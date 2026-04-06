@@ -2,8 +2,16 @@
 #![no_main]
 #![feature(cmse_nonsecure_entry)]
 
-use cortex_m_semihosting::hprintln;
-use panic_semihosting as _;
+/// Conditional debug logging macro. Compiles to no-op without the `debug-log` feature,
+/// ensuring no semihosting output in production builds.
+#[cfg(feature = "debug-log")]
+macro_rules! secure_log {
+    ($($arg:tt)*) => { cortex_m_semihosting::hprintln!($($arg)*) };
+}
+#[cfg(not(feature = "debug-log"))]
+macro_rules! secure_log {
+    ($($arg:tt)*) => {};
+}
 
 mod boot_ns;
 mod crypto;
@@ -42,30 +50,30 @@ fn setup_systick() {
 
 #[cortex_m_rt::entry]
 fn main() -> ! {
-    hprintln!("[S] Secure world starting...");
+    secure_log!("[S] Secure world starting...");
 
     sau::init();
-    hprintln!("[S] SAU + MPC configured");
+    secure_log!("[S] SAU + MPC configured");
 
     // Enroll test keypair
     #[cfg(feature = "mock-se")]
     {
         unsafe { crypto::enroll_test_key(&mut SE) };
-        hprintln!("[S] Test key enrolled (mock SE, PIN: 12345678)");
+        secure_log!("[S] Test key enrolled (mock SE)");
     }
 
     #[cfg(feature = "tropic01-se")]
     {
-        hprintln!("[S] Enrolling key on TROPIC01 chip...");
+        secure_log!("[S] Enrolling key on TROPIC01 chip...");
         tropic01_enroll();
-        hprintln!("[S] Key enrolled on TROPIC01 (e2e encrypted, PIN: 12345678)");
+        secure_log!("[S] Key enrolled on TROPIC01 (e2e encrypted)");
     }
 
     nsc::init_gateway();
     setup_systick();
-    hprintln!("[S] Gateway ready");
+    secure_log!("[S] Gateway ready");
 
-    hprintln!("[S] Booting non-secure world...");
+    secure_log!("[S] Booting non-secure world...");
     unsafe { boot_ns::boot(NS_FLASH_BASE) }
 }
 
@@ -76,22 +84,25 @@ fn tropic01_enroll() {
     use signature::Keypair;
     use slh_dsa::{Sha2_128f, SigningKey};
     use sphincs_tz_shared::MAX_ATTEMPTS;
+    use zeroize::Zeroize;
 
-    // Generate deterministic test key (replace with real RNG on production)
+    // Generate key seed from TROPIC01's hardware TRNG
     let mut seed = [0u8; 64];
-    for (i, b) in seed.iter_mut().enumerate() {
-        *b = i as u8;
+    unsafe {
+        SE.get_trng_bytes(&mut seed[..32]).expect("TRNG failed for seed[..32]");
+        SE.get_trng_bytes(&mut seed[32..]).expect("TRNG failed for seed[32..]");
     }
+
     let signing_key = SigningKey::<Sha2_128f>::try_from(seed.as_slice()).unwrap();
     let vk = signing_key.verifying_key();
     let vk_bytes = vk.to_bytes();
-    let sk_bytes = signing_key.to_bytes();
+    let mut sk_bytes = signing_key.to_bytes();
 
     let pin: [u8; 8] = *b"12345678";
-    let master_secret: [u8; 32] = crypto::kdf(b"test-master", &seed[..32], 0);
+    let mut master_secret: [u8; 32] = crypto::kdf(b"test-master", &seed[..32], 0);
 
     // Encrypt signing key
-    let wrap_key = crypto::derive_wrap_key(&master_secret);
+    let mut wrap_key = crypto::derive_wrap_key(&master_secret);
     let sk_nonce: [u8; 12] = crypto::kdf(b"test-sk-nonce", &master_secret, 0)[..12]
         .try_into()
         .unwrap();
@@ -109,9 +120,33 @@ fn tropic01_enroll() {
         SE.batch_enroll(&sk_buf[..92], &[], &vk_bytes, &master_secret, &pin, MAX_ATTEMPTS)
             .expect("TROPIC01 enrollment failed");
     }
+
+    // Wipe all sensitive intermediates
+    seed.zeroize();
+    sk_bytes.zeroize();
+    master_secret.zeroize();
+    wrap_key.zeroize();
+    sk_buf.zeroize();
 }
 
 #[cortex_m_rt::exception]
 fn SysTick() {
     nsc::poll_gateway();
+}
+
+/// Custom panic handler: zeroizes all sensitive state before halting.
+/// This ensures secrets don't persist in RAM after a crash.
+#[panic_handler]
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    nsc::zeroize_sensitive_state();
+
+    #[cfg(feature = "debug-log")]
+    {
+        // Best-effort debug output -- may fail if semihosting is unavailable
+        cortex_m_semihosting::hprintln!("[S] PANIC: {}", _info);
+    }
+
+    loop {
+        cortex_m::asm::bkpt();
+    }
 }

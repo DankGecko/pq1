@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 
 use crate::secure_element::SecureElement;
 use sphincs_tz_shared::MAX_ATTEMPTS;
+use zeroize::Zeroize;
 
 // r-mem slot assignments (same as desktop)
 pub const RMEM_ENCRYPTED_SK: u16 = 0;
@@ -160,11 +161,11 @@ pub fn enroll_test_key(se: &mut impl SecureElement) {
     let pin: [u8; 8] = *b"12345678";
 
     // Master secret (deterministic for test)
-    let master_secret: [u8; 32] = kdf(b"test-master", &seed[..32], 0);
+    let mut master_secret: [u8; 32] = kdf(b"test-master", &seed[..32], 0);
 
     // Encrypt signing key
-    let wrap_key = derive_wrap_key(&master_secret);
-    let sk_bytes = signing_key.to_bytes();
+    let mut wrap_key = derive_wrap_key(&master_secret);
+    let mut sk_bytes = signing_key.to_bytes();
     let mut sk_buf = [0u8; 64 + 12 + 16]; // sk + nonce + tag
     // Prepend a fixed nonce
     let sk_nonce: [u8; 12] = kdf(b"test-sk-nonce", &master_secret, 0)[..12]
@@ -193,7 +194,7 @@ pub fn enroll_test_key(se: &mut impl SecureElement) {
         // Initialize slot
         se.mac_and_destroy(j as u16, &init_in).unwrap();
         // Get w_j from PIN input
-        let w_j = se.mac_and_destroy(j as u16, &pin_in).unwrap();
+        let mut w_j = se.mac_and_destroy(j as u16, &pin_in).unwrap();
         // Re-initialize
         se.mac_and_destroy(j as u16, &init_in).unwrap();
 
@@ -202,6 +203,7 @@ pub fn enroll_test_key(se: &mut impl SecureElement) {
         ct_buf[..32].copy_from_slice(&master_secret);
         aes_encrypt_inplace(&w_j, &mut ct_buf, 32, j);
         encrypted_secrets[j as usize] = ct_buf;
+        w_j.zeroize();
     }
 
     // Store in SE
@@ -217,4 +219,11 @@ pub fn enroll_test_key(se: &mut impl SecureElement) {
 
     se.r_mem_erase(RMEM_VERIFYING_KEY).ok();
     se.r_mem_write(RMEM_VERIFYING_KEY, &vk_bytes).unwrap();
+
+    // Wipe all sensitive intermediates
+    seed.zeroize();
+    sk_bytes.zeroize();
+    master_secret.zeroize();
+    wrap_key.zeroize();
+    sk_buf.zeroize();
 }

@@ -1123,14 +1123,14 @@ dependencies = [
  "cortex-m-semihosting",
  "embedded-hal 1.0.0",
  "hmac 0.12.1",
- "panic-semihosting",
  "sha2 0.10.9",
  "signature",
  "slh-dsa",
  "sphincs-tz-shared",
- "tropic01",
+ "tropic01 0.1.0 (git+https://github.com/tropicsquare/libtropic-rs?rev=0cacb5ed94e5df491bfbb39e8702cc47598f7d63)",
  "x25519-dalek",
  "zerocopy",
+ "zeroize",
 ]
 
 [[package]]
@@ -1153,7 +1153,7 @@ dependencies = [
  "sha2 0.10.9",
  "signature",
  "slh-dsa",
- "tropic01",
+ "tropic01 0.1.0 (git+https://github.com/tropicsquare/libtropic-rs)",
  "x25519-dalek",
  "zerocopy",
 ]
@@ -1220,6 +1220,23 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "tropic01"
+version = "0.1.0"
+source = "git+https://github.com/tropicsquare/libtropic-rs?rev=0cacb5ed94e5df491bfbb39e8702cc47598f7d63#0cacb5ed94e5df491bfbb39e8702cc47598f7d63"
+dependencies = [
+ "aes-gcm",
+ "derive_more",
+ "dummy-pin",
+ "embedded-hal 1.0.0",
+ "hmac 0.12.1",
+ "packed_struct",
+ "sha2 0.10.9",
+ "x25519-dalek",
+ "zerocopy",
+ "zeroize",
 ]
 
 [[package]]

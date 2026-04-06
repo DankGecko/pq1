@@ -6,8 +6,10 @@
 
 use crate::secure_element::SecureElement;
 use sphincs_tz_shared::{
-    MAX_ATTEMPTS, NscStatus, SIGNATURE_LEN, VERIFYING_KEY_LEN, PIN_LEN, TX_HASH_LEN,
+    MAX_ATTEMPTS, NscStatus, NS_SRAM_BASE, NS_SRAM_END, SIGNATURE_LEN, VERIFYING_KEY_LEN,
+    PIN_LEN, TX_HASH_LEN,
 };
+use zeroize::Zeroize;
 
 // Command IDs
 const CMD_NONE: u32 = 0;
@@ -29,6 +31,34 @@ static mut REMAINING_ATTEMPTS: u8 = MAX_ATTEMPTS;
 static mut PIN_VERIFIED: bool = false;
 static mut MASTER_SECRET: [u8; 32] = [0u8; 32];
 
+/// Snapshot of shared memory arguments, read atomically in dispatch()
+/// to prevent TOCTOU races where NS modifies args between validation and use.
+struct GatewayArgs {
+    arg0: u32,
+    arg1: u32,
+    arg2: u32,
+}
+
+/// Validate that a pointer + length falls entirely within NS SRAM.
+/// Prevents confused-deputy attacks where NS passes pointers into secure memory.
+#[inline]
+fn validate_ns_ptr(ptr: u32, len: usize) -> bool {
+    ptr != 0
+        && ptr >= NS_SRAM_BASE
+        && ptr.checked_add(len as u32).map_or(false, |end| end <= NS_SRAM_END)
+}
+
+/// Zeroize all sensitive global state. Called from panic handler
+/// to ensure secrets don't persist in RAM after a crash.
+pub fn zeroize_sensitive_state() {
+    unsafe {
+        let ms = &raw mut MASTER_SECRET;
+        (*ms).zeroize();
+        PIN_VERIFIED = false;
+        REMAINING_ATTEMPTS = 0;
+    }
+}
+
 pub fn poll_gateway() {
     unsafe {
         let cmd = core::ptr::read_volatile(SHARED_CMD);
@@ -36,7 +66,14 @@ pub fn poll_gateway() {
             return;
         }
 
-        let result = dispatch(cmd);
+        // Snapshot all args atomically before dispatching (TOCTOU defense)
+        let args = GatewayArgs {
+            arg0: core::ptr::read_volatile(SHARED_ARG0),
+            arg1: core::ptr::read_volatile(SHARED_ARG1),
+            arg2: core::ptr::read_volatile(SHARED_ARG2),
+        };
+
+        let result = dispatch(cmd, &args);
 
         core::ptr::write_volatile(SHARED_RESULT, result);
         core::ptr::write_volatile(SHARED_DONE, 1);
@@ -44,12 +81,12 @@ pub fn poll_gateway() {
     }
 }
 
-unsafe fn dispatch(cmd: u32) -> u32 {
+unsafe fn dispatch(cmd: u32, args: &GatewayArgs) -> u32 {
     match cmd {
         CMD_GET_REMAINING => cmd_get_remaining(),
-        CMD_ENTER_PIN => cmd_enter_pin(),
-        CMD_GET_PUBKEY => cmd_get_pubkey(),
-        CMD_SIGN => cmd_sign(),
+        CMD_ENTER_PIN => cmd_enter_pin(args),
+        CMD_GET_PUBKEY => cmd_get_pubkey(args),
+        CMD_SIGN => cmd_sign(args),
         _ => NscStatus::InternalError as u32,
     }
 }
@@ -74,15 +111,20 @@ unsafe fn cmd_get_remaining() -> u32 {
     }
 }
 
-unsafe fn cmd_enter_pin() -> u32 {
-    let pin_ptr = core::ptr::read_volatile(SHARED_ARG0) as *const u8;
+unsafe fn cmd_enter_pin(args: &GatewayArgs) -> u32 {
+    let pin_ptr = args.arg0 as *const u8;
+
+    if !validate_ns_ptr(args.arg0, PIN_LEN) {
+        return NscStatus::InvalidPointer as u32;
+    }
+
     let mut pin = [0u8; PIN_LEN];
     for i in 0..PIN_LEN {
         pin[i] = core::ptr::read_volatile(pin_ptr.add(i));
     }
 
     #[cfg(feature = "tropic01-se")]
-    {
+    let result = {
         let se = &mut *core::ptr::addr_of_mut!(crate::SE);
         match se.batch_verify_pin(&pin, MAX_ATTEMPTS) {
             Ok(master) => {
@@ -103,9 +145,9 @@ unsafe fn cmd_enter_pin() -> u32 {
             }
             Err(_) => NscStatus::InternalError as u32,
         }
-    }
+    };
     #[cfg(not(feature = "tropic01-se"))]
-    {
+    let result = {
         let se = &mut *core::ptr::addr_of_mut!(crate::SE);
         match crate::pin::verify_pin(se, &pin) {
             Ok(master) => {
@@ -122,14 +164,21 @@ unsafe fn cmd_enter_pin() -> u32 {
             }
             Err(status) => status as u32,
         }
-    }
+    };
+
+    pin.zeroize();
+    result
 }
 
-unsafe fn cmd_get_pubkey() -> u32 {
-    let out_ptr = core::ptr::read_volatile(SHARED_ARG1) as *mut u8;
-    let out_len = core::ptr::read_volatile(SHARED_ARG2);
+unsafe fn cmd_get_pubkey(args: &GatewayArgs) -> u32 {
+    let out_ptr = args.arg1 as *mut u8;
+    let out_len = args.arg2;
 
     if out_len < VERIFYING_KEY_LEN as u32 {
+        return NscStatus::InvalidPointer as u32;
+    }
+
+    if !validate_ns_ptr(args.arg1, VERIFYING_KEY_LEN) {
         return NscStatus::InvalidPointer as u32;
     }
 
@@ -138,12 +187,14 @@ unsafe fn cmd_get_pubkey() -> u32 {
         let se = &mut *core::ptr::addr_of_mut!(crate::SE);
         let mut sk_buf = [0u8; 128];
         let mut vk_buf = [0u8; 64];
-        se.batch_read_key_material(&mut sk_buf, &mut vk_buf)
+        let res = se.batch_read_key_material(&mut sk_buf, &mut vk_buf)
             .map(|(_, vk_len)| {
                 for i in 0..vk_len {
                     core::ptr::write_volatile(out_ptr.add(i), vk_buf[i]);
                 }
-            })
+            });
+        sk_buf.zeroize();
+        res
     };
 
     #[cfg(not(feature = "tropic01-se"))]
@@ -164,16 +215,23 @@ unsafe fn cmd_get_pubkey() -> u32 {
     }
 }
 
-unsafe fn cmd_sign() -> u32 {
+unsafe fn cmd_sign(args: &GatewayArgs) -> u32 {
     if !PIN_VERIFIED {
         return NscStatus::NotInitialized as u32;
     }
 
-    let hash_ptr = core::ptr::read_volatile(SHARED_ARG0) as *const u8;
-    let sig_ptr = core::ptr::read_volatile(SHARED_ARG1) as *mut u8;
-    let sig_buf_len = core::ptr::read_volatile(SHARED_ARG2);
+    let hash_ptr = args.arg0 as *const u8;
+    let sig_ptr = args.arg1 as *mut u8;
+    let sig_buf_len = args.arg2;
 
     if sig_buf_len < SIGNATURE_LEN as u32 {
+        return NscStatus::InvalidPointer as u32;
+    }
+
+    if !validate_ns_ptr(args.arg0, TX_HASH_LEN) {
+        return NscStatus::InvalidPointer as u32;
+    }
+    if !validate_ns_ptr(args.arg1, SIGNATURE_LEN) {
         return NscStatus::InvalidPointer as u32;
     }
 
@@ -209,7 +267,7 @@ unsafe fn cmd_sign() -> u32 {
     let sk_nonce = &sk_blob[..12];
     let sk_ct = &sk_blob[12..sk_blob_len];
 
-    let wrap_key = crate::crypto::derive_wrap_key(&MASTER_SECRET);
+    let mut wrap_key = crate::crypto::derive_wrap_key(&*core::ptr::addr_of!(MASTER_SECRET));
 
     use aes_gcm::aead::{AeadInPlace, KeyInit};
     use aes_gcm::Nonce;
@@ -217,6 +275,7 @@ unsafe fn cmd_sign() -> u32 {
 
     let ct_len = sk_ct.len();
     if ct_len < 16 {
+        wrap_key.zeroize();
         return NscStatus::CryptoError as u32;
     }
     let plaintext_len = ct_len - 16;
@@ -228,6 +287,8 @@ unsafe fn cmd_sign() -> u32 {
         .decrypt_in_place_detached(Nonce::from_slice(sk_nonce), &[], &mut sk_dec[..plaintext_len], tag)
         .is_err()
     {
+        sk_dec.zeroize();
+        wrap_key.zeroize();
         return NscStatus::CryptoError as u32;
     }
 
@@ -237,12 +298,20 @@ unsafe fn cmd_sign() -> u32 {
 
     let signing_key = match SigningKey::<Sha2_128f>::try_from(sk_dec[..plaintext_len].as_ref()) {
         Ok(k) => k,
-        Err(_) => return NscStatus::CryptoError as u32,
+        Err(_) => {
+            sk_dec.zeroize();
+            wrap_key.zeroize();
+            return NscStatus::CryptoError as u32;
+        }
     };
 
     let sig = match signing_key.try_sign(&tx_hash) {
         Ok(s) => s,
-        Err(_) => return NscStatus::CryptoError as u32,
+        Err(_) => {
+            sk_dec.zeroize();
+            wrap_key.zeroize();
+            return NscStatus::CryptoError as u32;
+        }
     };
 
     // Write 17,088-byte signature to NS memory
@@ -251,9 +320,10 @@ unsafe fn cmd_sign() -> u32 {
         core::ptr::write_volatile(sig_ptr.add(i), sig_bytes[i]);
     }
 
-    // Wipe key from RAM
-    sk_dec = [0u8; 64];
-    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    // Wipe all sensitive key material from RAM
+    sk_dec.zeroize();
+    wrap_key.zeroize();
+    sk_blob.zeroize();
 
     NscStatus::Ok as u32
 }

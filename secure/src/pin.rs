@@ -2,8 +2,9 @@
 /// Ported from desktop/src/main.rs lines 320-460.
 
 use crate::crypto::*;
-use crate::secure_element::{SecureElement, SeError};
+use crate::secure_element::SecureElement;
 use sphincs_tz_shared::{MAX_ATTEMPTS, NscStatus};
+use zeroize::Zeroize;
 
 /// Verify PIN against the MAC-and-Destroy chain.
 /// On success, returns the decrypted master secret.
@@ -30,7 +31,7 @@ pub fn verify_pin(
     // Authenticate via MAC-and-Destroy
     let j = ps.next_index;
     let pin_in = macd_pin_input(pin, j);
-    let w_j = se
+    let mut w_j = se
         .mac_and_destroy(j as u16, &pin_in)
         .map_err(|_| NscStatus::InternalError)?;
 
@@ -43,6 +44,8 @@ pub fn verify_pin(
             // PIN correct — recover master secret
             let mut master_secret = [0u8; 32];
             master_secret.copy_from_slice(&ct_buf[..32]);
+            ct_buf.zeroize();
+            w_j.zeroize();
 
             // Re-initialize all MACD slots
             for slot_j in 0..MAX_ATTEMPTS {
@@ -62,6 +65,9 @@ pub fn verify_pin(
         }
         _ => {
             // PIN incorrect — advance attempt counter
+            ct_buf.zeroize();
+            w_j.zeroize();
+
             let new_index = j + 1;
             if new_index >= MAX_ATTEMPTS {
                 // Last attempt failed — erase everything

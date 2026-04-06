@@ -7,7 +7,8 @@
 
 use crate::semihosting_spi::SemihostingSpi;
 use crate::secure_element::{SecureElement, SeError};
-use cortex_m_semihosting::{hprintln, nr};
+use cortex_m_semihosting::nr;
+use zeroize::Zeroize;
 use tropic01::keys::{SH0PRIV_PROD0, SH0PUB_PROD0};
 use tropic01::{Tropic01, X25519Dalek};
 use x25519_dalek::{PublicKey, StaticSecret};
@@ -152,10 +153,10 @@ impl Tropic01SecureElement {
         use crate::crypto::{macd_init_input, macd_pin_input, aes_encrypt_inplace, PER_SLOT_CT_LEN};
 
         with_session!(session, {
-            hprintln!("  [T01] Session established (e2e encrypted)");
+            secure_log!("  [T01] Session established (e2e encrypted)");
 
             // Initialize MAC-and-Destroy slots
-            hprintln!("  [T01] Initializing {} MACD slots...", max_attempts);
+            secure_log!("  [T01] Initializing {} MACD slots...", max_attempts);
             let mut encrypted_secrets = [[0u8; PER_SLOT_CT_LEN]; 10];
 
             for j in 0..max_attempts {
@@ -164,7 +165,7 @@ impl Tropic01SecureElement {
 
                 session.mac_and_destroy(U16::new(j as u16), &init_in)
                     .map_err(|_| SeError::InternalError)?;
-                let w_j: [u8; 32] = *session
+                let mut w_j: [u8; 32] = *session
                     .mac_and_destroy(U16::new(j as u16), &pin_in)
                     .map_err(|_| SeError::InternalError)?;
                 session.mac_and_destroy(U16::new(j as u16), &init_in)
@@ -174,8 +175,9 @@ impl Tropic01SecureElement {
                 ct_buf[..32].copy_from_slice(master_secret);
                 aes_encrypt_inplace(&w_j, &mut ct_buf, 32, j);
                 encrypted_secrets[j as usize] = ct_buf;
+                w_j.zeroize();
             }
-            hprintln!("  [T01] MACD slots ready");
+            secure_log!("  [T01] MACD slots ready");
 
             // Store encrypted signing key
             session.r_mem_data_erase(U16::new(0)).ok();
@@ -200,7 +202,7 @@ impl Tropic01SecureElement {
             session.r_mem_data_write(U16::new(2), verifying_key)
                 .map_err(|_| SeError::InternalError)?;
 
-            hprintln!("  [T01] All data stored on chip (e2e encrypted)");
+            secure_log!("  [T01] All data stored on chip (e2e encrypted)");
             Ok(())
         })
     }
@@ -233,7 +235,7 @@ impl Tropic01SecureElement {
             // MAC-and-Destroy authentication
             let j = ps.next_index;
             let pin_in = macd_pin_input(pin, j);
-            let w_j: [u8; 32] = *session
+            let mut w_j: [u8; 32] = *session
                 .mac_and_destroy(U16::new(j as u16), &pin_in)
                 .map_err(|_| SeError::InternalError)?;
 
@@ -245,6 +247,8 @@ impl Tropic01SecureElement {
                 Ok(32) => {
                     let mut master_secret = [0u8; 32];
                     master_secret.copy_from_slice(&ct_buf[..32]);
+                    ct_buf.zeroize();
+                    w_j.zeroize();
 
                     // Re-initialize all MACD slots
                     for slot_j in 0..max_attempts {
@@ -264,6 +268,9 @@ impl Tropic01SecureElement {
                 }
                 _ => {
                     // Wrong PIN — advance counter
+                    ct_buf.zeroize();
+                    w_j.zeroize();
+
                     let new_index = j + 1;
                     if new_index >= max_attempts {
                         session.r_mem_data_erase(U16::new(0)).ok();
@@ -312,6 +319,25 @@ impl Tropic01SecureElement {
             }
             let next_index = data[0];
             Ok(next_index)
+        })
+    }
+
+    /// Get random bytes from the TROPIC01's hardware TRNG.
+    pub fn get_trng_bytes(&mut self, buf: &mut [u8]) -> Result<(), SeError> {
+        with_session!(session, {
+            // get_random_value takes a u8 count, so we chunk if needed
+            let mut offset = 0;
+            while offset < buf.len() {
+                let remaining = buf.len() - offset;
+                let chunk = if remaining > 255 { 255 } else { remaining as u8 };
+                let random = session
+                    .get_random_value(chunk)
+                    .map_err(|_| SeError::InternalError)?;
+                let got = random.len().min(chunk as usize);
+                buf[offset..offset + got].copy_from_slice(&random[..got]);
+                offset += got;
+            }
+            Ok(())
         })
     }
 }

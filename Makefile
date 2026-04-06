@@ -6,7 +6,9 @@ SECURE_ELF   = target/secure/$(TARGET)/release/sphincs-tz-secure
 NONSECURE_ELF = target/nonsecure/$(TARGET)/release/sphincs-tz-nonsecure
 
 # Default: mock secure element (no real chip needed)
-FEATURES ?= mock-se
+# debug-log enables semihosting output from the secure world.
+# Remove it for production builds to eliminate all debug strings.
+FEATURES ?= mock-se,debug-log
 
 .PHONY: all clean secure nonsecure run run-tropic01 setup-serial
 
@@ -41,7 +43,7 @@ setup-serial:
 # Build + run with real TROPIC01 chip via semihosting SPI bridge
 # Requires: TROPIC01 TS1302 devkit connected at /dev/ttyACM0
 run-tropic01: setup-serial
-	$(MAKE) FEATURES=tropic01-se all
+	$(MAKE) FEATURES=tropic01-se,debug-log all
 	qemu-system-arm \
 		-M mps2-an505 \
 		-nographic \
