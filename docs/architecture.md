@@ -408,13 +408,14 @@ The secure world must build first because the non-secure world links against `ve
     b. Configure MPC1 (SSRAM-1: blocks 0-3 S, 4+ NS)
     c. Configure SAU (4 regions: NS code, NSC veneers, NS data, NS periph)
     d. DSB + ISB barriers
-    e. Initialize MockSecureElement
-    f. Enroll test SPHINCS+ keypair (deterministic seed, PIN "12345678")
-    g. Initialize shared memory gateway (clear command buffer)
-    h. Enable secure SysTick (1000-cycle interval)
-    i. Set VTOR_NS = 0x00200000
-    j. Set MSP_NS from NS vector table[0]
-    k. BXNS to NS reset handler
+    e. Enroll test SPHINCS+ keypair (PIN "12345678"):
+       - mock-se: MockSecureElement in SRAM
+       - tropic01-se: e2e encrypted session to real chip via /dev/ttyACM0
+    f. Initialize shared memory gateway (clear command buffer)
+    g. Enable secure SysTick (1000-cycle interval)
+    h. Set VTOR_NS = 0x00200000
+    i. Set MSP_NS from NS vector table[0]
+    j. BXNS to NS reset handler
  5. Non-secure world boots via cortex-m-rt
  6. NS main() exercises gateway commands
  7. debug::exit(EXIT_SUCCESS) terminates QEMU
@@ -423,21 +424,25 @@ The secure world must build first because the non-secure world links against `ve
 ## Sign Transaction Flow (End-to-End)
 
 ```
-NS World                          Secure World
-────────                          ────────────
+NS World                          Secure World                        TROPIC01 Chip
+────────                          ────────────                        ─────────────
 1. Write PIN to NS SRAM
 2. CMD=ENTER_PIN, ARG0=&pin  ──►  SysTick fires
                                   Read PIN from NS memory
-                                  mac_and_destroy(slot, pin_input)
+                                  [tropic01-se: open e2e session] ──► X25519 handshake
+                                  mac_and_destroy(slot, pin_in) ─E2E─► HMAC + destroy
                                   AES-GCM decrypt master_secret
-                                  Re-init all MACD slots
+                                  Re-init all MACD slots ────────E2E─► Restore slots
+                                  [tropic01-se: close session] ──────► Zeroize keys
                                   RESULT=Ok, DONE=1
 3. Read RESULT=Ok            ◄──
 
 4. Write tx_hash to NS SRAM
 5. CMD=SIGN, ARG0=&hash,     ──►  SysTick fires
    ARG1=&sig_buf, ARG2=17088     Read tx_hash from NS memory
-                                  Read encrypted SK from SE slot 0
+                                  [tropic01-se: open e2e session] ──► X25519 handshake
+                                  Read encrypted SK from SE ─────E2E─► r_mem_data_read
+                                  [tropic01-se: close session] ──────► Zeroize keys
                                   Derive wrap_key from master_secret
                                   AES-GCM decrypt signing key (64 bytes)
                                   slh_dsa::SigningKey::try_sign(tx_hash)
@@ -480,19 +485,20 @@ When the STM32U585 board arrives:
 2. **Gateway:** Replace the shared memory gateway with proper CMSE veneers
    (`extern "cmse-nonsecure-entry"`). The veneer generation already works; only the
    NS-side call mechanism changes from shared memory to direct function calls through
-   `veneers.o` symbols.
+   `veneers.o` symbols. The QEMU MPC/SG bug does not affect real hardware.
 
-3. **Secure element:** Implement `Tropic01SecureElement` wrapping the `tropic01` crate
-   over real SPI. The `tropic01` crate is fully `no_std` and takes any
-   `embedded_hal::spi::SpiDevice`. Disable the `mock-se` cargo feature.
+3. **SPI transport:** Replace `SemihostingSpi` with a real `embedded_hal::spi::SpiDevice`
+   implementation using Embassy's SPI driver. The `Tropic01SecureElement` and its
+   `with_session!` macro work unchanged — only the SpiDevice impl swaps out.
 
-4. **RNG:** Replace deterministic test seed with hardware RNG (TROPIC01's TRNG via
-   `random_value_get()`, or STM32U585's built-in RNG).
+4. **RNG:** Replace semihosting `/dev/urandom` reads with the STM32U585's hardware RNG
+   (`embassy_stm32::rng`) or the TROPIC01's TRNG (`session.get_random_value(32)`).
 
-5. **Embassy:** Add `embassy-stm32` for async HAL (USB, SPI, GPIO). Embassy supports
+5. **Key generation:** Replace the deterministic test seed with true random key generation
+   using `SigningKey::<Sha2_128f>::new(&mut hw_rng)`.
+
+6. **Embassy:** Add `embassy-stm32` for async HAL (USB, SPI, GPIO, RNG). Embassy supports
    STM32U585 via feature flag `stm32u585zi`.
-
-6. **Clock:** Replace the 1000-cycle SysTick with proper clock configuration.
 
 ## no_std Dependencies
 
@@ -511,7 +517,13 @@ All cryptographic crates run without heap allocation:
 ## Security Considerations
 
 - **Key isolation:** SPHINCS+ signing key exists in secure SRAM only during the signing
-  operation. It is wiped (zeroed) immediately after use.
+  operation. It is wiped (zeroed + compiler fence) immediately after use.
+
+- **E2E encrypted transport:** All communication between TrustZone secure world and the
+  TROPIC01 chip is encrypted with AES-256-GCM over a Noise_KK1 session (X25519 key
+  exchange with pre-shared pairing keys). The private key is encrypted at rest
+  (AES-GCM wrap in r-mem), encrypted in transit (session encryption), and only
+  plaintext in secure SRAM during signing.
 
 - **PIN bricking:** After `MAX_ATTEMPTS` (9) wrong PINs, the encrypted signing key and
   all MACD state are erased from the secure element. Recovery is impossible by design.
@@ -527,3 +539,7 @@ All cryptographic crates run without heap allocation:
 - **Shared memory:** The gateway command buffer is in NS SRAM and is thus writable
   by the non-secure world at any time. The secure handler treats all data read from
   shared memory as untrusted input.
+
+- **Session freshness:** Each TROPIC01 operation batch generates a fresh ephemeral
+  X25519 keypair (from `/dev/urandom` on QEMU, hardware RNG on STM32U585), preventing
+  session replay attacks.
