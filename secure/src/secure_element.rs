@@ -6,6 +6,7 @@
 #[derive(Debug)]
 pub enum SeError {
     SlotNotFound,
+    SlotExpired,
     InvalidParameter,
     InternalError,
 }

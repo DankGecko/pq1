@@ -10,6 +10,11 @@ signatures through a narrow gateway.
 The firmware targets **STM32U585** (production) and runs on **QEMU mps2-an505** (development).
 A desktop CLI (`sphincs-wallet`) demonstrates the full TROPIC01 flow over USB.
 
+Two modes of operation:
+- **`mock-se`** (default): Mock secure element in SRAM, no hardware needed
+- **`tropic01-se`**: Real TROPIC01 chip connected via USB at `/dev/ttyACM0`, bridged to
+  QEMU via semihosting file I/O. All chip communication is e2e encrypted (X25519 + AES-256-GCM).
+
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                    QEMU mps2-an505                          │
@@ -19,15 +24,21 @@ A desktop CLI (`sphincs-wallet`) demonstrates the full TROPIC01 flow over USB.
 │  │  SPHINCS+ keys       │   │  USB protocol handler      │  │
 │  │  AES-GCM wrap/unwrap │   │  OLED display driver       │  │
 │  │  PIN verification    │   │  Button input               │  │
-│  │  TROPIC01 comms      │   │                             │  │
-│  │  (mock on QEMU)      │   │  Calls secure world ONLY   │  │
-│  │                      │   │  through gateway            │  │
-│  │  SysTick handler     │◄──│  Shared memory commands     │  │
+│  │  TROPIC01 comms ─────│───│──── /dev/ttyACM0 ──► chip  │  │
+│  │  (e2e encrypted SPI) │   │                             │  │
+│  │                      │   │  Calls secure world ONLY   │  │
+│  │  SysTick handler     │◄──│  through gateway            │  │
 │  │  polls gateway       │──►│  Reads results              │  │
 │  └──────────────────────┘   └────────────────────────────┘  │
 │         0x10000000                  0x00200000               │
 │       (secure flash)              (NS flash)                │
 └─────────────────────────────────────────────────────────────┘
+         │ (semihosting SYS_OPEN / SYS_READ / SYS_WRITE)
+         ▼
+   ┌─────────────┐      USB serial       ┌────────────────┐
+   │ /dev/ttyACM0│◄─────────────────────►│ TROPIC01 chip  │
+   │ (host)      │  115200 8N1 raw       │ (TS1302 devkit)│
+   └─────────────┘                        └────────────────┘
 ```
 
 ## Workspace Structure
@@ -59,7 +70,9 @@ sphincs_rust/
 │       ├── nsc.rs          #   Shared-memory gateway (4 commands)
 │       ├── crypto.rs       #   KDF, AES-GCM, PIN state, enrollment
 │       ├── pin.rs          #   PIN verify via MAC-and-Destroy chain
-│       └── secure_element.rs  # trait SecureElement + MockSecureElement
+│       ├── secure_element.rs  # trait SecureElement + MockSecureElement
+│       ├── semihosting_spi.rs # SpiDevice impl via semihosting (tropic01-se)
+│       └── tropic01_se.rs     # Tropic01SecureElement with e2e encrypted sessions
 │
 └── nonsecure/              # TrustZone NON-SECURE world firmware
     ├── Cargo.toml          #   minimal: cortex-m-rt + semihosting
@@ -173,6 +186,77 @@ The secure `build.rs` generates `veneers.o` via `--cmse-implib`, and the non-sec
 build links against it. When the QEMU bug is not present (real hardware), these
 veneers work directly.
 
+## TROPIC01 Integration
+
+### Semihosting SPI Bridge
+
+The real TROPIC01 chip (TS1302 devkit) connects to the host laptop via USB serial
+at `/dev/ttyACM0`. The firmware accesses it through QEMU's ARM semihosting:
+
+1. **SYS_OPEN**: Opens `/dev/ttyACM0` on the host (the host must pre-configure with `stty`)
+2. **SYS_WRITE**: Sends hex-encoded SPI commands (same protocol as `desktop/src/usb_dongle.rs`)
+3. **SYS_READ**: Reads hex-encoded SPI responses byte-by-byte until `\n`
+4. **SPI protocol**: `"A0B1C2x\n"` → chip processes → `"D3E4F5\r\n"`
+5. **CS deassert**: `"CS=0\n"` → `"OK\r\n"`
+
+The `SemihostingSpi` struct (`secure/src/semihosting_spi.rs`) implements
+`embedded_hal::spi::SpiDevice`, so the `tropic01` crate works unmodified.
+
+### E2E Encrypted Session
+
+Every TROPIC01 operation establishes a fresh Noise_KK1 encrypted session:
+
+```
+Secure World                          TROPIC01 Chip
+────────────                          ─────────────
+1. startup_req(Reboot)          ───►  Chip resets
+2. Generate ephemeral X25519          
+   keypair (random from               
+   host /dev/urandom)                  
+3. session_start(                ───►  X25519 handshake
+     shpub=SH0PUB_PROD0,              3x DH exchanges
+     shpriv=SH0PRIV_PROD0,            AES-GCM auth verify
+     ehpub, ehpriv, slot=0)    ◄───  Session keys derived
+                                       (Noise_KK1 protocol)
+                                       
+   === All further commands encrypted with AES-256-GCM ===
+   
+4. mac_and_destroy(slot, data)   ─E2E─►  HMAC + destroy
+5. r_mem_data_read(slot)         ─E2E─►  Read encrypted
+6. r_mem_data_write(slot, data)  ─E2E─►  Write encrypted
+7. session_abort()               ───►  Zeroize keys
+```
+
+The pre-shared pairing keys (`SH0PUB_PROD0`, `SH0PRIV_PROD0`) are compiled into
+the secure world firmware. The ephemeral keys are fresh for each session, generated
+from `/dev/urandom` via semihosting.
+
+### Batch Operations
+
+The `Tropic01SecureElement` provides batch methods that perform multiple operations
+in a single e2e encrypted session, avoiding the overhead of re-establishing a session
+for each individual command:
+
+| Method | Operations per session |
+|--------|----------------------|
+| `batch_enroll()` | N x mac_and_destroy + 3 x r_mem_write |
+| `batch_verify_pin()` | r_mem_read + mac_and_destroy + N x mac_and_destroy (re-init) + r_mem_write |
+| `batch_read_key_material()` | 2 x r_mem_read |
+| `batch_read_pin_state()` | r_mem_read |
+
+### Running with Real TROPIC01
+
+```bash
+# 1. Connect TROPIC01 TS1302 devkit via USB
+# 2. Configure serial port + build + run:
+make run-tropic01
+
+# Or manually:
+stty -F /dev/ttyACM0 115200 raw -echo cs8 -cstopb -parenb
+make FEATURES=tropic01-se all
+make run
+```
+
 ## Cryptographic Design
 
 ### Key Hierarchy
@@ -245,13 +329,13 @@ pub trait SecureElement {
 }
 ```
 
-| Implementation | Target | Backend |
-|---------------|--------|---------|
-| `MockSecureElement` | QEMU | In-memory arrays, HMAC-SHA256 for MACD |
-| (future) `Tropic01SecureElement` | STM32U585 | `tropic01` crate over real SPI |
+| Implementation | Feature | Backend |
+|---------------|---------|---------|
+| `MockSecureElement` | `mock-se` (default) | In-memory arrays, HMAC-SHA256 for MACD |
+| `Tropic01SecureElement` | `tropic01-se` | Real TROPIC01 chip via semihosting SPI, e2e encrypted |
 
 The mock stores up to 8 r-mem slots (512 bytes each) and 16 MACD slots (32 bytes each).
-Total mock state: ~5 KB in secure SRAM.
+The real implementation establishes a fresh Noise_KK1 encrypted session per operation batch.
 
 ## Build System
 
@@ -266,11 +350,19 @@ sudo apt install gcc-arm-none-eabi qemu-system-arm
 ### Build Commands
 
 ```bash
-make all        # Build secure world → generate veneers.o → build non-secure world
-make secure     # Build only secure world
-make nonsecure  # Build only non-secure world (requires veneers.o from secure)
-make run        # Build all + launch in QEMU
-make clean      # Remove build artifacts
+# Mock secure element (no hardware needed)
+make all                          # Build both worlds with mock SE
+make run                          # Build + run in QEMU
+
+# Real TROPIC01 chip (TS1302 devkit at /dev/ttyACM0)
+make run-tropic01                 # Configure serial + build + run
+make FEATURES=tropic01-se all     # Build only (manual serial setup)
+make setup-serial                 # Configure /dev/ttyACM0 only
+
+# Other
+make secure                       # Build only secure world
+make nonsecure                    # Build only non-secure world
+make clean                        # Remove build artifacts
 ```
 
 ### Build Pipeline
@@ -413,6 +505,8 @@ All cryptographic crates run without heap allocation:
 | `sha2` | 0.10 | `default-features = false` | Used for KDF |
 | `hmac` | 0.12 | `default-features = false` | Used for mock MACD |
 | `signature` | 3.0.0-rc.10 | `default-features = false` | Signer/Verifier traits |
+| `tropic01` | git (libtropic-rs) | `#![no_std]` | TROPIC01 driver (optional, `tropic01-se` feature) |
+| `x25519-dalek` | 2.0.1 | `default-features = false` | X25519 for e2e session (optional) |
 
 ## Security Considerations
 

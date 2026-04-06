@@ -1121,12 +1121,15 @@ dependencies = [
  "cortex-m",
  "cortex-m-rt",
  "cortex-m-semihosting",
+ "embedded-hal 1.0.0",
  "hmac 0.12.1",
  "panic-semihosting",
  "sha2 0.10.9",
  "signature",
  "slh-dsa",
  "sphincs-tz-shared",
+ "tropic01",
+ "x25519-dalek",
  "zerocopy",
 ]
 
