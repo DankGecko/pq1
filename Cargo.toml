@@ -1,0 +1,25 @@
+[workspace]
+members = [
+    "desktop",
+    "shared",
+    "secure",
+    "nonsecure",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+
+[profile.dev]
+opt-level = 2
+
+[profile.dev.package.slh-dsa]
+opt-level = 3
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+
+[profile.release.package.slh-dsa]
+opt-level = 3
