@@ -14,14 +14,16 @@
 //! | 2  | REQUEST_UNLOCK | —                                        | secure UI prompts for PIN |
 //! | 3  | GET_PUBKEY     | out_ptr, out_len                         | reads slot 2 |
 //! | 4  | SIGN           | unsigned_tx_ptr, sig_out_ptr, tx_len     | parse → confirm → sign |
+//! | 5  | CLEAR_SIGN     | payload_ptr, sig_out_ptr, total_len      | ZK verify → display → sign |
 
 use crate::secure_element::SecureElement;
 use crate::timeout;
 use crate::ui;
 use sphincs_tz_shared::{
-    NscStatus, CMD_GET_PUBKEY, CMD_GET_REMAINING, CMD_NONE, CMD_REQUEST_UNLOCK, CMD_SIGN,
-    MAX_ATTEMPTS, MAX_TX_LEN, NS_FLASH_BASE, NS_FLASH_END, NS_SRAM_BASE, NS_SRAM_END,
+    NscStatus, CMD_CLEAR_SIGN, CMD_GET_PUBKEY, CMD_GET_REMAINING, CMD_NONE, CMD_REQUEST_UNLOCK,
+    CMD_SIGN, MAX_ATTEMPTS, MAX_TX_LEN, NS_FLASH_BASE, NS_FLASH_END, NS_SRAM_BASE, NS_SRAM_END,
     SHARED_MAILBOX_BASE, SHARED_MAILBOX_END, SIGNATURE_LEN, VERIFYING_KEY_LEN,
+    ZK_HEADER_LEN, ZK_MAX_CALLDATA, ZK_PROOF_LEN, ZK_STRING_LEN,
 };
 use zeroize::Zeroize;
 
@@ -145,6 +147,7 @@ unsafe fn dispatch(cmd: u32, args: &GatewayArgs) -> u32 {
         CMD_REQUEST_UNLOCK => cmd_request_unlock(),
         CMD_GET_PUBKEY => cmd_get_pubkey(args),
         CMD_SIGN => cmd_sign(args),
+        CMD_CLEAR_SIGN => cmd_clear_sign(args),
         _ => NscStatus::InternalError as u32,
     }
 }
@@ -440,6 +443,231 @@ unsafe fn cmd_sign(args: &GatewayArgs) -> u32 {
 
     timeout::reset_activity();
     ui::show_status("Signed", "");
+    NscStatus::Ok as u32
+}
+
+// ---------------------------------------------------------------------------
+// CMD_CLEAR_SIGN — ZK-verified clear signing: verify proof, display, sign
+// ---------------------------------------------------------------------------
+
+unsafe fn cmd_clear_sign(args: &GatewayArgs) -> u32 {
+    use crate::tx::{display::render_pages, eip1559};
+    use crate::ui::confirm::{confirm, ConfirmResult};
+    use crate::zk::{Groth16Proof, VerificationKey, verify_clear_signing_proof};
+    use sphincs_tz_shared::ZK_VK_LEN;
+
+    if !PIN_VERIFIED {
+        return NscStatus::NotInitialized as u32;
+    }
+
+    let payload_ptr = args.arg0 as *const u8;
+    let sig_ptr = args.arg1 as *mut u8;
+    let total_len = args.arg2 as usize;
+
+    // 1. Validate sizes — payload must be at least header + 1 byte of tx
+    if total_len < ZK_HEADER_LEN + 1 || total_len > ZK_HEADER_LEN + MAX_TX_LEN {
+        return NscStatus::InvalidPointer as u32;
+    }
+    if !validate_ns_read_ptr(args.arg0, total_len) {
+        return NscStatus::InvalidPointer as u32;
+    }
+    if !validate_ns_write_ptr(args.arg1, SIGNATURE_LEN) {
+        return NscStatus::InvalidPointer as u32;
+    }
+
+    // 2. Copy entire payload into secure-stack buffer (TOCTOU defense)
+    let mut buf = [0u8; ZK_HEADER_LEN + MAX_TX_LEN];
+    for i in 0..total_len {
+        buf[i] = core::ptr::read_volatile(payload_ptr.add(i));
+    }
+
+    // 3. Parse the payload layout:
+    //    [0..960)        VK (protocol-specific verification key)
+    //    [960..1344)     proof (π.A || π.B || π.C)
+    //    [1344..1508)    calldata (164 bytes)
+    //    [1508..1572)    readable (64 bytes)
+    //    [1572..1604)    vk_hash (expected SHA-256 of VK, from on-chain governance)
+    //    [1604..1608)    tx_len (u32 LE)
+    //    [1608..)        EIP-1559 tx envelope
+    let mut off = 0usize;
+
+    let vk_bytes: &[u8; ZK_VK_LEN] = buf[off..off + ZK_VK_LEN].try_into().unwrap();
+    off += ZK_VK_LEN;
+
+    let proof_bytes: &[u8; 384] = buf[off..off + ZK_PROOF_LEN].try_into().unwrap();
+    off += ZK_PROOF_LEN;
+
+    let calldata: &[u8; ZK_MAX_CALLDATA] = buf[off..off + ZK_MAX_CALLDATA].try_into().unwrap();
+    off += ZK_MAX_CALLDATA;
+
+    let readable: &[u8; ZK_STRING_LEN] = buf[off..off + ZK_STRING_LEN].try_into().unwrap();
+    off += ZK_STRING_LEN;
+
+    let expected_vk_hash: &[u8; 32] = buf[off..off + 32].try_into().unwrap();
+    off += 32;
+
+    let tx_len =
+        u32::from_le_bytes(buf[off..off + 4].try_into().unwrap()) as usize;
+    off += 4;
+
+    if tx_len == 0 || tx_len > MAX_TX_LEN || off + tx_len > total_len {
+        return NscStatus::InvalidPointer as u32;
+    }
+    let tx_bytes = &buf[off..off + tx_len];
+
+    // 4. Authenticate the VK: hash it and compare against the expected hash
+    //    (which the companion read from the protocol's on-chain clearSigningVKHash).
+    let actual_vk_hash = VerificationKey::hash(vk_bytes);
+    if actual_vk_hash != *expected_vk_hash {
+        ui::show_status("Bad VK", "(hash mismatch)");
+        return NscStatus::CryptoError as u32;
+    }
+
+    // 5. Deserialize the VK and proof
+    let vk = match VerificationKey::from_bytes(vk_bytes) {
+        Some(v) => v,
+        None => {
+            ui::show_status("Bad VK", "(deserialize)");
+            return NscStatus::CryptoError as u32;
+        }
+    };
+
+    let proof = match Groth16Proof::from_bytes(proof_bytes) {
+        Some(p) => p,
+        None => {
+            ui::show_status("Bad proof", "(deserialize)");
+            return NscStatus::CryptoError as u32;
+        }
+    };
+
+    ui::show_status("Verifying", "ZK proof...");
+
+    // 6. Verify the ZK clear signing proof against the dynamic VK.
+    //    Computes Poseidon(calldata) and Poseidon(readable), then runs
+    //    the Groth16 pairing check.
+    if !verify_clear_signing_proof(calldata, readable, &proof, &vk) {
+        ui::show_status("ZK INVALID", "proof failed");
+        return NscStatus::CryptoError as u32;
+    }
+
+    // 6. Proof valid! Display ZK-verified readable string on trusted UI.
+    //    Build pages in the format confirm() expects: [[u8; 16]; 4] per page.
+    let readable_len = readable.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
+
+    let mut confirm_pages: [[[u8; 16]; 4]; 3] = [[[b' '; 16]; 4]; 3];
+
+    // Page 0: Header — "ZK Clear Sign" + "Proof verified"
+    confirm_pages[0][0][..16].copy_from_slice(b"ZK Clear Sign   ");
+    confirm_pages[0][1][..16].copy_from_slice(b"Proof verified! ");
+    confirm_pages[0][2][..16].copy_from_slice(b"                ");
+    confirm_pages[0][3][..16].copy_from_slice(b"  [scroll ->]   ");
+
+    // Page 1: The ZK-verified action string (up to 4 lines × 16 chars)
+    for (i, chunk) in readable[..readable_len].chunks(16).enumerate() {
+        if i >= 4 {
+            break;
+        }
+        for (j, &byte) in chunk.iter().enumerate() {
+            if byte >= 0x20 && byte < 0x7F {
+                confirm_pages[1][i][j] = byte;
+            }
+        }
+    }
+
+    // Page 2: Confirm prompt
+    confirm_pages[2][0][..16].copy_from_slice(b"                ");
+    confirm_pages[2][1][..16].copy_from_slice(b"  Long-press:   ");
+    confirm_pages[2][2][..16].copy_from_slice(b"  L=Cancel      ");
+    confirm_pages[2][3][..16].copy_from_slice(b"  R=Confirm     ");
+
+    let confirm_result = confirm(&confirm_pages);
+    match confirm_result {
+        ConfirmResult::Confirmed => {}
+        ConfirmResult::Cancelled => {
+            ui::show_status("Cancelled", "");
+            return NscStatus::UserRejected as u32;
+        }
+        ConfirmResult::IdleWipe => {
+            zeroize_sensitive_state();
+            ui::show_status("Locked", "(idle wipe)");
+            return NscStatus::IdleWipe as u32;
+        }
+    }
+
+    ui::show_status("Signing...", "");
+
+    // 7. Parse the EIP-1559 envelope (validation that it's a well-formed tx)
+    let parsed = match eip1559::parse(tx_bytes) {
+        Ok(t) => t,
+        Err(_) => {
+            ui::show_status("Bad tx", "(parse fail)");
+            return NscStatus::CryptoError as u32;
+        }
+    };
+
+    // 8. Read encrypted entropy, decrypt, derive signing key, sign
+    //    (Same flow as cmd_sign steps 5-10)
+    let mut entropy_blob = [0u8; 64];
+    let entropy_blob_len = {
+        let se = &mut *core::ptr::addr_of_mut!(crate::SE);
+        #[cfg(feature = "tropic01-se")]
+        {
+            let mut vk_ignore = [0u8; 64];
+            match se.batch_read_entropy_and_vk(&mut entropy_blob, &mut vk_ignore) {
+                Ok((entropy_len, _)) => entropy_len,
+                Err(_) => return NscStatus::InternalError as u32,
+            }
+        }
+        #[cfg(not(feature = "tropic01-se"))]
+        {
+            match se.r_mem_read(crate::crypto::RMEM_ENCRYPTED_ENTROPY, &mut entropy_blob) {
+                Ok(len) => len,
+                Err(_) => return NscStatus::InternalError as u32,
+            }
+        }
+    };
+
+    let mut entropy = match crate::crypto::decrypt_entropy_blob(
+        &entropy_blob[..entropy_blob_len],
+        &*core::ptr::addr_of!(MASTER_SECRET),
+    ) {
+        Ok(e) => e,
+        Err(_) => {
+            entropy_blob.zeroize();
+            return NscStatus::CryptoError as u32;
+        }
+    };
+    entropy_blob.zeroize();
+
+    let signing_key = crate::crypto::derive_signing_key_from_entropy(&entropy);
+    entropy.zeroize();
+
+    let mut rand_buf = [0u8; 16];
+    derive_sign_randomizer(&parsed.signing_hash, &mut rand_buf);
+
+    use slh_dsa::Sha2_128f;
+    use slh_dsa::SigningKey as Sk;
+    let sig = match <Sk<Sha2_128f>>::try_sign_with_context(
+        &signing_key,
+        &parsed.signing_hash,
+        &[],
+        Some(&rand_buf),
+    ) {
+        Ok(s) => s,
+        Err(_) => {
+            rand_buf.zeroize();
+            return NscStatus::CryptoError as u32;
+        }
+    };
+
+    let sig_bytes = sig.to_bytes();
+    for i in 0..SIGNATURE_LEN {
+        core::ptr::write_volatile(sig_ptr.add(i), sig_bytes[i]);
+    }
+
+    rand_buf.zeroize();
+    timeout::reset_activity();
+    ui::show_status("ZK Signed", "");
     NscStatus::Ok as u32
 }
 

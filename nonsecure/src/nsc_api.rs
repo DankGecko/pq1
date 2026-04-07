@@ -10,6 +10,7 @@ const CMD_GET_REMAINING: u32 = 1;
 const CMD_REQUEST_UNLOCK: u32 = 2;
 const CMD_GET_PUBKEY: u32 = 3;
 const CMD_SIGN: u32 = 4;
+const CMD_CLEAR_SIGN: u32 = 5;
 
 unsafe fn gateway_call(cmd: u32, arg0: u32, arg1: u32, arg2: u32) -> u32 {
     core::ptr::write_volatile(SHARED_DONE, 0);
@@ -48,6 +49,27 @@ pub fn sign(unsigned_tx: &[u8], sig_buf: &mut [u8]) -> u32 {
             unsigned_tx.as_ptr() as u32,
             sig_buf.as_mut_ptr() as u32,
             unsigned_tx.len() as u32,
+        )
+    }
+}
+
+/// ZK clear-sign: verify a Groth16 proof that the human-readable string
+/// matches the Aave calldata, display the verified string on the trusted UI,
+/// and sign the EIP-1559 transaction if the user confirms.
+///
+/// The payload buffer must contain:
+///   [0..384)           : Groth16 proof (π.A || π.B || π.C)
+///   [384..548)         : calldata (164 bytes, zero-padded)
+///   [548..612)         : human-readable string (64 bytes, null-padded)
+///   [612..616)         : tx_len (u32 LE)
+///   [616..616+tx_len)  : unsigned EIP-1559 transaction envelope
+pub fn clear_sign(payload: &[u8], sig_buf: &mut [u8]) -> u32 {
+    unsafe {
+        gateway_call(
+            CMD_CLEAR_SIGN,
+            payload.as_ptr() as u32,
+            sig_buf.as_mut_ptr() as u32,
+            payload.len() as u32,
         )
     }
 }

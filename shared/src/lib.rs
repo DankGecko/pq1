@@ -17,6 +17,39 @@ pub const MAX_ATTEMPTS: u8 = 9;
 pub const MAX_TX_LEN: usize = 4096;
 
 // ---------------------------------------------------------------------------
+// ZK clear signing constants (must match ZKlarity circuit parameters)
+// ---------------------------------------------------------------------------
+
+/// Maximum calldata size (ZKlarity circuit MAX_CALLDATA = 164 bytes).
+/// This is the raw smart contract calldata (selector + ABI-encoded params).
+pub const ZK_MAX_CALLDATA: usize = 164;
+
+/// Human-readable string length (ZKlarity circuit STRING_LEN = 64 bytes).
+pub const ZK_STRING_LEN: usize = 64;
+
+/// Groth16 proof size: π.A (96) + π.B (192) + π.C (96) = 384 bytes.
+pub const ZK_PROOF_LEN: usize = 384;
+
+/// Groth16 verification key size: alpha(96) + beta(192) + gamma(192) +
+/// delta(192) + 3×IC(288) = 960 bytes.
+/// The VK is protocol-specific — each smart contract publishes its own VK
+/// and stores `clearSigningVKHash` on-chain via governance.
+pub const ZK_VK_LEN: usize = 960;
+
+/// Total size of the fixed portion of a clear-sign request payload in NS SRAM.
+///
+/// Layout:
+///   [0..960)                     : Verification key (protocol-specific)
+///   [960..1344)                  : Groth16 proof (π.A || π.B || π.C)
+///   [1344..1508)                 : calldata (164 bytes, zero-padded)
+///   [1508..1572)                 : readable string (64 bytes, null-padded)
+///   [1572..1604)                 : vk_hash (32 bytes, expected SHA-256 of VK from on-chain)
+///   [1604..1608)                 : tx_len (u32 little-endian)
+///   [1608..1608+tx_len)          : unsigned EIP-1559 transaction envelope
+pub const ZK_HEADER_LEN: usize =
+    ZK_VK_LEN + ZK_PROOF_LEN + ZK_MAX_CALLDATA + ZK_STRING_LEN + 32 + 4;
+
+// ---------------------------------------------------------------------------
 // Non-secure SRAM boundaries (mps2-an505)
 // Used by secure world to validate NS pointers.
 // ---------------------------------------------------------------------------
@@ -47,6 +80,7 @@ pub const CMD_GET_REMAINING: u32 = 1;
 pub const CMD_REQUEST_UNLOCK: u32 = 2;
 pub const CMD_GET_PUBKEY: u32 = 3;
 pub const CMD_SIGN: u32 = 4;
+pub const CMD_CLEAR_SIGN: u32 = 5;
 
 // ---------------------------------------------------------------------------
 // NSC return status codes

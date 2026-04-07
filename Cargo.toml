@@ -5,6 +5,7 @@ members = [
     "secure",
     "nonsecure",
     "bip39",
+    "zk-test",
 ]
 resolver = "2"
 

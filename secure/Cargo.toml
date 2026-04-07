@@ -20,6 +20,9 @@ hmac = { version = "0.12", default-features = false }
 zerocopy = { version = "0.8", default-features = false }
 zeroize = { version = "1.8", default-features = false }
 
+# BLS12-381 pairing for Groth16 ZK proof verification (no_std, no alloc)
+bls12_381 = { version = "0.8", default-features = false, features = ["groups", "pairings"] }
+
 # TROPIC01 secure element (for real chip mode)
 tropic01 = { git = "https://github.com/tropicsquare/libtropic-rs", rev = "0cacb5ed94e5df491bfbb39e8702cc47598f7d63", features = ["keys"], optional = true }
 x25519-dalek = { version = "2.0.1", default-features = false, features = ["static_secrets"], optional = true }

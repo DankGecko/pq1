@@ -27,6 +27,7 @@ mod timeout;
 mod tropic01_se;
 mod tx;
 mod ui;
+mod zk;
 
 use crypto::{RMEM_ENCRYPTED_ENTROPY, RMEM_PIN_STATE, RMEM_VERIFYING_KEY};
 use secure_element::{MockSecureElement, SecureElement};
