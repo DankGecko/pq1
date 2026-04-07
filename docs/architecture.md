@@ -59,20 +59,32 @@ sphincs_rust/
 │   ├── Cargo.toml          #   zero dependencies
 │   └── src/lib.rs          #   NscStatus, size constants, memory addresses
 │
+├── bip39/                  # #![no_std] BIP-39 24-word mnemonic crate
+│   ├── Cargo.toml          #   sha2, hmac, zeroize
+│   ├── src/lib.rs          #   Mnemonic, PBKDF2-HMAC-SHA512, prefix lookup
+│   ├── src/wordlist.rs     #   Canonical 2048-word English wordlist
+│   └── tests/vectors.rs    #   Trezor 24-word test vectors (host-tested)
+│
 ├── secure/                 # TrustZone SECURE world firmware
-│   ├── Cargo.toml          #   no_std crypto: slh-dsa, aes-gcm, sha2, hmac
+│   ├── Cargo.toml          #   no_std crypto: slh-dsa, aes-gcm, sha2, hmac, bip39
 │   ├── memory.x            #   FLASH 0x10000000 + NSC 0x103FF000 + RAM 0x38000000
 │   ├── build.rs            #   Patches link.x to place .gnu.sgstubs in NSC region
 │   └── src/
-│       ├── main.rs         #   Boot: SAU → enroll → SysTick → boot NS
+│       ├── main.rs         #   Boot: SAU → first-boot wizard → SysTick → boot NS
 │       ├── sau.rs          #   SAU region config + MPC block config
 │       ├── boot_ns.rs      #   VTOR_NS + MSP_NS + BXNS
 │       ├── nsc.rs          #   Shared-memory gateway (4 commands)
-│       ├── crypto.rs       #   KDF, AES-GCM, PIN state, enrollment
+│       ├── crypto.rs       #   KDF, AES-GCM, BIP-39→SLH-DSA seed derivation
+│       ├── host_rng.rs     #   Host CSPRNG via semihosting /dev/urandom
 │       ├── pin.rs          #   PIN verify via MAC-and-Destroy chain
 │       ├── secure_element.rs  # trait SecureElement + MockSecureElement
 │       ├── semihosting_spi.rs # SpiDevice impl via semihosting (tropic01-se)
-│       └── tropic01_se.rs     # Tropic01SecureElement with e2e encrypted sessions
+│       ├── tropic01_se.rs     # Tropic01SecureElement with e2e encrypted sessions
+│       └── ui/
+│           ├── mod.rs         #   Display + Input + global singletons
+│           ├── pin_entry.rs   #   2-button 8-digit PIN entry (+ confirm helper)
+│           ├── confirm.rs     #   Multi-page tx confirmation navigator
+│           └── seed_wizard.rs #   First-boot mnemonic display / verify / restore
 │
 └── nonsecure/              # TrustZone NON-SECURE world firmware
     ├── Cargo.toml          #   minimal: cortex-m-rt + semihosting
@@ -261,30 +273,74 @@ make run
 
 ### Key Hierarchy
 
+The root of trust is a **24-word BIP-39 mnemonic** chosen on first boot
+(generated from the host CSPRNG / chip TRNG, or restored from a piece of
+paper). The mnemonic is **never persisted on the device** — it lives only on
+the user's paper backup.
+
+The on-device secret blob is the **32-byte BIP-39 entropy** that the 24
+words encode. The 48-byte SLH-DSA seed and the SigningKey itself are
+**recomputed on every unlock** by re-running the full BIP-39 → SLH-DSA
+chain. They never touch persistent storage.
+
+Everything is deterministically derived from the entropy, so the same 24
+words always produce the same SPHINCS+ keypair on any device running this
+firmware.
+
 ```
-                  ┌──────────────────┐
-                  │  master_secret   │  32 bytes, random
-                  │  (in TROPIC01)   │  protected by MAC-and-Destroy
-                  └────────┬─────────┘
-                           │
-              ┌────────────┼────────────┐
-              ▼                         ▼
-      derive_wrap_key()          MACD slot secrets
-      SHA256("sphincs-wrap-key"  (for PIN verification)
-             || master_secret    
-             || 0x00)            
-              │                         
-              ▼                         
-      ┌──────────────┐                 
-      │   wrap_key   │ AES-256-GCM key
-      └──────┬───────┘                 
-             │                         
-             ▼                         
-      ┌──────────────────────────┐     
-      │  encrypted signing key   │ 64 bytes + 12 nonce + 16 tag = 92 bytes
-      │  (stored in r-mem slot 0)│     
-      └──────────────────────────┘     
+                  ┌────────────────────────────┐
+                  │   24-word BIP-39 mnemonic  │  256 bits of entropy
+                  │   (paper backup, NOT on    │  + 8-bit checksum
+                  │    device after first boot)│
+                  └─────────────┬──────────────┘
+                                │  Mnemonic::to_entropy()
+                                ▼
+            ┌──────────────────────────────────────┐
+            │   BIP-39 entropy (32 B)              │
+            │   STORED encrypted in r-mem slot 0   │
+            │   under wrap_key derived from        │
+            │   PIN-gated master_secret            │
+            └────────────────┬─────────────────────┘
+                             │  Mnemonic::from_entropy()
+                             │  + PBKDF2-HMAC-SHA512 (2048 iters)
+                             ▼  ───── runs on every unlock ─────
+                  ┌────────────────────────────┐
+                  │      bip39_seed (64 B)     │  ephemeral, stack-only
+                  └─────────────┬──────────────┘
+                                │  slhdsa_seed_from_bip39():
+                                │  3 × SHA256("sphincs-slh-seed" || s || i)[..16]
+                                ▼
+                  ┌────────────────────────────┐
+                  │ SLH-DSA seed (48 B)        │  ephemeral, stack-only
+                  │ sk_seed ‖ sk_prf ‖ pk_seed │
+                  └─────────────┬──────────────┘
+                                │  slh_keygen_internal() (FIPS-205)
+                                ▼
+                  ┌────────────────────────────┐
+                  │  SigningKey<Sha2_128f>     │  ephemeral, stack-only
+                  │  (64 B + Merkle root)      │  zeroized after sign call
+                  └────────────────────────────┘
+
+  -- Independently --
+  master_secret = SHA256("sphincs-master" || entropy || 0x00)   # at provision
+                = decrypted from MACD chain via PIN              # at unlock
+  wrap_key      = SHA256("sphincs-wrap-key" || master_secret || 0x00)
+  → unwraps the 60-byte AES-GCM blob in r-mem slot 0 to recover entropy
 ```
+
+**On-device storage** (`RMEM_*` slots in the secure element):
+
+| Slot | Name                     | Contents                                  | Size |
+|------|--------------------------|-------------------------------------------|------|
+| 0    | `RMEM_ENCRYPTED_ENTROPY` | AES-GCM blob of the 32-byte BIP-39 entropy | 60 B |
+| 1    | `RMEM_PIN_STATE`         | next-attempt counter + 9 × per-attempt encrypted master_secret blobs | 433 B |
+| 2    | `RMEM_VERIFYING_KEY`     | 32-byte SLH-DSA public key (cached so the host can read it without unlocking) | 32 B |
+
+The mnemonic is **not** in any slot. The 48-byte SLH-DSA seed is **not** in
+any slot. Only the raw 32-byte BIP-39 entropy is persisted, which means the
+on-device secret is bit-for-bit identical to what the user's paper backup
+encodes. PBKDF2 + the slhdsa_seed_from_bip39 KDF run fresh on every
+unlock — ~tens of milliseconds, dwarfed by SPHINCS+ signing's seconds.
 
 ### PIN Protection (MAC-and-Destroy)
 
@@ -304,6 +360,49 @@ Verification (slot j = next_index):
   3. If decrypt succeeds → correct PIN, recover master_secret
   4. If decrypt fails → wrong PIN, increment next_index
 ```
+
+### Recovery from Seed Phrase
+
+If the device is lost, bricked (9 wrong PINs erase all MACD slots), or
+otherwise unusable, the user can restore the wallet on any replacement unit
+running the same firmware. The procedure:
+
+1. Power on a fresh / wiped device. The first-boot wizard runs.
+2. Choose **"Restore"** instead of **"New Wallet"**.
+3. Choose a new PIN (the PIN is local to each device — it gates only the
+   on-device encrypted state, not the mnemonic itself, so a recovered device
+   uses whatever new PIN the user picks).
+4. Type the 24 words from the paper backup using the trusted UI's letter-
+   scroll widget. The first 4 letters of every BIP-39 English word are
+   unique, so each word usually only needs 3 keystrokes before auto-completing.
+   Short words (`act`, `add`, `art`, …) drop into a candidate-pick list when
+   the prefix matches multiple longer words.
+5. The wizard verifies the BIP-39 checksum and rejects bad phrases.
+6. The same `slhdsa_seed_from_bip39` KDF runs and reconstructs an identical
+   48-byte SLH-DSA seed. The MACD chain is re-initialized, the encrypted seed
+   blob is rewritten, and the verifying key matches the original byte-for-byte.
+
+The recovery contract is the stability of two functions:
+
+```rust
+Mnemonic::to_seed("")                       // PBKDF2-HMAC-SHA512, 2048 iters
+crypto::slhdsa_seed_from_bip39(&bip39_seed) // domain-separated SHA-256 KDF
+```
+
+These are tested by host-side unit tests (`cargo test -p sphincs-tz-bip39`)
+against the canonical Trezor test vectors and by an end-to-end QEMU test
+that runs the Restore flow twice and confirms the verifying keys match
+byte-for-byte.
+
+### Backup Verification
+
+After displaying the 24 words on first boot, the wizard prompts for a
+spot-check of **3 randomly-selected words** (e.g. "Enter word 7", "Enter
+word 14", "Enter word 21") via the same word-entry widget used for
+recovery. The device only finalises provisioning if all three match. This
+catches transcription errors before they become permanent — same flow as
+Ledger / Trezor. The selected indices come from the host CSPRNG so the
+prompts differ between runs.
 
 ### SLH-DSA Parameters
 
@@ -408,14 +507,23 @@ The secure world must build first because the non-secure world links against `ve
     b. Configure MPC1 (SSRAM-1: blocks 0-3 S, 4+ NS)
     c. Configure SAU (4 regions: NS code, NSC veneers, NS data, NS periph)
     d. DSB + ISB barriers
-    e. Enroll test SPHINCS+ keypair (PIN "12345678"):
-       - mock-se: MockSecureElement in SRAM
-       - tropic01-se: e2e encrypted session to real chip via /dev/ttyACM0
-    f. Initialize shared memory gateway (clear command buffer)
-    g. Enable secure SysTick (1000-cycle interval)
-    h. Set VTOR_NS = 0x00200000
-    i. Set MSP_NS from NS vector table[0]
-    j. BXNS to NS reset handler
+    e. Initialize trusted UI (display + buttons)
+    f. is_provisioned()? → if no, run first-boot wizard:
+       - User picks (and confirms) a PIN via the trusted UI
+       - User chooses "New Wallet" or "Restore"
+       - New: 32 B host_rng entropy → BIP-39 24-word mnemonic → display
+              paginated → spot-check 3 random words against re-entry
+       - Restore: word-by-word entry with 4-letter prefix narrowing
+       - master_secret = KDF("sphincs-master", entropy, 0)
+       - One-shot full chain (PBKDF2 + slhdsa_seed_from_bip39 + KeyGen)
+         to compute the verifying key for caching in slot 2
+       - MACD chain initialized, encrypted ENTROPY (not seed) and
+         verifying key written to r-mem (mock or TROPIC01 e2e session)
+    g. Initialize shared memory gateway (clear command buffer)
+    h. Enable secure SysTick (1000-cycle interval)
+    i. Set VTOR_NS = 0x00200000
+    j. Set MSP_NS from NS vector table[0]
+    k. BXNS to NS reset handler
  5. Non-secure world boots via cortex-m-rt
  6. NS main() exercises gateway commands
  7. debug::exit(EXIT_SUCCESS) terminates QEMU
@@ -441,13 +549,18 @@ NS World                          Secure World                        TROPIC01 C
 5. CMD=SIGN, ARG0=&hash,     ──►  SysTick fires
    ARG1=&sig_buf, ARG2=17088     Read tx_hash from NS memory
                                   [tropic01-se: open e2e session] ──► X25519 handshake
-                                  Read encrypted SK from SE ─────E2E─► r_mem_data_read
+                                  Read encrypted ENTROPY (60 B) ─E2E─► r_mem_data_read slot 0
                                   [tropic01-se: close session] ──────► Zeroize keys
                                   Derive wrap_key from master_secret
-                                  AES-GCM decrypt signing key (64 bytes)
+                                  AES-GCM decrypt → 32 B BIP-39 entropy
+                                  Mnemonic::from_entropy(entropy)
+                                  PBKDF2-HMAC-SHA512(2048) → 64 B bip39_seed
+                                  slhdsa_seed_from_bip39 → 48 B SLH-DSA seed
+                                  slh_keygen_internal → SigningKey
                                   slh_dsa::SigningKey::try_sign(tx_hash)
                                   Write 17,088-byte signature to NS sig_buf
-                                  Wipe signing key from RAM
+                                  Wipe entropy + bip39_seed + slh_seed
+                                  + signing key from RAM
                                   RESULT=Ok, DONE=1
 6. Read RESULT=Ok            ◄──
    Read 17,088-byte signature
@@ -491,11 +604,22 @@ When the STM32U585 board arrives:
    implementation using Embassy's SPI driver. The `Tropic01SecureElement` and its
    `with_session!` macro work unchanged — only the SpiDevice impl swaps out.
 
-4. **RNG:** Replace semihosting `/dev/urandom` reads with the STM32U585's hardware RNG
-   (`embassy_stm32::rng`) or the TROPIC01's TRNG (`session.get_random_value(32)`).
+4. **RNG:** Replace semihosting `/dev/urandom` reads in `secure/src/host_rng.rs`
+   with the STM32U585's hardware RNG (`embassy_stm32::rng`) or the TROPIC01's
+   TRNG (`session.get_random_value(32)`). The `host_rng::fill` and
+   `host_rng::byte` API can stay the same — only the implementation changes.
+   This RNG feeds:
+   * BIP-39 mnemonic generation in the first-boot wizard (32 bytes of entropy)
+   * Word indices for the 3-word backup spot check
+   * Ephemeral X25519 keypairs for each TROPIC01 e2e session
 
-5. **Key generation:** Replace the deterministic test seed with true random key generation
-   using `SigningKey::<Sha2_128f>::new(&mut hw_rng)`.
+5. **Key generation:** Already mnemonic-driven. The first-boot wizard
+   (`secure/src/main.rs::run_first_boot_wizard`) prompts the user for a PIN
+   and a 24-word BIP-39 mnemonic (generated fresh or restored from paper).
+   The 48-byte SLH-DSA seed is then derived deterministically via
+   `crypto::slhdsa_seed_from_bip39`. Nothing else needs to change for
+   STM32U585 — the mnemonic flow runs identically on the real hardware,
+   only the RNG backend differs.
 
 6. **Embassy:** Add `embassy-stm32` for async HAL (USB, SPI, GPIO, RNG). Embassy supports
    STM32U585 via feature flag `stm32u585zi`.
@@ -508,9 +632,10 @@ All cryptographic crates run without heap allocation:
 |-------|---------|--------|-------|
 | `slh-dsa` | 0.2.0-rc.4 | `default-features = false` | 17 KB signatures on stack |
 | `aes-gcm` | 0.10 | `default-features = false, features = ["aes"]` | In-place encrypt/decrypt |
-| `sha2` | 0.10 | `default-features = false` | Used for KDF |
-| `hmac` | 0.12 | `default-features = false` | Used for mock MACD |
+| `sha2` | 0.10 | `default-features = false` | Used for KDF + PBKDF2-HMAC-SHA512 |
+| `hmac` | 0.12 | `default-features = false` | Used for mock MACD + PBKDF2 |
 | `signature` | 3.0.0-rc.10 | `default-features = false` | Signer/Verifier traits |
+| `sphincs-tz-bip39` | local crate | `#![no_std]` | 24-word BIP-39 mnemonic + PBKDF2-HMAC-SHA512, host-tested against canonical Trezor vectors |
 | `tropic01` | git (libtropic-rs) | `#![no_std]` | TROPIC01 driver (optional, `tropic01-se` feature) |
 | `x25519-dalek` | 2.0.1 | `default-features = false` | X25519 for e2e session (optional) |
 

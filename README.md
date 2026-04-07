@@ -33,25 +33,39 @@ Post-quantum hardware wallet firmware using **SLH-DSA (SPHINCS+)** signatures wi
 
 ## Quick Start
 
+### Interactive: drive the wallet with your laptop's arrow keys
+
 ```bash
-# Run with mock secure element (no hardware needed)
-make run
-
-# Run with real TROPIC01 chip
-make run-tropic01
+make play
 ```
 
-Expected output:
+Maps your two arrow keys to the two physical buttons of the emulated
+hardware wallet. Walk through the first-boot wizard, see the 24 BIP-39
+words on the OLED, do the spot-check, sign a transaction.
+
+| Key            | Action                                   |
+|----------------|------------------------------------------|
+| `<-`           | Left button — back / scroll down         |
+| `->`           | Right button — next / scroll up          |
+| `<-` + `->`    | Confirm (press both arrows together)     |
+| `Esc`          | Cancel / back out                        |
+| `Ctrl-C`       | Quit                                     |
+
+### Non-interactive smoke test
+
+```bash
+make run                # raw single-char protocol, useful for piping inputs
+make run-tropic01       # use the real TROPIC01 chip via /dev/ttyACM0
 ```
-[S] Secure world starting...
-[S] SAU + MPC configured
-[S] Test key enrolled (mock SE)
-[S] Gateway ready
-[S] Booting non-secure world...
+
+Expected end-of-run output:
+```
+[S] Wallet ready
 [NS] Non-secure world started!
 [NS] Remaining PIN attempts: 9
 [NS] Get pubkey: Ok
-[NS] Enter PIN: Ok
+[NS] Pubkey[0..4]: [30, 77, d8, 24]
+[NS] Unlock: Ok
 [NS] Sign: Ok
 [NS] Sig len: 17088 bytes
 [NS] === All tests passed! ===

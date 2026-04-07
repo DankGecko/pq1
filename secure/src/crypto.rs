@@ -1,5 +1,37 @@
 //! Crypto helpers: KDF, AES-GCM wrap/unwrap, PIN state ser/de, and on-unlock
-//! SLH-DSA key derivation from a stored seed.
+//! SLH-DSA key derivation from the stored BIP-39 entropy.
+//!
+//! ## Why entropy and not the SLH-DSA seed?
+//!
+//! The on-device secret blob is the **32-byte BIP-39 entropy** — the raw
+//! 256 bits the user's 24-word phrase encodes. On every unlock the secure
+//! world re-runs the full BIP-39 derivation:
+//!
+//! ```text
+//!     entropy (32 B)
+//!         │
+//!         ▼ Mnemonic::from_entropy()
+//!     mnemonic
+//!         │
+//!         ▼ PBKDF2-HMAC-SHA512, 2048 iters
+//!     bip39_seed (64 B)
+//!         │
+//!         ▼ slhdsa_seed_from_bip39  (3 × SHA-256 KDF)
+//!     SLH-DSA seed (48 B)
+//!         │
+//!         ▼ slh_keygen_internal (FIPS-205)
+//!     SigningKey<Sha2_128f>
+//! ```
+//!
+//! Storing entropy rather than the post-PBKDF2 SLH-DSA seed has two benefits:
+//! 1. Smaller secure-element footprint (32 B vs 48 B plaintext, 60 B vs 76 B
+//!    AES-GCM blob).
+//! 2. The on-device secret is bit-for-bit identical to the user's recovery
+//!    paper backup — there is no derived intermediate that could go stale
+//!    if anything in the BIP-39 chain ever changes.
+//!
+//! The cost is one PBKDF2-HMAC-SHA512 (2048 iters) per unlock, dwarfed by
+//! the SPHINCS+ signing time itself.
 
 use aes_gcm::aead::{AeadInPlace, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
@@ -7,23 +39,26 @@ use sha2::{Digest, Sha256};
 
 use crate::secure_element::SecureElement;
 use slh_dsa::{Sha2_128f, SigningKey};
+use sphincs_tz_bip39::{Mnemonic, ENTROPY_BYTES};
 use sphincs_tz_shared::MAX_ATTEMPTS;
 use zeroize::Zeroize;
 
 // r-mem slot assignments
-pub const RMEM_ENCRYPTED_SEED: u16 = 0;
+pub const RMEM_ENCRYPTED_ENTROPY: u16 = 0;
 pub const RMEM_PIN_STATE: u16 = 1;
 pub const RMEM_VERIFYING_KEY: u16 = 2;
 
 /// Length of the SLH-DSA-Sha2_128f seed material:
-/// `sk_seed (16) ‖ sk_prf (16) ‖ pk_seed (16)`. The fourth field of a
-/// serialized SigningKey, `pk_root` (16 B), is computed deterministically
-/// from these three on every unlock — that's the whole point of "store the
-/// seed, derive the key".
+/// `sk_seed (16) ‖ sk_prf (16) ‖ pk_seed (16)`. Computed from the BIP-39
+/// entropy on every unlock; never persisted.
 pub const SEED_LEN: usize = 48;
 
-/// Total stored blob: 12-byte nonce ‖ encrypted_seed (48) ‖ AES-GCM tag (16).
-pub const SEED_BLOB_LEN: usize = 12 + SEED_LEN + 16;
+/// On-device entropy length: 256 bits = the BIP-39 entropy that the user's
+/// 24-word phrase encodes.
+pub const ENTROPY_LEN: usize = ENTROPY_BYTES;
+
+/// Total stored blob: 12-byte nonce ‖ encrypted_entropy (32) ‖ AES-GCM tag (16).
+pub const ENTROPY_BLOB_LEN: usize = 12 + ENTROPY_LEN + 16;
 
 // ---------------------------------------------------------------------------
 // KDF helpers
@@ -49,8 +84,8 @@ pub fn derive_wrap_key(master_secret: &[u8; 32]) -> [u8; 32] {
     kdf(b"sphincs-wrap-key", master_secret, 0)
 }
 
-pub fn derive_seed_nonce(master_secret: &[u8; 32]) -> [u8; 12] {
-    let h = kdf(b"sphincs-seed-nonce", master_secret, 0);
+pub fn derive_entropy_nonce(master_secret: &[u8; 32]) -> [u8; 12] {
+    let h = kdf(b"sphincs-entropy-nonce", master_secret, 0);
     let mut n = [0u8; 12];
     n.copy_from_slice(&h[..12]);
     n
@@ -103,59 +138,65 @@ pub fn aes_decrypt_inplace(
 }
 
 // ---------------------------------------------------------------------------
-// Seed encryption/decryption with the master secret
+// Entropy encryption/decryption with the master secret
 // ---------------------------------------------------------------------------
 
-/// Encrypt a 48-byte SLH-DSA seed under the wrap key derived from
-/// `master_secret`. Output layout: `nonce(12) ‖ ciphertext(48) ‖ tag(16)`.
-pub fn encrypt_seed_blob(seed: &[u8; SEED_LEN], master_secret: &[u8; 32]) -> [u8; SEED_BLOB_LEN] {
+/// Encrypt the 32-byte BIP-39 entropy under the wrap key derived from
+/// `master_secret`. Output layout: `nonce(12) ‖ ciphertext(32) ‖ tag(16)`.
+pub fn encrypt_entropy_blob(
+    entropy: &[u8; ENTROPY_LEN],
+    master_secret: &[u8; 32],
+) -> [u8; ENTROPY_BLOB_LEN] {
     let mut wrap = derive_wrap_key(master_secret);
-    let nonce = derive_seed_nonce(master_secret);
+    let nonce = derive_entropy_nonce(master_secret);
 
-    let mut blob = [0u8; SEED_BLOB_LEN];
+    let mut blob = [0u8; ENTROPY_BLOB_LEN];
     blob[..12].copy_from_slice(&nonce);
-    blob[12..12 + SEED_LEN].copy_from_slice(seed);
+    blob[12..12 + ENTROPY_LEN].copy_from_slice(entropy);
 
     let cipher = Aes256Gcm::new_from_slice(&wrap).unwrap();
     let tag = cipher
         .encrypt_in_place_detached(
             Nonce::from_slice(&nonce),
             &[],
-            &mut blob[12..12 + SEED_LEN],
+            &mut blob[12..12 + ENTROPY_LEN],
         )
-        .expect("seed encryption");
-    blob[12 + SEED_LEN..].copy_from_slice(&tag);
+        .expect("entropy encryption");
+    blob[12 + ENTROPY_LEN..].copy_from_slice(&tag);
 
     wrap.zeroize();
     blob
 }
 
-/// Decrypt a stored seed blob with the master secret. Returns the 48-byte
-/// seed material on success.
-pub fn decrypt_seed_blob(blob: &[u8], master_secret: &[u8; 32]) -> Result<[u8; SEED_LEN], ()> {
-    if blob.len() != SEED_BLOB_LEN {
+/// Decrypt a stored entropy blob with the master secret. Returns the
+/// 32-byte BIP-39 entropy on success.
+pub fn decrypt_entropy_blob(
+    blob: &[u8],
+    master_secret: &[u8; 32],
+) -> Result<[u8; ENTROPY_LEN], ()> {
+    if blob.len() != ENTROPY_BLOB_LEN {
         return Err(());
     }
     let mut wrap = derive_wrap_key(master_secret);
     // The nonce stored at the head of the blob; we trust it because the
     // wrap_key is master-bound.
     let nonce: [u8; 12] = blob[..12].try_into().unwrap();
-    let mut seed_buf = [0u8; SEED_LEN];
-    seed_buf.copy_from_slice(&blob[12..12 + SEED_LEN]);
-    let tag = aes_gcm::Tag::from_slice(&blob[12 + SEED_LEN..]);
+    let mut entropy_buf = [0u8; ENTROPY_LEN];
+    entropy_buf.copy_from_slice(&blob[12..12 + ENTROPY_LEN]);
+    let tag = aes_gcm::Tag::from_slice(&blob[12 + ENTROPY_LEN..]);
 
     let cipher = Aes256Gcm::new_from_slice(&wrap).unwrap();
     let r = cipher
-        .decrypt_in_place_detached(Nonce::from_slice(&nonce), &[], &mut seed_buf, tag)
+        .decrypt_in_place_detached(Nonce::from_slice(&nonce), &[], &mut entropy_buf, tag)
         .map_err(|_| ());
 
     wrap.zeroize();
     r?;
-    Ok(seed_buf)
+    Ok(entropy_buf)
 }
 
-/// Derive a fully-formed SLH-DSA-SHA2-128f signing key from the 48-byte
-/// stored seed. Calls the FIPS-205 `slh_keygen_internal` primitive — the
+/// Derive a fully-formed SLH-DSA-SHA2-128f signing key from a 48-byte
+/// SLH-DSA seed. Calls the FIPS-205 `slh_keygen_internal` primitive — the
 /// `pk_root` Merkle root is *computed* from `sk_seed`/`pk_seed`, not just
 /// deserialized.
 pub fn derive_signing_key(seed: &[u8; SEED_LEN]) -> SigningKey<Sha2_128f> {
@@ -163,6 +204,76 @@ pub fn derive_signing_key(seed: &[u8; SEED_LEN]) -> SigningKey<Sha2_128f> {
     let sk_prf = &seed[16..32];
     let pk_seed = &seed[32..48];
     SigningKey::<Sha2_128f>::slh_keygen_internal(sk_seed, sk_prf, pk_seed)
+}
+
+/// Derive the 48-byte SLH-DSA seed material deterministically from the 64-byte
+/// BIP-39 seed (PBKDF2-HMAC-SHA512 output of the user's mnemonic).
+///
+/// Domain-separated with `"sphincs-slh-seed"` so the same mnemonic, used in a
+/// completely different wallet (e.g. BIP-44 Bitcoin), produces independent
+/// key material — losing one cannot pivot to compromise the other.
+///
+/// Three SHA-256 chunks (one per 16-byte SLH-DSA seed component) keyed by an
+/// index byte, so a hypothetical SHA-256 collision in one chunk cannot be
+/// pivoted to control the others.
+///
+/// This function is the **recovery contract**: as long as it remains stable,
+/// the same 24-word phrase always produces the same SPHINCS+ keypair, so a
+/// user who loses or bricks their device can restore from their written-down
+/// phrase on any device that runs this firmware.
+pub fn slhdsa_seed_from_bip39(bip39_seed: &[u8; 64]) -> [u8; SEED_LEN] {
+    let mut out = [0u8; SEED_LEN];
+    let chunk0 = kdf(b"sphincs-slh-seed", bip39_seed, 0);
+    let chunk1 = kdf(b"sphincs-slh-seed", bip39_seed, 1);
+    let chunk2 = kdf(b"sphincs-slh-seed", bip39_seed, 2);
+    out[0..16].copy_from_slice(&chunk0[..16]);
+    out[16..32].copy_from_slice(&chunk1[..16]);
+    out[32..48].copy_from_slice(&chunk2[..16]);
+    out
+}
+
+/// Run the full BIP-39 → SLH-DSA derivation chain on a 32-byte entropy and
+/// return the SPHINCS+ signing key. Called on every unlock so the
+/// `SigningKey` only exists in secure SRAM for the duration of the actual
+/// signing operation, never persisted in any form.
+///
+/// PBKDF2-HMAC-SHA512 (2048 iters) is the dominant cost (~tens of ms on a
+/// Cortex-M33; dwarfed by SPHINCS+ signing's seconds).
+pub fn derive_signing_key_from_entropy(
+    entropy: &[u8; ENTROPY_LEN],
+) -> SigningKey<Sha2_128f> {
+    // 1. Reconstruct the mnemonic from the stored entropy (recomputes
+    //    checksum; never produces words out loud).
+    let mnemonic = Mnemonic::from_entropy(entropy);
+
+    // 2. PBKDF2-HMAC-SHA512 with the empty passphrase.
+    let mut bip39_seed = mnemonic.to_seed("");
+
+    // 3. Domain-separate to the 48-byte SLH-DSA seed.
+    let mut slh_seed = slhdsa_seed_from_bip39(&bip39_seed);
+    bip39_seed.zeroize();
+
+    // 4. FIPS-205 KeyGen.
+    let sk = derive_signing_key(&slh_seed);
+    slh_seed.zeroize();
+
+    // mnemonic Drop zeros its 24 word indices.
+    sk
+}
+
+/// Same as `derive_signing_key_from_entropy` but also returns the 32-byte
+/// SLH-DSA verifying key bytes. Used by provisioning to cache the VK in
+/// r-mem slot 2 without keeping the full SigningKey alive longer than
+/// necessary.
+pub fn derive_keypair_from_entropy(
+    entropy: &[u8; ENTROPY_LEN],
+) -> (SigningKey<Sha2_128f>, [u8; 32]) {
+    use signature::Keypair;
+    let sk = derive_signing_key_from_entropy(entropy);
+    let vk_array = sk.verifying_key().to_bytes();
+    let mut vk_bytes = [0u8; 32];
+    vk_bytes.copy_from_slice(vk_array.as_slice());
+    (sk, vk_bytes)
 }
 
 // ---------------------------------------------------------------------------
@@ -217,43 +328,56 @@ pub fn deserialize_pin_state(blob: &[u8], blob_len: usize) -> Result<PinState, (
 // First-boot provisioning (mock SE path)
 // ---------------------------------------------------------------------------
 
-/// One-shot provisioning for the mock secure element. Generates a fresh seed,
-/// derives the SLH-DSA verifying key, sets up the MAC-and-Destroy PIN chain,
-/// and stores everything in r-mem. Only called when the device is detected
-/// as unprovisioned (see `main::is_provisioned`).
+/// Provision the (mock) secure element from a user-supplied BIP-39 mnemonic.
 ///
-/// On the mock SE, the "TRNG" is a deterministic value because we have no
-/// hardware RNG in QEMU. This is fine for testing only — `tropic01_se`
-/// uses the chip TRNG and is what runs on real hardware.
+/// This is the entry point for both the "new wallet" and "restore from seed
+/// phrase" wizard branches. The mnemonic itself is **not** persisted; only
+/// the **32-byte BIP-39 entropy** (encrypted under the master_secret), the
+/// PIN-gated MAC-and-Destroy chain, and the cached verifying key are
+/// written to r-mem. The 48-byte SLH-DSA seed and the SigningKey itself
+/// are never stored — they are recomputed on every unlock by running the
+/// full BIP-39 → SLH-DSA chain.
+///
+/// Determinism: the same `(mnemonic, pin)` pair always produces the same
+/// SPHINCS+ keypair on any device running this firmware. That is the
+/// recovery guarantee — if the device is lost or bricked, restoring from the
+/// 24 written-down words on a replacement unit yields the identical wallet.
 #[cfg(feature = "mock-se")]
-pub fn provision_mock_device(se: &mut impl SecureElement) {
-    use signature::Keypair;
+pub fn provision_with_mnemonic(
+    se: &mut impl SecureElement,
+    mnemonic: &sphincs_tz_bip39::Mnemonic,
+    pin: &[u8; 8],
+) {
+    // 1. Recover the 32-byte BIP-39 entropy from the mnemonic. The mnemonic
+    //    was either freshly generated from this entropy (new-wallet flow,
+    //    same bytes round-trip) or parsed from user input (restore flow,
+    //    BIP-39 checksum already verified by Mnemonic::from_indices).
+    let mut entropy = mnemonic
+        .to_entropy()
+        .expect("mnemonic was already checksum-verified");
 
-    // Deterministic seed for QEMU-only testing.
-    let mut seed = [0u8; SEED_LEN];
-    for (i, b) in seed.iter_mut().enumerate() {
-        *b = i as u8 + 0x20;
-    }
+    // 2. Master secret is derived directly from the entropy — no PBKDF2
+    //    needed at provisioning time. This means the unlock path (which
+    //    recovers master_secret from the PIN-gated MACD chain) doesn't have
+    //    to re-derive it from the post-PBKDF2 SLH-DSA seed; PBKDF2 only runs
+    //    when actually computing a SigningKey for signing.
+    let mut master_secret: [u8; 32] = kdf(b"sphincs-master", &entropy, 0);
 
-    // Derive the keypair to compute the verifying key.
-    let signing_key = derive_signing_key(&seed);
-    let vk = signing_key.verifying_key();
-    let vk_bytes = vk.to_bytes();
+    // 3. Run the full BIP-39 → SLH-DSA chain ONCE so we can cache the
+    //    32-byte verifying key in r-mem. After this, the SigningKey is
+    //    immediately dropped and only the entropy survives in encrypted form.
+    let (sk, vk_bytes) = derive_keypair_from_entropy(&entropy);
+    drop(sk);
 
-    // Test PIN
-    let pin: [u8; 8] = *b"12345678";
+    // 4. Encrypt the entropy under the master-derived wrap key.
+    let entropy_blob = encrypt_entropy_blob(&entropy, &master_secret);
 
-    // Master secret (deterministic for the mock)
-    let mut master_secret: [u8; 32] = kdf(b"test-master", &seed[..32], 0);
-
-    // Encrypt seed
-    let seed_blob = encrypt_seed_blob(&seed, &master_secret);
-
-    // Initialize MACD slots and build per-slot encrypted master_secret blobs
+    // 5. Initialize MACD slots and build the per-slot encrypted
+    //    master_secret blobs (one per allowed PIN attempt).
     let mut encrypted_secrets = [[0u8; PER_SLOT_CT_LEN]; MAX_ATTEMPTS as usize];
     for j in 0..MAX_ATTEMPTS {
         let init_in = macd_init_input(&master_secret, j);
-        let pin_in = macd_pin_input(&pin, j);
+        let pin_in = macd_pin_input(pin, j);
 
         se.mac_and_destroy(j as u16, &init_in).unwrap();
         let mut w_j = se.mac_and_destroy(j as u16, &pin_in).unwrap();
@@ -266,9 +390,9 @@ pub fn provision_mock_device(se: &mut impl SecureElement) {
         w_j.zeroize();
     }
 
-    // Store everything in r-mem
-    se.r_mem_erase(RMEM_ENCRYPTED_SEED).ok();
-    se.r_mem_write(RMEM_ENCRYPTED_SEED, &seed_blob).unwrap();
+    // 6. Store everything in r-mem.
+    se.r_mem_erase(RMEM_ENCRYPTED_ENTROPY).ok();
+    se.r_mem_write(RMEM_ENCRYPTED_ENTROPY, &entropy_blob).unwrap();
 
     let mut pin_state_buf = [0u8; PIN_STATE_MAX_LEN];
     let ps_len = serialize_pin_state(0, &encrypted_secrets, &mut pin_state_buf);
@@ -279,7 +403,7 @@ pub fn provision_mock_device(se: &mut impl SecureElement) {
     se.r_mem_erase(RMEM_VERIFYING_KEY).ok();
     se.r_mem_write(RMEM_VERIFYING_KEY, &vk_bytes).unwrap();
 
-    // Wipe sensitive intermediates
-    seed.zeroize();
+    // 7. Wipe sensitive intermediates from the stack.
+    entropy.zeroize();
     master_secret.zeroize();
 }

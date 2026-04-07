@@ -4,6 +4,7 @@ members = [
     "shared",
     "secure",
     "nonsecure",
+    "bip39",
 ]
 resolver = "2"
 

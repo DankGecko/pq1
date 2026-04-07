@@ -7,14 +7,18 @@
 //!   * long right   → next position (or submit on the last position)
 //!   * long left    → previous position (or cancel on position 0)
 
-use super::{display, input, Button, Press, DISPLAY_COLS};
+use super::{display, input, show_status, Button, Press, DISPLAY_COLS};
 use crate::timeout;
 use sphincs_tz_shared::PIN_LEN;
+use zeroize::Zeroize;
 
 pub enum PinEntryResult {
     Pin([u8; PIN_LEN]),
     Cancelled,
     IdleWipe,
+    /// First and confirmation PIN entries did not match. Caller should
+    /// inform the user and re-prompt.
+    Mismatch,
 }
 
 pub fn enter_pin() -> PinEntryResult {
@@ -113,6 +117,47 @@ fn render_pin_screen(pin: &[u8; PIN_LEN], pos: usize) {
 }
 
 fn wipe_pin(pin: &mut [u8; PIN_LEN]) {
-    use zeroize::Zeroize;
     pin.zeroize();
+}
+
+/// First-boot PIN selection: prompt twice and verify the entries match,
+/// so the user does not typo themselves into a brick on day one.
+///
+/// Returns `Pin` only when both entries match exactly. On any cancel,
+/// idle-wipe, or mismatch, returns the corresponding variant and zeroes any
+/// PIN material that briefly held a value.
+pub fn enter_pin_with_confirm() -> PinEntryResult {
+    show_status("Set new PIN", "");
+    let first = match enter_pin() {
+        PinEntryResult::Pin(p) => p,
+        other => return other,
+    };
+
+    show_status("Confirm PIN", "");
+    let second = match enter_pin() {
+        PinEntryResult::Pin(p) => p,
+        other => {
+            // We had a first PIN in flight; wipe it before bailing.
+            let mut f = first;
+            f.zeroize();
+            return other;
+        }
+    };
+
+    // Constant-time-ish comparison: don't early-return on mismatch.
+    let mut diff: u8 = 0;
+    for i in 0..PIN_LEN {
+        diff |= first[i] ^ second[i];
+    }
+
+    let mut a = first;
+    let mut b = second;
+    if diff != 0 {
+        a.zeroize();
+        b.zeroize();
+        return PinEntryResult::Mismatch;
+    }
+    // a (== b) is the confirmed PIN. Move it out, wipe b.
+    b.zeroize();
+    PinEntryResult::Pin(a)
 }

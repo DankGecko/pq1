@@ -10,7 +10,7 @@ NONSECURE_ELF = target/nonsecure/$(TARGET)/release/sphincs-tz-nonsecure
 # Remove it for production builds to eliminate all debug strings.
 FEATURES ?= mock-se,debug-log,ui-semihosting
 
-.PHONY: all clean secure nonsecure run run-tropic01 run-hw setup-serial
+.PHONY: all clean secure nonsecure run play run-tropic01 run-hw setup-serial
 
 all: secure nonsecure
 
@@ -38,6 +38,19 @@ run: all
 		-semihosting-config enable=on,target=native,chardev=hostio \
 		-kernel $(SECURE_ELF) \
 		-device loader,file=$(NONSECURE_ELF)
+
+# Interactive two-button hardware-wallet emulation. Maps your laptop's
+# arrow keys to the two physical buttons:
+#   <-           Left button (back / scroll down)
+#   ->           Right button (next / scroll up)
+#   <- + ->      Confirm (press both arrows together within 150 ms)
+#   Esc          Cancel / back
+#   Ctrl-C       Quit
+# tools/wallet_run.py spawns QEMU under the hood, owns the terminal in
+# raw mode, and forwards button events through the existing semihosting
+# single-char protocol.
+play: all
+	@python3 tools/wallet_run.py
 
 # Configure /dev/ttyACM0 for TROPIC01 communication
 setup-serial:

@@ -15,6 +15,7 @@ macro_rules! secure_log {
 
 mod boot_ns;
 mod crypto;
+mod host_rng;
 mod nsc;
 mod pin;
 mod sau;
@@ -27,7 +28,7 @@ mod tropic01_se;
 mod tx;
 mod ui;
 
-use crypto::{RMEM_ENCRYPTED_SEED, RMEM_PIN_STATE, RMEM_VERIFYING_KEY};
+use crypto::{RMEM_ENCRYPTED_ENTROPY, RMEM_PIN_STATE, RMEM_VERIFYING_KEY};
 use secure_element::{MockSecureElement, SecureElement};
 
 const NS_FLASH_BASE: u32 = 0x0020_0000;
@@ -60,9 +61,107 @@ fn setup_systick() {
 /// PIN state, and verifying key. Used to skip re-provisioning on every boot.
 fn is_provisioned(se: &mut impl SecureElement) -> bool {
     let mut buf = [0u8; 128];
-    se.r_mem_read(RMEM_ENCRYPTED_SEED, &mut buf).is_ok()
+    se.r_mem_read(RMEM_ENCRYPTED_ENTROPY, &mut buf).is_ok()
         && se.r_mem_read(RMEM_PIN_STATE, &mut buf).is_ok()
         && se.r_mem_read(RMEM_VERIFYING_KEY, &mut buf).is_ok()
+}
+
+/// Run the first-boot interactive wizard. Loops until the user successfully:
+/// 1. Picks (and confirms) a PIN
+/// 2. Either generates a fresh BIP-39 mnemonic or restores one
+/// 3. (For new wallets) writes down the displayed phrase and passes the
+///    3-word spot check
+///
+/// Returns `(Mnemonic, pin)` to the caller, which is responsible for
+/// provisioning the secure element. The mnemonic only ever lives on the
+/// stack and is zeroed on drop. The caller must wipe the returned PIN.
+///
+/// On any cancel/idle-wipe/mismatch the wizard restarts from PIN entry —
+/// there is no other recovery from a bricked first boot.
+fn run_first_boot_wizard() -> (sphincs_tz_bip39::Mnemonic, [u8; 8]) {
+    use ui::pin_entry::{enter_pin_with_confirm, PinEntryResult};
+    use ui::seed_wizard::{
+        choose_setup_mode, enter_mnemonic, show_mnemonic, verify_mnemonic, WizardChoice,
+        WizardError, WizardResult,
+    };
+    use zeroize::Zeroize;
+
+    loop {
+        // ---- 1. Choose PIN (twice) ----
+        let pin = match enter_pin_with_confirm() {
+            PinEntryResult::Pin(p) => p,
+            PinEntryResult::Mismatch => {
+                ui::show_status("PINs differ", "retry...");
+                continue;
+            }
+            PinEntryResult::Cancelled => {
+                ui::show_status("Cancelled", "retry...");
+                continue;
+            }
+            PinEntryResult::IdleWipe => {
+                ui::show_status("Idle", "retry...");
+                continue;
+            }
+        };
+
+        // ---- 2. New or restore? ----
+        let mnemonic = match choose_setup_mode() {
+            WizardChoice::NewWallet => {
+                // Pull 32 bytes of entropy from the host CSPRNG (semihosting
+                // /dev/urandom on QEMU; will be the on-board hardware RNG on
+                // STM32U585 — see docs/architecture.md "Porting to STM32U585").
+                let mut entropy = [0u8; 32];
+                if host_rng::fill(&mut entropy).is_err() {
+                    let mut p = pin;
+                    p.zeroize();
+                    ui::show_status("RNG failed", "retry...");
+                    continue;
+                }
+                let m = sphincs_tz_bip39::Mnemonic::from_entropy(&entropy);
+                entropy.zeroize();
+
+                // Show the 24 words paginated; require the user to walk to
+                // the last page before they can confirm.
+                if show_mnemonic(&m) != WizardResult::Confirmed {
+                    let mut p = pin;
+                    p.zeroize();
+                    ui::show_status("Cancelled", "retry...");
+                    continue;
+                }
+                // Spot-check 3 random words against what they wrote down.
+                if verify_mnemonic(&m) != WizardResult::Confirmed {
+                    let mut p = pin;
+                    p.zeroize();
+                    ui::show_status("Verify fail", "retry...");
+                    continue;
+                }
+                m
+            }
+            WizardChoice::Restore => match enter_mnemonic() {
+                Ok(m) => m,
+                Err(WizardError::Cancelled) => {
+                    let mut p = pin;
+                    p.zeroize();
+                    ui::show_status("Cancelled", "retry...");
+                    continue;
+                }
+                Err(WizardError::IdleWipe) => {
+                    let mut p = pin;
+                    p.zeroize();
+                    ui::show_status("Idle", "retry...");
+                    continue;
+                }
+            },
+            WizardChoice::Cancelled | WizardChoice::IdleWipe => {
+                let mut p = pin;
+                p.zeroize();
+                ui::show_status("Cancelled", "retry...");
+                continue;
+            }
+        };
+
+        return (mnemonic, pin);
+    }
 }
 
 #[cortex_m_rt::entry]
@@ -75,26 +174,55 @@ fn main() -> ! {
     ui::init();
     secure_log!("[S] UI initialized");
 
-    // Provision on first boot only
-    #[cfg(feature = "mock-se")]
+    // Provision on first boot only.
     unsafe {
         if !is_provisioned(&mut SE) {
-            secure_log!("[S] Unprovisioned (mock SE) — running first-boot provisioning");
-            crypto::provision_mock_device(&mut SE);
-            secure_log!("[S] Provisioned");
-        } else {
-            secure_log!("[S] Device already provisioned");
-        }
-    }
+            secure_log!("[S] Unprovisioned — running first-boot wizard");
+            let (mnemonic, mut pin) = run_first_boot_wizard();
 
-    #[cfg(feature = "tropic01-se")]
-    unsafe {
-        if !is_provisioned(&mut SE) {
-            secure_log!("[S] Unprovisioned (TROPIC01) — running first-boot provisioning");
-            let pin: [u8; 8] = *b"12345678";
-            SE.provision(&pin, sphincs_tz_shared::MAX_ATTEMPTS)
+            // Debug-only: log the mnemonic and the resulting verifying key.
+            // This is gated behind `debug-log` so production builds (which
+            // omit that feature) leak nothing on the semihosting channel.
+            #[cfg(feature = "debug-log")]
+            {
+                cortex_m_semihosting::hprintln!("[S] mnemonic (DEBUG):");
+                for (i, w) in mnemonic.words().enumerate() {
+                    cortex_m_semihosting::hprintln!("  {} {}", i + 1, w);
+                }
+            }
+
+            ui::show_status("Provisioning", "...");
+
+            #[cfg(feature = "mock-se")]
+            crypto::provision_with_mnemonic(&mut SE, &mnemonic, &pin);
+
+            #[cfg(feature = "tropic01-se")]
+            SE.provision(&mnemonic, &pin, sphincs_tz_shared::MAX_ATTEMPTS)
                 .expect("TROPIC01 provisioning failed");
-            secure_log!("[S] Provisioned (e2e encrypted)");
+
+            // Debug-only: log the verifying key the SE just stored. This is
+            // the regression guard for the recovery promise — same mnemonic
+            // must always produce the same VK.
+            #[cfg(feature = "debug-log")]
+            {
+                let mut vk_buf = [0u8; 64];
+                if let Ok(_) = SE.r_mem_read(crypto::RMEM_VERIFYING_KEY, &mut vk_buf) {
+                    cortex_m_semihosting::hprintln!("[S] vk (DEBUG):");
+                    for chunk in vk_buf[..32].chunks(8) {
+                        cortex_m_semihosting::hprintln!(
+                            "  {:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+                            chunk[0], chunk[1], chunk[2], chunk[3],
+                            chunk[4], chunk[5], chunk[6], chunk[7]
+                        );
+                    }
+                }
+            }
+
+            // mnemonic drops here → indices zeroed.
+            use zeroize::Zeroize;
+            pin.zeroize();
+            ui::show_status("Wallet ready", "");
+            secure_log!("[S] Provisioned");
         } else {
             secure_log!("[S] Device already provisioned");
         }

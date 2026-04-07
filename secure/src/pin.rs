@@ -23,7 +23,7 @@ pub fn verify_pin(
 
     if ps.next_index >= MAX_ATTEMPTS {
         // All attempts exhausted — brick the key
-        se.r_mem_erase(RMEM_ENCRYPTED_SEED).ok();
+        se.r_mem_erase(RMEM_ENCRYPTED_ENTROPY).ok();
         se.r_mem_erase(RMEM_PIN_STATE).ok();
         return Err(NscStatus::PinLocked);
     }
@@ -71,7 +71,7 @@ pub fn verify_pin(
             let new_index = j + 1;
             if new_index >= MAX_ATTEMPTS {
                 // Last attempt failed — erase everything
-                se.r_mem_erase(RMEM_ENCRYPTED_SEED).ok();
+                se.r_mem_erase(RMEM_ENCRYPTED_ENTROPY).ok();
                 se.r_mem_erase(RMEM_PIN_STATE).ok();
                 se.r_mem_erase(RMEM_VERIFYING_KEY).ok();
                 return Err(NscStatus::PinLocked);

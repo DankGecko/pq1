@@ -5,9 +5,9 @@
 /// through the encrypted tunnel — the SPHINCS+ private key never travels
 /// in plaintext over the SPI bus.
 
+use crate::host_rng;
 use crate::semihosting_spi::SemihostingSpi;
 use crate::secure_element::{SecureElement, SeError};
-use cortex_m_semihosting::nr;
 use sphincs_tz_shared::MAX_ATTEMPTS;
 use zeroize::Zeroize;
 use tropic01::keys::{SH0PRIV_PROD0, SH0PUB_PROD0};
@@ -18,29 +18,10 @@ use zerocopy::little_endian::U16;
 /// Device path for the TROPIC01 USB dongle (null-terminated for semihosting).
 const DEVICE_PATH: &[u8] = b"/dev/ttyACM0\0";
 
-/// Read random bytes from the host's /dev/urandom via semihosting.
-fn semihosting_random(buf: &mut [u8]) -> Result<(), SeError> {
-    let path = b"/dev/urandom\0";
-    let fd = unsafe {
-        cortex_m_semihosting::syscall!(OPEN, path.as_ptr(), nr::open::R_BINARY, path.len() - 1)
-    };
-    if fd as isize == -1 {
-        return Err(SeError::InternalError);
-    }
-    let not_read = unsafe {
-        cortex_m_semihosting::syscall!(READ, fd, buf.as_mut_ptr(), buf.len())
-    };
-    unsafe { cortex_m_semihosting::syscall!(CLOSE, fd) };
-    if not_read != 0 {
-        return Err(SeError::InternalError);
-    }
-    Ok(())
-}
-
 /// Generate an ephemeral X25519 keypair using host randomness.
 fn generate_ephemeral() -> Result<(PublicKey, StaticSecret), SeError> {
     let mut key_bytes = [0u8; 32];
-    semihosting_random(&mut key_bytes)?;
+    host_rng::fill(&mut key_bytes).map_err(|_| SeError::InternalError)?;
     let secret = StaticSecret::from(key_bytes);
     let public = PublicKey::from(&secret);
     Ok((public, secret))
@@ -141,49 +122,56 @@ impl SecureElement for Tropic01SecureElement {
 /// Batch operations that need multiple commands in one session.
 /// These avoid the overhead of re-establishing a session for each command.
 impl Tropic01SecureElement {
-    /// One-shot provisioning. Generates the SLH-DSA seed from the chip TRNG,
-    /// derives the verifying key, sets up the MAC-and-Destroy PIN chain, and
-    /// stores: encrypted seed (slot 0), PIN state (slot 1), verifying key
-    /// (slot 2). All in a single e2e-encrypted session.
+    /// One-shot provisioning from a user-supplied BIP-39 mnemonic. Stores
+    /// the **32-byte BIP-39 entropy** (encrypted under master_secret), the
+    /// PIN-gated MACD chain, and the cached verifying key. All in a single
+    /// e2e-encrypted session.
+    ///
+    /// The mnemonic itself is **never** persisted on the chip — only the
+    /// 32-byte raw entropy that the user's 24-word phrase encodes. The
+    /// 48-byte SLH-DSA seed and the SigningKey are recomputed on every
+    /// unlock by running the full BIP-39 → SLH-DSA chain in the secure world.
+    ///
+    /// The mnemonic is the user's recovery secret and must be written down
+    /// on paper.
     ///
     /// Must only be called when the device is unprovisioned. The caller is
     /// responsible for the `is_provisioned()` check on every boot.
-    pub fn provision(&mut self, pin: &[u8; 8], max_attempts: u8) -> Result<(), SeError> {
+    pub fn provision(
+        &mut self,
+        mnemonic: &sphincs_tz_bip39::Mnemonic,
+        pin: &[u8; 8],
+        max_attempts: u8,
+    ) -> Result<(), SeError> {
         use crate::crypto::{
-            aes_encrypt_inplace, derive_signing_key, encrypt_seed_blob, kdf, macd_init_input,
-            macd_pin_input, PER_SLOT_CT_LEN, SEED_LEN,
+            aes_encrypt_inplace, derive_keypair_from_entropy, encrypt_entropy_blob, kdf,
+            macd_init_input, macd_pin_input, PER_SLOT_CT_LEN,
         };
-        use signature::Keypair;
+
+        // Recover the 32-byte BIP-39 entropy from the mnemonic. The mnemonic
+        // was either freshly generated from this entropy (new-wallet) or
+        // parsed from user input (restore) — checksum already verified.
+        let mut entropy = mnemonic
+            .to_entropy()
+            .map_err(|_| SeError::InternalError)?;
+
+        // Derive the master_secret directly from the entropy. The unlock
+        // path recovers it from the PIN-gated MACD chain and uses it to
+        // unwrap the encrypted entropy below.
+        let mut master_secret: [u8; 32] = kdf(b"sphincs-master", &entropy, 0);
+
+        // Run the full BIP-39 → SLH-DSA chain ONCE to compute the cached
+        // verifying key. The SigningKey is dropped immediately afterwards;
+        // only the 32-byte entropy survives in encrypted form on the chip.
+        let (sk, vk_bytes) = derive_keypair_from_entropy(&entropy);
+        drop(sk);
+
+        // Encrypt the entropy under the master-derived wrap key.
+        let entropy_blob = encrypt_entropy_blob(&entropy, &master_secret);
 
         with_session!(session, {
             secure_log!("  [T01] Session established (e2e encrypted)");
-
-            // Pull SEED_LEN bytes of fresh randomness from the chip TRNG.
-            let mut seed = [0u8; SEED_LEN];
-            let mut got = 0usize;
-            while got < SEED_LEN {
-                let want = core::cmp::min(SEED_LEN - got, 255);
-                let r = session
-                    .get_random_value(want as u8)
-                    .map_err(|_| SeError::InternalError)?;
-                let n = core::cmp::min(r.len(), want);
-                seed[got..got + n].copy_from_slice(&r[..n]);
-                got += n;
-            }
-            secure_log!("  [T01] {} bytes of seed from chip TRNG", SEED_LEN);
-
-            // Derive the keypair to compute the verifying key (FIPS-205 KeyGen).
-            let signing_key = derive_signing_key(&seed);
-            let vk_bytes = signing_key.verifying_key().to_bytes();
-
-            // Generate a master secret. We *also* derive it from the seed via KDF,
-            // so a second seed read on the same device gives the same master.
-            // The master is what gates AES-GCM unwrap of the seed blob, so it
-            // is itself protected by the MACD PIN chain.
-            let mut master_secret: [u8; 32] = kdf(b"sphincs-master", &seed, 0);
-
-            // Encrypt the seed under the master-derived wrap key.
-            let seed_blob = encrypt_seed_blob(&seed, &master_secret);
+            secure_log!("  [T01] Provisioning from BIP-39 entropy");
 
             // Initialize MAC-and-Destroy slots and build the per-slot encrypted
             // master_secret blobs.
@@ -211,10 +199,10 @@ impl Tropic01SecureElement {
             }
             secure_log!("  [T01] MACD slots initialized ({} attempts)", max_attempts);
 
-            // Store encrypted seed (slot 0)
+            // Store encrypted entropy (slot 0)
             session.r_mem_data_erase(U16::new(0)).ok();
             session
-                .r_mem_data_write(U16::new(0), &seed_blob)
+                .r_mem_data_write(U16::new(0), &entropy_blob)
                 .map_err(|_| SeError::InternalError)?;
 
             // Store PIN state (slot 1)
@@ -237,7 +225,7 @@ impl Tropic01SecureElement {
                 .map_err(|_| SeError::InternalError)?;
 
             // Wipe sensitive intermediates
-            seed.zeroize();
+            entropy.zeroize();
             master_secret.zeroize();
 
             secure_log!("  [T01] Provisioned (e2e encrypted)");
@@ -326,22 +314,22 @@ impl Tropic01SecureElement {
         })
     }
 
-    /// Read the encrypted seed blob (slot 0) and verifying key (slot 2) in
-    /// one session. Used by the sign flow on every call.
-    pub fn batch_read_seed_and_vk(
+    /// Read the encrypted entropy blob (slot 0) and verifying key (slot 2)
+    /// in one session. Used by the sign flow on every call.
+    pub fn batch_read_entropy_and_vk(
         &mut self,
-        seed_blob: &mut [u8],
+        entropy_blob: &mut [u8],
         vk_buf: &mut [u8],
     ) -> Result<(usize, usize), SeError> {
         with_session!(session, {
-            let seed_data = session
+            let entropy_data = session
                 .r_mem_data_read(U16::new(0))
                 .map_err(|_| SeError::SlotNotFound)?;
-            let seed_len = seed_data.len();
-            if seed_blob.len() < seed_len {
+            let entropy_len = entropy_data.len();
+            if entropy_blob.len() < entropy_len {
                 return Err(SeError::InvalidParameter);
             }
-            seed_blob[..seed_len].copy_from_slice(seed_data);
+            entropy_blob[..entropy_len].copy_from_slice(entropy_data);
 
             let vk_data = session
                 .r_mem_data_read(U16::new(2))
@@ -352,7 +340,7 @@ impl Tropic01SecureElement {
             }
             vk_buf[..vk_len].copy_from_slice(vk_data);
 
-            Ok((seed_len, vk_len))
+            Ok((entropy_len, vk_len))
         })
     }
 

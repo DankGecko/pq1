@@ -185,7 +185,9 @@ unsafe fn cmd_request_unlock() -> u32 {
 
     let pin = match enter_pin() {
         PinEntryResult::Pin(p) => p,
-        PinEntryResult::Cancelled => {
+        PinEntryResult::Cancelled | PinEntryResult::Mismatch => {
+            // Mismatch is unreachable here (only enter_pin_with_confirm can
+            // return it), but match must be exhaustive.
             ui::show_status("Cancelled", "");
             return NscStatus::UserRejected as u32;
         }
@@ -283,8 +285,8 @@ unsafe fn cmd_get_pubkey(args: &GatewayArgs) -> u32 {
         let se = &mut *core::ptr::addr_of_mut!(crate::SE);
         #[cfg(feature = "tropic01-se")]
         {
-            let mut seed_blob = [0u8; 128];
-            se.batch_read_seed_and_vk(&mut seed_blob, &mut vk_buf)
+            let mut entropy_blob = [0u8; 64];
+            se.batch_read_entropy_and_vk(&mut entropy_blob, &mut vk_buf)
                 .map(|(_, vk_len)| vk_len)
         }
         #[cfg(not(feature = "tropic01-se"))]
@@ -365,42 +367,46 @@ unsafe fn cmd_sign(args: &GatewayArgs) -> u32 {
 
     ui::show_status("Signing...", "");
 
-    // 5. Read the encrypted seed blob from the SE
-    let mut seed_blob = [0u8; 128];
-    let seed_blob_len = {
+    // 5. Read the encrypted entropy blob from the SE.
+    let mut entropy_blob = [0u8; 64];
+    let entropy_blob_len = {
         let se = &mut *core::ptr::addr_of_mut!(crate::SE);
         #[cfg(feature = "tropic01-se")]
         {
             let mut vk_ignore = [0u8; 64];
-            match se.batch_read_seed_and_vk(&mut seed_blob, &mut vk_ignore) {
-                Ok((seed_len, _)) => seed_len,
+            match se.batch_read_entropy_and_vk(&mut entropy_blob, &mut vk_ignore) {
+                Ok((entropy_len, _)) => entropy_len,
                 Err(_) => return NscStatus::InternalError as u32,
             }
         }
         #[cfg(not(feature = "tropic01-se"))]
         {
-            match se.r_mem_read(crate::crypto::RMEM_ENCRYPTED_SEED, &mut seed_blob) {
+            match se.r_mem_read(crate::crypto::RMEM_ENCRYPTED_ENTROPY, &mut entropy_blob) {
                 Ok(len) => len,
                 Err(_) => return NscStatus::InternalError as u32,
             }
         }
     };
 
-    // 6. Decrypt the seed using the master secret unwrapped from PIN entry
-    let mut seed = match crate::crypto::decrypt_seed_blob(
-        &seed_blob[..seed_blob_len],
+    // 6. Decrypt the entropy using the master secret unwrapped from PIN entry.
+    let mut entropy = match crate::crypto::decrypt_entropy_blob(
+        &entropy_blob[..entropy_blob_len],
         &*core::ptr::addr_of!(MASTER_SECRET),
     ) {
-        Ok(s) => s,
+        Ok(e) => e,
         Err(_) => {
-            seed_blob.zeroize();
+            entropy_blob.zeroize();
             return NscStatus::CryptoError as u32;
         }
     };
-    seed_blob.zeroize();
+    entropy_blob.zeroize();
 
-    // 7. Derive the SLH-DSA signing key (FIPS-205 KeyGen) on the stack
-    let signing_key = crate::crypto::derive_signing_key(&seed);
+    // 7. Re-derive the SLH-DSA signing key from the entropy by running the
+    //    full BIP-39 chain (PBKDF2-HMAC-SHA512 → slhdsa_seed_from_bip39 →
+    //    slh_keygen_internal). The SigningKey only exists on the stack for
+    //    the duration of the actual signing call below.
+    let signing_key = crate::crypto::derive_signing_key_from_entropy(&entropy);
+    entropy.zeroize();
 
     // 8. Hedged sign: pass the secure-element's encrypted-seed-derived
     //    randomizer as opt_rand to avoid pure-deterministic signatures.
@@ -417,7 +423,6 @@ unsafe fn cmd_sign(args: &GatewayArgs) -> u32 {
     ) {
         Ok(s) => s,
         Err(_) => {
-            seed.zeroize();
             rand_buf.zeroize();
             return NscStatus::CryptoError as u32;
         }
@@ -429,8 +434,8 @@ unsafe fn cmd_sign(args: &GatewayArgs) -> u32 {
         core::ptr::write_volatile(sig_ptr.add(i), sig_bytes[i]);
     }
 
-    // 10. Wipe sensitive material
-    seed.zeroize();
+    // 10. Wipe sensitive material. The SigningKey will go out of scope at
+    //     the end of this function and slh-dsa zeroizes on drop.
     rand_buf.zeroize();
 
     timeout::reset_activity();

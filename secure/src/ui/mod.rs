@@ -24,6 +24,7 @@ pub use oled::{Display, Input};
 
 pub mod confirm;
 pub mod pin_entry;
+pub mod seed_wizard;
 
 /// Logical display dimensions (cells, not pixels).
 /// 16 columns x 4 rows fits an 8x16 monospace font on a 128x64 OLED.
