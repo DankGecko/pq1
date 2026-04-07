@@ -1,22 +1,32 @@
-/// Crypto helpers ported from desktop/src/main.rs to no_std.
-///
-/// All Vec<u8> replaced with fixed-size buffers.
+//! Crypto helpers: KDF, AES-GCM wrap/unwrap, PIN state ser/de, and on-unlock
+//! SLH-DSA key derivation from a stored seed.
 
 use aes_gcm::aead::{AeadInPlace, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use sha2::{Digest, Sha256};
 
 use crate::secure_element::SecureElement;
+use slh_dsa::{Sha2_128f, SigningKey};
 use sphincs_tz_shared::MAX_ATTEMPTS;
 use zeroize::Zeroize;
 
-// r-mem slot assignments (same as desktop)
-pub const RMEM_ENCRYPTED_SK: u16 = 0;
+// r-mem slot assignments
+pub const RMEM_ENCRYPTED_SEED: u16 = 0;
 pub const RMEM_PIN_STATE: u16 = 1;
 pub const RMEM_VERIFYING_KEY: u16 = 2;
 
+/// Length of the SLH-DSA-Sha2_128f seed material:
+/// `sk_seed (16) ‖ sk_prf (16) ‖ pk_seed (16)`. The fourth field of a
+/// serialized SigningKey, `pk_root` (16 B), is computed deterministically
+/// from these three on every unlock — that's the whole point of "store the
+/// seed, derive the key".
+pub const SEED_LEN: usize = 48;
+
+/// Total stored blob: 12-byte nonce ‖ encrypted_seed (48) ‖ AES-GCM tag (16).
+pub const SEED_BLOB_LEN: usize = 12 + SEED_LEN + 16;
+
 // ---------------------------------------------------------------------------
-// KDF helpers (identical to desktop, already no_std compatible)
+// KDF helpers
 // ---------------------------------------------------------------------------
 
 pub fn kdf(domain: &[u8], input: &[u8], index: u8) -> [u8; 32] {
@@ -39,6 +49,13 @@ pub fn derive_wrap_key(master_secret: &[u8; 32]) -> [u8; 32] {
     kdf(b"sphincs-wrap-key", master_secret, 0)
 }
 
+pub fn derive_seed_nonce(master_secret: &[u8; 32]) -> [u8; 12] {
+    let h = kdf(b"sphincs-seed-nonce", master_secret, 0);
+    let mut n = [0u8; 12];
+    n.copy_from_slice(&h[..12]);
+    n
+}
+
 fn nonce_for(index: u8) -> [u8; 12] {
     let h: [u8; 32] = kdf(b"sphincs-nonce", &[index], 0);
     let mut n = [0u8; 12];
@@ -47,11 +64,9 @@ fn nonce_for(index: u8) -> [u8; 12] {
 }
 
 // ---------------------------------------------------------------------------
-// AES-GCM (no_std: use fixed-size buffers with AeadInPlace)
+// AES-GCM helpers (in-place, no_std)
 // ---------------------------------------------------------------------------
 
-/// AES-GCM encrypt in-place. `buf` must have room for plaintext + 16-byte tag.
-/// Returns the total ciphertext length (plaintext_len + 16).
 pub fn aes_encrypt_inplace(
     key: &[u8; 32],
     buf: &mut [u8],
@@ -67,8 +82,6 @@ pub fn aes_encrypt_inplace(
     plaintext_len + 16
 }
 
-/// AES-GCM decrypt in-place. `buf[..ct_len]` has ciphertext + tag.
-/// Returns plaintext length (ct_len - 16) on success.
 pub fn aes_decrypt_inplace(
     key: &[u8; 32],
     buf: &mut [u8],
@@ -90,7 +103,70 @@ pub fn aes_decrypt_inplace(
 }
 
 // ---------------------------------------------------------------------------
-// PIN state serialization (fixed-size buffers)
+// Seed encryption/decryption with the master secret
+// ---------------------------------------------------------------------------
+
+/// Encrypt a 48-byte SLH-DSA seed under the wrap key derived from
+/// `master_secret`. Output layout: `nonce(12) ‖ ciphertext(48) ‖ tag(16)`.
+pub fn encrypt_seed_blob(seed: &[u8; SEED_LEN], master_secret: &[u8; 32]) -> [u8; SEED_BLOB_LEN] {
+    let mut wrap = derive_wrap_key(master_secret);
+    let nonce = derive_seed_nonce(master_secret);
+
+    let mut blob = [0u8; SEED_BLOB_LEN];
+    blob[..12].copy_from_slice(&nonce);
+    blob[12..12 + SEED_LEN].copy_from_slice(seed);
+
+    let cipher = Aes256Gcm::new_from_slice(&wrap).unwrap();
+    let tag = cipher
+        .encrypt_in_place_detached(
+            Nonce::from_slice(&nonce),
+            &[],
+            &mut blob[12..12 + SEED_LEN],
+        )
+        .expect("seed encryption");
+    blob[12 + SEED_LEN..].copy_from_slice(&tag);
+
+    wrap.zeroize();
+    blob
+}
+
+/// Decrypt a stored seed blob with the master secret. Returns the 48-byte
+/// seed material on success.
+pub fn decrypt_seed_blob(blob: &[u8], master_secret: &[u8; 32]) -> Result<[u8; SEED_LEN], ()> {
+    if blob.len() != SEED_BLOB_LEN {
+        return Err(());
+    }
+    let mut wrap = derive_wrap_key(master_secret);
+    // The nonce stored at the head of the blob; we trust it because the
+    // wrap_key is master-bound.
+    let nonce: [u8; 12] = blob[..12].try_into().unwrap();
+    let mut seed_buf = [0u8; SEED_LEN];
+    seed_buf.copy_from_slice(&blob[12..12 + SEED_LEN]);
+    let tag = aes_gcm::Tag::from_slice(&blob[12 + SEED_LEN..]);
+
+    let cipher = Aes256Gcm::new_from_slice(&wrap).unwrap();
+    let r = cipher
+        .decrypt_in_place_detached(Nonce::from_slice(&nonce), &[], &mut seed_buf, tag)
+        .map_err(|_| ());
+
+    wrap.zeroize();
+    r?;
+    Ok(seed_buf)
+}
+
+/// Derive a fully-formed SLH-DSA-SHA2-128f signing key from the 48-byte
+/// stored seed. Calls the FIPS-205 `slh_keygen_internal` primitive — the
+/// `pk_root` Merkle root is *computed* from `sk_seed`/`pk_seed`, not just
+/// deserialized.
+pub fn derive_signing_key(seed: &[u8; SEED_LEN]) -> SigningKey<Sha2_128f> {
+    let sk_seed = &seed[0..16];
+    let sk_prf = &seed[16..32];
+    let pk_seed = &seed[32..48];
+    SigningKey::<Sha2_128f>::slh_keygen_internal(sk_seed, sk_prf, pk_seed)
+}
+
+// ---------------------------------------------------------------------------
+// PIN state serialization (unchanged)
 // ---------------------------------------------------------------------------
 
 pub const PER_SLOT_CT_LEN: usize = 32 + 16; // master_secret (32) + AES-GCM tag (16)
@@ -138,67 +214,51 @@ pub fn deserialize_pin_state(blob: &[u8], blob_len: usize) -> Result<PinState, (
 }
 
 // ---------------------------------------------------------------------------
-// Enrollment (for QEMU testing: enroll a test key with hardcoded PIN)
+// First-boot provisioning (mock SE path)
 // ---------------------------------------------------------------------------
 
-/// Enroll a test keypair into the mock secure element.
-/// Uses a deterministic "RNG" for QEMU reproducibility.
-pub fn enroll_test_key(se: &mut impl SecureElement) {
-    use signature::{Keypair, Signer};
-    use slh_dsa::{Sha2_128f, SigningKey};
+/// One-shot provisioning for the mock secure element. Generates a fresh seed,
+/// derives the SLH-DSA verifying key, sets up the MAC-and-Destroy PIN chain,
+/// and stores everything in r-mem. Only called when the device is detected
+/// as unprovisioned (see `main::is_provisioned`).
+///
+/// On the mock SE, the "TRNG" is a deterministic value because we have no
+/// hardware RNG in QEMU. This is fine for testing only — `tropic01_se`
+/// uses the chip TRNG and is what runs on real hardware.
+#[cfg(feature = "mock-se")]
+pub fn provision_mock_device(se: &mut impl SecureElement) {
+    use signature::Keypair;
 
-    // Deterministic key from a fixed seed (for QEMU testing only)
-    let mut seed = [0u8; 64];
+    // Deterministic seed for QEMU-only testing.
+    let mut seed = [0u8; SEED_LEN];
     for (i, b) in seed.iter_mut().enumerate() {
-        *b = i as u8;
+        *b = i as u8 + 0x20;
     }
-    let signing_key = SigningKey::<Sha2_128f>::try_from(seed.as_slice())
-        .expect("test key");
+
+    // Derive the keypair to compute the verifying key.
+    let signing_key = derive_signing_key(&seed);
     let vk = signing_key.verifying_key();
     let vk_bytes = vk.to_bytes();
 
-    // Test PIN: "12345678"
+    // Test PIN
     let pin: [u8; 8] = *b"12345678";
 
-    // Master secret (deterministic for test)
+    // Master secret (deterministic for the mock)
     let mut master_secret: [u8; 32] = kdf(b"test-master", &seed[..32], 0);
 
-    // Encrypt signing key
-    let mut wrap_key = derive_wrap_key(&master_secret);
-    let mut sk_bytes = signing_key.to_bytes();
-    let mut sk_buf = [0u8; 64 + 12 + 16]; // sk + nonce + tag
-    // Prepend a fixed nonce
-    let sk_nonce: [u8; 12] = kdf(b"test-sk-nonce", &master_secret, 0)[..12]
-        .try_into()
-        .unwrap();
-    sk_buf[..12].copy_from_slice(&sk_nonce);
-    sk_buf[12..12 + 64].copy_from_slice(&sk_bytes);
-    // Encrypt sk_buf[12..76] in-place, tag goes to sk_buf[76..92]
-    let cipher = Aes256Gcm::new_from_slice(&wrap_key).unwrap();
-    let tag = cipher
-        .encrypt_in_place_detached(
-            Nonce::from_slice(&sk_nonce),
-            &[],
-            &mut sk_buf[12..12 + 64],
-        )
-        .expect("encrypt SK");
-    sk_buf[12 + 64..12 + 64 + 16].copy_from_slice(&tag);
-    let sk_blob_len = 12 + 64 + 16; // 92 bytes
+    // Encrypt seed
+    let seed_blob = encrypt_seed_blob(&seed, &master_secret);
 
-    // Initialize MACD slots and create encrypted secrets
+    // Initialize MACD slots and build per-slot encrypted master_secret blobs
     let mut encrypted_secrets = [[0u8; PER_SLOT_CT_LEN]; MAX_ATTEMPTS as usize];
     for j in 0..MAX_ATTEMPTS {
         let init_in = macd_init_input(&master_secret, j);
         let pin_in = macd_pin_input(&pin, j);
 
-        // Initialize slot
         se.mac_and_destroy(j as u16, &init_in).unwrap();
-        // Get w_j from PIN input
         let mut w_j = se.mac_and_destroy(j as u16, &pin_in).unwrap();
-        // Re-initialize
         se.mac_and_destroy(j as u16, &init_in).unwrap();
 
-        // Encrypt master_secret with w_j
         let mut ct_buf = [0u8; PER_SLOT_CT_LEN];
         ct_buf[..32].copy_from_slice(&master_secret);
         aes_encrypt_inplace(&w_j, &mut ct_buf, 32, j);
@@ -206,10 +266,9 @@ pub fn enroll_test_key(se: &mut impl SecureElement) {
         w_j.zeroize();
     }
 
-    // Store in SE
-    se.r_mem_erase(RMEM_ENCRYPTED_SK).ok();
-    se.r_mem_write(RMEM_ENCRYPTED_SK, &sk_buf[..sk_blob_len])
-        .unwrap();
+    // Store everything in r-mem
+    se.r_mem_erase(RMEM_ENCRYPTED_SEED).ok();
+    se.r_mem_write(RMEM_ENCRYPTED_SEED, &seed_blob).unwrap();
 
     let mut pin_state_buf = [0u8; PIN_STATE_MAX_LEN];
     let ps_len = serialize_pin_state(0, &encrypted_secrets, &mut pin_state_buf);
@@ -220,10 +279,7 @@ pub fn enroll_test_key(se: &mut impl SecureElement) {
     se.r_mem_erase(RMEM_VERIFYING_KEY).ok();
     se.r_mem_write(RMEM_VERIFYING_KEY, &vk_bytes).unwrap();
 
-    // Wipe all sensitive intermediates
+    // Wipe sensitive intermediates
     seed.zeroize();
-    sk_bytes.zeroize();
     master_secret.zeroize();
-    wrap_key.zeroize();
-    sk_buf.zeroize();
 }

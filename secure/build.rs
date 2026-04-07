@@ -3,6 +3,16 @@ use std::fs;
 use std::path::PathBuf;
 
 fn main() {
+    // Mutually-exclusive UI backend check
+    let ui_semihosting = env::var_os("CARGO_FEATURE_UI_SEMIHOSTING").is_some();
+    let ui_oled = env::var_os("CARGO_FEATURE_UI_OLED").is_some();
+    if ui_semihosting && ui_oled {
+        panic!("features `ui-semihosting` and `ui-oled` are mutually exclusive");
+    }
+    if !ui_semihosting && !ui_oled {
+        panic!("must enable exactly one UI backend (`ui-semihosting` or `ui-oled`)");
+    }
+
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
     // Copy memory.x

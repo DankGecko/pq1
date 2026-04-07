@@ -7,7 +7,7 @@ const SHARED_RESULT: *const u32 = 0x2802_FF10 as *const u32;
 const SHARED_DONE: *mut u32 = 0x2802_FF14 as *mut u32;
 
 const CMD_GET_REMAINING: u32 = 1;
-const CMD_ENTER_PIN: u32 = 2;
+const CMD_REQUEST_UNLOCK: u32 = 2;
 const CMD_GET_PUBKEY: u32 = 3;
 const CMD_SIGN: u32 = 4;
 
@@ -28,21 +28,26 @@ pub fn get_remaining_attempts() -> u32 {
     unsafe { gateway_call(CMD_GET_REMAINING, 0, 0, 0) }
 }
 
-pub fn enter_pin(pin: &[u8; 8]) -> u32 {
-    unsafe { gateway_call(CMD_ENTER_PIN, pin.as_ptr() as u32, 0, 0) }
+/// Ask the secure world to prompt the user for their PIN on the trusted UI.
+/// The PIN never crosses the gateway — NS only sees the result.
+pub fn request_unlock() -> u32 {
+    unsafe { gateway_call(CMD_REQUEST_UNLOCK, 0, 0, 0) }
 }
 
 pub fn get_pubkey(buf: &mut [u8; 32]) -> u32 {
     unsafe { gateway_call(CMD_GET_PUBKEY, 0, buf.as_mut_ptr() as u32, 32) }
 }
 
-pub fn sign(tx_hash: &[u8; 32], sig_buf: &mut [u8], sig_buf_len: u32) -> u32 {
+/// Sign an unsigned EIP-1559 transaction envelope. Secure world parses the
+/// envelope, displays it on the trusted UI, waits for physical confirmation,
+/// then signs.
+pub fn sign(unsigned_tx: &[u8], sig_buf: &mut [u8]) -> u32 {
     unsafe {
         gateway_call(
             CMD_SIGN,
-            tx_hash.as_ptr() as u32,
+            unsigned_tx.as_ptr() as u32,
             sig_buf.as_mut_ptr() as u32,
-            sig_buf_len,
+            unsigned_tx.len() as u32,
         )
     }
 }

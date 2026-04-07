@@ -5,12 +5,12 @@ VENEERS = $(CURDIR)/target/veneers.o
 SECURE_ELF   = target/secure/$(TARGET)/release/sphincs-tz-secure
 NONSECURE_ELF = target/nonsecure/$(TARGET)/release/sphincs-tz-nonsecure
 
-# Default: mock secure element (no real chip needed)
+# Default: mock secure element + semihosting UI mock (no real hardware needed)
 # debug-log enables semihosting output from the secure world.
 # Remove it for production builds to eliminate all debug strings.
-FEATURES ?= mock-se,debug-log
+FEATURES ?= mock-se,debug-log,ui-semihosting
 
-.PHONY: all clean secure nonsecure run run-tropic01 setup-serial
+.PHONY: all clean secure nonsecure run run-tropic01 run-hw setup-serial
 
 all: secure nonsecure
 
@@ -25,12 +25,17 @@ nonsecure: secure
 	cargo build --release --target $(TARGET) --target-dir target/nonsecure -p sphincs-tz-nonsecure
 	@echo "==> Non-secure world built."
 
-# Run with mock SE (no real TROPIC01 chip needed)
+# Run with mock SE (no real TROPIC01 chip needed).
+# We attach semihosting to a dedicated stdio chardev so SYS_READC can read
+# from the host terminal — this is what the secure UI mock uses to receive
+# "button" input ('l'/'h' = short, 'L'/'H' = long).
 run: all
 	qemu-system-arm \
 		-M mps2-an505 \
-		-nographic \
-		-semihosting-config enable=on,target=native \
+		-monitor null \
+		-serial null \
+		-chardev stdio,id=hostio \
+		-semihosting-config enable=on,target=native,chardev=hostio \
 		-kernel $(SECURE_ELF) \
 		-device loader,file=$(NONSECURE_ELF)
 
@@ -40,16 +45,25 @@ setup-serial:
 	stty -F /dev/ttyACM0 115200 raw -echo cs8 -cstopb -parenb
 	@echo "Serial port ready."
 
-# Build + run with real TROPIC01 chip via semihosting SPI bridge
+# Build + run with real TROPIC01 chip via semihosting SPI bridge.
+# UI is still mocked over semihosting (the OLED + buttons live on real HW).
 # Requires: TROPIC01 TS1302 devkit connected at /dev/ttyACM0
 run-tropic01: setup-serial
-	$(MAKE) FEATURES=tropic01-se,debug-log all
+	$(MAKE) FEATURES=tropic01-se,debug-log,ui-semihosting all
 	qemu-system-arm \
 		-M mps2-an505 \
-		-nographic \
-		-semihosting-config enable=on,target=native \
+		-monitor null \
+		-serial null \
+		-chardev stdio,id=hostio \
+		-semihosting-config enable=on,target=native,chardev=hostio \
 		-kernel $(SECURE_ELF) \
 		-device loader,file=$(NONSECURE_ELF)
+
+# Real STM32U585 hardware build: real chip + real OLED + real buttons.
+# This target only BUILDS — flashing is done with probe-rs / openocd / etc.
+# It will not link until secure/src/hw/stm32u585.rs is filled in.
+run-hw:
+	$(MAKE) FEATURES=tropic01-se,ui-oled all
 
 clean:
 	rm -rf target/secure target/nonsecure target/veneers.o

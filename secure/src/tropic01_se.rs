@@ -8,6 +8,7 @@
 use crate::semihosting_spi::SemihostingSpi;
 use crate::secure_element::{SecureElement, SeError};
 use cortex_m_semihosting::nr;
+use sphincs_tz_shared::MAX_ATTEMPTS;
 use zeroize::Zeroize;
 use tropic01::keys::{SH0PRIV_PROD0, SH0PUB_PROD0};
 use tropic01::{Tropic01, X25519Dalek};
@@ -140,69 +141,106 @@ impl SecureElement for Tropic01SecureElement {
 /// Batch operations that need multiple commands in one session.
 /// These avoid the overhead of re-establishing a session for each command.
 impl Tropic01SecureElement {
-    /// Enroll a key: performs multiple r_mem_write + mac_and_destroy in one session.
-    pub fn batch_enroll(
-        &mut self,
-        encrypted_sk_blob: &[u8],
-        pin_state_blob: &[u8],
-        verifying_key: &[u8],
-        master_secret: &[u8; 32],
-        pin: &[u8; 8],
-        max_attempts: u8,
-    ) -> Result<(), SeError> {
-        use crate::crypto::{macd_init_input, macd_pin_input, aes_encrypt_inplace, PER_SLOT_CT_LEN};
+    /// One-shot provisioning. Generates the SLH-DSA seed from the chip TRNG,
+    /// derives the verifying key, sets up the MAC-and-Destroy PIN chain, and
+    /// stores: encrypted seed (slot 0), PIN state (slot 1), verifying key
+    /// (slot 2). All in a single e2e-encrypted session.
+    ///
+    /// Must only be called when the device is unprovisioned. The caller is
+    /// responsible for the `is_provisioned()` check on every boot.
+    pub fn provision(&mut self, pin: &[u8; 8], max_attempts: u8) -> Result<(), SeError> {
+        use crate::crypto::{
+            aes_encrypt_inplace, derive_signing_key, encrypt_seed_blob, kdf, macd_init_input,
+            macd_pin_input, PER_SLOT_CT_LEN, SEED_LEN,
+        };
+        use signature::Keypair;
 
         with_session!(session, {
             secure_log!("  [T01] Session established (e2e encrypted)");
 
-            // Initialize MAC-and-Destroy slots
-            secure_log!("  [T01] Initializing {} MACD slots...", max_attempts);
-            let mut encrypted_secrets = [[0u8; PER_SLOT_CT_LEN]; 10];
+            // Pull SEED_LEN bytes of fresh randomness from the chip TRNG.
+            let mut seed = [0u8; SEED_LEN];
+            let mut got = 0usize;
+            while got < SEED_LEN {
+                let want = core::cmp::min(SEED_LEN - got, 255);
+                let r = session
+                    .get_random_value(want as u8)
+                    .map_err(|_| SeError::InternalError)?;
+                let n = core::cmp::min(r.len(), want);
+                seed[got..got + n].copy_from_slice(&r[..n]);
+                got += n;
+            }
+            secure_log!("  [T01] {} bytes of seed from chip TRNG", SEED_LEN);
+
+            // Derive the keypair to compute the verifying key (FIPS-205 KeyGen).
+            let signing_key = derive_signing_key(&seed);
+            let vk_bytes = signing_key.verifying_key().to_bytes();
+
+            // Generate a master secret. We *also* derive it from the seed via KDF,
+            // so a second seed read on the same device gives the same master.
+            // The master is what gates AES-GCM unwrap of the seed blob, so it
+            // is itself protected by the MACD PIN chain.
+            let mut master_secret: [u8; 32] = kdf(b"sphincs-master", &seed, 0);
+
+            // Encrypt the seed under the master-derived wrap key.
+            let seed_blob = encrypt_seed_blob(&seed, &master_secret);
+
+            // Initialize MAC-and-Destroy slots and build the per-slot encrypted
+            // master_secret blobs.
+            let mut encrypted_secrets = [[0u8; PER_SLOT_CT_LEN]; MAX_ATTEMPTS as usize];
 
             for j in 0..max_attempts {
-                let init_in = macd_init_input(master_secret, j);
+                let init_in = macd_init_input(&master_secret, j);
                 let pin_in = macd_pin_input(pin, j);
 
-                session.mac_and_destroy(U16::new(j as u16), &init_in)
+                session
+                    .mac_and_destroy(U16::new(j as u16), &init_in)
                     .map_err(|_| SeError::InternalError)?;
                 let mut w_j: [u8; 32] = *session
                     .mac_and_destroy(U16::new(j as u16), &pin_in)
                     .map_err(|_| SeError::InternalError)?;
-                session.mac_and_destroy(U16::new(j as u16), &init_in)
+                session
+                    .mac_and_destroy(U16::new(j as u16), &init_in)
                     .map_err(|_| SeError::InternalError)?;
 
                 let mut ct_buf = [0u8; PER_SLOT_CT_LEN];
-                ct_buf[..32].copy_from_slice(master_secret);
+                ct_buf[..32].copy_from_slice(&master_secret);
                 aes_encrypt_inplace(&w_j, &mut ct_buf, 32, j);
                 encrypted_secrets[j as usize] = ct_buf;
                 w_j.zeroize();
             }
-            secure_log!("  [T01] MACD slots ready");
+            secure_log!("  [T01] MACD slots initialized ({} attempts)", max_attempts);
 
-            // Store encrypted signing key
+            // Store encrypted seed (slot 0)
             session.r_mem_data_erase(U16::new(0)).ok();
-            session.r_mem_data_write(U16::new(0), encrypted_sk_blob)
+            session
+                .r_mem_data_write(U16::new(0), &seed_blob)
                 .map_err(|_| SeError::InternalError)?;
 
-            // Store PIN state
+            // Store PIN state (slot 1)
             let mut pin_state = [0u8; 512];
-            pin_state[0] = 0; // next_index = 0
+            pin_state[0] = 0;
             let mut offset = 1;
             for j in 0..max_attempts as usize {
-                pin_state[offset..offset + PER_SLOT_CT_LEN]
-                    .copy_from_slice(&encrypted_secrets[j]);
+                pin_state[offset..offset + PER_SLOT_CT_LEN].copy_from_slice(&encrypted_secrets[j]);
                 offset += PER_SLOT_CT_LEN;
             }
             session.r_mem_data_erase(U16::new(1)).ok();
-            session.r_mem_data_write(U16::new(1), &pin_state[..offset])
+            session
+                .r_mem_data_write(U16::new(1), &pin_state[..offset])
                 .map_err(|_| SeError::InternalError)?;
 
-            // Store verifying key
+            // Store verifying key (slot 2)
             session.r_mem_data_erase(U16::new(2)).ok();
-            session.r_mem_data_write(U16::new(2), verifying_key)
+            session
+                .r_mem_data_write(U16::new(2), &vk_bytes)
                 .map_err(|_| SeError::InternalError)?;
 
-            secure_log!("  [T01] All data stored on chip (e2e encrypted)");
+            // Wipe sensitive intermediates
+            seed.zeroize();
+            master_secret.zeroize();
+
+            secure_log!("  [T01] Provisioned (e2e encrypted)");
             Ok(())
         })
     }
@@ -288,24 +326,33 @@ impl Tropic01SecureElement {
         })
     }
 
-    /// Read the encrypted SK blob and verifying key in one session.
-    pub fn batch_read_key_material(
+    /// Read the encrypted seed blob (slot 0) and verifying key (slot 2) in
+    /// one session. Used by the sign flow on every call.
+    pub fn batch_read_seed_and_vk(
         &mut self,
-        sk_blob: &mut [u8],
+        seed_blob: &mut [u8],
         vk_buf: &mut [u8],
     ) -> Result<(usize, usize), SeError> {
         with_session!(session, {
-            let sk_data = session.r_mem_data_read(U16::new(0))
+            let seed_data = session
+                .r_mem_data_read(U16::new(0))
                 .map_err(|_| SeError::SlotNotFound)?;
-            let sk_len = sk_data.len();
-            sk_blob[..sk_len].copy_from_slice(sk_data);
+            let seed_len = seed_data.len();
+            if seed_blob.len() < seed_len {
+                return Err(SeError::InvalidParameter);
+            }
+            seed_blob[..seed_len].copy_from_slice(seed_data);
 
-            let vk_data = session.r_mem_data_read(U16::new(2))
+            let vk_data = session
+                .r_mem_data_read(U16::new(2))
                 .map_err(|_| SeError::SlotNotFound)?;
             let vk_len = vk_data.len();
+            if vk_buf.len() < vk_len {
+                return Err(SeError::InvalidParameter);
+            }
             vk_buf[..vk_len].copy_from_slice(vk_data);
 
-            Ok((sk_len, vk_len))
+            Ok((seed_len, vk_len))
         })
     }
 

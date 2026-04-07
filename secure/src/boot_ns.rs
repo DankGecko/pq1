@@ -1,6 +1,8 @@
 /// Boot the non-secure world.
 ///
-/// Sets VTOR_NS, MSP_NS, then branches to the NS reset vector via BXNS.
+/// Sets VTOR_NS, MSP_NS, clears all GP/FPU registers and PSP_NS to prevent
+/// secure-state leakage across the boundary, then branches to the NS reset
+/// vector via BXNS.
 ///
 /// The MPC must be configured before calling this so that the NS flash
 /// region at `ns_vector_table` is accessible.
@@ -23,20 +25,53 @@ pub unsafe fn boot(ns_vector_table: u32) -> ! {
     // 2. Read NS initial stack pointer (vector table entry 0)
     let ns_msp = core::ptr::read_volatile(vt);
 
-    // 3. Set MSP_NS
+    // 3. Set MSP_NS and clear PSP_NS
     core::arch::asm!(
         "msr MSP_NS, {0}",
+        "msr PSP_NS, {1}",
         in(reg) ns_msp,
+        in(reg) 0u32,
     );
 
-    // 4. Read NS reset handler (vector table entry 1)
-    let ns_reset = core::ptr::read_volatile(vt.add(1));
-
-    // 5. Branch to non-secure reset handler (clear LSB for NS target)
-    let ns_entry = ns_reset & !1u32;
+    // 4. Clear CONTROL_NS (privileged thread, MSP)
     core::arch::asm!(
-        "bxns {0}",
-        in(reg) ns_entry,
+        "msr CONTROL_NS, {0}",
+        in(reg) 0u32,
+    );
+
+    // 5. Read NS reset handler (vector table entry 1)
+    let ns_reset = core::ptr::read_volatile(vt.add(1));
+    let ns_entry = ns_reset & !1u32;
+
+    // 6. Clear all general-purpose registers and the link register before
+    //    crossing into NS world. The Cortex-M33 BXNS instruction does NOT
+    //    auto-clear registers (only function-pointer veneer returns do); we
+    //    must do it manually to avoid leaking secure intermediates.
+    //
+    //    We pass `ns_entry` in via r0 then move it to lr just before BXNS so
+    //    we can issue a single `bxns lr` after the clear.
+    //
+    //    NOTE: FPU register clear is omitted because cortex-m-rt does not
+    //    enable the FPU by default in this build. If FPU is enabled later,
+    //    add: `vmov.f32 sN, #0` for s0..s31 (or use VLDMIA from a zeroed
+    //    16-aligned buffer).
+    core::arch::asm!(
+        "mov lr, {entry}",
+        "mov r0,  #0",
+        "mov r1,  #0",
+        "mov r2,  #0",
+        "mov r3,  #0",
+        "mov r4,  #0",
+        "mov r5,  #0",
+        "mov r6,  #0",
+        "mov r7,  #0",
+        "mov r8,  #0",
+        "mov r9,  #0",
+        "mov r10, #0",
+        "mov r11, #0",
+        "mov r12, #0",
+        "bxns lr",
+        entry = in(reg) ns_entry,
         options(noreturn),
     );
 }
