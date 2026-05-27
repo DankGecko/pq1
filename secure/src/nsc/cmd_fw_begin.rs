@@ -66,6 +66,16 @@ fn arm_wipe_and_reset() -> ! {
     // from TZIC violation, OPTIGA tamper, SE050 errors).
     #[cfg(feature = "stm32u585")]
     let _ = unsafe { flash::arm_wipe_flag() };
+    // Soft-disconnect USB before sys_reset so a connected USB-C host
+    // observes a clean detach + re-attach across the reboot, instead
+    // of staying stuck on the pre-reset enumeration state. See
+    // `hw::usb_hw::soft_disconnect_then_reset` for the rationale +
+    // memory `reference_usb_c_warm_reset_edge`.
+    #[cfg(feature = "stm32u585")]
+    unsafe {
+        crate::hw::usb_hw::soft_disconnect_then_reset();
+    }
+    #[cfg(not(feature = "stm32u585"))]
     cortex_m::peripheral::SCB::sys_reset();
 }
 

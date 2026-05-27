@@ -165,7 +165,17 @@ pub(super) unsafe fn run(_args: &GatewayArgs) -> u32 {
         *core::ptr::addr_of_mut!(FW_UPDATE) = None;
     }
 
-    // 5. System reset. Doesn't return.
+    // 5. System reset. Doesn't return. Soft-disconnect USB first so
+    // the companion host sees a clean detach + re-attach across the
+    // post-COMMIT reboot, instead of being stuck on the pre-reset
+    // enumeration state until a physical cable replug. See
+    // `hw::usb_hw::soft_disconnect_then_reset` + memory
+    // `reference_usb_c_warm_reset_edge`.
     ui::show_status("Updating...", "rebooting");
+    #[cfg(feature = "stm32u585")]
+    unsafe {
+        crate::hw::usb_hw::soft_disconnect_then_reset();
+    }
+    #[cfg(not(feature = "stm32u585"))]
     cortex_m::peripheral::SCB::sys_reset();
 }

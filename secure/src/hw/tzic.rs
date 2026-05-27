@@ -238,7 +238,15 @@ unsafe fn trigger_tzic_wipe() -> ! {
     //    re-execution). On a stand-alone power-up the chip
     //    reboots normally and the boot-time wipe-resume path
     //    drives the SE wipe.
-    cortex_m::peripheral::SCB::sys_reset();
+    //
+    //    Soft-disconnect USB first so a connected USB-C host sees a
+    //    clean detach + re-attach across the reboot. We're in IRQ
+    //    context here — the ~50 ms delay inside
+    //    `soft_disconnect_then_reset` is acceptable because the
+    //    handler doesn't return to thread mode (it resets the chip),
+    //    and UI/I2C are deliberately untouched (see the docstring
+    //    comment above on IRQ-context constraints).
+    crate::hw::usb_hw::soft_disconnect_then_reset();
 }
 
 /// Total illegal-access events since boot. Stable read from thread

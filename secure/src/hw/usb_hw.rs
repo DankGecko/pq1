@@ -203,6 +203,70 @@ fn enable_tcpp03() {
     }
 }
 
+/// Soft-disconnect the device from USB, then `SCB::sys_reset`. Does
+/// not return.
+///
+/// **What it does (and what it doesn't).** Setting `OTG_DCTL.SDIS=1`
+/// drops the D+ pull-up so the host's USB 2.0 layer observes a clean
+/// `USB disconnect` event in `dmesg` (TDDIS ≥ 2.5 µs per USB 2.0
+/// §7.1.7.3). On B-U585I-IOT02A powered through the USB-C cable, this
+/// is **not sufficient by itself** to make the host *re-attach* the
+/// device on the post-reset boot — VBUS stays continuously asserted
+/// (the host is supplying it), so Linux's typec subsystem treats the
+/// brief D+/CC transitions as transient noise rather than a real
+/// unplug, and the port stays bound to the pre-reset device session.
+/// `lsusb` therefore still requires a physical cable replug to refresh
+/// after a firmware-initiated reset; see
+/// `reference_usb_c_warm_reset_edge` for the full topology analysis.
+///
+/// **Why we still do this.** Two real benefits:
+///   1. Companion / host apps that watch for `USB disconnect` see a
+///      clean event instead of a transport-level error mid-transaction.
+///   2. On topologies where VBUS *does* drop across the reset (USB-A
+///      host, USB-C-via-a-hub-with-PD-cycle, dev boards powered from
+///      ST-LINK with USB-C dongle data-only), the host re-enumerates
+///      automatically without a replug.
+///
+/// **Path classification.** USB OTG FS is GTZC-marked NS — the
+/// canonical access path from secure code is the NS alias
+/// `0x4204_0000` (same pattern as the FLASH-NSCR-via-NS-alias finding
+/// in `reference_stm32u5_nscr_ns_alias`).
+///
+/// # Safety
+/// Caller is committed to resetting the chip. Mutates the NS-mapped
+/// USB OTG controller via a volatile RMW on `OTG_DCTL`. If OTG isn't
+/// powered (boot-time pre-NS-init), the write hits a register block
+/// whose default has SDIS=1 anyway — no-op, no observable host detach,
+/// but still safe.
+#[inline(never)]
+pub unsafe fn soft_disconnect_then_reset() -> ! {
+    // USB OTG FS NS alias (matches `nonsecure/src/usb/mod.rs:USB_OTG_BASE`).
+    const OTG_NS: u32 = 0x4204_0000;
+    // OTG_DCTL @ +0x804 (STM32U5 RM §72 / RM0456). Bit 1 = SDIS.
+    const OTG_DCTL: u32 = OTG_NS + 0x804;
+    const SDIS: u32 = 1 << 1;
+
+    // SAFETY: NS-mapped peripheral, single-threaded secure-world
+    // caller on an about-to-reset path. RMW preserves the rest of
+    // DCTL (none of which matters past the imminent reset).
+    let dctl = OTG_DCTL as *mut u32;
+    unsafe {
+        let cur = core::ptr::read_volatile(dctl);
+        core::ptr::write_volatile(dctl, cur | SDIS);
+    }
+
+    // ~20 ms hold so the host's USB controller registers the detach.
+    // USB 2.0 §7.1.7.3 only requires TDDIS ≥ 2.5 µs but Linux's per-
+    // port debounce defaults around 100 ms; 20 ms is comfortably
+    // outside any "ignore this brief blip" window without dragging
+    // the reset path. ~3.2 M `nop`s at 160 MHz.
+    for _ in 0..3_200_000 {
+        cortex_m::asm::nop();
+    }
+
+    cortex_m::peripheral::SCB::sys_reset();
+}
+
 /// Initialize UCPD1 for USB Type-C CC detection (sink/device mode).
 ///
 /// On the B-U585I-IOT02A (UM2839 Table 8):
