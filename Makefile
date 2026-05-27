@@ -3050,3 +3050,85 @@ fuzz-manifest-crc:
 
 fuzz-manifest-build:
 	cd fw-manifest/fuzz && cargo +nightly build --release
+
+# Over-USB FW-update transport e2e test on real STM32U585 silicon —
+# REVERSIBLE (no OTP burn, no reset; chip stays reflashable).
+#
+# The host driver (tools/fwup-transport-test.py) sends a dev-signed
+# v1 manifest + small QW-aligned image chunks + FW_COMMIT over real
+# USB HID. The device runs the FULL state machine + verify_manifest +
+# verify_images, then STOPS at COMMIT before OTP/boot-state/sys_reset
+# under the `fwup-transport-e2e` feature.
+#
+# Catches transport-layer bugs (APDU chaining, HID framing, chunk
+# header parsing, BEGIN -> CHUNK -> COMMIT ordering) that the device-
+# side make-fw-rollback-hw test can't see (because that one bypasses
+# the gateway and calls verify_manifest directly).
+#
+# Requires:
+#   * ST-LINK + USB-C cable both connected (see USB-C enumeration
+#     work — `5V_UCPD` jumper is OK; ST-LINK provides probe-rs access).
+#   * udev rule installed for 1209:7051 (tools/99-pqsigner.rules) so
+#     /dev/hidrawN is rw-accessible without root.
+#   * `make dev-pubkey-fixture` populated (target/dev_vendor_pubkey.bin).
+#
+# Build features:
+#   secure: mock-se,ui-noop,stm32u585,usb,fwup-transport-e2e
+#     (fwup-transport-e2e implies e2e-test — auto-provision + skip PIN;
+#      deliberately does NOT imply debug-log because semihosting BKPTs
+#      under probe-rs run break USB timing — see the USB-C enumeration
+#      lesson + the reference_probe_rs_reset_halts_core memory.)
+#   NS: stm32u585,usb (the standard USB-HID host-facing build).
+FWUP_FIXTURE_DIR := $(CURDIR)/target/fwup-test
+FWUP_FIXTURE_FILES := $(FWUP_FIXTURE_DIR)/manifest.bin $(FWUP_FIXTURE_DIR)/secure.bin $(FWUP_FIXTURE_DIR)/nonsecure.bin
+
+fwup-transport-fixture: $(FWUP_FIXTURE_FILES)
+
+$(FWUP_FIXTURE_FILES) &:
+	@mkdir -p $(FWUP_FIXTURE_DIR)
+	@cargo run --release -p fwsign --quiet -- gen-test-fixture \
+	  --version 1 --secure-len 240 --nonsecure-len 240 \
+	  --out-dir $(FWUP_FIXTURE_DIR)
+
+fwup-transport-hw: dev-pubkey-fixture fwup-transport-fixture
+	@echo "==> Building secure (fwup-transport-e2e + usb + mock-se)"
+	@FSBL_VENDOR_PUBKEY=$(DEV_VENDOR_PUBKEY) $(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
+	  cargo build --locked --release --target $(TARGET) --target-dir target/secure \
+	    -p sphincs-tz-secure --no-default-features \
+	    --features mock-se,ui-noop,stm32u585,usb,fwup-transport-e2e
+	@echo "==> Building NS (usb)"
+	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
+	@$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
+	  cargo build --locked --release --target $(TARGET) --target-dir target/nonsecure \
+	    -p sphincs-tz-nonsecure --features stm32u585,usb
+	@echo "==> Flashing..."
+	@probe-rs download --chip STM32U585AIIx $(NONSECURE_ELF)
+	@probe-rs download --chip STM32U585AIIx $(SECURE_ELF)
+	@echo "==> Configuring TrustZone option bytes..."
+	@STM32_Programmer_CLI --connect port=SWD \
+	  --optionbytes TZEN=1 SECWM1_PSTRT=0x0 SECWM1_PEND=0x7F \
+	  SECWM2_PSTRT=0x7F SECWM2_PEND=0x0 SECBOOTADD0=0x180000
+	@echo "==> probe-rs run (background) — letting the device boot + USB enumerate..."
+	@(timeout 120 probe-rs run --chip STM32U585AIIx $(SECURE_ELF) > /tmp/fwup-transport-run.log 2>&1 &)
+	@for i in $$(seq 1 25); do \
+	  if lsusb 2>/dev/null | grep -qi '1209:7051'; then echo "==> Enumerated (~$${i}s)"; break; fi; \
+	  sleep 1; \
+	done
+	@if ! lsusb 2>/dev/null | grep -qi '1209:7051'; then \
+	  echo "ERROR: 1209:7051 did not enumerate within 25s — is the USB-C cable plugged into the host?"; \
+	  pkill -f "probe-rs run --chip STM32U585AIIx" 2>/dev/null; \
+	  cat /tmp/fwup-transport-run.log | tail -20; \
+	  exit 1; \
+	fi
+	@echo "==> Running transport e2e test (tools/fwup-transport-test.py)..."
+	@rc=0; python3 tools/fwup-transport-test.py --fixture-dir $(FWUP_FIXTURE_DIR) || rc=$$?; \
+	pkill -f "probe-rs run --chip STM32U585AIIx" 2>/dev/null || true; \
+	echo "===================================="; \
+	if [ $$rc -eq 0 ]; then \
+	  echo "==> fwup-transport-hw: PASS — full BEGIN+CHUNK+COMMIT round-trip green"; \
+	  exit 0; \
+	else \
+	  echo "==> fwup-transport-hw: FAIL (python rc=$$rc)"; \
+	  cat /tmp/fwup-transport-run.log | tail -20; \
+	  exit 1; \
+	fi

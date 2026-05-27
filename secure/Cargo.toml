@@ -193,6 +193,19 @@ e2e-test = []
 # Fenced out of mode-production by a dedicated compile_error! in nsc/mod.rs.
 # See secure/src/fw_rollback_e2e.rs. NEVER ship.
 fw-rollback-e2e = ["e2e-test", "debug-log"]
+# Over-USB FW-update transport e2e (`make fwup-transport-hw`). The
+# host driver sends a dev-signed manifest + chunks + COMMIT over USB
+# HID; the device runs the full state machine + verify_manifest +
+# verify_images, then STOPS before the OTP rollback-floor bump + boot-
+# state write + sys_reset (so the chip stays reflashable). Implies
+# e2e-test only (PIN/provisioning short-circuits + fence opt-in).
+# Deliberately does NOT imply debug-log: semihosting BKPTs under
+# probe-rs run halt the core per log line and break USB enumeration
+# timing (this is the same lesson the USB-C enumeration work hit —
+# see reference_probe_rs_reset_halts_core memory). The make target
+# adds usb/mock-se/ui-noop/stm32u585. Fenced out of mode-production.
+# NEVER ship.
+fwup-transport-e2e = ["e2e-test"]
 usb = []  # Enable USB OTG hardware init (clock, GPIO, GTZC) for host communication
 se050 = []  # NXP SE050 secure element via I2C1 (OM-SE050ARD on Arduino R3 headers)
 # STM32U585 TAMP (tamper detection) — backup-domain voltage, LSE clock,

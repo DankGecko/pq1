@@ -29,6 +29,9 @@ use crate::ui;
 pub(super) unsafe fn run(_args: &GatewayArgs) -> u32 {
     let _busy = HandlerGuard::enter();
 
+    // PIN gate. See cmd_fw_begin.rs for the fwup-transport-e2e bypass
+    // rationale (test-only, fenced from production).
+    #[cfg(not(feature = "fwup-transport-e2e"))]
     if peek_state(|s| s.pin_verified.check_sentinel()) != crate::fi::OK_SENTINEL {
         return NscStatus::NotInitialized as u32;
     }
@@ -63,6 +66,27 @@ pub(super) unsafe fn run(_args: &GatewayArgs) -> u32 {
     // need to commit. A `verify_images` failure already returned
     // FwUpdateBadImage/BadChunk above; COMMIT only reaches here on a
     // bit-perfect verified install.
+
+    // Transport e2e gate (finding #25 / make fwup-transport-hw): the
+    // over-USB transport test wants to validate the FULL state machine
+    // + verify_images on real bytes-from-host, but MUST stop here —
+    // the OTP rollback bump and sys_reset below are irreversible and
+    // would brick a reflashable bench chip. Under `fwup-transport-e2e`
+    // we drop the streaming ctx (zeroizing via ZeroizeOnDrop) and
+    // return Ok WITHOUT bumping OTP / writing the manifest / writing
+    // boot-state / resetting. The host test interprets Ok-without-
+    // reset as PASS. Fenced out of mode-production (see nsc/mod.rs).
+    #[cfg(feature = "fwup-transport-e2e")]
+    {
+        secure_log!("[S][fwup-transport-e2e] verify_images PASS — stopping before OTP/reset");
+        // SAFETY: category 5 — exclusive write to `static mut FW_UPDATE`
+        // under the non-reentrant dispatcher. The dropped value's
+        // ZeroizeOnDrop wipes the manifest copy and running hashers.
+        unsafe {
+            *core::ptr::addr_of_mut!(FW_UPDATE) = None;
+        }
+        return NscStatus::Ok as u32;
+    }
 
     // -- Commit -----------------------------------------------------
 

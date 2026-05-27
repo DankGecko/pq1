@@ -80,6 +80,29 @@ enum Cmd {
         out: std::path::PathBuf,
     },
 
+    /// Emit a self-consistent dev-signed bundle (manifest + raw image
+    /// bytes) for the over-USB FW-update transport e2e test
+    /// (`make fwup-transport-hw`). Generates deterministic raw images
+    /// (`[0xAA; secure_len]` / `[0xBB; nonsecure_len]`), signs the
+    /// manifest with the built-in DEV key, writes three files to
+    /// `<out_dir>/`: manifest.bin, secure.bin, nonsecure.bin.
+    /// **Never production.**
+    GenTestFixture {
+        /// Firmware version (encoded in the signed manifest).
+        #[arg(long)]
+        version: u32,
+        /// Raw secure-image length in bytes (must be a multiple of 16).
+        #[arg(long, default_value_t = 240)]
+        secure_len: u32,
+        /// Raw nonsecure-image length in bytes (must be a multiple of 16).
+        #[arg(long, default_value_t = 240)]
+        nonsecure_len: u32,
+        /// Output directory for `manifest.bin`, `secure.bin`,
+        /// `nonsecure.bin`.
+        #[arg(long)]
+        out_dir: std::path::PathBuf,
+    },
+
     /// Sign a pair of secure + nonsecure ELFs into a `.pqfw` release
     /// bundle.
     Sign {
@@ -241,6 +264,12 @@ fn main() -> anyhow::Result<()> {
         Cmd::Keygen { out } => subcommands::keygen::run(&out),
         Cmd::Pubkey { key, out } => subcommands::pubkey::run(&key, &out),
         Cmd::DevPubkey { out } => subcommands::dev_pubkey::run(&out),
+        Cmd::GenTestFixture {
+            version,
+            secure_len,
+            nonsecure_len,
+            out_dir,
+        } => subcommands::gen_test_fixture::run(version, secure_len, nonsecure_len, &out_dir),
         Cmd::Sign {
             key,
             version,

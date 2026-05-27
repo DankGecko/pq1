@@ -178,6 +178,18 @@ compile_error!(
      circuits boot into a firmware anti-rollback test — never a shipping image."
 );
 
+// Dedicated guard: `fwup-transport-e2e` is the over-USB FW-update transport
+// e2e test. It short-circuits CMD_FW_COMMIT to stop *before* the OTP
+// rollback-floor bump + boot-state write + sys_reset, so the chip stays
+// reflashable. That short-circuit must never reach a shipping image — a
+// production COMMIT that skips OTP would never raise the rollback floor.
+#[cfg(all(feature = "mode-production", feature = "fwup-transport-e2e"))]
+compile_error!(
+    "mode-production and fwup-transport-e2e are mutually exclusive. \
+     fwup-transport-e2e short-circuits CMD_FW_COMMIT before the OTP \
+     bump + reboot so the test chip stays reflashable — never a shipping image."
+);
+
 // ---------------------------------------------------------------------------
 // UI-axis mutual exclusivity (Phase 2)
 //
