@@ -1102,7 +1102,12 @@ impl CommandRouter {
         }
 
         let remaining = PENDING_LEN - PENDING_POS;
-        let chunk = core::cmp::min(remaining, APDU_MAX_RESP);
+        // FI-hardened length clamp — a glitched `chunk` value here
+        // would either overflow CHUNK_BUF (if it exceeds APDU_MAX_RESP)
+        // or read past `PENDING_PTR + PENDING_POS + remaining` (if it
+        // exceeds `remaining`), in either case leaking adjacent memory
+        // into the response. See `pqsigner_fi::fi_min` docstring.
+        let chunk = pqsigner_fi::fi_min(remaining, APDU_MAX_RESP);
         static mut CHUNK_BUF: [u8; APDU_MAX_RESP + 2] = [0u8; APDU_MAX_RESP + 2];
         core::ptr::copy_nonoverlapping(PENDING_PTR.add(PENDING_POS), CHUNK_BUF.as_mut_ptr(), chunk);
         PENDING_POS += chunk;
