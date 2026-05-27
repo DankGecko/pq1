@@ -30,14 +30,16 @@ use crate::hw::mmio::{Reg32, RoReg32};
 
 const FLASH: u32 = 0x5002_2000;
 
-// Non-secure-controller registers (accessible from secure world via the
-// secure peripheral bus — the NS/S distinction here selects which side's
-// watermark rules apply, not who can reach the register). Used for
-// programming bank 2 (NS flash) pages during firmware updates: NS pages
-// are rejected by SECCR because the watermark forbids secure-side
-// programming of NS flash, so NSCR is the only controller that can
-// write them. The secure world owns the update mechanism end-to-end, so
-// NS-world code never touches NSCR directly.
+// Non-secure-controller registers MUST be reached via the NS alias of the
+// FLASH peripheral block (0x4002_2000), even when called from the secure
+// world. The secure alias of the SAME register set silently corrupts NSCR
+// writes — every NSCR-initiated program/erase returns PGSERR on STM32U585.
+// ST's HAL `FLASH_PageErase`/`FLASH_Program_QuadWord` confirm this: when
+// `IS_FLASH_SECURE_OPERATION()` is false (i.e. the caller is operating on
+// NS-classified pages) HAL uses `&(FLASH_NS->NSCR)` — the NS alias of the
+// same register block. Driving NSCR via the secure alias was the cause of
+// the bank-2 erase failure during the fwup-transport-e2e bring-up.
+const FLASH_NS: u32 = 0x4002_2000;
 
 /// Selects which bank the flash controller targets. Only meaningful for
 /// dual-bank operations; bank 1 is S-flash, bank 2 is NS-flash in our
@@ -116,9 +118,11 @@ const REG: FlashRegs = unsafe {
         seckeyr: Reg32::new(FLASH + 0x0C),
         secsr: Reg32::new(FLASH + 0x24),
         seccr: Reg32::new(FLASH + 0x2C),
-        nskeyr: Reg32::new(FLASH + 0x08),
-        nssr: Reg32::new(FLASH + 0x20),
-        nscr: Reg32::new(FLASH + 0x28),
+        // NS-controller registers via the NS alias — see the comment on
+        // FLASH_NS above. The secure alias for NSCR fails with PGSERR.
+        nskeyr: Reg32::new(FLASH_NS + 0x08),
+        nssr: Reg32::new(FLASH_NS + 0x20),
+        nscr: Reg32::new(FLASH_NS + 0x28),
         icache_cr: Reg32::new(ICACHE_BASE),
         icache_sr: RoReg32::new(ICACHE_BASE + 0x04),
     }
@@ -992,15 +996,16 @@ pub unsafe fn erase_ns_page(page: u8) -> Result<(), ()> {
     assert!(page <= 127, "ns-bank page out of range");
     let page = page as u32;
 
+    // NSCR is reached via the NS alias of the FLASH register block
+    // (see `FLASH_NS` at top of file). The single-shot CR write matches
+    // ST HAL's `FLASH_PageErase` MODIFY_REG pattern.
     cortex_m::interrupt::free(|_| {
         wait_bsy_ns();
         clear_errors_ns();
         unlock_ns();
 
-        // BKER=1 selects bank 2.
-        let cr = PER | BKER | (page << PNB_SHIFT);
+        let cr = PER | BKER | (page << PNB_SHIFT) | STRT;
         REG.nscr.write(cr);
-        REG.nscr.write(cr | STRT);
 
         wait_bsy_ns();
 
@@ -1040,6 +1045,8 @@ unsafe fn write_ns_quadword(addr: u32, data: &[u8; 16]) -> Result<(), ()> {
         clear_errors_ns();
         unlock_ns();
 
+        // Clear any latent op bits, then arm PG.
+        REG.nscr.write(0);
         REG.nscr.write(PG);
 
         let dst = addr as *mut u32;
