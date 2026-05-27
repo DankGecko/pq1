@@ -255,11 +255,20 @@ pub unsafe fn soft_disconnect_then_reset() -> ! {
         core::ptr::write_volatile(dctl, cur | SDIS);
     }
 
-    // ~20 ms hold so the host's USB controller registers the detach.
-    // USB 2.0 §7.1.7.3 only requires TDDIS ≥ 2.5 µs but Linux's per-
-    // port debounce defaults around 100 ms; 20 ms is comfortably
-    // outside any "ignore this brief blip" window without dragging
-    // the reset path. ~3.2 M `nop`s at 160 MHz.
+    // ~20 ms hold so the host's USB 2.0 layer registers the detach.
+    // Empirically tested on B-U585I-IOT02A + Linux: this is enough
+    // for `dmesg` to log a clean `USB disconnect` event. It is NOT
+    // enough on its own to convince Linux's typec subsystem to drop
+    // the port and re-enumerate when VBUS stays asserted by the host
+    // — that's a USB-C topology constraint UM2839 documents no
+    // jumper to break (no SB isolates VBUS at CN1). Tried-and-failed
+    // mitigations (don't re-add without re-testing): SDIS +
+    // `OTG_GCCFG.PWRDWN=0`, SDIS + UCPD `CCENABLE=0`, SDIS + PA12-as-
+    // GPIO-LOW, SDIS + PA12-LOW + PB5-LOW (TCPP03 disable), various
+    // 10 ms → 500 ms holds. None re-attach without a physical replug
+    // while VBUS stays continuously asserted. See memory
+    // `reference_usb_c_warm_reset_edge` for the full topology trace.
+    // ~3.2 M `nop`s at 160 MHz.
     for _ in 0..3_200_000 {
         cortex_m::asm::nop();
     }
