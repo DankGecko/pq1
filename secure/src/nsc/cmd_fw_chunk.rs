@@ -35,9 +35,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // borrow and the chunk write is a use-after-drop on `FwUpdateCtx`.
     let _busy = super::HandlerGuard::enter();
 
-    // PIN gate. See cmd_fw_begin.rs for the fwup-transport-e2e bypass
-    // rationale (test-only, fenced from production).
-    #[cfg(not(feature = "fwup-transport-e2e"))]
+    // PIN gate.
     if peek_state(|s| s.pin_verified.check_sentinel()) != crate::fi::OK_SENTINEL {
         return NscStatus::NotInitialized as u32;
     }

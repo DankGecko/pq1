@@ -145,19 +145,6 @@ fn record_verify_success() {
 pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // Gate: PIN must be verified — updates aren't available on a
     // locked device.
-    //
-    // Under `fwup-transport-e2e`, bypass the PIN gate. The over-USB
-    // transport test (`make fwup-transport-hw`) needs to drive FW_BEGIN
-    // from a host script and the e2e-test auto-unlock path appears to
-    // not visibly propagate `pin_verified` to this entry point in the
-    // current build (GET_STATUS reports unlocked from the SAME global
-    // state, but check_sentinel here returns FAIL_SENTINEL — a real
-    // mystery worth chasing as a separate task). The feature is fenced
-    // out of mode-production (see nsc/mod.rs), and the bypass is paired
-    // with the test-mode COMMIT short-circuit that already gates the
-    // whole flow as test-only. PIN protection is exercised by other
-    // paths (interactive PIN entry, fw_rollback_e2e, etc.).
-    #[cfg(not(feature = "fwup-transport-e2e"))]
     if peek_state(|s| s.pin_verified.check_sentinel()) != crate::fi::OK_SENTINEL {
         return NscStatus::NotInitialized as u32;
     }
