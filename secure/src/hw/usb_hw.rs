@@ -276,6 +276,32 @@ pub unsafe fn soft_disconnect_then_reset() -> ! {
     cortex_m::peripheral::SCB::sys_reset();
 }
 
+/// Drop the USB 2.0 D+ pull-up via `OTG_DCTL.SDIS=1`. Used at the top
+/// of the "halt + wait for user to replug" paths in
+/// `cmd_fw_commit::run` and `cmd_fw_begin::arm_wipe_and_reset` so
+/// companion / host apps see a clean `USB disconnect` event in dmesg
+/// before the OLED-displayed "Replug USB" prompt becomes the
+/// human-facing signal.
+///
+/// Does NOT `sys_reset` (use [`soft_disconnect_then_reset`] for that).
+/// Does NOT wait — caller is responsible for any settle delay.
+///
+/// # Safety
+/// Mutates the NS-mapped USB OTG controller via a volatile RMW on
+/// `OTG_DCTL`. If OTG isn't powered the write is a no-op on reset-
+/// state `SDIS=1`.
+#[inline(never)]
+pub unsafe fn soft_disconnect() {
+    const OTG_DCTL: u32 = 0x4204_0000 + 0x804;
+    const SDIS: u32 = 1 << 1;
+    let dctl = OTG_DCTL as *mut u32;
+    // SAFETY: see docstring.
+    unsafe {
+        let cur = core::ptr::read_volatile(dctl);
+        core::ptr::write_volatile(dctl, cur | SDIS);
+    }
+}
+
 /// Initialize UCPD1 for USB Type-C CC detection (sink/device mode).
 ///
 /// On the B-U585I-IOT02A (UM2839 Table 8):

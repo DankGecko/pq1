@@ -58,7 +58,20 @@ const FW_VERIFY_FAIL_THRESHOLD_RAM: u32 = 5;
 /// wipe trigger fires.
 const FW_VERIFY_FAIL_THRESHOLD_FLASH: u32 = 20;
 
-/// Trigger the admin wipe + reset. Doesn't return.
+/// Arm the admin wipe + show the user-facing "replug USB" prompt +
+/// halt. Doesn't return.
+///
+/// Why halt instead of `sys_reset`: a firmware-initiated reset over
+/// USB-C on a stock B-U585I-IOT02A does NOT get the host to re-
+/// enumerate the device (VBUS stays asserted, host's typec keeps the
+/// port bound — see memory `reference_usb_c_warm_reset_edge`). The
+/// user has to physically replug to recover. Telling them on the
+/// OLED is the cleanest UX, and halting means the prompt stays up
+/// indefinitely until they take that action. The page-125 wipe flag
+/// is already armed in flash before this call, so the next cold boot
+/// (after the user replugs) sees `is_wipe_armed() == true` and the
+/// `se050`/`dual-se` path in `main.rs` runs `factory_reset_admin` to
+/// scrub the SEs before re-entering the seed wizard.
 #[inline(never)]
 fn arm_wipe_and_reset() -> ! {
     // SAFETY: dedicated single-QW idempotent flash write to the
@@ -66,14 +79,22 @@ fn arm_wipe_and_reset() -> ! {
     // from TZIC violation, OPTIGA tamper, SE050 errors).
     #[cfg(feature = "stm32u585")]
     let _ = unsafe { flash::arm_wipe_flag() };
-    // Soft-disconnect USB before sys_reset so a connected USB-C host
-    // observes a clean detach + re-attach across the reboot, instead
-    // of staying stuck on the pre-reset enumeration state. See
-    // `hw::usb_hw::soft_disconnect_then_reset` for the rationale +
-    // memory `reference_usb_c_warm_reset_edge`.
+
+    // Soft-disconnect USB so companion / dmesg watchers see a clean
+    // `USB disconnect` event before the human-facing OLED prompt.
     #[cfg(feature = "stm32u585")]
     unsafe {
-        crate::hw::usb_hw::soft_disconnect_then_reset();
+        crate::hw::usb_hw::soft_disconnect();
+    }
+
+    crate::ui::show_status("Tamper detected", "Replug USB");
+
+    // Halt on real hardware so the OLED prompt stays up until the
+    // user replugs. QEMU has no OLED persistence + sys_reset works
+    // cleanly there, so use it as the non-hw fallback.
+    #[cfg(feature = "stm32u585")]
+    loop {
+        cortex_m::asm::wfi();
     }
     #[cfg(not(feature = "stm32u585"))]
     cortex_m::peripheral::SCB::sys_reset();

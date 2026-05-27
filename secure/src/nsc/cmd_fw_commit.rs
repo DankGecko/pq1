@@ -165,17 +165,34 @@ pub(super) unsafe fn run(_args: &GatewayArgs) -> u32 {
         *core::ptr::addr_of_mut!(FW_UPDATE) = None;
     }
 
-    // 5. System reset. Doesn't return. Soft-disconnect USB first so
-    // the companion host sees a clean detach + re-attach across the
-    // post-COMMIT reboot, instead of being stuck on the pre-reset
-    // enumeration state until a physical cable replug. See
-    // `hw::usb_hw::soft_disconnect_then_reset` + memory
-    // `reference_usb_c_warm_reset_edge`.
-    ui::show_status("Updating...", "rebooting");
+    // 5. Halt + ask the user to replug the USB cable. Does not return.
+    //
+    // We deliberately do NOT `sys_reset` here — on a stock B-U585I-IOT02A
+    // a firmware-initiated reset over USB-C does not get the host to
+    // re-enumerate (VBUS stays asserted by the host, Linux's typec
+    // subsystem keeps the port bound — see `reference_usb_c_warm_reset_edge`).
+    // Instead, drop the D+ pull-up so the host logs a clean
+    // `USB disconnect` for companion / dmesg watchers, light up the
+    // OLED with "Update OK — Replug USB", then halt. The OTP rollback
+    // floor is already bumped + the new manifest is written with
+    // `try_once = TRIED` + boot-state points at the new slot, so the
+    // next cold boot (after the user replugs) will boot the new
+    // firmware. The OLED retains the prompt across the power cycle
+    // until the new firmware re-initialises its UI.
+    ui::show_status("Update OK", "Replug USB");
     #[cfg(feature = "stm32u585")]
-    unsafe {
-        crate::hw::usb_hw::soft_disconnect_then_reset();
+    {
+        // SAFETY: soft_disconnect mutates the NS-mapped OTG_DCTL on
+        // an about-to-halt path. See helper docstring.
+        unsafe {
+            crate::hw::usb_hw::soft_disconnect();
+        }
+        loop {
+            cortex_m::asm::wfi();
+        }
     }
+    // QEMU / non-hw fallback — no OLED persistence + sys_reset works
+    // cleanly there.
     #[cfg(not(feature = "stm32u585"))]
     cortex_m::peripheral::SCB::sys_reset();
 }

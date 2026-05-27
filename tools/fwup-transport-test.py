@@ -594,14 +594,16 @@ def phase_wipe_trigger(hid: HidRaw, manifest: bytes) -> HidRaw:
         return hid2
 
     print(
-        "==> [wipe] WARN: device did not auto-renegotiate USB-C after "
-        "sys_reset.\n"
-        "          This is the known USB-C warm-reset edge — the device "
-        "IS booting,\n"
-        "          but the host port needs a physical unplug/replug to "
-        "renegotiate.\n"
-        "          The wipe-trigger logic itself is validated by the "
-        "disconnect above.\n"
+        "==> [wipe] device is halted on purpose — OLED shows "
+        '"Tamper detected / Replug USB".\n'
+        "          On a stock B-U585I-IOT02A the host port can't be made "
+        "to re-enumerate\n"
+        "          while VBUS stays asserted (UM2839 documents no SB to "
+        "break VBUS at\n"
+        "          CN1), so the firmware halts with the OLED prompt "
+        "instead of sys_reset.\n"
+        "          The wipe-trigger logic is validated by the disconnect "
+        "above ✓.\n"
         "          To run the test again with a clean flash-failure "
         "counter, replug\n"
         "          the USB-C cable, then re-run `make fwup-transport-hw`."
