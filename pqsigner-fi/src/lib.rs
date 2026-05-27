@@ -178,6 +178,40 @@ pub fn check_true_into_sentinel<F: FnMut() -> bool, W: FnMut()>(mut cond: F, mut
     verdict
 }
 
+/// FI-hardened `min(a, b)` for length-clamping at security-critical
+/// boundaries (USB control-transfer length checks, APDU reassembly,
+/// HID frame size limits).
+///
+/// **Threat model.** Colin O'Flynn's USENIX WOOT 2019 EMFI attack
+/// (`fault.io/ches2018.pdf` and follow-up WOOT'19) showed that a
+/// single voltage/EM glitch on the conditional-branch instruction
+/// of a `min(a, b)` can clamp the result to whichever input the
+/// attacker chooses — effectively letting a hostile host punch
+/// through a length cap and overflow a downstream buffer.
+///
+/// **Mitigation.** Compute `min` via the standard path, then verify
+/// the result satisfies `r <= a && r <= b`. If the verification
+/// trips (the glitched result exceeded one of the inputs), recompute
+/// via the OTHER inequality — a glitch on the first branch can't
+/// land identically on the second.
+///
+/// Per `docs/production-security.md` §2.4 "USB stack hardening
+/// patterns" — same body as the reference implementation there.
+#[inline]
+#[must_use]
+pub fn fi_min(a: usize, b: usize) -> usize {
+    let r = if a < b { a } else { b };
+    if r > a || r > b {
+        // Single-fault glitch detected. Recompute via the *opposite*
+        // branch direction so an attacker who landed the first fault
+        // would also need to land an identically-shaped fault on this
+        // recompute. The two inequalities are intentionally not the
+        // same comparison: `a < b` vs `b <= a`.
+        return if b <= a { b } else { a };
+    }
+    r
+}
+
 /// Halt the CPU in a WFE loop. No return, no panic unwinding.
 ///
 /// Called from the `wait_random_loop` glitch paths. Do NOT print — a glitch
@@ -251,5 +285,21 @@ mod tests {
         // 0xA5A5A5A5 ^ 0x5A5A5A5A = 0xFFFFFFFF → 32 bits flipped.
         // Guarantees no single-bit fault can convert OK into FAIL.
         assert_eq!(distance, 32);
+    }
+
+    #[test]
+    fn fi_min_picks_smaller() {
+        assert_eq!(fi_min(3, 7), 3);
+        assert_eq!(fi_min(7, 3), 3);
+        assert_eq!(fi_min(5, 5), 5);
+        assert_eq!(fi_min(0, 100), 0);
+        assert_eq!(fi_min(100, 0), 0);
+    }
+
+    #[test]
+    fn fi_min_handles_extremes() {
+        assert_eq!(fi_min(usize::MAX, 1), 1);
+        assert_eq!(fi_min(1, usize::MAX), 1);
+        assert_eq!(fi_min(usize::MAX, usize::MAX), usize::MAX);
     }
 }

@@ -51,6 +51,9 @@ prodtest = ["stm32u585", "usb"]
 
 [dependencies]
 sphincs-tz-shared    = { workspace = true }
+# FI-hardening primitives — `fi_min` for length-clamping in the USB
+# response-queue copy path. See pqsigner-fi crate docstrings.
+pqsigner-fi          = { path = "../pqsigner-fi" }
 # fw-manifest is used only for the 8 KB MANIFEST_SIZE constant in the
 # chain-buffer sizing and the CHUNK payload bounds check. No crypto
 # imports on the NS side — all the verification happens in the secure

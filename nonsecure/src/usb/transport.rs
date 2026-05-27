@@ -87,7 +87,12 @@ impl Transport {
     /// # Safety
     /// `ptr` must be valid for `len` bytes.
     pub unsafe fn queue_response(&mut self, ptr: *const u8, len: usize) {
-        let copy_len = core::cmp::min(len, self.tx_buf.len());
+        // FI-hardened length clamp — the secure-side `len` flows
+        // directly into a `copy_nonoverlapping`, so an EMFI-glitch on
+        // the `min` here would let a stale-or-faulted `len` punch past
+        // `tx_buf` end. `pqsigner_fi::fi_min` recomputes via the
+        // opposite branch if the result fails the post-condition.
+        let copy_len = pqsigner_fi::fi_min(len, self.tx_buf.len());
         core::ptr::copy_nonoverlapping(ptr, self.tx_buf.as_mut_ptr(), copy_len);
         self.tx_len = copy_len;
         self.tx_pos = 0;

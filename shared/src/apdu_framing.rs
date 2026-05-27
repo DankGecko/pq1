@@ -354,8 +354,13 @@ impl HidFrameAssembler {
             self.rx_seq = 1;
 
             let avail_in_frame = n - 7;
-            let take = core::cmp::min(
-                core::cmp::min(HID_FIRST_DATA, avail_in_frame),
+            // FI-hardened length clamp — defeats Colin O'Flynn USENIX
+            // WOOT 2019 EMFI-on-min: if the result `take` doesn't
+            // satisfy `take ≤ each input`, recompute via the opposite
+            // branch direction. See `pqsigner-fi::fi_min` + finding in
+            // `docs/production-security.md` §2.4.
+            let take = pqsigner_fi::fi_min(
+                pqsigner_fi::fi_min(HID_FIRST_DATA, avail_in_frame),
                 self.rx_expected,
             );
             buf[..take].copy_from_slice(&report[7..7 + take]);
@@ -369,8 +374,10 @@ impl HidFrameAssembler {
 
             let remaining = self.rx_expected.saturating_sub(self.rx_pos);
             let avail_in_frame = n.saturating_sub(5);
-            let take = core::cmp::min(
-                core::cmp::min(HID_CONT_DATA, avail_in_frame),
+            // FI-hardened length clamp (see comment on the first-frame
+            // path above).
+            let take = pqsigner_fi::fi_min(
+                pqsigner_fi::fi_min(HID_CONT_DATA, avail_in_frame),
                 remaining,
             );
             // Explicit bounds check — defends against `rx_pos + take`

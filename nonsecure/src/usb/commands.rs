@@ -251,6 +251,24 @@ impl CommandRouter {
             _ => {}
         }
 
+        // INS allowlist for the chained-command path. Reject unknown
+        // INS *before* `chain.step` accepts any payload bytes — a
+        // hostile host could otherwise burn up to `CHAIN_BUF_LEN`
+        // (~8 KB) of buffer accumulation for a bogus INS before the
+        // execute-time `_ => SW_INS_NOT_SUPPORTED` arm finally rejects
+        // it. Matches §19 "APDU CLA/INS allowlist at non-secure
+        // *before* any NSC gateway call" in `docs/production-security.md`.
+        // Mirrors the explicit set in `execute_chain` below.
+        let is_chained_ins = matches!(
+            ins,
+            INS_V2_SIGN_USEROP | INS_V2_SIGN_USEROP_BATCH | INS_V2_SIGN_OFFCHAIN
+        );
+        #[cfg(feature = "stm32u585")]
+        let is_chained_ins = is_chained_ins || ins == INS_V2_FW_BEGIN;
+        if !is_chained_ins {
+            return self.sw_response(SW_INS_NOT_SUPPORTED);
+        }
+
         // Chained commands. The state machine, INS-mismatch detection,
         // and overflow-safe length checks all live in
         // `ChainState::step` — see `shared/src/apdu_framing.rs`. We

@@ -22,6 +22,10 @@ stm32u585 = ["pqsigner-proto/stm32u585"]
 
 [dependencies]
 pqsigner-proto = { workspace = true }
+# FI-hardening primitives (`fi_min` for length-clamping in the HID
+# frame reassembler). No-alloc, no_std — fine for the no-default
+# shared library target. See pqsigner-fi crate docstrings.
+pqsigner-fi = { path = "../pqsigner-fi" }
 
 [dev-dependencies]
 # Property-based fuzzing for the parsers in `apdu_framing.rs`. These are
