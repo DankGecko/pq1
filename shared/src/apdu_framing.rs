@@ -338,6 +338,23 @@ impl HidFrameAssembler {
             if n < 7 {
                 return FrameOutcome::Dropped;
             }
+            // Abort + scrub if a fresh first-frame interrupts an
+            // in-progress reassembly. A host whose framing state has
+            // gone out of sync must restart from a clean slate; we
+            // do NOT silently let the new seq=0 reuse the buffer
+            // while old partial bytes linger past the new
+            // `rx_expected`. The host can recover by retrying its
+            // seq=0 once the abort response (`Dropped`) arrives.
+            // Tracks §19 P0 "Bounded APDU reassembly" in
+            // `docs/production-security.md` §2.4.
+            if self.rx_pos > 0 {
+                let stale = core::cmp::min(self.rx_pos, buf.len());
+                for b in &mut buf[..stale] {
+                    *b = 0;
+                }
+                self.reset();
+                return FrameOutcome::Dropped;
+            }
             self.channel_id = channel;
             self.rx_expected = u16::from_be_bytes([report[5], report[6]]) as usize;
             // Reject zero-length, oversize, and "won't fit in caller buf"

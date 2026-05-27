@@ -92,6 +92,60 @@ pub unsafe fn configure_vbus_u5() {
     cortex_m::asm::dsb();
 }
 
+/// §19 P1 production hardening — explicitly force OTG_FS into pure
+/// device mode and mask the Start-of-Frame interrupt.
+///
+/// **Why FDMOD = 1.** The synopsys-usb-otg crate runs in device mode
+/// by default but the DWC2 core retains the OTG role-switching state
+/// machine. Forcing `OTG_GUSBCFG.FDMOD = 1` removes any attacker-
+/// triggered role-switch path — the controller stays as a peripheral
+/// until power-cycle.
+///
+/// **Why mask SOF.** The Start-of-Frame interrupt fires once per
+/// 1 ms USB frame. If enabled, it preempts secure-world / NS work
+/// on a host-controlled cadence, creating a timing side-channel an
+/// attacker can use to gate / correlate other measurements (Colin
+/// O'Flynn et al, "Power-Analysis Attacks on USB Controllers"). We
+/// don't need SOF events for HID transport — synopsys-usb-otg
+/// derives frame timing from URB completions. Mask
+/// `OTG_GINTMSK.SOFM = 0` (default after reset, but assert
+/// explicitly so a future crate-version change that flips it on
+/// can't introduce the side-channel silently).
+///
+/// Both registers are NS-mapped — same alias as configure_vbus_u5.
+///
+/// # Safety
+/// Volatile RMW on NS-mapped USB OTG registers. Must be called
+/// AFTER the synopsys-usb-otg core soft-reset (i.e. after
+/// `configure_vbus_u5`).
+pub unsafe fn harden_otg() {
+    // GUSBCFG @ +0x00C, FDMOD @ bit 30.
+    const GUSBCFG: *mut u32 = (USB_OTG_BASE + 0x00C) as *mut u32;
+    // GINTMSK @ +0x018, SOFM @ bit 3.
+    const GINTMSK: *mut u32 = (USB_OTG_BASE + 0x018) as *mut u32;
+    const FDMOD: u32 = 1 << 30;
+    const SOFM: u32 = 1 << 3;
+
+    let cfg = core::ptr::read_volatile(GUSBCFG);
+    core::ptr::write_volatile(GUSBCFG, cfg | FDMOD);
+
+    let msk = core::ptr::read_volatile(GINTMSK);
+    core::ptr::write_volatile(GINTMSK, msk & !SOFM);
+
+    cortex_m::asm::dsb();
+
+    // FDMOD takes effect after 25 ms (per STM32U5 RM §72.16.2
+    // GUSBCFG.FDMOD field description). The synopsys-usb-otg crate
+    // doesn't poll for this — its own init asserted FHMOD/FDMOD
+    // before the soft-reset and then proceeded. Our late assertion
+    // here is a belt-and-braces lock-in; the crate is already
+    // running in device mode so the 25 ms is a no-op wait. ~4 M
+    // `nop`s at 160 MHz.
+    for _ in 0..4_000_000 {
+        cortex_m::asm::nop();
+    }
+}
+
 /// Initialize the USB stack.  Returns a fully-configured `UsbStack` ready
 /// to be polled in the main loop.
 ///
@@ -129,6 +183,10 @@ pub unsafe fn init() -> UsbStack {
     // does not recognise the STM32U5 and VBUS sensing silently fails,
     // preventing enumeration on USB-C to USB-C connections.
     configure_vbus_u5();
+
+    // §19 P1: force FDMOD=1 + mask SOF interrupt. See `harden_otg`
+    // docstring + memory `production-security.md` §2.4.
+    harden_otg();
 
     UsbStack {
         device: usb_dev,
