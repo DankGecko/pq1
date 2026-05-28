@@ -814,6 +814,34 @@ the cache or memory-bus side channel, on top of whatever the SAES
 silicon itself leaks. The test rules out one specific class of
 production leak at firmware level.
 
+## dual-SE XOR entropy reconstruction — `sca_dual_se_xor` (`leakage_seed_derivation.py`)
+
+`make -C tools/sca seed-deriv-leak` includes `sca_dual_se_xor`, a mirror of
+[`secure/src/dual_se.rs::xor_32`](../../secure/src/dual_se.rs) — the
+`entropy = half_O ⊕ half_E` reconstruction that runs on the CPU at every unlock
+once both secure elements have released their XOR halves (invariant #1). The
+harness varies the 64-byte `half_o ‖ half_e` input fixed-vs-random and TVLAs the
+`mem_address` channel.
+
+**Result:** `max|t| = 0.00` over 600 traces × 216 samples → **flat**. Expected
+by construction — the reconstruction is branchless and fixed-stride, with no
+secret-indexed memory access, so there is no address-channel (cache / T-table)
+leak. The probe records that formally so the audit does not rest on "it's
+obviously constant-time."
+
+**Why this matters for the §18 RDI re-scope.** This is the third of the three
+**non-sign secret CPU paths** the RDI question hinged on; the other two —
+AES-GCM entropy wrap (`sca_aesgcm_wrap`, above) and the SAES-CMAC(DHUK) KDF
+wrapper (`sca_saes_cmac`, above) — are likewise flat. With the address channel
+clean on all three, the only residual is a **value-channel** leak (the Hamming
+weight of each entropy byte transiently in a register during the `^`), which is
+(a) invisible to rainbow's address-only model and (b) **single-trace** for this
+boot-once reconstruction. A random-delay timer (RDI) misaligns *many* traces; it
+does nothing against a single-trace SPA/template read, so RDI is not the
+countermeasure for this residual. See `docs/work-todo.md` §18 ("Emulation
+re-scope") for the full reasoning; on-silicon value-channel confirmation is
+tracked under §18b (`sca-trigger`).
+
 ## BIP-39 entropy → seed leakage — `leakage_bip39.py` + kdf_target's `sca_bip39_*`
 
 `make -C tools/sca bip39-leak` builds new symbols in `kdf_target`

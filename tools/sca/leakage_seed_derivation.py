@@ -113,6 +113,20 @@ def main():
         "sca_optiga_pin_derive", in_len=8, out_size=32,
     )
 
+    # dual-SE entropy reconstruction: `entropy = half_O ^ half_E`
+    # (`secure/src/dual_se.rs::xor_32`), the CPU op that re-assembles the
+    # full BIP-39 entropy at every unlock once both SEs release their XOR
+    # halves. Branchless / fixed-stride → expected flat on `mem_address`
+    # (no secret-indexed access). This closes the third of the three
+    # "non-sign secret CPU paths" the §18 RDI re-scope examined (the other
+    # two — AES-GCM entropy wrap and the SAES-CMAC KDF wrapper — are already
+    # characterised flat by `leakage_kdf.py` / `leakage_saes_kdf.py`). The
+    # value-channel residual is single-trace and out of scope for emulation.
+    results["dual_se_xor"] = run_tvla(
+        "dual_se_xor — entropy = half_O ^ half_E (dual_se.rs::xor_32)",
+        "sca_dual_se_xor", in_len=64, out_size=32,
+    )
+
     print()
     print("=" * 70)
     print("SUMMARY")

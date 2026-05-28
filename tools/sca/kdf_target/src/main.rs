@@ -191,6 +191,38 @@ pub extern "C" fn sca_hmac_sha512_kdf(seed_ptr: *const u8, out_ptr: *mut u8) {
     }
 }
 
+/// Mirror of `secure/src/dual_se.rs::xor_32` — the dual-SE entropy
+/// reconstruction `entropy = half_O ⊕ half_E` that runs on the CPU at
+/// every unlock once both secure elements have released their XOR halves.
+/// Input: 64 B (`half_o`(32) ‖ `half_e`(32)) at `in_ptr`. Output: 32 B
+/// reconstructed entropy at `out_ptr`.
+///
+/// Branchless, fixed-stride: there is no secret-indexed memory access to
+/// leak, so the `mem_address`-channel TVLA is flat *by construction* — the
+/// probe (`leakage_seed_derivation.py`) records that formally rather than
+/// asserting it. The irreducible residual is a value-channel leak (the
+/// Hamming weight of each entropy byte appears in a register during the
+/// `^`), which is (a) invisible to rainbow's address-only model and (b)
+/// single-trace for this boot-once reconstruction — see `tools/sca/README.md`
+/// §"dual-SE XOR" and `docs/work-todo.md` §18 (RDI is not the countermeasure
+/// for a single-trace value-channel leak).
+#[no_mangle]
+pub extern "C" fn sca_dual_se_xor(in_ptr: *const u8, out_ptr: *mut u8) {
+    // SAFETY: harness maps 64 B at in_ptr and 32 B at out_ptr.
+    let half_o: &[u8; 32] = unsafe { &*(in_ptr as *const [u8; 32]) };
+    let half_e: &[u8; 32] = unsafe { &*(in_ptr.add(32) as *const [u8; 32]) };
+    // Shape verbatim from `dual_se.rs::xor_32`.
+    let mut out = [0u8; 32];
+    for i in 0..32 {
+        out[i] = half_o[i] ^ half_e[i];
+    }
+    unsafe {
+        for (i, &b) in out.iter().enumerate() {
+            core::ptr::write_volatile(out_ptr.add(i), b);
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Secret-bearing derivation paths (audit follow-up to F-22).
 //
@@ -566,6 +598,8 @@ static _KEEP_LEAKY_ADDR: extern "C" fn() -> u32 = sca_leaky_sbox_table_addr;
 #[used]
 static _KEEP_HMAC: extern "C" fn(*const u8, *mut u8) = sca_hmac_sha512_kdf;
 #[used]
+static _KEEP_DUAL_SE_XOR: extern "C" fn(*const u8, *mut u8) = sca_dual_se_xor;
+#[used]
 static _KEEP_C10_KG: extern "C" fn(*const u8, *mut u8) = sca_c10_keygen;
 #[used]
 static _KEEP_C10_SIGN: extern "C" fn(*const u8, *mut u8) = sca_c10_sign;
@@ -904,6 +938,7 @@ fn main() -> ! {
     core::hint::black_box(&_KEEP_LEAKY);
     core::hint::black_box(&_KEEP_LEAKY_ADDR);
     core::hint::black_box(&_KEEP_HMAC);
+    core::hint::black_box(&_KEEP_DUAL_SE_XOR);
     core::hint::black_box(&_KEEP_C10_KG);
     core::hint::black_box(&_KEEP_C10_SIGN);
     core::hint::black_box(&_KEEP_C10_SIGN_SHUF);
