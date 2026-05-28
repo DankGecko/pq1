@@ -483,37 +483,38 @@ impl WalletStore for DualSecureElement {
     /// this in with the STM32 TRNG before any cryptographic use, so
     /// the final output is `STM32 ⊕ OPTIGA ⊕ SE050`.
     ///
-    /// Best-effort across the two SEs: if OPTIGA fails we still return
-    /// SE050's contribution (and vice versa). Returns Err only if BOTH
-    /// SEs fail — caller (`rng_strong::fill`) handles by falling back
-    /// to STM32 TRNG alone.
+    /// **Strict (both-or-fail).** Both OPTIGA and SE050 MUST contribute.
+    /// If either chip fails to provide entropy we return `Err` — the
+    /// caller (`rng_strong::fill`) propagates that and the signing call
+    /// aborts. Degrading to a single SE under EMFI / I2C glitching on
+    /// one of the two buses would let an attacker reduce entropy to
+    /// effectively two sources (STM32 + one SE) without anything
+    /// noticing; refusing the call is the loud failure mode.
     fn random(&mut self, buf: &mut [u8]) -> Result<(), SeError> {
         let mut tmp = [0u8; 32];
         let mut off = 0;
         while off < buf.len() {
             let len = (buf.len() - off).min(tmp.len());
-            let mut have_any = false;
 
-            // OPTIGA contribution.
-            if self.optiga.random(&mut tmp[..len]).is_ok() {
-                for i in 0..len {
-                    buf[off + i] ^= tmp[i];
-                }
-                have_any = true;
+            // OPTIGA contribution — mandatory.
+            self.optiga.random(&mut tmp[..len]).map_err(|_| {
+                tmp.zeroize();
+                SeError::InternalError
+            })?;
+            for i in 0..len {
+                buf[off + i] ^= tmp[i];
             }
-            // SE050 contribution.
+            // SE050 contribution — mandatory.
             tmp.zeroize();
-            if self.se050.random(&mut tmp[..len]).is_ok() {
-                for i in 0..len {
-                    buf[off + i] ^= tmp[i];
-                }
-                have_any = true;
+            self.se050.random(&mut tmp[..len]).map_err(|_| {
+                tmp.zeroize();
+                SeError::InternalError
+            })?;
+            for i in 0..len {
+                buf[off + i] ^= tmp[i];
             }
             tmp.zeroize();
 
-            if !have_any {
-                return Err(SeError::InternalError);
-            }
             off += len;
         }
         Ok(())

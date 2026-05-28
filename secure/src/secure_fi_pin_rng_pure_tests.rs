@@ -1642,16 +1642,33 @@ mod rng_source_text {
         );
     }
 
-    /// SE-side failure MUST fall through silently — only the platform
-    /// TRNG failure is fatal. The comment at rng_strong.rs:43-46 spells
-    /// out the contract; the `.is_ok()` check is the implementation.
+    /// SE-side failure MUST be fatal on production backends — no
+    /// silent fall-through. Under EMFI / I2C glitching of one SE,
+    /// degrading entropy to STM32-only without surfacing the failure
+    /// is exactly the attack we want to refuse. The dev-only
+    /// `mock-se` backend has no TRNG and is allowed to skip the SE
+    /// layer (guarded by `#[cfg(feature = "mock-se")]`).
     #[test]
-    fn negative_rng_strong_se_failure_falls_through() {
+    fn negative_rng_strong_se_failure_is_fatal() {
+        // Production path: `?` propagation, NOT `.is_ok()` guard.
         assert!(
-            RNG_STRONG_SRC
-                .contains("if unsafe { crate::se_random(&mut block[..len]) }.is_ok() {"),
-            "rng_strong must guard the SE call with `.is_ok()` — a broken \
-             SE TRNG must fall through, not abort the signing call."
+            RNG_STRONG_SRC.contains("not(feature = \"mock-se\")"),
+            "rng_strong must have a production-only branch that \
+             propagates SE failure (gated `not(feature = mock-se)`)."
+        );
+        assert!(
+            RNG_STRONG_SRC.contains(
+                "unsafe { crate::se_random(&mut block[..len]) }.map_err"
+            ),
+            "rng_strong production branch must propagate SE failure \
+             via `?` / `map_err` — silent `.is_ok()` fall-through \
+             would let an EMFI attacker degrade entropy unnoticed."
+        );
+        // Mock-only path: keeps `.is_ok()` so QEMU dev builds work.
+        assert!(
+            RNG_STRONG_SRC.contains("feature = \"mock-se\""),
+            "rng_strong must retain a `mock-se`-gated branch that \
+             tolerates the absent TRNG on the mock backend."
         );
     }
 

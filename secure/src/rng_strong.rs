@@ -17,6 +17,19 @@
 //!   - **Single-fault FI on one source's read path**: the other two
 //!     reach the XOR-fold unfaulted.
 //!
+//! **Failure semantics — strict, no silent fall-through.** Any source
+//! that fails to deliver entropy aborts the call. Specifically: the
+//! platform TRNG (STM32 RNG SEIS/CEIS, or QEMU `/dev/urandom`) AND
+//! the SE-side contribution (which itself is `OPTIGA ⊕ SE050` and
+//! requires *both* chips to succeed; see `DualSecureElement::random`).
+//! Refusing the call is the loud failure mode — under EMFI / I2C
+//! glitching, silently degrading to fewer sources would let an
+//! attacker reduce entropy without anything noticing.
+//!
+//! Under `feature = "mock-se"` only (dev/QEMU builds), the SE-side
+//! contribution is allowed to be absent because the mock backend has
+//! no TRNG. CI gates production firmware on `mock-se` OFF.
+//!
 //! **What we do NOT defend** with the XOR alone:
 //!
 //!   - A single-fault that clamps the **buffer** (not the source) to
@@ -41,38 +54,47 @@ use zeroize::Zeroize;
 /// Returns `Err(())` if:
 ///   - the platform TRNG fails (STM32 RNG peripheral seed/clock error
 ///     on hardware, or semihosting `/dev/urandom` unavailable on QEMU),
-///     or
+///   - the SE-side TRNG fails on a production backend (for
+///     `DualSecureElement` this means either OPTIGA or SE050 failed),
 ///   - the resulting buffer is all-zero after the fold (stuck-at-0
 ///     fault diagnostic — fail-closed).
 ///
-/// SE-side failure is **not** propagated: a broken SE TRNG falls
-/// through to the next source. The platform TRNG is always present, so
-/// we always have at least one contribution.
+/// Under `feature = "mock-se"` the SE call is allowed to fail (the
+/// mock backend has no TRNG); under any production backend
+/// (`optiga-trust-m`, `se050`, `dual-se`, `tropic01-se`) a missing SE
+/// contribution is fatal.
 pub fn fill(buf: &mut [u8]) -> Result<(), ()> {
     if buf.is_empty() {
         return Ok(());
     }
 
     // ── Step 1: platform TRNG (STM32 or QEMU /dev/urandom) ──────────
-    // Always available. Establishes the baseline; XOR layers below
-    // strictly improve entropy.
+    // Establishes the baseline; XOR layers below strictly improve
+    // entropy. STM32 RNG SEIS/CEIS or `/dev/urandom` read failure
+    // aborts the call.
     crate::rng::fill(buf)?;
 
     // ── Step 2: XOR-mix per-block from the SE backend ────────────────
     // For multi-SE backends the trait impl already XOR-folds the
-    // per-source contributions internally (see
-    // `DualSecureElement::random`). Block-by-block matches Trezor's
-    // pattern and keeps the SE TLV body small.
+    // per-source contributions internally and requires every chip to
+    // succeed (see `DualSecureElement::random`). Block-by-block
+    // matches Trezor's pattern and keeps the SE TLV body small.
     let mut block = [0u8; 32];
     let mut off = 0;
     while off < buf.len() {
         let len = (buf.len() - off).min(block.len());
         // SAFETY: the caller (sign path) has unlocked the SE, so the
-        // global SE handle is initialised. `se_random` returns Err
-        // when the active backend has no TRNG (the mock backend) —
-        // we fall through and the platform TRNG is the sole
-        // contributor for that backend.
-        #[cfg(not(test))]
+        // global SE handle is initialised.
+        #[cfg(all(not(test), not(feature = "mock-se")))]
+        {
+            unsafe { crate::se_random(&mut block[..len]) }.map_err(|_| {
+                block.zeroize();
+            })?;
+            for i in 0..len {
+                buf[off + i] ^= block[i];
+            }
+        }
+        #[cfg(all(not(test), feature = "mock-se"))]
         if unsafe { crate::se_random(&mut block[..len]) }.is_ok() {
             for i in 0..len {
                 buf[off + i] ^= block[i];
