@@ -168,16 +168,27 @@ impl Se050 {
         }
     }
 
-    /// Re-initialize SE050 state for a fresh handshake. Used by the
-    /// `se050-stress` harness between tests to isolate any SCP03 / T=1'
-    /// state perturbation from one test bleeding into the next.
+    /// Re-initialize SE050 state for a fresh handshake.
     ///
     /// Clears `ready`, replaces `scp03` with a zeroed `Scp03Session`,
     /// then runs the normal `init()` sequence (T=1' reset, applet
     /// SELECT, SCP03 establish). Caller is responsible for ensuring no
     /// outstanding session IDs from the prior handshake are reused —
     /// every fresh `init()` yields a new MCV / counter pair.
-    #[cfg(feature = "se050-stress")]
+    ///
+    /// **Production use (A3 mitigation, 2026-05-28).** Originally only
+    /// the `se050-stress` harness called this. Silicon Finding A3
+    /// (`docs/se050-silicon-findings.md` §4) showed B-U585I-IOT02A
+    /// leaves the chip in a "session-pending" state after a failed
+    /// `verify_session` (and possibly a failed `delete_object_authed`
+    /// / `close_session`); subsequent non-session APDUs — and even
+    /// fresh `create_session` calls — return SW=0x6982 until the chip
+    /// is power-cycled OR `reinit()` is invoked. Production callers
+    /// (`authenticate_and_read` failed-verify path, `admin_factory_
+    /// reset` post-wipe verification, duress / user-reset failed-
+    /// verify paths) now invoke `reinit()` to recover so the next
+    /// gateway command sees a clean chip. Cost is ~one SCP03
+    /// handshake (~100–300 ms on silicon).
     pub fn reinit(&mut self) -> Result<(), Se050Error> {
         self.ready = false;
         self.scp03 = Scp03Session::new();
@@ -450,6 +461,13 @@ impl Se050 {
             let sid = apdu::create_session(&mut self.t1, &mut self.scp03, DURESS_USERID_OBJ)?;
             if let Err(e) = apdu::verify_session(&mut self.t1, &mut self.scp03, &sid, duress_pin) {
                 let _ = apdu::close_session(&mut self.t1, &mut self.scp03, &sid);
+                // A3 recovery — see authenticate_and_read failed-verify
+                // path. Critical for the duress-pin chain in
+                // `nsc::gated_unlock`: a wrong-PIN-against-duress is
+                // expected on every regular unlock, so without this
+                // reinit the subsequent `se.unlock(pin)` call's
+                // `create_session` would always surface SW=0x6982.
+                let _ = self.reinit();
                 return Err(e);
             }
             let mut half_e = [0u8; 32];
@@ -472,12 +490,17 @@ impl Se050 {
     #[cfg(feature = "duress-pin")]
     pub fn duress_verify(&mut self, duress_pin: &[u8]) -> Result<(), Se050Error> {
         self.init()?;
-        unsafe {
+        let r = unsafe {
             let sid = apdu::create_session(&mut self.t1, &mut self.scp03, DURESS_USERID_OBJ)?;
             let r = apdu::verify_session(&mut self.t1, &mut self.scp03, &sid, duress_pin);
             let _ = apdu::close_session(&mut self.t1, &mut self.scp03, &sid);
             r
+        };
+        if r.is_err() {
+            // A3 recovery — see `authenticate_and_read` doc.
+            let _ = self.reinit();
         }
+        r
     }
 
     /// Peek the silicon-enforced **failed-attempts USED** count on the
@@ -489,14 +512,10 @@ impl Se050 {
     /// page-124 used-counter is a straight `!=` compare.)
     ///
     /// Mechanism: `ReadObjectAttributes` (CLA=0x80 INS_READ
-    /// P2_ATTRIBUTES) returns the object's attribute structure over the
-    /// transport SCP03 channel. No user-session authentication is
-    /// required — attribute reads describe the object's own policy and
-    /// state and are policy-gate-independent in the SE050 design (would
-    /// be chicken-and-egg otherwise). NXP SDK parsing reference:
-    /// `sss_pkcs11_pal_helpers.c:603-613` (pkcs11_parse_atrribute).
+    /// P2_ATTRIBUTES) reads the object's attribute structure over the
+    /// transport SCP03 channel.
     ///
-    /// Wire format of the inner TAG_3 value bytes:
+    /// Wire format of the inner TAG_3 value bytes (on a successful read):
     ///
     /// ```text
     ///   off  size  field
@@ -515,10 +534,38 @@ impl Se050 {
     /// [`SecureElement::pin_attempt_count`] via the trait impl — uses
     /// `None` as "skip the SE050 leg of the boot-time reconcile."
     ///
-    /// **This contradicts an earlier work-todo §4 claim** that said the
-    /// SE050 counter could only be read via SW=0x63Cx on VERIFY (which
-    /// would consume an attempt). The SDK header proves otherwise; this
-    /// method exists to use the real path.
+    /// **⚠️ Silicon caveat (A1, 2026-05-28).** An earlier draft of this
+    /// doc claimed "no user-session authentication is required —
+    /// attribute reads describe the object's own policy and state and
+    /// are policy-gate-independent in the SE050 design" with a citation
+    /// to the NXP SDK `sss_pkcs11_pal_helpers.c:603-613` parser. The
+    /// first end-to-end stress run on a real B-U585I-IOT02A
+    /// (`docs/se050-silicon-findings.md` §2; raw evidence
+    /// `b88gzpjod.output:1503-1504`) showed the chip returns SW=0x6986
+    /// (policy denial) on a freshly-created UserID gated by the standard
+    /// two-entry policy `(self → ALLOW_WRITE|ALLOW_DELETE|REQUIRE_SM,
+    /// admin → ALLOW_DELETE|REQUIRE_SM)`. The SDK parser is reachable
+    /// from inside a user session; transport SCP03 alone is not
+    /// sufficient. The "policy-gate-independent" claim is therefore
+    /// **retracted**.
+    ///
+    /// **Operational consequence.** On production `USERID_OBJ` (same
+    /// policy shape) this method returns `None` at boot, so the SE050
+    /// leg of the boot-time MCU↔SE050 attempt-counter reconcile is
+    /// silently skipped. The OPTIGA + MCU page-124 legs still
+    /// reconcile, which is the load-bearing pair (PIN comparison is in
+    /// SE silicon, and a desolder-bench attacker who derives
+    /// `se050_admin_pin()` still can't read user-gated objects per the
+    /// `audit_admin_passive_read_refused` silicon claim). The skipped
+    /// SE050 leg is a defense-in-depth loss, not a confidentiality
+    /// loss.
+    ///
+    /// **No workaround using attribute reads.** Recovering the counter
+    /// without burning an attempt would require either (1) opening a
+    /// session with the correct PIN (which resets the counter to 0 — no
+    /// help mid-investigation) or (2) burning a wrong PIN and reading
+    /// the SW=0x63Cx counter-remaining nibble (which costs one slot per
+    /// readback). Neither path fits the boot-time reconcile.
     pub fn pin_attempt_count_raw(&mut self) -> Option<u8> {
         if self.init().is_err() {
             return None;
@@ -585,6 +632,8 @@ impl Se050 {
                 &mut self.t1, &mut self.scp03, &session_id, pin,
             ) {
                 let _ = apdu::close_session(&mut self.t1, &mut self.scp03, &session_id);
+                // A3 recovery — see `authenticate_and_read` doc.
+                let _ = self.reinit();
                 return Err(e);
             }
 
@@ -2005,7 +2054,24 @@ impl Se050 {
 
                 let _ = apdu::close_session(&mut self.t1, &mut self.scp03, &session_id);
             }
+        }
 
+        // A3 mitigation (2026-05-28): the AUTH_OBJS_BEST_EFFORT loop
+        // above legitimately fails with SW=0x6986 post-S-6
+        // (UserID has no admin-delete policy entry), leaving the chip
+        // in a "session-pending" state per
+        // `docs/se050-silicon-findings.md` §4. Without recovery, every
+        // subsequent non-session APDU — both the `iterative_delete_all`
+        // sweep below AND the post-wipe `check_exists` verification —
+        // returns SW=0x6982, which the `unwrap_or(false)` callers
+        // silently coerce to "object is gone". That would be a
+        // false-negative on survivor detection: a real surviving user
+        // object would be reported as wiped, and the safety contract's
+        // post-condition check would pass on an unwiped chip. Flush
+        // the session-pending state before the verification block.
+        let _ = self.reinit();
+
+        unsafe {
             // Follow up with an unauthenticated sweep to catch any stragglers
             // (e.g. legacy objects from prior firmware versions that don't
             // have the admin-delete policy entry).
@@ -2354,6 +2420,19 @@ impl Se050 {
     ///
     /// On success returns `(entropy, vk, bootstrap_vk)`. On PIN failure the
     /// SE050 hardware decrements its attempt counter internally.
+    ///
+    /// **A3 mitigation (2026-05-28).** On the failed-verify path the
+    /// chip's session-pending state would surface SW=0x6982 from the
+    /// NEXT `create_session` call (per
+    /// `docs/se050-silicon-findings.md` §4 + the stress run's tests
+    /// 013/014/015 evidence). Without recovery, a user's 2nd-and-later
+    /// wrong PIN would propagate as `UnlockError::InternalError`
+    /// (via `Status(0x6982)` → `classify_se050_unlock_error`'s `_`
+    /// arm) instead of `PinIncorrect`. We `reinit()` after the failed
+    /// verify so the next unlock attempt sees a fresh SCP03 state.
+    /// The SE050's NVM `auth_attempts` counter persists across the
+    /// reinit (`pin_counter_persists_across_reinit` stress test, P2),
+    /// so the security gate is unaffected.
     fn authenticate_and_read(
         &mut self,
         pin: &[u8],
@@ -2373,6 +2452,16 @@ impl Se050 {
                 let _ = apdu::close_session(
                     &mut self.t1, &mut self.scp03, &session_id,
                 );
+                // A3 recovery before propagating the verify failure:
+                // flush the chip's session-pending state so the next
+                // unlock attempt's `create_session` doesn't surface
+                // SW=0x6982 (which would otherwise classify as
+                // `UnlockError::InternalError` and confuse the user UX
+                // / the desync of the SE050 counter from the user's
+                // mental model). The SE050's NVM `auth_attempts`
+                // counter persists across reinit, so the security gate
+                // is unaffected.
+                let _ = self.reinit();
                 return Err(e);
             }
 

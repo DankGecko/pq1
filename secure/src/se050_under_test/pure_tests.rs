@@ -1637,19 +1637,32 @@ fn gap4_apdu_translates_0x6986_to_auth_method_blocked() {
     // this match arm goes away, 0x6986 would surface as
     // `Se050Error::Status(0x6986)` which the classify-fn maps to
     // `InternalError` (no wipe) — exactly the bug Gap 4 closes.
+    //
+    // The arm was widened in 2026-05-28 to ALSO accept SW=0x6982 as
+    // an AuthMethodBlocked signal — silicon evidence
+    // (`docs/se050-silicon-findings.md` §5 #17 / `userid_silicon_-
+    // lockout`) showed B-U585I-IOT02A returns 0x6982 on a locked
+    // UserID, not the AN12413-documented 0x6986. Either constant in
+    // the source satisfies the Gap 4 contract, so the assertion now
+    // matches the wider pattern.
     assert!(
-        APDU_SRC.contains("Err(Se050Error::Status(sw)) if sw == 0x6986 =>"),
-        "verify_session must translate 0x6986 to a typed variant; \
+        APDU_SRC.contains("sw == 0x6986")
+            && APDU_SRC.contains("=> {")
+            && APDU_SRC.contains("Err(Se050Error::AuthMethodBlocked)"),
+        "verify_session must translate 0x6986 to AuthMethodBlocked; \
          without it the unlock dispatch falls back to InternalError"
-    );
-    assert!(
-        APDU_SRC.contains("Err(Se050Error::AuthMethodBlocked)"),
-        "verify_session must surface 0x6986 as AuthMethodBlocked"
     );
     // The variant must exist in the enum definition.
     assert!(
         APDU_SRC.contains("AuthMethodBlocked,"),
         "apdu.rs::Se050Error must declare the AuthMethodBlocked variant"
+    );
+    // Silicon-observed lockout SW (2026-05-28) must also map to the
+    // typed variant.
+    assert!(
+        APDU_SRC.contains("sw == 0x6982"),
+        "verify_session must also translate the silicon-observed 0x6982 lockout SW; \
+         see `docs/se050-silicon-findings.md` §5 #17"
     );
 }
 

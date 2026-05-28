@@ -139,20 +139,37 @@ stress_test!(SILICON_LOCKOUT, "userid_silicon_lockout", Tier::Destructive, silic
 // P1. pin_counter_resets_on_correct_pin
 // ---------------------------------------------------------------------------
 
-/// Burn 2 wrong PINs on a `max_attempts=5` UserID, read the counter
-/// via `ReadObjectAttributes` (which does not itself burn a slot —
-/// that property is verified by P4 below), then submit the CORRECT
-/// PIN. AN12413 §4.7.1.5 specifies that a successful VERIFY zeroes
-/// `auth_attempts`, so the counter MUST report 0 used after the
-/// success. This is the load-bearing claim behind
-/// `Se050::remaining`'s "resets to MAX on every successful unlock"
-/// commentary at `mod.rs:142-150` — if the chip ever stops doing
-/// this, the firmware's attempt budget drifts out of sync with the
-/// silicon and lockout fires unexpectedly mid-session.
+/// Verify the load-bearing claim behind `Se050::remaining`'s
+/// "resets to MAX on every successful unlock" commentary
+/// (`mod.rs:142-150`): a successful VERIFY zeroes the chip's
+/// `auth_attempts` counter. AN12413 §4.7.1.5 specifies this; if the
+/// chip ever stops, the firmware's attempt budget drifts out of sync
+/// with the silicon and lockout fires unexpectedly mid-session.
 ///
-/// PASS = post-success attribute read shows `auth_attempts == 0`.
-/// FAIL = counter still shows the burned attempts, or attribute
-/// read returns `None` (object disappeared somehow).
+/// **Probe redesign (A1 silicon finding, 2026-05-28).**
+/// `ReadObjectAttributes` is not policy-gate-independent on
+/// B-U585I-IOT02A (`docs/se050-silicon-findings.md` §2) — the chip
+/// returns SW=0x6986 on a freshly-provisioned user-policy-gated
+/// UserID. We therefore cannot read `auth_attempts` directly to
+/// inspect the counter; instead this test infers the reset via burn
+/// arithmetic:
+///
+///  - Provision UserID with `max_attempts = 5`.
+///  - Burn 3 wrong PINs (counter 0 → 3). Each must return
+///    `PinIncorrect`; `burn_wrong_pin` asserts that internally.
+///  - Submit the CORRECT PIN (must open a session — verifies success).
+///  - Burn 4 wrong PINs.
+///    * If the counter was reset (claim holds): counter advances
+///      0 → 4, every attempt returns `PinIncorrect`.
+///    * If the counter was NOT reset: counter advances 3 → 4 →
+///      LOCKED, so the 2nd post-success burn surfaces
+///      `AuthMethodBlocked`. `burn_wrong_pin` catches that and
+///      returns `"lockout fired earlier than expected"`.
+///
+/// PASS = both burns complete without lockout.
+/// FAIL = 2nd burn hits `AuthMethodBlocked` (counter not reset), or
+/// the success step itself fails (lockout fired during the first
+/// burn — UserID config wrong).
 fn pin_counter_resets_on_correct_pin(ctx: &mut StressCtx) -> StressResult {
     let target = ctx.oid(0x01);
     let correct: [u8; 8] = *b"pintest1";
@@ -161,65 +178,29 @@ fn pin_counter_resets_on_correct_pin(ctx: &mut StressCtx) -> StressResult {
     ctx.delete_scratch(target)?;
     ctx.provision_test_userid(target, &correct, 5, AdminPolicy::WithAdminDelete)?;
 
-    // Pre-check: counter starts at 0.
-    let pre = ctx.read_userid_attempts(target)
-        .ok_or(StressError::Assertion { what: "attribute read returned None pre-burn", iter: 0 })?;
-    if pre.0 != 0 {
-        secure_log!(
-            "[S][stress][pin-p1] pre-burn auth_attempts={} (expected 0)",
-            pre.0,
-        );
-        return Err(StressError::Assertion {
-            what: "auth_attempts != 0 on fresh UserID",
-            iter: 0,
-        });
-    }
-    if pre.1 != 5 {
-        secure_log!(
-            "[S][stress][pin-p1] pre-burn max_attempts={} (expected 5)",
-            pre.1,
-        );
-        return Err(StressError::Assertion {
-            what: "max_attempts != requested value",
-            iter: 0,
-        });
-    }
+    // Burn 3 wrong (counter 0 → 3, still below max=5).
+    ctx.burn_wrong_pin(target, &wrong, 3)?;
 
-    // Burn 2 wrong attempts.
-    ctx.burn_wrong_pin(target, &wrong, 2)?;
-
-    // Counter should now read 2.
-    let mid = ctx.read_userid_attempts(target)
-        .ok_or(StressError::Assertion { what: "attribute read returned None mid-test", iter: 0 })?;
-    secure_log!(
-        "[S][stress][pin-p1] after 2 wrong: auth_attempts={} (expected 2)",
-        mid.0,
-    );
-    if mid.0 != 2 {
-        return Err(StressError::Assertion {
-            what: "auth_attempts != 2 after burning 2 wrong PINs",
-            iter: 0,
-        });
-    }
-
-    // Submit CORRECT PIN — must reset the counter.
+    // Correct PIN — must succeed, and (per the claim) zero the counter.
     let sid = ctx.open_user_session(target, &correct)?;
     ctx.close_session(&sid);
 
-    let post = ctx.read_userid_attempts(target)
-        .ok_or(StressError::Assertion { what: "attribute read returned None post-success", iter: 0 })?;
-    secure_log!(
-        "[S][stress][pin-p1] after correct PIN: auth_attempts={} (expected 0)",
-        post.0,
-    );
-    if post.0 != 0 {
-        return Err(StressError::Assertion {
-            what: "auth_attempts != 0 after successful VERIFY — chip does not zero counter on success",
-            iter: 0,
-        });
-    }
+    // Burn 4 more wrong. With the counter at 0 (reset) the chip has
+    // 5 slots to spare; with the counter at 3 (no reset) it locks on
+    // the 2nd burn — `burn_wrong_pin` reports
+    // `"lockout fired earlier than expected"` if `AuthMethodBlocked`
+    // surfaces inside the loop.
+    ctx.burn_wrong_pin(target, &wrong, 4)?;
 
-    secure_log!("[S][stress][pin-p1] PASS — successful VERIFY zeroes auth_attempts");
+    // Final correct PIN confirms the UserID is still healthy — i.e.
+    // the chip didn't silently drift the counter past max either.
+    let sid = ctx.open_user_session(target, &correct)?;
+    ctx.close_session(&sid);
+
+    secure_log!(
+        "[S][stress][pin-p1] PASS — successful VERIFY zeroes auth_attempts \
+         (3 burn + success + 4 burn + success, no lockout)"
+    );
     Ok(())
 }
 stress_test!(PIN_COUNTER_RESETS_ON_CORRECT_PIN, "pin_counter_resets_on_correct_pin", Tier::Destructive, pin_counter_resets_on_correct_pin);
@@ -228,21 +209,39 @@ stress_test!(PIN_COUNTER_RESETS_ON_CORRECT_PIN, "pin_counter_resets_on_correct_p
 // P2. pin_counter_persists_across_reinit
 // ---------------------------------------------------------------------------
 
-/// Burn 2 wrong PINs, then invoke `Se050::reinit()` — which closes the
-/// SCP03 session, performs a T=1' interface reset, runs SELECT, and
-/// re-establishes SCP03 with a fresh nonce + key derivation. This is
-/// the closest software-only emulation of a power cycle the bench
-/// supports (the SE050 VCC is not GPIO-controlled on this board). The
-/// chip's NVM-backed `auth_attempts` counter MUST persist across this
-/// sequence — if it didn't, an attacker could brute-force a 4-digit
-/// PIN with ≤10⁴ wrong attempts simply by power-cycling between every
-/// few tries.
+/// `Se050::reinit()` closes the SCP03 session, performs a T=1'
+/// interface reset, runs SELECT, and re-establishes SCP03 with a fresh
+/// nonce + key derivation — the closest software-only emulation of a
+/// power cycle the bench supports (the SE050 VCC is not GPIO-controlled
+/// on this board). The chip's NVM-backed `auth_attempts` counter MUST
+/// persist across this sequence — if it didn't, an attacker could
+/// brute-force a 4-digit PIN with ≤10⁴ wrong attempts simply by
+/// power-cycling between every few tries.
 ///
-/// PASS = post-reinit attribute read reports the same `auth_attempts`
-/// as the pre-reinit read.
-/// FAIL = counter resets to 0 or shows a different non-2 value (NVM
-/// not durable, or reinit accidentally resets the chip's session-
-/// independent state).
+/// **Probe redesign (A1, 2026-05-28).** Same constraint as P1 — we
+/// cannot read `auth_attempts` directly, so persistence is inferred via
+/// burn arithmetic across the reinit:
+///
+///  - Provision UserID with `max_attempts = 5`.
+///  - Burn 4 wrong PINs (counter 0 → 4). Each `PinIncorrect`.
+///  - `Se050::reinit()` (simulated power cycle).
+///  - Burn 1 more wrong PIN.
+///    * If the counter persisted (claim holds): counter goes 4 → 5,
+///      returns `PinIncorrect` — the 5th and final allowed wrong.
+///    * If the counter reset: counter goes 0 → 1, also returns
+///      `PinIncorrect`. Indistinguishable yet — but the next probe
+///      separates them.
+///  - Burn 1 more wrong PIN.
+///    * Counter-persisted case: counter at 5, locked → returns
+///      `AuthMethodBlocked`.
+///    * Counter-reset case: counter goes 1 → 2, returns
+///      `PinIncorrect`.
+///
+/// PASS = the 6th total wrong PIN (1st post-reinit) is `PinIncorrect`,
+/// and the 7th total wrong PIN (2nd post-reinit) is `AuthMethodBlocked`.
+/// FAIL = the 7th wrong PIN is `PinIncorrect` (counter reset across
+/// reinit — brute-force protection silicon claim violated) or any
+/// earlier wrong PIN already triggers lockout (max_attempts not 5).
 fn pin_counter_persists_across_reinit(ctx: &mut StressCtx) -> StressResult {
     let target = ctx.oid(0x01);
     let correct: [u8; 8] = *b"pintest2";
@@ -251,46 +250,73 @@ fn pin_counter_persists_across_reinit(ctx: &mut StressCtx) -> StressResult {
     ctx.delete_scratch(target)?;
     ctx.provision_test_userid(target, &correct, 5, AdminPolicy::WithAdminDelete)?;
 
-    ctx.burn_wrong_pin(target, &wrong, 2)?;
-
-    let pre = ctx.read_userid_attempts(target)
-        .ok_or(StressError::Assertion { what: "pre-reinit attribute read returned None", iter: 0 })?;
-    if pre.0 != 2 {
-        secure_log!("[S][stress][pin-p2] pre-reinit auth_attempts={} (expected 2)", pre.0);
-        return Err(StressError::Assertion {
-            what: "pre-reinit auth_attempts != 2",
-            iter: 0,
-        });
-    }
+    // Pre-reinit: burn 4 wrong (counter 0 → 4, one slot remaining).
+    ctx.burn_wrong_pin(target, &wrong, 4)?;
 
     // Tear down + re-establish SCP03 (closest to a power cycle this
     // board supports). Persistent NVM (auth_attempts, the UserID
     // object itself) must survive.
     ctx.se().reinit()?;
 
-    let post = ctx.read_userid_attempts(target)
-        .ok_or(StressError::Assertion { what: "post-reinit attribute read returned None — object lost", iter: 0 })?;
-
-    secure_log!(
-        "[S][stress][pin-p2] post-reinit auth_attempts={} (expected 2 — must survive SCP03 reset)",
-        post.0,
-    );
-
-    if post.0 != 2 {
-        return Err(StressError::Assertion {
-            what: "auth_attempts not preserved across reinit — brute-force protection silicon claim violated",
-            iter: 0,
-        });
+    // Post-reinit attempt #1: the LAST allowed wrong if the counter
+    // persisted. Must surface as PinIncorrect (counter going 4 → 5).
+    ctx.set_iter(0);
+    match ctx.open_user_session(target, &wrong) {
+        Err(StressError::Driver(Se050Error::PinIncorrect)) => {
+            secure_log!(
+                "[S][stress][pin-p2] post-reinit wrong #1: PinIncorrect (counter advanced normally)"
+            );
+        }
+        Err(StressError::Driver(Se050Error::AuthMethodBlocked)) => {
+            secure_log!(
+                "[S][stress][pin-p2] post-reinit wrong #1 already locked — counter advanced past 5 \
+                 (chip lost a slot in pre-burn, or max_attempts != 5)"
+            );
+            return Err(StressError::Assertion {
+                what: "lockout fired earlier than expected",
+                iter: 0,
+            });
+        }
+        Ok(sid) => {
+            ctx.close_session(&sid);
+            return Err(StressError::Assertion {
+                what: "wrong PIN opened session post-reinit",
+                iter: 0,
+            });
+        }
+        Err(other) => return Err(other),
     }
-    if post.1 != pre.1 {
-        secure_log!(
-            "[S][stress][pin-p2] max_attempts drifted: pre={} post={}",
-            pre.1, post.1,
-        );
-        return Err(StressError::Assertion {
-            what: "max_attempts drifted across reinit",
-            iter: 0,
-        });
+
+    // Post-reinit attempt #2: distinguishes persisted-counter vs reset.
+    //   Persisted (counter=5 now): AuthMethodBlocked — PASS.
+    //   Reset (counter=2 now):     PinIncorrect — FAIL, the silicon
+    //                              dropped the brute-force barrier.
+    ctx.set_iter(1);
+    match ctx.open_user_session(target, &wrong) {
+        Err(StressError::Driver(Se050Error::AuthMethodBlocked)) => {
+            secure_log!(
+                "[S][stress][pin-p2] post-reinit wrong #2: AuthMethodBlocked — \
+                 counter persisted across reinit (5 wrong total locks the UserID)"
+            );
+        }
+        Err(StressError::Driver(Se050Error::PinIncorrect)) => {
+            secure_log!(
+                "[S][stress][pin-p2] CRITICAL — counter RESET across reinit; \
+                 brute-force protection silicon claim violated"
+            );
+            return Err(StressError::Assertion {
+                what: "auth_attempts not preserved across reinit — brute-force protection silicon claim violated",
+                iter: 1,
+            });
+        }
+        Ok(sid) => {
+            ctx.close_session(&sid);
+            return Err(StressError::Assertion {
+                what: "wrong PIN opened session on locked UserID",
+                iter: 1,
+            });
+        }
+        Err(other) => return Err(other),
     }
 
     secure_log!("[S][stress][pin-p2] PASS — auth_attempts NVM-durable across SCP03/T=1' reinit");
@@ -415,108 +441,71 @@ fn pin_lockout_persists_across_reinit(ctx: &mut StressCtx) -> StressResult {
 stress_test!(PIN_LOCKOUT_PERSISTS_ACROSS_REINIT, "pin_lockout_persists_across_reinit", Tier::Destructive, pin_lockout_persists_across_reinit);
 
 // ---------------------------------------------------------------------------
-// P4. pin_attribute_read_does_not_burn
+// P4. pin_attribute_read_refused_on_user_userid (A1 regression validator)
 // ---------------------------------------------------------------------------
 
-/// Burn 2 wrong PINs, then issue 5 back-to-back `ReadObjectAttributes`
-/// against the same UserID, then burn 1 more wrong PIN. The chip MUST
-/// still treat the 3rd wrong PIN as wrong-attempt #3 (not "wrong-
-/// attempt #8" or "lockout") — i.e. attribute reads do not consume
-/// PIN-counter slots. This is the load-bearing claim behind
-/// `Se050::pin_attempt_count_raw` being safe to invoke during the
-/// boot-time reconcile against the MCU page-124 counter (`mod.rs:485-
-/// 522` doc).
+/// **Repurposed (A1, 2026-05-28).** The original P4 asserted
+/// "`ReadObjectAttributes` does NOT consume PIN-counter slots" —
+/// the load-bearing claim behind invoking it during the boot-time
+/// MCU↔SE050 attempt-counter reconcile. The first silicon run
+/// (`docs/se050-silicon-findings.md` §2) showed B-U585I-IOT02A
+/// refuses the read entirely (SW=0x6986) on a UserID gated by the
+/// standard two-entry policy
+/// `(self → ALLOW_WRITE|ALLOW_DELETE|REQUIRE_SM,
+///  admin → ALLOW_DELETE|REQUIRE_SM)` — making "does it consume
+/// slots?" untestable, because the read can't proceed in the first
+/// place. `Se050::pin_attempt_count_raw` was updated to return
+/// `None` for the production `USERID_OBJ` (boot-time reconcile silently
+/// skips the SE050 leg; OPTIGA + MCU page-124 legs cover).
 ///
-/// PASS = post-attribute-read wrong PIN returns `PinIncorrect`
-/// (counter at 3/5 — burn drove it from 2 to 3, no extra slots
-/// consumed by the 5 attribute reads), and a follow-up attribute
-/// read shows `auth_attempts == 3`.
-/// FAIL = lockout fires early, or attribute read reports >3 used.
-fn pin_attribute_read_does_not_burn(ctx: &mut StressCtx) -> StressResult {
+/// This test is repurposed as the silicon regression check: assert
+/// that `ReadObjectAttributes` is in fact refused on a fresh
+/// user-PIN-gated UserID. If a future chip-firmware revision starts
+/// honouring attribute reads on this policy, the test surfaces it
+/// and the boot-time reconcile design can be revisited to use the
+/// real path again.
+///
+/// PASS = `try_read_userid_attempts` returns `None` (driver helper
+/// maps the policy-denial SW to `None`).
+/// FAIL = the helper returns `Some(_)` (chip allowed the read — the
+/// A1 finding no longer holds; revisit
+/// `Se050::pin_attempt_count_raw`).
+fn pin_attribute_read_refused_on_user_userid(ctx: &mut StressCtx) -> StressResult {
     let target = ctx.oid(0x01);
     let correct: [u8; 8] = *b"pintest4";
-    let wrong:   [u8; 8] = *b"WRONG!!!";
-    const ATTR_READS: usize = 5;
 
     ctx.delete_scratch(target)?;
     ctx.provision_test_userid(target, &correct, 5, AdminPolicy::WithAdminDelete)?;
 
-    ctx.burn_wrong_pin(target, &wrong, 2)?;
-
-    let after_burn = ctx.read_userid_attempts(target)
-        .ok_or(StressError::Assertion { what: "attribute read returned None mid-test", iter: 0 })?;
-    if after_burn.0 != 2 {
-        secure_log!("[S][stress][pin-p4] after 2 burn: auth_attempts={} (expected 2)", after_burn.0);
-        return Err(StressError::Assertion {
-            what: "pre-attribute-flood counter != 2",
-            iter: 0,
-        });
-    }
-
-    // Flood with attribute reads — none of these should consume a slot.
-    for i in 0..ATTR_READS {
-        ctx.set_iter(i as u32);
-        let r = ctx.read_userid_attempts(target);
-        if r.is_none() {
-            return Err(StressError::Assertion {
-                what: "attribute read returned None during flood",
-                iter: i as u32,
-            });
+    // The driver helper maps any error (including SW=0x6986 policy
+    // denial) to None. A1 silicon truth says this returns None on the
+    // standard two-entry user policy.
+    let r = ctx.read_userid_attempts(target);
+    match r {
+        None => {
+            secure_log!(
+                "[S][stress][pin-p4] PASS — ReadObjectAttributes refused on user-policy UserID \
+                 (A1 silicon truth confirmed: boot-time reconcile correctly skips SE050 leg)"
+            );
+            Ok(())
+        }
+        Some((auth, max)) => {
+            secure_log!(
+                "[S][stress][pin-p4] UNEXPECTED — ReadObjectAttributes returned \
+                 (auth_attempts={}, max_attempts={}) on a user-policy UserID. \
+                 A1 finding no longer applies — re-enable the SE050 leg of the \
+                 boot-time reconcile via `Se050::pin_attempt_count_raw` \
+                 (see `mod.rs:485-522`).",
+                auth, max,
+            );
+            Err(StressError::Assertion {
+                what: "ReadObjectAttributes succeeded on user-PIN-gated UserID — A1 finding no longer holds",
+                iter: 0,
+            })
         }
     }
-
-    let after_flood = ctx.read_userid_attempts(target)
-        .ok_or(StressError::Assertion { what: "post-flood attribute read returned None", iter: 0 })?;
-    secure_log!(
-        "[S][stress][pin-p4] after {} attribute reads: auth_attempts={} (expected 2)",
-        ATTR_READS, after_flood.0,
-    );
-    if after_flood.0 != 2 {
-        return Err(StressError::Assertion {
-            what: "attribute reads burned PIN-counter slots",
-            iter: 0,
-        });
-    }
-
-    // One more wrong PIN — should be wrong-attempt #3, NOT lockout.
-    ctx.set_iter(99);
-    match ctx.open_user_session(target, &wrong) {
-        Err(StressError::Driver(Se050Error::PinIncorrect)) => {
-            secure_log!("[S][stress][pin-p4] 3rd wrong PIN after flood: PinIncorrect (counter advanced normally)");
-        }
-        Err(StressError::Driver(Se050Error::AuthMethodBlocked)) => {
-            return Err(StressError::Assertion {
-                what: "lockout fired early — attribute reads must have burned slots",
-                iter: 99,
-            });
-        }
-        Err(other) => return Err(other),
-        Ok(sid) => {
-            ctx.close_session(&sid);
-            return Err(StressError::Assertion {
-                what: "wrong PIN opened session",
-                iter: 99,
-            });
-        }
-    }
-
-    let final_attempts = ctx.read_userid_attempts(target)
-        .ok_or(StressError::Assertion { what: "final attribute read returned None", iter: 0 })?;
-    secure_log!(
-        "[S][stress][pin-p4] final auth_attempts={} (expected 3 — i.e. only the burn'd wrong PINs counted)",
-        final_attempts.0,
-    );
-    if final_attempts.0 != 3 {
-        return Err(StressError::Assertion {
-            what: "final counter != 3 (attribute reads did burn slots, or chip miscounts)",
-            iter: 0,
-        });
-    }
-
-    secure_log!("[S][stress][pin-p4] PASS — ReadObjectAttributes does not consume PIN-counter slots");
-    Ok(())
 }
-stress_test!(PIN_ATTRIBUTE_READ_DOES_NOT_BURN, "pin_attribute_read_does_not_burn", Tier::Destructive, pin_attribute_read_does_not_burn);
+stress_test!(PIN_ATTRIBUTE_READ_REFUSED_ON_USER_USERID, "pin_attribute_read_refused_on_user_userid", Tier::Safe, pin_attribute_read_refused_on_user_userid);
 
 // ---------------------------------------------------------------------------
 // P5. pin_unlimited_no_lockout (S-7a silicon closure)
@@ -540,24 +529,21 @@ stress_test!(PIN_ATTRIBUTE_READ_DOES_NOT_BURN, "pin_attribute_read_does_not_burn
 /// that treated the omitted TLV as "max=10" would fire lockout by
 /// iteration 11 and FAIL the test loudly.
 ///
-/// Additional assertions layered into the same probe (one
-/// silicon round-trip apiece on top of the burn):
-///  - Pre-burn `(auth=0, max=0)` — the (0,0) attribute reading is the
-///    wire signal for "this UserID is unlimited".
-///  - Post-burn `max=0` (silicon doesn't mutate the unlimited marker
-///    on VERIFY failures) and `auth ≥ BURN_COUNT/2` (counter is
-///    actively advancing, not stuck at 0 or saturated low).
-///  - Correct PIN still authenticates AND resets `auth=0` (the
-///    "successful VERIFY zeroes counter" claim P1 verified on a
-///    bounded UserID — assert it holds on unlimited too).
+/// **Probe redesign (A1, 2026-05-28).** The prior version asserted
+/// `(auth=0, max=0)` via `ReadObjectAttributes` to detect the
+/// "unlimited" wire marker; per A1 silicon truth, that read returns
+/// SW=0x6986 on user-PIN-gated UserIDs, so the marker is no longer
+/// directly inspectable. Behavioural inference covers the same
+/// ground: 100 consecutive `PinIncorrect`s is incompatible with any
+/// `max_attempts ≤ 100` setting, and a final correct PIN proves the
+/// UserID is still authenticatable (i.e. neither the marker nor the
+/// counter has saturated into a soft-locked state).
 ///
-/// PASS = all of the above hold; "unlimited" is semantically truly
-/// unlimited on this silicon. Production unlimited-UserID code paths
-/// are silicon-validated.
-/// FAIL = lockout fires, the unlimited marker mutates, the counter
-/// stalls, or the correct PIN is rejected. Any of these means
-/// production unlimited-UserID code paths are unsafe on this
-/// specific chip and need a workaround before shipping.
+/// PASS = the 100-burn loop completes (every iteration
+/// `PinIncorrect`), then the correct PIN opens a session.
+/// FAIL = `AuthMethodBlocked` somewhere in the loop (implicit cap
+/// exists), or the post-burn correct PIN is refused (silicon silently
+/// dropped the UserID into a soft-locked state).
 fn pin_unlimited_no_lockout(ctx: &mut StressCtx) -> StressResult {
     let target = ctx.oid(0x01);
     let correct: [u8; 8] = *b"pintestu";
@@ -567,73 +553,21 @@ fn pin_unlimited_no_lockout(ctx: &mut StressCtx) -> StressResult {
     ctx.delete_scratch(target)?;
     ctx.provision_test_userid_unlimited(target, &correct, AdminPolicy::WithAdminDelete)?;
 
-    // Pre-burn: attribute read MUST show (auth=0, max=0).
-    let pre = ctx.read_userid_attempts(target)
-        .ok_or(StressError::Assertion { what: "pre-burn attribute read returned None", iter: 0 })?;
-    secure_log!(
-        "[S][stress][pin-p5] pre-burn (auth_attempts={}, max_attempts={}) — expected (0, 0)",
-        pre.0, pre.1,
-    );
-    if pre.0 != 0 || pre.1 != 0 {
-        return Err(StressError::Assertion {
-            what: "fresh unlimited UserID's attributes != (0, 0)",
-            iter: 0,
-        });
-    }
-
     // Burn 100 wrong PINs. `burn_wrong_pin` asserts each iteration
     // returns PinIncorrect — a single AuthMethodBlocked is the S-7a
     // silicon-side regression we're testing for.
     ctx.burn_wrong_pin(target, &wrong, BURN_COUNT)?;
 
-    // Post-burn: unlimited marker intact + counter advancing.
-    let post = ctx.read_userid_attempts(target)
-        .ok_or(StressError::Assertion { what: "post-burn attribute read returned None", iter: 0 })?;
-    secure_log!(
-        "[S][stress][pin-p5] after {} wrong PINs: (auth_attempts={}, max_attempts={})",
-        BURN_COUNT, post.0, post.1,
-    );
-    if post.1 != 0 {
-        return Err(StressError::Assertion {
-            what: "max_attempts mutated during burns — silicon silently altered the unlimited marker",
-            iter: 0,
-        });
-    }
-    if (post.0 as usize) < BURN_COUNT / 2 {
-        return Err(StressError::Assertion {
-            what: "auth_attempts not advancing — counter stuck while burning wrong PINs",
-            iter: 0,
-        });
-    }
-
-    // Correct PIN MUST still authenticate AND reset auth_attempts to 0.
+    // Correct PIN MUST still authenticate after 100 wrong attempts —
+    // proves the chip didn't silently soft-lock and that the unlimited
+    // marker survives the burn run.
     let sid = ctx.open_user_session(target, &correct)?;
     ctx.close_session(&sid);
 
-    let after_correct = ctx.read_userid_attempts(target)
-        .ok_or(StressError::Assertion { what: "post-correct attribute read returned None", iter: 0 })?;
-    secure_log!(
-        "[S][stress][pin-p5] after correct PIN: (auth_attempts={}, max_attempts={}) — expected (0, 0)",
-        after_correct.0, after_correct.1,
-    );
-    if after_correct.0 != 0 {
-        return Err(StressError::Assertion {
-            what: "correct PIN did not reset auth_attempts on unlimited UserID",
-            iter: 0,
-        });
-    }
-    if after_correct.1 != 0 {
-        return Err(StressError::Assertion {
-            what: "max_attempts mutated through the VERIFY-success path",
-            iter: 0,
-        });
-    }
-
     secure_log!(
         "[S][stress][pin-p5] PASS — {} consecutive wrong PINs returned PinIncorrect (no lockout), \
-         counter advanced 0 → {}, marker stayed unlimited, correct PIN reset counter to 0. \
-         S-7a silicon claim VERIFIED.",
-        BURN_COUNT, post.0,
+         correct PIN still opens a session afterwards. S-7a silicon claim VERIFIED.",
+        BURN_COUNT,
     );
     Ok(())
 }

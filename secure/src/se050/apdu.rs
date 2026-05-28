@@ -29,29 +29,36 @@ pub enum Se050Error {
     PinIncorrect,
     /// UserID authentication object is silicon-locked — the chip-side
     /// `auth_attempts == max_attempts` and the policy now denies
-    /// further verification.  Mapped from `SW_COMMAND_NOT_ALLOWED =
-    /// 0x6986` per `plug-and-trust/hostlib/hostLib/inc/se05x_enums.h:84`
-    /// (`kSE05x_SW12_COMMAND_NOT_ALLOWED`) and AN12413 §4.3.1 Table 15
-    /// page 33 ("Command not allowed — access denied based on object
-    /// policy"). Distinct from `PinIncorrect` because the chip won't
-    /// accept any more attempts — the only recovery is
-    /// `factory_reset_admin` + a fresh `UserID` re-provision (which
-    /// after S-6 requires bumping the OID range; see USERID_OBJ
-    /// comment in mod.rs).
+    /// further verification.  Mapped from one of two SWs that
+    /// AN12413 §4.3.1 Table 15 enumerates as policy/security failures:
     ///
-    /// **S-7d cross-reference (2026-05):** AN12413 in hand now —
-    /// the 0x6986 mapping is the documented "policy denial" code per
-    /// Table 15.  Note that AN12413's per-APDU SW lists (Table 71 for
-    /// VerifySessionUserID, page 52) document only `SW_NO_ERROR` and
-    /// `SW_CONDITIONS_NOT_SATISFIED (0x6985, "Wrong userID value")`
-    /// — they do NOT enumerate the "locked" SW.  Combined with
-    /// §4.2's catch-all "if another error code is returned, it means
-    /// the APDU has failed processing", the locked-VERIFY SW is
-    /// inferred to be 0x6986 (policy denial — the locked attempts
-    /// counter satisfies a policy DENY rule), not directly stated.
-    /// On-silicon verification (drive a throwaway UserID to
-    /// attempts=0, observe SW) remains the closing step — see
-    /// docs/work-todo.md S-7 step "Status-code probe".
+    ///  * `SW_COMMAND_NOT_ALLOWED = 0x6986` per
+    ///    `plug-and-trust/hostlib/hostLib/inc/se05x_enums.h:84`
+    ///    (`kSE05x_SW12_COMMAND_NOT_ALLOWED`, "Command not allowed —
+    ///    access denied based on object policy").
+    ///  * `SW_SECURITY_STATUS_NOT_SATISFIED = 0x6982` —
+    ///    silicon-observed lockout return on B-U585I-IOT02A
+    ///    (`userid_silicon_lockout` stress test, 2026-05-28; raw
+    ///    evidence `b88gzpjod.output:1372-1377`). The S-7d
+    ///    documented-by-deduction prediction (0x6986 alone) did NOT
+    ///    match silicon; on the chip we shipped against, a 4th wrong
+    ///    PIN against a `max_attempts=3` UserID returns 0x6982. Both
+    ///    SWs are accepted here to cover other chip revisions.
+    ///
+    /// Distinct from `PinIncorrect` because the chip won't accept any
+    /// more attempts — the only recovery is `factory_reset_admin` + a
+    /// fresh `UserID` re-provision (which after S-6 requires bumping
+    /// the OID range; see USERID_OBJ comment in mod.rs).
+    ///
+    /// **Disambiguation note.** SW=0x6982 also surfaces on *non-session*
+    /// APDUs (e.g. `check_exists`, `read_object_attributes`) when the
+    /// chip is in a session-pending state from a previously failed
+    /// verify/close cycle — Finding A3,
+    /// `docs/se050-silicon-findings.md` §4. Recovery from that case is
+    /// `Se050::reinit()`, not factory reset; the two cases are
+    /// distinguished by the surrounding APDU. The mapping below
+    /// applies only inside `verify_session` (where 0x6982 truly is
+    /// "auth blocked"), not inside `send_apdu` itself.
     AuthMethodBlocked,
     /// Device not provisioned (UserID object missing).
     NotProvisioned,
@@ -644,15 +651,18 @@ pub unsafe fn verify_session(
         Err(Se050Error::Status(sw)) if sw == 0x6985 || (sw & 0xFF00) == 0x6300 => {
             Err(Se050Error::PinIncorrect)
         }
-        // UserID silicon-lock path: §25 Gap 4. 0x6986
-        // (`SM_ERR_COMMAND_NOT_ALLOWED`, AN13030 wording "Command
-        // not allowed — access denied based on object policy") is
-        // SE050's policy-denial code. When the auth_attempts
-        // counter hits max_attempts the auth object's policy stops
-        // accepting VERIFY, which surfaces here. The mapping is
-        // documented-by-deduction (see `AuthMethodBlocked` doc);
-        // on-silicon confirmation deferred.
-        Err(Se050Error::Status(sw)) if sw == 0x6986 => {
+        // UserID silicon-lock path: §25 Gap 4. AN12413 §4.3.1 Table 15
+        // lists 0x6986 (`SM_ERR_COMMAND_NOT_ALLOWED`, "Command not
+        // allowed — access denied based on object policy") as the
+        // documented policy-denial code; the silicon shipped against
+        // (B-U585I-IOT02A, 2026-05-28) instead returns 0x6982
+        // (`SM_ERR_SECURITY_STATUS_NOT_SATISFIED`) on a locked
+        // UserID — see `b88gzpjod.output:1372-1377` and
+        // `docs/se050-silicon-findings.md` §5 #17. Both are
+        // accepted so this driver works against either chip
+        // revision. The 0x6982 mapping replaces the S-7d
+        // "documented-by-deduction" qualifier.
+        Err(Se050Error::Status(sw)) if sw == 0x6986 || sw == 0x6982 => {
             Err(Se050Error::AuthMethodBlocked)
         }
         Err(e) => Err(e),

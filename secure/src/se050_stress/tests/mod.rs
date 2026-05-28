@@ -31,6 +31,7 @@ pub static ALL_TESTS: &[&StressTest] = &[
     &object::EXTENDED_LC_BOUNDARY,
     &scp03::WTX_ENDURANCE,
     &trng::QUALITY_BASIC,
+    &userid::PIN_ATTRIBUTE_READ_REFUSED_ON_USER_USERID,
     // ----- Destructive -----
     &audit::USERID_NO_ADMIN_DELETE,
     &audit::AUDIT_ADMIN_PASSIVE_READ_REFUSED,
@@ -39,7 +40,6 @@ pub static ALL_TESTS: &[&StressTest] = &[
     &userid::PIN_COUNTER_RESETS_ON_CORRECT_PIN,
     &userid::PIN_COUNTER_PERSISTS_ACROSS_REINIT,
     &userid::PIN_LOCKOUT_PERSISTS_ACROSS_REINIT,
-    &userid::PIN_ATTRIBUTE_READ_DOES_NOT_BURN,
     &userid::PIN_UNLIMITED_NO_LOCKOUT,
     &userid::SILICON_LOCKOUT,
 ];

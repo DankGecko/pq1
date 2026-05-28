@@ -17,12 +17,24 @@ use crate::se050_stress::{StressCtx, StressResult, Tier};
 /// body sizes — a subtle bug in AES-CBC padding or R-MAC offset
 /// computation would surface here as a length mismatch or
 /// `Se050Error::Scp03`.
+///
+/// **Max payload cap (2026-05-28).** `ApduBuf` is `MAX_APDU = 1024` B
+/// total. `write_binary_gated` consumes ~34 B of header / fixed TLVs
+/// (4 B APDU header, 3 B extended-Lc reserve, 20 B TAG_POLICY, 6 B
+/// TAG_1 obj_id, 4 B TAG_3 file_len) plus 4 B of TAG_4 long-form
+/// length encoding once data ≥ 256 — leaving ~983 B for the payload
+/// itself. The first silicon stress run had `1024` here, which
+/// overran the buffer and silently corrupted the SCP03 state
+/// (`docs/se050-silicon-findings.md` §5 #5; chained failures cascaded
+/// into #6 and #7). 960 B leaves a comfortable margin and still
+/// exercises the >>256 extended-length encoding paths.
 fn extended_lc_boundary(ctx: &mut StressCtx) -> StressResult {
-    // Lengths that straddle the short/extended-Lc boundary.
-    const LENGTHS: &[usize] = &[1, 8, 32, 254, 255, 256, 257, 512, 1024];
+    // Lengths that straddle the short/extended-Lc boundary. Largest
+    // value kept ≤ 960 B per the cap above.
+    const LENGTHS: &[usize] = &[1, 8, 32, 254, 255, 256, 257, 512, 960];
     // Source pattern: cycling byte counter. Keeps each length's
     // payload distinguishable in a wire capture.
-    let mut src = [0u8; 1024];
+    let mut src = [0u8; 960];
     for (i, b) in src.iter_mut().enumerate() {
         *b = (i & 0xFF) as u8;
     }
@@ -35,7 +47,7 @@ fn extended_lc_boundary(ctx: &mut StressCtx) -> StressResult {
         ctx.delete_scratch(target)?;
         ctx.write_scratch(target, &src[..len])?;
 
-        let mut got = [0u8; 1024];
+        let mut got = [0u8; 960];
         let n = ctx.read_scratch(target, &mut got)?;
         if n != len {
             secure_log!(

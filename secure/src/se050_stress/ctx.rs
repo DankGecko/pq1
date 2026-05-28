@@ -159,6 +159,19 @@ impl<'a> StressCtx<'a> {
     }
 
     /// Open + verify a session against `userid_oid`.
+    ///
+    /// **Finding A3 mitigation (2026-05-28).** After any failed verify
+    /// (`PinIncorrect`, `AuthMethodBlocked`, or any `Status(sw)`), the
+    /// chip can be left in a "session-pending" state: subsequent
+    /// non-session APDUs (`check_exists`, `read_object_attributes`,
+    /// even a fresh `create_session`) return SW=0x6982 until a
+    /// successful close — or, observed reliably on B-U585I-IOT02A, a
+    /// full SCP03 re-init. To keep the chip clean for the next probe,
+    /// this helper calls `Se050::reinit()` whenever the verify leg
+    /// fails, *after* the best-effort close. Cost is ~one SCP03
+    /// handshake (~100-300 ms on silicon, ~ms on QEMU). See
+    /// `docs/se050-silicon-findings.md` §4 (raw evidence
+    /// `b88gzpjod.output:1275-1281`).
     pub fn open_user_session(
         &mut self,
         userid_oid: u32,
@@ -169,12 +182,20 @@ impl<'a> StressCtx<'a> {
                 let (t1, scp03) = self.se.t1_scp03_mut();
                 apdu::create_session(t1, scp03, userid_oid)?
             };
-            {
+            let verify_err = {
                 let (t1, scp03) = self.se.t1_scp03_mut();
-                if let Err(e) = apdu::verify_session(t1, scp03, &sid, pin) {
+                apdu::verify_session(t1, scp03, &sid, pin).err()
+            };
+            if let Some(e) = verify_err {
+                {
+                    let (t1, scp03) = self.se.t1_scp03_mut();
                     let _ = apdu::close_session(t1, scp03, &sid);
-                    return Err(e.into());
                 }
+                // A3 mitigation: flush the chip's session-pending
+                // state so the caller's next non-session APDU isn't
+                // poisoned by 0x6982.
+                let _ = self.se.reinit();
+                return Err(e.into());
             }
             Ok(sid)
         }

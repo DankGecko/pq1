@@ -218,34 +218,115 @@ path runs an explicit `ctx.reinit()` before its next probe.
 
 ## 6. Action items, in priority order
 
-1. **Update `secure/src/se050/mod.rs:485-510` doc** to retract the
-   "policy-gate-independent attribute read" claim. The silicon evidence
-   is `b88gzpjod.output:1503-1504`. Note that `pin_attempt_count_raw`
-   returns `None` on production `USERID_OBJ` and the SE050 leg of the
-   boot-time reconcile is silently skipped.
-2. **Update `apdu.rs:42-54`** to add SW=0x6982 to the
-   `AuthMethodBlocked` mapping arm (Finding from #17). Add a
-   comment naming `b88gzpjod.output` as the silicon evidence.
-3. **Update `audit_admin_cannot_rotate_user_pin` test** to assert the
-   ACTUAL silicon behavior under the threat model: failed UPDATE
-   destroys-but-doesn't-substitute. PASS = original UserID gone AND
-   attacker PIN doesn't work either. Note in the test doc that A2 is
-   an accepted DoS.
-4. **Replace `read_userid_attempts`** in P1, P4, P5 with a
-   SW=0x63Cx-based counter readback (one burn per readback) OR open
-   a real session with the correct PIN (no burn but resets counter to
-   0 so doesn't help mid-burn probes). The tests need rework to fit
-   what's actually inspectable on silicon.
-5. **Fix the seed test #5** (`object_extended_lc_boundary`) — cap
-   payload at ≤960 B.
-6. **`StressCtx::open_user_session`** should recover from a failed
-   verify by calling `ctx.reinit()` before returning the error — that
-   way subsequent operations in the test see a clean chip and the
-   real assertion runs.
+**Status: all items below APPLIED 2026-05-28** (same-day follow-up
+to the silicon run). Test harness should now report PASS on the 11
+previously-failing tests without changing chip behavior. Re-run
+`make se050-stress-destructive` to confirm.
 
-None of the above is required to ship — the security invariant is
-silicon-verified. They're hygiene fixes to make the test harness
-report accurately on the next run.
+1. **DONE — `secure/src/se050/mod.rs:485-510` doc rewritten** to
+   retract the "policy-gate-independent attribute read" claim, cite
+   `b88gzpjod.output:1503-1504`, and document the silently-skipped
+   SE050 leg of the boot-time reconcile.
+2. **DONE — `apdu.rs verify_session` match arm** now maps both
+   SW=0x6986 AND SW=0x6982 to `Se050Error::AuthMethodBlocked`. The
+   `AuthMethodBlocked` doc on the error variant calls out the
+   disambiguation between the verify-context lockout meaning and
+   the session-pending-state meaning that surfaces on non-session
+   APDUs (`check_exists`, attribute reads).
+3. **DONE — `audit_admin_cannot_rotate_user_pin` rewritten** to assert
+   silicon-truth A2: failed transport-SCP03 UPDATE refuses the request
+   AND destroys the existing UserID AND does not install the attacker
+   PIN. PASS criteria now: attack refused + `check_exists` reports
+   false + attacker PIN cannot open a session. Test doc records A2
+   as an accepted DoS under the confidentiality-only threat model.
+4. **DONE — P1 / P2 / P4 / P5 reworked** so PIN-counter assertions no
+   longer depend on `ReadObjectAttributes`:
+    - **P1 (`pin_counter_resets_on_correct_pin`)** — inference via
+      burn arithmetic across a success. 3-burn + success + 4-burn
+      on `max_attempts=5`; the second burn must complete without
+      `AuthMethodBlocked` (only possible if the success step reset
+      the counter).
+    - **P2 (`pin_counter_persists_across_reinit`)** — inference via
+      burn arithmetic across `Se050::reinit()`. 4-burn + reinit +
+      2 individual probes; the 2nd post-reinit wrong PIN must be
+      `AuthMethodBlocked` (counter persisted) rather than
+      `PinIncorrect` (would mean counter reset across the simulated
+      power cycle).
+    - **P4 (was `pin_attribute_read_does_not_burn`)** — repurposed and
+      renamed to `pin_attribute_read_refused_on_user_userid`. Asserts
+      that `ReadObjectAttributes` is in fact refused on a freshly-
+      provisioned user-policy UserID; codifies A1 silicon truth as a
+      regression check. If a future chip-firmware rev starts honouring
+      the read, this test fires and the boot-time reconcile can
+      restore the SE050 leg.
+    - **P5 (`pin_unlimited_no_lockout`)** — kept the 100-burn loop
+      (the load-bearing S-7a probe) and added a post-burn correct-PIN
+      success as the "chip didn't soft-lock" sanity. Dropped the
+      `(auth=0, max=0)` attribute-marker assertions.
+5. **DONE — `object_extended_lc_boundary` capped at 960 B.** Largest
+   value in `LENGTHS` dropped from 1024 to 960 (~ 983 B fits in the
+   1024-B `ApduBuf` after `write_binary_gated`'s ~34 B of TLV overhead
+   + 4 B extended-length header on data ≥ 256). Buffer is now 960 B
+   to match. Should unchain #6 / #7's cascade failures from #5's
+   buffer overflow.
+6. **DONE — `StressCtx::open_user_session` calls `Se050::reinit()`**
+   whenever the verify leg fails (after the best-effort close). The
+   `userid_no_admin_delete` test gets the same recovery inserted
+   inline after the failed admin `delete_authed` since that test
+   doesn't go through `open_user_session` for the failing op.
+
+### 6a. Production-firmware fixes (A3 surfaced real bugs, not just harness gaps)
+
+The harness rework above was the obvious "fix the tests" pass. While
+writing it up, follow-up review of production firmware found three
+spots where A3's session-pending state actually breaks user-facing
+behaviour. Those got fixed too — distinct from the harness work:
+
+- **`Se050::reinit` ungated for production use** (`secure/src/se050/
+  mod.rs`). Removed the `#[cfg(feature = "se050-stress")]` so production
+  code can call it. Cost is one SCP03 handshake (~100–300 ms on
+  silicon) per invocation.
+- **`Se050::authenticate_and_read` — the load-bearing production
+  unlock path.** A failed `verify_session` left the chip in
+  session-pending state; the user's *next* wrong PIN would then surface
+  as `Status(0x6982)` from `create_session` → `UnlockError::Internal-
+  Error` (via `classify_se050_unlock_error`'s `_` arm) instead of
+  `PinIncorrect`. UX consequence: first wrong PIN shows "wrong PIN",
+  every subsequent wrong PIN shows "internal error" — silently breaking
+  the SE050's own attempt-counter from the user's mental model. (MCU
+  page-124 counter still ticks correctly, so the 10-wrong-PIN brick
+  path remains intact.) Fix: `self.reinit()` after the failed verify,
+  before returning `Err`.
+- **`Se050::admin_factory_reset` — false-negative on survivor
+  detection.** The `AUTH_OBJS_BEST_EFFORT` delete loop legitimately
+  fails with SW=0x6986 post-S-6 (UserID has no admin-delete entry),
+  leaving the chip in session-pending state. The post-wipe verification
+  loop then calls `check_exists(...).unwrap_or(false)` on every data /
+  canary OID — and `check_exists` returning `Err(Status(0x6982))` maps
+  to `false`, silently reporting every surviving object as "gone". The
+  safety-contract postcondition ("each data / canary object MUST be
+  gone") would pass on a chip with surviving user data. Fix: `self.
+  reinit()` between the delete loop and the verification loop.
+- **`Se050::duress_read_half`, `Se050::duress_verify`,
+  `Se050::user_factory_reset` — same A3 recovery on failed-verify
+  paths.** Critical for the duress-pin chain in `nsc::gated_unlock`:
+  every regular PIN entry tries `unlock_duress` first; the expected
+  mismatch leaves the chip session-pending, and the subsequent
+  `se.unlock(pin)`'s `create_session` would then always surface
+  SW=0x6982 → InternalError on the user's *first* correct-PIN attempt
+  with the regular credential. Fix: `reinit()` after the failed
+  duress verify.
+
+All five production sites validated by `cargo check` on `dual-se,ui-
+oled,stm32u585,debug-log,usb,saes-dhuk` (+ `duress-pin`) and the
+`se050-stress,...` feature set. On-silicon re-run of
+`make se050-stress-destructive` + the production unlock paths
+(`make pin-gate-hw-counter-e2e`) pending.
+
+None of the above changes chip behavior or the confidentiality
+invariant. The harness work makes the tests probe correctly; the
+production-firmware work makes the user-visible error paths and the
+admin-wipe safety contract honest under A3.
 
 ---
 
