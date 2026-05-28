@@ -19,7 +19,13 @@
 #![allow(dead_code)]
 
 // Re-export the sentinel constants verbatim (same numeric values; existing
-// `crate::fi::OK_SENTINEL` etc. call sites keep working).
+// `crate::fi::OK_SENTINEL` etc. call sites keep working). `FAIL_SENTINEL`
+// is referenced only by the `#[cfg(test)]` pure-tests (Hamming-distance
+// assertion + the check_*_into_sentinel false-path checks), not by the
+// non-test firmware path — keep it re-exported for API symmetry with
+// `OK_SENTINEL` and silence the resulting unused-import warning in the
+// hardware build.
+#[allow(unused_imports)]
 pub use pqsigner_fi::{FAIL_SENTINEL, OK_SENTINEL};
 
 /// Returns one TRNG byte (production) or a fixed value (test / e2e-test).

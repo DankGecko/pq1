@@ -130,6 +130,25 @@ static mut PENDING_PTR: *const u8 = core::ptr::null();
 static mut PENDING_LEN: usize = 0;
 static mut PENDING_POS: usize = 0;
 
+/// 30-second inter-chunk timeout for an in-progress GET_RESPONSE drain
+/// (§19 P1 "Response-buffer locking … 30 s timeout"). If the host
+/// declares a chunked SLH-DSA-signature response (SW=0x61xx) and then
+/// stops issuing GET_RESPONSE entirely — no command at all, so the
+/// `dispatch` scrub-on-interleave never fires — the pending buffer
+/// would otherwise sit referenced indefinitely. `check_response_timeout`
+/// (driven from the NS poll loop by the `OTG_DSTS.FNSOF` frame clock)
+/// accumulates elapsed frames between checks and scrubs the pending
+/// cursor once `PENDING_TIMEOUT_FRAMES` pass without a GET_RESPONSE.
+///
+/// Accumulating per-iteration deltas (rather than a single start→now
+/// delta) sidesteps the 14-bit FNSOF wrap at 16.384 s: the NS loop
+/// polls at kHz, so each `(now - last) & 0x3FFF` delta is tiny and
+/// always wrap-correct, and 30 s > one wrap is handled by summation.
+static mut PENDING_LAST_FRAME: u16 = 0;
+static mut PENDING_ELAPSED_FRAMES: u32 = 0;
+/// 30 s at the nominal 1 ms USB SOF cadence.
+const PENDING_TIMEOUT_FRAMES: u32 = 30_000;
+
 // ---------------------------------------------------------------------------
 // Firmware version
 // ---------------------------------------------------------------------------
@@ -1116,6 +1135,10 @@ impl CommandRouter {
             return self.sw_response(SW_CONDITIONS_NOT_SATISFIED);
         }
 
+        // Progress — the host is actively draining, so reset the
+        // inter-chunk idle timeout accumulator.
+        PENDING_ELAPSED_FRAMES = 0;
+
         let remaining = PENDING_LEN - PENDING_POS;
         // FI-hardened length clamp — a glitched `chunk` value here
         // would either overflow CHUNK_BUF (if it exceeds APDU_MAX_RESP)
@@ -1142,6 +1165,37 @@ impl CommandRouter {
         Response {
             ptr: CHUNK_BUF.as_ptr(),
             len: chunk + 2,
+        }
+    }
+
+    /// Enforce the 30-second GET_RESPONSE inter-chunk timeout. Call once
+    /// per NS poll-loop iteration with the current `OTG_DSTS.FNSOF`
+    /// (`usb::usb_frame_number`). If a chunked-response drain has been
+    /// idle (no GET_RESPONSE) for `PENDING_TIMEOUT_FRAMES`, scrub the
+    /// pending cursor so a stalled host can't pin the buffer. No-op when
+    /// no drain is in progress.
+    ///
+    /// # Safety
+    /// Touches the module `PENDING_*` static-mut state under the
+    /// single-threaded NS dispatcher invariant (same as `get_response`
+    /// / `dispatch`).
+    pub unsafe fn check_response_timeout(&self, now_frame: u16) {
+        if PENDING_PTR.is_null() {
+            // No drain in progress — keep the clock reference fresh so
+            // the first frame of the next drain measures a small delta.
+            PENDING_ELAPSED_FRAMES = 0;
+            PENDING_LAST_FRAME = now_frame;
+            return;
+        }
+        let delta = now_frame.wrapping_sub(PENDING_LAST_FRAME) & 0x3FFF;
+        PENDING_LAST_FRAME = now_frame;
+        PENDING_ELAPSED_FRAMES = PENDING_ELAPSED_FRAMES.saturating_add(delta as u32);
+        if PENDING_ELAPSED_FRAMES >= PENDING_TIMEOUT_FRAMES {
+            // Abandoned drain — scrub.
+            PENDING_PTR = core::ptr::null();
+            PENDING_LEN = 0;
+            PENDING_POS = 0;
+            PENDING_ELAPSED_FRAMES = 0;
         }
     }
 

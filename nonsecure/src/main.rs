@@ -201,6 +201,9 @@ fn main() -> ! {
         // sending SOFs, so this never false-trips an idle link.
         let now_frame = usb::usb_frame_number();
         let _ = stack.transport.check_rx_timeout(now_frame);
+        // Bound how long an abandoned chunked GET_RESPONSE drain may pin
+        // the pending buffer (30 s inter-chunk timeout).
+        unsafe { stack.commands.check_response_timeout(now_frame) };
 
         if stack.device.poll(&mut [&mut stack.transport.hid]) {
             if poll_counter == 0 {
