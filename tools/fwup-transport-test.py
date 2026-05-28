@@ -562,53 +562,47 @@ def phase_wipe_trigger(hid: HidRaw, manifest: bytes) -> HidRaw:
         )
     print("==> [wipe] USB disconnect observed — wipe trigger fired ✓")
 
-    # USB-C warm-reset edge: the OTG_FS controller comes out of
-    # sys_reset, but the USB-C host port stays stuck thinking the
-    # device is still attached at the pre-reset state — a physical
-    # cable unplug/replug is needed to renegotiate. The device IS
-    # booting (verified by `lsusb` after a manual replug); this is
-    # the same enumeration topology issue tracked in CLAUDE.md
-    # "USB-C-power-bootstrap edge only" and is independent of the
-    # wipe-trigger logic we're validating here.
-    #
-    # So: re-enumeration is best-effort. If it doesn't come back
-    # within 60 s we PASS on the disconnect alone and tell the user
-    # they'll need a physical replug + a fresh `make` invocation to
-    # clear the flash-backed verify-failure counter. PHY-level
-    # warm-reset fix is tracked as a separate follow-up.
-    print("==> [wipe] checking for USB re-enumerate (best-effort, 60s)...")
-    if wait_for_enumerate(timeout_s=60.0):
-        print("==> [wipe] USB re-enumerated automatically")
-        hid2 = open_hid_or_die()
-        sw, _ = send_single_apdu(hid2, INS_V2_GET_DEVICE_INFO, P1_LAST, b"")
-        if sw != SW_OK:
-            raise RuntimeError(
-                f"[wipe] post-reset GET_DEVICE_INFO failed: SW=0x{sw:04X}"
-            )
-        print("==> [wipe] post-reset device responsive (GET_DEVICE_INFO: SW_OK)")
-        reset_fail_counter(hid2, manifest)
-        print(
-            "==> [wipe] flash-backed counter reset via post-recovery "
-            "valid BEGIN"
+    # Firmware-driven re-enumeration (task #26): `cc_open_then_reset`
+    # holds the USB-C CC lines open long enough for the host's typec
+    # port controller to register a real detach, then sys_resets — so
+    # the post-reset dead-battery Rd looks like a fresh attach and the
+    # device re-enumerates with NO physical replug. End-to-end latency
+    # is dominated by device boot (~15-25 s in this e2e build, which
+    # re-provisions on every boot) + the host's typec/VBUS cycle.
+    print("==> [wipe] waiting for firmware-driven USB re-enumerate "
+          "(cc_open_then_reset, up to 90s)...")
+    if not wait_for_enumerate(timeout_s=90.0):
+        raise RuntimeError(
+            "[wipe] device did NOT re-enumerate within 90s — the "
+            "cc_open_then_reset re-attach path regressed (it has worked "
+            "before: device comes back ~20-25s after the disconnect). "
+            "Check VBUS/CC wiring + that the host typec subsystem is healthy."
         )
-        return hid2
+    print("==> [wipe] USB re-enumerated automatically (no replug) ✓")
+    hid2 = open_hid_or_die()
+    sw, _ = send_single_apdu(hid2, INS_V2_GET_DEVICE_INFO, P1_LAST, b"")
+    if sw != SW_OK:
+        raise RuntimeError(
+            f"[wipe] post-reset GET_DEVICE_INFO failed: SW=0x{sw:04X}"
+        )
+    print("==> [wipe] post-reset device responsive (GET_DEVICE_INFO: SW_OK) ✓")
 
-    print(
-        "==> [wipe] device is halted on purpose — OLED shows "
-        '"Tamper detected / Replug USB".\n'
-        "          On a stock B-U585I-IOT02A the host port can't be made "
-        "to re-enumerate\n"
-        "          while VBUS stays asserted (UM2839 documents no SB to "
-        "break VBUS at\n"
-        "          CN1), so the firmware halts with the OLED prompt "
-        "instead of sys_reset.\n"
-        "          The wipe-trigger logic is validated by the disconnect "
-        "above ✓.\n"
-        "          To run the test again with a clean flash-failure "
-        "counter, replug\n"
-        "          the USB-C cable, then re-run `make fwup-transport-hw`."
-    )
-    return hid  # caller will swallow the close on a dead fd
+    # Best-effort flash-counter reset for the NEXT run's hygiene. This
+    # is a heavy chained BEGIN (~33 APDUs) over a freshly-re-enumerated
+    # link, which is the most transport-fragile op in the whole test —
+    # if it hangs we don't fail the run (the re-enumeration itself is
+    # the thing under test, and it already passed above). A stale flash
+    # counter at worst trips the lifetime wipe a few runs sooner.
+    try:
+        reset_fail_counter(hid2, manifest)
+        print("==> [wipe] flash-backed counter reset via post-recovery BEGIN ✓")
+    except (TimeoutError, IOError, OSError) as e:
+        print(
+            f"==> [wipe] post-recovery counter-reset BEGIN did not complete "
+            f"({type(e).__name__}) — non-fatal, re-enumeration already "
+            f"validated. Flash counter may carry over to the next run."
+        )
+    return hid2
 
 
 def run_e2e(fixture_dir: str) -> int:

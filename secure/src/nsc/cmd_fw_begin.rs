@@ -87,14 +87,21 @@ fn arm_wipe_and_reset() -> ! {
         crate::hw::usb_hw::soft_disconnect();
     }
 
-    crate::ui::show_status("Tamper detected", "Replug USB");
+    crate::ui::show_status("Tamper detected", "wiping...");
 
-    // Halt on real hardware so the OLED prompt stays up until the
-    // user replugs. QEMU has no OLED persistence + sys_reset works
-    // cleanly there, so use it as the non-hw fallback.
+    // Reboot with automatic USB re-enumeration (task #26). The wipe
+    // flag is armed above; the post-reset boot runs the wipe-resume
+    // path (se050/dual-se: `factory_reset_admin` → "WALLET WIPED /
+    // restore from seed"). `cc_open_then_reset` holds the USB-C CC
+    // lines open long enough for the host's typec layer to register a
+    // real detach, then resets — so the device re-enumerates as the
+    // wiped device with NO physical replug, and the companion can
+    // auto-detect the wiped state. This is the HW-proven cc_open path
+    // (the dmesg re-enumeration evidence came from the wipe-trigger
+    // e2e). ~20-25 s latency (mostly boot).
     #[cfg(feature = "stm32u585")]
-    loop {
-        cortex_m::asm::wfi();
+    unsafe {
+        crate::hw::usb_hw::cc_open_then_reset();
     }
     #[cfg(not(feature = "stm32u585"))]
     cortex_m::peripheral::SCB::sys_reset();

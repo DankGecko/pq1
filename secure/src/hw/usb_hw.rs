@@ -276,6 +276,84 @@ pub unsafe fn soft_disconnect_then_reset() -> ! {
     cortex_m::peripheral::SCB::sys_reset();
 }
 
+/// Hold the USB-C CC lines fully OPEN long enough that the host's
+/// Type-C port controller registers a real detach (past tCCDebounce
+/// ≈ 100–200 ms), then `sys_reset`. On the post-reset boot the
+/// dead-battery Rd re-engages (hardware default), which the host sees
+/// as a fresh attach → re-enumeration WITHOUT a physical replug.
+///
+/// This is the task-#26 fix for the USB-C warm-reset edge. A bare
+/// `sys_reset` leaves the host port stuck (VBUS stays asserted, so the
+/// typec layer keeps the port bound and never re-probes). HW-validated
+/// on B-U585I-IOT02A via the `fwup-transport-hw-iwdg` wipe-trigger:
+/// the kernel logs a clean detach + `new full-speed USB device`
+/// (1209:7051) re-attach with no physical replug, and the device is
+/// stable afterward. End-to-end latency ≈ 20–25 s (dominated by device
+/// boot; the host typec/VBUS cycle adds a few seconds).
+///
+/// Earlier failed attempts held CC open only ~200 ms (under
+/// tCCDebounce margin) and/or drove the TCPP03 EN (PB5) low — which
+/// puts the TCPP03 into *dead-battery mode* and PRESENTS Rd, the exact
+/// opposite of opening CC. The working recipe leaves EN high
+/// (passthrough) and removes BOTH device-side Rd sources below.
+///
+/// To open CC we must remove BOTH Rd sources the device can present:
+///   * UCPD's own Rd — clear `UCPD1_CR.CCENABLE` (bits 11:10) +
+///     `ANAMODE` (bit 9).
+///   * The STM32 dead-battery Rd — set `PWR_UCPDR.UCPD_DBDIS` (bit 0).
+/// We deliberately do NOT touch the TCPP03 EN (PB5): driving it low
+/// puts the TCPP03 into *dead-battery mode*, which PRESENTS Rd — the
+/// opposite of what we want. Leaving EN high passes the (now-open)
+/// UCPD CC state straight through to the connector.
+///
+/// Does not return.
+///
+/// # Safety
+/// Secure-alias UCPD1 + PWR registers (same as `init_ucpd`), single-
+/// threaded about-to-reset path.
+#[inline(never)]
+pub unsafe fn cc_open_then_reset() -> ! {
+    // UCPD1 CR (secure alias, matches `init_ucpd`).
+    const UCPD1_CR: u32 = 0x5000_DC00 + 0x0C;
+    const CC_ENABLE_MASK: u32 = 0b11 << 10; // CCENABLE[1:0]
+    const ANAMODE: u32 = 1 << 9; // sink Rd
+    // PWR_UCPDR (secure alias). UCPD_DBDIS = bit 0.
+    const PWR_UCPDR: u32 = 0x5602_0800 + 0x2C;
+    const UCPD_DBDIS: u32 = 1 << 0;
+    // OTG_DCTL.SDIS — also drop the D+ pull-up (USB-2 layer detach)
+    // alongside the CC open.
+    const OTG_DCTL: u32 = 0x4204_0000 + 0x804;
+    const SDIS: u32 = 1 << 1;
+
+    // SAFETY: see docstring.
+    unsafe {
+        // 1. Drop the USB-2 D+ pull-up.
+        let dctl = OTG_DCTL as *mut u32;
+        core::ptr::write_volatile(dctl, core::ptr::read_volatile(dctl) | SDIS);
+
+        // 2. Drop UCPD's Rd (clear CCENABLE + ANAMODE).
+        let cr = UCPD1_CR as *mut u32;
+        let v = core::ptr::read_volatile(cr);
+        core::ptr::write_volatile(cr, v & !CC_ENABLE_MASK & !ANAMODE);
+
+        // 3. Disable the STM32 dead-battery Rd (idempotent — init set
+        //    this too, but a defensive re-assert in case anything reset
+        //    it). With UCPD Rd gone AND dead-battery disabled AND
+        //    TCPP03 still enabled (passthrough), CC reads open.
+        let ucpdr = PWR_UCPDR as *mut u32;
+        core::ptr::write_volatile(ucpdr, core::ptr::read_volatile(ucpdr) | UCPD_DBDIS);
+    }
+
+    // Hold CC open ~1.5 s — comfortably past the host's tCCDebounce
+    // (100–200 ms) + any port-controller settle, so the typec layer
+    // tears the port down to "unattached". ~240 M nops at 160 MHz.
+    for _ in 0..240_000_000 {
+        cortex_m::asm::nop();
+    }
+
+    cortex_m::peripheral::SCB::sys_reset();
+}
+
 /// Drop the USB 2.0 D+ pull-up via `OTG_DCTL.SDIS=1`. Used at the top
 /// of the "halt + wait for user to replug" paths in
 /// `cmd_fw_commit::run` and `cmd_fw_begin::arm_wipe_and_reset` so
