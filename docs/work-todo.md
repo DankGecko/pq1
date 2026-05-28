@@ -6,6 +6,285 @@ Last audited: 2026-04-13
 
 ---
 
+## ⚠️ SHIP BLOCKERS — must be resolved before any unit leaves the bench
+
+These items are NOT part of the normal feature backlog. They are
+on-silicon-state regressions or metadata mis-configurations whose
+*current* state would ship a device with a known, exploitable security
+flaw. CI / `make ship-checklist` MUST hard-fail until each item below
+is closed. **No device may be sold, gifted, demoed-to-public, or
+shipped to an external auditor for unsealed use while any item here is
+open.**
+
+### S-1. OPTIGA F1D0 `Change = ALW` permits desoldered-chip PIN brute-force
+
+**Severity:** Critical — bypasses the 10-attempt LUC lockout that the
+threat model advertises as the primary online brute-force bound on the
+OPTIGA half. With this open, the per-chip PIN security degrades to
+"dual-SE XOR split alone" — i.e. an attacker would still need to also
+defeat SE050, but the layered defense the design promises is gone.
+
+**Where:** `secure/src/optiga/apdu.rs:930` (`build_metadata_auth_ref`)
+and `:1059` (`build_metadata_auth_ref_luc`) both write
+`Change = AC_ALW`. The current LcsO state on bench parts is Creation,
+so the metadata is additionally mutable, but even if the chip were
+ratcheted to LcsO=Operational *as the current bring-up metadata*, the
+`ALW` byte would be frozen and the chip would be permanently
+brute-forceable on a bench rig.
+
+**Attack:** Desolder OPTIGA → attach to attacker bench → plaintext
+`SetDataObject(F1D0, <chosen 32-byte HMAC key>)` (Change=ALW, no
+credential needed) → `hmac_verify_auto_state` with the chosen key
+succeeds → `Auto(F1D0)` granted → `SetDataObject(E120, (0, limit))`
+succeeds (E120.Change=Auto(F1D0)) → counter reset → repeat with
+real-PIN guesses → unbounded brute force. The exact attack steps are
+documented (as the *legitimate* admin-wipe path) in
+`secure/src/optiga/mod.rs:1216-1236 reset_e120_via_transient_auth`.
+
+**Required fix — `Change = Auto(F1D0)` (self-gated), ratchet to
+LcsO=Operational to freeze the metadata.**
+
+`Auto(F1D0)` means: rewriting F1D0 requires that this session has
+already HMAC-verified against the **current** F1D0 contents.
+Translation: changing the PIN requires knowing the current PIN.
+Once LcsO=Op freezes the metadata, this AC is the chip's permanent,
+silicon-enforced rule. Strictly better than the previously-proposed
+`LcsO<Op` because it preserves user-driven PIN change without a
+factory-reset-and-reprovision flow. `NEV` (immutable) and `LcsO<Op`
+(immutable after ratchet) are acceptable fallbacks if a downstream
+review surfaces a reason `Auto(F1D0)` won't work on our firmware
+revision — but every one of the three is strictly better than the
+current `ALW` or the originally-floated `Conf(E140)`.
+
+**Why `Conf(E140)` is NOT acceptable as the ship AC.** A
+PBS-extraction attacker satisfies `Conf(E140)` and rewrites F1D0
+through the shielded channel — same attack as `ALW`, just one ceremony
+longer. Designing the OPTIGA's last line of defense around "PBS is
+unextractable" is a single-point-of-failure we have no need to take.
+
+**Required-fix step-list (must all land together):**
+1. Add `apdu::build_metadata_auth_ref_ship()` with
+   `Change = Auto(F1D0)`, `Read = NEV`, `Exec = LUC(E120)`,
+   `DataType = AUTHREF`. Verify the AC byte encoding by reading
+   back the metadata and comparing against the SRM §"Access
+   Conditions" table (Auto = `0xE0` per the verified encoding;
+   compound forms use `0xFD` / `0xFE`).
+2. Production provisioning path emits the tightened metadata, then
+   ratchets F1D0 to LcsO=Operational so the metadata is
+   silicon-frozen.
+3. Register `build_metadata_auth_ref` + `build_metadata_auth_ref_luc`
+   (the `Change=ALW` bring-up variants) in the `compile_error!` fence
+   under `mode-production` (`secure/src/nsc/mod.rs:98-116`).
+4. `make ship-checklist` asserts the production binary's provisioning
+   path resolves to `_ship()` and never the bring-up variants
+   (static grep + compile-time fence).
+5. Sacrificial-part verification on a chip with F1D0 at LcsO=Op
+   carrying the tightened metadata: plaintext `SetDataObject(F1D0,
+   X)` MUST fail with `ACCESS_DENIED`; `SetDataObject(F1D0, X)`
+   inside an opened Shielded Connection MUST also fail (proving
+   `Conf(E140)` does not relax this); `reset_e120_via_transient_auth`
+   MUST fail at the F1D0-overwrite step; `SetDataObject(F1D0,
+   new_pin_hmac)` AFTER a successful HMAC verify with the current PIN
+   MUST succeed (validating that PIN-change works).
+6. Tearing/glitch test: power-yank between wrong-PIN APDU response
+   and E120 readback, ≥1000× — assert E120 never lags attempt count.
+   Closes an empirically-unverified assumption (Infineon does not
+   explicitly document failed-auth LUC-increment semantics for our
+   firmware revision; the happy-path increment is verified on silicon,
+   the tearing case is not — see `docs/deep-research-vulns-in-SEs.md:57`).
+7. Boundary test: `E120.current = limit - 1` + correct PIN must
+   still authorize and reset to 0. Currently
+   `optiga-hw-counter-e2e` only exercises low-`current` resets.
+
+**Cost we accept (with `Auto(F1D0)`):** None — user-driven PIN change
+is preserved. If a sacrificial-part test of step (5) reveals the
+chip's firmware doesn't accept `Auto(F1D0)` on the AUTHREF data type
+the way we expect, fall back to `NEV` (immutable; PIN change requires
+factory-reset + reprovision — same posture Trezor's OPTIGA integration
+adopts).
+
+**Tracking:** `docs/production-todo.md` "OPTIGA Trust M V3 — LcsO
+transitions" / F1D0 item (expanded with the implementation
+checklist); `docs/security-review-2026-05.md` §C-4 (added).
+`docs/threat-model.md` §"S3 — auth-equivalent" advertises the
+10-attempt bound this regression breaks; that claim is provisionally
+inaccurate for the current build and must be re-established by this
+fix.
+
+---
+
+### S-2. Infineon SAMPLE trust-anchor cert at OID `0xE0E3` enables full Protected-Update bypass
+
+**Severity:** Critical — defeats EVERY other OPTIGA hardening including S-1.
+This is the master key to the whole chip.
+
+**Where:** `secure/src/optiga/reset.rs:26-49`. `TRUST_ANCHOR_OID =
+0xE0E3` is provisioned via `provision_trust_anchor()` with
+`TRUST_ANCHOR_CERT` = the DER X.509 cert from
+`samples/integrity/sample_ec_256_priv.pem` in Infineon's public
+example bundle. The matching EC P-256 **private** key ships in that
+same public bundle (and is on GitHub).
+
+**Attack:** Anyone who can speak I²C to the chip — including a
+desoldered-OPTIGA bench attacker — composes a CBOR `SetObjectProtected`
+manifest targeting any OID (F1D0, E120, F1D1, F1D4, anything), signs
+it with the public Infineon sample private key, and sends it via
+`protected_update_start` → `protected_update_final`. The chip verifies
+the signature against the trust-anchor cert at the OID indicated by the
+manifest's `kid` field, accepts the manifest, and applies the payload
+**bypassing the target OID's Change AC entirely** — including
+`Change = NEV`, `Change = LcsO<Op` on an already-ratcheted object, and
+any `Change = Auto(F1D0)` from S-1's fix. The whole metadata
+hardening surface is moot in the presence of an attacker-controlled
+trust anchor.
+
+This means: even after S-1 lands, an attacker on the bus rewrites F1D0
+via Protected Update, then proceeds with the brute-force attack. S-1
+alone is insufficient. S-1 and S-2 MUST both close before ship.
+
+**Required fix (must all land together):**
+1. **Replace `TRUST_ANCHOR_CERT`** at `0xE0E3` with a PQ1-controlled
+   cert whose private key is held in the factory HSM and never
+   leaves it. The factory HSM signs production reset manifests; no
+   attacker can sign one. Document the HSM key custody in
+   `docs/production-todo.md` "Supply-chain attestation".
+2. **OR remove the trust anchor entirely** by overwriting `0xE0E3`
+   with junk metadata + ratcheting to LcsO=Operational frozen.
+   Cost: no field-recoverable OID reset path post-ship — any chip
+   that gets into a bad state requires factory rework. Acceptable if
+   the production provisioning flow is reliable enough.
+3. **Lock down every other potential trust-anchor surface:**
+   - Verify the chip's OID space for which OIDs can be set to
+     `DataType = TrustAnchor (0x11)`. Per Infineon SRM, OIDs
+     `0xE0E3..0xE0E8` are the trust-anchor pool. **Every one of
+     these MUST be either populated with PQ1-controlled certs or
+     ratcheted to LcsO=Op with empty/junk content** so an attacker
+     cannot install their own trust anchor on a free slot.
+   - `F1D7` (`apdu.rs:159` — "F1D7 is left spare") MUST be either
+     filled with junk-and-ratcheted, or its metadata must forbid
+     `DataType = 0x11`. Currently it's pristine and writable; an
+     attacker via Protected Update (using the sample key on
+     `0xE0E3`) could promote F1D7 to a trust anchor, install their
+     own pubkey, then sign with their own key on subsequent
+     attacks. (Closing the `0xE0E3` hole closes this transitively,
+     but defense-in-depth says lock F1D7 anyway.)
+   - Audit `0xE0E4..0xE0E8` (currently undocumented in the OID
+     map — production-todo §OPTIGA must enumerate and ratchet each).
+4. **Gate `optiga-reset-oids` and `reset::provision_trust_anchor` in
+   the `mode-production` `compile_error!` fence.** The current
+   dev-only feature flag is enforced by convention; make it a
+   compile-time guarantee.
+5. **Verify `kid` selection logic against the SRM.** The manifest's
+   unprotected `kid` header selects which on-chip object is used as
+   the verification anchor. Confirm the chip refuses if the selected
+   OID lacks `DataType = 0x11`. (Trezor's integration relies on this;
+   verify on our silicon revision.)
+6. **Sacrificial-part verification:** with the SHIP trust anchor
+   (PQ1-controlled), attempt a SetObjectProtected with a manifest
+   signed by the public Infineon sample key targeting `kid = 0xE0E3`
+   — MUST fail. Repeat with `kid = 0xE0E4..0xE0E8`, `kid = F1D7`,
+   and a few random OIDs — all MUST fail. Repeat with a manifest
+   signed by the factory HSM key — MUST succeed. Repeat the bypass
+   attempt against F1D0 after S-1's ratchet — MUST fail without a
+   valid signed manifest.
+
+**Cross-references:** `secure/src/optiga/reset.rs:14-18` admits this
+is a dev-only feature but doesn't enforce removal; `apdu.rs:159`
+notes `F1D7` as "spare"; `apdu.rs:405-498` is the Protected Update
+implementation; `mod.rs:220-290` is the bring-up provisioning path
+that writes the sample TA on first boot under `optiga-reset-oids`.
+
+---
+
+### S-3. Default (non-`optiga-hw-counter`) build has no silicon-enforced lockout
+
+**Severity:** Critical for any ship that doesn't enable
+`optiga-hw-counter` — and the default does not.
+
+**Where:** `secure/src/optiga/apdu.rs:930-940 build_metadata_auth_ref`
+(no LUC), `:956-965 build_metadata_counter` (soft counter at F1E1,
+`Change = Conf(E140)`).
+
+**The problem:** Without `optiga-hw-counter`, F1D0 has
+`Execute = ALW` — every HMAC-verify against it returns pass/fail with
+no chip-side count. The "10-attempt cap" is enforced **entirely in
+MCU firmware** by `gated_unlock` and the F1E1 soft counter
+(`Change = Conf(E140)`). On a desoldered chip this collapses to:
+
+- Speak I²C directly → F1D0.Execute=ALW lets the attacker burn
+  unbounded HMAC verifies; chip-side rate limiting is only the SEC
+  throttle (≤5s tmax, not a hard cap).
+- A PBS-extraction attacker satisfies `Conf(E140)` and rewrites the
+  F1E1 soft counter to zero.
+
+The on-board PIN gate is still bounded because `gated_unlock` is
+firmware-side and the MCU's page-124 counter decrements before the SE
+call. But the moment you remove the OPTIGA from the board, the chip
+contributes nothing to the rate limit. Even the firmware/MCU defense
+collapses if the attacker can reach the chip's bus directly via a
+hardware implant.
+
+**Required fix:**
+1. **`optiga-hw-counter` becomes mandatory for production builds.**
+   Add a `compile_error!` in the production-build fence that fires
+   when `mode-production` is on but `optiga-hw-counter` is off.
+2. **Make the soft-counter path a compile error in production**, not
+   just a "you should turn it on" convention. Add `#[cfg(not(any(
+   feature = "optiga-hw-counter", test)))]` `compile_error!` to
+   `build_metadata_counter` so it cannot be compiled into a
+   production binary at all.
+3. Remove `OID_COUNTER = 0xF1E1` references from the production
+   provisioning path, OR ratchet F1E1 to LcsO=Op with junk content
+   so it can never be re-armed as a counter.
+4. Reconcile the F1D5 / F1E1 / "soft counter" naming inconsistency
+   (`build_metadata_counter` docstring says `0xF1D5`, the constant
+   is `0xF1E1`, the duress-comment calls F1D5 "soft-counter" — three
+   different stories for one mechanism that's about to be deprecated
+   anyway).
+5. `make ship-checklist` asserts the production build enables
+   `optiga-hw-counter` (compile-time + post-build grep against the
+   feature set captured by `cargo metadata`).
+
+---
+
+### S-4. OPTIGA pre-ship lower-severity items (track + close, but not P0 ship blockers individually)
+
+These don't individually warrant blocking ship but together they
+represent the "obvious next-pass cleanups" that should be closed in
+the same hardening branch as S-1/S-2/S-3 rather than deferred.
+
+1. **Secret-OID `Change = Auto(F1D0) OR Conf(E140)` allows PBS-holder
+   to DoS-wipe the wallet.** `build_metadata_protected`
+   (`apdu.rs:898-915`) sets the OR-form so a PBS-extraction attacker
+   can overwrite (not read) entropy/master_secret — a wipe vector,
+   not a theft vector (read still requires Auto(F1D0) AND Conf(E140)
+   for shielded reads). Decide whether to drop the `Conf(E140)`
+   branch on Change to remove this DoS path; cost is losing the
+   admin-recovery path through the shielded channel.
+2. **`require_shielded = false` reads on VK / bootstrap_vk** come back
+   over plaintext I²C after F1D0 auth. Confirm in writing that those
+   are genuinely public verifying keys (consistent with the
+   `BootstrapKeyUsed` event posting them on-chain anyway) and nothing
+   confidential rides that path.
+3. **Duress wallet distinguishable to a PBS attacker.** The
+   byte-for-byte timing twin (`mod.rs:1748-1820`) holds against a
+   passive bus sniffer, but a PBS-extraction attacker decrypts the
+   shielded channel and sees the OIDs (E120 vs E121, F1D1..F1D4 vs
+   F1D6/8/9/A/B). State this explicitly in `docs/threat-model.md`
+   so users don't assume duress survives PBS loss.
+4. **Status-code → error mapping is unverified.** The
+   `0x02/0x07/0x0E/0x2F → Pin*` mapping in the OPTIGA driver isn't
+   obviously the SRM's device error codes. Bench-verify: (a) wrong
+   HMAC returns a non-zero status (not `0x00` with empty data); (b)
+   E120-at-threshold returns the status code the driver maps to
+   `PinLocked`. If not, `PinLocked` silently degrades to
+   `PinIncorrect` — cosmetic for security (chip still refuses), but
+   we'll misreport lockout to the user.
+5. **OID naming inconsistency** F1D5 vs F1E1 (covered by S-3 step 4
+   above — listed here so the doc cleanup happens in the same pass).
+
+---
+
 ## CRITICAL -- Blocks E2E
 
 ### 1. Dual-SE Entropy Split
@@ -1414,6 +1693,7 @@ When a task above is completed, update it here with the date and a one-line summ
 | 2026-05-20 | USB-C device enumeration fixed + validated on silicon | While closing the TZSC caveat's "USB still enumerates" half, found the device wouldn't enumerate over USB-C-to-USB-C and root-caused two real `secure/src/hw/usb_hw.rs::init_ucpd` register bugs (confirmed vs ST's authoritative LL driver + CMSIS): (1) it set `UCPD_CR.CC1TCDIS/CC2TCDIS=1` thinking they disable dead-battery, but those are the Type-C voltage *detector* disables (`LL_UCPD_TypeCDetectionCC1Disable()=SET_BIT(CC1TCDIS)`) → blinded the CC detectors → `UCPD_SR.TYPEC_VSTATE` stuck at 0; (2) it never disabled the actual dead-battery, which on STM32U5 is `PWR_UCPDR.UCPD_DBDIS` bit 0 (`LL_PWR_DisableUCPDDeadBattery()`), leaving the dead-battery Rd in parallel with the UCPD Rd → shifted CC voltage. Fix: leave detectors enabled (drop CCxTCDIS) + `PWR->UCPDR |= UCPD_DBDIS`. The CC pins (PA15/PB15) were CORRECT (verified vs Zephyr hal_stm32 STM32U585AII pinctrl; the "PB6/PB7" code comments were a wrong cross-family value). Validated on real B-U585I: enumerates as `1209:7051 "Generic PQSigner OS"` in ~1 s over USB-C (5V jumper on 5V_UCPD). Methodology gotcha that cost time: `probe-rs reset` halts the core on this setup (UCPD_CR read back 0 = unconfigured = firmware never ran) — runtime/USB tests must use `probe-rs run` or a power-cycle. Commit b325dd8. Ship cable is USB-C↔USB-C, so this was a real launch blocker. |
 | 2026-05-20 | Warm-reset follow-up — CHARACTERIZED (firmware re-init OK; USB-C-power-bootstrap edge only) | Localized the warm-reset non-recovery. Test: with the board on STABLE power (5V_STLK jumper) + USB-C connected, an NRST press → device drops → RE-ENUMERATES (`1209:7051`, fresh device number) in ~10 s. So **firmware re-init after a reset works whenever power is held — it is NOT a firmware bug.** The earlier 5V_UCPD non-recovery is purely the USB-C-*sole-power* re-bootstrap: an NRST cuts VBUS → board loses power, and that specific transient gets stuck (a clean unplug/replug = full POR → dead-battery → boot always works). Implication for the shipped (USB-C-only-powered) device: cold-plug ✅, brownout (full power loss → POR → dead-battery) should recover, watchdog reset (host holds VBUS through the brief reset → firmware re-runs) should recover (matches the 5V_STLK+NRST result); only the artificial "NRST while USB-C-sole-powered" transient got stuck, recoverable by replug. Severity downgraded to LOW. Remaining to 100%-confirm watchdog/brownout recovery: an LA capture of VBUS+CC1/CC2 through a reset cycle — DEFERRED (probing the CC lines is involved; replug always recovers). The DBDIS-persists-across-NRST hypothesis was disproven (PWR_UCPDR resets to 0). |
 | 2026-05-20 | USB-C standalone enumeration CONFIRMED + warm-reset follow-up | Definitive standalone validation: with the board self-powered from USB-C (5V_UCPD jumper) and NO debugger attached, an unplug/replug of the USB-C-to-USB-C cable cold-starts the board and enumerates it fresh as `1209:7051 "Generic PQSigner OS"` (new device number each plug) — the exact shipped scenario. So the init_ucpd fix (commit b325dd8) works end-to-end on real hardware. **Follow-up (robustness, non-blocking):** a WARM reset (NRST button / watchdog / brownout) *while* USB-C-powered did NOT re-enumerate until a physical replug — likely because `PWR_UCPDR.UCPD_DBDIS` (the dead-battery disable we set in firmware) persists across NRST, so post-warm-reset there's no passive dead-battery Rd to re-bootstrap VBUS (and the board, powered only by USB-C, can't present UCPD Rd until it has power → deadlock until unplug). Recoverable by unplug/replug. Harden by re-enabling dead-battery on the reset path (or confirm DBDIS reset-domain behavior); matters for brownout/watchdog resilience on a device whose only power is the USB-C cable. Tracked for a future session. |
+| 2026-05-26 | Verity verified-compilation track (ONESHOT_IMPLEMENT tasks 0/1 + 6/7/8 partial) | Closed the 3 `True := trivial` verifier-equivalence lemmas in `Verifier/Equivalence.lean` → real `rfl`-proven refinement equalities (refined FORS-PK reconstruction ≡ structural `Fors.reconstructForsPk`∘`deserialise`; per-layer step independent of the legacy byte-cursor); trimmed them from `known_trivial_theorems.txt`. Fixed two latent defects in `make verify-theft-free`: (a) the axiom-closure `awk` printed from `theft_free` to EOF and the greedy `sed` captured the last corollary block (so "seen" was only the 3 kernel axioms — silently broken when corollary `#print axioms` lines were appended); (b) `format_axiom_status.py` `KeyError: 'discharged'` against schema-v2 `AXIOM_STATUS.json`. Target now exits 0 end-to-end with an honest closure (A3 discharged; A1/A2/A4/A5 cited; 0 placeholder/misleading; only A4 + 3 A5 crypto-shapes remain `True`-typed cited-TCB, by design). Vendored Verity (pinned `b699e30` / Lean `v4.22.0` / mathlib `b100ad4` / evmyul `7785a9b`) at `contracts/verification/verity/` (source only, `.lake` gitignored); upstream examples build green (1124 modules, 0 project axioms). Ported the `PQMultiOwnable` counter+ownership core to the Verity EDSL with **I-4 (bootstrap-unremovable) + I-7 (cap-guard) proved against the EDSL source**, proof axiom closure = `{propext, Quot.sound}` (0 Verity axioms) → A3-by-construction for that core. Added `docs/VERITY_PIN.md`, `docs/VERITY_PORT_STATUS.md`, `make -C contracts/verification verity-build|verity-pqsigner`, and a Sepolia-guarded testnet deploy script (`script/DeployVerityArtifacts.s.sol` — hard mainnet refusal + post-deploy codehash attestation; compiles under solc 0.8.28, NOT broadcast). Pending (the research core, no estimates): EDSL ports of Factory/verifier/wallet + the Verity extensions they need (staticcall(0x02) precompile, fuel-bounded byte loops, bytes/Uint256-keyed mappings, ERC-7201 slots) = tasks 2-5; full A3-by-Verity `theft_free` rewire = task 6; A4/A5 stay cited-TCB; mainnet broadcast gated on explicit go + 0-7 green. |
 | 2026-05-28 | FSBL-rooted firmware fingerprint (manufacturer-trust elimination) | Closed the self-attested-measurement gap: the 8-BIP-39-word "OS Fingerprint" is now rendered by the WRP1A-locked FSBL *before* it branches into the slot, so a malicious update can no longer forge the words on the OLED. Implementation: (1) `bip39` crate gains a build-script-generated `WORDLIST_PREFIX5: [[u8; 5]; 2048]` (~10 KB) and a `firmware_fingerprint_lines(digest) → [[u8; 16]; 4]` pure function shared between FSBL and `secure/src/measured_boot.rs`; the heavy 18 KB `WORDLIST_FLAT` / `Mnemonic` / PBKDF2 / CT exact-lookup surface is now gated behind the `full-wordlist` feature (on by default for secure-world, off for FSBL). (2) `fsbl/src/verify.rs::verify_images` returns `Option<[u8; 32]>` (the verified secure-image digest) so the FSBL render path is driven by the same trusted bytes FSBL just SHA-256'd. (3) New `fsbl/src/oled.rs` + `glyphs.rs` ports the SSD1306 + I2C1 driver + the 5×8 ASCII font (vendored from `secure/assets/font_5x8.raw`) without any embedded-graphics / secure_log / hw::mmio dep — ~3.5 KB compiled. (4) `fsbl/src/main.rs` calls `render::render_fingerprint(&secure_digest)` after slot selection and before `branch::into_slot`. FSBL release footprint = 30,888 / 32 KB (1,880 B headroom). Tests: 12 in `bip39/tests/prefix5_roundtrip.rs` (prefix table integrity + fingerprint_lines layout pins), 1 in `fsbl-tests/tests/footprint.rs` (CI gate ≤ 32 KB), 6 in `fsbl-tests/tests/source_invariants.rs` (verify_images returns digest, FSBL renders before branch, no-OLED graceful fallback, measured_boot self-attests, render uses bip39's pure fn), 3 in `fwmeasure/tests/byte_identity.rs` (host fwmeasure output matches FSBL render for same digest), 3 `#[ignore]`d QEMU integration placeholders documenting future empirical proofs. Docs: new `docs/measured-boot.md` (threat model + trust chain + user workflow), updates to `docs/firmware-update.md`, `docs/reproducible-builds.md`, `CLAUDE.md` Lifecycle. Threat model: defends post-provisioning (any update can't fake the words); does NOT defend factory-time integrity (malicious vendor at provisioning) — the user must compare the very first boot's words to `./measure.sh` to establish the baseline. |
 | 2026-05-28 | USB-C warm-reset re-enumeration SOLVED in firmware (cc_open_then_reset) | The warm-reset non-recovery (a firmware `sys_reset` over USB-C didn't re-enumerate without a physical replug, because VBUS stays asserted by the host so Linux's typec layer keeps the port bound) is now fixed in firmware. Root insight: force a **real Type-C detach** by holding CC fully open long enough (~1.5 s, past tCCDebounce) before the reset — then the post-reset dead-battery Rd re-engages and the host sees a fresh attach. To open CC you must drop BOTH device-side Rd sources (UCPD `CCENABLE`+`ANAMODE` cleared AND `PWR_UCPDR.UCPD_DBDIS=1`) while leaving the TCPP03 EN (PB5) HIGH — driving PB5 low is the trap (it puts the TCPP03 in dead-battery mode = Rd presented, opposite of open; that's why the earlier 200 ms + PB5-low attempts failed). New `hw::usb_hw::cc_open_then_reset()`; wired into `cmd_fw_commit` (reboot into new firmware) + `cmd_fw_begin::arm_wipe_and_reset` (reboot into wiped device). `hw::tzic` stays on the fast `soft_disconnect_then_reset` (IRQ-context). HW-PROVEN via the `fwup-transport-hw-iwdg` wipe-trigger: kernel dmesg logged `USB disconnect` → `new full-speed USB device number N` (1209:7051) re-attach with NO replug, device stable after; observed across multiple runs (device 9→10→11). Latency ≈ 20-25 s (dominated by device boot in the e2e build; production boot is faster). Committed on the dmesg/usbwatch evidence — a single clean automated full-test PASS was rig-limited (the bench USB transport degraded into a flaky heavy-BEGIN hang mid-session, proven NOT cc_open-related: the cc_open-less baseline hangs identically). Re-run `make fwup-transport-hw-iwdg` on a healthy rig for the green checkmark. |
 | 2026-05-28 | Evaluated Trezor no-reset FW handoff — REJECTED, we're already at parity | Prompted by the #26 USB-C warm-reset work ("is Trezor's branch-not-reset way better?"). Read `/home/nicola/repos/trezor-firmware`: on **STM32U5** Trezor's firmware→bootloader transition is `NVIC_SystemReset()` (`bootutils.c:161`); only the bootloader→firmware leg is a `jump_to_next_stage()` branch (`bootloader/main.c:551`); the direct `jump_to_vectbl` firmware→verifier path is `#elif STM32F4`-only (they reset, not warm-branch, across the firmware↔verifier boundary on U5 — TrustZone state makes a warm branch unsafe). Their UCPD code is just `HAL_PWREx_DisableUCPDDeadBattery()` (`startup_init.c:259`, == our `UCPD_DBDIS`) with no CCENABLE/ANAMODE/TCPP03 → passive fixed-Rd CC, vs our UCPD-sink + TCPP03. **We already match the U5 pattern**: commit → `sys_reset` → FSBL → branch into the new A/B slot; both re-verify signature every boot. So it's security PARITY, not "we beat Trezor." The only "save-the-reset" variant — a runtime direct slot-A→slot-B branch — was rejected because it bypasses the FSBL per-boot re-verify + FSBL-rooted measured-boot fingerprint (commit `7d0ec47`), i.e. strictly less secure than our current design. The warm-reset re-enumeration gap was purely CC hardware and is already solved by `cc_open_then_reset` (#26). Net: no architectural change. See memory `trezor-fw-handoff-parity`. |

@@ -56,22 +56,215 @@ passed against sacrificial parts.
       Production chips land here once the PBS derivation is fully
       validated and we're ready to seal the chip's pairing against
       tampering.
-- [ ] **F1D0 (AUTH_REF) LcsO=Operational.** Metadata frozen at
-      `{Change=ALW, Read=NEV, Exec=ALW, DataType=AUTHREF}`. After
-      commit, the chip hard-enforces "PIN HMAC auth only" semantics
-      on this slot; attacker with bus access cannot loosen the policy.
+- [ ] **F1D0 (AUTH_REF) — TIGHTEN `Change` AC BEFORE LcsO=Operational. SHIP BLOCKER S-1. DO NOT REGRESS.**
+      The bring-up metadata
+      `{Change=ALW, Read=NEV, Exec=ALW | LUC(E120), DataType=AUTHREF}`
+      written by `apdu::build_metadata_auth_ref` / `build_metadata_auth_ref_luc`
+      (`secure/src/optiga/apdu.rs:930`, `:1059`) MUST be replaced with
+      a tightened variant **before** the LcsO ratchet to Operational.
+      Required final state on a shipping chip:
+      `{Change=Auto(F1D0), Read=NEV, Exec=LUC(E120), DataType=AUTHREF}`
+      then ratchet to LcsO=Operational so the metadata becomes
+      immutable. Acceptable fallbacks if sacrificial-part testing
+      reveals `Auto(F1D0)` doesn't behave as expected on our firmware
+      revision: `Change = NEV` (immutable; PIN change requires
+      factory reset) or `Change = LcsO<Op` (same effect after
+      ratchet). **`Change = Conf(E140)` is NOT acceptable** — a
+      PBS-extraction attacker satisfies it and rewrites F1D0 the
+      same way as `ALW`.
+
+      **Why this is a ship blocker (desoldered-OPTIGA brute-force).**
+      With `Change=ALW`, an attacker who desolders the OPTIGA and
+      attaches it to their own I²C bench can: (1) overwrite F1D0 with
+      a chosen 32-byte HMAC key (plaintext write, no credential
+      required); (2) HMAC-verify against F1D0 with their chosen key —
+      verify succeeds → `Auto(F1D0)` latched; (3) reset E120 to
+      `(0, limit)` because E120's `Change` AC is `Auto(F1D0)` and they
+      just satisfied it; (4) burn the silicon lockout indefinitely,
+      yielding unbounded PIN brute-force on the desoldered chip.
+      `secure/src/optiga/mod.rs:1238 reset_e120_via_transient_auth`
+      documents the exact attack as the *legitimate* admin-wipe path —
+      the bench attacker has the same capability minus the firmware
+      politeness. Even though `half_O` at F1D1 still requires
+      `Conf(E140)` to read (so the seed half isn't directly leaked
+      without also extracting PBS from the MCU), this regression
+      destroys the LUC defense layer that the threat model
+      (`docs/threat-model.md:125`) advertises as the primary online
+      brute-force bound on the OPTIGA half.
+
+      **Why `Change=Conf(E140)` is NOT sufficient.** A
+      PBS-extraction attacker (e.g. via STM32U585 RDP regression /
+      fault injection — there is published research against RDP1 and
+      side-channel work against RDP2) satisfies `Conf(E140)`, rewrites
+      F1D0 to their own HMAC key, and re-runs the same attack.
+      `LcsO<Op` (combined with actually ratcheting LcsO to
+      Operational) forecloses this branch entirely because the chip's
+      silicon LcsO state machine refuses the metadata write regardless
+      of PBS possession. **The ship config MUST use `LcsO<Op` (or
+      `NEV`), not `Conf(E140)`.**
+
+      **What this costs.** With `Change = Auto(F1D0)` (the primary
+      choice) — nothing. User-driven PIN change is preserved: the
+      user enters the current PIN, F1D0 auth succeeds, Auto(F1D0)
+      session state is granted, and `SetDataObject(F1D0, new_hmac)`
+      succeeds. With the `NEV` / `LcsO<Op` fallbacks — F1D0 becomes
+      immutable, so user-driven PIN change requires factory-reset +
+      reprovision (wipes both SEs, user re-enters mnemonic, picks new
+      PIN). Same posture as Trezor's OPTIGA integration. Decide
+      between primary and fallback during the sacrificial-part
+      verification step (item 3 below) and document the decision
+      before the ratchet.
+
+      **Implementation checklist before this gate flips:**
+      1. Add `apdu::build_metadata_auth_ref_ship()` returning
+         `{Change=Auto(F1D0), Read=NEV, Exec=LUC(E120),
+         DataType=AUTHREF}`. Verify the AC byte encoding by reading
+         back the metadata after `set_metadata` and comparing against
+         the SRM §"Access Conditions" table. (The encoding constants
+         in `apdu.rs:200-260` have been independently audited as
+         correct — ALW=0x00, NEV=0xFF, qualifiers `==/>/<` =
+         0xFA/0xFB/0xFC, `&&/||` = 0xFD/0xFE, LcsO ref = 0xE1,
+         LcsO set = 0xC0, Change/Read/Execute tags = 0xD0/0xD1/0xD3,
+         DataType tag = 0xE8, TrustAnchor type = 0x11. Auto(OID) uses
+         the auto-reference tag — confirm against SRM before the
+         `_ship()` builder lands.)
+      2. Register `build_metadata_auth_ref` and
+         `build_metadata_auth_ref_luc` (the bring-up `Change=ALW`
+         variants) in the `compile_error!` fence under
+         `mode-production` in `secure/src/nsc/mod.rs:98-116`.
+      3. Verify on a sacrificial part: provision F1D0 with the
+         tightened metadata at LcsO=Creation, ratchet F1D0 to
+         LcsO=Operational, then attempt a plaintext `SetDataObject`
+         on F1D0 — MUST fail with `OPTIGA_ERR_ACCESS_DENIED`.
+         Attempt the same write inside an opened Shielded Connection
+         — MUST also fail (proving Conf(E140) does not satisfy
+         `LcsO<Op` after the ratchet). Attempt
+         `reset_e120_via_transient_auth` — MUST fail at the F1D0
+         overwrite step. If any of these succeed, the AC encoding is
+         wrong and shipping with this metadata is equivalent to
+         shipping `Change=ALW` permanently.
+      4. Confirm the LUC increment-on-failed-auth property holds with
+         a tearing/glitch test: power-yank between the wrong-PIN APDU
+         response and the E120 readback, repeat ≥1000×, assert E120
+         never lags the attempt count. Required because the LUC's
+         failure-side increment semantics are not explicitly
+         documented by Infineon; the happy-path increment is
+         empirically validated by `optiga-hw-counter-e2e`
+         (`secure/src/main.rs:1844-1854`) on TRUSTMV3SHIELDTOBO1 but
+         the tearing/glitch case is not.
+      5. Add the boundary case to `optiga-hw-counter-e2e`:
+         `current = limit - 1` + correct PIN → must still authorize
+         and reset E120 to 0. Today the test only resets from low
+         `current`.
+      6. `make ship-checklist` (see `docs/security-review-2026-05.md`
+         §F) asserts that a release binary's provisioning path
+         calls `build_metadata_auth_ref_ship()` and never the
+         bring-up variants. Static grep + compile-time fence both.
+
+      **Cross-references.** `docs/security-review-2026-05.md` §C-N
+      (this issue); `docs/threat-model.md` §"S3 — auth-equivalent"
+      (advertises the 10-attempt bound that this regression breaks);
+      `secure/src/optiga/mod.rs:1216-1236` (admits `Change=ALW`
+      enables the transient-auth bypass); `secure/src/optiga/apdu.rs:920-924,
+      1052-1054` (doc comments flag the dev-only status of the
+      current variants).
 - [ ] **F1D1 / F1D2 / F1D3 / F1D4 LcsO=Operational.** Entropy / master
       secret / VK / bootstrap VK. Metadata frozen at `{Change=Auto(F1D0)
       OR Conf(E140), Read=Auto(F1D0) OR Conf(E140)}`. Data remains
       writeable via PIN-HMAC auth or shielded connection — exactly
       the wallet's read/write envelope.
-- [ ] **F1E1 (COUNTER) LcsO=Operational.** Metadata frozen at
-      `{Change=Conf(E140), Read=ALW}`. Counter writes require shielded
-      connection (stronger than PIN auth), which is the anti-brute-
-      force gate.
+- [ ] **F1E1 (COUNTER) LcsO=Operational — OR remove entirely (SHIP BLOCKER S-3).**
+      Production builds MUST enable `optiga-hw-counter`. In that build
+      F1E1 is unused — the counter is the silicon LUC at E120. F1E1
+      MUST therefore either be (a) ratcheted to LcsO=Op with junk
+      content so it cannot be re-armed as a counter on a desoldered
+      chip, or (b) removed from the provisioning sequence entirely.
+      The currently-documented `{Change=Conf(E140), Read=ALW}` shape
+      is the soft-counter path that S-3 deprecates: `Conf(E140)` is
+      bypassable by a PBS-extraction attacker, and on a chip without
+      hw-counter the F1D0 Execute=ALW lets a desoldered-chip attacker
+      burn unbounded HMAC verifies without ever touching F1E1. The
+      mitigation is: enforce `optiga-hw-counter` at compile time (see
+      S-3 in `docs/work-todo.md`), then make `build_metadata_counter`
+      a `compile_error!` under `mode-production`, then write F1E1
+      either as a frozen-junk slot or skip it entirely.
+
+      Also reconcile the F1D5 / F1E1 / "soft-counter" naming drift
+      across `apdu.rs:151`, `apdu.rs:956 build_metadata_counter`
+      docstring, and the duress-comment in `mod.rs`. All three name
+      the same mechanism. Pick one (delete the mechanism) and remove
+      the other two stories.
 - [ ] **Global chip LcsO (0xE0C0) = Operational** if we ever transition
       it. Currently we leave this alone; if we ever write it, it goes
       in this doc first.
+
+#### SHIP BLOCKER S-2 — Trust-anchor cleanup at OID `0xE0E3..0xE0E8`
+
+The single biggest hole in the OPTIGA shipping posture, and the one
+that defeats EVERY other hardening including S-1's metadata tightening
+and every LcsO=Operational ratchet above. **Cannot ship while this is
+open. There is no `optiga-lock-operational` flag value that closes it
+on its own — this requires a separate factory-controlled cert
+substitution.**
+
+The bring-up flow under `optiga-reset-oids`
+(`secure/src/optiga/reset.rs`) provisions `0xE0E3` with the Infineon
+**sample** EC P-256 cert from `samples/integrity/sample_ec_256_priv.pem`.
+The matching private key is in Infineon's public example bundle.
+Anyone holding it can sign a SetObjectProtected manifest the chip
+accepts, and a valid manifest **bypasses the target OID's Change AC
+entirely**, including `Change = NEV` and `Change = Auto(F1D0)` on
+ratcheted objects.
+
+Required for ship (each item is one-way per chip):
+
+- [ ] **Replace the cert at `0xE0E3` with a PQ1-factory-HSM-controlled
+      cert** whose private key is generated inside the factory HSM
+      and never exported. The HSM signs production reset manifests; no
+      attacker can sign one. OR overwrite `0xE0E3` with junk + ratchet
+      to LcsO=Op so there is no functional trust anchor at all (cost:
+      no field-recoverable OID reset post-ship — every bad-state chip
+      requires factory rework).
+- [ ] **Enumerate and ratchet `0xE0E4..0xE0E8`** (per Infineon SRM,
+      the trust-anchor pool). Each MUST be either PQ1-controlled
+      content + LcsO=Op, OR junk + LcsO=Op. None may be left in a
+      state where an attacker can write their own cert + `DataType =
+      0x11` (TrustAnchor).
+- [ ] **Lock `0xF1D7`** (currently "left spare" per `apdu.rs:159`).
+      Either fill with junk + ratchet to LcsO=Op so its metadata
+      becomes immutable, or — if any other F1Dx slots remain spare —
+      apply the same treatment to all of them. Any object whose
+      metadata is mutable AND whose data_type can be set to `0x11`
+      is a usable trust anchor surface.
+- [ ] **`compile_error!` fence** `optiga-reset-oids` and
+      `reset::provision_trust_anchor` in `secure/src/nsc/mod.rs`'s
+      production-build fence. Currently the feature flag is dev-only
+      by convention; make it a compile-time guarantee that no
+      production binary can write the sample TA cert.
+- [ ] **Document the factory HSM key custody** (which device, which
+      key slot, who has authorization to sign manifests, what
+      authorization workflow gates a signing operation). Pin this in
+      §"Supply-chain attestation" below.
+- [ ] **Sacrificial-part verification:** with the production trust
+      anchor in place at `0xE0E3` and all other TA-pool OIDs +
+      `0xF1D7` ratcheted:
+      - Manifest signed by the public Infineon sample key targeting
+        `kid = 0xE0E3` → MUST fail.
+      - Same manifest targeting `kid ∈ {0xE0E4..0xE0E8, 0xF1D7,
+        random OIDs}` → MUST fail.
+      - Manifest signed by the factory HSM key → MUST succeed.
+      - Manifest attempting to rewrite F1D0 after S-1's ratchet,
+        signed by the public Infineon sample key → MUST fail.
+      - Manifest attempting to promote any spare OID to
+        `DataType = 0x11`, signed by the Infineon sample key → MUST
+        fail (chip should reject the metadata change post-ratchet
+        regardless).
+- [ ] **Verify on silicon** that the chip enforces "`kid` must point
+      at an OID with `DataType = 0x11`" — i.e. the chip refuses a
+      manifest whose `kid` points at a regular data object even if
+      that object's content happens to be a valid X.509 cert.
+      Trezor's integration relies on this; verify on our chip
+      revision before depending on it.
 
 #### Pre-commit checklist (sacrificial part, each run fresh)
 

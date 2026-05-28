@@ -34,6 +34,101 @@ own passes.
 
 ## Not fixed (cannot be done from firmware alone)
 
+### C-4. OPTIGA F1D0 `Change = ALW` — desoldered-chip PIN brute-force (SHIP BLOCKER S-1)
+
+`secure/src/optiga/apdu.rs:930` (`build_metadata_auth_ref`) and `:1059`
+(`build_metadata_auth_ref_luc`) emit `Change = AC_ALW` on F1D0. An
+attacker who desolders the OPTIGA and attaches it to a bench rig can
+overwrite F1D0's HMAC secret with a chosen key (no credential
+required), self-auth, then reset E120 to drain the LUC lockout —
+unbounded PIN brute-force per chip. The legitimate
+`reset_e120_via_transient_auth` admin-wipe path
+(`secure/src/optiga/mod.rs:1238`) documents the exact attack and
+admits it depends on `Change=ALW`.
+
+Direct seed leakage from F1D1 still requires `Conf(E140)` (the
+Shielded Connection PBS), which lives only on the paired MCU and is
+re-derived from DHUK each boot — so this regression does not
+*directly* expose `half_O`. But it eliminates the LUC layer the threat
+model bills as the primary online brute-force bound on the OPTIGA
+half, and the dual-SE XOR split becomes the only remaining gate.
+
+Fix is metadata + LcsO ratchet, not a firmware patch in isolation —
+documented fully in `docs/production-todo.md` "OPTIGA Trust M V3 —
+LcsO transitions" (F1D0 item, expanded 2026-05-28) and tracked as
+ship blocker `S-1` at the top of `docs/work-todo.md`.
+
+**Primary fix:** `Change = Auto(F1D0)` (PIN change requires current
+PIN) + ratchet to LcsO=Op. **Fallbacks** (if `Auto(F1D0)` doesn't
+work on our firmware revision): `NEV` or `LcsO<Op`. **NOT acceptable:**
+`Conf(E140)` — bypassable by a PBS-extraction attacker.
+
+**Closure is necessary but not sufficient** — see C-5 (Trust Anchor)
+which can bypass any F1D0 hardening. Both must close together.
+
+CI / `make ship-checklist` MUST hard-fail until: (a) a
+`build_metadata_auth_ref_ship()` exists with `Change=Auto(F1D0)` (or
+`NEV`/`LcsO<Op` fallback), (b) the bring-up `_alw` variants are in the
+`mode-production` `compile_error!` fence, (c) sacrificial-part
+verification of post-ratchet F1D0 immutability passes, (d) the
+tearing/glitch test on the LUC failed-auth increment passes.
+
+### C-5. OPTIGA trust-anchor at `0xE0E3` is the Infineon public sample cert (SHIP BLOCKER S-2)
+
+`secure/src/optiga/reset.rs:26-49` provisions `TRUST_ANCHOR_OID =
+0xE0E3` with the DER X.509 cert from Infineon's
+`samples/integrity/sample_ec_256_priv.pem`. **The matching EC P-256
+private key is in Infineon's public example bundle.** Anyone with the
+sample key can sign a `SetObjectProtected` manifest the chip will
+accept, and a valid manifest **bypasses the target OID's Change AC
+entirely** — including any of S-1's proposed F1D0 fixes
+(`Auto(F1D0)`, `NEV`, `LcsO<Op`).
+
+This makes S-1 alone insufficient: an attacker on the bus rewrites
+F1D0 via Protected Update, then proceeds with the brute-force attack
+unimpeded. Every other OPTIGA Change-AC hardening on the chip is
+subordinate to the trust-anchor surface.
+
+Affects: every locked OID, every F1Dx secret, the LUC counter E120,
+F1E1, every spare OID (F1D7 is explicitly "left spare" per
+`apdu.rs:159` and can be promoted to `DataType=0x11` via Protected
+Update with the sample key).
+
+**Required fix (see production-todo.md "SHIP BLOCKER S-2"):**
+1. Replace `0xE0E3` cert with a PQ1-factory-HSM-controlled cert
+   whose private key never leaves the HSM (or remove the trust
+   anchor entirely + lose field-recoverable OID reset).
+2. Enumerate and lock `0xE0E4..0xE0E8` (the rest of the trust-anchor
+   pool).
+3. Fill/lock `0xF1D7` and any other spare OIDs.
+4. `compile_error!` gate `optiga-reset-oids` and
+   `reset::provision_trust_anchor` in the production-build fence.
+5. Sacrificial-part verification that manifests signed by the public
+   Infineon sample key are rejected for every plausible `kid`.
+
+### C-6. OPTIGA soft-counter path defeats desoldered-chip lockout (SHIP BLOCKER S-3)
+
+The default build (without `optiga-hw-counter`) emits
+`build_metadata_auth_ref` (`Execute = ALW`, no LUC) +
+`build_metadata_counter` (soft counter at F1E1, `Change = Conf(E140)`).
+The "10-attempt cap" is enforced **entirely in MCU firmware** by
+`gated_unlock` and the F1E1 soft counter. On a desoldered chip this
+collapses: F1D0.Execute=ALW allows unbounded HMAC verifies against the
+chip, and a PBS-extraction attacker rewrites the F1E1 soft counter
+through `Conf(E140)`.
+
+**Required fix:**
+1. `optiga-hw-counter` becomes mandatory for production
+   (`compile_error!` in the `mode-production` fence when off).
+2. `build_metadata_counter` becomes a `compile_error!` in production
+   builds (`#[cfg(not(any(feature="optiga-hw-counter", test)))]
+   compile_error!`).
+3. Remove `OID_COUNTER = 0xF1E1` from production provisioning, OR
+   ratchet F1E1 to LcsO=Op with junk content.
+4. Reconcile F1D5 / F1E1 / "soft-counter" naming drift across
+   `apdu.rs:151`, `apdu.rs:956 build_metadata_counter` docstring, and
+   the duress-comment.
+
 ### C-3. Pre-production TZSC/SAU regression
 `secure/src/sau.rs:173-181, 232`. `TZSC_SECCFGR{1,2,3} = 0` (everything NS) and SAU region 3 maps the entire peripheral window NS. Cannot be tightened until the GTZC2_TZSC base address is confirmed against RM0456 — the first guess (`0x5203_4400`) bus-faults on touch. This is a hardware/bring-up problem, not a software fix. CI must hard-fail any release build whose `sau::init()` leaves the SECCFGRx registers cleared.
 
