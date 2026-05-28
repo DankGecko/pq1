@@ -168,6 +168,38 @@ impl Se050 {
         }
     }
 
+    /// Re-initialize SE050 state for a fresh handshake. Used by the
+    /// `se050-stress` harness between tests to isolate any SCP03 / T=1'
+    /// state perturbation from one test bleeding into the next.
+    ///
+    /// Clears `ready`, replaces `scp03` with a zeroed `Scp03Session`,
+    /// then runs the normal `init()` sequence (T=1' reset, applet
+    /// SELECT, SCP03 establish). Caller is responsible for ensuring no
+    /// outstanding session IDs from the prior handshake are reused —
+    /// every fresh `init()` yields a new MCV / counter pair.
+    #[cfg(feature = "se050-stress")]
+    pub fn reinit(&mut self) -> Result<(), Se050Error> {
+        self.ready = false;
+        self.scp03 = Scp03Session::new();
+        self.init()
+    }
+
+    /// Split-borrow accessor exposing the T=1' state and SCP03 session
+    /// as two co-living mutable references. Used by the `se050-stress`
+    /// harness (`StressCtx`, `oid::admin_sweep_*`) to call the
+    /// crate-private `apdu::*` helpers, which take both refs in the
+    /// same signature.
+    ///
+    /// Implemented as a single accessor so the borrow checker sees the
+    /// two fields as disjoint (the existing `run_*_roundtrip` impls
+    /// use `&mut self.t1` / `&mut self.scp03` directly for the same
+    /// reason). Production code MUST go through the typed helpers;
+    /// this exists for in-tree testing only.
+    #[cfg(feature = "se050-stress")]
+    pub(crate) fn t1_scp03_mut(&mut self) -> (&mut T1State, &mut Scp03Session) {
+        (&mut self.t1, &mut self.scp03)
+    }
+
     /// Initialize the SE050: T1oI2C reset, applet SELECT, SCP03 establish.
     ///
     /// Called lazily on first use. Subsequent calls are no-ops.

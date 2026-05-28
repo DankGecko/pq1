@@ -356,3 +356,4 @@ After completing implementation tasks, check `docs/work-todo.md` and tick off ma
 - `docs/handoff-modularity-refactor.md` — workspace-crate extraction phases
 - `docs/handoff-unsafe-reduction.md` — per-peripheral migration of MMIO `read_volatile`/`write_volatile` to `hw::mmio::{Reg32, RoReg32}`; queue + footguns + irreducible categories
 - `docs/dev-board-setup.md`, `docs/hardware_requirements.md`, `docs/trezor-comparison.md`
+- `docs/se050-stress-harness.md` — `make se050-stress*` on-silicon stress runner; how to run, read output, add a test, and the S-5/S-6 silicon verifiers

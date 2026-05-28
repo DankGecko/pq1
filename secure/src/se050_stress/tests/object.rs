@@ -1,0 +1,56 @@
+//! Object IO stress probes — boundary lengths, churn.
+
+use crate::stress_test;
+use crate::se050_stress::{StressCtx, StressResult, Tier};
+
+// ---------------------------------------------------------------------------
+// 4. extended_lc_boundary
+// ---------------------------------------------------------------------------
+
+/// Write+read+delete a sentinel pattern at several payload lengths
+/// that straddle the SCP03 extended-Lc threshold. The `wrap_apdu` /
+/// `send_apdu` path in `secure/src/se050/apdu.rs` handles short-Lc
+/// (1-byte) and extended-Lc (0x00 + 2-byte) commands separately;
+/// length-encoding off-by-ones bite at the 255↔256-byte boundary.
+///
+/// Also exercises the round-trip through `unwrap_response` at varying
+/// body sizes — a subtle bug in AES-CBC padding or R-MAC offset
+/// computation would surface here as a length mismatch or
+/// `Se050Error::Scp03`.
+fn extended_lc_boundary(ctx: &mut StressCtx) -> StressResult {
+    // Lengths that straddle the short/extended-Lc boundary.
+    const LENGTHS: &[usize] = &[1, 8, 32, 254, 255, 256, 257, 512, 1024];
+    // Source pattern: cycling byte counter. Keeps each length's
+    // payload distinguishable in a wire capture.
+    let mut src = [0u8; 1024];
+    for (i, b) in src.iter_mut().enumerate() {
+        *b = (i & 0xFF) as u8;
+    }
+
+    let target = ctx.oid(0x01);
+    for (idx, &len) in LENGTHS.iter().enumerate() {
+        ctx.set_iter(idx as u32);
+
+        // Make sure the slot is clean before write.
+        ctx.delete_scratch(target)?;
+        ctx.write_scratch(target, &src[..len])?;
+
+        let mut got = [0u8; 1024];
+        let n = ctx.read_scratch(target, &mut got)?;
+        if n != len {
+            secure_log!(
+                "[S][stress][object] len={} read returned {} bytes",
+                len, n,
+            );
+            return Err(crate::se050_stress::StressError::Assertion {
+                what: "read length mismatch",
+                iter: idx as u32,
+            });
+        }
+        ctx.assert_eq("payload round-trip", &got[..n], &src[..len])?;
+
+        ctx.delete_scratch(target)?;
+    }
+    Ok(())
+}
+stress_test!(EXTENDED_LC_BOUNDARY, "object_extended_lc_boundary", Tier::Safe, extended_lc_boundary);

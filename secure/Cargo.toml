@@ -676,6 +676,17 @@ dual-se-multi-unlock-e2e = ["dual-se"]
 # correctness. Use `make pin-gate-e2e`.
 pin-gate-e2e = ["dual-se"]
 se050-crash-safety-e2e = ["se050"]  # 2-phase test: partial wipe + reset + resume. Use `make se050-crash-safety-e2e`.
+# On-silicon SE050 stress-test harness. Catalog-driven runner that boots
+# the secure world, runs every registered `stress_test!` against the real
+# SE050 (no `mock-se`), and reports PASS/FAIL via `secure_log!` semihosting.
+# Adding a new test is one function + one macro invocation in
+# `secure/src/se050_stress/tests/*.rs` — no Cargo, main.rs, or Makefile
+# edits per test. Stress-test OIDs live in carve-out range `0x7B5F_*`,
+# never touch the v6 production range `0x7B10_*`. Use `make se050-stress`
+# (Safe tier) / `make se050-stress-destructive` (incl. counter-burning
+# tests) / `make se050-stress-only-<name>` (single test) / `make
+# se050-stress-list` (host-side catalog).
+se050-stress = ["se050"]
 spi1-arduino = []  # Use SPI1/PE12-PE15 (Arduino R3 headers) instead of SPI2/PB12-PB15 for TROPIC01
 stsafe-probe = ["stm32u585", "mock-se"]  # I2C2 bus scan to detect on-board STSAFE-A110
 gpio-buttons = ["stm32u585"]  # GPIO button driver: PI2 (LEFT) + PA15 (RIGHT) on CN14

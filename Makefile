@@ -1005,6 +1005,110 @@ se050-admin-wipe-e2e:
 	@echo "==> Running admin-wipe e2e (watch semihosting output)..."
 	probe-rs run --chip STM32U585AIIx $(SECURE_ELF)
 
+# ---------------------------------------------------------------------------
+# SE050 on-silicon stress-test harness — `make se050-stress*`
+# ---------------------------------------------------------------------------
+# Catalog-driven runner that exercises the SE050 driver against real
+# silicon. Tests live under `secure/src/se050_stress/tests/*.rs`;
+# adding one is a function + a `stress_test!` macro line + a one-row
+# append to `secure/src/se050_stress/tests/mod.rs::ALL_TESTS`. No
+# Cargo.toml / Makefile edits per test.
+#
+# Output channel: `secure_log!` semihosting (probe-rs stdout). The
+# recipes scrape the log for `=== SUMMARY: P PASS / F FAIL / S SKIP ===`
+# and exit 0 only when F=0.
+#
+# Carve-out OIDs `0x7B5F_*`; production `0x7B10_*` is never touched.
+# Prereq: board has been through `make flash-hw-dual-se-oled-standalone`
+# at least once so TrustZone option bytes are set. The recipes below
+# do NOT reconfigure them.
+#
+# `make se050-stress`              — run all Tier::Safe tests
+# `make se050-stress-destructive`  — Safe + Destructive (drives UserID
+#                                    attempt counters to lockout)
+# `make se050-stress-only-<name>`  — single test by name (rebuilt with
+#                                    SE050_STRESS_ONLY filter)
+# `make se050-stress-list`         — host-side catalog dump (no flash)
+
+SE050_STRESS_FEATURES = se050-stress,ui-oled,stm32u585,debug-log,e2e-test,otp-hardcoded-master-key,usb
+
+# Cache-bust the secure-crate build whenever the SE050_STRESS_* env vars
+# change. cargo doesn't include env vars in its fingerprint, so without
+# this a re-run with a different filter would silently reuse the prior
+# binary. `date +%s` makes every invocation a distinct cfg flag.
+SE050_STRESS_RUSTFLAGS = $(RUSTFLAGS_SECURE_HW) --cfg=stress_build="$(shell date +%s)"
+
+.PHONY: se050-stress se050-stress-destructive se050-stress-list
+
+# Common pass/fail scrape — runs probe-rs, captures stdout, returns
+# 0 iff `=== SUMMARY:` appears AND the FAIL count is 0. Parameterised
+# so all three recipes share the same shell logic.
+#  $(1) = display label
+define SE050_STRESS_RUN
+	@log=$$$$(mktemp); rc_file=$$$$(mktemp); \
+	{ timeout 600 probe-rs run --chip STM32U585AIIx $(SECURE_ELF) 2>&1; echo $$$$? >"$$$$rc_file"; } | tee "$$$$log"; \
+	rc=$$$$(cat "$$$$rc_file"); \
+	if ! grep -q "=== SUMMARY:" "$$$$log"; then \
+		echo "==> $(1): FAIL (no SUMMARY line, probe-rs rc=$$$$rc, log=$$$$log)"; exit 1; \
+	fi; \
+	fail_count=$$$$(grep "=== SUMMARY:" "$$$$log" | head -1 | sed -E 's/.* ([0-9]+) FAIL .*/\1/'); \
+	if [ "$$$$fail_count" = "0" ]; then \
+		echo "==> $(1): PASS"; rm -f "$$$$log" "$$$$rc_file"; exit 0; \
+	fi; \
+	echo "==> $(1): FAIL ($$$$fail_count test failures, probe-rs rc=$$$$rc, log=$$$$log)"; exit 1
+endef
+
+# Run the full Tier::Safe catalog.
+se050-stress:
+	@echo "==> Building SE050 stress firmware (Tier::Safe)..."
+	$(RUSTFLAGS_VAR)="$(SE050_STRESS_RUSTFLAGS)" \
+	cargo build --locked --release --target $(TARGET) --target-dir target/secure \
+		-p sphincs-tz-secure --no-default-features --features $(SE050_STRESS_FEATURES)
+	@echo "==> Flashing stress firmware..."
+	probe-rs download --chip STM32U585AIIx $(SECURE_ELF)
+	@echo "==> Running stress catalog (watch semihosting output)..."
+	$(call SE050_STRESS_RUN,se050-stress)
+
+# Run Safe + Destructive tiers (includes UserID-lockout tests).
+se050-stress-destructive:
+	@echo "==> Building SE050 stress firmware (Safe + Destructive)..."
+	SE050_STRESS_TIER=destructive \
+	$(RUSTFLAGS_VAR)="$(SE050_STRESS_RUSTFLAGS)" \
+	cargo build --locked --release --target $(TARGET) --target-dir target/secure \
+		-p sphincs-tz-secure --no-default-features --features $(SE050_STRESS_FEATURES)
+	@echo "==> Flashing stress firmware..."
+	probe-rs download --chip STM32U585AIIx $(SECURE_ELF)
+	@echo "==> Running stress catalog (Safe + Destructive)..."
+	$(call SE050_STRESS_RUN,se050-stress-destructive)
+
+# Single-test runner — pattern target. Usage:
+#   make se050-stress-only-scp03_response_encryption_verify
+# Selection happens at build time via `SE050_STRESS_ONLY=<name>`,
+# baked into the firmware through `option_env!`. The Tier filter is
+# also disabled (`all`) so destructive single-test runs work without
+# the user remembering to flip a second flag.
+se050-stress-only-%:
+	@echo "==> Building SE050 stress firmware (single: $*)..."
+	SE050_STRESS_ONLY="$*" SE050_STRESS_TIER=all \
+	$(RUSTFLAGS_VAR)="$(SE050_STRESS_RUSTFLAGS)" \
+	cargo build --locked --release --target $(TARGET) --target-dir target/secure \
+		-p sphincs-tz-secure --no-default-features --features $(SE050_STRESS_FEATURES)
+	@echo "==> Flashing stress firmware..."
+	probe-rs download --chip STM32U585AIIx $(SECURE_ELF)
+	@echo "==> Running stress test '$*' (watch semihosting output)..."
+	$(call SE050_STRESS_RUN,se050-stress-only-$*)
+
+# Host-side catalog listing — no hardware, no flash. Greps the seed
+# catalog files for `stress_test!(IDENT, "name", Tier::X, …)` lines
+# and prints them as "[tier] name".
+se050-stress-list:
+	@echo "==> SE050 stress catalog:"
+	@grep -hE '^[[:space:]]*stress_test!\(' secure/src/se050_stress/tests/*.rs 2>/dev/null \
+		| sed -E 's/^[[:space:]]*stress_test!\([A-Z0-9_]+,[[:space:]]*"([^"]+)",[[:space:]]*Tier::([A-Za-z]+).*/[\2]\t\1/' \
+		| sort -k1,1 -k2,2 \
+		| awk -F'\t' '{printf "  %-14s %s\n", $$1, $$2}' \
+		|| echo "  (no tests found)"
+
 # SE050 SCP03 platform-key rotation ceremony (work-todo #20 Stage B).
 #
 # *** IRREVERSIBLE — DO NOT RUN ON A WORKING BENCH SE050 ***
@@ -1546,7 +1650,7 @@ verify-theft-free:
 	@echo "==> [3/5] Auditing axiom closure of theft_free"
 	@cd contracts/verification/lean && \
 	  lake env lean scripts/dump_axioms.lean 2>/dev/null > /tmp/theft_free_axioms.txt
-	@awk "/^'SphincsCVerify\\.Spec\\.Theorems\\.theft_free' depends on axioms:/{flag=1} flag" \
+	@awk "/^'SphincsCVerify\\.Spec\\.Theorems\\.theft_free' depends on axioms:/{flag=1} flag{print} flag&&/\\]/{exit}" \
 	    /tmp/theft_free_axioms.txt \
 	  | tr -d ' \n' \
 	  | sed -e 's/.*\[//' -e 's/\]$$//' \

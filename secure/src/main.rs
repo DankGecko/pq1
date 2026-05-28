@@ -118,6 +118,17 @@ mod sau;
 mod secure_element;
 #[cfg(all(feature = "se050", not(test)))]
 mod se050;
+// SE050 stress-test harness. Only present when the `se050-stress`
+// feature is on; otherwise compiles to absolutely nothing.
+#[cfg(all(feature = "se050-stress", not(test)))]
+mod se050_stress;
+// SE050 stress requires real silicon — the whole point is to challenge
+// silicon-side assumptions. `mock-se` would silently turn the run into
+// a no-op tour of the in-RAM mock and mask any real-chip regression.
+#[cfg(all(feature = "se050-stress", feature = "mock-se"))]
+compile_error!(
+    "`se050-stress` requires real SE050 silicon — drop `mock-se` from the feature set"
+);
 #[cfg(all(feature = "tropic01-se", not(feature = "stm32u585"), not(test)))]
 mod semihosting_spi;
 #[cfg(not(test))]
@@ -1513,6 +1524,25 @@ fn main() -> ! {
                 ui::show_status("Admin wipe", "FAIL");
             }
         }
+        loop { cortex_m::asm::wfi(); }
+    }
+
+    // ---- SE050 on-silicon stress harness ----
+    // Catalog-driven runner that exercises the SE050 driver against
+    // real silicon. See `secure/src/se050_stress/` for the test catalog
+    // + helper API. Operator-facing entry: `make se050-stress[-*]`.
+    //
+    // Halts in `wfi` after `run_catalog` returns. `probe-rs run` exits
+    // cleanly when the operator hits Ctrl-C; the Makefile recipe greps
+    // the semihosting log for `=== SUMMARY: … FAIL ===` to derive its
+    // own pass/fail status.
+    //
+    // Triggered by: make se050-stress[-destructive|-only-<name>]
+    #[cfg(feature = "se050-stress")]
+    unsafe {
+        ui::show_status("se050-stress", "init...");
+        let se = &mut *core::ptr::addr_of_mut!(SE);
+        se050_stress::run_catalog(se);
         loop { cortex_m::asm::wfi(); }
     }
 
