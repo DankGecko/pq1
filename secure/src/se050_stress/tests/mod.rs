@@ -21,16 +21,25 @@ pub mod object;
 pub mod audit;
 
 /// The runner-visible test catalog. Order shown to the user (BEGIN
-/// 001/008, …) matches order here. Safe-tier first, destructive last.
+/// 001/0NN, …) matches order here. Safe-tier first, destructive last.
 pub static ALL_TESTS: &[&StressTest] = &[
     // ----- Safe -----
     &scp03::HANDSHAKE_REPEAT,
     &scp03::APDU_BURST,
     &audit::SCP03_RESPONSE_ENCRYPTION_VERIFY,
+    &audit::AUDIT_UNAUTH_READ_REFUSED,
     &object::EXTENDED_LC_BOUNDARY,
     &scp03::WTX_ENDURANCE,
     &trng::QUALITY_BASIC,
     // ----- Destructive -----
     &audit::USERID_NO_ADMIN_DELETE,
+    &audit::AUDIT_ADMIN_PASSIVE_READ_REFUSED,
+    &audit::AUDIT_ADMIN_CANNOT_ROTATE_USER_PIN,
+    &audit::AUDIT_DATA_SUBSTITUTION_CHIP_LEVEL,
+    &userid::PIN_COUNTER_RESETS_ON_CORRECT_PIN,
+    &userid::PIN_COUNTER_PERSISTS_ACROSS_REINIT,
+    &userid::PIN_LOCKOUT_PERSISTS_ACROSS_REINIT,
+    &userid::PIN_ATTRIBUTE_READ_DOES_NOT_BURN,
+    &userid::PIN_UNLIMITED_NO_LOCKOUT,
     &userid::SILICON_LOCKOUT,
 ];

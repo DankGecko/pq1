@@ -149,10 +149,10 @@ even building.
 | File | Topic |
 |---|---|
 | `tests/scp03.rs` | SCP03 channel: handshake freshness, MCV chain, WTX |
-| `tests/userid.rs` | UserID PIN counter, lockout |
+| `tests/userid.rs` | UserID PIN counter behaviour: lockout (always-on), reset-on-success, NVM persistence across reinit, attribute-read non-burn |
 | `tests/trng.rs` | TRNG quality |
 | `tests/object.rs` | Object IO: extended-Lc boundaries, churn |
-| `tests/audit.rs` | Ship-blocker silicon verification (S-5, S-6, future S-N) |
+| `tests/audit.rs` | Ship-blocker silicon verification + adversarial confidentiality/substitution probes (S-5, S-6, admin-passive-read, unauth-read, in-place PIN UPDATE, data-substitution residual exposure) |
 
 To add a new category: drop a new file, add `pub mod <name>;` to
 `tests/mod.rs`, append your test entries to `ALL_TESTS`.
@@ -238,6 +238,8 @@ untouched.
 
 ## 8. Seed catalog (what's already covered)
 
+### Original 8 tests (SCP03 mechanics + S-5/S-6 closure)
+
 | ID | Name | Tier | What it probes |
 |---|---|---|---|
 | 1 | `scp03_handshake_repeat` | Safe | 8× `reinit() + establish()`; assert `s_enc` differs across handshakes |
@@ -248,6 +250,26 @@ untouched.
 | 6 | `trng_quality_basic` | Safe | 4096 B; no all-zero / all-one 64-B block, byte-histogram χ²≤330 |
 | 7 | **`userid_no_admin_delete`** | Destructive | **S-6 silicon verifier.** UserID with `admin_entry=None`; admin delete must FAIL, user self-delete OK |
 | 8 | `userid_silicon_lockout` | Destructive | UserID(max=3); 3× wrong PIN; 4th attempt returns lockout SW (logs actual SW for `apdu.rs:42-54` confirmation) |
+
+### Adversarial additions (2026-05-28, batch 2) — "challenge every assumption"
+
+Four audit-tier tests for confidentiality / substitution claims under
+the desolder-bench threat model, plus four PIN-counter persistence
+tests for the NVM-durability claims the firmware relies on. Each
+asserts a single silicon-level invariant; a FAIL is a hard signal that
+the firmware's assumption is wrong on this chip.
+
+| ID | Name | Tier | What it asserts |
+|---|---|---|---|
+| 9 | **`audit_unauth_read_refused`** | Safe | **Default-deny.** Pure-SCP03 (no UserID session) ReadBinary on a user-gated object MUST return non-9000. A FAIL means transport SCP03 silently bypasses the policy gate — every gated object leaks. |
+| 10 | **`audit_admin_passive_read_refused`** | Destructive | **Confidentiality.** Admin session + read of user-PIN-gated object MUST be refused. A FAIL means anyone who recovers `se050_admin_pin()` (BHK leak) extracts `half_E` directly. Stress-harness counterpart to the feature-gated `run_admin_extract_attempt`. |
+| 11 | **`audit_admin_cannot_rotate_user_pin`** | Destructive | **Substitution closure (UPDATE path).** Transport-level AND admin-session-context `WriteUserID` UPDATE on an existing user OID MUST fail (no `ALLOW_WRITE` granted to those auth contexts). A FAIL means admin can rotate user PIN in place — same outcome as the pre-S-6 DELETE+CREATE attack, via a different APDU. |
+| 12 | **`audit_data_substitution_chip_level`** | Destructive | **SE050 chip-layer assertion (scoped narrowly).** Strict three-step chain: admin DELETE on a user-gated data object → transport-SCP03 WriteBinary at the freed OID with `(attacker payload, user→ALLOW_READ policy)` → user-PIN-auth READ. PASS = all three steps succeed (silicon has no CREATE-ACL on freed OIDs — the chip cannot tell who originally created an OID after it's been deleted). FAIL = silicon is *more* defensive than the chip-layer model claims; the firmware can drop a defense layer if this happens. **This test does NOT show the seed is extractable.** The systemic protection lives in firmware: `dual_se.rs:378-382` re-derives `kdf("sphincs-master", full_entropy, 0)` and compares against OPTIGA's independently-stored `master_o`. A single-SE substitution (the chain this test exercises) fails that check; a two-SE coordinated substitution defeats the check but only *installs* a chosen seed rather than recovering the original. Pre-funding tamper detection vector is the 8-word OLED measurement fingerprint. |
+| P1 | **`pin_counter_resets_on_correct_pin`** | Destructive | **Counter reset on success.** Burn 2 wrong PINs, attribute-read `auth_attempts==2`, submit correct PIN, attribute-read `auth_attempts==0`. Load-bearing for `Se050::remaining`'s "resets on every successful unlock" claim. |
+| P2 | **`pin_counter_persists_across_reinit`** | Destructive | **NVM durability across power-cycle emulation.** Burn 2 wrong, call `Se050::reinit()` (T=1' reset + fresh SCP03), attribute-read MUST still show 2. A FAIL means a desolder attacker can brute-force a 4-digit PIN by power-cycling between tries. |
+| P3 | **`pin_lockout_persists_across_reinit`** | Destructive | **Lockout permanence.** Lock UserID(max=3) by burning 4 wrong PINs, `reinit()`, then verify wrong PIN AND correct PIN both still return blocked. A FAIL means the 10-wrong-PIN brick is recoverable by power-cycling — invariant #2 violated. |
+| P4 | **`pin_attribute_read_does_not_burn`** | Destructive | **Attribute read is gate-independent.** Burn 2 wrong PINs, flood 5× attribute reads, then 1 more wrong PIN. MUST see PinIncorrect (not lockout) and final `auth_attempts==3`. Load-bearing for `pin_attempt_count_raw` being safe to call during boot-time reconcile. |
+| P5 | **`pin_unlimited_no_lockout`** | Destructive | **S-7a silicon closure.** Provision a UserID via `write_userid_unlimited` (TAG_MAX_ATTEMPTS omitted per AN12413 §4.7.1.5), then burn 100 consecutive wrong PINs in a loop. EVERY attempt MUST return PinIncorrect; the unlimited marker `(max_attempts=0)` MUST stay 0; `auth_attempts` MUST advance past `BURN_COUNT/2`; correct PIN MUST still authenticate AND reset the counter to 0. PASS = production unlimited-UserID code paths (`ADMIN_WIPE_OBJ`, `DURESS_USERID_OBJ`, E2E test admins per `mod.rs:482-510`) are silicon-validated. FAIL = a single AuthMethodBlocked anywhere in the loop means silicon enforces an implicit cap and the omitted-TLV form is unsafe on this chip. |
 
 **Highest-priority first run after the S-5/S-6 commits:** tests #3
 and #7. Run individually:

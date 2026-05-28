@@ -325,6 +325,193 @@ impl<'a> StressCtx<'a> {
         self.se
     }
 
+    // -------- Adversarial / silicon-assumption probes --------
+    //
+    // Helpers below are the surface used by the audit / PIN-counter
+    // stress tests to probe what the chip actually does — admin-auth
+    // read of user-gated objects, substitution writes at deleted OIDs,
+    // attribute reads on arbitrary OIDs, transport-level write attempts
+    // on existing UserIDs, raw unauth ReadBinary. Every one of them
+    // returns the raw `Se050Error` (or a typed parse) so the caller can
+    // distinguish "SW=0x6986 policy-denied" (good) from "SW=0x9000 with
+    // bytes" (bad) — `delete_scratch` / `read_scratch` deliberately
+    // swallow errors for idempotency, which is the wrong shape here.
+
+    /// Provision a test UserID with the SE-side attempt counter
+    /// **disabled** (`max_attempts` TLV omitted → AN12413 §4.7.1.5
+    /// "unlimited"). Used by the substitution-attack rehearsal so the
+    /// repeated user/admin auth swings don't accidentally drive the test
+    /// UserID into lockout mid-probe.
+    pub fn provision_test_userid_unlimited(
+        &mut self,
+        target: u32,
+        pin: &[u8],
+        policy: AdminPolicy,
+    ) -> StressResult {
+        let admin_entry = match policy {
+            AdminPolicy::WithAdminDelete => Some(oid::STRESS_ADMIN_USERID),
+            AdminPolicy::WithoutAdminEntry => None,
+        };
+        unsafe {
+            let (t1, scp03) = self.se.t1_scp03_mut();
+            apdu::write_userid_unlimited(t1, scp03, target, pin, admin_entry)?;
+        }
+        Ok(())
+    }
+
+    /// Write a binary data object whose primary policy auth is an
+    /// arbitrary UserID (NOT the stress-admin). Used by audit tests
+    /// that need to gate a sentinel on a *user* credential and then
+    /// probe whether an admin session can still read it.
+    pub fn write_user_gated_data(
+        &mut self,
+        target: u32,
+        data: &[u8],
+        user_userid: u32,
+        admin_userid: Option<u32>,
+    ) -> StressResult {
+        unsafe {
+            let (t1, scp03) = self.se.t1_scp03_mut();
+            apdu::write_binary_gated(t1, scp03, target, data, user_userid, admin_userid)?;
+        }
+        Ok(())
+    }
+
+    /// Fallible variant of `write_user_gated_data` — returns the raw
+    /// driver error instead of converting to `StressError`. Used by
+    /// the substitution-attack rehearsal which needs to distinguish
+    /// "chip refused to write at the deleted OID" from generic test
+    /// failure.
+    pub fn try_write_user_gated_data(
+        &mut self,
+        target: u32,
+        data: &[u8],
+        user_userid: u32,
+        admin_userid: Option<u32>,
+    ) -> Result<(), Se050Error> {
+        unsafe {
+            let (t1, scp03) = self.se.t1_scp03_mut();
+            apdu::write_binary_gated(t1, scp03, target, data, user_userid, admin_userid)
+        }
+    }
+
+    /// Read a UserID-gated data object through a caller-owned session.
+    /// Distinct from `read_scratch` (which opens / verifies / closes a
+    /// stress-admin session internally) — required for tests that need
+    /// the read to flow through a *specific* session (admin or user) so
+    /// the chip's policy check is exercised against that exact auth.
+    pub fn read_authed_at(
+        &mut self,
+        sid: &SessionId,
+        target: u32,
+        out: &mut [u8],
+    ) -> Result<usize, Se050Error> {
+        unsafe {
+            let (t1, scp03) = self.se.t1_scp03_mut();
+            apdu::read_authed(t1, scp03, sid, target, out)
+        }
+    }
+
+    /// Send a top-level `INS_WRITE | INS_AUTH_OBJECT` `WriteUserID` APDU
+    /// at `target`, *outside* any UserID session (transport-SCP03 only).
+    /// On an empty OID the chip CREATEs; on an existing one the chip
+    /// must check the existing object's policy for `ALLOW_WRITE` —
+    /// transport SCP03 alone does NOT satisfy that, so a successful
+    /// return here on an existing target means the silicon is letting
+    /// pure-SCP03 callers rotate any PIN at will (catastrophic).
+    pub fn try_write_userid_transport(
+        &mut self,
+        target: u32,
+        pin: &[u8],
+        max_attempts: u16,
+        admin: Option<u32>,
+    ) -> Result<(), Se050Error> {
+        unsafe {
+            let (t1, scp03) = self.se.t1_scp03_mut();
+            apdu::write_userid(t1, scp03, target, pin, max_attempts, admin)
+        }
+    }
+
+    /// Parse `ReadObjectAttributes` for the UserID at `target` and
+    /// return `(auth_attempts, max_attempts)`. Reads attributes don't
+    /// burn a wrong-PIN attempt (policy-gate-independent per AN12413
+    /// §4.2) — that load-bearing claim is itself one of the PIN-counter
+    /// tests in `tests/userid.rs::attribute_read_does_not_burn`.
+    ///
+    /// Returns `None` if the object is missing, the response is
+    /// malformed, or `auth_attr != SET`. Mirrors
+    /// `Se050::pin_attempt_count_raw` but for arbitrary OIDs.
+    pub fn read_userid_attempts(&mut self, target: u32) -> Option<(u16, u16)> {
+        let mut buf = [0u8; 64];
+        let n = unsafe {
+            let (t1, scp03) = self.se.t1_scp03_mut();
+            apdu::read_object_attributes(t1, scp03, target, &mut buf).ok()?
+        };
+        if n < 14 || buf[5] != 0x01 {
+            return None;
+        }
+        let auth_attempts = u16::from_be_bytes([buf[6], buf[7]]);
+        let max_attempts = u16::from_be_bytes([buf[12], buf[13]]);
+        Some((auth_attempts, max_attempts))
+    }
+
+    /// Send a top-level `ReadBinary` (no `INS_PROCESS` wrap, no UserID
+    /// session) at `target`. The chip must refuse if the object's
+    /// policy requires `ALLOW_READ` via UserID auth — transport SCP03
+    /// alone is not a session and does not satisfy a UserID-auth entry.
+    /// Returns `Ok(n)` with `n` decoded payload bytes on a 0x9000
+    /// response (catastrophic — secret leaked); `Err(Status(sw))` is
+    /// the expected refusal path.
+    pub fn try_unauth_read(&mut self, target: u32, out: &mut [u8]) -> Result<usize, Se050Error> {
+        let mut apdu_buf = [0u8; 16];
+        apdu_buf[0] = 0x80; // CLA
+        apdu_buf[1] = 0x02; // INS = READ
+        apdu_buf[2] = 0x00; // P1
+        apdu_buf[3] = 0x00; // P2
+        apdu_buf[4] = 0x06; // Lc = TAG(1) + LEN(1) + OID(4)
+        apdu_buf[5] = 0x41; // TAG_1
+        apdu_buf[6] = 0x04;
+        apdu_buf[7..11].copy_from_slice(&target.to_be_bytes());
+        apdu_buf[11] = 0x00; // Le
+
+        let mut resp = [0u8; 128];
+        let n = self.raw_apdu(&apdu_buf[..12], &mut resp)?;
+        // 0x9000 path: data is in `resp[..n]`. Could be TLV-wrapped or
+        // raw bytes depending on whether the chip honoured the read.
+        // Either way, if we got here on a user-gated OID, the
+        // confidentiality invariant is broken.
+        let take = n.min(out.len());
+        out[..take].copy_from_slice(&resp[..take]);
+        Ok(take)
+    }
+
+    /// Burn `n` wrong-PIN attempts against `target`, asserting each
+    /// returns `PinIncorrect` (counter still has room) — useful prelude
+    /// for "what does the counter look like after N wrong" tests.
+    pub fn burn_wrong_pin(&mut self, target: u32, wrong: &[u8], n: usize) -> StressResult {
+        for i in 0..n {
+            self.set_iter(i as u32);
+            match self.open_user_session(target, wrong) {
+                Err(StressError::Driver(Se050Error::PinIncorrect)) => { /* expected */ }
+                Err(StressError::Driver(Se050Error::AuthMethodBlocked)) => {
+                    return Err(StressError::Assertion {
+                        what: "lockout fired earlier than expected",
+                        iter: i as u32,
+                    });
+                }
+                Ok(sid) => {
+                    self.close_session(&sid);
+                    return Err(StressError::Assertion {
+                        what: "wrong-PIN attempt opened a session",
+                        iter: i as u32,
+                    });
+                }
+                Err(other) => return Err(other),
+            }
+        }
+        Ok(())
+    }
+
     // -------- Private helpers --------
 
     fn admin_pin(&self) -> Result<[u8; 16], StressError> {

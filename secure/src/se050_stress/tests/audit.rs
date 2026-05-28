@@ -16,6 +16,7 @@
 
 use crate::stress_test;
 use crate::se050::apdu::Se050Error;
+use crate::se050_stress::oid::STRESS_ADMIN_USERID;
 use crate::se050_stress::{StressCtx, StressError, StressResult, Tier};
 use crate::se050_stress::ctx::AdminPolicy;
 
@@ -163,3 +164,503 @@ fn userid_no_admin_delete(ctx: &mut StressCtx) -> StressResult {
     Ok(())
 }
 stress_test!(USERID_NO_ADMIN_DELETE, "userid_no_admin_delete", Tier::Destructive, userid_no_admin_delete);
+
+// ---------------------------------------------------------------------------
+// 9. audit_admin_passive_read_refused
+// ---------------------------------------------------------------------------
+
+/// Provision a sentinel under USER-PIN gating with the standard two-
+/// entry policy (user → READ|WRITE|DELETE, admin → DELETE only). Open
+/// an admin session. Attempt to READ. The chip MUST refuse — admin
+/// holds DELETE authority but not READ authority over user-PIN-gated
+/// data.
+///
+/// This is the central "desolder + extracted BHK" confidentiality
+/// claim: even with full admin auth (which an attacker who recovered
+/// `se050_admin_pin()` can mount), the silicon refuses to release the
+/// user-gated bytes. A FAIL here is a confidentiality breach — every
+/// shipped device leaks `half_E` to anyone holding admin auth, full
+/// stop.
+///
+/// Mirrors `Se050::run_admin_extract_attempt` (`mod.rs:953-1158`,
+/// gated behind `se050-admin-extract-attempt-e2e`) but as a first-
+/// class stress test that runs under the routine
+/// `make se050-stress-destructive` suite — so the assertion is
+/// exercised on every chip-validation pass, not only when an opt-in
+/// e2e harness is plumbed up.
+///
+/// PASS = admin read returns `Se050Error::Status(non-9000)` or a
+/// driver error.  FAIL = admin read returns 0x9000 (the chip released
+/// data through admin auth).
+fn audit_admin_passive_read_refused(ctx: &mut StressCtx) -> StressResult {
+    let user_oid = ctx.oid(0x01);
+    let data_oid = ctx.oid(0x02);
+    let user_pin: [u8; 8] = *b"a1userpn";
+    // 32-byte sentinel — distinct from 0xDE (S-5 test) so a wire capture
+    // disambiguates which test is currently running.
+    const SENTINEL: [u8; 32] = [
+        0xA1, 0xA1, 0xA1, 0xA1, 0xA1, 0xA1, 0xA1, 0xA1,
+        0xA1, 0xA1, 0xA1, 0xA1, 0xA1, 0xA1, 0xA1, 0xA1,
+        0xA1, 0xA1, 0xA1, 0xA1, 0xA1, 0xA1, 0xA1, 0xA1,
+        0xA1, 0xA1, 0xA1, 0xA1, 0xA1, 0xA1, 0xA1, 0xA1,
+    ];
+
+    ctx.delete_scratch(data_oid)?;
+    ctx.delete_scratch(user_oid)?;
+
+    ctx.provision_test_userid(user_oid, &user_pin, 5, AdminPolicy::WithAdminDelete)?;
+    ctx.write_user_gated_data(data_oid, &SENTINEL, user_oid, Some(STRESS_ADMIN_USERID))?;
+
+    // Sanity: USER auth MUST be able to read the sentinel — if this
+    // fails, the test setup is wrong and we cannot draw conclusions
+    // from the attack step.
+    let user_sid = ctx.open_user_session(user_oid, &user_pin)?;
+    let mut sanity_buf = [0u8; 64];
+    let n = ctx.read_authed_at(&user_sid, data_oid, &mut sanity_buf)?;
+    ctx.close_session(&user_sid);
+    ctx.assert_eq("user-auth sanity read returns sentinel", &sanity_buf[..n], &SENTINEL)?;
+
+    // ATTACK: admin-authed READ. Must be refused.
+    let admin_sid = ctx.open_admin_session()?;
+    let mut attack_buf = [0u8; 64];
+    let attack_result = ctx.read_authed_at(&admin_sid, data_oid, &mut attack_buf);
+    ctx.close_session(&admin_sid);
+
+    match attack_result {
+        Ok(m) => {
+            let leaked = m == SENTINEL.len()
+                && attack_buf[..m].iter().zip(SENTINEL.iter()).all(|(a, b)| a == b);
+            secure_log!(
+                "[S][stress][audit-a1] SECURITY FAILURE — admin-auth read returned {} bytes (leaked_sentinel={})",
+                m, leaked,
+            );
+            Err(StressError::Assertion {
+                what: "admin-auth read returned data — confidentiality breach (S-5/desolder claim violated)",
+                iter: 0,
+            })
+        }
+        Err(Se050Error::Status(sw)) => {
+            secure_log!(
+                "[S][stress][audit-a1] admin-auth read REFUSED with SW=0x{:04x} — confidentiality holds",
+                sw,
+            );
+            Ok(())
+        }
+        Err(e) => {
+            secure_log!(
+                "[S][stress][audit-a1] admin-auth read REFUSED with driver error: {:?} — confidentiality holds",
+                e,
+            );
+            Ok(())
+        }
+    }
+}
+stress_test!(AUDIT_ADMIN_PASSIVE_READ_REFUSED, "audit_admin_passive_read_refused", Tier::Destructive, audit_admin_passive_read_refused);
+
+// ---------------------------------------------------------------------------
+// 10. audit_unauth_read_refused
+// ---------------------------------------------------------------------------
+
+/// Provision a sentinel under USER-PIN gating, then send a top-level
+/// `INS_READ` APDU (no `INS_PROCESS` wrap, no UserID session) over the
+/// established SCP03 transport. The chip MUST refuse — the object's
+/// policy demands `ALLOW_READ` granted via a session authenticated
+/// against the user UserID, and transport SCP03 alone does NOT satisfy
+/// a session-auth policy entry.
+///
+/// This probes the silicon's default-deny behavior, distinct from
+/// `audit_admin_passive_read_refused` (which tests "wrong session
+/// auth"): this test asks "what about NO session auth at all". A bug
+/// where the chip treated transport SCP03 as an anonymous session that
+/// satisfied any UserID auth entry would leak every gated object.
+///
+/// PASS = `Err(Se050Error::Status(non-9000))` or driver error.
+/// FAIL = read returned bytes that match the sentinel.
+fn audit_unauth_read_refused(ctx: &mut StressCtx) -> StressResult {
+    let user_oid = ctx.oid(0x01);
+    let data_oid = ctx.oid(0x02);
+    let user_pin: [u8; 8] = *b"a3userpn";
+    const SENTINEL: [u8; 32] = [
+        0xA3, 0xA3, 0xA3, 0xA3, 0xA3, 0xA3, 0xA3, 0xA3,
+        0xA3, 0xA3, 0xA3, 0xA3, 0xA3, 0xA3, 0xA3, 0xA3,
+        0xA3, 0xA3, 0xA3, 0xA3, 0xA3, 0xA3, 0xA3, 0xA3,
+        0xA3, 0xA3, 0xA3, 0xA3, 0xA3, 0xA3, 0xA3, 0xA3,
+    ];
+
+    ctx.delete_scratch(data_oid)?;
+    ctx.delete_scratch(user_oid)?;
+
+    ctx.provision_test_userid(user_oid, &user_pin, 5, AdminPolicy::WithAdminDelete)?;
+    ctx.write_user_gated_data(data_oid, &SENTINEL, user_oid, Some(STRESS_ADMIN_USERID))?;
+
+    // Attack: top-level ReadBinary, no INS_PROCESS, no session.
+    let mut buf = [0u8; 64];
+    match ctx.try_unauth_read(data_oid, &mut buf) {
+        Ok(m) => {
+            // Possible TLV envelope around the data; the apdu layer
+            // strips SW1/SW2 in `send_apdu`, but TLV wrappers from
+            // INS_READ can still be present. Search for the sentinel
+            // pattern in the returned bytes — finding it = leak.
+            let contains_sentinel = buf[..m]
+                .windows(SENTINEL.len())
+                .any(|w| w.iter().zip(SENTINEL.iter()).all(|(a, b)| a == b));
+            secure_log!(
+                "[S][stress][audit-a3] SECURITY FAILURE — unauth top-level READ returned {} bytes (sentinel_present={})",
+                m, contains_sentinel,
+            );
+            Err(StressError::Assertion {
+                what: "unauth ReadBinary returned data — transport SCP03 alone bypassed policy gate",
+                iter: 0,
+            })
+        }
+        Err(Se050Error::Status(sw)) => {
+            secure_log!(
+                "[S][stress][audit-a3] unauth READ REFUSED with SW=0x{:04x} — policy gate holds",
+                sw,
+            );
+            Ok(())
+        }
+        Err(e) => {
+            secure_log!(
+                "[S][stress][audit-a3] unauth READ REFUSED with driver error: {:?} — policy gate holds",
+                e,
+            );
+            Ok(())
+        }
+    }
+}
+stress_test!(AUDIT_UNAUTH_READ_REFUSED, "audit_unauth_read_refused", Tier::Safe, audit_unauth_read_refused);
+
+// ---------------------------------------------------------------------------
+// 11. audit_admin_cannot_rotate_user_pin
+// ---------------------------------------------------------------------------
+
+/// S-6 closes admin DELETE of a user UserID with no admin policy entry.
+/// This test probes the adjacent attack vector: in-place UPDATE of an
+/// existing user UserID. If admin (or any pure-SCP03 caller) can send
+/// `INS_WRITE | INS_AUTH_OBJECT` at the user OID and overwrite the PIN
+/// without satisfying the existing object's `ALLOW_WRITE` entry, the
+/// substitution attack chain reopens — same as DELETE + CREATE — but
+/// via a different APDU.
+///
+/// Per AN12413 §4.7, UPDATE of an existing AUTH_OBJECT must check the
+/// existing policy for `ALLOW_WRITE` granted to the current session's
+/// auth. Our user policy grants `ALLOW_WRITE` only to the user's own
+/// auth entry; admin's entry has only `ALLOW_DELETE`. Transport SCP03
+/// has no UserID session at all. So both the "no session" and "admin
+/// session" cases MUST be refused.
+///
+/// Sequence:
+///   1. Provision USERID with `user_pin`.
+///   2. Sanity: `user_pin` opens a session.
+///   3. ATTACK A: transport-level `write_userid(target, "eviltest", …)`
+///      → must FAIL.
+///   4. Confirm `user_pin` still works (no rotation happened).
+///   5. ATTACK B: open admin session, then issue transport-level
+///      `write_userid(target, "eviltest", …)` → must FAIL.
+///      Note: the apdu is transport-level either way; the admin session
+///      is open in parallel as the worst-case context.
+///   6. Close admin session. Confirm `user_pin` still works.
+///
+/// PASS = both attacks refused AND `user_pin` continues to work.
+/// FAIL = any attack succeeded OR `user_pin` stopped working.
+fn audit_admin_cannot_rotate_user_pin(ctx: &mut StressCtx) -> StressResult {
+    let user_oid = ctx.oid(0x01);
+    let user_pin:  [u8; 8] = *b"a4userpn";
+    let attacker_pin: [u8; 8] = *b"eviltest";
+
+    ctx.delete_scratch(user_oid)?;
+
+    ctx.provision_test_userid(user_oid, &user_pin, 5, AdminPolicy::WithAdminDelete)?;
+
+    // Sanity: user PIN works.
+    let sid = ctx.open_user_session(user_oid, &user_pin)?;
+    ctx.close_session(&sid);
+
+    // ATTACK A: transport-level WriteUserID, no session.
+    let attack_a = ctx.try_write_userid_transport(user_oid, &attacker_pin, 5, Some(STRESS_ADMIN_USERID));
+    match attack_a {
+        Ok(()) => {
+            secure_log!(
+                "[S][stress][audit-a4] SECURITY FAILURE — transport-level WriteUserID UPDATE succeeded on existing user OID",
+            );
+            // Don't try to undo it; the test result speaks for itself.
+            return Err(StressError::Assertion {
+                what: "transport-SCP03 WriteUserID rotated an existing user PIN",
+                iter: 0,
+            });
+        }
+        Err(Se050Error::Status(sw)) => {
+            secure_log!(
+                "[S][stress][audit-a4] transport-level UPDATE refused with SW=0x{:04x}",
+                sw,
+            );
+        }
+        Err(e) => {
+            secure_log!(
+                "[S][stress][audit-a4] transport-level UPDATE refused with driver error: {:?}",
+                e,
+            );
+        }
+    }
+
+    // Verify user PIN still works.
+    let sid = ctx.open_user_session(user_oid, &user_pin)?;
+    ctx.close_session(&sid);
+
+    // ATTACK B: admin session open in parallel.
+    let admin_sid = ctx.open_admin_session()?;
+    let attack_b = ctx.try_write_userid_transport(user_oid, &attacker_pin, 5, Some(STRESS_ADMIN_USERID));
+    ctx.close_session(&admin_sid);
+
+    match attack_b {
+        Ok(()) => {
+            secure_log!(
+                "[S][stress][audit-a4] SECURITY FAILURE — admin-session-context WriteUserID UPDATE succeeded",
+            );
+            return Err(StressError::Assertion {
+                what: "admin-context WriteUserID rotated an existing user PIN",
+                iter: 0,
+            });
+        }
+        Err(Se050Error::Status(sw)) => {
+            secure_log!(
+                "[S][stress][audit-a4] admin-context UPDATE refused with SW=0x{:04x}",
+                sw,
+            );
+        }
+        Err(e) => {
+            secure_log!(
+                "[S][stress][audit-a4] admin-context UPDATE refused with driver error: {:?}",
+                e,
+            );
+        }
+    }
+
+    // Final: user PIN still works.
+    let sid = ctx.open_user_session(user_oid, &user_pin)?;
+    ctx.close_session(&sid);
+
+    // Cross-check: the attacker PIN must NOT work.
+    match ctx.open_user_session(user_oid, &attacker_pin) {
+        Err(StressError::Driver(Se050Error::PinIncorrect)) => {
+            secure_log!(
+                "[S][stress][audit-a4] cross-check: attacker PIN rejected as PinIncorrect — UPDATE was correctly refused",
+            );
+        }
+        Ok(sid) => {
+            ctx.close_session(&sid);
+            secure_log!(
+                "[S][stress][audit-a4] SECURITY FAILURE — attacker PIN opens a session (PIN was silently rotated)",
+            );
+            return Err(StressError::Assertion {
+                what: "attacker PIN opens session — UPDATE silently succeeded",
+                iter: 0,
+            });
+        }
+        Err(other) => {
+            // Lockout or driver error — log and continue. Most likely
+            // PinIncorrect burned an attempt counter slot, but the test
+            // is destructive anyway.
+            secure_log!(
+                "[S][stress][audit-a4] cross-check: attacker PIN rejected with {:?}",
+                other,
+            );
+        }
+    }
+
+    secure_log!(
+        "[S][stress][audit-a4] PASS: WriteUserID UPDATE refused under both transport and admin-session contexts",
+    );
+    Ok(())
+}
+stress_test!(AUDIT_ADMIN_CANNOT_ROTATE_USER_PIN, "audit_admin_cannot_rotate_user_pin", Tier::Destructive, audit_admin_cannot_rotate_user_pin);
+
+// ---------------------------------------------------------------------------
+// 12. audit_data_substitution_chip_level
+// ---------------------------------------------------------------------------
+
+/// **Scope: SE050 chip layer ONLY.** This test asserts what the silicon
+/// itself does. The *system*-level protection that absorbs this chip
+/// behavior is a separate concern (see "Why this is not the system's
+/// final defense" below) and out of scope here.
+///
+/// **What the test proves on silicon.** SE050 has no CREATE-ACL on
+/// freed OIDs: after admin DELETEs a user-gated data object, the OID
+/// becomes a blank slot that any caller holding the SCP03 transport
+/// session can re-populate with arbitrary `(payload, policy)`. The
+/// chip does NOT remember "this OID used to be owned by entity X" —
+/// it forgets the object completely and treats the next write as a
+/// fresh creation. The next user PIN session reading the OID
+/// therefore gets back ATTACKER bytes through the ORIGINAL UserID
+/// session, exactly as if the user had stored those bytes themselves.
+///
+/// Sequence:
+///   1. Provision USER UserID + DATA gated by user (admin-delete entry).
+///   2. Sanity: user-auth read returns ORIGINAL.
+///   3. Admin DELETE on DATA → MUST succeed (`ALLOW_DELETE` policy).
+///   4. Transport-SCP03 (no UserID session) WriteBinary at the SAME OID
+///      with `(ATTACKER payload, user_userid → ALLOW_READ policy)` →
+///      MUST succeed (no chip-level CREATE-ACL).
+///   5. User-auth READ → MUST return ATTACKER bytes (the chip can't
+///      tell who wrote them; policy is satisfied; bytes are released).
+///
+/// PASS = all three steps succeed as described.
+/// FAIL = any step blocked unexpectedly — silicon is more defensive
+/// than the chip-layer threat model claims; investigate and update
+/// the firmware's defense-in-depth assumptions (one less layer needed
+/// upstream).
+///
+/// **What this test does NOT claim.** This test does NOT show that
+/// `half_E` is extractable, that the seed is recoverable, or that the
+/// wallet's confidentiality is broken. It claims only that the SE050,
+/// at the chip layer, will execute the delete-then-substitute sequence
+/// when the caller holds admin auth + SCP03 transport. The systemic
+/// outcome depends on the firmware layer above, which is not what this
+/// test exercises.
+///
+/// **Why this is not the system's final defense — pointer for the
+/// auditor.** The actual barrier against a substitution-attack
+/// payoff lives at `secure/src/dual_se.rs:378-382`: after both
+/// halves are read and XORed, the firmware re-derives
+/// `kdf("sphincs-master", full_entropy, 0)` and compares against
+/// OPTIGA's independently-stored `master_o`. A single-SE substitution
+/// (this test's chain on SE050 alone) fails that check and aborts
+/// unlock with `CRITICAL: reconstructed entropy doesn't match
+/// master!`. A two-SE coordinated substitution (also tampering
+/// OPTIGA in lockstep) defeats the check but only *installs* an
+/// attacker-chosen seed — the original seed never leaves the device.
+/// The remaining detection vector is the 8-word measurement
+/// fingerprint on the OLED (CLAUDE.md "Trusted-display clear-
+/// signing"), which the user must validate against an out-of-band
+/// reference before first funding. None of those upstream defenses
+/// are silicon-layer; they belong in a firmware-layer test.
+fn audit_data_substitution_chip_level(ctx: &mut StressCtx) -> StressResult {
+    let user_oid = ctx.oid(0x01);
+    let data_oid = ctx.oid(0x02);
+    let user_pin: [u8; 8] = *b"a2userpn";
+    const ORIGINAL: [u8; 32] = [
+        0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,
+        0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,
+        0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,
+        0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,
+    ];
+    const ATTACKER: [u8; 32] = [
+        0xEE, 0xEE, 0xEE, 0xEE, 0xEE, 0xEE, 0xEE, 0xEE,
+        0xEE, 0xEE, 0xEE, 0xEE, 0xEE, 0xEE, 0xEE, 0xEE,
+        0xEE, 0xEE, 0xEE, 0xEE, 0xEE, 0xEE, 0xEE, 0xEE,
+        0xEE, 0xEE, 0xEE, 0xEE, 0xEE, 0xEE, 0xEE, 0xEE,
+    ];
+
+    ctx.delete_scratch(data_oid)?;
+    ctx.delete_scratch(user_oid)?;
+
+    ctx.provision_test_userid(user_oid, &user_pin, 5, AdminPolicy::WithAdminDelete)?;
+    ctx.write_user_gated_data(data_oid, &ORIGINAL, user_oid, Some(STRESS_ADMIN_USERID))?;
+
+    // Step 1 (setup sanity).
+    let user_sid = ctx.open_user_session(user_oid, &user_pin)?;
+    let mut sanity_buf = [0u8; 64];
+    let n = ctx.read_authed_at(&user_sid, data_oid, &mut sanity_buf)?;
+    ctx.close_session(&user_sid);
+    ctx.assert_eq("setup sanity: user reads ORIGINAL", &sanity_buf[..n], &ORIGINAL)?;
+    secure_log!("[S][stress][audit-a2] step 1: sanity OK — user reads ORIGINAL ({} B)", n);
+
+    // Step 2: admin DELETE — strict assertion (DoS-wipe path is documented).
+    let admin_sid = ctx.open_admin_session()?;
+    let del_r = ctx.delete_authed(&admin_sid, data_oid);
+    ctx.close_session(&admin_sid);
+    if let Err(e) = del_r {
+        secure_log!(
+            "[S][stress][audit-a2] step 2: admin delete FAILED ({:?}) — DoS-wipe path is broken",
+            e,
+        );
+        return Err(StressError::Assertion {
+            what: "admin delete refused on data object — ALLOW_DELETE policy not honoured",
+            iter: 0,
+        });
+    }
+    if ctx.check_exists(data_oid).unwrap_or(true) {
+        secure_log!("[S][stress][audit-a2] step 2: admin reported delete OK but object still present");
+        return Err(StressError::Assertion {
+            what: "object survived admin delete (silicon-level inconsistency)",
+            iter: 0,
+        });
+    }
+    secure_log!("[S][stress][audit-a2] step 2: admin delete OK — OID freed");
+
+    // Step 3: transport-SCP03 substitution write — strict assertion.
+    let subst_r = ctx.try_write_user_gated_data(
+        data_oid,
+        &ATTACKER,
+        user_oid,
+        Some(STRESS_ADMIN_USERID),
+    );
+    match &subst_r {
+        Ok(()) => {
+            secure_log!(
+                "[S][stress][audit-a2] step 3: substitution write OK — chip has no CREATE-ACL on freed OID",
+            );
+        }
+        Err(e) => {
+            secure_log!(
+                "[S][stress][audit-a2] step 3: substitution write REFUSED ({:?}) — silicon has a CREATE-ACL not in the chip-layer threat model; review upstream defenses (one less layer needed)",
+                e,
+            );
+            return Err(StressError::Assertion {
+                what: "substitution write refused — silicon stronger than chip-layer model claims",
+                iter: 0,
+            });
+        }
+    }
+
+    // Step 4: user-auth read MUST return ATTACKER bytes.
+    let user_sid2 = ctx.open_user_session(user_oid, &user_pin)?;
+    let mut read_buf = [0u8; 64];
+    let read_r = ctx.read_authed_at(&user_sid2, data_oid, &mut read_buf);
+    ctx.close_session(&user_sid2);
+
+    match read_r {
+        Ok(m) => {
+            let is_attacker = m == ATTACKER.len()
+                && read_buf[..m].iter().zip(ATTACKER.iter()).all(|(a, b)| a == b);
+            let is_original = m == ORIGINAL.len()
+                && read_buf[..m].iter().zip(ORIGINAL.iter()).all(|(a, b)| a == b);
+            if is_attacker {
+                secure_log!(
+                    "[S][stress][audit-a2] step 4: user-auth read returns ATTACKER ({} B) — chip-layer substitution chain complete. Firmware-layer mitigation (dual_se.rs:378 consistency check) is the systemic backstop.",
+                    m,
+                );
+                Ok(())
+            } else if is_original {
+                secure_log!(
+                    "[S][stress][audit-a2] step 4: read returns ORIGINAL — impossible after a confirmed delete+write; chip is reporting state from a hidden cache or write was silently aborted",
+                );
+                Err(StressError::Assertion {
+                    what: "post-substitution read returned ORIGINAL bytes (silicon anomaly)",
+                    iter: 0,
+                })
+            } else {
+                secure_log!(
+                    "[S][stress][audit-a2] step 4: read returns {} bytes, neither ATTACKER nor ORIGINAL — chip mutated the substituted payload",
+                    m,
+                );
+                Err(StressError::Assertion {
+                    what: "post-substitution read returned neither attacker nor original (silicon anomaly)",
+                    iter: 0,
+                })
+            }
+        }
+        Err(e) => {
+            secure_log!(
+                "[S][stress][audit-a2] step 4: user-auth read REFUSED ({:?}) — silicon honoured a residual policy on the freed OID, blocking the substitution at read time. Chip-layer model overstates substitution; update threat model.",
+                e,
+            );
+            Err(StressError::Assertion {
+                what: "post-substitution user read refused — silicon enforces residual policy, chip-layer threat model overstated",
+                iter: 0,
+            })
+        }
+    }
+}
+stress_test!(AUDIT_DATA_SUBSTITUTION_CHIP_LEVEL, "audit_data_substitution_chip_level", Tier::Destructive, audit_data_substitution_chip_level);
