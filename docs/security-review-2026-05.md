@@ -131,6 +131,31 @@ through `Conf(E140)`.
 
 ### C-7. SE050 SCP03 at P1=0x03 — response unprotected; `half_E` leaks on I²C bus (SHIP BLOCKER S-5)
 
+**FIXED 2026-05-28.** `secure/src/se050/scp03.rs` now negotiates
+`P1=0x33` (C-MAC | C-DECRYPTION | R-MAC | R-ENCRYPTION) per GP
+Amendment D Table 7-6 page 35 + NXP plug-and-trust
+`fsl_sss_se05x_scp03.c:186-198`.  New `scp03::unwrap_response`
+(mirrored on `nxScp03_Com.c:124-248`) verifies the R-MAC over
+`MCV(16) || ciphered_body || SW(2)` under the S-RMAC key,
+AES-CBC-decrypts the body with `response_icv = AES-ECB-Enc(S-ENC,
+counter_block_with_byte0=0x80)` per Amd D §6.2.7, strips
+ISO 7816-4 padding, and propagates plaintext + SW upstream.  Counter
+advance moved from `wrap_apdu` to `unwrap_response` success path
+(matches NXP — both sides keep the counter at value N on a
+bare-error response per §6.2.5 first sentence, so they stay in sync).
+Constant-time R-MAC compare via `subtle::ConstantTimeEq` (stronger
+than NXP's plain `memcmp`).  Round-trip KAT for `aes128_cbc_encrypt`
+/ `aes128_cbc_decrypt` landed in `scp03_logic::tests`. Pinned-string
+test `positive_scp03_external_authenticate_p1_is_0x33` will trip if
+a future refactor regresses the P1 value.
+
+**Still required for full closure:** logic-analyzer capture of a
+real-board `read_authed` cycle confirming response phase is
+ciphertext + 8-byte R-MAC (the silicon-side verification step from
+the original spec).
+
+Original analysis follows.
+
 `secure/src/se050/scp03.rs:213` sends `P1=0x03` in EXTERNAL_AUTHENTICATE
 (C-MAC + C-DEC only, no R-MAC/R-ENC). `s_rmac` is derived at `:194` and
 never read anywhere in the codebase. `secure/src/se050/apdu.rs:262-282
@@ -157,6 +182,42 @@ Full spec: `docs/work-todo.md` S-5 + `docs/production-todo.md` §"SE050
 SCP03 response protection" (to be added in the SE050 hardening pass).
 
 ### C-8. SE050 admin-delete on USERID_OBJ enables seed theft from admin compromise (SHIP BLOCKER S-6)
+
+**FIXED 2026-05-28.** `store_objects` (`mod.rs:1614-1640`) and
+`store_duress_objects` (`mod.rs:1726-1732`) now pass `None` for the
+user / duress UserID's admin-delete policy entry; data objects
+(ENTROPY_OBJ, VK_OBJ, BOOTSTRAP_VK_OBJ — and their duress mirrors)
+keep the admin entry, so admin can still DoS-wipe the secret.  The
+substitution attack is structurally closed: admin-auth
+`delete_object_authed(USERID_OBJ)` now fails SW=0x6986 (verified by
+AN12413 §3.7.4 + Table 283 mapping `POLICY_OBJ_ALLOW_DELETE`).
+
+The stale-sweep + `admin_factory_reset` + `policy_roundtrip_selftest`
+paths were re-shaped to match: USER_OBJS is split into
+`DATA_AND_CANARY_OBJS` (must wipe — admin still authorised) and
+`AUTH_OBJS_BEST_EFFORT` (survival acceptable post-S-6); the canary
+selftest mirrors the production shape (no admin-delete on
+CANARY_USERID; self-delete via PIN-verified session in cleanup so
+repeated runs don't strand orphan canaries).
+
+**Trade-off accepted:** a chip that hits 10-wrong-PIN lockout is
+single-use — `admin_factory_reset` destroys the data (the safety
+contract) but USERID_OBJ stays orphaned (locked, gates nothing).
+The OID range must be bumped in firmware (v6 → v7) to re-provision
+that chip. AN12413's bare `DeleteAll` APDU (`80 04 00 2A`) is
+gated on session auth against the chip-reserved
+`RESERVED_ID_FACTORY_RESET = 0x7FFF0205` credential — NXP-internal,
+not exposed to our firmware — so a true full-chip factory reset is
+out of scope. Documented inline at the USERID_OBJ constant + in
+`docs/threat-model.md` Claim 5.
+
+Pinned-string regression test
+`negative_user_userid_has_no_admin_ref_post_s6` covers the literal
+`USERID_OBJ, pin, max_attempts, None,` write site; flipping the
+trailing arg back to `Some(...)` re-opens the vulnerability and
+must fail this test.
+
+Original analysis follows.
 
 `secure/src/se050/mod.rs:1598-1604` (production `store_objects`) passes
 `admin_ref = Some(ADMIN_WIPE_OBJ)` for the UserID's `admin_auth_obj_id`,
@@ -192,21 +253,47 @@ Full spec: `docs/work-todo.md` S-6.
 
 ### C-9. SE050 lower-severity follow-ups (tracked under S-7)
 
-Not ship blockers individually but should land in the same hardening
-pass as C-7/C-8:
-- `write_userid(.., max_attempts=0, ..)` silently provisions
-  unlimited-attempts UserID (`apdu.rs:421-423`); reject with
-  `InvalidParam`.
-- `delete_object` maps `SW=0x6986 → Ok(())` (`apdu.rs:620`); return
-  distinct error.
-- Status-code mappings unverified on silicon (already
-  self-documented in `apdu.rs:30-48`); capture actual SW for
-  lockout via the planned iterative_wipe probe.
-- Extended-Lc + Le emits 1 Le byte instead of 2 (`apdu.rs:200-203`);
-  latent, doesn't fire on ≤256B reads.
-- `iterative_delete_all` requires the PIN to fire pass 2
-  (`apdu.rs:739`) — so on 10-wrong-PIN the secret is *orphaned*,
-  not erased; document explicitly in threat-model Claim 5.
+**FIXED 2026-05-28** for a/b/c/d-doc-side; **OPEN** for d-silicon
++ orphan-vs-erased threat-model documentation (Claim 5).
+
+- ✓ **S-7a:** `write_userid(.., max_attempts=0, ..)` no longer silent
+  — rejects 0 (and ≥256) with `Se050Error::InvalidParam`.  Callers
+  that genuinely need unlimited attempts (admin / duress UserIDs +
+  E2E test admins) switched to the new explicit
+  `apdu::write_userid_unlimited(...)` which omits TAG_MAX_ATTEMPTS
+  per AN12413 §4.7.1.5 Table 98 (the documented unlimited encoding,
+  matching NXP plug-and-trust `tlvSet_MaxAttemps:351-358`).
+- ✓ **S-7b:** `delete_object` no longer maps SW=0x6986 → Ok.  Policy
+  denial (`kSE05x_SW12_COMMAND_NOT_ALLOWED` per
+  `se05x_enums.h:84`) now propagates as `Status(0x6986)` so callers
+  distinguish "already gone" from "wrong auth".  0x6985 → Ok stays
+  (idempotent-delete contract).
+- ✓ **S-7c:** Extended-Lc commands now emit 2 Le bytes per ISO 7816-4
+  Case 4E (`send_apdu` extended-detect on the wrapped output, mirrors
+  NXP plug-and-trust `se05x_tlv.c:1055-1059`).
+- ✓ **S-7d (doc side):** Status-code mappings cross-referenced against
+  AN12413 §4.3.1 Table 15 page 33 + NXP `se05x_enums.h:80-95`.
+  Confirmed: 0x9000, 0x6982, 0x6984, 0x6985, 0x6986, 0x6A80 are the
+  *only* SE050-documented SWs; 0x6A88 is **not** in NXP's enum so
+  the SE050 applet doesn't emit it (delete-on-non-existent uses
+  0x6985 instead). `AuthMethodBlocked` mapping to 0x6986 is the
+  documented policy-denial code, applicable to the locked-UserID
+  state by deduction (no per-APDU SW for "max_attempts exceeded" is
+  documented — VERIFY's Table 71 page 52 only lists 0x9000 +
+  0x6985; the policy-deny 0x6986 path is what fires when the
+  attempts counter reaches the limit).
+- ⏳ **S-7d (silicon side, STILL OPEN):** Drive an `iterative_wipe`
+  against a throwaway UserID to `auth_attempts == max_attempts`,
+  send VERIFY, capture actual SW.  Update mapping if empirical SW
+  differs from 0x6986.  See `docs/work-todo.md` S-7 step 3.
+- ⏳ **iterative_delete_all + orphan-vs-erased Claim 5:** Not a code
+  bug per se — `iterative_delete_all` still requires the PIN to fire
+  Pass 2 (`apdu.rs:739`) because USERID_OBJ now has no admin-delete
+  (S-6) so Pass 2 can ONLY work via self-PIN verify, which doesn't
+  exist at lockout.  Post-lockout state is: data destroyed (Pass 1
+  + admin-Pass-2 wipe both succeed on data objects), UserID
+  orphaned.  `threat-model.md` Claim 5 documents this; OID-range
+  bump is the firmware-side recovery.
 
 ### C-3. Pre-production TZSC/SAU regression
 `secure/src/sau.rs:173-181, 232`. `TZSC_SECCFGR{1,2,3} = 0` (everything NS) and SAU region 3 maps the entire peripheral window NS. Cannot be tightened until the GTZC2_TZSC base address is confirmed against RM0456 — the first guess (`0x5203_4400`) bus-faults on touch. This is a hardware/bring-up problem, not a software fix. CI must hard-fail any release build whose `sau::init()` leaves the SECCFGRx registers cleared.

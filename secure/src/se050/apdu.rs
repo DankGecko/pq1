@@ -29,23 +29,29 @@ pub enum Se050Error {
     PinIncorrect,
     /// UserID authentication object is silicon-locked — the chip-side
     /// `auth_attempts == max_attempts` and the policy now denies
-    /// further verification (SE050 surfaces this as
-    /// `SM_ERR_COMMAND_NOT_ALLOWED = 0x6986` per
-    /// `se05x_tlv.h::smStatus_t`, with AN13030 wording "Command not
-    /// allowed — access denied based on object policy"). Distinct
-    /// from `PinIncorrect` because the chip won't accept any more
-    /// attempts — the only recovery is `factory_reset_admin` + a
-    /// fresh `UserID` (re-provision).
+    /// further verification.  Mapped from `SW_COMMAND_NOT_ALLOWED =
+    /// 0x6986` per `plug-and-trust/hostlib/hostLib/inc/se05x_enums.h:84`
+    /// (`kSE05x_SW12_COMMAND_NOT_ALLOWED`) and AN12413 §4.3.1 Table 15
+    /// page 33 ("Command not allowed — access denied based on object
+    /// policy"). Distinct from `PinIncorrect` because the chip won't
+    /// accept any more attempts — the only recovery is
+    /// `factory_reset_admin` + a fresh `UserID` re-provision (which
+    /// after S-6 requires bumping the OID range; see USERID_OBJ
+    /// comment in mod.rs).
     ///
-    /// Empirical caveat: AN12413 (the authoritative APDU spec) is
-    /// behind NXP login and we have not yet captured the SW from the
-    /// chip directly. The mapping is informed by NXP's defined
-    /// `smStatus_t` set (0x6983 is NOT in SE050's enum — it's an
-    /// A71CL-era legacy code; SE050 uses 0x6986 for policy denial).
-    /// On-silicon confirmation is the deferred step in §25 Gap 4 —
-    /// run `iterative_wipe` against a throwaway UserID to drive it
-    /// to attempts=0, then send a fresh VERIFY and capture the SW.
-    /// If empirical SW differs from 0x6986, update this mapping.
+    /// **S-7d cross-reference (2026-05):** AN12413 in hand now —
+    /// the 0x6986 mapping is the documented "policy denial" code per
+    /// Table 15.  Note that AN12413's per-APDU SW lists (Table 71 for
+    /// VerifySessionUserID, page 52) document only `SW_NO_ERROR` and
+    /// `SW_CONDITIONS_NOT_SATISFIED (0x6985, "Wrong userID value")`
+    /// — they do NOT enumerate the "locked" SW.  Combined with
+    /// §4.2's catch-all "if another error code is returned, it means
+    /// the APDU has failed processing", the locked-VERIFY SW is
+    /// inferred to be 0x6986 (policy denial — the locked attempts
+    /// counter satisfies a policy DENY rule), not directly stated.
+    /// On-silicon verification (drive a throwaway UserID to
+    /// attempts=0, observe SW) remains the closing step — see
+    /// docs/work-todo.md S-7 step "Status-code probe".
     AuthMethodBlocked,
     /// Device not provisioned (UserID object missing).
     NotProvisioned,
@@ -212,8 +218,16 @@ impl ApduBuf {
 /// Send an APDU and return the response data (without SW).
 ///
 /// If an SCP03 session is active, the APDU is MAC'd and encrypted before
-/// sending. The Le byte is stripped before MAC computation and re-appended
-/// afterward (ISO 7816-4 Case 4).
+/// sending (`scp03::wrap_apdu`), the wire response is MAC-verified and
+/// decrypted (`scp03::unwrap_response`), and the SW is parsed from the
+/// resulting plaintext. The Le byte is stripped before MAC computation
+/// and re-appended afterward (ISO 7816-4 Case 4).
+///
+/// S-5 fix: previously the response was read straight off the wire (SW
+/// + TLV from the ciphertext / un-MAC'd body), which silently broke if
+/// the SE happened to respond in cleartext (level 0x03 — what the
+/// driver used to negotiate). At level 0x33 every response is wrapped
+/// and the `unwrap_response` call below is mandatory.
 pub unsafe fn send_apdu(
     t1: &mut T1State,
     scp03: &mut Scp03Session,
@@ -236,9 +250,22 @@ pub unsafe fn send_apdu(
         let mut wrapped = [0u8; MAX_APDU];
         let mut wlen = super::scp03::wrap_apdu(scp03, apdu_no_le, &mut wrapped);
 
+        // S-7c fix — extended-Lc commands take a 2-byte Le per ISO 7816-4
+        // (and per NXP plug-and-trust `se05x_tlv.c:1055-1059`). At SCP03
+        // level 0x33 wrap_apdu always produces extended-Lc output because
+        // it appends an 8-byte C-MAC, pushing the body well past the
+        // 255-byte short-Lc cap on every command with a payload.
         if has_le {
-            wrapped[wlen] = 0x00;
-            wlen += 1;
+            let wrapped_extended =
+                wlen >= 7 && wrapped[4] == 0x00;
+            if wrapped_extended {
+                wrapped[wlen] = 0x00;
+                wrapped[wlen + 1] = 0x00;
+                wlen += 2;
+            } else {
+                wrapped[wlen] = 0x00;
+                wlen += 1;
+            }
         }
         (wrapped, wlen)
     } else {
@@ -266,20 +293,37 @@ pub unsafe fn send_apdu(
         return Err(Se050Error::Transport);
     }
 
-    let sw = ((raw_resp[n - 2] as u16) << 8) | (raw_resp[n - 1] as u16);
+    // S-5 fix — unwrap (R-MAC verify + R-ENC decrypt) when SCP03 is up.
+    // The unwrapped buffer is `plaintext_body || SW1 SW2`; reading SW
+    // off `raw_resp[n-2..]` (the old code) would have used SW from the
+    // ciphertext at level 0x33, which is identically the on-wire SW
+    // because GP Amd D leaves SW outside the R-ENC envelope — but the
+    // body bytes are encrypted, so the old code's TLV parse upstream
+    // was reading ciphertext as if it were plaintext.  At level 0x03
+    // (pre-S-5) the body was cleartext but unauthenticated.  Either
+    // way, unwrap_response is now the only correct path.
+    let mut unwrapped = [0u8; MAX_APDU];
+    let (resp_slice, resp_len) = if scp03.active {
+        let m = super::scp03::unwrap_response(scp03, &raw_resp[..n], &mut unwrapped)?;
+        (&unwrapped[..m], m)
+    } else {
+        (&raw_resp[..n], n)
+    };
+
+    let sw = ((resp_slice[resp_len - 2] as u16) << 8) | (resp_slice[resp_len - 1] as u16);
 
     #[cfg(feature = "debug-log")]
-    secure_log!("[SE050] RX SW=0x{:04x} len={}", sw, n);
+    secure_log!("[SE050] RX SW=0x{:04x} len={}", sw, resp_len);
 
     if sw != SW_OK {
         return Err(Se050Error::Status(sw));
     }
 
-    let data_len = n - 2;
+    let data_len = resp_len - 2;
     if data_len > resp_buf.len() {
         return Err(Se050Error::BufferOverflow);
     }
-    resp_buf[..data_len].copy_from_slice(&raw_resp[..data_len]);
+    resp_buf[..data_len].copy_from_slice(&resp_slice[..data_len]);
     Ok(data_len)
 }
 
@@ -395,13 +439,27 @@ fn build_policy(
 /// The SE050 verifies PINs internally and enforces an attempt counter.
 /// After `max_attempts` failures the UserID locks permanently.
 ///
+/// `max_attempts` must be in `1..=255`. Per AN12413 §4.7.1.5 Table 98 the
+/// SE050 treats `max_attempts = 0` as "UNLIMITED" — a silent footgun
+/// (caller may intend "lock immediately") that this function rejects with
+/// `Se050Error::InvalidParam`.  Callers that genuinely want unlimited
+/// attempts (admin / duress UserIDs whose lockout is enforced on the MCU
+/// side) MUST use [`write_userid_unlimited`] explicitly.  The same table
+/// also caps PINs at 255 attempts; values >= 256 are rejected.  (S-7a
+/// fix — docs/security-review-2026-05.md §C-9.)
+///
 /// Policy entries:
 ///   1. `auth_obj_id = <self>`, `ar = ALLOW_WRITE | ALLOW_DELETE | REQUIRE_SM`
 ///      (session verified against this PIN can rotate PIN and self-delete)
 ///   2. If `admin_auth_obj_id` is provided:
 ///      `auth_obj_id = <admin>`, `ar = ALLOW_DELETE | REQUIRE_SM`
 ///      (a session authenticated against the admin UserID can delete THIS
-///       UserID without knowing its PIN — essential for PIN-lockout wipe)
+///       UserID without knowing its PIN). **S-6 caveat:** passing
+///       `Some(admin)` for a *user* UserID opens the substitution attack
+///       (admin deletes UserID, recreates with attacker PIN, satisfies
+///       any data object's `[UserID → ALLOW_READ]` policy).  Production
+///       code passes `None` for the user UserID and `Some(admin)` only
+///       for data objects via `write_binary_gated`.
 ///
 /// HW lesson #1: INS must be 0x41 (WRITE | AUTH_OBJECT), not 0x01.
 pub unsafe fn write_userid(
@@ -412,15 +470,64 @@ pub unsafe fn write_userid(
     max_attempts: u16,
     admin_auth_obj_id: Option<u32>,
 ) -> Result<(), Se050Error> {
+    // S-7a — reject the silent-unlimited footgun + the PIN-objects cap.
+    if max_attempts == 0 || max_attempts >= 256 {
+        return Err(Se050Error::InvalidParam);
+    }
+
     let mut apdu = ApduBuf::new(0x80, INS_WRITE | INS_AUTH_OBJECT, P1_USERID, P2_DEFAULT);
 
     let primary_ar = AR_ALLOW_WRITE | AR_ALLOW_DELETE | AR_REQUIRE_SM;
     let (policy_buf, policy_len) = build_policy(obj_id, primary_ar, admin_auth_obj_id);
     apdu.tlv(TAG_POLICY, &policy_buf[..policy_len]);
 
-    if max_attempts > 0 {
-        apdu.tlv(TAG_MAX_ATTEMPTS, &max_attempts.to_be_bytes());
-    }
+    apdu.tlv(TAG_MAX_ATTEMPTS, &max_attempts.to_be_bytes());
+    apdu.tlv_u32(TAG_1, obj_id);
+    apdu.tlv(TAG_2, pin);
+    let cmd = apdu.finish(false);
+
+    let mut resp = [0u8; 64];
+    send_apdu(t1, scp03, cmd, &mut resp)?;
+    Ok(())
+}
+
+/// Create a UserID authentication object with UNLIMITED PIN attempts —
+/// `TAG_MAX_ATTEMPTS` is omitted from the APDU, which AN12413 §4.7.1.5
+/// Table 98 specifies as the "unlimited" encoding.
+///
+/// Use this ONLY where the lockout is enforced by some external
+/// mechanism that compensates for the SE not bounding the attempt
+/// count.  In this firmware that's:
+///
+/// - **`ADMIN_WIPE_OBJ`** — PIN is 16 bytes of hardware-root-derived
+///   entropy (`hw::secret_keys::se050_admin_pin()`), brute force
+///   infeasible at any timing budget; SE-side lockout would only ever
+///   accidentally trigger on a hardware fault.
+/// - **`DURESS_USERID_OBJ`** — the MCU page-124 attempt counter gates
+///   lockout; an SE-side limit here would let a wrong duress PIN burn
+///   real-PIN attempts on the same chip.
+/// - **E2E test admin UserIDs (`TEST_ADMIN`)** — under
+///   `e2e-test`/`se050-reset-e2e` feature gates; intentional.
+///
+/// This is the S-7a-compliant explicit form.  Most callers should use
+/// [`write_userid`] which enforces `max_attempts ∈ 1..=255`.
+pub unsafe fn write_userid_unlimited(
+    t1: &mut T1State,
+    scp03: &mut Scp03Session,
+    obj_id: u32,
+    pin: &[u8],
+    admin_auth_obj_id: Option<u32>,
+) -> Result<(), Se050Error> {
+    let mut apdu = ApduBuf::new(0x80, INS_WRITE | INS_AUTH_OBJECT, P1_USERID, P2_DEFAULT);
+
+    let primary_ar = AR_ALLOW_WRITE | AR_ALLOW_DELETE | AR_REQUIRE_SM;
+    let (policy_buf, policy_len) = build_policy(obj_id, primary_ar, admin_auth_obj_id);
+    apdu.tlv(TAG_POLICY, &policy_buf[..policy_len]);
+
+    // TAG_MAX_ATTEMPTS omitted → SE050 treats as "unlimited" per
+    // AN12413 §4.7.1.5 (mirrors NXP plug-and-trust
+    // `se05x_tlv.c:351-358 tlvSet_MaxAttemps`, which also omits the
+    // TLV when its argument is 0).
     apdu.tlv_u32(TAG_1, obj_id);
     apdu.tlv(TAG_2, pin);
     let cmd = apdu.finish(false);
@@ -602,9 +709,21 @@ pub unsafe fn read_authed(
 
 /// Delete a single secure object from the SE050.
 ///
-/// Returns Ok even if the object doesn't exist (SW=0x6985).
-/// UserID auth objects may return SW=0x6986 (not allowed) — that is
-/// also treated as Ok since we can't do anything about it.
+/// Returns `Ok` if the object doesn't exist (SW=0x6985 — empirically the
+/// chip's "no such OID" response; not formally documented in AN12413
+/// Table 125 page 71, which only enumerates `SW_NO_ERROR`, but
+/// consistent across observed traffic and what NXP's own
+/// `iterative_delete_all` accepts).
+///
+/// **S-7b fix:** SW=0x6986 (`kSE05x_SW12_COMMAND_NOT_ALLOWED` per NXP
+/// plug-and-trust `se05x_enums.h:84`) means "access denied based on
+/// object policy" — the object exists but the current session lacks
+/// `ALLOW_DELETE` for it.  Pre-S-7b this was silently mapped to `Ok`,
+/// masking real policy-denial bugs (e.g. an unauthenticated sweep
+/// silently "succeeding" on objects that still exist on chip).  Now
+/// it propagates as `Se050Error::Status(0x6986)`, so the caller (
+/// `iterative_delete_all`, `admin_factory_reset`, etc.) sees the
+/// distinction between "already gone" and "needs different auth".
 pub unsafe fn delete_object(
     t1: &mut T1State,
     scp03: &mut Scp03Session,
@@ -616,8 +735,9 @@ pub unsafe fn delete_object(
     let mut resp = [0u8; 64];
     match send_apdu(t1, scp03, cmd, &mut resp) {
         Ok(_) => Ok(()),
-        Err(Se050Error::Status(0x6985)) => Ok(()), // doesn't exist
-        Err(Se050Error::Status(0x6986)) => Ok(()), // not allowed (UserID)
+        Err(Se050Error::Status(0x6985)) => Ok(()), // doesn't exist — idempotent
+        // S-7b: 0x6986 is policy-denied → caller distinguishes "missing"
+        // from "wrong auth".  Falls through to the generic Err arm.
         Err(e) => Err(e),
     }
 }

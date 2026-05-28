@@ -390,13 +390,31 @@ fn positive_scp03_key_version_is_0x0b() {
 }
 
 #[test]
-fn positive_scp03_external_authenticate_p1_is_0x03() {
-    // HW lesson #6: SE050E requires P1=0x03 (C-MAC + C-DEC) in EXTERNAL
-    // AUTHENTICATE. P1=0x01 (MAC-only) silently downgrades to a
-    // plaintext channel — invariant #3 ("E2E encrypted SE tunnels") is
-    // broken.
-    assert!(SCP03_SRC.contains("let header = [0x84u8, 0x82, 0x03, 0x00, 0x10];"));
-    assert!(SCP03_SRC.contains("ext_auth[2] = 0x03;"));
+fn positive_scp03_external_authenticate_p1_is_0x33() {
+    // S-5 fix (docs/security-review-2026-05.md §C-7): EXTERNAL
+    // AUTHENTICATE P1 must be 0x33 = C-MAC | C-DECRYPTION | R-MAC |
+    // R-ENCRYPTION (GP Amendment D Table 7-6 page 35; mirrored in
+    // NXP plug-and-trust `fsl_sss_se05x_scp03.c:186-198`
+    // `SECLVL_CDEC_RENC_CMAC_RMAC`).  Pre-S-5 the driver negotiated
+    // P1=0x03 (C-MAC + C-DEC only — no R-MAC, no R-ENC) which left
+    // every response in cleartext on the I²C bus, leaking `half_E`
+    // on every unlock.  Regressing to 0x03 or 0x13 (no R-ENC) or
+    // 0x11 (no C-DEC) breaks invariant #3 ("E2E encrypted SE
+    // tunnels") and must fire this test.
+    assert!(SCP03_SRC.contains("let header = [0x84u8, 0x82, 0x33, 0x00, 0x10];"));
+    assert!(SCP03_SRC.contains("ext_auth[2] = 0x33;"));
+}
+
+#[test]
+fn positive_scp03_unwrap_response_exists() {
+    // S-5: unwrap_response must exist and be called from send_apdu.
+    // Without it, even at level 0x33 the driver would feed wrapped
+    // ciphertext to the TLV parser upstream → garbage reads / silent
+    // policy bypass.
+    assert!(SCP03_SRC.contains("pub fn unwrap_response("));
+    assert!(SCP03_SRC.contains("fn response_icv("));
+    assert!(SCP03_SRC.contains("block[0] = 0x80;")); // §6.2.7 MSB pad
+    assert!(APDU_SRC.contains("super::scp03::unwrap_response("));
 }
 
 #[test]
@@ -515,12 +533,27 @@ fn positive_iterative_delete_skips_reserved_ranges() {
 }
 
 #[test]
-fn positive_iterative_delete_status_word_swallows_present() {
-    // delete_object treats 0x6985 (already deleted) and 0x6986 (not
-    // allowed — UserID without self-delete policy) as Ok, otherwise
-    // the cleanup loop short-circuits on the first stale UserID.
-    assert!(APDU_SRC.contains("Err(Se050Error::Status(0x6985)) => Ok(()), // doesn't exist"));
-    assert!(APDU_SRC.contains("Err(Se050Error::Status(0x6986)) => Ok(()), // not allowed (UserID)"));
+fn positive_delete_object_swallows_0x6985_idempotent() {
+    // delete_object treats 0x6985 ("already deleted" / "not found") as
+    // Ok so the cleanup loop is idempotent on objects that vanish
+    // between read_id_list and delete.  Per AN12413 Table 125 page 71
+    // the only documented SW for DELETE is 0x9000; 0x6985 is the
+    // empirical "no such OID" code (NXP plug-and-trust accepts it the
+    // same way).
+    assert!(APDU_SRC.contains("Err(Se050Error::Status(0x6985)) => Ok(()), // doesn't exist — idempotent"));
+}
+
+#[test]
+fn negative_delete_object_does_not_swallow_0x6986() {
+    // S-7b fix: SW=0x6986 (`kSE05x_SW12_COMMAND_NOT_ALLOWED` per
+    // NXP plug-and-trust `se05x_enums.h:84`) is policy-DENIED —
+    // distinct from "not found".  Pre-S-7b the code silently mapped
+    // this to Ok, hiding real policy-denial bugs (unauthenticated
+    // sweep pretending to succeed on UserID objects).  Now it MUST
+    // propagate as Err so callers can distinguish "already gone"
+    // from "needs different auth".  Regression: a future refactor
+    // re-adding `0x6986 => Ok(())` breaks this test.
+    assert!(!APDU_SRC.contains("0x6986)) => Ok(())"));
 }
 
 #[test]
@@ -988,22 +1021,55 @@ fn negative_remaining_attempts_shared_max_attempts_const() {
 }
 
 #[test]
-fn negative_admin_userid_max_attempts_zero_unlimited() {
-    // The admin UserID is provisioned with `max_attempts = 0` (the SE050
-    // sentinel for "unlimited") so the PIN-lockout factory-reset path
-    // can't lock itself out. A non-zero literal would silently brick the
-    // recovery path after enough failures.
-    assert!(MOD_SRC.contains("ADMIN_WIPE_OBJ, admin_pin, 0, None,"));
-    assert!(MOD_SRC.contains("ADMIN_WIPE_OBJ, admin, 0, None,"));
+fn negative_admin_userid_unlimited_via_explicit_api() {
+    // S-7a: the admin UserID is provisioned with UNLIMITED attempts
+    // — but via the explicit `write_userid_unlimited` function
+    // (which omits TAG_MAX_ATTEMPTS, the AN12413-documented
+    // unlimited encoding), NOT by passing the silent `0` sentinel
+    // to `write_userid`.  Pre-S-7a `write_userid(..., 0, ...)`
+    // silently dropped the TLV and produced an unlimited UserID —
+    // a footgun: a caller meaning "lock after 0 attempts" got
+    // "never lock".  Now `write_userid` rejects 0 with InvalidParam;
+    // callers that need unlimited must say so explicitly.
+    assert!(MOD_SRC.contains("write_userid_unlimited("));
+    assert!(MOD_SRC.contains("ADMIN_WIPE_OBJ, admin_pin, None,"));
+    assert!(MOD_SRC.contains("ADMIN_WIPE_OBJ, admin, None,"));
 }
 
 #[test]
 fn negative_admin_userid_provisioning_uses_no_admin_ref() {
-    // The admin UserID itself must NOT have a higher admin ref — there
-    // is no "super-admin" above it. Passing `Some(...)` here would let
-    // a leaked secondary credential delete the admin UserID and brick
-    // recovery on the next PIN lockout.
-    assert!(MOD_SRC.contains("ADMIN_WIPE_OBJ, admin_pin, 0, None,"));
+    // The admin UserID itself must NOT have a higher admin ref —
+    // there is no "super-admin" above it.  Passing `Some(...)`
+    // here would let a leaked secondary credential delete the
+    // admin UserID and brick recovery on the next PIN lockout.
+    //
+    // S-7a refactor: the admin is now created via
+    // `write_userid_unlimited` (the signature has no
+    // `max_attempts` field; the admin entry is the trailing
+    // argument).  Pin `None` as that trailing arg.
+    assert!(MOD_SRC.contains("ADMIN_WIPE_OBJ, admin_pin, None,"));
+}
+
+#[test]
+fn negative_user_userid_has_no_admin_ref_post_s6() {
+    // S-6 fix (docs/security-review-2026-05.md §C-8): the user
+    // UserID's policy MUST NOT contain an admin-delete entry.
+    // If admin had DELETE on the user UserID, an admin
+    // compromise could delete USERID_OBJ → recreate at the same
+    // OID with attacker PIN → read ENTROPY_OBJ (whose policy
+    // gates on USERID_OBJ by OID, not by instance).
+    //
+    // Pin the literal `USERID_OBJ, pin, max_attempts, None,`
+    // — the trailing `None` is what closes the substitution
+    // attack.  A future refactor that flips this back to
+    // `admin_ref` (or `Some(...)`) re-opens the vulnerability
+    // and must trip this test.
+    assert!(MOD_SRC.contains("USERID_OBJ, pin, max_attempts, None,"));
+    // Data objects KEEP admin-delete (DoS-wipe is acceptable —
+    // the safety contract is data destruction, which the admin
+    // path must be able to effect).  Pin that the data write
+    // still passes `admin_ref`.
+    assert!(MOD_SRC.contains("USERID_OBJ, admin_ref,"));
 }
 
 // ═════════════════════════════════════════════════════════════════════

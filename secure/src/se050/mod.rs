@@ -372,9 +372,10 @@ impl Se050 {
                     let _ = apdu::close_session(&mut self.t1, &mut self.scp03, &sid);
                 }
             }
-            // Unlimited-attempts UserID (max_attempts = 0), no admin
-            // binding — the duress credential never locks out.
-            apdu::write_userid(&mut self.t1, &mut self.scp03, obj_id, pin, 0, None)?;
+            // Unlimited-attempts UserID, no admin binding — the duress
+            // credential never locks out at the SE level (the MCU
+            // page-124 counter does).  Explicit-unlimited per S-7a.
+            apdu::write_userid_unlimited(&mut self.t1, &mut self.scp03, obj_id, pin, None)?;
 
             // Auth against it.
             let session_id = apdu::create_session(&mut self.t1, &mut self.scp03, obj_id)?;
@@ -803,8 +804,8 @@ impl Se050 {
             secure_log!("[E2E-ADMIN] step 1: cleanup OK");
 
             // ---- 2. Provision admin UserID first (so user objects can ref it) ----
-            apdu::write_userid(
-                &mut self.t1, &mut self.scp03, TEST_ADMIN, &admin_pin, 0, None,
+            apdu::write_userid_unlimited(
+                &mut self.t1, &mut self.scp03, TEST_ADMIN, &admin_pin, None,
             )?;
 
             // User UserID with two-entry policy: self + admin
@@ -973,8 +974,8 @@ impl Se050 {
             secure_log!("[E2E-EXTRACT] step 1: cleanup OK");
 
             // ---- 2. Provision admin + user UserIDs + secret data object ----
-            apdu::write_userid(
-                &mut self.t1, &mut self.scp03, TEST_ADMIN, &admin_pin, 0, None,
+            apdu::write_userid_unlimited(
+                &mut self.t1, &mut self.scp03, TEST_ADMIN, &admin_pin, None,
             )?;
             apdu::write_userid(
                 &mut self.t1, &mut self.scp03,
@@ -1217,8 +1218,8 @@ impl Se050 {
             secure_log!("[E2E-CRASH] 1a cleanup OK");
 
             // ---- b. Provision admin + user + data with 2-entry policy ----
-            apdu::write_userid(
-                &mut self.t1, &mut self.scp03, TEST_ADMIN, &admin_pin, 0, None,
+            apdu::write_userid_unlimited(
+                &mut self.t1, &mut self.scp03, TEST_ADMIN, &admin_pin, None,
             )?;
             apdu::write_userid(
                 &mut self.t1, &mut self.scp03,
@@ -1445,10 +1446,14 @@ impl Se050 {
                 secure_log!("[SE050/store] admin_exists={}", admin_exists);
 
                 if !admin_exists {
-                    secure_log!("[SE050/store] writing admin UserID (max_attempts=0, no admin_ref)");
-                    apdu::write_userid(
+                    secure_log!("[SE050/store] writing admin UserID (unlimited attempts, no admin_ref)");
+                    // Unlimited per S-7a — admin PIN is 16 bytes of
+                    // HW-root-derived entropy; SE-side lockout would
+                    // only fire on a hardware glitch, not actual
+                    // brute force.
+                    apdu::write_userid_unlimited(
                         &mut self.t1, &mut self.scp03,
-                        ADMIN_WIPE_OBJ, admin, 0, None,
+                        ADMIN_WIPE_OBJ, admin, None,
                     ).map_err(|e| {
                         secure_log!("[SE050/store] write admin UserID FAILED: {:?}", e);
                         e
@@ -1519,12 +1524,16 @@ impl Se050 {
                         return Err(e);
                     }
 
-                    // Data objects first, USERID_OBJ last. Only delete
-                    // confirmed-present objects so any error propagated
-                    // below is a real failure, not delete-on-absent. Order
-                    // within {data objects} is cosmetic — admin-auth
-                    // delete doesn't chain through USERID_OBJ.
-                    for idx in [1usize, 2, 3, 0] {
+                    // Data objects only — S-6 dropped admin-delete from
+                    // USERID_OBJ's policy, so the admin session cannot
+                    // delete idx=0 (USERID_OBJ). If a stale USERID_OBJ
+                    // is present here, the `userid_exists && admin_pin.
+                    // is_some()` check below fails provisioning loud —
+                    // the chip is in a stuck state (USERID locked from
+                    // a prior session, no recovery path that doesn't
+                    // wipe via NXP-only factory reset) and the OID
+                    // range must be bumped.
+                    for idx in [1usize, 2, 3] {
                         if present[idx] {
                             if let Err(e) = apdu::delete_object_authed(
                                 &mut self.t1, &mut self.scp03,
@@ -1592,12 +1601,26 @@ impl Se050 {
 
             if !userid_exists {
                 secure_log!(
-                    "[SE050/store] writing USERID_OBJ (pin_len={} max_attempts={})",
+                    "[SE050/store] writing USERID_OBJ (pin_len={} max_attempts={}, no admin_ref — S-6)",
                     pin.len(), max_attempts
                 );
+                // S-6 fix (docs/security-review-2026-05.md §C-8): the
+                // user UserID's policy is created WITHOUT an admin
+                // delete-entry, so an admin-credential compromise can
+                // no longer delete USERID_OBJ → recreate it at the
+                // same OID with attacker-chosen PIN → satisfy the
+                // data objects' `[USERID_OBJ → ALLOW_READ]` policy →
+                // read `half_E`. Data objects KEEP their admin
+                // delete-entry (DoS-wipe is acceptable; the safety
+                // contract is "seed destroyed", not "chip stays
+                // re-provisionable"). Trade-off: after lockout +
+                // admin_factory_reset, USERID_OBJ is orphaned on
+                // chip; the OID range must be bumped to reuse the
+                // chip — see the v6 → vN comment at the top of this
+                // module.
                 apdu::write_userid(
                     &mut self.t1, &mut self.scp03,
-                    USERID_OBJ, pin, max_attempts, admin_ref,
+                    USERID_OBJ, pin, max_attempts, None,
                 ).map_err(|e| {
                     secure_log!("[SE050/store] write USERID_OBJ FAILED: {:?}", e);
                     e
@@ -1706,7 +1729,13 @@ impl Se050 {
                         let _ = apdu::close_session(&mut self.t1, &mut self.scp03, &sid);
                         return Err(e);
                     }
-                    for idx in [1usize, 2, 3, 0] {
+                    // S-6: skip idx=0 (DURESS_USERID_OBJ) — admin can no
+                    // longer delete it.  Survival is acceptable here; on
+                    // a stuck duress UserID, the `check_exists(DURESS_
+                    // USERID_OBJ)` below will skip the write and leave
+                    // any old duress state in place (matches the
+                    // `store_objects` stuck-USERID semantics).
+                    for idx in [1usize, 2, 3] {
                         if present[idx] {
                             if let Err(e) = apdu::delete_object_authed(
                                 &mut self.t1, &mut self.scp03, &sid, STALE[idx],
@@ -1720,12 +1749,16 @@ impl Se050 {
                 }
             }
 
-            // Duress UserID — max_attempts=0 (unlimited).
+            // Duress UserID — unlimited attempts (MCU page-124 counter
+            // gates lockout, not the SE).  S-6 fix — pass `None` for
+            // the admin policy entry (same rationale as USERID_OBJ in
+            // `store_objects`); admin-delete on data objects below
+            // remains.  Explicit-unlimited per S-7a.
             if !apdu::check_exists(&mut self.t1, &mut self.scp03, DURESS_USERID_OBJ).unwrap_or(false) {
-                secure_log!("[SE050/duress] writing DURESS_USERID_OBJ (max_attempts=0)");
-                apdu::write_userid(
+                secure_log!("[SE050/duress] writing DURESS_USERID_OBJ (unlimited, no admin_ref — S-6)");
+                apdu::write_userid_unlimited(
                     &mut self.t1, &mut self.scp03,
-                    DURESS_USERID_OBJ, duress_pin, 0, admin_ref,
+                    DURESS_USERID_OBJ, duress_pin, None,
                 )?;
             }
 
@@ -1779,10 +1812,12 @@ impl Se050 {
                 ADMIN_WIPE_OBJ, exists
             );
             if !exists {
-                secure_log!("[SE050/admin] writing admin UserID (16-byte PIN, max_attempts=0, no admin_ref)");
-                apdu::write_userid(
+                secure_log!("[SE050/admin] writing admin UserID (16-byte PIN, unlimited attempts, no admin_ref)");
+                // Explicit-unlimited per S-7a — admin PIN is 16-byte
+                // HW-root-derived; SE-side lockout is unnecessary.
+                apdu::write_userid_unlimited(
                     &mut self.t1, &mut self.scp03,
-                    ADMIN_WIPE_OBJ, admin_pin, 0, None,
+                    ADMIN_WIPE_OBJ, admin_pin, None,
                 ).map_err(|e| {
                     secure_log!("[SE050/admin] write_userid FAILED: {:?}", e);
                     e
@@ -1811,26 +1846,38 @@ impl Se050 {
         use zeroize::Zeroize;
         self.init()?;
 
-        // Objects that MUST be gone after a successful admin wipe for
-        // the "wallet data is erased" contract to hold. Admin UserID
-        // survival is tracked separately below — the caller's
-        // `admin_exists()` check drives flash-page-125 erase decisions.
+        // Data + canary objects — these MUST be gone after a successful
+        // admin wipe for the "wallet data is erased" contract to hold.
+        // Each carries the admin-delete policy entry (`build_policy`
+        // with `admin_auth_obj_id = Some(ADMIN_WIPE_OBJ)`), so an admin
+        // session is authorised to delete them.
         //
-        // Cleanup list covers the full v6 canary range (0x7B10_00B0..B5)
-        // — matches what `policy_roundtrip_selftest` writes (Bug 3 /
-        // work-todo #29). If the selftest crashed between write and
-        // its own cleanup, admin_factory_reset sweeps the stragglers.
-        const USER_OBJS: &[(u32, &str)] = &[
+        // Includes the full v6 canary range (0x7B10_00B0..B5) — matches
+        // what `policy_roundtrip_selftest` writes (Bug 3 / work-todo
+        // #29). If the selftest crashed between write and its own
+        // cleanup, admin_factory_reset sweeps the stragglers.
+        const DATA_AND_CANARY_OBJS: &[(u32, &str)] = &[
             (ENTROPY_OBJ, "ENTROPY_OBJ"),
             (VK_OBJ, "VK_OBJ"),
             (BOOTSTRAP_VK_OBJ, "BOOTSTRAP_VK_OBJ"),
-            (USERID_OBJ, "USERID_OBJ"),
             (0x7B10_00B0, "CANARY_USERID"),
             (0x7B10_00B1, "CANARY_DATA_1"),
             (0x7B10_00B2, "CANARY_DATA_2"),
             (0x7B10_00B3, "CANARY_DATA_3"),
             (0x7B10_00B4, "CANARY_DATA_4"),
             (0x7B10_00B5, "CANARY_DATA_5"),
+        ];
+
+        // Auth objects — post-S-6 the UserID's policy has NO admin-
+        // delete entry (closes the substitution attack described in
+        // docs/security-review-2026-05.md §C-8). So admin-auth deletes
+        // on these will fail with SW=0x6986; that's expected, not an
+        // error. They are still attempted (best-effort) and logged, but
+        // survival is acceptable and does NOT fail the wipe. The user
+        // data wipe — what the safety contract guarantees — is gated on
+        // `DATA_AND_CANARY_OBJS` alone.
+        const AUTH_OBJS_BEST_EFFORT: &[(u32, &str)] = &[
+            (USERID_OBJ, "USERID_OBJ"),
         ];
 
         unsafe {
@@ -1871,7 +1918,7 @@ impl Se050 {
                 // `0x6982`/`0x6986`) apart from session-invalidation
                 // after Nth delete. Silent `let _ = ...` was masking
                 // both patterns indistinguishably — see work-todo Bug 1.
-                for (obj_id, name) in USER_OBJS {
+                for (obj_id, name) in DATA_AND_CANARY_OBJS {
                     match apdu::delete_object_authed(
                         &mut self.t1, &mut self.scp03, &session_id, *obj_id,
                     ) {
@@ -1881,6 +1928,31 @@ impl Se050 {
                         Err(e) => {
                             secure_log!(
                                 "[SE050/admin-wipe] delete {} (0x{:08x}): Err({:?})",
+                                name, obj_id, e
+                            );
+                        }
+                    }
+                }
+                // Best-effort UserID delete — expected to fail with
+                // SW=0x6986 post-S-6 (no admin-delete in policy).  We
+                // still try, in case the chip was provisioned with a
+                // pre-S-6 policy that DID include admin-delete (which
+                // would mean we're a fresh build sweeping legacy
+                // state); a successful delete here just cleans up the
+                // stale shape.
+                for (obj_id, name) in AUTH_OBJS_BEST_EFFORT {
+                    match apdu::delete_object_authed(
+                        &mut self.t1, &mut self.scp03, &session_id, *obj_id,
+                    ) {
+                        Ok(()) => {
+                            secure_log!(
+                                "[SE050/admin-wipe] delete {} (0x{:08x}): Ok (legacy admin-delete policy)",
+                                name, obj_id
+                            );
+                        }
+                        Err(e) => {
+                            secure_log!(
+                                "[SE050/admin-wipe] delete {} (0x{:08x}): Err({:?}) — expected post-S-6 (UserID orphan)",
                                 name, obj_id, e
                             );
                         }
@@ -1909,16 +1981,14 @@ impl Se050 {
                 &mut self.t1, &mut self.scp03, None, None,
             );
 
-            // Post-wipe verification. Each user object MUST be gone; if
-            // any survived the admin-auth delete the wipe is incomplete
-            // and the caller (flash-page-125 erase, multi-chip wipe
-            // coordinator) needs to know so it doesn't falsely advance
-            // state. Admin UserID survival is NOT a hard failure here:
-            // it matters for page-125 lifecycle but user-data wipe
-            // (the security guarantee) is orthogonal.
+            // Post-wipe verification.  Each data / canary object MUST
+            // be gone — that's the safety guarantee.  Auth objects
+            // (USERID_OBJ) may survive (S-6); we log but don't fail on
+            // their survival.  Admin UserID survival is tracked
+            // separately below and also informational only.
             let mut first_survivor: Option<(u32, &str)> = None;
             let mut surviving_count: u32 = 0;
-            for (obj_id, name) in USER_OBJS {
+            for (obj_id, name) in DATA_AND_CANARY_OBJS {
                 if apdu::check_exists(&mut self.t1, &mut self.scp03, *obj_id).unwrap_or(false) {
                     surviving_count += 1;
                     secure_log!(
@@ -1929,6 +1999,20 @@ impl Se050 {
                         first_survivor = Some((*obj_id, name));
                     }
                 }
+            }
+            // Auth-object survival is informational only (chip is
+            // single-use post-lockout — the OID range must be bumped
+            // to reuse the chip; the security contract is data
+            // destruction, which is checked above).
+            for (obj_id, name) in AUTH_OBJS_BEST_EFFORT {
+                let surv = apdu::check_exists(
+                    &mut self.t1, &mut self.scp03, *obj_id,
+                ).unwrap_or(false);
+                secure_log!(
+                    "[SE050/admin-wipe] post-check {} (0x{:08x}): {} (S-6: survival acceptable)",
+                    name, obj_id,
+                    if surv { "SURVIVED" } else { "gone" }
+                );
             }
 
             let admin_post = apdu::check_exists(
@@ -2042,6 +2126,11 @@ impl Se050 {
                     &mut self.t1, &mut self.scp03, &cleanup_sid, *obj_id,
                 );
             }
+            // CANARY_USERID may carry the legacy (pre-S-6) admin-delete
+            // policy on chips provisioned by older firmware; if so this
+            // succeeds.  On chips with the new shape (no admin-delete)
+            // this returns SW=0x6986 and we fall through to the
+            // self-delete path below.
             let _ = apdu::delete_object_authed(
                 &mut self.t1, &mut self.scp03, &cleanup_sid, CANARY_USERID,
             );
@@ -2049,12 +2138,39 @@ impl Se050 {
                 &mut self.t1, &mut self.scp03, &cleanup_sid,
             );
 
+            // Self-delete path — CANARY_USERID with the new shape can
+            // only be deleted by a session authenticated against itself
+            // (i.e. PIN-verified).  The canary PIN is the fixed value
+            // `00000000` so a prior orphaned UserID is always
+            // reclaimable.  Skip if the object is gone (cleaned up
+            // above) or if it never existed.
+            if apdu::check_exists(
+                &mut self.t1, &mut self.scp03, CANARY_USERID,
+            ).unwrap_or(false) {
+                if let Ok(self_sid) = apdu::create_session(
+                    &mut self.t1, &mut self.scp03, CANARY_USERID,
+                ) {
+                    if apdu::verify_session(
+                        &mut self.t1, &mut self.scp03, &self_sid, &canary_pin,
+                    ).is_ok() {
+                        let _ = apdu::delete_object_authed(
+                            &mut self.t1, &mut self.scp03, &self_sid, CANARY_USERID,
+                        );
+                    }
+                    let _ = apdu::close_session(
+                        &mut self.t1, &mut self.scp03, &self_sid,
+                    );
+                }
+            }
+
             // Write the canary UserID first — data objects reference it
-            // as their primary auth.
-            secure_log!("[SE050/selftest] write CANARY_USERID");
+            // as their primary auth.  Mirrors production shape: NO
+            // admin-delete entry on the UserID (S-6), admin-delete is
+            // ONLY on the data objects.
+            secure_log!("[SE050/selftest] write CANARY_USERID (no admin_ref — S-6 production shape)");
             apdu::write_userid(
                 &mut self.t1, &mut self.scp03,
-                CANARY_USERID, &canary_pin, 5, Some(ADMIN_WIPE_OBJ),
+                CANARY_USERID, &canary_pin, 5, None,
             ).map_err(|e| {
                 secure_log!("[SE050/selftest] write CANARY_USERID FAILED: {:?}", e);
                 e
@@ -2114,56 +2230,87 @@ impl Se050 {
                     }
                 }
             }
+            // CANARY_USERID delete — expected to FAIL post-S-6 (admin
+            // no longer has DELETE on UserID auth objects).  Try
+            // anyway: a successful delete here means the chip received
+            // a pre-S-6 canary policy from an earlier firmware build
+            // and is being swept clean.  Treat both outcomes as
+            // non-fatal; the survivor handling below allows it.
             match apdu::delete_object_authed(
                 &mut self.t1, &mut self.scp03, &sid, CANARY_USERID,
             ) {
                 Ok(()) => {
-                    secure_log!("[SE050/selftest] delete CANARY_USERID (0x{:08x}): Ok", CANARY_USERID);
+                    secure_log!(
+                        "[SE050/selftest] delete CANARY_USERID (0x{:08x}): Ok (legacy admin-delete policy on chip)",
+                        CANARY_USERID,
+                    );
                 }
                 Err(e) => {
                     secure_log!(
-                        "[SE050/selftest] delete CANARY_USERID (0x{:08x}): Err({:?})",
+                        "[SE050/selftest] delete CANARY_USERID (0x{:08x}): Err({:?}) — expected post-S-6",
                         CANARY_USERID, e,
                     );
                 }
             }
             let _ = apdu::close_session(&mut self.t1, &mut self.scp03, &sid);
 
-            // Post-check every canary — any survivor means the
-            // production 6-delete shape is broken.
-            let mut survivors: u32 = 0;
+            // Self-delete the canary UserID via its own PIN-verified
+            // session (the production "graceful user delete" path —
+            // not used in `admin_factory_reset`, but it IS the only
+            // legitimate path that can delete a UserID post-S-6, and
+            // the selftest needs to leave the chip clean for re-runs).
+            secure_log!("[SE050/selftest] self-delete CANARY_USERID via PIN verify");
+            if let Ok(self_sid) = apdu::create_session(
+                &mut self.t1, &mut self.scp03, CANARY_USERID,
+            ) {
+                if apdu::verify_session(
+                    &mut self.t1, &mut self.scp03, &self_sid, &canary_pin,
+                ).is_ok() {
+                    let _ = apdu::delete_object_authed(
+                        &mut self.t1, &mut self.scp03, &self_sid, CANARY_USERID,
+                    );
+                }
+                let _ = apdu::close_session(&mut self.t1, &mut self.scp03, &self_sid);
+            }
+
+            // Post-check: data objects MUST be gone (admin had delete).
+            // CANARY_USERID survival is acceptable here even after the
+            // self-delete attempt above (e.g. the canary already
+            // self-deleted via the admin session above on a legacy
+            // chip, leaving create_session→Err here).
+            let mut data_survivors: u32 = 0;
             for (obj_id, name) in CANARY_DATA_OBJS {
                 if apdu::check_exists(&mut self.t1, &mut self.scp03, *obj_id)
                     .unwrap_or(false)
                 {
-                    survivors += 1;
+                    data_survivors += 1;
                     secure_log!(
                         "[SE050/selftest] post-delete SURVIVOR: {} (0x{:08x})",
                         name, obj_id,
                     );
                 }
             }
-            if apdu::check_exists(&mut self.t1, &mut self.scp03, CANARY_USERID)
-                .unwrap_or(false)
-            {
-                survivors += 1;
+            let canary_userid_surv = apdu::check_exists(
+                &mut self.t1, &mut self.scp03, CANARY_USERID,
+            ).unwrap_or(false);
+            if canary_userid_surv {
                 secure_log!(
-                    "[SE050/selftest] post-delete SURVIVOR: CANARY_USERID (0x{:08x})",
+                    "[SE050/selftest] post-delete CANARY_USERID (0x{:08x}): survived (orphan, acceptable post-S-6)",
                     CANARY_USERID,
                 );
             }
 
-            if survivors > 0 {
+            if data_survivors > 0 {
                 secure_log!(
-                    "[SE050/selftest] FAILED: {} canary/canaries survived the 6-delete admin session \
+                    "[SE050/selftest] FAILED: {} data canaries survived the 5-delete admin session \
                      (policy TLV byte-order regression OR session-invalidation quirk)",
-                    survivors,
+                    data_survivors,
                 );
                 return Err(Se050Error::Status(0x6986));
             }
         }
 
-        secure_log!("[SE050/selftest] PASS (6 canaries admin-deleted in one session)");
+        secure_log!("[SE050/selftest] PASS (5 data canaries admin-deleted, UserID handled via self-delete)");
         Ok(())
     }
 

@@ -19,7 +19,7 @@
 //! the GP `PUT KEY` layout assertion fire on every `cargo test`.
 
 use aes::Aes128;
-use aes::cipher::{BlockEncrypt, KeyInit, generic_array::GenericArray};
+use aes::cipher::{BlockDecrypt, BlockEncrypt, KeyInit, generic_array::GenericArray};
 use cmac::Cmac;
 use cmac::Mac as CmacMac;
 
@@ -88,6 +88,29 @@ pub fn aes128_cbc_encrypt(key: &[u8; 16], iv: &[u8; 16], data: &mut [u8]) {
         cipher.encrypt_block(&mut block);
         chunk.copy_from_slice(&block);
         prev.copy_from_slice(chunk);
+    }
+}
+
+/// AES-128-CBC decrypt in-place — inverse of `aes128_cbc_encrypt`.
+/// `data` must be a multiple of 16 bytes; caller strips padding
+/// afterwards.  Used by `unwrap_response` to decrypt R-ENC response
+/// bodies under the SCP03 session's `S-ENC` key.
+pub fn aes128_cbc_decrypt(key: &[u8; 16], iv: &[u8; 16], data: &mut [u8]) {
+    let cipher = Aes128::new(GenericArray::from_slice(key));
+    let mut prev = *iv;
+    for chunk in data.chunks_mut(16) {
+        let ct_block: [u8; 16] = {
+            let mut b = [0u8; 16];
+            b.copy_from_slice(chunk);
+            b
+        };
+        let mut block = GenericArray::clone_from_slice(chunk);
+        cipher.decrypt_block(&mut block);
+        for (b, p) in block.iter_mut().zip(prev.iter()) {
+            *b ^= p;
+        }
+        chunk.copy_from_slice(&block);
+        prev = ct_block;
     }
 }
 
@@ -482,6 +505,71 @@ mod tests {
         let c1 = aes128_ecb_encrypt(&key, &c0);
         assert_eq!(&data[..16], &c0[..], "block 0 must equal E(0)");
         assert_eq!(&data[16..32], &c1[..], "block 1 must equal E(c0) (chained)");
+    }
+
+    /// AES-128-CBC encrypt then decrypt is the identity — pin the
+    /// `aes128_cbc_decrypt` primitive added for SCP03 `unwrap_response`
+    /// against the existing `aes128_cbc_encrypt`.  Round-trip is the
+    /// strongest single test: if decrypt has any bug (key/IV
+    /// misordering, chain through plaintext instead of ciphertext,
+    /// wrong block direction) the output won't equal the input.
+    #[test]
+    fn positive_aes128_cbc_encrypt_decrypt_round_trip() {
+        let key = [0x42u8; 16];
+        let iv = [0xA5u8; 16];
+        let original = [
+            0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88,
+            0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x00,
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+            0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
+        ];
+        let mut data = original;
+        aes128_cbc_encrypt(&key, &iv, &mut data);
+        assert_ne!(data, original, "encrypt must produce non-identity output");
+        aes128_cbc_decrypt(&key, &iv, &mut data);
+        assert_eq!(data, original, "decrypt(encrypt(x)) must equal x");
+    }
+
+    /// CBC decrypt with a single-block input + zero IV is just
+    /// AES-ECB-decrypt of the block.
+    #[test]
+    fn positive_aes128_cbc_decrypt_single_block_zero_iv_matches_ecb() {
+        let key: [u8; 16] = [
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+            0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+        ];
+        // FIPS 197 §C.1 ciphertext.
+        let ciphertext: [u8; 16] = [
+            0x69, 0xC4, 0xE0, 0xD8, 0x6A, 0x7B, 0x04, 0x30,
+            0xD8, 0xCD, 0xB7, 0x80, 0x70, 0xB4, 0xC5, 0x5A,
+        ];
+        let mut data = ciphertext;
+        let iv = [0u8; 16];
+        aes128_cbc_decrypt(&key, &iv, &mut data);
+        let expected: [u8; 16] = [
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+            0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF,
+        ];
+        assert_eq!(data, expected, "CBC decrypt with zero IV must equal ECB decrypt on first block");
+    }
+
+    /// CBC chains forward: decrypt of block 2 uses CT block 1 as the
+    /// XOR mask, NOT plaintext block 1. Mirrors the negative
+    /// `positive_aes128_cbc_two_blocks_chain_through_previous_ciphertext`
+    /// test in the encrypt direction.
+    #[test]
+    fn positive_aes128_cbc_decrypt_two_blocks_uses_previous_ciphertext() {
+        // Construct: c0 = AES-ECB-Enc(K, 0), c1 = AES-ECB-Enc(K, c0).
+        // Decrypt should give back [0; 32] with zero IV.
+        let key = [0x42u8; 16];
+        let iv = [0u8; 16];
+        let c0 = aes128_ecb_encrypt(&key, &[0u8; 16]);
+        let c1 = aes128_ecb_encrypt(&key, &c0);
+        let mut data = [0u8; 32];
+        data[..16].copy_from_slice(&c0);
+        data[16..].copy_from_slice(&c1);
+        aes128_cbc_decrypt(&key, &iv, &mut data);
+        assert_eq!(data, [0u8; 32]);
     }
 
     /// CBC is keyed: the same plaintext under different keys produces
