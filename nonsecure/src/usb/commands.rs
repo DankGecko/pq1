@@ -186,6 +186,21 @@ impl CommandRouter {
         if header.ins == INS_V2_GET_RESPONSE {
             return self.get_response();
         }
+
+        // Any command OTHER than GET_RESPONSE arriving while a chunked
+        // response is still pending means the host abandoned the drain.
+        // Reset the pending cursor so the leftover bytes can't be
+        // siphoned by a later GET_RESPONSE that belongs to a different
+        // logical exchange. §19 P1 "Response-buffer locking … scrub on
+        // anything other than GET_RESPONSE arriving". The 30 s
+        // wall-clock half of that item is still owed (NS clock
+        // plumbing); this closes the command-interleave half now.
+        if !PENDING_PTR.is_null() {
+            PENDING_PTR = core::ptr::null();
+            PENDING_LEN = 0;
+            PENDING_POS = 0;
+        }
+
         if let Err(e) = route_v2(&header) {
             return self.sw_response(e.to_sw());
         }

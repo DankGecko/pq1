@@ -146,6 +146,32 @@ pub unsafe fn harden_otg() {
     }
 }
 
+/// Read the USB frame number (`OTG_DSTS.FNSOF`) as a coarse 1 ms-tick
+/// monotonic clock for USB-transaction timeouts.
+///
+/// The host issues a Start-of-Frame token every 1 ms; the DWC2 core
+/// latches the frame number into `OTG_DSTS.FNSOF` (bits 21:8, 14-bit,
+/// wraps every 16.384 s) — we can read it without enabling the SOF
+/// interrupt (which we deliberately mask in `harden_otg` to avoid the
+/// timing side-channel). The counter advances ONLY while the host is
+/// actively sending SOFs (enumerated + not suspended), which is
+/// exactly the window where a reassembly / response timeout is
+/// meaningful: a host that stops talking naturally freezes the clock,
+/// so we never time out a legitimately-idle session.
+///
+/// 14-bit range bounds any single timeout to < 16.384 s; the 5 s
+/// reassembly timeout (`RX_REASSEMBLY_TIMEOUT_FRAMES`) fits with
+/// wrap-aware subtraction at the call site.
+#[must_use]
+pub fn usb_frame_number() -> u16 {
+    // OTG_DSTS @ device-base (0x800) + 0x08 = OTG_FS base + 0x808.
+    const OTG_DSTS: *const u32 = (USB_OTG_BASE + 0x808) as *const u32;
+    // SAFETY: read-only access to an NS-mapped USB OTG register; no
+    // side effects, races, or aliasing concerns for a volatile load.
+    let dsts = unsafe { core::ptr::read_volatile(OTG_DSTS) };
+    ((dsts >> 8) & 0x3FFF) as u16
+}
+
 /// Initialize the USB stack.  Returns a fully-configured `UsbStack` ready
 /// to be polled in the main loop.
 ///

@@ -163,13 +163,19 @@ fn main() -> ! {
 
     let mut poll_counter: u32 = 0;
     loop {
+        // Bound how long a partial APDU may sit half-reassembled. The
+        // frame clock (OTG_DSTS.FNSOF) only advances while the host is
+        // sending SOFs, so this never false-trips an idle link.
+        let now_frame = usb::usb_frame_number();
+        let _ = stack.transport.check_rx_timeout(now_frame);
+
         if stack.device.poll(&mut [&mut stack.transport.hid]) {
             if poll_counter == 0 {
                 ns_debug_log("[NS] first poll() returned true");
             }
             poll_counter = poll_counter.saturating_add(1);
             if !stack.transport.is_tx_active() {
-                if let Some(apdu) = stack.transport.try_receive() {
+                if let Some(apdu) = stack.transport.try_receive(now_frame) {
                     let resp = unsafe { stack.commands.dispatch(apdu) };
                     unsafe { stack.transport.queue_response(resp.ptr, resp.len) };
                 }
