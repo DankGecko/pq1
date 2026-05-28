@@ -204,6 +204,19 @@ mod transport {
         fn nsc_prodtest_usb_loopback(in_ptr: u32, out_ptr: u32, n: u32) -> u32;
         #[cfg(feature = "prodtest")]
         fn nsc_prodtest_button_test(out_ptr: u32) -> u32;
+
+        // IWDG heartbeat registration. Gated on `iwdg` on both sides so
+        // a non-iwdg build links no dangling veneer symbol.
+        #[cfg(feature = "iwdg")]
+        fn nsc_register_heartbeat(addr: u32) -> u32;
+    }
+
+    /// Register the NS heartbeat counter address with the secure IWDG
+    /// watcher. Returns 0 on success. See `secure/src/hw/iwdg.rs`.
+    #[cfg(feature = "iwdg")]
+    #[inline]
+    pub(super) fn register_heartbeat(addr: u32) -> u32 {
+        unsafe { nsc_register_heartbeat(addr) }
     }
 
     #[inline]
@@ -431,6 +444,15 @@ pub fn is_unlocked() -> bool {
 /// Explicitly lock the device: zeroize cached secrets and mark as locked.
 pub fn lock() -> u32 {
     transport::lock()
+}
+
+/// Register the NS USB-loop heartbeat counter with the secure IWDG
+/// watcher. Call once at boot, passing the address of the NS `static
+/// mut` heartbeat counter. Returns 0 on success. See
+/// `secure/src/hw/iwdg.rs` for the liveness model.
+#[cfg(feature = "iwdg")]
+pub fn register_heartbeat(addr: u32) -> u32 {
+    transport::register_heartbeat(addr)
 }
 
 /// Test-only: drive the secure-world PIN lockout self-test.

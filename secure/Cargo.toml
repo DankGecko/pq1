@@ -207,6 +207,15 @@ fw-rollback-e2e = ["e2e-test", "debug-log"]
 # NEVER ship.
 fwup-transport-e2e = ["e2e-test"]
 usb = []  # Enable USB OTG hardware init (clock, GPIO, GTZC) for host communication
+# Independent watchdog (IWDG) USB-path hang detection. Implies
+# `stm32u585` (IWDG register layout + 1 ms SysTick cadence are
+# hardware-specific). Secure-owned IWDG kicked from SysTick while the
+# NS heartbeat advances OR a gateway handler is busy; a sustained
+# stall (~4 s) stops the kicks and the ~2 s IWDG resets the chip. MUST
+# stay OFF for mode-bringup / mode-e2e — a live watchdog resets the
+# device during probe-rs breakpoints / semihosting pauses. Pairs with
+# the NS-side `iwdg` feature (heartbeat bump + boot registration).
+iwdg = ["stm32u585"]
 se050 = []  # NXP SE050 secure element via I2C1 (OM-SE050ARD on Arduino R3 headers)
 # STM32U585 TAMP (tamper detection) — backup-domain voltage, LSE clock,
 # crypto-peripheral-fault, JTAG/SWD-when-RDP>0 monitoring. Log-only IRQ

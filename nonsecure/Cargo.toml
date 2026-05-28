@@ -44,6 +44,12 @@ gtzc-test = ["e2e-test", "stm32u585"]
 tzic-wipe-test = ["stm32u585"]
 stm32u585 = ["sphincs-tz-shared/stm32u585"]  # Real STM32U585 hardware target (vs QEMU mps2-an505)
 usb = ["dep:usb-device", "dep:synopsys-usb-otg"]  # USB HID for host communication
+# NS half of the IWDG USB-path hang watchdog. Mirrors the secure-side
+# `iwdg` feature: bumps a heartbeat counter each poll-loop iteration +
+# registers its address with the secure IWDG watcher at boot. Implies
+# `stm32u585` (the `nsc_register_heartbeat` CMSE veneer only exists on
+# hardware). MUST be built in lockstep with the secure `iwdg` feature.
+iwdg = ["stm32u585"]
 # Prodtest companion. Mirrors the secure-side `prodtest` feature so the
 # NS-side `usb::commands` dispatcher routes `INS_V2_PRODTEST_*` codes
 # to the CMSE veneers exposed under the same secure-side gate.

@@ -3132,3 +3132,67 @@ fwup-transport-hw: dev-pubkey-fixture fwup-transport-fixture
 	  cat /tmp/fwup-transport-run.log | tail -20; \
 	  exit 1; \
 	fi
+
+# IWDG validation variant of fwup-transport-hw. Same flow but builds
+# BOTH worlds with the `iwdg` feature ON, and inserts a 12 s idle-
+# survival check before the transport test. This is the on-silicon
+# proof that the USB-path watchdog:
+#   * does NOT false-fire during normal idle (the device stays
+#     enumerated through the 12 s window — NS heartbeat keeps the IWDG
+#     fed), and
+#   * does NOT false-fire during the multi-second BEGIN erase or the
+#     wipe-halt (handler_is_busy() keeps it fed) — the full
+#     BEGIN+CHUNK+COMMIT+failpath+wipe-trigger sequence stays green.
+# (Deliberately reuses fwup-transport-e2e on the secure side so the
+#  device auto-provisions + enumerates; iwdg is added on TOP of it
+#  purely for this validation — production ships iwdg WITHOUT e2e.)
+fwup-transport-hw-iwdg: dev-pubkey-fixture fwup-transport-fixture
+	@echo "==> Building secure (fwup-transport-e2e + usb + mock-se + IWDG)"
+	@FSBL_VENDOR_PUBKEY=$(DEV_VENDOR_PUBKEY) $(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
+	  cargo build --locked --release --target $(TARGET) --target-dir target/secure \
+	    -p sphincs-tz-secure --no-default-features \
+	    --features mock-se,ui-noop,stm32u585,usb,fwup-transport-e2e,iwdg
+	@echo "==> Building NS (usb + IWDG)"
+	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
+	@$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
+	  cargo build --locked --release --target $(TARGET) --target-dir target/nonsecure \
+	    -p sphincs-tz-nonsecure --features stm32u585,usb,iwdg
+	@echo "==> Flashing..."
+	@probe-rs download --chip STM32U585AIIx $(NONSECURE_ELF)
+	@probe-rs download --chip STM32U585AIIx $(SECURE_ELF)
+	@echo "==> Configuring TrustZone option bytes..."
+	@STM32_Programmer_CLI --connect port=SWD \
+	  --optionbytes TZEN=1 SECWM1_PSTRT=0x0 SECWM1_PEND=0x7F \
+	  SECWM2_PSTRT=0x7F SECWM2_PEND=0x0 SECBOOTADD0=0x180000
+	@echo "==> probe-rs run (background) — letting the device boot + USB enumerate..."
+	@(timeout 120 probe-rs run --chip STM32U585AIIx $(SECURE_ELF) > /tmp/fwup-transport-run.log 2>&1 &)
+	@for i in $$(seq 1 25); do \
+	  if lsusb 2>/dev/null | grep -qi '1209:7051'; then echo "==> Enumerated (~$${i}s)"; break; fi; \
+	  sleep 1; \
+	done
+	@if ! lsusb 2>/dev/null | grep -qi '1209:7051'; then \
+	  echo "ERROR: 1209:7051 did not enumerate within 25s"; \
+	  pkill -f "probe-rs run --chip STM32U585AIIx" 2>/dev/null; \
+	  cat /tmp/fwup-transport-run.log | tail -20; \
+	  exit 1; \
+	fi
+	@echo "==> IWDG idle-survival: device must stay enumerated for 12 s (no watchdog false-fire while idle)..."
+	@sleep 12
+	@if ! lsusb 2>/dev/null | grep -qi '1209:7051'; then \
+	  echo "==> fwup-transport-hw-iwdg: FAIL — device dropped off USB during idle (IWDG false-fired)"; \
+	  pkill -f "probe-rs run --chip STM32U585AIIx" 2>/dev/null; \
+	  exit 1; \
+	fi
+	@echo "==> Still enumerated after 12 s idle — no false-fire ✓"
+	@echo "==> Running transport e2e test (tools/fwup-transport-test.py)..."
+	@rc=0; python3 tools/fwup-transport-test.py --fixture-dir $(FWUP_FIXTURE_DIR) || rc=$$?; \
+	pkill -f "probe-rs run --chip STM32U585AIIx" 2>/dev/null || true; \
+	echo "===================================="; \
+	if [ $$rc -eq 0 ]; then \
+	  echo "==> fwup-transport-hw-iwdg: PASS — idle-survival + full round-trip green with IWDG ON"; \
+	  exit 0; \
+	else \
+	  echo "==> fwup-transport-hw-iwdg: FAIL (python rc=$$rc)"; \
+	  cat /tmp/fwup-transport-run.log | tail -20; \
+	  exit 1; \
+	fi

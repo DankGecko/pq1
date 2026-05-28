@@ -119,6 +119,15 @@ const PAYLOAD_BUF_LEN: usize = SIGN_USEROP_HEADER_LEN + 256;
 ))]
 static mut PAYLOAD_BUF: [u8; PAYLOAD_BUF_LEN] = [0u8; PAYLOAD_BUF_LEN];
 
+// IWDG USB-loop heartbeat counter. Bumped once per poll-loop iteration;
+// its address is registered with the secure IWDG watcher at boot (see
+// `secure/src/hw/iwdg.rs`). A live loop keeps this advancing; a hang
+// freezes it, and after a sustained stall the secure SysTick stops
+// feeding the watchdog → reset. Plain counter, not a secret — wrapping
+// is fine (the watcher only checks "did it change").
+#[cfg(feature = "iwdg")]
+static mut USB_HEARTBEAT: u32 = 0;
+
 // ---------------------------------------------------------------------------
 // USB main loop: polls USB HID, dispatches APDUs to the NSC gateway.
 // Active when the `usb` feature is enabled (hardware builds with host comms).
@@ -161,8 +170,32 @@ fn main() -> ! {
     let mut stack = unsafe { usb::init() };
     ns_debug_log("[NS] usb::init() returned — entering poll loop");
 
+    // Register the USB-loop heartbeat with the secure IWDG watcher. The
+    // secure SysTick feeds the watchdog while this counter advances (or
+    // a gateway handler is busy); if the loop hangs, the counter stops
+    // and the IWDG resets the device. See `secure/src/hw/iwdg.rs`.
+    #[cfg(feature = "iwdg")]
+    {
+        let addr = core::ptr::addr_of!(USB_HEARTBEAT) as u32;
+        let rc = nsc_api::register_heartbeat(addr);
+        ns_debug_log(if rc == 0 {
+            "[NS] IWDG heartbeat registered"
+        } else {
+            "[NS] IWDG heartbeat registration REJECTED"
+        });
+    }
+
     let mut poll_counter: u32 = 0;
     loop {
+        // IWDG heartbeat: bump once per poll-loop iteration so the
+        // secure watcher can tell a live (even idle-polling) loop from
+        // a hung one. Single store; no-op build when `iwdg` is off.
+        #[cfg(feature = "iwdg")]
+        unsafe {
+            let p = core::ptr::addr_of_mut!(USB_HEARTBEAT);
+            core::ptr::write_volatile(p, core::ptr::read_volatile(p).wrapping_add(1));
+        }
+
         // Bound how long a partial APDU may sit half-reassembled. The
         // frame clock (OTG_DSTS.FNSOF) only advances while the host is
         // sending SOFs, so this never false-trips an idle link.

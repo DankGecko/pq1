@@ -140,3 +140,9 @@ pub mod buttons;
 /// See module docs for pin mapping + bring-up plan.
 #[cfg(feature = "ui-lcd")]
 pub mod lcd_nv3007;
+
+/// Independent watchdog (IWDG) — USB-path hang detection. Behind the
+/// `iwdg` feature (which implies `stm32u585`); compiles to no-op stubs
+/// otherwise, so call sites in `main` stay cfg-free. The off-build's
+/// `init` never starts the watchdog, so test builds can't self-reset.
+pub mod iwdg;

@@ -942,6 +942,23 @@ pub extern "cmse-nonsecure-entry" fn nsc_lock() -> u32 {
     r
 }
 
+/// Register the NS USB-loop heartbeat counter address with the secure
+/// IWDG watcher. Called once from NS boot. `addr` is the address of the
+/// NS `static mut` heartbeat counter; the secure side range-validates
+/// it against NS SRAM before storing. Returns 0 on success, 1 if the
+/// address failed validation. Gated on `iwdg` on both sides so a
+/// non-iwdg build links no dangling veneer symbol.
+#[cfg(all(feature = "stm32u585", feature = "iwdg"))]
+#[no_mangle]
+pub extern "cmse-nonsecure-entry" fn nsc_register_heartbeat(addr: u32) -> u32 {
+    secure_log!("[NSC] register_heartbeat(0x{:08x})", addr);
+    if crate::hw::iwdg::register_ns_heartbeat(addr) {
+        0
+    } else {
+        1
+    }
+}
+
 /// CMD_TEST_PIN_LOCKOUT — non-interactive brute-force verification.
 /// Destructive (locks SE050 silicon + maxes MCU counter); only built
 /// under `e2e-test`. See `cmd_test_pin_lockout.rs` for the contract.

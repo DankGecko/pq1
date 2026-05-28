@@ -174,6 +174,19 @@ fn record_verify_success() {
 /// with NS-supplied `GatewayArgs`. The handler must validate every NS
 /// pointer before deref; see the per-step SAFETY comments below.
 pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
+    // Hold the busy guard for the whole handler. BEGIN's verify-chain
+    // (~1-2 s SPHINCS+C10) + inactive-slot erase (~2 s) run with NS
+    // blocked in the veneer, so without this guard `handler_is_busy()`
+    // would read false for ~3 s — long enough that (a) the SysTick
+    // idle-wipe could fire mid-BEGIN, and (b) the `iwdg` watchdog would
+    // see no NS heartbeat + no busy handler and approach its stall
+    // limit. Holding the guard marks BEGIN as live progress for both.
+    // On the wipe path (`arm_wipe_and_reset` → WFI halt) the guard is
+    // never dropped, which is intentional: it keeps `handler_is_busy()`
+    // true so the IWDG keeps feeding and the "Tamper detected / Replug
+    // USB" prompt persists rather than being cut short by a reset.
+    let _busy = super::HandlerGuard::enter();
+
     // Gate: PIN must be verified — updates aren't available on a
     // locked device.
     if peek_state(|s| s.pin_verified.check_sentinel()) != crate::fi::OK_SENTINEL {

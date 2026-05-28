@@ -3539,6 +3539,14 @@ fn main() -> ! {
     #[cfg(not(feature = "stm32u585"))]
     nsc::init_gateway();
     setup_systick();
+
+    // Start the USB-path hang watchdog now that SysTick is firing to
+    // feed it. No-op unless the `iwdg` feature is on. The boot-grace
+    // path in `iwdg::systick_watch_and_kick` keeps it fed until NS
+    // registers its heartbeat. See `hw::iwdg` module docs.
+    #[cfg(feature = "stm32u585")]
+    hw::iwdg::init();
+
     secure_log!("[S] Gateway ready");
 
     ui::show_status("PQSigner OS", "Ready");
@@ -3566,6 +3574,14 @@ fn main() -> ! {
 #[cfg(not(test))]
 #[cortex_m_rt::exception]
 fn SysTick() {
+    // USB-path hang watchdog. Feeds the IWDG while the NS heartbeat is
+    // advancing OR a gateway handler is busy; stops feeding after a
+    // sustained stall so the IWDG resets a hung device. No-op without
+    // the `iwdg` feature. Kept first in the handler so the watchdog
+    // bookkeeping runs even if a later line in this ISR is what hangs.
+    #[cfg(feature = "stm32u585")]
+    hw::iwdg::systick_watch_and_kick(nsc::handler_is_busy());
+
     timeout::tick();
 
     // Drain TAMP_SR flags. Cheap fast path (1 MMIO read when no flag
