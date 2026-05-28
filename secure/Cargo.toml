@@ -5,7 +5,7 @@ edition.workspace = true
 
 [dependencies]
 sphincs-tz-shared = { workspace = true }
-sphincs-tz-bip39  = { workspace = true }
+sphincs-tz-bip39  = { workspace = true, features = ["full-wordlist"] }
 fw-manifest       = { workspace = true }
 # FI hardening primitives shared with FSBL — `secure/src/fi.rs` is a thin
 # shim over this crate, supplying the secure-world's TRNG-backed RNG.

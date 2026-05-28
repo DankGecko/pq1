@@ -1486,7 +1486,12 @@ dependencies = [
  "pqsigner-fi",
  "sha2 0.10.9",
  "sphincs-c10",
+ "sphincs-tz-bip39",
 ]
+
+[[package]]
+name = "pqsigner-fsbl-tests"
+version = "0.1.0"
 
 [[package]]
 name = "pqsigner-hal"

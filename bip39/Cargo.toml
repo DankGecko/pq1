@@ -2,15 +2,29 @@
 name = "sphincs-tz-bip39"
 version = "0.1.0"
 edition.workspace = true
+build = "build.rs"
 
 # A small no_std BIP-39 implementation. Hosted in its own workspace crate so
 # that it can be unit-tested on the host (`cargo test -p sphincs-tz-bip39`)
 # while still being usable from the no_std secure-world firmware.
+#
+# `default-features = false` keeps only the firmware-measurement surface
+# (`WORDLIST_PREFIX5`, `word_prefix_at`, `hash_to_word_indices`, bit
+# packing). That is the entire wordlist code path the FSBL needs and
+# fits the 32 KB FSBL flash budget (~10 KB rodata for the prefix-5 table
+# instead of ~18 KB for the full flat wordlist). Enabling `full-wordlist`
+# (the default) brings in `Mnemonic`, the 8-byte flat wordlist, and the
+# constant-time prefix/exact lookups for the seed-phrase wizard and PIN
+# entry on the secure-world side.
+
+[features]
+default = ["full-wordlist"]
+full-wordlist = ["dep:sha2", "dep:hmac", "dep:zeroize"]
 
 [dependencies]
-sha2    = { version = "0.10", default-features = false }
-hmac    = { workspace = true }
-zeroize = { workspace = true }
+sha2    = { version = "0.10", default-features = false, optional = true }
+hmac    = { workspace = true, optional = true }
+zeroize = { workspace = true, optional = true }
 
 [dev-dependencies]
 hex  = { workspace = true }

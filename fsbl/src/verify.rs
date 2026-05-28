@@ -14,8 +14,12 @@ use sha2::{Digest, Sha256};
 use crate::slot::{slot_ns_addr, slot_secure_addr, Slot};
 
 /// Verify the secure + nonsecure images for `slot` hash to the
-/// manifest's stored values.
-pub fn verify_images(slot: Slot, m: &ManifestRef) -> bool {
+/// manifest's stored values. Returns the secure-image SHA-256 on
+/// success so the caller can drive the on-OLED firmware fingerprint
+/// from the same trusted bytes FSBL just verified — without re-hashing.
+///
+/// Returns `None` on length-bound failure or hash mismatch.
+pub fn verify_images(slot: Slot, m: &ManifestRef) -> Option<[u8; 32]> {
     let secure_base = slot_secure_addr(slot);
     let ns_base = slot_ns_addr(slot);
     let secure_len = m.secure_len() as usize;
@@ -23,25 +27,25 @@ pub fn verify_images(slot: Slot, m: &ManifestRef) -> bool {
 
     // Sanity: reject obviously-bogus lengths before hashing. A length
     // exceeding slot capacity is a signed-but-malformed manifest and
-    // should never pass the verify step. Returning false here is
+    // should never pass the verify step. Returning None here is
     // defence-in-depth; a lying manifest couldn't pass the signature
     // check in the first place.
     if secure_len > crate::slot::SLOT_SECURE_CAPACITY as usize {
-        return false;
+        return None;
     }
     if ns_len > crate::slot::SLOT_NS_CAPACITY as usize {
-        return false;
+        return None;
     }
 
     let actual_secure = hash_flash_region(secure_base, secure_len);
     if &actual_secure != m.secure_hash() {
-        return false;
+        return None;
     }
     let actual_ns = hash_flash_region(ns_base, ns_len);
     if &actual_ns != m.nonsecure_hash() {
-        return false;
+        return None;
     }
-    true
+    Some(actual_secure)
 }
 
 /// SHA-256 of `len` bytes starting at `base`. Reads through a volatile

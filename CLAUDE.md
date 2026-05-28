@@ -32,7 +32,9 @@ When a task touches an invariant-adjacent subsystem (TZSC allowlist, gateway sur
 
 ## Lifecycle
 
-Boot → SAU/GTZC → SAES self-test → SE attest → PIN entry (S-world trusted UI) → unlock both SEs → reconstruct entropy in S-SRAM → active signing window (120 s idle timeout, S-only TIM; NS pings do NOT reset it) → zeroize on lock/tamper/brownout/inactivity.
+Boot → FSBL verify slots + render 8-word fingerprint on OLED (~3 s, WRP1A-rooted; see `docs/measured-boot.md`) → branch into active slot → SAU/GTZC → SAES self-test → SE attest → PIN entry (S-world trusted UI) → unlock both SEs → reconstruct entropy in S-SRAM → active signing window (120 s idle timeout, S-only TIM; NS pings do NOT reset it) → zeroize on lock/tamper/brownout/inactivity.
+
+The FSBL fingerprint and the secure-world `measured_boot::run` screen show the SAME 8 words for the same active slot (both derived via `sphincs_tz_bip39::firmware_fingerprint_lines`). The FSBL row is the trust root (immutable, WRP1A-locked); the secure-world row is advisory (self-attested, defense in depth). If they ever diverge the slot is lying — strong tamper signal.
 
 **Sign dispatch** (`cmd_sign_userop.rs`, companion-driven, no flash I/O):
 

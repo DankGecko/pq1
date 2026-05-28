@@ -54,8 +54,11 @@ use fw_manifest::{ManifestRef, TRY_ONCE_COMMITTED, TRY_ONCE_TRIED};
 mod boot_state;
 mod branch;
 mod fi;
+mod glyphs;
 mod manifest;
+mod oled;
 mod otp;
+mod render;
 mod slot;
 mod vendor_pubkey;
 mod verify;
@@ -81,13 +84,23 @@ fn main() -> ! {
     let valid_b = filter_valid(&m_b, floor);
 
     // Check image hashes. A manifest can pass signature verification
-    // but still fail if the actual slot contents were torn.
-    let img_ok_a = valid_a.filter(|m| verify::verify_images(Slot::A, m));
-    let img_ok_b = valid_b.filter(|m| verify::verify_images(Slot::B, m));
+    // but still fail if the actual slot contents were torn. On success
+    // we also capture the secure-image digest so the FSBL can render
+    // the firmware fingerprint on the OLED from the same trusted bytes
+    // it just verified — without re-hashing.
+    let img_ok_a = valid_a.and_then(|m| verify::verify_images(Slot::A, m).map(|d| (m, d)));
+    let img_ok_b = valid_b.and_then(|m| verify::verify_images(Slot::B, m).map(|d| (m, d)));
 
-    let Some(slot) = pick_slot(img_ok_a, img_ok_b) else {
+    let Some((slot, secure_digest)) = pick_slot(img_ok_a, img_ok_b) else {
         halt();
     };
+
+    // Render the 8-BIP-39-word firmware fingerprint on the OLED before
+    // branching. This is the trust root for the "subsequent updates
+    // can't fake the words" property: the slot we are about to enter
+    // never gets to display anything before the user has already seen
+    // FSBL's verdict for THESE bytes. See `docs/measured-boot.md`.
+    render::render_fingerprint(&secure_digest);
 
     // SAFETY: we verified the slot's manifest signature and image
     // hash. Branching is the last thing FSBL does; control passes to
@@ -125,25 +138,36 @@ fn filter_valid<'a>(m: &'a ManifestRef<'a>, floor: u32) -> Option<&'a ManifestRe
 }
 
 /// Pick the highest-version valid slot, honouring try-once semantics.
-/// Returns `None` if neither slot is valid.
-fn pick_slot(a: Option<&ManifestRef>, b: Option<&ManifestRef>) -> Option<Slot> {
+/// Returns `None` if neither slot is valid. On success returns the
+/// chosen slot AND the secure-image SHA-256 that `verify_images`
+/// already computed for that slot — so the caller can drive the OLED
+/// fingerprint render from the same trusted bytes without re-hashing.
+///
+/// `a` / `b` carry `(manifest, secure_digest)` pairs (None if that
+/// slot didn't pass `verify_images`). The pick logic operates on the
+/// manifest; the digest tags along untouched until we return.
+type Candidate<'a> = (&'a ManifestRef<'a>, [u8; 32]);
+fn pick_slot(
+    a: Option<Candidate>,
+    b: Option<Candidate>,
+) -> Option<(Slot, [u8; 32])> {
     // Quick single-candidate cases.
     let (Some(a), Some(b)) = (a, b) else {
         return match (a, b) {
-            (Some(_), None) => Some(Slot::A),
-            (None, Some(_)) => Some(Slot::B),
+            (Some((_, d)), None) => Some((Slot::A, d)),
+            (None, Some((_, d))) => Some((Slot::B, d)),
             _ => None,
         };
     };
 
     // Both valid — highest fw_version wins.
-    let (winner, winner_slot, loser_slot) = if a.fw_version() > b.fw_version() {
-        (a, Slot::A, Slot::B)
+    let (winner, winner_slot, loser, loser_slot) = if a.0.fw_version() > b.0.fw_version() {
+        (a, Slot::A, b, Slot::B)
     } else {
-        (b, Slot::B, Slot::A)
+        (b, Slot::B, a, Slot::A)
     };
 
-    let winner_flag = winner.try_once_flag();
+    let winner_flag = winner.0.try_once_flag();
 
     // Try-once guard. If the winner is in TRIED state and the boot-
     // state page says we already attempted this slot, revert to the
@@ -157,7 +181,7 @@ fn pick_slot(a: Option<&ManifestRef>, b: Option<&ManifestRef>) -> Option<Slot> {
     if winner_flag == TRY_ONCE_TRIED {
         if let Some(bs) = boot_state::read() {
             if bs.active_slot == winner_slot {
-                return Some(loser_slot);
+                return Some((loser_slot, loser.1));
             }
         }
     }
@@ -167,10 +191,10 @@ fn pick_slot(a: Option<&ManifestRef>, b: Option<&ManifestRef>) -> Option<Slot> {
     // represent a finished state. Reject and fall back to the other
     // slot.
     if winner_flag != TRY_ONCE_COMMITTED && winner_flag != TRY_ONCE_TRIED {
-        return Some(loser_slot);
+        return Some((loser_slot, loser.1));
     }
 
-    Some(winner_slot)
+    Some((winner_slot, winner.1))
 }
 
 /// No valid slot to boot — halt the CPU. A future iteration will

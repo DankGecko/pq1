@@ -1,0 +1,21 @@
+[package]
+name = "pqsigner-fsbl-tests"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+# Host-only test crate for the `pqsigner-fsbl` bootloader.
+#
+# Cannot live inside `fsbl/tests/` because `pqsigner-fsbl` is a `[[bin]]`
+# crate with `#![no_std]` / `#![no_main]` / `panic-halt` — `cargo test`
+# tries to build the bin in `cfg(test)` (std) mode and trips on
+# duplicate `panic_impl` lang items.
+#
+# Tests here shell out to `cargo build -p pqsigner-fsbl` as a subprocess,
+# parse `arm-none-eabi-size`, and assert flash-footprint / source-text
+# invariants. They run on every `cargo test --workspace` and gate the
+# WRP1A-locked 32 KB FSBL flash region against silent growth.
+
+[dependencies]
+
+[dev-dependencies]

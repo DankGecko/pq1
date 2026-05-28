@@ -12,6 +12,26 @@ attestation, not an independently verifiable fingerprint.
 Reproducibility is what makes the measurement a fingerprint rather than a
 claim.
 
+**Two pieces are required for the trust loop to close:**
+
+1. **An independently-derivable baseline** — `./measure.sh` words for
+   the published release commit. This is what reproducible builds
+   provide; everything below in this document is about getting it.
+2. **An on-device ground truth the running firmware can't forge** —
+   the WRP1A-locked FSBL renders the measurement words on the OLED
+   *before* branching into the slot, so any firmware update (even
+   vendor-signed) cannot lie about what bytes ended up on the device.
+   See [`measured-boot.md`](measured-boot.md) for the threat model
+   and the trust chain.
+
+The user closes the loop by comparing two values **they each derived
+independently**: the FSBL OLED words (on-device ground truth) and
+the `./measure.sh` output (independent rebuild). Without the FSBL-
+rooted display this loop was unclosed (the device's claim was
+unverifiable in software); with it, the user has cryptographic
+confidence that what they confirmed at install time is what is
+actually running.
+
 ## What the build guarantees
 
 Two independent clean builds of the same git commit, when run inside

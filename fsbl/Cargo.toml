@@ -36,6 +36,13 @@ pqsigner-fi = { workspace = true }
 # direct dep here ensures we can call it from verify.rs too.
 sha2        = { version = "0.10", default-features = false }
 
+# BIP-39 prefix-5 wordlist for the on-OLED firmware fingerprint render.
+# Workspace declares this dep with `default-features = false`, which is
+# exactly what FSBL wants — only the prefix-5 layer is pulled in,
+# stripping the ~18 KB flat wordlist + Mnemonic + PBKDF2 + CT exact
+# lookups out of FSBL's binary.
+sphincs-tz-bip39 = { workspace = true }
+
 # Cortex-M runtime.
 cortex-m     = { workspace = true, features = ["critical-section-single-core"] }
 cortex-m-rt  = { workspace = true }

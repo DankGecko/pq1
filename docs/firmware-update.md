@@ -44,6 +44,15 @@ vendor laptop             user laptop                 device (STM32U585)
    to confirm. Matching the words against the vendor's published
    release is the anchor that prevents a MitM companion app from
    slipping a (vendor-signed but user-unauthorised) release in.
+7. **FSBL-rooted post-install verification.** After COMMIT writes the
+   new slot and the device reboots, the WRP1A-locked FSBL re-hashes
+   the now-active slot and renders ITS view of the 8 words on the
+   OLED before branching into the new firmware. The user MUST see
+   the same 8 words FSBL shows that they confirmed at install time
+   (the "Nf" page) — if the two diverge, the bytes that landed in
+   flash are not the bytes whose hash was signed. Do not enter the
+   PIN in that state. See [`measured-boot.md`](measured-boot.md) for
+   the threat model and the trust chain.
 
 ## Storage layout
 
