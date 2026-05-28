@@ -2026,6 +2026,7 @@ dependencies = [
  "fw-manifest",
  "panic-halt",
  "panic-semihosting",
+ "pqsigner-fi",
  "sha2 0.10.9",
  "sha3 0.10.8",
  "sphincs-tz-shared",
@@ -2078,6 +2079,7 @@ dependencies = [
 name = "sphincs-tz-shared"
 version = "0.1.0"
 dependencies = [
+ "pqsigner-fi",
  "pqsigner-proto",
  "proptest",
 ]
