@@ -129,6 +129,85 @@ through `Conf(E140)`.
    `apdu.rs:151`, `apdu.rs:956 build_metadata_counter` docstring, and
    the duress-comment.
 
+### C-7. SE050 SCP03 at P1=0x03 — response unprotected; `half_E` leaks on I²C bus (SHIP BLOCKER S-5)
+
+`secure/src/se050/scp03.rs:213` sends `P1=0x03` in EXTERNAL_AUTHENTICATE
+(C-MAC + C-DEC only, no R-MAC/R-ENC). `s_rmac` is derived at `:194` and
+never read anywhere in the codebase. `secure/src/se050/apdu.rs:262-282
+send_apdu` reads `sw` off `raw_resp[n-2..]` and `tlv_parse`s the rest
+directly — no `unwrap_response` call (compare OPTIGA's
+`shield.unwrap_response` for the correct shape).
+
+The fact that `read_authed` works in production confirms the SE050 is
+emitting responses cleartext-on-the-wire at the negotiated security
+level. **Every successful `read_authed` puts the secret on the bus in
+plaintext.** A passive probe on the SE050 I²C lines (no SCP03 key
+knowledge required) captures `half_E` during every legitimate unlock.
+
+Worse than C-4/C-5 in attacker-cost terms: no desoldering, no PBS
+extraction — a malicious in-case implant or a supply-chain PCBA swap
+captures the seed half from any user who unlocks the device.
+
+**Required fix:** Switch to `P1=0x33`, implement
+`scp03::unwrap_response`, wire it into `send_apdu`. Sacrificial-part
+verification via logic-analyzer capture of a read_authed cycle — bytes
+during the response phase MUST be ciphertext + R-MAC.
+
+Full spec: `docs/work-todo.md` S-5 + `docs/production-todo.md` §"SE050
+SCP03 response protection" (to be added in the SE050 hardening pass).
+
+### C-8. SE050 admin-delete on USERID_OBJ enables seed theft from admin compromise (SHIP BLOCKER S-6)
+
+`secure/src/se050/mod.rs:1598-1604` (production `store_objects`) passes
+`admin_ref = Some(ADMIN_WIPE_OBJ)` for the UserID's `admin_auth_obj_id`,
+producing policy `[USERID_OBJ → WRITE|DELETE|SM, ADMIN_WIPE_OBJ →
+DELETE|SM]` on the UserID auth object itself. SE050 policies are
+immutable post-`WriteUserID`, so this is locked in for every
+already-provisioned chip until reset.
+
+An attacker with admin auth (e.g. via flaws in the BHK-derived admin
+PIN, or pre-RDP2 device theft):
+1. `delete_object_authed(USERID_OBJ)` → succeeds via admin entry.
+2. `write_userid(USERID_OBJ, attacker_pin, 5, None)` → succeeds, slot
+   was just emptied.
+3. Auth against USERID_OBJ with attacker_pin → succeeds.
+4. `read_authed(ENTROPY_OBJ)` → returns `half_E`. ENTROPY_OBJ's policy
+   gates on "session against ID USERID_OBJ"; the attacker's new
+   UserID at the same ID satisfies that.
+
+Admin path was supposed to be DoS-only ("admin can wipe but not
+steal"); this policy shape breaks that promise.
+
+**Required fix:** `mod.rs:1600` passes `None` for the UserID's
+`admin_auth_obj_id`. Keep `admin_ref` on the data objects (ENTROPY_OBJ
+et al) so admin can still DoS-wipe the secret. Replace the
+10-wrong-PIN-lockout cleanup path (which previously relied on the
+admin-delete-of-UserID entry) with SE050 full-chip `factory_reset`.
+
+Sacrificial-part verification: after the fix,
+`delete_object_authed(USERID_OBJ)` from an admin session MUST fail
+with `0x6986`; `delete_object_authed(ENTROPY_OBJ)` MUST still succeed.
+
+Full spec: `docs/work-todo.md` S-6.
+
+### C-9. SE050 lower-severity follow-ups (tracked under S-7)
+
+Not ship blockers individually but should land in the same hardening
+pass as C-7/C-8:
+- `write_userid(.., max_attempts=0, ..)` silently provisions
+  unlimited-attempts UserID (`apdu.rs:421-423`); reject with
+  `InvalidParam`.
+- `delete_object` maps `SW=0x6986 → Ok(())` (`apdu.rs:620`); return
+  distinct error.
+- Status-code mappings unverified on silicon (already
+  self-documented in `apdu.rs:30-48`); capture actual SW for
+  lockout via the planned iterative_wipe probe.
+- Extended-Lc + Le emits 1 Le byte instead of 2 (`apdu.rs:200-203`);
+  latent, doesn't fire on ≤256B reads.
+- `iterative_delete_all` requires the PIN to fire pass 2
+  (`apdu.rs:739`) — so on 10-wrong-PIN the secret is *orphaned*,
+  not erased; document explicitly in threat-model Claim 5.
+
 ### C-3. Pre-production TZSC/SAU regression
 `secure/src/sau.rs:173-181, 232`. `TZSC_SECCFGR{1,2,3} = 0` (everything NS) and SAU region 3 maps the entire peripheral window NS. Cannot be tightened until the GTZC2_TZSC base address is confirmed against RM0456 — the first guess (`0x5203_4400`) bus-faults on touch. This is a hardware/bring-up problem, not a software fix. CI must hard-fail any release build whose `sau::init()` leaves the SECCFGRx registers cleared.
 

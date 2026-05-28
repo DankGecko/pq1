@@ -247,6 +247,168 @@ hardware implant.
 
 ---
 
+### S-5. SE050 SCP03 at P1=0x03 — response unprotected; `half_E` leaks on I²C bus on every read
+
+**Severity:** Critical — breaks the dual-SE XOR-split invariant at
+the I²C-bus layer. A passive bus probe on the SE050 lines (no SCP03
+key knowledge required) reads `half_E` in plaintext during every
+legitimate unlock. Combined with any path to `half_O` from S-1/S-2,
+the seed reconstructs. **More dangerous than S-1/S-2 because it fires
+on a working device every time the user unlocks** — desoldering not
+required; a malicious in-case probe or supply-chain PCBA substitution
+captures every seed it sees over device lifetime.
+
+**Where:** `secure/src/se050/scp03.rs:213` — EXTERNAL_AUTHENTICATE
+sends `P1 = 0x03` (C-MAC + C-DEC, command-only protection) — NOT
+`0x33` which would add R-MAC + R-ENC. `scp03.rs:194` derives
+`s_rmac` for completeness but the field is dead code — grep finds
+zero reads of `s_rmac` anywhere in the codebase.
+`secure/src/se050/apdu.rs:262-282 send_apdu` reads `sw` off
+`raw_resp[n-2..]` and TLV-parses the rest directly, with no
+`unwrap_response` call. The OPTIGA driver does exactly this unwrap
+step (`shield.unwrap_response`) — the asymmetry between the two
+drivers is the tell.
+
+**Evidence the leak is real, not just a code-shape concern:**
+`read_authed` works in production. If the chip were applying R-MAC +
+R-ENC at P1=0x03, the bytes after the SW would be ciphertext + 8-byte
+R-MAC and `tlv_parse` would fail. They're not — they're plaintext
+TLV. So the SE050 at the negotiated security level is emitting
+responses cleartext-on-the-wire. The SCP03 session keys (BHK-derived
+post-Phase-2C) protect command direction only; the secret comes back
+unprotected.
+
+**Attack:** Place a passive probe on the SE050 I²C lines. Power the
+device, have the user unlock normally. `read_authed(ENTROPY_OBJ)`
+returns 32-byte `half_E` over the bus in cleartext, framed in
+plaintext TLV with the standard `TAG_1` wrapper. Probe captures it.
+Combined with the OPTIGA `half_O` (via S-1, S-2, or Shielded
+Connection break), the seed reconstructs.
+
+**Required fix (must all land together):**
+1. Switch `EXTERNAL_AUTHENTICATE` to `P1 = 0x33` (C-MAC + C-DEC +
+   R-MAC + R-ENC). Per NXP plug-and-trust SDK and AN12413, SE050
+   supports this level.
+2. Implement `scp03::unwrap_response(session, in: &[u8], out: &mut
+   [u8]) -> Result<usize, Se050Error>`. Strip the trailing 8-byte
+   R-MAC, verify against `cmac_aes128(s_rmac, [mcv || hdr ||
+   ciphertext])` per GP 2.3 Amendment D R-MAC chaining, then
+   AES-CBC-decrypt under the response ICV (typically `command_icv
+   XOR 0x80...` per GP — verify the exact recipe against NXP
+   plug-and-trust's `nxScp03_Unwrap` before shipping).
+3. Wire `send_apdu` to call `unwrap_response` on the raw response
+   before reading `sw`/TLV when `scp03.active`. Strip the SW from
+   the decrypted payload, not the ciphertext.
+4. Sacrificial-part verification: with the fix in place, run normal
+   provisioning + unlock + read_authed. MUST still succeed (entropy
+   round-trips). Place a logic analyzer on the SE050 I²C lines;
+   capture a `read_authed` cycle; bytes during response phase MUST
+   be ciphertext + 8-byte R-MAC. NO appearance of `half_E` bytes in
+   any captured frame.
+5. Compile-time assertion that EXTERNAL_AUTHENTICATE P1 byte is
+   0x33 (const-expr check, not string-grep).
+
+**Cross-cutting:** Affects every `read_authed` call site —
+`master_secret`, decoy entropy, any future readback. Fix is
+once-at-SCP03-layer; no call-site changes needed.
+
+---
+
+### S-6. SE050 admin-delete policy on USERID_OBJ enables seed theft from an admin compromise
+
+**Severity:** Critical — admin-path compromise becomes a *read* of
+the seed half, not just a destroy. The defense-in-depth promise that
+"admin can wipe but not steal" is broken.
+
+**Where:** `secure/src/se050/mod.rs:1598-1604` (production
+`store_objects`):
+```rust
+apdu::write_userid(
+    &mut self.t1, &mut self.scp03,
+    USERID_OBJ, pin, max_attempts, admin_ref,  // ← admin_ref = Some(ADMIN_WIPE_OBJ)
+)
+```
+produces policy `[USERID_OBJ→WRITE|DELETE|SM, ADMIN_WIPE_OBJ→DELETE|SM]`
+on the UserID auth object itself. Policies are immutable post-creation
+(SE050 `WriteUserID` writes them once; no `UpdatePolicy`), so this can
+only be fixed by changing provisioning AND wiping every
+already-provisioned chip.
+
+**Attack chain (assumes admin credential compromise):**
+1. Attacker authenticates as ADMIN_WIPE_OBJ.
+2. `delete_object_authed(USERID_OBJ)` — succeeds (admin policy
+   entry grants DELETE|SM).
+3. `write_userid(USERID_OBJ, attacker_pin, 5, None)` — succeeds;
+   USERID_OBJ slot was just emptied.
+4. CreateSession + VerifySession with attacker's PIN against
+   USERID_OBJ — succeeds.
+5. `read_authed(ENTROPY_OBJ)` — returns `half_E`. ENTROPY_OBJ's
+   policy gates on "session against ID USERID_OBJ"; the attacker's
+   UserID at the same ID satisfies that.
+
+Original PIN never required. Admin compromise → seed in 6 APDUs.
+
+**Required fix:**
+1. Pass `None` for the UserID's `admin_auth_obj_id` at
+   `mod.rs:1600` (and the same-shape calls in the duress / decoy /
+   canary paths around `mod.rs:1690+`, `:1726`, `:2055`). Keep
+   `admin_ref` on the data objects so admin can still DoS-wipe
+   the secret, just not recreate the UserID that gates it.
+2. Replace the now-removed admin-delete-of-UserID path with full
+   SE050 chip-level `factory_reset` for the 10-wrong-PIN-lockout
+   cleanup. NXP-documented recovery for a stuck-UserID; clears
+   the entire chip. Heavier than per-object delete but unavoidable
+   if we want the orphan-secret-on-lockout invariant to hold
+   without the admin-on-UserID footgun.
+3. Sacrificial-part verification:
+   - Provision with the new policy (no admin on USERID_OBJ).
+   - Auth as ADMIN_WIPE_OBJ.
+   - `delete_object_authed(USERID_OBJ)` MUST fail `0x6986`.
+   - `delete_object_authed(ENTROPY_OBJ)` MUST succeed.
+   - Lockout-cleanup via the new factory-reset path MUST succeed.
+
+**Cross-references:** `apdu.rs:407-431 write_userid`, `apdu.rs:364-390
+build_policy`, `mod.rs:1432-1450` admin_ref plumbing.
+
+---
+
+### S-7. SE050 pre-ship lower-severity items (track + close in the same hardening pass as S-5/S-6)
+
+1. **`write_userid(.., max_attempts=0, ..)` silently creates an
+   unlimited-attempts UserID** (`apdu.rs:421-423` omits
+   `TAG_MAX_ATTEMPTS` when `max_attempts == 0`; NXP documents this
+   as the brute-force vulnerability they explicitly warn against).
+   Currently only the `duress-probe-e2e` path (`mod.rs:377`)
+   intentionally uses 0. Fix: reject 0 with `Se050Error::InvalidParam`;
+   change the probe to pass `u16::MAX`.
+2. **`delete_object` maps `SW=0x6986 → Ok(())`** (`apdu.rs:620`).
+   Standalone callers get a misleading success. `iterative_delete_all`
+   re-verifies via `check_exists` so it's caught there, but the
+   standalone surface lies. Fix: return `Se050Error::PolicyDenied`;
+   keep the iterative wrapper's `check_exists` as ground truth.
+3. **Status-code mapping verified by deduction, not silicon capture**
+   (`apdu.rs:30-48` self-documents this). Close via the planned
+   `iterative_wipe` against a throwaway UserID — drive to
+   `auth_attempts == 0`, send VERIFY, capture actual SW; fix the
+   `AuthMethodBlocked` arm if it's not 0x6986. Pure detection/UX —
+   chip still enforces — but lockout-vs-incorrect misreport
+   confuses the wizard recovery flow.
+4. **Extended-Lc Le encoding is malformed.** `apdu.rs:200-203`
+   emits a single `0x00` Le byte on the extended-Lc path; ISO 7816-4
+   requires 2 bytes (`0x00 0x00`) when Lc is extended. Doesn't fire
+   on production payloads (≤256B for our secrets) but bites future
+   growth. Fix now while the code is being touched anyway.
+5. **`iterative_delete_all` is NOT the destroy-on-lockout
+   mechanism.** `apdu.rs:739` returns early when `verify_session`
+   errors. On the 10-wrong-PIN scenario the secret survives as
+   *orphaned*, not erased. Document this explicitly in
+   `docs/threat-model.md` Claim 5 (post-lockout secret state =
+   unreadable-but-physically-present, gated by UserID lock). If the
+   threat model requires true erasure, wire the lockout-detection
+   path to call the new full-chip factory-reset from S-6.
+
+---
+
 ### S-4. OPTIGA pre-ship lower-severity items (track + close, but not P0 ship blockers individually)
 
 These don't individually warrant blocking ship but together they
