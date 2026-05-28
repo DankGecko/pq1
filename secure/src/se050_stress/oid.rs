@@ -20,6 +20,16 @@ use crate::se050::apdu;
 /// elsewhere assume `STRESS_BASE & 0xFFFF_0000 == 0x7B5F_0000`.
 pub const STRESS_BASE: u32 = 0x7B5F_0000;
 
+/// Upper bound on slot probing within any single test's 256-slot sub-
+/// range. Tests in this catalog use slots `0x01..=0x02` exclusively (a
+/// "user" OID and a "data" OID); 8 is a comfortable buffer for future
+/// additions. Bounding the per-test sweep this way keeps cleanup fast
+/// on real silicon — at ~400 ms per SCP03-wrapped APDU (the round-trip
+/// cost with `debug-log` enabled on this hardware), scanning all 256
+/// slots blows past the probe-rs 600 s timeout before any test even
+/// runs. If a future test ever needs slot ≥ 8, bump this constant.
+const STRESS_SWEEP_SLOTS: u8 = 8;
+
 /// Stress-admin UserID. Unlimited attempts, PIN derived from
 /// `hw::secret_keys::se050_admin_pin()` (BHK-rooted in the shipping
 /// configuration, otherwise OTP/DHUK-rooted — every variant is per-
@@ -103,21 +113,24 @@ pub fn admin_sweep_all(se: &mut Se050) -> SweepReport {
             }
         }
 
-        // Sweep every test sub-range (1..=255). `check_exists` is
-        // unauthenticated and cheap; only OIDs that exist cost a
-        // delete APDU.
-        for test_id in 1u16..=255 {
-            let (lo, hi) = scratch_range(test_id);
-            for oid in lo..=hi {
-                let (t1, scp03) = se.t1_scp03_mut();
-                if apdu::check_exists(t1, scp03, oid).unwrap_or(false) {
-                    match apdu::delete_object_authed(t1, scp03, &sid, oid) {
-                        Ok(()) => rep.cleared += 1,
-                        Err(_) => rep.failed += 1,
-                    }
-                }
-            }
-        }
+        // Top-of-run sweep DISABLED for performance — at ~400 ms per
+        // SCP03-wrapped APDU on real silicon (with `debug-log`), even
+        // a bounded 64 × 8 = 512-OID scan blows past the probe-rs
+        // 600 s timeout before any test runs.
+        //
+        // The harness still gets cleanup from two layers:
+        //   1. Per-test teardown (`admin_sweep_test_range`) clears the
+        //      current test's 0..8 slots after every test, PASS or FAIL.
+        //   2. Each test's own first action is a `delete_scratch(target)`
+        //      that idempotently clears its OID(s) before provisioning —
+        //      so residue from a crashed prior run is reclaimed when
+        //      the same test_id runs again next time.
+        //
+        // The one residual case top-of-run sweep used to catch: a test
+        // crashed AND the catalog reorders so a different test_id
+        // touches the polluted slots. Worst case: those OIDs stay
+        // occupied (≤150 B each) inside the `0x7B5F_*` carve-out,
+        // invisible to production. Operationally acceptable.
 
         let (t1, scp03) = se.t1_scp03_mut();
         let _ = apdu::close_session(t1, scp03, &sid);
@@ -135,12 +148,15 @@ pub fn admin_sweep_test_range(se: &mut Se050, test_id: u16) -> SweepReport {
     };
 
     unsafe {
-        let (lo, hi) = scratch_range(test_id);
+        let lo = STRESS_BASE | ((test_id as u32) << 8);
 
-        // Quick scan first — if the sub-range is empty, skip the
-        // session machinery entirely.
+        // Quick scan: only probe the slots the catalog actually uses
+        // (`0..STRESS_SWEEP_SLOTS`, currently 8). Scanning the full
+        // 256-slot sub-range here would dominate the runner's wall
+        // clock — see the `STRESS_SWEEP_SLOTS` doc.
         let mut any = false;
-        for oid in lo..=hi {
+        for slot in 0u8..STRESS_SWEEP_SLOTS {
+            let oid = lo | (slot as u32);
             let (t1, scp03) = se.t1_scp03_mut();
             if apdu::check_exists(t1, scp03, oid).unwrap_or(false) {
                 any = true;
@@ -166,7 +182,8 @@ pub fn admin_sweep_test_range(se: &mut Se050, test_id: u16) -> SweepReport {
             }
         }
 
-        for oid in lo..=hi {
+        for slot in 0u8..STRESS_SWEEP_SLOTS {
+            let oid = lo | (slot as u32);
             let (t1, scp03) = se.t1_scp03_mut();
             if apdu::check_exists(t1, scp03, oid).unwrap_or(false) {
                 match apdu::delete_object_authed(t1, scp03, &sid, oid) {

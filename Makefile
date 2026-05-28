@@ -1036,7 +1036,15 @@ SE050_STRESS_FEATURES = se050-stress,ui-oled,stm32u585,debug-log,e2e-test,otp-ha
 # change. cargo doesn't include env vars in its fingerprint, so without
 # this a re-run with a different filter would silently reuse the prior
 # binary. `date +%s` makes every invocation a distinct cfg flag.
-SE050_STRESS_RUSTFLAGS = $(RUSTFLAGS_SECURE_HW) --cfg=stress_build="$(shell date +%s)"
+#
+# Name-only cfg (no `=value`): rustc nightly (≥2026-04 verified) rejects
+# `--cfg=name=value` unless the value is a quoted string, and the double
+# quotes get stripped by the shell when the variable is interpolated
+# inside the recipe's `RUSTFLAGS="..."` assignment. A name-only cfg
+# avoids the quoting tangle entirely while still being a unique-per-
+# second cargo fingerprint input — the cfg name itself is never queried
+# in source code, it just exists to invalidate the build cache.
+SE050_STRESS_RUSTFLAGS = $(RUSTFLAGS_SECURE_HW) --cfg=stress_build_$(shell date +%s)
 
 .PHONY: se050-stress se050-stress-destructive se050-stress-list
 
@@ -1045,17 +1053,17 @@ SE050_STRESS_RUSTFLAGS = $(RUSTFLAGS_SECURE_HW) --cfg=stress_build="$(shell date
 # so all three recipes share the same shell logic.
 #  $(1) = display label
 define SE050_STRESS_RUN
-	@log=$$$$(mktemp); rc_file=$$$$(mktemp); \
-	{ timeout 600 probe-rs run --chip STM32U585AIIx $(SECURE_ELF) 2>&1; echo $$$$? >"$$$$rc_file"; } | tee "$$$$log"; \
-	rc=$$$$(cat "$$$$rc_file"); \
-	if ! grep -q "=== SUMMARY:" "$$$$log"; then \
-		echo "==> $(1): FAIL (no SUMMARY line, probe-rs rc=$$$$rc, log=$$$$log)"; exit 1; \
+	@log=$$(mktemp); rc_file=$$(mktemp); \
+	{ timeout 1200 probe-rs run --chip STM32U585AIIx $(SECURE_ELF) 2>&1; echo $$? >"$$rc_file"; } | tee "$$log"; \
+	rc=$$(cat "$$rc_file"); \
+	if ! grep -q "=== SUMMARY:" "$$log"; then \
+		echo "==> $(1): FAIL (no SUMMARY line, probe-rs rc=$$rc, log=$$log)"; exit 1; \
 	fi; \
-	fail_count=$$$$(grep "=== SUMMARY:" "$$$$log" | head -1 | sed -E 's/.* ([0-9]+) FAIL .*/\1/'); \
-	if [ "$$$$fail_count" = "0" ]; then \
-		echo "==> $(1): PASS"; rm -f "$$$$log" "$$$$rc_file"; exit 0; \
+	fail_count=$$(grep "=== SUMMARY:" "$$log" | head -1 | sed -E 's/.* ([0-9]+) FAIL .*/\1/'); \
+	if [ "$$fail_count" = "0" ]; then \
+		echo "==> $(1): PASS"; rm -f "$$log" "$$rc_file"; exit 0; \
 	fi; \
-	echo "==> $(1): FAIL ($$$$fail_count test failures, probe-rs rc=$$$$rc, log=$$$$log)"; exit 1
+	echo "==> $(1): FAIL ($$fail_count test failures, probe-rs rc=$$rc, log=$$log)"; exit 1
 endef
 
 # Run the full Tier::Safe catalog.

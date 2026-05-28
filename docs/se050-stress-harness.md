@@ -48,6 +48,18 @@ admin-delete policy entry removed) ship-blocker fixes on real silicon.
 
 ## 3. Running tests
 
+> **`probe-rs run` never exits on its own.** Even after the runner
+> prints `=== SUMMARY:` + `=== DONE ===` and the firmware halts in
+> `wfi`, the semihosting stream stays open. The Makefile recipes
+> wrap `probe-rs run` in `timeout 1200` for this reason
+> (`Makefile:1085`). If you invoke `probe-rs run` directly, **always
+> prepend `timeout <N>`** — otherwise the terminal hangs forever
+> after the tests finish.
+>
+> Related: the USB probe handle is held exclusively. If a prior run
+> was force-killed mid-stream you'll see `interface is busy (errno
+> 16)` on the next launch — `pkill -f 'probe-rs run'` clears it.
+
 | Command | What it does |
 |---|---|
 | `make se050-stress` | Run every Tier::Safe test |
@@ -430,3 +442,17 @@ make se050-stress                                # done
 # Go back to normal wallet:
 make flash-hw-dual-se-oled-standalone
 ```
+
+---
+
+## 14. First on-silicon results (2026-05-28)
+
+First end-to-end real-hardware run: 6 PASS / 11 FAIL. The 6 PASS
+silicon-verify the load-bearing confidentiality claims (admin-passive-
+read refused, unauth-read refused, chip-layer substitution chain
+behaves as documented, S-5 round-trip works). The 11 FAIL split into
+(a) three real silicon behaviors the codebase had wrong assumptions
+about — none breach confidentiality, the worst is an accepted DoS
+vector — and (b) test-wrapper bugs that need fixing to make future
+runs report cleanly. Full analysis + action items: **[docs/se050-
+silicon-findings.md](se050-silicon-findings.md)**.
