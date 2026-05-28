@@ -513,11 +513,18 @@ fn positive_admin_wipe_obj_is_v6_a0() {
 // ═════════════════════════════════════════════════════════════════════
 
 #[test]
-fn positive_get_random_length_bounds_present() {
-    // NXP AN12413 §5.13.1: GetRandom length must be in [1, 256]. 0
-    // would request no entropy; >256 exceeds the chip's response buffer.
-    assert!(APDU_SRC.contains("if out.is_empty() || out.len() > 256 {"));
-    assert!(APDU_SRC.contains("return Err(Se050Error::InvalidParam);"));
+fn positive_get_random_chunks_large_requests() {
+    // Silicon (2026-05-28): a single GetRandom over SCP03 caps at 224 B
+    // (240 B → SW=0x6985). `get_random` therefore chunks any request
+    // larger than GET_RANDOM_MAX_CHUNK across multiple APDUs (mirrors
+    // the NXP SDK loop). Pin: the empty guard, the per-chunk cap, and
+    // the fill loop.
+    assert!(APDU_SRC.contains("if out.is_empty() {"));
+    assert!(APDU_SRC.contains("const GET_RANDOM_MAX_CHUNK: usize = 128;"));
+    assert!(APDU_SRC.contains("(out.len() - filled).min(GET_RANDOM_MAX_CHUNK)"));
+    // The old unconditional `> 256 → InvalidParam` reject must be gone
+    // (it would have rejected legitimate larger requests).
+    assert!(!APDU_SRC.contains("out.len() > 256"));
 }
 
 #[test]
@@ -866,13 +873,14 @@ fn negative_userid_policy_grants_write_delete_not_read() {
 }
 
 #[test]
-fn negative_get_random_rejects_out_of_range() {
-    // NXP AN12413 §5.13.1: `size` MUST be 1..=256. Pin the bounds
-    // check + the InvalidParam return — without it, a 0-byte request
-    // would still send the APDU and get rejected silently at the chip,
-    // and a >256 request would silently truncate.
-    assert!(APDU_SRC.contains("if out.is_empty() || out.len() > 256 {"));
+fn negative_get_random_rejects_empty_and_underfill() {
+    // A 0-byte request is rejected (would send a useless APDU); pin the
+    // empty guard + InvalidParam. Also pin the under-fill guard: if the
+    // chip returns fewer bytes than the chunk requested, `get_random`
+    // must error rather than leave the caller's buffer partially stale.
+    assert!(APDU_SRC.contains("if out.is_empty() {"));
     assert!(APDU_SRC.contains("return Err(Se050Error::InvalidParam);"));
+    assert!(APDU_SRC.contains("if value.len() < chunk {"));
 }
 
 #[test]

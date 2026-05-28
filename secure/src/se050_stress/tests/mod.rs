@@ -30,6 +30,7 @@ pub static ALL_TESTS: &[&StressTest] = &[
     &audit::AUDIT_UNAUTH_READ_REFUSED,
     &object::EXTENDED_LC_BOUNDARY,
     &scp03::WTX_ENDURANCE,
+    &scp03::GET_RANDOM_SIZE_BOUNDARY,
     &trng::QUALITY_BASIC,
     &userid::PIN_ATTRIBUTE_READ_REFUSED_ON_USER_USERID,
     // ----- Destructive -----

@@ -376,7 +376,9 @@ impl Se050 {
     /// the STM32 TRNG (and the OPTIGA TRNG in dual-SE builds) so a
     /// single broken or biased source cannot dictate the output.
     ///
-    /// `buf.len()` must be in `[1, 256]` (NXP AN12413 §5.13.1 limit).
+    /// Any `buf.len()` is accepted — `apdu::get_random` chunks requests
+    /// larger than the SCP03 per-APDU `GetRandom` ceiling (224 B on this
+    /// silicon) across multiple commands.
     pub fn random(&mut self, buf: &mut [u8]) -> Result<(), Se050Error> {
         if buf.is_empty() {
             return Ok(());

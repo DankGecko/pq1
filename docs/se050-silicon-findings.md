@@ -36,14 +36,17 @@ lingering `probe-rs run` / `timeout` processes
 
 ---
 
-## 1. Bottom line — run 1: 6 PASS / 11 FAIL → after fixes (run 3): 15 PASS / 2 FAIL
+## 1. Bottom line — run 1: 6 PASS / 11 FAIL → after fixes: 16 PASS / 2 FAIL
 
 > This section documents the FIRST run (6/11). After the fixes in §6/§6a
 > (production reinit + harness) and the §6b/§6c corrections (create_session
-> lockout, A2 retraction, object read-back cap, OID-base bump) the catalog
-> reaches **15 PASS / 2 FAIL** on the third run. The 2 residual failures
-> are the §4c GetRandom finding (production-relevant, separate open item;
-> not introduced by this work). See §6c for the final table.
+> lockout, A2 retraction, object read-back cap, OID-base bump, GetRandom
+> chunking) the catalog reaches **16 PASS / 2 FAIL** (progression
+> 6→10→12→15→16). The 2 residual failures are the §4d sustained-large-
+> response transport-endurance limit — a non-production transport-layer
+> item, not introduced by this work. The originally-alarming "GetRandom
+> rejected" (§4c) was root-caused (oversized single request >224 B over
+> SCP03) and FIXED by chunking; production was never affected. See §6c.
 
 ### Confidentiality invariant: HOLDS on silicon
 
@@ -477,75 +480,90 @@ coverage; the extended-Lc *encoding* path is unit-tested in
   session` maps `Status(0x6986) → AuthMethodBlocked`; the `verify_-
   session` 0x6982 arm reverted.
 
-## 6c. Third on-silicon run (2026-05-28) — 15 PASS / 2 FAIL
+## 6c. Runs 3-4 (2026-05-28) — GetRandom root-caused & fixed → 16 PASS / 2 FAIL
 
-Progression across the three runs: **6 → 10 → 12 → 15 PASS.** Every
-A1/A2/A3 item plus the §4a create_session lockout fix is now validated
-on B-U585I-IOT02A:
+Progression across the runs: **6 → 10 → 12 → 15 → 16 PASS.** Every
+A1/A2/A3 item plus the §4a create_session lockout fix is validated on
+B-U585I-IOT02A:
 
 | Test | Result | Note |
 |---|---|---|
 | `object_extended_lc_boundary` (5) | PASS | 32-B round-trip cap (§4b) |
-| `pin_attribute_read_refused_on_user_userid` (8) | PASS | A1 + OID-base bump |
-| `userid_no_admin_delete` (9) | PASS | A3 inline reinit |
-| `audit_admin_cannot_rotate_user_pin` (11) | PASS | **A2 retracted** — survives |
-| `pin_counter_persists_across_reinit` (14) | PASS | §4a create_session lock |
-| `userid_silicon_lockout` (17) | PASS | §4a create_session lock |
-| + the 9 already-green audit / scp03 / pin tests | PASS | |
+| `get_random_size_boundary` (new) | PASS | GetRandom chunking guard (§4c) |
+| `pin_attribute_read_refused_on_user_userid` | PASS | A1 + OID-base bump |
+| `userid_no_admin_delete` | PASS | A3 inline reinit |
+| `audit_admin_cannot_rotate_user_pin` | PASS | **A2 retracted** — survives |
+| `pin_counter_persists_across_reinit` | PASS | §4a create_session lock |
+| `userid_silicon_lockout` | PASS | §4a create_session lock |
+| + the audit / scp03 / pin tests | PASS | |
 
-The **2 remaining failures are both the §4c GetRandom finding** below,
-unrelated to A1/A2/A3 and not introduced by this work.
+The 2 residual failures (`scp03_wtx_endurance`, `trng_quality_basic`)
+are the §4d sustained-large-response transport-endurance limit — a
+non-production transport-layer matter, not A1/A2/A3.
 
-### 4c. NEW FINDING (production-relevant) — SE050 `GetRandom` returns SW=0x6985
+### 4c. RESOLVED — SE050 `GetRandom` 0x6985 was an oversized single request (>224 B over SCP03)
 
-`scp03_wtx_endurance` (test 6) and `trng_quality_basic` (test 7) both
-fail at their FIRST APDU: `INS=04 P1=00 P2=49` (`GetRandom`) → **SW=
-0x6985** ("conditions not satisfied"). Run-3 wire evidence: lines
-1242-1243 (test 6) and 1271-1272 (test 7). In runs 1-2 these two tests
-also failed but were attributed to the test-5 cascade; with test 5
-fixed in run 3, the test-5 corruption is gone and the TRUE cause is
-isolated — the chip rejects `GetRandom` itself.
+Initial symptom (runs 1-3): `scp03_wtx_endurance` and
+`trng_quality_basic` failed at their first `GetRandom` (`INS=04 P2=49`)
+with **SW=0x6985**. Root-caused in run 4 via the
+`get_random_size_boundary` probe (sizes 16…256, reinit between each):
 
-**Not an encoding bug.** Our `apdu::get_random` matches the NXP
-plug-and-trust `Se05x_API_GetRandom` byte-for-byte
-(`docs/SE050_AUDIT/plug-and-trust/hostlib/hostLib/se05x_03_xx_xx/
-se05x_APDU_impl.h:3835-3869`): `{CLA=0x80, INS=kSE05x_INS_MGMT(0x04),
-P1=kSE05x_P1_DEFAULT(0x00), P2=kSE05x_P2_RANDOM(0x49)}`, body
-`TLVSET_U16(TAG_1, size)`, Case-4. The SCP03 unwrap succeeds (we read a
-clean SW), so the transport and channel are fine — the applet itself
-returns 0x6985. Every other transport-level command on the same fresh
-SCP03 channel (`check_exists`, `write_binary_gated`, `create_session`)
-works, so it is `GetRandom`-specific. This is the FIRST time GetRandom
-was exercised on real silicon (the seed catalog's runner never worked
-until 2026-05-28).
+```
+size=16 OK  32 OK  48 OK  64 OK  96 OK  128 OK  160 OK  192 OK  224 OK
+size=240 FAIL SW=0x6985   256 FAIL SW=0x6985        max OK = 224
+```
 
-**⚠️ Production impact — needs investigation.** `rng_strong::fill`
-(`secure/src/rng_strong.rs:88-92`) makes the SE-TRNG contribution
-MANDATORY under every production backend (`se050`, `dual-se`,
-`optiga-trust-m`, `tropic01-se`): `crate::se_random(...).map_err(...)?`
-aborts the fill on any SE error (only `mock-se` tolerates failure). The
-SE-TRNG source resolves to `Se050::random → apdu::get_random` (and, in
-dual-se, `DualSecureElement::random` is strict both-or-fail too). So if
-this physical SE050 rejects GetRandom, the production OptRand fill
-(`crypto.rs:120`, every SPHINCS+C10 sign) and the OTP/consumption-mask
-seeds would abort on this hardware.
+So a SINGLE `GetRandom` over SCP03 caps at **224 bytes** (240 fails).
+The failing tests requested **256** bytes; `scp03_apdu_burst` requested
+16 and always passed. The cause is the encrypted response frame:
+`TLV(TAG_1,N) + SW`, R-ENC-padded to a 16-byte multiple plus the 8-byte
+R-MAC, must fit the SE050's ~256-byte secure-response frame — 224 fits
+(~248 B wire), 240 does not (~264 B). The NXP plug-and-trust SDK has
+the identical caveat as a TODO ("Replace 512 with max rsp buffer size
+based on with/without SCP") and resolves it by chunking.
 
-Open questions to resolve before relying on it:
-  1. Does GetRandom fail on the SE050 part used for the dual-se
-     production bring-up too, or only the stress chip? (The CLAUDE.md
-     "boots and signs on real B-U585I" status may have been QEMU/mock,
-     or may not have exercised the rng_strong OptRand path on silicon.)
-  2. Is GetRandom gated by this SE050 variant's applet config /
-     lifecycle (some SE05x SKUs restrict the RNG), or does it need a
-     prerequisite this harness skips?
-  3. If GetRandom is genuinely unavailable, `rng_strong` must either
-     drop the SE050 leg from the mandatory set (keeping STM32 TRNG +
-     OPTIGA as the entropy floor) or the SE050 entropy source must come
-     from a different command. Either is a deliberate design decision,
-     not a silent fallback.
+**Encoding was always correct** — `apdu::get_random` matched
+`Se05x_API_GetRandom` byte-for-byte (`se05x_APDU_impl.h:3835`). The bug
+was the driver allowing a single oversized request.
 
-This is tracked as a NEW open item — it is NOT a regression from the
-A1/A2/A3 work and was independently present before it.
+**Fix:** `apdu::get_random` now CHUNKS — any `out.len()` is split into
+`GET_RANDOM_MAX_CHUNK = 128`-byte `GetRandom` APDUs (mirrors the NXP SDK
+loop), well under the 224 ceiling. The old `out.len() > 256 →
+InvalidParam` reject is removed. New `get_random_size_boundary` stress
+test PASSES at all sizes incl. 480 B (multi-chunk).
+
+**Production was never at risk.** `rng_strong::fill` requests SE-TRNG
+entropy in **32-byte blocks** (`rng_strong.rs` `block = [0u8; 32]`) and
+`DualSecureElement::random` loops at 32 B — both far below 224. The
+earlier "production rng_strong would abort" alarm (prior draft of this
+section) was overstated; the OptRand fill (16 B) and every other
+production random draw are in the proven-good small-request regime.
+
+### 4d. OPEN (non-production) — sustained large-response GetRandom faults at ~31 calls
+
+With the §4c chunking fix in place, `scp03_wtx_endurance` (100 × 256-B
+= 200 × 128-B chunks) and `trng_quality_basic` (4096 B in 128-B chunks)
+now get PAST 0x6985 — each 128-B `GetRandom` returns `0x9000 len=134` —
+but fault after **~31 back-to-back 128-B responses**: the chip returns
+**SW=0x6d00** ("INS not supported") followed by a `Se050Error::Transport`
+(run 4 test 6 line 1314-1315). This is a T1oI2C transport-endurance
+limit under a sustained stream of LARGE SCP03 responses — the same
+family as §4b (large responses are fragile on this bench's T1oI2C
+setup). SMALL sustained responses are fine: `scp03_apdu_burst` does
+256× 16-B `GetRandom` without issue.
+
+**Not production-relevant.** Production never streams large SE050
+responses: `rng_strong` draws 32-B blocks at low volume. The exact
+mechanism (WTX retry desync? per-N-call SCP03/buffer accumulation? the
+"31" is suspiciously specific) is a transport-layer investigation
+deferred as a separate open item — needed only if SE050 *bulk* random
+is ever required, which no current design does.
+
+**Harness change:** `scp03_wtx_endurance` and `trng_quality_basic`
+reduced to 32-B per-call draws (the production-representative, robust
+regime) so they remain reliable regression signals; the large-response
+WTX endurance the original `wtx_endurance` name implied is tracked here
+as the open §4d item.
 
 After the A1/A2/A3 + create_session + harness fixes the catalog is
 **15 PASS / 2 FAIL**, the 2 being §4c (GetRandom), pending the

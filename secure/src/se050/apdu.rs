@@ -1057,12 +1057,30 @@ unsafe fn delete_id_list_page(
     Ok((more, list_len, deleted, failed))
 }
 
-/// `Se05x_API_GetRandom` (NXP AN12413 §5.13.1) — pull `out.len()` bytes
+/// Per-`GetRandom`-APDU request ceiling over the SCP03 secure channel.
+///
+/// **Silicon limit (B-U585I-IOT02A, 2026-05-28).** A single `GetRandom`
+/// over SCP03 succeeds up to **224 bytes** and is rejected with
+/// SW=0x6985 at **240 bytes** (empirically bracketed by the
+/// `get_random_size_boundary` stress probe: 16/32/48/64/96/128/160/
+/// 192/224 OK, 240/256 FAIL). The cause is the encrypted response
+/// frame: `TLV(TAG_1,N) + SW`, R-ENC-padded to a 16-byte multiple plus
+/// the 8-byte R-MAC, must fit the SE050's ~256-byte secure-response
+/// frame — which 224 does (≈248 B on the wire) and 240 does not
+/// (≈264 B). The NXP plug-and-trust SDK has the same caveat as a TODO
+/// (`fsl_sss_se05x_apis.c` — "Replace 512 with max rsp buffer size
+/// based on with/without SCP") and resolves it by chunking; we do the
+/// same. 128 is chosen as a clean, comfortably-safe chunk below 224.
+const GET_RANDOM_MAX_CHUNK: usize = 128;
+
+/// `Se05x_API_GetRandom` (NXP AN12413 §5.13.1) — fill `out` with bytes
 /// from the SE050 hardware TRNG over the established SCP03 channel.
 ///
-/// `size` is the requested length, capped by `SE05X_MAX_BUF_SIZE_RSP -
-/// overhead` (NXP plug-and-trust); for our use (≤32 B per call) the
-/// limit is academic. The response is `TLV(TAG_1, random_bytes)`.
+/// Requests larger than [`GET_RANDOM_MAX_CHUNK`] are split across
+/// multiple `GetRandom` APDUs (the SE050 rejects an oversized single
+/// request over SCP03 — see that constant). This mirrors the NXP SDK's
+/// `sss_se05x_rng_get_random` chunking loop, so any `out.len()` is
+/// accepted. Each APDU's response is `TLV(TAG_1, random_bytes)`.
 ///
 /// The XOR-mix layer (`hw::rng_strong`) is what makes this strong:
 /// even if the SE050 TRNG is biased / compromised, the XOR with the
@@ -1073,22 +1091,32 @@ pub unsafe fn get_random(
     scp03: &mut Scp03Session,
     out: &mut [u8],
 ) -> Result<usize, Se050Error> {
-    if out.is_empty() || out.len() > 256 {
+    if out.is_empty() {
         return Err(Se050Error::InvalidParam);
     }
-    let mut apdu = ApduBuf::new(0x80, INS_MGMT, P1_DEFAULT, P2_RANDOM);
-    let size = out.len() as u16;
-    apdu.tlv(TAG_1, &size.to_be_bytes());
-    let cmd = apdu.finish(true);
 
-    let mut resp = [0u8; 320];
-    let n = send_apdu(t1, scp03, cmd, &mut resp)?;
-    if let Some((_, value, _)) = tlv_parse(&resp[..n]) {
-        let copy_len = value.len().min(out.len());
-        out[..copy_len].copy_from_slice(&value[..copy_len]);
-        return Ok(copy_len);
+    let mut filled = 0usize;
+    while filled < out.len() {
+        let chunk = (out.len() - filled).min(GET_RANDOM_MAX_CHUNK);
+
+        let mut apdu = ApduBuf::new(0x80, INS_MGMT, P1_DEFAULT, P2_RANDOM);
+        let size = chunk as u16;
+        apdu.tlv(TAG_1, &size.to_be_bytes());
+        let cmd = apdu.finish(true);
+
+        let mut resp = [0u8; 320];
+        let n = send_apdu(t1, scp03, cmd, &mut resp)?;
+        let (_, value, _) = tlv_parse(&resp[..n]).ok_or(Se050Error::Transport)?;
+        if value.len() < chunk {
+            // Chip returned fewer bytes than requested — treat as a
+            // transport / framing fault rather than silently
+            // under-filling the caller's buffer with stale zeros.
+            return Err(Se050Error::Transport);
+        }
+        out[filled..filled + chunk].copy_from_slice(&value[..chunk]);
+        filled += chunk;
     }
-    Err(Se050Error::Transport)
+    Ok(filled)
 }
 
 /// Close a session on the SE050.
