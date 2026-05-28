@@ -55,7 +55,7 @@ impl<'a> StressCtx<'a> {
     // -------- OID layout --------
 
     /// OID for slot `slot` of this test's sub-range
-    /// (= `0x7B5F_<test_id><slot>`).
+    /// (= `0x7B5E_<test_id><slot>`).
     #[inline]
     pub fn oid(&self, slot: u8) -> u32 {
         oid::scratch_oid(self.test_id, slot)
@@ -105,8 +105,28 @@ impl<'a> StressCtx<'a> {
 
     /// Delete a scratch object via admin auth. Idempotent (missing OID
     /// is a no-op).
+    ///
+    /// **A3 robustness (2026-05-28).** A leftover at `target` may be a
+    /// UserID with no admin-delete policy entry (stranded by a prior
+    /// `WithoutAdminEntry` provisioning that crashed before its own
+    /// user-PIN self-delete). In that case `delete_object_authed`
+    /// returns SW=0x6986 and the subsequent close leaves the chip in
+    /// the Finding-A3 session-pending state, which would poison the
+    /// caller's next op. We swallow the admin-delete error for
+    /// idempotency BUT `reinit()` afterwards so the chip is clean.
+    ///
+    /// Note: such a no-admin UserID is NOT removable by this helper —
+    /// a transport `write_userid` UPDATE is *refused and preserves* the
+    /// object (Finding A2 is retracted; there is no destroy-on-failed-
+    /// UPDATE — see `docs/se050-silicon-findings.md` §3). The only
+    /// cures are the UserID's own user-PIN self-delete or a carve-out
+    /// OID-range bump; `oid::STRESS_BASE` was bumped `0x7B5F → 0x7B5E`
+    /// for exactly this reason. `delete_scratch` therefore only
+    /// guarantees the chip is left in a clean (non-pending) state, not
+    /// that an un-admin-deletable leftover is gone.
     pub fn delete_scratch(&mut self, target: u32) -> StressResult {
         let pin = self.admin_pin()?;
+        let mut needs_reinit = false;
         unsafe {
             let present = {
                 let (t1, scp03) = self.se.t1_scp03_mut();
@@ -123,15 +143,25 @@ impl<'a> StressCtx<'a> {
                 let (t1, scp03) = self.se.t1_scp03_mut();
                 if apdu::verify_session(t1, scp03, &sid, &pin).is_err() {
                     let _ = apdu::close_session(t1, scp03, &sid);
+                    // Verify failure on the admin session itself leaves
+                    // the chip session-pending — flush it.
+                    let _ = self.se.reinit();
                     return Ok(());
                 }
             }
             {
                 let (t1, scp03) = self.se.t1_scp03_mut();
-                let _ = apdu::delete_object_authed(t1, scp03, &sid, target);
+                if apdu::delete_object_authed(t1, scp03, &sid, target).is_err() {
+                    // Most likely a no-admin-policy UserID (0x6986).
+                    // The failed delete + close leaves session-pending.
+                    needs_reinit = true;
+                }
             }
             let (t1, scp03) = self.se.t1_scp03_mut();
             let _ = apdu::close_session(t1, scp03, &sid);
+        }
+        if needs_reinit {
+            let _ = self.se.reinit();
         }
         Ok(())
     }

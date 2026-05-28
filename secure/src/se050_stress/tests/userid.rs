@@ -19,7 +19,7 @@ use crate::se050_stress::ctx::AdminPolicy;
 /// SW=0x6986 per `apdu.rs:42-54`). Logs the actual SW seen so a future
 /// chip-firmware revision that changed the lockout SW would be caught.
 ///
-/// Side-effects: leaves a locked UserID at `0x7B5F_08_01` until the
+/// Side-effects: leaves a locked UserID at `0x7B5E_<id>_01` until the
 /// runner's admin sweep cleans it up.
 fn silicon_lockout(ctx: &mut StressCtx) -> StressResult {
     let target = ctx.oid(0x01);

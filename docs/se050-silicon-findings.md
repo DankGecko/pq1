@@ -36,7 +36,14 @@ lingering `probe-rs run` / `timeout` processes
 
 ---
 
-## 1. Bottom line — 6 PASS / 11 FAIL
+## 1. Bottom line — run 1: 6 PASS / 11 FAIL → after fixes (run 3): 15 PASS / 2 FAIL
+
+> This section documents the FIRST run (6/11). After the fixes in §6/§6a
+> (production reinit + harness) and the §6b/§6c corrections (create_session
+> lockout, A2 retraction, object read-back cap, OID-base bump) the catalog
+> reaches **15 PASS / 2 FAIL** on the third run. The 2 residual failures
+> are the §4c GetRandom finding (production-relevant, separate open item;
+> not introduced by this work). See §6c for the final table.
 
 ### Confidentiality invariant: HOLDS on silicon
 
@@ -105,7 +112,32 @@ test's burn arithmetic needs to account for it.
 
 ---
 
-## 3. Finding A2 — Failed `write_userid` UPDATE destroys the existing UserID (DoS, ACCEPTED)
+## 3. Finding A2 — ❌ RETRACTED — failed `write_userid` UPDATE is refused AND preserves the UserID
+
+> **RETRACTED 2026-05-28 (second silicon run).** This finding was an
+> artifact of Finding A3, not a real chip behavior. The original claim
+> ("a refused transport `write_userid` UPDATE *destroys* the existing
+> UserID — a one-APDU DoS") rested on a post-attack `check_exists`
+> returning SW=0x6982, which run 1 misread as "object gone". 0x6982 was
+> actually the A3 session-pending TRANSIENT left by the refused write.
+> Run 2 inserts a `reinit()` after the refused UPDATE (clearing the A3
+> transient) and `check_exists` then returns **0x9000 PRESENT** — the
+> UserID survives fully intact, and the original `user_pin` still
+> authenticates (wire evidence: 2026-05-28 run-2 test 11, lines
+> 1495-1509). So the chip behaves correctly: the transport / admin-
+> context UPDATE is cleanly **refused (SW=0x6985) and the original
+> credential is preserved**. There is no DoS and no substitution. The
+> `audit_admin_cannot_rotate_user_pin` test was reverted to assert
+> survival (refused + UserID survives + user_pin works + attacker_pin
+> rejected). **No production impact** — no firmware path depended on
+> the false "destroy" behavior.
+>
+> The original text is kept below (under "ORIGINAL — now known false")
+> for the record.
+
+---
+
+**ORIGINAL — now known false (kept for the record):**
 
 **Setup:** test `audit_admin_cannot_rotate_user_pin` provisions a
 UserID, opens a user session with the correct PIN (succeeds, proving
@@ -327,6 +359,197 @@ None of the above changes chip behavior or the confidentiality
 invariant. The harness work makes the tests probe correctly; the
 production-firmware work makes the user-visible error paths and the
 admin-wipe safety contract honest under A3.
+
+---
+
+## 6b. Second on-silicon run (2026-05-28, post-fix) — 10 PASS / 7 FAIL
+
+Re-ran `make se050-stress-destructive` on B-U585I-IOT02A after the §6 /
+§6a fixes landed. Improved from 6 → **10 PASS**. The remaining 7
+failures split into one genuinely production-relevant correction
+(§4a), one new harness/driver finding (§4b), and incomplete A3
+recovery in a few of the reworked tests — all now addressed in a
+follow-up pass. Confirmed PASSING on this run:
+
+- `scp03_handshake_repeat`, `scp03_apdu_burst`,
+  `scp03_response_encryption_verify` (S-5),
+  `audit_unauth_read_refused`, `audit_admin_passive_read_refused`,
+  `audit_data_substitution_chip_level`,
+  `userid_no_admin_delete` (the §6a A3 inline reinit WORKED),
+  `pin_lockout_persists_across_reinit`,
+  `pin_counter_resets_on_correct_pin` (P1 burn-arithmetic rework
+  WORKED), `pin_unlimited_no_lockout` (P5, 100-burn + correct-PIN,
+  WORKED with the per-failed-verify reinit).
+
+### 4a. CORRECTION — the lockout SW is 0x6986 at `create_session`, not 0x6982 at `verify_session`
+
+The first run (§5 #17) recorded "4th wrong PIN returned SW=0x6982"
+and the §6a commit added a `0x6982 → AuthMethodBlocked` arm to
+`verify_session`. **That was wrong.** With the driver now `reinit()`ing
+after every failed verify (§6 item 6), the A3 session-pending artifact
+is cleared between burns, and the SECOND run exposed the true lockout
+behaviour cleanly in both `pin_counter_persists_across_reinit` (test
+14) and `userid_silicon_lockout` (test 17):
+
+> A locked UserID is rejected at **`create_session`** (`INS=04 P2=1B`)
+> with **SW=0x6986**, BEFORE any VERIFY runs.
+
+i.e. the 0x6982 seen in run #1 was the A3 session-pending transient
+(the chip was pending from the prior wrong-PIN's failed close), NOT the
+lockout code. Wire evidence this run: test 17 lines 3439-3440
+(`create_session` → 0x6986 on the 4th attempt, after each of the first
+3 wrong PINs went create→verify(0x6985)→close→reinit).
+
+**Production impact + fix.** In `authenticate_and_read` the
+`create_session(USERID_OBJ)` call on a locked UserID returns 0x6986;
+before the fix that propagated as `Status(0x6986)` →
+`classify_se050_unlock_error`'s `_` arm → `UnlockError::InternalError`
+(no wipe), defeating the §25 Gap 4 contract. Fixes:
+
+- `apdu::create_session` now maps `Status(0x6986) → AuthMethodBlocked`
+  (mirrors `verify_session`). A locked UserID at session-open now
+  classifies as `PinLocked → trigger_lockout_wipe`.
+- The `0x6982 → AuthMethodBlocked` arm added to `verify_session` in
+  §6a is **reverted**. 0x6982 is the recoverable A3 transient; mapping
+  it to `PinLocked → trigger_lockout_wipe` would be a false-positive
+  device wipe. It now stays `Status(0x6982) → InternalError` (transient,
+  no wipe).
+- `pure_tests::gap4_apdu_translates_0x6986_to_auth_method_blocked`
+  updated: asserts the `create_session` 0x6986 arm exists AND that
+  0x6982 is NOT mapped to the lockout variant.
+
+Tests 14 + 17 pass once `create_session` surfaces `AuthMethodBlocked`
+(their existing match arms already expect it).
+
+### 4b. NEW FINDING — large-object read-back via `read_authed` fails (size-dependent)
+
+The §5 #5 diagnosis ("`object_extended_lc_boundary` writes 1024-byte
+payloads that overflow the 1024-B `ApduBuf`") was **wrong**. The WRITE
+path is fine; the READ-BACK is the weak link, and across two runs its
+ceiling is LOW and the failure mode is size-dependent:
+
+- The WRITE path succeeds well past 256 B — at len=254 the chip returns
+  0x9000 to a correctly extended-Lc-encoded `WriteBinary` (run 1 test 5
+  line 1202-1203).
+- READ-BACK via `read_authed` (INS_PROCESS wrapper, inner READ with
+  Le=0x00):
+    - **run 1**, len=254 read → **SW=0x6985** (clean chip rejection),
+    - **run 2**, len=64 read → **I2C TXIS hard transport timeout**
+      (`[S][I2C] TXIS timeout!`, run-2 lines 1214/1224) needing an
+      interface reset.
+  Read-back at **len=32 round-trips reliably on BOTH runs**.
+- Either read failure drops the chip into A3 session-pending, which
+  then cascaded into tests 6 (`scp03_wtx_endurance`) and 7
+  (`trng_quality_basic`) failing at their FIRST APDU even after the
+  inter-test reinit.
+
+So the read-back ceiling on this silicon is somewhere in **32..64 B**,
+with a flaky hard-hang failure mode above it — a genuine `read_authed`
+/ T1oI2C large-response driver issue worth its own investigation.
+
+**Not production-relevant.** Firmware only ever reads 32-byte objects
+(entropy / VK / bootstrap VK), comfortably inside the round-trip range.
+NOT a ship blocker.
+
+**Harness fix:** `object_extended_lc_boundary` now round-trips only
+≤32 B payloads (the only sizes proven good on both runs), and the large
+write-only boundary probes were removed (writing 254+ B objects we
+cannot read back added cascade risk for no production-relevant
+coverage; the extended-Lc *encoding* path is unit-tested in
+`crate::iso7816`'s proptest harness).
+
+### Second-run harness fixes (applied; third run pending)
+
+- **A2 retraction** (§3): `audit_admin_cannot_rotate_user_pin` reverted
+  to assert the UserID SURVIVES the refused UPDATE (with a `reinit()`
+  after the attack to clear the A3 transient before the survival
+  probes). Run 2 proved the run-1 "destroy" was an A3 artifact.
+- **Stranded-leftover / OID bump** (test 8): a no-admin-delete UserID
+  stranded at `0x7B5F_0801` by a prior run could not be removed
+  (admin-delete → 0x6986; transport `write_userid` → 0x6985 refused,
+  does NOT destroy — A2 retracted). Fix: bump `oid::STRESS_BASE`
+  `0x7B5F → 0x7B5E` for a clean carve-out generation (mirrors the
+  production S-6 "bump OID to re-provision" pattern). `delete_scratch`
+  also now `reinit()`s after a failed admin-delete so the session-
+  pending state never poisons the caller (it cannot remove an
+  un-admin-deletable leftover, but it leaves the chip clean).
+- **create_session lockout** (§4a, tests 14 + 17): `apdu::create_-
+  session` maps `Status(0x6986) → AuthMethodBlocked`; the `verify_-
+  session` 0x6982 arm reverted.
+
+## 6c. Third on-silicon run (2026-05-28) — 15 PASS / 2 FAIL
+
+Progression across the three runs: **6 → 10 → 12 → 15 PASS.** Every
+A1/A2/A3 item plus the §4a create_session lockout fix is now validated
+on B-U585I-IOT02A:
+
+| Test | Result | Note |
+|---|---|---|
+| `object_extended_lc_boundary` (5) | PASS | 32-B round-trip cap (§4b) |
+| `pin_attribute_read_refused_on_user_userid` (8) | PASS | A1 + OID-base bump |
+| `userid_no_admin_delete` (9) | PASS | A3 inline reinit |
+| `audit_admin_cannot_rotate_user_pin` (11) | PASS | **A2 retracted** — survives |
+| `pin_counter_persists_across_reinit` (14) | PASS | §4a create_session lock |
+| `userid_silicon_lockout` (17) | PASS | §4a create_session lock |
+| + the 9 already-green audit / scp03 / pin tests | PASS | |
+
+The **2 remaining failures are both the §4c GetRandom finding** below,
+unrelated to A1/A2/A3 and not introduced by this work.
+
+### 4c. NEW FINDING (production-relevant) — SE050 `GetRandom` returns SW=0x6985
+
+`scp03_wtx_endurance` (test 6) and `trng_quality_basic` (test 7) both
+fail at their FIRST APDU: `INS=04 P1=00 P2=49` (`GetRandom`) → **SW=
+0x6985** ("conditions not satisfied"). Run-3 wire evidence: lines
+1242-1243 (test 6) and 1271-1272 (test 7). In runs 1-2 these two tests
+also failed but were attributed to the test-5 cascade; with test 5
+fixed in run 3, the test-5 corruption is gone and the TRUE cause is
+isolated — the chip rejects `GetRandom` itself.
+
+**Not an encoding bug.** Our `apdu::get_random` matches the NXP
+plug-and-trust `Se05x_API_GetRandom` byte-for-byte
+(`docs/SE050_AUDIT/plug-and-trust/hostlib/hostLib/se05x_03_xx_xx/
+se05x_APDU_impl.h:3835-3869`): `{CLA=0x80, INS=kSE05x_INS_MGMT(0x04),
+P1=kSE05x_P1_DEFAULT(0x00), P2=kSE05x_P2_RANDOM(0x49)}`, body
+`TLVSET_U16(TAG_1, size)`, Case-4. The SCP03 unwrap succeeds (we read a
+clean SW), so the transport and channel are fine — the applet itself
+returns 0x6985. Every other transport-level command on the same fresh
+SCP03 channel (`check_exists`, `write_binary_gated`, `create_session`)
+works, so it is `GetRandom`-specific. This is the FIRST time GetRandom
+was exercised on real silicon (the seed catalog's runner never worked
+until 2026-05-28).
+
+**⚠️ Production impact — needs investigation.** `rng_strong::fill`
+(`secure/src/rng_strong.rs:88-92`) makes the SE-TRNG contribution
+MANDATORY under every production backend (`se050`, `dual-se`,
+`optiga-trust-m`, `tropic01-se`): `crate::se_random(...).map_err(...)?`
+aborts the fill on any SE error (only `mock-se` tolerates failure). The
+SE-TRNG source resolves to `Se050::random → apdu::get_random` (and, in
+dual-se, `DualSecureElement::random` is strict both-or-fail too). So if
+this physical SE050 rejects GetRandom, the production OptRand fill
+(`crypto.rs:120`, every SPHINCS+C10 sign) and the OTP/consumption-mask
+seeds would abort on this hardware.
+
+Open questions to resolve before relying on it:
+  1. Does GetRandom fail on the SE050 part used for the dual-se
+     production bring-up too, or only the stress chip? (The CLAUDE.md
+     "boots and signs on real B-U585I" status may have been QEMU/mock,
+     or may not have exercised the rng_strong OptRand path on silicon.)
+  2. Is GetRandom gated by this SE050 variant's applet config /
+     lifecycle (some SE05x SKUs restrict the RNG), or does it need a
+     prerequisite this harness skips?
+  3. If GetRandom is genuinely unavailable, `rng_strong` must either
+     drop the SE050 leg from the mandatory set (keeping STM32 TRNG +
+     OPTIGA as the entropy floor) or the SE050 entropy source must come
+     from a different command. Either is a deliberate design decision,
+     not a silent fallback.
+
+This is tracked as a NEW open item — it is NOT a regression from the
+A1/A2/A3 work and was independently present before it.
+
+After the A1/A2/A3 + create_session + harness fixes the catalog is
+**15 PASS / 2 FAIL**, the 2 being §4c (GetRandom), pending the
+investigation above.
 
 ---
 

@@ -347,55 +347,47 @@ stress_test!(AUDIT_UNAUTH_READ_REFUSED, "audit_unauth_read_refused", Tier::Safe,
 /// S-6 closes admin DELETE of a user UserID with no admin policy entry.
 /// This test probes the adjacent attack vector: in-place UPDATE of an
 /// existing user UserID. If a transport-SCP03 caller could send
-/// `INS_WRITE | INS_AUTH_OBJECT` at the user OID and silently swap
-/// the PIN, the substitution-attack chain reopens via a different APDU
-/// than DELETE+CREATE.
+/// `INS_WRITE | INS_AUTH_OBJECT` at the user OID and silently swap the
+/// PIN, the substitution-attack chain reopens via a different APDU than
+/// DELETE+CREATE.
 ///
 /// Per AN12413 §4.7, UPDATE of an existing AUTH_OBJECT must check the
 /// existing policy for `ALLOW_WRITE` granted to the current session's
 /// auth. Our user policy grants `ALLOW_WRITE` only to the user's own
 /// auth entry; admin's entry has only `ALLOW_DELETE`. Transport SCP03
 /// has no UserID session at all. So both the "no session" and "admin
-/// session" cases MUST be refused.
+/// session" cases MUST be refused, leaving the original UserID intact.
 ///
-/// **Silicon truth — Finding A2 (2026-05-28).** The B-U585I-IOT02A run
-/// showed the chip's UPDATE path internally "delete-then-create"s the
-/// auth object. The delete commits BEFORE the policy check on the new
-/// policy entries; the chip then refuses the create phase (SW=0x6985),
-/// but the delete is already through. Net effect: any caller with a
-/// valid SCP03 channel can DoS-destroy the UserID via a single APDU
-/// without satisfying any policy entry — and crucially WITHOUT
-/// installing the attacker's chosen PIN. Substitution fails, but so
-/// does survival. Wire trace `b88gzpjod.output:1372-1377`; full
-/// writeup `docs/se050-silicon-findings.md` §3.
-///
-/// **Threat-model classification: DoS, ACCEPTED.** The confidentiality
-/// invariant is "`half_E` never leaves the device." A destroyed
-/// `USERID_OBJ` makes `ENTROPY_OBJ` unreadable (policy gate dangles),
-/// which bricks unlock — but `half_E` is destroyed, not leaked. The
-/// user's BIP-39 paper backup recovers funds; the chip-pair is
-/// replaced or re-provisioned. Not a ship-blocker under the current
-/// threat model. If a future model adds "wallet stays functional after
-/// physical access", this becomes a blocker requiring chip-firmware
-/// mitigation (NXP custom AppletConfig) or a different UserID
-/// architecture.
+/// **Finding A2 RETRACTED (2026-05-28, second silicon run).** An
+/// earlier draft of this test claimed the failed UPDATE *destroys* the
+/// UserID ("delete-then-create that aborts after the delete" — a DoS).
+/// That was WRONG: it was an artifact of Finding A3. In run 1 the
+/// post-attack `check_exists` returned SW=0x6982 — which we misread as
+/// "object gone" — but 0x6982 was the chip's session-pending TRANSIENT
+/// left by the refused write, NOT a deletion. Run 2 inserts a
+/// `reinit()` after the attack (clearing the A3 transient) and the
+/// follow-up `check_exists` returns 0x9000 PRESENT: the UserID
+/// **survives** the refused UPDATE fully intact, and the original
+/// `user_pin` still authenticates. So the chip behaves correctly —
+/// the transport/admin-context UPDATE is cleanly refused (SW=0x6985)
+/// AND the original credential is preserved. No DoS, no substitution.
+/// See `docs/se050-silicon-findings.md` §3.
 ///
 /// Sequence per attack:
-///   1. Provision USERID with `user_pin`.
-///   2. Sanity: `user_pin` opens a session.
-///   3. ATTACK: `write_userid(user_oid, attacker_pin, …)`. Per silicon
-///      truth: chip returns Err (refused) AND the OID is destroyed.
-///   4. Assert refusal: `attack_result` is Err.
-///   5. Assert destruction: `check_exists(user_oid)` reports false.
-///   6. Assert no-substitution: the attacker's PIN does NOT open a
-///      session (the OID is gone, so create_session itself fails — we
-///      accept any Err here; getting `Ok(sid)` would be the
-///      catastrophic substitution outcome).
+///   1. Provision USERID with `user_pin`; sanity-check `user_pin` works.
+///   2. ATTACK: transport-level `write_userid(user_oid, attacker_pin,…)`
+///      → must be refused (Err).
+///   3. `reinit()` to clear the A3 session-pending transient the
+///      refused write leaves behind.
+///   4. Assert the UserID SURVIVES (`check_exists` → true).
+///   5. Assert `user_pin` STILL opens a session (credential intact).
+///   6. Assert `attacker_pin` does NOT open a session (no substitution).
 ///
-/// PASS = refused + destroyed + attacker-PIN-doesn't-work, for both
-/// transport-only (A) and admin-session-context (B) attack contexts.
-/// FAIL = (a) attack returns Ok, (b) UserID survives, (c) attacker's
-/// PIN opens a session — any of which means substitution succeeded.
+/// PASS = refused + UserID survives + user_pin works + attacker_pin
+/// rejected, under both transport-only (A) and admin-session-context
+/// (B) attack contexts.
+/// FAIL = (a) attack returns Ok, (b) UserID vanished, (c) user_pin
+/// stops working, or (d) attacker_pin opens a session.
 fn audit_admin_cannot_rotate_user_pin(ctx: &mut StressCtx) -> StressResult {
     let user_oid = ctx.oid(0x01);
     let user_pin:  [u8; 8] = *b"a4userpn";
@@ -410,162 +402,139 @@ fn audit_admin_cannot_rotate_user_pin(ctx: &mut StressCtx) -> StressResult {
     let sid = ctx.open_user_session(user_oid, &user_pin)?;
     ctx.close_session(&sid);
 
-    let attack_a = ctx.try_write_userid_transport(user_oid, &attacker_pin, 5, Some(STRESS_ADMIN_USERID));
-    match attack_a {
-        Ok(()) => {
-            secure_log!(
-                "[S][stress][audit-a4] SECURITY FAILURE — transport-level WriteUserID UPDATE succeeded on existing user OID",
-            );
-            return Err(StressError::Assertion {
-                what: "transport-SCP03 WriteUserID UPDATE returned Ok on existing OID",
-                iter: 0,
-            });
-        }
-        Err(Se050Error::Status(sw)) => {
-            secure_log!(
-                "[S][stress][audit-a4] attack A refused with SW=0x{:04x} (expected — chip's delete-then-create path aborts after delete)",
-                sw,
-            );
-        }
-        Err(e) => {
-            secure_log!(
-                "[S][stress][audit-a4] attack A refused with driver error: {:?}",
-                e,
-            );
-        }
-    }
-
-    // A2 silicon truth: the UserID is now destroyed.
-    match ctx.check_exists(user_oid) {
-        Ok(false) => {
-            secure_log!(
-                "[S][stress][audit-a4] attack A: UserID destroyed as expected (A2 DoS — accepted)",
-            );
-        }
-        Ok(true) => {
-            secure_log!(
-                "[S][stress][audit-a4] UNEXPECTED — UserID survived attack A; A2 may have been fixed in this chip rev",
-            );
-            return Err(StressError::Assertion {
-                what: "UserID survived transport UPDATE attack — silicon stronger than A2 reports",
-                iter: 0,
-            });
-        }
-        Err(e) => {
-            secure_log!(
-                "[S][stress][audit-a4] check_exists post-attack-A returned driver err {:?} (treating as destroyed)",
-                e,
-            );
-        }
-    }
-
-    // The attacker's PIN must NOT open a session. Two outcomes are
-    // acceptable: (a) create_session fails because the OID is gone
-    // (typical post-A2 path), or (b) the chip rejects verify with
-    // any non-Ok status. The catastrophic case is `Ok(sid)`.
-    match ctx.open_user_session(user_oid, &attacker_pin) {
-        Ok(sid) => {
-            ctx.close_session(&sid);
-            secure_log!(
-                "[S][stress][audit-a4] SECURITY FAILURE — attacker PIN opened a session after attack A",
-            );
-            return Err(StressError::Assertion {
-                what: "attacker PIN opens session — UPDATE silently installed the new PIN (substitution succeeded)",
-                iter: 0,
-            });
-        }
-        Err(e) => {
-            secure_log!(
-                "[S][stress][audit-a4] attack A: attacker PIN rejected ({:?}) — no substitution",
-                e,
-            );
-        }
-    }
+    run_rotate_attack(ctx, user_oid, &user_pin, &attacker_pin, "A", None)?;
 
     // -------- ATTACK B: same APDU, admin session open in parallel --------
-    //
-    // Re-provision so the OID exists again for the second probe.
-
-    ctx.delete_scratch(user_oid)?;
-    ctx.provision_test_userid(user_oid, &user_pin, 5, AdminPolicy::WithAdminDelete)?;
 
     let admin_sid = ctx.open_admin_session()?;
-    let attack_b = ctx.try_write_userid_transport(user_oid, &attacker_pin, 5, Some(STRESS_ADMIN_USERID));
-    ctx.close_session(&admin_sid);
+    run_rotate_attack(ctx, user_oid, &user_pin, &attacker_pin, "B", Some(admin_sid))?;
 
-    match attack_b {
+    secure_log!(
+        "[S][stress][audit-a4] PASS: WriteUserID UPDATE refused under both transport and \
+         admin-session contexts — UserID survives intact, user PIN still works, attacker \
+         PIN never installs. Substitution chain stays closed (A2 retracted: no DoS).",
+    );
+    Ok(())
+}
+
+/// One rotate-attack pass: fire the transport `write_userid` UPDATE,
+/// assert refusal, reinit to clear the A3 transient, then assert the
+/// UserID + original PIN survive and the attacker PIN does not work.
+/// `admin_sid`, if `Some`, is an open admin session held in parallel
+/// (the worst-case context for attack B) and is closed before the
+/// post-attack reinit.
+fn run_rotate_attack(
+    ctx: &mut StressCtx,
+    user_oid: u32,
+    user_pin: &[u8],
+    attacker_pin: &[u8],
+    label: &str,
+    admin_sid: Option<crate::se050_stress::ctx::SessionId>,
+) -> StressResult {
+    let attack = ctx.try_write_userid_transport(user_oid, attacker_pin, 5, Some(STRESS_ADMIN_USERID));
+
+    // Close the parallel admin session (attack B) before any reinit.
+    if let Some(sid) = admin_sid {
+        ctx.close_session(&sid);
+    }
+
+    match attack {
         Ok(()) => {
             secure_log!(
-                "[S][stress][audit-a4] SECURITY FAILURE — admin-context WriteUserID UPDATE succeeded",
+                "[S][stress][audit-a4] attack {} SECURITY FAILURE — WriteUserID UPDATE succeeded on existing user OID",
+                label,
             );
             return Err(StressError::Assertion {
-                what: "admin-context WriteUserID UPDATE returned Ok",
+                what: "WriteUserID UPDATE returned Ok on an existing user OID",
                 iter: 0,
             });
         }
         Err(Se050Error::Status(sw)) => {
             secure_log!(
-                "[S][stress][audit-a4] attack B refused with SW=0x{:04x}",
-                sw,
+                "[S][stress][audit-a4] attack {} refused with SW=0x{:04x} (expected)",
+                label, sw,
             );
         }
         Err(e) => {
             secure_log!(
-                "[S][stress][audit-a4] attack B refused with driver error: {:?}",
-                e,
+                "[S][stress][audit-a4] attack {} refused with driver error: {:?}",
+                label, e,
             );
         }
     }
 
+    // A3 recovery: the refused write leaves the chip session-pending.
+    // Flush it so the survival probes below read the REAL chip state
+    // rather than the 0x6982 transient (which run 1 misread as
+    // "destroyed", the false A2 finding).
+    let _ = ctx.se().reinit();
+
+    // The UserID must SURVIVE the refused UPDATE (A2 retracted).
     match ctx.check_exists(user_oid) {
-        Ok(false) => {
-            secure_log!(
-                "[S][stress][audit-a4] attack B: UserID destroyed (same A2 DoS path)",
-            );
-        }
         Ok(true) => {
             secure_log!(
-                "[S][stress][audit-a4] UNEXPECTED — UserID survived attack B",
+                "[S][stress][audit-a4] attack {}: UserID survives the refused UPDATE (correct)",
+                label,
+            );
+        }
+        Ok(false) => {
+            secure_log!(
+                "[S][stress][audit-a4] attack {} FAILURE — UserID vanished after refused UPDATE",
+                label,
             );
             return Err(StressError::Assertion {
-                what: "UserID survived admin-context UPDATE attack",
+                what: "UserID destroyed by a refused WriteUserID UPDATE",
                 iter: 0,
             });
         }
         Err(e) => {
             secure_log!(
-                "[S][stress][audit-a4] check_exists post-attack-B returned driver err {:?} (treating as destroyed)",
-                e,
+                "[S][stress][audit-a4] attack {} check_exists err {:?} after reinit",
+                label, e,
             );
+            return Err(e.into());
         }
     }
 
-    match ctx.open_user_session(user_oid, &attacker_pin) {
+    // The original user PIN must STILL work (credential intact).
+    match ctx.open_user_session(user_oid, user_pin) {
         Ok(sid) => {
             ctx.close_session(&sid);
             secure_log!(
-                "[S][stress][audit-a4] SECURITY FAILURE — attacker PIN opened a session after attack B",
+                "[S][stress][audit-a4] attack {}: original user PIN still authenticates (correct)",
+                label,
             );
-            return Err(StressError::Assertion {
-                what: "attacker PIN opens session after attack B — substitution succeeded",
-                iter: 0,
-            });
         }
         Err(e) => {
             secure_log!(
-                "[S][stress][audit-a4] attack B: attacker PIN rejected ({:?}) — no substitution",
-                e,
+                "[S][stress][audit-a4] attack {} FAILURE — original user PIN stopped working: {:?}",
+                label, e,
             );
+            return Err(e);
         }
     }
 
-    secure_log!(
-        "[S][stress][audit-a4] PASS: A2 DoS confirmed under both contexts — \
-         WriteUserID UPDATE refused, UserID destroyed, attacker PIN never installs. \
-         Substitution chain remains closed; DoS is accepted under the confidentiality \
-         threat model (BIP-39 backup is the recovery path).",
-    );
-    Ok(())
+    // The attacker PIN must NOT open a session (no substitution).
+    match ctx.open_user_session(user_oid, attacker_pin) {
+        Ok(sid) => {
+            ctx.close_session(&sid);
+            secure_log!(
+                "[S][stress][audit-a4] attack {} SECURITY FAILURE — attacker PIN opened a session (PIN was rotated)",
+                label,
+            );
+            Err(StressError::Assertion {
+                what: "attacker PIN opens session — UPDATE silently installed the new PIN",
+                iter: 0,
+            })
+        }
+        Err(e) => {
+            secure_log!(
+                "[S][stress][audit-a4] attack {}: attacker PIN rejected ({:?}) — no substitution",
+                label, e,
+            );
+            Ok(())
+        }
+    }
 }
 stress_test!(AUDIT_ADMIN_CANNOT_ROTATE_USER_PIN, "audit_admin_cannot_rotate_user_pin", Tier::Destructive, audit_admin_cannot_rotate_user_pin);
 

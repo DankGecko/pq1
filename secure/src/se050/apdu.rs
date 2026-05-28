@@ -28,37 +28,37 @@ pub enum Se050Error {
     /// PIN verification failed (SE050 decremented attempt counter).
     PinIncorrect,
     /// UserID authentication object is silicon-locked — the chip-side
-    /// `auth_attempts == max_attempts` and the policy now denies
-    /// further verification.  Mapped from one of two SWs that
-    /// AN12413 §4.3.1 Table 15 enumerates as policy/security failures:
+    /// `auth_attempts == max_attempts` and the policy now denies any
+    /// further use of the credential. Mapped from `SW_COMMAND_NOT_
+    /// ALLOWED = 0x6986` per `plug-and-trust/hostlib/hostLib/inc/
+    /// se05x_enums.h:84` (`kSE05x_SW12_COMMAND_NOT_ALLOWED`, "Command
+    /// not allowed — access denied based on object policy"), AN12413
+    /// §4.3.1 Table 15.
     ///
-    ///  * `SW_COMMAND_NOT_ALLOWED = 0x6986` per
-    ///    `plug-and-trust/hostlib/hostLib/inc/se05x_enums.h:84`
-    ///    (`kSE05x_SW12_COMMAND_NOT_ALLOWED`, "Command not allowed —
-    ///    access denied based on object policy").
-    ///  * `SW_SECURITY_STATUS_NOT_SATISFIED = 0x6982` —
-    ///    silicon-observed lockout return on B-U585I-IOT02A
-    ///    (`userid_silicon_lockout` stress test, 2026-05-28; raw
-    ///    evidence `b88gzpjod.output:1372-1377`). The S-7d
-    ///    documented-by-deduction prediction (0x6986 alone) did NOT
-    ///    match silicon; on the chip we shipped against, a 4th wrong
-    ///    PIN against a `max_attempts=3` UserID returns 0x6982. Both
-    ///    SWs are accepted here to cover other chip revisions.
+    /// **Where the lock surfaces (silicon, 2026-05-28).** On
+    /// B-U585I-IOT02A the lockout is enforced at `create_session`
+    /// (SW=0x6986) — the chip refuses to even open a session against a
+    /// locked UserID, BEFORE any VERIFY runs. `create_session` and
+    /// `verify_session` both translate 0x6986 to this variant so either
+    /// manifestation maps cleanly. Cleanly observed in the 2026-05-28
+    /// destructive run (tests 14 `pin_counter_persists_across_reinit`
+    /// + 17 `userid_silicon_lockout`) once the driver `reinit()`s after
+    /// every failed verify — see the corrected analysis in
+    /// `docs/se050-silicon-findings.md` §4a.
+    ///
+    /// **NOT 0x6982.** An earlier draft mapped SW=0x6982 here too,
+    /// believing it was the lockout code. It is not — 0x6982 is the
+    /// Finding-A3 session-pending TRANSIENT (any non-session APDU
+    /// after a failed verify/close cycle returns it until `reinit()`),
+    /// which is RECOVERABLE and must never trigger a wipe. Mapping it
+    /// to `AuthMethodBlocked → PinLocked → trigger_lockout_wipe` would
+    /// be a false-positive device wipe. 0x6982 therefore stays a raw
+    /// `Status(0x6982)` → `InternalError` (transient, no wipe).
     ///
     /// Distinct from `PinIncorrect` because the chip won't accept any
     /// more attempts — the only recovery is `factory_reset_admin` + a
     /// fresh `UserID` re-provision (which after S-6 requires bumping
     /// the OID range; see USERID_OBJ comment in mod.rs).
-    ///
-    /// **Disambiguation note.** SW=0x6982 also surfaces on *non-session*
-    /// APDUs (e.g. `check_exists`, `read_object_attributes`) when the
-    /// chip is in a session-pending state from a previously failed
-    /// verify/close cycle — Finding A3,
-    /// `docs/se050-silicon-findings.md` §4. Recovery from that case is
-    /// `Se050::reinit()`, not factory reset; the two cases are
-    /// distinguished by the surrounding APDU. The mapping below
-    /// applies only inside `verify_session` (where 0x6982 truly is
-    /// "auth blocked"), not inside `send_apdu` itself.
     AuthMethodBlocked,
     /// Device not provisioned (UserID object missing).
     NotProvisioned,
@@ -585,6 +585,23 @@ pub unsafe fn write_binary_gated(
 /// Create a session authenticated against a UserID object.
 ///
 /// Returns an 8-byte session ID (HW lesson #3).
+///
+/// **Silicon lockout path (2026-05-28).** When a UserID has exhausted
+/// its `auth_attempts` budget, B-U585I-IOT02A refuses session creation
+/// itself — `CreateSession` returns SW=0x6986 BEFORE any VERIFY can
+/// run. Both `userid_silicon_lockout` and `pin_counter_persists_across_
+/// reinit` stress tests show this cleanly once the A3 session-pending
+/// artifact is cleared by an intervening `reinit()` (raw evidence in
+/// the 2026-05-28 destructive run, tests 14 + 17). The prior assumption
+/// — that lockout surfaces at `verify_session` with SW=0x6982 — was an
+/// artifact of the chip being session-pending (Finding A3): with the
+/// driver now `reinit()`ing after each failed verify, the TRUE lockout
+/// code (0x6986 at session creation) is exposed. We translate it to
+/// `Se050Error::AuthMethodBlocked` here so the unlock dispatch
+/// (`classify_se050_unlock_error`) maps it to `UnlockError::PinLocked`
+/// → `trigger_lockout_wipe`, exactly as the §25 Gap 4 contract
+/// intends. Without this arm a locked UserID would mis-classify as
+/// `InternalError` (no wipe).
 pub unsafe fn create_session(
     t1: &mut T1State,
     scp03: &mut Scp03Session,
@@ -594,7 +611,13 @@ pub unsafe fn create_session(
     let cmd = apdu.tlv_u32(TAG_1, auth_obj_id).finish(true);
 
     let mut resp = [0u8; 64];
-    let n = send_apdu(t1, scp03, cmd, &mut resp)?;
+    let n = match send_apdu(t1, scp03, cmd, &mut resp) {
+        Ok(n) => n,
+        // Locked-UserID path: 0x6986 (policy denial) on CreateSession.
+        // See the doc above + `verify_session`'s matching arm.
+        Err(Se050Error::Status(0x6986)) => return Err(Se050Error::AuthMethodBlocked),
+        Err(e) => return Err(e),
+    };
 
     let mut session_id = [0u8; 8];
     if let Some((_, value, _)) = tlv_parse(&resp[..n]) {
@@ -654,15 +677,22 @@ pub unsafe fn verify_session(
         // UserID silicon-lock path: §25 Gap 4. AN12413 §4.3.1 Table 15
         // lists 0x6986 (`SM_ERR_COMMAND_NOT_ALLOWED`, "Command not
         // allowed — access denied based on object policy") as the
-        // documented policy-denial code; the silicon shipped against
-        // (B-U585I-IOT02A, 2026-05-28) instead returns 0x6982
-        // (`SM_ERR_SECURITY_STATUS_NOT_SATISFIED`) on a locked
-        // UserID — see `b88gzpjod.output:1372-1377` and
-        // `docs/se050-silicon-findings.md` §5 #17. Both are
-        // accepted so this driver works against either chip
-        // revision. The 0x6982 mapping replaces the S-7d
-        // "documented-by-deduction" qualifier.
-        Err(Se050Error::Status(sw)) if sw == 0x6986 || sw == 0x6982 => {
+        // policy-denial code. On B-U585I-IOT02A the lockout actually
+        // surfaces one step earlier — at `create_session` (SW=0x6986,
+        // mapped there too) — but we keep this arm because a chip that
+        // admits the session and rejects the VERIFY would land here.
+        //
+        // NOTE: SW=0x6982 is deliberately NOT mapped to
+        // `AuthMethodBlocked`. The 2026-05-28 silicon run initially
+        // suggested 0x6982 was the lockout code, but that was the
+        // Finding-A3 session-pending TRANSIENT (recoverable via
+        // `reinit()`), not a permanent lock — see
+        // `docs/se050-silicon-findings.md` §4. Mapping a recoverable
+        // transient to `AuthMethodBlocked` → `PinLocked` →
+        // `trigger_lockout_wipe` would risk a false-positive wipe, so
+        // 0x6982 propagates as `Status(0x6982)` (→ `InternalError`,
+        // treated as transient, no wipe).
+        Err(Se050Error::Status(sw)) if sw == 0x6986 => {
             Err(Se050Error::AuthMethodBlocked)
         }
         Err(e) => Err(e),

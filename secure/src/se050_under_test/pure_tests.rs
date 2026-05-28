@@ -1633,36 +1633,40 @@ fn negative_sync_remaining_with_mcu_monotonic_down() {
 
 #[test]
 fn gap4_apdu_translates_0x6986_to_auth_method_blocked() {
-    // The apdu-layer arm that lifts 0x6986 to a typed variant. If
-    // this match arm goes away, 0x6986 would surface as
-    // `Se050Error::Status(0x6986)` which the classify-fn maps to
-    // `InternalError` (no wipe) — exactly the bug Gap 4 closes.
+    // The apdu-layer arms that lift 0x6986 to a typed variant. If they
+    // go away, 0x6986 would surface as `Se050Error::Status(0x6986)`
+    // which the classify-fn maps to `InternalError` (no wipe) — exactly
+    // the bug Gap 4 closes.
     //
-    // The arm was widened in 2026-05-28 to ALSO accept SW=0x6982 as
-    // an AuthMethodBlocked signal — silicon evidence
-    // (`docs/se050-silicon-findings.md` §5 #17 / `userid_silicon_-
-    // lockout`) showed B-U585I-IOT02A returns 0x6982 on a locked
-    // UserID, not the AN12413-documented 0x6986. Either constant in
-    // the source satisfies the Gap 4 contract, so the assertion now
-    // matches the wider pattern.
+    // Silicon correction (2026-05-28, `docs/se050-silicon-findings.md`
+    // §4a): the lockout surfaces at `create_session` with SW=0x6986
+    // (the chip refuses to open a session against a locked UserID),
+    // not only at `verify_session`. BOTH call sites must translate it.
     assert!(
-        APDU_SRC.contains("sw == 0x6986")
-            && APDU_SRC.contains("=> {")
-            && APDU_SRC.contains("Err(Se050Error::AuthMethodBlocked)"),
-        "verify_session must translate 0x6986 to AuthMethodBlocked; \
-         without it the unlock dispatch falls back to InternalError"
+        APDU_SRC.contains("Err(Se050Error::AuthMethodBlocked)"),
+        "apdu.rs must translate the lockout SW to AuthMethodBlocked"
+    );
+    assert!(
+        APDU_SRC.contains("sw == 0x6986"),
+        "verify_session must translate 0x6986 to AuthMethodBlocked"
+    );
+    assert!(
+        APDU_SRC.contains("Err(Se050Error::Status(0x6986)) => return Err(Se050Error::AuthMethodBlocked)"),
+        "create_session must translate the locked-UserID 0x6986 to AuthMethodBlocked; \
+         on B-U585I-IOT02A the lockout is enforced at session creation"
     );
     // The variant must exist in the enum definition.
     assert!(
         APDU_SRC.contains("AuthMethodBlocked,"),
         "apdu.rs::Se050Error must declare the AuthMethodBlocked variant"
     );
-    // Silicon-observed lockout SW (2026-05-28) must also map to the
-    // typed variant.
+    // 0x6982 must NOT be mapped to the lockout variant — it is the
+    // recoverable A3 session-pending transient; mapping it would risk
+    // a false-positive device wipe.
     assert!(
-        APDU_SRC.contains("sw == 0x6982"),
-        "verify_session must also translate the silicon-observed 0x6982 lockout SW; \
-         see `docs/se050-silicon-findings.md` §5 #17"
+        !APDU_SRC.contains("sw == 0x6982"),
+        "0x6982 must NOT map to AuthMethodBlocked — it is the recoverable A3 \
+         session-pending transient, not a permanent lockout (false-positive wipe risk)"
     );
 }
 

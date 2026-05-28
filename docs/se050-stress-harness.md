@@ -132,7 +132,7 @@ Three things, in one file under `secure/src/se050_stress/tests/`:
 ```rust
 // 1. Write the function.
 fn my_test(ctx: &mut StressCtx) -> StressResult {
-    let oid = ctx.oid(0x01);                     // 0x7B5F_<id>01
+    let oid = ctx.oid(0x01);                     // 0x7B5E_<id>01
     ctx.write_scratch(oid, b"hello")?;
     let mut buf = [0u8; 5];
     let n = ctx.read_scratch(oid, &mut buf)?;
@@ -221,19 +221,19 @@ keep their declared tier unchanged.
 
 ## 7. Safety model — why stress tests can't break the wallet
 
-- **Carve-out OID range `0x7B5F_*`.** All stress test objects live
+- **Carve-out OID range `0x7B5E_*`.** All stress test objects live
   here. Production OIDs (`0x7B10_*`) are never touched. Other test
   ranges (`0x7B07_*`, `0x7B09_*`, `0x7B0A_*`, `0x7B0B_*`) are also
   steered clear of.
-- **Stress-admin UserID at `0x7B5F_00A0`** has unlimited attempts
+- **Stress-admin UserID at `0x7B5E_00A0`** has unlimited attempts
   and a HW-root-derived PIN
   (`hw::secret_keys::se050_admin_pin()` — the same admin key the
   production code uses; deterministic per device, stable across
   reboots/reflashes). It holds admin-delete authority over the
-  whole `0x7B5F_*` range, so the runner can always clean up.
-- **Top-of-run admin sweep** clears every OID in `0x7B5F_*` before
+  whole `0x7B5E_*` range, so the runner can always clean up.
+- **Top-of-run admin sweep** clears every OID in `0x7B5E_*` before
   the first test runs. A prior crashed run never poisons the next.
-- **Per-test sub-range sweep** (`0x7B5F_NN00..NNFF` for test N)
+- **Per-test sub-range sweep** (`0x7B5E_NN00..NNFF` for test N)
   after every test. Strands from one test can't bleed into the next.
 - **Inter-test `Se050::reinit()`** — full T=1' reset + fresh SCP03
   handshake between tests. SCP03 counter perturbations don't bleed.

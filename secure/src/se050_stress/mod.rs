@@ -31,10 +31,10 @@
 //!
 //! ## OID carve-out
 //!
-//! Stress tests own range `0x7B5F_*` exclusively (see `oid.rs`):
-//! - `0x7B5F_00A0` — stress-admin UserID (unlimited attempts, hardware-
+//! Stress tests own range `0x7B5E_*` exclusively (see `oid.rs`):
+//! - `0x7B5E_00A0` — stress-admin UserID (unlimited attempts, hardware-
 //!   root-derived PIN, admin-delete authority over the whole range).
-//! - `0x7B5F_NN??` — test N (1..=255) owns 256 OIDs. The runner cleans
+//! - `0x7B5E_NN??` — test N (1..=255) owns 256 OIDs. The runner cleans
 //!   this sub-range before AND after each test, so a crashed test never
 //!   poisons the next run.
 //!

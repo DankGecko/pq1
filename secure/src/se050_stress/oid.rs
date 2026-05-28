@@ -1,24 +1,42 @@
 //! SE050 object-ID carve-out for the stress harness.
 //!
-//! Layout — every OID the harness ever touches is in `0x7B5F_*`:
+//! Layout — every OID the harness ever touches is in `0x7B5E_*`:
 //!
 //! ```text
-//!   0x7B5F_00A0  STRESS_ADMIN_USERID  unlimited attempts, HW-root PIN
-//!   0x7B5F_NN00..0x7B5F_NNFF   test #NN (1..=255) — 256 OIDs
+//!   0x7B5E_00A0  STRESS_ADMIN_USERID  unlimited attempts, HW-root PIN
+//!   0x7B5E_NN00..0x7B5E_NNFF   test #NN (1..=255) — 256 OIDs
 //! ```
 //!
 //! That's well above existing per-test e2e ranges
 //! (`0x7B07_*`, `0x7B09_*`, `0x7B0A_*`, `0x7B0B_*`) and decisively above
 //! the v6 production range (`0x7B10_*`), so a stress run never collides
-//! with real provisioning. The second nibble (`F`) is the literal
-//! "stress" marker.
+//! with real provisioning.
+//!
+//! **Generation bump (2026-05-28): `0x7B5F_*` → `0x7B5E_*`.** The
+//! previous base (`0x7B5F_*`) accumulated stranded no-admin-delete
+//! UserIDs across runs — a UserID provisioned with `WithoutAdminEntry`
+//! (or by an older firmware whose OID layout differed) that crashed
+//! before its own user-PIN self-delete CANNOT be removed afterwards:
+//! admin-delete returns 0x6986 (no admin entry in its policy), and a
+//! transport `write_userid` UPDATE is *refused and preserves* the
+//! object (Finding A2 is RETRACTED — there is no destroy-on-failed-
+//! UPDATE; see `docs/se050-silicon-findings.md` §3). On the 2026-05-28
+//! run a stranded UserID at `0x7B5F_0801` made `pin_attribute_read_-
+//! refused_on_user_userid` fail at provisioning. Bumping the whole
+//! carve-out to `0x7B5E_*` abandons the stranded `0x7B5F_*` generation
+//! and gives every test + the admin UserID a clean slate — the same
+//! "bump the OID range to re-provision" pattern production uses after a
+//! chip strands a UserID (CLAUDE.md S-6). The abandoned `0x7B5F_*`
+//! objects are a harmless NVM leak on the throwaway stress chip. Bump
+//! again (`…5D`, `…5C`, …) if a future run strands the current
+//! generation.
 
 use crate::se050::Se050;
 use crate::se050::apdu;
 
 /// Base address of the stress carve-out range. Helper functions
-/// elsewhere assume `STRESS_BASE & 0xFFFF_0000 == 0x7B5F_0000`.
-pub const STRESS_BASE: u32 = 0x7B5F_0000;
+/// elsewhere assume `STRESS_BASE & 0xFFFF_0000 == 0x7B5E_0000`.
+pub const STRESS_BASE: u32 = 0x7B5E_0000;
 
 /// Upper bound on slot probing within any single test's 256-slot sub-
 /// range. Tests in this catalog use slots `0x01..=0x02` exclusively (a
@@ -35,7 +53,7 @@ const STRESS_SWEEP_SLOTS: u8 = 8;
 /// configuration, otherwise OTP/DHUK-rooted — every variant is per-
 /// device deterministic so the same firmware re-derives the same PIN
 /// across reboots and reflashes). Holds admin-delete authority over
-/// every OID in `0x7B5F_*`, so the runner can always clean up after a
+/// every OID in `0x7B5E_*`, so the runner can always clean up after a
 /// crashed test.
 pub const STRESS_ADMIN_USERID: u32 = STRESS_BASE | 0x00A0;
 
@@ -61,7 +79,7 @@ pub struct SweepReport {
     pub failed: u16,
 }
 
-/// Top-of-run sweep: clears every OID in `0x7B5F_*` that the stress-
+/// Top-of-run sweep: clears every OID in `0x7B5E_*` that the stress-
 /// admin session can reach. Provisions the stress-admin UserID first if
 /// it doesn't yet exist (idempotent). Best-effort — on failure the
 /// runner still tries the test, since per-test setup also tries to
@@ -129,7 +147,7 @@ pub fn admin_sweep_all(se: &mut Se050) -> SweepReport {
         // The one residual case top-of-run sweep used to catch: a test
         // crashed AND the catalog reorders so a different test_id
         // touches the polluted slots. Worst case: those OIDs stay
-        // occupied (≤150 B each) inside the `0x7B5F_*` carve-out,
+        // occupied (≤150 B each) inside the `0x7B5E_*` carve-out,
         // invisible to production. Operationally acceptable.
 
         let (t1, scp03) = se.t1_scp03_mut();
