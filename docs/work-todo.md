@@ -49,16 +49,16 @@ Bare-metal SPI driver at `secure/src/hw/spi_hw.rs` (init) + `secure/src/hw/spi.r
 
 ### 3. Physical GPIO Button Input
 
-**Status:** STUB ONLY
+**Status:** DONE (label corrected 2026-05-28 — `secure/src/hw/buttons.rs` is a real 395-line driver, not a stub).
 
-The OLED UI backend (`secure/src/ui/oled.rs`) has button input explicitly marked as a stub. Currently uses semihosting file I/O -- a Python script (`tools/wallet_run_hw.py`) maps keyboard presses over TCP to probe-rs. Without real buttons, a user can't enter PINs, confirm transactions, or navigate the seed wizard.
+Real two-button GPIO driver landed in `secure/src/hw/buttons.rs` with software debounce, short/long-press detection, and a both-buttons-released confirm gate. Wired into both UI backends — `secure/src/ui/oled.rs:490,538` and `semihosting.rs` call `hw::buttons::init()` / `wait_event()`. Runs in the secure world. The probe-rs keyboard-over-TCP path (`tools/wallet_run_hw.py`) remains only as a dev convenience for headless bench runs.
 
 **What's needed:**
-- [ ] GPIO input driver for two physical buttons (left/right) on chosen pins
-- [ ] Debouncing (hardware or software)
-- [ ] Short-press vs long-press detection
-- [ ] Wire into the `Input` struct in `secure/src/ui/oled.rs`
-- [ ] Runs in secure world (buttons are secure-only peripherals per CLAUDE.md)
+- [x] GPIO input driver for two physical buttons (left/right) on chosen pins
+- [x] Debouncing (software — see `buttons.rs` debounce loops)
+- [x] Short-press vs long-press detection (`Press` enum + hold-duration tracking)
+- [x] Wire into the UI (`oled.rs` + `semihosting.rs` `wait_event`)
+- [x] Runs in secure world (buttons are secure-only peripherals per CLAUDE.md)
 
 **Files to create:** `secure/src/hw/buttons.rs`
 **Files to change:** `secure/src/ui/oled.rs`
@@ -441,7 +441,7 @@ Also fixed during closure: the stale `proto/src/lib.rs::CMD_SIGN_BOOTSTRAP` docs
 
 ### 13. OEMiROT Secure Boot (ML-DSA-65)
 
-**Status:** NOT STARTED
+**Status:** SUPERSEDED (closed 2026-05-28). We do NOT use ST's OEMiROT. We built our own immutable FSBL (`fsbl/`, WRP1A-locked pages 0-3) that verifies each A/B slot with the vendor **SPHINCS+C10** key + renders the measured-boot fingerprint before branching (see §16, commit `7d0ec47`). That covers the secure-boot role OEMiROT would have filled, on our single PQ primitive (invariant #5) rather than ML-DSA-65. Re-open only if a concrete need for ST's OEMiROT toolchain integration appears.
 
 Custom bootloader that verifies S-world and NS-world firmware images with ML-DSA-65 + Ed25519 hybrid before any code runs.
 
@@ -522,9 +522,9 @@ path; entire chain is PQ.
 
 ### 16. Immutable Bootloader (Defense-in-Depth)
 
-**Status:** NOT STARTED
+**Status:** DONE (label corrected 2026-05-28). This is exactly what the FSBL is.
 
-Split the firmware measurement code into a separate immutable bootloader in WRP-locked flash pages. Protects against a compromised update that replaces both the firmware and the measurement code simultaneously.
+Split the firmware measurement code into a separate immutable bootloader in WRP-locked flash pages. Protects against a compromised update that replaces both the firmware and the measurement code simultaneously. **Realised by the FSBL** (`fsbl/`, pages 0-3, WRP1A-locked): it independently SHA-256-verifies each A/B slot against the SPHINCS+C10-signed manifest and renders the 8-word measured-boot fingerprint *before* branching into the slot, so a malicious update can't forge the measurement (commit `7d0ec47`, the manufacturer-trust-elimination work; see `docs/measured-boot.md`).
 
 **What's needed:**
 - [ ] Separate bootloader binary with its own linker script (ORIGIN = 0x0C000000, ~16-32 KB)
@@ -565,7 +565,7 @@ Research-derived mitigations from the deep-research round of 2026-04-14. Critica
 
 **SHAKE-vs-SHA2 decision — CLOSED 2026-05-20: STAY ON SHA-2, SHAKE REJECTED.** Three independent reasons, all confirmed this round: **(1) Masking is infeasible on either hash.** The on-silicon masked-SHA2 benchmark put masking the hot path at 278–2800× the HASH peripheral, and the 70,754 secret-touching PRF calls/sign make masking even just the secret subset ≈ 60 s/sign — 1–2 orders past the 5–10× viability line. **(2) SHAKE has NO hardware acceleration on STM32U5.** The HASH peripheral accelerates SHA-1/SHA-224/SHA-256 only — NOT SHA-3/Keccak/SHAKE (RM0456). So SHAKE would run entirely in software, forfeiting the measured 485-cyc/block HW path (vs 4265-cyc software SHA-2, 8.8×); even *unmasked* SHAKE is a net slowdown, and masked-SHAKE — though Keccak's single χ nonlinear step masks cheaper per-permutation than SHA-2's adders — is still ~70k software permutations/sign → also infeasible. **(3) The only cheap-SHAKE argument is unsubstantiated.** Fluhrer ePrint 2024/500's "1.7× backward-compatible PRF-tree" is not verifiable and technically implausible per production-security.md §3. **(4) Switching cost is launch-breaking:** a parameter-set change re-derives every key, moving the CREATE2 address (frozen-wallet invariant #6). Net: SHAKE offers no *realizable* SCA win on this MCU at a launch-breaking cost. The SCA posture stays on SHA-2 + the landed structural/FI mitigations (F-13 double-compute, F-16 WOTS/FORS shuffle, F-17 rate-limit, consumption-mask, multi-source OptRand); the **v2 PRF restructure** (pad sk_seed to a full 64-byte first block → constant cacheable midstate) remains the SHA-2-preserving KDF-revision escape hatch IF step-(b) leakage measurement ever shows an exploitable leak.
 
-- [ ] **SHAKE-vs-SHA2 architectural decision** (was P1 in original list, now a prerequisite). Benchmark SLH-DSA-SHAKE-128f masked implementation vs SLH-DSA-SHA2-128f with HASH peripheral + software countermeasures. Don't rely on Fluhrer's 1.7× figure — measure directly.
+- [x] **SHAKE-vs-SHA2 architectural decision** — **DECIDED: STAY ON SHA-2** (closed 2026-05-20, see Completion Log; user-confirmed three times). Masked-SHA2 and SHAKE are both too expensive for the STM32U5: masked-SHA2 = 278–2800× the HASH peripheral (~60 s/sign even masking only the secret subset), the U5 HASH peripheral accelerates SHA-1/SHA-2 only (NOT SHA-3/Keccak/SHAKE per RM0456) so SHAKE forfeits the HW path AND a parameter switch would re-derive every key + move the CREATE2 address (breaks frozen-wallet invariant #6). **Do not re-open.** SCA posture stays SHA-2 + landed F-13/F-16/F-17 + consumption-mask + multi-source OptRand.
   - [x] **#2 measurement (masked-SHA2 cost) — DONE, run on silicon 2026-05-20.** New `masked-sha2` workspace crate: first-order (2-share) boolean-masked building blocks — ISW masked AND (`sec_and`, Ishai-Sahai-Wagner CRYPTO 2003) + Kogge-Stone secure boolean adder (`sec_add`, Coron-Großschädl-Vadnala family CHES 2014), generic over an RNG closure. Per the advisor-reviewed plan we do NOT build a full masked SHA-256 (correctness-risk + code volume); instead we measure the two gates that dominate the cost and PROJECT the per-block number from SHA-256's fixed structure (`ADDS_PER_BLOCK = 600`, `ANDS_PER_BLOCK = 320`). 7 host correctness oracles (sec_and == plain AND over 50k random; sec_add == wrapping_add over 50k random + full-ripple edge cases; Ch/Maj composition over 20k) all pass → Kogge-Stone indexing proven correct. Bench firmware `secure/src/bench_masked_sha.rs` (`bench-masked-sha` feature), run-and-halt at boot, DWT-times one-compression (55-byte single-block input) of HASH peripheral + `sha2` software + sec_and/sec_add BOTH ways (TRNG-inline / rand-pre-drawn). `make bench-masked-sha-hw` (note: NO debug-log — `hw::rng::fill` secure_log!s on every call, which floods the semihosting channel under a TRNG-heavy bench; results print via unconditional `hprintln!`). **Decision rule** (advisor): masked/HW ≲ 3× → SHA2 viable; ≳ 5–10× → SHAKE worth building.
 
     **RESULT (STM32U585 @ 160 MHz, 20k iters/measurement):** HASH peripheral 1-block = **485 cyc**; sha2 software 1-block = 4265 cyc (8.8×); TRNG draw 1 word = **214 cyc**; sec_and = 22 cyc gate / 214 cyc TRNG-inline; sec_add = 213 cyc gate / 2147 cyc TRNG-inline. **Projected masked SHA-256 block: 134,840 cyc (~842 µs) DRBG-floor; 1,356,680 cyc (~8.5 ms) raw-TRNG.** Slowdown vs HASH peripheral: **~278× (DRBG) to ~2797× (raw TRNG)**; vs sha2 software ~31× to ~318×.
