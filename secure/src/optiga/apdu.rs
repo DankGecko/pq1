@@ -65,6 +65,11 @@ const CMD_CLEAR_LAST_ERROR: u8 = 0x80;
 const CMD_OPEN_APPLICATION:      u8 = 0x70 | CMD_CLEAR_LAST_ERROR;  // 0xF0
 const CMD_GET_DATA_OBJECT:       u8 = 0x01 | CMD_CLEAR_LAST_ERROR;  // 0x81
 const CMD_SET_DATA_OBJECT:       u8 = 0x02 | CMD_CLEAR_LAST_ERROR;  // 0x82
+/// SetObjectProtected (CMD 0x83) — a manifest-signed update that BYPASSES the
+/// target OID's Change AC. Its only legitimate caller is the dev-only
+/// `optiga-reset-oids` recovery path; gating it (S-2) keeps the encoder out of
+/// shipping binaries so a production image cannot emit a protected-update APDU.
+#[cfg(feature = "optiga-reset-oids")]
 const CMD_SET_OBJECT_PROTECTED:  u8 = 0x03 | CMD_CLEAR_LAST_ERROR;  // 0x83
 const CMD_GET_RANDOM:            u8 = 0x0C | CMD_CLEAR_LAST_ERROR;  // 0x8C
 const CMD_DECRYPT_SYM:           u8 = 0x15 | CMD_CLEAR_LAST_ERROR;  // 0x95
@@ -75,18 +80,23 @@ const CMD_DECRYPT_SYM:           u8 = 0x15 | CMD_CLEAR_LAST_ERROR;  // 0x95
 /// OR'd with the set_obj_protected_tag value (0x00=start, 0x02=continue,
 /// 0x01=final). The manifest_version (0x01 for V3) travels in the APDU param
 /// byte of the START APDU; CONTINUE and FINAL use param=0x00.
+#[cfg(feature = "optiga-reset-oids")]
 const SET_OBJ_PROT_TAG_START:    u8 = 0x30;
+#[cfg(feature = "optiga-reset-oids")]
 const SET_OBJ_PROT_TAG_CONTINUE: u8 = 0x32;
+#[cfg(feature = "optiga-reset-oids")]
 const SET_OBJ_PROT_TAG_FINAL:    u8 = 0x31;
 
 /// Manifest version for OPTIGA Trust M V3 protected update.
 /// See `examples/optiga/protected_update_data_set/example_optiga_util_protected_update.h`
 /// (struct `optiga_protected_update_manifest_fragment_configuration_t`).
+#[cfg(feature = "optiga-reset-oids")]
 pub const MANIFEST_VERSION_V3: u8 = 0x01;
 
 /// Max CONTINUE/FINAL fragment payload. Matches the `MAX_PAYLOAD_SIZE` the
 /// reference tool uses when chunking fragments (see
 /// `examples/tools/protected_update_data_set/include/protected_update_data_set.h`).
+#[cfg(feature = "optiga-reset-oids")]
 pub const PROTECTED_UPDATE_MAX_FRAGMENT: usize = 640;
 
 /// OPTIGA Trust M unique application identifier ("GenAuthAppl" sealed in the AID).
@@ -418,6 +428,7 @@ pub unsafe fn open_application(ifx: &mut IfxState) -> Result<(), OptigaError> {
 ///
 /// The chip only accepts CONTINUE/FINAL after a successful START in the same
 /// session — START takes a strict lock, FINAL releases it.
+#[cfg(feature = "optiga-reset-oids")]
 unsafe fn protected_update_chunk(
     ifx: &mut IfxState,
     shield: &mut ShieldedConnection,
@@ -441,6 +452,7 @@ unsafe fn protected_update_chunk(
 }
 
 /// SetObjectProtected START — send the signed CBOR manifest.
+#[cfg(feature = "optiga-reset-oids")]
 pub unsafe fn protected_update_start(
     ifx: &mut IfxState,
     shield: &mut ShieldedConnection,
@@ -451,6 +463,7 @@ pub unsafe fn protected_update_start(
 }
 
 /// SetObjectProtected CONTINUE — send an intermediate fragment chunk.
+#[cfg(feature = "optiga-reset-oids")]
 pub unsafe fn protected_update_continue(
     ifx: &mut IfxState,
     shield: &mut ShieldedConnection,
@@ -461,6 +474,7 @@ pub unsafe fn protected_update_continue(
 
 /// SetObjectProtected FINAL — send the last fragment chunk and release
 /// the chip's strict lock.
+#[cfg(feature = "optiga-reset-oids")]
 pub unsafe fn protected_update_final(
     ifx: &mut IfxState,
     shield: &mut ShieldedConnection,
@@ -476,6 +490,7 @@ pub unsafe fn protected_update_final(
 /// - Zero or more CONTINUE APDUs carrying all but the last fragment chunk.
 /// - One FINAL APDU carrying the last chunk (or an empty buffer if the whole
 ///   fragment fit in earlier CONTINUEs — not our use case).
+#[cfg(feature = "optiga-reset-oids")]
 pub unsafe fn send_protected_manifest(
     ifx: &mut IfxState,
     shield: &mut ShieldedConnection,
@@ -1049,15 +1064,20 @@ pub fn metadata_execute_is_always(metadata: &[u8], len: usize) -> bool {
 /// `Auto(F1D0)`, so the very authentication that just succeeded
 /// authorizes the reset).
 ///
-/// - **Change**: Always (dev variant — MUST be tightened to `Conf(E140)`
-///   or `LcsO<op` before shipping; same constraint as non-hw-counter
-///   build).
+/// - **Change**: `Auto(F1D0)` under `optiga-lock-operational` (the locked
+///   production profile, S-1) so the PIN-HMAC secret can only be rewritten by a
+///   PIN-verified session; `ALW` on dev builds so a partially-provisioned chip
+///   stays re-provisionable. `Conf(E140)` is deliberately NOT used — a cracked
+///   PBS would otherwise let a bench attacker rewrite F1D0.
 /// - **Read**: Never.
 /// - **Execute**: `LUC(OID_PIN_CTR)`.
 /// - **Data type**: AUTHREF (0x31).
 #[cfg(feature = "optiga-hw-counter")]
 pub fn build_metadata_auth_ref_luc() -> (MetaBuf, usize) {
-    build_metadata_auth_ref_luc_oid(OID_PIN_CTR)
+    // The REAL F1D0 takes the `Auto(F1D0)` Change AC only in the locked
+    // production profile; dev/bench builds keep ALW (see the `change_is_auto`
+    // doc on `build_metadata_auth_ref_luc_oid`).
+    build_metadata_auth_ref_luc_oid(OID_PIN_CTR, cfg!(feature = "optiga-lock-operational"))
 }
 
 /// OID-parameterized variant of [`build_metadata_auth_ref_luc`]: bind the
@@ -1066,11 +1086,26 @@ pub fn build_metadata_auth_ref_luc() -> (MetaBuf, usize) {
 /// counter (E121) so its verify runs the identical auto-state path and is
 /// a byte-for-byte timing twin of the real verify.
 #[cfg(feature = "optiga-hw-counter")]
-pub fn build_metadata_auth_ref_luc_oid(ctr_oid: u16) -> (MetaBuf, usize) {
+pub fn build_metadata_auth_ref_luc_oid(ctr_oid: u16, change_is_auto: bool) -> (MetaBuf, usize) {
     let mut inner = [0u8; 64];
     let mut c = 0usize;
 
-    push_ac_simple(&mut inner, &mut c, META_CHANGE, AC_ALW);
+    // S-1 — the Change AC selects who may rewrite this AuthRef:
+    //   `change_is_auto == true`  → `Auto(F1D0)` (`D0 03 23 F1 D0`): only a
+    //       session that has already HMAC-verified the CURRENT PIN may rewrite
+    //       F1D0. Used for the REAL F1D0 in the locked production profile, so a
+    //       desoldered bench attacker cannot overwrite the PIN-HMAC secret with
+    //       a chosen key once LcsO=Operational freezes the metadata.
+    //   `change_is_auto == false` → `ALW` (`D0 01 00`): freely rewritable. Used
+    //       for dev builds (kept re-provisionable) and for the §32 duress F1D8
+    //       twin, which is never locked and is blanked via ALW on the reset
+    //       path. The Auto target is always `OID_AUTH_REF` (F1D0) — only the
+    //       real F1D0 ever takes the `true` branch.
+    if change_is_auto {
+        push_ac_auto(&mut inner, &mut c, META_CHANGE, OID_AUTH_REF);
+    } else {
+        push_ac_simple(&mut inner, &mut c, META_CHANGE, AC_ALW);
+    }
     push_ac_simple(&mut inner, &mut c, META_READ, AC_NEV);
     push_ac_luc(&mut inner, &mut c, META_EXECUTE, ctr_oid);
     push_data_type(&mut inner, &mut c, DTYPE_AUTHREF);
@@ -1106,6 +1141,27 @@ pub fn build_metadata_lock() -> (MetaBuf, usize) {
     let mut inner = [0u8; 64];
     let mut c = 0usize;
     push_lcso_op(&mut inner, &mut c, LCS_OPERATIONAL);
+    wrap_meta(inner, c)
+}
+
+/// Metadata that neutralizes a trust-anchor pool OID (S-2).
+///
+/// `Change = NEV`, `Read = NEV`, `Execute = NEV`, and DELIBERATELY no
+/// `DataType` tag — so the slot carries no `DataType = TrustAnchor (0x11)` and
+/// the chip can never execute a SetObjectProtected signature-verify against it.
+/// Written (over any existing cert) + ratcheted to `LcsO=Operational` by
+/// [`OptigaTrustM::lockdown_ta_pool`] on `0xE0E3..0xE0E8`, this guarantees no
+/// usable trust anchor exists on a shipped chip: a desoldered-bench attacker
+/// has no anchor to verify a forged manifest against, so the protected-update
+/// Change-AC bypass is structurally closed.
+///
+/// Bytes: `20 09 D0 01 FF D1 01 FF D3 01 FF`.
+pub fn build_metadata_ta_junk() -> (MetaBuf, usize) {
+    let mut inner = [0u8; 64];
+    let mut c = 0usize;
+    push_ac_simple(&mut inner, &mut c, META_CHANGE, AC_NEV);
+    push_ac_simple(&mut inner, &mut c, META_READ, AC_NEV);
+    push_ac_simple(&mut inner, &mut c, META_EXECUTE, AC_NEV);
     wrap_meta(inner, c)
 }
 
@@ -1201,6 +1257,38 @@ pub fn is_metadata_operational(metadata: &[u8], len: usize) -> bool {
         Some(v) if v.len() == 1 => v[0] == LCS_OPERATIONAL,
         _ => false,
     }
+}
+
+/// Returns true iff every access-condition / data-type tag PRESENT in
+/// `expected` is also present in `stored` with a byte-identical value.
+///
+/// Compares the four security-relevant tags — `Change` / `Read` / `Execute` /
+/// `DataType` — TAG-WISE rather than as a flat buffer `==`, because the chip is
+/// known to re-order metadata tags and to append internal size/version tags the
+/// host never wrote. `LcsO` is intentionally excluded (the lock writes it AFTER
+/// this check).
+///
+/// This is the gate [`crate::optiga::OptigaTrustM::verify_and_lock`] runs before
+/// the irreversible `LcsO=Operational` bump: the chip silently accepts
+/// SetMetadata APDUs carrying AC constructs it won't honor (returns OK, stores
+/// nothing or a truncated form), so we MUST confirm the exact AC bytes actually
+/// landed before freezing them forever. A tag we expected but the chip did not
+/// store → `false` (refuse to lock).
+pub fn metadata_matches_expected(
+    stored: &[u8],
+    stored_len: usize,
+    expected: &[u8],
+    expected_len: usize,
+) -> bool {
+    for &tag in &[META_CHANGE, META_READ, META_EXECUTE, META_DATA_TYPE] {
+        if let Some(exp) = find_metadata_tag(expected, expected_len, tag) {
+            match find_metadata_tag(stored, stored_len, tag) {
+                Some(got) if got == exp => {}
+                _ => return false,
+            }
+        }
+    }
+    true
 }
 
 /// Returns true if the metadata's Change AC operand is `Auto(OID_AUTH_REF)`.

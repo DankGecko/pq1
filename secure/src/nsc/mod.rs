@@ -190,6 +190,54 @@ compile_error!(
      bump + reboot so the test chip stays reflashable — never a shipping image."
 );
 
+// S-3 ship-blocker: a production OPTIGA build MUST use the silicon E120 LUC
+// counter (`optiga-hw-counter`). Without it the only PIN-attempt cap is the
+// firmware soft counter at F1E1 + the MCU page-124 counter — both of which a
+// desoldered / PBS-extracting bench attacker bypasses entirely (F1D0.Execute is
+// ALW, so the chip answers unbounded HMAC-verify queries), giving an unbounded
+// PIN brute force. Because the PIN is shared with the SE050, that defeats the
+// whole wallet. Hardware TEST images may opt out via `e2e-test` / `dev-testkey`
+// (they deliberately exercise the soft path); SHIPPING images may not.
+#[cfg(all(
+    feature = "optiga-trust-m",
+    any(
+        feature = "mode-production",
+        all(feature = "stm32u585", not(debug_assertions)),
+    ),
+    not(feature = "e2e-test"),
+    not(feature = "dev-testkey"),
+    not(feature = "optiga-hw-counter"),
+))]
+compile_error!(
+    "Production OPTIGA builds require `optiga-hw-counter` (ship-blocker S-3). \
+     Without it the PIN attempt cap is a firmware soft counter the chip does \
+     not enforce, so a desoldered / PBS-extracting bench attacker gets \
+     unbounded HMAC-verify attempts against F1D0 and can brute-force the PIN. \
+     Enable `optiga-hw-counter`, or build a non-shipping test image with \
+     `e2e-test` / `dev-testkey`."
+);
+
+// S-2 ship-blocker: `optiga-reset-oids` compiles in the SetObjectProtected
+// manifest senders AND (via `optiga::reset`) provisions Infineon's PUBLIC
+// sample trust-anchor cert at 0xE0E3. Either is a protected-update bypass of
+// every OID's Change AC on a shipped chip (defeats even the S-1 F1D0 fix). It
+// is a dev-only recovery feature and must never reach a production image.
+#[cfg(all(
+    any(
+        feature = "mode-production",
+        all(feature = "stm32u585", not(debug_assertions)),
+    ),
+    not(feature = "e2e-test"),
+    not(feature = "dev-testkey"),
+    feature = "optiga-reset-oids",
+))]
+compile_error!(
+    "`optiga-reset-oids` must not ship (ship-blocker S-2): it compiles the \
+     SetObjectProtected manifest senders and provisions the PUBLIC Infineon \
+     sample trust-anchor cert — a protected-update bypass of every OID's \
+     Change AC. Drop `optiga-reset-oids` from production builds."
+);
+
 // ---------------------------------------------------------------------------
 // UI-axis mutual exclusivity (Phase 2)
 //

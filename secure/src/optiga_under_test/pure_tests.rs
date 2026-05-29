@@ -241,6 +241,149 @@ fn positive_is_metadata_operational_detects_lcs_07() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// S-1 / S-2 / S-3 production-hardening pins
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn positive_build_metadata_ta_junk_no_trust_anchor() {
+    // S-2: the trust-anchor pool neutralizer. Change/Read/Execute = NEV and —
+    // critically — NO DataType tag, so the slot can never be a manifest anchor.
+    let (buf, len) = apdu::build_metadata_ta_junk();
+    let expected: [u8; 11] =
+        [0x20, 0x09, 0xD0, 0x01, 0xFF, 0xD1, 0x01, 0xFF, 0xD3, 0x01, 0xFF];
+    assert_eq!(len, expected.len());
+    assert_eq!(&buf[..len], &expected, "TA-junk metadata is wire-frozen (S-2)");
+    assert!(
+        !buf[..len].windows(3).any(|w| w == [0xE8, 0x01, 0x11]),
+        "TA-junk must NEVER carry DataType=TrustAnchor(0x11) — that is the \
+         exact byte that would make the slot a usable manifest anchor"
+    );
+}
+
+#[test]
+fn positive_metadata_matches_expected_tolerates_reorder_rejects_flip() {
+    // The verify-before-lock gate's core. Built against build_metadata_protected
+    // (Change=Auto(F1D0) OR Conf(E140), Read=Auto(F1D0), Exec=NEV).
+    let (exp, exp_len) = apdu::build_metadata_protected(0xF1D0, false);
+
+    // Reflexive: a buffer with the same AC tags PLUS a trailing chip-internal
+    // tag (the chip is known to append size/version tags) must still match.
+    let mut stored = [0u8; 64];
+    stored[..exp_len].copy_from_slice(&exp[..exp_len]);
+    let extra = [0xC1u8, 0x01, 0xAA];
+    let inner_len = stored[1] as usize;
+    stored[2 + inner_len..2 + inner_len + extra.len()].copy_from_slice(&extra);
+    stored[1] = (inner_len + extra.len()) as u8;
+    let stored_len = exp_len + extra.len();
+    assert!(
+        apdu::metadata_matches_expected(&stored, stored_len, &exp[..exp_len], exp_len),
+        "trailing chip-added tags must not break a match on the AC tags"
+    );
+
+    // A flipped Change operand (Auto-Ref 0x23 → Conf 0x20) is exactly the
+    // silent-rejection the gate must catch → MUST NOT match.
+    let mut bad = [0u8; 64];
+    bad[..exp_len].copy_from_slice(&exp[..exp_len]);
+    bad[4] = 0x20; // root[0,1] | Change tag[2] | len[3] | operand[4]
+    assert!(
+        !apdu::metadata_matches_expected(&bad, exp_len, &exp[..exp_len], exp_len),
+        "a flipped Change operand MUST fail the verify-before-lock gate"
+    );
+}
+
+#[test]
+fn positive_metadata_matches_expected_missing_tag_fails() {
+    // If the chip stored nothing for a tag we intended, the gate must refuse to
+    // lock. `stored` = lock metadata (LcsO only); `expected` = TA-junk
+    // (Change/Read/Execute) → none of the expected AC tags are present.
+    let (stored, stored_len) = apdu::build_metadata_lock();
+    let (want, want_len) = apdu::build_metadata_ta_junk();
+    assert!(
+        !apdu::metadata_matches_expected(&stored, stored_len, &want, want_len),
+        "missing expected AC tags in stored metadata MUST fail the match"
+    );
+}
+
+#[test]
+fn negative_f1d0_luc_change_is_auto_only_under_lock() {
+    // S-1: the REAL F1D0 LUC builder selects Change=Auto(F1D0) ONLY in the
+    // locked production profile; a silent revert to Change=ALW reopens the
+    // bench-attack hole (overwrite F1D0 with a known key → read half_O).
+    assert!(
+        APDU_SRC.contains(
+            "build_metadata_auth_ref_luc_oid(OID_PIN_CTR, cfg!(feature = \"optiga-lock-operational\"))"
+        ),
+        "real F1D0 must take Change=Auto only under optiga-lock-operational"
+    );
+    assert!(
+        APDU_SRC.contains("push_ac_auto(&mut inner, &mut c, META_CHANGE, OID_AUTH_REF)"),
+        "the change_is_auto branch must emit Auto(F1D0) on the Change AC"
+    );
+}
+
+#[test]
+fn negative_setobjectprotected_senders_gated_out_of_production() {
+    // S-2: the SetObjectProtected manifest encoder + its command byte must be
+    // compiled out unless `optiga-reset-oids` is on, so no production binary can
+    // emit CMD 0x83.
+    for needle in [
+        "unsafe fn protected_update_chunk(",
+        "pub unsafe fn protected_update_start(",
+        "pub unsafe fn send_protected_manifest(",
+        "const CMD_SET_OBJECT_PROTECTED:",
+    ] {
+        let idx = APDU_SRC
+            .find(needle)
+            .unwrap_or_else(|| panic!("source marker missing: {needle}"));
+        let window = &APDU_SRC[idx.saturating_sub(140)..idx];
+        assert!(
+            window.contains("#[cfg(feature = \"optiga-reset-oids\")]"),
+            "{needle} must be gated behind optiga-reset-oids (S-2)"
+        );
+    }
+}
+
+#[test]
+fn negative_soft_counter_bump_gated_out_of_hw_counter() {
+    // S-3: the firmware soft-counter attempt bump must be behind
+    // not(optiga-hw-counter) so production (hw-counter mandatory) ships only the
+    // silicon E120 LUC counter, never the bypassable soft path.
+    // The soft path opens with `let attempts = match self.read_counter_raw()`
+    // directly under its `#[cfg(not(optiga-hw-counter))]` gate (a `let _ = {`
+    // sits between). Pin the gate's adjacency to that opener so it can't drift.
+    let idx = MOD_SRC
+        .find("let attempts = match self.read_counter_raw()")
+        .expect("soft-counter attempt read present");
+    let window = &MOD_SRC[idx.saturating_sub(120)..idx];
+    assert!(
+        window.contains("#[cfg(not(feature = \"optiga-hw-counter\"))]"),
+        "the soft-counter attempt bump must be behind not(optiga-hw-counter) (S-3)"
+    );
+}
+
+#[cfg(feature = "optiga-hw-counter")]
+#[test]
+fn positive_build_metadata_auth_ref_luc_change_auto_exact_bytes() {
+    // S-1 production F1D0 (change_is_auto=true): Change=Auto(F1D0), Read=NEV,
+    // Execute=LUC(E120), DataType=AUTHREF. Inner len = 5+3+5+3 = 16 (0x10).
+    let (buf, len) = apdu::build_metadata_auth_ref_luc_oid(apdu::OID_PIN_CTR, true);
+    let expected: [u8; 18] = [
+        0x20, 0x10, 0xD0, 0x03, 0x23, 0xF1, 0xD0, 0xD1, 0x01, 0xFF, 0xD3, 0x03, 0x40, 0xE1,
+        0x20, 0xE8, 0x01, 0x31,
+    ];
+    assert_eq!(len, expected.len());
+    assert_eq!(&buf[..len], &expected, "S-1 locked F1D0 metadata is wire-frozen");
+
+    // change_is_auto=false keeps Change=ALW (the dev / duress-twin shape).
+    let (dbuf, _dlen) = apdu::build_metadata_auth_ref_luc_oid(apdu::OID_PIN_CTR, false);
+    assert_eq!(
+        &dbuf[2..5],
+        &[0xD0, 0x01, 0x00],
+        "change_is_auto=false must emit Change=ALW"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Positive — Shielded Connection wire format
 // ─────────────────────────────────────────────────────────────────────
 

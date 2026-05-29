@@ -706,6 +706,67 @@ impl OptigaTrustM {
         }
     }
 
+    /// Read back an OID's stored metadata, confirm it byte-matches the
+    /// intended `expected_meta` on the security-relevant AC / DataType tags,
+    /// and ONLY THEN ratchet `LcsO=Operational` via [`Self::lock_oid`].
+    ///
+    /// **Why this gate exists.** The OPTIGA silently accepts `SetMetadata`
+    /// APDUs carrying access-condition constructs it will not honor — it
+    /// returns OK while storing nothing, or a truncated/altered form. Because
+    /// the `LcsO` ratchet is one-way (`docs/optiga-brick-postmortem.md` §1,
+    /// §3), locking such a chip would freeze the WRONG access conditions
+    /// forever — e.g. an F1D0 whose `Change` AC nobody can satisfy, bricking
+    /// the PIN-HMAC secret. This helper refuses to lock unless the exact bytes
+    /// we intended are confirmed present on-chip.
+    ///
+    /// Idempotent: an already-Operational OID is trusted from the prior
+    /// provisioning run and skipped (its frozen metadata can't be rewritten,
+    /// and re-verifying buys nothing).
+    ///
+    /// Without `optiga-lock-operational` this delegates to `lock_oid` (a
+    /// no-op), so dev/bench builds are byte-for-byte unchanged.
+    ///
+    /// # Safety
+    /// Touches the OPTIGA APDU stack; caller holds `&mut self`.
+    unsafe fn verify_and_lock(
+        &mut self,
+        oid: u16,
+        expected_meta: &[u8],
+    ) -> Result<(), OptigaError> {
+        #[cfg(not(feature = "optiga-lock-operational"))]
+        {
+            let _ = expected_meta;
+            self.lock_oid(oid)
+        }
+        #[cfg(feature = "optiga-lock-operational")]
+        {
+            let mut stored = [0u8; 128];
+            let n = apdu::get_metadata(&mut self.ifx, &mut self.shield, oid, &mut stored)?;
+            if apdu::is_metadata_operational(&stored, n) {
+                secure_log!(
+                    "[OPTIGA/lock] OID 0x{:04x} already Operational — skip verify+lock (idempotent)",
+                    oid
+                );
+                return Ok(());
+            }
+            if !apdu::metadata_matches_expected(&stored, n, expected_meta, expected_meta.len()) {
+                secure_log!(
+                    "[OPTIGA/lock] OID 0x{:04x} REFUSING LOCK — stored metadata does not match \
+                     intended AC (chip silently rejected the write). stored={:02x?} expected={:02x?}",
+                    oid, &stored[..n.min(48)], &expected_meta[..expected_meta.len().min(48)]
+                );
+                // 0xEB == "verify-before-lock mismatch": never lock a chip
+                // whose AC we could not confirm. Fail closed.
+                return Err(OptigaError::Status(0xEB));
+            }
+            secure_log!(
+                "[OPTIGA/lock] OID 0x{:04x} metadata verified against intent — locking",
+                oid
+            );
+            self.lock_oid(oid)
+        }
+    }
+
     /// Provision the auth-reference OID: write the PIN-derived secret,
     /// install AC + data-type, lock LcsO.
     ///
@@ -764,14 +825,27 @@ impl OptigaTrustM {
             // on F1D0 (see `optiga-reset-oids`) to return it to
             // LcsO=Initialization, then re-provision.
             #[cfg(feature = "optiga-hw-counter")]
-            if !apdu::metadata_has_luc_execute(&cur_meta, cur_len, apdu::OID_PIN_CTR) {
-                secure_log!(
-                    "[OPTIGA/prov] FAIL: F1D0 at LcsO=Op with non-LUC \
-                     Execute AC — hw-counter cannot be enabled without \
-                     a SetObjectProtected reset of F1D0 first. \
-                     See docs/optiga-brick-postmortem.md."
-                );
-                return Err(OptigaError::Status(0xE0));
+            {
+                let luc_ok =
+                    apdu::metadata_has_luc_execute(&cur_meta, cur_len, apdu::OID_PIN_CTR);
+                // S-1: in the locked production profile a frozen F1D0 must ALSO
+                // carry `Change=Auto(F1D0)`. A legacy chip frozen with
+                // `Change=ALW` cannot be hardened in place (metadata immutable),
+                // so accepting it would silently ship the very weakness S-1
+                // closes — fail closed and force a fresh part / OID-range bump.
+                #[cfg(feature = "optiga-lock-operational")]
+                let change_ok = apdu::metadata_change_is_auto_authref(&cur_meta, cur_len);
+                #[cfg(not(feature = "optiga-lock-operational"))]
+                let change_ok = true;
+                if !(luc_ok && change_ok) {
+                    secure_log!(
+                        "[OPTIGA/prov] FAIL: F1D0 at LcsO=Op without the \
+                         expected LUC Execute + Auto(F1D0) Change AC — cannot \
+                         harden in place. Use a fresh part / OID-range bump. \
+                         See docs/optiga-brick-postmortem.md."
+                    );
+                    return Err(OptigaError::Status(0xE0));
+                }
             }
             secure_log!(
                 "[OPTIGA/prov] F1D0 at LcsO=Operational — metadata write \
@@ -818,9 +892,12 @@ impl OptigaTrustM {
             }
         }
 
-        secure_log!("[OPTIGA/prov] auth_ref: lock_oid");
-        if let Err(e) = self.lock_oid(apdu::OID_AUTH_REF) {
-            secure_log!("[OPTIGA/prov] auth_ref lock FAILED: {:?}", e);
+        secure_log!("[OPTIGA/prov] auth_ref: verify_and_lock");
+        // S-1 brick-safety: confirm the F1D0 metadata we just wrote (incl. the
+        // `Change=Auto(F1D0)` AC in the locked profile) actually landed before
+        // the irreversible LcsO ratchet.
+        if let Err(e) = self.verify_and_lock(apdu::OID_AUTH_REF, &meta[..meta_len]) {
+            secure_log!("[OPTIGA/prov] auth_ref verify_and_lock FAILED: {:?}", e);
             return Err(e);
         }
         Ok(())
@@ -871,8 +948,8 @@ impl OptigaTrustM {
             secure_log!("[OPTIGA/prov] OID 0x{:04x}: set_metadata FAILED: {:?}", oid, e);
             return Err(e);
         }
-        if let Err(e) = self.lock_oid(oid) {
-            secure_log!("[OPTIGA/prov] OID 0x{:04x}: lock FAILED: {:?}", oid, e);
+        if let Err(e) = self.verify_and_lock(oid, &meta[..meta_len]) {
+            secure_log!("[OPTIGA/prov] OID 0x{:04x}: verify_and_lock FAILED: {:?}", oid, e);
             return Err(e);
         }
         Ok(())
@@ -1114,6 +1191,13 @@ impl OptigaTrustM {
     /// provisioning. On failure, F1D0 may be left in the no-LUC variant
     /// but the chip is still usable for PIN auth (just without silicon
     /// counter enforcement).
+    ///
+    /// S-1 INVARIANT: this recovery is reachable ONLY while F1D0 is still at
+    /// LcsO=Creation (it rewrites F1D0 metadata, which the one-way ratchet
+    /// forbids once locked). The factory provisioning order guarantees E120 is
+    /// written correctly BEFORE F1D0 is locked, so under the
+    /// `optiga-lock-operational` profile a locked F1D0 never reaches here —
+    /// `provision_auth_ref`'s skip-guard returns early for an Operational F1D0.
     #[cfg(feature = "optiga-hw-counter")]
     unsafe fn recover_hw_counter_metadata(
         &mut self,
@@ -1371,7 +1455,11 @@ impl OptigaTrustM {
         secret.zeroize();
         r?;
         // 4. AuthRef metadata: Change=ALW / Read=NEV / Execute=LUC(ctr_oid).
-        let (ameta, alen) = apdu::build_metadata_auth_ref_luc_oid(ctr_oid);
+        //    The duress F1D8 twin is deliberately NEVER locked and is blanked
+        //    via the ALW Change arm on the reset path, so it keeps `Change=ALW`
+        //    (change_is_auto=false) — the S-1 Auto(F1D0) hardening applies only
+        //    to the real F1D0.
+        let (ameta, alen) = apdu::build_metadata_auth_ref_luc_oid(ctr_oid, false);
         apdu::set_metadata(&mut self.ifx, &mut self.shield, authref_oid, &ameta[..alen])?;
         Ok(())
     }
@@ -1574,7 +1662,94 @@ impl OptigaTrustM {
             apdu::OID_COUNTER, &meta[..meta_len],
         )?;
 
-        self.lock_oid(apdu::OID_COUNTER)
+        // F1E1 is the boot-readable provisioned sentinel (Read=ALW,
+        // Change=Conf(E140)); locking its metadata is safe because the
+        // sentinel write in `factory_reset_body` is a DATA write satisfied by
+        // the Conf(E140) shield arm, which still works at LcsO=Operational.
+        self.verify_and_lock(apdu::OID_COUNTER, &meta[..meta_len])
+    }
+
+    /// S-2 — neutralize the OPTIGA trust-anchor pool so NO SetObjectProtected
+    /// manifest can ever bypass an OID's `Change` AC on a shipped chip.
+    ///
+    /// For each trust-anchor slot `0xE0E3..=0xE0E8`: overwrite any stored cert
+    /// with junk, install [`apdu::build_metadata_ta_junk`] (`Change`/`Read`/
+    /// `Execute = NEV`, and no `DataType=TrustAnchor`), readback-verify the AC,
+    /// then ratchet `LcsO=Operational`. After this the chip holds no cert it
+    /// will verify a manifest against AND the slots can never be re-pointed, so
+    /// the protected-update Change-AC bypass (ship-blocker S-2) is structurally
+    /// closed — even a bench attacker holding the public Infineon sample key has
+    /// no on-chip anchor to verify a forged manifest against.
+    ///
+    /// **IRREVERSIBLE.** This permanently removes any field OID-reset channel —
+    /// the owner's explicit "no recovery manifest, no HSM cert" decision. Gated
+    /// so it only ever runs inside a deliberately-flagged irreversible factory
+    /// build, and only as the LAST provisioning step.
+    ///
+    /// Idempotent: an already-Operational slot is skipped.
+    ///
+    /// NOTE (slot scope): per the Infineon SRM the functional trust-anchor pool
+    /// is `0xE0E3..0xE0E8`. Whether an arbitrary `F1Dx` data object can also be
+    /// promoted to `DataType=0x11` and honored as a manifest anchor is verified
+    /// on a sacrificial chip (see `docs/production-todo.md` S-2); if it can, the
+    /// promotable spare `F1Dx` are added to `TA_POOL` here.
+    ///
+    /// # Safety
+    /// Touches the OPTIGA APDU stack; caller holds `&mut self` and an active
+    /// shielded connection.
+    #[cfg(all(
+        feature = "optiga-lock-operational",
+        feature = "factory-production-irreversible-im-sure"
+    ))]
+    unsafe fn lockdown_ta_pool(&mut self) -> Result<(), OptigaError> {
+        const TA_POOL: [u16; 6] = [0xE0E3, 0xE0E4, 0xE0E5, 0xE0E6, 0xE0E7, 0xE0E8];
+        // 32 bytes of 0xFF: not a parseable X.509 cert, so even if a slot
+        // somehow retained `DataType=TrustAnchor`, a signature-verify against
+        // this junk fails — the data overwrite is the load-bearing defense, the
+        // NEV ACs + lock are belt-and-braces.
+        let junk = [0xFFu8; 32];
+        let (meta, meta_len) = apdu::build_metadata_ta_junk();
+
+        for &oid in TA_POOL.iter() {
+            let mut cur = [0u8; 128];
+            let cur_len =
+                apdu::get_metadata(&mut self.ifx, &mut self.shield, oid, &mut cur).unwrap_or(0);
+            if cur_len > 0 && apdu::is_metadata_operational(&cur, cur_len) {
+                secure_log!("[OPTIGA/ta] OID 0x{:04x} already locked — skip", oid);
+                continue;
+            }
+
+            // Overwrite any stored cert. Fresh production slots are empty, so a
+            // write error there is benign (nothing to neutralize) — log + press
+            // on; the metadata-narrow + lock below is what freezes the slot.
+            if let Err(e) = apdu::set_data_object(&mut self.ifx, &mut self.shield, oid, &junk) {
+                secure_log!("[OPTIGA/ta] OID 0x{:04x} junk set_data: {:?} (continuing)", oid, e);
+            }
+            #[cfg(feature = "stm32u585")]
+            {
+                self.hard_reset_and_reinit()?;
+                self.ensure_shield()?;
+            }
+
+            if let Err(e) =
+                apdu::set_metadata(&mut self.ifx, &mut self.shield, oid, &meta[..meta_len])
+            {
+                secure_log!("[OPTIGA/ta] OID 0x{:04x} set_metadata FAILED: {:?}", oid, e);
+                return Err(e);
+            }
+
+            // Readback-verify the junk AC actually landed BEFORE the
+            // irreversible lock (the chip silently accepts unsupported ACs).
+            self.verify_and_lock(oid, &meta[..meta_len])?;
+            #[cfg(feature = "stm32u585")]
+            {
+                self.hard_reset_and_reinit()?;
+                self.ensure_shield()?;
+            }
+            secure_log!("[OPTIGA/ta] OID 0x{:04x} neutralized + locked", oid);
+        }
+        secure_log!("[OPTIGA/ta] trust-anchor pool lockdown complete (S-2)");
+        Ok(())
     }
 
     /// Full-device provisioning.
@@ -1730,6 +1905,23 @@ impl OptigaTrustM {
             prov_with_reset!("counter", self.provision_counter());
         }
 
+        // S-2: neutralize the trust-anchor pool as the LAST infrastructure step
+        // — only in a deliberately-flagged irreversible factory build. Running
+        // it last means any earlier-step failure aborts BEFORE this
+        // point-of-no-return (it permanently removes the manifest channel).
+        // Idempotent on the end-user wizard's re-provision (slots already
+        // locked → skipped).
+        #[cfg(all(
+            feature = "optiga-lock-operational",
+            feature = "factory-production-irreversible-im-sure"
+        ))]
+        unsafe {
+            self.lockdown_ta_pool().map_err(|e| {
+                secure_log!("[OPTIGA/prov] lockdown_ta_pool FAILED: {:?}", e);
+                e
+            })?;
+        }
+
         // Stale-log hazard: this message used to say "6 OIDs written +
         // locked". Under the current feature set (`optiga-lock-
         // operational` OFF) and the LcsO-Op skip path, `lock_oid` is
@@ -1818,7 +2010,10 @@ impl OptigaTrustM {
             };
             secret.zeroize();
             r?;
-            let (ameta, alen) = apdu::build_metadata_auth_ref_luc_oid(apdu::OID_PIN_CTR_DURESS);
+            // Duress F1D8 keeps Change=ALW (change_is_auto=false): never locked,
+            // blanked via ALW on reset. S-1 Auto hardening is real-F1D0 only.
+            let (ameta, alen) =
+                apdu::build_metadata_auth_ref_luc_oid(apdu::OID_PIN_CTR_DURESS, false);
             unsafe {
                 apdu::set_metadata(
                     &mut self.ifx, &mut self.shield, apdu::OID_DURESS_AUTH_REF, &ameta[..alen],
@@ -2239,7 +2434,14 @@ impl OptigaTrustM {
         // the fix to the next wipe cycle, it doesn't corrupt anything.
         // Non-hw-counter builds skip this — the counter isn't
         // silicon-enforced on that path.
-        #[cfg(feature = "optiga-hw-counter")]
+        //
+        // S-1: ALSO skipped under `optiga-lock-operational`. The transient-auth
+        // reset rewrites F1D0 (relies on `Change=ALW`), which is impossible once
+        // F1D0 is `Auto(F1D0)`+locked. Under the locked profile E120 carry-over
+        // is moot anyway: a forgotten-PIN wipe abandons this OID range (the seed
+        // is destroyed below) and re-provisioning bumps to a fresh range rather
+        // than resetting E120 in place.
+        #[cfg(all(feature = "optiga-hw-counter", not(feature = "optiga-lock-operational")))]
         unsafe {
             if let Err(e) = self.reset_e120_via_transient_auth() {
                 secure_log!(
@@ -2263,6 +2465,14 @@ impl OptigaTrustM {
                 apdu::OID_COUNTER, &[RESET_SENTINEL],
             )?;
 
+            // S-1: under the locked profile F1D0 is `Auto(F1D0)`+LcsO=Operational,
+            // so this blank-write would FAIL (the reset path holds the shield but
+            // has not HMAC-verified the PIN). We deliberately skip it — F1D0 holds
+            // ONLY the PIN-HMAC key with Read=NEV, which is information-free once
+            // the entropy shares it XORs against (F1D1 half_O + F1D2 master,
+            // blanked just below via the Conf(E140) arm) are gone. Dev builds
+            // (F1D0 Change=ALW) still blank it for hygiene.
+            #[cfg(not(feature = "optiga-lock-operational"))]
             apdu::set_data_object(&mut self.ifx, &mut self.shield, apdu::OID_AUTH_REF, &blank)?;
             apdu::set_data_object(&mut self.ifx, &mut self.shield, apdu::OID_ENTROPY, &blank)?;
             apdu::set_data_object(&mut self.ifx, &mut self.shield, apdu::OID_MASTER_SECRET, &blank)?;
