@@ -596,22 +596,26 @@ output; the actionable residue is below. Most alarming "absent" items turned out
 already-enforced in code (see "Already enforced") — the genuine new work is the
 SWAP_BANK ship-blocker + four hardening residuals.
 
-#### ⚠️ SHIP-BLOCKER (new) — SWAP_BANK cross-bank boot redirect defeats FSBL immutability
+#### ⚠️ SHIP-BLOCKER — SWAP_BANK cross-bank boot redirect — RM0456-RESOLVED (2026-05-29)
 
-DS-proven chain (Table 4 note 6 + Table 4 "Flash main, RDP2, Write=Yes" + §3.4
-dual-bank boot): **SWAP_BANK is the one option byte still writable at RDP2**, and
-BOOT_LOCK/SECBOOTADD0 pin a *logical* address (0x0C00_0000) that SWAP_BANK remaps
-to the *other physical bank* — so BOOT_LOCK does NOT defend against it, and the
-FSBL's per-boot option-byte self-check (M-6) doesn't either (the swapped-in image
-just omits the check). **Our layout hands the attacker the staging area:** bank 1
-= secure world, **bank 2 = NS world (1 MB writable NS runtime)**, FSBL = bank-1
-pages 0..3 only, WRP1A as specced covers **bank 1 only** — the symmetric boot pages
-in physical bank 2 are NS-attributed and writable today. Write a malicious image
-into bank-2 boot pages → flip SWAP_BANK → it serves 0x0C00_0000.
+Mechanic confirmed (RM0456 §7.5.8 + Fig 24 + FLASH_OPTR bit 20): **SWAP_BANK remaps
+which PHYSICAL bank serves the boot logical address 0x0C00_0000.** WRP/SECWM/HDP are
+**physical-bank-bound** (§7.6.1 — they travel with the bank), so bank-1-only
+protection leaves physical bank 2's boot pages exposed. And SWAP_BANK programming is
+**NS-reachable** (staged in nonsecure FLASH_OPTR, triggered via OPTSTRT in nonsecure
+FLASH_NSCR — no OPTSTRT in FLASH_SECCR; §7.9.9/§7.9.13) — so the NS world itself can
+flip it. Our layout (bank 1 = secure FSBL+S-world, **bank 2 = NS runtime, boot pages
+NS-writable today**) is the staging area: write a malicious image into bank-2 boot
+pages → flip SWAP_BANK → it serves 0x0C00_0000.
 
-The exploit-vs-brick branch (swapped bank runs as *secure* → RCE, or stays NS →
-forced to RSS = DoS) is RM0456-only. **But the mitigation is UNCONDITIONAL** (WRP
-is enforced at write-time, closing both branches):
+**KEY (corrects the earlier draft, which wrongly said "BOOT_LOCK does NOT defend"):
+`BOOT_LOCK=1` + `TZEN=1` makes SWAP_BANK IMMUTABLE** — any write fails `OPTWERR`
+(RM0456 §7.4.1 L20405 / §7.4.2 L20746). So the NS-flip is **closed at the source by
+BOOT_LOCK** (which we set anyway). Keep BOTH layers (belt + braces):
+
+- [ ] **PRIMARY (source-level): commit `BOOT_LOCK=1` + `TZEN=1`** → SWAP_BANK can't
+      be written at all (`OPTWERR`). This was missing from the earlier draft and is
+      the single most important fix; set it in the lifecycle lockdown.
 
 - [ ] **WRP1A *and WRP2A*, `UNLOCK=0`, over pages 0..3 of BOTH physical banks**,
       committed before RDP2. (Two WRP areas per bank @ 8 KB granularity — DS
@@ -621,16 +625,37 @@ is enforced at write-time, closing both branches):
       are the weaker fallback: swap → DoS instead of RCE.)
 - [ ] **Mirror HDP2 + SECWM2** over the bank-2 boot pages (DS §3.4.2: one HDP area
       *per bank*; we only spec HDP1/SECWM1 today). The hide must cover both banks.
-- [ ] `SWAP_BANK=0` stays a checklist value but is **necessary-not-sufficient**
-      (mutable at RDP2 — pinning the bit is not durable; immutable identical boot
-      pages in both banks is the real fix).
-- [ ] **RM0456 must-verify (3 discriminators; DS is silent):** (a) does writing
-      SWAP_BANK swap which physical bank serves 0x0C00_0000; (b) is WRP/SECWM
-      attribution bound to the physical bank or the post-swap logical window;
-      (c) is SWAP_BANK programming secure-only under TZEN=1 (FLASH SECCR vs NSCR)
-      — if secure-only, the trigger is a compromised *updatable secure world* or
-      FI, not the NS USB stack (still in scope: surviving a compromised updatable
-      secure world is the FSBL's whole purpose — but state the trigger accurately).
+- [ ] `SWAP_BANK=0` — set it; it becomes durable once BOOT_LOCK=1 locks it
+      (`OPTWERR`). (Pre-BOOT_LOCK it's NS-mutable — so order BOOT_LOCK into the burn
+      sequence and don't rely on the bare bit before then.)
+
+  **3 discriminators — RESOLVED (RM0456):** (a) YES, SWAP_BANK remaps the physical
+  bank at 0x0C00_0000 (§7.5.8/Fig 24); (b) WRP/SECWM/HDP are physical-bank-bound
+  (§7.6.1) → WRP1A-only insufficient, WRP2A+SECWM2+HDP2 required; (c) SWAP_BANK
+  programming is NS-reachable (nonsecure NSCR/OPTR) — **but `BOOT_LOCK=1` closes it
+  at the source** (above). Remaining bench task: a sacrificial dry-run confirming
+  the BOOT_LOCK→OPTWERR lock + the both-banks WRP/identical-FSBL no-op behavior.
+
+#### RM0456 register-exact resolutions (2026-05-29) — closes the STM32 decision tail
+
+26/28 Stage-1 STM32 gaps resolved against RM0456 (verify pass re-checked every cited
+line). Register-exact values to pin in Matrix-1 / the read-back verifier:
+
+- **RDP** `FLASH_OPTR.RDP[7:0]`: 0xAA=L0, 0x55=L0.5 (TZEN=1 only), 0xCC=L2, **any other value=L1** (catch-all, not a single code).
+- **WRP**: 4 areas, 2/bank (WRP1A/1B bank-1, WRP2A/2B bank-2), 8 KB page granularity; per-register `UNLOCK`=bit 31 (0=locked/immutable). WRP2AR governs physical bank 2.
+- **HDP**: enable+extent are option bytes in the SECWM registers — `HDP1EN`=`FLASH_SECWM1R2[31]`, `HDP1_PEND`=`SECWM1R2[23:16]` (off 0x54); HDP2 in `FLASH_SECWM2R2`. (Runtime hide-engage `HDP_ACCDIS` is in `FLASH_SECHDPCR`.)
+- **BOOT_LOCK + SECBOOTADD0**: both in `FLASH_SECBOOTADD0R`@0x4C (SECURE reg, NS RAZ/WI). `SECBOOTADD0[24:0]`=bits 31:7 (128 B granular; word value 0x0C00_007C → boot address 0x0C00_0000 = FSBL base — note the register *word* ≠ the boot *address*).
+- **OEM keys (RDP-regression / debug-auth)**: `OEM1KEY`=`FLASH_OEM1KEYR1`@0x70 + `R2`@0x74; `OEM2KEY`=`OEM2KEYR1`@0x78 + `R2`@0x7C. Write-only (read 0).
+- **nBOOT0/nSWBOOT0**: `FLASH_OPTR` bit 27 / bit 26. `NSWBOOT0=0` → BOOT0 taken from the nBOOT0 option bit (pin ignored, deterministic — preferred).
+- **BOR**: `FLASH_OPTR.BOR_LEV[10:8]` — 000≈1.7 V (default/floor), 001≈2.0, 010≈2.2, 011≈2.5, **100≈2.8 V**. Raise above 000 to narrow the glitch dwell window.
+- **SRAM ECC**: ECC-capable banks = SRAM2 (full 64 KB), SRAM3 (first 256 KB), BKPSRAM; SRAM1/SRAM4 NOT. Enabled via FLASH_OPTR option bits, **inverted polarity (0=enabled)**: SRAM2_ECC=bit 24, SRAM3_ECC=bit 23. **DECISION: put secret buffers (master_secret / slot-cache / entropy) in SRAM2** — uniquely ECC-capable AND hardware-erased on tamper; set bit 24=0.
+- **MPCBB** (invariant-#4 SRAM-secure enforcement): 512 B block granularity, one `SEC` bit/block in `GTZC1_MPCBBz_SECCFGRx`; resets to all-secure under TZEN=1. **MPCWM4** governs BKPSRAM (32 B watermark) if used.
+- **TAMP backup-register secure zones** (`TAMP_SECCFGR`@0x20): `BKPRWSEC[7:0]`=end of zone-1 (RW-secure, BKP0R..), `BKPWSEC[23:16]`=end of zone-2. BHK in BKP0R..7R needs `BKPRWSEC>=8`. `BHKLOCK`=bit 30 (set-only → SAES-only). **`TAMPSEC`=bit 31** + `TAMP_PRIVCFGR.TAMPPRIV`=bit 31 → tamper config secure+privileged (NS can't disable tamper).
+- **Hardware-mode tamper erase** = per-tamper `NOER=0`: `TAMPxNOER` in `TAMP_CR2`@0x04 (8 external), `ITAMPxNOER` in `TAMP_CR3`@0x08 (internal). NOER=0 = immediate silicon backup-register erase (the "confirmed" mode) — set it for the BHK-protecting tamper(s).
+- **SAES KEYSEL** = `SAES_CR[30:28]`: 001=DHUK, 010=BHK, 100=DHUK^BHK (confirms M-11). **DHUK** = SAES-computed from a non-volatile per-die software-secret RHUK (confirms M-12). **BHK** write-once → BHKLOCK → SAES-only, cleared on tamper/RDP-regression (confirms M-11).
+- **RCC CSS**: `RCC_CR.CSSON`=bit 19 (HSE clock-security; on HSE fail → NMI + auto-fallback to MSIS/HSI16). LSE CSS separate.
+
+Still-open (need silicon/registry, NOT RM0456): the OPTIGA bench OID reads + the SE050 production-BOM variant + the OPTIGA/MCU PSA-SESIP cert-registry to-verifies.
 
 #### Hardening residuals (new, beyond SWAP_BANK)
 
@@ -640,6 +665,15 @@ is enforced at write-time, closing both branches):
       halts/glitches the core can't stop it) + the planned software
       `trigger_lockout_wipe()` as **braces** (the coordinated dual-SE zeroize
       HW-mode can't do). `tamp.rs` is log-only today; production needs both.
+      **BUG (found 2026-05-29, RM0456 §64.7 + mem-map L7293/L7306):** `tamp.rs`
+      uses `TAMP = 0x5600_4400`, which the memory map assigns to **LPTIM1**, not
+      TAMP. The TAMP register map is **0x5600_7C00** (matches `bhk.rs` `TAMP_S`).
+      So `tamp.rs`'s `CR3=0` write (and every CR1/IER/etc. write) lands on LPTIM1,
+      not TAMP — the "all internal tampers in confirmed mode" config is NOT live.
+      Fix the base to `0x5600_7C00` before relying on HW-mode erase; confirmed
+      mode (CR3 ITAMPxNOER=0) is what erases BKP0R..BKP7R via the `tamp_confirmed`
+      signal (Table 644 L183834-183836, unconditional — no TAMP_ERCFGR bit needed;
+      ERCFG0 @0x54 gates only Backup SRAM, L183849-183852).
 - [ ] **Place secret SRAM in an ECC-on bank + treat double-error as tamper.** DS:
       SRAM2 (64 KB) and 256 KB of SRAM3 support ECC (786 KB ECC-off / 722 KB
       ECC-on). Put `master_secret` / slot-cache / reconstructed entropy in an

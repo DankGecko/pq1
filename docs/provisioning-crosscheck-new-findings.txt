@@ -1,0 +1,15 @@
+PQ1 — new issues from the provisioning datasheet cross-check (2026-05-29)
+New/wrong stuff only; excludes known ship-blockers and deferred production lockdown.
+
+Net-new holes:
+- OPTIGA S-2 was a silent no-op on the wrong OID: reset.rs writes the "trust anchor" to 0xE0E3 (a device-cert slot), so it does nothing; the real anchors E0E8/E0E9/E0EF were never touched (checklist even named non-existent E0E4-E0E7).
+- STM32 SWAP_BANK boot-redirect (RM0456-confirmed, NS-reachable): SWAP_BANK remaps which physical bank serves the boot address, WRP/SECWM/HDP are physical-bank-bound, and SWAP_BANK is NS-writable (FLASH_OPTR/NSCR) — so the NS world itself could redirect boot to an attacker-staged bank-2 image. CLOSED by BOOT_LOCK=1+TZEN=1 (makes SWAP_BANK immutable, OPTWERR) as the primary fix, + WRP-both-banks + identical-FSBL + SECWM2/HDP2 as defense-in-depth.
+- SE050 half_E ALLOW_WRITE: a PIN-verified session can re-seed/desync the XOR split. Write-once policy -> must fix at first provisioning or it's permanent.
+- BHK Phase-2C: a BHK loss may permanently strand the SE050 (can't re-key without the old keys or the NXP factory-reset credential we don't hold). Unresolved gate.
+
+Corrections to our own spec:
+- SE050 variant overclaim: FIPS SL3/SL4 and "0x7FFF0207 forces SCP03" are SE050F-only; we run SE050E (no FIPS, SCP not forced).
+- OPTIGA E0E0 is a chip-unique genuine device cert, not a reproducible public sample.
+- OPTIGA S-2 bypass is conditional (needs Int(anchor)+0xF0), not unconditional.
+- OPTIGA AC-builder can't emit Int(X)/0xD8/0xF0 -> the S-1/S-2 fixes aren't codeable as-is.
+- SE050 boot-reconcile leg is dead-by-spec: a UserID auth-attempts counter always reads 0; comment mislabeled it (behavior already correct).
