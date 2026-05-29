@@ -198,7 +198,31 @@ passed against sacrificial parts.
       it. Currently we leave this alone; if we ever write it, it goes
       in this doc first.
 
-#### SHIP BLOCKER S-2 — Trust-anchor cleanup at OID `0xE0E3..0xE0E8`
+#### SHIP BLOCKER S-2 — Trust-anchor cleanup — OID TARGET UNDER REVISION (2026-05-29)
+
+> **⚠️ CORRECTION (2026-05-29) — this section is mis-targeted; revise the OID before acting.**
+> Our own 2026-04-22 on-silicon metadata dump (memory `project_optiga_reset_oids`)
+> shows **`0xE0E3` is a device-certificate slot (`DataType=0x12`), already full
+> with Infineon's device cert — NOT a Trust Anchor (`0x11`)**. The chip will not
+> retype it, so `reset.rs`'s "provision trust anchor at 0xE0E3" is a **silent
+> no-op** (also why `flash-hw-optiga-reset` no-ops on the TRUSTMV3SHIELDTOBO1, and
+> why the "16/16 OK" escape-hatch claim below is stale — the 2026-04-22 run got
+> uniform `Status(0xFF)`). Cross-confirmed by the deep-research output
+> (`docs/provisioning-reference.md`, Matrix 2 + top correction box).
+>
+> **Reframed threat:** the real Protected-Update trust-anchor pool is the
+> `DataType=0x11` slots (research: `0xE0E8/0xE0E9/0xE0EF`), which ship **empty at
+> LcsO=creation** — a physical attacker can install *their own* anchor there and
+> sign a manifest. **Our code touches none of them.** So the exposure is "open
+> type-0x11 anchor slots," not "Infineon sample cert at 0xE0E3." Also open:
+> whether the SetObjectProtected path is even live on our chip rev (our dump
+> showed every manifest failing for want of a usable TA) — so the dump settles
+> *severity* too.
+>
+> **Do NOT act on the OID targets below until the "⏳ BENCH-PENDING" dump at the
+> end of this section confirms the real anchor slot.** The fix *shape* (HSM-
+> controlled anchor, or fill-and-lock every type-0x11 slot + ratchet LcsO=Op) is
+> unchanged; only the OID targets move.
 
 The single biggest hole in the OPTIGA shipping posture, and the one
 that defeats EVERY other hardening including S-1's metadata tightening
@@ -218,18 +242,20 @@ ratcheted objects.
 
 Required for ship (each item is one-way per chip):
 
-- [ ] **Replace the cert at `0xE0E3` with a PQ1-factory-HSM-controlled
-      cert** whose private key is generated inside the factory HSM
-      and never exported. The HSM signs production reset manifests; no
-      attacker can sign one. OR overwrite `0xE0E3` with junk + ratchet
-      to LcsO=Op so there is no functional trust anchor at all (cost:
-      no field-recoverable OID reset post-ship — every bad-state chip
-      requires factory rework).
-- [ ] **Enumerate and ratchet `0xE0E4..0xE0E8`** (per Infineon SRM,
-      the trust-anchor pool). Each MUST be either PQ1-controlled
-      content + LcsO=Op, OR junk + LcsO=Op. None may be left in a
-      state where an attacker can write their own cert + `DataType =
-      0x11` (TrustAnchor).
+- [ ] **Lock the real type-0x11 trust-anchor pool `{0xE0E8, 0xE0E9, 0xE0EF}`**
+      (SRM Table 68 — triple-sourced, see correction block; `0xE0EF` =
+      platform-integrity, the SRM metadata-update example → primary target).
+      Each MUST be either a PQ1-factory-HSM-controlled cert (private key never
+      exported; the HSM signs production manifests) + LcsO=Op, OR junk + LcsO=Op
+      (cost: no field-recoverable OID reset post-ship). **NOT `0xE0E3`** — that's
+      a device-identity slot (type 0x12); our `reset.rs` install there silently
+      no-ops. **NOT `0xE0E4..0xE0E7`** — no objects exist there (GetDataObject errors).
+- [ ] **Ratchet the device-cert slots `{0xE0E1, 0xE0E2, 0xE0E3}` (type 0x12,
+      `Change=LcsO<op`) to LcsO=Op** so an attacker cannot RETYPE a device-cert
+      slot to `DataType=0x11` at creation and install their own anchor (the real
+      E0E1-E0E3 attack vector). `0xE0E0` is already `Change=NEV` — leave it (it's
+      the chip-unique device-identity cert; see the anti-counterfeit note in the
+      datasheet-cross-reference subsection).
 - [ ] **Lock `0xF1D7`** (currently "left spare" per `apdu.rs:159`).
       Either fill with junk + ratchet to LcsO=Op so its metadata
       becomes immutable, or — if any other F1Dx slots remain spare —
@@ -248,9 +274,9 @@ Required for ship (each item is one-way per chip):
 - [ ] **Sacrificial-part verification:** with the production trust
       anchor in place at `0xE0E3` and all other TA-pool OIDs +
       `0xF1D7` ratcheted:
-      - Manifest signed by the public Infineon sample key targeting
-        `kid = 0xE0E3` → MUST fail.
-      - Same manifest targeting `kid ∈ {0xE0E4..0xE0E8, 0xF1D7,
+      - Manifest signed by a non-PQ1 / Infineon-sample key targeting
+        `kid ∈ {0xE0E8, 0xE0E9, 0xE0EF}` → MUST fail.
+      - Same manifest targeting `kid ∈ {0xE0E1, 0xE0E2, 0xE0E3, 0xF1D7,
         random OIDs}` → MUST fail.
       - Manifest signed by the factory HSM key → MUST succeed.
       - Manifest attempting to rewrite F1D0 after S-1's ratchet,
@@ -298,6 +324,72 @@ sample Trust Anchor to reset the F1D0..F1DF user-OID range. Validated
 was accidentally LcsO=op'd in dev. Cannot reset E140 once LcsO=op
 with a lost PBS (that's the hard brick from the first chip), so the
 escape hatch exists for user OIDs only.
+
+#### ⏳ BENCH-PENDING (no dev board on hand 2026-05-29) — do first when back at the board
+
+All need the physical TRUSTMV3SHIELDTOBO1; they gate the corrected S-1/S-2 fixes.
+
+- [ ] **OPTIGA E0Ex metadata dump (settles S-2).** `trustm_metadata -r` on
+      `0xE0E0 0xE0E1 0xE0E2 0xE0E3 0xE0E8 0xE0E9 0xE0EF` — record type / LcsO /
+      Read+Change AC / populated. Then the discriminating read: the **`Int(...)`
+      (Integrity) AC on the objects we actually Protected-Update** — that names
+      the exact trust-anchor OID the manifest path consults, i.e. the slot S-2
+      must lock. Settles where the sample cert is, what E0E3 holds, whether our
+      write no-ops, which anchor matters, and whether the attack path is live.
+- [ ] **S-1 code fix (`apdu.rs:934`).** Our provisioning **actively writes
+      `Change=ALW`** on F1D0 (worse than the chip default). Change the production
+      path to write `Change=Conf(0xE140)&&Auto(0xF1D0)`, `Read=NEV`, then ratchet
+      LcsO=Op. Keep the dev `Change=ALW` variant gated OFF in production.
+- [ ] **S-2 code fix (`reset.rs`).** Slot identity is now DOC-SETTLED (SRM Table 68,
+      triple-sourced): re-target anchor provisioning from the no-op `0xE0E3` (device
+      cert, type 0x12) to the real type-0x11 pool `{0xE0E8, 0xE0E9, 0xE0EF}`, ratchet
+      the device-cert slots E0E1/E0E2/E0E3 (block DEVCERT→TA retype), and fix the
+      `reset.rs:24-26` comment + `TRUST_ANCHOR_OID`. Requires the AC-builder code gap
+      (work-todo) first. Bench still needed ONLY for: (a) does the chip accept a
+      type-0x12 `kid` (mixed evidence — `ecdsa_verify` accepts 0x11|0x12); (b) the
+      exact `Int`-AC the manifest path consults.
+- [ ] **Retire/relabel the stale escape-hatch "16/16 OK" claim** and consider
+      removing `optiga-reset-oids` + `reset.rs` (memory `project_optiga_reset_oids`).
+- [x] **OPTIGA monotonic-counter endurance — RESOLVED (2026-05-29 cross-reference).**
+      ~600k updates per counter / ~2M total CONFIRMED against the SRM + datasheet.
+      Size PIN/usage thresholds well under it (our E120 limit is 32 — ample margin).
+
+### OPTIGA Trust M V3 — datasheet cross-reference (SRM v3.70, 2026-05-29)
+
+From the SRM / ConfigGuide / Keys&Certificates cross-reference. The S-1/S-2/S-3 ship
+blockers above stand; these refine accuracy + add residuals.
+
+- **S-2 severity — LABEL down, LOCKDOWN unchanged.** SetObjectProtected is NOT
+  unconditional: the SRM (§2.2.5 / lines 3929-3931) gates it on the *target* object's
+  metadata carrying an `Int(trust-anchor)` Change/`0xD8` AC **and** a reset-type (`0xF0`);
+  an object with no `0xF0` cannot be metadata-updated via SetObjectProtected at all. So it
+  updates only objects that reference an anchor — not "every Change AC including NEV/Auto."
+  **This lower severity is CONDITIONAL on a verified invariant — no PQ1 object carries
+  `Int(TA)`/`0xF0`** (currently true: our AC builder can't even emit them — see work-todo
+  code-gap item). That invariant must be (a) checked across every provisioned object and
+  (b) **GUARDED** — a future change adding `Int(anchor)` to enable legitimate protected-update
+  reopens the bypass. The anchor-pool lockdown {E0E8/E0E9/E0EF} + device-cert-retype block
+  {E0E1-E0E3} **remain ship-blocker work** (the severity refinement does NOT unblock ship).
+- **E0E0 is NOT "a public sample anyone can reproduce" (threat-framing correction).** On
+  PRODUCTION parts `0xE0E0` is a chip-unique Infineon device cert (`Change=NEV`, leaf key
+  sealed at `0xE0F0 Read=NEV`) — an anti-counterfeit primitive to USE, not neutralize. The
+  reproducible artifact is the engineering-sample *Test* cert — and our bench evidence came
+  from the TRUSTMV3SHIELDTOBO1 **eval shield**, which may carry that test cert. So: don't
+  replace E0E0; treat E0E0 + the coprocessor UID (E0C2) as a device-identity opportunity on
+  production parts; confirm whether our eval shield holds the test cert vs a production cert.
+- **New residuals (verify/decide):** (1) Security Monitor config `0xE0C9` — `tmax=0` can
+  disable the throttle; verify it's non-zero + not writable. (2) `E120` linked-counter uses
+  `Change=Auto(F1D0)`; SRM recommends `Change=NEV` (DoS-hardening) — evaluate. (3) Any object
+  we want SetObjectProtected-protected needs Change AC = `Int(anchor)` (+ if confidential,
+  `Conf(secret)` with the secret OID *different* from the target).
+- **Decisions to record (unused):** Hibernate/`CloseApplication`-persist (we use auto-sleep +
+  per-boot OpenApplication; SEC>0 blocks hibernate); SecStaG/SecStaA boot-phase ACs (we gate
+  on Conf/Auto/Luc).
+- **Confirms that resolve:** anchor pool {E0E8/E0E9/E0EF} type 0x11, device certs E0E0-E0E3
+  type 0x12, no E0E4-E0E7 (SRM Table 68) ✓; PBS 64 B / type 0x22, shielded = TLS-PRF-SHA256 +
+  AES-128-CCM-8 ✓; CC EAL6+ / BSI-DSZ-CC-0961 ✓; counter endurance 600k/2M ✓ (resolves the
+  TO-VERIFY). ⚠️ the PSA cert **number/HW-ver/date** in O-12 are NOT in the Infineon docs —
+  verify against products.psacertified.org before citing as fact.
 
 ### STM32U585 — OTP + option-bytes commits
 
@@ -390,9 +482,10 @@ escape hatch exists for user OIDs only.
       Required before shipping to prevent flash extraction. Note:
       RDP2 → RDP0 regression on STM32U5 does a mass erase but survives
       for OTP (confirmed behaviour; OTP is the anchor of trust). Also
-      confirmed: **DHUK survives RDP2→RDP0 regression** — it's silicon-
-      fused, not in flash — so Tier 1 derivations still reproduce after
-      a mass erase. **BHK does NOT survive** — its DHUK-wrapped bytes
+      confirmed: **DHUK survives RDP2→RDP0 regression** — it is derived
+      inside SAES from an OTP-based RHUK (the ST-factory root HUK; OTP is
+      absent from the RDP1→0 mass-erase list), not silicon-fused-and-stored
+      — so Tier 1 derivations still reproduce after a mass erase. **BHK does NOT survive** — its DHUK-wrapped bytes
       live in flash, which is mass-erased. A regressed + re-provisioned
       device generates a fresh BHK → Tier 2 pairings re-key, which means
       SE050 + TROPIC01 (if on BHK per the work-todo #7 split) must be
@@ -407,6 +500,57 @@ escape hatch exists for user OIDs only.
       Erase-allowed only during factory provisioning.
 - [ ] **SECBOOTADD0 set to the FSBL base.** Secure boot points to the
       signed entry.
+- [ ] **BOOT_LOCK = 1.** Force the boot entry to `SECBOOTADD0` (the FSBL) — no
+      alternate boot via RAM or the system bootloader. (Research-derived: ST
+      UM3387 §3.2.3 SESIP-certified lockdown set; we set SECBOOTADD0 but not
+      BOOT_LOCK today.)
+- [ ] **HDP1 (HDP1EN + HDP1_PEND covering the FSBL; HDP1_ACCDIS engaged at
+      boot-exit).** Hides FSBL code+secrets from later boot stages at runtime —
+      distinct from WRP, which only write-protects. FSBL self-reads a
+      verification value after engaging HDP and halts on mismatch. (Research-
+      derived; UM3387 §3.2.3/§4.2.1. We observed `HDP1EN=0` in the OTP-burn note
+      above — i.e. NOT set today. Gap.)
+- [ ] **OEM2 / Debug-Authentication keys (OBKeys).** Provision a secret OEM2 DA
+      key so that post-RDP2 a regulated, cert-gated SWD reopen exists for external
+      security auditors and RMA — the only post-lockdown access path. The default
+      DA password is a hole; a default-password challenge MUST fail. (Research-
+      derived; ST AN6008. Not present today.)
+- [ ] **Ordering: commit WRP1A *before* RDP2.** WRP is removable only while
+      RDP≠2 (AN5156), so the WRP1A `UNLOCK=0` burn MUST precede the RDP2 burn or
+      the FSBL never becomes immutable. Pin into the ceremony order: WRP →
+      DA-finalize → **RDP2 last of all**.
+
+#### BHK survivability matrix (which events spare vs destroy the BHK)
+
+Consolidates the BHK wipe/regression behavior (the recurring "does a wipe brick
+the device?" question). The BHK lives DHUK-wrapped in **bank-1 flash page 126
+(`0x0C0F_C000`)** and is reloaded into TAMP backup registers every boot; the DS
+§3.43.2 confirms a tamper erases backup registers + SRAM2 + caches but **NOT main
+flash**.
+
+| Event | BHK flash page 126 | BHK backup-reg copy | SE050 SCP03 channel | Device reusable? |
+|---|---|---|---|---|
+| Tamper (HW or SW mode) | survives | cleared | survives (reloaded next boot) | ✅ after reboot |
+| User factory-reset (PIN known) | survives (spared) | — | survives | ✅ re-provision a fresh seed |
+| PIN-lockout wipe (10 wrong PINs) | survives (spared) | — | survives | ⚠️ yes — but the SE050 UserID is silicon-locked, so re-provision needs the OID-range bump (S-6), a firmware step |
+| Firmware update | survives (page carved out of the bank-2 update region) | — | survives | ✅ |
+| RDP regression (RDP1→0 mass-erase) | **WIPED** | cleared | **broken once SCP03 is BHK-rooted** (Phase 2C) | ⚠️ re-pair — see the Phase-2C SHIP-GATE in work-todo §7 |
+
+**Why sparing the BHK is correct (not a weakness):** the BHK alone reveals nothing
+— the seed is XOR-split (half_O/OPTIGA + half_E/SE050) and PIN-gated in SE silicon;
+the BHK only roots the SCP03 *bus-encryption* channel. The security guarantee is
+"wipe the **secrets**" (half_E/half_O/master), which every wipe path does. Wiping
+the BHK additionally would brick the SE pairing without crypto-erasing anything
+(unlike Trezor, we don't store the secret in MCU flash under the BHK —
+`docs/trezor-comparison.md §6.5`). The hard-brick "lost immutable root" risk is the
+**OPTIGA PBS** (on the DHUK, which survives mass-erase — that's *why* PBS is on
+DHUK), NOT the BHK.
+
+**Keep it spared (production):** WRP-lock page 126 (erase only at factory
+provisioning); when implementing hardware-mode tamper erase, scope it to backup
+regs / SRAM2 / caches — do NOT add a software step that erases page 126; and do
+NOT try to make the BHK survive RDP regression by OTP-storing or DHUK-deriving it
+(OTP-store burns scarce OTP; DHUK-derive collapses the Tier-2 isolation).
 
 #### Pre-commit checklist
 
@@ -443,6 +587,119 @@ escape hatch exists for user OIDs only.
    SE050-provision → option-byte lock in sequence, with per-part
    logs recording every step's observable (fingerprints, return
    codes, readback matches, DHUK probe output).
+
+### STM32U585 — datasheet cross-reference (DS13086, 2026-05-29)
+
+Cross-referenced Matrix-1 / this section against the STM32U585 datasheet (full
+text + a focused lifecycle/SWAP_BANK sub-audit). Full 92-finding set in the run
+output; the actionable residue is below. Most alarming "absent" items turned out
+already-enforced in code (see "Already enforced") — the genuine new work is the
+SWAP_BANK ship-blocker + four hardening residuals.
+
+#### ⚠️ SHIP-BLOCKER (new) — SWAP_BANK cross-bank boot redirect defeats FSBL immutability
+
+DS-proven chain (Table 4 note 6 + Table 4 "Flash main, RDP2, Write=Yes" + §3.4
+dual-bank boot): **SWAP_BANK is the one option byte still writable at RDP2**, and
+BOOT_LOCK/SECBOOTADD0 pin a *logical* address (0x0C00_0000) that SWAP_BANK remaps
+to the *other physical bank* — so BOOT_LOCK does NOT defend against it, and the
+FSBL's per-boot option-byte self-check (M-6) doesn't either (the swapped-in image
+just omits the check). **Our layout hands the attacker the staging area:** bank 1
+= secure world, **bank 2 = NS world (1 MB writable NS runtime)**, FSBL = bank-1
+pages 0..3 only, WRP1A as specced covers **bank 1 only** — the symmetric boot pages
+in physical bank 2 are NS-attributed and writable today. Write a malicious image
+into bank-2 boot pages → flip SWAP_BANK → it serves 0x0C00_0000.
+
+The exploit-vs-brick branch (swapped bank runs as *secure* → RCE, or stays NS →
+forced to RSS = DoS) is RM0456-only. **But the mitigation is UNCONDITIONAL** (WRP
+is enforced at write-time, closing both branches):
+
+- [ ] **WRP1A *and WRP2A*, `UNLOCK=0`, over pages 0..3 of BOTH physical banks**,
+      committed before RDP2. (Two WRP areas per bank @ 8 KB granularity — DS
+      §3.4.1; FSBL = 32 KB = one 8-KB-granular area per bank.)
+- [ ] **Stage the same known-good FSBL in both banks' pages 0..3** so a SWAP_BANK
+      flip is a harmless no-op, not a brick. (Erased+WRP-locked bank-2 boot pages
+      are the weaker fallback: swap → DoS instead of RCE.)
+- [ ] **Mirror HDP2 + SECWM2** over the bank-2 boot pages (DS §3.4.2: one HDP area
+      *per bank*; we only spec HDP1/SECWM1 today). The hide must cover both banks.
+- [ ] `SWAP_BANK=0` stays a checklist value but is **necessary-not-sufficient**
+      (mutable at RDP2 — pinning the bit is not durable; immutable identical boot
+      pages in both banks is the real fix).
+- [ ] **RM0456 must-verify (3 discriminators; DS is silent):** (a) does writing
+      SWAP_BANK swap which physical bank serves 0x0C00_0000; (b) is WRP/SECWM
+      attribution bound to the physical bank or the post-swap logical window;
+      (c) is SWAP_BANK programming secure-only under TZEN=1 (FLASH SECCR vs NSCR)
+      — if secure-only, the trigger is a compromised *updatable secure world* or
+      FI, not the NS USB stack (still in scope: surviving a compromised updatable
+      secure world is the FSBL's whole purpose — but state the trigger accurately).
+
+#### Hardening residuals (new, beyond SWAP_BANK)
+
+- [ ] **Hardware-mode tamper erase for the BHK-protecting tamper(s).** DS §3.43.2:
+      tampers support HW mode = immediate silicon erase of backup registers (incl.
+      BHK), no CPU in the loop. Use HW-mode as the **belt** (an attacker who
+      halts/glitches the core can't stop it) + the planned software
+      `trigger_lockout_wipe()` as **braces** (the coordinated dual-SE zeroize
+      HW-mode can't do). `tamp.rs` is log-only today; production needs both.
+- [ ] **Place secret SRAM in an ECC-on bank + treat double-error as tamper.** DS:
+      SRAM2 (64 KB) and 256 KB of SRAM3 support ECC (786 KB ECC-off / 722 KB
+      ECC-on). Put `master_secret` / slot-cache / reconstructed entropy in an
+      ECC-enabled region; an FI-induced bit-flip then faults (ECC double-error)
+      instead of silently corrupting a security decision — complements M-15.
+- [ ] **PVD + raised BOR** (M-15 bucket, cheap). Arm PVD (undervoltage interrupt)
+      → route the ISR to the zeroize/lockout path; raise BOR above the 1.71 V
+      default to shrink the voltage window a glitch can dwell in.
+- [ ] **TAMP backup-register secure-zone + privilege.** BHKLOCK is set (`bhk.rs`),
+      but configure the 3-zone backup-register SECCFGR boundary + mark the TAMP
+      *config itself* SECURE+privileged (`TAMP_PRIVCFGR`) so NS code cannot disable
+      tamper or the BHK-erase — the backup-domain analogue of the GTZC allowlist.
+- [ ] **Doc — RDP Level 0.5** is missing from our 0/1/2 progression. It exists
+      (TZEN-only: secure-debug closed, NS-debug + NS-flash R/W open) — the
+      manufacturer/auditor NS-debug-while-secure-locked state, NOT a field
+      substitute for L1/L2 (Flash Write=Yes at 0.5). Add to the ceremony narrative.
+- [ ] **Doc — enumerate the 11 internal tampers in M-14** (JTAG-if-RDP>0,
+      crypto-fault on RNG/SAES/AES/PKA, backup-voltage, temperature, LSE) — already
+      enabled in `tamp.rs`; M-14 just says "internal tamper on." Audit-facing.
+
+#### Already enforced in code — name them in Matrix-1 (NOT new holes)
+
+The automated pass grepped only docs; a code-check found these already implemented
+— the gap is only that the matrix doesn't name the controller:
+- **MPCBB** block-based secure SRAM — `sau.rs` configures MPCBB1/MPCBB2.
+- **TAMP BHKLOCK** — `bhk.rs` sets `TAMP_SECCFGR.BHKLOCK` (bit 30).
+- **RCC TrustZone** — auto-propagates from our TZSC peripheral-secure marking (DS
+  §3.8: RCC shares the securable-peripheral status), so SAES/HASH/RNG/PKA clock
+  controls are already secure.
+- **GPDMA exfil** — a non-secure DMA master is blocked from secure SRAM by MPCBB
+  (master-aware), which we configure. (Verify on silicon alongside the GTZC test.)
+- **GPIO** — all GPIOs secure after reset (fail-closed); we de-secure only USB
+  pins. Verify trusted-path GPIOs (OLED SPI, buttons, SE I2C) stay secure.
+
+#### Decisions to record (most resolve to "unused — document it")
+
+MPU (likely unused — no RTOS) · secure-world privilege axis (likely single-
+privilege) · OTFDEC (N/A — internal-flash boot; confirm no external encrypted
+region) · MPCWM (N/A — external mem unused) · DCACHE (external-memory-only →
+unused; still set the cache TZ-security attribute in FSBL) · IWDG/WWDG option-byte
+freeze-in-Debug config · flash NVM ECC (SED/DED — wire as an integrity signal for
+FSBL/counter pages) · DPA-resistant PKA (not load-bearing — SPHINCS+ is the only
+signer, BLS verify is over public data) · add the MCU's own cert line to Matrix-1.
+
+#### Confirms — resolved / corroborated against the DS
+
+- **OTP = 512 bytes**, one-way, survives mass-erase. Budget: 32 B master +
+  ~128 B rollback ≈ 160/512 — state the ceiling, tally future consumers.
+- **UID (96-bit) @0x0BFA_0590 is the read-only system-memory area**, SEPARATE from
+  the writable user-OTP at 0x0BFA_0080 — different sub-blocks, NOT an overlap.
+  (Both addresses are RM0456, not the DS.)
+- **RNG = NIST SP800-90B** (no AIS-31 claim — do not assert AIS-31).
+- **SAES is the ONLY DPA-side-channel-hardened AES** on the part — routing
+  DHUK/BHK through SAES is correct; never route a secret through the plain AES.
+- **Tamper budget for our exact part** (STM32U585AII6Q, UFBGA169 + SMPS):
+  **8 external tamper pins, 7 active meshes**; 32 backup registers (we use 8 → 24 spare).
+- **DHUK rooted in an OTP-based RHUK; BHK cleared on tamper/RDP-regression** ✓.
+- ⚠️ **SESIP3 + PSA Level 3** — DS says "(Target)" = assurance *target*. Verify
+  against the PSA/SESIP registry before citing as achieved (same caution as the
+  OPTIGA cert number). **DEV_ID 0x482 is RM0456** (not the DS) — cite it in Phase 1.1.
 
 ### SE050 — SCP03 + ADMIN provisioning
 
@@ -626,6 +883,46 @@ build-time path back to `0x0B` without an explicit rollback feature
 — and rolling back exposes every device to the same factory default
 that made rotation necessary in the first place. Treat a lost
 derivation root as a total loss of that chip.
+
+### SE050 — datasheet cross-reference (AN12413/AN12436, 2026-05-29)
+
+Variant pinned **SE050E2 / OEF 0xA921** (see Matrix-3 preamble). Matrix-3 rows carry
+the per-row corrections; the residuals + decisions below come from the AN12413/AN12436
+cross-reference (full 56-finding set in the run output).
+
+- **half_E `ALLOW_WRITE` (write-once) — SHIP ITEM (work-todo).** Code grants READ|WRITE|
+  DELETE (REQUIRE_SM-gated); READ+DELETE are design-mandatory, WRITE is droppable and MUST
+  be dropped at the FIRST provisioning run (policy immutable post-create). [S-C]
+- **S-7 closed (doc side):** AN12413 §3.2.4.4 — a TYPE_USERID object's auth-attempts attribute
+  is spec'd to "remain 0," so the SE050 boot-reconcile leg is dead-by-spec (stronger than the
+  0x6986 reason already cited). Code behavior already correct (returns `None` → leg skipped);
+  the `mod.rs:527/533` comment mislabels the field → fix the comment (queued code change).
+- **Variant/`GetVersion` assertion (work-todo)** — expected OEF `0xA921`, fail-closed (anti-substitution).
+- **Pre-provisioned NXP credential objects** (`0xF000_0xxx` cloud keys + `0x7FFF_xxxx`) survive
+  DeleteAll and are undeletable — code already skips them (`apdu.rs:1022`). Add a provisioning-
+  acceptance row: `ReadIDList`, confirm the only non-NXP objects are PQ1's; document the NXP
+  objects are off our trust path.
+- **Applet LockState / transport lock** — assert the applet is **Active** at boot (GetVersion/
+  CreateSession probe) and fail loudly if transport-locked, rather than letting SCP03 fail
+  opaquely. Optionally evaluate `PERSISTENT_LOCK` + `RESERVED_ID_TRANSPORT` (held in PQ1's HSM)
+  as a provisioning tamper-seal.
+- **Platform-SCP-not-forced (decide):** SE050E defaults `SCP_NOT_REQUIRED`; we rely on per-object
+  `REQUIRE_SM` (sufficient for half_E). Decide whether to also `SetPlatformSCPRequest` to force
+  the whole channel as defense-in-depth.
+- **Smaller attack-surface items (verify/decide):** I²C-master feature (`RESERVED_ID_I2CM_ACCESS`
+  / `CONFIG_I2CM`) — confirm not exploitable; strong-attack/tamper-fault counter
+  (`RESERVED_ID_ATTACK_COUNTER`) — could be read as a tamper signal; secure-import
+  (`ImportExternalObject` + RFC3394 wrapped-key) — confirm no unexpected injection path.
+- **Decisions to record (unused):** PCR / `REQUIRE_PCR_VALUE` (we do measured-boot MCU-side) ·
+  ECKey session (unused — platform SCP03/AESKey only; `RESERVED_ID_ECKEY_SESSION` is
+  NXP-provisioned device-unique, not a secret to rely on) · Crypto Object lifecycle (N/A —
+  invariant #5, no crypto) · `POLICY_OBJ_FORBID_ALL` for spare/provisioning objects.
+- **Confirms that resolve:** default Platform SCP03 keys for our variant + P1=0x33 ✓; PUT KEY
+  keyset 0x0B ✓; **per-object `REQUIRE_SM` forces a secure channel for half_E even with platform
+  SCP not forced** ✓ (our confidentiality basis); `RESERVED_ID_FACTORY_RESET` (0x7FFF0205)
+  NXP-reserved/unavailable ✓ (corroborates S-6 + the BHK Phase-2C ship-gate); UserID immutable
+  post-create + max_attempts 0..255 / 0=unlimited / prod=10 ✓; CC EAL6+ ✓; object attributes
+  immutable after creation = the spec root-cause of S-6/S-7 ✓.
 
 ### Supply-chain attestation (work-todo #22)
 
