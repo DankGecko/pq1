@@ -113,6 +113,7 @@ pub fn grind_r(
 pub fn compute_fors_root(
     seed: &[u8; 32],
     sk_seed: &[u8; 32],
+    ht_idx: u32,
     tree_idx: u32,
 ) -> [u8; N] {
     // Treehash: process 2^A leaves left-to-right with a stack.
@@ -123,8 +124,8 @@ pub fn compute_fors_root(
 
     for j in 0..n_leaves {
         // Compute leaf: th(seed, leaf_adrs, secret)
-        let secret = fors_secret(sk_seed, tree_idx, j as u32);
-        let leaf_adrs = make_adrs(0, 0, ADRS_FORS_TREE, tree_idx, 0, 0, j as u32);
+        let secret = fors_secret(sk_seed, ht_idx, tree_idx, j as u32);
+        let leaf_adrs = make_adrs(0, u64::from(ht_idx), ADRS_FORS_TREE, tree_idx, 0, 0, j as u32);
         let mut node = th(seed, &leaf_adrs, &pad16(&secret));
         let mut node_h = 0u32;
 
@@ -135,7 +136,7 @@ pub fn compute_fors_root(
             let parent_idx = (j >> (node_h + 1)) as u32;
             let adrs = make_adrs(
                 0,
-                0,
+                u64::from(ht_idx),
                 ADRS_FORS_TREE,
                 tree_idx,
                 0,
@@ -164,10 +165,11 @@ pub fn compute_fors_root(
 pub fn sign_fors_tree(
     seed: &[u8; 32],
     sk_seed: &[u8; 32],
+    ht_idx: u32,
     tree_idx: u32,
     leaf_idx: u32,
 ) -> ([u8; N], [[u8; N]; A]) {
-    let secret = fors_secret(sk_seed, tree_idx, leaf_idx);
+    let secret = fors_secret(sk_seed, ht_idx, tree_idx, leaf_idx);
 
     // Build the tree and extract the auth path via Treehash.
     // For each level h, we need the sibling of our path node at that level.
@@ -181,8 +183,8 @@ pub fn sign_fors_tree(
     let target_idx = leaf_idx;
 
     for j in 0..n_leaves {
-        let s = fors_secret(sk_seed, tree_idx, j as u32);
-        let leaf_adrs = make_adrs(0, 0, ADRS_FORS_TREE, tree_idx, 0, 0, j as u32);
+        let s = fors_secret(sk_seed, ht_idx, tree_idx, j as u32);
+        let leaf_adrs = make_adrs(0, u64::from(ht_idx), ADRS_FORS_TREE, tree_idx, 0, 0, j as u32);
         let mut node = th(seed, &leaf_adrs, &pad16(&s));
         let mut node_h = 0u32;
 
@@ -192,7 +194,7 @@ pub fn sign_fors_tree(
             let parent_idx = (j >> (node_h + 1)) as u32;
             let adrs = make_adrs(
                 0,
-                0,
+                u64::from(ht_idx),
                 ADRS_FORS_TREE,
                 tree_idx,
                 0,
@@ -237,7 +239,7 @@ pub fn sign_fors_tree(
 /// Compute the FORS public key from all K tree roots.
 ///
 /// `fors_pk = th_multi(seed, fors_roots_adrs, roots[0..K])`
-pub fn compute_fors_pk(seed: &[u8; 32], roots: &[[u8; N]; K]) -> [u8; N] {
-    let roots_adrs = make_adrs(0, 0, ADRS_FORS_ROOTS, 0, 0, 0, 0);
+pub fn compute_fors_pk(seed: &[u8; 32], ht_idx: u32, roots: &[[u8; N]; K]) -> [u8; N] {
+    let roots_adrs = make_adrs(0, u64::from(ht_idx), ADRS_FORS_ROOTS, 0, 0, 0, 0);
     th_multi(seed, &roots_adrs, roots)
 }

@@ -58,7 +58,7 @@ contract PinnedCodehashesTest is Test {
     bytes32 constant PQ_SMART_WALLET_FACTORY_CODEHASH =
         0xc22d39023fd71bf073fa9e77cac96f8aeaf027a166f8cfd2373dc0c089345185;
     bytes32 constant SPHINCS_C10_ASM_CODEHASH =
-        0x919cf8ef4b028b50f51de2e71aba7d08900d0e59833d003eed68102c7e9289c0;
+        0xf1ef4ccee22e6b39446723232fe39761f089c7195941b2c12576956b38fcfef5;
 
     SPHINCsC10Asm internal sphincs;
     MockSPHINCSVerifier internal c10;

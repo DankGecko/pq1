@@ -370,12 +370,19 @@ pub fn wots_secret(
 
 /// FORS secret key derivation.
 ///
-/// `sha256(sk_seed_b32 || "fors" || to_b4(tree_idx) || to_b4(leaf_idx))[0..N]`
-pub fn fors_secret(sk_seed: &[u8; 32], tree_idx: u32, leaf_idx: u32) -> [u8; N] {
+/// `sha256(sk_seed_b32 || "fors" || to_b4(ht_idx) || to_b4(tree_idx) || to_b4(leaf_idx))[0..N]`
+///
+/// `ht_idx` is the hypertree leaf position. Binding it here makes every one
+/// of the `2^H` hypertree positions an **independent** FORS forest, instead
+/// of one shared forest reused at every position. Without it, `fors_pk` is a
+/// per-key constant and a passive observer who collects enough signatures can
+/// reassemble the shared forest and forge (CWE-347 / few-time-key reuse).
+pub fn fors_secret(sk_seed: &[u8; 32], ht_idx: u32, tree_idx: u32, leaf_idx: u32) -> [u8; N] {
     bump!(FORS_SECRET);
     let mut h = Sha256::new();
     h.update(sk_seed);
     h.update(b"fors");
+    h.update(ht_idx.to_be_bytes()); // to_b4 — hypertree-position binding
     h.update(tree_idx.to_be_bytes()); // to_b4
     h.update(leaf_idx.to_be_bytes()); // to_b4
     truncate(&h.finalize().into())

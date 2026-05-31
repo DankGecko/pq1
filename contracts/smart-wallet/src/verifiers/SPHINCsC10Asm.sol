@@ -90,13 +90,17 @@ contract SPHINCsC10Asm {
             for { let i := 0 } lt(i, 12) { i := add(i, 1) } {
                 let treeIdx := and(shr(mul(i, 11), dVal), 0x7FF) // 11-bit indices
                 let secretVal := and(calldataload(add(sigBase, add(16, shl(4, i)))), N_MASK)
-                let leafAdrs := or(shl(128, 3), or(shl(96, i), treeIdx))
+                // FORS forest bound to hypertree leaf position: htIdx in the
+                // ADRS tree field (bits 160..223). Mirrors the Rust signer's
+                // make_adrs(0, ht_idx, FORS_TREE, ...). Without it the FORS
+                // forest is shared across all 2^18 positions and forgeable.
+                let leafAdrs := or(shl(160, htIdx), or(shl(128, 3), or(shl(96, i), treeIdx)))
                 mstore(0x20, leafAdrs)
                 mstore(0x40, secretVal)
                 pop(staticcall(gas(), 0x02, 0x00, 0x60, OUT, 32))
                 let node := and(mload(OUT), N_MASK)
 
-                let treeAdrsBase := or(shl(128, 3), shl(96, i))
+                let treeAdrsBase := or(shl(160, htIdx), or(shl(128, 3), shl(96, i)))
                 let pathIdx := treeIdx
                 // AUTH_START=224, auth per tree = 11*16 = 176
                 let authPtr := add(sigBase, add(224, mul(i, 176)))
@@ -120,7 +124,7 @@ contract SPHINCsC10Asm {
             // Last tree (forced-zero)
             {
                 let lastSecret := and(calldataload(add(sigBase, add(16, shl(4, 12)))), N_MASK) // 16+12*16=208
-                mstore(0x20, or(shl(128, 3), shl(96, 12)))
+                mstore(0x20, or(shl(160, htIdx), or(shl(128, 3), shl(96, 12))))
                 mstore(0x40, lastSecret)
                 // 0x80 + 12*0x20 = 0x80 + 0x180 = 0x200
                 pop(staticcall(gas(), 0x02, 0x00, 0x60, OUT, 32))
@@ -129,7 +133,8 @@ contract SPHINCsC10Asm {
 
             // Compress 13 roots: sha256(seed || rootsAdrs || 13 roots)
             // = 32 + 32 + 13*32 = 480 = 0x1E0
-            mstore(0x20, shl(128, 4))
+            // rootsAdrs also carries htIdx in the tree field (position binding).
+            mstore(0x20, or(shl(160, htIdx), shl(128, 4)))
             for { let i := 0 } lt(i, 13) { i := add(i, 1) } {
                 mstore(add(0x40, shl(5, i)), mload(add(0x80, shl(5, i))))
             }

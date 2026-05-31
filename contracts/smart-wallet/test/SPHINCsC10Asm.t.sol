@@ -37,15 +37,19 @@ contract SPHINCsC10AsmTest is Test {
     /// annotation) and I-2 (add N-mask layout check on pkSeed/pkRoot).
     /// RE-PINNED 2026-05-27 to 0x919c…: the verifier SOURCE is UNCHANGED —
     /// this is a metadata/toolchain-drift refresh, not a logic change (the
-    /// prior 0x94a6… pin predated in-progress contract work; a clean
-    /// rebuild reconciles `runtimeCode` keccak and EXTCODEHASH to 0x919c…).
-    /// The "source diff required" rule below is intentionally excepted here
-    /// and called out in the commit message; A3.1's Halmos/differential
-    /// discharge is PENDING re-run against this codehash (AXIOM_STATUS.json).
+    /// RE-PINNED (0x919c… → 0xf1ef…) for the FORS position-binding fix:
+    /// the verifier now folds the hypertree leaf index `htIdx` into the
+    /// four FORS ADRS words (leaf/auth-base/last-tree/roots) so each of the
+    /// 2^18 positions is an independent FORS forest. This closes the
+    /// shared-forest forgery (one constant fors_pk reused at every position;
+    /// CWE-347). Paired with the matching `sphincs-c10` signer diff + the
+    /// regenerated `c10_test_vectors.json` in the same commit.
+    /// A3.1's Halmos/differential discharge is PENDING re-run against this
+    /// codehash (AXIOM_STATUS.json).
     /// Any change here MUST be paired with a verifier source diff in
     /// the same commit + a justification in the commit message.
     bytes32 internal constant EXPECTED_RUNTIME_CODEHASH =
-        0x919cf8ef4b028b50f51de2e71aba7d08900d0e59833d003eed68102c7e9289c0;
+        0xf1ef4ccee22e6b39446723232fe39761f089c7195941b2c12576956b38fcfef5;
 
     /// Gas ceiling for a single `verify(valid sig)`. The hand-tuned
     /// Yul currently runs ~1.7-4M gas (see handoff §8 footgun #3).

@@ -127,11 +127,12 @@ fn sign_inner(
     for step in 0..(K - 1) {
         let t = fors_order[step] as usize;
         let (secret, auth_path) =
-            fors::sign_fors_tree(&seed, sk_seed, t as u32, fors_indices[t]);
+            fors::sign_fors_tree(&seed, sk_seed, ht_idx, t as u32, fors_indices[t]);
         fors_secrets[t] = secret;
         fors_auth_paths[t] = auth_path;
         fors_roots[t] = reconstruct_fors_root(
             &seed,
+            ht_idx,
             t as u32,
             fors_indices[t],
             &secret,
@@ -144,10 +145,10 @@ fn sign_inner(
     }
 
     // Last tree (forced-zero): the "secret" is the tree root
-    let last_root = fors::compute_fors_root(&seed, sk_seed, (K - 1) as u32);
+    let last_root = fors::compute_fors_root(&seed, sk_seed, ht_idx, (K - 1) as u32);
     fors_secrets[K - 1] = last_root;
     let last_leaf_adrs =
-        crate::address::make_adrs(0, 0, ADRS_FORS_TREE, (K - 1) as u32, 0, 0, 0);
+        crate::address::make_adrs(0, u64::from(ht_idx), ADRS_FORS_TREE, (K - 1) as u32, 0, 0, 0);
     fors_roots[K - 1] = crate::hash::th(&seed, &last_leaf_adrs, &pad16(&last_root));
 
     report(32);
@@ -169,7 +170,7 @@ fn sign_inner(
     debug_assert_eq!(offset, SIG_FORS_TOTAL);
 
     // Compute FORS public key
-    let fors_pk = fors::compute_fors_pk(&seed, &fors_roots);
+    let fors_pk = fors::compute_fors_pk(&seed, ht_idx, &fors_roots);
 
     // 4. Sign hypertree: D=2 layers
     let mut current_node = fors_pk;
@@ -304,6 +305,7 @@ pub fn verify(
     for t in 0..(K - 1) {
         fors_roots[t] = reconstruct_fors_root(
             &seed,
+            ht_idx,
             t as u32,
             fors_indices[t],
             &fors_secrets[t],
@@ -312,11 +314,11 @@ pub fn verify(
     }
 
     // Last tree (forced-zero): secret IS the root
-    let last_adrs = crate::address::make_adrs(0, 0, ADRS_FORS_TREE, (K - 1) as u32, 0, 0, 0);
+    let last_adrs = crate::address::make_adrs(0, u64::from(ht_idx), ADRS_FORS_TREE, (K - 1) as u32, 0, 0, 0);
     fors_roots[K - 1] =
         crate::hash::th(&seed, &last_adrs, &pad16(&fors_secrets[K - 1]));
 
-    let fors_pk = fors::compute_fors_pk(&seed, &fors_roots);
+    let fors_pk = fors::compute_fors_pk(&seed, ht_idx, &fors_roots);
 
     // 5. Verify hypertree
     let mut current_node = fors_pk;
@@ -380,12 +382,13 @@ pub fn verify(
 /// Reconstruct a FORS tree root from a leaf secret and auth path.
 fn reconstruct_fors_root(
     seed: &[u8; 32],
+    ht_idx: u32,
     tree_idx: u32,
     leaf_idx: u32,
     secret: &[u8; N],
     auth_path: &[[u8; N]; A],
 ) -> [u8; N] {
-    let leaf_adrs = crate::address::make_adrs(0, 0, ADRS_FORS_TREE, tree_idx, 0, 0, leaf_idx);
+    let leaf_adrs = crate::address::make_adrs(0, u64::from(ht_idx), ADRS_FORS_TREE, tree_idx, 0, 0, leaf_idx);
     let mut node = crate::hash::th(seed, &leaf_adrs, &pad16(secret));
     let mut path_idx = leaf_idx;
 
@@ -393,7 +396,7 @@ fn reconstruct_fors_root(
         let parent_idx = path_idx >> 1;
         let adrs = crate::address::make_adrs(
             0,
-            0,
+            u64::from(ht_idx),
             ADRS_FORS_TREE,
             tree_idx,
             0,
