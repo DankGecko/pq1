@@ -74,28 +74,45 @@ contract PQSmartWallet is IAccount06, PQMultiOwnable, ERC1271 {
     uint256 private constant SIG_VALIDATION_FAILED = 1;
     uint256 private constant SIG_VALIDATION_SUCCESS = 0;
 
-    // ── Transient storage slots (EIP-1153) ─────────────────────────
+    // ── Transient validated-op credits (EIP-1153) ──────────────────
     //
-    // EIP-4337 v0.6 pairs `validateUserOp` and the executed callData
-    // inside the same transaction. We thread two one-shot tokens via
-    // transient storage so the executed call is forced to match the
-    // signature that authorised it:
+    // EIP-4337 v0.6 `handleOps` runs ALL `validateUserOp`s first, then
+    // ALL executions. To force each executed callData to match the
+    // signature that authorised it, `_validateSignature` stamps a
+    // transient *credit* for the validated op that the execution phase
+    // consumes.
     //
-    //   * `_TS_VALIDATED_OWNER_INDEX_PLUS_ONE` — the wrapper's
-    //     `ownerIndex` from `_validateSignature`, offset by +1 so 0
-    //     means "no validation has happened in this tx". Read and
-    //     cleared by `executeWithOffchainCount` /
-    //     `executeBatchWithOffchainCount` to enforce H-3 parity.
-    //   * `_TS_PENDING_BOOTSTRAP_BUMP` — set to 1 whenever a bootstrap
-    //     UserOp validates. Read and cleared by `addOwnerBytes`
-    //     immediately after `_addOwner` succeeds, gating the actual
-    //     bootstrap-budget bump (audit M-1). Bumping in validation
-    //     would otherwise burn 1/65536 of the cap for every UserOp
-    //     whose execution reverts (e.g. on `AlreadyOwner`).
+    // The credit is a per-`ownerIndex` COUNTER, not a single shared
+    // token. A bundle may legitimately carry several UserOps for the
+    // same wallet, so N validations must hand N credits to N executions.
+    // The previous single-slot token collapsed under 2+ ops per wallet
+    // per bundle: the later validation clobbered the earlier credit, the
+    // first execute consumed it, and every later execute then either
+    // reverted (slot path — liveness) or silently skipped its
+    // bootstrap-budget bump (bootstrap path — cap under-count).
     //
-    // Both slots auto-clear at end of transaction (EIP-1153 semantics).
-    uint256 private constant _TS_VALIDATED_OWNER_INDEX_PLUS_ONE = 0;
-    uint256 private constant _TS_PENDING_BOOTSTRAP_BUMP = 1;
+    //   * ownerIndex 0 (bootstrap): each validated `addOwnerBytes`
+    //     increments credit[0]; `addOwnerBytes` consumes one credit
+    //     AFTER `_addOwner` succeeds, gating the deferred bootstrap
+    //     bump (audit M-1 — a reverting `_addOwner` rolls the consume
+    //     back, so it never burns a unit). N registrations in one
+    //     bundle now bump the cap N times, not once.
+    //   * ownerIndex >= 1 (offchain-count execute paths): each validated
+    //     `execute*WithOffchainCount` increments credit[ownerIndex]; the
+    //     matching execute consumes one (anti-impersonation + one-shot
+    //     replay guard, audit H-3). `removeOwnerAtIndex` carries no
+    //     ownerIndex argument and is authorised by validation alone, so
+    //     it neither stamps nor consumes a credit.
+    //
+    // H-3 parity (calldata ownerIndex == signed wrapper ownerIndex) is
+    // enforced in `_validateSignature` for the offchain-count paths so a
+    // credit is unambiguously owned by the slot that signed it, even when
+    // several slots share one bundle.
+    //
+    // Credits live at `keccak256(ownerIndex, _TS_CREDIT_NAMESPACE)` and
+    // auto-clear at end of transaction (EIP-1153 semantics).
+    uint256 private constant _TS_CREDIT_NAMESPACE =
+        0xb16be5bfba32ddb324f3386598c391a82b15cf64d18acab2fbda19f75b9962d8;
 
     // ── Errors ──────────────────────────────────────────────────────
 
@@ -219,7 +236,7 @@ contract PQSmartWallet is IAccount06, PQMultiOwnable, ERC1271 {
         bytes calldata data
     ) external returns (bytes memory) {
         if (msg.sender != address(_entryPoint)) revert NotFromEntryPoint();
-        _consumeValidatedOwnerIndex(ownerIndex);
+        if (!_consumeValidatedCredit(ownerIndex)) revert OwnerIndexMismatch();
         if (target == address(this)) revert SelfCallForbidden();
         _setOffchainSigCount(
             ownerIndex,
@@ -244,7 +261,7 @@ contract PQSmartWallet is IAccount06, PQMultiOwnable, ERC1271 {
         bytes[] calldata datas
     ) external {
         if (msg.sender != address(_entryPoint)) revert NotFromEntryPoint();
-        _consumeValidatedOwnerIndex(ownerIndex);
+        if (!_consumeValidatedCredit(ownerIndex)) revert OwnerIndexMismatch();
         _setOffchainSigCount(
             ownerIndex,
             newOffchainCount,
@@ -264,21 +281,41 @@ contract PQSmartWallet is IAccount06, PQMultiOwnable, ERC1271 {
         }
     }
 
-    /// @dev Consume the one-shot ownerIndex token written by
-    ///      `_validateSignature` and revert unless it matches the
-    ///      `ownerIndex` argument this caller supplied. Forces the
-    ///      executed call to operate on the same slot the bundle was
-    ///      authorised for (audit H-3) and to follow a validated
-    ///      UserOp at all (a direct EntryPoint-impersonating call
-    ///      with no preceding validate finds the slot empty).
-    function _consumeValidatedOwnerIndex(uint256 ownerIndex) private {
-        uint256 expectedPlusOne;
+    /// @dev Transient slot for the per-`ownerIndex` validated-op credit,
+    ///      namespaced to avoid collision with any future transient use.
+    function _creditSlot(uint256 ownerIndex) private pure returns (bytes32 slot) {
         assembly ("memory-safe") {
-            expectedPlusOne := tload(_TS_VALIDATED_OWNER_INDEX_PLUS_ONE)
-            tstore(_TS_VALIDATED_OWNER_INDEX_PLUS_ONE, 0)
+            mstore(0x00, ownerIndex)
+            mstore(0x20, _TS_CREDIT_NAMESPACE)
+            slot := keccak256(0x00, 0x40)
         }
-        if (expectedPlusOne == 0 || expectedPlusOne - 1 != ownerIndex) {
-            revert OwnerIndexMismatch();
+    }
+
+    /// @dev Validation phase: stamp one validated-op credit for `ownerIndex`.
+    ///      A per-index COUNTER, so several UserOps for the same wallet in one
+    ///      EntryPoint bundle each hand exactly one credit to the execution
+    ///      phase (v0.6 validates all ops, then executes all ops).
+    function _stampValidatedCredit(uint256 ownerIndex) private {
+        bytes32 slot = _creditSlot(ownerIndex);
+        assembly ("memory-safe") {
+            tstore(slot, add(tload(slot), 1))
+        }
+    }
+
+    /// @dev Execution phase: consume one validated-op credit for `ownerIndex`.
+    ///      Returns whether a credit was present (and decremented). Its
+    ///      absence means either no validation stamped this index in the
+    ///      current tx (a direct EntryPoint-impersonating call with no
+    ///      preceding validate — anti-impersonation) or it was already spent
+    ///      (one-shot replay guard). H-3 parity (calldata ownerIndex ==
+    ///      wrapper ownerIndex) is enforced in `_validateSignature`, so the
+    ///      credit is owned by the slot that signed it.
+    function _consumeValidatedCredit(uint256 ownerIndex) private returns (bool had) {
+        bytes32 slot = _creditSlot(ownerIndex);
+        assembly ("memory-safe") {
+            let c := tload(slot)
+            had := gt(c, 0)
+            if had { tstore(slot, sub(c, 1)) }
         }
     }
 
@@ -295,19 +332,16 @@ contract PQSmartWallet is IAccount06, PQMultiOwnable, ERC1271 {
     ///         `execute*` path rejects `target == address(this)`, audit H-2).
     ///
     ///         Bootstrap-budget bump is deferred from `_validateSignature`
-    ///         to here (audit M-1): consume the transient
-    ///         `_TS_PENDING_BOOTSTRAP_BUMP` token AFTER `_addOwner`
-    ///         succeeds, so a revert in `_addOwner` (e.g. duplicate owner)
-    ///         no longer burns 1/65536 of the bootstrap cap.
+    ///         to here (audit M-1): consume one transient bootstrap credit
+    ///         AFTER `_addOwner` succeeds, so a revert in `_addOwner` (e.g.
+    ///         duplicate owner) no longer burns 1/65536 of the cap. The
+    ///         credit is a COUNTER, so N bootstrap UserOps sharing one
+    ///         EntryPoint bundle bump the cap N times — one per successful
+    ///         registration — rather than once (the single-token bug).
     function addOwnerBytes(bytes calldata newOwner) external {
         if (msg.sender != address(_entryPoint)) revert NotFromEntryPoint();
         _addOwner(newOwner);
-        uint256 pending;
-        assembly ("memory-safe") {
-            pending := tload(_TS_PENDING_BOOTSTRAP_BUMP)
-            tstore(_TS_PENDING_BOOTSTRAP_BUMP, 0)
-        }
-        if (pending == 1) _bumpBootstrapUses(MAX_BOOTSTRAP_USES);
+        if (_consumeValidatedCredit(0)) _bumpBootstrapUses(MAX_BOOTSTRAP_USES);
     }
 
     /// @notice Remove a slot owner. Only callable by the EntryPoint — i.e.
@@ -415,6 +449,21 @@ contract PQSmartWallet is IAccount06, PQMultiOwnable, ERC1271 {
             if (!_isSlotAllowedSelector(selector)) {
                 return SIG_VALIDATION_FAILED;
             }
+            // Audit H-3 (now enforced at validation): the offchain-count
+            // execute paths carry the target slot as their first calldata
+            // argument. It MUST equal the signed wrapper `ownerIndex`, so the
+            // credit stamped below is unambiguously owned by this slot even
+            // when the bundle carries several slots' UserOps. Rejecting here
+            // (rather than only at execution) is what keeps the per-index
+            // credit from being stolen by a co-bundled victim op.
+            // `removeOwnerAtIndex` takes a removal index, not the signer's
+            // index, and is excluded.
+            if (
+                selector != this.removeOwnerAtIndex.selector &&
+                _calldataOwnerIndex(userOp.callData) != ownerIndex
+            ) {
+                return SIG_VALIDATION_FAILED;
+            }
             // Combined cap: this Type 2 sig will bump `slotUses[i]` by 1,
             // so the post-bump combined total must still be `<= MAX_SLOT_USES`.
             // Equivalently, the pre-bump combined must be `< MAX_SLOT_USES`.
@@ -432,25 +481,25 @@ contract PQSmartWallet is IAccount06, PQMultiOwnable, ERC1271 {
             return SIG_VALIDATION_FAILED;
         }
 
-        // ── Counter bumps after successful verify ───────────────────
+        // ── Counter bumps + validated-op credit after successful verify ──
         //
         // Audit M-1: the bootstrap-budget bump is deferred to
         //   `addOwnerBytes` so a reverting execution (e.g. `AlreadyOwner`)
-        //   doesn't burn a bootstrap unit. We just mark the bump as
-        //   pending here and let the execution-phase consume it.
+        //   doesn't burn a bootstrap unit. We stamp a credit here and let
+        //   the execution phase consume it.
         //
-        // Audit H-3: stamp the validated ownerIndex into transient
-        //   storage (+1 so the absence sentinel stays 0) so
-        //   `executeWithOffchainCount` / `executeBatchWithOffchainCount`
-        //   can enforce that the calldata ownerIndex matches.
+        // Audit H-3: each offchain-count execute op gets a per-`ownerIndex`
+        //   credit, consumed by `execute*WithOffchainCount`. Counted (not a
+        //   single token), so 2+ ops for this wallet in one bundle are each
+        //   honoured. `removeOwnerAtIndex` is authorised by validation alone
+        //   (no execution-phase credit), so it bumps `slotUses` but stamps
+        //   no credit.
         if (ownerIndex == 0) {
-            assembly ("memory-safe") {
-                tstore(_TS_PENDING_BOOTSTRAP_BUMP, 1)
-            }
+            _stampValidatedCredit(0);
         } else {
             _bumpSlotUses(ownerIndex, MAX_SLOT_USES);
-            assembly ("memory-safe") {
-                tstore(_TS_VALIDATED_OWNER_INDEX_PLUS_ONE, add(ownerIndex, 1))
+            if (selector != this.removeOwnerAtIndex.selector) {
+                _stampValidatedCredit(ownerIndex);
             }
         }
         return SIG_VALIDATION_SUCCESS;
@@ -462,6 +511,18 @@ contract PQSmartWallet is IAccount06, PQMultiOwnable, ERC1271 {
         if (callData.length < 4) return bytes4(0);
         assembly {
             s := calldataload(callData.offset)
+        }
+    }
+
+    /// @dev Read the first ABI word (the `uint256 ownerIndex` argument) of an
+    ///      `execute*WithOffchainCount` calldata, used for the H-3 parity
+    ///      check in `_validateSignature`. Returns `type(uint256).max` when
+    ///      the calldata is too short to carry one — a value no installed
+    ///      owner index can equal, so the parity check fails closed.
+    function _calldataOwnerIndex(bytes calldata callData) private pure returns (uint256 v) {
+        if (callData.length < 36) return type(uint256).max;
+        assembly {
+            v := calldataload(add(callData.offset, 4))
         }
     }
 

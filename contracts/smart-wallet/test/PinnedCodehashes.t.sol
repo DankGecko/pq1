@@ -43,11 +43,20 @@ contract PinnedCodehashesTest is Test {
     //   * PQ_SMART_WALLET_CODEHASH    → Halmos (HalmosValidateUserOp + HalmosExecute)
     //   * PQ_SMART_WALLET_FACTORY_CODEHASH → Certora (PQSmartWalletFactory.spec)
     //   * SPHINCS_C10_ASM_CODEHASH    → cross_validation/ Lean ↔ Rust ↔ Solidity
+    // RE-PINNED after the multi-op-per-bundle fix (per-ownerIndex transient
+    // credit replacing the single validate->execute token; H-3 parity moved
+    // into validation). Halmos A3.2 discharge MUST be re-run against this
+    // hash. Factory + SPHINCsC10Asm hashes are unchanged (only
+    // PQSmartWallet.sol was edited).
     bytes32 constant PQ_SMART_WALLET_CODEHASH =
-        0xdc2aa6c4db5cc6ebec277d97ef6adada7c448d09a76749ddfa94edd4879a3680;
+        0x0a7078cc741e825c9b874fe379fb11e91e9236aebf9fcfda3a1f30fe404f2b5d;
     bytes32 constant PQ_MULTI_OWNABLE_CODEHASH = bytes32(0);  // embedded in PQSmartWallet; no independent deploy
+    // Factory RUNTIME LOGIC is unchanged by the multi-op-bundle fix; only its
+    // trailing IPFS-metadata hash moved, because PQSmartWallet.sol (a source in
+    // the factory's compilation unit) changed. The Certora factory spec proves
+    // the same logic and does not need re-running for this edit.
     bytes32 constant PQ_SMART_WALLET_FACTORY_CODEHASH =
-        0x604e4000bb7d3fef349d1f9b09e3f048c6baa7a37f10d1bdfebef9ce1ecf3e02;
+        0xc22d39023fd71bf073fa9e77cac96f8aeaf027a166f8cfd2373dc0c089345185;
     bytes32 constant SPHINCS_C10_ASM_CODEHASH =
         0x919cf8ef4b028b50f51de2e71aba7d08900d0e59833d003eed68102c7e9289c0;
 

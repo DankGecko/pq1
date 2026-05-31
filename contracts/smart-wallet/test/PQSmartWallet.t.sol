@@ -1058,10 +1058,10 @@ contract PQSmartWalletTest is Test {
         PQSmartWallet w = _deployWallet();
         c10.setValid(true);
 
-        // Validate a slot-1 sig wrapper, but with calldata
-        // `ownerIndex = 99`. Validation reads the wrapper's
-        // ownerIndex (1) and stamps tstore(0) = 2; execute reads
-        // its own calldata `ownerIndex = 99` and must revert.
+        // Wrapper signs as slot 1, but calldata names `ownerIndex = 99`.
+        // The H-3 parity check now fires at VALIDATION: the op is rejected
+        // before it can stamp a credit or burn slot 1's budget — which is
+        // what stops a co-bundled slot-99 op's credit from being stolen.
         bytes memory callData = abi.encodeCall(
             w.executeWithOffchainCount, (99, 0, address(0xbeef), 0, "")
         );
@@ -1069,11 +1069,12 @@ contract PQSmartWalletTest is Test {
         vm.prank(ENTRY_POINT_ADDR);
         assertEq(
             w.validateUserOp(_packedOp(address(w), callData, sig), bytes32(0), 0),
-            0,
-            "validation accepts the slot-1 wrapper"
+            1,
+            "mismatched ownerIndex rejected at validation"
         );
-        assertEq(w.slotUses(1), 1);
+        assertEq(w.slotUses(1), 0, "rejected op must NOT burn slot 1's budget");
 
+        // Defense in depth: a direct execute(99) still reverts (no credit).
         vm.prank(ENTRY_POINT_ADDR);
         vm.expectRevert(PQSmartWallet.OwnerIndexMismatch.selector);
         w.executeWithOffchainCount(99, 0, address(0xbeef), 0, "");
@@ -1108,9 +1109,11 @@ contract PQSmartWalletTest is Test {
         vm.prank(ENTRY_POINT_ADDR);
         assertEq(
             w.validateUserOp(_packedOp(address(w), callData, sig), bytes32(0), 0),
-            0
+            1,
+            "mismatched ownerIndex rejected at validation"
         );
 
+        // Defense in depth: a direct batch execute(99) still reverts.
         vm.prank(ENTRY_POINT_ADDR);
         vm.expectRevert(PQSmartWallet.OwnerIndexMismatch.selector);
         w.executeBatchWithOffchainCount(99, 0, tos, vals, ds);
