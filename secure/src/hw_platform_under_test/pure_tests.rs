@@ -265,7 +265,11 @@ fn positive_pka_bls12_381_field_size_384_bits() {
 
 #[test]
 fn positive_tamp_secure_alias_and_irqn_2() {
-    assert!(TAMP_SRC.contains("pub const TAMP: u32 = 0x5600_4400;"));
+    // RM0456 memory map: TAMP secure region is 0x5600_7C00..0x5600_7FFF
+    // (cross-checked against silicon-validated bhk.rs TAMP_S). The old
+    // 0x5600_4400 was LPTIM1 — a wrong base that this very pin used to
+    // re-assert, hiding the bug.
+    assert!(TAMP_SRC.contains("pub const TAMP: u32 = 0x5600_7C00;"));
     assert!(TAMP_SRC.contains("pub const TAMP_IRQN: u32 = 2;"));
 }
 
@@ -273,6 +277,19 @@ fn positive_tamp_secure_alias_and_irqn_2() {
 fn positive_tamp_rcc_pwr_secure_aliases() {
     assert!(TAMP_SRC.contains("pub const RCC: u32 = 0x5602_0C00;"));
     assert!(TAMP_SRC.contains("pub const PWR: u32 = 0x5602_0800;"));
+}
+
+#[test]
+fn positive_tamp_rcc_pwr_register_offsets() {
+    // Pin the corrected RCC/PWR register offsets against the
+    // offset-into-wrong-peripheral regression class (RM0456 §§10.10/11.8):
+    // RTCAPBEN lives in APB3ENR@0xA8 (NOT AHB3ENR), PWR_DBPR@0x28 (0x10 is
+    // SVMCR), PWR_BDCR1@0x20 (0x18 is WUCR2). PWREN stays in AHB3ENR@0x94.
+    assert!(TAMP_SRC.contains("rcc_ahb3enr: Reg32::new(RCC + 0x94)"));
+    assert!(TAMP_SRC.contains("rcc_apb3enr: Reg32::new(RCC + 0xA8)"));
+    assert!(TAMP_SRC.contains("pwr_dbpr: Reg32::new(PWR + 0x28)"));
+    assert!(TAMP_SRC.contains("pwr_bdcr1: Reg32::new(PWR + 0x20)"));
+    assert!(TAMP_SRC.contains("pub const RCC_APB3ENR_RTCAPBEN: u32 = 1 << 21;"));
 }
 
 #[test]

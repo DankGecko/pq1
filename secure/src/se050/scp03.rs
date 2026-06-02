@@ -31,6 +31,22 @@ use crate::scp03_logic::{
 
 use super::apdu::Se050Error;
 
+// The factory-key fallback only makes sense when the build *prefers*
+// derived keys (otherwise the preferred set already IS the factory keys
+// and there is nothing to fall back from). Catch the nonsensical combo
+// at compile time rather than shipping a no-op flag. (Defense-in-depth:
+// dead today because Cargo.toml declares the feature edge
+// `se050-scp03-allow-factory-fallback = ["se050-derived-scp03"]`; this
+// fires only if that edge is ever removed.)
+#[cfg(all(
+    feature = "se050-scp03-allow-factory-fallback",
+    not(feature = "se050-derived-scp03")
+))]
+compile_error!(
+    "se050-scp03-allow-factory-fallback requires se050-derived-scp03 \
+     (without derived keys the preferred set already is the factory keys)"
+);
+
 // Constants `PLATFORM_ENC/MAC/DEK`, `KEY_VERSION`, the SCP03 KDF
 // derivation-data constants, and the pure crypto helpers all live in
 // `crate::scp03_logic` now (see the `use` block at the top of this
@@ -122,9 +138,13 @@ impl Scp03Session {
 /// per-device keys when `se050-derived-scp03` is on; the published
 /// factory constants otherwise — see `load_platform_keys`). If that
 /// fails the card-cryptogram check (the signal that the chip holds a
-/// different key set), it retries once with the factory constants — so
-/// a `se050-derived-scp03` build also works against a chip that has not
-/// yet been `PUT KEY`-rotated. `KEY_VERSION` is `0x0B` either way.
+/// different key set), it retries once with the factory constants —
+/// but ONLY in a build that sets `se050-scp03-allow-factory-fallback`
+/// (the provisioning/rotation tool, §29, which must open a factory-key
+/// session to send GP PUT KEY). A runtime-signing SHIP build omits that
+/// flag and therefore **fails closed** on a derived-key mismatch rather
+/// than silently downgrading to the attacker-known published keys.
+/// `KEY_VERSION` is `0x0B` either way.
 pub unsafe fn establish(
     session: &mut Scp03Session,
     t1: &mut super::t1oi2c::T1State,
@@ -134,12 +154,19 @@ pub unsafe fn establish(
     match establish_with_keys(session, t1, &enc, &mac) {
         Ok(()) => Ok(()),
         Err(e) => {
-            // Only the derived-keys build has a meaningful fallback (the
-            // default build's preferred set already *is* the factory
-            // constants). Retry on a key-related failure — card-cryptogram
-            // mismatch (`Scp03`) or a status word like `0x6A88`; don't
+            // The published-factory-key fallback is GATED to the
+            // provisioning/rotation tool (`se050-scp03-allow-factory-
+            // fallback`). In a runtime-signing build this whole arm is
+            // compiled out, so a derived-key mismatch returns `Err(e)`
+            // and the SE050 stays locked — fail CLOSED, never fall back
+            // to the AN12436 keys an attacker also holds. When the flag
+            // IS set, retry once on a key-related failure (card-cryptogram
+            // mismatch `Scp03` or a status word like `0x6A88`); never
             // retry a pure transport glitch.
-            #[cfg(feature = "se050-derived-scp03")]
+            #[cfg(all(
+                feature = "se050-derived-scp03",
+                feature = "se050-scp03-allow-factory-fallback"
+            ))]
             if matches!(e, Se050Error::Scp03 | Se050Error::Status(_)) {
                 #[cfg(feature = "debug-log")]
                 secure_log!("[SCP03] derived-key establish failed ({:?}); falling back to factory keys", e);

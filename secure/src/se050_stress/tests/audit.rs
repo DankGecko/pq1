@@ -267,6 +267,129 @@ fn audit_admin_passive_read_refused(ctx: &mut StressCtx) -> StressResult {
 stress_test!(AUDIT_ADMIN_PASSIVE_READ_REFUSED, "audit_admin_passive_read_refused", Tier::Destructive, audit_admin_passive_read_refused);
 
 // ---------------------------------------------------------------------------
+// 9b. audit_write_once_enforced — half_E write-once policy on real silicon
+// ---------------------------------------------------------------------------
+
+/// Validates the 2026-06-02 half_E write-once fix (`write_binary_write_once`,
+/// whose user policy drops `ALLOW_WRITE`) against real silicon. Two claims
+/// no emulator can settle:
+///
+/// 1. **Create-without-`ALLOW_WRITE` SUCCEEDS** — the brick-risk check.
+///    The creating `WriteBinary` is authorized by the SCP03 session, not
+///    the (not-yet-existent) object policy, so an object whose policy omits
+///    `ALLOW_WRITE` is still creatable. If silicon instead REJECTED the
+///    create, production provisioning would brick for *every* user (worse
+///    than the desync the fix prevents) — so this is the load-bearing one.
+/// 2. **In-place overwrite is REFUSED** — the write-once guarantee. A
+///    second `WriteBinary` to the existing OID must fail (expect SW=0x6985
+///    "conditions not satisfied"), and the original payload must survive
+///    intact (a live PIN session can't silently re-seed half_E).
+fn audit_write_once_enforced(ctx: &mut StressCtx) -> StressResult {
+    let user_oid = ctx.oid(0x01);
+    let wo_oid = ctx.oid(0x02); // write-once: policy WITHOUT ALLOW_WRITE
+    let rw_oid = ctx.oid(0x03); // control: policy WITH ALLOW_WRITE
+    let user_pin: [u8; 8] = *b"w1userpn";
+    // half_E-shaped (32 B) first share + an attempted re-seed.
+    const V1: [u8; 32] = [0x91; 32];
+    const V2: [u8; 32] = [0x92; 32];
+
+    ctx.delete_scratch(wo_oid)?;
+    ctx.delete_scratch(rw_oid)?;
+    ctx.delete_scratch(user_oid)?;
+
+    ctx.provision_test_userid(user_oid, &user_pin, 5, AdminPolicy::WithAdminDelete)?;
+
+    // 1. CREATE the write-once object (policy omits ALLOW_WRITE). MUST
+    //    succeed — the creating WriteBinary is session-authorized, not
+    //    policy-gated. If it failed, production provisioning would brick
+    //    for every user (the load-bearing check).
+    ctx.try_write_user_gated_data_write_once(wo_oid, &V1, user_oid, Some(STRESS_ADMIN_USERID))
+        .map_err(|e| {
+            secure_log!(
+                "[S][stress][audit-wo] BRICK RISK — create of policy-without-ALLOW_WRITE object FAILED: {:?}",
+                e,
+            );
+            StressError::Assertion {
+                what: "SE050 refused to CREATE a write-once (no-ALLOW_WRITE) object — would brick provisioning",
+                iter: 0,
+            }
+        })?;
+    secure_log!("[S][stress][audit-wo] create-without-ALLOW_WRITE SUCCEEDED — no provisioning brick");
+
+    // Control object WITH ALLOW_WRITE (default write_binary_gated policy).
+    // Same user gating, same data — only the ALLOW_WRITE bit differs.
+    ctx.write_user_gated_data(rw_oid, &V1, user_oid, Some(STRESS_ADMIN_USERID))?;
+
+    // Sanity: USER auth reads the write-once share (seed-reconstruction path).
+    let sid = ctx.open_user_session(user_oid, &user_pin)?;
+    let mut buf = [0u8; 64];
+    let n = ctx.read_authed_at(&sid, wo_oid, &mut buf)?;
+    ctx.assert_eq("write-once read-back returns V1", &buf[..n], &V1)?;
+
+    // 2a. CONTROL — a session-authed DATA update (the attacker's re-seed
+    //     path) on the ALLOW_WRITE object MUST succeed. This proves the
+    //     write_authed APDU is well-formed AND a user session can update
+    //     an object whose policy grants WRITE — so the refusal at 2b can
+    //     ONLY be the missing ALLOW_WRITE, not a malformed command.
+    let ctrl = ctx.try_write_authed(&sid, rw_oid, &V2);
+    if let Err(e) = &ctrl {
+        secure_log!(
+            "[S][stress][audit-wo] CONTROL update of ALLOW_WRITE object FAILED: {:?} (APDU format suspect — verdict inconclusive)",
+            e,
+        );
+    }
+    ctx.assert_true("control: ALLOW_WRITE object accepts session data update", ctrl.is_ok())?;
+    let m = ctx.read_authed_at(&sid, rw_oid, &mut buf)?;
+    ctx.assert_eq("control object mutated to V2", &buf[..m], &V2)?;
+
+    // 2b. WRITE-ONCE — the IDENTICAL session-authed data update on the
+    //     no-ALLOW_WRITE object MUST be refused.
+    let attack = ctx.try_write_authed(&sid, wo_oid, &V2);
+    match attack {
+        Ok(()) => {
+            secure_log!(
+                "[S][stress][audit-wo] SECURITY FAILURE — write-once object ACCEPTED a session data update (ALLOW_WRITE gate ineffective)"
+            );
+            ctx.close_session(&sid);
+            return Err(StressError::Assertion {
+                what: "write-once object updated via session — half_E re-seedable by a PIN session",
+                iter: 0,
+            });
+        }
+        Err(Se050Error::Status(sw)) => {
+            secure_log!(
+                "[S][stress][audit-wo] write-once data update REFUSED with SW=0x{:04x} — ALLOW_WRITE gate holds",
+                sw,
+            );
+        }
+        Err(e) => {
+            secure_log!(
+                "[S][stress][audit-wo] write-once data update REFUSED with driver error: {:?} — ALLOW_WRITE gate holds",
+                e,
+            );
+        }
+    }
+
+    // 3. The write-once share MUST survive the refused update intact (V1).
+    //    The policy-denied write (0x6986) invalidates the SE050 session (a
+    //    later read on it returns 0x6a80), so recover via reinit + a fresh
+    //    session before the survival read — this also makes it the stronger
+    //    check: the share is unchanged across a simulated power cycle.
+    ctx.close_session(&sid);
+    ctx.se().reinit()?;
+    let sid2 = ctx.open_user_session(user_oid, &user_pin)?;
+    let s = ctx.read_authed_at(&sid2, wo_oid, &mut buf)?;
+    ctx.close_session(&sid2);
+    ctx.assert_eq("write-once payload survives refused update", &buf[..s], &V1)?;
+
+    secure_log!(
+        "[S][stress][audit-wo] PASS: create ok (no brick); control accepts update; write-once refuses + survives"
+    );
+    Ok(())
+}
+stress_test!(AUDIT_WRITE_ONCE_ENFORCED, "audit_write_once_enforced", Tier::Destructive, audit_write_once_enforced);
+
+// ---------------------------------------------------------------------------
 // 10. audit_unauth_read_refused
 // ---------------------------------------------------------------------------
 

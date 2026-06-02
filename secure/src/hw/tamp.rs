@@ -99,14 +99,20 @@ mod regs {
     // PWR (secure alias) — we need DBP (disable-backup-protection) +
     // MONEN (backup-domain voltage monitor).
     pub const PWR: u32 = 0x5602_0800;
-    // TAMP (secure alias, backup domain).
-    pub const TAMP: u32 = 0x5600_4400;
+    // TAMP (secure alias, backup domain). RM0456 Table 2 memory map:
+    // TAMP secure region is 0x5600_7C00..0x5600_7FFF (cross-checked
+    // against the silicon-validated `hw::bhk` TAMP_S = 0x5600_7C00).
+    // (Was 0x5600_4400 — a wrong base that pointed every TAMP register
+    // write at unrelated MMIO; `tamp` is log-only + was never silicon-
+    // validated, so it went unnoticed. See Fix-1 in the 2026-06 desk batch.)
+    pub const TAMP: u32 = 0x5600_7C00;
 
     // NVIC — TAMP_IRQn on STM32U585 is interrupt number 2.
     pub const TAMP_IRQN: u32 = 2;
 
     pub struct Regs {
         pub rcc_ahb3enr: Reg32,
+        pub rcc_apb3enr: Reg32,
         pub rcc_bdcr: Reg32,
         pub pwr_dbpr: Reg32,
         pub pwr_bdcr1: Reg32,
@@ -125,10 +131,17 @@ mod regs {
     // PWR registers are touched via disjoint-bit RMW.
     pub const REG: Regs = unsafe {
         Regs {
+            // RM0456 §11.8: AHB3ENR @ 0x94 (PWREN bit 2), APB3ENR @ 0xA8
+            // (RTCAPBEN bit 21 — RTC/TAMP APB clock; lives in APB3ENR, NOT
+            // AHB3ENR), BDCR @ 0xF0. §10.10: SVMCR @ 0x10, BDCR1 @ 0x20
+            // (MONEN bit 4), DBPR @ 0x28 (DBP bit 0). The prior pwr_dbpr @
+            // 0x10 actually hit SVMCR and pwr_bdcr1 @ 0x18 hit WUCR2 — both
+            // corrected here.
             rcc_ahb3enr: Reg32::new(RCC + 0x94),
+            rcc_apb3enr: Reg32::new(RCC + 0xA8),
             rcc_bdcr: Reg32::new(RCC + 0xF0),
-            pwr_dbpr: Reg32::new(PWR + 0x10),
-            pwr_bdcr1: Reg32::new(PWR + 0x18),
+            pwr_dbpr: Reg32::new(PWR + 0x28),
+            pwr_bdcr1: Reg32::new(PWR + 0x20),
             tamp_cr1: Reg32::new(TAMP + 0x00),
             tamp_cr3: Reg32::new(TAMP + 0x08),
             tamp_fltcr: Reg32::new(TAMP + 0x0C),
@@ -147,7 +160,10 @@ mod regs {
     pub const RCC_BDCR_RTCEN: u32 = 1 << 15;
 
     pub const RCC_AHB3ENR_PWREN: u32 = 1 << 2;
-    pub const RCC_AHB3ENR_RTCAPBEN: u32 = 1 << 21; // TAMP lives here
+    // RTCAPBEN — "RTC and TAMP APB clock enable" — is bit 21 of
+    // RCC_APB3ENR (RM0456 §11.8.36), NOT AHB3ENR. The TAMP backup
+    // registers are unreachable until this is set.
+    pub const RCC_APB3ENR_RTCAPBEN: u32 = 1 << 21;
     pub const PWR_DBPR_DBP: u32 = 1 << 0;
     pub const PWR_BDCR1_MONEN: u32 = 1 << 4;
 
@@ -186,8 +202,10 @@ fn init_lsi_and_rtc_clock() {
     use regs::*;
 
     // Enable PWR + RTCAPB clocks — needed before we can touch DBPR or
-    // TAMP registers.
-    REG.rcc_ahb3enr.set_bits(RCC_AHB3ENR_PWREN | RCC_AHB3ENR_RTCAPBEN);
+    // TAMP registers. PWREN lives in AHB3ENR, RTCAPBEN in APB3ENR — two
+    // separate registers (RM0456 §11.8), so two separate writes.
+    REG.rcc_ahb3enr.set_bits(RCC_AHB3ENR_PWREN);
+    REG.rcc_apb3enr.set_bits(RCC_APB3ENR_RTCAPBEN);
 
     // Disable backup-domain write protection (one-shot cookie).
     REG.pwr_dbpr.write(PWR_DBPR_DBP);

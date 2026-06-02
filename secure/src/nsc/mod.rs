@@ -107,6 +107,7 @@ mod trailer;
         feature = "boot-pulse",
         feature = "bhk-hardcoded-master-key",
         feature = "se050-rotate-scp03",
+        feature = "se050-scp03-allow-factory-fallback",
         feature = "sca-trigger",
         feature = "erc7730-dev-unattested",
     )
@@ -115,14 +116,17 @@ compile_error!(
     "Hardware release builds (stm32u585 + !debug_assertions) must not enable \
      debug-log / ui-semihosting / ui-mirror / ui-capture / mock-se / \
      otp-hardcoded-master-key / bhk-hardcoded-master-key / saes-self-test / \
-     uart-console / boot-pulse / se050-rotate-scp03 / sca-trigger / \
+     uart-console / boot-pulse / se050-rotate-scp03 / \
+     se050-scp03-allow-factory-fallback / sca-trigger / \
      erc7730-dev-unattested. These \
      features leak secure-world state, replace the SE with a mock, replace \
      the per-device OTP master key or BHK with a shared compile-time \
      constant, halt the boot flow after a diagnostic, stream diagnostic \
      bytes on PA9 UART, pulse PE13 with boot-progress markers, perform a \
-     one-shot irreversible SCP03 key-rotation ceremony then halt, or toggle \
-     a GPIO around security-critical primitives so a ChipWhisperer / \
+     one-shot irreversible SCP03 key-rotation ceremony then halt, fall back \
+     to the published AN12436 factory SCP03 keys on a derived-key mismatch \
+     (a fail-OPEN that hands the SE050 channel to attacker-known keys), or \
+     toggle a GPIO around security-critical primitives so a ChipWhisperer / \
      NewAE-Scaffold rig can sync trace captures (a fatal leak on a \
      production unit). Hardware test images may opt in by also enabling \
      `e2e-test` (auto-provisioning, non-interactive) or `dev-testkey` \

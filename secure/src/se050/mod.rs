@@ -1748,12 +1748,16 @@ impl Se050 {
                         "[SE050/store] writing 0x{:08x} (len={})",
                         obj_id, data.len()
                     );
-                    apdu::write_binary_gated(
+                    // WRITE-ONCE: ENTROPY_OBJ (half_E) / VK / bootstrap_vk
+                    // must not be re-seedable by a live PIN session (would
+                    // desync the dual-SE XOR split). Admin-delete preserved
+                    // for the factory-reset/re-provision path.
+                    apdu::write_binary_write_once(
                         &mut self.t1, &mut self.scp03,
                         *obj_id, data, USERID_OBJ, admin_ref,
                     ).map_err(|e| {
                         secure_log!(
-                            "[SE050/store] write_binary_gated(0x{:08x}) FAILED: {:?}",
+                            "[SE050/store] write_binary_write_once(0x{:08x}) FAILED: {:?}",
                             obj_id, e
                         );
                         e
@@ -1854,7 +1858,9 @@ impl Se050 {
             for (obj_id, data) in &objs {
                 if !apdu::check_exists(&mut self.t1, &mut self.scp03, *obj_id).unwrap_or(false) {
                     secure_log!("[SE050/duress] writing 0x{:08x}", obj_id);
-                    apdu::write_binary_gated(
+                    // WRITE-ONCE: decoy half_E / VK / bootstrap_vk, same
+                    // re-seed-desync rationale as the real store_objects.
+                    apdu::write_binary_write_once(
                         &mut self.t1, &mut self.scp03,
                         *obj_id, data, DURESS_USERID_OBJ, admin_ref,
                     )?;

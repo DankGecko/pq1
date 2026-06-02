@@ -842,13 +842,38 @@ fn negative_admin_policy_grants_delete_only_not_read() {
 
 #[test]
 fn negative_user_policy_grants_full_access_through_user_userid() {
-    // The user-PIN-gated entry on a binary object must grant READ /
-    // WRITE / DELETE / REQUIRE_SM — anything less and unlock can't
-    // read the entropy, anything more and the chip would accept
-    // commands the firmware never validates.
-    assert!(APDU_SRC.contains(
-        "let primary_ar = AR_ALLOW_READ | AR_ALLOW_WRITE | AR_ALLOW_DELETE | AR_REQUIRE_SM;"
-    ));
+    // The default `write_binary_gated` user entry forwards the full
+    // READ | WRITE | DELETE | REQUIRE_SM set to the shared core (the AR
+    // is now an inline argument, not a `let primary_ar` binding). Scope
+    // the search to write_binary_gated's body so we don't accidentally
+    // match write_binary_write_once's (deliberately weaker) set.
+    let gated_body = APDU_SRC
+        .split("pub unsafe fn write_binary_gated(")
+        .nth(1)
+        .expect("write_binary_gated defined")
+        .split("pub unsafe fn ")
+        .next()
+        .expect("isolate write_binary_gated body");
+    assert!(gated_body
+        .contains("AR_ALLOW_READ | AR_ALLOW_WRITE | AR_ALLOW_DELETE | AR_REQUIRE_SM"));
+}
+
+#[test]
+fn negative_write_once_drops_allow_write_keeps_read_delete() {
+    // `write_binary_write_once` (half_E / VK / bootstrap_vk) must OMIT
+    // ALLOW_WRITE — so a live PIN session can't re-seed the share in
+    // place — while keeping READ (seed reconstruction) + DELETE
+    // (admin/self teardown) + REQUIRE_SM. Pinning the exact forwarded AR
+    // string proves WRITE is absent (a regression that re-added it would
+    // change the string and fail this assert).
+    let once_body = APDU_SRC
+        .split("pub unsafe fn write_binary_write_once(")
+        .nth(1)
+        .expect("write_binary_write_once defined")
+        .split("pub unsafe fn ")
+        .next()
+        .expect("isolate write_binary_write_once body");
+    assert!(once_body.contains("AR_ALLOW_READ | AR_ALLOW_DELETE | AR_REQUIRE_SM"));
 }
 
 #[test]
@@ -1220,13 +1245,27 @@ fn negative_se050_error_from_t1_collapses_to_transport() {
 // ═════════════════════════════════════════════════════════════════════
 
 #[test]
-fn negative_scp03_establish_falls_back_only_under_derived_feature() {
-    // Without `se050-derived-scp03` the "preferred" keys ARE the factory
-    // keys, so fallback would be a no-op. The retry path must be gated
-    // by `#[cfg(feature = "se050-derived-scp03")]` — otherwise every
-    // build accepts the factory keys after one failed attempt with
-    // device-derived keys, defeating the purpose of derived keys.
-    assert!(SCP03_SRC.contains("#[cfg(feature = \"se050-derived-scp03\")]\n            if matches!(e, Se050Error::Scp03 | Se050Error::Status(_)) {"));
+fn negative_scp03_establish_fallback_requires_derived_and_allow_flags() {
+    // The factory-key fallback in establish() must be gated on BOTH
+    // `se050-derived-scp03` AND `se050-scp03-allow-factory-fallback`, so
+    // a runtime-signing image (fallback flag off) FAILS CLOSED rather
+    // than retrying with the published AN12436 keys. Scope to
+    // establish()'s body and pin both required cfg features + the
+    // fallback call they guard.
+    let establish_body = SCP03_SRC
+        .split("pub unsafe fn establish(")
+        .nth(1)
+        .expect("establish defined")
+        .split("unsafe fn establish_with_keys(")
+        .next()
+        .expect("isolate establish body");
+    assert!(establish_body.contains("feature = \"se050-derived-scp03\""));
+    assert!(establish_body.contains("feature = \"se050-scp03-allow-factory-fallback\""));
+    assert!(establish_body.contains("&PLATFORM_ENC, &PLATFORM_MAC"));
+    // And the nonsense combo (fallback without derived) is compile-fenced.
+    assert!(SCP03_SRC.contains(
+        "se050-scp03-allow-factory-fallback requires se050-derived-scp03"
+    ));
 }
 
 #[test]

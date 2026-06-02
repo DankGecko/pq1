@@ -446,6 +446,25 @@ impl<'a> StressCtx<'a> {
         }
     }
 
+    /// WRITE-ONCE variant of [`try_write_user_gated_data`] — calls
+    /// `write_binary_write_once`, whose user policy entry omits
+    /// `ALLOW_WRITE`. Used by the half_E write-once silicon validation:
+    /// the CREATE must succeed even though the policy lacks `ALLOW_WRITE`
+    /// (the creating WriteBinary is session-authorized), and a second
+    /// write to the same OID must be refused.
+    pub fn try_write_user_gated_data_write_once(
+        &mut self,
+        target: u32,
+        data: &[u8],
+        user_userid: u32,
+        admin_userid: Option<u32>,
+    ) -> Result<(), Se050Error> {
+        unsafe {
+            let (t1, scp03) = self.se.t1_scp03_mut();
+            apdu::write_binary_write_once(t1, scp03, target, data, user_userid, admin_userid)
+        }
+    }
+
     /// Read a UserID-gated data object through a caller-owned session.
     /// Distinct from `read_scratch` (which opens / verifies / closes a
     /// stress-admin session internally) — required for tests that need
@@ -460,6 +479,22 @@ impl<'a> StressCtx<'a> {
         unsafe {
             let (t1, scp03) = self.se.t1_scp03_mut();
             apdu::read_authed(t1, scp03, sid, target, out)
+        }
+    }
+
+    /// Session-authed DATA update (INS_PROCESS-wrapped `WriteBinary`,
+    /// data-only). Returns the raw driver result so the write-once test
+    /// can distinguish "accepted" (the `ALLOW_WRITE` control) from
+    /// "refused" (the no-`ALLOW_WRITE` write-once object).
+    pub fn try_write_authed(
+        &mut self,
+        sid: &SessionId,
+        target: u32,
+        data: &[u8],
+    ) -> Result<(), Se050Error> {
+        unsafe {
+            let (t1, scp03) = self.se.t1_scp03_mut();
+            apdu::write_authed(t1, scp03, sid, target, data)
         }
     }
 

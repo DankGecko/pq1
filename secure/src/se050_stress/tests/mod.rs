@@ -36,6 +36,7 @@ pub static ALL_TESTS: &[&StressTest] = &[
     // ----- Destructive -----
     &audit::USERID_NO_ADMIN_DELETE,
     &audit::AUDIT_ADMIN_PASSIVE_READ_REFUSED,
+    &audit::AUDIT_WRITE_ONCE_ENFORCED,
     &audit::AUDIT_ADMIN_CANNOT_ROTATE_USER_PIN,
     &audit::AUDIT_DATA_SUBSTITUTION_CHIP_LEVEL,
     &userid::PIN_COUNTER_RESETS_ON_CORRECT_PIN,

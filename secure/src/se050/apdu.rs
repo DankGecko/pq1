@@ -563,10 +563,81 @@ pub unsafe fn write_binary_gated(
     auth_obj_id: u32,
     admin_auth_obj_id: Option<u32>,
 ) -> Result<(), Se050Error> {
+    write_binary_with_user_ar(
+        t1,
+        scp03,
+        obj_id,
+        data,
+        auth_obj_id,
+        AR_ALLOW_READ | AR_ALLOW_WRITE | AR_ALLOW_DELETE | AR_REQUIRE_SM,
+        admin_auth_obj_id,
+    )
+}
+
+/// Like [`write_binary_gated`] but **WRITE-ONCE**: the user policy entry
+/// omits `ALLOW_WRITE`, so a PIN-verified session can READ the object but
+/// can never **overwrite it in place**. Used for the XOR-split SE share
+/// (`ENTROPY_OBJ` / half_E) and the verifying keys, where an in-place
+/// re-seed under a live PIN session would silently desync the dual-SE
+/// entropy split against the fresh half_O on OPTIGA. Admin-delete is
+/// preserved (via `admin_auth_obj_id`) so the factory-reset/re-provision
+/// path still reclaims the object.
+///
+/// Scope note: the user entry intentionally KEEPS `ALLOW_DELETE`, so a
+/// PIN session can still delete-then-recreate (a re-seed by another name)
+/// — this is by design (admin re-provision relies on delete-then-write)
+/// and grants no capability a PIN holder lacks: that session already has
+/// `ALLOW_READ` on the share, and the firmware exposes no runtime gateway
+/// command that deletes+recreates a secret object (deletes happen only on
+/// the admin-authed provisioning/wipe paths). What this closes is the
+/// silent *in-place* overwrite, which needs no delete and leaves no trace.
+///
+/// **SE050 create-vs-update semantics.** The policy governs *subsequent*
+/// writes; the creating `WriteBinary` (object does not yet exist) is
+/// authorized by the SCP03 session, so creation succeeds even though the
+/// policy lacks `ALLOW_WRITE`. plug-and-trust builds write-less policies
+/// (`fsl_sss_se05x_policy.c` sets `POLICY_OBJ_ALLOW_WRITE` only
+/// conditionally), confirming this is an intended configuration — but it
+/// is **bench-validation-pending** on real silicon: provision, confirm
+/// the PIN-gated READ still works, then confirm a second `WriteBinary` to
+/// the same OID is refused (expect SW=0x6985 "conditions not satisfied").
+pub unsafe fn write_binary_write_once(
+    t1: &mut T1State,
+    scp03: &mut Scp03Session,
+    obj_id: u32,
+    data: &[u8],
+    auth_obj_id: u32,
+    admin_auth_obj_id: Option<u32>,
+) -> Result<(), Se050Error> {
+    write_binary_with_user_ar(
+        t1,
+        scp03,
+        obj_id,
+        data,
+        auth_obj_id,
+        // No ALLOW_WRITE → write-once. READ kept for seed reconstruction,
+        // DELETE kept for self/admin teardown, REQUIRE_SM as always.
+        AR_ALLOW_READ | AR_ALLOW_DELETE | AR_REQUIRE_SM,
+        admin_auth_obj_id,
+    )
+}
+
+/// Core of [`write_binary_gated`] / [`write_binary_write_once`]: write a
+/// binary object whose *user* policy entry carries the supplied `user_ar`.
+/// The admin entry (when `admin_auth_obj_id` is `Some`) is always
+/// `DELETE | REQUIRE_SM` per [`build_policy`].
+unsafe fn write_binary_with_user_ar(
+    t1: &mut T1State,
+    scp03: &mut Scp03Session,
+    obj_id: u32,
+    data: &[u8],
+    auth_obj_id: u32,
+    user_ar: u32,
+    admin_auth_obj_id: Option<u32>,
+) -> Result<(), Se050Error> {
     let mut apdu = ApduBuf::new(0x80, INS_WRITE, P1_BINARY, P2_DEFAULT);
 
-    let primary_ar = AR_ALLOW_READ | AR_ALLOW_WRITE | AR_ALLOW_DELETE | AR_REQUIRE_SM;
-    let (policy_buf, policy_len) = build_policy(auth_obj_id, primary_ar, admin_auth_obj_id);
+    let (policy_buf, policy_len) = build_policy(auth_obj_id, user_ar, admin_auth_obj_id);
     apdu.tlv(TAG_POLICY, &policy_buf[..policy_len]);
     apdu.tlv_u32(TAG_1, obj_id);
 
@@ -745,6 +816,45 @@ pub unsafe fn read_authed(
     } else {
         Ok(0)
     }
+}
+
+/// Update a binary object's DATA through an authenticated session
+/// (INS_PROCESS-wrapped `WriteBinary`, data-only: object-id + data tags
+/// only, no offset/length tags per HW lesson #5, no policy tag since the
+/// policy is immutable post-create). This is the pure data-UPDATE path an attacker
+/// would use to re-seed an object — it succeeds only if the session's auth
+/// object holds `ALLOW_WRITE` in the object policy. Used by the write-once
+/// silicon validation to prove that dropping `ALLOW_WRITE` (half_E) is what
+/// refuses the update. Not used by production firmware (which only ever
+/// CREATEs these objects).
+pub unsafe fn write_authed(
+    t1: &mut T1State,
+    scp03: &mut Scp03Session,
+    session_id: &[u8; 8],
+    obj_id: u32,
+    data: &[u8],
+) -> Result<(), Se050Error> {
+    // Inner command: WRITE / P1_BINARY / TAG_1(obj_id) + TAG_4(data).
+    let mut inner = [0u8; 96];
+    inner[0] = 0x80;
+    inner[1] = INS_WRITE;
+    inner[2] = P1_BINARY;
+    inner[3] = P2_DEFAULT;
+    let mut io = 5;
+    io = tlv_put_u32(&mut inner, io, TAG_1, obj_id);
+    io = tlv_put(&mut inner, io, TAG_4, data);
+    let inner_lc = io - 5;
+    inner[4] = inner_lc as u8;
+
+    // Outer PROCESS APDU: TAG_SESSION_ID(8) + TAG_1(inner_command).
+    let mut apdu = ApduBuf::new(0x80, INS_PROCESS, P1_DEFAULT, P2_DEFAULT);
+    apdu.tlv(TAG_SESSION_ID, session_id);
+    apdu.tlv(TAG_1, &inner[..io]);
+    let cmd = apdu.finish(false);
+
+    let mut resp = [0u8; 64];
+    send_apdu(t1, scp03, cmd, &mut resp)?;
+    Ok(())
 }
 
 /// Delete a single secure object from the SE050.
