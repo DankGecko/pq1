@@ -390,6 +390,60 @@ fn audit_write_once_enforced(ctx: &mut StressCtx) -> StressResult {
 stress_test!(AUDIT_WRITE_ONCE_ENFORCED, "audit_write_once_enforced", Tier::Destructive, audit_write_once_enforced);
 
 // ---------------------------------------------------------------------------
+// 9c. audit_se050_version_identity — anti-substitution OEF/variant check
+// ---------------------------------------------------------------------------
+
+/// Anti-substitution variant check (work-todo #651). Reads the SE050
+/// EXTENDED applet VersionInfo and pins the **AppletConfig** — the variant
+/// feature fingerprint that is fixed by the ordered OEF, so a substituted
+/// different-variant part (e.g. SE050F, which adds FIPS + forces SCP) reports
+/// a different value. Non-breaking: an unauthenticated identity read, no
+/// state change.
+///
+/// **Finding (2026-06-02 silicon):** the OEF id `0xA921` is an ORDERING
+/// identifier and is NOT present anywhere in the GetVersion response — so the
+/// runtime check pins AppletConfig, not the OEF. The OM-SE050ARD-E (SE050E2)
+/// reports applet `v7.2.0`, `AppletConfig=0x3F9F`, `SecureBox=0xFFFF`. 7-byte
+/// VersionInfo layout per AN12413: `[major][minor][patch][AppletConfig:2 BE][SecureBox:2 BE]`.
+fn audit_se050_version_identity(ctx: &mut StressCtx) -> StressResult {
+    // SE050E2 (OM-SE050ARD-E) variant fingerprint, captured on-silicon.
+    const SE050E2_APPLET_CONFIG: u16 = 0x3F9F;
+
+    let mut buf = [0u8; 48];
+    let n = ctx.get_version_ext(&mut buf)?;
+    ctx.assert_true("GetVersion returned >=7 bytes", n >= 7)?;
+
+    let applet_config = ((buf[3] as u16) << 8) | buf[4] as u16;
+    secure_log!(
+        "[S][stress][audit-ver] applet v{}.{}.{} AppletConfig=0x{:04x} SecureBox=0x{:02x}{:02x}",
+        buf[0], buf[1], buf[2], applet_config, buf[5], buf[6]
+    );
+
+    // Log the remaining ext bytes in 4-byte windows (no_std — no slice fmt).
+    let mut j = 7;
+    while j < n {
+        let b0 = buf[j];
+        let b1 = if j + 1 < n { buf[j + 1] } else { 0 };
+        let b2 = if j + 2 < n { buf[j + 2] } else { 0 };
+        let b3 = if j + 3 < n { buf[j + 3] } else { 0 };
+        secure_log!(
+            "[S][stress][audit-ver] vinfo[{}..]: {:02x} {:02x} {:02x} {:02x}",
+            j, b0, b1, b2, b3
+        );
+        j += 4;
+    }
+
+    // Anti-substitution: the variant must be the SE050E2 we ordered.
+    ctx.assert_true(
+        "AppletConfig == 0x3F9F (SE050E2 variant — anti-substitution)",
+        applet_config == SE050E2_APPLET_CONFIG,
+    )?;
+    secure_log!("[S][stress][audit-ver] PASS: SE050E2 variant confirmed (AppletConfig 0x3F9F)");
+    Ok(())
+}
+stress_test!(AUDIT_SE050_VERSION_IDENTITY, "audit_se050_version_identity", Tier::Safe, audit_se050_version_identity);
+
+// ---------------------------------------------------------------------------
 // 10. audit_unauth_read_refused
 // ---------------------------------------------------------------------------
 

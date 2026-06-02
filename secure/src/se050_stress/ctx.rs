@@ -498,6 +498,14 @@ impl<'a> StressCtx<'a> {
         }
     }
 
+    /// Read the SE050 extended applet version (anti-substitution identity).
+    pub fn get_version_ext(&mut self, out: &mut [u8]) -> Result<usize, Se050Error> {
+        unsafe {
+            let (t1, scp03) = self.se.t1_scp03_mut();
+            apdu::get_version_ext(t1, scp03, out)
+        }
+    }
+
     /// Send a top-level `INS_WRITE | INS_AUTH_OBJECT` `WriteUserID` APDU
     /// at `target`, *outside* any UserID session (transport-SCP03 only).
     /// On an empty OID the chip CREATEs; on an existing one the chip

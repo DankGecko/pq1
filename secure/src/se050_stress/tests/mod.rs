@@ -28,6 +28,7 @@ pub static ALL_TESTS: &[&StressTest] = &[
     &scp03::APDU_BURST,
     &audit::SCP03_RESPONSE_ENCRYPTION_VERIFY,
     &audit::AUDIT_UNAUTH_READ_REFUSED,
+    &audit::AUDIT_SE050_VERSION_IDENTITY,
     &object::EXTENDED_LC_BOUNDARY,
     &scp03::WTX_ENDURANCE,
     &scp03::GET_RANDOM_SIZE_BOUNDARY,

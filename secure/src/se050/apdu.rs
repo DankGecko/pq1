@@ -107,6 +107,9 @@ const P2_VERIFY_SESSION_USERID: u8 = 0x2C;
 /// `(CLA=0x80, INS=INS_MGMT, P1=P1_DEFAULT, P2=P2_RANDOM)`; body is
 /// `TLV(TAG_1, length:u16)`; response is `TLV(TAG_1, random_bytes)`.
 const P2_RANDOM: u8 = 0x49;
+/// GetVersion (extended) — returns 37-byte VersionInfo. AN12413 §4.x;
+/// `kSE05x_P2_VERSION_EXT = 0x21` in NXP plug-and-trust `se05x_enums.h`.
+const P2_VERSION_EXT: u8 = 0x21;
 
 // TLV tags
 const TAG_SESSION_ID: u8 = 0x10;
@@ -855,6 +858,34 @@ pub unsafe fn write_authed(
     let mut resp = [0u8; 64];
     send_apdu(t1, scp03, cmd, &mut resp)?;
     Ok(())
+}
+
+/// Read the SE050 EXTENDED applet version — 37-byte VersionInfo
+/// (major.minor.patch + applet feature config + secure-box version).
+/// Anti-substitution identity check: the OEF / variant marker in this
+/// response pins the chip to the ordered part (SE050E2 / OEF 0xA921 on
+/// the OM-SE050ARD-E dev board). `CLA=0x80 INS=INS_MGMT P1=P1_DEFAULT
+/// P2=P2_VERSION_EXT`, Case 2 (no command body, Le=0). The response is
+/// `TAG_1`-wrapped; the raw-bytes fallback handles stacks that don't wrap.
+pub unsafe fn get_version_ext(
+    t1: &mut T1State,
+    scp03: &mut Scp03Session,
+    out: &mut [u8],
+) -> Result<usize, Se050Error> {
+    let mut apdu = ApduBuf::new(0x80, INS_MGMT, P1_DEFAULT, P2_VERSION_EXT);
+    let cmd = apdu.finish(true);
+
+    let mut resp = [0u8; 64];
+    let n = send_apdu(t1, scp03, cmd, &mut resp)?;
+    if let Some((_, value, _)) = tlv_parse(&resp[..n]) {
+        let len = value.len().min(out.len());
+        out[..len].copy_from_slice(&value[..len]);
+        Ok(len)
+    } else {
+        let len = n.min(out.len());
+        out[..len].copy_from_slice(&resp[..len]);
+        Ok(len)
+    }
 }
 
 /// Delete a single secure object from the SE050.
