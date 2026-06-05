@@ -722,6 +722,27 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             core::ptr::write_volatile(out_ptr.add(SIGN_OFFCHAIN_OUTPUT_SIG_OFF + i), sig[i]);
         }
     } else {
+        // FI hardening: bind the larger write to a larger validation in
+        // THIS branch. The 8616-byte (`SIGN_OFFCHAIN_OUTPUT_LEN_6492`)
+        // extent was validated at the §4 gate only when `account_deployed`
+        // read false *there*; this branch is entered on a second read of
+        // the same un-hardened bool. A single fault that flips it
+        // true→false between the gate and here would otherwise reach the
+        // 8616-byte blob write below against a buffer only proven
+        // NS-writable for the 4016-byte deployed extent — a ~4600-byte
+        // overrun across the NS/secure-SRAM boundary. Re-validate the full
+        // 6492 extent now, double-evaluated through a hamming-distant
+        // sentinel (same pattern as F-8 in `nsc::ns_ptr`), so reaching the
+        // larger write *requires* a passing larger validation in the same
+        // branch: two coordinated faults are needed instead of one.
+        let extent_ok = crate::fi::check_true_into_sentinel(|| {
+            validate_ns_write_ptr(args.arg1, SIGN_OFFCHAIN_OUTPUT_LEN_6492)
+        });
+        if extent_ok != crate::fi::OK_SENTINEL {
+            crate::ui::show_status("EIP-1271", "bad out 6492");
+            return NscStatus::InvalidPointer as u32;
+        }
+
         // ERC-6492 counterfactual path.
         //
         // 1. Build the inner SignatureWrapper `(uint256 ownerIndex,

@@ -880,6 +880,37 @@ fn negative_sign_offchain_revalidates_write_ptr_for_larger_6492_buffer() {
 }
 
 #[test]
+fn negative_sign_offchain_revalidates_6492_extent_fi_hardened_before_write() {
+    // FI hardening for the write-size selector. The deployed (4016 B) vs
+    // 6492 (8616 B) write size is chosen by the un-hardened
+    // `account_deployed` bool, read once at parse time and again to pick
+    // the write branch. The up-front §4 re-validation of the larger
+    // extent is itself gated on `!account_deployed`, so a SINGLE fault
+    // flipping the bit true→false between that gate and the write branch
+    // would reach the 8616-byte blob write against a buffer only proven
+    // NS-writable for the 4016-byte deployed extent (~4600 B overrun
+    // across the NS/secure-SRAM boundary). The fix re-validates the full
+    // 6492 extent INSIDE the else branch, double-evaluated through
+    // `check_true_into_sentinel`, so reaching the larger write requires a
+    // passing larger validation in the same branch (two coordinated
+    // faults needed, matching the F-8 bar). A refactor that drops this
+    // guard re-opens the single-fault overrun.
+    let src = CMD_SIGN_OFFCHAIN_SRC;
+    // The hardened re-validation closure must compose the sentinel check
+    // with `validate_ns_write_ptr(.., SIGN_OFFCHAIN_OUTPUT_LEN_6492)`.
+    assert!(src.contains("check_true_into_sentinel"));
+    assert!(src.contains("validate_ns_write_ptr(args.arg1, SIGN_OFFCHAIN_OUTPUT_LEN_6492)"));
+    // Unique status string emitted only by the in-branch guard — pins the
+    // guard's presence so it can't be silently removed.
+    assert!(src.contains("bad out 6492"));
+    // The guard sits after the write-size branch opens (`if account_deployed`)
+    // so it gates the else/6492 write, not just the up-front fail-fast check.
+    let branch = src.find("if account_deployed {").expect("write-size branch");
+    let guard = src.find("bad out 6492").expect("6492 extent guard");
+    assert!(guard > branch, "6492 extent re-validation must live inside the write-size branch");
+}
+
+#[test]
 fn negative_sign_offchain_double_reads_counters_for_fi_hardening() {
     // F-10 hardening — read each counter twice with a randomised
     // gap, halt on disagreement. Defeats single-shot stuck-at faults
