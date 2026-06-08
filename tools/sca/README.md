@@ -197,6 +197,19 @@ whatever hardware it touches. Pattern: a `<name>_target/` crate that
 crate** (`sphincs-c10`, `pqsigner-domain`, …) and re-exports the function under
 stable C symbols, then a `rainbow`/`lascar` harness.
 
+- **SCP03 R-MAC / R-ENC response-unwrap (SE050)** — *not yet wired; surfaced by the
+  2026-06-02 C10-sweep pre-flight (workflow wf_d0a3640f).* The S-5 ship-blocker fix
+  (`P1=0x33`, 2026-05-28) added `secure/src/se050/scp03.rs::unwrap_response` +
+  `scp03_logic.rs::aes128_cbc_decrypt`/`response_icv`/`ct_eq_8` — new **secret-touching**
+  code (SE050 responses, incl. `half_E`, are now R-ENC+R-MAC instead of plaintext-on-I2C).
+  No harness covers it. Two flavors: **(a) FI** — can a single fault make the R-MAC verify
+  (`if !ct_eq_8(mac_full[..8], rmac_recv)`, scp03.rs:510) accept a forged response →
+  attacker-chosen `half_E`? (pattern: `fault_sweep_pin.py`). **(b) leakage/CT** — does
+  `aes128_cbc_decrypt`/CMAC leak the session key or `half_E` on `mem_address`? (pattern:
+  `leakage_saes_kdf.py`). Needs a `scp03_target/` crate path-dep'ing `scp03_logic`. Scope:
+  emulation tests the unwrap *logic* + MAC-verify gate, not SE050 silicon / I2C bus physics —
+  defense-in-depth completeness, not a known bug. Full rationale: `docs/work-todo.md §18b`.
+
 - ~~**C10 verify-before-release — full version**~~ — **DONE** (`fault_sweep_c10v.py`
   + `c10v_target/`, which path-deps the *real* `sphincs-c10`, software SHA — see
   "### Full C10 verify fault sweep" below). It loads the `wrong-message` vector
