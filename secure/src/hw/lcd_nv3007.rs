@@ -677,8 +677,14 @@ pub fn fill_rect(x0: u16, y0: u16, w: u16, h: u16, color: u16) {
 ///
 /// Assumes [`hw::spi_hw::init()`] has already run (SPI1 + CS/SCK/MOSI).
 pub fn init() {
+    // RES is tied to 3V3 on this board (PD15/PE14 both proved un-drivable),
+    // so use a software SWRESET instead of hard_reset()'s pin pulse, and init
+    // SPI ourselves — main.rs only inits SPI1 on the tropic01-se path, not for
+    // ui-lcd. Mirrors the validated lcd_test_loop bring-up sequence.
+    crate::hw::spi_hw::init();
     init_dc_res_gpios();
-    hard_reset();
+    write_cmd(0x01); // SWRESET
+    delay_ms(150);
     run_init_sequence();
     fill_screen(0x0000);
 }

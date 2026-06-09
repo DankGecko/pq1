@@ -21,24 +21,22 @@ fn main() {
 
     // Mutually-exclusive UI backend check.
     //
-    // `ui-lcd` is the NV3007/ZT165M017AT SPI LCD low-level driver
-    // (Phase A landed 2026-05-19). It does NOT yet implement the
-    // `ui::Display` trait — that's Phase C. For Phase A/B (driver
-    // bring-up on bench hardware), `ui-lcd` is paired with one of
-    // the existing display backends so the Display trait still
-    // resolves; the existing backend handles the wizard UI while
-    // `hw::lcd_nv3007` runs as a parallel raw-primitive surface.
-    // Once Phase C lands, `ui-lcd` will become a Display backend in
-    // its own right and this build check will gain a fourth arm.
+    // Four Display backends, exactly one must be active: `ui-semihosting`
+    // (QEMU), `ui-oled` (SSD1306 128×32 I2C), `ui-noop` (headless), and
+    // `ui-lcd` (NV3007 142×428 SPI LCD). `ui-lcd` became a standalone Display
+    // backend in Phase C (2026-06-09); during the Phase A/B driver bring-up it
+    // was paired with `ui-noop` so the Display trait still resolved — that
+    // pairing is now a build error (ui_count == 2).
     let ui_semihosting = env::var_os("CARGO_FEATURE_UI_SEMIHOSTING").is_some();
     let ui_oled = env::var_os("CARGO_FEATURE_UI_OLED").is_some();
     let ui_noop = env::var_os("CARGO_FEATURE_UI_NOOP").is_some();
-    let ui_count = ui_semihosting as u32 + ui_oled as u32 + ui_noop as u32;
+    let ui_lcd = env::var_os("CARGO_FEATURE_UI_LCD").is_some();
+    let ui_count = ui_semihosting as u32 + ui_oled as u32 + ui_noop as u32 + ui_lcd as u32;
     if ui_count > 1 {
-        panic!("UI backends (`ui-semihosting`, `ui-oled`, `ui-noop`) are mutually exclusive");
+        panic!("UI backends (`ui-semihosting`, `ui-oled`, `ui-noop`, `ui-lcd`) are mutually exclusive");
     }
     if ui_count == 0 {
-        panic!("must enable exactly one UI backend (`ui-semihosting`, `ui-oled`, or `ui-noop`)");
+        panic!("must enable exactly one UI backend (`ui-semihosting`, `ui-oled`, `ui-noop`, or `ui-lcd`)");
     }
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());

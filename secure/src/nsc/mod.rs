@@ -276,6 +276,25 @@ compile_error!(
      Pick exactly one."
 );
 
+#[cfg(all(feature = "ui-lcd", feature = "ui-semihosting"))]
+compile_error!(
+    "UI backends `ui-lcd` and `ui-semihosting` are mutually exclusive. \
+     Pick exactly one."
+);
+
+#[cfg(all(feature = "ui-lcd", feature = "ui-oled"))]
+compile_error!(
+    "UI backends `ui-lcd` and `ui-oled` are mutually exclusive. \
+     Pick exactly one."
+);
+
+#[cfg(all(feature = "ui-lcd", feature = "ui-noop"))]
+compile_error!(
+    "UI backends `ui-lcd` and `ui-noop` are mutually exclusive. Pick exactly \
+     one. (`ui-lcd` became a standalone Display backend in Phase C; the old \
+     Phase A/B `ui-lcd`+`ui-noop` pairing is no longer valid.)"
+);
+
 // At least one UI backend must be selected when targeting actual hardware
 // or QEMU. (Pure `cargo test -p sphincs-tz-secure --tests` builds run on
 // the host with neither stm32u585 nor any UI backend — those are exempt
@@ -287,12 +306,13 @@ compile_error!(
         feature = "ui-semihosting",
         feature = "ui-oled",
         feature = "ui-noop",
+        feature = "ui-lcd",
     ))
 ))]
 compile_error!(
     "Exactly one UI backend must be selected: `ui-semihosting`, `ui-oled`, \
-     or `ui-noop`. (`ui-mirror` implies `ui-oled`; `ui-capture` composes with \
-     any backend.)"
+     `ui-noop`, or `ui-lcd`. (`ui-mirror` implies `ui-oled`; `ui-capture` \
+     composes with any backend.)"
 );
 
 // ---------------------------------------------------------------------------

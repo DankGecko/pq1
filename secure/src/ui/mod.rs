@@ -27,6 +27,11 @@ mod noop;
 #[cfg(feature = "ui-noop")]
 pub use noop::{Display, Input};
 
+#[cfg(feature = "ui-lcd")]
+mod lcd;
+#[cfg(feature = "ui-lcd")]
+pub use lcd::{Display, Input};
+
 #[cfg(feature = "ui-mirror")]
 pub mod mirror;
 
@@ -39,11 +44,12 @@ pub mod capture;
 pub mod confirm;
 pub mod pin_entry;
 pub mod seed_wizard;
-/// F-24 stage D: constant-time glyph blit for secret-bearing OLED rows.
-/// Bypasses embedded-graphics' address-keyed font lookups for the seed
-/// wizard's word rows. ui-oled-only; the `ui-semihosting` and `ui-noop`
-/// backends don't render pixels.
-#[cfg(feature = "ui-oled")]
+/// F-24 stage D: constant-time glyph blit for secret-bearing display rows.
+/// Bypasses address-keyed font lookups for the seed wizard's word rows. Used by
+/// both the `ui-oled` (SSD1306 page blit) and `ui-lcd` (RGB565 via
+/// `secret_glyph_cols`) backends; the `ui-semihosting`/`ui-noop` backends don't
+/// render pixels.
+#[cfg(any(feature = "ui-oled", feature = "ui-lcd"))]
 pub mod secret_text;
 
 /// Logical display dimensions (cells, not pixels).
@@ -129,6 +135,14 @@ impl Ui for oled::Display {
 
 #[cfg(feature = "ui-noop")]
 impl Ui for noop::Display {
+    #[inline] fn clear(&mut self) { self.clear() }
+    #[inline] fn draw_line(&mut self, row: usize, text: &str) { self.draw_line(row, text) }
+    #[inline] fn flush(&mut self) { self.flush() }
+    #[inline] fn splash(&mut self) { self.splash() }
+}
+
+#[cfg(feature = "ui-lcd")]
+impl Ui for lcd::Display {
     #[inline] fn clear(&mut self) { self.clear() }
     #[inline] fn draw_line(&mut self, row: usize, text: &str) { self.draw_line(row, text) }
     #[inline] fn flush(&mut self) { self.flush() }

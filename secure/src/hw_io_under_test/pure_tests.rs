@@ -330,9 +330,14 @@ fn positive_spi_hw_ssi_high_before_master_mode() {
 }
 
 #[test]
-fn positive_spi_hw_cfg1_baud_5mhz_dsize_8bit() {
-    // MBR = 100 (÷32 → 160/32 = 5 MHz), DSIZE = 7 (8-bit).
-    assert!(SPI_HW_SRC.contains("REG.spi_cfg1.write((0b100 << 28) | 7);"));
+fn positive_spi_hw_cfg1_baud_gated_dsize_8bit() {
+    // SPI1 baud is gated on `ui-lcd` (2026-06-09): ÷8 (20 MHz) for the NV3007
+    // LCD (dropped from ÷4/40 MHz — the dev board's blue LED on PE13=SCK loads
+    // the line and corrupts 40 MHz edges), ÷32 (5 MHz) conservative for non-LCD
+    // / shared-TROPIC01 builds. DSIZE = 7 (8-bit); only MBR nibble [30:28] moves.
+    assert!(SPI_HW_SRC.contains("const MBR: u32 = 0b010;")); // ÷8 → 20 MHz (ui-lcd)
+    assert!(SPI_HW_SRC.contains("const MBR: u32 = 0b100;")); // ÷32 → 5 MHz (default)
+    assert!(SPI_HW_SRC.contains("REG.spi_cfg1.write((MBR << 28) | 7);"));
 }
 
 #[test]

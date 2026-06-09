@@ -3080,11 +3080,11 @@ build-hw-lcd-bringup:
 # (SPI on CN13 D10/D11/D13, DC=PE7/D4, RES=PD15/D2, VCC+BLK=3V3, GND).
 # Assumes TZ option bytes are already set (run any *-hw target once first).
 lcd-test-hw:
-	@echo "==> Building LCD bring-up test (NV3007 green/red/blue fill loop)..."
+	@echo "==> Building LCD UI bring-up test (NV3007 ui::Display 16x4 text)..."
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 	cargo build --release --target $(TARGET) --target-dir target/secure \
 		-p sphincs-tz-secure --no-default-features \
-		--features lcd-test,ui-noop,mock-se,debug-log,stm32u585,dev-testkey,usb
+		--features lcd-test,mock-se,debug-log,stm32u585,dev-testkey,usb
 	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
 	cargo build --release --target $(TARGET) --target-dir target/nonsecure \

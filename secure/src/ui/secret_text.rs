@@ -99,6 +99,37 @@ pub fn render_secret_row(fb: &mut [u8; 512], page: usize, text: &[u8]) {
     }
 }
 
+/// Constant-time fetch of all `FONT_GLYPH_W` (5) column-bytes of a glyph, for
+/// the LCD secret-row render path. Each column comes from the same 96-entry
+/// constant-time scan (`ct_glyph_col`, with its `black_box` barriers) as
+/// [`render_secret_row`], so the memory-access pattern is independent of the
+/// secret character. The branchless 3×/RGB565 expansion that consumes these
+/// bytes lives in `ui::lcd` and writes every pixel unconditionally, preserving
+/// the constant-time property end-to-end (only the pixel VALUE — the accepted
+/// F-24 stage-E display-broadcast residual — depends on the secret).
+#[cfg(feature = "ui-lcd")]
+pub(crate) fn secret_glyph_cols(ch: u8) -> [u8; FONT_GLYPH_W] {
+    let mut out = [0u8; FONT_GLYPH_W];
+    let mut c = 0usize;
+    while c < FONT_GLYPH_W {
+        out[c] = ct_glyph_col(ch, c);
+        c += 1;
+    }
+    out
+}
+
+/// Non-secret glyph column-bytes via a DIRECT index — used by the LCD public
+/// render path (titles / prompts / status), where the address-channel leak is
+/// irrelevant. NEVER call this for secret rows; use [`secret_glyph_cols`].
+#[cfg(feature = "ui-lcd")]
+pub(crate) fn public_glyph_cols(ch: u8) -> [u8; FONT_GLYPH_W] {
+    if ch >= FONT_FIRST_CHAR && ch <= FONT_LAST_CHAR {
+        FONT_FLAT_5X8[(ch - FONT_FIRST_CHAR) as usize]
+    } else {
+        [0u8; FONT_GLYPH_W]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

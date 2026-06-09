@@ -207,17 +207,21 @@ pub fn init() {
     // reappears at 20 MHz it means the jumper wiring can't sustain the edges:
     // back off to ÷16 (`0b011`, 10 MHz). DSIZE stays 7; only MBR[30:28] changes.
     #[cfg(feature = "ui-lcd")]
-    const MBR: u32 = 0b001; // ÷4  → 40 MHz (NV3007 fast repaint, ~25-33 ms/frame)
+    const MBR: u32 = 0b010; // ÷8  → 20 MHz (NV3007 UI, ~50 ms full repaint)
     #[cfg(not(feature = "ui-lcd"))]
     const MBR: u32 = 0b100; // ÷32 → 5 MHz  (conservative shared-bus default)
     REG.spi_cfg1.write((MBR << 28) | 7);
-    // ÷4 = 40 MHz: the CPU's per-byte TXP poll can still just keep the FIFO fed
-    // (a byte clocks in 200 ns vs ~100 ns poll), so this ~doubles throughput
-    // over ÷8. SCK half-period is 12.5 ns vs the NV3007 10 ns setup/hold spec —
-    // only ~2.5 ns bare-die margin, so it depends on clean jumper wiring. If
-    // striping reappears, the wiring can't hold the edges: fall back to ÷8
-    // (`0b010`, 20 MHz) or ÷16 (`0b011`, 10 MHz). ÷2 (80 MHz) would starve the
-    // polled FIFO — that needs DMA, not a prescaler change.
+    // ÷8 = 20 MHz (SCK half-period 25 ns = 2.5× the NV3007 10 ns setup/hold).
+    // The raw fill demo ran fine at ÷4 (40 MHz), but the *UI* showed intermittent
+    // flicker on the B-U585I dev board, traced to its blue Arduino LED (LD2)
+    // being hardwired to PE13 = SPI1_SCK: the LED + series resistor is an extra
+    // capacitive load that rounds off the 40 MHz SCK edges (12.5 ns half-period,
+    // only ~2.5 ns margin) → occasional misread bits = flicker. ÷8 restores the
+    // margin and is plenty for a near-static UI (partial updates < 2 ms; a full
+    // repaint ~50 ms happens only on a screen change). A production board with no
+    // LED on SCK + proper PCB traces could go back to ÷4 (`0b001`, 40 MHz); ÷16
+    // (`0b011`, 10 MHz) is the next step down if 20 MHz still isn't clean. ÷2
+    // (80 MHz) would starve the polled FIFO regardless — that needs DMA.
 
     // CFG2: Master mode, software NSS management, SSOE disabled
     // MASTER (bit 22) = 1

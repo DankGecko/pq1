@@ -1112,12 +1112,34 @@ fn main() -> ! {
     #[cfg(feature = "decoy-flicker-test")]
     ui::seed_wizard::decoy_flicker_test_loop();
 
-    // Phase-B LCD bring-up — short-circuit into the NV3007 green/red/blue
-    // fill loop. No measured_boot, no wizard, no SE access — just SPI1 + LCD
-    // render forever so a bench observer can confirm the wiring + the ported
-    // init sequence on real silicon. Run via `make lcd-test-hw`.
+    // Phase-C LCD UI bring-up — exercise the real `ui::Display` text path
+    // (clear + draw_line ×4 + flush) on the NV3007 so a bench observer can
+    // confirm the 16×4 grid renders with correct orientation, font scale, and
+    // centering. `ui::init()`/`ui::splash()` above already ran through
+    // `lcd::Display`. (The raw green/red/blue fill demo lives in
+    // `hw::lcd_nv3007::lcd_test_loop` if the panel itself needs re-checking.)
+    // Run via `make lcd-test-hw`.
     #[cfg(feature = "lcd-test")]
-    hw::lcd_nv3007::lcd_test_loop();
+    {
+        // Representative confirm-style screen on the resolved orientation,
+        // re-flushed ~every 400 ms so the SPI bus stays active — this is the
+        // stress check for the 20 MHz flicker fix (a one-shot render wouldn't
+        // exercise it). (The 4-way orientation sweep is
+        // `lcd::Display::orientation_test_loop` if it ever needs re-resolving.)
+        let d = ui::display();
+        let mut n: u32 = 0;
+        loop {
+            d.clear();
+            d.draw_line(0, "Confirm Send");
+            d.draw_line(1, "0.05 ETH");
+            d.draw_line(2, "0x1234..AbCd");
+            d.draw_line(3, "L=reject R=sign");
+            d.flush();
+            secure_log!("[LCD-UI] flush {}", n);
+            n = n.wrapping_add(1);
+            cortex_m::asm::delay(64_000_000); // ~400 ms
+        }
+    }
 
     // §32 P4/P5 interactive UI harness. Short-circuits into a loop that
     // drives JUST the duress-PIN setup dialogs on the real OLED — no SE,
