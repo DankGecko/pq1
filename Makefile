@@ -2887,6 +2887,31 @@ decoy-flicker-hw:
 	@echo "==> Running — watch the OLED. Ctrl-C to detach."
 	@probe-rs run --chip STM32U585AIIx $(SECURE_ELF)
 
+# Decoy-flicker test on the NV3007 LCD (Phase D — F-24 stage E sub-channel 4).
+# Same harness as decoy-flicker-hw but `ui-lcd`. The LCD's slow-response pixels
+# (Tr+Tf ~35 ms) are the whole point: a decoy painted briefly then overwritten
+# by the next real frame may never fully transition (subliminal to the eye)
+# while the SPI bus still carries it (the defense). The loop SWEEPS DECOY_HOLD =
+# 40/25/15/8/3/0 ms (~4-5 s each, logged) so you can find the subliminal
+# threshold. Builds + flashes; then run + watch the panel:
+#   probe-rs run --chip STM32U585AIIx $(SECURE_ELF)
+# Requires the NV3007 wired per docs/nv3007-wiring.md.
+decoy-flicker-lcd-hw:
+	@echo "==> Building decoy-flicker-test firmware for the NV3007 LCD..."
+	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
+	cargo build --release --target $(TARGET) --target-dir target/secure \
+		-p sphincs-tz-secure --no-default-features \
+		--features decoy-flicker-test,mock-se,debug-log,ui-lcd,stm32u585,dev-testkey,usb
+	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
+	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
+	cargo build --release --target $(TARGET) --target-dir target/nonsecure \
+		-p sphincs-tz-nonsecure --features stm32u585,usb
+	@echo "==> Flashing..."
+	@probe-rs download --chip STM32U585AIIx $(NONSECURE_ELF)
+	@probe-rs download --chip STM32U585AIIx $(SECURE_ELF)
+	@echo "==> Flashed. Run + watch the LCD (log prints the active DECOY_HOLD):"
+	@echo "    probe-rs run --chip STM32U585AIIx $(SECURE_ELF)"
+
 # Factory production-line test (prodtest) firmware. Single-purpose
 # build that the factory operator flashes BEFORE the
 # factory_provisioning ceremony. Sits in WFI after boot, waiting for

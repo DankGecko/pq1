@@ -953,19 +953,40 @@ pub fn decoy_flicker_test_loop() -> ! {
     ];
 
     #[cfg(feature = "debug-log")]
-    secure_log!("[S] decoy-flicker-test: starting render loop (page 0 only)");
+    secure_log!(
+        "[S] decoy-flicker-test: sweeping DECOY_HOLD (real hold = {} ms)",
+        REAL_FRAME_HOLD_MS
+    );
 
-    // Run forever. Page 0 = words 1-3 of the test mnemonic.
-    // Real frame: 200 ms hold. Decoy frame: 40 ms hold. Cycle: 240 ms.
-    // Time ratio real:decoy = 5:1.
+    // Page 0 = words 1-3 of the test mnemonic, real interleaved with decoys.
+    // SWEEP the decoy-frame hold (~4-5 s per value) so a bench observer can find
+    // the threshold where decoys stop being subliminal. On a bistable OLED this
+    // fails at EVERY hold (each decoy is a fully-visible content change — the
+    // documented 2026-05-19 result). On the slow-response NV3007 LCD (Tr+Tf
+    // ~35 ms) decoys SHOULD become subliminal once their total on-time (the
+    // ~15 ms page repaint PLUS this hold) stays under the pixel response time —
+    // the partially-transitioned decoy is overwritten by the next real frame
+    // before it fully appears, yet the SPI bus still carries it (the defense).
+    // Note the repaint itself is ~15 ms here, so even DECOY_HOLD=0 leaves a
+    // ~15 ms decoy on-time floor; that is the interesting low end.
+    const DECOY_HOLD_SWEEP: [u32; 6] = [40, 25, 15, 8, 3, 0];
+    let mut hold_idx: usize = 0;
     let mut decoy_idx: usize = 0;
     loop {
-        render_mnemonic_page(&real, 0);
-        cortex_m::asm::delay(160_000 * REAL_FRAME_HOLD_MS);
-
-        render_mnemonic_page(&decoys[decoy_idx], 0);
-        cortex_m::asm::delay(160_000 * DECOY_FRAME_HOLD_MS);
-
-        decoy_idx = (decoy_idx + 1) % N_DECOYS;
+        let decoy_hold = DECOY_HOLD_SWEEP[hold_idx % DECOY_HOLD_SWEEP.len()];
+        #[cfg(feature = "debug-log")]
+        secure_log!("[S] decoy-flicker: DECOY_HOLD = {} ms", decoy_hold);
+        let mut cycles = 0u32;
+        while cycles < 18 {
+            render_mnemonic_page(&real, 0);
+            cortex_m::asm::delay(160_000 * REAL_FRAME_HOLD_MS);
+            render_mnemonic_page(&decoys[decoy_idx], 0);
+            if decoy_hold > 0 {
+                cortex_m::asm::delay(160_000 * decoy_hold);
+            }
+            decoy_idx = (decoy_idx + 1) % N_DECOYS;
+            cycles += 1;
+        }
+        hold_idx += 1;
     }
 }
