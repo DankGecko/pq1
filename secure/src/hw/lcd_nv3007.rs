@@ -4,13 +4,20 @@
 //! ## Pin mapping (B-U585I-IOT02A, Arduino R3 headers + `spi1-arduino`)
 //!
 //! ```text
-//!   PE12  CS  (existing `spi_hw` CS pin — D10)
-//!   PE13  SCK (existing `spi_hw` SCK   — D13, AF5)
-//!   PE15  MOSI (existing `spi_hw` MOSI — D11, AF5)
-//!   PE3   DC  (NEW — wire to NV3007 D/CX pin via jumper)
-//!   PE1   RES (NEW — wire to NV3007 RES pin via jumper)
-//!   3V3   VLED+ (backlight, hard-wired for prototype; PWM-control
+//!   PE12  CS  (existing `spi_hw` CS pin — D10 / CN13 pin 3)
+//!   PE13  SCK (existing `spi_hw` SCK   — D13 / CN13 pin 6, AF5)
+//!   PE15  MOSI (existing `spi_hw` MOSI — D11 / CN13 pin 4, AF5)
+//!   PE7   DC  (Arduino D4,  CN14 — wire to NV3007 DC pin via jumper)
+//!   PE14  RES (Arduino D12, CN13 pin 5 — wire to NV3007 RES pin via jumper)
+//!   3V3   VCC + BLK (backlight, hard-wired for prototype; PWM-control
 //!         possible via a future GPIO if dimming is needed)
+//!
+//! DC/RES were retargeted 2026-06-08 off the Phase-A pins PE3/PE1, which are
+//! NOT reachable on this board (PE3 = on-board OCTOSPI PSRAM DQS, no pad;
+//! PE1 = camera connector CN7 only). RES first went to PD15/D2 but read flat
+//! on the LA at bring-up; moved to PE14 (unused SPI1_MISO = D12, on the solid
+//! CN13) which shares GPIOE with the proven-working DC/SPI pins. See
+//! `docs/nv3007-wiring.md`.
 //! ```
 //!
 //! ## Init sequence
@@ -79,22 +86,32 @@ pub const X_OFFSET: u16 = 12;
 pub const Y_OFFSET: u16 = 0;
 
 // ---------------------------------------------------------------------------
-// GPIO — DC + RES on GPIOE bits 3 and 1
+// GPIO — DC on GPIOE bit 7 (Arduino D4 / PE7), RES on GPIOE bit 14 (Arduino D12 / PE14)
 // ---------------------------------------------------------------------------
+//
+// Retargeted 2026-06-08: Phase-A's PE3 (DC) / PE1 (RES) aren't reachable on
+// the B-U585I-IOT02A (PE3 = on-board OCTOSPI PSRAM DQS, no pad; PE1 = camera
+// CN7 only). Bench bring-up confirmed DC=PE7 (Arduino D4) works, but the first
+// RES choice (PD15, GPIOD, Arduino D2 on CN14) read flat on the LA — so RES
+// moved to **PE14** (the unused SPI1_MISO = Arduino **D12 = CN13 pin 5**): same
+// GPIOE bank as DC + the SPI pins (proven to drive), on the solid CN13
+// connector. The panel is write-only so MISO is free. See docs/nv3007-wiring.md.
 
-/// DC (Data/Command) pin position on GPIOE. Drive HIGH for data,
-/// LOW for command. Configured as push-pull output by `init()`.
-const DC_PIN: u32 = 3;
+/// DC (Data/Command) pin position on GPIOE (PE7 = Arduino D4). Drive HIGH
+/// for data, LOW for command. Configured as push-pull output by `init()`.
+const DC_PIN: u32 = 7;
 
-/// RES (hardware reset, active-low) pin position on GPIOE. Driven by
-/// [`hard_reset`] during init. Push-pull output.
-const RES_PIN: u32 = 1;
+/// RES (hardware reset, active-low) pin position on GPIOE (PE14 = Arduino
+/// D12 / CN13 pin 5, the unused SPI1_MISO). Driven by [`hard_reset`] during
+/// init. Push-pull output (overrides spi_hw's AF on PE14).
+const RES_PIN: u32 = 14;
 
 /// Bit mask in `GPIOE_BSRR` for DC = HIGH (data).
 const DC_HIGH_BS: u32 = 1 << DC_PIN;
 /// Bit mask in `GPIOE_BSRR` for DC = LOW (command).
 const DC_LOW_BR: u32 = 1 << (DC_PIN + 16);
 
+/// Bit masks in `GPIOE_BSRR` for RES (PE14).
 const RES_HIGH_BS: u32 = 1 << RES_PIN;
 const RES_LOW_BR: u32 = 1 << (RES_PIN + 16);
 
@@ -104,9 +121,17 @@ const RES_LOW_BR: u32 = 1 << (RES_PIN + 16);
 //
 // `hw::spi_hw::init()` already enables the GPIOE clock and binds PE12-PE15
 // (CS, SCK, MISO, MOSI). This module extends the configuration by setting
-// PE3 + PE1 as push-pull outputs. We do NOT re-touch PE12-PE15 here.
+// PE7 (DC) as a push-pull output on GPIOE, and PD15 (RES) as a push-pull
+// output on GPIOD — for which it must also enable the GPIOD clock (spi_hw
+// only enabled GPIOE). We do NOT re-touch PE12-PE15 here.
 
 const GPIOE_S: u32 = 0x5202_1000;
+/// GPIOD secure alias — RES is PD15 (Arduino D2).
+const GPIOD_S: u32 = 0x5202_0C00;
+/// RCC AHB2ENR1 (secure alias) — GPIODEN is bit 3 (matches `pin_diag` +
+/// `spi_hw`'s `RCC_S + 0x8C`).
+const RCC_AHB2ENR1: u32 = 0x5602_0C8C;
+const GPIODEN_BIT: u32 = 3;
 
 struct LcdRegs {
     gpioe_moder: Reg32,
@@ -114,6 +139,16 @@ struct LcdRegs {
     gpioe_ospeedr: Reg32,
     gpioe_pupdr: Reg32,
     gpioe_bsrr: Reg32,
+
+    // GPIOD — RES on PD15.
+    gpiod_moder: Reg32,
+    gpiod_otyper: Reg32,
+    gpiod_ospeedr: Reg32,
+    gpiod_pupdr: Reg32,
+    gpiod_bsrr: Reg32,
+
+    // RCC AHB2ENR1 — to enable the GPIOD clock (GPIODEN).
+    rcc_ahb2enr1: Reg32,
 
     // SPI peripheral — same base as `spi_hw::SPI_BASE`. We use direct
     // TXDR access for byte sends.
@@ -126,8 +161,9 @@ struct LcdRegs {
 }
 
 // SAFETY: each MMIO address below is a real, 4-byte-aligned register
-// on STM32U585. PE3 + PE1 are not claimed by any other secure-world
-// driver (verified via grep). The single-threaded secure world doesn't
+// on STM32U585. PE7 (GPIOE) + PD15 (GPIOD) are not claimed by any other
+// secure-world driver (verified via grep — they appear only in pin_diag's
+// candidate sweep). The single-threaded secure world doesn't
 // race on these; RMW on disjoint bits is fine. The SPI peripheral is
 // shared with `hw::spi` (used by Tropic01) — but Tropic01 isn't shipped
 // (`project_tropic01_excluded`) and the `ui-lcd` feature is mutually
@@ -140,6 +176,14 @@ const REG: LcdRegs = unsafe {
         gpioe_pupdr: Reg32::new(GPIOE_S + 0x0C),
         gpioe_bsrr: Reg32::new(GPIOE_S + 0x18),
 
+        gpiod_moder: Reg32::new(GPIOD_S + 0x00),
+        gpiod_otyper: Reg32::new(GPIOD_S + 0x04),
+        gpiod_ospeedr: Reg32::new(GPIOD_S + 0x08),
+        gpiod_pupdr: Reg32::new(GPIOD_S + 0x0C),
+        gpiod_bsrr: Reg32::new(GPIOD_S + 0x18),
+
+        rcc_ahb2enr1: Reg32::new(RCC_AHB2ENR1),
+
         spi_cr1: Reg32::new(SPI_BASE + 0x00),
         spi_cr2: Reg32::new(SPI_BASE + 0x04),
         spi_cfg1: Reg32::new(SPI_BASE + 0x08),
@@ -149,13 +193,24 @@ const REG: LcdRegs = unsafe {
     }
 };
 
-// SPI SR bits (STM32U5 SPI v2)
-const SR_TXP: u32 = 1 << 1;
-const SR_EOT: u32 = 1 << 3;
+// SPI SR bits (STM32U5 SPI v2, RM0456 §68.8.6)
+const SR_TXP: u32 = 1 << 1; // Tx-packet space available (FIFO has room — NOT shifted out)
+const SR_EOT: u32 = 1 << 3; // End-of-transfer (sets when TSIZE bytes sent; needs TSIZE > 0)
 
-// CR1 bits
+// CR1 bits (§68.8.1)
 const CR1_SPE: u32 = 1 << 0;
-const CR1_CSTART: u32 = 1 << 9;
+const CR1_CSTART: u32 = 1 << 9; // self-clears at EOT; must be re-set per chunk
+
+// IFCR clear-flag bits (§68.8.7) — only named bits are writable
+const IFCR_EOTC: u32 = 1 << 3;
+const IFCR_TXTFC: u32 = 1 << 4;
+const IFCR_OVRC: u32 = 1 << 6;
+
+/// TSIZE is a 16-bit counter (CR2[15:0], §68.8.2). The full RGB565 frame is
+/// `142*428*2 = 121,552` bytes, which overflows it, so every bulk transfer is
+/// chunked. EVEN bound so an RGB565 pixel is never split across the per-chunk
+/// SPE-toggle gap.
+const MAX_CHUNK: u16 = 65_534;
 
 // ---------------------------------------------------------------------------
 // GPIO helpers — DC / RES atomic set/clear via BSRR
@@ -181,32 +236,27 @@ fn res_high() {
     REG.gpioe_bsrr.write(RES_HIGH_BS);
 }
 
-/// Configure PE3 (DC) and PE1 (RES) as push-pull outputs at very-high
-/// speed. Both start HIGH so RES doesn't accidentally reset the LCD
-/// before [`hard_reset`] sequences it.
+/// Configure DC (PE7) and RES (PE14) as push-pull outputs at very-high
+/// speed — both on GPIOE. Both start HIGH so RES doesn't accidentally
+/// reset the LCD before [`hard_reset`] sequences it.
 ///
 /// Assumes [`hw::spi_hw::init()`] has already enabled the GPIOE clock.
+/// RES = PE14 overrides spi_hw's AF (SPI1_MISO) — harmless, the panel is
+/// write-only so MISO is unused.
 fn init_dc_res_gpios() {
-    // MODER: bits [7:6] (PE3) and [3:2] (PE1) → 0b01 (output)
+    // DC = PE7, RES = PE14 — both GPIOE: output, push-pull, very-high speed.
     REG.gpioe_moder.modify(|v| {
         (v & !(0b11 << (DC_PIN * 2)) & !(0b11 << (RES_PIN * 2)))
             | (0b01 << (DC_PIN * 2))
             | (0b01 << (RES_PIN * 2))
     });
-
-    // OTYPER: push-pull (bit = 0)
     REG.gpioe_otyper.clear_bits((1 << DC_PIN) | (1 << RES_PIN));
-
-    // OSPEEDR: bits [7:6] (PE3) and [3:2] (PE1) → 0b11 (very high)
     REG.gpioe_ospeedr.set_bits((0b11 << (DC_PIN * 2)) | (0b11 << (RES_PIN * 2)));
-
-    // PUPDR: no pull-up/down (the LCD pulls these via its own resistors;
-    // we drive them push-pull anyway).
     REG.gpioe_pupdr.modify(|v| {
         v & !(0b11 << (DC_PIN * 2)) & !(0b11 << (RES_PIN * 2))
     });
 
-    // Start with both HIGH so RES is deasserted at boot.
+    // Start both HIGH (RES deasserted, DC = data) at boot.
     REG.gpioe_bsrr.write(DC_HIGH_BS | RES_HIGH_BS);
 }
 
@@ -214,20 +264,24 @@ fn init_dc_res_gpios() {
 // SPI byte send — direct TXDR write
 // ---------------------------------------------------------------------------
 
-/// Begin a multi-byte SPI transaction. Sets `TSIZE = 0` (unlimited),
-/// enables the peripheral, and starts the transfer. Caller must
-/// follow with one or more [`spi_send_byte`] then [`spi_end`].
-fn spi_begin() {
-    // TSIZE = 0 → free-running mode (the peripheral keeps transferring
-    // as long as TXDR has data and SPE is set).
-    REG.spi_cr2.write(0);
+/// Begin one bounded SPI transfer of exactly `tsize` bytes. TSIZE is loaded
+/// into CR2 while SPE = 0 (RM0456 §68.8.2: TSIZE must be changed with the SPI
+/// disabled), then SPE + CSTART start the transfer. With TSIZE > 0, EOT fires
+/// deterministically when the last byte has shifted out — which is what
+/// [`spi_end`] waits on. Caller pushes exactly `tsize` bytes via
+/// [`spi_send_byte`], then calls [`spi_end`].
+fn spi_begin(tsize: u16) {
+    // SPE = 0 so TSIZE is writable (robust even if a prior chunk left it set
+    // on an error path).
+    REG.spi_cr1.modify(|v| v & !CR1_SPE);
+    REG.spi_cr2.write(u32::from(tsize)); // CR2[15:0] = TSIZE; upper bits 0 (no CRC)
     REG.spi_cr1.modify(|v| v | CR1_SPE);
     REG.spi_cr1.modify(|v| v | CR1_CSTART);
 }
 
-/// Push one byte through TXDR. Blocks until TXP is set (Tx FIFO has
-/// space). Discards any incoming RX byte — we don't drive MISO and
-/// the LCD doesn't talk back.
+/// Push one byte through TXDR. Blocks until TXP is set (Tx FIFO has space).
+/// Any incoming RX byte is discarded (panel is write-only; MASRX = 0 in
+/// `spi_hw::init` means the unread RxFIFO never throttles TX — RM0456 §68.8.1).
 fn spi_send_byte(b: u8) {
     while (REG.spi_sr.read() & SR_TXP) == 0 {}
     // 8-bit write to TXDR. Reg32 only supports u32 access; use raw
@@ -240,57 +294,96 @@ fn spi_send_byte(b: u8) {
     }
 }
 
-/// End a multi-byte SPI transaction: wait for the last byte to drain,
-/// clear EOT, disable the peripheral.
+/// Finish one bounded transfer: wait for EOT (all TSIZE bytes shifted out on
+/// the wire), then disable the peripheral and clear the sticky completion
+/// flags so the NEXT chunk's EOT-wait doesn't return on a stale flag.
+///
+/// RM0456 §68.4.13 disable procedure (master, non-receive-only): wait EOT = 1,
+/// then SPE = 0. We poll EOT because [`spi_begin`] programs TSIZE > 0, making
+/// EOT fire deterministically (§68.4.12). EOT is sticky and is NOT cleared by
+/// SPE = 0, so it must be cleared via IFCR.
+///
+/// The few-cycle delay between the EOT wait and the SPE clear is the ES0499
+/// "truncation of SPI output after EOT" erratum mitigation (RM0456 §68.4.13
+/// Note): at 5 MHz SPI / 160 MHz core, clearing SPE within ~tens of ns of EOT
+/// can produce an asymmetric last SCK pulse and corrupt the final bit. Since
+/// every command is now its own TSIZE=1 transfer, that would silently corrupt
+/// the LSB of every command byte — so insert the delay.
 fn spi_end() {
-    // Wait for last byte transmitted. STM32U5 SPI v2: EOT only sets
-    // when TSIZE bytes have been transferred OR when SPE is cleared.
-    // With TSIZE=0 (unlimited mode) we rely on clearing SPE and
-    // letting any TXDR-pending byte drain via the standard procedure.
-    // Spin briefly to make sure TXDR-FIFO is empty.
-    while (REG.spi_sr.read() & SR_TXP) == 0 {}
+    while (REG.spi_sr.read() & SR_EOT) == 0 {}
+    // ES0499 mitigation: let the last SCK pulse complete symmetrically before
+    // dropping SPE. ~16 cycles @160 MHz ≈ 100 ns > one 5 MHz SCK half-period.
+    cortex_m::asm::delay(16);
     REG.spi_cr1.modify(|v| v & !CR1_SPE);
-    REG.spi_ifcr.write(0xFFFF_FFFF); // clear all sticky flags
-    let _ = SR_EOT;
+    // Clear only the writable, named flags (§68.8.7). EOTC clears EOT for the
+    // next chunk; OVRC clears the harmless OVR latched from the undrained
+    // RxFIFO on this write-only panel.
+    REG.spi_ifcr.write(IFCR_EOTC | IFCR_TXTFC | IFCR_OVRC);
 }
 
 // ---------------------------------------------------------------------------
 // LCD command / data primitives
 // ---------------------------------------------------------------------------
 
-/// Send a single command byte (DC=LOW).
-pub fn write_cmd(cmd: u8) {
+/// Transmit a byte slice as bounded, EOT-terminated chunks (each ≤ TSIZE max).
+/// CS and DC are owned by the caller and held across the whole call.
+fn spi_transfer(bytes: &[u8]) {
+    let mut off = 0usize;
+    while off < bytes.len() {
+        let n = core::cmp::min(bytes.len() - off, MAX_CHUNK as usize);
+        spi_begin(n as u16);
+        for &b in &bytes[off..off + n] {
+            spi_send_byte(b);
+        }
+        spi_end();
+        off += n;
+    }
+}
+
+/// Send a command byte (DC = LOW) followed by its parameter bytes (DC = HIGH),
+/// all inside ONE CS-low window. NV3007 (Novatek/MIPI-DBI) controllers reset
+/// the parameter index on CS rising, so each multi-param command MUST keep CS
+/// asserted across the command and every parameter. DC is toggled mid-window;
+/// this is safe only because [`spi_end`] waits for EOT before returning, so the
+/// command byte is fully shifted out before DC flips to data.
+pub fn write_cmd_data(cmd: u8, params: &[u8]) {
     cs_assert();
     dc_low();
-    spi_begin();
+    spi_begin(1);
     spi_send_byte(cmd);
     spi_end();
+    if !params.is_empty() {
+        dc_high();
+        spi_transfer(params); // CS still low; chunks ≤ TSIZE max
+    }
     cs_deassert();
 }
 
-/// Send a single data byte (DC=HIGH).
+/// Send a single command byte (DC = LOW), no parameters.
+pub fn write_cmd(cmd: u8) {
+    write_cmd_data(cmd, &[]);
+}
+
+/// Send a single data byte (DC = HIGH). Retained for callers that already hold
+/// the controller's parameter pointer; prefer [`write_cmd_data`] for new code.
+#[allow(dead_code)]
 pub fn write_data(data: u8) {
     cs_assert();
     dc_high();
-    spi_begin();
+    spi_begin(1);
     spi_send_byte(data);
     spi_end();
     cs_deassert();
 }
 
-/// Send a multi-byte data payload in one CS-asserted transaction.
-/// Faster than repeated [`write_data`] for bulk pixel writes.
+/// Send a multi-byte data payload in one CS-asserted transaction (chunked).
 pub fn write_data_bulk(data: &[u8]) {
     if data.is_empty() {
         return;
     }
     cs_assert();
     dc_high();
-    spi_begin();
-    for &b in data {
-        spi_send_byte(b);
-    }
-    spi_end();
+    spi_transfer(data);
     cs_deassert();
 }
 
@@ -325,134 +418,134 @@ fn delay_ms(ms: u32) {
 /// `dgen1/.../nv3007_142x428_4line_8bit.c::nv3007_Init_lcm()`.
 pub fn run_init_sequence() {
     // ---- Vendor command-mode unlock + analog rail tuning ----
-    write_cmd(0xFF); write_data(0xA5);
-    write_cmd(0x8F); write_data(0x22); write_data(0x03);
-    write_cmd(0x9A); write_data(0x78);
-    write_cmd(0x9B); write_data(0x78);
-    write_cmd(0x9C); write_data(0xA0);
-    write_cmd(0x9D); write_data(0x17); // VGH = +15.5 V
-    write_cmd(0x9E); write_data(0xC3); // VGL = -10.5 V
-    write_cmd(0x83); write_data(0xA6); // GVCL ADJ -3.87 V
-    write_cmd(0x84); write_data(0xC6); // GVDD ADJ +6.0 V
-    write_cmd(0x85); write_data(0x62); // GVSP ADJ
+    write_cmd_data(0xFF, &[0xA5]);
+    write_cmd_data(0x8F, &[0x22, 0x03]);
+    write_cmd_data(0x9A, &[0x78]);
+    write_cmd_data(0x9B, &[0x78]);
+    write_cmd_data(0x9C, &[0xA0]);
+    write_cmd_data(0x9D, &[0x17]); // VGH = +15.5 V
+    write_cmd_data(0x9E, &[0xC3]); // VGL = -10.5 V
+    write_cmd_data(0x83, &[0xA6]); // GVCL ADJ -3.87 V
+    write_cmd_data(0x84, &[0xC6]); // GVDD ADJ +6.0 V
+    write_cmd_data(0x85, &[0x62]); // GVSP ADJ
 
     // ---- Gamma (V0/V63 + V1/V62 + V2/V61 + V20/V43 + V4/V59 +
     //              V6/V57 + V13/V50 + V36/V27 — positive + negative) ----
-    write_cmd(0x6E); write_data(0x0F);
-    write_cmd(0x7E); write_data(0x0F);
-    write_cmd(0x60); write_data(0x04);
-    write_cmd(0x70); write_data(0x00);
-    write_cmd(0x6D); write_data(0x36);
-    write_cmd(0x7D); write_data(0x36);
-    write_cmd(0x61); write_data(0x05);
-    write_cmd(0x71); write_data(0x05);
-    write_cmd(0x6C); write_data(0x32);
-    write_cmd(0x7C); write_data(0x31);
-    write_cmd(0x62); write_data(0x0B);
-    write_cmd(0x72); write_data(0x0A);
-    write_cmd(0x68); write_data(0x4A);
-    write_cmd(0x78); write_data(0x4C);
-    write_cmd(0x66); write_data(0x32);
-    write_cmd(0x76); write_data(0x30);
-    write_cmd(0x6B); write_data(0x13);
-    write_cmd(0x7B); write_data(0x12);
-    write_cmd(0x63); write_data(0x09);
-    write_cmd(0x73); write_data(0x07);
-    write_cmd(0x6A); write_data(0x16);
-    write_cmd(0x7A); write_data(0x14);
-    write_cmd(0x64); write_data(0x08);
-    write_cmd(0x74); write_data(0x06);
-    write_cmd(0x69); write_data(0x0D);
-    write_cmd(0x79); write_data(0x0A);
-    write_cmd(0x65); write_data(0x04);
-    write_cmd(0x75); write_data(0x03);
-    write_cmd(0x67); write_data(0x33);
-    write_cmd(0x77); write_data(0x22);
-    write_cmd(0x6F); write_data(0x00);
-    write_cmd(0x7F); write_data(0x00);
+    write_cmd_data(0x6E, &[0x0F]);
+    write_cmd_data(0x7E, &[0x0F]);
+    write_cmd_data(0x60, &[0x04]);
+    write_cmd_data(0x70, &[0x00]);
+    write_cmd_data(0x6D, &[0x36]);
+    write_cmd_data(0x7D, &[0x36]);
+    write_cmd_data(0x61, &[0x05]);
+    write_cmd_data(0x71, &[0x05]);
+    write_cmd_data(0x6C, &[0x32]);
+    write_cmd_data(0x7C, &[0x31]);
+    write_cmd_data(0x62, &[0x0B]);
+    write_cmd_data(0x72, &[0x0A]);
+    write_cmd_data(0x68, &[0x4A]);
+    write_cmd_data(0x78, &[0x4C]);
+    write_cmd_data(0x66, &[0x32]);
+    write_cmd_data(0x76, &[0x30]);
+    write_cmd_data(0x6B, &[0x13]);
+    write_cmd_data(0x7B, &[0x12]);
+    write_cmd_data(0x63, &[0x09]);
+    write_cmd_data(0x73, &[0x07]);
+    write_cmd_data(0x6A, &[0x16]);
+    write_cmd_data(0x7A, &[0x14]);
+    write_cmd_data(0x64, &[0x08]);
+    write_cmd_data(0x74, &[0x06]);
+    write_cmd_data(0x69, &[0x0D]);
+    write_cmd_data(0x79, &[0x0A]);
+    write_cmd_data(0x65, &[0x04]);
+    write_cmd_data(0x75, &[0x03]);
+    write_cmd_data(0x67, &[0x33]);
+    write_cmd_data(0x77, &[0x22]);
+    write_cmd_data(0x6F, &[0x00]);
+    write_cmd_data(0x7F, &[0x00]);
 
     // ---- GOA (Gate-On Array) timing ----
-    write_cmd(0x50); write_data(0x00);
-    write_cmd(0x52); write_data(0xD6);
-    write_cmd(0x53); write_data(0x04);
-    write_cmd(0x54); write_data(0x04);
-    write_cmd(0x55); write_data(0x1B);
-    write_cmd(0x56); write_data(0x1B);
+    write_cmd_data(0x50, &[0x00]);
+    write_cmd_data(0x52, &[0xD6]);
+    write_cmd_data(0x53, &[0x04]);
+    write_cmd_data(0x54, &[0x04]);
+    write_cmd_data(0x55, &[0x1B]);
+    write_cmd_data(0x56, &[0x1B]);
 
-    write_cmd(0xA0); write_data_bulk(&[0x2A, 0x24, 0x00]);
-    write_cmd(0xA1); write_data(0x84);
-    write_cmd(0xA2); write_data(0x85);
-    write_cmd(0xA8); write_data(0x36);
-    write_cmd(0xA9); write_data(0x80);
-    write_cmd(0xAA); write_data(0x73);
-    write_cmd(0xAB); write_data_bulk(&[0x03, 0x61]);
-    write_cmd(0xAC); write_data_bulk(&[0x03, 0x65]);
-    write_cmd(0xAD); write_data_bulk(&[0x03, 0x60]);
-    write_cmd(0xAE); write_data_bulk(&[0x03, 0x64]);
-    write_cmd(0xB9); write_data(0x82);
-    write_cmd(0xBA); write_data(0x83);
-    write_cmd(0xBB); write_data(0x80);
-    write_cmd(0xBC); write_data(0x81);
-    write_cmd(0xBD); write_data(0x02);
-    write_cmd(0xBE); write_data(0x01);
-    write_cmd(0xBF); write_data(0x04);
-    write_cmd(0xC0); write_data(0x03);
-    write_cmd(0xC4); write_data(0x33);
-    write_cmd(0xC5); write_data(0x80);
-    write_cmd(0xC6); write_data(0x73);
-    write_cmd(0xC7); write_data(0x01);
-    write_cmd(0xC8); write_data_bulk(&[0x33, 0x33]);
-    write_cmd(0xC9); write_data(0x5B);
-    write_cmd(0xCA); write_data(0x5A);
-    write_cmd(0xCB); write_data(0x5D);
-    write_cmd(0xCC); write_data(0x5C);
-    write_cmd(0xCD); write_data_bulk(&[0x33, 0x33]);
-    write_cmd(0xCE); write_data(0x5F);
-    write_cmd(0xCF); write_data(0x5E);
-    write_cmd(0xD0); write_data(0x61);
-    write_cmd(0xD1); write_data(0x60);
+    write_cmd_data(0xA0, &[0x2A, 0x24, 0x00]);
+    write_cmd_data(0xA1, &[0x84]);
+    write_cmd_data(0xA2, &[0x85]);
+    write_cmd_data(0xA8, &[0x36]);
+    write_cmd_data(0xA9, &[0x80]);
+    write_cmd_data(0xAA, &[0x73]);
+    write_cmd_data(0xAB, &[0x03, 0x61]);
+    write_cmd_data(0xAC, &[0x03, 0x65]);
+    write_cmd_data(0xAD, &[0x03, 0x60]);
+    write_cmd_data(0xAE, &[0x03, 0x64]);
+    write_cmd_data(0xB9, &[0x82]);
+    write_cmd_data(0xBA, &[0x83]);
+    write_cmd_data(0xBB, &[0x80]);
+    write_cmd_data(0xBC, &[0x81]);
+    write_cmd_data(0xBD, &[0x02]);
+    write_cmd_data(0xBE, &[0x01]);
+    write_cmd_data(0xBF, &[0x04]);
+    write_cmd_data(0xC0, &[0x03]);
+    write_cmd_data(0xC4, &[0x33]);
+    write_cmd_data(0xC5, &[0x80]);
+    write_cmd_data(0xC6, &[0x73]);
+    write_cmd_data(0xC7, &[0x01]);
+    write_cmd_data(0xC8, &[0x33, 0x33]);
+    write_cmd_data(0xC9, &[0x5B]);
+    write_cmd_data(0xCA, &[0x5A]);
+    write_cmd_data(0xCB, &[0x5D]);
+    write_cmd_data(0xCC, &[0x5C]);
+    write_cmd_data(0xCD, &[0x33, 0x33]);
+    write_cmd_data(0xCE, &[0x5F]);
+    write_cmd_data(0xCF, &[0x5E]);
+    write_cmd_data(0xD0, &[0x61]);
+    write_cmd_data(0xD1, &[0x60]);
 
     // ---- Frame timing / inversion control ----
-    write_cmd(0xB0); write_data_bulk(&[0x3A, 0x3A, 0x00, 0x00]);
-    write_cmd(0xB6); write_data(0x32);
-    write_cmd(0xB7); write_data(0x80);
-    write_cmd(0xB8); write_data(0x73);
-    write_cmd(0xE0); write_data(0x00);
-    write_cmd(0xE1); write_data_bulk(&[0x03, 0x0F]);
-    write_cmd(0xE2); write_data(0x04);
-    write_cmd(0xE3); write_data(0x01);
-    write_cmd(0xE4); write_data(0x0E);
-    write_cmd(0xE5); write_data(0x01);
-    write_cmd(0xE6); write_data(0x19);
-    write_cmd(0xE7); write_data(0x10);
-    write_cmd(0xE8); write_data(0x10);
+    write_cmd_data(0xB0, &[0x3A, 0x3A, 0x00, 0x00]);
+    write_cmd_data(0xB6, &[0x32]);
+    write_cmd_data(0xB7, &[0x80]);
+    write_cmd_data(0xB8, &[0x73]);
+    write_cmd_data(0xE0, &[0x00]);
+    write_cmd_data(0xE1, &[0x03, 0x0F]);
+    write_cmd_data(0xE2, &[0x04]);
+    write_cmd_data(0xE3, &[0x01]);
+    write_cmd_data(0xE4, &[0x0E]);
+    write_cmd_data(0xE5, &[0x01]);
+    write_cmd_data(0xE6, &[0x19]);
+    write_cmd_data(0xE7, &[0x10]);
+    write_cmd_data(0xE8, &[0x10]);
     // 0xE9: inversion mode. 0x21 = dot inversion (default). Other
     // documented values: 0x20 column, 0xA0 2-dot, 0xA1 4-dot.
-    write_cmd(0xE9); write_data(0x21);
-    write_cmd(0xEA); write_data(0x12);
-    write_cmd(0xEB); write_data(0xD0);
-    write_cmd(0xEC); write_data(0x04);
-    write_cmd(0xED); write_data(0x07);
-    write_cmd(0xEE); write_data(0x07);
-    write_cmd(0xEF); write_data(0x09);
-    write_cmd(0xF0); write_data(0xD0);
-    write_cmd(0xF1); write_data(0x0E);
-    write_cmd(0xF9); write_data(0x56);
-    write_cmd(0xF2); write_data_bulk(&[0x26, 0x1B, 0x0B, 0x20]);
-    write_cmd(0xEC); write_data(0x04);
+    write_cmd_data(0xE9, &[0x21]);
+    write_cmd_data(0xEA, &[0x12]);
+    write_cmd_data(0xEB, &[0xD0]);
+    write_cmd_data(0xEC, &[0x04]);
+    write_cmd_data(0xED, &[0x07]);
+    write_cmd_data(0xEE, &[0x07]);
+    write_cmd_data(0xEF, &[0x09]);
+    write_cmd_data(0xF0, &[0xD0]);
+    write_cmd_data(0xF1, &[0x0E]);
+    write_cmd_data(0xF9, &[0x56]);
+    write_cmd_data(0xF2, &[0x26, 0x1B, 0x0B, 0x20]);
+    write_cmd_data(0xEC, &[0x04]);
 
     // 0x35: Tearing Effect Line ON (TE pin). Set to 0x00 = "V-blank only".
-    write_cmd(0x35); write_data(0x00);
+    write_cmd_data(0x35, &[0x00]);
     // 0x44: tear scanline.
-    write_cmd(0x44); write_data_bulk(&[0x00, 0x10]);
+    write_cmd_data(0x44, &[0x00, 0x10]);
     // 0x46: brightness/related.
-    write_cmd(0x46); write_data(0x10);
+    write_cmd_data(0x46, &[0x10]);
 
     // Lock vendor command-mode (mirror of the 0xFF/0xA5 unlock at the top).
-    write_cmd(0xFF); write_data(0x00);
+    write_cmd_data(0xFF, &[0x00]);
 
     // ---- Pixel format: COLMOD (0x3A) = 0x05 → RGB565 16-bit ----
-    write_cmd(0x3A); write_data(0x05);
+    write_cmd_data(0x3A, &[0x05]);
 
     // ---- Sleep out + display on ----
     write_cmd(0x11);                  // SLPOUT
@@ -478,14 +571,9 @@ pub fn run_init_sequence() {
 /// entire visible area.
 pub fn set_window(x0: u16, y0: u16, x1: u16, y1: u16) {
     let bytes = build_set_window_bytes(x0, y0, x1, y1);
-    // CASET (0x2A): 4 bytes
-    write_cmd(0x2A);
-    write_data_bulk(&bytes.caset);
-    // RASET (0x2B): 4 bytes
-    write_cmd(0x2B);
-    write_data_bulk(&bytes.raset);
-    // RAMWR (0x2C): begin RAM-write
-    write_cmd(0x2C);
+    write_cmd_data(0x2A, &bytes.caset); // CASET — single CS window
+    write_cmd_data(0x2B, &bytes.raset); // RASET — single CS window
+    write_cmd(0x2C); // RAMWR — pixel data follows via write_pixels*
 }
 
 /// Pure-logic byte builder for [`set_window`] — host-testable.
@@ -505,36 +593,52 @@ struct SetWindowBytes {
     raset: [u8; 4],
 }
 
-/// Write `n` pixels of `color` (RGB565) to the current window.
-/// Useful for clears or solid-color fills without allocating a buffer.
+/// Write `n` pixels of `color` (RGB565, big-endian on the wire) to the current
+/// window. Chunked by pixel count — never builds a 121 KB buffer (no_std,
+/// stack-only). CS stays low across all chunks; only SPE toggles per chunk.
 pub fn write_pixels_solid(color: u16, n: u32) {
+    if n == 0 {
+        return;
+    }
     let hi = (color >> 8) as u8;
     let lo = color as u8;
     cs_assert();
     dc_high();
-    spi_begin();
-    for _ in 0..n {
-        spi_send_byte(hi);
-        spi_send_byte(lo);
+    // MAX_CHUNK is even, so MAX_CHUNK/2 pixels = MAX_CHUNK bytes per chunk —
+    // a pixel is never split across the SPE-toggle gap.
+    let pixels_per_chunk: u32 = u32::from(MAX_CHUNK / 2);
+    let mut remaining = n;
+    while remaining > 0 {
+        let chunk_px = core::cmp::min(remaining, pixels_per_chunk);
+        spi_begin((chunk_px * 2) as u16);
+        for _ in 0..chunk_px {
+            spi_send_byte(hi);
+            spi_send_byte(lo);
+        }
+        spi_end();
+        remaining -= chunk_px;
     }
-    spi_end();
     cs_deassert();
 }
 
-/// Write a slice of RGB565 pixels to the current window. The slice is
-/// transmitted big-endian on the wire (NV3007 expects high byte first).
+/// Write a slice of RGB565 pixels to the current window. Transmitted big-endian
+/// (NV3007 expects high byte first). Chunked by pixel count; CS held low across
+/// all chunks.
 pub fn write_pixels(buf: &[u16]) {
     if buf.is_empty() {
         return;
     }
     cs_assert();
     dc_high();
-    spi_begin();
-    for &px in buf {
-        spi_send_byte((px >> 8) as u8);
-        spi_send_byte(px as u8);
+    let pixels_per_chunk = (MAX_CHUNK / 2) as usize;
+    for chunk in buf.chunks(pixels_per_chunk) {
+        spi_begin((chunk.len() * 2) as u16);
+        for &px in chunk {
+            spi_send_byte((px >> 8) as u8);
+            spi_send_byte(px as u8);
+        }
+        spi_end();
     }
-    spi_end();
     cs_deassert();
 }
 
@@ -544,6 +648,21 @@ pub fn fill_screen(color: u16) {
     write_pixels_solid(color, FRAME_WIDTH as u32 * FRAME_HEIGHT as u32);
 }
 
+/// Fill a `w`×`h` rectangle at `(x0, y0)` with `color` — a PARTIAL update.
+/// Only the rect's `w*h*2` bytes cross SPI (the controller auto-wraps RAMWR
+/// within the CASET/RASET window), so for UI-sized regions this is sub-
+/// millisecond versus ~24 ms for a full 142×428 repaint at 40 MHz. This is
+/// the primitive the trusted-UI layer uses to keep interactive screens
+/// instant — redraw only the changed region (a PIN digit, a text line, the
+/// fingerprint words), never the whole frame.
+pub fn fill_rect(x0: u16, y0: u16, w: u16, h: u16, color: u16) {
+    if w == 0 || h == 0 {
+        return;
+    }
+    set_window(x0, y0, x0 + w - 1, y0 + h - 1);
+    write_pixels_solid(color, u32::from(w) * u32::from(h));
+}
+
 // ---------------------------------------------------------------------------
 // Top-level init
 // ---------------------------------------------------------------------------
@@ -551,15 +670,127 @@ pub fn fill_screen(color: u16) {
 /// Bring the LCD up. Assumes [`hw::spi_hw::init`] has already
 /// configured the SPI peripheral + CS/SCK/MOSI pins. Steps:
 ///
-/// 1. Configure DC + RES GPIOs (PE3 + PE1, push-pull output).
+/// 1. Configure DC + RES GPIOs (PE7 on GPIOE + PD15 on GPIOD, push-pull).
 /// 2. Hardware reset pulse.
 /// 3. Run the production NV3007 init sequence.
 /// 4. Clear the screen to black (RGB565 `0x0000`).
+///
+/// Assumes [`hw::spi_hw::init()`] has already run (SPI1 + CS/SCK/MOSI).
 pub fn init() {
     init_dc_res_gpios();
     hard_reset();
     run_init_sequence();
     fill_screen(0x0000);
+}
+
+/// Phase-B bench bring-up (`lcd-test` feature): set up SPI1 + the LCD, then
+/// cycle the whole screen **green → red → blue** forever (~1 s each). The
+/// first physical confirmation that the wiring + the ported init sequence
+/// work on real silicon. Never returns. Run via `make lcd-test-hw`.
+#[cfg(feature = "lcd-test")]
+pub fn lcd_test_loop() -> ! {
+    // RES is tied to 3V3 externally (PD15 and PE14 both proved un-drivable on
+    // this board — loaded on-board), so the panel is held OUT of reset and we
+    // reset it in software with SWRESET (0x01) instead of a hardware pulse.
+    secure_log!("[LCD-TEST] start (RES=3V3, software reset via SWRESET)");
+    crate::hw::spi_hw::init();
+    secure_log!("[LCD-TEST] spi_hw::init done");
+    init_dc_res_gpios(); // DC = PE7 (the PE14/RES config is now unused)
+    secure_log!("[LCD-TEST] dc gpio done");
+    // Software reset first (RES is tied to 3V3, so no hardware-reset pulse).
+    write_cmd(0x01); // SWRESET
+    secure_log!("[LCD-TEST] SWRESET sent");
+    delay_ms(150);
+    // FULL canonical dgen1 init for this exact NV3007 SKU. The earlier minimal
+    // init (SWRESET/SLPOUT/COLMOD/DISPON) confirmed the panel is alive after
+    // the SPI-transfer fix, but left the pixel format under-configured: solid
+    // fills showed fine vertical striping (RGB565 hi/lo bytes split across
+    // adjacent columns) because 16-bit mode was never latched — COLMOD 0x05 was
+    // sent WITHOUT the vendor unlock (0xFF 0xA5) that gates it, and MADCTL + the
+    // GOA timing were skipped, leaving the bottom band unaddressed. The full
+    // sequence unlocks vendor regs, sets gamma/GOA/COLMOD in the right order,
+    // then SLPOUT + DISPON + full-screen window. Multi-parameter commands now
+    // transmit correctly via write_cmd_data, so this runs as the vendor intends.
+    run_init_sequence();
+    secure_log!("[LCD-TEST] full dgen1 init done — fill loop");
+
+    // One-shot repaint timing via the DWT cycle counter — turns "feels faster"
+    // into a real ms/frame number at the current SPI prescaler.
+    // SAFETY: TRCENA + DWT_LAR unlock + CYCCNT enable; plain debug-block writes
+    // always accessible to secure code (mirrors bench_masked_sha.rs).
+    unsafe {
+        core::ptr::write_volatile(
+            0xE000_EDFC as *mut u32,
+            core::ptr::read_volatile(0xE000_EDFC as *mut u32) | (1 << 24),
+        ); // DEMCR.TRCENA
+        core::ptr::write_volatile(0xE000_1FB0 as *mut u32, 0xC5AC_CE55); // DWT_LAR unlock
+        core::ptr::write_volatile(0xE000_1004 as *mut u32, 0); // DWT_CYCCNT = 0
+        core::ptr::write_volatile(
+            0xE000_1000 as *mut u32,
+            core::ptr::read_volatile(0xE000_1000 as *mut u32) | 1,
+        ); // DWT_CTRL.CYCCNTENA
+    }
+    // SAFETY: plain read of the free-running DWT cycle counter.
+    let t0 = unsafe { core::ptr::read_volatile(0xE000_1004 as *mut u32) };
+    fill_screen(0x07E0); // measured green repaint
+    let dt = unsafe { core::ptr::read_volatile(0xE000_1004 as *mut u32) }.wrapping_sub(t0);
+    let us = dt / 160; // 160 cycles/µs @160 MHz
+    secure_log!(
+        "[LCD-TEST] full repaint = {} us ({} cyc) ~ {} fps",
+        us,
+        dt,
+        1_000_000 / us.max(1)
+    );
+    delay_ms(1000);
+
+    // A couple of full-frame fills so the whole panel is still exercised...
+    fill_screen(0xF800); // red
+    delay_ms(700);
+    fill_screen(0x001F); // blue
+    delay_ms(700);
+
+    // ---- Partial-update showcase ----
+    // Clear once, then measure ONE small fill_rect: only the box's bytes cross
+    // SPI, so it's ~instant compared to a full repaint.
+    fill_screen(0x0000);
+    let p0 = unsafe { core::ptr::read_volatile(0xE000_1004 as *mut u32) };
+    fill_rect(20, 60, 40, 40, 0xFFFF);
+    let pdt = unsafe { core::ptr::read_volatile(0xE000_1004 as *mut u32) }.wrapping_sub(p0);
+    let pus = pdt / 160;
+    secure_log!(
+        "[LCD-TEST] partial 40x40 = {} us ({} fps-equiv) vs full-frame {} us",
+        pus,
+        1_000_000 / pus.max(1),
+        us
+    );
+    fill_rect(20, 60, 40, 40, 0x0000); // erase
+
+    // Moving-box demo (forever), FLICKER-FREE. The naive "draw box → erase whole
+    // box → redraw shifted" leaves the box black for ~1 ms/step → visible
+    // flicker. Instead we only touch what changes: as the box slides right by
+    // STEP, draw a STEP-wide green sliver on the new leading edge and erase a
+    // STEP-wide sliver on the vacated trailing edge. The 30 px body is never
+    // cleared, so there is no black gap — this is the draw-over technique the
+    // real trusted-UI layer uses to repaint a PIN digit / text line without
+    // flicker (~180 B/step, far below the bus limit).
+    const BOX_W: u16 = 30;
+    const STEP: u16 = 3;
+    const BOX_Y: u16 = 100;
+    let mut x: u16 = 0;
+    fill_rect(x, BOX_Y, BOX_W, BOX_W, 0x07E0); // initial solid box
+    loop {
+        delay_ms(16); // ~60 Hz
+        if x + STEP + BOX_W >= FRAME_WIDTH {
+            // wrap: clear the box and restart at the left edge
+            fill_rect(x, BOX_Y, BOX_W, BOX_W, 0x0000);
+            x = 0;
+            fill_rect(x, BOX_Y, BOX_W, BOX_W, 0x07E0);
+        } else {
+            fill_rect(x + BOX_W, BOX_Y, STEP, BOX_W, 0x07E0); // extend leading edge
+            fill_rect(x, BOX_Y, STEP, BOX_W, 0x0000); // retract trailing edge
+            x += STEP;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

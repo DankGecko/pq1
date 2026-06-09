@@ -1112,6 +1112,13 @@ fn main() -> ! {
     #[cfg(feature = "decoy-flicker-test")]
     ui::seed_wizard::decoy_flicker_test_loop();
 
+    // Phase-B LCD bring-up — short-circuit into the NV3007 green/red/blue
+    // fill loop. No measured_boot, no wizard, no SE access — just SPI1 + LCD
+    // render forever so a bench observer can confirm the wiring + the ported
+    // init sequence on real silicon. Run via `make lcd-test-hw`.
+    #[cfg(feature = "lcd-test")]
+    hw::lcd_nv3007::lcd_test_loop();
+
     // §32 P4/P5 interactive UI harness. Short-circuits into a loop that
     // drives JUST the duress-PIN setup dialogs on the real OLED — no SE,
     // no wizard, no provisioning. Lets a bench operator validate the

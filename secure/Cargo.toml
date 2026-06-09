@@ -416,6 +416,10 @@ decoy-frames = []
 # follow-up. Mutually exclusive with `ui-oled` (SSD1306 / I²C) — only
 # one display backend can ship per build.
 ui-lcd = ["spi1-arduino"]
+# Phase-B LCD bring-up: short-circuits `main()` into `lcd_nv3007::lcd_test_loop`
+# (green→red→blue fill loop) to validate the NV3007 wiring + init sequence on
+# real silicon. Pulls in `ui-lcd` (→ `spi1-arduino`). Build via `make lcd-test-hw`.
+lcd-test = ["ui-lcd"]
 # Factory provisioning firmware — single-purpose build that the
 # factory flashes to a fresh chip. Short-circuits `main()` into a
 # state machine that:

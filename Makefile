@@ -3073,6 +3073,28 @@ build-hw-lcd-bringup:
 	@echo "    in main.rs behind a lcd-test feature gate, mirror"
 	@echo "    decoy-flicker-hw's short-circuit pattern."
 
+# Phase-B LCD bring-up (NV3007). Flashes a firmware that short-circuits
+# main() into hw::lcd_nv3007::lcd_test_loop — the screen cycles
+# green -> red -> blue (~1 s each) forever. First on-silicon confirmation
+# that the wiring + the ported init sequence work. Wiring: docs/nv3007-wiring.md
+# (SPI on CN13 D10/D11/D13, DC=PE7/D4, RES=PD15/D2, VCC+BLK=3V3, GND).
+# Assumes TZ option bytes are already set (run any *-hw target once first).
+lcd-test-hw:
+	@echo "==> Building LCD bring-up test (NV3007 green/red/blue fill loop)..."
+	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
+	cargo build --release --target $(TARGET) --target-dir target/secure \
+		-p sphincs-tz-secure --no-default-features \
+		--features lcd-test,ui-noop,mock-se,debug-log,stm32u585,dev-testkey,usb
+	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
+	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
+	cargo build --release --target $(TARGET) --target-dir target/nonsecure \
+		-p sphincs-tz-nonsecure --features stm32u585,usb
+	@echo "==> Flashing..."
+	@probe-rs download --chip STM32U585AIIx $(NONSECURE_ELF)
+	@probe-rs download --chip STM32U585AIIx $(SECURE_ELF)
+	@echo "==> Running — watch the LCD: green -> red -> blue cycling. Ctrl-C to detach."
+	@probe-rs run --chip STM32U585AIIx $(SECURE_ELF)
+
 clean:
 	rm -rf target/secure target/nonsecure target/veneers.o
 

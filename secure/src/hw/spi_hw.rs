@@ -186,12 +186,38 @@ pub fn init() {
     REG.spi_cr1.write(1 << 12); // SSI=1, SPE=0
     cortex_m::asm::dsb();
 
-    // CFG1: 8-bit data size (DSIZE[4:0] = 7), baud rate prescaler
-    // PCLK = 160 MHz.  MBR[2:0] in bits [30:28]:
-    //   100 = ÷32 → 160/32 = 5 MHz
+    // CFG1: 8-bit data size (DSIZE[4:0] = 7), baud rate prescaler.
+    // PCLK = 160 MHz.  SCK = 160 / 2^(MBR+1), MBR[2:0] in bits [30:28].
     // DSIZE[4:0] in bits [4:0] = 0b00111 (8-bit)
     // FTHLV[1:0] in bits [6:5] = 00 (1-data threshold for TXP/RXP)
-    REG.spi_cfg1.write((0b100 << 28) | 7);
+    //
+    // The NV3007 LCD (`ui-lcd`) needs throughput — at ÷32 (5 MHz) a full
+    // 121,552-byte RGB565 repaint takes ~200 ms, and while that slowly streams
+    // top-to-bottom the panel is scanning out the previous frame, so the two
+    // race and produce visible tearing (a moving horizontal seam + per-column
+    // shimmer during color transitions; static frames are clean). ÷8 (20 MHz)
+    // cuts the repaint to ~65-70 ms (per-byte TXP poll overhead grows with
+    // clock), shrinking the tearing window ~4×. 20 MHz has 2.5× margin over the
+    // NV3007 10 ns data setup/hold spec (Table 8-3-2; SCK half-period 25 ns) and
+    // matches what real NV3007 drivers run (ESPHome 20 MHz, LVGL 40 MHz).
+    //
+    // Gated on `ui-lcd` so a non-LCD build (e.g. the excluded `tropic01-se`,
+    // which shares SPI1) keeps the conservative ÷32 — the bump is bus-wide, so
+    // only raise it where a fast display actually needs it. If striping ever
+    // reappears at 20 MHz it means the jumper wiring can't sustain the edges:
+    // back off to ÷16 (`0b011`, 10 MHz). DSIZE stays 7; only MBR[30:28] changes.
+    #[cfg(feature = "ui-lcd")]
+    const MBR: u32 = 0b001; // ÷4  → 40 MHz (NV3007 fast repaint, ~25-33 ms/frame)
+    #[cfg(not(feature = "ui-lcd"))]
+    const MBR: u32 = 0b100; // ÷32 → 5 MHz  (conservative shared-bus default)
+    REG.spi_cfg1.write((MBR << 28) | 7);
+    // ÷4 = 40 MHz: the CPU's per-byte TXP poll can still just keep the FIFO fed
+    // (a byte clocks in 200 ns vs ~100 ns poll), so this ~doubles throughput
+    // over ÷8. SCK half-period is 12.5 ns vs the NV3007 10 ns setup/hold spec —
+    // only ~2.5 ns bare-die margin, so it depends on clean jumper wiring. If
+    // striping reappears, the wiring can't hold the edges: fall back to ÷8
+    // (`0b010`, 20 MHz) or ÷16 (`0b011`, 10 MHz). ÷2 (80 MHz) would starve the
+    // polled FIFO — that needs DMA, not a prescaler change.
 
     // CFG2: Master mode, software NSS management, SSOE disabled
     // MASTER (bit 22) = 1
