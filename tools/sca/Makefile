@@ -45,7 +45,7 @@ SKDF_ELF := $(SKDF_DIR)/target/$(TARGET)/release/sca-saes-kdf-target
 DONJON   ?= donjon-sca
 SCARED   ?= scared-sca
 
-.PHONY: build build-kdf build-c10v build-fw-verify build-ns-ptr build-c10-sign build-cap build-dispatch build-flashctr build-saes-kdf build-groth16 fi fi-twofault c10 pin c10v fw-verify ns-ptr c10-sign cap dispatch flashctr kdf saes-kdf wait-random-leak bip39-leak seed-deriv-leak recovery-leak seedwizard-exact-leak groth16 groth16-full f9-retest f9-deeper f9-scared-collect f9-scared sweeps doctor clean
+.PHONY: build build-kdf build-c10v build-fw-verify build-ns-ptr build-c10-sign build-cap build-dispatch build-flashctr build-saes-kdf build-groth16 fi fi-twofault c10 pin c10v fw-verify ns-ptr c10-sign cap dispatch flashctr kdf saes-kdf wait-random-leak bip39-leak seed-deriv-leak recovery-leak seedwizard-exact-leak glyph-leak groth16 groth16-full f9-retest f9-deeper f9-scared-collect f9-scared sweeps doctor clean
 
 build: $(FI_ELF)
 
@@ -189,6 +189,14 @@ recovery-leak: build-kdf
 # the typed prefix? Same shape as F-25.
 seedwizard-exact-leak: build-kdf
 	$(DONJON) run leakage_seedwizard_exact.py
+
+# F-24: does the trusted-display secret glyph-render path (secret_text.rs
+# ct_glyph_col 96-entry scan + the branchless lcd.rs::blit_glyph expansion)
+# leak the rendered secret character via mem_address? Regression sentinel:
+# the pre-CT DIRECT FONT[(ch-0x20)][col] fetch (EXPECTED to leak) vs the
+# constant-time scan (EXPECTED flat).
+glyph-leak: build-kdf
+	$(DONJON) run leakage_glyph.py
 
 # F-9 re-test: did F-16's shuffle mask the FORS-leaf-index mem_address leak?
 # Compares post-F-16 max|t| against F-9's recorded baseline of 40.71.

@@ -43,8 +43,10 @@ fn ct_eq_u8(a: u8, b: u8) -> u8 {
 /// **`core::hint::black_box` barriers are load-bearing** — without them
 /// LLVM folds the loop into a direct `FONT_FLAT_5X8[ch - 0x20][col]`
 /// lookup (same regression mode F-22's `ct_load_word` saw). Verified
-/// empirically; if a future commit removes them, re-run the F-24
-/// regression harness in `tools/sca/` (when wired) to catch it.
+/// empirically via the F-24 TVLA harness `make -C tools/sca glyph-leak`
+/// (2026-06-09: leaky-baseline `max|t|=650.90` → LEAKAGE; this constant-time
+/// scan `max|t|=0.00` over 60,173 mem-address samples → flat). If a future
+/// commit removes the barriers, that harness regresses — re-run it to catch it.
 #[inline(never)]
 fn ct_glyph_col(ch: u8, col: usize) -> u8 {
     use core::hint::black_box;

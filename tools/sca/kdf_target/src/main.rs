@@ -931,6 +931,242 @@ pub extern "C" fn sca_seedwizard_prefix_is_exact_word_ct(
     unsafe { core::ptr::write_volatile(out_ptr, any_match); }
 }
 
+// ---------------------------------------------------------------------------
+// F-24 — secret glyph-render leakage (trusted-display secret rows).
+//
+// `embedded_graphics::Text::draw` does `MonoFont::glyph(char)` lookups keyed on
+// each rendered character — a 96-table-style `mem_address` leak for SECRET
+// characters (the master mnemonic in the seed wizard). `secure/src/ui/
+// secret_text.rs` replaces that, for secret rows, with `ct_glyph_col`: a
+// constant-time scan over all 96 `FONT_FLAT_5X8` entries whose load addresses
+// are keyed on the PUBLIC loop counter `i`, not the secret `ch`. The fetched
+// 5 column-bytes then feed the branchless RGB565 mask-select expansion in
+// `ui::lcd::blit_glyph`, which writes every pixel unconditionally (no
+// secret-dependent branch / address).
+//
+// This pair validates that the new LCD secret-render path does NOT leak the
+// rendered secret character via `mem_address`:
+//
+//   * `sca_glyph_secret_row_leaky` — regression sentinel. Fetches glyph
+//     columns via the DIRECT secret-indexed load (`public_glyph_cols`'s
+//     `FONT_FLAT_5X8[(ch - 0x20)][col]` form, the same fold-target the
+//     `ct_glyph_col` doc comment warns LLVM produces if the black_box
+//     barriers are removed). EXPECTED to leak (`max|t| > 4.5`).
+//
+//   * `sca_glyph_secret_row_ct` — verbatim mirror of `ct_eq_u8` +
+//     `ct_glyph_col` (black_box barriers + `#[inline(never)]` kept) +
+//     `secret_glyph_cols`. EXPECTED flat (`max|t| ≤ 4.5`).
+//
+// Both probes render a 16-byte secret word row through the SAME branchless
+// blit (only the glyph FETCH differs — isolating the fetch as the sole
+// variable), XOR-folding the expanded pixels into a 32-byte output to defeat
+// DCE.
+//
+// CAVEAT (house pattern, cf. `sca_dual_se_xor`): this validates the ADDRESS
+// channel only. rainbow's `mem_address` model is blind to the value /
+// Hamming-weight channel of the loaded glyph bytes, so the dummy
+// `FONT_FLAT_5X8` values below are irrelevant to the test — only the access
+// PATTERN (96-entry × 5-byte stride) must match production. The pixel-value
+// dependence on the secret is the accepted F-24 stage-E display-broadcast
+// residual (the OLED/LCD drivers physically emit the framebuffer), unfixable
+// in firmware.
+//
+// Run via `make glyph-leak`.
+// ---------------------------------------------------------------------------
+
+// Font constants — mirror the build-generated values from
+// `secure/build.rs::generate_font_flat` (emitted into $OUT_DIR/font_flat.rs and
+// `include!`-ed at `secret_text.rs:26`). Re-declared here because that file is
+// `#[path]`-unreachable from this detached workspace.
+const GLYPH_FONT_FIRST_CHAR: u8 = 0x20; // space
+const GLYPH_FONT_LAST_CHAR: u8 = 0x7F; // DEL
+const GLYPH_FONT_W: usize = 5;
+const GLYPH_FONT_H: usize = 8;
+const GLYPH_FONT_N: usize = 96; // 0x7F - 0x20 + 1
+
+// Dummy 96×5 font table. VALUES are irrelevant to the address-channel test
+// (rainbow's `mem_address` model is value-blind), but the SHAPE/STRIDE must
+// match production exactly: a 96-entry array of 5-byte rows, so the leaking
+// load `&FONT[0] + (ch - 0x20) * 5` reproduces the production access pattern.
+// The pattern is a NON-CONSTANT function of (i, c) so LLVM can't const-fold the
+// indexed load into a single constant (which would make the secret-dependent
+// address vanish from the trace and give a false "flat").
+const fn make_dummy_font() -> [[u8; GLYPH_FONT_W]; GLYPH_FONT_N] {
+    let mut f = [[0u8; GLYPH_FONT_W]; GLYPH_FONT_N];
+    let mut i = 0usize;
+    while i < GLYPH_FONT_N {
+        let mut c = 0usize;
+        while c < GLYPH_FONT_W {
+            // Arbitrary but per-(i,c)-distinct so the loaded byte varies.
+            f[i][c] = ((i as u8).wrapping_mul(31).wrapping_add(c as u8).wrapping_mul(7)) ^ 0x5A;
+            c += 1;
+        }
+        i += 1;
+    }
+    f
+}
+static GLYPH_FONT_FLAT_5X8: [[u8; GLYPH_FONT_W]; GLYPH_FONT_N] = make_dummy_font();
+
+// --- CT primitives: verbatim mirror of secret_text.rs:33-61 -----------------
+
+/// Verbatim mirror of `secret_text.rs::ct_eq_u8` (lines 33-38) — constant-time
+/// u8 equality, `0xFF` iff equal / `0x00` otherwise.
+#[inline(always)]
+fn glyph_ct_eq_u8(a: u8, b: u8) -> u8 {
+    let x: u16 = a as u16 ^ b as u16;
+    let nz: u16 = (x | x.wrapping_neg()) >> 15; // 0 iff eq, 1 iff diff
+    (nz as u8).wrapping_sub(1) // 0xFF iff eq, 0x00 iff diff
+}
+
+/// Verbatim mirror of `secret_text.rs::ct_glyph_col` (lines 48-61). The three
+/// `black_box` barriers + `#[inline(never)]` are LOAD-BEARING — without them
+/// LLVM folds the loop into a direct `FONT_FLAT_5X8[ch - 0x20][col]` lookup
+/// (the leaky form). The outer index into the font table is the PUBLIC loop
+/// counter `i` (0..96), never the secret `ch`.
+#[inline(never)]
+fn glyph_ct_glyph_col(ch: u8, col: usize) -> u8 {
+    use core::hint::black_box;
+    let mut acc: u8 = 0;
+    let mut i = 0u8;
+    while (i as usize) < GLYPH_FONT_N {
+        let entry_ch = GLYPH_FONT_FIRST_CHAR + i;
+        let mask = black_box(glyph_ct_eq_u8(entry_ch, ch));
+        let glyph_col = black_box(GLYPH_FONT_FLAT_5X8[i as usize][col]);
+        acc = black_box(acc | (glyph_col & mask));
+        i += 1;
+    }
+    acc
+}
+
+/// Verbatim mirror of `secret_text.rs::secret_glyph_cols` (lines 110-119),
+/// minus the `#[cfg(feature = "ui-lcd")]` gate (this probe crate has no such
+/// feature). Fetches all 5 column-bytes of a glyph via the constant-time scan.
+fn glyph_secret_glyph_cols(ch: u8) -> [u8; GLYPH_FONT_W] {
+    let mut out = [0u8; GLYPH_FONT_W];
+    let mut c = 0usize;
+    while c < GLYPH_FONT_W {
+        out[c] = glyph_ct_glyph_col(ch, c);
+        c += 1;
+    }
+    out
+}
+
+/// LEAKY glyph fetch — verbatim mirror of `secret_text.rs::public_glyph_cols`
+/// (lines 124-131): a DIRECT, secret-indexed table load. The range guard is
+/// both the faithful production form AND bounds-safe (max idx = 0x7F - 0x20 =
+/// 95) — load-bearing because `rand_inputs` feeds arbitrary bytes 0..=255 and
+/// an unguarded `FONT[(ch - 0x20)]` would underflow/panic for `ch < 0x20`.
+/// The load address `&FONT[0] + (ch - 0x20) * 5` is a linear function of the
+/// secret `ch` → the address channel leaks it.
+fn glyph_leaky_glyph_cols(ch: u8) -> [u8; GLYPH_FONT_W] {
+    if ch >= GLYPH_FONT_FIRST_CHAR && ch <= GLYPH_FONT_LAST_CHAR {
+        GLYPH_FONT_FLAT_5X8[(ch - GLYPH_FONT_FIRST_CHAR) as usize]
+    } else {
+        [0u8; GLYPH_FONT_W]
+    }
+}
+
+// --- branchless blit: per-pixel core of `lcd.rs::blit_glyph` (lines 240-259) -
+//
+// Reproduces ONLY the per-pixel mask-select over the fixed CELL_N=360 footprint
+// (24×15 native cell). `sx`/`sy` derive from the public landscape loop counters
+// (gx 0..GLYPH_LW, gy 0..GLYPH_LH), NOT the secret — so the index into `cols`
+// is public; the secret enters only the CONTENTS of `cols`. FLIP / PANEL_W /
+// set_window / write_pixels are Display/hardware-orientation state, out of
+// scope for the address-channel character and not pullable into this crate.
+
+const GLYPH_SCALE: usize = 3; // lcd.rs:55 — integer upscale
+const GLYPH_LW: usize = GLYPH_FONT_W * GLYPH_SCALE; // 15 — landscape X within glyph
+const GLYPH_LH: usize = GLYPH_FONT_H * GLYPH_SCALE; // 24 — landscape Y within glyph
+const GLYPH_FG: u16 = 0xFFFF; // lcd.rs:47 — white text
+const GLYPH_BG: u16 = 0x0000; // lcd.rs:48 — black background
+
+/// Branchless RGB565 expansion of one glyph cell's 5 column-bytes, mirroring
+/// the per-pixel core of `lcd.rs::blit_glyph`. Folds every expanded pixel into
+/// `acc` via XOR so the chain pins `cols[sx]` (and thus the upstream fetch) in
+/// the emitted code — defeating DCE while keeping the output tiny.
+#[inline(always)]
+fn glyph_blit_fold(cols: &[u8; GLYPH_FONT_W], acc: &mut [u8; 32]) {
+    let mut gy = 0usize; // landscape-Y within glyph 0..GLYPH_LH (24)
+    while gy < GLYPH_LH {
+        let mut gx = 0usize; // landscape-X within glyph 0..GLYPH_LW (15)
+        while gx < GLYPH_LW {
+            let sx = gx / GLYPH_SCALE; // glyph column 0..FONT_W (5) — PUBLIC
+            let sy = gy / GLYPH_SCALE; // glyph row    0..FONT_H (8) — PUBLIC
+            let bit = (cols[sx] >> sy) & 1; // 0 or 1
+            let mask = (bit as u16).wrapping_neg(); // 0xFFFF if set, else 0x0000
+            let px: u16 = (mask & GLYPH_FG) | (!mask & GLYPH_BG);
+            // Fold the pixel value (low + high byte) into the accumulator. The
+            // fold index is position-derived (public), not secret.
+            let slot = (gy * GLYPH_LW + gx) % 32;
+            acc[slot] ^= px as u8;
+            acc[(slot + 1) % 32] ^= (px >> 8) as u8;
+            gx += 1;
+        }
+        gy += 1;
+    }
+}
+
+/// F-24 REGRESSION SENTINEL — renders a 16-byte secret word row via the DIRECT
+/// secret-indexed glyph fetch (the pre-CT / `public_glyph_cols` form). Every
+/// character's `glyph_leaky_glyph_cols(ch)` loads `FONT_FLAT_5X8[(ch-0x20)]` at
+/// a secret-dependent address. EXPECTED to leak (`max|t| > 4.5`).
+///
+/// Input: 16 secret characters at `word_ptr`. Output: 32 B folded pixels at
+/// `out_ptr`.
+#[no_mangle]
+pub extern "C" fn sca_glyph_secret_row_leaky(word_ptr: *const u8, out_ptr: *mut u8) {
+    // SAFETY: harness passes 16 B word + 32 B output.
+    let word: &[u8; 16] = unsafe { &*(word_ptr as *const [u8; 16]) };
+    let mut acc = [0u8; 32];
+    let mut k = 0usize;
+    while k < 16 {
+        let cols = glyph_leaky_glyph_cols(word[k]); // SECRET-INDEXED LOAD — leaks.
+        glyph_blit_fold(&cols, &mut acc);
+        k += 1;
+    }
+    unsafe {
+        for (i, &b) in acc.iter().enumerate() {
+            core::ptr::write_volatile(out_ptr.add(i), b);
+        }
+    }
+}
+
+/// F-24 FIX VALIDATOR — renders the SAME 16-byte secret word row through the
+/// constant-time scan (`glyph_secret_glyph_cols` → `glyph_ct_glyph_col`, with
+/// its black_box barriers) and the SAME branchless blit. Every glyph-table
+/// load addresses the PUBLIC loop counter `i` (0..96), never the secret `ch`.
+/// EXPECTED flat (`max|t| ≤ 4.5`) on the same harness that lights up the leaky
+/// probe above. If this probe ever starts matching the leaky baseline, the
+/// `black_box` barriers in `ct_glyph_col` have been folded away.
+///
+/// Input: 16 secret characters at `word_ptr`. Output: 32 B folded pixels at
+/// `out_ptr`.
+#[no_mangle]
+pub extern "C" fn sca_glyph_secret_row_ct(word_ptr: *const u8, out_ptr: *mut u8) {
+    // SAFETY: harness passes 16 B word + 32 B output.
+    let word: &[u8; 16] = unsafe { &*(word_ptr as *const [u8; 16]) };
+    let mut acc = [0u8; 32];
+    let mut k = 0usize;
+    while k < 16 {
+        let cols = glyph_secret_glyph_cols(word[k]); // 96-entry CT scan — no addr leak.
+        glyph_blit_fold(&cols, &mut acc);
+        k += 1;
+    }
+    unsafe {
+        for (i, &b) in acc.iter().enumerate() {
+            core::ptr::write_volatile(out_ptr.add(i), b);
+        }
+    }
+}
+
+#[used]
+static _KEEP_GLYPH_SECRET_ROW_LEAKY: extern "C" fn(*const u8, *mut u8) =
+    sca_glyph_secret_row_leaky;
+#[used]
+static _KEEP_GLYPH_SECRET_ROW_CT: extern "C" fn(*const u8, *mut u8) =
+    sca_glyph_secret_row_ct;
+
 #[entry]
 fn main() -> ! {
     core::hint::black_box(&_KEEP_WRAP);
@@ -953,6 +1189,8 @@ fn main() -> ! {
     core::hint::black_box(&_KEEP_BIP39_LOOKUP_PREFIX_CT);
     core::hint::black_box(&_KEEP_SEEDWIZARD_PREFIX_EXACT);
     core::hint::black_box(&_KEEP_SEEDWIZARD_PREFIX_EXACT_CT);
+    core::hint::black_box(&_KEEP_GLYPH_SECRET_ROW_LEAKY);
+    core::hint::black_box(&_KEEP_GLYPH_SECRET_ROW_CT);
     loop {
         cortex_m::asm::nop();
     }
