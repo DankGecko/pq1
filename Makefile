@@ -156,6 +156,34 @@ play-hw-display:
 	@echo "==> Starting interactive wallet (Ctrl-C to quit)..."
 	@python3 tools/wallet_run_hw.py
 
+# Interactive two-button wallet on the NV3007 SPI LCD — the PRODUCTION display
+# path (`ui-lcd` is the shipping backend as of 2026-06-09). Runs the FULL real
+# wizard / PIN / confirm flow (no `lcd-test` short-circuit). Input from the
+# physical gpio-buttons (LEFT=PC1/D8, RIGHT=PA8/D9). `ui-lcd` pulls in
+# `gpio-buttons` + `spi1-arduino`. Requires: ST-LINK + the NV3007 wired per
+# docs/nv3007-wiring.md (SPI on CN13 D10/D11/D13, DC=PE7/D4, RES→3V3, VCC+BLK→3V3,
+# GND) + two buttons on the gpio-buttons pins. The OLED equivalent is
+# `play-hw-display` (kept for SSD1306 dev boards).
+play-hw-lcd:
+	@echo "==> Building secure + nonsecure for interactive LCD play (NV3007)"
+	@FSBL_VENDOR_PUBKEY=$(DEV_VENDOR_PUBKEY) $(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
+		cargo build --locked --release --target $(TARGET) --target-dir target/secure \
+			-p sphincs-tz-secure --no-default-features \
+			--features mock-se,debug-log,ui-lcd,stm32u585,dev-testkey
+	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
+	@$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
+		cargo build --locked --release --target $(TARGET) --target-dir target/nonsecure \
+			-p sphincs-tz-nonsecure --features stm32u585
+	@echo "==> Flashing..."
+	@probe-rs download --chip STM32U585AIIx $(NONSECURE_ELF)
+	@probe-rs download --chip STM32U585AIIx $(SECURE_ELF)
+	@echo "==> Configuring TrustZone option bytes..."
+	@STM32_Programmer_CLI --connect port=SWD \
+		--optionbytes TZEN=1 SECWM1_PSTRT=0x0 SECWM1_PEND=0x7F \
+		SECWM2_PSTRT=0x7F SECWM2_PEND=0x0 SECBOOTADD0=0x180000
+	@echo "==> Drive the wizard with the physical buttons; streaming logs (Ctrl-C to quit)..."
+	@python3 tools/wallet_run_hw.py
+
 # §32 P4/P5 interactive UI test — drive JUST the duress-PIN setup dialogs
 # on the real OLED. No SE, no provisioning (mock-se + duress-ui-test
 # short-circuits into a dialog loop at boot). Driven by the PHYSICAL
@@ -1862,7 +1890,7 @@ _repro_one:
 # Note: --features are taken from $(RELEASE_FEATURES); the default is
 # the production feature set (no debug-log, no e2e-test, no mock-se).
 # Pass RELEASE_FEATURES=... on the command line to override.
-RELEASE_FEATURES ?= stm32u585,se050,optiga-trust-m,dual-se,ui-oled
+RELEASE_FEATURES ?= stm32u585,se050,optiga-trust-m,dual-se,ui-lcd
 .PHONY: release
 release:
 	@echo "==> Release build (features: $(RELEASE_FEATURES))"

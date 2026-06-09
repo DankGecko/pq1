@@ -1121,23 +1121,30 @@ fn main() -> ! {
     // Run via `make lcd-test-hw`.
     #[cfg(feature = "lcd-test")]
     {
-        // Representative confirm-style screen on the resolved orientation,
-        // re-flushed ~every 400 ms so the SPI bus stays active — this is the
-        // stress check for the 20 MHz flicker fix (a one-shot render wouldn't
-        // exercise it). (The 4-way orientation sweep is
-        // `lcd::Display::orientation_test_loop` if it ever needs re-resolving.)
-        let d = ui::display();
-        let mut n: u32 = 0;
+        // Phase-C interactive bench: drive the REAL `pin_entry::enter_pin`
+        // dialog on the LCD so a bench operator can confirm the buttons +
+        // input loop work (no functionality loss vs the OLED). Controls:
+        //   Right short = +1 digit, Left short = -1 digit,
+        //   Right long  = next position / confirm at the last,
+        //   Left long   = previous position / cancel at the first.
+        // Needs physical buttons on the gpio-buttons pins (LEFT=PC1/D8,
+        // RIGHT=PA8/D9). Loops so it can be re-tested.
+        secure_log!("[LCD-UI] interactive PIN: L/R short=-/+digit, R-long=next/ok, L-long=prev/cancel");
         loop {
-            d.clear();
-            d.draw_line(0, "Confirm Send");
-            d.draw_line(1, "0.05 ETH");
-            d.draw_line(2, "0x1234..AbCd");
-            d.draw_line(3, "L=reject R=sign");
-            d.flush();
-            secure_log!("[LCD-UI] flush {}", n);
-            n = n.wrapping_add(1);
-            cortex_m::asm::delay(64_000_000); // ~400 ms
+            match ui::pin_entry::enter_pin() {
+                ui::pin_entry::PinEntryResult::Pin(_) => {
+                    secure_log!("[LCD-UI] -> PIN entered (8 digits)");
+                }
+                ui::pin_entry::PinEntryResult::Cancelled => {
+                    secure_log!("[LCD-UI] -> cancelled");
+                }
+                ui::pin_entry::PinEntryResult::IdleWipe => {
+                    secure_log!("[LCD-UI] -> idle wipe");
+                }
+                ui::pin_entry::PinEntryResult::Mismatch => {
+                    secure_log!("[LCD-UI] -> mismatch");
+                }
+            }
         }
     }
 
