@@ -133,6 +133,18 @@ fn write16(sig: &mut [u8; SIGNATURE_LEN], offset: usize, block: &[u8; N]) {
     sig[offset..offset + N].copy_from_slice(block);
 }
 
+/// Write row `i` of a `[[u8; N]; K]` through a call boundary.
+///
+/// `rows[K - 1] = v` written directly is const-propagated by MIR into a
+/// constant-index projection, which the Aeneas Lean extraction fails to
+/// join with later loops over the same array ("Unimplemented" —
+/// probe-bisected, work-todo §33 P0). The function call keeps the index
+/// on the runtime-`Index` path, which extracts fine.
+#[inline]
+fn set_row(rows: &mut [[u8; N]; K], i: usize, v: [u8; N]) {
+    rows[i] = v;
+}
+
 fn sign_inner(
     sk_seed: &[u8; 32],
     pk_seed: &[u8; N],
@@ -211,10 +223,10 @@ fn sign_inner(
 
     // Last tree (forced-zero): the "secret" is the tree root
     let last_root = fors::compute_fors_root(&seed, sk_seed, ht_idx, (K - 1) as u32);
-    fors_secrets[K - 1] = last_root;
+    set_row(&mut fors_secrets, K - 1, last_root);
     let last_leaf_adrs =
         crate::address::make_adrs(0, u64::from(ht_idx), ADRS_FORS_TREE, (K - 1) as u32, 0, 0, 0);
-    fors_roots[K - 1] = crate::hash::th(&seed, &last_leaf_adrs, &pad16(&last_root));
+    set_row(&mut fors_roots, K - 1, crate::hash::th(&seed, &last_leaf_adrs, &pad16(&last_root)));
 
     report(progress, 32);
 

@@ -8,10 +8,19 @@
 #
 # Each `shape_*` fn isolates one Rust idiom; a shape whose `_loop`
 # defs are missing from the generated Probe.lean failed translation.
-# Established findings: shapes a-g PASS (incl. compound-index loops,
-# write16-style &mut helper calls in loops, debug_assert_eq);
-# `seed == &[0u8; 32]` array comparison POISONS all later loops in
-# the same function (shape_h/k fail, shape_m/n pass).
+# Established findings (2026-06-10): shapes a-g PASS (incl.
+# compound-index loops, write16-style &mut helper calls in loops,
+# debug_assert_eq). Two poisons found, both of the form "construct X
+# breaks the translation of every LATER loop in the same function":
+#   1. array equality (`seed == &[0u8; 32]`) -> "join of nested
+#      borrows" (shape_h/k fail, shape_m/n pass). Fix: byte OR-fold.
+#   2. CONSTANT-index nested-array row write (`rows[K - 1] = v`;
+#      MIR const-propagates it to a constant projection) ->
+#      "Unimplemented". Dynamic-index writes (`rows[t] = v`) are fine.
+#      Fix: route through a `fn set_row(rows, i, v)` call boundary,
+#      which keeps the index on the runtime-Index path.
+# Both bisected via early-`return` prefix cuts on the real function —
+# error spans point at the victim loop, NOT the poisoning statement.
 [package]
 name = "aeneas-probe"
 version = "0.1.0"

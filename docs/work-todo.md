@@ -1888,17 +1888,25 @@ compiler/silicon/FI/SCA — those stay with `tools/sca` + silicon validation.
             OR-fold zero check; also API'd `fisher_yates` to return an
             owned `[u8; 64]` (out-param removed) and precomputed the
             SHA-256 stream (byte-identical, sequential counter blocks).
-      - [ ] Clear error site 3/3 — `sign_inner` "Unimplemented", span =
-            the FORS-secrets `write16` loop (hypertree.rs ~225). The
-            probe's verbatim structural replica (shape_f) PASSES, so the
-            trigger is contextual — something earlier in the real
-            `sign_inner` (suspects: `report(&ProgressSink)` calls,
-            `shuffle.derive` on a `ZeroizeOnDrop` type, `grind_r`/
-            `sign_fors_tree` real callees, `pad16`). Next: extend the
-            probe by pasting sign_inner verbatim and deleting halves
-            (binary search, ~10 s/cycle).
-      - [ ] Zero-error extraction of the full crate (re-run the §-log
-            command pair; keep both cfg-shape test runs green).
+      - [x] Clear error site 3/3 — DONE 2026-06-10 via early-`return`
+            prefix bisection on the real `sign_inner` (error spans point
+            at the VICTIM loop, not the poisoning statement — same lesson
+            as site 2). ROOT CAUSE: the **constant-index nested-array row
+            write `fors_secrets[K - 1] = last_root`** — MIR
+            const-propagates it to a constant projection that Aeneas
+            can't join with later loops over the same array
+            ("Unimplemented"); the dynamic `fors_secrets[t]` writes were
+            always fine. Fix: `set_row(&mut rows, i, v)` helper (call
+            boundary keeps the index on the runtime-Index path); applied
+            to both `[K - 1]` writes. Both poison classes documented in
+            the probe crate's Cargo.toml header.
+      - [x] Zero-error extraction of the full crate — DONE 2026-06-10:
+            all four files generated NON-partial (`Funs.lean` 9.3 MB,
+            `Types.lean`, both `*External_Template.lean`); tests 64/64
+            normal + 63/63 under `--cfg lean_extract`. NOTE for P1: the
+            9.3 MB `Funs.lean` may elaborate slowly — consider
+            `--start-from`-scoped extractions per theorem target if lake
+            builds drag.
       - [ ] Scaffold `contracts/verification/extracted/` lake project
             (Aeneas lib from `~/.local/share/pqsigner-lean/backends/lean`,
             Lean v4.30.0-rc2 — separate from SphincsCVerify's v4.22.0).
