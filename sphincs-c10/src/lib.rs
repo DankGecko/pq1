@@ -151,6 +151,11 @@ impl SigningKey {
     /// Pass `ShuffleSeed::zero()` to get the un-shuffled
     /// (deterministic-order) behaviour — useful for regression
     /// testing the byte-equality oracle.
+    /// Absent under `--cfg lean_extract` (work-todo §33 P0): the
+    /// `fn(u8)` progress parameter is an arrow type the Aeneas Lean
+    /// extraction cannot represent. Extraction-shape callers (and the
+    /// byte-equality test oracle) use [`Self::sign_with_shuffle_silent`].
+    #[cfg(not(lean_extract))]
     #[must_use]
     pub fn sign_with_shuffle(
         &self,
@@ -167,6 +172,25 @@ impl SigningKey {
             opt_rand,
             shuffle,
             progress,
+        )
+    }
+
+    /// [`Self::sign_with_shuffle`] without a progress callback.
+    /// Arrow-free signature, present in BOTH cfg shapes.
+    #[must_use]
+    pub fn sign_with_shuffle_silent(
+        &self,
+        msg_hash: &[u8; 32],
+        opt_rand: Option<&[u8; N]>,
+        shuffle: &shuffle::ShuffleSeed,
+    ) -> [u8; SIGNATURE_LEN] {
+        hypertree::sign_with_shuffle_silent(
+            &self.sk_seed,
+            &self.pk_seed,
+            &self.pk_root,
+            msg_hash,
+            opt_rand,
+            shuffle,
         )
     }
 

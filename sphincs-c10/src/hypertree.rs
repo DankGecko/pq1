@@ -49,6 +49,7 @@ pub fn sign(
 /// WOTS chains and FORS trees. Output is byte-identical to the
 /// un-shuffled path; the shuffle is purely a DPA-trace-misalignment
 /// defence (see `shuffle.rs`).
+#[cfg(not(lean_extract))]
 pub fn sign_with_shuffle(
     sk_seed: &[u8; 32],
     pk_seed: &[u8; N],
@@ -58,15 +59,22 @@ pub fn sign_with_shuffle(
     shuffle: &ShuffleSeed,
     progress: fn(u8),
 ) -> [u8; SIGNATURE_LEN] {
-    #[cfg(not(lean_extract))]
-    {
-        sign_inner(sk_seed, pk_seed, pk_root, msg_hash, opt_rand, &ProgressSink(Some(progress)), shuffle)
-    }
-    #[cfg(lean_extract)]
-    {
-        let _ = progress;
-        sign_inner(sk_seed, pk_seed, pk_root, msg_hash, opt_rand, &ProgressSink, shuffle)
-    }
+    sign_inner(sk_seed, pk_seed, pk_root, msg_hash, opt_rand, &ProgressSink(Some(progress)), shuffle)
+}
+
+/// [`sign_with_shuffle`] without a progress callback. Arrow-free
+/// signature, so it exists in BOTH cfg shapes and is the entry point
+/// the Aeneas Lean extraction (and the byte-equality test oracle)
+/// uses (work-todo §33 P0).
+pub fn sign_with_shuffle_silent(
+    sk_seed: &[u8; 32],
+    pk_seed: &[u8; N],
+    pk_root: &[u8; N],
+    msg_hash: &[u8; 32],
+    opt_rand: Option<&[u8; N]>,
+    shuffle: &ShuffleSeed,
+) -> [u8; SIGNATURE_LEN] {
+    sign_inner(sk_seed, pk_seed, pk_root, msg_hash, opt_rand, &progress_none(), shuffle)
 }
 
 /// Optional progress callback, newtype-wrapped so `fn(u8)` (an arrow
@@ -112,6 +120,17 @@ fn report(progress: &ProgressSink, pct: u8) {
     {
         let _ = (progress, pct);
     }
+}
+
+/// Copy one 16-byte block into `sig` at `offset`.
+///
+/// A dedicated helper (the non-loop `copy_from_slice` shape the Aeneas
+/// Lean extraction handles, re-borrowing `sig` per call) because a
+/// byte-indexed write through a long-lived `&mut` inside a loop body
+/// is a shape the extraction rejects (work-todo §33 P0).
+#[inline]
+fn write16(sig: &mut [u8; SIGNATURE_LEN], offset: usize, block: &[u8; N]) {
+    sig[offset..offset + N].copy_from_slice(block);
 }
 
 fn sign_inner(
@@ -168,8 +187,7 @@ fn sign_inner(
     // (forced-zero) tree at index K-1 is special and stays outside
     // the shuffle.
     let fors_shuffle_seed = shuffle.derive(b"fors");
-    let mut fors_order = [0u8; K - 1];
-    shuffle::fisher_yates(&fors_shuffle_seed, K - 1, &mut fors_order);
+    let fors_order = shuffle::fisher_yates(&fors_shuffle_seed, K - 1);
 
     for step in 0..(K - 1) {
         let t = fors_order[step] as usize;
@@ -200,31 +218,27 @@ fn sign_inner(
 
     report(progress, 32);
 
-    // Write ALL secrets (K * N bytes). Plain `while` loops with
-    // per-byte copies (not range `copy_from_slice` in a `for`): the
-    // runtime-range slice borrow inside a loop is a shape the Aeneas
-    // Lean extraction rejects (work-todo §33 P0).
+    // Write ALL secrets (K * N bytes). Rows are copied out by value
+    // and written through `write16` — see its doc for why
+    // (work-todo §33 P0).
     let mut t = 0;
     while t < K {
-        let mut b = 0;
-        while b < N {
-            sig[offset + b] = fors_secrets[t][b];
-            b += 1;
-        }
+        let row = fors_secrets[t];
+        write16(&mut sig, offset, &row);
         offset += N;
         t += 1;
     }
 
-    // Write auth paths for first K-1 trees ((K-1) * A * N bytes)
+    // Write auth paths for first K-1 trees ((K-1) * A * N bytes).
+    // Rows copied out by value (triple-nested indexing in a loop body
+    // is rejected by the extraction), written via `write16`
+    // (work-todo §33 P0).
     let mut t = 0;
     while t < K - 1 {
         let mut h = 0;
         while h < A {
-            let mut b = 0;
-            while b < N {
-                sig[offset + b] = fors_auth_paths[t][h][b];
-                b += 1;
-            }
+            let row = fors_auth_paths[t][h];
+            write16(&mut sig, offset, &row);
             offset += N;
             h += 1;
         }
@@ -268,9 +282,12 @@ fn sign_inner(
         );
 
         // Write WOTS chain values (L * N bytes)
-        for i in 0..L {
-            sig[offset..offset + N].copy_from_slice(&wots_sigma[i]);
+        let mut i = 0;
+        while i < L {
+            let row = wots_sigma[i];
+            write16(&mut sig, offset, &row);
             offset += N;
+            i += 1;
         }
 
         // Write count (4 bytes, big-endian)
@@ -278,9 +295,12 @@ fn sign_inner(
         offset += 4;
 
         // Write auth path (SUBTREE_H * N bytes)
-        for h in 0..SUBTREE_H {
-            sig[offset..offset + N].copy_from_slice(&auth_path[h]);
+        let mut h = 0;
+        while h < SUBTREE_H {
+            let row = auth_path[h];
+            write16(&mut sig, offset, &row);
             offset += N;
+            h += 1;
         }
 
         // Compute the reconstructed root for the next layer

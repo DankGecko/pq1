@@ -151,7 +151,7 @@ fn positive_opt_rand_same_value_is_deterministic() {
 fn positive_sign_with_shuffle_zero_matches_plain_sign() {
     let plain = sk().sign(&MSG, None);
     let shuffled = sk()
-        .sign_with_shuffle(&MSG, None, &ShuffleSeed::zero(), |_| {});
+        .sign_with_shuffle_silent(&MSG, None, &ShuffleSeed::zero());
     assert_eq!(
         plain.as_slice(),
         shuffled.as_slice(),
@@ -167,13 +167,16 @@ fn positive_sign_with_shuffle_nonzero_still_byte_equal() {
     // shuffle_byte_equality.rs but checked here against a different
     // message for breadth.)
     let s = ShuffleSeed([0xDEu8; 32]);
-    let shuffled = sk().sign_with_shuffle(&MSG, None, &s, |_| {});
+    let shuffled = sk().sign_with_shuffle_silent(&MSG, None, &s);
     let plain = sk().sign(&MSG, None);
     assert_eq!(plain.as_slice(), shuffled.as_slice());
 }
 
+// Compiled out (not just ignored) under --cfg lean_extract: the
+// fn(u8)-taking `sign_with_shuffle` itself is absent in the
+// extraction shape (work-todo section 33 P0).
+#[cfg(not(lean_extract))]
 #[test]
-#[cfg_attr(lean_extract, ignore = "progress callback is compiled out under --cfg lean_extract (work-todo section 33 P0)")]
 fn positive_progress_callback_invoked_monotonically_to_100() {
     use std::cell::RefCell;
     let observed: RefCell<Vec<u8>> = RefCell::new(Vec::new());

@@ -1,0 +1,28 @@
+# Standalone probe crate for bisecting Aeneas Lean-extraction failures
+# (work-todo §33 P0). NOT a workspace member — build/extract it in
+# isolation:
+#
+#   charon cargo --preset=aeneas --opaque sha2 --opaque zeroize \
+#     --dest-file /tmp/probe.llbc
+#   aeneas -backend lean -dest /tmp/probe-out /tmp/probe.llbc
+#
+# Each `shape_*` fn isolates one Rust idiom; a shape whose `_loop`
+# defs are missing from the generated Probe.lean failed translation.
+# Established findings: shapes a-g PASS (incl. compound-index loops,
+# write16-style &mut helper calls in loops, debug_assert_eq);
+# `seed == &[0u8; 32]` array comparison POISONS all later loops in
+# the same function (shape_h/k fail, shape_m/n pass).
+[package]
+name = "aeneas-probe"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+sha2 = { version = "0.10", default-features = false }
+zeroize = "1"
+
+[profile.dev]
+opt-level = 3

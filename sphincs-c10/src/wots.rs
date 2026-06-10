@@ -119,8 +119,7 @@ pub fn sign_with_shuffle(
     let base_adrs = make_adrs(layer, tree, ADRS_WOTS, kp, 0, 0, 0);
     let mut sigma = [[0u8; N]; L];
 
-    let mut chain_order = [0u8; L];
-    crate::shuffle::fisher_yates(shuffle_seed, L, &mut chain_order);
+    let chain_order = crate::shuffle::fisher_yates(shuffle_seed, L);
 
     for step in 0..L {
         let i = chain_order[step] as usize;

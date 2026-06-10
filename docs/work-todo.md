@@ -1868,21 +1868,35 @@ compiler/silicon/FI/SCA — those stay with `tools/sca` + silicon validation.
         "Unimplemented" — `--opaque` works only for FOREIGN crates.
 
       **P0 remainder (next session picks up here):**
-      - [ ] Clear error site 1/3 — `SigningKey::sign_with_shuffle`
-            (lib.rs:155, `fn(u8)` arrow in signature). Charon `--exclude`
-            name patterns `sphincs_c10::SigningKey::sign_with_shuffle` and
-            `…::{sphincs_c10::SigningKey}::…` both fail to match; apply the
-            same `lean_extract` cfg-gate as the hypertree wrapper, plus a
-            cfg'd test-only no-progress entry point so the shuffle
-            byte-equality oracle still compiles under the cfg.
-      - [ ] Clear error site 2/3 — `fisher_yates` while loop
-            (shuffle.rs:114, "join of nested borrows", persists with manual
-            swap; suspect `&mut [u8]` param + local `&mut` rng in one loop).
-            Next try: loop over an owned `[u8; 64]` copy, write back after.
-      - [ ] Clear error site 3/3 — hypertree auth-path nested while
-            (~line 210, "Unimplemented"; the same shape one level shallower
-            passes — suspect the `[[[u8;N];A];K-1]` triple indexing).
-            Next try: flatten via a per-level helper fn.
+      - [x] Clear error site 1/3 — `SigningKey::sign_with_shuffle` —
+            DONE 2026-06-10: the `fn(u8)` wrappers (lib.rs + hypertree) are
+            `#[cfg(not(lean_extract))]`; new arrow-free
+            `sign_with_shuffle_silent` (both shapes) is the extraction +
+            test-oracle entry; tests routed through it (the progress test
+            itself is `#[cfg(not(lean_extract))]`). Charon `--exclude`
+            never matched impl-method patterns (incl. `{impl …}` syntax)
+            — include in the upstream issue.
+      - [x] Clear error site 2/3 — `fisher_yates` — DONE 2026-06-10 via
+            probe-crate bisection (`contracts/verification/aeneas-probe/`,
+            seconds per cycle vs 30 s on the real crate — USE THIS for all
+            future extraction failures). ROOT CAUSE was none of the
+            suspected loop shapes: an **array equality
+            (`seed == &[0u8; 32]`) poisons the borrow state of every later
+            loop in the same function** ("join of nested borrows").
+            Probe-proven: compound-index loops, `&mut`-helper calls in
+            loops, byte loops, `debug_assert_eq!` all PASS. Fix: byte
+            OR-fold zero check; also API'd `fisher_yates` to return an
+            owned `[u8; 64]` (out-param removed) and precomputed the
+            SHA-256 stream (byte-identical, sequential counter blocks).
+      - [ ] Clear error site 3/3 — `sign_inner` "Unimplemented", span =
+            the FORS-secrets `write16` loop (hypertree.rs ~225). The
+            probe's verbatim structural replica (shape_f) PASSES, so the
+            trigger is contextual — something earlier in the real
+            `sign_inner` (suspects: `report(&ProgressSink)` calls,
+            `shuffle.derive` on a `ZeroizeOnDrop` type, `grind_r`/
+            `sign_fors_tree` real callees, `pad16`). Next: extend the
+            probe by pasting sign_inner verbatim and deleting halves
+            (binary search, ~10 s/cycle).
       - [ ] Zero-error extraction of the full crate (re-run the §-log
             command pair; keep both cfg-shape test runs green).
       - [ ] Scaffold `contracts/verification/extracted/` lake project

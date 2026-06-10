@@ -33,14 +33,14 @@ fn shuffled_sig_byte_equal_to_unshuffled() {
     let sk = SigningKey::keygen(SK_SEED, PK_SEED);
 
     // Identity shuffle == pre-shuffle behaviour.
-    let sig_unshuffled = sk.sign_with_shuffle(&MSG, None, &ShuffleSeed::zero(), |_| {});
+    let sig_unshuffled = sk.sign_with_shuffle_silent(&MSG, None, &ShuffleSeed::zero());
 
     // Random non-zero shuffle.
     let mut seed = [0u8; 32];
     seed[0] = 0x42;
     seed[7] = 0xA9;
     seed[31] = 0xFE;
-    let sig_shuffled = sk.sign_with_shuffle(&MSG, None, &ShuffleSeed(seed), |_| {});
+    let sig_shuffled = sk.sign_with_shuffle_silent(&MSG, None, &ShuffleSeed(seed));
 
     assert_eq!(
         sig_unshuffled.as_slice(),
@@ -54,7 +54,7 @@ fn shuffled_sig_verifies() {
     let sk = SigningKey::keygen(SK_SEED, PK_SEED);
     let mut seed = [0u8; 32];
     seed[2] = 0xCD;
-    let sig = sk.sign_with_shuffle(&MSG, None, &ShuffleSeed(seed), |_| {});
+    let sig = sk.sign_with_shuffle_silent(&MSG, None, &ShuffleSeed(seed));
     assert!(
         sphincs_c10::verify(sk.pk_seed(), sk.pk_root(), &MSG, &sig),
         "shuffled sig must verify"
@@ -64,11 +64,11 @@ fn shuffled_sig_verifies() {
 #[test]
 fn multiple_random_shuffles_all_equal() {
     let sk = SigningKey::keygen(SK_SEED, PK_SEED);
-    let reference = sk.sign_with_shuffle(&MSG, None, &ShuffleSeed::zero(), |_| {});
+    let reference = sk.sign_with_shuffle_silent(&MSG, None, &ShuffleSeed::zero());
 
     for byte in [0x01u8, 0x55, 0xAA, 0xFF, 0x42, 0x99] {
         let seed = [byte; 32];
-        let sig = sk.sign_with_shuffle(&MSG, None, &ShuffleSeed(seed), |_| {});
+        let sig = sk.sign_with_shuffle_silent(&MSG, None, &ShuffleSeed(seed));
         assert_eq!(
             sig.as_slice(),
             reference.as_slice(),
@@ -81,7 +81,7 @@ fn multiple_random_shuffles_all_equal() {
 fn sign_wrapper_matches_zero_seed_shuffle() {
     let sk = SigningKey::keygen(SK_SEED, PK_SEED);
     let via_wrapper = sk.sign(&MSG, None);
-    let via_zero_shuffle = sk.sign_with_shuffle(&MSG, None, &ShuffleSeed::zero(), |_| {});
+    let via_zero_shuffle = sk.sign_with_shuffle_silent(&MSG, None, &ShuffleSeed::zero());
     assert_eq!(
         via_wrapper.as_slice(),
         via_zero_shuffle.as_slice(),
