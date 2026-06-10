@@ -910,3 +910,146 @@ fn resolve_path_bytes(prog: &[u8], body: &[u8], tx: &Eip1559Tx) -> Result<[u8; 3
     }
 }
 
+
+#[cfg(test)]
+mod walker_slot_confusion_fixed {
+    //! REGRESSION (clear-signing forgery — FIXED): the walker computes a
+    //! head-word slot by SUMMING `FieldIdx` values. That is correct ONLY
+    //! when each emitted `FieldIdx` is the field's true ABI *head-word
+    //! offset*. dbgen now emits exactly that (see
+    //! `dbgen::erc7730::compile_structured_contract_path`); previously it
+    //! emitted a logical ordinal, so a field preceded by a multi-word
+    //! static type (fixed array `T[N]`, non-leading static tuple)
+    //! resolved to the wrong word and the trusted display showed one
+    //! value while the contract executed on another.
+    //!
+    //! These tests pin the on-device half: fed a correctly-compiled
+    //! head-slot program, the walker reads the EVM-decoded word (display
+    //! == signed); and the head-bound guard rejects any slot that reaches
+    //! past the format's static head. See
+    //! `docs/VULN-erc7730-walker-slot-confusion.md`.
+    use super::*;
+    use crate::tx::erc7730::{ContextKind, Erc7730Ir};
+
+    /// Build a throwaway `Erc7730Ir` whose `pool` holds a single compiled
+    /// path program at offset 1. Only `pool` matters for `resolve_path`.
+    fn ir_with_path(prog: &[u8]) -> Erc7730Ir<'static> {
+        let mut pool = std::vec::Vec::with_capacity(prog.len() + 2);
+        pool.push(0x00);
+        pool.push(prog.len() as u8);
+        pool.extend_from_slice(prog);
+        let pool: &'static [u8] = std::boxed::Box::leak(pool.into_boxed_slice());
+        Erc7730Ir {
+            schema_ver: crate::tx::erc7730::SCHEMA_VER,
+            context_kind: ContextKind::Contract,
+            chain_id: 1,
+            contract: [0u8; 20],
+            descriptor_hash: [0u8; 32],
+            domain_separator: [0u8; 32],
+            owner: &[],
+            contract_name: &[],
+            pool,
+            formats: &[],
+            raw: &[],
+        }
+    }
+
+    /// Encode the calldata BODY (post-selector) for
+    /// `f(uint256[3] arr, address to)`. ABI head layout:
+    ///   word0 = arr[0], word1 = arr[1], word2 = arr[2], word3 = to.
+    fn body_uint3arr_then_addr(arr1_marker: u8, real_to: [u8; 20]) -> [u8; 128] {
+        let mut body = [0u8; 128];
+        body[32 + 12..32 + 32].copy_from_slice(&[arr1_marker; 20]); // arr[1]
+        body[96 + 12..96 + 32].copy_from_slice(&real_to); // to (word 3)
+        body
+    }
+
+    fn addr_of(w: Resolved<'_>) -> [u8; 20] {
+        match w {
+            Resolved::Slot32(b) => {
+                let mut a = [0u8; 20];
+                a.copy_from_slice(&b[12..]);
+                a
+            }
+            Resolved::Container(_) => panic!("unexpected container"),
+        }
+    }
+
+    #[test]
+    fn walker_reads_to_with_head_slot_program() {
+        // dbgen now emits `to`'s ABI head-word slot 3 (it is preceded by
+        // the 3-word `uint256[3] arr`), encoded as `FieldIdx(3)`.
+        let prog = [
+            PathOp::RootStructured as u8,
+            PathOp::FieldIdx as u8,
+            0x00,
+            0x03, // FieldIdx(3) — head-word slot, NOT logical ordinal 1
+        ];
+        let ir = ir_with_path(&prog);
+
+        let arr1_marker = 0xBE; // attacker-controlled benign-looking word 1
+        let real_to = [0xADu8; 20]; // the address the EVM actually uses
+        let body = body_uint3arr_then_addr(arr1_marker, real_to);
+
+        let shown = addr_of(resolve_path(&ir, 1, &body).expect("path resolves"));
+
+        // DISPLAY == SIGNED: the walker reads head word 3 — the exact word
+        // the EVM decodes as `to`. The attacker can no longer divert the
+        // displayed recipient by stuffing word 1.
+        assert_eq!(shown, real_to, "walker reads the EVM-decoded `to` (word 3)");
+        assert_ne!(shown, [arr1_marker; 20], "walker does NOT read arr[1]");
+    }
+
+    #[test]
+    fn nested_static_tuple_slot_sums_to_head_word() {
+        // `g((uint256 a, uint256 b) s, address to)`: `to` is at ABI head
+        // word 2 (the static tuple inlines 2 words). dbgen emits
+        // FieldIdx(2) [tuple base] + FieldIdx(0) summing to 2. The walker
+        // reads word 2.
+        let prog = [
+            PathOp::RootStructured as u8,
+            PathOp::FieldIdx as u8,
+            0x00,
+            0x02, // tuple base offset (s occupies words 0..2)
+            PathOp::FieldIdx as u8,
+            0x00,
+            0x00, // (+0) — `to` follows the tuple
+        ];
+        let ir = ir_with_path(&prog);
+        let mut body = [0u8; 96];
+        let real_to = [0xCDu8; 20];
+        body[64 + 12..64 + 32].copy_from_slice(&real_to); // word 2 = to
+        let shown = addr_of(resolve_path(&ir, 1, &body).expect("resolves"));
+        assert_eq!(shown, real_to, "summed head slot 2 reads the real `to`");
+    }
+
+    #[test]
+    fn head_bound_guard_rejects_out_of_head_slot() {
+        // A (malformed) program whose slot reaches word 3 while the format
+        // declares a 2-word static head. `head_bounded_body` truncates the
+        // body to 2 words, so the walker's bounds check rejects the read
+        // instead of resolving into the dynamic tail.
+        let prog = [
+            PathOp::RootStructured as u8,
+            PathOp::FieldIdx as u8,
+            0x00,
+            0x03, // slot 3 — past the 2-word static head
+        ];
+        let ir = ir_with_path(&prog);
+        let full_body = [0u8; 128]; // 4 words on the wire
+        let bounded =
+            super::super::head_bounded_body(&full_body, 2).expect("2-word head present");
+        assert_eq!(bounded.len(), 64, "body clamped to the 2-word static head");
+        assert!(
+            resolve_path(&ir, 1, bounded).is_err(),
+            "slot past the static head is rejected, not silently rendered"
+        );
+    }
+
+    #[test]
+    fn head_bound_guard_rejects_short_head() {
+        // Calldata too short to even contain the declared static head.
+        let short = [0u8; 32]; // 1 word, but the format needs 2
+        assert!(super::super::head_bounded_body(&short, 2).is_err());
+    }
+}

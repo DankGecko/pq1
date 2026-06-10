@@ -13,7 +13,7 @@
 //!
 //! ```text
 //!   off  size  field
-//!    0    1   schema_ver         (0x01)
+//!    0    1   schema_ver         (0x02)
 //!    1    1   context_kind       (CTX_CONTRACT | CTX_EIP712)
 //!    2    8   chain_id (u64 BE)  (for EIP-712: domain.chainId)
 //!   10   20   contract           (for EIP-712: domain.verifyingContract)
@@ -47,7 +47,13 @@
 
 use core::convert::TryFrom;
 
-pub const SCHEMA_VER: u8 = 0x01;
+/// IR schema version. Bumped `0x01 → 0x02` when calldata `FieldIdx`
+/// args changed meaning from *logical ordinals* to *ABI head-word slots*
+/// (and a per-format `static_head_words` field was added to the format
+/// header). `parse` strict-rejects any other value, so a descriptor
+/// compiled under the old, slot-confusable encoding can never be walked
+/// by this firmware. See `docs/VULN-erc7730-walker-slot-confusion.md`.
+pub const SCHEMA_VER: u8 = 0x02;
 pub const HEADER_LEN: usize = 134;
 
 pub const CTX_CONTRACT: u8 = 0x01;
@@ -410,13 +416,21 @@ impl<'a> Erc7730Ir<'a> {
 /// (`dbgen::erc7730::compile_one_format`):
 ///
 /// ```text
-///   selector       [u8; 4]
-///   field_count    u8       (≤ MAX_FIELDS_PER_FORMAT)
-///   intent_len     u8       (≤ 254, printable ASCII)
-///   intent         [u8; intent_len]
-///   type_hash      [u8; 32] (EIP-712 context ONLY — see below)
-///   field          [u8; ...]*  (field_count entries — see FieldEntry)
+///   selector          [u8; 4]
+///   field_count       u8       (≤ MAX_FIELDS_PER_FORMAT)
+///   intent_len        u8       (≤ 254, printable ASCII)
+///   static_head_words u16 BE   (ABI static head, in 32-byte words)
+///   intent            [u8; intent_len]
+///   type_hash         [u8; 32] (EIP-712 context ONLY — see below)
+///   field             [u8; ...]*  (field_count entries — see FieldEntry)
 /// ```
+///
+/// `static_head_words` is the number of 32-byte words in the function's
+/// ABI static head (for EIP-712, the typed-data member count). The
+/// renderer truncates the body to this many words before walking fields,
+/// so a path slot that lands beyond the static head (a malformed
+/// descriptor reaching into the dynamic tail) is rejected instead of
+/// silently rendered. Schema v2.
 ///
 /// `type_hash` is present only for EIP-712-context descriptors (the
 /// header's `context_kind == CTX_EIP712`); contract-context entries omit
@@ -430,6 +444,10 @@ impl<'a> Erc7730Ir<'a> {
 pub struct FormatHeader<'a> {
     pub selector: [u8; 4],
     pub field_count: u8,
+    /// ABI static head width in 32-byte words. The renderer truncates the
+    /// calldata/typed-data body to this length before walking fields, so
+    /// any path slot reaching past the static head is rejected. Schema v2.
+    pub static_head_words: u16,
     /// Trimmed printable ASCII intent string ("Sign", "Wrap", …).
     pub intent: &'a [u8],
     /// Full 32-byte EIP-712 primary-type hash (`keccak256(encodeType)`).
@@ -528,8 +546,9 @@ impl<'a> Iterator for FormatIter<'a> {
         }
         self.remaining -= 1;
         let mut p = self.cursor;
-        // Header: 4 (selector) + 1 (field_count) + 1 (intent_len).
-        if p + 6 > self.buf.len() {
+        // Header: 4 (selector) + 1 (field_count) + 1 (intent_len)
+        //         + 2 (static_head_words).
+        if p + 8 > self.buf.len() {
             return Some(Err(IrError::BadFormat));
         }
         let mut selector = [0u8; 4];
@@ -539,7 +558,8 @@ impl<'a> Iterator for FormatIter<'a> {
             return Some(Err(IrError::OverCap));
         }
         let intent_len = self.buf[p + 5] as usize;
-        p += 6;
+        let static_head_words = u16::from_be_bytes([self.buf[p + 6], self.buf[p + 7]]);
+        p += 8;
         if p + intent_len > self.buf.len() {
             return Some(Err(IrError::BadFormat));
         }
@@ -576,6 +596,7 @@ impl<'a> Iterator for FormatIter<'a> {
         Some(Ok(FormatHeader {
             selector,
             field_count,
+            static_head_words,
             intent,
             type_hash,
             fields_buf,

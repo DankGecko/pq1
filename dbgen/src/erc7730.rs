@@ -1044,6 +1044,12 @@ fn compile_one_format(
         ));
     }
 
+    // Static ABI head width — the device uses this to bound every field's
+    // calldata read to the static head (defence-in-depth behind the
+    // width-aware path slots; see `format_static_head_words`).
+    let static_head_words = format_static_head_words(context_kind, &parsed)
+        .map_err(|e| format!("format `{sig}`: {e}"))?;
+
     // Compile every field's path + params first (so offsets are
     // stable before we emit the format header).
     let mut compiled: Vec<CompiledFieldOut> = Vec::with_capacity(fmt.fields.len());
@@ -1066,6 +1072,7 @@ fn compile_one_format(
     out.extend_from_slice(&selector); // 4 B
     out.push(compiled.len() as u8); // 1 B field_count
     out.push(intent.len() as u8); // 1 B intent_len
+    out.extend_from_slice(&static_head_words.to_be_bytes()); // 2 B static_head_words
     out.extend_from_slice(intent.as_bytes()); // intent_len B
     // EIP-712 only: full 32-byte primary-type hash (audit M-5). Contract
     // formats omit this so their on-wire bytes are unchanged.
@@ -1390,10 +1397,20 @@ struct ParsedFormatKey {
     types_signature: String,
     /// The top-level argument names (root-level of `#.`).
     top_names: Vec<String>,
+    /// The top-level argument *types*, positionally aligned with
+    /// [`top_names`](Self::top_names). Needed to compute each field's ABI
+    /// static head width so a calldata path resolves to the correct
+    /// 32-byte head word and not a logical ordinal (see
+    /// [`compile_structured_contract_path`] — closes the walker
+    /// slot-confusion forgery class).
+    top_types: Vec<String>,
     /// For tuple-typed top args, the inner names by top-arg name.
     /// e.g. `"params" -> ["tokenIn","tokenOut",...]`.
     /// For non-tuple top args this map is empty.
     inner_names: BTreeMap<String, Vec<String>>,
+    /// Inner member *types* for tuple-typed top args, positionally aligned
+    /// with [`inner_names`](Self::inner_names).
+    inner_types: BTreeMap<String, Vec<String>>,
 }
 
 /// Audit H-3 — contract-context field-completeness lint.
@@ -1504,7 +1521,9 @@ fn parse_format_key(sig: &str) -> Result<ParsedFormatKey, String> {
     let top_args = split_top_args(inner);
 
     let mut top_names = Vec::with_capacity(top_args.len());
+    let mut top_types = Vec::with_capacity(top_args.len());
     let mut inner_names: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut inner_types: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for arg in top_args {
         let arg = arg.trim();
         if arg.is_empty() {
@@ -1523,25 +1542,33 @@ fn parse_format_key(sig: &str) -> Result<ParsedFormatKey, String> {
                 ));
             }
             top_names.push(outer_name.to_string());
-            // Parse inner field names.
+            // Type string with all parameter names stripped (e.g.
+            // `(address,address,uint24,...)` or `(...)[2]`).
+            top_types.push(strip_one_arg(arg));
+            // Parse inner field names + types.
             let inner_args = split_top_args(tuple_body);
             let mut names = Vec::with_capacity(inner_args.len());
+            let mut types = Vec::with_capacity(inner_args.len());
             for inner_arg in inner_args {
-                let nm = last_ident(inner_arg.trim());
-                names.push(nm.to_string());
+                let inner_arg = inner_arg.trim();
+                names.push(last_ident(inner_arg).to_string());
+                types.push(strip_one_arg(inner_arg));
             }
             inner_names.insert(outer_name.to_string(), names);
+            inner_types.insert(outer_name.to_string(), types);
             let _ = stripped; // silence unused
         } else {
-            let nm = last_ident(arg);
-            top_names.push(nm.to_string());
+            top_names.push(last_ident(arg).to_string());
+            top_types.push(strip_one_arg(arg));
         }
     }
 
     Ok(ParsedFormatKey {
         types_signature,
         top_names,
+        top_types,
         inner_names,
+        inner_types,
     })
 }
 
@@ -1743,6 +1770,148 @@ fn last_ident(s: &str) -> &str {
 
 /// Compile a single ERC-7730 path string into the on-device opcode
 /// sequence (without the leading length prefix; caller adds that).
+/// ABI static head width of a type, in 32-byte words. `Dynamic` for
+/// `bytes` / `string` / dynamic arrays / tuples containing a dynamic
+/// member — their head slot holds only a 32-byte offset; the value lives
+/// in the tail and is NOT readable from the static head.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HeadWidth {
+    Words(u32),
+    Dynamic,
+}
+
+/// Words a type contributes to the ABI *head* (where the value — or, for
+/// a dynamic type, its 32-byte tail offset — physically sits). A dynamic
+/// predecessor still occupies exactly one head word, so summing this over
+/// preceding siblings yields the correct head-word index of a later
+/// static field.
+fn head_slot_words(ty: &str) -> Result<u32, String> {
+    Ok(match static_head_words(ty)? {
+        HeadWidth::Words(n) => n,
+        HeadWidth::Dynamic => 1,
+    })
+}
+
+/// Recursively compute a type's ABI static head width. The crux of the
+/// walker slot-confusion fix: a fixed array `T[N]` occupies `N ×
+/// width(T)` head words and a static tuple the sum of its members, so a
+/// calldata path that crosses one must advance by the true width, not by
+/// one logical ordinal.
+fn static_head_words(ty: &str) -> Result<HeadWidth, String> {
+    let ty = ty.trim();
+    if ty.is_empty() {
+        return Err("empty ABI type".to_string());
+    }
+    // Trailing array suffix (innermost-last in Solidity) — peel from the
+    // right so `T[2][3]` = 3 outer elements of `T[2]`.
+    if let Some(open) = find_last_array_open(ty) {
+        let base = &ty[..open];
+        let suffix = &ty[open..];
+        return match parse_fixed_array_len(suffix)? {
+            None => Ok(HeadWidth::Dynamic), // `[]` — dynamic array.
+            Some(count) => match static_head_words(base)? {
+                // Fixed array of a dynamic type is itself dynamic.
+                HeadWidth::Dynamic => Ok(HeadWidth::Dynamic),
+                HeadWidth::Words(w) => Ok(HeadWidth::Words(w.saturating_mul(count))),
+            },
+        };
+    }
+    // Tuple.
+    if ty.starts_with('(') {
+        let close = find_matching_paren(ty.as_bytes(), 0)
+            .ok_or_else(|| format!("unbalanced tuple type `{ty}`"))?;
+        if close != ty.len() - 1 {
+            return Err(format!("malformed tuple type `{ty}`"));
+        }
+        let mut total = 0u32;
+        for member in split_top_args(&ty[1..close]) {
+            let member = member.trim();
+            if member.is_empty() {
+                continue;
+            }
+            match static_head_words(member)? {
+                HeadWidth::Dynamic => return Ok(HeadWidth::Dynamic),
+                HeadWidth::Words(w) => total = total.saturating_add(w),
+            }
+        }
+        return Ok(HeadWidth::Words(total));
+    }
+    // Elementary type.
+    if ty == "bytes" || ty == "string" {
+        return Ok(HeadWidth::Dynamic);
+    }
+    match elementary_static_words(ty) {
+        Some(w) => Ok(HeadWidth::Words(w)),
+        None => Err(format!("unknown / unsupported ABI type `{ty}`")),
+    }
+}
+
+/// Head words of an elementary (non-array, non-tuple) static type, or
+/// `None` if `ty` is not a recognised single-word static type. `bytes` /
+/// `string` are handled by the caller as dynamic.
+fn elementary_static_words(ty: &str) -> Option<u32> {
+    if ty == "address" || ty == "bool" || ty == "function" {
+        return Some(1);
+    }
+    if let Some(rest) = ty.strip_prefix("uint").or_else(|| ty.strip_prefix("int")) {
+        // `uint`/`int` (== 256) or `uintN`/`intN`, N a multiple of 8 ≤ 256.
+        return if rest.is_empty() || rest.bytes().all(|b| b.is_ascii_digit()) {
+            Some(1)
+        } else {
+            None
+        };
+    }
+    if let Some(rest) = ty.strip_prefix("bytes") {
+        // `bytes1..32` is static one-word; bare `bytes` was handled above.
+        return if !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()) {
+            Some(1)
+        } else {
+            None
+        };
+    }
+    None
+}
+
+/// Byte index of the `[` that opens the trailing array suffix of `ty`, or
+/// `None` if `ty` does not end in an array suffix.
+fn find_last_array_open(ty: &str) -> Option<usize> {
+    let b = ty.as_bytes();
+    if b.last() != Some(&b']') {
+        return None;
+    }
+    let mut depth = 0i32;
+    for i in (0..b.len()).rev() {
+        match b[i] {
+            b']' => depth += 1,
+            b'[' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Parse an array suffix `[N]` → `Some(N)`, `[]` → `None` (dynamic).
+fn parse_fixed_array_len(suffix: &str) -> Result<Option<u32>, String> {
+    let inner = suffix
+        .trim()
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .ok_or_else(|| format!("bad array suffix `{suffix}`"))?
+        .trim();
+    if inner.is_empty() {
+        return Ok(None);
+    }
+    inner
+        .parse::<u32>()
+        .map(Some)
+        .map_err(|_| format!("bad fixed-array length in `{suffix}`"))
+}
+
 fn compile_path(
     path: &str,
     context_kind: u8,
@@ -1764,14 +1933,31 @@ fn compile_path(
         // Default root: structured (calldata for contract context;
         // typed-data message for EIP-712 — both addressed by name
         // through the same opcode).
-        let _ = context_kind;
         (PATHOP_ROOT_STRUCT, path)
     };
 
     let mut out = Vec::with_capacity(8);
     out.push(root);
 
-    // 2. Walk the dotted/indexed path.
+    // 2a. Contract-calldata structured paths emit *ABI head-word slots*
+    //     (width-aware), not logical ordinals. This is the fix for the
+    //     walker slot-confusion forgery: with logical ordinals a field
+    //     preceded by a multi-word static type (fixed array / non-leading
+    //     static tuple) resolved to the wrong calldata word, so the
+    //     trusted display showed one value while the contract executed on
+    //     another. See `compile_structured_contract_path` +
+    //     `docs/VULN-erc7730-walker-slot-confusion.md`.
+    if root == PATHOP_ROOT_STRUCT && context_kind == CTX_CONTRACT {
+        compile_structured_contract_path(&tokenize_path(rest)?, parsed, &mut out)?;
+        return Ok(out);
+    }
+
+    // 2b. Container (`@`) / metadata (`$`) roots, and EIP-712 message
+    //     roots, keep the existing encoding: container/metadata field
+    //     names resolve to keccak-prefix discriminators the on-device
+    //     envelope resolver matches, and EIP-712 `encodeData` lays out
+    //     every member as exactly one 32-byte word so the logical ordinal
+    //     IS the word slot. Do NOT apply ABI widths here.
     let mut cur_top: Option<&str> = None;
     for seg in tokenize_path(rest)? {
         match seg {
@@ -1795,6 +1981,131 @@ fn compile_path(
         }
     }
     Ok(out)
+}
+
+/// Compile a contract-calldata `#.<field>[.<member>]` path into
+/// `FieldIdx` ops whose **summed** args equal the field's ABI head-word
+/// index. Each emitted `FieldIdx` is the head-word offset of the named
+/// field among its siblings (top level, then optionally one static-tuple
+/// level); the on-device walker sums them and reads that word.
+///
+/// Refuses — at build time, so a hazardous descriptor can never be pinned
+/// — any path that:
+///   * uses array indexing / slices (a dynamic-tail op the static-head
+///     walker cannot follow);
+///   * descends into a dynamic tuple (members live in the tail);
+///   * terminates on a non-single-word type (dynamic, or a multi-word
+///     array/tuple the renderer would misread as one 32-byte word);
+///   * names a field absent from the function signature.
+fn compile_structured_contract_path(
+    segs: &[PathSeg<'_>],
+    parsed: &ParsedFormatKey,
+    out: &mut Vec<u8>,
+) -> Result<(), String> {
+    let mut names: Vec<&str> = Vec::with_capacity(segs.len());
+    for seg in segs {
+        match seg {
+            PathSeg::Name(n) => names.push(n),
+            _ => {
+                return Err(
+                    "contract calldata path uses array index/slice — unsupported \
+                     (dynamic-tail access; the static-head walker cannot follow it)"
+                        .to_string(),
+                )
+            }
+        }
+    }
+    if names.is_empty() {
+        return Err("contract calldata path names no field".to_string());
+    }
+    if names.len() > 2 {
+        return Err(format!(
+            "contract calldata path `{}` descends {} levels; only top-level and \
+             one static-tuple level are supported",
+            names.join("."),
+            names.len()
+        ));
+    }
+
+    let mut level_names: &[String] = &parsed.top_names;
+    let mut level_types: &[String] = &parsed.top_types;
+    for (depth, &name) in names.iter().enumerate() {
+        let terminal = depth == names.len() - 1;
+        let pos = level_names
+            .iter()
+            .position(|n| n == name)
+            .ok_or_else(|| format!("path field `{name}` is not in the function signature"))?;
+
+        // Head-word offset of this field among its preceding siblings.
+        let mut slot: u32 = 0;
+        for ty in &level_types[..pos] {
+            slot = slot.saturating_add(head_slot_words(ty)?);
+        }
+        let arg: u16 = slot
+            .try_into()
+            .map_err(|_| format!("head slot {slot} for `{name}` overflows u16"))?;
+        out.push(PATHOP_FIELD_IDX);
+        out.extend_from_slice(&arg.to_be_bytes());
+
+        let this_ty = &level_types[pos];
+        if terminal {
+            match static_head_words(this_ty)? {
+                HeadWidth::Words(1) => {}
+                HeadWidth::Words(n) => {
+                    return Err(format!(
+                        "path field `{name}` has static type `{this_ty}` spanning {n} words; \
+                         the trusted renderer reads a single 32-byte word — refusing to pin a \
+                         descriptor that would display only part of it"
+                    ))
+                }
+                HeadWidth::Dynamic => {
+                    return Err(format!(
+                        "path field `{name}` is dynamic (`{this_ty}`); its value is in the \
+                         calldata tail, not the static head, and is not readable by the walker"
+                    ))
+                }
+            }
+        } else {
+            // Must descend into a STATIC tuple (members inlined in head).
+            if static_head_words(this_ty)? == HeadWidth::Dynamic {
+                return Err(format!(
+                    "path descends into dynamic tuple `{name}` (`{this_ty}`); its members live \
+                     in the calldata tail and cannot be reached by fixed head offset"
+                ));
+            }
+            let inner = parsed.inner_types.get(name).ok_or_else(|| {
+                format!("path descends into `{name}`, which is not a parsed tuple argument")
+            })?;
+            level_names = parsed
+                .inner_names
+                .get(name)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            level_types = inner.as_slice();
+        }
+    }
+    Ok(())
+}
+
+/// Total ABI static head width of a format, in 32-byte words — the number
+/// of head words the on-device renderer must see before it walks any
+/// field. For contract calldata this is the sum of every top-level
+/// argument's head width (dynamic args contribute their one offset word);
+/// for EIP-712 `encodeData` every top-level member is exactly one word.
+/// The device truncates the body to this many words so an out-of-head
+/// slot (a malformed descriptor's read into the dynamic tail) is rejected
+/// rather than silently rendered.
+fn format_static_head_words(context_kind: u8, parsed: &ParsedFormatKey) -> Result<u16, String> {
+    let words: u32 = if context_kind == CTX_CONTRACT {
+        let mut total = 0u32;
+        for ty in &parsed.top_types {
+            total = total.saturating_add(head_slot_words(ty)?);
+        }
+        total
+    } else {
+        parsed.top_names.len() as u32
+    };
+    u16::try_from(words).map_err(|_| format!("static head {words} words overflows u16"))
 }
 
 /// Map a name segment to a 2-byte BE field-index opcode arg. For the
@@ -2515,6 +2826,136 @@ mod tests {
         assert_eq!(u16::from_be_bytes([prog[2], prog[3]]), 0); // "params"
         assert_eq!(prog[4], PATHOP_FIELD_IDX);
         assert_eq!(u16::from_be_bytes([prog[5], prog[6]]), 4); // "amountIn"
+    }
+
+    // ── Walker slot-confusion fix (head-word slots, not logical ordinals) ──
+
+    /// Sum the `FieldIdx` args of a compiled `#`-rooted program — the
+    /// absolute ABI head-word slot the on-device walker resolves to.
+    fn head_slot_of(prog: &[u8]) -> u32 {
+        assert_eq!(prog[0], PATHOP_ROOT_STRUCT);
+        let mut p = 1usize;
+        let mut sum = 0u32;
+        while p < prog.len() {
+            assert_eq!(prog[p], PATHOP_FIELD_IDX, "only FieldIdx ops expected");
+            sum += u16::from_be_bytes([prog[p + 1], prog[p + 2]]) as u32;
+            p += 3;
+        }
+        sum
+    }
+
+    #[test]
+    fn static_head_words_elementary_and_arrays() {
+        assert_eq!(static_head_words("address").unwrap(), HeadWidth::Words(1));
+        assert_eq!(static_head_words("uint256").unwrap(), HeadWidth::Words(1));
+        assert_eq!(static_head_words("uint8").unwrap(), HeadWidth::Words(1));
+        assert_eq!(static_head_words("int").unwrap(), HeadWidth::Words(1));
+        assert_eq!(static_head_words("bytes32").unwrap(), HeadWidth::Words(1));
+        assert_eq!(static_head_words("bool").unwrap(), HeadWidth::Words(1));
+        // Fixed arrays multiply; arrays-of-arrays compound.
+        assert_eq!(static_head_words("uint256[3]").unwrap(), HeadWidth::Words(3));
+        assert_eq!(static_head_words("address[2]").unwrap(), HeadWidth::Words(2));
+        assert_eq!(static_head_words("uint256[2][3]").unwrap(), HeadWidth::Words(6));
+        // Static tuple = sum of members.
+        assert_eq!(
+            static_head_words("(uint256,address,bytes32)").unwrap(),
+            HeadWidth::Words(3)
+        );
+        assert_eq!(
+            static_head_words("((uint256,uint256),address)").unwrap(),
+            HeadWidth::Words(3)
+        );
+        // Dynamic types and anything containing them.
+        assert_eq!(static_head_words("bytes").unwrap(), HeadWidth::Dynamic);
+        assert_eq!(static_head_words("string").unwrap(), HeadWidth::Dynamic);
+        assert_eq!(static_head_words("uint256[]").unwrap(), HeadWidth::Dynamic);
+        assert_eq!(static_head_words("(uint256,bytes)").unwrap(), HeadWidth::Dynamic);
+        assert!(static_head_words("notatype").is_err());
+    }
+
+    #[test]
+    fn compile_path_multiword_array_predecessor() {
+        // The canonical forgery shape: `to` is preceded by a 3-word
+        // static array, so its head-word slot is 3 (not logical ordinal 1).
+        let p = parse_format_key("f(uint256[3] arr, address to)").unwrap();
+        let prog = compile_path("#.to", CTX_CONTRACT, &p).unwrap();
+        assert_eq!(head_slot_of(&prog), 3, "to lands at ABI head word 3");
+    }
+
+    #[test]
+    fn compile_path_non_leading_static_tuple() {
+        // `to` follows a 2-word static tuple → head word 2; and a member
+        // inside the tuple resolves to its absolute head word.
+        let p =
+            parse_format_key("h((uint256 x, uint256 y) s, address to)").unwrap();
+        assert_eq!(head_slot_of(&compile_path("#.to", CTX_CONTRACT, &p).unwrap()), 2);
+        assert_eq!(head_slot_of(&compile_path("#.s.y", CTX_CONTRACT, &p).unwrap()), 1);
+        assert_eq!(head_slot_of(&compile_path("#.s.x", CTX_CONTRACT, &p).unwrap()), 0);
+    }
+
+    #[test]
+    fn compile_path_rejects_dynamic_target() {
+        let p = parse_format_key("f(bytes data)").unwrap();
+        assert!(compile_path("#.data", CTX_CONTRACT, &p).is_err());
+        let p = parse_format_key("f(uint256[] xs)").unwrap();
+        assert!(compile_path("#.xs", CTX_CONTRACT, &p).is_err());
+    }
+
+    #[test]
+    fn compile_path_rejects_multiword_static_target() {
+        // A field that is itself multi-word static can't be displayed as a
+        // single 32-byte word — refuse rather than show part of it.
+        let p = parse_format_key("f(uint256[2] pair, address to)").unwrap();
+        assert!(compile_path("#.pair", CTX_CONTRACT, &p).is_err());
+    }
+
+    #[test]
+    fn compile_path_rejects_array_index_and_unknown_name() {
+        let p = parse_format_key("f(uint256[] xs, address to)").unwrap();
+        assert!(compile_path("#.xs[0]", CTX_CONTRACT, &p).is_err(), "array index");
+        assert!(compile_path("#.nope", CTX_CONTRACT, &p).is_err(), "unknown name");
+    }
+
+    #[test]
+    fn compile_path_dynamic_predecessor_still_resolves_static_target() {
+        // A dynamic predecessor occupies exactly one head (offset) word, so
+        // a later static field sits at a fixed head slot and is readable.
+        let p = parse_format_key("f(bytes blob, address to)").unwrap();
+        assert_eq!(head_slot_of(&compile_path("#.to", CTX_CONTRACT, &p).unwrap()), 1);
+    }
+
+    #[test]
+    fn format_static_head_words_contract_and_eip712() {
+        let p = parse_format_key("f(uint256[3] arr, address to)").unwrap();
+        assert_eq!(format_static_head_words(CTX_CONTRACT, &p).unwrap(), 4);
+        // EIP-712: every top-level member is one encodeData word.
+        let p = parse_format_key("Order(address maker, uint256[3] nums, address taker)").unwrap();
+        assert_eq!(format_static_head_words(CTX_EIP712, &p).unwrap(), 3);
+    }
+
+    #[test]
+    fn eip712_path_keeps_logical_ordinal() {
+        // EIP-712 `encodeData` is one word per member regardless of ABI
+        // width, so the message-root path stays a logical ordinal — the
+        // width-aware contract logic must NOT apply here.
+        let p = parse_format_key("Order(address maker, uint256[3] nums, address taker)").unwrap();
+        let prog = compile_path("#.taker", CTX_EIP712, &p).unwrap();
+        assert_eq!(prog[0], PATHOP_ROOT_STRUCT);
+        assert_eq!(u16::from_be_bytes([prog[2], prog[3]]), 2, "ordinal 2, not width 4");
+    }
+
+    #[test]
+    fn container_path_keeps_keccak_discriminator() {
+        // `@.value` must still encode the keccak-prefix discriminator the
+        // on-device envelope resolver matches — the width logic only
+        // governs `#` calldata roots, and envelope field names (`value`,
+        // `to`, …) are not calldata args here so the discriminator fires.
+        let p = parse_format_key("deposit()").unwrap();
+        let prog = compile_path("@.value", CTX_CONTRACT, &p).unwrap();
+        assert_eq!(prog[0], PATHOP_ROOT_CONTAINER);
+        let disc = u16::from_be_bytes([prog[2], prog[3]]);
+        let h = keccak256(b"value");
+        assert_eq!(disc, u16::from_be_bytes([h[0], h[1]]));
     }
 
     #[test]

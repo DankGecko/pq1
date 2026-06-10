@@ -116,7 +116,15 @@ fn render_erc7730_pages_inner<'ir>(
         .find_format_by_selector(&selector)
         .map_err(|_| RenderErr::Reject("7730 bad formats"))?
         .ok_or(RenderErr::NoFormat)?;
-    let body = &inner_data[4..];
+    // Head-bound guard (defence-in-depth behind the width-aware path
+    // slots). Truncate the calldata body to the format's ABI static head
+    // so any field whose resolved slot lands beyond the static head — a
+    // malformed descriptor reading into the dynamic tail — fails the
+    // walker's `body.get(slot..)` bound and is rejected, never silently
+    // rendered. Field slots are always < static_head_words by
+    // construction, so this never rejects a well-formed descriptor. See
+    // `docs/VULN-erc7730-walker-slot-confusion.md`.
+    let body = head_bounded_body(&inner_data[4..], format.static_head_words)?;
 
     // 2. Allocate the page buffer (grows via push_blank).
     let mut pages = Pages::with_len(0);
@@ -224,13 +232,19 @@ fn render_erc7730_eip712_pages_inner<'ir>(
         signing_hash: [0u8; 32],
     };
 
+    // Head-bound guard — see `render_erc7730_pages_inner`. For EIP-712
+    // `encodeData` every member is exactly one 32-byte word, so
+    // `static_head_words` is the member count and the body is the encoded
+    // member words.
+    let body = head_bounded_body(encoded_data, format.static_head_words)?;
+
     let mut pages = Pages::with_len(0);
     intent::render_intent_banner(&mut pages, &descriptor.ir, &format)?;
     render_fields(
         &mut pages,
         &descriptor.ir,
         &format,
-        encoded_data,
+        body,
         &synth_tx,
         erc20,
         resolver,
@@ -238,6 +252,19 @@ fn render_erc7730_eip712_pages_inner<'ir>(
     append_eip712_chain_page(&mut pages, chain_id)?;
     append_confirm_page(&mut pages)?;
     Ok(pages)
+}
+
+/// Clamp a structured body to its format's ABI static head
+/// (`static_head_words` × 32 bytes). Rejects a body too short to contain
+/// the full static head (truncated / malformed calldata). The returned
+/// slice is what every field walker sees, so a path slot that would read
+/// past the static head falls outside it and is rejected by the walker's
+/// bounds check rather than silently resolving into the dynamic tail.
+fn head_bounded_body(body: &[u8], static_head_words: u16) -> Result<&[u8], RenderErr> {
+    let head_len = (static_head_words as usize)
+        .checked_mul(32)
+        .ok_or(RenderErr::Reject("7730 head overflow"))?;
+    body.get(..head_len).ok_or(RenderErr::Reject("7730 short head"))
 }
 
 fn render_fields(
