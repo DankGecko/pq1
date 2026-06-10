@@ -40,7 +40,7 @@ pub fn sign(
     msg_hash: &[u8; 32],
     opt_rand: Option<&[u8; N]>,
 ) -> [u8; SIGNATURE_LEN] {
-    sign_inner(sk_seed, pk_seed, pk_root, msg_hash, opt_rand, None, &ShuffleSeed::zero())
+    sign_inner(sk_seed, pk_seed, pk_root, msg_hash, opt_rand, &progress_none(), &ShuffleSeed::zero())
 }
 
 /// Like [`sign`] but invokes `progress(percent)` (`0..=100`) at each
@@ -58,7 +58,60 @@ pub fn sign_with_shuffle(
     shuffle: &ShuffleSeed,
     progress: fn(u8),
 ) -> [u8; SIGNATURE_LEN] {
-    sign_inner(sk_seed, pk_seed, pk_root, msg_hash, opt_rand, Some(progress), shuffle)
+    #[cfg(not(lean_extract))]
+    {
+        sign_inner(sk_seed, pk_seed, pk_root, msg_hash, opt_rand, &ProgressSink(Some(progress)), shuffle)
+    }
+    #[cfg(lean_extract)]
+    {
+        let _ = progress;
+        sign_inner(sk_seed, pk_seed, pk_root, msg_hash, opt_rand, &ProgressSink, shuffle)
+    }
+}
+
+/// Optional progress callback, newtype-wrapped so `fn(u8)` (an arrow
+/// type, unsupported by the Aeneas Lean extraction) never appears in
+/// `sign_inner`'s signature.
+///
+/// Under `--cfg lean_extract` (work-todo §33 P0 — set ONLY by the
+/// Charon/Aeneas extraction run, never by any shipping build) the
+/// callback slot is compiled out entirely and `report` is a no-op, so
+/// the extracted Lean model is arrow-free. This is a DOCUMENTED
+/// model/firmware divergence point, discharged empirically: CI runs
+/// the full sphincs-c10 test suite (KATs + shuffle byte-equality)
+/// under `--cfg lean_extract` too, pinning that the extracted shape
+/// signs byte-identically to the shipped shape.
+#[cfg(not(lean_extract))]
+pub(crate) struct ProgressSink(Option<fn(u8)>);
+#[cfg(lean_extract)]
+pub(crate) struct ProgressSink;
+
+/// `ProgressSink` with no callback installed. Arrow-free signature in
+/// both cfg shapes, so it extracts transparently.
+fn progress_none() -> ProgressSink {
+    #[cfg(not(lean_extract))]
+    {
+        ProgressSink(None)
+    }
+    #[cfg(lean_extract)]
+    {
+        ProgressSink
+    }
+}
+
+/// Invoke the optional progress callback. A free function (not a
+/// closure) so the sign path stays inside the closure-free Rust
+/// fragment the Aeneas Lean extraction supports (work-todo §33 P0).
+#[inline]
+fn report(progress: &ProgressSink, pct: u8) {
+    #[cfg(not(lean_extract))]
+    if let Some(f) = progress.0 {
+        f(pct);
+    }
+    #[cfg(lean_extract)]
+    {
+        let _ = (progress, pct);
+    }
 }
 
 fn sign_inner(
@@ -67,15 +120,9 @@ fn sign_inner(
     pk_root: &[u8; N],
     msg_hash: &[u8; 32],
     opt_rand: Option<&[u8; N]>,
-    progress: Option<fn(u8)>,
+    progress: &ProgressSink,
     shuffle: &ShuffleSeed,
 ) -> [u8; SIGNATURE_LEN] {
-    let report = |pct: u8| {
-        if let Some(f) = progress {
-            f(pct);
-        }
-    };
-
     let seed = pad16(pk_seed);
     let mut sig = [0u8; SIGNATURE_LEN];
     let mut offset = 0;
@@ -88,7 +135,7 @@ fn sign_inner(
     // making the iteration count depend on per-call randomness too.
     // When None, byte-equality with the pre-F-9-fix deterministic
     // path is preserved (load-bearing for `c10_test_vectors.json`).
-    report(0);
+    report(progress, 0);
     let (r, digest) = fors::grind_r(pk_seed, pk_root, msg_hash, opt_rand);
 
     // Write R (16 bytes)
@@ -102,7 +149,7 @@ fn sign_inner(
     // Verify forced-zero constraint
     debug_assert_eq!(fors_indices[K - 1], 0, "Last FORS index must be 0 after R-grinding");
 
-    report(5);
+    report(progress, 5);
 
     // 3. Sign FORS+C: K trees
     //
@@ -141,7 +188,7 @@ fn sign_inner(
         // FORS trees span 5%-30%, each tree ~2%. Report by step
         // (monotone) rather than by tree index (shuffled), so the
         // progress bar stays smooth regardless of shuffle.
-        report((5 + ((step as u32 + 1) * 25) / (K as u32 - 1)) as u8);
+        report(progress, (5 + ((step as u32 + 1) * 25) / (K as u32 - 1)) as u8);
     }
 
     // Last tree (forced-zero): the "secret" is the tree root
@@ -151,20 +198,37 @@ fn sign_inner(
         crate::address::make_adrs(0, u64::from(ht_idx), ADRS_FORS_TREE, (K - 1) as u32, 0, 0, 0);
     fors_roots[K - 1] = crate::hash::th(&seed, &last_leaf_adrs, &pad16(&last_root));
 
-    report(32);
+    report(progress, 32);
 
-    // Write ALL secrets (K * N bytes)
-    for t in 0..K {
-        sig[offset..offset + N].copy_from_slice(&fors_secrets[t]);
+    // Write ALL secrets (K * N bytes). Plain `while` loops with
+    // per-byte copies (not range `copy_from_slice` in a `for`): the
+    // runtime-range slice borrow inside a loop is a shape the Aeneas
+    // Lean extraction rejects (work-todo §33 P0).
+    let mut t = 0;
+    while t < K {
+        let mut b = 0;
+        while b < N {
+            sig[offset + b] = fors_secrets[t][b];
+            b += 1;
+        }
         offset += N;
+        t += 1;
     }
 
     // Write auth paths for first K-1 trees ((K-1) * A * N bytes)
-    for t in 0..(K - 1) {
-        for h in 0..A {
-            sig[offset..offset + N].copy_from_slice(&fors_auth_paths[t][h]);
+    let mut t = 0;
+    while t < K - 1 {
+        let mut h = 0;
+        while h < A {
+            let mut b = 0;
+            while b < N {
+                sig[offset + b] = fors_auth_paths[t][h][b];
+                b += 1;
+            }
             offset += N;
+            h += 1;
         }
+        t += 1;
     }
 
     debug_assert_eq!(offset, SIG_FORS_TOTAL);
@@ -185,7 +249,7 @@ fn sign_inner(
             merkle::build_subtree_with_auth(&seed, sk_seed, layer, idx_tree as u64, idx_leaf);
 
         // HT layers: layer 0 = 32%-65%, layer 1 = 65%-98%
-        report((32 + (layer + 1) * 33) as u8);
+        report(progress, (32 + (layer + 1) * 33) as u8);
 
         // **F-16 (DPA-defence) shuffle.** Per-layer WOTS chain
         // permutation. Each layer gets its own sub-derivation so a
@@ -238,7 +302,7 @@ fn sign_inner(
             &auth_path,
         );
     }
-    report(100);
+    report(progress, 100);
 
     debug_assert_eq!(offset, SIGNATURE_LEN);
 
