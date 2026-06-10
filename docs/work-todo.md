@@ -1970,17 +1970,20 @@ compiler/silicon/FI/SCA — those stay with `tools/sca` + silicon validation.
             axiom (FunsExternal `keccak256_pure`, total `def` + step spec,
             mirrors AXIOM_STATUS A1). In `Extracted/UserOpEquiv.lean`;
             axiom-checked + drift-guarded (`make extract-aa-userop`).
-      - [~] **`compute_user_op_hash_spec` (full byte layout = goal
-            theorem 1 firmware side)** — `step*` does the whole symbolic
-            execution; the lone remaining goal is the 320-byte
-            setSlice!-tower ↔ abi.encode-concatenation list arithmetic
-            (definitional unfold over a 320-elt `replicate` times out).
-            Stated + documented with a `sorry` in
-            `Extracted/UserOpEquivByteLayout.lean` (NOT in the default
-            target / AxiomCheck — keeps the shipped project sorry-free).
-            Next: a `setSlice!`-into-`replicate`-at-disjoint-spans lemma,
-            or `List.ext_getElem!` elementwise — prime AI-prover-loop
-            (P1) fodder.
+      - [x] **`compute_user_op_hash_spec` (full byte layout = goal
+            theorem 1, FIRMWARE SIDE) — PROVEN 2026-06-10, no sorry.**
+            The firmware's userOpHash equals the EntryPoint v0.6
+            double-keccak over the EXACT abi.encode preimage, for ALL
+            inputs. Axiom closure = [keccak256_pure, propext,
+            Classical.choice, Quot.sound] — keccak the lone content
+            axiom. Now IN the default target + AxiomCheck (sorry-free).
+            Built `Extracted/SetSliceLemmas.lean` — 6 reusable
+            `setSlice!`→concatenation lemmas (`setSlice!_append_replicate`,
+            `rightAlign_word`, `innerBuf_eq`, `outerBuf_eq`,
+            `outerSlot_zero`) the P3 wots/fors/merkle serializers reuse.
+            Method that cracked it: `List.ext_getElem!` + boundary-split
+            `by_cases` + `simp_lists` (NOT definitional `setSlice!`
+            unfold, which times out on the 320-elt replicate).
       - [ ] EIP-1271 personal-sign nesting equivalence (`eip1271.rs`).
       - [ ] The chain-side meet: bridge to the wallet model's
             `userOpHash` (needs the P1 v4.22→v4.30 import bridge).

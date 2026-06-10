@@ -7,7 +7,9 @@
    library (Aeneas/Std/Slice.lean etc.) are not on our proof paths. -/
 import Extracted.AdrsEquiv
 import Extracted.UserOpEquiv
+import Extracted.UserOpEquivByteLayout
 
 #print axioms Extracted.Equiv.make_adrs_spec
 #print axioms Extracted.Equiv.set_chain_index_spec
 #print axioms Extracted.Equiv.compute_user_op_hash_terminates
+#print axioms Extracted.Equiv.compute_user_op_hash_spec
