@@ -77,7 +77,7 @@ EXTRACTED_DIR := extracted
 PQLEAN        := $(HOME)/.local/share/pqsigner-lean
 REPO_ROOT     := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
 
-.PHONY: verify-extracted extract-sphincs-adrs
+.PHONY: verify-extracted extract-sphincs-adrs extract-aa-userop
 
 verify-extracted:
 	@cd $(EXTRACTED_DIR) && $(LAKE) build
@@ -94,3 +94,17 @@ extract-sphincs-adrs:
 	@diff -u $(EXTRACTED_DIR)/Extracted/Adrs.lean /tmp/pqsigner-extract/out/Adrs.lean \
 	  && echo "OK: committed extraction matches the current Rust" \
 	  || { echo "DRIFT: address.rs changed — re-extract, re-prove, re-commit"; exit 1; }
+
+extract-aa-userop:
+	@mkdir -p /tmp/pqsigner-extract
+	@cd $(REPO_ROOT)/aa && RUSTFLAGS="--cfg lean_extract" \
+	  $(PQLEAN)/charon cargo --preset=aeneas --opaque sha2 --opaque sha3 \
+	  --opaque 'pqsigner_tx_core::hash' \
+	  --start-from 'pqsigner_aa::userop::compute_user_op_hash' \
+	  --dest-file /tmp/pqsigner-extract/userop.llbc 2>&1 | tail -1
+	@rm -rf /tmp/pqsigner-extract/uout && mkdir -p /tmp/pqsigner-extract/uout
+	@$(PQLEAN)/aeneas -backend lean -dest /tmp/pqsigner-extract/uout -split-files /tmp/pqsigner-extract/userop.llbc
+	@sed 's/import Userop\./import Extracted.UserOp./' /tmp/pqsigner-extract/uout/Funs.lean > /tmp/pqsigner-extract/uout/Funs.fixed.lean
+	@diff -u $(EXTRACTED_DIR)/Extracted/UserOp/Funs.lean /tmp/pqsigner-extract/uout/Funs.fixed.lean \
+	  && echo "OK: committed userop extraction matches the current Rust" \
+	  || { echo "DRIFT: aa/userop.rs changed — re-extract, re-prove, re-commit"; exit 1; }

@@ -51,7 +51,6 @@ use pqsigner_tx_core::eip1559::{Eip1559Tx, U256};
 use pqsigner_tx_core::hash::keccak256;
 
 use sha2::{Digest as Sha256Digest, Sha256};
-use sha3::Keccak256;
 
 /// SHA-256("") — the empty-bytes hash used for empty `initCode` and
 /// `paymasterAndData` inside the SHA-256 sphincs digest.
@@ -271,6 +270,33 @@ pub enum BatchAaError {
 ///       data_i_len           uint256 (32 BE)
 ///       data_i bytes         padded with zeros to a 32-byte boundary
 /// ```
+/// Positional write helpers for [`reconstruct_execute_batch_calldata`].
+///
+/// Non-loop range copies behind a call boundary (re-borrowing the
+/// buffer per call): runtime-range slice writes inside loop bodies and
+/// early returns (`?`) inside loops are shapes the Aeneas Lean
+/// extraction rejects (work-todo §33 P2); the loops below call these
+/// helpers and propagate errors via a flag instead.
+#[inline]
+fn batch_write_u64_word(buf: &mut [u8; MAX_EXECUTE_BATCH_CALLDATA_LEN], pos: usize, v: u64) {
+    write_u64_in_word_be(&mut buf[pos..pos + WORD], v);
+}
+
+#[inline]
+fn batch_write_addr(buf: &mut [u8; MAX_EXECUTE_BATCH_CALLDATA_LEN], pos: usize, a: &[u8; 20]) {
+    buf[pos + (WORD - 20)..pos + WORD].copy_from_slice(a);
+}
+
+#[inline]
+fn batch_write_word32(buf: &mut [u8; MAX_EXECUTE_BATCH_CALLDATA_LEN], pos: usize, w: &[u8; 32]) {
+    buf[pos..pos + WORD].copy_from_slice(w);
+}
+
+#[inline]
+fn batch_write_bytes(buf: &mut [u8; MAX_EXECUTE_BATCH_CALLDATA_LEN], pos: usize, d: &[u8]) {
+    buf[pos..pos + d.len()].copy_from_slice(d);
+}
+
 pub fn reconstruct_execute_batch_calldata(
     owner_index: u64,
     new_offchain_count: u64,
@@ -285,19 +311,35 @@ pub fn reconstruct_execute_batch_calldata(
     }
 
     // Per-tx padded data length and running tail size for `bytes[]`.
+    // Index-based loop with an error FLAG (no `?`/`return` inside the
+    // loop body — work-todo §33 P2): `too_long` latches and the loop
+    // runs to completion; the (cheap) remaining iterations are dead
+    // work, identical observable behaviour.
     let mut padded_each: [usize; pqsigner_proto::MAX_BATCH_TXS] =
         [0; pqsigner_proto::MAX_BATCH_TXS];
     let mut datas_tail_size: usize = WORD + n * WORD; // length + N inner offsets
-    for (i, tx) in txs.iter().enumerate() {
-        if tx.data.len() > pqsigner_proto::MAX_TX_LEN {
-            return Err(BatchAaError::CallDataTooLong);
+    let mut too_long = false;
+    let mut i = 0;
+    while i < n {
+        let dlen = txs[i].data.len();
+        if dlen > pqsigner_proto::MAX_TX_LEN {
+            too_long = true;
+        } else {
+            // `dlen <= MAX_TX_LEN` here, so `+ 31` cannot overflow and
+            // the old `checked_add(31)` arm is unreachable; the running
+            // tail-size add keeps its checked form via saturating
+            // semantics + the latch.
+            let padded = (dlen + 31) & !31usize;
+            padded_each[i] = padded;
+            match datas_tail_size.checked_add(WORD + padded) {
+                Some(v) => datas_tail_size = v,
+                None => too_long = true,
+            }
         }
-        let padded = tx.data.len().checked_add(31).ok_or(BatchAaError::CallDataTooLong)? & !31usize;
-        padded_each[i] = padded;
-        // Each per-element block: 32 (length) + padded data bytes.
-        datas_tail_size = datas_tail_size
-            .checked_add(WORD + padded)
-            .ok_or(BatchAaError::CallDataTooLong)?;
+        i += 1;
+    }
+    if too_long {
+        return Err(BatchAaError::CallDataTooLong);
     }
 
     // Section sizes within args (after selector).
@@ -337,28 +379,34 @@ pub fn reconstruct_execute_batch_calldata(
         offset_values,
         offset_datas,
     ];
-    for (i, w) in head_words.iter().enumerate() {
+    let mut i = 0;
+    while i < 5 {
         let slot = SELECTOR_LEN + i * WORD;
-        write_u64_in_word_be(&mut out.buf[slot..slot + WORD], *w);
+        batch_write_u64_word(&mut out.buf, slot, head_words[i]);
+        i += 1;
     }
 
     // ── targets[] tail ─────────────────────────────────────────────
     let targets_start = SELECTOR_LEN + head_len;
     write_u64_in_word_be(&mut out.buf[targets_start..targets_start + WORD], n as u64);
     let targets_data = targets_start + WORD;
-    for (i, tx) in txs.iter().enumerate() {
+    let mut i = 0;
+    while i < n {
         let off = targets_data + i * WORD;
         // Address left-padded into a 32-byte slot.
-        out.buf[off + (WORD - 20)..off + WORD].copy_from_slice(&tx.to);
+        batch_write_addr(&mut out.buf, off, &txs[i].to);
+        i += 1;
     }
 
     // ── values[] tail ──────────────────────────────────────────────
     let values_start = targets_start + targets_size;
     write_u64_in_word_be(&mut out.buf[values_start..values_start + WORD], n as u64);
     let values_data = values_start + WORD;
-    for (i, tx) in txs.iter().enumerate() {
+    let mut i = 0;
+    while i < n {
         let off = values_data + i * WORD;
-        out.buf[off..off + WORD].copy_from_slice(&tx.value);
+        batch_write_word32(&mut out.buf, off, &txs[i].value);
+        i += 1;
     }
 
     // ── datas[] tail ───────────────────────────────────────────────
@@ -371,25 +419,30 @@ pub fn reconstruct_execute_batch_calldata(
     // the N pointer words themselves.
     let mut cursor_within_datas_heads: u64 = (n as u64) * WORD as u64;
     let mut payload_pos = datas_payload_base;
-    for (i, tx) in txs.iter().enumerate() {
+    let mut cursor_overflow = false;
+    let mut i = 0;
+    while i < n {
         let off_slot = datas_offsets + i * WORD;
-        write_u64_in_word_be(
-            &mut out.buf[off_slot..off_slot + WORD],
-            cursor_within_datas_heads,
-        );
+        batch_write_u64_word(&mut out.buf, off_slot, cursor_within_datas_heads);
 
         // length word + payload bytes (padding stays zero from init).
-        write_u64_in_word_be(
-            &mut out.buf[payload_pos..payload_pos + WORD],
-            tx.data.len() as u64,
-        );
+        batch_write_u64_word(&mut out.buf, payload_pos, txs[i].data.len() as u64);
         payload_pos += WORD;
-        out.buf[payload_pos..payload_pos + tx.data.len()].copy_from_slice(tx.data);
+        batch_write_bytes(&mut out.buf, payload_pos, txs[i].data);
         payload_pos += padded_each[i];
 
-        cursor_within_datas_heads = cursor_within_datas_heads
-            .checked_add(WORD as u64 + padded_each[i] as u64)
-            .ok_or(BatchAaError::CallDataTooLong)?;
+        // Flag-latched (no `?` in the loop — work-todo §33 P2). The
+        // cursor is only WRITTEN to the buffer at the top of the next
+        // iteration, and on overflow we bail before using it, so the
+        // wrapping value never reaches the output.
+        match cursor_within_datas_heads.checked_add(WORD as u64 + padded_each[i] as u64) {
+            Some(v) => cursor_within_datas_heads = v,
+            None => cursor_overflow = true,
+        }
+        i += 1;
+    }
+    if cursor_overflow {
+        return Err(BatchAaError::CallDataTooLong);
     }
     debug_assert_eq!(payload_pos, total);
 
@@ -426,29 +479,35 @@ pub struct AaUserOpParams {
 /// ignores this value (we sign a SHA-256 sphincs digest instead, for
 /// hardware speed), but it is kept here for tooling/tests that need
 /// to reproduce what a v0.6 bundler will see on the wire.
+/// Write `row` right-aligned into 32-byte slot `i` of the
+/// `hashStruct(userOp)` buffer. A dedicated helper (non-loop range
+/// copy, re-borrowing `buf` per call): the previous rows-of-`&[u8]`
+/// array iterated in a loop is a nested-borrow shape the Aeneas Lean
+/// extraction rejects (work-todo §33 P2).
+#[inline]
+fn write_word_right_aligned(buf: &mut [u8; 10 * WORD], i: usize, row: &[u8]) {
+    debug_assert!(row.len() <= WORD);
+    let slot_end = (i + 1) * WORD;
+    buf[slot_end - row.len()..slot_end].copy_from_slice(row);
+}
+
 #[must_use]
 pub fn compute_user_op_hash(params: &AaUserOpParams, call_data_hash: &[u8; 32]) -> [u8; 32] {
     // hashStruct(userOp) — 10 × 32 = 320 bytes total. Each row is one
     // right-aligned ABI word; field order matches `UserOp.hash()` in
-    // EntryPoint v0.6.
+    // EntryPoint v0.6. Unrolled (no rows-of-refs loop) for the Aeneas
+    // Lean extraction — see `write_word_right_aligned`.
     let mut buf = [0u8; 10 * WORD];
-    let rows: [&[u8]; 10] = [
-        &params.sender,
-        &params.nonce.0,
-        &params.init_code_hash,
-        call_data_hash,
-        &params.call_gas_limit.0,
-        &params.verification_gas_limit.0,
-        &params.pre_verification_gas.0,
-        &params.max_fee_per_gas.0,
-        &params.max_priority_fee_per_gas.0,
-        &params.paymaster_and_data_hash,
-    ];
-    for (i, row) in rows.iter().enumerate() {
-        debug_assert!(row.len() <= WORD);
-        let slot_end = (i + 1) * WORD;
-        buf[slot_end - row.len()..slot_end].copy_from_slice(row);
-    }
+    write_word_right_aligned(&mut buf, 0, &params.sender);
+    write_word_right_aligned(&mut buf, 1, &params.nonce.0);
+    write_word_right_aligned(&mut buf, 2, &params.init_code_hash);
+    write_word_right_aligned(&mut buf, 3, call_data_hash);
+    write_word_right_aligned(&mut buf, 4, &params.call_gas_limit.0);
+    write_word_right_aligned(&mut buf, 5, &params.verification_gas_limit.0);
+    write_word_right_aligned(&mut buf, 6, &params.pre_verification_gas.0);
+    write_word_right_aligned(&mut buf, 7, &params.max_fee_per_gas.0);
+    write_word_right_aligned(&mut buf, 8, &params.max_priority_fee_per_gas.0);
+    write_word_right_aligned(&mut buf, 9, &params.paymaster_and_data_hash);
 
     let inner = keccak256(&buf);
 
@@ -459,7 +518,11 @@ pub fn compute_user_op_hash(params: &AaUserOpParams, call_data_hash: &[u8; 32]) 
     outer[WORD + (WORD - 20)..2 * WORD].copy_from_slice(&params.entry_point);
     write_u64_in_word_be(&mut outer[2 * WORD..3 * WORD], params.chain_id);
 
-    Keccak256::digest(outer).into()
+    // Routed through `pqsigner_tx_core::hash::keccak256` (NOT the
+    // incremental sha3 API): keccak256 is the single opaque hash
+    // boundary for the Aeneas Lean extraction — one named axiom,
+    // mirroring AXIOM_STATUS A1 (work-todo §33 P2).
+    keccak256(&outer)
 }
 
 #[derive(Debug, PartialEq, Eq)]

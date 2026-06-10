@@ -6,6 +6,8 @@
    In particular NO `sorryAx`: the sorries inside the Aeneas support
    library (Aeneas/Std/Slice.lean etc.) are not on our proof paths. -/
 import Extracted.AdrsEquiv
+import Extracted.UserOpEquiv
 
 #print axioms Extracted.Equiv.make_adrs_spec
 #print axioms Extracted.Equiv.set_chain_index_spec
+#print axioms Extracted.Equiv.compute_user_op_hash_terminates

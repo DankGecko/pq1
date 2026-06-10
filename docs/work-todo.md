@@ -1950,15 +1950,40 @@ compiler/silicon/FI/SCA — those stay with `tools/sca` + silicon validation.
       Aristotle MCP fallback; `plausible` gate on every new spec/theorem
       statement BEFORE proof effort; extend no-sorry + axiom-lint CI to
       `extracted/`.
-- [ ] **P2 — parsers + aa.** Panic-freedom theorems across wire-format parsers;
-      `aa` userOpHash/EIP-1271-nesting equivalence vs the existing wallet model
-      (goal theorem 1). **Feasibility probe 2026-06-10: GO** — `charon
-      --preset=aeneas --opaque sha2 --opaque sha3` on `aa` yields only
-      3 errors / 41 fns, all in `userop.rs`
-      (`reconstruct_execute_batch_calldata` early-return-in-loop +
-      2 nested-borrow sites). Same fix scale as the sphincs-c10 pass;
-      keccak/sha2 axiomatized like the wallet model. Reuse the §33-P0
-      proof recipe + probe-bisection method.
+- [~] **P2 — parsers + aa.** IN PROGRESS — first firmware-side theorem landed.
+      Feasibility probe 2026-06-10 was GO (3 errors / 41 fns, all `userop.rs`).
+      - [x] **`aa` extracts clean** (2026-06-10). Refactors, test-pinned
+            (97/97 host tests both shapes): `compute_user_op_hash` rows
+            loop → unrolled `write_word_right_aligned` helper calls;
+            `reconstruct_execute_batch_calldata` `?`-in-loop → error-FLAG
+            latch + index `while` loops + positional write helpers;
+            switched the final outer hash from incremental `sha3` to the
+            `tx-core::keccak256` boundary so keccak is the SINGLE opaque
+            hash (one named axiom). `compute_user_op_hash` extracts with
+            zero errors; the batch fn is `--exclude`d for now (one
+            residual nested-borrow site — a P3-scope follow-up).
+      - [x] **`compute_user_op_hash_terminates` PROVEN** (panic-freedom,
+            goal theorem 3): the firmware never panics/diverges computing
+            the userOpHash, for ALL inputs. `step*` + a targeted
+            WORD-unfold closer. Axioms = [keccak256_pure, propext,
+            Classical.choice, Quot.sound] — keccak is the lone content
+            axiom (FunsExternal `keccak256_pure`, total `def` + step spec,
+            mirrors AXIOM_STATUS A1). In `Extracted/UserOpEquiv.lean`;
+            axiom-checked + drift-guarded (`make extract-aa-userop`).
+      - [~] **`compute_user_op_hash_spec` (full byte layout = goal
+            theorem 1 firmware side)** — `step*` does the whole symbolic
+            execution; the lone remaining goal is the 320-byte
+            setSlice!-tower ↔ abi.encode-concatenation list arithmetic
+            (definitional unfold over a 320-elt `replicate` times out).
+            Stated + documented with a `sorry` in
+            `Extracted/UserOpEquivByteLayout.lean` (NOT in the default
+            target / AxiomCheck — keeps the shipped project sorry-free).
+            Next: a `setSlice!`-into-`replicate`-at-disjoint-spans lemma,
+            or `List.ext_getElem!` elementwise — prime AI-prover-loop
+            (P1) fodder.
+      - [ ] EIP-1271 personal-sign nesting equivalence (`eip1271.rs`).
+      - [ ] The chain-side meet: bridge to the wallet model's
+            `userOpHash` (needs the P1 v4.22→v4.30 import bridge).
 - [ ] **P3 — C10 building blocks.** Per-function equivalence: WOTS chain, FORS
       leaf/root, merkle auth path, hypertree glue vs Spec modules. Expect
       ~30%/round AI close-rate (SorryDB-calibrated); loop invariants are the
