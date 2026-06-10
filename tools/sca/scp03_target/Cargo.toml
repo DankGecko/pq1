@@ -1,0 +1,42 @@
+# Standalone workspace — detached from the PQSigner workspace so a root
+# `cargo build` never tries to build this thumbv8m-only crate. Mirrors the
+# pattern of the other `tools/sca/*_target` crates.
+#
+# The secret-touching primitives under test (`aes128_cbc_decrypt`,
+# `cmac_aes128`) are pulled in BYTE-FOR-BYTE from the real firmware via a
+# `#[path]`-include of `secure/src/scp03_logic.rs` — same `aes` 0.8 / `cmac`
+# 0.7 soft (bitsliced, no T-table) backends as production. The thin SCP03
+# `unwrap_response` wrapper (R-MAC verify gate + R-ENC decrypt dispatch) is a
+# kept-in-sync copy of `secure/src/se050/scp03.rs` (that file can't be
+# `#[path]`-included — it's entangled with the SE050 I2C driver module).
+[workspace]
+
+[package]
+name = "sca-scp03-target"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "thumbv8m ELF for rainbow FI + lascar leakage analysis of the SE050 SCP03 response-unwrap path (R-MAC verify gate + R-ENC AES-128-CBC decrypt). Wraps the real secure/src/scp03_logic.rs primitives. Not shipped."
+
+[[bin]]
+name = "sca-scp03-target"
+path = "src/main.rs"
+
+[dependencies]
+cortex-m    = "0.7"
+cortex-m-rt = "0.7"
+panic-halt  = "1"
+# Same crates/versions as the secure world (secure/Cargo.toml) so the
+# emulated leakage + fault behaviour matches the shipped code. The `aes`
+# soft backend is constant-time bitsliced on thumbv8m (no AES-NI).
+aes    = { version = "0.8", default-features = false }
+cmac   = { version = "0.7", default-features = false }
+subtle = { version = "2.6", default-features = false }
+# The production FI-countermeasure crate, so the kept-in-sync `unwrap_response`
+# copy exercises the REAL `fi::check_true_into_sentinel` hardening (F-28) via a
+# `#[path]`-include of `secure/src/fi.rs` (mirrors `fi_target`).
+pqsigner-fi = { path = "../../../pqsigner-fi" }
+zeroize     = { version = "1", default-features = false }
+
+[profile.release]
+opt-level = 3            # keep emulation fast; do NOT strip (rainbow needs .symtab)

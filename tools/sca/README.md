@@ -189,6 +189,25 @@ tools/sca/
                              —     AES-256-GCM wrap; uses the same crates.io deps — aes-gcm 0.10 / aes 0.8 / sha2 0.10)
 ```
 
+> **Scope of the FI sweeps — what a "no forge-release" result does and does NOT
+> prove.** The C10-sign FI sweep (`c10_sign_full_sweep.py` /
+> `fault_sweep_c10_sign.py`) and the verify sweep (`fault_sweep_c10v.py`) audit
+> **single-fault gate-bypass** — can one injected fault make the firmware emit /
+> accept an *unverified* signature — against the F-1/F-2/F-5 + F-13 gates. They
+> sign one fixed message, never collect or correlate multiple signatures, and
+> judge every candidate with an **honest** verifier. They are therefore
+> **structurally blind to cryptographic-design / few-time-key-reuse flaws**: a
+> clean "no forge-release" sweep is **not** a forgery-resistance proof. The
+> `fcee705a` shared-FORS-forest forgery (CWE-347) is the worked example — a
+> passive observer reassembles ~3–4k *un-faulted* signatures into a forgery, and
+> the FI sweep found **0 anomalies on the known-vulnerable pre-fix binary**
+> (archived `out/c10_sign_sweep.PREFIX-VULNERABLE.jsonl.bak`). Cryptographic
+> forgery resistance is covered separately by
+> `sphincs-c10/tests/fors_forgery_resistance.rs` (the end-to-end reassembly
+> simulator) + `tests/fors_position_binding.rs` (the position-binding property
+> test), and audited by `docs/sphincs-c10-spec-conformance-checklist.md`. Run
+> both classes; neither substitutes for the other.
+
 ## Roadmap — targets not yet wired
 
 Each needs a `thumbv8m` (or host-x64) ELF of the code under test, plus stubs for
@@ -197,18 +216,19 @@ whatever hardware it touches. Pattern: a `<name>_target/` crate that
 crate** (`sphincs-c10`, `pqsigner-domain`, …) and re-exports the function under
 stable C symbols, then a `rainbow`/`lascar` harness.
 
-- **SCP03 R-MAC / R-ENC response-unwrap (SE050)** — *not yet wired; surfaced by the
-  2026-06-02 C10-sweep pre-flight (workflow wf_d0a3640f).* The S-5 ship-blocker fix
-  (`P1=0x33`, 2026-05-28) added `secure/src/se050/scp03.rs::unwrap_response` +
-  `scp03_logic.rs::aes128_cbc_decrypt`/`response_icv`/`ct_eq_8` — new **secret-touching**
-  code (SE050 responses, incl. `half_E`, are now R-ENC+R-MAC instead of plaintext-on-I2C).
-  No harness covers it. Two flavors: **(a) FI** — can a single fault make the R-MAC verify
-  (`if !ct_eq_8(mac_full[..8], rmac_recv)`, scp03.rs:510) accept a forged response →
-  attacker-chosen `half_E`? (pattern: `fault_sweep_pin.py`). **(b) leakage/CT** — does
-  `aes128_cbc_decrypt`/CMAC leak the session key or `half_E` on `mem_address`? (pattern:
-  `leakage_saes_kdf.py`). Needs a `scp03_target/` crate path-dep'ing `scp03_logic`. Scope:
-  emulation tests the unwrap *logic* + MAC-verify gate, not SE050 silicon / I2C bus physics —
-  defense-in-depth completeness, not a known bug. Full rationale: `docs/work-todo.md §18b`.
+- ~~**SCP03 R-MAC / R-ENC response-unwrap (SE050)**~~ — **WIRED** (`fault_sweep_scp03.py`
+  (FI) + `leakage_scp03.py` (TVLA) + `scp03_target/`, which `#[path]`-includes the real
+  `secure/src/scp03_logic.rs` primitives — see "### SE050 SCP03 response-unwrap" below).
+  `make scp03-fi` exits **0** now: the exhaustive stride-1 sweep first FOUND a real gate
+  weakness (**F-28** — `[skip]` faults released the attacker's `half_E`), which is now
+  FIXED (early `check_true_into_sentinel` gate + an *infective release mask*; closing it
+  also uncovered **F-29**, the shared sentinel-verdict branch being single-skip-defeatable).
+  See Findings F-28/F-29. `make scp03-leakage` reports flat on
+  `mem_address` for all four modes (R-ENC decrypt + R-MAC CMAC, vary key / `half_E` / msg),
+  with the leaky-S-box positive control confirming the pipeline detects leaks. Surfaced by
+  the 2026-06-02 C10-sweep pre-flight (workflow wf_d0a3640f); full rationale
+  `docs/work-todo.md §18b`. *Scope*: emulation tests the unwrap *logic* + MAC-verify gate,
+  not SE050 silicon / I2C bus physics.
 
 - ~~**C10 verify-before-release — full version**~~ — **DONE** (`fault_sweep_c10v.py`
   + `c10v_target/`, which path-deps the *real* `sphincs-c10`, software SHA — see
@@ -855,6 +875,194 @@ countermeasure for this residual. See `docs/work-todo.md` §18 ("Emulation
 re-scope") for the full reasoning; on-silicon value-channel confirmation is
 tracked under §18b (`sca-trigger`).
 
+## SE050 SCP03 response-unwrap — `fault_sweep_scp03.py` + `leakage_scp03.py` + `scp03_target/`
+
+`make -C tools/sca scp03-fi` and `make -C tools/sca scp03-leakage` cover the
+SE050 **SCP03 response leg** — the S-5 ship-blocker fix (`P1=0x33`, 2026-05-28)
+that made SE050 responses come back **R-ENC encrypted + R-MAC authenticated**
+instead of plaintext-on-I2C. That path now decrypts `half_E` (one XOR half of
+the BIP-39 seed, invariant #1) inside the host, so it's new **secret-touching**
+code that no harness covered. Surfaced by the 2026-06-02 C10-sweep pre-flight
+(workflow wf_d0a3640f); full rationale in `docs/work-todo.md §18b`.
+
+`scp03_target/` `#[path]`-includes the **real** firmware crypto primitives from
+`secure/src/scp03_logic.rs` (`aes128_cbc_decrypt`, `cmac_aes128`,
+`aes128_ecb_encrypt` — same `aes` 0.8 / `cmac` 0.7 bitsliced soft backends as
+production). The thin `unwrap_response` wrapper (the R-MAC verify gate + R-ENC
+decrypt dispatch) is a kept-in-sync copy of `secure/src/se050/scp03.rs:491-601`
+— that file can't be `#[path]`-included because it's entangled with the SE050
+I2C driver module. The Makefile rebuilds the ELF when `scp03_logic.rs` changes.
+
+### (a) FI — R-MAC verify gate bypass (`fault_sweep_scp03.py`)
+
+`sca_scp03_unwrap_gate` feeds `unwrap_response` a **forged** response:
+
+```
+ciphertext( R-ENC of an attacker-chosen half_E )  ||  WRONG R-MAC (zeros)  ||  9000
+```
+
+An attacker who drives the I2C bus can produce the ciphertext (just AES-CBC
+under the key they're attacking) but **cannot** produce the 8-byte R-MAC
+without `S-RMAC`. The only thing between that forged response and the host
+accepting an attacker-chosen `half_E` is the constant-time gate
+
+```rust
+let mac_full = cmac_aes128(&session.s_rmac, &[&session.mcv, body, sw]);
+if !ct_eq_8(&mac_full[..8], rmac_recv) { return Err(RMacMismatch); }
+```
+
+The sweep runs all three single-fault models (skip / stuck-at-0 / stuck-at-FF)
+over every instruction of the gate function. Verdict signals per fault: `r0 == 1`
+(unwrap returned `Ok` on a wrong-R-MAC response = bypass) and `SCA_SCP03_OUT[..15]
+== b"FORGED::half_E!"` (the attacker's plaintext was actually released). A
+self-test first proves the target ACCEPTS a correctly-MAC'd response of the same
+shape (so a green sweep isn't vacuous) and that the forged response is rejected
+with no fault.
+
+**History: this sweep FOUND a real finding (F-28), then confirmed its fix.** The
+first exhaustive run (on the un-hardened gate) found **`[skip]` faults inside
+`unwrap_response` that made a forged (wrong-R-MAC) response get ACCEPTED and
+release the attacker's `half_E`** (instr 18333, 39313). A coarse smoke stride
+(`SCP03_STRIDE=2000`) steps right over them and falsely reported "no bypass" —
+**only the exhaustive run surfaces this** (the lesson: never trust a strided
+result for a gate-bypass verdict). Root cause: the gate was a **plain
+`if !ct_eq_8(..) { return Err }`** with no FI redundancy.
+
+**Result now: `make scp03-fi` exits 0** — see Finding **F-28** below for the
+full fix (an early `check_true_into_sentinel` gate for correct rejection + an
+*infective release mask* that branchlessly garbles the output unless a fresh,
+independent R-MAC recompute matches). `GENUINE-gate-bypass(half_E released)=0`
+across all 3 fault models over the full 60,726-instruction sweep. Closing it
+also uncovered **F-29** (the shared `check_true_into_sentinel` verdict branch is
+itself single-skip-defeatable) — see below.
+
+The harness classifies its hits to keep the finding honest: **genuine** =
+inside `unwrap_response` + `half_E` actually released (the finding); **register**
+= returned Ok with no plaintext leak (the F-2 result-register-corruption class);
+**scaffold** = inside `build_forged_wrapped`, i.e. the harness faulting its *own*
+response builder (not a real attack — the attacker supplies the response on the
+bus). It exits non-zero only on a genuine `[skip]` gate bypass. Recommended fix
+(tracked in `docs/work-todo.md`): route the R-MAC verdict through
+`fi::check_true_into_sentinel` + double-evaluate, exactly like `crypto.rs`'s C10
+gate. **Threat:** a bench attacker driving the I2C bus + a single precise glitch
+gets the host to accept a chosen `half_E` (one XOR half of the seed); `half_E`
+alone doesn't reveal the seed — `half_O` stays on the OPTIGA behind the Shielded
+Connection — but accepting a forged SE response defeats the integrity the S-5
+fix was meant to give the response leg, and the bench-attacker model is exactly
+the one S-1/S-2/S-3 already take seriously. Knobs: `SCP03_STRIDE=N` (smoke only —
+**will miss the finding**), `SCP03_MAXI` for the position bound.
+
+### (b) Leakage / constant-time — R-ENC decrypt + R-MAC CMAC (`leakage_scp03.py`)
+
+TVLA (`mem_address` channel, `T_THRESHOLD = 4.5`, reusing `leakage_kdf.py`'s
+collect/tvla) over the two secret-touching primitives, four modes:
+
+| target | vary | result |
+|--------|------|--------|
+| `sca_scp03_cbc_decrypt` | key (S-ENC, 16 B) | flat (max\|t\| 0.00) |
+| `sca_scp03_cbc_decrypt` | ciphertext (= `half_E`, 32 B) | flat (max\|t\| 0.00) |
+| `sca_scp03_cmac` | key (S-RMAC, 16 B) | flat (max\|t\| 0.00) |
+| `sca_scp03_cmac` | message (32 B) | flat (max\|t\| 0.00) |
+
+All four flat: neither the R-ENC decrypt nor the R-MAC CMAC makes a memory
+access whose ADDRESS depends on the session key or `half_E` — the bitsliced
+soft AES has no T-tables, same clean result as the AES-GCM (`leakage_kdf.py`)
+and SAES-CMAC (`leakage_saes_kdf.py`) paths. The run first executes the
+`sca_leaky_sbox` positive control through the **same** rainbow→lascar pipeline
+(max\|t\| ≈ 18 ≫ 4.5) so the flat result is trustworthy, not a dead pipeline.
+
+**Scope (honest).** Both harnesses test the *software* unwrap logic + the
+MAC-verify gate, NOT the SE050 silicon, the I2C bus physics, or the R-MAC's
+cryptographic strength. Power/EM leakage on register VALUES (S-box outputs in
+registers, CBC state) needs on-silicon SCA with a scope. This is defense-in-depth
+completeness — a new gate-shaped secret path shouldn't ship un-swept when
+C10-sign / KDF / PIN-gate / FW-verify all have harnesses — not a known-bug
+fire drill.
+
+## rng_strong fail-closed multi-source fold — `fault_sweep_rng_strong.py` + `rng_strong_target/`
+
+`make -C tools/sca rng-strong` sweeps `secure/src/rng_strong.rs` — the
+multi-source strong-RNG fold whose failure semantics `bb2615f6` tightened to
+**strict / fail-closed** (an SE-TRNG failure is now FATAL under production
+backends; it used to silently fall through). work-todo §18b RANK 2.
+
+`rng_strong_target/` `#[path]`-includes the **real** `rng_strong::fill` and
+supplies its two crate-root hooks as harness-controllable stubs:
+`crate::rng::fill` (platform TRNG) and `crate::se_random` (the OPTIGA⊕SE050 SE
+fold, mirroring `DualSecureElement::random`). A handful of `#[no_mangle]`
+control statics let the sweep stage each failure scenario per run. So the sweep
+exercises the shipped control flow — the per-source fatal `?` and the
+fail-closed all-zero acceptance gate (`if acc == 0 { return Err }`).
+
+Scenarios (each = a fixed source-compromise state + one injected fault):
+OPTIGA-fails, SE050-fails, platform-fails, and all-sources-stuck-at-0; plus an
+all-OK positive baseline (must accept). The question: can a single skip /
+stuck-at force a "SE-TRNG-OK" — make `fill` return `Ok` when it must refuse?
+
+**Result: `make rng-strong` exits 0 (audit-only).** The sweep DOES find
+single-fault "accept" bypasses, classified honestly:
+
+- **degraded** — a single fault skips a fatal `?` (or stuck-ats the `Ok/Err`
+  result slot) so the fold proceeds after one source "failed". Same
+  call-site-glue / result-register-corruption residual class as PIN-gate **F-4**
+  / C10 **F-2**. It defeats the fail-*loud* intent, but the multi-source XOR
+  design means the output still carries full entropy from every unbroken
+  source — dropping one of {platform, OPTIGA, SE050} under one fault does **not**
+  weaken the result below one strong TRNG (rng_strong.rs §"Security argument").
+- **all-zero** — accepting an all-zero (predictable) buffer, reachable **only**
+  in the all-sources-stuck-at-0 scenario (a single skip of the all-zero gate).
+  Reaching an all-zero buffer needs platform AND OPTIGA AND SE050 to all produce
+  zero — three independent failures, outside the single-fault model; the gate is
+  a backstop for a post-fold buffer clamp (itself one fault) — you get one or
+  the other, not both (rng_strong.rs §"What we do NOT defend").
+
+**Verdict: no single fault produces WEAK entropy from a healthy system** — every
+"bypass" either retains a strong unbroken source (XOR resilience) or needs an
+out-of-single-fault precondition. The bb2615f6 strict semantics + all-zero gate
+hold under the single-fault model. The mitigation (if ever desired) is a
+sentinel-encoded per-source result the caller positively compares, exactly like
+the C10 verify-before-release gate. *Scope*: emulation tests the software
+fail-closed logic; the SE TRNGs / I2C / STM32 RNG SEIS-CEIS latches are stubbed.
+
+## OPTIGA verify_and_lock LcsO-ratchet gate — `fault_sweep_optiga_lock.py` + `optiga_lock_target/`
+
+`make -C tools/sca optiga-lock` sweeps `verify_and_lock`
+(`secure/src/optiga/mod.rs:731-768`), the verify-before-lock gate the S-1/S-2/S-3
+provisioning hardening relies on — the single chokepoint before every
+**irreversible** `LcsO=Operational` ratchet (F1D0 AuthRef lock, the S-2
+trust-anchor pool lockdown, the E120 counter lock). work-todo §18b RANK 3.
+
+The OPTIGA silently accepts SetMetadata APDUs carrying access-condition
+constructs it won't honour, so the firmware reads the metadata back and confirms
+the exact AC bytes landed (`metadata_matches_expected`) before freezing them.
+`optiga/{mod,apdu}.rs` can't be `#[path]`-included (entangled with the IFX-I2C +
+Shielded-Connection driver), so `optiga_lock_target/` copies the pure metadata
+parser/comparator (`find_metadata_tag` / `is_metadata_operational` /
+`metadata_matches_expected`) **verbatim** and stubs the I2C round-trips
+(`get_metadata` returns a harness-selected stored buffer; `lock_oid` sets
+`OPTIGA_LOCK_FIRED`). The MISMATCH scenario models a chip that silently kept
+`Change=ALW` instead of the intended `Change=Auto(F1D0)`.
+
+**Result: `make optiga-lock` exits 0 (audit-only) — with a reported finding.**
+The gate IS single-fault-defeatable (~12–14 of each fault model make
+`verify_and_lock` fire the irreversible ratchet on a chip whose AC readback
+didn't match): it's a plain branch with no FI redundancy (sentinel /
+double-evaluate), as the code comments acknowledge.
+
+**Why this is exit-0 / low-priority, not a security finding:** `verify_and_lock`
+runs at **provisioning** time, **once** per OID, in the **trusted PQ1 factory**
+(PQ1-factory-HSM-controlled) — never on a per-signature or field-attacker hot
+path. Its purpose is to catch the OPTIGA's silent-AC-reject *quirk* (a
+correctness issue), not to resist an adversary: anyone who can glitch the bench
+during provisioning already controls the provisioning process. So a fault here
+is a **yield/reliability** event (a glitched bench bricks a part with the wrong
+AC, caught by post-provisioning QA), not a field-exploitable bypass. Hardening
+(route the readback-verify through `fi::check_true_into_sentinel` +
+double-evaluate before `lock_oid`, like the C10 gate) is available if a
+hostile-provisioning threat model is ever in scope; it is not warranted under the
+current one. *Scope*: emulation tests the software readback-verify-then-lock
+logic; the OPTIGA's own LcsO sequencing + the silent-accept quirk are stubbed.
+
 ## BIP-39 entropy → seed leakage — `leakage_bip39.py` + kdf_target's `sca_bip39_*`
 
 `make -C tools/sca bip39-leak` builds new symbols in `kdf_target`
@@ -1399,6 +1607,125 @@ and DID have the leak.
 Both hygiene migrations are deferred to a separate "delete leaky
 `WORDLIST[i]` access pattern from the codebase" commit so the F-27
 diff stays focused on the production-critical fix.
+
+### F-28 — SE050 SCP03 R-MAC verify gate is single-fault-defeatable (`unwrap_response`) — **FIXED 2026-06-10 (infective release mask); `make scp03-fi` exits 0**
+
+The exhaustive stride-1 `make scp03-fi` sweep (39,325 positions × 3 fault
+models) found genuine **`[skip]` faults inside `secure/src/se050/scp03.rs::
+unwrap_response`** that make a **forged (wrong-R-MAC) SE050 response get
+accepted and release the attacker's `half_E`** (emulated instr 18333 / 39313).
+A coarse smoke stride (`SCP03_STRIDE=2000`) steps over the vulnerable
+instructions and falsely reports "no bypass" — this finding is *only* visible
+on the exhaustive run.
+
+**Root cause.** Unlike the C10 verify-before-release gate (FI-hardened after
+**F-1** with `fi::check_true_into_sentinel` + double-evaluate) and the PIN gate,
+`unwrap_response` checks the R-MAC with a **plain branch**:
+
+```rust
+let mac_full = cmac_aes128(&session.s_rmac, &[&session.mcv, body, sw]);
+if !ct_eq_8(&mac_full[..8], rmac_recv) { return Err(UnwrapError::RMacMismatch); }
+```
+
+A single instruction-skip past that conditional branch — or a stuck-at that
+zeroes the computed MAC to match a forged all-zero R-MAC — falls through to the
+R-ENC decrypt and emits the plaintext.
+
+**Distinguishing the finding from noise.** The harness classifies every "Ok on
+a forged response" hit: *genuine* (inside `unwrap_response` + `half_E` actually
+released — this finding), *register* (Ok returned but no plaintext leak — the
+inherent **F-2** result-register-corruption class), *scaffold* (inside
+`build_forged_wrapped` — the harness faulting its own response builder, which an
+attacker can't do). Only a genuine `[skip]` counts; `make scp03-fi` exits 1 on
+it.
+
+**Threat / impact.** A bench attacker driving the I2C bus + one precise glitch
+gets the host to accept a chosen `half_E` (one XOR half of the BIP-39 seed,
+invariant #1). `half_E` alone does not reveal the seed — `half_O` stays on the
+OPTIGA behind the Shielded Connection — but accepting a forged SE response
+defeats the response-leg integrity the S-5 fix (`P1=0x33`) was meant to provide,
+and the desoldered/bus-attacker model is exactly the one S-1/S-2/S-3 already
+take seriously.
+
+**Fix — RESOLVED 2026-06-10, in three passes (the iteration is the lesson):**
+
+1. *Sentinel gate (partial).* Recompute the CMAC inside a
+   `fi::check_true_into_sentinel` double-evaluated closure + `black_box`, then
+   `if rmac_ok != OK_SENTINEL { return Err }` — mirroring `crypto.rs`'s C10
+   gate. Killed **every** stuck-at bypass and every skip in the CMAC/compare,
+   but the exhaustive sweep still found **3** `[skip]` bypasses at the final
+   reject branch.
+2. *Redundant `read_volatile_voted` gate (partial).* A second, independent
+   verdict check right before the plaintext copy. Knocked it 3 → **1**.
+3. *Infective release mask (closed it).* Tracing the last survivor (instr
+   60768) showed it lands **inside `check_true_into_sentinel` itself** — a skip
+   of the unconditional branch in its `if cond { OK } else { FAIL }` verdict
+   selection makes the helper **return `OK_SENTINEL` for a false condition**,
+   which defeats *any* value-gate that reads the (now-corrupted) verdict (see
+   F-29). The fix that actually closes it stops branching on the verdict at the
+   release point: fold a **fresh, independent** R-MAC recompute branchlessly
+   into the output — `release_mask = (mac_matches as u8).wrapping_sub(1)`
+   (`0x00` release / `0xFF` garble), `out[i] = plain[i] ^ release_mask`. A
+   forged response that slips past the (skippable) early gate is XOR-garbled,
+   never the real `half_E`; the single fault is spent reaching that point, so
+   the recompute + mask run unfaulted. **Result:** `make scp03-fi` exits 0 —
+   `GENUINE-gate-bypass(half_E released)=0` across all 3 fault models over the
+   full 60,726-instruction sweep; baselines hold (valid response accepted +
+   correct plaintext, forged rejected). Landed in `secure/src/se050/scp03.rs`
+   (the early sentinel gate is kept for correct rejection; the infective mask
+   is the FI belt-and-braces) + the kept-in-sync `scp03_target` copy.
+
+### F-29 — `check_true_into_sentinel` verdict-selection branch was single-skip-defeatable — **FIXED 2026-06-10 (branchless `select_sentinel`); zero regressions across the FI matrix**
+
+Surfaced while closing F-28. The shared FI primitive
+`pqsigner_fi::check_true_into_sentinel` ends with
+`let verdict = if s == OK_SENTINEL && v1 && v2 { OK_SENTINEL } else { FAIL_SENTINEL }`.
+That `if/else` compiles to a branch selecting between the two sentinel
+constants; an exhaustive sweep found a **single instruction-skip of that branch
+returns `OK_SENTINEL` for a false condition** (emulated: skipping `b #0x20f74`
+inside the monomorphised helper falls through into the OK-verdict assignment).
+
+**Blast radius.** Every gate using a *single* `check_true_into_sentinel` check
+to gate a secret release is exposed (that was F-28's SCP03 gate). Gates with
+**two independent** sentinel/equivalent checks survive a single fault, because
+the skip is spent on one and the other holds: the C10 verify-before-release gate
+(verify-sentinel **+** the F-18 CFI `check_into_sentinel`), and the PIN gate
+(verdict-sentinel **+** the SE-silicon `result` the MCU can't forge). So the C10
+/ PIN gates are believed robust *as composed* — but the primitive itself is not,
+and the in-flight `c10_sign` full sweep should be checked against this.
+
+**Fix — RESOLVED 2026-06-10.** The verdict selection is now **branchless**
+(`pqsigner_fi::select_sentinel`): `true → OK_SENTINEL`, `false → FAIL_SENTINEL`
+assembled from **two independently `black_box`'d masks**
+(`(m1 & m2 & OK) | ((!m1 | !m2) & FAIL)`), applied to both the
+`sentinel_storage` assignment and the final verdict in `check_true` and
+`check_true_into_sentinel`. There is no `if/else` branch to skip, and producing
+`OK_SENTINEL` from a `false` input needs *both* masks all-ones — a single fault
+(skip of one mask compute → stale all-ones, or corruption of one) leaves the
+other `0`, which zeroes the OK term and forces the FAIL term. A glitch yields a
+non-`OK_SENTINEL` value, not a clean flip.
+
+**Verified.** Re-probing `sca_c10_verify_release(0)` (false input) afterward:
+the flip **inside `check_true_into_sentinel` is gone** (was old instr 120;
+now 0 inside-helper flips). The full FI matrix was re-run against the changed
+shared primitive — **`fi`, `c10`, `pin`, `ns-ptr`, `fw-verify`, `c10v`,
+`scp03-fi` all exit 0, zero regressions**; `pqsigner-fi` host tests (38) pass.
+
+**Residual (by design, not a regression).** The 4 flips that remain on
+`sca_c10_verify_release(0)` are all **outside** the primitive — the gate's own
+call-site glue (`if verdict != OK_SENTINEL { return … }`) and the condition
+closure. That is the long-documented **F-2** class: `fi::check_true_into_sentinel`
+"cannot fix its own call site." It is exploitable only for a gate that releases
+a secret on a *single* sentinel check with an attacker-controlled reject input
+(F-28's SCP03 shape) — which is why such gates additionally use the
+**infective-mask** pattern (see F-28). With F-29 closed, the primitive itself is
+now sound; gate authors must still compose it correctly (a second independent
+check, a silicon gate, or an infective mask) for secret-release sites.
+
+(Harness follow-up, low-priority: `make c10` still relies on a human to
+"eyeball the PCs" to tell an inside-`check_true` decision-point flip from
+call-site glue — worth teaching the oracle to auto-classify by symbol, as the
+`scp03-fi` harness already does.)
 
 ## Full C10 verify fault sweep — `fault_sweep_c10v.py` + `c10v_target/`
 

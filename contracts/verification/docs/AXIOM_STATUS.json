@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "last_updated": "2026-05-21",
+  "last_updated": "2026-06-08",
   "headline_theorem": "SphincsCVerify.Spec.Theorems.theft_free",
   "claim_corollaries": [
     "SphincsCVerify.Spec.Theorems.theft_free_with_calldata_binding",
@@ -82,7 +82,7 @@
       "description": "Deployed SPHINCsC10Asm.verify equals the Lean Yul model `verifyYulModel`.",
       "lean_type": "∀ pkSeed pkRoot message sig, DeployedBytecode.SPHINCsC10Asm_verify ... = verifyYulModel ...",
       "status": "pending-rerun",
-      "status_detail": "Post-Phase 0 refactor: opaque-equality shape (load-bearing). Was discharged by Halmos + Lean ↔ Rust ↔ Solidity differential against the prior pinned bytecode. PENDING re-run 2026-05-27: verifier source is unchanged, but the pinned codehash moved to 0x919cf8ef…89c0 (bytecode_hash=ipfs metadata/toolchain drift predating in-progress contract work); re-discharge expected to pass but NOT executed (halmos unavailable in dev env).",
+      "status_detail": "Post-Phase 0 refactor: opaque-equality shape (load-bearing). Was discharged by Halmos + Lean ↔ Rust ↔ Solidity differential against the prior pinned bytecode. PENDING re-run 2026-05-27: verifier source is unchanged, but the pinned codehash moved to 0x919cf8ef…89c0 (bytecode_hash=ipfs metadata/toolchain drift predating in-progress contract work); re-discharge expected to pass but NOT executed (halmos unavailable in dev env). UPDATE 2026-06-08 (fcee705a, CWE-347 shared-FORS-forest forgery fix): the verifier is now SEMANTICALLY changed, not just metadata drift — the four FORS ADRS words bind the hypertree leaf position htIdx (or(shl(160, htIdx), …)), and the pinned codehash moved 0x919c…89c0 → 0xf1ef…. The Lean spec has been RESYNCED to match (Spec/Fors.lean reconstructRoot/computeForsPk/reconstructForsPk + Spec/Adrs.lean forsNode/forsRoots + Verifier/Refined.lean now thread htIdx; mirrors the Yul). This spec resync is UNVERIFIED — the Lean toolchain was absent in the dev env, so the kernel proofs (Spec/Theorems.lean, Verifier/Equivalence.lean) were NOT re-checked and the Halmos differential was NOT re-run against 0xf1ef…. Both remain PENDING. Regression coverage for the forgery class now exists outside the formal layer: sphincs-c10/tests/fors_forgery_resistance.rs (end-to-end reassembly simulator) + fors_position_binding.rs (position-binding property test); see docs/sphincs-c10-spec-conformance-checklist.md.",
       "discharge_artifacts": [
         {
           "type": "halmos-session",

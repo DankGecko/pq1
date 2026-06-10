@@ -1,0 +1,31 @@
+# Standalone workspace — detached from the PQSigner workspace. Mirrors the
+# other `tools/sca/*_target` crates.
+#
+# The OPTIGA provisioning-lock gate (`verify_and_lock`, mod.rs:731-768) and its
+# pure metadata helpers (`find_metadata_tag` / `is_metadata_operational` /
+# `metadata_matches_expected`, apdu.rs:1231-1292) can't be `#[path]`-included —
+# `optiga/{mod,apdu}.rs` are entangled with the IFX-I2C + Shielded-Connection
+# driver. The pure helpers are copied verbatim here (kept in sync, see the
+# header in src/main.rs); the I2C round-trips (get_metadata / lock_oid) are
+# stubbed so the single-fault sweep can drive the readback-verify-then-ratchet
+# gate logic. work-todo §18b RANK 3.
+[workspace]
+
+[package]
+name = "sca-optiga-lock-target"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "thumbv8m ELF for rainbow FI analysis of the OPTIGA verify_and_lock LcsO-ratchet read-back gate (S-1/S-2/S-3 provisioning hardening). Not shipped."
+
+[[bin]]
+name = "sca-optiga-lock-target"
+path = "src/main.rs"
+
+[dependencies]
+cortex-m    = "0.7"
+cortex-m-rt = "0.7"
+panic-halt  = "1"
+
+[profile.release]
+opt-level = "s"          # match the firmware release profile; do NOT strip

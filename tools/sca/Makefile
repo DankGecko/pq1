@@ -17,6 +17,10 @@
 #   make c10v         build + run the fault sweep over the *real* sphincs_c10::verify (forge-a-sig direction)
 #   make fw-verify    build + run the FI sweep over the *real* fw-manifest verify chain (FW-update bypass)
 #   make kdf          build + run the lascar leakage analysis (AES / AES-GCM entropy wrap + a positive control)
+#   make scp03-fi     build + run the FI sweep over the SE050 SCP03 R-MAC verify gate (forged-response bypass)
+#   make scp03-leakage build + run the TVLA leakage analysis on the SCP03 R-ENC decrypt + R-MAC CMAC
+#   make rng-strong   build + run the FI sweep over rng_strong.rs's strict fail-closed multi-source fold
+#   make optiga-lock  build + run the FI sweep over the OPTIGA verify_and_lock LcsO-ratchet read-back gate
 #   make sweeps       fi + c10 + pin + fw-verify  (the FI fault sweeps; `c10v` and `kdf` are slower — run them on their own)
 #   make doctor       `donjon-sca doctor` — is the toolchain installed?
 #   make clean        cargo clean the target crates
@@ -42,10 +46,16 @@ FCT_DIR  := flashctr_target
 FCT_ELF  := $(FCT_DIR)/target/$(TARGET)/release/sca-flashctr-target
 SKDF_DIR := saes_kdf_target
 SKDF_ELF := $(SKDF_DIR)/target/$(TARGET)/release/sca-saes-kdf-target
+SCP03_DIR := scp03_target
+SCP03_ELF := $(SCP03_DIR)/target/$(TARGET)/release/sca-scp03-target
+RS_DIR   := rng_strong_target
+RS_ELF   := $(RS_DIR)/target/$(TARGET)/release/sca-rng-strong-target
+OPTL_DIR := optiga_lock_target
+OPTL_ELF := $(OPTL_DIR)/target/$(TARGET)/release/sca-optiga-lock-target
 DONJON   ?= donjon-sca
 SCARED   ?= scared-sca
 
-.PHONY: build build-kdf build-c10v build-fw-verify build-ns-ptr build-c10-sign build-cap build-dispatch build-flashctr build-saes-kdf build-groth16 fi fi-twofault c10 pin c10v fw-verify ns-ptr c10-sign cap dispatch flashctr kdf saes-kdf wait-random-leak bip39-leak seed-deriv-leak recovery-leak seedwizard-exact-leak glyph-leak groth16 groth16-full f9-retest f9-deeper f9-scared-collect f9-scared sweeps doctor clean
+.PHONY: build build-kdf build-c10v build-fw-verify build-ns-ptr build-c10-sign build-cap build-dispatch build-flashctr build-saes-kdf build-scp03 build-rng-strong build-optiga-lock build-groth16 fi fi-twofault c10 pin c10v fw-verify ns-ptr c10-sign cap dispatch flashctr kdf saes-kdf scp03-fi scp03-leakage rng-strong optiga-lock wait-random-leak bip39-leak seed-deriv-leak recovery-leak seedwizard-exact-leak glyph-leak groth16 groth16-full f9-retest f9-deeper f9-scared-collect f9-scared sweeps doctor clean
 
 build: $(FI_ELF)
 
@@ -119,6 +129,26 @@ build-saes-kdf: $(SKDF_ELF)
 $(SKDF_ELF): $(SKDF_DIR)/src/main.rs $(SKDF_DIR)/memory.x $(SKDF_DIR)/build.rs $(SKDF_DIR)/Cargo.toml ../../secure/src/cmac.rs
 	cargo build --release --target $(TARGET) --manifest-path $(SKDF_DIR)/Cargo.toml
 
+build-scp03: $(SCP03_ELF)
+
+# Rebuilds when the production scp03_logic.rs changes (it's `#[path]`-included;
+# the unwrap_response wrapper is a kept-in-sync copy of se050/scp03.rs).
+$(SCP03_ELF): $(SCP03_DIR)/src/main.rs $(SCP03_DIR)/memory.x $(SCP03_DIR)/build.rs $(SCP03_DIR)/Cargo.toml ../../secure/src/scp03_logic.rs
+	cargo build --release --target $(TARGET) --manifest-path $(SCP03_DIR)/Cargo.toml
+
+build-rng-strong: $(RS_ELF)
+
+# Rebuilds when the production rng_strong.rs changes (it's `#[path]`-included).
+$(RS_ELF): $(RS_DIR)/src/main.rs $(RS_DIR)/memory.x $(RS_DIR)/build.rs $(RS_DIR)/Cargo.toml ../../secure/src/rng_strong.rs
+	cargo build --release --target $(TARGET) --manifest-path $(RS_DIR)/Cargo.toml
+
+build-optiga-lock: $(OPTL_ELF)
+
+# The pure metadata parser/comparator is copied verbatim into the target;
+# list the source so a change signals a human to re-sync (it won't auto-update).
+$(OPTL_ELF): $(OPTL_DIR)/src/main.rs $(OPTL_DIR)/memory.x $(OPTL_DIR)/build.rs $(OPTL_DIR)/Cargo.toml ../../secure/src/optiga/apdu.rs ../../secure/src/optiga/mod.rs
+	cargo build --release --target $(TARGET) --manifest-path $(OPTL_DIR)/Cargo.toml
+
 fi: build
 	$(DONJON) run fault_sweep_fi.py
 
@@ -161,6 +191,35 @@ kdf: build-kdf
 # cannot model). See `leakage_saes_kdf.py` for the production-interpretation.
 saes-kdf: build-saes-kdf
 	$(DONJON) run leakage_saes_kdf.py
+
+# SE050 SCP03 response-unwrap (R-MAC verify gate + R-ENC AES-128-CBC decrypt)
+# — work-todo §18b RANK 1. Wraps the real secure/src/scp03_logic.rs primitives.
+#
+# scp03-fi       single-fault sweep over the R-MAC verify gate: can a fault make
+#                unwrap_response accept a FORGED response (wrong R-MAC) and release
+#                an attacker-chosen half_E? Exhaustive by default (~tens of k
+#                positions × 3 models); SCP03_STRIDE=N for a quick smoke run.
+# scp03-leakage  TVLA on aes128_cbc_decrypt + cmac_aes128 (vary key / half_E /
+#                msg) — expects flat on mem_address (bitsliced AES, no T-tables).
+#                Builds kdf_target too for the leaky-S-box positive control.
+scp03-fi: build-scp03
+	$(DONJON) run fault_sweep_scp03.py
+
+scp03-leakage: build-scp03 build-kdf
+	$(DONJON) run leakage_scp03.py
+
+# rng_strong.rs strict fail-closed (bb2615f6): single-fault sweep confirming a
+# faulted/forced "SE-TRNG-OK" can't let a weakened/all-zero XOR-fold through.
+# work-todo §18b RANK 2. Audit-only (exits 0; reports the F-2/F-4 residual class).
+rng-strong: build-rng-strong
+	$(DONJON) run fault_sweep_rng_strong.py
+
+# OPTIGA verify_and_lock LcsO-ratchet read-back gate (S-1/S-2/S-3 provisioning
+# hardening): single-fault check that the irreversible lock can't fire on a chip
+# whose AC readback didn't match the intent. work-todo §18b RANK 3 (lowest
+# priority). Audit-only (exits 0): provisioning-time, run-once, trusted-factory.
+optiga-lock: build-optiga-lock
+	$(DONJON) run fault_sweep_optiga_lock.py
 
 # wait_random loop-count leakage: does fi::wait_random's body have any
 # mem_address pattern that depends on the loop counter? Re-uses fi_target's
@@ -236,3 +295,6 @@ clean:
 	cargo clean --manifest-path $(FWV_DIR)/Cargo.toml
 	cargo clean --manifest-path $(NSP_DIR)/Cargo.toml
 	cargo clean --manifest-path $(C10S_DIR)/Cargo.toml
+	cargo clean --manifest-path $(SCP03_DIR)/Cargo.toml
+	cargo clean --manifest-path $(RS_DIR)/Cargo.toml
+	cargo clean --manifest-path $(OPTL_DIR)/Cargo.toml

@@ -84,13 +84,22 @@ def wotsPk (layer : UInt32) (tree : UInt64) (kp : UInt32) : Adrs :=
 def treeNode (layer : UInt32) (tree : UInt64) (height parentIdx : UInt32) : Adrs :=
   make layer tree (UInt32.ofNat ADRS_TREE) 0 0 height parentIdx
 
-/-- ADRS for a FORS tree node at (treeIdx, height, parentIdx). -/
-def forsNode (treeIdx height parentIdx : UInt32) : Adrs :=
-  make 0 0 (UInt32.ofNat ADRS_FORS_TREE) treeIdx 0 height parentIdx
+/-- ADRS for a FORS tree node at (htIdx, treeIdx, height, parentIdx).
 
-/-- ADRS for the FORS roots compression hash. -/
-def forsRoots : Adrs :=
-  make 0 0 (UInt32.ofNat ADRS_FORS_ROOTS) 0 0 0 0
+    RESYNC fcee705a (CWE-347 shared-FORS-forest forgery fix): the hypertree
+    leaf position `htIdx` is bound into the ADRS *tree* field (bytes [4..12)),
+    mirroring the Yul verifier's `or(shl(160, htIdx), …)` (SPHINCsC10Asm.sol)
+    and the Rust signer's `make_adrs(0, ht_idx, FORS_TREE, …)`. Without it the
+    FORS forest is shared across all 2^H positions and forgeable. -/
+def forsNode (htIdx : UInt64) (treeIdx height parentIdx : UInt32) : Adrs :=
+  make 0 htIdx (UInt32.ofNat ADRS_FORS_TREE) treeIdx 0 height parentIdx
+
+/-- ADRS for the FORS roots compression hash.
+
+    RESYNC fcee705a: `htIdx` bound in the tree field (position binding),
+    mirroring the Yul `or(shl(160, htIdx), shl(128, 4))`. -/
+def forsRoots (htIdx : UInt64) : Adrs :=
+  make 0 htIdx (UInt32.ofNat ADRS_FORS_ROOTS) 0 0 0 0
 
 end Adrs
 

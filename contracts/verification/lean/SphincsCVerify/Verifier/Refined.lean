@@ -102,7 +102,9 @@ def reconstructForsTreeRoot
   let dec := Spec.Signature.deserialise sig
   let indices := extractForsIndices digest
   let leafIdx := UInt32.ofNat (indices.getD i 0)
-  Fors.reconstructRoot seed (UInt32.ofNat i) leafIdx
+  -- RESYNC fcee705a (CWE-347): bind the digest-derived hypertree leaf position.
+  let htIdx : UInt64 := UInt64.ofNat (extractHtIndex digest)
+  Fors.reconstructRoot seed htIdx (UInt32.ofNat i) leafIdx
     (dec.fors.secrets.getD i (ByteVec.zero 16))
     (dec.fors.authPaths.getD i #[])
 

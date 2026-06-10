@@ -35,18 +35,23 @@ structure ForsSig where
 
 /-- Reconstruct a FORS tree root from `(secret, authPath, leafIdx)`.
 
-    Mirrors `reconstruct_fors_root` in `sphincs-c10/src/hypertree.rs`. -/
+    Mirrors `reconstruct_fors_root` in `sphincs-c10/src/hypertree.rs`.
+
+    RESYNC fcee705a (CWE-347): now takes the hypertree leaf position `htIdx`
+    and binds it into every FORS ADRS (`Adrs.forsNode htIdx …`), so each of the
+    2^H positions is an independent forest — matching the post-fix Rust signer
+    and the re-pinned Yul verifier. -/
 def reconstructRoot
-    (seed : ByteVec 32) (treeIdx : UInt32) (leafIdx : UInt32)
+    (seed : ByteVec 32) (htIdx : UInt64) (treeIdx : UInt32) (leafIdx : UInt32)
     (secret : ByteVec 16)
     (authPath : Array (ByteVec 16)) : ByteVec 16 := Id.run do
-  let leafAdrs := Adrs.forsNode treeIdx 0 leafIdx
+  let leafAdrs := Adrs.forsNode htIdx treeIdx 0 leafIdx
   let mut node := th seed leafAdrs (pad16 secret)
   let mut pathIdx := leafIdx.toNat
   for h in [:A] do
     let parentIdx := pathIdx / 2
     let adrs :=
-      Adrs.forsNode treeIdx (UInt32.ofNat (h + 1)) (UInt32.ofNat parentIdx)
+      Adrs.forsNode htIdx treeIdx (UInt32.ofNat (h + 1)) (UInt32.ofNat parentIdx)
     let sibling := authPath.getD h (zero 16)
     if pathIdx % 2 == 0 then
       node := thPair seed adrs (pad16 node) (pad16 sibling)
@@ -55,9 +60,11 @@ def reconstructRoot
     pathIdx := parentIdx
   pure node
 
-/-- Compute the FORS public key from all K tree roots. -/
-def computeForsPk (seed : ByteVec 32) (roots : Array (ByteVec 16)) : ByteVec 16 :=
-  thMulti seed Adrs.forsRoots roots.toList
+/-- Compute the FORS public key from all K tree roots.
+
+    RESYNC fcee705a (CWE-347): `htIdx` bound into the roots-compression ADRS. -/
+def computeForsPk (seed : ByteVec 32) (htIdx : UInt64) (roots : Array (ByteVec 16)) : ByteVec 16 :=
+  thMulti seed (Adrs.forsRoots htIdx) roots.toList
 
 /-- The FORS+C verifier-side reconstruction.
 
@@ -67,6 +74,12 @@ def reconstructForsPk
     (seed : ByteVec 32) (digest : ByteVec 32)
     (sig : ForsSig) : Option (ByteVec 16) :=
   let indices := extractForsIndices digest
+  -- RESYNC fcee705a (CWE-347): the hypertree leaf position is derived from the
+  -- PUBLIC digest (`extractHtIndex digest`, = the Yul `and(shr(143, digest),
+  -- 0x3FFFF)`) and threaded into every FORS ADRS below, so `reconstructForsPk`'s
+  -- own signature is unchanged (callers unaffected). Mirrors the post-fix Rust
+  -- `hypertree::verify` / `SPHINCsC10Asm.verify`.
+  let htIdx : UInt64 := UInt64.ofNat (extractHtIndex digest)
   -- Forced-zero check.
   if indices.getD (K - 1) 0 ≠ 0 then
     none
@@ -78,12 +91,12 @@ def reconstructForsPk
         let leafIdx := UInt32.ofNat (indices.getD t.val 0)
         let secret := sig.secrets.getD t.val (zero 16)
         let authPath := sig.authPaths.getD t.val #[]
-        reconstructRoot seed treeIdx leafIdx secret authPath
+        reconstructRoot seed htIdx treeIdx leafIdx secret authPath
     -- Last tree: secret IS the root (leaf-only hash, no auth path).
-    let lastAdrs := Adrs.forsNode (UInt32.ofNat (K - 1)) 0 0
+    let lastAdrs := Adrs.forsNode htIdx (UInt32.ofNat (K - 1)) 0 0
     let lastSecret := sig.secrets.getD (K - 1) (zero 16)
     let lastRoot := th seed lastAdrs (pad16 lastSecret)
     let allRoots := normalRoots.push lastRoot
-    some (computeForsPk seed allRoots)
+    some (computeForsPk seed htIdx allRoots)
 
 end SphincsCVerify.Spec.Fors

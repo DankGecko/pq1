@@ -533,8 +533,35 @@ pub fn unwrap_response(
     //   R-MAC = CMAC(S-RMAC, MCV || ciphered_body || SW)[..8]
     // The MCV is the full 16-byte command CMAC produced by `wrap_apdu`
     // (`session.mcv`); it is NOT updated by `unwrap_response`.
-    let mac_full = cmac_aes128(&session.s_rmac, &[&session.mcv, body, sw]);
-    if !ct_eq_8(&mac_full[..8], rmac_recv) {
+    //
+    // FI-hardening (F-28, `tools/sca/README.md` §F-28). This R-MAC verify is
+    // the ONLY thing between a forged (attacker-supplied, wrong-R-MAC)
+    // response and the host releasing an attacker-chosen `half_E`. A plain
+    // `if !ct_eq_8(..) { return Err }` is single-fault-defeatable — the
+    // exhaustive `make scp03-fi` sweep found `[skip]` faults that release the
+    // plaintext (skip the reject branch, or a stuck-at that zeroes the
+    // computed MAC to match a forged all-zero R-MAC). Mirror `crypto.rs`'s C10
+    // verify-before-release gate (F-1/F-2):
+    //
+    //   * The CMAC is recomputed INSIDE the double-evaluated closure, so a
+    //     fault that corrupts one computation makes the two evaluations
+    //     disagree → `check_true_into_sentinel` fails closed. (Unlike the C10
+    //     gate, which computes `verify` once because `verify` is itself
+    //     fault-robust, the R-MAC equality is not — so we recompute it.)
+    //   * The verdict is the Hamming-distant `OK_SENTINEL`; a skip of the
+    //     reject branch can't synthesise that 32-bit magic.
+    //   * `core::hint::black_box` is load-bearing — without it LLVM CSEs the
+    //     two closure evaluations (and the two CMACs) into one, collapsing the
+    //     re-check back to a single skippable branch. See F-1.
+    //
+    // `wait_random()` immediately before defeats clock-aligned glitch bursts
+    // timed to the fixed-shape control flow.
+    crate::fi::wait_random();
+    let rmac_ok = crate::fi::check_true_into_sentinel(|| {
+        let mac = cmac_aes128(&session.s_rmac, &[&session.mcv, body, sw]);
+        core::hint::black_box(ct_eq_8(&mac[..8], rmac_recv))
+    });
+    if rmac_ok != crate::fi::OK_SENTINEL {
         #[cfg(feature = "debug-log")]
         secure_log!("[SCP03] R-MAC MISMATCH");
         return Err(UnwrapError::RMacMismatch);
@@ -591,7 +618,33 @@ pub fn unwrap_response(
     if out.len() < plaintext_len + 2 {
         return Err(UnwrapError::Overflow);
     }
-    out[..plaintext_len].copy_from_slice(&plain[..plaintext_len]);
+
+    // F-28 infective release gate. The early sentinel gate above rejects a
+    // forged response in normal operation, but an exhaustive `make scp03-fi`
+    // sweep showed `check_true_into_sentinel`'s OWN verdict-selection branch is
+    // single-skip-defeatable (a skip flips its return to `OK_SENTINEL` for a
+    // false condition) — and that defeats ANY number of value-gates that read
+    // the now-corrupted verdict. So at the secret-release point we do NOT
+    // branch on the verdict: we fold a FRESH, INDEPENDENT R-MAC recompute
+    // branchlessly into the released bytes. The real plaintext is emitted only
+    // if this recompute matches; otherwise every byte is XOR-garbled. A forged
+    // response that reaches here (early gate FI-bypassed) therefore yields
+    // garbage, never the attacker's chosen `half_E`, and there is no clean
+    // branch a single skip can flip to "release". Reaching here at all costs
+    // the one fault, so this recompute + mask run unfaulted. (Folding `half_E`'s
+    // confidentiality into an arithmetic dependency is the standard "infective"
+    // FI countermeasure; it does not rely on the fragile sentinel branch.)
+    let mac_chk = cmac_aes128(&session.s_rmac, &[&session.mcv, body, sw]);
+    let mac_matches = ct_eq_8(&mac_chk[..8], rmac_recv);
+    // 0x00 when the R-MAC matches (release), 0xFF when it does not (garble) —
+    // branchless: `true as u8 = 1 → 0`, `false as u8 = 0 → 0xFF`.
+    let release_mask = (mac_matches as u8).wrapping_sub(1);
+    for (o, p) in out[..plaintext_len]
+        .iter_mut()
+        .zip(plain[..plaintext_len].iter())
+    {
+        *o = p ^ release_mask;
+    }
     out[plaintext_len] = sw[0];
     out[plaintext_len + 1] = sw[1];
 
