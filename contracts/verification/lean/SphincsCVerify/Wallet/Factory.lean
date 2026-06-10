@@ -52,8 +52,27 @@ def salt (masterPkSeed masterPkRoot : ByteVec 32) : ByteVec 32 :=
     ByteSeg.ofByteVec masterPkSeed,
     ByteSeg.ofByteVec masterPkRoot]
 
-/-- The factory's `createAccount` pre-condition: the bootstrap key must
-    have signed the slot-0 digest on this chain. -/
+/-- N-mask layout: the bottom 16 bytes of a 32-byte key half are zero
+    (C10's `N = 16`-byte values occupy the top half). Mirrors
+    `PQMultiOwnable._addOwnerAtIndex`'s
+    `uint128(uint256(half)) != 0 → revert InvalidNMaskLayout`. -/
+def nMasked (half : ByteVec 32) : Prop :=
+  ∀ i : Fin 32, 16 ≤ i.val → half.get i = 0
+
+/-- The factory's `createAccount` pre-condition (fresh-deploy arm): the
+    bootstrap key must have signed the slot-0 digest on this chain, AND
+    the owner-install gates of `PQMultiOwnable._addOwnerAtIndex` must
+    hold — all four key halves N-masked, and the slot-0 owner bytes
+    distinct from the bootstrap owner bytes (the duplicate-owner check;
+    the bootstrap owner is installed first, so only the slot-0 install
+    can collide at `initialize` time).
+
+    The gate conjuncts were added 2026-06-10 for bytecode faithfulness:
+    the deployed `initialize → _addOwnerAtIndex` path reverts on any of
+    them, so a precondition stating only the signature check is
+    observably weaker than the bytecode — found as a concrete
+    counterexample (non-N-masked `slot0PkRoot`) by the widened Halmos
+    rule `check_createAccount_iff_lean_precondition`. -/
 def createAccountPrecondition
     (masterPkSeed masterPkRoot slot0PkSeed slot0PkRoot : ByteVec 32)
     (chainId : UInt64) (factorySig : ByteVec SignatureLen)
@@ -61,6 +80,9 @@ def createAccountPrecondition
     Prop :=
   verify_fn masterPkSeed masterPkRoot
     (addSlot0Digest chainId slot0PkSeed slot0PkRoot) factorySig = true
+  ∧ nMasked masterPkSeed ∧ nMasked masterPkRoot
+  ∧ nMasked slot0PkSeed ∧ nMasked slot0PkRoot
+  ∧ ¬(slot0PkSeed = masterPkSeed ∧ slot0PkRoot = masterPkRoot)
 
 /-- The CREATE2 salt depends only on `(masterPkSeed, masterPkRoot)` —
     it does NOT depend on `chainId`. This is invariant #6 (same 24

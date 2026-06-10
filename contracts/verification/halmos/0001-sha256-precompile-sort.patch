@@ -1,8 +1,8 @@
 diff --git a/src/halmos/sevm.py b/src/halmos/sevm.py
-index 1d799bf..67acba2 100644
+index 1d799bf..a61c033 100644
 --- a/src/halmos/sevm.py
 +++ b/src/halmos/sevm.py
-@@ -2469,14 +2469,24 @@ class SEVM:
+@@ -2469,15 +2469,39 @@ class SEVM:
  
              elif to == SHA256_PRECOMPILE:
                  exit_code = ONE
@@ -10,24 +10,44 @@ index 1d799bf..67acba2 100644
 -                    f"f_sha256_{arg_size}", BitVecSorts[arg_size], BitVecSort256
 -                )
 -
-                 unwrapped = arg.unwrap()
-                 wrapped = (
-                     unwrapped if is_bv(unwrapped) else bytes_to_bv_value(unwrapped)
-                 )
-+                # PQ1 patch: the uninterpreted SHA-256 function's domain
-+                # sort must match the actual argument's BIT-width
-+                # (`wrapped.size()`), not the CALL's byte-size `arg_size`.
-+                # Keying on the byte-size declared `f_sha256_32 : BitVec 32`
-+                # but applied it to a `BitVec 256` value, so z3 raised
-+                # "Sort mismatch ... supplied sort is (_ BitVec 256)" on any
-+                # success path reaching a SHA-256 precompile call. This only
-+                # fixes the declared sort; the function stays uninterpreted
-+                # (sound abstraction). Mirrors how KECCAK is keyed on
-+                # `loc.size()` elsewhere in this file.
-+                arg_bits = wrapped.size()
-+                f_sha256 = Function(
-+                    f"f_sha256_{arg_bits}", BitVecSorts[arg_bits], BitVecSort256
-+                )
-                 ret = ByteVec(f_sha256(wrapped))
+-                unwrapped = arg.unwrap()
+-                wrapped = (
+-                    unwrapped if is_bv(unwrapped) else bytes_to_bv_value(unwrapped)
+-                )
+-                ret = ByteVec(f_sha256(wrapped))
++                # PQ1 patch (2/2): SHA-256 of the EMPTY input. z3 has no
++                # 0-width bitvector sort, so `bytes_to_bv_value(b"")` is
++                # unrepresentable and stock halmos crashes on any path that
++                # hashes an empty buffer (e.g. an empty `initCode` /
++                # `paymasterAndData` field). Model the digest of the empty
++                # string as a NULLARY uninterpreted constant: a single fixed
++                # but unknown 256-bit value, interned by name so every
++                # occurrence denotes the same value. Sound over-approximation:
++                # the true digest e3b0c442... is one admissible
++                # interpretation, and no constraint is added that the true
++                # SHA-256 does not satisfy.
++                if arg_size == 0:
++                    ret = ByteVec(BitVec("f_sha256_empty", 256))
++                else:
++                    unwrapped = arg.unwrap()
++                    wrapped = (
++                        unwrapped if is_bv(unwrapped) else bytes_to_bv_value(unwrapped)
++                    )
++                    # PQ1 patch (1/2): the uninterpreted SHA-256 function's
++                    # domain sort must match the actual argument's BIT-width
++                    # (`wrapped.size()`), not the CALL's byte-size `arg_size`.
++                    # Keying on the byte-size declared `f_sha256_32 : BitVec 32`
++                    # but applied it to a `BitVec 256` value, so z3 raised
++                    # "Sort mismatch ... supplied sort is (_ BitVec 256)" on any
++                    # success path reaching a SHA-256 precompile call. This only
++                    # fixes the declared sort; the function stays uninterpreted
++                    # (sound abstraction). Mirrors how KECCAK is keyed on
++                    # `loc.size()` elsewhere in this file.
++                    arg_bits = wrapped.size()
++                    f_sha256 = Function(
++                        f"f_sha256_{arg_bits}", BitVecSorts[arg_bits], BitVecSort256
++                    )
++                    ret = ByteVec(f_sha256(wrapped))
  
              elif to == RIPEMD160_PRECOMPILE:
+                 exit_code = ONE

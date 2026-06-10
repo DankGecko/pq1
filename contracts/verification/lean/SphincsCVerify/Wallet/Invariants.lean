@@ -556,15 +556,15 @@ private theorem capOk_slot_implies_strict
   -- conjunct's `decide`-true content.
   by_cases hv2 : s.slotUses oi + s.offchainSigCount oi < MaxSlotUses
   · exact hv2
-  · -- Contradiction: the && is false, but h says it isn't.
+  · -- Contradiction: the && is false, but h says it isn't. The cap
+    -- conjunct is the rightmost factor of the (right-associated)
+    -- three-way `&&` (allowed-selector, H-3 parity, cap), so two
+    -- `Bool.and_false` rewrites collapse the whole conjunction.
     exfalso
     apply h
     have hv2_false : decide (s.slotUses oi + s.offchainSigCount oi < MaxSlotUses) = false :=
       decide_eq_false hv2
-    rw [hv2_false]
-    cases hv1 : Selector.isSlotAllowed op.selectorOf with
-    | true => rfl
-    | false => rfl
+    simp [hv2_false]
 
 /-- The full inductive invariant across `validateSignature`: if the
     combined cap holds in the pre-state and `validateSignature`
@@ -647,7 +647,10 @@ theorem factory_requires_bootstrap_sig
             slot0PkSeed slot0PkRoot chainId factorySig verify_fn) :
     verify_fn masterPkSeed masterPkRoot
       (Factory.addSlot0Digest chainId slot0PkSeed slot0PkRoot) factorySig = true := by
-  exact h
+  -- The precondition is now a conjunction (signature check + the
+  -- 2026-06-10 owner-install gates); the squat-defence statement is
+  -- its first conjunct.
+  exact h.1
 
 /-! ## (I-1+EUF-CMA) Non-forgeability tie-in.
 

@@ -37,6 +37,8 @@ git -C "${SRC}" apply --check "${PATCH}" 2>/dev/null && git -C "${SRC}" apply "$
 
 grep -q 'f_sha256_{arg_bits}' "${SRC}/src/halmos/sevm.py" \
   || { echo "ERROR: patch did not land (f_sha256_{arg_bits} not found)"; exit 1; }
+grep -q 'f_sha256_empty' "${SRC}/src/halmos/sevm.py" \
+  || { echo "ERROR: patch part 2 did not land (f_sha256_empty not found)"; exit 1; }
 
 echo "==> Installing patched halmos"
 if command -v pipx >/dev/null 2>&1; then

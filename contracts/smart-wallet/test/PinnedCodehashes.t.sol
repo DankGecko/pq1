@@ -7,6 +7,7 @@ import {PQSmartWallet} from "../src/PQSmartWallet.sol";
 import {PQSmartWalletFactory} from "../src/PQSmartWalletFactory.sol";
 import {SPHINCsC10Asm} from "../src/verifiers/SPHINCsC10Asm.sol";
 import {MockSPHINCSVerifier} from "./mocks/MockSPHINCSVerifier.sol";
+import {PinnedCodehashSelector} from "./PinnedCodehashSelector.sol";
 
 /// @notice Pinned-codehash test — Phase 2C / Phase 3 of the
 ///         contracts/verification discharge plan.
@@ -23,7 +24,7 @@ import {MockSPHINCSVerifier} from "./mocks/MockSPHINCSVerifier.sol";
 ///         branch-cut; update via the `forge test --match-test
 ///         test_codehash_print -vv` output below, then re-run the
 ///         discharge artifacts (Halmos, Certora).
-contract PinnedCodehashesTest is Test {
+contract PinnedCodehashesTest is PinnedCodehashSelector {
     // ── Codehash freeze constants ─────────────────────────────────────
     //
     // Originally pinned at the 2026-05-21 branch-cut; re-pinned 2026-05-27
@@ -56,17 +57,15 @@ contract PinnedCodehashesTest is Test {
     //   * PQ_SMART_WALLET_CODEHASH         → Halmos (HalmosValidateUserOp + HalmosExecute)
     //   * PQ_SMART_WALLET_FACTORY_CODEHASH → Halmos (HalmosFactory) / Certora
     //   * SPHINCS_C10_ASM_CODEHASH         → Halmos (HalmosVerifier gates) + cross_validation/
-    bytes32 constant PQ_SMART_WALLET_CODEHASH =
-        0x43c65420691792d7f0f63dab95f47ab7adb649df4c83f432bd3cf2c95db3a06a;
+    //
+    // PROFILE-AWARE 2026-06-10: the actual pin constants now live in
+    // `PinnedCodehashSelector.sol`, which carries BOTH the default-profile
+    // (runs=200) and deploy-profile (runs=999999) codehash sets and picks
+    // by `$FOUNDRY_PROFILE`. `make -C ../verification verify-bytecode` runs
+    // the symbolic suite under both profiles, so the discharge covers the
+    // production build, not just the dev build. The aliases below keep this
+    // file's body unchanged.
     bytes32 constant PQ_MULTI_OWNABLE_CODEHASH = bytes32(0);  // embedded in PQSmartWallet; no independent deploy
-    // Factory RUNTIME LOGIC is unchanged by the bootstrap-cap fix; only its
-    // trailing IPFS-metadata hash moved, because PQSmartWallet.sol (a source in
-    // the factory's compilation unit) changed. The Certora factory spec proves
-    // the same logic and does not need re-running for this edit.
-    bytes32 constant PQ_SMART_WALLET_FACTORY_CODEHASH =
-        0xfa2922b4fadb81b4475307504890d68f2e3d9be97c7e5e9aeeba6e84110d7c3c;
-    bytes32 constant SPHINCS_C10_ASM_CODEHASH =
-        0xf1ef4ccee22e6b39446723232fe39761f089c7195941b2c12576956b38fcfef5;
 
     SPHINCsC10Asm internal sphincs;
     MockSPHINCSVerifier internal c10;
@@ -93,24 +92,28 @@ contract PinnedCodehashesTest is Test {
         assertTrue(factoryHash != bytes32(0), "PQSmartWalletFactory has no bytecode");
         assertTrue(sphincsHash != bytes32(0), "SPHINCsC10Asm has no bytecode");
 
-        if (PQ_SMART_WALLET_CODEHASH != bytes32(0)) {
-            assertEq(walletHash, PQ_SMART_WALLET_CODEHASH,
+        bytes32 pinWallet = _pinnedWallet();
+        bytes32 pinFactory = _pinnedFactory();
+        bytes32 pinVerifier = _pinnedVerifier();
+
+        if (pinWallet != bytes32(0)) {
+            assertEq(walletHash, pinWallet,
                 "PQSmartWallet codehash drift: re-run Halmos and update pin");
         } else {
             console2.log("[!] PQSmartWallet codehash (capture and pin):");
             console2.logBytes32(walletHash);
         }
 
-        if (PQ_SMART_WALLET_FACTORY_CODEHASH != bytes32(0)) {
-            assertEq(factoryHash, PQ_SMART_WALLET_FACTORY_CODEHASH,
-                "PQSmartWalletFactory codehash drift: re-run Certora and update pin");
+        if (pinFactory != bytes32(0)) {
+            assertEq(factoryHash, pinFactory,
+                "PQSmartWalletFactory codehash drift: re-run Halmos/Certora and update pin");
         } else {
             console2.log("[!] PQSmartWalletFactory codehash (capture and pin):");
             console2.logBytes32(factoryHash);
         }
 
-        if (SPHINCS_C10_ASM_CODEHASH != bytes32(0)) {
-            assertEq(sphincsHash, SPHINCS_C10_ASM_CODEHASH,
+        if (pinVerifier != bytes32(0)) {
+            assertEq(sphincsHash, pinVerifier,
                 "SPHINCsC10Asm codehash drift: re-run cross_validation/ and update pin");
         } else {
             console2.log("[!] SPHINCsC10Asm codehash (capture and pin):");

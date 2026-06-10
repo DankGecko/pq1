@@ -160,7 +160,8 @@ axiom solidityVerifier_compiles_correctly :
       DeployedBytecode.SPHINCsC10Asm_verify pkSeed pkRoot message sig
         = verifyYulModel pkSeed pkRoot message sig
 
-/-- **A3.2 — `PQSmartWallet.validateUserOp` matches `validateSignature`.**
+/-- **A3.2 — `PQSmartWallet.validateUserOp` matches `validateSignature`,
+    on reachable states.**
 
     The deployed bytecode at the pinned `PQSmartWallet` codehash, on
     inputs `(state, userOp, entryPoint, chainId)`, returns the same
@@ -169,11 +170,31 @@ axiom solidityVerifier_compiles_correctly :
     parameter instantiated to `DeployedBytecode.SPHINCsC10Asm_verify`
     (so the on-chain wallet uses the on-chain verifier).
 
-    Discharge: Halmos session
-    `test/halmos/HalmosValidateUserOp.t.sol::check_*` against pinned
-    `PQSmartWallet` runtime codehash. -/
+    REACHABLE-STATE HYPOTHESIS. The equality is conditioned on the
+    per-index combined-cap invariant
+    `slotUses i + offchainSigCount i ≤ MaxSlotUses` (the unfolding of
+    `Wallet.Invariants.combinedCapInvariant`, which
+    `combinedCap_inductive` proves established at `initialize` and
+    preserved by every transition). The hypothesis is NOT decorative:
+    on states outside it the two sides genuinely diverge — the
+    deployed bytecode REVERTS (Solidity 0.8 checked arithmetic on
+    `slotUses[i] + offchainSigCount[i]`) where the ℕ-valued model
+    returns `Result.failure`. The unconditional `∀ s` equality is
+    therefore FALSE, and stating the axiom that way would be
+    undischargeable; conditioning on the kernel-proven invariant makes
+    the axiom exactly what the Halmos session proves.
+
+    Discharge: Halmos pointwise-equivalence session
+    `test/halmos/HalmosValidateUserOpEquiv.t.sol` (deployed runtime
+    bytecode vs the clause-for-clause Lean-model transcription
+    `test/halmos/LeanValidateUserOpModel.sol`, under a generic
+    input-dependent uninterpreted verifier), plus the per-property
+    corollary rules in `test/halmos/HalmosValidateUserOp.t.sol`,
+    against the pinned `PQSmartWallet` runtime codehash. Envelope and
+    session log recorded in AXIOM_STATUS.json. -/
 axiom solidityWallet_compiles_correctly :
     ∀ (s : Storage) (op : UserOperation) (entryPoint : ByteVec 20) (chainId : Nat),
+      (∀ i, s.slotUses i + s.offchainSigCount i ≤ MaxSlotUses) →
       DeployedBytecode.PQSmartWallet_validateUserOp s op entryPoint chainId
         = validateSignature s op entryPoint chainId
             DeployedBytecode.SPHINCsC10Asm_verify

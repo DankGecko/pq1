@@ -34,6 +34,15 @@ import SphincsCVerify
 --   solidityVerifier_compiles_correctly (A3.1), evm_bytecode_executes_correctly (A4)
 #print axioms SphincsCVerify.Spec.Theorems.theft_free
 
+-- Bytecode-transported headline — theft_free's closure plus
+-- solidityWallet_compiles_correctly (A3.2): the EntryPoint transition's
+-- wallet step is the opaque deployed-bytecode symbol.
+#print axioms SphincsCVerify.Spec.Theorems.theft_free_bytecode
+
+-- Bytecode-transported squat-defence (I-8) — exactly
+-- solidityFactory_compiles_correctly (A3.3) + kernel.
+#print axioms SphincsCVerify.Spec.Theorems.factory_squat_defence_bytecode
+
 -- Claim 1 corollary — adds sha256_injective_on_fixed_length to the closure.
 #print axioms SphincsCVerify.Spec.Theorems.theft_free_with_calldata_binding
 

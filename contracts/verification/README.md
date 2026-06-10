@@ -16,14 +16,48 @@
 >
 > The Lean model is faithful to the **in-use** contracts as of
 > 2026-06-10: it tracks the deployed verifier's FORS hypertree-position
-> binding (`htIdx` folded into every FORS ADRS, commit fcee705a) and the
+> binding (`htIdx` folded into every FORS ADRS, commit fcee705a), the
 > deployed wallet's validation-phase bootstrap-cap bump (the
-> `PQBootstrapCapEvasion` fix). The residual gap is the **bytecode-level**
-> A3.* discharge (Halmos/Certora) against the freshly re-pinned
-> codehashes, which the dev env cannot run (no solver installed) — see
-> [`docs/AXIOM_STATUS.json`](docs/AXIOM_STATUS.json) for the per-axiom
+> `PQBootstrapCapEvasion` fix), the wrapper ABI tail-pad check, the
+> audit-H-3 ownerIndex parity, and the factory's install-time N-mask +
+> duplicate-owner gates.
+>
+> **The bytecode-level A3.* discharge is now run, not pending.** A
+> patched Halmos + z3 (see [`halmos/`](halmos/)) symbolically executes
+> the deployed runtime bytecode against the **profile-aware** pinned
+> codehashes (default `runs=200` **and** deploy `runs=999999`, both
+> certified, plus an immutable-window lemma transporting the per-instance
+> pin to all instances modulo the two certified immutables):
+>
+> - **A3.2 (wallet)** — `discharged-bytecode`: a full **pointwise
+>   equivalence** of `validateUserOp` to the clause-for-clause Lean-model
+>   transcription ([`LeanValidateUserOpModel.sol`](../smart-wallet/test/halmos/LeanValidateUserOpModel.sol))
+>   over a symbolic envelope under a generic uninterpreted verifier,
+>   conditioned on the kernel-proven reachable-state invariant, plus 14
+>   per-property rules.
+> - **A3.3 (factory)** — `discharged-bytecode`: `createAccount` ⟺
+>   `createAccountPrecondition` (over symbolic chain + signature) with
+>   deploy postconditions, the already-deployed early-return, and three
+>   install-gate reject rules.
+> - **A3.1 (verifier)** — `discharged-bytecode-partial`: Halmos input
+>   gates + the Lean refinement (incl. FORS htIdx) + 10 KAT vectors + a
+>   ≈250-mutant adversarial wrong-accept screen on the bytecode. The full
+>   ∀-signature functional equivalence is the named `-partial` gap (not
+>   symbolically tractable over a 4008-byte signature).
+>
+> The Lean corollaries `theft_free_bytecode` and
+> `factory_squat_defence_bytecode` quantify theft-freedom and
+> squat-defence directly over the **opaque deployed-bytecode symbols**,
+> so a `#print axioms` names the wallet/factory bridge axioms explicitly.
+> See [`docs/AXIOM_STATUS.json`](docs/AXIOM_STATUS.json) for the per-axiom
 > discharge state and [`docs/PINNED_CODEHASHES.md`](docs/PINNED_CODEHASHES.md)
-> for the pins. The Lean kernel proof itself is complete.
+> for the pins. Reproduce: `make verify-bytecode`.
+>
+> **Honest ceiling (unchanged).** A Halmos rule is a cited solver session
+> (Halmos + z3 + the harness↔property and transcription↔Lean
+> correspondences in the TCB), not a Lean kernel proof term; A2/A4/A5
+> remain cited-TCB; A3.1's ∀-signature equivalence remains on the Lean
+> refinement + KATs. SHA-256 is uninterpreted in every Halmos run (= A1).
 
 This directory contains the **mechanised formal-verification stack** in
 progress toward one goal:

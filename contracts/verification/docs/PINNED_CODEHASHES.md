@@ -44,12 +44,35 @@ pinned value below. Any drift fails CI.
 > uninterpreted function in every Halmos run (the named A1 boundary). A3.4
 > (multiownable) logic is unchanged.
 
+**default profile (`runs=200`)** — the dev/test build the symbolic suite runs against:
+
 ```
 PQSmartWallet         0x43c65420691792d7f0f63dab95f47ab7adb649df4c83f432bd3cf2c95db3a06a
 PQSmartWalletFactory  0xfa2922b4fadb81b4475307504890d68f2e3d9be97c7e5e9aeeba6e84110d7c3c
 SPHINCsC10Asm         0xf1ef4ccee22e6b39446723232fe39761f089c7195941b2c12576956b38fcfef5
 PQMultiOwnable        (embedded in PQSmartWallet; no independent deploy)
 ```
+
+**deploy profile (`runs=999999`)** — the production build (pinned + certified 2026-06-10):
+
+```
+PQSmartWallet         0x551c4e03bbd433a5929828ab19caac13a94ca9e2be6074cf3e18c7d926034c22
+PQSmartWalletFactory  0x5feb7955252e54bcbbf44062295bdeb45f3dea13c4ef7fb1ba579196d84da4b9
+SPHINCsC10Asm         0xeb1e3fcd38c7cd5f7b08352c298b34bd114d83f7dbd755b122c41eda2aab2cc5
+PQMultiOwnable        (embedded in PQSmartWallet; no independent deploy)
+```
+
+Both profile sets live in `contracts/smart-wallet/test/PinnedCodehashSelector.sol`
+(picked by `$FOUNDRY_PROFILE`) and are certified by `PinnedCodehashes.t.sol`
+under each profile. Because the two builds differ only in the optimiser's
+instruction selection — not control flow — an **immutable-window lemma**
+(`PinnedBytecodeImmutableLemma.t.sol`) additionally proves, exhaustively over
+every byte, that each contract's runtime differs from its pinned instance
+**only inside 32-byte windows holding the two constructor immutables**
+(`_entryPoint`/`implementation` and `c10Verifier`, plus the wallet's Solady
+EIP-712 `_cachedThis`/`_cachedDomainSeparator`). So a symbolic rule proved
+against one instance transports to every instance (and across profiles) modulo
+those certified-located immutables.
 
 ## EntryPoint v0.6 (cited-TCB)
 
@@ -86,8 +109,12 @@ evm_version = "prague"
 ```
 
 The `[profile.deploy]` profile uses `optimizer_runs = 999999` which
-produces different bytecode; production-pinned codehashes would be
-captured under that profile (TODO when production deploys are cut).
+produces different bytecode; those production codehashes are pinned in
+the **deploy profile** block above (captured + certified 2026-06-10) and
+covered by the same symbolic discharge via the immutable-window lemma.
+`make verify-bytecode` certifies BOTH profiles; set
+`PQ1_HALMOS_BOTH_PROFILES=1` to additionally re-run the symbolic suite
+under the deploy profile (the control flow is profile-independent).
 
 ## Re-pinning procedure
 

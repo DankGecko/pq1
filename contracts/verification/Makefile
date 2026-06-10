@@ -47,9 +47,13 @@ verify-bytecode-setup:
 	@bash halmos/setup_halmos.sh
 
 # Bytecode-level discharge of the A3.* bridge axioms: certifies the
-# compiled runtime codehashes match PINNED_CODEHASHES.md, then symbolically
-# executes the deployed PQSmartWallet / factory / verifier bytecode with the
-# patched Halmos. Run `make verify-bytecode-setup` once first.
+# compiled runtime codehashes match PINNED_CODEHASHES.md (BOTH the default
+# runs=200 and deploy runs=999999 profiles) + the immutable-window lemma,
+# then symbolically executes the deployed PQSmartWallet / factory / verifier
+# bytecode with the patched Halmos — including the full pointwise-equivalence
+# session for A3.2. Run `make verify-bytecode-setup` once first.
+# Set PQ1_HALMOS_BOTH_PROFILES=1 to also re-run the symbolic suite under the
+# deploy profile.
 verify-bytecode:
 	@bash halmos/run_halmos.sh
 

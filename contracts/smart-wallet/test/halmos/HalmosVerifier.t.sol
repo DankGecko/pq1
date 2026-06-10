@@ -35,11 +35,27 @@ contract HalmosVerifier is SymTest, Test {
     }
 
     /// **Wrong signature length reverts** ("Invalid sig length"). The check
-    /// is the first thing the Yul does, before any hash. Representative
-    /// wrong length (one below the required 4008).
-    function check_verify_reverts_on_wrong_length() public {
-        bytes memory sig = new bytes(4007);
-        try v.verify(NMASKED, NMASKED, bytes32(0), sig) returns (bool) {
+    /// is the first thing the Yul does, before any hash. Swept over the
+    /// boundary lengths {0, 1, 2048, 4007, 4009, 8192} with fully symbolic
+    /// content (the gate must be length-only: no byte value at a wrong
+    /// length may slip through). The correct length 4008 is exercised by
+    /// the two N-mask rules below (which return instead of reverting).
+    function check_verify_reverts_on_wrong_length(
+        uint256 lenSel,
+        bytes32 pkSeed,
+        bytes32 pkRoot,
+        bytes32 digest
+    ) public {
+        vm.assume(lenSel < 6);
+        bytes memory sig;
+        if (lenSel == 0) sig = new bytes(0);
+        else if (lenSel == 1) sig = svm.createBytes(1, "vsig1");
+        else if (lenSel == 2) sig = svm.createBytes(2048, "vsig2048");
+        else if (lenSel == 3) sig = svm.createBytes(4007, "vsig4007");
+        else if (lenSel == 4) sig = svm.createBytes(4009, "vsig4009");
+        else sig = svm.createBytes(8192, "vsig8192");
+
+        try v.verify(pkSeed, pkRoot, digest, sig) returns (bool) {
             assertTrue(false, "A3.1 bytecode: verifier accepted a non-4008 signature length");
         } catch {
             // expected: revert("Invalid sig length")
@@ -48,20 +64,32 @@ contract HalmosVerifier is SymTest, Test {
 
     /// **Non-N-masked `pkSeed` returns false** (audit I-2 in-verifier
     /// enforcement). The check sits above the H_msg hash, so this path
-    /// never reaches a SHA-256 call: a fully concrete reject.
-    function check_verify_rejects_non_nmasked_pkSeed(bytes32 pkSeed) public {
+    /// never reaches a SHA-256 call. Every other argument fully symbolic:
+    /// no pkRoot/digest/signature value may rescue a malformed pkSeed.
+    function check_verify_rejects_non_nmasked_pkSeed(
+        bytes32 pkSeed,
+        bytes32 pkRoot,
+        bytes32 digest
+    ) public {
         // bottom 16 bytes non-zero ⇒ not N-masked.
         vm.assume(uint128(uint256(pkSeed)) != 0);
-        bytes memory sig = new bytes(4008);
-        bool ok = v.verify(pkSeed, NMASKED, bytes32(0), sig);
+        bytes memory sig = svm.createBytes(4008, "nmSig");
+        bool ok = v.verify(pkSeed, pkRoot, digest, sig);
         assertTrue(!ok, "A3.1 bytecode: verifier accepted a non-N-masked pkSeed");
     }
 
-    /// **Non-N-masked `pkRoot` returns false.**
-    function check_verify_rejects_non_nmasked_pkRoot(bytes32 pkRoot) public {
+    /// **Non-N-masked `pkRoot` returns false.** pkSeed constrained to the
+    /// N-mask shape (so the pkRoot gate is actually reached); digest and
+    /// signature fully symbolic.
+    function check_verify_rejects_non_nmasked_pkRoot(
+        bytes32 pkSeedHigh,
+        bytes32 pkRoot,
+        bytes32 digest
+    ) public {
+        bytes32 pkSeed = pkSeedHigh & ~bytes32(uint256(type(uint128).max)); // N-masked
         vm.assume(uint128(uint256(pkRoot)) != 0);
-        bytes memory sig = new bytes(4008);
-        bool ok = v.verify(NMASKED, pkRoot, bytes32(0), sig);
+        bytes memory sig = svm.createBytes(4008, "nmSigR");
+        bool ok = v.verify(pkSeed, pkRoot, digest, sig);
         assertTrue(!ok, "A3.1 bytecode: verifier accepted a non-N-masked pkRoot");
     }
 }

@@ -341,6 +341,118 @@ theorem theft_free
       Classical.choice (Nonempty.intro ())
     exact Crypto.cannot_forge_without_breaking_SHA256 vk transcript msgStar sigStar hf
 
+/-! ## 4b. Bytecode-transported corollaries.
+
+`theft_free` quantifies the wallet step at the Lean model (`handleOp`
+calls `validateSignature ... deployedVerifier`). The corollaries below
+transport the same statements to the OPAQUE deployed-bytecode symbols,
+so the axiom closure printed by `#print axioms` names the wallet and
+factory bridge axioms explicitly: A3.2 joins `theft_free_bytecode`'s
+closure and A3.3 joins `factory_squat_defence_bytecode`'s. They are
+the Lean-side counterpart of the Halmos pointwise-equivalence sessions
+(`test/halmos/HalmosValidateUserOpEquiv.t.sol`,
+`test/halmos/HalmosFactory.t.sol`) recorded in AXIOM_STATUS.json. -/
+
+/-- `Bridge.EntryPoint.handleOp` with the wallet validation step taken
+    from the deployed-bytecode symbol (A3.2's left-hand side) instead
+    of the Lean model. -/
+def handleOpBytecode
+    (σ : Bridge.EntryPoint.State) (op : UserOperation)
+    (effects : Bridge.EntryPoint.Address → Nat → Nat) :
+    Bridge.EntryPoint.State :=
+  let (res, s') :=
+    Bridge.DeployedBytecode.PQSmartWallet_validateUserOp
+      σ.walletStorage op σ.entryPointAddress σ.chainId
+  match res with
+  | Result.failure => σ
+  | Result.success =>
+    { σ with
+        walletStorage := s'
+        balance := fun a => effects a (σ.balance a)
+        walletCalled := true }
+
+/-- **Theft-freedom, stated against the deployed wallet bytecode.**
+
+    Same hypotheses and conclusion as `theft_free`, except the
+    EntryPoint transition runs the wallet validation step at the opaque
+    `DeployedBytecode.PQSmartWallet_validateUserOp` symbol — "the code
+    at the pinned codehash" — rather than at the Lean model. The extra
+    hypothesis `hInv` is the kernel-proven reachable-state invariant
+    (`Wallet/Invariants.lean::combinedCap_inductive`): A3.2's pointwise
+    equality is conditioned on it, because outside it the bytecode
+    reverts on a checked-arithmetic overflow where the ℕ-valued model
+    returns failure (a divergence on unreachable states only — see
+    AXIOM_STATUS.json A3.2).
+
+    `#print axioms theft_free_bytecode` = `theft_free`'s closure
+    ∪ { solidityWallet_compiles_correctly }. -/
+theorem theft_free_bytecode
+    (op : UserOperation)
+    (σ σ' : Bridge.EntryPoint.State)
+    (effects : Bridge.EntryPoint.Address → Nat → Nat)
+    (hInv : ∀ i, σ.walletStorage.slotUses i + σ.walletStorage.offchainSigCount i
+                   ≤ MaxSlotUses)
+    (hExec : handleOpBytecode σ op effects = σ')
+    (hDecrease : σ'.balance σ.walletAddress < σ.balance σ.walletAddress) :
+    (∃ (ownerIndex : Nat) (owner : OwnerBytes)
+       (pkSeed pkRoot : ByteVec 32) (digest : ByteVec 32)
+       (innerSig : ByteVec SignatureLen),
+      decodeWrappedSig op.signature = some ⟨ownerIndex, innerSig⟩
+      ∧ σ.walletStorage.ownerAtIndex ownerIndex = some owner
+      ∧ pkSeed = owner.raw.take 32 (by decide)
+      ∧ pkRoot = owner.raw.drop 32 (by decide)
+      ∧ digest = sphincsDigest op σ.entryPointAddress σ.chainId
+      ∧ Bridge.DeployedBytecode.SPHINCsC10Asm_verify pkSeed pkRoot digest innerSig = true)
+    ∧ (∀ (vk : Signature.VerifyingKey)
+         (transcript : Crypto.Transcript)
+         (msgStar : ByteVec 32) (sigStar : Hypertree.Signature),
+        Crypto.isForgery vk transcript msgStar sigStar → False) := by
+  -- A3.1, in function form: the opaque deployed verifier IS the Lean
+  -- Yul model (which is `deployedVerifier` by definition).
+  have hfn : Bridge.DeployedBytecode.SPHINCsC10Asm_verify
+      = Bridge.EntryPoint.deployedVerifier :=
+    funext fun a => funext fun b => funext fun c => funext fun d =>
+      Bridge.solidityVerifier_compiles_correctly a b c d
+  -- A3.2 under the reachable-state invariant, then A3.1 to align the
+  -- verifier parameter.
+  have hwallet :
+      Bridge.DeployedBytecode.PQSmartWallet_validateUserOp
+        σ.walletStorage op σ.entryPointAddress σ.chainId
+      = validateSignature σ.walletStorage op σ.entryPointAddress σ.chainId
+          Bridge.EntryPoint.deployedVerifier := by
+    rw [Bridge.solidityWallet_compiles_correctly σ.walletStorage op
+          σ.entryPointAddress σ.chainId hInv, hfn]
+  -- The bytecode-stepped transition coincides with the model-stepped
+  -- one, so `theft_free` applies verbatim.
+  have hExec' : Bridge.EntryPoint.handleOp σ op effects = σ' := by
+    rw [← hExec]
+    unfold handleOpBytecode Bridge.EntryPoint.handleOp
+    rw [hwallet]
+    rfl
+  exact theft_free op σ σ' effects hExec' hDecrease
+
+
+/-- **Factory squat-defence, stated against the deployed factory
+    bytecode (I-8 transported through A3.3).** If the code at the
+    pinned factory codehash accepts a `createAccount` call, the
+    deployed verifier accepted the bootstrap signature over the slot-0
+    squat-defence digest.
+
+    `#print axioms factory_squat_defence_bytecode`
+    = { solidityFactory_compiles_correctly } ∪ kernel. -/
+theorem factory_squat_defence_bytecode
+    (masterPkSeed masterPkRoot slot0PkSeed slot0PkRoot : ByteVec 32)
+    (chainId : UInt64) (factorySig : ByteVec SignatureLen)
+    (h : Bridge.DeployedBytecode.PQSmartWalletFactory_createAccount_passes
+          masterPkSeed masterPkRoot slot0PkSeed slot0PkRoot chainId factorySig = true) :
+    Bridge.DeployedBytecode.SPHINCsC10Asm_verify masterPkSeed masterPkRoot
+        (Wallet.Factory.addSlot0Digest chainId slot0PkSeed slot0PkRoot) factorySig
+      = true := by
+  have hpre := (Bridge.solidityFactory_compiles_correctly
+      masterPkSeed masterPkRoot slot0PkSeed slot0PkRoot chainId factorySig).mp h
+  unfold Wallet.Factory.createAccountPrecondition at hpre
+  exact hpre.1
+
 /-! ## 5. Claim 1 — strengthened: signature-to-execution binding.
 
 `theft_free` (above) establishes that a wallet-balance decrement

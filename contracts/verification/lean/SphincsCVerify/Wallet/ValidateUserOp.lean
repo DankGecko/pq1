@@ -149,19 +149,28 @@ def extractInnerSig (raw : Array UInt8) (offset : Nat) : ByteVec SignatureLen :=
     ⟨Array.replicate SignatureLen 0, Array.size_replicate⟩
 
 /-- Decode the wrapped signature. Returns `none` on any malformed
-    shape (wrong total length, wrong offset field, wrong inner length).
+    shape (wrong total length, wrong offset field, wrong inner length,
+    non-zero ABI tail-pad).
 
     Mirrors the manual `calldataload`-based decode in
     `_validateSignature` (`contracts/smart-wallet/src/PQSmartWallet.sol`
-    lines 280-295). The layout is:
+    lines 399-435). The layout is:
 
     ```
-      [0..32)   ownerIndex   (u256 BE)
-      [32..64)  offsetField  (u256 BE; MUST be 0x40)
-      [64..96)  innerLen     (u256 BE; MUST be 4008)
-      [96..96+paddedInner)   inner C10 signature (padded to 32B boundary)
+      [0..32)     ownerIndex   (u256 BE)
+      [32..64)    offsetField  (u256 BE; MUST be 0x40)
+      [64..96)    innerLen     (u256 BE; MUST be 4008)
+      [96..4104)  inner C10 signature (4008 bytes)
+      [4104..4128) ABI tail-pad (24 bytes; MUST be zero — audit L-1)
     ```
--/
+
+    The tail-pad check mirrors the Solidity word-read at byte offset
+    4096 masked to its bottom 24 bytes (the top 8 bytes of that word
+    are the last 8 authenticated signature bytes): the wrapper must be
+    malleable in zero ways. Added 2026-06-10 for bytecode faithfulness —
+    the deployed `_validateSignature` enforces it, so a model without it
+    accepts wrappers the bytecode rejects and the A3.2 pointwise
+    equality would be false. -/
 def decodeWrappedSig (raw : Array UInt8) : Option DecodedSig :=
   if raw.size ≠ wrappedLen then
     none
@@ -169,12 +178,25 @@ def decodeWrappedSig (raw : Array UInt8) : Option DecodedSig :=
     let ownerIndex := readWordBE raw 0
     let offsetField := readWordBE raw 32
     let innerLen := readWordBE raw 64
+    let tailPad := readWordBE raw 4096 % 2 ^ 192
     if offsetField ≠ 0x40 then
       none
     else if innerLen ≠ SignatureLen then
       none
+    else if tailPad ≠ 0 then
+      none
     else
       some { ownerIndex := ownerIndex, innerSig := extractInnerSig raw 96 }
+
+/-- The first ABI word of an `execute*WithOffchainCount` calldata — the
+    `uint256 ownerIndex` argument at byte offset 4 (after the 4-byte
+    selector). Mirrors `PQSmartWallet._calldataOwnerIndex`: when the
+    calldata is too short to carry the word (`size < 36`), returns
+    `2^256 - 1` (Solidity `type(uint256).max`), a sentinel the H-3
+    parity check compares fail-closed. -/
+def calldataOwnerIndex (op : UserOperation) : Nat :=
+  if op.callData.size < 36 then 2 ^ 256 - 1
+  else readWordBE op.callData 4
 
 /-- The validation return code. -/
 inductive Result where
@@ -258,7 +280,17 @@ def sphincsDigest
 
 /-- The cap-check predicate (role-split): bootstrap path requires
     `addOwnerBytes` selector + `bootstrapUses` budget; slot path
-    requires a slot-allowed selector + combined cap budget. -/
+    requires a slot-allowed selector + the audit-H-3 ownerIndex parity
+    + combined cap budget.
+
+    The H-3 conjunct mirrors `_validateSignature` (Solidity lines
+    469-474): for the offchain-count execute selectors, the calldata's
+    first argument (the target slot) must equal the signed wrapper's
+    `ownerIndex`, so the execution-phase credit is unambiguously owned
+    by the slot that signed it. `removeOwnerAtIndex` carries a removal
+    index, not the signer's index, and is excluded. Added 2026-06-10
+    for bytecode faithfulness (the model previously accepted
+    mismatched-index ops the bytecode rejects). -/
 def capOk
     (s : Storage) (op : UserOperation) (ownerIndex : Nat) : Bool :=
   if ownerIndex = 0 then
@@ -266,6 +298,8 @@ def capOk
     decide (s.bootstrapUses < MaxBootstrapUses)
   else
     Selector.isSlotAllowed op.selectorOf &&
+    (decide (op.selectorOf = Selector.removeOwnerAtIndex) ||
+       decide (calldataOwnerIndex op = ownerIndex)) &&
     decide (s.slotUses ownerIndex + s.offchainSigCount ownerIndex < MaxSlotUses)
 
 /-- The counter-bump step run on the success path. Returns the
