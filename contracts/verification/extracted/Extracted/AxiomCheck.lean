@@ -20,3 +20,4 @@ import Extracted.ForsLoop
 #print axioms Extracted.Equiv.read_bits_le_loop_terminates
 #print axioms Extracted.Equiv.extract_ht_index_terminates
 #print axioms Extracted.Equiv.extract_fors_indices_terminates
+#print axioms Extracted.Equiv.extract_ht_index_in_range

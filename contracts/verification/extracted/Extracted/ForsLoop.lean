@@ -168,4 +168,50 @@ theorem extract_fors_indices_terminates (digest : Std.Array Std.U8 32#usize) :
     | scalar_tac
     | trivial
 
+
+open sphincs_c10 in
+set_option maxHeartbeats 8000000 in
+theorem read_bits_le_in_range (digest : Std.Array Std.U8 32#usize)
+    (bit_offset num_bits : Std.Usize)
+    (hpos : 0 < num_bits.val) (h : num_bits.val ≤ 57) (hoff : bit_offset.val ≤ 248) :
+    fors.read_bits_le digest bit_offset num_bits ⦃ r => r.val < 2 ^ num_bits.val ⦄ := by
+  unfold fors.read_bits_le
+  have hp : (0:Nat) < 2 ^ num_bits.val := Nat.two_pow_pos _
+  have hlt64 : (2:Nat) ^ num_bits.val < U64.size := by
+    have hsz : U64.size = 2 ^ 64 := by simp [U64.size, U64.numBits]
+    rw [hsz]
+    calc (2:Nat) ^ num_bits.val ≤ 2 ^ 57 := Nat.pow_le_pow_right (by norm_num) h
+      _ < 2 ^ 64 := Nat.pow_lt_pow_right (by norm_num) (by norm_num)
+  step* <;>
+    first
+    | scalar_tac
+    | (rw [Nat.shiftLeft_eq, Nat.one_mul, Nat.mod_eq_of_lt hlt64]; omega)
+    | simp_all
+    | trivial
+  have hmask : (1 <<< num_bits.val % U64.size - 1 : Nat) = 2 ^ num_bits.val - 1 := by
+    rw [Nat.shiftLeft_eq, Nat.one_mul, Nat.mod_eq_of_lt hlt64]
+  rw [hmask, Nat.and_two_pow_sub_one_eq_mod]
+  exact Nat.mod_lt _ (Nat.two_pow_pos _)
+
+attribute [step] read_bits_le_in_range
+
+open sphincs_c10 in
+set_option maxHeartbeats 8000000 in
+theorem extract_ht_index_in_range (digest : Std.Array Std.U8 32#usize) :
+    fors.extract_ht_index digest ⦃ r => r.val < 2 ^ 18 ⦄ := by
+  unfold fors.extract_ht_index
+  simp only [params.K, params.A, params.H]
+  step* <;>
+    first
+    | (apply read_bits_le_in_range <;> scalar_tac)
+    | scalar_tac
+    | simp_all
+    | trivial
+  -- compose: i1.val < 2^18, cast U32 preserves (2^18 < 2^32)
+  rename_i hr
+  rw [UScalar.cast_val_eq]
+  have : (UScalarTy.U32).numBits = 32 := by rfl
+  rw [this, Nat.mod_eq_of_lt (by omega)]
+  omega
+
 end Extracted.Equiv
