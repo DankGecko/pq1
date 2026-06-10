@@ -212,6 +212,7 @@ what you need:**
 | Synthesise the 2026-04-14 deep-research findings into "what to do next" | `docs/production-security.md` |
 | Drive a future AI-research session with project context | `docs/ai-research-briefing.md` + `docs/research-bundles/` |
 | See what's already been researched (raw artefacts) | `docs/research-bundles/results/` |
+| Understand the Lean verification track (tools, state of the art, harness design) | `docs/lean-verification-research-2026-06.md` + work-todo §33 |
 
 ### Subsystem-specific design
 
@@ -687,6 +688,61 @@ A single secure element is a single point of trust. Whether the failure mode is 
 The cost is one extra I²C peripheral, ~$3 BOM, and ~50 ms added unlock latency.
 
 See [docs/architecture.md](docs/architecture.md) for the technical design, [docs/HARDENING.md](docs/HARDENING.md) for the consolidated hardening requirements, and [docs/m4-cowswap-eip712.md](docs/m4-cowswap-eip712.md) for the CowSwap EIP-712 order clear-signing handoff (deferred M4 milestone — read this before attempting that work).
+
+## Formal Verification (Lean 4)
+
+Two machine-checked proof tracks, one shared specification. Neither gates
+shipping — the C10 parameters and wire formats are frozen, so proofs that land
+after a release still apply to shipped firmware.
+
+**On-chain track (established).** `contracts/verification/` holds a Lean 4
+specification of SPHINCS+C10 verification (`SphincsCVerify/Spec/` — WOTS, FORS,
+ADRS, hypertree) plus wallet-model theorems (`theft_free` and its per-claim
+corollaries: caps are unresettable, the bootstrap key can't be removed, the
+CREATE2 address is chain-independent, EIP-1271 forbids the bootstrap key).
+Every proof is re-checked by the Lean kernel; the remaining trust surface is a
+small, *named* axiom list (`docs/AXIOM_STATUS.json`) — e.g. "the SHA-256
+precompile implements FIPS 180-4" — each entry carrying its discharge artifact
+(NIST CAVS known-answer tests, Halmos bytecode sessions against pinned
+codehashes, or a citation). CI enforces no-`sorry` and lints the axiom list.
+
+**Firmware track (in progress — work-todo §33).** The pure-logic firmware
+crates (`sphincs-c10`, `aa`, `domain`, the wire-format parsers) are translated
+to Lean with [Charon](https://github.com/AeneasVerif/charon) +
+[Aeneas](https://github.com/AeneasVerif/aeneas), then proven equivalent to the
+*same* `SphincsCVerify` spec the on-chain verifier was proven sound against.
+Proof grinding is designed to be mostly AI-driven (a scheduled prover loop in
+CI; the Lean kernel re-checks every proof, so AI output can never compromise
+soundness), with an adversarial spec-validation layer — property-based
+counterexample search on every spec before proof effort, plus differential
+fuzzing of the executable Lean spec against the real Rust crate on the host.
+Research and tool selection: [docs/lean-verification-research-2026-06.md](docs/lean-verification-research-2026-06.md).
+
+What this unlocks, in value order:
+
+1. **Firmware↔chain binding.** The headline goal theorem: *the bytes the
+   firmware signs over a parsed sign-request are exactly the `userOpHash` the
+   proven wallet model verifies* — closing, mathematically, the gap between
+   what the device signs and what the chain checks. No test suite can cover
+   that gap exhaustively; a theorem covers every input at once.
+2. **Signer/verifier correspondence.** The firmware's C10 signer and the
+   on-chain verifier proven against one spec, ending any possibility of
+   silent algorithmic drift between the two implementations.
+3. **Panic-freedom on the attacker-facing parsers** (USB → wire-format), as a
+   machine-checked DoS-hardening property — near-free under Aeneas's monadic
+   translation.
+
+**Status (2026-06):** extraction pipeline works end-to-end on `sphincs-c10`
+(the crypto core — ADRS/WOTS/FORS/Merkle/hash — extracts cleanly after small,
+test-pinned refactors; three UI-plumbing error sites remain). No firmware
+theorem is proven yet; the first equivalence targets are
+`address.rs ↔ Spec/Adrs.lean`.
+
+**Honest scope.** A kernel-checked theorem here means: *proven, modulo the
+enumerated axiom list, Aeneas translation fidelity, and rustc*. It says
+nothing about side channels, fault injection, or silicon behaviour — those
+remain covered by the SCA/FI bench (`tools/sca/`) and on-silicon validation.
+Any claim of "verified" in docs or marketing must carry the assumption list.
 
 ## Implementation Status
 
