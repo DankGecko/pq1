@@ -9,9 +9,12 @@ import Extracted.AdrsEquiv
 import Extracted.UserOpEquiv
 import Extracted.UserOpEquivByteLayout
 import Extracted.SpecBridge
+import Extracted.ForsLoop
 
 #print axioms Extracted.Equiv.make_adrs_spec
 #print axioms Extracted.Equiv.set_chain_index_spec
 #print axioms Extracted.Equiv.compute_user_op_hash_terminates
 #print axioms Extracted.Equiv.compute_user_op_hash_spec
 #print axioms Extracted.Equiv.firmware_make_adrs_matches_vendored
+#print axioms Extracted.Equiv.next_usize_spec
+#print axioms Extracted.Equiv.read_bits_le_loop_terminates

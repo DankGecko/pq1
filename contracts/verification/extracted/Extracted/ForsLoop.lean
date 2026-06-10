@@ -52,13 +52,39 @@ theorem next_usize_spec (it : core.ops.range.Range Std.Usize) :
     left
     refine ⟨?_, ?_⟩ <;> first | trivial | scalar_tac
 
-set_option maxHeartbeats 4000000 in
-/-- Panic-freedom of the FORS bit-reader loop. Structure + the `next`
-    step are done; blocked on a few primitive `@[step]` specs (header). -/
+open sphincs_c10 in
+set_option maxHeartbeats 8000000 in
+/-- Panic-freedom of the FORS bit-reader loop — PROVEN (no sorry). The
+    first complete loop-reasoning proof of the track: `loop.spec_decr_nat`
+    (measure = range length), `next_usize_spec` for the iterator step,
+    `it.start < it.end ≤ 8 ⟹ it.start ≤ 7` to discharge the body's
+    `it.start * 8` / shift bounds, and the @[step] specs for
+    mul/shift/or/from. -/
+@[step]
 theorem read_bits_le_loop_terminates
     (iter : core.ops.range.Range Std.Usize) (digest : Std.Array Std.U8 32#usize)
     (byte_start : Std.Usize) (val : Std.U64) (hb8 : iter.«end».val ≤ 8) :
-    sphincs_c10.fors.read_bits_le_loop iter digest byte_start val ⦃ _ => True ⦄ := by
-  sorry
+    fors.read_bits_le_loop iter digest byte_start val ⦃ _ => True ⦄ := by
+  unfold fors.read_bits_le_loop
+  apply Aeneas.Std.loop.spec_decr_nat
+    (measure := fun (s : core.ops.range.Range Std.Usize × Std.U64) => s.1.«end».val - s.1.start.val)
+    (inv := fun (s : core.ops.range.Range Std.Usize × Std.U64) => s.1.«end».val ≤ 8)
+  · rintro ⟨it, v⟩ hend8
+    unfold fors.read_bits_le_loop.body
+    simp only []
+    let* ⟨o, iter1, hpost⟩ ← next_usize_spec it
+    rcases hpost with ⟨ho, hle⟩ | ⟨b, it', heq, hb, hlt, hend, hstart⟩
+    · simp_all
+    · simp only [Prod.mk.injEq] at heq
+      obtain ⟨rfl, rfl⟩ := heq
+      have h7 : it.start.val ≤ 7 := by scalar_tac
+      simp only [lift]
+      step* <;>
+        first
+        | scalar_tac
+        | (refine ⟨?_, ?_⟩ <;> scalar_tac)
+        | simp_all
+        | trivial
+  · exact hb8
 
 end Extracted.Equiv
