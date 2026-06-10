@@ -280,17 +280,19 @@ contract PQSmartWalletTest is Test {
         vm.prank(ENTRY_POINT_ADDR);
         uint256 vd = w.validateUserOp(_packedOp(address(w), callData, sig), bytes32(uint256(2)), 0);
         assertEq(vd, 0, "bootstrap MUST validate addOwner UserOp");
-        // Audit M-1: bootstrap bump is now deferred to `addOwnerBytes`.
-        // Validation only sets the pending-bump transient flag — the
-        // counter still reads 0 until the rotation actually lands.
-        assertEq(w.bootstrapUses(), 0, "bootstrap bump must defer to addOwnerBytes");
+        // Bootstrap few-time cap is bumped in the VALIDATION phase (mirrors
+        // the slot path) — an accepted Type-1 sig spent a master-key
+        // few-time position and is counted revert-proof up front.
+        assertEq(w.bootstrapUses(), 1, "bootstrap MUST bump at validation");
 
         // Drive the execute half of the EntryPoint pair the way v0.6 does:
         // the EntryPoint dispatches `userOp.callData` to the wallet, so the
         // EntryPoint — not the wallet — is `msg.sender` for `addOwnerBytes`.
+        // Execution lands the rotation but does NOT bump again (the count
+        // already happened at validation).
         vm.prank(ENTRY_POINT_ADDR);
         w.addOwnerBytes(slot1Bytes);
-        assertEq(w.bootstrapUses(), 1, "bootstrap MUST bump once rotation lands");
+        assertEq(w.bootstrapUses(), 1, "execution does not double-count");
     }
 
     function test_bootstrapCannotCallExecute() public {
@@ -389,14 +391,15 @@ contract PQSmartWalletTest is Test {
         bytes memory addOwnerCall = abi.encodeCall(w.addOwnerBytes, (slot1Bytes));
         bytes memory bootstrapSig = _wrapSig(0, _fakeC10Sig());
 
-        // First validation passes (bootstrapUses=65_535 < cap=65_536),
-        // and the rotation lands the bump (M-1 deferred path) so
-        // `bootstrapUses` reaches the cap of 65_536.
+        // First validation passes (bootstrapUses=65_535 < cap=65_536) and
+        // bumps `bootstrapUses` to the cap of 65_536 in the validation phase.
         vm.prank(ENTRY_POINT_ADDR);
         assertEq(
             w.validateUserOp(_packedOp(address(w), addOwnerCall, bootstrapSig), bytes32(uint256(1)), 0),
             0
         );
+        assertEq(w.bootstrapUses(), 65_536, "validation bumps to cap");
+        // Execution lands the rotation but does not bump again.
         vm.prank(ENTRY_POINT_ADDR);
         w.addOwnerBytes(slot1Bytes);
         assertEq(w.bootstrapUses(), 65_536);
@@ -1168,13 +1171,21 @@ contract PQSmartWalletTest is Test {
         assertEq(w.offchainSigCount(1), 7);
     }
 
-    // M-1 — Bootstrap budget MUST NOT decrement when execution reverts.
+    // Bootstrap budget is counted REVERT-PROOF in the validation phase.
+    //
+    // History: an earlier "audit M-1" fix DEFERRED the bootstrap bump to
+    // `addOwnerBytes`, gated on `_addOwner` succeeding, on the theory that a
+    // reverting duplicate-add should not burn a unit. That was a
+    // misdiagnosis: an accepted Type-1 signature has already spent a
+    // master-key few-time position regardless of whether `_addOwner` lands,
+    // and v0.6 swallows the revert — so the deferred bump under-counted the
+    // cap toward zero (PQBootstrapCapEvasion). The bump is now done at
+    // validation, mirroring the slot path.
 
-    function test_audit_m1_bootstrapBumpDoesNotChargeOnRevertingAddOwner() public {
-        // Set up: slot 1 already registered (with non-zero owner bytes).
-        // A bootstrap-signed `addOwnerBytes(slot 0 bytes)` would revert
-        // with `AlreadyOwner(bootstrap)` if it ever ran — but per M-1
-        // the budget bump should ALSO not happen.
+    function test_bootstrapBumpCountsEvenWhenAddOwnerReverts() public {
+        // A bootstrap-signed `addOwnerBytes(existing bootstrap bytes)`
+        // reverts with `AlreadyOwner` in execution — but the accepted
+        // signature MUST still count against the few-time cap.
         PQSmartWallet w = _deployWallet();
         c10.setValid(true);
 
@@ -1182,30 +1193,31 @@ contract PQSmartWalletTest is Test {
         bytes memory callData = abi.encodeCall(w.addOwnerBytes, (existingBootstrap));
         bytes memory bootstrapSig = _wrapSig(0, _fakeC10Sig());
 
-        // Validate — passes (selector is `addOwnerBytes`, cap not hit).
+        // Validate — passes (selector is `addOwnerBytes`, cap not hit) and
+        // counts the accepted signature up front.
         vm.prank(ENTRY_POINT_ADDR);
         assertEq(
             w.validateUserOp(_packedOp(address(w), callData, bootstrapSig), bytes32(0), 0),
             0
         );
-        // Per M-1: bootstrap counter is NOT yet bumped.
-        assertEq(w.bootstrapUses(), 0, "validation must not bump bootstrap before execute");
+        assertEq(w.bootstrapUses(), 1, "accepted bootstrap sig counted at validation");
 
         // Execute via the EntryPoint (v0.6 dispatches `userOp.callData`, so
-        // the EntryPoint is `msg.sender`). Inside `addOwnerBytes`, `_addOwner`
-        // reverts on `AlreadyOwner`; the pending transient bump must NEVER be
-        // consumed since the call body unwinds before reaching the bump path.
+        // the EntryPoint is `msg.sender`). `_addOwner` reverts on
+        // `AlreadyOwner`; the EntryPoint swallows it in production. The count
+        // already happened at validation and is unaffected by the revert.
         vm.prank(ENTRY_POINT_ADDR);
         vm.expectRevert(
             abi.encodeWithSelector(PQMultiOwnable.AlreadyOwner.selector, existingBootstrap)
         );
         w.addOwnerBytes(existingBootstrap);
 
-        assertEq(w.bootstrapUses(), 0, "bootstrap MUST stay zero on reverting rotation");
+        assertEq(w.bootstrapUses(), 1, "count survives the execution-phase revert");
     }
 
-    function test_audit_m1_bootstrapBumpHappensOnSuccessfulAddOwner() public {
-        // Regression: the happy path must still bump.
+    function test_bootstrapBumpAtValidation_noDoubleCountOnSuccess() public {
+        // Happy path: bump at validation; the successful execution lands the
+        // rotation but does not bump again.
         PQSmartWallet w = _deployWallet();
         c10.setValid(true);
         bytes memory slot1 = abi.encodePacked(SLOT1_PK_SEED, SLOT1_PK_ROOT);
@@ -1217,11 +1229,11 @@ contract PQSmartWalletTest is Test {
             w.validateUserOp(_packedOp(address(w), callData, bootstrapSig), bytes32(0), 0),
             0
         );
-        assertEq(w.bootstrapUses(), 0);
+        assertEq(w.bootstrapUses(), 1, "bumped at validation");
 
         vm.prank(ENTRY_POINT_ADDR);
         w.addOwnerBytes(slot1);
-        assertEq(w.bootstrapUses(), 1, "successful rotation bumps");
+        assertEq(w.bootstrapUses(), 1, "execution does not double-count");
         assertEq(w.nextOwnerIndex(), 3);
     }
 

@@ -86,23 +86,31 @@ contract PQSmartWallet is IAccount06, PQMultiOwnable, ERC1271 {
     // token. A bundle may legitimately carry several UserOps for the
     // same wallet, so N validations must hand N credits to N executions.
     // The previous single-slot token collapsed under 2+ ops per wallet
-    // per bundle: the later validation clobbered the earlier credit, the
-    // first execute consumed it, and every later execute then either
-    // reverted (slot path — liveness) or silently skipped its
-    // bootstrap-budget bump (bootstrap path — cap under-count).
+    // per bundle: the later validation clobbered the earlier credit and
+    // the first execute consumed it, so every later execute reverted
+    // (liveness loss).
     //
-    //   * ownerIndex 0 (bootstrap): each validated `addOwnerBytes`
-    //     increments credit[0]; `addOwnerBytes` consumes one credit
-    //     AFTER `_addOwner` succeeds, gating the deferred bootstrap
-    //     bump (audit M-1 — a reverting `_addOwner` rolls the consume
-    //     back, so it never burns a unit). N registrations in one
-    //     bundle now bump the cap N times, not once.
+    // Credits gate ONLY the slot offchain-count execute paths
+    // (`ownerIndex >= 1`):
     //   * ownerIndex >= 1 (offchain-count execute paths): each validated
     //     `execute*WithOffchainCount` increments credit[ownerIndex]; the
     //     matching execute consumes one (anti-impersonation + one-shot
     //     replay guard, audit H-3). `removeOwnerAtIndex` carries no
     //     ownerIndex argument and is authorised by validation alone, so
     //     it neither stamps nor consumes a credit.
+    //
+    // The bootstrap path (`ownerIndex == 0`) does NOT use a credit. Its
+    // few-time-usage cap `bootstrapUses` is bumped directly in the
+    // VALIDATION phase (see `_validateSignature`), exactly like the slot
+    // path bumps `slotUses` — an accepted Type-1 signature has already
+    // spent a position on the master key's SPHINCS+ few-time forest and
+    // is public on-chain, so it MUST be counted revert-proof. v0.6's
+    // execution phase is revert-tolerant (`handleOps` swallows a
+    // reverting `callData` and keeps validation-phase state), so a count
+    // done in execution — as the prior credit-gated bump in
+    // `addOwnerBytes` did — is lost whenever `_addOwner` reverts (e.g. a
+    // forced duplicate-owner), under-counting the cap toward zero and
+    // re-opening the few-time forgery surface the cap exists to close.
     //
     // H-3 parity (calldata ownerIndex == signed wrapper ownerIndex) is
     // enforced in `_validateSignature` for the offchain-count paths so a
@@ -331,17 +339,17 @@ contract PQSmartWallet is IAccount06, PQMultiOwnable, ERC1271 {
     ///         bootstrap key; a self-call cannot reach here anyway (every
     ///         `execute*` path rejects `target == address(this)`, audit H-2).
     ///
-    ///         Bootstrap-budget bump is deferred from `_validateSignature`
-    ///         to here (audit M-1): consume one transient bootstrap credit
-    ///         AFTER `_addOwner` succeeds, so a revert in `_addOwner` (e.g.
-    ///         duplicate owner) no longer burns 1/65536 of the cap. The
-    ///         credit is a COUNTER, so N bootstrap UserOps sharing one
-    ///         EntryPoint bundle bump the cap N times — one per successful
-    ///         registration — rather than once (the single-token bug).
+    ///         The bootstrap few-time cap (`bootstrapUses`) is bumped in the
+    ///         VALIDATION phase by `_validateSignature`, not here. An accepted
+    ///         Type-1 signature has already spent a master-key few-time
+    ///         position regardless of whether this `_addOwner` ultimately
+    ///         lands (a duplicate-owner revert is swallowed by the EntryPoint
+    ///         under v0.6), so counting it in execution would let a
+    ///         duplicate-add under-count the cap toward zero. This function
+    ///         therefore performs no counter bump — it is pure execution.
     function addOwnerBytes(bytes calldata newOwner) external {
         if (msg.sender != address(_entryPoint)) revert NotFromEntryPoint();
         _addOwner(newOwner);
-        if (_consumeValidatedCredit(0)) _bumpBootstrapUses(MAX_BOOTSTRAP_USES);
     }
 
     /// @notice Remove a slot owner. Only callable by the EntryPoint — i.e.
@@ -483,19 +491,26 @@ contract PQSmartWallet is IAccount06, PQMultiOwnable, ERC1271 {
 
         // ── Counter bumps + validated-op credit after successful verify ──
         //
-        // Audit M-1: the bootstrap-budget bump is deferred to
-        //   `addOwnerBytes` so a reverting execution (e.g. `AlreadyOwner`)
-        //   doesn't burn a bootstrap unit. We stamp a credit here and let
-        //   the execution phase consume it.
+        // Both few-time caps are bumped HERE, in the validation phase, so
+        // every accepted signature is counted revert-proof: v0.6's
+        // execution phase is revert-tolerant and would lose a count done
+        // there.
         //
-        // Audit H-3: each offchain-count execute op gets a per-`ownerIndex`
-        //   credit, consumed by `execute*WithOffchainCount`. Counted (not a
-        //   single token), so 2+ ops for this wallet in one bundle are each
-        //   honoured. `removeOwnerAtIndex` is authorised by validation alone
-        //   (no execution-phase credit), so it bumps `slotUses` but stamps
-        //   no credit.
+        //   * ownerIndex 0 (bootstrap): bump `bootstrapUses` directly,
+        //     mirroring the slot path. An accepted Type-1 sig has spent a
+        //     master-key few-time position and is public on-chain; it must
+        //     count even if the subsequent `addOwnerBytes` execution reverts
+        //     (a forced duplicate-owner). No execution-phase credit is
+        //     stamped — `addOwnerBytes` is pure execution.
+        //   * ownerIndex >= 1 (slot): bump `slotUses[ownerIndex]`. The
+        //     offchain-count execute ops additionally get a per-`ownerIndex`
+        //     credit (audit H-3), consumed by `execute*WithOffchainCount`.
+        //     Counted (not a single token), so 2+ ops for this wallet in one
+        //     bundle are each honoured. `removeOwnerAtIndex` is authorised by
+        //     validation alone (no execution-phase credit), so it bumps
+        //     `slotUses` but stamps no credit.
         if (ownerIndex == 0) {
-            _stampValidatedCredit(0);
+            _bumpBootstrapUses(MAX_BOOTSTRAP_USES);
         } else {
             _bumpSlotUses(ownerIndex, MAX_SLOT_USES);
             if (selector != this.removeOwnerAtIndex.selector) {

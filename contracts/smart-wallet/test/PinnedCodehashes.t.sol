@@ -26,37 +26,45 @@ import {MockSPHINCSVerifier} from "./mocks/MockSPHINCSVerifier.sol";
 contract PinnedCodehashesTest is Test {
     // ── Codehash freeze constants ─────────────────────────────────────
     //
-    // Originally pinned at the 2026-05-21 branch-cut. RE-PINNED 2026-05-27
-    // after the EntryPoint-guard fix (addOwnerBytes / removeOwnerAtIndex).
+    // Originally pinned at the 2026-05-21 branch-cut; re-pinned 2026-05-27
+    // (EntryPoint-guard fix). RE-PINNED 2026-06-10 after the bootstrap
+    // few-time-cap fix: `bootstrapUses` is now bumped in the VALIDATION
+    // phase of `_validateSignature` (mirroring the slot path) instead of
+    // the deferred, credit-gated bump in `addOwnerBytes`. This makes every
+    // accepted Type-1 signature counted revert-proof under v0.6 (closes the
+    // PQBootstrapCapEvasion under-count). Only `PQSmartWallet.sol` logic
+    // changed; the verifier `SPHINCsC10Asm.sol` is untouched (its pin stayed
+    // at the fcee705a FORS-htIdx value 0xf1ef…), and the factory's runtime
+    // moved only because it imports the edited wallet into its compilation
+    // unit (its CREATE2 / squat-defence logic is unchanged).
     //
-    // DISCHARGE PENDING: these were re-captured from a LOCAL `forge build`
-    // (solc 0.8.28, via_ir, runs=200). The Halmos discharge for axiom A3.2
-    // has NOT been re-run against them (halmos unavailable in the dev env)
-    // — see AXIOM_STATUS.json, where A3.2 is marked `pending`. They must be
-    // re-captured + re-discharged in the canonical build env before the
-    // axiom is trusted: note the import-free SPHINCsC10Asm hash moved with
-    // ZERO source change between 05-21 and 05-27, so the `bytecode_hash =
-    // "ipfs"` metadata makes these non-reproducible across toolchains.
+    // DISCHARGE STATUS: these were captured from a LOCAL `forge build`
+    // (solc 0.8.28, via_ir, runs=200). The A3.* bridge axioms are now
+    // DISCHARGED on the deployed bytecode by Halmos symbolic execution
+    // against these exact codehashes — 19 rules PASS (A3.2 wallet 14, A3.1
+    // verifier-gates 3, A3.3 factory 2). Reproduce:
+    // `make -C ../verification verify-bytecode` (which runs this test first
+    // to certify the codehashes, then the symbolic rules). The Lean model in
+    // `verification/lean/SphincsCVerify/Wallet/ValidateUserOp.lean` is the
+    // kernel-checked source of the same properties (it bumps `bootstrapUses`
+    // in the validation phase: `bumpForOwner s 0 = Storage.bumpBootstrap`).
+    // See AXIOM_STATUS.json. Note the `bytecode_hash = "ipfs"` metadata makes
+    // these non-reproducible across toolchains.
     //
     // Re-capture via `forge test --match-test test_codehash_pinned_or_print -vv`.
     // Each update must be accompanied by re-running the discharge artifact:
-    //   * PQ_SMART_WALLET_CODEHASH    → Halmos (HalmosValidateUserOp + HalmosExecute)
-    //   * PQ_SMART_WALLET_FACTORY_CODEHASH → Certora (PQSmartWalletFactory.spec)
-    //   * SPHINCS_C10_ASM_CODEHASH    → cross_validation/ Lean ↔ Rust ↔ Solidity
-    // RE-PINNED after the multi-op-per-bundle fix (per-ownerIndex transient
-    // credit replacing the single validate->execute token; H-3 parity moved
-    // into validation). Halmos A3.2 discharge MUST be re-run against this
-    // hash. Factory + SPHINCsC10Asm hashes are unchanged (only
-    // PQSmartWallet.sol was edited).
+    //   * PQ_SMART_WALLET_CODEHASH         → Halmos (HalmosValidateUserOp + HalmosExecute)
+    //   * PQ_SMART_WALLET_FACTORY_CODEHASH → Halmos (HalmosFactory) / Certora
+    //   * SPHINCS_C10_ASM_CODEHASH         → Halmos (HalmosVerifier gates) + cross_validation/
     bytes32 constant PQ_SMART_WALLET_CODEHASH =
-        0x0a7078cc741e825c9b874fe379fb11e91e9236aebf9fcfda3a1f30fe404f2b5d;
+        0x43c65420691792d7f0f63dab95f47ab7adb649df4c83f432bd3cf2c95db3a06a;
     bytes32 constant PQ_MULTI_OWNABLE_CODEHASH = bytes32(0);  // embedded in PQSmartWallet; no independent deploy
-    // Factory RUNTIME LOGIC is unchanged by the multi-op-bundle fix; only its
+    // Factory RUNTIME LOGIC is unchanged by the bootstrap-cap fix; only its
     // trailing IPFS-metadata hash moved, because PQSmartWallet.sol (a source in
     // the factory's compilation unit) changed. The Certora factory spec proves
     // the same logic and does not need re-running for this edit.
     bytes32 constant PQ_SMART_WALLET_FACTORY_CODEHASH =
-        0xc22d39023fd71bf073fa9e77cac96f8aeaf027a166f8cfd2373dc0c089345185;
+        0xfa2922b4fadb81b4475307504890d68f2e3d9be97c7e5e9aeeba6e84110d7c3c;
     bytes32 constant SPHINCS_C10_ASM_CODEHASH =
         0xf1ef4ccee22e6b39446723232fe39761f089c7195941b2c12576956b38fcfef5;
 
