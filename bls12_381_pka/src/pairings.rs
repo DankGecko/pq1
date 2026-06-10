@@ -698,14 +698,26 @@ pub fn miller_loop_4(pairs: [(&G1Affine, &G2Affine); 4]) -> MillerLoopResult {
         }
     }
 
-    // Handle identity points: replace with generator to avoid division by zero,
-    // then mask the result to identity afterward.
-    let mut any_identity = Choice::from(0u8);
+    // Identity-point guard. The affine doubling/addition formulas divide
+    // by coordinates that are zero at the point at infinity, so an identity
+    // input would be undefined. We substitute the generator purely to keep
+    // the arithmetic well-defined; that makes the corresponding factor
+    // `e(generator, ·)` instead of the true `e(identity, ·) = 1`, so the
+    // overall product is DELIBERATELY wrong for any identity input and the
+    // caller's equality check fails closed (a reject, never an accept).
+    //
+    // We do NOT mask the whole result back to `Fp12::one()` the way the
+    // single-pairing `pairing()` does (audit L-9): this is a product of
+    // four pairings, so blanket-masking the product to one on any identity
+    // input would discard the other three factors and could turn a bogus
+    // proof into `== Gt::identity()` — a false ACCEPT. Callers that need
+    // identity rejection (e.g. the Groth16 verifier) must reject identity
+    // points explicitly BEFORE calling; this substitution is only a
+    // well-definedness backstop, not a correctness mask.
     let mut ps = [G1Affine::generator(); 4];
     let mut qs = [G2Affine::generator(); 4];
     for i in 0..4 {
         let id = pairs[i].0.is_identity() | pairs[i].1.is_identity();
-        any_identity |= id;
         ps[i] = G1Affine::conditional_select(pairs[i].0, &G1Affine::generator(), id);
         qs[i] = G2Affine::conditional_select(pairs[i].1, &G2Affine::generator(), id);
     }

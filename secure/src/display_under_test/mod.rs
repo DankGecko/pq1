@@ -110,6 +110,12 @@ pub mod erc20_known;
 #[path = "../tx/display/erc20_unknown.rs"]
 pub mod erc20_unknown;
 
+// The dispatcher-level native-value invariant (audit C-1 / H-2 / M-8).
+// Mounted so its real body + regression tests run on the host even though
+// the `pick_sign_pages` dispatcher that calls it is firmware-only.
+#[path = "../tx/display/value_page.rs"]
+pub mod value_page;
+
 #[path = "../tx/display/slot_rotation.rs"]
 pub mod slot_rotation;
 

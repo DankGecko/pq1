@@ -997,19 +997,34 @@ fn compile_one_format(
 ) -> Result<(), String> {
     let parsed = parse_format_key(sig).map_err(|e| format!("format `{sig}`: {e}"))?;
 
-    // Selector / discriminator slot — 4 bytes.
+    // Audit H-3: refuse to pin a contract-context descriptor that leaves
+    // any calldata argument unaccounted for. The on-device renderer can't
+    // reconstruct ABI arity, so completeness is enforced here — where the
+    // full signature is known — at build time.
+    if context_kind == CTX_CONTRACT {
+        check_contract_field_completeness(sig, fmt, &parsed)?;
+    }
+
+    // Selector / discriminator slot — 4 bytes. For EIP-712 we also keep
+    // the FULL 32-byte primary-type hash so the on-device renderer can
+    // bind all 32 bytes (audit M-5), not just the 4-byte prefix it
+    // selects the display template by.
+    let eip712_type_hash: Option<[u8; 32]> = if context_kind == CTX_CONTRACT {
+        None
+    } else {
+        // The EIP-712 format key IS the typed-data `encodeType` string
+        // (e.g. `Permit(address owner,address spender,uint256 value,
+        // uint256 nonce,uint256 deadline)`); its keccak256 is the
+        // primary-type hash the dapp/companion supplies at sign time.
+        Some(keccak256(sig.as_bytes()))
+    };
     let selector: [u8; 4] = if context_kind == CTX_CONTRACT {
-        // keccak256 of the types-only signature.
+        // keccak256 of the types-only signature (the 4-byte function
+        // selector).
         let h = keccak256(parsed.types_signature.as_bytes());
         [h[0], h[1], h[2], h[3]]
     } else {
-        // For EIP-712 the format key is a typed-data hash signature
-        // like `Permit(address owner,address spender,uint256 value,
-        // uint256 nonce,uint256 deadline)`. Use the first 4 bytes of
-        // its keccak256 as the discriminator. The IR doc reserves only
-        // 4 bytes here; widening to a full typehash is a Phase 3+
-        // decision (see plan §3).
-        let h = keccak256(sig.as_bytes());
+        let h = eip712_type_hash.expect("eip712 type hash computed above");
         [h[0], h[1], h[2], h[3]]
     };
 
@@ -1052,6 +1067,11 @@ fn compile_one_format(
     out.push(compiled.len() as u8); // 1 B field_count
     out.push(intent.len() as u8); // 1 B intent_len
     out.extend_from_slice(intent.as_bytes()); // intent_len B
+    // EIP-712 only: full 32-byte primary-type hash (audit M-5). Contract
+    // formats omit this so their on-wire bytes are unchanged.
+    if let Some(th) = eip712_type_hash {
+        out.extend_from_slice(&th); // 32 B
+    }
 
     // Emit fields.
     for cf in &compiled {
@@ -1374,6 +1394,96 @@ struct ParsedFormatKey {
     /// e.g. `"params" -> ["tokenIn","tokenOut",...]`.
     /// For non-tuple top args this map is empty.
     inner_names: BTreeMap<String, Vec<String>>,
+}
+
+/// Audit H-3 — contract-context field-completeness lint.
+///
+/// A clear-sign descriptor that silently omits an effect-bearing calldata
+/// argument renders a benign-looking page while the signature still
+/// commits to the hidden word (the canonical break: a
+/// `transfer(address,uint256)` descriptor that declares only the amount
+/// and never the recipient). The on-device renderer cannot reconstruct
+/// ABI arity to catch the gap, so completeness is enforced HERE — where
+/// every parameter of the function signature is known — and an
+/// incomplete descriptor is refused at build time rather than pinned.
+///
+/// Every top-level parameter MUST be accounted for by at least one of:
+///   * a field whose path resolves to it, at ANY visibility — an explicit
+///     `visible:"never"` is a conscious author decision to hide a
+///     non-effect-bearing field (nonce / deadline / referral / permit);
+///   * a `tokenAmount` field's `tokenPath`, which surfaces the parameter
+///     as the token whose symbol labels the amount (e.g. Aave's `asset`).
+///
+/// Parameters reached only through `@`-container or `$`-metadata roots are
+/// envelope / constant references, not calldata arguments, so they never
+/// need their own coverage. Coverage is checked at top-level granularity:
+/// a tuple argument is "covered" once any field walks into it, matching
+/// the renderer, which treats the whole tuple as one calldata region.
+fn check_contract_field_completeness(
+    sig: &str,
+    fmt: &Format,
+    parsed: &ParsedFormatKey,
+) -> Result<(), String> {
+    let n = parsed.top_names.len();
+    if n == 0 {
+        return Ok(()); // zero-argument function, e.g. `deposit()`.
+    }
+    let mut covered = vec![false; n];
+    let mut mark = |path: &str| {
+        if let Some(idx) = path_top_param_index(path, parsed) {
+            if (idx as usize) < n {
+                covered[idx as usize] = true;
+            }
+        }
+    };
+    for field in &fmt.fields {
+        mark(&field.path);
+        if let Some(tp) = field
+            .params
+            .as_ref()
+            .and_then(|p| p.get("tokenPath"))
+            .and_then(|v| v.as_str())
+        {
+            mark(tp);
+        }
+    }
+    for (idx, seen) in covered.iter().enumerate() {
+        if !*seen {
+            return Err(format!(
+                "format `{sig}`: parameter #{idx} (`{}`) is neither rendered, explicitly \
+                 hidden (`visible:\"never\"`), nor used as a `tokenPath` — every \
+                 contract-call argument must be accounted for so the trusted display \
+                 cannot omit an effect-bearing field (audit H-3)",
+                parsed.top_names[idx]
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Resolve the top-level function-argument index a descriptor `path`
+/// touches, or `None` when the path roots at the `@`-container /
+/// `$`-metadata namespace (no calldata argument) or names an argument the
+/// format key does not declare.
+fn path_top_param_index(path: &str, parsed: &ParsedFormatKey) -> Option<u16> {
+    let path = path.trim();
+    let rest = if let Some(r) = path.strip_prefix('#') {
+        r.trim_start_matches('.')
+    } else if path.starts_with('@') || path.starts_with('$') {
+        return None;
+    } else {
+        path
+    };
+    let end = rest.find(['.', '[']).unwrap_or(rest.len());
+    let seg = rest[..end].trim();
+    if seg.is_empty() {
+        return None;
+    }
+    parsed
+        .top_names
+        .iter()
+        .position(|nm| nm == seg)
+        .map(|p| p as u16)
 }
 
 fn parse_format_key(sig: &str) -> Result<ParsedFormatKey, String> {

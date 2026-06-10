@@ -30,6 +30,11 @@ pub fn render_erc20_unknown_pages(
     write_line(&mut pages.buf[0][1], method);
     write_line(&mut pages.buf[0][2], "(decimals = ?)");
     write_line(&mut pages.buf[0][3], "> next");
+    // Native-ETH `value` carried on an ERC-20-shaped call is rendered by
+    // the dispatcher-level value page that `pick_sign_pages` splices in
+    // right after this banner whenever `value != 0` (audit C-1) — so the
+    // value-hiding path that motivated the finding is closed centrally,
+    // without this renderer having to spend its only spare row.
 
     // ── Page 1: Contract address ───────────────────────────────────
     write_line(&mut pages.buf[1][0], "Contract:");

@@ -138,7 +138,6 @@ fn seed_corpus_bundles_verify_against_on_device_parser() {
             cross_check_eip712(
                 &verified.ir,
                 entry.chain_id,
-                &entry.contract,
                 &verified.ir.domain_separator,
             )
             .unwrap_or_else(|e| {

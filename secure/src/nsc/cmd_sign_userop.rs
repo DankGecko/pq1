@@ -733,12 +733,26 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // calldata itself, so the firmware natively recomputes both
     // keccak chains and byte-compares.
     let safe_v1_verified = if safe_v1.len > 0 {
-        crate::tx::eip712::safe::verify_and_bind_trailer(
+        let v = crate::tx::eip712::safe::verify_and_bind_trailer(
             &snap[safe_v1.start..safe_v1.start + safe_v1.len],
             inner_data,
             chain_id,
             &to_address,
-        )
+        );
+        // FI-hardened verdict (audit L-10): mirror the batch dispatcher —
+        // double-evaluate the verify result through a Hamming-distant
+        // sentinel with `wait_random` between, so a single glitch that
+        // flips the bind verdict also has to defeat the sentinel compare.
+        // Fail closed to `None`.
+        let ok = v.is_some();
+        crate::fi::wait_random();
+        if crate::fi::check_true_into_sentinel(|| core::hint::black_box(ok))
+            != crate::fi::OK_SENTINEL
+        {
+            None
+        } else {
+            v
+        }
     } else {
         None
     };
@@ -753,7 +767,18 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     let safe_exec_verified = if inner_data.len() >= 4
         && inner_data[..4] == EXEC_TRANSACTION_SELECTOR
     {
-        crate::tx::eip712::safe::verify_and_bind_exec(inner_data, chain_id, &to_address)
+        let v = crate::tx::eip712::safe::verify_and_bind_exec(inner_data, chain_id, &to_address);
+        // FI-hardened verdict (audit L-10): same sentinel double-eval as
+        // the `safe_v1` bind above. Fail closed to `None`.
+        let ok = v.is_some();
+        crate::fi::wait_random();
+        if crate::fi::check_true_into_sentinel(|| core::hint::black_box(ok))
+            != crate::fi::OK_SENTINEL
+        {
+            None
+        } else {
+            v
+        }
     } else {
         None
     };

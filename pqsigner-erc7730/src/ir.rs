@@ -377,6 +377,7 @@ impl<'a> Erc7730Ir<'a> {
             buf: self.formats,
             cursor,
             remaining: count,
+            is_eip712: matches!(self.context_kind, ContextKind::Eip712),
         }
     }
 
@@ -413,14 +414,28 @@ impl<'a> Erc7730Ir<'a> {
 ///   field_count    u8       (≤ MAX_FIELDS_PER_FORMAT)
 ///   intent_len     u8       (≤ 254, printable ASCII)
 ///   intent         [u8; intent_len]
+///   type_hash      [u8; 32] (EIP-712 context ONLY — see below)
 ///   field          [u8; ...]*  (field_count entries — see FieldEntry)
 /// ```
+///
+/// `type_hash` is present only for EIP-712-context descriptors (the
+/// header's `context_kind == CTX_EIP712`); contract-context entries omit
+/// it entirely so their bytes are unchanged. It is the FULL 32-byte
+/// `keccak256(primaryType encodeType)` whose first 4 bytes are
+/// [`selector`](Self::selector). The renderer binds the companion-supplied
+/// `primary_type_hash` against all 32 bytes before rendering, closing the
+/// 4-byte-prefix-only gap (audit M-5): selecting the display template by a
+/// 4-byte truncation while the signature commits to the full hash.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FormatHeader<'a> {
     pub selector: [u8; 4],
     pub field_count: u8,
     /// Trimmed printable ASCII intent string ("Sign", "Wrap", …).
     pub intent: &'a [u8],
+    /// Full 32-byte EIP-712 primary-type hash (`keccak256(encodeType)`).
+    /// All-zero for contract-context formats, which don't carry it on the
+    /// wire. `selector == type_hash[..4]` for EIP-712 entries.
+    pub type_hash: [u8; 32],
     /// Raw bytes of the field-entry array. Parse via
     /// [`FieldEntry::next_from`].
     pub fields_buf: &'a [u8],
@@ -498,6 +513,10 @@ pub struct FormatIter<'a> {
     buf: &'a [u8],
     cursor: usize,
     remaining: u8,
+    /// EIP-712-context descriptors carry a 32-byte `type_hash` after each
+    /// format's intent string; contract-context ones don't. Threaded from
+    /// the IR header's `context_kind` so the same parser handles both.
+    is_eip712: bool,
 }
 
 impl<'a> Iterator for FormatIter<'a> {
@@ -529,6 +548,19 @@ impl<'a> Iterator for FormatIter<'a> {
             return Some(Err(IrError::BadAscii));
         }
         p += intent_len;
+        // EIP-712 formats carry a full 32-byte primary-type hash after
+        // the intent (contract formats don't). See `FormatHeader`.
+        let type_hash = if self.is_eip712 {
+            if p + 32 > self.buf.len() {
+                return Some(Err(IrError::BadFormat));
+            }
+            let mut th = [0u8; 32];
+            th.copy_from_slice(&self.buf[p..p + 32]);
+            p += 32;
+            th
+        } else {
+            [0u8; 32]
+        };
         // Advance past every field entry to compute the start of the
         // next format. Each entry's length is variable (label_len),
         // so we have to parse field-by-field.
@@ -545,6 +577,7 @@ impl<'a> Iterator for FormatIter<'a> {
             selector,
             field_count,
             intent,
+            type_hash,
             fields_buf,
         }))
     }

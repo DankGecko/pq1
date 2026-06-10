@@ -379,10 +379,14 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         // ALSO has to defeat a Hamming-distant sentinel compare.
         // Mirrors the verify-before-release pattern in
         // `crypto::c10_sign_verified_with_progress`.
+        // `domain_separator` is the companion-supplied domain the
+        // signature commits to (folded into `final_eip712` below); the
+        // descriptor's pinned `ir.domain_separator` cryptographically
+        // binds the verifying contract through it, so there is no separate
+        // contract argument to compare (audit L-11).
         let eip712_bind_ok = crate::tx::erc7730::cross_check_eip712(
             &v.ir,
             chain_id,
-            &v.ir.contract,
             &domain_separator,
         )
         .is_ok();

@@ -229,9 +229,11 @@ fn positive_write_eth_two_rows_one_eth() {
     let value = u256_from_u64(1_000_000_000_000_000_000); // 1 ETH
     let fit = write_eth_two_rows(&mut r1, &mut r2, &value);
     assert_eq!(fit, AmountFit::Full);
-    let s = row_str(&r1);
-    assert!(s.starts_with("1 ETH") || s == "1 ETH",
-        "expected row 1 to start with '1 ETH', got {:?}", s);
+    // Audit M-6: ETH amounts render fixed-width (6 fractional digits, no
+    // trailing-zero trim) like ERC-20 token amounts, so two distinct
+    // values can't alias by the renderer silently dropping the digits
+    // that distinguish them.
+    assert_eq!(row_str(&r1), "1.000000 ETH");
 }
 
 #[test]

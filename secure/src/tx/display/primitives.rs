@@ -370,29 +370,39 @@ pub(super) fn write_chain(row: &mut [u8; DISPLAY_COLS], chain_id: u64) {
 // ETH / gwei / gas formatting
 // ---------------------------------------------------------------------------
 
-/// Paint an ETH value across (up to) two rows. Trailing zeros are
-/// trimmed because ETH amounts are self-describing.
+/// Number of fractional digits shown for every ETH amount. Fixed (not
+/// auto-shrunk to fit a row) and matched to the ERC-20 token policy
+/// (`write_token_amount_two_rows` uses `min(decimals, 6)`).
+const ETH_FRAC_DIGITS: u32 = 6;
+
+/// Paint an ETH value across (up to) two rows.
 ///
-/// Row 1 carries the integer portion; row 2 carries the fractional
-/// tail plus "ETH". The helper also short-circuits to a single row
-/// when the whole thing fits. Returns `AmountFit::Overflow` for
-/// pathological values — a 60+ digit integer can't be rendered, and
-/// the caller should refuse to sign.
+/// Row 1 carries the integer portion; row 2 carries the fractional tail
+/// plus "ETH". The helper short-circuits to a single row when the whole
+/// thing fits. Returns `AmountFit::Overflow` for pathological values — a
+/// 17+ digit integer can't be rendered, and the caller paints a banner.
+///
+/// **Anti-spoof (audit M-6).** The fractional width is FIXED at
+/// [`ETH_FRAC_DIGITS`] and trailing zeros are NOT trimmed — identical to
+/// the ERC-20 token-amount policy. The previous implementation tried
+/// progressively fewer fractional digits (6 → 4 → 2 → 0) to squeeze the
+/// value onto one row and trimmed trailing zeros, so two distinct
+/// amounts could render to the same string when the renderer silently
+/// dropped the digits that distinguished them. Fixing the width removes
+/// that collision class; any value that still doesn't fit overflows
+/// loudly rather than aliasing.
 pub(super) fn write_eth_two_rows(
     row1: &mut [u8; DISPLAY_COLS],
     row2: &mut [u8; DISPLAY_COLS],
     value: &U256,
 ) -> AmountFit {
-    // Try single-row first with progressively smaller frac digits to
-    // give users the most precision that fits.
-    for &frac in &[6u32, 4, 2, 0] {
-        if try_write_amount_single_row(row1, value, 18, frac, true, "ETH") {
-            *row2 = [b' '; DISPLAY_COLS];
-            return AmountFit::Full;
-        }
+    // Single row if the fixed-width form fits.
+    if try_write_amount_single_row(row1, value, 18, ETH_FRAC_DIGITS, false, "ETH") {
+        *row2 = [b' '; DISPLAY_COLS];
+        return AmountFit::Full;
     }
-    // 2-row fallback, full 18-decimal precision with trim.
-    write_amount_two_rows(row1, row2, value, 18, 18, true, "ETH")
+    // Otherwise spill the SAME fixed-width form across two rows.
+    write_amount_two_rows(row1, row2, value, 18, ETH_FRAC_DIGITS, false, "ETH")
 }
 
 /// Paint a gas-price value in gwei on a single row. Uses 3 fractional

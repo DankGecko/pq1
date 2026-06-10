@@ -189,13 +189,23 @@ fn render_erc7730_eip712_pages_inner<'ir>(
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
 ) -> Result<Pages, RenderErr> {
-    // 1. Locate the format by primaryTypeHash[..4].
-    let key: [u8; 4] = primary_type_hash[..4].try_into().unwrap();
-    let format = descriptor
-        .ir
-        .find_format_by_selector(&key)
-        .map_err(|_| RenderErr::Reject("7730 bad formats"))?
-        .ok_or(RenderErr::NoFormat)?;
+    // 1. Locate the format by the FULL 32-byte primary-type hash and bind
+    //    it constant-time (audit M-5). The 4-byte selector only picks the
+    //    display template; the signature commits to the full
+    //    `primary_type_hash`, so selecting on a 4-byte prefix would let a
+    //    companion render template A while the contract honours a
+    //    different type B whose hash shares A's first 4 bytes. Matching
+    //    all 32 bytes closes that gap.
+    use subtle::ConstantTimeEq;
+    let mut format = None;
+    for entry in descriptor.ir.format_iter() {
+        let header = entry.map_err(|_| RenderErr::Reject("7730 bad formats"))?;
+        if bool::from(header.type_hash.ct_eq(primary_type_hash)) {
+            format = Some(header);
+            break;
+        }
+    }
+    let format = format.ok_or(RenderErr::NoFormat)?;
 
     // 2. Build a synthetic envelope tx so the formatters can render
     //    `@.chainId` / `@.to` / `@.value` against the EIP-712 domain.

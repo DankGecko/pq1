@@ -299,38 +299,62 @@ fn render_token_amount(
     // symbol to display.
     let token_addr = resolve_token_address(ir, body, tx, params).ok();
 
-    // Match against the supplied `erc20` bundle if the addresses agree.
-    let (decimals, ticker): (u32, &[u8]) = match (token_addr, erc20) {
+    // Match against the supplied `erc20` bundle only when the addresses
+    // agree. A `None` here means the token could NOT be bound to a
+    // Merkle-verified metadata entry — we do not know its decimals.
+    let bound: Option<(u32, &[u8])> = match (token_addr, erc20) {
         (Some(addr), Some(meta)) if addr == meta.contract => {
-            (u32::from(meta.decimals), meta.symbol)
+            Some((u32::from(meta.decimals), meta.symbol))
         }
-        _ => (18, b"???"),
+        _ => None,
     };
 
     let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
     write_label_row(pages, p, field.label);
     let [_, r1, r2, foot] = pages.page_mut(p);
-    // Threshold check (Aragon/Coinbase Wallet/Rabby convention): when
-    // the descriptor supplies a `threshold` param and the on-chain
-    // value is greater-than-or-equal, render "unlimited <ticker>"
-    // instead of the digit string. BE byte arrays compare
-    // lexicographically — which is the same as numeric on full-width
-    // u256, so a direct `>=` over the raw bytes is correct.
-    if let Some(threshold) = params.threshold {
-        if value.0 >= *threshold {
-            write_unlimited_row(r1, ticker);
-            write_line(foot, "> next");
-            return Ok(());
+
+    match bound {
+        Some((decimals, ticker)) => {
+            // Threshold check (Aragon/Coinbase Wallet/Rabby convention):
+            // when the descriptor supplies a `threshold` param and the
+            // on-chain value is greater-than-or-equal, render
+            // "unlimited <ticker>" instead of the digit string. BE byte
+            // arrays compare lexicographically — which is the same as
+            // numeric on full-width u256, so a direct `>=` over the raw
+            // bytes is correct.
+            if let Some(threshold) = params.threshold {
+                if value.0 >= *threshold {
+                    write_unlimited_row(r1, ticker);
+                    write_line(foot, "> next");
+                    return Ok(());
+                }
+            }
+            let fit =
+                write_amount_two_rows(r1, r2, &value, decimals, 6, true, ascii_str(ticker));
+            write_line(
+                foot,
+                match fit {
+                    AmountFit::Full => "> next",
+                    AmountFit::Overflow => "!AMOUNT OVERFLOW",
+                },
+            );
+        }
+        None => {
+            // Audit M-4: never present a scaled decimal with an assumed
+            // scale. Without verified `decimals` a 6-decimal token would
+            // render 10^12× off while *looking* authoritative. Show the
+            // RAW integer (no scaling) and label the unknown scale loudly
+            // so the user knows the magnitude is uninterpreted.
+            let fit = write_amount_two_rows(r1, r2, &value, 0, 0, false, "");
+            write_line(
+                foot,
+                match fit {
+                    AmountFit::Full => "! raw, dec=?",
+                    AmountFit::Overflow => "!AMOUNT OVERFLOW",
+                },
+            );
         }
     }
-    let fit = write_amount_two_rows(r1, r2, &value, decimals, 6, true, ascii_str(ticker));
-    write_line(
-        foot,
-        match fit {
-            AmountFit::Full => "> next",
-            AmountFit::Overflow => "!AMOUNT OVERFLOW",
-        },
-    );
     Ok(())
 }
 
@@ -357,22 +381,15 @@ fn render_nft_name(
     _resolver: &NameResolver<'_>,
     _params: &ParamSet<'_>,
 ) -> Result<(), RenderErr> {
-    // Phase 4 v1: render token id (decimal if u64-fits, else hex). The
-    // collection-name lookup needs an NFT-specific name DB which is
-    // not yet on-device — that lands in Phase 5 alongside the deep
-    // calldata renderer.
-    let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
-    write_label_row(pages, p, field.label);
-    let bytes = match resolve_path(ir, field.path_off, body)? {
-        Resolved::Slot32(b) => *b,
-        Resolved::Container(idx) => container_u256(tx, idx)?,
-    };
-    let [_, r1, r2, foot] = pages.page_mut(p);
-    let value = U256(bytes);
-    let _ = write_amount_two_rows(r1, r2, &value, 0, 0, false, "");
-    write_line(r2, "(NFT token id)");
-    write_line(foot, "> next");
-    Ok(())
+    // Audit M-7: the Phase-4 stub rendered the raw on-chain integer (the
+    // NFT token id) under the semantic `NftName` label and discarded the
+    // collection-name resolution — an opaque number wearing a verified
+    // intent banner. Until the NFT-name resolver lands, REJECT so the
+    // priority ladder falls through to blind-sign (consistent with how
+    // `Calldata` and `MustMatch` already reject), rather than presenting
+    // a misreadable value as if it were resolved.
+    let _ = (field, pages, ir, body, tx);
+    Err(RenderErr::Reject("7730 nftName unsupported"))
 }
 
 fn render_date(
@@ -464,23 +481,14 @@ fn render_enum(
     tx: &Eip1559Tx,
     params: &ParamSet<'_>,
 ) -> Result<(), RenderErr> {
-    let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
-    write_label_row(pages, p, field.label);
-    // Phase 4 v1: render the enum index numerically with the enum_ref
-    // pool offset shown as a hint. Resolving the actual enum text
-    // requires the pool TLV-decoder for the enum row, which the
-    // current dbgen emits but the renderer doesn't yet consume —
-    // wired in Phase 5 alongside the dynamic-types support.
-    let bytes = match resolve_path(ir, field.path_off, body)? {
-        Resolved::Slot32(b) => *b,
-        Resolved::Container(idx) => container_u256(tx, idx)?,
-    };
-    let value = U256(bytes);
-    let [_, r1, r2, foot] = pages.page_mut(p);
-    let _ = write_amount_two_rows(r1, r2, &value, 0, 0, false, "");
-    let _ = params.enum_ref;
-    write_line(foot, "> next");
-    Ok(())
+    // Audit M-7: the Phase-4 stub rendered the raw enum index (e.g.
+    // "Side: 1") instead of the resolved label ("Side: SELL"), discarding
+    // the enum resolution while keeping the semantic label — opaque and
+    // misreadable under the verified intent banner. Until the enum-pool
+    // resolver lands, REJECT so the ladder falls through to blind-sign
+    // (consistent with `Calldata` / `MustMatch`).
+    let _ = (field, pages, ir, body, tx, params);
+    Err(RenderErr::Reject("7730 enum unsupported"))
 }
 
 fn render_unit(

@@ -114,6 +114,17 @@ fn groth16_verify(proof: &Groth16Proof, vk: &VerificationKey, pub0: Scalar, pub1
     let neg_vk_x = -vk_x;
     let neg_c = -proof.c;
 
+    // Reject identity inputs before the Miller loop (audit L-9).
+    // `miller_loop_4` substitutes the generator for an identity point only
+    // to keep the affine arithmetic well-defined — it does NOT mask the
+    // result — so an identity input would otherwise feed a silently-wrong
+    // factor into the product. Honest proofs never contain identity
+    // A/B/C and the pinned VK points are non-identity, so this fires only
+    // on malformed input; fail closed.
+    if any_identity_g1g2(&proof.a, &proof.b, &vk.alpha_g1, &vk.beta_g2, &vk_x, &vk.gamma_g2, &proof.c, &vk.delta_g2) {
+        return false;
+    }
+
     let result = miller_loop_4([
         (&proof.a, &proof.b),
         (&neg_alpha, &vk.beta_g2),
@@ -122,8 +133,46 @@ fn groth16_verify(proof: &Groth16Proof, vk: &VerificationKey, pub0: Scalar, pub1
     ])
     .final_exponentiation();
 
-    // Check if result is the identity element in GT
-    result == Gt::identity()
+    // FI-hardened accept (audit L-10). The accept decision is the single
+    // GT-identity comparison; double-evaluate it with a `wait_random`
+    // between and fold the verdict through a Hamming-distant sentinel so a
+    // single glitch on the accept branch also has to defeat the sentinel
+    // compare. Mirrors the verify-before-release pattern used across the
+    // signing path (and the batch dispatcher's trailer-verdict hardening).
+    accept_is_identity(&result)
+}
+
+/// FI-hardened `result == Gt::identity()` (audit L-10). Two independent
+/// evaluations separated by `wait_random`, folded into a sentinel compare.
+fn accept_is_identity(result: &Gt) -> bool {
+    let v1 = *result == Gt::identity();
+    crate::fi::wait_random();
+    let v2 = *result == Gt::identity();
+    crate::fi::check_true_into_sentinel(|| core::hint::black_box(v1 && v2))
+        == crate::fi::OK_SENTINEL
+}
+
+/// Audit L-9 helper: true if any of the four G1/G2 pairing operands is the
+/// point at infinity. Used to fail-close before [`miller_loop_4`], which
+/// does not itself mask identity inputs (see its doc comment).
+fn any_identity_g1g2(
+    a: &G1Affine,
+    b: &G2Affine,
+    alpha: &G1Affine,
+    beta: &G2Affine,
+    vk_x: &G1Affine,
+    gamma: &G2Affine,
+    c: &G1Affine,
+    delta: &G2Affine,
+) -> bool {
+    bool::from(a.is_identity())
+        || bool::from(b.is_identity())
+        || bool::from(alpha.is_identity())
+        || bool::from(beta.is_identity())
+        || bool::from(vk_x.is_identity())
+        || bool::from(gamma.is_identity())
+        || bool::from(c.is_identity())
+        || bool::from(delta.is_identity())
 }
 
 // ===========================================================================
@@ -209,6 +258,12 @@ fn groth16_verify_3pub(
     let neg_vk_x = -vk_x;
     let neg_c = -proof.c;
 
+    // Reject identity inputs before the Miller loop (audit L-9) — see the
+    // 2-public-signal verifier above for the rationale.
+    if any_identity_g1g2(&proof.a, &proof.b, &vk.alpha_g1, &vk.beta_g2, &vk_x, &vk.gamma_g2, &proof.c, &vk.delta_g2) {
+        return false;
+    }
+
     let result = miller_loop_4([
         (&proof.a, &proof.b),
         (&neg_alpha, &vk.beta_g2),
@@ -217,7 +272,8 @@ fn groth16_verify_3pub(
     ])
     .final_exponentiation();
 
-    result == Gt::identity()
+    // FI-hardened accept (audit L-10) — see the 2-public-signal verifier.
+    accept_is_identity(&result)
 }
 
 /// Verify a ZK clear signing proof with a dynamically-provided verification key.

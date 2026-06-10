@@ -69,14 +69,26 @@ pub fn cross_check_contract(
 /// Check that the descriptor's EIP-712 context binding matches the
 /// typed-data payload the user is about to sign.
 ///
-/// The `domain_separator` argument MUST be the value computed by the
-/// secure-world EIP-712 verifier from the inbound payload — NOT a
-/// value supplied by the companion. Same load-bearing guarantee as
-/// `cross_check_contract`.
+/// The `domain_separator` argument MUST be the value the secure world
+/// folds into the signed `final_eip712` hash — i.e. the companion-supplied
+/// domain the signature actually commits to — NOT a value re-derived from
+/// the descriptor. It is checked against the descriptor's pinned
+/// `ir.domain_separator`, and because the EIP-712 domain separator is
+/// `keccak256(EIP712Domain‖name‖version‖chainId‖verifyingContract)`, that
+/// single comparison cryptographically binds the verifying contract (and
+/// name/version) too.
+///
+/// There is therefore deliberately **no** `verifying_contract` parameter:
+/// on this path the firmware never receives the verifying contract as an
+/// independent field (only the `domain_separator`), so a `verifying_contract`
+/// argument could only ever be `ir.contract` compared against itself — a
+/// tautology that reads as a check but verifies nothing (audit L-11). The
+/// `chain_id` check below is kept because `domain_chain_id` IS an
+/// independent value: the chain of the surrounding sign request, which
+/// must match the descriptor's pinned chain.
 pub fn cross_check_eip712(
     ir: &Erc7730Ir<'_>,
     domain_chain_id: u64,
-    domain_verifying_contract: &[u8; 20],
     domain_separator: &[u8; 32],
 ) -> Result<(), BindingError> {
     if !matches!(ir.context_kind, ContextKind::Eip712) {
@@ -84,9 +96,6 @@ pub fn cross_check_eip712(
     }
     if ir.chain_id != domain_chain_id {
         return Err(BindingError::ChainIdMismatch);
-    }
-    if &ir.contract != domain_verifying_contract {
-        return Err(BindingError::ContractMismatch);
     }
     if &ir.domain_separator != domain_separator {
         return Err(BindingError::DomainSeparatorMismatch);
@@ -163,9 +172,18 @@ mod tests {
         let domain_sep = [0x55u8; 32];
         let bytes = ir_bytes(CTX_EIP712, 1, addr, domain_sep);
         let ir = Erc7730Ir::parse(&bytes).unwrap();
+        assert_eq!(cross_check_eip712(&ir, 1, &domain_sep), Ok(()));
+    }
+
+    #[test]
+    fn eip712_chain_mismatch() {
+        let addr = [0x33u8; 20];
+        let domain_sep = [0x55u8; 32];
+        let bytes = ir_bytes(CTX_EIP712, 1, addr, domain_sep);
+        let ir = Erc7730Ir::parse(&bytes).unwrap();
         assert_eq!(
-            cross_check_eip712(&ir, 1, &addr, &domain_sep),
-            Ok(())
+            cross_check_eip712(&ir, 137, &domain_sep),
+            Err(BindingError::ChainIdMismatch)
         );
     }
 
@@ -177,7 +195,7 @@ mod tests {
         let ir = Erc7730Ir::parse(&bytes).unwrap();
         let wrong = [0x66u8; 32];
         assert_eq!(
-            cross_check_eip712(&ir, 1, &addr, &wrong),
+            cross_check_eip712(&ir, 1, &wrong),
             Err(BindingError::DomainSeparatorMismatch)
         );
     }
@@ -188,7 +206,7 @@ mod tests {
         let bytes = ir_bytes(CTX_CONTRACT, 1, addr, [0u8; 32]);
         let ir = Erc7730Ir::parse(&bytes).unwrap();
         assert_eq!(
-            cross_check_eip712(&ir, 1, &addr, &[0u8; 32]),
+            cross_check_eip712(&ir, 1, &[0u8; 32]),
             Err(BindingError::WrongContextKind)
         );
     }

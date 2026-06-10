@@ -35,6 +35,7 @@ mod safe_display;
 mod safe_mgmt;
 mod slot_rotation;
 mod typed_call;
+mod value_page;
 mod value_transfer;
 
 pub use blind_sign::render_blind_sign_pages;
@@ -188,7 +189,41 @@ impl Pages {
 /// would be for the inner call, which the Safe renderer dispatches
 /// through its own inner-tx ladder.
 #[cfg(not(test))]
+#[allow(clippy::too_many_arguments)]
 pub fn pick_sign_pages(
+    tx: &crate::tx::eip1559::Eip1559Tx,
+    inner_data: &[u8],
+    v3: Option<&crate::tx::eip712::cowswap::VerifiedCowswapV3>,
+    v1: Option<&crate::zk::VerifiedClearSignV1>,
+    safe_v1: Option<&crate::tx::eip712::safe::VerifiedSafeV1<'_>>,
+    safe_exec: Option<&crate::tx::eip712::safe::VerifiedSafeExec<'_>>,
+    erc7730: Option<&crate::tx::erc7730::VerifiedDescriptor<'_>>,
+    erc20: Option<&crate::erc20::bundle::Erc20Metadata<'_>>,
+    selector: Option<&crate::selectors::SelectorMeta<'_>>,
+    resolver: &crate::names::NameResolver<'_>,
+) -> Pages {
+    let mut pages = pick_sign_pages_inner(
+        tx, inner_data, v3, v1, safe_v1, safe_exec, erc7730, erc20, selector, resolver,
+    );
+    // Dispatcher-level WYSIWYS invariant (audit C-1 / H-2 / M-8).
+    //
+    // The outer UserOp `value` is signed verbatim into
+    // `executeWithOffchainCount(ownerIndex, count, target, value, data)`,
+    // but several renderers historically surfaced only token / inner-tx
+    // semantics and never the native ETH. Rather than trust each renderer
+    // to opt in, EVERY sign confirm funnels through here: when `value`
+    // is non-zero we splice in a dedicated, loud value page right after
+    // the renderer's banner so the user always sees the ETH the signature
+    // commits to. A future renderer physically cannot forget it. The
+    // helper lives in `value_page.rs` so the host-test scaffold can mount
+    // and exercise the real body (this dispatcher is `cfg(not(test))`).
+    value_page::enforce_native_value_page(&mut pages, &tx.value);
+    pages
+}
+
+#[cfg(not(test))]
+#[allow(clippy::too_many_arguments)]
+fn pick_sign_pages_inner(
     tx: &crate::tx::eip1559::Eip1559Tx,
     inner_data: &[u8],
     v3: Option<&crate::tx::eip712::cowswap::VerifiedCowswapV3>,
