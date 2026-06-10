@@ -2008,10 +2008,34 @@ compiler/silicon/FI/SCA — those stay with `tools/sca` + silicon validation.
       - [ ] EIP-1271 personal-sign nesting equivalence (`eip1271.rs`).
       - [ ] The chain-side meet: bridge to the wallet model's
             `userOpHash` (needs the P1 v4.22→v4.30 import bridge).
-- [ ] **P3 — C10 building blocks.** Per-function equivalence: WOTS chain, FORS
-      leaf/root, merkle auth path, hypertree glue vs Spec modules. Expect
-      ~30%/round AI close-rate (SorryDB-calibrated); loop invariants are the
-      human-reviewed residue.
+- [~] **P3 — C10 building blocks.** KICKOFF landed; loop-invariant work ahead.
+      Per-function equivalence: WOTS chain, FORS leaf/root, merkle auth path,
+      hypertree glue vs Spec modules. Expect ~30%/round AI close-rate
+      (SorryDB-calibrated); loop invariants are the human-reviewed residue.
+      - [x] **FORS index extraction landed 2026-06-10** —
+            `Extracted/Fors/{Types,Funs}.lean`: `read_bits_le`,
+            `extract_fors_indices`, `extract_ht_index` extract with ZERO
+            external axioms (pure bit-manip, no hashing). Builds in the
+            project; drift-guarded (`make extract-fors-index`).
+            `extract_ht_index` is security-critical — the `ht_idx` source
+            of the CWE-347 FORS-position binding (= Yul
+            `and(shr(143, digest), 0x3FFFF)`).
+      - [ ] **First loop-invariant proof** — `read_bits_le_loop`
+            step-spec via `Aeneas.Std.loop.spec_decr_nat` (measure =
+            range length, inv = True for panic-freedom). Needs an
+            `IteratorRange.next`-decreases lemma (Aeneas ships the def,
+            no step-spec). Then `extract_ht_index`/`extract_fors_indices`
+            panic-freedom close. Full plan in
+            `Extracted/ForsExtractWIP.lean`. This is the FIRST real
+            loop-reasoning proof — unblocks the WOTS/merkle/hypertree
+            loops that all share the shape.
+      - [ ] Functional spec of `extract_ht_index` (= the bit extraction)
+            via the loop accumulator invariant; then vendor `Spec/Fors`
+            + the `firmware_extract_ht_index_matches_vendored` bridge
+            (closes the CWE-347 binding at the firmware level).
+      - [ ] WOTS chain / FORS tree / merkle auth-path / hypertree
+            equivalence (reuse SetSliceLemmas for the byte-serialization
+            parts; loop invariants for the tree walks).
 - [ ] **P4 — adversarial spec layer.** Lean-spec→host-oracle differential
       fuzzing in cargo tests (`tools/spec-oracle/`); multi-agent Facade-taxonomy
       audit (translation infidelity / trust-boundary / spec-gaming) as a

@@ -77,7 +77,7 @@ EXTRACTED_DIR := extracted
 PQLEAN        := $(HOME)/.local/share/pqsigner-lean
 REPO_ROOT     := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
 
-.PHONY: verify-extracted extract-sphincs-adrs extract-aa-userop
+.PHONY: verify-extracted extract-sphincs-adrs extract-aa-userop extract-fors-index
 
 verify-extracted:
 	@cd $(EXTRACTED_DIR) && $(LAKE) build
@@ -108,6 +108,20 @@ extract-aa-userop:
 	@diff -u $(EXTRACTED_DIR)/Extracted/UserOp/Funs.lean /tmp/pqsigner-extract/uout/Funs.fixed.lean \
 	  && echo "OK: committed userop extraction matches the current Rust" \
 	  || { echo "DRIFT: aa/userop.rs changed — re-extract, re-prove, re-commit"; exit 1; }
+
+extract-fors-index:
+	@mkdir -p /tmp/pqsigner-extract
+	@cd $(REPO_ROOT)/sphincs-c10 && RUSTFLAGS="--cfg lean_extract" \
+	  $(PQLEAN)/charon cargo --preset=aeneas --opaque sha2 --opaque zeroize \
+	  --start-from 'sphincs_c10::fors::extract_ht_index' \
+	  --start-from 'sphincs_c10::fors::extract_fors_indices' \
+	  --dest-file /tmp/pqsigner-extract/fors.llbc 2>&1 | tail -1
+	@rm -rf /tmp/pqsigner-extract/fout && mkdir -p /tmp/pqsigner-extract/fout
+	@$(PQLEAN)/aeneas -backend lean -dest /tmp/pqsigner-extract/fout -split-files /tmp/pqsigner-extract/fors.llbc
+	@sed 's/import Fors\./import Extracted.Fors./' /tmp/pqsigner-extract/fout/Funs.lean > /tmp/pqsigner-extract/fout/Funs.fixed.lean
+	@diff -u $(EXTRACTED_DIR)/Extracted/Fors/Funs.lean /tmp/pqsigner-extract/fout/Funs.fixed.lean \
+	  && echo "OK: committed FORS extraction matches the current Rust" \
+	  || { echo "DRIFT: fors.rs index path changed — re-extract, re-prove, re-commit"; exit 1; }
 
 # §33 P1 — guard that Extracted/SpecVendored.lean stays a faithful copy of
 # the SphincsCVerify source it vendors (the version bridge's trust rests on
