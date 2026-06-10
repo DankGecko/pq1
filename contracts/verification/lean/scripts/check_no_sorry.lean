@@ -43,17 +43,11 @@ def main : IO Unit := do
       total := total + n
   IO.println s!"Total tactic-position sorry count: {total}"
   IO.println ""
-  IO.println "Closed core (no `sorry`, no cryptographic axiom):"
-  IO.println "  * SphincsCVerify/Spec/Params.lean"
-  IO.println "  * SphincsCVerify/Spec/Bytes.lean"
-  IO.println "  * SphincsCVerify/Spec/Adrs.lean"
-  IO.println "  * SphincsCVerify/Spec/Hash.lean         (modulo opaque sha256)"
-  IO.println "  * SphincsCVerify/Spec/Hypertree.lean"
-  IO.println "  * SphincsCVerify/Spec/Signature.lean"
-  IO.println "  * SphincsCVerify/Verifier/Refined.lean"
-  IO.println "  * SphincsCVerify/Bridge/SolidityVerifier.lean"
-  IO.println "  * SphincsCVerify/Wallet/Storage.lean"
-  IO.println "  * SphincsCVerify/Wallet/MultiOwnable.lean (all theorems closed)"
-  IO.println "  * SphincsCVerify/Wallet/Factory.lean"
-  IO.println ""
-  IO.println "Outstanding mechanical-discharge `sorry`s — see docs/AXIOMS.md § D."
+  if total == 0 then
+    IO.println "✔ Zero tactic-position `sorry`s anywhere under SphincsCVerify/."
+    IO.println "  The headline `theft_free` and every claim corollary are"
+    IO.println "  closed; their axiom closures are the cited TCB set only"
+    IO.println "  (see `make verify-audit` / scripts/dump_axioms.lean)."
+  else
+    IO.println s!"✗ {total} outstanding tactic-position `sorry`(s) — see docs/AXIOMS.md § D."
+    IO.Process.exit 1

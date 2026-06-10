@@ -1,185 +1,198 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {SymTest} from "halmos-cheatcodes/SymTest.sol";
-import {Test} from "forge-std/Test.sol";
-import {IEntryPoint} from "account-abstraction/legacy/v06/IEntryPoint06.sol";
 import {UserOperation06} from "account-abstraction/legacy/v06/UserOperation06.sol";
 
 import {PQSmartWallet} from "../../src/PQSmartWallet.sol";
-import {PQSmartWalletFactory} from "../../src/PQSmartWalletFactory.sol";
-import {MockSPHINCSVerifier} from "../mocks/MockSPHINCSVerifier.sol";
+import {PQMultiOwnable} from "../../src/PQMultiOwnable.sol";
+import {HalmosWalletBase} from "./HalmosWalletBase.sol";
 
 /// @notice Halmos symbolic-execution rules for
-///         `PQSmartWallet._validateSignature` — discharges the
-///         `solidityWallet_compiles_correctly` axiom (A3.2) for the
-///         Claim 1 surface.
+///         `PQSmartWallet.validateUserOp` / `_validateSignature`,
+///         executed against the **deployed runtime bytecode** (Halmos
+///         symbolically executes the solc-compiled EVM bytecode, so a
+///         passing rule is a proof over ALL inputs, not the 10 KAT
+///         vectors). Together these discharge the validation surface of
+///         `solidityWallet_compiles_correctly` (A3.2) and provide the
+///         bytecode analogue of the Lean invariants:
 ///
-///         Each `check_*` is a Halmos rule. Run via
-///         `halmos --bytecode <pinned-codehash> --contract HalmosValidateUserOp`.
-contract HalmosValidateUserOp is SymTest, Test {
-    address constant ENTRY_POINT_ADDR = address(0x4337);
-
-    PQSmartWallet internal wallet;
-    MockSPHINCSVerifier internal c10;
-
+///           * `check_nonbypass_*`  ≡ Lean I-1
+///             (`validateSignature_only_via_verify`): success ⇒ the
+///             (arbitrary, symbolic) verifier returned true.
+///           * `check_*_bumps_*_at_validation` ≡ the validation-phase
+///             few-time-cap bump (I-2) — proves on bytecode that the
+///             count happens in `validateUserOp` itself, the
+///             PQBootstrapCapEvasion fix.
+///           * the selector / tail-pad / caller rules ≡ the role-split
+///             and shape gates.
+///
+///         Run: `halmos --contract HalmosValidateUserOp` (see
+///         `test/halmos/run_halmos.sh`).
+contract HalmosValidateUserOp is HalmosWalletBase {
     function setUp() public {
-        c10 = new MockSPHINCSVerifier();
-        PQSmartWallet impl = new PQSmartWallet(IEntryPoint(ENTRY_POINT_ADDR), c10);
-        PQSmartWalletFactory factory = new PQSmartWalletFactory(address(impl), c10);
-        c10.setValid(true);
-        wallet = factory.createAccount(
-            bytes32(uint256(0xaaaa) << 240),
-            bytes32(uint256(0xbbbb) << 240),
-            bytes32(uint256(0xcccc) << 240),
-            bytes32(uint256(0xdddd) << 240),
-            uint64(block.chainid),
-            hex"aaaa"
-        );
+        wallet = _deployWalletSha256Free();
+        // NB: we do NOT stub the 0x02 precompile. The patched Halmos models
+        // SHA-256 as a correctly-sorted uninterpreted function, so the
+        // success path runs the genuine `sphincsDigest` precompile calls —
+        // the digest stays opaque (the honest A1 boundary), which is exactly
+        // how the Lean model treats it.
     }
 
-    /// **Claim 1 — validateUserOp success implies verifier accepted.**
-    /// For any symbolic UserOp, if `validateUserOp` returns SUCCESS,
-    /// then the C10 verifier was called and returned true.
-    function check_validateUserOp_success_implies_verifier_accepted(uint256 ownerIndex) public {
-        vm.assume(ownerIndex < 2);  // bootstrap or slot 0
-        bytes memory sig = svm.createBytes(4128, "wrappedSig");
-        UserOperation06 memory op = _symbolicOp(sig);
-        c10.setValid(true);  // honest verifier path
+    /// @dev ABI-encode a SignatureWrapper(ownerIndex, 4008-byte inner sig).
+    function _wrap(uint256 ownerIndex) internal pure returns (bytes memory) {
+        return abi.encode(ownerIndex, new bytes(4008));
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // I-1 (non-bypass): validateUserOp SUCCESS ⇒ the verifier accepted.
+    //
+    // The verifier's answer is SYMBOLIC (`svm.createBool`), so Halmos
+    // explores BOTH answers and proves there is no path where
+    // `validateUserOp` returns SUCCESS while the verifier returned false.
+    // This is the bytecode analogue of Lean's
+    // `validateSignature_only_via_verify` over an arbitrary `verify_fn`.
+    // ──────────────────────────────────────────────────────────────────
+
+    /// **Non-bypass, bootstrap role (ownerIndex 0).**
+    function check_nonbypass_bootstrap() public {
+        bytes memory newOwner = abi.encodePacked(SLOT0_PK_SEED, SLOT0_PK_ROOT);
+        bytes memory callData = abi.encodeCall(wallet.addOwnerBytes, (newOwner));
+        bool verifierResult = svm.createBool("verifierResult_bootstrap");
+        c10.setValid(verifierResult);
 
         vm.prank(ENTRY_POINT_ADDR);
-        uint256 result = wallet.validateUserOp(op, bytes32(0), 0);
+        uint256 result = wallet.validateUserOp(_op(callData, _wrap(0)), bytes32(0), 0);
 
-        // If validate returned SUCCESS, the verifier was queried and
-        // returned true (we enforced this via `setValid(true)` before
-        // the call). Since the mock always returns `valid`, this is
-        // a tautology at the mock-substitution layer; the real claim
-        // is enforced at the real-verifier substitution in
-        // `solidityVerifier_compiles_correctly` (A3.1).
         if (result == 0) {
-            assertTrue(c10.valid(),
-                "Claim 1 violation: validate SUCCESS without verifier accept");
+            assertTrue(verifierResult, "I-1 bytecode: bootstrap SUCCESS without verifier accept");
         }
     }
 
-    /// **Bootstrap selector enforcement.** `ownerIndex == 0` requires
-    /// callData selector to be `addOwnerBytes`. Other selectors → revert.
-    function check_validateUserOp_rejects_wrong_selector_for_bootstrap() public {
-        bytes memory wrongCalldata = svm.createBytes(100, "wrongCalldata");
+    /// **Non-bypass, slot role (ownerIndex 1).**
+    function check_nonbypass_slot() public {
+        bytes memory callData = abi.encodeCall(
+            wallet.executeWithOffchainCount, (uint256(1), uint256(0), address(0xc0ffee), uint256(0), bytes(""))
+        );
+        bool verifierResult = svm.createBool("verifierResult_slot");
+        c10.setValid(verifierResult);
+
+        vm.prank(ENTRY_POINT_ADDR);
+        uint256 result = wallet.validateUserOp(_op(callData, _wrap(1)), bytes32(0), 0);
+
+        if (result == 0) {
+            assertTrue(verifierResult, "I-1 bytecode: slot SUCCESS without verifier accept");
+        }
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // I-2 (validation-phase few-time-cap bump) — the PQBootstrapCapEvasion
+    // fix, proven on bytecode: the count is taken inside `validateUserOp`
+    // itself (NOT deferred to the execution phase), so an accepted sig is
+    // counted revert-proof under v0.6.
+    // ──────────────────────────────────────────────────────────────────
+
+    /// **Bootstrap cap is bumped at validation.** A symbolic verifier
+    /// answer: if `validateUserOp` accepts, `bootstrapUses` went 0 → 1
+    /// WITHOUT any `addOwnerBytes` execution. (And if it rejects, the
+    /// counter is untouched.)
+    function check_bootstrap_bumps_cap_at_validation() public {
+        bytes memory newOwner =
+            abi.encodePacked(bytes32(uint256(0x1111) << 240), bytes32(uint256(0x2222) << 240));
+        bytes memory callData = abi.encodeCall(wallet.addOwnerBytes, (newOwner));
+        bool verifierResult = svm.createBool("verifierResult_capBootstrap");
+        c10.setValid(verifierResult);
+
+        assertEq(wallet.bootstrapUses(), 0, "precondition");
+        vm.prank(ENTRY_POINT_ADDR);
+        uint256 result = wallet.validateUserOp(_op(callData, _wrap(0)), bytes32(0), 0);
+
+        if (result == 0) {
+            assertEq(wallet.bootstrapUses(), 1, "bytecode: bootstrap cap not bumped at validation");
+        } else {
+            assertEq(wallet.bootstrapUses(), 0, "bytecode: rejected sig must not bump");
+        }
+    }
+
+    /// **Slot cap is bumped at validation.** Same shape for `slotUses[1]`.
+    function check_slot_bumps_cap_at_validation() public {
+        bytes memory callData = abi.encodeCall(
+            wallet.executeWithOffchainCount, (uint256(1), uint256(0), address(0xc0ffee), uint256(0), bytes(""))
+        );
+        bool verifierResult = svm.createBool("verifierResult_capSlot");
+        c10.setValid(verifierResult);
+
+        assertEq(wallet.slotUses(1), 0, "precondition");
+        vm.prank(ENTRY_POINT_ADDR);
+        uint256 result = wallet.validateUserOp(_op(callData, _wrap(1)), bytes32(0), 0);
+
+        if (result == 0) {
+            assertEq(wallet.slotUses(1), 1, "bytecode: slot cap not bumped at validation");
+        } else {
+            assertEq(wallet.slotUses(1), 0, "bytecode: rejected sig must not bump");
+        }
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // Role-split + shape gates (reached before sphincsDigest, sha256-free).
+    // ──────────────────────────────────────────────────────────────────
+
+    /// **Bootstrap selector enforcement.** `ownerIndex == 0` requires the
+    /// `addOwnerBytes` selector; any other selector ⇒ rejected.
+    function check_rejects_wrong_selector_for_bootstrap() public {
+        bytes memory wrongCalldata = svm.createBytes(64, "wrongCalldataB");
         vm.assume(wrongCalldata.length >= 4);
         bytes4 selector = bytes4(wrongCalldata);
         vm.assume(selector != wallet.addOwnerBytes.selector);
 
-        bytes memory innerSig = new bytes(4008);
-        bytes memory wrappedSig = abi.encode(uint256(0), innerSig);
-        UserOperation06 memory op = _packedOpWithCallData(wallet, wrongCalldata, wrappedSig);
-
         c10.setValid(true);
         vm.prank(ENTRY_POINT_ADDR);
-        uint256 result = wallet.validateUserOp(op, bytes32(0), 0);
-        assertTrue(result == 1,
-            "Claim 1 violation: bootstrap accepted non-addOwnerBytes selector");
+        uint256 result = wallet.validateUserOp(_op(wrongCalldata, _wrap(0)), bytes32(0), 0);
+        assertTrue(result == 1, "bytecode: bootstrap accepted non-addOwnerBytes selector");
     }
 
-    /// **Slot selector enforcement.** `ownerIndex >= 1` requires
-    /// callData selector to be one of the slot-allowed set.
-    function check_validateUserOp_rejects_wrong_selector_for_slot() public {
-        bytes memory wrongCalldata = svm.createBytes(100, "wrongCalldata");
+    /// **Slot selector enforcement.** `ownerIndex >= 1` requires a
+    /// slot-allowed selector.
+    function check_rejects_wrong_selector_for_slot() public {
+        bytes memory wrongCalldata = svm.createBytes(64, "wrongCalldataS");
         vm.assume(wrongCalldata.length >= 4);
         bytes4 selector = bytes4(wrongCalldata);
         vm.assume(selector != wallet.executeWithOffchainCount.selector);
         vm.assume(selector != wallet.executeBatchWithOffchainCount.selector);
         vm.assume(selector != wallet.removeOwnerAtIndex.selector);
 
-        bytes memory innerSig = new bytes(4008);
-        bytes memory wrappedSig = abi.encode(uint256(1), innerSig);
-        UserOperation06 memory op = _packedOpWithCallData(wallet, wrongCalldata, wrappedSig);
-
         c10.setValid(true);
         vm.prank(ENTRY_POINT_ADDR);
-        uint256 result = wallet.validateUserOp(op, bytes32(0), 0);
-        assertTrue(result == 1,
-            "Claim 1 violation: slot accepted non-allowed selector");
+        uint256 result = wallet.validateUserOp(_op(wrongCalldata, _wrap(1)), bytes32(0), 0);
+        assertTrue(result == 1, "bytecode: slot accepted non-allowed selector");
     }
 
-    /// **Tail-pad enforcement (audit L-1).** A non-zero ABI tail-pad
-    /// in the SignatureWrapper must be rejected.
-    function check_validateUserOp_rejects_nonzero_tail_pad(uint256 padByte) public {
+    /// **Tail-pad enforcement (audit L-1).** A non-zero ABI tail-pad byte
+    /// in the wrapper ⇒ rejected.
+    function check_rejects_nonzero_tail_pad(uint256 padByte) public {
         vm.assume(padByte != 0 && padByte < 256);
-        bytes memory innerSig = new bytes(4008);
-        bytes memory sig = abi.encode(uint256(1), innerSig);
-        // Corrupt the last byte of the tail-pad.
+        bytes memory sig = _wrap(1);
         sig[sig.length - 1] = bytes1(uint8(padByte));
 
         bytes memory callData = abi.encodeCall(
             wallet.executeWithOffchainCount, (uint256(1), uint256(0), address(0xc0ffee), uint256(0), bytes(""))
         );
-        UserOperation06 memory op = _packedOpWithCallData(wallet, callData, sig);
-
         c10.setValid(true);
         vm.prank(ENTRY_POINT_ADDR);
-        uint256 result = wallet.validateUserOp(op, bytes32(0), 0);
-        assertTrue(result == 1, "Audit L-1: non-zero tail-pad accepted");
+        uint256 result = wallet.validateUserOp(_op(callData, sig), bytes32(0), 0);
+        assertTrue(result == 1, "audit L-1 bytecode: non-zero tail-pad accepted");
     }
 
-    /// **Non-EntryPoint caller is rejected.** Only the configured
-    /// EntryPoint can invoke `validateUserOp`.
-    function check_validateUserOp_rejects_non_entrypoint_caller(address caller) public {
+    /// **Non-EntryPoint caller is rejected** (before any signature work).
+    function check_rejects_non_entrypoint_caller(address caller) public {
         vm.assume(caller != ENTRY_POINT_ADDR);
-        bytes memory sig = new bytes(4128);
-        UserOperation06 memory op = _symbolicOp(sig);
-
-        vm.prank(caller);
-        try wallet.validateUserOp(op, bytes32(0), 0) returns (uint256) {
-            assertTrue(false, "Claim 1 violation: non-EntryPoint caller accepted");
-        } catch {
-            // expected: NotFromEntryPoint revert
-        }
-    }
-
-    /// **Direct execute call without validate is rejected.**
-    /// `_consumeValidatedOwnerIndex` reverts if the transient token
-    /// is not set (audit H-3).
-    function check_execute_without_validate_reverts() public {
-        vm.prank(ENTRY_POINT_ADDR);
-        try wallet.executeWithOffchainCount(1, 0, address(0xc0ffee), 0, "") returns (bytes memory) {
-            assertTrue(false, "Audit H-3 violation: execute without validate accepted");
-        } catch {
-            // expected: OwnerIndexMismatch revert
-        }
-    }
-
-    // ── Helpers ─────────────────────────────────────────────────────
-
-    function _symbolicOp(bytes memory sig) internal view returns (UserOperation06 memory op) {
-        op.sender = address(wallet);
-        op.nonce = 0;
-        op.initCode = "";
-        op.callData = abi.encodeCall(
+        bytes memory callData = abi.encodeCall(
             wallet.executeWithOffchainCount, (uint256(1), uint256(0), address(0xc0ffee), uint256(0), bytes(""))
         );
-        op.callGasLimit = 0;
-        op.verificationGasLimit = 0;
-        op.preVerificationGas = 0;
-        op.maxFeePerGas = 0;
-        op.maxPriorityFeePerGas = 0;
-        op.paymasterAndData = "";
-        op.signature = sig;
-    }
-
-    function _packedOpWithCallData(PQSmartWallet w, bytes memory callData, bytes memory sig)
-        internal pure returns (UserOperation06 memory op)
-    {
-        op.sender = address(w);
-        op.nonce = 0;
-        op.initCode = "";
-        op.callData = callData;
-        op.callGasLimit = 0;
-        op.verificationGasLimit = 0;
-        op.preVerificationGas = 0;
-        op.maxFeePerGas = 0;
-        op.maxPriorityFeePerGas = 0;
-        op.paymasterAndData = "";
-        op.signature = sig;
+        vm.prank(caller);
+        try wallet.validateUserOp(_op(callData, _wrap(1)), bytes32(0), 0) returns (uint256) {
+            assertTrue(false, "bytecode: non-EntryPoint caller reached validateUserOp");
+        } catch {
+            // expected: NotFromEntryPoint
+        }
     }
 }

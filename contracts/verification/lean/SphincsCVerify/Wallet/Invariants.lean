@@ -254,10 +254,46 @@ theorem removeOwner_preserves_counters
 
 end Storage
 
-/-- The meta-statement: every `Storage` mutation in this codebase is
-    monotonic. The five sub-lemmas above cover every mutating method:
-    `bumpBootstrap`, `bumpSlot`, `setOffchain`, `addOwner`, `removeOwner`. -/
-theorem no_reset_path : True := trivial
+/-- **(I-3) No reset path.** The meta-statement: every state-mutating
+    `Storage` method is monotonic — it never decreases `bootstrapUses`,
+    any `slotUses[j]`, or any `offchainSigCount[j]`. The five conjuncts
+    cover every mutating method (`bumpBootstrap`, `bumpSlot`,
+    `setOffchain`, `addOwner`, `removeOwner`); together with the fact
+    that these are the *only* mutators of the counter fields (no
+    `reset*` / `decrease*` method exists in the API), this is the
+    on-chain meaning of CLAUDE.md invariant #7 "per-chain caps
+    monotonic, unresettable".
+
+    Proven by composing the five no-decrease / counter-preservation
+    lemmas above; no axioms. -/
+theorem no_reset_path :
+    -- `bumpBootstrap` never decreases `bootstrapUses`.
+    (∀ (s : Storage) (cap : Nat) (s' : Storage),
+        Storage.bumpBootstrap s cap = some s' → s.bootstrapUses ≤ s'.bootstrapUses)
+    -- `bumpSlot` never decreases any `slotUses[j]`.
+    ∧ (∀ (s : Storage) (oi cap : Nat) (s' : Storage) (j : Nat),
+        Storage.bumpSlot s oi cap = some s' → s.slotUses j ≤ s'.slotUses j)
+    -- `setOffchain` never decreases any `offchainSigCount[j]`.
+    ∧ (∀ (s : Storage) (oi newCount slotUsesNow cap : Nat) (s' : Storage) (j : Nat),
+        Storage.setOffchain s oi newCount slotUsesNow cap = some s' →
+          s.offchainSigCount j ≤ s'.offchainSigCount j)
+    -- `addOwner` preserves all three counters.
+    ∧ (∀ (s : Storage) (o : OwnerBytes) (s' : Storage),
+        Storage.addOwner s o = some s' →
+          s.bootstrapUses = s'.bootstrapUses
+          ∧ (∀ j, s.slotUses j = s'.slotUses j)
+          ∧ (∀ j, s.offchainSigCount j = s'.offchainSigCount j))
+    -- `removeOwner` preserves all three counters.
+    ∧ (∀ (s : Storage) (i : Nat) (expected : OwnerBytes) (s' : Storage),
+        Storage.removeOwner s i expected = some s' →
+          s.bootstrapUses = s'.bootstrapUses
+          ∧ (∀ j, s.slotUses j = s'.slotUses j)
+          ∧ (∀ j, s.offchainSigCount j = s'.offchainSigCount j)) :=
+  ⟨Storage.bumpBootstrap_no_decrease,
+   Storage.bumpSlot_no_decrease,
+   Storage.setOffchain_no_decrease_offchain,
+   Storage.addOwner_preserves_counters,
+   Storage.removeOwner_preserves_counters⟩
 
 /-! ## (I-4) Bootstrap unremovability -/
 

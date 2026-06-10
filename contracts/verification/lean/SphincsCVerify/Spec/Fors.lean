@@ -33,20 +33,23 @@ structure ForsSig where
   authPaths : Array (Array (ByteVec 16))  -- length K-1, each inner = A
   authPathsLen : authPaths.size = K - 1
 
-/-- Reconstruct a FORS tree root from `(secret, authPath, leafIdx)`.
+/-- Reconstruct a FORS tree root from `(secret, authPath, leafIdx)` at
+    hypertree leaf position `htIdx`.
 
-    Mirrors `reconstruct_fors_root` in `sphincs-c10/src/hypertree.rs`. -/
+    Mirrors `reconstruct_fors_root` in `sphincs-c10/src/hypertree.rs`.
+    `htIdx` binds the forest to the hypertree position (commit fcee705a);
+    see `Adrs.forsNode`. -/
 def reconstructRoot
-    (seed : ByteVec 32) (treeIdx : UInt32) (leafIdx : UInt32)
+    (seed : ByteVec 32) (htIdx : UInt64) (treeIdx : UInt32) (leafIdx : UInt32)
     (secret : ByteVec 16)
     (authPath : Array (ByteVec 16)) : ByteVec 16 := Id.run do
-  let leafAdrs := Adrs.forsNode treeIdx 0 leafIdx
+  let leafAdrs := Adrs.forsNode htIdx treeIdx 0 leafIdx
   let mut node := th seed leafAdrs (pad16 secret)
   let mut pathIdx := leafIdx.toNat
   for h in [:A] do
     let parentIdx := pathIdx / 2
     let adrs :=
-      Adrs.forsNode treeIdx (UInt32.ofNat (h + 1)) (UInt32.ofNat parentIdx)
+      Adrs.forsNode htIdx treeIdx (UInt32.ofNat (h + 1)) (UInt32.ofNat parentIdx)
     let sibling := authPath.getD h (zero 16)
     if pathIdx % 2 == 0 then
       node := thPair seed adrs (pad16 node) (pad16 sibling)
@@ -55,18 +58,26 @@ def reconstructRoot
     pathIdx := parentIdx
   pure node
 
-/-- Compute the FORS public key from all K tree roots. -/
-def computeForsPk (seed : ByteVec 32) (roots : Array (ByteVec 16)) : ByteVec 16 :=
-  thMulti seed Adrs.forsRoots roots.toList
+/-- Compute the FORS public key from all K tree roots, at hypertree leaf
+    position `htIdx` (folded into the roots-compression ADRS). -/
+def computeForsPk (seed : ByteVec 32) (htIdx : UInt64) (roots : Array (ByteVec 16)) : ByteVec 16 :=
+  thMulti seed (Adrs.forsRoots htIdx) roots.toList
 
 /-- The FORS+C verifier-side reconstruction.
 
     Returns `none` iff the forced-zero constraint on the last index
-    is violated (the Solidity verifier `revert(0,0)`s in this case). -/
+    is violated (the Solidity verifier `revert(0,0)`s in this case).
+
+    The hypertree leaf position `htIdx = extractHtIndex digest` is folded
+    into every FORS ADRS (leaf, auth-node, last/forced-zero tree, and
+    roots compression), binding the few-time forest to the position —
+    byte-identical to `SPHINCsC10Asm.verify`'s `or(shl(160, htIdx), …)`
+    (commit fcee705a). -/
 def reconstructForsPk
     (seed : ByteVec 32) (digest : ByteVec 32)
     (sig : ForsSig) : Option (ByteVec 16) :=
   let indices := extractForsIndices digest
+  let htIdx : UInt64 := UInt64.ofNat (extractHtIndex digest)
   -- Forced-zero check.
   if indices.getD (K - 1) 0 ≠ 0 then
     none
@@ -78,12 +89,12 @@ def reconstructForsPk
         let leafIdx := UInt32.ofNat (indices.getD t.val 0)
         let secret := sig.secrets.getD t.val (zero 16)
         let authPath := sig.authPaths.getD t.val #[]
-        reconstructRoot seed treeIdx leafIdx secret authPath
+        reconstructRoot seed htIdx treeIdx leafIdx secret authPath
     -- Last tree: secret IS the root (leaf-only hash, no auth path).
-    let lastAdrs := Adrs.forsNode (UInt32.ofNat (K - 1)) 0 0
+    let lastAdrs := Adrs.forsNode htIdx (UInt32.ofNat (K - 1)) 0 0
     let lastSecret := sig.secrets.getD (K - 1) (zero 16)
     let lastRoot := th seed lastAdrs (pad16 lastSecret)
     let allRoots := normalRoots.push lastRoot
-    some (computeForsPk seed allRoots)
+    some (computeForsPk seed htIdx allRoots)
 
 end SphincsCVerify.Spec.Fors

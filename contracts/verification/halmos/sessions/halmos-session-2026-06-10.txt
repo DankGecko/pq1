@@ -1,0 +1,30 @@
+# Halmos session — PQSmartWallet bytecode discharge — 2026-06-10
+# halmos halmos 0.3.4.dev0+gba94bdc23.d20260610 / solver z3
+
+Running 6 tests for test/halmos/HalmosExecute.t.sol:HalmosExecute
+[32m[PASS][0m check_executeBatch_rejects_any_self_target(uint256) (paths: 3, time: 0.09s, bounds: [])
+[32m[PASS][0m check_execute_no_replay() (paths: 1, time: 0.03s, bounds: [])
+[32m[PASS][0m check_execute_rejects_non_entrypoint_caller(address) (paths: 2, time: 0.01s, bounds: [])
+[32m[PASS][0m check_execute_rejects_owner_index_mismatch(uint256) (paths: 1, time: 0.03s, bounds: [])
+[32m[PASS][0m check_execute_rejects_self_target() (paths: 1, time: 0.02s, bounds: [])
+[32m[PASS][0m check_execute_without_validate_reverts() (paths: 1, time: 0.00s, bounds: [])
+Symbolic test result: 6 passed; 0 failed; time: 0.24s
+Running 2 tests for test/halmos/HalmosFactory.t.sol:HalmosFactory
+[32m[PASS][0m check_createAccount_rejects_wrong_chainid(uint64) (paths: 2, time: 0.01s, bounds: [])
+[32m[PASS][0m check_createAccount_requires_bootstrap_sig() (paths: 3, time: 0.05s, bounds: [])
+Symbolic test result: 2 passed; 0 failed; time: 0.08s
+Running 8 tests for test/halmos/HalmosValidateUserOp.t.sol:HalmosValidateUserOp
+[32m[PASS][0m check_bootstrap_bumps_cap_at_validation() (paths: 3, time: 0.04s, bounds: [])
+[32m[PASS][0m check_nonbypass_bootstrap() (paths: 3, time: 0.03s, bounds: [])
+[32m[PASS][0m check_nonbypass_slot() (paths: 3, time: 0.03s, bounds: [])
+[32m[PASS][0m check_rejects_non_entrypoint_caller(address) (paths: 2, time: 0.01s, bounds: [])
+[32m[PASS][0m check_rejects_nonzero_tail_pad(uint256) (paths: 3, time: 0.14s, bounds: [])
+[32m[PASS][0m check_rejects_wrong_selector_for_bootstrap() (paths: 1, time: 0.02s, bounds: [])
+[32m[PASS][0m check_rejects_wrong_selector_for_slot() (paths: 1, time: 0.13s, bounds: [])
+[32m[PASS][0m check_slot_bumps_cap_at_validation() (paths: 3, time: 0.04s, bounds: [])
+Symbolic test result: 8 passed; 0 failed; time: 0.49s
+Running 3 tests for test/halmos/HalmosVerifier.t.sol:HalmosVerifier
+[32m[PASS][0m check_verify_rejects_non_nmasked_pkRoot(bytes32) (paths: 1, time: 0.00s, bounds: [])
+[32m[PASS][0m check_verify_rejects_non_nmasked_pkSeed(bytes32) (paths: 1, time: 0.00s, bounds: [])
+[32m[PASS][0m check_verify_reverts_on_wrong_length() (paths: 1, time: 0.00s, bounds: [])
+Symbolic test result: 3 passed; 0 failed; time: 0.02s

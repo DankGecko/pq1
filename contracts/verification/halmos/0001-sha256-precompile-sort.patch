@@ -1,0 +1,33 @@
+diff --git a/src/halmos/sevm.py b/src/halmos/sevm.py
+index 1d799bf..67acba2 100644
+--- a/src/halmos/sevm.py
++++ b/src/halmos/sevm.py
+@@ -2469,14 +2469,24 @@ class SEVM:
+ 
+             elif to == SHA256_PRECOMPILE:
+                 exit_code = ONE
+-                f_sha256 = Function(
+-                    f"f_sha256_{arg_size}", BitVecSorts[arg_size], BitVecSort256
+-                )
+-
+                 unwrapped = arg.unwrap()
+                 wrapped = (
+                     unwrapped if is_bv(unwrapped) else bytes_to_bv_value(unwrapped)
+                 )
++                # PQ1 patch: the uninterpreted SHA-256 function's domain
++                # sort must match the actual argument's BIT-width
++                # (`wrapped.size()`), not the CALL's byte-size `arg_size`.
++                # Keying on the byte-size declared `f_sha256_32 : BitVec 32`
++                # but applied it to a `BitVec 256` value, so z3 raised
++                # "Sort mismatch ... supplied sort is (_ BitVec 256)" on any
++                # success path reaching a SHA-256 precompile call. This only
++                # fixes the declared sort; the function stays uninterpreted
++                # (sound abstraction). Mirrors how KECCAK is keyed on
++                # `loc.size()` elsewhere in this file.
++                arg_bits = wrapped.size()
++                f_sha256 = Function(
++                    f"f_sha256_{arg_bits}", BitVecSorts[arg_bits], BitVecSort256
++                )
+                 ret = ByteVec(f_sha256(wrapped))
+ 
+             elif to == RIPEMD160_PRECOMPILE:

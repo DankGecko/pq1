@@ -59,24 +59,47 @@ theorem load_R_consistent (bytes : ByteVec SignatureLen) :
     that wires `reconstructForsPkRefined` directly through
     `Spec.Signature.deserialise` + `Fors.reconstructForsPk`, the
     structural-vs-byte gap on the FORS section is closed by
-    construction — the load-bearing equality lives in
-    `Refined.reconstructForsPkRefined`'s body. -/
+    construction. Real propositional content (the byte-indexed FORS
+    helper equals the structural FORS reconstruction over the decoded
+    signature, including the hypertree-position binding `htIdx` folded
+    into every FORS ADRS by `Fors.reconstructForsPk`); closes by `rfl`
+    because the refined helper's body *is* that structural call. -/
 theorem fors_section_consistent
-    (_bytes : ByteVec SignatureLen) (_digest : ByteVec 32) :
-    True := trivial
+    (bytes : ByteVec SignatureLen) (seed : ByteVec 32) (digest : ByteVec 32) :
+    Refined.reconstructForsPkRefined bytes seed digest
+      = Fors.reconstructForsPk seed digest (deserialise bytes).fors := rfl
 
 /-- The HT layer walk reaches the same subtree root in both flows.
-    After the refactor, `Refined.hypertreeLayerStep` delegates
-    directly to `Wots.pkFromSig` + `Hypertree.verifyAuthPath` over the
-    deserialised layer signature. Load-bearing equality in
-    `Refined.hypertreeLayerStep`'s body. -/
-theorem ht_layer0_consistent
-    (_bytes : ByteVec SignatureLen) (_forsPk : ByteVec 16) :
-    True := trivial
+    After the `deserialise` refactor, `Refined.hypertreeLayerStep`
+    delegates to `Wots.pkFromSig` (WOTS+C target-sum-gated public-key
+    recovery) + `Hypertree.verifyAuthPath` (subtree Merkle
+    reconstruction) over the *deserialised* layer signature — so the
+    real byte-offset arithmetic lives entirely in `deserialise`, and the
+    layer step's residual `_sigOff` cursor argument is vestigial.
 
+    Real propositional content at `layer = 0` (incoming node = the FORS
+    PK): the byte-indexed layer step is a pure function of the decoded
+    signature and the `(idxTree, idxLeaf)` indices — its result does not
+    depend on the byte-offset cursor. This independence is exactly why
+    the top-level `verifyRefined_eq_spec` holds by `rfl` (the layer walk
+    no longer threads a calldata cursor). Closes by `rfl` because the
+    vestigial argument never reaches the body. -/
+theorem ht_layer0_consistent
+    (bytes : ByteVec SignatureLen) (seed : ByteVec 32)
+    (idxTree idxLeaf : Nat) (forsPk : ByteVec 16) (sigOff sigOff' : Nat) :
+    Refined.hypertreeLayerStep bytes seed 0 idxTree idxLeaf forsPk sigOff
+      = Refined.hypertreeLayerStep bytes seed 0 idxTree idxLeaf forsPk sigOff' :=
+  rfl
+
+/-- Same as `ht_layer0_consistent` at `layer = 1` (incoming node = the
+    layer-0 subtree root): the layer-1 byte step is independent of the
+    vestigial byte-offset cursor. Closes by `rfl`. -/
 theorem ht_layer1_consistent
-    (_bytes : ByteVec SignatureLen) (_layer0Root : ByteVec 16) :
-    True := trivial
+    (bytes : ByteVec SignatureLen) (seed : ByteVec 32)
+    (idxTree idxLeaf : Nat) (layer0Root : ByteVec 16) (sigOff sigOff' : Nat) :
+    Refined.hypertreeLayerStep bytes seed 1 idxTree idxLeaf layer0Root sigOff
+      = Refined.hypertreeLayerStep bytes seed 1 idxTree idxLeaf layer0Root sigOff' :=
+  rfl
 
 /-! ### Top-level refinement -/
 

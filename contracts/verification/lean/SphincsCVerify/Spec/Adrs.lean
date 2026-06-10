@@ -84,13 +84,29 @@ def wotsPk (layer : UInt32) (tree : UInt64) (kp : UInt32) : Adrs :=
 def treeNode (layer : UInt32) (tree : UInt64) (height parentIdx : UInt32) : Adrs :=
   make layer tree (UInt32.ofNat ADRS_TREE) 0 0 height parentIdx
 
-/-- ADRS for a FORS tree node at (treeIdx, height, parentIdx). -/
-def forsNode (treeIdx height parentIdx : UInt32) : Adrs :=
-  make 0 0 (UInt32.ofNat ADRS_FORS_TREE) treeIdx 0 height parentIdx
+/-- ADRS for a FORS tree node at hypertree leaf position `htIdx`, FORS
+    tree `treeIdx`, node `(height, parentIdx)`.
 
-/-- ADRS for the FORS roots compression hash. -/
-def forsRoots : Adrs :=
-  make 0 0 (UInt32.ofNat ADRS_FORS_ROOTS) 0 0 0 0
+    `htIdx` is folded into the 8-byte `tree` field (ADRS bytes [4..12),
+    bits [160..224) of the 256-bit word). This binds the FORS few-time
+    forest to the hypertree leaf position, so each of the 2^18 positions
+    is an independent forest — mirroring the deployed Yul
+    `or(shl(160, htIdx), or(shl(128, 3), or(shl(96, treeIdx), node)))`
+    in `SPHINCsC10Asm.sol` and `make_adrs(0, ht_idx, FORS_TREE, …)` in
+    `sphincs-c10/src/{fors,hypertree}.rs`. Without it the forest is shared
+    across all positions and forgeable from ~3-4k public signatures
+    (CWE-347; fixed in commit fcee705a). Since `htIdx < 2^18`, the value
+    occupies the low bits of the `tree` field exactly as the Yul `shl 160`
+    places it. -/
+def forsNode (htIdx : UInt64) (treeIdx height parentIdx : UInt32) : Adrs :=
+  make 0 htIdx (UInt32.ofNat ADRS_FORS_TREE) treeIdx 0 height parentIdx
+
+/-- ADRS for the FORS roots compression hash at hypertree leaf position
+    `htIdx`. Same position binding as `forsNode`: the roots-compression
+    ADRS also carries `htIdx` in the `tree` field (Yul
+    `or(shl(160, htIdx), shl(128, 4))`). -/
+def forsRoots (htIdx : UInt64) : Adrs :=
+  make 0 htIdx (UInt32.ofNat ADRS_FORS_ROOTS) 0 0 0 0
 
 end Adrs
 

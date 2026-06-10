@@ -101,8 +101,9 @@ def reconstructForsTreeRoot
     (i : Nat) : ByteVec 16 :=
   let dec := Spec.Signature.deserialise sig
   let indices := extractForsIndices digest
+  let htIdx : UInt64 := UInt64.ofNat (extractHtIndex digest)
   let leafIdx := UInt32.ofNat (indices.getD i 0)
-  Fors.reconstructRoot seed (UInt32.ofNat i) leafIdx
+  Fors.reconstructRoot seed htIdx (UInt32.ofNat i) leafIdx
     (dec.fors.secrets.getD i (ByteVec.zero 16))
     (dec.fors.authPaths.getD i #[])
 

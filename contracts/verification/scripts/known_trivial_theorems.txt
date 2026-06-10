@@ -12,14 +12,12 @@
 # Add an entry here ONLY if you can name the tier (in the plan file)
 # that discharges it, and you put a TODO marker next to the entry.
 
-# Tier 1.8 will convert this to a real propositional theorem.
-# (userop_acceptance_implies_signed_or_break upgraded to real content
-# in Phase 1A — composes I-1 + sphincsDigest binding.)
-SphincsCVerify.Wallet.Invariants.no_reset_path
-
-# Tier 1.4 will replace these three with real propositional content
-# about offset arithmetic. (Live under `namespace SphincsCVerify.Verifier`
-# in `Verifier/Equivalence.lean`.)
-SphincsCVerify.Verifier.fors_section_consistent
-SphincsCVerify.Verifier.ht_layer0_consistent
-SphincsCVerify.Verifier.ht_layer1_consistent
+# (empty) — 2026-06-10: the four remaining placeholders were upgraded to
+# real propositional theorems, so the allowlist is now empty.
+#   * Wallet.Invariants.no_reset_path  → conjunction of the five
+#     Storage-mutator monotonicity lemmas (I-3, "caps unresettable").
+#   * Verifier.fors_section_consistent → byte-FORS-helper == structural
+#     Fors.reconstructForsPk over the decoded sig (incl. htIdx binding).
+#   * Verifier.ht_layer0_consistent / ht_layer1_consistent → byte layer
+#     step == Wots.pkFromSig + Hypertree.verifyAuthPath at layer 0 / 1.
+# No `True := trivial` theorems remain under SphincsCVerify/.

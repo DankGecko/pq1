@@ -16,7 +16,7 @@
 LEAN_DIR := lean
 LAKE     ?= $(shell command -v lake 2>/dev/null || echo $$HOME/.elan/bin/lake)
 
-.PHONY: verify verify-build verify-audit verify-three-claims verify-exec-gate verify-clean
+.PHONY: verify verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup
 
 verify: verify-build
 	@cd $(LEAN_DIR) && $(LAKE) exe verify-test-vectors
@@ -42,6 +42,16 @@ verify-exec-gate:
 	@echo "Expected closure: { propext, Classical.choice, Quot.sound } (kernel-only)"
 	@echo ""
 	@cd $(LEAN_DIR) && $(LAKE) env lean scripts/dump_axioms_claim4.lean
+
+verify-bytecode-setup:
+	@bash halmos/setup_halmos.sh
+
+# Bytecode-level discharge of the A3.* bridge axioms: certifies the
+# compiled runtime codehashes match PINNED_CODEHASHES.md, then symbolically
+# executes the deployed PQSmartWallet / factory / verifier bytecode with the
+# patched Halmos. Run `make verify-bytecode-setup` once first.
+verify-bytecode:
+	@bash halmos/run_halmos.sh
 
 verify-clean:
 	@cd $(LEAN_DIR) && rm -rf .lake build

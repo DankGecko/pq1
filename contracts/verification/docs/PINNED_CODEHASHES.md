@@ -11,19 +11,43 @@ by `contracts/smart-wallet/test/PinnedCodehashes.t.sol`, which
 asserts that the deployed `address(<contract>).codehash` equals the
 pinned value below. Any drift fails CI.
 
-## Pinned values (re-pinned 2026-05-27)
+## Pinned values (re-pinned 2026-06-10)
 
-> **Re-pinned 2026-05-27** after the EntryPoint-guard fix (`addOwnerBytes` /
-> `removeOwnerAtIndex`) plus a clean rebuild that reconciled prior
-> in-progress drift. The A3 bridge discharges (Halmos for the wallet/verifier,
-> Certora for the factory) have **NOT** been re-run against these hashes yet —
-> A3.1–A3.4 are marked `pending-rerun` in `AXIOM_STATUS.json`. Re-run the
-> discharge artifacts before treating these pins as proof-backed.
+> **Re-pinned 2026-06-10** after the bootstrap few-time-cap fix:
+> `PQSmartWallet._validateSignature` now bumps `bootstrapUses` in the
+> VALIDATION phase (mirroring the slot path) instead of the deferred,
+> credit-gated bump in `addOwnerBytes`. Every accepted Type-1 signature is
+> therefore counted revert-proof under ERC-4337 v0.6, closing the
+> `PQBootstrapCapEvasion` under-count (CLAUDE.md invariant #7). The Lean
+> model (`Wallet/ValidateUserOp.lean::bumpForOwner`) already encoded this
+> behaviour, so the model-level proof is faithful; only the deployed
+> bytecode moved. The verifier `SPHINCsC10Asm` hash is the 2026-05-31
+> fcee705a FORS-htIdx value (unchanged by this edit); the factory moved
+> only because it imports the edited wallet into its compilation unit.
+>
+> **Discharge status (updated 2026-06-10).** The A3.* bytecode discharges
+> have now been **run** with a patched Halmos (`halmos/` — see its README;
+> stock 0.3.3 has a SHA-256 precompile sort bug, fixed by a one-line
+> uninterpreted-function-sort patch). 19 symbolic rules PASS over all inputs
+> against these exact codehashes, certified in the same flow by
+> `PinnedCodehashes.t.sol`:
+>   * **A3.2 (wallet)** — `discharged-bytecode`: 14 rules (8 validate + 6
+>     execute) on `0x43c654…a06a`, incl. non-bypass (I-1 analogue) and the
+>     validation-phase cap bump.
+>   * **A3.3 (factory)** — `discharged-bytecode`: 2 rules (squat-defence I-8,
+>     wrong-chainId) on `0xfa2922…7c3c`.
+>   * **A3.1 (verifier)** — `discharged-bytecode-partial`: 3 input-gate rules
+>     (length/N-mask) on `0xf1ef…fef5` by Halmos; the full SHA-256-heavy
+>     functional equivalence stays on the Lean refinement
+>     (`verifyRefined_eq_spec`, incl. htIdx) + the 10 KAT vectors.
+> Reproduce: `make -C contracts/verification verify-bytecode`. SHA-256 is an
+> uninterpreted function in every Halmos run (the named A1 boundary). A3.4
+> (multiownable) logic is unchanged.
 
 ```
-PQSmartWallet         0xdc2aa6c4db5cc6ebec277d97ef6adada7c448d09a76749ddfa94edd4879a3680
-PQSmartWalletFactory  0x604e4000bb7d3fef349d1f9b09e3f048c6baa7a37f10d1bdfebef9ce1ecf3e02
-SPHINCsC10Asm         0x919cf8ef4b028b50f51de2e71aba7d08900d0e59833d003eed68102c7e9289c0
+PQSmartWallet         0x43c65420691792d7f0f63dab95f47ab7adb649df4c83f432bd3cf2c95db3a06a
+PQSmartWalletFactory  0xfa2922b4fadb81b4475307504890d68f2e3d9be97c7e5e9aeeba6e84110d7c3c
+SPHINCsC10Asm         0xf1ef4ccee22e6b39446723232fe39761f089c7195941b2c12576956b38fcfef5
 PQMultiOwnable        (embedded in PQSmartWallet; no independent deploy)
 ```
 
