@@ -214,4 +214,78 @@ theorem extract_ht_index_in_range (digest : Std.Array Std.U8 32#usize) :
   rw [this, Nat.mod_eq_of_lt (by omega)]
   omega
 
+
+open sphincs_c10 in
+set_option maxHeartbeats 16000000 in
+set_option maxRecDepth 8192 in
+/-- Every FORS index is in range [0, 2^11) — it indexes a valid
+    FORS-tree leaf. Loop invariant: every array entry written so far
+    is < 2^A = 2^11. -/
+theorem extract_fors_indices_loop_in_range
+    (iter : core.ops.range.Range Std.Usize) (digest : Std.Array Std.U8 32#usize)
+    (indices : Std.Array Std.U32 13#usize) (hb : iter.«end».val = 13)
+    (hinit : ∀ j, j < iter.start.val → (indices.val[j]!).val < 2 ^ 11) :
+    fors.extract_fors_indices_loop iter digest indices
+      ⦃ r => ∀ j, j < 13 → (r.val[j]!).val < 2 ^ 11 ⦄ := by
+  unfold fors.extract_fors_indices_loop
+  apply Aeneas.Std.loop.spec_decr_nat
+    (measure := fun (s : core.ops.range.Range Std.Usize × Std.Array Std.U32 13#usize) =>
+       s.1.«end».val - s.1.start.val)
+    (inv := fun (s : core.ops.range.Range Std.Usize × Std.Array Std.U32 13#usize) =>
+       s.1.«end».val = 13 ∧ ∀ j, j < s.1.start.val → (s.2.val[j]!).val < 2 ^ 11)
+  · rintro ⟨it, ind⟩ ⟨hend, hinv⟩
+    unfold fors.extract_fors_indices_loop.body
+    simp only []
+    let* ⟨o, iter1, hpost⟩ ← next_usize_spec it
+    rcases hpost with ⟨ho, hle⟩ | ⟨b, it', heq, hb', hlt, hend', hstart⟩
+    · subst ho
+      simp only [WP.spec_ok]
+      exact fun j hj => hinv j (by scalar_tac)
+    · simp only [Prod.mk.injEq] at heq
+      obtain ⟨rfl, rfl⟩ := heq
+      have hbeq : b.val = it.start.val := by rw [hb']
+      have h12 : b.val ≤ 12 := by scalar_tac
+      simp only [params.A]
+      step* <;>
+        first
+        | (apply read_bits_le_in_range <;> scalar_tac)
+        | scalar_tac
+        | skip
+      refine ⟨by rw [hend']; exact hend, fun j hj => ?_, by scalar_tac⟩
+      have hlen : ind.val.length = 13 := by have := ind.property; simp_all
+      have hi3 : i3.val < 2 ^ 11 := by
+        rw [i3_post, UScalar.cast_val_eq]
+        simp only [show UScalarTy.U32.numBits = 32 from rfl]
+        omega
+      rw [a_post, Array.set_val_eq]
+      by_cases hjb : j = b.val
+      · subst hjb
+        rw [List.set_getElem!_eq _ b.val b.val i3 ⟨by omega, rfl⟩]
+        exact hi3
+      · rw [List.set_getElem!_ne _ b.val j i3 (by simp only [Nat.not_eq]; omega)]
+        have hbv : b.val = it.start.val := by rw [hb']
+        rw [hbv] at hjb
+        have hj' : j < it.start.val + 1 := by rw [← hstart]; exact hj
+        apply hinv j
+        show j < it.start.val
+        omega
+  · exact ⟨hb, hinit⟩
+
+attribute [step] extract_fors_indices_loop_in_range
+
+open sphincs_c10 in
+set_option maxHeartbeats 16000000 in
+/-- Every index returned by `extract_fors_indices` is in [0, 2^11). -/
+theorem extract_fors_indices_in_range (digest : Std.Array Std.U8 32#usize) :
+    fors.extract_fors_indices digest ⦃ r => ∀ j, j < 13 → (r.val[j]!).val < 2 ^ 11 ⦄ := by
+  unfold fors.extract_fors_indices
+  simp only [params.K]
+  step* <;>
+    first
+    | (apply extract_fors_indices_loop_in_range)
+    | scalar_tac
+    | (intro j hj; simp_all)
+    | simp_all
+    | trivial
+
 end Extracted.Equiv
