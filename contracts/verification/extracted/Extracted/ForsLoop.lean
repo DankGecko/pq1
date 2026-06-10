@@ -122,4 +122,50 @@ theorem extract_ht_index_terminates (digest : Std.Array Std.U8 32#usize) :
     | scalar_tac
     | trivial
 
+
+open sphincs_c10 in
+set_option maxHeartbeats 8000000 in
+theorem extract_fors_indices_loop_terminates
+    (iter : core.ops.range.Range Std.Usize) (digest : Std.Array Std.U8 32#usize)
+    (indices : Std.Array Std.U32 13#usize) (hb : iter.«end».val ≤ 13) :
+    fors.extract_fors_indices_loop iter digest indices ⦃ _ => True ⦄ := by
+  unfold fors.extract_fors_indices_loop
+  apply Aeneas.Std.loop.spec_decr_nat
+    (measure := fun (s : core.ops.range.Range Std.Usize × Std.Array Std.U32 13#usize) =>
+       s.1.«end».val - s.1.start.val)
+    (inv := fun (s : core.ops.range.Range Std.Usize × Std.Array Std.U32 13#usize) =>
+       s.1.«end».val ≤ 13)
+  · rintro ⟨it, ind⟩ hend
+    unfold fors.extract_fors_indices_loop.body
+    simp only []
+    let* ⟨o, iter1, hpost⟩ ← next_usize_spec it
+    rcases hpost with ⟨ho, hle⟩ | ⟨b, it', heq, hb', hlt, hend', hstart⟩
+    · simp_all
+    · simp only [Prod.mk.injEq] at heq
+      obtain ⟨rfl, rfl⟩ := heq
+      have h12 : it.start.val ≤ 12 := by scalar_tac
+      simp only [params.A]
+      step* <;>
+        first
+        | (apply read_bits_le_terminates <;> scalar_tac)
+        | scalar_tac
+        | (refine ⟨?_, ?_⟩ <;> scalar_tac)
+        | simp_all
+        | trivial
+  · exact hb
+
+attribute [step] extract_fors_indices_loop_terminates
+
+open sphincs_c10 in
+set_option maxHeartbeats 8000000 in
+theorem extract_fors_indices_terminates (digest : Std.Array Std.U8 32#usize) :
+    fors.extract_fors_indices digest ⦃ _ => True ⦄ := by
+  unfold fors.extract_fors_indices
+  simp only [params.K]
+  step* <;>
+    first
+    | (apply extract_fors_indices_loop_terminates <;> scalar_tac)
+    | scalar_tac
+    | trivial
+
 end Extracted.Equiv
