@@ -129,3 +129,11 @@ extract-fors-index:
 .PHONY: verify-spec-vendored-fidelity
 verify-spec-vendored-fidelity:
 	@python3 scripts/check_vendored_spec.py
+
+# §33 — AI-prover loop: drive a headless Claude agent to close ONE proof
+# obligation, gated on the Lean kernel + axiom discipline. See
+# ai-prover/ai_prove.sh. Usage:
+#   make ai-prove MODULE=Extracted.Bits TARGET="Prove lor_eq_add_disjoint ..."
+.PHONY: ai-prove
+ai-prove:
+	@ai-prover/ai_prove.sh "$(MODULE)" "$(TARGET)"
