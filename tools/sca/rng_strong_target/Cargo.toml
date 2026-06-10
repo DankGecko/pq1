@@ -1,0 +1,30 @@
+# Standalone workspace — detached from the PQSigner workspace. Mirrors the
+# other `tools/sca/*_target` crates.
+#
+# This target `#[path]`-includes the REAL `secure/src/rng_strong.rs` (the
+# multi-source fail-closed strong-RNG fold added/tightened by bb2615f6) and
+# supplies the two crate-root hooks it needs — `crate::rng::fill` (platform
+# TRNG) and `crate::se_random` (the OPTIGA⊕SE050 SE fold) — as harness-
+# controllable stubs. So the fault sweep exercises the actual shipped
+# `?`-propagation + all-zero acceptance gate, not a re-implementation.
+[workspace]
+
+[package]
+name = "sca-rng-strong-target"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "thumbv8m ELF for rainbow FI analysis of secure/src/rng_strong.rs — the strict (bb2615f6) SE-TRNG-failure-is-fatal fold + all-zero acceptance gate. Not shipped."
+
+[[bin]]
+name = "sca-rng-strong-target"
+path = "src/main.rs"
+
+[dependencies]
+cortex-m    = "0.7"
+cortex-m-rt = "0.7"
+panic-halt  = "1"
+zeroize     = { version = "1", default-features = false }
+
+[profile.release]
+opt-level = "s"          # match the firmware release profile; do NOT strip

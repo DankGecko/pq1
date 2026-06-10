@@ -97,6 +97,9 @@ fn err_code(e: VerifyError) -> u32 {
         VerifyError::BelowRollback => 8,
         VerifyError::SecureHashMismatch => 9,
         VerifyError::NonsecureHashMismatch => 10,
+        // Added to `fw-manifest::VerifyError` after this target was last built;
+        // mapped here so the SCA target compiles against the current crate.
+        VerifyError::BadReserved => 11,
     }
 }
 

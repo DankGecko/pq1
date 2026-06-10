@@ -173,6 +173,7 @@ fn positive_sign_with_shuffle_nonzero_still_byte_equal() {
 }
 
 #[test]
+#[cfg_attr(lean_extract, ignore = "progress callback is compiled out under --cfg lean_extract (work-todo section 33 P0)")]
 fn positive_progress_callback_invoked_monotonically_to_100() {
     use std::cell::RefCell;
     let observed: RefCell<Vec<u8>> = RefCell::new(Vec::new());

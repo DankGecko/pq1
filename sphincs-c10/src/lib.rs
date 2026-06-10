@@ -40,6 +40,36 @@ pub mod shuffle;
 #[cfg(feature = "hash-counters")]
 pub use hash::counters;
 
+/// Internals exposed **only** for the security-regression harnesses in
+/// `tests/` — gated behind the `sim-internals` feature (off by default,
+/// never shipped). These re-export functions that are otherwise
+/// `pub(crate)`:
+///
+/// * `h_msg`, `pad16`, `extract_fors_indices`, `extract_ht_index` —
+///   take only **public** inputs (`pk_seed`, `pk_root`, `R`, message).
+///   They model exactly what a passive on-chain observer can compute, so
+///   the FORS shared-forest forgery simulator
+///   (`tests/fors_forgery_resistance.rs`) can interpret harvested
+///   signatures without a secret key.
+/// * `fors_secret`, `compute_fors_root`, `compute_fors_pk`,
+///   `sign_fors_tree`, `make_adrs`, `th*` — let the position-binding
+///   property test (`tests/fors_position_binding.rs`) assert that the
+///   post-`fcee705a` `ht_idx` fold makes every hypertree position an
+///   independent FORS forest (CWE-347 regression guard).
+///
+/// This widens the public surface of a security-critical crate, which is
+/// why it is feature-gated and `#[doc(hidden)]`. Do not depend on it from
+/// production code.
+#[cfg(feature = "sim-internals")]
+#[doc(hidden)]
+pub mod sim_internals {
+    pub use crate::address::make_adrs;
+    pub use crate::fors::{
+        compute_fors_pk, compute_fors_root, extract_fors_indices, extract_ht_index, sign_fors_tree,
+    };
+    pub use crate::hash::{fors_secret, h_msg, pad16, th, th_multi, th_pair};
+}
+
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use params::{N, SIGNATURE_LEN, VERIFYING_KEY_LEN};

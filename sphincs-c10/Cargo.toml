@@ -22,6 +22,22 @@ hw-sha256 = []
 # at the top of each hash primitive — measurement-only, never shipped.
 hash-counters = []
 
+# Re-export otherwise-`pub(crate)` internals (PRF, ADRS, digest, FORS tree
+# helpers) under `sphincs_c10::sim_internals`, for the security-regression
+# harnesses in `tests/` only: the FORS shared-forest forgery simulator
+# (`fors_forgery_resistance.rs`) and the position-binding property test
+# (`fors_position_binding.rs`), both guarding the fcee705a fix (CWE-347).
+# Off by default so the production public API stays minimal; never shipped.
+sim-internals = []
+
+# `--cfg lean_extract` is set ONLY by the Aeneas/Charon Lean-extraction
+# run (work-todo §33 P0): it compiles out the UI progress-callback slot
+# (an arrow type the extraction can't represent). Never set by any
+# shipping build; CI must run this crate's test suite under the cfg too,
+# pinning byte-equality between the extracted and shipped shapes.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(lean_extract)"] }
+
 [dev-dependencies]
 hex = { workspace = true }
 serde = { version = "1", features = ["derive"] }

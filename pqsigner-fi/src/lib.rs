@@ -75,6 +75,35 @@ fn vwrite<T>(p: *mut T, v: T) {
     unsafe { core::ptr::write_volatile(p, v) }
 }
 
+/// Branchless map of a boolean verdict to the Hamming-distant sentinels:
+/// `true → OK_SENTINEL`, `false → FAIL_SENTINEL`.
+///
+/// **F-29 hardening.** The obvious `if pass { OK_SENTINEL } else { FAIL_SENTINEL }`
+/// compiles to a conditional/unconditional branch selecting between the two
+/// constants — and an exhaustive `tools/sca` sweep showed a **single
+/// instruction-skip of that branch flips a `false` verdict to `OK_SENTINEL`**
+/// (the dangerous false→OK direction), defeating every value-gate that reads
+/// the result. This form has **no branch**: the verdict is assembled from two
+/// **independently** black-boxed masks, AND-ed for the OK term and OR-ed
+/// (via De Morgan) for the FAIL term, so producing `OK_SENTINEL` from a
+/// `false` input requires *both* masks to be all-ones — which a single fault
+/// (skip of one mask compute → stale all-ones, or corruption of one mask)
+/// cannot achieve, because the other mask is `0` and zeroes the OK term while
+/// forcing the FAIL term. A glitch yields garbage that is `!= OK_SENTINEL`,
+/// not a clean flip. (It does NOT make boolean→sentinel *unconditionally*
+/// single-fault-proof — a stale-register coincidence on the final compose is
+/// still possible; secret-RELEASE gates should additionally use the
+/// infective-mask pattern, see `tools/sca/README.md` §F-28. But it removes the
+/// clean single-branch flip that was F-29's root.)
+#[inline(always)]
+fn select_sentinel(pass: bool) -> u32 {
+    // Two independent recomputes of the all-ones/zero mask. `black_box` stops
+    // LLVM from proving them equal and folding the AND/OR back into a branch.
+    let m1 = (core::hint::black_box(pass) as u32).wrapping_neg(); // 0xFFFF_FFFF iff pass
+    let m2 = (core::hint::black_box(pass) as u32).wrapping_neg();
+    (m1 & m2 & OK_SENTINEL) | ((!m1 | !m2) & FAIL_SENTINEL)
+}
+
 /// Trezor's `wait_random()`, port of
 /// `core/embed/sec/random_delays/stm32/random_delays.c:186-202`.
 ///
@@ -137,7 +166,8 @@ pub fn check_true<F: FnMut() -> bool, W: FnMut()>(mut cond: F, mut wait: W) -> b
     let v1 = cond();
     wait();
     let v2 = cond();
-    let mut sentinel_storage: u32 = if v1 && v2 { OK_SENTINEL } else { FAIL_SENTINEL };
+    // F-29: branchless verdict select (no skippable `if pass { OK } else { FAIL }`).
+    let mut sentinel_storage: u32 = select_sentinel(v1 & v2);
     let sentinel_ptr = &mut sentinel_storage as *mut u32;
     wait();
     let s = vread(sentinel_ptr);
@@ -168,11 +198,12 @@ pub fn check_true_into_sentinel<F: FnMut() -> bool, W: FnMut()>(mut cond: F, mut
     let v1 = cond();
     wait();
     let v2 = cond();
-    let mut sentinel_storage: u32 = if v1 && v2 { OK_SENTINEL } else { FAIL_SENTINEL };
+    // F-29: branchless verdict select (no skippable `if pass { OK } else { FAIL }`).
+    let mut sentinel_storage: u32 = select_sentinel(v1 & v2);
     let sentinel_ptr = &mut sentinel_storage as *mut u32;
     wait();
     let s = vread(sentinel_ptr);
-    let verdict = if s == OK_SENTINEL && v1 && v2 { OK_SENTINEL } else { FAIL_SENTINEL };
+    let verdict = select_sentinel((s == OK_SENTINEL) & v1 & v2);
     sentinel_storage.zeroize();
     core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
     verdict

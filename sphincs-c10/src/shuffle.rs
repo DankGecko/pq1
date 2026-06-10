@@ -94,43 +94,78 @@ pub fn fisher_yates(seed: &[u8; 32], n: usize, perm: &mut [u8]) {
         return;
     }
 
-    // RNG state: an SHA-256-extended counter-mode stream.
-    let mut block = [0u8; 32];
-    let mut block_off: usize = 32; // force a refill on first use
-    let mut counter: u32 = 0;
+    // `n <= 1` would make the countdown start below underflow (the old
+    // `(1..n).rev()` range was simply empty); the permutation of a
+    // 0- or 1-element slice is the identity already written above.
+    // Checked BEFORE the seed is copied into the RNG state so the
+    // early return leaves no unscrubbed seed copy on the stack.
+    if n <= 1 {
+        return;
+    }
 
-    let next_u16 = |b: &mut [u8; 32], off: &mut usize, ctr: &mut u32| -> u16 {
-        let mut take_byte = || -> u8 {
-            if *off >= 32 {
-                let mut h = Sha256::new();
-                h.update(b"sphincs-c10-fisher-yates-v1");
-                h.update(seed);
-                h.update(&ctr.to_be_bytes());
-                let d = h.finalize();
-                b.copy_from_slice(&d);
-                *ctr = ctr.wrapping_add(1);
-                *off = 0;
-            }
-            let v = b[*off];
-            *off += 1;
-            v
-        };
-        let lo = take_byte() as u16;
-        let hi = take_byte() as u16;
-        (hi << 8) | lo
-    };
+    // RNG state: an SHA-256-extended counter-mode stream.
+    let mut rng = FisherYatesRng { seed: *seed, block: [0u8; 32], off: 32, counter: 0 };
 
     // Classic Fisher-Yates: for i = n-1 down to 1, swap perm[i] with
-    // perm[j] for random j ∈ [0, i].
-    for i in (1..n).rev() {
+    // perm[j] for random j ∈ [0, i]. A plain `while` countdown (not
+    // `(1..n).rev()`) so the loop stays inside the iterator-free Rust
+    // fragment the Aeneas Lean extraction supports (work-todo §33 P0).
+    let mut i = n - 1;
+    while i >= 1 {
         let bound = (i + 1) as u16;
-        let r = next_u16(&mut block, &mut block_off, &mut counter);
+        let r = rng.next_u16();
         let j = (r % bound) as usize;
-        perm.swap(i, j);
+        // Manual swap (not `perm.swap`): the slice-method reborrow
+        // through the `&mut [u8]` parameter is a nested-borrow shape
+        // the Aeneas Lean extraction rejects (work-todo §33 P0).
+        let tmp = perm[i];
+        perm[i] = perm[j];
+        perm[j] = tmp;
+        i -= 1;
     }
 
     // Defensive: scrub the RNG block before the function returns.
-    block.zeroize();
+    rng.block.zeroize();
+    rng.seed.zeroize();
+}
+
+/// SHA-256 counter-mode byte stream for [`fisher_yates`].
+///
+/// A named struct with methods (not nested closures) so the shuffle
+/// stays inside the closure-free Rust fragment the Aeneas Lean
+/// extraction supports (work-todo §33 P0). Behaviour is byte-identical
+/// to the previous closure-based implementation: each 32-byte block is
+/// `SHA-256("sphincs-c10-fisher-yates-v1" || seed || counter_be4)`,
+/// bytes consumed in pairs as little-endian `u16`s.
+struct FisherYatesRng {
+    seed: [u8; 32],
+    block: [u8; 32],
+    off: usize,
+    counter: u32,
+}
+
+impl FisherYatesRng {
+    fn take_byte(&mut self) -> u8 {
+        if self.off >= 32 {
+            let mut h = Sha256::new();
+            h.update(b"sphincs-c10-fisher-yates-v1");
+            h.update(self.seed);
+            h.update(self.counter.to_be_bytes());
+            let d = h.finalize();
+            self.block.copy_from_slice(&d);
+            self.counter = self.counter.wrapping_add(1);
+            self.off = 0;
+        }
+        let v = self.block[self.off];
+        self.off += 1;
+        v
+    }
+
+    fn next_u16(&mut self) -> u16 {
+        let lo = self.take_byte() as u16;
+        let hi = self.take_byte() as u16;
+        (hi << 8) | lo
+    }
 }
 
 #[cfg(test)]
