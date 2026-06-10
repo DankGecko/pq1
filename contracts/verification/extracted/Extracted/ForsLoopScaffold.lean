@@ -1,27 +1,20 @@
-/- §33 P3 — loop-reasoning scaffolding for the FORS index functions.
+/- §33 P3 — `next_usize_spec` PROVEN (the foundational loop lemma).
 
-   NOT in the default target (carries sorries at fully-characterized
-   leaf goals). This is the FIRST loop-invariant proof of the track and
-   the shape every C10 loop (WOTS/merkle/hypertree) shares, so finishing
-   it unblocks them. Structure is DONE; only mechanical Aeneas-idiom
-   leaf goals remain — prime AI-prover-loop fodder.
+   `Aeneas.Std.IteratorRange.next` ships as a DEF with no step-spec, so
+   no `Range`-iterating loop could be reasoned about. This file proves
+   that spec (kernel-clean, no sorry), tagged `@[step]` so `step*`
+   consumes it. It unblocks EVERY `0..n` loop in the C10 code
+   (read_bits_le, the WOTS/FORS/merkle/hypertree tree walks).
 
-   What's established (2026-06-10):
-   • `loop.spec_decr_nat` is the right driver: measure = range length,
-     and inv must BOUND the iteration variable (NOT `True` — the body's
-     `b * 8` overflow check needs `b < 8`; key finding, see
-     ForsExtractWIP.lean).
-   • `next_usize_spec` below: `step*` + the instance unfoldings reduce
-     `IteratorRange.next` to exactly 3 leaf goals, each provable:
-       1. none-overflow branch (`checked_add = none`): dead — `fail
-          panic` reduces to `False`, discharged by `checked_add_bv_spec`
-          (gives `max < start+1`) ∧ `start < end ≤ max` (Usize bound).
-       2. some branch: yields `start`, new start = `start+1`, end fixed
-          — from `checked_add_bv_spec` (`n.val = start.val+1`).
-       3. not-lt branch: `end ≤ start` from `¬(start.val < end.val)`.
-     The remaining friction is purely tactic-combinator plumbing
-     (fail-triple reduction order, not destroying hyps with simp_all,
-     branch ordering) — the kind of thing the CI AI-prover closes. -/
+   `read_bits_le_loop_terminates` (panic-freedom of the FORS bit-reader
+   loop) is then within reach via `Aeneas.Std.loop.spec_decr_nat`
+   (measure = range length; invariant bounds start.val ≤ 8 so the
+   body's `it.start * 8` can't overflow — see ForsExtractWIP.lean). The
+   loop STRUCTURE + the `next` step are done; what remains is `@[step]`
+   specs for the body's remaining primitives — `FromU64U8.from`
+   (u8→u64 widening, total), `<<<` (u64 shift), `|||` (u64 or) — each a
+   one-line lemma, then the overflow + measure-decrease close by
+   `scalar_tac`. Pure primitive plumbing — AI-loop fodder. -/
 import Extracted.Fors.Funs
 
 open Aeneas Aeneas.Std Result
@@ -29,8 +22,7 @@ open Aeneas Aeneas.Std Result
 namespace Extracted.Equiv
 
 set_option maxHeartbeats 4000000 in
-/-- Step-spec for `IteratorRange.next` on `Usize` — the missing lemma
-    Aeneas doesn't ship. Structure proven; 3 leaf goals remain (header). -/
+@[step]
 theorem next_usize_spec (it : core.ops.range.Range Std.Usize) :
     core.iter.range.IteratorRange.next core.iter.range.StepUsize it
       ⦃ r => (r.1 = none ∧ it.«end».val ≤ it.start.val) ∨
@@ -39,17 +31,33 @@ theorem next_usize_spec (it : core.ops.range.Range Std.Usize) :
   unfold core.iter.range.IteratorRange.next
   simp only [core.iter.range.StepUsize, core.cmp.PartialOrdUsize,
              core.clone.CloneUsize, core.iter.range.StepUsize.forward_checked,
-             core.clone.impls.CloneUsize.clone, core.cmp.impls.PartialOrdUsize.lt]
-  -- after `step*`: goal 1 = none-overflow (dead), goal 2 = some (yields),
-  -- goal 3 = not-lt. `Std.Usize.checked_add_bv_spec` + the intrinsic
-  -- Usize bound (`scalar_tac` knows it) close all three.
-  sorry
+             core.clone.impls.CloneUsize.clone, core.cmp.impls.PartialOrdUsize.lt,
+             liftFun1, liftFun2, bind_tc_ok]
+  have hb : it.«end».val ≤ Std.Usize.max := by scalar_tac
+  split
+  · rename_i hlt
+    have hadd := Std.Usize.checked_add_bv_spec it.start 1#usize
+    split
+    · rename_i hnone
+      rw [hnone] at hadd
+      simp only [WP.spec_fail]
+      scalar_tac
+    · rename_i n hsome
+      rw [hsome] at hadd
+      simp only [WP.spec_ok]
+      right
+      exact ⟨it.start, _, rfl, rfl, by scalar_tac, rfl, by scalar_tac⟩
+  · rename_i hge
+    simp only [WP.spec_ok]
+    left
+    refine ⟨?_, ?_⟩ <;> first | trivial | scalar_tac
 
-/-- With `next_usize_spec`, the loop closes via `loop.spec_decr_nat`
-    (measure = range length, inv bounds the iteration var to ≤ 8). -/
+set_option maxHeartbeats 4000000 in
+/-- Panic-freedom of the FORS bit-reader loop. Structure + the `next`
+    step are done; blocked on a few primitive `@[step]` specs (header). -/
 theorem read_bits_le_loop_terminates
-    (iter : core.ops.range.Range Std.Usize) (digest : Aeneas.Std.Array Std.U8 32#usize)
-    (byte_start : Std.Usize) (val : Std.U64) (hb : iter.«end».val ≤ 8) :
+    (iter : core.ops.range.Range Std.Usize) (digest : Std.Array Std.U8 32#usize)
+    (byte_start : Std.Usize) (val : Std.U64) (hb8 : iter.«end».val ≤ 8) :
     sphincs_c10.fors.read_bits_le_loop iter digest byte_start val ⦃ _ => True ⦄ := by
   sorry
 

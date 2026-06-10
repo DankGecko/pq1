@@ -14,7 +14,7 @@
    this needs real loop reasoning — the documented "loop invariants are
    the human-reviewed residue" P3 work. Path (next session / AI-loop):
 
-     1. Prove a step-spec for `fors.read_bits_le_loop` via
+     1. [DONE 2026-06-10] step-spec for `fors.read_bits_le_loop` via
         `Aeneas.Std.loop.spec_decr_nat` with
           measure := fun (iter, _) => iter.end - iter.start
           inv    := fun _ => True            -- panic-freedom only

@@ -2020,15 +2020,22 @@ compiler/silicon/FI/SCA — those stay with `tools/sca` + silicon validation.
             `extract_ht_index` is security-critical — the `ht_idx` source
             of the CWE-347 FORS-position binding (= Yul
             `and(shr(143, digest), 0x3FFFF)`).
-      - [ ] **First loop-invariant proof** — `read_bits_le_loop`
-            step-spec via `Aeneas.Std.loop.spec_decr_nat` (measure =
-            range length, inv = True for panic-freedom). Needs an
-            `IteratorRange.next`-decreases lemma (Aeneas ships the def,
-            no step-spec). Then `extract_ht_index`/`extract_fors_indices`
-            panic-freedom close. Full plan in
-            `Extracted/ForsExtractWIP.lean`. This is the FIRST real
-            loop-reasoning proof — unblocks the WOTS/merkle/hypertree
-            loops that all share the shape.
+      - [x] **Foundational loop lemma `next_usize_spec` PROVEN
+            2026-06-10** (`Extracted/ForsLoopScaffold.lean`, axioms =
+            [propext, Classical.choice, Quot.sound], `@[step]`-tagged).
+            `Aeneas.Std.IteratorRange.next` ships as a DEF with NO
+            step-spec, so no `Range`-loop could be reasoned about; this
+            supplies it. Unblocks EVERY `0..n` loop in the C10 code
+            (read_bits_le + the WOTS/FORS/merkle/hypertree tree walks).
+            Proof: unfold + liftFun/bind_tc_ok simp + split on lt/
+            checked_add, 3 leaf goals closed via `checked_add_bv_spec`
+            + the intrinsic Usize bound.
+      - [~] **`read_bits_le_loop` panic-freedom** — loop STRUCTURE +
+            the `next` step done (`loop.spec_decr_nat`, measure = range
+            length, inv bounds `start.val ≤ 8` so `it.start * 8` can't
+            overflow). Remaining: `@[step]` specs for the body's
+            `FromU64U8.from` / `<<<` / `|||` primitives (one-liners),
+            then `scalar_tac` closes. Pure plumbing — AI-loop fodder.
       - [ ] Functional spec of `extract_ht_index` (= the bit extraction)
             via the loop accumulator invariant; then vendor `Spec/Fors`
             + the `firmware_extract_ht_index_matches_vendored` bridge
