@@ -8,8 +8,10 @@
 import Extracted.AdrsEquiv
 import Extracted.UserOpEquiv
 import Extracted.UserOpEquivByteLayout
+import Extracted.SpecBridge
 
 #print axioms Extracted.Equiv.make_adrs_spec
 #print axioms Extracted.Equiv.set_chain_index_spec
 #print axioms Extracted.Equiv.compute_user_op_hash_terminates
 #print axioms Extracted.Equiv.compute_user_op_hash_spec
+#print axioms Extracted.Equiv.firmware_make_adrs_matches_vendored

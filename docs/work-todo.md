@@ -1943,13 +1943,34 @@ compiler/silicon/FI/SCA — those stay with `tools/sca` + silicon validation.
             **P0 VERDICT: GO.** The extract-a-model fallback was NOT
             needed: the real crate extracts whole, with all refactors
             semantics-preserving and test-pinned.
-- [ ] **P1 — harness online.** `contracts/verification/extracted/` as a separate
-      lake project pinned to Aeneas's toolchain (bridge to SphincsCVerify when
-      versions align). Adapted Lean Squad GitHub agentic workflow (scheduled
-      sorry-closer, iterative error-feedback, dependency-closure context only);
-      Aristotle MCP fallback; `plausible` gate on every new spec/theorem
-      statement BEFORE proof effort; extend no-sorry + axiom-lint CI to
-      `extracted/`.
+- [~] **P1 — harness online.** Lake project + bridge DONE; AI-loop pending.
+      - [x] `contracts/verification/extracted/` lake project (P0).
+      - [x] **Version bridge to SphincsCVerify — DONE 2026-06-10.** The
+            two projects can't share a lake build (SphincsCVerify is
+            DELIBERATELY mathlib-free on v4.22.0; extracted needs
+            mathlib + v4.30.0-rc2 for Aeneas), so a literal `import` is
+            out. Resolved by VENDORING the spec verbatim
+            (`Extracted/SpecVendored.lean` — ByteVec/ofU32BE/ofU64BE/
+            Adrs.make/setChainIndex port cleanly, mathlib-free) and
+            PROVING the §33 local restatements equal it
+            (`Extracted/SpecBridge.lean`: `specMakeAdrs_eq_vendored`).
+            Composed corollary `firmware_make_adrs_matches_vendored`
+            (axioms = [propext, Classical.choice, Quot.sound], no
+            content axiom): **the extracted firmware `make_adrs`
+            produces exactly the bytes the on-chain ADRS spec defines,
+            for ALL inputs** — the local restatement is no longer
+            "trust me, it's 1:1". Vendored-copy fidelity is CI-guarded
+            (`make verify-spec-vendored-fidelity` →
+            `scripts/check_vendored_spec.py`, drift-tested: catches a
+            single bit-shift edit). Residual trust: Aeneas translation +
+            the small auditable vendored diff.
+      - [ ] Extend the bridge to FORS/WOTS/hash specs as those modules
+            get extracted (P3) — same vendor+prove+guard pattern.
+      - [ ] Adapted Lean Squad GitHub agentic workflow (scheduled
+            sorry-closer, iterative error-feedback, dependency-closure
+            context); Aristotle MCP fallback; `plausible` gate on every
+            new spec/theorem statement BEFORE proof effort. (Becomes
+            high-value once P3 produces a standing pool of open goals.)
 - [~] **P2 — parsers + aa.** IN PROGRESS — first firmware-side theorem landed.
       Feasibility probe 2026-06-10 was GO (3 errors / 41 fns, all `userop.rs`).
       - [x] **`aa` extracts clean** (2026-06-10). Refactors, test-pinned

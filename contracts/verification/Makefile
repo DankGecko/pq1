@@ -108,3 +108,10 @@ extract-aa-userop:
 	@diff -u $(EXTRACTED_DIR)/Extracted/UserOp/Funs.lean /tmp/pqsigner-extract/uout/Funs.fixed.lean \
 	  && echo "OK: committed userop extraction matches the current Rust" \
 	  || { echo "DRIFT: aa/userop.rs changed — re-extract, re-prove, re-commit"; exit 1; }
+
+# §33 P1 — guard that Extracted/SpecVendored.lean stays a faithful copy of
+# the SphincsCVerify source it vendors (the version bridge's trust rests on
+# the verbatim transcription). Compares the named ByteVec/Adrs definitions.
+.PHONY: verify-spec-vendored-fidelity
+verify-spec-vendored-fidelity:
+	@python3 scripts/check_vendored_spec.py
