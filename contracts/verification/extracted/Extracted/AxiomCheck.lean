@@ -1,0 +1,11 @@
+/- Axiom-discipline check (extends the SphincsCVerify no-sorry/axiom-lint
+   culture to the extracted-code project; CI wiring tracked in §33 P1).
+
+   Both P0 theorems close over EXACTLY the Lean kernel built-ins
+   [propext, Classical.choice, Quot.sound] — verified 2026-06-10.
+   In particular NO `sorryAx`: the sorries inside the Aeneas support
+   library (Aeneas/Std/Slice.lean etc.) are not on our proof paths. -/
+import Extracted.AdrsEquiv
+
+#print axioms Extracted.Equiv.make_adrs_spec
+#print axioms Extracted.Equiv.set_chain_index_spec
