@@ -4,7 +4,7 @@
 **Component:** `circuits/lib/format.circom :: FormatTrimmedAmount`
 (used by `circuits/cowswap/eip712_order/circuit.circom`)
 **Found:** 2026-06-10 (ZK clear-signing soundness audit)
-**Status:** **RESOLVED 2026-06-10** (cowswap fully closed; aave sibling source-fixed, VK-regen pending — see Resolution)
+**Status:** **RESOLVED 2026-06-10** (both cowswap AND aave fully closed — circuit bound + native guard + regenerated VKs on both paths)
 **PoC:** `docs/cowswap-zk-poc/forge_amount_witness.py`
 **Negative test:** `docs/cowswap-zk-poc/run_overflow_negative_test.sh`
 
@@ -52,22 +52,36 @@ amount forgery can no longer pass:
      `FormatTrimmedAmount` harness and asserts the forged witness now FAILS
      witness generation while the benign one succeeds.
 
-### Aave residual (ship-blocker, tracked)
+### Aave path — also fully closed (5/6)
 
-`FormatAmount` source is hardened (item 1), but the aave VK was **not**
-regenerated in this change: regenerating it would invalidate the upstream
-ZKlarity proof embedded in the host Groth16 tests (`zk-test`,
-`secure/src/zk_under_test/pure_tests.rs`, `secure/src/zk/test_vectors.rs`,
-`secure/src/zk/vk_data.rs`), and re-deriving that proof requires recomputing the
-aave witness against the new circuit via the external `../zk_clear_signing`
-project + re-running `tools/export_zk_constants.js`. Until that is done, the
-on-device aave clear-sign VK still corresponds to the *unbounded* circuit, and
-the cowswap-specific native bound (item 2) does **not** cover the aave display
-path. **Before production, regenerate the aave VK against the fixed
-`formatting.circom` and re-pin** (`tools/build_vks.sh aave_v3_pool` — aave fits
-pot14 — then regenerate its proof vector + `cargo run -p dbgen`). The aave
-overflow is the "Related" item below; it is not a demonstrated exploit in a
-shipping flow, which is why it is tracked rather than blocking this fix.
+The Aave clear-sign path (`verify_and_bind_trailer_v1`, wired into
+`cmd_sign_userop` + the batch path) has the identical class and is now closed
+the same way as cowswap:
+
+5. **Aave VK regenerated against the fixed circuit.** `tools/build_vks.sh
+   aave_v3_pool` rebuilt the VK from the hardened `formatting.circom` (6,538
+   constraints, fits pot14), re-pinned `circuits/aave_v3/circuit_final.zkey` +
+   `secure/data/vks/aave_v3_pool.vk.bin` (`sha256 927bc1b7…`). The host Groth16
+   test vectors were regenerated against the new key: the Aave supply witness
+   was recomputed from `../zk_clear_signing/witness_supply.json` with the new
+   wasm, re-proved, and `vk_data.rs` (via `vk_bin_to_rust.js`) + `test_vectors.rs`
+   (via `export_zk_constants.js`) re-pinned. `cargo run -p zk-test` verifies the
+   fresh proof against the new VK and the Poseidon KATs still pass. `dbgen`
+   folded both new VKs → `VK_DB_ROOT` `3cda5293…` → `e2f9e2ed…`.
+
+6. **Native bound on the v1 path.** `verify_and_bind_trailer_v1`
+   (`secure/src/zk/mod.rs`) now rejects `calldata[36..68]` (the uint256 `amount`,
+   ABI arg #2 for every Aave Pool action: supply/borrow/repay/withdraw) if it is
+   `≥ 2¹⁹⁰`, reusing the same `amount_within_field_safe_bound` helper, before
+   trusting the ZK-bound readable. Safe for the only other v1 protocol, cowswap
+   `setPreSignature`, whose arg-#2 slot is the `signed` bool (≤ 1). Tests:
+   `negative_v1_amount_slot_rejects_huge_aave_amount` /
+   `positive_v1_amount_slot_accepts_setpresig_bool_and_real_amount` in
+   `extra_tests.rs`.
+
+(The Aave `FormatAmount` uses the identical `Num2Bits(190)` primitive proven by
+the cowswap circuit-level negative test; only the recomposition differs — no
+`remainder` term — which does not affect the range-check rejection.)
 
 ## TL;DR
 

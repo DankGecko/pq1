@@ -663,3 +663,45 @@ fn frozen_field_safe_bits_is_190() {
     // regenerate the VK.
     assert_eq!(RAW_AMOUNT_FIELD_SAFE_BITS, 190);
 }
+
+// ---------------------------------------------------------------------------
+// v1 clear-sign amount-slot bound (zk/mod.rs verify_and_bind_trailer_v1)
+// ---------------------------------------------------------------------------
+//
+// The v1 native guard bounds calldata[36..68] (ABI arg #2). For the Aave
+// Pool family that slot is the uint256 `amount`; for cowswap
+// setPreSignature it is the `signed` bool. These tests pin that the
+// offset choice catches the forgery for aave-shaped calldata while leaving
+// the setPreSignature shape unaffected. (The full verify_and_bind_trailer_v1
+// path is cfg(not(test))-gated behind crate::zk; here we exercise the exact
+// slot + bound it applies.)
+
+#[test]
+fn negative_v1_amount_slot_rejects_huge_aave_amount() {
+    // Aave supply(asset, amount, onBehalfOf, referralCode): selector(4) +
+    // asset(32) → amount at bytes 36..68. Plant the PoC 254-bit amount.
+    let mut calldata = [0u8; 164];
+    calldata[0..4].copy_from_slice(&[0x61, 0x7b, 0xa0, 0x37]); // some selector
+    calldata[36..68].copy_from_slice(&POC_FORGED_SELL_AMOUNT);
+    let slot: &[u8; 32] = calldata[36..68].try_into().unwrap();
+    assert!(
+        !amount_within_field_safe_bound(slot),
+        "a huge aave amount in calldata arg #2 must fail the v1 bound"
+    );
+}
+
+#[test]
+fn positive_v1_amount_slot_accepts_setpresig_bool_and_real_amount() {
+    // setPreSignature(bytes orderUid, bool signed): arg #2 (bytes 36..68)
+    // is the `signed` bool — must pass.
+    let mut setpresig = [0u8; 164];
+    setpresig[67] = 1; // signed = true (32-byte word = 1)
+    let s1: &[u8; 32] = setpresig[36..68].try_into().unwrap();
+    assert!(amount_within_field_safe_bound(s1), "setPreSignature signed bool must pass");
+
+    // A realistic aave amount (1000 USDC = 1_000_000_000 raw 6-dp units).
+    let mut supply = [0u8; 164];
+    supply[60..68].copy_from_slice(&1_000_000_000u64.to_be_bytes());
+    let s2: &[u8; 32] = supply[36..68].try_into().unwrap();
+    assert!(amount_within_field_safe_bound(s2), "realistic aave amount must pass");
+}

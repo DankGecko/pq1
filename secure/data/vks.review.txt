@@ -7,7 +7,7 @@ non-secure world supplies (vk_bytes, merkle_proof) and the secure
 world re-derives the leaf hash from (chain_id, contract, vk_bytes)
 and walks the proof up to this root.
 
-Merkle root (VK_DB_ROOT) = 3cda52938b2646fc36a925db4fe2fcab74417ccc6c3086a59314b5de15798767
+Merkle root (VK_DB_ROOT) = e2f9e2edbffd696f7332306e9c351316e08d558937b768008a5cc1acc48bd563
 
 This file is a build-traceability artifact. It records which
 (chain_id, contract, sha256(vk)) triples were folded into the
@@ -18,7 +18,7 @@ VK_DB_ROOT in secure flash → Merkle proof → Groth16 verification.
 No on-chain comparison is performed, ever.
 
 aave-v3-pool-v1
-  sha256(vk) = 8bb8ab690f8bf8fef5ea905b7fb7f028ea776080e3897f4aad93465803ae14cd
+  sha256(vk) = f59cff6e78d960b346c4888a8016f7f06b9947245f6040075e5740c8a4271fc8
   chain      1, contract 0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2 (Aave V3 Pool, Mainnet)
   chain   8453, contract 0xA238Dd80C259a72e81d7e4664a9801593F98d1c5 (Aave V3 Pool, Base)
   chain  42161, contract 0x794a61358D6845594F94dc1DB02A252b5b4814aD (Aave V3 Pool, Arbitrum)

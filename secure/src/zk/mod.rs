@@ -197,6 +197,30 @@ pub fn verify_and_bind_trailer_v1(
         return None;
     }
 
+    // Native field-overflow guard (defense-in-depth — mirrors the cowswap
+    // step 1b; see docs/VULN-cowswap-zk-amount-overflow.md).
+    //
+    // The amount-formatting v1 circuit (Aave Pool: supply/borrow/repay/
+    // withdraw) renders the uint256 `amount`, which is ABI arg #2 at
+    // calldata bytes 36..68, via `FormatAmount`. That formatter multiplies
+    // the amount by a scale factor in the BLS12-381 scalar field; a
+    // field-overflow forgery could make the recomposition wrap r so the
+    // device displays a benign amount while signing a huge one. The fixed
+    // circuit range-checks the amount to 190 bits; we re-assert the SAME
+    // 190-bit bound natively here so the class is closed on-device even
+    // against a future circuit regression — independent of, and redundant
+    // with, the in-circuit `Num2Bits(190)`.
+    //
+    // This is safe for the only other current v1 protocol, cowswap
+    // `setPreSignature(bytes orderUid, bool signed)`: its arg-#2 slot is
+    // the `signed` bool (≤ 1), far below 2^190. A future v1 clear-sign
+    // protocol whose arg #2 is legitimately ≥ 2^190 (not an amount) would
+    // need to revisit this gate.
+    let amount_slot: &[u8; 32] = calldata_bytes[36..68].try_into().ok()?;
+    if !crate::tx::eip712::cowswap::amount_within_field_safe_bound(amount_slot) {
+        return None;
+    }
+
     // Calldata binding: attested prefix must equal what the tx will
     // actually execute, and the rest of the attested slot must be
     // zero-padded (the circuit right-pads to MAX_CALLDATA).
