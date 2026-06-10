@@ -1863,21 +1863,41 @@ compiler/silicon/FI/SCA — those stay with `tools/sca` + silicon validation.
         divergence, discharged by running the suite under the cfg).
       - `make_adrs`/`set_chain_index` + ALL of wots/fors/merkle/params/hash
         extract clean — the spike target is unblocked.
-      - 3 error sites remain: (1) `SigningKey::sign_with_shuffle`
-        (lib.rs:155 — `fn(u8)` arrow in signature; charon `--exclude` name
-        patterns `sphincs_c10::SigningKey::sign_with_shuffle` AND
-        `…::{sphincs_c10::SigningKey}::…` both failed to match — likely
-        needs the cfg-gate treatment like the hypertree wrapper, with a
-        cfg'd test-only no-progress entry so the shuffle byte-equality
-        oracle still compiles under the cfg); (2) `fisher_yates` while loop
-        (shuffle.rs:114 — "join of nested borrows" persists even with
-        manual swap; suspect `&mut [u8]` param + local `&mut` rng borrow in
-        one loop; next try: operate on an owned `[u8; 64]` copy, write back
-        after); (3) hypertree auth-path nested while (line ~210,
-        "Unimplemented"; the SAME shape one loop earlier now passes —
-        suspect the triple-nested `[[ [u8;N]; A]; K-1]` indexing; next try:
-        flatten to a helper fn per level). Aeneas local-opaque types are
+      - Refactors + research report committed/pushed: `c1bfdb8` on
+        `sca-fors-gap-fi-hardening`. Lesson: Aeneas local-opaque types are
         "Unimplemented" — `--opaque` works only for FOREIGN crates.
+
+      **P0 remainder (next session picks up here):**
+      - [ ] Clear error site 1/3 — `SigningKey::sign_with_shuffle`
+            (lib.rs:155, `fn(u8)` arrow in signature). Charon `--exclude`
+            name patterns `sphincs_c10::SigningKey::sign_with_shuffle` and
+            `…::{sphincs_c10::SigningKey}::…` both fail to match; apply the
+            same `lean_extract` cfg-gate as the hypertree wrapper, plus a
+            cfg'd test-only no-progress entry point so the shuffle
+            byte-equality oracle still compiles under the cfg.
+      - [ ] Clear error site 2/3 — `fisher_yates` while loop
+            (shuffle.rs:114, "join of nested borrows", persists with manual
+            swap; suspect `&mut [u8]` param + local `&mut` rng in one loop).
+            Next try: loop over an owned `[u8; 64]` copy, write back after.
+      - [ ] Clear error site 3/3 — hypertree auth-path nested while
+            (~line 210, "Unimplemented"; the same shape one level shallower
+            passes — suspect the `[[[u8;N];A];K-1]` triple indexing).
+            Next try: flatten via a per-level helper fn.
+      - [ ] Zero-error extraction of the full crate (re-run the §-log
+            command pair; keep both cfg-shape test runs green).
+      - [ ] Scaffold `contracts/verification/extracted/` lake project
+            (Aeneas lib from `~/.local/share/pqsigner-lean/backends/lean`,
+            Lean v4.30.0-rc2 — separate from SphincsCVerify's v4.22.0).
+      - [ ] Hand-write `FunsExternal.lean` SHA-256 model (same `Spec.sha256`
+            symbol as bridge axiom A1; KAT-check it).
+      - [ ] State + prove `address.make_adrs ↔ Spec.Adrs.make` and
+            `set_chain_index ↔ Adrs.setChainIndex` (the P0 go/no-go
+            theorems; try `grind`/`simp` first, then a Claude proof loop).
+      - [ ] File the upstream Aeneas issue for the local-opaque-type
+            "Unimplemented" + the `--exclude` impl-method matcher misses
+            (the RV paper's workaround #1: fix it upstream).
+      - [ ] Tick P0 done + add Completion Log row; decision note on
+            extract-a-model fallback NOT being needed (if it holds).
 - [ ] **P1 — harness online.** `contracts/verification/extracted/` as a separate
       lake project pinned to Aeneas's toolchain (bridge to SphincsCVerify when
       versions align). Adapted Lean Squad GitHub agentic workflow (scheduled
