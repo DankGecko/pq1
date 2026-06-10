@@ -19,17 +19,23 @@ import {OracleSPHINCSVerifier} from "./OracleSPHINCSVerifier.sol";
 ///         plus the success-path postconditions (deployment at the predicted
 ///         CREATE2 address, owners installed exactly as supplied).
 ///
-///         SYMBOLIC ENVELOPE: slot-0 key halves, chainId, and the factory
-///         signature bytes are fully symbolic; the verifier is the GENERIC
+///         SYMBOLIC ENVELOPE — stated exactly: in the central iff rule,
+///         chainId and every factory-signature byte (incl. the empty/4008
+///         length shapes) are fully symbolic; the verifier is the GENERIC
 ///         (input-dependent uninterpreted) `OracleSPHINCSVerifier`, so the
 ///         digest preimage and signature bytes handed to the verifier are
-///         bound byte-for-byte. The master key halves are swept over
-///         concrete representatives: they determine the CREATE2 salt, and a
-///         symbolic salt would make the deployment address symbolic, which
-///         the symbolic engine cannot deploy to (`NotConcreteError`) — the
-///         master halves otherwise only flow into the verifier arguments
-///         (still bound: concrete equality) and the stored owner bytes
-///         (asserted below).
+///         bound byte-for-byte. BOTH key pairs are CONCRETE in the iff
+///         rule: the master halves because they determine the CREATE2 salt
+///         (a symbolic salt makes the deploy address symbolic —
+///         `NotConcreteError`), and the slot-0 halves because a symbolic
+///         owner half makes the engine havoc the proxy's owner storage on
+///         the phantom already-deployed CREATE2 fork. The key-dependent
+///         precondition conjuncts (N-mask × 2, duplicate) are instead each
+///         witnessed by a dedicated reject rule below, and the slot-0
+///         halves ARE fully symbolic in the already-deployed rule (where
+///         no deploy fork exists). The iff over the key space is therefore
+///         concrete-point + per-conjunct witnesses, NOT a symbolic ∀ —
+///         the honest residual of A3.3's discharge.
 ///
 ///         Run: `make -C contracts/verification verify-bytecode`.
 contract HalmosFactory is SymTest, Test {

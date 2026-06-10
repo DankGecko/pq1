@@ -12,16 +12,18 @@
 #    Every `check_*` rule that passes is a proof over ALL inputs (modulo the
 #    SMT solver + the SHA-256-as-uninterpreted-function abstraction = A1).
 #
-# Runs BOTH compiler profiles: `default` (runs=200, the dev/test build the
-# symbolic suite executes against) and `deploy` (runs=999999, the production
-# build). The codehash + immutable-lemma certification runs under both so the
-# discharge holds for the production bytecode, not just the dev bytecode. The
-# (slow) symbolic suite runs once on the default profile; the wallet/factory
-# CONTROL FLOW is identical across profiles (only the optimiser's instruction
-# selection differs, which the codehash + immutable lemma already pin), so a
-# single symbolic run plus the cross-profile codehash certification covers
-# both. Set PQ1_HALMOS_BOTH_PROFILES=1 to additionally re-run the symbolic
-# suite under the deploy profile.
+# Runs BOTH compiler profiles: `default` (runs=200) and `deploy`
+# (runs=999999, the production build). For EACH profile we (1) certify the
+# compiled runtime codehashes match PINNED_CODEHASHES.md + the immutable-
+# window lemma, then (2) symbolically execute the FULL rule suite against
+# that profile's bytecode. So the discharge holds for the production
+# bytecode directly — not by a "control flow is identical across profiles"
+# argument. (The immutable-window lemma still earns its keep WITHIN a
+# profile: it transports each profile's pinned instance to every other
+# instance of the same artifact, i.e. across differing constructor
+# immutables — the harness verifier/EntryPoint addresses vs a real
+# deployment.) Set PQ1_HALMOS_SKIP_DEPLOY_SYMBOLIC=1 to skip the (slow)
+# deploy-profile symbolic re-run when iterating locally.
 #
 # Exit non-zero if any rule fails or errors.
 set -euo pipefail
@@ -53,20 +55,23 @@ run_symbolic() {
   echo "==> [2/2] Halmos symbolic execution of the deployed bytecode [profile=${profile}]"
   FOUNDRY_PROFILE="${profile}" forge build --ast >/dev/null 2>&1
   FOUNDRY_PROFILE="${profile}" halmos \
-    --match-contract 'Halmos(ValidateUserOpEquiv|ValidateUserOp|Execute|Verifier|Factory)' \
+    --match-contract 'Halmos(ValidateUserOpEquiv|ValidateUserOp|ExecuteEquiv|Execute|MultiOwnable|Verifier|Factory)' \
     --solver "${SOLVER}" --loop 4 \
-    | tee /tmp/pq1-halmos-run.txt | grep -E "Running|\[PASS\]|\[FAIL\]|\[ERROR\]|Symbolic test result"
+    | tee "/tmp/pq1-halmos-run-${profile}.txt" | grep -E "Running|\[PASS\]|\[FAIL\]|\[ERROR\]|Symbolic test result"
 
-  if grep -qE "\[FAIL\]|\[ERROR\]" /tmp/pq1-halmos-run.txt; then
+  if grep -qE "\[FAIL\]|\[ERROR\]" "/tmp/pq1-halmos-run-${profile}.txt"; then
     echo "==> FAIL: at least one Halmos rule did not pass [profile=${profile}]"
     exit 1
   fi
   local passes
-  passes=$(grep -c "\[PASS\]" /tmp/pq1-halmos-run.txt || true)
-  echo "==> PASS: ${passes} bytecode rules verified [profile=${profile}] (A3.1 gates / A3.2 equiv / A3.3)"
+  passes=$(grep -c "\[PASS\]" "/tmp/pq1-halmos-run-${profile}.txt" || true)
+  echo "==> PASS: ${passes} bytecode rules verified [profile=${profile}]"
+  echo "    (A3.1 verifier gates / A3.2 validate equiv / A3.2-exec execute equiv / A3.3 factory iff / A3.4 owner table)"
 }
 
 run_symbolic default
-if [ "${PQ1_HALMOS_BOTH_PROFILES:-0}" = "1" ]; then
+if [ "${PQ1_HALMOS_SKIP_DEPLOY_SYMBOLIC:-0}" = "1" ]; then
+  echo "==> NOTE: skipping deploy-profile symbolic re-run (PQ1_HALMOS_SKIP_DEPLOY_SYMBOLIC=1)"
+else
   run_symbolic deploy
 fi

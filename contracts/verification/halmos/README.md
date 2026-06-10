@@ -8,15 +8,23 @@ bytecode**, so each passing `check_*` rule is a proof for *all* inputs in its
 envelope (not the 10 concrete KAT vectors), modulo the SMT solver and the
 SHA-256-as-uninterpreted-function abstraction (= axiom A1).
 
-## What is proved (25 rules, all PASS)
+## What is proved (37 rules, all PASS — on BOTH compiler profiles)
 
 | Harness (`test/halmos/`) | Axiom surface | Rules |
 |---|---|---|
 | `HalmosValidateUserOpEquiv.t.sol` | A3.2 — **pointwise equivalence** of `validateUserOp` to the Lean model | 3 |
 | `HalmosValidateUserOp.t.sol` | A3.2 — `validateUserOp` per-property rules | 8 |
-| `HalmosExecute.t.sol` | A3.2 — `execute*WithOffchainCount` (the money-mover) | 6 |
+| `HalmosExecuteEquiv.t.sol` | A3.2-exec — **pointwise equivalence** of `execute{,Batch}WithOffchainCount` to the Lean `Execute` model, **symbolic ∀ `ownerIndex`** | 5 |
+| `HalmosExecute.t.sol` | A3.2-exec — `execute*WithOffchainCount` per-property rules | 6 |
+| `HalmosMultiOwnable.t.sol` | A3.4 — `addOwnerBytes`/`removeOwnerAtIndex`/`initialize` pointwise + `ownerAtIndex` read parity (replaces stale Certora) | 7 |
 | `HalmosVerifier.t.sol` | A3.1 — `SPHINCsC10Asm.verify` **input gates** | 3 |
 | `HalmosFactory.t.sol` | A3.3 — `createAccount` ⟺ `createAccountPrecondition` | 5 |
+
+The full suite is executed against **both** the `default` (runs=200) and
+`deploy` (runs=999999, production) profile bytecode — the production codehash
+is symbolically discharged directly, not transported by a control-flow
+argument. The emitted external CALL's faithful byte-delivery on the execute
+path is axiom **A4** (EVM executes per spec), not A3.2-exec.
 
 ### A3.2 — full pointwise equivalence (the headline strengthening)
 
@@ -27,9 +35,15 @@ Solidity transcription of the Lean model
 (`LeanValidateUserOpModel.sol` ↔ `Wallet/ValidateUserOp.lean`), over a
 **symbolic envelope** —
 
-* every byte of the 4128-byte signature wrapper symbolic (ownerIndex word,
-  offset word, innerLen word, 4008 sig bytes, 24 pad bytes), plus a sweep over
-  wrong total lengths;
+* signature-wrapper bytes `[32..4128)` symbolic (offset word, innerLen word,
+  4008 sig bytes, 24 pad bytes), plus a sweep over wrong total lengths. The
+  wrapper `ownerIndex` word `[0..32)` is six **concrete class
+  representatives** — a stated engine ceiling, *not* a modelling choice:
+  `validateUserOp` reads `ownerAtIndex(ownerIndex)`, a `mapping(uint=>bytes)`
+  getter whose dynamic-length return Halmos cannot allocate for a symbolic
+  key. (The EXECUTE path achieves a genuinely **symbolic ∀ `ownerIndex`** —
+  see A3.2-exec below — because it reads only word-typed counters + the
+  transient credit, never the bytes getter.)
 * `callData` symbolic at lengths `{0,3,4,35,36,68}`; `initCode` /
   `paymasterAndData` symbolic at `{0,32}` (empty exercises the
   `sha256("")` path); all scalar UserOp fields, `userOpHash`,
@@ -44,6 +58,34 @@ wallet hands the verifier different bytes than the model yields a
 counterexample — a pass therefore also certifies the exact verifier-call
 arguments, byte-for-byte. This is strictly more general than instantiating the
 deployed verifier (the deployed verifier is *one* admissible interpretation).
+
+### A3.2-exec — execute pointwise equivalence (symbolic ∀ ownerIndex)
+
+`HalmosExecuteEquiv.t.sol` proves `executeWithOffchainCount` /
+`executeBatchWithOffchainCount` return the **same `(success?, post-storage)`**
+as the Lean `Execute` model (`LeanExecuteModel.sol` ↔ `Wallet/Execute.lean`)
+over a **symbolic `ownerIndex`** (the money path reads only word-typed
+counters + the transient-credit `tload`, so it admits a genuine ∀-index
+sweep), symbolic `newOffchainCount`, symbolic `value`, symbolic `data`, and
+symbolic counters under the combined-cap invariant; the execution credit is
+stamped by a *real* `validateUserOp` call on the same bytecode. The axiom is
+the **success direction** (the only one theft-freedom needs): the Lean model
+is the all-dispatch-succeeds model, so conditioning on the bytecode returning
+`some σ'` restricts to the `callOk≡true` world where the equality holds. The
+atomicity arm (a reverting target reverts the whole execute) and the
+∀-index no-credit-reverts arm are separate rules. The emitted external CALL's
+faithful byte-delivery is **A4**, not A3.2-exec.
+
+### A3.4 — owner table on bytecode (replaces stale Certora)
+
+`HalmosMultiOwnable.t.sol` proves `addOwnerBytes` / `removeOwnerAtIndex` /
+`initialize` pointwise-equal to the Lean `Storage` model (length + N-mask +
+duplicate gates; install/remove/init verbatim), each asserting `ownerAtIndex`
+**read parity** (the A3.4 equality proper) after the mutation, plus
+bootstrap-unremovable (Claim 2) for every `expected`-bytes value and the
+unset-index reject for every index `>= 2`. This replaces the prior Certora
+artifact, which had gone stale (pinned to a PQSmartWallet codehash that no
+longer matched the embedding bytecode, never re-run).
 
 The per-property harnesses (`HalmosValidateUserOp`, `HalmosExecute`) remain as
 the bytecode analogues of the named Lean invariants — non-bypass (I-1) over a
@@ -119,8 +161,8 @@ stop a crash. (The true digest is one admissible interpretation.)
 
 ```bash
 cd contracts/verification
-make verify-bytecode-setup   # clone halmos v0.3.3, apply the patch, install (once)
-make verify-bytecode         # certify codehashes (both profiles) + immutable lemma, then run all 25 rules
+make verify-bytecode-setup   # clone + patch + install the patched halmos (once)
+make verify-bytecode         # certify codehashes (both profiles) + immutable lemma, then run all 37 rules on BOTH profiles
 ```
 
 `run_halmos.sh` first runs `PinnedCodehashes.t.sol` **and**
@@ -129,7 +171,8 @@ make verify-bytecode         # certify codehashes (both profiles) + immutable le
 codehashes equal the pins in `PINNED_CODEHASHES.md` and that each runtime
 differs from its pinned instance only inside the certified immutable windows —
 i.e. the bytecode Halmos executes is the bytecode the Lean `theft_free`
-closure names, on both the dev and production builds — then fails if any
-symbolic rule does not pass. Session output is archived under `sessions/`.
-Set `PQ1_HALMOS_BOTH_PROFILES=1` to additionally re-run the symbolic suite
-under the deploy profile.
+closure names, on both the dev and production builds — then runs the full
+symbolic suite against **each** profile's bytecode and fails if any rule does
+not pass. Session output is archived under `sessions/`. Set
+`PQ1_HALMOS_SKIP_DEPLOY_SYMBOLIC=1` to skip the (slow) deploy-profile symbolic
+re-run during fast local iteration.

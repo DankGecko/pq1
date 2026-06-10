@@ -63,3 +63,11 @@ import SphincsCVerify
 #print axioms SphincsCVerify.Spec.Theorems.every_call_gated_by_verifier
 #print axioms SphincsCVerify.Spec.Theorems.no_call_without_prior_verifier_acceptance
 #print axioms SphincsCVerify.Wallet.TxFlow.callstack_grew_implies_some_verify_true
+
+-- Claim 4, transported to the deployed EXECUTE bytecode (A3.2-exec): a
+-- successful deployed executeWithOffchainCount / executeBatchWithOffchainCount
+-- required the matching validated-owner token on entry. Closure adds
+-- solidityWalletExecute_compiles_correctly (resp. ...Batch...) — the
+-- execute bridge axioms discharged by test/halmos/HalmosExecuteEquiv.t.sol.
+#print axioms SphincsCVerify.Spec.Theorems.deployed_execute_requires_prior_token
+#print axioms SphincsCVerify.Spec.Theorems.deployed_executeBatch_requires_prior_token

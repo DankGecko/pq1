@@ -25,24 +25,37 @@ pinned value below. Any drift fails CI.
 > fcee705a FORS-htIdx value (unchanged by this edit); the factory moved
 > only because it imports the edited wallet into its compilation unit.
 >
-> **Discharge status (updated 2026-06-10).** The A3.* bytecode discharges
-> have now been **run** with a patched Halmos (`halmos/` — see its README;
-> stock 0.3.3 has a SHA-256 precompile sort bug, fixed by a one-line
-> uninterpreted-function-sort patch). 19 symbolic rules PASS over all inputs
-> against these exact codehashes, certified in the same flow by
-> `PinnedCodehashes.t.sol`:
->   * **A3.2 (wallet)** — `discharged-bytecode`: 14 rules (8 validate + 6
->     execute) on `0x43c654…a06a`, incl. non-bypass (I-1 analogue) and the
->     validation-phase cap bump.
->   * **A3.3 (factory)** — `discharged-bytecode`: 2 rules (squat-defence I-8,
->     wrong-chainId) on `0xfa2922…7c3c`.
+> **Discharge status (updated 2026-06-10, strengthened).** The A3.*
+> bytecode discharges are **run** with a patched Halmos (`halmos/` — see its
+> README; stock 0.3.x has a SHA-256 precompile sort bug, fixed by a one-line
+> uninterpreted-function-sort patch). The full symbolic suite PASSES over all
+> inputs against these exact codehashes, certified in the same flow by
+> `PinnedCodehashes.t.sol`, on BOTH profiles:
+>   * **A3.2 (wallet validate)** — `discharged-bytecode`: pointwise
+>     equivalence to the Lean model (`HalmosValidateUserOpEquiv`) + 8
+>     per-property rules (`HalmosValidateUserOp`) on `0x43c654…a06a`, incl.
+>     non-bypass (I-1 analogue) and the validation-phase cap bump.
+>   * **A3.2-exec (wallet execute)** — `discharged-bytecode`: pointwise
+>     equivalence of `executeWithOffchainCount` /
+>     `executeBatchWithOffchainCount` to the Lean `Execute` model over a
+>     **symbolic ownerIndex** (`HalmosExecuteEquiv`, 6 rules) + the 6
+>     per-property rules (`HalmosExecute`). The emitted external CALL's
+>     delivery is A4, not A3.2 (see the harness header).
+>   * **A3.3 (factory)** — `discharged-bytecode`: 5 rules (createAccount ⟺
+>     precondition iff + postconditions, already-deployed early-return, 3
+>     install-gate rejects) on `0xfa2922…7c3c`.
+>   * **A3.4 (owner table)** — `discharged-bytecode`: `HalmosMultiOwnable`
+>     (7 rules) — `addOwnerBytes`/`removeOwnerAtIndex`/`initialize` pointwise
+>     vs the Lean `Storage` model + `ownerAtIndex` read parity, on the
+>     current embedding wallet codehash. (Replaces the prior stale Certora
+>     artifact, which had not been re-run after the codehash moved.)
 >   * **A3.1 (verifier)** — `discharged-bytecode-partial`: 3 input-gate rules
 >     (length/N-mask) on `0xf1ef…fef5` by Halmos; the full SHA-256-heavy
 >     functional equivalence stays on the Lean refinement
->     (`verifyRefined_eq_spec`, incl. htIdx) + the 10 KAT vectors.
+>     (`verifyRefined_eq_spec`, incl. htIdx) + the 10 KAT vectors + the
+>     ~250-mutant adversarial wrong-accept screen.
 > Reproduce: `make -C contracts/verification verify-bytecode`. SHA-256 is an
-> uninterpreted function in every Halmos run (the named A1 boundary). A3.4
-> (multiownable) logic is unchanged.
+> uninterpreted function in every Halmos run (the named A1 boundary).
 
 **default profile (`runs=200`)** — the dev/test build the symbolic suite runs against:
 
@@ -64,15 +77,23 @@ PQMultiOwnable        (embedded in PQSmartWallet; no independent deploy)
 
 Both profile sets live in `contracts/smart-wallet/test/PinnedCodehashSelector.sol`
 (picked by `$FOUNDRY_PROFILE`) and are certified by `PinnedCodehashes.t.sol`
-under each profile. Because the two builds differ only in the optimiser's
-instruction selection — not control flow — an **immutable-window lemma**
+under each profile. **The symbolic suite is executed against BOTH profiles'
+bytecode** (`run_halmos.sh` runs `default` then `deploy`; set
+`PQ1_HALMOS_SKIP_DEPLOY_SYMBOLIC=1` only for fast local iteration) — so the
+production `runs=999999` bytecode is symbolically discharged directly, not by
+a "control flow is identical across profiles" argument.
+
+Within a single profile, an **immutable-window lemma**
 (`PinnedBytecodeImmutableLemma.t.sol`) additionally proves, exhaustively over
 every byte, that each contract's runtime differs from its pinned instance
 **only inside 32-byte windows holding the two constructor immutables**
 (`_entryPoint`/`implementation` and `c10Verifier`, plus the wallet's Solady
 EIP-712 `_cachedThis`/`_cachedDomainSeparator`). So a symbolic rule proved
-against one instance transports to every instance (and across profiles) modulo
-those certified-located immutables.
+against one instance transports to every OTHER instance of that same compiled
+artifact — e.g. the harness's mock-verifier/test-EntryPoint instance to a real
+deployment with the production verifier + EntryPoint addresses — modulo those
+certified-located immutables. (This lemma is an intra-profile instance bridge;
+the cross-profile coverage comes from actually running both profiles, above.)
 
 ## EntryPoint v0.6 (cited-TCB)
 
@@ -125,11 +146,16 @@ When a legitimate source change requires the bytecode to drift:
 2. Update the constants in `test/PinnedCodehashes.t.sol`.
 3. Update this file.
 4. For each changed codehash, re-run the corresponding discharge
-   artifact:
-   - PQSmartWallet     → `halmos --contract HalmosValidateUserOp` and `halmos --contract HalmosExecute`
-   - PQSmartWalletFactory → `certoraRun certora/confs/PQSmartWalletFactory.conf`
-   - PQMultiOwnable    → `certoraRun certora/confs/PQMultiOwnable.conf`
-   - SPHINCsC10Asm     → `cross_validation/` Lean ↔ Rust ↔ Solidity differential
+   artifact (all via `make -C contracts/verification verify-bytecode`,
+   which runs the whole suite on both profiles):
+   - PQSmartWallet     → `HalmosValidateUserOpEquiv` + `HalmosValidateUserOp`
+                         (validate) and `HalmosExecuteEquiv` + `HalmosExecute`
+                         (execute); `HalmosMultiOwnable` (the embedded
+                         owner-table, A3.4)
+   - PQSmartWalletFactory → `HalmosFactory`
+   - SPHINCsC10Asm     → `HalmosVerifier` (input gates) + `cross_validation/`
+                         Lean ↔ Rust ↔ Solidity differential +
+                         `SPHINCsC10AsmAdversarial`
 5. Record the new discharge artifact ID (session hash / rule-set hash)
    in `AXIOM_STATUS.json`.
 6. Re-run `lint_axioms.sh` and `make verify-audit` to confirm no

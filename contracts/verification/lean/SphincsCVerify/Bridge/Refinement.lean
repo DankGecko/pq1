@@ -60,6 +60,7 @@ import SphincsCVerify.Bridge.SolidityVerifier
 import SphincsCVerify.Verifier.Equivalence
 import SphincsCVerify.Wallet.Storage
 import SphincsCVerify.Wallet.ValidateUserOp
+import SphincsCVerify.Wallet.Execute
 import SphincsCVerify.Wallet.Factory
 import SphincsCVerify.Spec.Hash
 
@@ -69,6 +70,7 @@ open SphincsCVerify.Spec
 open SphincsCVerify.Wallet
 open SphincsCVerify.Wallet.Storage
 open SphincsCVerify.Wallet.ValidateUserOp
+open SphincsCVerify.Wallet.Execute
 
 /-! ## Opaque deployed-bytecode-shaped symbols
 
@@ -124,10 +126,28 @@ opaque PQSmartWalletFactory_createAccount_passes :
     ByteVec 32 → ByteVec 32 → ByteVec 32 → ByteVec 32 → UInt64 → ByteVec SignatureLen → Bool
 
 /-- `PQMultiOwnable.ownerAtIndex(i)` on the deployed contract. Used by
-    Claim 2 (owner-set integrity) to relate Certora-verified owner-table
-    properties to the Lean `Storage.ownerAtIndex`. -/
+    Claim 2 (owner-set integrity) to relate the Halmos-verified owner-table
+    properties (`test/halmos/HalmosMultiOwnable.t.sol`) to the Lean
+    `Storage.ownerAtIndex`. -/
 opaque PQMultiOwnable_ownerAtIndex :
     Storage → Nat → Option OwnerBytes
+
+/-- Result of `PQSmartWallet.executeWithOffchainCount(...)` on the
+    deployed proxy, modelled on the same `ExecState → … → Option ExecState`
+    interface as the Lean `Execute.executeWithOffchainCount`. `none`
+    denotes a revert (failed guard OR a reverting dispatched call);
+    `some σ'` the post-state (storage updated, transient credit cleared,
+    one external call appended). -/
+opaque PQSmartWallet_executeWithOffchainCount :
+    ExecState → ByteVec 20 → Nat → Nat → ByteVec 20 → Nat → Array UInt8 →
+    Option ExecState
+
+/-- Result of `PQSmartWallet.executeBatchWithOffchainCount(...)` on the
+    deployed proxy. Same interface as `Execute.executeBatchWithOffchainCount`. -/
+opaque PQSmartWallet_executeBatchWithOffchainCount :
+    ExecState → ByteVec 20 → Nat → Nat →
+    List (ByteVec 20) → List Nat → List (Array UInt8) →
+    Option ExecState
 
 /-- EVM SHA-256 precompile (address `0x02`) applied to a byte sequence.
     Discharged by A1 + an empirical Foundry parity test on KAT vectors. -/
@@ -235,6 +255,68 @@ axiom solidityFactory_compiles_correctly :
 axiom solidityMultiOwnable_compiles_correctly :
     ∀ (s : Storage) (i : Nat),
       DeployedBytecode.PQMultiOwnable_ownerAtIndex s i = s.ownerAtIndex i
+
+/-- **A3.2-exec — `executeWithOffchainCount` matches `Execute`, on the
+    success direction (the only one theft-freedom needs).**
+
+    If the deployed `executeWithOffchainCount` bytecode at the pinned
+    `PQSmartWallet` codehash returns `some σ'` (i.e. it did NOT revert —
+    neither a failed guard nor a reverting dispatched call), then the Lean
+    model `Execute.executeWithOffchainCount` returns the SAME `some σ'`.
+
+    Why the success-DIRECTION rather than a full equality: the Lean
+    `Execute` model is the all-dispatch-succeeds model — a dispatched call
+    always appends to `callStack`; a reverting target is outside its
+    `Option ExecState` codomain. So the unconditional equality is false on
+    a reverting target (bytecode `none`, model `some appended`), exactly as
+    A3.2's reachable-state caveat. Conditioning on the bytecode having
+    returned `some σ'` restricts to the `callOk ≡ true` world, where the
+    full pointwise equality holds. This is the only direction the gating
+    corollary `deployed_execute_requires_prior_token` uses (a balance
+    decrement requires a non-reverting execute that returned `some`).
+
+    REACHABLE-STATE HYPOTHESIS: the combined-cap invariant, as in A3.2.
+
+    Discharge: Halmos `test/halmos/HalmosExecuteEquiv.t.sol`
+    (`check_execute_pointwise_equals_lean_model`, SYMBOLIC ownerIndex —
+    the money path is ∀-index, not class-representative) for the
+    (result, post-`offchainSigCount`, frame, guards) projection;
+    `check_execute_no_credit_reverts_for_all_indices` +
+    `check_execute_inner_revert_is_atomic` for the `none` arms; all against
+    the pinned `PQSmartWallet` runtime codehash. The remaining ExecState
+    component — the `callStack` append (i.e. that the EVM faithfully emits
+    the `target.call{value}(data)` the bytecode reached) — is axiom A4
+    (`evm_bytecode_executes_correctly`), the same EVM-execution boundary
+    through which `theft_free` routes every actual value movement; it is
+    NOT a wallet-compilation fact and is intentionally not re-proved on the
+    symbolic engine (which also cannot reconstruct forwarded calldata). -/
+axiom solidityWalletExecute_compiles_correctly :
+    ∀ (σ : ExecState) (caller : ByteVec 20)
+      (ownerIndex newOffchainCount : Nat)
+      (target : ByteVec 20) (value : Nat) (data : Array UInt8)
+      (σ' : ExecState),
+      (∀ i, σ.storage.slotUses i + σ.storage.offchainSigCount i ≤ MaxSlotUses) →
+      DeployedBytecode.PQSmartWallet_executeWithOffchainCount
+          σ caller ownerIndex newOffchainCount target value data = some σ' →
+      executeWithOffchainCount σ caller ownerIndex newOffchainCount target value data
+        = some σ'
+
+/-- **A3.2-exec(batch) — `executeBatchWithOffchainCount` matches `Execute`,
+    success direction.** Batch peer of `solidityWalletExecute_compiles_correctly`.
+
+    Discharge: Halmos `HalmosExecuteEquiv`
+    (`check_executeBatch_pointwise_equals_lean_model` +
+    `check_executeBatch_dispatches_verbatim`). -/
+axiom solidityWalletExecuteBatch_compiles_correctly :
+    ∀ (σ : ExecState) (caller : ByteVec 20)
+      (ownerIndex newOffchainCount : Nat)
+      (targets : List (ByteVec 20)) (values : List Nat) (datas : List (Array UInt8))
+      (σ' : ExecState),
+      (∀ i, σ.storage.slotUses i + σ.storage.offchainSigCount i ≤ MaxSlotUses) →
+      DeployedBytecode.PQSmartWallet_executeBatchWithOffchainCount
+          σ caller ownerIndex newOffchainCount targets values datas = some σ' →
+      executeBatchWithOffchainCount σ caller ownerIndex newOffchainCount targets values datas
+        = some σ'
 
 /-! ## A1 (refactored) — SHA-256 precompile correctness.
 

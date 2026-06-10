@@ -453,6 +453,59 @@ theorem factory_squat_defence_bytecode
   unfold Wallet.Factory.createAccountPrecondition at hpre
   exact hpre.1
 
+/-! ## 4c. Execution-gate non-bypass, transported to the deployed execute
+    bytecode (Claim 4 / A3.2-exec).
+
+The model-level `executeBatch_faithful` / `every_call_gated_by_verifier`
+quantify the execute step at the Lean `Execute` model. The corollaries
+below restate the load-bearing gate — *a money-moving execute requires
+the in-transaction validated-owner token* — against the OPAQUE deployed
+execute symbols, so `#print axioms` names the execute bridge axioms
+(A3.2-exec). They are the Lean-side counterpart of the Halmos session
+`test/halmos/HalmosExecuteEquiv.t.sol`. -/
+
+open SphincsCVerify.Wallet.Execute
+
+/-- **A successful deployed `executeWithOffchainCount` required the
+    matching validated-owner token on entry.** If the code at the pinned
+    `PQSmartWallet` codehash performs a (non-reverting) single execute
+    from state `σ`, then `σ.validatedOwnerPlusOne = ownerIndex + 1` — i.e.
+    an earlier in-transaction step stamped the credit, which (model-side,
+    via `TxFlow` + I-1) only a verifier-true slot-path validate can do.
+
+    Composes A3.2-exec (`solidityWalletExecute_compiles_correctly`,
+    success direction) with E-8 (`execute_only_validateSig_authorises`).
+
+    `#print axioms deployed_execute_requires_prior_token` adds
+    `solidityWalletExecute_compiles_correctly` to the closure. -/
+theorem deployed_execute_requires_prior_token
+    (σ σ' : Wallet.Execute.ExecState) (caller : ByteVec 20)
+    (ownerIndex newOffchainCount : Nat)
+    (target : ByteVec 20) (value : Nat) (data : Array UInt8)
+    (hInv : ∀ i, σ.storage.slotUses i + σ.storage.offchainSigCount i ≤ MaxSlotUses)
+    (h : Bridge.DeployedBytecode.PQSmartWallet_executeWithOffchainCount
+          σ caller ownerIndex newOffchainCount target value data = some σ') :
+    σ.validatedOwnerPlusOne = ownerIndex + 1 :=
+  Wallet.Execute.execute_only_validateSig_authorises
+    (Bridge.solidityWalletExecute_compiles_correctly
+      σ caller ownerIndex newOffchainCount target value data σ' hInv h)
+
+/-- **A successful deployed `executeBatchWithOffchainCount` required the
+    matching validated-owner token on entry.** Batch peer of
+    `deployed_execute_requires_prior_token`; composes A3.2-exec(batch)
+    with E-8(batch). -/
+theorem deployed_executeBatch_requires_prior_token
+    (σ σ' : Wallet.Execute.ExecState) (caller : ByteVec 20)
+    (ownerIndex newOffchainCount : Nat)
+    (targets : List (ByteVec 20)) (values : List Nat) (datas : List (Array UInt8))
+    (hInv : ∀ i, σ.storage.slotUses i + σ.storage.offchainSigCount i ≤ MaxSlotUses)
+    (h : Bridge.DeployedBytecode.PQSmartWallet_executeBatchWithOffchainCount
+          σ caller ownerIndex newOffchainCount targets values datas = some σ') :
+    σ.validatedOwnerPlusOne = ownerIndex + 1 :=
+  Wallet.Execute.executeBatch_only_validateSig_authorises
+    (Bridge.solidityWalletExecuteBatch_compiles_correctly
+      σ caller ownerIndex newOffchainCount targets values datas σ' hInv h)
+
 /-! ## 5. Claim 1 — strengthened: signature-to-execution binding.
 
 `theft_free` (above) establishes that a wallet-balance decrement

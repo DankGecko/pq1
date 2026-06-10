@@ -22,34 +22,52 @@
 > audit-H-3 ownerIndex parity, and the factory's install-time N-mask +
 > duplicate-owner gates.
 >
-> **The bytecode-level A3.* discharge is now run, not pending.** A
-> patched Halmos + z3 (see [`halmos/`](halmos/)) symbolically executes
-> the deployed runtime bytecode against the **profile-aware** pinned
-> codehashes (default `runs=200` **and** deploy `runs=999999`, both
-> certified, plus an immutable-window lemma transporting the per-instance
-> pin to all instances modulo the two certified immutables):
+> **The bytecode-level A3.* discharge is run on BOTH profiles, not
+> pending.** A patched Halmos + z3 (see [`halmos/`](halmos/)) symbolically
+> executes the deployed runtime bytecode against the pinned codehashes —
+> the full symbolic suite is run under default `runs=200` **and** deploy
+> `runs=999999` (production), each certified by `PinnedCodehashes.t.sol`;
+> the immutable-window lemma additionally bridges each profile's pinned
+> instance to every other instance of that artifact (differing
+> constructor immutables):
 >
-> - **A3.2 (wallet)** — `discharged-bytecode`: a full **pointwise
+> - **A3.2 (wallet validate)** — `discharged-bytecode`: a full **pointwise
 >   equivalence** of `validateUserOp` to the clause-for-clause Lean-model
 >   transcription ([`LeanValidateUserOpModel.sol`](../smart-wallet/test/halmos/LeanValidateUserOpModel.sol))
 >   over a symbolic envelope under a generic uninterpreted verifier,
->   conditioned on the kernel-proven reachable-state invariant, plus 14
+>   conditioned on the kernel-proven reachable-state invariant, plus 8
 >   per-property rules.
+> - **A3.2-exec (wallet execute)** — `discharged-bytecode`: pointwise
+>   equivalence of `executeWithOffchainCount` /
+>   `executeBatchWithOffchainCount` to the Lean `Execute` model
+>   ([`LeanExecuteModel.sol`](../smart-wallet/test/halmos/LeanExecuteModel.sol))
+>   over a **symbolic ∀ `ownerIndex`** (the money path reads only
+>   word-typed counters + the transient credit, so it admits a genuine
+>   ∀-index sweep) + atomicity + credit rules, plus 6 per-property rules.
+>   The emitted external CALL's byte-delivery is A4, not A3.2.
 > - **A3.3 (factory)** — `discharged-bytecode`: `createAccount` ⟺
 >   `createAccountPrecondition` (over symbolic chain + signature) with
 >   deploy postconditions, the already-deployed early-return, and three
 >   install-gate reject rules.
+> - **A3.4 (owner table)** — `discharged-bytecode`:
+>   `addOwnerBytes`/`removeOwnerAtIndex`/`initialize` pointwise vs the Lean
+>   `Storage` model + `ownerAtIndex` read parity + bootstrap-unremovable +
+>   EntryPoint-only gate ([`HalmosMultiOwnable.t.sol`](../smart-wallet/test/halmos/HalmosMultiOwnable.t.sol),
+>   7 rules). Replaces the prior stale Certora artifact.
 > - **A3.1 (verifier)** — `discharged-bytecode-partial`: Halmos input
 >   gates + the Lean refinement (incl. FORS htIdx) + 10 KAT vectors + a
 >   ≈250-mutant adversarial wrong-accept screen on the bytecode. The full
 >   ∀-signature functional equivalence is the named `-partial` gap (not
 >   symbolically tractable over a 4008-byte signature).
 >
-> The Lean corollaries `theft_free_bytecode` and
-> `factory_squat_defence_bytecode` quantify theft-freedom and
-> squat-defence directly over the **opaque deployed-bytecode symbols**,
-> so a `#print axioms` names the wallet/factory bridge axioms explicitly.
-> See [`docs/AXIOM_STATUS.json`](docs/AXIOM_STATUS.json) for the per-axiom
+> The Lean corollaries `theft_free_bytecode`,
+> `factory_squat_defence_bytecode`, and
+> `deployed_execute_requires_prior_token` /
+> `deployed_executeBatch_requires_prior_token` quantify theft-freedom,
+> squat-defence, and the execute-gate directly over the **opaque
+> deployed-bytecode symbols**, so a `#print axioms` names the
+> wallet/factory/execute bridge axioms explicitly. See
+> [`docs/AXIOM_STATUS.json`](docs/AXIOM_STATUS.json) for the per-axiom
 > discharge state and [`docs/PINNED_CODEHASHES.md`](docs/PINNED_CODEHASHES.md)
 > for the pins. Reproduce: `make verify-bytecode`.
 >
@@ -97,8 +115,8 @@ substantive content of each axiom varies — see
 | `lake build` end-to-end | ✅ Succeeds on Lean 4.22.0 |
 | `theft_free` theorem | ✅ Kernel-checked; closure = exactly the 11 cited axioms. |
 | Wallet invariants I-1 through I-8 | ✅ All closed; details in [`docs/AXIOMS.md`](docs/AXIOMS.md). |
-| Bridge axioms A1 / A3.1 | ✅ `opaque + axiom-equality` shapes with real content. A3.1 spec-refinement (`verifyRefined_eq_spec`) is `rfl`, incl. the FORS `htIdx` ADRS binding; verifier **input gates** also discharged on bytecode by Halmos (3 rules). |
-| Bridge axioms A3.2 / A3.3 (bytecode) | ✅ **Discharged on the deployed bytecode** by Halmos symbolic execution: 14 wallet rules + 2 factory rules PASS over all inputs vs the pinned codehashes (`make verify-bytecode`). |
+| Bridge axioms A1 / A3.1 | ✅ `opaque + axiom-equality` shapes with real content. A3.1 spec-refinement (`verifyRefined_eq_spec`) is `rfl`, incl. the FORS `htIdx` ADRS binding; verifier **input gates** also discharged on bytecode by Halmos (3 rules) + a ≈250-mutant adversarial screen. |
+| Bridge axioms A3.2 / A3.2-exec / A3.3 / A3.4 (bytecode) | ✅ **Discharged on the deployed bytecode** by Halmos symbolic execution, both profiles: validate pointwise + per-property (`HalmosValidateUserOpEquiv`/`HalmosValidateUserOp`), execute pointwise over a **symbolic ∀ ownerIndex** + per-property (`HalmosExecuteEquiv`/`HalmosExecute`), factory iff (`HalmosFactory`), owner-table pointwise + read-parity (`HalmosMultiOwnable`, replaces stale Certora) — all vs the pinned codehashes (`make verify-bytecode`). |
 | Bridge axiom A4 (`evm_bytecode_executes_correctly`) | 📚 CITED-TCB `True` marker (KEVM as formal-EVM referent), per user decision. |
 | EntryPoint axiom (A2) | 📚 CITED-TCB. Property of the Lean `handleOp` model of EntryPoint v0.6; cited OZ/ChainSecurity/Spearbit audits + 18mo mainnet. |
 | Cryptographic axiom (A5) `EUF_CMA_SPHINCSplusC` | 📚 CITED-TCB. Real propositional content; cites Barbosa et al. ASIACRYPT 2024 + Hülsing PQC 2022. |
@@ -154,29 +172,36 @@ Bridge / Crypto / Top-level).
 
 The Lean kernel checks the propositional statement
 `SphincsCVerify.Spec.Theorems.theft_free` (see
-`lean/SphincsCVerify/Spec/Theorems.lean`). The statement quantifies
-over a Lean-defined state-transition function `Bridge.EntryPoint.handleOp`
-and a Lean-defined verifier `verifyYulModel`. Three of the axioms it
-formally depends on (`solidityVerifier_compiles_correctly`,
-`evm_bytecode_executes_correctly`, `precompile_0x02_is_FIPS_180_4`)
-have type `True` — they appear in `#print axioms theft_free` for
-documentation, but they do not constrain anything in the kernel.
-So the Lean theorem in its current form is a model-level
-sanity check of the wallet's logic, **not a mathematical guarantee
-about the deployed bytecode**.
+`lean/SphincsCVerify/Spec/Theorems.lean`) with the bridge axioms in
+their **post-refactor `opaque + axiom-equality` form**: A1
+(`precompile_0x02_is_FIPS_180_4`) and the four A3 sub-axioms
+(`solidityVerifier / solidityWallet / solidityFactory /
+solidityMultiOwnable _compiles_correctly`) carry real propositional
+content — each equates an *opaque deployed-bytecode symbol* to its
+kernel-reducible Lean model, and removing any one leaves the per-claim
+corollaries unprovable. Only A4 (`evm_bytecode_executes_correctly`) and
+the three A5 crypto-shape axioms remain `True`-typed cited-TCB markers.
 
-The cryptographic axiom `EUF_CMA_SPHINCSplusC` does carry real
-propositional content (asserts non-forgery in the deterministic-
-adversary form); its discharge is the citation to Barbosa et al. 2024
-plus the SPHINCS+ → SPHINCS+C transition argument.
+So `theft_free` is a kernel-checked guarantee about the wallet's logic
+*relative to* the bridge axioms; the bridge axioms are then
+**discharged on the deployed bytecode** by the Halmos sessions under
+[`../smart-wallet/test/halmos/`](../smart-wallet/test/halmos/) — run on
+**both** compiler profiles against the pinned codehashes. What is
+discharged on bytecode, and the honest residual of each, is enumerated
+in [`docs/AXIOM_STATUS.json`](docs/AXIOM_STATUS.json):
 
-## What this aims to prove on completion of the discharge plan
+- **A3.2 validate / A3.2-exec execute / A3.3 factory / A3.4 owner-table**
+  — `discharged-bytecode` (pointwise equivalence to the Lean models;
+  the execute money-path over a **symbolic ∀ ownerIndex**).
+- **A3.1 verifier** — `discharged-bytecode-partial`: input gates on
+  bytecode + the Lean refinement + 10 KAT vectors + a ≈250-mutant
+  adversarial screen; the full ∀-signature functional equivalence over a
+  4008-byte signature is the named `-partial` gap.
+- **A1 SHA-256** — uninterpreted in every Halmos run (the named boundary).
+- **A2 EntryPoint / A4 EVM / A5 EUF-CMA** — cited-TCB by decision. The
+  emitted-CALL byte-delivery on the execute path lives in A4.
 
-The plan at
-[`docs/DISCHARGE_PLAN.md`](docs/DISCHARGE_PLAN.md)
-discharges each placeholder via Kontrol (KEVM) and Certora sessions,
-plus a Lean-side opaque-and-axiom-equality refactor that makes the
-deployed bytecode load-bearing in the dep closure. After completion:
+The headline guarantee, modulo A1–A6:
 
 > For any deployed `PQSmartWallet` proxy at address `W`, for any EVM state
 > transition `σ → σ'` triggered by a UserOp accepted by EntryPoint v0.6, if
@@ -186,3 +211,10 @@ deployed bytecode load-bearing in the dep closure. After completion:
 
 Equivalently: an adversary who does not hold an installed SPHINCS+C10 secret
 key cannot reduce the wallet's balance, modulo A1–A6.
+
+**Honest ceiling (unchanged).** A Halmos rule is a cited Halmos+z3 solver
+session — the harness↔property match and the
+LeanModel.sol↔Lean-file transcription are in the TCB — not a Lean kernel
+proof term. The `EUF_CMA_SPHINCSplusC` discharge is the citation to
+Barbosa et al. ASIACRYPT 2024 plus the SPHINCS+ → SPHINCS+C transition
+argument.

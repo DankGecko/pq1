@@ -30,10 +30,27 @@ import {OracleSPHINCSVerifier, RevertingSPHINCSVerifier} from "./OracleSPHINCSVe
 ///                field/index elsewhere unchanged — the frame).
 ///
 ///         SYMBOLIC ENVELOPE (each item universally quantified):
-///           * signature: all 4128-byte wrappers (every byte symbolic —
-///             ownerIndex word, offset word, innerLen word, 4008 sig bytes,
-///             24 pad bytes); plus a second rule sweeping wrong total
-///             lengths {0,95,96,4127,4129,8192};
+///           * signature: 4128-byte wrappers with bytes [32..4128) (offset
+///             word, innerLen word, 4008 sig bytes, 24 pad bytes) fully
+///             symbolic in every rule; plus a second rule sweeping wrong
+///             total lengths {0,95,96,4127,4129,8192};
+///           * the wrapper ownerIndex word [0..32): six CONCRETE class
+///             representatives (`_sweepOwnerIndexWord`). This is a genuine
+///             engine ceiling, not a modelling choice: `validateUserOp`
+///             reads `ownerAtIndex(ownerIndex)`, a `mapping(uint => bytes)`
+///             getter, whose DYNAMIC-length return Halmos cannot allocate
+///             for a symbolic key (`NotConcreteError`) — so the index must
+///             be concrete in any rule that reaches the owner read. The six
+///             reps cover every qualitatively distinct treatment (bootstrap
+///             idx 0; both installed slots 1, 2; first-unset 3; a deep
+///             unset 2^200; the H-3 sentinel uint256.max). Per-index
+///             behaviour downstream of the read depends only on
+///             `(ownerAtIndex(i), counters at i)`, both symbolic here.
+///             NOTE: the EXECUTE path (`HalmosExecuteEquiv`) achieves a
+///             genuinely SYMBOLIC ownerIndex, because it reads only
+///             word-typed counters/credit, not the bytes getter — so the
+///             money-moving surface is ∀-index, and only this
+///             validation-read surface carries the concrete-rep residual.
 ///           * callData: symbolic content at lengths {0,3,4,35,36,68}
 ///             (covering: no selector; selector w/o H-3 word — incl. both
 ///             boundary lengths 35/36; full execute-shaped calldata);
@@ -187,9 +204,10 @@ contract HalmosValidateUserOpEquiv is SymTest, Test {
     ///      first unset index, a deep unset index, and the H-3 sentinel
     ///      value. All remaining 4096 wrapper bytes (offset word, innerLen
     ///      word, 4008 sig bytes, 24 pad bytes) stay fully symbolic.
-    ///      Indices ≥ 3 are all mapping-default-equal at the bytecode level
-    ///      (same code path, same default reads); the three unset
-    ///      representatives witness that class at both extremes.
+    ///      These concrete representatives are a layered cross-check only:
+    ///      rules 1b/1c quantify the ownerIndex word SYMBOLICALLY over the
+    ///      unset (>= 3) and installed (1..2) partitions, so the full
+    ///      uint256 index space is solver-covered, not argued by hand.
     function _sweepOwnerIndexWord(uint256 idxSel) internal pure returns (bytes32) {
         vm.assume(idxSel < 6);
         if (idxSel == 0) return bytes32(uint256(0));
