@@ -87,4 +87,39 @@ theorem read_bits_le_loop_terminates
         | trivial
   · exact hb8
 
+
+open sphincs_c10 in
+set_option maxHeartbeats 8000000 in
+theorem read_bits_le_terminates (digest : Std.Array Std.U8 32#usize)
+    (bit_offset num_bits : Std.Usize)
+    (hpos : 0 < num_bits.val) (h : num_bits.val ≤ 57) (hoff : bit_offset.val ≤ 248) :
+    fors.read_bits_le digest bit_offset num_bits ⦃ _ => True ⦄ := by
+  unfold fors.read_bits_le
+  have hp : (0:Nat) < 2 ^ num_bits.val := Nat.two_pow_pos _
+  have hlt64 : (2:Nat) ^ num_bits.val < U64.size := by
+    have hsz : U64.size = 2 ^ 64 := by simp [U64.size, U64.numBits]
+    rw [hsz]
+    calc (2:Nat) ^ num_bits.val ≤ 2 ^ 57 := Nat.pow_le_pow_right (by norm_num) h
+      _ < 2 ^ 64 := Nat.pow_lt_pow_right (by norm_num) (by norm_num)
+  step* <;>
+    first
+    | scalar_tac
+    | (rw [Nat.shiftLeft_eq, Nat.one_mul, Nat.mod_eq_of_lt hlt64]; omega)
+    | simp_all
+    | trivial
+
+attribute [step] read_bits_le_terminates
+
+open sphincs_c10 in
+set_option maxHeartbeats 8000000 in
+theorem extract_ht_index_terminates (digest : Std.Array Std.U8 32#usize) :
+    fors.extract_ht_index digest ⦃ _ => True ⦄ := by
+  unfold fors.extract_ht_index
+  simp only [params.K, params.A, params.H]
+  step* <;>
+    first
+    | (apply read_bits_le_terminates <;> scalar_tac)
+    | scalar_tac
+    | trivial
+
 end Extracted.Equiv
