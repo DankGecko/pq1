@@ -1952,7 +1952,13 @@ compiler/silicon/FI/SCA — those stay with `tools/sca` + silicon validation.
       `extracted/`.
 - [ ] **P2 — parsers + aa.** Panic-freedom theorems across wire-format parsers;
       `aa` userOpHash/EIP-1271-nesting equivalence vs the existing wallet model
-      (goal theorem 1).
+      (goal theorem 1). **Feasibility probe 2026-06-10: GO** — `charon
+      --preset=aeneas --opaque sha2 --opaque sha3` on `aa` yields only
+      3 errors / 41 fns, all in `userop.rs`
+      (`reconstruct_execute_batch_calldata` early-return-in-loop +
+      2 nested-borrow sites). Same fix scale as the sphincs-c10 pass;
+      keccak/sha2 axiomatized like the wallet model. Reuse the §33-P0
+      proof recipe + probe-bisection method.
 - [ ] **P3 — C10 building blocks.** Per-function equivalence: WOTS chain, FORS
       leaf/root, merkle auth path, hypertree glue vs Spec modules. Expect
       ~30%/round AI close-rate (SorryDB-calibrated); loop invariants are the
