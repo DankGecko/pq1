@@ -148,6 +148,29 @@ pub fn verify_and_bind_trailer(
     )
     .ok()?;
 
+    // ── 1b. Native field-overflow guard (defense-in-depth) ─────────
+    //
+    // The Groth16 proof binds `readable` (the formatted amounts shown on
+    // the trusted UI) to `canonical` via the circuit's
+    // `FormatTrimmedAmount`. That formatter multiplies the raw amount by
+    // a scale factor in the scalar field; a field-overflow forgery can
+    // make the recomposition wrap r so the device displays a benign
+    // amount while signing a huge one (docs/VULN-cowswap-zk-amount-
+    // overflow.md). The fixed circuit range-checks the amount to 190
+    // bits; we re-assert the SAME bound natively here so the class is
+    // closed from both sides — even a future circuit regression cannot
+    // get a display/actual mismatch past this gate. A legitimate
+    // displayable amount is ≤ ~2^93, far below 2^190.
+    let sell_amount: &[u8; 32] =
+        canonical_bytes[68..100].try_into().ok()?;
+    let buy_amount: &[u8; 32] =
+        canonical_bytes[100..132].try_into().ok()?;
+    if !super::amount_within_field_safe_bound(sell_amount)
+        || !super::amount_within_field_safe_bound(buy_amount)
+    {
+        return None;
+    }
+
     // ── 2. Sentinel + chain binding ────────────────────────────────
     if verified.chain_id != chain_id || verified.contract != COWSWAP_EIP712_SENTINEL {
         return None;

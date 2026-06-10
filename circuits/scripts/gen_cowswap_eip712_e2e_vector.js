@@ -395,11 +395,18 @@ const input = {
   sell_frac_digits: sellW.frac_digits.map(String),
   sell_n_lz:        sellW.n_leading_zeros.toString(),
   sell_remainder:   sellW.remainder,
+  // v3.1 sub-precision flag. The example amounts (1000.0000 / 0.5000)
+  // are both ≥ 10^-FRAC_DIGITS, so they render in normal mode (flag 0).
+  // FormatTrimmedAmount also now range-checks raw_amount to 190 bits
+  // (docs/VULN-cowswap-zk-amount-overflow.md) — the example amounts are
+  // ≪ 2^190 so witness generation is unaffected.
+  sell_is_sub_precision: "0",
 
   buy_int_digits:   buyW.int_digits.map(String),
   buy_frac_digits:  buyW.frac_digits.map(String),
   buy_n_lz:         buyW.n_leading_zeros.toString(),
   buy_remainder:    buyW.remainder,
+  buy_is_sub_precision: "0",
 };
 const inputPath = path.join(BUILD_DIR, "e2e_input.json");
 fs.mkdirSync(BUILD_DIR, { recursive: true });

@@ -234,9 +234,13 @@ template FormatTrimmedAmount(MAX_INT_DIGITS, FRAC_DIGITS, MAX_DECIMALS) {
     //
     // Two modes:
     //
-    //   (a) Normal (is_sub_precision == 0): enforce remainder === 0.
-    //       Prover must round-to-FRAC_DIGITS explicitly. Rejects the
-    //       v2 "0.0000 hides 0.00005" footgun.
+    //   (a) Normal (is_sub_precision == 0): a non-zero remainder is
+    //       permitted (v3.1, see block below) but bounded to
+    //       remainder < pow_skip unconditionally. Because raw_amount is
+    //       now range-checked to 190 bits, the product does not wrap r,
+    //       so the (int, frac, remainder) decomposition is unique over ℤ
+    //       and the displayed int.frac is the true truncation of the
+    //       on-chain amount. (Pre-fix this was mod-r and forgeable.)
     //
     //   (b) Sub-precision (is_sub_precision == 1): permit remainder > 0,
     //       but require int_value == 0 AND frac_value == 0 AND
@@ -248,6 +252,31 @@ template FormatTrimmedAmount(MAX_INT_DIGITS, FRAC_DIGITS, MAX_DECIMALS) {
     //       attacker could flip the flag on a big amount and hide
     //       everything behind "<0.0001" — the bound is what makes this
     //       mode trustworthy.
+    // ── SOUNDNESS: bound raw_amount so the product cannot wrap r ─────
+    //
+    // `scaled <== raw_amount * scale_factor` below is a field
+    // multiplication, evaluated mod r (BLS12-381 scalar field,
+    // r ≈ 2^254.86). `Uint256BytesToField` (the caller) bounds
+    // raw_amount only to < 2^254, and scale_factor can be as large as
+    // 10^18 < 2^60. Without a tighter bound the product reaches
+    // 2^254 · 2^60 = 2^314 and wraps r ~2^59 times: `scaled` becomes the
+    // RESIDUE, not the true integer product, and the recomposition
+    // equation below — which is mod r — no longer pins the real amount.
+    // A malicious prover can then pick a benign (int, frac, remainder)
+    // residue and back out a huge ~254-bit raw_amount preimage, making
+    // the device DISPLAY a benign amount while SIGNING an astronomically
+    // large one. (See docs/VULN-cowswap-zk-amount-overflow.md.)
+    //
+    // Fix: constrain raw_amount to 190 bits. Then
+    //   raw_amount · scale_factor < 2^190 · 10^18 < 2^249.8 < r
+    // over ℤ — the product can NEVER wrap, so `scaled` is the true
+    // integer product and the (int, frac, remainder) decomposition is
+    // unique over ℤ (not merely mod r). 190 bits loses no displayable
+    // amount: with MAX_INT_DIGITS=10, a displayable value has
+    // raw_amount ≤ 10^10 · 10^18 = 10^28 ≈ 2^93.4 ≪ 2^190.
+    component ra_bits = Num2Bits(190);
+    ra_bits.in <== raw_amount;
+
     signal scaled;
     scaled <== raw_amount * scale_factor;
 

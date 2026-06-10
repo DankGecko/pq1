@@ -1,0 +1,25 @@
+{
+  "raw_amount": "200000",
+  "scale_factor": "1000000000000",
+  "int_digits": [
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0"
+  ],
+  "frac_digits": [
+    "2",
+    "0",
+    "0",
+    "0"
+  ],
+  "n_leading_zeros": "9",
+  "remainder": "0",
+  "is_sub_precision": "0"
+}

@@ -304,6 +304,38 @@ pub const SETPRESIG_OWNER_LEN: usize = 20;
 pub const SETPRESIG_VALID_TO_OFFSET: usize = SETPRESIG_OWNER_OFFSET + SETPRESIG_OWNER_LEN;
 pub const SETPRESIG_VALID_TO_LEN: usize = 4;
 
+// ---------------------------------------------------------------------------
+// Field-overflow defense-in-depth (see docs/VULN-cowswap-zk-amount-overflow.md)
+// ---------------------------------------------------------------------------
+
+/// Bit-width the CoW Groth16 circuit range-checks `raw_amount` to, so
+/// that `raw_amount * scale_factor` cannot wrap the BLS12-381 scalar
+/// field (r ≈ 2^254.86) — `2^190 · 10^18 < 2^249.8 < r` over ℤ. The
+/// firmware mirrors the same bound natively as belt-and-braces.
+pub const RAW_AMOUNT_FIELD_SAFE_BITS: u32 = 190;
+
+/// Returns `true` iff the 32-byte big-endian amount is `< 2^190`.
+///
+/// The CoW circuit formats `sellAmount`/`buyAmount` via
+/// `FormatTrimmedAmount`, whose recomposition multiplies `raw_amount` by
+/// `scale_factor` in the scalar field. A *legitimate* displayable amount
+/// is tiny — with `MAX_INT_DIGITS = 10` and 18 decimals,
+/// `raw_amount ≤ 10^10 · 10^18 = 10^28 ≈ 2^93.4`. Any amount `≥ 2^190`
+/// therefore could only have come from a field-overflow forgery: a proof
+/// where the device displays a benign amount while signing an
+/// astronomically large one. Rejecting `≥ 2^190` here closes that class
+/// from the firmware side, independent of (and redundant with) the
+/// circuit's own `Num2Bits(190)` guard.
+///
+/// `2^190` lands inside byte index 8 (which holds bits 184..191), so the
+/// value is `< 2^190` exactly when bytes[0..8] (bits 192..255) are all
+/// zero and the top two bits of byte 8 (bits 190, 191) are clear, i.e.
+/// `bytes[8] < 0x40`. Bytes 9..32 are unconstrained.
+#[must_use]
+pub fn amount_within_field_safe_bound(amount_be: &[u8; 32]) -> bool {
+    amount_be[..8].iter().all(|&b| b == 0) && amount_be[8] < 0x40
+}
+
 /// Failure modes for the v3 `setPreSignature` cross-check. Kept as a
 /// discriminated enum (rather than a `Result<(), ()>`) so the caller
 /// can surface a precise error to telemetry + trusted UI even when the

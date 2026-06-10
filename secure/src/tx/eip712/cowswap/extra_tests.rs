@@ -24,8 +24,9 @@
 //!     refactor that dropped a field.
 
 use super::{
-    balance_hash, check_setpresig_calldata_shape, compute_digest, cross_check_setpresig_calldata,
-    decode_canonical, kind_hash, struct_hash, COWSWAP_DOMAIN_NAME, COWSWAP_DOMAIN_VERSION,
+    amount_within_field_safe_bound, balance_hash, check_setpresig_calldata_shape, compute_digest,
+    cross_check_setpresig_calldata, decode_canonical, kind_hash, struct_hash,
+    RAW_AMOUNT_FIELD_SAFE_BITS, COWSWAP_DOMAIN_NAME, COWSWAP_DOMAIN_VERSION,
     GPV2_SETTLEMENT_ADDRESS, ORDER_TYPEHASH_PREIMAGE, SETPRESIG_ORDERUID_OFFSET,
     SETPRESIG_ORDER_DIGEST_LEN, SETPRESIG_ORDER_DIGEST_OFFSET, SETPRESIG_OWNER_LEN,
     SETPRESIG_OWNER_OFFSET, SETPRESIG_VALID_TO_LEN, SETPRESIG_VALID_TO_OFFSET,
@@ -562,4 +563,103 @@ fn negative_shape_rejects_each_tail_pad_byte_nonzero() {
             "tail-pad byte at offset {offset} must reject when nonzero"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Field-overflow guard (docs/VULN-cowswap-zk-amount-overflow.md)
+// ---------------------------------------------------------------------------
+//
+// The CoW Groth16 circuit's `FormatTrimmedAmount` once computed
+// `raw_amount * scale_factor` in the scalar field with no range check on
+// `raw_amount`, letting a malicious companion forge a proof where the
+// device displays "0.2000 USDC" while the canonical sellAmount is a huge
+// ~254-bit value (~2.6e70 USDC). The circuit now range-checks the amount
+// to 190 bits; `amount_within_field_safe_bound` re-asserts the SAME bound
+// natively in `verify_and_bind_trailer` so the class is closed from both
+// sides. These tests pin the native gate.
+
+/// The exact forged sellAmount from `docs/cowswap-zk-poc/`: the unique
+/// `raw_amount = scaled_repr * (10^12)^-1 mod r` preimage of the benign
+/// "0.2000 USDC" residue. 254 bits — must be rejected.
+const POC_FORGED_SELL_AMOUNT: [u8; 32] = [
+    0x39, 0xd2, 0x6d, 0x02, 0xcf, 0x7a, 0x4d, 0x98, 0xb6, 0x3a, 0x92, 0x0d, 0x4f, 0x6d, 0x18, 0x8f,
+    0x2b, 0xbd, 0xde, 0x30, 0x65, 0x79, 0x70, 0x8f, 0xab, 0xb8, 0x80, 0xfb, 0xaf, 0x37, 0x5e, 0xff,
+];
+
+#[test]
+fn negative_field_safe_bound_rejects_poc_forged_amount() {
+    // The headline of the vuln: the witness that would render a benign
+    // "0.2000 USDC" while signing ~2.6e70 USDC. The native guard must
+    // reject it regardless of any (forged) proof that accompanies it.
+    assert!(
+        !amount_within_field_safe_bound(&POC_FORGED_SELL_AMOUNT),
+        "the PoC's 254-bit forged sellAmount must fail the field-safe bound"
+    );
+}
+
+#[test]
+fn positive_field_safe_bound_accepts_realistic_amounts() {
+    // 0.2 USDC in raw 6-decimal units = 200_000.
+    let mut amt = [0u8; 32];
+    amt[24..32].copy_from_slice(&200_000u64.to_be_bytes());
+    assert!(amount_within_field_safe_bound(&amt));
+
+    // The largest displayable amount: 10 int digits at 18 decimals =
+    // 10^10 * 10^18 = 10^28 ≈ 2^93.4 — comfortably under 2^190.
+    // 10^28 = 0x204fce5e3e25026110000000 (12 bytes).
+    let ten_pow_28: [u8; 12] = [
+        0x20, 0x4f, 0xce, 0x5e, 0x3e, 0x25, 0x02, 0x61, 0x10, 0x00, 0x00, 0x00,
+    ];
+    let mut big = [0u8; 32];
+    big[20..32].copy_from_slice(&ten_pow_28);
+    assert!(
+        amount_within_field_safe_bound(&big),
+        "10^28 (max displayable) must pass the field-safe bound"
+    );
+
+    // Zero amount is fine.
+    assert!(amount_within_field_safe_bound(&[0u8; 32]));
+}
+
+#[test]
+fn boundary_field_safe_bound_at_2_pow_190() {
+    // Exactly 2^190 = bit 190 set. Byte 8 holds bits 184..191, so bit 190
+    // is bit 6 of byte 8 (0x40). 2^190 itself must be REJECTED (the bound
+    // is strict: value < 2^190).
+    let mut at_bound = [0u8; 32];
+    at_bound[8] = 0x40; // 2^190
+    assert!(
+        !amount_within_field_safe_bound(&at_bound),
+        "2^190 must be rejected (bound is strict <)"
+    );
+
+    // 2^190 - 1: byte 8 = 0x3f, bytes 9..32 = 0xff. Must be accepted.
+    let mut just_under = [0u8; 32];
+    just_under[8] = 0x3f;
+    for b in just_under[9..32].iter_mut() {
+        *b = 0xff;
+    }
+    assert!(
+        amount_within_field_safe_bound(&just_under),
+        "2^190 - 1 must be accepted"
+    );
+
+    // Any nonzero byte in [0..8] (bits 192..255) is an instant reject,
+    // even if byte 8 is small.
+    for i in 0..8 {
+        let mut v = [0u8; 32];
+        v[i] = 0x01;
+        assert!(
+            !amount_within_field_safe_bound(&v),
+            "nonzero byte at index {i} (bits >= 192) must reject"
+        );
+    }
+}
+
+#[test]
+fn frozen_field_safe_bits_is_190() {
+    // Pin the bound so it can't silently drift away from the circuit's
+    // Num2Bits(190). If you change one you MUST change the other and
+    // regenerate the VK.
+    assert_eq!(RAW_AMOUNT_FIELD_SAFE_BITS, 190);
 }
