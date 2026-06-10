@@ -21,7 +21,20 @@
         The body obligation needs an `IteratorRange.next` decreasing
         lemma (Aeneas ships the `next` DEF but no step-spec — build one:
         `next` either yields & shrinks the range by 1, or returns none;
-        `forward_checked _ 1` never fails for the small ranges here).
+        `StepUsize.forward_checked _ 1 = ok (checked_add start 1)` never
+        returns none for `start < end ≤ Usize.max`, so the `fail .panic`
+        arm is dead).
+
+        ⚠️ KEY FINDING (2026-06-10, verified by inspecting the body):
+        `inv := True` is INSUFFICIENT even for panic-freedom. The loop
+        body computes `b * 8` (then `digest[idx] <<< (b*8)`), where `b`
+        is the yielded range element. With `inv = True` there is no
+        bound on `b`, so the `b * 8` Usize-multiplication overflow check
+        does NOT close. The invariant must bound the iteration variable,
+        e.g. `inv := fun (iter, _) => iter.end.val ≤ 8` (bytes_needed ≤ 8
+        for the C10 params), which gives `b < 8` and `b * 8 < 64`. So
+        even panic-freedom here is a genuine (small) invariant, not a
+        `True`-invariant rubber-stamp — the first real loop reasoning.
      2. With the loop spec, `extract_ht_index ⦃ _ => True ⦄` and
         `extract_fors_indices ⦃ _ => True ⦄` close (panic-freedom).
      3. FUNCTIONAL spec (extract_ht_index = (digest_le >> 143) & 0x3FFFF)
