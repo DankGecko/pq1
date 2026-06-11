@@ -1033,19 +1033,32 @@ fn negative_vendor_pubkey_does_not_inline_classical_keys() {
 // ─────────────────────────────────────────────────────────────────────
 
 #[test]
-fn positive_flash_base_addresses_pinned() {
-    // The two FLASH_BASE addresses are load-bearing for the
-    // OS-Fingerprint reproducibility check: `fwmeasure` host-side
-    // and `firmware_hash` on-device MUST hash the same region for
-    // the words to match.
+fn positive_measurement_base_derives_from_image_link_symbol() {
+    // MEDIUM-1 fix (docs/audits/boot-fsbl-20260611-141459.md): the
+    // measurement base must NOT be a hardcoded flash address. It is
+    // derived from the `__vector_table` linker symbol (= `ORIGIN(FLASH)`,
+    // the address the image is actually linked + loaded at), so it tracks
+    // the active layout — `0x0C00_0000` monolithic, `0x1000_0000` QEMU,
+    // and the slot base once the A/B slot-relocated build ships. This is
+    // the SAME range the WRP1A-rooted FSBL hashes for its trusted-display
+    // fingerprint, so an honest slot yields identical words on both rows.
+    // A regression to a hardcoded base would silently measure the FSBL +
+    // manifest region instead of the running slot in the A/B layout.
     assert!(
-        MEASURED_BOOT_SRC.contains("const FLASH_BASE: usize = 0x0C00_0000;"),
-        "stm32u585 FLASH_BASE must remain 0x0C00_0000 — secure flash alias on Cortex-M33 \
-         non-secure flag set"
+        MEASURED_BOOT_SRC.contains("static __vector_table: u8;"),
+        "measured_boot must import the __vector_table link symbol for the image base"
     );
     assert!(
-        MEASURED_BOOT_SRC.contains("const FLASH_BASE: usize = 0x1000_0000;"),
-        "QEMU FLASH_BASE must remain 0x1000_0000 — matches mps2-an505 secure flash"
+        MEASURED_BOOT_SRC.contains("fn image_base() -> usize")
+            && MEASURED_BOOT_SRC.contains("core::ptr::addr_of!(__vector_table) as usize"),
+        "image_base() must derive from addr_of!(__vector_table) — never a hardcoded const"
+    );
+    // Regression guard: the old hardcoded-base constants must be gone, so a
+    // future edit cannot quietly reintroduce a layout-blind base.
+    assert!(
+        !MEASURED_BOOT_SRC.contains("const FLASH_BASE: usize ="),
+        "the hardcoded FLASH_BASE const must stay removed (MEDIUM-1) — derive from \
+         __vector_table so the measurement tracks the running slot in the A/B layout"
     );
 }
 
@@ -1072,8 +1085,16 @@ fn positive_firmware_hash_uses_sha256_over_flash_region() {
         "firmware_hash must use Sha256::digest — same primitive fwmeasure uses host-side"
     );
     assert!(
-        MEASURED_BOOT_SRC.contains("core::slice::from_raw_parts(FLASH_BASE as *const u8, size)"),
-        "firmware_hash must hash a slice rooted at FLASH_BASE — fwmeasure expects this"
+        MEASURED_BOOT_SRC.contains("core::slice::from_raw_parts(base as *const u8, size)"),
+        "firmware_hash must hash a slice rooted at the image base (image_base()) — \
+         fwmeasure expects this"
+    );
+    // The length must derive from the linker-emitted end so the measured
+    // region is `[image_base(), flash_end())` and saturates (never panics
+    // / never under-reads) if a future layout reorders the symbols.
+    assert!(
+        MEASURED_BOOT_SRC.contains("let size = end.saturating_sub(base);"),
+        "firmware_hash size must be flash_end() saturating_sub image_base()"
     );
 }
 

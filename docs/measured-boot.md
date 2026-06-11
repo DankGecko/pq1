@@ -141,8 +141,41 @@ streaming attack or a flash failure). The COMMIT-time
 `verify_images` *also* catches this and auto-aborts, but FSBL is the
 user-visible belt-and-braces.
 
+## Same byte range on both rows (FSBL and secure-world)
+
+For the FSBL row and the secure-world row to show identical words for an
+honest slot, both must SHA-256 the **same bytes**. FSBL hashes
+`[slot_secure_addr, slot_secure_addr + secure_len)` — i.e. `[ORIGIN(FLASH),
+__veneer_limit)` of the slot it verified (`fsbl/src/verify.rs`). The
+secure-world `measured_boot::firmware_hash()` must therefore root its
+measurement at the **same image base**, not a hardcoded address.
+
+It does this by deriving the base from the `__vector_table` linker symbol
+(emitted by cortex-m-rt at `ORIGIN(FLASH)`) rather than a constant. The
+symbol resolves to wherever the running image is linked + loaded —
+`0x0C00_0000` for the monolithic secure build, `0x1000_0000` on QEMU, and
+the slot base (e.g. `0x0C00_E000`) once the A/B slot-relocated build ships.
+A hardcoded base would silently measure the FSBL + manifest region instead
+of the running slot the moment the A/B layout relocates the image, making
+this cross-check mis-fire on honest firmware (the "divergence ⇒ tamper"
+signal would then be permanently tripped and ignored). See
+`docs/audits/boot-fsbl-20260611-141459.md` (MEDIUM-1).
+
+> **Status of the cross-check.** Today's shipping build is **monolithic**
+> (no FSBL flashed), so only the self-attested secure-world row exists; the
+> FSBL trust root is not yet deployed. The base-tracking fix above is what
+> makes the two rows agree *once FSBL + A/B ship*. There is still **no
+> automated comparator** — divergence detection is a human glance at the
+> OLED against the recorded baseline. Wiring an on-device comparator (FSBL
+> leaving its verdict in a known SRAM/RTC-backup slot for the slot to echo)
+> remains future work and is tracked as the open half of MEDIUM-1.
+
 ## Implementation entrypoints
 
+- `secure/src/measured_boot.rs::image_base` / `firmware_hash` — measures
+  `[image_base(), flash_end())`, where `image_base()` is the
+  `__vector_table` link symbol (= `ORIGIN(FLASH)`), so the measured range
+  equals what FSBL hashed regardless of which slot the firmware runs from.
 - `fsbl/src/verify.rs::verify_images` — returns `Option<[u8; 32]>`,
   the secure-image digest on success.
 - `fsbl/src/main.rs` — calls `render::render_fingerprint(&secure_digest)`

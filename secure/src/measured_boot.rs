@@ -16,13 +16,26 @@ use crate::ui::{display, input, show_status, DISPLAY_COLS};
 // Flash region boundaries
 // ---------------------------------------------------------------------------
 
-// Secure flash base address — same #[cfg] pattern as NS_FLASH_BASE in main.rs.
-#[cfg(feature = "stm32u585")]
-const FLASH_BASE: usize = 0x0C00_0000;
-#[cfg(not(feature = "stm32u585"))]
-const FLASH_BASE: usize = 0x1000_0000;
-
-// Linker-defined symbols for determining the end of flash content.
+// Linker-defined symbols delimiting the firmware image in flash.
+//
+// `__vector_table` is emitted by cortex-m-rt's `link.x` exactly at
+// `ORIGIN(FLASH)` (`__vector_table = .;` is the first symbol inside
+// `.vector_table ORIGIN(FLASH) : { ... }`), so its address is the base the
+// image is BOTH linked and loaded at: `0x0C00_0000` for the monolithic
+// secure build, `0x1000_0000` on QEMU mps2-an505, and the slot base (e.g.
+// `0x0C00_E000`) once the A/B slot-relocated build ships.
+//
+// We derive the measurement base from this symbol rather than a hardcoded
+// constant so `firmware_hash()` always measures the bytes the image
+// ACTUALLY runs from — which is precisely the range the WRP1A-rooted FSBL
+// hashes for its trusted-display fingerprint (`fsbl/src/verify.rs` hashes
+// `[slot_secure_addr, slot_secure_addr + secure_len)` = `[ORIGIN(FLASH),
+// __veneer_limit)`). A hardcoded `0x0C00_0000` would silently measure the
+// FSBL + manifest region instead of the running slot the moment the A/B
+// layout relocates the image, making the FSBL-vs-secure-world fingerprint
+// cross-check (CLAUDE.md "divergence ⇒ tamper") mis-fire on honest
+// firmware. See docs/measured-boot.md and
+// docs/audits/boot-fsbl-20260611-141459.md (MEDIUM-1).
 //
 // On STM32U585, CMSE veneers (.gnu.sgstubs) live in FLASH, so the last
 // flash content is at __veneer_limit.
@@ -31,12 +44,25 @@ const FLASH_BASE: usize = 0x1000_0000;
 // (0x103FF000), so __veneer_limit is NOT in flash. Instead we compute
 // the end as __sidata + (__edata - __sdata) = end of .data init values.
 extern "C" {
+    static __vector_table: u8;
+
     #[cfg(feature = "stm32u585")]
     static __veneer_limit: u8;
 
     static __sidata: u8;
     static __sdata: u8;
     static __edata: u8;
+}
+
+/// Base address of the firmware image in flash — `ORIGIN(FLASH)`, i.e. the
+/// address the running image is both linked and loaded at. Tracks the
+/// active layout (monolithic vs A/B slot) automatically; see the `extern`
+/// block above for why this must NOT be a hardcoded constant.
+fn image_base() -> usize {
+    // SAFETY: `addr_of!` on an `extern "C"` static yields the linker-defined
+    // address without dereferencing; converting to `usize` does not read
+    // memory.
+    unsafe { core::ptr::addr_of!(__vector_table) as usize }
 }
 
 /// End of firmware content in flash.
@@ -64,14 +90,30 @@ fn flash_end() -> usize {
 // ---------------------------------------------------------------------------
 
 /// SHA-256 hash of the firmware flash region.
+///
+/// Covers `[image_base(), flash_end())` — the vector table, .text,
+/// .rodata, .data init values, and (on STM32U585) the CMSE veneers — i.e.
+/// the exact bytes the running image occupies in flash. This is the same
+/// range the WRP1A-rooted FSBL hashes for its trusted-display fingerprint,
+/// so an honest slot yields identical words on both rows regardless of
+/// which slot the firmware runs from (see docs/measured-boot.md).
 pub fn firmware_hash() -> [u8; 32] {
+    let base = image_base();
     let end = flash_end();
-    let size = end - FLASH_BASE;
+    // `end >= base` always holds for an honestly-linked image (both are
+    // linker-emitted, `__veneer_limit` after `__vector_table`).
+    // `saturating_sub` is belt-and-braces against a future linker-script
+    // edit that reorders them: a zero-length measurement is a visible, safe
+    // failure (all words render "abandon") rather than an arithmetic
+    // overflow panic (release builds set `overflow-checks = true`) or an
+    // out-of-bounds slice.
+    let size = end.saturating_sub(base);
 
     // SAFETY: flash is memory-mapped and readable from secure world.
-    // The region [FLASH_BASE, end) covers the vector table, .text,
-    // .rodata, .data init values, and (on STM32U585) CMSE veneers.
-    let flash = unsafe { core::slice::from_raw_parts(FLASH_BASE as *const u8, size) };
+    // The region [base, end) covers the vector table, .text, .rodata,
+    // .data init values, and (on STM32U585) CMSE veneers — all inside the
+    // image's own flash bank.
+    let flash = unsafe { core::slice::from_raw_parts(base as *const u8, size) };
 
     let hash: [u8; 32] = Sha256::digest(flash).into();
     hash
