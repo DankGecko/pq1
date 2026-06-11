@@ -2813,6 +2813,11 @@ impl WalletStore for Se050 {
         self.vk_cached = false;
         self.bootstrap_vk_cache.zeroize();
         self.bootstrap_vk_cached = false;
+        // MEDIUM-1 (audit secret-lifecycle 20260611): also tear down the
+        // live SCP03 session keys so they don't outlive the unlock session
+        // in SRAM. Lock / idle-wipe / panic reach here via
+        // `nsc::zeroize_sensitive_state`; the next SE access re-establishes.
+        self.scp03.zeroize_session();
     }
 
     fn random(&mut self, buf: &mut [u8]) -> Result<(), SeError> {

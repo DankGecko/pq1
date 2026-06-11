@@ -122,6 +122,29 @@ impl Scp03Session {
             }
         }
     }
+
+    /// Zeroize the live SCP03 session keys and force re-establishment.
+    ///
+    /// Reached from `Se050`'s `zeroize_caches`, which the lock / idle-wipe /
+    /// panic path drives via `nsc::zeroize_sensitive_state`. The `Se050`
+    /// driver is a `static mut` singleton, so it is never `Drop`ped in
+    /// production — without this, the AES-128 session keys
+    /// (`s_enc`/`s_mac`/`s_rmac`) that wrap `half_E` on the SE050 I2C bus
+    /// would persist in secure SRAM through the entire locked state, where
+    /// they could combine with a captured bus transcript to recover the
+    /// half. Clearing `active` makes the next SE access re-run
+    /// `scp03::establish` (the existing lazy-establish path checked at
+    /// `send_apdu`). (audit secret-lifecycle 20260611, MEDIUM-1)
+    pub fn zeroize_session(&mut self) {
+        use zeroize::Zeroize;
+        self.s_enc.zeroize();
+        self.s_mac.zeroize();
+        self.s_rmac.zeroize();
+        self.mcv.zeroize();
+        self.counter.zeroize();
+        crate::fi::zeroize_barrier();
+        self.active = false;
+    }
 }
 
 // AES-128 ECB/CBC + CMAC primitives and the SP 800-108 derivation-data

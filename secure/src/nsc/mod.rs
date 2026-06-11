@@ -242,6 +242,35 @@ compile_error!(
      Change AC. Drop `optiga-reset-oids` from production builds."
 );
 
+// SCA ship-blocker (audit secret-lifecycle 20260611, MEDIUM-3): a production
+// hardware build MUST enable the power-consumption mask (`consumption-mask`).
+// The ~7 s SPHINCS+C10 keygen/sign produces a characteristic power-draw
+// signature a bench CPA/DPA rig can correlate against the WOTS chain seeds and
+// FORS leaf secrets. `consumption-mask` drives a TIM2-CH1 PWM on PA5 whose duty
+// is re-randomised from the SysTick handler, so the signature stays
+// uncorrelated across the whole signing window; without it the only sign-path
+// SCA defenses are the F-16 shuffle and the F-17 rate limiter. This mirrors the
+// S-3 `optiga-hw-counter` pattern: the feature is not auto-composed, the fence
+// forces a shipping build to opt in. Hardware TEST images may opt out via
+// `e2e-test` / `dev-testkey` (they run non-shipping paths and keep timing
+// deterministic); SHIPPING images may not.
+#[cfg(all(
+    feature = "stm32u585",
+    not(debug_assertions),
+    not(feature = "e2e-test"),
+    not(feature = "dev-testkey"),
+    not(feature = "consumption-mask"),
+))]
+compile_error!(
+    "Production hardware builds (stm32u585 + !debug_assertions) require \
+     `consumption-mask` (ship-blocker; audit secret-lifecycle 20260611 \
+     MEDIUM-3). Without it the SPHINCS+C10 keygen/sign window runs with an \
+     undiluted power signature, exposing the WOTS/FORS secrets to a bench \
+     CPA/DPA attacker. Enable `consumption-mask` (it implies `stm32u585`; its \
+     TIM2-CH1 PWM mask runs on PA5, which no other driver claims), or build a \
+     non-shipping test image with `e2e-test` / `dev-testkey`."
+);
+
 // ---------------------------------------------------------------------------
 // UI-axis mutual exclusivity (Phase 2)
 //

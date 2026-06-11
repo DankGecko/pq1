@@ -116,6 +116,33 @@ impl ShieldedConnection {
         self.pbs_loaded = true;
     }
 
+    /// Zeroize the live Shielded-Connection session keys and force a fresh
+    /// handshake on next use.
+    ///
+    /// Reached from `OptigaTrustM`'s `zeroize_caches` on the lock / idle-wipe
+    /// / panic path (`nsc::zeroize_sensitive_state`). The `OptigaTrustM`
+    /// driver is a `static mut` singleton, so the `Drop` impl below never
+    /// runs in production — without this the AES-128-CCM session keys that
+    /// wrap `half_O` on the OPTIGA I2C bus would persist in secure SRAM
+    /// through the entire locked state, where they could combine with a
+    /// captured bus transcript to recover the half. Clearing `active` makes
+    /// `ensure_shield` re-handshake on the next OPTIGA APDU (the same
+    /// recovery the HIGH-9 renegotiation threshold relies on). The PBS is
+    /// intentionally retained: it is the long-lived pairing root (loaded
+    /// once at boot, re-derivable from the OTP/DHUK master) needed to
+    /// re-derive the session keys on the next handshake.
+    /// (audit secret-lifecycle 20260611, MEDIUM-1)
+    pub fn zeroize_session(&mut self) {
+        self.enc_key.zeroize();
+        self.dec_key.zeroize();
+        self.enc_nonce_base.zeroize();
+        self.dec_nonce_base.zeroize();
+        crate::fi::zeroize_barrier();
+        self.enc_seq = 0;
+        self.dec_seq = 0;
+        self.active = false;
+    }
+
     /// Derive session keys from the PBS and the chip-provided `random_S`.
     ///
     /// Uses TLS 1.2 PRF (HMAC-SHA256) to expand:

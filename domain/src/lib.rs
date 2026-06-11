@@ -282,8 +282,13 @@ fn with_bip39_seed<T>(entropy: &[u8; ENTROPY_LEN], f: impl FnOnce(&[u8; 64]) -> 
 /// the cached `pk_root` to skip the hypertree rebuild.
 #[must_use]
 pub fn derive_signing_key(seed: &[u8; SEED_LEN]) -> SigningKey {
-    let (sk_seed, pk_seed) = split_seed_48(seed);
-    SigningKey::keygen(sk_seed, pk_seed)
+    let (mut sk_seed, pk_seed) = split_seed_48(seed);
+    let sk = SigningKey::keygen(sk_seed, pk_seed);
+    // `[u8; 32]` is `Copy`, so `keygen` consumed a copy and this frame's
+    // `sk_seed` still holds the secret SPHINCS+ seed. Wipe it (audit
+    // secret-lifecycle 20260611, MEDIUM-2); `pk_seed` is the public seed.
+    sk_seed.zeroize();
+    sk
 }
 
 /// Derive the 48-byte SPHINCS+C10 seed material deterministically from the
@@ -570,9 +575,14 @@ pub fn derive_c10_master_keypair_from_entropy_with_progress(
     progress: impl Fn(u8),
 ) -> (SigningKey, [u8; 32], [u8; 32]) {
     progress(0);
-    let (pk_seed_32, sk_seed_32) = derive_c10_master_from_entropy(entropy, account_index);
+    let (pk_seed_32, mut sk_seed_32) = derive_c10_master_from_entropy(entropy, account_index);
     progress(10);
     let (sk, pk_root_32) = c10_keygen_from_n_masked_seeds(&sk_seed_32, &pk_seed_32);
+    // The secret sk_seed is not returned — keygen folded it into the
+    // (ZeroizeOnDrop) `SigningKey`. Wipe the leftover transient so it does
+    // not linger in this frame (audit secret-lifecycle 20260611, MEDIUM-2).
+    // `pk_seed_32` is the public N-masked seed.
+    sk_seed_32.zeroize();
     progress(100);
     (sk, pk_seed_32, pk_root_32)
 }
@@ -679,11 +689,15 @@ pub fn derive_c10_slot_keypair_with_progress(
 ) -> (SigningKey, [u8; 32], [u8; 32]) {
     progress(0);
     let mut entropy = slot_entropy(master_entropy, chain_id, slot_index);
-    let (sk_seed_32, pk_seed_32) = derive_c10_slot_seeds(&entropy);
+    let (mut sk_seed_32, pk_seed_32) = derive_c10_slot_seeds(&entropy);
     entropy.zeroize();
 
     progress(10);
     let (sk, pk_root_32) = c10_keygen_from_n_masked_seeds(&sk_seed_32, &pk_seed_32);
+    // Wipe the secret slot sk_seed transient post-keygen (audit
+    // secret-lifecycle 20260611, MEDIUM-2). The slot `entropy` is already
+    // wiped above; `pk_seed_32` is the public N-masked seed.
+    sk_seed_32.zeroize();
     progress(100);
 
     (sk, pk_seed_32, pk_root_32)

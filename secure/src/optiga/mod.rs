@@ -2739,6 +2739,12 @@ impl OptigaTrustM {
         self.vk_cached = false;
         self.bootstrap_vk_cache.zeroize();
         self.bootstrap_vk_cached = false;
+        // MEDIUM-1 (audit secret-lifecycle 20260611): also tear down the
+        // live Shielded-Connection session keys so they don't outlive the
+        // unlock session in SRAM. Lock / idle-wipe / panic reach here via
+        // `nsc::zeroize_sensitive_state`; `ensure_shield` re-handshakes on
+        // the next OPTIGA APDU.
+        self.shield.zeroize_session();
     }
 }
 

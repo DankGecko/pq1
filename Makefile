@@ -259,7 +259,7 @@ run-tropic01: setup-serial
 # This target only BUILDS — flashing is done with probe-rs / openocd / etc.
 # It will not link until the ui-oled backend is fully wired up.
 run-hw:
-	$(MAKE) FEATURES=tropic01-se,ui-oled,pka-accel,stm32u585 all
+	$(MAKE) FEATURES=tropic01-se,ui-oled,pka-accel,consumption-mask,stm32u585 all
 
 # Real STM32U585 hardware build (semihosting): mock SE + semihosting UI.
 # Uses probe-rs semihosting for I/O — same interactive model as QEMU
