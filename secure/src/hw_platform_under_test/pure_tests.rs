@@ -1290,38 +1290,43 @@ fn negative_journal_blank_qw_is_none_per_parse_entry_contract() {
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// 16. NEGATIVE — TAMP / RTC log-only semantics on bring-up branch
+// 16. TAMP trigger response — feature-gated escalation (audit tz-tamper
+//     20260611 MEDIUM-1). Log-only on bench (tamp-wipe OFF); shared
+//     intrusion wipe in production (tamp-wipe ON, forced by the
+//     `nsc/mod.rs` ship-blocker fence).
 // ═════════════════════════════════════════════════════════════════════
 
 #[test]
-fn negative_tamp_poll_is_log_only_not_wipe() {
-    // Per CLAUDE.md / Pre-Production Caveats: `tamp` is log-only on
-    // this branch. Trezor's `reboot_with_rsod()` was deliberately
-    // replaced with `secure_log!`. A future refactor that
-    // re-introduced `factory_reset_admin` / `trigger_lockout_wipe`
-    // here would brick every bench chip on the next false ITAMP9.
-    // Pin the log-only shape: poll reads SR, logs, write-1-to-clears,
-    // returns. Never halts, never wipes.
+fn tamp_poll_escalation_is_tamp_wipe_feature_gated() {
+    // MEDIUM-1 (audit tz-tamper 20260611): `poll` ALWAYS logs +
+    // write-1-to-clears (the log-only fast path bench/dev builds keep),
+    // and escalates to the shared intrusion wipe ONLY behind
+    // `#[cfg(feature = "tamp-wipe")]`. Both halves are load-bearing:
+    // dropping the wipe regresses MEDIUM-1 (a shipped device that only
+    // logs a tamper); making it unconditional regresses bench safety (a
+    // false ITAMP9 under a probe-rs glitch session would brick the
+    // bench chip). Pin both.
     let body = extract_body(TAMP_SRC, "pub fn poll() {");
     assert!(body.contains("secure_log!"));
     assert!(body.contains("REG.tamp_scr.write(ITAMP_FLAG_MASK);"));
+    // Escalation present, but gated so bench builds stay log-only.
+    assert!(body.contains("#[cfg(feature = \"tamp-wipe\")]"));
+    assert!(body.contains("trigger_intrusion_wipe"));
+    // The wipe routes through the shared tzic primitive — no inline,
+    // always-on factory-reset in the fast path.
     assert!(!body.contains("factory_reset"));
-    assert!(!body.contains("trigger_lockout_wipe"));
-    assert!(!body.contains("SCB::sys_reset"));
-    assert!(!body.contains("loop {"));
 }
 
 #[test]
-fn negative_tamp_irq_handler_is_log_only_not_wipe() {
-    // Same shape as `poll` — IRQ-mode must not escalate either,
-    // pending the production hardening that flips the trigger
-    // response (see docs/production-todo.md "TAMP escalation").
+fn tamp_irq_handler_escalation_is_tamp_wipe_feature_gated() {
+    // Same contract as `poll` — the IRQ-mode handler escalates only
+    // behind `#[cfg(feature = "tamp-wipe")]`, staying log-only on bench.
     let body = extract_body(TAMP_SRC, "pub fn on_tamp_irq() {");
     assert!(body.contains("secure_log!"));
     assert!(body.contains("REG.tamp_scr.write(ITAMP_FLAG_MASK);"));
+    assert!(body.contains("#[cfg(feature = \"tamp-wipe\")]"));
+    assert!(body.contains("trigger_intrusion_wipe"));
     assert!(!body.contains("factory_reset"));
-    assert!(!body.contains("trigger_lockout_wipe"));
-    assert!(!body.contains("SCB::sys_reset"));
 }
 
 #[test]

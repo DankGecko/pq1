@@ -3,14 +3,21 @@
 //! Port of Trezor's `core/embed/sec/tamper/stm32u5/tamper.c` with two
 //! deliberate differences for the PQSigner bring-up branch:
 //!
-//! 1. **Log-only IRQ handler.** Where Trezor calls `reboot_with_rsod()`
-//!    (zeroize + reboot into red-screen-of-death), this handler logs
-//!    the trigger source via `secure_log!` and parks in a WFE loop. On
-//!    a dev board wired to probe-rs, a false ITAMP9 (crypto peripheral
-//!    fault) during a glitch-sensitive debug probe would otherwise
-//!    wipe the bench chip every session — that's the exact
-//!    bring-up-safety failure mode `CLAUDE.md` warns about. Once
-//!    hardware is stable end-to-end, flip to `trigger_lockout_wipe()`.
+//! 1. **Feature-gated trigger response (audit tz-tamper 20260611
+//!    MEDIUM-1).** Where Trezor calls `reboot_with_rsod()` (zeroize +
+//!    reboot into red-screen-of-death), `poll` / `on_tamp_irq` always
+//!    log the trigger source via `secure_log!` and write-1-to-clear,
+//!    then — **only under `tamp-wipe`** — fire the shared intrusion
+//!    response `hw::tzic::trigger_intrusion_wipe` (zeroize SRAM secrets
+//!    + arm the page-125 wipe flag + reset; the next boot finishes the
+//!    SE factory_reset + page-124 erase). With `tamp-wipe` OFF the
+//!    handler stays log-only: on a dev board wired to probe-rs, a false
+//!    ITAMP9 (crypto peripheral fault) during a glitch-sensitive debug
+//!    probe would otherwise wipe the bench chip every session — that's
+//!    the exact bring-up-safety failure mode `CLAUDE.md` warns about.
+//!    Shipping dual-SE images are forced to enable `tamp` + `tamp-wipe`
+//!    (+ `tzic-wipe`) by the ship-blocker `compile_error!` in
+//!    `nsc/mod.rs`, so production wipes while the bench stays safe.
 //!
 //! 2. **Feature-gated behind `tamp`.** Without the feature, this
 //!    module compiles into a no-op and nothing in the boot sequence
@@ -83,6 +90,23 @@ pub fn poll() {
     let _reason = reason_from_sr(sr);
     secure_log!("[TAMP] poll: {} (SR={:#010x})", _reason, sr);
     REG.tamp_scr.write(ITAMP_FLAG_MASK);
+
+    // MEDIUM-1 (audit tz-tamper 20260611) — production escalation. A
+    // confirmed internal tamper is terminal: drive the shared
+    // zeroize-SRAM + arm-page-125-wipe-flag + reset intrusion response
+    // (`tzic::trigger_intrusion_wipe`), so the next boot's wipe-resume
+    // path finishes the SE factory-reset + page-124 erase. Feature-gated
+    // so bench/dev builds (tamp-wipe OFF) stay log-only — a false ITAMP9
+    // under a glitch-sensitive probe-rs session must NOT brick the bench
+    // chip. The `nsc/mod.rs` ship-blocker fence forces `tamp-wipe` ON for
+    // production dual-SE images. Never returns.
+    #[cfg(feature = "tamp-wipe")]
+    // SAFETY: `poll` runs in SysTick exception context — single-threaded
+    // secure world, never returns to thread mode; satisfies
+    // `trigger_intrusion_wipe`'s exception-context precondition.
+    unsafe {
+        crate::hw::tzic::trigger_intrusion_wipe();
+    }
 }
 
 #[cfg(not(feature = "tamp"))]
@@ -387,6 +411,17 @@ pub fn on_tamp_irq() {
     // Write-1-to-clear the flags so the line de-asserts. Without this
     // the IRQ would re-enter immediately on return.
     REG.tamp_scr.write(ITAMP_FLAG_MASK);
+
+    // MEDIUM-1 (audit tz-tamper 20260611) — production escalation, same
+    // contract as `poll`: a confirmed tamper drives the shared
+    // intrusion wipe. Feature-gated so bench builds stay log-only.
+    // Never returns.
+    #[cfg(feature = "tamp-wipe")]
+    // SAFETY: IRQ (exception) context, single-threaded secure world,
+    // never returns to thread mode; matches `trigger_intrusion_wipe`.
+    unsafe {
+        crate::hw::tzic::trigger_intrusion_wipe();
+    }
 }
 
 #[cfg(all(test, feature = "tamp"))]

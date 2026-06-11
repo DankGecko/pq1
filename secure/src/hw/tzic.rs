@@ -11,11 +11,17 @@
 //! for the same peripheral, so the same masks `sau::stm32` builds for
 //! SECCFGR are reused as IER masks.
 //!
-//! Production behaviour (today, slice-1 of the GTZC hardening): log
-//! the offender via `secure_log!` and increment a counter. The
-//! follow-up commit replaces the body of [`on_violation`] with a
-//! lockout-wipe + reboot once TAMP has been moved off log-only — see
-//! `docs/production-todo.md` §"GTZC1 TZSC ... validation".
+//! Behaviour: log the offender via `secure_log!`, increment a counter,
+//! and — under `tzic-wipe` — fire [`trigger_intrusion_wipe`], the
+//! shared intrusion response (zeroize SRAM secrets + arm the page-125
+//! wipe flag + reset). The same primitive is the production TAMP
+//! escalation (`hw::tamp`, under `tamp-wipe`); both are forced on for
+//! shipping dual-SE images by the ship-blocker `compile_error!` in
+//! `nsc/mod.rs` (audit tz-tamper 20260611 MEDIUM-1). Without those
+//! features the handler is log-only — the `gtzc-enforcement-hw`
+//! validation path relies on that to trip violations and read the
+//! counter back. See `docs/production-todo.md` §"GTZC1 TZSC ...
+//! validation".
 
 use crate::hw::mmio::{Reg32, RoReg32};
 
@@ -183,12 +189,14 @@ pub unsafe fn on_violation() {
     // it can trip 7 violations and read the counter back.
     #[cfg(feature = "tzic-wipe")]
     unsafe {
-        trigger_tzic_wipe();
+        trigger_intrusion_wipe();
     }
 }
 
-/// Production wipe sequence triggered from the TZIC IRQ. Never
-/// returns — calls `SCB::sys_reset` after staging.
+/// Shared intrusion-response wipe. Triggered from a GTZC1 illegal-access
+/// (TZIC) IRQ under `tzic-wipe`, and from a TAMP tamper event
+/// (`hw::tamp::poll` / `on_tamp_irq`) under `tamp-wipe`. Never returns —
+/// resets the chip after staging.
 ///
 /// Order matters: SRAM zeroize first (microseconds — racing
 /// residual-power side channels), then flash arm (single
@@ -204,12 +212,12 @@ pub unsafe fn on_violation() {
 /// (`main.rs:937`).
 ///
 /// # Safety
-/// Caller is in IRQ context; `crate::SE` and `state::SecureState`
-/// are accessed under the single-threaded secure-world invariant
-/// (IRQ pre-empts thread mode but doesn't re-enter itself, and
-/// we never return to thread mode).
-#[cfg(feature = "tzic-wipe")]
-unsafe fn trigger_tzic_wipe() -> ! {
+/// Caller is in exception (IRQ / SysTick) context; `crate::SE` and
+/// `state::SecureState` are accessed under the single-threaded
+/// secure-world invariant (exception pre-empts thread mode but doesn't
+/// re-enter itself, and we never return to thread mode).
+#[cfg(any(feature = "tzic-wipe", feature = "tamp-wipe"))]
+pub(crate) unsafe fn trigger_intrusion_wipe() -> ! {
     // 1. Zero every secret in SRAM. Microseconds — drains the
     //    cache before any residual-power side channel can read
     //    it. Same primitive `cmd_request_unlock::trigger_lockout_wipe`
@@ -240,12 +248,16 @@ unsafe fn trigger_tzic_wipe() -> ! {
     //    drives the SE wipe.
     //
     //    Soft-disconnect USB first so a connected USB-C host sees a
-    //    clean detach + re-attach across the reboot. We're in IRQ
+    //    clean detach + re-attach across the reboot. We're in exception
     //    context here — the ~50 ms delay inside
     //    `soft_disconnect_then_reset` is acceptable because the
     //    handler doesn't return to thread mode (it resets the chip),
     //    and UI/I2C are deliberately untouched (see the docstring
-    //    comment above on IRQ-context constraints).
+    //    comment above on exception-context constraints). `usb` is a
+    //    hard dependency of every `stm32u585` image anyway (the
+    //    `cmd_fw_*` handlers reference `usb_hw` unconditionally), so a
+    //    shipping build that satisfies the `nsc/mod.rs` tamper fence
+    //    always has it.
     crate::hw::usb_hw::soft_disconnect_then_reset();
 }
 

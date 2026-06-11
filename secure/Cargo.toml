@@ -234,6 +234,20 @@ tamp = ["stm32u585"]
 # escalation"). Off by default while polled-mode soaks; see
 # `docs/work-todo.md` #26 for the flip-when criteria.
 tamp-irq = ["tamp"]
+# Production escalation for a TAMP tamper event (audit tz-tamper 20260611
+# MEDIUM-1). When OFF (bench/dev), `tamp::poll` / `tamp::on_tamp_irq` stay
+# log-only so a false ITAMP9 (crypto-peripheral fault) during a glitch-
+# sensitive probe-rs session doesn't wipe the bench chip — the exact
+# bring-up-safety failure mode the log-only handler was built for. When ON,
+# a confirmed internal-tamper flag drives the same zeroize-SRAM + arm-page-
+# 125-wipe-flag + reset intrusion response the GTZC1 illegal-access path
+# uses (`hw::tzic::trigger_intrusion_wipe`); the next boot's wipe-resume
+# path finishes the SE factory_reset + page-124 erase. Implies `tamp` (you
+# can't escalate a tamper you don't monitor); pair with `tamp-irq` for
+# lowest-latency response. Production CI / `make prod-check` must require
+# this ON — enforced by the ship-blocker `compile_error!` in `nsc/mod.rs`
+# (mirrors `tzic-wipe` / `consumption-mask`).
+tamp-wipe = ["tamp"]
 # Production escalation for GTZC1 illegal-access. When OFF, the TZIC
 # IRQ handler in `hw::tzic::on_violation` only snapshots SR + bumps a
 # counter (the `gtzc-test` validation path uses this — see the

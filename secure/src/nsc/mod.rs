@@ -271,6 +271,46 @@ compile_error!(
      non-shipping test image with `e2e-test` / `dev-testkey`."
 );
 
+// MEDIUM-1 ship-blocker (audit tz-tamper 20260611): a production hardware
+// build MUST enable tamper monitoring AND the production intrusion-response
+// escalation on BOTH detectors — TAMP (`tamp` + `tamp-wipe`) and the GTZC1
+// illegal-access controller (`tzic-wipe`). Without `tamp` the device does
+// ZERO tamper detection; with `tamp` but without `tamp-wipe` / `tzic-wipe` a
+// detected tamper (voltage / clock glitch, ITAMP9 crypto-peripheral-fault FI
+// canary, SWD-at-RDP>0) or an NS->secure illegal access is merely logged and
+// the device continues — the zeroize-SRAM + arm-wipe-flag + reset response
+// (`hw::tzic::trigger_intrusion_wipe`) never fires, so a fault-injection
+// campaign against the SAES/PKA/TRNG gets unbounded attempts with no penalty.
+// Keyed on `dual-se` (the production seed-split SE config, invariant #1) so
+// the fence targets shipping images only and never forces a brick-on-tamper
+// response onto mock / tropic01 / single-SE bench builds — mirrors how the
+// `optiga-hw-counter` / `se050-derived-scp03` fences key on their backend.
+// These features are not auto-composed, so the fence forces a shipping build
+// to opt in. Hardware TEST images may opt out via `e2e-test` / `dev-testkey`
+// (they keep the log-only path so a probe-rs glitch session doesn't wipe the
+// bench chip).
+#[cfg(all(
+    feature = "dual-se",
+    any(
+        feature = "mode-production",
+        all(feature = "stm32u585", not(debug_assertions)),
+    ),
+    not(feature = "e2e-test"),
+    not(feature = "dev-testkey"),
+    not(all(feature = "tamp", feature = "tamp-wipe", feature = "tzic-wipe")),
+))]
+compile_error!(
+    "Production dual-SE builds require `tamp` + `tamp-wipe` + `tzic-wipe` \
+     (ship-blocker; audit tz-tamper 20260611 MEDIUM-1). Without them a \
+     detected tamper (voltage/clock glitch, ITAMP9 crypto-peripheral fault, \
+     SWD-at-RDP>0) or an NS->secure illegal access is only logged — the \
+     zeroize-SRAM + arm-wipe-flag + reset intrusion response never fires, so \
+     a fault-injection campaign gets unbounded attempts with no penalty. \
+     Enable `tamp` + `tamp-wipe` + `tzic-wipe` (add `tamp-irq` for \
+     lowest-latency response), or build a non-shipping test image with \
+     `e2e-test` / `dev-testkey`."
+);
+
 // HIGH-1 ship-blocker (audit se-tunnels 20260611): a production SE050 build MUST
 // root its SCP03 channel in per-device derived keys (`se050-derived-scp03`), not
 // the published AN12436 factory keyset. Without the feature,
