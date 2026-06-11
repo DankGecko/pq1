@@ -271,6 +271,72 @@ compile_error!(
      non-shipping test image with `e2e-test` / `dev-testkey`."
 );
 
+// HIGH-1 ship-blocker (audit se-tunnels 20260611): a production SE050 build MUST
+// root its SCP03 channel in per-device derived keys (`se050-derived-scp03`), not
+// the published AN12436 factory keyset. Without the feature,
+// `scp03::load_platform_keys` returns `PLATFORM_{ENC,MAC,DEK}` — the public
+// SE050E OEF-0xA921 constants — and `establish()` derives the session keys from
+// them, so a logic analyzer on I2C1 reconstructs `s_enc`/`s_rmac` from the
+// on-wire SCP03 handshake challenges and DECRYPTS `half_E` (the SE050 seed share)
+// out of every unlock. `scp03_logic.rs` says it outright: such a channel is
+// "plaintext-equivalent to a bus sniffer with the datasheet". Invariant #3 break;
+// weakens #1. Mirrors the S-3 `optiga-hw-counter` pattern — the feature is not
+// auto-composed, so the fence forces a shipping build to opt in (and to run the
+// per-unit `se050-rotate-scp03` PUT KEY ceremony so the chip holds the matching
+// derived keys). `dual-se` implies `se050`, so this also covers the production
+// dual-chip build. NOTE: fencing out the *fallback* fail-OPEN
+// (`se050-scp03-allow-factory-fallback`, above) shut the back door; this shuts
+// the front door — shipping with the feature simply OFF. Hardware TEST images
+// may opt out via `e2e-test` / `dev-testkey`.
+#[cfg(all(
+    feature = "se050",
+    any(
+        feature = "mode-production",
+        all(feature = "stm32u585", not(debug_assertions)),
+    ),
+    not(feature = "e2e-test"),
+    not(feature = "dev-testkey"),
+    not(feature = "se050-derived-scp03"),
+))]
+compile_error!(
+    "Production SE050 builds require `se050-derived-scp03` (ship-blocker; audit \
+     se-tunnels 20260611 HIGH-1). Without it the SCP03 static keys are the \
+     PUBLISHED AN12436 factory constants (`PLATFORM_{ENC,MAC,DEK}`), so the SE050 \
+     secure channel is plaintext-equivalent to a bus sniffer holding the \
+     datasheet: a logic analyzer on I2C1 reconstructs the session keys from the \
+     on-wire SCP03 handshake challenges and decrypts `half_E` out of every unlock \
+     (invariant #3 break, weakens #1). Enable `se050-derived-scp03` (and run the \
+     per-unit `se050-rotate-scp03` PUT KEY ceremony so the chip holds the matching \
+     derived keys), or build a non-shipping test image with `e2e-test` / \
+     `dev-testkey`."
+);
+
+// MEDIUM-1 ship-blocker (audit se-tunnels 20260611): `optiga-no-shield` turns
+// `ensure_shield()` into a no-op and routes every OPTIGA APDU through the
+// plaintext `send_command` branch, so `half_O` (the OPTIGA seed share) and the
+// PIN-auth HMAC challenge/response transit I2C in cleartext — a bus attacker
+// reads the OPTIGA seed share directly off the wire (invariant #3 break, weakens
+// #1). It is a dev affordance for a bricked/unreachable E140 and must never reach
+// a shipping image. Same shape as the S-2 `optiga-reset-oids` fence. Hardware
+// TEST images may opt out via `e2e-test` / `dev-testkey`.
+#[cfg(all(
+    feature = "optiga-no-shield",
+    any(
+        feature = "mode-production",
+        all(feature = "stm32u585", not(debug_assertions)),
+    ),
+    not(feature = "e2e-test"),
+    not(feature = "dev-testkey"),
+))]
+compile_error!(
+    "`optiga-no-shield` must not ship (ship-blocker; audit se-tunnels 20260611 \
+     MEDIUM-1): it disables the Shielded Connection entirely, so `half_O` and the \
+     PIN-auth APDUs transit I2C in plaintext and a bus attacker reads the OPTIGA \
+     seed share directly off the wire (invariant #3 break, weakens #1). Drop \
+     `optiga-no-shield` from production builds, or build a non-shipping test image \
+     with `e2e-test` / `dev-testkey`."
+);
+
 // ---------------------------------------------------------------------------
 // UI-axis mutual exclusivity (Phase 2)
 //

@@ -616,6 +616,26 @@ fn positive_production_build_blocks_dev_features() {
 }
 
 #[test]
+fn positive_se_tunnel_ship_blocker_fences_present() {
+    // audit se-tunnels 20260611 HIGH-1: a production SE050 build must REQUIRE
+    // per-device derived SCP03 keys; without `se050-derived-scp03` the channel
+    // authenticates with the published AN12436 factory keyset and a bus sniffer
+    // decrypts `half_E`. Pin the fence by source so a refactor can't drop it.
+    assert!(
+        NSC_MOD_SRC.contains("not(feature = \"se050-derived-scp03\")")
+            && NSC_MOD_SRC.contains("HIGH-1"),
+        "nsc/mod.rs must keep the HIGH-1 se050-derived-scp03 production fence"
+    );
+    // audit se-tunnels 20260611 MEDIUM-1: `optiga-no-shield` (plaintext I2C,
+    // bus-sniffable `half_O`) must not ship.
+    assert!(
+        NSC_MOD_SRC.contains("feature = \"optiga-no-shield\"")
+            && NSC_MOD_SRC.contains("MEDIUM-1"),
+        "nsc/mod.rs must keep the MEDIUM-1 optiga-no-shield production fence"
+    );
+}
+
+#[test]
 fn positive_otp_hardcoded_and_optiga_lock_operational_mutually_exclusive() {
     // The dedicated guard against the catastrophic combination
     // (hardcoded PBS + irreversible operational lock).

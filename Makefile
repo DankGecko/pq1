@@ -1263,7 +1263,13 @@ flash-hw-se050-oled-standalone: build-hw-se050-oled-standalone
 # Invariants respected:
 #   #1 dual-chip seed split (half_O on OPTIGA, half_E on SE050).
 #   #2 hardware-level PIN gating (OPTIGA auth-ref + SE050 UserID).
-#   #3 E2E encrypted tunnels (Shielded Connection + SCP03).
+#   #3 E2E encrypted tunnels (Shielded Connection + SCP03) — STRUCTURE only on
+#      this BENCH target: `dev-testkey` roots the OPTIGA PBS in a compile-time
+#      constant and `se050-derived-scp03` is OFF, so the SE050 SCP03 channel runs
+#      on the PUBLISHED AN12436 factory keys. Both are bus-sniffable here — fine
+#      for bench (dev-testkey is a non-shipping marker), NOT confidential. A
+#      SHIPPING build must add `se050-derived-scp03` (+ saes-dhuk/bhk PBS) and a
+#      rotated chip; the `nsc/mod.rs` HIGH-1 fence enforces the build side.
 #   #4/#5/#6/#7/#8 — all in force; this is just a feature-set wrapper.
 #
 # Intended workflow for bench iteration:
