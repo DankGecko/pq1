@@ -58,6 +58,12 @@ mod backend {
     pub unsafe fn last_userop_count_set(slot_key: &[u8; 8], count: u64) -> Result<(), ()> {
         crate::hw::flash::last_userop_count_set(slot_key, count)
     }
+    pub unsafe fn userop_sigs_read(slot_key: &[u8; 8]) -> u64 {
+        crate::hw::flash::userop_sigs_read(slot_key)
+    }
+    pub unsafe fn userop_sigs_bump(slot_key: &[u8; 8], new_count: u64) -> Result<(), ()> {
+        crate::hw::flash::userop_sigs_bump(slot_key, new_count)
+    }
 }
 
 #[cfg(not(any(feature = "stm32u585", feature = "pka-accel")))]
@@ -77,6 +83,7 @@ mod backend {
         slot_key: [u8; 8],
         offchain: u64,
         last_userop: u64,
+        userop_sigs: u64,
         registered: bool,
         used: bool,
     }
@@ -85,6 +92,7 @@ mod backend {
         slot_key: [0u8; 8],
         offchain: 0,
         last_userop: 0,
+        userop_sigs: 0,
         registered: false,
         used: false,
     }; MAX_SLOTS];
@@ -106,6 +114,7 @@ mod backend {
                 e.slot_key = *slot_key;
                 e.offchain = 0;
                 e.last_userop = 0;
+                e.userop_sigs = 0;
                 e.registered = false;
                 e.used = true;
                 return Some(i);
@@ -189,6 +198,30 @@ mod backend {
         Ok(())
     }
 
+    /// Mirror of `flash::userop_sigs_read` (MEDIUM-2).
+    pub unsafe fn userop_sigs_read(slot_key: &[u8; 8]) -> u64 {
+        match find(slot_key) {
+            Some(i) => (*core::ptr::addr_of!(TABLE))[i].userop_sigs,
+            None => 0,
+        }
+    }
+
+    /// Mirror of `flash::userop_sigs_bump` (MEDIUM-2). Monotonic: `Err`
+    /// if `new_count <= current` so the caller's `current + 1` only fails
+    /// on a logic error.
+    pub unsafe fn userop_sigs_bump(slot_key: &[u8; 8], new_count: u64) -> Result<(), ()> {
+        let idx = match find(slot_key) {
+            Some(i) => i,
+            None => allocate(slot_key).ok_or(())?,
+        };
+        let table = &mut *core::ptr::addr_of_mut!(TABLE);
+        if new_count <= table[idx].userop_sigs {
+            return Err(());
+        }
+        table[idx].userop_sigs = new_count;
+        Ok(())
+    }
+
     /// Test-only: clear the SRAM mock to simulate a power cycle / seed
     /// restoration. Never compiled into a real firmware — guarded by
     /// `e2e-test`.
@@ -200,6 +233,7 @@ mod backend {
                 slot_key: [0u8; 8],
                 offchain: 0,
                 last_userop: 0,
+                userop_sigs: 0,
                 registered: false,
                 used: false,
             };

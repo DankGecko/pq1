@@ -1040,8 +1040,10 @@ fn negative_eip1271_counterfactual_shows_pre_deploy_warning() {
         1, 0, 1, &wallet, b"hi", 5, 4, 100, false,
     );
     assert_eq!(row_str(&p_deployed.buf[0][2]), "Verify on dapp");
-    // "! Pre-deploy 6492" is 17 chars — truncated to 16 by write_line.
-    assert_eq!(row_str(&p_pre_deploy.buf[0][2]), "! Pre-deploy 649");
+    // MEDIUM-1: legible, fit-to-width counterfactual warning (exactly 16
+    // chars, no longer truncated). Surfaces the budget-reset risk to a
+    // returning user whose wallet is actually deployed.
+    assert_eq!(row_str(&p_pre_deploy.buf[0][2]), "! Undeployed sig");
     assert_ne!(p_deployed.buf[0][2], p_pre_deploy.buf[0][2]);
 
     // Same affordance on the raw32 path.
@@ -1049,7 +1051,7 @@ fn negative_eip1271_counterfactual_shows_pre_deploy_warning() {
     let r_deployed = render_eip1271_raw32_pages(1, 0, 1, &hash, 5, 4, 100, true);
     let r_pre = render_eip1271_raw32_pages(1, 0, 1, &hash, 5, 4, 100, false);
     assert_eq!(row_str(&r_deployed.buf[0][2]), "Verify on dapp");
-    assert_eq!(row_str(&r_pre.buf[0][2]), "! Pre-deploy 649");
+    assert_eq!(row_str(&r_pre.buf[0][2]), "! Undeployed sig");
 }
 
 #[test]

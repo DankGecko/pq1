@@ -616,6 +616,9 @@ const CMD_OFFCHAIN_STATUS_SRC: &str = include_str!("nsc/cmd_offchain_status.rs")
 const CMD_OFFCHAIN_SYNC_SRC: &str = include_str!("nsc/cmd_offchain_sync.rs");
 const CMD_SIGN_OFFCHAIN_SRC: &str = include_str!("nsc/cmd_sign_offchain.rs");
 const CMD_SIGN_USEROP_BATCH_SRC: &str = include_str!("nsc/cmd_sign_userop_batch.rs");
+// Not part of the four-file "slice" array below — pinned only for the
+// MEDIUM-2 combined-cap guard, which lives in the single-tx handler too.
+const CMD_SIGN_USEROP_SRC: &str = include_str!("nsc/cmd_sign_userop.rs");
 
 const ALL_SLICE_SRCS: [(&str, &str); 4] = [
     ("cmd_offchain_status.rs", CMD_OFFCHAIN_STATUS_SRC),
@@ -942,6 +945,86 @@ fn negative_sign_offchain_refuses_unregistered_slots_on_deployed_path() {
     // `OffchainSlotUnregistered` for non-6492 unregistered slots.
     assert!(CMD_SIGN_OFFCHAIN_SRC.contains("OffchainSlotUnregistered"));
     assert!(CMD_SIGN_OFFCHAIN_SRC.contains("slot unregistered"));
+}
+
+#[test]
+fn negative_sign_offchain_defers_registration_until_after_confirm() {
+    // MEDIUM-3 (audit counter-replay 20260611): the off-chain handler must
+    // NOT commit a durable page-123 registration entry before the user
+    // confirms. The old code called `offchain_count_register_slot` at the
+    // §5 probe (pre-confirm), letting a malicious companion mint durable
+    // flash state — and wear the page — with no consent. The registration
+    // is now folded into the post-confirm §13 `offchain_count_bump`. Pin
+    // that the pre-confirm register call is gone from this handler.
+    assert!(
+        !CMD_SIGN_OFFCHAIN_SRC.contains("offchain_count_register_slot"),
+        "MEDIUM-3: off-chain handler must not write a registration entry before the user confirm"
+    );
+    // The counterfactual (account_deployed==0, slot 0) carve-out is still
+    // the ONLY unregistered-slot path that proceeds; everything else is
+    // refused (invariant #9).
+    assert!(CMD_SIGN_OFFCHAIN_SRC.contains("account_deployed || slot_index != 0"));
+}
+
+#[test]
+fn negative_combined_cap_counts_userop_sigs_on_every_sign_path() {
+    // MEDIUM-2 (audit counter-replay 20260611): off-chain EIP-1271 sigs are
+    // never counted on-chain (isValidSignature is view-only) and a withheld
+    // / reverted UserOp never bumps on-chain `slotUses`, so the device must
+    // tally the Type-2 slot-key signatures it produces (`userop_sigs`) and
+    // enforce the *combined* few-time budget `userop_sigs + offchain_count
+    // <= MAX_SLOT_USES` on BOTH the UserOp and the off-chain paths. Without
+    // this, a malicious companion can withhold the publishing UserOps and
+    // drive total slot-key usage to ~2x the cap.
+    //
+    // Off-chain path: reads the tally and folds it into the cap.
+    assert!(CMD_SIGN_OFFCHAIN_SRC.contains("userop_sigs"));
+    assert!(CMD_SIGN_OFFCHAIN_SRC.contains("userop_sigs.saturating_add(new_count) > MAX_SLOT_USES"));
+    // Single-tx UserOp path: combined-cap gate + per-sign durable bump.
+    assert!(CMD_SIGN_USEROP_SRC.contains("userop_sigs_read"));
+    assert!(CMD_SIGN_USEROP_SRC.contains("userop_sigs.saturating_add(local_offchain) >= MAX_SLOT_USES"));
+    assert!(CMD_SIGN_USEROP_SRC.contains("userop_sigs_bump"));
+    // Batch path: same gate + bump (one Type-2 sig per batch).
+    assert!(CMD_SIGN_USEROP_BATCH_SRC.contains("userop_sigs_read"));
+    assert!(CMD_SIGN_USEROP_BATCH_SRC.contains("userop_sigs.saturating_add(local_offchain) >= MAX_SLOT_USES"));
+    assert!(CMD_SIGN_USEROP_BATCH_SRC.contains("userop_sigs_bump"));
+}
+
+#[test]
+fn combined_cap_boundary_arithmetic() {
+    // MEDIUM-2: mirror both gate formulations and verify they bound the
+    // TOTAL slot-key signatures (UserOp tally + off-chain count) to
+    // MAX_SLOT_USES, plus the fail-closed saturating behaviour on a
+    // glitched (u64::MAX) counter read. Keep in lockstep with the handler
+    // expressions pinned above; if either drifts, this fires.
+
+    // UserOp path: refuse iff `userop_sigs + local_offchain >= cap`
+    // (after the +1 bump the post-state combined is <= cap).
+    let userop_refuse = |userop_sigs: u64, local_offchain: u64| -> bool {
+        userop_sigs.saturating_add(local_offchain) >= MAX_SLOT_USES
+    };
+    // Off-chain path: refuse iff `userop_sigs + (local_offchain + 1) > cap`.
+    let offchain_refuse = |userop_sigs: u64, local_offchain: u64| -> bool {
+        let new_count = local_offchain + 1;
+        userop_sigs.saturating_add(new_count) > MAX_SLOT_USES
+    };
+
+    // The sig that reaches exactly the cap is allowed; the next is refused.
+    assert!(!userop_refuse(MAX_SLOT_USES - 1, 0)); // 65535 userops -> 1 more ok
+    assert!(userop_refuse(MAX_SLOT_USES, 0)); // 65536 produced -> refuse
+    assert!(!userop_refuse(MAX_SLOT_USES / 2, MAX_SLOT_USES / 2 - 1)); // 32768+32767 ok
+    assert!(userop_refuse(MAX_SLOT_USES / 2, MAX_SLOT_USES / 2)); // 32768+32768 refuse
+
+    assert!(!offchain_refuse(0, MAX_SLOT_USES - 1)); // 65536th off-chain ok
+    assert!(offchain_refuse(0, MAX_SLOT_USES)); // would be 65537 -> refuse
+    // Mixed: the 2x evasion is closed — 65535 userops + off-chain caps at
+    // exactly one more (reaching the cap), not a second full 65536 budget.
+    assert!(!offchain_refuse(MAX_SLOT_USES - 1, 0)); // 65535 + 1 = 65536 ok
+    assert!(offchain_refuse(MAX_SLOT_USES - 1, 1)); // 65535 + 2 = 65537 refuse
+
+    // Fail-closed: a glitched counter read (u64::MAX) saturates and refuses.
+    assert!(userop_refuse(u64::MAX, 0));
+    assert!(offchain_refuse(u64::MAX, 0));
 }
 
 #[test]

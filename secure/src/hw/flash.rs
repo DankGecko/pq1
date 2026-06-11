@@ -1232,6 +1232,18 @@ const OFFCHAIN_CAPACITY: u32 = 512; // 8 KB / 16
 
 const OFFCHAIN_TYPE_COUNT: u8 = 0x01;
 const OFFCHAIN_TYPE_USEROP: u8 = 0x02;
+// MEDIUM-2 (audit counter-replay 20260611): durable per-slot count of
+// Type-2 (slot-key) UserOp signatures this firmware has *produced* for
+// the slot — including ones the companion never broadcast or that
+// reverted on-chain. On-chain `slotUses[i]` only counts UserOps that
+// *landed*, and EIP-1271 off-chain sigs are never counted on-chain at
+// all, so the device cannot enforce the combined SPHINCS+ budget
+// `slotUses + offchainSigCount <= MAX_SLOT_USES` from on-chain state
+// alone. This local tally lets the firmware bound the *total* slot-key
+// signatures it emits (off-chain + UserOp) to `MAX_SLOT_USES` per device
+// incarnation, closing the ~2x combined-cap evasion a malicious companion
+// could otherwise reach by withholding the publishing UserOps.
+const OFFCHAIN_TYPE_USEROP_SIGS: u8 = 0x03;
 
 /// Pack a journal entry into a 16-byte quad-word.
 fn entry_qw(slot_key: &[u8; 8], entry_type: u8, count: u64) -> [u8; 16] {
@@ -1285,7 +1297,10 @@ fn parse_entry(qw_addr: u32) -> Option<(u8, [u8; 8], u64)> {
         // Stale, undecodable, but the page may have valid entries past it.
         return Some((0, [0u8; 8], 0));
     }
-    if type_byte != OFFCHAIN_TYPE_COUNT && type_byte != OFFCHAIN_TYPE_USEROP {
+    if type_byte != OFFCHAIN_TYPE_COUNT
+        && type_byte != OFFCHAIN_TYPE_USEROP
+        && type_byte != OFFCHAIN_TYPE_USEROP_SIGS
+    {
         // Unknown type — treat as corrupt, skip but don't stop the scan.
         return Some((0, [0u8; 8], 0));
     }
@@ -1383,17 +1398,29 @@ struct SlotEntry {
     slot_key: [u8; 8],
     offchain_count: u64,
     last_userop_count: u64,
+    userop_sigs: u64,
     has_offchain: bool,
     has_userop: bool,
+    has_userop_sigs: bool,
 }
 
-/// Scan the page once and project the latest `(offchain, last_userop)`
-/// pair for every observed `slot_key`. Used by both compaction and the
-/// (rarely-needed) "show me all active slots" introspection path. The
-/// table is allocated on the caller's stack via the in/out reference.
+/// Scan the page once and project the latest `(offchain, last_userop,
+/// userop_sigs)` triple for every observed `slot_key`. Used by both
+/// compaction and the (rarely-needed) "show me all active slots"
+/// introspection path. The table is allocated on the caller's stack via
+/// the in/out reference.
 ///
-/// Returns the number of distinct slot_keys observed.
-fn scan_page_into_table(table: &mut [SlotEntry; MAX_ACTIVE_SLOTS]) -> usize {
+/// Returns the number of distinct slot_keys observed. **HIGH-1 (audit
+/// counter-replay 20260611):** if more than `MAX_ACTIVE_SLOTS` distinct
+/// slot_keys are present, `*overflow` is set to `true` and the surplus
+/// slots are NOT projected. The old code silently dropped them, which
+/// erased those slots' counters on the next compaction — a counter
+/// rollback. `compact_page` now refuses (fail-closed) when `overflow`
+/// is set rather than committing a lossy compaction.
+fn scan_page_into_table(
+    table: &mut [SlotEntry; MAX_ACTIVE_SLOTS],
+    overflow: &mut bool,
+) -> usize {
     let mut n: usize = 0;
     for i in 0..OFFCHAIN_CAPACITY {
         let addr = OFFCHAIN_PAGE_ADDR + i * OFFCHAIN_QW_SIZE;
@@ -1413,9 +1440,13 @@ fn scan_page_into_table(table: &mut [SlotEntry; MAX_ACTIVE_SLOTS]) -> usize {
                     Some(j) => j,
                     None => {
                         if n >= MAX_ACTIVE_SLOTS {
-                            // Saturate; subsequent slots silently dropped.
-                            // In practice this never triggers (page only
-                            // holds 512 QWs, and N distinct slots <= 512).
+                            // HIGH-1 fail-closed: do NOT silently drop. Flag
+                            // the overflow so the caller refuses the
+                            // (lossy) compaction instead of rolling back
+                            // the surplus slots' counters to zero. The page
+                            // only holds 512 QWs, so 256 distinct live slots
+                            // is already pathological.
+                            *overflow = true;
                             continue;
                         }
                         let j = n;
@@ -1424,8 +1455,10 @@ fn scan_page_into_table(table: &mut [SlotEntry; MAX_ACTIVE_SLOTS]) -> usize {
                             slot_key: sk,
                             offchain_count: 0,
                             last_userop_count: 0,
+                            userop_sigs: 0,
                             has_offchain: false,
                             has_userop: false,
+                            has_userop_sigs: false,
                         };
                         j
                     }
@@ -1440,6 +1473,11 @@ fn scan_page_into_table(table: &mut [SlotEntry; MAX_ACTIVE_SLOTS]) -> usize {
                         table[idx].last_userop_count = count;
                     }
                     table[idx].has_userop = true;
+                } else if t == OFFCHAIN_TYPE_USEROP_SIGS {
+                    if count > table[idx].userop_sigs || !table[idx].has_userop_sigs {
+                        table[idx].userop_sigs = count;
+                    }
+                    table[idx].has_userop_sigs = true;
                 }
             }
         }
@@ -1460,23 +1498,35 @@ unsafe fn compact_page() -> Result<(), ()> {
         slot_key: [0u8; 8],
         offchain_count: 0,
         last_userop_count: 0,
+        userop_sigs: 0,
         has_offchain: false,
         has_userop: false,
+        has_userop_sigs: false,
     }; MAX_ACTIVE_SLOTS];
-    let n = scan_page_into_table(&mut table);
+    let mut overflow = false;
+    let n = scan_page_into_table(&mut table, &mut overflow);
+
+    // HIGH-1 fail-closed: if the page holds more distinct slots than the
+    // SRAM projection table can hold, a compaction would drop the surplus
+    // and silently roll their counters back to zero. Refuse here —
+    // BEFORE erasing — so the page (and every slot's budget) stays
+    // intact. The caller surfaces this as a write failure and declines to
+    // sign, which is strictly safer than a counter rollback.
+    if overflow {
+        return Err(());
+    }
 
     // SAFETY: about to replay from SRAM.
     unsafe { erase_offchain_page()? };
 
-    // Replay: write surviving entries at the start of the page.
+    // Replay: write surviving entries at the start of the page. Each
+    // present (slot, type) projection is written to the next blank QW;
+    // blanks only advance as we write, so no regression is possible.
     for j in 0..n {
         let entry = table[j];
-        let mut idx: u32 = 0;
         if entry.has_userop {
             let qw = entry_qw(&entry.slot_key, OFFCHAIN_TYPE_USEROP, entry.last_userop_count);
-            // Find next blank inside the freshly-erased page.
             let blank = find_next_blank_idx().ok_or(())?;
-            idx = blank;
             // SAFETY: target QW is inside page 123 and was just erased.
             unsafe {
                 write_quadword_verified(OFFCHAIN_PAGE_ADDR + blank * OFFCHAIN_QW_SIZE, &qw)?
@@ -1485,10 +1535,17 @@ unsafe fn compact_page() -> Result<(), ()> {
         if entry.has_offchain {
             let qw = entry_qw(&entry.slot_key, OFFCHAIN_TYPE_COUNT, entry.offchain_count);
             let blank = find_next_blank_idx().ok_or(())?;
-            // Defensive: ensure we did not somehow regress.
-            if blank < idx {
-                return Err(());
-            }
+            // SAFETY: target QW is inside page 123 and was just erased.
+            unsafe {
+                write_quadword_verified(OFFCHAIN_PAGE_ADDR + blank * OFFCHAIN_QW_SIZE, &qw)?
+            };
+        }
+        if entry.has_userop_sigs {
+            // MEDIUM-2: preserve the durable UserOp-signature tally across
+            // compaction. Mirrors the USEROP/COUNT replay exactly — losing
+            // it here would roll the combined-cap tally back to zero.
+            let qw = entry_qw(&entry.slot_key, OFFCHAIN_TYPE_USEROP_SIGS, entry.userop_sigs);
+            let blank = find_next_blank_idx().ok_or(())?;
             // SAFETY: target QW is inside page 123 and was just erased.
             unsafe {
                 write_quadword_verified(OFFCHAIN_PAGE_ADDR + blank * OFFCHAIN_QW_SIZE, &qw)?
@@ -1536,14 +1593,54 @@ unsafe fn write_entry(qw: &[u8; 16]) -> Result<(), ()> {
         }
     }
 
-    // Self-heal: bulk-erase the page and retry once. After the erase
-    // the whole page is 0xFF, so find_next_blank_idx returns 0 and the
-    // write must succeed (or the flash itself is dead).
+    // HIGH-1 (audit counter-replay 20260611): the bulk-erase self-heal
+    // must NEVER destroy live counters. A failed / fault-injected write on
+    // a page full of live per-slot entries would otherwise erase every
+    // slot's offchain / last_userop / userop_sigs counter to zero — a
+    // single-fault rollback of the entire off-chain signing budget that
+    // the F-12 read double-scan cannot detect (after the erase both the
+    // forward and reverse scans agree on the empty page, so no mismatch
+    // fires). Only bulk-erase when the page holds NO decodable COUNT /
+    // USEROP / USEROP_SIGS entry — i.e. it is pure pre-all-C10 cutover
+    // garbage, the only case this self-heal was ever designed for. If live
+    // entries exist, fail closed: refuse the write (the caller surfaces
+    // "Sig commit FAIL" and declines to sign), which is strictly safer
+    // than rolling the budget back.
+    if offchain_page_has_live_entries() {
+        return Err(());
+    }
+
+    // Page is cutover-garbage only — safe to bulk-erase and retry once.
+    // After the erase the whole page is 0xFF, so find_next_blank_idx
+    // returns 0 and the write must succeed (or the flash itself is dead).
     // SAFETY: see write_entry's # Safety contract.
     unsafe { erase_offchain_page()? };
     let blank = find_next_blank_idx().ok_or(())?;
     // SAFETY: target QW is inside page 123 and was just erased.
     unsafe { write_quadword_verified(OFFCHAIN_PAGE_ADDR + blank * OFFCHAIN_QW_SIZE, qw) }
+}
+
+/// True iff page 123 holds at least one decodable COUNT / USEROP /
+/// USEROP_SIGS entry — i.e. live per-slot counter state the wallet still
+/// cares about. Gates the `write_entry` self-heal bulk erase (HIGH-1) so
+/// a failed / glitched write can never roll back live counters. Pre-all-
+/// C10 cutover garbage (non-decodable QWs) reads as "no live entries", so
+/// the legitimate one-time self-heal of an inherited-garbage page is
+/// preserved. Scans the whole page (no early-exit) so a live entry that
+/// happens to sit past a blank QW is still detected — fail-closed.
+fn offchain_page_has_live_entries() -> bool {
+    for i in 0..OFFCHAIN_CAPACITY {
+        let addr = OFFCHAIN_PAGE_ADDR + i * OFFCHAIN_QW_SIZE;
+        if let Some((t, _, _)) = parse_entry(addr) {
+            if t == OFFCHAIN_TYPE_COUNT
+                || t == OFFCHAIN_TYPE_USEROP
+                || t == OFFCHAIN_TYPE_USEROP_SIGS
+            {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Forward scan — the original log-structured implementation. Stops at the
@@ -1845,4 +1942,66 @@ pub unsafe fn last_userop_count_set(slot_key: &[u8; 8], count: u64) -> Result<()
     let qw = entry_qw(slot_key, OFFCHAIN_TYPE_USEROP, count);
     // SAFETY: forwarded contract.
     unsafe { write_entry(&qw) }
+}
+
+/// Read the durable per-slot tally of Type-2 (slot-key) UserOp signatures
+/// this firmware has produced for `slot_key` (MEDIUM-2). Returns 0 when
+/// no entry exists. F-12-hardened: forward + reverse double scan with
+/// `wait_random()` between, returning `u64::MAX` on disagreement so the
+/// combined-cap check fails closed (refuses to sign).
+///
+/// # Safety
+/// Reads from the page-123 journal.
+pub unsafe fn userop_sigs_read(slot_key: &[u8; 8]) -> u64 {
+    let sk_a: [u8; 8] = *slot_key;
+    crate::fi::wait_random();
+    let sk_b: [u8; 8] = *slot_key;
+    if sk_a != sk_b {
+        return u64::MAX;
+    }
+    let r1 = scan_forward(&sk_a, OFFCHAIN_TYPE_USEROP_SIGS);
+    crate::fi::wait_random();
+    let r2 = scan_reverse(&sk_b, OFFCHAIN_TYPE_USEROP_SIGS);
+    if r1 != r2 {
+        return u64::MAX;
+    }
+    r1
+}
+
+/// Bump the durable UserOp-signature tally for `slot_key` to `new_count`
+/// (MEDIUM-2). Mirrors `offchain_count_bump`: monotonic (`Err(())` when
+/// `new_count <= current`), F-12 slot_key input-redundancy, and a
+/// read-back + sentinel-gated re-check so a glitched write that did not
+/// land is rejected. The caller (cmd_sign_userop / batch) computes
+/// `new_count = current + 1`, so a return of `Err` means flash trouble.
+///
+/// # Safety
+/// Programs page 123.
+pub unsafe fn userop_sigs_bump(slot_key: &[u8; 8], new_count: u64) -> Result<(), ()> {
+    // F-12: input redundancy on slot_key (see offchain_count_bump).
+    let sk_a: [u8; 8] = *slot_key;
+    crate::fi::wait_random();
+    let sk_b: [u8; 8] = *slot_key;
+    if sk_a != sk_b {
+        return Err(());
+    }
+    let slot_key = &sk_a;
+
+    let pre = userop_sigs_read(slot_key);
+    if new_count <= pre {
+        return Err(());
+    }
+    let qw = entry_qw(slot_key, OFFCHAIN_TYPE_USEROP_SIGS, new_count);
+    // SAFETY: forwarded contract.
+    unsafe { write_entry(&qw)? };
+    let post = userop_sigs_read(slot_key);
+    if post != new_count {
+        return Err(());
+    }
+    if crate::fi::check_true_into_sentinel(|| userop_sigs_read(slot_key) == new_count)
+        != crate::fi::OK_SENTINEL
+    {
+        return Err(());
+    }
+    Ok(())
 }

@@ -46,7 +46,7 @@
 use sphincs_tz_shared::{
     NscStatus, ACCOUNT_INDEX_MASK, ACCOUNT_INDEX_SHIFT, APPROVE_HASH_CALLDATA_LEN,
     APPROVE_HASH_SELECTOR, C10_SIG_LEN, FLAG_INCLUDE_INIT_CODE, FLAG_REGISTER_SLOT,
-    GPV2_SETTLEMENT_ADDRESS, MAX_BATCH_TXS, MAX_SIGN_RESPONSE_LEN, MAX_TX_LEN,
+    GPV2_SETTLEMENT_ADDRESS, MAX_BATCH_TXS, MAX_SIGN_RESPONSE_LEN, MAX_SLOT_USES, MAX_TX_LEN,
     PQ_ADD_OWNER_BYTES_SELECTOR, PQ_CREATE_ACCOUNT_SELECTOR, PQ_INIT_CODE_LEN,
     PQ_SMART_WALLET_FACTORY, SET_PRE_SIGNATURE_SELECTOR, SIGN_USEROP_BATCH_HEADER_LEN,
     SIGN_USEROP_BATCH_MAX_PAYLOAD_LEN, SIGN_USEROP_BATCH_TX_PREFIX_LEN,
@@ -764,6 +764,17 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     let local_offchain = unsafe { crate::offchain_state::offchain_count_read(&slot_flash_key) };
     let last_userop_snapshot =
         unsafe { crate::offchain_state::last_userop_count_read(&slot_flash_key) };
+
+    // MEDIUM-2 (audit counter-replay 20260611): same combined-cap gate as
+    // the single-tx path. A batch produces exactly ONE Type-2 slot-key
+    // signature (covering all inner txs), so it consumes one unit of the
+    // few-time budget. Refuse before signing if the combined total
+    // (durable UserOp tally + off-chain count) would exceed MAX_SLOT_USES.
+    let userop_sigs = unsafe { crate::offchain_state::userop_sigs_read(&slot_flash_key) };
+    if userop_sigs.saturating_add(local_offchain) >= MAX_SLOT_USES {
+        ui::show_status("Slot exhausted", "rotate slot");
+        return NscStatus::OffchainCapExceeded as u32;
+    }
     let new_offchain_count = local_offchain.max(last_userop_snapshot);
     if new_offchain_count > local_offchain {
         if unsafe {
@@ -1114,6 +1125,17 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         }
     }
     if unsafe { crate::offchain_state::last_userop_count_set(&slot_flash_key, new_offchain_count) }
+        .is_err()
+    {
+        entropy.zeroize();
+        crate::fi::zeroize_barrier();
+        ui::show_status("Sig commit", "FAIL");
+        return NscStatus::InternalError as u32;
+    }
+    // MEDIUM-2: durably tally this batch's single Type-2 slot-key
+    // signature (same accounting unit as the single-tx path). After sig
+    // verify, before the response write, fail-closed.
+    if unsafe { crate::offchain_state::userop_sigs_bump(&slot_flash_key, userop_sigs + 1) }
         .is_err()
     {
         entropy.zeroize();

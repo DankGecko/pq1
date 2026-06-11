@@ -51,7 +51,7 @@ use sphincs_tz_shared::{
     NscStatus, ACCOUNT_INDEX_MASK, ACCOUNT_INDEX_SHIFT, APPROVE_HASH_CALLDATA_LEN,
     APPROVE_HASH_SELECTOR, C10_SIG_LEN, ERC7730_MAX_TRAILER_LEN,
     EXEC_TRANSACTION_MIN_CALLDATA_LEN, EXEC_TRANSACTION_SELECTOR, FLAG_INCLUDE_INIT_CODE,
-    FLAG_REGISTER_SLOT, GPV2_SETTLEMENT_ADDRESS, MAX_SIGN_RESPONSE_LEN, MAX_TX_LEN,
+    FLAG_REGISTER_SLOT, GPV2_SETTLEMENT_ADDRESS, MAX_SIGN_RESPONSE_LEN, MAX_SLOT_USES, MAX_TX_LEN,
     PQ_ADD_OWNER_BYTES_SELECTOR, PQ_CREATE_ACCOUNT_SELECTOR, PQ_INIT_CODE_LEN,
     PQ_SMART_WALLET_FACTORY, SAFE_V1_PAYLOAD_MAX, SET_PRE_SIGNATURE_SELECTOR,
     SIGN_USEROP_HEADER_LEN, SIG_WRAPPER_LEN, SLOT_INDEX_MASK, ZK_CLEAR_SIGN_FIXED_LEN,
@@ -1049,9 +1049,26 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         unsafe { crate::offchain_state::offchain_count_read(&slot_flash_key) };
     let last_userop_snapshot =
         unsafe { crate::offchain_state::last_userop_count_read(&slot_flash_key) };
+
+    // MEDIUM-2 (audit counter-replay 20260611): enforce the *combined*
+    // SPHINCS+ few-time budget on-device. Off-chain EIP-1271 sigs are
+    // never counted on-chain (isValidSignature is view-only), and a
+    // UserOp this firmware signs but the companion withholds / lets revert
+    // never bumps on-chain `slotUses` — so the chain alone cannot bound
+    // total slot-key usage. `userop_sigs` is the durable tally of Type-2
+    // sigs THIS firmware has produced for the slot; together with
+    // `local_offchain` it is the device's view of total slot-key
+    // signatures. Refuse before signing if emitting one more would push
+    // the combined total past MAX_SLOT_USES. Fail-closed: a glitched read
+    // returns u64::MAX, which saturates and trips the gate.
+    let userop_sigs = unsafe { crate::offchain_state::userop_sigs_read(&slot_flash_key) };
+    if userop_sigs.saturating_add(local_offchain) >= MAX_SLOT_USES {
+        ui::show_status("Slot exhausted", "rotate slot");
+        return NscStatus::OffchainCapExceeded as u32;
+    }
     secure_log!(
-        "[S][sign] slot_key={:02x?} local_offchain={} last_userop={}",
-        slot_flash_key, local_offchain, last_userop_snapshot
+        "[S][sign] slot_key={:02x?} local_offchain={} last_userop={} userop_sigs={}",
+        slot_flash_key, local_offchain, last_userop_snapshot, userop_sigs
     );
     let new_offchain_count = local_offchain.max(last_userop_snapshot);
     if new_offchain_count > local_offchain {
@@ -1486,6 +1503,25 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         secure_log!(
             "[S][sig-commit] last_userop_count_set FAIL key={:02x?} count={}",
             slot_flash_key, new_offchain_count
+        );
+        ui::show_status("Sig commit", "FAIL");
+        return NscStatus::InternalError as u32;
+    }
+    // MEDIUM-2: durably tally this Type-2 slot-key signature so the
+    // combined-cap gate (§10) accounts for it on the next call. Bumped
+    // after sig verify (so a verify failure bakes no phantom count) and
+    // before the response is written (so a bump failure refuses the
+    // response rather than releasing an uncounted sig). `userop_sigs` was
+    // read at §10 and the cap gate proved `userop_sigs < MAX_SLOT_USES`,
+    // so `+ 1` cannot overflow.
+    if unsafe { crate::offchain_state::userop_sigs_bump(&slot_flash_key, userop_sigs + 1) }
+        .is_err()
+    {
+        entropy.zeroize();
+        crate::fi::zeroize_barrier();
+        secure_log!(
+            "[S][sig-commit] userop_sigs_bump FAIL key={:02x?} count={}",
+            slot_flash_key, userop_sigs + 1
         );
         ui::show_status("Sig commit", "FAIL");
         return NscStatus::InternalError as u32;

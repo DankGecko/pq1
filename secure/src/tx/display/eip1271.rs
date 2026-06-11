@@ -65,7 +65,16 @@ pub fn render_eip1271_personal_sign_pages(
     } else {
         // ERC-6492: the dapp will receive a wrapped sig that
         // counterfactually deploys this wallet on first use.
-        write_line(&mut pages.buf[0][2], "! Pre-deploy 6492");
+        // MEDIUM-1 (audit counter-replay 20260611): legible, fit-to-width
+        // counterfactual warning (the old "! Pre-deploy 6492" truncated to
+        // "! Pre-deploy 649"). account_deployed==0 means the firmware is
+        // treating this wallet as never-deployed and resets its off-chain
+        // budget view to zero — correct for a genuinely new wallet, but a
+        // RED FLAG for a user who restored a wallet they have used before
+        // (a companion lying about account_deployed to reset the slot's
+        // few-time budget). "Undeployed" reads as obviously-wrong to such a
+        // returning user, who can then cancel.
+        write_line(&mut pages.buf[0][2], "! Undeployed sig");
     }
     write_line(&mut pages.buf[0][3], "> next");
 
@@ -141,7 +150,16 @@ pub fn render_eip1271_raw32_pages(
     if account_deployed {
         write_line(&mut pages.buf[0][2], "Verify on dapp");
     } else {
-        write_line(&mut pages.buf[0][2], "! Pre-deploy 6492");
+        // MEDIUM-1 (audit counter-replay 20260611): legible, fit-to-width
+        // counterfactual warning (the old "! Pre-deploy 6492" truncated to
+        // "! Pre-deploy 649"). account_deployed==0 means the firmware is
+        // treating this wallet as never-deployed and resets its off-chain
+        // budget view to zero — correct for a genuinely new wallet, but a
+        // RED FLAG for a user who restored a wallet they have used before
+        // (a companion lying about account_deployed to reset the slot's
+        // few-time budget). "Undeployed" reads as obviously-wrong to such a
+        // returning user, who can then cancel.
+        write_line(&mut pages.buf[0][2], "! Undeployed sig");
     }
     write_line(&mut pages.buf[0][3], "> next");
 

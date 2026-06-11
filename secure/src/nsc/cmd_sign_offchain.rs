@@ -219,20 +219,35 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // ── 5. Slot key + registration probe ────────────────────────────
     let slot_flash_key =
         crate::offchain_state::slot_key_compute(account_index as u8, chain_id, slot_index);
+    // MEDIUM-1 / MEDIUM-3 (audit counter-replay 20260611): if the slot is
+    // unregistered, the ERC-6492 counterfactual path (account_deployed==0,
+    // slot 0) is the ONLY case allowed to proceed — every other
+    // unregistered slot is refused (invariant #9: force a Type-1 rotation
+    // to a fresh slot first). Two changes from the prior design:
+    //   * MEDIUM-3: the registration entry is NO LONGER written here. The
+    //     old code committed a flash entry BEFORE the §9 user confirm,
+    //     letting a malicious companion mint durable page-123 state — and
+    //     wear the page toward its erase-endurance limit — with zero
+    //     consent (it could simply abandon the confirm). We defer the
+    //     write to AFTER the confirm; the durable counter bump in §13
+    //     registers the slot, so a cancelled request leaves no trace.
+    //   * MEDIUM-1: the counterfactual case resets this slot's off-chain
+    //     budget view to zero. A wallet that is actually deployed-and-used
+    //     but whose page-123 state was lost (seed-restore onto a fresh
+    //     device) would be re-enabled at count 0 here if the companion
+    //     lies `account_deployed=0`. The trusted display surfaces the
+    //     pre-deploy/counterfactual assumption loudly (see
+    //     `render_eip1271_*` "Pre-deploy" warning) so the user can catch
+    //     the lie and cancel. The deeper desync (the device cannot read
+    //     the chain's `offchainSigCount`) is bounded by the §6 cap +
+    //     CMD_OFFCHAIN_SYNC and is documented as residual.
     if !crate::offchain_state::offchain_count_is_registered(&slot_flash_key) {
-        // ERC-6492 path on a never-used wallet: auto-register slot 0
-        // with `local_offchain = last_userop = 0`. This is bounded
-        // safe — the only way a caller can ride this branch on a slot
-        // with prior on-chain history is by lying about
-        // `account_deployed`, but a wallet that's actually deployed
-        // has its slot 0 registered already (by the matching Type 1
-        // UserOp), so this branch is a no-op there.
-        if !account_deployed && slot_index == 0 {
-            if crate::offchain_state::offchain_count_register_slot(&slot_flash_key).is_err() {
-                crate::ui::show_status("EIP-1271", "register fail");
-                return NscStatus::InternalError as u32;
-            }
-        } else {
+        // Only the ERC-6492 counterfactual path (account_deployed==0, slot
+        // 0) may proceed on an unregistered slot; every other unregistered
+        // slot is refused. The §13 durable bump (offchain_count -> 1)
+        // registers the counterfactual slot post-confirm — no flash write
+        // happens before the user confirms.
+        if account_deployed || slot_index != 0 {
             crate::ui::show_status("EIP-1271", "slot unregistered");
             return NscStatus::OffchainSlotUnregistered as u32;
         }
@@ -273,6 +288,24 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         }
         local_offchain = last_userop;
     }
+
+    // MEDIUM-2 (audit counter-replay 20260611): read the durable Type-2
+    // UserOp-signature tally so the cap below bounds the *combined*
+    // slot-key usage (off-chain + UserOp), not off-chain alone. Both kinds
+    // of signature share one SPHINCS+ few-time budget, but the chain never
+    // sees a pure off-chain sig (isValidSignature is view-only), so this is
+    // the only enforcement point for the combined cap on the off-chain
+    // path. Double-read + halt-on-mismatch like the counters above; a
+    // glitched read returns u64::MAX, which saturates and refuses.
+    let userop_sigs_a = crate::offchain_state::userop_sigs_read(&slot_flash_key);
+    crate::fi::wait_random();
+    let userop_sigs_b = crate::offchain_state::userop_sigs_read(&slot_flash_key);
+    if userop_sigs_a != userop_sigs_b {
+        crate::ui::show_status("EIP-1271", "fi tampered");
+        return NscStatus::InternalError as u32;
+    }
+    let userop_sigs = userop_sigs_a;
+
     let gap = local_offchain.saturating_sub(last_userop);
     if gap >= MAX_OFFCHAIN_GAP {
         crate::ui::show_status("EIP-1271", "publish first");
@@ -282,7 +315,10 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         Some(v) => v,
         None => return NscStatus::OffchainCapExceeded as u32,
     };
-    if new_count > MAX_SLOT_USES {
+    // Combined cap: this off-chain sig plus every Type-2 UserOp sig this
+    // firmware has produced for the slot must stay within the few-time
+    // budget. `saturating_add` keeps a glitched u64::MAX read fail-closed.
+    if userop_sigs.saturating_add(new_count) > MAX_SLOT_USES {
         crate::ui::show_status("EIP-1271", "slot exhausted");
         return NscStatus::OffchainCapExceeded as u32;
     }
@@ -290,7 +326,9 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // A second pass forces a glitch to land in *both* windows.
     crate::fi::wait_random();
     let gap_recheck = local_offchain.saturating_sub(last_userop);
-    if gap_recheck >= MAX_OFFCHAIN_GAP || new_count > MAX_SLOT_USES {
+    if gap_recheck >= MAX_OFFCHAIN_GAP
+        || userop_sigs.saturating_add(new_count) > MAX_SLOT_USES
+    {
         crate::ui::show_status("EIP-1271", "fi tampered");
         return NscStatus::InternalError as u32;
     }
