@@ -91,6 +91,21 @@ pub(super) unsafe fn run(_args: &GatewayArgs) -> u32 {
     let inactive: flash::Slot = ctx.inactive.into();
     let new_version = manifest.fw_version();
 
+    // The OTP rollback floor must land at `new_version - 1`, NOT
+    // `new_version`. `verify_rollback` (run by both FSBL at boot and
+    // BEGIN) accepts a manifest only when `fw_version > floor` (strict),
+    // so a floor equal to the just-installed version would make FSBL
+    // reject THIS slot on the next boot (`V > V` is false) and brick the
+    // device, while a floor of `V - 1` lets V boot yet still rejects
+    // every release `<= V - 1` (full anti-downgrade). We derive the
+    // floor from the SIGNED `fw_version`, never from the manifest's
+    // unsigned `boot_counter_snap` field: trusting that field would let
+    // a hostile companion lower the floor at BEGIN and re-open a
+    // downgrade window. `saturating_sub` is defensive — `new_version >= 1`
+    // always holds here (BEGIN's `verify_rollback` already rejected
+    // `fw_version <= floor`, and `floor >= 0`).
+    let new_rollback_floor = new_version.saturating_sub(1);
+
     // 1. Bump OTP rollback floor. Do this BEFORE writing the new
     //    manifest so a reset between these steps still prevents an
     //    attacker from downgrading to an older signed release.
@@ -98,11 +113,11 @@ pub(super) unsafe fn run(_args: &GatewayArgs) -> u32 {
     // one-way (irreversible). Precondition: we just verified the
     // manifest signature and image hashes, and the user confirmed on
     // the trusted display. Bumping here BEFORE writing the new
-    // manifest means a reset between OTP and flash leaves rollback
+    // manifest means a reset between OTP and flash leaves the rollback
     // floor raised — the partially-staged slot fails verification on
     // next boot but the rollback gate still rejects older signed
     // releases.
-    if let Err(e) = unsafe { otp::bump_to(new_version) } {
+    if let Err(e) = unsafe { otp::bump_to(new_rollback_floor) } {
         match e {
             otp::OtpError::OutOfBudget => return NscStatus::FwUpdateOtpExhausted as u32,
             _ => return NscStatus::FwUpdateFlashError as u32,

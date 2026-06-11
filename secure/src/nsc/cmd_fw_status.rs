@@ -10,7 +10,7 @@ use sphincs_tz_shared::{
 };
 
 use super::ptr_validate::validate_ns_write_ptr;
-use super::state::FW_UPDATE;
+use super::state::{peek_state, FW_UPDATE};
 use super::GatewayArgs;
 
 /// # Safety
@@ -18,6 +18,15 @@ use super::GatewayArgs;
 /// pointer before deref and reads the `static mut FW_UPDATE` snapshot
 /// under the single-threaded dispatcher invariant.
 pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
+    // PIN gate — like BEGIN/CHUNK/COMMIT and per CLAUDE.md ("PIN unlock
+    // required on every call" for CMDs 20–24). Pre-unlock the session
+    // context is already `None` (BEGIN requires PIN; lock/idle-wipe drops
+    // it), so a gated STATUS returns `NotInitialized` rather than leaking
+    // or fabricating progress — the companion treats that as "unlock first".
+    if peek_state(|s| s.pin_verified.check_sentinel()) != crate::fi::OK_SENTINEL {
+        return NscStatus::NotInitialized as u32;
+    }
+
     let out_ptr = args.arg1;
     // HIGH-1 (audit fault-injection 20260611): sentinel-gate the NS write
     // pointer (bare `if !validate` is single-fault FAIL-OUT → OOB write).

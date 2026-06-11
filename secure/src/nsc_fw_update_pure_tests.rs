@@ -658,10 +658,11 @@ fn negative_chunk_rejects_header_len_mismatch_with_payload() {
 // ─────────────────────────────────────────────────────────────────────
 // 8. Negative: source-text invariant pins — PIN-verified gating
 //
-// CLAUDE.md §"Lifecycle": every update entry point except STATUS
-// and ABORT must check `pin_verified` first. A regression that
-// dropped the gate would let a locked device be silently flashed
-// to a hostile (but vendor-signed) release.
+// CLAUDE.md gateway table: ALL update entry points (BEGIN, CHUNK,
+// COMMIT, STATUS, ABORT — CMDs 20–24) check `pin_verified` first.
+// A regression that dropped the gate would let a locked device be
+// silently flashed to a hostile (but vendor-signed) release, or have
+// its in-flight session state probed / cleared pre-unlock.
 // ─────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -695,25 +696,29 @@ fn negative_commit_checks_pin_verified_first() {
 }
 
 #[test]
-fn negative_status_does_not_gate_on_pin_verified() {
-    // Documented: STATUS is a recovery probe, not a secret-bearing
-    // call. Pin the absence so a future refactor doesn't quietly
-    // add a PIN gate that breaks companion's pre-unlock UX.
+fn negative_status_checks_pin_verified_first() {
+    // LOW-1 (fw-update audit 20260611): STATUS is pin-gated like every
+    // other FW entry point. Pre-unlock the session context is already
+    // `None`, so the companion loses nothing — it reads `NotInitialized`
+    // ("unlock first") rather than fabricated or stale progress.
     assert!(
-        !STATUS_SRC.contains("pin_verified"),
-        "cmd_fw_status is intentionally not pin-gated — companion polls it pre-unlock"
+        STATUS_SRC.contains("pin_verified.check_sentinel()"),
+        "cmd_fw_status must gate on pin_verified (CLAUDE.md: PIN required on every FW call)"
     );
+    assert!(STATUS_SRC.contains("NscStatus::NotInitialized"));
 }
 
 #[test]
-fn negative_abort_does_not_gate_on_pin_verified() {
-    // Documented in cmd_fw_abort.rs:1-7: ABORT is the recovery path
-    // and must succeed even if the device is mid-lock. Pin the
-    // absence — adding a gate here would create a wedge state.
+fn negative_abort_checks_pin_verified_first() {
+    // LOW-1 (fw-update audit 20260611): ABORT is pin-gated. Not a wedge —
+    // a context exists only after a PIN-verified BEGIN, and the
+    // lock / idle-wipe path already drops FW_UPDATE, so a locked device
+    // has nothing left to abort.
     assert!(
-        !ABORT_SRC.contains("pin_verified"),
-        "cmd_fw_abort must NOT gate on pin_verified — recovery must always work"
+        ABORT_SRC.contains("pin_verified.check_sentinel()"),
+        "cmd_fw_abort must gate on pin_verified (CLAUDE.md: PIN required on every FW call)"
     );
+    assert!(ABORT_SRC.contains("NscStatus::NotInitialized"));
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1030,7 +1035,7 @@ fn negative_commit_bumps_otp_before_writing_new_manifest() {
     // for replaying older releases.
     let body = COMMIT_SRC;
     let otp_pos = body
-        .find("otp::bump_to(new_version)")
+        .find("otp::bump_to(new_rollback_floor)")
         .expect("COMMIT must call otp::bump_to");
     let manifest_write_pos = body
         .find("flash::write_quadword_verified")
@@ -1038,6 +1043,22 @@ fn negative_commit_bumps_otp_before_writing_new_manifest() {
     assert!(
         otp_pos < manifest_write_pos,
         "OTP rollback-floor bump must precede the new manifest write — anti-replay across reset"
+    );
+
+    // Anti-brick + anti-downgrade (fw-update audit 20260611): the floor
+    // target is the SIGNED version minus one, so the just-installed
+    // version still satisfies FSBL's strict `fw_version > floor` on the
+    // next boot, while every older release stays rejected. Deriving the
+    // floor from `new_version` itself bricks the device (`V > V` false);
+    // deriving it from the unsigned `boot_counter_snap` would let a
+    // hostile companion lower the floor and re-open a downgrade window.
+    assert!(
+        body.contains("new_rollback_floor = new_version.saturating_sub(1)"),
+        "COMMIT must set the OTP floor to fw_version - 1 (anti-brick + anti-downgrade)"
+    );
+    assert!(
+        body.contains("otp::bump_to(new_rollback_floor)") && !body.contains("otp::bump_to(new_version)"),
+        "COMMIT must bump to new_rollback_floor (fw_version - 1), never to fw_version itself"
     );
 }
 
@@ -1355,50 +1376,57 @@ fn negative_status_response_layout_uses_proto_offset_constants() {
 // ─────────────────────────────────────────────────────────────────────
 // 20. Negative: shape pins — file size & shape sanity
 //
-// ABORT is intentionally tiny (no PIN gate, no NS deref, no flash —
-// it's just `FW_UPDATE = None`). A regression that grew the file
-// past a small bound is a smell worth surfacing.
+// ABORT is intentionally tiny (a PIN gate, then `FW_UPDATE = None` —
+// no NS deref, no flash, no HandlerGuard). A regression that grew the
+// file past a small bound is a smell worth surfacing.
 // ─────────────────────────────────────────────────────────────────────
 
 #[test]
 fn negative_abort_handler_is_intentionally_tiny() {
-    // The file is ~30 lines including the doc comment. Anything
+    // The file is ~40 lines including the doc comment. Anything
     // significantly larger has snuck in extra work — review.
     let lines = ABORT_SRC.lines().count();
     assert!(
         lines < 50,
         "cmd_fw_abort is intentionally tiny ({lines} lines); growth is a smell"
     );
-    // And it MUST NOT introduce any new gate (PIN, pointer, busy).
-    // ABORT writes None to FW_UPDATE in a single statement; no
-    // mutable borrow is held across any operation that SysTick's
-    // idle-wipe could race, so HandlerGuard::enter() is not needed.
-    // (The doc-comment references HandlerGuard to explain why the
-    // single-statement write is safe; the assertion below pins
+    // The PIN gate reads only the SecureState sentinel via `peek_state`
+    // (not `FW_UPDATE`), and the FW_UPDATE write stays a single
+    // statement — no mutable borrow is held across any operation that
+    // SysTick's idle-wipe could race, so HandlerGuard::enter() is not
+    // needed. (The doc-comment references HandlerGuard to explain why
+    // the single-statement write is safe; the assertion below pins
     // the absence of an *active* enter() call.)
     assert!(
         !ABORT_SRC.contains("HandlerGuard::enter()"),
-        "ABORT does no FW_UPDATE deref before the assignment — no HandlerGuard::enter() needed"
+        "ABORT holds no mutable FW_UPDATE borrow — no HandlerGuard::enter() needed"
     );
     assert!(!ABORT_SRC.contains("validate_ns_"));
+    // It IS pin-gated (LOW-1 fix), but performs no NS pointer work.
     assert!(
-        !ABORT_SRC.contains("pin_verified.check_sentinel()"),
-        "ABORT must not gate on pin_verified — recovery must always work"
+        ABORT_SRC.contains("pin_verified.check_sentinel()"),
+        "ABORT is pin-gated; the gate reads SecureState, not FW_UPDATE"
     );
 }
 
 #[test]
-fn negative_abort_always_returns_ok() {
-    // ABORT has no failure mode; the assignment to None always
-    // succeeds. The companion treats any non-Ok as a real error,
-    // so this must not regress.
+fn negative_abort_returns_ok_or_notinitialized() {
+    // ABORT's only outcomes are: `NotInitialized` when locked (the
+    // LOW-1 PIN gate) or `Ok` after dropping the context. The
+    // drop-to-None itself has no failure mode, so once unlocked ABORT
+    // always succeeds. The companion treats any other non-Ok as a real
+    // error, so this must not regress to a richer status set.
     assert!(
         ABORT_SRC.contains("NscStatus::Ok"),
-        "cmd_fw_abort must always return NscStatus::Ok"
+        "cmd_fw_abort must return NscStatus::Ok on success"
+    );
+    assert!(
+        ABORT_SRC.contains("NscStatus::NotInitialized"),
+        "cmd_fw_abort must return NscStatus::NotInitialized when locked (PIN gate)"
     );
     let other_status = ABORT_SRC.matches("NscStatus::").count();
     assert_eq!(
-        other_status, 1,
-        "cmd_fw_abort must mention NscStatus exactly once (the Ok return)"
+        other_status, 2,
+        "cmd_fw_abort must mention NscStatus exactly twice (NotInitialized gate + Ok return)"
     );
 }

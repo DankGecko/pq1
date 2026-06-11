@@ -5,10 +5,15 @@
 //! harmless, because FSBL rejects a manifest-less slot as
 //! `BadMagic` and falls back to the active slot. A subsequent
 //! `CMD_FW_BEGIN` re-erases before re-seeding, so nothing leaks.
+//!
+//! Gated on `pin_verified` like every FW entry point (CLAUDE.md: CMDs
+//! 20–24 require unlock). Not a wedge: a context exists only after a
+//! PIN-verified BEGIN, and lock / idle-wipe already drops `FW_UPDATE`,
+//! so a locked device has nothing left to abort.
 
 use sphincs_tz_shared::NscStatus;
 
-use super::state::FW_UPDATE;
+use super::state::{peek_state, FW_UPDATE};
 
 /// # Safety
 /// CMSE non-secure-entry handler — caller is the gateway dispatcher
@@ -16,6 +21,13 @@ use super::state::FW_UPDATE;
 /// CMSE veneer. Dispatcher invariants apply: single-threaded,
 /// non-reentrant, NS arguments have already been snapshotted.
 pub(super) unsafe fn run() -> u32 {
+    // PIN gate — matches BEGIN/CHUNK/COMMIT. `peek_state` reads only the
+    // SecureState sentinel (not `FW_UPDATE`), so the single-statement
+    // `FW_UPDATE` write below still needs no `HandlerGuard`.
+    if peek_state(|s| s.pin_verified.check_sentinel()) != crate::fi::OK_SENTINEL {
+        return NscStatus::NotInitialized as u32;
+    }
+
     // SAFETY: `FW_UPDATE` is the secure-world `static mut` that holds
     // the in-flight firmware-update context (category 5: single-
     // threaded driver bookkeeping). Access is serialised by the non-
