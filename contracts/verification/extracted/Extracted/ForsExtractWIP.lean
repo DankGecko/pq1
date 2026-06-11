@@ -27,18 +27,9 @@
    extraction + a `firmware_extract_ht_index_matches_vendored` bridge
    (the SpecBridge pattern) closes CWE-347 at the firmware level.
 
-   FOUNDATIONAL LEMMA NEEDED (the load-bearing fact, attempted
-   2026-06-10): the accumulator step `val ||| (x <<< 8b) = val + x*2^8b`
-   when `val < 2^8b` and `x < 256` (the new byte's bits are disjoint
-   from the occupied low bits, so OR = ADD). This is a known-true Nat
-   fact (disjoint-or-equals-add) but its mathlib name was not quickly
-   located by hand; provable via `Nat.eq_of_testBit_eq` + the
-   testBit-of-or / testBit-of-shiftLeft lemmas + carry-free
-   testBit-of-add, or by finding the existing
-   `land_eq_zero → lor = add` lemma. With it, the strengthened loop
-   invariant is `val.val = <partial byte window> ∧ val.val < 256^start`
-   (the < bound feeds the next step's disjointness).
-
-   This is prime AI-prover-loop fodder: a well-scoped invariant-discovery
-   problem on a frozen, fully-panic-free function, blocked only on a
-   named-lemma lookup the AI loop resolves trivially. -/
+   FOUNDATIONAL LEMMA: **PROVEN 2026-06-11** — `lor_eq_add_disjoint`
+   in `Extracted/Bits.lean` (closed via the LeanLoop pipeline:
+   core's `Nat.testBit_two_pow_mul_add` append lemma + testBit
+   extensionality; kernel-clean). The strengthened loop invariant is
+   now unblocked: `val.val = <partial byte window> ∧ val.val < 256^start`
+   (the < bound feeds the next step's disjointness via Bits). -/

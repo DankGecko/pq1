@@ -1,0 +1,20 @@
+# Ordered LeanLoop goal manifest for the §33 open obligations.
+# Leaf lemmas first — once committed, they become premises for later goals.
+# (Modules not listed here are NOT touched by `leanloop run --manifest`.)
+
+[[goal]]
+module  = "Extracted.Bits"
+name    = "lor_eq_add_disjoint"
+context = """The load-bearing fact for the read_bits_le accumulator invariant
+(CWE-347 closure roadmap in ForsExtractWIP.lean). Known-true Nat fact:
+disjoint-OR equals ADD. Hand attempts (2026-06-10) found: the disjointness step
+`val &&& (x <<< 8*b) = 0` proves easily via Nat.eq_of_testBit_eq +
+Nat.testBit_shiftLeft + Nat.testBit_lt_two_pow; the missing piece is the bridge
+`a &&& b = 0 -> a ||| b = a + b` (exact?/omega/grind all failed — find the
+Mathlib lemma, e.g. around Nat.distrib/Nat.add of disjoint bits, or prove the
+bridge from scratch via testBit + Nat.add carry-freeness)."""
+
+# Next up once Bits lands (re-sorry'd functional specs, see work-todo §33):
+# [[goal]]
+# module = "Extracted.ForsExtract"      # read_bits_le accumulator invariant
+# context = "Uses lor_eq_add_disjoint; strengthened loop invariant in ForsExtractWIP.lean"

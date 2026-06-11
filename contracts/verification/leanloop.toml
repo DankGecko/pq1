@@ -1,0 +1,39 @@
+# LeanLoop config for the §33 verification track (github.com/Nicola-Ceornea/LeanLoop).
+# Lives HERE (PQSigner side) on purpose: LeanLoop is the public generic tool;
+# everything project-specific — config, goal manifests, queue artifacts, run DB —
+# stays in this private repo. Run from this directory:
+#
+#   leanloop doctor
+#   leanloop run --manifest goals.leanloop.toml          # queues hard goals
+#   leanloop frontier / leanloop submit <goal>           # interactive frontier
+#
+# (leanloop binary: pip install -e ~/repos/LeanLoop, or use its .venv)
+
+[project]
+root = "extracted"           # the Aeneas/hand-written Lean 4 Lake project
+lake = "lake"                # needs ~/.elan/bin on PATH (toolchain v4.30.0-rc2 pinned)
+
+[prover]
+# generous per-goal budget: candidate verification on this project pays a real
+# `lake build` (Aeneas dep); the battery alone is ~10 builds.
+goal_timeout_s = 2400
+
+[prover.local]
+enabled  = true
+backend  = "ollama"
+base_url = "http://localhost:11434"   # GPU box later: http://gpu-box:11434 (Tailscale)
+model    = "goedel-prover-v2-8b"
+samples  = 32
+concurrency = 2
+self_correct_rounds = 2
+health_max_wait_s = 0        # dry-run friendly: skip Tier 1 instantly if prover absent
+
+[prover.frontier]
+backend = "queue"            # free: hard goals queue for an interactive Claude Code
+                             # session (subscription flat-rate); /leanloop-frontier
+
+[audit]
+# THE single content axiom of this project (UserOp/FunsExternal.lean) — the
+# uninterpreted keccak-256 boundary. Everything else must reduce to the three
+# kernel axioms; sorryAx / surprise axioms / native_decide are rejected.
+axiom_whitelist = ["keccak256_pure"]

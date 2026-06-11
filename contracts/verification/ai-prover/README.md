@@ -40,3 +40,10 @@ Mirrors the Lean-Squad pattern (research:
 make-driven repo. `PROMPT_TEMPLATE.md` carries the project's proven
 tactic patterns (loop.spec_decr_nat, step*, SetSliceLemmas, …) so the
 agent reuses them instead of rediscovering.
+
+---
+**LEGACY (2026-06-11):** superseded by **LeanLoop**
+(github.com/Nicola-Ceornea/LeanLoop) — the generalized, gated prover loop.
+This repo now drives proofs via `contracts/verification/leanloop.toml` +
+`goals.leanloop.toml` (see work-todo §33). The kernel/axiom gates pioneered
+here live on in LeanLoop's audit module.

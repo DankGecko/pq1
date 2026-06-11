@@ -6,6 +6,7 @@
    In particular NO `sorryAx`: the sorries inside the Aeneas support
    library (Aeneas/Std/Slice.lean etc.) are not on our proof paths. -/
 import Extracted.AdrsEquiv
+import Extracted.Bits
 import Extracted.UserOpEquiv
 import Extracted.UserOpEquivByteLayout
 import Extracted.SpecBridge
@@ -22,3 +23,4 @@ import Extracted.ForsLoop
 #print axioms Extracted.Equiv.extract_fors_indices_terminates
 #print axioms Extracted.Equiv.extract_ht_index_in_range
 #print axioms Extracted.Equiv.extract_fors_indices_in_range
+#print axioms Extracted.Equiv.lor_eq_add_disjoint
