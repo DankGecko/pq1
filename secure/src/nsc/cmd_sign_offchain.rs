@@ -12,9 +12,19 @@
 //!     approving.
 //!
 //!   * **`OFFCHAIN_KIND_RAW32` (0)** — fallback for cases where the
-//!     companion only has the final 32-byte hash (e.g. a typed-data
-//!     digest from a dapp the firmware can't decode). The firmware
-//!     signs the supplied bytes as-is and renders them as hex.
+//!     companion only has the dapp's final 32-byte hash `H` (e.g. a
+//!     typed-data digest the firmware can't decode). The companion
+//!     supplies the RAW `H` (the value it passes to `isValidSignature`),
+//!     NOT a pre-nested value; the firmware applies the Solady
+//!     replay-safe EIP-712 nesting (`replay_safe_hash`) to `H` itself,
+//!     signs that, and renders `H` as hex. Nesting on-device keeps the
+//!     signed value keccak-bound to the wallet domain so it can never
+//!     coincide with the bare SHA-256 `sphincsDigest` the on-chain UserOp
+//!     path verifies — without this the path was a UserOp-forgery oracle
+//!     (`raw32(sphincsDigest(drainOp))` → valid Type-2 sig; fixed
+//!     2026-06-11). Still a blind hash sign for the user (flagged as
+//!     such), but its blast radius is an EIP-1271 attestation of `H`, not
+//!     a forgeable UserOp.
 //!
 //! Slot-key safety:
 //!   * Enforces the bounded-recovery rule
@@ -451,13 +461,15 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         wallet_addr =
             crate::aa::eip1271::proxy_address(&master_pk_seed_32, &master_pk_root_32);
 
-        // Solady-nested PersonalSign wrap of the 32-byte EIP-712 final
-        // hash. The on-chain dispatcher (`Solady.ERC1271`) wraps the
-        // dapp-supplied `H` through the exact same PersonalSign
-        // envelope when verifying, so this signature validates without
-        // any on-chain change (no new typehash, no TypedDataSign
-        // appended-data branch).
-        hash_to_sign = crate::aa::eip1271::personal_sign_replay_safe_hash(
+        // Solady replay-safe nesting of the 32-byte EIP-712 final hash.
+        // `final_eip712` IS the `H` a dapp passes to `isValidSignature`,
+        // so we wrap it directly via `replay_safe_hash` (NO inner EIP-191
+        // prefix — that's only for the PersonalSign *message* path). The
+        // on-chain dispatcher (`Solady.ERC1271`) wraps the dapp-supplied
+        // `H` through the exact same PersonalSign envelope when verifying,
+        // so this signature validates without any on-chain change (no new
+        // typehash, no TypedDataSign appended-data branch).
+        hash_to_sign = crate::aa::eip1271::replay_safe_hash(
             chain_id,
             &wallet_addr,
             &final_eip712,
@@ -505,7 +517,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         already_confirmed = true;
     }
 
-    // ── 8. PersonalSign hash construction (kind=1) ─────────────────
+    // ── 8. PersonalSign + raw32 hash construction (kind=0/1) ───────
     //
     // The firmware computes the final replay-safe hash itself from the
     // raw message — that's the whole point of the "show real text"
@@ -514,14 +526,25 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // account. We pull it from `bootstrap_cache` if warm and derive on
     // demand otherwise (<1 s on first hit per session).
     //
-    // For kind=0 (raw32) we just sign the 32 bytes verbatim. The
-    // kind=2 branch in §7b populates `hash_to_sign` already.
+    // For kind=0 (raw32) the same nesting is applied to the dapp's raw
+    // 32-byte hash `H` — the firmware never signs `H` bare (see the
+    // RAW32 doc at the top of this file). The kind=2 branch in §7b
+    // populates `hash_to_sign` already.
     match kind {
-        OFFCHAIN_KIND_RAW32 => {
-            hash_to_sign.copy_from_slice(payload);
-        }
-        OFFCHAIN_KIND_PERSONAL_SIGN => {
-            // Look up bootstrap pubkey; derive on miss.
+        OFFCHAIN_KIND_RAW32 | OFFCHAIN_KIND_PERSONAL_SIGN => {
+            // Both kinds perform the Solady replay-safe EIP-712 nesting in
+            // the SECURE WORLD — the firmware, never the companion,
+            // controls the nesting. This binds the signed value to this
+            // wallet's domain (verifyingContract + chainId) and, crucially,
+            // keeps it keccak-nested so it can NEVER coincide with the bare
+            // SHA-256 `sphincsDigest` the on-chain Type-1/Type-2 UserOp path
+            // verifies. A bare-signed raw32 value would be a UserOp-forgery
+            // oracle (`raw32(sphincsDigest(drainOp))` → valid Type-2 sig);
+            // nesting on-device closes that (audit fix 2026-06-11).
+            //
+            // Look up the bootstrap pubkey (needed for the wallet's CREATE2
+            // proxy address = EIP-712 verifyingContract); derive on miss
+            // (<1 s, cached for the session).
             let cached =
                 super::state::with_state(|s| s.bootstrap_cache_lookup(account_index));
             let (master_pk_seed_32, master_pk_root_32) = match cached {
@@ -541,10 +564,21 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                     (pk_seed_32, pk_root_32)
                 }
             };
-            wallet_addr = crate::aa::eip1271::proxy_address(&master_pk_seed_32, &master_pk_root_32);
-            hash_to_sign = crate::aa::eip1271::personal_sign_replay_safe_hash(
-                chain_id, &wallet_addr, payload,
-            );
+            wallet_addr =
+                crate::aa::eip1271::proxy_address(&master_pk_seed_32, &master_pk_root_32);
+            hash_to_sign = if kind == OFFCHAIN_KIND_RAW32 {
+                // `payload` is the dapp's RAW 32-byte hash H (the value it
+                // passes to `isValidSignature`); validated to exactly 32 B
+                // in §4. Nest on-device — do NOT sign it bare.
+                let mut raw_h = [0u8; 32];
+                raw_h.copy_from_slice(payload);
+                crate::aa::eip1271::replay_safe_hash(chain_id, &wallet_addr, &raw_h)
+            } else {
+                // PersonalSign: EIP-191-prefix the message, then nest.
+                crate::aa::eip1271::personal_sign_replay_safe_hash(
+                    chain_id, &wallet_addr, payload,
+                )
+            };
         }
         OFFCHAIN_KIND_EIP712_TYPED => {
             // hash_to_sign already populated in §7b.
@@ -560,6 +594,14 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // the ERC-8213 fingerprint here.
     if !already_confirmed {
         use crate::ui::confirm::{confirm, ConfirmResult};
+        // For raw32 the user-meaningful value is the dapp's raw hash H
+        // (= payload), NOT the firmware-internal replay-safe nesting now
+        // held in `hash_to_sign`. Show + fingerprint H so the user can
+        // cross-check it against the dapp's "you are signing 0x…" prompt.
+        let mut raw_h = [0u8; 32];
+        if kind == OFFCHAIN_KIND_RAW32 {
+            raw_h.copy_from_slice(payload);
+        }
         let mut pages = match kind {
             OFFCHAIN_KIND_PERSONAL_SIGN => crate::tx::display::render_eip1271_personal_sign_pages(
                 chain_id,
@@ -576,7 +618,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                 chain_id,
                 account_index,
                 slot_index,
-                &hash_to_sign,
+                &raw_h,
                 new_count,
                 last_userop,
                 MAX_SLOT_USES,
@@ -594,7 +636,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                 let digest = pqsigner_tx_core::erc8213::calldata_digest(payload);
                 crate::tx::display::erc8213::Kind::CalldataDigest(digest)
             }
-            _ => crate::tx::display::erc8213::Kind::Raw32(hash_to_sign),
+            _ => crate::tx::display::erc8213::Kind::Raw32(raw_h),
         };
         let _ = crate::tx::display::erc8213::append_fingerprint_page(
             &mut pages,

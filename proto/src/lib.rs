@@ -308,13 +308,19 @@ pub const CMD_GET_INIT_CODE: u32 = 15;
 ///     This is the mode that gives the user actual visibility into
 ///     what they're approving.
 ///
-///   * **`OFFCHAIN_KIND_RAW32` (0)** — companion sends a 32-byte hash
-///     directly (e.g. an EIP-712 typed-data digest the firmware can't
-///     break apart). The firmware signs it as-is and renders the hash
-///     in hex. Used as a fallback for cases where the message text is
-///     unavailable.
+///   * **`OFFCHAIN_KIND_RAW32` (0)** — companion sends the dapp's RAW
+///     32-byte hash `H` directly (e.g. an EIP-712 typed-data digest the
+///     firmware can't break apart) — i.e. the exact value the dapp passes
+///     to `isValidSignature`, NOT a pre-nested value. The firmware
+///     applies the Solady replay-safe EIP-712 nesting to `H` itself
+///     (`replay_safe_hash`) and signs that, then renders `H` in hex.
+///     Fallback for when the message text is unavailable. The firmware —
+///     never the companion — performs the nesting, so the signed value is
+///     always keccak-bound to the wallet domain and can never collide
+///     with the bare SHA-256 `sphincsDigest` the on-chain Type-1/Type-2
+///     UserOp path verifies (raw32 UserOp-forgery fix, 2026-06-11).
 ///
-/// In both modes, on-chain verification works because Solady's
+/// In every mode, on-chain verification works because Solady's
 /// `_erc1271IsValidSignatureViaNestedEIP712` first attempts the
 /// TypedDataSign branch and falls back to PersonalSign when no
 /// appended data is present in the signature — our companion-supplied
@@ -362,12 +368,15 @@ pub const CMD_GET_INIT_CODE: u32 = 15;
 ///       [ 0.. 1)  account_index  (u8)
 ///       [ 1.. 9)  chain_id       (u64 BE)
 ///       [ 9..13)  slot_index     (u32 BE)
-///       [13..14)  kind           (u8: 0=raw32, 1=personal_sign)
+///       [13..14)  kind           (u8: 0=raw32, 1=personal_sign,
+///                                 2=eip712_typed)
 ///       [14..16)  payload_len    (u16 BE)
 ///       [16..17)  flags          (u8 — bit 0 = `OFFCHAIN_FLAG_ACCOUNT_DEPLOYED`;
 ///                                 other bits MUST be zero)
-///       [17..)    payload (`payload_len` bytes — 32 for raw32, the
-///                 raw message for personal_sign)
+///       [17..)    payload (`payload_len` bytes — for raw32 the dapp's
+///                 RAW 32-byte hash H (firmware nests it, does NOT sign
+///                 it bare); for personal_sign the raw message; for
+///                 eip712_typed the domain/type/encoded-data + bundle)
 ///   * `arg1` — NS write buffer. Length depends on the deployed flag:
 ///       - flag set (deployed): `SIGN_OFFCHAIN_OUTPUT_LEN` = 4016 bytes:
 ///           [ 0.. 8)  new_local_offchain_count (u64 BE, post-bump)

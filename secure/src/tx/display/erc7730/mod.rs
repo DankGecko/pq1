@@ -235,7 +235,22 @@ fn render_erc7730_eip712_pages_inner<'ir>(
     // Head-bound guard — see `render_erc7730_pages_inner`. For EIP-712
     // `encodeData` every member is exactly one 32-byte word, so
     // `static_head_words` is the member count and the body is the encoded
-    // member words.
+    // member words. Unlike calldata there is NO dynamic tail, so require an
+    // EXACT length rather than the `>=` that `head_bounded_body` allows: a
+    // companion must not be able to append extra member words that fold
+    // into the signed `structHash` (`keccak(primary_type_hash ||
+    // encoded_data)`) but render past `static_head_words` and never
+    // display. Without this, a blessed descriptor that under-declares
+    // `static_head_words` would let those trailing words be
+    // signed-but-not-shown (audit defense-in-depth 2026-06-11). On a
+    // mismatch the caller falls back to the raw32 page, which honestly
+    // shows the EIP-712 final digest as an opaque hash.
+    let head_len = (format.static_head_words as usize)
+        .checked_mul(32)
+        .ok_or(RenderErr::Reject("7730 ed head overflow"))?;
+    if encoded_data.len() != head_len {
+        return Err(RenderErr::Reject("7730 ed len"));
+    }
     let body = head_bounded_body(encoded_data, format.static_head_words)?;
 
     let mut pages = Pages::with_len(0);

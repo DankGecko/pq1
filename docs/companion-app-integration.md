@@ -914,11 +914,20 @@ Header (17 bytes):
   [ 0..  1)  account_index    (u8)
   [ 1..  9)  chain_id         (u64 BE)
   [ 9.. 13)  slot_index       (u32 BE)
-  [13.. 14)  kind             (u8: 0 = RAW32, 1 = PERSONAL_SIGN)
+  [13.. 14)  kind             (u8: 0 = RAW32, 1 = PERSONAL_SIGN, 2 = EIP712_TYPED)
   [14.. 16)  payload_len      (u16 BE)
   [16.. 17)  flags            (u8 — bit 0 = OFFCHAIN_FLAG_ACCOUNT_DEPLOYED)
   [17..   )  payload          (32 B for RAW32, raw message bytes ≤700 for PERSONAL_SIGN)
 ```
+
+**RAW32 sends the dapp's *raw* hash, not a pre-wrapped one.** For
+`kind = RAW32` the 32-byte payload is the exact `rawHash` the dapp passes
+to `wallet.isValidSignature(rawHash, …)`. The firmware itself applies the
+Solady replay-safe EIP-712 nesting before signing — the companion MUST
+NOT pre-nest. (This is a security requirement: the on-chain UserOp path
+verifies a bare SHA-256 `sphincsDigest`, so a firmware that signed a
+companion-chosen 32-byte value verbatim would be a UserOp-forgery oracle.
+Fixed 2026-06-11.)
 
 **Companion responsibility — set the `account_deployed` bit:** before
 each call, the companion checks `eth_getCode(predicted_address)` on

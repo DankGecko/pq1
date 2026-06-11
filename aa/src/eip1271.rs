@@ -126,20 +126,49 @@ pub fn personal_sign_prefixed_hash(msg: &[u8]) -> [u8; 32] {
     h.finalize().into()
 }
 
-/// Final hash signed by the firmware on the PersonalSign workflow.
+/// Solady's `replaySafeHash` — the nested-EIP-712 wrap of an
+/// already-final 32-byte digest `final_hash` (the exact value a dapp
+/// passes to `isValidSignature`). This is the PersonalSign-workflow
+/// wrap WITHOUT any inner EIP-191 prefix:
+///
+/// ```text
+///   structHash = keccak256(PERSONAL_SIGN_TYPEHASH || final_hash)
+///   final      = keccak256("\x19\x01" || domainSep || structHash)
+/// ```
+///
+/// matching `Solady.ERC1271._erc1271IsValidSignatureViaNestedEIP712`'s
+/// PersonalSign branch (`lib/solady/src/accounts/ERC1271.sol:240-290`):
+/// when our `SignatureWrapper` carries no appended TypedDataSign data
+/// the on-chain dispatcher computes
+/// `_hashTypedData(keccak256(PERSONAL_SIGN_TYPEHASH, hash))` and verifies
+/// the C10 sig against THAT. So a firmware sig over `replay_safe_hash(H)`
+/// validates when a dapp calls `isValidSignature(H, sig)`.
+///
+/// # Why this exists (security — raw32 UserOp-forgery fix)
+///
+/// The firmware MUST perform this nesting itself for every off-chain
+/// signing kind (RAW32 + EIP712_TYPED) rather than letting the companion
+/// supply a pre-nested 32-byte value. The on-chain Type 1/2 UserOp path
+/// verifies a slot/bootstrap C10 sig over a **bare** SHA-256
+/// `sphincsDigest` (`PQSmartWallet.sphincsDigest`). A firmware that
+/// bare-signs a companion-chosen 32-byte value is therefore a
+/// UserOp-forgery oracle: `raw32(sphincsDigest(drainOp))` would be a
+/// valid Type 2 signature, draining the wallet behind a blind "raw
+/// 32-byte" page. Routing every off-chain hash through
+/// `replay_safe_hash` guarantees the signed value is keccak-nested with
+/// this wallet's EIP-712 domain and can never coincide with a SHA-256
+/// `sphincsDigest`.
 #[must_use]
-pub fn personal_sign_replay_safe_hash(
+pub fn replay_safe_hash(
     chain_id: u64,
     verifying_contract: &[u8; 20],
-    msg: &[u8],
+    final_hash: &[u8; 32],
 ) -> [u8; 32] {
-    let prefixed = personal_sign_prefixed_hash(msg);
-
-    // structHash = keccak256(PERSONAL_SIGN_TYPEHASH || prefixed)
+    // structHash = keccak256(PERSONAL_SIGN_TYPEHASH || final_hash)
     let struct_hash: [u8; 32] = {
         let mut h = Keccak256::new();
         h.update(PERSONAL_SIGN_TYPEHASH);
-        h.update(prefixed);
+        h.update(final_hash);
         h.finalize().into()
     };
 
@@ -150,6 +179,23 @@ pub fn personal_sign_replay_safe_hash(
     h.update(domain_sep);
     h.update(struct_hash);
     h.finalize().into()
+}
+
+/// Final hash signed by the firmware on the PersonalSign workflow.
+///
+/// Equivalent to
+/// `replay_safe_hash(chain_id, vc, &personal_sign_prefixed_hash(msg))`:
+/// the message is EIP-191 personal-sign-prefixed first, then nested. A
+/// standard dapp computes `H = personal_sign_prefixed_hash(msg)` and
+/// calls `isValidSignature(H, sig)`, so this round-trips on chain.
+#[must_use]
+pub fn personal_sign_replay_safe_hash(
+    chain_id: u64,
+    verifying_contract: &[u8; 20],
+    msg: &[u8],
+) -> [u8; 32] {
+    let prefixed = personal_sign_prefixed_hash(msg);
+    replay_safe_hash(chain_id, verifying_contract, &prefixed)
 }
 
 /// Format `n` into `out` as left-aligned ASCII decimal. Returns the
@@ -220,5 +266,73 @@ mod tests {
             h.finalize().into()
         };
         assert_eq!(EIP712_DOMAIN_TYPEHASH, expected);
+    }
+
+    /// `replay_safe_hash(H)` equals Solady's PersonalSign-branch wrap of a
+    /// raw 32-byte digest `H` — `keccak(0x1901 || domainSep ||
+    /// keccak(PERSONAL_SIGN_TYPEHASH || H))`, with NO inner EIP-191 prefix.
+    #[test]
+    fn replay_safe_hash_matches_solady_nesting() {
+        let chain_id: u64 = 8453;
+        let verifying: [u8; 20] = [0xCDu8; 20];
+        let h: [u8; 32] = [0x42u8; 32];
+
+        let struct_hash: [u8; 32] = {
+            let mut k = Keccak256::new();
+            k.update(PERSONAL_SIGN_TYPEHASH);
+            k.update(h);
+            k.finalize().into()
+        };
+        let dsep = domain_separator(chain_id, &verifying);
+        let expected: [u8; 32] = {
+            let mut k = Keccak256::new();
+            k.update(b"\x19\x01");
+            k.update(dsep);
+            k.update(struct_hash);
+            k.finalize().into()
+        };
+
+        assert_eq!(replay_safe_hash(chain_id, &verifying, &h), expected);
+    }
+
+    /// Refactor equivalence + kind=1 unchanged:
+    /// `personal_sign_replay_safe_hash(msg) == replay_safe_hash(prefixed(msg))`.
+    #[test]
+    fn personal_sign_is_replay_safe_of_prefixed() {
+        let chain_id: u64 = 1;
+        let verifying: [u8; 20] = [0x11u8; 20];
+        let msg = b"login nonce 12345";
+        let prefixed = personal_sign_prefixed_hash(msg);
+        assert_eq!(
+            personal_sign_replay_safe_hash(chain_id, &verifying, msg),
+            replay_safe_hash(chain_id, &verifying, &prefixed),
+        );
+    }
+
+    /// Anti-forgery core: the firmware NEVER signs the companion's raw
+    /// 32 bytes verbatim — `replay_safe_hash(X) != X` for any X. This is
+    /// what prevents a `raw32` off-chain request with `X =
+    /// sphincsDigest(drainOp)` from yielding a sig the on-chain Type 2
+    /// path (which verifies a bare slot sig over `sphincsDigest`) accepts.
+    #[test]
+    fn replay_safe_hash_never_returns_input() {
+        let chain_id: u64 = 8453;
+        let verifying: [u8; 20] = [0x99u8; 20];
+        // A value shaped exactly like an on-chain Type-2 digest target.
+        let sphincs_digest_like: [u8; 32] = [0xABu8; 32];
+        assert_ne!(
+            replay_safe_hash(chain_id, &verifying, &sphincs_digest_like),
+            sphincs_digest_like,
+        );
+        // Domain-bound: same H, different wallet/chain → different signed
+        // value, so a captured sig can't be replayed across wallets/chains.
+        assert_ne!(
+            replay_safe_hash(1, &verifying, &sphincs_digest_like),
+            replay_safe_hash(2, &verifying, &sphincs_digest_like),
+        );
+        assert_ne!(
+            replay_safe_hash(chain_id, &[0x01u8; 20], &sphincs_digest_like),
+            replay_safe_hash(chain_id, &[0x02u8; 20], &sphincs_digest_like),
+        );
     }
 }
