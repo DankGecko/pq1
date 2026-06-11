@@ -50,10 +50,13 @@ pinned value below. Any drift fails CI.
 >     current embedding wallet codehash. (Replaces the prior stale Certora
 >     artifact, which had not been re-run after the codehash moved.)
 >   * **A3.1 (verifier)** — `discharged-bytecode-partial`: 3 input-gate rules
->     (length/N-mask) on `0xf1ef…fef5` by Halmos; the full SHA-256-heavy
->     functional equivalence stays on the Lean refinement
->     (`verifyRefined_eq_spec`, incl. htIdx) + the 10 KAT vectors + the
->     ~250-mutant adversarial wrong-accept screen.
+>     (length/N-mask) on `0xf1ef…fef5` by Halmos; an executable
+>     Lean↔FIPS↔bytecode KAT on the digest/htIdx sub-layers (`lake exe
+>     verify-test-vectors`, 10/10); the full SHA-256-heavy functional
+>     equivalence is EMPIRICAL only (bytecode 10-vector KAT + ~250-mutant
+>     screen). The Lean refinement (`verifyRefined_eq_spec`) is `rfl` over a
+>     spec that is NOT executably faithful on reconstruction — the A3.1
+>     equality is currently false as stated; see `docs/A3_1_VERIFIER_GAP.md`.
 > Reproduce: `make -C contracts/verification verify-bytecode`. SHA-256 is an
 > uninterpreted function in every Halmos run (the named A1 boundary).
 

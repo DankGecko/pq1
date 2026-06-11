@@ -54,11 +54,19 @@
 >   `Storage` model + `ownerAtIndex` read parity + bootstrap-unremovable +
 >   EntryPoint-only gate ([`HalmosMultiOwnable.t.sol`](../smart-wallet/test/halmos/HalmosMultiOwnable.t.sol),
 >   7 rules). Replaces the prior stale Certora artifact.
-> - **A3.1 (verifier)** — `discharged-bytecode-partial`: Halmos input
->   gates + the Lean refinement (incl. FORS htIdx) + 10 KAT vectors + a
->   ≈250-mutant adversarial wrong-accept screen on the bytecode. The full
->   ∀-signature functional equivalence is the named `-partial` gap (not
->   symbolically tractable over a 4008-byte signature).
+> - **A3.1 (verifier)** — `discharged-bytecode-partial`, **with an
+>   important caveat (2026-06-11)**: Halmos input gates + an **executable
+>   Lean↔FIPS↔bytecode KAT on the digest/htIdx sub-layers** (10/10, `lake
+>   exe verify-test-vectors`) + the bytecode-side 10-vector KAT + a
+>   ≈250-mutant wrong-accept screen. **The FORS/WOTS+C/Merkle functional
+>   layer is carried EMPIRICALLY only** — the Lean verifier spec is **not
+>   executably faithful** there (`Spec.Signature.verify` returns `false`
+>   on the valid vectors), so the A3.1 *equality* axiom is currently
+>   **false as stated** and must be made faithful or restated as
+>   cited-TCB. This is the single named gap that blocks an unqualified
+>   "verifier proven to bytecode" claim. See
+>   [`docs/A3_1_VERIFIER_GAP.md`](docs/A3_1_VERIFIER_GAP.md) and
+>   [`docs/THE_CLAIM.md`](docs/THE_CLAIM.md).
 >
 > The Lean corollaries `theft_free_bytecode`,
 > `factory_squat_defence_bytecode`, and
@@ -194,9 +202,15 @@ in [`docs/AXIOM_STATUS.json`](docs/AXIOM_STATUS.json):
   — `discharged-bytecode` (pointwise equivalence to the Lean models;
   the execute money-path over a **symbolic ∀ ownerIndex**).
 - **A3.1 verifier** — `discharged-bytecode-partial`: input gates on
-  bytecode + the Lean refinement + 10 KAT vectors + a ≈250-mutant
-  adversarial screen; the full ∀-signature functional equivalence over a
-  4008-byte signature is the named `-partial` gap.
+  bytecode + an executable Lean↔FIPS↔bytecode KAT on the **digest/htIdx
+  sub-layers** + the bytecode-side 10-vector KAT + a ≈250-mutant
+  adversarial screen. The **FORS/WOTS+C/Merkle functional layer is
+  EMPIRICAL only**; the Lean spec is not executably faithful there (the
+  A3.1 equality is currently **false as stated** — `Spec.Signature.verify`
+  returns `false` on valid vectors). See
+  [`docs/A3_1_VERIFIER_GAP.md`](docs/A3_1_VERIFIER_GAP.md). This is the
+  reason an unqualified "verifier proven to bytecode" claim is NOT yet
+  supportable.
 - **A1 SHA-256** — uninterpreted in every Halmos run (the named boundary).
 - **A2 EntryPoint / A4 EVM / A5 EUF-CMA** — cited-TCB by decision. The
   emitted-CALL byte-delivery on the execute path lives in A4.
@@ -211,6 +225,19 @@ The headline guarantee, modulo A1–A6:
 
 Equivalently: an adversary who does not hold an installed SPHINCS+C10 secret
 key cannot reduce the wallet's balance, modulo A1–A6.
+
+> **⚠️ Read `modulo A1–A6` literally.** This is a guarantee *relative to*
+> the trusted axioms — it is only as strong as their discharge. As of
+> 2026-06-11 the **A3.1** axiom (deployed verifier = Lean `verifyYulModel`)
+> is **contradicted by a concrete KAT vector** (the Lean spec returns
+> `false` where the bytecode returns `true`), so on the *verifier*
+> dimension this guarantee does **not** yet transfer to the deployed
+> bytecode. The wallet/factory/owner-table CONTROL FLOW *is* discharged on
+> bytecode (Halmos, both profiles); the verifier's functional correctness
+> rests on testing (bytecode KAT + mutant screen), not proof. See
+> [`docs/THE_CLAIM.md`](docs/THE_CLAIM.md) for the exact, defensible
+> wording and [`docs/A3_1_VERIFIER_GAP.md`](docs/A3_1_VERIFIER_GAP.md) for
+> the gap.
 
 **Honest ceiling (unchanged).** A Halmos rule is a cited Halmos+z3 solver
 session — the harness↔property match and the

@@ -1,34 +1,146 @@
 /-
 Driver for `lake exe verify-test-vectors`.
 
-Loads the test-vector corpus from `sphincs-c10/tests/c10_test_vectors.json`
-(or wherever the host signer dumped it) and confirms that, for every
-test vector, `Spec.Signature.verify` returns the expected boolean.
+## What this runner actually does (2026-06-11 — made real)
 
-Because the Lean spec uses an opaque `sha256`, the verifier cannot
-actually compute concrete digests at runtime. So this executable serves
-two purposes:
+Previous versions of this file only printed a few constants — the
+"Lean leg" of the advertised three-way Rust ↔ Solidity ↔ Lean KAT
+differential was a STUB; the Lean spec had never been executed on a
+concrete signature. This runner replays the 10 shared KAT vectors
+(`contracts/smart-wallet/test/c10_test_vectors.json`, embedded via
+`SphincsCVerify/KatVectors.lean`) through the executable Lean spec and
+reports, per vector and in aggregate, exactly what the Lean spec
+reproduces and what it does not:
 
-  1. It type-checks the spec-level API the test-vector harness needs.
-  2. It documents the structure of the cross-validation pipeline:
-     the actual byte-level differential testing happens via Rust
-     (`sphincs-c10/tests/signing_suite.rs`) and Solidity
-     (`contracts/smart-wallet/test/`); this driver re-runs the **type
-     checks** so a Lean-level rename does not silently break the
-     externally-validated artifact.
+  (1) hMsg DIGEST layer — `Spec.Hash.hMsg` recomputed from the spec is
+      compared to the FIPS-180-4 ground truth embedded by
+      `scripts/gen_kat_vectors.py`. A match certifies the Lean SHA-256
+      reference (`Spec.Sha256Impl`) and the digest preimage layout
+      against the same digest the deployed verifier computes.
 
-For full byte-level test-vector replay inside Lean, we would need a
-kernel-computable SHA-256 (see § 3.5 of the playbook). That is a
-follow-on work item.
+  (2) htIdx layer — `Util.extractHtIndex` vs the embedded ground truth.
+
+  (3) FULL functional verify — `Spec.Signature.verify` over the
+      byte-decoded signature, compared to the vector's `expectValid`.
+
+### Honest result (current)
+
+Layers (1) and (2) MATCH on every vector — the Lean digest/index
+sub-layer is byte-faithful to the deployed bytecode. Layer (3) does
+NOT yet match: `Spec.Signature.verify` returns `false` on the VALID
+vectors, because the WOTS+C / hypertree RECONSTRUCTION layer
+(`Spec.Wots.pkFromSig` → `digitSum ≠ TargetSum`) was specified to
+mirror the Rust signer but was never executed, and its ADRS bit-layout
+diverges from the deployed Yul. This is the named A3.1 residual (see
+`docs/AXIOM_STATUS.json` A3.1 and `docs/A3_1_VERIFIER_GAP.md`): the
+verifier's full functional equivalence is carried EMPIRICALLY by the
+on-bytecode KAT + the ~250-mutant wrong-accept screen, NOT by an
+executable Lean differential.
+
+This runner is wired so the digest/index differential is a HARD CHECK
+(non-zero exit on drift — a real regression guard on the Lean SHA-256
+and preimage), while the full-verify column is reported but not yet
+asserted green, so the artifact tells the truth instead of hiding the
+gap. When the reconstruction layer is made faithful, flip
+`requireFullVerify` to `true` to promote it to a hard check.
 -/
 
 import SphincsCVerify
+import SphincsCVerify.KatVectors
 
-def main : IO Unit := do
-  IO.println "SphincsCVerify build OK"
-  IO.println s!"SignatureLen = {SphincsCVerify.Spec.SignatureLen}"
-  IO.println s!"VerifyingKeyLen = {SphincsCVerify.Spec.VerifyingKeyLen}"
-  IO.println s!"MaxBootstrapUses = {SphincsCVerify.Spec.MaxBootstrapUses}"
-  IO.println s!"MaxSlotUses = {SphincsCVerify.Spec.MaxSlotUses}"
-  IO.println "(For byte-level differential testing against the Rust"
-  IO.println " test vectors, see `sphincs-c10/tests/signing_suite.rs`.)"
+open SphincsCVerify.Spec
+open SphincsCVerify.Spec.ByteVec
+open SphincsCVerify.Spec.Hypertree
+open SphincsCVerify.Util
+open SphincsCVerify.KatVectors
+
+/-- Decode one hex nibble. -/
+def hexNibble (c : Char) : UInt8 :=
+  if '0' ≤ c ∧ c ≤ '9' then (c.toNat - '0'.toNat).toUInt8
+  else if 'a' ≤ c ∧ c ≤ 'f' then (c.toNat - 'a'.toNat + 10).toUInt8
+  else if 'A' ≤ c ∧ c ≤ 'F' then (c.toNat - 'A'.toNat + 10).toUInt8
+  else 0
+
+/-- Parse a "0x..."-prefixed hex string into an `Array UInt8`. -/
+def hexToBytes (s : String) : Array UInt8 := Id.run do
+  let arr := (s.toList.drop 2).toArray
+  let mut out : Array UInt8 := #[]
+  let mut i := 0
+  while h : i + 1 < arr.size do
+    out := out.push (hexNibble arr[i]! * 16 + hexNibble arr[i + 1]!)
+    i := i + 2
+  pure out
+
+/-- Total decoder to a fixed-length `ByteVec` (right-pad / truncate to `n`). -/
+def toBV (n : Nat) (a : Array UInt8) : ByteVec n :=
+  ⟨(a ++ Array.replicate n 0).extract 0 n, by
+    simp [Array.size_extract, Array.size_append, Array.size_replicate]
+    omega⟩
+
+/-- Lowercase hex of a byte array, "0x"-prefixed. -/
+def bytesToHex (a : Array UInt8) : String := Id.run do
+  let digits := "0123456789abcdef".toList.toArray
+  let mut s := "0x"
+  for b in a do
+    s := s.push digits[(b.toNat / 16)]!
+    s := s.push digits[(b.toNat % 16)]!
+  pure s
+
+structure Outcome where
+  digestOk : Bool
+  htIdxOk : Bool
+  verifyMatches : Bool
+
+def runVector (v : KatVector) : Outcome :=
+  let pkSeed16 : ByteVec 16 := (toBV 32 (hexToBytes v.pkSeed)).take 16 (by decide)
+  let pkRoot16 : ByteVec 16 := (toBV 32 (hexToBytes v.pkRoot)).take 16 (by decide)
+  let msgBV : ByteVec 32 := toBV 32 (hexToBytes v.message)
+  let sigBV : ByteVec SignatureLen := toBV SignatureLen (hexToBytes v.signature)
+  let rVal : ByteVec 16 := (Signature.deserialise sigBV).r
+  let digest : ByteVec 32 := hMsg (pad16 pkSeed16) (pad16 pkRoot16) (pad16 rVal) msgBV
+  let digestOk : Bool := bytesToHex digest.data == v.expectedDigestHex
+  let htIdxOk : Bool := extractHtIndex digest == v.expectedHtIdx
+  let verifyResult : Bool := Signature.verify ⟨pkSeed16, pkRoot16⟩ msgBV sigBV
+  ⟨digestOk, htIdxOk, verifyResult == v.expectValid⟩
+
+/-- Promote the full-verify column to a hard check once the
+    reconstruction layer is made executably faithful (currently false —
+    see the file header / docs/A3_1_VERIFIER_GAP.md). -/
+def requireFullVerify : Bool := false
+
+def main : IO UInt32 := do
+  IO.println "=== Lean ↔ bytecode KAT differential (verify-test-vectors) ==="
+  IO.println s!"SignatureLen = {SphincsCVerify.Spec.SignatureLen}, vectors = {vectors.length}"
+  IO.println ""
+  IO.println "label                              digest  htIdx  full-verify"
+  IO.println "---------------------------------- ------  -----  -----------"
+  let mut digestFails := 0
+  let mut htIdxFails := 0
+  let mut verifyMismatch := 0
+  for v in vectors do
+    let o := runVector v
+    if !o.digestOk then digestFails := digestFails + 1
+    if !o.htIdxOk then htIdxFails := htIdxFails + 1
+    if !o.verifyMatches then verifyMismatch := verifyMismatch + 1
+    let pad := v.label ++ String.mk (List.replicate (max 0 (34 - v.label.length)) ' ')
+    let d := if o.digestOk then "  OK  " else " FAIL "
+    let h := if o.htIdxOk then " OK  " else "FAIL "
+    let f := if o.verifyMatches then "  match  " else " MISMATCH"
+    IO.println s!"{pad} {d}  {h}  {f}"
+  IO.println ""
+  IO.println s!"digest layer : {vectors.length - digestFails}/{vectors.length} match FIPS ground truth (HARD CHECK)"
+  IO.println s!"htIdx layer  : {vectors.length - htIdxFails}/{vectors.length} match ground truth (HARD CHECK)"
+  IO.println s!"full verify  : {vectors.length - verifyMismatch}/{vectors.length} match expectValid (REPORTED, not yet asserted — A3.1 residual)"
+  IO.println ""
+  if digestFails > 0 || htIdxFails > 0 then
+    IO.eprintln "FAIL: the Lean digest/index sub-layer drifted from the bytecode ground truth."
+    return 1
+  if requireFullVerify && verifyMismatch > 0 then
+    IO.eprintln "FAIL: full-verify differential required but mismatched."
+    return 1
+  IO.println "OK: digest + htIdx sub-layers are byte-faithful to the deployed verifier."
+  IO.println "NOTE: full functional verify is the named A3.1 residual — the WOTS+C /"
+  IO.println "      hypertree reconstruction layer is carried empirically by the"
+  IO.println "      on-bytecode KAT + ~250-mutant wrong-accept screen, not by this"
+  IO.println "      executable Lean differential. See docs/A3_1_VERIFIER_GAP.md."
+  return 0

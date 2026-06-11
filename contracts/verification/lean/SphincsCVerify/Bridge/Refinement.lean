@@ -18,7 +18,7 @@ so the discharge artifacts can be recorded independently:
 
 | Axiom | Discharged by |
 |-------|---------------|
-| `solidityVerifier_compiles_correctly`     | Halmos session against pinned `SPHINCsC10Asm` codehash; cross-validated against `cross_validation/` Lean ↔ Rust ↔ Solidity test vectors |
+| `solidityVerifier_compiles_correctly`     | **partial**: Halmos input-gates on pinned `SPHINCsC10Asm` codehash + executable Lean↔FIPS↔bytecode KAT on the digest/htIdx sub-layers + bytecode-side 10-vector KAT + ~250-mutant screen. Functional reconstruction layer is EMPIRICAL only — see `docs/A3_1_VERIFIER_GAP.md` |
 | `solidityWallet_compiles_correctly`       | Halmos session against pinned `PQSmartWallet` codehash (`test/halmos/HalmosValidateUserOp.t.sol`, `HalmosExecute.t.sol`) |
 | `solidityFactory_compiles_correctly`      | Certora rule-set `certora/PQSmartWalletFactory.spec` |
 | `solidityMultiOwnable_compiles_correctly` | Certora rule-set `certora/PQMultiOwnable.spec` |
@@ -170,11 +170,18 @@ documentation. -/
     The deployed bytecode at the pinned codehash returns `true` exactly
     when `Bridge.SolidityVerifier.verifyYulModel` returns `true`.
 
-    Discharge: Halmos session against the pinned runtime codehash, plus
-    the existing Lean ↔ Rust ↔ Solidity cross-validation at
-    `contracts/verification/cross_validation/`. Both record their tool +
-    version + codehash + session-hash in
-    `contracts/verification/docs/AXIOM_STATUS.json`. -/
+    Discharge status: **`discharged-bytecode-partial`**. The honest
+    ledger (see `docs/A3_1_VERIFIER_GAP.md` + `docs/AXIOM_STATUS.json`):
+      * digest + htIdx sub-layers — executable Lean ↔ FIPS ↔ bytecode
+        KAT, 10/10 (`lake exe verify-test-vectors`, HARD CHECK);
+      * input gates — Halmos on the bytecode (length / N-mask);
+      * FORS/WOTS+C/Merkle functional layer — EMPIRICAL only (10-vector
+        bytecode KAT + ~250-mutant wrong-accept screen). The Lean
+        `verifyYulModel` is NOT yet executably faithful here
+        (`Spec.Signature.verify` returns `false` on valid vectors — the
+        reconstruction-layer ADRS divergence), and a symbolic
+        ∀-signature equivalence is intractable under uninterpreted
+        SHA-256 (= A1). This is the single named A3.1 residual. -/
 axiom solidityVerifier_compiles_correctly :
     ∀ (pkSeed pkRoot : ByteVec 32) (message : ByteVec 32) (sig : ByteVec SignatureLen),
       DeployedBytecode.SPHINCsC10Asm_verify pkSeed pkRoot message sig

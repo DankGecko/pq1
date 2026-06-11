@@ -1,0 +1,66 @@
+# Halmos session — PQSmartWallet/Factory/MultiOwnable/Verifier bytecode discharge
+# 2026-06-11 (re-run after the A3.1 verifier-gap correction + validate ownerIndex
+#   installed-partition symbolic sweep; the attempted unset-partition sweep was
+#   REMOVED because it ERRORs on the ownerAtIndex dynamic-bytes getter — see
+#   docs/A3_1_VERIFIER_GAP.md and halmos/README.md)
+# halmos 0.3.4.dev (+ PQ1 sha256 sort + empty-input patches) / solver z3
+#
+# Reproduce: make -C contracts/verification verify-bytecode   (exit 0)
+#
+# Certification (run first, BOTH profiles): PinnedCodehashes + PinnedBytecodeImmutableLemma PASS
+#
+# =================================================================
+#  PROFILE = default (runs=200)          ==> PASS: 38 bytecode rules
+# =================================================================
+[PASS] check_executeBatch_rejects_any_self_target(uint256) (paths: 3, time: 0.09s, bounds: [])
+[PASS] check_execute_no_replay() (paths: 1, time: 0.03s, bounds: [])
+[PASS] check_execute_rejects_non_entrypoint_caller(address) (paths: 2, time: 0.01s, bounds: [])
+[PASS] check_execute_rejects_owner_index_mismatch(uint256) (paths: 1, time: 0.03s, bounds: [])
+[PASS] check_execute_rejects_self_target() (paths: 1, time: 0.02s, bounds: [])
+[PASS] check_execute_without_validate_reverts() (paths: 1, time: 0.00s, bounds: [])
+[PASS] check_executeBatch_pointwise_equals_lean_model(uint256,uint256,uint256) (paths: 67, time: 6.59s, bounds: [])
+[PASS] check_execute_inner_revert_is_atomic(uint256) (paths: 12, time: 0.42s, bounds: [])
+[PASS] check_execute_no_credit_reverts_for_all_indices(uint256) (paths: 1, time: 0.01s, bounds: [])
+[PASS] check_execute_pointwise_equals_lean_model(uint256,uint256,uint256) (paths: 53, time: 5.42s, bounds: [])
+[PASS] check_validate_remove_selector_stamps_no_credit(uint256) (paths: 1, time: 0.02s, bounds: [])
+[PASS] check_createAccount_already_deployed_returns_existing(uint64,bytes32,bytes32,bool) (paths: 4, time: 0.10s, bounds: [])
+[PASS] check_createAccount_iff_lean_precondition(uint64,bool) (paths: 10, time: 0.43s, bounds: [])
+[PASS] check_createAccount_rejects_duplicate_slot0() (paths: 1, time: 0.02s, bounds: [])
+[PASS] check_createAccount_rejects_non_nmasked_master(bytes32,bytes32) (paths: 1, time: 0.02s, bounds: [])
+[PASS] check_createAccount_rejects_non_nmasked_slot0() (paths: 1, time: 0.02s, bounds: [])
+[PASS] check_addOwnerBytes_pointwise_equals_lean_model(uint256) (paths: 7, time: 0.38s, bounds: [])
+[PASS] check_initialize_fresh_pointwise() (paths: 10, time: 0.44s, bounds: [])
+[PASS] check_initialize_one_shot(uint256,uint256) (paths: 25, time: 0.53s, bounds: [])
+[PASS] check_owner_mutators_reject_non_entrypoint(address,bool) (paths: 4, time: 0.03s, bounds: [])
+[PASS] check_removeOwner_bootstrap_unremovable(bool) (paths: 3, time: 0.03s, bounds: [])
+[PASS] check_removeOwner_installed_pointwise(uint256) (paths: 7, time: 0.27s, bounds: [])
+[PASS] check_removeOwner_unset_index_rejects(uint256) (paths: 2, time: 0.02s, bounds: [])
+[PASS] check_bootstrap_bumps_cap_at_validation() (paths: 3, time: 0.04s, bounds: [])
+[PASS] check_nonbypass_bootstrap() (paths: 3, time: 0.03s, bounds: [])
+[PASS] check_nonbypass_slot() (paths: 3, time: 0.03s, bounds: [])
+[PASS] check_rejects_non_entrypoint_caller(address) (paths: 2, time: 0.01s, bounds: [])
+[PASS] check_rejects_nonzero_tail_pad(uint256) (paths: 3, time: 0.04s, bounds: [])
+[PASS] check_rejects_wrong_selector_for_bootstrap() (paths: 1, time: 0.02s, bounds: [])
+[PASS] check_rejects_wrong_selector_for_slot() (paths: 1, time: 0.02s, bounds: [])
+[PASS] check_slot_bumps_cap_at_validation() (paths: 3, time: 0.04s, bounds: [])
+[PASS] check_validateUserOp_equiv_wrong_sig_lengths(uint256,uint256) (paths: 14, time: 3.07s, bounds: [])
+[PASS] check_validateUserOp_pointwise_equals_lean_model(uint256,uint256,bool,bool,uint256) (paths: 2209, time: 478.60s, bounds: [])
+[PASS] check_validateUserOp_pointwise_installed_indices(uint256,uint256,bool,bool,uint256) (paths: 1347, time: 281.19s, bounds: [])
+[PASS] check_validateUserOp_reverting_verifier_is_false_interp(uint256,uint256) (paths: 92, time: 7.30s, bounds: [])
+[PASS] check_verify_rejects_non_nmasked_pkRoot(bytes32,bytes32,bytes32) (paths: 1, time: 0.01s, bounds: [])
+[PASS] check_verify_rejects_non_nmasked_pkSeed(bytes32,bytes32,bytes32) (paths: 1, time: 0.01s, bounds: [])
+[PASS] check_verify_reverts_on_wrong_length(uint256,bytes32,bytes32,bytes32) (paths: 6, time: 0.02s, bounds: [])
+#
+# =================================================================
+#  PROFILE = deploy (runs=999999, PROD)   ==> PASS: 38 bytecode rules
+# =================================================================
+#  Same 38 rules, all PASS, against the production codehashes.
+#  Total: 38 symbolic rules PASS on EACH profile (76 rule-executions).
+#
+# NOTE on A3.1: SHA-256 (0x02) is uninterpreted throughout, AND the verifier
+#  itself is uninterpreted in these wallet rules (HalmosVerifier covers only
+#  input gates). The verifier's FUNCTIONAL correctness is NOT proven here — it
+#  is carried by the bytecode KAT + ~250-mutant screen (testing). The Lean
+#  verifier spec is NOT executably faithful (lake exe verify-test-vectors:
+#  Spec.Signature.verify returns false on valid vectors) so the A3.1 equality
+#  axiom is currently false as stated. See docs/A3_1_VERIFIER_GAP.md / THE_CLAIM.md.

@@ -196,18 +196,22 @@ contract HalmosValidateUserOpEquiv is SymTest, Test {
         op.signature = ""; // set by caller
     }
 
-    /// @dev The wrapper's ownerIndex word, materialised CONCRETE per path
-    ///      (Halmos cannot allocate the symbolic-LENGTH owner-bytes memory a
-    ///      fully symbolic index would produce — `NotConcreteError`). The
-    ///      class representatives cover every qualitatively distinct
+    /// @dev The wrapper's ownerIndex word, materialised CONCRETE per path.
+    ///      The class representatives cover every qualitatively distinct
     ///      treatment: the bootstrap index, both installed slot indices, the
     ///      first unset index, a deep unset index, and the H-3 sentinel
     ///      value. All remaining 4096 wrapper bytes (offset word, innerLen
     ///      word, 4008 sig bytes, 24 pad bytes) stay fully symbolic.
-    ///      These concrete representatives are a layered cross-check only:
-    ///      rules 1b/1c quantify the ownerIndex word SYMBOLICALLY over the
-    ///      unset (>= 3) and installed (1..2) partitions, so the full
-    ///      uint256 index space is solver-covered, not argued by hand.
+    ///      Note {0, 1, 2} is the ENTIRE installed set of this owner-set
+    ///      shape — for those indices concrete enumeration IS exhaustive
+    ///      coverage, not sampling. The unset reps {3, 2^200, max} cover
+    ///      the unset partition (>= 3), on which the wallet's behaviour is
+    ///      uniform (owner length 0 != 64 => fail): the boundary, a deep
+    ///      value, and the H-3 sentinel. A symbolic sweep of the unset
+    ///      partition is NOT possible (the `ownerAtIndex` dynamic-bytes
+    ///      getter `NotConcreteError`s on a symbolic non-installed key — a
+    ///      disclosed Halmos engine ceiling); see the NOTE above rule 1c.
+    ///      Rule 1c does sweep a symbolic index over the INSTALLED slots.
     function _sweepOwnerIndexWord(uint256 idxSel) internal pure returns (bytes32) {
         vm.assume(idxSel < 6);
         if (idxSel == 0) return bytes32(uint256(0));
@@ -222,6 +226,16 @@ contract HalmosValidateUserOpEquiv is SymTest, Test {
     ///      everything after byte 32 symbolic.
     function _sweepSig(uint256 idxSel, string memory tailName) internal view returns (bytes memory) {
         return abi.encodePacked(_sweepOwnerIndexWord(idxSel), svm.createBytes(4096, tailName));
+    }
+
+    /// @dev 4128-byte wrapper with a caller-supplied (symbolic) ownerIndex
+    ///      word; everything after byte 32 symbolic.
+    function _sigWithIndexWord(uint256 idxWord, string memory tailName)
+        internal
+        view
+        returns (bytes memory)
+    {
+        return abi.encodePacked(bytes32(idxWord), svm.createBytes(4096, tailName));
     }
 
     /// @dev Shared body: run model + bytecode on the same op, assert the
@@ -303,6 +317,58 @@ contract HalmosValidateUserOpEquiv is SymTest, Test {
 
         UserOperation06 memory op = _symUserOp(callData, initCode, pm);
         op.signature = _sweepSig(idxSel, "wrappedSigTail");
+
+        _assertEquiv(op, probeIndex);
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // NOTE — the UNSET partition (ownerIndex >= 3) is NOT swept
+    // symbolically. An attempt (`check_validateUserOp_pointwise_unset_indices`,
+    // a symbolic idxWord >= 3) ERRORS under Halmos with the
+    // dynamic-bytes-getter `NotConcreteError`: `validateUserOp` reads
+    // `ownerAtIndex(ownerIndex)`, a `mapping(uint => bytes)` getter, and
+    // for a symbolic key that is NOT statically one of the installed
+    // {0,1,2} Halmos cannot resolve the returned bytes' LENGTH (the
+    // mapping's default-empty branch is not concretely decidable for a
+    // symbolic key), so it cannot allocate the return buffer. This is a
+    // hard, disclosed engine ceiling — NOT closed by partitioning. The
+    // unset partition is instead covered by the CONCRETE representatives
+    // {3, 2^200, uint256.max} in rule 1 (`_sweepOwnerIndexWord` idxSel
+    // 3/4/5): the wallet's behaviour on every unset index is uniform
+    // (owner length 0 != 64 => SIG_VALIDATION_FAILED, state unchanged),
+    // so the reps exercise the boundary (first unset), a deep value, and
+    // the H-3 sentinel. Rule 1c below DOES sweep a symbolic index over
+    // the INSTALLED partition {1,2} (where the getter length is a
+    // concrete 64), a genuine — if modest — strengthening over the two
+    // concrete instantiations.
+    // ──────────────────────────────────────────────────────────────────
+
+    // ──────────────────────────────────────────────────────────────────
+    // Rule 1c — ∀-SYMBOLIC ownerIndex over the INSTALLED slot partition
+    // {1, 2}: the full pointwise equality (success arms included) with
+    // the index a symbolic word constrained to the partition rather
+    // than a concrete singleton. Both installed owners store 64-byte
+    // values, so the symbolic-key getter's length resolves uniformly
+    // across the partition and the dynamic allocation stays concrete.
+    // ──────────────────────────────────────────────────────────────────
+    function check_validateUserOp_pointwise_installed_indices(
+        uint256 idxWord,
+        uint256 lenSel,
+        bool initCodeEmpty,
+        bool paymasterEmpty,
+        uint256 probeIndex
+    ) public {
+        vm.assume(idxWord == 1 || idxWord == 2);
+        _storeSymbolicCounters(wallet);
+
+        bytes memory callData = _sweepCallData(lenSel);
+        bytes memory initCode =
+            initCodeEmpty ? new bytes(0) : svm.createBytes(32, "initCodeIns");
+        bytes memory pm =
+            paymasterEmpty ? new bytes(0) : svm.createBytes(32, "pmIns");
+
+        UserOperation06 memory op = _symUserOp(callData, initCode, pm);
+        op.signature = _sigWithIndexWord(idxWord, "wrappedSigInsTail");
 
         _assertEquiv(op, probeIndex);
     }

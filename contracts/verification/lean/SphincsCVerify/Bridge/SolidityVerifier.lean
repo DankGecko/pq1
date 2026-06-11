@@ -35,23 +35,31 @@ namespace SphincsCVerify.Bridge
 open SphincsCVerify.Spec
 open SphincsCVerify.Verifier.Refined
 
-/-- The Yul-level verifier function. Conceptually identical to
-    `Refined.verifyRefined` but the body is rewritten to mirror Yul's
-    statement structure (sequential `staticcall`s rather than Lean's
-    `for-in` syntax).
+/-- The "Yul-level" verifier symbol.
 
-    We keep the definition here purely structural — it is byte-for-byte
-    equivalent to `verifyRefined`. The interesting work is the
-    refinement to the EVM bytecode after `solc 0.8.28` codegen, which is
-    in the TCB. -/
+    HONESTY NOTE (2026-06-11): this is a **definitional alias** of
+    `Refined.verifyRefined`, NOT an independently Yul-structured model —
+    `verifyYulModel := verifyRefined` and `yul_eq_refined` is therefore
+    `rfl` (it proves `x = x`, carrying no semantic content). The genuine
+    byte-offset modelling lives in `Verifier/Refined.lean`
+    (`Spec.Signature.deserialise` + the offset constants); this layer
+    exists only to name the Refinement.lean bridge endpoint
+    (`solidityVerifier_compiles_correctly` is stated against
+    `verifyYulModel`). Do NOT count `yul_eq_refined` as a discharge
+    "layer" — it is plumbing. The substantive A3.1 obligation is the
+    bridge axiom plus the bytecode-side evidence; and even
+    `Refined.verifyRefined` is not yet executably faithful on the
+    reconstruction layer (see `docs/A3_1_VERIFIER_GAP.md`). -/
 def verifyYulModel
     (pkSeed pkRoot : ByteVec 32)
     (message : ByteVec 32)
     (sig : ByteVec SignatureLen) : Bool :=
   SphincsCVerify.Verifier.Refined.verifyRefined pkSeed pkRoot message sig
 
-/-- The Yul model and the refined Lean model are extensionally equal by
-    definition. This is the easiest refinement step. -/
+/-- `verifyYulModel` and `verifyRefined` are equal **by definition**
+    (the former is a `def`-alias of the latter), so this is `rfl`. It is
+    plumbing, not a refinement step with content — see the note on
+    `verifyYulModel`. -/
 theorem yul_eq_refined
     (pkSeed pkRoot : ByteVec 32) (message : ByteVec 32) (sig : ByteVec SignatureLen) :
     verifyYulModel pkSeed pkRoot message sig

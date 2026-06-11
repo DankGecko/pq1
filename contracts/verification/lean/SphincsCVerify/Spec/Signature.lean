@@ -17,11 +17,16 @@ Splitting `deserialise` out lets us prove:
   * `verify_signs` — `verify pk msg (sign sk msg) = true`,
     proved at the structured-`Signature` level.
 
-The actual byte-level decoder is a *placeholder*: it returns a
-canonical default `Signature` shape so the spec type-checks and the
-top-level `verify` reduces. The full decoder lives in
-`Verifier/Equivalence.lean` (the proof aligns the offset-indexed
-shape against this declarative shape).
+`deserialise` (below) is a REAL offset-indexed byte decoder (R, FORS
+secrets + auth paths, per-layer WOTS chains + count + auth path). NOTE:
+as of 2026-06-11 the end-to-end `verify` is NOT executably faithful to
+the deployed bytecode — `lake exe verify-test-vectors` shows it returns
+`false` on the valid KAT vectors because the WOTS+C / hypertree
+RECONSTRUCTION layer (`Spec.Wots.pkFromSig`, the ADRS bit-layout)
+diverges from the deployed Yul. The digest + htIdx sub-layers ARE
+byte-faithful. See `docs/A3_1_VERIFIER_GAP.md` for the full ledger; this
+is the named A3.1 residual. (`defaultSignature` below is the round-trip
+serialiser's zero shape, not the decoder.)
 -/
 
 import SphincsCVerify.Spec.Hypertree

@@ -8,11 +8,17 @@ bytecode**, so each passing `check_*` rule is a proof for *all* inputs in its
 envelope (not the 10 concrete KAT vectors), modulo the SMT solver and the
 SHA-256-as-uninterpreted-function abstraction (= axiom A1).
 
-## What is proved (37 rules, all PASS — on BOTH compiler profiles)
+## What is proved (38 rules, all PASS — on BOTH compiler profiles)
+
+> **Scope note.** These rules discharge the wallet/factory/owner-table
+> **control flow** on bytecode, with the verifier modeled as an
+> uninterpreted function. They do **not** prove the verifier's own
+> functional correctness — see `HalmosVerifier.t.sol` (input gates only)
+> and `docs/A3_1_VERIFIER_GAP.md` for why A3.1 is `-partial`.
 
 | Harness (`test/halmos/`) | Axiom surface | Rules |
 |---|---|---|
-| `HalmosValidateUserOpEquiv.t.sol` | A3.2 — **pointwise equivalence** of `validateUserOp` to the Lean model | 3 |
+| `HalmosValidateUserOpEquiv.t.sol` | A3.2 — **pointwise equivalence** of `validateUserOp` to the Lean model (+ symbolic-index sweep over installed slots) | 4 |
 | `HalmosValidateUserOp.t.sol` | A3.2 — `validateUserOp` per-property rules | 8 |
 | `HalmosExecuteEquiv.t.sol` | A3.2-exec — **pointwise equivalence** of `execute{,Batch}WithOffchainCount` to the Lean `Execute` model, **symbolic ∀ `ownerIndex`** | 5 |
 | `HalmosExecute.t.sol` | A3.2-exec — `execute*WithOffchainCount` per-property rules | 6 |
@@ -37,13 +43,19 @@ Solidity transcription of the Lean model
 
 * signature-wrapper bytes `[32..4128)` symbolic (offset word, innerLen word,
   4008 sig bytes, 24 pad bytes), plus a sweep over wrong total lengths. The
-  wrapper `ownerIndex` word `[0..32)` is six **concrete class
-  representatives** — a stated engine ceiling, *not* a modelling choice:
-  `validateUserOp` reads `ownerAtIndex(ownerIndex)`, a `mapping(uint=>bytes)`
-  getter whose dynamic-length return Halmos cannot allocate for a symbolic
-  key. (The EXECUTE path achieves a genuinely **symbolic ∀ `ownerIndex`** —
-  see A3.2-exec below — because it reads only word-typed counters + the
-  transient credit, never the bytes getter.)
+  wrapper `ownerIndex` word `[0..32)` coverage: rule 1 **enumerates** the
+  entire installed set `{0,1,2}` (finite — exhaustive, not sampling) plus
+  concrete reps `{3, 2^200, max}` for the unset partition (on which the
+  wallet's reject behaviour is uniform), and rule 1c
+  (`check_validateUserOp_pointwise_installed_indices`) **adds a symbolic
+  sweep over the installed slots `{1,2}`**. The **unset partition cannot be
+  swept symbolically** — a symbolic non-installed key `NotConcreteError`s on
+  the `mapping(uint=>bytes)` `ownerAtIndex` getter (Halmos can't resolve the
+  default-empty return length for a symbolic key). This is a **disclosed
+  hard engine ceiling**: the prior "six concrete reps" is *reduced* (installed
+  slots now symbolic), not eliminated. (The EXECUTE path is genuinely ∀-index
+  because it reads word-typed counters + the transient credit, never the
+  bytes getter.)
 * `callData` symbolic at lengths `{0,3,4,35,36,68}`; `initCode` /
   `paymasterAndData` symbolic at `{0,32}` (empty exercises the
   `sha256("")` path); all scalar UserOp fields, `userOpHash`,
@@ -121,12 +133,18 @@ the bytecode satisfies on every reachable state.
 * The verifier's **full functional behaviour** (FORS/WOTS/Merkle/hypertree
   over a 4008-byte signature with thousands of `staticcall(0x02)`) is **not**
   symbolically tractable and is **not** attempted here. That part of A3.1
-  stays `discharged-bytecode-partial`: the Lean refinement
-  (`Verifier/Equivalence.lean::verifyRefined_eq_spec`, incl. the FORS `htIdx`
-  ADRS binding) + the 10-vector Rust ↔ Solidity ↔ Lean differential
-  (`test_verifyAllKatVectors`) carry the positive direction, and a
-  ≈250-mutant adversarial wrong-accept screen on the bytecode
-  (`test/SPHINCsC10AsmAdversarial.t.sol`) carries the negative direction.
+  stays `discharged-bytecode-partial`, and the evidence is **empirical**, not
+  a Lean proof: the positive direction is the **bytecode-side** 10-vector KAT
+  (`test_verifyAllKatVectors`, Rust signer ↔ deployed Solidity verifier — a
+  real matched-pair differential) and the negative direction is the
+  ≈250-mutant adversarial wrong-accept screen
+  (`test/SPHINCsC10AsmAdversarial.t.sol`). **Important (2026-06-11):** the
+  *Lean* leg of the differential is real only on the **digest/htIdx
+  sub-layers** (`lake exe verify-test-vectors`); the Lean verifier spec is
+  **not** executably faithful on the reconstruction layer — it returns
+  `false` on the valid vectors — so the A3.1 *equality* axiom is currently
+  **false as stated**. Do not cite `verifyRefined_eq_spec` as faithfulness;
+  it is `rfl` over an unfaithful model. See `docs/A3_1_VERIFIER_GAP.md`.
   Halmos here proves only the verifier's **input-validation gates**
   (boundary-swept length revert / N-mask reject), which run before any hash.
 * SHA-256 is an **uninterpreted function** in Halmos — the proofs bottom out
@@ -162,7 +180,7 @@ stop a crash. (The true digest is one admissible interpretation.)
 ```bash
 cd contracts/verification
 make verify-bytecode-setup   # clone + patch + install the patched halmos (once)
-make verify-bytecode         # certify codehashes (both profiles) + immutable lemma, then run all 37 rules on BOTH profiles
+make verify-bytecode         # certify codehashes (both profiles) + immutable lemma, then run all 38 rules on BOTH profiles
 ```
 
 `run_halmos.sh` first runs `PinnedCodehashes.t.sol` **and**
