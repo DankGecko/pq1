@@ -1433,49 +1433,121 @@ struct ParsedFormatKey {
 ///
 /// Parameters reached only through `@`-container or `$`-metadata roots are
 /// envelope / constant references, not calldata arguments, so they never
-/// need their own coverage. Coverage is checked at top-level granularity:
-/// a tuple argument is "covered" once any field walks into it, matching
-/// the renderer, which treats the whole tuple as one calldata region.
+/// need their own coverage.
+///
+/// Granularity matches what the on-device renderer can address. The
+/// renderer resolves a calldata path by SUMMING `FieldIdx` head-word slots
+/// (`secure/src/tx/display/erc7730/formatters.rs::resolve_path`), so it
+/// addresses each member of a *plain* static tuple individually. Coverage
+/// is therefore enforced per static-tuple MEMBER, not merely per top-level
+/// argument: a descriptor that walks `order.amount` but omits
+/// `order.recipient` would render a benign page while the signature still
+/// commits to the hidden recipient. Static arrays and array-of-tuple
+/// arguments are NOT element-addressable on device (the renderer refuses
+/// `ArrayIdx`), so they stay at top-level granularity. Nested tuples are
+/// covered one level deep — the format-key parser captures a single inner
+/// level, so a deeper member rides on its parent member's coverage.
 fn check_contract_field_completeness(
     sig: &str,
     fmt: &Format,
     parsed: &ParsedFormatKey,
 ) -> Result<(), String> {
-    let n = parsed.top_names.len();
-    if n == 0 {
+    if parsed.top_names.is_empty() {
         return Ok(()); // zero-argument function, e.g. `deposit()`.
     }
-    let mut covered = vec![false; n];
-    let mut mark = |path: &str| {
-        if let Some(idx) = path_top_param_index(path, parsed) {
-            if (idx as usize) < n {
-                covered[idx as usize] = true;
-            }
-        }
-    };
+
+    // Every descriptor path that surfaces a calldata word: each field's
+    // own path, plus any `tokenPath` param (which renders the word as the
+    // token whose symbol labels an amount). `visible:"never"` fields are
+    // included — an explicit hide is a conscious author decision.
+    let mut paths: Vec<&str> = Vec::with_capacity(fmt.fields.len() * 2);
     for field in &fmt.fields {
-        mark(&field.path);
+        paths.push(field.path.as_str());
         if let Some(tp) = field
             .params
             .as_ref()
             .and_then(|p| p.get("tokenPath"))
             .and_then(|v| v.as_str())
         {
-            mark(tp);
+            paths.push(tp);
         }
     }
-    for (idx, seen) in covered.iter().enumerate() {
-        if !*seen {
-            return Err(format!(
-                "format `{sig}`: parameter #{idx} (`{}`) is neither rendered, explicitly \
-                 hidden (`visible:\"never\"`), nor used as a `tokenPath` — every \
-                 contract-call argument must be accounted for so the trusted display \
-                 cannot omit an effect-bearing field (audit H-3)",
-                parsed.top_names[idx]
-            ));
+
+    for (idx, top_name) in parsed.top_names.iter().enumerate() {
+        // A *plain* static tuple — type `(...)` with no trailing `[]` array
+        // suffix — has members the renderer addresses individually by ABI
+        // head-word slot, so each member needs its own coverage.
+        let top_ty = &parsed.top_types[idx];
+        let plain_tuple_members = if top_ty.starts_with('(') && top_ty.ends_with(')') {
+            parsed.inner_names.get(top_name).filter(|m| !m.is_empty())
+        } else {
+            None
+        };
+
+        match plain_tuple_members {
+            Some(members) => {
+                for member in members {
+                    if !paths
+                        .iter()
+                        .any(|p| path_covers_tuple_member(p, top_name, member))
+                    {
+                        return Err(format!(
+                            "format `{sig}`: tuple member `{top_name}.{member}` is neither \
+                             rendered, explicitly hidden (`visible:\"never\"`), nor used as a \
+                             `tokenPath`. The on-device renderer addresses static-tuple members \
+                             individually, so every member must be accounted for or the trusted \
+                             display can omit an effect-bearing field (audit H-3, tuple-member \
+                             granularity)"
+                        ));
+                    }
+                }
+            }
+            None => {
+                if !paths
+                    .iter()
+                    .any(|p| path_top_param_index(p, parsed) == Some(idx as u16))
+                {
+                    return Err(format!(
+                        "format `{sig}`: parameter #{idx} (`{}`) is neither rendered, explicitly \
+                         hidden (`visible:\"never\"`), nor used as a `tokenPath` — every \
+                         contract-call argument must be accounted for so the trusted display \
+                         cannot omit an effect-bearing field (audit H-3)",
+                        parsed.top_names[idx]
+                    ));
+                }
+            }
         }
     }
     Ok(())
+}
+
+/// Does descriptor `path` surface the calldata word for tuple member
+/// `(tuple_name, member_name)`? True when the path's first segment is
+/// `tuple_name` and its second segment — an explicit `.member` access — is
+/// `member_name`. Paths rooted at `@`-container / `$`-metadata cover no
+/// calldata member. A bare-tuple path (`tuple_name` with no member) or an
+/// array-indexed first hop covers no specific member, matching the
+/// renderer, which reads exactly one head word per resolved path.
+fn path_covers_tuple_member(path: &str, tuple_name: &str, member_name: &str) -> bool {
+    let path = path.trim();
+    let rest = if let Some(r) = path.strip_prefix('#') {
+        r.trim_start_matches('.')
+    } else if path.starts_with('@') || path.starts_with('$') {
+        return false;
+    } else {
+        path
+    };
+    let end0 = rest.find(['.', '[']).unwrap_or(rest.len());
+    if rest[..end0].trim() != tuple_name {
+        return false;
+    }
+    // The member hop must be an explicit `.<member>` access (not `[i]`).
+    let after = match rest[end0..].strip_prefix('.') {
+        Some(a) => a,
+        None => return false,
+    };
+    let end1 = after.find(['.', '[']).unwrap_or(after.len());
+    after[..end1].trim() == member_name
 }
 
 /// Resolve the top-level function-argument index a descriptor `path`
@@ -2994,5 +3066,110 @@ mod tests {
         let res = build_db(&dir, &policy).expect("build seed corpus");
         assert!(res.leaf_count >= 6, "expected ≥6 leaves, got {}", res.leaf_count);
         round_trip_check(&res).expect("round-trip");
+    }
+
+    // ── Audit H-3 — field-completeness lint (clear-sign forgery class) ──
+    //
+    // A descriptor that silently omits an effect-bearing calldata word
+    // renders a benign page while the signature still commits to the
+    // hidden value. These pin both the top-level rule and the tuple-member
+    // tightening (the renderer addresses static-tuple members individually,
+    // so per-member coverage is required — not "tuple touched once").
+
+    /// Build a throwaway `Format` from a JSON `fields` array.
+    fn fmt_from_fields(fields_json: &str) -> Format {
+        serde_json::from_str(&format!(r#"{{"fields": {fields_json}}}"#))
+            .expect("valid test Format JSON")
+    }
+
+    #[test]
+    fn completeness_flat_param_omitted_rejected() {
+        // The canonical break: a `transfer` descriptor that shows only the
+        // amount and never the recipient.
+        let sig = "transfer(address to, uint256 amount)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_from_fields(
+            r#"[{"path":"amount","label":"Amount","format":"tokenAmount","params":{"token":"0x0000000000000000000000000000000000000000"}}]"#,
+        );
+        let err = check_contract_field_completeness(sig, &fmt, &parsed)
+            .expect_err("omitted recipient must be rejected");
+        assert!(err.contains("`to`"), "error names the hidden param: {err}");
+    }
+
+    #[test]
+    fn completeness_flat_all_covered_accepted() {
+        let sig = "transfer(address to, uint256 amount)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_from_fields(
+            r#"[
+              {"path":"to","label":"To","format":"addressName"},
+              {"path":"amount","label":"Amount","format":"raw"}
+            ]"#,
+        );
+        assert!(check_contract_field_completeness(sig, &fmt, &parsed).is_ok());
+    }
+
+    #[test]
+    fn completeness_tuple_member_omitted_rejected() {
+        // Uniswap exactInputSingle shape: every member but
+        // `sqrtPriceLimitX96` is surfaced. Top-level granularity would call
+        // the tuple "covered"; member granularity correctly rejects, because
+        // the renderer can (and the attacker-set word would be) signed but
+        // not shown.
+        let sig = "swap((address tokenIn, address tokenOut, uint256 amountIn, uint160 sqrtPriceLimitX96) params)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_from_fields(
+            r#"[
+              {"path":"params.amountIn","label":"Send","format":"tokenAmount","params":{"tokenPath":"params.tokenIn"}},
+              {"path":"params.tokenOut","label":"To token","format":"addressName"}
+            ]"#,
+        );
+        let err = check_contract_field_completeness(sig, &fmt, &parsed)
+            .expect_err("omitted tuple member must be rejected");
+        assert!(
+            err.contains("sqrtPriceLimitX96"),
+            "error names the hidden member: {err}"
+        );
+    }
+
+    #[test]
+    fn completeness_tuple_member_hidden_via_never_accepted() {
+        // Same shape, but the omitted member is an explicit `visible:"never"`
+        // author decision — accepted (a conscious hide, what the lint forces).
+        let sig = "swap((address tokenIn, address tokenOut, uint256 amountIn, uint160 sqrtPriceLimitX96) params)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_from_fields(
+            r#"[
+              {"path":"params.amountIn","label":"Send","format":"tokenAmount","params":{"tokenPath":"params.tokenIn"}},
+              {"path":"params.tokenOut","label":"To token","format":"addressName"},
+              {"path":"params.sqrtPriceLimitX96","label":"Price limit","visible":"never"}
+            ]"#,
+        );
+        assert!(check_contract_field_completeness(sig, &fmt, &parsed).is_ok());
+    }
+
+    #[test]
+    fn completeness_tuple_all_members_covered_accepted() {
+        // tokenIn covered via `tokenPath`, amountIn via its own field path.
+        let sig = "swap((address tokenIn, uint256 amountIn) params)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_from_fields(
+            r#"[{"path":"params.amountIn","label":"Send","format":"tokenAmount","params":{"tokenPath":"params.tokenIn"}}]"#,
+        );
+        assert!(check_contract_field_completeness(sig, &fmt, &parsed).is_ok());
+    }
+
+    #[test]
+    fn path_covers_tuple_member_matches_and_rejects() {
+        assert!(path_covers_tuple_member("params.amountIn", "params", "amountIn"));
+        assert!(path_covers_tuple_member("#.params.amountIn", "params", "amountIn"));
+        assert!(path_covers_tuple_member("params.order.x", "params", "order")); // nested, one level
+        // wrong member / wrong tuple / bare tuple / array hop / envelope root.
+        assert!(!path_covers_tuple_member("params.amountIn", "params", "tokenIn"));
+        assert!(!path_covers_tuple_member("other.amountIn", "params", "amountIn"));
+        assert!(!path_covers_tuple_member("params", "params", "amountIn"));
+        assert!(!path_covers_tuple_member("params[0]", "params", "amountIn"));
+        assert!(!path_covers_tuple_member("@.value", "params", "amountIn"));
+        assert!(!path_covers_tuple_member("$.metadata", "params", "amountIn"));
     }
 }

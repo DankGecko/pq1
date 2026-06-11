@@ -69,6 +69,11 @@
               ]
             },
             "visible": "always"
+          },
+          {
+            "label": "Price limit (sqrtPriceLimitX96)",
+            "path": "params.sqrtPriceLimitX96",
+            "visible": "never"
           }
         ]
       }
