@@ -44,10 +44,18 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     if total_len != OFFCHAIN_STATUS_INPUT_LEN {
         return NscStatus::InvalidPointer as u32;
     }
-    if !validate_ns_read_ptr(args.arg0, OFFCHAIN_STATUS_INPUT_LEN) {
+    // HIGH-1 (audit fault-injection 20260611): sentinel-gate the NS-pointer
+    // checks (bare `if !validate` is single-fault FAIL-OUT → OOB R/W).
+    let read_ptr_ok = crate::fi::check_true_into_sentinel(|| {
+        validate_ns_read_ptr(args.arg0, OFFCHAIN_STATUS_INPUT_LEN)
+    });
+    if read_ptr_ok != crate::fi::OK_SENTINEL {
         return NscStatus::InvalidPointer as u32;
     }
-    if !validate_ns_write_ptr(args.arg1, OFFCHAIN_STATUS_OUTPUT_LEN) {
+    let write_ptr_ok = crate::fi::check_true_into_sentinel(|| {
+        validate_ns_write_ptr(args.arg1, OFFCHAIN_STATUS_OUTPUT_LEN)
+    });
+    if write_ptr_ok != crate::fi::OK_SENTINEL {
         return NscStatus::InvalidPointer as u32;
     }
 

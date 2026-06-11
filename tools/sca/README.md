@@ -2836,12 +2836,33 @@ it too — empirically it doesn't here because the stuck-at value gets compared
 against the bounds and rejected).
 
 **Production exposure.** Every gateway command in `secure/src/nsc/cmd_*.rs`
-calls `NsPtr::validate_{read,write}(len)?` before any dereference. A single
+validates its NS pointers before any dereference. A single
 fault on the predicate can let an NS-supplied pointer alias secure RAM (→
 arbitrary read of the master seed cache / slot key cache / PIN-attempt page),
 or alias the shared command mailbox (→ overwrite the in-flight `CMD_*` word
 that the secure world is still interpreting — classic time-of-check-time-of-use
-trick with FI standing in for a race condition). The closest upstream analog
+trick with FI standing in for a race condition).
+
+> **Correction (2026-06-11, audit fault-injection HIGH-1).** An earlier
+> revision of this section claimed every `cmd_*.rs` handler *"calls
+> `NsPtr::validate_{read,write}(len)?`"* and that the hardened double-sentinel
+> sequence *"runs on every `NsPtr::validate_*` call from every `cmd_*.rs`
+> gateway handler."* That was **false**: the `NsPtr` typestate
+> (`secure/src/nsc/ns_ptr.rs`) was written but left `#![allow(dead_code)]`
+> and never adopted — every production handler called the **raw**
+> `ptr_validate::validate_ns_{read,write}_ptr` via a bare
+> `if !validate(...) { return }`, i.e. exactly the single-fault FAIL-OUT
+> this finding is about. The HIGH-1 fix wires the F-8 hardening onto every
+> primary gate **inline**: each call is now
+> `if check_true_into_sentinel(|| validate_ns_*_ptr(arg, len)) != OK_SENTINEL { reject }`
+> (the same idiom already used by the §14 6492 re-validation in
+> `cmd_sign_offchain.rs`), so the caller compares a Hamming-distant value
+> instead of branching on a bool. `NsPtr` remains the optional typestate
+> route for new code. Hardened sites: the read+write gates in
+> `cmd_sign_userop`, `cmd_sign_userop_batch`, `cmd_sign_offchain`,
+> `cmd_get_init_code`, `cmd_offchain_status`; the write gate in
+> `cmd_get_wallet_address` / `cmd_fw_status`; the read gate in
+> `cmd_offchain_sync` / `cmd_fw_begin` / `cmd_fw_chunk`. The closest upstream analog
 is rainbow's `HW_analysis/pin_fault.py` Trezor `storage_containsPin` skip
 demo: a small predicate whose `Err→Ok` flip breaks an isolation boundary.
 
@@ -2868,10 +2889,16 @@ their original bypass counts as regression coverage; a revert to the bare
 `if … { Ok } else { Err }` shape would re-introduce the finding and flip
 the harness back to exit 1).
 
-`make ns-ptr` exits 0 after the fix. Production hardening is bit-equivalent
-to the mirror — the same `fi::check_true_into_sentinel` + `wait_random()` +
-sentinel-double-check sequence runs on every `NsPtr::validate_*` call from
-every `cmd_*.rs` gateway handler.
+`make ns-ptr` exits 0 after the fix; it covers the `NsPtr` mirror. The
+production gateway handlers apply the equivalent
+`fi::check_true_into_sentinel(|| validate_ns_*_ptr(...)) != OK_SENTINEL`
+gate inline at every NS-pointer call site (see the 2026-06-11 correction
+above). NOTE: the `sca_ns_validate_*_fi` mirror tracks the `NsPtr`
+double-sentinel form, which is *stronger* than the single-`check_true_into_sentinel`
+the handlers now use; both close the single-fault FAIL-OUT. A focused sweep
+that loads the real `cmd_*.rs` validation prologues (rather than the mirror)
+is a worthwhile follow-up so the harness verifies the path actually compiled
+into firmware.
 
 ## C10-sign end-to-end FI smoke — `fault_sweep_c10_sign.py` + `c10_sign_target/`
 

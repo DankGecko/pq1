@@ -129,11 +129,25 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         ui::show_status("Sign", "bad length");
         return NscStatus::InvalidPointer as u32;
     }
-    if !validate_ns_read_ptr(args.arg0, total_len) {
+    // HIGH-1 (audit fault-injection 20260611): route the NS-pointer gates
+    // through the Hamming-distant sentinel (`check_true_into_sentinel`)
+    // rather than a bare `if !validate(...)`. A single instruction-skip /
+    // stuck-at on a plain reject branch falls through into the handler body
+    // with an unvalidated pointer — NS then picks an `out_ptr` into secure
+    // SRAM and the response write below becomes an OOB write across the
+    // S/NS boundary. Comparing a sentinel value (not a bool) fails closed.
+    // Same idiom as the §14 6492 re-validation in cmd_sign_offchain.rs.
+    let read_ptr_ok = crate::fi::check_true_into_sentinel(|| {
+        validate_ns_read_ptr(args.arg0, total_len)
+    });
+    if read_ptr_ok != crate::fi::OK_SENTINEL {
         ui::show_status("Sign", "bad ptr");
         return NscStatus::InvalidPointer as u32;
     }
-    if !validate_ns_write_ptr(args.arg1, MAX_SIGN_RESPONSE_LEN) {
+    let write_ptr_ok = crate::fi::check_true_into_sentinel(|| {
+        validate_ns_write_ptr(args.arg1, MAX_SIGN_RESPONSE_LEN)
+    });
+    if write_ptr_ok != crate::fi::OK_SENTINEL {
         ui::show_status("Sign", "bad out");
         return NscStatus::InvalidPointer as u32;
     }

@@ -46,7 +46,12 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     }
 
     let out_ptr = args.arg0 as *mut u8;
-    if !validate_ns_write_ptr(args.arg0, ADDR_LEN) {
+    // HIGH-1 (audit fault-injection 20260611): sentinel-gate the NS write
+    // pointer (bare `if !validate` is single-fault FAIL-OUT → OOB write).
+    let write_ptr_ok = crate::fi::check_true_into_sentinel(|| {
+        validate_ns_write_ptr(args.arg0, ADDR_LEN)
+    });
+    if write_ptr_ok != crate::fi::OK_SENTINEL {
         return NscStatus::InvalidPointer as u32;
     }
 

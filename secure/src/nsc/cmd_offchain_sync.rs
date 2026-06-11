@@ -50,7 +50,13 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     if total_len != OFFCHAIN_SYNC_INPUT_LEN {
         return NscStatus::InvalidPointer as u32;
     }
-    if !validate_ns_read_ptr(args.arg0, OFFCHAIN_SYNC_INPUT_LEN) {
+    // HIGH-1 (audit fault-injection 20260611): sentinel-gate the NS read
+    // pointer (bare `if !validate` is single-fault FAIL-OUT). This handler
+    // has no output buffer, so only the read pointer is validated.
+    let read_ptr_ok = crate::fi::check_true_into_sentinel(|| {
+        validate_ns_read_ptr(args.arg0, OFFCHAIN_SYNC_INPUT_LEN)
+    });
+    if read_ptr_ok != crate::fi::OK_SENTINEL {
         return NscStatus::InvalidPointer as u32;
     }
 

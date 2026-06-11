@@ -161,11 +161,22 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         ui::show_status("Batch sign", "bad length");
         return NscStatus::InvalidPointer as u32;
     }
-    if !validate_ns_read_ptr(args.arg0, total_len) {
+    // HIGH-1 (audit fault-injection 20260611): sentinel-gate the NS-pointer
+    // checks so a single instruction-skip on the reject branch cannot fall
+    // through with an unvalidated pointer (→ OOB write of the response into
+    // attacker-chosen secure SRAM). See cmd_sign_userop.rs for the full
+    // rationale; same idiom as the §14 6492 re-validation in cmd_sign_offchain.rs.
+    let read_ptr_ok = crate::fi::check_true_into_sentinel(|| {
+        validate_ns_read_ptr(args.arg0, total_len)
+    });
+    if read_ptr_ok != crate::fi::OK_SENTINEL {
         ui::show_status("Batch sign", "bad ptr");
         return NscStatus::InvalidPointer as u32;
     }
-    if !validate_ns_write_ptr(args.arg1, MAX_SIGN_RESPONSE_LEN) {
+    let write_ptr_ok = crate::fi::check_true_into_sentinel(|| {
+        validate_ns_write_ptr(args.arg1, MAX_SIGN_RESPONSE_LEN)
+    });
+    if write_ptr_ok != crate::fi::OK_SENTINEL {
         ui::show_status("Batch sign", "bad out");
         return NscStatus::InvalidPointer as u32;
     }

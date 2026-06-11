@@ -94,7 +94,13 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         crate::ui::show_status("EIP-1271", "bad length");
         return NscStatus::InvalidPointer as u32;
     }
-    if !validate_ns_read_ptr(args.arg0, total_len) {
+    // HIGH-1 (audit fault-injection 20260611): sentinel-gate the NS-pointer
+    // checks (a bare `if !validate` is single-fault FAIL-OUT → OOB R/W across
+    // the S/NS boundary). Same idiom as the §14 6492 re-validation below.
+    let read_ptr_ok = crate::fi::check_true_into_sentinel(|| {
+        validate_ns_read_ptr(args.arg0, total_len)
+    });
+    if read_ptr_ok != crate::fi::OK_SENTINEL {
         return NscStatus::InvalidPointer as u32;
     }
     // NS-write-buffer length depends on the flags byte (deployed → bare
@@ -104,7 +110,10 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // fails fast before we touch SE state. The 6492-path write below
     // performs its own larger validation immediately after parsing the
     // flag.
-    if !validate_ns_write_ptr(args.arg1, SIGN_OFFCHAIN_OUTPUT_LEN) {
+    let write_ptr_ok = crate::fi::check_true_into_sentinel(|| {
+        validate_ns_write_ptr(args.arg1, SIGN_OFFCHAIN_OUTPUT_LEN)
+    });
+    if write_ptr_ok != crate::fi::OK_SENTINEL {
         return NscStatus::InvalidPointer as u32;
     }
 
@@ -164,7 +173,11 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
 
     // When ERC-6492 wrapping is requested, the output buffer is
     // larger. Validate the full extent now that we know the mode.
-    if !account_deployed && !validate_ns_write_ptr(args.arg1, SIGN_OFFCHAIN_OUTPUT_LEN_6492) {
+    if !account_deployed
+        && crate::fi::check_true_into_sentinel(|| {
+            validate_ns_write_ptr(args.arg1, SIGN_OFFCHAIN_OUTPUT_LEN_6492)
+        }) != crate::fi::OK_SENTINEL
+    {
         return NscStatus::InvalidPointer as u32;
     }
 

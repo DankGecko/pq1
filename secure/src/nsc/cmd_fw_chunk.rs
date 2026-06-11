@@ -46,7 +46,12 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     if total_len < FW_CHUNK_HEADER_LEN || total_len > FW_CHUNK_HEADER_LEN + FW_MAX_CHUNK {
         return NscStatus::InvalidPointer as u32;
     }
-    if !validate_ns_read_ptr(payload_ptr, total_len) {
+    // HIGH-1 (audit fault-injection 20260611): sentinel-gate the NS read
+    // pointer (bare `if !validate` is single-fault FAIL-OUT).
+    let read_ptr_ok = crate::fi::check_true_into_sentinel(|| {
+        validate_ns_read_ptr(payload_ptr, total_len)
+    });
+    if read_ptr_ok != crate::fi::OK_SENTINEL {
         return NscStatus::InvalidPointer as u32;
     }
 

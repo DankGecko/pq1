@@ -80,11 +80,21 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         crate::ui::show_status("InitCode", "bad length");
         return NscStatus::InvalidPointer as u32;
     }
-    if !validate_ns_read_ptr(args.arg0, INPUT_LEN) {
+    // HIGH-1 (audit fault-injection 20260611): sentinel-gate the NS-pointer
+    // checks. A bare `if !validate` is single-fault FAIL-OUT — a skip lets NS
+    // pick an `out_ptr` into secure SRAM and the 4280-byte initCode write
+    // below becomes an OOB write across the S/NS boundary.
+    let read_ptr_ok = crate::fi::check_true_into_sentinel(|| {
+        validate_ns_read_ptr(args.arg0, INPUT_LEN)
+    });
+    if read_ptr_ok != crate::fi::OK_SENTINEL {
         crate::ui::show_status("InitCode", "bad in ptr");
         return NscStatus::InvalidPointer as u32;
     }
-    if !validate_ns_write_ptr(args.arg1, PQ_INIT_CODE_LEN) {
+    let write_ptr_ok = crate::fi::check_true_into_sentinel(|| {
+        validate_ns_write_ptr(args.arg1, PQ_INIT_CODE_LEN)
+    });
+    if write_ptr_ok != crate::fi::OK_SENTINEL {
         crate::ui::show_status("InitCode", "bad out ptr");
         return NscStatus::InvalidPointer as u32;
     }
