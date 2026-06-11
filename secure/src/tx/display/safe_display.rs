@@ -16,7 +16,18 @@
 //!      <chain name>              <addr full>            <inner kind hint>
 //!      > next                    <addr full>            > next
 //!
-//!   3..N: inner-tx pages (one of):
+//!   refund (2 pages, only when a gas refund is configured — i.e. any of
+//!          gasPrice / gasToken / refundReceiver is non-zero):
+//!          A: "! GAS REFUND" + "Safe pays in:" + token (addr or "ETH")
+//!          B: "Refund to:"   + refundReceiver (full addr, or "tx.origin")
+//!          Surfaces the Safe gas-refund drain channel — a *token* refund
+//!          has no on-chain gasPrice cap.
+//!
+//!   inner-ETH (1 page, only when SafeTx `value != 0` and the inner kind
+//!          is not PlainEth/EmptyCall): "Safe sends ETH:" + amount. The
+//!          PlainEth branch shows the value inline instead.
+//!
+//!   N..M: inner-tx pages (one of):
 //!         * plain ETH transfer  (2 pages: "Inner to" + "Send ETH")
 //!         * ERC-20 known        (4 pages: header + recipient + amount + contract)
 //!         * ERC-20 unknown      (4 pages: same shape, no symbol)
@@ -72,8 +83,10 @@ enum SafeRenderFlavour {
     /// triggering the Safe to execute. SafeTx fields come from the
     /// calldata directly (no separate trailer). Nonce is determined
     /// by the Safe's storage at execution time and is not visible
-    /// to the firmware.
-    ExecTransaction { gas_price: [u8; 32] },
+    /// to the firmware. Refund fields (gasPrice / gasToken /
+    /// refundReceiver) ride in [`SafeRenderInput`] for both flavours,
+    /// so the renderer surfaces them identically regardless of flow.
+    ExecTransaction,
 }
 
 /// Normalised input to the shared Safe rendering body. Approve-hash and
@@ -91,6 +104,19 @@ struct SafeRenderInput<'a> {
     /// verifier's bind step); for exec we compute it here so the
     /// blind-sign branches can still surface it.
     data_hash: [u8; 32],
+    /// SafeTx refund parameters. All three are folded into the signed
+    /// `safeTxHash` (EIP-712 struct hash) but are NOT otherwise visible
+    /// in the inner-tx semantics, so the renderer must surface them
+    /// explicitly: when `gasPrice > 0` the Safe pays
+    /// `(gasUsed + baseGas) * gasPrice` of `gasToken` (or ETH when
+    /// `gasToken == 0`) to `refundReceiver` (or `tx.origin` when
+    /// `refundReceiver == 0`). A *token* refund has no on-chain cap on
+    /// `gasPrice`, so an attacker who hides these fields can drain the
+    /// Safe's entire balance of a chosen ERC-20 behind a benign-looking
+    /// inner call. See `docs/safe-multisig-clear-sign.md`.
+    gas_price: [u8; 32],
+    gas_token: [u8; 20],
+    refund_receiver: [u8; 20],
 }
 
 /// Render a verified `safe_v1` trailer.
@@ -133,6 +159,9 @@ pub fn render_safe_v1_pages(
         value: tx.value,
         raw_data: safe.raw_data,
         data_hash: tx.data_hash,
+        gas_price: tx.gas_price,
+        gas_token: tx.gas_token,
+        refund_receiver: tx.refund_receiver,
     };
     render_safe_pages_inner(&input, erc20, resolver)
 }
@@ -164,15 +193,16 @@ pub fn render_safe_exec_pages(
     // blind-sign / unknown-Safe-op branches that show it.
     let data_hash = keccak(d.data);
     let input = SafeRenderInput {
-        flavour: SafeRenderFlavour::ExecTransaction {
-            gas_price: d.gas_price,
-        },
+        flavour: SafeRenderFlavour::ExecTransaction,
         chain_id: exec.chain_id,
         safe_address: exec.safe_address,
         to: d.to,
         value: d.value,
         raw_data: d.data,
         data_hash,
+        gas_price: d.gas_price,
+        gas_token: d.gas_token,
+        refund_receiver: d.refund_receiver,
     };
     render_safe_pages_inner(&input, erc20, resolver)
 }
@@ -198,16 +228,19 @@ fn render_safe_pages_inner(
         raw_data: input.raw_data,
     };
 
-    // Refund-risk warning page is added only on the execTransaction path
-    // when `gas_price != 0`. Safe's refund mechanism pays the executor
-    // back `(safeTxGas + baseGas) * gasPrice` in `gasToken` (or ETH if
-    // `gasToken == 0`), so a non-zero gasPrice is a real value flow the
-    // user should see.
-    let refund_warning = matches!(
-        input.flavour,
-        SafeRenderFlavour::ExecTransaction { gas_price }
-            if gas_price.iter().any(|&b| b != 0)
-    );
+    // Refund-risk pages are added for BOTH approveHash and
+    // execTransaction whenever the SafeTx configures a gas refund.
+    // Safe pays `(gasUsed + baseGas) * gasPrice` of `gasToken` (ETH when
+    // `gasToken == 0`) to `refundReceiver` (`tx.origin` when zero). The
+    // on-chain trigger is `gasPrice > 0`; a *token* refund has no
+    // gasPrice cap, so a hidden refund is a full-ERC-20-balance drain
+    // channel dressed up behind a benign inner call. We surface it
+    // whenever any refund field is set — a non-zero gasToken /
+    // refundReceiver with gasPrice 0 is anomalous enough to show too.
+    // Two pages: banner + gasToken, then the full refundReceiver address.
+    let refund_active = input.gas_price.iter().any(|&b| b != 0)
+        || input.gas_token.iter().any(|&b| b != 0)
+        || input.refund_receiver.iter().any(|&b| b != 0);
 
     // Decide inner-tx flavor up-front so we can size the page count.
     // ERC-20 calldata renders as `Erc20Known` only when metadata is
@@ -241,15 +274,23 @@ fn render_safe_pages_inner(
         InnerKind::UnknownSafeSelf => 3,
         InnerKind::Blind => 3,
     };
-    let refund_pages = if refund_warning { 1 } else { 0 };
-    let total_pages = SAFE_HEADER_PAGES + refund_pages + inner_pages + 1; // +1 = confirm
+    let refund_pages = if refund_active { 2 } else { 0 };
+    // Inner SafeTx `value` (ETH the Safe forwards to `to` on execution)
+    // is shown inline only by the PlainEth branch. For every other inner
+    // kind a non-zero value would otherwise be invisible even though it
+    // is bound into the signed safeTxHash, so splice a dedicated page.
+    let show_inner_eth = !inner_value.is_zero()
+        && !matches!(inner_kind, InnerKind::PlainEth | InnerKind::EmptyCall);
+    let inner_eth_pages = usize::from(show_inner_eth);
+    let total_pages =
+        SAFE_HEADER_PAGES + refund_pages + inner_eth_pages + inner_pages + 1; // +1 = confirm
     let total_pages = core::cmp::min(total_pages, super::MAX_PAGES);
     let mut pages = Pages::with_len(total_pages);
 
     // ── Page 0: banner + chain ──────────────────────────────────────
     let banner = match input.flavour {
         SafeRenderFlavour::ApproveHash { .. } => "Approve Safe TX",
-        SafeRenderFlavour::ExecTransaction { .. } => "Execute Safe TX",
+        SafeRenderFlavour::ExecTransaction => "Execute Safe TX",
     };
     write_line(&mut pages.buf[0][0], banner);
     write_chain(&mut pages.buf[0][1], tx.chain_id);
@@ -269,7 +310,7 @@ fn render_safe_pages_inner(
         SafeRenderFlavour::ApproveHash { nonce } => {
             write_safe_nonce_row(&mut pages.buf[2][0], &nonce);
         }
-        SafeRenderFlavour::ExecTransaction { .. } => {
+        SafeRenderFlavour::ExecTransaction => {
             // No SafeTx nonce visible from calldata — the Safe reads it
             // from storage at execution time. Surface the flow so the
             // user can tell this apart from an approveHash render at a
@@ -281,18 +322,68 @@ fn render_safe_pages_inner(
     write_line(&mut pages.buf[2][2], inner_kind_hint(&inner_kind));
     write_line(&mut pages.buf[2][3], "> next");
 
-    // ── Optional page 3: refund-risk warning (exec only, gasPrice>0) ─
+    // ── Optional refund pages: gasToken + refundReceiver ────────────
+    //
+    // Rendered for BOTH flavours when any refund field is set. The user
+    // is paying `(gasUsed + baseGas) * gasPrice` in `gasToken` (ETH when
+    // `gasToken == 0`) to `refundReceiver`. We cannot decode the exact
+    // amount (it depends on runtime gas usage), but the *token* and the
+    // *recipient* are the WYSIWYS-critical facts: a token refund has no
+    // on-chain gasPrice cap, so without these pages an attacker could
+    // drain the Safe's full balance of a chosen ERC-20 to themselves
+    // behind a benign-looking inner call.
     let mut next_page = SAFE_HEADER_PAGES;
-    if refund_warning {
-        // The user is paying the executor `(safeTxGas + baseGas) * gasPrice`
-        // in `gasToken` (ETH when `gasToken == 0`). Most modern Safes set
-        // `gasPrice = 0`, so flagging the rare non-zero case loudly is
-        // proportional. We don't decode the amount — it depends on the
-        // executor's actual gas usage which the firmware can't know.
+    if refund_active {
+        // Page A: banner + the token the refund is paid in.
         write_line(&mut pages.buf[next_page][0], "! GAS REFUND");
-        write_line(&mut pages.buf[next_page][1], "Safe pays exec");
-        write_line(&mut pages.buf[next_page][2], "gasPrice != 0");
+        write_line(&mut pages.buf[next_page][1], "Safe pays in:");
+        if input.gas_token.iter().all(|&b| b == 0) {
+            write_line(&mut pages.buf[next_page][2], "ETH (native)");
+        } else {
+            // Token refund (no gasPrice cap) — show the token address so
+            // the user can recognise "wait, that's my USDC".
+            write_short_addr(&mut pages.buf[next_page][2], &input.gas_token);
+        }
         write_line(&mut pages.buf[next_page][3], "> next");
+        next_page += 1;
+
+        // Page B: who receives the refund (full address, resolver-aware).
+        write_line(&mut pages.buf[next_page][0], "Refund to:");
+        if input.refund_receiver.iter().all(|&b| b == 0) {
+            write_line(&mut pages.buf[next_page][1], "tx.origin");
+            write_line(&mut pages.buf[next_page][2], "(whoever execs)");
+            write_line(&mut pages.buf[next_page][3], "> next");
+        } else {
+            let [_lbl, a, b, c] = &mut pages.buf[next_page];
+            write_addr_full_or_name(
+                a,
+                b,
+                c,
+                &input.refund_receiver,
+                tx.chain_id,
+                resolver,
+            );
+        }
+        next_page += 1;
+    }
+
+    // ── Optional inner-ETH page ─────────────────────────────────────
+    //
+    // The PlainEth branch already shows the value inline; for every
+    // other inner kind a non-zero SafeTx `value` is otherwise invisible.
+    if show_inner_eth {
+        write_line(&mut pages.buf[next_page][0], "Safe sends ETH:");
+        {
+            let [_lbl, r1, r2, foot] = &mut pages.buf[next_page];
+            let fit = write_eth_two_rows(r1, r2, &inner_value);
+            write_line(
+                foot,
+                match fit {
+                    AmountFit::Full => "> next",
+                    AmountFit::Overflow => "!AMOUNT OVERFLOW",
+                },
+            );
+        }
         next_page += 1;
     }
 

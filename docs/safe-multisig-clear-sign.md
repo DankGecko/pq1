@@ -299,6 +299,52 @@ This means the wallet can be a fully PQ Safe owner today, with no
 on-chain changes to Safe contracts and no ECDSA fallback path on the
 device.
 
+## Gas refund parameters (gasPrice / gasToken / refundReceiver)
+
+A SafeTx carries five fields the inner-call semantics never surface:
+`safeTxGas`, `baseGas`, `gasPrice`, `gasToken`, `refundReceiver`. When
+`gasPrice > 0`, `execTransaction` pays the executor
+`(gasUsed + baseGas) * gasPrice` of `gasToken` (native ETH when
+`gasToken == 0`) to `refundReceiver` (or `tx.origin` when zero). All
+five are folded into the EIP-712 `safeTxHash`, so they are tamper-bound
+the moment the wallet signs — but being *bound* is not the same as being
+*shown*.
+
+The dangerous case is a **token refund** (`gasToken != address(0)`):
+Safe applies no on-chain cap to `gasPrice` for token refunds (the
+`min(gasPrice, tx.gasprice)` cap only applies to the native-ETH branch),
+so an attacker can set `gasToken` to any ERC-20 the Safe holds,
+`refundReceiver` to themselves, and `gasPrice`/`baseGas` so the refund
+equals the Safe's entire balance of that token — all behind a SafeTx
+whose inner call reads as a benign "transfer 1 USDC" or even an empty
+call. For a 1-of-1 Safe the wallet's `approveHash` is sufficient
+threshold; the attacker then calls `execTransaction` (step 20 above) and
+the drain settles.
+
+To keep the surface WYSIWYS, the renderer (`safe_display.rs`) surfaces a
+loud two-page refund block on **both** the approveHash and
+execTransaction paths whenever any of `gasPrice` / `gasToken` /
+`refundReceiver` is non-zero:
+
+```text
+┌────────────────┐    ┌────────────────┐
+│! GAS REFUND    │    │Refund to:      │
+│Safe pays in:   │    │<refundReceiver │
+│0xA0b8..6eB48   │    │ full addr /    │
+│> next          │    │ tx.origin>     │
+└────────────────┘    └────────────────┘
+   token = gasToken        recipient
+   ("ETH (native)"
+    when gasToken == 0)
+```
+
+The exact refund *amount* is not shown — it depends on runtime `gasUsed`
+the firmware cannot know — but the **token** and the **recipient** are
+the WYSIWYS-critical facts (the user can recognise "that's my USDC going
+to an address I don't know"). The SafeTx inner `value` (ETH the Safe
+forwards to `to` on execution) is likewise surfaced on its own page for
+every inner kind, not just plain ETH transfers.
+
 ## DelegateCall
 
 Refused outright in v1. A delegatecall through a Safe replaces the
