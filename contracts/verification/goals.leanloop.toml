@@ -80,8 +80,10 @@ Then step* + Subtype.ext + the buf lemma. U32.to_be_bytes gives
 List.map UScalar.mk fw_version.bv.toBEBytes, length 4 by toBEBytes_length.
 No hash, no axioms — should be the easiest goal in the queue."""
 
-[[goal]]
-module  = "Extracted.MerkleVerifySpec"  # rank 6: XMSS auth-path walk
+# DONE 2026-06-12 (frontier, lean-lsp-mcp): verify_auth_path_spec PROVEN —
+# single content axiom th_pair_pure (the tweakable-hash boundary, as designed).
+# [[goal]]
+module_done_6 = "Extracted.MerkleVerifySpec"  # rank 6: XMSS auth-path walk
 context = """One sorry. loop.spec_decr_nat over the 9-step walk; invariant:
 (node_k, idx_k) = (authFold (auth.take k) leaf idx 0, idx >>> k). Per step:
 make_adrs_spec (AdrsEquiv, PROVEN) pins the adrs bytes = specMakeAdrs; bridge
