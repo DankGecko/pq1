@@ -14,6 +14,7 @@ include "./aave_abi_parsers.circom";
 include "./string_assembly.circom";
 include "../node_modules/poseidon-bls12381-circom/circuits/poseidon255.circom";
 include "../node_modules/circomlib/circuits/comparators.circom";
+include "../node_modules/circomlib/circuits/bitify.circom";
 
 /*
  * CLEAR_SIGNING_PROOF.circom
@@ -63,6 +64,17 @@ template PackBytes31(N_BLOCKS) {
 
     signal input  bytes[TOTAL_BYTES];
     signal output fields[N_BLOCKS];
+
+    // SECURITY: range-check every byte to [0,256) before the base-256
+    // fold. Without it `acc*256 + byte` is non-injective over the scalar
+    // field, so `H_tx`/`H_str` bind only the packed fields, not the
+    // bytes — a prover could forge a benign-displayed / malicious-signed
+    // calldata. See docs/VULN-cowswap-zk-bytepack-nonbinding.md.
+    component rc[TOTAL_BYTES];
+    for (var i = 0; i < TOTAL_BYTES; i++) {
+        rc[i] = Num2Bits(8);
+        rc[i].in <== bytes[i];
+    }
 
     signal acc[N_BLOCKS][32];
     for (var b = 0; b < N_BLOCKS; b++) {

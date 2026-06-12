@@ -29,15 +29,35 @@ pragma circom 2.0.0;
 // This file is the source of truth for any *new* circuit.
 
 include "../node_modules/poseidon-bls12381-circom/circuits/poseidon255.circom";
+include "../node_modules/circomlib/circuits/bitify.circom";
 
 // PackBytes31(N_BLOCKS) — pack N_BLOCKS × 31 raw bytes into N_BLOCKS
 // field elements (31 bytes × 8 = 248 bits, comfortably under the
 // BLS12-381 / BN254 254-bit prime). Each block is packed big-endian.
+//
+// SECURITY — every input byte MUST be range-checked to [0,256) before
+// the base-256 fold. The firmware computes the identical hash over a
+// genuine `[u8]`, so `H_tx`/`H_str` are only byte-binding if the circuit
+// forces each `bytes[i] < 256`. Without the `Num2Bits(8)` below the fold
+// `acc*256 + byte` is non-injective over the scalar field (256 is
+// invertible mod r): a malicious prover can present out-of-range "bytes"
+// that pack to the SAME field elements as a *different* real on-chain
+// canonical, so Poseidon matches and the proof verifies while the device
+// signs an order it never displayed. See
+// docs/VULN-cowswap-zk-bytepack-nonbinding.md.
 template PackBytes31(N_BLOCKS) {
     var TOTAL_BYTES = N_BLOCKS * 31;
 
     signal input  bytes[TOTAL_BYTES];
     signal output fields[N_BLOCKS];
+
+    // Range-check every byte to [0,256). Num2Bits(8) constrains its input
+    // to be representable in 8 bits, i.e. `bytes[i] ∈ [0,255]`.
+    component rc[TOTAL_BYTES];
+    for (var i = 0; i < TOTAL_BYTES; i++) {
+        rc[i] = Num2Bits(8);
+        rc[i].in <== bytes[i];
+    }
 
     signal acc[N_BLOCKS][32];
     for (var b = 0; b < N_BLOCKS; b++) {
