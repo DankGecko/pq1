@@ -254,4 +254,84 @@ theorem read_bits_le_spec (digest : Std.Array Std.U8 32#usize)
   rw [UScalar.val_and, i4_post1, mask_post1, hi3v, Nat.and_two_pow_sub_one_eq_mod,
       hvloop, W, hq, hbib, window_shift _ _ _ _ hprec, ← Nat.shiftRight_add, hbo]
 
+/-! ### rank 2 — FORS index extraction (composes read_bits_le_spec) -/
+
+/-- `extract_ht_index` = the 18-bit hypertree index at offset 143 = K·A. -/
+theorem extract_ht_index_spec (digest : Std.Array Std.U8 32#usize) :
+    fors.extract_ht_index digest ⦃ r => r.val = (digestWord digest >>> 143) % 2 ^ 18 ⦄ := by
+  unfold fors.extract_ht_index
+  simp only [params.K, params.A, params.H]
+  let* ⟨i, hi⟩ ← Std.Usize.mul_spec
+  let* ⟨i1, hi1⟩ ← read_bits_le_spec digest i 18#usize (by scalar_tac) (by scalar_tac) (by rw [hi]; omega)
+  rw [UScalar.cast_val_eq, show UScalarTy.U32.numBits = 32 from rfl, hi1, hi,
+      show (13 * 11 : Nat) = 143 by norm_num,
+      Nat.mod_eq_of_lt (lt_of_lt_of_le (Nat.mod_lt _ (Nat.two_pow_pos 18))
+        (Nat.pow_le_pow_right (by norm_num) (by norm_num)))]
+
+set_option maxHeartbeats 16000000 in
+theorem extract_fors_indices_loop_value
+    (iter : core.ops.range.Range Std.Usize) (digest : Std.Array Std.U8 32#usize)
+    (indices : Std.Array Std.U32 13#usize) (hb : iter.«end».val = 13)
+    (hinit : ∀ j, j < iter.start.val → (indices.val[j]!).val = (digestWord digest >>> (j * 11)) % 2 ^ 11) :
+    fors.extract_fors_indices_loop iter digest indices
+      ⦃ r => ∀ j, j < 13 → (r.val[j]!).val = (digestWord digest >>> (j * 11)) % 2 ^ 11 ⦄ := by
+  unfold fors.extract_fors_indices_loop
+  apply Aeneas.Std.loop.spec_decr_nat
+    (measure := fun (s : core.ops.range.Range Std.Usize × Std.Array Std.U32 13#usize) =>
+       s.1.«end».val - s.1.start.val)
+    (inv := fun (s : core.ops.range.Range Std.Usize × Std.Array Std.U32 13#usize) =>
+       s.1.«end».val = 13 ∧ ∀ j, j < s.1.start.val →
+         (s.2.val[j]!).val = (digestWord digest >>> (j * 11)) % 2 ^ 11)
+  · rintro ⟨it, ind⟩ ⟨hend, hinv⟩
+    unfold fors.extract_fors_indices_loop.body
+    simp only []
+    let* ⟨o, iter1, hpost⟩ ← next_usize_spec it
+    rcases hpost with ⟨ho, hle⟩ | ⟨b, it', heq, hb', hlt, hend', hstart⟩
+    · subst ho; simp only [WP.spec_ok]
+      exact fun j hj => hinv j (by scalar_tac)
+    · simp only [Prod.mk.injEq] at heq
+      obtain ⟨rfl, rfl⟩ := heq
+      have hbeq : b.val = it.start.val := by rw [hb']
+      have h12 : b.val ≤ 12 := by scalar_tac
+      simp only [params.A]
+      let* ⟨i1, hi1m⟩ ← Std.Usize.mul_spec
+      let* ⟨i2, hi2⟩ ← read_bits_le_spec digest i1 11#usize (by scalar_tac) (by scalar_tac) (by rw [hi1m]; omega)
+      have hi3val : (UScalar.cast UScalarTy.U32 i2).val = (digestWord digest >>> (b.val * 11)) % 2 ^ 11 := by
+        rw [UScalar.cast_val_eq, show UScalarTy.U32.numBits = 32 from rfl, hi2, hi1m,
+            Nat.mod_eq_of_lt (lt_of_lt_of_le (Nat.mod_lt _ (Nat.two_pow_pos 11))
+              (Nat.pow_le_pow_right (by norm_num) (by norm_num)))]
+      step*
+      refine ⟨by rw [hend']; exact hend, fun j hj => ?_, by scalar_tac⟩
+      have hlen : ind.val.length = 13 := by have := ind.property; simp_all
+      rw [a_post, Array.set_val_eq]
+      by_cases hjb : j = b.val
+      · subst hjb
+        rw [List.set_getElem!_eq _ b.val b.val i3 ⟨by omega, rfl⟩, i3_post]
+        exact hi3val
+      · rw [List.set_getElem!_ne _ b.val j i3 (by simp only [Nat.not_eq]; omega)]
+        rw [hbeq] at hjb
+        have hj' : j < it.start.val + 1 := by rw [← hstart]; exact hj
+        apply hinv j
+        show j < it.start.val
+        omega
+  · exact ⟨hb, hinit⟩
+
+attribute [step] extract_fors_indices_loop_value
+
+open sphincs_c10 in
+set_option maxHeartbeats 16000000 in
+theorem extract_fors_indices_spec (digest : Std.Array Std.U8 32#usize) :
+    fors.extract_fors_indices digest
+      ⦃ r => ∀ j, j < 13 → (r.val[j]!).val = (digestWord digest >>> (j * 11)) % 2 ^ 11 ⦄ := by
+  unfold fors.extract_fors_indices
+  simp only [params.K]
+  step* <;>
+    first
+    | (apply extract_fors_indices_loop_value)
+    | scalar_tac
+    | (intro j hj; simp_all)
+    | simp_all
+    | trivial
+
+
 end Extracted.Equiv

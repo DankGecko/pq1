@@ -26,3 +26,5 @@ import Extracted.ForsLoop
 #print axioms Extracted.Equiv.extract_fors_indices_in_range
 #print axioms Extracted.Equiv.lor_eq_add_disjoint
 #print axioms Extracted.Equiv.read_bits_le_spec
+#print axioms Extracted.Equiv.extract_ht_index_spec
+#print axioms Extracted.Equiv.extract_fors_indices_spec

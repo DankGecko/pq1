@@ -27,7 +27,8 @@
        post := fun v => v.val = <partial LE bit-read of digest>
    and the invariant to relate `val` to the bytes consumed so far. This
    is NOT the SetSliceLemmas byte-layout method (that's for fixed-offset
-   serialization); it's a bit-level accumulator induction. Once
+   serialization); it's a bit-level accumulator induction. **rank 2 DONE 2026-06-12: extract_ht_index_spec + extract_fors_indices_spec
+   PROVEN** (ForsExtract.lean, kernel-clean). Once
    read_bits_le's functional spec is proven, extract_ht_index /
    extract_fors_indices compose, then vendor `Spec/Fors.lean`'s htIdx
    extraction + a `firmware_extract_ht_index_matches_vendored` bridge
