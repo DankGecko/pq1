@@ -269,3 +269,21 @@ extract-wots-pkfromsig:
 	@diff -u $(EXTRACTED_DIR)/Extracted/PkFromSig/Funs.lean /tmp/pqsigner-extract/pout/Funs.fixed.lean \
 	  && echo "OK: committed pk_from_sig extraction matches the current Rust" \
 	  || { echo "DRIFT: sphincs-c10/src/wots.rs changed — re-extract, re-prove, re-commit"; exit 1; }
+
+# §33 rank 11 — tx::erc20::merkle::verify_proof (trust-bundle merkle walk;
+# leaf_hash/node_hash opaque → _pure axioms in TxMerkle/FunsExternal.lean).
+.PHONY: extract-tx-merkle
+extract-tx-merkle:
+	@mkdir -p /tmp/pqsigner-extract
+	@cd $(REPO_ROOT)/tx && RUSTFLAGS="--cfg lean_extract" \
+	  $(PQLEAN)/charon cargo --preset=aeneas --opaque sha2 \
+	  --opaque 'pqsigner_tx::erc20::merkle::leaf_hash' \
+	  --opaque 'pqsigner_tx::erc20::merkle::node_hash' \
+	  --start-from 'pqsigner_tx::erc20::merkle::verify_proof' \
+	  --dest-file /tmp/pqsigner-extract/txmk.llbc 2>&1 | tail -1
+	@rm -rf /tmp/pqsigner-extract/tout && mkdir -p /tmp/pqsigner-extract/tout
+	@$(PQLEAN)/aeneas -backend lean -dest /tmp/pqsigner-extract/tout -split-files /tmp/pqsigner-extract/txmk.llbc
+	@sed 's/import Txmk\./import Extracted.TxMerkle./' /tmp/pqsigner-extract/tout/Funs.lean > /tmp/pqsigner-extract/tout/Funs.fixed.lean
+	@diff -u $(EXTRACTED_DIR)/Extracted/TxMerkle/Funs.lean /tmp/pqsigner-extract/tout/Funs.fixed.lean \
+	  && echo "OK: committed tx-merkle extraction matches the current Rust" \
+	  || { echo "DRIFT: tx/src/erc20/merkle.rs changed — re-extract, re-prove, re-commit"; exit 1; }

@@ -101,3 +101,13 @@ set_chain_index bridges via specSetChainIndex = take 20 ++ u32be ci ++ drop 24
 (W-1) - digit needs digit < 8 (from wotsDigit def, Nat.mod_lt) → no wrap
 (scalar_tac with the bound in context). Final th_multi_pure via @[step];
 slice ext by Subtype.ext + the loop1 invariant at k=43."""
+
+[[goal]]
+module  = "Extracted.TxMerkleSpec"      # rank 11: trust-bundle merkle verify
+context = """One sorry, an IFF (both directions). Rank-6 method: loop invariant
+(h_k, idx_k) = (merkleFold ((range k).map (chunk32 …)) leafHash idx, idx >>> k).
+Under the length gate the slice index [l*32, l*32+32) is in bounds and
+try_from always lands Ok with chunk pad empty (List.take_drop lemmas);
+PartialEqArray.eq at exit ↔ array equality (Subtype.ext both ways). The ←
+direction: length mismatch short-circuits the first if to false. leaf/node
+hash fire via @[step] specs. idx &&& 1 / >>> 1 ↔ % 2 / / 2 by scalar_tac."""
