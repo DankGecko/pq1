@@ -2,7 +2,7 @@
   "chainId": 8453,
   "chainName": "base-mainnet",
   "rpcUrl": "https://mainnet.base.org",
-  "deployer": "0x00137482d6b37eBb235A463D748191D925D92eB3",
+  "deployer": "0x3a4e6eD8B0F02BFBfaA3C6506Af2DB939eA5798c",
   "create2Deployer": "0x4e59b44847b379578588920cA78FbF26c0B4956C",
   "salts": {
     "verifier": "0x0000000000000000000000000000000000000000000000000000000000000000",
@@ -11,11 +11,11 @@
   },
   "contracts": {
     "EntryPointV06": "0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789",
-    "SPHINCsC10Asm": "0xb32e32a532d03a160ceb35af39b4a95ba4881fc7",
-    "PQSmartWalletImpl": "0x155d7da5feef1811214a1271335a19fb3fce8f1e",
-    "PQSmartWalletFactory": "0x67943487e9e41a9ee5f5f7a10f18aa82fe19e03b"
+    "SPHINCsC10Asm": "0xdDE4D290d646097ECeEA1e33Bf8C9Fa6dd589cbB",
+    "PQSmartWalletImpl": "0x31e49D24370bFa487dF1D6687A1aca5a34183590",
+    "PQSmartWalletFactory": "0xe8CE78CD976497447FF8B76c71b59aE42Af0d452"
   },
-  "proxyInitCodeHash": "0x81bf5ce06e60f71c41de86991b75639e32d967b8e9d412b706a1c24e25aadc4c",
+  "proxyInitCodeHash": "0xac0c44b6d06f678eb350426f4d0d7a89cc729dcb156de303fa77a7752ccc22b6",
   "verified": false,
-  "note": "CREATE2-deterministic via Arachnid's 0x4e59… deployer; byte-identical to the Base Sepolia addresses under FOUNDRY_PROFILE=deploy. Source intentionally NOT published."
+  "note": "Deployed 2026-06-12 (blocks 47241971/47242046/47242047). CREATE2-deterministic via Arachnid's 0x4e59… deployer under FOUNDRY_PROFILE=deploy. Base Sepolia still carries older bytecode — redeploy pending. Source intentionally NOT published."
 }
