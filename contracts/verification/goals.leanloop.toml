@@ -17,9 +17,11 @@ bridge from scratch via testBit + Nat.add carry-freeness)."""
 # NOW-phase queue (docs/verification-targets-2026-06.md; uncomment as each goal
 # file is created — see each target's "first step"):
 #
-# rank 1+2 DONE 2026-06-12 (ForsExtract.lean, kernel-clean, default target):
-#   read_bits_le_spec, extract_ht_index_spec, extract_fors_indices_spec.
-# Next: rank 3 — aa/eip1271 byte-layout trio (clone the userOpHash method).
+# rank 1+2 DONE 2026-06-12 (ForsExtract.lean): read_bits_le_spec,
+#   extract_ht_index_spec, extract_fors_indices_spec.
+# rank 3 DONE 2026-06-12 (Eip1271Equiv.lean): domain_separator_spec,
+#   replay_safe_hash_spec (kernel-clean, default target).
+# Next: rank 4 — wots extract_digits (composes read_bits_le_spec like rank 2).
 #
 # [[goal]]
 # module  = "Extracted.SpecBridgeFors"  # rank 2: vendored-bridge for ht_idx

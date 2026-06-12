@@ -8,6 +8,7 @@
 import Extracted.AdrsEquiv
 import Extracted.Bits
 import Extracted.ForsExtract
+import Extracted.Eip1271Equiv
 import Extracted.UserOpEquiv
 import Extracted.UserOpEquivByteLayout
 import Extracted.SpecBridge
@@ -28,3 +29,5 @@ import Extracted.ForsLoop
 #print axioms Extracted.Equiv.read_bits_le_spec
 #print axioms Extracted.Equiv.extract_ht_index_spec
 #print axioms Extracted.Equiv.extract_fors_indices_spec
+#print axioms Extracted.Equiv.domain_separator_spec
+#print axioms Extracted.Equiv.replay_safe_hash_spec
