@@ -12,6 +12,7 @@ import Extracted.Eip1271Equiv
 import Extracted.WotsDigits
 import Extracted.FwManifestSpec
 import Extracted.Bip39RoundtripSpec
+import Extracted.RlpIntSpec
 import Extracted.UserOpEquiv
 import Extracted.UserOpEquivByteLayout
 import Extracted.SpecBridge
@@ -38,3 +39,6 @@ import Extracted.ForsLoop
 #print axioms Extracted.Equiv.extract_digits_lt
 #print axioms Extracted.Equiv.signed_preimage_spec
 #print axioms Extracted.Equiv.roundtrip_11_id
+#print axioms Extracted.Equiv.beValue_lt
+#print axioms Extracted.Equiv.bytes_to_u64_spec
+#print axioms Extracted.Equiv.bytes_to_u256_spec

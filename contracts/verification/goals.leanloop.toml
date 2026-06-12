@@ -42,8 +42,10 @@ bridge from scratch via testBit + Nat.add carry-freeness)."""
 # ── Spec-first batch (2026-06-12): statements landed, proofs queued for the
 #    grind (local 32B tier when GPU box is up; frontier queue for survivors). ──
 
-[[goal]]
-module  = "Extracted.RlpIntSpec"        # rank 7: canonical BE-int decode
+# DONE 2026-06-12 (frontier): beValue_lt + bytes_to_u64_spec + bytes_to_u256_spec
+# PROVEN kernel-clean, zero content axioms.
+# [[goal]]
+module_done_7 = "Extracted.RlpIntSpec"        # rank 7: canonical BE-int decode
 context = """Three sorry'd goals. Leaf lemmas first: beValue_lt is induction on
 the list (foldl acc bound: acc < 256^k → acc*256+b < 256^(k+1)). The two _spec
 theorems: unfold, the length/leading-zero gates are if-splits closed by
