@@ -20,6 +20,7 @@ LAKE     ?= $(shell command -v lake 2>/dev/null || echo $$HOME/.elan/bin/lake)
 
 verify: verify-build
 	@cd $(LEAN_DIR) && $(LAKE) exe verify-test-vectors
+	@cd $(LEAN_DIR) && $(LAKE) exe verify-mutant-corpus
 
 verify-build:
 	@cd $(LEAN_DIR) && $(LAKE) build

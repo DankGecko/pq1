@@ -41,19 +41,25 @@ Specifically and defensibly:
 3. **The bootstrap-cap bug is really fixed.** The few-time-cap under-count
    (`PQBootstrapCapEvasion`) is closed in the validation phase and locked by
    tests; `forge test` 108/108. Reproduced 2026-06-11.
-4. **Verifier functional layer — executable Lean differential.** An
-   **executable** Lean↔FIPS↔bytecode differential
-   (`lake exe verify-test-vectors`) shows the Lean spec
-   (`Spec.Signature.verify` — digest, htIdx, FORS forest, WOTS+C
-   count/digit grind, chain stepping, subtree Merkle, final root compare)
-   matches the deployed verifier's accept/reject decision on **all 10 KAT
-   vectors (4 valid + 6 negative/mutant), as a HARD CHECK** (non-zero exit
-   on drift). The historic reconstruction-layer divergence (two defects:
-   the `chainHash` chain-pos field and `loadWord32` straddling-read
-   semantics) was localised by `scripts/gap1_differential.py` and fixed
-   2026-06-12; the same script reproduces the byte-level diff and the fix.
-   The three-way Rust↔Solidity↔Lean KAT differential is therefore now real
-   on **every** layer, not just digest/index.
+4. **Verifier functional layer — executable Lean differential, KAT +
+   mutant scale.** Two **executable** Lean↔bytecode differentials, both
+   HARD CHECKS (non-zero exit on drift): (a) `lake exe verify-test-vectors`
+   — the Lean spec (`Spec.Signature.verify`: digest, htIdx, FORS forest,
+   WOTS+C count/digit grind, chain stepping, subtree Merkle, final root
+   compare) matches the deployed verifier's accept/reject decision on all
+   10 KAT vectors; (b) `lake exe verify-mutant-corpus` — the same spec
+   matches the deployed bytecode on a **246-entry adversarial corpus**
+   (4 positive controls + 242 near-miss mutants mirroring the bytecode
+   screen's classes, plus dense sweeps of both historic defect sites),
+   where the corpus' expected column is **deployed-bytecode ground truth**
+   asserted by `forge test --match-contract SPHINCsC10AsmMutantCorpusTest`
+   (exact two-directional parity). The historic reconstruction-layer
+   divergence (two defects: the `chainHash` chain-pos field and
+   `loadWord32` straddling-read semantics) was localised by
+   `scripts/gap1_differential.py` and fixed 2026-06-12. The three-way
+   Rust↔Solidity↔Lean differential is therefore real on **every** layer,
+   at **252 distinct agreement points**, in both accept and reject
+   directions. Reproduced 2026-06-12.
 5. **Verifier negative direction.** The deployed verifier bytecode rejects a
    ≈250-mutant wrong-accept battery and the 6 negative KAT vectors, and
    accepts the 4 valid vectors (`forge test`). Reproduced 2026-06-11.

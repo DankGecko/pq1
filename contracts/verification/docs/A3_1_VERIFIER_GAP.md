@@ -70,6 +70,14 @@ a plausible-but-wrong story that survived a day in the ledger.
 | hMsg **digest** | `Spec.Hash.hMsg` (over `Spec.Sha256Impl`) | **10/10 byte-exact** (HARD CHECK) |
 | **htIdx** extraction | `Util.extractHtIndex` | **10/10 exact** (HARD CHECK) |
 | **full functional verify** | `Spec.Signature.verify` | **10/10 accept/reject agreement** (HARD CHECK) |
+| **mutant-corpus verify** | `Spec.Signature.verify` (`lake exe verify-mutant-corpus`) | **246/246 agreement** on the adversarial corpus, expected values asserted against the deployed bytecode by forge (HARD CHECK) |
+
+The 246-entry corpus (`test/c10_mutant_corpus.json`, deterministic, from
+`scripts/gen_mutant_corpus.py`) mirrors the bytecode screen's mutation
+classes and adds dense sweeps of both historic defect sites (the
+straddling-read tail [3992,4008) and the per-layer count fields), so the
+two specific bugs of this postmortem are regression-locked at corpus
+scale on BOTH legs.
 
 Reproduce: `cd contracts/verification && make verify` (or
 `python3 scripts/gap1_differential.py [--lean-fixed]` for the standalone

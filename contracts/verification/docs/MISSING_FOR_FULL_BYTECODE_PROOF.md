@@ -53,6 +53,10 @@ was repaired 2026-06-12.) The gaps below enumerate the delta.
   extraction, ADRS packings, offsets — was already byte-faithful.
 - **Closure evidence:** `lake exe verify-test-vectors` full-verify **10/10**
   with `requireFullVerify = true` (**hard check**, regression-guarded);
+  `lake exe verify-mutant-corpus` **246/246** agreement on a deterministic
+  adversarial corpus whose expected column is deployed-bytecode ground
+  truth (forge `SPHINCsC10AsmMutantCorpusTest`, exact two-directional
+  parity) — both historic defect sites regression-locked at corpus scale;
   `verifyRefined_eq_spec` still `rfl`; 0 `sorry`; axiom closure unchanged.
   Postmortem: [`A3_1_VERIFIER_GAP.md`](A3_1_VERIFIER_GAP.md).
 - **What it does NOT close:** the universal quantifier. A3.1 is now

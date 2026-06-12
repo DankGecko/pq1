@@ -41,3 +41,7 @@ roots = ["SphincsCVerify"]
 [[lean_exe]]
 name = "verify-test-vectors"
 root = "Main"
+
+[[lean_exe]]
+name = "verify-mutant-corpus"
+root = "MutantMain"

@@ -102,6 +102,11 @@
           "evidence": "Lean<->FIPS<->bytecode KAT: digest 10/10, htIdx 10/10, AND full functional verify 10/10 — ALL HARD CHECKS since 2026-06-12 (requireFullVerify = true; non-zero exit on drift). The Lean spec reproduces the deployed verifier's accept/reject decision on the complete corpus."
         },
         {
+          "type": "executable-lean-mutant-differential",
+          "path": "contracts/verification/lean/MutantMain.lean (lake exe verify-mutant-corpus) + contracts/smart-wallet/test/{c10_mutant_corpus.json,SPHINCsC10AsmMutantCorpus.t.sol}",
+          "evidence": "Mutant-scale Lean<->bytecode functional differential (added 2026-06-12): a deterministic 246-entry corpus (4 positive controls + 242 near-miss mutants mirroring the adversarial screen's classes + dense sweeps of both historic GAP-1 defect sites — the calldataload straddling tail [3992,4008) and both per-layer count fields). Expected column is DEPLOYED-BYTECODE ground truth (forge SPHINCsC10AsmMutantCorpusTest asserts exact two-directional parity, wrong-accept AND wrong-reject fail); the Lean exe replays the same corpus through Spec.Signature.verify as a HARD CHECK — 246/246. Lifts the Lean leg to the same evidence scale as the bytecode-side mutant screen, in both directions."
+        },
+        {
           "type": "cross-validation",
           "path": "contracts/verification/cross_validation/",
           "evidence": "Rust signer <-> Solidity bytecode differential on the 10 shared KAT vectors (test_verifyAllKatVectors, PASS). Since 2026-06-12 the Lean leg covers the FULL functional layer too (executable-lean-differential above), making the three-way Rust<->Solidity<->Lean differential real end-to-end. Standalone byte-level oracle with per-intermediate tracing: scripts/gap1_differential.py."
