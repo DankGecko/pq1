@@ -174,3 +174,20 @@ extract-wots-digits:
 	@diff -u $(EXTRACTED_DIR)/Extracted/Wots/Funs.lean /tmp/pqsigner-extract/wout/Funs.fixed.lean \
 	  && echo "OK: committed wots extraction matches the current Rust" \
 	  || { echo "DRIFT: sphincs-c10/src/wots.rs changed — re-extract, re-prove, re-commit"; exit 1; }
+
+# §33 rank 7 — tx-core RLP bytes_to_u64 + bytes_to_u256 (canonical BE-int decode).
+# into_iter is given a DEF (not axiom) in Extracted/Rlp/FunsExternal.lean.
+.PHONY: extract-txcore-rlp
+extract-txcore-rlp:
+	@mkdir -p /tmp/pqsigner-extract
+	@cd $(REPO_ROOT)/tx-core && RUSTFLAGS="--cfg lean_extract" \
+	  $(PQLEAN)/charon cargo --preset=aeneas --opaque sha2 --opaque sha3 \
+	  --start-from 'pqsigner_tx_core::rlp::bytes_to_u64' \
+	  --start-from 'pqsigner_tx_core::rlp::bytes_to_u256' \
+	  --dest-file /tmp/pqsigner-extract/rlp.llbc 2>&1 | tail -1
+	@rm -rf /tmp/pqsigner-extract/rout && mkdir -p /tmp/pqsigner-extract/rout
+	@$(PQLEAN)/aeneas -backend lean -dest /tmp/pqsigner-extract/rout -split-files /tmp/pqsigner-extract/rlp.llbc
+	@sed 's/import Rlp\./import Extracted.Rlp./' /tmp/pqsigner-extract/rout/Funs.lean > /tmp/pqsigner-extract/rout/Funs.fixed.lean
+	@diff -u $(EXTRACTED_DIR)/Extracted/Rlp/Funs.lean /tmp/pqsigner-extract/rout/Funs.fixed.lean \
+	  && echo "OK: committed RLP extraction matches the current Rust" \
+	  || { echo "DRIFT: tx-core/src/rlp.rs changed — re-extract, re-prove, re-commit"; exit 1; }
