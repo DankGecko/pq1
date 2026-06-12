@@ -10,3 +10,5 @@ import Extracted.Bits
 import Extracted.ForsExtract
 import Extracted.Eip1271Equiv
 import Extracted.WotsDigits
+import Extracted.FwManifestSpec
+import Extracted.Bip39RoundtripSpec

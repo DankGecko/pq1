@@ -65,8 +65,9 @@ Byte write per step: prod % 256 at index 31-j (List.set_getElem!_eq/ne).
 Final j=32: drop 0 = whole; overflow branch carry≠0 ⟺ product ≥ 2^256 needs
 beValue out = product - carry*2^256 bound. beValue from RlpIntSpec."""
 
-[[goal]]
-module  = "Extracted.FwManifestSpec"    # rank 12: 75-byte FW-signing preimage
+# DONE 2026-06-12 (frontier): signed_preimage_spec PROVEN kernel-clean.
+# [[goal]]
+module_done_12 = "Extracted.FwManifestSpec"    # rank 12: 75-byte FW-signing preimage
 context = """One sorry. EXACT clone of the rank-3 method (Eip1271Equiv.lean):
 state a fwmanBuf_eq by-index lemma (List.ext_getElem! + simp_lists + congr/omega
 closer, see domainBuf_eq) for the 4-slot chain: replicate 75 0 setSlice! 0 tag(7)
@@ -112,8 +113,9 @@ PartialEqArray.eq at exit ↔ array equality (Subtype.ext both ways). The ←
 direction: length mismatch short-circuits the first if to false. leaf/node
 hash fire via @[step] specs. idx &&& 1 / >>> 1 ↔ % 2 / / 2 by scalar_tac."""
 
-[[goal]]
-module  = "Extracted.Bip39RoundtripSpec"  # rank 9: 11-bit pack/unpack round-trip
+# DONE 2026-06-12 (frontier): roundtrip_11_id PROVEN kernel-clean.
+# [[goal]]
+module_done_9 = "Extracted.Bip39RoundtripSpec"  # rank 9: 11-bit pack/unpack round-trip
 context = """One sorry. unfold roundtrip_11; write_11_bits is `buf[k] |=` into a
 zero buffer (disjoint OR = ADD, lor_shiftLeft_add from WotsDigits) placing
 value<<(24-shift-11) across ≤3 bytes; read_11_bits reassembles the same 24-bit
