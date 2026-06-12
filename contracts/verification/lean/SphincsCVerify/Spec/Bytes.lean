@@ -131,15 +131,30 @@ verifier (`Verifier.Refined`) and the structural deserialiser
 Sharing the definitions is what makes `load_R_consistent` and friends in
 `Verifier/Equivalence.lean` discharge by `rfl`. -/
 
-/-- Load a 32-byte word from a byte vector at `offset`. Out-of-bounds
-    reads return zero (matches `calldataload`'s zero-padding). -/
+/-- Load a 32-byte word from a byte vector at `offset`, with
+    `calldataload` semantics: bytes past the end of the vector read as
+    zero, but bytes BEFORE the end are the real data. A read that
+    *straddles* the end therefore returns the available suffix followed
+    by zero padding — NOT an all-zero word.
+
+    This matters concretely: the deployed verifier's last Merkle-sibling
+    read of hypertree layer 1 sits at offset 3992 of the 4008-byte
+    signature, so `calldataload` returns the final 16 real bytes ‖ 16
+    bytes of ABI zero-padding. The pre-2026-06-12 definition returned
+    `zero 32` for ANY read crossing the end, zeroing that sibling and
+    breaking the layer-1 root reconstruction (the second of the two
+    divergences behind the A3.1 reconstruction gap). -/
 def loadWord32 {n : Nat} (sig : ByteVec n) (offset : Nat) : ByteVec 32 :=
   if h : offset + 32 ≤ n then
     ⟨sig.data.extract offset (offset + 32), by
       have hsize : sig.data.size = n := sig.size_eq
       simp [Array.size_extract, hsize, Nat.min_eq_left h]⟩
   else
-    zero 32
+    ⟨sig.data.extract offset n ++ Array.replicate (32 - (n - offset)) (0 : UInt8), by
+      have hsize : sig.data.size = n := sig.size_eq
+      have hlt : n - offset < 32 := by omega
+      simp [Array.size_append, Array.size_extract, hsize]
+      omega⟩
 
 /-- Load a 16-byte (N-masked) value: top 16 bytes of the 32-byte word
     at `offset`. -/

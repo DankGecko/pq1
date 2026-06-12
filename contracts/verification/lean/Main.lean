@@ -23,26 +23,26 @@ reproduces and what it does not:
   (3) FULL functional verify — `Spec.Signature.verify` over the
       byte-decoded signature, compared to the vector's `expectValid`.
 
-### Honest result (current)
+### Result (since 2026-06-12)
 
-Layers (1) and (2) MATCH on every vector — the Lean digest/index
-sub-layer is byte-faithful to the deployed bytecode. Layer (3) does
-NOT yet match: `Spec.Signature.verify` returns `false` on the VALID
-vectors, because the WOTS+C / hypertree RECONSTRUCTION layer
-(`Spec.Wots.pkFromSig` → `digitSum ≠ TargetSum`) was specified to
-mirror the Rust signer but was never executed, and its ADRS bit-layout
-diverges from the deployed Yul. This is the named A3.1 residual (see
-`docs/AXIOM_STATUS.json` A3.1 and `docs/A3_1_VERIFIER_GAP.md`): the
-verifier's full functional equivalence is carried EMPIRICALLY by the
-on-bytecode KAT + the ~250-mutant wrong-accept screen, NOT by an
-executable Lean differential.
+ALL THREE layers match on every vector. The reconstruction-layer gap
+(the A3.1 residual of 2026-06-11) was localised by
+`scripts/gap1_differential.py` to a SINGLE divergence: `chainHash`
+advanced the WOTS chain position via `Adrs.setChainIndex` (ADRS bytes
+[20..24)), where the Rust signer and the deployed Yul thread the
+position through the `chain_pos` field (bytes [24..28)) and preserve
+the chain index. Everything upstream — digest, FORS forest, forsPk,
+layer-0 WOTS digest + digit sum — was already byte-faithful (the
+earlier "digit-sum gate fails first" diagnosis in the gap doc was a
+downstream symptom at layer 1, not the cause). With `setChainPos` in
+place, `Spec.Signature.verify` reproduces the deployed bytecode's
+accept/reject decision on all 10 vectors.
 
-This runner is wired so the digest/index differential is a HARD CHECK
-(non-zero exit on drift — a real regression guard on the Lean SHA-256
-and preimage), while the full-verify column is reported but not yet
-asserted green, so the artifact tells the truth instead of hiding the
-gap. When the reconstruction layer is made faithful, flip
-`requireFullVerify` to `true` to promote it to a hard check.
+Both the digest/index differential AND the full functional verify are
+HARD CHECKS (non-zero exit on drift): this runner is now a real
+executable Lean ↔ bytecode differential for the complete verifier,
+which is what makes A3.1's functional leg dischargeable on the corpus
+(the ∀-signature symbolic equivalence remains GAP-2 — Verity/KEVM).
 -/
 
 import SphincsCVerify
@@ -103,10 +103,12 @@ def runVector (v : KatVector) : Outcome :=
   let verifyResult : Bool := Signature.verify ⟨pkSeed16, pkRoot16⟩ msgBV sigBV
   ⟨digestOk, htIdxOk, verifyResult == v.expectValid⟩
 
-/-- Promote the full-verify column to a hard check once the
-    reconstruction layer is made executably faithful (currently false —
-    see the file header / docs/A3_1_VERIFIER_GAP.md). -/
-def requireFullVerify : Bool := false
+/-- The full-verify column is a HARD CHECK: the reconstruction layer was
+    made executably faithful on 2026-06-12 (the `chainHash` chain-pos
+    field fix — see `Spec/Hash.lean` and docs/A3_1_VERIFIER_GAP.md), and
+    `Spec.Signature.verify` now matches the deployed bytecode on all 10
+    KAT vectors. Any drift fails the build. -/
+def requireFullVerify : Bool := true
 
 def main : IO UInt32 := do
   IO.println "=== Lean ↔ bytecode KAT differential (verify-test-vectors) ==="
@@ -130,7 +132,7 @@ def main : IO UInt32 := do
   IO.println ""
   IO.println s!"digest layer : {vectors.length - digestFails}/{vectors.length} match FIPS ground truth (HARD CHECK)"
   IO.println s!"htIdx layer  : {vectors.length - htIdxFails}/{vectors.length} match ground truth (HARD CHECK)"
-  IO.println s!"full verify  : {vectors.length - verifyMismatch}/{vectors.length} match expectValid (REPORTED, not yet asserted — A3.1 residual)"
+  IO.println s!"full verify  : {vectors.length - verifyMismatch}/{vectors.length} match expectValid (HARD CHECK)"
   IO.println ""
   if digestFails > 0 || htIdxFails > 0 then
     IO.eprintln "FAIL: the Lean digest/index sub-layer drifted from the bytecode ground truth."
@@ -138,9 +140,8 @@ def main : IO UInt32 := do
   if requireFullVerify && verifyMismatch > 0 then
     IO.eprintln "FAIL: full-verify differential required but mismatched."
     return 1
-  IO.println "OK: digest + htIdx sub-layers are byte-faithful to the deployed verifier."
-  IO.println "NOTE: full functional verify is the named A3.1 residual — the WOTS+C /"
-  IO.println "      hypertree reconstruction layer is carried empirically by the"
-  IO.println "      on-bytecode KAT + ~250-mutant wrong-accept screen, not by this"
-  IO.println "      executable Lean differential. See docs/A3_1_VERIFIER_GAP.md."
+  IO.println "OK: the executable Lean spec (digest, htIdx, AND full functional verify)"
+  IO.println "    is byte-faithful to the deployed verifier on the complete KAT corpus."
+  IO.println "    The ∀-signature symbolic equivalence remains the separate GAP-2"
+  IO.println "    (Verity / KEVM); see docs/MISSING_FOR_FULL_BYTECODE_PROOF.md."
   return 0

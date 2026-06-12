@@ -18,15 +18,16 @@ Splitting `deserialise` out lets us prove:
     proved at the structured-`Signature` level.
 
 `deserialise` (below) is a REAL offset-indexed byte decoder (R, FORS
-secrets + auth paths, per-layer WOTS chains + count + auth path). NOTE:
-as of 2026-06-11 the end-to-end `verify` is NOT executably faithful to
-the deployed bytecode — `lake exe verify-test-vectors` shows it returns
-`false` on the valid KAT vectors because the WOTS+C / hypertree
-RECONSTRUCTION layer (`Spec.Wots.pkFromSig`, the ADRS bit-layout)
-diverges from the deployed Yul. The digest + htIdx sub-layers ARE
-byte-faithful. See `docs/A3_1_VERIFIER_GAP.md` for the full ledger; this
-is the named A3.1 residual. (`defaultSignature` below is the round-trip
-serialiser's zero shape, not the decoder.)
+secrets + auth paths, per-layer WOTS chains + count + auth path). The
+end-to-end `verify` is executably faithful to the deployed bytecode
+since 2026-06-12: `lake exe verify-test-vectors` replays all 10 KAT
+vectors through it and asserts the accept/reject decision matches the
+bytecode ground truth (full-verify 10/10, HARD CHECK). The one historic
+divergence — `chainHash` stepping the WOTS chain position through the
+ADRS chain-index field instead of `chain_pos` — is documented in
+`Spec/Hash.lean` and `docs/A3_1_VERIFIER_GAP.md`.
+(`defaultSignature` below is the round-trip serialiser's zero shape,
+not the decoder.)
 -/
 
 import SphincsCVerify.Spec.Hypertree

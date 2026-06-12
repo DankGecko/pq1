@@ -1,174 +1,104 @@
-# A3.1 — the verifier functional-equivalence gap (honest status)
+# A3.1 — the verifier functional-equivalence gap (RESOLVED 2026-06-12)
 
-**Date:** 2026-06-11. **Severity:** verification-stack honesty (no on-chain
-exploit; the deployed verifier itself is unchanged and is exercised by the
-on-bytecode KAT + mutant screen below). **Status of the headline
-`theft_free` proof:** unaffected at the kernel level — but the gap below
-bounds exactly how far A3.1 connects that proof to the verifier bytecode.
+**Original date:** 2026-06-11. **Resolved:** 2026-06-12. This document is
+kept as the postmortem of record: what the gap was, what the *actual* root
+cause turned out to be (the original diagnosis below was partially wrong),
+how it was closed, and what residual remains (GAP-2 — the ∀-signature
+equivalence — which is tracked in `MISSING_FOR_FULL_BYTECODE_PROOF.md`,
+not here).
 
-## TL;DR
+## TL;DR (post-resolution)
 
-The Lean SPHINCS+C10 verifier spec (`Spec.Signature.verify`) had **never
-been executed on a concrete signature** until 2026-06-11. When run against
-the 10 shared KAT vectors (`lake exe verify-test-vectors`), it returns
-`false` on the **valid** vectors. So the Lean verifier model is **not
-functionally faithful** to the deployed bytecode, and the previously
-advertised "three-way Rust ↔ Solidity ↔ Lean KAT differential" for A3.1
-was, on the Lean leg, a stub (a print statement). This document records
-the precise gap, what *is* validated, and what closing it requires.
+The Lean SPHINCS+C10 verifier spec (`Spec.Signature.verify`) had never been
+executed on a concrete signature until 2026-06-11; it returned `false` on
+the valid KAT vectors the deployed bytecode accepts, so the A3.1 axiom
+(`∀ inputs, bytecode = verifyYulModel`) was **false as stated**.
 
-## What the runner shows
+On 2026-06-12 the divergence was localised by a byte-level differential
+oracle (`scripts/gap1_differential.py` — an exact Python transliteration of
+the deployed Yul, traced per-intermediate, against an exact replica of the
+Lean spec) to **two one-line semantic defects, both in the Lean model**:
 
-`lake exe verify-test-vectors` replays all 10 vectors through the
-executable spec and reports three sub-layers:
+1. **`Spec.Hash.chainHash` stepped the WOTS chain position through the
+   wrong ADRS field.** It called `Adrs.setChainIndex` (bytes [20..24)) per
+   step — overwriting the chain index `i` the caller had set — where the
+   Rust signer (`hash.rs::chain_hash`, `a[24..28) = pos`) and the deployed
+   Yul (`or(chainBase, shl(32, add(digit, step)))`) thread the position
+   through the `chain_pos` field (bytes [24..28)) and preserve the index.
+   Fix: new `Adrs.setChainPos` + one-line change in `chainHash`.
+
+2. **`ByteVec.loadWord32` returned an all-zero word for any read crossing
+   the end of the signature.** `calldataload` semantics zero-pad only the
+   bytes *past* the end; the deployed verifier's final layer-1
+   Merkle-sibling read sits at offset 3992 of the 4008-byte signature, so
+   the real bytes [3992..4008) ‖ 16 zero bytes must be returned. The
+   pre-fix definition zeroed the entire word, destroying the last sibling
+   of the layer-1 auth path. Fix: partial-read + zero-pad in the
+   out-of-bounds branch.
+
+With both fixed, `lake exe verify-test-vectors` reports **full-verify
+10/10** and `requireFullVerify = true` makes it a **hard check** (non-zero
+exit on any future drift). `verifyRefined_eq_spec` remains `rfl`; the full
+proof stack builds with 0 `sorry` and an unchanged axiom closure.
+
+## Correction to the original diagnosis
+
+The 2026-06-11 version of this document attributed the failure to the
+**ADRS bit-layout of `Spec.Adrs.make`** ("clean structured address" vs the
+Yul's "ad-hoc packed words") and claimed the failure point was the
+**layer-0 digit-sum gate** (`pkFromSig → none`). Both were wrong:
+
+* `Spec.Adrs.make`'s field placement (layer ‖ tree(8) ‖ atype ‖ kp ‖ ci ‖
+  cp ‖ ha) is **byte-identical** to every packed word the Yul constructs.
+  The digest, FORS forest (all 13 roots), forsPk, layer-0 WOTS digest and
+  layer-0 digit sum were **already byte-faithful** before the fix — the
+  differential proved this per-intermediate.
+* The first divergence was the layer-0 **chain endpoints** (defect 1).
+  The digit-sum failure observed at *layer 1* was a downstream symptom:
+  wrong endpoints → wrong layer-0 WOTS pk → wrong subtree root → wrong
+  layer-1 `currentNode` → garbage layer-1 WOTS digest → digit-sum ≠ 205.
+
+Lesson recorded for the next gap of this shape: diagnose with an
+executable per-intermediate differential **before** writing the
+root-cause narrative. The masking structure ("gate fails first") invited
+a plausible-but-wrong story that survived a day in the ledger.
+
+## What the runner shows (since 2026-06-12)
 
 | Sub-layer | Lean function | Result vs bytecode ground truth |
 |---|---|---|
 | hMsg **digest** | `Spec.Hash.hMsg` (over `Spec.Sha256Impl`) | **10/10 byte-exact** (HARD CHECK) |
 | **htIdx** extraction | `Util.extractHtIndex` | **10/10 exact** (HARD CHECK) |
-| **full functional verify** | `Spec.Signature.verify` | **valid vectors return `false`** — GAP |
+| **full functional verify** | `Spec.Signature.verify` | **10/10 accept/reject agreement** (HARD CHECK) |
 
-So the SHA-256 reference, the `hMsg` preimage layout, and the hypertree-leaf
-index extraction are genuinely faithful (a real Lean-SHA256 ↔ FIPS ↔
-deployed-digest cross-check). The divergence is strictly **downstream of the
-digest**, in the reconstruction layer.
+Reproduce: `cd contracts/verification && make verify` (or
+`python3 scripts/gap1_differential.py [--lean-fixed]` for the standalone
+byte-level oracle with per-intermediate tracing).
 
-## Where it diverges (localised)
+## What this does and does NOT establish
 
-`Spec.Hypertree.verifyWithDigest` reaches `Spec.Wots.pkFromSig`, which
-recomputes the WOTS+C digest and checks `digitSum digits = TargetSum`
-(= 205). On the valid vectors this check **fails** (`pkFromSig` → `none` →
-`verifyHypertree` → `none` → `verify` → `false`). The first-order cause is
-the **ADRS bit-layout**: the Lean `Spec.Adrs.make` builds a clean
-structured 32-byte address (`layer ‖ tree ‖ atype ‖ kp ‖ ci ‖ cp ‖ ha`)
-intended to "mirror `address.rs`", whereas the deployed Yul packs ad-hoc
-words such as
+* It **does** make A3.1 no longer refuted: no known input distinguishes
+  `Spec.Signature.verify` from the deployed bytecode. The three-way
+  Rust ↔ Solidity ↔ Lean differential is now real on every layer.
+* It does **not** prove the universally-quantified A3.1. Equality at 10
+  corpus points (+ the ~250-mutant wrong-accept screen on the bytecode
+  side) is testing-grade evidence. The ∀-signature equivalence over
+  4008-byte signatures remains open — and remains **intractable under
+  uninterpreted SHA-256** (the verifier branches on base-`w` digits of
+  `sha256(seed‖adrs‖node‖count)`; with SHA-256 uninterpreted every digit
+  is an unconstrained symbolic value and the path set explodes). Closing
+  it needs interpreted-hash reachability (Kontrol/KEVM) or verified
+  compilation (Verity). That is **GAP-2** in
+  `MISSING_FOR_FULL_BYTECODE_PROOF.md` and is why A3.1's ledger entry
+  stays `discharged-bytecode-partial` (functional layer now
+  corpus-discharged by executable differential; ∀-layer open).
 
-```
-wotsAdrs := or(shl(224, layer), or(shl(160, idxTree), shl(96, idxLeaf)))
-chainBase := and(or(wotsAdrs, shl(64, i)), 0xFF..FF00000000FFFFFFFF)
-pkAdrs   := or(shl(224,layer), or(shl(160,idxTree), or(shl(128,1), shl(96,idxLeaf))))
-treeAdrs := or(shl(224,layer), or(shl(160,idxTree), shl(128,2)))
-```
+## Closure criteria (met)
 
-with the per-chain index threaded at `shl(64, i)` and the chain position at
-`shl(32, digit+step)`. For the recomputed WOTS digest (hence the digit sum,
-hence every chain endpoint and the Merkle path) to match, the Lean ADRS
-bytes must equal these packed words **byte-for-byte** at every call site.
-They evidently do not. Because the digit-sum gate fails first, any further
-divergences in the FORS / WOTS chain / subtree-Merkle reconstruction are
-currently **masked** and not yet individually characterised.
-
-## The sharp consequence: the A3.1 axiom is currently FALSE as stated
-
-`solidityVerifier_compiles_correctly` (A3.1) asserts
-
-```
-∀ pkSeed pkRoot message sig,
-  DeployedBytecode.SPHINCsC10Asm_verify pkSeed pkRoot message sig
-    = verifyYulModel pkSeed pkRoot message sig
-```
-
-We have **exhibited a concrete counterexample**: on KAT `valid-1` the
-deployed bytecode returns `true` while `verifyYulModel` (= `verifyRefined`
-= `Spec.Signature.verify`) returns `false`. So the universally-quantified
-equality is **false**, and A3.1 is not "partially discharged" — as written
-it is a **false axiom**.
-
-Two precise implications, kept separate so neither is over- or under-stated:
-
-* **Formally:** `theft_free` is still kernel-checked; Lean does not know or
-  care that A3.1 is false. But a proof resting on a false axiom carries no
-  real-world force — and worse, a false axiom is *inconsistent with reality*,
-  so the axiom base could in principle derive contradictory conclusions.
-  The kernel "green" is therefore **not** evidence of bytecode-level
-  security on the verifier dimension.
-
-* **Operationally (why no on-chain bug):** the **deployed** verifier is the
-  Rust-signer's matched pair and is exercised directly by the bytecode KAT +
-  mutant screen (all PASS). The falsity is in the *Lean model*, not the
-  contract. Nothing on-chain is broken; what is broken is the *claim that the
-  Lean proof reaches the verifier bytecode*.
-
-**Required correction (either path):**
-1. Make `Spec.Signature.verify` executably faithful (so the equality holds
-   and A3.1 becomes true + discharged), **or**
-2. Restate A3.1 honestly: drop the verifier-functional equality from the
-   formal bridge and record the verifier's correctness as an **empirical /
-   cited** assumption (bytecode KAT + mutant screen + the Rust↔Solidity
-   matched-pair), i.e. treat the verifier like A2/A4/A5 (cited-TCB) rather
-   than as a discharged bytecode bridge.
-
-Until one of these lands, the project must NOT claim the verifier is
-"mathematically proven to the bytecode."
-
-## What this does and does NOT mean
-
-* It does **not** mean the deployed verifier is wrong. The deployed
-  `SPHINCsC10Asm.verify` bytecode **accepts** all four valid vectors
-  (`forge test --match-test test_verifyAllKatVectors`, PASS) and **rejects**
-  every member of the ~250-mutant wrong-accept screen
-  (`SPHINCsC10AsmAdversarial.t.sol`, PASS) and the 6 negative KAT vectors.
-  The Rust signer and the Solidity verifier are a validated matched pair.
-
-* It **does** mean A3.1's *formal* leg is weaker than the prior docs
-  implied. The chain
-  `Spec.Signature.verify → verifyRefined (rfl) → verifyYulModel (rfl) →
-  [A3.1 axiom] → deployed bytecode` is internally consistent, but its
-  left end (`Spec.Signature.verify`) does not compute the function the
-  deployed bytecode computes. So the Lean refinement establishes
-  *internal* structure, not *external* faithfulness, on the reconstruction
-  layer. The FORS-`htIdx` ADRS binding added in `fcee705a` is **structural
-  only** — it was never executably confirmed against a vector.
-
-## Corrected A3.1 evidence ledger
-
-A3.1 (`solidityVerifier_compiles_correctly`) is **`discharged-bytecode-partial`**,
-and the honest decomposition is:
-
-1. **Digest + index layer** — executable Lean ↔ FIPS ↔ bytecode KAT, 10/10
-   (`lake exe verify-test-vectors`, HARD CHECK). *New, real.*
-2. **Input gates** — Halmos over the deployed bytecode (length revert,
-   N-mask reject), 3 rules (`HalmosVerifier.t.sol`).
-3. **Functional behaviour (FORS/WOTS+C/Merkle/hypertree)** — **empirical
-   only**: the 10-vector positive KAT + the ~250-mutant wrong-accept screen,
-   both on the deployed bytecode. **No formal ∀-signature equivalence**, and
-   **no executable Lean cross-check** (this gap). This is the named residual.
-
-The earlier phrasing "Lean refinement (incl. FORS htIdx) + 10 KAT vectors"
-must be read as: *structural* Lean refinement (not executably faithful on
-reconstruction) + *bytecode-side* KAT (the Rust↔Solidity leg is real; the
-Lean leg validates only the digest/index sub-layer).
-
-## Why it is not closed in-session
-
-Making `Spec.Signature.verify` executably faithful is a **bit-exact
-reimplementation-and-validation** of the WOTS+C and hypertree ADRS layer
-(≥4 distinct packings + index threading + the count/target-sum grind +
-subtree Merkle ordering), each cross-checked against Rust/Yul intermediates.
-That is a multi-day effort with compounding-bug risk, not a localized fix —
-exactly the work the verified-compilation path
-(`PATH_TO_VERIFIED_BYTECODE.md`, Verity) or an interpreted-hash symbolic
-discharge (Kontrol/KEVM) is meant to absorb.
-
-## Closure criteria (when this doc can be deleted)
-
-* `lake exe verify-test-vectors` reports **full verify 10/10** and
-  `requireFullVerify` in `Main.lean` is flipped to `true` (hard check); **and**
-* the Lean `Spec.Signature.verify` digest/index/reconstruction all match on
-  the corpus, with `verifyRefined_eq_spec` still `rfl`; **then**
-* A3.1 can be promoted from `discharged-bytecode-partial` to
-  `discharged-bytecode` for the functional layer (the ∀-signature symbolic
-  equivalence over a 4008-byte sig remains intractable under uninterpreted
-  SHA-256 regardless — see below).
-
-## The deeper ∀-signature ceiling (separate from this gap)
-
-Even a perfectly faithful executable Lean spec would not give a *symbolic*
-∀-signature equivalence on the bytecode under Halmos: the verifier branches
-on base-`w` digits of `sha256(seed‖adrs‖node‖count)`, and with SHA-256 an
-**uninterpreted** function (= axiom A1) every digit is an unconstrained
-symbolic value, so the path set explodes and no UF-based symbolic engine can
-close it. Closing *that* needs an interpreted-hash reachability tool
-(Kontrol/KEVM) or verified compilation (Verity). This is why A3.1 stays
-`-partial` independently of the reconstruction gap above.
+* ✅ `lake exe verify-test-vectors` reports **full verify 10/10** and
+  `requireFullVerify` in `Main.lean` is `true` (hard check);
+* ✅ digest/index/reconstruction all match on the corpus, with
+  `verifyRefined_eq_spec` still `rfl`;
+* ✅ A3.1 promoted: functional layer `discharged-bytecode` on the corpus
+  (executable Lean differential), ∀-signature residual explicitly named
+  (GAP-2). See `AXIOM_STATUS.json`.

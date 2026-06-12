@@ -178,7 +178,19 @@ def hMsg
 /-! ## WOTS chain hashing -/
 
 /-- Iterative chain hash: apply `th` for `steps` iterations, starting
-    from position `start_pos`. -/
+    from position `start_pos`.
+
+    Each step threads the position through the ADRS `chain_pos` field
+    (bytes [24..28)) — `setChainPos`, NOT `setChainIndex` — exactly as
+    the Rust `chain_hash` (`a[24..28) = pos`) and the deployed Yul
+    (`or(chainBase, shl(32, add(digit, step)))`) do. The caller's
+    `chain_index` (bytes [20..24)) is preserved across every step.
+
+    HISTORY: until 2026-06-12 this function advanced the position via
+    `setChainIndex`, which wrote the wrong ADRS field and erased the
+    chain index — the single divergence behind the A3.1 reconstruction
+    gap (`docs/A3_1_VERIFIER_GAP.md`). Validated fixed by
+    `lake exe verify-test-vectors` full-verify 10/10 (hard check). -/
 def chainHash
     (seed : ByteVec 32) (a : Adrs) (val : ByteVec 16)
     (startPos steps : Nat) : ByteVec 16 :=
@@ -187,7 +199,7 @@ def chainHash
     | 0 => current
     | i+1 =>
       let pos := startPos + (steps - 1 - i)  -- traverse forward
-      let a' := Adrs.setChainIndex a (UInt32.ofNat pos)
+      let a' := Adrs.setChainPos a (UInt32.ofNat pos)
       let next := th seed a' (pad16 current)
       aux i next
   aux steps val

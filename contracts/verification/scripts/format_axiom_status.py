@@ -137,7 +137,10 @@ def main() -> int:
     placeholder = summary["placeholder_true_typed"]
     misleading = summary["misleading"]
     cited = summary["cited_tcb"]
-    discharged = summary["discharged"]
+    # schema v2 renamed `discharged` -> `discharged_bytecode`; accept both
+    discharged = summary.get("discharged", summary.get("discharged_bytecode"))
+    if discharged is None:
+        raise KeyError("summary lacks discharged/discharged_bytecode")
     kernel = summary["kernel_tcb"]
     print(f"  Summary: {total} axiom(s) in closure;",
           f"{RED}{placeholder} placeholder{RESET},",

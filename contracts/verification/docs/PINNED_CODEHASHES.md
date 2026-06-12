@@ -51,12 +51,13 @@ pinned value below. Any drift fails CI.
 >     artifact, which had not been re-run after the codehash moved.)
 >   * **A3.1 (verifier)** — `discharged-bytecode-partial`: 3 input-gate rules
 >     (length/N-mask) on `0xf1ef…fef5` by Halmos; an executable
->     Lean↔FIPS↔bytecode KAT on the digest/htIdx sub-layers (`lake exe
->     verify-test-vectors`, 10/10); the full SHA-256-heavy functional
->     equivalence is EMPIRICAL only (bytecode 10-vector KAT + ~250-mutant
->     screen). The Lean refinement (`verifyRefined_eq_spec`) is `rfl` over a
->     spec that is NOT executably faithful on reconstruction — the A3.1
->     equality is currently false as stated; see `docs/A3_1_VERIFIER_GAP.md`.
+>     Lean↔FIPS↔bytecode differential on digest, htIdx AND the full
+>     functional verify (`lake exe verify-test-vectors`, each 10/10, all
+>     HARD CHECKS since 2026-06-12); bytecode-side 10-vector KAT +
+>     ~250-mutant screen. The Lean refinement (`verifyRefined_eq_spec`,
+>     `rfl`) now sits over an executably-faithful spec; the remaining
+>     residual is the ∀-signature symbolic equivalence (GAP-2) — see the
+>     postmortem in `docs/A3_1_VERIFIER_GAP.md`.
 > Reproduce: `make -C contracts/verification verify-bytecode`. SHA-256 is an
 > uninterpreted function in every Halmos run (the named A1 boundary).
 

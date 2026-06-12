@@ -202,15 +202,17 @@ in [`docs/AXIOM_STATUS.json`](docs/AXIOM_STATUS.json):
   — `discharged-bytecode` (pointwise equivalence to the Lean models;
   the execute money-path over a **symbolic ∀ ownerIndex**).
 - **A3.1 verifier** — `discharged-bytecode-partial`: input gates on
-  bytecode + an executable Lean↔FIPS↔bytecode KAT on the **digest/htIdx
-  sub-layers** + the bytecode-side 10-vector KAT + a ≈250-mutant
-  adversarial screen. The **FORS/WOTS+C/Merkle functional layer is
-  EMPIRICAL only**; the Lean spec is not executably faithful there (the
-  A3.1 equality is currently **false as stated** — `Spec.Signature.verify`
-  returns `false` on valid vectors). See
-  [`docs/A3_1_VERIFIER_GAP.md`](docs/A3_1_VERIFIER_GAP.md). This is the
-  reason an unqualified "verifier proven to bytecode" claim is NOT yet
-  supportable.
+  bytecode + an executable Lean↔FIPS↔bytecode differential covering the
+  **digest, htIdx, AND the full functional verify** (each 10/10, all
+  HARD CHECKS since 2026-06-12 — `Spec.Signature.verify` reproduces the
+  deployed bytecode's accept/reject decision on the entire KAT corpus) +
+  the bytecode-side 10-vector KAT + a ≈250-mutant adversarial screen.
+  The remaining residual is the **∀-signature symbolic equivalence**
+  (corpus-validated, not proven — GAP-2; intractable under uninterpreted
+  SHA-256, needs Kontrol/KEVM or Verity). See the postmortem in
+  [`docs/A3_1_VERIFIER_GAP.md`](docs/A3_1_VERIFIER_GAP.md). This residual
+  is the reason an unqualified "verifier proven to bytecode" claim is
+  still not supportable.
 - **A1 SHA-256** — uninterpreted in every Halmos run (the named boundary).
 - **A2 EntryPoint / A4 EVM / A5 EUF-CMA** — cited-TCB by decision. The
   emitted-CALL byte-delivery on the execute path lives in A4.
