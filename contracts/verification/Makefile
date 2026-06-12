@@ -222,3 +222,50 @@ extract-u256-mul:
 	@diff -u $(EXTRACTED_DIR)/Extracted/U256Mul/Funs.lean /tmp/pqsigner-extract/mout/Funs.fixed.lean \
 	  && echo "OK: committed u256-mul extraction matches the current Rust" \
 	  || { echo "DRIFT: tx-core/src/eip1559.rs changed — re-extract, re-prove, re-commit"; exit 1; }
+
+# §33 rank 6 — merkle::verify_auth_path (XMSS auth-path walk; th_pair opaque →
+# th_pair_pure axiom in Merkle/FunsExternal.lean). The dedup filter drops the
+# re-extracted make_adrs / params.H duplicates and imports their canonical homes.
+.PHONY: extract-merkle-verify
+extract-merkle-verify:
+	@mkdir -p /tmp/pqsigner-extract
+	@cd $(REPO_ROOT)/sphincs-c10 && RUSTFLAGS="--cfg lean_extract" \
+	  $(PQLEAN)/charon cargo --preset=aeneas --opaque sha2 --opaque zeroize \
+	  --opaque 'sphincs_c10::hash::th_pair' \
+	  --start-from 'sphincs_c10::merkle::verify_auth_path' \
+	  --dest-file /tmp/pqsigner-extract/merkle.llbc 2>&1 | tail -1
+	@rm -rf /tmp/pqsigner-extract/mkout && mkdir -p /tmp/pqsigner-extract/mkout
+	@$(PQLEAN)/aeneas -backend lean -dest /tmp/pqsigner-extract/mkout -split-files /tmp/pqsigner-extract/merkle.llbc
+	@python3 scripts/dedup_extraction.py /tmp/pqsigner-extract/mkout/Funs.lean /tmp/pqsigner-extract/mkout/Funs.fixed.lean \
+	  --sed-import 'Merkle.=Extracted.Merkle.' \
+	  --kill 'sphincs_c10::address::make_adrs' --kill 'sphincs_c10::params::H' \
+	  --add-import Extracted.Adrs --add-import Extracted.Fors.Funs
+	@diff -u $(EXTRACTED_DIR)/Extracted/Merkle/Funs.lean /tmp/pqsigner-extract/mkout/Funs.fixed.lean \
+	  && echo "OK: committed merkle extraction matches the current Rust" \
+	  || { echo "DRIFT: sphincs-c10/src/merkle.rs changed — re-extract, re-prove, re-commit"; exit 1; }
+
+# §33 rank 5 — wots::pk_from_sig (verifier-side WOTS+C; wots_digest/chain_hash/
+# th_multi opaque → _pure axioms in PkFromSig/FunsExternal.lean; dedup drops
+# the re-extracted make_adrs/set_chain_index/extract_digits/params/pad16).
+.PHONY: extract-wots-pkfromsig
+extract-wots-pkfromsig:
+	@mkdir -p /tmp/pqsigner-extract
+	@cd $(REPO_ROOT)/sphincs-c10 && RUSTFLAGS="--cfg lean_extract" \
+	  $(PQLEAN)/charon cargo --preset=aeneas --opaque sha2 --opaque zeroize \
+	  --opaque 'sphincs_c10::hash::chain_hash' --opaque 'sphincs_c10::hash::th_multi' \
+	  --opaque 'sphincs_c10::hash::wots_digest' \
+	  --start-from 'sphincs_c10::wots::pk_from_sig' \
+	  --dest-file /tmp/pqsigner-extract/pkfs.llbc 2>&1 | tail -1
+	@rm -rf /tmp/pqsigner-extract/pout && mkdir -p /tmp/pqsigner-extract/pout
+	@$(PQLEAN)/aeneas -backend lean -dest /tmp/pqsigner-extract/pout -split-files /tmp/pqsigner-extract/pkfs.llbc
+	@python3 scripts/dedup_extraction.py /tmp/pqsigner-extract/pout/Funs.lean /tmp/pqsigner-extract/pout/Funs.fixed.lean \
+	  --sed-import 'Pkfs.=Extracted.PkFromSig.' \
+	  --kill 'sphincs_c10::address::make_adrs' --kill 'sphincs_c10::address::set_chain_index' \
+	  --kill 'sphincs_c10::wots::extract_digits' \
+	  --kill 'sphincs_c10::params::W' --kill 'sphincs_c10::params::LOG_W' \
+	  --kill 'sphincs_c10::params::L' --kill 'sphincs_c10::params::W_MASK' \
+	  --kill 'sphincs_c10::hash::pad16' --kill 'sphincs_c10::params::N' \
+	  --add-import Extracted.Adrs --add-import Extracted.Wots.Funs --add-import Extracted.Merkle.Funs
+	@diff -u $(EXTRACTED_DIR)/Extracted/PkFromSig/Funs.lean /tmp/pqsigner-extract/pout/Funs.fixed.lean \
+	  && echo "OK: committed pk_from_sig extraction matches the current Rust" \
+	  || { echo "DRIFT: sphincs-c10/src/wots.rs changed — re-extract, re-prove, re-commit"; exit 1; }

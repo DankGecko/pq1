@@ -74,3 +74,30 @@ setSlice! 7 ver(4) setSlice! 11 sh(32) setSlice! 43 nh(32) = tag++ver++sh++nh.
 Then step* + Subtype.ext + the buf lemma. U32.to_be_bytes gives
 List.map UScalar.mk fw_version.bv.toBEBytes, length 4 by toBEBytes_length.
 No hash, no axioms — should be the easiest goal in the queue."""
+
+[[goal]]
+module  = "Extracted.MerkleVerifySpec"  # rank 6: XMSS auth-path walk
+context = """One sorry. loop.spec_decr_nat over the 9-step walk; invariant:
+(node_k, idx_k) = (authFold (auth.take k) leaf idx 0, idx >>> k). Per step:
+make_adrs_spec (AdrsEquiv, PROVEN) pins the adrs bytes = specMakeAdrs; bridge
+to treeAdrs via entries-<256 injectivity (a.val.map (·.val) = specMakeAdrs →
+a = treeAdrs since BitVec.ofNat inverts toNat below 256 — clone map_val_mk).
+hash.pad16 steps to the pure pad16p (unfold, SetSliceLemmas one-slot).
+idx &&& 1 = idx % 2 and idx >>> 1 = idx / 2 by scalar_tac/UScalar lemmas.
+th_pair_pure fires via the @[step] th_pair_spec. List.take/getElem!
+bookkeeping like rank 2."""
+
+[[goal]]
+module  = "Extracted.PkFromSigSpec"     # rank 5: verifier-side WOTS+C (HARDEST)
+context = """One sorry, the campaign's hardest. Prefix: step* — pad16 → pure
+pad16p, make_adrs_spec → adrsArr (same <256-injectivity bridge as rank 6),
+wots_digest_pure via @[step]. Then extract_digits_spec (WotsDigits, PROVEN)
+gives digits[j].val = wotsDigit d j. loop0 = digit-sum fold: invariant
+sum_k.val = Σ_{j<k} wotsDigit d j (List.range sum lemmas); the != 205 gate
+if-splits (TARGET_SUM is irreducible — simp only [params.TARGET_SUM] first).
+loop1: invariant ∀ j<k, pk_elements[j]! = chain_hash_pure …; per step
+set_chain_index bridges via specSetChainIndex = take 20 ++ u32be ci ++ drop 24
+= specMakeAdrs with ci (pure list identity, simp). The U32 subtraction
+(W-1) - digit needs digit < 8 (from wotsDigit def, Nat.mod_lt) → no wrap
+(scalar_tac with the bound in context). Final th_multi_pure via @[step];
+slice ext by Subtype.ext + the loop1 invariant at k=43."""

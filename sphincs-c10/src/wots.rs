@@ -150,8 +150,13 @@ pub fn pk_from_sig(
     let d = wots_digest(seed, &wots_adrs, &padded, count);
     let digits = extract_digits(&d);
 
-    // Verify digit sum
-    let sum: usize = digits.iter().map(|&d| d as usize).sum();
+    // Verify digit sum. Indexed form instead of iter().map().sum() so the
+    // Aeneas model is a plain Range loop, not closure/iterator-adapter
+    // axioms — see contracts/verification §33 rank 5. Identical sum.
+    let mut sum: usize = 0;
+    for i in 0..L {
+        sum += digits[i] as usize;
+    }
     if sum != TARGET_SUM {
         return [0u8; N]; // Invalid: digit sum doesn't match
     }
