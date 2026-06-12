@@ -15,3 +15,4 @@ import Extracted.Bip39RoundtripSpec
 import Extracted.RlpIntSpec
 import Extracted.U256MulSpec
 import Extracted.MerkleVerifySpec
+import Extracted.TxMerkleSpec

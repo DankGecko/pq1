@@ -109,8 +109,12 @@ set_chain_index bridges via specSetChainIndex = take 20 ++ u32be ci ++ drop 24
 (scalar_tac with the bound in context). Final th_multi_pure via @[step];
 slice ext by Subtype.ext + the loop1 invariant at k=43."""
 
-[[goal]]
-module  = "Extracted.TxMerkleSpec"      # rank 11: trust-bundle merkle verify
+# DONE 2026-06-12 (frontier, lean-lsp-mcp): verify_proof_spec PROVEN — two
+# content axioms leaf_hash_pure/node_hash_pure (the sha256 boundaries).
+# NOTE: statement gained hdepth precondition (depth*32 ≤ Usize.max) — forced
+# by the extracted code (the multiply precedes the length check).
+# [[goal]]
+module_done_11 = "Extracted.TxMerkleSpec"      # rank 11: trust-bundle merkle verify
 context = """One sorry, an IFF (both directions). Rank-6 method: loop invariant
 (h_k, idx_k) = (merkleFold ((range k).map (chunk32 …)) leafHash idx, idx >>> k).
 Under the length gate the slice index [l*32, l*32+32) is in bounds and

@@ -15,6 +15,7 @@ import Extracted.Bip39RoundtripSpec
 import Extracted.RlpIntSpec
 import Extracted.U256MulSpec
 import Extracted.MerkleVerifySpec
+import Extracted.TxMerkleSpec
 import Extracted.UserOpEquiv
 import Extracted.UserOpEquivByteLayout
 import Extracted.SpecBridge
@@ -46,3 +47,4 @@ import Extracted.ForsLoop
 #print axioms Extracted.Equiv.bytes_to_u256_spec
 #print axioms Extracted.Equiv.saturating_mul_u64_spec
 #print axioms Extracted.Equiv.verify_auth_path_spec
+#print axioms Extracted.Equiv.verify_proof_spec
