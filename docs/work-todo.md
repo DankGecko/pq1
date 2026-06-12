@@ -2076,7 +2076,38 @@ compiler/silicon/FI/SCA — those stay with `tools/sca` + silicon validation.
             PQC2022; EUF-CMA reduction cited as TCB (Barbosa et al.
             ASIACRYPT 2024 + the +C transition paper) in AXIOM_STATUS.json.
             No action needed beyond keeping the discipline for new Spec
-            modules (FORS/hypertree P3 extensions).
+            modules (FORS/hypertree P3 extensions). NOTE `Spec/Sha256Impl.lean`
+            is already a kernel-computable FIPS 180-4 §-by-§ transcription
+            (scroll-fv port) wired as the body of `sha256` — the one standard
+            we follow unmodified is already transcription-specced.
+      FIPS-spec follow-ups (2026-06-12 assessment of "should we consider
+      the FIPS specs"):
+      - [ ] **CAVP vectors for Sha256Impl:** run the official NIST CAVP
+            SHA-256 suite (SHA256ShortMsg.rsp / LongMsg.rsp + Monte Carlo,
+            hundreds of vectors) through `Spec/Sha256Impl.lean` in the
+            `verify-test-vectors` runner — today only the 10 SPHINCS KATs
+            exercise it. Cheap; makes the FIPS 180-4 grounding empirical.
+      - [ ] **Collapse the §33 hash axioms onto FIPS 180-4 (high value):**
+            redefine the six opaque content axioms (`th_pair/th_multi/
+            chain_hash/wots_digest/leaf_hash/node_hash _pure` in
+            `extracted/Extracted/*/FunsExternal.lean`) as their documented
+            domain-separated preimage constructions over ONE `sha256`
+            function; prove the preimage-layout halves with the existing
+            §33 byte-layout method (SetSliceLemmas / ext_getElem!); pin the
+            single `sha256` to the FIPS-transcribed `Sha256Impl` via the
+            vendored-bridge pattern (clone `specMakeAdrs_eq_vendored`).
+            End state: the whole 12-rank catalog's hash trust = one
+            line-by-line-FIPS-reviewable, CAVP-tested definition instead of
+            7 opaque axioms (keccak256_pure stays separate — EVM keccak is
+            deliberately NOT FIPS 202; pinned by EVM KATs).
+      - [ ] **C10 ↔ FIPS 205 delta-audit document:** one-time walk of every
+            FIPS 205 algorithm (wots_pkFromSig, fors_pkFromSig, ht_verify,
+            slh_verify, ADRS §4.2-4.3, message digest) recording per-line:
+            same / deviates-cite-SPHINCS+C / deviates-cite-frozen-Yul. NOT
+            a re-spec (C10 deviates by design; lineage = SPHINCS+ v3 +
+            SPHINCS+C paper). Catches the unknown-accidental-deviation
+            class (= what A3.1 was) and doubles as the auditor/grant-facing
+            "relation to the NIST standard" doc P5's EF application needs.
 - [ ] **P5 — composition + outreach (post-Oct).** sign∘verify end-to-end;
       Tier B targets; EF Verified-zkEVM grant application
       (verified-zkevm@ethereum.org, program winds down ~end-2026) — pitch:
