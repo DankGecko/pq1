@@ -21,7 +21,9 @@ bridge from scratch via testBit + Nat.add carry-freeness)."""
 #   extract_ht_index_spec, extract_fors_indices_spec.
 # rank 3 DONE 2026-06-12 (Eip1271Equiv.lean): domain_separator_spec,
 #   replay_safe_hash_spec (kernel-clean, default target).
-# Next: rank 4 — wots extract_digits (composes read_bits_le_spec like rank 2).
+# rank 4 DONE 2026-06-12 (WotsDigits.lean): extract_digits_spec + extract_digits_lt
+#   (kernel-clean, default target). Independent extractor = same window as rank 1.
+# Next: rank 5 — wots pk_from_sig (consumes extract_digits_lt; opaque chain_hash/th_multi).
 #
 # [[goal]]
 # module  = "Extracted.SpecBridgeFors"  # rank 2: vendored-bridge for ht_idx

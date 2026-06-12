@@ -9,3 +9,4 @@ import Extracted.ForsLoop
 import Extracted.Bits
 import Extracted.ForsExtract
 import Extracted.Eip1271Equiv
+import Extracted.WotsDigits
