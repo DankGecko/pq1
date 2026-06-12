@@ -20,15 +20,18 @@ pub fn extract_digits(digest: &[u8; 32]) -> [u8; L] {
     //
     // In big-endian bytes, bit 0 is the LSB of byte[31].
     let mut digits = [0u8; L];
-    // Convert to a bit-extraction view: work from the least significant byte
-    let mut bit_offset = 0usize;
-    for digit in digits.iter_mut() {
+    // Indexed form (bit_offset = i*LOG_W is the identical sequence the running
+    // accumulator produced) so the Aeneas model is a Range loop + indexed
+    // write — see contracts/verification §33 rank 4. Byte-identical; pinned by
+    // extract_digits_matches_window_reference.
+    for i in 0..L {
+        let bit_offset = i * LOG_W;
         let byte_idx = 31 - (bit_offset / 8);
         let bit_in_byte = bit_offset % 8;
 
         if bit_in_byte + LOG_W <= 8 {
             // All bits within one byte
-            *digit = (digest[byte_idx] >> bit_in_byte) & W_MASK;
+            digits[i] = (digest[byte_idx] >> bit_in_byte) & W_MASK;
         } else {
             // Spans two bytes
             let lo = digest[byte_idx] >> bit_in_byte;
@@ -37,9 +40,8 @@ pub fn extract_digits(digest: &[u8; 32]) -> [u8; L] {
             } else {
                 0
             };
-            *digit = (lo | hi) & W_MASK;
+            digits[i] = (lo | hi) & W_MASK;
         }
-        bit_offset += LOG_W;
     }
     digits
 }
@@ -163,4 +165,40 @@ pub fn pk_from_sig(
     }
     let pk_adrs = make_adrs(layer, tree, ADRS_WOTS_PK, kp, 0, 0, 0);
     th_multi(seed, &pk_adrs, &pk_elements)
+}
+
+#[cfg(test)]
+mod extract_digits_tests {
+    use super::*;
+
+    /// Independent reference: the digest is a 256-bit big-endian integer `D`;
+    /// digit `k = (D >> (k*LOG_W)) & W_MASK`. Computed with a uniform 2-byte
+    /// window — deliberately distinct from the branchy production impl, so the
+    /// two agreeing is a real cross-check, not a tautology.
+    fn digit_ref(digest: &[u8; 32], k: usize) -> u8 {
+        let p = k * LOG_W;
+        let q = p / 8; // byte index counted from the LSB end
+        let lo = digest[31 - q] as u32;
+        let hi = if q + 1 < 32 { digest[31 - q - 1] as u32 } else { 0 };
+        let window = (lo | (hi << 8)) >> (p % 8);
+        (window as u8) & W_MASK
+    }
+
+    #[test]
+    fn extract_digits_matches_window_reference() {
+        let mut patterned = [0u8; 32];
+        let mut xored = [0u8; 32];
+        for i in 0..32 {
+            patterned[i] = (i as u8).wrapping_mul(37).wrapping_add(11);
+            xored[i] = 0xA5u8 ^ (i as u8);
+        }
+        let digests: [[u8; 32]; 4] = [[0u8; 32], [0xFFu8; 32], patterned, xored];
+        for d in &digests {
+            let got = extract_digits(d);
+            for k in 0..L {
+                assert_eq!(got[k], digit_ref(d, k), "digit {k} mismatch");
+                assert!((got[k] as usize) < W, "digit {k} out of range");
+            }
+        }
+    }
 }

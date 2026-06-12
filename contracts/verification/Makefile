@@ -158,3 +158,19 @@ extract-aa-eip1271:
 	@diff -u $(EXTRACTED_DIR)/Extracted/Eip1271/Funs.lean /tmp/pqsigner-extract/eout/Funs.fixed.lean \
 	  && echo "OK: committed eip1271 extraction matches the current Rust" \
 	  || { echo "DRIFT: aa/eip1271.rs changed — re-extract, re-prove, re-commit"; exit 1; }
+
+# §33 rank 4 — wots::extract_digits (independent bit-extractor; proven = same
+# closed-form window as read_bits_le). opaque sha2/zeroize like fors.
+.PHONY: extract-wots-digits
+extract-wots-digits:
+	@mkdir -p /tmp/pqsigner-extract
+	@cd $(REPO_ROOT)/sphincs-c10 && RUSTFLAGS="--cfg lean_extract" \
+	  $(PQLEAN)/charon cargo --preset=aeneas --opaque sha2 --opaque zeroize \
+	  --start-from 'sphincs_c10::wots::extract_digits' \
+	  --dest-file /tmp/pqsigner-extract/wots.llbc 2>&1 | tail -1
+	@rm -rf /tmp/pqsigner-extract/wout && mkdir -p /tmp/pqsigner-extract/wout
+	@$(PQLEAN)/aeneas -backend lean -dest /tmp/pqsigner-extract/wout -split-files /tmp/pqsigner-extract/wots.llbc
+	@sed 's/import Wots\./import Extracted.Wots./' /tmp/pqsigner-extract/wout/Funs.lean > /tmp/pqsigner-extract/wout/Funs.fixed.lean
+	@diff -u $(EXTRACTED_DIR)/Extracted/Wots/Funs.lean /tmp/pqsigner-extract/wout/Funs.fixed.lean \
+	  && echo "OK: committed wots extraction matches the current Rust" \
+	  || { echo "DRIFT: sphincs-c10/src/wots.rs changed — re-extract, re-prove, re-commit"; exit 1; }
