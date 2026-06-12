@@ -494,3 +494,42 @@ tracked as **A3.1** (`contracts/verification/docs/A3_1_VERIFIER_GAP.md`,
   codehash `0xf1ef4cce…fcfef5`).
 - **SHA-256 conformance** — FIPS 180-4; 229/229 NIST CAVP vectors via
   `make verify-cavp` (`contracts/verification/cavp/`).
+
+---
+
+## Addendum (2026-06-12, same day): upstream provenance deep-dive
+
+A full examination of the reference repo `github.com/nconsigny/SPHINCS-`
+(clone reviewed at 324 commits, latest 2026-06-12) sharpens the lineage:
+
+- **C10's parameter set originated there** — commit `0516a11` (2026-04-09)
+  introduced c10 with the security curve **sec_14=128, sec_16=128,
+  sec_18=118.3, sec_20=104.5 bits** from its Fluhrer-Dang sweep
+  (`legacy/script/sweep_d2_fluhrer_dang.py`). That table directly validates
+  PQSigner's 65,536 (2^16) per-chain cap as sitting at the 128-bit boundary.
+- **Upstream has retired C10** (superseded by C13); PQSigner is the parameter
+  set's only active user. The C10 ancestor artifacts live in its `legacy/`
+  tree (`legacy/script/signer.py`, `legacy/src/SPHINCs-C10Asm.sol` —
+  keccak-based; PQSigner swapped to SHA-256).
+- **Citation corpus** (upstream `sphincs_parameters_paper_corpus.md`): the
+  WOTS+C/FORS+C family origin is IACR ePrint **2025/2203**; the few-time
+  security formula is Fluhrer & Dang ePrint **2024/018**; background
+  Kölbl-Philipoom ePrint 2022/1725. These join the SPHINCS+C PQC-2022
+  citation already in `Spec/Params.lean`.
+- **Convergent bug discovery:** upstream independently found and fixed the
+  same shared-FORS-forest forgery class (their "Finding C", commit `237ab69`,
+  2026-06-03) that PQSigner fixed as the CWE-347 ht_idx binding — but with a
+  **different binding encoding** (FIPS-style field split vs PQSigner's full
+  `ht_idx` in the 8-byte ADRS tree field). The two implementations are NOT
+  byte-compatible on the bound FORS path; PQSigner's encoding is pinned by
+  its frozen verifier.
+- **Known divergence with a hardening implication:** upstream's current R
+  derivation is `H(sk_seed ‖ "R_grind" ‖ message ‖ nonce)` — secret-keyed and
+  message-bound — adopted to close a chosen-message FORS-saturation analysis
+  (their `docs/SECURITY-ANALYSIS.md` §2 "Avenue B"). PQSigner's R is
+  `H("R_grind" ‖ opt_rand ‖ nonce)`, safe **because production firmware
+  always supplies fresh TRNG `opt_rand`** (`secure/src/crypto.rs:118-123`,
+  errors on RNG failure). Since R derivation is signer-side only (the frozen
+  verifier merely reads R from the signature), adopting the secret-keyed
+  message-bound form is available as defense-in-depth — tracked in
+  `docs/work-todo.md`.

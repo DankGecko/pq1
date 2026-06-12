@@ -2122,12 +2122,77 @@ compiler/silicon/FI/SCA — those stay with `tools/sca` + silicon validation.
             fact-checked against the final standard (caught the
             ipd-vs-final algorithm renumbering). Known A3.1 (Lean spec
             layer) scoped, not resolved.
-      - [ ] **Evaluate "Verity" for the smart-contract verification stack**
-            (user request 2026-06-12): assess what Verity adds beyond the
-            current Halmos + Lean + pinned-codehash stack for
-            PQSmartWallet / factory / SPHINCsC10Asm. First step: confirm
-            which Verity (vendor/tool) is meant and its EVM/Yul coverage,
-            then trial it on the verifier contract.
+      - [ ] **R-derivation hardening (defense-in-depth, signer-side
+            only):** adopt upstream's secret-keyed, message-bound R —
+            `R = H(sk_seed ‖ "R_grind" ‖ opt_rand ‖ message ‖ nonce)` —
+            in `fors::grind_r`, closing the chosen-message FORS-saturation
+            avenue even under TRNG bias/failure (upstream SPHINCS-
+            `docs/SECURITY-ANALYSIS.md` §2 "Avenue B"; their fix C13-X-f2).
+            The frozen on-chain verifier only READS R from the signature,
+            so this changes no deployed artifact — but it changes signer
+            output bytes: regenerate `c10_test_vectors.json` + Solidity
+            KATs + any Lean KAT fixtures together, and re-run the full
+            differential. Also: lift the existing `opt_rand`-mandatory
+            justification in `crypto.rs` comments from "SCA fix (F-9)" to
+            ALSO cite the cryptographic argument (upstream §2).
+      - [ ] **Patched-fork Python oracle (third differential leg):**
+            ~30-40-line patch of upstream `legacy/script/signer.py` c10
+            (keccak→sha256; add PQSigner-shape ht_idx into `fors_secret` +
+            FORS ADRS tree field; add `opt_rand` into `grind_R`) gives an
+            independent Python oracle (self-verifying). Suited to tens of
+            vectors (~600K hashes/sign in pure Python); for bulk copy the
+            upstream `signers/c13-crosscheck/crosscheck.py` architecture
+            (Python↔Rust↔anvil) extended 4-way with
+            `lake exe verify-test-vectors`. License caveat: no root
+            LICENSE upstream — get nconsigny's sign-off before vendoring
+            any code (running it as an oracle is fine).
+      - [ ] **Evaluate Verity (veritylang.com, LFG Labs) for the
+            smart-contract verification stack** (user request 2026-06-12).
+            Identified 2026-06-12: a research-stage **Lean EDSL** — each
+            contract is spec + implementation + machine-checked Lean proof,
+            compiled to EVM via IR→Yul. Constraint: our contracts are
+            FROZEN on Base Mainnet (CREATE2 addresses baked into firmware,
+            invariant #6) — Verity cannot replace deployed artifacts.
+            Realistic scoping to evaluate: (a) write a VERIFIED MIRROR of
+            `SPHINCsC10Asm.verify` in the Verity EDSL and
+            differential-test it against the deployed Yul (strengthens the
+            A3.1-adjacent verifier-functional claims; check first whether
+            its "supported fragment" covers sha256-precompile staticcalls
+            + raw calldata slicing — a 233-line hand-Yul verifier is far
+            from typical EDSL territory); (b) assess whether its Lean EVM/
+            Yul semantics could upgrade our A3.2/A3.3 bridge axioms from
+            Halmos-cited-TCB to Lean proof terms; (c) note its Lean
+            version vs our two toolchains (v4.22 SphincsCVerify /
+            v4.30 extracted). Outcome = a docs/ evaluation note, not an
+            adoption decision. SCOPING UPDATE (same day, from
+            veritylang.com/capabilities + /trust-model): Verity proves
+            spec↔EDSL↔IR↔Yul in Lean (in-Lean Yul interpreter; solc
+            Yul→bytecode trusted; zero project axioms claimed) BUT its
+            proven fragment EXCLUDES exactly what SPHINCsC10Asm is made
+            of — sha256-precompile staticcalls ("not modeled in the proof
+            interpreters"), raw-calldata decoded words (not modeled),
+            positive non-empty loop bodies ("future work"). Verdict: a
+            verified mirror of the C10 verifier is NOT meaningful today;
+            track the project, revisit when loop-body proofs land, and
+            separately evaluate reusing their in-Lean Yul interpreter to
+            upgrade our A3.2/A3.3 bridge axioms from Halmos-cited-TCB
+            toward Lean proof terms. MAJOR UPDATE (same day): the
+            upstream SPHINCS- repo ALREADY uses the verity-framework to
+            prove its C13 verifier refines a functional spec
+            (`verity/` subtree, ~45k LOC, Lean v4.22.0 — SAME toolchain as
+            SphincsCVerify; `c13_refines_spec` with 3 residual assembly
+            axioms, AXIOMS.md/TRUST_ASSUMPTIONS.md documentation pattern).
+            So the demonstrated path is hand-transcribed EVM model +
+            framework refinement — exactly the A3.1-class program — NOT
+            the EDSL fragment. Concrete plan: study their `Spec.lean`
+            two-layer architecture (byte-spec → algorithmic spec, fuel
+            recursion, `Variant` record) as the blueprint for fixing A3.1
+            and possibly porting SphincsCVerify onto the verity-framework
+            for a C10 `verify_refines_spec`. Their `scripts/lean-capped.sh`
+            handles the >64GB `Proofs.lean` OOM. No JARDIN-ADRS Lean
+            instance exists upstream (C10/C11 models deleted) — our
+            delta-audit §6 + the frozen Yul remain the ADRS transcription
+            source.
 - [ ] **P5 — composition + outreach (post-Oct).** sign∘verify end-to-end;
       Tier B targets; EF Verified-zkEVM grant application
       (verified-zkevm@ethereum.org, program winds down ~end-2026) — pitch:
