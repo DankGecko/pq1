@@ -287,3 +287,36 @@ extract-tx-merkle:
 	@diff -u $(EXTRACTED_DIR)/Extracted/TxMerkle/Funs.lean /tmp/pqsigner-extract/tout/Funs.fixed.lean \
 	  && echo "OK: committed tx-merkle extraction matches the current Rust" \
 	  || { echo "DRIFT: tx/src/erc20/merkle.rs changed — re-extract, re-prove, re-commit"; exit 1; }
+
+# §33 rank 9 — bip39 11-bit pack/unpack round-trip (via the roundtrip_11 pub
+# wrapper; private write_11_bits/read_11_bits can't be --start-from'd).
+.PHONY: extract-bip39-roundtrip
+extract-bip39-roundtrip:
+	@mkdir -p /tmp/pqsigner-extract
+	@cd $(REPO_ROOT)/bip39 && RUSTFLAGS="--cfg lean_extract" \
+	  $(PQLEAN)/charon cargo --preset=aeneas --opaque sha2 --opaque zeroize --opaque subtle \
+	  --start-from 'sphincs_tz_bip39::full::roundtrip_11' \
+	  --dest-file /tmp/pqsigner-extract/bip39.llbc 2>&1 | tail -1
+	@rm -rf /tmp/pqsigner-extract/bout && mkdir -p /tmp/pqsigner-extract/bout
+	@$(PQLEAN)/aeneas -backend lean -dest /tmp/pqsigner-extract/bout -split-files /tmp/pqsigner-extract/bip39.llbc
+	@sed 's/import Bip39\./import Extracted.Bip39./' /tmp/pqsigner-extract/bout/Funs.lean > /tmp/pqsigner-extract/bout/Funs.fixed.lean
+	@diff -u $(EXTRACTED_DIR)/Extracted/Bip39/Funs.lean /tmp/pqsigner-extract/bout/Funs.fixed.lean \
+	  && echo "OK: committed bip39 extraction matches the current Rust" \
+	  || { echo "DRIFT: bip39/src changed — re-extract, re-prove, re-commit"; exit 1; }
+
+# §33 rank 8 — rlp::decode_item (canonical-RLP grammar). Types/FunsExternal are
+# hand-deduped against Rlp.* (shared RlpError + into_iter) — re-do that dedup if
+# re-extracting; only Funs is drift-guarded here.
+.PHONY: extract-decode-item
+extract-decode-item:
+	@mkdir -p /tmp/pqsigner-extract
+	@cd $(REPO_ROOT)/tx-core && RUSTFLAGS="--cfg lean_extract" \
+	  $(PQLEAN)/charon cargo --preset=aeneas --opaque sha2 --opaque sha3 \
+	  --start-from 'pqsigner_tx_core::rlp::decode_item' \
+	  --dest-file /tmp/pqsigner-extract/decode.llbc 2>&1 | tail -1
+	@rm -rf /tmp/pqsigner-extract/dout && mkdir -p /tmp/pqsigner-extract/dout
+	@$(PQLEAN)/aeneas -backend lean -dest /tmp/pqsigner-extract/dout -split-files /tmp/pqsigner-extract/decode.llbc
+	@sed 's/import Decode\./import Extracted.Decode./' /tmp/pqsigner-extract/dout/Funs.lean > /tmp/pqsigner-extract/dout/Funs.fixed.lean
+	@diff -u $(EXTRACTED_DIR)/Extracted/Decode/Funs.lean /tmp/pqsigner-extract/dout/Funs.fixed.lean \
+	  && echo "OK: committed decode_item extraction matches the current Rust" \
+	  || { echo "DRIFT: tx-core/src/rlp.rs changed — re-extract, re-prove, re-commit"; exit 1; }

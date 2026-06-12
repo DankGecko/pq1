@@ -422,6 +422,18 @@ impl fmt::Debug for Mnemonic {
 // Bit packing helper used only by Mnemonic
 // ---------------------------------------------------------------------------
 
+/// Verification wrapper (charon `--start-from` cannot target the private
+/// `write_11_bits`/`read_11_bits`): round-trip an 11-bit `value` through a
+/// fresh 33-byte buffer at bit offset `bit`. Used only by the §33 rank-9
+/// proof; `#[doc(hidden)]`, zero production callers.
+#[doc(hidden)]
+#[must_use]
+pub fn roundtrip_11(value: u16, bit: usize) -> u16 {
+    let mut buf = [0u8; ENTROPY_BYTES + 1];
+    write_11_bits(&mut buf, bit, value);
+    crate::read_11_bits(&buf, bit)
+}
+
 /// Write 11 bits MSB-first into `buf` starting at bit offset `bit`.
 #[inline]
 fn write_11_bits(buf: &mut [u8], bit: usize, value: u16) {
@@ -735,6 +747,20 @@ fn pbkdf2_hmac_sha512(password: &[u8], salt: &[u8], iters: u32, out: &mut [u8; S
         u_prev = mac.finalize().into_bytes();
         for (b, x) in out.iter_mut().zip(u_prev.iter()) {
             *b ^= *x;
+        }
+    }
+}
+
+
+#[cfg(test)]
+mod roundtrip_11_tests {
+    use super::*;
+    #[test]
+    fn roundtrip_is_identity_for_aligned_words() {
+        for w in 0..24usize {
+            for &v in &[0u16, 1, 0x7FF, 0x555, 0x2AA, 1234] {
+                assert_eq!(roundtrip_11(v, w * BITS_PER_WORD), v, "w={w} v={v}");
+            }
         }
     }
 }

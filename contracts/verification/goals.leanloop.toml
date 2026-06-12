@@ -111,3 +111,25 @@ try_from always lands Ok with chunk pad empty (List.take_drop lemmas);
 PartialEqArray.eq at exit ↔ array equality (Subtype.ext both ways). The ←
 direction: length mismatch short-circuits the first if to false. leaf/node
 hash fire via @[step] specs. idx &&& 1 / >>> 1 ↔ % 2 / / 2 by scalar_tac."""
+
+[[goal]]
+module  = "Extracted.Bip39RoundtripSpec"  # rank 9: 11-bit pack/unpack round-trip
+context = """One sorry. unfold roundtrip_11; write_11_bits is `buf[k] |=` into a
+zero buffer (disjoint OR = ADD, lor_shiftLeft_add from WotsDigits) placing
+value<<(24-shift-11) across ≤3 bytes; read_11_bits reassembles the same 24-bit
+big-endian window and >>(24-shift-11) & 0x7FF. The two `top` shifts cancel;
+value<2^11 survives the mask. Pure window arithmetic (rank-1 family). The
+roundtrip_11 wrapper writes a fresh 33-byte buffer so no aliasing. Identity
+#eval-checked for all 24 aligned words × 6 values."""
+
+[[goal]]
+module  = "Extracted.DecodeItemSpec"     # rank 8: canonical-RLP decode_item
+context = """One sorry. decodeRef is the independent grammar reference,
+#eval-VALIDATED against 8 positive + 7 negative rlp_decoder.rs vectors (so the
+spec is ground-truthed). Proof: unfold decode_item; Slice.first → some (input
+nonempty case) else Err Truncated; case-ladder on first (≤0x7f/≤0xb7/≤0xbf/
+≤0xf7/else) by scalar_tac, each arm ↔ a decodeRef arm; decode_length_be reuses
+rank-7's beValue accumulator (checked_shl/checked_add total for len_of_len≤8).
+FIRST clean up the extraction axioms: core::{checked_shl,Option.ok_or,
+Try.branch,Slice.first} should be DEF'd (into_iter pattern) or whitelisted —
+they're total stdlib helpers. itemIsList matches the Bytes/List discriminant."""
