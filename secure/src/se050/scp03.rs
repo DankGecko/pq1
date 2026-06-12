@@ -507,10 +507,14 @@ fn ct_eq_8(a: &[u8], b: &[u8]) -> bool {
 ///    via ISO 7816-4 (scan from end for `0x80`).
 ///
 /// Mirrors `nxpSCP03_Decrypt_ResponseAPDU` in NXP plug-and-trust
-/// (`hostlib/hostLib/libCommon/nxScp/nxScp03_Com.c:124-248`). On success
-/// the encryption counter is incremented (so the wrap/unwrap pair share
-/// one counter value, and the next wrap uses `counter + 1`). On failure
-/// the counter is **not** advanced — both ends roll back together.
+/// (`hostlib/hostLib/libCommon/nxScp/nxScp03_Com.c:124-248`). The
+/// encryption counter advances on EVERY response — protected or bare
+/// error SW — because the card consumed the command's counter value the
+/// moment its SM layer processed the command (GP Amd D §6.2.6: per
+/// command sent, not per protected response). Only a verify/decrypt
+/// failure of a *protected* response (R-MAC mismatch — a forgery, not a
+/// card response) leaves the counter untouched, and that path kills the
+/// session anyway.
 pub fn unwrap_response(
     session: &mut Scp03Session,
     wrapped: &[u8],
@@ -532,10 +536,19 @@ pub fn unwrap_response(
         }
         out[0] = wrapped[0];
         out[1] = wrapped[1];
-        // No counter increment — the card did not produce a protected
-        // response, so the counter contract isn't "consumed" yet. This
-        // matches NXP's `nxScp03_Com.c` path that returns early on
-        // bare-SW responses before the inc_command_counter call.
+        // Counter MUST advance here. The card's SM layer consumed this
+        // command's counter value when it C-DEC/C-MAC-processed the
+        // command; an applet-level error that returns a bare SW (object
+        // missing, wrong state) has still burned it — GP Amd D §6.2.6
+        // counts per command sent, not per protected response. Holding
+        // the host counter back desyncs the C-ENC ICV one command later:
+        // observed on silicon 2026-06-12 (wiped chip → reconcile's
+        // ReadObjectAttributes → bare 0x6985 → next command 0x6982
+        // (card-side SM failure, session terminated) → every later APDU
+        // 0x6985 → first-boot wizard rng_strong bricked). Transport
+        // failures (no response at all) never reach unwrap_response, so
+        // this arm only fires when the card actually processed a command.
+        session.inc_counter();
         return Ok(2);
     }
 

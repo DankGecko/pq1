@@ -60,6 +60,17 @@ impl DualSecureElement {
         self.optiga.load_pbs();
     }
 
+    /// First-boot OPTIGA E140 pairing, run BEFORE the seed wizard draws
+    /// entropy — see `OptigaTrustM::pair_for_first_boot` for why
+    /// (mandatory `ensure_shield` in `random()` needs a paired chip).
+    /// The OPTIGA-level error detail is logged by the inner driver;
+    /// callers only branch on success.
+    pub fn pair_optiga_for_first_boot(&mut self) -> Result<(), SeError> {
+        self.optiga
+            .pair_for_first_boot()
+            .map_err(|_| SeError::InternalError)
+    }
+
     /// Generate a fresh OPTIGA-side XOR half via a 3-source TRNG mix
     /// (STM32 ⊕ OPTIGA ⊕ SE050). The security of the dual-SE split
     /// depends critically on this half being unpredictable: if an

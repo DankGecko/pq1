@@ -3417,6 +3417,31 @@ fn main() -> ! {
     unsafe {
         if !is_provisioned(&mut *core::ptr::addr_of_mut!(SE)) {
             secure_log!("[S] Unprovisioned — running first-boot wizard");
+
+            // Pair the OPTIGA's E140 PBS BEFORE the wizard: the wizard's
+            // very first screens draw `rng_strong` (PIN-pad start digit,
+            // seed entropy), whose OPTIGA leg mandates the Shielded
+            // Connection (CRIT-8) — and the PRL handshake needs E140
+            // provisioned. Idempotent at LcsO=Creation (provisioning
+            // step 1 rewrites the same bytes again later). Failure is
+            // logged loudly but non-fatal: `Optiga::random`'s self-heal
+            // retry gives each draw another chance, and the wizard's
+            // RNG-failure loop remains the fallback UX.
+            #[cfg(all(feature = "dual-se", feature = "stm32u585"))]
+            {
+                let se = &mut *core::ptr::addr_of_mut!(SE);
+                if let Err(e) = se.pair_optiga_for_first_boot() {
+                    secure_log!("[S] pre-wizard OPTIGA pairing FAILED: {:?}", e);
+                }
+            }
+            #[cfg(all(feature = "optiga-trust-m", not(feature = "dual-se"), feature = "stm32u585"))]
+            {
+                let se = &mut *core::ptr::addr_of_mut!(SE);
+                if let Err(e) = se.pair_for_first_boot() {
+                    secure_log!("[S] pre-wizard OPTIGA pairing FAILED: {:?}", e);
+                }
+            }
+
             let (mnemonic, mut pin) = run_first_boot_wizard();
 
             // §32 P4: optionally collect a duress (decoy) PIN — ONLY on

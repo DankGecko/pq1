@@ -236,9 +236,47 @@ impl OptigaTrustM {
         if buf.is_empty() {
             return Ok(());
         }
+        // CRIT-8: the chip-TRNG contribution must traverse the Shielded
+        // Connection — a plaintext GetRandom lets an I2C MITM substitute
+        // a fixed "random". `ensure_shield` is also what makes the call
+        // work at all against a paired chip: once host/chip PRL state
+        // diverges (chip dropped its session, or sits wedged in the
+        // SCTR=0x40 alert state from an earlier failed handshake), every
+        // mismatched exchange bounces with the 7-byte `08 40` alert —
+        // observed on silicon 2026-06-12 in both directions (first-boot
+        // wizard + the first post-NS-boot NSC rng call).
+        //
+        // Self-heal (one bounded retry): on any failure, drop `ready` +
+        // `shield.active` so the second attempt re-inits — the RST pulse
+        // + soft_reset in `init()` clears the chip's PRL/alert state
+        // (work-todo 2026-05-12 + 2026-06-12 rows) — then re-handshakes.
+        // A second failure surfaces as Err; `rng_strong::fill` fails
+        // closed (no silent plaintext downgrade — see bb2615f6).
+        let mut last_err = OptigaError::Shield;
+        for attempt in 0..2u8 {
+            match self.random_shielded_once(buf) {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    if attempt == 0 {
+                        secure_log!(
+                            "[OPTIGA] random: {:?} — dropping PRL session, re-init + retry",
+                            e
+                        );
+                        self.ready = false;
+                        self.shield.active = false;
+                    }
+                    last_err = e;
+                }
+            }
+        }
+        Err(last_err)
+    }
+
+    /// One `init` → `ensure_shield` → `GetRandom` attempt; split out so
+    /// [`Self::random`] can run it twice around the PRL self-heal.
+    fn random_shielded_once(&mut self, buf: &mut [u8]) -> Result<(), OptigaError> {
         self.init()?;
-        // The Shielded Connection encrypts request + response, so an
-        // I2C MITM cannot substitute a fixed challenge here.
+        self.ensure_shield()?;
         unsafe {
             if buf.len() < 8 {
                 let mut tmp = [0u8; 8];
@@ -436,6 +474,36 @@ impl OptigaTrustM {
                 }
                 secure_log!("[OPTIGA/shield] PRL handshake OK — encrypted I2C active");
             }
+            Ok(())
+        }
+    }
+
+    /// First-boot pairing: write the PBS to E140 (plaintext, allowed at
+    /// LcsO=Creation) BEFORE the wizard draws any entropy, so that
+    /// [`Self::random`]'s mandatory `ensure_shield` can handshake even
+    /// on a factory-new chip whose E140 is blank. Idempotent — the
+    /// provisioning flow's step 1 (`setup_pbs_no_handshake` inside
+    /// `store_objects`) rewrites the same bytes again later; at
+    /// LcsO=Creation the rewrite is always permitted. The trailing
+    /// `hard_reset_and_reinit` clears the 2-writes-per-session throttle
+    /// the E140 data+metadata writes just consumed (and any PRL/alert
+    /// residue), leaving the chip clean for the first handshake.
+    ///
+    /// Under `optiga-no-shield` this is a no-op — those chips never run
+    /// the PRL and `ensure_shield` is a no-op for them too.
+    pub fn pair_for_first_boot(&mut self) -> Result<(), OptigaError> {
+        #[cfg(feature = "optiga-no-shield")]
+        {
+            secure_log!("[OPTIGA] pair_for_first_boot skipped (optiga-no-shield)");
+            Ok(())
+        }
+        #[cfg(not(feature = "optiga-no-shield"))]
+        {
+            self.init()?;
+            secure_log!("[OPTIGA] pair_for_first_boot: writing E140 PBS (pre-wizard)");
+            self.setup_pbs_no_handshake()?;
+            #[cfg(feature = "stm32u585")]
+            self.hard_reset_and_reinit()?;
             Ok(())
         }
     }
