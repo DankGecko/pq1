@@ -189,15 +189,34 @@ rely on, but they must be disclosed, not hidden.
   property). Parametrising the harness over bounded shapes would
   spot-check it further.
 
-### GAP-11 — Execute equivalence: single-credit envelope, success-direction only
-- **What:** `HalmosExecuteEquiv` stamps the execution credit via **one** real
-  `validateUserOp`; the Lean `Execute` model has a single
-  `validatedOwnerPlusOne` field. Multi-op bundles (several slots' credits in
-  one EntryPoint `handleOps`) are not modelled. The axiom is also the
-  **success direction** only (`bytecode returns some σ' ⇒ model agrees`); the
-  Lean model is the all-dispatch-succeeds model.
-- **What closes it:** extend the Lean model + harness to a per-slot credit map
-  and bundle semantics; add the failure-direction equivalence.
+### GAP-11 — Execute equivalence: single-credit envelope, success-direction only — CLOSED 2026-06-12
+- **What it was:** `HalmosExecuteEquiv` stamped the execution credit via
+  **one** real `validateUserOp`; the Lean `Execute` model had a single
+  `validatedOwnerPlusOne` compare-and-clear field, faithful to the deployed
+  per-index credit counters only on the ≤1-stamp-per-bundle envelope.
+- **Closure:** the Lean model now carries the SAME per-index transient
+  credit COUNTER map the deployed bytecode keeps
+  (`ExecState.credits : Nat → Nat`; stamp `+1` in validation for
+  offchain-count selectors — `TxFlow.applyValidateSuccess` also mirrors the
+  `removeOwnerAtIndex` no-stamp rule — consume `-1` in execution, per-index
+  isolation). Bundle semantics (N validations fund exactly N executions of
+  the index per tx) are modeled, kernel-proven through the migrated E-1..E-8
+  + Claim-4 trace theorems (`every_call_gated_by_verifier` still
+  kernel-only), and **bytecode-witnessed** by the new
+  `check_two_stamps_fund_exactly_two_executes` rule. The harness
+  transcription (`LeanExecuteModel.sol`) migrated in lockstep (per-index
+  `creditAtIndex`, parity clause gone) and the pointwise equivalence
+  re-discharged on BOTH compiler profiles (6 rules, 2026-06-12).
+- **Direction status (the precise residual):** the A3.2-exec axiom remains
+  **success-direction by design** — the Lean model is the
+  all-dispatch-succeeds model, so a reverting dispatched call is outside its
+  codomain and the unconditional reverse implication is false there. The
+  GUARD-LEVEL failure direction (bytecode revert on caller / credit / self /
+  setOffchain ⇒ model `none`) IS checked two-directionally inside the
+  pointwise rules' catch arm; the dispatch-revert case is pinned by the
+  atomicity rule and its state semantics belong to A4. Closing the
+  dispatch-revert direction formally would require enriching the model with
+  call-outcome semantics — a model-scope decision, not a faithfulness gap.
 
 ### GAP-12 — A3.2 carries a reachable-state hypothesis
 - **What:** the validate equivalence is conditioned on
@@ -225,7 +244,7 @@ To drop every qualifier and claim "fully proven to the bytecode":
 - [x] **GAP-1** — `lake exe verify-test-vectors` full-verify 10/10; `requireFullVerify = true`; A3.1 no longer refuted. **CLOSED 2026-06-12.**
 - [ ] **GAP-2** — verifier ∀-signature equivalence via Kontrol/KEVM or Verity.
 - [ ] **GAP-7 / GAP-8** — bytecode discharges carried as Lean proof terms (Verity) or audited solver + upstreamed patch.
-- [ ] **GAP-9 / GAP-10 / GAP-11** — index/shape/credit envelopes generalised to ∀ (or Lean lemmas covering them). *Model halves of GAP-9 + GAP-10 closed 2026-06-12 by kernel lemmas (`validateSignature_unset_index_uniform`, `validateSignature_result_local`); bytecode-side residuals (mapping-getter uniformity, per-index slot isolation) and GAP-11 remain.*
+- [ ] **GAP-9 / GAP-10 / GAP-11** — index/shape/credit envelopes generalised to ∀ (or Lean lemmas covering them). *Model halves of GAP-9 + GAP-10 closed 2026-06-12 by kernel lemmas (`validateSignature_unset_index_uniform`, `validateSignature_result_local`); GAP-11 CLOSED 2026-06-12 (per-index credit-counter model + bundle semantics + both-profile re-discharge; dispatch-revert direction documented as model-scope). Remaining: bytecode-side mapping-getter uniformity (GAP-9) and per-index slot isolation (GAP-10).*
 - [ ] **GAP-3 / GAP-4 / GAP-5 / GAP-6 / GAP-13** — either discharged (Kontrol/KEVM/Verity) or **explicitly accepted** as the named universal-Ethereum + crypto TCB, and the public claim worded to say so.
 
 With GAP-1 closed, the **maximal honest claim** is the one in

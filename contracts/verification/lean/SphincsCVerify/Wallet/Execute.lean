@@ -43,12 +43,25 @@ instance : Inhabited Call :=
 
 end Call
 
-/-- The slice of EVM state the executor operates on. -/
+/-- The slice of EVM state the executor operates on.
+
+    `credits` mirrors the wallet's per-`ownerIndex` transient validated-op
+    credit COUNTERS (EIP-1153 slots at `keccak256(ownerIndex,
+    _TS_CREDIT_NAMESPACE)`): `_validateSignature` stamps `credit[i] += 1`
+    for a slot-path offchain-count op, and `execute*WithOffchainCount`
+    consumes one (`credit[i] -= 1`, reverting at zero). A per-index
+    COUNTER map — not a single token — so a bundle carrying several
+    UserOps for the same wallet hands N credits to N executions.
+
+    HISTORY: until 2026-06-12 this structure had a single
+    `validatedOwnerPlusOne : Nat` compare-and-clear token, which was
+    faithful to the deployed bytecode only on the ≤1-stamp-per-bundle
+    envelope (GAP-11 in `docs/MISSING_FOR_FULL_BYTECODE_PROOF.md`). -/
 structure ExecState where
   storage : Storage
   selfAddress : ByteVec 20
   entryPoint : ByteVec 20
-  validatedOwnerPlusOne : Nat
+  credits : Nat → Nat
   callStack : List Call
 
 namespace ExecState
@@ -57,10 +70,16 @@ instance : Inhabited ExecState :=
   ⟨{ storage := Storage.empty,
      selfAddress := ⟨Array.replicate 20 0, by simp⟩,
      entryPoint := ⟨Array.replicate 20 0, by simp⟩,
-     validatedOwnerPlusOne := 0,
+     credits := fun _ => 0,
      callStack := [] }⟩
 
 end ExecState
+
+/-- Decrement the credit counter at `ownerIndex`, leaving every other
+    index untouched. Mirrors `_consumeValidatedCredit`'s
+    `tstore(slot, sub(c, 1))`. -/
+def consumeCredit (credits : Nat → Nat) (ownerIndex : Nat) : Nat → Nat :=
+  fun i => if i = ownerIndex then credits i - 1 else credits i
 
 /-! ## `executeWithOffchainCount`
 
@@ -69,15 +88,17 @@ The function is intentionally written in `if-then-else + match` form
 visible at the top level. The structure helps the proofs below
 unfold cleanly. -/
 
-/-- Model of `PQSmartWallet.executeWithOffchainCount`. -/
+/-- Model of `PQSmartWallet.executeWithOffchainCount`. Guard order
+    mirrors the deployed bytecode: EntryPoint caller → consume one
+    per-index credit (revert at zero) → self-target reject → monotonic
+    `setOffchain` under the combined cap → dispatch. -/
 def executeWithOffchainCount
     (σ : ExecState) (caller : ByteVec 20)
     (ownerIndex newOffchainCount : Nat)
     (target : ByteVec 20) (value : Nat) (data : Array UInt8) :
     Option ExecState :=
   if caller ≠ σ.entryPoint then none
-  else if σ.validatedOwnerPlusOne = 0 then none
-  else if σ.validatedOwnerPlusOne - 1 ≠ ownerIndex then none
+  else if σ.credits ownerIndex = 0 then none
   else if target = σ.selfAddress then none
   else
     (Storage.setOffchain σ.storage ownerIndex newOffchainCount
@@ -86,7 +107,7 @@ def executeWithOffchainCount
         storage := s'
         selfAddress := σ.selfAddress
         entryPoint := σ.entryPoint
-        validatedOwnerPlusOne := 0
+        credits := consumeCredit σ.credits ownerIndex
         callStack := σ.callStack ++ [{ target := target, value := value, data := data }] })
 
 /-! ## `executeBatchWithOffchainCount` -/
@@ -103,7 +124,9 @@ def appendBatchCalls
     else appendBatchCalls selfAddr (acc ++ [{ target := t, value := v, data := d }]) ts vs ds
   | _, _, _ => none
 
-/-- Model of `PQSmartWallet.executeBatchWithOffchainCount`. -/
+/-- Model of `PQSmartWallet.executeBatchWithOffchainCount`. Same credit
+    semantics as the single variant; the per-element self-target check
+    and the array-length check live in `appendBatchCalls`. -/
 def executeBatchWithOffchainCount
     (σ : ExecState) (caller : ByteVec 20)
     (ownerIndex newOffchainCount : Nat)
@@ -111,8 +134,7 @@ def executeBatchWithOffchainCount
     (datas : List (Array UInt8)) :
     Option ExecState :=
   if caller ≠ σ.entryPoint then none
-  else if σ.validatedOwnerPlusOne = 0 then none
-  else if σ.validatedOwnerPlusOne - 1 ≠ ownerIndex then none
+  else if σ.credits ownerIndex = 0 then none
   else
     (Storage.setOffchain σ.storage ownerIndex newOffchainCount
             (σ.storage.slotUses ownerIndex) MaxSlotUses).bind fun s' =>
@@ -121,12 +143,16 @@ def executeBatchWithOffchainCount
           storage := s'
           selfAddress := σ.selfAddress
           entryPoint := σ.entryPoint
-          validatedOwnerPlusOne := 0
+          credits := consumeCredit σ.credits ownerIndex
           callStack := newStack }
 
 /-! ## Proof helpers — peel off the outer if-then-else guards. -/
 
-/-- The four guards passed (caller, token-set, token-matches, non-self). -/
+/-- The three guards passed (caller, credit-present, non-self). The old
+    fourth conjunct — the single-token `ownerIndex` parity — has no
+    bytecode counterpart in the per-index credit design: presenting an
+    index IS naming the credit consumed (H-3 parity binds the calldata
+    index to the signed wrapper index in the VALIDATION phase). -/
 private theorem exec_passes_guards
     {σ : ExecState} {caller : ByteVec 20}
     {ownerIndex newOffchainCount : Nat}
@@ -135,29 +161,23 @@ private theorem exec_passes_guards
     (h : executeWithOffchainCount σ caller ownerIndex newOffchainCount
              target value data = some σ') :
     caller = σ.entryPoint ∧
-    σ.validatedOwnerPlusOne ≠ 0 ∧
-    σ.validatedOwnerPlusOne - 1 = ownerIndex ∧
+    σ.credits ownerIndex ≠ 0 ∧
     target ≠ σ.selfAddress := by
   unfold executeWithOffchainCount at h
   by_cases hcaller : caller ≠ σ.entryPoint
   · rw [if_pos hcaller] at h; exact Option.noConfusion h
   · rw [if_neg hcaller] at h
     have hcaller_eq : caller = σ.entryPoint := Classical.byContradiction hcaller
-    by_cases htok : σ.validatedOwnerPlusOne = 0
-    · rw [if_pos htok] at h; exact Option.noConfusion h
-    · rw [if_neg htok] at h
-      by_cases hpar : σ.validatedOwnerPlusOne - 1 ≠ ownerIndex
-      · rw [if_pos hpar] at h; exact Option.noConfusion h
-      · rw [if_neg hpar] at h
-        have hpar_eq : σ.validatedOwnerPlusOne - 1 = ownerIndex :=
-          Classical.byContradiction hpar
-        by_cases hself : target = σ.selfAddress
-        · rw [if_pos hself] at h; exact Option.noConfusion h
-        · rw [if_neg hself] at h
-          exact ⟨hcaller_eq, htok, hpar_eq, hself⟩
+    by_cases hcred : σ.credits ownerIndex = 0
+    · rw [if_pos hcred] at h; exact Option.noConfusion h
+    · rw [if_neg hcred] at h
+      by_cases hself : target = σ.selfAddress
+      · rw [if_pos hself] at h; exact Option.noConfusion h
+      · rw [if_neg hself] at h
+        exact ⟨hcaller_eq, hcred, hself⟩
 
-/-- The three guards passed for the batch variant (caller, token-set,
-    token-matches; the per-iteration self-target check lives inside
+/-- The two guards passed for the batch variant (caller,
+    credit-present; the per-iteration self-target check lives inside
     `appendBatchCalls`). -/
 private theorem batch_passes_guards
     {σ : ExecState} {caller : ByteVec 20}
@@ -168,25 +188,20 @@ private theorem batch_passes_guards
     (h : executeBatchWithOffchainCount σ caller ownerIndex newOffchainCount
              targets values datas = some σ') :
     caller = σ.entryPoint ∧
-    σ.validatedOwnerPlusOne ≠ 0 ∧
-    σ.validatedOwnerPlusOne - 1 = ownerIndex := by
+    σ.credits ownerIndex ≠ 0 := by
   unfold executeBatchWithOffchainCount at h
   by_cases hcaller : caller ≠ σ.entryPoint
   · rw [if_pos hcaller] at h; exact Option.noConfusion h
   · rw [if_neg hcaller] at h
     have hcaller_eq : caller = σ.entryPoint := Classical.byContradiction hcaller
-    by_cases htok : σ.validatedOwnerPlusOne = 0
-    · rw [if_pos htok] at h; exact Option.noConfusion h
-    · rw [if_neg htok] at h
-      by_cases hpar : σ.validatedOwnerPlusOne - 1 ≠ ownerIndex
-      · rw [if_pos hpar] at h; exact Option.noConfusion h
-      · rw [if_neg hpar] at h
-        have hpar_eq : σ.validatedOwnerPlusOne - 1 = ownerIndex :=
-          Classical.byContradiction hpar
-        exact ⟨hcaller_eq, htok, hpar_eq⟩
+    by_cases hcred : σ.credits ownerIndex = 0
+    · rw [if_pos hcred] at h; exact Option.noConfusion h
+    · rw [if_neg hcred] at h
+      exact ⟨hcaller_eq, hcred⟩
 
 /-- Extract the post-state of a successful execute call: the storage
-    is the result of `Storage.setOffchain`, the transient is 0, the
+    is the result of `Storage.setOffchain`, exactly one credit at
+    `ownerIndex` is consumed (every other index untouched), the
     callStack appends the one new call. -/
 private theorem exec_post_state
     {σ : ExecState} {caller : ByteVec 20}
@@ -195,18 +210,16 @@ private theorem exec_post_state
     {σ' : ExecState}
     (h : executeWithOffchainCount σ caller ownerIndex newOffchainCount
              target value data = some σ') :
-    σ'.validatedOwnerPlusOne = 0 ∧
+    σ'.credits = consumeCredit σ.credits ownerIndex ∧
     σ'.callStack = σ.callStack ++ [{ target := target, value := value, data := data }] := by
   -- Apply the guards first to peel the outer conditionals.
   have hguards := exec_passes_guards h
-  obtain ⟨hcaller_eq, htok, hpar_eq, hself⟩ := hguards
+  obtain ⟨hcaller_eq, hcred, hself⟩ := hguards
   -- Now unfold and use the guard facts to simplify.
   unfold executeWithOffchainCount at h
   have hcaller : ¬ (caller ≠ σ.entryPoint) := fun hne => hne hcaller_eq
   rw [if_neg hcaller] at h
-  rw [if_neg htok] at h
-  have hpar : ¬ (σ.validatedOwnerPlusOne - 1 ≠ ownerIndex) := fun hne => hne hpar_eq
-  rw [if_neg hpar] at h
+  rw [if_neg hcred] at h
   rw [if_neg hself] at h
   -- h : (Storage.setOffchain ...).bind (fun s' => some {...}) = some σ'
   -- Case-analyse the setOffchain result via Option.bind_eq_some_iff.
@@ -226,18 +239,16 @@ private theorem batch_post_state
     {σ' : ExecState}
     (h : executeBatchWithOffchainCount σ caller ownerIndex newOffchainCount
              targets values datas = some σ') :
-    σ'.validatedOwnerPlusOne = 0 ∧
+    σ'.credits = consumeCredit σ.credits ownerIndex ∧
     ∃ newStack,
       appendBatchCalls σ.selfAddress σ.callStack targets values datas = some newStack
       ∧ σ'.callStack = newStack := by
   have hguards := batch_passes_guards h
-  obtain ⟨hcaller_eq, htok, hpar_eq⟩ := hguards
+  obtain ⟨hcaller_eq, hcred⟩ := hguards
   unfold executeBatchWithOffchainCount at h
   have hcaller : ¬ (caller ≠ σ.entryPoint) := fun hne => hne hcaller_eq
   rw [if_neg hcaller] at h
-  rw [if_neg htok] at h
-  have hpar : ¬ (σ.validatedOwnerPlusOne - 1 ≠ ownerIndex) := fun hne => hne hpar_eq
-  rw [if_neg hpar] at h
+  rw [if_neg hcred] at h
   rw [Option.bind_eq_some_iff] at h
   obtain ⟨s', _hSO, hinner⟩ := h
   rw [Option.bind_eq_some_iff] at hinner
@@ -280,7 +291,7 @@ theorem execute_rejects_self_target
     (h : executeWithOffchainCount σ caller ownerIndex newOffchainCount
              target value data = some σ') :
     target ≠ σ.selfAddress :=
-  (exec_passes_guards h).2.2.2
+  (exec_passes_guards h).2.2
 
 /-- If `appendBatchCalls` returns `some _`, no element of `targets`
     equals `selfAddr`. -/
@@ -320,41 +331,19 @@ theorem executeBatch_rejects_self_target
   obtain ⟨_, _, hAC, _⟩ := batch_post_state h
   exact appendBatchCalls_no_self hAC
 
-/-! ## (E-3) Requires validated-owner-index token (audit H-3) -/
+/-! ## (E-3) Requires a per-index validated-op credit (audit H-3) -/
 
-theorem execute_requires_token_set
+theorem execute_requires_credit
     {σ : ExecState} {caller : ByteVec 20}
     {ownerIndex newOffchainCount : Nat}
     {target : ByteVec 20} {value : Nat} {data : Array UInt8}
     {σ' : ExecState}
     (h : executeWithOffchainCount σ caller ownerIndex newOffchainCount
              target value data = some σ') :
-    σ.validatedOwnerPlusOne > 0 :=
+    σ.credits ownerIndex > 0 :=
   Nat.pos_of_ne_zero (exec_passes_guards h).2.1
 
-theorem execute_requires_token_match
-    {σ : ExecState} {caller : ByteVec 20}
-    {ownerIndex newOffchainCount : Nat}
-    {target : ByteVec 20} {value : Nat} {data : Array UInt8}
-    {σ' : ExecState}
-    (h : executeWithOffchainCount σ caller ownerIndex newOffchainCount
-             target value data = some σ') :
-    σ.validatedOwnerPlusOne - 1 = ownerIndex :=
-  (exec_passes_guards h).2.2.1
-
-/-! ## (E-4) Token cleared post-execute -/
-
-theorem execute_clears_token
-    {σ : ExecState} {caller : ByteVec 20}
-    {ownerIndex newOffchainCount : Nat}
-    {target : ByteVec 20} {value : Nat} {data : Array UInt8}
-    {σ' : ExecState}
-    (h : executeWithOffchainCount σ caller ownerIndex newOffchainCount
-             target value data = some σ') :
-    σ'.validatedOwnerPlusOne = 0 :=
-  (exec_post_state h).1
-
-theorem executeBatch_clears_token
+theorem executeBatch_requires_credit
     {σ : ExecState} {caller : ByteVec 20}
     {ownerIndex newOffchainCount : Nat}
     {targets : List (ByteVec 20)} {values : List Nat}
@@ -362,8 +351,67 @@ theorem executeBatch_clears_token
     {σ' : ExecState}
     (h : executeBatchWithOffchainCount σ caller ownerIndex newOffchainCount
              targets values datas = some σ') :
-    σ'.validatedOwnerPlusOne = 0 :=
-  (batch_post_state h).1
+    σ.credits ownerIndex > 0 :=
+  Nat.pos_of_ne_zero (batch_passes_guards h).2
+
+/-! ## (E-4) Exactly one credit consumed post-execute (one-shot replay
+    guard — N stamps fund at most N executes per index per bundle) -/
+
+theorem execute_consumes_credit
+    {σ : ExecState} {caller : ByteVec 20}
+    {ownerIndex newOffchainCount : Nat}
+    {target : ByteVec 20} {value : Nat} {data : Array UInt8}
+    {σ' : ExecState}
+    (h : executeWithOffchainCount σ caller ownerIndex newOffchainCount
+             target value data = some σ') :
+    σ'.credits ownerIndex = σ.credits ownerIndex - 1 := by
+  have hpost := (exec_post_state h).1
+  rw [hpost]
+  unfold consumeCredit
+  rw [if_pos rfl]
+
+theorem execute_preserves_other_credits
+    {σ : ExecState} {caller : ByteVec 20}
+    {ownerIndex newOffchainCount : Nat}
+    {target : ByteVec 20} {value : Nat} {data : Array UInt8}
+    {σ' : ExecState}
+    (h : executeWithOffchainCount σ caller ownerIndex newOffchainCount
+             target value data = some σ')
+    {j : Nat} (hj : j ≠ ownerIndex) :
+    σ'.credits j = σ.credits j := by
+  have hpost := (exec_post_state h).1
+  rw [hpost]
+  unfold consumeCredit
+  rw [if_neg hj]
+
+theorem executeBatch_consumes_credit
+    {σ : ExecState} {caller : ByteVec 20}
+    {ownerIndex newOffchainCount : Nat}
+    {targets : List (ByteVec 20)} {values : List Nat}
+    {datas : List (Array UInt8)}
+    {σ' : ExecState}
+    (h : executeBatchWithOffchainCount σ caller ownerIndex newOffchainCount
+             targets values datas = some σ') :
+    σ'.credits ownerIndex = σ.credits ownerIndex - 1 := by
+  have hpost := (batch_post_state h).1
+  rw [hpost]
+  unfold consumeCredit
+  rw [if_pos rfl]
+
+theorem executeBatch_preserves_other_credits
+    {σ : ExecState} {caller : ByteVec 20}
+    {ownerIndex newOffchainCount : Nat}
+    {targets : List (ByteVec 20)} {values : List Nat}
+    {datas : List (Array UInt8)}
+    {σ' : ExecState}
+    (h : executeBatchWithOffchainCount σ caller ownerIndex newOffchainCount
+             targets values datas = some σ')
+    {j : Nat} (hj : j ≠ ownerIndex) :
+    σ'.credits j = σ.credits j := by
+  have hpost := (batch_post_state h).1
+  rw [hpost]
+  unfold consumeCredit
+  rw [if_neg hj]
 
 /-! ## (E-5) Batch runs in signed order -/
 
@@ -542,10 +590,8 @@ theorem execute_only_validateSig_authorises
     {σ' : ExecState}
     (h : executeWithOffchainCount σ caller ownerIndex newOffchainCount
              target value data = some σ') :
-    σ.validatedOwnerPlusOne = ownerIndex + 1 := by
-  have hpos := execute_requires_token_set h
-  have heq := execute_requires_token_match h
-  omega
+    σ.credits ownerIndex > 0 :=
+  execute_requires_credit h
 
 theorem executeBatch_only_validateSig_authorises
     {σ : ExecState} {caller : ByteVec 20}
@@ -555,9 +601,7 @@ theorem executeBatch_only_validateSig_authorises
     {σ' : ExecState}
     (h : executeBatchWithOffchainCount σ caller ownerIndex newOffchainCount
              targets values datas = some σ') :
-    σ.validatedOwnerPlusOne = ownerIndex + 1 := by
-  obtain ⟨_, htok, hpar⟩ := batch_passes_guards h
-  have hpos : σ.validatedOwnerPlusOne > 0 := Nat.pos_of_ne_zero htok
-  omega
+    σ.credits ownerIndex > 0 :=
+  executeBatch_requires_credit h
 
 end SphincsCVerify.Wallet.Execute

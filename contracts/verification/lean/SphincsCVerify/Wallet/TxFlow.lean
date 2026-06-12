@@ -15,17 +15,17 @@ The existing modules give us the static pieces:
   * `Wallet.Invariants.validateSignature_only_via_verify` (I-1) — a
     successful validate implies `verify_fn` returned `true`.
   * `Wallet.Execute.execute{,Batch}_only_validateSig_authorises` (E-8) —
-    a successful execute requires `validatedOwnerPlusOne = ownerIndex+1`
-    on entry.
+    a successful execute requires `credits ownerIndex > 0` on entry
+    (a stamped, not-yet-consumed per-index validated-op credit).
 
 This module composes them into a **transaction-level** statement by
 modelling a sequence of `Step`s the EntryPoint can drive against the
 wallet and a `runTrace` function that threads `ExecState` through them.
 Key load-bearing lemmas:
 
-  * `applyStep_token_set_only_by_validate_success` — the transient
-    `validatedOwnerPlusOne` field can only transition from `0` to a
-    non-zero value via a successful slot-path `validate` step.
+  * `applyStep_credit_lift_only_by_validate_success` — the per-index
+    transient credit map can only be lifted from all-zero via a
+    successful slot-path `validate` step (offchain-count selectors).
   * `validate_step_preserves_callstack` — `validate` never appends.
   * `callstack_grew_implies_some_verify_true` — trace-level: any
     growth in `σ'.callStack` implies the trace contained at least one
@@ -88,24 +88,32 @@ unchanged) when validation fails — a failing validate in EIP-4337 v0.6
 makes the EntryPoint reject the UserOp without mutating the wallet, so
 the transaction trace simply continues with the same `ExecState`.
 
-For `validate` *success* on the slot path (`ownerIndex ≠ 0`), we set
-`validatedOwnerPlusOne := ownerIndex + 1` to mirror the
-`tstore(_TS_VALIDATED_OWNER_INDEX_PLUS_ONE, ...)` write in
-`_validateSignature`. The bootstrap path (`ownerIndex = 0`) sets the
-`_TS_PENDING_BOOTSTRAP_BUMP` transient instead — not the
-`validatedOwnerPlusOne` token — and so does NOT enable the execute
-guard. We mirror that by leaving `validatedOwnerPlusOne` untouched in
-the bootstrap branch.
+For `validate` *success* on the slot path (`ownerIndex ≠ 0`) with an
+offchain-count execute selector, we stamp ONE per-index credit
+(`credits[ownerIndex] += 1`) to mirror `_stampValidatedCredit`'s
+`tstore(slot, add(tload(slot), 1))` in `_validateSignature`. The
+bootstrap path (`ownerIndex = 0`) stamps no credit (its few-time cap is
+bumped revert-proof in validation), and `removeOwnerAtIndex` is
+authorised by validation alone — both leave `credits` untouched, so
+neither enables the execute guard.
 
 The if-then-else structure (rather than nested `match`) mirrors the
 proof-friendly form used by `Execute.executeWithOffchainCount`. -/
 
+/-- Increment the credit counter at `ownerIndex`, leaving every other
+    index untouched. Mirrors `_stampValidatedCredit`. -/
+def stampCredit (credits : Nat → Nat) (ownerIndex : Nat) : Nat → Nat :=
+  fun i => if i = ownerIndex then credits i + 1 else credits i
+
 /-- Helper: post-validate state mutation, factored out so the proof can
-    case on individual sub-conditions. -/
+    case on individual sub-conditions. Mirrors the deployed stamp rules:
+    bootstrap stamps nothing; `removeOwnerAtIndex` stamps nothing; the
+    offchain-count execute selectors stamp `credits[d.ownerIndex] += 1`. -/
 def applyValidateSuccess
-    (σ : ExecState) (s' : Storage) (d : DecodedSig) : ExecState :=
+    (σ : ExecState) (s' : Storage) (d : DecodedSig) (op : UserOperation) : ExecState :=
   if d.ownerIndex = 0 then { σ with storage := s' }
-  else { σ with storage := s', validatedOwnerPlusOne := d.ownerIndex + 1 }
+  else if op.selectorOf = Selector.removeOwnerAtIndex then { σ with storage := s' }
+  else { σ with storage := s', credits := stampCredit σ.credits d.ownerIndex }
 
 def applyStep (σ : ExecState) : Step → Option ExecState
   | .validate op entryPoint chainId verify_fn =>
@@ -113,7 +121,7 @@ def applyStep (σ : ExecState) : Step → Option ExecState
       if r.1 = Result.success then
         match decodeWrappedSig op.signature with
         | none => some σ
-        | some d => some (applyValidateSuccess σ r.2 d)
+        | some d => some (applyValidateSuccess σ r.2 d op)
       else some σ
   | .execute caller ownerIndex newOffchainCount target value data =>
       executeWithOffchainCount σ caller ownerIndex newOffchainCount
@@ -133,12 +141,15 @@ def runTrace (σ : ExecState) : List Step → Option ExecState
 
 /-- `applyValidateSuccess` preserves the callStack. -/
 private theorem applyValidateSuccess_preserves_callstack
-    (σ : ExecState) (s' : Storage) (d : DecodedSig) :
-    (applyValidateSuccess σ s' d).callStack = σ.callStack := by
+    (σ : ExecState) (s' : Storage) (d : DecodedSig) (op : UserOperation) :
+    (applyValidateSuccess σ s' d op).callStack = σ.callStack := by
   unfold applyValidateSuccess
   by_cases h : d.ownerIndex = 0
   · rw [if_pos h]
   · rw [if_neg h]
+    by_cases hsel : op.selectorOf = Selector.removeOwnerAtIndex
+    · rw [if_pos hsel]
+    · rw [if_neg hsel]
 
 /-- A `validate` step never appends to the callStack. -/
 theorem validate_step_preserves_callstack
@@ -161,55 +172,54 @@ theorem validate_step_preserves_callstack
         rw [hdec] at h
         injection h with h
         rw [← h]
-        exact applyValidateSuccess_preserves_callstack σ _ d
+        exact applyValidateSuccess_preserves_callstack σ _ d op
   · rw [if_neg hsucc] at h
     injection h with h
     rw [← h]
 
-/-- An execute step that succeeds requires the *incoming* state to have
-    `validatedOwnerPlusOne = ownerIndex + 1` — i.e. some earlier step
-    must have stamped the token. Repackages
-    `Execute.execute_only_validateSig_authorises` through the
-    `applyStep` wrapper. -/
-theorem execute_step_requires_prior_token
+/-- An execute step that succeeds requires the *incoming* state to hold
+    a credit at `ownerIndex` — i.e. some earlier step must have stamped
+    it. Repackages `Execute.execute_only_validateSig_authorises` through
+    the `applyStep` wrapper. -/
+theorem execute_step_requires_prior_credit
     {σ σ' : ExecState} {caller : ByteVec 20}
     {ownerIndex newOffchainCount : Nat}
     {target : ByteVec 20} {value : Nat} {data : Array UInt8}
     (h : applyStep σ (.execute caller ownerIndex newOffchainCount target value data)
          = some σ') :
-    σ.validatedOwnerPlusOne = ownerIndex + 1 := by
+    σ.credits ownerIndex > 0 := by
   simp only [applyStep] at h
   exact execute_only_validateSig_authorises h
 
 /-- Same for the batch variant. -/
-theorem executeBatch_step_requires_prior_token
+theorem executeBatch_step_requires_prior_credit
     {σ σ' : ExecState} {caller : ByteVec 20}
     {ownerIndex newOffchainCount : Nat}
     {targets : List (ByteVec 20)} {values : List Nat}
     {datas : List (Array UInt8)}
     (h : applyStep σ (.executeBatch caller ownerIndex newOffchainCount
                         targets values datas) = some σ') :
-    σ.validatedOwnerPlusOne = ownerIndex + 1 := by
+    σ.credits ownerIndex > 0 := by
   simp only [applyStep] at h
   exact executeBatch_only_validateSig_authorises h
 
-/-! ## Token-write monotonicity
+/-! ## Credit-write monotonicity
 
-The transient `validatedOwnerPlusOne` can ONLY transition from `0` to a
-non-zero value via a `validate` step whose `validateSignature` returned
-success and whose decoded `ownerIndex` was non-zero (i.e. a slot-path
-sig). Execute steps clear the token (zero it). -/
+A credit counter can ONLY be lifted above zero via a `validate` step
+whose `validateSignature` returned success and whose decoded
+`ownerIndex` was non-zero (a slot-path offchain-count sig). Execute
+steps only consume (decrement). -/
 
-/-- Successful `validate` step that lifts the token from zero must be a
+/-- Successful step that lifts the credit map from all-zero must be a
     slot-path validate with a decoded sig and the storage updated by
     `bumpForOwner`. The conclusion is packaged as the same `∃` the
     Invariants module uses, so I-1 (`validateSignature_only_via_verify`)
     plugs in directly downstream. -/
-theorem applyStep_token_set_only_by_validate_success
+theorem applyStep_credit_lift_only_by_validate_success
     {σ σ' : ExecState} {step : Step}
     (h : applyStep σ step = some σ')
-    (hwas : σ.validatedOwnerPlusOne = 0)
-    (hnow : σ'.validatedOwnerPlusOne ≠ 0) :
+    (hwas : ∀ i, σ.credits i = 0)
+    (hnow : ∃ i, σ'.credits i ≠ 0) :
     ∃ (op : UserOperation) (entryPoint : ByteVec 20) (chainId : Nat)
       (verify_fn : ByteVec 32 → ByteVec 32 → ByteVec 32 →
                    ByteVec SignatureLen → Bool)
@@ -217,8 +227,7 @@ theorem applyStep_token_set_only_by_validate_success
       step = .validate op entryPoint chainId verify_fn ∧
       validateSignatureOk σ.storage op entryPoint chainId verify_fn d owner ∧
       bumpForOwner σ.storage d.ownerIndex = some σ'.storage ∧
-      d.ownerIndex ≠ 0 ∧
-      σ'.validatedOwnerPlusOne = d.ownerIndex + 1 := by
+      d.ownerIndex ≠ 0 := by
   cases hs : step with
   | validate op ep cid vfn =>
       subst hs
@@ -237,62 +246,69 @@ theorem applyStep_token_set_only_by_validate_success
             rw [hdec] at h
             injection h with h
             rw [← h] at hnow
-            exact absurd hwas hnow
+            obtain ⟨i, hi⟩ := hnow
+            exact absurd (hwas i) hi
         | some d =>
             rw [hdec] at h
             injection h with h
-            -- h : applyValidateSuccess σ (validateSignature ...).2 d = σ'
-            -- Decompose applyValidateSuccess into the two sub-cases.
+            -- h : applyValidateSuccess σ (validateSignature ...).2 d op = σ'
+            -- Decompose applyValidateSuccess into the three sub-cases.
             by_cases hd0 : d.ownerIndex = 0
-            · -- Bootstrap branch: applyValidateSuccess returns σ with only
-              -- storage updated; validatedOwnerPlusOne unchanged.
-              have hv : σ'.validatedOwnerPlusOne = σ.validatedOwnerPlusOne := by
+            · -- Bootstrap branch: credits unchanged.
+              have hv : σ'.credits = σ.credits := by
                 rw [← h]
                 unfold applyValidateSuccess
                 rw [if_pos hd0]
-              rw [hwas] at hv
-              exact absurd hv hnow
-            · -- Slot branch: validatedOwnerPlusOne becomes d.ownerIndex + 1,
-              -- storage becomes the bumped value.
-              have hv : σ'.validatedOwnerPlusOne = d.ownerIndex + 1 := by
-                rw [← h]
-                unfold applyValidateSuccess
-                rw [if_neg hd0]
-              have hst : σ'.storage = (validateSignature σ.storage op ep cid vfn).2 := by
-                rw [← h]
-                unfold applyValidateSuccess
-                rw [if_neg hd0]
-              -- Use validateSignature_success_iff to extract validateSignatureOk + bump-eq.
-              have hsucc_pair :
-                  validateSignature σ.storage op ep cid vfn
-                    = (Result.success,
-                       (validateSignature σ.storage op ep cid vfn).2) := hpair
-              rw [validateSignature_success_iff] at hsucc_pair
-              obtain ⟨d', owner, hOk, hBumpEq⟩ := hsucc_pair
-              -- d' = d (both come from decoding the same op.signature).
-              have hd_eq : d' = d := by
-                have h1 : (some d' : Option DecodedSig) = some d := by
-                  rw [← hOk.1, hdec]
-                exact Option.some.inj h1
-              -- Use d' as the witness, rewriting back to d where needed.
-              refine ⟨op, ep, cid, vfn, d', owner, rfl, hOk, ?_, ?_, ?_⟩
-              · rw [hst]; exact hBumpEq
-              · rw [hd_eq]; exact hd0
-              · rw [hd_eq]; exact hv
+              rw [hv] at hnow
+              obtain ⟨i, hi⟩ := hnow
+              exact absurd (hwas i) hi
+            · by_cases hsel : op.selectorOf = Selector.removeOwnerAtIndex
+              · -- removeOwnerAtIndex: authorised by validation alone,
+                -- no credit stamped — credits unchanged.
+                have hv : σ'.credits = σ.credits := by
+                  rw [← h]
+                  unfold applyValidateSuccess
+                  rw [if_neg hd0, if_pos hsel]
+                rw [hv] at hnow
+                obtain ⟨i, hi⟩ := hnow
+                exact absurd (hwas i) hi
+              · -- Stamping branch: storage becomes the bumped value.
+                have hst : σ'.storage = (validateSignature σ.storage op ep cid vfn).2 := by
+                  rw [← h]
+                  unfold applyValidateSuccess
+                  rw [if_neg hd0, if_neg hsel]
+                -- Use validateSignature_success_iff to extract
+                -- validateSignatureOk + bump-eq.
+                have hsucc_pair :
+                    validateSignature σ.storage op ep cid vfn
+                      = (Result.success,
+                         (validateSignature σ.storage op ep cid vfn).2) := hpair
+                rw [validateSignature_success_iff] at hsucc_pair
+                obtain ⟨d', owner, hOk, hBumpEq⟩ := hsucc_pair
+                -- d' = d (both come from decoding the same op.signature).
+                have hd_eq : d' = d := by
+                  have h1 : (some d' : Option DecodedSig) = some d := by
+                    rw [← hOk.1, hdec]
+                  exact Option.some.inj h1
+                -- Use d' as the witness, rewriting back to d where needed.
+                refine ⟨op, ep, cid, vfn, d', owner, rfl, hOk, ?_, ?_⟩
+                · rw [hst]; exact hBumpEq
+                · rw [hd_eq]; exact hd0
       · rw [if_neg hsucc] at h
         injection h with h
         rw [← h] at hnow
-        exact absurd hwas hnow
+        obtain ⟨i, hi⟩ := hnow
+        exact absurd (hwas i) hi
   | execute caller oi noc t v d =>
       subst hs
-      have htok := execute_step_requires_prior_token h
-      rw [hwas] at htok
-      exact absurd htok.symm (Nat.succ_ne_zero _)
+      have htok := execute_step_requires_prior_credit h
+      rw [hwas oi] at htok
+      exact absurd htok (Nat.lt_irrefl 0)
   | executeBatch caller oi noc ts vs ds =>
       subst hs
-      have htok := executeBatch_step_requires_prior_token h
-      rw [hwas] at htok
-      exact absurd htok.symm (Nat.succ_ne_zero _)
+      have htok := executeBatch_step_requires_prior_credit h
+      rw [hwas oi] at htok
+      exact absurd htok (Nat.lt_irrefl 0)
 
 /-! ## Trace-level: callstack growth implies a verifier-true validate -/
 
@@ -313,22 +329,22 @@ def StepVerified (σ : ExecState) (step : Step) : Prop :=
         (owner.raw.drop 32 (by decide))
         (sphincsDigest op ep cid) d.innerSig = true
 
-/-- Bridge from `applyStep_token_set_only_by_validate_success` to the
-    `StepVerified` packaging: a slot-path validate that lifts the token
-    is verified at the pre-state. -/
-private theorem stepVerified_of_token_lift
+/-- Bridge from `applyStep_credit_lift_only_by_validate_success` to the
+    `StepVerified` packaging: a slot-path validate that lifts the credit
+    map is verified at the pre-state. -/
+private theorem stepVerified_of_credit_lift
     {σ σ' : ExecState} {step : Step}
     (h : applyStep σ step = some σ')
-    (hwas : σ.validatedOwnerPlusOne = 0)
-    (hnow : σ'.validatedOwnerPlusOne ≠ 0) :
+    (hwas : ∀ i, σ.credits i = 0)
+    (hnow : ∃ i, σ'.credits i ≠ 0) :
     StepVerified σ step := by
-  obtain ⟨op, ep, cid, vfn, d, owner, hstep, hOk, _hbump, _hd0, _hvop⟩ :=
-    applyStep_token_set_only_by_validate_success h hwas hnow
+  obtain ⟨op, ep, cid, vfn, d, owner, hstep, hOk, _hbump, _hd0⟩ :=
+    applyStep_credit_lift_only_by_validate_success h hwas hnow
   refine ⟨op, ep, cid, vfn, d, owner, hstep, hOk.1, hOk.2.1, hOk.2.2.2.1⟩
 
-/-- **Trace-level non-bypass.** If `σ0.validatedOwnerPlusOne = 0` (the
-    standard boundary at transaction entry — EIP-1153 transients zero
-    at tx start) and `runTrace σ0 trace = some σ'` with `σ'.callStack`
+/-- **Trace-level non-bypass.** If `∀ i, σ0.credits i = 0` (the standard
+    boundary at transaction entry — EIP-1153 transients zero at tx
+    start) and `runTrace σ0 trace = some σ'` with `σ'.callStack`
     strictly longer than `σ0.callStack`, then `trace` contains at
     least one *successful* `validate` step whose `verify_fn` returned
     `true` on the appropriate `(pkSeed, pkRoot, sphincsDigest, innerSig)`.
@@ -341,7 +357,7 @@ private theorem stepVerified_of_token_lift
 theorem callstack_grew_implies_some_verify_true
     (σ0 σ' : ExecState) (trace : List Step)
     (hrun : runTrace σ0 trace = some σ')
-    (hinit : σ0.validatedOwnerPlusOne = 0)
+    (hinit : ∀ i, σ0.credits i = 0)
     (hgrew : σ0.callStack.length < σ'.callStack.length) :
     ∃ (σ_pre : ExecState) (step : Step),
       step ∈ trace ∧ StepVerified σ_pre step := by
@@ -349,7 +365,7 @@ theorem callstack_grew_implies_some_verify_true
   suffices aux :
       ∀ (σ : ExecState) (tr : List Step) (σf : ExecState),
         runTrace σ tr = some σf →
-        σ.validatedOwnerPlusOne = 0 →
+        (∀ i, σ.credits i = 0) →
         σ.callStack.length < σf.callStack.length →
         ∃ σ_pre step, step ∈ tr ∧ StepVerified σ_pre step by
     exact aux σ0 trace σ' hrun hinit hgrew
@@ -375,29 +391,35 @@ theorem callstack_grew_implies_some_verify_true
             rw [hpres] at hmid
             exact absurd hmid (Nat.lt_irrefl _)
         | execute caller oi noc t v d =>
-            -- An execute step requires σ.validatedOwnerPlusOne = oi + 1,
-            -- contradicting hzero (= 0).
-            have htok := execute_step_requires_prior_token hStep
-            rw [hzero] at htok
-            exact absurd htok.symm (Nat.succ_ne_zero _)
+            -- An execute step requires a credit at oi, contradicting
+            -- the all-zero map.
+            have htok := execute_step_requires_prior_credit hStep
+            rw [hzero oi] at htok
+            exact absurd htok (Nat.lt_irrefl 0)
         | executeBatch caller oi noc ts vs ds =>
-            have htok := executeBatch_step_requires_prior_token hStep
-            rw [hzero] at htok
-            exact absurd htok.symm (Nat.succ_ne_zero _)
+            have htok := executeBatch_step_requires_prior_credit hStep
+            rw [hzero oi] at htok
+            exact absurd htok (Nat.lt_irrefl 0)
       · -- Growth must come later in `rest`. Convert ¬ < to ≤.
         have hmid_le : σ_mid.callStack.length ≤ σ.callStack.length :=
           Nat.le_of_not_lt hmid
-        by_cases htoken : σ_mid.validatedOwnerPlusOne = 0
-        · -- Token still zero. Apply IH on `rest` starting from σ_mid.
+        by_cases htoken : ∀ i, σ_mid.credits i = 0
+        · -- Credit map still all-zero. Apply IH on `rest` from σ_mid.
           have hgrew_mid : σ_mid.callStack.length < σf.callStack.length := by
             calc σ_mid.callStack.length
                 ≤ σ.callStack.length := hmid_le
               _ < σf.callStack.length := hgrew
           obtain ⟨σ_pre, s, hMem, hVer⟩ := ih σ_mid hRest htoken hgrew_mid
           exact ⟨σ_pre, s, List.mem_cons.mpr (Or.inr hMem), hVer⟩
-        · -- Token became non-zero on this step ⇒ verifier-true validate.
+        · -- Some credit became non-zero on this step ⇒ verifier-true
+          -- validate. Extract the witness index classically (Nat
+          -- equality is decidable, so double negation eliminates).
+          have hex : ∃ i, σ_mid.credits i ≠ 0 :=
+            Classical.byContradiction fun hne =>
+              htoken fun i =>
+                Decidable.of_not_not fun hni => hne ⟨i, hni⟩
           exact ⟨σ, step, List.mem_cons.mpr (Or.inl rfl),
-                 stepVerified_of_token_lift hStep hzero htoken⟩
+                 stepVerified_of_credit_lift hStep hzero hex⟩
 
 /-- Convenience corollary: a `σ0` with empty callStack reaching a
     non-empty `σ'.callStack` implies a successful `validate` somewhere
@@ -405,7 +427,7 @@ theorem callstack_grew_implies_some_verify_true
 theorem any_call_implies_some_verify_true
     (σ0 σ' : ExecState) (trace : List Step)
     (hrun : runTrace σ0 trace = some σ')
-    (hinit : σ0.validatedOwnerPlusOne = 0)
+    (hinit : ∀ i, σ0.credits i = 0)
     (hempty : σ0.callStack = [])
     (hsome : σ'.callStack ≠ []) :
     ∃ (σ_pre : ExecState) (step : Step),

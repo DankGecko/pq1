@@ -136,8 +136,9 @@ opaque PQMultiOwnable_ownerAtIndex :
     deployed proxy, modelled on the same `ExecState → … → Option ExecState`
     interface as the Lean `Execute.executeWithOffchainCount`. `none`
     denotes a revert (failed guard OR a reverting dispatched call);
-    `some σ'` the post-state (storage updated, transient credit cleared,
-    one external call appended). -/
+    `some σ'` the post-state (storage updated, exactly one per-index
+    transient credit consumed at `ownerIndex`, one external call
+    appended). -/
 opaque PQSmartWallet_executeWithOffchainCount :
     ExecState → ByteVec 20 → Nat → Nat → ByteVec 20 → Nat → Array UInt8 →
     Option ExecState
@@ -284,15 +285,27 @@ axiom solidityMultiOwnable_compiles_correctly :
 
     REACHABLE-STATE HYPOTHESIS: the combined-cap invariant, as in A3.2.
 
+    CREDIT-MAP CORRESPONDENCE (since 2026-06-12, GAP-11): the Lean
+    `ExecState.credits : Nat → Nat` is the SAME per-index transient
+    credit counter map the bytecode keeps (EIP-1153 slots at
+    `keccak256(ownerIndex, _TS_CREDIT_NAMESPACE)`; stamp = `+1` in
+    `_validateSignature`, consume = `-1` here) — the previous
+    single-token abstraction and its ≤1-stamp-per-bundle envelope are
+    gone. The multi-stamp COUNTER semantics (N validations fund exactly
+    N executions of the index per transaction) is witnessed on the
+    bytecode by `check_two_stamps_fund_exactly_two_executes`.
+
     Discharge: Halmos `test/halmos/HalmosExecuteEquiv.t.sol`
     (`check_execute_pointwise_equals_lean_model`, SYMBOLIC ownerIndex —
     the money path is ∀-index, not class-representative) for the
     (result, post-`offchainSigCount`, frame, guards) projection;
     `check_execute_no_credit_reverts_for_all_indices` +
-    `check_execute_inner_revert_is_atomic` for the `none` arms; all against
-    the pinned `PQSmartWallet` runtime codehash. The remaining ExecState
-    component — the `callStack` append (i.e. that the EVM faithfully emits
-    the `target.call{value}(data)` the bytecode reached) — is axiom A4
+    `check_execute_inner_revert_is_atomic` for the `none` arms;
+    `check_two_stamps_fund_exactly_two_executes` for the counter
+    semantics; all against the pinned `PQSmartWallet` runtime codehash.
+    The remaining ExecState component — the `callStack` append (i.e.
+    that the EVM faithfully emits the `target.call{value}(data)` the
+    bytecode reached) — is axiom A4
     (`evm_bytecode_executes_correctly`), the same EVM-execution boundary
     through which `theft_free` routes every actual value movement; it is
     NOT a wallet-compilation fact and is intentionally not re-proved on the

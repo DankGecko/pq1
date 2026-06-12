@@ -26,27 +26,29 @@ import {PqsignerProto} from "../../src/generated/PqsignerProto.sol";
 ///         mirrored from the A3.2 storage correspondence):
 ///           * `σ.storage`            <-> the wallet's ERC-7201 storage,
 ///             read through the same public getters the bytecode reads;
-///           * `σ.validatedOwnerPlusOne` <-> the wallet's transient credit
-///             counter at the stamped index, supplied by the HARNESS as
-///             `stampedPlusOne` (transient storage has no external getter;
-///             the harness knows the ground truth because it performed the
-///             stamping `validateUserOp` calls itself, and the
-///             stamp<->consume bytecode pairing is separately proven by the
-///             `HalmosExecute` + `HalmosExecuteEquiv` credit rules). The
-///             Lean model's single-token abstraction corresponds to the
-///             bytecode's per-index counter exactly on the <=1-stamp
-///             envelope the harness establishes;
+///           * `σ.credits ownerIndex` <-> the wallet's per-index transient
+///             credit counter (`keccak256(ownerIndex, _TS_CREDIT_NAMESPACE)`
+///             EIP-1153 slot), supplied by the HARNESS as `creditAtIndex`
+///             (transient storage has no external getter; the harness knows
+///             the ground truth because it performed the stamping
+///             `validateUserOp` calls itself, and the stamp<->consume
+///             bytecode pairing is separately proven by the
+///             `HalmosExecute` + `HalmosExecuteEquiv` credit rules,
+///             including the multi-stamp counter rule). Since 2026-06-12 the
+///             Lean model carries the SAME per-index counter map the
+///             bytecode does (`ExecState.credits : Nat → Nat`,
+///             stamp = `+1`, consume = `-1`) — the previous single-token
+///             abstraction and its <=1-stamp envelope are gone (GAP-11);
 ///           * the Lean `Option ExecState` codomain <-> (revert ⟺ `none`);
 ///             the appended `callStack` entry <-> the dispatched EVM call,
 ///             observable via the recorder rule when the target records.
 ///
-///         FAILURE-ORDER NOTE: the deployed bytecode checks
-///         caller → credit → self-target → setOffchain, the Lean model
-///         caller → token-set → token-match → self-target → setOffchain.
-///         Both orders produce the identical observable (revert,
-///         state-unchanged) on every failing input — the equivalence rule
-///         compares only (success?, post-state), which is the equality the
-///         axiom states.
+///         GUARD-ORDER NOTE: both the deployed bytecode and the Lean model
+///         check caller → credit → self-target → setOffchain (the old
+///         model's separate token-set / token-match clauses collapsed into
+///         the single per-index credit-present check — presenting an index
+///         IS naming the credit consumed; H-3 parity binds calldata index
+///         to wrapper index in the VALIDATION phase).
 contract LeanExecuteModel {
     uint256 public constant MAX_SLOT_USES = PqsignerProto.MAX_SLOT_USES;
 
@@ -68,17 +70,17 @@ contract LeanExecuteModel {
     }
 
     /// @notice The Lean `executeWithOffchainCount σ caller ownerIndex
-    ///         newOffchainCount target value data` (Execute.lean:73-90),
+    ///         newOffchainCount target value data` (Execute.lean),
     ///         with `σ.storage` read through the wallet's getters,
-    ///         `σ.validatedOwnerPlusOne = stampedPlusOne` (harness ground
-    ///         truth), `σ.selfAddress = address(wallet)`, and
-    ///         `σ.entryPoint = entryPointAddr`. `value`/`data` only flow
-    ///         into the appended `Call` (checked by the recorder rule), not
-    ///         into the accept/reject decision, so they are not parameters
-    ///         here.
+    ///         `σ.credits ownerIndex = creditAtIndex` (harness ground
+    ///         truth for the PRESENTED index), `σ.selfAddress =
+    ///         address(wallet)`, and `σ.entryPoint = entryPointAddr`.
+    ///         `value`/`data` only flow into the appended `Call` (checked
+    ///         by the recorder rule), not into the accept/reject decision,
+    ///         so they are not parameters here.
     function predictExecute(
         PQSmartWallet wallet,
-        uint256 stampedPlusOne,
+        uint256 creditAtIndex,
         address caller,
         uint256 ownerIndex,
         uint256 newOffchainCount,
@@ -86,10 +88,8 @@ contract LeanExecuteModel {
     ) external view returns (Prediction memory p) {
         // Lean: `if caller ≠ σ.entryPoint then none`
         if (caller != entryPointAddr) return p;
-        // Lean: `if σ.validatedOwnerPlusOne = 0 then none`
-        if (stampedPlusOne == 0) return p;
-        // Lean: `if σ.validatedOwnerPlusOne - 1 ≠ ownerIndex then none`
-        if (stampedPlusOne - 1 != ownerIndex) return p;
+        // Lean: `if σ.credits ownerIndex = 0 then none`
+        if (creditAtIndex == 0) return p;
         // Lean: `if target = σ.selfAddress then none`
         if (target == address(wallet)) return p;
         // Lean: `Storage.setOffchain σ.storage ownerIndex newOffchainCount
@@ -97,14 +97,14 @@ contract LeanExecuteModel {
         return _setOffchain(wallet, ownerIndex, newOffchainCount);
     }
 
-    /// @notice The Lean `executeBatchWithOffchainCount` (Execute.lean:107-125).
+    /// @notice The Lean `executeBatchWithOffchainCount` (Execute.lean).
     ///         `targets` participates in the per-element self-target check
-    ///         (`appendBatchCalls`, Execute.lean:95-104); `values`/`datas`
-    ///         only flow into the appended calls, so only their LENGTHS
-    ///         (the `| _, _, _ => none` length-mismatch arm) matter here.
+    ///         (`appendBatchCalls`); `values`/`datas` only flow into the
+    ///         appended calls, so only their LENGTHS (the `| _, _, _ =>
+    ///         none` length-mismatch arm) matter here.
     function predictExecuteBatch(
         PQSmartWallet wallet,
-        uint256 stampedPlusOne,
+        uint256 creditAtIndex,
         address caller,
         uint256 ownerIndex,
         uint256 newOffchainCount,
@@ -114,10 +114,8 @@ contract LeanExecuteModel {
     ) external view returns (Prediction memory p) {
         // Lean: `if caller ≠ σ.entryPoint then none`
         if (caller != entryPointAddr) return p;
-        // Lean: `if σ.validatedOwnerPlusOne = 0 then none`
-        if (stampedPlusOne == 0) return p;
-        // Lean: `if σ.validatedOwnerPlusOne - 1 ≠ ownerIndex then none`
-        if (stampedPlusOne - 1 != ownerIndex) return p;
+        // Lean: `if σ.credits ownerIndex = 0 then none`
+        if (creditAtIndex == 0) return p;
         // Lean `appendBatchCalls`: the `| _, _, _ => none` arm fires on any
         // length mismatch...
         if (valuesLen != targets.length || datasLen != targets.length) return p;

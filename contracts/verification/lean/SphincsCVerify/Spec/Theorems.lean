@@ -466,12 +466,13 @@ execute symbols, so `#print axioms` names the execute bridge axioms
 
 open SphincsCVerify.Wallet.Execute
 
-/-- **A successful deployed `executeWithOffchainCount` required the
-    matching validated-owner token on entry.** If the code at the pinned
-    `PQSmartWallet` codehash performs a (non-reverting) single execute
-    from state `σ`, then `σ.validatedOwnerPlusOne = ownerIndex + 1` — i.e.
-    an earlier in-transaction step stamped the credit, which (model-side,
-    via `TxFlow` + I-1) only a verifier-true slot-path validate can do.
+/-- **A successful deployed `executeWithOffchainCount` required a
+    validated-op credit at `ownerIndex` on entry.** If the code at the
+    pinned `PQSmartWallet` codehash performs a (non-reverting) single
+    execute from state `σ`, then `σ.credits ownerIndex > 0` — i.e. an
+    earlier in-transaction step stamped a per-index credit, which
+    (model-side, via `TxFlow` + I-1) only a verifier-true slot-path
+    validate can do.
 
     Composes A3.2-exec (`solidityWalletExecute_compiles_correctly`,
     success direction) with E-8 (`execute_only_validateSig_authorises`).
@@ -485,13 +486,13 @@ theorem deployed_execute_requires_prior_token
     (hInv : ∀ i, σ.storage.slotUses i + σ.storage.offchainSigCount i ≤ MaxSlotUses)
     (h : Bridge.DeployedBytecode.PQSmartWallet_executeWithOffchainCount
           σ caller ownerIndex newOffchainCount target value data = some σ') :
-    σ.validatedOwnerPlusOne = ownerIndex + 1 :=
+    σ.credits ownerIndex > 0 :=
   Wallet.Execute.execute_only_validateSig_authorises
     (Bridge.solidityWalletExecute_compiles_correctly
       σ caller ownerIndex newOffchainCount target value data σ' hInv h)
 
-/-- **A successful deployed `executeBatchWithOffchainCount` required the
-    matching validated-owner token on entry.** Batch peer of
+/-- **A successful deployed `executeBatchWithOffchainCount` required a
+    validated-op credit at `ownerIndex` on entry.** Batch peer of
     `deployed_execute_requires_prior_token`; composes A3.2-exec(batch)
     with E-8(batch). -/
 theorem deployed_executeBatch_requires_prior_token
@@ -501,7 +502,7 @@ theorem deployed_executeBatch_requires_prior_token
     (hInv : ∀ i, σ.storage.slotUses i + σ.storage.offchainSigCount i ≤ MaxSlotUses)
     (h : Bridge.DeployedBytecode.PQSmartWallet_executeBatchWithOffchainCount
           σ caller ownerIndex newOffchainCount targets values datas = some σ') :
-    σ.validatedOwnerPlusOne = ownerIndex + 1 :=
+    σ.credits ownerIndex > 0 :=
   Wallet.Execute.executeBatch_only_validateSig_authorises
     (Bridge.solidityWalletExecuteBatch_compiles_correctly
       σ caller ownerIndex newOffchainCount targets values datas σ' hInv h)
@@ -570,18 +571,18 @@ theorem executeBatch_faithful
     caller = σ.entryPoint ∧
     -- E-2: no self-target in the batch
     (∀ t ∈ targets, t ≠ σ.selfAddress) ∧
-    -- E-4: transient token cleared (no replay)
-    σ'.validatedOwnerPlusOne = 0 ∧
+    -- E-4: exactly one credit consumed at the index (one-shot replay guard)
+    σ'.credits ownerIndex = σ.credits ownerIndex - 1 ∧
     -- E-5: callStack appends in input order
     σ'.callStack = σ.callStack ++ Wallet.Execute.buildBatchCalls targets values datas ∧
     -- E-6: value outflow equals sum of signed values
     Wallet.Execute.totalValue σ'.callStack
       = Wallet.Execute.totalValue σ.callStack + values.foldl (· + ·) 0 ∧
-    -- E-8: a prior validateSignature stamped the matching token
-    σ.validatedOwnerPlusOne = ownerIndex + 1 :=
+    -- E-8: a prior validateSignature stamped a credit at the index
+    σ.credits ownerIndex > 0 :=
   ⟨Wallet.Execute.executeBatch_caller_is_entrypoint h,
    Wallet.Execute.executeBatch_rejects_self_target h,
-   Wallet.Execute.executeBatch_clears_token h,
+   Wallet.Execute.executeBatch_consumes_credit h,
    Wallet.Execute.executeBatch_runs_in_signed_order h,
    Wallet.Execute.executeBatch_value_outflow_eq_sum_values hlen1 hlen2 h,
    Wallet.Execute.executeBatch_only_validateSig_authorises h⟩
@@ -589,8 +590,8 @@ theorem executeBatch_faithful
 /-! ## 7. Claim 4 — execution-gate non-bypass.
 
 For any transaction trace `runTrace σ0 trace = some σ'` starting from a
-clean transient (`σ0.validatedOwnerPlusOne = 0`, the EIP-1153 boundary
-at transaction entry), every wallet-initiated external call appearing
+clean transient (`∀ i, σ0.credits i = 0`, the EIP-1153 boundary at
+transaction entry), every wallet-initiated external call appearing
 in `σ'.callStack` (i.e. any growth beyond `σ0.callStack`) is authorised
 by at least one `validate` step in `trace` whose on-chain
 `c10Verifier.verify` returned `true` over `sphincsDigest(op)` under an
@@ -598,12 +599,12 @@ installed owner key.
 
 The composition is:
 
-  * `Wallet.TxFlow.applyStep_token_set_only_by_validate_success` — the
-    transient `validatedOwnerPlusOne` cannot be lifted from `0` to a
-    non-zero value except by a successful slot-path `validate` step.
+  * `Wallet.TxFlow.applyStep_credit_lift_only_by_validate_success` —
+    the per-index transient credit map cannot be lifted from all-zero
+    except by a successful slot-path `validate` step.
   * `Wallet.Execute.execute_only_validateSig_authorises` (E-8) — every
     successful `execute` / `executeBatch` step required
-    `validatedOwnerPlusOne = ownerIndex + 1` on entry.
+    `credits ownerIndex > 0` on entry.
   * `Wallet.Invariants.validateSignature_only_via_verify` (I-1) — every
     successful `validateSignature` implies `verify_fn` returned `true`
     on the decoded `(pkSeed, pkRoot, sphincsDigest, innerSig)`.
@@ -634,7 +635,7 @@ open SphincsCVerify.Wallet.TxFlow
 theorem every_call_gated_by_verifier
     (σ0 σ' : Wallet.Execute.ExecState) (trace : List Wallet.TxFlow.Step)
     (hrun : Wallet.TxFlow.runTrace σ0 trace = some σ')
-    (hinit : σ0.validatedOwnerPlusOne = 0)
+    (hinit : ∀ i, σ0.credits i = 0)
     (hgrew : σ0.callStack.length < σ'.callStack.length) :
     ∃ (σ_pre : Wallet.Execute.ExecState) (step : Wallet.TxFlow.Step),
       step ∈ trace ∧ Wallet.TxFlow.StepVerified σ_pre step :=
@@ -646,7 +647,7 @@ theorem every_call_gated_by_verifier
 theorem no_call_without_prior_verifier_acceptance
     (σ0 σ' : Wallet.Execute.ExecState) (trace : List Wallet.TxFlow.Step)
     (hrun : Wallet.TxFlow.runTrace σ0 trace = some σ')
-    (hinit : σ0.validatedOwnerPlusOne = 0)
+    (hinit : ∀ i, σ0.credits i = 0)
     (hempty : σ0.callStack = [])
     (hsome : σ'.callStack ≠ []) :
     ∃ (σ_pre : Wallet.Execute.ExecState) (step : Wallet.TxFlow.Step),

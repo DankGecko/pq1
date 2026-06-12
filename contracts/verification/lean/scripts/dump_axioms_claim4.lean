@@ -11,10 +11,10 @@ indicate the proof has drifted off the intended dep chain.
 
 import SphincsCVerify
 
-#print axioms SphincsCVerify.Wallet.TxFlow.applyStep_token_set_only_by_validate_success
+#print axioms SphincsCVerify.Wallet.TxFlow.applyStep_credit_lift_only_by_validate_success
 #print axioms SphincsCVerify.Wallet.TxFlow.validate_step_preserves_callstack
-#print axioms SphincsCVerify.Wallet.TxFlow.execute_step_requires_prior_token
-#print axioms SphincsCVerify.Wallet.TxFlow.executeBatch_step_requires_prior_token
+#print axioms SphincsCVerify.Wallet.TxFlow.execute_step_requires_prior_credit
+#print axioms SphincsCVerify.Wallet.TxFlow.executeBatch_step_requires_prior_credit
 #print axioms SphincsCVerify.Wallet.TxFlow.callstack_grew_implies_some_verify_true
 #print axioms SphincsCVerify.Wallet.TxFlow.any_call_implies_some_verify_true
 #print axioms SphincsCVerify.Spec.Theorems.every_call_gated_by_verifier

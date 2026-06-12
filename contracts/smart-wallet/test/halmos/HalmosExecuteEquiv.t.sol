@@ -45,11 +45,14 @@ contract RevertingTarget {
 ///             (i ∈ {1,2}) and `bootstrapUses`: fully symbolic under the
 ///             kernel-proven combined-cap invariant (`combinedCap_inductive`),
 ///             exactly the reachable-state hypothesis A3.2 carries;
-///           * the stamped credit state: established by a REAL
-///             `validateUserOp` call on the same bytecode (so the
+///           * the stamped credit state: established by REAL
+///             `validateUserOp` calls on the same bytecode (so the
 ///             stamp↔consume pairing is the genuine production path), with
-///             the model's `validatedOwnerPlusOne` fed the per-path ground
-///             truth derived from that call's observable result;
+///             the model's per-index `σ.credits` map fed the ground truth
+///             derived from those calls' observable results
+///             (`_creditAt`); the multi-stamp COUNTER semantics (N stamps
+///             fund exactly N executes — the bundle envelope, GAP-11) is
+///             witnessed by `check_two_stamps_fund_exactly_two_executes`;
 ///           * `data` bytes: symbolic content over length classes
 ///             {0, 5, 68} (data does not influence accept/reject; the
 ///             dispatch rule checks the forwarded value + length, with
@@ -126,14 +129,14 @@ contract HalmosExecuteEquiv is HalmosWalletBase {
     }
 
     /// @dev Run the REAL validation-phase bytecode to stamp (or fail to
-    ///      stamp) the execution credit for wrapper `ownerIndex = 1`, with
+    ///      stamp) one execution credit for wrapper `ownerIndex = 1`, with
     ///      an `executeWithOffchainCount`-shaped callData (H-3 word = 1).
-    ///      Returns the model-side `σ.validatedOwnerPlusOne` ground truth:
-    ///      `2` iff the validate returned success (credit stamped for index
-    ///      1), `0` otherwise (cap-exhausted path — no credit). This is the
-    ///      single-stamp envelope of the A3.2-exec axioms' state
-    ///      correspondence.
-    function _stampViaValidate() internal returns (uint256 stampedPlusOne) {
+    ///      Returns `1` iff the validate returned success (one credit
+    ///      stamped at index 1), `0` otherwise (cap-exhausted path — no
+    ///      credit). The model-side per-index ground truth for a presented
+    ///      index `i` is then `i == 1 ? stamped : 0` — the credit map
+    ///      `{1 ↦ stamped}` with every other index zero.
+    function _stampViaValidate() internal returns (uint256 stamped) {
         bytes memory callData = abi.encodeCall(
             wallet.executeWithOffchainCount,
             (uint256(1), uint256(0), CODELESS_TARGET, uint256(0), bytes(""))
@@ -142,7 +145,18 @@ contract HalmosExecuteEquiv is HalmosWalletBase {
         c10.setValid(true);
         vm.prank(ENTRY_POINT_ADDR);
         uint256 vres = wallet.validateUserOp(_op(callData, wrappedSig), bytes32(0), 0);
-        stampedPlusOne = vres == 0 ? 2 : 0;
+        stamped = vres == 0 ? 1 : 0;
+    }
+
+    /// @dev The per-index credit ground truth for a (symbolic) presented
+    ///      index, after `_stampViaValidate` stamped `stamped` credits at
+    ///      index 1: `credits[i] = (i == 1) ? stamped : 0`.
+    function _creditAt(uint256 stamped, uint256 presentedIndex)
+        internal
+        pure
+        returns (uint256)
+    {
+        return presentedIndex == 1 ? stamped : 0;
     }
 
     /// @dev Symbolic `data` over the length classes {0, 5, 68}. Content is
@@ -168,14 +182,15 @@ contract HalmosExecuteEquiv is HalmosWalletBase {
         uint256 probeIndex
     ) public {
         _storeSymbolicCounters();
-        uint256 stampedPlusOne = _stampViaValidate();
+        uint256 stamped = _stampViaValidate();
 
         uint256 newCount = svm.createUint256("newOffchainCount");
         uint256 value = _symValue("value");
         bytes memory data = _sweepData(dataSel);
 
-        LeanExecuteModel.Prediction memory want =
-            model.predictExecute(wallet, stampedPlusOne, ENTRY_POINT_ADDR, callIdx, newCount, CODELESS_TARGET);
+        LeanExecuteModel.Prediction memory want = model.predictExecute(
+            wallet, _creditAt(stamped, callIdx), ENTRY_POINT_ADDR, callIdx, newCount, CODELESS_TARGET
+        );
 
         // Pre-state probes for the frame / fail-path halves.
         uint256 preBoot = wallet.bootstrapUses();
@@ -232,7 +247,7 @@ contract HalmosExecuteEquiv is HalmosWalletBase {
         vm.prank(ENTRY_POINT_ADDR);
         uint256 vres =
             wallet.validateUserOp(_op(vCallData, abi.encode(uint256(1), new bytes(4008))), bytes32(0), 0);
-        uint256 stampedPlusOne = vres == 0 ? 2 : 0;
+        uint256 stamped = vres == 0 ? 1 : 0;
 
         // Array-shape classes: {0,1,2} equal-length, {2 targets / 1 value}
         // mismatch, {2 targets, second = self} self-reject.
@@ -262,7 +277,7 @@ contract HalmosExecuteEquiv is HalmosWalletBase {
         uint256 newCount = svm.createUint256("batchNewOffchainCount");
 
         LeanExecuteModel.Prediction memory want = model.predictExecuteBatch(
-            wallet, stampedPlusOne, ENTRY_POINT_ADDR, callIdx, newCount, targets, vLen, n
+            wallet, _creditAt(stamped, callIdx), ENTRY_POINT_ADDR, callIdx, newCount, targets, vLen, n
         );
 
         uint256 preBoot = wallet.bootstrapUses();
@@ -317,8 +332,8 @@ contract HalmosExecuteEquiv is HalmosWalletBase {
     /// it; the Lean trace model scopes to all-success traces — see the
     /// axiom comment in Bridge/Refinement.lean.)
     function check_execute_inner_revert_is_atomic(uint256 dataSel) public {
-        uint256 stampedPlusOne = _stampViaValidate();
-        vm.assume(stampedPlusOne == 2);
+        uint256 stamped = _stampViaValidate();
+        vm.assume(stamped == 1);
 
         uint256 preOff1 = wallet.offchainSigCount(1);
         uint256 preSlot1 = wallet.slotUses(1);
@@ -376,6 +391,47 @@ contract HalmosExecuteEquiv is HalmosWalletBase {
             assertTrue(false, "credit: remove-selector validate opened the execute gate");
         } catch {
             // expected: OwnerIndexMismatch — no credit was stamped
+        }
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // Rule 6 — multi-credit COUNTER semantics (bundle envelope, GAP-11):
+    // N validations hand exactly N credits to N executions of the same
+    // index in one transaction. This is the bytecode witness for the Lean
+    // `credits : Nat → Nat` per-index counter map (stamp = +1,
+    // consume = -1): two stamped validates fund exactly two executes —
+    // the third reverts with no credit left, and the symbolic
+    // `newOffchainCount`s thread the monotonic `setOffchain` chain.
+    // ──────────────────────────────────────────────────────────────────
+    function check_two_stamps_fund_exactly_two_executes() public {
+        uint256 s1 = _stampViaValidate();
+        uint256 s2 = _stampViaValidate();
+        // The base wallet's counters start at zero, so both validates
+        // succeed on this concrete pre-state (capOk holds).
+        assertEq(s1, 1, "first stamp should succeed");
+        assertEq(s2, 1, "second stamp should succeed");
+
+        // Monotonic counts: c1 <= c2, both within the combined cap.
+        uint256 c1 = svm.createUint256("bundleCount1");
+        uint256 c2 = svm.createUint256("bundleCount2");
+        vm.assume(c1 <= c2);
+        vm.assume(c2 <= MAX_SLOT_USES - wallet.slotUses(1));
+        vm.assume(c1 >= wallet.offchainSigCount(1));
+
+        // Credit balance 2: first execute consumes one...
+        vm.prank(ENTRY_POINT_ADDR);
+        wallet.executeWithOffchainCount(1, c1, CODELESS_TARGET, 0, "");
+        // ...second execute consumes the other...
+        vm.prank(ENTRY_POINT_ADDR);
+        wallet.executeWithOffchainCount(1, c2, CODELESS_TARGET_2, 0, "");
+        assertEq(wallet.offchainSigCount(1), c2, "bundle: second setOffchain lost");
+        // ...and a third execute finds the counter at zero.
+        vm.prank(ENTRY_POINT_ADDR);
+        try wallet.executeWithOffchainCount(1, c2, CODELESS_TARGET, 0, "")
+        returns (bytes memory) {
+            assertTrue(false, "credit counter: third execute ran on two stamps");
+        } catch {
+            // expected: OwnerIndexMismatch — both credits consumed
         }
     }
 }
