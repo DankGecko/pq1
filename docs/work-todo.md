@@ -2047,6 +2047,36 @@ compiler/silicon/FI/SCA — those stay with `tools/sca` + silicon validation.
       fuzzing in cargo tests (`tools/spec-oracle/`); multi-agent Facade-taxonomy
       audit (translation infidelity / trust-boundary / spec-gaming) as a
       recurring review; document the no-unqualified-"verified" claim rule.
+      Concrete sub-items from the 2026-06-12 proof-grinding-SOTA review
+      (transcription-spec / ML-KEM-pattern chat export — assessed: mostly
+      validates the current setup; these are the three transferable deltas):
+      - [ ] **LeanLoop falsification upgrade:** add `bv_decide` to the NEG
+            probe's `neg_tactics` (currently only simp_all/omega/intros —
+            `leanloop/spec_vet.py:87`) and boundary-value witnesses
+            (zero/max/length-edge) to HYP. Rationale: `plausible` random
+            testing essentially never finds counterexamples in 2^256-sized
+            spaces, so CEX/NEG give false comfort on exactly the
+            crypto-shaped specs; bv_decide-on-the-negation is a real
+            falsifier and its LRAT cert is kernel-checked (no conflict with
+            the native_decide ban). Lives in the LeanLoop repo, not here.
+      - [ ] **Bulk random differential beyond the 10 KATs:** extend the
+            executable-spec conformance from published vectors to hundreds
+            of `gen_test_vectors.rs`-generated random vectors, Lean
+            executable spec ↔ sphincs-c10 host reference (digest + htIdx
+            layers are executable today, 10/10; extend per-layer as the
+            A3.1 ADRS-divergence fix lands). The KAT layer is what breaks
+            the spec↔implementation circularity (our Spec/ transcribes the
+            Rust, not an external standard — C10 deviates from FIPS 205 by
+            design), so widening it is the highest-leverage spec-assurance
+            buy. Cross-ref §18b ④ (A3.1 re-discharge) — that fix is the
+            prerequisite for the full-verify differential.
+      - [x] Transcription-spec discipline (per-deviation delimiting +
+            citation): already satisfied — `Spec/Wots.lean:1-17` delimits
+            WOTS+C, `Spec/Params.lean:13-17` cites Hülsing et al. SPHINCS+C
+            PQC2022; EUF-CMA reduction cited as TCB (Barbosa et al.
+            ASIACRYPT 2024 + the +C transition paper) in AXIOM_STATUS.json.
+            No action needed beyond keeping the discipline for new Spec
+            modules (FORS/hypertree P3 extensions).
 - [ ] **P5 — composition + outreach (post-Oct).** sign∘verify end-to-end;
       Tier B targets; EF Verified-zkEVM grant application
       (verified-zkevm@ethereum.org, program winds down ~end-2026) — pitch:
