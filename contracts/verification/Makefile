@@ -16,10 +16,19 @@
 LEAN_DIR := lean
 LAKE     ?= $(shell command -v lake 2>/dev/null || echo $$HOME/.elan/bin/lake)
 
-.PHONY: verify verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup
+.PHONY: verify verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp
 
 verify: verify-build
 	@cd $(LEAN_DIR) && $(LAKE) exe verify-test-vectors
+
+# NIST CAVP SHA-256 conformance: regenerate the embedded vector module from
+# the official byte-oriented .rsp suite (cavp/ — idempotent) and replay ALL
+# ShortMsg + LongMsg vectors plus the full SHAVS Monte Carlo procedure
+# through the executable FIPS 180-4 spec (Spec/Sha256Impl.lean). Compiled
+# IO-level comparison; non-zero exit on any mismatch so CI can gate.
+verify-cavp:
+	@python3 scripts/gen_cavp_vectors.py
+	@cd $(LEAN_DIR) && $(LAKE) exe verify-cavp
 
 verify-build:
 	@cd $(LEAN_DIR) && $(LAKE) build
@@ -127,9 +136,11 @@ extract-fors-index:
 	  && echo "OK: committed FORS extraction matches the current Rust" \
 	  || { echo "DRIFT: fors.rs index path changed — re-extract, re-prove, re-commit"; exit 1; }
 
-# §33 P1 — guard that Extracted/SpecVendored.lean stays a faithful copy of
-# the SphincsCVerify source it vendors (the version bridge's trust rests on
-# the verbatim transcription). Compares the named ByteVec/Adrs definitions.
+# §33 P1 — guard that the vendored copies in extracted/Extracted/ stay
+# faithful to the SphincsCVerify sources they vendor (the version bridge's
+# trust rests on the verbatim transcription). Compares the named ByteVec/Adrs
+# definitions (SpecVendored.lean) and the FIPS 180-4 SHA-256 definitions
+# (Sha256Vendored.lean, source Spec/Sha256Impl.lean).
 .PHONY: verify-spec-vendored-fidelity
 verify-spec-vendored-fidelity:
 	@python3 scripts/check_vendored_spec.py
@@ -239,7 +250,9 @@ extract-merkle-verify:
 	@python3 scripts/dedup_extraction.py /tmp/pqsigner-extract/mkout/Funs.lean /tmp/pqsigner-extract/mkout/Funs.fixed.lean \
 	  --sed-import 'Merkle.=Extracted.Merkle.' \
 	  --kill 'sphincs_c10::address::make_adrs' --kill 'sphincs_c10::params::H' \
-	  --add-import Extracted.Adrs --add-import Extracted.Fors.Funs
+	  --kill 'sphincs_c10::hash::pad16' --kill 'sphincs_c10::params::N' \
+	  --add-import Extracted.Adrs --add-import Extracted.Fors.Funs \
+	  --add-import Extracted.Hash.Funs
 	@diff -u $(EXTRACTED_DIR)/Extracted/Merkle/Funs.lean /tmp/pqsigner-extract/mkout/Funs.fixed.lean \
 	  && echo "OK: committed merkle extraction matches the current Rust" \
 	  || { echo "DRIFT: sphincs-c10/src/merkle.rs changed — re-extract, re-prove, re-commit"; exit 1; }
@@ -320,3 +333,27 @@ extract-decode-item:
 	@diff -u $(EXTRACTED_DIR)/Extracted/Decode/Funs.lean /tmp/pqsigner-extract/dout/Funs.fixed.lean \
 	  && echo "OK: committed decode_item extraction matches the current Rust" \
 	  || { echo "DRIFT: tx-core/src/rlp.rs changed — re-extract, re-prove, re-commit"; exit 1; }
+
+# §33 axiom-collapse — the five sphincs-c10 tweakable-hash primitives with
+# sha256_bytes as the SINGLE opaque boundary (FunsExternal wires it to the
+# vendored FIPS 180-4 sha256_pure). chain_hash extracts its real loop (calls
+# th); th/th_pair/th_multi/wots_digest expose their exact preimage assembly.
+.PHONY: extract-hash-fns
+extract-hash-fns:
+	@mkdir -p /tmp/pqsigner-extract
+	@cd $(REPO_ROOT)/sphincs-c10 && RUSTFLAGS="--cfg lean_extract" \
+	  $(PQLEAN)/charon cargo --preset=aeneas --opaque sha2 --opaque zeroize \
+	  --opaque 'sphincs_c10::hash::sha256_bytes' \
+	  --start-from 'sphincs_c10::hash::th' \
+	  --start-from 'sphincs_c10::hash::th_pair' \
+	  --start-from 'sphincs_c10::hash::th_multi' \
+	  --start-from 'sphincs_c10::hash::chain_hash' \
+	  --start-from 'sphincs_c10::hash::wots_digest' \
+	  --dest-file /tmp/pqsigner-extract/hashfns.llbc 2>&1 | tail -1
+	@rm -rf /tmp/pqsigner-extract/hout && mkdir -p /tmp/pqsigner-extract/hout
+	@$(PQLEAN)/aeneas -backend lean -dest /tmp/pqsigner-extract/hout -split-files /tmp/pqsigner-extract/hashfns.llbc
+	@python3 scripts/dedup_extraction.py /tmp/pqsigner-extract/hout/Funs.lean /tmp/pqsigner-extract/hout/Funs.fixed.lean \
+	  --sed-import 'Hashfns.=Extracted.Hash.'
+	@diff -u $(EXTRACTED_DIR)/Extracted/Hash/Funs.lean /tmp/pqsigner-extract/hout/Funs.fixed.lean \
+	  && echo "OK: committed hash-fns extraction matches the current Rust" \
+	  || { echo "DRIFT: sphincs-c10/src/hash.rs changed — re-extract, re-prove, re-commit"; exit 1; }

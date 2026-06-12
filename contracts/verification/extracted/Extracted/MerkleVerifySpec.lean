@@ -21,6 +21,7 @@
    entries < 256 so BitVec.ofNat is injective on them), pad16 step* gives the
    pure pad, the &&&1 / >>>1 selections match %2 / /2 by scalar_tac. -/
 import Extracted.Merkle.Funs
+import Extracted.HashSpecs
 import Extracted.AdrsEquiv
 import Extracted.SetSliceLemmas
 import Extracted.ForsLoop
@@ -95,6 +96,7 @@ theorem pad16_spec (v : Std.Array Std.U8 16#usize) :
   simp [pad16p, hv]
 
 set_option maxHeartbeats 16000000 in
+set_option maxRecDepth 100000 in
 /-- Loop lemma (continuation form): folding the remaining siblings from the
     current state yields the total fold. -/
 theorem verify_auth_path_loop_value

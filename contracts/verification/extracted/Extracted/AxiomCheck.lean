@@ -18,6 +18,8 @@ import Extracted.MerkleVerifySpec
 import Extracted.TxMerkleSpec
 import Extracted.DecodeItemSpec
 import Extracted.PkFromSigSpec
+import Extracted.Sha256Pure
+import Extracted.HashSpecs
 import Extracted.UserOpEquiv
 import Extracted.UserOpEquivByteLayout
 import Extracted.SpecBridge
@@ -53,3 +55,10 @@ import Extracted.ForsLoop
 #print axioms Extracted.Equiv.decode_length_be_spec
 #print axioms Extracted.Equiv.decode_item_spec
 #print axioms Extracted.Equiv.pk_from_sig_spec
+#print axioms sha256_pure
+#print axioms sphincs_c10.hash.truncate_spec
+#print axioms sphincs_c10.hash.th_spec
+#print axioms sphincs_c10.hash.th_pair_spec
+#print axioms sphincs_c10.hash.wots_digest_spec
+#print axioms sphincs_c10.hash.th_multi_spec
+#print axioms sphincs_c10.hash.chain_hash_spec

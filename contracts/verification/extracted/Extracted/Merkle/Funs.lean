@@ -5,6 +5,7 @@ import Extracted.Merkle.Types
 import Extracted.Merkle.FunsExternal
 import Extracted.Adrs
 import Extracted.Fors.Funs
+import Extracted.Hash.Funs
 open Aeneas Aeneas.Std Result ControlFlow Error
 set_option linter.dupNamespace false
 set_option linter.hashCommand false
@@ -20,25 +21,6 @@ set_option maxRecDepth 2048
 noncomputable section
 
 namespace sphincs_c10
-
-/-- [sphincs_c10::params::N]
-    Source: 'sphincs-c10/src/params.rs', lines 19:0-19:24
-    Visibility: public -/
-@[global_simps, irreducible] def params.N : Std.Usize := 16#usize
-
-/-- [sphincs_c10::hash::pad16]:
-    Source: 'sphincs-c10/src/hash.rs', lines 161:0-165:1
-    Visibility: public -/
-def hash.pad16
-  (val : Array Std.U8 16#usize) : Result (Array Std.U8 32#usize) := do
-  let out := Array.repeat 32#usize 0#u8
-  let (s, index_mut_back) ←
-    core.array.Array.index_mut (core.ops.index.IndexMutSlice
-      (core.slice.index.SliceIndexRangeToUsizeSlice Std.U8)) out
-      { «end» := params.N }
-  let s1 ← lift (Array.to_slice val)
-  let s2 ← core.slice.Slice.copy_from_slice core.marker.CopyU8 s s1
-  ok (index_mut_back s2)
 
 /-- [sphincs_c10::params::ADRS_TREE]
     Source: 'sphincs-c10/src/params.rs', lines 99:0-99:29

@@ -18,3 +18,8 @@ import Extracted.MerkleVerifySpec
 import Extracted.TxMerkleSpec
 import Extracted.DecodeItemSpec
 import Extracted.PkFromSigSpec
+import Extracted.Sha256Vendored
+import Extracted.Sha256Pure
+import Extracted.HashPure
+import Extracted.Hash.Funs
+import Extracted.HashSpecs

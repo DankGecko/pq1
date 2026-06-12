@@ -22,6 +22,7 @@
    specMakeAdrs-with-ci (take/append identity). The (W-1)-digit subtraction:
    U32 sub side-condition discharged by digit < 8 ≤ W. -/
 import Extracted.PkFromSig.Funs
+import Extracted.HashSpecs
 import Extracted.MerkleVerifySpec
 import Extracted.ForsExtract
 import Extracted.WotsDigits
@@ -254,6 +255,7 @@ theorem pk_loop1_value (seed : Std.Array Std.U8 32#usize)
   · exact ⟨hend, hle, hpk⟩
 
 set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 100000 in
 /-- **Functional spec**: digit-sum gate (exact 205) + per-chain advance
     (start = digit, steps = 7 - digit, sigma in chain order) + th_multi
     compress, with every ADRS byte-pinned. -/
@@ -303,6 +305,9 @@ theorem pk_from_sig_spec (seed : Std.Array Std.U8 32#usize)
     let* ⟨pk_adrs, hpkadrs⟩ ← make_adrs_spec
     simp only [lift]
     step*
+    · -- th_multi's |vals| ≤ 43 side condition: the slice of a 43-array
+      have := pk_elements1.property
+      simp_all [Array.val_to_slice]
     have h205 : ((List.range 43).map (wotsDigit d)).sum = 205 := by simpa using hsum.symm
     rw [r_post, if_pos h205]
     -- pk_adrs = adrsArr layer tree 1 …

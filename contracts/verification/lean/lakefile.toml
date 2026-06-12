@@ -41,3 +41,11 @@ roots = ["SphincsCVerify"]
 [[lean_exe]]
 name = "verify-test-vectors"
 root = "Main"
+
+# NIST CAVP SHA-256 conformance runner: replays the full official
+# byte-oriented suite (ShortMsg + LongMsg + Monte Carlo) through
+# Spec/Sha256Impl.lean. See CavpMain.lean + scripts/gen_cavp_vectors.py;
+# run via `make verify-cavp` in contracts/verification/.
+[[lean_exe]]
+name = "verify-cavp"
+root = "CavpMain"
