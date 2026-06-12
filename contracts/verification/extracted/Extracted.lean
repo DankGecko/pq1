@@ -16,3 +16,5 @@ import Extracted.RlpIntSpec
 import Extracted.U256MulSpec
 import Extracted.MerkleVerifySpec
 import Extracted.TxMerkleSpec
+import Extracted.DecodeItemSpec
+import Extracted.PkFromSigSpec

@@ -23,7 +23,10 @@ bridge from scratch via testBit + Nat.add carry-freeness)."""
 #   replay_safe_hash_spec (kernel-clean, default target).
 # rank 4 DONE 2026-06-12 (WotsDigits.lean): extract_digits_spec + extract_digits_lt
 #   (kernel-clean, default target). Independent extractor = same window as rank 1.
-# Next: rank 5 — wots pk_from_sig (consumes extract_digits_lt; opaque chain_hash/th_multi).
+# ranks 5-12 ALL DONE 2026-06-12 — THE 12-RANK CATALOG IS COMPLETE. Every
+#   module in the default sorry-free target + AxiomCheck; content axioms are
+#   exactly the declared hash boundaries (keccak256/sha256/th_pair/th_multi/
+#   chain_hash/wots_digest _pure); ranks 4,7,8,9,10,12 fully kernel-clean.
 #
 # [[goal]]
 # module  = "Extracted.SpecBridgeFors"  # rank 2: vendored-bridge for ht_idx
@@ -94,8 +97,14 @@ idx &&& 1 = idx % 2 and idx >>> 1 = idx / 2 by scalar_tac/UScalar lemmas.
 th_pair_pure fires via the @[step] th_pair_spec. List.take/getElem!
 bookkeeping like rank 2."""
 
-[[goal]]
-module  = "Extracted.PkFromSigSpec"     # rank 5: verifier-side WOTS+C (HARDEST)
+# DONE 2026-06-12 (frontier, lean-lsp-mcp): pk_from_sig_spec PROVEN — three
+# content axioms wots_digest_pure/chain_hash_pure/th_multi_pure (the hash
+# boundaries). loop0 invariant = partial digit-sum; loop1 invariant = per-chain
+# chain_hash_pure with BitVec.ofNat-lifted (digit, 7-digit) args (u32_eq_ofNat
+# helper); top assembly composes extract_digits_spec + both loops + congrArg
+# th_multi_pure (congr 1 whnf-times-out on the opaque axiom — use congrArg).
+# [[goal]]
+module_done_5  = "Extracted.PkFromSigSpec"     # rank 5: verifier-side WOTS+C (HARDEST)
 context = """One sorry, the campaign's hardest. Prefix: step* — pad16 → pure
 pad16p, make_adrs_spec → adrsArr (same <256-injectivity bridge as rank 6),
 wots_digest_pure via @[step]. Then extract_digits_spec (WotsDigits, PROVEN)
@@ -134,8 +143,15 @@ value<2^11 survives the mask. Pure window arithmetic (rank-1 family). The
 roundtrip_11 wrapper writes a fresh 33-byte buffer so no aliasing. Identity
 #eval-checked for all 24 aligned words × 6 values."""
 
-[[goal]]
-module  = "Extracted.DecodeItemSpec"     # rank 8: canonical-RLP decode_item
+# DONE 2026-06-12 (workflow agent + frontier): decode_item_spec PROVEN
+# kernel-clean — ZERO content axioms (all five stdlib helpers DEF'd, into_iter
+# pattern). REAL RUST BUG found by the proof: checked_shl(8) discards
+# overflowed value bits on 32-bit usize (thumbv8m!) → decode_length_be wrapped
+# for len_of_len ≥ 5 → parse-desync. tx-core/src/rlp.rs FIXED 2026-06-12 to
+# checked_mul(256) (extracts to Aeneas stdlib Usize.checked_mul); regression
+# test negative_length_field_exceeding_usize_errors_not_wraps pins it.
+# [[goal]]
+module_done_8 = "Extracted.DecodeItemSpec"     # rank 8: canonical-RLP decode_item
 context = """One sorry. decodeRef is the independent grammar reference,
 #eval-VALIDATED against 8 positive + 7 negative rlp_decoder.rs vectors (so the
 spec is ground-truthed). Proof: unfold decode_item; Slice.first → some (input

@@ -16,21 +16,30 @@ set_option maxHeartbeats 1000000
 set_option maxRecDepth 2048
 open pqsigner_tx_core
 
-/-- [core::num::{usize}::checked_shl]:
-    Source: '/rustc/library/core/src/num/uint_macros.rs', lines 1975:8-1975:64
-    Name pattern: [core::num::{usize}::checked_shl]
-    Visibility: public -/
-@[rust_fun "core::num::{usize}::checked_shl"]
-axiom core.num.Usize.checked_shl
-  : Std.Usize → Std.U32 → Result (Option Std.Usize)
+/- The template axiomatized four total core stdlib helpers (ok_or, Try.branch,
+   FromResidual.from_residual, Slice.first). Following the `into_iter` pattern
+   in Extracted/Rlp/FunsExternal.lean we give each a DEF so the decode_item
+   proof carries no content axioms.
+
+   History: the original Rust used `acc.checked_shl(8)`, whose REAL rustc
+   semantics (None only when rhs >= BITS; bits shifted out the top silently
+   DISCARDED) make `decode_length_be` wrap on a 32-bit usize for
+   len_of_len >= 5 — a parse-desync bug on thumbv8m found while proving the
+   rank-8 spec (the spec was only provable against a deliberately-stricter
+   model). The Rust was fixed 2026-06-12 to `acc.checked_mul(256)`, which
+   Aeneas maps to the stdlib `Usize.checked_mul` — no hand model needed. -/
 
 /-- [core::option::{core::option::Option<T>}::ok_or]:
     Source: '/rustc/library/core/src/option.rs', lines 1334:4-1334:73
     Name pattern: [core::option::{core::option::Option<@T>}::ok_or]
     Visibility: public -/
 @[rust_fun "core::option::{core::option::Option<@T>}::ok_or"]
-axiom core.option.Option.ok_or
-  {T : Type} {E : Type} : Option T → E → Result (core.result.Result T E)
+def core.option.Option.ok_or
+    {T : Type} {E : Type} (o : Option T) (e : E) :
+    Result (core.result.Result T E) :=
+  match o with
+  | some x => ok (core.result.Result.Ok x)
+  | none => ok (core.result.Result.Err e)
 
 /-- [core::result::{impl core::ops::try_trait::Try for core::result::Result<T, E>}::branch]:
     Source: '/rustc/library/core/src/result.rs', lines 2177:4-2177:64
@@ -38,10 +47,15 @@ axiom core.option.Option.ok_or
     Visibility: public -/
 @[rust_fun
   "core::result::{core::ops::try_trait::Try<core::result::Result<@T, @E>>}::branch"]
-axiom core.result.Result.Insts.CoreOpsTry_traitTry.branch
-  {T : Type} {E : Type} :
-  core.result.Result T E → Result (core.ops.control_flow.ControlFlow
-    (core.result.Result core.convert.Infallible E) T)
+def core.result.Result.Insts.CoreOpsTry_traitTry.branch
+    {T : Type} {E : Type} (r : core.result.Result T E) :
+    Result (core.ops.control_flow.ControlFlow
+      (core.result.Result core.convert.Infallible E) T) :=
+  match r with
+  | core.result.Result.Ok x =>
+    ok (core.ops.control_flow.ControlFlow.Continue x)
+  | core.result.Result.Err e =>
+    ok (core.ops.control_flow.ControlFlow.Break (core.result.Result.Err e))
 
 /-- [core::result::{impl core::ops::try_trait::FromResidual<core::result::Result<core::convert::Infallible, E>> for core::result::Result<T, F>}::from_residual]:
     Source: '/rustc/library/core/src/result.rs', lines 2192:4-2192:70
@@ -49,11 +63,16 @@ axiom core.result.Result.Insts.CoreOpsTry_traitTry.branch
     Visibility: public -/
 @[rust_fun
   "core::result::{core::ops::try_trait::FromResidual<core::result::Result<@T, @F>, core::result::Result<core::convert::Infallible, @E>>}::from_residual"]
-axiom
+def
   core.result.Result.Insts.CoreOpsTry_traitFromResidualResultInfallibleE.from_residual
-  (T : Type) {E : Type} {F : Type} (convertFromInst : core.convert.From F E) :
-  core.result.Result core.convert.Infallible E → Result (core.result.Result T
-    F)
+    (T : Type) {E : Type} {F : Type} (convertFromInst : core.convert.From F E)
+    (r : core.result.Result core.convert.Infallible E) :
+    Result (core.result.Result T F) :=
+  match r with
+  | core.result.Result.Ok x => nomatch x
+  | core.result.Result.Err e => do
+    let f ← convertFromInst.from_ e
+    ok (core.result.Result.Err f)
 
 
 
@@ -62,5 +81,5 @@ axiom
     Name pattern: [core::slice::{[@T]}::first]
     Visibility: public -/
 @[rust_fun "core::slice::{[@T]}::first"]
-axiom core.slice.Slice.first {T : Type} : Slice T → Result (Option T)
-
+def core.slice.Slice.first {T : Type} (s : Slice T) : Result (Option T) :=
+  ok s.val.head?

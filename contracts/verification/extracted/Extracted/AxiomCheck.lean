@@ -16,6 +16,8 @@ import Extracted.RlpIntSpec
 import Extracted.U256MulSpec
 import Extracted.MerkleVerifySpec
 import Extracted.TxMerkleSpec
+import Extracted.DecodeItemSpec
+import Extracted.PkFromSigSpec
 import Extracted.UserOpEquiv
 import Extracted.UserOpEquivByteLayout
 import Extracted.SpecBridge
@@ -48,3 +50,6 @@ import Extracted.ForsLoop
 #print axioms Extracted.Equiv.saturating_mul_u64_spec
 #print axioms Extracted.Equiv.verify_auth_path_spec
 #print axioms Extracted.Equiv.verify_proof_spec
+#print axioms Extracted.Equiv.decode_length_be_spec
+#print axioms Extracted.Equiv.decode_item_spec
+#print axioms Extracted.Equiv.pk_from_sig_spec

@@ -110,7 +110,12 @@ fn decode_length_be(bytes: &[u8]) -> Result<usize, RlpError> {
     }
     let mut acc: usize = 0;
     for &b in bytes {
-        acc = acc.checked_shl(8).ok_or(RlpError::LengthOverflow)?;
+        // checked_mul, NOT checked_shl: checked_shl(8) only fails when
+        // 8 >= usize::BITS and silently DISCARDS bits shifted out of the
+        // top, so on a 32-bit usize (thumbv8m) a >4-byte length field
+        // would wrap instead of erroring — a parse-desync against any
+        // 64-bit decoder. Found by the §33 rank-8 Lean proof.
+        acc = acc.checked_mul(256).ok_or(RlpError::LengthOverflow)?;
         acc = acc.checked_add(b as usize).ok_or(RlpError::LengthOverflow)?;
     }
     Ok(acc)
