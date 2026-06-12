@@ -88,8 +88,11 @@ impl U256 {
     pub fn saturating_mul_u64(&self, rhs: u64) -> (U256, bool) {
         let mut out = [0u8; 32];
         let mut carry: u128 = 0;
-        // LS-first multiply
-        for i in (0..32).rev() {
+        // LS-first multiply. Indexed form (i = 31 - j) instead of
+        // `(0..32).rev()` so the Aeneas model is a plain Range loop —
+        // see contracts/verification §33 rank 10. Identical sequence.
+        for j in 0..32 {
+            let i = 31 - j;
             let prod = (self.0[i] as u128) * (rhs as u128) + carry;
             out[i] = prod as u8;
             carry = prod >> 8;
@@ -225,6 +228,15 @@ impl U256 {
         debug_assert_eq!(w, need);
         Some(w)
     }
+}
+
+/// Free-function wrapper for the Aeneas extraction (`--start-from` cannot
+/// target inherent-impl methods directly); see contracts/verification §33
+/// rank 10. Semantically identical to `v.saturating_mul_u64(rhs)`.
+#[doc(hidden)]
+#[must_use]
+pub fn u256_saturating_mul_u64(v: &U256, rhs: u64) -> (U256, bool) {
+    v.saturating_mul_u64(rhs)
 }
 
 /// Divide a 32-byte big-endian U256 by 10 in place; returns remainder.

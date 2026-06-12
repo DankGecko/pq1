@@ -191,3 +191,34 @@ extract-txcore-rlp:
 	@diff -u $(EXTRACTED_DIR)/Extracted/Rlp/Funs.lean /tmp/pqsigner-extract/rout/Funs.fixed.lean \
 	  && echo "OK: committed RLP extraction matches the current Rust" \
 	  || { echo "DRIFT: tx-core/src/rlp.rs changed — re-extract, re-prove, re-commit"; exit 1; }
+
+# §33 rank 12 — fw-manifest signed_preimage (75-byte frozen FW-signing layout).
+.PHONY: extract-fwmanifest-preimage
+extract-fwmanifest-preimage:
+	@mkdir -p /tmp/pqsigner-extract
+	@cd $(REPO_ROOT)/fw-manifest && RUSTFLAGS="--cfg lean_extract" \
+	  $(PQLEAN)/charon cargo --preset=aeneas --opaque sha2 --opaque sphincs_c10 --opaque subtle \
+	  --start-from 'fw_manifest::signed_preimage' \
+	  --dest-file /tmp/pqsigner-extract/fwman.llbc 2>&1 | tail -1
+	@rm -rf /tmp/pqsigner-extract/fmout && mkdir -p /tmp/pqsigner-extract/fmout
+	@$(PQLEAN)/aeneas -backend lean -dest /tmp/pqsigner-extract/fmout -split-files /tmp/pqsigner-extract/fwman.llbc
+	@sed 's/import Fwman\./import Extracted.FwManifest./' /tmp/pqsigner-extract/fmout/Funs.lean > /tmp/pqsigner-extract/fmout/Funs.fixed.lean
+	@diff -u $(EXTRACTED_DIR)/Extracted/FwManifest/Funs.lean /tmp/pqsigner-extract/fmout/Funs.fixed.lean \
+	  && echo "OK: committed fw-manifest extraction matches the current Rust" \
+	  || { echo "DRIFT: fw-manifest/src/lib.rs changed — re-extract, re-prove, re-commit"; exit 1; }
+
+# §33 rank 10 — U256::saturating_mul_u64 (via the u256_saturating_mul_u64 wrapper;
+# --start-from cannot target inherent-impl methods).
+.PHONY: extract-u256-mul
+extract-u256-mul:
+	@mkdir -p /tmp/pqsigner-extract
+	@cd $(REPO_ROOT)/tx-core && RUSTFLAGS="--cfg lean_extract" \
+	  $(PQLEAN)/charon cargo --preset=aeneas --opaque sha2 --opaque sha3 \
+	  --start-from 'pqsigner_tx_core::eip1559::u256_saturating_mul_u64' \
+	  --dest-file /tmp/pqsigner-extract/u256mul.llbc 2>&1 | tail -1
+	@rm -rf /tmp/pqsigner-extract/mout && mkdir -p /tmp/pqsigner-extract/mout
+	@$(PQLEAN)/aeneas -backend lean -dest /tmp/pqsigner-extract/mout -split-files /tmp/pqsigner-extract/u256mul.llbc
+	@sed 's/import U256mul\./import Extracted.U256Mul./' /tmp/pqsigner-extract/mout/Funs.lean > /tmp/pqsigner-extract/mout/Funs.fixed.lean
+	@diff -u $(EXTRACTED_DIR)/Extracted/U256Mul/Funs.lean /tmp/pqsigner-extract/mout/Funs.fixed.lean \
+	  && echo "OK: committed u256-mul extraction matches the current Rust" \
+	  || { echo "DRIFT: tx-core/src/eip1559.rs changed — re-extract, re-prove, re-commit"; exit 1; }

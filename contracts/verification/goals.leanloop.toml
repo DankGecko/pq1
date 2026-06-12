@@ -38,3 +38,39 @@ bridge from scratch via testBit + Nat.add carry-freeness)."""
 # [[goal]]
 # module  = "Extracted.WotsDigits"      # rank 4: extract_digits = readBitsLe map
 # context = "New extract-wots-digits Makefile target mirroring extract-fors-index."
+
+# ── Spec-first batch (2026-06-12): statements landed, proofs queued for the
+#    grind (local 32B tier when GPU box is up; frontier queue for survivors). ──
+
+[[goal]]
+module  = "Extracted.RlpIntSpec"        # rank 7: canonical BE-int decode
+context = """Three sorry'd goals. Leaf lemmas first: beValue_lt is induction on
+the list (foldl acc bound: acc < 256^k → acc*256+b < 256^(k+1)). The two _spec
+theorems: unfold, the length/leading-zero gates are if-splits closed by
+scalar_tac; the Ok branch needs a loop invariant over IteratorSliceIter.next
+(a Std DEF — unfold it; iter state is ⟨slice, i⟩, next returns slice[i] and
+bumps i): after k steps acc.val = beValue (bytes.take k), no-overflow from
+beValue_lt + len ≤ 8. The OR-step acc<<<8 ||| b = acc*256+b is
+lor_shiftLeft_add (WotsDigits.lean, PROVEN) + UScalar.cast_val_eq.
+bytes_to_u256 Ok branch is a SetSliceLemmas left-pad layout (replicate (32-n)
+0 ++ bytes), clone rightAlign_word."""
+
+[[goal]]
+module  = "Extracted.U256MulSpec"       # rank 10: saturating fee multiply
+context = """One sorry. Loop invariant over the indexed LS-first carry multiply
+(loop.spec_decr_nat, measure end-start): after j steps,
+beValue (out.val.drop (32-j)) + carry.val * 256^j = beValue (self.val.drop (32-j)) * rhs.val
+and carry.val < 2^64 (u8*u64+carry fits u128: 255*(2^64-1)+(2^64-1) < 2^72).
+Byte write per step: prod % 256 at index 31-j (List.set_getElem!_eq/ne).
+Final j=32: drop 0 = whole; overflow branch carry≠0 ⟺ product ≥ 2^256 needs
+beValue out = product - carry*2^256 bound. beValue from RlpIntSpec."""
+
+[[goal]]
+module  = "Extracted.FwManifestSpec"    # rank 12: 75-byte FW-signing preimage
+context = """One sorry. EXACT clone of the rank-3 method (Eip1271Equiv.lean):
+state a fwmanBuf_eq by-index lemma (List.ext_getElem! + simp_lists + congr/omega
+closer, see domainBuf_eq) for the 4-slot chain: replicate 75 0 setSlice! 0 tag(7)
+setSlice! 7 ver(4) setSlice! 11 sh(32) setSlice! 43 nh(32) = tag++ver++sh++nh.
+Then step* + Subtype.ext + the buf lemma. U32.to_be_bytes gives
+List.map UScalar.mk fw_version.bv.toBEBytes, length 4 by toBEBytes_length.
+No hash, no axioms — should be the easiest goal in the queue."""
