@@ -116,8 +116,8 @@ theorem not_wsub_lt32_of_gt (a b : Std.Usize) (ha : a.val ≤ 31) (hbs : b.val �
 
 /-! ### The loop accumulator invariant (L) -/
 
--- abbreviation for the windowed word
-private def W (digest : Std.Array Std.U8 32#usize) (byte_start : Nat) : Nat :=
+/-- The digest word shifted to the byte the loop starts reading. -/
+def W (digest : Std.Array Std.U8 32#usize) (byte_start : Nat) : Nat :=
   digestWord digest >>> (8 * (31 - byte_start))
 
 set_option maxHeartbeats 4000000 in
@@ -203,13 +203,55 @@ theorem read_bits_le_loop_value
 
 /-! ### The functional spec (main goal) -/
 
-/-- Functional spec: the result IS the `num_bits`-wide window at `bit_offset`
-    of the digest word. Preconditions mirror `read_bits_le_terminates`. -/
+/-- (F) A window strictly inside the kept low bits is unaffected by the outer mod. -/
+theorem window_shift (X k n m : Nat) (h : n + k ≤ m) :
+    ((X % 2 ^ m) >>> k) % 2 ^ n = (X >>> k) % 2 ^ n := by
+  rw [Nat.shiftRight_eq_div_pow, Nat.shiftRight_eq_div_pow,
+      show m = k + (m - k) by omega, pow_add, Nat.mod_mul,
+      Nat.add_mul_div_left _ _ (Nat.two_pow_pos k),
+      Nat.div_eq_of_lt (Nat.mod_lt _ (Nat.two_pow_pos k)), Nat.zero_add,
+      Nat.mod_mod_of_dvd _ (pow_dvd_pow 2 (by omega))]
+
+set_option maxHeartbeats 4000000 in
+/-- **Functional spec**: `read_bits_le` returns exactly the `num_bits`-wide
+    little-endian window at `bit_offset` of the digest word (= the EVM's
+    `(digest >> bit_offset) & ((1<<num_bits)-1)`). Preconditions mirror
+    `read_bits_le_terminates`. -/
 theorem read_bits_le_spec (digest : Std.Array Std.U8 32#usize)
     (bit_offset num_bits : Std.Usize)
     (hpos : 0 < num_bits.val) (h : num_bits.val ≤ 57) (hoff : bit_offset.val ≤ 248) :
     fors.read_bits_le digest bit_offset num_bits
       ⦃ r => r.val = (digestWord digest >>> bit_offset.val) % 2 ^ num_bits.val ⦄ := by
-  sorry
+  unfold fors.read_bits_le
+  let* ⟨_, _⟩ ← massert_spec
+  let* ⟨_, _⟩ ← massert_spec
+  let* ⟨i, hi⟩ ← Std.Usize.div_spec
+  let* ⟨byte_start, hbsv, hile⟩ ← Std.Usize.sub_spec
+  let* ⟨bib, hbib⟩ ← Std.Usize.rem_spec
+  let* ⟨i1, hi1⟩ ← Std.Usize.add_spec
+  let* ⟨i2, hi2⟩ ← Std.Usize.add_spec
+  let* ⟨bytes_needed, hbnv⟩ ← Std.Usize.div_spec
+  have hbs31 : byte_start.val ≤ 31 := by omega
+  have hbn8 : bytes_needed.val ≤ 8 := by rw [hbnv, hi2, hi1, hbib]; omega
+  let* ⟨val, hvloop⟩ ← read_bits_le_loop_value
+        { start := 0#usize, «end» := bytes_needed } digest byte_start 0#u64 bytes_needed.val
+        hbs31 hbn8 rfl (Nat.zero_le _) (by simp [Nat.mod_one])
+  have hlt64 : (2:Nat) ^ num_bits.val < 2 ^ 64 :=
+    calc 2 ^ num_bits.val ≤ 2 ^ 57 := Nat.pow_le_pow_right (by norm_num) h
+      _ < 2 ^ 64 := by norm_num
+  step*
+  · -- side goal: 1#u64 ≤ i3  (i3 = 2^num_bits ≥ 1)
+    rw [i3_post1, Nat.shiftLeft_eq, Nat.one_mul,
+        show U64.size = 2 ^ 64 by simp [U64.size, U64.numBits], Nat.mod_eq_of_lt hlt64]
+    exact Nat.one_le_two_pow
+  have hi3v : i3.val = 2 ^ num_bits.val := by
+    rw [i3_post1, Nat.shiftLeft_eq, Nat.one_mul,
+        show U64.size = 2 ^ 64 by simp [U64.size, U64.numBits], Nat.mod_eq_of_lt hlt64]
+  have hprec : num_bits.val + bit_offset.val % 8 ≤ 8 * bytes_needed.val := by
+    rw [hbnv, hi2, hi1, hbib]; omega
+  have hq : 8 * (31 - byte_start.val) = 8 * (bit_offset.val / 8) := by rw [hbsv]; omega
+  have hbo : 8 * (bit_offset.val / 8) + bit_offset.val % 8 = bit_offset.val := by omega
+  rw [UScalar.val_and, i4_post1, mask_post1, hi3v, Nat.and_two_pow_sub_one_eq_mod,
+      hvloop, W, hq, hbib, window_shift _ _ _ _ hprec, ← Nat.shiftRight_add, hbo]
 
 end Extracted.Equiv

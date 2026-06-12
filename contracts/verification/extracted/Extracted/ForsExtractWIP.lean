@@ -5,6 +5,12 @@
    default target): next_usize_spec, read_bits_le(_loop)_terminates,
    extract_ht_index_terminates, extract_fors_indices(_loop)_terminates.
 
+   **DONE 2026-06-12: `read_bits_le_spec` (Extracted/ForsExtract.lean)
+   PROVEN — kernel-clean, in the default target.** read_bits_le computes
+   EXACTLY (digestWord >>> bit_offset) %% 2^num_bits, via the loop-accumulator
+   invariant (lor_eq_add_disjoint OR->ADD) + window arithmetic. The remaining
+   FORS work (below) now composes on top of it.
+
    What REMAINS (the "genuinely mathy" part the research flagged):
    FUNCTIONAL correctness — that extract_ht_index computes the right
    value, not merely that it doesn't panic:
