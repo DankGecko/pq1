@@ -14,7 +14,26 @@ Nat.testBit_shiftLeft + Nat.testBit_lt_two_pow; the missing piece is the bridge
 Mathlib lemma, e.g. around Nat.distrib/Nat.add of disjoint bits, or prove the
 bridge from scratch via testBit + Nat.add carry-freeness)."""
 
-# Next up once Bits lands (re-sorry'd functional specs, see work-todo §33):
+# NOW-phase queue (docs/verification-targets-2026-06.md; uncomment as each goal
+# file is created — see each target's "first step"):
+#
 # [[goal]]
-# module = "Extracted.ForsExtract"      # read_bits_le accumulator invariant
-# context = "Uses lor_eq_add_disjoint; strengthened loop invariant in ForsExtractWIP.lean"
+# module  = "Extracted.ForsExtract"     # rank 1: read_bits_le FUNCTIONAL spec
+# context = """Strengthened loop invariant per ForsExtractWIP.lean: val.val =
+# <partial LE byte-window> AND val.val < 256^start; lor_eq_add_disjoint (Bits.lean,
+# PROVEN) rewrites the accumulator OR into ADD at each step. Anchor:
+# SphincsCVerify/Util/Bits.lean::readBitsLe; KatVectors.lean has 10 triples."""
+#
+# [[goal]]
+# module  = "Extracted.SpecBridgeFors"  # rank 2: vendored-bridge for ht_idx
+# context = "Mirror firmware_make_adrs_matches_vendored; premise = rank 1."
+#
+# [[goal]]
+# module  = "Extracted.Eip1271"         # rank 3: byte-exact preimage layouts
+# context = """domain_separator 160-byte layout, personal-sign prefix, replay_safe_hash
+# nesting — clone the compute_user_op_hash_spec method (SetSliceLemmas); extraction:
+# new extract-aa-eip1271 Makefile target, keccak256_pure already whitelisted."""
+#
+# [[goal]]
+# module  = "Extracted.WotsDigits"      # rank 4: extract_digits = readBitsLe map
+# context = "New extract-wots-digits Makefile target mirroring extract-fors-index."
