@@ -1310,6 +1310,64 @@ flash-hw-dual-se-oled-standalone: build-hw-dual-se-oled-standalone
 	@echo "==> Flashed and reset. Disconnect ST-LINK, connect only USB-C if desired."
 	@echo "    Set JP4 to 5V_UCPD for USB-C power (or keep 5V_USB_STLK if using both cables)."
 
+# Same full standalone firmware as `flash-hw-dual-se-oled-standalone`,
+# but on the NV3007 SPI LCD (`ui-lcd` — the shipping display backend as
+# of 2026-06-09) instead of the OLED. `ui-lcd` pulls in `gpio-buttons`
+# + `spi1-arduino`. Requires the NV3007 wired per docs/nv3007-wiring.md.
+# All the caveats on the OLED target (bench-only #3 tunnel keys via
+# dev-testkey, LcsO=Creation, wipe-for-wizard workflow) apply unchanged.
+build-hw-dual-se-lcd-standalone:
+	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
+	cargo build --locked --release --target $(TARGET) --target-dir target/secure \
+		-p sphincs-tz-secure --no-default-features \
+		--features dual-se,optiga-hw-counter,dev-testkey,ui-lcd,stm32u585,usb
+	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
+	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
+	cargo build --locked --release --target $(TARGET) --target-dir target/nonsecure \
+		-p sphincs-tz-nonsecure --features stm32u585,usb
+	@echo "==> Dual-SE LCD standalone build ready (no semihosting, USB-C only, LcsO=Creation)."
+
+flash-hw-dual-se-lcd-standalone: build-hw-dual-se-lcd-standalone
+	@probe-rs download --chip STM32U585AIIx $(NONSECURE_ELF)
+	@probe-rs download --chip STM32U585AIIx $(SECURE_ELF)
+	@echo "==> Configuring TrustZone option bytes..."
+	@STM32_Programmer_CLI --connect port=SWD \
+		--optionbytes TZEN=1 SECWM1_PSTRT=0x0 SECWM1_PEND=0x7F \
+		SECWM2_PSTRT=0x7F SECWM2_PEND=0x0 SECBOOTADD0=0x180000
+	@echo "==> Resetting target..."
+	@probe-rs reset --chip STM32U585AIIx
+	@echo "==> Flashed and reset. Disconnect ST-LINK, connect only USB-C if desired."
+	@echo "    Set JP4 to 5V_UCPD for USB-C power (or keep 5V_USB_STLK if using both cables)."
+
+# Same build as `flash-hw-dual-se-lcd-standalone` PLUS `debug-log`,
+# attached over the ST-LINK micro-USB (`probe-rs run` at the end keeps
+# the debugger connected and streams every secure-world log line to
+# this terminal). Board powers from the programmer — no USB-C needed.
+# NOT for production: `debug-log` leaks device-internal state (the
+# wizard prints mnemonic words) over semihosting.
+build-hw-dual-se-lcd-standalone-debug:
+	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
+	cargo build --locked --release --target $(TARGET) --target-dir target/secure \
+		-p sphincs-tz-secure --no-default-features \
+		--features dual-se,optiga-hw-counter,dev-testkey,ui-lcd,stm32u585,usb,debug-log
+	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
+	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
+	cargo build --locked --release --target $(TARGET) --target-dir target/nonsecure \
+		-p sphincs-tz-nonsecure --features stm32u585,usb
+	@echo "==> Dual-SE LCD standalone DEBUG build ready (debug-log ON, ST-LINK powered)."
+
+flash-hw-dual-se-lcd-standalone-debug: build-hw-dual-se-lcd-standalone-debug
+	@probe-rs download --chip STM32U585AIIx $(NONSECURE_ELF)
+	@probe-rs download --chip STM32U585AIIx $(SECURE_ELF)
+	@echo "==> Configuring TrustZone option bytes..."
+	@STM32_Programmer_CLI --connect port=SWD \
+		--optionbytes TZEN=1 SECWM1_PSTRT=0x0 SECWM1_PEND=0x7F \
+		SECWM2_PSTRT=0x7F SECWM2_PEND=0x0 SECBOOTADD0=0x180000
+	@echo "==> Attaching probe-rs run — semihosting stream follows. Ctrl-C to detach."
+	@echo "    Wizard + PIN entry are driven by the physical buttons as usual;"
+	@echo "    probe-rs only captures stdout."
+	@probe-rs run --chip STM32U585AIIx $(SECURE_ELF)
+
 # Same build as `flash-hw-dual-se-oled-standalone` PLUS `debug-log`, so
 # `secure_log!` / `hprintln!` output streams over the ST-LINK SWO/SWD
 # semihosting channel. Flashes with `probe-rs run` at the end — that
