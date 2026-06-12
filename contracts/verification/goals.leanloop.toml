@@ -57,8 +57,10 @@ lor_shiftLeft_add (WotsDigits.lean, PROVEN) + UScalar.cast_val_eq.
 bytes_to_u256 Ok branch is a SetSliceLemmas left-pad layout (replicate (32-n)
 0 ++ bytes), clone rightAlign_word."""
 
-[[goal]]
-module  = "Extracted.U256MulSpec"       # rank 10: saturating fee multiply
+# DONE 2026-06-12 (frontier, via lean-lsp-mcp): saturating_mul_u64_spec PROVEN
+# kernel-clean — first proof developed through the LSP workflow.
+# [[goal]]
+module_done_10 = "Extracted.U256MulSpec"       # rank 10: saturating fee multiply
 context = """One sorry. Loop invariant over the indexed LS-first carry multiply
 (loop.spec_decr_nat, measure end-start): after j steps,
 beValue (out.val.drop (32-j)) + carry.val * 256^j = beValue (self.val.drop (32-j)) * rhs.val

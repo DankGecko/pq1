@@ -13,6 +13,7 @@ import Extracted.WotsDigits
 import Extracted.FwManifestSpec
 import Extracted.Bip39RoundtripSpec
 import Extracted.RlpIntSpec
+import Extracted.U256MulSpec
 import Extracted.UserOpEquiv
 import Extracted.UserOpEquivByteLayout
 import Extracted.SpecBridge
@@ -42,3 +43,4 @@ import Extracted.ForsLoop
 #print axioms Extracted.Equiv.beValue_lt
 #print axioms Extracted.Equiv.bytes_to_u64_spec
 #print axioms Extracted.Equiv.bytes_to_u256_spec
+#print axioms Extracted.Equiv.saturating_mul_u64_spec

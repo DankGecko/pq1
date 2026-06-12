@@ -13,3 +13,4 @@ import Extracted.WotsDigits
 import Extracted.FwManifestSpec
 import Extracted.Bip39RoundtripSpec
 import Extracted.RlpIntSpec
+import Extracted.U256MulSpec
