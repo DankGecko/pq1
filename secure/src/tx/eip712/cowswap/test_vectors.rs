@@ -53,21 +53,27 @@ fn fixture_owner() -> [u8; 20] {
     [0xfb, 0x3c, 0x7e, 0xb9, 0x36, 0xcA, 0xA1, 0x2B, 0x5A, 0x88, 0x4d, 0x61, 0x23, 0x93, 0x96, 0x9A, 0x55, 0x7d, 0x43, 0x07]
 }
 
-/// Hand-build a setPreSignature calldata for the fixture owner +
-/// canonical. Reuses `compute_digest` for the orderDigest slice.
-fn fixture_calldata() -> [u8; 164] {
+/// Hand-build a setPreSignature calldata for an arbitrary uid owner.
+/// The owner sits OUTSIDE the EIP-712 digest, so the same canonical +
+/// digest serve both the direct flow (owner = wallet sender) and the
+/// Safe-wrapped flow (owner = the Safe). Reuses `compute_digest` for
+/// the orderDigest slice.
+fn fixture_calldata_for_owner(owner: &[u8; 20]) -> [u8; 164] {
     let canonical = fixture_canonical();
     let digest = compute_digest(&canonical, 1).unwrap();
-    let owner = fixture_owner();
     let mut cd = [0u8; 164];
     cd[0..4].copy_from_slice(&[0xec, 0x6c, 0xb1, 0x3f]);
     cd[35] = 0x40;
     cd[67] = 1;
     cd[99] = 56;
     cd[100..132].copy_from_slice(&digest);
-    cd[132..152].copy_from_slice(&owner);
+    cd[132..152].copy_from_slice(owner);
     cd[152..156].copy_from_slice(&canonical[164..168]);
     cd
+}
+
+fn fixture_calldata() -> [u8; 164] {
+    fixture_calldata_for_owner(&fixture_owner())
 }
 
 #[test]
@@ -171,4 +177,89 @@ fn shape_check_rejects_nonzero_tail_padding() {
         check_setpresig_calldata_shape(&cd),
         Err(OrderUidMismatch::CanonicalDecode)
     );
+}
+
+// ---------------------------------------------------------------------------
+// Safe-wrapped presign (uid owner = a Gnosis Safe, not the wallet)
+// ---------------------------------------------------------------------------
+
+fn fixture_safe_address() -> [u8; 20] {
+    [0x5a; 20]
+}
+
+#[test]
+fn safe_owner_binding_passes_and_sender_binding_fails() {
+    // The same order pre-signed THROUGH a Safe: uid.owner is the Safe.
+    // Cross-check must pass when the expected owner is the Safe and
+    // refuse when it's the wallet sender — this asymmetry is exactly
+    // what `safe::cow_binding::resolve_cow_binding` selects on.
+    let canonical = fixture_canonical();
+    let safe = fixture_safe_address();
+    let calldata = fixture_calldata_for_owner(&safe);
+    assert!(check_setpresig_calldata_shape(&calldata).is_ok());
+    assert!(cross_check_setpresig_calldata(&canonical, &calldata, 1, &safe).is_ok());
+    assert_eq!(
+        cross_check_setpresig_calldata(&canonical, &calldata, 1, &fixture_owner()),
+        Err(OrderUidMismatch::OwnerMismatch)
+    );
+}
+
+#[test]
+fn safe_wrapped_host_pipeline_composes() {
+    // Everything the firmware chains for a Safe-wrapped presign except
+    // the Groth16 step (cfg(not(test))-gated): build a SafeTx whose
+    // inner call is the presign with uid.owner = the Safe, verify the
+    // safe_v1 trailer against the approveHash calldata, resolve the
+    // CoW binding off the verified Safe, and run the v3 cross-check
+    // against the resolved (owner, calldata) pair.
+    use crate::tx::eip712::safe::{
+        compute_safe_tx_hash, resolve_cow_binding, verify_and_bind_trailer,
+    };
+    use sphincs_tz_shared::{
+        APPROVE_HASH_SELECTOR, GPV2_SETTLEMENT_ADDRESS, SAFE_OFF_CHAIN_ID, SAFE_OFF_DATA_HASH,
+        SAFE_OFF_SAFE_ADDRESS, SAFE_OFF_TO, SAFE_V1_CANONICAL_LEN,
+    };
+
+    let safe_addr = fixture_safe_address();
+    let presign_cd = fixture_calldata_for_owner(&safe_addr);
+
+    // SafeTx canonical: Safe `safe_addr` calls the settlement with the
+    // presign bytes (operation Call, no value, no refund, nonce 0).
+    let mut sc = [0u8; SAFE_V1_CANONICAL_LEN];
+    sc[SAFE_OFF_CHAIN_ID..SAFE_OFF_CHAIN_ID + 8].copy_from_slice(&1u64.to_be_bytes());
+    sc[SAFE_OFF_SAFE_ADDRESS..SAFE_OFF_SAFE_ADDRESS + 20].copy_from_slice(&safe_addr);
+    sc[SAFE_OFF_TO..SAFE_OFF_TO + 20].copy_from_slice(&GPV2_SETTLEMENT_ADDRESS);
+    sc[SAFE_OFF_DATA_HASH..SAFE_OFF_DATA_HASH + 32].copy_from_slice(&keccak(&presign_cd));
+
+    // safe_v1 trailer bundle: canonical || u16 raw_data_len || raw_data.
+    let mut bundle = [0u8; SAFE_V1_CANONICAL_LEN + 2 + 164];
+    bundle[..SAFE_V1_CANONICAL_LEN].copy_from_slice(&sc);
+    bundle[SAFE_V1_CANONICAL_LEN..SAFE_V1_CANONICAL_LEN + 2]
+        .copy_from_slice(&(164u16).to_be_bytes());
+    bundle[SAFE_V1_CANONICAL_LEN + 2..].copy_from_slice(&presign_cd);
+
+    // UserOp inner calldata: approveHash(safeTxHash).
+    let safe_tx_hash = compute_safe_tx_hash(&sc).unwrap();
+    let mut inner = [0u8; 36];
+    inner[..4].copy_from_slice(&APPROVE_HASH_SELECTOR);
+    inner[4..36].copy_from_slice(&safe_tx_hash);
+
+    let verified = verify_and_bind_trailer(&bundle, &inner, 1, &safe_addr)
+        .expect("safe_v1 trailer must verify");
+
+    let wallet_sender = fixture_owner();
+    let bind = resolve_cow_binding(&inner, &wallet_sender, Some(&verified), None);
+    assert!(bind.via_safe);
+    assert_eq!(bind.owner, safe_addr);
+    assert_eq!(bind.calldata, presign_cd.as_slice());
+
+    let calldata_array: &[u8; 164] = bind.calldata.try_into().unwrap();
+    assert!(check_setpresig_calldata_shape(calldata_array).is_ok());
+    assert!(cross_check_setpresig_calldata(
+        &fixture_canonical(),
+        calldata_array,
+        1,
+        &bind.owner
+    )
+    .is_ok());
 }

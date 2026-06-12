@@ -800,11 +800,19 @@ impl CommandRouter {
     /// Shared implementation for the v1 and v3 VK injectors — both
     /// follow the same pattern: verify the trailer's declared length
     /// matches `fixed_len` (the bare companion-sent shape, pre-bundle),
-    /// verify the trailer ends exactly at `received_len` (no further
-    /// sections after), look up the `(chain_id, contract_key)` pair in
-    /// the NS VK DB, append the bundle, rewrite the trailer's length
-    /// header. Any failure returns `received_len` unchanged — the
-    /// secure world handles the degraded case downstream.
+    /// look up the `(chain_id, contract_key)` pair in the NS VK DB,
+    /// splice the bundle in right after the trailer's fixed prefix,
+    /// rewrite the trailer's length header. Any failure returns
+    /// `received_len` unchanged — the secure world handles the degraded
+    /// case downstream.
+    ///
+    /// The trailer does NOT have to be the last section of the payload:
+    /// a Safe-wrapped CoW presign carries a non-empty `safe_v1` section
+    /// *after* `zk_v3`, so the injector shifts any tail sections right
+    /// to open a gap (`copy_within`, same approach as the ERC-20
+    /// skeleton injector). The injection stays purely shape-driven —
+    /// only the exact bare `fixed_len` shape triggers it, so a payload
+    /// that already carries a VK bundle is never touched.
     ///
     /// The only non-shared piece is `(trailer_offset, fixed_len,
     /// contract_key)` — the v1 injector passes `after_erc20`,
@@ -829,7 +837,7 @@ impl CommandRouter {
             return received_len;
         }
         let trailer_end = trailer_offset + 2 + declared_len;
-        if trailer_end != received_len {
+        if trailer_end > received_len {
             return received_len;
         }
 
@@ -846,12 +854,18 @@ impl CommandRouter {
         };
 
         let new_declared_len = declared_len + vk_bundle_len;
-        let new_len = trailer_end + vk_bundle_len;
+        let new_len = received_len + vk_bundle_len;
         if new_len > CHAIN_BUF_LEN || new_declared_len > u16::MAX as usize {
             return received_len;
         }
 
-        CHAIN_BUF[trailer_end..new_len].copy_from_slice(&vk_bundle_buf[..vk_bundle_len]);
+        // Open a gap for the bundle when later sections follow the
+        // trailer (safe_v1 / selector / names …), then splice it in.
+        if trailer_end < received_len {
+            CHAIN_BUF.copy_within(trailer_end..received_len, trailer_end + vk_bundle_len);
+        }
+        CHAIN_BUF[trailer_end..trailer_end + vk_bundle_len]
+            .copy_from_slice(&vk_bundle_buf[..vk_bundle_len]);
         CHAIN_BUF[trailer_offset..trailer_offset + 2]
             .copy_from_slice(&(new_declared_len as u16).to_be_bytes());
         new_len

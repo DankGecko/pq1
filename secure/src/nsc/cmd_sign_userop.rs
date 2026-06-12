@@ -725,27 +725,17 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         None
     };
 
-    // 7c. v3 CoW EIP-712 — 5-step pipeline (Groth16 + H_root pin →
-    // sentinel + chain → length → shape → cross-check). Returns
-    // `None` on any failure; no partial-success fallback. See
-    // `tx::eip712::cowswap::verify_and_bind_trailer` for specifics.
-    let zk_v3_verified = if zk_v3.len > 0 {
-        crate::tx::eip712::cowswap::verify_and_bind_trailer(
-            &snap[zk_v3.start..zk_v3.start + zk_v3.len],
-            inner_data,
-            chain_id,
-            &sender,
-        )
-    } else {
-        None
-    };
-
-    // 7c-bis. `safe_v1` Safe-multisig `approveHash` cross-check —
+    // 7c. `safe_v1` Safe-multisig `approveHash` cross-check —
     // 8-step all-native pipeline (length → selector → calldata len →
     // chain pin → safe-address pin → operation gate → data_hash bind
     // → safeTxHash bind). No Groth16; the approveHash digest is in the
     // calldata itself, so the firmware natively recomputes both
     // keccak chains and byte-compares.
+    //
+    // Runs BEFORE the v3 CoW verify (7c-ter): a Safe-wrapped CoW
+    // presign anchors the v3 binding to the SafeTx's inner raw_data and
+    // to the Safe's address, so the CoW verify needs the verified Safe
+    // context first. Nothing in between reads `zk_v3_verified`.
     let safe_v1_verified = if safe_v1.len > 0 {
         let v = crate::tx::eip712::safe::verify_and_bind_trailer(
             &snap[safe_v1.start..safe_v1.start + safe_v1.len],
@@ -771,7 +761,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         None
     };
 
-    // 7c-ter. Safe-multisig `execTransaction(...)` decode — no trailer
+    // 7c-bis. Safe-multisig `execTransaction(...)` decode — no trailer
     // needed; the SafeTx fields are encoded directly into the function
     // arguments, so the firmware decodes them straight out of
     // `inner_data` once the selector matches. Companion of the
@@ -797,7 +787,49 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         None
     };
 
-    // 7c-ter. Selector → text-signature bundle.
+    // 7c-ter. v3 CoW EIP-712 — 5-step pipeline (Groth16 + H_root pin →
+    // sentinel + chain → length → shape → cross-check). Returns
+    // `None` on any failure; no partial-success fallback. See
+    // `tx::eip712::cowswap::verify_and_bind_trailer` for specifics.
+    //
+    // The binding target depends on the Safe context resolved above:
+    // for a direct order the trailer binds to `inner_data` with
+    // `uid.owner == sender`; for a Safe-wrapped presign it binds to the
+    // SafeTx's inner raw_data with `uid.owner == the Safe` (GPv2's
+    // settlement sees the Safe as `msg.sender` at execution). One call
+    // site, one resolver — see `safe::cow_binding` for the fail-closed
+    // argument.
+    let cow_bind = crate::tx::eip712::safe::resolve_cow_binding(
+        inner_data,
+        &sender,
+        safe_v1_verified.as_ref(),
+        safe_exec_verified.as_ref(),
+    );
+    let zk_v3_verified = if zk_v3.len > 0 {
+        let v = crate::tx::eip712::cowswap::verify_and_bind_trailer(
+            &snap[zk_v3.start..zk_v3.start + zk_v3.len],
+            cow_bind.calldata,
+            chain_id,
+            &cow_bind.owner,
+        );
+        // FI-hardened verdict: same sentinel double-eval as the safe_v1
+        // bind above and the batch dispatcher's ZK_V3 arm (this call
+        // site historically lacked the envelope — closed for parity).
+        // Fail closed to `None`.
+        let ok = v.is_some();
+        crate::fi::wait_random();
+        if crate::fi::check_true_into_sentinel(|| core::hint::black_box(ok))
+            != crate::fi::OK_SENTINEL
+        {
+            None
+        } else {
+            v
+        }
+    } else {
+        None
+    };
+
+    // 7c-quater. Selector → text-signature bundle.
     //
     // Two parallel paths, mutually exclusive at the wire level:
     //
@@ -868,6 +900,20 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     let cow_selector = inner_data.len() >= 4 && &inner_data[..4] == SET_PRE_SIGNATURE_SELECTOR;
     let cow_target = to_address == GPV2_SETTLEMENT_ADDRESS;
     if cow_selector && cow_target && zk_v3_verified.is_none() {
+        ui::show_status("CoW sign", "v3 required");
+        return NscStatus::InvalidPointer as u32;
+    }
+
+    // Safe-wrapped twin of the gate above. `via_safe` is true exactly
+    // when a *verified* Safe context's inner call claims setPreSignature
+    // on the GPv2 settlement (see `safe::cow_binding`) — in that case a
+    // verified v3 trailer is mandatory too. Without this gate a hostile
+    // companion could strip the trailer and the order would fall to the
+    // generic blind-sign inner page; a user habituated to the rich CoW
+    // display might confirm it anyway. Same failure mode covers
+    // malformed presign calldata and `signed == false` (revocation is
+    // unsupported, exactly like the direct path).
+    if cow_bind.via_safe && zk_v3_verified.is_none() {
         ui::show_status("CoW sign", "v3 required");
         return NscStatus::InvalidPointer as u32;
     }

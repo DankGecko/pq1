@@ -17,9 +17,10 @@ use crate::nsc_api;
 use cortex_m_semihosting::{debug, hprintln};
 use sha3::{Digest, Keccak256};
 use sphincs_tz_shared::{
-    APPROVE_HASH_CALLDATA_LEN, APPROVE_HASH_SELECTOR, FLAG_REGISTER_SLOT, MAX_BATCH_TXS,
-    MAX_SIGN_RESPONSE_LEN, NscStatus, SAFE_DOMAIN_TYPEHASH, SAFE_OFF_CHAIN_ID, SAFE_OFF_DATA_HASH,
-    SAFE_OFF_NONCE, SAFE_OFF_OPERATION, SAFE_OFF_SAFE_ADDRESS, SAFE_OFF_TO, SAFE_TX_TYPEHASH,
+    APPROVE_HASH_CALLDATA_LEN, APPROVE_HASH_SELECTOR, FLAG_REGISTER_SLOT,
+    GPV2_SETTLEMENT_ADDRESS, MAX_BATCH_TXS, MAX_SIGN_RESPONSE_LEN, NscStatus,
+    SAFE_DOMAIN_TYPEHASH, SAFE_OFF_CHAIN_ID, SAFE_OFF_DATA_HASH, SAFE_OFF_NONCE,
+    SAFE_OFF_OPERATION, SAFE_OFF_SAFE_ADDRESS, SAFE_OFF_TO, SAFE_TX_TYPEHASH,
     SAFE_V1_CANONICAL_LEN, SIGN_USEROP_BATCH_HEADER_LEN, SIGN_USEROP_HEADER_LEN, SIG_TYPE1_LEN,
     SIG_TYPE2_LEN,
 };
@@ -245,6 +246,111 @@ fn append_safe_only_trailers(
     // Writing an explicit zero here would leave one trailing byte
     // the cursor doesn't advance past, tripping the
     // `"trailing bytes"` final check.
+    o
+}
+
+// === CoW GPv2Order (zk_v3 AddrOnly) helpers ================================
+
+/// CoW GPv2Order EIP-712 digest, mirroring
+/// `secure/src/tx/eip712/cowswap::compute_digest` byte-for-byte (same
+/// rationale as `compute_safe_tx_hash` above — any divergence surfaces
+/// as an orderDigest cross-check refusal in the secure world).
+fn compute_cow_order_digest(canonical: &[u8; 204]) -> [u8; 32] {
+    const ORDER_TYPEHASH_PREIMAGE: &[u8] = b"Order(address sellToken,address buyToken,address receiver,uint256 sellAmount,uint256 buyAmount,uint32 validTo,bytes32 appData,uint256 feeAmount,string kind,bool partiallyFillable,string sellTokenBalance,string buyTokenBalance)";
+
+    // ── Domain separator (name "Gnosis Protocol", version "v2") ────
+    let domain_typehash = keccak256(
+        b"EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)",
+    );
+    let mut dom = [0u8; 32 * 5];
+    dom[0..32].copy_from_slice(&domain_typehash);
+    dom[32..64].copy_from_slice(&keccak256(b"Gnosis Protocol"));
+    dom[64..96].copy_from_slice(&keccak256(b"v2"));
+    dom[96 + 24..128].copy_from_slice(&canonical[0..8]); // chainId
+    dom[128 + 12..160].copy_from_slice(&GPV2_SETTLEMENT_ADDRESS);
+    let domain = keccak256(&dom);
+
+    // ── Struct hash (13 words, field order per the typehash) ───────
+    let kind_hash = if canonical[168] == 0 {
+        keccak256(b"sell")
+    } else {
+        keccak256(b"buy")
+    };
+    let sell_bal = match canonical[170] {
+        0 => keccak256(b"erc20"),
+        1 => keccak256(b"external"),
+        _ => keccak256(b"internal"),
+    };
+    let buy_bal = match canonical[171] {
+        0 => keccak256(b"erc20"),
+        _ => keccak256(b"internal"),
+    };
+    let mut sh = [0u8; 32 * 13];
+    sh[0..32].copy_from_slice(&keccak256(ORDER_TYPEHASH_PREIMAGE));
+    sh[32 + 12..64].copy_from_slice(&canonical[8..28]); // sellToken
+    sh[64 + 12..96].copy_from_slice(&canonical[28..48]); // buyToken
+    sh[96 + 12..128].copy_from_slice(&canonical[48..68]); // receiver
+    sh[128..160].copy_from_slice(&canonical[68..100]); // sellAmount
+    sh[160..192].copy_from_slice(&canonical[100..132]); // buyAmount
+    sh[192 + 28..224].copy_from_slice(&canonical[164..168]); // validTo
+    sh[224..256].copy_from_slice(&canonical[172..204]); // appData
+    sh[256..288].copy_from_slice(&canonical[132..164]); // feeAmount
+    sh[288..320].copy_from_slice(&kind_hash);
+    sh[320 + 31] = canonical[169]; // partiallyFillable
+    sh[352..384].copy_from_slice(&sell_bal);
+    sh[384..416].copy_from_slice(&buy_bal);
+    let struct_hash = keccak256(&sh);
+
+    let mut fin = [0u8; 66];
+    fin[0] = 0x19;
+    fin[1] = 0x01;
+    fin[2..34].copy_from_slice(&domain);
+    fin[34..66].copy_from_slice(&struct_hash);
+    keccak256(&fin)
+}
+
+/// Build the 164-byte `setPreSignature(orderUid, true)` calldata for
+/// `(orderDigest, owner, validTo)`. orderUid = digest(32) || owner(20)
+/// || validTo(4).
+fn build_presign_calldata(
+    order_digest: &[u8; 32],
+    owner: &[u8; 20],
+    valid_to_be: &[u8],
+) -> [u8; 164] {
+    let mut cd = [0u8; 164];
+    cd[0..4].copy_from_slice(&[0xec, 0x6c, 0xb1, 0x3f]);
+    cd[35] = 0x40; // bytes offset
+    cd[67] = 1; // signed = true
+    cd[99] = 56; // bytes length
+    cd[100..132].copy_from_slice(order_digest);
+    cd[132..152].copy_from_slice(owner);
+    cd[152..156].copy_from_slice(valid_to_be);
+    cd
+}
+
+/// Append a `zk_v3` AddrOnly trailer (bare 204-byte GPv2Order
+/// canonical — no proof, no readable, no VK bundle) AND a `safe_v1`
+/// trailer, preceded by the zero-length erc20/zk_v1 sections. This is
+/// the Safe-wrapped CoW presign wire shape. Returns the new offset.
+fn append_zkv3_addr_only_and_safe_trailers(
+    buf: &mut [u8],
+    off: usize,
+    order_canonical: &[u8; 204],
+    canonical: &[u8; SAFE_V1_CANONICAL_LEN],
+    raw_data: &[u8],
+) -> usize {
+    // erc20 bundle absent
+    buf[off..off + 2].copy_from_slice(&0u16.to_be_bytes());
+    // zk v1 absent
+    buf[off + 2..off + 4].copy_from_slice(&0u16.to_be_bytes());
+    // zk v3 = bare AddrOnly canonical
+    buf[off + 4..off + 6].copy_from_slice(&204u16.to_be_bytes());
+    let mut o = off + 6;
+    buf[o..o + 204].copy_from_slice(order_canonical);
+    o += 204;
+    o = append_safe_v1_trailer(buf, o, canonical, raw_data);
+    // No selector trailer, no names-count byte (see
+    // `append_safe_only_trailers` for the trailing-bytes rationale).
     o
 }
 
@@ -1502,7 +1608,143 @@ fn main() -> ! {
         hprintln!("[NS][e2e]   → ERC-7730 binding mismatch dropped, blind-sign proceeded");
     }
 
-    // counter at MAX and SE050 user UserID silicon-locked; next boot
+    // Scenario 5q: Safe-wrapped CoW presign clear-sign.
+    //
+    // The SafeTx's inner call is `GPv2Settlement.setPreSignature(uid,
+    // true)` with `uid.owner = the Safe` (GPv2 requires owner ==
+    // msg.sender, and the Safe is the caller at execution). The
+    // companion attaches BOTH a `safe_v1` trailer (SafeTx canonical +
+    // presign raw_data) and a `zk_v3` AddrOnly trailer (bare 204-byte
+    // GPv2Order canonical — pure-keccak path, QEMU-friendly). The
+    // secure world must: verify the safe trailer, resolve the CoW
+    // binding to (presign raw_data, safe address), recompute the
+    // orderDigest from the order canonical, byte-compare it against
+    // the uid, and render the combined Safe + order pages. A
+    // successful sign proves the whole Safe-wrapped pipeline.
+    hprintln!("[NS][e2e] Scenario 5q: Safe-wrapped CoW presign clear-sign");
+    unsafe {
+        let safe_address: [u8; 20] = [
+            0x5a, 0xfe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
+        ];
+        let chain_id: u64 = 11_155_111; // Sepolia (slot 1 registered in Scenario 1)
+
+        // GPv2Order canonical: sell 1000 USDC for ≥ 0.5 WETH, zero
+        // receiver (proceeds to the owner = the Safe), kind=SELL.
+        let mut order = [0u8; 204];
+        order[0..8].copy_from_slice(&chain_id.to_be_bytes());
+        order[8..28].copy_from_slice(&[
+            0xa0, 0xb8, 0x69, 0x91, 0xc6, 0x21, 0x8b, 0x36, 0xc1, 0xd1, 0x9d, 0x4a, 0x2e, 0x9e,
+            0xb0, 0xce, 0x36, 0x06, 0xeb, 0x48,
+        ]); // sellToken = USDC
+        order[28..48].copy_from_slice(&[
+            0xc0, 0x2a, 0xaa, 0x39, 0xb2, 0x23, 0xfe, 0x8d, 0x0a, 0x0e, 0x5c, 0x4f, 0x27, 0xea,
+            0xd9, 0x08, 0x3c, 0x75, 0x6c, 0xc2,
+        ]); // buyToken = WETH
+        order[96..100].copy_from_slice(&1_000_000_000u32.to_be_bytes()); // sellAmount
+        order[124..132].copy_from_slice(&0x06F0_5B59_D3B2_0000u64.to_be_bytes()); // buyAmount
+        order[164..168].copy_from_slice(&0x6800_0000u32.to_be_bytes()); // validTo
+
+        let order_digest = compute_cow_order_digest(&order);
+        let presign_cd = build_presign_calldata(&order_digest, &safe_address, &order[164..168]);
+
+        let safe_nonce: u64 = 18;
+        let canonical = build_safe_canonical(
+            chain_id,
+            &safe_address,
+            &GPV2_SETTLEMENT_ADDRESS,
+            &presign_cd,
+            safe_nonce,
+        );
+        let safe_tx_hash = compute_safe_tx_hash(&canonical);
+        let inner_data = build_approve_hash_calldata(&safe_tx_hash);
+
+        let mut len = build_sign_payload(
+            &mut PAYLOAD_BUF,
+            chain_id,
+            1,     // already-registered slot 1
+            false, // no rotation
+            5,     // base nonce
+            &safe_address,
+            0u128,
+            &inner_data,
+        );
+        len = append_zkv3_addr_only_and_safe_trailers(
+            &mut PAYLOAD_BUF,
+            len,
+            &order,
+            &canonical,
+            &presign_cd,
+        );
+
+        let status = nsc_api::sign_userop(&PAYLOAD_BUF[..len], &mut SIG_BUF);
+        assert_eq!(
+            status,
+            NscStatus::Ok as u32,
+            "scenario 5q must succeed (got {})",
+            status
+        );
+        let (t1_present, t2_len) = parse_response(&SIG_BUF);
+        assert!(!t1_present, "scenario 5q must NOT emit Type 1");
+        hprintln!(
+            "[NS][e2e]   → safe-wrapped CoW presign verified, t2_len={}",
+            t2_len
+        );
+    }
+
+    // Scenario 5r: Safe-wrapped CoW presign WITHOUT the zk_v3 trailer
+    // must be REFUSED (downgrade-mitigation gate). Stripping the
+    // trailer is exactly what a hostile companion would do to push the
+    // user onto a blind-sign page for an order they never saw — the
+    // gate refuses to sign instead, mirroring the direct-path
+    // "v3 required" behaviour.
+    hprintln!("[NS][e2e] Scenario 5r: safe-wrapped presign without zk_v3 is refused");
+    unsafe {
+        let safe_address: [u8; 20] = [
+            0x5a, 0xfe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
+        ];
+        let chain_id: u64 = 11_155_111;
+
+        // Same wire as 5q but with a placeholder uid (digest content is
+        // irrelevant — the gate fires before any digest work) and NO
+        // zk_v3 trailer.
+        let presign_cd = build_presign_calldata(&[0xCD; 32], &safe_address, &[0x68, 0, 0, 0]);
+        let canonical = build_safe_canonical(
+            chain_id,
+            &safe_address,
+            &GPV2_SETTLEMENT_ADDRESS,
+            &presign_cd,
+            19,
+        );
+        let safe_tx_hash = compute_safe_tx_hash(&canonical);
+        let inner_data = build_approve_hash_calldata(&safe_tx_hash);
+
+        let mut len = build_sign_payload(
+            &mut PAYLOAD_BUF,
+            chain_id,
+            1,
+            false,
+            6,
+            &safe_address,
+            0u128,
+            &inner_data,
+        );
+        len = append_safe_only_trailers(&mut PAYLOAD_BUF, len, &canonical, &presign_cd);
+
+        let status = nsc_api::sign_userop(&PAYLOAD_BUF[..len], &mut SIG_BUF);
+        assert_eq!(
+            status,
+            NscStatus::InvalidPointer as u32,
+            "scenario 5r: safe-wrapped presign without zk_v3 must refuse \
+             with InvalidPointer (got {}); Ok would mean the downgrade \
+             gate is not firing for the Safe-wrapped path",
+            status
+        );
+        hprintln!("[NS][e2e]   → refused as expected (v3 required)");
+    }
+
+        // counter at MAX and SE050 user UserID silicon-locked; next boot
     // recovers via `trigger_lockout_wipe` + fresh admin-wipe
     // re-provision.
     hprintln!("[NS][e2e] Scenario 6: brute-force protection (10 wrong PINs + 1 correct)");

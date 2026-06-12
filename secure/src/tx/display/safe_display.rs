@@ -8,7 +8,7 @@
 //! semantic content alongside the Safe-level metadata that distinguish
 //! "approving a Safe tx" from "calling something directly".
 //!
-//! Page layout (variable, capped at `MAX_PAGES = 10`):
+//! Page layout (variable, capped at [`super::MAX_PAGES`]):
 //!
 //! ```text
 //!   0: "Approve Safe TX"     1: "Safe:"             2: "SafeTx Nonce: N"
@@ -36,6 +36,14 @@
 //!                                when `canonical.to == safe_address`
 //!                                and selector matches one of the
 //!                                eight Safe v1.3.0+ singleton ops.
+//!         * CoW presign         (7 or 9 pages: "CowSwap order / for
+//!                                this Safe" context banner + the v3
+//!                                order body from
+//!                                `crate::tx::eip712::cowswap_display`.
+//!                                Fires only when the handler verified
+//!                                a CoW v3 trailer against the SafeTx
+//!                                inner calldata with owner = the Safe;
+//!                                see `safe::cow_binding`).
 //!         * unknown Safe op     (3 pages: "Unknown Safe op" + Inner-to + selector/hash)
 //!         * blind-sign          (3 pages: "Unknown call" + "Inner to" + selector/hash)
 //!
@@ -60,8 +68,14 @@ use crate::erc20::bundle::Erc20Metadata;
 use crate::erc20::calldata::{is_unlimited_amount, parse_erc20_calldata, Erc20Call};
 use crate::names::NameResolver;
 use crate::tx::eip1559::U256;
+use crate::tx::eip712::cowswap::VerifiedCowswapV3;
+use crate::tx::eip712::cowswap_display::{
+    append_order_body_pages, order_body_page_count, order_kind_label,
+};
 use crate::tx::eip712::keccak;
-use crate::tx::eip712::safe::{decode_canonical, SafeTx, VerifiedSafeExec, VerifiedSafeV1};
+use crate::tx::eip712::safe::{
+    decode_canonical, safe_inner_is_cow_presign, SafeTx, VerifiedSafeExec, VerifiedSafeV1,
+};
 use crate::ui::DISPLAY_COLS;
 
 /// Number of fixed Safe-level header pages rendered before the inner-tx
@@ -128,8 +142,12 @@ struct SafeRenderInput<'a> {
 /// the *outer* trailer chain; we apply it to the inner-tx's `to` only
 /// when the addresses match (a Safe inner call to USDC carries the
 /// metadata for USDC, not for the Safe contract).
+/// `cow` is the optional CoW v3 order the handler verified against this
+/// SafeTx's inner calldata (owner = the Safe) — when present, the
+/// inner-tx pages become the full order intent instead of blind-sign.
 pub fn render_safe_v1_pages(
     safe: &VerifiedSafeV1<'_>,
+    cow: Option<&VerifiedCowswapV3>,
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
 ) -> Pages {
@@ -163,7 +181,7 @@ pub fn render_safe_v1_pages(
         gas_token: tx.gas_token,
         refund_receiver: tx.refund_receiver,
     };
-    render_safe_pages_inner(&input, erc20, resolver)
+    render_safe_pages_inner(&input, cow, erc20, resolver)
 }
 
 /// Render a verified `execTransaction(...)` UserOp.
@@ -181,8 +199,11 @@ pub fn render_safe_v1_pages(
 /// matches the decoded inner `to`. The decoded `signatures` blob is
 /// left intentionally undisplayed — it is multi-owner content and
 /// surfacing it would only add noise to the on-device confirm.
+/// `cow` mirrors [`render_safe_v1_pages`]: a CoW v3 order verified
+/// against the decoded SafeTx inner calldata with owner = the Safe.
 pub fn render_safe_exec_pages(
     exec: &VerifiedSafeExec<'_>,
+    cow: Option<&VerifiedCowswapV3>,
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
 ) -> Pages {
@@ -204,12 +225,13 @@ pub fn render_safe_exec_pages(
         gas_token: d.gas_token,
         refund_receiver: d.refund_receiver,
     };
-    render_safe_pages_inner(&input, erc20, resolver)
+    render_safe_pages_inner(&input, cow, erc20, resolver)
 }
 
 /// Shared rendering body for both approveHash and execTransaction.
 fn render_safe_pages_inner(
     input: &SafeRenderInput<'_>,
+    cow: Option<&VerifiedCowswapV3>,
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
 ) -> Pages {
@@ -254,16 +276,30 @@ fn render_safe_pages_inner(
     // loud "Unknown Safe op" blind-sign branch so the user can tell
     // it apart from a generic opaque inner call.
     let inner_value = U256(tx.value);
-    let inner_kind = if tx.to == tx.safe_address && !safe.raw_data.is_empty() {
-        match classify_safe_mgmt(safe.raw_data) {
-            Some(op) => InnerKind::SafeMgmt(op),
-            None => InnerKind::UnknownSafeSelf,
+    // A handler-verified CoW v3 order takes the inner slot outright —
+    // the v3 pipeline already byte-bound the canonical to this SafeTx's
+    // raw_data (digest/validTo) and to the Safe address (uid owner).
+    // The predicate re-check is defensive only: if the dispatcher ever
+    // paired a `cow` with a non-presign inner call (logic bug, memory
+    // fault), we ignore it and fall through to the normal ladder, which
+    // lands on the loud blind-sign page. Fail-safe, never fail-rich.
+    let inner_kind = match cow {
+        Some(v3) if safe_inner_is_cow_presign(&tx.to, safe.raw_data) => {
+            InnerKind::CowswapPresign(v3)
         }
-    } else {
-        match classify_inner(safe.raw_data, &inner_value) {
-            InnerKind::Erc20Known(call) if erc20.is_some() => InnerKind::Erc20Known(call),
-            InnerKind::Erc20Known(call) => InnerKind::Erc20Unknown(call),
-            other => other,
+        _ => {
+            if tx.to == tx.safe_address && !safe.raw_data.is_empty() {
+                match classify_safe_mgmt(safe.raw_data) {
+                    Some(op) => InnerKind::SafeMgmt(op),
+                    None => InnerKind::UnknownSafeSelf,
+                }
+            } else {
+                match classify_inner(safe.raw_data, &inner_value) {
+                    InnerKind::Erc20Known(call) if erc20.is_some() => InnerKind::Erc20Known(call),
+                    InnerKind::Erc20Known(call) => InnerKind::Erc20Unknown(call),
+                    other => other,
+                }
+            }
         }
     };
     let inner_pages = match &inner_kind {
@@ -271,6 +307,8 @@ fn render_safe_pages_inner(
         InnerKind::EmptyCall => 1,
         InnerKind::Erc20Known(_) | InnerKind::Erc20Unknown(_) => 4,
         InnerKind::SafeMgmt(op) => safe_mgmt_page_count(op),
+        // Context banner + the shared CoW order body (6 proof / 8 addr).
+        InnerKind::CowswapPresign(v3) => 1 + order_body_page_count(v3.readable.is_some()),
         InnerKind::UnknownSafeSelf => 3,
         InnerKind::Blind => 3,
     };
@@ -571,6 +609,37 @@ fn render_safe_pages_inner(
                 resolver,
             );
         }
+        InnerKind::CowswapPresign(v3) => {
+            // P_n: context banner — the load-bearing linkage page. The
+            // user must understand that the order shown on the next
+            // pages is owned by (sells the funds of) THIS Safe, not the
+            // wallet. The short-form Safe address lets them eyeball it
+            // against the full-address page 1 without flipping back.
+            write_line(&mut pages.buf[next_page][0], "CowSwap order");
+            write_line(&mut pages.buf[next_page][1], "for this Safe:");
+            write_short_addr(&mut pages.buf[next_page][2], &tx.safe_address);
+            // Proof mode carries the sell/buy direction in the
+            // readable's first line; addr mode needs it surfaced here
+            // (mirrors the AddrOnly direct flow's banner row).
+            write_line(
+                &mut pages.buf[next_page][3],
+                match &v3.readable {
+                    Some(_) => "> next",
+                    None => order_kind_label(&v3.canonical),
+                },
+            );
+            next_page += 1;
+            // P_n+1..: the shared v3 order body. Zero receiver renders
+            // as "(= the Safe)" — GPv2 routes proceeds to the uid owner,
+            // which the handler verified is this Safe.
+            next_page = append_order_body_pages(
+                &mut pages,
+                next_page,
+                &v3.canonical,
+                v3.readable.as_ref(),
+                Some("(= the Safe)"),
+            );
+        }
         InnerKind::UnknownSafeSelf => {
             // Loud variant of Blind that distinguishes "self-call to the
             // Safe contract with an unrecognised selector" from a generic
@@ -634,7 +703,7 @@ struct SafeRawData<'a> {
     raw_data: &'a [u8],
 }
 
-enum InnerKind {
+enum InnerKind<'a> {
     EmptyCall,
     PlainEth,
     Erc20Known(Erc20Call),
@@ -642,6 +711,11 @@ enum InnerKind {
     /// Inner call targets `safe_address` and decoded as one of the
     /// recognised Safe-native owner/module/guard/fallback ops.
     SafeMgmt(SafeMgmtOp),
+    /// Inner call is `setPreSignature` on GPv2Settlement and the
+    /// handler verified a CoW v3 trailer against it (orderUid digest /
+    /// validTo bound to `raw_data`, uid owner == the Safe). Renders
+    /// the full order intent via the shared cowswap_display body.
+    CowswapPresign(&'a VerifiedCowswapV3),
     /// Inner call targets `safe_address` but the selector is not in
     /// the recognised Safe-native set — loud blind-sign with an
     /// explicit "Unknown Safe op" warning so the user can tell this
@@ -652,19 +726,24 @@ enum InnerKind {
 
 /// Produce a one-line semantic hint about the inner tx, e.g.
 /// `"Inner: ERC-20"`. Bounded to 16 ASCII columns.
-fn inner_kind_hint(kind: &InnerKind) -> &'static str {
+fn inner_kind_hint(kind: &InnerKind<'_>) -> &'static str {
     match kind {
         InnerKind::EmptyCall => "(empty call)",
         InnerKind::PlainEth => "Inner: ETH xfer",
         InnerKind::Erc20Known(_) => "Inner: ERC-20",
         InnerKind::Erc20Unknown(_) => "Inner: ERC-20?",
         InnerKind::SafeMgmt(_) => "Inner: Safe mgmt",
+        InnerKind::CowswapPresign(_) => "Inner: CoW order",
         InnerKind::UnknownSafeSelf => "! Unkn self-call",
         InnerKind::Blind => "! Inner: opaque",
     }
 }
 
-fn classify_inner(raw_data: &[u8], value: &U256) -> InnerKind {
+// The returned `InnerKind` never borrows from the arguments — the
+// lifetime parameter only exists for the `CowswapPresign` variant,
+// which this classifier never produces (the caller selects it from the
+// handler-verified `cow` before consulting the ladder).
+fn classify_inner<'a>(raw_data: &[u8], value: &U256) -> InnerKind<'a> {
     if raw_data.is_empty() {
         if value.is_zero() {
             InnerKind::EmptyCall

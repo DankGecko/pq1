@@ -61,6 +61,10 @@ use crate::ui::{DISPLAY_COLS, DISPLAY_ROWS};
 ///   * contract_creation                    → 8 pages
 ///   * cowswap EIP-712 render (see
 ///     `crate::tx::eip712::cowswap_display`) → 10 pages
+///   * Safe-wrapped CoW presign (Safe surface with the v3 order as its
+///     inner pages) → 3 header + 2 refund + 1 inner-ETH + 1 context
+///     banner + 8 body (addr mode) + 1 confirm = 16, +1 native-value
+///     splice + 1 ERC-8213 fingerprint = 18; +1 batch banner = 19
 ///   * typed_call (Phase 2 calldata decode) → up to 14 pages
 ///     (banner + up to 6 typed args + To + Value + Chain + 2 fee
 ///     pages + Nonce; declines past `MAX_TYPED_ARGS_RENDERED = 6`)
@@ -188,6 +192,13 @@ impl Pages {
 /// call still renders the outer Safe banner first — the descriptor
 /// would be for the inner call, which the Safe renderer dispatches
 /// through its own inner-tx ladder.
+///
+/// Combination rule: when BOTH a v3 order and a Safe context verified
+/// (Safe-wrapped CoW presign — the handler bound the order to the
+/// SafeTx inner calldata with uid owner = the Safe), the render routes
+/// through the Safe surface with the order as its inner pages. A bare
+/// CoW render would hide the SafeTx's signed refund parameters, which
+/// are a drain channel (see `safe_display.rs`).
 #[cfg(not(test))]
 #[allow(clippy::too_many_arguments)]
 pub fn pick_sign_pages(
@@ -236,6 +247,23 @@ fn pick_sign_pages_inner(
     resolver: &crate::names::NameResolver<'_>,
 ) -> Pages {
     if let Some(v3) = v3 {
+        // Safe-wrapped CoW presign: when the v3 order was verified
+        // against a Safe flow's inner calldata (the handler bound uid
+        // owner == the Safe via `safe::cow_binding`), the Safe surface
+        // must stay visible — its banner, address, nonce and above all
+        // the gas-refund pages are signed facts a bare CoW render would
+        // hide (the refund channel is a full-balance drain vector, see
+        // `safe_display.rs`). The order renders as the Safe's inner-tx
+        // pages instead. ERC-20 inner metadata is structurally
+        // inapplicable here (the verified inner target is the GPv2
+        // settlement singleton, never a token contract) so we pass
+        // `None` rather than re-running the address match.
+        if let Some(safe) = safe_v1 {
+            return render_safe_v1_pages(safe, Some(v3), None, resolver);
+        }
+        if let Some(exec) = safe_exec {
+            return render_safe_exec_pages(exec, Some(v3), None, resolver);
+        }
         return match &v3.readable {
             Some(readable) => {
                 crate::tx::eip712::cowswap_display::render_cowswap_pages(
@@ -269,7 +297,7 @@ fn pick_sign_pages_inner(
             };
             if m.contract == inner_to { Some(m) } else { None }
         });
-        return render_safe_v1_pages(safe, inner_meta, resolver);
+        return render_safe_v1_pages(safe, None, inner_meta, resolver);
     }
     if let Some(exec) = safe_exec {
         // Same address-match rule for the exec path: the outer ERC-20
@@ -285,7 +313,7 @@ fn pick_sign_pages_inner(
                     None
                 }
             });
-        return render_safe_exec_pages(exec, inner_meta, resolver);
+        return render_safe_exec_pages(exec, None, inner_meta, resolver);
     }
     if let Some(d) = erc7730 {
         match erc7730::render_erc7730_pages(tx, inner_data, d, erc20, resolver) {

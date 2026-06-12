@@ -177,6 +177,7 @@ call they're about to inspect:
 | `PlainEth` (no calldata, value > 0) | `Inner: ETH xfer` |
 | `Erc20Known` (recognised ERC-20 + matching metadata bundle) | `Inner: ERC-20` |
 | `Erc20Unknown` (recognised ERC-20 but no metadata) | `Inner: ERC-20?` |
+| `CowswapPresign` (inner call is `setPreSignature` on GPv2Settlement, CoW v3 trailer verified) | `Inner: CoW order` |
 | `Blind` (unknown calldata) | `! Inner: opaque` |
 
 If the metadata bundle's contract address doesn't match `canonical.to`,
@@ -240,6 +241,48 @@ can compare it byte-for-byte against what the dapp shows.
 The data-hash page on blind-sign uses `canonical.data_hash` (which the
 firmware proved equals `keccak256(raw_data)` in step 7), so the user
 can compare it against what the dapp claims.
+
+#### CoW order pre-sign (1 context banner + 6/8 order body pages)
+
+When the SafeTx's inner call is CowSwap
+`GPv2Settlement.setPreSignature(orderUid, true)` and the companion
+attaches a verified CoW v3 trailer (see
+**[Safe-wrapped CowSwap pre-sign](companion-safe-cowswap-presign.md)**),
+the inner-tx pages become the full order intent instead of a blind-sign
+page. The order is bound to *this* Safe: the firmware checks
+`orderUid.owner == safe_address` and re-derives the orderDigest from the
+v3 canonical, so the order shown is provably the one the Safe will act
+on.
+
+```
+┌────────────────┐    ┌────────────────┐    ┌────────────────┐
+│CowSwap order   │    │CowSwap SELL    │    │for at least    │
+│for this Safe:  │    │0.20 USDC       │    │0.0004 WETH     │
+│0x5afe00..000002│    │                │    │                │  …order body…
+│> next          │    │                │    │                │
+└────────────────┘    └────────────────┘    └────────────────┘
+   context banner          proof-mode readable pages (or addr-mode
+                           token+amount pages when a token is absent
+                           from the firmware registry)
+```
+
+The context banner is the load-bearing linkage page: it names the Safe
+(short form, cross-checkable against the full address on header page 2)
+so the user can never confuse "a CoW order I'm placing personally" with
+"a CoW order I'm placing for this multisig". The order-body pages are
+the *same* renderer the direct CoW v3 flow uses
+(`cowswap_display::append_order_body_pages`) — receiver `0x0` renders as
+`(= the Safe)` because GPv2 routes proceeds to the order owner. Refund
+pages (below) still render whenever the SafeTx configures a gas refund:
+the combined view never hides a signed fact.
+
+### Refund pages (2 pages, only when a gas refund is configured)
+
+If any of `gasPrice` / `gasToken` / `refundReceiver` is non-zero, two
+loud pages render between the metadata header and the inner-tx pages —
+a *token* refund has no on-chain `gasPrice` cap, so a hidden refund is a
+full-ERC-20-balance drain channel. The pages name the refund token (or
+`ETH (native)`) and the recipient (or `tx.origin`).
 
 ### Confirm page
 

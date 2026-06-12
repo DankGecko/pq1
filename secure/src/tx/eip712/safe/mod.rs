@@ -60,6 +60,13 @@ pub mod mgmt_decode;
 pub mod exec_decode;
 pub use exec_decode::{verify_and_bind_exec, DecodedExec, VerifiedSafeExec};
 
+// Pure-logic CoW-binding resolution for Safe-wrapped `setPreSignature`
+// orders. Host-runnable; shared by both gateway handlers and their
+// downgrade gates so the "is this Safe inner call a CoW presign?"
+// predicate has exactly one definition.
+pub mod cow_binding;
+pub use cow_binding::{resolve_cow_binding, safe_inner_is_cow_presign, CowBinding};
+
 #[cfg(test)]
 mod test_vectors;
 

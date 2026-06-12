@@ -395,24 +395,14 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                     .zk_v1 = v_opt;
             }
             TRAILER_KIND_ZK_V3 => {
-                let ptx = parsed[rec.tx_idx as usize].as_ref().unwrap();
-                let inner_data: &[u8] = &snap[ptx.data_off..ptx.data_off + ptx.data_len];
-                let v_opt = crate::tx::eip712::cowswap::verify_and_bind_trailer(
-                    bytes,
-                    inner_data,
-                    chain_id,
-                    &sender,
-                );
-                let ok = v_opt.is_some();
-                crate::fi::wait_random();
-                if crate::fi::check_true_into_sentinel(|| core::hint::black_box(ok))
-                    != crate::fi::OK_SENTINEL
-                {
-                    continue;
-                }
-                routed[rec.tx_idx as usize]
-                    .get_or_insert_with(RoutedTrailers::empty)
-                    .zk_v3 = v_opt;
+                // Deferred to pass 2 (§5d below). The CoW binding
+                // target depends on the Safe context for the same
+                // tx_idx — and the matching `safe_v1` record may sit
+                // LATER in the companion-supplied record order — so
+                // ZK_V3 verification runs only after every other kind
+                // has routed. Parse-time validation (kind / tx_idx /
+                // length caps / dedup) already happened in
+                // `parse_batch_trailers`, so skipping here is safe.
             }
             TRAILER_KIND_SAFE_V1 => {
                 let ptx = parsed[rec.tx_idx as usize].as_ref().unwrap();
@@ -525,6 +515,63 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                 return NscStatus::InternalError as u32;
             }
         }
+    }
+
+    // ── 5d. Pass 2: verify the deferred ZK_V3 (CoW v3) records ──────
+    //
+    // Runs after every other kind so the Safe context for the same
+    // tx_idx — wherever it sat in the companion's record order — is
+    // already in `routed`. Mirrors the single-tx handler's ordering
+    // (Safe verifies before the CoW verify) and uses the same
+    // `safe::cow_binding` resolver: a Safe-wrapped presign binds the
+    // trailer to the SafeTx's inner raw_data with uid.owner == the
+    // Safe; everything else binds to the tx's inner calldata with
+    // uid.owner == sender.
+    for rec_opt in &parsed_trailers.records[..parsed_trailers.count] {
+        let rec = match rec_opt.as_ref() {
+            Some(r) => r,
+            None => continue,
+        };
+        if rec.kind != TRAILER_KIND_ZK_V3 {
+            continue;
+        }
+        let bytes: &[u8] = &snap[rec.start..rec.start + rec.len];
+        let idx = rec.tx_idx as usize;
+        let ptx = parsed[idx].as_ref().unwrap();
+        let inner_data: &[u8] = &snap[ptx.data_off..ptx.data_off + ptx.data_len];
+        // Exec context via a cheap pure ABI decode (no keccak, no
+        // Groth16). The render loop recomputes the same decode later;
+        // doubling it for the one CoW-wrapped tx beats threading a
+        // MAX_BATCH_TXS-sized context array through the handler.
+        let safe_exec_ctx = if inner_data.len() >= 4
+            && inner_data[..4] == sphincs_tz_shared::EXEC_TRANSACTION_SELECTOR
+        {
+            crate::tx::eip712::safe::verify_and_bind_exec(inner_data, chain_id, &ptx.to)
+        } else {
+            None
+        };
+        let cow_bind = crate::tx::eip712::safe::resolve_cow_binding(
+            inner_data,
+            &sender,
+            routed[idx].as_ref().and_then(|r| r.safe_v1.as_ref()),
+            safe_exec_ctx.as_ref(),
+        );
+        let v_opt = crate::tx::eip712::cowswap::verify_and_bind_trailer(
+            bytes,
+            cow_bind.calldata,
+            chain_id,
+            &cow_bind.owner,
+        );
+        let ok = v_opt.is_some();
+        crate::fi::wait_random();
+        if crate::fi::check_true_into_sentinel(|| core::hint::black_box(ok))
+            != crate::fi::OK_SENTINEL
+        {
+            continue;
+        }
+        routed[idx]
+            .get_or_insert_with(RoutedTrailers::empty)
+            .zk_v3 = v_opt;
     }
 
     // ── 6. Per-tx clear-signing confirm ─────────────────────────────
@@ -658,6 +705,27 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             inner_data.len() >= sphincs_tz_shared::EXEC_TRANSACTION_MIN_CALLDATA_LEN;
         if safe_exec_selector && safe_exec_enough_len && safe_exec_verified.is_none() {
             ui::show_status("Batch sign", "exec parse fail");
+            return NscStatus::InvalidPointer as u32;
+        }
+
+        // Safe-wrapped CoW presign gate — twin of the direct gate
+        // above and of the single-tx handler's `cow_bind.via_safe`
+        // gate. The predicate is the SAME resolver pass 2 used to pick
+        // the v3 binding target, so gate and verify cannot drift: when
+        // a verified Safe context's inner call claims setPreSignature
+        // on the GPv2 settlement, a verified v3 trailer is mandatory
+        // for this tx — no blind-sign fallback.
+        let safe_wrapped_cow = crate::tx::eip712::safe::resolve_cow_binding(
+            inner_data,
+            &sender,
+            routed[i].as_ref().and_then(|r| r.safe_v1.as_ref()),
+            safe_exec_verified.as_ref(),
+        )
+        .via_safe;
+        if safe_wrapped_cow
+            && routed[i].as_ref().and_then(|r| r.zk_v3.as_ref()).is_none()
+        {
+            ui::show_status("CoW sign", "v3 required (batch)");
             return NscStatus::InvalidPointer as u32;
         }
         let inner_pages = pick_sign_pages(

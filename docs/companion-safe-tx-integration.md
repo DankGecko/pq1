@@ -14,6 +14,13 @@ It assumes you already understand the broader companion-app surface
 What is new here is the `safe_v1` trailer that converts an opaque
 `approveHash(bytes32)` UserOp into a clear-signing experience.
 
+> **Placing a CowSwap order from a Safe?** When the SafeTx's inner call
+> is `GPv2Settlement.setPreSignature`, the device additionally renders
+> the full CoW order intent (bound to the Safe) — see
+> [`companion-safe-cowswap-presign.md`](companion-safe-cowswap-presign.md).
+> A verified CoW `zk_v3` trailer is then **mandatory** alongside
+> `safe_v1`, or the sign refuses with `CoW sign / v3 required`.
+
 ## Why this flow exists
 
 The Gnosis Safe Web Dapp does **not** request an EIP-712 typed-data

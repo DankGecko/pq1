@@ -348,6 +348,23 @@ on-chain VK hash comparison, or external trust anchor. The release
 review still happens by diffing `secure/data/vks.review.txt` against
 the previous release before signing the firmware image.
 
+### `orderUid.owner` is a verifier *parameter*, not a baked-in constant
+
+`verify_and_bind_trailer(bundle, calldata, chain_id, owner)` takes the
+expected `orderUid.owner` as an argument. The direct `setPreSignature`
+flow passes the wallet `sender`; the **Safe-wrapped** flow (landed
+2026-06-11, see
+[`companion-safe-cowswap-presign.md`](companion-safe-cowswap-presign.md))
+passes the **Safe address** instead. This is the *only* difference
+between the two flows: the owner sits outside both the EIP-712 digest
+and the Poseidon-bound canonical, so the same proof + canonical verify
+for either, and the cross-check's `orderUid[32..52] == owner` byte
+compare pins the order to whichever account will be `msg.sender` at
+settlement. The binding selection (which calldata + which owner) lives
+in `secure/src/tx/eip712/safe/cow_binding.rs` and is fail-closed: a
+wrong selection produces a `(calldata, owner)` pair the pipeline
+rejects.
+
 ## Caveats and known limitations
 
 1. **`appData` is forced to `bytes32(0)`.** Orders that use a

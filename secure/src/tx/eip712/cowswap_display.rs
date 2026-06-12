@@ -70,64 +70,9 @@ pub fn render_cowswap_pages(canonical: &[u8; 204], readable: &[u8; 128]) -> Page
     write_line(&mut pages.row_mut(0, 2), chain_name_str(chain_id));
     write_line(&mut pages.row_mut(0, 3), "> next");
 
-    // ── Page 1: readable[0..64) — 4 lines of ASCII from the proof ──
-    splice_readable_rows(&mut pages, 1, &readable[0..64]);
-
-    // ── Page 2: readable[64..128) — remaining 4 lines ──────────────
-    splice_readable_rows(&mut pages, 2, &readable[64..128]);
-
-    // ── Page 3: Receiver ───────────────────────────────────────────
-    write_line(&mut pages.row_mut(3, 0), "Receiver:");
-    let receiver: [u8; 20] = canonical[OFF_RECEIVER..OFF_RECEIVER + 20]
-        .try_into()
-        .expect("20-byte slice");
-    // `write_addr_two_rows` needs mutable access to rows 1 and 2 at
-    // the same time. Borrow the page slice once and split it so both
-    // rows get independent mutable refs without tripping the
-    // double-mutable-borrow check.
-    {
-        let page = pages.page_mut(3);
-        let (head, tail) = page.split_at_mut(2);
-        write_addr_two_rows(&mut head[1], &mut tail[0], &receiver);
-    }
-    write_line(&mut pages.row_mut(3, 3), "> next");
-
-    // ── Page 4: Expires + partiallyFillable ───────────────────────
-    write_line(&mut pages.row_mut(4, 0), "Expires:");
-    let valid_to = u32::from_be_bytes([
-        canonical[OFF_VALID_TO + 0],
-        canonical[OFF_VALID_TO + 1],
-        canonical[OFF_VALID_TO + 2],
-        canonical[OFF_VALID_TO + 3],
-    ]);
-    write_u32_row(&mut pages.row_mut(4, 1), "unix ", valid_to);
-    write_partial_row(&mut pages.row_mut(4, 2), canonical[OFF_PARTIAL]);
-    write_line(&mut pages.row_mut(4, 3), "> next");
-
-    // ── Page 5: Fee + balance kinds ────────────────────────────────
-    write_line(&mut pages.row_mut(5, 0), "Fee:");
-    // Fee amount is a uint256 BE; show the last 8 bytes as hex. Zero
-    // shows as "0x0000000000000000" which is unambiguous. Non-zero
-    // fees are rare on CowSwap user orders (the solver pays gas), so
-    // this raw hex is mostly a safety indicator rather than a value
-    // the user has to parse.
-    write_fee_row(
-        &mut pages.row_mut(5, 1),
-        &canonical[OFF_FEE_AMOUNT..OFF_FEE_AMOUNT + 32],
-    );
-    write_balance_row(
-        &mut pages.row_mut(5, 2),
-        canonical[OFF_SELL_TOKEN_BAL],
-        canonical[OFF_BUY_TOKEN_BAL],
-    );
-    write_line(&mut pages.row_mut(5, 3), "> next");
-
-    // ── Page 6: appData ────────────────────────────────────────────
-    write_line(&mut pages.row_mut(6, 0), "appData:");
-    let app = &canonical[OFF_APP_DATA..OFF_APP_DATA + 32];
-    write_app_data_prefix(&mut pages.row_mut(6, 1), app);
-    write_app_data_suffix(&mut pages.row_mut(6, 2), app);
-    write_line(&mut pages.row_mut(6, 3), "> next");
+    // ── Pages 1..=6: order body (shared with the Safe-wrapped flow) ─
+    let next = append_order_body_pages(&mut pages, 1, canonical, Some(readable), None);
+    debug_assert_eq!(next, 7);
 
     // ── Page 7: Confirm ────────────────────────────────────────────
     write_line(&mut pages.row_mut(7, 0), "");
@@ -136,6 +81,163 @@ pub fn render_cowswap_pages(canonical: &[u8; 204], readable: &[u8; 128]) -> Page
     write_line(&mut pages.row_mut(7, 3), "R=Confirm");
 
     pages
+}
+
+/// Order-body page count for a given trailer flavour: 6 pages when the
+/// Groth16-bound `readable` is present (amounts + symbols come from the
+/// proof), 8 in AddrOnly mode (raw token addresses + full uint256 hex
+/// amounts). Used by the Safe-wrapped renderer to pre-size its `Pages`
+/// before calling [`append_order_body_pages`].
+pub const fn order_body_page_count(has_readable: bool) -> usize {
+    if has_readable {
+        6
+    } else {
+        8
+    }
+}
+
+/// Write the order-body pages of a verified CoW v3 canonical into an
+/// already-sized `Pages` buffer starting at index `start`; returns the
+/// index of the first page after the body.
+///
+/// This is the shared core of [`render_cowswap_pages`] (direct flow,
+/// proof mode), [`render_cowswap_pages_addr`] (direct flow, AddrOnly)
+/// and the Safe-wrapped combined renderer in
+/// `crate::tx::display::safe_display` — one body implementation, three
+/// framings. Layout per mode:
+///
+///   * `readable = Some(_)` (proof mode, 6 pages): readable[0..64),
+///     readable[64..128), receiver, expires + partial, fee + balance
+///     kinds, appData.
+///   * `readable = None` (AddrOnly, 8 pages): sell token, sellAmount
+///     (full uint256 hex), buy token, buyAmount, receiver, expires +
+///     partial, fee + balance kinds, appData.
+///
+/// `owner_label`: GPv2 semantics give `receiver == address(0)` the
+/// meaning "proceeds go to the order's owner". The direct flows pass
+/// `None` and keep rendering the zero address verbatim (byte-identical
+/// to the historical pages); the Safe-wrapped flow passes a label like
+/// `"(= the Safe)"` so the user understands the bought tokens land in
+/// the Safe, not in the wallet.
+pub fn append_order_body_pages(
+    pages: &mut Pages,
+    start: usize,
+    canonical: &[u8; 204],
+    readable: Option<&[u8; 128]>,
+    owner_label: Option<&str>,
+) -> usize {
+    let mut p = start;
+
+    match readable {
+        Some(readable) => {
+            // ── readable[0..64) — 4 lines of ASCII from the proof ──
+            splice_readable_rows(pages, p, &readable[0..64]);
+            p += 1;
+            // ── readable[64..128) — remaining 4 lines ──────────────
+            splice_readable_rows(pages, p, &readable[64..128]);
+            p += 1;
+        }
+        None => {
+            // ── Sell token addr + amount-page hint ─────────────────
+            write_line(&mut pages.row_mut(p, 0), "Sell token:");
+            let sell_token: [u8; 20] = canonical[OFF_SELL_TOKEN..OFF_SELL_TOKEN + 20]
+                .try_into()
+                .expect("20-byte slice");
+            {
+                let page = pages.page_mut(p);
+                let (head, tail) = page.split_at_mut(2);
+                write_addr_two_rows(&mut head[1], &mut tail[0], &sell_token);
+            }
+            write_line(&mut pages.row_mut(p, 3), "sellAmt(hex) >");
+            p += 1;
+
+            // ── Sell amount, 4×16 hex = full 32-byte uint256 BE ───
+            write_uint256_hex_page(pages, p, &canonical[OFF_SELL_AMOUNT..OFF_SELL_AMOUNT + 32]);
+            p += 1;
+
+            // ── Buy token addr + amount-page hint ──────────────────
+            write_line(&mut pages.row_mut(p, 0), "Buy  token:");
+            let buy_token: [u8; 20] = canonical[OFF_BUY_TOKEN..OFF_BUY_TOKEN + 20]
+                .try_into()
+                .expect("20-byte slice");
+            {
+                let page = pages.page_mut(p);
+                let (head, tail) = page.split_at_mut(2);
+                write_addr_two_rows(&mut head[1], &mut tail[0], &buy_token);
+            }
+            write_line(&mut pages.row_mut(p, 3), "buyAmt(hex)  >");
+            p += 1;
+
+            // ── Buy amount, 4×16 hex = full 32-byte uint256 BE ────
+            write_uint256_hex_page(pages, p, &canonical[OFF_BUY_AMOUNT..OFF_BUY_AMOUNT + 32]);
+            p += 1;
+        }
+    }
+
+    // ── Receiver ───────────────────────────────────────────────────
+    write_line(&mut pages.row_mut(p, 0), "Receiver:");
+    let receiver: [u8; 20] = canonical[OFF_RECEIVER..OFF_RECEIVER + 20]
+        .try_into()
+        .expect("20-byte slice");
+    match owner_label {
+        Some(label) if receiver == [0u8; 20] => {
+            write_line(&mut pages.row_mut(p, 1), label);
+            write_line(&mut pages.row_mut(p, 2), "");
+        }
+        _ => {
+            // `write_addr_two_rows` needs mutable access to rows 1 and
+            // 2 at the same time. Borrow the page slice once and split
+            // it so both rows get independent mutable refs without
+            // tripping the double-mutable-borrow check.
+            let page = pages.page_mut(p);
+            let (head, tail) = page.split_at_mut(2);
+            write_addr_two_rows(&mut head[1], &mut tail[0], &receiver);
+        }
+    }
+    write_line(&mut pages.row_mut(p, 3), "> next");
+    p += 1;
+
+    // ── Expires + partiallyFillable ────────────────────────────────
+    write_line(&mut pages.row_mut(p, 0), "Expires:");
+    let valid_to = u32::from_be_bytes([
+        canonical[OFF_VALID_TO + 0],
+        canonical[OFF_VALID_TO + 1],
+        canonical[OFF_VALID_TO + 2],
+        canonical[OFF_VALID_TO + 3],
+    ]);
+    write_u32_row(&mut pages.row_mut(p, 1), "unix ", valid_to);
+    write_partial_row(&mut pages.row_mut(p, 2), canonical[OFF_PARTIAL]);
+    write_line(&mut pages.row_mut(p, 3), "> next");
+    p += 1;
+
+    // ── Fee + balance kinds ────────────────────────────────────────
+    write_line(&mut pages.row_mut(p, 0), "Fee:");
+    // Fee amount is a uint256 BE; show the last 8 bytes as hex. Zero
+    // shows as "0x0000000000000000" which is unambiguous. Non-zero
+    // fees are rare on CowSwap user orders (the solver pays gas), so
+    // this raw hex is mostly a safety indicator rather than a value
+    // the user has to parse.
+    write_fee_row(
+        &mut pages.row_mut(p, 1),
+        &canonical[OFF_FEE_AMOUNT..OFF_FEE_AMOUNT + 32],
+    );
+    write_balance_row(
+        &mut pages.row_mut(p, 2),
+        canonical[OFF_SELL_TOKEN_BAL],
+        canonical[OFF_BUY_TOKEN_BAL],
+    );
+    write_line(&mut pages.row_mut(p, 3), "> next");
+    p += 1;
+
+    // ── appData ────────────────────────────────────────────────────
+    write_line(&mut pages.row_mut(p, 0), "appData:");
+    let app = &canonical[OFF_APP_DATA..OFF_APP_DATA + 32];
+    write_app_data_prefix(&mut pages.row_mut(p, 1), app);
+    write_app_data_suffix(&mut pages.row_mut(p, 2), app);
+    write_line(&mut pages.row_mut(p, 3), "> next");
+    p += 1;
+
+    p
 }
 
 /// Address-mode page renderer for a CowSwap order whose sell or buy
@@ -184,84 +286,11 @@ pub fn render_cowswap_pages_addr(canonical: &[u8; 204]) -> Pages {
     // Row 3: surface the order kind so the user has the sell/buy
     // direction up-front, since the addr-mode pages don't carry the
     // proof-bound "CowSwap SELL / BUY" header readable does.
-    write_line(
-        &mut pages.row_mut(0, 3),
-        if canonical[OFF_KIND] == 0 { "kind=SELL" } else { "kind=BUY" },
-    );
+    write_line(&mut pages.row_mut(0, 3), order_kind_label(canonical));
 
-    // ── Page 1: Sell token addr + amount-page hint ────────────────
-    write_line(&mut pages.row_mut(1, 0), "Sell token:");
-    let sell_token: [u8; 20] = canonical[OFF_SELL_TOKEN..OFF_SELL_TOKEN + 20]
-        .try_into()
-        .expect("20-byte slice");
-    {
-        let page = pages.page_mut(1);
-        let (head, tail) = page.split_at_mut(2);
-        write_addr_two_rows(&mut head[1], &mut tail[0], &sell_token);
-    }
-    write_line(&mut pages.row_mut(1, 3), "sellAmt(hex) >");
-
-    // ── Page 2: Sell amount, 4×16 hex = full 32-byte uint256 BE ──
-    write_uint256_hex_page(&mut pages, 2, &canonical[OFF_SELL_AMOUNT..OFF_SELL_AMOUNT + 32]);
-
-    // ── Page 3: Buy token addr + amount-page hint ─────────────────
-    write_line(&mut pages.row_mut(3, 0), "Buy  token:");
-    let buy_token: [u8; 20] = canonical[OFF_BUY_TOKEN..OFF_BUY_TOKEN + 20]
-        .try_into()
-        .expect("20-byte slice");
-    {
-        let page = pages.page_mut(3);
-        let (head, tail) = page.split_at_mut(2);
-        write_addr_two_rows(&mut head[1], &mut tail[0], &buy_token);
-    }
-    write_line(&mut pages.row_mut(3, 3), "buyAmt(hex)  >");
-
-    // ── Page 4: Buy amount, 4×16 hex = full 32-byte uint256 BE ───
-    write_uint256_hex_page(&mut pages, 4, &canonical[OFF_BUY_AMOUNT..OFF_BUY_AMOUNT + 32]);
-
-    // ── Page 5: Receiver ─────────────────────────────────────────
-    write_line(&mut pages.row_mut(5, 0), "Receiver:");
-    let receiver: [u8; 20] = canonical[OFF_RECEIVER..OFF_RECEIVER + 20]
-        .try_into()
-        .expect("20-byte slice");
-    {
-        let page = pages.page_mut(5);
-        let (head, tail) = page.split_at_mut(2);
-        write_addr_two_rows(&mut head[1], &mut tail[0], &receiver);
-    }
-    write_line(&mut pages.row_mut(5, 3), "> next");
-
-    // ── Page 6: Expires + partiallyFillable ──────────────────────
-    write_line(&mut pages.row_mut(6, 0), "Expires:");
-    let valid_to = u32::from_be_bytes([
-        canonical[OFF_VALID_TO + 0],
-        canonical[OFF_VALID_TO + 1],
-        canonical[OFF_VALID_TO + 2],
-        canonical[OFF_VALID_TO + 3],
-    ]);
-    write_u32_row(&mut pages.row_mut(6, 1), "unix ", valid_to);
-    write_partial_row(&mut pages.row_mut(6, 2), canonical[OFF_PARTIAL]);
-    write_line(&mut pages.row_mut(6, 3), "> next");
-
-    // ── Page 7: Fee + balance kinds ──────────────────────────────
-    write_line(&mut pages.row_mut(7, 0), "Fee:");
-    write_fee_row(
-        &mut pages.row_mut(7, 1),
-        &canonical[OFF_FEE_AMOUNT..OFF_FEE_AMOUNT + 32],
-    );
-    write_balance_row(
-        &mut pages.row_mut(7, 2),
-        canonical[OFF_SELL_TOKEN_BAL],
-        canonical[OFF_BUY_TOKEN_BAL],
-    );
-    write_line(&mut pages.row_mut(7, 3), "> next");
-
-    // ── Page 8: appData ──────────────────────────────────────────
-    write_line(&mut pages.row_mut(8, 0), "appData:");
-    let app = &canonical[OFF_APP_DATA..OFF_APP_DATA + 32];
-    write_app_data_prefix(&mut pages.row_mut(8, 1), app);
-    write_app_data_suffix(&mut pages.row_mut(8, 2), app);
-    write_line(&mut pages.row_mut(8, 3), "> next");
+    // ── Pages 1..=8: order body (shared with the Safe-wrapped flow) ─
+    let next = append_order_body_pages(&mut pages, 1, canonical, None, None);
+    debug_assert_eq!(next, 9);
 
     // ── Page 9: Confirm ──────────────────────────────────────────
     write_line(&mut pages.row_mut(9, 0), "");
@@ -270,6 +299,17 @@ pub fn render_cowswap_pages_addr(canonical: &[u8; 204]) -> Pages {
     write_line(&mut pages.row_mut(9, 3), "R=Confirm");
 
     pages
+}
+
+/// "kind=SELL" / "kind=BUY" banner row for renderings that don't carry
+/// the proof-bound readable header (AddrOnly direct flow + the
+/// Safe-wrapped context banner in addr mode).
+pub fn order_kind_label(canonical: &[u8; 204]) -> &'static str {
+    if canonical[OFF_KIND] == 0 {
+        "kind=SELL"
+    } else {
+        "kind=BUY"
+    }
 }
 
 /// Render a 32-byte BE uint256 as 4 rows × 16 hex chars (no prefix /

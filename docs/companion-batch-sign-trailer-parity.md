@@ -177,7 +177,7 @@ Per-batch record count: `≤ MAX_TRAILERS_PER_BATCH (32)`.
 
 ## Downgrade-mitigation gates — what the extension must guarantee
 
-Two cases where the firmware refuses to sign the entire batch unless
+Three cases where the firmware refuses to sign the entire batch unless
 the matching trailer is routed:
 
 * **CoW v3 `setPreSignature`.** If `call.data[0..4] == 0xec6cb13f` AND
@@ -186,6 +186,15 @@ the matching trailer is routed:
 * **Safe `approveHash`.** If `call.data[0..4] == 0xd4d9bdcd` AND
   `call.data.length == 36` AND no `safeV1Bundle` is routed, the
   firmware aborts with `InvalidPointer / "Safe sign: safe_v1 required (batch)"`.
+* **Safe-wrapped CoW `setPreSignature`.** If a routed `safeV1Bundle`'s
+  SafeTx inner call (or a decoded `execTransaction`'s inner call) is
+  `setPreSignature` on the GPv2 settlement AND no `zkV3Bundle` is routed
+  to that same call, the firmware aborts with
+  `InvalidPointer / "CoW sign: v3 required (batch)"`. Route BOTH kind 3
+  (ZK v3, with `uid.owner == the Safe`) and kind 4 (Safe v1) to the same
+  `tx_idx` — order within the trailer list doesn't matter, the firmware
+  verifies ZK v3 in a second pass. See
+  [`companion-safe-cowswap-presign.md`](companion-safe-cowswap-presign.md).
 
 The extension's batch builder should refuse to send a payload that
 omits the mandatory trailer — better to fail fast at the keystroke
