@@ -17,12 +17,15 @@ bridge from scratch via testBit + Nat.add carry-freeness)."""
 # NOW-phase queue (docs/verification-targets-2026-06.md; uncomment as each goal
 # file is created — see each target's "first step"):
 #
-# [[goal]]
-# module  = "Extracted.ForsExtract"     # rank 1: read_bits_le FUNCTIONAL spec
-# context = """Strengthened loop invariant per ForsExtractWIP.lean: val.val =
-# <partial LE byte-window> AND val.val < 256^start; lor_eq_add_disjoint (Bits.lean,
-# PROVEN) rewrites the accumulator OR into ADD at each step. Anchor:
-# SphincsCVerify/Util/Bits.lean::readBitsLe; KatVectors.lean has 10 triples."""
+[[goal]]
+module  = "Extracted.ForsExtract"      # rank 1: read_bits_le FUNCTIONAL spec
+context = """Statement EXECUTABLY SANITY-CHECKED on 6 concrete shapes (incl.
+unaligned 57-bit and past-the-end zero-pad) — the formula is right; prove it.
+Strengthened loop invariant per ForsExtractWIP.lean: after processing b bytes,
+val.val = the byte window read so far AND val.val < 256^b; the OR step rewrites
+to ADD via lor_eq_add_disjoint (Bits.lean, PROVEN). Reuse next_usize_spec +
+loop.spec_decr_nat from ForsLoop.lean. Final step: (val >>> bit_in_byte) &&& mask
+relates to (digestWord >>> bit_offset) % 2^num_bits via div/mod arithmetic."""
 #
 # [[goal]]
 # module  = "Extracted.SpecBridgeFors"  # rank 2: vendored-bridge for ht_idx
