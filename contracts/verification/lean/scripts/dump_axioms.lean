@@ -22,6 +22,8 @@ import SphincsCVerify
 #print axioms SphincsCVerify.Wallet.Invariants.combinedCap_preserved_by_bumpSlot
 #print axioms SphincsCVerify.Wallet.Invariants.create2_address_chain_independent
 #print axioms SphincsCVerify.Wallet.Invariants.validateSignature_only_via_verify
+#print axioms SphincsCVerify.Wallet.Invariants.validateSignature_unset_index_uniform
+#print axioms SphincsCVerify.Wallet.Invariants.validateSignature_result_local
 #print axioms SphincsCVerify.Wallet.Invariants.combinedCap_inductive
 #print axioms SphincsCVerify.Wallet.Invariants.eip1271_forbids_bootstrap
 #print axioms SphincsCVerify.Wallet.Invariants.factory_requires_bootstrap_sig

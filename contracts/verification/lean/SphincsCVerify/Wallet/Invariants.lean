@@ -682,4 +682,116 @@ theorem userop_acceptance_implies_signed_or_break
   rw [hdig] at hverify
   exact hverify
 
+/-! ## Envelope-closure lemmas for the Halmos A3.2 validate session
+    (GAP-9 / GAP-10 in `docs/MISSING_FOR_FULL_BYTECODE_PROOF.md`)
+
+The bytecode-side pointwise equivalence sweeps a symbolic `ownerIndex`
+over the installed slots and covers the unset partition only at concrete
+representatives `{3, 2^200, max}` (a Halmos dynamic-bytes-getter
+ceiling), and fixes the owner-set SHAPE (bootstrap at 0, slots at
+`{1, 2}`, everything ≥ 3 unset). The two lemmas below discharge the
+MODEL half of both envelopes with kernel proofs:
+
+* `validateSignature_unset_index_uniform` (GAP-9): the model is CONSTANT
+  on the entire unset partition — every unset index rejects with
+  unchanged storage, so the concrete reps are representative of the
+  model's behaviour at EVERY unset index. The remaining bytecode-side
+  residual is only that solc's mapping getter is uniform on unset keys
+  (returns the same length-0 bytes for any never-written key — a
+  storage-layout property the reps spot-check).
+
+* `validateSignature_result_local` (GAP-10): the model's accept/reject
+  result depends only on the storage AT the decoded index —
+  `ownerAtIndex i`, `bootstrapUses` (the `i = 0` path), and
+  `slotUses i + offchainSigCount i` (the `i ≥ 1` path) — never on the
+  contents of any other index. So the fixed swept shape generalises:
+  for ANY owner-set shape, the model's behaviour at the decoded index
+  coincides with that of a swept configuration agreeing at that index.
+-/
+
+/-- GAP-9 (model half): on ANY unset owner index, `validateSignature`
+    rejects uniformly — `(Result.failure, s)` with storage untouched,
+    independent of which unset index the wrapper named. -/
+theorem validateSignature_unset_index_uniform
+    (s : Storage) (op : UserOperation) (entryPoint : ByteVec 20) (chainId : Nat)
+    (verify_fn : ByteVec 32 → ByteVec 32 → ByteVec 32 → ByteVec SignatureLen → Bool)
+    (d : DecodedSig)
+    (hdec : decodeWrappedSig op.signature = some d)
+    (hunset : s.ownerAtIndex d.ownerIndex = none) :
+    validateSignature s op entryPoint chainId verify_fn = (Result.failure, s) := by
+  obtain ⟨oi, isig⟩ := d
+  unfold validateSignature
+  rw [hdec]
+  simp only at hunset ⊢
+  rw [hunset]
+
+/-- GAP-10 (model half): the validate result is LOCAL to the decoded
+    index. If two storages agree at `d.ownerIndex` on the owner blob and
+    the counters the cap check reads (`bootstrapUses` for the bootstrap
+    path; `slotUses`/`offchainSigCount` at the index for the slot path),
+    `validateSignature` returns the same `Result` — regardless of what
+    either storage holds at every other index. -/
+theorem validateSignature_result_local
+    (s t : Storage) (op : UserOperation) (entryPoint : ByteVec 20) (chainId : Nat)
+    (verify_fn : ByteVec 32 → ByteVec 32 → ByteVec 32 → ByteVec SignatureLen → Bool)
+    (d : DecodedSig)
+    (hdec : decodeWrappedSig op.signature = some d)
+    (hown : s.ownerAtIndex d.ownerIndex = t.ownerAtIndex d.ownerIndex)
+    (hboot : s.bootstrapUses = t.bootstrapUses)
+    (hslot : s.slotUses d.ownerIndex = t.slotUses d.ownerIndex)
+    (hoff : s.offchainSigCount d.ownerIndex = t.offchainSigCount d.ownerIndex) :
+    (validateSignature s op entryPoint chainId verify_fn).1 =
+      (validateSignature t op entryPoint chainId verify_fn).1 := by
+  obtain ⟨oi, isig⟩ := d
+  simp only at hown hslot hoff
+  -- The cap check reads only index-local state, so it agrees.
+  have hcap : capOk s op oi = capOk t op oi := by
+    unfold capOk
+    by_cases h0 : oi = 0
+    · subst h0
+      rw [hboot, hslot, hoff]
+    · rw [if_neg h0, if_neg h0, hslot, hoff]
+  -- The counter bump's success/failure also reads only index-local state.
+  have hbump : (bumpForOwner s oi).isSome = (bumpForOwner t oi).isSome := by
+    by_cases h0 : oi = 0
+    · subst h0
+      simp only [bumpForOwner, if_pos rfl, Storage.bumpBootstrap, hboot]
+      by_cases hc : t.bootstrapUses + 1 > MaxBootstrapUses
+      · simp [hc]
+      · simp [hc]
+    · simp only [bumpForOwner, if_neg h0, Storage.bumpSlot, hslot]
+      by_cases hc : t.slotUses oi + 1 > MaxSlotUses
+      · simp [hc]
+      · simp [hc]
+  unfold validateSignature
+  rw [hdec]
+  simp only
+  rw [hown]
+  cases howner : t.ownerAtIndex oi with
+  | none => rfl
+  | some owner =>
+    simp only
+    rw [hcap]
+    by_cases hc : capOk t op oi = false
+    · rw [if_pos hc, if_pos hc]
+    · rw [if_neg hc, if_neg hc]
+      by_cases hv : verify_fn (owner.raw.take 32 (by decide))
+          (owner.raw.drop 32 (by decide))
+          (sphincsDigest op entryPoint chainId) isig = false
+      · rw [if_pos hv, if_pos hv]
+      · rw [if_neg hv, if_neg hv]
+        cases hbs : bumpForOwner s oi with
+        | none =>
+          cases hbt : bumpForOwner t oi with
+          | none => rfl
+          | some t' =>
+            rw [hbs, hbt] at hbump
+            simp [Option.isSome] at hbump
+        | some s' =>
+          cases hbt : bumpForOwner t oi with
+          | none =>
+            rw [hbs, hbt] at hbump
+            simp [Option.isSome] at hbump
+          | some t' => rfl
+
 end SphincsCVerify.Wallet.Invariants

@@ -149,26 +149,45 @@ rely on, but they must be disclosed, not hidden.
 
 ## SCOPE / COMPLETENESS gaps (the discharges hold over *envelopes*, not unconditionally)
 
-### GAP-9 — Validate `ownerIndex`: unset partition is concrete-reps only
+### GAP-9 — Validate `ownerIndex`: unset partition is concrete-reps only — MODEL HALF CLOSED 2026-06-12
 - **What:** the validate pointwise-equivalence sweeps a *symbolic* index over
   the **installed** slots `{1,2}` and **enumerates** `{0,1,2}`, but the **unset
   partition (≥3)** is covered only by concrete reps `{3, 2^200, max}`. A
   symbolic sweep of it **errors** (`NotConcreteError` — Halmos cannot allocate
   the `ownerAtIndex` dynamic-bytes return for a symbolic non-installed key).
-- **Mitigation today:** the wallet's behaviour on every unset index is uniform
-  (owner length 0 ≠ 64 ⇒ reject), so the reps are representative — but it is
-  not a ∀-proof. The *execute* path IS genuinely ∀-index.
-- **What closes it:** a symbolic engine that models the mapping getter for a
-  symbolic key, or a manual Lean lemma that the unset branch is index-uniform.
+- **Model half (CLOSED):** the kernel lemma
+  `Wallet/Invariants.lean::validateSignature_unset_index_uniform`
+  (axiom closure = `{propext, Quot.sound}`) proves the Lean model is
+  **constant on the entire unset partition** — every unset index returns
+  `(failure, s)` with storage untouched. The concrete reps are therefore
+  representative of the model at EVERY unset index, by proof rather than
+  by inspection.
+- **Remaining residual:** only the *bytecode* side — that solc's mapping
+  getter is uniform on never-written keys (returns the same length-0
+  bytes for any unset key; a storage-layout property of the compiled
+  `ownerAtIndex`, spot-checked at the three reps). A symbolic engine that
+  models the mapping getter for a symbolic key would discharge it fully.
 
-### GAP-10 — Owner-set SHAPE is concrete in the validate equivalence
+### GAP-10 — Owner-set SHAPE is concrete in the validate equivalence — MODEL HALF CLOSED 2026-06-12
 - **What:** the validate/owner-table equivalence fixes the *installed set*
   shape (bootstrap at 0, slots at 1 and 2; ≥3 unset). Owner *contents* and
   counters are symbolic, but the rules do not range over arbitrary owner-set
   shapes (e.g. more installed slots, gaps).
-- **What closes it:** parametrise the harness over owner-set shapes (bounded),
-  or a Lean inductive argument that behaviour depends only on
-  `(ownerAtIndex(i), counters(i))` per index (already true by inspection).
+- **Model half (CLOSED):** the kernel lemma
+  `Wallet/Invariants.lean::validateSignature_result_local`
+  (axiom closure = `{propext, Quot.sound}`) proves the Lean model's
+  accept/reject result depends ONLY on the storage at the decoded index —
+  `ownerAtIndex i`, `bootstrapUses` (the `i = 0` path), and
+  `slotUses i + offchainSigCount i` (the `i ≥ 1` path) — never on the
+  contents of any other index. Behaviour at the decoded index under ANY
+  owner-set shape therefore coincides with a swept configuration that
+  agrees at that index ("depends only on `(ownerAtIndex(i), counters(i))`",
+  now by proof rather than by inspection).
+- **Remaining residual:** only the *bytecode* side — that the compiled
+  storage reads of `_validateSignature` are likewise per-index isolated
+  (distinct mapping slots don't alias; an ERC-7201/keccak storage-layout
+  property). Parametrising the harness over bounded shapes would
+  spot-check it further.
 
 ### GAP-11 — Execute equivalence: single-credit envelope, success-direction only
 - **What:** `HalmosExecuteEquiv` stamps the execution credit via **one** real
@@ -206,7 +225,7 @@ To drop every qualifier and claim "fully proven to the bytecode":
 - [x] **GAP-1** — `lake exe verify-test-vectors` full-verify 10/10; `requireFullVerify = true`; A3.1 no longer refuted. **CLOSED 2026-06-12.**
 - [ ] **GAP-2** — verifier ∀-signature equivalence via Kontrol/KEVM or Verity.
 - [ ] **GAP-7 / GAP-8** — bytecode discharges carried as Lean proof terms (Verity) or audited solver + upstreamed patch.
-- [ ] **GAP-9 / GAP-10 / GAP-11** — index/shape/credit envelopes generalised to ∀ (or Lean lemmas covering them).
+- [ ] **GAP-9 / GAP-10 / GAP-11** — index/shape/credit envelopes generalised to ∀ (or Lean lemmas covering them). *Model halves of GAP-9 + GAP-10 closed 2026-06-12 by kernel lemmas (`validateSignature_unset_index_uniform`, `validateSignature_result_local`); bytecode-side residuals (mapping-getter uniformity, per-index slot isolation) and GAP-11 remain.*
 - [ ] **GAP-3 / GAP-4 / GAP-5 / GAP-6 / GAP-13** — either discharged (Kontrol/KEVM/Verity) or **explicitly accepted** as the named universal-Ethereum + crypto TCB, and the public claim worded to say so.
 
 With GAP-1 closed, the **maximal honest claim** is the one in
