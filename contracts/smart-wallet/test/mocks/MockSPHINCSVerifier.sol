@@ -3,7 +3,7 @@ pragma solidity 0.8.28;
 
 import {ISPHINCSVerifier} from "../../src/verifiers/ISPHINCSVerifier.sol";
 
-/// @notice Controllable mock for wallet tests. The real `SPHINCsC11Asm`
+/// @notice Controllable mock for wallet tests. The real `SPHINCsC10Asm`
 ///         verifier is tested separately with genuine signature vectors;
 ///         this mock exists so the wallet dispatcher tests can focus on
 ///         control flow.

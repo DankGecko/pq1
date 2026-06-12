@@ -2424,7 +2424,8 @@ impl Se050 {
     ///
     /// Reads all three PIN-gated objects (entropy, VK, bootstrap VK) in a
     /// single authenticated session so the unlock path never needs to run
-    /// the expensive SPHINCS+C7 hypertree keygen (~25s per key on Cortex-M33).
+    /// the SPHINCS+C10 hypertree keygen (<1 s per key on Cortex-M33 with
+    /// `hw-sha256`, but still the dominant unlock-path cost).
     ///
     /// On success returns `(entropy, vk, bootstrap_vk)`. On PIN failure the
     /// SE050 hardware decrements its attempt counter internally.
