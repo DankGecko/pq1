@@ -697,8 +697,48 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                         inner_to.copy_from_slice(&inner_data[16..36]);
                         inner_to == meta.contract
                     };
+                // (c) a multiSend RECORD targets the token: the Safe
+                //     flows batch e.g. `[approve(USDC), setPreSignature]`
+                //     through MultiSendCallOnly, so the metadata's
+                //     contract sits one level deeper — inside a packed
+                //     record of either the exec calldata's `data` or
+                //     the (here still unverified — metadata is display-
+                //     label trust, and the renderer re-matches per
+                //     record) safe_v1 trailer's raw_data.
+                //     `any_record_to_matches` returns false for
+                //     anything that isn't a well-formed multiSend.
+                let msend_record_match = {
+                    let exec_ms = inner_data.len() >= 4
+                        && inner_data[..4] == EXEC_TRANSACTION_SELECTOR
+                        && crate::tx::eip712::safe::exec_decode::decode_exec_transaction(
+                            inner_data,
+                        )
+                        .map(|d| {
+                            crate::tx::eip712::safe::multi_send::any_record_to_matches(
+                                d.data,
+                                &meta.contract,
+                            )
+                        })
+                        .unwrap_or(false);
+                    let v1_ms = safe_v1.len
+                        >= sphincs_tz_shared::SAFE_V1_CANONICAL_LEN + 2
+                        && {
+                            let b = &snap[safe_v1.start..safe_v1.start + safe_v1.len];
+                            let raw_len = u16::from_be_bytes([
+                                b[sphincs_tz_shared::SAFE_V1_CANONICAL_LEN],
+                                b[sphincs_tz_shared::SAFE_V1_CANONICAL_LEN + 1],
+                            ]) as usize;
+                            let start = sphincs_tz_shared::SAFE_V1_CANONICAL_LEN + 2;
+                            start.checked_add(raw_len).is_some_and(|end| end <= b.len())
+                                && crate::tx::eip712::safe::multi_send::any_record_to_matches(
+                                    &b[start..start + raw_len],
+                                    &meta.contract,
+                                )
+                        };
+                    exec_ms || v1_ms
+                };
                 if meta.chain_id == chain_id
-                    && (outer_to_match || safe_exec_inner_match)
+                    && (outer_to_match || safe_exec_inner_match || msend_record_match)
                 {
                     Some(meta)
                 } else {
@@ -944,6 +984,33 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     if safe_exec_selector && safe_exec_enough_len && safe_exec_verified.is_none() {
         ui::show_status("Safe sign", "exec parse fail");
         return NscStatus::InvalidPointer as u32;
+    }
+
+    // MultiSend gate. When a verified Safe context's inner call claims
+    // an allowlisted MultiSendCallOnly DELEGATECALL, the payload must
+    // pass every hard rule (strict framing, per-record operation == 0,
+    // record cap, at most one presign claim) AND fit the trusted-
+    // display page budget — a record the user never sees is exactly
+    // the attack class this flow closes, so overflow refuses instead
+    // of truncating. One shared decision (`multisend_sign_gate`) for
+    // this handler and the batch handler. Reserved pages here: the
+    // dispatcher's native-value page when the outer UserOp carries
+    // ETH, plus the two ERC-8213 fingerprint pages appended below.
+    {
+        let reserved = usize::from(value.iter().any(|&b| b != 0)) + 2;
+        match crate::tx::display::multisend_sign_gate(
+            safe_v1_verified.as_ref(),
+            safe_exec_verified.as_ref(),
+            zk_v3_verified.as_ref(),
+            reserved,
+        ) {
+            crate::tx::display::MultisendGate::Reject(reason) => {
+                ui::show_status("Safe sign", reason);
+                return NscStatus::InvalidPointer as u32;
+            }
+            crate::tx::display::MultisendGate::NotMultiSend
+            | crate::tx::display::MultisendGate::Ok => {}
+        }
     }
 
     // 7e. Address-name bundles.

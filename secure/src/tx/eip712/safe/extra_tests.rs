@@ -817,10 +817,11 @@ fn safe_mgmt_set_fallback_handler_e2e_install_and_removal() {
 fn safe_mgmt_delegate_call_with_safe_mgmt_calldata_still_rejected() {
     // Build a canonical that says operation=1 (DelegateCall) but whose
     // inner calldata is a perfectly-shaped addOwnerWithThreshold. The
-    // verifier must still reject because the operation gate fires
-    // BEFORE the inner-calldata classifier ever sees the bytes — this
-    // is the load-bearing pre-condition for "MultiSend not yet
-    // supported".
+    // verifier must still reject: DelegateCall is only accepted for an
+    // allowlisted MultiSendCallOnly target carrying multiSend calldata
+    // (`multi_send::is_multisend_claim`), and a self-call to the Safe
+    // is neither. The operation gate fires BEFORE the inner-calldata
+    // classifier ever sees the bytes.
     let raw = calldata_add_owner_with_threshold(FIXTURE_TO, 3);
     let (mut canonical, _stale_cd) = build_self_call(&raw);
     // Flip operation 0 -> 1, then recompute safeTxHash so the bind
@@ -835,6 +836,89 @@ fn safe_mgmt_delegate_call_with_safe_mgmt_calldata_still_rejected() {
     assert!(
         verify_and_bind_trailer(&bundle, &cd, FIXTURE_CHAIN_ID, &FIXTURE_SAFE_ADDRESS).is_none(),
         "operation=1 (DelegateCall) must be rejected even when the rest of the bind chain would have passed"
+    );
+}
+
+// ===========================================================================
+// MultiSendCallOnly DELEGATECALL — operation-gate matrix + full compose
+// ===========================================================================
+
+use super::multi_send::test_util::{
+    cow_flow_calldata_with, presign_calldata_stub,
+};
+
+/// Build a verifiable `safe_v1` bundle + matching approveHash calldata
+/// for an arbitrary `(to, operation, raw_data)` SafeTx.
+fn build_safe_tx_with(
+    to: &[u8; 20],
+    operation: u8,
+    raw_data: &[u8],
+) -> ([u8; SAFE_V1_CANONICAL_LEN], [u8; APPROVE_HASH_CALLDATA_LEN]) {
+    let mut c = [0u8; SAFE_V1_CANONICAL_LEN];
+    c[SAFE_OFF_CHAIN_ID..SAFE_OFF_CHAIN_ID + 8].copy_from_slice(&FIXTURE_CHAIN_ID.to_be_bytes());
+    c[SAFE_OFF_SAFE_ADDRESS..SAFE_OFF_SAFE_ADDRESS + 20].copy_from_slice(&FIXTURE_SAFE_ADDRESS);
+    c[SAFE_OFF_TO..SAFE_OFF_TO + 20].copy_from_slice(to);
+    let dh = keccak(raw_data);
+    c[SAFE_OFF_DATA_HASH..SAFE_OFF_DATA_HASH + 32].copy_from_slice(&dh);
+    c[SAFE_OFF_OPERATION] = operation;
+    let h = compute_safe_tx_hash(&c).unwrap();
+    let mut cd = [0u8; APPROVE_HASH_CALLDATA_LEN];
+    cd[..4].copy_from_slice(&APPROVE_HASH_SELECTOR);
+    cd[4..36].copy_from_slice(&h);
+    (c, cd)
+}
+
+const MS_CALL_ONLY_130: [u8; 20] = sphincs_tz_shared::MULTISEND_CALL_ONLY_ADDRESSES[0];
+
+#[test]
+fn multisend_delegatecall_verify_accepts_allowlisted_target() {
+    let ms = cow_flow_calldata_with(&FIXTURE_TO, &presign_calldata_stub());
+    let (canonical, cd) = build_safe_tx_with(&MS_CALL_ONLY_130, 1, &ms);
+    let bundle = bundle_with_raw(&canonical, &ms);
+    let v = verify_and_bind_trailer(&bundle, &cd, FIXTURE_CHAIN_ID, &FIXTURE_SAFE_ADDRESS)
+        .expect("op=1 to an allowlisted MultiSendCallOnly must pass the operation gate");
+    assert_eq!(v.raw_data, &ms[..]);
+}
+
+#[test]
+fn multisend_delegatecall_verify_rejects_non_multisend_payload() {
+    // op=1 to the allowlisted address but the payload is not
+    // multiSend(bytes): the claim predicate (selector half) refuses.
+    let raw = calldata_add_owner_with_threshold(FIXTURE_TO, 3);
+    let (canonical, cd) = build_safe_tx_with(&MS_CALL_ONLY_130, 1, &raw);
+    let bundle = bundle_with_raw(&canonical, &raw);
+    assert!(
+        verify_and_bind_trailer(&bundle, &cd, FIXTURE_CHAIN_ID, &FIXTURE_SAFE_ADDRESS).is_none(),
+        "DelegateCall with non-multiSend calldata must be rejected even to an allowlisted target"
+    );
+}
+
+#[test]
+fn multisend_delegatecall_verify_rejects_non_allowlisted_target() {
+    // The exact Safe-UI payload, but the DELEGATECALL target is an
+    // arbitrary contract — attacker code would run in the Safe's
+    // context regardless of what the records say. Must refuse.
+    let ms = cow_flow_calldata_with(&FIXTURE_TO, &presign_calldata_stub());
+    let (canonical, cd) = build_safe_tx_with(&[0xaa; 20], 1, &ms);
+    let bundle = bundle_with_raw(&canonical, &ms);
+    assert!(
+        verify_and_bind_trailer(&bundle, &cd, FIXTURE_CHAIN_ID, &FIXTURE_SAFE_ADDRESS).is_none(),
+        "DelegateCall to a non-allowlisted target must be rejected even with a well-formed multiSend payload"
+    );
+}
+
+#[test]
+fn multisend_call_op0_still_verifies_as_plain_call() {
+    // op=0 to a MultiSend address stays on today's path: the verifier
+    // accepts (it's an ordinary CALL) and the resolver makes no CoW
+    // claim — `cow_binding::multisend_op0_resolves_direct` pins the
+    // resolver half.
+    let ms = cow_flow_calldata_with(&FIXTURE_TO, &presign_calldata_stub());
+    let (canonical, cd) = build_safe_tx_with(&MS_CALL_ONLY_130, 0, &ms);
+    let bundle = bundle_with_raw(&canonical, &ms);
+    assert!(
+        verify_and_bind_trailer(&bundle, &cd, FIXTURE_CHAIN_ID, &FIXTURE_SAFE_ADDRESS).is_some(),
+        "op=0 CALL to a MultiSend address is an ordinary call and must keep verifying"
     );
 }
 

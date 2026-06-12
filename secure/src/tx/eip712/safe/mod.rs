@@ -67,6 +67,13 @@ pub use exec_decode::{verify_and_bind_exec, DecodedExec, VerifiedSafeExec};
 pub mod cow_binding;
 pub use cow_binding::{resolve_cow_binding, safe_inner_is_cow_presign, CowBinding};
 
+// Pure-logic strict decoder + classifier for Safe `MultiSendCallOnly`
+// batches (SafeTx DELEGATECALL into the pinned multiSend deployments).
+// Host-runnable; owns the single `operation == 1` acceptance predicate
+// shared by both Safe verifiers, the CoW-binding resolver and the
+// renderer. Consumers path through `multi_send::` directly.
+pub mod multi_send;
+
 #[cfg(test)]
 mod test_vectors;
 

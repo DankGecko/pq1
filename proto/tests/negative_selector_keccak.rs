@@ -106,6 +106,16 @@ fn negative_approve_hash_selector_matches_canonical_signature() {
     );
 }
 
+#[test]
+fn negative_multi_send_selector_matches_canonical_signature() {
+    let sig = "multiSend(bytes)";
+    assert_eq!(
+        MULTI_SEND_SELECTOR,
+        selector(sig),
+        "MULTI_SEND_SELECTOR no longer matches keccak256({sig})[..4]"
+    );
+}
+
 // ───────────────────────────────────────────────────────────────────────
 // EIP-712 typehashes (full 32-byte keccak of the canonical type string)
 // ───────────────────────────────────────────────────────────────────────

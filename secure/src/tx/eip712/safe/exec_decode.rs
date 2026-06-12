@@ -200,20 +200,25 @@ pub struct VerifiedSafeExec<'a> {
 
 /// End-to-end verification + bind of an `execTransaction` UserOp.
 ///
-/// Returns `None` on selector mismatch, decode failure, or
-/// `operation == 1` (DelegateCall — refused for the same reason as in
-/// the approveHash path: DelegateCall replaces the Safe's code for the
-/// duration of the call, so a non-expert user cannot meaningfully
-/// confirm the inner action).
+/// Returns `None` on selector mismatch, decode failure, or a
+/// disallowed `operation == 1` (DelegateCall). DelegateCall is
+/// accepted ONLY for an allowlisted `MultiSendCallOnly` batch — same
+/// predicate as the approveHash path's operation gate (see
+/// [`super::multi_send::is_multisend_claim`]); any other DelegateCall
+/// replaces the Safe's code for the duration of the call, so a
+/// non-expert user cannot meaningfully confirm the inner action.
 pub fn verify_and_bind_exec<'a>(
     inner_data: &'a [u8],
     chain_id: u64,
     userop_to: &[u8; 20],
 ) -> Option<VerifiedSafeExec<'a>> {
     let decoded = decode_exec_transaction(inner_data).ok()?;
-    if decoded.operation != 0 {
-        // Operation gate — DelegateCall (1) is structurally clear-sign-
-        // unfriendly and refused here. `decode_exec_transaction` already
+    if decoded.operation != 0
+        && !super::multi_send::is_multisend_claim(decoded.operation, &decoded.to, decoded.data)
+    {
+        // Operation gate — DelegateCall (1) only for the pinned
+        // multiSend shape; the payload's own hard rules run in the
+        // handler's verdict gate. `decode_exec_transaction` already
         // refuses values > 1.
         return None;
     }
@@ -518,6 +523,8 @@ mod tests {
 
     #[test]
     fn verify_and_bind_exec_rejects_delegatecall() {
+        // DelegateCall to a non-allowlisted target (0xAA..AA is not a
+        // MultiSendCallOnly deployment) — refused regardless of payload.
         let cd = encode_exec(
             fixture_addr(0xAA),
             fixture_u256(0),
@@ -531,6 +538,50 @@ mod tests {
             &[],
         );
         assert!(verify_and_bind_exec(&cd, 1, &fixture_addr(0xBB)).is_none());
+    }
+
+    #[test]
+    fn verify_and_bind_exec_accepts_allowlisted_multisend_delegatecall() {
+        let ms = super::super::multi_send::test_util::cow_flow_calldata();
+        let ms_target = sphincs_tz_shared::MULTISEND_CALL_ONLY_ADDRESSES[0];
+        let cd = encode_exec(
+            ms_target,
+            fixture_u256(0),
+            &ms,
+            1,
+            fixture_u256(0),
+            fixture_u256(0),
+            fixture_u256(0),
+            [0u8; 20],
+            [0u8; 20],
+            &[],
+        );
+        let v = verify_and_bind_exec(&cd, 1, &fixture_addr(0xBB))
+            .expect("op=1 to an allowlisted MultiSendCallOnly must pass the operation gate");
+        assert_eq!(v.decoded.operation, 1);
+        assert_eq!(v.decoded.to, ms_target);
+        assert_eq!(v.decoded.data, &ms[..]);
+    }
+
+    #[test]
+    fn verify_and_bind_exec_rejects_allowlisted_target_without_multisend_payload() {
+        let ms_target = sphincs_tz_shared::MULTISEND_CALL_ONLY_ADDRESSES[0];
+        let cd = encode_exec(
+            ms_target,
+            fixture_u256(0),
+            &[0xde, 0xad, 0xbe, 0xef],
+            1,
+            fixture_u256(0),
+            fixture_u256(0),
+            fixture_u256(0),
+            [0u8; 20],
+            [0u8; 20],
+            &[],
+        );
+        assert!(
+            verify_and_bind_exec(&cd, 1, &fixture_addr(0xBB)).is_none(),
+            "DelegateCall with a non-multiSend payload must be rejected even to an allowlisted target"
+        );
     }
 
     #[test]

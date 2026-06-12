@@ -188,6 +188,66 @@ fn negative_cowswap_sentinel_differs_from_settlement_only_in_last_byte() {
     assert_eq!(COWSWAP_EIP712_SENTINEL[19], 0x42);
 }
 
+#[test]
+fn negative_gpv2_vault_relayer_address_frozen() {
+    let expected: [u8; 20] = [
+        0xc9, 0x2e, 0x8b, 0xdf, 0x79, 0xf0, 0x50, 0x7f, 0x65, 0xa3,
+        0x92, 0xb0, 0xab, 0x46, 0x67, 0x71, 0x6b, 0xfe, 0x01, 0x10,
+    ];
+    assert_eq!(
+        GPV2_VAULT_RELAYER_ADDRESS, expected,
+        "GPV2_VAULT_RELAYER_ADDRESS drifted — the trusted UI would mislabel (or stop labelling) the spender of a CoW approve record"
+    );
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// Safe MultiSendCallOnly allowlist — the ONLY contracts a SafeTx may
+// DELEGATECALL into. Source: safe-global/safe-deployments
+// (multi_send_call_only.json for v1.3.0 + v1.4.1). A drifted byte here
+// either bricks the multiSend clear-sign flow (refusal) or — far worse —
+// allowlists an attacker contract whose delegatecalled code ignores the
+// rendered records entirely.
+// ───────────────────────────────────────────────────────────────────────
+
+#[test]
+fn negative_multisend_call_only_allowlist_frozen() {
+    let expected: [[u8; 20]; 3] = [
+        // v1.3.0 canonical 0x40A2aCCbd92BCA938b02010E17A5b8929b49130D
+        [
+            0x40, 0xa2, 0xac, 0xcb, 0xd9, 0x2b, 0xca, 0x93, 0x8b, 0x02,
+            0x01, 0x0e, 0x17, 0xa5, 0xb8, 0x92, 0x9b, 0x49, 0x13, 0x0d,
+        ],
+        // v1.3.0 eip155 0xA1dabEF33b3B82c7814B6D82A79e50F4AC44102B
+        [
+            0xa1, 0xda, 0xbe, 0xf3, 0x3b, 0x3b, 0x82, 0xc7, 0x81, 0x4b,
+            0x6d, 0x82, 0xa7, 0x9e, 0x50, 0xf4, 0xac, 0x44, 0x10, 0x2b,
+        ],
+        // v1.4.1 canonical 0x9641d764fc13c8B624c04430C7356C1C7C8102e2
+        [
+            0x96, 0x41, 0xd7, 0x64, 0xfc, 0x13, 0xc8, 0xb6, 0x24, 0xc0,
+            0x44, 0x30, 0xc7, 0x35, 0x6c, 0x1c, 0x7c, 0x81, 0x02, 0xe2,
+        ],
+    ];
+    assert_eq!(
+        MULTISEND_CALL_ONLY_ADDRESSES, expected,
+        "MULTISEND_CALL_ONLY_ADDRESSES drifted from the canonical safe-deployments addresses"
+    );
+    // The allowlist must never contain the plain (delegatecall-capable)
+    // MultiSend deployments.
+    let plain_multisend_v130: [u8; 20] = [
+        0xa2, 0x38, 0xcb, 0xeb, 0x14, 0x2c, 0x10, 0xef, 0x7a, 0xd8,
+        0x44, 0x2c, 0x6d, 0x1f, 0x9e, 0x89, 0xe0, 0x7e, 0x77, 0x61,
+    ];
+    let plain_multisend_v141: [u8; 20] = [
+        0x38, 0x86, 0x9b, 0xf6, 0x6a, 0x61, 0xcf, 0x6b, 0xdb, 0x99,
+        0x6a, 0x6a, 0xe4, 0x0d, 0x58, 0x53, 0xfd, 0x43, 0xb5, 0x26,
+    ];
+    for a in &MULTISEND_CALL_ONLY_ADDRESSES {
+        assert_ne!(a, &plain_multisend_v130, "plain MultiSend v1.3.0 must not be allowlisted");
+        assert_ne!(a, &plain_multisend_v141, "plain MultiSend v1.4.1 must not be allowlisted");
+    }
+}
+
 // ───────────────────────────────────────────────────────────────────────
 // Safe EIP-712 typehashes — keccak256 of the canonical struct
 // signature. Cross-checked against the literal expected value (the

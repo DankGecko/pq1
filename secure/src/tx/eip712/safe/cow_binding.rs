@@ -20,21 +20,40 @@
 //! downgrade gate share one predicate instead of three copies that can
 //! drift.
 //!
+//! ## MultiSend-wrapped orders
+//!
+//! The Safe web UI does not emit a single-call SafeTx for CoW flows —
+//! it batches `[ERC-20 approve(GPv2VaultRelayer), setPreSignature]`
+//! through `MultiSendCallOnly` via DELEGATECALL. When a verified Safe
+//! context's inner call is an allowlisted multiSend (see
+//! [`super::multi_send`]) carrying **exactly one** presign-claiming
+//! record, the v3 trailer binds to that record's 164 bytes — the rest
+//! of the pipeline (owner = the Safe, digest/validTo cross-check) is
+//! unchanged. Zero presign records means a generic batch: no CoW
+//! binding and no v3 requirement (the renderer shows every record).
+//!
 //! ## Fail-closed by construction
 //!
 //! A wrong selection (logic bug, glitched branch) yields a
 //! `(owner, calldata)` pair that the v3 pipeline's own cross-checks
 //! reject: the calldata length/shape gate refuses anything that is not
 //! a well-formed 164-byte setPreSignature, and the owner byte-compare
-//! refuses a mismatched uid. There is no input for which a mis-routed
-//! binding verifies, so no FI sentinel is needed around the selection
-//! itself (the verify *result* is sentinel-hardened at the call sites).
+//! refuses a mismatched uid. The multiSend arm preserves the property:
+//! a malformed or ambiguous (≥2 presign claims) payload binds the FULL
+//! multiSend calldata — which starts with `0x8d80ff0a` and so can never
+//! pass the pipeline's selector/length pins — keeping `via_safe = true`
+//! so the handlers' "v3 required" gate refuses even if the dedicated
+//! msend verdict gate were glitched past. There is no input for which a
+//! mis-routed binding verifies, so no FI sentinel is needed around the
+//! selection itself (the verify *result* is sentinel-hardened at the
+//! call sites).
 
 use sphincs_tz_shared::{
-    GPV2_SETTLEMENT_ADDRESS, SAFE_OFF_SAFE_ADDRESS, SAFE_OFF_TO, SET_PRE_SIGNATURE_SELECTOR,
+    GPV2_SETTLEMENT_ADDRESS, SAFE_OFF_OPERATION, SAFE_OFF_SAFE_ADDRESS, SAFE_OFF_TO,
+    SET_PRE_SIGNATURE_SELECTOR,
 };
 
-use super::{VerifiedSafeExec, VerifiedSafeV1};
+use super::{multi_send, VerifiedSafeExec, VerifiedSafeV1};
 
 /// Does this Safe inner call claim to be a CoW `setPreSignature`?
 ///
@@ -75,6 +94,56 @@ pub struct CowBinding<'s> {
     pub via_safe: bool,
 }
 
+/// Evaluate one verified Safe context (either flavour, reduced to its
+/// `(operation, inner_to, raw_data, safe_address)` facts) against both
+/// CoW claims.
+///
+/// Returns `None` when the inner call makes no CoW claim at all — a
+/// direct (non-multiSend) non-presign call, or a well-formed multiSend
+/// whose records contain zero presign claims (a generic batch needs no
+/// v3 trailer; the renderer shows every record).
+fn resolve_safe_arm<'s>(
+    operation: u8,
+    inner_to: &[u8; 20],
+    raw_data: &'s [u8],
+    owner: [u8; 20],
+) -> Option<CowBinding<'s>> {
+    if safe_inner_is_cow_presign(inner_to, raw_data) {
+        return Some(CowBinding {
+            owner,
+            calldata: raw_data,
+            via_safe: true,
+        });
+    }
+    if multi_send::is_multisend_claim(operation, inner_to, raw_data) {
+        return match multi_send::summarize(raw_data) {
+            // Generic batch — no CoW record, no v3 requirement.
+            Ok(s) if s.presign_claims == 0 => None,
+            // The CoW flow: bind the unique presign record's bytes.
+            Ok(s) if s.presign_claims == 1 => Some(CowBinding {
+                owner,
+                // `presign_record_data` re-derives from the same bytes
+                // the summary just decoded; `unwrap_or(raw_data)` is
+                // unreachable but keeps the arm fail-closed (the full
+                // multiSend calldata can never pass the v3 pipeline).
+                calldata: multi_send::presign_record_data(raw_data).unwrap_or(raw_data),
+                via_safe: true,
+            }),
+            // Malformed payload or ambiguous (≥2 presign claims): bind
+            // provably-unverifiable bytes with `via_safe = true` so the
+            // "v3 required" gate refuses — belt-and-braces under the
+            // dedicated msend verdict gate, which refuses these earlier
+            // with a specific banner.
+            _ => Some(CowBinding {
+                owner,
+                calldata: raw_data,
+                via_safe: true,
+            }),
+        };
+    }
+    None
+}
+
 /// Resolve which `(owner, calldata)` pair a CoW v3 trailer must bind to.
 ///
 /// Precedence: a verified `safe_v1` (approveHash) context wins, then a
@@ -92,25 +161,21 @@ pub fn resolve_cow_binding<'s>(
     if let Some(safe) = safe_v1 {
         let mut inner_to = [0u8; 20];
         inner_to.copy_from_slice(&safe.canonical[SAFE_OFF_TO..SAFE_OFF_TO + 20]);
-        if safe_inner_is_cow_presign(&inner_to, safe.raw_data) {
-            let mut owner = [0u8; 20];
-            owner.copy_from_slice(
-                &safe.canonical[SAFE_OFF_SAFE_ADDRESS..SAFE_OFF_SAFE_ADDRESS + 20],
-            );
-            return CowBinding {
-                owner,
-                calldata: safe.raw_data,
-                via_safe: true,
-            };
+        let mut owner = [0u8; 20];
+        owner.copy_from_slice(&safe.canonical[SAFE_OFF_SAFE_ADDRESS..SAFE_OFF_SAFE_ADDRESS + 20]);
+        let operation = safe.canonical[SAFE_OFF_OPERATION];
+        if let Some(binding) = resolve_safe_arm(operation, &inner_to, safe.raw_data, owner) {
+            return binding;
         }
     }
     if let Some(exec) = safe_exec {
-        if safe_inner_is_cow_presign(&exec.decoded.to, exec.decoded.data) {
-            return CowBinding {
-                owner: exec.safe_address,
-                calldata: exec.decoded.data,
-                via_safe: true,
-            };
+        if let Some(binding) = resolve_safe_arm(
+            exec.decoded.operation,
+            &exec.decoded.to,
+            exec.decoded.data,
+            exec.safe_address,
+        ) {
+            return binding;
         }
     }
     CowBinding {
@@ -297,5 +362,157 @@ mod tests {
         assert_eq!(b.owner, SAFE_ADDR);
         assert_eq!(b.calldata.as_ptr(), raw_a.as_ptr());
         assert!(b.via_safe);
+    }
+
+    // ── multiSend resolver matrix ──────────────────────────────────
+
+    use super::super::multi_send::test_util::{
+        cow_flow_calldata, encode_multisend, pack_record, presign_calldata_stub, ZERO_VALUE,
+    };
+    use sphincs_tz_shared::{MULTISEND_CALL_ONLY_ADDRESSES, SET_PRE_SIGNATURE_SELECTOR as PRESIG};
+
+    const MS_CALL_ONLY: [u8; 20] = MULTISEND_CALL_ONLY_ADDRESSES[0];
+
+    fn canonical_with_op(
+        inner_to: &[u8; 20],
+        operation: u8,
+    ) -> [u8; SAFE_V1_CANONICAL_LEN] {
+        let mut c = canonical_with(inner_to);
+        c[SAFE_OFF_OPERATION] = operation;
+        c
+    }
+
+    fn exec_with_op<'a>(
+        inner_to: [u8; 20],
+        data: &'a [u8],
+        operation: u8,
+    ) -> VerifiedSafeExec<'a> {
+        let mut e = exec_with(inner_to, data);
+        e.decoded.operation = operation;
+        e
+    }
+
+    /// The binding the v3 pipeline receives must be the presign
+    /// *record's* bytes — a strict subslice of the multiSend calldata.
+    #[test]
+    fn multisend_approvehash_binds_presign_record() {
+        let ms = cow_flow_calldata();
+        let safe = VerifiedSafeV1 {
+            canonical: canonical_with_op(&MS_CALL_ONLY, 1),
+            raw_data: &ms,
+        };
+        let inner = [0u8; 36];
+        let b = resolve_cow_binding(&inner, &SENDER, Some(&safe), None);
+        assert!(b.via_safe);
+        assert_eq!(b.owner, SAFE_ADDR);
+        assert_eq!(b.calldata.len(), 164);
+        assert_eq!(&b.calldata[..4], &PRESIG);
+        let ms_range = ms.as_ptr() as usize..ms.as_ptr() as usize + ms.len();
+        assert!(ms_range.contains(&(b.calldata.as_ptr() as usize)));
+    }
+
+    #[test]
+    fn multisend_exec_binds_presign_record() {
+        let ms = cow_flow_calldata();
+        let exec = exec_with_op(MS_CALL_ONLY, &ms, 1);
+        let inner = [0u8; 372];
+        let b = resolve_cow_binding(&inner, &SENDER, None, Some(&exec));
+        assert!(b.via_safe);
+        assert_eq!(b.owner, SAFE_ADDR);
+        assert_eq!(b.calldata.len(), 164);
+        assert_eq!(&b.calldata[..4], &PRESIG);
+    }
+
+    /// Zero presign records = generic batch: no CoW binding, no v3
+    /// requirement — the renderer shows every record instead.
+    #[test]
+    fn multisend_without_presign_resolves_direct() {
+        let packed = pack_record(0, &[0x11; 20], &ZERO_VALUE, &[]);
+        let ms = encode_multisend(&packed);
+        let safe = VerifiedSafeV1 {
+            canonical: canonical_with_op(&MS_CALL_ONLY, 1),
+            raw_data: &ms,
+        };
+        let inner = [0u8; 36];
+        let b = resolve_cow_binding(&inner, &SENDER, Some(&safe), None);
+        assert!(!b.via_safe);
+        assert_eq!(b.owner, SENDER);
+        assert_eq!(b.calldata.as_ptr(), inner.as_ptr());
+    }
+
+    /// Two presign records is ambiguous (one trailer, one binding):
+    /// fail closed — via_safe with bytes the CoW pipeline rejects.
+    #[test]
+    fn multisend_two_presigns_fails_closed() {
+        let mut packed = pack_record(
+            0,
+            &GPV2_SETTLEMENT_ADDRESS,
+            &ZERO_VALUE,
+            &presign_calldata_stub(),
+        );
+        packed.extend_from_slice(&pack_record(
+            0,
+            &GPV2_SETTLEMENT_ADDRESS,
+            &ZERO_VALUE,
+            &presign_calldata_stub(),
+        ));
+        let ms = encode_multisend(&packed);
+        let safe = VerifiedSafeV1 {
+            canonical: canonical_with_op(&MS_CALL_ONLY, 1),
+            raw_data: &ms,
+        };
+        let inner = [0u8; 36];
+        let b = resolve_cow_binding(&inner, &SENDER, Some(&safe), None);
+        assert!(b.via_safe, "ambiguous multiSend must keep the v3 requirement");
+        // Non-verifiable by construction: multiSend selector, not 164 B.
+        assert_ne!(&b.calldata[..4], &PRESIG);
+        assert_ne!(b.calldata.len(), 164);
+    }
+
+    /// Malformed multiSend (claim fires, decode fails): fail closed.
+    #[test]
+    fn multisend_malformed_fails_closed() {
+        let ms = [0x8d, 0x80, 0xff, 0x0a, 0xde, 0xad, 0xbe, 0xef];
+        let safe = VerifiedSafeV1 {
+            canonical: canonical_with_op(&MS_CALL_ONLY, 1),
+            raw_data: &ms,
+        };
+        let inner = [0u8; 36];
+        let b = resolve_cow_binding(&inner, &SENDER, Some(&safe), None);
+        assert!(b.via_safe);
+        assert_ne!(b.calldata.len(), 164);
+    }
+
+    /// op==0 to a MultiSend address is NOT a multiSend claim (under
+    /// CALL the Safe is not msg.sender for the records) — stays on the
+    /// direct path, where it renders as loud blind-sign.
+    #[test]
+    fn multisend_op0_resolves_direct() {
+        let ms = cow_flow_calldata();
+        let safe = VerifiedSafeV1 {
+            canonical: canonical_with_op(&MS_CALL_ONLY, 0),
+            raw_data: &ms,
+        };
+        let inner = [0u8; 36];
+        let b = resolve_cow_binding(&inner, &SENDER, Some(&safe), None);
+        assert!(!b.via_safe);
+        assert_eq!(b.owner, SENDER);
+    }
+
+    /// op==1 to a non-allowlisted target never produces a binding here
+    /// — but more importantly it never produces a `Verified*` at all
+    /// (the verifier op-gates are pinned in `verify.rs` /
+    /// `exec_decode.rs` tests). This pins the resolver half: even if a
+    /// Verified* existed, no multiSend claim fires.
+    #[test]
+    fn multisend_non_allowlisted_target_no_claim() {
+        let ms = cow_flow_calldata();
+        let safe = VerifiedSafeV1 {
+            canonical: canonical_with_op(&[0xaa; 20], 1),
+            raw_data: &ms,
+        };
+        let inner = [0u8; 36];
+        let b = resolve_cow_binding(&inner, &SENDER, Some(&safe), None);
+        assert!(!b.via_safe);
     }
 }

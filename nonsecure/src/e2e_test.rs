@@ -18,22 +18,24 @@ use cortex_m_semihosting::{debug, hprintln};
 use sha3::{Digest, Keccak256};
 use sphincs_tz_shared::{
     APPROVE_HASH_CALLDATA_LEN, APPROVE_HASH_SELECTOR, FLAG_REGISTER_SLOT,
-    GPV2_SETTLEMENT_ADDRESS, MAX_BATCH_TXS, MAX_SIGN_RESPONSE_LEN, NscStatus,
-    SAFE_DOMAIN_TYPEHASH, SAFE_OFF_CHAIN_ID, SAFE_OFF_DATA_HASH, SAFE_OFF_NONCE,
-    SAFE_OFF_OPERATION, SAFE_OFF_SAFE_ADDRESS, SAFE_OFF_TO, SAFE_TX_TYPEHASH,
-    SAFE_V1_CANONICAL_LEN, SIGN_USEROP_BATCH_HEADER_LEN, SIGN_USEROP_HEADER_LEN, SIG_TYPE1_LEN,
-    SIG_TYPE2_LEN,
+    GPV2_SETTLEMENT_ADDRESS, GPV2_VAULT_RELAYER_ADDRESS, MAX_BATCH_TXS, MAX_SIGN_RESPONSE_LEN,
+    MULTISEND_CALL_ONLY_ADDRESSES, MULTI_SEND_SELECTOR, NscStatus, SAFE_DOMAIN_TYPEHASH,
+    SAFE_OFF_CHAIN_ID, SAFE_OFF_DATA_HASH, SAFE_OFF_NONCE, SAFE_OFF_OPERATION,
+    SAFE_OFF_SAFE_ADDRESS, SAFE_OFF_TO, SAFE_TX_TYPEHASH, SAFE_V1_CANONICAL_LEN,
+    SIGN_USEROP_BATCH_HEADER_LEN, SIGN_USEROP_HEADER_LEN, SIG_TYPE1_LEN, SIG_TYPE2_LEN,
 };
 
 // === Scratch buffers =======================================================
 
 static mut SIG_BUF: [u8; MAX_SIGN_RESPONSE_LEN] = [0u8; MAX_SIGN_RESPONSE_LEN];
-// Sized for the largest scenario: SafeTx canonical (281) + u16 raw_data_len
-// (2) + raw_data (≤ 256 in this runner) + 36 B `approveHash` inner_data +
-// header. We don't need the firmware's 16 KB SNAP_LEN budget because every
-// e2e scenario uses small inner_data.
-static mut PAYLOAD_BUF: [u8; SIGN_USEROP_HEADER_LEN + 1024] =
-    [0u8; SIGN_USEROP_HEADER_LEN + 1024];
+// Sized for the largest scenario: the multiSend safe-wrapped CoW presign
+// (5s) carries a zk_v3 AddrOnly trailer (2+204) plus a safe_v1 trailer
+// whose raw_data is the ~484-byte multiSend calldata (2 + 281 + 2 + 484)
+// on top of the 36 B `approveHash` inner_data — ~1.1 KB of trailers. We
+// don't need the firmware's 16 KB SNAP_LEN budget because every e2e
+// scenario uses small inner_data.
+static mut PAYLOAD_BUF: [u8; SIGN_USEROP_HEADER_LEN + 2048] =
+    [0u8; SIGN_USEROP_HEADER_LEN + 2048];
 
 // === Helpers ===============================================================
 
@@ -126,14 +128,17 @@ fn keccak256(input: &[u8]) -> [u8; 32] {
 }
 
 /// Build a 281-byte canonical SafeTx for `(chain_id, safe_address, to,
-/// raw_data, nonce_seq)`. All other fields default to zero (typical
-/// for a relayer-less Safe approval).
+/// raw_data, nonce_seq, operation)`. All other fields default to zero
+/// (typical for a relayer-less Safe approval). `operation` is 0 (Call)
+/// for single-call SafeTxs, 1 (DelegateCall) for a MultiSendCallOnly
+/// batch.
 fn build_safe_canonical(
     chain_id: u64,
     safe_address: &[u8; 20],
     to: &[u8; 20],
     raw_data: &[u8],
     nonce_seq: u64,
+    operation: u8,
 ) -> [u8; SAFE_V1_CANONICAL_LEN] {
     let mut c = [0u8; SAFE_V1_CANONICAL_LEN];
     c[SAFE_OFF_CHAIN_ID..SAFE_OFF_CHAIN_ID + 8].copy_from_slice(&chain_id.to_be_bytes());
@@ -141,7 +146,7 @@ fn build_safe_canonical(
     c[SAFE_OFF_TO..SAFE_OFF_TO + 20].copy_from_slice(to);
     let dh = keccak256(raw_data);
     c[SAFE_OFF_DATA_HASH..SAFE_OFF_DATA_HASH + 32].copy_from_slice(&dh);
-    c[SAFE_OFF_OPERATION] = 0; // Call
+    c[SAFE_OFF_OPERATION] = operation;
     let mut n = [0u8; 32];
     n[24..32].copy_from_slice(&nonce_seq.to_be_bytes());
     c[SAFE_OFF_NONCE..SAFE_OFF_NONCE + 32].copy_from_slice(&n);
@@ -326,6 +331,65 @@ fn build_presign_calldata(
     cd[132..152].copy_from_slice(owner);
     cd[152..156].copy_from_slice(valid_to_be);
     cd
+}
+
+/// Build strict 68-byte `approve(spender, amount)` ERC-20 calldata.
+fn build_erc20_approve_calldata(spender: &[u8; 20], amount_low: u64) -> [u8; 68] {
+    let mut cd = [0u8; 68];
+    cd[0..4].copy_from_slice(&[0x09, 0x5e, 0xa7, 0xb3]);
+    cd[16..36].copy_from_slice(spender);
+    cd[60..68].copy_from_slice(&amount_low.to_be_bytes());
+    cd
+}
+
+/// Pack one multiSend record at `off`:
+/// `op(1) || to(20) || value(32, zero) || dataLen(32) || data`.
+/// Returns the new offset.
+fn pack_multisend_record(
+    out: &mut [u8],
+    off: usize,
+    op: u8,
+    to: &[u8; 20],
+    data: &[u8],
+) -> usize {
+    out[off] = op;
+    out[off + 1..off + 21].copy_from_slice(to);
+    out[off + 21..off + 53].fill(0); // value = 0
+    out[off + 53..off + 85].fill(0);
+    out[off + 81..off + 85].copy_from_slice(&(data.len() as u32).to_be_bytes());
+    out[off + 85..off + 85 + data.len()].copy_from_slice(data);
+    off + 85 + data.len()
+}
+
+/// Build canonical `multiSend(bytes)` calldata for the Safe-UI CoW
+/// flow: `[approve(vault relayer) on sell_token, setPreSignature]`.
+/// `approve_op` is the approve record's operation byte — 0 for the
+/// happy path, 1 to exercise the per-record op gate. Returns the
+/// calldata length within `out`.
+fn build_cow_multisend_calldata(
+    out: &mut [u8; 512],
+    approve_op: u8,
+    sell_token: &[u8; 20],
+    approve_cd: &[u8],
+    presign_cd: &[u8; 164],
+) -> usize {
+    // Packed records start after selector(4) + offset word(32) +
+    // length word(32).
+    let records_start = 68;
+    let mut p = records_start;
+    p = pack_multisend_record(out, p, approve_op, sell_token, approve_cd);
+    p = pack_multisend_record(out, p, 0, &GPV2_SETTLEMENT_ADDRESS, presign_cd);
+    let packed_len = p - records_start;
+
+    out[0..4].copy_from_slice(&MULTI_SEND_SELECTOR);
+    out[4..36].fill(0);
+    out[35] = 0x20; // bytes head offset = 32
+    out[36..68].fill(0);
+    out[64..68].copy_from_slice(&(packed_len as u32).to_be_bytes());
+    // Zero-pad the bytes tail to a 32-byte boundary, like Solidity.
+    let pad = (32 - packed_len % 32) % 32;
+    out[p..p + pad].fill(0);
+    p + pad
 }
 
 /// Append a `zk_v3` AddrOnly trailer (bare 204-byte GPv2Order
@@ -783,6 +847,7 @@ fn main() -> ! {
             &usdc_addr,
             &raw_data,
             safe_nonce,
+            0, // Call
         );
         let safe_tx_hash = compute_safe_tx_hash(&canonical);
         let inner_data = build_approve_hash_calldata(&safe_tx_hash);
@@ -1655,6 +1720,7 @@ fn main() -> ! {
             &GPV2_SETTLEMENT_ADDRESS,
             &presign_cd,
             safe_nonce,
+            0, // Call
         );
         let safe_tx_hash = compute_safe_tx_hash(&canonical);
         let inner_data = build_approve_hash_calldata(&safe_tx_hash);
@@ -1716,6 +1782,7 @@ fn main() -> ! {
             &GPV2_SETTLEMENT_ADDRESS,
             &presign_cd,
             19,
+            0, // Call
         );
         let safe_tx_hash = compute_safe_tx_hash(&canonical);
         let inner_data = build_approve_hash_calldata(&safe_tx_hash);
@@ -1739,6 +1806,222 @@ fn main() -> ! {
             "scenario 5r: safe-wrapped presign without zk_v3 must refuse \
              with InvalidPointer (got {}); Ok would mean the downgrade \
              gate is not firing for the Safe-wrapped path",
+            status
+        );
+        hprintln!("[NS][e2e]   → refused as expected (v3 required)");
+    }
+
+    // Scenario 5s: multiSend-wrapped CoW presign clear-sign — the
+    // ACTUAL Safe-web-UI wire shape. The SafeTx DELEGATECALLs the
+    // canonical MultiSendCallOnly contract with `multiSend([approve(
+    // vault relayer) on sellToken, setPreSignature(uid, true)])`. The
+    // secure world must: open the operation gate for the allowlisted
+    // target, strictly decode the packed records (op==0, exact
+    // framing), bind the zk_v3 order to the presign RECORD's bytes
+    // with uid.owner == the Safe, pass the page-budget gate, and
+    // render divider + approve + order pages. A successful sign proves
+    // the whole multiSend pipeline.
+    hprintln!("[NS][e2e] Scenario 5s: multiSend (approve+presign) safe-wrapped CoW clear-sign");
+    unsafe {
+        let safe_address: [u8; 20] = [
+            0x5a, 0xfe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
+        ];
+        let chain_id: u64 = 11_155_111;
+        let usdc: [u8; 20] = [
+            0xa0, 0xb8, 0x69, 0x91, 0xc6, 0x21, 0x8b, 0x36, 0xc1, 0xd1, 0x9d, 0x4a, 0x2e, 0x9e,
+            0xb0, 0xce, 0x36, 0x06, 0xeb, 0x48,
+        ];
+
+        // Same 1000 USDC → ≥ 0.5 WETH order as 5q.
+        let mut order = [0u8; 204];
+        order[0..8].copy_from_slice(&chain_id.to_be_bytes());
+        order[8..28].copy_from_slice(&usdc); // sellToken
+        order[28..48].copy_from_slice(&[
+            0xc0, 0x2a, 0xaa, 0x39, 0xb2, 0x23, 0xfe, 0x8d, 0x0a, 0x0e, 0x5c, 0x4f, 0x27, 0xea,
+            0xd9, 0x08, 0x3c, 0x75, 0x6c, 0xc2,
+        ]); // buyToken = WETH
+        order[96..100].copy_from_slice(&1_000_000_000u32.to_be_bytes()); // sellAmount
+        order[124..132].copy_from_slice(&0x06F0_5B59_D3B2_0000u64.to_be_bytes()); // buyAmount
+        order[164..168].copy_from_slice(&0x6800_0000u32.to_be_bytes()); // validTo
+
+        let order_digest = compute_cow_order_digest(&order);
+        let presign_cd = build_presign_calldata(&order_digest, &safe_address, &order[164..168]);
+        let approve_cd = build_erc20_approve_calldata(&GPV2_VAULT_RELAYER_ADDRESS, 1_000_000_000);
+
+        let mut ms_buf = [0u8; 512];
+        let ms_len = build_cow_multisend_calldata(&mut ms_buf, 0, &usdc, &approve_cd, &presign_cd);
+
+        let canonical = build_safe_canonical(
+            chain_id,
+            &safe_address,
+            &MULTISEND_CALL_ONLY_ADDRESSES[0], // v1.3.0 canonical
+            &ms_buf[..ms_len],
+            20,
+            1, // DelegateCall — only legal against the allowlisted multiSend
+        );
+        let safe_tx_hash = compute_safe_tx_hash(&canonical);
+        let inner_data = build_approve_hash_calldata(&safe_tx_hash);
+
+        let mut len = build_sign_payload(
+            &mut PAYLOAD_BUF,
+            chain_id,
+            1,
+            false,
+            7,
+            &safe_address,
+            0u128,
+            &inner_data,
+        );
+        len = append_zkv3_addr_only_and_safe_trailers(
+            &mut PAYLOAD_BUF,
+            len,
+            &order,
+            &canonical,
+            &ms_buf[..ms_len],
+        );
+
+        let status = nsc_api::sign_userop(&PAYLOAD_BUF[..len], &mut SIG_BUF);
+        assert_eq!(
+            status,
+            NscStatus::Ok as u32,
+            "scenario 5s must succeed (got {})",
+            status
+        );
+        let (t1_present, t2_len) = parse_response(&SIG_BUF);
+        assert!(!t1_present, "scenario 5s must NOT emit Type 1");
+        hprintln!(
+            "[NS][e2e]   → multiSend approve+presign verified, t2_len={}",
+            t2_len
+        );
+    }
+
+    // Scenario 5t: multiSend with a DELEGATECALL record must be
+    // REFUSED. The approve record's operation byte is 1 — on-chain
+    // MultiSendCallOnly would revert, and the firmware's per-record
+    // gate refuses on-device for the same reason (a nested
+    // delegatecall is not honestly clear-signable). The refusal is the
+    // dedicated msend verdict gate, not a blind-sign fallback.
+    hprintln!("[NS][e2e] Scenario 5t: multiSend with a delegatecall record is refused");
+    unsafe {
+        let safe_address: [u8; 20] = [
+            0x5a, 0xfe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
+        ];
+        let chain_id: u64 = 11_155_111;
+        let usdc: [u8; 20] = [
+            0xa0, 0xb8, 0x69, 0x91, 0xc6, 0x21, 0x8b, 0x36, 0xc1, 0xd1, 0x9d, 0x4a, 0x2e, 0x9e,
+            0xb0, 0xce, 0x36, 0x06, 0xeb, 0x48,
+        ];
+
+        // Digest content is irrelevant — the record-op gate fires
+        // before any CoW digest work.
+        let presign_cd = build_presign_calldata(&[0xCD; 32], &safe_address, &[0x68, 0, 0, 0]);
+        let approve_cd = build_erc20_approve_calldata(&GPV2_VAULT_RELAYER_ADDRESS, 1);
+
+        let mut ms_buf = [0u8; 512];
+        let ms_len = build_cow_multisend_calldata(
+            &mut ms_buf, 1, // approve record op = DELEGATECALL → refuse
+            &usdc, &approve_cd, &presign_cd,
+        );
+
+        let canonical = build_safe_canonical(
+            chain_id,
+            &safe_address,
+            &MULTISEND_CALL_ONLY_ADDRESSES[0],
+            &ms_buf[..ms_len],
+            21,
+            1,
+        );
+        let safe_tx_hash = compute_safe_tx_hash(&canonical);
+        let inner_data = build_approve_hash_calldata(&safe_tx_hash);
+
+        let mut len = build_sign_payload(
+            &mut PAYLOAD_BUF,
+            chain_id,
+            1,
+            false,
+            8,
+            &safe_address,
+            0u128,
+            &inner_data,
+        );
+        len = append_zkv3_addr_only_and_safe_trailers(
+            &mut PAYLOAD_BUF,
+            len,
+            &[0u8; 204], // order content irrelevant — gate fires first
+            &canonical,
+            &ms_buf[..ms_len],
+        );
+
+        let status = nsc_api::sign_userop(&PAYLOAD_BUF[..len], &mut SIG_BUF);
+        assert_eq!(
+            status,
+            NscStatus::InvalidPointer as u32,
+            "scenario 5t: a multiSend record with operation=1 must refuse \
+             with InvalidPointer (got {}); Ok would mean the per-record \
+             op gate is not firing",
+            status
+        );
+        hprintln!("[NS][e2e]   → refused as expected (msend rec op!=0)");
+    }
+
+    // Scenario 5u: multiSend presign WITHOUT the zk_v3 trailer must be
+    // REFUSED — the downgrade-mitigation gate extends through the
+    // multiSend wrapper. Stripping the trailer is what a hostile
+    // companion would do to push the user onto blind pages for an
+    // order they never saw; `resolve_cow_binding` claims the unique
+    // presign record (via_safe = true) and the missing v3 refuses the
+    // sign, mirroring scenario 5r's single-call behaviour.
+    hprintln!("[NS][e2e] Scenario 5u: multiSend presign without zk_v3 is refused");
+    unsafe {
+        let safe_address: [u8; 20] = [
+            0x5a, 0xfe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
+        ];
+        let chain_id: u64 = 11_155_111;
+        let usdc: [u8; 20] = [
+            0xa0, 0xb8, 0x69, 0x91, 0xc6, 0x21, 0x8b, 0x36, 0xc1, 0xd1, 0x9d, 0x4a, 0x2e, 0x9e,
+            0xb0, 0xce, 0x36, 0x06, 0xeb, 0x48,
+        ];
+
+        let presign_cd = build_presign_calldata(&[0xCD; 32], &safe_address, &[0x68, 0, 0, 0]);
+        let approve_cd = build_erc20_approve_calldata(&GPV2_VAULT_RELAYER_ADDRESS, 1);
+
+        let mut ms_buf = [0u8; 512];
+        let ms_len =
+            build_cow_multisend_calldata(&mut ms_buf, 0, &usdc, &approve_cd, &presign_cd);
+
+        let canonical = build_safe_canonical(
+            chain_id,
+            &safe_address,
+            &MULTISEND_CALL_ONLY_ADDRESSES[0],
+            &ms_buf[..ms_len],
+            22,
+            1,
+        );
+        let safe_tx_hash = compute_safe_tx_hash(&canonical);
+        let inner_data = build_approve_hash_calldata(&safe_tx_hash);
+
+        let mut len = build_sign_payload(
+            &mut PAYLOAD_BUF,
+            chain_id,
+            1,
+            false,
+            9,
+            &safe_address,
+            0u128,
+            &inner_data,
+        );
+        len = append_safe_only_trailers(&mut PAYLOAD_BUF, len, &canonical, &ms_buf[..ms_len]);
+
+        let status = nsc_api::sign_userop(&PAYLOAD_BUF[..len], &mut SIG_BUF);
+        assert_eq!(
+            status,
+            NscStatus::InvalidPointer as u32,
+            "scenario 5u: multiSend presign without zk_v3 must refuse \
+             with InvalidPointer (got {}); Ok would mean the downgrade \
+             gate does not extend through the multiSend wrapper",
             status
         );
         hprintln!("[NS][e2e]   → refused as expected (v3 required)");

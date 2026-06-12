@@ -1452,6 +1452,78 @@ pub const EXEC_TRANSACTION_SELECTOR: [u8; 4] = [0x6a, 0x76, 0x12, 0x02];
 pub const EXEC_TRANSACTION_MIN_CALLDATA_LEN: usize = 4 + 10 * 32 + 2 * 32;
 
 // ---------------------------------------------------------------------------
+// Safe `MultiSendCallOnly` — batched SafeTx via DELEGATECALL
+// ---------------------------------------------------------------------------
+//
+// The Safe web UI does not emit a single-call SafeTx for flows that need
+// more than one action (e.g. CoW order placement = ERC-20 approve +
+// `setPreSignature`). It emits `SafeTx{to = MultiSendCallOnly,
+// operation = 1 (DELEGATECALL), data = multiSend(transactions)}` where
+// `transactions` is a packed list of records, each
+// `operation(1) || to(20) || value(32) || dataLen(32) || data(dataLen)`.
+//
+// DELEGATECALL executes the target's code in the Safe's own storage
+// context, so decoding the payload is only meaningful when the target is
+// a known-good MultiSend implementation — hence the address allowlist
+// below. The firmware additionally enforces `operation == 0` on every
+// record (mirroring MultiSendCallOnly's on-chain revert), so no nested
+// delegatecall can ride a record either.
+
+/// Function selector for `multiSend(bytes)` on Safe `MultiSend` /
+/// `MultiSendCallOnly` contracts. Equals
+/// `keccak256("multiSend(bytes)")[..4]`.
+pub const MULTI_SEND_SELECTOR: [u8; 4] = [0x8d, 0x80, 0xff, 0x0a];
+
+/// Canonical `MultiSendCallOnly` deployments the firmware accepts as a
+/// SafeTx DELEGATECALL target. CREATE2-deployed, address-identical on
+/// every chain of each variant (source: safe-global/safe-deployments,
+/// `src/assets/v1.3.0/multi_send_call_only.json` and
+/// `v1.4.1/multi_send_call_only.json`, verified 2026-06-12):
+///
+/// ```text
+///   [0]  v1.3.0 canonical  0x40A2aCCbd92BCA938b02010E17A5b8929b49130D
+///   [1]  v1.3.0 eip155     0xA1dabEF33b3B82c7814B6D82A79e50F4AC44102B
+///   [2]  v1.4.1 canonical  0x9641d764fc13c8B624c04430C7356C1C7C8102e2
+/// ```
+///
+/// Plain `MultiSend` (which permits per-record DELEGATECALL) is
+/// deliberately NOT listed: the Safe UI routes all-CALL batches through
+/// `MultiSendCallOnly`, and a smaller allowlist fails closed. zkSync
+/// variants are excluded (PQ1 does not target zkSync).
+pub const MULTISEND_CALL_ONLY_ADDRESSES: [[u8; 20]; 3] = [
+    [
+        0x40, 0xa2, 0xac, 0xcb, 0xd9, 0x2b, 0xca, 0x93, 0x8b, 0x02, 0x01, 0x0e, 0x17, 0xa5,
+        0xb8, 0x92, 0x9b, 0x49, 0x13, 0x0d,
+    ],
+    [
+        0xa1, 0xda, 0xbe, 0xf3, 0x3b, 0x3b, 0x82, 0xc7, 0x81, 0x4b, 0x6d, 0x82, 0xa7, 0x9e,
+        0x50, 0xf4, 0xac, 0x44, 0x10, 0x2b,
+    ],
+    [
+        0x96, 0x41, 0xd7, 0x64, 0xfc, 0x13, 0xc8, 0xb6, 0x24, 0xc0, 0x44, 0x30, 0xc7, 0x35,
+        0x6c, 0x1c, 0x7c, 0x81, 0x02, 0xe2,
+    ],
+];
+
+/// Maximum number of packed records the firmware will decode out of one
+/// `multiSend(bytes)` payload. The trusted-display page budget is the
+/// real binding constraint (a record costs 1 divider page + 1..9 content
+/// pages); this cap just bounds the decode loop and keeps the confirm
+/// flow reviewable by a human.
+pub const MULTISEND_MAX_RECORDS: usize = 6;
+
+/// Real `GPv2VaultRelayer` address on every EVM chain CoW Protocol
+/// supports (CREATE2-deployed, address-identical — the contract CoW
+/// users grant ERC-20 allowances to). Display-only: when a multiSend
+/// record is an ERC-20 `approve` whose spender equals this address, the
+/// trusted UI labels the spender "CoW VaultRelayer". Never used as a
+/// verification gate.
+pub const GPV2_VAULT_RELAYER_ADDRESS: [u8; 20] = [
+    0xc9, 0x2e, 0x8b, 0xdf, 0x79, 0xf0, 0x50, 0x7f, 0x65, 0xa3, 0x92, 0xb0, 0xab, 0x46, 0x67,
+    0x71, 0x6b, 0xfe, 0x01, 0x10,
+];
+
+// ---------------------------------------------------------------------------
 // Safe v1.3.0+ singleton management selectors (owner / module / guard /
 // fallback). Rendered with per-op intent banners by the secure-side
 // `safe_mgmt` decoder when the inner SafeTx targets the Safe itself

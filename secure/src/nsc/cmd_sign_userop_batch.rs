@@ -367,8 +367,57 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                 }
                 let meta = meta_opt.unwrap();
                 let ptx = parsed[rec.tx_idx as usize].as_ref().unwrap();
-                // Cross-check (chain_id, contract) against the routed tx.
-                if meta.chain_id == chain_id && meta.contract == ptx.to {
+                let inner_data: &[u8] = &snap[ptx.data_off..ptx.data_off + ptx.data_len];
+                // Cross-check (chain_id, contract) against the routed
+                // tx. The contract may also sit one level deeper —
+                // inside a Safe flow's multiSend record (e.g.
+                // `[approve(USDC), setPreSignature]` batched through
+                // MultiSendCallOnly): accept when an exec calldata's
+                // multiSend `data` carries a matching record. The
+                // renderer re-matches per record before applying, so
+                // this is routing, not the trust gate. (The approveHash
+                // flavour's multiSend lives in the safe_v1 trailer; the
+                // single-tx handler peeks it, here the records walk the
+                // exec calldata only — safe_v1 batch members keep the
+                // direct match.)
+                let exec_record_match = inner_data.len() >= 4
+                    && inner_data[..4] == sphincs_tz_shared::EXEC_TRANSACTION_SELECTOR
+                    && crate::tx::eip712::safe::exec_decode::decode_exec_transaction(inner_data)
+                        .map(|d| {
+                            crate::tx::eip712::safe::multi_send::any_record_to_matches(
+                                d.data,
+                                &meta.contract,
+                            )
+                        })
+                        .unwrap_or(false);
+                let safe_v1_record_match = parsed_trailers.records
+                    [..parsed_trailers.count]
+                    .iter()
+                    .flatten()
+                    .any(|r| {
+                        r.kind == TRAILER_KIND_SAFE_V1
+                            && r.tx_idx == rec.tx_idx
+                            && r.len >= sphincs_tz_shared::SAFE_V1_CANONICAL_LEN + 2
+                            && {
+                                let b = &snap[r.start..r.start + r.len];
+                                let raw_len = u16::from_be_bytes([
+                                    b[sphincs_tz_shared::SAFE_V1_CANONICAL_LEN],
+                                    b[sphincs_tz_shared::SAFE_V1_CANONICAL_LEN + 1],
+                                ])
+                                    as usize;
+                                let start = sphincs_tz_shared::SAFE_V1_CANONICAL_LEN + 2;
+                                start
+                                    .checked_add(raw_len)
+                                    .is_some_and(|end| end <= b.len())
+                                    && crate::tx::eip712::safe::multi_send::any_record_to_matches(
+                                        &b[start..start + raw_len],
+                                        &meta.contract,
+                                    )
+                            }
+                    });
+                if meta.chain_id == chain_id
+                    && (meta.contract == ptx.to || exec_record_match || safe_v1_record_match)
+                {
                     routed[rec.tx_idx as usize]
                         .get_or_insert_with(RoutedTrailers::empty)
                         .erc20 = Some(meta);
@@ -706,6 +755,31 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         if safe_exec_selector && safe_exec_enough_len && safe_exec_verified.is_none() {
             ui::show_status("Batch sign", "exec parse fail");
             return NscStatus::InvalidPointer as u32;
+        }
+
+        // MultiSend gate — same shared decision as the single-tx
+        // handler (`multisend_sign_gate`): a verified Safe context
+        // whose inner call claims an allowlisted MultiSendCallOnly
+        // DELEGATECALL must pass every hard rule and fit the trusted-
+        // display page budget, else refuse the whole batch. Reserved
+        // pages here: the dispatcher's native-value page when this
+        // member carries ETH, the two ERC-8213 fingerprint pages, and
+        // the batch banner page.
+        {
+            let reserved = usize::from(ptx.value.iter().any(|&b| b != 0)) + 2 + 1;
+            match crate::tx::display::multisend_sign_gate(
+                routed[i].as_ref().and_then(|r| r.safe_v1.as_ref()),
+                safe_exec_verified.as_ref(),
+                routed[i].as_ref().and_then(|r| r.zk_v3.as_ref()),
+                reserved,
+            ) {
+                crate::tx::display::MultisendGate::Reject(reason) => {
+                    ui::show_status("Batch sign", reason);
+                    return NscStatus::InvalidPointer as u32;
+                }
+                crate::tx::display::MultisendGate::NotMultiSend
+                | crate::tx::display::MultisendGate::Ok => {}
+            }
         }
 
         // Safe-wrapped CoW presign gate — twin of the direct gate

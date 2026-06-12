@@ -33,8 +33,9 @@ use crate::ui::confirm::Page;
 use crate::ui::{DISPLAY_COLS, DISPLAY_ROWS};
 
 /// Mirrors the production `tx::display::MAX_PAGES`. Pinned by the
-/// `positive_max_pages_matches_production` test.
-pub const MAX_PAGES: usize = 22;
+/// `positive_max_pages_matches_production` test. (22 → 24 with the
+/// multiSend clear-sign feature — see the production doc comment.)
+pub const MAX_PAGES: usize = 24;
 
 /// Mirrors the production `tx::display::Pages`. Fields and methods kept
 /// `pub` so the included submodules can construct and mutate them via

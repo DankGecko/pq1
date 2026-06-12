@@ -43,7 +43,9 @@ pub use eip1271::{render_eip1271_personal_sign_pages, render_eip1271_raw32_pages
 pub use erc20_known::render_erc20_known_pages;
 pub use erc20_unknown::render_erc20_unknown_pages;
 #[cfg(not(test))]
-pub use safe_display::{render_safe_exec_pages, render_safe_v1_pages};
+pub use safe_display::{
+    multisend_sign_gate, render_safe_exec_pages, render_safe_v1_pages, MultisendGate,
+};
 pub use slot_rotation::build_slot_rotation_pages;
 pub use value_transfer::render_pages;
 
@@ -64,7 +66,14 @@ use crate::ui::{DISPLAY_COLS, DISPLAY_ROWS};
 ///   * Safe-wrapped CoW presign (Safe surface with the v3 order as its
 ///     inner pages) → 3 header + 2 refund + 1 inner-ETH + 1 context
 ///     banner + 8 body (addr mode) + 1 confirm = 16, +1 native-value
-///     splice + 1 ERC-8213 fingerprint = 18; +1 batch banner = 19
+///     splice + 2 ERC-8213 fingerprint pages = 19; +1 batch banner = 20
+///   * Safe multiSend batch (per record: 1 divider + optional value
+///     page + the record's own pages; the CoW record costs 1 banner +
+///     6/8 body). NOT statically bounded — the handlers'
+///     `multisend_sign_gate` page-budget check refuses any composition
+///     whose exact total (same per-kind counts the renderer uses)
+///     would exceed `MAX_PAGES`; the Safe-UI approve+presign flow in
+///     addr mode with refund pages + batch banner lands on 24 exactly.
 ///   * typed_call (Phase 2 calldata decode) → up to 14 pages
 ///     (banner + up to 6 typed args + To + Value + Chain + 2 fee
 ///     pages + Nonce; declines past `MAX_TYPED_ARGS_RENDERED = 6`)
@@ -76,9 +85,13 @@ use crate::ui::{DISPLAY_COLS, DISPLAY_ROWS};
 ///     final confirm) + `ceil(MAX_OFFCHAIN_PERSONAL_SIGN_LEN / 48)`
 ///     message pages = up to 5 + ceil(700 / 48) = 5 + 15 = 20.
 ///
-/// Bumping this costs `4 × 16 = 64` extra stack bytes per page, so
-/// grow it deliberately and not speculatively.
-pub const MAX_PAGES: usize = 22;
+/// Bumping this costs `4 × 16 = 64` extra stack bytes per page (×2
+/// transiently while the batch banner wrap holds two `Pages`), so grow
+/// it deliberately and not speculatively. 22 → 24 accompanied the
+/// multiSend clear-sign feature so the worst realistic CoW flow
+/// (AddrOnly + refund + record values + batch banner + fingerprints)
+/// fits without truncation.
+pub const MAX_PAGES: usize = 24;
 
 /// A buffer of up to [`MAX_PAGES`] pre-rendered confirmation pages.
 ///
@@ -254,15 +267,17 @@ fn pick_sign_pages_inner(
         // the gas-refund pages are signed facts a bare CoW render would
         // hide (the refund channel is a full-balance drain vector, see
         // `safe_display.rs`). The order renders as the Safe's inner-tx
-        // pages instead. ERC-20 inner metadata is structurally
-        // inapplicable here (the verified inner target is the GPv2
-        // settlement singleton, never a token contract) so we pass
-        // `None` rather than re-running the address match.
+        // pages instead. ERC-20 metadata can apply to a multiSend
+        // RECORD (the Safe-UI flow batches `approve(sellToken)` next to
+        // the presign), so the address-matched bundle is threaded
+        // through; the single-call presign arm ignores it.
         if let Some(safe) = safe_v1 {
-            return render_safe_v1_pages(safe, Some(v3), None, resolver);
+            let inner_meta = safe_inner_meta(erc20, &safe_v1_inner_to(safe), safe.raw_data);
+            return render_safe_v1_pages(safe, Some(v3), inner_meta, resolver);
         }
         if let Some(exec) = safe_exec {
-            return render_safe_exec_pages(exec, Some(v3), None, resolver);
+            let inner_meta = safe_inner_meta(erc20, &exec.decoded.to, exec.decoded.data);
+            return render_safe_exec_pages(exec, Some(v3), inner_meta, resolver);
         }
         return match &v3.readable {
             Some(readable) => {
@@ -283,36 +298,17 @@ fn pick_sign_pages_inner(
         // For Safe inner-tx ERC-20 rendering, only apply the outer
         // ERC-20 metadata bundle when its contract address matches the
         // inner-tx target — a Safe call carrying USDC metadata is
-        // useful only if the inner `to` is in fact USDC.
-        let inner_meta: Option<&crate::erc20::bundle::Erc20Metadata<'_>> = erc20.and_then(|m| {
-            // Decode inner `to` from the canonical (offset 28..48 per
-            // SAFE_OFF_TO). We can compare directly against m.contract.
-            let inner_to: [u8; 20] = {
-                let mut t = [0u8; 20];
-                t.copy_from_slice(
-                    &safe.canonical[sphincs_tz_shared::SAFE_OFF_TO
-                        ..sphincs_tz_shared::SAFE_OFF_TO + 20],
-                );
-                t
-            };
-            if m.contract == inner_to { Some(m) } else { None }
-        });
+        // useful only if the inner `to` is in fact USDC — or, for a
+        // multiSend batch, when one of the packed records targets the
+        // token (the renderer re-matches per record before applying).
+        let inner_meta = safe_inner_meta(erc20, &safe_v1_inner_to(safe), safe.raw_data);
         return render_safe_v1_pages(safe, None, inner_meta, resolver);
     }
     if let Some(exec) = safe_exec {
-        // Same address-match rule for the exec path: the outer ERC-20
-        // metadata bundle only applies when its contract address matches
-        // the decoded inner `to`. This pairs with the approveHash branch
-        // above so both Safe surfaces handle ERC-20 attribution
-        // consistently.
-        let inner_meta: Option<&crate::erc20::bundle::Erc20Metadata<'_>> =
-            erc20.and_then(|m| {
-                if m.contract == exec.decoded.to {
-                    Some(m)
-                } else {
-                    None
-                }
-            });
+        // Same address-match rule for the exec path, multiSend records
+        // included. This pairs with the approveHash branch above so
+        // both Safe surfaces handle ERC-20 attribution consistently.
+        let inner_meta = safe_inner_meta(erc20, &exec.decoded.to, exec.decoded.data);
         return render_safe_exec_pages(exec, None, inner_meta, resolver);
     }
     if let Some(d) = erc7730 {
@@ -356,4 +352,36 @@ fn pick_sign_pages_inner(
             render_blind_sign_pages(tx, inner_data, selector, resolver)
         }
     }
+}
+
+/// Inner `to` decoded from a verified `safe_v1` canonical.
+#[cfg(not(test))]
+fn safe_v1_inner_to(safe: &crate::tx::eip712::safe::VerifiedSafeV1<'_>) -> [u8; 20] {
+    let mut t = [0u8; 20];
+    t.copy_from_slice(
+        &safe.canonical[sphincs_tz_shared::SAFE_OFF_TO..sphincs_tz_shared::SAFE_OFF_TO + 20],
+    );
+    t
+}
+
+/// Address-match filter for ERC-20 metadata on the Safe surfaces: the
+/// bundle applies when its contract is the inner `to`, or — for a
+/// multiSend batch — when one of the packed records targets it.
+/// (`any_record_to_matches` returns false for anything that is not a
+/// well-formed multiSend.) The renderer still re-matches per record
+/// before applying the metadata, so this is routing, not the trust
+/// gate.
+#[cfg(not(test))]
+fn safe_inner_meta<'m>(
+    erc20: Option<&'m crate::erc20::bundle::Erc20Metadata<'m>>,
+    inner_to: &[u8; 20],
+    raw_data: &[u8],
+) -> Option<&'m crate::erc20::bundle::Erc20Metadata<'m>> {
+    erc20.filter(|m| {
+        m.contract == *inner_to
+            || crate::tx::eip712::safe::multi_send::any_record_to_matches(
+                raw_data,
+                &m.contract,
+            )
+    })
 }

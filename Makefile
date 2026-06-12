@@ -362,6 +362,9 @@ e2e:
 		"\\[NS\\]\\[e2e\\] Scenario 5p: EIP-712 typed sign (kind=2) wire format" \
 		"\\[NS\\]\\[e2e\\] Scenario 5q: Safe-wrapped CoW presign clear-sign" \
 		"\\[NS\\]\\[e2e\\] Scenario 5r: safe-wrapped presign without zk_v3 is refused" \
+		"\\[NS\\]\\[e2e\\] Scenario 5s: multiSend (approve+presign) safe-wrapped CoW clear-sign" \
+		"\\[NS\\]\\[e2e\\] Scenario 5t: multiSend with a delegatecall record is refused" \
+		"\\[NS\\]\\[e2e\\] Scenario 5u: multiSend presign without zk_v3 is refused" \
 		"\\[NS\\]\\[e2e\\] Scenario 6: brute-force protection" \
 		"\\[NS\\]\\[e2e\\] === All scenarios passed! ==="; do \
 		if grep -q "$$line" $$log; then \

@@ -1238,7 +1238,7 @@ fn negative_max_pages_matches_production_constant() {
     // copy and that source must stay in lockstep. Searches the
     // production source text rather than the gated-out module.
     let src = include_str!("../tx/display/mod.rs");
-    let needle = "pub const MAX_PAGES: usize = 22;";
+    let needle = "pub const MAX_PAGES: usize = 24;";
     assert!(src.contains(needle),
         "production tx/display/mod.rs no longer defines `{}` — either \
          bump MAX_PAGES here and update this test, OR fix the source.",

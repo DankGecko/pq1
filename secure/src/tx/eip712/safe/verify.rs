@@ -20,8 +20,14 @@
 //!   5. **Safe-address pinning** — `canonical.safe_address ==
 //!      userop.to`. The UserOp must call `approveHash` on the same
 //!      Safe whose hash we're approving; otherwise something's wrong.
-//!   6. **Operation gate** — only `0` (Call) is accepted in v1.
-//!      DelegateCall (`1`) is refused outright since it replaces the
+//!   6. **Operation gate** — `0` (Call) is always accepted.
+//!      DelegateCall (`1`) is accepted ONLY when the target is one of
+//!      the pinned canonical `MultiSendCallOnly` deployments and the
+//!      data is `multiSend(bytes)` (see
+//!      [`super::multi_send::is_multisend_claim`]); the payload then
+//!      faces its own hard rules (strict framing, per-record
+//!      `operation == 0`, record cap) before anything renders. Any
+//!      other DelegateCall is refused outright since it replaces the
 //!      Safe's code for the duration of the call and is not honestly
 //!      clear-signable for a non-expert user.
 //!   7. **Data-hash bind** — `keccak256(raw_data) == canonical.data_hash`.
@@ -119,8 +125,19 @@ pub fn verify_and_bind_trailer<'a>(
     if &tx.safe_address != userop_to {
         return None;
     }
-    // (6) operation gate — only Call (0) accepted in v1
-    if tx.operation != 0 {
+    // (6) operation gate — Call (0) always; DelegateCall (1) ONLY for
+    // an allowlisted MultiSendCallOnly batch (pinned target + multiSend
+    // selector — see `multi_send::is_multisend_claim`). Any other
+    // DelegateCall is refused outright since it replaces the Safe's
+    // code for the duration of the call and is not honestly
+    // clear-signable. The multiSend payload itself is decoded under
+    // its own hard rules (strict framing, every record op == 0) by the
+    // handler's verdict gate and the renderer; the data_hash bind in
+    // step 7 is what makes the selector/target check on `raw_data`
+    // trustworthy here.
+    if tx.operation != 0
+        && !super::multi_send::is_multisend_claim(tx.operation, &tx.to, raw_data)
+    {
         return None;
     }
 

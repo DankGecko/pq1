@@ -263,3 +263,126 @@ fn safe_wrapped_host_pipeline_composes() {
     )
     .is_ok());
 }
+
+#[test]
+fn multisend_wrapped_host_pipeline_composes() {
+    // The Safe-UI shape end-to-end minus Groth16: the SafeTx
+    // DELEGATECALLs MultiSendCallOnly with `multiSend([approve(vault
+    // relayer) on sellToken, setPreSignature])`; the safe_v1 trailer
+    // verifies (operation gate opens for the allowlisted target), the
+    // resolver binds the v3 target to the presign RECORD's bytes, and
+    // the cross-check passes against the order canonical with
+    // uid.owner = the Safe.
+    extern crate alloc;
+    use crate::tx::eip712::safe::multi_send::test_util::cow_flow_calldata_with;
+    use crate::tx::eip712::safe::{
+        compute_safe_tx_hash, resolve_cow_binding, verify_and_bind_trailer,
+    };
+    use sphincs_tz_shared::{
+        APPROVE_HASH_SELECTOR, MULTISEND_CALL_ONLY_ADDRESSES, SAFE_OFF_CHAIN_ID,
+        SAFE_OFF_DATA_HASH, SAFE_OFF_OPERATION, SAFE_OFF_SAFE_ADDRESS, SAFE_OFF_TO,
+        SAFE_V1_CANONICAL_LEN,
+    };
+
+    let safe_addr = fixture_safe_address();
+    let presign_cd = fixture_calldata_for_owner(&safe_addr);
+    // approve on the order's sellToken (canonical[8..28] = USDC).
+    let sell_token: [u8; 20] = fixture_canonical()[8..28].try_into().unwrap();
+    let ms = cow_flow_calldata_with(&sell_token, &presign_cd);
+
+    // SafeTx canonical: DELEGATECALL into MultiSendCallOnly v1.3.0.
+    let mut sc = [0u8; SAFE_V1_CANONICAL_LEN];
+    sc[SAFE_OFF_CHAIN_ID..SAFE_OFF_CHAIN_ID + 8].copy_from_slice(&1u64.to_be_bytes());
+    sc[SAFE_OFF_SAFE_ADDRESS..SAFE_OFF_SAFE_ADDRESS + 20].copy_from_slice(&safe_addr);
+    sc[SAFE_OFF_TO..SAFE_OFF_TO + 20].copy_from_slice(&MULTISEND_CALL_ONLY_ADDRESSES[0]);
+    sc[SAFE_OFF_DATA_HASH..SAFE_OFF_DATA_HASH + 32].copy_from_slice(&keccak(&ms));
+    sc[SAFE_OFF_OPERATION] = 1;
+
+    let mut bundle = alloc::vec::Vec::with_capacity(SAFE_V1_CANONICAL_LEN + 2 + ms.len());
+    bundle.extend_from_slice(&sc);
+    bundle.extend_from_slice(&(ms.len() as u16).to_be_bytes());
+    bundle.extend_from_slice(&ms);
+
+    let safe_tx_hash = compute_safe_tx_hash(&sc).unwrap();
+    let mut inner = [0u8; 36];
+    inner[..4].copy_from_slice(&APPROVE_HASH_SELECTOR);
+    inner[4..36].copy_from_slice(&safe_tx_hash);
+
+    let verified = verify_and_bind_trailer(&bundle, &inner, 1, &safe_addr)
+        .expect("multiSend safe_v1 trailer must verify (allowlisted DELEGATECALL)");
+
+    let wallet_sender = fixture_owner();
+    let bind = resolve_cow_binding(&inner, &wallet_sender, Some(&verified), None);
+    assert!(bind.via_safe);
+    assert_eq!(bind.owner, safe_addr);
+    assert_eq!(
+        bind.calldata,
+        presign_cd.as_slice(),
+        "the binding must be the presign RECORD's bytes, not the multiSend wrapper"
+    );
+
+    let calldata_array: &[u8; 164] = bind.calldata.try_into().unwrap();
+    assert!(check_setpresig_calldata_shape(calldata_array).is_ok());
+    assert!(cross_check_setpresig_calldata(
+        &fixture_canonical(),
+        calldata_array,
+        1,
+        &bind.owner
+    )
+    .is_ok());
+}
+
+#[test]
+fn multisend_exec_host_pipeline_composes() {
+    // Same composition through the `execTransaction` flavour: the
+    // wallet's inner calldata IS the execTransaction whose `data` is
+    // the multiSend blob and `operation` is 1.
+    extern crate alloc;
+    use crate::tx::eip712::safe::multi_send::test_util::cow_flow_calldata_with;
+    use crate::tx::eip712::safe::{resolve_cow_binding, verify_and_bind_exec};
+    use sphincs_tz_shared::{EXEC_TRANSACTION_SELECTOR, MULTISEND_CALL_ONLY_ADDRESSES};
+
+    let safe_addr = fixture_safe_address();
+    let presign_cd = fixture_calldata_for_owner(&safe_addr);
+    let sell_token: [u8; 20] = fixture_canonical()[8..28].try_into().unwrap();
+    let ms = cow_flow_calldata_with(&sell_token, &presign_cd);
+
+    // ABI-encode execTransaction(to=MultiSendCallOnly, value=0,
+    // data=ms, operation=1, gas/refund zeroed, signatures empty).
+    let head_len = 10 * 32;
+    let ms_padded = (ms.len() + 31) / 32 * 32;
+    let data_off = head_len;
+    let sigs_off = head_len + 32 + ms_padded;
+    let total = 4 + head_len + 32 + ms_padded + 32;
+    let mut cd = alloc::vec![0u8; total];
+    cd[..4].copy_from_slice(&EXEC_TRANSACTION_SELECTOR);
+    let head = &mut cd[4..];
+    head[12..32].copy_from_slice(&MULTISEND_CALL_ONLY_ADDRESSES[0]); // to
+    head[2 * 32 + 28..2 * 32 + 32].copy_from_slice(&(data_off as u32).to_be_bytes());
+    head[3 * 32 + 31] = 1; // operation = DelegateCall
+    head[9 * 32 + 28..9 * 32 + 32].copy_from_slice(&(sigs_off as u32).to_be_bytes());
+    let data_pos = 4 + head_len;
+    cd[data_pos + 28..data_pos + 32].copy_from_slice(&(ms.len() as u32).to_be_bytes());
+    cd[data_pos + 32..data_pos + 32 + ms.len()].copy_from_slice(&ms);
+    // signatures tail: zero length at sigs_off (already zeroed).
+
+    let verified = verify_and_bind_exec(&cd, 1, &safe_addr)
+        .expect("multiSend execTransaction must verify (allowlisted DELEGATECALL)");
+    assert_eq!(verified.decoded.operation, 1);
+
+    let wallet_sender = fixture_owner();
+    let bind = resolve_cow_binding(&cd, &wallet_sender, None, Some(&verified));
+    assert!(bind.via_safe);
+    assert_eq!(bind.owner, safe_addr);
+    assert_eq!(bind.calldata, presign_cd.as_slice());
+
+    let calldata_array: &[u8; 164] = bind.calldata.try_into().unwrap();
+    assert!(check_setpresig_calldata_shape(calldata_array).is_ok());
+    assert!(cross_check_setpresig_calldata(
+        &fixture_canonical(),
+        calldata_array,
+        1,
+        &bind.owner
+    )
+    .is_ok());
+}

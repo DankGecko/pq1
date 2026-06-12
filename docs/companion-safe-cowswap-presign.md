@@ -152,10 +152,14 @@ shows a two-line banner; the gateway returns `InvalidPointer`
 
 - **Revocation** (`setPreSignature(uid, false)`) — refused on both the
   direct and Safe paths; the shape check requires `signed == true`.
-- **multiSend batches** (`0x8d80ff0a`) — Safe's `multiSend` runs via
-  DELEGATECALL, which the Safe verifier rejects wholesale, so an
-  approve+presign multiSend bundle falls to loud blind-sign. Build a
-  single-call SafeTx whose `data` is the presign.
+
+**multiSend batches** (`0x8d80ff0a`) — the shape the Safe web UI
+actually emits for CoW orders (`approve` + `setPreSignature` batched
+through `MultiSendCallOnly` via DELEGATECALL) — are now SUPPORTED with
+per-record clear-signing. See
+**[`companion-safe-cowswap-multisend.md`](companion-safe-cowswap-multisend.md)**
+for the delta (allowlisted targets, hard rules, new refusal banners);
+the single-call flow documented here remains valid unchanged.
 
 ## What the user sees on-device
 

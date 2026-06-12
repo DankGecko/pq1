@@ -83,11 +83,18 @@ impl Kind {
 }
 
 /// Append the 2-page fingerprint banner + hash to `pages`. Returns
-/// `Err(())` if appending overflows `MAX_PAGES`; callers may choose
-/// to silently drop the fingerprint and proceed (the hash is also
-/// available via off-device tools), but for current Phase 4 callers
-/// the budget is always sufficient.
+/// `Err(())` if appending would overflow `MAX_PAGES`; callers may
+/// choose to silently drop the fingerprint and proceed (the hash is
+/// also available via off-device tools), but for current Phase 4
+/// callers the budget is always sufficient (the multiSend page-budget
+/// gate reserves these two pages explicitly).
 pub fn append_fingerprint_page(pages: &mut Pages, kind: Kind) -> Result<(), ()> {
+    // Atomic pre-check: either both pages fit or neither is pushed —
+    // an orphan "8213 Fingerprint" banner with no hash page would read
+    // as a rendering fault.
+    if pages.as_slice().len() + 2 > super::MAX_PAGES {
+        return Err(());
+    }
     // Banner.
     let banner = pages.push_blank()?;
     write_line(pages.row_mut(banner, 0), "8213 Fingerprint");
