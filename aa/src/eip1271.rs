@@ -109,9 +109,10 @@ pub fn domain_separator(chain_id: u64, verifying_contract: &[u8; 20]) -> [u8; 32
     buf[96 + 24..128].copy_from_slice(&chain_id.to_be_bytes());
     // verifyingContract left-padded to address (20-byte right-aligned in 32).
     buf[128 + 12..160].copy_from_slice(verifying_contract);
-    let mut h = Keccak256::new();
-    h.update(buf);
-    h.finalize().into()
+    // one-shot keccak over the assembled buffer (byte-identical to the
+    // incremental form; routed through the tx-core one-shot so the Aeneas
+    // model is `keccak256_pure(buf)` — see contracts/verification §33 rank 3).
+    pqsigner_tx_core::hash::keccak256(&buf)
 }
 
 /// `prefixed = keccak256("\x19Ethereum Signed Message:\n" || itoa(len) || msg)`.
@@ -165,20 +166,18 @@ pub fn replay_safe_hash(
     final_hash: &[u8; 32],
 ) -> [u8; 32] {
     // structHash = keccak256(PERSONAL_SIGN_TYPEHASH || final_hash)
-    let struct_hash: [u8; 32] = {
-        let mut h = Keccak256::new();
-        h.update(PERSONAL_SIGN_TYPEHASH);
-        h.update(final_hash);
-        h.finalize().into()
-    };
+    let mut sbuf = [0u8; 64];
+    sbuf[..32].copy_from_slice(&PERSONAL_SIGN_TYPEHASH);
+    sbuf[32..64].copy_from_slice(final_hash);
+    let struct_hash = pqsigner_tx_core::hash::keccak256(&sbuf);
 
     // final = keccak256("\x19\x01" || domainSep || structHash)
     let domain_sep = domain_separator(chain_id, verifying_contract);
-    let mut h = Keccak256::new();
-    h.update(b"\x19\x01");
-    h.update(domain_sep);
-    h.update(struct_hash);
-    h.finalize().into()
+    let mut fbuf = [0u8; 66];
+    fbuf[..2].copy_from_slice(b"\x19\x01");
+    fbuf[2..34].copy_from_slice(&domain_sep);
+    fbuf[34..66].copy_from_slice(&struct_hash);
+    pqsigner_tx_core::hash::keccak256(&fbuf)
 }
 
 /// Final hash signed by the firmware on the PersonalSign workflow.
