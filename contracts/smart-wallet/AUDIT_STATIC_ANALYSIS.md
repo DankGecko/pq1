@@ -83,9 +83,9 @@ production optimizer (`optimizer_runs=200`, `via_ir=true`,
 `evm_version=prague`) so the deployed runtime bytecode hash differs
 from the pinned production hash.
 
-- Production pin (from `halmos.toml` + `test/PinnedCodehashes.t.sol`):
-  - PQSmartWallet: `0xdc2aa6c4db5cc6ebec277d97ef6adada7c448d09a76749ddfa94edd4879a3680`
-  - SPHINCsC10Asm: `0x919cf8ef4b028b50f51de2e71aba7d08900d0e59833d003eed68102c7e9289c0`
+- Pinned codehashes (from `test/PinnedCodehashSelector.sol`; `default` runs=200 / `deploy` runs=999999):
+  - PQSmartWallet: `0x43c65420…a06a` (default) / `0x551c4e03…34c22` (deploy)
+  - SPHINCsC10Asm: `0xf1ef4cce…fef5` (default) / `0xeb1e3fcd…2cc5` (deploy — byte-identical to on-chain Base Mainnet verifier `0xdDE4D290…`)
 - `forge coverage --ir-minimum` codehashes (today):
   - PQSmartWallet: `0x9e88d1e2cb6339506e9fca0ebb6fc57a612e12906f7c74aeff2acc3f655b4d34`
   - SPHINCsC10Asm: `0x41f8482f017e7d34748c36dc3370a328834bcd364975996ab3230dad6bb2bdd4`

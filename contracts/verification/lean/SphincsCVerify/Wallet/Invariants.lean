@@ -621,11 +621,23 @@ theorem eip1271_forbids_bootstrap
 
 /-! ## (I-7) Address determinism -/
 
+/-- (I-7) **Address determinism / chain-independence.** The CREATE2 salt —
+    the only wallet-specific input to the proxy address — is `sha256` of the
+    `(masterPkSeed ‖ masterPkRoot)` preimage, which contains **no chain id**,
+    so the deployed proxy address is identical on every chain (invariant #6).
+    The `chain1 chain2` parameters make the cross-chain framing explicit;
+    they provably cannot affect the result because `Factory.salt` takes no
+    chain id. (A bare `salt = salt` reflexive form would be vacuous; this
+    states the actual chain-free preimage, which would FAIL if the salt mixed
+    in a chain id — cf. `create2_salt_definition` below.) -/
 theorem create2_address_chain_independent
     (mpk_seed mpk_root : ByteVec 32) (chain1 chain2 : UInt64) :
-    Factory.salt mpk_seed mpk_root = Factory.salt mpk_seed mpk_root := by
+    Factory.salt mpk_seed mpk_root
+      = Spec.sha256 [Spec.ByteSeg.ofByteVec mpk_seed,
+                     Spec.ByteSeg.ofByteVec mpk_root] := by
   let _ := chain1
   let _ := chain2
+  unfold Factory.salt
   rfl
 
 /-- The salt's preimage does not include chain id. -/

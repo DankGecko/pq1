@@ -18,10 +18,10 @@ so the discharge artifacts can be recorded independently:
 
 | Axiom | Discharged by |
 |-------|---------------|
-| `solidityVerifier_compiles_correctly`     | **partial**: Halmos input-gates on pinned `SPHINCsC10Asm` codehash + executable Lean↔FIPS↔bytecode KAT on the digest/htIdx sub-layers + bytecode-side 10-vector KAT + ~250-mutant screen. Functional reconstruction layer is EMPIRICAL only — see `docs/A3_1_VERIFIER_GAP.md` |
-| `solidityWallet_compiles_correctly`       | Halmos session against pinned `PQSmartWallet` codehash (`test/halmos/HalmosValidateUserOp.t.sol`, `HalmosExecute.t.sol`) |
-| `solidityFactory_compiles_correctly`      | Certora rule-set `certora/PQSmartWalletFactory.spec` |
-| `solidityMultiOwnable_compiles_correctly` | Certora rule-set `certora/PQMultiOwnable.spec` |
+| `solidityVerifier_compiles_correctly`     | Halmos input-gates on pinned `SPHINCsC10Asm` codehash + **full-functional** executable Lean↔FIPS↔bytecode KAT (`lake exe verify-test-vectors` full-verify 10/10, `requireFullVerify=true`) + bulk 384/384 + ~250-mutant screen. ∀-signature symbolic equivalence is the standing ceiling (uninterpreted SHA-256 = A1). See `docs/A3_1_VERIFIER_GAP.md` (functional layer RESOLVED 2026-06-13) |
+| `solidityWallet_compiles_correctly`       | Halmos pointwise-equivalence against pinned `PQSmartWallet` codehash — primary `test/halmos/HalmosValidateUserOpEquiv.t.sol` + `HalmosExecuteEquiv.t.sol`; corollaries `HalmosValidateUserOp.t.sol`, `HalmosExecute.t.sol` |
+| `solidityFactory_compiles_correctly`      | Halmos `test/halmos/HalmosFactory.t.sol` (primary; Certora `certora/PQSmartWalletFactory.spec` is an alternative path) |
+| `solidityMultiOwnable_compiles_correctly` | Halmos `test/halmos/HalmosMultiOwnable.t.sol` (primary; replaced the prior stale Certora artifact) |
 
 A1 (`precompile_0x02_is_FIPS_180_4`) is also refactored into the
 opaque-equality shape (the `DeployedBytecode.SHA256_precompile` symbol
@@ -170,18 +170,20 @@ documentation. -/
     The deployed bytecode at the pinned codehash returns `true` exactly
     when `Bridge.SolidityVerifier.verifyYulModel` returns `true`.
 
-    Discharge status: **`discharged-bytecode-partial`**. The honest
-    ledger (see `docs/A3_1_VERIFIER_GAP.md` + `docs/AXIOM_STATUS.json`):
-      * digest + htIdx sub-layers — executable Lean ↔ FIPS ↔ bytecode
-        KAT, 10/10 (`lake exe verify-test-vectors`, HARD CHECK);
+    Discharge status: **`discharged-bytecode`** on the corpus (functional
+    layer RESOLVED 2026-06-13). The honest ledger (see
+    `docs/A3_1_VERIFIER_GAP.md` + `docs/AXIOM_STATUS.json`):
+      * FULL functional layer — executable Lean ↔ FIPS ↔ bytecode KAT,
+        full-verify 10/10 (`lake exe verify-test-vectors`,
+        `requireFullVerify=true`, HARD CHECK: accepts the 4 valid +
+        rejects the 6 negatives) + bulk 384/384 (`verify-bulk`);
       * input gates — Halmos on the bytecode (length / N-mask);
-      * FORS/WOTS+C/Merkle functional layer — EMPIRICAL only (10-vector
-        bytecode KAT + ~250-mutant wrong-accept screen). The Lean
-        `verifyYulModel` is NOT yet executably faithful here
-        (`Spec.Signature.verify` returns `false` on valid vectors — the
-        reconstruction-layer ADRS divergence), and a symbolic
-        ∀-signature equivalence is intractable under uninterpreted
-        SHA-256 (= A1). This is the single named A3.1 residual. -/
+      * the FORS/WOTS+C/Merkle reconstruction is now executably faithful
+        (the chainHash ADRS-field + loadWord32 tail-padding bugs were
+        fixed; `verifyRefined_eq_spec` stays `rfl` over the faithful spec).
+    Standing ceiling (coverage, NOT a falsity): a symbolic ∀-signature
+    equivalence over all 4008-byte sigs is intractable under uninterpreted
+    SHA-256 (= A1); the ∀ is carried by the KAT + bulk + mutant screen. -/
 axiom solidityVerifier_compiles_correctly :
     ∀ (pkSeed pkRoot : ByteVec 32) (message : ByteVec 32) (sig : ByteVec SignatureLen),
       DeployedBytecode.SPHINCsC10Asm_verify pkSeed pkRoot message sig
@@ -236,9 +238,11 @@ axiom solidityWallet_compiles_correctly :
     `addSlot0Digest(chainId, slot0PkSeed, slot0PkRoot)` against
     `factorySig` under the deployed verifier.
 
-    Discharge: Certora rule-set
-    `certora/PQSmartWalletFactory.spec::createAccount_requires_bootstrap_sig`
-    + `same_inputs_same_address` against pinned factory codehash. -/
+    Discharge: Halmos `test/halmos/HalmosFactory.t.sol` (5 rules —
+    `createAccount ⟺ createAccountPrecondition` iff + postconditions,
+    already-deployed early-return, 3 install-gate rejects) against the
+    pinned factory codehash `0xfa2922…7c3c`. The prior Certora rule-set
+    `certora/PQSmartWalletFactory.spec` remains an alternative path. -/
 axiom solidityFactory_compiles_correctly :
     ∀ (masterPkSeed masterPkRoot slot0PkSeed slot0PkRoot : ByteVec 32)
       (chainId : UInt64) (factorySig : ByteVec SignatureLen),
@@ -253,12 +257,16 @@ axiom solidityFactory_compiles_correctly :
 
     The deployed `PQMultiOwnable.ownerAtIndex(i)` reads the same value
     as `Storage.ownerAtIndex i` in the Lean model. Together with the
-    Certora-verified mutation rules (Claim 2), this gives a complete
+    Halmos-verified mutation rules (Claim 2), this gives a complete
     bytecode-level account of owner-set integrity.
 
-    Discharge: Certora rule-set `certora/PQMultiOwnable.spec` (the
-    `onlySelfCanChangeOwnerAtIndex` + `bootstrap_unremovable` rules in
-    particular) against pinned `PQMultiOwnable`-embedded codehash. -/
+    Discharge: Halmos `test/halmos/HalmosMultiOwnable.t.sol` (7 rules —
+    add/remove/initialize pointwise vs the Lean `Storage` model +
+    `ownerAtIndex` read parity + bootstrap-unremovable + EntryPoint-only
+    gate) against the pinned `PQMultiOwnable`-embedded codehash
+    `0x43c654…a06a`. This REPLACED the prior Certora artifact
+    `certora/PQMultiOwnable.spec`, which had been pinned to a stale
+    codehash and never re-run. -/
 axiom solidityMultiOwnable_compiles_correctly :
     ∀ (s : Storage) (i : Nat),
       DeployedBytecode.PQMultiOwnable_ownerAtIndex s i = s.ownerAtIndex i

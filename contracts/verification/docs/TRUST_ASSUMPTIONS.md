@@ -63,44 +63,53 @@ each an `opaque + axiom-equality` shape that asserts the deployed
 bytecode matches the Lean model. Removing any one would leave the
 per-claim corollaries unprovable.
 
-> **PENDING re-run (2026-05-27).** The codehashes below were re-pinned after
-> the EntryPoint-guard fix (`addOwnerBytes` / `removeOwnerAtIndex`) plus a
-> clean rebuild. The Halmos/Certora discharges named in each entry have
-> **not** been re-run against the new hashes, so A3.1–A3.4 are
-> `pending-rerun` in `AXIOM_STATUS.json`. A3.2 (wallet) is semantically
-> affected and must be re-Halmos'd; A3.1/A3.3/A3.4 are metadata/toolchain
-> drift with unchanged logic. Treat the "Discharge" lines below as the
-> *intended* artifacts, not as currently-passing evidence.
+> **CURRENT (2026-06-13).** `AXIOM_STATUS.json` + `PINNED_CODEHASHES.md` are
+> the AUTHORITATIVE source for codehashes and discharge artifacts; the
+> entries below are kept in sync with them. The A3.* axioms are
+> `discharged-bytecode`: the full Halmos suite (38 rules) passes on BOTH the
+> `default` (runs=200) and `deploy` (runs=999999) profiles' bytecode, and the
+> deploy-profile build reproduces the live Base Mainnet contracts exactly
+> (`test/DeployedBytecodeReproCheck.t.sol`). Codehashes are shown as
+> `default / deploy`. (Historical note: a prior 2026-05-27 snapshot pinned
+> stale hashes — A3.2 `0xdc2aa6c4…`, A3.3 `0x604e4000…`, A3.1 `0x919cf8ef…` —
+> and attributed A3.3/A3.4 to Certora; those have been superseded by the
+> Halmos discharge below.)
 
 ### A3.1. `solidityVerifier_compiles_correctly`
 
 * **Lean.** `DeployedBytecode.SPHINCsC10Asm_verify = verifyYulModel`
-* **Pinned codehash.** `0x919cf8ef4b028b50f51de2e71aba7d08900d0e59833d003eed68102c7e9289c0`
-* **Discharge.** Halmos symbolic execution against the pinned bytecode
-  (rules in `test/halmos/HalmosValidateUserOp.t.sol`) +
-  Lean ↔ Rust ↔ Solidity differential at `cross_validation/`.
+* **Pinned codehash.** `0xf1ef4ccee22e6b39446723232fe39761f089c7195941b2c12576956b38fcfef5` (default) / `0xeb1e3fcd38c7cd5f7b08352c298b34bd114d83f7dbd755b122c41eda2aab2cc5` (deploy — **byte-identical to on-chain Base Mainnet verifier `0xdDE4D290…`**)
+* **Discharge.** Halmos input-gate rules (`test/halmos/HalmosVerifier.t.sol`,
+  length / N-mask) + **full-functional** executable Lean↔FIPS↔bytecode KAT
+  (`lake exe verify-test-vectors` full-verify 10/10) + bulk 384/384
+  (`verify-bulk`) + ~250-mutant wrong-accept screen. ∀-signature symbolic
+  equivalence is the standing ceiling (uninterpreted SHA-256 = A1).
 
-### A3.2. `solidityWallet_compiles_correctly`
+### A3.2. `solidityWallet_compiles_correctly` (+ A3.2-exec)
 
 * **Lean.** `DeployedBytecode.PQSmartWallet_validateUserOp = validateSignature`
-* **Pinned codehash.** `0xdc2aa6c4db5cc6ebec277d97ef6adada7c448d09a76749ddfa94edd4879a3680`
-* **Discharge.** Halmos rules
-  (`test/halmos/HalmosValidateUserOp.t.sol` +
-  `test/halmos/HalmosExecute.t.sol`) + Certora rule-set
-  (`certora/PQSmartWallet.spec` + `certora/PQSmartWalletExecute.spec`) +
-  Foundry invariant suite (`test/PQSmartWalletInvariants.t.sol`).
+  (+ `executeWithOffchainCount` / `executeBatchWithOffchainCount`), on
+  reachable states (combined-cap invariant).
+* **Pinned codehash.** `0x43c65420691792d7f0f63dab95f47ab7adb649df4c83f432bd3cf2c95db3a06a` (default) / `0x551c4e03bbd433a5929828ab19caac13a94ca9e2be6074cf3e18c7d926034c22` (deploy)
+* **Discharge.** Halmos pointwise-equivalence — primary
+  `test/halmos/HalmosValidateUserOpEquiv.t.sol` + `HalmosExecuteEquiv.t.sol`;
+  per-property corollaries `HalmosValidateUserOp.t.sol` + `HalmosExecute.t.sol`.
 
 ### A3.3. `solidityFactory_compiles_correctly`
 
 * **Lean.** `DeployedBytecode.PQSmartWalletFactory_createAccount_passes ↔ Factory.createAccountPrecondition`
-* **Pinned codehash.** `0x604e4000bb7d3fef349d1f9b09e3f048c6baa7a37f10d1bdfebef9ce1ecf3e02`
-* **Discharge.** Certora rule-set (`certora/PQSmartWalletFactory.spec`).
+* **Pinned codehash.** `0xfa2922b4fadb81b4475307504890d68f2e3d9be97c7e5e9aeeba6e84110d7c3c` (default) / `0x5feb7955252e54bcbbf44062295bdeb45f3dea13c4ef7fb1ba579196d84da4b9` (deploy)
+* **Discharge.** Halmos `test/halmos/HalmosFactory.t.sol` (5 rules) — the
+  prior Certora rule-set `certora/PQSmartWalletFactory.spec` is an
+  alternative path.
 
 ### A3.4. `solidityMultiOwnable_compiles_correctly`
 
 * **Lean.** `DeployedBytecode.PQMultiOwnable_ownerAtIndex s i = s.ownerAtIndex i`
-* **Discharge.** Certora rule-set (`certora/PQMultiOwnable.spec`) +
-  storage-slot parity test (`test/StorageSlotParity.t.sol`).
+* **Pinned codehash.** `0x43c654…a06a` / `0x551c4e…34c22` (embedded in `PQSmartWallet`; no independent deploy)
+* **Discharge.** Halmos `test/halmos/HalmosMultiOwnable.t.sol` (7 rules) —
+  REPLACED the prior Certora artifact `certora/PQMultiOwnable.spec`, which had
+  been pinned to a stale codehash and never re-run.
 
 ## A4. EVM bytecode executes per specification
 
