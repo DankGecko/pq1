@@ -68,6 +68,18 @@ Do **not** say any of the following:
   The verifier's **∀-signature** functional equivalence is still carried by
   testing + the executable Lean KAT differential, not a symbolic ∀ proof —
   see below.
+* ~~"The A3.2/A3.3/A3.4 Halmos proofs are discharged on the *deployed*
+  wallet/factory bytecode."~~ As of 2026-06-13 they are discharged on a
+  **reproducible re-build** of the source: the deployed Base Mainnet
+  wallet/factory (`0x31e49D24…`/`0xe8CE78CD…`) were built with library
+  commits (solady/AA) that were never recorded in `foundry.lock` and are not
+  reproducible from the current repo — confirmed by rebuilding with the exact
+  deployed immutables (the bytecode still differs, purely in library
+  regions). The **logic-level** discharge (control-flow over PQSigner's own
+  source, verifier uninterpreted) does apply to the live contracts, and the
+  **verifier is byte-identical to deployed**, but the wallet/factory
+  byte-level discharge is against the re-build, pending a maintainer decision
+  (`DEPLOYED_BYTECODE_PIN_CAVEAT.md`).
 * ~~"The SPHINCS+C10 verifier's functional equivalence to bytecode is proven
   for all signatures."~~ It is validated on the **10-vector KAT** (executable
   Lean↔bytecode, both directions) + the ~250-mutant wrong-accept screen, not

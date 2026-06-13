@@ -27,14 +27,21 @@
 >   it is lib-version-independent. Default-profile `0xf1ef…fef5` matches; the
 >   deploy-profile `0xeb1e3fcd…` matches the **on-chain Base Mainnet** verifier
 >   (`0xdDE4D290…`), confirming the toolchain is deployment-faithful.
-> * **The deployed Base Mainnet wallet/factory** were built with the original
->   (lost-from-lock) libs, so their on-chain codehashes differ from the new
->   pins — partly by libs, partly by the immutable windows (verifier address,
->   entryPoint) that `PinnedBytecodeImmutableLemma` accounts for. The A3.*
->   control-flow rules are over PQSigner's own `validateUserOp`/factory logic
->   (verifier uninterpreted), which is unchanged across solady versions, so the
->   re-run proofs hold for the deployed logic; the verifier — the C10-critical
->   component — is byte-identical to deployed.
+> * **⚠️ The deployed Base Mainnet wallet/factory are NOT byte-reproducible**
+>   from the repaired lock. Rebuilding with the **exact deployed immutables**
+>   (`_entryPoint = 0x5FF1…`, `c10Verifier = 0xdDE4…`, deploy profile) gives
+>   wallet `0x1333ed8a…` vs on-chain `0xdc9a082f…` and factory `0x23a69d2e…`
+>   vs on-chain `0x045bb5e4…` — immutables identical, so the difference is
+>   **purely library bytecode** (solady/AA): the deployed contracts used the
+>   original, now-lost lib commits. Consequence: the A3.2/A3.3/A3.4 rules
+>   discharge a **reproducible re-build**, not the live wallet/factory
+>   bytecode (`PinnedBytecodeImmutableLemma` bridges instances only WITHIN a
+>   lib set). What still holds for the live contracts is the **logic-level**
+>   argument (the rules are control-flow over PQSigner's own source with the
+>   verifier uninterpreted — independent of the solady regions that differ);
+>   the verifier itself is byte-identical to deployed. **This needs a
+>   maintainer decision (recover deploy-time libs vs accept logic-level) —
+>   see [`DEPLOYED_BYTECODE_PIN_CAVEAT.md`](DEPLOYED_BYTECODE_PIN_CAVEAT.md).**
 
 Each `solidity*_compiles_correctly` axiom in `Bridge/Refinement.lean`
 is bound to a specific runtime codehash. When that codehash changes,
