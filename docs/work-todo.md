@@ -2194,6 +2194,33 @@ compiler/silicon/FI/SCA — those stay with `tools/sca` + silicon validation.
             instance exists upstream (C10/C11 models deleted) — our
             delta-audit §6 + the frozen Yul remain the ADRS transcription
             source.
+      - **DECISION 2026-06-13 (workflow `verity-assessment` + 2 adversarial
+        reviews, both Keep):** split into two paths. **(i) Verity EDSL
+        (write-in verified compilation) → DO NOT PURSUE.** Two independent
+        dispositive reasons: it cannot ingest existing Solidity/Yul/bytecode
+        (it only proves its own EDSL→Yul output), so it is the wrong tool
+        class for an axiom (A3.1) that is ∀ over the *deployed* runtime; and
+        even a hypothetical port is a different-bytecode, different-CREATE2-
+        address contract barred from the shipped wallet by invariant #6 — plus
+        v0.1.0's fragment (zero-bound loops only, word-keyed single-word
+        memory, no calldata/sub-word/sha256-precompile primitives) can't
+        express the 233-line hand-Yul verifier (~8–12 pw upstream Phase-0
+        alone, verifier port unestimated). It also leaves A1/A2/A4 + solc
+        Yul→bytecode in the TCB and keeps the functional "==Rust ref" leg an
+        axiom witnessed by the same KAT harness. **(ii) verity-FRAMEWORK
+        refinement (the upstream `c13_refines_spec` shape: hand-transcribed
+        in-Lean EVM model + framework refinement, same Lean v4.22 as
+        SphincsCVerify) → REMAINS the tracked A3.1-ceiling option above**, but
+        scoped honestly: it proves ∀ over a hand-transcribed EVM *model* (so
+        model↔deployed-bytecode is a transcription-TCB) and still axiomatizes
+        SHA-256. The complementary option that proves the *actual* deployed
+        bytecode with SHA-256 INTERPRETED is **Kontrol/KEVM** (tractability at
+        C10 depth ~322 hashes/verify unproven; best as a 1–3 week spike on one
+        sub-routine, e.g. WOTS+C chaining, for methodological diversity). Both
+        (ii)/Kontrol are DEFERRED behind the S-1/S-2/S-3 OPTIGA ship-blockers
+        and are NOT primary-assurance commitments; status-quo A3.1 (KAT 10/10
+        + ~250-mutant screen + Rust↔Solidity↔Lean differential) is the honest,
+        exploit-free ceiling. No code/redeploy implied.
 - [ ] **P5 — composition + outreach (post-Oct).** sign∘verify end-to-end;
       Tier B targets; EF Verified-zkEVM grant application
       (verified-zkevm@ethereum.org, program winds down ~end-2026) — pitch:
