@@ -39,10 +39,14 @@ Specifically and defensibly:
 3. **The bootstrap-cap bug is really fixed.** The few-time-cap under-count
    (`PQBootstrapCapEvasion`) is closed in the validation phase and locked by
    tests; `forge test` 108/108. Reproduced 2026-06-11.
-4. **Verifier digest layer.** An **executable** Lean↔FIPS↔bytecode KAT
-   (`lake exe verify-test-vectors`) shows the Lean SHA-256 reference and the
-   `hMsg` digest + hypertree-index extraction match the deployed verifier's
-   on all 10 vectors (hard check). Reproduced 2026-06-11.
+4. **Verifier executable Lean↔bytecode KAT (full functional, 2026-06-13).**
+   `lake exe verify-test-vectors` runs the executable Lean
+   `Spec.Signature.verify` over the byte-decoded signature and reports
+   **full-verify 10/10** — the Lean spec **accepts the 4 valid vectors and
+   rejects the 6 negatives**, matching the deployed verifier, alongside the
+   digest + hypertree-index layers (all hard checks, non-zero exit on drift).
+   The Lean verifier model is now **executably faithful** to the deployed
+   bytecode on the KAT corpus. Reproduced 2026-06-13.
 5. **Verifier negative direction.** The deployed verifier bytecode rejects a
    ≈250-mutant wrong-accept battery and the 6 negative KAT vectors, and
    accepts the 4 valid vectors (`forge test`). Reproduced 2026-06-11.
@@ -61,27 +65,33 @@ A5/A3.1 are supposed to discharge separately).
 Do **not** say any of the following:
 
 * ~~"The smart contracts are fully mathematically proven to the bytecode."~~
-  The **verifier's functional correctness is not proven** — see below.
-* ~~"The SPHINCS+C10 verifier is formally verified / proven correct to the
-  bytecode."~~ Its FORS/WOTS+C/Merkle functional behaviour is carried by
-  **testing only** (bytecode KAT + mutant screen). There is **no** ∀-signature
-  proof and the Lean verifier model is **not executably faithful**.
-* ~~"A three-way Rust↔Solidity↔Lean differential validates the verifier."~~
-  The Lean leg is real only on the **digest/index sub-layers**; on the
-  functional layer the Lean spec returns `false` on valid vectors. The
-  real differential is Rust↔Solidity (bytecode) + the digest-layer Lean check.
+  The verifier's **∀-signature** functional equivalence is still carried by
+  testing + the executable Lean KAT differential, not a symbolic ∀ proof —
+  see below.
+* ~~"The SPHINCS+C10 verifier's functional equivalence to bytecode is proven
+  for all signatures."~~ It is validated on the **10-vector KAT** (executable
+  Lean↔bytecode, both directions) + the ~250-mutant wrong-accept screen, not
+  by a symbolic ∀-signature proof (intractable under uninterpreted SHA-256).
 
-### The one blocking defect
+The three-way **Rust↔Solidity↔Lean** differential IS now real on the full
+functional verify (the Lean leg was made executably faithful 2026-06-13 —
+see Claimable #4), not just the digest/index sub-layers.
+
+### The remaining ceiling (no longer a *defect*)
 
 `solidityVerifier_compiles_correctly` (A3.1) asserts the deployed verifier
-equals the Lean `verifyYulModel` for all inputs. That equality is
-**contradicted by a concrete KAT vector** (`Spec.Signature.verify` returns
-`false` where the bytecode returns `true`), so **A3.1 is currently false as
-stated** — the WOTS+C / hypertree reconstruction layer of the Lean spec
-diverges from the deployed Yul ADRS layout and was never executed until now.
-`theft_free` is still kernel-valid as a formal object, but a proof resting on
-a false axiom does **not** establish bytecode-level security on the verifier
-dimension. Full analysis: [`A3_1_VERIFIER_GAP.md`](A3_1_VERIFIER_GAP.md).
+equals the Lean `verifyYulModel` for all inputs. As of **2026-06-13 this
+axiom is no longer contradicted by any tested vector**: the two Lean-spec
+reconstruction bugs (`chainHash` ADRS field; `loadWord32` tail zero-padding)
+are fixed, `Spec.Signature.verify` accepts/rejects all 10 KAT vectors
+identically to the bytecode, and `verifyRefined_eq_spec` stays `rfl` over the
+now-faithful spec. What remains is **not** a falsity but a *coverage* limit:
+the equality is quantified over all 4008-byte signatures, and that ∀ is
+discharged by the KAT + mutant screen + executable Lean differential, **not**
+by a symbolic ∀ proof — which is intractable while SHA-256 is uninterpreted
+(= A1). So A3.1 is `discharged-bytecode` on the corpus, with the ∀-symbolic
+equivalence as the standing ceiling (needs Kontrol/KEVM or verified
+compilation). History: [`A3_1_VERIFIER_GAP.md`](A3_1_VERIFIER_GAP.md).
 
 Also still cited-TCB by decision (not "proven to bytecode"): **A2** EntryPoint
 v0.6 honesty, **A4** EVM-executes-per-spec (incl. the emitted-CALL byte
@@ -94,14 +104,14 @@ the `+C` transition is a cited argument), **A1** SHA-256 precompile = FIPS.
 
 In dependency order:
 
-1. **Make the Lean verifier executably faithful.** Reimplement the WOTS+C /
-   hypertree reconstruction ADRS layer to byte-match the deployed Yul, until
-   `lake exe verify-test-vectors` reports full-verify 10/10 and
-   `requireFullVerify` is flipped to `true`. Then A3.1's equality becomes
-   *true* and the Lean refinement (`verifyRefined_eq_spec`, still `rfl`)
-   carries real faithfulness. This removes the false-axiom problem but still
-   leaves the ∀-signature equivalence as a *citation* to the executable KAT +
-   EUF-CMA, not a symbolic bytecode proof.
+1. ~~**Make the Lean verifier executably faithful.**~~ **DONE 2026-06-13.**
+   The WOTS+C / hypertree reconstruction layer now byte-matches the deployed
+   Yul: `lake exe verify-test-vectors` reports full-verify 10/10 and
+   `requireFullVerify` is `true`. A3.1's equality is no longer contradicted by
+   any tested vector, and the Lean refinement (`verifyRefined_eq_spec`, still
+   `rfl`) carries real faithfulness over the corpus. The remaining work is the
+   ∀-signature equivalence as a *citation* to the executable KAT + EUF-CMA,
+   not yet a symbolic bytecode proof (step 2).
 2. **Discharge the verifier's ∀-signature equivalence on bytecode.** Not
    possible under uninterpreted SHA-256 (the digit branches fork on
    unconstrained symbolic values). Needs an **interpreted-hash reachability**

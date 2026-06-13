@@ -178,7 +178,11 @@ def hMsg
 /-! ## WOTS chain hashing -/
 
 /-- Iterative chain hash: apply `th` for `steps` iterations, starting
-    from position `start_pos`. -/
+    from position `start_pos`. Each step writes the running position into
+    the ADRS **chain_pos** field (bytes [24..28)) via `setChainPos`,
+    leaving the caller-set chain_index (which of the L chains) intact —
+    matching `sphincs-c10/src/hash.rs::chain_hash`, which does
+    `a[24..28].copy_from_slice(&pos.to_be_bytes())` per iteration. -/
 def chainHash
     (seed : ByteVec 32) (a : Adrs) (val : ByteVec 16)
     (startPos steps : Nat) : ByteVec 16 :=
@@ -187,7 +191,7 @@ def chainHash
     | 0 => current
     | i+1 =>
       let pos := startPos + (steps - 1 - i)  -- traverse forward
-      let a' := Adrs.setChainIndex a (UInt32.ofNat pos)
+      let a' := Adrs.setChainPos a (UInt32.ofNat pos)
       let next := th seed a' (pad16 current)
       aux i next
   aux steps val

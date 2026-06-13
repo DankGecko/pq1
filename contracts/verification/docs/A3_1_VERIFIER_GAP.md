@@ -1,5 +1,42 @@
 # A3.1 — the verifier functional-equivalence gap (honest status)
 
+> ## ✅ RESOLVED 2026-06-13 — functional layer discharged
+>
+> The reconstruction-layer divergence described below is **fixed**. Two real
+> Lean-spec bugs were the cause, found by layer-by-layer differential against
+> the Rust signer (`sim_internals`) and the deployed Yul:
+>
+> 1. **`chainHash` wrote the wrong ADRS field** — it called `setChainIndex`
+>    (bytes [20..24)) where `sphincs-c10/src/hash.rs::chain_hash` writes
+>    **chain_pos** (bytes [24..28)), and it clobbered the caller-set
+>    chain_index. Fix: new `Adrs.setChainPos`; `chainHash` uses it. This
+>    corrupted every WOTS chain endpoint, hence layer-0's `wotsPk` and subtree
+>    root, which surfaced (one layer late) as the layer-1 digit-sum gate
+>    failing — the original "digit-sum gate fails first" diagnosis below was
+>    one layer off.
+> 2. **`loadWord32` returned all-zero on a partial tail read** — the last
+>    16-byte auth-path entry of a 4008-byte signature sits at offset 3992,
+>    whose 32-byte window `[3992, 4024)` overruns the blob by 16 bytes. The
+>    old definition returned a zero word for any overrun (silently zeroing a
+>    real value); EVM `calldataload` instead returns the available bytes and
+>    zero-pads the tail. Fix: `loadWord32` now zero-pads. (This is why only
+>    layer 1's *final* merkle step was wrong while layer 0 was perfect.)
+>
+> With both fixes, `lake exe verify-test-vectors` reports **full-verify
+> 10/10** (4 valid ACCEPTED, 6 negatives REJECTED), `requireFullVerify` is
+> flipped to `true` (hard check), and `verifyRefined_eq_spec` stays `rfl`
+> over the now-faithful spec — meeting every closure criterion at the bottom
+> of this doc. The A3.1 axiom is no longer contradicted by any tested vector.
+>
+> **What remains** (the standing ceiling, never part of this gap): the
+> ∀-signature symbolic equivalence over all 4008-byte inputs is intractable
+> under uninterpreted SHA-256 (see "The deeper ∀-signature ceiling" below);
+> the ∀ is carried by the executable Lean↔bytecode KAT + the ~250-mutant
+> screen + EUF-CMA, not a symbolic proof. `AXIOM_STATUS.json` A3.1 is now
+> `discharged-bytecode`. The original analysis is retained below for history.
+
+---
+
 **Date:** 2026-06-11. **Severity:** verification-stack honesty (no on-chain
 exploit; the deployed verifier itself is unchanged and is exercised by the
 on-bytecode KAT + mutant screen below). **Status of the headline

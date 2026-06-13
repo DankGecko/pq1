@@ -103,10 +103,13 @@ def runVector (v : KatVector) : Outcome :=
   let verifyResult : Bool := Signature.verify ⟨pkSeed16, pkRoot16⟩ msgBV sigBV
   ⟨digestOk, htIdxOk, verifyResult == v.expectValid⟩
 
-/-- Promote the full-verify column to a hard check once the
-    reconstruction layer is made executably faithful (currently false —
-    see the file header / docs/A3_1_VERIFIER_GAP.md). -/
-def requireFullVerify : Bool := false
+/-- Full-verify column is a HARD CHECK as of 2026-06-13: the WOTS+C /
+    hypertree reconstruction layer was made executably faithful to the
+    deployed bytecode (two fixes — `chainHash` now writes the ADRS
+    chain_pos field, and `loadWord32` zero-pads partial tail reads like
+    `calldataload`). `lake exe verify-test-vectors` reports full-verify
+    10/10; A3.1 is discharged on the functional layer. -/
+def requireFullVerify : Bool := true
 
 def main : IO UInt32 := do
   IO.println "=== Lean ↔ bytecode KAT differential (verify-test-vectors) ==="
@@ -130,7 +133,7 @@ def main : IO UInt32 := do
   IO.println ""
   IO.println s!"digest layer : {vectors.length - digestFails}/{vectors.length} match FIPS ground truth (HARD CHECK)"
   IO.println s!"htIdx layer  : {vectors.length - htIdxFails}/{vectors.length} match ground truth (HARD CHECK)"
-  IO.println s!"full verify  : {vectors.length - verifyMismatch}/{vectors.length} match expectValid (REPORTED, not yet asserted — A3.1 residual)"
+  IO.println s!"full verify  : {vectors.length - verifyMismatch}/{vectors.length} match expectValid (HARD CHECK)"
   IO.println ""
   if digestFails > 0 || htIdxFails > 0 then
     IO.eprintln "FAIL: the Lean digest/index sub-layer drifted from the bytecode ground truth."
@@ -138,9 +141,9 @@ def main : IO UInt32 := do
   if requireFullVerify && verifyMismatch > 0 then
     IO.eprintln "FAIL: full-verify differential required but mismatched."
     return 1
-  IO.println "OK: digest + htIdx sub-layers are byte-faithful to the deployed verifier."
-  IO.println "NOTE: full functional verify is the named A3.1 residual — the WOTS+C /"
-  IO.println "      hypertree reconstruction layer is carried empirically by the"
-  IO.println "      on-bytecode KAT + ~250-mutant wrong-accept screen, not by this"
-  IO.println "      executable Lean differential. See docs/A3_1_VERIFIER_GAP.md."
+  IO.println "OK: digest + htIdx + full functional verify are byte-faithful to the"
+  IO.println "    deployed verifier on all 10 KAT vectors (A3.1 functional layer"
+  IO.println "    discharged 2026-06-13). The executable Lean Spec.Signature.verify"
+  IO.println "    accepts the 4 valid vectors and rejects the 6 negatives, matching"
+  IO.println "    the deployed bytecode."
   return 0

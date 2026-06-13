@@ -131,15 +131,21 @@ verifier (`Verifier.Refined`) and the structural deserialiser
 Sharing the definitions is what makes `load_R_consistent` and friends in
 `Verifier/Equivalence.lean` discharge by `rfl`. -/
 
-/-- Load a 32-byte word from a byte vector at `offset`. Out-of-bounds
-    reads return zero (matches `calldataload`'s zero-padding). -/
+/-- Load a 32-byte word from a byte vector at `offset`, matching EVM
+    `calldataload` semantics: read the bytes that exist in
+    `[offset, min(offset+32, n))` and **zero-pad the tail** for any bytes
+    past the end. (The previous definition returned an all-zero word when
+    the full 32-byte window overran `n`, which silently dropped the real
+    low bytes of a partial read — e.g. the very last 16-byte auth-path
+    entry of a 4008-byte signature sits at offset 3992, whose 32-byte
+    window `[3992, 4024)` overruns by 16; `calldataload` returns those 16
+    real bytes followed by 16 zero bytes, and the N-mask keeps the real
+    top 16. The old all-zero fallback corrupted that read.) -/
 def loadWord32 {n : Nat} (sig : ByteVec n) (offset : Nat) : ByteVec 32 :=
-  if h : offset + 32 ≤ n then
-    ⟨sig.data.extract offset (offset + 32), by
-      have hsize : sig.data.size = n := sig.size_eq
-      simp [Array.size_extract, hsize, Nat.min_eq_left h]⟩
-  else
-    zero 32
+  ⟨(sig.data.extract offset (offset + 32) ++ Array.replicate 32 0).extract 0 32, by
+    have hsize : sig.data.size = n := sig.size_eq
+    simp [Array.size_extract, Array.size_append, Array.size_replicate]
+    omega⟩
 
 /-- Load a 16-byte (N-masked) value: top 16 bytes of the 32-byte word
     at `offset`. -/
