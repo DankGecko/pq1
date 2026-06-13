@@ -16,10 +16,23 @@
 LEAN_DIR := lean
 LAKE     ?= $(shell command -v lake 2>/dev/null || echo $$HOME/.elan/bin/lake)
 
-.PHONY: verify verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp
+.PHONY: verify verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk
 
 verify: verify-build
 	@cd $(LEAN_DIR) && $(LAKE) exe verify-test-vectors
+
+# Bulk executable-spec differential (A3.1 follow-up): regenerate the random
+# corpus from the Rust signer (slow; gated behind GEN=1), embed it, and run
+# Spec.Signature.verify over every vector, asserting it matches the Rust
+# oracle's verdict. Non-zero exit on any mismatch. The committed
+# bulk_vectors.json + BulkVectors.lean make the default run reproducible
+# without re-signing.
+verify-bulk:
+ifeq ($(GEN),1)
+	@cd $(REPO_ROOT) && cargo test -p sphincs-c10 --test gen_bulk_vectors --release -- --nocapture
+	@cd $(LEAN_DIR) && python3 scripts/gen_bulk_lean.py
+endif
+	@cd $(LEAN_DIR) && $(LAKE) exe verify-bulk
 
 # NIST CAVP SHA-256 conformance: regenerate the embedded vector module from
 # the official byte-oriented .rsp suite (cavp/ — idempotent) and replay ALL

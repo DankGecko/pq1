@@ -49,3 +49,11 @@ root = "Main"
 [[lean_exe]]
 name = "verify-cavp"
 root = "CavpMain"
+
+# Bulk executable-spec differential: runs Spec.Signature.verify over a broad
+# random corpus (bulk_vectors.json → BulkVectors.lean) and asserts it matches
+# the Rust reference signer's verdict. The many-vector extension of
+# verify-test-vectors. Run via `make verify-bulk` in contracts/verification/.
+[[lean_exe]]
+name = "verify-bulk"
+root = "BulkMain"

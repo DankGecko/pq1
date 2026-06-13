@@ -1,3 +1,4 @@
 # LeanLoop runtime artifacts (run from this dir) — transient, never commit
 leanloop_runs.sqlite*
 leanloop_frontier_queue/
+bulk_vectors.json
