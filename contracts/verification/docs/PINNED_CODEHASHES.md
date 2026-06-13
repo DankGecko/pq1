@@ -1,5 +1,43 @@
 # Pinned bytecode codehashes
 
+> ## ⚠️ Build-reproducibility note (2026-06-13)
+>
+> `contracts/smart-wallet/foundry.lock` was repaired this date: its
+> account-abstraction pin (v0.7.0, `7af70c8`) **did not compile** — the code
+> imports `account-abstraction/legacy/v06/*`, a layout that only exists in
+> **v0.8.0+**. The lock now pins AA **v0.8.0** (`4cbc060`); the project
+> compiles from a clean checkout again.
+>
+> **Pin reproducibility status after the repair:**
+> * **SPHINCsC10Asm (verifier) — REPRODUCIBLE ✓.** Imports no libraries.
+>   Local default-profile build = `0xf1ef…fef5` (pin matches,
+>   `SPHINCsC10Asm.t.sol` 13/13); the **on-chain Base Mainnet** verifier
+>   (`0xdDE4D290…`) deploy-profile codehash = `0xeb1e3fcd…`, which **matches
+>   the deploy-profile pin** — confirming the solc 0.8.28/via_ir toolchain is
+>   deployment-faithful.
+> * **PQSmartWallet / PQSmartWalletFactory — NOT reproducible from the lock.**
+>   The wallet compilation unit pulls **solady** (ERC1271/LibClone) and
+>   account-abstraction `legacy/v06` (UserOperation06 struct + interfaces).
+>   The exact solady commit used when these pins were captured (2026-06-10)
+>   was **never recorded in `foundry.lock`** (the lock has been stale w.r.t.
+>   the code since the v0.9→v0.6 retarget) and is not reproducible from
+>   current public solady (the relevant files froze 2025-12-04). A clean
+>   build with the repaired lock yields `0xaa85…` (wallet), not the pinned
+>   `0x43c654…`. The on-chain wallet/factory codehashes differ from BOTH
+>   pins by their immutable windows (verifier address, entryPoint) — expected
+>   per `PinnedBytecodeImmutableLemma`, so chain bytecode can't directly
+>   re-derive the pin.
+>
+> **Consequence:** `PinnedCodehashes` + `PinnedBytecodeImmutableLemma` FAIL
+> for the wallet/factory in a clean checkout. The pins remain bound to the
+> Halmos A3.2/A3.3/A3.4 discharges, which ran against `0x43c654…`/`0xfa2922…`
+> — so the pins were **deliberately NOT re-pinned** to the new reproducible
+> build (that would falsely re-bind the proofs without re-running them; halmos
+> + z3 are absent in the current dev env). Restoring green requires EITHER
+> recovering the deploy-time solady/AA commits, OR re-pinning to a reproducible
+> build + re-running `make -C contracts/verification verify-bytecode`. Tracked
+> in `docs/work-todo.md`.
+
 Each `solidity*_compiles_correctly` axiom in `Bridge/Refinement.lean`
 is bound to a specific runtime codehash. When that codehash changes,
 the corresponding discharge artifact (Halmos session, Certora
