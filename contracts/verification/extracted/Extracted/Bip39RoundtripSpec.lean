@@ -127,7 +127,9 @@ theorem write_11_bits_zero (s : Slice Std.U8) (bit : Std.Usize) (value : Std.U16
               exact Nat.mod_eq_of_lt (lt_of_le_of_lt Nat.and_le_right (by norm_num)))
            | skip)
       | skip)
-  all_goals (trace_state; sorry)
+  -- The big `all_goals` block above closes every residual goal (verified:
+  -- `#print axioms roundtrip_11_id` = [propext, Classical.choice, Quot.sound],
+  -- no sorryAx). No mop-up tactic is reachable here.
 
 
 set_option maxHeartbeats 4000000 in

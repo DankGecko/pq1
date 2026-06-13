@@ -106,9 +106,14 @@ REPO_ROOT     := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
 .PHONY: verify-extracted extract-sphincs-adrs extract-aa-userop extract-fors-index
 
 verify-extracted:
-	@cd $(EXTRACTED_DIR) && $(LAKE) build
-	@echo "=== Axiom closure of the §33 theorems (expect exactly propext, Classical.choice, Quot.sound) ==="
-	@cd $(EXTRACTED_DIR) && $(LAKE) env lean Extracted/AxiomCheck.lean
+	@cd $(EXTRACTED_DIR) && $(LAKE) build 2>&1 | tee /tmp/pq_extracted_build.out
+	@if grep -E "Extracted/[^ ]*\.lean:.*declaration uses" /tmp/pq_extracted_build.out; then \
+	  echo "FAIL: an Extracted/ declaration uses 'sorry' (incomplete proof)"; exit 1; fi
+	@echo "=== Axiom closure of the §33 theorems (expect propext, Classical.choice, Quot.sound + the disclosed keccak256_pure / sha256_pure content axioms) ==="
+	@cd $(EXTRACTED_DIR) && $(LAKE) env lean Extracted/AxiomCheck.lean 2>&1 | tee /tmp/pq_axiomcheck.out
+	@if grep -q sorryAx /tmp/pq_axiomcheck.out; then \
+	  echo "FAIL: a §33 theorem axiom closure contains sorryAx — a proof is incomplete"; exit 1; \
+	else echo "OK: extracted/ axiom-discipline gate passed — no sorryAx in any §33 theorem closure"; fi
 
 extract-sphincs-adrs:
 	@mkdir -p /tmp/pqsigner-extract
