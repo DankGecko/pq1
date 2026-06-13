@@ -48,8 +48,23 @@ contract SPHINCsC10AsmTest is Test {
     /// codehash (AXIOM_STATUS.json).
     /// Any change here MUST be paired with a verifier source diff in
     /// the same commit + a justification in the commit message.
+    /// Default profile (runs=200) verifier runtime codehash.
     bytes32 internal constant EXPECTED_RUNTIME_CODEHASH =
         0xf1ef4ccee22e6b39446723232fe39761f089c7195941b2c12576956b38fcfef5;
+    /// Deploy profile (runs=999999) verifier runtime codehash — the
+    /// production build; byte-identical to the on-chain Base Mainnet verifier
+    /// at 0xdDE4D290… (see PINNED_CODEHASHES.md / DeployedBytecodeReproCheck).
+    bytes32 internal constant EXPECTED_RUNTIME_CODEHASH_DEPLOY =
+        0xeb1e3fcd38c7cd5f7b08352c298b34bd114d83f7dbd755b122c41eda2aab2cc5;
+
+    /// The expected verifier codehash for the active optimiser profile, so
+    /// `forge test` is clean under BOTH `default` and `deploy`.
+    function _expectedVerifierCodehash() internal view returns (bytes32) {
+        return keccak256(bytes(vm.envOr("FOUNDRY_PROFILE", string("default"))))
+            == keccak256(bytes("deploy"))
+            ? EXPECTED_RUNTIME_CODEHASH_DEPLOY
+            : EXPECTED_RUNTIME_CODEHASH;
+    }
 
     /// Gas ceiling for a single `verify(valid sig)`. The hand-tuned
     /// Yul currently runs ~1.7-4M gas (see handoff §8 footgun #3).
@@ -267,12 +282,13 @@ contract SPHINCsC10AsmTest is Test {
 
     function test_verifierBytecodeFrozen() public {
         bytes32 runtimeHash = address(verifier).codehash;
-        // If EXPECTED_RUNTIME_CODEHASH is zero (first run), record it.
+        bytes32 expected = _expectedVerifierCodehash();
+        // If the expected codehash is zero (first run), record it.
         // Otherwise enforce equality.
-        if (EXPECTED_RUNTIME_CODEHASH != bytes32(0)) {
+        if (expected != bytes32(0)) {
             assertEq(
                 runtimeHash,
-                EXPECTED_RUNTIME_CODEHASH,
+                expected,
                 "verifier bytecode changed - update EXPECTED_RUNTIME_CODEHASH only after deliberate change"
             );
         } else {

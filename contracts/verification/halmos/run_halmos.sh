@@ -39,9 +39,11 @@ cd "${WALLET_DIR}"
 
 certify_profile() {
   local profile="$1"
-  echo "    [${profile}] codehash freeze + immutable-window lemma"
+  echo "    [${profile}] codehash freeze + immutable-window lemma + deployed-bytecode repro"
+  # DeployedBytecodeReproCheck self-skips off the deploy profile (the live
+  # contracts were cut from runs=999999), so it is a no-op under default.
   FOUNDRY_PROFILE="${profile}" forge test \
-    --match-contract 'PinnedCodehashes|PinnedBytecodeImmutableLemma' >/dev/null
+    --match-contract 'PinnedCodehashes|PinnedBytecodeImmutableLemma|DeployedBytecodeReproCheck' >/dev/null
 }
 
 echo "==> [1/2] Certifying compiled bytecode == pinned codehashes (Foundry, both profiles)"
@@ -49,6 +51,7 @@ certify_profile default
 certify_profile deploy
 echo "    OK: wallet / factory / verifier codehashes match PINNED_CODEHASHES.md"
 echo "    OK: runtime differs from the pinned instance only at the certified immutables"
+echo "    OK: CREATE2 replay reproduces the deployed Base Mainnet impl/factory/verifier (addr+codehash)"
 
 run_symbolic() {
   local profile="$1"

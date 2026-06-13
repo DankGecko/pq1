@@ -1,4 +1,4 @@
-# The claim — exactly what is and isn't proven (2026-06-11)
+# The claim — exactly what is and isn't proven (2026-06-13)
 
 This file is the single source of truth for **what you may publicly claim**
 about the PQSmartWallet formal-verification stack. It is deliberately
@@ -50,6 +50,20 @@ Specifically and defensibly:
 5. **Verifier negative direction.** The deployed verifier bytecode rejects a
    ≈250-mutant wrong-accept battery and the 6 negative KAT vectors, and
    accepts the 4 valid vectors (`forge test`). Reproduced 2026-06-11.
+6. **Byte-bound to the deployed Base Mainnet contracts.** The bytecode the
+   control-flow discharge runs against is the bytecode on chain. The
+   deploy-time lib set is recorded in `foundry.lock` (account-abstraction
+   `f54584e` = ERC-4337 v0.9 release; solady `90db92ce`, bytecode-irrelevant),
+   and `test/DeployedBytecodeReproCheck.t.sol` replays the production CREATE2
+   deploy (Arachnid `0x4e59…`, salt 0, chain id 8453, deploy profile),
+   reproducing the live verifier `0xdDE4…`, wallet impl `0x31e49D24…`, and
+   factory `0xe8CE78CD…` — both **addresses and full runtime codehashes**
+   (`0xeb1e3fcd…`, `0xdc9a082f…`, `0x045bb5…`). The Halmos discharges
+   (pinned harness instances) transport to these via
+   `PinnedBytecodeImmutableLemma`, whose immutable-window premise is grounded
+   against the actual on-chain bytecode (the only deployed-vs-rebuild deltas
+   are the EIP-712 immutable cache and the implementation-address immutable).
+   Reproduced 2026-06-13.
 
 The honest trust base for (1)–(2): the Lean kernel; that a Halmos+z3 rule is
 a sound solver session (the harness↔property and `LeanModel.sol`↔Lean-file
@@ -68,18 +82,16 @@ Do **not** say any of the following:
   The verifier's **∀-signature** functional equivalence is still carried by
   testing + the executable Lean KAT differential, not a symbolic ∀ proof —
   see below.
-* ~~"The A3.2/A3.3/A3.4 Halmos proofs are discharged on the *deployed*
-  wallet/factory bytecode."~~ As of 2026-06-13 they are discharged on a
-  **reproducible re-build** of the source: the deployed Base Mainnet
-  wallet/factory (`0x31e49D24…`/`0xe8CE78CD…`) were built with library
-  commits (solady/AA) that were never recorded in `foundry.lock` and are not
-  reproducible from the current repo — confirmed by rebuilding with the exact
-  deployed immutables (the bytecode still differs, purely in library
-  regions). The **logic-level** discharge (control-flow over PQSigner's own
-  source, verifier uninterpreted) does apply to the live contracts, and the
-  **verifier is byte-identical to deployed**, but the wallet/factory
-  byte-level discharge is against the re-build, pending a maintainer decision
-  (`DEPLOYED_BYTECODE_PIN_CAVEAT.md`).
+* **(RESOLVED 2026-06-13 — was a gap, now claimable.)** "The A3.2/A3.3/A3.4
+  Halmos proofs are byte-bound to the *deployed* wallet/factory bytecode." A
+  brief interim finding (lost-libs) was **overturned**: the deploy-time lib
+  was recovered (`foundry.lock` pins account-abstraction `f54584e`, the
+  ERC-4337 v0.9 release, whose `legacy/v06` differs from the v0.8.0 tag), and
+  `test/DeployedBytecodeReproCheck.t.sol` replays the production CREATE2
+  deploy (Arachnid, salt 0, chain id 8453, deploy profile) to reproduce the
+  live impl `0x31e49D24…`/`0xdc9a082f…`, factory `0xe8CE78CD…`/`0x045bb5…`,
+  and verifier `0xeb1e3fcd…` **exactly — addresses and codehashes**. See
+  Claimable #6 and `DEPLOYED_BYTECODE_PIN_CAVEAT.md`.
 * ~~"The SPHINCS+C10 verifier's functional equivalence to bytecode is proven
   for all signatures."~~ It is validated on the **10-vector KAT** (executable
   Lean↔bytecode, both directions) + the ~250-mutant wrong-accept screen, not
