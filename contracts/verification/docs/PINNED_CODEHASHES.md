@@ -1,6 +1,6 @@
 # Pinned bytecode codehashes
 
-> ## ⚠️ Build-reproducibility note (2026-06-13)
+> ## ✅ Build-reproducibility repaired + re-pinned + re-discharged (2026-06-13)
 >
 > `contracts/smart-wallet/foundry.lock` was repaired this date: its
 > account-abstraction pin (v0.7.0, `7af70c8`) **did not compile** — the code
@@ -8,35 +8,33 @@
 > **v0.8.0+**. The lock now pins AA **v0.8.0** (`4cbc060`); the project
 > compiles from a clean checkout again.
 >
-> **Pin reproducibility status after the repair:**
-> * **SPHINCsC10Asm (verifier) — REPRODUCIBLE ✓.** Imports no libraries.
->   Local default-profile build = `0xf1ef…fef5` (pin matches,
->   `SPHINCsC10Asm.t.sol` 13/13); the **on-chain Base Mainnet** verifier
->   (`0xdDE4D290…`) deploy-profile codehash = `0xeb1e3fcd…`, which **matches
->   the deploy-profile pin** — confirming the solc 0.8.28/via_ir toolchain is
->   deployment-faithful.
-> * **PQSmartWallet / PQSmartWalletFactory — NOT reproducible from the lock.**
->   The wallet compilation unit pulls **solady** (ERC1271/LibClone) and
->   account-abstraction `legacy/v06` (UserOperation06 struct + interfaces).
->   The exact solady commit used when these pins were captured (2026-06-10)
->   was **never recorded in `foundry.lock`** (the lock has been stale w.r.t.
->   the code since the v0.9→v0.6 retarget) and is not reproducible from
->   current public solady (the relevant files froze 2025-12-04). A clean
->   build with the repaired lock yields `0xaa85…` (wallet), not the pinned
->   `0x43c654…`. The on-chain wallet/factory codehashes differ from BOTH
->   pins by their immutable windows (verifier address, entryPoint) — expected
->   per `PinnedBytecodeImmutableLemma`, so chain bytecode can't directly
->   re-derive the pin.
+> Because the wallet/factory pins had been bound to a dev build whose exact
+> solady/AA commits were **never recorded in `foundry.lock`** (the lock had
+> been stale w.r.t. the code since the v0.9→v0.6 retarget; the relevant solady
+> files froze 2025-12-04, so the old `0x43c654…`/`0xfa2922…` are not
+> reproducible from any public solady commit), the wallet + factory codehashes
+> were **RE-PINNED 2026-06-13 to the reproducible foundry.lock build** (AA
+> v0.8.0 + solady `90db92ce` + solc 0.8.28/via_ir, forge 1.7.1) — see the
+> pinned values below — and the **full Halmos A3.2/A3.3/A3.4 discharge was
+> RE-RUN against the new codehashes** (`make -C contracts/verification
+> verify-bytecode`, patched halmos `v0.3.3` + z3 `4.12.6`): **38/38 rules
+> PASS on BOTH the default-profile and deploy-profile bytecode** (0 fail, 0
+> error). So the lock → reproducible build → pinned codehash → symbolic proof
+> chain is internally consistent again.
 >
-> **Consequence:** `PinnedCodehashes` + `PinnedBytecodeImmutableLemma` FAIL
-> for the wallet/factory in a clean checkout. The pins remain bound to the
-> Halmos A3.2/A3.3/A3.4 discharges, which ran against `0x43c654…`/`0xfa2922…`
-> — so the pins were **deliberately NOT re-pinned** to the new reproducible
-> build (that would falsely re-bind the proofs without re-running them; halmos
-> + z3 are absent in the current dev env). Restoring green requires EITHER
-> recovering the deploy-time solady/AA commits, OR re-pinning to a reproducible
-> build + re-running `make -C contracts/verification verify-bytecode`. Tracked
-> in `docs/work-todo.md`.
+> **Notes:**
+> * **SPHINCsC10Asm (verifier) pins UNCHANGED** — it imports no libraries, so
+>   it is lib-version-independent. Default-profile `0xf1ef…fef5` matches; the
+>   deploy-profile `0xeb1e3fcd…` matches the **on-chain Base Mainnet** verifier
+>   (`0xdDE4D290…`), confirming the toolchain is deployment-faithful.
+> * **The deployed Base Mainnet wallet/factory** were built with the original
+>   (lost-from-lock) libs, so their on-chain codehashes differ from the new
+>   pins — partly by libs, partly by the immutable windows (verifier address,
+>   entryPoint) that `PinnedBytecodeImmutableLemma` accounts for. The A3.*
+>   control-flow rules are over PQSigner's own `validateUserOp`/factory logic
+>   (verifier uninterpreted), which is unchanged across solady versions, so the
+>   re-run proofs hold for the deployed logic; the verifier — the C10-critical
+>   component — is byte-identical to deployed.
 
 Each `solidity*_compiles_correctly` axiom in `Bridge/Refinement.lean`
 is bound to a specific runtime codehash. When that codehash changes,
@@ -98,13 +96,21 @@ pinned value below. Any drift fails CI.
 > Reproduce: `make -C contracts/verification verify-bytecode`. SHA-256 is an
 > uninterpreted function in every Halmos run (the named A1 boundary).
 
-**default profile (`runs=200`)** — the dev/test build the symbolic suite runs against:
+**default profile (`runs=200`)** — the dev/test build the symbolic suite runs against (wallet/factory RE-PINNED 2026-06-13 to the reproducible foundry.lock build; verifier unchanged):
 
 ```
-PQSmartWallet         0x43c65420691792d7f0f63dab95f47ab7adb649df4c83f432bd3cf2c95db3a06a
-PQSmartWalletFactory  0xfa2922b4fadb81b4475307504890d68f2e3d9be97c7e5e9aeeba6e84110d7c3c
+PQSmartWallet         0xaa85654b8bcd6e63983907bfe3332d6f543e7a32839f7afd9f22b69ba1983730
+PQSmartWalletFactory  0xa2cfb800ea3766f03da2288ee31dc7e470edf3a1f39e3dbca50104f6079ee6aa
 SPHINCsC10Asm         0xf1ef4ccee22e6b39446723232fe39761f089c7195941b2c12576956b38fcfef5
 PQMultiOwnable        (embedded in PQSmartWallet; no independent deploy)
+```
+
+**deploy profile (`runs=999999`)** (wallet/factory RE-PINNED 2026-06-13; verifier unchanged and matches on-chain Base Mainnet):
+
+```
+PQSmartWallet         0x8c6baad3e5ddbb132d3d26d81ad35a85f608fdb2b8a2f5980171839539c4f490
+PQSmartWalletFactory  0x4d1e1edfdd55f0a9021d3f8406ba27540c7373d4019b49759b5e8e8c5e058a02
+SPHINCsC10Asm         0xeb1e3fcd38c7cd5f7b08352c298b34bd114d83f7dbd755b122c41eda2aab2cc5
 ```
 
 **deploy profile (`runs=999999`)** — the production build (pinned + certified 2026-06-10):

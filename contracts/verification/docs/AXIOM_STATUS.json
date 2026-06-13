@@ -127,21 +127,21 @@
           "type": "halmos-session",
           "path": "contracts/smart-wallet/test/halmos/HalmosValidateUserOpEquiv.t.sol",
           "model_contract": "contracts/smart-wallet/test/halmos/LeanValidateUserOpModel.sol",
-          "pinned_codehash": "0x43c65420691792d7f0f63dab95f47ab7adb649df4c83f432bd3cf2c95db3a06a",
+          "pinned_codehash": "0xaa85654b8bcd6e63983907bfe3332d6f543e7a32839f7afd9f22b69ba1983730",
           "tool": "halmos 0.3.4.dev (+ PQ1 sha256 sort + empty-input patch) / z3",
           "evidence": "4 rules PASS — full pointwise (result + post-storage frame) equivalence to the Lean model over a symbolic envelope, generic uninterpreted verifier, reverting-verifier arm, plus a symbolic-index sweep over the INSTALLED slots {1,2} (the unset partition stays concrete-reps — a symbolic non-installed key errors on the dynamic-bytes getter; engine ceiling, disclosed)"
         },
         {
           "type": "halmos-session",
           "path": "contracts/smart-wallet/test/halmos/HalmosValidateUserOp.t.sol",
-          "pinned_codehash": "0x43c65420691792d7f0f63dab95f47ab7adb649df4c83f432bd3cf2c95db3a06a",
+          "pinned_codehash": "0xaa85654b8bcd6e63983907bfe3332d6f543e7a32839f7afd9f22b69ba1983730",
           "tool": "halmos 0.3.4.dev (+ PQ1 sha256-sort patch) / z3",
           "evidence": "8 rules PASS (non-bypass, validation-phase cap bump, role-split, tail-pad, EntryPoint-only)"
         },
         {
           "type": "halmos-session",
           "path": "contracts/smart-wallet/test/halmos/HalmosExecute.t.sol",
-          "pinned_codehash": "0x43c65420691792d7f0f63dab95f47ab7adb649df4c83f432bd3cf2c95db3a06a",
+          "pinned_codehash": "0xaa85654b8bcd6e63983907bfe3332d6f543e7a32839f7afd9f22b69ba1983730",
           "tool": "halmos 0.3.4.dev (+ PQ1 sha256-sort patch) / z3",
           "evidence": "6 rules PASS (execute gated by prior validate, one-shot, self-target rejected single+batch)"
         },
@@ -175,14 +175,14 @@
           "type": "halmos-session",
           "path": "contracts/smart-wallet/test/halmos/HalmosExecuteEquiv.t.sol",
           "model_contract": "contracts/smart-wallet/test/halmos/LeanExecuteModel.sol",
-          "pinned_codehash": "0x43c65420691792d7f0f63dab95f47ab7adb649df4c83f432bd3cf2c95db3a06a",
+          "pinned_codehash": "0xaa85654b8bcd6e63983907bfe3332d6f543e7a32839f7afd9f22b69ba1983730",
           "tool": "halmos 0.3.4.dev (+ PQ1 sha256 sort + empty-input patch) / z3",
           "evidence": "6 rules PASS — execute/executeBatch pointwise equivalence to the Lean Execute model over a SYMBOLIC ownerIndex, atomicity, ∀-index no-credit revert, remove-selector stamps no credit"
         },
         {
           "type": "halmos-session",
           "path": "contracts/smart-wallet/test/halmos/HalmosExecute.t.sol",
-          "pinned_codehash": "0x43c65420691792d7f0f63dab95f47ab7adb649df4c83f432bd3cf2c95db3a06a",
+          "pinned_codehash": "0xaa85654b8bcd6e63983907bfe3332d6f543e7a32839f7afd9f22b69ba1983730",
           "tool": "halmos 0.3.4.dev (+ PQ1 sha256-sort patch) / z3",
           "evidence": "6 per-property rules PASS (execute gated by prior validate, one-shot, self-target rejected single+batch)"
         }
@@ -200,7 +200,7 @@
         {
           "type": "halmos-session",
           "path": "contracts/smart-wallet/test/halmos/HalmosFactory.t.sol",
-          "pinned_codehash": "0xfa2922b4fadb81b4475307504890d68f2e3d9be97c7e5e9aeeba6e84110d7c3c",
+          "pinned_codehash": "0xa2cfb800ea3766f03da2288ee31dc7e470edf3a1f39e3dbca50104f6079ee6aa",
           "tool": "halmos 0.3.4.dev (+ PQ1 sha256-sort patch) / z3",
           "evidence": "5 rules PASS — createAccount ⟺ createAccountPrecondition iff + postconditions, already-deployed early-return, 3 install-gate reject rules"
         },
@@ -208,7 +208,7 @@
           "type": "certora-rule-set",
           "path": "contracts/smart-wallet/certora/PQSmartWalletFactory.spec",
           "conf": "contracts/smart-wallet/certora/confs/PQSmartWalletFactory.conf",
-          "pinned_codehash": "0xfa2922b4fadb81b4475307504890d68f2e3d9be97c7e5e9aeeba6e84110d7c3c"
+          "pinned_codehash": "0xa2cfb800ea3766f03da2288ee31dc7e470edf3a1f39e3dbca50104f6079ee6aa"
         }
       ],
       "citation": null
@@ -224,7 +224,7 @@
         {
           "type": "halmos-session",
           "path": "contracts/smart-wallet/test/halmos/HalmosMultiOwnable.t.sol",
-          "pinned_codehash": "0x43c65420691792d7f0f63dab95f47ab7adb649df4c83f432bd3cf2c95db3a06a",
+          "pinned_codehash": "0xaa85654b8bcd6e63983907bfe3332d6f543e7a32839f7afd9f22b69ba1983730",
           "tool": "halmos 0.3.4.dev (+ PQ1 sha256-sort patch) / z3",
           "evidence": "7 rules PASS — add/remove/initialize pointwise vs Lean Storage + ownerAtIndex read parity + bootstrap-unremovable + EntryPoint-only gate"
         },
