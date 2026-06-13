@@ -108,6 +108,18 @@ pub fn c10_sign_verified_with_progress(
     //     across signatures.
     //   - any single biased / compromised TRNG: the XOR of the
     //     remaining unbroken sources preserves entropy.
+    //   - F-9 transparent leak: a fresh randomiser makes the R-grind
+    //     iteration count depend on per-call randomness, not just
+    //     (sk_seed, message) — removing the TVLA-detectable
+    //     msg-dependent count.
+    // NOTE: the *cryptographic* chosen-message FORS-saturation defence
+    // (upstream SPHINCS- SECURITY-ANALYSIS.md §2 "Avenue B") does NOT
+    // rely on this TRNG: `fors::grind_r` derives R as
+    // `sha256(sk_seed ‖ "R_grind" ‖ [opt_rand] ‖ message ‖ nonce)`, so
+    // `ht_idx` is unpredictable to anyone without the secret key for any
+    // chosen message even if this RNG is biased or predictable. OptRand
+    // here is defence-in-depth (SCA + Genêt) layered on top of that
+    // secret-keyed, message-bound R.
     // The randomiser is drawn ONCE and fed to both signs — re-drawing
     // per sign would still be cryptographically sound but would
     // produce divergent sigs, breaking the byte-equality FI gate.

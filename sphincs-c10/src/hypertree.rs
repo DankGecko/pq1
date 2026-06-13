@@ -160,14 +160,13 @@ fn sign_inner(
 
     // 1. R-grind: find R such that the last FORS index is 0.
     //
-    // `opt_rand` (when Some) is mixed into the nonce-derived R hash —
-    // see `fors::grind_r` for the rationale. Closes the F-9
-    // transparent-leak channel (msg-dependent iteration count) by
-    // making the iteration count depend on per-call randomness too.
-    // When None, byte-equality with the pre-F-9-fix deterministic
-    // path is preserved (load-bearing for `c10_test_vectors.json`).
+    // R is secret-keyed (`sk_seed`) and message-bound — see `fors::grind_r`
+    // for the full rationale: this makes `ht_idx` unpredictable without the
+    // secret key for any chosen message (closing the chosen-message
+    // FORS-saturation avenue even under TRNG failure), and `opt_rand` (when
+    // Some) additionally randomises the iteration count per call (F-9).
     report(progress, 0);
-    let (r, digest) = fors::grind_r(pk_seed, pk_root, msg_hash, opt_rand);
+    let (r, digest) = fors::grind_r(sk_seed, pk_seed, pk_root, msg_hash, opt_rand);
 
     // Write R (16 bytes)
     sig[offset..offset + N].copy_from_slice(&r);

@@ -64,8 +64,39 @@ pub fn extract_ht_index(digest: &[u8; 32]) -> u32 {
 /// The forced-zero constraint eliminates the need for an authentication
 /// path for the last FORS tree, saving `A*N = 11*16 = 176` bytes.
 ///
-/// Matches Python: `grind_R_fors(seed, root, message, k, a)`
+/// # R derivation (secret-keyed, message-bound — hardened 2026-06-13)
+///
+/// ```text
+/// R = sha256(sk_seed || "R_grind" || [opt_rand] || message || nonce_be32)[0..N]
+/// ```
+///
+/// Two independent properties, both load-bearing:
+///
+/// * **`sk_seed` + `message` binding** makes R (and hence
+///   `ht_idx = bits[143..161] of h_msg(pk_seed, pk_root, R, message)`)
+///   **unpredictable to anyone who does not hold the secret key**, for any
+///   chosen message — even under a biased or fully-predictable TRNG. This
+///   closes the chosen-message FORS-saturation avenue (upstream SPHINCS-
+///   `docs/SECURITY-ANALYSIS.md` §2 "Avenue B"): without a secret-keyed R an
+///   attacker who can compute the public `message ↦ ht_idx` map offline can
+///   craft many messages that collide on one hypertree leaf, concentrating
+///   the few-time FORS budget on a single instance and lowering the forgery
+///   bound. With sk_seed in the preimage that map is not attacker-computable.
+///   This mirrors FIPS 205's `PRF_msg` keying R on a secret (`SK.prf`).
+/// * **`opt_rand`** (when `Some`) additionally randomises the R series per
+///   call, so the iteration count at which the forced-zero constraint hits
+///   depends on fresh randomness rather than just `(sk_seed, message)` —
+///   closing the F-9 transparent-leak channel (the msg-dependent iteration
+///   count that is TVLA-detectable post-F-16). Production firmware always
+///   supplies fresh TRNG `opt_rand`; the `None` path is deterministic given
+///   `(sk_seed, message)` and exists only for byte-stable test vectors.
+///
+/// The verifier never recomputes R (it reads R from the signature), so this
+/// is a pure signer-side change: the on-chain Yul verifier and the deployed
+/// contracts are unaffected, but signature *bytes* change for a given input,
+/// so all pinned vectors must be regenerated together.
 pub fn grind_r(
+    sk_seed: &[u8; 32],
     pk_seed: &[u8; N],
     pk_root: &[u8; N],
     message: &[u8; 32],
@@ -76,21 +107,13 @@ pub fn grind_r(
     let last_shift = (K - 1) * A; // bit offset of the last FORS index
 
     for nonce in 0..10_000_000u32 {
-        // R = sha256("R_grind" || [opt_rand] || nonce_b32)[0..N].
-        //
-        // `opt_rand` (when Some) is mixed into the hash so the resulting
-        // R series — and therefore the iteration count at which the
-        // forced-zero constraint hits — depends on per-call randomness
-        // instead of just (msg, pk). Closes the F-9 transparent leak
-        // channel (the msg-dependent iteration count that's
-        // TVLA-detectable post-F-16). When None, the function preserves
-        // the pre-F-9-fix deterministic behaviour byte-for-byte
-        // (load-bearing for `c10_test_vectors.json` byte-stability).
         let mut h = Sha256::new();
+        h.update(sk_seed);
         h.update(b"R_grind");
         if let Some(rand) = opt_rand {
             h.update(rand);
         }
+        h.update(message);
         let mut nonce_b32 = [0u8; 32];
         nonce_b32[28..32].copy_from_slice(&nonce.to_be_bytes());
         h.update(&nonce_b32);
