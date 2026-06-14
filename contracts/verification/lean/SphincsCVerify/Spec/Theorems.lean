@@ -297,10 +297,10 @@ theorem theft_free
     -- And cryptographic well-foundedness: the EUF-CMA framework holds,
     -- so any forgery attempt against this verifier on this transcript
     -- contradicts the SHA-256 hardness assumptions (A5).
-    ∧ (∀ (vk : Signature.VerifyingKey)
+    ∧ (∀ (sk : Signer.SigningKey)
          (transcript : Crypto.Transcript)
          (msgStar : ByteVec 32) (sigStar : Hypertree.Signature),
-        Crypto.isForgery vk transcript msgStar sigStar → False) := by
+        Crypto.isForgery sk transcript msgStar sigStar → Crypto.BreaksHash) := by
   -- Substitute σ' = handleOp σ op effects.
   subst hExec
   -- Apply A2 (entrypoint_honest):
@@ -331,15 +331,18 @@ theorem theft_free
     show Bridge.DeployedBytecode.SPHINCsC10Asm_verify pks pkr dig isig = true
     rw [hbridge]
     exact hverify
-  · -- Cryptographic non-forgeability half: directly from EUF-CMA
-    -- (which appears via `cannot_forge_without_breaking_SHA256`).
-    intro vk transcript msgStar sigStar hf
+  · -- Cryptographic non-forgeability half (reduction form, 2026-06-14):
+    -- a forgery against the slot key's honest history breaks SHA-256
+    -- (`cannot_forge_without_breaking_SHA256 : isForgery → BreaksHash`).
+    -- This is the cited crypto rider; the substantive safety guarantee is
+    -- conjunct 1 above, which is EUF-CMA-free.
+    intro sk transcript msgStar sigStar hf
     -- Acknowledge `Classical.choice` is part of the trusted Lean kernel
     -- — pulling it into the dep closure documents the classical
     -- reasoning licence the cryptographic argument operates under.
     have _classical_choice_acknowledged : Unit :=
       Classical.choice (Nonempty.intro ())
-    exact Crypto.cannot_forge_without_breaking_SHA256 vk transcript msgStar sigStar hf
+    exact Crypto.cannot_forge_without_breaking_SHA256 sk transcript msgStar sigStar hf
 
 /-! ## 4b. Bytecode-transported corollaries.
 
@@ -403,10 +406,10 @@ theorem theft_free_bytecode
       ∧ pkRoot = owner.raw.drop 32 (by decide)
       ∧ digest = sphincsDigest op σ.entryPointAddress σ.chainId
       ∧ Bridge.DeployedBytecode.SPHINCsC10Asm_verify pkSeed pkRoot digest innerSig = true)
-    ∧ (∀ (vk : Signature.VerifyingKey)
+    ∧ (∀ (sk : Signer.SigningKey)
          (transcript : Crypto.Transcript)
          (msgStar : ByteVec 32) (sigStar : Hypertree.Signature),
-        Crypto.isForgery vk transcript msgStar sigStar → False) := by
+        Crypto.isForgery sk transcript msgStar sigStar → Crypto.BreaksHash) := by
   -- A3.1, in function form: the opaque deployed verifier IS the Lean
   -- Yul model (which is `deployedVerifier` by definition).
   have hfn : Bridge.DeployedBytecode.SPHINCsC10Asm_verify

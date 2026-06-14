@@ -5,25 +5,27 @@ about the PQSmartWallet formal-verification stack. It is deliberately
 conservative. If a marketing line is not derivable from the "✅ Claimable"
 section below, do not ship it.
 
-> ## 🛑 CRITICAL — `theft_free` is currently VACUOUS (2026-06-14)
+> ## ✅ EUF-CMA inconsistency RESOLVED for `theft_free` (2026-06-14)
 >
-> An adversarial audit found and **reproduced (kernel-checked, no `sorryAx`)**
-> a derivation of `False` from the `lean/` crypto axiom set: the
-> `EUF_CMA_SPHINCSplusC` axiom (`∀ vk transcript m s, isForgery … → False`)
-> is **inconsistent**. A genuine valid KAT signature at the *empty transcript*
-> satisfies `isForgery` (since `verify` now accepts valid sigs, post commit
-> `5055d66`), so `cannot_forge_without_breaking_SHA256 … : False`. **Because
-> `theft_free` / `theft_free_bytecode` / `cannot_forge_without_breaking_SHA256`
-> / `theft_free_with_calldata_binding` depend on this axiom set, they are
-> currently VACUOUSLY TRUE and establish NOTHING about wallet safety.** DO NOT
-> claim theft-freedom until `EUF_CMA` is restated to a consistent shape and
-> `theft_free` is re-derived. Root cause + fix options:
-> [`EUF_CMA_INCONSISTENCY.md`](EUF_CMA_INCONSISTENCY.md). Scope: the
-> *component* proofs below (wallet-model invariants, §33 extracted functional
-> proofs, Halmos bytecode-equivalence, A3.1 verifier KAT) do **not** depend on
-> the crypto axioms and remain valid; only the top-level theft-freedom
-> composition is hollow. (Secondary: `sha256_injective_on_fixed_length` is also
-> a false axiom — latent, non-detonatable only because `lean/` is mathlib-free.)
+> The `EUF_CMA_SPHINCSplusC` inconsistency (a kernel-checked `False` from a
+> valid KAT at the empty transcript) is **fixed**. The axiom was restated to a
+> consistent **reduction shape** — conclusion is an *opaque* `BreaksHash`
+> (never `False`, never assumed false), and `isForgery` now carries a key-bound
+> `KeyHistory` so the empty-transcript witness is unformable. Two compiled-in
+> guard lemmas (`keyHistory_empty_signs_nothing`, `honest_sig_not_forgery`,
+> closure `{propext, Quot.sound}`) fence it. **The old detonator no longer
+> type-checks** (`cannot_forge … : BreaksHash`, not `False` — verified). So
+> **`theft_free` / `theft_free_bytecode` are SOUND again** (kernel-checked,
+> closure = the 11 cited axioms, no `sorryAx`). Details:
+> [`EUF_CMA_INCONSISTENCY.md`](EUF_CMA_INCONSISTENCY.md).
+>
+> **Two residual items (do NOT block `theft_free`, but tracked):** (1)
+> `theft_free_with_calldata_binding` still rests on `sha256_injective_on_fixed_length`,
+> which is false-by-pigeonhole (latent — non-detonatable only because `lean/`
+> is mathlib-free); restate as collision-resistance before any mathlib import.
+> (2) the three SHA-256 hardness shapes (`SM_DT_TCR_F`/`ITSR_F`/`hMsg_random_oracle`)
+> are still `∀_,True` placeholders — harmless now (KeyHistory + opaque BreaksHash
+> are the real guards) but a faithfulness nit to upgrade to opaque hardness props.
 
 ---
 
@@ -43,16 +45,21 @@ section below, do not ship it.
 
 Specifically and defensibly:
 
-1. **Kernel proof. 🛑 SUSPENDED 2026-06-14 — see the banner above.**
-   `theft_free` is `sorry`-free and kernel-checked, BUT its 11-axiom closure
-   includes the **inconsistent** `EUF_CMA_SPHINCSplusC` (+ the three `∀_,True`
-   crypto shapes), so the theorem is **vacuously true and carries no force**
-   until A5 is restated. The kernel-checked *component* proofs that do NOT
-   depend on the crypto axioms (the wallet-model invariants — `combinedCap_inductive`,
-   `bootstrap_unremovable`, `eip1271_forbids_bootstrap`, `factory_requires_bootstrap_sig`,
-   `create2_*`, etc.; verified via `#print axioms` to close over only
-   `propext`/`Classical.choice`/`Quot.sound`) remain valid. The theft-freedom
-   *composition* is reinstated only after the EUF-CMA fix.
+1. **Kernel proof (REINSTATED 2026-06-14 after the EUF-CMA fix).** `theft_free`
+   and its claim corollaries are `sorry`-free and kernel-checked, with the
+   11-axiom closure now **consistent** (the restated `EUF_CMA_SPHINCSplusC`
+   concludes the opaque `BreaksHash` reduction, not `False`). What `theft_free`
+   actually says: it is a **conjunction** — conjunct 1 (the safety guarantee:
+   no wallet balance decrease without the deployed verifier accepting an
+   installed-owner C10 signature over the op's `sphincsDigest`) is **EUF-CMA-free**,
+   resting on A2 (`entrypoint_honest`) + A3.1 (`solidityVerifier_compiles_correctly`)
+   + A1/A4; conjunct 2 (producing such a signature for an un-signed message
+   would break SHA-256) is the **cited** Barbosa-et-al. reduction. So the
+   substantive theft-freedom content is conjunct 1 (control-flow, discharged
+   to bytecode); the cryptographic infeasibility is cited, not mechanised.
+   Reproduced 2026-06-14 (`make verify-audit`). (Caveat: the variant
+   `theft_free_with_calldata_binding` still rests on the false-latent
+   `sha256_injective` — see the banner.)
 2. **Control-flow bytecode discharge.** 38 Halmos rules pass on **both** the
    `default` (runs=200) and `deploy` (runs=999999) profiles' deployed
    bytecode, against pinned codehashes — validate (pointwise + per-property;

@@ -1,13 +1,35 @@
-# EUF-CMA axiom inconsistency — `theft_free` is currently vacuous
+# EUF-CMA axiom inconsistency — found, then FIXED
 
-**Status:** 🛑 **OPEN (found 2026-06-14).** A deep adversarial audit found, and
-two independent reproductions (including a hand-written one) confirmed
-**kernel-checked, `sorryAx`-free**, that the `lean/` (SphincsCVerify) crypto
-axiom set is **logically inconsistent** — `False` is derivable. The headline
-theorem `theft_free` depends on that axiom set, so it is **vacuously true and
-proves nothing about wallet safety** until the axiom is restated.
+**Status:** ✅ **RESOLVED 2026-06-14 for `theft_free` / `theft_free_bytecode`.**
+`EUF_CMA_SPHINCSplusC` was restated to a consistent **reduction**: conclusion
+is an *opaque* `BreaksHash` (never `False`, never assumed false), and
+`isForgery` now carries a key-bound `KeyHistory sk transcript` so the
+empty-transcript valid-KAT witness is **unformable** (`KeyHistory sk []`
+forces `sk` to sign nothing). Two compiled guard lemmas
+(`keyHistory_empty_signs_nothing`, `honest_sig_not_forgery`) fence both
+firewalls. Verified: the old `boom : False` no longer type-checks
+(`cannot_forge … : BreaksHash`, not `False`); `theft_free`'s closure is the 11
+cited axioms with **no `sorryAx`** and is **consistent**. `theft_free`'s
+*safety* guarantee (conjunct 1) is EUF-CMA-free; the crypto enters only as the
+cited conjunct-2 reduction. See §6.
+>
+> **Remaining (do NOT block `theft_free`):** `theft_free_with_calldata_binding`
+> still depends on `sha256_injective_on_fixed_length` (false-by-pigeonhole,
+> latent — restate as collision-resistance before any mathlib import); and the
+> three SHA-256 hardness shapes are still `∀_,True` placeholders (harmless now
+> — `KeyHistory` + opaque `BreaksHash` are the real guards — a faithfulness nit).
 
-This is **not an on-chain vulnerability** — the deployed contracts are
+---
+
+## Historical record (the finding, as discovered 2026-06-14)
+
+A deep adversarial audit found, and two independent reproductions (including a
+hand-written one) confirmed **kernel-checked, `sorryAx`-free**, that the `lean/`
+(SphincsCVerify) crypto axiom set *was* **logically inconsistent** — `False`
+was derivable. `theft_free` depended on that axiom set, so it was **vacuously
+true** until the restatement above.
+
+This was **not an on-chain vulnerability** — the deployed contracts are
 unchanged. It is a defect in the *Lean security argument*: the top-level claim
 is currently unsupported.
 
@@ -134,3 +156,39 @@ History: this was missed by two earlier audit passes (which checked the
 overlooked that `Hypertree.verify` is *computable*, so a concrete KAT can be
 `native_decide`d to `true`). `#print axioms` (the `sorryAx`/`ofReduceBool`
 ledger) is the gate that makes the inconsistency visible.
+
+## 6. Resolution as implemented (2026-06-14)
+
+Chosen design (from the `eufcma-reconcile` workflow, lowest-risk of four
+adversarially-tested candidates): **reduction-to-`BreaksHash` with a key-bound
+`KeyHistory` transcript** — two independent firewalls.
+
+`Crypto/EUFCMA.lean`:
+- `opaque BreaksHash : Prop` — the reduction's conclusion (no constructor / no
+  eliminator). **Invariant: never assume `¬ BreaksHash`** (a `¬BreaksHash`
+  anywhere re-detonates the inconsistency; `grep` confirms none exists).
+- `structure KeyHistory (sk) (transcript)` with `mem_signed` + `signed_recorded`
+  — ties the transcript to the key (firewall 1).
+- `isForgery` now takes `sk : SigningKey` and carries `KeyHistory sk transcript`
+  as its first conjunct.
+- `EUF_CMA_SPHINCSplusC … → BreaksHash` (was `→ False`); `cannot_forge_without_breaking_SHA256
+  … : BreaksHash`.
+- Guard lemmas `keyHistory_empty_signs_nothing` and `honest_sig_not_forgery`
+  (closure `{propext, Quot.sound}`) — the structural regression fence.
+
+`Spec/Theorems.lean`: conjunct 2 of `theft_free` and `theft_free_bytecode`
+re-typed (`sk : SigningKey`, conclusion `Crypto.BreaksHash`); discharge updated.
+Conjunct 1 (the EUF-CMA-free safety guarantee) is untouched.
+
+`Bridge/EntryPoint.lean`: `entrypoint_no_replay` **deleted** (it was dangling +
+latent-false against its own model — `handleOp` ignores `op.nonce`).
+
+Verification (kernel-checked, my own hands):
+- `lake build` green, 0 `sorry`.
+- `#print axioms theft_free` = the 11 cited axioms, no `sorryAx`, now consistent.
+- old detonator `example … : False := cannot_forge … hf` → `type mismatch
+  (BreaksHash : Prop / False : Prop)` — dead.
+- both guard lemmas close over `{propext, Quot.sound}`.
+
+Still open (separate follow-up, non-detonating): restate `sha256_injective`
+(§4) and upgrade the three `∀_,True` hardness shapes to opaque hardness props.

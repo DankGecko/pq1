@@ -152,38 +152,15 @@ axiom entrypoint_honest
       = (Result.success,
          (handleOp σ op effects).walletStorage)
 
-/-! ## `entrypoint_no_replay` — peer to A2 for nonce uniqueness.
+/-! ## `entrypoint_no_replay` — REMOVED 2026-06-14.
 
-The wallet relies on the EntryPoint to enforce nonce uniqueness per
-`(sender, nonce)` pair. Concretely, EntryPoint v0.6's
-`NonceManager._validateAndUpdateNonce` reads-modify-writes the per-
-sender nonce, rejecting any UserOp whose `nonce` field doesn't match
-the current value. This kills replay at the EntryPoint level —
-*before* the UserOp reaches `wallet.validateUserOp` for the second
-time.
-
-We capture this as an axiom that says: if `handleOp` already accepted
-an op with `(sender=s, nonce=n)`, a second `handleOp` with the same
-`(sender, nonce)` cannot also produce a state where the wallet was
-called. Equivalently: the post-state is unchanged.
-
-Discharge: cited universal EntryPoint v0.6 TCB (OZ / ChainSecurity /
-Spearbit audits; 18+ months mainnet operation; codehash pinned at
-`PINNED_CODEHASHES.md`).
--/
-
-/-- **`entrypoint_no_replay` — Claim 1's nonce-uniqueness peer to A2.**
-
-    Replay of `(sender, nonce)` is rejected by EntryPoint v0.6 and
-    therefore the second `handleOp` is a no-op (the EntryPoint
-    increments its per-sender nonce on every accepted call). -/
-axiom entrypoint_no_replay
-    (σ : State) (op1 op2 : UserOperation)
-    (effects1 effects2 : Address → Nat → Nat) :
-    (handleOp σ op1 effects1).walletCalled = true →
-    op2.sender = op1.sender →
-    op2.nonce = op1.nonce →
-    handleOp (handleOp σ op1 effects1) op2 effects2
-      = handleOp σ op1 effects1
+The prior `entrypoint_no_replay` axiom was DANGLING (referenced by zero
+theorems — adversarial axiom audit) AND latent-false against its own model:
+`handleOp` never reads `op.nonce`, so the model structurally admits a
+distinct-fresh-slot second success, contradicting the axiom's "the second
+`handleOp` is a no-op" conclusion. It protected nothing, so it was deleted
+rather than left as latent-false debt. EntryPoint v0.6's real `NonceManager`
+replay protection remains a cited-TCB fact (simply not modelled in Lean, and
+no theorem needs it). -/
 
 end SphincsCVerify.Bridge.EntryPoint
