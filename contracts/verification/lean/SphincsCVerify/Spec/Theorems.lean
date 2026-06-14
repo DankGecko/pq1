@@ -629,12 +629,15 @@ open SphincsCVerify.Wallet.TxFlow
     on the decoded `(pkSeed, pkRoot, sphincsDigest, innerSig)` under
     an installed owner key.
 
-    Note the consequent is existential ("some validated step in the
-    trace"), not per-call attribution — that stronger form is left as
-    an `OPEN_PROOF_OBLIGATIONS` follow-up. The existential form is
-    already sufficient to rule out the bypass attack: a transaction
-    trace containing zero verifier-true validates cannot produce any
-    external call. -/
+    The consequent here is existential ("some validated step in the
+    trace") — already sufficient to rule out the bypass attack: a
+    transaction trace containing zero verifier-true validates cannot
+    produce any external call. The STRONGER per-step (injective)
+    attribution — every stack-growing external-call step is backed by
+    its OWN distinct verifier-true validate — is now also proven, see
+    `every_call_attributed_to_distinct_validate` (quantitative
+    pigeonhole) and `call_traces_to_authorising_validate` (structural)
+    below (Gap-2 closed 2026-06-14). -/
 theorem every_call_gated_by_verifier
     (σ0 σ' : Wallet.Execute.ExecState) (trace : List Wallet.TxFlow.Step)
     (hrun : Wallet.TxFlow.runTrace σ0 trace = some σ')
@@ -656,5 +659,61 @@ theorem no_call_without_prior_verifier_acceptance
     ∃ (σ_pre : Wallet.Execute.ExecState) (step : Wallet.TxFlow.Step),
       step ∈ trace ∧ Wallet.TxFlow.StepVerified σ_pre step :=
   Wallet.TxFlow.any_call_implies_some_verify_true σ0 σ' trace hrun hinit hempty hsome
+
+/-! ### Per-call (per-step, injective) attribution — Gap-2 closed.
+
+The two corollaries below strengthen the existential gate above to
+genuine per-step attribution: every money-moving external-call step is
+backed by its OWN distinct verifier-true validate. The token discipline
+(a verifier-true slot-validate is the only step that lifts the EIP-1153
+`validatedOwnerPlusOne` transient; every execute requires it live and
+clears it) means one stamp authorises at most one execute.
+
+`#print axioms` for both = `{ propext, Classical.choice, Quot.sound }`
+(kernel-only — same closure as the existential `every_call_gated_by_verifier`).
+
+Granularity note: this is per-execute-STEP, not per-individual-CALL. An
+`executeBatch` appends several calls under a single validate, so calls
+within one batch legitimately share one authorising validate; a distinct
+validate *per call element* is false in this model and is NOT claimed.
+Per-step is the faithful granularity for "external call authorised by
+its own verifier-true validate". -/
+
+/-- **Per-step (injective) attribution — quantitative form.** For a
+    transaction trace run from a clean transient, the number of
+    stack-growing execute-family steps (`ne`, counted by the
+    `TxFlow.ledger`) is `≤` the number of verifier-true validate steps
+    (`nv`). Each external-call-producing step is therefore charged to
+    its own distinct authorising validate — `n` calls force `n`
+    verifier-true validates, which a purely existential `≥ 1` gate does
+    NOT give (e.g. one validate then two executes is ruled out: the
+    first execute zeroes the transient, the second has no stamp to
+    consume). -/
+theorem every_call_attributed_to_distinct_validate
+    (σ0 σf : Wallet.Execute.ExecState) (trace : List Wallet.TxFlow.Step)
+    (nv ne : Nat)
+    (hledger : Wallet.TxFlow.ledger σ0 trace = some (σf, nv, ne))
+    (hinit : σ0.validatedOwnerPlusOne = 0) :
+    ne ≤ nv :=
+  Wallet.TxFlow.growing_executes_le_verified_validates σ0 σf trace nv ne hledger hinit
+
+/-- **Per-step attribution — structural form.** Any live transient at
+    the end of a run traces back to the unique most-recent verifier-true
+    validate, with NO execute step between it and the end — i.e. the
+    validate whose stamp the next execute will consume. Applied at an
+    execute step's entry state (where the transient is necessarily live),
+    this names the specific authorising validate of that exact step. -/
+theorem call_traces_to_authorising_validate
+    (σ0 σf : Wallet.Execute.ExecState) (trace : List Wallet.TxFlow.Step)
+    (hrun : Wallet.TxFlow.runTrace σ0 trace = some σf)
+    (hinit : σ0.validatedOwnerPlusOne = 0)
+    (hlive : σf.validatedOwnerPlusOne ≠ 0) :
+    ∃ (a : List Wallet.TxFlow.Step) (v : Wallet.TxFlow.Step)
+      (b : List Wallet.TxFlow.Step) (σv : Wallet.Execute.ExecState),
+      trace = a ++ v :: b
+      ∧ Wallet.TxFlow.runTrace σ0 a = some σv
+      ∧ Wallet.TxFlow.StepVerified σv v
+      ∧ (∀ s ∈ b, Wallet.TxFlow.Step.isExec s = false) :=
+  Wallet.TxFlow.token_lift_traces_to_validate trace σ0 σf hrun hinit hlive
 
 end SphincsCVerify.Spec.Theorems

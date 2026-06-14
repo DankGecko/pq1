@@ -39,6 +39,7 @@ import SphincsCVerify.Wallet.SphincsDigestSpec
 import SphincsCVerify.Wallet.StorageLayout
 import SphincsCVerify.Wallet.Execute
 import SphincsCVerify.Wallet.Invariants
+import SphincsCVerify.Wallet.UpgradeSafety
 import SphincsCVerify.Wallet.OffchainBinding
 import SphincsCVerify.Wallet.TxFlow
 

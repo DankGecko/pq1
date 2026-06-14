@@ -16,10 +16,21 @@
 LEAN_DIR := lean
 LAKE     ?= $(shell command -v lake 2>/dev/null || echo $$HOME/.elan/bin/lake)
 
-.PHONY: verify verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk
+.PHONY: verify verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk verify-storage-mutators
 
 verify: verify-build
 	@cd $(LEAN_DIR) && $(LAKE) exe verify-test-vectors
+
+# I-3 closed-world gate: `no_reset_path` (Wallet/Invariants.lean) proves the
+# KNOWN Storage counter-mutators are non-decreasing, but "these are the ONLY
+# mutators" is an out-of-Lean assertion. This lint extracts every
+# Storage-returning / `{ s with }`-updating def in Wallet/Storage.lean and
+# FAILS if the set drifts from the pinned allow-list — so adding a new mutator
+# forces a conscious allow-list update + a matching no-decrease lemma. Pure
+# source lint (no lake build); positive=current tree PASS, negative=fake
+# resetter FAIL. See scripts/check_storage_mutators.sh.
+verify-storage-mutators:
+	@bash scripts/check_storage_mutators.sh
 
 # Bulk executable-spec differential (A3.1 follow-up): regenerate the random
 # corpus from the Rust signer (slow; gated behind GEN=1), embed it, and run

@@ -45,8 +45,38 @@ All findings below were reproduced kernel-side against a clean HEAD worktree
 >   unchanged** (verified); the new axiom enters only the disjointness
 >   corollary. AXIOM_STATUS.json updated (A6).
 >
-> The remaining items (P2/P3 + the out-of-scope device invariants) stay tracked
-> in `docs/work-todo.md`.
+> ## ✅ P2/P3 follow-ups also landed 2026-06-14 (A4 held for review)
+>
+> - **Gap-4 (upgrade_path_unreachable) — DONE.** New `Wallet/UpgradeSafety.lean`
+>   composes the two already-proven pieces (`Execute.execute_rejects_self_target`
+>   + `executeBatch_rejects_self_target` + `StorageLayout`
+>   impl-slot-disjointness) into the named conjunction `upgrade_path_unreachable`
+>   (kernel-only, no new axiom, no re-proof).
+> - **Gap-2 (per-call attribution) — DONE (honest scope).** Added per-execute-
+>   STEP injective attribution to `TxFlow.lean`
+>   (`growing_executes_le_verified_validates`: `#call-steps ≤
+>   #verifier-true-validates`, via a token-`ledger` proven to agree with the real
+>   `runTrace`). Rules out the existential gate's blind spot (1 validate → 2
+>   executes). **Honest scope:** per-execute-STEP, NOT per-call-ELEMENT (batch
+>   appends many calls under one validate; a literal per-call provenance map needs
+>   a model change). Builds on the EXISTING trace model; kernel-clean; no new axiom.
+> - **Gap-1 (closed-world) — DONE (CI lint).** `check_storage_mutators.sh` +
+>   `make verify-storage-mutators` pin the 5-mutator allow-list; tested
+>   positive (pass) + negative (a fake `evilReset` trips it). Build-side gate
+>   (Lean has no sound in-kernel "all Storage mutators" reflection), strictly
+>   stronger than the prior comment.
+> - **A4 (give `evm_bytecode_executes_correctly` content) — VERIFIED DRAFT,
+>   HELD for user go/no-go.** Restating `: True` → `∀ c, evmDeliversCall c`
+>   (opaque predicate) closes the falsifiability FAIL; verified to keep
+>   `theft_free`'s same 11-name closure + same strength (still cited-TCB). Held
+>   because it edits `theft_free`'s proof term and changes the headline
+>   trust-base shape.
+>
+> Verified integrated: full `lake build` 0-sorry; `theft_free` closure unchanged;
+> all new theorems kernel-clean; detonator type-errors; KATs 10/10 + 384/384.
+>
+> The remaining items (the out-of-scope device invariants #1–#4 + trusted
+> display) stay tracked in `docs/work-todo.md`.
 
 ---
 

@@ -19,3 +19,14 @@ import SphincsCVerify
 #print axioms SphincsCVerify.Wallet.TxFlow.any_call_implies_some_verify_true
 #print axioms SphincsCVerify.Spec.Theorems.every_call_gated_by_verifier
 #print axioms SphincsCVerify.Spec.Theorems.no_call_without_prior_verifier_acceptance
+
+-- Gap-2 — per-step (injective) attribution. Expected closure: kernel-only.
+#print axioms SphincsCVerify.Wallet.TxFlow.stepVerified_of_token_change
+#print axioms SphincsCVerify.Wallet.TxFlow.token_lift_traces_to_validate
+#print axioms SphincsCVerify.Wallet.TxFlow.step_ledger_ineq
+#print axioms SphincsCVerify.Wallet.TxFlow.ledger_invariant
+#print axioms SphincsCVerify.Wallet.TxFlow.growing_executes_le_verified_validates
+#print axioms SphincsCVerify.Wallet.TxFlow.stampsB_is_verified
+#print axioms SphincsCVerify.Wallet.TxFlow.growsB_is_exec
+#print axioms SphincsCVerify.Spec.Theorems.every_call_attributed_to_distinct_validate
+#print axioms SphincsCVerify.Spec.Theorems.call_traces_to_authorising_validate
