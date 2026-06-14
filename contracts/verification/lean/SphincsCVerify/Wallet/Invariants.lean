@@ -566,6 +566,33 @@ private theorem capOk_slot_implies_strict
       decide_eq_false hv2
     simp [hv2_false]
 
+/-- **Bootstrap analog of `capOk_slot_implies_strict`.** `capOk` on the
+    bootstrap path (`ownerIndex = 0`) implies the *strict* few-time-cap
+    precondition `bootstrapUses < MaxBootstrapUses` (invariant #7 for the
+    bootstrap key). This closes the proof-coverage asymmetry surfaced by the
+    2026-06-14 faithfulness audit's `cap-bootstrap` mutation survivor: before
+    this lemma, the slot path proved `capOk ⇒ strict-cap` but the bootstrap
+    path proved only monotonicity, so weakening `capOk`'s bootstrap `<` to `≤`
+    survived the whole proof (it was masked end-to-end only by the redundant
+    `bumpBootstrap` gate). With this lemma `capOk`'s bootstrap strictness is
+    itself proof-load-bearing — the `<`→`≤` mutation now fails to compile
+    here, because `≤` cannot discharge the `< `-typed conclusion. -/
+private theorem capOk_bootstrap_implies_strict
+    (s : Storage) (op : UserOperation) (oi : Nat)
+    (h0 : oi = 0) (h : capOk s op oi ≠ false) :
+    s.bootstrapUses < MaxBootstrapUses := by
+  unfold capOk at h
+  rw [if_pos h0] at h
+  -- The bootstrap branch is `decide (sel = addOwnerBytes) && decide (cap)`.
+  -- Extract the rightmost conjunct's `decide`-true content.
+  by_cases hv : s.bootstrapUses < MaxBootstrapUses
+  · exact hv
+  · exfalso
+    apply h
+    have hv_false : decide (s.bootstrapUses < MaxBootstrapUses) = false :=
+      decide_eq_false hv
+    simp [hv_false]
+
 /-- The full inductive invariant across `validateSignature`: if the
     combined cap holds in the pre-state and `validateSignature`
     returned success, it holds in the post-state. -/
@@ -603,6 +630,33 @@ theorem combinedCap_inductive
         -- Reduce the slotUses-update fn at index i (where i ≠ d.ownerIndex).
         simp [hi_eq]
         exact hi
+
+/-- **(I-7 bootstrap) Bootstrap few-time cap is enforced at the validation
+    gate.** If `validateSignature` accepts a bootstrap UserOp (the decoded
+    wrapper's `ownerIndex` is 0), then the pre-state strictly satisfied the
+    bootstrap cap: `bootstrapUses < MaxBootstrapUses`. This is the bootstrap
+    counterpart of `combinedCap_inductive` for slots — it makes
+    `capOk_bootstrap_implies_strict` proof-load-bearing (two-gate parity with
+    the slot path), so the `cap-bootstrap` mutation (`<`→`≤`) can no longer
+    pass verification. It states the *precondition* (an op at-or-past the cap is
+    refused), which `bumpBootstrap_capped` alone does not give — that lemma only
+    bounds the *post*-state value. -/
+theorem validateSignature_bootstrap_cap_strict
+    (s : Storage) (op : UserOperation) (entryPoint : ByteVec 20) (chainId : Nat)
+    (verify_fn : ByteVec 32 → ByteVec 32 → ByteVec 32 → ByteVec SignatureLen → Bool)
+    (s' : Storage) (d : DecodedSig)
+    (hdec : decodeWrappedSig op.signature = some d)
+    (h0 : d.ownerIndex = 0)
+    (h : validateSignature s op entryPoint chainId verify_fn = (Result.success, s')) :
+    s.bootstrapUses < MaxBootstrapUses := by
+  rw [validateSignature_success_iff] at h
+  obtain ⟨d', _owner, ⟨hdec', _, hcapTrue, _, _⟩, _⟩ := h
+  -- Reconcile the existential decode with the hypothesis decode.
+  rw [hdec] at hdec'
+  have hdd : d = d' := Option.some.inj hdec'
+  have h0' : d'.ownerIndex = 0 := by rw [← hdd]; exact h0
+  have hcap_neq : capOk s op d'.ownerIndex ≠ false := by rw [hcapTrue]; decide
+  exact capOk_bootstrap_implies_strict s op d'.ownerIndex h0' hcap_neq
 
 /-! ## (I-6) EIP-1271 forbids bootstrap
 

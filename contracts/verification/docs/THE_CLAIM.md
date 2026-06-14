@@ -112,6 +112,34 @@ A5/A3.1 are supposed to discharge separately).
 
 ---
 
+## ⚠️ Scope of the proof (read before quoting "theft_free proven")
+
+A faithfulness audit (2026-06-14, mutation testing + coverage matrix +
+per-axiom falsifiability — [`FAITHFULNESS_AUDIT_2026-06-14.md`](FAITHFULNESS_AUDIT_2026-06-14.md))
+confirms the verification is **faithful within its declared scope** (8/9
+injected real defects were caught, most at compile time), but the scope is the
+**on-chain contract + the SPHINCS+C10 spec only**:
+
+- **5 of the 9 CLAUDE.md non-negotiable invariants are NOT formally proven.**
+  #1 dual-chip XOR seed split, #2 hardware PIN three-way lockstep, #3 E2E SE
+  tunnels, #4 TrustZone secret isolation, and the trusted-display clear-signing
+  pipeline are firmware/secure-world/hardware properties with **zero Lean
+  coverage** — they rest on silicon E2E tests + the security-review docs. Do not
+  let "theft_free proven" be read as a device-wide guarantee.
+- **The P1 bootstrap-cap proof-coverage hole is now CLOSED (2026-06-14).**
+  `capOk_bootstrap_implies_strict` + `validateSignature_bootstrap_cap_strict`
+  give the bootstrap few-time cap (`bootstrapUses < MAX_BOOTSTRAP_USES`,
+  invariant #7) the same proof coverage the slot path had — the `<`→`≤`
+  mutation now fails to compile. Two-gate parity.
+- **`replaySafeHash` domain separation is now MODELED (Gap-3, 2026-06-14).**
+  `Wallet/OffchainBinding.lean` proves an off-chain-nested value is never any
+  UserOp `sphincsDigest` (the RAW32 forgery-oracle defense), reducing it to one
+  new cited axiom `keccak_sha256_cross_separation` (cross-hash separation,
+  `∨ BreaksHash`; `keccak256` opaque). `theft_free`'s closure is unchanged.
+- **A4 (`evm_bytecode_executes_correctly : True`) and `keccak256_pure` are
+  non-falsifiable as stated** (sound, but `True`-typed / uninterpreted) — they
+  carry the EVM-execution and keccak boundaries by citation, not content.
+
 ## ❌ NOT claimable (the named gaps)
 
 Do **not** say any of the following:

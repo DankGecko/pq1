@@ -71,3 +71,17 @@ import SphincsCVerify
 -- execute bridge axioms discharged by test/halmos/HalmosExecuteEquiv.t.sol.
 #print axioms SphincsCVerify.Spec.Theorems.deployed_execute_requires_prior_token
 #print axioms SphincsCVerify.Spec.Theorems.deployed_executeBatch_requires_prior_token
+
+-- (I-7 bootstrap) Bootstrap few-time cap enforced at the validation gate —
+-- the faithfulness-audit (2026-06-14) P1 fix that makes capOk's bootstrap
+-- strictness proof-load-bearing (two-gate parity with the slot path). Closure
+-- = {propext, Quot.sound} only (kernel-clean, no new axiom).
+#print axioms SphincsCVerify.Wallet.Invariants.validateSignature_bootstrap_cap_strict
+
+-- (Gap-3) Off-chain/on-chain domain separation — the RAW32 forgery-oracle
+-- defense: an off-chain replaySafeHash-nested value is never equal to any
+-- UserOp sphincsDigest. Closure adds exactly ONE new cited axiom,
+-- keccak_sha256_cross_separation (cross-hash separation, same `… ∨ BreaksHash`
+-- reduction shape as sha256_collision_resistance); keccak256 is `opaque`
+-- (Classical.choice), not a named axiom. Never concludes False.
+#print axioms SphincsCVerify.Wallet.OffchainBinding.offchain_nested_disjoint_from_userop_digest
