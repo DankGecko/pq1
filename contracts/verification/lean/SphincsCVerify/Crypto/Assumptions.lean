@@ -28,9 +28,13 @@ axiomatise the resulting bound with citations.
 Lean 4 + mathlib does not (yet) have a production-grade game-based
 cryptography library comparable to EasyCrypt's `pRHL` and `phl`
 modules. Rather than introduce a probability theory backbone, we treat
-each cryptographic assumption as a function-typed axiom: parametric in
-the SHA-256 inputs that the hardness assumption ranges over, returning
-`True` because the spec form is "no PPT adversary breaks this." A
+each cryptographic assumption as an OPAQUE proposition (2026-06-14
+reconciliation): the three hardness shapes (`SM_DT_TCR_F_Shape` etc.)
+are `opaque Prop`s witnessed by their axioms, and the operative
+assumptions are stated as REDUCTIONS to the opaque `BreaksHash` token
+(an EUF-CMA forgery ⇒ `BreaksHash`; a same-length SHA-256 collision ⇒
+`BreaksHash`). This is consistent — no `∀_,True` placeholders, no
+literally-false injectivity — and `BreaksHash` is never assumed false. A
 future EasyCrypt-style port would replace these with `Pr[Game(A)] ≤
 ε(A)` real-valued inequalities.
 
@@ -73,6 +77,16 @@ real-valued inequalities. -/
     Hülsing PQC2022 Table 2 (SPHINCS+-128f / 128s analogues). -/
 def negligible : Nat := 1 <<< 128  -- ≥ 2^128, the inverse of the bound
 
+/-- **Opaque SHA-256 hardness-break token.** The shared conclusion of every
+    cryptographic reduction in this development (an EUF-CMA forgery, or a
+    SHA-256 same-length collision): "one of the cited SHA-256 hardness
+    assumptions was broken." Opaque — concludable, never refutable.
+    **INVARIANT: never assume `¬ BreaksHash`** (that re-introduces the
+    inconsistency the 2026-06-14 reconciliation fixed). Lives here (rather than
+    in `EUFCMA.lean`) so the EUF-CMA reduction and the collision-resistance
+    axiom share one token. -/
+opaque BreaksHash : Prop
+
 /-! ### Spec-level signature shapes for the three primitives.
 
 These type aliases pin the call shape of the three SHA-256 assumptions.
@@ -84,17 +98,13 @@ of any theorem that uses EUF-CMA. -/
     statement parametric in the SHA-256 inputs the assumption ranges
     over. The witness is the axiom `SM_DT_TCR_F` below; downstream
     consumers take values of this type as preconditions. -/
-def SM_DT_TCR_F_Shape : Prop :=
-  ∀ (_pkSeed : ByteVec 32) (_adrsList : List Adrs)
-    (_xs : List (ByteVec 32)), True
+opaque SM_DT_TCR_F_Shape : Prop
 
 /-- Functional type of an ITSR-F witness. -/
-def ITSR_F_Shape : Prop :=
-  ∀ (_pkSeed : ByteVec 32), True
+opaque ITSR_F_Shape : Prop
 
 /-- Functional type of an `H_msg`-RO witness. -/
-def hMsg_RO_Shape : Prop :=
-  ∀ (_seed _root _r _m : ByteVec 32), True
+opaque hMsg_RO_Shape : Prop
 
 /-- **SM-DT-TCR on F (the chain step tweakable hash).**
 
@@ -137,28 +147,30 @@ axiom hMsg_random_oracle : hMsg_RO_Shape
 
 /-! ## C. Named corollaries used by wallet-level theorems. -/
 
-/-- **SHA-256 is collision-free on equal-total-length inputs.**
+/-- **SHA-256 collision-resistance (reduction form).**
 
     For any two segment lists whose flattened byte arrays have the same
-    length, if their SHA-256 digests match then the flattened arrays
-    are equal. Stated as the contrapositive: any pair of distinct
-    same-length preimages that collide under SHA-256 would constitute a
-    collision-resistance break, contradicting `SM_DT_TCR_F` (when
-    restricted to the empty `ADRS` tweak, which yields the unkeyed
-    collision-resistance statement).
+    length, if their SHA-256 digests match then EITHER the flattened arrays
+    are equal OR a SHA-256 hardness assumption was broken (`BreaksHash`).
 
-    This is the cryptographic content needed by Claim 1's
-    `sphincsDigest_field_binding` lemma: equal `sphincsDigest(op)`
-    digests imply equal preimages, which (with a fixed 240-byte
-    layout) means equal field values.
+    This is the honest, CONSISTENT rendering (2026-06-14): literal injectivity
+    (`… → flatten segs1 = flatten segs2`) is mathematically FALSE — by
+    pigeonhole, two distinct same-length inputs longer than 32 bytes must
+    collide. So an unconditional "equal digests ⟹ equal preimages" axiom is a
+    false proposition (latent-inconsistent; it would detonate under mathlib's
+    pigeonhole). The reduction form is true: a distinct-same-length collision
+    IS a collision-resistance break, so it lands in the `BreaksHash` disjunct;
+    when no collision occurs, the equal-preimage disjunct holds. `BreaksHash`
+    is the cited-infeasible branch (Barbosa et al. 2024 SM-DT-TCR, empty-ADRS
+    unkeyed collision-resistance), never assumed false.
 
-    Stated as an axiom because Lean does not formalise the probabilistic
-    advantage bound; the discharge is the same Barbosa et al. 2024
-    EasyCrypt reduction that backs `SM_DT_TCR_F`. -/
-axiom sha256_injective_on_fixed_length :
+    Claim 1's `sphincsDigest_field_binding` propagates the disjunct: equal
+    `sphincsDigest(op)` digests imply equal preimages — unless SHA-256 is
+    broken. -/
+axiom sha256_collision_resistance :
     ∀ (segs1 segs2 : List ByteSeg),
       (ByteSeg.flatten segs1).size = (ByteSeg.flatten segs2).size →
       sha256 segs1 = sha256 segs2 →
-      ByteSeg.flatten segs1 = ByteSeg.flatten segs2
+      ByteSeg.flatten segs1 = ByteSeg.flatten segs2 ∨ BreaksHash
 
 end SphincsCVerify.Crypto

@@ -13,11 +13,14 @@ cited axioms with **no `sorryAx`** and is **consistent**. `theft_free`'s
 *safety* guarantee (conjunct 1) is EUF-CMA-free; the crypto enters only as the
 cited conjunct-2 reduction. See §6.
 >
-> **Remaining (do NOT block `theft_free`):** `theft_free_with_calldata_binding`
-> still depends on `sha256_injective_on_fixed_length` (false-by-pigeonhole,
-> latent — restate as collision-resistance before any mathlib import); and the
-> three SHA-256 hardness shapes are still `∀_,True` placeholders (harmless now
-> — `KeyHistory` + opaque `BreaksHash` are the real guards — a faithfulness nit).
+> **Follow-ups ALSO fixed (2026-06-14):** the false `sha256_injective_on_fixed_length`
+> was replaced by `sha256_collision_resistance` (consistent disjunctive
+> reduction `equal preimages ∨ BreaksHash`; `theft_free_with_calldata_binding` /
+> `sphincsDigest_field_binding` now conclude that honest form), and the three
+> SHA-256 hardness shapes were upgraded from `∀_,True` to `opaque` Props.
+> `BreaksHash` now lives in `Assumptions.lean` (shared by both reductions). The
+> trust base now has **no false / vacuous / inconsistent axioms** — only honest
+> cited assumptions. See §6.
 
 ---
 
@@ -190,5 +193,11 @@ Verification (kernel-checked, my own hands):
   (BreaksHash : Prop / False : Prop)` — dead.
 - both guard lemmas close over `{propext, Quot.sound}`.
 
-Still open (separate follow-up, non-detonating): restate `sha256_injective`
-(§4) and upgrade the three `∀_,True` hardness shapes to opaque hardness props.
+Follow-ups (done 2026-06-14, same session): `sha256_injective_on_fixed_length`
+→ `sha256_collision_resistance` (Assumptions.lean — disjunctive reduction
+`flatten eq ∨ BreaksHash`; `sphincsDigest_preimage_eq`/`_field_binding` +
+`theft_free_with_calldata_binding` re-derived to the `∨ BreaksHash` form,
+verified closure = `{propext, Classical.choice, Quot.sound,
+sha256_collision_resistance}`); and the three `∀_,True` hardness shapes →
+`opaque` Props. `BreaksHash` moved to `Assumptions.lean` (shared token). No
+false/vacuous/inconsistent axioms remain.

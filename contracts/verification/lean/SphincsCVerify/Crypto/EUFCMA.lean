@@ -77,12 +77,10 @@ def Transcript : Type := List (ByteVec 32 × Hypertree.Signature)
 def transcriptHasMsg (transcript : Transcript) (msgStar : ByteVec 32) : Prop :=
   ∃ s, List.Mem (msgStar, s) transcript
 
-/-- **Opaque SHA-256 hardness break.** The reduction's conclusion: a forgery
-    against an honest key on an un-queried message would constitute a break of
-    the cited SHA-256 hardness assumptions. Opaque (no constructor / no
-    eliminator), so it can be *concluded* but never *refuted*. Firewall #2:
-    NEVER assume `¬ BreaksHash` — that re-detonates the inconsistency. -/
-opaque BreaksHash : Prop
+-- `BreaksHash` (the opaque SHA-256 hardness-break token — firewall #2, the
+-- reduction's conclusion) is defined in `Crypto/Assumptions.lean` so it is
+-- shared with the collision-resistance axiom. INVARIANT: never assume
+-- `¬ BreaksHash` — that re-detonates the inconsistency.
 
 /-- **Key-bound signing history** (firewall #1 — the EUF-CMA oracle-log
     invariant). `KeyHistory sk transcript` says the transcript IS exactly the

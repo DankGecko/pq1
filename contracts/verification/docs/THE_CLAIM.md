@@ -19,13 +19,16 @@ section below, do not ship it.
 > closure = the 11 cited axioms, no `sorryAx`). Details:
 > [`EUF_CMA_INCONSISTENCY.md`](EUF_CMA_INCONSISTENCY.md).
 >
-> **Two residual items (do NOT block `theft_free`, but tracked):** (1)
-> `theft_free_with_calldata_binding` still rests on `sha256_injective_on_fixed_length`,
-> which is false-by-pigeonhole (latent — non-detonatable only because `lean/`
-> is mathlib-free); restate as collision-resistance before any mathlib import.
-> (2) the three SHA-256 hardness shapes (`SM_DT_TCR_F`/`ITSR_F`/`hMsg_random_oracle`)
-> are still `∀_,True` placeholders — harmless now (KeyHistory + opaque BreaksHash
-> are the real guards) but a faithfulness nit to upgrade to opaque hardness props.
+> **The two faithfulness follow-ups are now ALSO fixed (2026-06-14):** (1) the
+> false `sha256_injective_on_fixed_length` was replaced by
+> `sha256_collision_resistance` (a consistent disjunctive reduction:
+> `equal preimages ∨ BreaksHash`); `theft_free_with_calldata_binding` /
+> `sphincsDigest_field_binding` now conclude the honest `∨ BreaksHash` form and
+> close over the consistent axiom. (2) the three SHA-256 hardness shapes were
+> upgraded from `∀_,True` placeholders to `opaque` Props. So the trust base now
+> has **no false / vacuous / inconsistent axioms** — only honest cited
+> assumptions (`BreaksHash` shared in `Assumptions.lean`). The dangling+latent-false
+> `entrypoint_no_replay` was deleted.
 
 ---
 
@@ -57,9 +60,10 @@ Specifically and defensibly:
    would break SHA-256) is the **cited** Barbosa-et-al. reduction. So the
    substantive theft-freedom content is conjunct 1 (control-flow, discharged
    to bytecode); the cryptographic infeasibility is cited, not mechanised.
-   Reproduced 2026-06-14 (`make verify-audit`). (Caveat: the variant
-   `theft_free_with_calldata_binding` still rests on the false-latent
-   `sha256_injective` — see the banner.)
+   Reproduced 2026-06-14 (`make verify-audit`). (The variant
+   `theft_free_with_calldata_binding` now closes over the consistent
+   `sha256_collision_resistance` and concludes the honest `preimage eq ∨
+   BreaksHash` form — the false `sha256_injective` axiom is gone.)
 2. **Control-flow bytecode discharge.** 38 Halmos rules pass on **both** the
    `default` (runs=200) and `deploy` (runs=999999) profiles' deployed
    bytecode, against pinned codehashes — validate (pointwise + per-property;

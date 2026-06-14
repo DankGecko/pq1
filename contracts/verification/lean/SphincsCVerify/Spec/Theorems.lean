@@ -517,11 +517,11 @@ corollary adds the cryptographic **field-binding** result: the signed
 digest commits to the op's fields (sender, nonce, callData, gas
 params, chainId, entryPoint). Composes I-1 (non-bypass) +
 `Wallet.SphincsDigestSpec.sphincsDigest_field_binding`
-(sha256_injective_on_fixed_length) + the bridge axioms.
+(sha256_collision_resistance) + the bridge axioms.
 
 Consumed-by-claim: this is the headline statement for Claim 1
 ("signature-to-execution binding"). Removing
-`sha256_injective_on_fixed_length` from the axiom set would leave a
+`sha256_collision_resistance` from the axiom set would leave a
 hole — equal digests would no longer imply equal preimages, so
 calldata could in principle differ between the signing and execution
 sides. -/
@@ -539,12 +539,13 @@ theorem theft_free_with_calldata_binding
     (hSameDigest : sphincsDigest op1 σ.entryPointAddress σ.chainId
                      = sphincsDigest op2 σ.entryPointAddress σ.chainId) :
     -- Then `op2` and `op1` agree on the preimage (and hence on every
-    -- positional field): no calldata substitution is possible without
-    -- a SHA-256 collision (ruled out by A5).
+    -- positional field) — UNLESS SHA-256 is broken: no calldata substitution
+    -- is possible without a same-length SHA-256 collision, which lands in the
+    -- (cited-infeasible) `BreaksHash` disjunct.
     sphincsDigestPreimage op1 σ.entryPointAddress σ.chainId
-      = sphincsDigestPreimage op2 σ.entryPointAddress σ.chainId := by
-  -- Discharge by `sphincsDigest_field_binding` (Phase 1A theorem,
-  -- which itself reduces to `sha256_injective_on_fixed_length`).
+      = sphincsDigestPreimage op2 σ.entryPointAddress σ.chainId ∨ Crypto.BreaksHash := by
+  -- Discharge by `sphincsDigest_field_binding`, which reduces to
+  -- `sha256_collision_resistance` (equal preimages, or a SHA-256 break).
   exact sphincsDigest_field_binding op1 op2
     σ.entryPointAddress σ.chainId hSameDigest
 
