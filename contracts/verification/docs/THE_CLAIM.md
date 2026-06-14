@@ -1,13 +1,33 @@
-# The claim — exactly what is and isn't proven (2026-06-13)
+# The claim — exactly what is and isn't proven (2026-06-14)
 
 This file is the single source of truth for **what you may publicly claim**
 about the PQSmartWallet formal-verification stack. It is deliberately
 conservative. If a marketing line is not derivable from the "✅ Claimable"
 section below, do not ship it.
 
+> ## 🛑 CRITICAL — `theft_free` is currently VACUOUS (2026-06-14)
+>
+> An adversarial audit found and **reproduced (kernel-checked, no `sorryAx`)**
+> a derivation of `False` from the `lean/` crypto axiom set: the
+> `EUF_CMA_SPHINCSplusC` axiom (`∀ vk transcript m s, isForgery … → False`)
+> is **inconsistent**. A genuine valid KAT signature at the *empty transcript*
+> satisfies `isForgery` (since `verify` now accepts valid sigs, post commit
+> `5055d66`), so `cannot_forge_without_breaking_SHA256 … : False`. **Because
+> `theft_free` / `theft_free_bytecode` / `cannot_forge_without_breaking_SHA256`
+> / `theft_free_with_calldata_binding` depend on this axiom set, they are
+> currently VACUOUSLY TRUE and establish NOTHING about wallet safety.** DO NOT
+> claim theft-freedom until `EUF_CMA` is restated to a consistent shape and
+> `theft_free` is re-derived. Root cause + fix options:
+> [`EUF_CMA_INCONSISTENCY.md`](EUF_CMA_INCONSISTENCY.md). Scope: the
+> *component* proofs below (wallet-model invariants, §33 extracted functional
+> proofs, Halmos bytecode-equivalence, A3.1 verifier KAT) do **not** depend on
+> the crypto axioms and remain valid; only the top-level theft-freedom
+> composition is hollow. (Secondary: `sha256_injective_on_fixed_length` is also
+> a false axiom — latent, non-detonatable only because `lean/` is mathlib-free.)
+
 ---
 
-## ✅ Claimable (true, reproduced)
+## ✅ Claimable (true, reproduced) — SEE THE 🛑 BANNER: #1 below is SUSPENDED
 
 > **The PQSmartWallet's on-chain control flow is formally verified, and the
 > verification is connected to the deployed bytecode.** A Lean 4
@@ -23,9 +43,16 @@ section below, do not ship it.
 
 Specifically and defensibly:
 
-1. **Kernel proof.** `theft_free` and its claim corollaries are checked by
-   the Lean 4 kernel with **zero `sorry`** and an axiom closure of exactly
-   11 named axioms (`make verify-audit`). Reproduced 2026-06-11.
+1. **Kernel proof. 🛑 SUSPENDED 2026-06-14 — see the banner above.**
+   `theft_free` is `sorry`-free and kernel-checked, BUT its 11-axiom closure
+   includes the **inconsistent** `EUF_CMA_SPHINCSplusC` (+ the three `∀_,True`
+   crypto shapes), so the theorem is **vacuously true and carries no force**
+   until A5 is restated. The kernel-checked *component* proofs that do NOT
+   depend on the crypto axioms (the wallet-model invariants — `combinedCap_inductive`,
+   `bootstrap_unremovable`, `eip1271_forbids_bootstrap`, `factory_requires_bootstrap_sig`,
+   `create2_*`, etc.; verified via `#print axioms` to close over only
+   `propext`/`Classical.choice`/`Quot.sound`) remain valid. The theft-freedom
+   *composition* is reinstated only after the EUF-CMA fix.
 2. **Control-flow bytecode discharge.** 38 Halmos rules pass on **both** the
    `default` (runs=200) and `deploy` (runs=999999) profiles' deployed
    bytecode, against pinned codehashes — validate (pointwise + per-property;

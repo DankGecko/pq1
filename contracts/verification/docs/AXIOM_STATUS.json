@@ -1,6 +1,7 @@
 {
   "schema_version": 2,
-  "last_updated": "2026-06-11",
+  "last_updated": "2026-06-14",
+  "critical_alert": "🛑 theft_free is currently VACUOUS (2026-06-14). The A5-EUFCMA axiom is INCONSISTENT (kernel-checked False reproduced, no sorryAx) — see the A5-EUFCMA entry + docs/EUF_CMA_INCONSISTENCY.md. theft_free / theft_free_bytecode / cannot_forge_without_breaking_SHA256 / theft_free_with_calldata_binding depend on it and prove nothing until A5 is restated. The component proofs NOT in the crypto closure (wallet-model invariants, §33 extracted, Halmos A3.*, A3.1 KAT) remain valid. Secondary: A5-injective is a false-but-latent axiom (see its entry). NOT an on-chain vulnerability.",
   "headline_theorem": "SphincsCVerify.Spec.Theorems.theft_free",
   "claim_corollaries": [
     "SphincsCVerify.Spec.Theorems.theft_free_with_calldata_binding",
@@ -256,8 +257,8 @@
       "name": "SphincsCVerify.Crypto.EUF_CMA_SPHINCSplusC",
       "description": "SPHINCS+C10 is EUF-CMA secure.",
       "lean_type": "SM_DT_TCR_F_Shape → ITSR_F_Shape → hMsg_RO_Shape → ∀ vk transcript msg* sig*, isForgery ... → False",
-      "status": "cited-tcb",
-      "status_detail": "Real propositional content (asserts non-forgery). The three preconditions reduce to `True` (Barbosa et al. modular reduction). Discharge is the EasyCrypt mechanization + SPHINCS+ → SPHINCS+C transition argument.",
+      "status": "BROKEN-INCONSISTENT",
+      "status_detail": "🛑 INCONSISTENT as written (found 2026-06-14, reproduced kernel-checked with no sorryAx — see docs/EUF_CMA_INCONSISTENCY.md). The axiom `∀ vk transcript msg* sig*, isForgery → False` degenerates at transcript=[] to 'the verifier accepts NO signature'; but Spec.Signature.verify accepts the valid KAT vectors (full-verify 10/10 since commit 5055d66), so a genuine valid KAT sig at the empty transcript derives False. theft_free / theft_free_bytecode / cannot_forge_without_breaking_SHA256 / theft_free_with_calldata_binding depend on this axiom set and are therefore VACUOUSLY TRUE (carry no force) until A5 is restated to a consistent shape (game/probability, reduction, or demote-to-explicit-hypothesis) and theft_free is re-derived. Root cause: commit 5055d66 fixed A3.1 (made verify accept valid sigs) which simultaneously broke A5 (the two are mutually exclusive for an executable verifier). The EUF-CMA SECURITY of SPHINCS+ remains a legitimate cited assumption (Barbosa et al.); the defect is purely the self-contradictory Lean SHAPE. NOT an on-chain vulnerability.",
       "discharge_artifacts": [
         {
           "type": "citation",
@@ -301,8 +302,8 @@
       "name": "SphincsCVerify.Crypto.sha256_injective_on_fixed_length",
       "description": "SHA-256 is collision-free on equal-total-length inputs (named corollary of A5, used by sphincsDigest_field_binding for Claim 1).",
       "lean_type": "∀ segs1 segs2, (flatten segs1).size = (flatten segs2).size → sha256 segs1 = sha256 segs2 → flatten segs1 = flatten segs2",
-      "status": "cited-tcb",
-      "status_detail": "Real propositional content. Discharge is the same Barbosa et al. 2024 reduction backing SM_DT_TCR_F; in Lean stated as a named corollary axiom so Claim 1's field-binding theorem cites it directly.",
+      "status": "FALSE-AXIOM-LATENT",
+      "status_detail": "⚠️ MATHEMATICALLY FALSE as written (found 2026-06-14): unrestricted same-length injectivity of SHA-256 is pigeonhole-false for inputs > 32 bytes (it is used on the 240-byte sphincsDigest preimage). Currently NON-detonatable ONLY because lean/ is mathlib-free (no Finite/pigeonhole lemma available to exhibit the contradiction) — confirmed `#check @Finite` = unknown identifier. theft_free_with_calldata_binding rests on it. MUST be restated as collision-resistance (no-PPT-adversary-finds-a-collision) BEFORE mathlib is ever imported (mathlib would detonate it). The intended cryptographic content (collision-resistance, Barbosa et al.) is legitimate; the literal injectivity SHAPE is the defect. See docs/EUF_CMA_INCONSISTENCY.md §4.",
       "discharge_artifacts": [],
       "citation": "Barbosa et al. 2024 (corollary of SM_DT_TCR_F)"
     },
