@@ -33,6 +33,17 @@ pub(crate) mod wots;
 // crates construct `ShuffleSeed` values to drive `sign_with_shuffle`.
 pub mod shuffle;
 
+/// TEST-ONLY +C-gate near-miss vector generator. Gated behind the
+/// `near-miss-gen` feature (off by default, NEVER shipped). Produces
+/// signatures that reconstruct the correct `pk_root` under standard WOTS +
+/// hypertree verification but are rejected by the deployed verifier ONLY
+/// because of the WOTS+C digit-sum gate (NM1) or the FORS+C forced-zero gate
+/// (NM2). Used by `tests/gen_test_vectors.rs` to add gate-isolating negatives
+/// so the Lean KAT can SEE a gate's removal. The production signer is
+/// unchanged. See the module docs for the construction's correctness argument.
+#[cfg(feature = "near-miss-gen")]
+pub mod near_miss;
+
 // Measurement-only (work-todo §18 SCA step a): per-category hash-call
 // counters. Re-exported at the crate root so integration tests can read
 // the secret-touching (PRF) vs public (tree/chain) breakdown per sign.

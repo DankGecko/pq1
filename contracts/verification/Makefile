@@ -16,7 +16,7 @@
 LEAN_DIR := lean
 LAKE     ?= $(shell command -v lake 2>/dev/null || echo $$HOME/.elan/bin/lake)
 
-.PHONY: verify verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk verify-storage-mutators
+.PHONY: verify verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk verify-storage-mutators verify-fv-lints verify-lean4checker
 
 verify: verify-build
 	@cd $(LEAN_DIR) && $(LAKE) exe verify-test-vectors
@@ -31,6 +31,33 @@ verify: verify-build
 # resetter FAIL. See scripts/check_storage_mutators.sh.
 verify-storage-mutators:
 	@bash scripts/check_storage_mutators.sh
+
+# FV-invariant escape-hatch gate: fails CI on the audit anti-patterns over the
+# lean/ + extracted/ Lean SOURCE (comment-stripped). Four sub-lints:
+#   (a) no proof-path escape hatches (native_decide / decide +native / @[csimp]
+#       / @[implemented_by] / @[extern] / unsafe / partial / reduceBool);
+#   (b) BreaksHash firewall (no `¬ BreaksHash` / `BreaksHash → False`);
+#   (c) Gap-3 + theft_free axiom-closure tripwire (dump_axioms.lean must show
+#       keccak_sha256_cross_separation in the offchain closure + the expected
+#       A1/A2/A3.1/A4/A5 + kernel premises in theft_free's closure);
+#   (d) opaque-guard (`trivial` must NOT inhabit Bridge.evmDeliversCall default
+#       — catches an opaque→def A4 regression that #print-axioms misses).
+# Sub-lints (c)/(d) read the built oleans, so this depends on verify-build.
+# See scripts/lint_fv_invariants.sh (positive=clean tree PASS; negative trips
+# documented in the script header).
+verify-fv-lints: verify-build
+	@bash scripts/lint_fv_invariants.sh
+
+# EXTERNAL kernel re-check gate (deep-research rec #1). lean/ is Lean v4.22.0,
+# inside the pre-#8842 collectAxioms under-report window, so `#print axioms`
+# (verify-audit) can under-report the trust base. lean4checker independently
+# replays the whole SphincsCVerify environment back through the Lean kernel and
+# computes the TRUE closure — non-zero exit on any rejected declaration. Needs a
+# version-matched lean4checker at ~/lean4checker (see scripts/run_lean4checker.sh
+# header for the one-time build: git clone + checkout v4.22.0 + lake build);
+# override the location with LEAN4CHECKER_DIR=...
+verify-lean4checker:
+	@bash scripts/run_lean4checker.sh
 
 # Bulk executable-spec differential (A3.1 follow-up): regenerate the random
 # corpus from the Rust signer (slow; gated behind GEN=1), embed it, and run

@@ -30,6 +30,15 @@ hash-counters = []
 # Off by default so the production public API stays minimal; never shipped.
 sim-internals = []
 
+# Expose `sphincs_c10::near_miss` — a TEST-ONLY +C-gate near-miss vector
+# generator. It produces signatures that reconstruct the correct pkRoot but
+# fail ONLY the WOTS+C digit-sum gate (NM1) or the FORS+C forced-zero gate
+# (NM2), so the Lean / Solidity KAT can SEE a gate's removal (the gates were
+# previously only proof-guarded — see contracts/verification A3.1). Off by
+# default; the production signer is unchanged (grinding stays on); never
+# shipped. Consumed by `tests/gen_test_vectors.rs`.
+near-miss-gen = []
+
 # `--cfg lean_extract` is set ONLY by the Aeneas/Charon Lean-extraction
 # run (work-todo §33 P0): it compiles out the UI progress-callback slot
 # (an arrow type the extraction can't represent). Never set by any

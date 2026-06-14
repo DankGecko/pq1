@@ -1,0 +1,413 @@
+#!/usr/bin/env bash
+#
+# lint_fv_invariants.sh — CI gate that fails on the formal-verification
+# audit anti-patterns ("escape hatches") in the SphincsCVerify (lean/) and
+# Aeneas-extracted (extracted/) Lean source trees.
+#
+# Four independent sub-lints (each can fail the run; all run before exit):
+#
+#   (a) ESCAPE-HATCH gate — no proof-path use of the kernel-trust escape
+#       hatches:  native_decide, `decide +native`, @[csimp],
+#       @[implemented_by], @[extern], `unsafe `, `partial `,
+#       Lean.ofReduceBool / reduceBool.  Scanned with COMMENTS STRIPPED
+#       (-- line comments + nested /- -/ blocks) so prose mentioning the
+#       names is fine; IO `lake exe` / audit-script mains (Main.lean,
+#       CavpMain.lean, BulkMain.lean, anything under lean/scripts/) are
+#       excluded — they are programs, not proofs.
+#
+#   (b) BreaksHash FIREWALL — no non-comment `¬ BreaksHash`,
+#       `Not BreaksHash`, or `BreaksHash → False`.  Assuming the opaque
+#       SHA-256 hardness-break token false re-detonates the EUF_CMA
+#       inconsistency the 2026-06-14 fix removed.
+#
+#   (c) GAP-3 CLOSURE TRIPWIRE — runs `lake env lean --run
+#       scripts/dump_axioms.lean` and asserts:
+#         * the `offchain_nested_disjoint_from_userop_digest` axiom-closure
+#           line literally contains `keccak_sha256_cross_separation` (so the
+#           Gap-3 `True ∨ BreaksHash` tautology mutation, which would drop
+#           that axiom from the closure, fails CI), AND
+#         * `theft_free`'s closure contains exactly the expected named
+#           premises (A1/A2/A3.1/A4/A5 + kernel triple).
+#
+#   (d) OPAQUE-GUARD — asserts `trivial` / `True.intro` does NOT inhabit
+#       `Bridge.evmDeliversCall (default : Wallet.Execute.Call)` by
+#       compiling a tiny temp Lean file and confirming it FAILS.  Catches an
+#       opaque→`def := fun _ => True` A4 regression that `#print axioms`
+#       alone misses (the regressed def would silently drop A4 from
+#       theft_free's closure and let `trivial` discharge the marker).
+#
+# Run from anywhere; resolves the repo root from its own location.
+#
+# Exit codes:
+#   0  every sub-lint passed (PASS)
+#   1  at least one sub-lint tripped (FAIL); details on stderr
+#   2  internal error (missing tooling / unbuilt Lean project / bad parse)
+#
+# Tooling required: lake (Lean 4), python3.
+#
+# Invoked from `make verify-fv-lints` (and from CI).
+#
+# Robustness note: greps that may legitimately zero-match are wrapped in
+# `|| true` so `set -o pipefail` does not abort the lint on a clean tree
+# (same convention as lint_axioms.sh).
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+VERIF_DIR="${REPO_ROOT}/contracts/verification"
+LEAN_DIR="${VERIF_DIR}/lean"
+EXTRACTED_DIR="${VERIF_DIR}/extracted"
+
+# Ensure elan-installed lake is on PATH for CI environments.
+export PATH="${HOME}/.elan/bin:${PATH}"
+
+err() { printf 'lint_fv_invariants.sh: %s\n' "$*" >&2; }
+
+require() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    err "missing required tool: $1"
+    exit 2
+  fi
+}
+
+require lake
+require python3
+
+for d in "${LEAN_DIR}" "${EXTRACTED_DIR}"; do
+  if [ ! -d "$d" ]; then
+    err "source tree missing: $d"
+    exit 2
+  fi
+done
+
+###############################################################################
+# Comment-stripping helper.
+#
+# Emits, for each scanned *.lean SOURCE file (under the SphincsCVerify spec
+# tree + the extracted Aeneas tree, EXCLUDING IO/exe/audit-script mains),
+# its comment-stripped text prefixed with `path:lineno:` so a downstream
+# grep reports a real, human-navigable location.  Handles `--` line
+# comments and NESTED `/- ... -/` block comments (mirrors the proven
+# stripper in lint_placeholders.py).
+###############################################################################
+
+# Files that are IO programs / audit dumps, NOT proofs. The KAT `lake exe`
+# mains (Main/CavpMain/BulkMain) and everything under lean/scripts/ are
+# allowed to use `partial def`, IO, etc.
+strip_comments_py() {
+  python3 - "$@" <<'PYEOF'
+import sys, os
+
+def strip_comments(text):
+    out_lines = []
+    in_block = 0  # nested /- -/ depth
+    for line in text.splitlines():
+        i = 0
+        buf = []
+        while i < len(line):
+            if in_block > 0:
+                close_at = line.find("-/", i)
+                if close_at == -1:
+                    i = len(line)
+                else:
+                    in_block -= 1
+                    i = close_at + 2
+            else:
+                open_at = line.find("/-", i)
+                cmt_at = line.find("--", i)
+                if open_at == -1 and cmt_at == -1:
+                    buf.append(line[i:]); i = len(line)
+                elif cmt_at != -1 and (open_at == -1 or cmt_at < open_at):
+                    buf.append(line[i:cmt_at]); i = len(line)
+                else:
+                    buf.append(line[i:open_at]); in_block += 1; i = open_at + 2
+        out_lines.append("".join(buf))
+    return out_lines
+
+for path in sys.argv[1:]:
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError as exc:
+        sys.stderr.write(f"strip_comments: cannot read {path}: {exc}\n")
+        continue
+    for n, ln in enumerate(strip_comments(text), start=1):
+        # keep blank lines so a grep -n offset still makes sense, but only
+        # print lines that have content (a comment-only line strips to "")
+        if ln.strip():
+            sys.stdout.write(f"{path}:{n}:{ln}\n")
+PYEOF
+}
+
+# Build the SOURCE file list: spec proofs + extracted proofs, minus the
+# IO/exe/audit mains.
+collect_source_files() {
+  {
+    # SphincsCVerify spec tree (proofs).
+    find "${LEAN_DIR}/SphincsCVerify" -name '*.lean'
+    # Extracted Aeneas tree (proofs). NB: the Aeneas support *package* under
+    # .lake/packages is NOT ours — we only scan extracted/Extracted/.
+    find "${EXTRACTED_DIR}/Extracted" -name '*.lean'
+  } | while IFS= read -r f; do
+    base="$(basename "$f")"
+    case "$base" in
+      Main.lean|CavpMain.lean|BulkMain.lean) continue ;;   # KAT exe roots
+    esac
+    # Exclude lean/scripts/ audit + no-sorry IO programs.
+    case "$f" in
+      */lean/scripts/*) continue ;;
+    esac
+    printf '%s\n' "$f"
+  done
+}
+
+OVERALL_EXIT=0
+
+###############################################################################
+# (a) ESCAPE-HATCH gate.
+###############################################################################
+printf '==> [lint_fv] (a) escape-hatch gate (comment-stripped, proof paths only)\n'
+
+# shellcheck disable=SC2046
+SRC_FILES=$(collect_source_files)
+if [ -z "${SRC_FILES//[[:space:]]/}" ]; then
+  err "(a) no source files collected — tree layout changed?"
+  exit 2
+fi
+
+# Comment-stripped corpus with path:line: prefixes.
+STRIPPED="$(strip_comments_py ${SRC_FILES})" || {
+  err "(a) comment-stripper failed"
+  exit 2
+}
+
+# Escape-hatch patterns. Anchored where it matters:
+#   - native_decide / reduceBool / ofReduceBool : bare token
+#   - `decide +native`                          : the +native config form
+#   - @[csimp] @[implemented_by] @[extern]      : attribute brackets
+#   - `unsafe ` / `partial `                    : declaration modifiers
+# Each grep is `|| true` so a clean (zero-match) tree does not trip pipefail.
+ESCAPE_HITS=""
+add_hits() {
+  # $1 = ERE pattern, $2 = human label
+  local hits
+  hits="$(printf '%s\n' "${STRIPPED}" | { grep -nE "$1" || true; } | sed "s/^/[$2] /")"
+  if [ -n "${hits//[[:space:]]/}" ]; then
+    ESCAPE_HITS="${ESCAPE_HITS}${hits}"$'\n'
+  fi
+}
+
+add_hits '\bnative_decide\b'        'native_decide'
+add_hits 'decide[[:space:]]+\+native' 'decide+native'
+add_hits '@\[csimp\]'               'csimp'
+add_hits '@\[implemented_by'        'implemented_by'
+add_hits '@\[extern'                'extern'
+add_hits '\bunsafe[[:space:]]'      'unsafe'
+add_hits '\bpartial[[:space:]]'     'partial'
+add_hits 'ofReduceBool'            'ofReduceBool'
+add_hits '\breduceBool\b'           'reduceBool'
+
+if [ -n "${ESCAPE_HITS//[[:space:]]/}" ]; then
+  err ""
+  err "(a) FAIL: escape-hatch construct(s) on a proof path (non-comment):"
+  printf '%s' "${ESCAPE_HITS}" | sed 's/^/    /' >&2
+  err ""
+  err "These bypass kernel checking (native_decide / reduceBool), inject"
+  err "unverified compiled code (@[implemented_by]/@[extern]/@[csimp]), or"
+  err "escape totality (unsafe/partial). Remove them from proof code, or — if"
+  err "this is a new IO/exe/audit main — exclude it in collect_source_files()."
+  OVERALL_EXIT=1
+else
+  printf '    PASS — no escape-hatch constructs on proof paths\n'
+fi
+
+###############################################################################
+# (b) BreaksHash FIREWALL.
+###############################################################################
+printf '==> [lint_fv] (b) BreaksHash firewall (no `¬ BreaksHash`)\n'
+
+# Match (comment-stripped):  ¬ BreaksHash | Not BreaksHash | BreaksHash → False
+# Allow whitespace variants around the negation/arrow.
+BREAKSHASH_HITS="$(printf '%s\n' "${STRIPPED}" \
+  | { grep -nE '(¬[[:space:]]*BreaksHash|\bNot[[:space:]]+BreaksHash|BreaksHash[[:space:]]*(→|->)[[:space:]]*False)' || true; })"
+
+if [ -n "${BREAKSHASH_HITS//[[:space:]]/}" ]; then
+  err ""
+  err "(b) FAIL: \`BreaksHash\` assumed/derivable-false (non-comment):"
+  printf '%s\n' "${BREAKSHASH_HITS}" | sed 's/^/    /' >&2
+  err ""
+  err "\`BreaksHash\` is the opaque SHA-256 hardness-break token. Assuming it"
+  err "false (¬ BreaksHash / BreaksHash → False) collapses the EUF_CMA"
+  err "reduction back to the inconsistency removed on 2026-06-14. Forbidden."
+  OVERALL_EXIT=1
+else
+  printf '    PASS — no `¬ BreaksHash` / `BreaksHash → False` on any source path\n'
+fi
+
+###############################################################################
+# (c) GAP-3 CLOSURE TRIPWIRE.
+###############################################################################
+printf '==> [lint_fv] (c) Gap-3 + theft_free axiom-closure tripwire\n'
+
+# `lake env lean --run scripts/dump_axioms.lean` prints all `#print axioms`
+# blocks then errors on the missing `main` (it is an audit dump, not an exe).
+# That trailing `unknown declaration 'main'` makes the exit code non-zero, so
+# we DO NOT gate on it — we gate on the emitted #print-axioms CONTENT, which
+# is complete before the error. We require the keccak axiom line + theft_free
+# closure to be present (a failed elaboration would omit them, which we catch).
+DUMP_OUT="$(cd "${LEAN_DIR}" && lake env lean --run scripts/dump_axioms.lean 2>&1)" || true
+
+# Surface a hard internal error if the project clearly is not built / the
+# import failed (no #print-axioms lines emitted at all).
+if ! printf '%s\n' "${DUMP_OUT}" | grep -q 'depends on axioms:'; then
+  err "(c) dump_axioms.lean produced no axiom output — is the Lean project built?"
+  err "    Run: (cd ${LEAN_DIR} && lake build SphincsCVerify)"
+  printf '%s\n' "${DUMP_OUT}" | tail -20 >&2
+  exit 2
+fi
+
+# Collapse each per-theorem block (Lean wraps long axiom lists across lines:
+# a new block starts at a line beginning with a quote, continuations are
+# indented `<axiom>,` lines) into ONE logical line keyed by the quoted name.
+COLLAPSED_DUMP="$(printf '%s\n' "${DUMP_OUT}" | awk '
+  BEGIN { buf = "" }
+  /^'\''/ {                       # line beginning with a single-quote = new block
+    if (buf != "") print buf
+    buf = $0
+    next
+  }
+  {
+    if (buf != "") {
+      gsub(/^[[:space:]]+/, " ")  # collapse leading indent to a single space
+      buf = buf $0
+    }
+  }
+  END { if (buf != "") print buf }
+')"
+
+# (c.1) Gap-3 keccak axiom must be in the offchain closure.
+OFFCHAIN_LINE="$(printf '%s\n' "${COLLAPSED_DUMP}" \
+  | { grep 'offchain_nested_disjoint_from_userop_digest' || true; })"
+
+C_EXIT=0
+if [ -z "${OFFCHAIN_LINE//[[:space:]]/}" ]; then
+  err "(c) FAIL: no closure line for offchain_nested_disjoint_from_userop_digest"
+  C_EXIT=1
+elif ! printf '%s\n' "${OFFCHAIN_LINE}" | grep -q 'keccak_sha256_cross_separation'; then
+  err ""
+  err "(c) FAIL: offchain_nested_disjoint_from_userop_digest closure no longer"
+  err "    contains keccak_sha256_cross_separation:"
+  err "      ${OFFCHAIN_LINE}"
+  err ""
+  err "This is the Gap-3 tripwire: if the theorem was mutated to a tautology"
+  err "(e.g. \`True ∨ BreaksHash\`), the cited cross-hash axiom drops from its"
+  err "closure and the RAW32-oracle defense becomes vacuous. Restore the real"
+  err "\`replaySafeHash … ≠ sphincsDigest … ∨ BreaksHash\` reduction."
+  C_EXIT=1
+else
+  printf '    PASS (c.1) — keccak_sha256_cross_separation in Gap-3 closure\n'
+fi
+
+# (c.2) theft_free closure must contain exactly the expected named premises.
+THEFT_LINE="$(printf '%s\n' "${COLLAPSED_DUMP}" \
+  | { grep "'SphincsCVerify.Spec.Theorems.theft_free'" || true; })"
+
+# Expected named (non-kernel) premises in theft_free's closure. The kernel
+# triple {propext, Classical.choice, Quot.sound} is checked separately.
+THEFT_EXPECTED=(
+  "SphincsCVerify.Bridge.evm_bytecode_executes_correctly"        # A4
+  "SphincsCVerify.Bridge.precompile_0x02_is_FIPS_180_4"          # A1
+  "SphincsCVerify.Bridge.solidityVerifier_compiles_correctly"    # A3.1
+  "SphincsCVerify.Crypto.EUF_CMA_SPHINCSplusC"                   # A5
+  "SphincsCVerify.Crypto.ITSR_F"                                 # A5
+  "SphincsCVerify.Crypto.SM_DT_TCR_F"                            # A5
+  "SphincsCVerify.Crypto.hMsg_random_oracle"                     # A5
+  "SphincsCVerify.Bridge.EntryPoint.entrypoint_honest"           # A2
+)
+THEFT_KERNEL=( "propext" "Classical.choice" "Quot.sound" )
+
+if [ -z "${THEFT_LINE//[[:space:]]/}" ]; then
+  err "(c) FAIL: no closure line for SphincsCVerify.Spec.Theorems.theft_free"
+  C_EXIT=1
+else
+  MISSING=""
+  for ax in "${THEFT_EXPECTED[@]}" "${THEFT_KERNEL[@]}"; do
+    if ! printf '%s\n' "${THEFT_LINE}" | grep -qF "${ax}"; then
+      MISSING="${MISSING} ${ax}"
+    fi
+  done
+  if [ -n "${MISSING//[[:space:]]/}" ]; then
+    err ""
+    err "(c) FAIL: theft_free closure is MISSING expected premise(s):"
+    printf '      - %s\n' ${MISSING} >&2
+    err "    Actual closure line:"
+    err "      ${THEFT_LINE}"
+    err ""
+    err "A dropped premise means the trust base silently shrank (often a"
+    err "regression: an axiom became a discharged def, or a binding was"
+    err "deleted). Reconcile the model + update THEFT_EXPECTED if intended."
+    C_EXIT=1
+  else
+    printf '    PASS (c.2) — theft_free closure = expected A1/A2/A3.1/A4/A5 + kernel triple\n'
+  fi
+fi
+
+if [ "${C_EXIT}" -ne 0 ]; then
+  OVERALL_EXIT=1
+fi
+
+###############################################################################
+# (d) OPAQUE-GUARD.
+###############################################################################
+printf '==> [lint_fv] (d) opaque-guard (trivial must NOT inhabit evmDeliversCall default)\n'
+
+GUARD_TMP="$(mktemp /tmp/lint_fv_opaque_guard.XXXXXX.lean)"
+trap 'rm -f "${GUARD_TMP}"' EXIT
+cat > "${GUARD_TMP}" <<'LEANEOF'
+import SphincsCVerify
+open SphincsCVerify
+-- If `evmDeliversCall` regressed from `opaque` to `def := fun _ => True`,
+-- this `trivial` (which only proves `True`) would type-check. It MUST NOT.
+example : Bridge.evmDeliversCall (default : Wallet.Execute.Call) := trivial
+LEANEOF
+
+# A clean compile (exit 0) means `trivial` proved it → opaque guard BROKEN.
+# A non-zero exit (type mismatch) is the healthy state.
+if (cd "${LEAN_DIR}" && lake env lean "${GUARD_TMP}") >/tmp/lint_fv_guard.out 2>&1; then
+  err ""
+  err "(d) FAIL: \`trivial\` inhabited Bridge.evmDeliversCall default — A4's"
+  err "    \`evmDeliversCall\` is no longer opaque (regressed to a True def?)."
+  err "    A4 would silently drop from theft_free's closure. Restore"
+  err "    \`opaque evmDeliversCall : Wallet.Execute.Call → Prop\` in"
+  err "    SphincsCVerify/Bridge/Refinement.lean."
+  cat /tmp/lint_fv_guard.out >&2 || true
+  OVERALL_EXIT=1
+else
+  # Sanity: confirm the failure is the EXPECTED type-mismatch, not an
+  # unrelated build break (which would falsely "pass" this guard).
+  if grep -q 'evmDeliversCall' /tmp/lint_fv_guard.out 2>/dev/null; then
+    printf '    PASS — `trivial` correctly rejected (evmDeliversCall stays opaque)\n'
+  else
+    err "(d) WARN: opaque-guard temp file failed to compile, but NOT with the"
+    err "    expected evmDeliversCall type-mismatch. Output:"
+    cat /tmp/lint_fv_guard.out >&2 || true
+    err "    Treating as internal error (could be an unrelated build break)."
+    exit 2
+  fi
+fi
+rm -f /tmp/lint_fv_guard.out
+
+###############################################################################
+# REPORT.
+###############################################################################
+if [ "${OVERALL_EXIT}" -eq 0 ]; then
+  printf '\n==> [lint_fv] PASS — all four FV-invariant sub-lints green\n'
+  printf '    (a) escape-hatch  (b) BreaksHash firewall\n'
+  printf '    (c) Gap-3 + theft_free closure  (d) opaque-guard\n'
+else
+  err ""
+  err "==> [lint_fv] FAIL — see sub-lint diagnostics above."
+fi
+
+exit "${OVERALL_EXIT}"

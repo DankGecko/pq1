@@ -220,9 +220,14 @@ contract SPHINCsC10AsmTest is Test {
 
     function _vectorCount() internal view returns (uint256) {
         // The vectors array length isn't directly parseable from a path
-        // selector; we hard-code 10 matching the generator output and
-        // sanity-check below.
-        return 10;
+        // selector; we hard-code it to match the generator output.
+        //   10 base vectors (4 valid + 6 negatives)
+        // + 2 +C-gate NEAR-MISS negatives (near-miss-WOTS-digit-sum,
+        //   near-miss-FORS-forced-zero) emitted by gen_test_vectors.rs under
+        //   the `near-miss-gen` feature — signatures that reconstruct the
+        //   correct pkRoot but are rejected ONLY by a single +C gate, so the
+        //   deployed Yul verifier's gate is exercised in isolation.
+        return 12;
     }
 
     function test_verifyAllKatVectors() public {
