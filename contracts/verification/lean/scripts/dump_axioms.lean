@@ -43,7 +43,7 @@ import SphincsCVerify
 -- solidityFactory_compiles_correctly (A3.3) + kernel.
 #print axioms SphincsCVerify.Spec.Theorems.factory_squat_defence_bytecode
 
--- Claim 1 corollary — adds sha256_injective_on_fixed_length to the closure.
+-- Claim 1 corollary — adds sha256_collision_resistance to the closure.
 #print axioms SphincsCVerify.Spec.Theorems.theft_free_with_calldata_binding
 
 -- Claim 3 corollary — composes the 6 Wallet.Execute theorems.

@@ -386,12 +386,26 @@ transfer per Cancun execution semantics.
 We model "the EVM faithfully performs this emitted call" by the opaque
 predicate `evmDeliversCall : Call → Prop` (kernel-irreducible, like the
 `DeployedBytecode.*` symbols — it cannot be `decide`-d or `rfl`-ed away).
-The axiom asserts this predicate holds for *every* emitted call. This is
-content-bearing: removing the axiom leaves `evmDeliversCall c`
-unprovable for any `c`, so any proof that consumes a delivery fact breaks
-— restoring the load-bearing property the `: True` form lacked. It stays
-a cited-TCB axiom (KEVM / consensus-client conformance is the external
+The axiom asserts this predicate holds for *every* emitted call. The TYPE
+is content-bearing — it *names* the EVM-delivery assumption (a real honesty
+gain over the prior `: True`, which asserted nothing refutable). It stays a
+cited-TCB axiom (KEVM / consensus-client conformance is the external
 discharge; we do not claim an in-Lean discharge artifact).
+
+HONEST SCOPE (corrected by faithfulness-audit pass-2, 2026-06-14): in
+`theft_free` this axiom is a NON-CONSUMED TCB MARKER, not a semantic
+premise. The `have _a4_delivers := evm_bytecode_executes_correctly default`
+binding pulls A4 into `theft_free`'s `#print axioms` closure (so the closure
+self-documents the EVM-execution boundary), but the safety proof does not
+consume it — deleting the binding (axiom retained) leaves `theft_free`
+proven, and its closure drops to the 9 genuine semantic premises (A2 + A3.1
++ EUF-CMA ×4 + the kernel triple). The earlier claim that A4 became
+"load-bearing in theft_free / removing the axiom leaves it unprovable" was
+an OVER-CLAIM: removing the axiom definition breaks the binding with an
+unknown-identifier error, not a logical gap. A4's content-bearing *type* is
+the genuine improvement; its closure presence additionally relies on
+`evmDeliversCall` staying `opaque` (a `def := fun _ => True` regression would
+let `trivial` discharge `_a4_delivers` and drop A4 from the closure).
 
 Trust-base impact: the trust base is **more honest, neither stronger nor
 weaker**. The set of facts a verifier must trust to believe `theft_free`

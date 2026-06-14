@@ -138,9 +138,15 @@ injected real defects were caught, most at compile time), but the scope is the
   `∨ BreaksHash`; `keccak256` opaque). `theft_free`'s closure is unchanged.
 - **A4 was made content-bearing (2026-06-14).** `evm_bytecode_executes_correctly`
   is now `∀ c, evmDeliversCall c` (opaque predicate) instead of `: True` — it
-  names the EVM-delivery assumption it always stood for and is load-bearing in
-  `theft_free` (same 11-axiom closure, same cited-TCB strength). The
-  `lint_axioms` gate now reports zero `: True`-typed axioms. `keccak256_pure`
+  *names* the EVM-delivery assumption it always stood for. **Honest scope
+  (corrected by faithfulness-audit pass-2):** A4 (and A1) are present in
+  `theft_free`'s 11-name closure as NON-CONSUMED TCB markers (surfaced via
+  `have` bindings so `#print axioms` self-documents the on-chain TCB), NOT
+  semantic premises — `theft_free`'s genuine 9 premises are A2 + A3.1 + A5(×4)
+  + kernel (deleting the markers leaves it proven). A4's content-bearing *type*
+  is the real gain; the earlier "load-bearing in theft_free" wording was an
+  over-claim. The `lint_axioms` gate now reports zero `: True`-typed axioms.
+  `keccak256_pure`
   (extracted) remains an uninterpreted total-function postulate — benign and
   standard for Aeneas hash boundaries, carrying the keccak binding by external
   citation (Rust KATs + EVM conformance), not in-Lean content.

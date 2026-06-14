@@ -65,12 +65,16 @@ All findings below were reproduced kernel-side against a clean HEAD worktree
 >   positive (pass) + negative (a fake `evilReset` trips it). Build-side gate
 >   (Lean has no sound in-kernel "all Storage mutators" reflection), strictly
 >   stronger than the prior comment.
-> - **A4 (give `evm_bytecode_executes_correctly` content) — DONE (user-approved).**
->   Restated `: True` → `∀ c, evmDeliversCall c` (opaque predicate); `theft_free`
->   now consumes it (`_a4_delivers`). Closes the falsifiability FAIL; same 11-name
->   closure, same cited-TCB strength. The `lint_axioms` gate now reports **zero
->   `: True`-typed axioms** in the ledger. AXIOM_STATUS A4 updated
->   (`placeholder_true_typed` 1→0).
+> - **A4 (give `evm_bytecode_executes_correctly` content) — DONE (user-approved);
+>   wording corrected by pass-2.** Restated `: True` → `∀ c, evmDeliversCall c`
+>   (opaque predicate), which *names* the EVM-delivery assumption (the real gain).
+>   `theft_free` references it via a `have _a4_delivers` binding so it appears in
+>   the closure, but **pass-2 corrected the earlier "now load-bearing" claim:**
+>   the binding is NOT consumed by the safety proof (deleting it, axiom retained,
+>   leaves `theft_free` proven → 9 genuine premises). A4/A1 are non-consumed TCB
+>   markers in the 11-name closure, not semantic premises. Closes the
+>   falsifiability FAIL (no more `: True`); `lint_axioms` reports **zero
+>   `: True`-typed axioms**. AXIOM_STATUS A4 updated (`placeholder_true_typed` 1→0).
 >
 > Verified integrated: full `lake build` 0-sorry; `theft_free` closure unchanged;
 > all new theorems kernel-clean; detonator type-errors; KATs 10/10 + 384/384.
@@ -235,10 +239,13 @@ closure), + the kernel trio.
   `theft_free` routes *every* actual value movement (the emitted-CALL byte
   delivery on the execute path). It is now restated as
   `∀ c, evmDeliversCall c` (opaque predicate naming the EVM-delivery
-  assumption) and consumed in `theft_free` — implementing this section's own
-  recommendation ("replace `: True` with an explicit, documented kernel-TCB
-  statement that names what is assumed"). Same 11-axiom closure, same
-  cited-TCB strength; the `lint_axioms` gate now reports zero `: True` axioms.
+  assumption) — implementing this section's own recommendation ("replace
+  `: True` with an explicit, documented kernel-TCB statement that names what is
+  assumed"). It is surfaced in `theft_free`'s closure as a NON-CONSUMED TCB
+  marker (a `have` binding), NOT a semantic premise — pass-2 corrected the
+  initial "consumed/load-bearing" wording (deleting the binding leaves
+  `theft_free` proven over its 9 genuine premises). Same cited-TCB strength;
+  the `lint_axioms` gate now reports zero `: True` axioms.
 - **`keccak256_pure` (extracted, FunsExternal.lean:14)** — an uninterpreted
   total-function postulate `Slice U8 → Array U8 32`. Asserts only existence of a
   total deterministic 32-byte function; does **not** assert equality with real

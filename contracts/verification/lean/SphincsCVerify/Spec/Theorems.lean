@@ -324,14 +324,24 @@ theorem theft_free
     obtain ⟨oi, ow, pks, pkr, dig, isig, hdec, hown, hpks, hpkr, hdig, hverify⟩ := hExist
     refine ⟨oi, ow, pks, pkr, dig, isig, hdec, hown, hpks, hpkr, hdig, ?_⟩
     have hbridge := Bridge.solidityVerifier_compiles_correctly pks pkr dig isig
-    -- A4 (now CONTENT-BEARING, 2026-06-14): instantiate the EVM-delivery
-    -- guarantee on the emitted call. `theft_free` bottoms out on the EVM
-    -- actually performing the `target.call{value}(data)` the wallet bytecode
-    -- emits on the execute path; A4 (`evm_bytecode_executes_correctly`) is the
-    -- cited-TCB statement that it does. The explicit `evmDeliversCall`-typed
-    -- binding consumes the opaque-Prop content (the old `: True` form bound
-    -- only `True.intro` and was decorative): removing the axiom now leaves
-    -- `_a4_delivers` unprovable, so A4 stays load-bearing in this proof.
+    -- A4 + A1 as named TCB MARKERS (NOT semantic premises of this theorem).
+    -- The two `have`s below pull A4 (`evm_bytecode_executes_correctly`, the
+    -- EVM-delivers-the-emitted-CALL boundary) and A1
+    -- (`precompile_0x02_is_FIPS_180_4`) into `theft_free`'s `#print axioms`
+    -- closure so the closure self-documents the full on-chain TCB.
+    -- HONEST SCOPE (corrected by faithfulness-audit pass-2, 2026-06-14): these
+    -- bindings are NOT consumed by the safety argument — deleting them (axioms
+    -- retained) leaves `theft_free` proven, and the proof closes via
+    -- `rw [hbridge]; exact hverify` (A3.1 + the EUF-CMA conjunct). So
+    -- `theft_free`'s genuine SEMANTIC premises are A2 (entrypoint_honest) +
+    -- A3.1 (solidityVerifier_compiles_correctly) + A5 (EUF-CMA ×4) + the kernel
+    -- triple — NINE axioms; A4/A1 are real-world TCB surfaced here for
+    -- completeness, not logical content of the model theorem. (The earlier
+    -- "A4 is now LOAD-BEARING" wording was an over-claim; A4's content-bearing
+    -- *type* genuinely names the assumption, but it is still a non-consumed
+    -- marker. A4's mere presence in the closure relies on `evmDeliversCall`
+    -- staying `opaque`: a `def := fun _ => True` regression would let `trivial`
+    -- discharge `_a4_delivers` and silently drop A4 from the closure.)
     have _a4_delivers : Bridge.evmDeliversCall (default : Wallet.Execute.Call) :=
       Bridge.evm_bytecode_executes_correctly (default : Wallet.Execute.Call)
     have := Bridge.precompile_0x02_is_FIPS_180_4 []
