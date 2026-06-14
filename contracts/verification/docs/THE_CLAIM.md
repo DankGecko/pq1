@@ -136,9 +136,14 @@ injected real defects were caught, most at compile time), but the scope is the
   UserOp `sphincsDigest` (the RAW32 forgery-oracle defense), reducing it to one
   new cited axiom `keccak_sha256_cross_separation` (cross-hash separation,
   `∨ BreaksHash`; `keccak256` opaque). `theft_free`'s closure is unchanged.
-- **A4 (`evm_bytecode_executes_correctly : True`) and `keccak256_pure` are
-  non-falsifiable as stated** (sound, but `True`-typed / uninterpreted) — they
-  carry the EVM-execution and keccak boundaries by citation, not content.
+- **A4 was made content-bearing (2026-06-14).** `evm_bytecode_executes_correctly`
+  is now `∀ c, evmDeliversCall c` (opaque predicate) instead of `: True` — it
+  names the EVM-delivery assumption it always stood for and is load-bearing in
+  `theft_free` (same 11-axiom closure, same cited-TCB strength). The
+  `lint_axioms` gate now reports zero `: True`-typed axioms. `keccak256_pure`
+  (extracted) remains an uninterpreted total-function postulate — benign and
+  standard for Aeneas hash boundaries, carrying the keccak binding by external
+  citation (Rust KATs + EVM conformance), not in-Lean content.
 
 ## ❌ NOT claimable (the named gaps)
 

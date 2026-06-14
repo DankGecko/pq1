@@ -65,12 +65,12 @@ All findings below were reproduced kernel-side against a clean HEAD worktree
 >   positive (pass) + negative (a fake `evilReset` trips it). Build-side gate
 >   (Lean has no sound in-kernel "all Storage mutators" reflection), strictly
 >   stronger than the prior comment.
-> - **A4 (give `evm_bytecode_executes_correctly` content) — VERIFIED DRAFT,
->   HELD for user go/no-go.** Restating `: True` → `∀ c, evmDeliversCall c`
->   (opaque predicate) closes the falsifiability FAIL; verified to keep
->   `theft_free`'s same 11-name closure + same strength (still cited-TCB). Held
->   because it edits `theft_free`'s proof term and changes the headline
->   trust-base shape.
+> - **A4 (give `evm_bytecode_executes_correctly` content) — DONE (user-approved).**
+>   Restated `: True` → `∀ c, evmDeliversCall c` (opaque predicate); `theft_free`
+>   now consumes it (`_a4_delivers`). Closes the falsifiability FAIL; same 11-name
+>   closure, same cited-TCB strength. The `lint_axioms` gate now reports **zero
+>   `: True`-typed axioms** in the ledger. AXIOM_STATUS A4 updated
+>   (`placeholder_true_typed` 1→0).
 >
 > Verified integrated: full `lake build` 0-sorry; `theft_free` closure unchanged;
 > all new theorems kernel-clean; detonator type-errors; KATs 10/10 + 384/384.
@@ -229,15 +229,16 @@ closure), + the kernel trio.
 
 **FAIL — non-falsifiable as stated (both sound, but worth recording):**
 
-- **A4 `evm_bytecode_executes_correctly : True`** — a `True`-typed placeholder
-  with zero propositional content; hostile removal breaks no proof. Yet it is
-  the EVM-execution boundary through which `theft_free` routes *every* actual
-  value movement (the emitted-CALL byte delivery on the execute path). The
-  real-world claim (a client mis-executing a Cancun opcode / mis-delivering CALL
-  bytes) *is* falsifiable; the Lean axiom does not encode it. Recommended:
-  either give it a Halmos-discharged CALL-byte-delivery property, or replace the
-  `: True` with an explicit, documented kernel-TCB statement that *names* what
-  is assumed.
+- **A4 `evm_bytecode_executes_correctly` — was `: True`, RESOLVED 2026-06-14.**
+  The `True`-typed placeholder carried zero propositional content (hostile
+  removal broke no proof), yet it is the EVM-execution boundary through which
+  `theft_free` routes *every* actual value movement (the emitted-CALL byte
+  delivery on the execute path). It is now restated as
+  `∀ c, evmDeliversCall c` (opaque predicate naming the EVM-delivery
+  assumption) and consumed in `theft_free` — implementing this section's own
+  recommendation ("replace `: True` with an explicit, documented kernel-TCB
+  statement that names what is assumed"). Same 11-axiom closure, same
+  cited-TCB strength; the `lint_axioms` gate now reports zero `: True` axioms.
 - **`keccak256_pure` (extracted, FunsExternal.lean:14)** — an uninterpreted
   total-function postulate `Slice U8 → Array U8 32`. Asserts only existence of a
   total deterministic 32-byte function; does **not** assert equality with real

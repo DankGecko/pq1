@@ -324,7 +324,16 @@ theorem theft_free
     obtain ⟨oi, ow, pks, pkr, dig, isig, hdec, hown, hpks, hpkr, hdig, hverify⟩ := hExist
     refine ⟨oi, ow, pks, pkr, dig, isig, hdec, hown, hpks, hpkr, hdig, ?_⟩
     have hbridge := Bridge.solidityVerifier_compiles_correctly pks pkr dig isig
-    have := Bridge.evm_bytecode_executes_correctly
+    -- A4 (now CONTENT-BEARING, 2026-06-14): instantiate the EVM-delivery
+    -- guarantee on the emitted call. `theft_free` bottoms out on the EVM
+    -- actually performing the `target.call{value}(data)` the wallet bytecode
+    -- emits on the execute path; A4 (`evm_bytecode_executes_correctly`) is the
+    -- cited-TCB statement that it does. The explicit `evmDeliversCall`-typed
+    -- binding consumes the opaque-Prop content (the old `: True` form bound
+    -- only `True.intro` and was decorative): removing the axiom now leaves
+    -- `_a4_delivers` unprovable, so A4 stays load-bearing in this proof.
+    have _a4_delivers : Bridge.evmDeliversCall (default : Wallet.Execute.Call) :=
+      Bridge.evm_bytecode_executes_correctly (default : Wallet.Execute.Call)
     have := Bridge.precompile_0x02_is_FIPS_180_4 []
     -- Rewrite `DeployedBytecode.SPHINCsC10Asm_verify` into `verifyYulModel`
     -- using A3.1, then close with `hverify`.

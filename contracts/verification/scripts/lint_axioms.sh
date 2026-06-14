@@ -105,15 +105,18 @@ SHAPE_DEFS_TRUE="$(printf '%s\n' "${COLLAPSED}" \
 
 # Step (b): axioms whose conclusion is literally `True` (i.e. the type
 # string ends in `, True` or `: True`).
+# NB: the `grep` filters use `|| true` so that a *zero-match* (which is the
+# correct, healthy state once the last `True`-typed axiom is upgraded — e.g.
+# A4 on 2026-06-14) does not trip `set -o pipefail` and abort the lint.
 DIRECT_TRUE_AXIOMS="$(printf '%s\n' "${COLLAPSED}" \
-  | grep -v '^def ' \
-  | grep -E '(, True$|: True$)' \
+  | { grep -v '^def ' || true; } \
+  | { grep -E '(, True$|: True$)' || true; } \
   | sed -nE 's/^([A-Za-z0-9._]+) :.*/\1/p' \
   | sort -u)"
 
 # Step (c): axioms whose type is exactly a `_Shape` name from (a).
 SHAPE_TRUE_AXIOMS="$(printf '%s\n' "${COLLAPSED}" \
-  | grep -v '^def ' \
+  | { grep -v '^def ' || true; } \
   | sed -nE 's/^([A-Za-z0-9._]+) : ([A-Za-z0-9._]+)$/\1 \2/p' \
   | awk -v shapes="${SHAPE_DEFS_TRUE}" '
       BEGIN {
@@ -125,7 +128,7 @@ SHAPE_TRUE_AXIOMS="$(printf '%s\n' "${COLLAPSED}" \
   | sort -u)"
 
 TRUE_AXIOMS_FROM_LEAN="$( { printf '%s\n' "${DIRECT_TRUE_AXIOMS}"; printf '%s\n' "${SHAPE_TRUE_AXIOMS}"; } \
-  | grep -v '^[[:space:]]*$' | sort -u)"
+  | { grep -v '^[[:space:]]*$' || true; } | sort -u)"
 
 ###############################################################################
 # 2. Source-level scan for `theorem ... : True := trivial` placeholders and
@@ -152,7 +155,7 @@ TRUE_AXIOMS_FROM_SOURCE="$(printf '%s\n' "${PLACEHOLDERS_RAW}" \
 # Union the two sources: elaborated Lean dump (catches `_Shape`-typed) and
 # Python source scan (catches direct `..., True` and any newly-added axiom).
 TRUE_AXIOMS_ACTUAL="$( { printf '%s\n' "${TRUE_AXIOMS_FROM_LEAN}"; printf '%s\n' "${TRUE_AXIOMS_FROM_SOURCE}"; } \
-  | grep -v '^[[:space:]]*$' | sort -u)"
+  | { grep -v '^[[:space:]]*$' || true; } | sort -u)"
 
 TRUE_AXIOMS_EXPECTED="$(read_allowlist "${KNOWN_AXIOMS}")"
 

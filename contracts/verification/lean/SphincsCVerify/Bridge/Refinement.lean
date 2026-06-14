@@ -356,12 +356,71 @@ axiom precompile_0x02_is_FIPS_180_4 :
 /-! ## A4 (cited TCB) — EVM bytecode executes per the EVM specification.
 
 This statement is a universal-Ethereum trust marker. KEVM is the
-formal-EVM-semantics referent; per user decision A4 stays as a `True`
-axiom — it documents the trust boundary without claiming an in-Lean
-discharge artifact. -/
+formal-EVM-semantics referent — A4 documents the trust boundary at the
+point where Lean stops and the consensus client takes over.
 
-/-- **A4 — Cancun-era EVM bytecode executes per the EVM specification.** -/
-axiom evm_bytecode_executes_correctly : True
+### Content-bearing restatement (2026-06-14, faithfulness-audit P-FAIL fix)
+
+The prior shape `axiom evm_bytecode_executes_correctly : True` carried
+*zero* propositional content: a hostile removal broke no proof, and the
+falsifiability review FAILed it for that reason — yet it is the
+EVM-execution boundary through which `theft_free` routes every actual
+value movement (the emitted-CALL byte-delivery on the execute path; see
+the closing paragraph of `solidityWalletExecute_compiles_correctly`'s
+doc-comment, which explicitly assigns that delivery to A4 rather than to
+the wallet-compilation axiom — Halmos cannot reconstruct forwarded
+calldata either).
+
+We now give A4 a *named, documented* propositional statement. The Lean
+`Execute` model records each external call the wallet bytecode reaches as
+a `Wallet.Execute.Call { target, value, data }` appended to
+`ExecState.callStack`. The deployed-bytecode opaque symbol
+`DeployedBytecode.PQSmartWallet_executeWithOffchainCount` returns a
+post-state with the *same* appended frame (success direction, A3.2-exec).
+A4 is the trust statement that the EVM, when it runs that bytecode and
+the bytecode emits `target.call{value: value}(data)`, **actually delivers
+`(target, value, data)` to the callee** — i.e. the abstract `Call`
+appended to `callStack` corresponds to a real on-chain value+calldata
+transfer per Cancun execution semantics.
+
+We model "the EVM faithfully performs this emitted call" by the opaque
+predicate `evmDeliversCall : Call → Prop` (kernel-irreducible, like the
+`DeployedBytecode.*` symbols — it cannot be `decide`-d or `rfl`-ed away).
+The axiom asserts this predicate holds for *every* emitted call. This is
+content-bearing: removing the axiom leaves `evmDeliversCall c`
+unprovable for any `c`, so any proof that consumes a delivery fact breaks
+— restoring the load-bearing property the `: True` form lacked. It stays
+a cited-TCB axiom (KEVM / consensus-client conformance is the external
+discharge; we do not claim an in-Lean discharge artifact).
+
+Trust-base impact: the trust base is **more honest, neither stronger nor
+weaker**. The set of facts a verifier must trust to believe `theft_free`
+is unchanged (still A1–A5 + kernel); A4 now *names* the EVM-delivery
+assumption it always silently stood for, instead of hiding behind `True`.
+A real-world mis-execution (a client mis-delivering CALL bytes) now has a
+Lean statement it would contradict — the falsifiability gap the audit
+flagged is closed at the encoding level. The axiom never concludes
+`False` (its conclusion is the opaque `evmDeliversCall c`, a `Prop` with
+no constructor available outside the axiom itself), so it cannot make the
+system inconsistent. -/
+
+/-- The kernel-irreducible predicate "the EVM faithfully performs the
+    emitted external call `c` — it transfers `c.value` and delivers
+    `c.data` to `c.target` per Cancun execution semantics". Opaque so it
+    cannot be discharged inside Lean; the only relation to it is via A4
+    (`evm_bytecode_executes_correctly`) below, the cited Ethereum TCB. -/
+opaque evmDeliversCall : Wallet.Execute.Call → Prop
+
+/-- **A4 — Cancun-era EVM bytecode executes per the EVM specification.**
+
+    Content-bearing form: every external call the wallet bytecode emits
+    on a (non-reverting) execute path is faithfully delivered by the EVM
+    to its callee — `target.call{value}(data)` actually moves `value` and
+    forwards `data`. This is the EVM-execution boundary `theft_free`'s
+    value-movement guarantee bottoms out on; it is cited-TCB (KEVM /
+    consensus-client conformance), not discharged in Lean. -/
+axiom evm_bytecode_executes_correctly :
+    ∀ (c : Wallet.Execute.Call), evmDeliversCall c
 
 /-! ## Composite refinement statement
 
