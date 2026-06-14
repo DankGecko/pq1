@@ -1,33 +1,69 @@
-# The claim — exactly what is and isn't proven (2026-06-12)
+# The claim — exactly what is and isn't proven (2026-06-14)
 
 This file is the single source of truth for **what you may publicly claim**
 about the PQSmartWallet formal-verification stack. It is deliberately
 conservative. If a marketing line is not derivable from the "✅ Claimable"
 section below, do not ship it.
 
+> ## ✅ EUF-CMA inconsistency RESOLVED for `theft_free` (2026-06-14)
+>
+> The `EUF_CMA_SPHINCSplusC` inconsistency (a kernel-checked `False` from a
+> valid KAT at the empty transcript) is **fixed**. The axiom was restated to a
+> consistent **reduction shape** — conclusion is an *opaque* `BreaksHash`
+> (never `False`, never assumed false), and `isForgery` now carries a key-bound
+> `KeyHistory` so the empty-transcript witness is unformable. Two compiled-in
+> guard lemmas (`keyHistory_empty_signs_nothing`, `honest_sig_not_forgery`,
+> closure `{propext, Quot.sound}`) fence it. **The old detonator no longer
+> type-checks** (`cannot_forge … : BreaksHash`, not `False` — verified). So
+> **`theft_free` / `theft_free_bytecode` are SOUND again** (kernel-checked,
+> closure = the 11 cited axioms, no `sorryAx`). Details:
+> [`EUF_CMA_INCONSISTENCY.md`](EUF_CMA_INCONSISTENCY.md).
+>
+> **The two faithfulness follow-ups are now ALSO fixed (2026-06-14):** (1) the
+> false `sha256_injective_on_fixed_length` was replaced by
+> `sha256_collision_resistance` (a consistent disjunctive reduction:
+> `equal preimages ∨ BreaksHash`); `theft_free_with_calldata_binding` /
+> `sphincsDigest_field_binding` now conclude the honest `∨ BreaksHash` form and
+> close over the consistent axiom. (2) the three SHA-256 hardness shapes were
+> upgraded from `∀_,True` placeholders to `opaque` Props. So the trust base now
+> has **no false / vacuous / inconsistent axioms** — only honest cited
+> assumptions (`BreaksHash` shared in `Assumptions.lean`). The dangling+latent-false
+> `entrypoint_no_replay` was deleted.
+
 ---
 
-## ✅ Claimable (true, reproduced)
+## ✅ Claimable (true, reproduced) — SEE THE 🛑 BANNER: #1 below is SUSPENDED
 
 > **The PQSmartWallet's on-chain control flow is formally verified, and the
 > verification is connected to the deployed bytecode.** A Lean 4
 > kernel-checked theorem (`theft_free`, 0 `sorry`, an explicit 11-axiom
-> base) proves theft-freedom over a faithful model of the wallet; the
+> base) proves theft-freedom over a faithful model of the wallet; and the
 > **wallet `validateUserOp` / `executeWithOffchainCount` /
 > `executeBatchWithOffchainCount`, the factory `createAccount`, and the
 > `PQMultiOwnable` owner table** are each proven, by symbolic execution of
 > the **deployed runtime bytecode** (Halmos + z3, both compiler profiles,
 > pinned codehashes), to be **pointwise-equal to those Lean models** over
 > symbolic inputs — including a genuinely ∀-quantified owner index on every
-> money-moving path; and the **executable Lean SPHINCS+C10 verifier spec
-> reproduces the deployed verifier's accept/reject decision on the complete
-> shared KAT corpus** (full functional verify, 10/10, hard check).
+> money-moving path.**
 
 Specifically and defensibly:
 
-1. **Kernel proof.** `theft_free` and its claim corollaries are checked by
-   the Lean 4 kernel with **zero `sorry`** and an axiom closure of exactly
-   11 named axioms (`make verify-audit`). Reproduced 2026-06-12.
+1. **Kernel proof (REINSTATED 2026-06-14 after the EUF-CMA fix).** `theft_free`
+   and its claim corollaries are `sorry`-free and kernel-checked, with the
+   11-axiom closure now **consistent** (the restated `EUF_CMA_SPHINCSplusC`
+   concludes the opaque `BreaksHash` reduction, not `False`). What `theft_free`
+   actually says: it is a **conjunction** — conjunct 1 (the safety guarantee:
+   no wallet balance decrease without the deployed verifier accepting an
+   installed-owner C10 signature over the op's `sphincsDigest`) is **EUF-CMA-free**,
+   resting on A2 (`entrypoint_honest`) + A3.1 (`solidityVerifier_compiles_correctly`)
+   + A1/A4; conjunct 2 (producing such a signature for an un-signed message
+   would break SHA-256) is the **cited** Barbosa-et-al. reduction. So the
+   substantive theft-freedom content is conjunct 1 (control-flow, discharged
+   to bytecode); the cryptographic infeasibility is cited, not mechanised.
+   Reproduced 2026-06-14 (`make verify-audit`). (The variant
+   `theft_free_with_calldata_binding` now closes over the consistent
+   `sha256_collision_resistance` and concludes the honest `preimage eq ∨
+   BreaksHash` form — the false `sha256_injective` axiom is gone.)
 2. **Control-flow bytecode discharge.** 38 Halmos rules pass on **both** the
    `default` (runs=200) and `deploy` (runs=999999) profiles' deployed
    bytecode, against pinned codehashes — validate (pointwise + per-property;
@@ -41,75 +77,122 @@ Specifically and defensibly:
 3. **The bootstrap-cap bug is really fixed.** The few-time-cap under-count
    (`PQBootstrapCapEvasion`) is closed in the validation phase and locked by
    tests; `forge test` 108/108. Reproduced 2026-06-11.
-4. **Verifier functional layer — executable Lean differential, KAT +
-   mutant scale.** Two **executable** Lean↔bytecode differentials, both
-   HARD CHECKS (non-zero exit on drift): (a) `lake exe verify-test-vectors`
-   — the Lean spec (`Spec.Signature.verify`: digest, htIdx, FORS forest,
-   WOTS+C count/digit grind, chain stepping, subtree Merkle, final root
-   compare) matches the deployed verifier's accept/reject decision on all
-   10 KAT vectors; (b) `lake exe verify-mutant-corpus` — the same spec
-   matches the deployed bytecode on a **246-entry adversarial corpus**
-   (4 positive controls + 242 near-miss mutants mirroring the bytecode
-   screen's classes, plus dense sweeps of both historic defect sites),
-   where the corpus' expected column is **deployed-bytecode ground truth**
-   asserted by `forge test --match-contract SPHINCsC10AsmMutantCorpusTest`
-   (exact two-directional parity). The historic reconstruction-layer
-   divergence (two defects: the `chainHash` chain-pos field and
-   `loadWord32` straddling-read semantics) was localised by
-   `scripts/gap1_differential.py` and fixed 2026-06-12. The three-way
-   Rust↔Solidity↔Lean differential is therefore real on **every** layer,
-   at **252 distinct agreement points**, in both accept and reject
-   directions. Reproduced 2026-06-12.
+4. **Verifier executable Lean↔bytecode KAT (full functional, 2026-06-13).**
+   `lake exe verify-test-vectors` runs the executable Lean
+   `Spec.Signature.verify` over the byte-decoded signature and reports
+   **full-verify 10/10** — the Lean spec **accepts the 4 valid vectors and
+   rejects the 6 negatives**, matching the deployed verifier, alongside the
+   digest + hypertree-index layers (all hard checks, non-zero exit on drift).
+   The Lean verifier model is now **executably faithful** to the deployed
+   bytecode on the KAT corpus. Reproduced 2026-06-13.
 5. **Verifier negative direction.** The deployed verifier bytecode rejects a
    ≈250-mutant wrong-accept battery and the 6 negative KAT vectors, and
    accepts the 4 valid vectors (`forge test`). Reproduced 2026-06-11.
+6. **Byte-bound to the deployed Base Mainnet contracts.** The bytecode the
+   control-flow discharge runs against is the bytecode on chain. The
+   deploy-time lib set is recorded in `foundry.lock` (account-abstraction
+   `f54584e` = ERC-4337 v0.9 release; solady `90db92ce`, bytecode-irrelevant),
+   and `test/DeployedBytecodeReproCheck.t.sol` replays the production CREATE2
+   deploy (Arachnid `0x4e59…`, salt 0, chain id 8453, deploy profile),
+   reproducing the live verifier `0xdDE4…`, wallet impl `0x31e49D24…`, and
+   factory `0xe8CE78CD…` — both **addresses and full runtime codehashes**
+   (`0xeb1e3fcd…`, `0xdc9a082f…`, `0x045bb5…`). The Halmos discharges
+   (pinned harness instances) transport to these via
+   `PinnedBytecodeImmutableLemma`, whose immutable-window premise is grounded
+   against the actual on-chain bytecode (the only deployed-vs-rebuild deltas
+   are the EIP-712 immutable cache and the implementation-address immutable).
+   Reproduced 2026-06-13.
 
 The honest trust base for (1)–(2): the Lean kernel; that a Halmos+z3 rule is
 a sound solver session (the harness↔property and `LeanModel.sol`↔Lean-file
 transcriptions are in the TCB, not Lean proof terms); SHA-256 modeled as an
 uninterpreted function; and the verifier modeled as an uninterpreted function
 inside the wallet rules (which is exactly what makes them tractable and what
-A5/A3.1 are supposed to discharge separately). For (4): the KAT corpus is
-finite (10 vectors); equality at 10 points validates but does not prove the
-universally-quantified A3.1 axiom (see below).
+A5/A3.1 are supposed to discharge separately).
 
 ---
+
+## ⚠️ Scope of the proof (read before quoting "theft_free proven")
+
+A faithfulness audit (2026-06-14, mutation testing + coverage matrix +
+per-axiom falsifiability — [`FAITHFULNESS_AUDIT_2026-06-14.md`](FAITHFULNESS_AUDIT_2026-06-14.md))
+confirms the verification is **faithful within its declared scope** (8/9
+injected real defects were caught, most at compile time), but the scope is the
+**on-chain contract + the SPHINCS+C10 spec only**:
+
+- **5 of the 9 CLAUDE.md non-negotiable invariants are NOT formally proven.**
+  #1 dual-chip XOR seed split, #2 hardware PIN three-way lockstep, #3 E2E SE
+  tunnels, #4 TrustZone secret isolation, and the trusted-display clear-signing
+  pipeline are firmware/secure-world/hardware properties with **zero Lean
+  coverage** — they rest on silicon E2E tests + the security-review docs. Do not
+  let "theft_free proven" be read as a device-wide guarantee.
+- **The P1 bootstrap-cap proof-coverage hole is now CLOSED (2026-06-14).**
+  `capOk_bootstrap_implies_strict` + `validateSignature_bootstrap_cap_strict`
+  give the bootstrap few-time cap (`bootstrapUses < MAX_BOOTSTRAP_USES`,
+  invariant #7) the same proof coverage the slot path had — the `<`→`≤`
+  mutation now fails to compile. Two-gate parity.
+- **`replaySafeHash` domain separation is now MODELED (Gap-3, 2026-06-14).**
+  `Wallet/OffchainBinding.lean` proves an off-chain-nested value is never any
+  UserOp `sphincsDigest` (the RAW32 forgery-oracle defense), reducing it to one
+  new cited axiom `keccak_sha256_cross_separation` (cross-hash separation,
+  `∨ BreaksHash`; `keccak256` opaque). `theft_free`'s closure is unchanged.
+- **A4 was made content-bearing (2026-06-14).** `evm_bytecode_executes_correctly`
+  is now `∀ c, evmDeliversCall c` (opaque predicate) instead of `: True` — it
+  *names* the EVM-delivery assumption it always stood for. **Honest scope
+  (corrected by faithfulness-audit pass-2):** A4 (and A1) are present in
+  `theft_free`'s 11-name closure as NON-CONSUMED TCB markers (surfaced via
+  `have` bindings so `#print axioms` self-documents the on-chain TCB), NOT
+  semantic premises — `theft_free`'s genuine 9 premises are A2 + A3.1 + A5(×4)
+  + kernel (deleting the markers leaves it proven). A4's content-bearing *type*
+  is the real gain; the earlier "load-bearing in theft_free" wording was an
+  over-claim. The `lint_axioms` gate now reports zero `: True`-typed axioms.
+  `keccak256_pure`
+  (extracted) remains an uninterpreted total-function postulate — benign and
+  standard for Aeneas hash boundaries, carrying the keccak binding by external
+  citation (Rust KATs + EVM conformance), not in-Lean content.
 
 ## ❌ NOT claimable (the named gaps)
 
 Do **not** say any of the following:
 
 * ~~"The smart contracts are fully mathematically proven to the bytecode."~~
-  The **verifier's ∀-signature functional equivalence is not proven** — the
-  Lean↔bytecode agreement is established on the 10-vector corpus (plus the
-  bytecode-side mutant screen), which is **evidence, not a proof, of the
-  universally-quantified A3.1**. GAP-2 (Verity / Kontrol-KEVM) remains open,
-  as do the rigor/scope gaps (GAP-7..13) in
-  [`MISSING_FOR_FULL_BYTECODE_PROOF.md`](MISSING_FOR_FULL_BYTECODE_PROOF.md).
-* ~~"The SPHINCS+C10 verifier is formally verified / proven correct to the
-  bytecode."~~ Its functional behaviour is carried by an executable
-  Lean↔bytecode differential on the corpus + the bytecode KAT + the mutant
-  screen — **testing-grade evidence**. There is **no** ∀-signature proof.
-* "A three-way Rust↔Solidity↔Lean differential validates the verifier." —
-  now TRUE and claimable as stated (since 2026-06-12 the Lean leg covers the
-  full functional layer as a hard check), provided it is presented as a
-  *differential/testing* result, not as a proof.
+  The verifier's **∀-signature** functional equivalence is still carried by
+  testing + the executable Lean KAT differential, not a symbolic ∀ proof —
+  see below.
+* **(RESOLVED 2026-06-13 — was a gap, now claimable.)** "The A3.2/A3.3/A3.4
+  Halmos proofs are byte-bound to the *deployed* wallet/factory bytecode." A
+  brief interim finding (lost-libs) was **overturned**: the deploy-time lib
+  was recovered (`foundry.lock` pins account-abstraction `f54584e`, the
+  ERC-4337 v0.9 release, whose `legacy/v06` differs from the v0.8.0 tag), and
+  `test/DeployedBytecodeReproCheck.t.sol` replays the production CREATE2
+  deploy (Arachnid, salt 0, chain id 8453, deploy profile) to reproduce the
+  live impl `0x31e49D24…`/`0xdc9a082f…`, factory `0xe8CE78CD…`/`0x045bb5…`,
+  and verifier `0xeb1e3fcd…` **exactly — addresses and codehashes**. See
+  Claimable #6 and `DEPLOYED_BYTECODE_PIN_CAVEAT.md`.
+* ~~"The SPHINCS+C10 verifier's functional equivalence to bytecode is proven
+  for all signatures."~~ It is validated on the **10-vector KAT** (executable
+  Lean↔bytecode, both directions) + the ~250-mutant wrong-accept screen, not
+  by a symbolic ∀-signature proof (intractable under uninterpreted SHA-256).
 
-### The formerly-blocking defect (RESOLVED 2026-06-12)
+The three-way **Rust↔Solidity↔Lean** differential IS now real on the full
+functional verify (the Lean leg was made executably faithful 2026-06-13 —
+see Claimable #4), not just the digest/index sub-layers.
+
+### The remaining ceiling (no longer a *defect*)
 
 `solidityVerifier_compiles_correctly` (A3.1) asserts the deployed verifier
-equals the Lean `verifyYulModel` for all inputs. Until 2026-06-12 that
-equality was **contradicted by a concrete KAT vector** — the Lean spec
-returned `false` on the valid vectors, so A3.1 was a **false axiom** and the
-kernel "green" carried no real-world force on the verifier dimension. The
-divergence was localised to exactly two one-line semantic defects (the
-WOTS chain-position ADRS field and the straddling `calldataload`
-zero-padding), both in the *Lean model*, not the contract; both are fixed,
-and `lake exe verify-test-vectors` now enforces full-corpus agreement as a
-hard check. **A3.1 is no longer refuted by any known input; it remains an
-axiom whose universal claim is corpus-validated, not proven** (that
-residual is GAP-2). History and root-cause: 
-[`A3_1_VERIFIER_GAP.md`](A3_1_VERIFIER_GAP.md).
+equals the Lean `verifyYulModel` for all inputs. As of **2026-06-13 this
+axiom is no longer contradicted by any tested vector**: the two Lean-spec
+reconstruction bugs (`chainHash` ADRS field; `loadWord32` tail zero-padding)
+are fixed, `Spec.Signature.verify` accepts/rejects all 10 KAT vectors
+identically to the bytecode, and `verifyRefined_eq_spec` stays `rfl` over the
+now-faithful spec. What remains is **not** a falsity but a *coverage* limit:
+the equality is quantified over all 4008-byte signatures, and that ∀ is
+discharged by the KAT + mutant screen + executable Lean differential, **not**
+by a symbolic ∀ proof — which is intractable while SHA-256 is uninterpreted
+(= A1). So A3.1 is `discharged-bytecode` on the corpus, with the ∀-symbolic
+equivalence as the standing ceiling (needs Kontrol/KEVM or verified
+compilation). History: [`A3_1_VERIFIER_GAP.md`](A3_1_VERIFIER_GAP.md).
 
 Also still cited-TCB by decision (not "proven to bytecode"): **A2** EntryPoint
 v0.6 honesty, **A4** EVM-executes-per-spec (incl. the emitted-CALL byte
@@ -122,13 +205,14 @@ the `+C` transition is a cited argument), **A1** SHA-256 precompile = FIPS.
 
 In dependency order:
 
-1. ~~**Make the Lean verifier executably faithful.**~~ **DONE 2026-06-12.**
-   `lake exe verify-test-vectors` reports full-verify 10/10 and
-   `requireFullVerify = true` (hard check). A3.1's equality is now
-   corpus-consistent and the Lean refinement (`verifyRefined_eq_spec`,
-   still `rfl`) carries real faithfulness on every executed layer. The
-   ∀-signature equivalence remains a *citation* to the executable KAT +
-   mutant screen + EUF-CMA, not a symbolic bytecode proof.
+1. ~~**Make the Lean verifier executably faithful.**~~ **DONE 2026-06-13.**
+   The WOTS+C / hypertree reconstruction layer now byte-matches the deployed
+   Yul: `lake exe verify-test-vectors` reports full-verify 10/10 and
+   `requireFullVerify` is `true`. A3.1's equality is no longer contradicted by
+   any tested vector, and the Lean refinement (`verifyRefined_eq_spec`, still
+   `rfl`) carries real faithfulness over the corpus. The remaining work is the
+   ∀-signature equivalence as a *citation* to the executable KAT + EUF-CMA,
+   not yet a symbolic bytecode proof (step 2).
 2. **Discharge the verifier's ∀-signature equivalence on bytecode.** Not
    possible under uninterpreted SHA-256 (the digit branches fork on
    unconstrained symbolic values). Needs an **interpreted-hash reachability**
@@ -138,9 +222,6 @@ In dependency order:
 3. **Optionally** reduce A2/A4 from cited-TCB to bytecode (Kontrol against the
    deployed EntryPoint) — a large, separate engagement.
 
-With step 1 landed, the maximal honest headline is the **✅ Claimable**
-block above — "control flow proven to the deployed bytecode; verifier
-functionally validated by an executable three-way differential on the full
-KAT corpus (hard check)" — still **not** "fully proven to bytecode" (that
-requires step 2 plus the GAP-7..13 closures, or explicit acceptance of the
-named TCB).
+Until step 1 lands, the maximal honest headline is the **✅ Claimable**
+block above — "control flow proven to bytecode; verifier validated by
+testing" — not "fully proven to bytecode."

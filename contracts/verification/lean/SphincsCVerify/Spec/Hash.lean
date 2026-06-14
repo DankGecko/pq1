@@ -178,19 +178,11 @@ def hMsg
 /-! ## WOTS chain hashing -/
 
 /-- Iterative chain hash: apply `th` for `steps` iterations, starting
-    from position `start_pos`.
-
-    Each step threads the position through the ADRS `chain_pos` field
-    (bytes [24..28)) — `setChainPos`, NOT `setChainIndex` — exactly as
-    the Rust `chain_hash` (`a[24..28) = pos`) and the deployed Yul
-    (`or(chainBase, shl(32, add(digit, step)))`) do. The caller's
-    `chain_index` (bytes [20..24)) is preserved across every step.
-
-    HISTORY: until 2026-06-12 this function advanced the position via
-    `setChainIndex`, which wrote the wrong ADRS field and erased the
-    chain index — the single divergence behind the A3.1 reconstruction
-    gap (`docs/A3_1_VERIFIER_GAP.md`). Validated fixed by
-    `lake exe verify-test-vectors` full-verify 10/10 (hard check). -/
+    from position `start_pos`. Each step writes the running position into
+    the ADRS **chain_pos** field (bytes [24..28)) via `setChainPos`,
+    leaving the caller-set chain_index (which of the L chains) intact —
+    matching `sphincs-c10/src/hash.rs::chain_hash`, which does
+    `a[24..28].copy_from_slice(&pos.to_be_bytes())` per iteration. -/
 def chainHash
     (seed : ByteVec 32) (a : Adrs) (val : ByteVec 16)
     (startPos steps : Nat) : ByteVec 16 :=

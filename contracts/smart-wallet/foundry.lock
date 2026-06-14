@@ -1,9 +1,6 @@
 {
   "lib/account-abstraction": {
-    "tag": {
-      "name": "v0.7.0",
-      "rev": "7af70c8993a6f42973f520ae0752386a5032abe7"
-    }
+    "rev": "f54584edd4c627e084d04c315dcabda48a6b9ea9"
   },
   "lib/forge-std": {
     "rev": "f494b0c2c045dda3df3d761bc82209b9a015c4e7"

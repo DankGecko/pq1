@@ -16,11 +16,71 @@
 LEAN_DIR := lean
 LAKE     ?= $(shell command -v lake 2>/dev/null || echo $$HOME/.elan/bin/lake)
 
-.PHONY: verify verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup
+.PHONY: verify verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk verify-storage-mutators verify-fv-lints verify-lean4checker
 
 verify: verify-build
 	@cd $(LEAN_DIR) && $(LAKE) exe verify-test-vectors
 	@cd $(LEAN_DIR) && $(LAKE) exe verify-mutant-corpus
+
+# I-3 closed-world gate: `no_reset_path` (Wallet/Invariants.lean) proves the
+# KNOWN Storage counter-mutators are non-decreasing, but "these are the ONLY
+# mutators" is an out-of-Lean assertion. This lint extracts every
+# Storage-returning / `{ s with }`-updating def in Wallet/Storage.lean and
+# FAILS if the set drifts from the pinned allow-list — so adding a new mutator
+# forces a conscious allow-list update + a matching no-decrease lemma. Pure
+# source lint (no lake build); positive=current tree PASS, negative=fake
+# resetter FAIL. See scripts/check_storage_mutators.sh.
+verify-storage-mutators:
+	@bash scripts/check_storage_mutators.sh
+
+# FV-invariant escape-hatch gate: fails CI on the audit anti-patterns over the
+# lean/ + extracted/ Lean SOURCE (comment-stripped). Four sub-lints:
+#   (a) no proof-path escape hatches (native_decide / decide +native / @[csimp]
+#       / @[implemented_by] / @[extern] / unsafe / partial / reduceBool);
+#   (b) BreaksHash firewall (no `¬ BreaksHash` / `BreaksHash → False`);
+#   (c) Gap-3 + theft_free axiom-closure tripwire (dump_axioms.lean must show
+#       keccak_sha256_cross_separation in the offchain closure + the expected
+#       A1/A2/A3.1/A4/A5 + kernel premises in theft_free's closure);
+#   (d) opaque-guard (`trivial` must NOT inhabit Bridge.evmDeliversCall default
+#       — catches an opaque→def A4 regression that #print-axioms misses).
+# Sub-lints (c)/(d) read the built oleans, so this depends on verify-build.
+# See scripts/lint_fv_invariants.sh (positive=clean tree PASS; negative trips
+# documented in the script header).
+verify-fv-lints: verify-build
+	@bash scripts/lint_fv_invariants.sh
+
+# EXTERNAL kernel re-check gate (deep-research rec #1). lean/ is Lean v4.22.0,
+# inside the pre-#8842 collectAxioms under-report window, so `#print axioms`
+# (verify-audit) can under-report the trust base. lean4checker independently
+# replays the whole SphincsCVerify environment back through the Lean kernel and
+# computes the TRUE closure — non-zero exit on any rejected declaration. Needs a
+# version-matched lean4checker at ~/lean4checker (see scripts/run_lean4checker.sh
+# header for the one-time build: git clone + checkout v4.22.0 + lake build);
+# override the location with LEAN4CHECKER_DIR=...
+verify-lean4checker:
+	@bash scripts/run_lean4checker.sh
+
+# Bulk executable-spec differential (A3.1 follow-up): regenerate the random
+# corpus from the Rust signer (slow; gated behind GEN=1), embed it, and run
+# Spec.Signature.verify over every vector, asserting it matches the Rust
+# oracle's verdict. Non-zero exit on any mismatch. The committed
+# bulk_vectors.json + BulkVectors.lean make the default run reproducible
+# without re-signing.
+verify-bulk:
+ifeq ($(GEN),1)
+	@cd $(REPO_ROOT) && cargo test -p sphincs-c10 --test gen_bulk_vectors --release -- --nocapture
+	@cd $(LEAN_DIR) && python3 scripts/gen_bulk_lean.py
+endif
+	@cd $(LEAN_DIR) && $(LAKE) exe verify-bulk
+
+# NIST CAVP SHA-256 conformance: regenerate the embedded vector module from
+# the official byte-oriented .rsp suite (cavp/ — idempotent) and replay ALL
+# ShortMsg + LongMsg vectors plus the full SHAVS Monte Carlo procedure
+# through the executable FIPS 180-4 spec (Spec/Sha256Impl.lean). Compiled
+# IO-level comparison; non-zero exit on any mismatch so CI can gate.
+verify-cavp:
+	@python3 scripts/gen_cavp_vectors.py
+	@cd $(LEAN_DIR) && $(LAKE) exe verify-cavp
 
 verify-build:
 	@cd $(LEAN_DIR) && $(LAKE) build
@@ -85,9 +145,14 @@ REPO_ROOT     := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
 .PHONY: verify-extracted extract-sphincs-adrs extract-aa-userop extract-fors-index
 
 verify-extracted:
-	@cd $(EXTRACTED_DIR) && $(LAKE) build
-	@echo "=== Axiom closure of the §33 theorems (expect exactly propext, Classical.choice, Quot.sound) ==="
-	@cd $(EXTRACTED_DIR) && $(LAKE) env lean Extracted/AxiomCheck.lean
+	@cd $(EXTRACTED_DIR) && $(LAKE) build 2>&1 | tee /tmp/pq_extracted_build.out
+	@if grep -E "Extracted/[^ ]*\.lean:.*declaration uses" /tmp/pq_extracted_build.out; then \
+	  echo "FAIL: an Extracted/ declaration uses 'sorry' (incomplete proof)"; exit 1; fi
+	@echo "=== Axiom closure of the §33 theorems (expect propext, Classical.choice, Quot.sound + the disclosed keccak256_pure / sha256_pure content axioms) ==="
+	@cd $(EXTRACTED_DIR) && $(LAKE) env lean Extracted/AxiomCheck.lean 2>&1 | tee /tmp/pq_axiomcheck.out
+	@if grep -q sorryAx /tmp/pq_axiomcheck.out; then \
+	  echo "FAIL: a §33 theorem axiom closure contains sorryAx — a proof is incomplete"; exit 1; \
+	else echo "OK: extracted/ axiom-discipline gate passed — no sorryAx in any §33 theorem closure"; fi
 
 extract-sphincs-adrs:
 	@mkdir -p /tmp/pqsigner-extract
@@ -128,9 +193,11 @@ extract-fors-index:
 	  && echo "OK: committed FORS extraction matches the current Rust" \
 	  || { echo "DRIFT: fors.rs index path changed — re-extract, re-prove, re-commit"; exit 1; }
 
-# §33 P1 — guard that Extracted/SpecVendored.lean stays a faithful copy of
-# the SphincsCVerify source it vendors (the version bridge's trust rests on
-# the verbatim transcription). Compares the named ByteVec/Adrs definitions.
+# §33 P1 — guard that the vendored copies in extracted/Extracted/ stay
+# faithful to the SphincsCVerify sources they vendor (the version bridge's
+# trust rests on the verbatim transcription). Compares the named ByteVec/Adrs
+# definitions (SpecVendored.lean) and the FIPS 180-4 SHA-256 definitions
+# (Sha256Vendored.lean, source Spec/Sha256Impl.lean).
 .PHONY: verify-spec-vendored-fidelity
 verify-spec-vendored-fidelity:
 	@python3 scripts/check_vendored_spec.py
@@ -240,7 +307,9 @@ extract-merkle-verify:
 	@python3 scripts/dedup_extraction.py /tmp/pqsigner-extract/mkout/Funs.lean /tmp/pqsigner-extract/mkout/Funs.fixed.lean \
 	  --sed-import 'Merkle.=Extracted.Merkle.' \
 	  --kill 'sphincs_c10::address::make_adrs' --kill 'sphincs_c10::params::H' \
-	  --add-import Extracted.Adrs --add-import Extracted.Fors.Funs
+	  --kill 'sphincs_c10::hash::pad16' --kill 'sphincs_c10::params::N' \
+	  --add-import Extracted.Adrs --add-import Extracted.Fors.Funs \
+	  --add-import Extracted.Hash.Funs
 	@diff -u $(EXTRACTED_DIR)/Extracted/Merkle/Funs.lean /tmp/pqsigner-extract/mkout/Funs.fixed.lean \
 	  && echo "OK: committed merkle extraction matches the current Rust" \
 	  || { echo "DRIFT: sphincs-c10/src/merkle.rs changed — re-extract, re-prove, re-commit"; exit 1; }
@@ -321,3 +390,27 @@ extract-decode-item:
 	@diff -u $(EXTRACTED_DIR)/Extracted/Decode/Funs.lean /tmp/pqsigner-extract/dout/Funs.fixed.lean \
 	  && echo "OK: committed decode_item extraction matches the current Rust" \
 	  || { echo "DRIFT: tx-core/src/rlp.rs changed — re-extract, re-prove, re-commit"; exit 1; }
+
+# §33 axiom-collapse — the five sphincs-c10 tweakable-hash primitives with
+# sha256_bytes as the SINGLE opaque boundary (FunsExternal wires it to the
+# vendored FIPS 180-4 sha256_pure). chain_hash extracts its real loop (calls
+# th); th/th_pair/th_multi/wots_digest expose their exact preimage assembly.
+.PHONY: extract-hash-fns
+extract-hash-fns:
+	@mkdir -p /tmp/pqsigner-extract
+	@cd $(REPO_ROOT)/sphincs-c10 && RUSTFLAGS="--cfg lean_extract" \
+	  $(PQLEAN)/charon cargo --preset=aeneas --opaque sha2 --opaque zeroize \
+	  --opaque 'sphincs_c10::hash::sha256_bytes' \
+	  --start-from 'sphincs_c10::hash::th' \
+	  --start-from 'sphincs_c10::hash::th_pair' \
+	  --start-from 'sphincs_c10::hash::th_multi' \
+	  --start-from 'sphincs_c10::hash::chain_hash' \
+	  --start-from 'sphincs_c10::hash::wots_digest' \
+	  --dest-file /tmp/pqsigner-extract/hashfns.llbc 2>&1 | tail -1
+	@rm -rf /tmp/pqsigner-extract/hout && mkdir -p /tmp/pqsigner-extract/hout
+	@$(PQLEAN)/aeneas -backend lean -dest /tmp/pqsigner-extract/hout -split-files /tmp/pqsigner-extract/hashfns.llbc
+	@python3 scripts/dedup_extraction.py /tmp/pqsigner-extract/hout/Funs.lean /tmp/pqsigner-extract/hout/Funs.fixed.lean \
+	  --sed-import 'Hashfns.=Extracted.Hash.'
+	@diff -u $(EXTRACTED_DIR)/Extracted/Hash/Funs.lean /tmp/pqsigner-extract/hout/Funs.fixed.lean \
+	  && echo "OK: committed hash-fns extraction matches the current Rust" \
+	  || { echo "DRIFT: sphincs-c10/src/hash.rs changed — re-extract, re-prove, re-commit"; exit 1; }

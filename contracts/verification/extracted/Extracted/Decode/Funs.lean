@@ -20,7 +20,7 @@ noncomputable section
 namespace pqsigner_tx_core
 
 /-- [pqsigner_tx_core::rlp::decode_length_be]: loop body 0:
-    Source: 'tx-core/src/rlp.rs', lines 112:4-117:1 -/
+    Source: 'tx-core/src/rlp.rs', lines 112:4-122:1 -/
 @[rust_loop_body]
 def rlp.decode_length_be_loop.body
   (iter : core.slice.iter.Iter Std.U8) (acc : Std.Usize) :
@@ -31,7 +31,7 @@ def rlp.decode_length_be_loop.body
   match o with
   | none => ok (done (core.result.Result.Ok acc))
   | some b =>
-    let o1 ← core.num.Usize.checked_shl acc 8#u32
+    let o1 ← lift (Usize.checked_mul acc 256#usize)
     let r ← core.option.Option.ok_or o1 rlp.RlpError.LengthOverflow
     let cf ← core.result.Result.Insts.CoreOpsTry_traitTry.branch r
     match cf with
@@ -55,7 +55,7 @@ def rlp.decode_length_be_loop.body
       ok (done r1)
 
 /-- [pqsigner_tx_core::rlp::decode_length_be]: loop 0:
-    Source: 'tx-core/src/rlp.rs', lines 112:4-117:1 -/
+    Source: 'tx-core/src/rlp.rs', lines 112:4-122:1 -/
 @[rust_loop]
 def rlp.decode_length_be_loop
   (iter : core.slice.iter.Iter Std.U8) (acc : Std.Usize) :
@@ -66,7 +66,7 @@ def rlp.decode_length_be_loop
     (iter, acc)
 
 /-- [pqsigner_tx_core::rlp::decode_length_be]:
-    Source: 'tx-core/src/rlp.rs', lines 104:0-117:1 -/
+    Source: 'tx-core/src/rlp.rs', lines 104:0-122:1 -/
 def rlp.decode_length_be
   (bytes : Slice Std.U8) :
   Result (core.result.Result Std.Usize rlp.RlpError)

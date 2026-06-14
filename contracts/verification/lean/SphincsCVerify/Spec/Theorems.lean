@@ -297,10 +297,10 @@ theorem theft_free
     -- And cryptographic well-foundedness: the EUF-CMA framework holds,
     -- so any forgery attempt against this verifier on this transcript
     -- contradicts the SHA-256 hardness assumptions (A5).
-    ∧ (∀ (vk : Signature.VerifyingKey)
+    ∧ (∀ (sk : Signer.SigningKey)
          (transcript : Crypto.Transcript)
          (msgStar : ByteVec 32) (sigStar : Hypertree.Signature),
-        Crypto.isForgery vk transcript msgStar sigStar → False) := by
+        Crypto.isForgery sk transcript msgStar sigStar → Crypto.BreaksHash) := by
   -- Substitute σ' = handleOp σ op effects.
   subst hExec
   -- Apply A2 (entrypoint_honest):
@@ -324,22 +324,44 @@ theorem theft_free
     obtain ⟨oi, ow, pks, pkr, dig, isig, hdec, hown, hpks, hpkr, hdig, hverify⟩ := hExist
     refine ⟨oi, ow, pks, pkr, dig, isig, hdec, hown, hpks, hpkr, hdig, ?_⟩
     have hbridge := Bridge.solidityVerifier_compiles_correctly pks pkr dig isig
-    have := Bridge.evm_bytecode_executes_correctly
+    -- A4 + A1 as named TCB MARKERS (NOT semantic premises of this theorem).
+    -- The two `have`s below pull A4 (`evm_bytecode_executes_correctly`, the
+    -- EVM-delivers-the-emitted-CALL boundary) and A1
+    -- (`precompile_0x02_is_FIPS_180_4`) into `theft_free`'s `#print axioms`
+    -- closure so the closure self-documents the full on-chain TCB.
+    -- HONEST SCOPE (corrected by faithfulness-audit pass-2, 2026-06-14): these
+    -- bindings are NOT consumed by the safety argument — deleting them (axioms
+    -- retained) leaves `theft_free` proven, and the proof closes via
+    -- `rw [hbridge]; exact hverify` (A3.1 + the EUF-CMA conjunct). So
+    -- `theft_free`'s genuine SEMANTIC premises are A2 (entrypoint_honest) +
+    -- A3.1 (solidityVerifier_compiles_correctly) + A5 (EUF-CMA ×4) + the kernel
+    -- triple — NINE axioms; A4/A1 are real-world TCB surfaced here for
+    -- completeness, not logical content of the model theorem. (The earlier
+    -- "A4 is now LOAD-BEARING" wording was an over-claim; A4's content-bearing
+    -- *type* genuinely names the assumption, but it is still a non-consumed
+    -- marker. A4's mere presence in the closure relies on `evmDeliversCall`
+    -- staying `opaque`: a `def := fun _ => True` regression would let `trivial`
+    -- discharge `_a4_delivers` and silently drop A4 from the closure.)
+    have _a4_delivers : Bridge.evmDeliversCall (default : Wallet.Execute.Call) :=
+      Bridge.evm_bytecode_executes_correctly (default : Wallet.Execute.Call)
     have := Bridge.precompile_0x02_is_FIPS_180_4 []
     -- Rewrite `DeployedBytecode.SPHINCsC10Asm_verify` into `verifyYulModel`
     -- using A3.1, then close with `hverify`.
     show Bridge.DeployedBytecode.SPHINCsC10Asm_verify pks pkr dig isig = true
     rw [hbridge]
     exact hverify
-  · -- Cryptographic non-forgeability half: directly from EUF-CMA
-    -- (which appears via `cannot_forge_without_breaking_SHA256`).
-    intro vk transcript msgStar sigStar hf
+  · -- Cryptographic non-forgeability half (reduction form, 2026-06-14):
+    -- a forgery against the slot key's honest history breaks SHA-256
+    -- (`cannot_forge_without_breaking_SHA256 : isForgery → BreaksHash`).
+    -- This is the cited crypto rider; the substantive safety guarantee is
+    -- conjunct 1 above, which is EUF-CMA-free.
+    intro sk transcript msgStar sigStar hf
     -- Acknowledge `Classical.choice` is part of the trusted Lean kernel
     -- — pulling it into the dep closure documents the classical
     -- reasoning licence the cryptographic argument operates under.
     have _classical_choice_acknowledged : Unit :=
       Classical.choice (Nonempty.intro ())
-    exact Crypto.cannot_forge_without_breaking_SHA256 vk transcript msgStar sigStar hf
+    exact Crypto.cannot_forge_without_breaking_SHA256 sk transcript msgStar sigStar hf
 
 /-! ## 4b. Bytecode-transported corollaries.
 
@@ -403,10 +425,10 @@ theorem theft_free_bytecode
       ∧ pkRoot = owner.raw.drop 32 (by decide)
       ∧ digest = sphincsDigest op σ.entryPointAddress σ.chainId
       ∧ Bridge.DeployedBytecode.SPHINCsC10Asm_verify pkSeed pkRoot digest innerSig = true)
-    ∧ (∀ (vk : Signature.VerifyingKey)
+    ∧ (∀ (sk : Signer.SigningKey)
          (transcript : Crypto.Transcript)
          (msgStar : ByteVec 32) (sigStar : Hypertree.Signature),
-        Crypto.isForgery vk transcript msgStar sigStar → False) := by
+        Crypto.isForgery sk transcript msgStar sigStar → Crypto.BreaksHash) := by
   -- A3.1, in function form: the opaque deployed verifier IS the Lean
   -- Yul model (which is `deployedVerifier` by definition).
   have hfn : Bridge.DeployedBytecode.SPHINCsC10Asm_verify
@@ -515,11 +537,11 @@ corollary adds the cryptographic **field-binding** result: the signed
 digest commits to the op's fields (sender, nonce, callData, gas
 params, chainId, entryPoint). Composes I-1 (non-bypass) +
 `Wallet.SphincsDigestSpec.sphincsDigest_field_binding`
-(sha256_injective_on_fixed_length) + the bridge axioms.
+(sha256_collision_resistance) + the bridge axioms.
 
 Consumed-by-claim: this is the headline statement for Claim 1
 ("signature-to-execution binding"). Removing
-`sha256_injective_on_fixed_length` from the axiom set would leave a
+`sha256_collision_resistance` from the axiom set would leave a
 hole — equal digests would no longer imply equal preimages, so
 calldata could in principle differ between the signing and execution
 sides. -/
@@ -537,12 +559,13 @@ theorem theft_free_with_calldata_binding
     (hSameDigest : sphincsDigest op1 σ.entryPointAddress σ.chainId
                      = sphincsDigest op2 σ.entryPointAddress σ.chainId) :
     -- Then `op2` and `op1` agree on the preimage (and hence on every
-    -- positional field): no calldata substitution is possible without
-    -- a SHA-256 collision (ruled out by A5).
+    -- positional field) — UNLESS SHA-256 is broken: no calldata substitution
+    -- is possible without a same-length SHA-256 collision, which lands in the
+    -- (cited-infeasible) `BreaksHash` disjunct.
     sphincsDigestPreimage op1 σ.entryPointAddress σ.chainId
-      = sphincsDigestPreimage op2 σ.entryPointAddress σ.chainId := by
-  -- Discharge by `sphincsDigest_field_binding` (Phase 1A theorem,
-  -- which itself reduces to `sha256_injective_on_fixed_length`).
+      = sphincsDigestPreimage op2 σ.entryPointAddress σ.chainId ∨ Crypto.BreaksHash := by
+  -- Discharge by `sphincsDigest_field_binding`, which reduces to
+  -- `sha256_collision_resistance` (equal preimages, or a SHA-256 break).
   exact sphincsDigest_field_binding op1 op2
     σ.entryPointAddress σ.chainId hSameDigest
 
@@ -626,12 +649,15 @@ open SphincsCVerify.Wallet.TxFlow
     on the decoded `(pkSeed, pkRoot, sphincsDigest, innerSig)` under
     an installed owner key.
 
-    Note the consequent is existential ("some validated step in the
-    trace"), not per-call attribution — that stronger form is left as
-    an `OPEN_PROOF_OBLIGATIONS` follow-up. The existential form is
-    already sufficient to rule out the bypass attack: a transaction
-    trace containing zero verifier-true validates cannot produce any
-    external call. -/
+    The consequent here is existential ("some validated step in the
+    trace") — already sufficient to rule out the bypass attack: a
+    transaction trace containing zero verifier-true validates cannot
+    produce any external call. The STRONGER per-step (injective)
+    attribution — every stack-growing external-call step is backed by
+    its OWN distinct verifier-true validate — is now also proven, see
+    `every_call_attributed_to_distinct_validate` (quantitative
+    pigeonhole) and `call_traces_to_authorising_validate` (structural)
+    below (Gap-2 closed 2026-06-14). -/
 theorem every_call_gated_by_verifier
     (σ0 σ' : Wallet.Execute.ExecState) (trace : List Wallet.TxFlow.Step)
     (hrun : Wallet.TxFlow.runTrace σ0 trace = some σ')
@@ -653,5 +679,61 @@ theorem no_call_without_prior_verifier_acceptance
     ∃ (σ_pre : Wallet.Execute.ExecState) (step : Wallet.TxFlow.Step),
       step ∈ trace ∧ Wallet.TxFlow.StepVerified σ_pre step :=
   Wallet.TxFlow.any_call_implies_some_verify_true σ0 σ' trace hrun hinit hempty hsome
+
+/-! ### Per-call (per-step, injective) attribution — Gap-2 closed.
+
+The two corollaries below strengthen the existential gate above to
+genuine per-step attribution: every money-moving external-call step is
+backed by its OWN distinct verifier-true validate. The token discipline
+(a verifier-true slot-validate is the only step that lifts the EIP-1153
+`validatedOwnerPlusOne` transient; every execute requires it live and
+clears it) means one stamp authorises at most one execute.
+
+`#print axioms` for both = `{ propext, Classical.choice, Quot.sound }`
+(kernel-only — same closure as the existential `every_call_gated_by_verifier`).
+
+Granularity note: this is per-execute-STEP, not per-individual-CALL. An
+`executeBatch` appends several calls under a single validate, so calls
+within one batch legitimately share one authorising validate; a distinct
+validate *per call element* is false in this model and is NOT claimed.
+Per-step is the faithful granularity for "external call authorised by
+its own verifier-true validate". -/
+
+/-- **Per-step (injective) attribution — quantitative form.** For a
+    transaction trace run from a clean transient, the number of
+    stack-growing execute-family steps (`ne`, counted by the
+    `TxFlow.ledger`) is `≤` the number of verifier-true validate steps
+    (`nv`). Each external-call-producing step is therefore charged to
+    its own distinct authorising validate — `n` calls force `n`
+    verifier-true validates, which a purely existential `≥ 1` gate does
+    NOT give (e.g. one validate then two executes is ruled out: the
+    first execute zeroes the transient, the second has no stamp to
+    consume). -/
+theorem every_call_attributed_to_distinct_validate
+    (σ0 σf : Wallet.Execute.ExecState) (trace : List Wallet.TxFlow.Step)
+    (nv ne : Nat)
+    (hledger : Wallet.TxFlow.ledger σ0 trace = some (σf, nv, ne))
+    (hinit : σ0.validatedOwnerPlusOne = 0) :
+    ne ≤ nv :=
+  Wallet.TxFlow.growing_executes_le_verified_validates σ0 σf trace nv ne hledger hinit
+
+/-- **Per-step attribution — structural form.** Any live transient at
+    the end of a run traces back to the unique most-recent verifier-true
+    validate, with NO execute step between it and the end — i.e. the
+    validate whose stamp the next execute will consume. Applied at an
+    execute step's entry state (where the transient is necessarily live),
+    this names the specific authorising validate of that exact step. -/
+theorem call_traces_to_authorising_validate
+    (σ0 σf : Wallet.Execute.ExecState) (trace : List Wallet.TxFlow.Step)
+    (hrun : Wallet.TxFlow.runTrace σ0 trace = some σf)
+    (hinit : σ0.validatedOwnerPlusOne = 0)
+    (hlive : σf.validatedOwnerPlusOne ≠ 0) :
+    ∃ (a : List Wallet.TxFlow.Step) (v : Wallet.TxFlow.Step)
+      (b : List Wallet.TxFlow.Step) (σv : Wallet.Execute.ExecState),
+      trace = a ++ v :: b
+      ∧ Wallet.TxFlow.runTrace σ0 a = some σv
+      ∧ Wallet.TxFlow.StepVerified σv v
+      ∧ (∀ s ∈ b, Wallet.TxFlow.Step.isExec s = false) :=
+  Wallet.TxFlow.token_lift_traces_to_validate trace σ0 σf hrun hinit hlive
 
 end SphincsCVerify.Spec.Theorems

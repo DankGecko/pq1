@@ -103,11 +103,12 @@ def runVector (v : KatVector) : Outcome :=
   let verifyResult : Bool := Signature.verify ⟨pkSeed16, pkRoot16⟩ msgBV sigBV
   ⟨digestOk, htIdxOk, verifyResult == v.expectValid⟩
 
-/-- The full-verify column is a HARD CHECK: the reconstruction layer was
-    made executably faithful on 2026-06-12 (the `chainHash` chain-pos
-    field fix — see `Spec/Hash.lean` and docs/A3_1_VERIFIER_GAP.md), and
-    `Spec.Signature.verify` now matches the deployed bytecode on all 10
-    KAT vectors. Any drift fails the build. -/
+/-- Full-verify column is a HARD CHECK as of 2026-06-13: the WOTS+C /
+    hypertree reconstruction layer was made executably faithful to the
+    deployed bytecode (two fixes — `chainHash` now writes the ADRS
+    chain_pos field, and `loadWord32` zero-pads partial tail reads like
+    `calldataload`). `lake exe verify-test-vectors` reports full-verify
+    10/10; A3.1 is discharged on the functional layer. -/
 def requireFullVerify : Bool := true
 
 def main : IO UInt32 := do
@@ -140,8 +141,9 @@ def main : IO UInt32 := do
   if requireFullVerify && verifyMismatch > 0 then
     IO.eprintln "FAIL: full-verify differential required but mismatched."
     return 1
-  IO.println "OK: the executable Lean spec (digest, htIdx, AND full functional verify)"
-  IO.println "    is byte-faithful to the deployed verifier on the complete KAT corpus."
-  IO.println "    The ∀-signature symbolic equivalence remains the separate GAP-2"
-  IO.println "    (Verity / KEVM); see docs/MISSING_FOR_FULL_BYTECODE_PROOF.md."
+  IO.println "OK: digest + htIdx + full functional verify are byte-faithful to the"
+  IO.println "    deployed verifier on all 10 KAT vectors (A3.1 functional layer"
+  IO.println "    discharged 2026-06-13). The executable Lean Spec.Signature.verify"
+  IO.println "    accepts the 4 valid vectors and rejects the 6 negatives, matching"
+  IO.println "    the deployed bytecode."
   return 0

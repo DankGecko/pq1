@@ -45,7 +45,7 @@ import SphincsCVerify
 -- solidityFactory_compiles_correctly (A3.3) + kernel.
 #print axioms SphincsCVerify.Spec.Theorems.factory_squat_defence_bytecode
 
--- Claim 1 corollary — adds sha256_injective_on_fixed_length to the closure.
+-- Claim 1 corollary — adds sha256_collision_resistance to the closure.
 #print axioms SphincsCVerify.Spec.Theorems.theft_free_with_calldata_binding
 
 -- Claim 3 corollary — composes the 6 Wallet.Execute theorems.
@@ -66,6 +66,15 @@ import SphincsCVerify
 #print axioms SphincsCVerify.Spec.Theorems.no_call_without_prior_verifier_acceptance
 #print axioms SphincsCVerify.Wallet.TxFlow.callstack_grew_implies_some_verify_true
 
+-- Claim 4 / Gap-2 — per-step (injective) attribution: every money-moving
+-- external-call step is backed by its OWN distinct verifier-true validate.
+-- Closure: kernel-only {propext, Classical.choice, Quot.sound} — same as
+-- the existential gate; no new axiom.
+#print axioms SphincsCVerify.Spec.Theorems.every_call_attributed_to_distinct_validate
+#print axioms SphincsCVerify.Spec.Theorems.call_traces_to_authorising_validate
+#print axioms SphincsCVerify.Wallet.TxFlow.growing_executes_le_verified_validates
+#print axioms SphincsCVerify.Wallet.TxFlow.token_lift_traces_to_validate
+
 -- Claim 4, transported to the deployed EXECUTE bytecode (A3.2-exec): a
 -- successful deployed executeWithOffchainCount / executeBatchWithOffchainCount
 -- required the matching validated-owner token on entry. Closure adds
@@ -73,3 +82,23 @@ import SphincsCVerify
 -- execute bridge axioms discharged by test/halmos/HalmosExecuteEquiv.t.sol.
 #print axioms SphincsCVerify.Spec.Theorems.deployed_execute_requires_prior_token
 #print axioms SphincsCVerify.Spec.Theorems.deployed_executeBatch_requires_prior_token
+
+-- (I-7 bootstrap) Bootstrap few-time cap enforced at the validation gate —
+-- the faithfulness-audit (2026-06-14) P1 fix that makes capOk's bootstrap
+-- strictness proof-load-bearing (two-gate parity with the slot path). Closure
+-- = {propext, Quot.sound} only (kernel-clean, no new axiom).
+#print axioms SphincsCVerify.Wallet.Invariants.validateSignature_bootstrap_cap_strict
+
+-- (Gap-3) Off-chain/on-chain domain separation — the RAW32 forgery-oracle
+-- defense: an off-chain replaySafeHash-nested value is never equal to any
+-- UserOp sphincsDigest. Closure adds exactly ONE new cited axiom,
+-- keccak_sha256_cross_separation (cross-hash separation, same `… ∨ BreaksHash`
+-- reduction shape as sha256_collision_resistance); keccak256 is `opaque`
+-- (Classical.choice), not a named axiom. Never concludes False.
+#print axioms SphincsCVerify.Wallet.OffchainBinding.offchain_nested_disjoint_from_userop_digest
+
+-- (Gap-4) UUPS upgrade-path unreachable — the named end-to-end assembly.
+-- COMPOSES the two already-proven pieces (Execute self-target rejection +
+-- StorageLayout impl-slot disjointness). No new proof, no new axiom.
+-- Closure: kernel-only {propext, Classical.choice, Quot.sound}.
+#print axioms SphincsCVerify.Wallet.UpgradeSafety.upgrade_path_unreachable

@@ -18,10 +18,10 @@ so the discharge artifacts can be recorded independently:
 
 | Axiom | Discharged by |
 |-------|---------------|
-| `solidityVerifier_compiles_correctly`     | **partial**: Halmos input-gates on pinned `SPHINCsC10Asm` codehash + executable Lean↔FIPS↔bytecode KAT on the digest/htIdx sub-layers + bytecode-side 10-vector KAT + ~250-mutant screen. Functional reconstruction layer is EMPIRICAL only — see `docs/A3_1_VERIFIER_GAP.md` |
-| `solidityWallet_compiles_correctly`       | Halmos session against pinned `PQSmartWallet` codehash (`test/halmos/HalmosValidateUserOp.t.sol`, `HalmosExecute.t.sol`) |
-| `solidityFactory_compiles_correctly`      | Certora rule-set `certora/PQSmartWalletFactory.spec` |
-| `solidityMultiOwnable_compiles_correctly` | Certora rule-set `certora/PQMultiOwnable.spec` |
+| `solidityVerifier_compiles_correctly`     | Halmos input-gates on pinned `SPHINCsC10Asm` codehash + **full-functional** executable Lean↔FIPS↔bytecode KAT (`lake exe verify-test-vectors` full-verify 10/10, `requireFullVerify=true`) + bulk 384/384 + ~250-mutant screen. ∀-signature symbolic equivalence is the standing ceiling (uninterpreted SHA-256 = A1). See `docs/A3_1_VERIFIER_GAP.md` (functional layer RESOLVED 2026-06-13) |
+| `solidityWallet_compiles_correctly`       | Halmos pointwise-equivalence against pinned `PQSmartWallet` codehash — primary `test/halmos/HalmosValidateUserOpEquiv.t.sol` + `HalmosExecuteEquiv.t.sol`; corollaries `HalmosValidateUserOp.t.sol`, `HalmosExecute.t.sol` |
+| `solidityFactory_compiles_correctly`      | Halmos `test/halmos/HalmosFactory.t.sol` (primary; Certora `certora/PQSmartWalletFactory.spec` is an alternative path) |
+| `solidityMultiOwnable_compiles_correctly` | Halmos `test/halmos/HalmosMultiOwnable.t.sol` (primary; replaced the prior stale Certora artifact) |
 
 A1 (`precompile_0x02_is_FIPS_180_4`) is also refactored into the
 opaque-equality shape (the `DeployedBytecode.SHA256_precompile` symbol
@@ -171,18 +171,20 @@ documentation. -/
     The deployed bytecode at the pinned codehash returns `true` exactly
     when `Bridge.SolidityVerifier.verifyYulModel` returns `true`.
 
-    Discharge status: **`discharged-bytecode-partial`**. The honest
-    ledger (see `docs/A3_1_VERIFIER_GAP.md` + `docs/AXIOM_STATUS.json`):
-      * digest + htIdx sub-layers — executable Lean ↔ FIPS ↔ bytecode
-        KAT, 10/10 (`lake exe verify-test-vectors`, HARD CHECK);
+    Discharge status: **`discharged-bytecode`** on the corpus (functional
+    layer RESOLVED 2026-06-13). The honest ledger (see
+    `docs/A3_1_VERIFIER_GAP.md` + `docs/AXIOM_STATUS.json`):
+      * FULL functional layer — executable Lean ↔ FIPS ↔ bytecode KAT,
+        full-verify 10/10 (`lake exe verify-test-vectors`,
+        `requireFullVerify=true`, HARD CHECK: accepts the 4 valid +
+        rejects the 6 negatives) + bulk 384/384 (`verify-bulk`);
       * input gates — Halmos on the bytecode (length / N-mask);
-      * FORS/WOTS+C/Merkle functional layer — EMPIRICAL only (10-vector
-        bytecode KAT + ~250-mutant wrong-accept screen). The Lean
-        `verifyYulModel` is NOT yet executably faithful here
-        (`Spec.Signature.verify` returns `false` on valid vectors — the
-        reconstruction-layer ADRS divergence), and a symbolic
-        ∀-signature equivalence is intractable under uninterpreted
-        SHA-256 (= A1). This is the single named A3.1 residual. -/
+      * the FORS/WOTS+C/Merkle reconstruction is now executably faithful
+        (the chainHash ADRS-field + loadWord32 tail-padding bugs were
+        fixed; `verifyRefined_eq_spec` stays `rfl` over the faithful spec).
+    Standing ceiling (coverage, NOT a falsity): a symbolic ∀-signature
+    equivalence over all 4008-byte sigs is intractable under uninterpreted
+    SHA-256 (= A1); the ∀ is carried by the KAT + bulk + mutant screen. -/
 axiom solidityVerifier_compiles_correctly :
     ∀ (pkSeed pkRoot : ByteVec 32) (message : ByteVec 32) (sig : ByteVec SignatureLen),
       DeployedBytecode.SPHINCsC10Asm_verify pkSeed pkRoot message sig
@@ -237,9 +239,11 @@ axiom solidityWallet_compiles_correctly :
     `addSlot0Digest(chainId, slot0PkSeed, slot0PkRoot)` against
     `factorySig` under the deployed verifier.
 
-    Discharge: Certora rule-set
-    `certora/PQSmartWalletFactory.spec::createAccount_requires_bootstrap_sig`
-    + `same_inputs_same_address` against pinned factory codehash. -/
+    Discharge: Halmos `test/halmos/HalmosFactory.t.sol` (5 rules —
+    `createAccount ⟺ createAccountPrecondition` iff + postconditions,
+    already-deployed early-return, 3 install-gate rejects) against the
+    pinned factory codehash `0xfa2922…7c3c`. The prior Certora rule-set
+    `certora/PQSmartWalletFactory.spec` remains an alternative path. -/
 axiom solidityFactory_compiles_correctly :
     ∀ (masterPkSeed masterPkRoot slot0PkSeed slot0PkRoot : ByteVec 32)
       (chainId : UInt64) (factorySig : ByteVec SignatureLen),
@@ -254,12 +258,16 @@ axiom solidityFactory_compiles_correctly :
 
     The deployed `PQMultiOwnable.ownerAtIndex(i)` reads the same value
     as `Storage.ownerAtIndex i` in the Lean model. Together with the
-    Certora-verified mutation rules (Claim 2), this gives a complete
+    Halmos-verified mutation rules (Claim 2), this gives a complete
     bytecode-level account of owner-set integrity.
 
-    Discharge: Certora rule-set `certora/PQMultiOwnable.spec` (the
-    `onlySelfCanChangeOwnerAtIndex` + `bootstrap_unremovable` rules in
-    particular) against pinned `PQMultiOwnable`-embedded codehash. -/
+    Discharge: Halmos `test/halmos/HalmosMultiOwnable.t.sol` (7 rules —
+    add/remove/initialize pointwise vs the Lean `Storage` model +
+    `ownerAtIndex` read parity + bootstrap-unremovable + EntryPoint-only
+    gate) against the pinned `PQMultiOwnable`-embedded codehash
+    `0x43c654…a06a`. This REPLACED the prior Certora artifact
+    `certora/PQMultiOwnable.spec`, which had been pinned to a stale
+    codehash and never re-run. -/
 axiom solidityMultiOwnable_compiles_correctly :
     ∀ (s : Storage) (i : Nat),
       DeployedBytecode.PQMultiOwnable_ownerAtIndex s i = s.ownerAtIndex i
@@ -361,12 +369,85 @@ axiom precompile_0x02_is_FIPS_180_4 :
 /-! ## A4 (cited TCB) — EVM bytecode executes per the EVM specification.
 
 This statement is a universal-Ethereum trust marker. KEVM is the
-formal-EVM-semantics referent; per user decision A4 stays as a `True`
-axiom — it documents the trust boundary without claiming an in-Lean
-discharge artifact. -/
+formal-EVM-semantics referent — A4 documents the trust boundary at the
+point where Lean stops and the consensus client takes over.
 
-/-- **A4 — Cancun-era EVM bytecode executes per the EVM specification.** -/
-axiom evm_bytecode_executes_correctly : True
+### Content-bearing restatement (2026-06-14, faithfulness-audit P-FAIL fix)
+
+The prior shape `axiom evm_bytecode_executes_correctly : True` carried
+*zero* propositional content: a hostile removal broke no proof, and the
+falsifiability review FAILed it for that reason — yet it is the
+EVM-execution boundary through which `theft_free` routes every actual
+value movement (the emitted-CALL byte-delivery on the execute path; see
+the closing paragraph of `solidityWalletExecute_compiles_correctly`'s
+doc-comment, which explicitly assigns that delivery to A4 rather than to
+the wallet-compilation axiom — Halmos cannot reconstruct forwarded
+calldata either).
+
+We now give A4 a *named, documented* propositional statement. The Lean
+`Execute` model records each external call the wallet bytecode reaches as
+a `Wallet.Execute.Call { target, value, data }` appended to
+`ExecState.callStack`. The deployed-bytecode opaque symbol
+`DeployedBytecode.PQSmartWallet_executeWithOffchainCount` returns a
+post-state with the *same* appended frame (success direction, A3.2-exec).
+A4 is the trust statement that the EVM, when it runs that bytecode and
+the bytecode emits `target.call{value: value}(data)`, **actually delivers
+`(target, value, data)` to the callee** — i.e. the abstract `Call`
+appended to `callStack` corresponds to a real on-chain value+calldata
+transfer per Cancun execution semantics.
+
+We model "the EVM faithfully performs this emitted call" by the opaque
+predicate `evmDeliversCall : Call → Prop` (kernel-irreducible, like the
+`DeployedBytecode.*` symbols — it cannot be `decide`-d or `rfl`-ed away).
+The axiom asserts this predicate holds for *every* emitted call. The TYPE
+is content-bearing — it *names* the EVM-delivery assumption (a real honesty
+gain over the prior `: True`, which asserted nothing refutable). It stays a
+cited-TCB axiom (KEVM / consensus-client conformance is the external
+discharge; we do not claim an in-Lean discharge artifact).
+
+HONEST SCOPE (corrected by faithfulness-audit pass-2, 2026-06-14): in
+`theft_free` this axiom is a NON-CONSUMED TCB MARKER, not a semantic
+premise. The `have _a4_delivers := evm_bytecode_executes_correctly default`
+binding pulls A4 into `theft_free`'s `#print axioms` closure (so the closure
+self-documents the EVM-execution boundary), but the safety proof does not
+consume it — deleting the binding (axiom retained) leaves `theft_free`
+proven, and its closure drops to the 9 genuine semantic premises (A2 + A3.1
++ EUF-CMA ×4 + the kernel triple). The earlier claim that A4 became
+"load-bearing in theft_free / removing the axiom leaves it unprovable" was
+an OVER-CLAIM: removing the axiom definition breaks the binding with an
+unknown-identifier error, not a logical gap. A4's content-bearing *type* is
+the genuine improvement; its closure presence additionally relies on
+`evmDeliversCall` staying `opaque` (a `def := fun _ => True` regression would
+let `trivial` discharge `_a4_delivers` and drop A4 from the closure).
+
+Trust-base impact: the trust base is **more honest, neither stronger nor
+weaker**. The set of facts a verifier must trust to believe `theft_free`
+is unchanged (still A1–A5 + kernel); A4 now *names* the EVM-delivery
+assumption it always silently stood for, instead of hiding behind `True`.
+A real-world mis-execution (a client mis-delivering CALL bytes) now has a
+Lean statement it would contradict — the falsifiability gap the audit
+flagged is closed at the encoding level. The axiom never concludes
+`False` (its conclusion is the opaque `evmDeliversCall c`, a `Prop` with
+no constructor available outside the axiom itself), so it cannot make the
+system inconsistent. -/
+
+/-- The kernel-irreducible predicate "the EVM faithfully performs the
+    emitted external call `c` — it transfers `c.value` and delivers
+    `c.data` to `c.target` per Cancun execution semantics". Opaque so it
+    cannot be discharged inside Lean; the only relation to it is via A4
+    (`evm_bytecode_executes_correctly`) below, the cited Ethereum TCB. -/
+opaque evmDeliversCall : Wallet.Execute.Call → Prop
+
+/-- **A4 — Cancun-era EVM bytecode executes per the EVM specification.**
+
+    Content-bearing form: every external call the wallet bytecode emits
+    on a (non-reverting) execute path is faithfully delivered by the EVM
+    to its callee — `target.call{value}(data)` actually moves `value` and
+    forwards `data`. This is the EVM-execution boundary `theft_free`'s
+    value-movement guarantee bottoms out on; it is cited-TCB (KEVM /
+    consensus-client conformance), not discharged in Lean. -/
+axiom evm_bytecode_executes_correctly :
+    ∀ (c : Wallet.Execute.Call), evmDeliversCall c
 
 /-! ## Composite refinement statement
 

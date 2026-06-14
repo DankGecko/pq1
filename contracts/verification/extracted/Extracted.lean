@@ -10,3 +10,16 @@ import Extracted.Bits
 import Extracted.ForsExtract
 import Extracted.Eip1271Equiv
 import Extracted.WotsDigits
+import Extracted.FwManifestSpec
+import Extracted.Bip39RoundtripSpec
+import Extracted.RlpIntSpec
+import Extracted.U256MulSpec
+import Extracted.MerkleVerifySpec
+import Extracted.TxMerkleSpec
+import Extracted.DecodeItemSpec
+import Extracted.PkFromSigSpec
+import Extracted.Sha256Vendored
+import Extracted.Sha256Pure
+import Extracted.HashPure
+import Extracted.Hash.Funs
+import Extracted.HashSpecs

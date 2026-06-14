@@ -1,5 +1,42 @@
 # Pinned bytecode codehashes
 
+> ## ✅ Build-reproducibility repaired — deployed bytecode byte-bound (2026-06-13)
+>
+> `contracts/smart-wallet/foundry.lock` had pinned account-abstraction v0.7.0
+> (`7af70c8`), which **did not compile** — the code imports
+> `account-abstraction/legacy/v06/*`, a layout that only exists in v0.8.0+.
+> The **deploy-time lib was recovered**: the lock now pins AA
+> **`f54584e`** (the **ERC-4337 v0.9 release**), whose `contracts/legacy/v06/`
+> differs from the v0.8.0 tag (`UserOperation06` blob `9277fdd` vs `1479bcc`)
+> and drives `validateUserOp` calldata decoding. PQSigner's build had always
+> tracked the v0.9 AA tree (the v0.9→v0.6 EntryPoint retarget, `074fcbb`);
+> the lock had merely mis-named the tag. solady (`90db92ce`) is
+> **bytecode-irrelevant** — its consumed files (LibClone/ERC1271/EIP712/
+> SignatureCheckerLib) are byte-identical 2025-12-04→HEAD.
+>
+> With this lib the **original audited pins are reproduced exactly** under both
+> profiles (wallet `0x43c654`/`0x551c4e`, factory `0xfa2922`/`0x5feb7955`,
+> verifier `0xf1ef…`/`0xeb1e3fcd`) — so the pins below are the **original**
+> values, not a re-pin — and the **full Halmos A3.2/A3.3/A3.4 discharge passes
+> against them** (`make -C contracts/verification verify-bytecode`, 38/38 on
+> both profiles).
+>
+> **The deployed Base Mainnet contracts ARE byte-reproducible.** A CREATE2
+> replay of the production deploy (Arachnid `0x4e59…`, salt 0, chain id 8453,
+> deploy profile) reproduces the live verifier `0xdDE4…`, wallet impl
+> `0x31e49D24…`, and factory `0xe8CE78CD…` — both **addresses and full runtime
+> codehashes** (`0xeb1e3fcd…`, `0xdc9a082f…`, `0x045bb5…`) — see
+> `contracts/smart-wallet/test/DeployedBytecodeReproCheck.t.sol`
+> (`FOUNDRY_PROFILE=deploy`). The Halmos discharges (pinned harness instances)
+> transport to the live bytecode via `PinnedBytecodeImmutableLemma`; the only
+> deployed-vs-rebuild deltas are the verified immutable windows (wallet:
+> EIP-712 domain separator + `address(this)` + chainId 8453; factory:
+> implementation address ×3), and identical metadata IPFS hashes prove same
+> source + settings. The earlier "NOT byte-reproducible / lost libs / maintainer
+> decision pending" note is **withdrawn** — it was an artifact of comparing at
+> forge chainId 31337 vs Base 8453. See
+> [`DEPLOYED_BYTECODE_PIN_CAVEAT.md`](DEPLOYED_BYTECODE_PIN_CAVEAT.md).
+
 Each `solidity*_compiles_correctly` axiom in `Bridge/Refinement.lean`
 is bound to a specific runtime codehash. When that codehash changes,
 the corresponding discharge artifact (Halmos session, Certora
@@ -61,7 +98,7 @@ pinned value below. Any drift fails CI.
 > Reproduce: `make -C contracts/verification verify-bytecode`. SHA-256 is an
 > uninterpreted function in every Halmos run (the named A1 boundary).
 
-**default profile (`runs=200`)** — the dev/test build the symbolic suite runs against:
+**default profile (`runs=200`)** — the dev/test build the symbolic suite runs against (the **original audited pins**, reproduced byte-for-byte by the recovered `foundry.lock` build — AA `f54584e` + solady `90db92ce`):
 
 ```
 PQSmartWallet         0x43c65420691792d7f0f63dab95f47ab7adb649df4c83f432bd3cf2c95db3a06a
@@ -70,7 +107,7 @@ SPHINCsC10Asm         0xf1ef4ccee22e6b39446723232fe39761f089c7195941b2c12576956b
 PQMultiOwnable        (embedded in PQSmartWallet; no independent deploy)
 ```
 
-**deploy profile (`runs=999999`)** — the production build (pinned + certified 2026-06-10):
+**deploy profile (`runs=999999`)** — the production build (the **original audited pins**, reproduced by the recovered lib; the deployed Base Mainnet impl/factory/verifier are reproduced ADDRESS **and** codehash by `DeployedBytecodeReproCheck.t.sol`):
 
 ```
 PQSmartWallet         0x551c4e03bbd433a5929828ab19caac13a94ca9e2be6074cf3e18c7d926034c22

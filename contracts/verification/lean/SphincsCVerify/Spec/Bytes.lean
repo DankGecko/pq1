@@ -131,30 +131,21 @@ verifier (`Verifier.Refined`) and the structural deserialiser
 Sharing the definitions is what makes `load_R_consistent` and friends in
 `Verifier/Equivalence.lean` discharge by `rfl`. -/
 
-/-- Load a 32-byte word from a byte vector at `offset`, with
-    `calldataload` semantics: bytes past the end of the vector read as
-    zero, but bytes BEFORE the end are the real data. A read that
-    *straddles* the end therefore returns the available suffix followed
-    by zero padding — NOT an all-zero word.
-
-    This matters concretely: the deployed verifier's last Merkle-sibling
-    read of hypertree layer 1 sits at offset 3992 of the 4008-byte
-    signature, so `calldataload` returns the final 16 real bytes ‖ 16
-    bytes of ABI zero-padding. The pre-2026-06-12 definition returned
-    `zero 32` for ANY read crossing the end, zeroing that sibling and
-    breaking the layer-1 root reconstruction (the second of the two
-    divergences behind the A3.1 reconstruction gap). -/
+/-- Load a 32-byte word from a byte vector at `offset`, matching EVM
+    `calldataload` semantics: read the bytes that exist in
+    `[offset, min(offset+32, n))` and **zero-pad the tail** for any bytes
+    past the end. (The previous definition returned an all-zero word when
+    the full 32-byte window overran `n`, which silently dropped the real
+    low bytes of a partial read — e.g. the very last 16-byte auth-path
+    entry of a 4008-byte signature sits at offset 3992, whose 32-byte
+    window `[3992, 4024)` overruns by 16; `calldataload` returns those 16
+    real bytes followed by 16 zero bytes, and the N-mask keeps the real
+    top 16. The old all-zero fallback corrupted that read.) -/
 def loadWord32 {n : Nat} (sig : ByteVec n) (offset : Nat) : ByteVec 32 :=
-  if h : offset + 32 ≤ n then
-    ⟨sig.data.extract offset (offset + 32), by
-      have hsize : sig.data.size = n := sig.size_eq
-      simp [Array.size_extract, hsize, Nat.min_eq_left h]⟩
-  else
-    ⟨sig.data.extract offset n ++ Array.replicate (32 - (n - offset)) (0 : UInt8), by
-      have hsize : sig.data.size = n := sig.size_eq
-      have hlt : n - offset < 32 := by omega
-      simp [Array.size_append, Array.size_extract, hsize]
-      omega⟩
+  ⟨(sig.data.extract offset (offset + 32) ++ Array.replicate 32 0).extract 0 32, by
+    have hsize : sig.data.size = n := sig.size_eq
+    simp [Array.size_extract, Array.size_append, Array.size_replicate]
+    omega⟩
 
 /-- Load a 16-byte (N-masked) value: top 16 bytes of the 32-byte word
     at `offset`. -/

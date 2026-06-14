@@ -13,9 +13,14 @@
 #
 # What remains:
 #
-#   - A4 (`evm_bytecode_executes_correctly`) — kept as a cited universal
-#     Ethereum TCB marker per user decision. KEVM is the formal-EVM-
-#     semantics referent.
+#   - A4 (`evm_bytecode_executes_correctly`) — REMOVED from this allowlist
+#     2026-06-14: upgraded from `: True` to a content-bearing statement
+#     `∀ (c : Wallet.Execute.Call), Bridge.evmDeliversCall c` (the EVM
+#     faithfully delivers every emitted CALL's (target,value,data);
+#     KEVM / consensus-client conformance is the cited external
+#     discharge). It is still a cited universal-Ethereum TCB axiom and
+#     still in `theft_free`'s 11-name closure, but it is no longer a
+#     `True`-typed placeholder, so it must NOT be on this allowlist.
 #   - A2 (`entrypoint_honest`) — `_Shape`-typed (Prop carries content
 #     about the Lean `handleOp` fiction) but the user explicitly opted
 #     to keep this as-is rather than discharge against deployed
@@ -25,7 +30,6 @@
 #     EUF-CMA reduction; mechanising the advantage bound in Lean is a
 #     multi-person-year effort.
 
-SphincsCVerify.Bridge.evm_bytecode_executes_correctly
 SphincsCVerify.Crypto.SM_DT_TCR_F
 SphincsCVerify.Crypto.ITSR_F
 SphincsCVerify.Crypto.hMsg_random_oracle

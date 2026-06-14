@@ -10,6 +10,16 @@ import Extracted.Bits
 import Extracted.ForsExtract
 import Extracted.Eip1271Equiv
 import Extracted.WotsDigits
+import Extracted.FwManifestSpec
+import Extracted.Bip39RoundtripSpec
+import Extracted.RlpIntSpec
+import Extracted.U256MulSpec
+import Extracted.MerkleVerifySpec
+import Extracted.TxMerkleSpec
+import Extracted.DecodeItemSpec
+import Extracted.PkFromSigSpec
+import Extracted.Sha256Pure
+import Extracted.HashSpecs
 import Extracted.UserOpEquiv
 import Extracted.UserOpEquivByteLayout
 import Extracted.SpecBridge
@@ -34,3 +44,21 @@ import Extracted.ForsLoop
 #print axioms Extracted.Equiv.replay_safe_hash_spec
 #print axioms Extracted.Equiv.extract_digits_spec
 #print axioms Extracted.Equiv.extract_digits_lt
+#print axioms Extracted.Equiv.signed_preimage_spec
+#print axioms Extracted.Equiv.roundtrip_11_id
+#print axioms Extracted.Equiv.beValue_lt
+#print axioms Extracted.Equiv.bytes_to_u64_spec
+#print axioms Extracted.Equiv.bytes_to_u256_spec
+#print axioms Extracted.Equiv.saturating_mul_u64_spec
+#print axioms Extracted.Equiv.verify_auth_path_spec
+#print axioms Extracted.Equiv.verify_proof_spec
+#print axioms Extracted.Equiv.decode_length_be_spec
+#print axioms Extracted.Equiv.decode_item_spec
+#print axioms Extracted.Equiv.pk_from_sig_spec
+#print axioms sha256_pure
+#print axioms sphincs_c10.hash.truncate_spec
+#print axioms sphincs_c10.hash.th_spec
+#print axioms sphincs_c10.hash.th_pair_spec
+#print axioms sphincs_c10.hash.wots_digest_spec
+#print axioms sphincs_c10.hash.th_multi_spec
+#print axioms sphincs_c10.hash.chain_hash_spec

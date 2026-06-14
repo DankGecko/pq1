@@ -390,3 +390,20 @@ fn negative_listiter_propagates_inner_rlp_errors() {
         RlpError::NonCanonical,
     );
 }
+
+#[test]
+fn negative_length_field_exceeding_usize_errors_not_wraps() {
+    // ASSUMPTION: a length field whose value cannot be represented in
+    // usize must error, never wrap. 0xbf = long string, len_of_len = 8;
+    // length field 0x01_00_00_00_00_00_00_05 = 2^56 + 5. On a 64-bit
+    // usize the value is representable and the claimed-total check
+    // rejects it; on a 32-bit usize (the thumbv8m firmware target) the
+    // accumulator itself overflows. Either way: LengthOverflow. The
+    // pre-fix checked_shl(8) accumulator on 32-bit silently wrapped
+    // this to 5 and ACCEPTED the item with a 5-byte payload — a
+    // parse-desync against every 64-bit decoder. Found by the §33
+    // rank-8 Lean proof.
+    let mut input = vec![0xbf, 0x01, 0, 0, 0, 0, 0, 0, 0x05];
+    input.extend_from_slice(&[0xAA; 5]); // the payload the wrap would accept
+    assert_eq!(decode_item(&input).unwrap_err(), RlpError::LengthOverflow);
+}

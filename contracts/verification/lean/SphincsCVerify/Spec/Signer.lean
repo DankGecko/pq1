@@ -81,9 +81,17 @@ def findCount
 
 /-- R-grinding: find an R such that the last FORS index is zero.
 
-    Mirrors `fors::grind_r`. Same `Option` modelling as `findCount`. -/
+    Mirrors `fors::grind_r` (the deterministic `opt_rand = None` path used
+    by the byte-stable test vectors). As of 2026-06-13 the R derivation is
+    **secret-keyed and message-bound**:
+    `R = sha256(sk_seed ‖ "R_grind" ‖ message ‖ nonce)[0..16]` — so `ht_idx`
+    is unpredictable without the secret key for any chosen message (closing
+    the chosen-message FORS-saturation avenue; see `fors::grind_r`). The
+    production firmware additionally splices a fresh `opt_rand` between the
+    tag and the message (not modelled here — `None`-path reference only). -/
 def grindR
-    (pkSeed pkRoot : ByteVec 16) (message : ByteVec 32) (limit : Nat) :
+    (skSeed : ByteVec 32) (pkSeed pkRoot : ByteVec 16) (message : ByteVec 32)
+    (limit : Nat) :
     Option (ByteVec 16 × ByteVec 32) :=
   let seedB32 := pad16 pkSeed
   let rootB32 := pad16 pkRoot
@@ -94,7 +102,9 @@ def grindR
     else
       let nonceB32 := u32ToB32 (UInt32.ofNat nonce)
       let rFull := sha256 [
+        ByteSeg.ofByteVec skSeed,
         ByteSeg.ofByteVec rGrindTag,
+        ByteSeg.ofByteVec message,
         ByteSeg.ofByteVec nonceB32]
       let r := truncate16 rFull
       let rB32 := pad16 r
@@ -120,7 +130,7 @@ noncomputable def sign
   -- (Signing produces a structured `Signature`; the byte-level
   -- 4008-byte serialisation is in `Signature.serialise`, with a
   -- round-trip theorem `deserialise (serialise s) = s` in `Bytes.lean`.)
-  match grindR sk.pkSeed sk.pkRoot message limit with
+  match grindR sk.skSeed sk.pkSeed sk.pkRoot message limit with
   | none => pure none
   | some (r, digest) =>
     let forsIndices := extractForsIndices digest

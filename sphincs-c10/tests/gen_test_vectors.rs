@@ -5,7 +5,19 @@
 //! forge test harness.
 //!
 //! Run with:
-//!   cargo test -p sphincs-c10 --test gen_test_vectors --release -- --nocapture
+//!   cargo test -p sphincs-c10 --test gen_test_vectors \
+//!     --features near-miss-gen --release -- --nocapture
+//!
+//! ⚠️ ALWAYS pass `--features near-miss-gen` when regenerating: it appends the
+//! two +C-gate NEAR-MISS negatives (`near-miss-WOTS-digit-sum`,
+//! `near-miss-FORS-forced-zero`) — signatures that reconstruct the correct
+//! pkRoot but are rejected ONLY by a single +C gate, so the Lean / Solidity
+//! KAT can SEE a gate's removal (see contracts/verification docs/A3_1).
+//! Without the feature gen emits only the 10 base vectors and the next regen
+//! would silently DROP the near-miss coverage (the gates revert to merely
+//! proof-guarded). The committed JSON has 12 vectors; keep it that way.
+//! Solidity-side: `SPHINCsC10Asm.t.sol::_vectorCount()` returns 12 to match.
+//! Lean-side: rerun `scripts/gen_kat_vectors.py` after regenerating.
 //!
 //! Release mode is strongly recommended — the hypertree keygen runs in
 //! software sha2 and takes O(seconds) on a laptop, O(30+ s) in debug.
@@ -25,6 +37,7 @@
 use sha2::{Digest, Sha256};
 use sphincs_c10::params::{N, SIGNATURE_LEN};
 use sphincs_c10::{verify, SigningKey};
+#[cfg(feature = "near-miss-gen")]
 use std::fs;
 
 fn to_hex(bytes: &[u8]) -> String {
@@ -272,6 +285,61 @@ fn generate_c10_test_vectors() {
         expect_valid: false,
     });
 
+    // 11-12: +C-GATE NEAR-MISS vectors (feature `near-miss-gen`).
+    //
+    // The previous negatives (#5-#10) all break verification at the digest /
+    // index / Merkle-reconstruction layer: flip a byte and the recovered root
+    // simply doesn't match. None of them isolates a +C GATE — so removing the
+    // WOTS+C digit-sum gate or the FORS+C forced-zero gate from the verifier
+    // left the KAT at "all match" (the gates were only proof-guarded; see
+    // contracts/verification docs/A3_1_VERIFIER_GAP.md).
+    //
+    // These two vectors are GRIND-skipped signatures that reconstruct the
+    // CORRECT pkRoot under standard WOTS + hypertree verification and are
+    // rejected ONLY by a single +C gate:
+    //
+    //   near-miss-WOTS-digit-sum   — layer-0 WOTS count NOT grinded to 205, so
+    //                                 digitSum != 205. Rejected only by the
+    //                                 WOTS+C gate. Remove that gate ⇒ accepts.
+    //   near-miss-FORS-forced-zero — R NOT grinded, so the last FORS index != 0.
+    //                                 Rejected only by the FORS+C gate. Remove
+    //                                 that gate ⇒ accepts.
+    //
+    // With the feature OFF, gen falls back to the 10-vector corpus (so the
+    // default Solidity test corpus is byte-stable); with it ON the JSON the
+    // Lean KAT embeds carries the two gate-isolating negatives.
+    #[cfg(feature = "near-miss-gen")]
+    {
+        use sphincs_c10::near_miss::{sign_near_miss, verify_with_gate_removed, Kind};
+
+        let nm1_msg: [u8; 32] = *b"PQSigner C10 near-miss NM1 vec 1";
+        let nm1 = sign_near_miss(sk.sk_seed(), sk.pk_seed(), sk.pk_root(), &nm1_msg, Kind::WotsDigitSum);
+        // Clean near-miss: production REJECT, digit-sum-gate-removed ACCEPT.
+        assert!(!verify(sk.pk_seed(), sk.pk_root(), &nm1_msg, &nm1));
+        assert!(verify_with_gate_removed(sk.pk_seed(), sk.pk_root(), &nm1_msg, &nm1, Kind::WotsDigitSum));
+        vectors.push(Vector {
+            label: "near-miss-WOTS-digit-sum".to_string(),
+            pk_seed_b32: pk_seed_b32.clone(),
+            pk_root_b32: pk_root_b32.clone(),
+            message_b32: to_hex(&nm1_msg),
+            signature: nm1.to_vec(),
+            expect_valid: false,
+        });
+
+        let nm2_msg: [u8; 32] = *b"PQSigner C10 near-miss NM2 vec 2";
+        let nm2 = sign_near_miss(sk.sk_seed(), sk.pk_seed(), sk.pk_root(), &nm2_msg, Kind::ForsForcedZero);
+        assert!(!verify(sk.pk_seed(), sk.pk_root(), &nm2_msg, &nm2));
+        assert!(verify_with_gate_removed(sk.pk_seed(), sk.pk_root(), &nm2_msg, &nm2, Kind::ForsForcedZero));
+        vectors.push(Vector {
+            label: "near-miss-FORS-forced-zero".to_string(),
+            pk_seed_b32: pk_seed_b32.clone(),
+            pk_root_b32: pk_root_b32.clone(),
+            message_b32: to_hex(&nm2_msg),
+            signature: nm2.to_vec(),
+            expect_valid: false,
+        });
+    }
+
     // Sanity-check: every "expectValid: false" vector must actually
     // be rejected by the Rust verifier — otherwise we'd be shipping a
     // false-negative test case.
@@ -390,8 +458,29 @@ fn generate_c10_test_vectors() {
         env!("CARGO_MANIFEST_DIR"),
         "/../contracts/smart-wallet/test/c10_test_vectors.json"
     );
-    fs::write(out_path, &json).expect("write c10 test vectors");
-    println!("Wrote {} vectors to {}", vectors.len(), out_path);
+
+    // Only OVERWRITE the committed corpus when the full (12-vector) set was
+    // built, i.e. under `--features near-miss-gen`. A default-feature run
+    // (e.g. `cargo test -p sphincs-c10`) would otherwise silently truncate
+    // the file to the 10 base vectors, dropping the +C-gate near-miss
+    // negatives and reverting the gates to merely proof-guarded. So when the
+    // feature is OFF we validate the 10 base vectors (above) but DO NOT write,
+    // leaving the committed 12-vector file intact. See this file's header.
+    #[cfg(feature = "near-miss-gen")]
+    {
+        fs::write(out_path, &json).expect("write c10 test vectors");
+        println!("Wrote {} vectors to {}", vectors.len(), out_path);
+    }
+    #[cfg(not(feature = "near-miss-gen"))]
+    {
+        let _ = json;
+        println!(
+            "SKIPPED writing {out_path}: built {} base vectors without `near-miss-gen`. \
+             To regenerate the committed 12-vector corpus, rerun with \
+             `--features near-miss-gen` (then `scripts/gen_kat_vectors.py`).",
+            vectors.len()
+        );
+    }
 }
 
 /// Helper: decode a `0x`-prefixed 64-hex-char string to a 32-byte array.

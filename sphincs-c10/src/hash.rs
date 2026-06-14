@@ -181,13 +181,26 @@ fn u64_to_b32(v: u64) -> [u8; 32] {
     out
 }
 
-/// Encode a u32 as a 32-byte big-endian value (uint256 representation).
-/// The value sits in bytes [28..32), matching Python's `int.to_bytes(32, "big")`.
-#[inline]
-fn u32_to_b32(v: u32) -> [u8; 32] {
-    let mut out = [0u8; 32];
-    out[28..32].copy_from_slice(&v.to_be_bytes());
-    out
+
+// ---------------------------------------------------------------------------
+// One-shot SHA-256 boundary
+// ---------------------------------------------------------------------------
+
+/// One-shot SHA-256 over a single contiguous buffer.
+///
+/// This is the SINGLE opaque hash boundary for the Lean extraction
+/// (`--opaque sphincs_c10::hash::sha256_bytes` in the §33 verification
+/// Makefile targets): every tweakable-hash primitive below assembles its
+/// exact preimage in a stack buffer and makes one call here, so the
+/// extracted code exposes the full preimage layout to the prover and the
+/// only unverified step is SHA-256 itself (pinned to the FIPS 180-4
+/// transcription spec + CAVP vectors on the Lean side). Behaviour is
+/// identical to the previous incremental `update()` chains — SHA-256 is
+/// streaming, so hashing the concatenation equals the incremental digest.
+pub fn sha256_bytes(data: &[u8]) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(data);
+    h.finalize().into()
 }
 
 // ---------------------------------------------------------------------------
@@ -202,11 +215,11 @@ fn u32_to_b32(v: u32) -> [u8; 32] {
 /// `mstore(0x00, seed)`, `mstore(0x20, adrs)`, `mstore(0x40, val)`.
 pub fn th(seed: &[u8; 32], adrs: &[u8; 32], val: &[u8; 32]) -> [u8; N] {
     bump!(TH);
-    let mut h = Sha256::new();
-    h.update(seed);
-    h.update(adrs);
-    h.update(val);
-    truncate(&h.finalize().into())
+    let mut buf = [0u8; 96];
+    buf[0..32].copy_from_slice(seed);
+    buf[32..64].copy_from_slice(adrs);
+    buf[64..96].copy_from_slice(val);
+    truncate(&sha256_bytes(&buf))
 }
 
 /// `th_pair(seed, adrs, left, right)` — tweakable hash with two 32-byte inputs.
@@ -221,28 +234,42 @@ pub fn th_pair(
     right: &[u8; 32],
 ) -> [u8; N] {
     bump!(TH);
-    let mut h = Sha256::new();
-    h.update(seed);
-    h.update(adrs);
-    h.update(left);
-    h.update(right);
-    truncate(&h.finalize().into())
+    let mut buf = [0u8; 128];
+    buf[0..32].copy_from_slice(seed);
+    buf[32..64].copy_from_slice(adrs);
+    buf[64..96].copy_from_slice(left);
+    buf[96..128].copy_from_slice(right);
+    truncate(&sha256_bytes(&buf))
 }
+
+/// Maximum number of values `th_multi` accepts: `L = 43` (WOTS+C pubkey
+/// compress); the other caller, FORS root compress, passes `K = 13`.
+pub const TH_MULTI_MAX: usize = 43;
 
 /// `th_multi(seed, adrs, vals)` — tweakable hash with variable N-byte inputs.
 ///
 /// `sha256(seed_b32 || adrs_b32 || pad(v0) || pad(v1) || ...)[0..N]`
 ///
 /// Each value in `vals` is a 16-byte N-value that gets padded to 32 bytes.
+///
+/// # Panics
+/// If `vals.len() > TH_MULTI_MAX` (= 43). Both call sites pass compile-time
+/// constant lengths (L = 43, K = 13), so the bound is unreachable in
+/// practice; it exists so the preimage fits a fixed stack buffer for the
+/// one-shot `sha256_bytes` boundary.
 pub fn th_multi(seed: &[u8; 32], adrs: &[u8; 32], vals: &[[u8; N]]) -> [u8; N] {
     bump!(TH);
-    let mut h = Sha256::new();
-    h.update(seed);
-    h.update(adrs);
-    for v in vals {
-        h.update(pad16(v));
+    assert!(vals.len() <= TH_MULTI_MAX);
+    let mut buf = [0u8; 64 + 32 * TH_MULTI_MAX];
+    buf[0..32].copy_from_slice(seed);
+    buf[32..64].copy_from_slice(adrs);
+    // pad16 layout: each 16-byte value sits in bytes [0..16) of its 32-byte
+    // slot; bytes [16..32) stay zero (buf is zero-initialised).
+    for i in 0..vals.len() {
+        let off = 64 + 32 * i;
+        buf[off..off + N].copy_from_slice(&vals[i]);
     }
-    truncate(&h.finalize().into())
+    truncate(&sha256_bytes(&buf[..64 + 32 * vals.len()]))
 }
 
 /// `h_msg(seed, root, R, message)` — domain-separated message hash.
@@ -327,13 +354,14 @@ pub fn wots_digest(
     count: u32,
 ) -> [u8; 32] {
     bump!(OTHER);
-    let count_b32 = u32_to_b32(count);
-    let mut h = Sha256::new();
-    h.update(seed);
-    h.update(wots_adrs);
-    h.update(msg_hash);
-    h.update(&count_b32);
-    h.finalize().into()
+    let mut buf = [0u8; 128];
+    buf[0..32].copy_from_slice(seed);
+    buf[32..64].copy_from_slice(wots_adrs);
+    buf[64..96].copy_from_slice(msg_hash);
+    // u32_to_b32: count occupies bytes [28..32) of its 32-byte slot, the
+    // rest stays zero (buf is zero-initialised).
+    buf[124..128].copy_from_slice(&count.to_be_bytes());
+    sha256_bytes(&buf)
 }
 
 /// WOTS secret key derivation.

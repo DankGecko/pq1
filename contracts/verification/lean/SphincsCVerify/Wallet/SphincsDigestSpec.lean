@@ -9,7 +9,7 @@ The two top-level statements are:
   * `sphincsDigest_field_binding` — two UserOps that produce the same
     `sphincsDigest` must agree on every preimage byte. Under the
     SHA-256 collision-resistance axiom
-    (`sha256_injective_on_fixed_length`), this gives the cryptographic
+    (`sha256_collision_resistance`), this gives the cryptographic
     binding the wallet relies on: a signed digest commits to the
     sender, nonce, chainId, and the SHA-256 of callData (etc.).
 
@@ -43,7 +43,7 @@ theorem sphincsDigest_preimage_len
 /-! ## Cryptographic field binding
 
 If two ops produce the same `sphincsDigest`, their preimage byte
-arrays are equal (under `sha256_injective_on_fixed_length`). Since the
+arrays are equal (under `sha256_collision_resistance`). Since the
 preimage layout is positional and uses injective encodings
 (`natToB32`, `sha256OfArr`, raw `ByteVec`), equal preimages imply
 equal field commitments. -/
@@ -61,14 +61,14 @@ private theorem flatten_single
 
     Proof: `sphincsDigest = sha256_concat preimage = sha256
     [ofByteVec preimage]`. Both preimages flatten to a 360-byte
-    array. Apply `sha256_injective_on_fixed_length` and rewrite via
+    array. Apply `sha256_collision_resistance` and rewrite via
     `flatten_single`. -/
 theorem sphincsDigest_preimage_eq
     (op1 op2 : UserOperation) (entryPoint : ByteVec 20) (chainId : Nat)
     (h : sphincsDigest op1 entryPoint chainId = sphincsDigest op2 entryPoint chainId) :
     (sphincsDigestPreimage op1 entryPoint chainId).data
-      = (sphincsDigestPreimage op2 entryPoint chainId).data := by
-  -- Convert h into the segment-list form sha256_injective_on_fixed_length expects.
+      = (sphincsDigestPreimage op2 entryPoint chainId).data ∨ BreaksHash := by
+  -- Convert h into the segment-list form sha256_collision_resistance expects.
   unfold sphincsDigest sha256_concat at h
   -- h : sha256 [ofByteVec preimage1] = sha256 [ofByteVec preimage2]
   -- Lengths agree by the ByteVec 360 type.
@@ -78,12 +78,16 @@ theorem sphincsDigest_preimage_eq
     rw [flatten_single, flatten_single]
     rw [(sphincsDigestPreimage op1 entryPoint chainId).size_eq,
         (sphincsDigestPreimage op2 entryPoint chainId).size_eq]
+  -- Collision-resistance reduction: equal digests ⟹ equal preimages OR a
+  -- SHA-256 break.
   have hflat :=
-    sha256_injective_on_fixed_length
+    sha256_collision_resistance
       [ByteSeg.ofByteVec (sphincsDigestPreimage op1 entryPoint chainId)]
       [ByteSeg.ofByteVec (sphincsDigestPreimage op2 entryPoint chainId)]
       hlen h
-  rwa [flatten_single, flatten_single] at hflat
+  rcases hflat with heq | hbk
+  · left; rwa [flatten_single, flatten_single] at heq
+  · right; exact hbk
 
 /-- **Field binding — preimage form.** Equal digests imply the entire
     360-byte preimage is identical (as a `ByteVec`).
@@ -96,8 +100,12 @@ theorem sphincsDigest_field_binding
     (op1 op2 : UserOperation) (entryPoint : ByteVec 20) (chainId : Nat)
     (h : sphincsDigest op1 entryPoint chainId = sphincsDigest op2 entryPoint chainId) :
     sphincsDigestPreimage op1 entryPoint chainId
-      = sphincsDigestPreimage op2 entryPoint chainId := by
-  apply ByteVec.ext_data
-  exact sphincsDigest_preimage_eq op1 op2 entryPoint chainId h
+      = sphincsDigestPreimage op2 entryPoint chainId ∨ BreaksHash := by
+  rcases sphincsDigest_preimage_eq op1 op2 entryPoint chainId h with heq | hbk
+  · left
+    apply ByteVec.ext_data
+    exact heq
+  · right
+    exact hbk
 
 end SphincsCVerify.Wallet.SphincsDigestSpec

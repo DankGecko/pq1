@@ -1,0 +1,106 @@
+/-
+Off-chain / on-chain signing-domain separation (Gap-3, faithfulness audit
+2026-06-14).
+
+The on-chain UserOp path verifies a bare C10 signature over
+`sphincsDigest op` — a SHA-256 digest. The off-chain EIP-1271 path verifies
+over a value the FIRMWARE (never the companion) nests through Solady's
+`replaySafeHash`: a nested EIP-712 (PersonalSign) wrap whose outermost
+operation is `keccak256` (see `aa/src/eip1271.rs` and the on-chain `ERC1271`
+base, which applies the nesting in the public `isValidSignature` before the
+internal `_erc1271IsValidSignatureNowCalldata` hook this project models in
+`Wallet/IsValidSignature.lean`).
+
+The security invariant — the RAW32 UserOp-forgery-oracle defense, fixed
+2026-06-11 — is that an off-chain-signed value can never coincide with any
+UserOp's `sphincsDigest`. If it could, a malicious companion could request an
+off-chain signature over `raw32 = sphincsDigest(drainOp)` and reuse the
+resulting C10 signature as a valid Type-2 UserOp signature to drain the wallet.
+
+This file models the nesting and proves the disjointness, reducing it to a
+single cited cross-hash assumption: a keccak-256 image equals a SHA-256 image
+only if a hash hardness assumption is broken (`keccak_sha256_cross_separation`,
+stated in the same consistent `… ∨ BreaksHash` reduction style as
+`sha256_collision_resistance`, never concluding `False`).
+-/
+
+import SphincsCVerify.Wallet.ValidateUserOp
+import SphincsCVerify.Wallet.IsValidSignature
+import SphincsCVerify.Crypto.Assumptions
+
+namespace SphincsCVerify.Wallet.OffchainBinding
+
+open SphincsCVerify.Spec
+open SphincsCVerify.Crypto
+open SphincsCVerify.Wallet
+open SphincsCVerify.Wallet.ValidateUserOp
+
+/-- Keccak-256 over a `ByteSeg` list — the EVM-mandated hash. Modeled as an
+    uninterpreted total function (like the §33 extracted `keccak256_pure`); the
+    nesting STRUCTURE, not keccak's internals, is what this file reasons about.
+    `opaque` (Classical.choice-backed), so it adds no named axiom to any
+    `#print axioms` closure. -/
+opaque keccak256 : List ByteSeg → ByteVec 32
+
+/-- **Cross-hash domain separation (cited assumption).** A keccak-256 image
+    equals a SHA-256 image only if a hash hardness assumption is broken.
+    keccak-256 and SHA-256 are independent functions; exhibiting `x, y` with
+    `keccak256 x = sha256 y` is a cross-hash collision — the `BreaksHash`
+    witness. Stated in the same consistent reduction shape as
+    `sha256_collision_resistance`: it never concludes `False`, and `BreaksHash`
+    must NEVER be assumed false (that would re-introduce an inconsistency). -/
+axiom keccak_sha256_cross_separation
+    (ksegs ssegs : List ByteSeg) :
+    keccak256 ksegs ≠ sha256 ssegs ∨ BreaksHash
+
+/-- Solady's `replaySafeHash` — the nested-EIP-712 (PersonalSign) wrap the
+    firmware applies to every off-chain hash before C10-signing. Mirrors
+    `aa/src/eip1271.rs::replay_safe_hash` and the on-chain `ERC1271` base:
+
+      structHash = keccak256(PERSONAL_SIGN_TYPEHASH ‖ rawHash)
+      final      = keccak256("\x19\x01" ‖ domainSep ‖ structHash)
+
+    The EIP-712 prefix and domain separator are parameters (the domain depends
+    on chainId + verifying contract). The load-bearing structural fact, and all
+    the disjointness proof needs, is that the OUTERMOST operation is
+    `keccak256`. -/
+noncomputable def replaySafeHash
+    (rawHash personalSignTypeHash domainSep : ByteVec 32)
+    (eip712Prefix : ByteSeg) : ByteVec 32 :=
+  let structHash := keccak256 [ByteSeg.ofByteVec personalSignTypeHash,
+                               ByteSeg.ofByteVec rawHash]
+  keccak256 [eip712Prefix, ByteSeg.ofByteVec domainSep, ByteSeg.ofByteVec structHash]
+
+/-- The off-chain EIP-1271 entry point WITH the firmware's nesting made
+    explicit: the raw dapp hash is `replaySafeHash`-nested before the inner C10
+    verification. (`IsValidSignature.erc1271IsValidSignature` models the inner
+    hook, which receives the already-nested hash; this composes the nesting the
+    Solady `ERC1271` base performs in the public `isValidSignature`.) -/
+noncomputable def erc1271IsValidSignatureNested
+    (s : Storage)
+    (rawHash personalSignTypeHash domainSep : ByteVec 32)
+    (eip712Prefix : ByteSeg)
+    (signature : Array UInt8)
+    (verify_fn : ByteVec 32 → ByteVec 32 → ByteVec 32 → ByteVec SignatureLen → Bool) :
+    Bool :=
+  IsValidSignature.erc1271IsValidSignature s
+    (replaySafeHash rawHash personalSignTypeHash domainSep eip712Prefix)
+    signature verify_fn
+
+/-- **Gap-3 / RAW32-oracle defense.** The value the off-chain path signs
+    (`replaySafeHash …`) is never equal to any UserOp's `sphincsDigest` (or a
+    SHA-256 hardness assumption is broken). Because a C10 signature binds its
+    32-byte message (A3.1/A5), an off-chain signature is therefore never a valid
+    UserOp signature — closing the companion-controlled forgery oracle a
+    bare-signed 32-byte value would open. The off-chain message is a keccak-256
+    image; the UserOp message is a SHA-256 image; disjointness reduces to
+    `keccak_sha256_cross_separation`. -/
+theorem offchain_nested_disjoint_from_userop_digest
+    (rawHash personalSignTypeHash domainSep : ByteVec 32) (eip712Prefix : ByteSeg)
+    (op : UserOperation) (entryPoint : ByteVec 20) (chainId : Nat) :
+    replaySafeHash rawHash personalSignTypeHash domainSep eip712Prefix
+      ≠ sphincsDigest op entryPoint chainId ∨ BreaksHash := by
+  unfold replaySafeHash sphincsDigest sha256_concat
+  exact keccak_sha256_cross_separation _ _
+
+end SphincsCVerify.Wallet.OffchainBinding

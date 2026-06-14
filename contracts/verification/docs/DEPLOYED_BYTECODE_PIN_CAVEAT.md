@@ -1,0 +1,148 @@
+# Deployed-bytecode ↔ pinned-codehash: RESOLVED
+
+**Status:** ✅ **RESOLVED 2026-06-13.** The deployed Base Mainnet **wallet,
+factory, and verifier are byte-for-byte reproducible** from this repo's
+pinned source + `foundry.lock`. The earlier "not reproducible / deploy-time
+libs lost" finding was an **artifact of comparing builds at the wrong chain
+id + address** (forge default 31337 vs Base 8453, and a local test address vs
+the deployed address). Reproducing at the real address + chain id yields the
+on-chain codehashes exactly. **No maintainer decision is required** — Option A
+(byte-level discharge of the live contracts) is achieved.
+
+This file documents how it was resolved so the result is auditable; the
+permanent proof is `contracts/smart-wallet/test/DeployedBytecodeReproCheck.t.sol`.
+
+---
+
+## 1. The one thing that was actually wrong: the `foundry.lock` AA pin
+
+`contracts/smart-wallet/foundry.lock` had pinned **account-abstraction
+v0.7.0** (`7af70c8`), which **does not compile** — the code imports
+`account-abstraction/legacy/v06/{IAccount06,IEntryPoint06,UserOperation06}.sol`,
+a path that only exists in **v0.8.0+**. A first repair to **v0.8.0**
+(`4cbc060`) compiled (`forge test` 108/108) but produced a **different**
+wallet/factory codehash than the audited pins — which set off the
+investigation below.
+
+**Root cause:** the AA `legacy/v06` interfaces are **not** frozen across
+releases. `UserOperation06.sol`'s git blob differs between the v0.8.0 tag
+(`1479bcc…`) and the **ERC-4337 v0.9 release** commit `f54584e` (`9277fdd…`),
+and that struct drives calldata decoding in `validateUserOp`, so the wallet
+runtime bytecode differs between the two. PQSigner's "retarget from EntryPoint
+v0.9 to v0.6" history (`074fcbb`) meant the build had always tracked the
+**v0.9** AA tree (using its `legacy/v06` to target the v0.6 EntryPoint), not
+the v0.8.0 tag the lock happened to name.
+
+**Fix (committed):** `foundry.lock` now pins account-abstraction
+`f54584edd4c627e084d04c315dcabda48a6b9ea9` (ERC-4337 v0.9 release). A clean
+checkout compiles, `forge test` is 108/108, and the wallet/factory codehashes
+match the original audited pins exactly under both profiles:
+
+| | default (runs=200) | deploy (runs=999999) |
+|---|---|---|
+| wallet | `0x43c654…a06a` ✓ | `0x551c4e…34c22` ✓ |
+| factory | `0xfa2922…7c3c` ✓ | `0x5feb7955…a4b9` ✓ |
+| verifier | `0xf1ef4cce…fef5` ✓ | `0xeb1e3fcd…2cc5` ✓ |
+
+solady (`90db92ce`) is **bytecode-irrelevant** here: the only solady files the
+wallet/factory consume — `utils/LibClone.sol`, `accounts/ERC1271.sol`, and
+their transitive `EIP712.sol` / `SignatureCheckerLib.sol` — are byte-identical
+(same git blob) from 2025-12-04 through HEAD, so any solady from that window
+yields the same bytecode.
+
+## 2. The deployed contracts ARE the audited build
+
+`test/DeployedBytecodeReproCheck.t.sol` (deploy profile) **replays the exact
+production deploy** — the Arachnid deterministic CREATE2 deployer
+(`0x4e59b448…`, salt = 0) on the real Base chain id (8453), under
+`[profile.deploy]` (runs=999999) — and asserts the result against chain:
+
+| Contract | On-chain (Base Mainnet) | CREATE2 replay (this repo) | Match? |
+|----------|-------------------------|-----------------------------|--------|
+| verifier `0xdDE4D290…` | `0xeb1e3fcd…2cc5` | `0xeb1e3fcd…2cc5` | ✅ |
+| wallet impl `0x31e49D24…` | `0xdc9a082f…6994` | addr **and** `0xdc9a082f…6994` | ✅ |
+| factory `0xe8CE78CD…` | `0x045bb5e4…ba9a` | addr **and** `0x045bb5e4…ba9a` | ✅ |
+
+Both deployed **addresses** and full runtime **codehashes** reproduce. This is
+the strongest possible binding: the live contracts are this source, this lib
+set, this profile.
+
+## 3. Why the first comparison looked like a mismatch (and what it proved)
+
+The original §3 rebuilt the impl with the deployed immutables but on forge's
+**default** environment, getting `0x1333ed8a` (v0.8.0) / `0x012994ef`
+(f54584e) ≠ on-chain `0xdc9a082f`. A byte diff of the on-chain impl vs the
+`f54584e` rebuild explains it completely:
+
+* **Same length** (11541 B) and **identical trailing CBOR metadata** (same
+  IPFS hash, same `solc 0.8.28`) ⇒ **same source + same compiler settings**.
+* The **only** 54 differing bytes are three Solady EIP-712 immutable-cache
+  windows:
+  * 32 B = the **cached domain separator**, verified to equal
+    `keccak256(EIP712Domain("PQSmartWallet","1", 8453, 0x31e49D24…))`;
+  * 20 B = **`address(this)`** (`0x31e49D24…`, the deployed address);
+  * 2 B = the **cached chain id** (`0x2105` = 8453 Base, vs `0x7a69` = 31337
+    forge default).
+
+The factory diff is analogous: same length (2362 B), identical metadata, and
+the only 60 differing bytes are the **implementation-address immutable**
+embedded 3× (`0x31e49D24…` on-chain vs the local impl address). The
+verifier has no immutables and is byte-identical outright.
+
+So the "mismatch" was entirely (deploy address, Base chain id)-derived
+immutables. Reproducing at the real address + chain id (the CREATE2 replay in
+§2) makes them coincide and yields the on-chain codehash. The
+broadcast-recorded deploy commit `dd71578a` not existing in git
+(a deploy from an uncommitted tree) is a **red herring** for reproducibility —
+the identical metadata IPFS hash proves the deployed source equals the
+committed source regardless.
+
+## 4. What this means for the formal-verification claims
+
+The Halmos `solidity*_compiles_correctly` axioms (A3.2 wallet validate,
+A3.2-exec execute, A3.3 factory, A3.4 owner-table) are discharged on the
+**pinned test-harness instances** (wallet `0x43c654`/`0x551c4e`, factory
+`0xfa2922`/`0x5feb7955`) and transported to the deployed contracts by
+`PinnedBytecodeImmutableLemma` (runtime differs only in immutable windows).
+
+* **Verifier (A3.1 gates):** byte-identical to chain. ✅
+* **Wallet / factory (A3.2 / A3.3 / A3.4):** byte-bound to the deployed
+  bytecode. The lemma's "differs only in immutable windows" premise is now
+  **grounded against the actual on-chain bytecode** (§3): the on-chain
+  windows are exactly the EIP-712 cache (wallet) and the implementation
+  address (factory), and the CREATE2 replay (§2) closes the transport by
+  reproducing the on-chain codehash at the real address + chain id. ✅
+
+The earlier conservative language ("discharged on a reproducible re-build, not
+the deployed bytecode" / "logic-level only for the live wallet/factory") is
+**withdrawn** — the discharge is byte-bound to the live contracts. The
+standing TCB is unchanged (Lean kernel; Halmos+z3 + transcription soundness;
+SHA-256 uninterpreted = A1; the verifier's ∀-signature equivalence carried by
+the executable-Lean KAT + mutant screen, not a symbolic ∀ proof).
+
+## 5. Reproduce
+
+```bash
+cd contracts/smart-wallet
+# clean checkout: clone libs at foundry.lock revs (lib/ is gitignored), then:
+FOUNDRY_PROFILE=deploy forge test --skip 'test/halmos/*' \
+  --match-contract DeployedBytecodeReproCheck -vv          # addresses+codehashes == chain
+forge test --skip 'test/halmos/*'                          # 108/108 (default profile)
+make -C ../verification verify-bytecode                    # Halmos 38/38, both profiles
+```
+
+The on-chain constants in the test were captured from
+`https://mainnet.base.org` via `cast code <addr> | cast keccak`
+(`deployments/base-mainnet.json`).
+
+## 6. Process follow-up (non-blocking)
+
+The deploy ran from an uncommitted working tree (the broadcast's
+`dd71578a` is not in git) and `foundry.lock` was left naming a non-compiling
+AA tag. Neither affected the deployed bytecode (proven above), but to avoid a
+recurrence: **commit before `forge script --broadcast`**, and treat
+`DeployedBytecodeReproCheck` as the gate that the lock + source still
+reproduce the chain.
+
+See also: `PINNED_CODEHASHES.md`, `THE_CLAIM.md`, `AXIOM_STATUS.json`
+(A3.2/A3.3/A3.4).

@@ -70,18 +70,13 @@ def setChainIndex (a : Adrs) (idx : UInt32) : Adrs :=
       simp [Array.size_extract, this]⟩
   cast (by decide) (prefix4.append (ofU32BE idx) |>.append suffix)
 
-/-- Return a copy of `a` with the `chain_pos` field (bytes [24..28)) set
-    to `pos`. Mirrors the Rust `chain_hash`'s per-step
-    `a[24..28].copy_from_slice(&pos.to_be_bytes())` and the Yul
-    `or(chainBase, shl(32, add(digit, step)))` — the chain POSITION is
-    threaded at bits [32..64), one field BELOW the chain index.
-
-    Confusing these two fields was the entire A3.1 reconstruction gap:
-    the pre-fix `chainHash` advanced the position via `setChainIndex`,
-    which both placed it in the wrong field AND erased the chain index
-    `i` the caller had set. Fixed 2026-06-12; validated by
-    `scripts/gap1_differential.py` (Yul-replica vs Lean-replica, 10/10)
-    and `lake exe verify-test-vectors` (full-verify 10/10, hard check). -/
+/-- Return a copy of `a` with the `chain_pos` field (bytes [24..28)) set to
+    `pos`, leaving the `chain_index` field (bytes [20..24)) intact. Mirrors
+    the per-step `a[24..28].copy_from_slice(&pos.to_be_bytes())` in
+    `sphincs-c10/src/hash.rs::chain_hash` (and the Yul `or(chainBase,
+    shl(32, digit+step))` in `SPHINCsC10Asm.sol`). This is distinct from
+    `setChainIndex`: the WOTS chain walk sets the *position* per hash step
+    while the chain *index* (which of the L chains) stays fixed. -/
 def setChainPos (a : Adrs) (pos : UInt32) : Adrs :=
   -- Replace bytes [24..28) with `ofU32BE pos`.
   let prefix6 : ByteVec 24 :=

@@ -19,7 +19,10 @@ script's source-pattern scan ensures any newly-introduced axiom in
 
 import SphincsCVerify
 
--- Bridge axioms (A1, A3, A4) — currently `True`-typed placeholders.
+-- Bridge axioms (A1, A3.1, A4) — all content-bearing post-refactor.
+-- A1 / A3.1 are opaque-equality shapes; A4 (2026-06-14) is now
+-- `∀ (c : Wallet.Execute.Call), Bridge.evmDeliversCall c` (EVM faithfully
+-- delivers every emitted CALL), no longer a `True` placeholder.
 #check @SphincsCVerify.Bridge.precompile_0x02_is_FIPS_180_4
 #check @SphincsCVerify.Bridge.solidityVerifier_compiles_correctly
 #check @SphincsCVerify.Bridge.evm_bytecode_executes_correctly

@@ -45,3 +45,19 @@ root = "Main"
 [[lean_exe]]
 name = "verify-mutant-corpus"
 root = "MutantMain"
+
+# NIST CAVP SHA-256 conformance runner: replays the full official
+# byte-oriented suite (ShortMsg + LongMsg + Monte Carlo) through
+# Spec/Sha256Impl.lean. See CavpMain.lean + scripts/gen_cavp_vectors.py;
+# run via `make verify-cavp` in contracts/verification/.
+[[lean_exe]]
+name = "verify-cavp"
+root = "CavpMain"
+
+# Bulk executable-spec differential: runs Spec.Signature.verify over a broad
+# random corpus (bulk_vectors.json → BulkVectors.lean) and asserts it matches
+# the Rust reference signer's verdict. The many-vector extension of
+# verify-test-vectors. Run via `make verify-bulk` in contracts/verification/.
+[[lean_exe]]
+name = "verify-bulk"
+root = "BulkMain"
