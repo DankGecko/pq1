@@ -1,7 +1,15 @@
 # Kontrol / KEVM scoping — closing the model-to-bytecode gap (D)
 
-**Status: A3.4 DISCHARGED ON BYTECODE (12/12, 2026-06-15); A3.2-exec / A3.3 /
-A3.2 NEXT.** The K backend is now
+**Status: A3.4 + A3.2-exec DISCHARGED ON BYTECODE (2026-06-15); A3.3 / A3.2
+NEXT.** A3.4 owner-table = 12/12 KEVM proofs; A3.2-exec (execute /
+executeBatch) = 8/8 in `kontrol/test/KontrolExecute.t.sol` (EntryPoint gate,
+anti-impersonation no-credit-revert ∀ ownerIndex, self-target reject, the
+`setOffchain` pointwise gate ∀-counters, credit one-shot/replay-guard, atomicity
+on a reverting target, batch self-target reject, batch dispatch witness). The
+transient validated-credit is stamped by a CONCRETE `validateUserOp` call +
+valid mock (KEVM computes `sphincsDigest`'s SHA-256 via its `[concrete]`
+precompile rewrite — no symbolic-hash wall). Two new gotchas recorded below.
+The K backend is now
 installed (multi-user Nix → `kup install kontrol`; kontrol 1.0.247 / K v7.1.333,
 pulled prebuilt from `k-framework.cachix.org` — `nicola` was added to Nix
 `trusted-users` so the cache is used instead of a multi-hour source build).
@@ -41,6 +49,21 @@ Lean theorems.
 > 3. **prove matcher** — `kontrol prove` has no `--match-contract`; use
 >    `--match-test '<regex over Contract.func(sig)>'` (the runner uses
 >    `Kontrol.*\.prove_`).
+> 4. **checked-add overflow** — a fully-symbolic scalar (e.g. `newOffchainCount`)
+>    lets a Solidity 0.8 checked add (`slotUsesNow + newCount`) overflow 2²⁵⁶ on
+>    some path, which reverts via a panic rather than the intended gate (and the
+>    harness's own `wantSuccess` add overflows too). Bound such scalars to their
+>    reachable range (`vm.assume(newCount <= MAX_SLOT_USES)`) — faithful, since
+>    anything above is uniformly rejected, and it keeps full boundary coverage.
+> 5. **symbolic-calldata dynamic arrays** — a symbolic scalar arg passed to a
+>    call with dynamic-array args (`executeBatchWithOffchainCount`) makes the
+>    whole ABI calldata symbolic; on the SUCCESS path KEVM reads each element's
+>    CALL `value` (`values[i]`) via a `#range` over that symbolic buffer it can't
+>    simplify to 0, leaving an undischargeable branch. (Revert-shaped batch rules
+>    dodge it — they revert before the value read.) Worked around by proving the
+>    batch SUCCESS path with a CONCRETE instance and delegating the ∀-gate
+>    coverage to the single-execute rule (identical `_setOffchainSigCount` call)
+>    + the symbolic batch self-target rule. Documented inline in `KontrolExecute.t.sol`.
 
 The sections below record the (now-historical) install assessment, the
 ready-to-run proof artifact, and the realistic per-axiom effort estimate for
