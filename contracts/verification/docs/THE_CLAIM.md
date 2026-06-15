@@ -32,7 +32,7 @@ section below, do not ship it.
 
 ---
 
-## ✅ Claimable (true, reproduced) — SEE THE 🛑 BANNER: #1 below is SUSPENDED
+## ✅ Claimable (true, reproduced)
 
 > **The PQSmartWallet's on-chain control flow is formally verified, and the
 > verification is connected to the deployed bytecode.** A Lean 4
