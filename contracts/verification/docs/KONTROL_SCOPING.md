@@ -1,7 +1,16 @@
 # Kontrol / KEVM scoping — closing the model-to-bytecode gap (D)
 
-**Status: A3.4 + A3.2-exec + A3.3 DISCHARGED ON BYTECODE (2026-06-15); A3.2
-(validateUserOp) NEXT.** A3.4 owner-table = 12/12 KEVM proofs; A3.2-exec
+**Status: A3.2 + A3.3 + A3.4 FULLY DISCHARGED ON BYTECODE (2026-06-15) — 30/30
+KEVM proofs; only A3.1 (verifier ∀-signature) remains, and is intractable under
+symbolic SHA-256 (out of scope).** The four control-flow bridge axioms are now
+proven directly on the deployed PQSmartWallet/Factory bytecode by an engine
+independent of Halmos with no hand-written `LeanModel.sol` mirror — so the
+hand-transcription TCB element of A3.2/A3.3/A3.4 is retired (Halmos stays the
+fast CI gate). Breakdown: A3.4 owner-table = 12/12; A3.2-exec = 8/8; A3.3 factory
+= 6/6; A3.2-validate (the non-bypass I-1: validate succeeds ⟺ cap-gate ∧
+verifier-accepts, ∀ verdict + counters, slot + bootstrap roles; + unset-owner +
+EntryPoint rejects) = 4/4 in `kontrol/test/KontrolValidateUserOp.t.sol`.
+A3.4 owner-table = 12/12 KEVM proofs; A3.2-exec
 (execute / executeBatch) = 8/8 in `kontrol/test/KontrolExecute.t.sol`
 (EntryPoint gate, anti-impersonation no-credit-revert ∀ ownerIndex, self-target
 reject, the `setOffchain` pointwise gate ∀-counters, credit one-shot/replay-guard,
