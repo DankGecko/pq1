@@ -55,6 +55,12 @@ contract KontrolBootstrapUnremovable is Test {
     MockSPHINCSVerifier internal c10;
 
     function setUp() public {
+        // KEVM's default block.chainid is 1 (mainnet); MockSPHINCSVerifier's
+        // M14 deploy guard reverts unless chainid ∈ {31337, 1337, 0}. forge
+        // defaults to 31337 so this is invisible under `forge test`, but the
+        // KEVM symbolic engine needs it set explicitly or `setUp` reverts at
+        // the mock's constructor. (Faithful: the mock is local-test-only.)
+        vm.chainId(31337);
         c10 = new MockSPHINCSVerifier();
         PQSmartWallet impl = new PQSmartWallet(IEntryPoint(ENTRY_POINT_ADDR), c10);
         address proxy = LibClone.deployERC1967(address(impl));

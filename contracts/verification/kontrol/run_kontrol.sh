@@ -17,24 +17,25 @@ HARNESS="$HERE/test/KontrolBootstrapUnremovable.t.sol"
 DEST_DIR="$SW/test/kontrol"
 DEST="$DEST_DIR/KontrolBootstrapUnremovable.t.sol"
 
-command -v kompile >/dev/null 2>&1 || {
-  echo "ERROR: 'kompile' (K Framework backend) not found on PATH."
-  echo "       Kontrol's Python CLI installs via pip/uv but the symbolic-"
-  echo "       execution engine is a separate native backend. Install with:"
+# NOTE: `kompile` / `kore-rpc-booster` are NOT expected on the outer PATH when
+# Kontrol is installed via `kup install kontrol` (Nix) — the `kontrol` wrapper
+# prepends its OWN bundled K backend (k-<ver>/bin) internally. So we require
+# only the `kontrol` CLI; it self-contains the symbolic-execution engine.
+command -v kontrol >/dev/null 2>&1 || {
+  echo "ERROR: 'kontrol' CLI not found. Install with:"
   echo "         bash <(curl https://kframework.org/install)   # installs kup (Nix)"
   echo "         kup install kontrol"
   echo "       or use the runtimeverification/kontrol Docker image."
   echo "       See ../docs/KONTROL_SCOPING.md."
   exit 2
 }
-command -v kontrol >/dev/null 2>&1 || { echo "ERROR: 'kontrol' CLI not found."; exit 2; }
 
 # kontrol-cheatcodes (symbolic helpers) — only needed if a harness uses
 # kevm.* / KontrolCheats. This harness uses ONLY forge-std cheatcodes, but
 # install it anyway so future harnesses work out of the box.
 if [ ! -d "$SW/lib/kontrol-cheatcodes" ]; then
   echo "Installing kontrol-cheatcodes ..."
-  ( cd "$SW" && forge install runtimeverification/kontrol-cheatcodes --no-commit ) || true
+  ( cd "$SW" && forge install runtimeverification/kontrol-cheatcodes ) || true
 fi
 
 mkdir -p "$DEST_DIR"

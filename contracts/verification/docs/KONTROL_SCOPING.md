@@ -1,14 +1,30 @@
 # Kontrol / KEVM scoping — closing the model-to-bytecode gap (D)
 
-**Status: PARTIAL.** Kontrol's Python CLI installs and parses our Foundry
-project; a concrete first proof harness was written, compiles into the exact
-artifact set Kontrol consumes, and its three properties **pass under the
-forge fuzzer** (256 runs each, symbolic-shaped inputs). The actual
-`kontrol prove` (KEVM symbolic execution) **cannot be run on this host**
-because the K Framework backend (`kompile`, `llvm-kompile`, `kore-rpc-booster`)
-is not installable in reasonable time without Nix or Docker (neither present).
-This doc records exactly what works, the blocker with command output, the
-ready-to-run proof artifact, and a realistic per-axiom effort estimate for
+**Status: FIRST LIVE KEVM PROOF LANDED (2026-06-15).** The K backend is now
+installed (multi-user Nix → `kup install kontrol`; kontrol 1.0.247 / K v7.1.333,
+pulled prebuilt from `k-framework.cachix.org` — `nicola` was added to Nix
+`trusted-users` so the cache is used instead of a multi-hour source build).
+`kontrol build` + `kontrol prove` run live, and **all three bootstrap-unremovable
+rules PASS under KEVM symbolic execution against the deployed `PQSmartWallet`
+runtime bytecode**: `prove_bootstrap_unremovable_from_entrypoint(bytes)` (∀
+symbolic `expected`), `prove_bootstrap_unremovable_exact_bytes`, and
+`prove_bootstrap_remove_rejected_non_entrypoint(address,bytes)` (∀ caller).
+Run via `make -C contracts/verification verify-kontrol` (or
+`contracts/verification/kontrol/run_kontrol.sh`); ~5 min build + prove.
+
+This is the first slice of **A3.4 (owner-table)**, proven directly on the
+bytecode by an engine independent of Halmos — no hand-written `LeanModel.sol`
+mirror in the loop. It corresponds to security invariant #6 / the Lean
+`Invariants.cannot_remove_bootstrap`.
+
+> **Gotcha recorded for the next harnesses:** KEVM's default `block.chainid` is
+> **1** (not forge's 31337); `MockSPHINCSVerifier`'s M14 deploy guard reverts off
+> a local chain, so `setUp` reverted at the mock's constructor until we added
+> `vm.chainId(31337)` as the first `setUp` statement. Every Kontrol harness that
+> deploys the mock needs this.
+
+The sections below record the (now-historical) install assessment, the
+ready-to-run proof artifact, and the realistic per-axiom effort estimate for
 replacing each Halmos A3.* bridge with a Kontrol proof.
 
 Date: 2026-06-14. HEAD: `2329abe`. Host: Ubuntu, 24 cores, 90 GiB RAM,

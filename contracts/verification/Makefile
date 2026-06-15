@@ -16,7 +16,7 @@
 LEAN_DIR := lean
 LAKE     ?= $(shell command -v lake 2>/dev/null || echo $$HOME/.elan/bin/lake)
 
-.PHONY: verify verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk verify-storage-mutators verify-fv-lints verify-lean4checker
+.PHONY: verify verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk verify-storage-mutators verify-fv-lints verify-lean4checker verify-kontrol
 
 verify: verify-build
 	@cd $(LEAN_DIR) && $(LAKE) exe verify-test-vectors
@@ -59,6 +59,15 @@ verify-fv-lints: verify-build
 # override the location with LEAN4CHECKER_DIR=...
 verify-lean4checker:
 	@bash scripts/run_lean4checker.sh
+
+# Model-to-bytecode (D): Kontrol/KEVM symbolic-execution proofs DIRECTLY against
+# the deployed contract bytecode — an engine independent of Halmos, with no
+# hand-written LeanModel.sol mirror in the loop. Currently proves the
+# bootstrap-unremovable owner-table slice (A3.4 / invariant #6). Requires a K
+# backend (`kup install kontrol` via Nix, or the RV Docker image); ~5 min
+# build+prove. See kontrol/run_kontrol.sh + docs/KONTROL_SCOPING.md.
+verify-kontrol:
+	@bash kontrol/run_kontrol.sh
 
 # Bulk executable-spec differential (A3.1 follow-up): regenerate the random
 # corpus from the Rust signer (slow; gated behind GEN=1), embed it, and run
