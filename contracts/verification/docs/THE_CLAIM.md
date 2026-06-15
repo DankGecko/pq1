@@ -44,7 +44,9 @@ section below, do not ship it.
 > the **deployed runtime bytecode** (Halmos + z3, both compiler profiles,
 > pinned codehashes), to be **pointwise-equal to those Lean models** over
 > symbolic inputs — including a genuinely ∀-quantified owner index on every
-> money-moving path.**
+> money-moving path. The same four control-flow bridges are now **independently
+> re-discharged transcription-free by Kontrol/KEVM** — proven directly on the
+> deployed bytecode with no hand-written model mirror (30 KEVM proofs; see #2).**
 
 Specifically and defensibly:
 
@@ -74,6 +76,21 @@ Specifically and defensibly:
    (pointwise over a genuinely symbolic ∀ ownerIndex + atomicity), factory
    (`createAccount ⟺ precondition` iff), owner-table (add/remove/initialize
    pointwise + read-parity). Reproduced 2026-06-11 (`make verify-bytecode`).
+   **Transcription-free Kontrol/KEVM re-discharge (2026-06-15).** The same four
+   control-flow bridge axioms (A3.2 validate, A3.2-exec, A3.3 factory, A3.4
+   owner-table) are now ALSO proven directly on the deployed bytecode by **KEVM
+   symbolic execution via Kontrol** — an engine independent of Halmos, with **no
+   hand-written `LeanModel.sol` mirror in the loop** — so the property is stated
+   once and checked against the bytecode itself. 30 KEVM proofs across 5
+   harnesses (`contracts/verification/kontrol/`): A3.4 = 12/12, A3.2-exec = 8/8,
+   A3.3 = 6/6, A3.2-validate (the non-bypass I-1) = 4/4. This **retires the
+   `LeanModel.sol` hand-transcription element from the TCB** for all four
+   control-flow axioms (Halmos stays as the fast CI gate; the two engines agree).
+   Reproduced 2026-06-15 (`make verify-kontrol`; needs a Nix-installed K backend).
+   The verifier's ∀-signature equivalence (A3.1) is **not** a Kontrol target —
+   it is intractable under symbolic SHA-256 in both engines (KEVM models the
+   `0x02` precompile as the SMT-uninterpreted `Sha256raw`), so it stays
+   KAT-validated (see #4/#5). See [`KONTROL_SCOPING.md`](KONTROL_SCOPING.md).
 3. **The bootstrap-cap bug is really fixed.** The few-time-cap under-count
    (`PQBootstrapCapEvasion`) is closed in the validation phase and locked by
    tests; `forge test` 108/108. Reproduced 2026-06-11.
@@ -103,12 +120,21 @@ Specifically and defensibly:
    are the EIP-712 immutable cache and the implementation-address immutable).
    Reproduced 2026-06-13.
 
-The honest trust base for (1)–(2): the Lean kernel; that a Halmos+z3 rule is
-a sound solver session (the harness↔property and `LeanModel.sol`↔Lean-file
-transcriptions are in the TCB, not Lean proof terms); SHA-256 modeled as an
-uninterpreted function; and the verifier modeled as an uninterpreted function
-inside the wallet rules (which is exactly what makes them tractable and what
-A5/A3.1 are supposed to discharge separately).
+The honest trust base for (1)–(2): the Lean kernel; and that the bytecode
+discharge is a sound symbolic-execution session. For the four control-flow
+bridge axioms (A3.2/A3.2-exec/A3.3/A3.4) that discharge now exists in **two
+forms**: (a) a Halmos+z3 session — the fast CI gate — whose harness↔property
+correspondence AND the `LeanModel.sol`↔Lean-file **transcription** are in the
+TCB; and (b) a transcription-free **Kontrol/KEVM** session that proves the
+property directly against the bytecode with **no `LeanModel.sol` mirror**, so the
+transcription element drops out and the residual is KEVM-soundness (the canonical
+EVM semantics) + the Kontrol session. The two engines agree, so the
+hand-transcription is no longer a load-bearing trust assumption for the
+control-flow axioms. Still in the TCB regardless of engine: SHA-256 modeled as an
+uninterpreted function, and the verifier modeled as an uninterpreted function
+inside the wallet rules (which is what makes them tractable and what A5/A3.1
+discharge separately — the verifier's ∀-signature equivalence stays out of both
+engines under symbolic SHA-256).
 
 ---
 
@@ -191,8 +217,13 @@ the equality is quantified over all 4008-byte signatures, and that ∀ is
 discharged by the KAT + mutant screen + executable Lean differential, **not**
 by a symbolic ∀ proof — which is intractable while SHA-256 is uninterpreted
 (= A1). So A3.1 is `discharged-bytecode` on the corpus, with the ∀-symbolic
-equivalence as the standing ceiling (needs Kontrol/KEVM or verified
-compilation). History: [`A3_1_VERIFIER_GAP.md`](A3_1_VERIFIER_GAP.md).
+equivalence as the standing ceiling. **Confirmed 2026-06-15: Kontrol/KEVM does
+NOT close this** — although Kontrol is now installed and used for the four
+control-flow axioms (A3.2/A3.3/A3.4, see #2), KEVM models the `0x02` precompile
+as the SMT-uninterpreted `Sha256raw` on symbolic input, so the verifier's digit
+branches fork exactly as under Halmos. Closing A3.1 needs an **interpreted-hash**
+reachability engine or **verified compilation**, not Kontrol. History:
+[`A3_1_VERIFIER_GAP.md`](A3_1_VERIFIER_GAP.md).
 
 Also still cited-TCB by decision (not "proven to bytecode"): **A2** EntryPoint
 v0.6 honesty, **A4** EVM-executes-per-spec (incl. the emitted-CALL byte
@@ -216,9 +247,12 @@ In dependency order:
 2. **Discharge the verifier's ∀-signature equivalence on bytecode.** Not
    possible under uninterpreted SHA-256 (the digit branches fork on
    unconstrained symbolic values). Needs an **interpreted-hash reachability**
-   engine (Kontrol/KEVM) or **verified compilation** (Verity,
-   [`PATH_TO_VERIFIED_BYTECODE.md`](PATH_TO_VERIFIED_BYTECODE.md)). Even Verity
-   stops at Yul, leaving A1/A2/A4 as cited-TCB.
+   engine or **verified compilation** (Verity,
+   [`PATH_TO_VERIFIED_BYTECODE.md`](PATH_TO_VERIFIED_BYTECODE.md)). **NOTE:
+   Kontrol/KEVM does NOT qualify** — despite now being installed and used for the
+   control-flow axioms, KEVM's `0x02` precompile is SMT-uninterpreted on symbolic
+   input (`Sha256raw`), so it hits the same wall as Halmos (confirmed
+   2026-06-15). Even Verity stops at Yul, leaving A1/A2/A4 as cited-TCB.
 3. **Optionally** reduce A2/A4 from cited-TCB to bytecode (Kontrol against the
    deployed EntryPoint) — a large, separate engagement.
 
