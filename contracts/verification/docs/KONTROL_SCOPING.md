@@ -1,14 +1,20 @@
 # Kontrol / KEVM scoping — closing the model-to-bytecode gap (D)
 
-**Status: A3.4 + A3.2-exec DISCHARGED ON BYTECODE (2026-06-15); A3.3 / A3.2
-NEXT.** A3.4 owner-table = 12/12 KEVM proofs; A3.2-exec (execute /
-executeBatch) = 8/8 in `kontrol/test/KontrolExecute.t.sol` (EntryPoint gate,
-anti-impersonation no-credit-revert ∀ ownerIndex, self-target reject, the
-`setOffchain` pointwise gate ∀-counters, credit one-shot/replay-guard, atomicity
-on a reverting target, batch self-target reject, batch dispatch witness). The
-transient validated-credit is stamped by a CONCRETE `validateUserOp` call +
-valid mock (KEVM computes `sphincsDigest`'s SHA-256 via its `[concrete]`
-precompile rewrite — no symbolic-hash wall). Two new gotchas recorded below.
+**Status: A3.4 + A3.2-exec + A3.3 DISCHARGED ON BYTECODE (2026-06-15); A3.2
+(validateUserOp) NEXT.** A3.4 owner-table = 12/12 KEVM proofs; A3.2-exec
+(execute / executeBatch) = 8/8 in `kontrol/test/KontrolExecute.t.sol`
+(EntryPoint gate, anti-impersonation no-credit-revert ∀ ownerIndex, self-target
+reject, the `setOffchain` pointwise gate ∀-counters, credit one-shot/replay-guard,
+atomicity on a reverting target, batch self-target reject, batch dispatch
+witness); A3.3 factory = 6/6 in `kontrol/test/KontrolFactory.t.sol`
+(`createAccount` ⟺ precondition iff with symbolic chainId + verifier verdict +
+real CREATE2 deploy/postconditions; N-mask×2 / duplicate / wrong-chain reject
+witnesses; already-deployed early-return ⟺ chain-ok). The transient
+validated-credit is stamped by a CONCRETE `validateUserOp` call + valid mock
+(KEVM computes `sphincsDigest`'s SHA-256 via its `[concrete]` precompile rewrite
+— no symbolic-hash wall); the factory keeps the master keys concrete (the
+CREATE2 salt is `sha256(master)`) and models the verifier as a symbolic-`valid`
+mock. Gotchas recorded below.
 The K backend is now
 installed (multi-user Nix → `kup install kontrol`; kontrol 1.0.247 / K v7.1.333,
 pulled prebuilt from `k-framework.cachix.org` — `nicola` was added to Nix
