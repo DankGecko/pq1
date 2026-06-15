@@ -1,6 +1,7 @@
 # Kontrol / KEVM scoping — closing the model-to-bytecode gap (D)
 
-**Status: FIRST LIVE KEVM PROOF LANDED (2026-06-15).** The K backend is now
+**Status: A3.4 DISCHARGED ON BYTECODE (12/12, 2026-06-15); A3.2-exec / A3.3 /
+A3.2 NEXT.** The K backend is now
 installed (multi-user Nix → `kup install kontrol`; kontrol 1.0.247 / K v7.1.333,
 pulled prebuilt from `k-framework.cachix.org` — `nicola` was added to Nix
 `trusted-users` so the cache is used instead of a multi-hour source build).
@@ -12,16 +13,34 @@ symbolic `expected`), `prove_bootstrap_unremovable_exact_bytes`, and
 Run via `make -C contracts/verification verify-kontrol` (or
 `contracts/verification/kontrol/run_kontrol.sh`); ~5 min build + prove.
 
-This is the first slice of **A3.4 (owner-table)**, proven directly on the
-bytecode by an engine independent of Halmos — no hand-written `LeanModel.sol`
-mirror in the loop. It corresponds to security invariant #6 / the Lean
-`Invariants.cannot_remove_bootstrap`.
+**A3.4 (owner-table) is now FULLY discharged** — 12/12 rules PASS under KEVM
+across two harnesses (`kontrol/test/KontrolBootstrapUnremovable.t.sol` +
+`KontrolOwnerTable.t.sol`), mirroring `test/halmos/HalmosMultiOwnable.t.sol`
+rule-for-rule: `addOwnerBytes` pointwise (∀ symbolic 64-byte content) + length
+gates (63/65 reject) + EntryPoint gate; `removeOwnerAtIndex` installed-pointwise
+(∀ symbolic `expected`) + unset-index reject (∀ index ≥ 2) + bootstrap-
+unremovable (∀ caller, ∀ expected, exact-bytes) + EntryPoint gate; `initialize`
+one-shot + fresh-proxy pointwise. All proven DIRECTLY on the deployed bytecode
+by an engine independent of Halmos — no hand-written `LeanModel.sol` mirror —
+so the **transcription-TCB element of A3.4 is retired** (Halmos stays as the
+fast CI gate). Corresponds to invariant #6 + the Claim-2 owner-set-integrity
+Lean theorems.
 
-> **Gotcha recorded for the next harnesses:** KEVM's default `block.chainid` is
-> **1** (not forge's 31337); `MockSPHINCSVerifier`'s M14 deploy guard reverts off
-> a local chain, so `setUp` reverted at the mock's constructor until we added
-> `vm.chainId(31337)` as the first `setUp` statement. Every Kontrol harness that
-> deploys the mock needs this.
+> **Gotchas recorded for the next harnesses (A3.2/A3.3):**
+> 1. **chainid** — KEVM's default `block.chainid` is **1** (not forge's 31337);
+>    `MockSPHINCSVerifier`'s M14 deploy guard reverts off a local chain, so
+>    `setUp` reverts at the mock constructor unless `vm.chainId(31337)` is the
+>    first `setUp` statement.
+> 2. **storageLayout** — kontrol SILENTLY SKIPS a contract ("non-compatible JSON"
+>    → "Test identifiers not found") if its foundry artifact lacks
+>    `storageLayout`. A prior plain `forge build` leaves harness artifacts
+>    without it and kontrol's incremental build won't refresh them. `run_kontrol.sh`
+>    now `rm`s the staged harness artifacts before `kontrol build` so they
+>    recompile under kontrol's `--extra-output storageLayout`. (Don't plain
+>    `forge build` before a kontrol run.)
+> 3. **prove matcher** — `kontrol prove` has no `--match-contract`; use
+>    `--match-test '<regex over Contract.func(sig)>'` (the runner uses
+>    `Kontrol.*\.prove_`).
 
 The sections below record the (now-historical) install assessment, the
 ready-to-run proof artifact, and the realistic per-axiom effort estimate for
