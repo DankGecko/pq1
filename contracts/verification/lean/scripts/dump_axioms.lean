@@ -29,6 +29,8 @@ import SphincsCVerify
 #print axioms SphincsCVerify.Interpreter.writeRegion_comm
 #print axioms SphincsCVerify.Interpreter.mstore32_get
 #print axioms SphincsCVerify.Interpreter.staticcallSha256_frame
+#print axioms SphincsCVerify.Interpreter.hashPair_assembled
+#print axioms SphincsCVerify.Interpreter.hashPairStep_frame
 
 #print axioms SphincsCVerify.Spec.Theorems.verify_deterministic
 #print axioms SphincsCVerify.Spec.Theorems.verify_rejects_wrong_length
