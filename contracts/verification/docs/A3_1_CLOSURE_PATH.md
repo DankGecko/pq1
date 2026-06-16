@@ -187,6 +187,26 @@ claim currently made (which honestly scopes A3.1 as corpus-validated).
   the concrete `Sha256Impl` wires in at the bridge). Decision recorded: build the
   C10 interpreter-refinement in the `lean/` `SphincsCVerify` project (reuses
   `Spec.verify` + `Spec.Sha256Impl`, no external Verity git dep) rather than the
-  `contracts/verity/` scaffold. Next: the `Sha256Bridge` (concrete digest via the
-  reused `sha256_pure`/`Sha256Impl`) + the first climb-step PoC (one FORS/Merkle
-  step) per §6.
+  `contracts/verity/` scaffold.
+- **2026-06-16 — per-step climb characterized.** `SphincsCVerify/Interpreter/Climb.lean`
+  models the hash-pair step shared by every C10 climb (WOTS chain / FORS tree /
+  hypertree Merkle): `hashPairStep` + `hashPair_assembled` (the precompile input is
+  exactly `node‖sibling` big-endian, byte for byte), `hashPairStep_frame` (touches
+  only the pair + digest windows — the locality climb-induction needs),
+  `hashPairStep_out`, `slice_writeRegion_frame`. Kernel-only, mathlib-free, hash
+  abstract → no axiom. So the memory layer + the per-step memory effect are now
+  fully proven; the symbolic-execution digit-explosion is structurally avoided
+  (the step is frame-characterized, not symbolically searched).
+- **NEXT (precise), in order:**
+  1. `mload32` BE round-trip: `mload32 (mstore32 mem off w) off = w % 2^256` — a
+     mathlib-free Horner/base-256 reassembly lemma (the one finicky arithmetic
+     piece; lets a climb thread word values, not just bytes). Plus
+     `mload32 (hashPairStep …) outOff = <digest word>`.
+  2. Loop-induction: a `climb`/`foldLoop` over a sibling list + `climb = specFold`
+     by induction on the step count (the verity `foldLoop_invariant_cond` analog —
+     THE transfer-PoC: N steps, hash opaque, two cases, no explosion).
+  3. `Sha256Bridge`: instantiate the abstract `dig` with `beByte (sha256 …)` via
+     the reused `Spec.Sha256Impl` (no new axiom) + the slice↔spec-input byte-layout
+     bridge.
+  4. The full `execC10Asm` interpreter body (H_msg → FORS → WOTS → hypertree) +
+     `execC10Asm = Spec.verify` (compose the per-phase refinements).
