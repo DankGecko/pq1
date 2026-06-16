@@ -216,10 +216,90 @@ claim currently made (which honestly scopes A3.1 as corpus-validated).
   byte-addressed-SHA-256 setting?" — with a kernel-checked YES.** Kernel-only, no
   axiom. So foundation (memory) → per-step (climb, fully word-characterized) →
   loop-induction are all proven; what remains is wiring + scale, not open questions.
+- **2026-06-16 — Sha256Bridge step 1: byte-array ↔ big-endian-word iso.**
+  `Interpreter/Sha256Bridge.lean`: `beByte_mload32` — load a 32-byte word with
+  `mload32`, extract big-endian byte `i` with `beByte`, recover the stored byte
+  `mem(off+i)` (the *inverse* of `mload32_mstore32_self`; mathlib-free Horner
+  positional extraction: `beNat`/`foldl_horner_acc`/`beNat_append`/`beNat_lt`/
+  `beNat_getByte`). Lifted to the spec via `memOfBytes`/`wordOf` +
+  `beByte_wordOf : beByte (wordOf v) i = v.get i` for `v : ByteVec 32`. Both
+  results `[propext, Quot.sound]` only. **This is the representation boundary**
+  between the word-threaded interpreter (`Nat`) and the byte-oriented declarative
+  spec (`ByteVec 32`): `mstore32 mem off (wordOf seg)` lays down exactly `seg`'s
+  bytes for the precompile, and a `mload`ed digest word maps back to a spec node.
+  `verify-build` 40/40, `verify-audit` 0 sorry, `theft_free` closure unchanged.
+
+### Landscape pinned (orientation workflow, 2026-06-16)
+
+- **Where the axiom sits.** The verifier leg of `theft_free` is
+  `Spec.verify ←(rfl) Verifier.Refined.verifyRefined ←(rfl)
+  Bridge.SolidityVerifier.verifyYulModel ←(A3.1 axiom
+  `solidityVerifier_compiles_correctly`) DeployedBytecode.SPHINCsC10Asm_verify
+  (opaque)`. The top three layers collapse by `rfl` — `verifyYulModel` **is**
+  `Spec.verify`. The *only* verifier axiom is the bottom one, equating the opaque
+  deployed-bytecode symbol to `verifyYulModel`.
+- **What the interpreter can / cannot do.** `DeployedBytecode.SPHINCsC10Asm_verify`
+  is opaque — `solidityVerifier_compiles_correctly` is **not** provable as stated
+  (nothing to compute). The verity move (their `c13_refines_spec`) is to introduce
+  a *concrete* interpreter `execC10Asm`, **prove** `execC10Asm = verifyYulModel`
+  (loop-induction, SHA-256 opaque), and **replace** the big axiom with a *narrower*
+  `DeployedBytecode.SPHINCsC10Asm_verify = execC10Asm` (their residual
+  `assembly_refinement`, `.assumed`). Net: trade one large semantic axiom
+  ("bytecode = structured verifier") for one narrow transcription axiom
+  ("bytecode = my opcode interpreter", = R1) + a proven refinement theorem.
+- **C10's Yul is fully word-aligned** (every `mstore` at a `0x20` multiple; the
+  branchless swap only lands on `0x40`/`0x60`). The byte-addressed model is a
+  faithful *superset* — it closes R2 **without** verity's `.assumed`
+  `linear_memory_aliasing`. Note: verity's own SHA-2 instance
+  (`slhDsaSha2_128_24`) is **axiom-blocked** (`slhDsaSha2_128_24_refines_byte_spec`
+  is unproven) precisely because its word-valued memory can't model SHA-2 packing —
+  i.e. **we are past the upstream frontier for SHA-2, not porting a finished result.**
+- **The 8 real hash sites** (`SPHINCsC10Asm.sol`, all `inOff=0x00, outOff=0x600`):
+  H_msg (160 B, **unmasked**), FORS-leaf (96, masked), FORS-Merkle-pair (128,
+  masked, parity swap), FORS-root-compress (480, masked), WOTS-digit (128,
+  **unmasked** — full 32 B feeds base-8 digit extraction), WOTS-chain (96, masked),
+  WOTS-PK-compress (1440, masked), HT-Merkle-pair (128, masked, parity swap).
+  `seed` persists at `0x00` across FORS, re-set before the hypertree. **The two
+  unmasked sites (H_msg, WOTS-digit) must NOT be truncated.** Padding confirmed:
+  `pad16 v = v ‖ zero 16` (trailing zeros) and `truncate16 = take 16` (top/MSB 16)
+  match `N_MASK` exactly, so the chained child `pad16 node = node16 ‖ zeros16` is
+  byte-sound. (The current `hashPairStep`/`climbMem` are a 2-input PoC; the real
+  step is 4 segments seed‖adrs‖left‖right with the parity swap + mask.)
+
+### DECISION GATE before the next increment — interpreter shape (a) vs (b)
+
+The honesty of "narrower residual axiom" depends entirely on **how `execC10Asm` is
+structured** (advisor, 2026-06-16):
+
+- **(a) interpreter over a faithful Yul-statement representation** (verity's
+  `execStmtList`/`evalExpr` over an AST that visibly mirrors `SPHINCsC10Asm.sol`).
+  Then `DeployedBytecode = execC10Asm` is a *mechanical opcode-by-opcode*
+  transcription check — **a real trust-base reduction** (R1-only residual). The
+  climb lemmas (`hashPairStep`/`climbMem`/`Sha256Bridge`) become loop-body
+  refinement lemmas *underneath* the statement-interpreter.
+- **(b) bespoke byte-memory Lean function** (what `climbMem` currently is). Still
+  provably `= Spec.verify`, but the residual axiom `DeployedBytecode = execC10Asm`
+  is **no narrower than today's** — it's a second independent deductive ∀-model
+  (defense-in-depth), **not** a trust-base reduction.
+
+The current building blocks are shaped like (b). **This fork must be settled before
+committing to the top-level `execC10Asm` shape** — under (a), the climb lemmas must
+be wired as lemmas, not as the top-level def. A *pragmatic-(a)* middle path: write
+`execC10Asm` in deliberately Yul-mirroring straight-line style (one Lean line per
+Yul statement, loops as `foldLoop` mirroring the Yul `for`), so the transcription
+axiom is a line-by-line visual check (as narrow as verity's `assembly_refinement`),
+with the climb lemmas as the loop-refinement engine.
+
 - **NEXT (precise), in order:**
-  1. `Sha256Bridge`: instantiate the abstract `H`/`dig` with `Spec.Sha256Impl`
-     (no new axiom) + the slice↔spec-input byte-layout bridge, so the climbs run
-     the *real* hash and `specClimb` becomes the *real* Merkle/WOTS/FORS fold.
+  0. **Settle the (a)/(b) fork** (decision gate above) — determines the
+     `execC10Asm` shape. Everything below assumes it is resolved.
+  1. Finish `Sha256Bridge`: the input-assembly bridge (`slice mem 0x00 inLen =
+     ByteSeg.flatten [seed,adrs,…]` from the frame lemmas + the `beByte_wordOf`
+     atom) and the masked output bridge (`and(mload32 …,N_MASK) = truncate16
+     (sha256 [...])` = a spec node), instantiating the abstract `H`/`dig` with the
+     real `Spec.Sha256Impl`/`thPair` (no new axiom). Build the *real* 4-segment
+     Merkle step (seed‖adrs‖left‖right + parity swap + mask), not the 2-input PoC.
   2. The full `execC10Asm` interpreter body (H_msg → FORS → WOTS → hypertree),
-     each phase a `climbMem`-style fold, + `execC10Asm = Spec.verify` (compose the
-     per-phase refinements via the loop-induction).
+     each phase a fold refined via the loop-induction, + `execC10Asm = verifyYulModel`,
+     then replace `solidityVerifier_compiles_correctly` with the narrow
+     transcription axiom and re-derive the old statement as a theorem.
