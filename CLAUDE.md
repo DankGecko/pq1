@@ -213,7 +213,7 @@ CI must gate shipped firmware on `debug-log` / `e2e-test` / `mock-se` / `otp-har
 - NS pointer validation on every gateway call before any deref. NS buffers copied to S-stack before parse.
 - Cross-world types in `shared/src/lib.rs` with `#[repr(C)]`.
 - Secret types are `!Copy + !Clone`.
-- Verify-before-release on every Type 1 / Type 2 sig (FI guard, double-evaluated with sentinel) — `crypto::c10_sign_verified*`.
+- FI-hardened signing on every Type 1 / Type 2 sig — `crypto::c10_sign_verified*` is a **double-compute → byte-compare → verify-before-release** chain (RFC 9814 §A.2 / Genêt TCHES 2023): sign twice over identical inputs, constant-time-compare the two 4008-B signatures (the *redundant-recomputation* countermeasure — verify-after-sign **alone is insufficient** against SPHINCS+ grafting faults, since a random faulted sig is more likely to still verify than to fail), then verify-before-release, all under an `fi::CfiCounter` 7-step gate with F-2 Hamming-distant sentinels, F-16 DPA shuffle, and fresh 3-source OptRand. Do **not** weaken this to verify-only (a known-insufficient FI gate).
 
 ## Key File Map
 
