@@ -623,10 +623,19 @@ impl Splash {
                     let fx = rem as f32 * INV_STEP;
                     let omfx = 1.0 - fx;
                     let idx = gyb + gx;
-                    let n = self.field[idx] * omfx * omfy
-                        + self.field[idx + 1] * fx * omfy
-                        + self.field[idx + GW] * omfx * fy
-                        + self.field[idx + GW + 1] * fx * fy;
+                    // SAFETY: bounds-check elision in the per-pixel hot path.
+                    // idx = gyb + gx with gy ≤ GH-2 (the `gy+1 >= GH` guard
+                    // above) and gx ≤ (LW-1)/STEP = GW-2 (gx tracks x/STEP,
+                    // x < LW), so all four accessed indices idx, idx+1, idx+GW,
+                    // idx+GW+1 are ≤ (gy+2)*GW - 1 ≤ GH*GW - 1 < field.len()
+                    // (GW*GH). Exhaustively host-verified over all 60 776 pixels
+                    // for STEP=6 / GW=73 / GH=25 (max index 1824 < 1825).
+                    let n = unsafe {
+                        *self.field.get_unchecked(idx) * omfx * omfy
+                            + *self.field.get_unchecked(idx + 1) * fx * omfy
+                            + *self.field.get_unchecked(idx + GW) * omfx * fy
+                            + *self.field.get_unchecked(idx + GW + 1) * fx * fy
+                    };
                     // v = pow(n, 2.2) * 0.7 * carve, via the precomputed LUT. n
                     // is bounded to ~(0.018, 0.982) so the clamp never fires in
                     // practice; when it does it mirrors the original
