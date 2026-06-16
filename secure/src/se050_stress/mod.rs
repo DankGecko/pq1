@@ -333,8 +333,8 @@ fn format_summary<'a>(pass: u32, fail: u32, buf: &'a mut [u8; 16]) -> &'a str {
     i = u32_to_decimal(fail, buf, i);
     buf[i] = b'F';
     i += 1;
-    // SAFETY: we wrote only ASCII bytes (digits + 'P' + '/' + 'F').
-    unsafe { core::str::from_utf8_unchecked(&buf[..i]) }
+    // ASCII-by-construction (digits + 'P' + '/' + 'F') — sanctioned helper, no unsafe.
+    crate::ui::ascii_str(&buf[..i])
 }
 
 fn u32_to_decimal(mut n: u32, buf: &mut [u8; 16], mut i: usize) -> usize {

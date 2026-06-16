@@ -625,8 +625,8 @@ fn saes_self_test_and_halt() -> ! {
                     buf[i * 2] = HEX[(b >> 4) as usize];
                     buf[i * 2 + 1] = HEX[(b & 0xF) as usize];
                 }
-                // SAFETY: hex chars are valid UTF-8.
-                let s = unsafe { core::str::from_utf8_unchecked(&buf) };
+                // ASCII-by-construction (hex digits) — sanctioned helper, no unsafe.
+                let s = crate::ui::ascii_str(&buf);
                 let d = ui::display();
                 d.draw_line(0, s); // overwrite the "BOOT 6" marker — boot is done
                 d.flush();
