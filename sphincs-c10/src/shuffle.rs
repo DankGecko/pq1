@@ -161,7 +161,24 @@ pub fn fisher_yates(seed: &[u8; 32], n: usize) -> [u8; 64] {
         let hi = stream[pos + 1] as u16;
         pos += 2;
         let r = (hi << 8) | lo;
-        let j = (r % bound) as usize;
+        // CT-1 (work-todo §18b): constant-time bounded reduction via the
+        // Lemire multiply-shift, replacing `r % bound`. A hardware modulo
+        // compiles to `UDIV` (`DIVW` on x86); the Cortex-M33's iterative,
+        // early-terminating divider makes that `UDIV`'s latency depend on
+        // the operand `r` — and `r` is the secret per-signature shuffle
+        // stream the shuffle exists to hide. That variable latency is
+        // observable in the same power/EM trace a profiled-DPA attacker
+        // collects, so a `%` here partially leaks the permutation and
+        // erodes the F-16 trace-misalignment defence. The multiply-shift is
+        // operand-independent (single-cycle MUL + shift). Range is
+        // identical to the modulo: `r ∈ [0, 2^16)`, `bound = i+1 ∈ [2, n]
+        // ≤ 64` ⇒ `(r * bound) >> 16 ∈ [0, bound)` (and `r * bound ≤
+        // 65535·64 < 2^22`, no overflow). The negligible modulo bias is
+        // irrelevant for a DPA-order shuffle (it selects the *order* of
+        // computation, never the *value* — any valid permutation yields a
+        // byte-identical signature; preserved by `tests/shuffle_byte_equality.rs`
+        // and the F-13 double-compute gate).
+        let j = (((r as u32) * (bound as u32)) >> 16) as usize;
         let tmp = buf[i];
         buf[i] = buf[j];
         buf[j] = tmp;
