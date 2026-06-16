@@ -100,7 +100,14 @@ explosion:
   three-way Rust↔Yul↔Lean differential — **not** a symbolic-search wall. Eliminating
   it entirely needs verified compilation (Verity stops at Yul; KEVM-to-spec is
   multi-person-year), which is why even the full deductive proof leaves a cited
-  bridge — but a *much smaller* one (see §5).
+  bridge — but a *much smaller* one (see §5). **Complementary bytecode-level
+  check (SOTA 2026-06, `docs/security-tooling-sota-2026-06.md` §2):** `hevm`
+  equivalence (and Kontrol/KEVM) can prove the *deployed bytecode* ≡ a reference
+  Solidity verifier over all inputs with SHA-256 uninterpreted — a *different*
+  equivalence than model↔spec, attacking R1 from the bytecode side; it bounds the
+  transcription TCB without replacing the deductive model↔spec proof. (Same
+  symbolic-SHA-256 caveat applies to the verifier's crypto-heavy core; use it for
+  the structural/reference equivalence, not to reason inside the hash.)
 - **(R2) SHA-256 needs byte-addressed interpreter memory.** The upstream
   machinery is built for native `keccak256`. The Keccak→SHA-256 bridge is
   otherwise mechanically identical (`KeccakBridge`→`Sha256Bridge`, one
@@ -109,6 +116,15 @@ explosion:
   **word-keyed** memory model cannot represent that aliasing; a faithful SHA-256
   interpreter needs a **byte-addressed** memory. This is a refactor, not a wall —
   but it is real, SHA-256-specific work that the Keccak proof never had to do.
+
+**Framing (SOTA 2026-06 §2): A3.1 closure is one leg of a tripod, not the whole
+proof.** Deductive interpreter-refinement gives *implementation correctness* (the
+bytecode computes the verifier algorithm's verdict for all inputs). It does NOT
+give EUF-CMA / collision-resistance (that is A5, the separate cited crypto leg,
+shadowed quantitatively by `Crypto/Quantitative.lean`), and it does NOT by itself
+discharge the model↔deployed-bytecode transcription fidelity (R1, the review/
+differential/hevm leg). The three legs together = the full verifier assurance;
+this doc is the plan for the implementation-correctness leg.
 
 ## 5. What closure would actually buy (and the corrected status)
 
