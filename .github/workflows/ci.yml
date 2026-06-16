@@ -1,14 +1,21 @@
 name: CI
 
 # Born-green CI for PQSigner. Each job runs a command verified to pass on the
-# current tree (2026-06-16). Intentionally NOT yet gated here (pre-existing,
-# unrelated red — track + fix, then promote into CI):
-#   * `make test-unit` full secure-crate suite — 1 failing source-pin test
-#     (`negative_usb_hw_raw_volatile_only_under_debug_log_diagnostic`: usb_hw.rs
-#     has >1 raw read_volatile; the unsafe-taxonomy MMIO migration regressed).
-#   * `forge test` — 4 bytecode-codehash-pin drifts (re-run Halmos / update the
-#     audited pins after the deliberate change, or the solc version differs).
-# See docs/work-todo.md §34.
+# current tree (2026-06-16). The two pre-existing reds noted in earlier
+# revisions of this file are now FIXED and GATED here (docs/work-todo.md §34):
+#   * usb_hw raw-MMIO source-pin (commit 4d1d6476 — raw read/write_volatile
+#     migrated to hw::mmio::Reg32). Gated by the `secure-tests` job (the full
+#     sphincs-tz-secure host suite: 2076 passed / 0 failed on this tree).
+#   * forge codehash-pin drift (commit 4b3f4f85 — re-pinned after the
+#     deliberate FORS-leaf-binding security fix fcee705a, then Halmos-
+#     re-discharged 39/39 incl. HalmosVerifier 3/3). Gated by the `contracts`
+#     job (full default `forge test`: 109 passed / 0 failed / 1 skipped).
+#
+# Intentionally NOT in CI (kept as local/manual gates — slow + need the
+# patched halmos toolchain): the `deploy` foundry profile and
+# `make -C contracts/verification verify-bytecode` (the symbolic discharge).
+# The deploy profile is intentionally red — local is ahead of the Base
+# Mainnet reference deployment (the FORS fix is not on chain yet); see §34.
 
 on:
   push:
@@ -53,13 +60,31 @@ jobs:
             -p pqsigner-domain -p pqsigner-tx -p pqsigner-erc7730 \
             -p sphincs-c10 -p pqsigner-fi
 
+  secure-tests:
+    name: Secure-world unit tests (host)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The secure crate host-builds with --no-default-features (the
+      # semihosting backend is arch-gated to a host stub). This is the
+      # `make test-unit` secure path; gates the usb_hw raw-MMIO fix.
+      - name: cargo test (sphincs-tz-secure, host)
+        run: |
+          cargo test --locked -p sphincs-tz-secure \
+            --no-default-features \
+            --features mock-se,debug-log,ui-semihosting
+
   contracts:
-    name: Contracts (forge build)
+    name: Contracts (forge test)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
       - uses: foundry-rs/foundry-toolchain@v1
-      - name: forge build
-        run: cd contracts/smart-wallet && forge build
+      # Default profile: DeployedBytecodeReproCheck self-skips (it only runs
+      # under the deploy profile), so this is 109 passed / 0 failed / 1 skipped.
+      - name: forge test (default profile)
+        run: cd contracts/smart-wallet && forge test
