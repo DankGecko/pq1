@@ -586,13 +586,23 @@ impl Splash {
         // (an f32 `vdiv` is ~14 cycles; a multiply ~1).
         const INV_STEP: f32 = 1.0 / STEP as f32;
         const INV68: f32 = 1.0 / 68.0;
-        for y in 0..LH {
+        // HALF-RES INTENSITY, FULL-RES DITHER (deep-research fill-rate lever).
+        // The expensive per-pixel work — bilinear upsample of the noise field +
+        // radial carve + pow-LUT — is evaluated ONCE per 2×2 block, but the
+        // cheap Bayer dither + bit-set still run on all four pixels. So the
+        // smooth nebula *intensity* is sampled at half resolution (visually
+        // negligible — it is already a low-frequency bilinear-from-coarse field)
+        // while the 1-bit *stipple* stays full resolution. Cuts the dominant
+        // per-pixel math ~4×. LW (428) and LH (142) are both even, so the 2×2
+        // tiling is exact (no partial edge blocks).
+        let mut y = 0usize;
+        while y < LH {
             let gy = y / STEP;
-            // The HTML reads `field[idx+gw]`/`[idx+gw+1]`; on the bottom rows
-            // (`gy+1 == GH`) those are out of the typed array → `undefined` →
-            // NaN → the `v > 0.02` test is false → no pixel. We skip the same
-            // rows so the look matches AND we never index past `field`.
+            // Bottom-edge guard (see fb layout note): both pixel rows of the
+            // block share gy (for even y, (y+1)/STEP == y/STEP), so one guard
+            // covers the 2×2 block and keeps the field reads in range.
             if gy + 1 >= GH {
+                y += 2;
                 continue;
             }
             // Row-constant terms hoisted out of the x loop.
@@ -601,18 +611,19 @@ impl Splash {
             let ay = (y as f32 - 70.0) * 1.9;
             let ay2 = ay * ay;
             let gyb = gy * GW; // field row base
-            // Track ax = x-214, gx = x/STEP, rem = x mod STEP incrementally —
-            // no per-pixel integer OR float division (host-verified the
-            // sequence equals x-214 / x/STEP / x%STEP for all x).
+            // Track ax = x-214, gx = x/STEP, rem = x mod STEP incrementally,
+            // stepping x by 2 per block — no per-block integer OR float division
+            // (host-verified the sequence equals x-214 / x/STEP / x%STEP at
+            // every even x).
             let mut ax = -214.0f32;
             let mut gx = 0usize;
             let mut rem = 0usize;
-            for x in 0..LW {
-                // carve = clamp01((d - 104)/68), d = hypot(x-214, (y-70)*1.9).
-                // Squared-distance branch: skip the carved-out centre and the
-                // saturated body without ever calling sqrt; only the annulus
-                // does. Equivalent to the original clamp (carve ≤ 0 ⟺ d ≤ 104,
-                // carve = 1 ⟺ d ≥ 172).
+            let mut x = 0usize;
+            while x < LW {
+                // carve = clamp01((d - 104)/68), d = hypot(x-214, (y-70)*1.9),
+                // evaluated at the block origin. Squared-distance branch skips
+                // the carved-out centre and the saturated body without sqrt;
+                // only the annulus calls it. (carve ≤ 0 ⟺ d ≤ 104, =1 ⟺ d ≥ 172.)
                 let d2 = ax * ax + ay2;
                 if d2 > R_IN2 {
                     let carve = if d2 >= R_OUT2 {
@@ -623,12 +634,10 @@ impl Splash {
                     let fx = rem as f32 * INV_STEP;
                     let omfx = 1.0 - fx;
                     let idx = gyb + gx;
-                    // SAFETY: bounds-check elision in the per-pixel hot path.
-                    // idx = gyb + gx with gy ≤ GH-2 (the `gy+1 >= GH` guard
-                    // above) and gx ≤ (LW-1)/STEP = GW-2 (gx tracks x/STEP,
-                    // x < LW), so all four accessed indices idx, idx+1, idx+GW,
-                    // idx+GW+1 are ≤ (gy+2)*GW - 1 ≤ GH*GW - 1 < field.len()
-                    // (GW*GH). Exhaustively host-verified over all 60 776 pixels
+                    // SAFETY: bounds-check elision. idx = gyb + gx with gy ≤ GH-2
+                    // (the `gy+1 >= GH` guard above) and gx ≤ (LW-1)/STEP = GW-2
+                    // (gx tracks x/STEP, x < LW), so idx, idx+1, idx+GW, idx+GW+1
+                    // are all ≤ GH*GW - 1 < field.len() (GW*GH). Host-verified
                     // for STEP=6 / GW=73 / GH=25 (max index 1824 < 1825).
                     let n = unsafe {
                         *self.field.get_unchecked(idx) * omfx * omfy
@@ -636,25 +645,40 @@ impl Splash {
                             + *self.field.get_unchecked(idx + GW) * omfx * fy
                             + *self.field.get_unchecked(idx + GW + 1) * fx * fy
                     };
-                    // v = pow(n, 2.2) * 0.7 * carve, via the precomputed LUT. n
-                    // is bounded to ~(0.018, 0.982) so the clamp never fires in
-                    // practice; when it does it mirrors the original
-                    // out-of-range behaviour — a negative/NaN n maps to index 0
-                    // (pow_lut[0]=0 → no pixel), exactly as the old
-                    // pow(neg,2.2)=NaN → NaN>0.02=false.
+                    // v = pow(n, 2.2) * 0.7 * carve via LUT. n is bounded to
+                    // ~(0.018, 0.982); the clamp never fires in practice and on
+                    // out-of-range n maps to index 0 (pow_lut[0]=0 → no pixel),
+                    // matching the old pow(neg,2.2)=NaN → NaN>0.02=false.
                     let li = ((n * 255.0) as i32).clamp(0, 255) as usize;
                     let v = self.pow_lut[li] * carve;
-                    if v > 0.02 && bay(x as i32, y as i32, v) {
-                        self.set(x as i32, y as i32);
+                    if v > 0.02 {
+                        // Full-res Bayer dither over the 2×2 block (shared v):
+                        // each of the four pixels keeps its own Bayer threshold,
+                        // so the stipple is full resolution.
+                        let (xi, yi) = (x as i32, y as i32);
+                        if bay(xi, yi, v) {
+                            self.set(xi, yi);
+                        }
+                        if bay(xi + 1, yi, v) {
+                            self.set(xi + 1, yi);
+                        }
+                        if bay(xi, yi + 1, v) {
+                            self.set(xi, yi + 1);
+                        }
+                        if bay(xi + 1, yi + 1, v) {
+                            self.set(xi + 1, yi + 1);
+                        }
                     }
                 }
-                ax += 1.0;
-                rem += 1;
-                if rem == STEP {
-                    rem = 0;
+                ax += 2.0;
+                rem += 2;
+                if rem >= STEP {
+                    rem -= STEP;
                     gx += 1;
                 }
+                x += 2;
             }
+            y += 2;
         }
 
         for i in 0..self.nb_n {
