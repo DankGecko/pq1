@@ -197,12 +197,17 @@ claim currently made (which honestly scopes A3.1 as corpus-validated).
   abstract → no axiom. So the memory layer + the per-step memory effect are now
   fully proven; the symbolic-execution digit-explosion is structurally avoided
   (the step is frame-characterized, not symbolically searched).
+- **2026-06-16 — `mload32` BE round-trip DONE.** `mload32 (mstore32 mem off w) off
+  = w % 2^256` (`Interpreter/Memory.lean`, `mload32_mstore32_self`) — the
+  mathlib-free Horner/base-256 reassembly (proved via `split_mod_aux`
+  = `Nat.mul_mod_mul_left` carry step, folded by induction; `Nat.shiftRight_add`
+  / `_eq_div_pow` / `Nat.two_pow_pos`). Plus the climb capstone
+  `mload32_hashPairStep` (`Interpreter/Climb.lean`): reading a step's digest back
+  as a word recovers the hash word. So a climb step is now FULLY characterized at
+  the word level (input-assembly + frame + digest-readback). Kernel-only, no new
+  axiom. The one finicky arithmetic piece is behind us.
 - **NEXT (precise), in order:**
-  1. `mload32` BE round-trip: `mload32 (mstore32 mem off w) off = w % 2^256` — a
-     mathlib-free Horner/base-256 reassembly lemma (the one finicky arithmetic
-     piece; lets a climb thread word values, not just bytes). Plus
-     `mload32 (hashPairStep …) outOff = <digest word>`.
-  2. Loop-induction: a `climb`/`foldLoop` over a sibling list + `climb = specFold`
+  1. Loop-induction: a `climb`/`foldLoop` over a sibling list + `climb = specFold`
      by induction on the step count (the verity `foldLoop_invariant_cond` analog —
      THE transfer-PoC: N steps, hash opaque, two cases, no explosion).
   3. `Sha256Bridge`: instantiate the abstract `dig` with `beByte (sha256 …)` via

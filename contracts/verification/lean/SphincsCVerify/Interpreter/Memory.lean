@@ -143,4 +143,65 @@ theorem writeRegion_get_of_disjoint (mem : ByteMemory) (o1 o2 : Nat)
     writeRegion (writeRegion mem o1 f1) o2 f2 a = f1 (a - o1) := by
   rw [writeRegion_frame _ o2 f2 a (by omega), writeRegion_get _ o1 f1 a h1]
 
+/-! ## `mload32` round-trip (big-endian reassembly)
+
+Reading back the 32 big-endian bytes just written reconstructs the low 256 bits
+of the word: `mload32 (mstore32 mem off w) off = w % 2^256`. This is the one
+piece of genuine bit-arithmetic in the memory model — it lets a climb thread word
+values (each step's digest word feeds the next). Mathlib-free. -/
+
+/-- One base-256 carry step: `s % (256·m) = (s/256 % m)·256 + s%256`. The
+    arithmetic heart of the big-endian reassembly. -/
+private theorem split_mod_aux (s m : Nat) (hm : 0 < m) :
+    s % (256 * m) = (s / 256 % m) * 256 + s % 256 := by
+  have h1 : 256 * (s / 256) + s % 256 = s := Nat.div_add_mod s 256
+  have hr : s % 256 < 256 := Nat.mod_lt _ (by decide)
+  have hqm : s / 256 % m < m := Nat.mod_lt _ hm
+  calc s % (256 * m)
+      = (256 * (s / 256) + s % 256) % (256 * m) := by rw [h1]
+    _ = (256 * (s / 256) % (256 * m) + s % 256 % (256 * m)) % (256 * m) := by rw [Nat.add_mod]
+    _ = (256 * (s / 256 % m) + s % 256) % (256 * m) := by
+          rw [Nat.mul_mod_mul_left, Nat.mod_eq_of_lt (show s % 256 < 256 * m by omega)]
+    _ = 256 * (s / 256 % m) + s % 256 := Nat.mod_eq_of_lt (by omega)
+    _ = (s / 256 % m) * 256 + s % 256 := by omega
+
+/-- `(beByte w i).toNat` is the `i`-th big-endian base-256 digit of `w`. -/
+private theorem beByte_toNat (w i : Nat) :
+    (beByte w i).toNat = (w >>> (8 * (31 - i))) % 256 := by
+  unfold beByte
+  rw [UInt8.toNat_ofNat']
+  omega
+
+/-- The MSB-first fold of the written bytes reconstructs the top `k` bytes of `w`. -/
+private theorem mload32_mstore32_aux (mem : ByteMemory) (off w : Nat) :
+    ∀ k, k ≤ 32 →
+      (List.range k).foldl
+          (fun acc i => acc * 256 + (mstore32 mem off w (off + i)).toNat) 0
+        = (w >>> (8 * (32 - k))) % 2 ^ (8 * k) := by
+  intro k
+  induction k with
+  | zero => intro _; simp [Nat.mod_one]
+  | succ j ih =>
+      intro hk
+      rw [List.range_succ, List.foldl_append, ih (by omega)]
+      simp only [List.foldl_cons, List.foldl_nil]
+      rw [mstore32_get mem off w j (by omega), beByte_toNat]
+      -- Let s = w >>> (8*(31-j)); then w >>> (8*(32-j)) = s / 256, and
+      -- 2^(8*(j+1)) = 256 * 2^(8*j); close via split_mod_aux.
+      have hshift : w >>> (8 * (32 - j)) = (w >>> (8 * (31 - j))) / 256 := by
+        rw [show 8 * (32 - j) = 8 * (31 - j) + 8 by omega, Nat.shiftRight_add,
+            Nat.shiftRight_eq_div_pow (w >>> (8 * (31 - j))) 8]
+      have hidx : 8 * (32 - (j + 1)) = 8 * (31 - j) := by omega
+      have hpow : (2 : Nat) ^ (8 * (j + 1)) = 256 * 2 ^ (8 * j) := by
+        rw [show 8 * (j + 1) = 8 * j + 8 by omega, Nat.pow_add]; omega
+      rw [hshift, hidx, hpow,
+          split_mod_aux (w >>> (8 * (31 - j))) (2 ^ (8 * j)) (Nat.two_pow_pos _)]
+
+/-- **Read-after-write round-trip.** Reading the 32 big-endian bytes of a stored
+    word back reconstructs its low 256 bits. -/
+theorem mload32_mstore32_self (mem : ByteMemory) (off w : Nat) :
+    mload32 (mstore32 mem off w) off = w % 2 ^ 256 := by
+  have h := mload32_mstore32_aux mem off w 32 (by omega)
+  simpa [mload32, Nat.shiftRight_zero] using h
+
 end SphincsCVerify.Interpreter

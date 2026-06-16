@@ -79,4 +79,17 @@ theorem hashPairStep_out (mem : ByteMemory) (base outOff node sibling : Nat)
   unfold hashPairStep
   exact staticcallSha256_get _ outOff dig i hi
 
+/-- **Digest read-back, word level.** When the precompile's digest is the
+    big-endian encoding of a word `dw` (`dig = beByte dw`, the climb case —
+    the next step's input node is the previous step's hashed word), reading the
+    output window back with `mload32` recovers `dw` (low 256 bits). Combined with
+    `hashPair_assembled` (input = `node‖sibling`) this fully characterizes a climb
+    step at the WORD level: `mload32 (step …) outOff = (hash of node‖sibling) % 2^256`
+    — exactly the per-step fact a word-threaded loop-induction consumes. -/
+theorem mload32_hashPairStep (mem : ByteMemory) (base outOff node sibling dw : Nat) :
+    mload32 (hashPairStep mem base outOff node sibling (beByte dw)) outOff = dw % 2 ^ 256 := by
+  unfold hashPairStep staticcallSha256
+  -- `writeRegion … outOff (beByte dw)` is definitionally `mstore32 … outOff dw`.
+  exact mload32_mstore32_self _ outOff dw
+
 end SphincsCVerify.Interpreter
