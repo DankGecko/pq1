@@ -654,10 +654,11 @@ open SphincsCVerify.Wallet.TxFlow
     transaction trace containing zero verifier-true validates cannot
     produce any external call. The STRONGER per-step (injective)
     attribution — every stack-growing external-call step is backed by
-    its OWN distinct verifier-true validate — is now also proven, see
-    `every_call_attributed_to_distinct_validate` (quantitative
-    pigeonhole) and `call_traces_to_authorising_validate` (structural)
-    below (Gap-2 closed 2026-06-14). -/
+    its OWN per-index credit, stamped only by a verifier-true validate —
+    is now also proven, see `every_call_consumes_its_own_validated_credit`
+    (per-index exactly-once anti-replay) and
+    `credit_lift_implies_verified_validate` (lift ⇒ verified validate)
+    below (Gap-2, credits-model form; see their section note). -/
 theorem every_call_gated_by_verifier
     (σ0 σ' : Wallet.Execute.ExecState) (trace : List Wallet.TxFlow.Step)
     (hrun : Wallet.TxFlow.runTrace σ0 trace = some σ')
@@ -680,60 +681,80 @@ theorem no_call_without_prior_verifier_acceptance
       step ∈ trace ∧ Wallet.TxFlow.StepVerified σ_pre step :=
   Wallet.TxFlow.any_call_implies_some_verify_true σ0 σ' trace hrun hinit hempty hsome
 
-/-! ### Per-call (per-step, injective) attribution — Gap-2 closed.
+/-! ### Per-index anti-replay attribution — Gap-2 (credits model).
 
-The two corollaries below strengthen the existential gate above to
-genuine per-step attribution: every money-moving external-call step is
-backed by its OWN distinct verifier-true validate. The token discipline
-(a verifier-true slot-validate is the only step that lifts the EIP-1153
-`validatedOwnerPlusOne` transient; every execute requires it live and
-clears it) means one stamp authorises at most one execute.
+The two corollaries below strengthen the existential gate above to genuine
+per-index attribution under the deployed EIP-1153 *per-index* credit
+discipline (`Execute.ExecState.credits : Nat → Nat`): a verifier-true
+slot-validate STAMPS a credit at its decoded `ownerIndex` (+1), and every
+`execute`/`executeBatch` REQUIRES a live credit at its index and CONSUMES
+exactly that one (−1), leaving all other indices untouched. So a single
+stamp at index `i` funds AT MOST ONE execute at `i` — exactly-once
+anti-replay, per index.
+
+This is the faithful credits-model successor to the pre-credits
+single-transient "token ledger" formulation (commit 488ba78, written
+against the single `validatedOwnerPlusOne` transient that the GAP-11
+refactor — commit 84ae543 — replaced with the per-index `credits` map; the
+merge `b9f2e59` left the old-API ledger stranded on the new model). The
+single-token ledger proved a GLOBAL aggregate `#executes ≤ #validates`; the
+credits model proves the STRONGER PER-INDEX exactly-once bound directly from
+the `Execute` require/consume lemmas — without a global sum, which over
+`Nat → Nat` would need finite-support machinery this mathlib-free project
+omits. The per-index form IS the operative anti-replay (it rules out the
+"one validate → two executes" replay the existential gate cannot); a
+credits-native GLOBAL trace-ledger (summing over the trace's finitely-many
+touched indices) is a clean follow-up, tracked for the credit-subsystem owner.
 
 `#print axioms` for both = `{ propext, Classical.choice, Quot.sound }`
 (kernel-only — same closure as the existential `every_call_gated_by_verifier`).
 
-Granularity note: this is per-execute-STEP, not per-individual-CALL. An
-`executeBatch` appends several calls under a single validate, so calls
-within one batch legitimately share one authorising validate; a distinct
-validate *per call element* is false in this model and is NOT claimed.
-Per-step is the faithful granularity for "external call authorised by
-its own verifier-true validate". -/
+Granularity note unchanged: this is per-execute-STEP / per-index, not
+per-individual-CALL. An `executeBatch` appends several calls under one
+validate (one credit), so calls within a batch share one authorising
+validate; a distinct validate *per call element* is false in this model and
+is NOT claimed. -/
 
-/-- **Per-step (injective) attribution — quantitative form.** For a
-    transaction trace run from a clean transient, the number of
-    stack-growing execute-family steps (`ne`, counted by the
-    `TxFlow.ledger`) is `≤` the number of verifier-true validate steps
-    (`nv`). Each external-call-producing step is therefore charged to
-    its own distinct authorising validate — `n` calls force `n`
-    verifier-true validates, which a purely existential `≥ 1` gate does
-    NOT give (e.g. one validate then two executes is ruled out: the
-    first execute zeroes the transient, the second has no stamp to
-    consume). -/
-theorem every_call_attributed_to_distinct_validate
-    (σ0 σf : Wallet.Execute.ExecState) (trace : List Wallet.TxFlow.Step)
-    (nv ne : Nat)
-    (hledger : Wallet.TxFlow.ledger σ0 trace = some (σf, nv, ne))
-    (hinit : σ0.validatedOwnerPlusOne = 0) :
-    ne ≤ nv :=
-  Wallet.TxFlow.growing_executes_le_verified_validates σ0 σf trace nv ne hledger hinit
+/-- **Per-index exactly-once anti-replay (credits form).** A money-moving
+    `execute` step REQUIRES a live credit at its `ownerIndex` (some earlier
+    step stamped it), CONSUMES exactly that one credit (−1), and leaves every
+    OTHER index untouched. So the credit it spends is non-replayable: a
+    second execute at the same index needs a fresh stamp — `n` executes at an
+    index force `n` stamps there, which a purely existential `≥ 1` gate does
+    NOT give. The credits-model successor to the pre-credits
+    `every_call_attributed_to_distinct_validate`. -/
+theorem every_call_consumes_its_own_validated_credit
+    {σ σ' : Wallet.Execute.ExecState} {caller : ByteVec 20}
+    {ownerIndex newOffchainCount : Nat}
+    {target : ByteVec 20} {value : Nat} {data : Array UInt8}
+    (h : Wallet.TxFlow.applyStep σ
+           (.execute caller ownerIndex newOffchainCount target value data)
+           = some σ') :
+    σ.credits ownerIndex > 0
+    ∧ σ'.credits ownerIndex = σ.credits ownerIndex - 1
+    ∧ (∀ j, j ≠ ownerIndex → σ'.credits j = σ.credits j) := by
+  refine ⟨Wallet.TxFlow.execute_step_requires_prior_credit h, ?_, ?_⟩
+  · simp only [Wallet.TxFlow.applyStep] at h
+    exact Wallet.Execute.execute_consumes_credit h
+  · intro j hj
+    simp only [Wallet.TxFlow.applyStep] at h
+    exact Wallet.Execute.execute_preserves_other_credits h hj
 
-/-- **Per-step attribution — structural form.** Any live transient at
-    the end of a run traces back to the unique most-recent verifier-true
-    validate, with NO execute step between it and the end — i.e. the
-    validate whose stamp the next execute will consume. Applied at an
-    execute step's entry state (where the transient is necessarily live),
-    this names the specific authorising validate of that exact step. -/
-theorem call_traces_to_authorising_validate
-    (σ0 σf : Wallet.Execute.ExecState) (trace : List Wallet.TxFlow.Step)
-    (hrun : Wallet.TxFlow.runTrace σ0 trace = some σf)
-    (hinit : σ0.validatedOwnerPlusOne = 0)
-    (hlive : σf.validatedOwnerPlusOne ≠ 0) :
-    ∃ (a : List Wallet.TxFlow.Step) (v : Wallet.TxFlow.Step)
-      (b : List Wallet.TxFlow.Step) (σv : Wallet.Execute.ExecState),
-      trace = a ++ v :: b
-      ∧ Wallet.TxFlow.runTrace σ0 a = some σv
-      ∧ Wallet.TxFlow.StepVerified σv v
-      ∧ (∀ s ∈ b, Wallet.TxFlow.Step.isExec s = false) :=
-  Wallet.TxFlow.token_lift_traces_to_validate trace σ0 σf hrun hinit hlive
+/-- **A credit is lifted from zero only by a verifier-true validate.** If a
+    step raises the all-zero credit map to a state with some live credit,
+    that step is a slot-path `validate` whose `verify_fn` returned `true`
+    over `sphincsDigest` (`StepVerified`). Composed with the anti-replay
+    above: the credit every call consumes traces back to a verifier-true
+    validate. The credits-model successor to the pre-credits
+    `call_traces_to_authorising_validate`. -/
+theorem credit_lift_implies_verified_validate
+    {σ σ' : Wallet.Execute.ExecState} {step : Wallet.TxFlow.Step}
+    (h : Wallet.TxFlow.applyStep σ step = some σ')
+    (hwas : ∀ i, σ.credits i = 0)
+    (hnow : ∃ i, σ'.credits i ≠ 0) :
+    Wallet.TxFlow.StepVerified σ step := by
+  obtain ⟨op, ep, cid, vfn, d, owner, hstep, hOk, _, _⟩ :=
+    Wallet.TxFlow.applyStep_credit_lift_only_by_validate_success h hwas hnow
+  exact ⟨op, ep, cid, vfn, d, owner, hstep, hOk.1, hOk.2.1, hOk.2.2.2.1⟩
 
 end SphincsCVerify.Spec.Theorems

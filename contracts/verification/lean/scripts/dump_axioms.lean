@@ -14,6 +14,15 @@ import SphincsCVerify
 
 #print axioms SphincsCVerify.Spec.signatureLen_eq_4008
 #print axioms SphincsCVerify.Spec.maxUses_lt_positions
+
+-- Quantitative security-margin layer (Crypto/Quantitative.lean): the on-chain
+-- usage cap turned into kernel-checked bit-security floors. All axiom-free
+-- (pure `decide`) except the antitone lemma ({propext, Quot.sound}).
+#print axioms SphincsCVerify.Crypto.Quantitative.advantage_floors_within_slot_cap
+#print axioms SphincsCVerify.Crypto.Quantitative.c10_security_floor_at_slot_cap
+#print axioms SphincsCVerify.Crypto.Quantitative.c10_cap_is_load_bearing
+#print axioms SphincsCVerify.Crypto.Quantitative.securityFloor_antitone_in_qBits
+
 #print axioms SphincsCVerify.Spec.Theorems.verify_deterministic
 #print axioms SphincsCVerify.Spec.Theorems.verify_rejects_wrong_length
 #print axioms SphincsCVerify.Wallet.MultiOwnable.bumpBootstrap_monotonic
@@ -66,14 +75,12 @@ import SphincsCVerify
 #print axioms SphincsCVerify.Spec.Theorems.no_call_without_prior_verifier_acceptance
 #print axioms SphincsCVerify.Wallet.TxFlow.callstack_grew_implies_some_verify_true
 
--- Claim 4 / Gap-2 — per-step (injective) attribution: every money-moving
--- external-call step is backed by its OWN distinct verifier-true validate.
--- Closure: kernel-only {propext, Classical.choice, Quot.sound} — same as
--- the existential gate; no new axiom.
-#print axioms SphincsCVerify.Spec.Theorems.every_call_attributed_to_distinct_validate
-#print axioms SphincsCVerify.Spec.Theorems.call_traces_to_authorising_validate
-#print axioms SphincsCVerify.Wallet.TxFlow.growing_executes_le_verified_validates
-#print axioms SphincsCVerify.Wallet.TxFlow.token_lift_traces_to_validate
+-- Claim 4 / Gap-2 (credits model) — per-index exactly-once anti-replay:
+-- every money-moving external-call step consumes its OWN per-index credit,
+-- which only a verifier-true validate can have stamped. Closure: kernel-only
+-- {propext, Classical.choice, Quot.sound} — same as the existential gate.
+#print axioms SphincsCVerify.Spec.Theorems.every_call_consumes_its_own_validated_credit
+#print axioms SphincsCVerify.Spec.Theorems.credit_lift_implies_verified_validate
 
 -- Claim 4, transported to the deployed EXECUTE bytecode (A3.2-exec): a
 -- successful deployed executeWithOffchainCount / executeBatchWithOffchainCount

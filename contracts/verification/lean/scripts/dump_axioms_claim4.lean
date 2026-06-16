@@ -20,13 +20,15 @@ import SphincsCVerify
 #print axioms SphincsCVerify.Spec.Theorems.every_call_gated_by_verifier
 #print axioms SphincsCVerify.Spec.Theorems.no_call_without_prior_verifier_acceptance
 
--- Gap-2 — per-step (injective) attribution. Expected closure: kernel-only.
-#print axioms SphincsCVerify.Wallet.TxFlow.stepVerified_of_token_change
-#print axioms SphincsCVerify.Wallet.TxFlow.token_lift_traces_to_validate
-#print axioms SphincsCVerify.Wallet.TxFlow.step_ledger_ineq
-#print axioms SphincsCVerify.Wallet.TxFlow.ledger_invariant
-#print axioms SphincsCVerify.Wallet.TxFlow.growing_executes_le_verified_validates
-#print axioms SphincsCVerify.Wallet.TxFlow.stampsB_is_verified
-#print axioms SphincsCVerify.Wallet.TxFlow.growsB_is_exec
-#print axioms SphincsCVerify.Spec.Theorems.every_call_attributed_to_distinct_validate
-#print axioms SphincsCVerify.Spec.Theorems.call_traces_to_authorising_validate
+-- Gap-2 (credits model) — per-index exactly-once anti-replay. Expected
+-- closure: kernel-only. (The pre-credits single-token ledger lemmas —
+-- token_lift_traces_to_validate / ledger_invariant / growing_executes_le_
+-- verified_validates — were retired when the GAP-11 credits refactor's model
+-- replaced the single `validatedOwnerPlusOne` transient with a per-index
+-- `credits` map; the per-index require/consume lemmas live in Execute.lean.)
+#print axioms SphincsCVerify.Wallet.TxFlow.execute_step_requires_prior_credit
+#print axioms SphincsCVerify.Wallet.TxFlow.applyStep_credit_lift_only_by_validate_success
+#print axioms SphincsCVerify.Wallet.Execute.execute_consumes_credit
+#print axioms SphincsCVerify.Wallet.Execute.execute_preserves_other_credits
+#print axioms SphincsCVerify.Spec.Theorems.every_call_consumes_its_own_validated_credit
+#print axioms SphincsCVerify.Spec.Theorems.credit_lift_implies_verified_validate
