@@ -62,3 +62,4 @@ import SphincsCVerify.Util.ByteVec
 -- docs/A3_1_CLOSURE_PATH.md.
 import SphincsCVerify.Interpreter.Memory
 import SphincsCVerify.Interpreter.Climb
+import SphincsCVerify.Interpreter.ClimbLoop

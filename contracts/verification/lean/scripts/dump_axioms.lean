@@ -33,6 +33,7 @@ import SphincsCVerify
 #print axioms SphincsCVerify.Interpreter.hashPairStep_frame
 #print axioms SphincsCVerify.Interpreter.mload32_mstore32_self
 #print axioms SphincsCVerify.Interpreter.mload32_hashPairStep
+#print axioms SphincsCVerify.Interpreter.climbMem_eq_specClimb
 
 #print axioms SphincsCVerify.Spec.Theorems.verify_deterministic
 #print axioms SphincsCVerify.Spec.Theorems.verify_rejects_wrong_length

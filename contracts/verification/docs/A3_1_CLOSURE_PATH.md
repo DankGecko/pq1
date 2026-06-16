@@ -206,12 +206,20 @@ claim currently made (which honestly scopes A3.1 as corpus-validated).
   as a word recovers the hash word. So a climb step is now FULLY characterized at
   the word level (input-assembly + frame + digest-readback). Kernel-only, no new
   axiom. The one finicky arithmetic piece is behind us.
+- **2026-06-16 — loop-induction transfer-PoC DONE.** `Interpreter/ClimbLoop.lean`:
+  `climbMem_eq_specClimb` — the memory-realized climb (per step: lay the pair into
+  scratch, run the `0x02` precompile, read the new node back) over an
+  arbitrary-length auth path equals the pure spec fold, proved by **induction on
+  path length (two cases), hash opaque, no 8ⁿ digit-branch explosion**. The C10
+  analogue of verity's `foldLoop_invariant_cond`. **This answers the load-bearing
+  question — "does the deductive interpreter-refinement technique transfer to C10's
+  byte-addressed-SHA-256 setting?" — with a kernel-checked YES.** Kernel-only, no
+  axiom. So foundation (memory) → per-step (climb, fully word-characterized) →
+  loop-induction are all proven; what remains is wiring + scale, not open questions.
 - **NEXT (precise), in order:**
-  1. Loop-induction: a `climb`/`foldLoop` over a sibling list + `climb = specFold`
-     by induction on the step count (the verity `foldLoop_invariant_cond` analog —
-     THE transfer-PoC: N steps, hash opaque, two cases, no explosion).
-  3. `Sha256Bridge`: instantiate the abstract `dig` with `beByte (sha256 …)` via
-     the reused `Spec.Sha256Impl` (no new axiom) + the slice↔spec-input byte-layout
-     bridge.
-  4. The full `execC10Asm` interpreter body (H_msg → FORS → WOTS → hypertree) +
-     `execC10Asm = Spec.verify` (compose the per-phase refinements).
+  1. `Sha256Bridge`: instantiate the abstract `H`/`dig` with `Spec.Sha256Impl`
+     (no new axiom) + the slice↔spec-input byte-layout bridge, so the climbs run
+     the *real* hash and `specClimb` becomes the *real* Merkle/WOTS/FORS fold.
+  2. The full `execC10Asm` interpreter body (H_msg → FORS → WOTS → hypertree),
+     each phase a `climbMem`-style fold, + `execC10Asm = Spec.verify` (compose the
+     per-phase refinements via the loop-induction).
