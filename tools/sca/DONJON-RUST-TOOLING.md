@@ -163,19 +163,26 @@ ground-truth leaky-S-box) to self-test the harness without running rainbow (CI s
 ### Verified results
 - Synthetic ground truth: TVLA `max|t|=62.8` fires on the injected samples; CPA recovers
   the injected key `0x2b`.
-- **Real `f9_traces.npz`** (sca_c10_sign_shuffled, post-F-16/CT-1), windowed to the first
-  200k of 10M samples: TVLA `max|t|=3.24` (< 4.5) = **the F-16 shuffle holding** in that
-  window. (The lascar full-10M baseline peak `max|t|≈4.93` sits later in the trace —
-  convert all 10M samples to reproduce the exact published number.) Muscat reproduces the
-  lascar/scared verdict on identical data.
+- **Full-10M TVLA cross-check (DONE 2026-06-16): `max|t| = 4.931 @ sample 6,802,705`** over
+  the real `f9_traces.npz` (sca_c10_sign_shuffled, 600 × 10M, post-F-16/CT-1) — **reproduces
+  the lascar baseline (≈4.93) exactly** on identical data. The peak is in the grind_r tail
+  (~6.8M), which is why the earlier first-200k window read flat (3.24). So Muscat is a
+  validated drop-in for the "legacy" lascar TVLA. The residual leak is the known F-9
+  grind_r msg-dependent iteration count — a PUBLIC-input effect (grind_r never touches
+  `sk_seed`), already analysed/accepted (see §F-9 above). Run with
+  `SKIP_CPA=1 TRACES_DIR=<full> cargo run --release --example pqsigner_tvla_cpa` (the
+  `SKIP_CPA` env skips the 256-guess CPA, which is large on 10M-wide traces).
 
-### Red-teaming the shuffle (next)
-For a real CPA *attack* on the shuffle (not just the structural screen), swap the
-`leakage_model` in `pqsigner_tvla_cpa.rs` to a FORS-leaf-index model (the C10 sign is not a
-single-S-box AES). The shuffle defends by randomising temporal order, so a successful
-first-order CPA would need shuffle-permutation hypotheses or higher-order DPA — Muscat
-gives the first-order CPA + TVLA screen; a low-corr/flat result is the countermeasure
-holding.
+### Red-teaming the shuffle — first-order CPA (DONE: flat / no recovery)
+Ran a first-order CPA over the **random-group** traces windowed around the TVLA peak
+(`6.7M–6.9M`): best guess corr `0.355` with the top-5 clustered `0.29–0.36` and **no
+separated spike** — i.e. the 300-trace noise floor, **not** a recovered key. So a first-order
+address-channel CPA recovers nothing. This is the expected, corroborating result: (a) C10 is
+SHA-256-based with **no secret-indexed table** (unlike AES) — `cargo-checkct` *proves*
+`th`/`fors_secret`/`kdf` have no secret-dependent addresses (§1); (b) the F-16 shuffle
+randomises temporal order. A meaningful attack would need a register-*value* power/EM channel
++ higher-order / shuffle-permutation hypotheses — on-silicon SCA territory (ChipWhisperer),
+not this emulated address channel.
 
 **Scope limit:** this is the emulated `mem_address` (access-address Hamming-weight)
 channel. A flat TVLA rules out data-dependent memory *addresses* at audit-grade

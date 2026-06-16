@@ -118,6 +118,14 @@ fn main() -> Result<()> {
     // ====================================================================
     // PASS 2 — CPA (Pearson correlation), recover target byte
     // ====================================================================
+    // Skippable: on very wide trace sets (e.g. the full 10M-sample f9 set) the
+    // 256-guess CPA accumulators are large; for a pure TVLA cross-check set
+    // SKIP_CPA=1. (On the fixed/random TVLA set CPA is also degenerate — the
+    // fixed group has constant msg, so the byte model has zero variance.)
+    if std::env::var("SKIP_CPA").is_ok() {
+        println!("CPA        : skipped (SKIP_CPA set)");
+        return Ok(());
+    }
     // plaintexts.npy is the public-input matrix [n, k]; we attack one byte.
     let plaintexts: Array2<u8> =
         read_npy(dir.join("plaintexts.npy")).context("read plaintexts.npy (uint8 [n, k])")?;
