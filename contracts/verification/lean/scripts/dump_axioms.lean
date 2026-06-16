@@ -23,6 +23,13 @@ import SphincsCVerify
 #print axioms SphincsCVerify.Crypto.Quantitative.c10_cap_is_load_bearing
 #print axioms SphincsCVerify.Crypto.Quantitative.securityFloor_antitone_in_qBits
 
+-- A3.1 deductive-closure track (Interpreter/Memory.lean): byte-addressed memory
+-- frame/disjointness lemmas (residual R2). Kernel-only, mathlib-free, NO new
+-- content axiom (the precompile hash is a parameter). See A3_1_CLOSURE_PATH.md.
+#print axioms SphincsCVerify.Interpreter.writeRegion_comm
+#print axioms SphincsCVerify.Interpreter.mstore32_get
+#print axioms SphincsCVerify.Interpreter.staticcallSha256_frame
+
 #print axioms SphincsCVerify.Spec.Theorems.verify_deterministic
 #print axioms SphincsCVerify.Spec.Theorems.verify_rejects_wrong_length
 #print axioms SphincsCVerify.Wallet.MultiOwnable.bumpBootstrap_monotonic

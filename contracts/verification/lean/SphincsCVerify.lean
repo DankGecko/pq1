@@ -56,3 +56,7 @@ import SphincsCVerify.Bridge.EntryPoint
 -- Utilities
 import SphincsCVerify.Util.Bits
 import SphincsCVerify.Util.ByteVec
+
+-- A3.1 deductive-closure track: byte-addressed memory for the C10 interpreter
+-- (residual R2). See docs/A3_1_CLOSURE_PATH.md.
+import SphincsCVerify.Interpreter.Memory

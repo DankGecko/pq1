@@ -171,3 +171,22 @@ claim currently made (which honestly scopes A3.1 as corpus-validated).
 - Upstream: `/home/nicola/repos/SPHINCS-/verity/SphincsMinusVerifiers/{Proofs,ClimbLoop,ClimbKit,ClimbMemFrameMerkle,ClimbKeccakStep,KeccakBridge}.lean`, `SphincsMinusVerifierSpec/{Spec,C13Concrete}.lean`, `Model.lean`, `AXIOMS.md`.
 - PQSigner scaffold: `contracts/verity/PQSigner/Verifier/*.lean`.
 - This repo: `A3_1_VERIFIER_GAP.md` (reconstruction postmortem), `KONTROL_SCOPING.md` (symbolic-engine scoping), `THE_CLAIM.md` (claim ledger), `MISSING_FOR_FULL_BYTECODE_PROOF.md`.
+
+## 8. Progress
+
+- **2026-06-16 — R2 foundation landed.** `SphincsCVerify/Interpreter/Memory.lean`
+  (in the `lean/` project — same v4.22 mathlib-free home as `Spec.verify`, the
+  refinement target): a **true byte-granularity** EVM memory (`Nat → UInt8`) with
+  `mstore32`/`mload32`/`slice`/`staticcallSha256` and the **frame/disjointness**
+  lemmas the climb proofs need (`writeRegion_frame`, `writeRegion_comm` for
+  disjoint writes, `mstore32_get`/`_frame`, `staticcallSha256_get`/`_frame`,
+  `writeRegion_get_of_disjoint`). It models the sub-word `mstore` aliasing
+  faithfully (vs the upstream's word-valued cells + `linear_memory_aliasing`
+  *assumed* obligation), so R2 is no longer an open design question. **Mathlib-free,
+  kernel-only closures, NO new content axiom** (the precompile hash is a parameter;
+  the concrete `Sha256Impl` wires in at the bridge). Decision recorded: build the
+  C10 interpreter-refinement in the `lean/` `SphincsCVerify` project (reuses
+  `Spec.verify` + `Spec.Sha256Impl`, no external Verity git dep) rather than the
+  `contracts/verity/` scaffold. Next: the `Sha256Bridge` (concrete digest via the
+  reused `sha256_pure`/`Sha256Impl`) + the first climb-step PoC (one FORS/Merkle
+  step) per §6.
