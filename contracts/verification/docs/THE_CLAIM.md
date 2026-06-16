@@ -221,8 +221,16 @@ equivalence as the standing ceiling. **Confirmed 2026-06-15: Kontrol/KEVM does
 NOT close this** — although Kontrol is now installed and used for the four
 control-flow axioms (A3.2/A3.3/A3.4, see #2), KEVM models the `0x02` precompile
 as the SMT-uninterpreted `Sha256raw` on symbolic input, so the verifier's digit
-branches fork exactly as under Halmos. Closing A3.1 needs an **interpreted-hash**
-reachability engine or **verified compilation**, not Kontrol. History:
+branches fork exactly as under Halmos — *symbolic* engines fork on every digit.
+But that is not the only path: a **deductive interpreter-refinement proof in
+Lean** closes the ∀-signature model↔spec equality with the hash kept **opaque**
+(induction on loop-iteration count, no symbolic search, no interpreted-hash
+engine) — the upstream SPHINCS- `/verity` demonstrates it (`c13_refines_spec`,
+zero hash axioms for Keccak), and PQSigner already has a half-built
+`contracts/verity/` scaffold for it. The genuine residuals are then the
+model↔deployed-bytecode hand-transcription + SHA-256 byte-addressed memory, not
+the digit explosion. Corrected analysis + closure path + effort in
+[`A3_1_CLOSURE_PATH.md`](A3_1_CLOSURE_PATH.md); history in
 [`A3_1_VERIFIER_GAP.md`](A3_1_VERIFIER_GAP.md).
 
 Also still cited-TCB by decision (not "proven to bytecode"): **A2** EntryPoint

@@ -209,3 +209,20 @@ symbolic value, so the path set explodes and no UF-based symbolic engine can
 close it. Closing *that* needs an interpreted-hash reachability tool
 (Kontrol/KEVM) or verified compilation (Verity). This is why A3.1 stays
 `-partial` independently of the reconstruction gap above.
+
+> **Correction (2026-06-16) — the above is right about *symbolic engines* but
+> incomplete about the *problem*.** "No UF-based symbolic engine can close it"
+> is true; "closing it needs an interpreted-hash engine or verified compilation"
+> is **not** the whole story. A **deductive interpreter-refinement proof in
+> Lean** closes `∀ inputs, execModel = Spec.verify` with the hash kept **opaque**
+> and **no** interpreted-hash engine — the digit-branch explosion is an artifact
+> of symbolic *search* (Halmos/KEVM fork on every branch), not of the theorem (a
+> proof assistant does *induction on loop-iteration count*: two cases per loop,
+> the hash threaded through a hash-agnostic per-step invariant, never unfolded).
+> The upstream SPHINCS- `/verity` project **demonstrates** this — `c13_refines_spec
+> : ∀ …, execC13 = verifySpec` (`Proofs.lean:12158`), carrying **zero** hash
+> axioms for Keccak. The genuine residuals are then (R1) the model↔deployed-
+> bytecode hand-transcription (shared with upstream; a diff-checkable TCB element,
+> not the explosion) and (R2) SHA-256 needing a **byte-addressed** interpreter
+> memory (the `0x02` precompile's sub-word `mstore` aliasing). Full analysis +
+> closure path + effort in [`A3_1_CLOSURE_PATH.md`](A3_1_CLOSURE_PATH.md).
