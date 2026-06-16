@@ -1,21 +1,28 @@
 name: CI
 
 # Born-green CI for PQSigner. Each job runs a command verified to pass on the
-# current tree (2026-06-16). The two pre-existing reds noted in earlier
+# current tree (2026-06-16). The two pre-existing reds tracked in earlier
 # revisions of this file are now FIXED and GATED here (docs/work-todo.md §34):
 #   * usb_hw raw-MMIO source-pin (commit 4d1d6476 — raw read/write_volatile
 #     migrated to hw::mmio::Reg32). Gated by the `secure-tests` job (the full
 #     sphincs-tz-secure host suite: 2076 passed / 0 failed on this tree).
-#   * forge codehash-pin drift (commit 4b3f4f85 — re-pinned after the
-#     deliberate FORS-leaf-binding security fix fcee705a, then Halmos-
-#     re-discharged 39/39 incl. HalmosVerifier 3/3). Gated by the `contracts`
-#     job (full default `forge test`: 109 passed / 0 failed / 1 skipped).
+#   * The `contracts` job was dying at COMPILE time in CI: the Foundry libs
+#     (forge-std, solady, account-abstraction, …) are git-pinned by
+#     contracts/smart-wallet/foundry.lock, but `lib/` is gitignored and they
+#     are NOT git submodules — so a clean CI checkout had nothing to compile
+#     against ("Unable to resolve imports"). The job now restores each lib at
+#     its EXACT foundry.lock rev, then runs the full default `forge test`
+#     (109 passed / 0 failed / 1 skipped — the skip is DeployedBytecodeReproCheck,
+#     which only runs under the deploy profile). The committed codehash pins
+#     (0xf1ef… verifier, 0x43c654… wallet) are canonical for exactly this
+#     foundry.lock lib set; an extra/missing lib perturbs solc metadata and
+#     therefore the codehash, so the restore must be lib-exact.
 #
 # Intentionally NOT in CI (kept as local/manual gates — slow + need the
-# patched halmos toolchain): the `deploy` foundry profile and
+# patched halmos toolchain): the `deploy` foundry profile (runs=999999) and
 # `make -C contracts/verification verify-bytecode` (the symbolic discharge).
-# The deploy profile is intentionally red — local is ahead of the Base
-# Mainnet reference deployment (the FORS fix is not on chain yet); see §34.
+# Under the deploy profile DeployedBytecodeReproCheck reproduces the on-chain
+# Base Mainnet bytecode exactly (verified locally in a clean lib-exact tree).
 
 on:
   push:
@@ -81,10 +88,37 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
       - uses: foundry-rs/foundry-toolchain@v1
-      # Default profile: DeployedBytecodeReproCheck self-skips (it only runs
-      # under the deploy profile), so this is 109 passed / 0 failed / 1 skipped.
+      # lib/ is gitignored and the deps are git-pinned by foundry.lock (NOT
+      # submodules), so restore each at its EXACT locked rev. The codehash
+      # freeze tests are lib-exact: an extra/missing lib changes the
+      # auto-generated remappings, which solc folds into the metadata hash
+      # appended to the runtime bytecode → a different codehash.
+      - name: Restore pinned Foundry libs (foundry.lock revs)
+        working-directory: contracts/smart-wallet
+        run: |
+          set -euo pipefail
+          declare -A URL=(
+            [forge-std]=https://github.com/foundry-rs/forge-std
+            [solady]=https://github.com/vectorized/solady
+            [account-abstraction]=https://github.com/eth-infinitism/account-abstraction
+            [openzeppelin-contracts]=https://github.com/openzeppelin/openzeppelin-contracts
+            [p256-verifier]=https://github.com/daimo-eth/p256-verifier
+            [safe-singleton-deployer-sol]=https://github.com/wilsoncusack/safe-singleton-deployer-sol
+            [webauthn-sol]=https://github.com/base-org/webauthn-sol
+          )
+          mkdir -p lib
+          for key in $(jq -r 'keys[]' foundry.lock); do
+            name="${key#lib/}"
+            url="${URL[$name]:-}"
+            if [ -z "$url" ]; then
+              echo "::error::foundry.lock dep '$name' has no URL mapping in ci.yml — add it"; exit 1
+            fi
+            rev=$(jq -r --arg k "$key" '.[$k].rev' foundry.lock)
+            git clone -q "$url" "lib/$name"
+            git -C "lib/$name" -c advice.detachedHead=false checkout -q "$rev"
+            echo "  restored $name @ $rev"
+          done
       - name: forge test (default profile)
-        run: cd contracts/smart-wallet && forge test
+        working-directory: contracts/smart-wallet
+        run: forge test
