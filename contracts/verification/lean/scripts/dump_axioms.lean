@@ -35,6 +35,13 @@ import SphincsCVerify
 #print axioms SphincsCVerify.Interpreter.mload32_hashPairStep
 #print axioms SphincsCVerify.Interpreter.climbMem_eq_specClimb
 
+-- A3.1 Sha256Bridge (Interpreter/Sha256Bridge.lean): the byte-array ↔
+-- big-endian-word isomorphism connecting interpreter words to spec ByteVecs.
+-- beByte_mload32 (load-then-extract recovers the stored byte) needs only
+-- [propext, Quot.sound]; beByte_wordOf is the round-trip to Spec.ByteVec.
+#print axioms SphincsCVerify.Interpreter.beByte_mload32
+#print axioms SphincsCVerify.Interpreter.beByte_wordOf
+
 #print axioms SphincsCVerify.Spec.Theorems.verify_deterministic
 #print axioms SphincsCVerify.Spec.Theorems.verify_rejects_wrong_length
 #print axioms SphincsCVerify.Wallet.MultiOwnable.bumpBootstrap_monotonic
