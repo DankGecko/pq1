@@ -24,21 +24,37 @@ import {Test} from "forge-std/Test.sol";
 ///         A zero constant means "not yet pinned": the freeze test prints
 ///         the live value for capture instead of asserting.
 abstract contract PinnedCodehashSelector is Test {
-    // ── default profile (runs=200) — re-pinned 2026-06-10 ─────────────
+    // ── default profile (runs=200) — re-pinned 2026-06-16 ─────────────
+    //    Drift from the 2026-06-10 pins is from deliberate post-audit
+    //    security fixes that landed after the last re-pin (per-ownerIndex
+    //    credit b7ce7c73, FORS-leaf binding fcee705a, bootstrap few-time
+    //    cap 98c1e862, EntryPoint gate, A3.2/A3.3 dd99730d).
+    //    The Halmos SYMBOLIC rules were re-discharged directly against this
+    //    bytecode 2026-06-16 (z3, default profile, --loop 4): 39/39 rules pass
+    //    across all 7 Halmos contracts (Execute 6, ExecuteEquiv 6, Factory 5,
+    //    MultiOwnable 7, ValidateUserOp 8, ValidateUserOpEquiv 4, Verifier 3),
+    //    0 failed / 0 counterexamples — so the post-audit verify/validate
+    //    bytecode is symbolically sound, not just freshly pinned.
+    //    NOTE: the full `make -C contracts/verification verify-bytecode` is
+    //    currently BLOCKED at its certify step by a SEPARATE, known divergence
+    //    — local is AHEAD of the Base Mainnet reference deployment (the FORS
+    //    fix fcee705a is not deployed, so DeployedBytecodeReproCheck fails
+    //    under the deploy profile). That is a deploy decision (see work-todo),
+    //    NOT a re-pin: the ONCHAIN_*_CODEHASH constants are left untouched.
     bytes32 internal constant WALLET_CODEHASH_DEFAULT =
-        0x43c65420691792d7f0f63dab95f47ab7adb649df4c83f432bd3cf2c95db3a06a;
+        0x6c113d2c1bc38133fecd0472bd366d6ef832467e99b8533ec0f98e3b6aac8e41;
     bytes32 internal constant FACTORY_CODEHASH_DEFAULT =
-        0xfa2922b4fadb81b4475307504890d68f2e3d9be97c7e5e9aeeba6e84110d7c3c;
+        0x46c1349ca0251c263aa9589b178b4e8dc9b387d4ba0a980cb502b5e6bec05bc0;
     bytes32 internal constant VERIFIER_CODEHASH_DEFAULT =
-        0xf1ef4ccee22e6b39446723232fe39761f089c7195941b2c12576956b38fcfef5;
+        0x18402d2650e7cbabeda77b93091f0281d98eb81005897bbf07981f1ec25a9fbf;
 
-    // ── deploy profile (runs=999999) — pinned 2026-06-10 ──────────────
+    // ── deploy profile (runs=999999) — re-pinned 2026-06-16 ───────────
     bytes32 internal constant WALLET_CODEHASH_DEPLOY =
-        0x551c4e03bbd433a5929828ab19caac13a94ca9e2be6074cf3e18c7d926034c22;
+        0x95d9cc41dc6d919435f997a61aa57a2ecd1dcad9cac64b757a659332347a0458;
     bytes32 internal constant FACTORY_CODEHASH_DEPLOY =
-        0x5feb7955252e54bcbbf44062295bdeb45f3dea13c4ef7fb1ba579196d84da4b9;
+        0xbc89b8248915b89a41b1e81aa3930d3ba6e51e9f2124ed8fa4d6e61f5ccacebd;
     bytes32 internal constant VERIFIER_CODEHASH_DEPLOY =
-        0xeb1e3fcd38c7cd5f7b08352c298b34bd114d83f7dbd755b122c41eda2aab2cc5;
+        0xc5c8938b075230a99cef637a333d4f35284296e4083c9c38da18f1dbc00dc996;
 
     function _isDeployProfile() internal view returns (bool) {
         return keccak256(bytes(vm.envOr("FOUNDRY_PROFILE", string("default"))))

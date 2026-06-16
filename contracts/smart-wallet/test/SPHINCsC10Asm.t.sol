@@ -49,8 +49,13 @@ contract SPHINCsC10AsmTest is Test {
     /// Any change here MUST be paired with a verifier source diff in
     /// the same commit + a justification in the commit message.
     /// Default profile (runs=200) verifier runtime codehash.
+    /// Re-pinned 2026-06-16: the shared-forest forgery fix (fcee705a,
+    /// CWE-347 — FORS forest bound to hypertree leaf position) changed the
+    /// verifier bytecode. Re-discharged via Halmos against this exact
+    /// codehash the same day (HalmosVerifier 3/3, full suite 39/39, z3,
+    /// default profile, 0 counterexamples).
     bytes32 internal constant EXPECTED_RUNTIME_CODEHASH =
-        0xf1ef4ccee22e6b39446723232fe39761f089c7195941b2c12576956b38fcfef5;
+        0x18402d2650e7cbabeda77b93091f0281d98eb81005897bbf07981f1ec25a9fbf;
     /// Deploy profile (runs=999999) verifier runtime codehash — the
     /// production build; byte-identical to the on-chain Base Mainnet verifier
     /// at 0xdDE4D290… (see PINNED_CODEHASHES.md / DeployedBytecodeReproCheck).
