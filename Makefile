@@ -3217,6 +3217,31 @@ lcd-test-hw:
 	@echo "==> Running — watch the LCD: green -> red -> blue cycling. Ctrl-C to detach."
 	@probe-rs run --chip STM32U585AIIx $(SECURE_ELF)
 
+# Animated splash-screen preview (NV3007). Flashes a firmware that short-circuits
+# main() into ui::splash_test::run — the three assets/splash-1{6,7,8}-*.html
+# revisions (hyperspace -> horizon -> nebula), ported to no_std, cycle on the
+# LCD ~12 s each forever so you can judge how each looks on the real panel.
+# Same wiring as lcd-test-hw (docs/nv3007-wiring.md): SPI on CN13 D10/D11/D13,
+# DC=PE7/D4, RES=3V3, VCC+BLK=3V3, GND. Assumes TZ option bytes are already set
+# (run any *-hw target once first). The first build pulls `micromath` into
+# Cargo.lock (cached locally, so it resolves offline).
+splash-test-hw:
+	@echo "==> Building animated splash preview (NV3007: hyperspace/horizon/nebula)..."
+	@echo "    (with hardware FPU: -C target-feature=+fp-armv8d16sp; CPACR enabled at runtime)"
+	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW) -C target-feature=+fp-armv8d16sp" \
+	cargo build --release --target $(TARGET) --target-dir target/secure \
+		-p sphincs-tz-secure --no-default-features \
+		--features splash-test,mock-se,debug-log,stm32u585,dev-testkey,usb
+	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
+	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
+	cargo build --release --target $(TARGET) --target-dir target/nonsecure \
+		-p sphincs-tz-nonsecure --features stm32u585,usb
+	@echo "==> Flashing..."
+	@probe-rs download --chip STM32U585AIIx $(NONSECURE_ELF)
+	@probe-rs download --chip STM32U585AIIx $(SECURE_ELF)
+	@echo "==> Running — watch the LCD cycle the 3 splash revisions. Ctrl-C to detach."
+	@probe-rs run --chip STM32U585AIIx $(SECURE_ELF)
+
 clean:
 	rm -rf target/secure target/nonsecure target/veneers.o
 

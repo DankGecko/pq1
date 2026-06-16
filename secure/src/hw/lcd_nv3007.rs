@@ -642,6 +642,39 @@ pub fn write_pixels(buf: &[u16]) {
     cs_deassert();
 }
 
+/// Stream `n` RGB565 pixels into the current window, pulling each from `next`.
+/// One continuous transaction — CS held low across the whole run, only SPE
+/// toggles per `MAX_CHUNK` chunk (identical framing to [`write_pixels_solid`]).
+/// This lets a caller blit a computed full-frame image with a SINGLE
+/// `set_window` + RAMWR instead of one window per row, and without ever
+/// materialising a 121 KB native framebuffer. Pixels are sent big-endian.
+///
+/// `#[inline]` so the per-pixel generator closure (and any framebuffer read it
+/// performs) folds into a tight loop at the call site rather than an indirect
+/// call per pixel — keeps the blit close to the polled-SPI throughput floor.
+#[inline]
+pub fn write_pixels_with(n: u32, mut next: impl FnMut() -> u16) {
+    if n == 0 {
+        return;
+    }
+    cs_assert();
+    dc_high();
+    let pixels_per_chunk: u32 = u32::from(MAX_CHUNK / 2);
+    let mut remaining = n;
+    while remaining > 0 {
+        let chunk_px = core::cmp::min(remaining, pixels_per_chunk);
+        spi_begin((chunk_px * 2) as u16);
+        for _ in 0..chunk_px {
+            let px = next();
+            spi_send_byte((px >> 8) as u8);
+            spi_send_byte(px as u8);
+        }
+        spi_end();
+        remaining -= chunk_px;
+    }
+    cs_deassert();
+}
+
 /// Fill the entire visible area with `color`. Convenience wrapper.
 pub fn fill_screen(color: u16) {
     set_window(0, 0, FRAME_WIDTH - 1, FRAME_HEIGHT - 1);

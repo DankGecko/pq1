@@ -52,6 +52,12 @@ pub mod seed_wizard;
 #[cfg(any(feature = "ui-oled", feature = "ui-lcd"))]
 pub mod secret_text;
 
+/// Bench-only animated splash-screen preview for the NV3007 LCD. Ports the
+/// three `assets/splash-1{6,7,8}-*.html` revisions to `no_std`; `main()`
+/// short-circuits into `splash_test::run`. Build via `make splash-test-hw`.
+#[cfg(feature = "splash-test")]
+pub mod splash_test;
+
 /// Logical display dimensions (cells, not pixels).
 /// 16 columns × 4 rows: fits 5×8 font on 128×32 OLED, 8×13 on 128×64.
 pub const DISPLAY_COLS: usize = 16;

@@ -151,3 +151,11 @@ opt-level = 3
 
 [profile.release.package.hmac]
 opt-level = 3
+
+# `micromath` provides the f32 sin/cos/sqrt/powf for the `splash-test` animated
+# preview. It is the per-frame hot path there (the nebula noise field alone is
+# ~46k trig calls/frame), and it is NOT linked into any production build
+# (optional dep, on only under `splash-test`), so speed-optimise it
+# unconditionally — no production size/repro impact.
+[profile.release.package.micromath]
+opt-level = 3

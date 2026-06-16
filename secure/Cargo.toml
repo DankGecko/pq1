@@ -56,6 +56,13 @@ hmac    = { workspace = true }
 zerocopy = { version = "0.8", default-features = false }
 zeroize = { workspace = true }
 
+# Fast no_std f32 transcendentals (sin/cos/sqrt/powf/floor/ceil) for the
+# `splash-test` animated boot-screen preview only. Pure-Rust approximations —
+# accurate enough for a 1-bit dithered splash, never used by crypto. Optional:
+# compiled in only under `splash-test`. `num-traits` dep stays off
+# (default-features = false).
+micromath = { version = "2.1", default-features = false, optional = true }
+
 # BLS12-381 pairing for Groth16 ZK proof verification (no_std, no alloc).
 # Uses our fork which adds a `pka` feature for STM32U585 hardware acceleration.
 bls12_381 = { workspace = true }
@@ -434,6 +441,13 @@ ui-lcd = ["spi1-arduino", "gpio-buttons"]
 # (green→red→blue fill loop) to validate the NV3007 wiring + init sequence on
 # real silicon. Pulls in `ui-lcd` (→ `spi1-arduino`). Build via `make lcd-test-hw`.
 lcd-test = ["ui-lcd"]
+# Animated splash-screen preview. Short-circuits `main()` into
+# `ui::splash_test::run`, which ports the three `assets/splash-1{6,7,8}-*.html`
+# revisions (hyperspace / horizon / nebula) to no_std and cycles them on the
+# NV3007 LCD ~12 s each, forever. Pulls in `ui-lcd` (→ `spi1-arduino` +
+# `gpio-buttons`) and `micromath` (fast f32 sin/cos/sqrt/powf for the
+# animations). Build + flash via `make splash-test-hw`.
+splash-test = ["ui-lcd", "dep:micromath"]
 # Factory provisioning firmware — single-purpose build that the
 # factory flashes to a fresh chip. Short-circuits `main()` into a
 # state machine that:

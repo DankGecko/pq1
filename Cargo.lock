@@ -2057,6 +2057,7 @@ dependencies = [
  "hex",
  "hmac",
  "masked-sha2",
+ "micromath",
  "png",
  "pqsigner-aa",
  "pqsigner-domain",

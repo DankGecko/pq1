@@ -206,8 +206,18 @@ pub fn init() {
     // only raise it where a fast display actually needs it. If striping ever
     // reappears at 20 MHz it means the jumper wiring can't sustain the edges:
     // back off to ÷16 (`0b011`, 10 MHz). DSIZE stays 7; only MBR[30:28] changes.
-    #[cfg(feature = "ui-lcd")]
-    const MBR: u32 = 0b010; // ÷8  → 20 MHz (NV3007 UI, ~50 ms full repaint)
+    // The `splash-test` bench preview streams a full 121 KB frame every frame,
+    // so it is SPI-clock-bound: ÷8 (20 MHz) caps the blit at ~48.6 ms (measured).
+    // Bump it to ÷4 (40 MHz) — halves the blit (~24 ms) and ~2× the frame rate.
+    // The dev board's LD2 LED on PE13=SCK can round the 40 MHz edges into
+    // occasional misread bits (cosmetic shimmer on bright transitions), but this
+    // is a throwaway preview, NOT the trusted UI, so the trade is fine. The
+    // polled FIFO sustains 40 MHz (the raw fill demo did); 80 MHz would starve it
+    // and needs DMA. The trusted-UI `ui-lcd` default stays at the clean 20 MHz.
+    #[cfg(feature = "splash-test")]
+    const MBR: u32 = 0b001; // ÷4  → 40 MHz (splash preview, ~24 ms full repaint)
+    #[cfg(all(feature = "ui-lcd", not(feature = "splash-test")))]
+    const MBR: u32 = 0b010; // ÷8  → 20 MHz (NV3007 trusted UI, ~48 ms full repaint)
     #[cfg(not(feature = "ui-lcd"))]
     const MBR: u32 = 0b100; // ÷32 → 5 MHz  (conservative shared-bus default)
     REG.spi_cfg1.write((MBR << 28) | 7);

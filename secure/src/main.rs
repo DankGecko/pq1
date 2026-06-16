@@ -4,6 +4,10 @@
 #![cfg_attr(not(test), no_std)]
 #![cfg_attr(not(test), no_main)]
 #![cfg_attr(not(test), feature(cmse_nonsecure_entry))]
+// The `splash-test` bench build runs heavy per-frame f32 math; let it carry
+// `#[optimize(speed)]` on the splash hot path so those functions beat the
+// crate's `opt-level = "s"`. Gated on the feature so no other build enables it.
+#![cfg_attr(feature = "splash-test", feature(optimize_attribute))]
 // The `e2e-test` build intentionally bypasses the interactive UI paths
 // (wizard, pin entry confirm, interactive main()). Silence the resulting
 // dead-code noise ONLY in that build so production builds still surface
@@ -1147,6 +1151,14 @@ fn main() -> ! {
             }
         }
     }
+
+    // Animated splash-screen preview. Short-circuits boot into a loop that
+    // cycles the three `assets/splash-1{6,7,8}-*.html` revisions (hyperspace /
+    // horizon / nebula) on the NV3007 LCD, ~12 s each, forever — no SE, no
+    // wizard, no provisioning. `ui::init()` above already brought the panel up.
+    // Run via `make splash-test-hw`.
+    #[cfg(feature = "splash-test")]
+    ui::splash_test::run();
 
     // §32 P4/P5 interactive UI harness. Short-circuits into a loop that
     // drives JUST the duress-PIN setup dialogs on the real OLED — no SE,
