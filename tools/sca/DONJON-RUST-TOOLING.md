@@ -98,18 +98,28 @@ Program status is : insecure   (517/518 control-flow + 5359/5361 memory-access c
   checkct proof of the shuffle will always be INSECURE. A green run would require an
   oblivious/sort-based shuffle, which we explicitly chose not to build.
 
-### Where a GREEN checkct run is meaningful (recommended next drivers)
-`cargo-checkct add -n <name>` + a driver that marks the right secret:
-- **`sphincs_c10::verify`** — inputs are public ⇒ positive-control / regression gate (expect SECURE).
-- **WOTS/FORS chain hashing** with `sk_seed` secret — a SECURE verdict = a real CT proof
-  of the core signing hash path (chain *lengths* are public digits; secret chain *values*
-  flow through hashes without secret-indexed access).
-- **KDF / CMAC wrapper** — checkct cannot see the **SAES/HASH/PKA hardware** (binsec models
-  only the CPU). Drive the *software mirror* the SCA targets already use
-  (`tools/sca/saes_kdf_target` mirrors `secure/src/cmac.rs::cmac_generic` under software AES);
-  mark the key/label secret. Proves the wrapper's CPU work constant-time.
-- **`pqsigner-domain` KDF** (HMAC-SHA512/PBKDF2) — mark `bip39_seed`/`entropy`; expect SECURE
-  (SHA-2/HMAC are inherently CT) — a guard against secret-indexed code creeping in.
+### Machine-checked CT proofs — SECURE (the green-run drivers, DONE 2026-06-16)
+Three drivers mark a real secret and prove (for **all** secret values) that the function
+leaks nothing via control flow or memory address on thumbv8m. All **SECURE**:
+
+| Driver | Function (secret marked) | Verdict | Checks pass |
+|---|---|---|---|
+| `driver_kdf`  | `pqsigner_domain::kdf` (secret keying material) | **SECURE** | 117/117 CF · 750/750 mem |
+| `driver_fors` | `sphincs_c10::sim_internals::fors_secret` (secret `sk_seed`) | **SECURE** | 52/52 · 575/575 |
+| `driver_th`   | `sphincs_c10::sim_internals::th` (secret hash input) | **SECURE** | 141/141 · 1290/1290 |
+
+So the SHA-256 KDF, the FORS secret-key PRF, and the core tweakable hash are machine-proven
+constant-time over their secret inputs — exactly the secret-touching primitives. (Run all
+four drivers with `cargo-checkct run --dir tools/sca`; the suite exits non-zero only because
+`driver` = the by-design-INSECURE shuffle. `sim_internals` needs the `sim-internals` feature,
+already set in the driver Cargo.tomls.)
+
+**Not attempted (binsec scope):** `verify` / `keygen` symbolically execute the full
+hypertree (≫ millions of instructions) and would time out — binsec's sweet spot is a single
+primitive / chain, not the whole scheme. The **SAES/HASH/PKA hardware** is invisible to
+binsec (it models only the CPU); for the CMAC/KDF *hardware* path use the software mirror
+(`tools/sca/saes_kdf_target` mirrors `secure/src/cmac.rs::cmac_generic` under software AES)
+as a driver — same scope the rainbow harnesses already accept.
 
 **Scope limit:** checkct catches secret-dependent **branches** and **addresses**, *not*
 variable-latency instructions (e.g. it would not by itself have caught CT-1's `UDIV`
