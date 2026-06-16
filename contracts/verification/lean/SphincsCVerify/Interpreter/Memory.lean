@@ -204,4 +204,32 @@ theorem mload32_mstore32_self (mem : ByteMemory) (off w : Nat) :
   have h := mload32_mstore32_aux mem off w 32 (by omega)
   simpa [mload32, Nat.shiftRight_zero] using h
 
+/-- **General digest read-back.** Reading a freshly-written 32-byte region back
+    gives the big-endian `Nat` value of exactly the bytes written. This is the
+    bridge primitive for a *real* precompile digest (a 32-byte `ByteVec`, not the
+    `beByte`-encoding of a pre-existing word): after `staticcallSha256 … dig`, an
+    `mload32` of the output window recovers the digest as a word. -/
+theorem mload32_writeRegion (mem : ByteMemory) (off : Nat) (f : Nat → UInt8) :
+    mload32 (writeRegion mem off f) off
+      = (List.range 32).foldl (fun acc i => acc * 256 + (f i).toNat) 0 := by
+  unfold mload32
+  suffices h : ∀ k, k ≤ 32 →
+      (List.range k).foldl
+          (fun acc i => acc * 256 + (writeRegion mem off f (off + i)).toNat) 0
+        = (List.range k).foldl (fun acc i => acc * 256 + (f i).toNat) 0 from h 32 (by omega)
+  intro k
+  induction k with
+  | zero => intro _; rfl
+  | succ j ih =>
+      intro hk
+      rw [List.range_succ, List.foldl_append, List.foldl_append, ih (by omega)]
+      simp only [List.foldl_cons, List.foldl_nil]
+      rw [writeRegion_get mem off f (off + j) (by omega), Nat.add_sub_cancel_left]
+
+/-- The precompile output, read back, is the big-endian word of its digest bytes. -/
+theorem mload32_staticcallSha256 (mem : ByteMemory) (outOff : Nat) (dig : Nat → UInt8) :
+    mload32 (staticcallSha256 mem outOff dig) outOff
+      = (List.range 32).foldl (fun acc i => acc * 256 + (dig i).toNat) 0 :=
+  mload32_writeRegion mem outOff dig
+
 end SphincsCVerify.Interpreter
