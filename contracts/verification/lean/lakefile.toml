@@ -61,3 +61,12 @@ root = "CavpMain"
 [[lean_exe]]
 name = "verify-bulk"
 root = "BulkMain"
+
+# Empirical interpreter↔bytecode bridge: replays the KAT + bulk corpus THROUGH
+# the transcribed Yul interpreter (Interpreter/C10Program.lean, under the real
+# Spec.Sha256Impl oracle) and asserts execC10Asm == Spec.Signature.verify AND
+# == the KAT/bulk ground truth. The full-(a) A3.1 precondition (see
+# docs/A3_1_CLOSURE_PATH.md §8). Run via `make verify-interp`.
+[[lean_exe]]
+name = "verify-interp"
+root = "InterpMain"

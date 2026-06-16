@@ -332,7 +332,46 @@ Yul statement, loops as `foldLoop` mirroring the Yul `for`), so the transcriptio
 axiom is a line-by-line visual check (as narrow as verity's `assembly_refinement`),
 with the climb lemmas as the loop-refinement engine.
 
-- **NEXT (precise), in order — executable-first per the advisor condition:**
+- **2026-06-16 — EXECUTABLE-VALIDATION MILESTONE DONE (steps 1–3). The advisor's
+  load-bearing condition is satisfied.** Three modules + a runner:
+  * `Interpreter/Yul.lean` — the executable, mathlib-free Yul-subset interpreter
+    (AST + faithful EVM word semantics mod 2^256, two's-comp sub, Yul shl/shr
+    operand order, bitwise ops; `ByteMemory`; calldata via `loadWord32`;
+    precompile ORACLE param; `ifnz`/`forRange`=fold/`block`/`revert`/`ret` with
+    short-circuit halt; `revert`→false, `ret`→`mem[0x00]==1`). 16 `#guard`
+    smoke-tests; all total computable. EVM semantics reviewed line-by-line.
+  * `Interpreter/C10Program.lean` — `c10Program : List Stmt`, the ENTIRE deployed
+    `SPHINCsC10Asm.sol` Yul transcribed statement-for-statement (inline `-- L<n>`
+    source refs; masks copied verbatim), + `execC10Asm` running it under the real
+    computable `Spec.Sha256Impl` oracle (no new axiom).
+  * `InterpMain.lean` + `make verify-interp` (`lake exe verify-interp`) — replays
+    the KAT + bulk corpus THROUGH `execC10Asm`. **RESULT: `execC10Asm` reproduces
+    `Spec.Signature.verify` AND the deployed-bytecode `expectValid` verdict on
+    ALL 12 KAT (4 valid + 6 negatives + NM1/NM2 near-miss) + 384 bulk = 396/396
+    on BOTH checks.** HARD CHECK (non-zero exit on any mismatch). This empirically
+    pins (i) AST-transcription faithfulness and (ii) `execStmt`↔EVM semantics
+    against ground truth, and is the empirical interpreter↔bytecode bridge that
+    makes the upcoming `execC10Asm = verifyYulModel` a genuine trust-base
+    reduction. `verify-build` green (43/43), `verify-audit` 0-sorry, `theft_free`
+    closure UNCHANGED (the interpreter modules are leaves).
+
+- **NEXT (precise), in order — steps 1–3 DONE (above); proof phase next:**
+  4. Finish `Sha256Bridge`: input-assembly (`slice = ByteSeg.flatten [seed,adrs,…]`
+     from frame lemmas + `beByte_wordOf`) + masked/unmasked output
+     (`and(mload32,N_MASK) = truncate16 (sha256 …)` = a spec node; H_msg/WOTS-digit
+     unmasked) at the real `Spec.Sha256Impl`/`thPair`, real 4-seg step (parity swap).
+     **Binding frame/locality lemmas FIRST** (distinct-var read/write commute;
+     unmentioned vars preserved) — their absence caused verity's grind.
+  5. Prove vertically, **H_msg phase first** (straight-line, unmasked → the digest
+     `verifyWithDigest` consumes), then FORS/WOTS/hypertree phases via the
+     loop-induction (each loop touches only scratch+accumulator), composing to
+     `execC10Asm = Spec.Signature.verify` (= `verifyYulModel`).
+  6. Replace `solidityVerifier_compiles_correctly` with the narrow
+     `DeployedBytecode.SPHINCsC10Asm_verify = execC10Asm` transcription axiom
+     (empirically backed by step 3 / `make verify-interp`) + re-derive the old
+     statement as a theorem.
+
+- **(historical) the original executable-first NEXT list (now steps 1–3 done):**
   1. **`Interpreter/Yul.lean`** — the C10 opcode-subset AST (`Expr`:
      `calldataload`/`mload`/`add`/`mul`/`sub`/`div`/`mod`/`and`/`or`/`xor`/`shl`/`shr`/
      `lt`/`eq`/`iszero`/`var`/`lit`; `Stmt`: `let`/`assign`/`mstore`/`staticcall0x02`/

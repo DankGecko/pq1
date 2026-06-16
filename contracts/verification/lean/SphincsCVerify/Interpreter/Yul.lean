@@ -63,6 +63,7 @@ inductive Expr
   | lit (n : Nat)
   | var (name : String)
   | sigOffset                       -- Yul `sig.offset`; modeled as 0
+  | sigLength                       -- Yul `sig.length`; the calldata blob's byte length
   | bin (op : BinOp) (a b : Expr)
   | iszero (a : Expr)
   | mload (off : Expr)
@@ -111,6 +112,7 @@ def eval {n : Nat} (sig : Spec.ByteVec n) (vm : VM) : Expr → Nat
   | .lit k => k
   | .var name => vm.env name
   | .sigOffset => 0
+  | .sigLength => n
   | .iszero a => if eval sig vm a = 0 then 1 else 0
   | .mload off => mload32 vm.mem (eval sig vm off)
   | .calldataload off => calldataload sig (eval sig vm off)
@@ -185,12 +187,19 @@ end
     preload pkSeed / pkRoot / message). The Bool verdict mirrors the on-chain
     verifier: `return(off,0x20)` of the word `1` ⇒ `true`; a returned word `≠ 1`,
     a `revert`, or fall-through ⇒ `false`. -/
-def execProgram {n : Nat} (sha : List UInt8 → Spec.ByteVec 32) (sig : Spec.ByteVec n)
-    (program : List Stmt) (mem0 : ByteMemory) : Bool :=
-  match (execList sha sig program { mem := mem0, env := fun _ => 0 }).2 with
+def execFrom {n : Nat} (sha : List UInt8 → Spec.ByteVec 32) (sig : Spec.ByteVec n)
+    (program : List Stmt) (env0 : VarEnv) (mem0 : ByteMemory) : Bool :=
+  match (execList sha sig program { mem := mem0, env := env0 }).2 with
   | some (Halt.returned w) => decide (w = 1)
   | some Halt.reverted     => false
   | none                   => false
+
+/-- Run a program from an all-zero initial environment. Thin wrapper over
+    `execFrom`; the real C10 verifier (`execC10Asm`) uses `execFrom` to inject
+    `pkSeed`/`pkRoot`/`message` as the function's parameter bindings. -/
+def execProgram {n : Nat} (sha : List UInt8 → Spec.ByteVec 32) (sig : Spec.ByteVec n)
+    (program : List Stmt) (mem0 : ByteMemory) : Bool :=
+  execFrom sha sig program (fun _ => 0) mem0
 
 /-! ## Validation: compile-time shake-out (`#guard` = test; a failure won't compile)
 

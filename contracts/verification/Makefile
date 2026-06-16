@@ -16,7 +16,7 @@
 LEAN_DIR := lean
 LAKE     ?= $(shell command -v lake 2>/dev/null || echo $$HOME/.elan/bin/lake)
 
-.PHONY: verify verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk verify-storage-mutators verify-fv-lints verify-lean4checker verify-kontrol
+.PHONY: verify verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk verify-interp verify-storage-mutators verify-fv-lints verify-lean4checker verify-kontrol
 
 verify: verify-build
 	@cd $(LEAN_DIR) && $(LAKE) exe verify-test-vectors
@@ -81,6 +81,15 @@ ifeq ($(GEN),1)
 	@cd $(LEAN_DIR) && python3 scripts/gen_bulk_lean.py
 endif
 	@cd $(LEAN_DIR) && $(LAKE) exe verify-bulk
+
+# A3.1 full-(a) empirical interpreter↔bytecode bridge: replays the KAT + bulk
+# corpus THROUGH the transcribed Yul interpreter (Interpreter/C10Program.lean,
+# under the real Spec.Sha256Impl oracle) and asserts execC10Asm ==
+# Spec.Signature.verify AND == the KAT/bulk ground-truth verdict on every vector.
+# The load-bearing precondition for the interpreter-refinement proof (see
+# docs/A3_1_CLOSURE_PATH.md §8). HARD CHECK (non-zero exit on any mismatch).
+verify-interp:
+	@cd $(LEAN_DIR) && $(LAKE) exe verify-interp
 
 # NIST CAVP SHA-256 conformance: regenerate the embedded vector module from
 # the official byte-oriented .rsp suite (cavp/ — idempotent) and replay ALL
