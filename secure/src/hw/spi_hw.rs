@@ -207,15 +207,17 @@ pub fn init() {
     // reappears at 20 MHz it means the jumper wiring can't sustain the edges:
     // back off to ÷16 (`0b011`, 10 MHz). DSIZE stays 7; only MBR[30:28] changes.
     // The `splash-test` bench preview streams a full 121 KB frame every frame,
-    // so it is SPI-clock-bound: ÷8 (20 MHz) caps the blit at ~48.6 ms (measured).
-    // Bump it to ÷4 (40 MHz) — halves the blit (~24 ms) and ~2× the frame rate.
-    // The dev board's LD2 LED on PE13=SCK can round the 40 MHz edges into
-    // occasional misread bits (cosmetic shimmer on bright transitions), but this
-    // is a throwaway preview, NOT the trusted UI, so the trade is fine. The
-    // polled FIFO sustains 40 MHz (the raw fill demo did); 80 MHz would starve it
-    // and needs DMA. The trusted-UI `ui-lcd` default stays at the clean 20 MHz.
+    // so it is SPI-clock-bound: ÷8 (20 MHz) = ~48.6 ms blit, ÷4 (40 MHz) = ~24 ms,
+    // ÷2 (80 MHz) = ~13 ms. We run it at ÷2 = 80 MHz. The old wisdom that 80 MHz
+    // "starves the polled FIFO and needs DMA" predates the lean byte-wise blit:
+    // VALIDATED on the B-U585I dev board 2026-06-16 — blit measured 13.2 ms (the
+    // CPU keeps the FIFO fed at the 100 ns/byte rate; ≈ the 12.2 ms clock-out
+    // floor), hyperspace 38→68 fps, NO flicker despite the LD2 LED on PE13=SCK
+    // (the edge-rounding concern that capped the *trusted UI* at 20 MHz did not
+    // materialise for this preview). The trusted-UI `ui-lcd` default stays at the
+    // clean 20 MHz below (this faster clock is splash-preview-only).
     #[cfg(feature = "splash-test")]
-    const MBR: u32 = 0b001; // ÷4  → 40 MHz (splash preview, ~24 ms full repaint)
+    const MBR: u32 = 0b000; // ÷2  → 80 MHz (splash preview, ~13 ms full repaint; HW-validated)
     #[cfg(all(feature = "ui-lcd", not(feature = "splash-test")))]
     const MBR: u32 = 0b010; // ÷8  → 20 MHz (NV3007 trusted UI, ~48 ms full repaint)
     #[cfg(not(feature = "ui-lcd"))]
