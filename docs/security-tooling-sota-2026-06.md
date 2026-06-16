@@ -335,8 +335,50 @@ a warm-up, low value relative to the lockstep/channel work.
 ---
 
 ## 10. Filed work items
-See `docs/work-todo.md` §28 ("Security-tooling adoption — 2026-06 SOTA research") and the FI items
+See `docs/work-todo.md` §34 ("Security-tooling adoption — 2026-06 SOTA research") and the FI items
 folded into §18b. The Completion Log records this research (2026-06-16).
+
+---
+
+## 11. Trail of Bits skills marketplace — `trailofbits/skills` (Claude Code)
+
+`/plugin marketplace add trailofbits/skills` (CC-BY-SA-4.0, ~40 plugins, actively maintained, 5.7k★).
+These are **assistive** Claude Code skills (structured prompts + some Python helpers like `ct_analyzer`)
+— they orchestrate Claude over tooling, they are **not** standalone proven analyzers, so treat output
+as *triage to verify*, not ground truth. They sit *above* the real assurance (Lean/verity/Kontrol +
+rainbow/lascar/scared), not in place of it, and are **source/IR-level** (not M33 machine code — they
+complement `cargo-checkct`/dudect/rainbow, §4). High-value subset, mapped to this report:
+
+- **`zeroize-audit`** [adopt-now] — Rust-aware; **assembly/LLVM-IR detection of zeroization removed by
+  compiler optimization (dead-store elimination)** + control-flow path coverage + register-spill
+  analysis. Directly audits whether PQ-Signer's `zeroize::ZeroizeOnDrop` + compiler-fence discipline
+  *survives `opt-level="s"`+LTO* on the real translation units — a check **nothing else in this report
+  performs.** The best fit in the marketplace.
+- **`constant-time-analysis`** (`ct_analyzer`) [adopt-now] — Rust-supporting source/IR CT pre-filter
+  (secret-dependent branches, `/`/`%` on secrets, `sign`/`verify`/`derive_key`). Cheap front-end to the
+  §4 CT stack; does **not** replace `cargo-checkct` (shipped-binary level).
+- **`semgrep-rule-creator` + `semgrep-rule-variant-creator`** [adopt-now] — author the custom invariant
+  Semgrep ruleset (§1/§8: inv #5/#6/#7 + the unsafe taxonomy) instead of hand-writing it.
+- **`mutation-testing` + `property-based-testing`** [pilot] — Foundry/Echidna invariant testing;
+  complements LeanLoop `mutate`/`kat` (§3).
+- **`differential-review`** [pilot] — the C10 differential cross-impl review (§2) + security-diff review.
+- **`variant-analysis`** [pilot] — find every other instance of a confirmed bug (Big-Sleep-style).
+- **`entry-point-analyzer`** [pilot] — state-changing entry-point map for the contract surface
+  (`validateUserOp`/`execute`) and conceptually the NSC gateway.
+- **`building-secure-contracts`** [reference] — guidelines-advisor / audit-prep / code-maturity /
+  token-integration for the `.sol`. **Caveat:** its vuln *scanners* are 6 **non-EVM** chains
+  (Solana/Cairo/Cosmos/Substrate/TON/Algorand) — **no Solidity scanner**; the Solidity spine stays
+  Slither-MCP + halmos/hevm/Kontrol (§2).
+- **`supply-chain-risk-auditor`** [pilot] — the §8 supply-chain layer.
+- **`agentic-actions-auditor` + `seatbelt-sandboxer` + `fp-check`/`second-opinion`** [pilot] — exactly
+  the MCP/CI **data-egress + prompt-injection + alert-fatigue** hardening flagged in §7/§8 (audit the GH
+  Actions incl. the `claude-code-security-review` Action, sandbox tool exec, suppress false positives).
+- **`c-review`** (SARIF) + **`debug-buttercup`** [reference] — the C reference signers / SHA-256 hooks;
+  debugging Buttercup if adopted (§7).
+
+**Caveats:** assistive-not-proven (above); **no EVM scanner**; source/IR-not-binary; CC-BY-SA-4.0
+share-alike if you fork-and-publish; same data-egress discipline as any agentic tool on a key-holding
+repo (scope what they read).
 
 ---
 
