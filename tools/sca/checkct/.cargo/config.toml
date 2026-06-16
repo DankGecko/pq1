@@ -1,0 +1,19 @@
+[build]
+target = ["thumbv8m.main-none-eabi"]
+
+# IMPORTANT: these go under [target.<triple>], NOT [build.rustflags]. This
+# workspace lives inside the PQSigner repo, whose root .cargo/config.toml sets
+# `target.thumbv8m.main-none-eabi.rustflags`. Cargo uses target-specific
+# rustflags INSTEAD OF build.rustflags (no merge), and the closer config file
+# wins — so a [build.rustflags] here would be silently shadowed by the repo
+# root, dropping `-Cpanic=immediate-abort` and bloating .text with panic
+# machinery (which then crashes binsec with `Not_found`). Defining them here,
+# target-specific, makes this (closer) config win and carries the inherited
+# build-id flag forward so the codegen matches a standalone build.
+[target.thumbv8m.main-none-eabi]
+rustflags = ["-Zunstable-options", "-Cpanic=immediate-abort", "-C", "link-arg=--build-id=none"]
+
+[unstable]
+unstable-options = true
+build-std = ["core", "panic_abort"]
+build-std-features = ["compiler-builtins-mem"]
