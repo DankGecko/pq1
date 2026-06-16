@@ -266,7 +266,49 @@ claim currently made (which honestly scopes A3.1 as corpus-validated).
   byte-sound. (The current `hashPairStep`/`climbMem` are a 2-input PoC; the real
   step is 4 segments seed‖adrs‖left‖right with the parity swap + mask.)
 
-### DECISION GATE before the next increment — interpreter shape (a) vs (b)
+### DECISION (2026-06-16, RESOLVED) — full-(a), executable-first
+
+User chose **maximum correctness, time no constraint** ⇒ **full-(a)**: a scoped
+Yul-statement interpreter over a C10 opcode-subset AST (verity's
+`execStmt`/`evalExpr` architecture), NOT pragmatic-(a) (hand-function, eyeball
+transcription) nor (b) (bespoke fn, no reduction). Rationale: only full-(a)
+factors the residual into (i) reusable EVM-subset semantics + (ii) a *mechanizable*
+Yul-transcription, and reuses for A3.2/A3.3/A3.4. Advisor endorsed — **conditionally**.
+
+**THE CONDITION (advisor, load-bearing) — executable validation BEFORE phase proofs.**
+The refinement proof connects `Spec.verify ↔ interpreter` (both Lean); it does
+**not** check that `execStmt`+AST match the *real* EVM/Yul (both mine — a
+mis-modeled `staticcall` + a compensating AST could prove `execC10Asm = Spec.verify`
+while matching neither bytecode nor reality). So full-(a) is "more correct" **iff**
+`execStmt`+AST are validated against ground truth. ⇒ **NEXT MILESTONE, ahead of
+finishing the Sha256Bridge:** make the interpreter *executable* (real computable
+`Spec.Sha256Impl` as the `0x02` oracle — execution needs NO bridge lemmas),
+transcribe the **entire** Yul, and **reproduce KAT 10/10 + bulk 384/384 +
+mutant/near-miss rejection THROUGH `execC10Asm`**, asserting agreement with BOTH
+the spec AND the deployed-bytecode KAT results. That agreement *is* the empirical
+interpreter↔bytecode bridge and gives the eventual transcription axiom the same
+backing the current A3.1 axiom has. Only then prove vertically (H_msg first).
+
+**De-risking the verity bog (advisor):** verity's residual cutpoint axioms
+(`..._beforeAuthOff_wotsPk_..._cutpoint`) are all at **loop↔straight-line seams**
+(re-establishing the loop invariant vs ambient state at entry/exit), never inside
+loops. Mitigation: (1) prove **binding frame/locality lemmas FIRST** (distinct-var
+reads/writes commute; unmentioned vars preserved) — their absence caused the grind;
+(2) design each phase's pre/postcondition so the loop touches ONLY its scratch
+window + accumulator (the `climbMem_eq_specClimb` discipline — nothing ambient), so
+each cutpoint collapses to one clean "scratch holds X" hypothesis. Binding rep
+(string-keyed-faithful vs typed) matters far less than having these frame lemmas.
+
+**Honesty nudges (advisor, keep in docs as the artifact grows):** (1) the interpreter
+models Yul **source**, not deployed bytecode — the optimizer gap remains, covered by
+KAT-against-the-codehash-pinned-bytecode; keep running KATs against BOTH and assert
+agreement. (2) C10's full word-alignment means the byte-addressed memory, while
+strictly more faithful (no `linear_memory_aliasing` assumption — a real gain), was
+**not strictly required** for C10. Honest significance = "first *completed* SHA-2
+on-chain verifier refinement," NOT "byte-memory was the unlock." Do not let that
+drift into overclaim.
+
+### (historical) the (a) vs (b) fork — interpreter shape
 
 The honesty of "narrower residual axiom" depends entirely on **how `execC10Asm` is
 structured** (advisor, 2026-06-16):
@@ -290,16 +332,29 @@ Yul statement, loops as `foldLoop` mirroring the Yul `for`), so the transcriptio
 axiom is a line-by-line visual check (as narrow as verity's `assembly_refinement`),
 with the climb lemmas as the loop-refinement engine.
 
-- **NEXT (precise), in order:**
-  0. **Settle the (a)/(b) fork** (decision gate above) — determines the
-     `execC10Asm` shape. Everything below assumes it is resolved.
-  1. Finish `Sha256Bridge`: the input-assembly bridge (`slice mem 0x00 inLen =
-     ByteSeg.flatten [seed,adrs,…]` from the frame lemmas + the `beByte_wordOf`
-     atom) and the masked output bridge (`and(mload32 …,N_MASK) = truncate16
-     (sha256 [...])` = a spec node), instantiating the abstract `H`/`dig` with the
-     real `Spec.Sha256Impl`/`thPair` (no new axiom). Build the *real* 4-segment
-     Merkle step (seed‖adrs‖left‖right + parity swap + mask), not the 2-input PoC.
-  2. The full `execC10Asm` interpreter body (H_msg → FORS → WOTS → hypertree),
-     each phase a fold refined via the loop-induction, + `execC10Asm = verifyYulModel`,
-     then replace `solidityVerifier_compiles_correctly` with the narrow
-     transcription axiom and re-derive the old statement as a theorem.
+- **NEXT (precise), in order — executable-first per the advisor condition:**
+  1. **`Interpreter/Yul.lean`** — the C10 opcode-subset AST (`Expr`:
+     `calldataload`/`mload`/`add`/`mul`/`sub`/`div`/`mod`/`and`/`or`/`xor`/`shl`/`shr`/
+     `lt`/`eq`/`iszero`/`var`/`lit`; `Stmt`: `let`/`assign`/`mstore`/`staticcall0x02`/
+     `if`/`for`/`block`/`funcall`/`leave`) over `Interpreter.Memory` + a calldata
+     model + a bindings env, with the `0x02` precompile as an oracle parameter.
+     `for`-semantics = a fold (wires into `climbMem`/loop-induction). **Computable**
+     (so KATs run). Plus binding **frame/locality lemmas** (de-risk) + a `#eval`/
+     `decide` shake-out of a 3-stmt fragment.
+  2. **Transcribe the ENTIRE `SPHINCsC10Asm.sol` Yul → the AST** (`execC10Asm`),
+     instantiating the oracle with the computable `Spec.Sha256Impl`.
+  3. **Empirical validation milestone:** run KAT 10/10 (incl. 6 negatives + NM1/NM2
+     near-miss) + bulk 384/384 + the mutant battery THROUGH `execC10Asm`; assert it
+     agrees with `Spec.verify` AND the deployed-bytecode KAT results. (No bridge
+     lemmas needed — hash is computable.) This empirically pins AST-faithfulness +
+     `execStmt`↔EVM before any proof.
+  4. Finish `Sha256Bridge`: input-assembly (`slice = ByteSeg.flatten [seed,adrs,…]`
+     from frame lemmas + `beByte_wordOf`) + masked/unmasked output
+     (`and(mload32,N_MASK) = truncate16 (sha256 …)` = a spec node; H_msg/WOTS-digit
+     unmasked) at the real `Spec.Sha256Impl`/`thPair`, real 4-seg step (parity swap).
+  5. Prove vertically, **H_msg phase first** (straight-line, unmasked → the digest
+     `verifyWithDigest` consumes), then FORS/WOTS/hypertree phases via the
+     loop-induction, composing to `execC10Asm = verifyYulModel`.
+  6. Replace `solidityVerifier_compiles_correctly` with the narrow
+     `DeployedBytecode.SPHINCsC10Asm_verify = execC10Asm` transcription axiom
+     (empirically backed by step 3) + re-derive the old statement as a theorem.
