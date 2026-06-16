@@ -1,0 +1,273 @@
+/-
+SphincsCVerify.Interpreter.Yul — a small, EXECUTABLE Yul-subset interpreter.
+
+Foundational infrastructure for the A3.1 deductive-closure track (see
+`Interpreter.Memory`, `Interpreter.Climb`): the plan to prove
+`∀ inputs, execC10Asm = Spec.verify` by interpreter-refinement + loop-induction,
+hash kept opaque. This module supplies the **executable operational semantics**
+of the exact Yul fragment the deployed `SPHINCsC10Asm.sol` verifier uses — a
+faithful model of EVM word arithmetic (mod `2^256`), byte memory, the `0x02`
+SHA-256 precompile (threaded as an oracle parameter so the interpreter stays
+hash-agnostic and computable), and the three control constructs the target Yul
+actually uses (`if`, the canonical `for { let v:=0 } lt(v,count) { v:=v+1 }`
+counting loop, and `{ }` scopes), plus `revert`/`return`.
+
+## Design choices that buy faithfulness
+
+* **True byte memory** (`Interpreter.Memory.ByteMemory = Nat → UInt8`): sub-word
+  `mstore` aliasing is represented exactly, not assumed.
+* **EVM word semantics mod `W := 2^256`** on every arithmetic result; `sub` uses
+  the two's-complement form `(x + (W - y%W)) % W` — NOT `(x-y)%W`, since Lean's
+  `Nat` subtraction saturates at 0 and would silently corrupt under `x < y`.
+* **Yul `shl`/`shr` operand order**: `shl(x,y) = y << x`, `shr(x,y) = y >> x`
+  (first operand is the shift amount, second is the value) — the one place the
+  operand order is swapped relative to the source AST `(a b)`.
+* **`forRange` count evaluated ONCE at loop entry** — faithful because every loop
+  in the target Yul has a body-invariant bound.
+* **`sha256` precompile = a parameter** `sha : List UInt8 → ByteVec 32`, so the
+  interpreter carries no hash and remains `#eval`-able / axiom-free.
+
+Mathlib-free (Lean core only); no `sorry`/`admit`/`axiom`/`native_decide`;
+everything is a total computable `def` (no `partial`), so it `#eval`s and the
+`#guard` smoke-tests below run at elaboration time.
+-/
+
+import SphincsCVerify.Interpreter.Memory
+import SphincsCVerify.Spec.Bytes
+
+namespace SphincsCVerify.Interpreter
+
+/-- The EVM word modulus `2^256`. Every arithmetic op is taken mod `W`. -/
+def W : Nat := 2 ^ 256
+
+/-- Big-endian `Nat` of a 32-byte `ByteVec` (MSB first), matching `calldataload`'s
+    word value. `getD i 0` is total: out-of-range indices read as `0` (cannot
+    happen for a well-formed `ByteVec 32`, but keeps the def computable). -/
+def wordOfBV (v : Spec.ByteVec 32) : Nat :=
+  (List.range 32).foldl (fun acc i => acc * 256 + (v.data.getD i 0).toNat) 0
+
+/-- `calldataload sig off`: the 32-byte big-endian word at `off` in the signature
+    blob, zero-padded past the end (EVM `calldataload` semantics, via
+    `Spec.ByteVec.loadWord32`). -/
+def calldataload {n : Nat} (sig : Spec.ByteVec n) (off : Nat) : Nat :=
+  wordOfBV (sig.loadWord32 off)
+
+/-! ## The AST (exactly the constructs the target Yul uses) -/
+
+/-- Binary operators modelled by the interpreter. -/
+inductive BinOp | add | sub | mul | band | bor | bxor | shl | shr | eq | lt
+deriving Repr, DecidableEq
+
+/-- Yul expressions. `sigOffset` models the `sig.offset` calldata base (= 0). -/
+inductive Expr
+  | lit (n : Nat)
+  | var (name : String)
+  | sigOffset                       -- Yul `sig.offset`; modeled as 0
+  | bin (op : BinOp) (a b : Expr)
+  | iszero (a : Expr)
+  | mload (off : Expr)
+  | calldataload (off : Expr)
+deriving Repr
+
+/-- Yul statements. -/
+inductive Stmt
+  | letv (name : String) (e : Expr)         -- `let name := e`
+  | setv (name : String) (e : Expr)         -- `name := e`
+  | mstore (off val : Expr)                 -- `mstore(off, val)`
+  | sha256 (inOff inLen outOff : Expr)      -- `pop(staticcall(gas(), 0x02, inOff, inLen, outOff, 32))`
+  | ifnz (cond : Expr) (body : List Stmt)   -- Yul `if cond { body }` — body runs iff cond ≠ 0
+  | forRange (v : String) (count : Expr) (body : List Stmt)
+      -- models `for { let v := 0 } lt(v, count) { v := add(v,1) } { body }`
+      -- (count is evaluated ONCE at entry — faithful since bounds are body-invariant)
+  | block (body : List Stmt)                -- a `{ ... }` scope (flat env; no shadowing in this Yul)
+  | revert                                  -- `revert(...)` → halt-revert
+  | ret (off : Expr)                        -- `return(off, 0x20)` → halt-return the 32-byte word at off
+deriving Repr
+
+/-! ## Interpreter state -/
+
+/-- Variable environment: unbound names read as `0`. -/
+abbrev VarEnv := String → Nat
+
+/-- Bind `x ↦ v`, shadowing any prior binding. -/
+def setVar (env : VarEnv) (x : String) (v : Nat) : VarEnv :=
+  fun y => if y = x then v else env y
+
+/-- Interpreter machine state: byte memory + variable environment. -/
+structure VM where
+  mem : ByteMemory
+  env : VarEnv
+
+/-- Halt outcome of a program: a `revert(...)` or a `return(off,0x20)` whose
+    32-byte word is recorded. -/
+inductive Halt | reverted | returned (w : Nat)
+
+/-! ## Expression evaluation -/
+
+/-- Evaluate an expression against the signature blob and a machine state.
+    EVM word semantics: every arithmetic result is taken mod `W = 2^256`, and
+    `shl`/`shr` swap the operand order (`shl(shift,value) = value <<< shift`). -/
+def eval {n : Nat} (sig : Spec.ByteVec n) (vm : VM) : Expr → Nat
+  | .lit k => k
+  | .var name => vm.env name
+  | .sigOffset => 0
+  | .iszero a => if eval sig vm a = 0 then 1 else 0
+  | .mload off => mload32 vm.mem (eval sig vm off)
+  | .calldataload off => calldataload sig (eval sig vm off)
+  | .bin op a b =>
+      let x := eval sig vm a
+      let y := eval sig vm b
+      match op with
+      | .add  => (x + y) % W
+      | .sub  => (x + (W - y % W)) % W      -- EVM two's-complement sub (NOT (x-y)%W)
+      | .mul  => (x * y) % W
+      | .band => x &&& y
+      | .bor  => x ||| y
+      | .bxor => x ^^^ y
+      | .shl  => (y <<< x) % W              -- Yul shl(x,y) = y << x : a=shift, b=value
+      | .shr  => y >>> x                    -- Yul shr(x,y) = y >> x : a=shift, b=value
+      | .eq   => if x = y then 1 else 0
+      | .lt   => if x < y then 1 else 0
+
+/-! ## Statement execution
+
+`execStmt`, `execList`, and the loop driver `execFor` are mutually recursive over
+the structural size of the `Stmt` / `List Stmt` (and the loop counter for
+`execFor`). Each returns `VM × Option Halt`: `none` = fell through, `some h` =
+halted. Once halted, the remaining statements / loop iterations are skipped. The
+SHA-256 precompile is the `sha` parameter; the digest is always 32 bytes. -/
+
+mutual
+  /-- Execute one statement. -/
+  def execStmt {n : Nat} (sha : List UInt8 → Spec.ByteVec 32) (sig : Spec.ByteVec n) :
+      Stmt → VM → VM × Option Halt
+    | .letv name e, vm => ({ vm with env := setVar vm.env name (eval sig vm e) }, none)
+    | .setv name e, vm => ({ vm with env := setVar vm.env name (eval sig vm e) }, none)
+    | .mstore off val, vm =>
+        ({ vm with mem := mstore32 vm.mem (eval sig vm off) (eval sig vm val) }, none)
+    | .sha256 inOff inLen outOff, vm =>
+        let dig := sha (slice vm.mem (eval sig vm inOff) (eval sig vm inLen))
+        ({ vm with mem := writeRegion vm.mem (eval sig vm outOff) (fun i => dig.data.getD i 0) },
+         none)
+    | .ifnz cond body, vm =>
+        if eval sig vm cond ≠ 0 then execList sha sig body vm else (vm, none)
+    | .forRange v count body, vm => execFor sha sig v body (eval sig vm count) 0 vm
+    | .block body, vm => execList sha sig body vm
+    | .revert, vm => (vm, some Halt.reverted)
+    | .ret off, vm => (vm, some (Halt.returned (mload32 vm.mem (eval sig vm off))))
+
+  /-- Execute a list of statements with short-circuit on the first halt. -/
+  def execList {n : Nat} (sha : List UInt8 → Spec.ByteVec 32) (sig : Spec.ByteVec n) :
+      List Stmt → VM → VM × Option Halt
+    | [], vm => (vm, none)
+    | s :: rest, vm =>
+        match execStmt sha sig s vm with
+        | (vm', none) => execList sha sig rest vm'
+        | (vm', some h) => (vm', some h)
+
+  /-- Drive the counting loop `for { let v:=0 } lt(v,count) { v:=v+1 } { body }`.
+      `count` (= `N`) is fixed at entry; `i` is the current iteration index.
+      Runs `body` with `env v := i` for `i = cur .. cur+remaining-1`, stopping
+      early on halt. `remaining` is the structural-recursion fuel. -/
+  def execFor {n : Nat} (sha : List UInt8 → Spec.ByteVec 32) (sig : Spec.ByteVec n)
+      (v : String) (body : List Stmt) : (remaining cur : Nat) → VM → VM × Option Halt
+    | 0, _, vm => (vm, none)
+    | remaining + 1, cur, vm =>
+        let vm := { vm with env := setVar vm.env v cur }
+        match execList sha sig body vm with
+        | (vm', none) => execFor sha sig v body remaining (cur + 1) vm'
+        | (vm', some h) => (vm', some h)
+end
+
+/-! ## Top-level program execution -/
+
+/-- Run a program from a caller-supplied initial memory (`mem0` lets the caller
+    preload pkSeed / pkRoot / message). The Bool verdict mirrors the on-chain
+    verifier: `return(off,0x20)` of the word `1` ⇒ `true`; a returned word `≠ 1`,
+    a `revert`, or fall-through ⇒ `false`. -/
+def execProgram {n : Nat} (sha : List UInt8 → Spec.ByteVec 32) (sig : Spec.ByteVec n)
+    (program : List Stmt) (mem0 : ByteMemory) : Bool :=
+  match (execList sha sig program { mem := mem0, env := fun _ => 0 }).2 with
+  | some (Halt.returned w) => decide (w = 1)
+  | some Halt.reverted     => false
+  | none                   => false
+
+/-! ## Validation: compile-time shake-out (`#guard` = test; a failure won't compile)
+
+A dummy oracle (32 zero bytes), an empty signature blob, and an all-zero initial
+memory. We exercise: `mload`-after-`mstore` round-trip via the `ret`/Bool path;
+`forRange` accumulation via the env; and `shl`/`shr`/`band` operand order. -/
+
+/-- The hash-agnostic dummy precompile: always 32 zero bytes. -/
+private def dummySha : List UInt8 → Spec.ByteVec 32 := fun _ => Spec.ByteVec.zero 32
+
+/-- An empty calldata blob (none of the smoke programs touch `calldataload`). -/
+private def sig0 : Spec.ByteVec 0 := Spec.ByteVec.zero 0
+
+/-- All-zero initial memory. -/
+private def mem0 : ByteMemory := fun _ => 0
+
+private def vm0 : VM := { mem := mem0, env := fun _ => 0 }
+
+-- (1) mstore→mload→ret round-trip: store `1` at offset 0, then `return(0,0x20)`.
+--     `mload32` of the freshly-stored word is `1`, so the Bool verdict is `true`.
+#guard execProgram dummySha sig0 [Stmt.mstore (.lit 0) (.lit 1), Stmt.ret (.lit 0)] mem0 = true
+
+-- (1b) storing a non-1 word reverts the Bool verdict to false (return path, w≠1).
+#guard execProgram dummySha sig0 [Stmt.mstore (.lit 0) (.lit 7), Stmt.ret (.lit 0)] mem0 = false
+
+-- (1c) round-trip a large value through memory (off 64), confirm exact readback.
+#guard execProgram dummySha sig0
+    [Stmt.mstore (.lit 64) (.lit 123456789),
+     Stmt.ifnz (.bin .eq (.mload (.lit 64)) (.lit 123456789))
+       [Stmt.mstore (.lit 0) (.lit 1), Stmt.ret (.lit 0)],
+     Stmt.revert] mem0 = true
+
+-- (2) forRange accumulation: acc := Σ_{i=0}^{4} i = 0+1+2+3+4 = 10.
+#guard (execList dummySha sig0
+    [Stmt.letv "acc" (.lit 0),
+     Stmt.forRange "i" (.lit 5)
+       [Stmt.setv "acc" (.bin .add (.var "acc") (.var "i"))]] vm0).1.env "acc" = 10
+
+-- (2b) forRange runs exactly `count` times: counting 0,1,...,9 leaves "i" = 9 on
+--      the last iteration (loop var keeps the final index after the body runs).
+#guard (execList dummySha sig0
+    [Stmt.forRange "i" (.lit 10) [Stmt.letv "_" (.lit 0)]] vm0).1.env "i" = 9
+
+-- (2c) forRange with count 0 runs the body zero times (acc stays 0).
+#guard (execList dummySha sig0
+    [Stmt.letv "acc" (.lit 7),
+     Stmt.forRange "i" (.lit 0) [Stmt.setv "acc" (.lit 99)]] vm0).1.env "acc" = 7
+
+-- (2d) forRange short-circuits on halt: revert inside the loop stops it.
+#guard (match (execList dummySha sig0
+    [Stmt.forRange "i" (.lit 5) [Stmt.revert]] vm0).2 with
+    | some Halt.reverted => true | _ => false) = true
+
+-- (3) shl operand order: shl(8, 1) = 1 << 8 = 256  (a = shift = 8, b = value = 1).
+#guard eval sig0 vm0 (.bin .shl (.lit 8) (.lit 1)) = 256
+
+-- (3b) shr operand order: shr(4, 256) = 256 >> 4 = 16  (a = shift, b = value).
+#guard eval sig0 vm0 (.bin .shr (.lit 4) (.lit 256)) = 16
+
+-- (3c) band: 0xF0 &&& 0x3C = 0x30 = 48.
+#guard eval sig0 vm0 (.bin .band (.lit 0xF0) (.lit 0x3C)) = 48
+
+-- (3d) two's-complement sub does NOT saturate: 3 - 5 = W - 2 (EVM underflow wrap),
+--      whereas Nat `(3 - 5) % W` would be 0. This guards the landmine.
+#guard eval sig0 vm0 (.bin .sub (.lit 3) (.lit 5)) = W - 2
+
+-- (3e) iszero: iszero(0) = 1, iszero(5) = 0.
+#guard eval sig0 vm0 (.iszero (.lit 0)) = 1
+#guard eval sig0 vm0 (.iszero (.lit 5)) = 0
+
+-- (4) sha256 precompile writes the (dummy = zero) digest into the output window;
+--     mload of that window is therefore 0, so the eq-to-0 branch returns true.
+#guard execProgram dummySha sig0
+    [Stmt.mstore (.lit 0) (.lit 0xdeadbeef),
+     Stmt.sha256 (.lit 0) (.lit 32) (.lit 0),
+     Stmt.ifnz (.iszero (.mload (.lit 0)))
+       [Stmt.mstore (.lit 0) (.lit 1), Stmt.ret (.lit 0)],
+     Stmt.revert] mem0 = true
+
+end SphincsCVerify.Interpreter

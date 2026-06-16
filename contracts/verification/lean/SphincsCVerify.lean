@@ -64,3 +64,4 @@ import SphincsCVerify.Interpreter.Memory
 import SphincsCVerify.Interpreter.Climb
 import SphincsCVerify.Interpreter.ClimbLoop
 import SphincsCVerify.Interpreter.Sha256Bridge
+import SphincsCVerify.Interpreter.Yul
