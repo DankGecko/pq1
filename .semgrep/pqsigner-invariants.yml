@@ -1,0 +1,74 @@
+# PQSigner non-negotiable invariants — machine-enforced (Semgrep).
+#
+# These rules turn the prose invariants in CLAUDE.md ("Non-Negotiable
+# Invariants" / "What NOT to do") into a CI gate. Run via `make invariant-gates`
+# (which also runs `cargo deny check bans` for the dependency-level invariant #5).
+#
+# Calibration: rules with ZERO findings on the current tree are ERROR (hard
+# gate); rules with pre-existing legitimate-but-discouraged sites are WARNING
+# (surface for review, don't break the build). Verified against the tree
+# 2026-06-16: the three ERROR rules are clean (0 findings).
+#
+# Run standalone:  semgrep --config .semgrep/pqsigner-invariants.yml --error
+# (`--error` makes a WARNING-only run still exit 0; ERROR findings exit non-zero.)
+
+rules:
+  # ── Invariant #5: SPHINCS+C10 is the ONLY signature primitive ──────────────
+  - id: no-classical-signer-import
+    languages: [generic]
+    severity: ERROR
+    message: >
+      Invariant #5 (non-negotiable): SPHINCS+C10 is the wallet's ONLY signature
+      primitive — no classical signer (secp256k1/k256/p256/ecdsa/ed25519/
+      schnorrkel) in firmware, FW-update, or the on-chain verifier. Belt-and-
+      braces with deny.toml's [bans]. If you truly need this crate, you are
+      breaking invariant #5 — stop.
+    paths:
+      include: ['*.rs']
+    patterns:
+      - pattern-regex: '(?m)^\s*(use|extern\s+crate)\s+(secp256k1|libsecp256k1|k256|p256|ecdsa|ed25519|ed25519_dalek|ed25519_compact|schnorrkel)\b'
+
+  - id: no-ecrecover-in-wallet-contracts
+    languages: [generic]
+    severity: ERROR
+    message: >
+      Invariant #5: the PQ smart wallet has a single c10Verifier and NO classical
+      signer. `ecrecover` must not appear in the wallet / factory / verifier
+      contracts (a hybrid ECDSA path would re-introduce a classical signer).
+    paths:
+      include: ['contracts/smart-wallet/src/']
+    patterns:
+      - pattern-regex: '\becrecover\s*\('
+
+  # ── Invariants #6 / #7: immutable bootstrap keys; monotonic unresettable caps ─
+  - id: no-key-rotation-or-cap-reset-in-contracts
+    languages: [generic]
+    severity: ERROR
+    message: >
+      Invariants #6/#7 (non-negotiable): bootstrap C10 keys are immutable per
+      wallet (CREATE2 salt depends only on them) and per-chain caps are monotonic
+      & unresettable. No `rotateMasterKeys`, `reset*`, or `increaseMax*` function
+      may exist in the wallet/factory/multiownable contracts.
+    paths:
+      include: ['contracts/smart-wallet/src/']
+    patterns:
+      - pattern-regex: '\bfunction\s+(rotateMasterKeys|reset[A-Za-z0-9_]*|increaseMax[A-Za-z0-9_]*)\b'
+
+  # ── Convention (WARNING): ASCII materialisation via ui::ascii_str ──────────
+  - id: from-utf8-unchecked-prefer-ascii-str
+    languages: [generic]
+    severity: WARNING
+    message: >
+      Convention (CLAUDE.md unsafe taxonomy): materialise ASCII-by-construction
+      buffers via `crate::ui::ascii_str`, not `core::str::from_utf8_unchecked`.
+      Review/migrate these call sites. (Known pre-existing: secure/src/main.rs
+      boot-fingerprint hex, secure/src/se050_stress.)
+    paths:
+      include: ['*.rs']
+      exclude:
+        - '*ascii*.rs'
+        - '*/tests/*'
+        - '*_under_test/*'
+        - '*pure_tests*.rs'
+    patterns:
+      - pattern-regex: '\bfrom_utf8_unchecked\s*\('

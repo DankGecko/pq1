@@ -168,13 +168,26 @@ allow = [
 # This is useful for organizations that want to deny all external dependencies by default
 # but allow their own workspace crates without having to explicitly list them
 allow-workspace = false
-# List of crates to deny
+# List of crates to deny.
+#
+# INVARIANT #5 (non-negotiable): SPHINCS+C10 is the ONLY signature primitive —
+# no classical signer (secp256k1, P-256, Ed25519, schnorr) anywhere in the
+# firmware, the FW-update path, or the on-chain verifier. This dependency-level
+# ban is belt-and-braces with the `.semgrep/pqsigner-invariants.yml` source rule
+# (`no-classical-signer-import`). None of these are in the tree today; the ban
+# is preventive — `cargo deny check bans` fails the build if one ever appears.
+# (bls12_381 / pairing / sha2 / keccak / hmac stay allowed — they are PQ/ZK/hash
+# primitives, not classical *signers*.)
 deny = [
-    #"ansi_term@0.11.0",
-    #{ crate = "ansi_term@0.11.0", reason = "you can specify a reason it is banned" },
-    # Wrapper crates can optionally be specified to allow the crate when it
-    # is a direct dependency of the otherwise banned crate
-    #{ crate = "ansi_term@0.11.0", wrappers = ["this-crate-directly-depends-on-ansi_term"] },
+    { crate = "secp256k1",       reason = "invariant #5: no classical signer" },
+    { crate = "libsecp256k1",    reason = "invariant #5: no classical signer" },
+    { crate = "k256",            reason = "invariant #5: no classical (secp256k1) signer" },
+    { crate = "p256",            reason = "invariant #5: no classical (P-256) signer" },
+    { crate = "ecdsa",           reason = "invariant #5: no ECDSA" },
+    { crate = "ed25519",         reason = "invariant #5: no Ed25519 signer" },
+    { crate = "ed25519-dalek",   reason = "invariant #5: no Ed25519 signer" },
+    { crate = "ed25519-compact",  reason = "invariant #5: no Ed25519 signer" },
+    { crate = "schnorrkel",      reason = "invariant #5: no Schnorr signer" },
 ]
 
 # List of features to allow/deny

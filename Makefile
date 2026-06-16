@@ -3477,3 +3477,18 @@ fwup-transport-hw-iwdg: dev-pubkey-fixture fwup-transport-fixture
 	  cat /tmp/fwup-transport-run.log | tail -20; \
 	  exit 1; \
 	fi
+
+# ── Invariant gates: machine-enforce CLAUDE.md non-negotiable invariants ──
+# #5 one PQ signer · #6 immutable bootstrap keys · #7 monotonic unresettable caps.
+# Deps gated by cargo-deny [bans]; source gated by .semgrep/pqsigner-invariants.yml.
+.PHONY: invariant-gates
+SEMGREP ?= $(shell command -v semgrep 2>/dev/null || echo $(HOME)/.venvs/semgrep/bin/semgrep)
+invariant-gates:
+	@echo "==> [1/3] invariant #5 (deps): cargo deny check bans"
+	cargo deny check bans
+	@command -v "$(SEMGREP)" >/dev/null 2>&1 || { echo "ERROR: semgrep not found ($(SEMGREP)). Install: python3 -m venv ~/.venvs/semgrep && ~/.venvs/semgrep/bin/pip install semgrep"; exit 1; }
+	@echo "==> [2/3] invariants #5/#6/#7 (source, ERROR-level fails the build):"
+	"$(SEMGREP)" --config .semgrep/pqsigner-invariants.yml --severity ERROR --error --metrics off --quiet
+	@echo "==> [3/3] advisory warnings (non-blocking):"
+	-@"$(SEMGREP)" --config .semgrep/pqsigner-invariants.yml --severity WARNING --metrics off --quiet
+	@echo "==> invariant-gates: PASS"
