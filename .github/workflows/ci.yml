@@ -1,0 +1,65 @@
+name: CI
+
+# Born-green CI for PQSigner. Each job runs a command verified to pass on the
+# current tree (2026-06-16). Intentionally NOT yet gated here (pre-existing,
+# unrelated red — track + fix, then promote into CI):
+#   * `make test-unit` full secure-crate suite — 1 failing source-pin test
+#     (`negative_usb_hw_raw_volatile_only_under_debug_log_diagnostic`: usb_hw.rs
+#     has >1 raw read_volatile; the unsafe-taxonomy MMIO migration regressed).
+#   * `forge test` — 4 bytecode-codehash-pin drifts (re-run Halmos / update the
+#     audited pins after the deliberate change, or the solc version differs).
+# See docs/work-todo.md §34.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  invariant-gates:
+    name: Invariant gates (#5 / #6 / #7)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Invariant #5 (dependency level): no classical-signer crate. Reads deny.toml [bans].
+      - name: cargo deny check bans
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check bans
+      # Invariants #5/#6/#7 (source level): the hard ERROR rules must be clean.
+      - name: semgrep invariant rules (ERROR-level)
+        run: |
+          python3 -m pip install --quiet semgrep
+          semgrep --config .semgrep/pqsigner-invariants.yml --severity ERROR --error --metrics off
+
+  host-tests:
+    name: Host unit tests (pure-logic crates)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo test (pure-logic crates)
+        run: |
+          cargo test --locked --lib \
+            -p pqsigner-proto -p pqsigner-tx-core -p pqsigner-aa \
+            -p pqsigner-domain -p pqsigner-tx -p pqsigner-erc7730 \
+            -p sphincs-c10 -p pqsigner-fi
+
+  contracts:
+    name: Contracts (forge build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: foundry-rs/foundry-toolchain@v1
+      - name: forge build
+        run: cd contracts/smart-wallet && forge build
