@@ -249,11 +249,10 @@ pub unsafe fn soft_disconnect_then_reset() -> ! {
     // SAFETY: NS-mapped peripheral, single-threaded secure-world
     // caller on an about-to-reset path. RMW preserves the rest of
     // DCTL (none of which matters past the imminent reset).
-    let dctl = OTG_DCTL as *mut u32;
-    unsafe {
-        let cur = core::ptr::read_volatile(dctl);
-        core::ptr::write_volatile(dctl, cur | SDIS);
-    }
+    // RMW via the typed MMIO handle (hw::mmio) — no raw volatile (unsafe
+    // taxonomy). Preserves the rest of DCTL (none of which matters past
+    // the imminent reset).
+    Reg32::new(OTG_DCTL).modify(|v| v | SDIS);
 
     // ~20 ms hold so the host's USB 2.0 layer registers the detach.
     // Empirically tested on B-U585I-IOT02A + Linux: this is enough
@@ -325,24 +324,16 @@ pub unsafe fn cc_open_then_reset() -> ! {
     const OTG_DCTL: u32 = 0x4204_0000 + 0x804;
     const SDIS: u32 = 1 << 1;
 
-    // SAFETY: see docstring.
-    unsafe {
-        // 1. Drop the USB-2 D+ pull-up.
-        let dctl = OTG_DCTL as *mut u32;
-        core::ptr::write_volatile(dctl, core::ptr::read_volatile(dctl) | SDIS);
-
-        // 2. Drop UCPD's Rd (clear CCENABLE + ANAMODE).
-        let cr = UCPD1_CR as *mut u32;
-        let v = core::ptr::read_volatile(cr);
-        core::ptr::write_volatile(cr, v & !CC_ENABLE_MASK & !ANAMODE);
-
-        // 3. Disable the STM32 dead-battery Rd (idempotent — init set
-        //    this too, but a defensive re-assert in case anything reset
-        //    it). With UCPD Rd gone AND dead-battery disabled AND
-        //    TCPP03 still enabled (passthrough), CC reads open.
-        let ucpdr = PWR_UCPDR as *mut u32;
-        core::ptr::write_volatile(ucpdr, core::ptr::read_volatile(ucpdr) | UCPD_DBDIS);
-    }
+    // Typed MMIO (hw::mmio) RMW — no raw volatile.
+    // 1. Drop the USB-2 D+ pull-up.
+    Reg32::new(OTG_DCTL).modify(|v| v | SDIS);
+    // 2. Drop UCPD's Rd (clear CCENABLE + ANAMODE).
+    Reg32::new(UCPD1_CR).modify(|v| v & !CC_ENABLE_MASK & !ANAMODE);
+    // 3. Disable the STM32 dead-battery Rd (idempotent — init set
+    //    this too, but a defensive re-assert in case anything reset
+    //    it). With UCPD Rd gone AND dead-battery disabled AND
+    //    TCPP03 still enabled (passthrough), CC reads open.
+    Reg32::new(PWR_UCPDR).modify(|v| v | UCPD_DBDIS);
 
     // Hold CC open ~1.5 s — comfortably past the host's tCCDebounce
     // (100–200 ms) + any port-controller settle, so the typec layer
@@ -372,12 +363,8 @@ pub unsafe fn cc_open_then_reset() -> ! {
 pub unsafe fn soft_disconnect() {
     const OTG_DCTL: u32 = 0x4204_0000 + 0x804;
     const SDIS: u32 = 1 << 1;
-    let dctl = OTG_DCTL as *mut u32;
-    // SAFETY: see docstring.
-    unsafe {
-        let cur = core::ptr::read_volatile(dctl);
-        core::ptr::write_volatile(dctl, cur | SDIS);
-    }
+    // Typed MMIO (hw::mmio) RMW — no raw volatile.
+    Reg32::new(OTG_DCTL).modify(|v| v | SDIS);
 }
 
 /// Initialize UCPD1 for USB Type-C CC detection (sink/device mode).
