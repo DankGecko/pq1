@@ -1,0 +1,136 @@
+(* ===========================================================================
+   PQ-Signer — SE050 SCP03 key-establishment handshake, symbolic model (ProVerif)
+   ===========================================================================
+
+   Fills the handshake gap left abstract in dual_se_unlock.pv (which treated the
+   per-channel key as pre-shared). Models the GlobalPlatform SCP03 mutual-auth +
+   session-key derivation that actually establishes that key, and pins down the
+   exact condition under which the channel protects the PIN.
+
+   Flow (secure/src/se050/scp03.rs::establish_with_keys):
+     host -> card : INITIALIZE UPDATE  (host_challenge)
+     card -> host : card_challenge, card_cryptogram
+                    session keys = KDF(static, host_challenge, card_challenge)
+     host -> card : EXTERNAL AUTHENTICATE (host_cryptogram)
+     host -> card : VERIFY(PIN) wrapped under the session ENC key
+   The static keys (S-ENC/S-MAC, abstracted here as one `static`) are the
+   device-unique OTP/DHUK-derived secret — the invariant-#3 "channel-equivalent"
+   S2 asset.
+
+   ABSTRACTIONS (stated): S-ENC and S-MAC collapsed to one `static` (a DHUK leak
+   gives both); KDF / cryptograms / AES-CCM/CBC modelled as symbolic functions
+   (perfect crypto); the SCP03 command counter / MAC-chaining replay window is
+   not modelled (a separate refinement). Faithful for the session-key secrecy,
+   mutual authentication, and PIN-confidentiality questions below.
+   =========================================================================== *)
+
+type key.
+
+(* symbolic authenticated encryption for the established channel *)
+fun senc(bitstring, key): bitstring.
+reduc forall m: bitstring, k: key; sdec(senc(m, k), k) = m.
+
+(* SCP03 session-key derivation: KDF over the static key + BOTH challenges.
+   Fresh challenges => a fresh session key each handshake. *)
+fun skdf(key, bitstring, bitstring): key.
+
+(* card / host cryptograms: prove knowledge of `static` over the challenges. *)
+fun cardcrypto(key, bitstring, bitstring): bitstring.
+fun hostcrypto(key, bitstring, bitstring): bitstring.
+
+free bus: channel.   (* the I2C bus — attacker-controlled *)
+
+event CardSent(bitstring, bitstring).     (* card ran a handshake with (hchal, cchal) *)
+event HostAccepted(bitstring, bitstring). (* host accepted the card's cryptogram *)
+event HostSent(bitstring, bitstring).     (* host ran a handshake with (hchal, cchal) *)
+event CardAccepted(bitstring, bitstring). (* card accepted the host's cryptogram *)
+
+(* ---------------------------------------------------------------------------
+   Parameterised protocol legs (reused by both scenarios).
+   --------------------------------------------------------------------------- *)
+let card(static: key, thePin: bitstring) =
+    in(bus, hchal: bitstring);                          (* INITIALIZE UPDATE *)
+    new cchal: bitstring;
+    let s = skdf(static, hchal, cchal) in
+    event CardSent(hchal, cchal);
+    out(bus, (cchal, cardcrypto(static, hchal, cchal)));
+    in(bus, hc: bitstring);                             (* EXTERNAL AUTHENTICATE *)
+    if hc = hostcrypto(static, hchal, cchal) then
+    (
+        event CardAccepted(hchal, cchal);
+        in(bus, c: bitstring);                          (* wrapped VERIFY(PIN) *)
+        let p = sdec(c, s) in
+        if p = thePin then 0                            (* silicon PIN gate *)
+    ).
+
+let host(static: key, thePin: bitstring) =
+    new hchal: bitstring;
+    out(bus, hchal);                                   (* INITIALIZE UPDATE *)
+    in(bus, (cchal: bitstring, cc: bitstring));
+    let s = skdf(static, hchal, cchal) in
+    if cc = cardcrypto(static, hchal, cchal) then       (* authenticate the card *)
+    (
+        event HostAccepted(hchal, cchal);
+        event HostSent(hchal, cchal);
+        out(bus, hostcrypto(static, hchal, cchal));     (* EXTERNAL AUTHENTICATE *)
+        out(bus, senc(thePin, s))                       (* wrapped VERIFY(PIN) *)
+    ).
+
+(* ===========================================================================
+   SCENARIO BASELINE — pure bus (Dolev-Yao) attacker, no key leak.
+   Expect: session-key + PIN SECRET (the channel protects them), and mutual
+   authentication holds.
+   =========================================================================== *)
+free staticB: key       [private].
+free pinB:    bitstring [private].
+query attacker(pinB).                                  (* expect: secret *)
+(* mutual authentication: an accept implies the peer actually ran. *)
+query h: bitstring, c: bitstring; event(HostAccepted(h, c)) ==> event(CardSent(h, c)).
+query h: bitstring, c: bitstring; event(CardAccepted(h, c)) ==> event(HostSent(h, c)).
+let scenarioBaseline = ( card(staticB, pinB) | host(staticB, pinB) ).
+
+(* Event-free legs for the residual scenario: with the static key leaked the
+   attacker can forge cryptograms, so the mutual-auth events would (correctly)
+   be spurious there — we therefore scope the authentication queries above to
+   the no-leak baseline by not emitting them here. The residual scenario is only
+   about PIN confidentiality. *)
+let cardL(static: key, thePin: bitstring) =
+    in(bus, hchal: bitstring);
+    new cchal: bitstring;
+    let s = skdf(static, hchal, cchal) in
+    out(bus, (cchal, cardcrypto(static, hchal, cchal)));
+    in(bus, hc: bitstring);
+    if hc = hostcrypto(static, hchal, cchal) then
+    (
+        in(bus, c: bitstring);
+        let p = sdec(c, s) in
+        if p = thePin then 0
+    ).
+
+let hostL(static: key, thePin: bitstring) =
+    new hchal: bitstring;
+    out(bus, hchal);
+    in(bus, (cchal: bitstring, cc: bitstring));
+    let s = skdf(static, hchal, cchal) in
+    if cc = cardcrypto(static, hchal, cchal) then
+    (
+        out(bus, hostcrypto(static, hchal, cchal));
+        out(bus, senc(thePin, s))
+    ).
+
+(* ===========================================================================
+   RESIDUAL — static-key leak (DHUK/PBS extraction, S2) + the attacker observes
+   a legitimate session on the bus. The attacker re-derives that session's key
+   from the static key + the captured challenges and decrypts the PIN.
+   Expect: PIN NOT secret. This is the documented Claim-7 residual that the
+   planned ML-KEM inner wrap closes — and it doubles as the model's anti-vacuity
+   control: ProVerif MUST be able to recover the PIN here, else the model is
+   vacuously safe and the baseline `secret` result is meaningless.
+   =========================================================================== *)
+free staticR: key       [private].
+free pinR:    bitstring [private].
+query attacker(pinR).                                  (* expect: NOT secret *)
+let scenarioResidual =
+    ( cardL(staticR, pinR) | hostL(staticR, pinR) | out(bus, staticR) ).  (* leak static *)
+
+process ( scenarioBaseline | scenarioResidual )

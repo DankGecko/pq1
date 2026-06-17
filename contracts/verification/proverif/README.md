@@ -84,11 +84,59 @@ proverif /tmp/gate_off.pv   # RESULT ... reconstruct(ho2,he2) ... is false
   monotonic-counter properties (Tamarin/GSVerif territory). What ProVerif proves
   here is the *qualitative* gate — no offline grind — not the count. (Claim 3 is
   also currently provisional, partially violated by ship-blocker S-1.)
-- **Key-establishment handshakes**: the TLS-PRF/CCM-8 (Shielded Connection) and
-  CMAC/CBC (SCP03) session-key derivations are abstracted as pre-shared per-
-  channel keys; modelling the handshakes is a separate, later model.
+- **Key-establishment handshakes**: `dual_se_unlock.pv` abstracts the per-channel
+  key as pre-shared. The SE050 **SCP03** handshake that establishes it is now
+  modelled separately in `scp03_handshake.pv` (see below), which justifies that
+  abstraction for the no-leak case. The OPTIGA Shielded Connection (TLS-PRF/CCM-8)
+  handshake remains a future model.
 - **Quantum-harvest residual** (Claim 7): perfect symbolic crypto cannot express
   it; it stays a documented open item (ML-KEM inner wrap).
 - **XOR-malleability / bit-flip**: `reconstruct` has no equational theory, so
   this model cannot express it — that surface is the FI track (F-28/F-29 R-MAC
   tamper).
+
+---
+
+# `scp03_handshake.pv` — SE050 SCP03 key-establishment handshake
+
+Fills the handshake gap `dual_se_unlock.pv` leaves abstract. Models the
+GlobalPlatform SCP03 mutual-auth + session-key derivation (`INITIALIZE UPDATE`
+→ `EXTERNAL AUTHENTICATE`, session key = `KDF(static, host_chal, card_chal)`,
+PIN VERIFY wrapped under the session key) and pins down exactly when the channel
+protects the PIN. `make proverif` runs it after the seed-unlock model.
+
+## What is proven
+
+| Query | Attacker | Result | Meaning |
+|---|---|---|---|
+| `attacker(pinB)` | pure bus (Dolev-Yao), no key leak | **secret** | the channel protects the PIN — justifies the pre-shared-key abstraction in `dual_se_unlock.pv` |
+| `HostAccepted ⟹ CardSent` | — | **true** | host authenticates the card (no impersonation without `static`) |
+| `CardAccepted ⟹ HostSent` | — | **true** | card authenticates the host |
+| `attacker(pinR)` | holds `static` (DHUK/PBS leak, S2) **and** captured a session | **NOT secret** | static-key leak + session capture recovers the PIN |
+
+```
+RESULT not attacker(pinB[]) is true.                                  # baseline PIN secret
+RESULT event(HostAccepted(h,c)) ==> event(CardSent(h,c)) is true.     # card authenticated
+RESULT event(CardAccepted(h,c)) ==> event(HostSent(h,c)) is true.     # host authenticated
+RESULT not attacker(pinR[]) is false.                                 # residual: PIN recovered
+```
+
+### The residual is the documented Claim-7 item — and the anti-vacuity control
+
+`attacker(pinR)` coming back **NOT secret** is the formal statement of
+`threat-model.md` Claim 7's residual: an adversary who has the device's static
+channel keys (a DHUK/PBS extraction) **and** captured a legitimate unlock session
+re-derives that session's key from `KDF(static, captured challenges)` and
+decrypts the PIN VERIFY. This is exactly what the planned **ML-KEM inner wrap**
+closes (its PQ secret is not recoverable from the static keys). It is NOT a newly
+found break — fresh per-session challenges already stop a *pure bus* attacker
+(the `pinB` = secret result) — and it doubles as the model's anti-vacuity
+control: ProVerif must be able to recover the PIN here, else the `secret` results
+would be vacuous.
+
+## Out of frame (scp03_handshake.pv)
+
+- S-ENC / S-MAC collapsed to one `static` (a DHUK leak gives both).
+- KDF / cryptograms / AES-CCM/CBC are symbolic functions (perfect crypto).
+- The SCP03 command counter + MAC-chaining replay window is not modelled.
+- The OPTIGA Shielded Connection (TLS-PRF/CCM-8) handshake is a separate model.

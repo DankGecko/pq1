@@ -3533,7 +3533,10 @@ miri:
 .PHONY: proverif
 proverif:
 	@command -v proverif >/dev/null 2>&1 || { echo "ERROR: proverif not found. Install: opam install --assume-depexts proverif (CLI build needs no GTK)"; exit 1; }
+	@echo "==> ProVerif: dual-SE seed-unlock (secrecy + PIN-gate auth)"
 	proverif contracts/verification/proverif/dual_se_unlock.pv
+	@echo "==> ProVerif: SE050 SCP03 handshake (session-key secrecy + mutual auth + static-leak residual)"
+	proverif contracts/verification/proverif/scp03_handshake.pv
 
 # Stateful symbolic model (Tamarin) of the three-way PIN-attempt lockstep:
 # a single-counter reset is always caught by the boot reconcile (CORE), an
