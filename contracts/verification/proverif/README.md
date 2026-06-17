@@ -140,3 +140,44 @@ would be vacuous.
 - KDF / cryptograms / AES-CCM/CBC are symbolic functions (perfect crypto).
 - The SCP03 command counter + MAC-chaining replay window is not modelled.
 - The OPTIGA Shielded Connection (TLS-PRF/CCM-8) handshake is a separate model.
+
+---
+
+# `optiga_shield_handshake.pv` — OPTIGA Shielded Connection handshake
+
+The OPTIGA-side companion to `scp03_handshake.pv` (so both SE tunnels have a
+handshake model). Models the Infineon Shielded Connection (PBS root secret →
+TLS-1.2-PRF → AES-128-CCM-8) that returns `half_O`. Structurally identical to
+the SCP03 model; results parallel it:
+
+| Query | Attacker | Result | Meaning |
+|---|---|---|---|
+| `attacker(halfOB)` | pure bus | **secret** | the shielded channel protects `half_O` |
+| `HostAccepted ⟹ OptSent`, `OptAccepted ⟹ HostSent` | — | **true** | mutual authentication |
+| `attacker(halfOR)` | holds PBS (S2 leak) **and** captured a session | **NOT secret** | PBS-leak + capture recovers `half_O` |
+
+The residual is **strictly weaker** than the SCP03 PIN one: `half_O` is one XOR
+half — by Claim 1 (proved in `dual_se_unlock.pv`) it is useless without `half_E`.
+
+---
+
+# `scp03_replay.pv` + `../tamarin/scp03_replay.spthy` — SCP03 in-session anti-replay
+
+Refines the handshake: once the session is up, every wrapped command carries a
+C-MAC over an advancing counter, so the card accepts each command at most once.
+The proof is **split across both tools by their strength**:
+
+- **`scp03_replay.pv` (ProVerif) — NO FORGERY:** `event(Accept) ⟹ event(Send)`
+  is `true` — the card never accepts a wrapped command the host did not send (a
+  bus attacker cannot forge one without the session MAC key). ProVerif
+  **over-approximates** the injective no-replay (`inj-event` "cannot be proved" —
+  it cannot rule out a symbolic MAC-chain collision), so that half is left to
+  Tamarin.
+- **`../tamarin/scp03_replay.spthy` (Tamarin) — NO REPLAY:** `no_replay` (each
+  counter accepted at most once) is **verified** via the explicit linear counter
+  state (the `Expected` token for a counter is consumed on accept), plus
+  `can_accept` (anti-vacuity) so the result is not vacuous. `make tamarin` runs it.
+
+Together: no-forgery (ProVerif) + no-replay (Tamarin) = an attacker can neither
+inject nor replay a wrapped command within a session. Cross-session replay is
+separately prevented by the fresh per-session keys proved in `scp03_handshake.pv`.

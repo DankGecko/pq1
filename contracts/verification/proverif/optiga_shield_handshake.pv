@@ -1,0 +1,107 @@
+(* ===========================================================================
+   PQ-Signer — OPTIGA Trust M Shielded Connection handshake (ProVerif)
+   ===========================================================================
+
+   The OPTIGA-side companion to scp03_handshake.pv: models the Infineon Shielded
+   Connection that establishes the encrypted tunnel `dual_se_unlock.pv` abstracts
+   as a pre-shared key, so BOTH SE tunnels now have a handshake model.
+
+   Mechanism (secure/src/optiga/shield.rs):
+     root of trust : Platform Binding Secret (PBS) at OID 0xE140 (64 B, factory-
+                     provisioned, DHUK-wrapped) — the invariant-#3 S2 asset.
+     key derivation: TLS 1.2 PRF (HMAC-SHA256) over PBS + exchanged nonces.
+     channel       : AES-128-CCM-8 (authenticated encryption).
+   The host (S-world) opens the shielded connection, the F1D0/E120 silicon gate
+   authorises the read, and OPTIGA returns `half_O` over the channel.
+
+   ABSTRACTIONS (stated): PBS as one symbolic key; TLS-PRF / cryptograms /
+   AES-CCM-8 as symbolic functions (perfect crypto); the exact 4-step framing
+   abstracted to a nonce-exchange + PRF-derived session key. Faithful for the
+   session-key secrecy, mutual authentication, and half_O-confidentiality
+   questions below.
+
+   NOTE: half_O is ONE XOR half — by Claim 1 it is useless without half_E (proved
+   in dual_se_unlock.pv). So the residual here is a channel-confidentiality fact,
+   strictly weaker than scp03_handshake.pv's PIN-recovery residual.
+   =========================================================================== *)
+
+type key.
+
+fun senc(bitstring, key): bitstring.
+reduc forall m: bitstring, k: key; sdec(senc(m, k), k) = m.
+
+(* TLS-PRF session-key derivation from PBS + both nonces (fresh => fresh key). *)
+fun prf(key, bitstring, bitstring): key.
+(* handshake cryptograms proving knowledge of PBS over the nonces. *)
+fun hostcrypto(key, bitstring, bitstring): bitstring.
+fun optcrypto(key, bitstring, bitstring): bitstring.
+
+free bus: channel.
+
+event OptSent(bitstring, bitstring).
+event HostAccepted(bitstring, bitstring).
+event HostSent(bitstring, bitstring).
+event OptAccepted(bitstring, bitstring).
+
+(* OPTIGA: derive session key from PBS + nonces, authenticate the host, then
+   release half_O over the channel (the F1D0/E120 gate is the host's auth). *)
+let optiga(pbs: key, halfO: bitstring) =
+    in(bus, hrnd: bitstring);                       (* host opens the connection *)
+    new ornd: bitstring;
+    let s = prf(pbs, hrnd, ornd) in
+    event OptSent(hrnd, ornd);
+    out(bus, (ornd, optcrypto(pbs, hrnd, ornd)));
+    in(bus, hc: bitstring);
+    if hc = hostcrypto(pbs, hrnd, ornd) then
+    (
+        event OptAccepted(hrnd, ornd);
+        out(bus, senc(halfO, s))                    (* return half_O, wrapped *)
+    ).
+
+let host(pbs: key, halfO: bitstring) =
+    new hrnd: bitstring;
+    out(bus, hrnd);
+    in(bus, (ornd: bitstring, oc: bitstring));
+    let s = prf(pbs, hrnd, ornd) in
+    if oc = optcrypto(pbs, hrnd, ornd) then          (* authenticate OPTIGA *)
+    (
+        event HostAccepted(hrnd, ornd);
+        event HostSent(hrnd, ornd);
+        out(bus, hostcrypto(pbs, hrnd, ornd))
+    ).
+
+(* event-free legs for the leaky residual scenario (auth would be spuriously
+   forgeable once PBS leaks, so we scope the auth queries to the baseline). *)
+let optigaL(pbs: key, halfO: bitstring) =
+    in(bus, hrnd: bitstring);
+    new ornd: bitstring;
+    let s = prf(pbs, hrnd, ornd) in
+    out(bus, (ornd, optcrypto(pbs, hrnd, ornd)));
+    in(bus, hc: bitstring);
+    if hc = hostcrypto(pbs, hrnd, ornd) then ( out(bus, senc(halfO, s)) ).
+
+let hostL(pbs: key, halfO: bitstring) =
+    new hrnd: bitstring;
+    out(bus, hrnd);
+    in(bus, (ornd: bitstring, oc: bitstring));
+    let s = prf(pbs, hrnd, ornd) in
+    if oc = optcrypto(pbs, hrnd, ornd) then ( out(bus, hostcrypto(pbs, hrnd, ornd)) ).
+
+(* === BASELINE: pure bus attacker, no PBS leak. half_O secret + mutual auth. === *)
+free pbsB:   key       [private].
+free halfOB: bitstring [private].
+query attacker(halfOB).
+query h: bitstring, c: bitstring; event(HostAccepted(h, c)) ==> event(OptSent(h, c)).
+query h: bitstring, c: bitstring; event(OptAccepted(h, c)) ==> event(HostSent(h, c)).
+let scenarioBaseline = ( optiga(pbsB, halfOB) | host(pbsB, halfOB) ).
+
+(* === RESIDUAL: PBS leak (DHUK extraction, S2) + captured session => half_O
+   recovered. Doubles as anti-vacuity. (Strictly weaker than the SCP03 PIN
+   residual: half_O alone is useless by Claim 1.) === *)
+free pbsR:   key       [private].
+free halfOR: bitstring [private].
+query attacker(halfOR).
+let scenarioResidual =
+    ( optigaL(pbsR, halfOR) | hostL(pbsR, halfOR) | out(bus, pbsR) ).
+
+process ( scenarioBaseline | scenarioResidual )

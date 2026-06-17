@@ -1,0 +1,51 @@
+theory SCP03Replay begin
+
+functions: mac/2, s/1
+
+/* In-session SCP03 anti-replay: the wrapped command carries a counter; the card
+   accepts only the expected counter and advances. Session key `k` is established
+   (scp03_handshake.pv's job). Replay = re-injecting a captured wrapped command. */
+
+rule Provision:
+    [ Fr(~sid), Fr(~c0), Fr(~k) ]
+  --[ Provision(~sid) ]->
+    [ HCtr(~sid, ~c0, ~k), Expected(~sid, ~c0, ~k) ]
+
+rule HostSend:
+    [ HCtr(sid, c, k), Fr(~cmd) ]
+  --[ Send(sid, c, ~cmd) ]->
+    [ HCtr(sid, s(c), k), Out(<c, ~cmd, mac(k, <c, ~cmd>)>) ]
+
+// card accepts iff the inbound counter == expected AND the MAC is valid; advance.
+// The MAC check is an equality restriction (not a pattern match) so the inbound
+// message `m` is a free variable — this avoids a partial deconstruction on the
+// mac term that would otherwise need --auto-sources.
+rule CardAccept:
+    [ Expected(sid, c, k), In(<c, cmd, m>) ]
+  --[ Accept(sid, c, cmd), MacOk(m, k, c, cmd) ]->
+    [ Expected(sid, s(c), k) ]
+
+restriction mac_ok:
+    "All m k c cmd #i. MacOk(m, k, c, cmd) @ i ==> m = mac(k, <c, cmd>)"
+
+// anti-vacuity: a command can be accepted.
+lemma can_accept:
+  exists-trace "Ex sid c cmd #i. Accept(sid, c, cmd) @ i"
+
+// NO REPLAY: each counter is accepted at most once (a replay is rejected).
+// This is the injective property ProVerif over-approximates (it could not rule
+// out a symbolic MAC-chain collision); Tamarin's explicit linear counter state
+// proves it directly — the Expected token for a counter is consumed on accept,
+// so the same counter can never be accepted twice.
+lemma no_replay:
+  all-traces
+    "All sid c m1 m2 #i #j.
+        Accept(sid, c, m1) @ i & Accept(sid, c, m2) @ j ==> #i = #j"
+
+// (NO FORGERY — every accept corresponds to a genuine send — is the companion
+//  property, proved in ../proverif/scp03_replay.pv. Tamarin's automated prover
+//  does not auto-close it here: the Expected-token loop makes the backward
+//  search non-terminating, the same class of issue documented in pin_lockstep.
+//  ProVerif discharges it cleanly, so the work splits tool-by-strength:
+//  ProVerif = no-forgery, Tamarin = no-replay + the anti-vacuity witness.)
+end

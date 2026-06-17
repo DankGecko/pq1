@@ -68,3 +68,24 @@ reset (the **S-1** OPTIGA glitch alone, an **SE050 delete** alone, or a TZ-bypas
   chain multiple boots in a single trace.
 - **Tunnel crypto / message secrecy**: that is the ProVerif model's job
   (`../proverif/`). This model is purely about the counter/reconcile state.
+
+---
+
+# `scp03_replay.spthy` — SCP03 in-session anti-replay (counter)
+
+The stateful half of the SCP03 replay-window proof (the ProVerif companion
+`../proverif/scp03_replay.pv` proves the no-forgery trace property). Models the
+in-session command counter: the card accepts only the expected next counter and
+advances, so a captured wrapped command cannot be replayed/reordered.
+
+| Lemma | Kind | Result |
+|---|---|---|
+| `can_accept` | exists-trace | **verified** — a command can be accepted (anti-vacuity) |
+| `no_replay` | all-traces | **verified** — each counter is accepted at most once (injective anti-replay) |
+
+`no_replay` is exactly the injective property ProVerif over-approximates;
+Tamarin's explicit linear `Expected` counter token (consumed on accept) proves it
+directly. The MAC check is an equality `restriction` (not a pattern match) to
+avoid a partial deconstruction — so it needs no `--auto-sources`. `no_forgery`
+lives in the ProVerif companion (Tamarin's automated prover does not auto-close
+it — the `Expected`-token loop, same class as `pin_lockstep`).

@@ -1,0 +1,79 @@
+(* ===========================================================================
+   PQ-Signer — SCP03 within-session anti-replay (sequential counter), ProVerif
+   ===========================================================================
+
+   Refines scp03_handshake.pv: once the session is up, every wrapped command
+   carries a C-MAC over the command counter (and the MAC-chaining value). The
+   counter is SEQUENTIAL — the card accepts only the next expected counter and
+   advances — so a bus attacker cannot REPLAY or REORDER a wrapped command.
+
+   secure/src/se050/scp03.rs: 16-byte `counter` incremented per wrapped command.
+   The SE processes commands sequentially (one I2C transaction at a time), so the
+   card is modelled as a sequential server: its expected-counter state is
+   threaded through a private channel holding a SINGLE token (which serialises
+   access — a replicated `!card` over a shared table would otherwise admit a
+   spurious non-atomic check-then-accept race that the real single SE does not).
+
+   Proven here:
+     * NO FORGERY: the card only accepts commands the host actually sent — a bus
+       attacker cannot forge a wrapped command without the session MAC key.
+
+   The COMPANION property — NO REPLAY (injective: the card never accepts the same
+   wrapped command twice) — is proved in ../tamarin/scp03_replay.spthy. ProVerif
+   OVER-APPROXIMATES the injective version (it cannot rule out a symbolic
+   MAC-chain collision, so `inj-event(Accept) ==> inj-event(Send)` comes back
+   "cannot be proved"); Tamarin's explicit linear counter state discharges it.
+   The two tools split the replay-window proof by strength: ProVerif = no-forgery
+   (trace property), Tamarin = no-replay (stateful injective).
+
+   ABSTRACTION: `cmac` symbolic; the session key is assumed established (the
+   handshake is scp03_handshake.pv's job); `s` is the counter successor.
+   =========================================================================== *)
+
+type key.
+fun cmac(key, bitstring, bitstring): bitstring.   (* C-MAC over (counter, command) *)
+fun s(bitstring): bitstring.                       (* counter successor (+1) *)
+
+free bus:  channel.
+free smac: key       [private].   (* established session MAC key *)
+free c0:   bitstring [private].   (* initial counter (post-handshake) *)
+
+event Send(bitstring, bitstring).     (* host wrapped + sent (ctr, cmd) *)
+event Accept(bitstring, bitstring).   (* card accepted (ctr, cmd) *)
+
+free hch: channel [private].   (* host's counter state (single token) *)
+free cch: channel [private].   (* card's expected-counter state (single token) *)
+
+(* host: emit one wrapped command per counter value, in sequence. *)
+let host =
+    !(  in(hch, ctr: bitstring);
+        new cmd: bitstring;
+        let mac = cmac(smac, ctr, cmd) in
+        event Send(ctr, cmd);
+        out(bus, (ctr, cmd, mac));
+        out(hch, s(ctr))  ).
+
+(* card: sequential. Accept a (possibly attacker-injected) command iff its MAC
+   is valid AND its counter is exactly the expected next one; then advance. A
+   stale/replayed counter (ctr <> exp) is rejected; the expected counter holds. *)
+let card =
+    !(  in(cch, exp: bitstring);
+        in(bus, (ctr: bitstring, cmd: bitstring, mac: bitstring));
+        if mac = cmac(smac, ctr, cmd) then
+        (
+            if ctr = exp then
+            (
+                event Accept(ctr, cmd);
+                out(cch, s(exp))
+            )
+            else out(cch, exp)
+        )
+        else out(cch, exp)  ).
+
+(* NO FORGERY: every accept corresponds to a genuine host send. (NO REPLAY —
+   the injective version — is proved in ../tamarin/scp03_replay.spthy; see the
+   header for why ProVerif over-approximates it.) *)
+query ctr: bitstring, cmd: bitstring;
+    event(Accept(ctr, cmd)) ==> event(Send(ctr, cmd)).
+
+process ( out(hch, c0) | out(cch, c0) | host | card )

@@ -3537,6 +3537,10 @@ proverif:
 	proverif contracts/verification/proverif/dual_se_unlock.pv
 	@echo "==> ProVerif: SE050 SCP03 handshake (session-key secrecy + mutual auth + static-leak residual)"
 	proverif contracts/verification/proverif/scp03_handshake.pv
+	@echo "==> ProVerif: OPTIGA Shielded Connection handshake (half_O secrecy + mutual auth + PBS-leak residual)"
+	proverif contracts/verification/proverif/optiga_shield_handshake.pv
+	@echo "==> ProVerif: SCP03 within-session no-forgery (companion to the Tamarin no-replay)"
+	proverif contracts/verification/proverif/scp03_replay.pv
 
 # Stateful symbolic model (Tamarin) of the three-way PIN-attempt lockstep:
 # a single-counter reset is always caught by the boot reconcile (CORE), an
@@ -3545,4 +3549,7 @@ proverif:
 .PHONY: tamarin
 tamarin:
 	@command -v tamarin-prover >/dev/null 2>&1 || { echo "ERROR: tamarin-prover not found. Install the prebuilt linux64 binary + the maude backend (both need no sudo/GHC; see contracts/verification/tamarin/README.md)"; exit 1; }
+	@echo "==> Tamarin: three-way PIN-attempt lockstep reconcile"
 	tamarin-prover --prove contracts/verification/tamarin/pin_lockstep.spthy
+	@echo "==> Tamarin: SCP03 within-session no-replay (counter)"
+	tamarin-prover --prove contracts/verification/tamarin/scp03_replay.spthy
