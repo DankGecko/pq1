@@ -3506,10 +3506,14 @@ invariant-gates:
 .PHONY: kani miri
 kani:
 	@command -v cargo-kani >/dev/null 2>&1 || { echo "ERROR: cargo-kani not found. Install: cargo install --locked kani-verifier && cargo kani setup"; exit 1; }
-	@echo "==> Kani: tx-core parsers (decode_item used<=len + validate_access_list nested walker)"
+	@echo "==> Kani: tx-core RLP parsers (decode_item used<=len, bytes_to_u256)"
 	cargo kani -p pqsigner-tx-core
 	@echo "==> Kani: domain recovery parser (deserialize_pin_state)"
 	cargo kani -p pqsigner-domain --harness deserialize_pin_state_panic_free
+	@echo "==> Kani: ERC-20 calldata decoder (panic-free + transfer no-misdecode)"
+	cargo kani -p pqsigner-tx
+	@echo "==> Kani: ERC-7730 IR header parser (offset-bounds safety)"
+	cargo kani -p pqsigner-erc7730 --harness erc7730_ir_parse_panic_free
 	@echo "==> kani: PASS"
 
 miri:

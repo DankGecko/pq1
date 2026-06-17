@@ -761,3 +761,32 @@ mod tests {
         assert_eq!(Erc7730Ir::parse(&bytes), Err(IrError::BadLayout));
     }
 }
+
+#[cfg(kani)]
+mod kani_harnesses {
+    use super::*;
+
+    /// Panic / overflow / slice-OOB-freedom for the ERC-7730 clear-signing IR
+    /// header parser over arbitrary (companion-supplied descriptor) bytes. The
+    /// non-trivial part Kani discharges: the symbolic `metadata_off` / `pool_len`
+    /// / `formats_off` / `formats_len` offsets (read from header bytes) combined
+    /// with the layout checks (`metadata_off == HEADER_LEN`, `formats_off ==
+    /// metadata_off + pool_len`, `formats_off + formats_len == bytes.len()`) must
+    /// guarantee the final `&bytes[metadata_off..metadata_off+pool_len]` and
+    /// `&bytes[formats_off..formats_off+formats_len]` slices are in-bounds — no
+    /// hostile descriptor can panic the parser. `Ir::parse` is loop-free; the
+    /// format/field iteration happens lazily in later methods.
+    ///
+    /// Scope: host-reachable pure-logic parser (no_std); bounded to N bytes for
+    /// CBMC tractability — the (symbolic u16) offset arithmetic and every
+    /// layout-check branch are exercised within this bound.
+    #[kani::proof]
+    #[kani::unwind(64)]
+    fn erc7730_ir_parse_panic_free() {
+        const N: usize = HEADER_LEN + 6; // header + room for a small pool/formats
+        let buf: [u8; N] = kani::any();
+        let len: usize = kani::any();
+        kani::assume(len <= N);
+        let _ = Erc7730Ir::parse(&buf[..len]);
+    }
+}

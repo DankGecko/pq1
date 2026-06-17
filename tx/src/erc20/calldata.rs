@@ -108,3 +108,48 @@ pub fn is_unlimited_amount(amount: &U256) -> bool {
     // so any nonzero byte in `amount.0[0..7]` means amount >= 2^200.
     amount.0[0..7].iter().any(|&b| b != 0)
 }
+
+#[cfg(kani)]
+mod kani_harnesses {
+    use super::*;
+
+    /// Panic / slice-OOB-freedom for the ERC-20 calldata decoder over arbitrary
+    /// (companion-supplied) calldata. This decodes exactly what the trusted
+    /// display renders on the confirm screen, so a panic here is a DoS on the
+    /// sign path. Kani proves no input of length <= N panics — every input maps
+    /// to `Some(call)` or `None`.
+    /// Scope: host-reachable pure-logic decoder (no_std).
+    #[kani::proof]
+    #[kani::unwind(13)]
+    fn parse_erc20_calldata_panic_free() {
+        const N: usize = 100; // covers transferFrom (4 + 96) + slack
+        let buf: [u8; N] = kani::any();
+        let len: usize = kani::any();
+        kani::assume(len <= N);
+        let _ = parse_erc20_calldata(&buf[..len]);
+    }
+
+    /// No-misdecode (display integrity): a well-formed `transfer(to, amount)`
+    /// calldata ALWAYS decodes to `Transfer` with EXACTLY the encoded `to` and
+    /// `amount`. The decoder cannot show the user a recipient/amount different
+    /// from the bytes that get signed — proved for every (to, amount).
+    #[kani::proof]
+    #[kani::unwind(64)] // covers the 32-byte copy_from_slice / word compares
+    fn parse_erc20_transfer_no_misdecode() {
+        let to: [u8; 20] = kani::any();
+        let amount: [u8; 32] = kani::any();
+        let mut data = [0u8; 68];
+        data[0..4].copy_from_slice(&SELECTOR_TRANSFER);
+        // The address is right-justified in the 32-byte word; the top 12 bytes
+        // stay zero (the encoding the decoder's left-pad check requires).
+        data[16..36].copy_from_slice(&to);
+        data[36..68].copy_from_slice(&amount);
+        match parse_erc20_calldata(&data) {
+            Some(Erc20Call::Transfer { to: pto, amount: pamount }) => {
+                assert!(pto == to, "decoded recipient must equal the encoded recipient");
+                assert!(pamount.0 == amount, "decoded amount must equal the encoded amount");
+            }
+            _ => panic!("a well-formed transfer calldata must decode to Transfer"),
+        }
+    }
+}
