@@ -30,13 +30,23 @@ command -v kontrol >/dev/null 2>&1 || {
   exit 2
 }
 
-# kontrol-cheatcodes (symbolic helpers) — only needed if a harness uses
-# kevm.* / KontrolCheats. This harness uses ONLY forge-std cheatcodes, but
-# install it anyway so future harnesses work out of the box.
-if [ ! -d "$SW/lib/kontrol-cheatcodes" ]; then
-  echo "Installing kontrol-cheatcodes ..."
-  ( cd "$SW" && forge install runtimeverification/kontrol-cheatcodes ) || true
-fi
+# kontrol-cheatcodes (symbolic helpers) is a TRANSIENT kontrol artifact and must
+# NOT linger in the smart-wallet lib/: Foundry auto-generates a remapping for
+# every lib/ dir and folds the remapping list into solc metadata, so its mere
+# presence shifts EVERY pinned contract codehash and turns the codehash freeze
+# tests (`forge test`) red — a phantom failure for anyone who has run Kontrol.
+# So we (a) install it only when a staged harness actually imports it (deferred
+# until after staging; current harnesses use only forge-std cheatcodes), and
+# (b) remove it on exit so a later `forge test` / CI sees the canonical
+# foundry.lock lib set. See work-todo §34 + docs/KONTROL_SCOPING.md.
+KCC_DIR="$SW/lib/kontrol-cheatcodes"
+cleanup() {
+  if [ -d "$KCC_DIR" ]; then
+    rm -rf "$KCC_DIR"
+    echo "Removed transient kontrol-cheatcodes from lib/ (keeps codehash pins canonical)."
+  fi
+}
+trap cleanup EXIT
 
 mkdir -p "$DEST_DIR"
 # Stage every Kontrol harness, rewriting the repo-relative imports to the
@@ -47,6 +57,16 @@ for h in "$SRC_DIR"/*.t.sol; do
     "$h" > "$DEST_DIR/$base"
   echo "Staged harness -> $DEST_DIR/$base"
 done
+
+# Install kontrol-cheatcodes ONLY if a staged harness imports it. The EXIT trap
+# above removes it again afterward, so the common forge-std-only case never
+# leaves lib/ polluted for the next `forge test` / CI codehash freeze check.
+if grep -rqlE "kontrol-cheatcodes|KontrolCheats|KEVMCheats" "$DEST_DIR"/*.t.sol 2>/dev/null; then
+  if [ ! -d "$KCC_DIR" ]; then
+    echo "A staged harness imports kontrol-cheatcodes; installing transiently ..."
+    ( cd "$SW" && forge install runtimeverification/kontrol-cheatcodes ) || true
+  fi
+fi
 
 cd "$SW"
 # Force the staged harnesses to recompile under kontrol's own
