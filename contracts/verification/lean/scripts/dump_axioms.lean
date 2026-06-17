@@ -47,6 +47,10 @@ import SphincsCVerify
 -- consecutive 32-byte windows, the precompile input slice = the spec's ByteSeg.flatten.
 #print axioms SphincsCVerify.Interpreter.execList_append
 #print axioms SphincsCVerify.Interpreter.execFor_invariant
+-- Bounded loop-induction engine: `hstep` may assume `cur < N`, so a per-iteration
+-- obligation bounded by the index (e.g. the FORS climb's `h < A` `H_adrs`/`H_sib`) is
+-- dischargeable — the fix that makes `fors_climb`/`fors_tree_body` non-vacuous.
+#print axioms SphincsCVerify.Interpreter.execFor_invariant_lt
 #print axioms SphincsCVerify.Interpreter.slice_toArray_eq_flatten
 #print axioms SphincsCVerify.Interpreter.C10.c10Oracle_holdsSegs
 
@@ -63,6 +67,10 @@ import SphincsCVerify
 #print axioms SphincsCVerify.Interpreter.C10.mload_masked_eq_wordOf_pad16
 #print axioms SphincsCVerify.Interpreter.C10.reconstructRoot_eq_foldl
 #print axioms SphincsCVerify.Interpreter.C10.fors_tree_body
+-- Non-vacuity guards: the bounded `H_adrs`/`H_sib` that `fors_tree_body` carries are
+-- INHABITED (the regression that fences out re-introducing an unsatisfiable hyp).
+#print axioms SphincsCVerify.Interpreter.C10.H_adrs_dischargeable
+#print axioms SphincsCVerify.Interpreter.C10.H_sib_dischargeable
 #print axioms SphincsCVerify.Interpreter.C10.wordOf_make
 #print axioms SphincsCVerify.Interpreter.C10.wordOf_forsNode
 

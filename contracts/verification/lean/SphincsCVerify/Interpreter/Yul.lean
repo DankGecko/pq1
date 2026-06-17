@@ -254,6 +254,48 @@ theorem execFor_invariant {n : Nat} (sha : List UInt8 → Spec.ByteVec 32) (sig 
       rw [show cur + (rem + 1) = (cur + 1) + rem by omega]
       exact hih
 
+/-- **Bounded loop-induction for `forRange`.** The `execFor_invariant` variant in
+    which the per-iteration step `hstep` may *assume* the index is in range
+    (`cur < N`). This is what a sound climb engine needs: the invariant
+    `R cur w` is only re-established for `cur < N`, so a hypothesis bounded by
+    `cur < N` (e.g. `H_adrs`/`H_sib` quantified `h < A`) is dischargeable at every
+    iteration the engine actually runs. Proved by generalizing over the remaining
+    fuel `rem` with `cur + rem = N` (so `cur < N` whenever `rem = j+1`), mirroring
+    `execFor_invariant`'s `rcases`/`subst` match handling. -/
+theorem execFor_invariant_lt {n : Nat} (sha : List UInt8 → Spec.ByteVec 32) (sig : Spec.ByteVec n)
+    (v : String) (body : List Stmt) (N : Nat) (R : Nat → VM → Prop)
+    (hstep : ∀ cur vm, cur < N → R cur vm →
+      (execList sha sig body { vm with env := setVar vm.env v cur }).2 = none ∧
+      R (cur + 1) (execList sha sig body { vm with env := setVar vm.env v cur }).1) :
+    ∀ vm, R 0 vm →
+      (execFor sha sig v body N 0 vm).2 = none ∧ R N (execFor sha sig v body N 0 vm).1 := by
+  -- Generalize: from index `cur` with `rem` iterations left and `cur + rem = N`.
+  suffices hgen : ∀ rem cur vm, cur + rem = N → R cur vm →
+      (execFor sha sig v body rem cur vm).2 = none ∧
+      R (cur + rem) (execFor sha sig v body rem cur vm).1 by
+    intro vm hR0
+    have h := hgen N 0 vm (by omega) hR0
+    rwa [Nat.zero_add] at h
+  intro rem
+  induction rem with
+  | zero =>
+      intro cur vm _ hR
+      simp only [execFor, Nat.add_zero]
+      exact ⟨trivial, hR⟩
+  | succ rem ih =>
+      intro cur vm hsum hR
+      -- `cur < N` since `cur + (rem + 1) = N`.
+      obtain ⟨hnone, hR1⟩ := hstep cur vm (by omega) hR
+      rw [execFor]
+      revert hR1
+      rcases hp : execList sha sig body { vm with env := setVar vm.env v cur } with ⟨pvm, po⟩
+      rw [hp] at hnone
+      subst hnone
+      intro hR1
+      have hih := ih (cur + 1) pvm (by omega) hR1
+      rw [show cur + (rem + 1) = (cur + 1) + rem by omega]
+      exact hih
+
 /-! ## Top-level program execution -/
 
 /-- Run a program from a caller-supplied initial memory (`mem0` lets the caller

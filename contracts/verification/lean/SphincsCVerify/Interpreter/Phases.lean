@@ -18,6 +18,7 @@ Mathlib-free (Lean core / `Init` only); no `sorry`/`admit`/`axiom`/`native_decid
 -/
 import SphincsCVerify.Interpreter.C10Program
 import SphincsCVerify.Spec.Fors
+import SphincsCVerify.Spec.Signature
 
 namespace SphincsCVerify.Interpreter.C10
 
@@ -790,17 +791,23 @@ theorem fors_climb_step
     (sig : ByteVec Spec.SignatureLen)
     (seed : ByteVec 32) (htIdx : UInt64) (treeIdx leafIdx : UInt32)
     (secret : ByteVec 16) (authPath : Array (ByteVec 16)) (tBase auth : Nat)
-    (H_adrs : ∀ h p, tBase ||| (((h + 1) % W) <<< 32 % W ||| p >>> 1)
+    -- BOUNDED byte-layout obligations: the climb only runs for `h < A` and the
+    -- running `pathIdx` stays `< 2^32` (it starts at a UInt32 leaf index and halves
+    -- each level), so these are TRUE/dischargeable — not the prior unsatisfiable
+    -- unbounded forms (which forced `p` unbounded and `h ≥ A`).
+    (H_adrs : ∀ h, h < Spec.A → ∀ p, p < 2 ^ 32 →
+        tBase ||| (((h + 1) % W) <<< 32 % W ||| p >>> 1)
         = wordOf (Spec.Adrs.forsNode htIdx treeIdx (UInt32.ofNat (h + 1)) (UInt32.ofNat (p / 2))))
-    (H_sib : ∀ h, calldataload sig ((auth + h <<< 4 % W) % W) &&& NMASK
+    (H_sib : ∀ h, h < Spec.A → calldataload sig ((auth + h <<< 4 % W) % W) &&& NMASK
         = wordOf (ByteVec.pad16 (authPath.getD h (ByteVec.zero 16))))
-    (cur : Nat) (w : VM)
+    (cur : Nat) (hcur : cur < Spec.A) (w : VM)
     (hR : w.env "node"
             = wordOf (ByteVec.pad16 (forsAcc seed htIdx treeIdx leafIdx secret authPath cur).fst)
           ∧ w.env "pathIdx" = (forsAcc seed htIdx treeIdx leafIdx secret authPath cur).snd
           ∧ w.env "N_MASK" = NMASK ∧ w.env "OUT" = 0x600
           ∧ w.env "treeAdrsBase" = tBase ∧ w.env "authPtr" = auth
-          ∧ (∀ i, i < 32 → w.mem (0 + i) = seed.data.getD i 0)) :
+          ∧ (∀ i, i < 32 → w.mem (0 + i) = seed.data.getD i 0)
+          ∧ (forsAcc seed htIdx treeIdx leafIdx secret authPath cur).snd < 2 ^ 32) :
     (execList c10Oracle sig forsClimbBody { w with env := setVar w.env "h" cur }).2 = none
     ∧ ((execList c10Oracle sig forsClimbBody { w with env := setVar w.env "h" cur }).1.env "node"
           = wordOf (ByteVec.pad16 (forsAcc seed htIdx treeIdx leafIdx secret authPath (cur + 1)).fst)
@@ -816,8 +823,9 @@ theorem fors_climb_step
             = auth
         ∧ (∀ i, i < 32 →
             (execList c10Oracle sig forsClimbBody { w with env := setVar w.env "h" cur }).1.mem (0 + i)
-              = seed.data.getD i 0)) := by
-  obtain ⟨hRnode, hRpath, hRN, hROUT, hRtB, hRauth, hRseed⟩ := hR
+              = seed.data.getD i 0)
+        ∧ (forsAcc seed htIdx treeIdx leafIdx secret authPath (cur + 1)).snd < 2 ^ 32) := by
+  obtain ⟨hRnode, hRpath, hRN, hROUT, hRtB, hRauth, hRseed, hRbound⟩ := hR
   unfold forsClimbBody
   rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
   rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
@@ -836,10 +844,13 @@ theorem fors_climb_step
   -- one more climb level is one more forsStep
   rw [forsAcc_succ]
   -- Rewrite the adrs word and sibling word into their spec `wordOf` forms.
-  rw [H_adrs cur (forsAcc seed htIdx treeIdx leafIdx secret authPath cur).snd, H_sib cur]
+  -- `H_adrs`/`H_sib` are BOUNDED: supply `cur < A` (hcur) and the running pathIdx
+  -- bound (`hRbound`), both in scope from the bounded engine + invariant.
+  rw [H_adrs cur hcur (forsAcc seed htIdx treeIdx leafIdx secret authPath cur).snd hRbound,
+      H_sib cur hcur]
   -- Resolve the parity `s` into {0, 32}.
   rw [s_value]
-  refine ⟨?node, ?path, trivial, trivial, trivial, trivial, ?mem⟩
+  refine ⟨?node, ?path, trivial, trivial, trivial, trivial, ?mem, ?bound⟩
   · -- node: parity-split the branchless swap, commute to canonical, apply climbMem_thPair.
     by_cases hpar : (forsAcc seed htIdx treeIdx leafIdx secret authPath cur).snd % 2 == 0
     · -- even: s = 0, stores at 64 (node) / 96 (sibling) → canonical
@@ -881,6 +892,18 @@ theorem fors_climb_step
       rw [mstore32_frame _ 64 _ (0 + i) (by omega), mstore32_frame _ 96 _ (0 + i) (by omega),
           mstore32_frame _ 32 _ (0 + i) (by omega)]
       exact hRseed i hi
+  · -- pathIdx bound preserved: forsStep halves pathIdx (`.snd = p / 2 ≤ p < 2^32`).
+    show (forsStep seed htIdx treeIdx authPath
+        (forsAcc seed htIdx treeIdx leafIdx secret authPath cur) cur).snd < 2 ^ 32
+    have hsnd : (forsStep seed htIdx treeIdx authPath
+        (forsAcc seed htIdx treeIdx leafIdx secret authPath cur) cur).snd
+        = (forsAcc seed htIdx treeIdx leafIdx secret authPath cur).snd / 2 := by
+      unfold forsStep
+      by_cases hp : (forsAcc seed htIdx treeIdx leafIdx secret authPath cur).snd % 2 == 0
+      · rw [if_pos hp]
+      · rw [if_neg hp]
+    rw [hsnd]
+    exact Nat.lt_of_le_of_lt (Nat.div_le_self _ 2) hRbound
 
 set_option maxHeartbeats 2000000 in
 set_option maxRecDepth 4000 in
@@ -905,10 +928,14 @@ theorem fors_climb
           (ByteVec.pad16 secret))))
     (hpath : vm.env "pathIdx" = leafIdx.toNat)
     (hseed : ∀ i, i < 32 → vm.mem (0 + i) = seed.data.getD i 0)
-    -- byte-layout obligations (wrapper-discharged)
-    (H_adrs : ∀ h p, tBase ||| (((h + 1) % W) <<< 32 % W ||| p >>> 1)
+    -- BOUNDED byte-layout obligations (wrapper-discharged; satisfiable — see the
+    -- bounded forms on `fors_climb_step`). The pathIdx bound the climb invariant
+    -- carries is rooted at `leafIdx.toNat < 2^32` (free, `leafIdx : UInt32`) and is
+    -- preserved by the per-level halving.
+    (H_adrs : ∀ h, h < Spec.A → ∀ p, p < 2 ^ 32 →
+        tBase ||| (((h + 1) % W) <<< 32 % W ||| p >>> 1)
         = wordOf (Spec.Adrs.forsNode htIdx treeIdx (UInt32.ofNat (h + 1)) (UInt32.ofNat (p / 2))))
-    (H_sib : ∀ h, calldataload sig ((auth + h <<< 4 % W) % W) &&& NMASK
+    (H_sib : ∀ h, h < Spec.A → calldataload sig ((auth + h <<< 4 % W) % W) &&& NMASK
         = wordOf (ByteVec.pad16 (authPath.getD h (ByteVec.zero 16)))) :
     (execFor c10Oracle sig "h" forsClimbBody Spec.A 0 vm).2 = none
     ∧ ((execFor c10Oracle sig "h" forsClimbBody Spec.A 0 vm).1).env "node"
@@ -918,33 +945,44 @@ theorem fors_climb
     -- so the outer FORS i-loop's seed invariant carries to the next tree.
     ∧ (∀ i, i < 32 → ((execFor c10Oracle sig "h" forsClimbBody Spec.A 0 vm).1).mem (0 + i)
         = seed.data.getD i 0) := by
-  -- The loop invariant: node/pathIdx track the spec fold; consts + seed persist.
+  -- The loop invariant: node/pathIdx track the spec fold; consts + seed persist;
+  -- the running pathIdx stays `< 2^32` (the conjunct that makes the BOUNDED
+  -- `H_adrs` dischargeable at every iteration).
   let R : Nat → VM → Prop := fun c w =>
     w.env "node" = wordOf (ByteVec.pad16 (forsAcc seed htIdx treeIdx leafIdx secret authPath c).fst)
     ∧ w.env "pathIdx" = (forsAcc seed htIdx treeIdx leafIdx secret authPath c).snd
     ∧ w.env "N_MASK" = NMASK ∧ w.env "OUT" = 0x600
     ∧ w.env "treeAdrsBase" = tBase ∧ w.env "authPtr" = auth
     ∧ (∀ i, i < 32 → w.mem (0 + i) = seed.data.getD i 0)
-  have hstep : ∀ cur w, R cur w →
+    ∧ (forsAcc seed htIdx treeIdx leafIdx secret authPath c).snd < 2 ^ 32
+  -- The bounded step engine demands `cur < A` per iteration — exactly what
+  -- `fors_climb_step` (bounded) consumes (`hcur`) alongside the invariant.
+  have hstep : ∀ cur w, cur < Spec.A → R cur w →
       (execList c10Oracle sig forsClimbBody { w with env := setVar w.env "h" cur }).2 = none ∧
       R (cur + 1) (execList c10Oracle sig forsClimbBody { w with env := setVar w.env "h" cur }).1 :=
-    fors_climb_step sig seed htIdx treeIdx leafIdx secret authPath tBase auth H_adrs H_sib
-  -- R holds at entry (cur = 0): the empty fold is forsAccInit.
+    fun cur w hcur hRcw =>
+      fors_climb_step sig seed htIdx treeIdx leafIdx secret authPath tBase auth
+        H_adrs H_sib cur hcur w hRcw
+  -- R holds at entry (cur = 0): the empty fold is forsAccInit; the pathIdx bound is
+  -- the leaf index `leafIdx.toNat < 2^32` (free, `leafIdx : UInt32`).
   have hR0 : R 0 vm := by
-    refine ⟨?_, ?_, hNMASK, hOUT, htBase, hAuth, hseed⟩
+    refine ⟨?_, ?_, hNMASK, hOUT, htBase, hAuth, hseed, ?_⟩
     · show vm.env "node"
           = wordOf (ByteVec.pad16 (forsAcc seed htIdx treeIdx leafIdx secret authPath 0).fst)
       rw [hnode, forsAcc_zero]; rfl
     · show vm.env "pathIdx" = (forsAcc seed htIdx treeIdx leafIdx secret authPath 0).snd
       rw [hpath, forsAcc_zero]; rfl
-  -- Drive the loop.
-  have hloop := execFor_invariant c10Oracle sig "h" forsClimbBody R hstep Spec.A 0 vm hR0
-  obtain ⟨hn, _, _, _, _, _, hmemfinal⟩ := hloop.2
+    · show (forsAcc seed htIdx treeIdx leafIdx secret authPath 0).snd < 2 ^ 32
+      rw [forsAcc_zero]; exact leafIdx.toNat_lt
+  -- Drive the loop with the BOUNDED engine.
+  have hloop := execFor_invariant_lt c10Oracle sig "h" forsClimbBody Spec.A R hstep vm hR0
+  obtain ⟨hn, _, _, _, _, _, hmemfinal, _⟩ := hloop.2
   refine ⟨hloop.1, ?_, hmemfinal⟩
   -- The final node is wordOf (pad16 (acc A).fst); (acc A).fst = reconstructRoot via Layer 2.
+  -- (`execFor_invariant_lt` re-establishes `R N`, so the index is `Spec.A` directly.)
   rw [hn]
-  show wordOf (ByteVec.pad16 (forsAcc seed htIdx treeIdx leafIdx secret authPath (0 + Spec.A)).fst) = _
-  rw [Nat.zero_add, reconstructRoot_eq_foldl]
+  show wordOf (ByteVec.pad16 (forsAcc seed htIdx treeIdx leafIdx secret authPath Spec.A).fst) = _
+  rw [reconstructRoot_eq_foldl]
   rfl
 
 /-! ## FORS per-tree body refinement
@@ -1177,7 +1215,13 @@ set_option maxRecDepth 4000 in
     (`H_idx`, the `readBitsLe`↔word-shift bridge) are factored to the i-loop
     wrapper, exactly as `fors_climb` factors `H_adrs`. The secret and the auth-path
     siblings are bound to the *real* `loadValue16` calldata reads (`secret` is the
-    `reconstructForsPk` value; `H_sib` is the same shape `fors_climb` consumes). -/
+    `reconstructForsPk` value; `H_sib` is the same shape `fors_climb` consumes).
+
+    `H_adrs` / `H_sib` are *bounded* (`h < A`, `p < 2^32`) hence SATISFIABLE — the
+    non-vacuity is witnessed end-to-end by `fors_tree_body_nonvacuous` at the bottom of
+    this file (it actually *applies* this theorem on a concrete tree, discharging every
+    hypothesis via the `_dischargeable` guards), so a revert to an unsatisfiable hyp
+    breaks the build. -/
 theorem fors_tree_body
     (sig : ByteVec Spec.SignatureLen) (vm : VM)
     (seed : ByteVec 32) (htIdx : UInt64) (t : Nat)
@@ -1196,12 +1240,14 @@ theorem fors_tree_body
         ((vm.env "dVal" >>> (t * 11)) &&& 0x7FF)))
       = wordOf (Spec.Adrs.forsNode htIdx (UInt32.ofNat t) 0 leafIdx))
     (H_idx : (vm.env "dVal" >>> (t * 11)) &&& 0x7FF = leafIdx.toNat)
-    (H_adrs : ∀ h p,
+    -- BOUNDED byte-layout obligations (satisfiable — discharge guards
+    -- `H_adrs_dischargeable` / `H_sib_dischargeable` below prove them inhabited).
+    (H_adrs : ∀ h, h < Spec.A → ∀ p, p < 2 ^ 32 →
         ((htIdx.toNat <<< 160 % W) ||| ((3 <<< 128 % W) ||| (t <<< 96 % W)))
           ||| (((h + 1) % W) <<< 32 % W ||| p >>> 1)
         = wordOf (Spec.Adrs.forsNode htIdx (UInt32.ofNat t) (UInt32.ofNat (h + 1))
             (UInt32.ofNat (p / 2))))
-    (H_sib : ∀ h, calldataload sig (((224 + t * 176) + h <<< 4 % W) % W) &&& NMASK
+    (H_sib : ∀ h, h < Spec.A → calldataload sig (((224 + t * 176) + h <<< 4 % W) % W) &&& NMASK
         = wordOf (ByteVec.pad16 (authPath.getD h (ByteVec.zero 16)))) :
     (execList c10Oracle sig forsTreeBody vm).2 = none
     ∧ (∀ k, k < 32 →
@@ -1741,5 +1787,154 @@ private theorem H_leafAdrs_dischargeable
     Nat.mod_eq_of_lt (shl_lt_two_pow_256 _ 12 96 (Nat.lt_trans ht (by decide)) (by omega))
   rw [hW1, hW2, hW3]
   simp only [Nat.or_assoc]
+
+/-! ## Non-vacuity guards for `fors_tree_body`'s bounded obligations
+
+`fors_tree_body` carries its `H_adrs` / `H_sib` as *bounded* (hence satisfiable)
+factored hypotheses — `authPath` appears in its conclusion, so a literal inline
+discharge that removes the hypothesis would have to rewrite the conclusion (which
+must stay identical). These two guards prove the bounded forms are inhabited (always
+true / discharged from the deserialised auth path) — the regression that fences out
+re-introducing an *unsatisfiable* hypothesis (the original vacuity defect). They are
+the `H_leafAdrs_dischargeable` analogues for the climb-level ADRS word and the
+sibling read. -/
+
+/-- **`H_adrs` is always true (bounded).** `fors_tree_body`'s climb-ADRS obligation
+    — for `h < A` and `p < 2^32` the Yul word
+    `(htIdx<<<160 | 3<<<128 | t<<<96) | ((h+1)<<<32 | p>>1)` is the spec `forsNode`
+    word `forsNode htIdx t (h+1) (p/2)`. Discharged from `wordOf_forsNode` + the
+    `UInt32.ofNat`-roundtrips (`h+1 < 2^32`, `p/2 < 2^32`, `t < 12`) + the mod-inert
+    field shifts + `Nat.or_assoc`. The bounds are exactly what make it provable. -/
+theorem H_adrs_dischargeable
+    (htIdx : UInt64) (t : Nat) (ht : t < 12) (h : Nat) (hh : h < Spec.A) (p : Nat) (hp : p < 2 ^ 32) :
+    ((htIdx.toNat <<< 160 % W) ||| ((3 <<< 128 % W) ||| (t <<< 96 % W)))
+      ||| (((h + 1) % W) <<< 32 % W ||| p >>> 1)
+    = wordOf (Spec.Adrs.forsNode htIdx (UInt32.ofNat t) (UInt32.ofNat (h + 1))
+        (UInt32.ofNat (p / 2))) := by
+  rw [wordOf_forsNode]
+  -- UInt32.ofNat round-trips (all arguments below 2^32).
+  have hFT : (UInt32.ofNat Spec.ADRS_FORS_TREE).toNat = 3 := by decide
+  have hti : (UInt32.ofNat t).toNat = t := by
+    show t % UInt32.size = t
+    rw [Nat.mod_eq_of_lt (Nat.lt_trans ht (by decide))]
+  have hszU : (UInt32.size : Nat) = 2 ^ 32 := rfl
+  have hh1 : (UInt32.ofNat (h + 1)).toNat = h + 1 := by
+    show (h + 1) % UInt32.size = h + 1
+    rw [hszU, Nat.mod_eq_of_lt (by have : Spec.A = 11 := rfl; omega)]
+  have hp2 : (UInt32.ofNat (p / 2)).toNat = p / 2 := by
+    show (p / 2) % UInt32.size = p / 2
+    rw [hszU, Nat.mod_eq_of_lt (Nat.lt_of_le_of_lt (Nat.div_le_self p 2) hp)]
+  rw [hFT, hti, hh1, hp2]
+  -- Resolve the LHS `% W` truncations (each field shift < 2^256).
+  have hWh : (h + 1) % W = h + 1 := Nat.mod_eq_of_lt (lt_W_of_lt (by have : Spec.A = 11 := rfl; omega))
+  have hWh32 : (h + 1) <<< 32 % W = (h + 1) <<< 32 :=
+    Nat.mod_eq_of_lt (shl_lt_two_pow_256 _ 6 32 (by have : Spec.A = 11 := rfl; omega) (by omega))
+  have hW1 : htIdx.toNat <<< 160 % W = htIdx.toNat <<< 160 :=
+    Nat.mod_eq_of_lt (shl_lt_two_pow_256 _ 64 160 htIdx.toNat_lt (by omega))
+  have hW2 : (3 : Nat) <<< 128 % W = 3 <<< 128 :=
+    Nat.mod_eq_of_lt (shl_lt_two_pow_256 _ 2 128 (by decide) (by omega))
+  have hW3 : t <<< 96 % W = t <<< 96 :=
+    Nat.mod_eq_of_lt (shl_lt_two_pow_256 _ 12 96 (Nat.lt_trans ht (by decide)) (by omega))
+  -- p >>> 1 = p / 2.
+  have hsh : p >>> 1 = p / 2 := by rw [Nat.shiftRight_eq_div_pow, Nat.pow_one]
+  rw [hWh, hWh32, hW1, hW2, hW3, hsh]
+  simp only [Nat.or_assoc]
+
+/-- **`H_sib` is satisfiable.** Instantiate `fors_tree_body`'s sibling obligation on
+    the *real* deserialised auth path `authPath := (deserialise sig).fors.authPaths.getD
+    t #[]`: for `h < A`, the masked calldata read at `224 + 176t + 16h` equals
+    `wordOf (pad16 (authPath.getD h …))`. Discharged from `cl_masked_eq_wordOf` (the
+    calldata read-back) + the `Array.ofFn`/`getD` evaluation of `deserialise`'s auth
+    layout + `shl4_small` (the `% W` strides are inert). Witnesses that the bounded
+    `H_sib` is inhabited (never the unsatisfiable unbounded form). -/
+theorem H_sib_dischargeable
+    (sig : ByteVec Spec.SignatureLen) (t : Nat) (ht : t < 12) (h : Nat) (hh : h < Spec.A) :
+    calldataload sig (((224 + t * 176) + h <<< 4 % W) % W) &&& NMASK
+      = wordOf (ByteVec.pad16
+          (((Spec.Signature.deserialise sig).fors.authPaths.getD t #[]).getD h (ByteVec.zero 16))) := by
+  -- Normalise the offset: the `% W` strides are inert (224 + 176t + 16h < 4096).
+  have hoff : ((224 + t * 176) + h <<< 4 % W) % W = 224 + t * 176 + 16 * h := by
+    rw [shl4_small h (by have : Spec.A = 11 := rfl; omega),
+        Nat.mod_eq_of_lt (lt_W_of_lt (show 224 + t * 176 + 16 * h < 4096 by
+          have : Spec.A = 11 := rfl; omega))]
+  rw [hoff, cl_masked_eq_wordOf sig (224 + t * 176 + 16 * h)]
+  -- The deserialised auth-path entry at `(t, h)` is exactly `loadValue16 sig (224 + 176t + 16h)`.
+  have hauth :
+      ((Spec.Signature.deserialise sig).fors.authPaths.getD t #[]).getD h (ByteVec.zero 16)
+        = ByteVec.loadValue16 sig (224 + t * 176 + 16 * h) := by
+    show ((Array.ofFn (n := Spec.K - 1) fun t' =>
+            Array.ofFn (n := Spec.A) fun h' =>
+              ByteVec.loadValue16 sig
+                (Spec.SigR + Spec.SigForsSecrets + t'.val * (Spec.A * Spec.N) + h'.val * Spec.N)).getD t #[]).getD h (ByteVec.zero 16)
+          = ByteVec.loadValue16 sig (224 + t * 176 + 16 * h)
+    -- Resolve the OUTER `getD t` (tree row) first, then the INNER `getD h` (level).
+    have houter :
+        (Array.ofFn (n := Spec.K - 1) fun t' =>
+            Array.ofFn (n := Spec.A) fun h' =>
+              ByteVec.loadValue16 sig
+                (Spec.SigR + Spec.SigForsSecrets + t'.val * (Spec.A * Spec.N) + h'.val * Spec.N)).getD t #[]
+          = Array.ofFn (n := Spec.A) fun h' =>
+              ByteVec.loadValue16 sig
+                (Spec.SigR + Spec.SigForsSecrets + t * (Spec.A * Spec.N) + h'.val * Spec.N) := by
+      rw [Array.getD_eq_getD_getElem?, Array.getElem?_ofFn,
+          dif_pos (show t < Spec.K - 1 by have : Spec.K = 13 := rfl; omega), Option.getD_some]
+    rw [houter, Array.getD_eq_getD_getElem?, Array.getElem?_ofFn,
+        dif_pos (show h < Spec.A by exact hh), Option.getD_some]
+    congr 1
+    -- SigR + SigForsSecrets + t*(A*N) + h*N = 224 + 176t + 16h.
+    have hR : Spec.SigR = 16 := rfl
+    have hS : Spec.SigForsSecrets = 208 := rfl
+    have hAN : Spec.A * Spec.N = 176 := rfl
+    have hN : Spec.N = 16 := rfl
+    -- (Fin.val of the `dif_pos` witnesses are `t` / `h`; mathlib-free Nat algebra:
+    -- `16 + 208 + t*176 + h*16` is defeq to `224 + t*176 + 16*h` after `mul_comm`.)
+    rw [hR, hS, hAN, hN, Nat.mul_comm h 16]
+  rw [hauth]
+
+/-! ## Non-vacuity regression for `fors_tree_body`
+
+This is the *guard* the task demands: it does not re-prove a shape, it **applies**
+`fors_tree_body` on a concrete satisfiable setup (FORS tree `t = 0`, `htIdx = 0`,
+`dVal = 0`, leaf index `0`, the deserialised auth path), discharging EVERY hypothesis
+— the env preconditions via the `setVar` chain, `H_leafAdrs`/`H_adrs`/`H_sib` via the
+`_dischargeable` guards, `H_idx` by computation. If any hypothesis ever reverts to the
+old *unsatisfiable* unbounded form, the corresponding `_dischargeable` term stops
+typechecking and THIS theorem fails to compile — exactly the regression that fences
+out re-introducing a vacuous hypothesis. -/
+private theorem fors_tree_body_nonvacuous (sig : ByteVec Spec.SignatureLen)
+    (seed : ByteVec 32) : True := by
+  -- Concrete climb-entry env: every `fors_tree_body` env-precond var bound, dVal := 0.
+  let env0 : VarEnv :=
+    setVar (setVar (setVar (setVar (setVar (setVar (setVar (fun _ => 0)
+      "htIdx" 0) "sigBase" 0) "seed" (wordOf seed)) "N_MASK" NMASK)
+      "OUT" 0x600) "i" 0) "dVal" 0
+  let vm0 : VM := { mem := memOfBytes seed, env := env0 }
+  -- H_idx for the concrete (dVal=0, leafIdx=0) tree: both sides are 0.
+  have hidx0 : (vm0.env "dVal" >>> (0 * 11)) &&& 0x7FF = (UInt32.ofNat 0).toNat := by
+    show (env0 "dVal" >>> (0 * 11)) &&& 0x7FF = (UInt32.ofNat 0).toNat
+    simp only [env0, setVar, String.reduceEq, if_true, ite_false]
+    decide
+  -- Apply fors_tree_body; every hypothesis discharged. The mere fact that this
+  -- term elaborates is the non-vacuity certificate.
+  have _inst := fors_tree_body sig vm0 seed (0 : UInt64) 0 (UInt32.ofNat 0)
+    ((Spec.Signature.deserialise sig).fors.authPaths.getD 0 #[])
+    (by decide)                                   -- ht : 0 < 12
+    (by show env0 "htIdx" = (0 : UInt64).toNat; simp [env0, setVar])                -- hht
+    (by show env0 "sigBase" = 0; simp [env0, setVar])                               -- hsb
+    (by show env0 "seed" = wordOf seed; simp [env0, setVar])                        -- hseedw
+    (by show env0 "N_MASK" = NMASK; simp [env0, setVar])                            -- hN
+    (by show env0 "OUT" = 0x600; simp [env0, setVar])                               -- hOUT
+    (by show env0 "i" = 0; simp [env0, setVar])                                     -- hival
+    (fun i hi => by                                                                 -- hseedmem
+      show memOfBytes seed (0 + i) = seed.data.getD i 0
+      have hsz : i < seed.data.size := by rw [seed.size_eq]; exact hi
+      unfold memOfBytes
+      rw [Nat.zero_add, dif_pos hsz, Array.getD_eq_getD_getElem?,
+          Array.getElem?_eq_getElem hsz, Option.getD_some])
+    (H_leafAdrs_dischargeable (0 : UInt64) 0 (UInt32.ofNat 0) (vm0.env "dVal") (by decide) hidx0)
+    hidx0                                                                           -- H_idx
+    (fun h hh p hp => H_adrs_dischargeable (0 : UInt64) 0 (by decide) h hh p hp)    -- H_adrs
+    (fun h hh => H_sib_dischargeable sig 0 (by decide) h hh)                        -- H_sib
+  trivial
 
 end SphincsCVerify.Interpreter.C10
