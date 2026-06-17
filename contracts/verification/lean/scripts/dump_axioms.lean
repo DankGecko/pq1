@@ -49,6 +49,11 @@ import SphincsCVerify
 #print axioms SphincsCVerify.Interpreter.slice_toArray_eq_flatten
 #print axioms SphincsCVerify.Interpreter.C10.c10Oracle_holdsSegs
 
+-- A3.1 first PHASE proof (Interpreter/Phases.lean): running the transcribed H_msg
+-- fragment yields env "digest" = wordOf (Spec.hMsg …) — the deductive refinement
+-- of the verifier's first phase, the template for FORS/WOTS/hypertree.
+#print axioms SphincsCVerify.Interpreter.C10.hmsg_digest
+
 #print axioms SphincsCVerify.Spec.Theorems.verify_deterministic
 #print axioms SphincsCVerify.Spec.Theorems.verify_rejects_wrong_length
 #print axioms SphincsCVerify.Wallet.MultiOwnable.bumpBootstrap_monotonic

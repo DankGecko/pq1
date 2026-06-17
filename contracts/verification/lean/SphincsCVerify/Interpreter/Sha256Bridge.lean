@@ -362,4 +362,101 @@ theorem slice_toArray_eq_flatten (mem : ByteMemory) (base : Nat)
     rw [← hsplit]
     exact h (k / 32) (k % 32) hdiv hmod
 
+/-! ## N-mask byte action and the `natToB32`/`wordOf` round-trip
+
+Two reusable bit-arithmetic facts for the C10 master-key derivation. The C10
+`pk_seed` is the top 16 big-endian bytes of a SHA-256 word, the bottom 16 zeroed
+(`& N_MASK`); `beByte_and_nmask` characterises that masking byte-positionally.
+`natToB32_wordOf` is the second half of the `wordOf`/`ByteVec 32` iso: re-encoding
+the big-endian word of a vector recovers the vector (companion of `beByte_wordOf`).
+Both are mathlib-free; closed-numeral `decide` only on the concrete `NMASK`
+identity, never on a goal with free variables. -/
+
+/-- The C10 N-mask constant: top 16 bytes (most-significant) set, bottom 16 zero. -/
+def NMASK : Nat := 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF00000000000000000000000000000000
+
+/-- `NMASK` as a single power-of-two product: `2^128 * (2^128 - 1)`. The shape that
+    lets `testBit_two_pow_mul_add` characterise every bit without a succ/pred dance.
+    Closed-numeral `decide` (binary-`Nat` kernel arithmetic; instant). -/
+private theorem nmask_eq_mul : NMASK = 2 ^ 128 * (2 ^ 128 - 1) + 0 := by decide
+
+/-- **Bit-action of the N-mask.** Bit `k` of `NMASK` is set exactly on the top
+    128 bits (indices `128 ≤ k < 256`). Proved from the `2^128 * (2^128-1)` form via
+    `testBit_two_pow_mul_add` + `testBit_two_pow_sub_one`. -/
+private theorem nmask_testBit (k : Nat) :
+    NMASK.testBit k = decide (128 ≤ k ∧ k < 256) := by
+  rw [nmask_eq_mul, Nat.testBit_two_pow_mul_add (2 ^ 128 - 1) (Nat.two_pow_pos 128) k]
+  by_cases hk : k < 128
+  · rw [if_pos hk, Nat.zero_testBit]
+    have : ¬ (128 ≤ k ∧ k < 256) := by omega
+    rw [decide_eq_false this]
+  · rw [if_neg hk, Nat.testBit_two_pow_sub_one]
+    -- decide (k - 128 < 128) = decide (128 ≤ k ∧ k < 256)  (k ≥ 128, truncated sub)
+    rw [decide_eq_decide]
+    omega
+
+/-- The byte the N-mask contributes at big-endian position `i`: `2^8 - 1` (all ones)
+    for the top 16 bytes, `0` below. The `w`-free crux of `beByte_and_nmask`, proved
+    by bit-extensionality so no `i < 32` hypothesis is needed (for `i ≥ 32` the
+    truncated shift index lands the whole byte in the zero region). -/
+private theorem nmask_byte (i : Nat) :
+    (NMASK >>> (8 * (31 - i))) % 2 ^ 8 = if i < 16 then 2 ^ 8 - 1 else 0 := by
+  apply Nat.eq_of_testBit_eq
+  intro b
+  rw [Nat.testBit_mod_two_pow, Nat.testBit_shiftRight, nmask_testBit]
+  by_cases hi : i < 16
+  · rw [if_pos hi, Nat.testBit_two_pow_sub_one]
+    -- (b < 8) && decide (128 ≤ 8*(31-i)+b ∧ 8*(31-i)+b < 256) = decide (b < 8)
+    by_cases hb : b < 8 <;> simp [hb] <;> omega
+  · rw [if_neg hi, Nat.zero_testBit, Bool.and_eq_false_imp]
+    -- on the bottom 16 bytes the shift index keeps every byte-bit < 128
+    intro hb
+    apply decide_eq_false
+    rw [decide_eq_true_eq] at hb
+    omega
+
+/-- **Byte-action of the N-mask.** ANDing a word with `NMASK` keeps its top 16
+    big-endian bytes (indices `0..15`) and zeroes the rest. -/
+theorem beByte_and_nmask (w i : Nat) :
+    beByte (w &&& NMASK) i = if i < 16 then beByte w i else 0 := by
+  unfold beByte
+  -- Reduce the inner `Nat`: distribute AND through the shift, then through `% 2^8`.
+  have hinner : ((w &&& NMASK) >>> (8 * (31 - i))) % 256
+      = ((w >>> (8 * (31 - i))) % 2 ^ 8) &&& ((NMASK >>> (8 * (31 - i))) % 2 ^ 8) := by
+    rw [Nat.shiftRight_and_distrib, show (256 : Nat) = 2 ^ 8 from rfl, Nat.and_mod_two_pow]
+  rw [hinner, nmask_byte]
+  by_cases hi : i < 16
+  · rw [if_pos hi, if_pos hi]
+    -- x &&& (2^8 - 1) = x, since x = (w>>>s) % 2^8 < 2^8
+    have hlt : (w >>> (8 * (31 - i))) % 2 ^ 8 < 2 ^ 8 := Nat.mod_lt _ (Nat.two_pow_pos 8)
+    rw [Nat.and_two_pow_sub_one_of_lt_two_pow hlt, show (2 : Nat) ^ 8 = 256 from rfl]
+  · rw [if_neg hi, if_neg hi, Nat.and_zero]
+    rfl
+
+/-- Round-trip: the big-endian word of a 32-byte vector, re-encoded, is the vector.
+    (Companion of `beByte_wordOf`.) -/
+theorem natToB32_wordOf (v : ByteVec 32) :
+    Spec.ByteVec.natToB32 (wordOf v) = v := by
+  apply Spec.ByteVec.ext_data
+  -- expose the `Array.ofFn` under `.data`, then proceed elementwise.
+  show (Array.ofFn (n := 32)
+      (fun (i : Fin 32) => UInt8.ofNat ((wordOf v >>> ((31 - i.val) * 8)) &&& 0xff))) = v.data
+  apply Array.ext
+  · -- sizes: both 32
+    rw [Array.size_ofFn, v.size_eq]
+  · -- elements: the i-th encoded byte is v.data[i]
+    intro k hk1 _
+    -- LHS k-bound lives over the ofFn array; pin it to k < 32 for the Fin.
+    have hk32 : k < 32 := by rw [Array.size_ofFn] at hk1; exact hk1
+    rw [Array.getElem_ofFn]
+    -- ofFn body: UInt8.ofNat ((wordOf v >>> ((31 - k) * 8)) &&& 0xff)
+    show UInt8.ofNat ((wordOf v >>> ((31 - k) * 8)) &&& 0xff) = v.data[k]
+    -- (31-k)*8 = 8*(31-k); &&& 0xff = % 256; collapses to beByte (wordOf v) k.
+    rw [Nat.mul_comm (31 - k) 8,
+        show (0xff : Nat) = 2 ^ 8 - 1 from rfl, Nat.and_two_pow_sub_one_eq_mod,
+        show (2 : Nat) ^ 8 = 256 from rfl]
+    have hbe : UInt8.ofNat ((wordOf v >>> (8 * (31 - k))) % 256) = beByte (wordOf v) k := rfl
+    rw [hbe, beByte_wordOf v ⟨k, hk32⟩]
+    rfl
+
 end SphincsCVerify.Interpreter

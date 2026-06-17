@@ -66,3 +66,4 @@ import SphincsCVerify.Interpreter.ClimbLoop
 import SphincsCVerify.Interpreter.Sha256Bridge
 import SphincsCVerify.Interpreter.Yul
 import SphincsCVerify.Interpreter.C10Program
+import SphincsCVerify.Interpreter.Phases
