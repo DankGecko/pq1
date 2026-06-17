@@ -62,6 +62,7 @@ import SphincsCVerify
 #print axioms SphincsCVerify.Interpreter.C10.fors_climb
 #print axioms SphincsCVerify.Interpreter.C10.mload_masked_eq_wordOf_pad16
 #print axioms SphincsCVerify.Interpreter.C10.reconstructRoot_eq_foldl
+#print axioms SphincsCVerify.Interpreter.C10.fors_tree_body
 
 #print axioms SphincsCVerify.Spec.Theorems.verify_deterministic
 #print axioms SphincsCVerify.Spec.Theorems.verify_rejects_wrong_length

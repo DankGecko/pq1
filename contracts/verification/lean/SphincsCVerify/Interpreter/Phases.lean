@@ -913,7 +913,11 @@ theorem fors_climb
     (execFor c10Oracle sig "h" forsClimbBody Spec.A 0 vm).2 = none
     ∧ ((execFor c10Oracle sig "h" forsClimbBody Spec.A 0 vm).1).env "node"
         = wordOf (ByteVec.pad16
-            (Spec.Fors.reconstructRoot seed htIdx treeIdx leafIdx secret authPath)) := by
+            (Spec.Fors.reconstructRoot seed htIdx treeIdx leafIdx secret authPath))
+    -- The seed scratch window persists across the whole climb (every store lands at ≥ 0x20),
+    -- so the outer FORS i-loop's seed invariant carries to the next tree.
+    ∧ (∀ i, i < 32 → ((execFor c10Oracle sig "h" forsClimbBody Spec.A 0 vm).1).mem (0 + i)
+        = seed.data.getD i 0) := by
   -- The loop invariant: node/pathIdx track the spec fold; consts + seed persist.
   let R : Nat → VM → Prop := fun c w =>
     w.env "node" = wordOf (ByteVec.pad16 (forsAcc seed htIdx treeIdx leafIdx secret authPath c).fst)
@@ -935,12 +939,402 @@ theorem fors_climb
       rw [hpath, forsAcc_zero]; rfl
   -- Drive the loop.
   have hloop := execFor_invariant c10Oracle sig "h" forsClimbBody R hstep Spec.A 0 vm hR0
-  refine ⟨hloop.1, ?_⟩
+  obtain ⟨hn, _, _, _, _, _, hmemfinal⟩ := hloop.2
+  refine ⟨hloop.1, ?_, hmemfinal⟩
   -- The final node is wordOf (pad16 (acc A).fst); (acc A).fst = reconstructRoot via Layer 2.
-  obtain ⟨hn, _⟩ := hloop.2
   rw [hn]
   show wordOf (ByteVec.pad16 (forsAcc seed htIdx treeIdx leafIdx secret authPath (0 + Spec.A)).fst) = _
   rw [Nat.zero_add, reconstructRoot_eq_foldl]
   rfl
+
+/-! ## FORS per-tree body refinement
+
+The wrapper above (`fors_climb`) is the inner `for h in 11` climb. This section
+refines the *whole* per-tree body of the outer `for i in 12` loop
+(`SPHINCsC10Asm.sol` L90–122, the `forsTreeBody` below): compute the FORS leaf
+(`th seed leafAdrs (pad16 secret)`), drive the climb, and store the resulting root
+at `0x80 + 32*t`. It DISCHARGES `fors_climb`'s `H_sib` (the masked-calldata sibling
+read) internally and FEEDS its remaining preconditions, leaving the two pure
+byte-layout obligations — the leaf/node ADRS-word identities — and the
+digest→leaf-index identity as wrapper hypotheses (the same factoring `fors_climb`
+itself uses for `H_adrs`: the `make`/`wordOf` byte bridge and the `readBitsLe`↔
+word-shift bridge are heavy and belong to the i-loop wrapper).
+
+The development reuses the H_msg/climb glue (`mload_masked_eq_wordOf_pad16`,
+`c10Oracle_holdsSegs`, `mstore32_get`/`_frame`) plus three small additions:
+a generalised masked-calldata read-back (`cl_masked_eq_wordOf`), small-offset
+arithmetic helpers, and the 3-segment `holdsSegs` for the leaf hash. -/
+
+/-! ### Generalised masked-calldata read-back
+
+`R_beByte_eq` was specialised to offset `0` (the H_msg `R`). The FORS secret and
+the auth-path siblings are read at arbitrary offsets, so we lift it to any `off`:
+`calldataload sig off &&& NMASK = wordOf (pad16 (loadValue16 sig off))`. -/
+
+/-- `(loadValue16 sig off)`'s `i`-th byte (`i < 16`) equals `(loadWord32 sig off)`'s
+    `i`-th byte — `loadValue16_data_getD` at an arbitrary offset. -/
+private theorem loadValue16_data_getD_off {m : Nat} (sig : ByteVec m) (off i : Nat) (hi : i < 16) :
+    (ByteVec.loadValue16 sig off).data.getD i 0 = (ByteVec.loadWord32 sig off).data.getD i 0 := by
+  unfold ByteVec.loadValue16 ByteVec.take
+  rw [Array.getD_eq_getD_getElem?, Array.getElem?_extract]
+  have hwsz : (ByteVec.loadWord32 sig off).data.size = 32 := (ByteVec.loadWord32 sig off).size_eq
+  rw [hwsz, if_pos (show i < min 16 32 - 0 by omega), Nat.zero_add, ← Array.getD_eq_getD_getElem?]
+
+/-- **R-segment byte action at any offset.** The big-endian byte `i` of
+    `(calldataload sig off) &&& NMASK` is the `i`-th byte of
+    `pad16 (loadValue16 sig off)`. (`R_beByte_eq` generalised over `off`.) -/
+private theorem cl_beByte_eq {m : Nat} (sig : ByteVec m) (off i : Nat) (hi : i < 32) :
+    beByte (calldataload sig off &&& NMASK) i
+      = (ByteVec.pad16 (ByteVec.loadValue16 sig off)).data.getD i 0 := by
+  rw [beByte_and_nmask, pad16_data_getD]
+  by_cases h16 : i < 16
+  · rw [if_pos h16, if_pos h16, loadValue16_data_getD_off sig off i h16]
+    unfold calldataload
+    rw [wordOfBV_eq_wordOf]
+    have := beByte_wordOf (ByteVec.loadWord32 sig off) ⟨i, hi⟩
+    rw [this]
+    unfold ByteVec.get
+    rw [Array.getD_eq_getD_getElem?]
+    have hsz : i < (ByteVec.loadWord32 sig off).data.size := by
+      rw [(ByteVec.loadWord32 sig off).size_eq]; exact hi
+    rw [Array.getElem?_eq_getElem hsz, Option.getD_some]
+    rfl
+  · rw [if_neg h16, if_neg h16]
+
+/-- **Masked-calldata read-back as a word.** `(calldataload sig off) &&& NMASK`
+    (as a `Nat`) equals the big-endian word of `pad16 (loadValue16 sig off)` — the
+    N-masked top-16-bytes value the FORS body feeds as `secretVal` / `sibling`.
+    The calldata analogue of `mload_masked_eq_wordOf_pad16`. -/
+theorem cl_masked_eq_wordOf {m : Nat} (sig : ByteVec m) (off : Nat) :
+    calldataload sig off &&& NMASK = wordOf (ByteVec.pad16 (ByteVec.loadValue16 sig off)) := by
+  apply eq_of_beByte
+  · exact Nat.lt_of_le_of_lt Nat.and_le_left
+      (by unfold calldataload; rw [wordOfBV_eq_wordOf]; exact wordOf_lt _)
+  · exact wordOf_lt _
+  · intro i hi
+    rw [cl_beByte_eq sig off i hi, beByte_wordOf_getD _ i hi]
+
+/-! ### Small-offset arithmetic helpers
+
+Every FORS offset/index in the body is bounded well below `W = 2^256`, so the
+EVM `% W` truncations are inert. These helpers discharge the `mod`/`shiftLeft`
+normalisations that turn the interpreter's `(… % W)` Nat-forms into plain
+arithmetic the wrapper hypotheses are phrased in. -/
+
+/-- A value below `4096` is below `W = 2^256` (the only `decide`-on-`2^256` site;
+    binary-`Nat` kernel arithmetic, instant). -/
+private theorem lt_W_of_lt {x : Nat} (h : x < 4096) : x < W := by
+  unfold W; exact Nat.lt_trans h (by decide)
+
+/-- `h <<< 4 % W = 16 * h` for `h < 256` (the sibling/secret stride; `16h < W`).
+    Covers both the `i`-loop (`i < 12`) and the `h`-loop (`h < 11`). -/
+private theorem shl4_small (h : Nat) (hh : h < 256) : h <<< 4 % W = 16 * h := by
+  rw [Nat.shiftLeft_eq, Nat.mod_eq_of_lt (lt_W_of_lt (by omega)), Nat.mul_comm]
+
+/-! ### 3-segment leaf hash
+
+The FORS leaf precompile hashes `[0x00,0x60)` = 3 segments `[seed, leafAdrs,
+pad16 secret]` (`th`'s input). The `climbMem_holdsSegs` analogue for 3 windows. -/
+
+/-- The three-segment list the FORS leaf precompile hashes (a `th` input). -/
+private def leafSegs (seed adrs val : ByteVec 32) : List (ByteVec 32) := [seed, adrs, val]
+
+/-- **Holds the leaf segments.** With `seed` already in window `0` and the two
+    stores at `0x20`/`0x40` as `wordOf`-words, scratch `[0x00, 0x60)` holds
+    `[seed, adrs, val]`. -/
+private theorem leafMem_holdsSegs (mem : ByteMemory) (seed adrs val : ByteVec 32)
+    (hseed : ∀ i, i < 32 → mem (0 + i) = seed.data.getD i 0) :
+    holdsSegs (mstore32 (mstore32 mem 32 (wordOf adrs)) 64 (wordOf val)) 0
+      (leafSegs seed adrs val) := by
+  intro j i hj hi
+  have hjlt : j < 3 := by simpa [leafSegs] using hj
+  rw [Nat.zero_add]
+  match j, hjlt with
+  | 0, _ =>
+      rw [mstore32_frame _ 64 (wordOf val) (32 * 0 + i) (by omega),
+          mstore32_frame _ 32 (wordOf adrs) (32 * 0 + i) (by omega),
+          show (32 * 0 + i) = (0 + i) by omega, hseed i hi]
+      rfl
+  | 1, _ =>
+      rw [mstore32_frame _ 64 (wordOf val) (32 * 1 + i) (by omega)]
+      have e := mstore32_get mem 32 (wordOf adrs) i hi
+      rw [show (32 * 1 + i) = (32 + i) by omega, e, beByte_wordOf_getD adrs i hi]
+      rfl
+  | 2, _ =>
+      have e := mstore32_get (mstore32 mem 32 (wordOf adrs)) 64 (wordOf val) i hi
+      rw [show (32 * 2 + i) = (64 + i) by omega, e, beByte_wordOf_getD val i hi]
+      rfl
+
+/-- **One leaf hash step ↔ `th`.** Running the precompile over the assembled leaf
+    memory and masking the digest yields `wordOf (pad16 (th seed adrs val))`.
+    The 3-segment analogue of `climbMem_thPair`. -/
+private theorem leafMem_th (mem : ByteMemory) (seed adrs val : ByteVec 32)
+    (hseed : ∀ i, i < 32 → mem (0 + i) = seed.data.getD i 0) :
+    (mload32 (writeRegion (mstore32 (mstore32 mem 32 (wordOf adrs)) 64 (wordOf val))
+        0x600
+        (fun i => (c10Oracle (slice
+          (mstore32 (mstore32 mem 32 (wordOf adrs)) 64 (wordOf val)) 0 96)).data.getD i 0)) 0x600)
+        &&& NMASK
+      = wordOf (ByteVec.pad16 (Spec.th seed (adrs : Spec.Adrs) val)) := by
+  rw [mload_masked_eq_wordOf_pad16
+        (mstore32 (mstore32 mem 32 (wordOf adrs)) 64 (wordOf val))
+        0x600
+        (c10Oracle (slice (mstore32 (mstore32 mem 32 (wordOf adrs)) 64 (wordOf val)) 0 96))]
+  have hseg : c10Oracle (slice (mstore32 (mstore32 mem 32 (wordOf adrs)) 64 (wordOf val)) 0 96)
+      = Spec.sha256 ((leafSegs seed adrs val).map Spec.ByteSeg.ofByteVec) := by
+    have hlen : (leafSegs seed adrs val).length = 3 := rfl
+    have h := c10Oracle_holdsSegs (mstore32 (mstore32 mem 32 (wordOf adrs)) 64 (wordOf val))
+      0 (leafSegs seed adrs val) (leafMem_holdsSegs mem seed adrs val hseed)
+    rw [hlen] at h
+    exact h
+  rw [hseg]
+  rfl
+
+/-! ### The FORS per-tree body
+
+`forsTreeBody` is the outer-loop body of `c10Program`'s `forRange "i" 12`
+(`SPHINCsC10Asm.sol` L90–122), written with raw constructors so it is defeq to
+that slice. With loop var `i = t`. -/
+
+/-- The FORS per-tree body (`SPHINCsC10Asm.sol` L90–122). -/
+def forsTreeBody : List Stmt :=
+  [ .letv "treeIdx" (.bin .band (.bin .shr (.bin .mul (.var "i") (.lit 11)) (.var "dVal")) (.lit 0x7FF))
+  , .letv "secretVal"
+      (.bin .band (.calldataload (.bin .add (.var "sigBase")
+        (.bin .add (.lit 16) (.bin .shl (.lit 4) (.var "i"))))) (.var "N_MASK"))
+  , .letv "leafAdrs"
+      (.bin .bor (.bin .shl (.lit 160) (.var "htIdx"))
+        (.bin .bor (.bin .shl (.lit 128) (.lit 3))
+          (.bin .bor (.bin .shl (.lit 96) (.var "i")) (.var "treeIdx"))))
+  , .mstore (.lit 0x20) (.var "leafAdrs")
+  , .mstore (.lit 0x40) (.var "secretVal")
+  , .sha256 (.lit 0x00) (.lit 0x60) (.var "OUT")
+  , .letv "node" (.bin .band (.mload (.var "OUT")) (.var "N_MASK"))
+  , .letv "treeAdrsBase"
+      (.bin .bor (.bin .shl (.lit 160) (.var "htIdx"))
+        (.bin .bor (.bin .shl (.lit 128) (.lit 3)) (.bin .shl (.lit 96) (.var "i"))))
+  , .letv "pathIdx" (.var "treeIdx")
+  , .letv "authPtr" (.bin .add (.var "sigBase")
+      (.bin .add (.lit 224) (.bin .mul (.var "i") (.lit 176))))
+  , .forRange "h" (.lit 11) forsClimbBody
+  , .mstore (.bin .add (.lit 0x80) (.bin .shl (.lit 5) (.var "i"))) (.var "node")
+  ]
+
+/-- `forsClimbBody` (one climb level, entered with `"h" := cur`) falls through (no
+    `revert`/`return`) and never writes `"i"`: it only binds `sibling`, `parentIdx`,
+    `s`, `node`, `pathIdx` (and `"h"` at entry). So the outer loop variable `"i"`
+    survives one climb level. -/
+private theorem execList_forsClimbBody_preserves_i (sig : ByteVec Spec.SignatureLen)
+    (cur : Nat) (v : VM) :
+    (execList c10Oracle sig forsClimbBody { v with env := setVar v.env "h" cur }).2 = none
+    ∧ (execList c10Oracle sig forsClimbBody { v with env := setVar v.env "h" cur }).1.env "i"
+        = v.env "i" := by
+  unfold forsClimbBody
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList]
+  refine ⟨rfl, ?_⟩
+  simp [execStmt, eval, setVar]
+
+/-- The whole inner climb (`execFor … forsClimbBody`) preserves `"i"`: drives
+    `execList_forsClimbBody_preserves_i` through the loop by induction on `remaining`. -/
+private theorem execFor_forsClimbBody_preserves_i (sig : ByteVec Spec.SignatureLen) :
+    ∀ (remaining cur : Nat) (v : VM),
+      (execFor c10Oracle sig "h" forsClimbBody remaining cur v).1.env "i" = v.env "i" := by
+  intro remaining
+  induction remaining with
+  | zero => intro cur v; simp only [execFor]
+  | succ rem ih =>
+      intro cur v
+      obtain ⟨hnone, hi⟩ := execList_forsClimbBody_preserves_i sig cur v
+      rw [execFor]
+      rcases hp : execList c10Oracle sig forsClimbBody { v with env := setVar v.env "h" cur }
+        with ⟨pvm, po⟩
+      rw [hp] at hnone hi
+      subst hnone
+      simp only []
+      rw [ih (cur + 1) pvm, hi]
+
+set_option maxHeartbeats 8000000 in
+set_option maxRecDepth 4000 in
+/-- **FORS per-tree body refinement.** Running `forsTreeBody` for tree `t < 12`
+    from a VM whose env supplies `htIdx`, `sigBase = 0`, `seed`, `N_MASK`,
+    `OUT = 0x600`, `dVal`, and loop var `i = t`, with `seed` in scratch
+    `[0x00,0x20)`, falls through (`.2 = none`) and writes the masked
+    `wordOf (pad16 (reconstructRoot …))` of FORS tree `t` at `0x80 + 32*t`; the
+    seed window and the loop consts persist.
+
+    The leaf hash, the climb drive, the final store, and seed/const persistence
+    are discharged here; the two pure byte-layout obligations (`H_leafAdrs` /
+    `H_adrs`, the `make`/`wordOf` bridge) and the digest→leaf-index identity
+    (`H_idx`, the `readBitsLe`↔word-shift bridge) are factored to the i-loop
+    wrapper, exactly as `fors_climb` factors `H_adrs`. The secret and the auth-path
+    siblings are bound to the *real* `loadValue16` calldata reads (`secret` is the
+    `reconstructForsPk` value; `H_sib` is the same shape `fors_climb` consumes). -/
+theorem fors_tree_body
+    (sig : ByteVec Spec.SignatureLen) (vm : VM)
+    (seed : ByteVec 32) (htIdx : UInt64) (t : Nat)
+    (leafIdx : UInt32) (authPath : Array (ByteVec 16))
+    (ht : t < 12)
+    -- env preconditions
+    (hht : vm.env "htIdx" = htIdx.toNat)
+    (hsb : vm.env "sigBase" = 0)
+    (hseedw : vm.env "seed" = wordOf seed)
+    (hN : vm.env "N_MASK" = NMASK)
+    (hOUT : vm.env "OUT" = 0x600)
+    (hival : vm.env "i" = t)
+    (hseedmem : ∀ i, i < 32 → vm.mem (0 + i) = seed.data.getD i 0)
+    -- byte-layout obligations (wrapper-discharged)
+    (H_leafAdrs : (htIdx.toNat <<< 160 % W) ||| ((3 <<< 128 % W) ||| ((t <<< 96 % W) |||
+        ((vm.env "dVal" >>> (t * 11)) &&& 0x7FF)))
+      = wordOf (Spec.Adrs.forsNode htIdx (UInt32.ofNat t) 0 leafIdx))
+    (H_idx : (vm.env "dVal" >>> (t * 11)) &&& 0x7FF = leafIdx.toNat)
+    (H_adrs : ∀ h p,
+        ((htIdx.toNat <<< 160 % W) ||| ((3 <<< 128 % W) ||| (t <<< 96 % W)))
+          ||| (((h + 1) % W) <<< 32 % W ||| p >>> 1)
+        = wordOf (Spec.Adrs.forsNode htIdx (UInt32.ofNat t) (UInt32.ofNat (h + 1))
+            (UInt32.ofNat (p / 2))))
+    (H_sib : ∀ h, calldataload sig (((224 + t * 176) + h <<< 4 % W) % W) &&& NMASK
+        = wordOf (ByteVec.pad16 (authPath.getD h (ByteVec.zero 16)))) :
+    (execList c10Oracle sig forsTreeBody vm).2 = none
+    ∧ (∀ k, k < 32 →
+        (execList c10Oracle sig forsTreeBody vm).1.mem (0x80 + 32 * t + k)
+          = (ByteVec.pad16 (Spec.Fors.reconstructRoot seed htIdx (UInt32.ofNat t) leafIdx
+              (ByteVec.loadValue16 sig (16 + 16 * t)) authPath)).data.getD k 0)
+    ∧ (∀ i, i < 32 → (execList c10Oracle sig forsTreeBody vm).1.mem (0 + i) = seed.data.getD i 0) := by
+  unfold forsTreeBody
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  simp only [execStmt, eval, setVar, hht, hsb, hN, hOUT, hival,
+    ite_true, ite_false, String.reduceEq]
+  -- Normalise the (small) `% W` shift-amounts / offsets to plain arithmetic.
+  have hmul11 : t * 11 % W = t * 11 := Nat.mod_eq_of_lt (lt_W_of_lt (by omega))
+  have hsecOff : (0 + (16 + t <<< 4 % W) % W) % W = 16 + 16 * t := by
+    rw [shl4_small t (by omega), Nat.mod_eq_of_lt (lt_W_of_lt (show 16 + 16 * t < 4096 by omega)),
+        Nat.zero_add, Nat.mod_eq_of_lt (lt_W_of_lt (show 16 + 16 * t < 4096 by omega))]
+  have hauthOff : (0 + (224 + t * 176 % W) % W) % W = 224 + t * 176 := by
+    rw [Nat.mod_eq_of_lt (lt_W_of_lt (show t * 176 < 4096 by omega)),
+        Nat.mod_eq_of_lt (lt_W_of_lt (show 224 + t * 176 < 4096 by omega)),
+        Nat.zero_add, Nat.mod_eq_of_lt (lt_W_of_lt (show 224 + t * 176 < 4096 by omega))]
+  rw [hmul11, hsecOff, hauthOff]
+  -- Clean the leaf-ADRS word, the secret read, and the leaf index.
+  rw [H_leafAdrs, cl_masked_eq_wordOf sig (16 + 16 * t), H_idx]
+  -- Abbreviations for the post-leaf-hash VM (the climb entry state).
+  -- The leaf node word = wordOf (pad16 (th seed leafA (pad16 secret))) via `leafMem_th`.
+  have hleafnode :
+      mload32
+        (writeRegion
+          (mstore32 (mstore32 vm.mem 32 (wordOf (Spec.Adrs.forsNode htIdx (UInt32.ofNat t) 0 leafIdx)))
+            64 (wordOf (ByteVec.loadValue16 sig (16 + 16 * t)).pad16))
+          1536 fun i =>
+          (c10Oracle (slice
+            (mstore32 (mstore32 vm.mem 32 (wordOf (Spec.Adrs.forsNode htIdx (UInt32.ofNat t) 0 leafIdx)))
+              64 (wordOf (ByteVec.loadValue16 sig (16 + 16 * t)).pad16))
+            0 96)).data.getD i 0) 1536 &&& NMASK
+      = wordOf (ByteVec.pad16 (Spec.th seed (Spec.Adrs.forsNode htIdx (UInt32.ofNat t) 0 leafIdx)
+          (ByteVec.pad16 (ByteVec.loadValue16 sig (16 + 16 * t))))) :=
+    leafMem_th vm.mem seed (Spec.Adrs.forsNode htIdx (UInt32.ofNat t) 0 leafIdx)
+      (ByteVec.pad16 (ByteVec.loadValue16 sig (16 + 16 * t))) hseedmem
+  rw [hleafnode]
+  -- Abbreviate the climb-entry VM as `w` (collapses the 3 identical record copies).
+  obtain ⟨w, hweq⟩ :
+      ∃ w : VM, w =
+        { mem :=
+            writeRegion
+              (mstore32 (mstore32 vm.mem 32 (wordOf (Spec.Adrs.forsNode htIdx (UInt32.ofNat t) 0 leafIdx)))
+                64 (wordOf (ByteVec.loadValue16 sig (16 + 16 * t)).pad16)) 1536 (fun i =>
+              (c10Oracle (slice
+                (mstore32 (mstore32 vm.mem 32 (wordOf (Spec.Adrs.forsNode htIdx (UInt32.ofNat t) 0 leafIdx)))
+                  64 (wordOf (ByteVec.loadValue16 sig (16 + 16 * t)).pad16))
+                0 96)).data.getD i 0),
+          env :=
+            setVar (setVar (setVar (setVar (setVar (setVar
+              (setVar vm.env "treeIdx" leafIdx.toNat) "secretVal"
+                (wordOf (ByteVec.loadValue16 sig (16 + 16 * t)).pad16))
+              "leafAdrs" (wordOf (Spec.Adrs.forsNode htIdx (UInt32.ofNat t) 0 leafIdx)))
+              "node" (wordOf (ByteVec.pad16 (Spec.th seed (Spec.Adrs.forsNode htIdx (UInt32.ofNat t) 0 leafIdx)
+                (ByteVec.pad16 (ByteVec.loadValue16 sig (16 + 16 * t)))))))
+              "treeAdrsBase" (htIdx.toNat <<< 160 % W ||| (3 <<< 128 % W ||| t <<< 96 % W)))
+              "pathIdx" leafIdx.toNat)
+              "authPtr" (224 + t * 176) } := ⟨_, rfl⟩
+  rw [← hweq]
+  -- env/mem facts about the climb-entry `w` (frame the outer `setVar`s).
+  have hwN : w.env "N_MASK" = NMASK := by rw [hweq, hN.symm]; simp [setVar]
+  have hwOUT : w.env "OUT" = 0x600 := by rw [hweq, hOUT.symm]; simp [setVar]
+  have hwtB : w.env "treeAdrsBase"
+      = (htIdx.toNat <<< 160 % W ||| (3 <<< 128 % W ||| t <<< 96 % W)) := by
+    rw [hweq]; simp [setVar]
+  have hwAuth : w.env "authPtr" = 224 + t * 176 := by rw [hweq]; simp [setVar]
+  have hwnode : w.env "node"
+      = wordOf (ByteVec.pad16 (Spec.th seed (Spec.Adrs.forsNode htIdx (UInt32.ofNat t) 0 leafIdx)
+          (ByteVec.pad16 (ByteVec.loadValue16 sig (16 + 16 * t))))) := by
+    rw [hweq]; simp [setVar]
+  have hwpath : w.env "pathIdx" = leafIdx.toNat := by rw [hweq]; simp [setVar]
+  have hwmem : w.mem = writeRegion
+      (mstore32 (mstore32 vm.mem 32 (wordOf (Spec.Adrs.forsNode htIdx (UInt32.ofNat t) 0 leafIdx)))
+        64 (wordOf (ByteVec.loadValue16 sig (16 + 16 * t)).pad16)) 1536 (fun i =>
+        (c10Oracle (slice
+          (mstore32 (mstore32 vm.mem 32 (wordOf (Spec.Adrs.forsNode htIdx (UInt32.ofNat t) 0 leafIdx)))
+            64 (wordOf (ByteVec.loadValue16 sig (16 + 16 * t)).pad16))
+          0 96)).data.getD i 0) := by rw [hweq]
+  have hwseed : ∀ i, i < 32 → w.mem (0 + i) = seed.data.getD i 0 := by
+    intro i hi
+    rw [hwmem, writeRegion_frame _ 1536 _ (0 + i) (by omega),
+        mstore32_frame _ 64 _ (0 + i) (by omega), mstore32_frame _ 32 _ (0 + i) (by omega)]
+    exact hseedmem i hi
+  -- Drive the inner climb on `w` via `execFor_invariant` with the *full* climb
+  -- invariant (the same `R` `fors_climb` uses internally), so we keep the seed-mem
+  -- persistence + the `node` binding the wrapper needs (the public `fors_climb`
+  -- surfaces only `node`).
+  -- Drive the inner climb on `w` (FORS-tree Merkle climb core). `fors_climb` exposes
+  -- both the `node` = `reconstructRoot` result and the seed-window persistence.
+  obtain ⟨hclimb_none, hclimb_node, hclimb_seedmem⟩ :=
+    fors_climb sig w seed htIdx (UInt32.ofNat t) leafIdx
+      (ByteVec.loadValue16 sig (16 + 16 * t)) authPath
+      (htIdx.toNat <<< 160 % W ||| (3 <<< 128 % W ||| t <<< 96 % W)) (224 + t * 176)
+      hwN hwOUT hwtB hwAuth hwnode hwpath hwseed H_adrs H_sib
+  -- The forRange statement IS `execFor … Spec.A 0 w` (Spec.A = 11 defeq).
+  have hforStmt : execStmt c10Oracle sig (.forRange "h" (.lit 11) forsClimbBody) w
+      = execFor c10Oracle sig "h" forsClimbBody Spec.A 0 w := by
+    simp only [execStmt, eval]; rfl
+  -- The climb preserves the outer loop var `"i" = t` (it frames through `w`).
+  have hwi : w.env "i" = t := by rw [hweq]; simp [setVar]; exact hival
+  have hclimbVM_i : (execFor c10Oracle sig "h" forsClimbBody Spec.A 0 w).1.env "i" = t := by
+    rw [execFor_forsClimbBody_preserves_i sig Spec.A 0 w, hwi]
+  -- Step the forRange (falls through by `hclimb_none`), landing on the climb-final VM.
+  rw [execList_cons_none c10Oracle sig _ _ _ (by rw [hforStmt]; exact hclimb_none), hforStmt]
+  -- Step the final `mstore (0x80 + 32*t) node`: writes `wordOf (pad16 reconstructRoot)`.
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt]), execList]
+  -- Normalise the store offset `(0x80 + t <<< 5 % W) % W = 128 + 32*t`.
+  have hstoreOff : (128 + t <<< 5 % W) % W = 128 + 32 * t := by
+    rw [Nat.shiftLeft_eq, show (2 : Nat) ^ 5 = 32 from rfl, Nat.mul_comm t 32,
+        Nat.mod_eq_of_lt (lt_W_of_lt (show 32 * t < 4096 by omega)),
+        Nat.mod_eq_of_lt (lt_W_of_lt (show 128 + 32 * t < 4096 by omega))]
+  simp only [execStmt, eval, hclimbVM_i, hclimb_node, hstoreOff]
+  refine ⟨trivial, ?_, ?_⟩
+  · -- conjunct 2: mem at 128+32*t+k = (pad16 reconstructRoot)'s k-th byte.
+    intro k hk
+    rw [show (128 + 32 * t + k) = ((128 + 32 * t) + k) by omega,
+        mstore32_get _ (128 + 32 * t) _ k hk,
+        beByte_wordOf_getD _ k hk]
+  · -- conjunct 3: seed window persists (the store lands at ≥ 128).
+    intro i hi
+    rw [mstore32_frame _ (128 + 32 * t) _ (0 + i) (by omega)]
+    exact hclimb_seedmem i hi
 
 end SphincsCVerify.Interpreter.C10
