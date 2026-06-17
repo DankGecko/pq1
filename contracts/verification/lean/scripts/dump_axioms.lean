@@ -55,6 +55,14 @@ import SphincsCVerify
 -- of the verifier's first phase, the template for FORS/WOTS/hypertree.
 #print axioms SphincsCVerify.Interpreter.C10.hmsg_digest
 
+-- A3.1 FORS Merkle climb refinement (the canonical climb, reused by the hypertree):
+-- the interpreter's A=11-level inner forRange refines Spec.Fors.reconstructRoot
+-- (env "node" = wordOf (pad16 (reconstructRoot …))), via execFor_invariant + the
+-- masked-oracle helper + the forIn→foldl bridge.
+#print axioms SphincsCVerify.Interpreter.C10.fors_climb
+#print axioms SphincsCVerify.Interpreter.C10.mload_masked_eq_wordOf_pad16
+#print axioms SphincsCVerify.Interpreter.C10.reconstructRoot_eq_foldl
+
 #print axioms SphincsCVerify.Spec.Theorems.verify_deterministic
 #print axioms SphincsCVerify.Spec.Theorems.verify_rejects_wrong_length
 #print axioms SphincsCVerify.Wallet.MultiOwnable.bumpBootstrap_monotonic
