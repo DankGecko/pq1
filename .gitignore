@@ -8,3 +8,6 @@ __pycache__/
 
 # Local-only deploy scripts (contain RPC URLs / API keys — never commit)
 *.local.sh
+
+# CycloneDX SBOM release sidecars (regenerate with `make sbom`)
+*.cdx.json

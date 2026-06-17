@@ -27,7 +27,22 @@ name: CI
 on:
   push:
     branches: [master]
+    # Skip CI when a push touches ONLY docs / proofs / formal-models — none of
+    # these feed any CI job (the verify-bytecode + kontrol gates are local-only,
+    # and contracts/verification/** is never compiled by the `contracts` job,
+    # which builds contracts/smart-wallet). A push that ALSO changes any other
+    # file still runs the full suite. Conserves private-repo Actions minutes.
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - '**/*.lean'
+      - 'contracts/verification/**'
   pull_request:
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - '**/*.lean'
+      - 'contracts/verification/**'
 
 permissions:
   contents: read
@@ -42,11 +57,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # Invariant #5 (dependency level): no classical-signer crate. Reads deny.toml [bans].
-      - name: cargo deny check bans
+      # Deterministic supply-chain gate (fail-hard):
+      #  * bans       — invariant #5: no classical-signer crate (deny.toml [bans])
+      #  * advisories — real CVEs in any dep (unmaintained is workspace-scoped per
+      #                 deny.toml so transitive-unmaintained deps don't tripwire CI)
+      #  * sources    — deps only from expected registries/remotes (typosquat /
+      #                 dependency-confusion guard)
+      # Licenses are deliberately NOT a hard gate (a compliance tripwire, not a
+      # security property) — captured by the SBOM (`make sbom`) instead.
+      - name: cargo deny check (advisories + bans + sources)
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
-          command: check bans
+          command: check advisories bans sources
       # Invariants #5/#6/#7 (source level): the hard ERROR rules must be clean.
       - name: semgrep invariant rules (ERROR-level)
         run: |

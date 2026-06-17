@@ -2877,7 +2877,32 @@ flash-hw-optiga-reset: optiga-reset-oids
 FUZZ_TIME ?= $(TIME)
 FUZZ_LIBFUZZER_ARGS = $(if $(FUZZ_TIME),-- -max_total_time=$(FUZZ_TIME),)
 
-.PHONY: fuzz-list fuzz-aa-userop-parse fuzz-rlp-decode-item fuzz-eip1559-parse fuzz-erc20-calldata fuzz-erc20-bundle fuzz-apdu-parse-header fuzz-hid-frame-assembler
+# On a nix-based toolchain the libFuzzer binary can't find libstdc++ at runtime
+# (the system libstdc++ is GLIBC-incompatible with the nix-built cargo-fuzz).
+# Auto-prepend the nix gcc-lib dir if present; empty on a standard glibc env
+# (where the binaries link the system libstdc++ and just run).
+FUZZ_LD := $(shell ls -d /nix/store/*gcc-1[45]*-lib/lib 2>/dev/null | head -1)
+FUZZ_ENV := $(if $(FUZZ_LD),LD_LIBRARY_PATH=$(FUZZ_LD),)
+
+.PHONY: fuzz-list fuzz-all fuzz-aa-userop-parse fuzz-rlp-decode-item fuzz-eip1559-parse fuzz-erc20-calldata fuzz-erc20-bundle fuzz-apdu-parse-header fuzz-hid-frame-assembler
+
+# Smoke the whole adversarial parse surface: run every target for FUZZ_TIME
+# seconds (default 30) against its seed corpus. Coverage-guided libFuzzer; a
+# crash drops an artifact under fuzz/artifacts/<target>/ to triage (these parsers
+# are Kani-proven panic-free on bounded input, so a crash = a real unbounded-path
+# bug OR a harness artifact — decide which before "fixing"). Last full run
+# (2026-06-17): all 11 targets non-vacuous (cov 23-133), 0 crashes.
+fuzz-all:
+	@cd fuzz && cargo +nightly fuzz build
+	@cd fuzz && for t in $$(cargo +nightly fuzz list); do \
+	  echo "==> fuzz $$t ($(or $(FUZZ_TIME),30)s)"; \
+	  mkdir -p corpus/$$t artifacts/$$t; \
+	  $(FUZZ_ENV) target/x86_64-unknown-linux-gnu/release/$$t corpus/$$t \
+	    -max_total_time=$(or $(FUZZ_TIME),30) -rss_limit_mb=2048 -artifact_prefix=artifacts/$$t/ \
+	    2>&1 | grep -E "DONE|cov: [0-9]+ ft:|crash|deadly signal|SUMMARY" | tail -2; \
+	done; \
+	c=$$(find artifacts -type f \( -name 'crash-*' -o -name 'oom-*' \) 2>/dev/null | wc -l); \
+	echo "==> fuzz-all done; crash artifacts: $$c (triage any under fuzz/artifacts/)"
 
 fuzz-list:
 	@echo "Available fuzz targets (see fuzz/README.md):"
@@ -3484,14 +3509,27 @@ fwup-transport-hw-iwdg: dev-pubkey-fixture fwup-transport-fixture
 .PHONY: invariant-gates
 SEMGREP ?= $(shell command -v semgrep 2>/dev/null || echo $(HOME)/.venvs/semgrep/bin/semgrep)
 invariant-gates:
-	@echo "==> [1/3] invariant #5 (deps): cargo deny check bans"
-	cargo deny check bans
+	@echo "==> [1/3] supply-chain (deps): cargo deny check advisories bans sources"
+	@echo "    bans=invariant #5 (no classical signer); advisories=real CVEs"
+	@echo "    (unmaintained is workspace-scoped); sources=registry/remote guard."
+	cargo deny check advisories bans sources
 	@command -v "$(SEMGREP)" >/dev/null 2>&1 || { echo "ERROR: semgrep not found ($(SEMGREP)). Install: python3 -m venv ~/.venvs/semgrep && ~/.venvs/semgrep/bin/pip install semgrep"; exit 1; }
 	@echo "==> [2/3] invariants #5/#6/#7 (source, ERROR-level fails the build):"
 	"$(SEMGREP)" --config .semgrep/pqsigner-invariants.yml --severity ERROR --error --metrics off --quiet
 	@echo "==> [3/3] advisory warnings (non-blocking):"
 	-@"$(SEMGREP)" --config .semgrep/pqsigner-invariants.yml --severity WARNING --metrics off --quiet
 	@echo "==> invariant-gates: PASS"
+
+# Supply-chain SBOM (CycloneDX) — a release SIDECAR capturing the full dep tree
+# + licenses. NOT embedded in firmware (the secure-world binary is size-critical;
+# pair an external SBOM with the FSBL-measured hash, per the SOTA report §8).
+# Licenses are RECORDED here, not gated (a license gate is a compliance tripwire,
+# not a security property — see deny.toml). Output `*.cdx.json` is gitignored.
+.PHONY: sbom
+sbom:
+	@command -v cargo-cyclonedx >/dev/null 2>&1 || { echo "ERROR: cargo-cyclonedx not found. Install: cargo install cargo-cyclonedx"; exit 1; }
+	cargo cyclonedx --format json --all
+	@echo "==> sbom: wrote <crate>.cdx.json per workspace member (release sidecars)"
 
 # ---------------------------------------------------------------------------
 # Host Rust formal verification (SOTA 2026-06 §1 adopt-now; work-todo §34).

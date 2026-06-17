@@ -86,3 +86,28 @@ directions.
    so the fix is permanent.
 4. Save the artifact to `fuzz/corpus/<target>/` so libFuzzer never
    regresses on the same shape.
+
+## Running
+
+```sh
+make fuzz-all                 # build + run all 11 targets 30s each (FUZZ_TIME=N to change)
+make fuzz-rlp-decode-item FUZZ_TIME=120   # one target, longer
+make fuzz-list                # list targets
+```
+
+On a **nix-based toolchain** the libFuzzer binary can't find `libstdc++` at
+runtime (the system one is GLIBC-incompatible with the nix-built cargo-fuzz).
+The `make` targets auto-prepend the nix gcc-lib dir via `FUZZ_ENV`; if you run a
+target binary by hand, set `LD_LIBRARY_PATH=$(ls -d /nix/store/*gcc-15*-lib/lib)`.
+(The `llvm-symbolizer` may also fail to load `libLLVM-18.so.18.1` — cosmetic, it
+only affects symbolized stack traces, not fuzzing or crash detection.)
+
+## Last full campaign (2026-06-17)
+
+All 11 targets, 30 s each against their seed corpora: **non-vacuous coverage on
+every target (cov 23–133), 0 crashes** (~10–27 M execs/target). The adversarial
+parse surface survives coverage-guided fuzzing — this extends the Kani
+panic-freedom proofs (`make kani`) onto the unbounded / large-input paths the
+bounded proofs don't reach. A crash drops an artifact under
+`fuzz/artifacts/<target>/`; triage it (real unbounded-path bug vs harness
+artifact) before touching a Kani-proven parser.

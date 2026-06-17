@@ -63,6 +63,15 @@ feature-depth = 1
 # More documentation for the advisories section can be found here:
 # https://embarkstudios.github.io/cargo-deny/checks/advisories/cfg.html
 [advisories]
+# Hard-gate on VULNERABILITIES (real CVEs in any dep). Treat UNMAINTAINED
+# advisories as informational for TRANSITIVE deps we do not control:
+# `unmaintained = "workspace"` only fails on unmaintained DIRECT workspace deps,
+# not transitive ones. This keeps `cargo deny check advisories` firing on real
+# security signal without breaking CI on RUSTSEC-2026-0110 (bare-metal 0.2.5 — an
+# unmaintained TRANSITIVE dep of cortex-m 0.7.7; deprecated, NOT vulnerable, and
+# unremovable until the cortex-m stack drops it). Surfaced 2026-06-17; revisit if
+# cortex-m is bumped. A real vulnerability advisory in bare-metal would still fail.
+unmaintained = "workspace"
 # The path where the advisory databases are cloned/fetched into
 #db-path = "$CARGO_HOME/advisory-dbs"
 # The url(s) of the advisory databases to use
