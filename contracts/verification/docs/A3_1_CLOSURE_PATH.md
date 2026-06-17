@@ -369,7 +369,41 @@ with the climb lemmas as the loop-refinement engine.
   6. Replace `solidityVerifier_compiles_correctly` with the narrow
      `DeployedBytecode.SPHINCsC10Asm_verify = execC10Asm` transcription axiom
      (empirically backed by step 3 / `make verify-interp`) + re-derive the old
-     statement as a theorem.
+     statement as a theorem. **See the N-mask finding below — this step touches
+     `theft_free` and is USER-GATED.**
+
+### FINDING (2026-06-17, surfaced by the refinement) — N-mask gate: bytecode strict, model lenient
+
+The deployed Yul (`SPHINCsC10Asm.sol` L58–65) rejects (`return false`) any
+`pkSeed`/`pkRoot` not in N-mask shape (`and(key, N_MASK) != key`). The Lean model
+`verifyYulModel = Verifier.Refined.verifyRefined` (confirmed at `Refined.lean:143`)
+takes `ByteVec 32` keys and does `pkSeed.take 16` — **silently discarding the
+bottom 16 bytes, with NO N-mask check.** So `execC10Asm = verifyYulModel` is **not
+literally true**: on a non-N-masked key, `execC10Asm = false` (gate) while
+`verifyYulModel` uses the top 16 and can be `true`. (Deductively certain;
+`verify-interp` 396/396 is consistent because every KAT/bulk key is N-masked.)
+
+- **It is a precision WIN, not a bug.** The bytecode is strictly *more* restrictive
+  (`bytecode true → model true` always; divergence only at `bytecode false, model
+  true`, reachable only by inputs the factory/`addOwner` never produce — they
+  N-mask). `DeployedBytecode` is opaque, so the old axiom is unfaithful-to-reality,
+  NOT provably-false (no soundness fire). The project already covers the gate via
+  **Halmos input-gates, separately** from the Lean equiv; the interpreter folds
+  *core + gate* into ONE kernel statement, subsuming the Halmos check.
+- **True target theorem (step 5/6 end-state):**
+  `execC10Asm pkS pkR m sig = nMaskedB pkS && nMaskedB pkR && verifyYulModel pkS pkR m sig`,
+  with `nMaskedB key := (wordOf key) &&& N_MASK == wordOf key` (Bool, matching the
+  bytecode) + a small lemma to `Wallet.Factory.nMasked` (Prop). The phase proofs
+  (H_msg→FORS→WOTS→hypertree) are UNAFFECTED — they prove the both-N-masked branch
+  computes `verifyYulModel`; the gate is the top-level `ifnz` wrapper.
+- **`theft_free` interaction (step 6, USER-GATED):** `theft_free` (Theorems.lean
+  :350-352) uses the A3.1 axiom in the LIVENESS direction (`rw [hbridge]; exact
+  hverify`: `verifyYulModel true → DeployedBytecode true`). Under the faithful
+  characterization that needs the stored keys N-masked — modeled
+  (`Factory.nMasked`/`Storage.hasNMaskLayout`) and enforced by the factory/addOwner,
+  so threadable, but it edits `theft_free`. **KEEP the old axiom in place for now;
+  bring the swap (transcription axiom + characterization + threading the N-mask
+  invariant) to the user at step 6, with the characterization already proven.**
 
 - **(historical) the original executable-first NEXT list (now steps 1–3 done):**
   1. **`Interpreter/Yul.lean`** — the C10 opcode-subset AST (`Expr`:

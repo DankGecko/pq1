@@ -181,6 +181,43 @@ mutual
         | (vm', some h) => (vm', some h)
 end
 
+/-! ## Composition + binding-frame lemmas (proof-phase foundation)
+
+These are the workhorses the phase-wise refinement consumes (`docs/A3_1_CLOSURE_PATH.md`
+§8 step 4): `execList_append` splits the program at phase boundaries (with the
+halt short-circuit threaded), and the `setVar` frame lemmas let a phase carry a
+computed binding (e.g. `digest`) past later statements that touch other vars. -/
+
+/-- Reading the just-bound variable returns the bound value. -/
+@[simp] theorem setVar_get_eq (env : VarEnv) (x : String) (v : Nat) :
+    setVar env x v x = v := by
+  unfold setVar; rw [if_pos rfl]
+
+/-- Reading a *different* variable is unaffected by a binding. -/
+@[simp] theorem setVar_get_ne (env : VarEnv) (x y : String) (v : Nat) (h : y ≠ x) :
+    setVar env x v y = env y := by
+  unfold setVar; rw [if_neg h]
+
+/-- **Phase composition.** Running `xs ++ ys` runs `xs`, and — only if `xs` did
+    not halt — continues with `ys` from the resulting state; a halt in `xs`
+    short-circuits. The structural lemma behind every phase split. -/
+theorem execList_append {n : Nat} (sha : List UInt8 → Spec.ByteVec 32) (sig : Spec.ByteVec n)
+    (xs ys : List Stmt) (vm : VM) :
+    execList sha sig (xs ++ ys) vm
+      = match execList sha sig xs vm with
+        | (vm', none)   => execList sha sig ys vm'
+        | (vm', some h) => (vm', some h) := by
+  induction xs generalizing vm with
+  | nil => simp only [List.nil_append, execList]
+  | cons s rest ih =>
+      show execList sha sig (s :: (rest ++ ys)) vm = _
+      rw [execList]
+      cases hs : execStmt sha sig s vm with
+      | mk vm' o =>
+        cases o with
+        | none => rw [execList, hs]; exact ih vm'
+        | some h => rw [execList, hs]
+
 /-! ## Top-level program execution -/
 
 /-- Run a program from a caller-supplied initial memory (`mem0` lets the caller
