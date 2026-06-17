@@ -42,6 +42,12 @@ import SphincsCVerify
 #print axioms SphincsCVerify.Interpreter.beByte_mload32
 #print axioms SphincsCVerify.Interpreter.beByte_wordOf
 
+-- A3.1 proof-phase foundations: phase-split composition (Yul.lean) + the reusable
+-- input-assembly bridge (Sha256Bridge.lean) — when memory holds the segments at
+-- consecutive 32-byte windows, the precompile input slice = the spec's ByteSeg.flatten.
+#print axioms SphincsCVerify.Interpreter.execList_append
+#print axioms SphincsCVerify.Interpreter.slice_toArray_eq_flatten
+
 #print axioms SphincsCVerify.Spec.Theorems.verify_deterministic
 #print axioms SphincsCVerify.Spec.Theorems.verify_rejects_wrong_length
 #print axioms SphincsCVerify.Wallet.MultiOwnable.bumpBootstrap_monotonic

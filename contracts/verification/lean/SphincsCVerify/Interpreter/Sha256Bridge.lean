@@ -15,6 +15,7 @@ Mathlib-free (Lean core / `Init` only); no new axioms beyond the kernel three.
 
 import SphincsCVerify.Interpreter.Memory
 import SphincsCVerify.Spec.Bytes
+import SphincsCVerify.Spec.Hash
 
 namespace SphincsCVerify.Interpreter
 
@@ -203,5 +204,162 @@ theorem beByte_wordOf (v : ByteVec 32) (i : Fin 32) :
   unfold memOfBytes ByteVec.get
   rw [dif_pos (by rw [v.size_eq]; exact i.isLt)]
   rfl
+
+/-! ## Input-assembly bridge: a contiguous slice IS the spec's `ByteSeg.flatten`
+
+The precompile reads `size` contiguous memory bytes; the declarative spec hashes
+`ByteSeg.flatten segs`. When the interpreter has laid `segs` (each a 32-byte
+`ByteVec`) into consecutive 32-byte windows starting at `base`, the
+`32 * segs.length`-byte slice at `base` is **exactly** the flattened segment
+bytes — so the precompile reads precisely the concatenated segments. This is the
+keystone reused at every C10 hash site (WOTS chains, FORS/Merkle climbs, `h_msg`).
+
+The proof works over `List (Spec.ByteVec 32)` (NOT `List Spec.ByteSeg`): only
+because the segments are *uniformly* 32 bytes is the slice size `32 * length`.
+`flattenV` is `ByteSeg.flatten ∘ (·.map ofByteVec)` specialised to that type, and
+`flatten_map_eq_flattenV` bridges the two. -/
+
+open SphincsCVerify.Spec (ByteSeg)
+
+/-- The flatten foldl specialised to uniform 32-byte vectors: foldl-append each
+    vector's `data`. Equal to `ByteSeg.flatten (segs.map ByteSeg.ofByteVec)`
+    (see `flatten_map_eq_flattenV`), but stated at `List (ByteVec 32)` so every
+    head carries `size_eq : data.size = 32`. -/
+private def flattenV (segs : List (ByteVec 32)) : Array UInt8 :=
+  segs.foldl (fun acc s => acc ++ s.data) #[]
+
+/-- `ByteSeg.flatten (segs.map ofByteVec) = flattenV segs`: the spec's flatten of
+    the coerced segments is the uniform-vector foldl. `(ofByteVec s).bytes.data`
+    is `s.data` by `rfl`, so `List.foldl_map` collapses the two. -/
+private theorem flatten_map_eq_flattenV (segs : List (ByteVec 32)) :
+    ByteSeg.flatten (segs.map ByteSeg.ofByteVec) = flattenV segs := by
+  unfold ByteSeg.flatten flattenV
+  rw [List.foldl_map]
+  rfl
+
+/-- Accumulator factoring for the flatten foldl: starting from an arbitrary `acc`
+    prepends `acc` to the headless flatten. The array analogue of the Horner
+    accumulator trick used for `beNat`; lets us peel the head cleanly. -/
+private theorem flattenV_foldl_acc (segs : List (ByteVec 32)) :
+    ∀ acc, segs.foldl (fun a s => a ++ s.data) acc = acc ++ flattenV segs := by
+  induction segs with
+  | nil => intro acc; simp [flattenV]
+  | cons s rest ih =>
+      intro acc
+      rw [List.foldl_cons, ih (acc ++ s.data)]
+      have hrest : flattenV (s :: rest) = s.data ++ flattenV rest := by
+        show rest.foldl _ (#[] ++ s.data) = _
+        rw [ih (#[] ++ s.data), Array.empty_append]
+      rw [hrest, Array.append_assoc]
+
+/-- `flattenV` over a cons splits off the head vector's data. The clean recursion
+    lemma the size/element inductions consume. -/
+private theorem flattenV_cons (s : ByteVec 32) (rest : List (ByteVec 32)) :
+    flattenV (s :: rest) = s.data ++ flattenV rest := by
+  show rest.foldl _ (#[] ++ s.data) = _
+  rw [flattenV_foldl_acc rest (#[] ++ s.data), Array.empty_append]
+
+/-- The flattened size is exactly `32 * length` — true *because* each segment is a
+    32-byte `ByteVec` (`size_eq`). -/
+private theorem flattenV_size (segs : List (ByteVec 32)) :
+    (flattenV segs).size = 32 * segs.length := by
+  induction segs with
+  | nil => simp [flattenV]
+  | cons s rest ih =>
+      rw [flattenV_cons, Array.size_append, s.size_eq, ih, List.length_cons]
+      -- 32 + 32 * rest.length = 32 * (rest.length + 1)
+      omega
+
+/-- **Positional flatten read-back.** For an in-range index `k`, the `k`-th byte
+    of `flattenV segs` (with default `0`) is the `(k % 32)`-th byte of the
+    `(k / 32)`-th segment (with defaults `ByteVec.zero 32` / `0`). The `getD`
+    phrasing makes the RHS byte-identical to what `holdsSegs` supplies, so the
+    main bridge closes by a single `h` application. -/
+private theorem flattenV_getD (segs : List (ByteVec 32)) :
+    ∀ k, k < 32 * segs.length →
+      (flattenV segs).getD k 0
+        = (segs.getD (k / 32) (ByteVec.zero 32)).data.getD (k % 32) 0 := by
+  induction segs with
+  | nil => intro k hk; simp at hk
+  | cons s rest ih =>
+      intro k hk
+      rw [flattenV_cons]
+      -- (s.data ++ flattenV rest).getD k 0 = (s.data ++ flattenV rest)[k]?.getD 0
+      rw [Array.getD_eq_getD_getElem?, Array.getElem?_append]
+      have hssize : s.data.size = 32 := s.size_eq
+      by_cases hlt : k < s.data.size
+      · -- head segment: k / 32 = 0, k % 32 = k
+        rw [if_pos hlt]
+        have hk32 : k < 32 := by rw [hssize] at hlt; exact hlt
+        have hdiv : k / 32 = 0 := by omega
+        have hmod : k % 32 = k := by omega
+        rw [hdiv, hmod, List.getD_cons_zero]
+        -- s.data[k]?.getD 0 = s.data.getD k 0
+        rw [← Array.getD_eq_getD_getElem?]
+      · -- tail segment: recurse at k - 32
+        rw [if_neg hlt, hssize]
+        have hge : 32 ≤ k := by rw [hssize] at hlt; omega
+        have hkrest : k - 32 < 32 * rest.length := by
+          rw [List.length_cons] at hk; omega
+        have hih := ih (k - 32) hkrest
+        -- (flattenV rest)[k - 32]?.getD 0 = (flattenV rest).getD (k-32) 0
+        rw [← Array.getD_eq_getD_getElem?, hih]
+        -- bridge the indices: (k-32)/32 = k/32 - 1, (k-32)%32 = k%32, k/32 ≥ 1
+        have hd : (k - 32) / 32 = k / 32 - 1 := by omega
+        have hm : (k - 32) % 32 = k % 32 := by omega
+        rw [hd, hm]
+        -- RHS: ((s::rest).getD (k/32) _) = rest.getD (k/32 - 1) _  (since k/32 ≥ 1)
+        obtain ⟨m, hmeq⟩ : ∃ m, k / 32 = m + 1 := ⟨k / 32 - 1, by omega⟩
+        have hcons : (s :: rest).getD (k / 32) (ByteVec.zero 32)
+            = rest.getD (k / 32 - 1) (ByteVec.zero 32) := by
+          rw [hmeq, List.getD_cons_succ, Nat.add_sub_cancel]
+        rw [hcons]
+
+/-- Memory holds a list of 32-byte `ByteVec` segments at consecutive 32-byte
+    windows starting at `base` (window `j = [base+32j, base+32j+32)`). -/
+def holdsSegs (mem : ByteMemory) (base : Nat) (segs : List (Spec.ByteVec 32)) : Prop :=
+  ∀ j i, j < segs.length → i < 32 →
+    mem (base + 32 * j + i) = (segs.getD j (Spec.ByteVec.zero 32)).data.getD i 0
+
+/-- **Input-assembly bridge.** When memory holds `segs` at consecutive 32-byte
+    windows, the `32 * segs.length`-byte slice at `base` is exactly the spec's
+    `ByteSeg.flatten` of those segments — i.e. the precompile reads precisely the
+    concatenated segment bytes. Reusable across all C10 hash sites. -/
+theorem slice_toArray_eq_flatten (mem : ByteMemory) (base : Nat)
+    (segs : List (Spec.ByteVec 32)) (h : holdsSegs mem base segs) :
+    (slice mem base (32 * segs.length)).toArray
+      = Spec.ByteSeg.flatten (segs.map Spec.ByteSeg.ofByteVec) := by
+  rw [flatten_map_eq_flattenV]
+  apply Array.ext
+  · -- sizes: both 32 * segs.length
+    rw [List.size_toArray, flattenV_size]
+    show (slice mem base (32 * segs.length)).length = _
+    unfold slice
+    rw [List.length_map, List.length_range]
+  · -- elements: at each in-range index k
+    intro k hk1 _
+    -- LHS k-bound is over the toArray; reduce it to `k < 32 * segs.length`
+    have hkrange : k < 32 * segs.length := by
+      rw [List.size_toArray] at hk1
+      have : (slice mem base (32 * segs.length)).length = 32 * segs.length := by
+        unfold slice; rw [List.length_map, List.length_range]
+      rw [this] at hk1; exact hk1
+    -- LHS: (slice …).toArray[k] = mem (base + k)
+    have hlhs : (slice mem base (32 * segs.length)).toArray[k] = mem (base + k) := by
+      rw [List.getElem_toArray]
+      show ((List.range (32 * segs.length)).map (fun i => mem (base + i)))[k]'_ = _
+      rw [List.getElem_map, List.getElem_range]
+    -- RHS: convert getElem to getD-with-0, then apply flattenV_getD + h
+    rw [hlhs]
+    have hrhs : (flattenV segs)[k] = (flattenV segs).getD k 0 := by
+      rw [Array.getD_eq_getD_getElem?, Array.getElem?_eq_getElem, Option.getD_some]
+    rw [hrhs, flattenV_getD segs k hkrange]
+    -- mem (base + k) = (segs.getD (k/32) _).data.getD (k%32) 0   via `h`
+    have hdiv : k / 32 < segs.length := Nat.div_lt_of_lt_mul hkrange
+    have hmod : k % 32 < 32 := Nat.mod_lt _ (by decide)
+    have hsplit : base + 32 * (k / 32) + k % 32 = base + k := by
+      have := Nat.div_add_mod k 32; omega
+    rw [← hsplit]
+    exact h (k / 32) (k % 32) hdiv hmod
 
 end SphincsCVerify.Interpreter
