@@ -355,6 +355,38 @@ with the climb lemmas as the loop-refinement engine.
     reduction. `verify-build` green (43/43), `verify-audit` 0-sorry, `theft_free`
     closure UNCHANGED (the interpreter modules are leaves).
 
+- **2026-06-17 — PROOF PHASE (step 5) WELL UNDERWAY.** All reusable interpreter-
+  refinement infrastructure + the first phase + the hardest climb shape are PROVEN
+  (Phases.lean / Yul.lean / Sha256Bridge.lean; all `[propext, Classical.choice,
+  Quot.sound]`, mathlib-free, 0 sorry, `theft_free` closure UNCHANGED, verify-build
+  green, verify-interp 396/396):
+  * **Composition + loop engine** (Yul.lean): `execList_append` (phase split),
+    `execFor_invariant` (the loop-induction engine — thread `R:Nat→VM→Prop` through
+    a halt-free `forRange`; the D=2 layer loop is unfolded since its body reverts),
+    `setVar_get_eq/_ne`.
+  * **Hash-site bridges** (Sha256Bridge.lean + C10Program.lean): `slice_toArray_eq_flatten`
+    (`holdsSegs`→slice=`ByteSeg.flatten`), `c10Oracle_holdsSegs` (assembled mem →
+    the precompile computes the real `Spec.sha256`), `beByte_and_nmask`, `natToB32_wordOf`,
+    `mload_masked_eq_wordOf_pad16` (`and(mload,N_MASK)=wordOf(pad16(truncate16 d))`),
+    `climbMem_thPair` (4-seg + branchless parity swap via `mstore32_comm`),
+    `cl_masked_eq_wordOf` (masked calldata read-back), `reconstructRoot_eq_foldl`
+    (forIn→foldl via `@[simp] forIn_eq_forIn_range'` + `List.forIn_pure_yield_eq_foldl`).
+  * **Phases proven** (Phases.lean): `hmsg_digest` (H_msg phase → `env "digest" =
+    wordOf(Spec.hMsg …)`, the template); `fors_climb` (the canonical A=11 Merkle
+    climb → `wordOf(pad16(Spec.Fors.reconstructRoot …))`, reused by the hypertree);
+    `fors_tree_body` (one full FORS tree: leaf `th` + climb + store →
+    `mem(0x80+32t)=pad16(reconstructRoot …)`, with the real `loadValue16` secret).
+  * **REMAINING FORS** (next): the `Adrs.make` word-layout bridge `wordOf (make …)
+    = Σ field<<<pos = ||| field<<<pos` (discharges `fors_tree_body`'s forsNode
+    obligations; reusable for `treeNode`/`wotsPk`) → i-loop wrapper (`execFor_invariant`
+    over 12 trees) → last-tree → root-compress (`thMulti`=`computeForsPk`) →
+    `fors_phase` (forced-zero `ifnz`→revert, else `env "forsPk"=wordOf(pad16 r)`,
+    `reconstructForsPk … = some r`). **THEN** the hypertree phase (reuse the climb +
+    `mload_masked` for the 9-level Merkle; NEW: WOTS digit-sum accumulate loop, the
+    43-chain loop with a variable-length inner step loop, PK-compress; ×D=2 layers
+    unfolded) → final `eq` compare → `execC10Asm = verifyYulModel`. **THEN** step 6
+    (USER-GATED: the N-mask reconciliation).
+
 - **NEXT (precise), in order — steps 1–3 DONE (above); proof phase next:**
   4. Finish `Sha256Bridge`: input-assembly (`slice = ByteSeg.flatten [seed,adrs,…]`
      from frame lemmas + `beByte_wordOf`) + masked/unmasked output
