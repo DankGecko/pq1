@@ -3522,4 +3522,7 @@ miri:
 	MIRIFLAGS="-Zmiri-disable-isolation" cargo +nightly miri test -p pqsigner-fi
 	@echo "==> Miri: tx-core decoders (RLP / EIP-1559 / keccak)"
 	MIRIFLAGS="-Zmiri-disable-isolation" cargo +nightly miri test -p pqsigner-tx-core
+	@echo "==> Miri: secure-world NS-pointer deref + validation (the genuine host-reachable unsafe)"
+	@# permissive-provenance: the NS-ptr boundary is a legitimate int->ptr cast.
+	MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-permissive-provenance" cargo +nightly miri test -p sphincs-tz-secure --no-default-features --features mock-se,debug-log,ui-semihosting ns_ptr ptr_validate
 	@echo "==> miri: PASS"
