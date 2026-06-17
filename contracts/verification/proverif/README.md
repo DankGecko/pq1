@@ -23,8 +23,8 @@ from source (the GUI's `lablgtk2`/GTK2 dep is NOT needed for the CLI).
 | Query (model) | Attacker capability | Expected | Maps to |
 |---|---|---|---|
 | `scenarioBaseline` | Dolev-Yao on the I2C bus only | seed **secret** | warm-up (tunnels hold) |
-| `scenarioClaim1` | bus + **one** entropy half extracted (one S4) | seed **secret** | **Claim 1** — dual residency |
-| `scenarioClaim2` | bus + **both channel keys** (S2 / DHUK-PBS leak), **no PIN** | seed **secret** | **Claim 2** — channel access ≠ read access |
+| `scenarioClaim1` | bus + **one** entropy half extracted (one S4) | seed **secret** | **Claim 1** — dual residency (*structural* need-both-inputs; see note) |
+| `scenarioClaim2` | bus + **both channel keys** (S2 / DHUK-PBS leak), **no PIN**, **fresh** (no captured session) | seed **secret** | **Claim 2** — channel access ≠ read access (see replay caveat) |
 | `scenarioPositiveControl` | bus + **both** halves extracted | seed **NOT secret** | anti-vacuity control (see below) |
 | `ReleasedHalfO/E ==> PresentedPinO/E` | — | **true** | §6.2 — no half released without a correct PIN ("every PIN attack is online") |
 
@@ -48,7 +48,37 @@ never computed, an over-abstraction, etc.). `scenarioPositiveControl` leaks
 every other PASS is meaningless. It is the protocol-model analogue of the F-9
 positive control in the SCA harnesses.
 
+### The PIN gate is load-bearing (per-mechanism control)
+
+The global positive control proves the seed is *derivable at all*; it does not by
+itself prove that `scenarioClaim2` passes **because of** the PIN gate rather than
+because the halves merely never leave the SEs in that scenario. To earn that:
+disable the silicon gate (`if p = realpin then` → `if p = p then`) and re-run —
+Claim 2 flips from `secret` to **NOT secret** (a channel-key attacker then reads
+both halves). Gate on → `secret`; gate off → `not secret`. So the gate is the
+mechanism doing the work, verified rather than argued:
+
+```sh
+sed 's/if p = realpin then/if p = p then/' dual_se_unlock.pv > /tmp/gate_off.pv
+proverif /tmp/gate_off.pv   # RESULT ... reconstruct(ho2,he2) ... is false
+```
+
 ## Out of frame (deliberate — stated, not discovered)
+
+- **Replay / session freshness**: `scenarioClaim2` models a **fresh** key-holding
+  attacker with *no captured session*. A deployment-realistic attacker may have
+  snooped a prior unlock's `senc(pin, k)` off the bus and, once it holds the
+  channel key, replay it. This model cannot see that (no `sworld` in that
+  scenario), and the auth correspondence is **non-injective** by choice, so
+  `ReleasedHalf ⇒ PresentedPin` proves "a correct PIN was presented at least
+  once", NOT "this release maps to a *fresh* presentation". Replay / anti-replay
+  is therefore **out of frame, not proven safe** — it folds into the deferred
+  key-establishment handshake model.
+- **Claim 1 is *structural*, not information-theoretic**: symbolic `reconstruct`
+  with no equational theory proves the attacker needs *both inputs* to form the
+  seed. It does NOT prove the math-statement "one half is uniformly random /
+  statistically independent of the seed" (Claim 1's information-theoretic flavor)
+  — that is the cryptographic argument's job, not ProVerif's.
 
 - **Counting bound** (≤10 PIN attempts, Claim 3): ProVerif is the wrong tool for
   monotonic-counter properties (Tamarin/GSVerif territory). What ProVerif proves
