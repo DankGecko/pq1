@@ -252,4 +252,21 @@ def execC10Asm (pkSeed pkRoot message : ByteVec 32)
       "pkRoot" (wordOf pkRoot)) "message" (wordOf message)
   execFrom c10Oracle sig c10Program env0 (fun _ => 0)
 
+/-- **Oracle ↔ spec-hash bridge.** When memory holds `segs` at consecutive 32-byte
+    windows, running the `0x02` precompile over the assembled `32*len`-byte slice
+    computes exactly the spec's `Spec.sha256` of those segments. Combines the
+    input-assembly bridge (`slice_toArray_eq_flatten`) with the spec identity
+    `sha256 = sha256_impl` — no new axiom (`c10Oracle` and `Spec.sha256` share the
+    one computable `Sha256Impl.sha256Bytes`). This is what turns each hash site's
+    `holdsSegs` precondition into the corresponding spec tweakable-hash value. -/
+theorem c10Oracle_holdsSegs (mem : ByteMemory) (base : Nat) (segs : List (ByteVec 32))
+    (h : holdsSegs mem base segs) :
+    c10Oracle (slice mem base (32 * segs.length))
+      = Spec.sha256 (segs.map Spec.ByteSeg.ofByteVec) := by
+  rw [Spec.sha256_eq_impl]
+  apply Spec.ByteVec.ext_data
+  show Spec.Sha256Impl.sha256Bytes (slice mem base (32 * segs.length)).toArray
+     = Spec.Sha256Impl.sha256Bytes (Spec.ByteSeg.flatten (segs.map Spec.ByteSeg.ofByteVec))
+  rw [slice_toArray_eq_flatten mem base segs h]
+
 end SphincsCVerify.Interpreter.C10

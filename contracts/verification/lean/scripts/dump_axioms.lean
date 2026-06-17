@@ -47,6 +47,7 @@ import SphincsCVerify
 -- consecutive 32-byte windows, the precompile input slice = the spec's ByteSeg.flatten.
 #print axioms SphincsCVerify.Interpreter.execList_append
 #print axioms SphincsCVerify.Interpreter.slice_toArray_eq_flatten
+#print axioms SphincsCVerify.Interpreter.C10.c10Oracle_holdsSegs
 
 #print axioms SphincsCVerify.Spec.Theorems.verify_deterministic
 #print axioms SphincsCVerify.Spec.Theorems.verify_rejects_wrong_length
