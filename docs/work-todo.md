@@ -111,6 +111,31 @@ checklist); `docs/security-review-2026-05.md` §C-4 (added).
 inaccurate for the current build and must be re-established by this
 fix.
 
+**BUILD-FENCE ADDED 2026-06-17 (compile-time enforcement only — does NOT
+close S-1).** `secure/src/nsc/mod.rs` now `compile_error!`s when
+`mode-production` + `optiga-trust-m` is built WITHOUT
+`optiga-lock-operational`, so a production image can no longer omit the
+F1D0 `Change = Auto(F1D0)` + LcsO ratchet (the metadata itself was already
+wired at `optiga/apdu.rs:1080` under that feature). **DELIBERATELY keyed to
+`mode-production` ALONE** — NOT the `all(stm32u585, not(debug_assertions))`
+belt-and-braces the S-2/S-3 fences use — because `optiga-lock-operational`
+performs the IRREVERSIBLE LcsO ratchet: `make e2e-hw` / `play-hw-display`
+build `--release` (so `not(debug_assertions)`) WITHOUT `mode-production`,
+and the broader trigger would force the ratchet on them and brick dev bench
+chips. Verified: production-without-lock → S-1 fires; production-with-lock →
+clears; dev release (no mode-production) → never fires; CI host test target
+unaffected. **Residual gap (surfaced, deliberately NOT fenced):** a release
+`stm32u585` shipping image that forgets `mode-production` would still ship
+S-1-open — closing that with a "release-hw must set mode-production" fence
+would break the dev hardware test targets (which build release without the
+profile), so `shipping == mode-production` stays a documented convention.
+**Still open (the actual fix — irreversible, bench-only):** the LcsO ratchet
++ sacrificial-part validation per the checklist above; and S-2 (the trust
+anchor at 0xE0E3 — its `optiga-reset-oids`/public-sample-cert ship path is
+already fenced, but the production PQ1-HSM cert is a factory-key-custody
+deliverable). Note: the S-2 + S-3 `compile_error!` fences already existed in
+`nsc/mod.rs` before this session (the ship-blocker prose lagged the code).
+
 ---
 
 ### S-2. Infineon SAMPLE trust-anchor cert at OID `0xE0E3` enables full Protected-Update bypass

@@ -242,6 +242,45 @@ compile_error!(
      Change AC. Drop `optiga-reset-oids` from production builds."
 );
 
+// S-1 ship-blocker: a production OPTIGA unit MUST ratchet F1D0 to
+// `Change = Auto(F1D0)` + LcsO=Operational via `optiga-lock-operational` (the
+// `Auto(F1D0)` metadata itself is already wired at `optiga/apdu.rs:1080` under
+// this feature). Without it F1D0 stays `Change = ALW`: a desoldered-OPTIGA bench
+// attacker overwrites the AuthRef HMAC key with a chosen one, self-authenticates,
+// resets the E120 LUC counter, and brute-forces the PIN without bound — and
+// because the PIN is shared with the SE050, that defeats the whole wallet.
+//
+// DELIBERATELY keyed to `mode-production` ALONE — NOT the
+// `all(stm32u585, not(debug_assertions))` belt-and-braces the S-2/S-3 fences
+// use. `optiga-lock-operational` performs the IRREVERSIBLE LcsO ratchet (OPTIGA
+// SRM: LcsO is monotonic, no reverse path), so it must fire only for an explicit
+// production-unit build, never for a dev/test RELEASE hardware build:
+// `make e2e-hw` / `play-hw-display` build `--release` (so `not(debug_assertions)`)
+// WITHOUT `mode-production`, and forcing the ratchet on them would brick dev
+// bench chips. The release-hardware-without-`mode-production` gap (a shipping
+// image that forgets the profile) is therefore NOT closed here — it cannot be,
+// without a fence that would break those dev hardware targets; shipping ==
+// `mode-production` stays a documented convention (see docs/work-todo.md S-1).
+//
+// NOTE: this fence does not *fix* S-1 — it makes a production build that omits
+// the metadata hardening fail to compile. Actually closing S-1 is the
+// (irreversible, bench-only) LcsO ratchet + sacrificial-part validation.
+#[cfg(all(
+    feature = "mode-production",
+    feature = "optiga-trust-m",
+    not(feature = "optiga-lock-operational"),
+))]
+compile_error!(
+    "Production OPTIGA builds require `optiga-lock-operational` (ship-blocker \
+     S-1): it ratchets F1D0 to `Change = Auto(F1D0)` + LcsO=Operational so the \
+     PIN-gating AuthRef HMAC key can no longer be overwritten on a desoldered \
+     chip. Without it F1D0 stays `Change = ALW` and a bench attacker resets the \
+     E120 attempt counter and brute-forces the PIN. This fence is \
+     `mode-production`-only BY DESIGN: the lock-operational ratchet is \
+     irreversible, so it must never fire for dev/test hardware builds (which \
+     would brick dev chips). Do NOT broaden the trigger to match S-2/S-3."
+);
+
 // SCA ship-blocker (audit secret-lifecycle 20260611, MEDIUM-3): a production
 // hardware build MUST enable the power-consumption mask (`consumption-mask`).
 // The ~7 s SPHINCS+C10 keygen/sign produces a characteristic power-draw
