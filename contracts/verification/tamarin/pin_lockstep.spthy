@@ -1,0 +1,121 @@
+theory DualSE_PinLockstep
+begin
+
+/* ===========================================================================
+   PQ-Signer — three-way PIN-attempt lockstep, stateful model (Tamarin)
+   ===========================================================================
+
+   Companion to the ProVerif secrecy model (contracts/verification/proverif/).
+   ProVerif proves message-level secrecy/authentication; this proves the
+   STATEFUL reconcile property it cannot reason about (counter resets +
+   reachable-state safety).
+
+   Mechanism (threat-model.md §6.2 / secure/src/nsc/mod.rs::reconcile_pin_attempts):
+   three failed-attempt counters — MCU page-124, OPTIGA F1E1, SE050 UserID —
+   move in LOCKSTEP (every wrong PIN bumps all three). At boot, reconcile()
+   WIPES the device if the three counters DISAGREE (tamper signal). An attacker
+   can RESET one counter (OPTIGA via the S-1 glitch / SE050 delete-recreate /
+   a TZ-bypass MCU-erase) to try to win back attempts.
+
+   PROVEN (see lemmas): a surviving boot is reachable ONLY when either NO
+   counter was reset, or ALL THREE were. Equivalently, a PARTIAL reset (one or
+   two of the three) can NEVER survive a boot — the un-reset counter(s) desync
+   the reset one and reconcile wipes. A single-side reset (S-1 alone, SE050
+   delete alone, MCU erase alone) is always caught. The all-three reset is the
+   documented residual that the hardware-monotonic OPTIGA counter (work-todo
+   #24 / ship-blocker S-3) closes by making Reset_OPT impossible — dropping the
+   attacker from "reset 2 of 3" to "reset 1 of 3", which is caught here.
+
+   ABSTRACTIONS (stated, not discovered):
+   * Each counter's value is abstracted to a STATUS: 'fresh' (in lockstep) or
+     'zeroed' (attacker-reset). This is faithful for the RECONCILE property:
+     lockstep counters always agree, a reset desyncs one. It deliberately drops
+     the exact "<= 10" per-counter silicon cap (enforced inside each SE; out of
+     this model's frame) — what is proven is that the reconcile DEFENDS that cap
+     against resets, not the cap value itself.
+   * The boot rule is TERMINAL (one boot per trace) so the state space is finite
+     and the safety lemmas are decidable. reconcile runs at EVERY boot, so the
+     per-boot property proven here is exactly the per-boot guarantee; it does
+     not model a device continuing across multiple boots in one trace.
+   =========================================================================== */
+
+/* provisioning: all three counters synced ('fresh'); device Live. */
+rule Provision:
+    [ Fr(~sid) ]
+  --[ Provision(~sid) ]->
+    [ MCU(~sid, 'fresh'), OPT(~sid, 'fresh'), SE(~sid, 'fresh'), Live(~sid) ]
+
+/* attacker resets ONE counter to 'zeroed' (powered-off; no Live needed). */
+rule Reset_MCU: [ MCU(sid, st) ] --[ Reset(sid, 'MCU') ]-> [ MCU(sid, 'zeroed') ]
+rule Reset_OPT: [ OPT(sid, st) ] --[ Reset(sid, 'OPT') ]-> [ OPT(sid, 'zeroed') ]
+rule Reset_SE:  [ SE(sid, st)  ] --[ Reset(sid, 'SE')  ]-> [ SE(sid, 'zeroed') ]
+
+/* boot reconcile (TERMINAL). Outcome split by the agreed status so the safety
+   lemmas avoid a disjunctive conclusion:
+     - all three 'fresh'  => survive (SyncedFresh)
+     - all three 'zeroed' => survive (SyncedZero)
+     - any disagreement   => Wipe. */
+rule Boot_Fresh:
+    [ MCU(sid, 'fresh'), OPT(sid, 'fresh'), SE(sid, 'fresh'), Live(sid) ]
+  --[ Boot(sid), SyncedFresh(sid) ]->
+    [ Survived(sid) ]
+
+rule Boot_Zero:
+    [ MCU(sid, 'zeroed'), OPT(sid, 'zeroed'), SE(sid, 'zeroed'), Live(sid) ]
+  --[ Boot(sid), SyncedZero(sid) ]->
+    [ Survived(sid) ]
+
+rule Boot_Wipe:
+    [ MCU(sid, m), OPT(sid, o), SE(sid, s), Live(sid) ]
+  --[ Boot(sid), Wipe(sid), Differ(m, o, s) ]->
+    [ Wiped(sid) ]
+
+/* Boot_Wipe fires only on genuine disagreement. */
+restriction differ:
+    "All m o s #i. Differ(m, o, s) @ i ==> (not(m = o)) | (not(o = s)) | (not(m = s))"
+
+/* ===========================================================================
+   LEMMAS  (all four verified by `tamarin-prover --prove`)
+   =========================================================================== */
+
+/* ANTI-VACUITY: a provisioned device can boot and SURVIVE without a wipe. If
+   this fails the model is trivially always-wipe and the safety lemmas below
+   are meaningless. */
+lemma honest_boot_possible:
+  exists-trace
+    "Ex sid #b. SyncedFresh(sid) @ b & not (Ex #w. Wipe(sid) @ w)"
+
+/* CORE (A): a surviving FRESH boot implies NO counter was EVER reset before it.
+   (The un-reset counters can only stay 'fresh'; any reset would desync them.) */
+lemma fresh_synced_means_no_reset:
+  all-traces
+    "All sid #b.
+        SyncedFresh(sid) @ b
+      ==> not (Ex c #r. Reset(sid, c) @ r & r < b)"
+
+/* CORE (B): a surviving ZERO boot implies ALL THREE counters were reset before
+   it. Together with (A): a surviving boot is reachable ONLY via no-reset or
+   all-three-reset, so a PARTIAL (one/two) reset can never survive — the
+   three-way reconcile catches every single-side reset. */
+lemma zero_synced_means_all_reset:
+  all-traces
+    "All sid #b.
+        SyncedZero(sid) @ b
+      ==> ( Ex #rm #ro #rs.
+                Reset(sid, 'MCU') @ rm & rm < b
+              & Reset(sid, 'OPT') @ ro & ro < b
+              & Reset(sid, 'SE')  @ rs & rs < b )"
+
+/* RESIDUAL (documented limitation): resetting ALL THREE counters together does
+   survive a boot — reconcile cannot see an all-zero agreement. This is the gap
+   the hardware-monotonic OPTIGA counter closes (it removes Reset_OPT). */
+lemma full_reset_bypass:
+  exists-trace
+    "Ex sid #rm #ro #rs #b.
+        Reset(sid, 'MCU') @ rm & rm < b
+      & Reset(sid, 'OPT') @ ro & ro < b
+      & Reset(sid, 'SE')  @ rs & rs < b
+      & SyncedZero(sid) @ b
+      & not (Ex #w. Wipe(sid) @ w)"
+
+end

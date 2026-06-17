@@ -3534,3 +3534,12 @@ miri:
 proverif:
 	@command -v proverif >/dev/null 2>&1 || { echo "ERROR: proverif not found. Install: opam install --assume-depexts proverif (CLI build needs no GTK)"; exit 1; }
 	proverif contracts/verification/proverif/dual_se_unlock.pv
+
+# Stateful symbolic model (Tamarin) of the three-way PIN-attempt lockstep:
+# a single-counter reset is always caught by the boot reconcile (CORE), an
+# all-three reset is the documented residual. Companion to the ProVerif secrecy
+# model. See contracts/verification/tamarin/README.md.
+.PHONY: tamarin
+tamarin:
+	@command -v tamarin-prover >/dev/null 2>&1 || { echo "ERROR: tamarin-prover not found. Install the prebuilt linux64 binary + the maude backend (both need no sudo/GHC; see contracts/verification/tamarin/README.md)"; exit 1; }
+	tamarin-prover --prove contracts/verification/tamarin/pin_lockstep.spthy
