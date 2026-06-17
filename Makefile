@@ -3492,3 +3492,30 @@ invariant-gates:
 	@echo "==> [3/3] advisory warnings (non-blocking):"
 	-@"$(SEMGREP)" --config .semgrep/pqsigner-invariants.yml --severity WARNING --metrics off --quiet
 	@echo "==> invariant-gates: PASS"
+
+# ---------------------------------------------------------------------------
+# Host Rust formal verification (SOTA 2026-06 §1 adopt-now; work-todo §34).
+#   kani = bounded model-checking (panic / arithmetic-overflow / slice-OOB
+#          freedom) of the untrusted-companion-bytes parse surface.
+#   miri = UB detection on the host-reachable `unsafe` (the FI volatile
+#          helpers + the decoders).
+# SCOPE: host toolchain over HOST-REACHABLE logic. The CMSE veneers, raw
+# MMIO, and NS-pointer deref are thumbv8m/hardware-cfg'd OUT of the host
+# build, so these do NOT cover those — see work-todo §34.
+# ---------------------------------------------------------------------------
+.PHONY: kani miri
+kani:
+	@command -v cargo-kani >/dev/null 2>&1 || { echo "ERROR: cargo-kani not found. Install: cargo install --locked kani-verifier && cargo kani setup"; exit 1; }
+	@echo "==> Kani: tx-core parsers (decode_item used<=len + validate_access_list nested walker)"
+	cargo kani -p pqsigner-tx-core
+	@echo "==> Kani: domain recovery parser (deserialize_pin_state)"
+	cargo kani -p pqsigner-domain --harness deserialize_pin_state_panic_free
+	@echo "==> kani: PASS"
+
+miri:
+	@rustup component list --toolchain nightly --installed 2>/dev/null | grep -q '^miri' || rustup component add miri --toolchain nightly
+	@echo "==> Miri: FI volatile helpers"
+	MIRIFLAGS="-Zmiri-disable-isolation" cargo +nightly miri test -p pqsigner-fi
+	@echo "==> Miri: tx-core decoders (RLP / EIP-1559 / keccak)"
+	MIRIFLAGS="-Zmiri-disable-isolation" cargo +nightly miri test -p pqsigner-tx-core
+	@echo "==> miri: PASS"

@@ -419,6 +419,12 @@ fn validate_access_list(payload: &[u8]) -> Result<usize, TxError> {
     Ok(count)
 }
 
+// NOTE: a `validate_access_list` Kani harness was attempted but is intractable
+// for CBMC (nested ListIter × decode_item × decode_length_be loops explode the
+// path count) AND redundant: the walker's panic-freedom reduces to `decode_item`
+// being panic-free with `used <= input.len()` — already proved in rlp.rs. The
+// nested re-slices `&self.rest[used..]` are in-bounds by that invariant.
+
 // ---------------------------------------------------------------------------
 // Tests (host-only).
 // ---------------------------------------------------------------------------

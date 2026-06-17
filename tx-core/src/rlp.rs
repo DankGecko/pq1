@@ -157,6 +157,54 @@ impl<'a> ListIter<'a> {
     }
 }
 
+#[cfg(kani)]
+mod kani_harnesses {
+    use super::*;
+
+    /// Panic / overflow / OOB-freedom for the RLP item decoder over arbitrary
+    /// (adversarial companion) bytes, PLUS the load-bearing invariant
+    /// `used <= input.len()` — the consumed count never exceeds the input, so
+    /// the slices `decode_item` hands back and `ListIter`'s `&self.rest[used..]`
+    /// re-slice are always in-bounds. Kani additionally auto-checks for
+    /// arithmetic overflow, slice index OOB, unreachable, and panics over EVERY
+    /// input of length <= N.
+    ///
+    /// Scope: host-reachable pure-logic decoder (no_std, no hardware deps);
+    /// this is the untrusted-companion-bytes parse surface (EIP-1559 envelopes).
+    #[kani::proof]
+    #[kani::unwind(11)]
+    fn decode_item_panic_free_and_used_in_bounds() {
+        const N: usize = 10;
+        let len: usize = kani::any();
+        kani::assume(len <= N);
+        let mut buf = [0u8; N];
+        let mut i = 0;
+        while i < len {
+            buf[i] = kani::any();
+            i += 1;
+        }
+        if let Ok((_item, used)) = decode_item(&buf[..len]) {
+            assert!(used <= len, "decode_item consumed past the input");
+        }
+    }
+
+    /// Panic / underflow / OOB-freedom for the RLP big-endian → U256 leaf
+    /// decoder over arbitrary bytes. Kani proves the `32 - bytes.len()` offset
+    /// never underflows (the `len > 32` guard suffices) and that
+    /// `out[off..].copy_from_slice(bytes)` has matching slice lengths — so no
+    /// numeric field of any companion-supplied tx can panic this decoder.
+    /// Scope: host-reachable pure-logic decoder (no_std).
+    #[kani::proof]
+    #[kani::unwind(34)]
+    fn bytes_to_u256_panic_free() {
+        const N: usize = 33; // exercises the len==32 boundary + the len>32 reject
+        let buf: [u8; N] = kani::any();
+        let len: usize = kani::any();
+        kani::assume(len <= N);
+        let _ = bytes_to_u256(&buf[..len]);
+    }
+}
+
 /// Decode an RLP-encoded big-endian unsigned integer (canonical: no leading
 /// zero unless the value is exactly zero, which is encoded as the empty
 /// string).

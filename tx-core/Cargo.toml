@@ -14,3 +14,8 @@ edition.workspace = true
 [dependencies]
 pqsigner-proto = { workspace = true }
 sha3 = { version = "0.10", default-features = false }
+
+[lints.rust]
+# `kani` is set only by cargo-kani (#[cfg(kani)] proof harnesses); register it
+# so normal builds do not emit unexpected_cfgs warnings. See work-todo §34.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)"] }

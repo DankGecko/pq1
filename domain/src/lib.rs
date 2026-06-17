@@ -763,6 +763,31 @@ pub fn deserialize_pin_state(blob: &[u8], blob_len: usize) -> Result<PinState, (
     })
 }
 
+#[cfg(kani)]
+mod kani_harnesses {
+    use super::*;
+
+    /// Panic / OOB / overflow-freedom for the flash PIN-state deserializer over
+    /// EVERY blob byte pattern, given the API precondition `blob_len <= blob.len()`
+    /// (the caller hands a flash-page slice + its used length). Kani proves the
+    /// `blob[0]` read, the `blob[1..blob_len]` re-slice, the `chunks().enumerate()`
+    /// loop, the `encrypted_secrets[i]` writes, and `copy_from_slice` are all
+    /// in-bounds for every input — no flash/companion byte pattern can panic the
+    /// recovery parser. (The `num_slots > MAX_ATTEMPTS` guard is what keeps the
+    /// `encrypted_secrets[i]` write in bounds; Kani confirms it suffices.)
+    ///
+    /// Scope: host-reachable pure-logic recovery parser (no_std).
+    #[kani::proof]
+    #[kani::unwind(12)]
+    fn deserialize_pin_state_panic_free() {
+        let blob: [u8; PIN_STATE_MAX_LEN] = kani::any();
+        let blob_len: usize = kani::any();
+        // API precondition: the used length never exceeds the backing slice.
+        kani::assume(blob_len <= PIN_STATE_MAX_LEN);
+        let _ = deserialize_pin_state(&blob, blob_len);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Host-only tests for the SPHINCS+C10 derivation recovery contract.
 // ---------------------------------------------------------------------------
