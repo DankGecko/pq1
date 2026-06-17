@@ -1937,4 +1937,1347 @@ private theorem fors_tree_body_nonvacuous (sig : ByteVec Spec.SignatureLen)
     (fun h hh => H_sib_dischargeable sig 0 (by decide) h hh)                        -- H_sib
   trivial
 
+/-! ## FORS phase: the K-1 normal-tree i-loop, the last tree, and root compression
+
+The three remaining FORS fragments after `fors_tree_body`'s per-tree refinement:
+
+  1. `fors_normal_trees` — the outer `forRange "i" 12`: drive `fors_tree_body` 12×
+     (`execFor_invariant_lt`), each iteration laying `pad16 (reconstructRoot …)` at
+     `0x80 + 32*t`, the seed window + the loop consts persisting.
+  2. `fors_last_tree` — the forced-zero last tree (`{ }` block): `th seed (forsNode
+     htIdx 12 0 0) (pad16 lastSecret)` written `pad16`'d at `0x200 = 0x80 + 32*12`.
+  3. `fors_root_compress` — the `forRange "i" 13` copy + the 480-byte compression
+     `sha256(0x00, 0x1E0)` = `computeForsPk` (`thMulti`).
+  4. `fors_phase` — composes all three from the post-`H_msg` VM, dispatching the
+     forced-zero `ifnz`, into `env "forsPk" = wordOf (pad16 (reconstructForsPk …))`.
+
+The leaf indices are kept in the *interpreter-side* form `(dVal >>> (t*11)) &&& 0x7FF`
+through trees 1–3 (so `fors_tree_body`'s `H_idx` is `rfl`), and bridged to
+`extractForsIndices` only at the `fors_phase` capstone via `extractForsIndices_eq_wordShift`. -/
+
+/-! ### The `readBitsLe`↔word-shift index bridge
+
+`extractForsIndices`/`extractHtIndex` read A-bit / H-bit little-endian windows out of
+the 32-byte digest (`readBitsLe`: bit 0 = LSB of `digest[31]`); the interpreter reads the
+SAME windows by shifting the big-endian-assembled word `wordOf digest`. The two agree
+because `wordOf` packs `digest[0]` as the MSB, so logical bit `j` of `wordOf digest`
+(`>>>`, LSB-first) is exactly `digest[31 - j/8]`'s bit `j%8` — `readBitsLe.stepValue`'s
+selection. Proved bit-extensionally (`Nat.eq_of_testBit_eq`). -/
+
+/-- `wordOf v`'s logical bit `b` (`b < 256`) is `digest[31 - b/8]`'s bit `b % 8` —
+    the LSB-first bit at position `b` of the big-endian-assembled word. -/
+private theorem wordOf_testBit (v : ByteVec 32) (b : Nat) (hb : b < 256) :
+    (wordOf v).testBit b = (v.data.getD (31 - b / 8) 0).toNat.testBit (b % 8) := by
+  -- byte (31 - b/8) of v is big-endian byte index `i = 31 - (31 - b/8) = b/8`… use beByte.
+  have hbyte : v.data.getD (31 - b / 8) 0 = beByte (wordOf v) (31 - b / 8) := by
+    rw [beByte_wordOf_getD v (31 - b / 8) (by omega)]
+  rw [hbyte, beByte_toNat']
+  -- (wordOf v >>> (8*(31-(31-b/8))) % 256).testBit (b%8) ; 31-(31-b/8) = b/8.
+  rw [show 31 - (31 - b / 8) = b / 8 by omega]
+  rw [show (256 : Nat) = 2 ^ 8 from rfl, Nat.testBit_mod_two_pow, Nat.testBit_shiftRight]
+  have hsum : 8 * (b / 8) + b % 8 = b := by omega
+  rw [hsum, decide_eq_true (show b % 8 < 8 by omega), Bool.true_and]
+
+/-- `x &&& 1 < 2`. -/
+private theorem and_one_lt_two' (x : Nat) : x &&& 1 < 2 := by
+  have h : x &&& 1 < 2 ^ 1 := Nat.and_lt_two_pow x (by decide : (1 : Nat) < 2 ^ 1)
+  simpa using h
+
+/-- `readBitsLe.stepValue v off i`'s only set bit (if any) is bit `i`, and it is set
+    iff `wordOf v`'s bit `off + i` is set (`off + i < 256`). The per-step bit witness. -/
+private theorem stepValue_testBit (v : ByteVec 32) (off i j : Nat) (hoi : off + i < 256) :
+    (SphincsCVerify.Util.readBitsLe.stepValue v off i).testBit j
+      = (decide (j = i) && (wordOf v).testBit (off + i)) := by
+  unfold SphincsCVerify.Util.readBitsLe.stepValue
+  -- value = ((b.toNat >>> (bitInByte)) &&& 1) <<< i, with byteIdx = 31 - (off+i)/8.
+  simp only []
+  rw [Nat.testBit_shiftLeft]
+  by_cases hj : i ≤ j
+  · rw [decide_eq_true hj, Bool.true_and]
+    -- inner: ((b.toNat >>> ((off+i)%8)) &&& 1).testBit (j - i)
+    by_cases hji : j = i
+    · subst hji
+      rw [decide_eq_true (rfl : j = j), Bool.true_and, Nat.sub_self]
+      -- (x &&& 1).testBit 0 = x.testBit 0 ; and the byteIdx branch
+      have hbyteIdx : (31 - (off + j) / 8) < 32 := by omega
+      rw [if_pos hbyteIdx]
+      rw [Nat.testBit_and, Nat.testBit_shiftRight]
+      rw [show (1 : Nat).testBit 0 = true from rfl, Bool.and_true]
+      -- v.get ⟨31-(off+j)/8,_⟩'s bit ((off+j)%8) = wordOf v's bit (off+j)
+      rw [wordOf_testBit v (off + j) hoi, Nat.add_zero]
+      have hge : v.get ⟨31 - (off + j) / 8, by omega⟩ = v.data.getD (31 - (off + j) / 8) 0 := by
+        unfold ByteVec.get
+        rw [Array.getD_eq_getD_getElem?,
+            Array.getElem?_eq_getElem (show 31 - (off+j)/8 < v.data.size by rw [v.size_eq]; omega),
+            Option.getD_some]
+        rfl
+      rw [hge]
+    · rw [decide_eq_false hji, Bool.false_and]
+      -- (x &&& 1).testBit (j-i) with j-i ≥ 1 is false (x&&&1 < 2)
+      have hji1 : 1 ≤ j - i := by omega
+      have hlt : ((if 31 - (off + i) / 8 < 32 then v.get ⟨31 - (off + i) / 8, by omega⟩ else 0).toNat
+          >>> ((off + i) % 8)) &&& 1 < 2 ^ (j - i) := by
+        calc _ < 2 := and_one_lt_two' _
+          _ ≤ 2 ^ (j - i) := by
+              calc (2:Nat) = 2 ^ 1 := rfl
+                _ ≤ 2 ^ (j - i) := Nat.pow_le_pow_right (by decide) hji1
+      rw [Nat.testBit_lt_two_pow hlt]
+  · rw [decide_eq_false hj, Bool.false_and]
+    rw [decide_eq_false (show ¬ j = i by omega), Bool.false_and]
+
+/-- `readBitsLe.loop` accumulates exactly the bits `[off, off + numBits)` of `wordOf v`,
+    shifted down to `[0, numBits)`: bit `j` of the loop result (for `j < numBits`) is
+    bit `off + j` of `wordOf v`. Inductive over the loop's fuel. -/
+private theorem readBitsLe_loop_testBit (v : ByteVec 32) (off numBits : Nat)
+    (hbound : off + numBits ≤ 256) :
+    ∀ (d i acc : Nat), numBits - i = d → i ≤ numBits →
+      (∀ j, acc.testBit j = (decide (j < i) && (wordOf v).testBit (off + j))) →
+      ∀ j, (SphincsCVerify.Util.readBitsLe.loop v off numBits i acc).testBit j
+        = (decide (j < numBits) && (wordOf v).testBit (off + j)) := by
+  intro d
+  induction d with
+  | zero =>
+      intro i acc hd hi hacc j
+      have hie : i = numBits := by omega
+      subst hie
+      unfold SphincsCVerify.Util.readBitsLe.loop
+      rw [if_neg (by omega)]
+      exact hacc j
+  | succ d ih =>
+      intro i acc hd hi hacc j
+      have hilt : i < numBits := by omega
+      unfold SphincsCVerify.Util.readBitsLe.loop
+      rw [if_pos hilt]
+      apply ih (i + 1) (acc ||| SphincsCVerify.Util.readBitsLe.stepValue v off i) (by omega) (by omega)
+      intro j'
+      rw [Nat.testBit_or, hacc j', stepValue_testBit v off i j' (by omega)]
+      by_cases hji : j' = i
+      · subst hji
+        rw [decide_eq_true (rfl : j' = j'), Bool.true_and,
+            decide_eq_false (Nat.lt_irrefl j'), Bool.false_and, Bool.false_or,
+            decide_eq_true (Nat.lt_succ_self j'), Bool.true_and]
+      · rw [decide_eq_false hji, Bool.false_and, Bool.or_false]
+        by_cases hjlt : j' < i
+        · rw [decide_eq_true hjlt, decide_eq_true (Nat.lt_succ_of_lt hjlt)]
+        · rw [decide_eq_false hjlt, decide_eq_false (show ¬ j' < i + 1 by omega)]
+
+/-- **The index bridge.** `readBitsLe v off k` (the spec's LE bit-window read) equals
+    `(wordOf v >>> off) &&& (2^k - 1)` (the interpreter's word-shift-and-mask), for
+    `off + k ≤ 256`. The common foundation for `extractForsIndices`/`extractHtIndex`
+    alignment with the deployed Yul `and(shr(off, dVal), MASK)`. -/
+theorem readBitsLe_eq_wordShift (v : ByteVec 32) (off k : Nat) (hbound : off + k ≤ 256) :
+    SphincsCVerify.Util.readBitsLe v off k = (wordOf v >>> off) &&& (2 ^ k - 1) := by
+  apply Nat.eq_of_testBit_eq
+  intro j
+  unfold SphincsCVerify.Util.readBitsLe
+  rw [readBitsLe_loop_testBit v off k hbound k 0 0 rfl (Nat.zero_le _)
+        (fun j => by rw [Nat.zero_testBit, decide_eq_false (Nat.not_lt_zero j), Bool.false_and]) j]
+  rw [Nat.testBit_and, Nat.testBit_shiftRight, Nat.testBit_two_pow_sub_one]
+  by_cases hjk : j < k
+  · rw [decide_eq_true hjk, Bool.true_and, Bool.and_true, Nat.add_comm]
+  · rw [decide_eq_false hjk, Bool.false_and, Bool.and_false]
+
+/-- **FORS index alignment.** For `t < K`, the spec's `(extractForsIndices digest).getD
+    t 0` (= `readBitsLe digest (t*A) A`) is the interpreter's `(wordOf digest >>> (t*11))
+    &&& 0x7FF`. The per-tree corollary of `readBitsLe_eq_wordShift` (`A = 11`, mask
+    `2^11-1 = 0x7FF`, window `[t*11, (t+1)*11) ⊆ [0, 143) ⊆ [0, 256)`). -/
+theorem extractForsIndices_eq_wordShift (digest : ByteVec 32) (t : Nat) (ht : t < Spec.K) :
+    (SphincsCVerify.Util.extractForsIndices digest).getD t 0
+      = (wordOf digest >>> (t * 11)) &&& 0x7FF := by
+  unfold SphincsCVerify.Util.extractForsIndices
+  rw [Array.getD_eq_getD_getElem?, Array.getElem?_ofFn,
+      dif_pos (show t < Spec.K by exact ht), Option.getD_some]
+  have hA : Spec.A = 11 := rfl
+  rw [show ((⟨t, ht⟩ : Fin Spec.K).val * Spec.A) = t * 11 by rw [hA]]
+  rw [readBitsLe_eq_wordShift digest (t * 11) Spec.A (by rw [hA]; have : Spec.K = 13 := rfl; omega)]
+  rw [hA]
+
+/-- **Hypertree index alignment.** `extractHtIndex digest` (= `readBitsLe digest (K*A)
+    H`) is `(wordOf digest >>> 143) &&& 0x3FFFF` — the interpreter's `htIdx` (`K*A = 143`,
+    `H = 18`, mask `2^18-1 = 0x3FFFF`). -/
+theorem extractHtIndex_eq_wordShift (digest : ByteVec 32) :
+    SphincsCVerify.Util.extractHtIndex digest = (wordOf digest >>> 143) &&& 0x3FFFF := by
+  unfold SphincsCVerify.Util.extractHtIndex
+  rw [show (Spec.K * Spec.A) = 143 from rfl,
+      readBitsLe_eq_wordShift digest 143 Spec.H (by have : Spec.H = 18 := rfl; omega)]
+  rfl
+
+/-! ### `forsTreeBody` env frame
+
+`forsTreeBody` only binds (`letv`/`setv`) the names `treeIdx, secretVal, leafAdrs, node,
+treeAdrsBase, pathIdx, authPtr` at the top level and `sibling, parentIdx, s, h, node,
+pathIdx` inside the inner climb. So any variable distinct from those (and from the outer
+`"i"`, which the loop driver sets) survives one body — the const-env half `fors_tree_body`
+doesn't surface but the outer i-loop invariant needs to carry `htIdx/sigBase/seed/
+N_MASK/OUT/dVal`. -/
+
+/-- One climb level preserves any variable `x` it never binds (`x ∉ {sibling, parentIdx,
+    s, node, pathIdx, h}`). The var-generalised `execList_forsClimbBody_preserves_i`. -/
+private theorem execList_forsClimbBody_preserves_var (sig : ByteVec Spec.SignatureLen)
+    (cur : Nat) (v : VM) (x : String)
+    (hx : x ≠ "sibling" ∧ x ≠ "parentIdx" ∧ x ≠ "s" ∧ x ≠ "node" ∧ x ≠ "pathIdx" ∧ x ≠ "h") :
+    (execList c10Oracle sig forsClimbBody { v with env := setVar v.env "h" cur }).1.env x
+        = v.env x := by
+  obtain ⟨h1, h2, h3, h4, h5, h6⟩ := hx
+  unfold forsClimbBody
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList]
+  simp only [execStmt, eval, setVar, h1, h2, h3, h4, h5, h6, ite_false]
+
+/-- The whole inner climb preserves any unbound variable `x`. The var-generalised
+    `execFor_forsClimbBody_preserves_i`. -/
+private theorem execFor_forsClimbBody_preserves_var (sig : ByteVec Spec.SignatureLen)
+    (x : String)
+    (hx : x ≠ "sibling" ∧ x ≠ "parentIdx" ∧ x ≠ "s" ∧ x ≠ "node" ∧ x ≠ "pathIdx" ∧ x ≠ "h") :
+    ∀ (remaining cur : Nat) (v : VM),
+      (execFor c10Oracle sig "h" forsClimbBody remaining cur v).1.env x = v.env x := by
+  intro remaining
+  induction remaining with
+  | zero => intro cur v; simp only [execFor]
+  | succ rem ih =>
+      intro cur v
+      obtain ⟨hnone, _⟩ := execList_forsClimbBody_preserves_i sig cur v
+      rw [execFor]
+      rcases hp : execList c10Oracle sig forsClimbBody { v with env := setVar v.env "h" cur }
+        with ⟨pvm, po⟩
+      rw [hp] at hnone
+      subst hnone
+      simp only []
+      rw [ih (cur + 1) pvm]
+      have := execList_forsClimbBody_preserves_var sig cur v x hx
+      rw [hp] at this
+      exact this
+
+/-- The inner climb (`execFor … forsClimbBody`) always falls through (no `revert`/`return`
+    in `forsClimbBody`). Drives `execList_forsClimbBody_preserves_i`'s none witness. -/
+private theorem execFor_forsClimbBody_none (sig : ByteVec Spec.SignatureLen) :
+    ∀ (remaining cur : Nat) (v : VM),
+      (execFor c10Oracle sig "h" forsClimbBody remaining cur v).2 = none := by
+  intro remaining
+  induction remaining with
+  | zero => intro cur v; simp only [execFor]
+  | succ rem ih =>
+      intro cur v
+      obtain ⟨hnone, _⟩ := execList_forsClimbBody_preserves_i sig cur v
+      rw [execFor]
+      rcases hp : execList c10Oracle sig forsClimbBody { v with env := setVar v.env "h" cur }
+        with ⟨pvm, po⟩
+      rw [hp] at hnone
+      subst hnone
+      simp only []
+      exact ih (cur + 1) pvm
+
+/-- **`forsTreeBody` preserves the const-env.** A variable `x` distinct from every name
+    `forsTreeBody` binds — `{treeIdx, secretVal, leafAdrs, node, treeAdrsBase, pathIdx,
+    authPtr, sibling, parentIdx, s, h}` — reads the same after the body (entered with
+    `"i" := cur`) as `v.env x`. Lets the i-loop carry `htIdx/sigBase/seed/N_MASK/OUT/dVal`. -/
+private theorem execList_forsTreeBody_preserves_const (sig : ByteVec Spec.SignatureLen)
+    (cur : Nat) (v : VM) (x : String)
+    (hx : x ≠ "treeIdx" ∧ x ≠ "secretVal" ∧ x ≠ "leafAdrs" ∧ x ≠ "node" ∧ x ≠ "treeAdrsBase"
+        ∧ x ≠ "pathIdx" ∧ x ≠ "authPtr" ∧ x ≠ "sibling" ∧ x ≠ "parentIdx" ∧ x ≠ "s" ∧ x ≠ "h"
+        ∧ x ≠ "i") :
+    (execList c10Oracle sig forsTreeBody { v with env := setVar v.env "i" cur }).1.env x
+        = v.env x := by
+  obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12⟩ := hx
+  unfold forsTreeBody
+  -- Step the 10 leading non-loop statements (all `letv`/`mstore`/`sha256`, no halt).
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  -- Now: forRange "h" 11 forsClimbBody :: [mstore …]. Abbreviate the post-10-letv VM.
+  obtain ⟨w', hw'⟩ :
+      ∃ w', w' = (execStmt c10Oracle sig (Stmt.letv "authPtr" (.bin .add (.var "sigBase")
+          (.bin .add (.lit 224) (.bin .mul (.var "i") (.lit 176)))))
+        (execStmt c10Oracle sig (Stmt.letv "pathIdx" (.var "treeIdx"))
+        (execStmt c10Oracle sig (Stmt.letv "treeAdrsBase"
+            (.bin .bor (.bin .shl (.lit 160) (.var "htIdx"))
+              (.bin .bor (.bin .shl (.lit 128) (.lit 3)) (.bin .shl (.lit 96) (.var "i")))))
+        (execStmt c10Oracle sig (Stmt.letv "node" (.bin .band (.mload (.var "OUT")) (.var "N_MASK")))
+        (execStmt c10Oracle sig (Stmt.sha256 (.lit 0x00) (.lit 0x60) (.var "OUT"))
+        (execStmt c10Oracle sig (Stmt.mstore (.lit 0x40) (.var "secretVal"))
+        (execStmt c10Oracle sig (Stmt.mstore (.lit 0x20) (.var "leafAdrs"))
+        (execStmt c10Oracle sig (Stmt.letv "leafAdrs"
+            (.bin .bor (.bin .shl (.lit 160) (.var "htIdx"))
+              (.bin .bor (.bin .shl (.lit 128) (.lit 3))
+                (.bin .bor (.bin .shl (.lit 96) (.var "i")) (.var "treeIdx")))))
+        (execStmt c10Oracle sig (Stmt.letv "secretVal"
+            (.bin .band (.calldataload (.bin .add (.var "sigBase")
+              (.bin .add (.lit 16) (.bin .shl (.lit 4) (.var "i"))))) (.var "N_MASK")))
+        (execStmt c10Oracle sig (Stmt.letv "treeIdx"
+            (.bin .band (.bin .shr (.bin .mul (.var "i") (.lit 11)) (.var "dVal")) (.lit 0x7FF)))
+          { v with env := setVar v.env "i" cur }).1).1).1).1).1).1).1).1).1).1 := ⟨_, rfl⟩
+  rw [← hw']
+  -- The forRange-step: it falls through (climb never halts).
+  have hforStmt : execStmt c10Oracle sig (.forRange "h" (.lit 11) forsClimbBody) w'
+      = execFor c10Oracle sig "h" forsClimbBody Spec.A 0 w' := by
+    simp only [execStmt, eval]; rfl
+  have hforNone : (execStmt c10Oracle sig (.forRange "h" (.lit 11) forsClimbBody) w').2 = none := by
+    rw [hforStmt]; exact execFor_forsClimbBody_none sig Spec.A 0 w'
+  rw [execList_cons_none c10Oracle sig _ _ _ hforNone, hforStmt]
+  -- Final statement: mstore (writes mem, not env), then [].
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt]), execList]
+  -- env x after the climb = env x of w' (climb preserves x), and env x of w' = v.env x.
+  simp only [execStmt, eval]
+  rw [execFor_forsClimbBody_preserves_var sig x ⟨h8, h9, h10, h4, h6, h11⟩ Spec.A 0 w']
+  -- Now reduce w'.env x through the 10 letvs (none of which is x).
+  rw [hw']
+  simp only [execStmt, eval, setVar, h1, h2, h3, h4, h5, h6, h7, h12, ite_false]
+
+/-! ### `forsTreeBody` memory frame for laid trees
+
+The body's only writes are scratch `[0x20,0x80)`, the OUT window `[0x600,0x620)`, and the
+final node store `[0x80+32*cur, +32)`. So an address `a` in `[0x80, 0x80+32*cur)` (where
+laid earlier-tree roots live) survives the body — this is the frame the i-loop needs to
+carry trees `t < cur` past iteration `cur`. -/
+
+/-- One climb level preserves any memory address `a` with `0x80 ≤ a < 0x600` (it writes
+    only `0x20`/`0x40`/`0x60` in scratch and the OUT window `[0x600,0x620)`). -/
+private theorem execList_forsClimbBody_mem_frame (sig : ByteVec Spec.SignatureLen)
+    (cur : Nat) (v : VM) (hOUT : v.env "OUT" = 0x600) (a : Nat) (ha : 0x80 ≤ a ∧ a < 0x600) :
+    (execList c10Oracle sig forsClimbBody { v with env := setVar v.env "h" cur }).1.mem a
+        = v.mem a := by
+  obtain ⟨ha1, ha2⟩ := ha
+  unfold forsClimbBody
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList]
+  -- Resolve the memory writes; the four mstore/sha256 windows are < 0x80 or ≥ 0x600.
+  simp only [execStmt, eval, setVar, String.reduceEq, ite_true, ite_false, hOUT]
+  -- Frame `a` through the OUT window [0x600,0x620), then the parity stores, then mstore 0x20.
+  rw [writeRegion_frame _ 0x600 _ a (by omega)]
+  -- s = (pathIdx & 1) << 5 % W ∈ {0, 32}; both 0x40^s, 0x60^s ∈ {0x40, 0x60} < 0x80.
+  have hs := s_value (v.env "pathIdx")
+  by_cases hpar : (v.env "pathIdx") % 2 == 0
+  · rw [if_pos hpar] at hs
+    rw [hs]
+    simp only [show (0x40 : Nat) ^^^ 0 = 0x40 from rfl, show (0x60 : Nat) ^^^ 0 = 0x60 from rfl]
+    rw [mstore32_frame _ 0x60 _ a (by omega), mstore32_frame _ 0x40 _ a (by omega),
+        mstore32_frame _ 0x20 _ a (by omega)]
+  · rw [if_neg hpar] at hs
+    rw [hs]
+    simp only [show (0x40 : Nat) ^^^ 32 = 0x60 from rfl, show (0x60 : Nat) ^^^ 32 = 0x40 from rfl]
+    rw [mstore32_frame _ 0x40 _ a (by omega), mstore32_frame _ 0x60 _ a (by omega),
+        mstore32_frame _ 0x20 _ a (by omega)]
+
+/-- The whole inner climb preserves any memory address `a` with `0x80 ≤ a < 0x600`
+    (`OUT = 0x600` persists across iterations — `forsClimbBody` never rebinds it). -/
+private theorem execFor_forsClimbBody_mem_frame (sig : ByteVec Spec.SignatureLen)
+    (a : Nat) (ha : 0x80 ≤ a ∧ a < 0x600) :
+    ∀ (remaining cur : Nat) (v : VM), v.env "OUT" = 0x600 →
+      (execFor c10Oracle sig "h" forsClimbBody remaining cur v).1.mem a = v.mem a := by
+  intro remaining
+  induction remaining with
+  | zero => intro cur v _; simp only [execFor]
+  | succ rem ih =>
+      intro cur v hOUT
+      obtain ⟨hnone, _⟩ := execList_forsClimbBody_preserves_i sig cur v
+      rw [execFor]
+      rcases hp : execList c10Oracle sig forsClimbBody { v with env := setVar v.env "h" cur }
+        with ⟨pvm, po⟩
+      rw [hp] at hnone
+      subst hnone
+      simp only []
+      -- OUT persists across the body (forsClimbBody never binds "OUT").
+      have hpOUT : pvm.env "OUT" = 0x600 := by
+        have := execList_forsClimbBody_preserves_var sig cur v "OUT"
+          ⟨by decide, by decide, by decide, by decide, by decide, by decide⟩
+        rw [hp] at this; rw [this]; exact hOUT
+      rw [ih (cur + 1) pvm hpOUT]
+      have := execList_forsClimbBody_mem_frame sig cur v hOUT a ha
+      rw [hp] at this
+      exact this
+
+set_option maxHeartbeats 4000000 in
+/-- **`forsTreeBody` memory frame.** Entered with `i := cur` (`cur < 12`), the body
+    preserves any address `a` with `0x80 ≤ a < 0x80 + 32*cur` — the window holding the
+    already-laid roots of trees `t < cur` (disjoint from scratch `[0x20,0x80)`, the OUT
+    window `[0x600,…)`, and this tree's store `[0x80+32*cur, +32)`). -/
+private theorem execList_forsTreeBody_mem_frame (sig : ByteVec Spec.SignatureLen)
+    (cur : Nat) (v : VM) (hOUT : v.env "OUT" = 0x600)
+    (hcur : cur < 12) (a : Nat) (ha : 0x80 ≤ a ∧ a < 0x80 + 32 * cur) :
+    (execList c10Oracle sig forsTreeBody { v with env := setVar v.env "i" cur }).1.mem a
+        = v.mem a := by
+  obtain ⟨ha1, ha2⟩ := ha
+  unfold forsTreeBody
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  -- Abbreviate the post-10-letv VM (env-only changes; mem only from leaf hash mstores/sha256).
+  obtain ⟨w', hw'⟩ :
+      ∃ w', w' = (execStmt c10Oracle sig (Stmt.letv "authPtr" (.bin .add (.var "sigBase")
+          (.bin .add (.lit 224) (.bin .mul (.var "i") (.lit 176)))))
+        (execStmt c10Oracle sig (Stmt.letv "pathIdx" (.var "treeIdx"))
+        (execStmt c10Oracle sig (Stmt.letv "treeAdrsBase"
+            (.bin .bor (.bin .shl (.lit 160) (.var "htIdx"))
+              (.bin .bor (.bin .shl (.lit 128) (.lit 3)) (.bin .shl (.lit 96) (.var "i")))))
+        (execStmt c10Oracle sig (Stmt.letv "node" (.bin .band (.mload (.var "OUT")) (.var "N_MASK")))
+        (execStmt c10Oracle sig (Stmt.sha256 (.lit 0x00) (.lit 0x60) (.var "OUT"))
+        (execStmt c10Oracle sig (Stmt.mstore (.lit 0x40) (.var "secretVal"))
+        (execStmt c10Oracle sig (Stmt.mstore (.lit 0x20) (.var "leafAdrs"))
+        (execStmt c10Oracle sig (Stmt.letv "leafAdrs"
+            (.bin .bor (.bin .shl (.lit 160) (.var "htIdx"))
+              (.bin .bor (.bin .shl (.lit 128) (.lit 3))
+                (.bin .bor (.bin .shl (.lit 96) (.var "i")) (.var "treeIdx")))))
+        (execStmt c10Oracle sig (Stmt.letv "secretVal"
+            (.bin .band (.calldataload (.bin .add (.var "sigBase")
+              (.bin .add (.lit 16) (.bin .shl (.lit 4) (.var "i"))))) (.var "N_MASK")))
+        (execStmt c10Oracle sig (Stmt.letv "treeIdx"
+            (.bin .band (.bin .shr (.bin .mul (.var "i") (.lit 11)) (.var "dVal")) (.lit 0x7FF)))
+          { v with env := setVar v.env "i" cur }).1).1).1).1).1).1).1).1).1).1 := ⟨_, rfl⟩
+  rw [← hw']
+  have hforStmt : execStmt c10Oracle sig (.forRange "h" (.lit 11) forsClimbBody) w'
+      = execFor c10Oracle sig "h" forsClimbBody Spec.A 0 w' := by
+    simp only [execStmt, eval]; rfl
+  have hforNone : (execStmt c10Oracle sig (.forRange "h" (.lit 11) forsClimbBody) w').2 = none := by
+    rw [hforStmt]; exact execFor_forsClimbBody_none sig Spec.A 0 w'
+  rw [execList_cons_none c10Oracle sig _ _ _ hforNone, hforStmt]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt]), execList]
+  -- Final mstore window: 0x80 + 32*cur .. +32 (disjoint from a since a < 0x80+32*cur).
+  simp only [execStmt, eval]
+  -- The store offset uses the climb-final "i" (= w'.env "i" = cur).
+  have hwi : w'.env "i" = cur := by
+    rw [hw']; simp only [execStmt, eval, setVar, String.reduceEq, ite_true, ite_false]
+  rw [execFor_forsClimbBody_preserves_var sig "i"
+        ⟨by decide, by decide, by decide, by decide, by decide, by decide⟩ Spec.A 0 w', hwi]
+  have hstoreOff : (128 + cur <<< 5 % W) % W = 128 + 32 * cur := by
+    rw [Nat.shiftLeft_eq, show (2 : Nat) ^ 5 = 32 from rfl, Nat.mul_comm cur 32,
+        Nat.mod_eq_of_lt (lt_W_of_lt (show 32 * cur < 4096 by omega)),
+        Nat.mod_eq_of_lt (lt_W_of_lt (show 128 + 32 * cur < 4096 by omega))]
+  rw [hstoreOff, mstore32_frame _ (128 + 32 * cur) _ a (by omega)]
+  -- OUT = 0x600 survives the 10 letvs (none binds "OUT").
+  have hw'OUT : w'.env "OUT" = 0x600 := by
+    rw [hw']
+    simp only [execStmt, eval, setVar, String.reduceEq, ite_true, ite_false]; exact hOUT
+  -- The climb preserves a (0x80 ≤ a < 0x600 since 0x80+32*cur ≤ 0x80+32*12 = 0x200 < 0x600).
+  rw [execFor_forsClimbBody_mem_frame sig a (by omega) Spec.A 0 w' hw'OUT]
+  -- The leaf-hash mstores (0x40,0x20) + sha256 (0x600) are disjoint from a (0x80 ≤ a < 0x200).
+  rw [hw']
+  simp only [execStmt, eval, setVar, String.reduceEq, ite_true, ite_false, hOUT]
+  rw [writeRegion_frame _ 0x600 _ a (by omega), mstore32_frame _ 0x40 _ a (by omega),
+      mstore32_frame _ 0x20 _ a (by omega)]
+
+/-! ### The K-1 normal-tree i-loop -/
+
+/-- The reconstructed root of normal FORS tree `t` — `reconstructRoot` at leaf index
+    `(dVal >>> (t*11)) &&& 0x7FF` (interpreter form), secret `loadValue16 sig (16+16t)`,
+    and the deserialised auth path. The `reconstructForsPk.normalRoots[t]` value once the
+    leaf index is bridged to `extractForsIndices` (`fors_phase`). -/
+def forsTreeRoot (seed : ByteVec 32) (htIdx : UInt64) (dVal : Nat)
+    (sig : ByteVec Spec.SignatureLen) (t : Nat) : ByteVec 16 :=
+  Spec.Fors.reconstructRoot seed htIdx (UInt32.ofNat t)
+    (UInt32.ofNat ((dVal >>> (t * 11)) &&& 0x7FF))
+    (ByteVec.loadValue16 sig (16 + 16 * t))
+    ((Spec.Signature.deserialise sig).fors.authPaths.getD t #[])
+
+set_option maxHeartbeats 8000000 in
+set_option maxRecDepth 4000 in
+/-- **FORS normal-tree i-loop refinement.** Running the outer `forRange "i" 12` from a
+    VM whose env supplies `htIdx`, `sigBase = 0`, `seed`, `N_MASK`, `OUT = 0x600`,
+    `dVal = wordOf digest`, with `seed` in scratch `[0x00,0x20)`, falls through and lays
+    `pad16 (forsTreeRoot … t)` at `0x80 + 32*t` for every `t < 12`; the seed window and
+    the loop consts persist. Drives `fors_tree_body` 12× via `execFor_invariant_lt`. -/
+theorem fors_normal_trees
+    (sig : ByteVec Spec.SignatureLen) (vm : VM)
+    (seed : ByteVec 32) (htIdx : UInt64) (dVal : Nat)
+    (hht : vm.env "htIdx" = htIdx.toNat)
+    (hsb : vm.env "sigBase" = 0)
+    (hseedw : vm.env "seed" = wordOf seed)
+    (hN : vm.env "N_MASK" = NMASK)
+    (hOUT : vm.env "OUT" = 0x600)
+    (hdVal : vm.env "dVal" = dVal)
+    (hseedmem : ∀ i, i < 32 → vm.mem (0 + i) = seed.data.getD i 0) :
+    (execFor c10Oracle sig "i" forsTreeBody 12 0 vm).2 = none
+    ∧ (∀ t, t < 12 → ∀ k, k < 32 →
+        (execFor c10Oracle sig "i" forsTreeBody 12 0 vm).1.mem (0x80 + 32 * t + k)
+          = (ByteVec.pad16 (forsTreeRoot seed htIdx dVal sig t)).data.getD k 0)
+    ∧ (∀ i, i < 32 → (execFor c10Oracle sig "i" forsTreeBody 12 0 vm).1.mem (0 + i)
+        = seed.data.getD i 0)
+    ∧ (execFor c10Oracle sig "i" forsTreeBody 12 0 vm).1.env "OUT" = 0x600
+    ∧ (execFor c10Oracle sig "i" forsTreeBody 12 0 vm).1.env "N_MASK" = NMASK
+    ∧ (execFor c10Oracle sig "i" forsTreeBody 12 0 vm).1.env "htIdx" = htIdx.toNat
+    ∧ (execFor c10Oracle sig "i" forsTreeBody 12 0 vm).1.env "seed" = wordOf seed
+    ∧ (execFor c10Oracle sig "i" forsTreeBody 12 0 vm).1.env "sigBase" = 0
+    ∧ (execFor c10Oracle sig "i" forsTreeBody 12 0 vm).1.env "dVal" = dVal := by
+  -- Loop invariant: trees `< cur` are laid at `0x80+32t`; seed window + consts persist.
+  let R : Nat → VM → Prop := fun cur w =>
+    (∀ t, t < cur → ∀ k, k < 32 →
+        w.mem (0x80 + 32 * t + k) = (ByteVec.pad16 (forsTreeRoot seed htIdx dVal sig t)).data.getD k 0)
+    ∧ (∀ i, i < 32 → w.mem (0 + i) = seed.data.getD i 0)
+    ∧ w.env "htIdx" = htIdx.toNat ∧ w.env "sigBase" = 0 ∧ w.env "seed" = wordOf seed
+    ∧ w.env "N_MASK" = NMASK ∧ w.env "OUT" = 0x600 ∧ w.env "dVal" = dVal
+  have hstep : ∀ cur w, cur < 12 → R cur w →
+      (execList c10Oracle sig forsTreeBody { w with env := setVar w.env "i" cur }).2 = none ∧
+      R (cur + 1) (execList c10Oracle sig forsTreeBody { w with env := setVar w.env "i" cur }).1 := by
+    intro cur w hcur hR
+    obtain ⟨hRmem, hRseed, hRht, hRsb, hRseedw, hRN, hROUT, hRdVal⟩ := hR
+    obtain ⟨wi, hwi⟩ : ∃ wi, ({ w with env := setVar w.env "i" cur } : VM) = wi := ⟨_, rfl⟩
+    rw [hwi]
+    -- env facts about wi (consts ≠ i): unfold the setVar through hwi.
+    have hwienv : wi.env = setVar w.env "i" cur := by rw [← hwi]
+    have hwimem : wi.mem = w.mem := by rw [← hwi]
+    have hwiht : wi.env "htIdx" = htIdx.toNat := by
+      rw [hwienv, setVar_get_ne _ _ _ _ (by decide)]; exact hRht
+    have hwisb : wi.env "sigBase" = 0 := by
+      rw [hwienv, setVar_get_ne _ _ _ _ (by decide)]; exact hRsb
+    have hwiseedw : wi.env "seed" = wordOf seed := by
+      rw [hwienv, setVar_get_ne _ _ _ _ (by decide)]; exact hRseedw
+    have hwiN : wi.env "N_MASK" = NMASK := by
+      rw [hwienv, setVar_get_ne _ _ _ _ (by decide)]; exact hRN
+    have hwiOUT : wi.env "OUT" = 0x600 := by
+      rw [hwienv, setVar_get_ne _ _ _ _ (by decide)]; exact hROUT
+    have hwii : wi.env "i" = cur := by rw [hwienv, setVar_get_eq]
+    have hwidVal : wi.env "dVal" = dVal := by
+      rw [hwienv, setVar_get_ne _ _ _ _ (by decide)]; exact hRdVal
+    have hwiseedmem : ∀ i, i < 32 → wi.mem (0 + i) = seed.data.getD i 0 := by
+      intro i hi; rw [hwimem]; exact hRseed i hi
+    -- Interpreter leaf index for tree `cur`.
+    obtain ⟨li, hli⟩ : ∃ li : UInt32,
+        UInt32.ofNat ((wi.env "dVal" >>> (cur * 11)) &&& 0x7FF) = li := ⟨_, rfl⟩
+    have hidx : (wi.env "dVal" >>> (cur * 11)) &&& 0x7FF = li.toNat := by
+      rw [← hli]
+      have hlt : (wi.env "dVal" >>> (cur * 11)) &&& 0x7FF < 2 ^ 32 :=
+        Nat.lt_of_le_of_lt Nat.and_le_right (by decide)
+      show _ = (((wi.env "dVal" >>> (cur * 11)) &&& 0x7FF) % UInt32.size)
+      rw [Nat.mod_eq_of_lt (show _ < (2^32 : Nat) by exact hlt)]
+    -- Apply fors_tree_body at t = cur.
+    have hbody := fors_tree_body sig wi seed htIdx cur li
+      ((Spec.Signature.deserialise sig).fors.authPaths.getD cur #[])
+      hcur hwiht hwisb hwiseedw hwiN hwiOUT hwii hwiseedmem
+      (H_leafAdrs_dischargeable htIdx cur li (wi.env "dVal") hcur hidx)
+      hidx
+      (fun h hh p hp => H_adrs_dischargeable htIdx cur hcur h hh p hp)
+      (fun h hh => H_sib_dischargeable sig cur hcur h hh)
+    obtain ⟨hbodyNone, hbodyMem, hbodySeed⟩ := hbody
+    refine ⟨hbodyNone, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    · -- trees < cur+1 laid: t = cur (hbodyMem matches forsTreeRoot), t < cur (mem-frame).
+      intro t ht k hk
+      by_cases htc : t = cur
+      · subst htc
+        rw [hbodyMem k hk]
+        show _ = (ByteVec.pad16 (forsTreeRoot seed htIdx dVal sig t)).data.getD k 0
+        unfold forsTreeRoot
+        rw [show (UInt32.ofNat ((dVal >>> (t * 11)) &&& 0x7FF)) = li by rw [← hwidVal]; exact hli]
+      · have htlt : t < cur := by omega
+        rw [← hwi, execList_forsTreeBody_mem_frame sig cur w hROUT hcur (0x80 + 32 * t + k)
+              ⟨by omega, by omega⟩]
+        exact hRmem t htlt k hk
+    · -- seed window persists.
+      intro i hi; exact hbodySeed i hi
+    · -- consts persist (the body never binds them).
+      rw [← hwi, execList_forsTreeBody_preserves_const sig cur w "htIdx"
+            ⟨by decide, by decide, by decide, by decide, by decide, by decide, by decide,
+             by decide, by decide, by decide, by decide, by decide⟩]
+      exact hRht
+    · rw [← hwi, execList_forsTreeBody_preserves_const sig cur w "sigBase"
+            ⟨by decide, by decide, by decide, by decide, by decide, by decide, by decide,
+             by decide, by decide, by decide, by decide, by decide⟩]
+      exact hRsb
+    · rw [← hwi, execList_forsTreeBody_preserves_const sig cur w "seed"
+            ⟨by decide, by decide, by decide, by decide, by decide, by decide, by decide,
+             by decide, by decide, by decide, by decide, by decide⟩]
+      exact hRseedw
+    · rw [← hwi, execList_forsTreeBody_preserves_const sig cur w "N_MASK"
+            ⟨by decide, by decide, by decide, by decide, by decide, by decide, by decide,
+             by decide, by decide, by decide, by decide, by decide⟩]
+      exact hRN
+    · rw [← hwi, execList_forsTreeBody_preserves_const sig cur w "OUT"
+            ⟨by decide, by decide, by decide, by decide, by decide, by decide, by decide,
+             by decide, by decide, by decide, by decide, by decide⟩]
+      exact hROUT
+    · rw [← hwi, execList_forsTreeBody_preserves_const sig cur w "dVal"
+            ⟨by decide, by decide, by decide, by decide, by decide, by decide, by decide,
+             by decide, by decide, by decide, by decide, by decide⟩]
+      exact hRdVal
+  -- R holds at entry (cur = 0): no trees laid, seed window + consts from the hyps.
+  have hR0 : R 0 vm := ⟨fun t ht => absurd ht (Nat.not_lt_zero t), hseedmem, hht, hsb, hseedw,
+    hN, hOUT, hdVal⟩
+  have hloop := execFor_invariant_lt c10Oracle sig "i" forsTreeBody 12 R hstep vm hR0
+  obtain ⟨hmem, hseedf, hhtf, hsbf, hseedwf, hNf, hOUTf, hdValf⟩ := hloop.2
+  exact ⟨hloop.1, hmem, hseedf, hOUTf, hNf, hhtf, hseedwf, hsbf, hdValf⟩
+
+/-! ### The forced-zero last tree -/
+
+/-- The body of `c10Program`'s last-tree `.block` (`SPHINCsC10Asm.sol` L124–132): load
+    the last secret (`loadValue16 sig 208`), store the height-0/parent-0 FORS-node ADRS
+    at `0x20`, the secret at `0x40`, hash the 3-segment `th` input, and store the masked
+    root at `0x200 = 0x80 + 32*12`. Written with raw constructors so it is defeq to the
+    block. -/
+def forsLastTreeBody : List Stmt :=
+  [ .letv "lastSecret"
+      (.bin .band (.calldataload (.bin .add (.var "sigBase")
+        (.bin .add (.lit 16) (.bin .shl (.lit 4) (.lit 12))))) (.var "N_MASK"))
+  , .mstore (.lit 0x20)
+      (.bin .bor (.bin .shl (.lit 160) (.var "htIdx"))
+        (.bin .bor (.bin .shl (.lit 128) (.lit 3)) (.bin .shl (.lit 96) (.lit 12))))
+  , .mstore (.lit 0x40) (.var "lastSecret")
+  , .sha256 (.lit 0x00) (.lit 0x60) (.var "OUT")
+  , .mstore (.lit 0x200) (.bin .band (.mload (.var "OUT")) (.var "N_MASK"))
+  ]
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 4000 in
+/-- **FORS last-tree refinement.** Running `forsLastTreeBody` from a VM whose env supplies
+    `htIdx`, `sigBase = 0`, `N_MASK`, `OUT = 0x600`, with `seed` in scratch `[0x00,0x20)`,
+    falls through and stores `pad16 (th seed (forsNode htIdx 12 0 0) (pad16 (loadValue16 sig
+    208)))` at `0x200 = 0x80 + 32*12` — exactly `reconstructForsPk`'s `lastRoot` (with
+    `lastSecret = secrets.getD (K-1) = loadValue16 sig 208`). The seed window persists. -/
+theorem fors_last_tree
+    (sig : ByteVec Spec.SignatureLen) (vm : VM)
+    (seed : ByteVec 32) (htIdx : UInt64)
+    (hht : vm.env "htIdx" = htIdx.toNat)
+    (hsb : vm.env "sigBase" = 0)
+    (hN : vm.env "N_MASK" = NMASK)
+    (hOUT : vm.env "OUT" = 0x600)
+    (hseedmem : ∀ i, i < 32 → vm.mem (0 + i) = seed.data.getD i 0) :
+    (execList c10Oracle sig forsLastTreeBody vm).2 = none
+    ∧ (∀ k, k < 32 →
+        (execList c10Oracle sig forsLastTreeBody vm).1.mem (0x200 + k)
+          = (ByteVec.pad16 (Spec.th seed (Spec.Adrs.forsNode htIdx (UInt32.ofNat 12) 0 0)
+              (ByteVec.pad16 (ByteVec.loadValue16 sig (16 + 16 * 12))))).data.getD k 0)
+    ∧ (∀ i, i < 32 → (execList c10Oracle sig forsLastTreeBody vm).1.mem (0 + i) = seed.data.getD i 0) := by
+  unfold forsLastTreeBody
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList]
+  refine ⟨rfl, ?_⟩
+  simp only [execStmt, eval, setVar, hht, hsb, hN, hOUT, ite_true, ite_false, String.reduceEq]
+  -- Normalise the secret offset: sigBase(0) + 16 + (12<<<4) = 16 + 192 = 208 = 16 + 16*12.
+  have hsecOff : (0 + (16 + 12 <<< 4 % W) % W) % W = 16 + 16 * 12 := by
+    rw [shl4_small 12 (by omega),
+        Nat.mod_eq_of_lt (lt_W_of_lt (show 16 + 16 * 12 < 4096 by omega)), Nat.zero_add,
+        Nat.mod_eq_of_lt (lt_W_of_lt (show 16 + 16 * 12 < 4096 by omega))]
+  rw [hsecOff, cl_masked_eq_wordOf sig (16 + 16 * 12)]
+  -- The ADRS word = wordOf (forsNode htIdx 12 0 0).
+  have hadrs : (htIdx.toNat <<< 160 % W) ||| ((3 <<< 128 % W) ||| (12 <<< 96 % W))
+      = wordOf (Spec.Adrs.forsNode htIdx (UInt32.ofNat 12) 0 0) := by
+    rw [wordOf_forsNode]
+    have hFT : (UInt32.ofNat Spec.ADRS_FORS_TREE).toNat = 3 := by decide
+    have hti : (UInt32.ofNat 12).toNat = 12 := by decide
+    rw [hFT, hti]
+    show _ = _ ||| _ ||| _ ||| (0 : UInt32).toNat <<< 32 ||| (0 : UInt32).toNat
+    rw [show (0 : UInt32).toNat = 0 from rfl, Nat.zero_shiftLeft, Nat.or_zero, Nat.or_zero]
+    have hW1 : htIdx.toNat <<< 160 % W = htIdx.toNat <<< 160 :=
+      Nat.mod_eq_of_lt (shl_lt_two_pow_256 _ 64 160 htIdx.toNat_lt (by omega))
+    have hW2 : (3 : Nat) <<< 128 % W = 3 <<< 128 :=
+      Nat.mod_eq_of_lt (shl_lt_two_pow_256 _ 2 128 (by decide) (by omega))
+    have hW3 : (12 : Nat) <<< 96 % W = 12 <<< 96 :=
+      Nat.mod_eq_of_lt (shl_lt_two_pow_256 _ 4 96 (by decide) (by omega))
+    rw [hW1, hW2, hW3, Nat.or_assoc]
+  rw [hadrs]
+  -- The leaf hash = wordOf (pad16 (th seed adrs (pad16 secret))) via leafMem_th.
+  have hleaf := leafMem_th vm.mem seed (Spec.Adrs.forsNode htIdx (UInt32.ofNat 12) 0 0)
+    (ByteVec.pad16 (ByteVec.loadValue16 sig (16 + 16 * 12))) hseedmem
+  rw [hleaf]
+  refine ⟨?_, ?_⟩
+  · -- mem at 0x200 + k = pad16(th …)'s byte.
+    intro k hk
+    rw [mstore32_get _ 0x200 _ k hk, beByte_wordOf_getD _ k hk]
+  · -- seed window persists (stores land at ≥ 0x20).
+    intro i hi
+    rw [mstore32_frame _ 0x200 _ (0 + i) (by omega)]
+    -- frame through the leaf-hash writes (0x20, 0x40, 0x600 = OUT).
+    rw [writeRegion_frame _ 0x600 _ (0 + i) (by omega),
+        mstore32_frame _ 0x40 _ (0 + i) (by omega), mstore32_frame _ 0x20 _ (0 + i) (by omega)]
+    exact hseedmem i hi
+
+/-- `forsLastTreeBody` binds only `"lastSecret"`; any other variable is preserved. -/
+theorem execList_forsLastTreeBody_preserves_var (sig : ByteVec Spec.SignatureLen) (vm : VM)
+    (x : String) (hx : x ≠ "lastSecret") :
+    (execList c10Oracle sig forsLastTreeBody vm).1.env x = vm.env x := by
+  unfold forsLastTreeBody
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList]
+  simp only [execStmt, eval, setVar]
+  rw [if_neg hx]
+
+set_option maxHeartbeats 4000000 in
+/-- **`forsLastTreeBody` mem frame for the already-laid normal trees.** The last-tree block
+    writes only `0x20`/`0x40` (scratch), the OUT window `[0x600,…)`, and `0x200`; so any
+    address `a` in `[0x80, 0x200)` (where normal trees 0–11 live) survives — needed to carry
+    them past the last tree into root compression. `OUT = 0x600` required for the OUT frame. -/
+theorem fors_last_tree_mem_frame
+    (sig : ByteVec Spec.SignatureLen) (vm : VM) (hOUT : vm.env "OUT" = 0x600)
+    (a : Nat) (ha : 0x80 ≤ a ∧ a < 0x200) :
+    (execList c10Oracle sig forsLastTreeBody vm).1.mem a = vm.mem a := by
+  unfold forsLastTreeBody
+  obtain ⟨ha1, ha2⟩ := ha
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList]
+  simp only [execStmt, eval, setVar, hOUT, ite_true, ite_false, String.reduceEq]
+  -- Frame `a` through: 0x200 store, OUT window, 0x40, 0x20 (all disjoint from [0x80,0x200)).
+  rw [mstore32_frame _ 0x200 _ a (by omega), writeRegion_frame _ 0x600 _ a (by omega),
+      mstore32_frame _ 0x40 _ a (by omega), mstore32_frame _ 0x20 _ a (by omega)]
+
+/-! ### Root compression -/
+
+/-- The copy-loop body of `c10Program`'s root compression (`SPHINCsC10Asm.sol` L139–141):
+    one record move `mem[0x40 + 32*i] := mem[0x80 + 32*i]`. -/
+def forsCopyBody : List Stmt :=
+  [ .mstore (.bin .add (.lit 0x40) (.bin .shl (.lit 5) (.var "i")))
+      (.mload (.bin .add (.lit 0x80) (.bin .shl (.lit 5) (.var "i")))) ]
+
+/-- `i <<< 5 % W = 32*i` for `i < 128` (the 32-byte record stride; `32*i < 4096`). -/
+private theorem shl5_small (i : Nat) (hi : i < 128) : i <<< 5 % W = 32 * i := by
+  rw [Nat.shiftLeft_eq, show (2:Nat)^5 = 32 from rfl, Nat.mod_eq_of_lt (lt_W_of_lt (by omega)),
+      Nat.mul_comm]
+
+/-- One copy-loop step preserves env and moves one record. The `execFor_invariant_lt`
+    step for the 13-record copy (`mem[0x40+32*cur] := mem[0x80+32*cur]`); the read window
+    `[0x80+32*cur,…)` is untouched by prior writes (`dest_j = 0x40+32j` hits `0x80+32*cur`
+    only at `j = cur+2 > cur`), so the source still holds the original root. -/
+private theorem fors_copy_step (sig : ByteVec Spec.SignatureLen) (cur : Nat) (v : VM)
+    (hcur : cur < 13) :
+    (execList c10Oracle sig forsCopyBody { v with env := setVar v.env "i" cur }).2 = none
+    ∧ (∀ a, ¬ (0x40 + 32 * cur ≤ a ∧ a < 0x40 + 32 * cur + 32) →
+        (execList c10Oracle sig forsCopyBody { v with env := setVar v.env "i" cur }).1.mem a = v.mem a)
+    ∧ (∀ k, k < 32 →
+        (execList c10Oracle sig forsCopyBody { v with env := setVar v.env "i" cur }).1.mem
+          (0x40 + 32 * cur + k) = v.mem (0x80 + 32 * cur + k))
+    ∧ (execList c10Oracle sig forsCopyBody { v with env := setVar v.env "i" cur }).1.env
+        = setVar v.env "i" cur := by
+  unfold forsCopyBody
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList]
+  simp only [execStmt, eval, setVar, ite_true]
+  -- Normalise the dest/source offsets: (0x40 + cur<<<5%W)%W = 64+32cur, (0x80 + …)%W = 128+32cur.
+  have hdest : (0x40 + cur <<< 5 % W) % W = 64 + 32 * cur := by
+    rw [shl5_small cur (by omega), Nat.mod_eq_of_lt (lt_W_of_lt (show 64 + 32 * cur < 4096 by omega))]
+  have hsrc : (0x80 + cur <<< 5 % W) % W = 128 + 32 * cur := by
+    rw [shl5_small cur (by omega), Nat.mod_eq_of_lt (lt_W_of_lt (show 128 + 32 * cur < 4096 by omega))]
+  rw [hdest, hsrc]
+  refine ⟨trivial, ?_, ?_, ?_⟩
+  · -- frame: writes only [0x40+32*cur, +32) = [64+32cur, +32).
+    intro a ha
+    rw [mstore32_frame _ (64 + 32 * cur) _ a (by omega)]
+  · -- the copied window: mstore32_get reads the destination = mload32 of the source.
+    intro k hk
+    rw [show (0x40 + 32 * cur + k) = ((64 + 32 * cur) + k) by omega, mstore32_get _ (64 + 32 * cur) _ k hk]
+    rw [beByte_mload32 v.mem (128 + 32 * cur) k hk]
+  · -- env unchanged by the mstore.
+    trivial
+
+set_option maxHeartbeats 8000000 in
+set_option maxRecDepth 4000 in
+/-- **The 13-record copy loop.** Drives `fors_copy_step` 13× via `execFor_invariant_lt`.
+    Pre: the 13 roots sit `pad16`'d at `[0x80+32t,…)` (`hsrc`) and the low window `[0,0x40)`
+    (seed + the forsRoots ADRS) is fixed (`hlow`). Post: the 13 roots are `pad16`'d at
+    `[0x40+32t,…)` for `t < 13`, and `[0,0x40)` is unchanged. -/
+private theorem fors_copy_loop (sig : ByteVec Spec.SignatureLen) (vm : VM)
+    (roots : Nat → ByteVec 16)
+    (hsrc : ∀ t, t < 13 → ∀ k, k < 32 → vm.mem (0x80 + 32 * t + k)
+        = (ByteVec.pad16 (roots t)).data.getD k 0) :
+    (execFor c10Oracle sig "i" forsCopyBody 13 0 vm).2 = none
+    ∧ (∀ t, t < 13 → ∀ k, k < 32 →
+        (execFor c10Oracle sig "i" forsCopyBody 13 0 vm).1.mem (0x40 + 32 * t + k)
+          = (ByteVec.pad16 (roots t)).data.getD k 0)
+    ∧ (∀ a, a < 0x40 → (execFor c10Oracle sig "i" forsCopyBody 13 0 vm).1.mem a = vm.mem a) := by
+  let R : Nat → VM → Prop := fun cur w =>
+    (∀ t, t < cur → ∀ k, k < 32 → w.mem (0x40 + 32 * t + k) = (ByteVec.pad16 (roots t)).data.getD k 0)
+    ∧ (∀ t, cur ≤ t → t < 13 → ∀ k, k < 32 → w.mem (0x80 + 32 * t + k) = (ByteVec.pad16 (roots t)).data.getD k 0)
+    ∧ (∀ a, a < 0x40 → w.mem a = vm.mem a)
+  have hstep : ∀ cur w, cur < 13 → R cur w →
+      (execList c10Oracle sig forsCopyBody { w with env := setVar w.env "i" cur }).2 = none ∧
+      R (cur + 1) (execList c10Oracle sig forsCopyBody { w with env := setVar w.env "i" cur }).1 := by
+    intro cur w hcur hR
+    obtain ⟨hRcopied, hRsrc, hRlow⟩ := hR
+    obtain ⟨hnone, hframe, hcopy, _⟩ := fors_copy_step sig cur w hcur
+    refine ⟨hnone, ?_, ?_, ?_⟩
+    · -- copied roots for t < cur+1.
+      intro t ht k hk
+      by_cases htc : t = cur
+      · rw [htc, hcopy k hk]; exact hRsrc cur (Nat.le_refl cur) hcur k hk
+      · have htlt : t < cur := by omega
+        rw [hframe (0x40 + 32 * t + k) (by omega)]
+        exact hRcopied t htlt k hk
+    · -- sources for t ≥ cur+1 preserved (dest 0x40+32cur disjoint).
+      intro t ht ht13 k hk
+      rw [hframe (0x80 + 32 * t + k) (by omega)]
+      exact hRsrc t (by omega) ht13 k hk
+    · -- low window [0,0x40) preserved.
+      intro a ha
+      rw [hframe a (by omega)]
+      exact hRlow a ha
+  have hR0 : R 0 vm := ⟨fun t ht => absurd ht (Nat.not_lt_zero t),
+    fun t _ ht13 k hk => hsrc t ht13 k hk, fun a _ => rfl⟩
+  have hloop := execFor_invariant_lt c10Oracle sig "i" forsCopyBody 13 R hstep vm hR0
+  obtain ⟨hcopied, _, hlow⟩ := hloop.2
+  exact ⟨hloop.1, hcopied, hlow⟩
+
+/-- The 15-segment list the compression precompile hashes (`[0,0x1E0)`): `seed`, the
+    forsRoots ADRS (32-byte, NOT pad16'd — matches `thMulti`'s `ofByteVec a` header), then
+    the 13 `pad16`'d roots. Exactly `thMulti`'s `header ++ roots.map (ofByteVec ∘ pad16)`. -/
+def forsRootSegs (seed : ByteVec 32) (htIdx : UInt64) (roots : List (ByteVec 16)) :
+    List (ByteVec 32) :=
+  seed :: (Spec.Adrs.forsRoots htIdx) :: roots.map ByteVec.pad16
+
+/-- The forsRoots-ADRS Yul word `or(shl(160,htIdx), shl(128,4))`, masks inert. -/
+private theorem forsRoots_word (htIdx : UInt64) :
+    (htIdx.toNat <<< 160 % W) ||| (4 <<< 128 % W)
+      = wordOf (Spec.Adrs.forsRoots htIdx) := by
+  rw [wordOf_forsRoots]
+  have hFR : (UInt32.ofNat Spec.ADRS_FORS_ROOTS).toNat = 4 := by decide
+  rw [hFR]
+  have hW1 : htIdx.toNat <<< 160 % W = htIdx.toNat <<< 160 :=
+    Nat.mod_eq_of_lt (shl_lt_two_pow_256 _ 64 160 htIdx.toNat_lt (by omega))
+  have hW2 : (4 : Nat) <<< 128 % W = 4 <<< 128 :=
+    Nat.mod_eq_of_lt (shl_lt_two_pow_256 _ 3 128 (by decide) (by omega))
+  rw [hW1, hW2]
+
+
+/-! ### Root compression — env frame + the 15-segment holds + the lemma -/
+
+/-- One copy-body step never touches the env beyond `"i"`: any `x ≠ "i"` is preserved. -/
+private theorem execList_forsCopyBody_preserves_var (sig : ByteVec Spec.SignatureLen)
+    (cur : Nat) (v : VM) (x : String) (hxi : x ≠ "i") :
+    (execList c10Oracle sig forsCopyBody { v with env := setVar v.env "i" cur }).1.env x
+        = v.env x := by
+  unfold forsCopyBody
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList]
+  simp only [execStmt, eval, setVar]
+  rw [if_neg hxi]
+
+/-- The whole copy loop preserves any variable `x ≠ "i"`. -/
+private theorem execFor_forsCopyBody_preserves_var (sig : ByteVec Spec.SignatureLen)
+    (x : String) (hxi : x ≠ "i") :
+    ∀ (remaining cur : Nat) (v : VM),
+      (execFor c10Oracle sig "i" forsCopyBody remaining cur v).1.env x = v.env x := by
+  intro remaining
+  induction remaining with
+  | zero => intro cur v; simp only [execFor]
+  | succ rem ih =>
+      intro cur v
+      -- The body falls through (one mstore); peel one iteration.
+      have hnone : (execList c10Oracle sig forsCopyBody { v with env := setVar v.env "i" cur }).2 = none := by
+        unfold forsCopyBody
+        rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt]), execList]
+      rw [execFor]
+      rcases hp : execList c10Oracle sig forsCopyBody { v with env := setVar v.env "i" cur }
+        with ⟨pvm, po⟩
+      rw [hp] at hnone
+      subst hnone
+      simp only []
+      rw [ih (cur + 1) pvm]
+      have := execList_forsCopyBody_preserves_var sig cur v x hxi
+      rw [hp] at this
+      exact this
+
+/-- `(roots.map pad16).getD n (zero 32) = pad16 (roots.getD n (zero 16))` for `n < roots.length`. -/
+private theorem map_pad16_getD (roots : List (ByteVec 16)) (n : Nat) (hn : n < roots.length) :
+    (roots.map ByteVec.pad16).getD n (ByteVec.zero 32) = ByteVec.pad16 (roots.getD n (ByteVec.zero 16)) := by
+  rw [List.getD_eq_getElem?_getD, List.getD_eq_getElem?_getD, List.getElem?_map]
+  rw [List.getElem?_eq_getElem hn, Option.map_some, Option.getD_some, Option.getD_some]
+
+set_option maxHeartbeats 8000000 in
+set_option maxRecDepth 4000 in
+/-- **FORS root compression refinement.** Running the compression fragment
+    (`SPHINCsC10Asm.sol` L137–143: store ADRS, copy 13 roots, hash, mask) from a VM whose
+    env supplies `htIdx`, `N_MASK`, `OUT = 0x600`, `seed` in `[0x00,0x20)`, and the 13
+    `pad16`'d roots at `[0x80+32t,…)`, falls through and binds `"forsPk"` to
+    `wordOf (pad16 (computeForsPk seed htIdx roots.toArray))` — `thMulti` over the 15
+    segments. (`roots.length = 13`.) -/
+theorem fors_root_compress
+    (sig : ByteVec Spec.SignatureLen) (vm : VM)
+    (seed : ByteVec 32) (htIdx : UInt64) (roots : List (ByteVec 16)) (hlen : roots.length = 13)
+    (hN : vm.env "N_MASK" = NMASK)
+    (hOUT : vm.env "OUT" = 0x600)
+    (hht : vm.env "htIdx" = htIdx.toNat)
+    (hseedmem : ∀ i, i < 32 → vm.mem (0 + i) = seed.data.getD i 0)
+    (hrootmem : ∀ t, t < 13 → ∀ k, k < 32 →
+        vm.mem (0x80 + 32 * t + k) = (ByteVec.pad16 (roots.getD t (ByteVec.zero 16))).data.getD k 0) :
+    (execList c10Oracle sig
+        (.mstore (.lit 0x20) (.bin .bor (.bin .shl (.lit 160) (.var "htIdx")) (.bin .shl (.lit 128) (.lit 4)))
+          :: .forRange "i" (.lit 13) forsCopyBody
+          :: .sha256 (.lit 0x00) (.lit 0x1E0) (.var "OUT")
+          :: [.letv "forsPk" (.bin .band (.mload (.var "OUT")) (.var "N_MASK"))]) vm).2 = none
+    ∧ ((execList c10Oracle sig
+        (.mstore (.lit 0x20) (.bin .bor (.bin .shl (.lit 160) (.var "htIdx")) (.bin .shl (.lit 128) (.lit 4)))
+          :: .forRange "i" (.lit 13) forsCopyBody
+          :: .sha256 (.lit 0x00) (.lit 0x1E0) (.var "OUT")
+          :: [.letv "forsPk" (.bin .band (.mload (.var "OUT")) (.var "N_MASK"))]) vm).1.env "forsPk"
+        = wordOf (ByteVec.pad16 (Spec.Fors.computeForsPk seed htIdx roots.toArray))) := by
+  -- Step 1: mstore 0x20 (forsRoots adrs word).
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  obtain ⟨v1, hv1⟩ : ∃ v1, (execStmt c10Oracle sig
+      (.mstore (.lit 0x20) (.bin .bor (.bin .shl (.lit 160) (.var "htIdx")) (.bin .shl (.lit 128) (.lit 4)))) vm).1 = v1 := ⟨_, rfl⟩
+  rw [hv1]
+  have hv1env : v1.env = vm.env := by rw [← hv1]; simp only [execStmt]
+  have hv1mem : v1.mem = mstore32 vm.mem 0x20 (wordOf (Spec.Adrs.forsRoots htIdx)) := by
+    rw [← hv1]; simp only [execStmt, eval, hht]; rw [forsRoots_word]
+  have hv1root : ∀ t, t < 13 → ∀ k, k < 32 →
+      v1.mem (0x80 + 32 * t + k) = (ByteVec.pad16 (roots.getD t (ByteVec.zero 16))).data.getD k 0 := by
+    intro t ht k hk
+    rw [hv1mem, mstore32_frame _ 0x20 _ (0x80 + 32 * t + k) (by omega)]
+    exact hrootmem t ht k hk
+  have hv1seed : ∀ i, i < 32 → v1.mem (0 + i) = seed.data.getD i 0 := by
+    intro i hi; rw [hv1mem, mstore32_frame _ 0x20 _ (0 + i) (by omega)]; exact hseedmem i hi
+  have hv1adrs : ∀ k, k < 32 → v1.mem (0x20 + k) = (Spec.Adrs.forsRoots htIdx).data.getD k 0 := by
+    intro k hk; rw [hv1mem, mstore32_get _ 0x20 _ k hk, beByte_wordOf_getD _ k hk]
+  -- Step 2: the copy loop.
+  have hcopyStmt : execStmt c10Oracle sig (.forRange "i" (.lit 13) forsCopyBody) v1
+      = execFor c10Oracle sig "i" forsCopyBody 13 0 v1 := by simp only [execStmt, eval]
+  obtain ⟨hcopyNone, hcopyRoots, hcopyLow⟩ := fors_copy_loop sig v1
+    (fun t => roots.getD t (ByteVec.zero 16)) hv1root
+  rw [execList_cons_none c10Oracle sig _ _ _ (by rw [hcopyStmt]; exact hcopyNone), hcopyStmt]
+  obtain ⟨v2, hv2⟩ : ∃ v2, (execFor c10Oracle sig "i" forsCopyBody 13 0 v1).1 = v2 := ⟨_, rfl⟩
+  rw [hv2]
+  -- env "OUT"/"N_MASK" persist through the copy loop.
+  have hv2OUT : v2.env "OUT" = 0x600 := by
+    rw [← hv2, execFor_forsCopyBody_preserves_var sig "OUT" (by decide) 13 0 v1, hv1env, hOUT]
+  have hv2N : v2.env "N_MASK" = NMASK := by
+    rw [← hv2, execFor_forsCopyBody_preserves_var sig "N_MASK" (by decide) 13 0 v1, hv1env, hN]
+  -- mem facts about v2: low window [0,0x40) = v1's (seed + adrs); roots at [0x40+32t,…).
+  have hv2low : ∀ a, a < 0x40 → v2.mem a = v1.mem a := by intro a ha; rw [← hv2]; exact hcopyLow a ha
+  have hv2roots : ∀ t, t < 13 → ∀ k, k < 32 →
+      v2.mem (0x40 + 32 * t + k) = (ByteVec.pad16 (roots.getD t (ByteVec.zero 16))).data.getD k 0 := by
+    intro t ht k hk; rw [← hv2]; exact hcopyRoots t ht k hk
+  -- The 15-segment holdsSegs at base 0.
+  have hseglen : (forsRootSegs seed htIdx roots).length = 15 := by
+    simp only [forsRootSegs, List.length_cons, List.length_map, hlen]
+  have hsegs : holdsSegs v2.mem 0 (forsRootSegs seed htIdx roots) := by
+    intro j i hj hi
+    rw [hseglen] at hj
+    rw [Nat.zero_add]
+    -- seg0 = seed, seg1 = forsRoots adrs, seg{j} (j≥2) = pad16 (roots[j-2]).
+    rcases Nat.lt_or_ge j 2 with hj2 | hj2
+    · match j, hj2 with
+      | 0, _ =>
+          -- j = 0: window [0,32) = seed.
+          rw [show (32 * 0 + i) = (0 + i) by omega, hv2low (0 + i) (by omega), hv1seed i hi]
+          rfl
+      | 1, _ =>
+          -- j = 1: window [32,64) = forsRoots adrs.
+          rw [show (32 * 1 + i) = (0x20 + i) by omega, hv2low (0x20 + i) (by omega), hv1adrs i hi]
+          rfl
+    · -- j ≥ 2: write j = m + 2; window [32*(m+2),…) = [0x40 + 32*m,…) = root m.
+      obtain ⟨m, rfl⟩ : ∃ m, j = m + 2 := ⟨j - 2, by omega⟩
+      rw [show (32 * (m + 2) + i) = (0x40 + 32 * m + i) by omega, hv2roots m (by omega) i hi]
+      -- (forsRootSegs).getD (m+2) = (roots.map pad16).getD m = pad16 (roots.getD m).
+      show _ = ((forsRootSegs seed htIdx roots).getD (m + 2) (ByteVec.zero 32)).data.getD i 0
+      have hgetD : (forsRootSegs seed htIdx roots).getD (m + 2) (ByteVec.zero 32)
+          = ByteVec.pad16 (roots.getD m (ByteVec.zero 16)) := by
+        unfold forsRootSegs
+        rw [List.getD_cons_succ, List.getD_cons_succ]
+        exact map_pad16_getD roots m (by omega)
+      rw [hgetD]
+  -- Step 3: sha256 over [0,0x1E0) = 15 segments → computeForsPk.
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  -- Step 4: letv forsPk := and(mload OUT, N_MASK) → masked digest.
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt]), execList]
+  refine ⟨rfl, ?_⟩
+  -- Resolve env "forsPk" to the masked mload of the digest.
+  simp only [execStmt, eval, hv2OUT, hv2N]
+  rw [setVar_get_eq]
+  -- The sha256 output window slice = computeForsPk (via holdsSegs + the oracle bridge + mask).
+  -- mload(OUT) is the digest just written; mask it → wordOf (pad16 (truncate16 dig)).
+  rw [mload_masked_eq_wordOf_pad16 v2.mem 0x600
+        (c10Oracle (slice v2.mem 0 (32 * 15)))]
+  -- The digest = sha256 (forsRootSegs.map ofByteVec) = thMulti's input.
+  have hbridge : c10Oracle (slice v2.mem 0 (32 * 15))
+      = Spec.sha256 ((forsRootSegs seed htIdx roots).map Spec.ByteSeg.ofByteVec) := by
+    have h := c10Oracle_holdsSegs v2.mem 0 (forsRootSegs seed htIdx roots) hsegs
+    rw [hseglen] at h
+    exact h
+  rw [hbridge]
+  -- truncate16 (sha256 (forsRootSegs.map ofByteVec)) = computeForsPk seed htIdx roots.toArray.
+  congr 2
+  -- computeForsPk seed htIdx roots.toArray = thMulti seed (forsRoots htIdx) roots.toArray.toList.
+  show ByteVec.truncate16 (Spec.sha256 ((forsRootSegs seed htIdx roots).map Spec.ByteSeg.ofByteVec))
+      = Spec.Fors.computeForsPk seed htIdx roots.toArray
+  unfold Spec.Fors.computeForsPk Spec.thMulti forsRootSegs
+  -- header ++ padded ; roots.toArray.toList = roots ; List.map composition.
+  rw [List.toList_toArray]
+  simp only [List.map_cons, List.map_map]
+  rfl
+
+/-! ### The FORS phase capstone -/
+
+/-- The whole FORS fragment of `c10Program` (`SPHINCsC10Asm.sol` L81–143), from the `htIdx`
+    derivation through the masked `forsPk` — written with the per-phase bodies so it is defeq
+    to that slice of `c10Program`. Begins right after the H_msg `digest` letv. -/
+def forsPhaseFragment : List Stmt :=
+  [ .letv "htIdx" (.bin .band (.bin .shr (.lit 143) (.var "digest")) (.lit 0x3FFFF))
+  , .letv "dVal" (.var "digest")
+  , .ifnz (.bin .band (.bin .shr (.lit 132) (.var "dVal")) (.lit 0x7FF)) [ .revert ]
+  , .letv "sigBase" .sigOffset
+  , .forRange "i" (.lit 12) forsTreeBody
+  , .block forsLastTreeBody
+  , .mstore (.lit 0x20) (.bin .bor (.bin .shl (.lit 160) (.var "htIdx")) (.bin .shl (.lit 128) (.lit 4)))
+  , .forRange "i" (.lit 13) forsCopyBody
+  , .sha256 (.lit 0x00) (.lit 0x1E0) (.var "OUT")
+  , .letv "forsPk" (.bin .band (.mload (.var "OUT")) (.var "N_MASK")) ]
+
+/-- The 13 FORS roots `reconstructForsPk` compresses, as a function (interpreter index form):
+    trees `t < 12` are `forsTreeRoot`; tree 12 is the forced-zero `lastRoot`. The
+    `reconstructForsPk` `allRoots.toList` once `htIdx`/leaf-index are bridged. -/
+def forsAllRoots (seed : ByteVec 32) (htIdx : UInt64) (dVal : Nat)
+    (sig : ByteVec Spec.SignatureLen) : List (ByteVec 16) :=
+  (List.ofFn (n := 12) (fun t : Fin 12 => forsTreeRoot seed htIdx dVal sig t.val))
+    ++ [Spec.th seed (Spec.Adrs.forsNode htIdx (UInt32.ofNat 12) 0 0)
+          (ByteVec.pad16 (ByteVec.loadValue16 sig (16 + 16 * 12)))]
+
+/-- `forsAllRoots` has length 13. -/
+private theorem forsAllRoots_length (seed : ByteVec 32) (htIdx : UInt64) (dVal : Nat)
+    (sig : ByteVec Spec.SignatureLen) : (forsAllRoots seed htIdx dVal sig).length = 13 := by
+  simp only [forsAllRoots, List.length_append, List.length_ofFn, List.length_cons, List.length_nil]
+
+/-- `forsAllRoots.getD t` for `t < 12` is `forsTreeRoot … t`. -/
+private theorem forsAllRoots_getD_lt (seed : ByteVec 32) (htIdx : UInt64) (dVal : Nat)
+    (sig : ByteVec Spec.SignatureLen) (t : Nat) (ht : t < 12) :
+    (forsAllRoots seed htIdx dVal sig).getD t (ByteVec.zero 16)
+      = forsTreeRoot seed htIdx dVal sig t := by
+  unfold forsAllRoots
+  rw [List.getD_eq_getElem?_getD, List.getElem?_append_left (by rw [List.length_ofFn]; exact ht),
+      List.getElem?_ofFn, dif_pos ht, Option.getD_some]
+
+/-- `forsAllRoots.getD 12` is the forced-zero last root. -/
+private theorem forsAllRoots_getD_last (seed : ByteVec 32) (htIdx : UInt64) (dVal : Nat)
+    (sig : ByteVec Spec.SignatureLen) :
+    (forsAllRoots seed htIdx dVal sig).getD 12 (ByteVec.zero 16)
+      = Spec.th seed (Spec.Adrs.forsNode htIdx (UInt32.ofNat 12) 0 0)
+          (ByteVec.pad16 (ByteVec.loadValue16 sig (16 + 16 * 12))) := by
+  unfold forsAllRoots
+  rw [List.getD_eq_getElem?_getD, List.getElem?_append_right (by rw [List.length_ofFn]; exact Nat.le_refl 12),
+      List.length_ofFn]
+  rfl
+
+attribute [local irreducible] Spec.Fors.reconstructRoot Spec.th Spec.Fors.computeForsPk Spec.thMulti
+
+set_option maxHeartbeats 16000000 in
+/-- `forsAllRoots` matches `reconstructForsPk`'s `allRoots.toList` (with `htIdx = htIdx_bv`,
+    `dVal = wordOf digest_bv`). The bridge tying the interpreter's 13 compressed roots to the
+    spec's `normalRoots.push lastRoot`. -/
+private theorem forsAllRoots_eq_specAllRoots
+    (sig : ByteVec Spec.SignatureLen) (seed digest_bv : ByteVec 32) (htIdx_bv : UInt64)
+    (hhtbv : htIdx_bv = UInt64.ofNat (SphincsCVerify.Util.extractHtIndex digest_bv)) :
+    forsAllRoots seed htIdx_bv (wordOf digest_bv) sig
+      = ((Array.ofFn (n := Spec.K - 1) (fun t : Fin (Spec.K - 1) =>
+          Spec.Fors.reconstructRoot seed htIdx_bv (UInt32.ofNat t.val)
+            (UInt32.ofNat ((SphincsCVerify.Util.extractForsIndices digest_bv).getD t.val 0))
+            ((Spec.Signature.deserialise sig).fors.secrets.getD t.val (ByteVec.zero 16))
+            ((Spec.Signature.deserialise sig).fors.authPaths.getD t.val #[]))).push
+        (Spec.th seed (Spec.Adrs.forsNode htIdx_bv (UInt32.ofNat (Spec.K - 1)) 0 0)
+          (ByteVec.pad16 ((Spec.Signature.deserialise sig).fors.secrets.getD (Spec.K - 1) (ByteVec.zero 16))))).toList := by
+  -- The deserialise secrets bridge: secrets.getD t = loadValue16 sig (16 + 16t).
+  have hsecret : ∀ t, t < 13 → (Spec.Signature.deserialise sig).fors.secrets.getD t (ByteVec.zero 16)
+      = ByteVec.loadValue16 sig (16 + 16 * t) := by
+    intro t ht
+    show ((Array.ofFn (n := Spec.K) fun i => ByteVec.loadValue16 sig (Spec.N + i.val * Spec.N)).getD t (ByteVec.zero 16))
+        = ByteVec.loadValue16 sig (16 + 16 * t)
+    rw [Array.getD_eq_getD_getElem?, Array.getElem?_ofFn,
+        dif_pos (show t < Spec.K by have : Spec.K = 13 := rfl; omega), Option.getD_some]
+    have hN : Spec.N = 16 := rfl
+    rw [hN, Nat.mul_comm t 16]
+  -- RHS list = (ofFn 12 reconstructRoot).toList ++ [lastRoot'].
+  rw [Array.toList_push, Array.toList_ofFn]
+  unfold forsAllRoots
+  -- Whole-list extensionality over the 13 entries (t<12 normal, t=12 last).
+  apply List.ext_getElem
+  · simp only [List.length_append, List.length_ofFn, List.length_cons, List.length_nil]; rfl
+  · intro t h1 h2
+    have htlen : t < 13 := by
+      simp only [List.length_append, List.length_ofFn, List.length_cons, List.length_nil] at h1
+      omega
+    have hK1 : Spec.K - 1 = 12 := rfl
+    by_cases htlt : t < 12
+    · -- t < 12: both sides are the normal ofFn list entry.
+      rw [List.getElem_append_left (by rw [List.length_ofFn]; exact htlt),
+          List.getElem_append_left (by rw [List.length_ofFn]; rw [hK1]; exact htlt),
+          List.getElem_ofFn, List.getElem_ofFn]
+      show forsTreeRoot seed htIdx_bv (wordOf digest_bv) sig t = _
+      unfold forsTreeRoot
+      rw [extractForsIndices_eq_wordShift digest_bv t (by have : Spec.K = 13 := rfl; omega),
+          hsecret t (by omega)]
+    · -- t = 12: the last (singleton) entry.
+      have ht12 : t = 12 := by omega
+      subst ht12
+      rw [List.getElem_append_right (by rw [List.length_ofFn]; exact Nat.le_refl 12),
+          List.getElem_append_right (by rw [List.length_ofFn]; exact (show Spec.K - 1 ≤ 12 from Nat.le_refl 12))]
+      simp only [List.length_ofFn]
+      -- both sides index [_][0]; `Spec.K - 1` is defeq `12`, then the secret bridge.
+      show Spec.th seed (Spec.Adrs.forsNode htIdx_bv (UInt32.ofNat 12) 0 0)
+          (ByteVec.pad16 (ByteVec.loadValue16 sig (16 + 16 * 12)))
+        = Spec.th seed (Spec.Adrs.forsNode htIdx_bv (UInt32.ofNat 12) 0 0)
+          (ByteVec.pad16 ((Spec.Signature.deserialise sig).fors.secrets.getD 12 (ByteVec.zero 16)))
+      rw [hsecret 12 (by omega)]
+
+set_option maxHeartbeats 8000000 in
+/-- **`reconstructForsPk` returns the interpreter's compressed-root value.** When the
+    forced-zero last index is `0`, the spec `reconstructForsPk seed digest_bv (deserialise
+    sig).fors` is `some (computeForsPk seed htIdx_bv forsAllRoots.toArray)` — its `allRoots`
+    array is exactly `forsAllRoots.toArray` (the bridge `forsAllRoots_eq_specAllRoots`). -/
+private theorem reconstructForsPk_eq_compute
+    (sig : ByteVec Spec.SignatureLen) (seed digest_bv : ByteVec 32) (htIdx_bv : UInt64)
+    (hhtbv : htIdx_bv = UInt64.ofNat (SphincsCVerify.Util.extractHtIndex digest_bv))
+    (hz : (SphincsCVerify.Util.extractForsIndices digest_bv).getD (Spec.K - 1) 0 = 0) :
+    Spec.Fors.reconstructForsPk seed digest_bv (Spec.Signature.deserialise sig).fors
+      = some (Spec.Fors.computeForsPk seed htIdx_bv (forsAllRoots seed htIdx_bv (wordOf digest_bv) sig).toArray) := by
+  unfold Spec.Fors.reconstructForsPk
+  rw [if_neg (show ¬ (SphincsCVerify.Util.extractForsIndices digest_bv).getD (Spec.K - 1) 0 ≠ 0
+    from fun h => h hz)]
+  -- The spec's `htIdx`/`allRoots` match `htIdx_bv` / `forsAllRoots.toArray`.
+  congr 1
+  -- `allRoots = normalRoots.push lastRoot`; substitute the spec `htIdx` = `htIdx_bv`.
+  rw [← hhtbv,
+      forsAllRoots_eq_specAllRoots sig seed digest_bv htIdx_bv hhtbv, Array.toArray_toList]
+
+set_option maxHeartbeats 16000000 in
+set_option maxRecDepth 4000 in
+/-- The forced-zero (`hz`) FORS continuation from the post-(htIdx,dVal) VM `v0`: run
+    `sigBase`, the 12 normal trees, the last tree, and root compression, landing on
+    `env "forsPk" = wordOf (pad16 r)` with `reconstructForsPk … = some r`. Factored out of
+    `fors_phase` so the heavy composition is isolated from the `ifnz` dispatch. -/
+private theorem fors_phase_zero
+    (sig : ByteVec Spec.SignatureLen) (v0 : VM)
+    (seed digest_bv : ByteVec 32) (htIdx_bv : UInt64)
+    (hhtbv : htIdx_bv = UInt64.ofNat (SphincsCVerify.Util.extractHtIndex digest_bv))
+    (hz : (SphincsCVerify.Util.extractForsIndices digest_bv).getD (Spec.K - 1) 0 = 0)
+    (hv0dig : v0.env "digest" = wordOf digest_bv)
+    (hv0ht : v0.env "htIdx" = htIdx_bv.toNat)
+    (hv0dVal : v0.env "dVal" = wordOf digest_bv)
+    (hv0seedw : v0.env "seed" = wordOf seed)
+    (hv0N : v0.env "N_MASK" = NMASK)
+    (hv0OUT : v0.env "OUT" = 0x600)
+    (hv0mem : ∀ i, i < 32 → v0.mem (0 + i) = seed.data.getD i 0) :
+    (execList c10Oracle sig
+        (.letv "sigBase" .sigOffset
+          :: .forRange "i" (.lit 12) forsTreeBody
+          :: .block forsLastTreeBody
+          :: .mstore (.lit 0x20) (.bin .bor (.bin .shl (.lit 160) (.var "htIdx")) (.bin .shl (.lit 128) (.lit 4)))
+          :: .forRange "i" (.lit 13) forsCopyBody
+          :: .sha256 (.lit 0x00) (.lit 0x1E0) (.var "OUT")
+          :: [.letv "forsPk" (.bin .band (.mload (.var "OUT")) (.var "N_MASK"))]) v0).2 = none
+    ∧ ∃ r, Spec.Fors.reconstructForsPk seed digest_bv (Spec.Signature.deserialise sig).fors = some r
+        ∧ (execList c10Oracle sig
+        (.letv "sigBase" .sigOffset
+          :: .forRange "i" (.lit 12) forsTreeBody
+          :: .block forsLastTreeBody
+          :: .mstore (.lit 0x20) (.bin .bor (.bin .shl (.lit 160) (.var "htIdx")) (.bin .shl (.lit 128) (.lit 4)))
+          :: .forRange "i" (.lit 13) forsCopyBody
+          :: .sha256 (.lit 0x00) (.lit 0x1E0) (.var "OUT")
+          :: [.letv "forsPk" (.bin .band (.mload (.var "OUT")) (.var "N_MASK"))]) v0).1.env "forsPk"
+            = wordOf (ByteVec.pad16 r) := by
+  -- Step 1: sigBase letv (→ 0).
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  obtain ⟨v1, hv1⟩ : ∃ v1, (execStmt c10Oracle sig (.letv "sigBase" .sigOffset) v0).1 = v1 := ⟨_, rfl⟩
+  rw [hv1]
+  -- v1 env: sigBase = 0; htIdx/dVal/seed/N_MASK/OUT inherited from v0; mem = v0.mem.
+  have hv1sb : v1.env "sigBase" = 0 := by rw [← hv1]; simp only [execStmt, eval, setVar]; rfl
+  have hv1ht : v1.env "htIdx" = htIdx_bv.toNat := by
+    rw [← hv1]; simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hv0ht
+  have hv1dVal : v1.env "dVal" = wordOf digest_bv := by
+    rw [← hv1]; simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hv0dVal
+  have hv1seedw : v1.env "seed" = wordOf seed := by
+    rw [← hv1]; simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hv0seedw
+  have hv1N : v1.env "N_MASK" = NMASK := by
+    rw [← hv1]; simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hv0N
+  have hv1OUT : v1.env "OUT" = 0x600 := by
+    rw [← hv1]; simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hv0OUT
+  have hv1mem : ∀ i, i < 32 → v1.mem (0 + i) = seed.data.getD i 0 := by
+    intro i hi; rw [← hv1]; simp only [execStmt, eval]; exact hv0mem i hi
+  -- Step 2: the 12 normal trees.
+  have hntStmt : execStmt c10Oracle sig (.forRange "i" (.lit 12) forsTreeBody) v1
+      = execFor c10Oracle sig "i" forsTreeBody 12 0 v1 := by simp only [execStmt, eval]
+  obtain ⟨hntNone, hntMem, hntSeed, hntOUT, hntN, hntHt, _, _, _⟩ :=
+    fors_normal_trees sig v1 seed htIdx_bv (wordOf digest_bv)
+      hv1ht hv1sb hv1seedw hv1N hv1OUT hv1dVal hv1mem
+  rw [execList_cons_none c10Oracle sig _ _ _ (by rw [hntStmt]; exact hntNone), hntStmt]
+  obtain ⟨v2, hv2⟩ : ∃ v2, (execFor c10Oracle sig "i" forsTreeBody 12 0 v1).1 = v2 := ⟨_, rfl⟩
+  rw [hv2]
+  -- v2: trees 0-11 at 0x80+32t; seed window; htIdx/N_MASK/OUT preserved; sigBase=0 too.
+  have hv2ht : v2.env "htIdx" = htIdx_bv.toNat := by rw [← hv2]; exact hntHt
+  have hv2N : v2.env "N_MASK" = NMASK := by rw [← hv2]; exact hntN
+  have hv2OUT : v2.env "OUT" = 0x600 := by rw [← hv2]; exact hntOUT
+  have hv2seed : ∀ i, i < 32 → v2.mem (0 + i) = seed.data.getD i 0 := by
+    intro i hi; rw [← hv2]; exact hntSeed i hi
+  have hv2sb : v2.env "sigBase" = 0 := by
+    rw [← hv2]
+    -- forsTreeBody preserves sigBase (driven through the i-loop frame).
+    have := fors_normal_trees sig v1 seed htIdx_bv (wordOf digest_bv)
+      hv1ht hv1sb hv1seedw hv1N hv1OUT hv1dVal hv1mem
+    exact this.2.2.2.2.2.2.2.1
+  have hv2trees : ∀ t, t < 12 → ∀ k, k < 32 →
+      v2.mem (0x80 + 32 * t + k) = (ByteVec.pad16 (forsTreeRoot seed htIdx_bv (wordOf digest_bv) sig t)).data.getD k 0 := by
+    intro t ht k hk; rw [← hv2]; exact hntMem t ht k hk
+  -- Step 3: the last tree (.block forsLastTreeBody).
+  have hblockStmt : execStmt c10Oracle sig (.block forsLastTreeBody) v2
+      = execList c10Oracle sig forsLastTreeBody v2 := by simp only [execStmt]
+  obtain ⟨hltNone, hltMem, hltSeed⟩ := fors_last_tree sig v2 seed htIdx_bv
+    hv2ht hv2sb hv2N hv2OUT hv2seed
+  rw [execList_cons_none c10Oracle sig _ _ _ (by rw [hblockStmt]; exact hltNone), hblockStmt]
+  obtain ⟨v3, hv3⟩ : ∃ v3, (execList c10Oracle sig forsLastTreeBody v2).1 = v3 := ⟨_, rfl⟩
+  rw [hv3]
+  -- v3: tree 12 at 0x200; trees 0-11 preserved (mem-frame); seed window; consts preserved.
+  have hv3ht : v3.env "htIdx" = htIdx_bv.toNat := by
+    rw [← hv3, execList_forsLastTreeBody_preserves_var sig v2 "htIdx" (by decide)]; exact hv2ht
+  have hv3N : v3.env "N_MASK" = NMASK := by
+    rw [← hv3, execList_forsLastTreeBody_preserves_var sig v2 "N_MASK" (by decide)]; exact hv2N
+  have hv3OUT : v3.env "OUT" = 0x600 := by
+    rw [← hv3, execList_forsLastTreeBody_preserves_var sig v2 "OUT" (by decide)]; exact hv2OUT
+  have hv3seed : ∀ i, i < 32 → v3.mem (0 + i) = seed.data.getD i 0 := by
+    intro i hi; rw [← hv3]; exact hltSeed i hi
+  -- The 13 roots at 0x80+32t in v3: t<12 from trees (mem-frame past last tree), t=12 last.
+  have hv3roots : ∀ t, t < 13 → ∀ k, k < 32 →
+      v3.mem (0x80 + 32 * t + k) =
+        (ByteVec.pad16 ((forsAllRoots seed htIdx_bv (wordOf digest_bv) sig).getD t (ByteVec.zero 16))).data.getD k 0 := by
+    intro t ht k hk
+    by_cases htlt : t < 12
+    · -- trees 0-11: preserved through the last-tree block (mem-frame [0x80,0x200)).
+      rw [← hv3, fors_last_tree_mem_frame sig v2 hv2OUT (0x80 + 32 * t + k) ⟨by omega, by omega⟩]
+      rw [hv2trees t htlt k hk, forsAllRoots_getD_lt seed htIdx_bv (wordOf digest_bv) sig t htlt]
+    · -- tree 12: laid by the last tree at 0x200 = 0x80 + 32*12.
+      have ht12 : t = 12 := by omega
+      subst ht12
+      rw [show (0x80 + 32 * 12 + k) = (0x200 + k) by omega, ← hv3, hltMem k hk,
+          forsAllRoots_getD_last seed htIdx_bv (wordOf digest_bv) sig]
+  -- Step 4: root compression on v3 with roots = forsAllRoots.
+  obtain ⟨hcompNone, hcompPk⟩ := fors_root_compress sig v3 seed htIdx_bv
+    (forsAllRoots seed htIdx_bv (wordOf digest_bv) sig)
+    (forsAllRoots_length seed htIdx_bv (wordOf digest_bv) sig)
+    hv3N hv3OUT hv3ht hv3seed hv3roots
+  refine ⟨hcompNone, ?_⟩
+  -- reconstructForsPk seed digest_bv (deserialise sig).fors = some (computeForsPk seed htIdx_bv allRoots).
+  refine ⟨Spec.Fors.computeForsPk seed htIdx_bv (forsAllRoots seed htIdx_bv (wordOf digest_bv) sig).toArray, ?_, ?_⟩
+  · -- the spec returns `some` (forced-zero index = 0) with allRoots = forsAllRoots.toArray.
+    exact reconstructForsPk_eq_compute sig seed digest_bv htIdx_bv hhtbv hz
+  · -- env "forsPk" = wordOf (pad16 (computeForsPk …)).
+    exact hcompPk
+
+set_option maxHeartbeats 16000000 in
+set_option maxRecDepth 4000 in
+/-- **FORS phase capstone.** From a post-`H_msg` VM (`digest = wordOf digest_bv`,
+    `seed = wordOf seed`, `N_MASK`, `OUT = 0x600`, `seed` in scratch `[0,0x20)`), running the
+    whole FORS fragment (`SPHINCsC10Asm.sol` L81–143: derive `htIdx`/`dVal`, the forced-zero
+    `ifnz`, the 12 normal trees, the last tree, and root compression):
+
+    * if the forced-zero last index `(extractForsIndices digest_bv).getD (K-1) 0 ≠ 0`, the
+      `ifnz` reverts (`.2 = some Halt.reverted`); else
+    * it falls through and binds `"forsPk" = wordOf (pad16 r)` where
+      `reconstructForsPk seed digest_bv (deserialise sig).fors = some r`.
+
+    Composes `fors_normal_trees` + `fors_last_tree` + `fors_root_compress`, bridging the
+    interpreter leaf/ht indices to `extractForsIndices`/`extractHtIndex`. -/
+theorem fors_phase
+    (sig : ByteVec Spec.SignatureLen) (vm : VM)
+    (seed digest_bv : ByteVec 32)
+    (hdig : vm.env "digest" = wordOf digest_bv)
+    (hseedw : vm.env "seed" = wordOf seed)
+    (hN : vm.env "N_MASK" = NMASK)
+    (hOUT : vm.env "OUT" = 0x600)
+    (hseedmem : ∀ i, i < 32 → vm.mem (0 + i) = seed.data.getD i 0) :
+    (if (SphincsCVerify.Util.extractForsIndices digest_bv).getD (Spec.K - 1) 0 ≠ 0 then
+        (execList c10Oracle sig forsPhaseFragment vm).2 = some Halt.reverted
+      else
+        (execList c10Oracle sig forsPhaseFragment vm).2 = none
+        ∧ ∃ r, Spec.Fors.reconstructForsPk seed digest_bv (Spec.Signature.deserialise sig).fors = some r
+            ∧ (execList c10Oracle sig forsPhaseFragment vm).1.env "forsPk" = wordOf (ByteVec.pad16 r)) := by
+  -- The spec hypertree index, and its Nat round-trip.
+  obtain ⟨htIdx_bv, hhtbv⟩ :
+      ∃ h : UInt64, h = UInt64.ofNat (SphincsCVerify.Util.extractHtIndex digest_bv) := ⟨_, rfl⟩
+  have hhtNat : htIdx_bv.toNat = SphincsCVerify.Util.extractHtIndex digest_bv := by
+    rw [hhtbv]
+    show (SphincsCVerify.Util.extractHtIndex digest_bv) % UInt64.size = _
+    rw [Nat.mod_eq_of_lt (Nat.lt_of_lt_of_le (SphincsCVerify.Util.extractHtIndex_lt digest_bv)
+      (by decide : (2:Nat)^Spec.H ≤ UInt64.size))]
+  unfold forsPhaseFragment
+  -- Step 1+2: htIdx, dVal letvs.
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  -- Abbreviate the post-(htIdx,dVal) VM `v0`.
+  obtain ⟨v0, hv0⟩ : ∃ v0, (execStmt c10Oracle sig (.letv "dVal" (.var "digest"))
+      (execStmt c10Oracle sig (.letv "htIdx"
+        (.bin .band (.bin .shr (.lit 143) (.var "digest")) (.lit 0x3FFFF))) vm).1).1 = v0 := ⟨_, rfl⟩
+  rw [hv0]
+  -- v0's env facts: digest, htIdx-Nat (= htIdx_bv.toNat), dVal (= wordOf digest_bv), and the
+  -- inherited seed/N_MASK/OUT; v0.mem = vm.mem.
+  have hv0dig : v0.env "digest" = wordOf digest_bv := by
+    rw [← hv0]; simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hdig
+  have hv0ht : v0.env "htIdx" = htIdx_bv.toNat := by
+    rw [← hv0]; simp only [execStmt, eval, setVar, String.reduceEq, ite_true, ite_false]
+    rw [hhtNat, hdig, extractHtIndex_eq_wordShift digest_bv]
+  have hv0dVal : v0.env "dVal" = wordOf digest_bv := by
+    rw [← hv0]; simp only [execStmt, eval, setVar, ite_true]; exact hdig
+  have hv0seedw : v0.env "seed" = wordOf seed := by
+    rw [← hv0]; simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hseedw
+  have hv0N : v0.env "N_MASK" = NMASK := by
+    rw [← hv0]; simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hN
+  have hv0OUT : v0.env "OUT" = 0x600 := by
+    rw [← hv0]; simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hOUT
+  have hv0mem : ∀ i, i < 32 → v0.mem (0 + i) = seed.data.getD i 0 := by
+    intro i hi; rw [← hv0]; simp only [execStmt, eval, setVar]; exact hseedmem i hi
+  -- The forced-zero condition value, via the index bridge (132 = 12*11 = (K-1)*A).
+  have hcond : ((v0.env "dVal") >>> 132) &&& 2047
+      = (SphincsCVerify.Util.extractForsIndices digest_bv).getD (Spec.K - 1) 0 := by
+    rw [extractForsIndices_eq_wordShift digest_bv (Spec.K - 1) (by decide), hv0dVal,
+        show ((Spec.K - 1) * 11) = 132 from rfl]
+  -- The ifnz statement: execList (ifnz :: rest) v0.
+  rw [execList]
+  -- execStmt (ifnz cond body) v0: branches on eval cond ≠ 0.
+  by_cases hz : (SphincsCVerify.Util.extractForsIndices digest_bv).getD (Spec.K - 1) 0 = 0
+  · -- Zero: ifnz falls through.
+    rw [if_neg (show ¬ ((SphincsCVerify.Util.extractForsIndices digest_bv).getD (Spec.K - 1) 0 ≠ 0)
+      from fun h => h hz)]
+    have hcondz : execStmt c10Oracle sig
+        (.ifnz (.bin .band (.bin .shr (.lit 132) (.var "dVal")) (.lit 0x7FF)) [.revert]) v0
+        = (v0, none) := by
+      unfold execStmt
+      rw [if_neg]
+      show ¬ (((v0.env "dVal") >>> 132) &&& 2047 ≠ 0)
+      rw [hcond]; exact fun h => h hz
+    rw [hcondz]
+    -- Continue with the rest: sigBase, 12-loop, block, compression.
+    exact fors_phase_zero sig v0 seed digest_bv htIdx_bv hhtbv hz
+      hv0dig hv0ht hv0dVal hv0seedw hv0N hv0OUT hv0mem
+  · -- Nonzero: ifnz reverts.
+    rw [if_pos (show (SphincsCVerify.Util.extractForsIndices digest_bv).getD (Spec.K - 1) 0 ≠ 0 from hz)]
+    have hcondnz : execStmt c10Oracle sig
+        (.ifnz (.bin .band (.bin .shr (.lit 132) (.var "dVal")) (.lit 0x7FF)) [.revert]) v0
+        = (v0, some Halt.reverted) := by
+      unfold execStmt
+      rw [if_pos]
+      · simp only [execList, execStmt]
+      · show ((v0.env "dVal") >>> 132) &&& 2047 ≠ 0
+        rw [hcond]; exact hz
+    rw [hcondnz]
+
 end SphincsCVerify.Interpreter.C10

@@ -74,6 +74,19 @@ import SphincsCVerify
 #print axioms SphincsCVerify.Interpreter.C10.wordOf_make
 #print axioms SphincsCVerify.Interpreter.C10.wordOf_forsNode
 
+-- A3.1 FORS phase (Interpreter/Phases.lean): the K-1 normal-tree i-loop, the forced-zero
+-- last tree, the 13-root compression, and the capstone composing all three from the
+-- post-H_msg VM (env "forsPk" = wordOf (pad16 (reconstructForsPk …)) / revert on the
+-- forced-zero violation).  Plus the readBitsLe↔word-shift index bridge underpinning the
+-- extractForsIndices/extractHtIndex alignment.  All kernel-only.
+#print axioms SphincsCVerify.Interpreter.C10.readBitsLe_eq_wordShift
+#print axioms SphincsCVerify.Interpreter.C10.extractForsIndices_eq_wordShift
+#print axioms SphincsCVerify.Interpreter.C10.extractHtIndex_eq_wordShift
+#print axioms SphincsCVerify.Interpreter.C10.fors_normal_trees
+#print axioms SphincsCVerify.Interpreter.C10.fors_last_tree
+#print axioms SphincsCVerify.Interpreter.C10.fors_root_compress
+#print axioms SphincsCVerify.Interpreter.C10.fors_phase
+
 #print axioms SphincsCVerify.Spec.Theorems.verify_deterministic
 #print axioms SphincsCVerify.Spec.Theorems.verify_rejects_wrong_length
 #print axioms SphincsCVerify.Wallet.MultiOwnable.bumpBootstrap_monotonic
