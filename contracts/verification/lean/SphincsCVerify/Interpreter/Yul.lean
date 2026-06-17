@@ -218,6 +218,42 @@ theorem execList_append {n : Nat} (sha : List UInt8 → Spec.ByteVec 32) (sig : 
         | none => rw [execList, hs]; exact ih vm'
         | some h => rw [execList, hs]
 
+/-- **Loop-induction for `forRange`.** Thread an invariant `R : Nat → VM → Prop`
+    through a (halt-free) counting loop: if each iteration from `R cur` runs the
+    body without halting and re-establishes `R (cur+1)`, then the whole loop from
+    `R cur` finishes without halting in a state satisfying `R (cur+remaining)`.
+    The concrete interpreter analogue of `climbMem_eq_specClimb` — the engine every
+    C10 climb/accumulate loop (FORS/WOTS/Merkle/root-compress) is refined through.
+    Proved by induction on `remaining`. -/
+theorem execFor_invariant {n : Nat} (sha : List UInt8 → Spec.ByteVec 32) (sig : Spec.ByteVec n)
+    (v : String) (body : List Stmt) (R : Nat → VM → Prop)
+    (hstep : ∀ cur vm, R cur vm →
+      (execList sha sig body { vm with env := setVar vm.env v cur }).2 = none ∧
+      R (cur + 1) (execList sha sig body { vm with env := setVar vm.env v cur }).1) :
+    ∀ (remaining cur : Nat) (vm : VM), R cur vm →
+      (execFor sha sig v body remaining cur vm).2 = none ∧
+      R (cur + remaining) (execFor sha sig v body remaining cur vm).1 := by
+  intro remaining
+  induction remaining with
+  | zero =>
+      intro cur vm hR
+      simp only [execFor, Nat.add_zero]
+      exact ⟨trivial, hR⟩
+  | succ rem ih =>
+      intro cur vm hR
+      obtain ⟨hnone, hR1⟩ := hstep cur vm hR
+      rw [execFor]
+      -- The match scrutinee is `execList … { vm with env := setVar vm.env v cur }`;
+      -- `hnone` says its `.2` is `none`, so the match takes the continue branch.
+      revert hR1
+      rcases hp : execList sha sig body { vm with env := setVar vm.env v cur } with ⟨pvm, po⟩
+      rw [hp] at hnone
+      subst hnone
+      intro hR1
+      have hih := ih (cur + 1) pvm hR1
+      rw [show cur + (rem + 1) = (cur + 1) + rem by omega]
+      exact hih
+
 /-! ## Top-level program execution -/
 
 /-- Run a program from a caller-supplied initial memory (`mem0` lets the caller

@@ -46,6 +46,7 @@ import SphincsCVerify
 -- input-assembly bridge (Sha256Bridge.lean) — when memory holds the segments at
 -- consecutive 32-byte windows, the precompile input slice = the spec's ByteSeg.flatten.
 #print axioms SphincsCVerify.Interpreter.execList_append
+#print axioms SphincsCVerify.Interpreter.execFor_invariant
 #print axioms SphincsCVerify.Interpreter.slice_toArray_eq_flatten
 #print axioms SphincsCVerify.Interpreter.C10.c10Oracle_holdsSegs
 
