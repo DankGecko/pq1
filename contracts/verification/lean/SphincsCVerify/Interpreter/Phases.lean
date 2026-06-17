@@ -1337,4 +1337,409 @@ theorem fors_tree_body
     rw [mstore32_frame _ (128 + 32 * t) _ (0 + i) (by omega)]
     exact hclimb_seedmem i hi
 
+/-! ## ADRS word-layout bridge
+
+`wordOf_make` proves that the big-endian 256-bit word of `Spec.Adrs.make`'s 32-byte
+packed structure is the disjoint byte-aligned OR of its seven fields — the layout the
+deployed Yul `or(shl(160,htIdx), or(shl(128,FT), …))` builds directly. The three
+specializations (`wordOf_forsNode`/`forsRoots`/`treeNode`) are what the interpreter
+wrapper actually consumes to discharge the FORS-tree ADRS-word obligations
+(`fors_tree_body`'s `H_leafAdrs`; the bounded form of `H_adrs` — see the note below).
+
+The route is byte-extensional (robust): `eq_of_beByte` reduces the word equality to
+agreement on all 32 big-endian bytes; the left side is read back via `beByte_wordOf_getD`
++ a 7-range append split (`make_data_getD_beByte`); the right side distributes through OR
+(`beByte_lor`) and places each byte-aligned field (`beByte_shiftLeft_byte` + the field
+placement lemmas). Mathlib-free. -/
+
+/-- **OR distributes over `beByte`.** Big-endian byte `i` of `a ||| b` is the (UInt8)
+    OR of the `i`-th bytes — the OR analogue of `beByte_and_nmask`'s AND-distribution. -/
+theorem beByte_lor (a b i : Nat) : beByte (a ||| b) i = beByte a i ||| beByte b i := by
+  unfold beByte
+  rw [Nat.shiftRight_or_distrib, show (256 : Nat) = 2 ^ 8 from rfl, Nat.or_mod_two_pow,
+      UInt8.ofNat_or]
+
+/-- **Byte-aligned left shift moves bytes toward the MSB (lower index).** For `i < 32`,
+    byte `i` of `x <<< (8*b)` is byte `i+b` of `x` when `i+b ≤ 31`, else `0`. -/
+theorem beByte_shiftLeft_byte (x b i : Nat) (hi : i < 32) :
+    beByte (x <<< (8 * b)) i = if i + b ≤ 31 then beByte x (i + b) else 0 := by
+  unfold beByte
+  by_cases h : i + b ≤ 31
+  · rw [if_pos h]
+    congr 1
+    apply Nat.eq_of_testBit_eq
+    intro k
+    rw [show (256 : Nat) = 2 ^ 8 from rfl, Nat.testBit_mod_two_pow, Nat.testBit_mod_two_pow,
+        Nat.testBit_shiftRight, Nat.testBit_shiftRight, Nat.testBit_shiftLeft]
+    have hge : 8 * (31 - i) + k ≥ 8 * b := by omega
+    have hidx : 8 * (31 - i) + k - 8 * b = 8 * (31 - (i + b)) + k := by omega
+    rw [decide_eq_true hge, Bool.true_and, hidx]
+  · rw [if_neg h]
+    have hzero : x <<< (8 * b) >>> (8 * (31 - i)) % 256 = 0 := by
+      apply Nat.eq_of_testBit_eq
+      intro k
+      rw [show (256 : Nat) = 2 ^ 8 from rfl, Nat.testBit_mod_two_pow, Nat.testBit_shiftRight,
+          Nat.testBit_shiftLeft, Nat.zero_testBit]
+      by_cases hk : k < 8
+      · have hlt : ¬ (8 * (31 - i) + k ≥ 8 * b) := by omega
+        rw [decide_eq_false hlt, Bool.false_and, Bool.and_false]
+      · rw [decide_eq_false hk, Bool.false_and]
+    rw [hzero]; rfl
+
+private theorem and_0xFF_eq_mod (a : Nat) : a &&& 0xFF = a % 256 := by
+  rw [show (0xFF : Nat) = 2 ^ 8 - 1 from rfl, Nat.and_two_pow_sub_one_eq_mod]
+
+/-- The `i`-th byte (`i < 4`) of `ofU32BE x` is `beByte x.toNat (i+28)` (the low 4 bytes). -/
+private theorem ofU32BE_getD_eq_beByte (x : UInt32) (i : Nat) (hi : i < 4) :
+    (ByteVec.ofU32BE x).data.getD i 0 = beByte x.toNat (i + 28) := by
+  unfold beByte
+  match i, hi with
+  | 0, _ => show UInt8.ofNat (x.toNat >>> 24 &&& 0xFF) = UInt8.ofNat (x.toNat >>> 24 % 256)
+            rw [and_0xFF_eq_mod]
+  | 1, _ => show UInt8.ofNat (x.toNat >>> 16 &&& 0xFF) = UInt8.ofNat (x.toNat >>> 16 % 256)
+            rw [and_0xFF_eq_mod]
+  | 2, _ => show UInt8.ofNat (x.toNat >>> 8 &&& 0xFF) = UInt8.ofNat (x.toNat >>> 8 % 256)
+            rw [and_0xFF_eq_mod]
+  | 3, _ => show UInt8.ofNat (x.toNat &&& 0xFF) = UInt8.ofNat (x.toNat >>> 0 % 256)
+            rw [and_0xFF_eq_mod, Nat.shiftRight_zero]
+
+/-- The `i`-th byte (`i < 8`) of `ofU64BE x` is `beByte x.toNat (i+24)`. -/
+private theorem ofU64BE_getD_eq_beByte (x : UInt64) (i : Nat) (hi : i < 8) :
+    (ByteVec.ofU64BE x).data.getD i 0 = beByte x.toNat (i + 24) := by
+  unfold beByte
+  match i, hi with
+  | 0, _ =>
+      show UInt8.ofNat (x.toNat >>> 56) = UInt8.ofNat (x.toNat >>> 56 % 256)
+      have hlt : x.toNat >>> 56 < 256 := by
+        have hlt64 : x.toNat < 2 ^ 64 := x.toNat_lt
+        rw [Nat.shiftRight_eq_div_pow]
+        omega
+      rw [Nat.mod_eq_of_lt hlt]
+  | 1, _ => show UInt8.ofNat (x.toNat >>> 48 &&& 0xFF) = UInt8.ofNat (x.toNat >>> 48 % 256)
+            rw [and_0xFF_eq_mod]
+  | 2, _ => show UInt8.ofNat (x.toNat >>> 40 &&& 0xFF) = UInt8.ofNat (x.toNat >>> 40 % 256)
+            rw [and_0xFF_eq_mod]
+  | 3, _ => show UInt8.ofNat (x.toNat >>> 32 &&& 0xFF) = UInt8.ofNat (x.toNat >>> 32 % 256)
+            rw [and_0xFF_eq_mod]
+  | 4, _ => show UInt8.ofNat (x.toNat >>> 24 &&& 0xFF) = UInt8.ofNat (x.toNat >>> 24 % 256)
+            rw [and_0xFF_eq_mod]
+  | 5, _ => show UInt8.ofNat (x.toNat >>> 16 &&& 0xFF) = UInt8.ofNat (x.toNat >>> 16 % 256)
+            rw [and_0xFF_eq_mod]
+  | 6, _ => show UInt8.ofNat (x.toNat >>> 8 &&& 0xFF) = UInt8.ofNat (x.toNat >>> 8 % 256)
+            rw [and_0xFF_eq_mod]
+  | 7, _ => show UInt8.ofNat (x.toNat &&& 0xFF) = UInt8.ofNat (x.toNat >>> 0 % 256)
+            rw [and_0xFF_eq_mod, Nat.shiftRight_zero]
+
+/-- High-index (`j < 28`) big-endian bytes of a `UInt32` value are zero. -/
+private theorem beByte_u32_zero_lo (x : UInt32) (j : Nat) (hj : j < 28) : beByte x.toNat j = 0 := by
+  unfold beByte
+  have hx : x.toNat < 2 ^ 32 := x.toNat_lt
+  have hsh : x.toNat >>> (8 * (31 - j)) = 0 := by
+    rw [Nat.shiftRight_eq_div_pow]
+    apply Nat.div_eq_of_lt
+    exact Nat.lt_of_lt_of_le hx (Nat.pow_le_pow_right (by decide) (by omega))
+  rw [hsh]; rfl
+
+/-- High-index (`j < 24`) big-endian bytes of a `UInt64` value are zero. -/
+private theorem beByte_u64_zero_lo (x : UInt64) (j : Nat) (hj : j < 24) : beByte x.toNat j = 0 := by
+  unfold beByte
+  have hx : x.toNat < 2 ^ 64 := x.toNat_lt
+  have hsh : x.toNat >>> (8 * (31 - j)) = 0 := by
+    rw [Nat.shiftRight_eq_div_pow]
+    apply Nat.div_eq_of_lt
+    exact Nat.lt_of_lt_of_le hx (Nat.pow_le_pow_right (by decide) (by omega))
+  rw [hsh]; rfl
+
+/-- A `UInt32` field shifted to byte-offset `off` occupies bytes `[off, off+4)`. -/
+private theorem field32_byte (x : UInt32) (off i : Nat) (hoff : off ≤ 28) (hi : i < 32) :
+    beByte (x.toNat <<< (8 * (28 - off))) i
+      = if off ≤ i ∧ i < off + 4 then beByte x.toNat (i + 28 - off) else 0 := by
+  rw [beByte_shiftLeft_byte x.toNat (28 - off) i hi]
+  by_cases hc : off ≤ i ∧ i < off + 4
+  · rw [if_pos hc, if_pos (show i + (28 - off) ≤ 31 by omega)]
+    congr 1; omega
+  · rw [if_neg hc]
+    by_cases hstruct : i + (28 - off) ≤ 31
+    · rw [if_pos hstruct]
+      apply beByte_u32_zero_lo
+      omega
+    · rw [if_neg hstruct]
+
+/-- The `UInt64` `tree` field (byte-offset 4) occupies bytes `[4, 12)`. -/
+private theorem field64_byte (x : UInt64) (i : Nat) (hi : i < 32) :
+    beByte (x.toNat <<< (8 * 20)) i
+      = if 4 ≤ i ∧ i < 12 then beByte x.toNat (i + 20) else 0 := by
+  rw [beByte_shiftLeft_byte x.toNat 20 i hi]
+  by_cases hc : 4 ≤ i ∧ i < 12
+  · rw [if_pos hc, if_pos (show i + 20 ≤ 31 by omega)]
+  · rw [if_neg hc]
+    by_cases hstruct : i + 20 ≤ 31
+    · rw [if_pos hstruct]
+      apply beByte_u64_zero_lo
+      omega
+    · rw [if_neg hstruct]
+
+/-- `getD` over an append of two raw arrays at a known left-size `p`. -/
+private theorem arr_append_getD (a b : Array UInt8) (p i : Nat) (hp : a.size = p) :
+    (a ++ b).getD i 0 = if i < p then a.getD i 0 else b.getD (i - p) 0 := by
+  rw [Array.getD_eq_getD_getElem?, Array.getElem?_append, hp]
+  by_cases hi : i < p
+  · rw [if_pos hi, if_pos hi, ← Array.getD_eq_getD_getElem?]
+  · rw [if_neg hi, if_neg hi, ← Array.getD_eq_getD_getElem?]
+
+/-- The make's `data` is the 7-fold byte append of the BE-encoded fields. -/
+private theorem make_data_eq (layer : UInt32) (tree : UInt64) (atype kp ci cp ha : UInt32) :
+    (Spec.Adrs.make layer tree atype kp ci cp ha).data
+      = (ByteVec.ofU32BE layer).data ++ (ByteVec.ofU64BE tree).data ++ (ByteVec.ofU32BE atype).data
+        ++ (ByteVec.ofU32BE kp).data ++ (ByteVec.ofU32BE ci).data ++ (ByteVec.ofU32BE cp).data
+        ++ (ByteVec.ofU32BE ha).data := rfl
+
+private theorem sz_u32 (x : UInt32) : (ByteVec.ofU32BE x).data.size = 4 := (ByteVec.ofU32BE x).size_eq
+private theorem sz_u64 (x : UInt64) : (ByteVec.ofU64BE x).data.size = 8 := (ByteVec.ofU64BE x).size_eq
+
+/-- Byte-`i` of the make, resolved to the covering field's `beByte`. -/
+private theorem make_data_getD_beByte
+    (layer : UInt32) (tree : UInt64) (atype kp ci cp ha : UInt32) (i : Nat) (hi : i < 32) :
+    (Spec.Adrs.make layer tree atype kp ci cp ha).data.getD i 0
+      = if i < 4 then beByte layer.toNat (i + 28)
+        else if i < 12 then beByte tree.toNat (i - 4 + 24)
+        else if i < 16 then beByte atype.toNat (i - 12 + 28)
+        else if i < 20 then beByte kp.toNat (i - 16 + 28)
+        else if i < 24 then beByte ci.toNat (i - 20 + 28)
+        else if i < 28 then beByte cp.toNat (i - 24 + 28)
+        else beByte ha.toNat (i - 28 + 28) := by
+  rw [make_data_eq]
+  have sL : (ByteVec.ofU32BE layer).data.size = 4 := sz_u32 layer
+  have sT : (ByteVec.ofU64BE tree).data.size = 8 := sz_u64 tree
+  have sA : (ByteVec.ofU32BE atype).data.size = 4 := sz_u32 atype
+  have sK : (ByteVec.ofU32BE kp).data.size = 4 := sz_u32 kp
+  have sC : (ByteVec.ofU32BE ci).data.size = 4 := sz_u32 ci
+  have sP : (ByteVec.ofU32BE cp).data.size = 4 := sz_u32 cp
+  -- The append is left-nested (`++` is infixl): ((((((L++T)++A)++K)++C)++P)++Hh).
+  -- Peel from the outermost (rightmost field) inward; prefix sizes via Array.size_append.
+  rw [arr_append_getD _ (ByteVec.ofU32BE ha).data 28 i
+        (by simp [Array.size_append, sL, sT, sA, sK, sC, sP])]
+  rw [arr_append_getD _ (ByteVec.ofU32BE cp).data 24 i
+        (by simp [Array.size_append, sL, sT, sA, sK, sC])]
+  rw [arr_append_getD _ (ByteVec.ofU32BE ci).data 20 i
+        (by simp [Array.size_append, sL, sT, sA, sK])]
+  rw [arr_append_getD _ (ByteVec.ofU32BE kp).data 16 i
+        (by simp [Array.size_append, sL, sT, sA])]
+  rw [arr_append_getD _ (ByteVec.ofU32BE atype).data 12 i
+        (by simp [Array.size_append, sL, sT])]
+  rw [arr_append_getD (ByteVec.ofU32BE layer).data (ByteVec.ofU64BE tree).data 4 i sL]
+  -- resolve each leaf field byte; split i into the 7 ranges. `simp only` with the
+  -- in-scope range facts decides every LHS-descending and RHS `if`, the field lemma
+  -- lands the leaf, and `congr 1; omega` matches the surviving index.
+  rcases Nat.lt_or_ge i 4 with h | h
+  · simp only [if_pos (show i < 28 by omega), if_pos (show i < 24 by omega),
+      if_pos (show i < 20 by omega), if_pos (show i < 16 by omega), if_pos (show i < 12 by omega),
+      if_pos h, ofU32BE_getD_eq_beByte layer i h]
+  · rcases Nat.lt_or_ge i 12 with h2 | h2
+    · simp only [if_pos (show i < 28 by omega), if_pos (show i < 24 by omega),
+        if_pos (show i < 20 by omega), if_pos (show i < 16 by omega), if_pos h2,
+        if_neg (Nat.not_lt.2 h), ofU64BE_getD_eq_beByte tree (i - 4) (by omega)]
+    · rcases Nat.lt_or_ge i 16 with h3 | h3
+      · simp only [if_pos (show i < 28 by omega), if_pos (show i < 24 by omega),
+          if_pos (show i < 20 by omega), if_pos h3, if_neg (Nat.not_lt.2 h), if_neg (Nat.not_lt.2 h2),
+          ofU32BE_getD_eq_beByte atype (i - 12) (by omega)]
+      · rcases Nat.lt_or_ge i 20 with h4 | h4
+        · simp only [if_pos (show i < 28 by omega), if_pos (show i < 24 by omega), if_pos h4,
+            if_neg (Nat.not_lt.2 h), if_neg (Nat.not_lt.2 h2), if_neg (Nat.not_lt.2 h3),
+            ofU32BE_getD_eq_beByte kp (i - 16) (by omega)]
+        · rcases Nat.lt_or_ge i 24 with h5 | h5
+          · simp only [if_pos (show i < 28 by omega), if_pos h5, if_neg (Nat.not_lt.2 h),
+              if_neg (Nat.not_lt.2 h2), if_neg (Nat.not_lt.2 h3), if_neg (Nat.not_lt.2 h4),
+              ofU32BE_getD_eq_beByte ci (i - 20) (by omega)]
+          · rcases Nat.lt_or_ge i 28 with h6 | h6
+            · simp only [if_pos h6, if_neg (Nat.not_lt.2 h), if_neg (Nat.not_lt.2 h2),
+                if_neg (Nat.not_lt.2 h3), if_neg (Nat.not_lt.2 h4), if_neg (Nat.not_lt.2 h5),
+                ofU32BE_getD_eq_beByte cp (i - 24) (by omega)]
+            · simp only [if_neg (Nat.not_lt.2 h), if_neg (Nat.not_lt.2 h2), if_neg (Nat.not_lt.2 h3),
+                if_neg (Nat.not_lt.2 h4), if_neg (Nat.not_lt.2 h5), if_neg (Nat.not_lt.2 h6),
+                ofU32BE_getD_eq_beByte ha (i - 28) (by omega)]
+
+/-- A value `< 2^m` shifted left by `k` with `m + k ≤ 256` stays `< 2^256`. -/
+private theorem shl_lt_two_pow_256 (x m k : Nat) (hx : x < 2 ^ m) (hmk : m + k ≤ 256) :
+    x <<< k < 2 ^ 256 := by
+  rw [Nat.shiftLeft_eq]
+  calc x * 2 ^ k < 2 ^ m * 2 ^ k := by
+            exact (Nat.mul_lt_mul_right (Nat.two_pow_pos k)).2 hx
+    _ = 2 ^ (m + k) := by rw [← Nat.pow_add]
+    _ ≤ 2 ^ 256 := Nat.pow_le_pow_right (by decide) hmk
+
+/-- The make's RHS big-OR of the seven byte-aligned shifts is `< 2^256`. -/
+private theorem make_rhs_lt (layer : UInt32) (tree : UInt64) (atype kp ci cp ha : UInt32) :
+    layer.toNat <<< 224 ||| tree.toNat <<< 160 ||| atype.toNat <<< 128
+      ||| kp.toNat <<< 96 ||| ci.toNat <<< 64 ||| cp.toNat <<< 32 ||| ha.toNat < 2 ^ 256 := by
+  have hl : layer.toNat <<< 224 < 2 ^ 256 := shl_lt_two_pow_256 _ 32 224 layer.toNat_lt (by omega)
+  have ht : tree.toNat <<< 160 < 2 ^ 256 := shl_lt_two_pow_256 _ 64 160 tree.toNat_lt (by omega)
+  have ha' : atype.toNat <<< 128 < 2 ^ 256 := shl_lt_two_pow_256 _ 32 128 atype.toNat_lt (by omega)
+  have hk : kp.toNat <<< 96 < 2 ^ 256 := shl_lt_two_pow_256 _ 32 96 kp.toNat_lt (by omega)
+  have hc : ci.toNat <<< 64 < 2 ^ 256 := shl_lt_two_pow_256 _ 32 64 ci.toNat_lt (by omega)
+  have hp : cp.toNat <<< 32 < 2 ^ 256 := shl_lt_two_pow_256 _ 32 32 cp.toNat_lt (by omega)
+  have hh : ha.toNat < 2 ^ 256 := Nat.lt_trans ha.toNat_lt (by decide)
+  exact Nat.or_lt_two_pow (Nat.or_lt_two_pow (Nat.or_lt_two_pow (Nat.or_lt_two_pow
+    (Nat.or_lt_two_pow (Nat.or_lt_two_pow hl ht) ha') hk) hc) hp) hh
+
+/-- Byte action of the make's RHS big-OR: distribute over OR and place each field. -/
+private theorem make_rhs_beByte (layer : UInt32) (tree : UInt64) (atype kp ci cp ha : UInt32)
+    (i : Nat) (hi : i < 32) :
+    beByte (layer.toNat <<< 224 ||| tree.toNat <<< 160 ||| atype.toNat <<< 128
+      ||| kp.toNat <<< 96 ||| ci.toNat <<< 64 ||| cp.toNat <<< 32 ||| ha.toNat) i
+      = if i < 4 then beByte layer.toNat (i + 28)
+        else if i < 12 then beByte tree.toNat (i - 4 + 24)
+        else if i < 16 then beByte atype.toNat (i - 12 + 28)
+        else if i < 20 then beByte kp.toNat (i - 16 + 28)
+        else if i < 24 then beByte ci.toNat (i - 20 + 28)
+        else if i < 28 then beByte cp.toNat (i - 24 + 28)
+        else beByte ha.toNat (i - 28 + 28) := by
+  rw [beByte_lor, beByte_lor, beByte_lor, beByte_lor, beByte_lor, beByte_lor]
+  rw [show layer.toNat <<< 224 = layer.toNat <<< (8 * (28 - 0)) from rfl, field32_byte layer 0 i (by omega) hi]
+  rw [show tree.toNat <<< 160 = tree.toNat <<< (8 * 20) from rfl, field64_byte tree i hi]
+  rw [show atype.toNat <<< 128 = atype.toNat <<< (8 * (28 - 12)) from rfl,
+      field32_byte atype 12 i (by omega) hi]
+  rw [show kp.toNat <<< 96 = kp.toNat <<< (8 * (28 - 16)) from rfl, field32_byte kp 16 i (by omega) hi]
+  rw [show ci.toNat <<< 64 = ci.toNat <<< (8 * (28 - 20)) from rfl, field32_byte ci 20 i (by omega) hi]
+  rw [show cp.toNat <<< 32 = cp.toNat <<< (8 * (28 - 24)) from rfl, field32_byte cp 24 i (by omega) hi]
+  -- 7-way range split; in each, exactly one disjunct is non-zero, the rest collapse via UInt8 OR.
+  rcases Nat.lt_or_ge i 4 with h | h
+  · rw [if_pos (show 0 ≤ i ∧ i < 0 + 4 by omega), if_neg (show ¬ (4 ≤ i ∧ i < 12) by omega),
+        if_neg (show ¬ (12 ≤ i ∧ i < 16) by omega), if_neg (show ¬ (16 ≤ i ∧ i < 20) by omega),
+        if_neg (show ¬ (20 ≤ i ∧ i < 24) by omega), if_neg (show ¬ (24 ≤ i ∧ i < 28) by omega),
+        beByte_u32_zero_lo ha i (by omega), if_pos h,
+        UInt8.or_zero, UInt8.or_zero, UInt8.or_zero, UInt8.or_zero, UInt8.or_zero, UInt8.or_zero]
+    congr 1
+  · rcases Nat.lt_or_ge i 12 with h2 | h2
+    · rw [if_pos (show 4 ≤ i ∧ i < 12 by omega), if_neg (show ¬ (0 ≤ i ∧ i < 0 + 4) by omega),
+          if_neg (show ¬ (12 ≤ i ∧ i < 16) by omega), if_neg (show ¬ (16 ≤ i ∧ i < 20) by omega),
+          if_neg (show ¬ (20 ≤ i ∧ i < 24) by omega), if_neg (show ¬ (24 ≤ i ∧ i < 28) by omega),
+          beByte_u32_zero_lo ha i (by omega), if_neg (Nat.not_lt.2 h), if_pos h2,
+          UInt8.zero_or, UInt8.or_zero, UInt8.or_zero, UInt8.or_zero, UInt8.or_zero, UInt8.or_zero]
+      congr 1; omega
+    · rcases Nat.lt_or_ge i 16 with h3 | h3
+      · rw [if_pos (show 12 ≤ i ∧ i < 16 by omega), if_neg (show ¬ (0 ≤ i ∧ i < 0 + 4) by omega),
+            if_neg (show ¬ (4 ≤ i ∧ i < 12) by omega), if_neg (show ¬ (16 ≤ i ∧ i < 20) by omega),
+            if_neg (show ¬ (20 ≤ i ∧ i < 24) by omega), if_neg (show ¬ (24 ≤ i ∧ i < 28) by omega),
+            beByte_u32_zero_lo ha i (by omega), if_neg (Nat.not_lt.2 h), if_neg (Nat.not_lt.2 h2),
+            if_pos h3, UInt8.zero_or, UInt8.zero_or, UInt8.or_zero, UInt8.or_zero, UInt8.or_zero,
+            UInt8.or_zero]
+        congr 1; omega
+      · rcases Nat.lt_or_ge i 20 with h4 | h4
+        · rw [if_pos (show 16 ≤ i ∧ i < 20 by omega), if_neg (show ¬ (0 ≤ i ∧ i < 0 + 4) by omega),
+              if_neg (show ¬ (4 ≤ i ∧ i < 12) by omega), if_neg (show ¬ (12 ≤ i ∧ i < 16) by omega),
+              if_neg (show ¬ (20 ≤ i ∧ i < 24) by omega), if_neg (show ¬ (24 ≤ i ∧ i < 28) by omega),
+              beByte_u32_zero_lo ha i (by omega), if_neg (Nat.not_lt.2 h), if_neg (Nat.not_lt.2 h2),
+              if_neg (Nat.not_lt.2 h3), if_pos h4, UInt8.zero_or, UInt8.zero_or, UInt8.zero_or,
+              UInt8.or_zero, UInt8.or_zero, UInt8.or_zero]
+          congr 1; omega
+        · rcases Nat.lt_or_ge i 24 with h5 | h5
+          · rw [if_pos (show 20 ≤ i ∧ i < 24 by omega), if_neg (show ¬ (0 ≤ i ∧ i < 0 + 4) by omega),
+                if_neg (show ¬ (4 ≤ i ∧ i < 12) by omega), if_neg (show ¬ (12 ≤ i ∧ i < 16) by omega),
+                if_neg (show ¬ (16 ≤ i ∧ i < 20) by omega), if_neg (show ¬ (24 ≤ i ∧ i < 28) by omega),
+                beByte_u32_zero_lo ha i (by omega), if_neg (Nat.not_lt.2 h), if_neg (Nat.not_lt.2 h2),
+                if_neg (Nat.not_lt.2 h3), if_neg (Nat.not_lt.2 h4), if_pos h5, UInt8.zero_or,
+                UInt8.zero_or, UInt8.zero_or, UInt8.zero_or, UInt8.or_zero, UInt8.or_zero]
+            congr 1; omega
+          · rcases Nat.lt_or_ge i 28 with h6 | h6
+            · rw [if_pos (show 24 ≤ i ∧ i < 28 by omega), if_neg (show ¬ (0 ≤ i ∧ i < 0 + 4) by omega),
+                  if_neg (show ¬ (4 ≤ i ∧ i < 12) by omega), if_neg (show ¬ (12 ≤ i ∧ i < 16) by omega),
+                  if_neg (show ¬ (16 ≤ i ∧ i < 20) by omega), if_neg (show ¬ (20 ≤ i ∧ i < 24) by omega),
+                  beByte_u32_zero_lo ha i (by omega), if_neg (Nat.not_lt.2 h), if_neg (Nat.not_lt.2 h2),
+                  if_neg (Nat.not_lt.2 h3), if_neg (Nat.not_lt.2 h4), if_neg (Nat.not_lt.2 h5),
+                  if_pos h6, UInt8.zero_or, UInt8.zero_or, UInt8.zero_or, UInt8.zero_or, UInt8.zero_or,
+                  UInt8.or_zero]
+              congr 1; omega
+            · rw [if_neg (show ¬ (24 ≤ i ∧ i < 28) by omega), if_neg (show ¬ (0 ≤ i ∧ i < 0 + 4) by omega),
+                  if_neg (show ¬ (4 ≤ i ∧ i < 12) by omega), if_neg (show ¬ (12 ≤ i ∧ i < 16) by omega),
+                  if_neg (show ¬ (16 ≤ i ∧ i < 20) by omega), if_neg (show ¬ (20 ≤ i ∧ i < 24) by omega),
+                  if_neg (Nat.not_lt.2 h), if_neg (Nat.not_lt.2 h2), if_neg (Nat.not_lt.2 h3),
+                  if_neg (Nat.not_lt.2 h4), if_neg (Nat.not_lt.2 h5), if_neg (Nat.not_lt.2 h6),
+                  UInt8.zero_or, UInt8.zero_or, UInt8.zero_or, UInt8.zero_or, UInt8.zero_or, UInt8.zero_or]
+              congr 1; omega
+
+/-- **ADRS word-layout bridge.** The big-endian 256-bit word of `Spec.Adrs.make`'s
+    32-byte packed structure is the disjoint byte-aligned OR of its seven fields —
+    `ofU32BE layer ‖ ofU64BE tree ‖ … ‖ ofU32BE ha` read as one word equals the Yul
+    `or(shl 224 layer, or(shl 160 tree, …))`. Proved byte-extensionally. -/
+theorem wordOf_make (layer : UInt32) (tree : UInt64) (atype kp ci cp ha : UInt32) :
+    wordOf (Spec.Adrs.make layer tree atype kp ci cp ha)
+      = layer.toNat <<< 224 ||| tree.toNat <<< 160 ||| atype.toNat <<< 128
+        ||| kp.toNat <<< 96 ||| ci.toNat <<< 64 ||| cp.toNat <<< 32 ||| ha.toNat := by
+  apply eq_of_beByte
+  · exact wordOf_lt _
+  · exact make_rhs_lt layer tree atype kp ci cp ha
+  · intro i hi
+    rw [beByte_wordOf_getD (Spec.Adrs.make layer tree atype kp ci cp ha) i hi,
+        make_data_getD_beByte layer tree atype kp ci cp ha i hi,
+        make_rhs_beByte layer tree atype kp ci cp ha i hi]
+
+/-- **FORS-node ADRS word.** `forsNode = make 0 htIdx FORS_TREE treeIdx 0 height
+    parentIdx`; the `layer = 0` and `ci = 0` shifts vanish (the deployed Yul
+    `or(shl(160,htIdx), or(shl(128,3), or(shl(96,treeIdx), node)))`). -/
+theorem wordOf_forsNode (htIdx : UInt64) (treeIdx height parentIdx : UInt32) :
+    wordOf (Spec.Adrs.forsNode htIdx treeIdx height parentIdx)
+      = htIdx.toNat <<< 160 ||| (UInt32.ofNat Spec.ADRS_FORS_TREE).toNat <<< 128
+        ||| treeIdx.toNat <<< 96 ||| height.toNat <<< 32 ||| parentIdx.toNat := by
+  unfold Spec.Adrs.forsNode
+  rw [wordOf_make]
+  show (0 : UInt32).toNat <<< 224 ||| htIdx.toNat <<< 160 ||| _ ||| _
+        ||| (0 : UInt32).toNat <<< 64 ||| _ ||| _ = _
+  rw [show (0 : UInt32).toNat = 0 from rfl, Nat.zero_shiftLeft, Nat.zero_or, Nat.zero_shiftLeft]
+  rw [Nat.or_zero]
+
+/-- **FORS-roots ADRS word.** `forsRoots = make 0 htIdx FORS_ROOTS 0 0 0 0` (Yul
+    `or(shl(160,htIdx), shl(128,4))`). -/
+theorem wordOf_forsRoots (htIdx : UInt64) :
+    wordOf (Spec.Adrs.forsRoots htIdx)
+      = htIdx.toNat <<< 160 ||| (UInt32.ofNat Spec.ADRS_FORS_ROOTS).toNat <<< 128 := by
+  unfold Spec.Adrs.forsRoots
+  rw [wordOf_make]
+  show (0 : UInt32).toNat <<< 224 ||| htIdx.toNat <<< 160 ||| _ ||| (0 : UInt32).toNat <<< 96
+        ||| (0 : UInt32).toNat <<< 64 ||| (0 : UInt32).toNat <<< 32 ||| (0 : UInt32).toNat = _
+  rw [show (0 : UInt32).toNat = 0 from rfl, Nat.zero_shiftLeft, Nat.zero_or, Nat.zero_shiftLeft,
+      Nat.or_zero, Nat.zero_shiftLeft, Nat.or_zero, Nat.zero_shiftLeft, Nat.or_zero, Nat.or_zero]
+
+/-- **XMSS-tree-node ADRS word.** `treeNode = make layer tree ADRS_TREE 0 0 height
+    parentIdx`; `kp = ci = 0` vanish (Yul masked `or(shl(224,layer), or(shl(160,tree),
+    shl(128,2)))`). -/
+theorem wordOf_treeNode (layer : UInt32) (tree : UInt64) (height parentIdx : UInt32) :
+    wordOf (Spec.Adrs.treeNode layer tree height parentIdx)
+      = layer.toNat <<< 224 ||| tree.toNat <<< 160 ||| (UInt32.ofNat Spec.ADRS_TREE).toNat <<< 128
+        ||| height.toNat <<< 32 ||| parentIdx.toNat := by
+  unfold Spec.Adrs.treeNode
+  rw [wordOf_make]
+  show _ ||| _ ||| _ ||| (0 : UInt32).toNat <<< 96 ||| (0 : UInt32).toNat <<< 64 ||| _ ||| _ = _
+  rw [show (0 : UInt32).toNat = 0 from rfl, Nat.zero_shiftLeft, Nat.or_zero, Nat.zero_shiftLeft,
+      Nat.or_zero]
+
+/-- Regression guard: `wordOf_forsNode` discharges `fors_tree_body`'s `H_leafAdrs`
+    obligation — the `(htIdx<<<160) | (3<<<128) | (t<<<96) | leafTreeIdx` Yul word
+    is the spec `forsNode` word, given the digest→leaf-index identity `H_idx` and
+    `t < 12`. The `% W` truncations are inert (each field shift `< 2^256`) and the
+    `|||` reassociates (`Nat.or_assoc`). -/
+private theorem H_leafAdrs_dischargeable
+    (htIdx : UInt64) (t : Nat) (leafIdx : UInt32) (dVal : Nat)
+    (ht : t < 12)
+    (H_idx : (dVal >>> (t * 11)) &&& 0x7FF = leafIdx.toNat) :
+    (htIdx.toNat <<< 160 % W) ||| ((3 <<< 128 % W) ||| ((t <<< 96 % W) |||
+        ((dVal >>> (t * 11)) &&& 0x7FF)))
+      = wordOf (Spec.Adrs.forsNode htIdx (UInt32.ofNat t) 0 leafIdx) := by
+  rw [wordOf_forsNode, H_idx]
+  have hFT : (UInt32.ofNat Spec.ADRS_FORS_TREE).toNat = 3 := by decide
+  have hti : (UInt32.ofNat t).toNat = t := by
+    show t % UInt32.size = t
+    rw [Nat.mod_eq_of_lt (Nat.lt_trans ht (by decide))]
+  rw [hFT, hti]
+  show _ = _ ||| _ ||| _ ||| (0 : UInt32).toNat <<< 32 ||| leafIdx.toNat
+  rw [show (0 : UInt32).toNat = 0 from rfl, Nat.zero_shiftLeft, Nat.or_zero]
+  have hW1 : htIdx.toNat <<< 160 % W = htIdx.toNat <<< 160 :=
+    Nat.mod_eq_of_lt (shl_lt_two_pow_256 _ 64 160 htIdx.toNat_lt (by omega))
+  have hW2 : (3 : Nat) <<< 128 % W = 3 <<< 128 :=
+    Nat.mod_eq_of_lt (shl_lt_two_pow_256 _ 2 128 (by decide) (by omega))
+  have hW3 : t <<< 96 % W = t <<< 96 :=
+    Nat.mod_eq_of_lt (shl_lt_two_pow_256 _ 12 96 (Nat.lt_trans ht (by decide)) (by omega))
+  rw [hW1, hW2, hW3]
+  simp only [Nat.or_assoc]
+
 end SphincsCVerify.Interpreter.C10
