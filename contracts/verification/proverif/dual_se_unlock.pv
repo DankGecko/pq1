@@ -1,0 +1,149 @@
+(* ===========================================================================
+   PQ-Signer — dual-SE seed-unlock protocol, symbolic model (ProVerif)
+   ===========================================================================
+
+   Models the seed-reconstruction unlock (threat-model.md §6.1 / §6.2):
+
+     S-world presents the user PIN to OPTIGA and SE050 over their respective
+     encrypted tunnels (OPTIGA Shielded Connection / SE050 SCP03); each SE
+     releases its entropy half ONLY after a silicon PIN check; S-world then
+     reconstructs  seed = reconstruct(half_O, half_E).
+
+   This is a SECRECY / AUTHENTICATION model in the symbolic (Dolev-Yao) model.
+   It is queried in LAYERS, each mapped to a threat-model S-tier and Claim, so
+   each RESULT reads back as a formalized Claim rather than a generic lemma.
+
+   ---------------------------------------------------------------------------
+   ABSTRACTIONS (stated, not discovered — see scope note at end):
+   * `reconstruct` (the BIP-39 XOR combine) is a FREE binary constructor with
+     NO equational theory. Faithful for secrecy-of-seed (the seed needs BOTH
+     halves); it deliberately CANNOT express XOR-malleability / bit-flip — that
+     surface is the FI track's job (F-28/F-29 R-MAC tamper).
+   * Each tunnel is authenticated symmetric encryption (`senc`/`sdec`) with a
+     distinct per-channel key. The TLS-PRF/CCM-8 vs CMAC/CBC key-ESTABLISHMENT
+     handshakes are NOT modelled here (a separate, later model).
+   * The PIN gate is a control SEPARATE from the tunnel crypto: an SE releases
+     its half only on a correct-PIN message, so holding a channel key does NOT
+     grant read access (this is what makes the Claim-2 query non-vacuous).
+   * Perfect symbolic crypto => this model structurally cannot cover Claim 7's
+     quantum-harvest residual, and ProVerif is the wrong tool for the "<= 10
+     attempts" counting bound (Tamarin/GSVerif territory) — both out of frame.
+   =========================================================================== *)
+
+type key.
+
+(* --- tunnels: authenticated symmetric encryption --- *)
+fun senc(bitstring, key): bitstring.
+reduc forall m: bitstring, k: key; sdec(senc(m, k), k) = m.
+
+(* --- the dual-SE combine: public, no equational theory --- *)
+fun reconstruct(bitstring, bitstring): bitstring.
+
+free bus: channel.   (* the I2C buses — fully under attacker control *)
+
+(* events for the PIN-gate authentication correspondence *)
+event PresentedPinO(bitstring).
+event ReleasedHalfO(bitstring, bitstring).
+event PresentedPinE(bitstring).
+event ReleasedHalfE(bitstring, bitstring).
+
+(* ---------------------------------------------------------------------------
+   Protocol legs (parameterised so every scenario reuses the SAME protocol).
+   --------------------------------------------------------------------------- *)
+
+(* OPTIGA: decrypt the inbound tunnel msg; release enc(half_O) iff it is the
+   correct PIN. The silicon gate is the `if p = realpin` — orthogonal to `ko`. *)
+let optiga(ho: bitstring, ko: key, realpin: bitstring) =
+    in(bus, c1: bitstring);
+    let p = sdec(c1, ko) in
+    if p = realpin then
+    (
+        event ReleasedHalfO(ho, realpin);
+        out(bus, senc(ho, ko))
+    ).
+
+let se050(he: bitstring, ke: key, realpin: bitstring) =
+    in(bus, c2: bitstring);
+    let p = sdec(c2, ke) in
+    if p = realpin then
+    (
+        event ReleasedHalfE(he, realpin);
+        out(bus, senc(he, ke))
+    ).
+
+(* S-world: present the PIN over each tunnel, collect both halves, reconstruct. *)
+let sworld(ho: bitstring, he: bitstring, ko: key, ke: key, realpin: bitstring) =
+    event PresentedPinO(realpin);
+    out(bus, senc(realpin, ko));
+    event PresentedPinE(realpin);
+    out(bus, senc(realpin, ke));
+    in(bus, r1: bitstring);
+    in(bus, r2: bitstring);
+    let hoR = sdec(r1, ko) in
+    let heR = sdec(r2, ke) in
+    let seed = reconstruct(hoR, heR) in
+    0.
+
+(* ===========================================================================
+   SCENARIO 0 — BASELINE (warm-up: proves the model is not broken)
+   Attacker: Dolev-Yao on the bus only. A legitimate unlock runs.
+   Expect: seed SECRET (the tunnels protect PIN + halves).
+   =========================================================================== *)
+free hoB, heB: bitstring [private].
+free pinB:     bitstring [private].
+free koB, keB: key       [private].
+query attacker(reconstruct(hoB, heB)).
+let scenarioBaseline =
+    ( optiga(hoB, koB, pinB) | se050(heB, keB, pinB) | sworld(hoB, heB, koB, keB, pinB) ).
+
+(* ===========================================================================
+   SCENARIO 1 — CLAIM 1 (dual residency): ONE chip's half extracted (one S4).
+   Attacker additionally holds half_O (decap of OPTIGA). Legitimate unlock runs.
+   Expect: seed SECRET (still needs half_E, which stays behind its tunnel+gate).
+   =========================================================================== *)
+free ho1, he1: bitstring [private].
+free pin1:     bitstring [private].
+free ko1, ke1: key       [private].
+query attacker(reconstruct(ho1, he1)).
+let scenarioClaim1 =
+    ( optiga(ho1, ko1, pin1) | se050(he1, ke1, pin1) | sworld(ho1, he1, ko1, ke1, pin1)
+    | out(bus, ho1) ).   (* leak one half: a single decapped chip *)
+
+(* ===========================================================================
+   SCENARIO 2 — CLAIM 2 (channel access != read access): the DHUK/PBS leak.
+   Attacker holds BOTH channel keys (S2) but NOT the PIN, and is alone with the
+   chips (no legitimate session to capture). Expect: seed SECRET — the silicon
+   PIN gate blocks the read even though the attacker can talk on the tunnels.
+   =========================================================================== *)
+free ho2, he2: bitstring [private].
+free pin2:     bitstring [private].
+free ko2, ke2: key       [private].
+query attacker(reconstruct(ho2, he2)).
+let scenarioClaim2 =
+    ( optiga(ho2, ko2, pin2) | se050(he2, ke2, pin2)
+    | out(bus, ko2) | out(bus, ke2) ).   (* leak both channel keys; NO sworld, NO pin *)
+
+(* ===========================================================================
+   POSITIVE CONTROL — both halves extracted (two S4).  This MUST fail to be
+   secret: if ProVerif still reports the seed secret here, the model is
+   over-abstracted and every PASS above is meaningless.
+   Expect: seed NOT secret (attacker reconstructs it).
+   =========================================================================== *)
+free hoP, heP: bitstring [private].
+query attacker(reconstruct(hoP, heP)).
+let scenarioPositiveControl =
+    ( out(bus, hoP) | out(bus, heP) ).   (* both halves leaked => seed derivable *)
+
+(* ===========================================================================
+   AUTHENTICATION — the PIN gate: no half is released without a correct PIN
+   having been presented first (formalises "every PIN attack is online — there
+   is no offline ciphertext/hash to grind", §6.2). Proven on the baseline legs.
+   =========================================================================== *)
+query h: bitstring, p: bitstring; event(ReleasedHalfO(h, p)) ==> event(PresentedPinO(p)).
+query h: bitstring, p: bitstring; event(ReleasedHalfE(h, p)) ==> event(PresentedPinE(p)).
+
+process
+    ( scenarioBaseline
+    | scenarioClaim1
+    | scenarioClaim2
+    | scenarioPositiveControl )

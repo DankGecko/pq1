@@ -3526,3 +3526,11 @@ miri:
 	@# permissive-provenance: the NS-ptr boundary is a legitimate int->ptr cast.
 	MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-permissive-provenance" cargo +nightly miri test -p sphincs-tz-secure --no-default-features --features mock-se,debug-log,ui-semihosting ns_ptr ptr_validate
 	@echo "==> miri: PASS"
+
+# Symbolic-model (ProVerif, Dolev-Yao) proof of the dual-SE seed-unlock protocol:
+# seed secrecy under partial compromise (Claims 1/2) + the PIN-gate authentication
+# + the anti-vacuity positive control. See contracts/verification/proverif/README.md.
+.PHONY: proverif
+proverif:
+	@command -v proverif >/dev/null 2>&1 || { echo "ERROR: proverif not found. Install: opam install --assume-depexts proverif (CLI build needs no GTK)"; exit 1; }
+	proverif contracts/verification/proverif/dual_se_unlock.pv
