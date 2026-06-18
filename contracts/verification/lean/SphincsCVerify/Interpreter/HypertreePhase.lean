@@ -18,6 +18,7 @@ runs `SubtreeH = 9` levels. So `htStep`/`verifyAuthPath_eq_foldl` mirror
 -/
 
 import SphincsCVerify.Interpreter.Phases
+import SphincsCVerify.Interpreter.EnvFrame
 
 namespace SphincsCVerify.Interpreter.C10
 
@@ -356,6 +357,8 @@ identity (mirrors `if bad then pure ()`). -/
 -- they do not reach here — `verifyAuthPath_eq_foldl` only survived above because
 -- its body has no `pkFromSig`). Stays in force for `ht_layer`/`verifyHypertree_refine` too.
 attribute [local irreducible] Spec.Wots.pkFromSig Spec.Hypertree.verifyAuthPath
+  Spec.wotsDigest Spec.chainHash SphincsCVerify.Util.digitSum SphincsCVerify.Util.extractDigits
+  Spec.Adrs.wots Spec.Adrs.treeNode
 
 /-- **Pointwise `forIn → foldl` bridge.** Like `List.forIn_pure_yield_eq_foldl`, but the
     body need only *equal* `pure ∘ yield ∘ f` pointwise (`h`) rather than be syntactically
@@ -412,5 +415,516 @@ theorem verifyHypertree_eq_foldl
           (layers.getD layer Spec.Hypertree.defaultLayerSig).wots with
       | none => rfl
       | some wotsPk => rw [hr]
+
+/-! ### One hypertree layer — `ht_layer_step`
+
+`execList htLayerBody` over a VM holding a layer's entry state refines one `vhStep`:
+the WOTS+C digit-sum gate failing makes the layer revert (↔ `pkFromSig = none` ↔
+`vhStep` sets `bad`); otherwise it yields `currentNode = wordOf(pad16(verifyAuthPath
+… wotsPk …))`, `idxTree >>>= SubtreeH`, `sigOff += 836`. Composes `wots_pkfromsig`
+(WOTS fragment) and `ht_climb` (XMSS Merkle climb) across the `setup ++ wotsBody ++
+setup2 ++ [Merkle] ++ finalize` split. The sig-byte relationships (`hsig`, `hcount`,
+`H_sib`) and the treeNode ADRS layout (`H_adrs`) thread to the sub-lemmas; the grand
+composition discharges them from `deserialise`. -/
+theorem ht_layer_step
+    (sig : ByteVec Spec.SignatureLen) (vm : VM)
+    (seed : ByteVec 32) (layer : UInt32) (idxTreeIn : Nat) (cnode : ByteVec 16)
+    (sigOffIn : Nat) (sigma : Spec.Wots.Sigma) (authPath : Array (ByteVec 16))
+    (hwp : sigOffIn < 4096)
+    (hidxbnd : idxTreeIn < 2 ^ 64)   -- htIdx is a u64; needed so `idxTreeIn >>> 9 < 2^64`
+                                     -- (the `tree`-field round-trip in `H_adrs` / `wordOf_treeNode`)
+    (hpathSize : authPath.size = Spec.SubtreeH)
+    -- entry env
+    (hlayer : vm.env "layer" = layer.toNat)
+    (hidxTree : vm.env "idxTree" = idxTreeIn)
+    (hsigoff : vm.env "sigOff" = sigOffIn)
+    (hcn : vm.env "currentNode" = wordOf (ByteVec.pad16 cnode))
+    (hseedw : vm.env "seed" = wordOf seed)
+    (hsigbase : vm.env "sigBase" = 0)
+    (hN : vm.env "N_MASK" = NMASK)
+    (hOUT : vm.env "OUT" = 0x600)
+    (hseedmem : ∀ i, i < 32 → vm.mem (0 + i) = seed.data.getD i 0)
+    -- the layer's WOTS sig + auth-path bytes (forwarded to the sub-lemmas)
+    (hsig : ∀ i (h : i < sigma.chains.size),
+        sigma.chains[i] = ByteVec.loadValue16 sig (sigOffIn + 16 * i))
+    (hcount : calldataload sig (sigOffIn + 688) >>> 224
+        = wordOf (ByteVec.u32ToB32 sigma.count))
+    -- the treeNode ADRS layout for the Merkle climb's `tBase`
+    (H_adrs : ∀ h, h < Spec.SubtreeH → ∀ p, p < 2 ^ 32 →
+        ((layer.toNat <<< 224 ||| (idxTreeIn >>> 9) <<< 160 ||| 2 <<< 128)
+            &&& 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF0000000000000000)
+          ||| (((h + 1) % W) <<< 32 % W ||| p >>> 1)
+        = wordOf (Spec.Adrs.treeNode layer (UInt64.ofNat (idxTreeIn >>> 9))
+            (UInt32.ofNat (h + 1)) (UInt32.ofNat (p / 2))))
+    (H_sib : ∀ h, h < Spec.SubtreeH →
+        calldataload sig (((sigOffIn + 692) + h <<< 4 % W) % W) &&& NMASK
+        = wordOf (ByteVec.pad16 (authPath.getD h (ByteVec.zero 16)))) :
+    (if SphincsCVerify.Util.digitSum (SphincsCVerify.Util.extractDigits
+          (Spec.wotsDigest seed (Spec.Adrs.wots layer (UInt64.ofNat (idxTreeIn >>> 9))
+            (UInt32.ofNat (idxTreeIn &&& 0x1FF))) (ByteVec.pad16 cnode) sigma.count))
+          ≠ Spec.TargetSum then
+        (execList c10Oracle sig htLayerBody vm).2 = some Halt.reverted
+      else
+        (execList c10Oracle sig htLayerBody vm).2 = none
+        ∧ ∃ wotsPk, Spec.Wots.pkFromSig seed layer (UInt64.ofNat (idxTreeIn >>> 9))
+              (UInt32.ofNat (idxTreeIn &&& 0x1FF)) cnode sigma = some wotsPk
+          ∧ (execList c10Oracle sig htLayerBody vm).1.env "currentNode"
+              = wordOf (ByteVec.pad16 (Spec.Hypertree.verifyAuthPath seed layer
+                  (UInt64.ofNat (idxTreeIn >>> 9)) wotsPk (idxTreeIn &&& 0x1FF) authPath))
+          ∧ (execList c10Oracle sig htLayerBody vm).1.env "idxTree" = idxTreeIn >>> 9
+          ∧ (execList c10Oracle sig htLayerBody vm).1.env "sigOff" = sigOffIn + 836
+          ∧ (execList c10Oracle sig htLayerBody vm).1.env "seed" = wordOf seed
+          ∧ (execList c10Oracle sig htLayerBody vm).1.env "sigBase" = 0
+          ∧ (execList c10Oracle sig htLayerBody vm).1.env "N_MASK" = NMASK
+          ∧ (execList c10Oracle sig htLayerBody vm).1.env "OUT" = 0x600
+          ∧ (∀ i, i < 32 → (execList c10Oracle sig htLayerBody vm).1.mem (0 + i)
+              = seed.data.getD i 0)) := by
+  -- PROOF PLAN (mathlib-free → no `set`; mirror `fors_phase_zero` 3099+):
+  --   by_cases hgate on the digit-sum gate (so each branch fixes it), then in each branch
+  --   step the layer body in the MAIN flow via `execList_cons_none`/`execList_append`
+  --   (`obtain ⟨vK, hvK⟩ : ∃ vK, (execStmt … sK …).1 = vK := ⟨_, rfl⟩; rw [hvK]`), discharging
+  --   each `vK.env` fact by `rw [← hvK]; simp only [execStmt, eval, setVar, String.reduceEq,
+  --   ite_false]; exact …`. setup(5) → establish `wots_pkfromsig`'s 15 preconds (wotsAdrs via
+  --   `wordOf_wots` + `%W` identity via `Nat.mod_eq_of_lt`; count via `hcount`); apply
+  --   `wots_pkfromsig`; gate-fail → `execList_append` short-circuits to `some reverted`; gate-pass
+  --   → setup2(5) → `ht_climb` (forward `H_adrs`/`H_sib`; needs de-privatized
+  --   `shl_lt_two_pow_256`/`lt_W_of_lt` only at `verifyHypertree_refine`'s discharge, not here)
+  --   → finalize(2). Verify chunks with `lean_diagnostic_messages severity error` (the conclusion
+  --   inlines `execList … htLayerBody vm` ~10×, so `lean_goal` dumps are huge — avoid).
+  by_cases hgate : SphincsCVerify.Util.digitSum (SphincsCVerify.Util.extractDigits
+        (Spec.wotsDigest seed (Spec.Adrs.wots layer (UInt64.ofNat (idxTreeIn >>> 9))
+          (UInt32.ofNat (idxTreeIn &&& 0x1FF))) (ByteVec.pad16 cnode) sigma.count))
+        ≠ Spec.TargetSum
+  · rw [if_pos hgate]
+    rw [htLayerBody]
+    simp only [List.cons_append, List.nil_append, List.append_assoc]
+    -- s1: idxLeaf := idxTree &&& 0x1FF
+    rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+    obtain ⟨v1, hv1⟩ : ∃ v1, (execStmt c10Oracle sig
+        (.letv "idxLeaf" (.bin .band (.var "idxTree") (.lit 0x1FF))) vm).1 = v1 := ⟨_, rfl⟩
+    rw [hv1]
+    -- s2: idxTree := idxTree >>> 9
+    rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+    obtain ⟨v2, hv2⟩ : ∃ v2, (execStmt c10Oracle sig
+        (.setv "idxTree" (.bin .shr (.lit 9) (.var "idxTree"))) v1).1 = v2 := ⟨_, rfl⟩
+    rw [hv2]
+    -- s3: wotsAdrs
+    rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+    obtain ⟨v3, hv3⟩ : ∃ v3, (execStmt c10Oracle sig
+        (.letv "wotsAdrs" (.bin .bor (.bin .shl (.lit 224) (.var "layer"))
+          (.bin .bor (.bin .shl (.lit 160) (.var "idxTree")) (.bin .shl (.lit 96) (.var "idxLeaf"))))) v2).1
+        = v3 := ⟨_, rfl⟩
+    rw [hv3]
+    -- s4: countOff := sigOff + 688
+    rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+    obtain ⟨v4, hv4⟩ : ∃ v4, (execStmt c10Oracle sig
+        (.letv "countOff" (.bin .add (.var "sigOff") (.lit 688))) v3).1 = v4 := ⟨_, rfl⟩
+    rw [hv4]
+    -- s5: count := shr 224 (calldataload (sigBase + countOff))
+    rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+    obtain ⟨v5, hv5⟩ : ∃ v5, (execStmt c10Oracle sig
+        (.letv "count" (.bin .shr (.lit 224)
+          (.calldataload (.bin .add (.var "sigBase") (.var "countOff"))))) v4).1 = v5 := ⟨_, rfl⟩
+    rw [hv5]
+    rw [execList_append]
+    -- v5 env facts (propagated unchanged through the 5 setup setVars)
+    have hv5seed : v5.env "seed" = wordOf seed := by
+      rw [← hv5, ← hv4, ← hv3, ← hv2, ← hv1]
+      simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hseedw
+    have hv5sb : v5.env "sigBase" = 0 := by
+      rw [← hv5, ← hv4, ← hv3, ← hv2, ← hv1]
+      simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hsigbase
+    have hv5so : v5.env "sigOff" = sigOffIn := by
+      rw [← hv5, ← hv4, ← hv3, ← hv2, ← hv1]
+      simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hsigoff
+    have hv5layer : v5.env "layer" = layer.toNat := by
+      rw [← hv5, ← hv4, ← hv3, ← hv2, ← hv1]
+      simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hlayer
+    have hv5N : v5.env "N_MASK" = NMASK := by
+      rw [← hv5, ← hv4, ← hv3, ← hv2, ← hv1]
+      simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hN
+    have hv5OUT : v5.env "OUT" = 0x600 := by
+      rw [← hv5, ← hv4, ← hv3, ← hv2, ← hv1]
+      simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hOUT
+    have hv5cn : v5.env "currentNode" = wordOf (ByteVec.pad16 cnode) := by
+      rw [← hv5, ← hv4, ← hv3, ← hv2, ← hv1]
+      simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hcn
+    have hv5mem : ∀ i, i < 32 → v5.mem (0 + i) = seed.data.getD i 0 := by
+      intro i hi; rw [← hv5, ← hv4, ← hv3, ← hv2, ← hv1]
+      simp only [execStmt, eval]; exact hseedmem i hi
+    -- computed: idxLeaf = idxTree &&& 0x1FF, idxTree updated to idxTree >>> 9 (round-trips)
+    have hv5idxLeaf : v5.env "idxLeaf" = (UInt32.ofNat (idxTreeIn &&& 0x1FF)).toNat := by
+      rw [← hv5, ← hv4, ← hv3, ← hv2, ← hv1]
+      simp only [execStmt, eval, setVar, String.reduceEq, ite_false, if_true]
+      rw [hidxTree, UInt32.toNat_ofNat_of_lt' (Nat.lt_of_le_of_lt Nat.and_le_right (by decide))]
+    have hv5idxTree : v5.env "idxTree" = (UInt64.ofNat (idxTreeIn >>> 9)).toNat := by
+      rw [← hv5, ← hv4, ← hv3, ← hv2, ← hv1]
+      simp only [execStmt, eval, setVar, String.reduceEq, ite_false, if_true]
+      rw [hidxTree, UInt64.toNat_ofNat_of_lt'
+        (by rw [Nat.shiftRight_eq_div_pow]; exact Nat.lt_of_le_of_lt (Nat.div_le_self _ _) hidxbnd)]
+    -- count = shr 224 (calldataload (sigBase + countOff)); the double %W collapses (sigOff+688 < W)
+    have hv5count : v5.env "count" = wordOf (ByteVec.u32ToB32 sigma.count) := by
+      rw [← hv5, ← hv4, ← hv3, ← hv2, ← hv1]
+      simp only [execStmt, eval, setVar, String.reduceEq, ite_false, if_true]
+      rw [hsigbase, hsigoff, Nat.zero_add, Nat.mod_mod]
+      have hb : sigOffIn + 688 < W := by
+        show sigOffIn + 688 < 2 ^ 256
+        exact Nat.lt_of_lt_of_le (show sigOffIn + 688 < 2 ^ 13 by omega)
+          (Nat.pow_le_pow_right (by decide) (by decide))
+      rw [Nat.mod_eq_of_lt hb]
+      exact hcount
+    -- wotsAdrs = layer<<<224 | idxTree<<<160 | idxLeaf<<<96  (= wordOf (Adrs.wots …), ADRS_WOTS=0)
+    have hv5wa : v5.env "wotsAdrs"
+        = wordOf (Spec.Adrs.wots layer (UInt64.ofNat (idxTreeIn >>> 9))
+            (UInt32.ofNat (idxTreeIn &&& 0x1FF))) := by
+      rw [← hv5, ← hv4, ← hv3, ← hv2, ← hv1]
+      simp only [execStmt, eval, setVar, String.reduceEq, ite_false, if_true]
+      -- %W drops stated as `% W` haves (defeq to `% 2^256`) so `rw` matches the goal's `W`
+      have hwL : layer.toNat <<< 224 % W = layer.toNat <<< 224 :=
+        Nat.mod_eq_of_lt (shl_lt_two_pow_256 layer.toNat 32 224 layer.toNat_lt (by decide))
+      have hidx9 : idxTreeIn >>> 9 < 2 ^ 64 := by
+        rw [Nat.shiftRight_eq_div_pow]; exact Nat.lt_of_le_of_lt (Nat.div_le_self _ _) hidxbnd
+      have hwT : (idxTreeIn >>> 9) <<< 160 % W = (idxTreeIn >>> 9) <<< 160 :=
+        Nat.mod_eq_of_lt (shl_lt_two_pow_256 (idxTreeIn >>> 9) 64 160 hidx9 (by decide))
+      have hand : idxTreeIn &&& 0x1FF < 2 ^ 9 := Nat.lt_of_le_of_lt Nat.and_le_right (by decide)
+      have hwLf : (idxTreeIn &&& 0x1FF) <<< 96 % W = (idxTreeIn &&& 0x1FF) <<< 96 :=
+        Nat.mod_eq_of_lt (shl_lt_two_pow_256 (idxTreeIn &&& 0x1FF) 9 96 hand (by decide))
+      rw [hlayer, hidxTree, wordOf_wots, hwL, hwT, hwLf,
+        UInt64.toNat_ofNat_of_lt' hidx9,
+        UInt32.toNat_ofNat_of_lt' (Nat.lt_of_le_of_lt Nat.and_le_right (by decide)),
+        (by decide : (UInt32.ofNat Spec.ADRS_WOTS).toNat = 0),
+        Nat.zero_shiftLeft, Nat.or_zero, Nat.or_assoc]
+    -- apply wots_pkfromsig; gate-fail → wotsBody reverts → execList_append short-circuits
+    have hw := wots_pkfromsig sig v5 seed layer (UInt64.ofNat (idxTreeIn >>> 9))
+      (UInt32.ofNat (idxTreeIn &&& 0x1FF)) cnode sigma sigOffIn hwp hsig
+      hv5seed hv5wa hv5cn hv5count hv5sb hv5so hv5layer hv5idxTree hv5idxLeaf hv5N hv5OUT
+    rw [if_pos hgate] at hw
+    cases hwex : execList c10Oracle sig wotsBody v5 with
+    | mk w' o => rw [hwex] at hw; simp only at hw; subst hw; rfl
+  · rw [if_neg hgate]
+    rw [htLayerBody]
+    simp only [List.cons_append, List.nil_append, List.append_assoc]
+    rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+    obtain ⟨v1, hv1⟩ : ∃ v1, (execStmt c10Oracle sig
+        (.letv "idxLeaf" (.bin .band (.var "idxTree") (.lit 0x1FF))) vm).1 = v1 := ⟨_, rfl⟩
+    rw [hv1]
+    rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+    obtain ⟨v2, hv2⟩ : ∃ v2, (execStmt c10Oracle sig
+        (.setv "idxTree" (.bin .shr (.lit 9) (.var "idxTree"))) v1).1 = v2 := ⟨_, rfl⟩
+    rw [hv2]
+    rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+    obtain ⟨v3, hv3⟩ : ∃ v3, (execStmt c10Oracle sig
+        (.letv "wotsAdrs" (.bin .bor (.bin .shl (.lit 224) (.var "layer"))
+          (.bin .bor (.bin .shl (.lit 160) (.var "idxTree")) (.bin .shl (.lit 96) (.var "idxLeaf"))))) v2).1
+        = v3 := ⟨_, rfl⟩
+    rw [hv3]
+    rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+    obtain ⟨v4, hv4⟩ : ∃ v4, (execStmt c10Oracle sig
+        (.letv "countOff" (.bin .add (.var "sigOff") (.lit 688))) v3).1 = v4 := ⟨_, rfl⟩
+    rw [hv4]
+    rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+    obtain ⟨v5, hv5⟩ : ∃ v5, (execStmt c10Oracle sig
+        (.letv "count" (.bin .shr (.lit 224)
+          (.calldataload (.bin .add (.var "sigBase") (.var "countOff"))))) v4).1 = v5 := ⟨_, rfl⟩
+    rw [hv5]
+    rw [execList_append]
+    have hv5seed : v5.env "seed" = wordOf seed := by
+      rw [← hv5, ← hv4, ← hv3, ← hv2, ← hv1]
+      simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hseedw
+    have hv5sb : v5.env "sigBase" = 0 := by
+      rw [← hv5, ← hv4, ← hv3, ← hv2, ← hv1]
+      simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hsigbase
+    have hv5so : v5.env "sigOff" = sigOffIn := by
+      rw [← hv5, ← hv4, ← hv3, ← hv2, ← hv1]
+      simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hsigoff
+    have hv5layer : v5.env "layer" = layer.toNat := by
+      rw [← hv5, ← hv4, ← hv3, ← hv2, ← hv1]
+      simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hlayer
+    have hv5N : v5.env "N_MASK" = NMASK := by
+      rw [← hv5, ← hv4, ← hv3, ← hv2, ← hv1]
+      simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hN
+    have hv5OUT : v5.env "OUT" = 0x600 := by
+      rw [← hv5, ← hv4, ← hv3, ← hv2, ← hv1]
+      simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hOUT
+    have hv5cn : v5.env "currentNode" = wordOf (ByteVec.pad16 cnode) := by
+      rw [← hv5, ← hv4, ← hv3, ← hv2, ← hv1]
+      simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hcn
+    have hv5mem : ∀ i, i < 32 → v5.mem (0 + i) = seed.data.getD i 0 := by
+      intro i hi; rw [← hv5, ← hv4, ← hv3, ← hv2, ← hv1]
+      simp only [execStmt, eval]; exact hseedmem i hi
+    have hv5idxLeaf : v5.env "idxLeaf" = (UInt32.ofNat (idxTreeIn &&& 0x1FF)).toNat := by
+      rw [← hv5, ← hv4, ← hv3, ← hv2, ← hv1]
+      simp only [execStmt, eval, setVar, String.reduceEq, ite_false, if_true]
+      rw [hidxTree, UInt32.toNat_ofNat_of_lt' (Nat.lt_of_le_of_lt Nat.and_le_right (by decide))]
+    have hv5idxTree : v5.env "idxTree" = (UInt64.ofNat (idxTreeIn >>> 9)).toNat := by
+      rw [← hv5, ← hv4, ← hv3, ← hv2, ← hv1]
+      simp only [execStmt, eval, setVar, String.reduceEq, ite_false, if_true]
+      rw [hidxTree, UInt64.toNat_ofNat_of_lt'
+        (by rw [Nat.shiftRight_eq_div_pow]; exact Nat.lt_of_le_of_lt (Nat.div_le_self _ _) hidxbnd)]
+    have hv5count : v5.env "count" = wordOf (ByteVec.u32ToB32 sigma.count) := by
+      rw [← hv5, ← hv4, ← hv3, ← hv2, ← hv1]
+      simp only [execStmt, eval, setVar, String.reduceEq, ite_false, if_true]
+      rw [hsigbase, hsigoff, Nat.zero_add, Nat.mod_mod]
+      have hb : sigOffIn + 688 < W := by
+        show sigOffIn + 688 < 2 ^ 256
+        exact Nat.lt_of_lt_of_le (show sigOffIn + 688 < 2 ^ 13 by omega)
+          (Nat.pow_le_pow_right (by decide) (by decide))
+      rw [Nat.mod_eq_of_lt hb]
+      exact hcount
+    have hv5wa : v5.env "wotsAdrs"
+        = wordOf (Spec.Adrs.wots layer (UInt64.ofNat (idxTreeIn >>> 9))
+            (UInt32.ofNat (idxTreeIn &&& 0x1FF))) := by
+      rw [← hv5, ← hv4, ← hv3, ← hv2, ← hv1]
+      simp only [execStmt, eval, setVar, String.reduceEq, ite_false, if_true]
+      have hwL : layer.toNat <<< 224 % W = layer.toNat <<< 224 :=
+        Nat.mod_eq_of_lt (shl_lt_two_pow_256 layer.toNat 32 224 layer.toNat_lt (by decide))
+      have hidx9 : idxTreeIn >>> 9 < 2 ^ 64 := by
+        rw [Nat.shiftRight_eq_div_pow]; exact Nat.lt_of_le_of_lt (Nat.div_le_self _ _) hidxbnd
+      have hwT : (idxTreeIn >>> 9) <<< 160 % W = (idxTreeIn >>> 9) <<< 160 :=
+        Nat.mod_eq_of_lt (shl_lt_two_pow_256 (idxTreeIn >>> 9) 64 160 hidx9 (by decide))
+      have hand : idxTreeIn &&& 0x1FF < 2 ^ 9 := Nat.lt_of_le_of_lt Nat.and_le_right (by decide)
+      have hwLf : (idxTreeIn &&& 0x1FF) <<< 96 % W = (idxTreeIn &&& 0x1FF) <<< 96 :=
+        Nat.mod_eq_of_lt (shl_lt_two_pow_256 (idxTreeIn &&& 0x1FF) 9 96 hand (by decide))
+      rw [hlayer, hidxTree, wordOf_wots, hwL, hwT, hwLf,
+        UInt64.toNat_ofNat_of_lt' hidx9,
+        UInt32.toNat_ofNat_of_lt' (Nat.lt_of_le_of_lt Nat.and_le_right (by decide)),
+        (by decide : (UInt32.ofNat Spec.ADRS_WOTS).toNat = 0),
+        Nat.zero_shiftLeft, Nat.or_zero, Nat.or_assoc]
+    -- countOff = sigOff + 688 (bound at s4, preserved through s5; %W collapses)
+    have hv5countOff : v5.env "countOff" = sigOffIn + 688 := by
+      rw [← hv5, ← hv4]
+      simp only [execStmt, eval, setVar, String.reduceEq, ite_false, if_true]
+      rw [← hv3, ← hv2, ← hv1]
+      simp only [execStmt, eval, setVar, String.reduceEq, ite_false]
+      rw [hsigoff]
+      exact Nat.mod_eq_of_lt (show sigOffIn + 688 < 2 ^ 256 from
+        Nat.lt_of_lt_of_le (show sigOffIn + 688 < 2 ^ 13 by omega)
+          (Nat.pow_le_pow_right (by decide) (by decide)))
+    have hw := wots_pkfromsig sig v5 seed layer (UInt64.ofNat (idxTreeIn >>> 9))
+      (UInt32.ofNat (idxTreeIn &&& 0x1FF)) cnode sigma sigOffIn hwp hsig
+      hv5seed hv5wa hv5cn hv5count hv5sb hv5so hv5layer hv5idxTree hv5idxLeaf hv5N hv5OUT
+    rw [if_neg hgate] at hw
+    obtain ⟨hwnone, wpk, hpk, hwpk⟩ := hw
+    -- hwnone : (execList wotsBody v5).2 = none ; hwpk : (execList wotsBody v5).1.env "wotsPk" = wordOf (pad16 wpk)
+    -- resolve the wots match: execList wotsBody v5 = (v6, none) → match → execList (setup2++merkle++finalize) v6
+    cases hwe : execList c10Oracle sig wotsBody v5 with
+    | mk v6 o =>
+      rw [hwe] at hwnone hwpk
+      simp only at hwnone hwpk
+      subst hwnone
+      simp only [hwe]
+      -- v6 = (execList wotsBody v5).1.  The WOTS loops touch only d/digitSum/ii/wotsPtr/i/chain
+      -- scratch/pkAdrs/wotsPk — NOT idxLeaf/layer/idxTree/sigBase/countOff/sigOff/N_MASK/OUT/seed —
+      -- so the generic env-frame (`execList_env_frame`, `assignsVarList wotsBody x = false` by decide)
+      -- carries every entry var through.  Only the scratch window [0,0x20) (which `wotsBody` re-lays
+      -- = seed) needs the dedicated `wotsBody_seed_mem` (Phases) — stubbed here, landed next.
+      have hv6e : (execList c10Oracle sig wotsBody v5).1 = v6 := by rw [hwe]
+      have hframe : ∀ x, assignsVarList wotsBody x = false → v6.env x = v5.env x := fun x hx => by
+        rw [← hv6e]; exact execList_env_frame c10Oracle sig wotsBody x v5 hx
+      have hv6layer : v6.env "layer" = layer.toNat := by rw [hframe "layer" (by decide)]; exact hv5layer
+      have hv6idxTree : v6.env "idxTree" = (UInt64.ofNat (idxTreeIn >>> 9)).toNat := by
+        rw [hframe "idxTree" (by decide)]; exact hv5idxTree
+      have hv6idxLeaf : v6.env "idxLeaf" = (UInt32.ofNat (idxTreeIn &&& 0x1FF)).toNat := by
+        rw [hframe "idxLeaf" (by decide)]; exact hv5idxLeaf
+      have hv6sb : v6.env "sigBase" = 0 := by rw [hframe "sigBase" (by decide)]; exact hv5sb
+      have hv6countOff : v6.env "countOff" = sigOffIn + 688 := by
+        rw [hframe "countOff" (by decide)]; exact hv5countOff
+      have hv6N : v6.env "N_MASK" = NMASK := by rw [hframe "N_MASK" (by decide)]; exact hv5N
+      have hv6OUT : v6.env "OUT" = 0x600 := by rw [hframe "OUT" (by decide)]; exact hv5OUT
+      have hv6seed : v6.env "seed" = wordOf seed := by rw [hframe "seed" (by decide)]; exact hv5seed
+      -- seed-mem preserved by `wotsBody` (`wotsBody_seed_mem`, Phases): the digit hash re-lays
+      -- the seed into scratch [0,0x20) and every later WOTS write is at ≥ 0x20.
+      have hv6mem : ∀ i, i < 32 → v6.mem (0 + i) = seed.data.getD i 0 := by
+        intro i hi; rw [← hv6e]; exact wotsBody_seed_mem sig v5 seed hv5seed hv5OUT i hi
+      -- ===== setup2 (5 letvs): authOff, treeAdrs, merkleNode := wotsPk, mIdx := idxLeaf, merklePtr.
+      rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+      obtain ⟨v7, hv7⟩ : ∃ v7, (execStmt c10Oracle sig
+          (.letv "authOff" (.bin .add (.var "countOff") (.lit 4))) v6).1 = v7 := ⟨_, rfl⟩
+      rw [hv7]
+      rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+      obtain ⟨v8, hv8⟩ : ∃ v8, (execStmt c10Oracle sig
+          (.letv "treeAdrs" (.bin .bor (.bin .shl (.lit 224) (.var "layer"))
+            (.bin .bor (.bin .shl (.lit 160) (.var "idxTree")) (.bin .shl (.lit 128) (.lit 2))))) v7).1
+          = v8 := ⟨_, rfl⟩
+      rw [hv8]
+      rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+      obtain ⟨v9, hv9⟩ : ∃ v9, (execStmt c10Oracle sig
+          (.letv "merkleNode" (.var "wotsPk")) v8).1 = v9 := ⟨_, rfl⟩
+      rw [hv9]
+      rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+      obtain ⟨v10, hv10⟩ : ∃ v10, (execStmt c10Oracle sig
+          (.letv "mIdx" (.var "idxLeaf")) v9).1 = v10 := ⟨_, rfl⟩
+      rw [hv10]
+      rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+      obtain ⟨v11, hv11⟩ : ∃ v11, (execStmt c10Oracle sig
+          (.letv "merklePtr" (.bin .add (.var "sigBase") (.var "authOff"))) v10).1 = v11 := ⟨_, rfl⟩
+      rw [hv11]
+      -- %W collapse helpers (idxTreeIn >>> 9 < 2^64 etc.)
+      have hidx9 : idxTreeIn >>> 9 < 2 ^ 64 := by
+        rw [Nat.shiftRight_eq_div_pow]; exact Nat.lt_of_le_of_lt (Nat.div_le_self _ _) hidxbnd
+      have hwL : layer.toNat <<< 224 % W = layer.toNat <<< 224 :=
+        Nat.mod_eq_of_lt (shl_lt_two_pow_256 layer.toNat 32 224 layer.toNat_lt (by decide))
+      have hwT : (idxTreeIn >>> 9) <<< 160 % W = (idxTreeIn >>> 9) <<< 160 :=
+        Nat.mod_eq_of_lt (shl_lt_two_pow_256 (idxTreeIn >>> 9) 64 160 hidx9 (by decide))
+      have hw2 : (2 : Nat) <<< 128 % W = 2 <<< 128 :=
+        Nat.mod_eq_of_lt (shl_lt_two_pow_256 2 2 128 (by decide) (by decide))
+      -- treeAdrs = tBase := layer<<<224 ||| (idxTree>>>9)<<<160 ||| 2<<<128 (bound at v8).
+      have hv8tA : v8.env "treeAdrs"
+          = layer.toNat <<< 224 ||| (idxTreeIn >>> 9) <<< 160 ||| 2 <<< 128 := by
+        rw [← hv8]
+        simp only [execStmt, eval, setVar, String.reduceEq, ite_false, if_true]
+        rw [← hv7]
+        simp only [execStmt, eval, setVar, String.reduceEq, ite_false]
+        rw [hv6layer, hv6idxTree, UInt64.toNat_ofNat_of_lt' hidx9, hwL, hwT, hw2, Nat.or_assoc]
+      -- authOff = sigOff + 692 (bound at v7).
+      have hv7authOff : v7.env "authOff" = sigOffIn + 692 := by
+        rw [← hv7]
+        simp only [execStmt, eval, setVar, String.reduceEq, ite_false, if_true]
+        rw [hv6countOff]
+        exact Nat.mod_eq_of_lt (show sigOffIn + 688 + 4 < 2 ^ 256 from
+          Nat.lt_of_lt_of_le (show sigOffIn + 688 + 4 < 2 ^ 13 by omega)
+            (Nat.pow_le_pow_right (by decide) (by decide)))
+      -- v11-level facts (step back through the 5 setup2 letvs; idxLeaf/mIdx round-trip).
+      have hv11tA : v11.env "treeAdrs"
+          = layer.toNat <<< 224 ||| (idxTreeIn >>> 9) <<< 160 ||| 2 <<< 128 := by
+        rw [← hv11, ← hv10, ← hv9]
+        simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hv8tA
+      have hv11authOff : v11.env "authOff" = sigOffIn + 692 := by
+        rw [← hv11, ← hv10, ← hv9, ← hv8]
+        simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hv7authOff
+      have hv11node : v11.env "merkleNode" = wordOf (ByteVec.pad16 wpk) := by
+        rw [← hv11, ← hv10]
+        simp only [execStmt, eval, setVar, String.reduceEq, ite_false]
+        rw [← hv9]
+        simp only [execStmt, eval, setVar, String.reduceEq, if_true]
+        -- merkleNode := wotsPk ; wotsPk preserved v6 → v8 (authOff/treeAdrs ≠ wotsPk)
+        rw [← hv8, ← hv7]
+        simp only [execStmt, eval, setVar, String.reduceEq, ite_false]
+        exact hwpk
+      have hv11mIdx : v11.env "mIdx" = idxTreeIn &&& 0x1FF := by
+        rw [← hv11]
+        simp only [execStmt, eval, setVar, String.reduceEq, ite_false]
+        rw [← hv10]
+        simp only [execStmt, eval, setVar, String.reduceEq, if_true]
+        rw [← hv9, ← hv8, ← hv7]
+        simp only [execStmt, eval, setVar, String.reduceEq, ite_false]
+        rw [hv6idxLeaf, UInt32.toNat_ofNat_of_lt' (Nat.lt_of_le_of_lt Nat.and_le_right (by decide))]
+      have hv11mptr : v11.env "merklePtr" = sigOffIn + 692 := by
+        rw [← hv11]
+        simp only [execStmt, eval, setVar, String.reduceEq, ite_false, if_true]
+        -- merklePtr := sigBase + authOff ; both at v10
+        rw [show v10.env "sigBase" = 0 from by
+              rw [← hv10, ← hv9, ← hv8, ← hv7]
+              simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hv6sb,
+            show v10.env "authOff" = sigOffIn + 692 from by
+              rw [← hv10, ← hv9, ← hv8]
+              simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hv7authOff]
+        rw [Nat.zero_add]
+        exact Nat.mod_eq_of_lt (show sigOffIn + 692 < 2 ^ 256 from
+          Nat.lt_of_lt_of_le (show sigOffIn + 692 < 2 ^ 13 by omega)
+            (Nat.pow_le_pow_right (by decide) (by decide)))
+      have hv11N : v11.env "N_MASK" = NMASK := by
+        rw [← hv11, ← hv10, ← hv9, ← hv8, ← hv7]
+        simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hv6N
+      have hv11OUT : v11.env "OUT" = 0x600 := by
+        rw [← hv11, ← hv10, ← hv9, ← hv8, ← hv7]
+        simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hv6OUT
+      have hv11layer : v11.env "layer" = layer.toNat := by
+        rw [← hv11, ← hv10, ← hv9, ← hv8, ← hv7]
+        simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hv6layer
+      have hv11idxTree : v11.env "idxTree" = (UInt64.ofNat (idxTreeIn >>> 9)).toNat := by
+        rw [← hv11, ← hv10, ← hv9, ← hv8, ← hv7]
+        simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hv6idxTree
+      have hv11seed : v11.env "seed" = wordOf seed := by
+        rw [← hv11, ← hv10, ← hv9, ← hv8, ← hv7]
+        simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hv6seed
+      have hv11sb : v11.env "sigBase" = 0 := by
+        rw [← hv11, ← hv10, ← hv9, ← hv8, ← hv7]
+        simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hv6sb
+      have hv11mem : ∀ i, i < 32 → v11.mem (0 + i) = seed.data.getD i 0 := by
+        intro i hi
+        rw [← hv11, ← hv10, ← hv9, ← hv8, ← hv7]
+        simp only [execStmt, eval]; exact hv6mem i hi
+      -- ===== the Merkle climb (forRange "h" 9 htClimbBody) via ht_climb.
+      have hmerkleStmt : execStmt c10Oracle sig (.forRange "h" (.lit 9) htClimbBody) v11
+          = execFor c10Oracle sig "h" htClimbBody 9 0 v11 := by simp only [execStmt, eval]
+      obtain ⟨hcl_none, hcl_node, hcl_mem⟩ := ht_climb sig v11 seed layer
+        (UInt64.ofNat (idxTreeIn >>> 9)) wpk (idxTreeIn &&& 0x1FF) authPath
+        (layer.toNat <<< 224 ||| (idxTreeIn >>> 9) <<< 160 ||| 2 <<< 128) (sigOffIn + 692)
+        (Nat.lt_of_le_of_lt Nat.and_le_right (by decide))
+        hv11N hv11OUT hv11tA hv11mptr hv11node hv11mIdx hv11mem H_adrs H_sib
+      rw [execList_cons_none c10Oracle sig _ _ _ (by rw [hmerkleStmt]; exact hcl_none), hmerkleStmt]
+      obtain ⟨v12, hv12⟩ : ∃ v12, (execFor c10Oracle sig "h" htClimbBody 9 0 v11).1 = v12 := ⟨_, rfl⟩
+      rw [hv12]
+      have hv12node : v12.env "merkleNode"
+          = wordOf (ByteVec.pad16 (Spec.Hypertree.verifyAuthPath seed layer
+              (UInt64.ofNat (idxTreeIn >>> 9)) wpk (idxTreeIn &&& 0x1FF) authPath)) := by
+        rw [← hv12]; exact hcl_node
+      have hv12authOff : v12.env "authOff" = sigOffIn + 692 := by
+        rw [← hv12, execFor_env_frame c10Oracle sig "h" htClimbBody "authOff" (by decide) (by decide)
+          9 0 v11]; exact hv11authOff
+      have hv12idxTree : v12.env "idxTree" = (UInt64.ofNat (idxTreeIn >>> 9)).toNat := by
+        rw [← hv12, execFor_env_frame c10Oracle sig "h" htClimbBody "idxTree" (by decide) (by decide)
+          9 0 v11]; exact hv11idxTree
+      have hv12seed : v12.env "seed" = wordOf seed := by
+        rw [← hv12, execFor_env_frame c10Oracle sig "h" htClimbBody "seed" (by decide) (by decide)
+          9 0 v11]; exact hv11seed
+      have hv12sb : v12.env "sigBase" = 0 := by
+        rw [← hv12, execFor_env_frame c10Oracle sig "h" htClimbBody "sigBase" (by decide) (by decide)
+          9 0 v11]; exact hv11sb
+      have hv12N : v12.env "N_MASK" = NMASK := by
+        rw [← hv12, execFor_env_frame c10Oracle sig "h" htClimbBody "N_MASK" (by decide) (by decide)
+          9 0 v11]; exact hv11N
+      have hv12OUT : v12.env "OUT" = 0x600 := by
+        rw [← hv12, execFor_env_frame c10Oracle sig "h" htClimbBody "OUT" (by decide) (by decide)
+          9 0 v11]; exact hv11OUT
+      have hv12mem : ∀ i, i < 32 → v12.mem (0 + i) = seed.data.getD i 0 := by
+        intro i hi; rw [← hv12]; exact hcl_mem i hi
+      -- ===== finalize (2 setvs): currentNode := merkleNode, sigOff := authOff + 144.
+      rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+      obtain ⟨v13, hv13⟩ : ∃ v13, (execStmt c10Oracle sig
+          (.setv "currentNode" (.var "merkleNode")) v12).1 = v13 := ⟨_, rfl⟩
+      rw [hv13]
+      rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+      obtain ⟨v14, hv14⟩ : ∃ v14, (execStmt c10Oracle sig
+          (.setv "sigOff" (.bin .add (.var "authOff") (.lit 144))) v13).1 = v14 := ⟨_, rfl⟩
+      rw [hv14, execList]
+      -- ===== assemble the 11-component conjunction.
+      refine ⟨rfl, wpk, hpk, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+      · -- currentNode = wordOf (pad16 (verifyAuthPath …))
+        rw [← hv14]
+        simp only [execStmt, eval, setVar, String.reduceEq, ite_false]
+        rw [← hv13]
+        simp only [execStmt, eval, setVar, String.reduceEq, if_true]
+        exact hv12node
+      · -- idxTree = idxTreeIn >>> 9
+        rw [← hv14, ← hv13]
+        simp only [execStmt, eval, setVar, String.reduceEq, ite_false]
+        rw [hv12idxTree, UInt64.toNat_ofNat_of_lt' hidx9]
+      · -- sigOff = sigOffIn + 836
+        rw [← hv14]
+        simp only [execStmt, eval, setVar, String.reduceEq, ite_false, if_true]
+        rw [show v13.env "authOff" = sigOffIn + 692 from by
+              rw [← hv13]; simp only [execStmt, eval, setVar, String.reduceEq, ite_false]
+              exact hv12authOff]
+        exact Nat.mod_eq_of_lt (show sigOffIn + 692 + 144 < 2 ^ 256 from
+          Nat.lt_of_lt_of_le (show sigOffIn + 692 + 144 < 2 ^ 13 by omega)
+            (Nat.pow_le_pow_right (by decide) (by decide)))
+      · -- seed = wordOf seed
+        rw [← hv14, ← hv13]
+        simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hv12seed
+      · -- sigBase = 0
+        rw [← hv14, ← hv13]
+        simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hv12sb
+      · -- N_MASK
+        rw [← hv14, ← hv13]
+        simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hv12N
+      · -- OUT
+        rw [← hv14, ← hv13]
+        simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hv12OUT
+      · -- seed-mem
+        intro i hi
+        rw [← hv14, ← hv13]
+        simp only [execStmt, eval]; exact hv12mem i hi
 
 end SphincsCVerify.Interpreter.C10

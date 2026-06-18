@@ -2657,7 +2657,7 @@ def forsCopyBody : List Stmt :=
       (.mload (.bin .add (.lit 0x80) (.bin .shl (.lit 5) (.var "i")))) ]
 
 /-- `i <<< 5 % W = 32*i` for `i < 128` (the 32-byte record stride; `32*i < 4096`). -/
-private theorem shl5_small (i : Nat) (hi : i < 128) : i <<< 5 % W = 32 * i := by
+theorem shl5_small (i : Nat) (hi : i < 128) : i <<< 5 % W = 32 * i := by
   rw [Nat.shiftLeft_eq, show (2:Nat)^5 = 32 from rfl, Nat.mod_eq_of_lt (lt_W_of_lt (by omega)),
       Nat.mul_comm]
 
@@ -4124,7 +4124,7 @@ private theorem execList_wotsChainStepBody_preserves_var (sig : ByteVec Spec.Sig
   simp only [execStmt, eval, setVar, h1, h2, ite_false]
 
 /-- One inner chain step falls through (no `revert`/`return` in `wotsChainStepBody`). -/
-private theorem execList_wotsChainStepBody_none (sig : ByteVec Spec.SignatureLen)
+theorem execList_wotsChainStepBody_none (sig : ByteVec Spec.SignatureLen)
     (cur : Nat) (v : VM) :
     (execList c10Oracle sig wotsChainStepBody { v with env := setVar v.env "step" cur }).2 = none := by
   unfold wotsChainStepBody
@@ -4282,7 +4282,7 @@ analogue). The body's only writes are `{0x20, 0x40, OUT=0x600}` (chain hash scra
 `0x80+32i` (the endpoint), so already-laid endpoints `[0x80, 0x80+32·cur)` and the seed
 window persist. Lays `pad16 (wotsChainEndpoint … t)` at `0x80+32t` for every `t < 43`. -/
 
-private theorem execFor_wotsChainStepBody_none' (sig : ByteVec Spec.SignatureLen) :
+theorem execFor_wotsChainStepBody_none' (sig : ByteVec Spec.SignatureLen) :
     ∀ (remaining cur : Nat) (v : VM),
       (execFor c10Oracle sig "step" wotsChainStepBody remaining cur v).2 = none := by
   intro remaining
@@ -4726,7 +4726,7 @@ helpers here, NOT by strengthening the sub-lemmas (keeps the green build safe). 
     `mstore 0x00 seed`); the later `0x20`/`0x40`/`0x60` mstores and the `0x600` digest
     writeRegion all frame off `[0,0x20)`. So regardless of the prior mem, after the
     fragment `mem[0,0x20) = seed`. -/
-private theorem wotsDigitHashFragment_seed_mem
+theorem wotsDigitHashFragment_seed_mem
     (sig : ByteVec Spec.SignatureLen) (vm : VM) (seed : ByteVec 32)
     (hseedw : vm.env "seed" = wordOf seed) (hOUT : vm.env "OUT" = 0x600) :
     ∀ k, k < 32 → (execList c10Oracle sig wotsDigitHashFragment vm).1.mem (0 + k)
@@ -4777,7 +4777,7 @@ private theorem execList_wotsDigitSumBody_preserves_var (sig : ByteVec Spec.Sign
   simp only [execStmt, eval, setVar, h1, h2, ite_false]
 
 /-- One digit-sum step falls through (no `revert`/`return`). -/
-private theorem execList_wotsDigitSumBody_none (sig : ByteVec Spec.SignatureLen)
+theorem execList_wotsDigitSumBody_none (sig : ByteVec Spec.SignatureLen)
     (cur : Nat) (v : VM) :
     (execList c10Oracle sig wotsDigitSumBody { v with env := setVar v.env "ii" cur }).2 = none := by
   unfold wotsDigitSumBody
@@ -4814,7 +4814,7 @@ private theorem execFor_wotsDigitSumBody_preserves_var (sig : ByteVec Spec.Signa
       rw [hp] at this; exact this
 
 /-- The whole digit-sum loop never touches mem. -/
-private theorem execFor_wotsDigitSumBody_mem (sig : ByteVec Spec.SignatureLen) (a : Nat) :
+theorem execFor_wotsDigitSumBody_mem (sig : ByteVec Spec.SignatureLen) (a : Nat) :
     ∀ (remaining cur : Nat) (v : VM),
       (execFor c10Oracle sig "ii" wotsDigitSumBody remaining cur v).1.mem a = v.mem a := by
   intro remaining
@@ -4891,7 +4891,7 @@ private theorem wotsEndptList_eq_chainValues
   rfl
 
 /-- One `wotsChainBody` iteration falls through (no `revert`/`return`). -/
-private theorem execList_wotsChainBody_none (sig : ByteVec Spec.SignatureLen)
+theorem execList_wotsChainBody_none (sig : ByteVec Spec.SignatureLen)
     (cur : Nat) (v : VM) :
     (execList c10Oracle sig wotsChainBody { v with env := setVar v.env "i" cur }).2 = none := by
   unfold wotsChainBody
@@ -5332,5 +5332,343 @@ private theorem wots_pkfromsig_nonvacuous (sig : ByteVec Spec.SignatureLen) (see
     (by show env0 "N_MASK" = NMASK; simp [env0, setVar])
     (by show env0 "OUT" = 0x600; simp [env0, setVar])
   trivial
+
+/-! ### `wotsBody` seed-window preservation (for the hypertree Merkle climb)
+
+`ht_climb` (HypertreePhase) reads the public seed from scratch `[0,0x20)` for every
+XMSS `th`.  After `wotsBody` runs, that window still holds the seed: the digit-hash
+fragment *lays* it (`wotsDigitHashFragment_seed_mem`), and every later statement writes
+only at offsets ≥ `0x20` (chains/`th` scratch at `0x20/0x40/0x600`, the PK-adrs `mstore`
+at `0x20`, the endpoint copy at `0x40+`, the PK-compress `sha256` at `0x600`).  These
+`_low` frames are the `a < 0x20` (resp. `a < 0x40`) siblings of the existing
+`[0x80,0x600)` chain / copy frames — pure memory framing, no spec-hash reduction. -/
+
+/-- Inner chain step preserves `[0,0x20)` (writes only `0x20/0x40/[OUT,+32)`). -/
+theorem execList_wotsChainStepBody_mem_low (sig : ByteVec Spec.SignatureLen)
+    (cur : Nat) (v : VM) (hOUT : v.env "OUT" = 0x600) (a : Nat) (ha : a < 0x20) :
+    (execList c10Oracle sig wotsChainStepBody { v with env := setVar v.env "step" cur }).1.mem a = v.mem a := by
+  unfold wotsChainStepBody
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList]
+  simp only [execStmt, eval, setVar, String.reduceEq, ite_true, ite_false, hOUT]
+  rw [writeRegion_frame _ 0x600 _ a (by omega), mstore32_frame _ 0x40 _ a (by omega),
+      mstore32_frame _ 0x20 _ a (by omega)]
+
+/-- The inner chain loop preserves `[0,0x20)`. -/
+theorem execFor_wotsChainStepBody_mem_low (sig : ByteVec Spec.SignatureLen)
+    (a : Nat) (ha : a < 0x20) :
+    ∀ (remaining cur : Nat) (v : VM), v.env "OUT" = 0x600 →
+      (execFor c10Oracle sig "step" wotsChainStepBody remaining cur v).1.mem a = v.mem a := by
+  intro remaining
+  induction remaining with
+  | zero => intro cur v _; simp only [execFor]
+  | succ rem ih =>
+      intro cur v hOUT
+      have hnone := execList_wotsChainStepBody_none sig cur v
+      rw [execFor]
+      rcases hp : execList c10Oracle sig wotsChainStepBody { v with env := setVar v.env "step" cur }
+        with ⟨pvm, po⟩
+      rw [hp] at hnone; subst hnone; simp only []
+      have hpOUT : pvm.env "OUT" = 0x600 := by
+        have := execList_wotsChainStepBody_preserves_var sig cur v "OUT" ⟨by decide, by decide⟩
+        rw [hp] at this; rw [this]; exact hOUT
+      rw [ih (cur + 1) pvm hpOUT]
+      have := execList_wotsChainStepBody_mem_low sig cur v hOUT a ha
+      rw [hp] at this; exact this
+
+/-- `wotsChainBody` (one outer iteration) preserves `[0,0x20)`. -/
+theorem execList_wotsChainBody_mem_low (sig : ByteVec Spec.SignatureLen)
+    (cur : Nat) (v : VM) (hOUT : v.env "OUT" = 0x600)
+    (hcur : cur < 43) (a : Nat) (ha : a < 0x20) :
+    (execList c10Oracle sig wotsChainBody { v with env := setVar v.env "i" cur }).1.mem a = v.mem a := by
+  unfold wotsChainBody
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  obtain ⟨w', hw'⟩ : ∃ w', w' = (execStmt c10Oracle sig (Stmt.letv "chainBase"
+        (.bin .band (.bin .bor (.var "wotsAdrs") (.bin .shl (.lit 64) (.var "i"))) (.lit CHAINBASE_MASK)))
+      (execStmt c10Oracle sig (Stmt.letv "val"
+        (.bin .band (.calldataload (.bin .add (.var "wotsPtr") (.bin .shl (.lit 4) (.var "i")))) (.var "N_MASK")))
+      (execStmt c10Oracle sig (Stmt.letv "steps" (.bin .sub (.lit 7) (.var "digit")))
+      (execStmt c10Oracle sig (Stmt.letv "digit"
+        (.bin .band (.bin .shr (.bin .mul (.var "i") (.lit 3)) (.var "d")) (.lit 0x7)))
+        { v with env := setVar v.env "i" cur }).1).1).1).1 := ⟨_, rfl⟩
+  rw [← hw']
+  have hforNone : (execStmt c10Oracle sig (.forRange "step" (.var "steps") wotsChainStepBody) w').2 = none := by
+    simp only [execStmt, eval]; exact execFor_wotsChainStepBody_none' sig _ 0 w'
+  have hforStmt : execStmt c10Oracle sig (.forRange "step" (.var "steps") wotsChainStepBody) w'
+      = execFor c10Oracle sig "step" wotsChainStepBody (w'.env "steps") 0 w' := by simp only [execStmt, eval]
+  rw [execList_cons_none c10Oracle sig _ _ _ hforNone, hforStmt]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt]), execList]
+  simp only [execStmt, eval]
+  have hw'i : w'.env "i" = cur := by rw [hw']; simp only [execStmt, eval, setVar, String.reduceEq, ite_true, ite_false]
+  rw [execFor_wotsChainStepBody_preserves_var sig "i" ⟨by decide, by decide⟩ (w'.env "steps") 0 w', hw'i]
+  have hstoreOff : (128 + cur <<< 5 % W) % W = 128 + 32 * cur := by
+    rw [Nat.shiftLeft_eq, show (2:Nat)^5 = 32 from rfl, Nat.mul_comm cur 32,
+        Nat.mod_eq_of_lt (lt_W_of_lt (show 32 * cur < 4096 by omega)),
+        Nat.mod_eq_of_lt (lt_W_of_lt (show 128 + 32 * cur < 4096 by omega))]
+  rw [hstoreOff, mstore32_frame _ (128 + 32 * cur) _ a (by omega)]
+  have hw'OUT : w'.env "OUT" = 0x600 := by
+    rw [hw']; simp only [execStmt, eval, setVar, String.reduceEq, ite_true, ite_false]; exact hOUT
+  rw [execFor_wotsChainStepBody_mem_low sig a ha (w'.env "steps") 0 w' hw'OUT]
+  rw [hw']
+  simp only [execStmt, eval, setVar]
+
+/-- The whole 43-chain outer loop falls through (no revert). -/
+theorem execFor_wotsChainBody_none (sig : ByteVec Spec.SignatureLen) :
+    ∀ (remaining cur : Nat) (v : VM),
+      (execFor c10Oracle sig "i" wotsChainBody remaining cur v).2 = none := by
+  intro remaining
+  induction remaining with
+  | zero => intro cur v; simp only [execFor]
+  | succ rem ih =>
+      intro cur v
+      have hnone := execList_wotsChainBody_none sig cur v
+      rw [execFor]
+      rcases hp : execList c10Oracle sig wotsChainBody { v with env := setVar v.env "i" cur } with ⟨pvm, po⟩
+      rw [hp] at hnone; subst hnone; simp only []; exact ih (cur + 1) pvm
+
+/-- The whole 43-chain outer loop preserves `[0,0x20)`. -/
+theorem execFor_wotsChainBody_mem_low (sig : ByteVec Spec.SignatureLen) (a : Nat) (ha : a < 0x20) :
+    ∀ (remaining cur : Nat) (v : VM), v.env "OUT" = 0x600 → cur + remaining ≤ 43 →
+      (execFor c10Oracle sig "i" wotsChainBody remaining cur v).1.mem a = v.mem a := by
+  intro remaining
+  induction remaining with
+  | zero => intro cur v _ _; simp only [execFor]
+  | succ rem ih =>
+      intro cur v hOUT hbound
+      have hnone := execList_wotsChainBody_none sig cur v
+      rw [execFor]
+      rcases hp : execList c10Oracle sig wotsChainBody { v with env := setVar v.env "i" cur } with ⟨pvm, po⟩
+      rw [hp] at hnone; subst hnone; simp only []
+      have hpOUT : pvm.env "OUT" = 0x600 := by
+        have := execList_wotsChainBody_preserves_const sig cur v "OUT"
+          ⟨by decide, by decide, by decide, by decide, by decide, by decide⟩
+        rw [hp] at this; rw [this]; exact hOUT
+      rw [ih (cur + 1) pvm hpOUT (by omega)]
+      have := execList_wotsChainBody_mem_low sig cur v hOUT (by omega) a ha
+      rw [hp] at this; exact this
+
+/-- The whole 43-iteration digit-sum loop falls through. -/
+theorem execFor_wotsDigitSumBody_none (sig : ByteVec Spec.SignatureLen) :
+    ∀ (remaining cur : Nat) (v : VM),
+      (execFor c10Oracle sig "ii" wotsDigitSumBody remaining cur v).2 = none := by
+  intro remaining
+  induction remaining with
+  | zero => intro cur v; simp only [execFor]
+  | succ rem ih =>
+      intro cur v
+      have hnone := execList_wotsDigitSumBody_none sig cur v
+      rw [execFor]
+      rcases hp : execList c10Oracle sig wotsDigitSumBody { v with env := setVar v.env "ii" cur } with ⟨pvm, po⟩
+      rw [hp] at hnone; subst hnone; simp only []; exact ih (cur + 1) pvm
+
+/-- One endpoint-copy step falls through. -/
+theorem execList_forsCopyBody_none (sig : ByteVec Spec.SignatureLen) (cur : Nat) (v : VM) :
+    (execList c10Oracle sig forsCopyBody { v with env := setVar v.env "i" cur }).2 = none := by
+  unfold forsCopyBody
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList]
+
+/-- One endpoint-copy step preserves `[0,0x40)` (writes only `[0x40+32·cur,+32)`). -/
+theorem execList_forsCopyBody_mem_low (sig : ByteVec Spec.SignatureLen)
+    (cur : Nat) (hcur : cur < 43) (v : VM) (a : Nat) (ha : a < 0x40) :
+    (execList c10Oracle sig forsCopyBody { v with env := setVar v.env "i" cur }).1.mem a = v.mem a := by
+  unfold forsCopyBody
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList]
+  simp only [execStmt, eval, setVar, ite_true]
+  have hdest : (0x40 + cur <<< 5 % W) % W = 64 + 32 * cur := by
+    rw [shl5_small cur (by omega), Nat.mod_eq_of_lt (lt_W_of_lt (show 64 + 32 * cur < 4096 by omega))]
+  rw [hdest, mstore32_frame _ (64 + 32 * cur) _ a (by omega)]
+
+/-- The 43-iteration endpoint-copy loop falls through. -/
+theorem execFor_forsCopyBody_none (sig : ByteVec Spec.SignatureLen) :
+    ∀ (remaining cur : Nat) (v : VM),
+      (execFor c10Oracle sig "i" forsCopyBody remaining cur v).2 = none := by
+  intro remaining
+  induction remaining with
+  | zero => intro cur v; simp only [execFor]
+  | succ rem ih =>
+      intro cur v
+      have hnone := execList_forsCopyBody_none sig cur v
+      rw [execFor]
+      rcases hp : execList c10Oracle sig forsCopyBody { v with env := setVar v.env "i" cur } with ⟨pvm, po⟩
+      rw [hp] at hnone; subst hnone; simp only []; exact ih (cur + 1) pvm
+
+/-- The 43-iteration endpoint-copy loop preserves `[0,0x40)`. -/
+theorem execFor_forsCopyBody_mem_low (sig : ByteVec Spec.SignatureLen) (a : Nat) (ha : a < 0x40) :
+    ∀ (remaining cur : Nat) (v : VM), cur + remaining ≤ 43 →
+      (execFor c10Oracle sig "i" forsCopyBody remaining cur v).1.mem a = v.mem a := by
+  intro remaining
+  induction remaining with
+  | zero => intro cur v _; simp only [execFor]
+  | succ rem ih =>
+      intro cur v hbound
+      have hnone := execList_forsCopyBody_none sig cur v
+      rw [execFor]
+      rcases hp : execList c10Oracle sig forsCopyBody { v with env := setVar v.env "i" cur } with ⟨pvm, po⟩
+      rw [hp] at hnone; subst hnone; simp only []
+      rw [ih (cur + 1) pvm (by omega)]
+      have := execList_forsCopyBody_mem_low sig cur (by omega) v a ha
+      rw [hp] at this; exact this
+
+/-- The 43-iteration endpoint-copy loop preserves any env var `x ≠ "i"`. -/
+theorem execFor_forsCopyBody_preserves (sig : ByteVec Spec.SignatureLen) (x : String) (hx : x ≠ "i") :
+    ∀ (remaining cur : Nat) (v : VM),
+      (execFor c10Oracle sig "i" forsCopyBody remaining cur v).1.env x = v.env x := by
+  intro remaining
+  induction remaining with
+  | zero => intro cur v; simp only [execFor]
+  | succ rem ih =>
+      intro cur v
+      have hnone := execList_forsCopyBody_none sig cur v
+      rw [execFor]
+      rcases hp : execList c10Oracle sig forsCopyBody { v with env := setVar v.env "i" cur } with ⟨pvm, po⟩
+      rw [hp] at hnone; subst hnone; simp only []
+      rw [ih (cur + 1) pvm]
+      have : (execList c10Oracle sig forsCopyBody { v with env := setVar v.env "i" cur }).1.env x = v.env x := by
+        unfold forsCopyBody
+        rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+        rw [execList]
+        simp only [execStmt, eval, setVar, hx, ite_false]
+      rw [hp] at this; exact this
+
+/-- **`wotsContTail` preserves the seed window `[0,0x20)`.** The post-digit-sum-gate tail
+    (the 43 chains, PK-adrs `mstore`, endpoint copy, PK-compress) writes only at `≥ 0x20`. -/
+theorem wotsContTail_seed_frame (sig : ByteVec Spec.SignatureLen) (v : VM)
+    (hOUT : v.env "OUT" = 0x600) (a : Nat) (ha : a < 0x20) :
+    (execList c10Oracle sig wotsContTail v).1.mem a = v.mem a := by
+  unfold wotsContTail
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  obtain ⟨w1, hw1⟩ : ∃ w1, (execStmt c10Oracle sig
+      (.letv "wotsPtr" (.bin .add (.var "sigBase") (.var "sigOff"))) v).1 = w1 := ⟨_, rfl⟩
+  rw [hw1]
+  have hw1mem : w1.mem a = v.mem a := by rw [← hw1]; simp only [execStmt]
+  have hw1OUT : w1.env "OUT" = 0x600 := by
+    rw [← hw1]; simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hOUT
+  have hchStmt : execStmt c10Oracle sig (.forRange "i" (.lit 43) wotsChainBody) w1
+      = execFor c10Oracle sig "i" wotsChainBody 43 0 w1 := by simp only [execStmt, eval]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by rw [hchStmt]; exact execFor_wotsChainBody_none sig 43 0 w1), hchStmt]
+  obtain ⟨w2, hw2⟩ : ∃ w2, (execFor c10Oracle sig "i" wotsChainBody 43 0 w1).1 = w2 := ⟨_, rfl⟩
+  rw [hw2]
+  have hw2mem : w2.mem a = w1.mem a := by
+    rw [← hw2]; exact execFor_wotsChainBody_mem_low sig a ha 43 0 w1 hw1OUT (by omega)
+  have hw2OUT : w2.env "OUT" = 0x600 := by
+    rw [← hw2, execFor_wotsChainStepBody_outer_preserves sig "OUT"
+      ⟨by decide, by decide, by decide, by decide, by decide, by decide⟩ 43 0 w1]; exact hw1OUT
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  obtain ⟨w3, hw3⟩ : ∃ w3, (execStmt c10Oracle sig
+      (.letv "pkAdrs" (.bin .bor (.bin .shl (.lit 224) (.var "layer"))
+        (.bin .bor (.bin .shl (.lit 160) (.var "idxTree"))
+          (.bin .bor (.bin .shl (.lit 128) (.lit 1)) (.bin .shl (.lit 96) (.var "idxLeaf")))))) w2).1 = w3 := ⟨_, rfl⟩
+  rw [hw3]
+  have hw3mem : w3.mem a = w2.mem a := by rw [← hw3]; simp only [execStmt]
+  have hw3OUT : w3.env "OUT" = 0x600 := by
+    rw [← hw3]; simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hw2OUT
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  obtain ⟨w4, hw4⟩ : ∃ w4, (execStmt c10Oracle sig (.mstore (.lit 0x20) (.var "pkAdrs")) w3).1 = w4 := ⟨_, rfl⟩
+  rw [hw4]
+  have hw4mem : w4.mem a = w3.mem a := by
+    rw [← hw4]; simp only [execStmt, eval]; rw [mstore32_frame _ 0x20 _ a (by omega)]
+  have hw4OUT : w4.env "OUT" = 0x600 := by rw [← hw4]; simp only [execStmt]; exact hw3OUT
+  have hcpStmt : execStmt c10Oracle sig (.forRange "i" (.lit 43) forsCopyBody) w4
+      = execFor c10Oracle sig "i" forsCopyBody 43 0 w4 := by simp only [execStmt, eval]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by rw [hcpStmt]; exact execFor_forsCopyBody_none sig 43 0 w4), hcpStmt]
+  obtain ⟨w5, hw5⟩ : ∃ w5, (execFor c10Oracle sig "i" forsCopyBody 43 0 w4).1 = w5 := ⟨_, rfl⟩
+  rw [hw5]
+  have hw5mem : w5.mem a = w4.mem a := by
+    rw [← hw5]; exact execFor_forsCopyBody_mem_low sig a (by omega) 43 0 w4 (by omega)
+  have hw5OUT : w5.env "OUT" = 0x600 := by
+    rw [← hw5, execFor_forsCopyBody_preserves sig "OUT" (by decide) 43 0 w4]; exact hw4OUT
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  obtain ⟨w6, hw6⟩ : ∃ w6, (execStmt c10Oracle sig (.sha256 (.lit 0x00) (.lit 0x5A0) (.var "OUT")) w5).1 = w6 := ⟨_, rfl⟩
+  rw [hw6]
+  have hw6mem : w6.mem a = w5.mem a := by
+    rw [← hw6]; simp only [execStmt, eval, hw5OUT]; rw [writeRegion_frame _ 0x600 _ a (by omega)]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  obtain ⟨w7, hw7⟩ : ∃ w7, (execStmt c10Oracle sig
+      (.letv "wotsPk" (.bin .band (.mload (.var "OUT")) (.var "N_MASK"))) w6).1 = w7 := ⟨_, rfl⟩
+  rw [hw7, execList]
+  have hw7mem : w7.mem a = w6.mem a := by rw [← hw7]; simp only [execStmt]
+  show w7.mem a = v.mem a
+  rw [hw7mem, hw6mem, hw5mem, hw4mem, hw3mem, hw2mem, hw1mem]
+
+/-- **`wotsBody` seed-window capstone.** From a VM with `seed` in env and `OUT = 0x600`,
+    `[0,0x20)` holds the seed bytes after `wotsBody` — unconditionally (the digit-sum revert
+    just freezes mem after the digit hash + sum loop, which already laid/preserved the seed). -/
+theorem wotsBody_seed_mem (sig : ByteVec Spec.SignatureLen) (vm : VM) (seed : ByteVec 32)
+    (hseedw : vm.env "seed" = wordOf seed) (hOUT : vm.env "OUT" = 0x600) :
+    ∀ k, k < 32 → (execList c10Oracle sig wotsBody vm).1.mem (0 + k) = seed.data.getD k 0 := by
+  intro k hk
+  unfold wotsBody
+  rw [execList_append c10Oracle sig wotsDigitHashFragment _ vm]
+  obtain ⟨v1, hv1⟩ : ∃ v1, (execList c10Oracle sig wotsDigitHashFragment vm).1 = v1 := ⟨_, rfl⟩
+  have hfragNone : (execList c10Oracle sig wotsDigitHashFragment vm).2 = none := by
+    unfold wotsDigitHashFragment
+    rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+    rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+    rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+    rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+    rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+    rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+    rw [execList]
+  have hpair : execList c10Oracle sig wotsDigitHashFragment vm = (v1, none) := by rw [← hv1, ← hfragNone]
+  simp only [hpair]
+  -- v1 facts: seed-mem (just laid) + OUT preserved.
+  have hv1seedmem : ∀ j, j < 32 → v1.mem (0 + j) = seed.data.getD j 0 := by
+    intro j hj; rw [← hv1]; exact wotsDigitHashFragment_seed_mem sig vm seed hseedw hOUT j hj
+  have hv1OUT : v1.env "OUT" = 0x600 := by
+    rw [← hv1, wotsDigitHashFragment_preserves_var sig vm "OUT" (by decide)]; exact hOUT
+  -- s1: letv "digitSum" 0
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  obtain ⟨vds, hvds⟩ : ∃ vds, (execStmt c10Oracle sig (.letv "digitSum" (.lit 0)) v1).1 = vds := ⟨_, rfl⟩
+  rw [hvds]
+  have hvdsmem : ∀ j, j < 32 → vds.mem (0 + j) = seed.data.getD j 0 := by
+    intro j hj; rw [← hvds]; simp only [execStmt]; exact hv1seedmem j hj
+  have hvdsOUT : vds.env "OUT" = 0x600 := by
+    rw [← hvds]; simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hv1OUT
+  -- s2: forRange "ii" 43 wotsDigitSumBody
+  have hdsStmt : execStmt c10Oracle sig (.forRange "ii" (.lit 43) wotsDigitSumBody) vds
+      = execFor c10Oracle sig "ii" wotsDigitSumBody 43 0 vds := by simp only [execStmt, eval]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by rw [hdsStmt]; exact execFor_wotsDigitSumBody_none sig 43 0 vds), hdsStmt]
+  obtain ⟨vloop, hvloop⟩ : ∃ vloop, (execFor c10Oracle sig "ii" wotsDigitSumBody 43 0 vds).1 = vloop := ⟨_, rfl⟩
+  rw [hvloop]
+  have hvloopmem : ∀ j, j < 32 → vloop.mem (0 + j) = seed.data.getD j 0 := by
+    intro j hj; rw [← hvloop, execFor_wotsDigitSumBody_mem sig (0 + j) 43 0 vds]; exact hvdsmem j hj
+  have hvloopOUT : vloop.env "OUT" = 0x600 := by
+    rw [← hvloop, execFor_wotsDigitSumBody_preserves_var sig "OUT" ⟨by decide, by decide⟩ 43 0 vds]
+    exact hvdsOUT
+  -- s3: the digit-sum revert gate.  Writes no mem and preserves env either way.
+  rw [execList]
+  have hgmem : (execStmt c10Oracle sig
+      (.ifnz (.iszero (.bin .eq (.var "digitSum") (.lit 205))) [ .revert ]) vloop).1.mem = vloop.mem := by
+    simp only [execStmt]; split
+    · simp only [execList, execStmt]
+    · rfl
+  have hgOUT : (execStmt c10Oracle sig
+      (.ifnz (.iszero (.bin .eq (.var "digitSum") (.lit 205))) [ .revert ]) vloop).1.env "OUT"
+        = vloop.env "OUT" := by
+    simp only [execStmt]; split
+    · simp only [execList, execStmt]
+    · rfl
+  cases hg : execStmt c10Oracle sig
+      (.ifnz (.iszero (.bin .eq (.var "digitSum") (.lit 205))) [ .revert ]) vloop with
+  | mk v' o =>
+    rw [hg] at hgmem hgOUT
+    simp only at hgmem hgOUT
+    have hv'mem : v'.mem (0 + k) = seed.data.getD k 0 := by rw [hgmem]; exact hvloopmem k hk
+    have hv'OUT : v'.env "OUT" = 0x600 := by rw [hgOUT]; exact hvloopOUT
+    cases o with
+    | some h => simp only []; exact hv'mem
+    | none =>
+      simp only []
+      show (execList c10Oracle sig wotsContTail v').1.mem (0 + k) = seed.data.getD k 0
+      rw [wotsContTail_seed_frame sig v' hv'OUT (0 + k) (by omega)]
+      exact hv'mem
 
 end SphincsCVerify.Interpreter.C10
