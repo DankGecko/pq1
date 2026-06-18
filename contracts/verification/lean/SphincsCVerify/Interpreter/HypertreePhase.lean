@@ -74,4 +74,33 @@ theorem verifyAuthPath_eq_foldl
   rw [List.forIn_pure_yield_eq_foldl]
   rfl
 
+/-- The Merkle-climb accumulator after `c` levels (fold of `htStep` from the leaf
+    `⟨leafIdx, leafNode⟩`). The `ht_climb` loop invariant tracks this. -/
+def htAcc (seed : ByteVec 32) (layer : UInt32) (tree : UInt64)
+    (leafNode : ByteVec 16) (leafIdx : Nat) (authPath : Array (ByteVec 16)) (c : Nat) :
+    MProd Nat (ByteVec 16) :=
+  (List.range' 0 c).foldl (htStep seed layer tree authPath) ⟨leafIdx, leafNode⟩
+
+theorem htAcc_zero (seed : ByteVec 32) (layer : UInt32) (tree : UInt64)
+    (leafNode : ByteVec 16) (leafIdx : Nat) (authPath : Array (ByteVec 16)) :
+    htAcc seed layer tree leafNode leafIdx authPath 0 = ⟨leafIdx, leafNode⟩ := rfl
+
+/-- **`htAcc` recursion.** One more climb level is one more `htStep`. -/
+theorem htAcc_succ (seed : ByteVec 32) (layer : UInt32) (tree : UInt64)
+    (leafNode : ByteVec 16) (leafIdx : Nat) (authPath : Array (ByteVec 16)) (c : Nat) :
+    htAcc seed layer tree leafNode leafIdx authPath (c + 1)
+      = htStep seed layer tree authPath (htAcc seed layer tree leafNode leafIdx authPath c) c := by
+  unfold htAcc
+  rw [List.range'_1_concat, List.foldl_append, Nat.zero_add]
+  rfl
+
+/-- `verifyAuthPath` is the node component (`.snd`) of `htAcc` at `SubtreeH`. The
+    form `ht_climb`'s loop drive lands on. -/
+theorem verifyAuthPath_eq_htAcc
+    (seed : ByteVec 32) (layer : UInt32) (tree : UInt64)
+    (leafNode : ByteVec 16) (leafIdx : Nat) (authPath : Array (ByteVec 16)) :
+    Spec.Hypertree.verifyAuthPath seed layer tree leafNode leafIdx authPath
+      = (htAcc seed layer tree leafNode leafIdx authPath Spec.SubtreeH).snd := by
+  rw [verifyAuthPath_eq_foldl]; rfl
+
 end SphincsCVerify.Interpreter.C10
