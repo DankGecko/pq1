@@ -194,6 +194,38 @@ compile_error!(
      bump + reboot so the test chip stays reflashable — never a shipping image."
 );
 
+// MED-2 ship gate (audits/tz-tamper-debug-20260611): `e2e-test` and
+// `dev-testkey` are the two dev escape hatches that ship FIXED secrets —
+// `e2e-test` auto-provisions a fixed mnemonic + PIN and short-circuits every
+// secure-side confirm()/enter_pin(); `dev-testkey` substitutes the per-device
+// OTP master key with a compile-time constant (it pulls in
+// `otp-hardcoded-master-key`). Both turn OFF the main hardware-release fence
+// above (it excludes them at the `not(feature = "e2e-test")` /
+// `not(feature = "dev-testkey")` lines so `make e2e-hw` / `make
+// play-hw-display` can drive the tests), so nothing else catches them in a
+// shipping image. `mode-production` is the explicit "this is a shipping
+// build" declaration; it must reject both. We key on `mode-production` ALONE
+// (not the stm32u585+release condition the S-2/S-3 fences use) because
+// stm32u585+release+e2e-test IS the legitimate `make e2e-hw` hardware-test
+// image. The belt-and-braces companion is `make prod-check`, which resolves
+// the actual shipping feature set (catching a release built WITHOUT
+// mode-production too) and is wired into `make release` + CI.
+#[cfg(all(feature = "mode-production", feature = "e2e-test"))]
+compile_error!(
+    "mode-production and e2e-test are mutually exclusive (ship gate MED-2). \
+     e2e-test auto-provisions a FIXED test mnemonic + PIN and short-circuits \
+     every secure-side confirm()/enter_pin() — never a shipping image. Build \
+     hardware-test images with `stm32u585,e2e-test` (no mode-production)."
+);
+#[cfg(all(feature = "mode-production", feature = "dev-testkey"))]
+compile_error!(
+    "mode-production and dev-testkey are mutually exclusive (ship gate MED-2). \
+     dev-testkey substitutes the per-device OTP master key with a shared \
+     compile-time constant (via otp-hardcoded-master-key), so every unit built \
+     with it derives identical admin / SCP03 / PBS secrets — never a shipping \
+     image."
+);
+
 // S-3 ship-blocker: a production OPTIGA build MUST use the silicon E120 LUC
 // counter (`optiga-hw-counter`). Without it the only PIN-attempt cap is the
 // firmware soft counter at F1E1 + the MCU page-124 counter — both of which a

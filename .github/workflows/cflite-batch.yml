@@ -1,0 +1,35 @@
+name: ClusterFuzzLite (batch)
+
+# Scheduled deeper fuzzing sweep over all 11 harnesses (SOTA 2026-06 §6).
+# `batch` mode runs every fuzzer for a fixed budget; pair with a corpus
+# storage repo to carry coverage across runs (see ClusterFuzzLite docs —
+# set `storage-repo` once a private corpus repo + deploy key exist; until
+# then each run starts from the committed fuzz/corpus/ seeds).
+
+on:
+  schedule:
+    - cron: '41 3 * * *'   # 03:41 UTC daily
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  Batch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build fuzzers
+        uses: google/clusterfuzzlite/actions/build_fuzzers@v1
+        with:
+          language: rust
+          sanitizer: address
+      - name: Run fuzzers
+        uses: google/clusterfuzzlite/actions/run_fuzzers@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          fuzz-seconds: 1800
+          mode: 'batch'
+          sanitizer: address
+          output-sarif: true

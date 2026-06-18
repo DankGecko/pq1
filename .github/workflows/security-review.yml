@@ -1,0 +1,61 @@
+name: Claude Security Review (advisory)
+
+# LLM-advisory security review (SOTA 2026-06 §8). Reads BOTH the Rust and the
+# Solidity/Yul diff of a PR — the one reviewer in the stack that sees both.
+#
+# ADVISORY ONLY — never a merge gate. The action is NOT hardened against prompt
+# injection, so findings are posted as PR comments for human triage (suppress
+# to backlog, never auto-merge). The real assurance stays the deterministic
+# gates (cargo-deny / semgrep / Lean / Kontrol / rainbow), per §8.
+#
+# Egress discipline (a key-holding repo): this runs on `pull_request` (NOT
+# `pull_request_target`) and is gated to PRs whose head branch lives in THIS
+# repo, so a fork PR can neither read the API key nor exfiltrate the diff. If
+# the ANTHROPIC_API_KEY secret is unset the job no-ops cleanly (not red).
+#
+# The action is pinned to a reviewed commit SHA (supply-chain hygiene — §7);
+# bump deliberately after reviewing the diff, do not float to @main.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  security-review:
+    name: Claude security review
+    runs-on: ubuntu-latest
+    # Fork guard: fork PRs don't get repo secrets, so skip them entirely
+    # rather than fail. Internal-branch PRs get the advisory review.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - name: Gate on API key being configured
+        id: gate
+        env:
+          KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "${KEY:-}" ]; then
+            echo "ANTHROPIC_API_KEY not set — skipping advisory review (no-op)."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.enabled == 'true'
+        with:
+          fetch-depth: 0
+      - name: Claude Code Security Review
+        if: steps.gate.outputs.enabled == 'true'
+        uses: anthropics/claude-code-security-review@0c6a49f1fa56a1d472575da86a94dbc1edb78eda
+        with:
+          claude-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          comment-pr: true
+          upload-results: true
+          # Skip docs, vendored upstream trees, and generated Lean artifacts.
+          exclude-directories: docs,lib,contracts/verification/extracted

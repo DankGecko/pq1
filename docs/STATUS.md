@@ -97,10 +97,10 @@ re-drifting.
 |------|------|--------|------------------|--------|
 | OPTIGA | S-3 soft-counter `build_metadata_counter` compile-fence | open | `apdu.rs:971` ungated; `production-todo.md:188` | sec-review C-6 |
 | CI | Prod-config gate rejecting `e2e-test`/`dev-testkey` fixed secrets (MED-2) | open | `docs/security/audits/tz-tamper-debug-20260611-*.md` | audits/tz-tamper |
-| cargo-checkct | SAES-CMAC mirror driver (`driver_saes`) + a `make checkct` CI gate | partial | `checkct/driver_{kdf,fors,th}` exist (`b0944ecf`); no `driver_saes`, no `make checkct` | sota §1 |
+| cargo-checkct | SAES-CMAC mirror driver (`driver_saes`) + a CI gate | partial | `make checkct` **EXISTS** (`Makefile:3620`) — STATUS was stale; `checkct/driver_{kdf,fors,th}` green (`b0944ecf`); remaining = `driver_saes` + a CI job (binsec needs a local opam switch, so kept host-local for now) | sota §1 |
 | on-chain Yul | **hevm equivalence** of `SPHINCsC10Asm` vs a reference Solidity verifier | open | no hevm harness/binary; halmos side done (39 rules) | sota §2 |
 | on-chain Yul | KAT oracle — independent-source leg (`crosscheck.py`) + `leanloop kat` leg | partial | 3-way *shared-corpus* differential already runs (Rust JSON → Yul `SPHINCsC10Asm.t.sol` + Lean `verify-test-vectors`); independent source not wired | sota §2 |
-| CI / fuzz | ClusterFuzzLite time-boxed job over the 11 fuzz targets; ui-capture golden-screenshot gate | open | only `ci.yml`; capture infra `ui/capture.rs` exists as manual harness | trezor-comp |
+| CI / fuzz | ClusterFuzzLite time-boxed job over the 11 fuzz targets | open | substrate done (`make fuzz-all`, 11 targets, committed corpus); no `.clusterfuzzlite/` config yet | trezor-comp |
 | CI | `claude-code-security-review` GitHub Action (ext-contributor-gated) | open | absent from `.github/workflows/` | sota §8 |
 | ToB skills | Pilot tail: mutation-testing, property-based-testing, differential-review, variant-analysis, entry-point-analyzer, supply-chain-risk-auditor, agentic-actions-auditor, seatbelt-sandboxer, fp-check | open | zero run-evidence (2 headline + semgrep done; see §C) | sota §11 |
 | OPTIGA | S-4 items 2 (plaintext VK-read confirm) / 3 (duress-PBS caveat in threat-model) / 5 (F1D5↔F1E1 naming) | open | doc/code | work-todo S-4 |
@@ -157,7 +157,9 @@ Compact ledger of security/verification items confirmed complete against the rep
 | Supply-chain | cargo-deny `advisories+bans+sources` in CI + `make invariant-gates` | `deny.toml`; `ci.yml:68-71`; `Makefile:3515` (`ca28eda7`) | re-read configs |
 | Fuzzing | cargo-fuzz campaign, 11 targets, 0 crashes, `make fuzz-all` | `fuzz/fuzz_targets/` (11); 1.7M corpus; `fuzz/README.md:105` | corpus checked |
 | Supply-chain | `make sbom` (CycloneDX sidecar) | `Makefile:3528-3532`; cargo-cyclonedx installed | target exists |
-| Firmware FV | Kani (6 harnesses) + Miri (0-UB incl. secure-crate NS-ptr) | `make kani`/`make miri` `Makefile:3544-3566`; `#[kani::proof]`×6; `38a097d8`,`242feda9`,`69257ff0` | exists; not re-run (heavy); **not in CI** |
+| Firmware FV | Kani (6 harnesses) + Miri (0-UB incl. secure-crate NS-ptr) | `make kani`/`make miri` `Makefile:3545-3566`; `#[kani::proof]`×6; `38a097d8`,`242feda9`,`69257ff0` | **now CI-gated** (2026-06-18): Miri per-push (`ci.yml` `miri` job), Kani nightly (`nightly.yml`) |
+| CI / UI | ui-capture golden-screenshot regression gate | `make ui-golden` (`Makefile`); producer `ui/capture.rs`, comparator `tools/ui_fixture.py`, fixtures `tests/ui_fixtures.json` | **target added 2026-06-18** — LOCAL/manual gate (full-e2e capture is 10+ min over QEMU semihosting → not CI-gated; a dedicated short-capture scenario is the CI-viable follow-up) |
+| CI / repro | Reproducible-build byte-diff gate | `make verify-repro` (`Makefile:1912`); `nightly.yml` `verify-repro` job | **wired 2026-06-18** — was capability-only (Makefile comment falsely claimed per-PR); now nightly-gated |
 | Protocol | ProVerif (15 RESULTs) + Tamarin (6 lemmas) | `make proverif`/`make tamarin`; `4beebec7`,`118665bf`,`86291fd7`,`3f82f560` | **both provers re-run end-to-end** |
 | SCA | cargo-checkct: 3 SECURE CT proofs (kdf/fors/th) | `checkct/driver_{kdf,fors,th}` (`b0944ecf`) | driver+commit; binsec not re-run |
 | SCA | Muscat pilot — full-10M TVLA reproduces lascar, CPA flat | `muscat/pqsigner_tvla_cpa.rs` (`23e72bd4`) | cross-check on emulated traces (not silicon) |

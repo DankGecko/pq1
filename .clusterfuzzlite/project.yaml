@@ -1,0 +1,10 @@
+# ClusterFuzzLite project config for PQSigner (SOTA 2026-06 §6, Trezor-port).
+# Continuous/CI fuzzing of the 11 libFuzzer harnesses in fuzz/fuzz_targets/
+# (the pure-logic parsers: UserOp/APDU/HID framing, RLP/EIP-1559, ERC-20 +
+# ERC-7730 decode/verify/walker/render). The substrate is the existing
+# cargo-fuzz suite (`make fuzz-all`); this adds corpus-persistent CI runs.
+language: rust
+sanitizers:
+  - address
+fuzzing_engines:
+  - libfuzzer

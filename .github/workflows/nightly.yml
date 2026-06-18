@@ -1,0 +1,60 @@
+name: Nightly (heavy gates)
+
+# Heavy verification gates that are too slow for the per-PR `ci.yml` but must
+# still run on a regular cadence (SOTA 2026-06 §3/§6; docs/STATUS.md §B):
+#
+#   * kani        — bounded model-checking of the parsers / cap-monotonicity
+#                   (downloads a checker via `cargo kani setup`, minutes).
+#   * verify-repro — two full release cross-builds + byte-diff of the secure +
+#                   nonsecure ELFs (the canonical reproducibility gate).
+#
+# Runs nightly + on manual dispatch. The fast invariant/host/secure/contracts
+# gates stay in ci.yml on every push/PR.
+#
+# NOT here: `make ui-golden` (Trezor-style golden-screenshot regression). It
+# works, but capturing all 24 e2e scenarios' frames over the QEMU semihosting
+# backend (one trap per emitted char) runs 10+ min — too slow/fragile for a
+# CI gate as written. Kept a LOCAL/manual gate; the CI-viable version is a
+# dedicated short-capture scenario (measured-boot + the key dialogs only)
+# instead of the full 24-scenario e2e.
+
+on:
+  schedule:
+    - cron: '27 4 * * *'   # 04:27 UTC daily
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kani:
+    name: Kani (bounded model-checking)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Kani
+        run: |
+          cargo install --locked kani-verifier
+          cargo kani setup
+      - name: make kani
+        run: make kani
+
+  verify-repro:
+    name: Reproducible-build byte-diff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv8m.main-none-eabi
+      - name: Install arm-none-eabi toolchain (arm-none-eabi-ld)
+        run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi
+      - uses: Swatinem/rust-cache@v2
+      - name: make verify-repro
+        run: make verify-repro

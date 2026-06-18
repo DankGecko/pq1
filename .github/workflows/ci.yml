@@ -75,6 +75,22 @@ jobs:
           python3 -m pip install --quiet semgrep
           semgrep --config .semgrep/pqsigner-invariants.yml --severity ERROR --error --metrics off
 
+  prod-config-gate:
+    name: Production feature-set gate (MED-2)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv8m.main-none-eabi
+      - uses: Swatinem/rust-cache@v2
+      # Resolve the shipping feature set and hard-fail if any never-ship
+      # feature (e2e-test/dev-testkey/mock-se/debug-log/otp-hardcoded-master-key/
+      # ui-capture/… ) is active — including transitively. Belt-and-braces with
+      # the `mode-production` compile fences in nsc/mod.rs. Fast (cargo tree only).
+      - name: make prod-check
+        run: make prod-check
+
   host-tests:
     name: Host unit tests (pure-logic crates)
     runs-on: ubuntu-latest
@@ -104,6 +120,23 @@ jobs:
           cargo test --locked -p sphincs-tz-secure \
             --no-default-features \
             --features mock-se,debug-log,ui-semihosting
+
+  miri:
+    name: Miri (UB in host-reachable unsafe)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      - uses: Swatinem/rust-cache@v2
+      # UB detection over the genuine host-reachable `unsafe`: the FI volatile
+      # helpers (pqsigner-fi), the tx-core decoders, and the secure-world
+      # NS-pointer deref + validation (the int->ptr boundary). Same crate set
+      # as `make miri`. Light enough to run per-push (no checker download,
+      # unlike Kani which is nightly-scheduled).
+      - name: cargo miri test (FI / tx-core / NS-ptr)
+        run: make miri
 
   contracts:
     name: Contracts (forge test)

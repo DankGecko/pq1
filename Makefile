@@ -1901,8 +1901,10 @@ fsbl-release:
 # release is not safe to ship because an independent rebuild would
 # produce different measurement words than the vendor publishes.
 #
-# This target is the canonical reproducibility gate. CI runs it on
-# every PR; the release pipeline runs it before signing.
+# This target is the canonical reproducibility gate. The nightly CI
+# workflow runs it (.github/workflows/nightly.yml, the `verify-repro`
+# job); the release pipeline runs it before signing. It is NOT a
+# per-PR gate — two full release cross-builds are too slow for that.
 #
 # Two builds share the same VENEERS path (build A writes it, build B
 # links against the identical file), which is fine: linking the same
@@ -1960,8 +1962,39 @@ _repro_one:
 # the production feature set (no debug-log, no e2e-test, no mock-se).
 # Pass RELEASE_FEATURES=... on the command line to override.
 RELEASE_FEATURES ?= stm32u585,se050,optiga-trust-m,dual-se,ui-lcd
+
+# MED-2 ship gate (audits/tz-tamper-debug-20260611). Resolve the ACTUAL feature
+# set cargo would compile for the shipping image and fail if any never-ship
+# feature is active — including TRANSITIVELY (ui-capture→debug-log,
+# dev-testkey→otp-hardcoded-master-key). `cargo tree --depth 0 -f "{f}"` prints
+# the secure crate's fully-resolved feature list; we scan it against the
+# forbidden set. Independent of the `mode-production` compile fences in
+# nsc/mod.rs: this also catches a release built as `stm32u585,…` WITHOUT
+# mode-production. `make release` depends on it; CI runs it as a fast gate.
+PROD_FORBIDDEN = e2e-test dev-testkey mock-se debug-log otp-hardcoded-master-key \
+                 ui-capture ui-mirror bhk-hardcoded-master-key uart-console \
+                 boot-pulse sca-trigger erc7730-dev-unattested optiga-reset-oids \
+                 fw-rollback-e2e fwup-transport-e2e se050-scp03-allow-factory-fallback
+.PHONY: prod-check
+prod-check:
+	@echo "==> prod-check (MED-2): resolving shipping feature set"
+	@echo "    RELEASE_FEATURES = $(RELEASE_FEATURES)"
+	@feats=$$(cargo tree -p sphincs-tz-secure --no-default-features \
+		--features "$(RELEASE_FEATURES)" --target $(TARGET) \
+		-e features -f "{f}" --depth 0 2>/dev/null | tr ',' '\n' | tr -d ' ' | sort -u); \
+	bad=""; \
+	for f in $(PROD_FORBIDDEN); do \
+		echo "$$feats" | grep -qx "$$f" && bad="$$bad $$f"; \
+	done; \
+	if [ -n "$$bad" ]; then \
+		echo "==> prod-check: FAIL — shipping build enables never-ship feature(s):$$bad"; \
+		echo "    forbidden set: $(PROD_FORBIDDEN)"; \
+		exit 1; \
+	fi; \
+	echo "==> prod-check: PASS — no never-ship feature in the resolved set"
+
 .PHONY: release
-release:
+release: prod-check
 	@echo "==> Release build (features: $(RELEASE_FEATURES))"
 	@echo "==> SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH)"
 	@$(MAKE) verify-repro FEATURES=$(RELEASE_FEATURES)
@@ -3541,7 +3574,7 @@ sbom:
 # MMIO, and NS-pointer deref are thumbv8m/hardware-cfg'd OUT of the host
 # build, so these do NOT cover those — see work-todo §34.
 # ---------------------------------------------------------------------------
-.PHONY: kani miri
+.PHONY: kani miri ui-golden
 kani:
 	@command -v cargo-kani >/dev/null 2>&1 || { echo "ERROR: cargo-kani not found. Install: cargo install --locked kani-verifier && cargo kani setup"; exit 1; }
 	@echo "==> Kani: tx-core RLP parsers (decode_item used<=len, bytes_to_u256)"
@@ -3564,6 +3597,48 @@ miri:
 	@# permissive-provenance: the NS-ptr boundary is a legitimate int->ptr cast.
 	MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-permissive-provenance" cargo +nightly miri test -p sphincs-tz-secure --no-default-features --features mock-se,debug-log,ui-semihosting ns_ptr ptr_validate
 	@echo "==> miri: PASS"
+
+# UI golden-screenshot gate (Trezor-port, SOTA 2026-06 §6). Builds the e2e
+# suite with the `ui-capture` feature so every secure-world Display::flush()
+# emits a `[UI-FP] <idx> <sha256>` line (secure/src/ui/capture.rs), runs it
+# under QEMU, and diffs the captured per-frame fingerprints against the
+# committed tests/ui_fixtures.json. A render regression (layout / text /
+# byte drift) flips a hash → tools/ui_fixture.py exits 1. Same trust
+# boundary as the display: the fingerprint is produced INSIDE the secure
+# world, so it hashes exactly what the trusted UI rendered.
+#
+#   make ui-golden                          # check against committed fixtures
+#   make ui-golden GOLDEN_MODE=--regenerate # re-baseline after an intentional UI change
+#
+# LOCAL / MANUAL gate (not in CI): capturing all 24 e2e scenarios' frames over
+# the QEMU semihosting backend emits each [UI-FP] line one trap per char, so a
+# full run is 10+ min — too slow/fragile for a CI gate as written. The
+# CI-viable version is a dedicated short-capture scenario (measured-boot + the
+# key dialogs only) instead of the full 24-scenario e2e. Regenerate the
+# committed fixtures only from a clean, intentional render (slow but correct).
+GOLDEN_MODE ?= --check
+ui-golden:
+	@echo "==> Building e2e suite with ui-capture (frame-fingerprint emitter)"
+	@$(RUSTFLAGS_VAR)="-C linker=arm-none-eabi-ld -C link-arg=-Tlink.x $(REPRO_FLAGS)" \
+		cargo build --locked --release --target $(TARGET) --target-dir target/secure \
+			-p sphincs-tz-secure --no-default-features \
+			--features mock-se,debug-log,ui-semihosting,ui-capture,e2e-test
+	@$(RUSTFLAGS_VAR)="-C linker=arm-none-eabi-ld -C link-arg=-Tlink.x $(REPRO_FLAGS)" \
+		cargo build --locked --release --target $(TARGET) --target-dir target/nonsecure \
+			-p sphincs-tz-nonsecure --features e2e-test
+	@echo "==> Running e2e under QEMU, capturing [UI-FP] frame fingerprints"
+	@log=$$(mktemp); \
+	qemu-system-arm \
+		-M mps2-an505 -monitor null -serial null -nographic \
+		-chardev stdio,id=hostio \
+		-semihosting-config enable=on,target=native,chardev=hostio \
+		-kernel $(SECURE_ELF) \
+		-device loader,file=$(NONSECURE_ELF) </dev/null 2>&1 | tee $$log >/dev/null; \
+	echo "==> ui-golden ($(GOLDEN_MODE)) vs tests/ui_fixtures.json"; \
+	rc=0; python3 tools/ui_fixture.py $(GOLDEN_MODE) tests/ui_fixtures.json < $$log || rc=$$?; \
+	rm -f $$log; \
+	if [ $$rc -eq 0 ]; then echo "==> ui-golden: PASS"; else echo "==> ui-golden: FAIL (rc=$$rc)"; fi; \
+	exit $$rc
 
 # Symbolic-model (ProVerif, Dolev-Yao) proof of the dual-SE seed-unlock protocol:
 # seed secrecy under partial compromise (Claims 1/2) + the PIN-gate authentication
