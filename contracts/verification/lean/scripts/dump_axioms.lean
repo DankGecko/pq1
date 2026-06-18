@@ -87,6 +87,11 @@ import SphincsCVerify
 #print axioms SphincsCVerify.Interpreter.C10.fors_root_compress
 #print axioms SphincsCVerify.Interpreter.C10.fors_phase
 
+-- A3.1 WOTS+C phase capstone: the per-layer WOTS interp fragment refines
+-- Spec.Wots.pkFromSig (digit-sum≠205 → revert; else env "wotsPk" = wordOf (pad16 wpk)
+-- with pkFromSig … = some wpk). Non-vacuity witnessed by wots_pkfromsig_nonvacuous.
+#print axioms SphincsCVerify.Interpreter.C10.wots_pkfromsig
+
 #print axioms SphincsCVerify.Spec.Theorems.verify_deterministic
 #print axioms SphincsCVerify.Spec.Theorems.verify_rejects_wrong_length
 #print axioms SphincsCVerify.Wallet.MultiOwnable.bumpBootstrap_monotonic

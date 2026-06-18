@@ -5107,4 +5107,230 @@ private theorem pkFromSig_eq
     from fun h => h hgate)]
   -- The `else` branch is `some (thMulti seed (wotsPk …) chainValues)`; rewrite wotsEndptList → chainValues.
   rw [wotsEndptList_eq_chainValues sig seed layer tree kp msgHash sigma wotsPtr hsig]
+
+-- Seal pkFromSig + the base-w digit decoders so the capstone composition below
+-- never whnf-reduces them: they unfold to 43-fold digit folds over the (opaque,
+-- sealed) WOTS digest, which blows the heartbeat budget. `pkFromSig_eq` above
+-- already performed the one controlled unfold of `pkFromSig`. This closes the
+-- 50M/16M-heartbeat whnf timeouts in `wots_pkfromsig` / `wots_pkfromsig_nonvacuous`.
+attribute [local irreducible] Spec.Wots.pkFromSig SphincsCVerify.Util.digitSum SphincsCVerify.Util.extractDigits
+
+set_option maxHeartbeats 50000000
+set_option maxRecDepth 8000
+/-- **WOTS `pkFromSig` capstone.** From a per-layer-preamble VM — `seed = wordOf seed`,
+    `wotsAdrs = wordOf (Adrs.wots layer tree kp)`, `currentNode = wordOf (pad16 msgHash)`,
+    `count = wordOf (u32ToB32 sigma.count)`, `sigBase = 0`, `sigOff = wotsPtr` (< 4096),
+    `layer/idxTree/idxLeaf` the `.toNat`s of the position params, `N_MASK`, `OUT = 0x600`,
+    `digitSum = 0`, and `seed` in scratch `[0,0x20)` — running `wotsBody`:
+
+    * if the digit-sum check fails (`digitSum (extractDigits d) ≠ TargetSum`, `d` the WOTS
+      digest), reverts (`.2 = some Halt.reverted`); else
+    * falls through and binds `"wotsPk" = wordOf (pad16 wpk)` where
+      `Spec.Wots.pkFromSig seed layer tree kp msgHash sigma = some wpk`.
+
+    The per-chain signature values are bound to the calldata loads via `hsig`
+    (`sigma.chains[i] = loadValue16 sig (wotsPtr+16i)`) — the bounded, dischargeable
+    sigma hypothesis (chain count = L = 43; non-vacuity certified by `wots_pkfromsig_nonvacuous`).
+    Composes `wots_digit_hash` + `wots_digit_sum` + `wots_chain_outer_loop` + `wots_pk_compress`. -/
+theorem wots_pkfromsig
+    (sig : ByteVec Spec.SignatureLen) (vm : VM)
+    (seed : ByteVec 32) (layer : UInt32) (tree : UInt64) (kp : UInt32)
+    (msgHash : ByteVec 16) (sigma : Spec.Wots.Sigma) (wotsPtr : Nat) (hwp : wotsPtr < 4096)
+    (hsig : ∀ i (h : i < sigma.chains.size), sigma.chains[i] = ByteVec.loadValue16 sig (wotsPtr + 16 * i))
+    (hseedw : vm.env "seed" = wordOf seed)
+    (hwa : vm.env "wotsAdrs" = wordOf (Spec.Adrs.wots layer tree kp))
+    (hcn : vm.env "currentNode" = wordOf (ByteVec.pad16 msgHash))
+    (hcount : vm.env "count" = wordOf (ByteVec.u32ToB32 sigma.count))
+    (hsigbase : vm.env "sigBase" = 0)
+    (hsigoff : vm.env "sigOff" = wotsPtr)
+    (hlayer : vm.env "layer" = layer.toNat)
+    (hidxTree : vm.env "idxTree" = tree.toNat)
+    (hidxLeaf : vm.env "idxLeaf" = kp.toNat)
+    (hN : vm.env "N_MASK" = NMASK)
+    (hOUT : vm.env "OUT" = 0x600)
+    (hds0 : vm.env "digitSum" = 0) :
+    (if SphincsCVerify.Util.digitSum (SphincsCVerify.Util.extractDigits
+          (Spec.wotsDigest seed (Spec.Adrs.wots layer tree kp) (ByteVec.pad16 msgHash) sigma.count))
+          ≠ Spec.TargetSum then
+        (execList c10Oracle sig wotsBody vm).2 = some Halt.reverted
+      else
+        (execList c10Oracle sig wotsBody vm).2 = none
+        ∧ ∃ wpk, Spec.Wots.pkFromSig seed layer tree kp msgHash sigma = some wpk
+            ∧ (execList c10Oracle sig wotsBody vm).1.env "wotsPk" = wordOf (ByteVec.pad16 wpk)) := by
+  -- Abbreviate the WOTS adrs and digest (plain `let`-equalities; no goal rewrite).
+  obtain ⟨wotsA, hwotsA⟩ : ∃ a, a = Spec.Adrs.wots layer tree kp := ⟨_, rfl⟩
+  obtain ⟨d_bv, hd_bv⟩ : ∃ d, d = Spec.wotsDigest seed wotsA (ByteVec.pad16 msgHash) sigma.count := ⟨_, rfl⟩
+  -- Rewrite the goal's `wotsDigest seed (Adrs.wots …)` occurrence to the abbreviation `d_bv`.
+  rw [show Spec.wotsDigest seed (Spec.Adrs.wots layer tree kp) (ByteVec.pad16 msgHash) sigma.count = d_bv
+      from by rw [hd_bv, hwotsA]]
+  -- ===== Phase 1: digit hash. `execList_append` splits `wotsDigitHashFragment` off. =====
+  unfold wotsBody
+  rw [execList_append c10Oracle sig wotsDigitHashFragment _ vm]
+  have hwa' : vm.env "wotsAdrs" = wordOf wotsA := by rw [hwotsA]; exact hwa
+  obtain ⟨hdhNone, hdhD⟩ := wots_digit_hash sig vm seed wotsA msgHash sigma.count
+    hseedw hwa' hcn hcount hOUT
+  -- After the digit hash: env "d" = wordOf d_bv, seed re-laid in [0,0x20), all other env vars persist.
+  obtain ⟨v1, hv1⟩ : ∃ v1, (execList c10Oracle sig wotsDigitHashFragment vm).1 = v1 := ⟨_, rfl⟩
+  -- Rewrite the whole `execList wotsDigitHashFragment vm` pair to `(v1, none)` so the
+  -- `execList_append` match reduces (a bare `.2 = none` rewrite cannot fire on the match
+  -- scrutinee — this was masked by the pre-seal whnf timeout).
+  have hpair : execList c10Oracle sig wotsDigitHashFragment vm = (v1, none) := by
+    rw [← hv1, ← hdhNone]
+  simp only [hpair]
+  -- hdhD : (execList …).1.env "d" = wordOf (wotsDigest seed wotsA (pad16 msgHash) sigma.count); fold to d_bv.
+  -- (Keep hdhD in `(execList …).1` form so `hv1d` below closes via `rw [← hv1]; exact hdhD`, consistent
+  --  with `hv1seedmem`/`hv1pv`.)
+  rw [show Spec.wotsDigest seed wotsA (ByteVec.pad16 msgHash) sigma.count = d_bv from hd_bv.symm] at hdhD
+  -- v1's env/mem facts.
+  have hv1d : v1.env "d" = wordOf d_bv := by rw [← hv1]; exact hdhD
+  have hv1seedmem : ∀ k, k < 32 → v1.mem (0 + k) = seed.data.getD k 0 := by
+    intro k hk; rw [← hv1]; exact wotsDigitHashFragment_seed_mem sig vm seed hseedw hOUT k hk
+  have hv1pv : ∀ x, x ≠ "d" → v1.env x = vm.env x := by
+    intro x hx; rw [← hv1]; exact wotsDigitHashFragment_preserves_var sig vm x hx
+  have hv1wa : v1.env "wotsAdrs" = wordOf wotsA := by rw [hv1pv "wotsAdrs" (by decide)]; exact hwa'
+  have hv1sigbase : v1.env "sigBase" = 0 := by rw [hv1pv "sigBase" (by decide)]; exact hsigbase
+  have hv1sigoff : v1.env "sigOff" = wotsPtr := by rw [hv1pv "sigOff" (by decide)]; exact hsigoff
+  have hv1layer : v1.env "layer" = layer.toNat := by rw [hv1pv "layer" (by decide)]; exact hlayer
+  have hv1idxTree : v1.env "idxTree" = tree.toNat := by rw [hv1pv "idxTree" (by decide)]; exact hidxTree
+  have hv1idxLeaf : v1.env "idxLeaf" = kp.toNat := by rw [hv1pv "idxLeaf" (by decide)]; exact hidxLeaf
+  have hv1N : v1.env "N_MASK" = NMASK := by rw [hv1pv "N_MASK" (by decide)]; exact hN
+  have hv1OUT : v1.env "OUT" = 0x600 := by rw [hv1pv "OUT" (by decide)]; exact hOUT
+  have hv1ds0 : v1.env "digitSum" = 0 := by rw [hv1pv "digitSum" (by decide)]; exact hds0
+  -- ===== Phase 2: letv "digitSum" 0 (re-init); then the digit-sum loop. =====
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  obtain ⟨v2, hv2⟩ : ∃ v2, (execStmt c10Oracle sig (.letv "digitSum" (.lit 0)) v1).1 = v2 := ⟨_, rfl⟩
+  rw [hv2]
+  have hv2env : v2.env = setVar v1.env "digitSum" 0 := by rw [← hv2]; simp only [execStmt, eval]
+  have hv2mem : v2.mem = v1.mem := by rw [← hv2]; simp only [execStmt]
+  have hv2d : v2.env "d" = wordOf d_bv := by rw [hv2env, setVar_get_ne _ _ _ _ (by decide)]; exact hv1d
+  have hv2ds0 : v2.env "digitSum" = 0 := by rw [hv2env, setVar_get_eq]
+  -- The digit-sum forRange statement = execFor … 43 0 v2.
+  have hdsStmt : execStmt c10Oracle sig (.forRange "ii" (.lit 43) wotsDigitSumBody) v2
+      = execFor c10Oracle sig "ii" wotsDigitSumBody 43 0 v2 := by simp only [execStmt, eval]
+  obtain ⟨hsumNone, hsumVal, hsumD⟩ := wots_digit_sum sig v2 d_bv hv2d hv2ds0
+  rw [execList_cons_none c10Oracle sig _ _ _ (by rw [hdsStmt]; exact hsumNone), hdsStmt]
+  obtain ⟨v3, hv3⟩ : ∃ v3, (execFor c10Oracle sig "ii" wotsDigitSumBody 43 0 v2).1 = v3 := ⟨_, rfl⟩
+  rw [hv3]
+  -- v3's facts: digitSum = digitSum(extractDigits d_bv), d persists; all non-{ii,digitSum} env persist; mem unchanged.
+  have hv3ds : v3.env "digitSum"
+      = SphincsCVerify.Util.digitSum (SphincsCVerify.Util.extractDigits d_bv) := by rw [← hv3]; exact hsumVal
+  have hv3pv : ∀ x, x ≠ "ii" → x ≠ "digitSum" → v3.env x = v2.env x := by
+    intro x h1 h2; rw [← hv3]; exact execFor_wotsDigitSumBody_preserves_var sig x ⟨h1, h2⟩ 43 0 v2
+  have hv3mem : ∀ a, v3.mem a = v2.mem a := by intro a; rw [← hv3]; exact execFor_wotsDigitSumBody_mem sig a 43 0 v2
+  -- ===== Phase 3: the ifnz revert gate. Case-split on the digit-sum equality. =====
+  rw [execList]
+  by_cases hgate : SphincsCVerify.Util.digitSum (SphincsCVerify.Util.extractDigits d_bv) = 205
+  · -- digit sum = 205 = TargetSum: the ifnz falls through; pkFromSig returns `some`.
+    rw [if_neg (show ¬ (SphincsCVerify.Util.digitSum (SphincsCVerify.Util.extractDigits d_bv) ≠ Spec.TargetSum)
+      from fun h => h (by rw [hgate]; rfl))]
+    have hcondz : execStmt c10Oracle sig
+        (.ifnz (.iszero (.bin .eq (.var "digitSum") (.lit 205))) [.revert]) v3 = (v3, none) := by
+      unfold execStmt
+      rw [if_neg]
+      -- side-goal: ¬ (eval (iszero (eq digitSum 205)) ≠ 0); under hgate the digit sum is 205.
+      show ¬ eval sig v3 (.iszero (.bin .eq (.var "digitSum") (.lit 205))) ≠ 0
+      simp only [eval, hv3ds]
+      rw [if_pos hgate]
+      decide
+    rw [hcondz]
+    -- The remaining 7 statements ARE `wotsContTail`; fold the goal to it.
+    show (execList c10Oracle sig wotsContTail v3).2 = none
+      ∧ ∃ wpk, Spec.Wots.pkFromSig seed layer tree kp msgHash sigma = some wpk
+          ∧ (execList c10Oracle sig wotsContTail v3).1.env "wotsPk" = wordOf (ByteVec.pad16 wpk)
+    -- v3 const facts (inherited through digitSum re-init + the sum loop).
+    have hv3d : v3.env "d" = wordOf d_bv := by rw [hv3pv "d" (by decide) (by decide), hv2d]
+    have hv3wa : v3.env "wotsAdrs" = wordOf (Spec.Adrs.wots layer tree kp) := by
+      rw [hv3pv "wotsAdrs" (by decide) (by decide), hv2env, setVar_get_ne _ _ _ _ (by decide), ← hwotsA]; exact hv1wa
+    have hv3sigbase : v3.env "sigBase" = 0 := by
+      rw [hv3pv "sigBase" (by decide) (by decide), hv2env, setVar_get_ne _ _ _ _ (by decide)]; exact hv1sigbase
+    have hv3sigoff : v3.env "sigOff" = wotsPtr := by
+      rw [hv3pv "sigOff" (by decide) (by decide), hv2env, setVar_get_ne _ _ _ _ (by decide)]; exact hv1sigoff
+    have hv3layer : v3.env "layer" = layer.toNat := by
+      rw [hv3pv "layer" (by decide) (by decide), hv2env, setVar_get_ne _ _ _ _ (by decide)]; exact hv1layer
+    have hv3idxTree : v3.env "idxTree" = tree.toNat := by
+      rw [hv3pv "idxTree" (by decide) (by decide), hv2env, setVar_get_ne _ _ _ _ (by decide)]; exact hv1idxTree
+    have hv3idxLeaf : v3.env "idxLeaf" = kp.toNat := by
+      rw [hv3pv "idxLeaf" (by decide) (by decide), hv2env, setVar_get_ne _ _ _ _ (by decide)]; exact hv1idxLeaf
+    have hv3N : v3.env "N_MASK" = NMASK := by
+      rw [hv3pv "N_MASK" (by decide) (by decide), hv2env, setVar_get_ne _ _ _ _ (by decide)]; exact hv1N
+    have hv3OUT : v3.env "OUT" = 0x600 := by
+      rw [hv3pv "OUT" (by decide) (by decide), hv2env, setVar_get_ne _ _ _ _ (by decide)]; exact hv1OUT
+    have hv3seedmem : ∀ k, k < 32 → v3.mem (0 + k) = seed.data.getD k 0 := by
+      intro k hk; rw [hv3mem (0 + k), hv2mem]; exact hv1seedmem k hk
+    -- The heavy chain-loop + PK-compress block (own heartbeat budget).
+    obtain ⟨htailNone, htailVal⟩ := wots_cont_tail sig v3 seed layer tree kp d_bv wotsPtr hwp
+      hv3d hv3wa hv3sigbase hv3sigoff hv3layer hv3idxTree hv3idxLeaf hv3N hv3OUT hv3seedmem
+    refine ⟨htailNone, ?_⟩
+    -- pkFromSig = some (thMulti seed (wotsPk …) (wotsEndptList …)); the bridge (own budget).
+    refine ⟨Spec.thMulti seed (Spec.Adrs.wotsPk layer tree kp) (wotsEndptList seed layer tree kp d_bv sig wotsPtr), ?_, htailVal⟩
+    -- `d_bv = wotsDigest seed (Adrs.wots layer tree kp) (pad16 msgHash) sigma.count` (fold both abbrevs).
+    have hd_bv' : d_bv = Spec.wotsDigest seed (Spec.Adrs.wots layer tree kp) (ByteVec.pad16 msgHash) sigma.count := by
+      rw [hd_bv, hwotsA]
+    rw [hd_bv']
+    exact pkFromSig_eq sig seed layer tree kp msgHash sigma wotsPtr hsig
+      (by rw [← hd_bv']; exact hgate)
+  · -- digit sum ≠ 205: the ifnz reverts; `execList_append` short-circuit gives `some Halt.reverted`.
+    rw [if_pos (show SphincsCVerify.Util.digitSum (SphincsCVerify.Util.extractDigits d_bv) ≠ Spec.TargetSum
+      from fun h => hgate (by rw [h]; rfl))]
+    have hcondnz : execStmt c10Oracle sig
+        (.ifnz (.iszero (.bin .eq (.var "digitSum") (.lit 205))) [.revert]) v3
+        = (v3, some Halt.reverted) := by
+      unfold execStmt
+      rw [if_pos]
+      · simp only [execList, execStmt]
+      · show eval sig v3 (.iszero (.bin .eq (.var "digitSum") (.lit 205))) ≠ 0
+        simp only [eval, hv3ds]
+        rw [if_neg (show ¬ (SphincsCVerify.Util.digitSum (SphincsCVerify.Util.extractDigits d_bv) = 205)
+          from hgate)]
+        decide
+    rw [hcondnz]
+
+set_option maxHeartbeats 16000000 in
+set_option maxRecDepth 8000 in
+/-- **Non-vacuity certificate for `wots_pkfromsig`.** The bounded sigma hypothesis `hsig`
+    is dischargeable with a concrete witness — `sigma.chains := Array.ofFn (loadValue16 …)`
+    (size = L = 43, so `chainsLen` holds; the dependent getElem matches the calldata load) —
+    and every env precondition is satisfiable (a concrete `env0`/`vm0`). Mirrors
+    `fors_tree_body_nonvacuous`: the mere elaboration of `wots_pkfromsig` applied to these
+    witnesses is the certificate (no `∀`-over-Nat hypothesis is left unsatisfiable). -/
+private theorem wots_pkfromsig_nonvacuous (sig : ByteVec Spec.SignatureLen) (seed : ByteVec 32) :
+    True := by
+  let sigma : Spec.Wots.Sigma :=
+    { chains := Array.ofFn (n := 43) (fun i : Fin 43 => ByteVec.loadValue16 sig (0 + 16 * i.val))
+      chainsLen := by rw [Array.size_ofFn]; rfl
+      count := ByteVec.loadU32BE sig 688 }
+  let env0 : VarEnv :=
+    setVar (setVar (setVar (setVar (setVar (setVar (setVar (setVar (setVar (setVar (setVar
+      (setVar (fun _ => 0)
+      "seed" (wordOf seed))
+      "wotsAdrs" (wordOf (Spec.Adrs.wots 0 0 0)))
+      "currentNode" (wordOf (ByteVec.pad16 (ByteVec.zero 16))))
+      "count" (wordOf (ByteVec.u32ToB32 sigma.count)))
+      "sigBase" 0)
+      "sigOff" 0)
+      "layer" ((0 : UInt32).toNat))
+      "idxTree" ((0 : UInt64).toNat))
+      "idxLeaf" ((0 : UInt32).toNat))
+      "N_MASK" NMASK)
+      "OUT" 0x600)
+      "digitSum" 0
+  let vm0 : VM := { mem := memOfBytes seed, env := env0 }
+  have _inst := wots_pkfromsig sig vm0 seed 0 0 0 (ByteVec.zero 16) sigma 0 (by decide)
+    (fun i h => by
+      show (Array.ofFn (n := 43) (fun j : Fin 43 => ByteVec.loadValue16 sig (0 + 16 * j.val)))[i] = _
+      rw [Array.getElem_ofFn])
+    (by show env0 "seed" = wordOf seed; simp [env0, setVar])
+    (by show env0 "wotsAdrs" = wordOf (Spec.Adrs.wots 0 0 0); simp [env0, setVar])
+    (by show env0 "currentNode" = wordOf (ByteVec.pad16 (ByteVec.zero 16)); simp [env0, setVar])
+    (by show env0 "count" = wordOf (ByteVec.u32ToB32 sigma.count); simp [env0, setVar])
+    (by show env0 "sigBase" = 0; simp [env0, setVar])
+    (by show env0 "sigOff" = 0; simp [env0, setVar])
+    (by show env0 "layer" = (0 : UInt32).toNat; simp [env0, setVar])
+    (by show env0 "idxTree" = (0 : UInt64).toNat; simp [env0, setVar])
+    (by show env0 "idxLeaf" = (0 : UInt32).toNat; simp [env0, setVar])
+    (by show env0 "N_MASK" = NMASK; simp [env0, setVar])
+    (by show env0 "OUT" = 0x600; simp [env0, setVar])
+    (by show env0 "digitSum" = 0; simp [env0, setVar])
+  trivial
+
 end SphincsCVerify.Interpreter.C10
