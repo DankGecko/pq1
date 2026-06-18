@@ -121,4 +121,122 @@ theorem pad16_wordOf_inj {a b : ByteVec 16}
   have hd : (ByteVec.pad16 a).data.getD i 0 = (ByteVec.pad16 b).data.getD i 0 := by rw [hp]
   rwa [pad16_data_getD, pad16_data_getD, if_pos hi, if_pos hi] at hd
 
+/-! ## hmsg seed-memory
+
+`hmsg_digest` exposes only `env "digest"`; the FORS and hypertree phases also
+require the `[0,32)` seed window to hold `seed`'s bytes. `hmsgFragment` lays
+`mstore 0x00 seed` (statement 3) and every later store targets ≥ 0x20 (and the
+precompile writes `OUT = 0x600`), so the window survives as `seed = pkSeed`. -/
+theorem hmsg_seed_mem (sig : ByteVec Spec.SignatureLen) (vm : VM)
+    (hOUT : vm.env "OUT" = 0x600) (i : Nat) (hi : i < 32) :
+    (execList c10Oracle sig hmsgFragment vm).1.mem (0 + i) = beByte (vm.env "pkSeed") i := by
+  unfold hmsgFragment
+  rw [execList_cons_none c10Oracle sig _ _ vm (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList]
+  simp only [execStmt, eval, setVar, hOUT, ite_true, ite_false, String.reduceEq]
+  -- Frame `0 + i` (< 0x20) through the high writes (sha256 OUT=0x600; mstores at
+  -- 0x80/0x60/0x40/0x20), landing on the 0x00 seed store via `mstore32_get`.
+  rw [writeRegion_frame _ 1536 _ (0 + i) (by omega),
+      mstore32_frame _ 128 _ (0 + i) (by omega),
+      mstore32_frame _ 96 _ (0 + i) (by omega),
+      mstore32_frame _ 64 _ (0 + i) (by omega),
+      mstore32_frame _ 32 _ (0 + i) (by omega),
+      mstore32_get _ 0 _ i hi]
+
+/-! ## FORS-phase post-conditions
+
+`fors_phase` exposes only `forsPk`/revert; the hypertree phase also needs the
+loop-invariant env vars (`seed`/`N_MASK`/`OUT`/`root`) and the FORS-set vars
+(`htIdx`/`sigBase`). Read-only vars come from the generic env-frame; the set
+vars from a head-split + env-frame on the tail. -/
+
+/-- `htIdx` is set by `forsPhaseFragment`'s head `letv` (always — before any
+    revert) and never reassigned, so it ends as `extractHtIndex digest`. -/
+theorem fors_post_htIdx (sig : ByteVec Spec.SignatureLen) (vm : VM) (digest_bv : ByteVec 32)
+    (hdig : vm.env "digest" = wordOf digest_bv) :
+    (execList c10Oracle sig forsPhaseFragment vm).1.env "htIdx"
+      = SphincsCVerify.Util.extractHtIndex digest_bv := by
+  unfold forsPhaseFragment
+  rw [execList]
+  simp only [execStmt]
+  refine Eq.trans (execList_env_frame c10Oracle sig _ "htIdx" _ ?_) ?_
+  · decide
+  · simp only [eval, setVar, ite_true]
+    rw [hdig, extractHtIndex_eq_wordShift digest_bv]
+
+/-- The read-only env vars (`seed`/`root`/`N_MASK`/`OUT`/`message`) are assigned
+    nowhere in `forsPhaseFragment`, so they survive unchanged. -/
+theorem fors_post_const (sig : ByteVec Spec.SignatureLen) (vm : VM)
+    (x : String) (hx : assignsVarList forsPhaseFragment x = false) :
+    (execList c10Oracle sig forsPhaseFragment vm).1.env x = vm.env x :=
+  execList_env_frame c10Oracle sig forsPhaseFragment x vm hx
+
+/-- Phase composition, fall-through arm: if `xs` runs without halting to `vm'`,
+    then `xs ++ ys` continues into `ys` from `vm'`. -/
+theorem execList_append_none {n : Nat} (sha : List UInt8 → Spec.ByteVec 32) (sig : Spec.ByteVec n)
+    (xs ys : List Stmt) (vm vm' : VM) (h : execList sha sig xs vm = (vm', none)) :
+    execList sha sig (xs ++ ys) vm = execList sha sig ys vm' := by
+  rw [execList_append, h]
+
+/-- Phase composition, halt arm: if `xs` halts at `vm'` with `hh`, so does `xs ++ ys`. -/
+theorem execList_append_halt {n : Nat} (sha : List UInt8 → Spec.ByteVec 32) (sig : Spec.ByteVec n)
+    (xs ys : List Stmt) (vm vm' : VM) (hh : Halt) (h : execList sha sig xs vm = (vm', some hh)) :
+    execList sha sig (xs ++ ys) vm = (vm', some hh) := by
+  rw [execList_append, h]
+
+/-- An `ifnz cond [revert]` statement leaves the VM unchanged and halts (`some
+    reverted`) iff the condition is non-zero. Reused by the sig-length guard and
+    the FORS forced-zero gate. -/
+theorem execStmt_ifnz_revert {n : Nat} (sha : List UInt8 → Spec.ByteVec 32) (sig : Spec.ByteVec n)
+    (cond : Expr) (vm : VM) :
+    execStmt sha sig (.ifnz cond [.revert]) vm
+      = (vm, if eval sig vm cond = 0 then none else some Halt.reverted) := by
+  unfold execStmt
+  by_cases h : eval sig vm cond = 0
+  · rw [if_neg (not_not_intro h), if_pos h]
+  · rw [if_pos h, if_neg h]
+    simp only [execList, execStmt]
+
+/-- `sigBase` is set to `sig.offset = 0` at FORS statement 4; given the FORS
+    phase did not halt (`.2 = none`, the pass case), it ends as `0`. Split the
+    fragment at the forced-zero gate: if the prefix (through the gate) halts, the
+    whole phase halts (contradicting `hnone`); otherwise the `sigBase` letv runs. -/
+theorem fors_post_sigBase (sig : ByteVec Spec.SignatureLen) (vm : VM)
+    (hnone : (execList c10Oracle sig forsPhaseFragment vm).2 = none) :
+    (execList c10Oracle sig forsPhaseFragment vm).1.env "sigBase" = 0 := by
+  have hsplit : forsPhaseFragment
+      = [ .letv "htIdx" (.bin .band (.bin .shr (.lit 143) (.var "digest")) (.lit 0x3FFFF))
+        , .letv "dVal" (.var "digest")
+        , .ifnz (.bin .band (.bin .shr (.lit 132) (.var "dVal")) (.lit 0x7FF)) [ .revert ] ]
+        ++ [ .letv "sigBase" .sigOffset
+           , .forRange "i" (.lit 12) forsTreeBody
+           , .block forsLastTreeBody
+           , .mstore (.lit 0x20)
+               (.bin .bor (.bin .shl (.lit 160) (.var "htIdx")) (.bin .shl (.lit 128) (.lit 4)))
+           , .forRange "i" (.lit 13) forsCopyBody
+           , .sha256 (.lit 0x00) (.lit 0x1E0) (.var "OUT")
+           , .letv "forsPk" (.bin .band (.mload (.var "OUT")) (.var "N_MASK")) ] := rfl
+  rw [hsplit] at hnone ⊢
+  cases hpre : execList c10Oracle sig
+      [ .letv "htIdx" (.bin .band (.bin .shr (.lit 143) (.var "digest")) (.lit 0x3FFFF))
+      , .letv "dVal" (.var "digest")
+      , .ifnz (.bin .band (.bin .shr (.lit 132) (.var "dVal")) (.lit 0x7FF)) [ .revert ] ] vm with
+  | mk vm3 o3 =>
+    cases o3 with
+    | some h => rw [execList_append_halt _ _ _ _ _ _ _ hpre] at hnone; exact absurd hnone (by simp)
+    | none =>
+      rw [execList_append_none _ _ _ _ _ _ hpre]
+      rw [execList_cons_none c10Oracle sig _ _ vm3 (by simp only [execStmt])]
+      rw [execList_env_frame c10Oracle sig _ "sigBase" _ (by decide)]
+      simp only [execStmt, eval, setVar, ite_true]
+
 end SphincsCVerify.Interpreter.C10
