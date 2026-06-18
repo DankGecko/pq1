@@ -53,15 +53,15 @@ theorem c10Program_decompose :
           [ .mstore (.lit 0x00) (.lit 0), .ret (.lit 0x00) ]
       , .ifnz (.iszero (.bin .eq (.bin .band (.var "pkRoot") (.var "N_MASK")) (.var "pkRoot")))
           [ .mstore (.lit 0x00) (.lit 0), .ret (.lit 0x00) ] ]
-      ++ hmsgFragment
-      ++ forsPhaseFragment
+      ++ (hmsgFragment
+      ++ (forsPhaseFragment
       ++ [ .letv "currentNode" (.var "forsPk")
          , .letv "idxTree" (.var "htIdx")
          , .letv "sigOff" (.lit 2336)
          , .forRange "layer" (.lit 2) htLayerBody
          , .letv "valid" (.bin .eq (.var "currentNode") (.var "root"))
          , .mstore (.lit 0x00) (.var "valid")
-         , .ret (.lit 0x00) ] := by rfl
+         , .ret (.lit 0x00) ])) := by rfl
 
 /-! ## Shared byte-level glue
 
@@ -322,5 +322,43 @@ theorem htLayers_satisfy_Hbind (sig : ByteVec Spec.SignatureLen)
     rw [hRHS, hoffeq, shl4_small hh (by omega), Nat.mod_eq_of_lt hofflt, cl_masked_eq_wordOf]
   · -- size
     rw [deserialise_layer sig k hk]; exact Array.size_ofFn
+
+/-- Package a `.1`/`.2`-fall-through pair into a single equality. -/
+theorem execList_pair {n : Nat} (sha : List UInt8 → Spec.ByteVec 32) (sig : Spec.ByteVec n)
+    (stmts : List Stmt) (vm v : VM) (h1 : (execList sha sig stmts vm).1 = v)
+    (h2 : (execList sha sig stmts vm).2 = none) :
+    execList sha sig stmts vm = (v, none) := by rw [← h1, ← h2]
+
+/-! ## Prefix guards
+
+`c10Program`'s prefix is two scratch `letv`s + three guards: a (dead) sig-length
+guard and the two N-mask guards. Each guard is VM-preserving when it passes and
+returns `0` (→ verdict `false`) when it fails. -/
+
+/-- The sig-length guard always passes (our `ByteVec` has length `SignatureLen = 4008`). -/
+theorem sigLen_guard_pass (sig : ByteVec Spec.SignatureLen) (vm : VM) :
+    execStmt c10Oracle sig (.ifnz (.iszero (.bin .eq .sigLength (.lit 4008))) [.revert]) vm
+      = (vm, none) := by
+  rw [execStmt_ifnz_revert, if_pos (by simp [eval, Spec.signatureLen_eq_4008])]
+
+/-- An N-mask guard over key var `v` (bound to `wordOf key`, `N_MASK = NMASK`):
+    passes (VM-preserving) iff `nMaskedB key`. -/
+theorem nmask_guard_pass (sig : ByteVec Spec.SignatureLen) (v : String) (key : ByteVec 32) (vm : VM)
+    (hkey : vm.env v = wordOf key) (hN : vm.env "N_MASK" = NMASK) (hpass : nMaskedB key = true) :
+    execStmt c10Oracle sig
+      (.ifnz (.iszero (.bin .eq (.bin .band (.var v) (.var "N_MASK")) (.var v)))
+        [.mstore (.lit 0x00) (.lit 0), .ret (.lit 0x00)]) vm = (vm, none) := by
+  unfold execStmt
+  rw [if_neg (by simp [eval, hkey, hN, of_decide_eq_true hpass])]
+
+/-- A failing N-mask guard halts with `return 0` (verdict `false`). -/
+theorem nmask_guard_fail (sig : ByteVec Spec.SignatureLen) (v : String) (key : ByteVec 32) (vm : VM)
+    (hkey : vm.env v = wordOf key) (hN : vm.env "N_MASK" = NMASK) (hfail : nMaskedB key = false) :
+    (execStmt c10Oracle sig
+      (.ifnz (.iszero (.bin .eq (.bin .band (.var v) (.var "N_MASK")) (.var v)))
+        [.mstore (.lit 0x00) (.lit 0), .ret (.lit 0x00)]) vm).2 = some (Halt.returned 0) := by
+  unfold execStmt
+  rw [if_pos (by simp [eval, hkey, hN, of_decide_eq_false hfail])]
+  simp [execList, execStmt, eval, mload32_mstore32_self]
 
 end SphincsCVerify.Interpreter.C10
