@@ -18,16 +18,5 @@
     "n_public": 2,
     "constraint_budget": 2000,
     "_note": "CowSwap GPv2Settlement.setPreSignature(bytes orderUid, bool signed) clear-signing circuit. Binds calldata to a static readable string 'Pre-sign CowSwap order'. Does NOT decode orderUid internals (orderDigest/owner/validTo) — a richer follow-up can add hex formatting. See circuits/cowswap/set_pre_signature/circuit.circom for the full rationale."
-  },
-  {
-    "id": "cowswap_eip712_order",
-    "src": "cowswap/eip712_order/circuit.circom",
-    "domain": "poseidon_canonical_order",
-    "ptau": "pot16_bls12_381_final.ptau",
-    "out": "cowswap_eip712_order.vk.bin",
-    "n_public": 3,
-    "constraint_budget": 20000,
-    "_ptau_note": "Requires pot16 (2^16): this circuit is ~17.7k constraints (> 2^14), so the repo-pinned ptau.lock=pot14 is too small for it — it is built out-of-band with build/ptau/pot16_bls12_381_final.ptau. See docs/VULN-cowswap-zk-amount-overflow.md Resolution.",
-    "_note": "CowSwap EIP-712 GPv2Order clear-signing circuit (M4 v3). Binds a 204-byte packed canonical encoding of the GPv2Order struct (now including chain_id and appData) to a 128-byte 8-line × 16-char readable layout (kind / SELL: / amount / symbol / for-at-least / amount / symbol / reserved). Token symbols + decimals come from a Poseidon-Merkle proof against the firmware's `ERC20_POSEIDON_ROOT`, which is the third public input — this replaces v2's hardcoded 8-entry mainnet-only mux with the full multi-chain `secure/data/erc20.json` registry. Amounts are formatted by circuits/lib/format.circom (MAX_INT_DIGITS=10, FRAC_DIGITS=4). raw_amount is range-checked to 190 bits so raw_amount*scale_factor cannot wrap the BLS12-381 scalar field (docs/VULN-cowswap-zk-amount-overflow.md); a non-zero remainder < 10^-FRAC_DIGITS is permitted (truncated display) while genuinely sub-0.0001 amounts render as the explicit '<0.0001' sub-precision string. The secure world recomputes the EIP-712 digest by re-keccaking the same canonical bytes (now including the real appData from [172..204)), cross-checks canonical.chain_id against the verified VK bundle chain_id, AND natively re-asserts the 190-bit amount bound (verify.rs step 1b) before trusting the readable. See circuits/cowswap/eip712_order/circuit.circom and docs/m4-cowswap-eip712-impl.md for the full rationale."
   }
 ]

@@ -23,7 +23,6 @@
 //!   secure/src/db_roots.rs
 //!   secure/data/vks.review.txt
 //!   secure/data/erc7730.review.txt
-//!   circuits/generated/erc20_poseidon_tree.json
 //!
 //! Run manually after editing the JSON sources:
 //!
@@ -156,11 +155,6 @@ fn main() {
     let erc7730_review_out = root.join("secure/data/erc7730.review.txt");
     let roots_out = root.join("secure/src/db_roots.rs");
     let review_out = root.join("secure/data/vks.review.txt");
-    // The Poseidon-Merkle tree export is consumed by the off-device
-    // witness generator that builds CowSwap EIP-712 v3 proofs. It's
-    // committed into the repo so `make e2e-hw` remains deterministic
-    // without requiring a live dbgen run.
-    let poseidon_tree_out = root.join("circuits/generated/erc20_poseidon_tree.json");
 
     // ----- ERC20 metadata DB -----
     // All three host-side blobs share the tools/companion-stub dir;
@@ -178,17 +172,6 @@ fn main() {
         erc20_out.display(),
         erc20_res.blob.len(),
         hex::encode(erc20_res.root),
-    );
-    // ERC20 Poseidon-Merkle companion artifact.
-    if let Some(parent) = poseidon_tree_out.parent() {
-        fs::create_dir_all(parent).expect("create circuits/generated");
-    }
-    fs::write(&poseidon_tree_out, &erc20_res.poseidon_tree_json)
-        .expect("write erc20_poseidon_tree.json");
-    println!(
-        "dbgen: wrote {} (poseidon root = {})",
-        poseidon_tree_out.display(),
-        hex::encode(erc20_res.poseidon_root),
     );
 
     // ----- VK DB -----
@@ -336,16 +319,13 @@ fn main() {
     // ----- secure/src/db_roots.rs -----
     //
     // This is the only file the secure-world build sees from the DBs.
-    // Five 32-byte Merkle roots are baked into the secure image: the
+    // The 32-byte Merkle roots baked into the secure image: the
     // SHA-256 ERC-20 + VK + Names roots (for the transfer display /
-    // VK bundle verifier / address-name lookup paths), the Poseidon
-    // ERC-20 root (used as the third public input for the CowSwap
-    // EIP-712 v3 Groth16 proof), and the ERC-7730 descriptor root
-    // (for the Phase-3 trailer parser).
+    // VK bundle verifier / address-name lookup paths) and the ERC-7730
+    // descriptor root (for the Phase-3 trailer parser).
     let roots_rs = render_db_roots(
         &erc20_res.root,
         &vk_res.root,
-        &erc20_res.poseidon_root,
         &names_res.root,
         &selectors_res.root,
         &selectors_e2e_res.root,
@@ -377,13 +357,6 @@ const DB_ROOTS_HEADER: &str = "\
 //! a bundle only degrades to a fail-safe render (unknown token / raw
 //! hex / blind-sign), never a forged display.
 //!
-//! `ERC20_POSEIDON_ROOT` is the parallel BLS12-381 Poseidon-Merkle
-//! tree over the same sorted (chain_id, contract) entry set that
-//! the CowSwap EIP-712 v3 Groth16 circuit consumes as its third
-//! public input. It's stored as the 32-byte little-endian canonical
-//! encoding of the root scalar, ready to be fed into
-//! `bls12_381::Scalar::from_bytes`.
-//!
 //! `NAMES_DB_ROOT` anchors the address-name DB. Every trusted-UI
 //! address render consults this root before a human-readable
 //! name is allowed to replace the raw 40-hex address.
@@ -413,7 +386,6 @@ const DB_ROOTS_HEADER: &str = "\
 fn render_db_roots(
     erc20_root: &[u8; 32],
     vk_root: &[u8; 32],
-    erc20_poseidon_root: &[u8; 32],
     names_root: &[u8; 32],
     selectors_root: &[u8; 32],
     selectors_e2e_root: &[u8; 32],
@@ -426,7 +398,6 @@ fn render_db_roots(
     s.push_str(DB_ROOTS_HEADER);
     emit_root(&mut s, "ERC20_DB_ROOT", erc20_root);
     emit_root(&mut s, "VK_DB_ROOT", vk_root);
-    emit_root(&mut s, "ERC20_POSEIDON_ROOT", erc20_poseidon_root);
     emit_root(&mut s, "NAMES_DB_ROOT", names_root);
     writeln!(s, "#[cfg(not(feature = \"e2e-test\"))]").unwrap();
     emit_root(&mut s, "SELECTOR_DB_ROOT", selectors_root);

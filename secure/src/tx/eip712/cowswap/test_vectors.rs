@@ -332,6 +332,111 @@ fn multisend_wrapped_host_pipeline_composes() {
     .is_ok());
 }
 
+// ---------------------------------------------------------------------------
+// On-device decode trailer (`verify_and_bind_trailer`) — parse, binding,
+// and the AddrHex fallback. The `Decoded` positive path (a leg whose
+// ERC-20 bundle Merkle-verifies against the firmware-pinned ERC20_DB_ROOT
+// and whose token/chain match the canonical leg) is exercised end-to-end
+// by the QEMU CoW scenarios — building a real Merkle proof against the
+// committed tree isn't tractable in a host unit test. These tests pin the
+// security-critical behaviours: the keccak binding still gates, and a
+// missing/garbage/mismatched bundle DEGRADES a leg to AddrHex rather than
+// rejecting or trusting host-supplied metadata.
+
+#[test]
+fn decode_canonical_only_trailer_both_legs_addrhex() {
+    let canonical = fixture_canonical();
+    let calldata = fixture_calldata();
+    let owner = fixture_owner();
+    let v = verify_and_bind_trailer(&canonical, &calldata, 1, &owner)
+        .expect("canonical-only trailer with valid calldata must verify");
+    assert!(matches!(v.sell, CowLeg::AddrHex));
+    assert!(matches!(v.buy, CowLeg::AddrHex));
+    assert_eq!(v.canonical, canonical);
+}
+
+#[test]
+fn decode_trailer_rejected_on_order_digest_flip() {
+    let canonical = fixture_canonical();
+    let mut calldata = fixture_calldata();
+    calldata[100] ^= 0x01; // corrupt the bound orderDigest
+    let owner = fixture_owner();
+    assert!(verify_and_bind_trailer(&canonical, &calldata, 1, &owner).is_none());
+}
+
+#[test]
+fn decode_trailer_rejected_on_wrong_owner() {
+    let canonical = fixture_canonical();
+    let calldata = fixture_calldata();
+    assert!(verify_and_bind_trailer(&canonical, &calldata, 1, &[0u8; 20]).is_none());
+}
+
+#[test]
+fn decode_trailer_rejected_when_canonical_too_short() {
+    let calldata = fixture_calldata();
+    assert!(verify_and_bind_trailer(&[0u8; 100], &calldata, 1, &fixture_owner()).is_none());
+}
+
+#[test]
+fn decode_trailer_rejected_on_bad_calldata_len() {
+    let canonical = fixture_canonical();
+    assert!(verify_and_bind_trailer(&canonical, &[0u8; 36], 1, &fixture_owner()).is_none());
+}
+
+#[test]
+fn decode_garbage_leg_bundles_degrade_to_addrhex() {
+    // canonical(204) + sell_len||garbage + buy_len||garbage. The garbage
+    // can't Merkle-verify, so both legs fall back to AddrHex — but the
+    // order still verifies because the keccak binding is intact.
+    extern crate alloc;
+    let canonical = fixture_canonical();
+    let calldata = fixture_calldata();
+    let owner = fixture_owner();
+    let g = [0xABu8; 48];
+    let mut t = alloc::vec::Vec::new();
+    t.extend_from_slice(&canonical);
+    t.extend_from_slice(&(g.len() as u16).to_be_bytes());
+    t.extend_from_slice(&g);
+    t.extend_from_slice(&(g.len() as u16).to_be_bytes());
+    t.extend_from_slice(&g);
+    let v = verify_and_bind_trailer(&t, &calldata, 1, &owner)
+        .expect("binding intact, garbage legs must degrade not reject");
+    assert!(matches!(v.sell, CowLeg::AddrHex));
+    assert!(matches!(v.buy, CowLeg::AddrHex));
+}
+
+#[test]
+fn decode_zero_len_legs_are_addrhex() {
+    extern crate alloc;
+    let canonical = fixture_canonical();
+    let calldata = fixture_calldata();
+    let owner = fixture_owner();
+    let mut t = alloc::vec::Vec::new();
+    t.extend_from_slice(&canonical);
+    t.extend_from_slice(&0u16.to_be_bytes()); // sell_len = 0 → no bundle
+    t.extend_from_slice(&0u16.to_be_bytes()); // buy_len  = 0 → no bundle
+    let v = verify_and_bind_trailer(&t, &calldata, 1, &owner).expect("Some");
+    assert!(matches!(v.sell, CowLeg::AddrHex));
+    assert!(matches!(v.buy, CowLeg::AddrHex));
+}
+
+#[test]
+fn decode_malformed_len_prefix_does_not_panic() {
+    // A len prefix larger than the remaining bytes must not panic and
+    // must not reject — the leg simply degrades to AddrHex.
+    extern crate alloc;
+    let canonical = fixture_canonical();
+    let calldata = fixture_calldata();
+    let owner = fixture_owner();
+    let mut t = alloc::vec::Vec::new();
+    t.extend_from_slice(&canonical);
+    t.extend_from_slice(&0xFFFFu16.to_be_bytes()); // claims 65535 bytes, none follow
+    let v = verify_and_bind_trailer(&t, &calldata, 1, &owner)
+        .expect("malformed len must degrade, binding intact");
+    assert!(matches!(v.sell, CowLeg::AddrHex));
+    assert!(matches!(v.buy, CowLeg::AddrHex));
+}
+
 #[test]
 fn multisend_exec_host_pipeline_composes() {
     // Same composition through the `execTransaction` flavour: the

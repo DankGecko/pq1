@@ -318,7 +318,7 @@ fn render_safe_pages_inner(
     // (logic bug, memory fault), we ignore it and fall through to the
     // normal ladder, which lands on the loud blind-sign page.
     let inner_kind = if multi_send::is_multisend_claim(input.operation, &tx.to, safe.raw_data) {
-        let cow_body = 1 + order_body_page_count(cow.is_some_and(|v| v.readable.is_some()));
+        let cow_body = safe_cow_pages(cow);
         let count = multi_send::summarize(safe.raw_data)
             .map(|s| s.record_count)
             .unwrap_or(0);
@@ -602,7 +602,7 @@ pub fn multisend_sign_gate(
 
     // Page budget — refuse instead of truncating: a record the user
     // never saw is exactly the attack class this feature closes.
-    let cow_body = 1 + order_body_page_count(cow.is_some_and(|v| v.readable.is_some()));
+    let cow_body = safe_cow_pages(cow);
     let Some(inner_pages) = multi_send::records_pages_total(raw, &safe_address, cow_body)
     else {
         return MultisendGate::Reject("msend malformed");
@@ -692,14 +692,24 @@ fn inner_kind_hint(kind: &InnerKind<'_>) -> &'static str {
 /// each non-MultiSend arm's literal mirrors its `record_content_pages`
 /// arm — a divergence would show as blank or truncated pages in the
 /// QEMU multiSend e2e scenarios.
+/// Body + context-banner page count for a Safe-wrapped CoW presign.
+/// When `cow` is absent we budget the AddrHex maximum (conservative).
+fn safe_cow_pages(cow: Option<&VerifiedCowswapV3>) -> usize {
+    use crate::tx::eip712::cowswap::CowLeg;
+    1 + cow.map_or(
+        order_body_page_count(&CowLeg::AddrHex, &CowLeg::AddrHex),
+        |v| order_body_page_count(&v.sell, &v.buy),
+    )
+}
+
 fn inner_kind_page_count(kind: &InnerKind<'_>) -> usize {
     match kind {
         InnerKind::EmptyCall => 1,
         InnerKind::PlainEth => 2,
         InnerKind::Erc20Known(_) | InnerKind::Erc20Unknown(_) => 4,
         InnerKind::SafeMgmt(op) => safe_mgmt_page_count(op),
-        // Context banner + the shared CoW order body (6 proof / 8 addr).
-        InnerKind::CowswapPresign(v3) => 1 + order_body_page_count(v3.readable.is_some()),
+        // Context banner + the shared CoW order body (6 fully-decoded .. 8 addr).
+        InnerKind::CowswapPresign(v3) => safe_cow_pages(Some(v3)),
         InnerKind::UnknownSafeSelf => 3,
         InnerKind::MultiSend { inner_pages, .. } => *inner_pages,
         InnerKind::Blind => 3,
@@ -841,25 +851,20 @@ fn append_inner_kind_pages(
             write_line(&mut pages.buf[next_page][0], "CowSwap order");
             write_line(&mut pages.buf[next_page][1], "for this Safe:");
             write_short_addr(&mut pages.buf[next_page][2], &ctx.safe_address);
-            // Proof mode carries the sell/buy direction in the
-            // readable's first line; addr mode needs it surfaced here
-            // (mirrors the AddrOnly direct flow's banner row).
-            write_line(
-                &mut pages.buf[next_page][3],
-                match &v3.readable {
-                    Some(_) => "> next",
-                    None => order_kind_label(&v3.canonical),
-                },
-            );
+            // Surface the sell/buy direction on the context banner; the
+            // per-leg labels in the body restate it but this keeps it
+            // visible up-front (the direct flow shows it on page 0).
+            write_line(&mut pages.buf[next_page][3], order_kind_label(&v3.canonical));
             next_page += 1;
-            // P_n+1..: the shared v3 order body. Zero receiver renders
+            // P_n+1..: the shared CoW order body. Zero receiver renders
             // as "(= the Safe)" — GPv2 routes proceeds to the uid owner,
             // which the handler verified is this Safe.
             next_page = append_order_body_pages(
                 pages,
                 next_page,
                 &v3.canonical,
-                v3.readable.as_ref(),
+                &v3.sell,
+                &v3.buy,
                 Some("(= the Safe)"),
             );
         }

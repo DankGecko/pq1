@@ -55,10 +55,9 @@ const CHAIN_BUF_LEN_SIGN: usize = SIGN_USEROP_HEADER_LEN
     + 2
     + ZK_CLEAR_SIGN_FIXED_LEN
     + ZK_VK_BUNDLE_MAX_LEN
-    // v3 CoW EIP-712 trailer: 2-byte length + fixed prefix + VK bundle.
+    // CoW order trailer: 2-byte length + canonical + two ERC-20 bundles.
     + 2
-    + ZK_V3_FIXED_LEN
-    + ZK_VK_BUNDLE_MAX_LEN
+    + COW_ORDER_TRAILER_MAX_LEN
     // ERC-7730 clear-signing descriptor trailer (Phase 3): 2-byte
     // length + bundle (up to ERC7730_MAX_TRAILER_LEN = 5130 B). Sits
     // between self-attest and names per the wire-format ordering in
