@@ -3280,4 +3280,1831 @@ theorem fors_phase
         rw [hcond]; exact hz
     rw [hcondnz]
 
+/-! ## WOTS+C `pkFromSig` refinement — phase infrastructure
+
+The reusable byte/word/loop glue for the per-layer WOTS interp fragment
+(`SPHINCsC10Asm.sol` L153–200): the digit hash, the WOTS+C digit-sum gate, the 43
+WOTS chains (each a variable-length forward chain walk), and the PK-compression.
+Mirrors the FORS development (`fors_climb`/`fors_normal_trees`/`fors_root_compress`)
+where the shapes coincide, plus the WOTS-specific bridges:
+
+  * `chainHash_eq_fwd` — the spec `chainHash`'s back-peel `aux` recursion as a
+    *forward* `List.range'`-fold (the `forsAcc` analogue, structural, hash-free);
+  * `setChainIndex_make` / `setChainPos_make` — the ADRS chain-index / chain-pos
+    setters as field substitutions on `make` (byte-extensional);
+  * `chainPosAdrs_word` — the interp `or(and(or(wotsAdrs, i<<64), CHAINBASE_MASK),
+    pos<<32)` word equals `wordOf (make … ci=i cp=pos)` — the per-step ADRS word,
+    discharged INTERNALLY (no factored/unbounded hypothesis ⇒ zero vacuity risk).
+-/
+
+/-! ### `chainHash` as a forward fold
+
+`Spec.chainHash seed a val startPos steps = chainHash.aux … steps val`, where `aux`
+peels from the BACK (`pos = startPos + (steps-1-i)`). We re-express it as a forward
+`List.range' 0 steps` fold over `wotsChainFwdStep` (each step `j` hashes at
+`setChainPos a (startPos + j)`), the analogue of `forsAcc`'s `range'` fold. Purely
+structural — no `th`/`sha256` semantics, so `c10Oracle` irreducibility is irrelevant
+and it is fast/mathlib-free. -/
+
+set_option maxHeartbeats 2000000 in
+/-- One forward chain-walk step: `th` at chain-position `startPos + j`. The
+    `forsStep` analogue for the WOTS chain (the inner step loop's body). -/
+def wotsChainFwdStep (seed : ByteVec 32) (a : Spec.Adrs) (startPos : Nat)
+    (cur : ByteVec 16) (j : Nat) : ByteVec 16 :=
+  Spec.th seed (Spec.Adrs.setChainPos a (UInt32.ofNat (startPos + j))) (ByteVec.pad16 cur)
+
+/-- **`chainHash.aux` is a forward window fold.** Running the back-peel `aux m current`
+    equals folding `wotsChainFwdStep` over the forward window `[steps-m, steps)`. By
+    induction on `m` using the FRONT-cons of `range'` (`range'_succ`): `aux`'s front step
+    (`pos = startPos + (steps-1-m)` for the `m+1` call) lines up with `range' (steps-m-1)
+    (m+1)`'s head `steps-m-1`. Both index identities are `omega`. -/
+theorem chainHash_aux_eq_fwd (seed : ByteVec 32) (a : Spec.Adrs) (startPos steps : Nat) :
+    ∀ m, m ≤ steps → ∀ current,
+      Spec.chainHash.aux seed a startPos steps m current
+        = (List.range' (steps - m) m).foldl (wotsChainFwdStep seed a startPos) current := by
+  intro m
+  induction m with
+  | zero =>
+      intro _ current
+      show current = _
+      simp only [List.range'_zero, List.foldl_nil]
+  | succ m ih =>
+      intro hm current
+      have hth : Spec.th seed (Spec.Adrs.setChainPos a (UInt32.ofNat (startPos + (steps - 1 - m))))
+            (ByteVec.pad16 current)
+          = wotsChainFwdStep seed a startPos current (steps - m - 1) := by
+        unfold wotsChainFwdStep
+        congr 3
+        omega
+      show Spec.chainHash.aux seed a startPos steps m
+            (Spec.th seed (Spec.Adrs.setChainPos a (UInt32.ofNat (startPos + (steps - 1 - m))))
+              (ByteVec.pad16 current))
+          = _
+      rw [hth, ih (by omega)]
+      have hstart : steps - (m + 1) = steps - m - 1 := by omega
+      have hstep : steps - m - 1 + 1 = steps - m := by omega
+      rw [hstart, List.range'_succ, List.foldl_cons, hstep]
+
+/-- **`chainHash` as a forward fold.** `chainHash seed a val startPos steps` is the
+    forward fold of `wotsChainFwdStep` over `[0, steps)` from `val`. Instantiates
+    `chainHash_aux_eq_fwd` at `m = steps` (`range' 0 steps`). The `forsAcc`/`reconstructRoot_eq_foldl`
+    analogue for the WOTS chain; the inner step loop refines AGAINST this. -/
+theorem chainHash_eq_fwd (seed : ByteVec 32) (a : Spec.Adrs) (val : ByteVec 16)
+    (startPos steps : Nat) :
+    Spec.chainHash seed a val startPos steps
+      = (List.range' 0 steps).foldl (wotsChainFwdStep seed a startPos) val := by
+  show Spec.chainHash.aux seed a startPos steps steps val = _
+  rw [chainHash_aux_eq_fwd seed a startPos steps steps (Nat.le_refl steps) val, Nat.sub_self]
+
+/-! ### `setChainIndex`/`setChainPos` as field substitutions on `make`
+
+The ADRS setters are defined via `extract`/`append` (NOT `make`), so the word bridge
+needs them re-expressed as the matching `make` field-substitution before `wordOf_make`
+applies. Both are byte-extensional (`array_ext_getD` + the field-range case split). -/
+
+/-- Array extensionality via `getD` (default 0) over equal-size arrays. -/
+private theorem array_ext_getD (a b : Array UInt8) (hsz : a.size = b.size)
+    (h : ∀ k, k < a.size → a.getD k 0 = b.getD k 0) : a = b := by
+  apply Array.ext hsz
+  intro k hk1 hk2
+  have := h k hk1
+  rw [Array.getD_eq_getD_getElem?, Array.getElem?_eq_getElem hk1, Option.getD_some,
+      Array.getD_eq_getD_getElem?, Array.getElem?_eq_getElem hk2, Option.getD_some] at this
+  exact this
+
+/-- `getD` over `Array.extract` at an in-range index. -/
+private theorem extract_getD (arr : Array UInt8) (s e i : Nat) (h : i < min e arr.size - s) :
+    (arr.extract s e).getD i 0 = arr.getD (s + i) 0 := by
+  rw [Array.getD_eq_getD_getElem?, Array.getElem?_extract, if_pos h, ← Array.getD_eq_getD_getElem?]
+
+/-- `setChainIndex M idx`'s `data` is `M.data.extract 0 20 ++ ofU32BE idx ++ M.data.extract 24 32`. -/
+private theorem setChainIndex_data (M : Spec.Adrs) (idx : UInt32) :
+    (Spec.Adrs.setChainIndex M idx).data
+      = (M.data.extract 0 20 ++ (ByteVec.ofU32BE idx).data) ++ M.data.extract 24 32 := by
+  unfold Spec.Adrs.setChainIndex
+  simp only [ByteVec.cast]
+  show ((M.data.extract 0 20 ++ (ByteVec.ofU32BE idx).data) ++ M.data.extract 24 32) = _
+  rfl
+
+/-- `setChainPos M pos`'s `data` is `M.data.extract 0 24 ++ ofU32BE pos ++ M.data.extract 28 32`. -/
+private theorem setChainPos_data (M : Spec.Adrs) (pos : UInt32) :
+    (Spec.Adrs.setChainPos M pos).data
+      = (M.data.extract 0 24 ++ (ByteVec.ofU32BE pos).data) ++ M.data.extract 28 32 := by
+  unfold Spec.Adrs.setChainPos
+  simp only [ByteVec.cast]
+  show ((M.data.extract 0 24 ++ (ByteVec.ofU32BE pos).data) ++ M.data.extract 28 32) = _
+  rfl
+
+/-- **`make`'s `data` byte at `k`, by covering field.** The `getD` form (companion of
+    the private `make_data_getD_beByte`; this returns the covering field's `getD`, the shape
+    the `setChain*` substitution proofs consume). -/
+theorem make_data_getD (layer : UInt32) (tree : UInt64) (atype kp ci cp ha : UInt32) (k : Nat) :
+    (Spec.Adrs.make layer tree atype kp ci cp ha).data.getD k 0
+      = if k < 4 then (ByteVec.ofU32BE layer).data.getD k 0
+        else if k < 12 then (ByteVec.ofU64BE tree).data.getD (k - 4) 0
+        else if k < 16 then (ByteVec.ofU32BE atype).data.getD (k - 12) 0
+        else if k < 20 then (ByteVec.ofU32BE kp).data.getD (k - 16) 0
+        else if k < 24 then (ByteVec.ofU32BE ci).data.getD (k - 20) 0
+        else if k < 28 then (ByteVec.ofU32BE cp).data.getD (k - 24) 0
+        else (ByteVec.ofU32BE ha).data.getD (k - 28) 0 := by
+  have sL : (ByteVec.ofU32BE layer).data.size = 4 := (ByteVec.ofU32BE layer).size_eq
+  have sT : (ByteVec.ofU64BE tree).data.size = 8 := (ByteVec.ofU64BE tree).size_eq
+  have sA : (ByteVec.ofU32BE atype).data.size = 4 := (ByteVec.ofU32BE atype).size_eq
+  have sK : (ByteVec.ofU32BE kp).data.size = 4 := (ByteVec.ofU32BE kp).size_eq
+  have sC : (ByteVec.ofU32BE ci).data.size = 4 := (ByteVec.ofU32BE ci).size_eq
+  have sP : (ByteVec.ofU32BE cp).data.size = 4 := (ByteVec.ofU32BE cp).size_eq
+  show ((((((((ByteVec.ofU32BE layer).data ++ (ByteVec.ofU64BE tree).data) ++ (ByteVec.ofU32BE atype).data)
+        ++ (ByteVec.ofU32BE kp).data) ++ (ByteVec.ofU32BE ci).data) ++ (ByteVec.ofU32BE cp).data)
+        ++ (ByteVec.ofU32BE ha).data)).getD k 0 = _
+  rw [arr_append_getD _ (ByteVec.ofU32BE ha).data 28 k (by simp [Array.size_append, sL, sT, sA, sK, sC, sP])]
+  rw [arr_append_getD _ (ByteVec.ofU32BE cp).data 24 k (by simp [Array.size_append, sL, sT, sA, sK, sC])]
+  rw [arr_append_getD _ (ByteVec.ofU32BE ci).data 20 k (by simp [Array.size_append, sL, sT, sA, sK])]
+  rw [arr_append_getD _ (ByteVec.ofU32BE kp).data 16 k (by simp [Array.size_append, sL, sT, sA])]
+  rw [arr_append_getD _ (ByteVec.ofU32BE atype).data 12 k (by simp [Array.size_append, sL, sT])]
+  rw [arr_append_getD (ByteVec.ofU32BE layer).data (ByteVec.ofU64BE tree).data 4 k sL]
+  by_cases h0 : k < 4
+  · simp only [if_pos h0, if_pos (show k < 28 by omega), if_pos (show k < 24 by omega),
+      if_pos (show k < 20 by omega), if_pos (show k < 16 by omega), if_pos (show k < 12 by omega)]
+  · simp only [if_neg h0]
+    by_cases h1 : k < 12
+    · simp only [if_pos h1, if_pos (show k < 28 by omega), if_pos (show k < 24 by omega),
+        if_pos (show k < 20 by omega), if_pos (show k < 16 by omega)]
+    · simp only [if_neg h1]
+      by_cases h2 : k < 16
+      · simp only [if_pos h2, if_pos (show k < 28 by omega), if_pos (show k < 24 by omega),
+          if_pos (show k < 20 by omega)]
+      · simp only [if_neg h2]
+        by_cases h3 : k < 20
+        · simp only [if_pos h3, if_pos (show k < 28 by omega), if_pos (show k < 24 by omega)]
+        · simp only [if_neg h3]
+          by_cases h4 : k < 24
+          · simp only [if_pos h4, if_pos (show k < 28 by omega)]
+          · simp only [if_neg h4]
+
+set_option maxHeartbeats 2000000 in
+/-- **`setChainIndex` of a `make` is the `ci`-field substitution.** -/
+theorem setChainIndex_make (layer : UInt32) (tree : UInt64) (atype kp ci cp ha idx : UInt32) :
+    Spec.Adrs.setChainIndex (Spec.Adrs.make layer tree atype kp ci cp ha) idx
+      = Spec.Adrs.make layer tree atype kp idx cp ha := by
+  apply ByteVec.ext_data
+  rw [setChainIndex_data]
+  have hmk : (Spec.Adrs.make layer tree atype kp ci cp ha).data.size = 32 :=
+    (Spec.Adrs.make layer tree atype kp ci cp ha).size_eq
+  apply array_ext_getD
+  · rw [Array.size_append, Array.size_append, Array.size_extract, Array.size_extract,
+        (ByteVec.ofU32BE idx).size_eq, hmk, (Spec.Adrs.make layer tree atype kp idx cp ha).size_eq]
+    omega
+  · intro k hk
+    have hk32 : k < 32 := by
+      rw [Array.size_append, Array.size_append, Array.size_extract, Array.size_extract,
+          (ByteVec.ofU32BE idx).size_eq, hmk] at hk
+      omega
+    rw [arr_append_getD _ ((Spec.Adrs.make layer tree atype kp ci cp ha).data.extract 24 32) 24 k
+          (by rw [Array.size_append, Array.size_extract, (ByteVec.ofU32BE idx).size_eq, hmk]; omega)]
+    rw [make_data_getD layer tree atype kp idx cp ha k]
+    by_cases h24 : k < 24
+    · rw [if_pos h24]
+      rw [arr_append_getD _ (ByteVec.ofU32BE idx).data 20 k (by rw [Array.size_extract, hmk]; omega)]
+      by_cases h20 : k < 20
+      · rw [if_pos h20, extract_getD _ 0 20 k (by rw [hmk]; omega), Nat.zero_add,
+            make_data_getD layer tree atype kp ci cp ha k]
+        by_cases h4 : k < 4
+        · simp only [if_pos h4]
+        · by_cases h12 : k < 12
+          · simp only [if_neg h4, if_pos h12]
+          · by_cases h16 : k < 16
+            · simp only [if_neg h4, if_neg h12, if_pos h16]
+            · simp only [if_neg h4, if_neg h12, if_neg h16, if_pos h20]
+      · rw [if_neg h20, if_neg (show ¬ k < 20 from h20), if_neg (show ¬ k < 16 by omega),
+            if_neg (show ¬ k < 12 by omega), if_neg (show ¬ k < 4 by omega), if_pos h24]
+    · rw [if_neg h24, extract_getD _ 24 32 (k - 24) (by rw [hmk]; omega), show 24 + (k - 24) = k by omega,
+          make_data_getD layer tree atype kp ci cp ha k]
+      simp only [if_neg (show ¬ k < 24 from h24), if_neg (show ¬ k < 20 by omega),
+        if_neg (show ¬ k < 16 by omega), if_neg (show ¬ k < 12 by omega), if_neg (show ¬ k < 4 by omega)]
+
+set_option maxHeartbeats 2000000 in
+/-- **`setChainPos` of a `make` is the `cp`-field substitution.** -/
+theorem setChainPos_make (layer : UInt32) (tree : UInt64) (atype kp ci cp ha pos : UInt32) :
+    Spec.Adrs.setChainPos (Spec.Adrs.make layer tree atype kp ci cp ha) pos
+      = Spec.Adrs.make layer tree atype kp ci pos ha := by
+  apply ByteVec.ext_data
+  rw [setChainPos_data]
+  have hmk : (Spec.Adrs.make layer tree atype kp ci cp ha).data.size = 32 :=
+    (Spec.Adrs.make layer tree atype kp ci cp ha).size_eq
+  apply array_ext_getD
+  · rw [Array.size_append, Array.size_append, Array.size_extract, Array.size_extract,
+        (ByteVec.ofU32BE pos).size_eq, hmk, (Spec.Adrs.make layer tree atype kp ci pos ha).size_eq]
+    omega
+  · intro k hk
+    have hk32 : k < 32 := by
+      rw [Array.size_append, Array.size_append, Array.size_extract, Array.size_extract,
+          (ByteVec.ofU32BE pos).size_eq, hmk] at hk
+      omega
+    rw [arr_append_getD _ ((Spec.Adrs.make layer tree atype kp ci cp ha).data.extract 28 32) 28 k
+          (by rw [Array.size_append, Array.size_extract, (ByteVec.ofU32BE pos).size_eq, hmk]; omega)]
+    rw [make_data_getD layer tree atype kp ci pos ha k]
+    by_cases h28 : k < 28
+    · rw [if_pos h28]
+      rw [arr_append_getD _ (ByteVec.ofU32BE pos).data 24 k (by rw [Array.size_extract, hmk]; omega)]
+      by_cases h24 : k < 24
+      · rw [if_pos h24, extract_getD _ 0 24 k (by rw [hmk]; omega), Nat.zero_add,
+            make_data_getD layer tree atype kp ci cp ha k]
+        by_cases h4 : k < 4
+        · simp only [if_pos h4]
+        · by_cases h12 : k < 12
+          · simp only [if_neg h4, if_pos h12]
+          · by_cases h16 : k < 16
+            · simp only [if_neg h4, if_neg h12, if_pos h16]
+            · by_cases h20 : k < 20
+              · simp only [if_neg h4, if_neg h12, if_neg h16, if_pos h20]
+              · simp only [if_neg h4, if_neg h12, if_neg h16, if_neg h20, if_pos h24]
+      · rw [if_neg h24, if_neg (show ¬ k < 24 from h24), if_neg (show ¬ k < 20 by omega),
+            if_neg (show ¬ k < 16 by omega), if_neg (show ¬ k < 12 by omega),
+            if_neg (show ¬ k < 4 by omega), if_pos h28]
+    · rw [if_neg h28, extract_getD _ 28 32 (k - 28) (by rw [hmk]; omega), show 28 + (k - 28) = k by omega,
+          make_data_getD layer tree atype kp ci cp ha k]
+      simp only [if_neg (show ¬ k < 28 from h28), if_neg (show ¬ k < 24 by omega),
+        if_neg (show ¬ k < 20 by omega), if_neg (show ¬ k < 16 by omega),
+        if_neg (show ¬ k < 12 by omega), if_neg (show ¬ k < 4 by omega)]
+
+/-! ### The CHAINBASE_MASK byte action + the WOTS ADRS word + the chain-pos ADRS bridge -/
+
+set_option maxHeartbeats 8000000 in
+/-- The deployed `CHAINBASE_MASK` (`SPHINCsC10Asm.sol` L180): all 32 bytes 0xFF except
+    the `cp` field (bytes [24,28)) zeroed. The interp `and(or(wotsAdrs, i<<64),
+    CHAINBASE_MASK)` uses it to clear the chain-position field before the per-step OR. -/
+def CHAINBASE_MASK : Nat := 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF00000000FFFFFFFF
+
+/-- `CHAINBASE_MASK = 2^64·(2^192−1) + (2^32−1)`: bits [0,32) set (ha field), [32,64)
+    zero (cp field), [64,256) set. The shape `testBit_two_pow_mul_add` consumes. -/
+private theorem chainbase_eq_mul : CHAINBASE_MASK = 2 ^ 64 * (2 ^ 192 - 1) + (2 ^ 32 - 1) := by decide
+
+/-- Bit `k` of `CHAINBASE_MASK` is set iff `k < 256 ∧ ¬(32 ≤ k < 64)`. -/
+private theorem chainbase_testBit (k : Nat) :
+    CHAINBASE_MASK.testBit k = decide (k < 256 ∧ ¬ (32 ≤ k ∧ k < 64)) := by
+  have hlt : (2 : Nat) ^ 32 - 1 < 2 ^ 64 := by decide
+  rw [chainbase_eq_mul, Nat.testBit_two_pow_mul_add (2 ^ 192 - 1) hlt k]
+  by_cases hk : k < 64
+  · rw [if_pos hk, Nat.testBit_two_pow_sub_one, decide_eq_decide]; omega
+  · rw [if_neg hk, Nat.testBit_two_pow_sub_one, decide_eq_decide]; omega
+
+/-- The inner `Nat` byte of `CHAINBASE_MASK`: `0` on the cp field [24,28), `2^8−1` else.
+    Bit-extensional (no `i < 32` needed). The `nmask_byte` analogue. -/
+private theorem chainbase_byte_nat (i : Nat) :
+    (CHAINBASE_MASK >>> (8 * (31 - i))) % 2 ^ 8 = if 24 ≤ i ∧ i < 28 then 0 else 2 ^ 8 - 1 := by
+  apply Nat.eq_of_testBit_eq
+  intro b
+  rw [Nat.testBit_mod_two_pow, Nat.testBit_shiftRight, chainbase_testBit]
+  by_cases hc : 24 ≤ i ∧ i < 28
+  · rw [if_pos hc, Nat.zero_testBit]
+    by_cases hb : b < 8
+    · rw [decide_eq_true hb, Bool.true_and]; apply decide_eq_false; omega
+    · rw [decide_eq_false hb, Bool.false_and]
+  · rw [if_neg hc, Nat.testBit_two_pow_sub_one]
+    by_cases hb : b < 8
+    · rw [decide_eq_true hb, Bool.true_and]; apply decide_eq_true; omega
+    · rw [decide_eq_false hb, Bool.false_and]
+
+/-- **Byte-action of `CHAINBASE_MASK`.** `beByte CHAINBASE_MASK i = 0` on the cp field
+    [24,28), `0xFF` elsewhere. -/
+theorem chainbase_byte (i : Nat) :
+    beByte CHAINBASE_MASK i = if 24 ≤ i ∧ i < 28 then 0 else 0xFF := by
+  unfold beByte
+  rw [show (256 : Nat) = 2 ^ 8 from rfl, chainbase_byte_nat]
+  by_cases hc : 24 ≤ i ∧ i < 28
+  · rw [if_pos hc, if_pos hc]; rfl
+  · rw [if_neg hc, if_neg hc]; rfl
+
+/-- **OR distributes over `beByte`.** (Mirror of the existing `beByte_lor`'s sibling, for AND.) -/
+theorem beByte_band (a b i : Nat) : beByte (a &&& b) i = beByte a i &&& beByte b i := by
+  unfold beByte
+  rw [Nat.shiftRight_and_distrib, show (256 : Nat) = 2 ^ 8 from rfl, Nat.and_mod_two_pow,
+      UInt8.ofNat_and]
+
+/-- A UInt8 ANDed with `0xFF` is itself. -/
+private theorem and_0xFF_id (b : UInt8) : b &&& 0xFF = b := by
+  have : (0xFF : UInt8) = (-1 : UInt8) := by decide
+  rw [this, UInt8.and_neg_one]
+
+/-- **WOTS ADRS word.** `wots = make layer tree ADRS_WOTS kp 0 0 0`; the `ci=cp=ha=0`
+    shifts vanish (Yul `or(shl(224,layer), or(shl(160,tree), or(shl(128,0), shl(96,kp))))`). -/
+theorem wordOf_wots (layer : UInt32) (tree : UInt64) (kp : UInt32) :
+    wordOf (Spec.Adrs.wots layer tree kp)
+      = layer.toNat <<< 224 ||| tree.toNat <<< 160 ||| (UInt32.ofNat Spec.ADRS_WOTS).toNat <<< 128
+        ||| kp.toNat <<< 96 := by
+  unfold Spec.Adrs.wots
+  rw [wordOf_make]
+  show _ ||| _ ||| _ ||| _ ||| (0 : UInt32).toNat <<< 64 ||| (0 : UInt32).toNat <<< 32
+        ||| (0 : UInt32).toNat = _
+  rw [show (0 : UInt32).toNat = 0 from rfl, Nat.zero_shiftLeft, Nat.or_zero, Nat.zero_shiftLeft,
+      Nat.or_zero, Nat.or_zero]
+
+/-- `(ByteVec.ofU32BE 0).data.getD j 0 = 0` for `j < 4`. -/
+private theorem ofU32BE_zero_getD (j : Nat) (hj : j < 4) :
+    (ByteVec.ofU32BE (0 : UInt32)).data.getD j 0 = 0 := by
+  rw [ofU32BE_getD_eq_beByte (0 : UInt32) j hj, show (0 : UInt32).toNat = 0 from rfl]
+  unfold beByte
+  rw [Nat.zero_shiftRight, Nat.zero_mod]; rfl
+
+/-- `(UInt32.ofNat x).toNat = x` for `x < 2^32`. -/
+private theorem u32_roundtrip (x : Nat) (hx : x < 2 ^ 32) : (UInt32.ofNat x).toNat = x := by
+  show x % UInt32.size = x
+  rw [Nat.mod_eq_of_lt (show x < UInt32.size from hx)]
+
+/-- **Per-step chain-position ADRS word.** The interp word
+    `or(and(or(wotsAdrs, i<<64), CHAINBASE_MASK), pos<<32)` (with `wotsAdrs =
+    wordOf (Adrs.wots layer tree kp)`) equals `wordOf (make layer tree ADRS_WOTS kp i pos 0)`
+    for `i, pos < 2^32`. The `wots` base has `ci=cp=ha=0`, so `or i<<64` sets `ci=i`,
+    the mask clears (already-zero) `cp`, and `or pos<<32` sets `cp=pos` cleanly. Proved
+    byte-extensionally (`eq_of_beByte` + the 7-field range split, masking the cp field).
+    Discharged INTERNALLY — NO factored/unbounded hypothesis (the `i<2^32`/`pos<2^32`
+    bounds are free from `i<43`/`pos<8` at the call site), so zero vacuity risk. -/
+theorem chainPosAdrs_word (layer : UInt32) (tree : UInt64) (kp : UInt32) (i pos : Nat)
+    (hi : i < 2 ^ 32) (hpos : pos < 2 ^ 32) :
+    ((wordOf (Spec.Adrs.wots layer tree kp) ||| i <<< 64) &&& CHAINBASE_MASK) ||| pos <<< 32
+      = wordOf (Spec.Adrs.make layer tree (UInt32.ofNat Spec.ADRS_WOTS) kp
+          (UInt32.ofNat i) (UInt32.ofNat pos) 0) := by
+  have hbP : pos <<< 32 < 2 ^ 256 := shl_lt_two_pow_256 pos 32 32 hpos (by omega)
+  apply eq_of_beByte
+  · apply Nat.or_lt_two_pow
+    · exact Nat.lt_of_le_of_lt Nat.and_le_right (by unfold CHAINBASE_MASK; decide)
+    · exact hbP
+  · exact wordOf_lt _
+  · intro k hk
+    rw [beByte_wordOf_getD _ k hk,
+        make_data_getD layer tree _ kp (UInt32.ofNat i) (UInt32.ofNat pos) 0 k]
+    rw [beByte_lor, beByte_band, beByte_lor, chainbase_byte k]
+    rw [beByte_wordOf_getD (Spec.Adrs.wots layer tree kp) k hk]
+    show (((Spec.Adrs.make layer tree (UInt32.ofNat Spec.ADRS_WOTS) kp 0 0 0).data.getD k 0
+          ||| beByte (i <<< 64) k) &&& _) ||| beByte (pos <<< 32) k = _
+    rw [make_data_getD layer tree _ kp 0 0 0 k]
+    rw [show i <<< 64 = (UInt32.ofNat i).toNat <<< (8 * (28 - 20)) by rw [u32_roundtrip i hi]]
+    rw [show pos <<< 32 = (UInt32.ofNat pos).toNat <<< (8 * (28 - 24)) by rw [u32_roundtrip pos hpos]]
+    rw [field32_byte (UInt32.ofNat i) 20 k (by omega) hk, field32_byte (UInt32.ofNat pos) 24 k (by omega) hk]
+    by_cases h4 : k < 4
+    · simp only [if_pos h4, if_pos (show k < 28 by omega), if_pos (show k < 24 by omega),
+        if_pos (show k < 20 by omega), if_pos (show k < 16 by omega), if_pos (show k < 12 by omega),
+        if_neg (show ¬ (20 ≤ k ∧ k < 24) by omega), if_neg (show ¬ (24 ≤ k ∧ k < 28) by omega)]
+      rw [UInt8.or_zero, UInt8.or_zero, and_0xFF_id]
+    · by_cases h12 : k < 12
+      · simp only [if_neg h4, if_pos h12, if_pos (show k < 28 by omega), if_pos (show k < 24 by omega),
+          if_pos (show k < 20 by omega), if_pos (show k < 16 by omega),
+          if_neg (show ¬ (20 ≤ k ∧ k < 24) by omega), if_neg (show ¬ (24 ≤ k ∧ k < 28) by omega)]
+        rw [UInt8.or_zero, UInt8.or_zero, and_0xFF_id]
+      · by_cases h16 : k < 16
+        · simp only [if_neg h4, if_neg h12, if_pos h16, if_pos (show k < 28 by omega),
+            if_pos (show k < 24 by omega), if_pos (show k < 20 by omega),
+            if_neg (show ¬ (20 ≤ k ∧ k < 24) by omega), if_neg (show ¬ (24 ≤ k ∧ k < 28) by omega)]
+          rw [UInt8.or_zero, UInt8.or_zero, and_0xFF_id]
+        · by_cases h20 : k < 20
+          · simp only [if_neg h4, if_neg h12, if_neg h16, if_pos h20, if_pos (show k < 28 by omega),
+              if_pos (show k < 24 by omega), if_neg (show ¬ (20 ≤ k ∧ k < 24) by omega),
+              if_neg (show ¬ (24 ≤ k ∧ k < 28) by omega)]
+            rw [UInt8.or_zero, UInt8.or_zero, and_0xFF_id]
+          · by_cases h24 : k < 24
+            · simp only [if_neg h4, if_neg h12, if_neg h16, if_neg h20, if_pos h24,
+                if_pos (show k < 28 by omega), if_pos (show 20 ≤ k ∧ k < 24 by omega),
+                if_neg (show ¬ (24 ≤ k ∧ k < 28) by omega)]
+              rw [UInt8.or_zero, ofU32BE_zero_getD (k - 20) (by omega), UInt8.zero_or, and_0xFF_id,
+                  ofU32BE_getD_eq_beByte (UInt32.ofNat i) (k - 20) (by omega)]
+              congr 1; omega
+            · by_cases h28 : k < 28
+              · simp only [if_neg h4, if_neg h12, if_neg h16, if_neg h20, if_neg h24, if_pos h28,
+                  if_pos (show 24 ≤ k ∧ k < 28 by omega), if_neg (show ¬ (20 ≤ k ∧ k < 24) by omega)]
+                rw [ofU32BE_zero_getD (k - 24) (by omega), UInt8.or_zero, UInt8.and_zero, UInt8.zero_or,
+                    ofU32BE_getD_eq_beByte (UInt32.ofNat pos) (k - 24) (by omega)]
+                congr 1; omega
+              · simp only [if_neg h4, if_neg h12, if_neg h16, if_neg h20, if_neg h24, if_neg h28,
+                  if_neg (show ¬ (20 ≤ k ∧ k < 24) by omega), if_neg (show ¬ (24 ≤ k ∧ k < 28) by omega)]
+                rw [UInt8.or_zero, UInt8.or_zero, and_0xFF_id]
+
+/-! ### The WOTS+C digit hash + digit-sum gate
+
+The digit hash is the UNMASKED 4-segment `sha256(seed‖wotsAdrs‖currentNode‖count)`
+returning the full 32-byte `d` (`Spec.wotsDigest`); the digit-sum gate reads 43 base-8
+digits of `d` and reverts unless they sum to `TargetSum = 205`. The digit hash mirrors
+`hmsg_digest` (UNMASKED readback, here 4 segments); the digit-sum loop is the one piece
+with no FORS template (an Array-foldl-sum bridge). -/
+
+/-- The digit-hash fragment of the per-layer body (`SPHINCsC10Asm.sol` L167–173). -/
+def wotsDigitHashFragment : List Stmt :=
+  [ .mstore (.lit 0x00) (.var "seed")
+  , .mstore (.lit 0x20) (.var "wotsAdrs")
+  , .mstore (.lit 0x40) (.var "currentNode")
+  , .mstore (.lit 0x60) (.var "count")
+  , .sha256 (.lit 0x00) (.lit 0x80) (.var "OUT")
+  , .letv "d" (.mload (.var "OUT")) ]
+
+/-- The 4-segment list the WOTS digit hash feeds: `[seed, wotsAdrs, pad16 msgHash, u32ToB32 count]`. -/
+private def digitSegs (seed : ByteVec 32) (wotsAdrs : Spec.Adrs) (msgHash : ByteVec 16)
+    (count : UInt32) : List (ByteVec 32) :=
+  [seed, wotsAdrs, ByteVec.pad16 msgHash, ByteVec.u32ToB32 count]
+
+/-- **Holds the digit-hash segments.** After the four `mstore`s, scratch `[0x00, 0x80)`
+    holds the four `wotsDigest` segments. The 4-segment `hmsgMem5_holdsSegs` analogue. -/
+private theorem digitMem_holdsSegs (mem : ByteMemory)
+    (seed : ByteVec 32) (wotsAdrs : Spec.Adrs) (msgHash : ByteVec 16) (count : UInt32) :
+    holdsSegs (mstore32 (mstore32 (mstore32 (mstore32 mem 0 (wordOf seed))
+        32 (wordOf wotsAdrs)) 64 (wordOf (ByteVec.pad16 msgHash))) 96 (wordOf (ByteVec.u32ToB32 count))) 0
+      (digitSegs seed wotsAdrs msgHash count) := by
+  intro j i hj hi
+  have hjlt : j < 4 := by simpa [digitSegs] using hj
+  rw [Nat.zero_add]
+  match j, hjlt with
+  | 0, _ =>
+      rw [mstore32_frame _ 96 _ (32 * 0 + i) (by omega), mstore32_frame _ 64 _ (32 * 0 + i) (by omega),
+          mstore32_frame _ 32 _ (32 * 0 + i) (by omega)]
+      have e := mstore32_get mem 0 (wordOf seed) i hi
+      rw [show (32 * 0 + i) = (0 + i) by omega, e, beByte_wordOf_getD seed i hi]
+      rfl
+  | 1, _ =>
+      rw [mstore32_frame _ 96 _ (32 * 1 + i) (by omega), mstore32_frame _ 64 _ (32 * 1 + i) (by omega)]
+      have e := mstore32_get (mstore32 mem 0 (wordOf seed)) 32 (wordOf wotsAdrs) i hi
+      rw [show (32 * 1 + i) = (32 + i) by omega, e, beByte_wordOf_getD wotsAdrs i hi]
+      rfl
+  | 2, _ =>
+      rw [mstore32_frame _ 96 _ (32 * 2 + i) (by omega)]
+      have e := mstore32_get (mstore32 (mstore32 mem 0 (wordOf seed)) 32 (wordOf wotsAdrs)) 64
+        (wordOf (ByteVec.pad16 msgHash)) i hi
+      rw [show (32 * 2 + i) = (64 + i) by omega, e, beByte_wordOf_getD (ByteVec.pad16 msgHash) i hi]
+      rfl
+  | 3, _ =>
+      have e := mstore32_get (mstore32 (mstore32 (mstore32 mem 0 (wordOf seed)) 32 (wordOf wotsAdrs)) 64
+        (wordOf (ByteVec.pad16 msgHash))) 96 (wordOf (ByteVec.u32ToB32 count)) i hi
+      rw [show (32 * 3 + i) = (96 + i) by omega, e, beByte_wordOf_getD (ByteVec.u32ToB32 count) i hi]
+      rfl
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 4000 in
+/-- **WOTS digit-hash refinement.** Running `wotsDigitHashFragment` from a VM whose env
+    supplies `seed`/`wotsAdrs`/`currentNode = pad16 msgHash`/`count` as `wordOf`-words and
+    `OUT = 0x600` falls through and binds `"d"` to the UNMASKED full-32-byte
+    `wordOf (Spec.wotsDigest seed wotsAdrs (pad16 msgHash) count)`. The 4-segment, UNMASKED
+    analogue of `hmsg_digest`. -/
+theorem wots_digit_hash
+    (sig : ByteVec Spec.SignatureLen) (vm : VM)
+    (seed : ByteVec 32) (wotsAdrs : Spec.Adrs) (msgHash : ByteVec 16) (count : UInt32)
+    (hseedw : vm.env "seed" = wordOf seed)
+    (hwa : vm.env "wotsAdrs" = wordOf wotsAdrs)
+    (hcn : vm.env "currentNode" = wordOf (ByteVec.pad16 msgHash))
+    (hcount : vm.env "count" = wordOf (ByteVec.u32ToB32 count))
+    (hOUT : vm.env "OUT" = 0x600) :
+    (execList c10Oracle sig wotsDigitHashFragment vm).2 = none
+    ∧ ((execList c10Oracle sig wotsDigitHashFragment vm).1).env "d"
+        = wordOf (Spec.wotsDigest seed wotsAdrs (ByteVec.pad16 msgHash) count) := by
+  unfold wotsDigitHashFragment
+  rw [execList_cons_none c10Oracle sig _ _ vm (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList]
+  refine ⟨rfl, ?_⟩
+  simp only [execStmt, eval, setVar, hseedw, hwa, hcn, hcount, hOUT,
+    ite_true, ite_false, String.reduceEq]
+  -- env "d" = mload32 (writeRegion mem4 0x600 dig) 0x600, dig = c10Oracle (slice mem4 0 0x80)
+  rw [mload32_writeRegion_digest]
+  congr 1
+  refine (c10Oracle_holdsSegs _ 0 (digitSegs seed wotsAdrs msgHash count)
+    (digitMem_holdsSegs vm.mem seed wotsAdrs msgHash count)).trans ?_
+  unfold digitSegs Spec.wotsDigest
+  rfl
+
+/-! ### Digit-sum: pure helpers + the gate loop
+
+`partialDigitSum d cur` is the running interp sum (`∑_{ii<cur} (wordOf d >>> ii·3) & 7`,
+re-expressed in `readBitsLe` form via the alignment). The loop invariant carries the bound
+`≤ 7·cur` so the `eAdd`'s `%W` truncation is inert. The closing `digitSum_extractDigits`
+bridges the Array-foldl-sum `digitSum (extractDigits d)` to `partialDigitSum d L`. -/
+
+/-- The running digit sum after `cur` levels (interp side, in spec `readBitsLe` form). -/
+def partialDigitSum (d_bv : ByteVec 32) (cur : Nat) : Nat :=
+  (List.range cur).foldl
+    (fun acc ii => acc + SphincsCVerify.Util.readBitsLe d_bv (ii * Spec.LogW) Spec.LogW) 0
+
+/-- `partialDigitSum`'s successor step. -/
+theorem partialDigitSum_succ (d_bv : ByteVec 32) (cur : Nat) :
+    partialDigitSum d_bv (cur + 1)
+      = partialDigitSum d_bv cur + SphincsCVerify.Util.readBitsLe d_bv (cur * Spec.LogW) Spec.LogW := by
+  unfold partialDigitSum
+  rw [List.range_succ, List.foldl_append]
+  simp only [List.foldl_cons, List.foldl_nil]
+
+/-- Each WOTS digit is `< W = 8` (`readBitsLe … LogW < 2^LogW = 8`). -/
+theorem digit_lt_8 (d_bv : ByteVec 32) (ii : Nat) :
+    SphincsCVerify.Util.readBitsLe d_bv (ii * Spec.LogW) Spec.LogW < 8 := by
+  have := SphincsCVerify.Util.readBitsLe_lt d_bv (ii * Spec.LogW) Spec.LogW
+  have hL : Spec.LogW = 3 := rfl
+  rw [hL] at this; exact this
+
+/-- `partialDigitSum d cur ≤ 7·cur` — the bound that keeps the interp `eAdd`'s `%W` inert. -/
+theorem partialDigitSum_le (d_bv : ByteVec 32) : ∀ cur, partialDigitSum d_bv cur ≤ 7 * cur := by
+  intro cur
+  induction cur with
+  | zero => simp [partialDigitSum]
+  | succ c ih => rw [partialDigitSum_succ]; have := digit_lt_8 d_bv c; omega
+
+/-- **Digit alignment.** The interp `(wordOf d >>> ii·3) & 7` equals the spec
+    `readBitsLe d (ii·LogW) LogW` for `ii < L`. The `extractForsIndices_eq_wordShift`
+    analogue (`LogW = 3`, mask `2^3-1 = 7`, window `[ii·3, ii·3+3) ⊆ [0, 129) ⊆ [0, 256)`). -/
+theorem digit_align (d_bv : ByteVec 32) (ii : Nat) (hii : ii < Spec.L) :
+    (wordOf d_bv >>> (ii * 3)) &&& 0x7
+      = SphincsCVerify.Util.readBitsLe d_bv (ii * Spec.LogW) Spec.LogW := by
+  have hL : Spec.LogW = 3 := rfl
+  rw [hL, readBitsLe_eq_wordShift d_bv (ii * 3) 3 (by have : Spec.L = 43 := rfl; omega)]
+
+/-- Generic `(+)`-foldl over `List.ofFn (Fin n)` equals the same over `List.range n`
+    (val-indexed). By induction with `ofFn_succ_last` / `range_succ` (both back-cons). -/
+private theorem ofFn_natfoldl_eq_range (g : Nat → Nat) : ∀ n,
+    (List.ofFn (n := n) (fun i : Fin n => g i.val)).foldl (· + ·) 0
+      = (List.range n).foldl (fun acc i => acc + g i) 0 := by
+  intro n
+  induction n with
+  | zero => simp [List.ofFn_zero]
+  | succ m ih =>
+      rw [List.ofFn_succ_last, List.foldl_append, List.range_succ, List.foldl_append]
+      have hinner : (List.ofFn fun i : Fin m => (fun j : Fin (m + 1) => g j.val) i.castSucc)
+          = List.ofFn (fun i : Fin m => g i.val) := by
+        apply congrArg; funext i; rfl
+      rw [hinner, ih]
+      simp only [List.foldl_cons, List.foldl_nil]
+      rfl
+
+/-- **Digit-sum closing.** `digitSum (extractDigits d)` (the spec's Array-foldl-sum) equals
+    `partialDigitSum d L`. Bridges `Array.foldl` → `List.foldl` (`Array.foldl_toList`,
+    `Array.toList_ofFn`) → the val-indexed `range` fold (`ofFn_natfoldl_eq_range`). -/
+theorem digitSum_extractDigits (d_bv : ByteVec 32) :
+    SphincsCVerify.Util.digitSum (SphincsCVerify.Util.extractDigits d_bv)
+      = partialDigitSum d_bv Spec.L := by
+  unfold SphincsCVerify.Util.digitSum SphincsCVerify.Util.extractDigits partialDigitSum
+  rw [← Array.foldl_toList, Array.toList_ofFn]
+  exact ofFn_natfoldl_eq_range
+    (fun i => SphincsCVerify.Util.readBitsLe d_bv (i * Spec.LogW) Spec.LogW) Spec.L
+
+/-- The digit-sum loop body (`SPHINCsC10Asm.sol` L177): `digitSum += (d >> ii·3) & 7`. -/
+def wotsDigitSumBody : List Stmt :=
+  [ .setv "digitSum"
+      (.bin .add (.var "digitSum")
+        (.bin .band (.bin .shr (.bin .mul (.var "ii") (.lit 3)) (.var "d")) (.lit 0x7))) ]
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 4000 in
+/-- **WOTS digit-sum loop refinement.** Running `forRange "ii" 43 wotsDigitSumBody` from a
+    VM with `env "d" = wordOf d_bv` and `env "digitSum" = 0` falls through and binds
+    `"digitSum" = digitSum (extractDigits d_bv)` (the value the revert gate compares to 205);
+    `"d"` persists. Drives the body 43× via `execFor_invariant_lt`; the invariant carries the
+    `≤ 7·cur` bound so the `%W` is inert; the per-step digit aligns via `digit_align`. -/
+theorem wots_digit_sum
+    (sig : ByteVec Spec.SignatureLen) (vm : VM) (d_bv : ByteVec 32)
+    (hd : vm.env "d" = wordOf d_bv)
+    (hds0 : vm.env "digitSum" = 0) :
+    (execFor c10Oracle sig "ii" wotsDigitSumBody 43 0 vm).2 = none
+    ∧ (execFor c10Oracle sig "ii" wotsDigitSumBody 43 0 vm).1.env "digitSum"
+        = SphincsCVerify.Util.digitSum (SphincsCVerify.Util.extractDigits d_bv)
+    ∧ (execFor c10Oracle sig "ii" wotsDigitSumBody 43 0 vm).1.env "d" = wordOf d_bv := by
+  let R : Nat → VM → Prop := fun cur w =>
+    w.env "digitSum" = partialDigitSum d_bv cur ∧ w.env "d" = wordOf d_bv
+  have hstep : ∀ cur w, cur < 43 → R cur w →
+      (execList c10Oracle sig wotsDigitSumBody { w with env := setVar w.env "ii" cur }).2 = none ∧
+      R (cur + 1) (execList c10Oracle sig wotsDigitSumBody { w with env := setVar w.env "ii" cur }).1 := by
+    intro cur w hcur hR
+    obtain ⟨hRds, hRd⟩ := hR
+    unfold wotsDigitSumBody
+    rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+    rw [execList]
+    refine ⟨rfl, ?_, ?_⟩
+    · simp only [execStmt, eval, setVar, ite_true, String.reduceEq, ite_false, hRds, hRd]
+      -- goal: (partialDigitSum cur + (wordOf d >>> (cur*3 % W)) &&& 7) % W = partialDigitSum (cur+1)
+      have hmul3 : cur * 3 % W = cur * 3 :=
+        Nat.mod_eq_of_lt (lt_W_of_lt (show cur * 3 < 4096 by omega))
+      rw [hmul3, digit_align d_bv cur (by have : Spec.L = 43 := rfl; omega), partialDigitSum_succ]
+      have hb : partialDigitSum d_bv cur ≤ 7 * cur := partialDigitSum_le d_bv cur
+      have hd8 : SphincsCVerify.Util.readBitsLe d_bv (cur * Spec.LogW) Spec.LogW < 8 := digit_lt_8 d_bv cur
+      have hbnd : partialDigitSum d_bv cur + SphincsCVerify.Util.readBitsLe d_bv (cur * Spec.LogW) Spec.LogW < W := by
+        have h7 : 7 * cur < 4096 := by omega
+        exact lt_W_of_lt (by omega)
+      exact Nat.mod_eq_of_lt hbnd
+    · simp only [execStmt, eval, setVar, ite_false, String.reduceEq]
+      exact hRd
+  have hR0 : R 0 vm := ⟨by rw [hds0]; rfl, hd⟩
+  have hloop := execFor_invariant_lt c10Oracle sig "ii" wotsDigitSumBody 43 R hstep vm hR0
+  obtain ⟨hdsfinal, hdfinal⟩ := hloop.2
+  refine ⟨hloop.1, ?_, hdfinal⟩
+  rw [hdsfinal]
+  exact (digitSum_extractDigits d_bv).symm
+
+/-! ### The inner WOTS chain step loop
+
+One WOTS chain `i` walks `steps = (W-1) - digit = 7 - digit` forward hash steps from
+its signature value (`SPHINCsC10Asm.sol` L188–193). The inner `forRange "step" steps`
+refines against `chainHash_eq_fwd`'s forward fold (the `fors_climb` analogue): each step
+is a 3-segment masked `th` at chain-position `digit + step`, discharged via `leafMem_th`
++ the `chainPosAdrs_word_setChain` ADRS bridge (INTERNAL, no factored hyp). -/
+
+/-- The forward chain accumulator after `c` steps (the `forsAcc` analogue). -/
+def wotsChainAcc (seed : ByteVec 32) (a : Spec.Adrs) (startPos : Nat) (val : ByteVec 16)
+    (c : Nat) : ByteVec 16 :=
+  (List.range' 0 c).foldl (wotsChainFwdStep seed a startPos) val
+
+/-- `wotsChainAcc` at 0 is the initial value. -/
+theorem wotsChainAcc_zero (seed : ByteVec 32) (a : Spec.Adrs) (startPos : Nat) (val : ByteVec 16) :
+    wotsChainAcc seed a startPos val 0 = val := rfl
+
+/-- `wotsChainAcc` recursion: one more step is one more `wotsChainFwdStep`. -/
+theorem wotsChainAcc_succ (seed : ByteVec 32) (a : Spec.Adrs) (startPos : Nat) (val : ByteVec 16)
+    (c : Nat) :
+    wotsChainAcc seed a startPos val (c + 1)
+      = wotsChainFwdStep seed a startPos (wotsChainAcc seed a startPos val c) c := by
+  unfold wotsChainAcc
+  rw [List.range'_1_concat, List.foldl_append, Nat.zero_add]
+  rfl
+
+/-- **Per-step chain-pos ADRS word (spec form).** The interp `or(and(or(wotsAdrs, i<<64),
+    CHAINBASE_MASK), pos<<32)` equals `wordOf (setChainPos (setChainIndex (wots …) i) pos)`
+    — `chainPosAdrs_word` composed with `setChainIndex_make`/`setChainPos_make` (`wots`'s
+    `ci=cp=ha=0` make the OR-substitutions clean). -/
+theorem chainPosAdrs_word_setChain (layer : UInt32) (tree : UInt64) (kp : UInt32) (i pos : Nat)
+    (hi : i < 2 ^ 32) (hpos : pos < 2 ^ 32) :
+    ((wordOf (Spec.Adrs.wots layer tree kp) ||| i <<< 64) &&& CHAINBASE_MASK) ||| pos <<< 32
+      = wordOf (Spec.Adrs.setChainPos (Spec.Adrs.setChainIndex (Spec.Adrs.wots layer tree kp)
+          (UInt32.ofNat i)) (UInt32.ofNat pos)) := by
+  rw [chainPosAdrs_word layer tree kp i pos hi hpos]
+  show _ = wordOf (Spec.Adrs.setChainPos (Spec.Adrs.setChainIndex
+      (Spec.Adrs.make layer tree (UInt32.ofNat Spec.ADRS_WOTS) kp 0 0 0) (UInt32.ofNat i))
+      (UInt32.ofNat pos))
+  rw [setChainIndex_make, setChainPos_make]
+
+/-- The inner chain step body (`SPHINCsC10Asm.sol` L189–192). -/
+def wotsChainStepBody : List Stmt :=
+  [ .mstore (.lit 0x20)
+      (.bin .bor (.var "chainBase") (.bin .shl (.lit 32) (.bin .add (.var "digit") (.var "step"))))
+  , .mstore (.lit 0x40) (.var "val")
+  , .sha256 (.lit 0x00) (.lit 0x60) (.var "OUT")
+  , .setv "val" (.bin .band (.mload (.var "OUT")) (.var "N_MASK")) ]
+
+set_option maxHeartbeats 8000000 in
+set_option maxRecDepth 4000 in
+/-- **One inner chain step.** Running `wotsChainStepBody` once (entered with `step := cur`,
+    `cur < 7 - digit`) re-establishes the chain invariant: `val` advances by one
+    `wotsChainFwdStep` (the per-step `th` at pos `digit + cur`), the consts and the seed
+    window persist. The ADRS word is discharged INTERNALLY by `chainPosAdrs_word_setChain`
+    (`pos = digit + cur < 8 < 2^32`); the hash is `leafMem_th`. -/
+theorem wots_chain_step
+    (sig : ByteVec Spec.SignatureLen)
+    (seed : ByteVec 32) (layer : UInt32) (tree : UInt64) (kp : UInt32)
+    (i digit : Nat) (val0 : ByteVec 16)
+    (hi32 : i < 2 ^ 32) (hdigit : digit < 8)
+    (cur : Nat) (hcur : cur < 7 - digit) (w : VM)
+    (hR : w.env "val" = wordOf (ByteVec.pad16 (wotsChainAcc seed
+            (Spec.Adrs.setChainIndex (Spec.Adrs.wots layer tree kp) (UInt32.ofNat i)) digit val0 cur))
+          ∧ w.env "digit" = digit
+          ∧ w.env "chainBase" = (wordOf (Spec.Adrs.wots layer tree kp) ||| i <<< 64) &&& CHAINBASE_MASK
+          ∧ w.env "N_MASK" = NMASK ∧ w.env "OUT" = 0x600
+          ∧ (∀ k, k < 32 → w.mem (0 + k) = seed.data.getD k 0)) :
+    (execList c10Oracle sig wotsChainStepBody { w with env := setVar w.env "step" cur }).2 = none
+    ∧ ((execList c10Oracle sig wotsChainStepBody { w with env := setVar w.env "step" cur }).1.env "val"
+          = wordOf (ByteVec.pad16 (wotsChainAcc seed
+              (Spec.Adrs.setChainIndex (Spec.Adrs.wots layer tree kp) (UInt32.ofNat i)) digit val0 (cur + 1)))
+        ∧ (execList c10Oracle sig wotsChainStepBody { w with env := setVar w.env "step" cur }).1.env "digit"
+            = digit
+        ∧ (execList c10Oracle sig wotsChainStepBody { w with env := setVar w.env "step" cur }).1.env "chainBase"
+            = (wordOf (Spec.Adrs.wots layer tree kp) ||| i <<< 64) &&& CHAINBASE_MASK
+        ∧ (execList c10Oracle sig wotsChainStepBody { w with env := setVar w.env "step" cur }).1.env "N_MASK"
+            = NMASK
+        ∧ (execList c10Oracle sig wotsChainStepBody { w with env := setVar w.env "step" cur }).1.env "OUT"
+            = 0x600
+        ∧ (∀ k, k < 32 →
+            (execList c10Oracle sig wotsChainStepBody { w with env := setVar w.env "step" cur }).1.mem (0 + k)
+              = seed.data.getD k 0)) := by
+  obtain ⟨hRval, hRdig, hRcb, hRN, hROUT, hRseed⟩ := hR
+  unfold wotsChainStepBody
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList]
+  refine ⟨rfl, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · -- val advances by one wotsChainFwdStep.
+    simp only [execStmt, eval, setVar, ite_true, ite_false, String.reduceEq, hRN, hROUT, hRcb,
+      hRdig, hRval]
+    rw [wotsChainAcc_succ]
+    -- the per-step ADRS word: or(chainBase, shl 32 ((digit+cur)%W)).  Normalize the shl %W.
+    have hpos : digit + cur < 8 := by omega
+    have hshl : (digit + cur) <<< 32 % W = (digit + cur) <<< 32 :=
+      Nat.mod_eq_of_lt (shl_lt_two_pow_256 (digit + cur) 4 32 (by omega) (by omega))
+    -- the interp adds (digit + cur) % W as the shift value; both digit and cur are small.
+    have hsum : (digit + cur) % W = digit + cur := Nat.mod_eq_of_lt (lt_W_of_lt (by omega))
+    rw [hsum, hshl,
+        chainPosAdrs_word_setChain layer tree kp i (digit + cur) hi32 (by omega)]
+    -- now leafMem_th over [seed, posAdrs, pad16 (chainAcc cur)]
+    rw [leafMem_th w.mem seed
+          (Spec.Adrs.setChainPos (Spec.Adrs.setChainIndex (Spec.Adrs.wots layer tree kp)
+            (UInt32.ofNat i)) (UInt32.ofNat (digit + cur)))
+          (ByteVec.pad16 (wotsChainAcc seed
+            (Spec.Adrs.setChainIndex (Spec.Adrs.wots layer tree kp) (UInt32.ofNat i)) digit val0 cur))
+          hRseed]
+    -- = wordOf (pad16 (wotsChainFwdStep … cur))
+    show _ = wordOf (ByteVec.pad16 (wotsChainFwdStep seed
+      (Spec.Adrs.setChainIndex (Spec.Adrs.wots layer tree kp) (UInt32.ofNat i)) digit
+      (wotsChainAcc seed (Spec.Adrs.setChainIndex (Spec.Adrs.wots layer tree kp) (UInt32.ofNat i)) digit val0 cur)
+      cur))
+    unfold wotsChainFwdStep
+    rfl
+  · simp only [execStmt, eval, setVar, ite_false, String.reduceEq]; exact hRdig
+  · simp only [execStmt, eval, setVar, ite_false, String.reduceEq]; exact hRcb
+  · simp only [execStmt, eval, setVar, ite_false, String.reduceEq]; exact hRN
+  · simp only [execStmt, eval, setVar, ite_false, String.reduceEq]; exact hROUT
+  · -- seed window persists (writes land at ≥ 0x20).
+    intro k hk
+    simp only [execStmt, eval, setVar, ite_true, ite_false, String.reduceEq, hRN, hROUT, hRcb, hRdig, hRval]
+    rw [writeRegion_frame _ _ _ (0 + k) (by omega), mstore32_frame _ 0x40 _ (0 + k) (by omega),
+        mstore32_frame _ 0x20 _ (0 + k) (by omega)]
+    exact hRseed k hk
+
+set_option maxHeartbeats 8000000 in
+set_option maxRecDepth 4000 in
+/-- **The inner WOTS chain loop.** Running `forRange "step" (7 - digit) wotsChainStepBody`
+    from the chain-entry VM (`val = wordOf (pad16 val0)`, `digit`, `chainBase`, consts, seed
+    in scratch `[0,0x20)`) falls through and binds `"val" = wordOf (pad16 (chainHash seed
+    (setChainIndex (wots …) i) val0 digit (7 - digit)))` — the WOTS chain endpoint.
+    Drives `wots_chain_step` `(7-digit)×` via `execFor_invariant_lt`; the `fors_climb`
+    analogue. The consts/seed persist. -/
+theorem wots_chain_loop
+    (sig : ByteVec Spec.SignatureLen) (vm : VM)
+    (seed : ByteVec 32) (layer : UInt32) (tree : UInt64) (kp : UInt32)
+    (i digit : Nat) (val0 : ByteVec 16)
+    (hi32 : i < 2 ^ 32) (hdigit : digit < 8)
+    (hval : vm.env "val" = wordOf (ByteVec.pad16 val0))
+    (hdig : vm.env "digit" = digit)
+    (hcb : vm.env "chainBase" = (wordOf (Spec.Adrs.wots layer tree kp) ||| i <<< 64) &&& CHAINBASE_MASK)
+    (hN : vm.env "N_MASK" = NMASK) (hOUT : vm.env "OUT" = 0x600)
+    (hseed : ∀ k, k < 32 → vm.mem (0 + k) = seed.data.getD k 0) :
+    (execFor c10Oracle sig "step" wotsChainStepBody (7 - digit) 0 vm).2 = none
+    ∧ (execFor c10Oracle sig "step" wotsChainStepBody (7 - digit) 0 vm).1.env "val"
+        = wordOf (ByteVec.pad16 (Spec.chainHash seed
+            (Spec.Adrs.setChainIndex (Spec.Adrs.wots layer tree kp) (UInt32.ofNat i)) val0 digit (7 - digit)))
+    ∧ (∀ k, k < 32 → (execFor c10Oracle sig "step" wotsChainStepBody (7 - digit) 0 vm).1.mem (0 + k)
+        = seed.data.getD k 0) := by
+  let A : Spec.Adrs := Spec.Adrs.setChainIndex (Spec.Adrs.wots layer tree kp) (UInt32.ofNat i)
+  let R : Nat → VM → Prop := fun c w =>
+    w.env "val" = wordOf (ByteVec.pad16 (wotsChainAcc seed A digit val0 c))
+    ∧ w.env "digit" = digit
+    ∧ w.env "chainBase" = (wordOf (Spec.Adrs.wots layer tree kp) ||| i <<< 64) &&& CHAINBASE_MASK
+    ∧ w.env "N_MASK" = NMASK ∧ w.env "OUT" = 0x600
+    ∧ (∀ k, k < 32 → w.mem (0 + k) = seed.data.getD k 0)
+  have hstep : ∀ cur w, cur < 7 - digit → R cur w →
+      (execList c10Oracle sig wotsChainStepBody { w with env := setVar w.env "step" cur }).2 = none ∧
+      R (cur + 1) (execList c10Oracle sig wotsChainStepBody { w with env := setVar w.env "step" cur }).1 :=
+    fun cur w hcur hRcw =>
+      wots_chain_step sig seed layer tree kp i digit val0 hi32 hdigit cur hcur w hRcw
+  have hR0 : R 0 vm := by
+    refine ⟨?_, hdig, hcb, hN, hOUT, hseed⟩
+    rw [hval]; rfl
+  have hloop := execFor_invariant_lt c10Oracle sig "step" wotsChainStepBody (7 - digit) R hstep vm hR0
+  obtain ⟨hvalf, _, _, _, _, hseedf⟩ := hloop.2
+  refine ⟨hloop.1, ?_, hseedf⟩
+  rw [hvalf]
+  -- wotsChainAcc seed A digit val0 (7-digit) = chainHash seed A val0 digit (7-digit)
+  show wordOf (ByteVec.pad16 (wotsChainAcc seed A digit val0 (7 - digit))) = _
+  rw [show wotsChainAcc seed A digit val0 (7 - digit)
+        = Spec.chainHash seed A val0 digit (7 - digit) from by
+    unfold wotsChainAcc
+    rw [chainHash_eq_fwd seed A val0 digit (7 - digit)]]
+
+/-! ### The outer WOTS chain loop (per-chain body + the 43-chain drive)
+
+The outer `forRange "i" 43` body (`SPHINCsC10Asm.sol` L182–195): compute `digit`,
+`steps = 7-digit`, the chain value `val0 = loadValue16 sig (wotsPtr+16i)`, the `chainBase`,
+drive the inner chain loop (`wots_chain_loop`), and store the endpoint at `0x80+32i`.
+The `fors_tree_body`/`fors_normal_trees` analogue. -/
+
+/-- `extractDigits d [i]! = readBitsLe d (i·LogW) LogW` for `i < L`. -/
+theorem extractDigits_getElem (d_bv : ByteVec 32) (i : Nat) (hi : i < Spec.L) :
+    (SphincsCVerify.Util.extractDigits d_bv)[i]!
+      = SphincsCVerify.Util.readBitsLe d_bv (i * Spec.LogW) Spec.LogW := by
+  unfold SphincsCVerify.Util.extractDigits
+  rw [getElem!_pos (Array.ofFn (n := Spec.L) fun j =>
+        SphincsCVerify.Util.readBitsLe d_bv (j.val * Spec.LogW) Spec.LogW) i (by simp [hi])]
+  simp
+
+/-- The WOTS chain endpoint for chain `i` (interp digit form): `chainHash` from the chain
+    value `loadValue16 sig (688 + 16i)` (the layer's WOTS chains start at `sigOff`; here we
+    bind to the concrete per-layer offset at the call site) — kept abstract via `wotsPtr`. -/
+def wotsChainEndpoint (seed : ByteVec 32) (layer : UInt32) (tree : UInt64) (kp : UInt32)
+    (d_bv : ByteVec 32) (sig : ByteVec Spec.SignatureLen) (wotsPtr i : Nat) : ByteVec 16 :=
+  let digit := (SphincsCVerify.Util.extractDigits d_bv)[i]!
+  Spec.chainHash seed (Spec.Adrs.setChainIndex (Spec.Adrs.wots layer tree kp) (UInt32.ofNat i))
+    (ByteVec.loadValue16 sig (wotsPtr + 16 * i)) digit (7 - digit)
+
+/-- The outer chain body (`SPHINCsC10Asm.sol` L182–195), with loop var `i`. -/
+def wotsChainBody : List Stmt :=
+  [ .letv "digit" (.bin .band (.bin .shr (.bin .mul (.var "i") (.lit 3)) (.var "d")) (.lit 0x7))
+  , .letv "steps" (.bin .sub (.lit 7) (.var "digit"))
+  , .letv "val" (.bin .band (.calldataload (.bin .add (.var "wotsPtr") (.bin .shl (.lit 4) (.var "i")))) (.var "N_MASK"))
+  , .letv "chainBase" (.bin .band (.bin .bor (.var "wotsAdrs") (.bin .shl (.lit 64) (.var "i"))) (.lit CHAINBASE_MASK))
+  , .forRange "step" (.var "steps") wotsChainStepBody
+  , .mstore (.bin .add (.lit 0x80) (.bin .shl (.lit 5) (.var "i"))) (.var "val") ]
+
+
+/-- One inner chain step preserves any variable it never binds (`x ∉ {step, val}`). The
+    `wotsChainStepBody` binds only `step` (loop var) and `val` (`setv`); `chainBase/digit/
+    N_MASK/OUT/i` survive. -/
+private theorem execList_wotsChainStepBody_preserves_var (sig : ByteVec Spec.SignatureLen)
+    (cur : Nat) (v : VM) (x : String) (hx : x ≠ "step" ∧ x ≠ "val") :
+    (execList c10Oracle sig wotsChainStepBody { v with env := setVar v.env "step" cur }).1.env x
+        = v.env x := by
+  obtain ⟨h1, h2⟩ := hx
+  unfold wotsChainStepBody
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList]
+  simp only [execStmt, eval, setVar, h1, h2, ite_false]
+
+/-- One inner chain step falls through (no `revert`/`return` in `wotsChainStepBody`). -/
+private theorem execList_wotsChainStepBody_none (sig : ByteVec Spec.SignatureLen)
+    (cur : Nat) (v : VM) :
+    (execList c10Oracle sig wotsChainStepBody { v with env := setVar v.env "step" cur }).2 = none := by
+  unfold wotsChainStepBody
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList]
+
+/-- The whole inner chain loop preserves any `x ∉ {step, val}`. -/
+private theorem execFor_wotsChainStepBody_preserves_var (sig : ByteVec Spec.SignatureLen)
+    (x : String) (hx : x ≠ "step" ∧ x ≠ "val") :
+    ∀ (remaining cur : Nat) (v : VM),
+      (execFor c10Oracle sig "step" wotsChainStepBody remaining cur v).1.env x = v.env x := by
+  intro remaining
+  induction remaining with
+  | zero => intro cur v; simp only [execFor]
+  | succ rem ih =>
+      intro cur v
+      have hnone := execList_wotsChainStepBody_none sig cur v
+      rw [execFor]
+      rcases hp : execList c10Oracle sig wotsChainStepBody { v with env := setVar v.env "step" cur }
+        with ⟨pvm, po⟩
+      rw [hp] at hnone
+      subst hnone
+      simp only []
+      rw [ih (cur + 1) pvm]
+      have := execList_wotsChainStepBody_preserves_var sig cur v x hx
+      rw [hp] at this
+      exact this
+
+set_option maxHeartbeats 8000000 in
+set_option maxRecDepth 4000 in
+/-- **Per-chain WOTS body refinement.** Running `wotsChainBody` for chain `c < 43` from a VM
+    whose env supplies `d = wordOf d_bv`, `wotsPtr`, `wotsAdrs = wordOf (wots layer tree kp)`,
+    `N_MASK`, `OUT = 0x600`, loop var `i = c`, with `seed` in scratch `[0,0x20)`, falls
+    through and stores `wordOf (pad16 (wotsChainEndpoint … c))` at `0x80 + 32*c`; seed window
+    and consts persist. Discharges the inner chain loop (`wots_chain_loop`) and the
+    digit/chain-value reads internally. -/
+theorem wots_chain_body
+    (sig : ByteVec Spec.SignatureLen) (vm : VM)
+    (seed : ByteVec 32) (layer : UInt32) (tree : UInt64) (kp : UInt32)
+    (d_bv : ByteVec 32) (wotsPtr c : Nat) (hc : c < 43) (hwp : wotsPtr < 4096)
+    (hd : vm.env "d" = wordOf d_bv)
+    (hwptr : vm.env "wotsPtr" = wotsPtr)
+    (hwa : vm.env "wotsAdrs" = wordOf (Spec.Adrs.wots layer tree kp))
+    (hN : vm.env "N_MASK" = NMASK)
+    (hOUT : vm.env "OUT" = 0x600)
+    (hival : vm.env "i" = c)
+    (hseedmem : ∀ k, k < 32 → vm.mem (0 + k) = seed.data.getD k 0) :
+    (execList c10Oracle sig wotsChainBody vm).2 = none
+    ∧ (∀ k, k < 32 →
+        (execList c10Oracle sig wotsChainBody vm).1.mem (0x80 + 32 * c + k)
+          = (ByteVec.pad16 (wotsChainEndpoint seed layer tree kp d_bv sig wotsPtr c)).data.getD k 0)
+    ∧ (∀ k, k < 32 → (execList c10Oracle sig wotsChainBody vm).1.mem (0 + k) = seed.data.getD k 0) := by
+  unfold wotsChainBody
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  simp only [execStmt, eval, setVar, hd, hwptr, hwa, hN, hOUT, hival, ite_true, ite_false, String.reduceEq]
+  -- Normalise the small `% W` arithmetic.
+  have hmul3 : c * 3 % W = c * 3 := Nat.mod_eq_of_lt (lt_W_of_lt (by omega))
+  have hshl4 : c <<< 4 % W = 16 * c := shl4_small c (by omega)
+  have hshl64 : c <<< 64 % W = c <<< 64 :=
+    Nat.mod_eq_of_lt (shl_lt_two_pow_256 c 32 64 (by have : c < 43 := hc; omega) (by omega))
+  have hvalW : wotsPtr + 16 * c < W := by
+    unfold W; have : wotsPtr + 16 * c < 4784 := by omega
+    exact Nat.lt_trans this (by decide)
+  have hvalOff : (wotsPtr + c <<< 4 % W) % W = wotsPtr + 16 * c := by
+    rw [hshl4, Nat.mod_eq_of_lt hvalW]
+  rw [hmul3, hshl64, hvalOff]
+  -- digit = (wordOf d_bv >>> (c*3)) & 7 = extractDigits[c]!
+  have hdigit : (wordOf d_bv >>> (c * 3)) &&& 0x7 = (SphincsCVerify.Util.extractDigits d_bv)[c]! := by
+    rw [digit_align d_bv c (by have : Spec.L = 43 := rfl; omega), extractDigits_getElem d_bv c (by have : Spec.L = 43 := rfl; omega)]
+  -- chain value: calldataload (wotsPtr + 16c) & N_MASK = wordOf (pad16 (loadValue16 sig (wotsPtr+16c)))
+  rw [cl_masked_eq_wordOf sig (wotsPtr + 16 * c), hdigit]
+  -- Abbreviate the chain-entry VM `w`.
+  obtain ⟨w, hweq⟩ : ∃ w : VM, w =
+      { mem := vm.mem,
+        env := setVar (setVar (setVar (setVar vm.env
+          "digit" ((SphincsCVerify.Util.extractDigits d_bv)[c]!))
+          "steps" ((7 + (W - ((SphincsCVerify.Util.extractDigits d_bv)[c]!) % W)) % W))
+          "val" (wordOf (ByteVec.pad16 (ByteVec.loadValue16 sig (wotsPtr + 16 * c)))))
+          "chainBase" ((wordOf (Spec.Adrs.wots layer tree kp) ||| c <<< 64) &&& CHAINBASE_MASK) } := ⟨_, rfl⟩
+  rw [← hweq]
+  -- digit < 8
+  have hdig8 : (SphincsCVerify.Util.extractDigits d_bv)[c]! < 8 := by
+    have := SphincsCVerify.Util.extractDigits_lt d_bv ⟨c, by have : Spec.L = 43 := rfl; omega⟩
+    have hW : Spec.W = 8 := rfl
+    rw [hW] at this; exact this
+  -- steps = 7 - digit (EVM sub inert since digit ≤ 7)
+  have hsteps : (7 + (W - ((SphincsCVerify.Util.extractDigits d_bv)[c]!) % W)) % W
+      = 7 - (SphincsCVerify.Util.extractDigits d_bv)[c]! := by
+    have hdmod : ((SphincsCVerify.Util.extractDigits d_bv)[c]!) % W
+        = (SphincsCVerify.Util.extractDigits d_bv)[c]! := Nat.mod_eq_of_lt (lt_W_of_lt (by omega))
+    have hWbig : (8 : Nat) ≤ W := by unfold W; exact Nat.le_of_lt (by decide)
+    rw [hdmod, show 7 + (W - (SphincsCVerify.Util.extractDigits d_bv)[c]!)
+          = W + (7 - (SphincsCVerify.Util.extractDigits d_bv)[c]!) by omega,
+        Nat.add_mod_left, Nat.mod_eq_of_lt (lt_W_of_lt (by omega))]
+  -- env facts about w
+  have hwval : w.env "val" = wordOf (ByteVec.pad16 (ByteVec.loadValue16 sig (wotsPtr + 16 * c))) := by
+    rw [hweq]; simp [setVar]
+  have hwdig : w.env "digit" = (SphincsCVerify.Util.extractDigits d_bv)[c]! := by rw [hweq]; simp [setVar]
+  have hwcb : w.env "chainBase"
+      = (wordOf (Spec.Adrs.wots layer tree kp) ||| c <<< 64) &&& CHAINBASE_MASK := by
+    rw [hweq]; simp [setVar]
+  have hwN : w.env "N_MASK" = NMASK := by rw [hweq, hN.symm]; simp [setVar]
+  have hwOUT : w.env "OUT" = 0x600 := by rw [hweq, hOUT.symm]; simp [setVar]
+  have hwsteps : w.env "steps" = 7 - (SphincsCVerify.Util.extractDigits d_bv)[c]! := by
+    rw [hweq]; show _ = _; simp only [setVar, String.reduceEq, ite_false, ite_true]; exact hsteps
+  have hwmem : w.mem = vm.mem := by rw [hweq]
+  have hwseed : ∀ k, k < 32 → w.mem (0 + k) = seed.data.getD k 0 := by
+    intro k hk; rw [hwmem]; exact hseedmem k hk
+  have hwi : w.env "i" = c := by rw [hweq]; simp [setVar]; exact hival
+  -- The inner forRange "step" steps statement = execFor … (7-digit) 0 w (steps eval = 7-digit).
+  have hforStmt : execStmt c10Oracle sig (.forRange "step" (.var "steps") wotsChainStepBody) w
+      = execFor c10Oracle sig "step" wotsChainStepBody (7 - (SphincsCVerify.Util.extractDigits d_bv)[c]!) 0 w := by
+    simp only [execStmt, eval, hwsteps]
+  obtain ⟨hloopNone, hloopVal, hloopSeed⟩ :=
+    wots_chain_loop sig w seed layer tree kp c ((SphincsCVerify.Util.extractDigits d_bv)[c]!)
+      (ByteVec.loadValue16 sig (wotsPtr + 16 * c)) (by have : c < 43 := hc; omega) hdig8
+      hwval hwdig hwcb hwN hwOUT hwseed
+  -- step the forRange
+  rw [execList_cons_none c10Oracle sig _ _ _ (by rw [hforStmt]; exact hloopNone), hforStmt]
+  -- step the final mstore (0x80 + 32c) val
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt]), execList]
+  -- the climb preserves "i" = c (chain loop never binds "i").
+  have hloopI : (execFor c10Oracle sig "step" wotsChainStepBody (7 - (SphincsCVerify.Util.extractDigits d_bv)[c]!) 0 w).1.env "i" = c := by
+    rw [execFor_wotsChainStepBody_preserves_var sig "i" (by decide) _ 0 w, hwi]
+  simp only [execStmt, eval, hloopI, hloopVal]
+  -- store offset (0x80 + c<<<5 % W) % W = 128 + 32c
+  have hstoreOff : (128 + c <<< 5 % W) % W = 128 + 32 * c := by
+    rw [Nat.shiftLeft_eq, show (2:Nat)^5 = 32 from rfl, Nat.mul_comm c 32,
+        Nat.mod_eq_of_lt (lt_W_of_lt (show 32 * c < 4096 by omega)),
+        Nat.mod_eq_of_lt (lt_W_of_lt (show 128 + 32 * c < 4096 by omega))]
+  rw [hstoreOff]
+  refine ⟨trivial, ?_, ?_⟩
+  · -- mem at 128+32c+k = (pad16 endpoint)'s k-th byte
+    intro k hk
+    rw [show (128 + 32 * c + k) = ((128 + 32 * c) + k) by omega, mstore32_get _ (128 + 32 * c) _ k hk,
+        beByte_wordOf_getD _ k hk]
+    show _ = (ByteVec.pad16 (wotsChainEndpoint seed layer tree kp d_bv sig wotsPtr c)).data.getD k 0
+    unfold wotsChainEndpoint
+    rfl
+  · -- seed window persists (store at ≥ 128)
+    intro k hk
+    rw [mstore32_frame _ (128 + 32 * c) _ (0 + k) (by omega)]
+    exact hloopSeed k hk
+
+/-! ### The 43-chain outer loop drive
+
+Drives `wots_chain_body` 43× via `execFor_invariant_lt` (the `fors_normal_trees`
+analogue). The body's only writes are `{0x20, 0x40, OUT=0x600}` (chain hash scratch) and
+`0x80+32i` (the endpoint), so already-laid endpoints `[0x80, 0x80+32·cur)` and the seed
+window persist. Lays `pad16 (wotsChainEndpoint … t)` at `0x80+32t` for every `t < 43`. -/
+
+private theorem execFor_wotsChainStepBody_none' (sig : ByteVec Spec.SignatureLen) :
+    ∀ (remaining cur : Nat) (v : VM),
+      (execFor c10Oracle sig "step" wotsChainStepBody remaining cur v).2 = none := by
+  intro remaining
+  induction remaining with
+  | zero => intro cur v; simp only [execFor]
+  | succ rem ih =>
+      intro cur v
+      have hnone := execList_wotsChainStepBody_none sig cur v
+      rw [execFor]
+      rcases hp : execList c10Oracle sig wotsChainStepBody { v with env := setVar v.env "step" cur }
+        with ⟨pvm, po⟩
+      rw [hp] at hnone; subst hnone; simp only []; exact ih (cur + 1) pvm
+
+/-- `wotsChainBody` preserves any const var `x ∉ {digit, steps, val, chainBase, step, i}`. -/
+private theorem execList_wotsChainBody_preserves_const (sig : ByteVec Spec.SignatureLen)
+    (cur : Nat) (v : VM) (x : String)
+    (hx : x ≠ "digit" ∧ x ≠ "steps" ∧ x ≠ "val" ∧ x ≠ "chainBase" ∧ x ≠ "step" ∧ x ≠ "i") :
+    (execList c10Oracle sig wotsChainBody { v with env := setVar v.env "i" cur }).1.env x = v.env x := by
+  obtain ⟨h1, h2, h3, h4, h5, h6⟩ := hx
+  unfold wotsChainBody
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  -- abbreviate the post-4-letv VM w'
+  obtain ⟨w', hw'⟩ : ∃ w', w' = (execStmt c10Oracle sig (Stmt.letv "chainBase"
+        (.bin .band (.bin .bor (.var "wotsAdrs") (.bin .shl (.lit 64) (.var "i"))) (.lit CHAINBASE_MASK)))
+      (execStmt c10Oracle sig (Stmt.letv "val"
+        (.bin .band (.calldataload (.bin .add (.var "wotsPtr") (.bin .shl (.lit 4) (.var "i")))) (.var "N_MASK")))
+      (execStmt c10Oracle sig (Stmt.letv "steps" (.bin .sub (.lit 7) (.var "digit")))
+      (execStmt c10Oracle sig (Stmt.letv "digit"
+        (.bin .band (.bin .shr (.bin .mul (.var "i") (.lit 3)) (.var "d")) (.lit 0x7)))
+        { v with env := setVar v.env "i" cur }).1).1).1).1 := ⟨_, rfl⟩
+  rw [← hw']
+  have hforNone : (execStmt c10Oracle sig (.forRange "step" (.var "steps") wotsChainStepBody) w').2 = none := by
+    simp only [execStmt, eval]
+    exact execFor_wotsChainStepBody_none' sig _ 0 w'
+  have hforStmt : execStmt c10Oracle sig (.forRange "step" (.var "steps") wotsChainStepBody) w'
+      = execFor c10Oracle sig "step" wotsChainStepBody (w'.env "steps") 0 w' := by
+    simp only [execStmt, eval]
+  rw [execList_cons_none c10Oracle sig _ _ _ hforNone, hforStmt]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt]), execList]
+  simp only [execStmt, eval]
+  rw [execFor_wotsChainStepBody_preserves_var sig x ⟨h5, h3⟩ (w'.env "steps") 0 w']
+  rw [hw']
+  simp only [execStmt, eval, setVar, h1, h2, h3, h4, h6, ite_false]
+
+/-- One inner chain step preserves any memory address `a ∉ [0x20, 0x600)`-conflicting (it writes
+    only `0x20`/`0x40`/`OUT=0x600`); for `0x80 ≤ a < 0x600` the address survives. -/
+private theorem execList_wotsChainStepBody_mem_frame (sig : ByteVec Spec.SignatureLen)
+    (cur : Nat) (v : VM) (hOUT : v.env "OUT" = 0x600) (a : Nat) (ha : 0x80 ≤ a ∧ a < 0x600) :
+    (execList c10Oracle sig wotsChainStepBody { v with env := setVar v.env "step" cur }).1.mem a = v.mem a := by
+  obtain ⟨ha1, ha2⟩ := ha
+  unfold wotsChainStepBody
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList]
+  simp only [execStmt, eval, setVar, String.reduceEq, ite_true, ite_false, hOUT]
+  rw [writeRegion_frame _ 0x600 _ a (by omega), mstore32_frame _ 0x40 _ a (by omega),
+      mstore32_frame _ 0x20 _ a (by omega)]
+
+private theorem execFor_wotsChainStepBody_mem_frame (sig : ByteVec Spec.SignatureLen)
+    (a : Nat) (ha : 0x80 ≤ a ∧ a < 0x600) :
+    ∀ (remaining cur : Nat) (v : VM), v.env "OUT" = 0x600 →
+      (execFor c10Oracle sig "step" wotsChainStepBody remaining cur v).1.mem a = v.mem a := by
+  intro remaining
+  induction remaining with
+  | zero => intro cur v _; simp only [execFor]
+  | succ rem ih =>
+      intro cur v hOUT
+      have hnone := execList_wotsChainStepBody_none sig cur v
+      rw [execFor]
+      rcases hp : execList c10Oracle sig wotsChainStepBody { v with env := setVar v.env "step" cur }
+        with ⟨pvm, po⟩
+      rw [hp] at hnone; subst hnone; simp only []
+      have hpOUT : pvm.env "OUT" = 0x600 := by
+        have := execList_wotsChainStepBody_preserves_var sig cur v "OUT" ⟨by decide, by decide⟩
+        rw [hp] at this; rw [this]; exact hOUT
+      rw [ih (cur + 1) pvm hpOUT]
+      have := execList_wotsChainStepBody_mem_frame sig cur v hOUT a ha
+      rw [hp] at this; exact this
+
+set_option maxHeartbeats 8000000 in
+set_option maxRecDepth 4000 in
+/-- `wotsChainBody` (entered with `i := cur`, `cur < 43`) preserves any laid-endpoint
+    address `a` with `0x80 ≤ a < 0x80 + 32·cur` (disjoint from `{0x20,0x40,OUT}` and this
+    chain's store `[0x80+32·cur, +32)`). -/
+private theorem execList_wotsChainBody_mem_frame (sig : ByteVec Spec.SignatureLen)
+    (cur : Nat) (v : VM) (hOUT : v.env "OUT" = 0x600)
+    (hcur : cur < 43) (a : Nat) (ha : 0x80 ≤ a ∧ a < 0x80 + 32 * cur) :
+    (execList c10Oracle sig wotsChainBody { v with env := setVar v.env "i" cur }).1.mem a = v.mem a := by
+  obtain ⟨ha1, ha2⟩ := ha
+  unfold wotsChainBody
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  obtain ⟨w', hw'⟩ : ∃ w', w' = (execStmt c10Oracle sig (Stmt.letv "chainBase"
+        (.bin .band (.bin .bor (.var "wotsAdrs") (.bin .shl (.lit 64) (.var "i"))) (.lit CHAINBASE_MASK)))
+      (execStmt c10Oracle sig (Stmt.letv "val"
+        (.bin .band (.calldataload (.bin .add (.var "wotsPtr") (.bin .shl (.lit 4) (.var "i")))) (.var "N_MASK")))
+      (execStmt c10Oracle sig (Stmt.letv "steps" (.bin .sub (.lit 7) (.var "digit")))
+      (execStmt c10Oracle sig (Stmt.letv "digit"
+        (.bin .band (.bin .shr (.bin .mul (.var "i") (.lit 3)) (.var "d")) (.lit 0x7)))
+        { v with env := setVar v.env "i" cur }).1).1).1).1 := ⟨_, rfl⟩
+  rw [← hw']
+  have hforNone : (execStmt c10Oracle sig (.forRange "step" (.var "steps") wotsChainStepBody) w').2 = none := by
+    simp only [execStmt, eval]; exact execFor_wotsChainStepBody_none' sig _ 0 w'
+  have hforStmt : execStmt c10Oracle sig (.forRange "step" (.var "steps") wotsChainStepBody) w'
+      = execFor c10Oracle sig "step" wotsChainStepBody (w'.env "steps") 0 w' := by simp only [execStmt, eval]
+  rw [execList_cons_none c10Oracle sig _ _ _ hforNone, hforStmt]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt]), execList]
+  simp only [execStmt, eval]
+  -- the climb-final "i" = cur (the chain loop never binds "i")
+  have hw'i : w'.env "i" = cur := by rw [hw']; simp only [execStmt, eval, setVar, String.reduceEq, ite_true, ite_false]
+  rw [execFor_wotsChainStepBody_preserves_var sig "i" ⟨by decide, by decide⟩ (w'.env "steps") 0 w', hw'i]
+  have hstoreOff : (128 + cur <<< 5 % W) % W = 128 + 32 * cur := by
+    rw [Nat.shiftLeft_eq, show (2:Nat)^5 = 32 from rfl, Nat.mul_comm cur 32,
+        Nat.mod_eq_of_lt (lt_W_of_lt (show 32 * cur < 4096 by omega)),
+        Nat.mod_eq_of_lt (lt_W_of_lt (show 128 + 32 * cur < 4096 by omega))]
+  rw [hstoreOff, mstore32_frame _ (128 + 32 * cur) _ a (by omega)]
+  -- OUT = 0x600 survives the 4 letvs
+  have hw'OUT : w'.env "OUT" = 0x600 := by
+    rw [hw']; simp only [execStmt, eval, setVar, String.reduceEq, ite_true, ite_false]; exact hOUT
+  rw [execFor_wotsChainStepBody_mem_frame sig a (by omega) (w'.env "steps") 0 w' hw'OUT]
+  rw [hw']
+  simp only [execStmt, eval, setVar]
+
+set_option maxHeartbeats 8000000 in
+set_option maxRecDepth 4000 in
+/-- **The 43-chain outer loop.** Running `forRange "i" 43 wotsChainBody` from a VM whose env
+    supplies `d = wordOf d_bv`, `wotsPtr`, `wotsAdrs = wordOf (wots layer tree kp)`, `N_MASK`,
+    `OUT = 0x600`, with `seed` in scratch `[0,0x20)`, falls through and lays
+    `pad16 (wotsChainEndpoint … t)` at `0x80 + 32*t` for every `t < 43`; the seed window and
+    the loop consts persist. Drives `wots_chain_body` 43× via `execFor_invariant_lt`. -/
+theorem wots_chain_outer_loop
+    (sig : ByteVec Spec.SignatureLen) (vm : VM)
+    (seed : ByteVec 32) (layer : UInt32) (tree : UInt64) (kp : UInt32)
+    (d_bv : ByteVec 32) (wotsPtr : Nat) (hwp : wotsPtr < 4096)
+    (hd : vm.env "d" = wordOf d_bv)
+    (hwptr : vm.env "wotsPtr" = wotsPtr)
+    (hwa : vm.env "wotsAdrs" = wordOf (Spec.Adrs.wots layer tree kp))
+    (hN : vm.env "N_MASK" = NMASK)
+    (hOUT : vm.env "OUT" = 0x600)
+    (hseedmem : ∀ k, k < 32 → vm.mem (0 + k) = seed.data.getD k 0) :
+    (execFor c10Oracle sig "i" wotsChainBody 43 0 vm).2 = none
+    ∧ (∀ t, t < 43 → ∀ k, k < 32 →
+        (execFor c10Oracle sig "i" wotsChainBody 43 0 vm).1.mem (0x80 + 32 * t + k)
+          = (ByteVec.pad16 (wotsChainEndpoint seed layer tree kp d_bv sig wotsPtr t)).data.getD k 0)
+    ∧ (∀ k, k < 32 → (execFor c10Oracle sig "i" wotsChainBody 43 0 vm).1.mem (0 + k) = seed.data.getD k 0)
+    ∧ (execFor c10Oracle sig "i" wotsChainBody 43 0 vm).1.env "N_MASK" = NMASK
+    ∧ (execFor c10Oracle sig "i" wotsChainBody 43 0 vm).1.env "OUT" = 0x600 := by
+  let R : Nat → VM → Prop := fun cur w =>
+    (∀ t, t < cur → ∀ k, k < 32 → w.mem (0x80 + 32 * t + k)
+        = (ByteVec.pad16 (wotsChainEndpoint seed layer tree kp d_bv sig wotsPtr t)).data.getD k 0)
+    ∧ (∀ k, k < 32 → w.mem (0 + k) = seed.data.getD k 0)
+    ∧ w.env "d" = wordOf d_bv ∧ w.env "wotsPtr" = wotsPtr
+    ∧ w.env "wotsAdrs" = wordOf (Spec.Adrs.wots layer tree kp)
+    ∧ w.env "N_MASK" = NMASK ∧ w.env "OUT" = 0x600
+  have hstep : ∀ cur w, cur < 43 → R cur w →
+      (execList c10Oracle sig wotsChainBody { w with env := setVar w.env "i" cur }).2 = none ∧
+      R (cur + 1) (execList c10Oracle sig wotsChainBody { w with env := setVar w.env "i" cur }).1 := by
+    intro cur w hcur hR
+    obtain ⟨hRmem, hRseed, hRd, hRwp, hRwa, hRN, hROUT⟩ := hR
+    obtain ⟨wi, hwi⟩ : ∃ wi, ({ w with env := setVar w.env "i" cur } : VM) = wi := ⟨_, rfl⟩
+    rw [hwi]
+    have hwienv : wi.env = setVar w.env "i" cur := by rw [← hwi]
+    have hwimem : wi.mem = w.mem := by rw [← hwi]
+    have hwid : wi.env "d" = wordOf d_bv := by rw [hwienv, setVar_get_ne _ _ _ _ (by decide)]; exact hRd
+    have hwiwp : wi.env "wotsPtr" = wotsPtr := by rw [hwienv, setVar_get_ne _ _ _ _ (by decide)]; exact hRwp
+    have hwiwa : wi.env "wotsAdrs" = wordOf (Spec.Adrs.wots layer tree kp) := by
+      rw [hwienv, setVar_get_ne _ _ _ _ (by decide)]; exact hRwa
+    have hwiN : wi.env "N_MASK" = NMASK := by rw [hwienv, setVar_get_ne _ _ _ _ (by decide)]; exact hRN
+    have hwiOUT : wi.env "OUT" = 0x600 := by rw [hwienv, setVar_get_ne _ _ _ _ (by decide)]; exact hROUT
+    have hwii : wi.env "i" = cur := by rw [hwienv, setVar_get_eq]
+    have hwiseedmem : ∀ k, k < 32 → wi.mem (0 + k) = seed.data.getD k 0 := by
+      intro k hk; rw [hwimem]; exact hRseed k hk
+    have hbody := wots_chain_body sig wi seed layer tree kp d_bv wotsPtr cur hcur hwp
+      hwid hwiwp hwiwa hwiN hwiOUT hwii hwiseedmem
+    obtain ⟨hbodyNone, hbodyMem, hbodySeed⟩ := hbody
+    refine ⟨hbodyNone, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    · intro t ht k hk
+      by_cases htc : t = cur
+      · subst htc; rw [hbodyMem k hk]
+      · have htlt : t < cur := by omega
+        rw [← hwi, execList_wotsChainBody_mem_frame sig cur w hROUT hcur (0x80 + 32 * t + k) ⟨by omega, by omega⟩]
+        exact hRmem t htlt k hk
+    · intro k hk; exact hbodySeed k hk
+    · rw [← hwi, execList_wotsChainBody_preserves_const sig cur w "d"
+            ⟨by decide, by decide, by decide, by decide, by decide, by decide⟩]; exact hRd
+    · rw [← hwi, execList_wotsChainBody_preserves_const sig cur w "wotsPtr"
+            ⟨by decide, by decide, by decide, by decide, by decide, by decide⟩]; exact hRwp
+    · rw [← hwi, execList_wotsChainBody_preserves_const sig cur w "wotsAdrs"
+            ⟨by decide, by decide, by decide, by decide, by decide, by decide⟩]; exact hRwa
+    · rw [← hwi, execList_wotsChainBody_preserves_const sig cur w "N_MASK"
+            ⟨by decide, by decide, by decide, by decide, by decide, by decide⟩]; exact hRN
+    · rw [← hwi, execList_wotsChainBody_preserves_const sig cur w "OUT"
+            ⟨by decide, by decide, by decide, by decide, by decide, by decide⟩]; exact hROUT
+  have hR0 : R 0 vm := ⟨fun t ht => absurd ht (Nat.not_lt_zero t), hseedmem, hd, hwptr, hwa, hN, hOUT⟩
+  have hloop := execFor_invariant_lt c10Oracle sig "i" wotsChainBody 43 R hstep vm hR0
+  obtain ⟨hmem, hseedf, _, _, _, hNf, hOUTf⟩ := hloop.2
+  exact ⟨hloop.1, hmem, hseedf, hNf, hOUTf⟩
+
+/-! ### WOTS PK compression
+
+The 43-endpoint compression (`SPHINCsC10Asm.sol` L197–205): store the `wotsPk` ADRS at
+`0x20`, copy the 43 chain endpoints from `[0x80+32i,…)` to `[0x40+32i,…)`, hash the
+45-segment `[seed, wotsPk-adrs, endpoint0..42]` window (`sha256 0x00 0x5A0`), and mask the
+digest into `wotsPk`. The `fors_root_compress` analogue (`forsCopyBody` reused verbatim). -/
+
+/-- **WOTS-PK ADRS word.** `wotsPk = make layer tree ADRS_WOTS_PK kp 0 0 0`; the
+    `ci=cp=ha=0` shifts vanish (Yul `or(shl(224,layer), or(shl(160,tree), or(shl(128,1),
+    shl(96,kp))))`). The `wordOf_wots` mirror with `ADRS_WOTS_PK`. -/
+theorem wordOf_wotsPk (layer : UInt32) (tree : UInt64) (kp : UInt32) :
+    wordOf (Spec.Adrs.wotsPk layer tree kp)
+      = layer.toNat <<< 224 ||| tree.toNat <<< 160 ||| (UInt32.ofNat Spec.ADRS_WOTS_PK).toNat <<< 128
+        ||| kp.toNat <<< 96 := by
+  unfold Spec.Adrs.wotsPk
+  rw [wordOf_make]
+  show _ ||| _ ||| _ ||| _ ||| (0 : UInt32).toNat <<< 64 ||| (0 : UInt32).toNat <<< 32
+        ||| (0 : UInt32).toNat = _
+  rw [show (0 : UInt32).toNat = 0 from rfl, Nat.zero_shiftLeft, Nat.or_zero, Nat.zero_shiftLeft,
+      Nat.or_zero, Nat.or_zero]
+
+/-- The WOTS PK-adrs Yul word `or(shl(224,layer), or(shl(160,idxTree), or(shl(128,1), shl(96,idxLeaf))))`,
+    masks inert (for `layer < 2^32`, `tree < 2^64`, `kp < 2^32`). -/
+private theorem wotsPk_word (layer : UInt32) (tree : UInt64) (kp : UInt32) :
+    ((layer.toNat <<< 224 % W) ||| ((tree.toNat <<< 160 % W) ||| ((1 <<< 128 % W) ||| (kp.toNat <<< 96 % W))))
+      = wordOf (Spec.Adrs.wotsPk layer tree kp) := by
+  rw [wordOf_wotsPk]
+  have hPk : (UInt32.ofNat Spec.ADRS_WOTS_PK).toNat = 1 := by decide
+  rw [hPk]
+  have hW0 : layer.toNat <<< 224 % W = layer.toNat <<< 224 :=
+    Nat.mod_eq_of_lt (shl_lt_two_pow_256 _ 32 224 layer.toNat_lt (by omega))
+  have hW1 : tree.toNat <<< 160 % W = tree.toNat <<< 160 :=
+    Nat.mod_eq_of_lt (shl_lt_two_pow_256 _ 64 160 tree.toNat_lt (by omega))
+  have hW2 : (1 : Nat) <<< 128 % W = 1 <<< 128 :=
+    Nat.mod_eq_of_lt (shl_lt_two_pow_256 _ 1 128 (by decide) (by omega))
+  have hW3 : kp.toNat <<< 96 % W = kp.toNat <<< 96 :=
+    Nat.mod_eq_of_lt (shl_lt_two_pow_256 _ 32 96 kp.toNat_lt (by omega))
+  rw [hW0, hW1, hW2, hW3, Nat.or_assoc, Nat.or_assoc]
+
+/-- One 43-copy step (`forsCopyBody`, reused verbatim): `mem[0x40+32cur] := mem[0x80+32cur]`. -/
+private theorem wots_copy_step (sig : ByteVec Spec.SignatureLen) (cur : Nat) (v : VM)
+    (hcur : cur < 43) :
+    (execList c10Oracle sig forsCopyBody { v with env := setVar v.env "i" cur }).2 = none
+    ∧ (∀ a, ¬ (0x40 + 32 * cur ≤ a ∧ a < 0x40 + 32 * cur + 32) →
+        (execList c10Oracle sig forsCopyBody { v with env := setVar v.env "i" cur }).1.mem a = v.mem a)
+    ∧ (∀ k, k < 32 →
+        (execList c10Oracle sig forsCopyBody { v with env := setVar v.env "i" cur }).1.mem
+          (0x40 + 32 * cur + k) = v.mem (0x80 + 32 * cur + k))
+    ∧ (execList c10Oracle sig forsCopyBody { v with env := setVar v.env "i" cur }).1.env
+        = setVar v.env "i" cur := by
+  unfold forsCopyBody
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList]
+  simp only [execStmt, eval, setVar, ite_true]
+  have hdest : (0x40 + cur <<< 5 % W) % W = 64 + 32 * cur := by
+    rw [shl5_small cur (by omega), Nat.mod_eq_of_lt (lt_W_of_lt (show 64 + 32 * cur < 4096 by omega))]
+  have hsrc : (0x80 + cur <<< 5 % W) % W = 128 + 32 * cur := by
+    rw [shl5_small cur (by omega), Nat.mod_eq_of_lt (lt_W_of_lt (show 128 + 32 * cur < 4096 by omega))]
+  rw [hdest, hsrc]
+  refine ⟨trivial, ?_, ?_, ?_⟩
+  · intro a ha; rw [mstore32_frame _ (64 + 32 * cur) _ a (by omega)]
+  · intro k hk
+    rw [show (0x40 + 32 * cur + k) = ((64 + 32 * cur) + k) by omega, mstore32_get _ (64 + 32 * cur) _ k hk]
+    rw [beByte_mload32 v.mem (128 + 32 * cur) k hk]
+  · trivial
+
+set_option maxHeartbeats 8000000 in
+set_option maxRecDepth 4000 in
+/-- The 43-record copy loop (`fors_copy_loop` analogue, 43 instead of 13). Pre: 43 endpoints
+    `pad16`'d at `[0x80+32t,…)` and `[0,0x40)` fixed. Post: 43 endpoints `pad16`'d at
+    `[0x40+32t,…)`, `[0,0x40)` unchanged. -/
+private theorem wots_copy_loop (sig : ByteVec Spec.SignatureLen) (vm : VM)
+    (endpts : Nat → ByteVec 16)
+    (hsrc : ∀ t, t < 43 → ∀ k, k < 32 → vm.mem (0x80 + 32 * t + k)
+        = (ByteVec.pad16 (endpts t)).data.getD k 0) :
+    (execFor c10Oracle sig "i" forsCopyBody 43 0 vm).2 = none
+    ∧ (∀ t, t < 43 → ∀ k, k < 32 →
+        (execFor c10Oracle sig "i" forsCopyBody 43 0 vm).1.mem (0x40 + 32 * t + k)
+          = (ByteVec.pad16 (endpts t)).data.getD k 0)
+    ∧ (∀ a, a < 0x40 → (execFor c10Oracle sig "i" forsCopyBody 43 0 vm).1.mem a = vm.mem a) := by
+  let R : Nat → VM → Prop := fun cur w =>
+    (∀ t, t < cur → ∀ k, k < 32 → w.mem (0x40 + 32 * t + k) = (ByteVec.pad16 (endpts t)).data.getD k 0)
+    ∧ (∀ t, cur ≤ t → t < 43 → ∀ k, k < 32 → w.mem (0x80 + 32 * t + k) = (ByteVec.pad16 (endpts t)).data.getD k 0)
+    ∧ (∀ a, a < 0x40 → w.mem a = vm.mem a)
+  have hstep : ∀ cur w, cur < 43 → R cur w →
+      (execList c10Oracle sig forsCopyBody { w with env := setVar w.env "i" cur }).2 = none ∧
+      R (cur + 1) (execList c10Oracle sig forsCopyBody { w with env := setVar w.env "i" cur }).1 := by
+    intro cur w hcur hR
+    obtain ⟨hRcopied, hRsrc, hRlow⟩ := hR
+    obtain ⟨hnone, hframe, hcopy, _⟩ := wots_copy_step sig cur w hcur
+    refine ⟨hnone, ?_, ?_, ?_⟩
+    · intro t ht k hk
+      by_cases htc : t = cur
+      · rw [htc, hcopy k hk]; exact hRsrc cur (Nat.le_refl cur) hcur k hk
+      · have htlt : t < cur := by omega
+        rw [hframe (0x40 + 32 * t + k) (by omega)]; exact hRcopied t htlt k hk
+    · intro t ht ht43 k hk
+      rw [hframe (0x80 + 32 * t + k) (by omega)]; exact hRsrc t (by omega) ht43 k hk
+    · intro a ha; rw [hframe a (by omega)]; exact hRlow a ha
+  have hR0 : R 0 vm := ⟨fun t ht => absurd ht (Nat.not_lt_zero t),
+    fun t _ ht43 k hk => hsrc t ht43 k hk, fun a _ => rfl⟩
+  have hloop := execFor_invariant_lt c10Oracle sig "i" forsCopyBody 43 R hstep vm hR0
+  obtain ⟨hcopied, _, hlow⟩ := hloop.2
+  exact ⟨hloop.1, hcopied, hlow⟩
+
+/-- The 45-segment compression input: `seed`, the `wotsPk` ADRS, then the 43 `pad16`'d
+    endpoints. Exactly `thMulti`'s `header ++ endpts.map (ofByteVec ∘ pad16)`. -/
+def wotsPkSegs (seed : ByteVec 32) (layer : UInt32) (tree : UInt64) (kp : UInt32)
+    (endpts : List (ByteVec 16)) : List (ByteVec 32) :=
+  seed :: (Spec.Adrs.wotsPk layer tree kp) :: endpts.map ByteVec.pad16
+
+/-- `(endpts.map pad16).getD n (zero 32) = pad16 (endpts.getD n (zero 16))` for `n < length`. -/
+private theorem map_pad16_getD' (endpts : List (ByteVec 16)) (n : Nat) (hn : n < endpts.length) :
+    (endpts.map ByteVec.pad16).getD n (ByteVec.zero 32) = ByteVec.pad16 (endpts.getD n (ByteVec.zero 16)) := by
+  rw [List.getD_eq_getElem?_getD, List.getD_eq_getElem?_getD, List.getElem?_map,
+      List.getElem?_eq_getElem hn, Option.map_some, Option.getD_some, Option.getD_some]
+
+set_option maxHeartbeats 8000000 in
+set_option maxRecDepth 4000 in
+/-- **WOTS PK-compression refinement.** Running the compression fragment (store the `wotsPk`
+    ADRS at `0x20`, copy the 43 endpoints, `sha256 0x00 0x5A0`, mask) from a VM whose env
+    supplies `wotsAdrs`-unused, `idxTree`/`idxLeaf` already folded into `pkAdrs` via
+    `wotsAdrs`-word — here parametrized by the env words `layer/tree/kp` through `pkAdrs`,
+    `N_MASK`, `OUT = 0x600`, `seed` in `[0,0x20)`, and the 43 `pad16`'d endpoints at
+    `[0x80+32t,…)` — falls through and binds `"wotsPk" = wordOf (pad16 (thMulti seed
+    (wotsPk layer tree kp) endpts))` (`endpts.length = 43`). The `fors_root_compress`
+    analogue. The `pkAdrs` env word is supplied as a precondition (`hpk`, the wrapper builds it). -/
+theorem wots_pk_compress
+    (sig : ByteVec Spec.SignatureLen) (vm : VM)
+    (seed : ByteVec 32) (layer : UInt32) (tree : UInt64) (kp : UInt32)
+    (endpts : List (ByteVec 16)) (hlen : endpts.length = 43)
+    (hpk : vm.env "pkAdrs" = wordOf (Spec.Adrs.wotsPk layer tree kp))
+    (hN : vm.env "N_MASK" = NMASK)
+    (hOUT : vm.env "OUT" = 0x600)
+    (hseedmem : ∀ k, k < 32 → vm.mem (0 + k) = seed.data.getD k 0)
+    (hendmem : ∀ t, t < 43 → ∀ k, k < 32 →
+        vm.mem (0x80 + 32 * t + k) = (ByteVec.pad16 (endpts.getD t (ByteVec.zero 16))).data.getD k 0) :
+    (execList c10Oracle sig
+        (.mstore (.lit 0x20) (.var "pkAdrs")
+          :: .forRange "i" (.lit 43) forsCopyBody
+          :: .sha256 (.lit 0x00) (.lit 0x5A0) (.var "OUT")
+          :: [.letv "wotsPk" (.bin .band (.mload (.var "OUT")) (.var "N_MASK"))]) vm).2 = none
+    ∧ ((execList c10Oracle sig
+        (.mstore (.lit 0x20) (.var "pkAdrs")
+          :: .forRange "i" (.lit 43) forsCopyBody
+          :: .sha256 (.lit 0x00) (.lit 0x5A0) (.var "OUT")
+          :: [.letv "wotsPk" (.bin .band (.mload (.var "OUT")) (.var "N_MASK"))]) vm).1.env "wotsPk"
+        = wordOf (ByteVec.pad16 (Spec.thMulti seed (Spec.Adrs.wotsPk layer tree kp) endpts))) := by
+  -- Step 1: mstore 0x20 (wotsPk adrs word).
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  obtain ⟨v1, hv1⟩ : ∃ v1, (execStmt c10Oracle sig (.mstore (.lit 0x20) (.var "pkAdrs")) vm).1 = v1 := ⟨_, rfl⟩
+  rw [hv1]
+  have hv1env : v1.env = vm.env := by rw [← hv1]; simp only [execStmt]
+  have hv1mem : v1.mem = mstore32 vm.mem 0x20 (wordOf (Spec.Adrs.wotsPk layer tree kp)) := by
+    rw [← hv1]; simp only [execStmt, eval, hpk]
+  have hv1end : ∀ t, t < 43 → ∀ k, k < 32 →
+      v1.mem (0x80 + 32 * t + k) = (ByteVec.pad16 (endpts.getD t (ByteVec.zero 16))).data.getD k 0 := by
+    intro t ht k hk; rw [hv1mem, mstore32_frame _ 0x20 _ (0x80 + 32 * t + k) (by omega)]; exact hendmem t ht k hk
+  have hv1seed : ∀ k, k < 32 → v1.mem (0 + k) = seed.data.getD k 0 := by
+    intro k hk; rw [hv1mem, mstore32_frame _ 0x20 _ (0 + k) (by omega)]; exact hseedmem k hk
+  have hv1adrs : ∀ k, k < 32 → v1.mem (0x20 + k) = (Spec.Adrs.wotsPk layer tree kp).data.getD k 0 := by
+    intro k hk; rw [hv1mem, mstore32_get _ 0x20 _ k hk, beByte_wordOf_getD _ k hk]
+  -- Step 2: copy loop.
+  have hcopyStmt : execStmt c10Oracle sig (.forRange "i" (.lit 43) forsCopyBody) v1
+      = execFor c10Oracle sig "i" forsCopyBody 43 0 v1 := by simp only [execStmt, eval]
+  obtain ⟨hcopyNone, hcopyEnd, hcopyLow⟩ := wots_copy_loop sig v1
+    (fun t => endpts.getD t (ByteVec.zero 16)) hv1end
+  rw [execList_cons_none c10Oracle sig _ _ _ (by rw [hcopyStmt]; exact hcopyNone), hcopyStmt]
+  obtain ⟨v2, hv2⟩ : ∃ v2, (execFor c10Oracle sig "i" forsCopyBody 43 0 v1).1 = v2 := ⟨_, rfl⟩
+  rw [hv2]
+  have hv2OUT : v2.env "OUT" = 0x600 := by
+    rw [← hv2, execFor_forsCopyBody_preserves_var sig "OUT" (by decide) 43 0 v1, hv1env, hOUT]
+  have hv2N : v2.env "N_MASK" = NMASK := by
+    rw [← hv2, execFor_forsCopyBody_preserves_var sig "N_MASK" (by decide) 43 0 v1, hv1env, hN]
+  have hv2low : ∀ a, a < 0x40 → v2.mem a = v1.mem a := by intro a ha; rw [← hv2]; exact hcopyLow a ha
+  have hv2end : ∀ t, t < 43 → ∀ k, k < 32 →
+      v2.mem (0x40 + 32 * t + k) = (ByteVec.pad16 (endpts.getD t (ByteVec.zero 16))).data.getD k 0 := by
+    intro t ht k hk; rw [← hv2]; exact hcopyEnd t ht k hk
+  -- The 45-segment holdsSegs at base 0.
+  have hseglen : (wotsPkSegs seed layer tree kp endpts).length = 45 := by
+    simp only [wotsPkSegs, List.length_cons, List.length_map, hlen]
+  have hsegs : holdsSegs v2.mem 0 (wotsPkSegs seed layer tree kp endpts) := by
+    intro j i hj hi
+    rw [hseglen] at hj
+    rw [Nat.zero_add]
+    rcases Nat.lt_or_ge j 2 with hj2 | hj2
+    · match j, hj2 with
+      | 0, _ =>
+          rw [show (32 * 0 + i) = (0 + i) by omega, hv2low (0 + i) (by omega), hv1seed i hi]; rfl
+      | 1, _ =>
+          rw [show (32 * 1 + i) = (0x20 + i) by omega, hv2low (0x20 + i) (by omega), hv1adrs i hi]; rfl
+    · obtain ⟨m, rfl⟩ : ∃ m, j = m + 2 := ⟨j - 2, by omega⟩
+      rw [show (32 * (m + 2) + i) = (0x40 + 32 * m + i) by omega, hv2end m (by omega) i hi]
+      show _ = ((wotsPkSegs seed layer tree kp endpts).getD (m + 2) (ByteVec.zero 32)).data.getD i 0
+      have hgetD : (wotsPkSegs seed layer tree kp endpts).getD (m + 2) (ByteVec.zero 32)
+          = ByteVec.pad16 (endpts.getD m (ByteVec.zero 16)) := by
+        unfold wotsPkSegs
+        rw [List.getD_cons_succ, List.getD_cons_succ]
+        exact map_pad16_getD' endpts m (by omega)
+      rw [hgetD]
+  -- Step 3+4: sha256 over [0,0x5A0) = 45 segments, then mask.
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt]), execList]
+  refine ⟨rfl, ?_⟩
+  simp only [execStmt, eval, hv2OUT, hv2N]
+  rw [setVar_get_eq]
+  rw [mload_masked_eq_wordOf_pad16 v2.mem 0x600 (c10Oracle (slice v2.mem 0 (32 * 45)))]
+  have hbridge : c10Oracle (slice v2.mem 0 (32 * 45))
+      = Spec.sha256 ((wotsPkSegs seed layer tree kp endpts).map Spec.ByteSeg.ofByteVec) := by
+    have h := c10Oracle_holdsSegs v2.mem 0 (wotsPkSegs seed layer tree kp endpts) hsegs
+    rw [hseglen] at h; exact h
+  rw [hbridge]
+  congr 2
+  show ByteVec.truncate16 (Spec.sha256 ((wotsPkSegs seed layer tree kp endpts).map Spec.ByteSeg.ofByteVec))
+      = Spec.thMulti seed (Spec.Adrs.wotsPk layer tree kp) endpts
+  unfold Spec.thMulti wotsPkSegs
+  simp only [List.map_cons, List.map_map]
+  rfl
+
+/-! ### WOTS `pkFromSig` capstone — the full per-layer WOTS body
+
+`wotsBody` is the per-layer WOTS interp fragment of `SPHINCsC10Asm.sol` (L168–205),
+*exactly* `mstore 0x00 seed` (digit hash) through `letv "wotsPk"` (PK-compress) — i.e.
+the layer body up to but **excluding** the preamble (`idxLeaf`/`idxTree`/`wotsAdrs`/`count`
+derivation, L161–167) and the Merkle climb (L207+). It composes the five proven phases
+(`wots_digit_hash` / `wots_digit_sum` / `wots_chain_outer_loop` / `wots_pk_compress`) plus
+the digit-sum revert gate, refining against `Spec.Wots.pkFromSig`.
+
+The only inter-phase glue not yet established is on the digit-hash→chain-loop side:
+the digit hash re-lays `seed` into scratch `[0,0x20)` (its first stmt is `mstore 0x00
+seed`) and, with the digit-sum loop (pure-env: no `mstore`/`sha`), preserves every env
+var the downstream phases need (`wotsAdrs`/`wotsPtr`/`N_MASK`/`OUT`). We build those frame
+helpers here, NOT by strengthening the sub-lemmas (keeps the green build safe). -/
+
+/-- The digit-hash fragment re-lays `seed` into scratch `[0,0x20)` (its first stmt is
+    `mstore 0x00 seed`); the later `0x20`/`0x40`/`0x60` mstores and the `0x600` digest
+    writeRegion all frame off `[0,0x20)`. So regardless of the prior mem, after the
+    fragment `mem[0,0x20) = seed`. -/
+private theorem wotsDigitHashFragment_seed_mem
+    (sig : ByteVec Spec.SignatureLen) (vm : VM) (seed : ByteVec 32)
+    (hseedw : vm.env "seed" = wordOf seed) (hOUT : vm.env "OUT" = 0x600) :
+    ∀ k, k < 32 → (execList c10Oracle sig wotsDigitHashFragment vm).1.mem (0 + k)
+        = seed.data.getD k 0 := by
+  intro k hk
+  unfold wotsDigitHashFragment
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList]
+  -- After the `letv "d"` (which doesn't touch mem) and the 4 mstores + sha, the byte at
+  -- `0+k` is framed back to the first `mstore 0x00 seed`'s store.
+  simp only [execStmt, eval, setVar, hseedw, hOUT]
+  rw [writeRegion_frame _ 0x600 _ (0 + k) (by omega),
+      mstore32_frame _ 0x60 _ (0 + k) (by omega),
+      mstore32_frame _ 0x40 _ (0 + k) (by omega),
+      mstore32_frame _ 0x20 _ (0 + k) (by omega)]
+  rw [show (0 + k) = (0 + k) by rfl, mstore32_get vm.mem 0 (wordOf seed) k hk, beByte_wordOf_getD seed k hk]
+
+/-- The digit-hash fragment preserves any env var `x ∉ {d}` (the only `letv` binds `d`;
+    the `mstore`/`sha256` stmts never touch the env). -/
+private theorem wotsDigitHashFragment_preserves_var
+    (sig : ByteVec Spec.SignatureLen) (vm : VM) (x : String) (hx : x ≠ "d") :
+    (execList c10Oracle sig wotsDigitHashFragment vm).1.env x = vm.env x := by
+  unfold wotsDigitHashFragment
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList]
+  simp only [execStmt, eval, setVar, hx, ite_false]
+
+/-- One digit-sum step preserves any env var `x ∉ {ii, digitSum}` (the body only `setv`s
+    `digitSum`; `ii` is the loop var). -/
+private theorem execList_wotsDigitSumBody_preserves_var (sig : ByteVec Spec.SignatureLen)
+    (cur : Nat) (v : VM) (x : String) (hx : x ≠ "ii" ∧ x ≠ "digitSum") :
+    (execList c10Oracle sig wotsDigitSumBody { v with env := setVar v.env "ii" cur }).1.env x
+        = v.env x := by
+  obtain ⟨h1, h2⟩ := hx
+  unfold wotsDigitSumBody
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList]
+  simp only [execStmt, eval, setVar, h1, h2, ite_false]
+
+/-- One digit-sum step falls through (no `revert`/`return`). -/
+private theorem execList_wotsDigitSumBody_none (sig : ByteVec Spec.SignatureLen)
+    (cur : Nat) (v : VM) :
+    (execList c10Oracle sig wotsDigitSumBody { v with env := setVar v.env "ii" cur }).2 = none := by
+  unfold wotsDigitSumBody
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList]
+
+/-- One digit-sum step never touches mem (the body has no `mstore`/`sha256`). -/
+private theorem execList_wotsDigitSumBody_mem (sig : ByteVec Spec.SignatureLen)
+    (cur : Nat) (v : VM) (a : Nat) :
+    (execList c10Oracle sig wotsDigitSumBody { v with env := setVar v.env "ii" cur }).1.mem a
+        = v.mem a := by
+  unfold wotsDigitSumBody
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList]
+  simp only [execStmt, eval, setVar]
+
+/-- The whole digit-sum loop preserves any env var `x ∉ {ii, digitSum}`. -/
+private theorem execFor_wotsDigitSumBody_preserves_var (sig : ByteVec Spec.SignatureLen)
+    (x : String) (hx : x ≠ "ii" ∧ x ≠ "digitSum") :
+    ∀ (remaining cur : Nat) (v : VM),
+      (execFor c10Oracle sig "ii" wotsDigitSumBody remaining cur v).1.env x = v.env x := by
+  intro remaining
+  induction remaining with
+  | zero => intro cur v; simp only [execFor]
+  | succ rem ih =>
+      intro cur v
+      have hnone := execList_wotsDigitSumBody_none sig cur v
+      rw [execFor]
+      rcases hp : execList c10Oracle sig wotsDigitSumBody { v with env := setVar v.env "ii" cur }
+        with ⟨pvm, po⟩
+      rw [hp] at hnone; subst hnone; simp only []
+      rw [ih (cur + 1) pvm]
+      have := execList_wotsDigitSumBody_preserves_var sig cur v x hx
+      rw [hp] at this; exact this
+
+/-- The whole digit-sum loop never touches mem. -/
+private theorem execFor_wotsDigitSumBody_mem (sig : ByteVec Spec.SignatureLen) (a : Nat) :
+    ∀ (remaining cur : Nat) (v : VM),
+      (execFor c10Oracle sig "ii" wotsDigitSumBody remaining cur v).1.mem a = v.mem a := by
+  intro remaining
+  induction remaining with
+  | zero => intro cur v; simp only [execFor]
+  | succ rem ih =>
+      intro cur v
+      have hnone := execList_wotsDigitSumBody_none sig cur v
+      rw [execFor]
+      rcases hp : execList c10Oracle sig wotsDigitSumBody { v with env := setVar v.env "ii" cur }
+        with ⟨pvm, po⟩
+      rw [hp] at hnone; subst hnone; simp only []
+      rw [ih (cur + 1) pvm]
+      have := execList_wotsDigitSumBody_mem sig cur v a
+      rw [hp] at this; exact this
+
+/-- The 43 WOTS chain endpoints as a `List` (interp index form). Exactly the list that
+    `wots_chain_outer_loop` lays into memory (`wotsChainEndpoint … t` at `0x80+32t`) and
+    that `wots_pk_compress` compresses. -/
+def wotsEndptList (seed : ByteVec 32) (layer : UInt32) (tree : UInt64) (kp : UInt32)
+    (d_bv : ByteVec 32) (sig : ByteVec Spec.SignatureLen) (wotsPtr : Nat) : List (ByteVec 16) :=
+  (List.range 43).map (wotsChainEndpoint seed layer tree kp d_bv sig wotsPtr ·)
+
+/-- `wotsEndptList` has length 43. -/
+private theorem wotsEndptList_length (seed : ByteVec 32) (layer : UInt32) (tree : UInt64)
+    (kp : UInt32) (d_bv : ByteVec 32) (sig : ByteVec Spec.SignatureLen) (wotsPtr : Nat) :
+    (wotsEndptList seed layer tree kp d_bv sig wotsPtr).length = 43 := by
+  simp only [wotsEndptList, List.length_map, List.length_range]
+
+/-- `wotsEndptList.getD t (zero 16) = wotsChainEndpoint … t` for `t < 43`. -/
+private theorem wotsEndptList_getD (seed : ByteVec 32) (layer : UInt32) (tree : UInt64)
+    (kp : UInt32) (d_bv : ByteVec 32) (sig : ByteVec Spec.SignatureLen) (wotsPtr t : Nat)
+    (ht : t < 43) :
+    (wotsEndptList seed layer tree kp d_bv sig wotsPtr).getD t (ByteVec.zero 16)
+      = wotsChainEndpoint seed layer tree kp d_bv sig wotsPtr t := by
+  unfold wotsEndptList
+  rw [List.getD_eq_getElem?_getD, List.getElem?_map,
+      List.getElem?_eq_getElem (by rw [List.length_range]; exact ht), Option.map_some,
+      Option.getD_some, List.getElem_range]
+
+/-- **The chainValues bridge.** With `d_bv = wotsDigest seed (Adrs.wots layer tree kp)
+    (pad16 msgHash) sigma.count` and the per-chain signature value bound to the calldata
+    load (`sigma.chains[i] = loadValue16 sig (wotsPtr+16i)`), the interp endpoint list
+    `wotsEndptList` equals exactly `pkFromSig`'s `chainValues` (the `List.range L`-map).
+    `W-1 = 7`, `L = 43`; the dependent `dite` in `pkFromSig` takes the true branch via the
+    bounded sigma hypothesis (so the per-index reads the supplied chain value). -/
+private theorem wotsEndptList_eq_chainValues
+    (sig : ByteVec Spec.SignatureLen)
+    (seed : ByteVec 32) (layer : UInt32) (tree : UInt64) (kp : UInt32)
+    (msgHash : ByteVec 16) (sigma : Spec.Wots.Sigma) (wotsPtr : Nat)
+    (hsig : ∀ i (h : i < sigma.chains.size), sigma.chains[i] = ByteVec.loadValue16 sig (wotsPtr + 16 * i)) :
+    wotsEndptList seed layer tree kp
+        (Spec.wotsDigest seed (Spec.Adrs.wots layer tree kp) (ByteVec.pad16 msgHash) sigma.count)
+        sig wotsPtr
+      = (List.range Spec.L).map (fun i =>
+          let chainAdrs := Spec.Adrs.setChainIndex (Spec.Adrs.wots layer tree kp) (UInt32.ofNat i)
+          let digit := (SphincsCVerify.Util.extractDigits
+            (Spec.wotsDigest seed (Spec.Adrs.wots layer tree kp) (ByteVec.pad16 msgHash) sigma.count))[i]!
+          let sigI := if h : i < sigma.chains.size then sigma.chains[i] else ByteVec.zero 16
+          let remaining := (Spec.W - 1) - digit
+          Spec.chainHash seed chainAdrs sigI digit remaining) := by
+  have hLeq : Spec.L = 43 := rfl
+  unfold wotsEndptList
+  rw [hLeq]
+  apply List.map_congr_left
+  intro i hi
+  have hi43 : i < 43 := by rw [List.mem_range] at hi; exact hi
+  -- chain count = L = 43, so i < sigma.chains.size; the dite takes the true branch.
+  have hsz : i < sigma.chains.size := by rw [sigma.chainsLen]; exact (by rw [hLeq] at *; exact hi43)
+  unfold wotsChainEndpoint
+  rw [dif_pos hsz, hsig i hsz]
+  -- W - 1 = 7; remaining = 7 - digit.
+  show Spec.chainHash seed _ _ _ (7 - _) = Spec.chainHash seed _ _ _ ((Spec.W - 1) - _)
+  rfl
+
+/-- One `wotsChainBody` iteration falls through (no `revert`/`return`). -/
+private theorem execList_wotsChainBody_none (sig : ByteVec Spec.SignatureLen)
+    (cur : Nat) (v : VM) :
+    (execList c10Oracle sig wotsChainBody { v with env := setVar v.env "i" cur }).2 = none := by
+  unfold wotsChainBody
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  obtain ⟨w', hw'⟩ : ∃ w', w' = (execStmt c10Oracle sig (Stmt.letv "chainBase"
+        (.bin .band (.bin .bor (.var "wotsAdrs") (.bin .shl (.lit 64) (.var "i"))) (.lit CHAINBASE_MASK)))
+      (execStmt c10Oracle sig (Stmt.letv "val"
+        (.bin .band (.calldataload (.bin .add (.var "wotsPtr") (.bin .shl (.lit 4) (.var "i")))) (.var "N_MASK")))
+      (execStmt c10Oracle sig (Stmt.letv "steps" (.bin .sub (.lit 7) (.var "digit")))
+      (execStmt c10Oracle sig (Stmt.letv "digit"
+        (.bin .band (.bin .shr (.bin .mul (.var "i") (.lit 3)) (.var "d")) (.lit 0x7)))
+        { v with env := setVar v.env "i" cur }).1).1).1).1 := ⟨_, rfl⟩
+  rw [← hw']
+  have hforNone : (execStmt c10Oracle sig (.forRange "step" (.var "steps") wotsChainStepBody) w').2 = none := by
+    simp only [execStmt, eval]; exact execFor_wotsChainStepBody_none' sig _ 0 w'
+  rw [execList_cons_none c10Oracle sig _ _ _ hforNone]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList]
+
+/-- The whole 43-chain outer loop preserves any const `x ∉ {digit,steps,val,chainBase,step,i}`. -/
+private theorem execFor_wotsChainStepBody_outer_preserves (sig : ByteVec Spec.SignatureLen)
+    (x : String)
+    (hx : x ≠ "digit" ∧ x ≠ "steps" ∧ x ≠ "val" ∧ x ≠ "chainBase" ∧ x ≠ "step" ∧ x ≠ "i") :
+    ∀ (remaining cur : Nat) (v : VM),
+      (execFor c10Oracle sig "i" wotsChainBody remaining cur v).1.env x = v.env x := by
+  intro remaining
+  induction remaining with
+  | zero => intro cur v; simp only [execFor]
+  | succ rem ih =>
+      intro cur v
+      have hnone := execList_wotsChainBody_none sig cur v
+      rw [execFor]
+      rcases hp : execList c10Oracle sig wotsChainBody { v with env := setVar v.env "i" cur }
+        with ⟨pvm, po⟩
+      rw [hp] at hnone; subst hnone; simp only []
+      rw [ih (cur + 1) pvm]
+      have := execList_wotsChainBody_preserves_const sig cur v x hx
+      rw [hp] at this; exact this
+
+/-- **`wotsBody`** — the full per-layer WOTS interp fragment (`SPHINCsC10Asm.sol` L168–205),
+    statement-for-statement: the digit hash (`wotsDigitHashFragment`), the WOTS+C digit-sum
+    gate (`letv "digitSum" 0`; the 43-iteration sum loop; the `ifnz` revert-unless-205), the
+    43 WOTS chains (`letv "wotsPtr"`; `forRange "i" 43 wotsChainBody`), and the PK-compression
+    (`letv "pkAdrs"`; the 4-stmt `wots_pk_compress` tail). Excludes the per-layer preamble
+    (`idxLeaf`/`idxTree`/`wotsAdrs`/`count`, L161–167) and the Merkle climb (L207+). -/
+def wotsBody : List Stmt :=
+  wotsDigitHashFragment
+    ++ [ .letv "digitSum" (.lit 0)
+       , .forRange "ii" (.lit 43) wotsDigitSumBody
+       , .ifnz (.iszero (.bin .eq (.var "digitSum") (.lit 205))) [ .revert ]
+       , .letv "wotsPtr" (.bin .add (.var "sigBase") (.var "sigOff"))
+       , .forRange "i" (.lit 43) wotsChainBody
+       , .letv "pkAdrs"
+           (.bin .bor (.bin .shl (.lit 224) (.var "layer"))
+             (.bin .bor (.bin .shl (.lit 160) (.var "idxTree"))
+               (.bin .bor (.bin .shl (.lit 128) (.lit 1)) (.bin .shl (.lit 96) (.var "idxLeaf")))))
+       , .mstore (.lit 0x20) (.var "pkAdrs")
+       , .forRange "i" (.lit 43) forsCopyBody
+       , .sha256 (.lit 0x00) (.lit 0x5A0) (.var "OUT")
+       , .letv "wotsPk" (.bin .band (.mload (.var "OUT")) (.var "N_MASK")) ]
+
+-- Seal the spec hashes so `whnf`/`isDefEq` in the capstone never tries to reduce the
+-- 64-round SHA-256 body (would heartbeat-die). `Spec.th`/`Spec.thMulti` are already sealed
+-- (the L2984 `local irreducible`, still active in this namespace); `c10Oracle` is sealed
+-- (L320). `pkFromSig` is intentionally LEFT reducible — we unfold it once to expose its
+-- `if`/`chainValues`.
+attribute [local irreducible] Spec.chainHash Spec.wotsDigest
+
+/-- The post-`ifnz` fall-through tail of `wotsBody` (the statements after the digit-sum gate):
+    `letv "wotsPtr"`, the 43-chain loop, `letv "pkAdrs"`, and the 4-stmt PK-compress. Split
+    out as its own declaration so the heavy chain-loop + PK-compress work has its own
+    heartbeat budget (the `wots_pkfromsig` capstone consumes it as one block). -/
+def wotsContTail : List Stmt :=
+  [ .letv "wotsPtr" (.bin .add (.var "sigBase") (.var "sigOff"))
+  , .forRange "i" (.lit 43) wotsChainBody
+  , .letv "pkAdrs"
+      (.bin .bor (.bin .shl (.lit 224) (.var "layer"))
+        (.bin .bor (.bin .shl (.lit 160) (.var "idxTree"))
+          (.bin .bor (.bin .shl (.lit 128) (.lit 1)) (.bin .shl (.lit 96) (.var "idxLeaf")))))
+  , .mstore (.lit 0x20) (.var "pkAdrs")
+  , .forRange "i" (.lit 43) forsCopyBody
+  , .sha256 (.lit 0x00) (.lit 0x5A0) (.var "OUT")
+  , .letv "wotsPk" (.bin .band (.mload (.var "OUT")) (.var "N_MASK")) ]
+
+set_option maxHeartbeats 48000000 in
+set_option maxRecDepth 8000 in
+/-- **The WOTS fall-through tail refinement.** From a post-digit-sum-gate VM `v3` (the
+    digit-sum check passed) whose env supplies `d = wordOf d_bv`, `wotsAdrs = wordOf (wots
+    layer tree kp)`, `sigBase = 0`, `sigOff = wotsPtr` (< 4096), `layer/idxTree/idxLeaf` the
+    `.toNat`s, `N_MASK`, `OUT = 0x600`, and `seed` in scratch `[0,0x20)`, running `wotsContTail`
+    falls through and binds `"wotsPk" = wordOf (pad16 (thMulti seed (wotsPk layer tree kp)
+    (wotsEndptList …)))`. Composes the chain outer loop + the PK-compression. -/
+private theorem wots_cont_tail
+    (sig : ByteVec Spec.SignatureLen) (v3 : VM)
+    (seed : ByteVec 32) (layer : UInt32) (tree : UInt64) (kp : UInt32)
+    (d_bv : ByteVec 32) (wotsPtr : Nat) (hwp : wotsPtr < 4096)
+    (hv3d : v3.env "d" = wordOf d_bv)
+    (hv3wa : v3.env "wotsAdrs" = wordOf (Spec.Adrs.wots layer tree kp))
+    (hv3sigbase : v3.env "sigBase" = 0)
+    (hv3sigoff : v3.env "sigOff" = wotsPtr)
+    (hv3layer : v3.env "layer" = layer.toNat)
+    (hv3idxTree : v3.env "idxTree" = tree.toNat)
+    (hv3idxLeaf : v3.env "idxLeaf" = kp.toNat)
+    (hv3N : v3.env "N_MASK" = NMASK)
+    (hv3OUT : v3.env "OUT" = 0x600)
+    (hv3seedmem : ∀ k, k < 32 → v3.mem (0 + k) = seed.data.getD k 0) :
+    (execList c10Oracle sig wotsContTail v3).2 = none
+    ∧ (execList c10Oracle sig wotsContTail v3).1.env "wotsPk"
+        = wordOf (ByteVec.pad16 (Spec.thMulti seed (Spec.Adrs.wotsPk layer tree kp)
+            (wotsEndptList seed layer tree kp d_bv sig wotsPtr))) := by
+  unfold wotsContTail
+  -- letv "wotsPtr" (add sigBase sigOff) = (0 + wotsPtr) % W = wotsPtr.
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  obtain ⟨v4, hv4⟩ : ∃ v4, (execStmt c10Oracle sig
+      (.letv "wotsPtr" (.bin .add (.var "sigBase") (.var "sigOff"))) v3).1 = v4 := ⟨_, rfl⟩
+  rw [hv4]
+  have hv4env : v4.env = setVar v3.env "wotsPtr" ((0 + wotsPtr) % W) := by
+    rw [← hv4]; simp only [execStmt, eval, hv3sigbase, hv3sigoff]
+  have hv4mem : v4.mem = v3.mem := by rw [← hv4]; simp only [execStmt]
+  have hwptrW : (0 + wotsPtr) % W = wotsPtr := by
+    rw [Nat.zero_add, Nat.mod_eq_of_lt (lt_W_of_lt (by omega))]
+  have hv4wptr : v4.env "wotsPtr" = wotsPtr := by rw [hv4env, setVar_get_eq, hwptrW]
+  have hv4d : v4.env "d" = wordOf d_bv := by rw [hv4env, setVar_get_ne _ _ _ _ (by decide)]; exact hv3d
+  have hv4wa : v4.env "wotsAdrs" = wordOf (Spec.Adrs.wots layer tree kp) := by
+    rw [hv4env, setVar_get_ne _ _ _ _ (by decide)]; exact hv3wa
+  have hv4layer : v4.env "layer" = layer.toNat := by rw [hv4env, setVar_get_ne _ _ _ _ (by decide)]; exact hv3layer
+  have hv4idxTree : v4.env "idxTree" = tree.toNat := by rw [hv4env, setVar_get_ne _ _ _ _ (by decide)]; exact hv3idxTree
+  have hv4idxLeaf : v4.env "idxLeaf" = kp.toNat := by rw [hv4env, setVar_get_ne _ _ _ _ (by decide)]; exact hv3idxLeaf
+  have hv4N : v4.env "N_MASK" = NMASK := by rw [hv4env, setVar_get_ne _ _ _ _ (by decide)]; exact hv3N
+  have hv4OUT : v4.env "OUT" = 0x600 := by rw [hv4env, setVar_get_ne _ _ _ _ (by decide)]; exact hv3OUT
+  have hv4seedmem : ∀ k, k < 32 → v4.mem (0 + k) = seed.data.getD k 0 := by
+    intro k hk; rw [hv4mem]; exact hv3seedmem k hk
+  -- ===== Phase 4: the 43-chain outer loop. =====
+  have hchainStmt : execStmt c10Oracle sig (.forRange "i" (.lit 43) wotsChainBody) v4
+      = execFor c10Oracle sig "i" wotsChainBody 43 0 v4 := by simp only [execStmt, eval]
+  obtain ⟨hclNone, hclMem, hclSeed, hclN, hclOUT⟩ := wots_chain_outer_loop sig v4 seed layer tree kp
+    d_bv wotsPtr hwp hv4d hv4wptr hv4wa hv4N hv4OUT hv4seedmem
+  rw [execList_cons_none c10Oracle sig _ _ _ (by rw [hchainStmt]; exact hclNone), hchainStmt]
+  obtain ⟨v5, hv5⟩ : ∃ v5, (execFor c10Oracle sig "i" wotsChainBody 43 0 v4).1 = v5 := ⟨_, rfl⟩
+  rw [hv5]
+  have hv5end : ∀ t, t < 43 → ∀ k, k < 32 →
+      v5.mem (0x80 + 32 * t + k)
+        = (ByteVec.pad16 (wotsChainEndpoint seed layer tree kp d_bv sig wotsPtr t)).data.getD k 0 := by
+    intro t ht k hk; rw [← hv5]; exact hclMem t ht k hk
+  have hv5seed : ∀ k, k < 32 → v5.mem (0 + k) = seed.data.getD k 0 := by
+    intro k hk; rw [← hv5]; exact hclSeed k hk
+  have hv5N : v5.env "N_MASK" = NMASK := by rw [← hv5]; exact hclN
+  have hv5OUT : v5.env "OUT" = 0x600 := by rw [← hv5]; exact hclOUT
+  have hv5layer : v5.env "layer" = layer.toNat := by
+    rw [← hv5, execFor_wotsChainStepBody_outer_preserves sig "layer" (by decide) 43 0 v4]; exact hv4layer
+  have hv5idxTree : v5.env "idxTree" = tree.toNat := by
+    rw [← hv5, execFor_wotsChainStepBody_outer_preserves sig "idxTree" (by decide) 43 0 v4]; exact hv4idxTree
+  have hv5idxLeaf : v5.env "idxLeaf" = kp.toNat := by
+    rw [← hv5, execFor_wotsChainStepBody_outer_preserves sig "idxLeaf" (by decide) 43 0 v4]; exact hv4idxLeaf
+  -- ===== Phase 5: letv "pkAdrs"; then the 4-stmt pk-compress tail. =====
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  obtain ⟨v6, hv6⟩ : ∃ v6, (execStmt c10Oracle sig
+      (.letv "pkAdrs"
+        (.bin .bor (.bin .shl (.lit 224) (.var "layer"))
+          (.bin .bor (.bin .shl (.lit 160) (.var "idxTree"))
+            (.bin .bor (.bin .shl (.lit 128) (.lit 1)) (.bin .shl (.lit 96) (.var "idxLeaf")))))) v5).1 = v6 := ⟨_, rfl⟩
+  rw [hv6]
+  have hv6mem : v6.mem = v5.mem := by rw [← hv6]; simp only [execStmt]
+  have hv6env : v6.env = setVar v5.env "pkAdrs"
+      (((layer.toNat <<< 224 % W) ||| ((tree.toNat <<< 160 % W) ||| ((1 <<< 128 % W) ||| (kp.toNat <<< 96 % W))))) := by
+    rw [← hv6]; simp only [execStmt, eval, hv5layer, hv5idxTree, hv5idxLeaf]
+  have hv6pk : v6.env "pkAdrs" = wordOf (Spec.Adrs.wotsPk layer tree kp) := by
+    rw [hv6env, setVar_get_eq, wotsPk_word layer tree kp]
+  have hv6N : v6.env "N_MASK" = NMASK := by rw [hv6env, setVar_get_ne _ _ _ _ (by decide)]; exact hv5N
+  have hv6OUT : v6.env "OUT" = 0x600 := by rw [hv6env, setVar_get_ne _ _ _ _ (by decide)]; exact hv5OUT
+  have hv6seed : ∀ k, k < 32 → v6.mem (0 + k) = seed.data.getD k 0 := by
+    intro k hk; rw [hv6mem]; exact hv5seed k hk
+  have hv6end : ∀ t, t < 43 → ∀ k, k < 32 →
+      v6.mem (0x80 + 32 * t + k)
+        = (ByteVec.pad16 ((wotsEndptList seed layer tree kp d_bv sig wotsPtr).getD t (ByteVec.zero 16))).data.getD k 0 := by
+    intro t ht k hk; rw [hv6mem, hv5end t ht k hk, wotsEndptList_getD seed layer tree kp d_bv sig wotsPtr t ht]
+  -- Apply wots_pk_compress with endpts = wotsEndptList.
+  obtain ⟨hpcNone, hpcVal⟩ := wots_pk_compress sig v6 seed layer tree kp
+    (wotsEndptList seed layer tree kp d_bv sig wotsPtr)
+    (wotsEndptList_length seed layer tree kp d_bv sig wotsPtr)
+    hv6pk hv6N hv6OUT hv6seed hv6end
+  exact ⟨hpcNone, hpcVal⟩
+
+set_option maxHeartbeats 16000000 in
+set_option maxRecDepth 8000 in
+/-- **`pkFromSig` evaluates to the `wotsEndptList` compression.** When the digit-sum check
+    passes (`digitSum (extractDigits d_bv) = TargetSum`, `d_bv` the WOTS digest) and the
+    per-chain values are bound to the calldata loads (`hsig`), `pkFromSig` returns
+    `some (thMulti seed (wotsPk layer tree kp) (wotsEndptList …))`. The interp-side bridge,
+    proven once with controlled reduction (unfold pkFromSig, the `if_neg` selects the else,
+    the `chainValues = wotsEndptList` rewrite closes it) — kept OUT of the capstone so its
+    `congr`/`rw` cost does not stack with the phase plumbing's heartbeats. -/
+private theorem pkFromSig_eq
+    (sig : ByteVec Spec.SignatureLen)
+    (seed : ByteVec 32) (layer : UInt32) (tree : UInt64) (kp : UInt32)
+    (msgHash : ByteVec 16) (sigma : Spec.Wots.Sigma) (wotsPtr : Nat)
+    (hsig : ∀ i (h : i < sigma.chains.size), sigma.chains[i] = ByteVec.loadValue16 sig (wotsPtr + 16 * i))
+    (hgate : SphincsCVerify.Util.digitSum (SphincsCVerify.Util.extractDigits
+        (Spec.wotsDigest seed (Spec.Adrs.wots layer tree kp) (ByteVec.pad16 msgHash) sigma.count))
+        = Spec.TargetSum) :
+    Spec.Wots.pkFromSig seed layer tree kp msgHash sigma
+      = some (Spec.thMulti seed (Spec.Adrs.wotsPk layer tree kp)
+          (wotsEndptList seed layer tree kp
+            (Spec.wotsDigest seed (Spec.Adrs.wots layer tree kp) (ByteVec.pad16 msgHash) sigma.count)
+            sig wotsPtr)) := by
+  -- Unfold + zeta-reduce the `let`s so the `if` condition is the fully-substituted form.
+  simp only [Spec.Wots.pkFromSig]
+  rw [if_neg (show ¬ (SphincsCVerify.Util.digitSum (SphincsCVerify.Util.extractDigits
+      (Spec.wotsDigest seed (Spec.Adrs.wots layer tree kp) (ByteVec.pad16 msgHash) sigma.count)) ≠ Spec.TargetSum)
+    from fun h => h hgate)]
+  -- The `else` branch is `some (thMulti seed (wotsPk …) chainValues)`; rewrite wotsEndptList → chainValues.
+  rw [wotsEndptList_eq_chainValues sig seed layer tree kp msgHash sigma wotsPtr hsig]
 end SphincsCVerify.Interpreter.C10
