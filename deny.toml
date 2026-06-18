@@ -42,7 +42,12 @@ targets = [
 # If true, metadata will be collected with `--all-features`. Note that this can't
 # be toggled off if true, if you want to conditionally enable `--all-features` it
 # is recommended to pass `--all-features` on the cmd line instead
-all-features = false
+# Collect the dep graph with --all-features so the `sources`/`advisories` gates
+# actually SEE optional deps (e.g. the `tropic01` git dep). With this false the
+# [sources] check was a no-op — it pruned the optional git source it was meant
+# to police (2026-06-18 ToB supply-chain audit). Cannot be toggled off at the
+# cmd line once true, which is what we want for a hard gate.
+all-features = true
 # If true, metadata will be collected with `--no-default-features`. The same
 # caveat with `all-features` applies
 no-default-features = false
@@ -72,6 +77,10 @@ feature-depth = 1
 # unremovable until the cortex-m stack drops it). Surfaced 2026-06-17; revisit if
 # cortex-m is bumped. A real vulnerability advisory in bare-metal would still fail.
 unmaintained = "workspace"
+# Hard-fail on YANKED crate versions: a version is usually yanked because it was
+# compromised or critically broken, so a yanked dep in the lockfile is real
+# signal (2026-06-18 ToB supply-chain audit — was the cargo-deny default "warn").
+yanked = "deny"
 # The path where the advisory databases are cloned/fetched into
 #db-path = "$CARGO_HOME/advisory-dbs"
 # The url(s) of the advisory databases to use
@@ -242,10 +251,12 @@ skip-tree = [
 [sources]
 # Lint level for what to happen when a crate from a crate registry that is not
 # in the allow list is encountered
-unknown-registry = "warn"
+unknown-registry = "deny"
 # Lint level for what to happen when a crate from a git repository that is not
-# in the allow list is encountered
-unknown-git = "warn"
+# in the allow list is encountered. DENY (was "warn" = no-op) so an arbitrary-org
+# git dep can't slip in — the dependency-confusion guard CI advertises now
+# actually fails (2026-06-18 ToB supply-chain audit).
+unknown-git = "deny"
 # List of URLs for allowed crate registries. Defaults to the crates.io index
 # if not specified. If it is specified but empty, no registries are allowed.
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
@@ -253,8 +264,11 @@ allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = []
 
 [sources.allow-org]
-# github.com organizations to allow git sources for
-github = []
+# github.com organizations to allow git sources for. `tropicsquare` = the
+# libtropic-rs (tropic01) optional SE driver dep — the ONLY allowed git org;
+# any other git source now fails the gate. `make verify-pins` separately
+# hard-fails any git dep lacking a 40-char hex `rev =` pin (belt-and-braces).
+github = ["tropicsquare"]
 # gitlab.com organizations to allow git sources for
 gitlab = []
 # bitbucket.org organizations to allow git sources for
