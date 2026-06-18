@@ -13,7 +13,10 @@
 //!     against `ERC20_DB_ROOT`, so the firmware shows `<amount> <symbol>`
 //!     with `decimals` applied (the same fixed-width, anti-spoof
 //!     amount formatter the ERC-20 transfer path uses) on page A, and
-//!     the `<symbol>` + human-readable `<name>` on page B. 2 pages.
+//!     the `<symbol>` + human-readable `<name>` + the compact token
+//!     contract address (`0x..` first/last 3 bytes) on page B — the
+//!     address is the same anti-DB-spoof backstop the ERC-20 transfer
+//!     path prints on its "Contract:" page. 2 pages.
 //!   * `CowLeg::AddrHex` — no usable bundle: the firmware shows the raw
 //!     20-byte token address + the full uint256 amount as hex so the
 //!     user can still verify magnitudes without trusting the host for
@@ -238,16 +241,23 @@ fn append_leg(
                 );
             }
             write_line(&mut pages.row_mut(p, 3), "> next");
-            // Page B: restate symbol + full token name. The amount page
-            // shows the symbol next to the figure; this page repeats it
-            // and adds the human-readable name so a symbol-only DB
-            // collision (e.g. two "USDC" rows) is visible to the user.
-            // Both are clamped to the 16-col OLED width (same truncation
-            // the ERC-20 transfer path applies via `write_token_name`).
+            // Page B: restate symbol + full token name + the raw token
+            // contract address. The amount page shows the symbol next to
+            // the figure; this page repeats it, adds the human-readable
+            // name, and prints the contract address so a symbol-only DB
+            // collision (e.g. two "USDC" rows pointing at different
+            // contracts) is visible to the user — the same anti-spoof
+            // backstop the ERC-20 transfer path provides via its
+            // "Contract:" page. Symbol/name are clamped to the 16-col OLED
+            // width; the address is shown compact ("0x" + 3 bytes + ".." +
+            // 3 bytes) so it fits one row alongside the symbol/name rows.
+            let token: [u8; 20] = canonical[token_off..token_off + 20]
+                .try_into()
+                .expect("20-byte slice");
             write_line(&mut pages.row_mut(p + 1, 0), "Token:");
             write_bytes_row(&mut pages.row_mut(p + 1, 1), &symbol[..*symbol_len as usize]);
             write_bytes_row(&mut pages.row_mut(p + 1, 2), &name[..*name_len as usize]);
-            write_line(&mut pages.row_mut(p + 1, 3), "> next");
+            write_addr_trunc_row(&mut pages.row_mut(p + 1, 3), &token);
             p + 2
         }
         CowLeg::AddrHex => {
@@ -392,6 +402,32 @@ fn write_addr_two_rows(
         let b = addr[14 + i];
         row2[4 + i * 2] = hex_nibble(b >> 4);
         row2[4 + i * 2 + 1] = hex_nibble(b & 0x0f);
+    }
+}
+
+/// Render a 20-byte address compactly on one OLED row:
+///
+///   "0x" + first 3 bytes (6 hex) + ".." + last 3 bytes (6 hex) = 16 chars.
+///
+/// Used on the decoded-leg `Token:` page so the user can cross-check the
+/// token contract against the symbol/name (anti-DB-spoof) within a single
+/// row, mirroring the ERC-20 transfer path's full "Contract:" page intent.
+fn write_addr_trunc_row(row: &mut [u8; DISPLAY_COLS], addr: &[u8; 20]) {
+    *row = [b' '; DISPLAY_COLS];
+    row[0] = b'0';
+    row[1] = b'x';
+    // First 3 bytes → cols 2..8.
+    for i in 0..3 {
+        row[2 + i * 2] = hex_nibble(addr[i] >> 4);
+        row[2 + i * 2 + 1] = hex_nibble(addr[i] & 0x0f);
+    }
+    row[8] = b'.';
+    row[9] = b'.';
+    // Last 3 bytes → cols 10..16.
+    for i in 0..3 {
+        let b = addr[17 + i];
+        row[10 + i * 2] = hex_nibble(b >> 4);
+        row[10 + i * 2 + 1] = hex_nibble(b & 0x0f);
     }
 }
 
