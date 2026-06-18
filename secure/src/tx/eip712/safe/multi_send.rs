@@ -456,7 +456,10 @@ pub fn record_content_pages(kind: &MsRecordKind, cow_body_pages: usize) -> usize
     match kind {
         MsRecordKind::EmptyCall => 1,
         MsRecordKind::PlainEth => 2,
-        MsRecordKind::Erc20(_) => 4,
+        // header + recipient + amount + contract; +1 for the transferFrom
+        // `From (debited)` page (lockstep with
+        // `safe_display::{append_erc20_tail_pages, inner_kind_page_count}`).
+        MsRecordKind::Erc20(call) => 4 + usize::from(matches!(call, Erc20Call::TransferFrom { .. })),
         MsRecordKind::SafeMgmt(op) => mgmt_page_count(op),
         MsRecordKind::UnknownSafeSelf | MsRecordKind::Blind => 3,
         MsRecordKind::CowPresignClaim => cow_body_pages,
@@ -565,6 +568,17 @@ pub mod test_util {
         cd
     }
 
+    /// Strict 100-byte `transferFrom(from, to, amount)` calldata. The
+    /// `from` is the debited account the renderer surfaces on its own page.
+    pub fn transfer_from_calldata(from: &[u8; 20], to: &[u8; 20], amount_low: u8) -> [u8; 100] {
+        let mut cd = [0u8; 100];
+        cd[..4].copy_from_slice(&[0x23, 0xb8, 0x72, 0xdd]);
+        cd[16..36].copy_from_slice(from);
+        cd[48..68].copy_from_slice(to);
+        cd[99] = amount_low;
+        cd
+    }
+
     /// The Safe-UI CoW flow: `[approve(vault relayer) on TOKEN,
     /// setPreSignature]`, both records op 0 / value 0, wrapped in
     /// canonical multiSend calldata. `presign` defaults to the stub.
@@ -592,7 +606,8 @@ pub mod test_util {
 #[cfg(test)]
 mod tests {
     use super::test_util::{
-        approve_calldata, cow_flow_calldata, encode_multisend, pack_record, ZERO_VALUE,
+        approve_calldata, cow_flow_calldata, encode_multisend, pack_record, transfer_from_calldata,
+        ZERO_VALUE,
     };
     use super::*;
     use sphincs_tz_shared::{GPV2_SETTLEMENT_ADDRESS, GPV2_VAULT_RELAYER_ADDRESS, SET_PRE_SIGNATURE_SELECTOR};
@@ -971,5 +986,32 @@ mod tests {
             records_pages_total(&encode_multisend(&packed), &SAFE_ADDR, 9),
             Some(5)
         );
+    }
+
+    /// WYSIWYS lockstep (audit 2026-06-18 — transferFrom `from` page). A
+    /// transferFrom record debits a third-party `from`, so it renders one
+    /// extra "From (debited)" page: divider(1) + header+From+recipient+
+    /// amount+contract(5) = 6. This pins `record_content_pages` against the
+    /// `safe_display` renderer (which is `#[cfg(not(test))]` and so has no
+    /// host coverage of its own) — if the two ever drift, the multiSend
+    /// page-budget gate would mis-size and silently drop or blank a page.
+    #[test]
+    fn pages_total_transfer_from_adds_from_page() {
+        let xfer_from = encode_multisend(&pack_record(
+            0,
+            &[0x70; 20], // token (not the Safe → classifies as Erc20)
+            &ZERO_VALUE,
+            &transfer_from_calldata(&[0xaa; 20], &[0xbb; 20], 7),
+        ));
+        assert_eq!(records_pages_total(&xfer_from, &SAFE_ADDR, 9), Some(6));
+
+        // A plain `approve` (no `from`) stays at divider(1) + 4 = 5.
+        let approve = encode_multisend(&pack_record(
+            0,
+            &[0x70; 20],
+            &ZERO_VALUE,
+            &approve_calldata(&[0xbb; 20], 7),
+        ));
+        assert_eq!(records_pages_total(&approve, &SAFE_ADDR, 9), Some(5));
     }
 }

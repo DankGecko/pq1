@@ -58,6 +58,7 @@ use crate::ui::{DISPLAY_COLS, DISPLAY_ROWS};
 ///
 ///   * plain value transfer                 → 6 pages
 ///   * erc20_known / erc20_unknown          → 8 pages
+///     (9 for `transferFrom`: + the "From (debited)" source-account page)
 ///   * blind_sign (no selector bundle)      → 9 pages
 ///   * blind_sign (with verified FUNCTION)  → 10 pages
 ///   * contract_creation                    → 8 pages

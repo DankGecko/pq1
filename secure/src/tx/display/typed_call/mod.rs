@@ -245,6 +245,27 @@ fn render_arg(
         }
         TypeRef::Array { elem, fixed_len } => {
             let count = walked.count;
+            // WYSIWYS (audit 2026-06-18 — array-tail hiding). This arg gets
+            // exactly ONE page, and `write_array_rows` can only render
+            // element 0 (`first: …`) plus the `[N items]` count. For any
+            // array with more than one element, elements 1..N are part of
+            // the signed `executeWithOffchainCount(...,data)` calldata but
+            // would never reach a page — a benign `first:` recipient/amount
+            // lulling the user while an attacker leg in slot 1 is signed
+            // unseen (e.g. `disperse([friend,attacker],[tiny,balance])`).
+            //
+            // The renderer cannot honestly show the whole array on one
+            // OLED page, so it DECLINES rather than rendering a misleading
+            // partial: returning `false` makes `try_render_typed_call`
+            // bail to `None`, and the caller falls back to the loud Phase-1
+            // BLIND SIGN flow (banner + selector + full calldata SHA-256),
+            // which hides nothing behind a fake-friendly decode. This is
+            // the same "refuse rather than truncate" rule the Safe
+            // multiSend page-budget gate already enforces. Arrays of 0 or 1
+            // elements are rendered in full below (nothing is hidden).
+            if count > 1 {
+                return Some(false);
+            }
             let elem_kind = *parsed.arena.get(elem);
             let elem_word_off = match fixed_len {
                 Some(_) => walked.body_off,        // inline in head
@@ -745,3 +766,83 @@ fn write_array_rows(
 // Page-assembly tests live in the e2e harness (Scenario 5b/5d) since
 // they require an Eip1559Tx + NameResolver. Parser + ABI walker have
 // host-runnable unit tests in `crate::tx::typed_call::{parser, abi}`.
+
+#[cfg(test)]
+mod array_wysiwys_tests {
+    //! WYSIWYS regression (audit 2026-06-18 — array-tail hiding). A typed
+    //! array arg gets exactly one OLED page, on which only element 0 can
+    //! render. Any array with >1 element must DECLINE (→ blind-sign
+    //! fallback) so elements 1..N are never signed-but-not-shown behind a
+    //! benign `first: …` page. These exercise the real `render_arg` body.
+    use super::*;
+
+    fn word_be32(v: u32) -> [u8; 32] {
+        let mut w = [0u8; 32];
+        w[28..32].copy_from_slice(&v.to_be_bytes());
+        w
+    }
+    fn addr_word(b: u8) -> [u8; 32] {
+        let mut w = [0u8; 32];
+        for i in 12..32 {
+            w[i] = b;
+        }
+        w
+    }
+
+    /// Canonical `address[]` calldata body (no selector), `n` elements.
+    fn address_array_body(n: u32) -> Vec<u8> {
+        let mut body = Vec::new();
+        body.extend_from_slice(&word_be32(32)); // offset to the length word
+        body.extend_from_slice(&word_be32(n)); // element count
+        for i in 0..n {
+            body.extend_from_slice(&addr_word(0x10 + i as u8));
+        }
+        body
+    }
+
+    /// Walk `sig` over `body` and render its first arg into a scratch page,
+    /// returning the `render_arg` verdict (`Some(false)` == declined).
+    fn render_first_arg(sig: &[u8], body: &[u8]) -> Option<bool> {
+        let parsed = parse_text_sig(sig).expect("sig parses");
+        let walked = walk(&parsed, body).expect("body walks");
+        let mut pages = Pages::with_len(1);
+        let resolver = NameResolver::new();
+        render_arg(&mut pages, 0, 0, &parsed, &walked.args[0], body, 1, &resolver)
+    }
+
+    #[test]
+    fn multi_element_dyn_array_declines_to_blind_sign() {
+        // 2-element address[] — element 1 (the attacker leg in a
+        // disperse-style drain) would be signed-but-not-shown.
+        let body = address_array_body(2);
+        assert_eq!(
+            render_first_arg(b"f(address[])", &body),
+            Some(false),
+            "an array with a hidden tail element must decline, not render a partial"
+        );
+    }
+
+    #[test]
+    fn single_element_dyn_array_renders_in_full() {
+        // 1 element is fully shown on its page — nothing hidden.
+        let body = address_array_body(1);
+        assert_eq!(render_first_arg(b"f(address[])", &body), Some(true));
+    }
+
+    #[test]
+    fn empty_dyn_array_renders() {
+        // 0 elements — `[0 items]`, nothing to hide.
+        let body = address_array_body(0);
+        assert_eq!(render_first_arg(b"f(address[])", &body), Some(true));
+    }
+
+    #[test]
+    fn multi_element_static_array_declines() {
+        // Fixed-size `uint256[3]` hides elements 1..2 just the same.
+        let mut body = Vec::new();
+        body.extend_from_slice(&word_be32(1));
+        body.extend_from_slice(&word_be32(2));
+        body.extend_from_slice(&word_be32(3));
+        assert_eq!(render_first_arg(b"f(uint256[3])", &body), Some(false));
+    }
+}

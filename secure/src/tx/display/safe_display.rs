@@ -708,7 +708,12 @@ fn inner_kind_page_count(kind: &InnerKind<'_>) -> usize {
     match kind {
         InnerKind::EmptyCall => 1,
         InnerKind::PlainEth => 2,
-        InnerKind::Erc20Known(_) | InnerKind::Erc20Unknown(_) => 4,
+        // 4 = header + recipient + amount + contract; +1 for the
+        // transferFrom `From (debited)` page (kept in lockstep with
+        // `append_erc20_tail_pages` and `multi_send::record_content_pages`).
+        InnerKind::Erc20Known(call) | InnerKind::Erc20Unknown(call) => {
+            4 + usize::from(matches!(call, Erc20Call::TransferFrom { .. }))
+        }
         InnerKind::SafeMgmt(op) => safe_mgmt_page_count(op),
         // Context banner + the shared CoW order body (constant 8 pages).
         InnerKind::CowswapPresign(v3) => safe_cow_pages(Some(v3)),
@@ -921,6 +926,19 @@ fn append_erc20_tail_pages(
     ctx: &InnerRenderCtx<'_, '_>,
 ) -> usize {
     let mut next_page = start;
+    // From (debited account) — transferFrom only. The `from` is a signed
+    // calldata operand that names a THIRD-PARTY account being pulled (not
+    // the wallet/Safe), so it gets its own page; hiding it is the same
+    // WYSIWYS gap closed on the direct ERC-20 renderers (audit 2026-06-18).
+    // This +1 page for transferFrom is mirrored by `inner_kind_page_count`
+    // and `multi_send::record_content_pages` so the multiSend page-budget
+    // gate stays exact.
+    if let Erc20Call::TransferFrom { from, .. } = call {
+        write_line(&mut pages.buf[next_page][0], "From (debited):");
+        let [_lbl, a, b, c] = &mut pages.buf[next_page];
+        write_addr_full_or_name(a, b, c, from, ctx.chain_id, ctx.resolver);
+        next_page += 1;
+    }
     // Recipient/spender (full address). An `approve` whose spender is
     // the pinned CoW vault relayer gets a verified human label — the
     // equality is against the rodata constant, not companion data.
