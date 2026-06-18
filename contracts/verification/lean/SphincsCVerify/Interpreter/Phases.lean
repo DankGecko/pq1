@@ -5555,6 +5555,411 @@ theorem execFor_forsCopyBody_preserves (sig : ByteVec Spec.SignatureLen) (x : St
         simp only [execStmt, eval, setVar, hx, ite_false]
       rw [hp] at this; exact this
 
+/-! ### FORS-fragment low-window `[0, 0x20)` memory frames
+
+The whole FORS fragment's `mstore`s all target offsets `≥ 0x20`, and its `sha256`
+writes land in the `OUT = 0x600` window. So every sub-body preserves the low window
+`[0, 0x20)`. These low-window frames mirror the `[0x80, 0x600)` `_mem_frame`
+templates above but with the disjoint range `a < 0x20`, and compose into
+`forsPhaseFragment_mem_low`. -/
+
+/-- One climb level preserves any address `a < 0x20` (writes only `0x20`/`0x40`/`0x60`
+    in scratch and the OUT window `[0x600,0x620)` — all `≥ 0x20`). The `a < 0x20`
+    analogue of `execList_forsClimbBody_mem_frame`. -/
+private theorem execList_forsClimbBody_mem_low (sig : ByteVec Spec.SignatureLen)
+    (cur : Nat) (v : VM) (hOUT : v.env "OUT" = 0x600) (a : Nat) (ha : a < 0x20) :
+    (execList c10Oracle sig forsClimbBody { v with env := setVar v.env "h" cur }).1.mem a
+        = v.mem a := by
+  unfold forsClimbBody
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList]
+  simp only [execStmt, eval, setVar, String.reduceEq, ite_true, ite_false, hOUT]
+  -- Frame `a` through the OUT window [0x600,0x620), the parity stores, then mstore 0x20.
+  rw [writeRegion_frame _ 0x600 _ a (by omega)]
+  have hs := s_value (v.env "pathIdx")
+  by_cases hpar : (v.env "pathIdx") % 2 == 0
+  · rw [if_pos hpar] at hs
+    rw [hs]
+    simp only [show (0x40 : Nat) ^^^ 0 = 0x40 from rfl, show (0x60 : Nat) ^^^ 0 = 0x60 from rfl]
+    rw [mstore32_frame _ 0x60 _ a (by omega), mstore32_frame _ 0x40 _ a (by omega),
+        mstore32_frame _ 0x20 _ a (by omega)]
+  · rw [if_neg hpar] at hs
+    rw [hs]
+    simp only [show (0x40 : Nat) ^^^ 32 = 0x60 from rfl, show (0x60 : Nat) ^^^ 32 = 0x40 from rfl]
+    rw [mstore32_frame _ 0x40 _ a (by omega), mstore32_frame _ 0x60 _ a (by omega),
+        mstore32_frame _ 0x20 _ a (by omega)]
+
+/-- The whole inner climb preserves any address `a < 0x20` (`OUT = 0x600` persists across
+    iterations — `forsClimbBody` never rebinds it). The `a < 0x20` analogue of
+    `execFor_forsClimbBody_mem_frame`. -/
+private theorem execFor_forsClimbBody_mem_low (sig : ByteVec Spec.SignatureLen)
+    (a : Nat) (ha : a < 0x20) :
+    ∀ (remaining cur : Nat) (v : VM), v.env "OUT" = 0x600 →
+      (execFor c10Oracle sig "h" forsClimbBody remaining cur v).1.mem a = v.mem a := by
+  intro remaining
+  induction remaining with
+  | zero => intro cur v _; simp only [execFor]
+  | succ rem ih =>
+      intro cur v hOUT
+      obtain ⟨hnone, _⟩ := execList_forsClimbBody_preserves_i sig cur v
+      rw [execFor]
+      rcases hp : execList c10Oracle sig forsClimbBody { v with env := setVar v.env "h" cur }
+        with ⟨pvm, po⟩
+      rw [hp] at hnone
+      subst hnone
+      simp only []
+      have hpOUT : pvm.env "OUT" = 0x600 := by
+        have := execList_forsClimbBody_preserves_var sig cur v "OUT"
+          ⟨by decide, by decide, by decide, by decide, by decide, by decide⟩
+        rw [hp] at this; rw [this]; exact hOUT
+      rw [ih (cur + 1) pvm hpOUT]
+      have := execList_forsClimbBody_mem_low sig cur v hOUT a ha
+      rw [hp] at this
+      exact this
+
+/-- `forsTreeBody` (entered with `"i" := cur`) always falls through — no `revert`/`return`
+    in the body or its inner climb. Standalone `none` witness for the i-loop low-frame. -/
+private theorem execList_forsTreeBody_none (sig : ByteVec Spec.SignatureLen)
+    (cur : Nat) (v : VM) :
+    (execList c10Oracle sig forsTreeBody { v with env := setVar v.env "i" cur }).2 = none := by
+  unfold forsTreeBody
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  obtain ⟨w', hw'⟩ :
+      ∃ w', w' = (execStmt c10Oracle sig (Stmt.letv "authPtr" (.bin .add (.var "sigBase")
+          (.bin .add (.lit 224) (.bin .mul (.var "i") (.lit 176)))))
+        (execStmt c10Oracle sig (Stmt.letv "pathIdx" (.var "treeIdx"))
+        (execStmt c10Oracle sig (Stmt.letv "treeAdrsBase"
+            (.bin .bor (.bin .shl (.lit 160) (.var "htIdx"))
+              (.bin .bor (.bin .shl (.lit 128) (.lit 3)) (.bin .shl (.lit 96) (.var "i")))))
+        (execStmt c10Oracle sig (Stmt.letv "node" (.bin .band (.mload (.var "OUT")) (.var "N_MASK")))
+        (execStmt c10Oracle sig (Stmt.sha256 (.lit 0x00) (.lit 0x60) (.var "OUT"))
+        (execStmt c10Oracle sig (Stmt.mstore (.lit 0x40) (.var "secretVal"))
+        (execStmt c10Oracle sig (Stmt.mstore (.lit 0x20) (.var "leafAdrs"))
+        (execStmt c10Oracle sig (Stmt.letv "leafAdrs"
+            (.bin .bor (.bin .shl (.lit 160) (.var "htIdx"))
+              (.bin .bor (.bin .shl (.lit 128) (.lit 3))
+                (.bin .bor (.bin .shl (.lit 96) (.var "i")) (.var "treeIdx")))))
+        (execStmt c10Oracle sig (Stmt.letv "secretVal"
+            (.bin .band (.calldataload (.bin .add (.var "sigBase")
+              (.bin .add (.lit 16) (.bin .shl (.lit 4) (.var "i"))))) (.var "N_MASK")))
+        (execStmt c10Oracle sig (Stmt.letv "treeIdx"
+            (.bin .band (.bin .shr (.bin .mul (.var "i") (.lit 11)) (.var "dVal")) (.lit 0x7FF)))
+          { v with env := setVar v.env "i" cur }).1).1).1).1).1).1).1).1).1).1 := ⟨_, rfl⟩
+  rw [← hw']
+  have hforStmt : execStmt c10Oracle sig (.forRange "h" (.lit 11) forsClimbBody) w'
+      = execFor c10Oracle sig "h" forsClimbBody Spec.A 0 w' := by
+    simp only [execStmt, eval]; rfl
+  have hforNone : (execStmt c10Oracle sig (.forRange "h" (.lit 11) forsClimbBody) w').2 = none := by
+    rw [hforStmt]; exact execFor_forsClimbBody_none sig Spec.A 0 w'
+  rw [execList_cons_none c10Oracle sig _ _ _ hforNone, hforStmt]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt]), execList]
+
+set_option maxHeartbeats 4000000 in
+/-- **`forsTreeBody` low-window frame.** Entered with `"i" := cur` (`cur < 12`), the body
+    preserves any address `a < 0x20`: every store lands at `≥ 0x20` (scratch `0x20`/`0x40`,
+    the inner climb via `execFor_forsClimbBody_mem_low`, the leaf-hash `0x20`/`0x40` + OUT,
+    and the final node store `0x80+32*cur`). The `a < 0x20` analogue of
+    `execList_forsTreeBody_mem_frame`. -/
+private theorem execList_forsTreeBody_mem_low (sig : ByteVec Spec.SignatureLen)
+    (cur : Nat) (v : VM) (hOUT : v.env "OUT" = 0x600)
+    (hcur : cur < 12) (a : Nat) (ha : a < 0x20) :
+    (execList c10Oracle sig forsTreeBody { v with env := setVar v.env "i" cur }).1.mem a
+        = v.mem a := by
+  unfold forsTreeBody
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  obtain ⟨w', hw'⟩ :
+      ∃ w', w' = (execStmt c10Oracle sig (Stmt.letv "authPtr" (.bin .add (.var "sigBase")
+          (.bin .add (.lit 224) (.bin .mul (.var "i") (.lit 176)))))
+        (execStmt c10Oracle sig (Stmt.letv "pathIdx" (.var "treeIdx"))
+        (execStmt c10Oracle sig (Stmt.letv "treeAdrsBase"
+            (.bin .bor (.bin .shl (.lit 160) (.var "htIdx"))
+              (.bin .bor (.bin .shl (.lit 128) (.lit 3)) (.bin .shl (.lit 96) (.var "i")))))
+        (execStmt c10Oracle sig (Stmt.letv "node" (.bin .band (.mload (.var "OUT")) (.var "N_MASK")))
+        (execStmt c10Oracle sig (Stmt.sha256 (.lit 0x00) (.lit 0x60) (.var "OUT"))
+        (execStmt c10Oracle sig (Stmt.mstore (.lit 0x40) (.var "secretVal"))
+        (execStmt c10Oracle sig (Stmt.mstore (.lit 0x20) (.var "leafAdrs"))
+        (execStmt c10Oracle sig (Stmt.letv "leafAdrs"
+            (.bin .bor (.bin .shl (.lit 160) (.var "htIdx"))
+              (.bin .bor (.bin .shl (.lit 128) (.lit 3))
+                (.bin .bor (.bin .shl (.lit 96) (.var "i")) (.var "treeIdx")))))
+        (execStmt c10Oracle sig (Stmt.letv "secretVal"
+            (.bin .band (.calldataload (.bin .add (.var "sigBase")
+              (.bin .add (.lit 16) (.bin .shl (.lit 4) (.var "i"))))) (.var "N_MASK")))
+        (execStmt c10Oracle sig (Stmt.letv "treeIdx"
+            (.bin .band (.bin .shr (.bin .mul (.var "i") (.lit 11)) (.var "dVal")) (.lit 0x7FF)))
+          { v with env := setVar v.env "i" cur }).1).1).1).1).1).1).1).1).1).1 := ⟨_, rfl⟩
+  rw [← hw']
+  have hforStmt : execStmt c10Oracle sig (.forRange "h" (.lit 11) forsClimbBody) w'
+      = execFor c10Oracle sig "h" forsClimbBody Spec.A 0 w' := by
+    simp only [execStmt, eval]; rfl
+  have hforNone : (execStmt c10Oracle sig (.forRange "h" (.lit 11) forsClimbBody) w').2 = none := by
+    rw [hforStmt]; exact execFor_forsClimbBody_none sig Spec.A 0 w'
+  rw [execList_cons_none c10Oracle sig _ _ _ hforNone, hforStmt]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt]), execList]
+  -- Final mstore window: 0x80 + 32*cur .. +32 (disjoint from a since a < 0x20 ≤ 0x80).
+  simp only [execStmt, eval]
+  have hwi : w'.env "i" = cur := by
+    rw [hw']; simp only [execStmt, eval, setVar, String.reduceEq, ite_true, ite_false]
+  rw [execFor_forsClimbBody_preserves_var sig "i"
+        ⟨by decide, by decide, by decide, by decide, by decide, by decide⟩ Spec.A 0 w', hwi]
+  have hstoreOff : (128 + cur <<< 5 % W) % W = 128 + 32 * cur := by
+    rw [Nat.shiftLeft_eq, show (2 : Nat) ^ 5 = 32 from rfl, Nat.mul_comm cur 32,
+        Nat.mod_eq_of_lt (lt_W_of_lt (show 32 * cur < 4096 by omega)),
+        Nat.mod_eq_of_lt (lt_W_of_lt (show 128 + 32 * cur < 4096 by omega))]
+  rw [hstoreOff, mstore32_frame _ (128 + 32 * cur) _ a (by omega)]
+  -- OUT = 0x600 survives the 10 letvs (none binds "OUT").
+  have hw'OUT : w'.env "OUT" = 0x600 := by
+    rw [hw']
+    simp only [execStmt, eval, setVar, String.reduceEq, ite_true, ite_false]; exact hOUT
+  -- The climb preserves a < 0x20.
+  rw [execFor_forsClimbBody_mem_low sig a ha Spec.A 0 w' hw'OUT]
+  -- The leaf-hash mstores (0x40,0x20) + sha256 (0x600) are disjoint from a (a < 0x20).
+  rw [hw']
+  simp only [execStmt, eval, setVar, String.reduceEq, ite_true, ite_false, hOUT]
+  rw [writeRegion_frame _ 0x600 _ a (by omega), mstore32_frame _ 0x40 _ a (by omega),
+      mstore32_frame _ 0x20 _ a (by omega)]
+
+/-- The whole 12-tree i-loop falls through (no `revert`/`return` in `forsTreeBody`).
+    Drives `execList_forsTreeBody_none` by induction on `remaining`. -/
+private theorem execFor_forsTreeBody_none (sig : ByteVec Spec.SignatureLen) :
+    ∀ (remaining cur : Nat) (v : VM),
+      (execFor c10Oracle sig "i" forsTreeBody remaining cur v).2 = none := by
+  intro remaining
+  induction remaining with
+  | zero => intro cur v; simp only [execFor]
+  | succ rem ih =>
+      intro cur v
+      have hnone := execList_forsTreeBody_none sig cur v
+      rw [execFor]
+      rcases hp : execList c10Oracle sig forsTreeBody { v with env := setVar v.env "i" cur }
+        with ⟨pvm, po⟩
+      rw [hp] at hnone; subst hnone; simp only []; exact ih (cur + 1) pvm
+
+/-- The whole 12-tree i-loop preserves any const var `x` distinct from the names
+    `forsTreeBody` binds (and `≠ "i"`). Drives `execList_forsTreeBody_preserves_const`. -/
+private theorem execFor_forsTreeBody_preserves_const (sig : ByteVec Spec.SignatureLen)
+    (x : String)
+    (hx : x ≠ "treeIdx" ∧ x ≠ "secretVal" ∧ x ≠ "leafAdrs" ∧ x ≠ "node" ∧ x ≠ "treeAdrsBase"
+        ∧ x ≠ "pathIdx" ∧ x ≠ "authPtr" ∧ x ≠ "sibling" ∧ x ≠ "parentIdx" ∧ x ≠ "s" ∧ x ≠ "h"
+        ∧ x ≠ "i") :
+    ∀ (remaining cur : Nat) (v : VM),
+      (execFor c10Oracle sig "i" forsTreeBody remaining cur v).1.env x = v.env x := by
+  intro remaining
+  induction remaining with
+  | zero => intro cur v; simp only [execFor]
+  | succ rem ih =>
+      intro cur v
+      have hnone := execList_forsTreeBody_none sig cur v
+      rw [execFor]
+      rcases hp : execList c10Oracle sig forsTreeBody { v with env := setVar v.env "i" cur }
+        with ⟨pvm, po⟩
+      rw [hp] at hnone; subst hnone; simp only []
+      rw [ih (cur + 1) pvm]
+      have := execList_forsTreeBody_preserves_const sig cur v x hx
+      rw [hp] at this; exact this
+
+/-- `forsLastTreeBody` always falls through (no `revert`/`return`). Standalone `none`. -/
+private theorem execList_forsLastTreeBody_none (sig : ByteVec Spec.SignatureLen) (vm : VM) :
+    (execList c10Oracle sig forsLastTreeBody vm).2 = none := by
+  unfold forsLastTreeBody
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList]
+
+set_option maxHeartbeats 8000000 in
+/-- **The 12-tree i-loop low-window frame.** Drives `execList_forsTreeBody_mem_low` 12×
+    by induction on `remaining`, threading `OUT = 0x600` into each iteration via
+    `execList_forsTreeBody_preserves_const`. Preserves any address `a < 0x20`. -/
+private theorem execFor_forsTreeBody_mem_low (sig : ByteVec Spec.SignatureLen)
+    (a : Nat) (ha : a < 0x20) :
+    ∀ (remaining cur : Nat) (v : VM), cur + remaining ≤ 12 → v.env "OUT" = 0x600 →
+      (execFor c10Oracle sig "i" forsTreeBody remaining cur v).1.mem a = v.mem a := by
+  intro remaining
+  induction remaining with
+  | zero => intro cur v _ _; simp only [execFor]
+  | succ rem ih =>
+      intro cur v hbound hOUT
+      have hnone := execList_forsTreeBody_none sig cur v
+      rw [execFor]
+      rcases hp : execList c10Oracle sig forsTreeBody { v with env := setVar v.env "i" cur }
+        with ⟨pvm, po⟩
+      rw [hp] at hnone; subst hnone; simp only []
+      have hpOUT : pvm.env "OUT" = 0x600 := by
+        have := execList_forsTreeBody_preserves_const sig cur v "OUT"
+          ⟨by decide, by decide, by decide, by decide, by decide, by decide, by decide,
+           by decide, by decide, by decide, by decide, by decide⟩
+        rw [hp] at this; rw [this]; exact hOUT
+      rw [ih (cur + 1) pvm (by omega) hpOUT]
+      have := execList_forsTreeBody_mem_low sig cur v hOUT (by omega) a ha
+      rw [hp] at this; exact this
+
+set_option maxHeartbeats 4000000 in
+/-- **`forsLastTreeBody` low-window frame.** The block writes only `0x20`/`0x40` (scratch),
+    the OUT window `[0x600,…)`, and `0x200`; so any address `a < 0x20` survives. The
+    `a < 0x20` analogue of `fors_last_tree_mem_frame`. -/
+private theorem fors_last_tree_mem_low
+    (sig : ByteVec Spec.SignatureLen) (vm : VM) (hOUT : vm.env "OUT" = 0x600)
+    (a : Nat) (ha : a < 0x20) :
+    (execList c10Oracle sig forsLastTreeBody vm).1.mem a = vm.mem a := by
+  unfold forsLastTreeBody
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList]
+  simp only [execStmt, eval, setVar, hOUT, ite_true, ite_false, String.reduceEq]
+  -- Frame `a` through: 0x200 store, OUT window, 0x40, 0x20 (all disjoint from a < 0x20).
+  rw [mstore32_frame _ 0x200 _ a (by omega), writeRegion_frame _ 0x600 _ a (by omega),
+      mstore32_frame _ 0x40 _ a (by omega), mstore32_frame _ 0x20 _ a (by omega)]
+
+set_option maxHeartbeats 8000000 in
+set_option maxRecDepth 4000 in
+/-- **The FORS phase fragment preserves the low memory window `[0, 0x20)`.** Every `mstore`
+    in the fragment targets an offset `≥ 0x20`, and every `sha256` writes the `OUT = 0x600`
+    window — so the whole fragment preserves `[0, 0x20)`, regardless of whether the
+    forced-zero `ifnz` reverts. Composes the per-body low-frames above; `OUT` is read-only
+    in the fragment, so `hOUT` threads through. -/
+theorem forsPhaseFragment_mem_low (sig : ByteVec Spec.SignatureLen) (vm : VM)
+    (hOUT : vm.env "OUT" = 0x600) (a : Nat) (ha : a < 0x20) :
+    (execList c10Oracle sig forsPhaseFragment vm).1.mem a = vm.mem a := by
+  unfold forsPhaseFragment
+  -- Statements 1+2: htIdx, dVal letvs (no mem write).
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  obtain ⟨v0, hv0⟩ : ∃ v0, (execStmt c10Oracle sig (.letv "dVal" (.var "digest"))
+      (execStmt c10Oracle sig (.letv "htIdx"
+        (.bin .band (.bin .shr (.lit 143) (.var "digest")) (.lit 0x3FFFF))) vm).1).1 = v0 := ⟨_, rfl⟩
+  rw [hv0]
+  have hv0mem : v0.mem a = vm.mem a := by
+    rw [← hv0]; simp only [execStmt, eval, setVar]
+  have hv0OUT : v0.env "OUT" = 0x600 := by
+    rw [← hv0]; simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hOUT
+  -- Statement 3: the ifnz. Branch-agnostic — no mem write either way.
+  rw [execList]
+  by_cases hc : eval sig v0 (.bin .band (.bin .shr (.lit 132) (.var "dVal")) (.lit 0x7FF)) = 0
+  · -- falls through: execStmt (ifnz …) v0 = (v0, none).
+    have hcondz : execStmt c10Oracle sig
+        (.ifnz (.bin .band (.bin .shr (.lit 132) (.var "dVal")) (.lit 0x7FF)) [.revert]) v0
+        = (v0, none) := by
+      unfold execStmt; rw [if_neg (by rw [hc]; exact fun h => h rfl)]
+    rw [hcondz]
+    -- The `match (v0, none)` reduces (definitionally) to `execList … rest v0`.
+    show (execList c10Oracle sig
+        (.letv "sigBase" .sigOffset
+          :: .forRange "i" (.lit 12) forsTreeBody
+          :: .block forsLastTreeBody
+          :: .mstore (.lit 0x20) (.bin .bor (.bin .shl (.lit 160) (.var "htIdx")) (.bin .shl (.lit 128) (.lit 4)))
+          :: .forRange "i" (.lit 13) forsCopyBody
+          :: .sha256 (.lit 0x00) (.lit 0x1E0) (.var "OUT")
+          :: [.letv "forsPk" (.bin .band (.mload (.var "OUT")) (.var "N_MASK"))]) v0).1.mem a = vm.mem a
+    -- Continue from v0 with the rest: sigBase, 12-loop, last tree, mstore 0x20, copy, sha256, forsPk.
+    rw [← hv0mem]
+    -- Statement 4: sigBase letv (no mem write).
+    rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+    obtain ⟨v1, hv1⟩ : ∃ v1, (execStmt c10Oracle sig (.letv "sigBase" .sigOffset) v0).1 = v1 := ⟨_, rfl⟩
+    rw [hv1]
+    have hv1mem : v1.mem a = v0.mem a := by rw [← hv1]; simp only [execStmt, eval, setVar]
+    have hv1OUT : v1.env "OUT" = 0x600 := by
+      rw [← hv1]; simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hv0OUT
+    -- Statement 5: the 12 normal trees.
+    have hntStmt : execStmt c10Oracle sig (.forRange "i" (.lit 12) forsTreeBody) v1
+        = execFor c10Oracle sig "i" forsTreeBody 12 0 v1 := by simp only [execStmt, eval]
+    have hntNone : (execStmt c10Oracle sig (.forRange "i" (.lit 12) forsTreeBody) v1).2 = none := by
+      rw [hntStmt]; exact execFor_forsTreeBody_none sig 12 0 v1
+    rw [execList_cons_none c10Oracle sig _ _ _ hntNone, hntStmt]
+    obtain ⟨v2, hv2⟩ : ∃ v2, (execFor c10Oracle sig "i" forsTreeBody 12 0 v1).1 = v2 := ⟨_, rfl⟩
+    rw [hv2]
+    have hv2mem : v2.mem a = v1.mem a := by
+      rw [← hv2]; exact execFor_forsTreeBody_mem_low sig a ha 12 0 v1 (by omega) hv1OUT
+    have hv2OUT : v2.env "OUT" = 0x600 := by
+      rw [← hv2, execFor_forsTreeBody_preserves_const sig "OUT"
+        ⟨by decide, by decide, by decide, by decide, by decide, by decide, by decide,
+         by decide, by decide, by decide, by decide, by decide⟩ 12 0 v1]; exact hv1OUT
+    -- Statement 6: the last tree (.block forsLastTreeBody).
+    have hltStmt : execStmt c10Oracle sig (.block forsLastTreeBody) v2
+        = execList c10Oracle sig forsLastTreeBody v2 := by simp only [execStmt]
+    have hltNone : (execStmt c10Oracle sig (.block forsLastTreeBody) v2).2 = none := by
+      rw [hltStmt]; exact execList_forsLastTreeBody_none sig v2
+    rw [execList_cons_none c10Oracle sig _ _ _ hltNone, hltStmt]
+    obtain ⟨v3, hv3⟩ : ∃ v3, (execList c10Oracle sig forsLastTreeBody v2).1 = v3 := ⟨_, rfl⟩
+    rw [hv3]
+    have hv3mem : v3.mem a = v2.mem a := by
+      rw [← hv3]; exact fors_last_tree_mem_low sig v2 hv2OUT a ha
+    have hv3OUT : v3.env "OUT" = 0x600 := by
+      rw [← hv3, execList_forsLastTreeBody_preserves_var sig v2 "OUT" (by decide)]; exact hv2OUT
+    -- Statement 7: standalone mstore 0x20 (disjoint from a < 0x20).
+    rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+    obtain ⟨v4, hv4⟩ : ∃ v4, (execStmt c10Oracle sig
+        (.mstore (.lit 0x20) (.bin .bor (.bin .shl (.lit 160) (.var "htIdx"))
+          (.bin .shl (.lit 128) (.lit 4)))) v3).1 = v4 := ⟨_, rfl⟩
+    rw [hv4]
+    have hv4mem : v4.mem a = v3.mem a := by
+      rw [← hv4]; simp only [execStmt, eval]; rw [mstore32_frame _ 0x20 _ a (by omega)]
+    have hv4OUT : v4.env "OUT" = 0x600 := by
+      rw [← hv4]; simp only [execStmt, eval, setVar]; exact hv3OUT
+    -- Statement 8: the 13-record copy loop (preserves [0,0x40) ⊇ [0,0x20)).
+    have hcpStmt : execStmt c10Oracle sig (.forRange "i" (.lit 13) forsCopyBody) v4
+        = execFor c10Oracle sig "i" forsCopyBody 13 0 v4 := by simp only [execStmt, eval]
+    have hcpNone : (execStmt c10Oracle sig (.forRange "i" (.lit 13) forsCopyBody) v4).2 = none := by
+      rw [hcpStmt]; exact execFor_forsCopyBody_none sig 13 0 v4
+    rw [execList_cons_none c10Oracle sig _ _ _ hcpNone, hcpStmt]
+    obtain ⟨v5, hv5⟩ : ∃ v5, (execFor c10Oracle sig "i" forsCopyBody 13 0 v4).1 = v5 := ⟨_, rfl⟩
+    rw [hv5]
+    have hv5mem : v5.mem a = v4.mem a := by
+      rw [← hv5]; exact execFor_forsCopyBody_mem_low sig a (by omega) 13 0 v4 (by omega)
+    have hv5OUT : v5.env "OUT" = 0x600 := by
+      rw [← hv5, execFor_forsCopyBody_preserves sig "OUT" (by decide) 13 0 v4]; exact hv4OUT
+    -- Statement 9: the final sha256 → OUT (0x600 window, disjoint from a < 0x20).
+    rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+    obtain ⟨v6, hv6⟩ : ∃ v6, (execStmt c10Oracle sig
+        (.sha256 (.lit 0x00) (.lit 0x1E0) (.var "OUT")) v5).1 = v6 := ⟨_, rfl⟩
+    rw [hv6]
+    have hv6mem : v6.mem a = v5.mem a := by
+      rw [← hv6]; simp only [execStmt, eval, hv5OUT]
+      rw [writeRegion_frame _ 0x600 _ a (by omega)]
+    -- Statement 10: forsPk letv (no mem write), then [].
+    rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt]), execList]
+    simp only [execStmt, eval]
+    rw [hv6mem, hv5mem, hv4mem, hv3mem, hv2mem, hv1mem]
+  · -- reverts: execStmt (ifnz …) v0 = (v0, some reverted); fragment short-circuits, .1 = v0.
+    have hcondnz : execStmt c10Oracle sig
+        (.ifnz (.bin .band (.bin .shr (.lit 132) (.var "dVal")) (.lit 0x7FF)) [.revert]) v0
+        = (v0, some Halt.reverted) := by
+      unfold execStmt; rw [if_pos hc]; simp only [execList, execStmt]
+    rw [hcondnz]
+    show v0.mem a = vm.mem a
+    exact hv0mem
+
 /-- **`wotsContTail` preserves the seed window `[0,0x20)`.** The post-digit-sum-gate tail
     (the 43 chains, PK-adrs `mstore`, endpoint copy, PK-compress) writes only at `≥ 0x20`. -/
 theorem wotsContTail_seed_frame (sig : ByteVec Spec.SignatureLen) (v : VM)

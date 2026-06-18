@@ -29,6 +29,7 @@ namespace SphincsCVerify.Interpreter.C10
 
 open SphincsCVerify.Interpreter
 open SphincsCVerify.Spec (ByteVec)
+open SphincsCVerify.Bridge (verifyYulModel)
 
 -- The phase capstones are consumed as opaque equations; replicate the
 -- HypertreePhase seals so no stray `simp`/`rfl`/`decide` whnf's through the
@@ -238,5 +239,20 @@ theorem fors_post_sigBase (sig : ByteVec Spec.SignatureLen) (vm : VM)
       rw [execList_cons_none c10Oracle sig _ _ vm3 (by simp only [execStmt])]
       rw [execList_env_frame c10Oracle sig _ "sigBase" _ (by decide)]
       simp only [execStmt, eval, setVar, ite_true]
+
+/-! ## The spec target, unfolded
+
+`verifyYulModel` is a def-alias chain down to `Hypertree.verify`; unfold it to the
+`verifyWithDigest` form the spine's case analysis matches (digest → FORS gate →
+`verifyHypertree` → root compare). All `def`-unfolding (no sealed body touched). -/
+theorem verifyYulModel_unfold (pkSeed pkRoot message : ByteVec 32)
+    (sig : ByteVec Spec.SignatureLen) :
+    verifyYulModel pkSeed pkRoot message sig
+      = Spec.Hypertree.verifyWithDigest (ByteVec.pad16 (pkSeed.take 16 (by decide)))
+          (pkRoot.take 16 (by decide))
+          (Spec.hMsg (ByteVec.pad16 (pkSeed.take 16 (by decide)))
+            (ByteVec.pad16 (pkRoot.take 16 (by decide)))
+            (ByteVec.pad16 (Spec.Signature.deserialise sig).r) message)
+          (Spec.Signature.deserialise sig) := rfl
 
 end SphincsCVerify.Interpreter.C10
