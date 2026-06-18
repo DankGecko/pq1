@@ -27,9 +27,8 @@ Reference documentation for the **OPTIGA Trust M V3** (SLS32AIA) secure element 
 | Document | Contents |
 |----------|----------|
 | [hardware-specs.md](hardware-specs.md) | Chip capabilities, crypto algorithms, pinout, electrical specs, shield board details |
-| [ifx-i2c-protocol.md](ifx-i2c-protocol.md) | Complete IFX I2C protocol stack: physical, data link, transport, presentation layers |
+| [ifx-i2c-protocol.md](ifx-i2c-protocol.md) | Complete IFX I2C protocol stack: physical, data link, transport, **presentation (§3a Shielded Connection — handshake, TLS-PRF key derivation, AES-128-CCM, pairing, session save/restore)** layers |
 | [commands-and-oids.md](commands-and-oids.md) | APDU command reference, OID map, access conditions, metadata format |
-| [shielded-connection.md](shielded-connection.md) | Encrypted I2C channel: handshake, key derivation, AES-128-CCM, pairing |
 | [stm32-integration.md](stm32-integration.md) | Wiring to B-U585I-IOT02A, GPIO config, initialization sequence, timing |
 | [rust-driver-plan.md](rust-driver-plan.md) | Rust ecosystem assessment, existing repos, driver architecture plan |
 

@@ -16,6 +16,7 @@ repointed to `docs/archive/…` at move time.
 |---|---|---|
 | `companion-safe-cowswap-multisend.md` | `docs/companion/companion-safe-cowswap-presign.md` | Was a *delta* to presign; now the "multiSend batches" section of it (allowlist, hard rules, refusal banners, scenarios 5s/5t/5u all preserved). |
 | `companion-erc7730-integration.md` | `docs/companion/companion-erc7730-implementation-guide.md` | Earlier narrower draft. Its 2 unique pitfalls are now §9 rows of the guide; its `E73D` catalog schema was **superseded** by the guide's `P730` (§3) — do not use it. |
+| `optiga-shielded-connection.md` | `docs/secure-elements/OPTIGATRUSTM/ifx-i2c-protocol.md` §3a | The Shielded Connection IS the IFX I2C presentation layer that the protocol reference stubbed out; folded in full (handshake, TLS-PRF KDF, AES-128-CCM, pairing, session save/restore). |
 
 ## Absorbed research inputs (the output is a live reference)
 

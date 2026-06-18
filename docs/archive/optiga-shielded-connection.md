@@ -1,5 +1,12 @@
 # OPTIGA Trust M -- Shielded Connection (Encrypted I2C)
 
+> 📦 **ARCHIVED 2026-06-18 — folded into
+> [`../secure-elements/OPTIGATRUSTM/ifx-i2c-protocol.md`](../secure-elements/OPTIGATRUSTM/ifx-i2c-protocol.md)
+> §3a Presentation Layer.** The Shielded Connection IS the IFX I2C stack's
+> presentation layer, which that protocol reference previously stubbed out;
+> it now carries the full content (handshake, TLS-PRF KDF, AES-128-CCM,
+> pairing, session save/restore). Kept here for provenance only.
+
 The Shielded Connection provides integrity and confidentiality protection between the host MCU and the OPTIGA Trust M over I2C. It operates at the Presentation Layer of the IFX I2C protocol stack.
 
 ## Overview

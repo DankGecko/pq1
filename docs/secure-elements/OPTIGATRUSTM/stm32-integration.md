@@ -100,7 +100,7 @@ If using separate I2C peripherals:
    - Wait for success response (status 0x00)
 
 8. (Optional) Establish Shielded Connection:
-   - Perform 4-step handshake (see shielded-connection.md)
+   - Perform 4-step handshake (see ifx-i2c-protocol.md §3a Presentation Layer)
 
 9. Chip is READY for commands
 ```
