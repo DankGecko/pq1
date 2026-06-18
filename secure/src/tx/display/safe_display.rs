@@ -693,7 +693,9 @@ fn inner_kind_hint(kind: &InnerKind<'_>) -> &'static str {
 /// arm — a divergence would show as blank or truncated pages in the
 /// QEMU multiSend e2e scenarios.
 /// Body + context-banner page count for a Safe-wrapped CoW presign.
-/// When `cow` is absent we budget the AddrHex maximum (conservative).
+/// Each leg is 2 pages in both modes, so the body is a constant 8 and
+/// this returns 9 regardless of whether `cow` is present; the absent
+/// case still computes it via the AddrHex legs for symmetry.
 fn safe_cow_pages(cow: Option<&VerifiedCowswapV3>) -> usize {
     use crate::tx::eip712::cowswap::CowLeg;
     1 + cow.map_or(
@@ -708,7 +710,7 @@ fn inner_kind_page_count(kind: &InnerKind<'_>) -> usize {
         InnerKind::PlainEth => 2,
         InnerKind::Erc20Known(_) | InnerKind::Erc20Unknown(_) => 4,
         InnerKind::SafeMgmt(op) => safe_mgmt_page_count(op),
-        // Context banner + the shared CoW order body (6 fully-decoded .. 8 addr).
+        // Context banner + the shared CoW order body (constant 8 pages).
         InnerKind::CowswapPresign(v3) => safe_cow_pages(Some(v3)),
         InnerKind::UnknownSafeSelf => 3,
         InnerKind::MultiSend { inner_pages, .. } => *inner_pages,

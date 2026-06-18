@@ -12,7 +12,8 @@
 //!   * `CowLeg::Decoded` — the leg's ERC-20 bundle Merkle-verified
 //!     against `ERC20_DB_ROOT`, so the firmware shows `<amount> <symbol>`
 //!     with `decimals` applied (the same fixed-width, anti-spoof
-//!     amount formatter the ERC-20 transfer path uses). 1 page.
+//!     amount formatter the ERC-20 transfer path uses) on page A, and
+//!     the `<symbol>` + human-readable `<name>` on page B. 2 pages.
 //!   * `CowLeg::AddrHex` — no usable bundle: the firmware shows the raw
 //!     20-byte token address + the full uint256 amount as hex so the
 //!     user can still verify magnitudes without trusting the host for
@@ -51,14 +52,23 @@ enum Side {
     Buy,
 }
 
-/// Number of body pages a leg occupies: 1 when decoded (amount+symbol),
-/// 2 in AddrHex mode (token address page + uint256 hex page).
-const fn leg_page_count(decoded: bool) -> usize {
-    if decoded {
-        1
-    } else {
-        2
-    }
+/// Number of body pages a leg occupies — 2 in both modes:
+///   * Decoded: page A = label + amount + symbol, page B = symbol + name.
+///   * AddrHex: page A = token address, page B = uint256 hex amount.
+///
+/// (`decoded` is kept in the signature so callers stay symmetric and a
+/// future divergence is a one-line change.)
+const fn leg_page_count(_decoded: bool) -> usize {
+    2
+}
+
+/// Copy a byte slice into one OLED row, space-padded and truncated to
+/// the 16-column width. Bytes are clean ASCII by construction (the
+/// ERC-20 bundle verifier rejects non-printable symbol/name fields).
+fn write_bytes_row(row: &mut [u8; DISPLAY_COLS], bytes: &[u8]) {
+    *row = [b' '; DISPLAY_COLS];
+    let n = core::cmp::min(bytes.len(), DISPLAY_COLS);
+    row[..n].copy_from_slice(&bytes[..n]);
 }
 
 /// Total order-body page count for the given leg modes. Used by the
@@ -74,9 +84,9 @@ pub fn order_body_page_count(sell: &CowLeg, buy: &CowLeg) -> usize {
 
 /// Produce the full confirmation flow for a verified CowSwap order.
 ///
-/// Page layout: header (chain + kind) → order body → confirm. The page
-/// count depends on the leg modes (8 when both legs decode, up to 10
-/// when both fall back to AddrHex).
+/// Page layout: header (chain + kind) → order body → confirm. Each leg
+/// is 2 pages in both modes, so the body is a constant 8 pages and the
+/// full flow is 10 pages (header + 8 + confirm).
 pub fn render_cowswap_pages(canonical: &[u8; 204], sell: &CowLeg, buy: &CowLeg) -> Pages {
     let total = 1 + order_body_page_count(sell, buy) + 1;
     let mut pages = Pages::empty_with_len(total);
@@ -208,8 +218,10 @@ fn append_leg(
             decimals,
             symbol,
             symbol_len,
+            name,
+            name_len,
         } => {
-            // One page: label / amount (2 rows) / "> next".
+            // Page A: label / amount (2 rows) / "> next".
             write_line(&mut pages.row_mut(p, 0), leg_label(kind, side));
             let amount: [u8; 32] = canonical[amount_off..amount_off + 32]
                 .try_into()
@@ -226,7 +238,17 @@ fn append_leg(
                 );
             }
             write_line(&mut pages.row_mut(p, 3), "> next");
-            p + 1
+            // Page B: restate symbol + full token name. The amount page
+            // shows the symbol next to the figure; this page repeats it
+            // and adds the human-readable name so a symbol-only DB
+            // collision (e.g. two "USDC" rows) is visible to the user.
+            // Both are clamped to the 16-col OLED width (same truncation
+            // the ERC-20 transfer path applies via `write_token_name`).
+            write_line(&mut pages.row_mut(p + 1, 0), "Token:");
+            write_bytes_row(&mut pages.row_mut(p + 1, 1), &symbol[..*symbol_len as usize]);
+            write_bytes_row(&mut pages.row_mut(p + 1, 2), &name[..*name_len as usize]);
+            write_line(&mut pages.row_mut(p + 1, 3), "> next");
+            p + 2
         }
         CowLeg::AddrHex => {
             // Page A: token addr + amount-page hint.

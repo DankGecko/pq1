@@ -46,12 +46,18 @@ use super::{
 /// `pqsigner_tx::erc20::bundle`'s `MAX_DISPLAY_FIELD`).
 pub const COW_LEG_SYMBOL_MAX: usize = 64;
 
+/// Maximum on-device token name length (matches
+/// `pqsigner_tx::erc20::bundle`'s `MAX_DISPLAY_FIELD`).
+pub const COW_LEG_NAME_MAX: usize = 64;
+
 /// How a single swap leg should be rendered.
 ///
 ///   * `Decoded` — the leg's ERC-20 bundle Merkle-verified against
 ///     `ERC20_DB_ROOT` and its `(contract, chain_id)` matched the
 ///     canonical leg token + chain. The trusted UI shows
-///     `<amount> <symbol>` with `decimals` applied.
+///     `<amount> <symbol>` with `decimals` applied, plus a page that
+///     restates the `<symbol>` and the human-readable `<name>` (so a
+///     symbol-only collision in the DB is visible to the user).
 ///   * `AddrHex` — no usable bundle: render the raw 20-byte token
 ///     address + the full uint256 amount as hex. Still fully bound
 ///     (canonical → orderDigest → calldata.uid), just unformatted.
@@ -63,6 +69,11 @@ pub enum CowLeg {
         /// before render. Only the first `symbol_len` are valid.
         symbol: [u8; COW_LEG_SYMBOL_MAX],
         symbol_len: u8,
+        /// Name bytes, owned so the snapshot buffer can be dropped
+        /// before render. Only the first `name_len` are valid.
+        /// Clean ASCII, 1..=64 bytes (enforced by `verify_erc20_bundle`).
+        name: [u8; COW_LEG_NAME_MAX],
+        name_len: u8,
     },
     AddrHex,
 }
@@ -104,10 +115,20 @@ fn decode_leg(bundle: Option<&[u8]>, expected_token: &[u8; 20], chain_id: u64) -
     }
     let mut symbol = [0u8; COW_LEG_SYMBOL_MAX];
     symbol[..sym.len()].copy_from_slice(sym);
+    // `verify_erc20_bundle` already guarantees `name` is clean ASCII and
+    // 1..=64 bytes; clamp defensively in case the bound ever diverges.
+    let nm = meta.name;
+    if nm.is_empty() || nm.len() > COW_LEG_NAME_MAX {
+        return CowLeg::AddrHex;
+    }
+    let mut name = [0u8; COW_LEG_NAME_MAX];
+    name[..nm.len()].copy_from_slice(nm);
     CowLeg::Decoded {
         decimals: meta.decimals,
         symbol,
         symbol_len: sym.len() as u8,
+        name,
+        name_len: nm.len() as u8,
     }
 }
 
