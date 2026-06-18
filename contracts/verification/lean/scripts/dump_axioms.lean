@@ -161,6 +161,9 @@ import SphincsCVerify
 #print axioms SphincsCVerify.Wallet.CreditLedger.creditConservation
 #print axioms SphincsCVerify.Wallet.CreditLedger.exec_count_le_validate_count
 #print axioms SphincsCVerify.Spec.Theorems.exec_count_le_validate_count
+-- Non-vacuity (decode-free): a live credit funds one successful execute — rules out
+-- the degenerate "executeWithOffchainCount unsatisfiable for all inputs" vacuity.
+#print axioms SphincsCVerify.Wallet.CreditLedger.execute_step_satisfiable
 
 -- Claim 4, transported to the deployed EXECUTE bytecode (A3.2-exec): a
 -- successful deployed executeWithOffchainCount / executeBatchWithOffchainCount

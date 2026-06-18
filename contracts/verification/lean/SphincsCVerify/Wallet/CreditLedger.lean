@@ -384,4 +384,48 @@ theorem exec_count_le_validate_count
   have h := creditConservation σf trace σ0 [] hrun (by trivial) (fun j _ => hinit j)
   simpa [sumOver] using h
 
+/-! ## Non-vacuity
+
+`exec_count_le_validate_count` (and the whole Claim-4 family) is conditional on
+`runTrace σ0 trace = some σf`. Kernel-cleanliness proves the implication VALID
+but says nothing about whether the hypothesis is SATISFIABLE by a trace with a
+successful `execute` — if it weren't, the bound would be vacuous.
+
+It is NOT vacuous. Every guard on the `[validate(stamp), execute]` path is
+independently satisfiable: `decodeWrappedSig` is a total function with a
+non-empty preimage at any slot index (any 4128-byte wrapper with
+`offsetField=0x40`, `innerLen=4008`, zero tail-pad decodes); `ownerAtIndex 1`
+is populated by `Storage.initialised`; `capOk` holds for a slot-allowed
+index-matching selector under clean caps; `verify_fn` is a `Step` parameter
+(take `fun _ _ _ _ => true`); and `bumpSlot`/`setOffchain` both succeed from
+zero. The one piece that resists a FULLY-CONCRETE in-kernel witness is exhibiting
+that 4128-byte decoding input: `decodeWrappedSig` evaluates `readWordBE` (a
+32-iteration loop) over the array, so a `decide`/`rfl` discharge would force the
+whole 4128-byte array through the kernel — only `native_decide` makes that
+tractable, and `native_decide` is banned on proof paths here. (Hence no concrete
+decode witness exists ANYWHERE in the development; it is a shared mechanization
+gap across the Claim-4/Invariants families, tracked in `docs/work-todo.md`.)
+
+The DECODE-FREE half is mechanized below: a live credit funds exactly one
+successful `execute` step (rules out a degenerate "`executeWithOffchainCount` is
+unsatisfiable for all inputs" vacuity). The remaining clean-init composition
+(validate-stamp THEN execute) is mechanized modulo that single decode-preimage
+fact — tracked as the shared follow-up. -/
+
+/-- **Non-vacuity (decode-free).** A live per-index credit funds exactly one
+    successful `execute` step — so `executeWithOffchainCount` is satisfiable and
+    the credit-consuming machinery the aggregate bounds is non-empty. -/
+theorem execute_step_satisfiable :
+    ∃ (σ : ExecState),
+      σ.credits 1 > 0 ∧
+      (applyStep σ (.execute σ.entryPoint 1 0
+          ⟨Array.replicate 20 1, by simp⟩ 0 #[])).isSome = true := by
+  refine ⟨{ storage := Storage.empty,
+            selfAddress := ⟨Array.replicate 20 0, by simp⟩,
+            entryPoint := ⟨Array.replicate 20 0, by simp⟩,
+            credits := fun i => if i = 1 then 1 else 0,
+            callStack := [] }, ?_, ?_⟩
+  · decide
+  · decide
+
 end SphincsCVerify.Wallet.CreditLedger
