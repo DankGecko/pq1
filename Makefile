@@ -3654,6 +3654,8 @@ proverif:
 	proverif contracts/verification/proverif/optiga_shield_handshake.pv
 	@echo "==> ProVerif: SCP03 within-session no-forgery (companion to the Tamarin no-replay)"
 	proverif contracts/verification/proverif/scp03_replay.pv
+	@echo "==> ProVerif: firmware-update authenticity (vendor-signed manifest, domain-separated)"
+	proverif contracts/verification/proverif/fw_update_authenticity.pv
 
 # Stateful symbolic model (Tamarin) of the three-way PIN-attempt lockstep:
 # a single-counter reset is always caught by the boot reconcile (CORE), an

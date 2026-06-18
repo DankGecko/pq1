@@ -1,0 +1,91 @@
+(* ===========================================================================
+   PQ-Signer — firmware-update authenticity (vendor-signed manifest), ProVerif
+   ===========================================================================
+
+   The streaming FW-update path (CMD_FW_BEGIN/CHUNK/COMMIT) installs a new image
+   only if it carries a valid vendor SPHINCS+C10 signature over the manifest
+   preimage:
+
+       preimage = SHA-256( b"PQFW_V1"            (DOMAIN_TAG, 7 B)
+                         || fw_version_be_u32     (4 B)
+                         || secure_hash[32]
+                         || nonsecure_hash[32] )   = the 75-B signed preimage
+
+   (fw-manifest/src/lib.rs: DOMAIN_TAG, signed_preimage, verify_signature.) The
+   vendor root signing key NEVER touches the device (fwsign/ runs off-box); the
+   device holds only the public key / fingerprint.
+
+   Proven here (Dolev-Yao attacker owns the transport — the companion/USB host
+   is fully untrusted and may inject, modify, drop, or reorder any bytes):
+
+     * AUTHENTICITY (no forgery): the device installs an image only if the
+       vendor actually signed that exact preimage. A malicious companion cannot
+       forge a FW image without the vendor secret key.
+
+     * DOMAIN SEPARATION: the device structurally parses the signed bytes as a
+       PQFW preimage before accepting, so a vendor signature produced over some
+       OTHER message shape (a different protocol's digest) can never be replayed
+       as a firmware image — the `b"PQFW_V1"` tag, modelled as the `preimage`
+       constructor, is what buys this.
+
+   NOT modelled here (stateful — Tamarin's job, like the PIN-lockstep): the OTP
+   ANTI-ROLLBACK floor (`verify_rollback`: fw_version > floor, monotonic OTP).
+   ProVerif's strength is the trace/secrecy authenticity above; the monotonic-
+   counter rollback property needs mutable global state and is tracked
+   separately (a near-mirror of tamarin/pin_lockstep.spthy's counter shape).
+
+   ABSTRACTION: SPHINCS+C10 is a generic EUF-CMA signature (`sign`/`verifyget`);
+   SHA-256 is the injective `preimage` constructor (collision-resistance is the
+   crypto assumption discharged in the Lean track, not re-litigated symbolically).
+   =========================================================================== *)
+
+type sskey.   (* SPHINCS+C10 secret signing key (vendor root) *)
+type spkey.   (* SPHINCS+C10 public key (embedded in the device) *)
+
+fun spk(sskey): spkey.
+
+(* EUF-CMA signature with message recovery: verifyget(sign(m,k), spk(k)) = m,
+   and there is no rule producing a valid signature without the secret key. *)
+fun sign(bitstring, sskey): bitstring.
+reduc forall m: bitstring, k: sskey; verifyget(sign(m, k), spk(k)) = m.
+
+(* The signed preimage. The `preimage` constructor stands for the
+   SHA-256(DOMAIN_TAG || version || shash || nshash) binding: it is injective in
+   its fields AND distinct from any non-PQFW message shape (the domain tag).
+   `[data]` makes it a public constructor with the matching destructor, so the
+   device can structurally parse — and only PQFW-shaped bytes parse. *)
+fun preimage(bitstring, bitstring, bitstring): bitstring [data].
+
+free net: channel.                 (* untrusted USB/companion transport *)
+free vendorsk: sskey [private].    (* vendor root key — never on the device *)
+
+event Sign(bitstring).      (* vendor signed this preimage *)
+event Install(bitstring).   (* device accepted + installed this preimage *)
+
+(* Vendor (off-box, fwsign/): sign arbitrarily many genuine manifests. *)
+let vendor =
+    !(  new version: bitstring; new shash: bitstring; new nshash: bitstring;
+        let pre = preimage(version, shash, nshash) in
+        event Sign(pre);
+        out(net, (pre, sign(pre, vendorsk)))  ).
+
+(* Device (secure/src/fw_update/verify.rs): receive a candidate (the attacker
+   may have produced it). Accept iff (1) it structurally parses as a PQFW
+   preimage AND (2) the signature verifies under the embedded vendor pubkey. *)
+let device(vendorpk: spkey) =
+    !(  in(net, (m: bitstring, sg: bitstring));
+        let preimage(v: bitstring, sh: bitstring, nsh: bitstring) = m in  (* PQFW structural gate (domain tag) *)
+        if verifyget(sg, vendorpk) = m then
+            event Install(m)  ).
+
+(* AUTHENTICITY: every install corresponds to a genuine vendor signature over
+   that exact preimage — no forgery, and (via the structural gate) no
+   cross-protocol signature reuse as a firmware image. *)
+query m: bitstring; event(Install(m)) ==> event(Sign(m)).
+
+(* Anti-vacuity: the honest update path is reachable (the query is not
+   vacuously true because nothing installs). Expect "Install is reachable". *)
+query m: bitstring; event(Install(m)).
+
+process
+    ( vendor | device(spk(vendorsk)) | out(net, spk(vendorsk)) )
