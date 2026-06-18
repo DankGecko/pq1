@@ -22,11 +22,14 @@
        vendor actually signed that exact preimage. A malicious companion cannot
        forge a FW image without the vendor secret key.
 
-     * DOMAIN SEPARATION: the device structurally parses the signed bytes as a
-       PQFW preimage before accepting, so a vendor signature produced over some
-       OTHER message shape (a different protocol's digest) can never be replayed
-       as a firmware image — the `b"PQFW_V1"` tag, modelled as the `preimage`
-       constructor, is what buys this.
+     * STRUCTURAL DOMAIN-SEPARATION GATE (present, not adversarially stressed):
+       the device structurally parses the signed bytes as a PQFW preimage
+       before accepting, so only `b"PQFW_V1"`-shaped bytes (the `preimage`
+       constructor) can install. This models the domain tag — but the model has
+       a SINGLE signer that only ever signs preimages, with no second signing
+       context emitting a non-preimage signature to replay. So this is "the gate
+       exists + only preimages install", NOT a proven cross-protocol-reuse-
+       resistance theorem. Authenticity below is the solidly-proven property.
 
    NOT modelled here (stateful — Tamarin's job, like the PIN-lockstep): the OTP
    ANTI-ROLLBACK floor (`verify_rollback`: fw_version > floor, monotonic OTP).

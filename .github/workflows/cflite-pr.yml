@@ -23,6 +23,12 @@ concurrency:
 jobs:
   PR:
     runs-on: ubuntu-latest
+    # NON-BLOCKING until the OSS-Fuzz Docker build (.clusterfuzzlite/build.sh,
+    # cargo-fuzz from the excluded fuzz/ workspace inside base-builder-rust) is
+    # proven green by a real run — it can't be validated off-CI. A build hiccup
+    # then reports but does NOT redden every PR. Remove `continue-on-error`
+    # once a first run is green to promote it to a hard gate.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - name: Build fuzzers
