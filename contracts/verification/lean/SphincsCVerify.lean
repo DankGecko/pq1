@@ -67,3 +67,4 @@ import SphincsCVerify.Interpreter.Sha256Bridge
 import SphincsCVerify.Interpreter.Yul
 import SphincsCVerify.Interpreter.C10Program
 import SphincsCVerify.Interpreter.Phases
+import SphincsCVerify.Interpreter.HypertreePhase

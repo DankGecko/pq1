@@ -178,3 +178,6 @@ import SphincsCVerify
 -- StorageLayout impl-slot disjointness). No new proof, no new axiom.
 -- Closure: kernel-only {propext, Classical.choice, Quot.sound}.
 #print axioms SphincsCVerify.Wallet.UpgradeSafety.upgrade_path_unreachable
+
+-- A3.1 hypertree phase (Interpreter/HypertreePhase.lean): verifyAuthPath as a foldl.
+#print axioms SphincsCVerify.Interpreter.C10.verifyAuthPath_eq_foldl
