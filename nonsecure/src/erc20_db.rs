@@ -27,7 +27,13 @@ use sphincs_tz_shared::db_format::{
 // production device ships no blob — only the `ERC20_DB_ROOT`). This
 // `include_bytes!` is reached ONLY in `e2e-test` builds, where this
 // module acts as the QEMU companion stub. Mirrors `selectors_db.rs`.
-static ERC20_DB: &[u8] = include_bytes!("../../tools/companion-stub/erc20_db.bin");
+//
+// We embed the TINY e2e fixture blob (`erc20_db_e2e.bin`), NOT the full
+// production `erc20_db.bin` — the latter is many MB and would overflow the
+// 256 KB NS flash. Its proofs match `ERC20_DB_ROOT` under `cfg(e2e-test)`
+// (see dbgen/src/main.rs render_db_roots). On real hardware the companion
+// app holds the full blob and builds the same bundle shape.
+static ERC20_DB: &[u8] = include_bytes!("../../tools/companion-stub/erc20_db_e2e.bin");
 
 /// Build an ERC20 metadata bundle for `(chain_id, contract)`. Writes
 /// into `out` and returns the number of bytes written, or `None` if

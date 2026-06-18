@@ -29,6 +29,7 @@ pub fn canonical_erc20_leaf(
 pub struct Erc20BuildResult {
     pub blob: Vec<u8>,
     pub root: [u8; 32],
+    pub entry_count: usize,
 }
 
 pub fn build_db(json_path: &Path) -> Result<Erc20BuildResult, String> {
@@ -75,28 +76,45 @@ pub fn build_db(json_path: &Path) -> Result<Erc20BuildResult, String> {
         }
     }
 
-    // 4. Reject the same contract on multiple chains pointing to different
-    //    name/symbol — almost always a copy-paste typo. The same contract
-    //    on multiple chains with the same name+symbol is fine and dedups
-    //    via interning.
+    // 4. WARN (do not reject) when the same contract appears on multiple
+    //    chains with different name/symbol. At hand-curated scale this was
+    //    almost always a copy-paste typo and worth a hard stop. For a large
+    //    multichain DB merged from authoritative sources it is frequently
+    //    LEGITIMATE: an address can host genuinely different tokens on
+    //    different chains (coincidental cross-chain address reuse — e.g.
+    //    0x50c5..0cb is DAI on Optimism but LYRA on Base). Because every
+    //    lookup is keyed by (chain_id, contract) and every Merkle leaf binds
+    //    the chain_id, such entries are fully unambiguous and safe; rejecting
+    //    them would silently drop real tokens (incl. blue chips like Optimism
+    //    DAI/COMP, L2 XRP/DOGE). We keep the diagnostic as a build-time
+    //    warning so a genuine curator typo is still visible on review.
     {
         let mut by_contract: HashMap<[u8; 20], (&str, &str)> = HashMap::new();
+        let mut cross_chain_diffs = 0usize;
         for r in &prepared {
             if let Some((name, symbol)) = by_contract.get(&r.contract) {
                 if *name != r.name || *symbol != r.symbol {
-                    return Err(format!(
-                        "contract 0x{} appears on multiple chains with different metadata \
-                         (`{} ({})` vs `{} ({})`) — likely a copy-paste error",
+                    cross_chain_diffs += 1;
+                    eprintln!(
+                        "dbgen: note: contract 0x{} has different metadata across chains \
+                         (`{} ({})` vs `{} ({})`) — allowed (chain-bound leaf), verify it \
+                         is intentional",
                         hex::encode(r.contract),
                         name,
                         symbol,
                         r.name,
                         r.symbol
-                    ));
+                    );
                 }
             } else {
                 by_contract.insert(r.contract, (&r.name, &r.symbol));
             }
+        }
+        if cross_chain_diffs > 0 {
+            eprintln!(
+                "dbgen: {cross_chain_diffs} shared-address cross-chain metadata \
+                 difference(s) — see notes above"
+            );
         }
     }
 
@@ -221,7 +239,11 @@ pub fn build_db(json_path: &Path) -> Result<Erc20BuildResult, String> {
 
     assert_eq!(blob.len(), total_size);
 
-    Ok(Erc20BuildResult { blob, root })
+    Ok(Erc20BuildResult {
+        blob,
+        root,
+        entry_count: entry_cnt,
+    })
 }
 
 /// Round-trip every input row through a host-side mirror of the
@@ -614,12 +636,15 @@ mod tests {
         assert!(err.contains("duplicate"), "got: {err}");
     }
 
-    /// Same contract across two chains with DIFFERENT name/symbol is
-    /// almost always a copy-paste error. The build refuses to commit
-    /// it to the trust anchor so a UI display can't accidentally show
-    /// "WETH" on chain A as "DAI" on chain B.
+    /// Same contract on DIFFERENT chains may legitimately be DIFFERENT
+    /// tokens (coincidental cross-chain address reuse — e.g. 0x50c5..0cb is
+    /// DAI on Optimism but LYRA on Base). The DB is keyed by
+    /// (chain_id, contract) and every leaf binds the chain_id, so this is
+    /// unambiguous and safe. dbgen WARNS (for curator review) but MUST NOT
+    /// reject — rejecting silently drops real tokens (Optimism DAI/COMP,
+    /// L2 XRP/DOGE) from an exhaustive multichain DB.
     #[test]
-    fn negative_build_db_same_contract_different_metadata_rejected() {
+    fn positive_build_db_same_contract_cross_chain_different_metadata_allowed() {
         let json = format!(
             r#"[
                 {{"chain_id": 1, "address": "{}", "name": "USDC", "symbol": "USDC", "decimals": 6}},
@@ -629,10 +654,33 @@ mod tests {
             fixture_addr(0xbe),
         );
         let f = write_json(&json);
-        let err = build_db(f.path()).err().expect(
-            "same contract cross-chain with different metadata must be rejected",
+        let res = build_db(f.path()).expect(
+            "same contract cross-chain with different metadata is allowed (chain-bound leaf)",
         );
-        assert!(err.contains("multiple chains"), "got: {err}");
+        // Both entries must be present and Merkle-verifiable at their
+        // respective (chain_id, contract) keys.
+        round_trip_check(&res.blob, f.path(), &res.root)
+            .expect("both cross-chain entries must round-trip");
+    }
+
+    /// A TRUE duplicate — same (chain_id, contract) twice — remains a hard
+    /// error (genuine ambiguity at a single lookup key, unlike the
+    /// cross-chain case above).
+    #[test]
+    fn negative_build_db_same_chain_same_contract_different_metadata_rejected() {
+        let json = format!(
+            r#"[
+                {{"chain_id": 1, "address": "{}", "name": "USDC", "symbol": "USDC", "decimals": 6}},
+                {{"chain_id": 1, "address": "{}", "name": "DAI", "symbol": "DAI", "decimals": 18}}
+            ]"#,
+            fixture_addr(0xbe),
+            fixture_addr(0xbe),
+        );
+        let f = write_json(&json);
+        let err = build_db(f.path())
+            .err()
+            .expect("same (chain, contract) duplicate must be rejected");
+        assert!(err.contains("duplicate"), "got: {err}");
     }
 
     /// Tampered blob — if a single byte of the entries region flips,

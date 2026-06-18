@@ -121,9 +121,13 @@ fn main() {
     // (the curated JSON is the same regardless of which world hosts
     // the resulting blob).
     let erc20_json = root.join("secure/data/erc20.json");
+    // Small parallel ERC-20 fixture for `--features e2e-test` QEMU builds.
+    let erc20_e2e_json = root.join("secure/data/erc20-e2e.json");
     let vks_json = root.join("secure/data/vks.json");
     let vks_dir = root.join("secure/data/vks");
     let names_json = root.join("secure/data/names.json");
+    // Small parallel Names fixture for `--features e2e-test` QEMU builds.
+    let names_e2e_json = root.join("secure/data/names-e2e.json");
     let selectors_json = root.join("secure/data/selectors.json");
     let selectors_e2e_json = root.join("secure/data/selectors-e2e.json");
     let erc7730_dir = root.join("secure/data/erc7730");
@@ -138,8 +142,18 @@ fn main() {
     // copies double as the QEMU e2e companion stub (see the
     // `e2e-test`-gated `nonsecure/src/{erc20,vk,names}_db.rs`).
     let erc20_out = root.join("tools/companion-stub/erc20_db.bin");
+    // Tiny e2e fixture blob — see the selectors/erc7730 e2e split below.
+    // The full erc20_db.bin can be many MB (host/companion-side only); this
+    // small parallel blob is what the `e2e-test` NS stub bakes into 256 KB
+    // flash without overflow, matched by ERC20_DB_ROOT under `cfg(e2e-test)`.
+    let erc20_e2e_out = root.join("tools/companion-stub/erc20_db_e2e.bin");
     let vk_out = root.join("tools/companion-stub/vk_db.bin");
     let names_out = root.join("tools/companion-stub/names_db.bin");
+    // Tiny e2e fixture blob — the full names_db.bin can grow large
+    // (host/companion-side only); this small parallel blob is what the
+    // `e2e-test` NS stub bakes into 256 KB flash, matched by NAMES_DB_ROOT
+    // under `cfg(e2e-test)`.
+    let names_e2e_out = root.join("tools/companion-stub/names_db_e2e.bin");
     // The selectors DB blob also lives on the host (companion app)
     // instead of in NS rodata, so it ships as a separate artifact
     // under tools/companion-stub/. Only the 32-byte SELECTOR_DB_ROOT
@@ -168,10 +182,32 @@ fn main() {
         .expect("erc20 round-trip failed");
     fs::write(&erc20_out, &erc20_res.blob).expect("write erc20_db.bin");
     println!(
-        "dbgen: wrote {} ({} bytes, root = {})",
+        "dbgen: wrote {} ({} bytes, {} entries, root = {})",
         erc20_out.display(),
         erc20_res.blob.len(),
+        erc20_res.entry_count,
         hex::encode(erc20_res.root),
+    );
+
+    // ----- ERC20 metadata DB (e2e fixture) -----
+    //
+    // Tiny parallel set used ONLY when the secure crate is built with
+    // `--features e2e-test` (the QEMU companion stub bakes the blob into NS
+    // rodata). The matching `ERC20_DB_ROOT` under `cfg(feature = "e2e-test")`
+    // in db_roots.rs is selected by the same gate, so the production
+    // multi-MB blob never has to ship in the 256 KB NS flash. Same shape as
+    // the selectors / ERC-7730 e2e splits below.
+    let erc20_e2e_res =
+        erc20::build_db(&erc20_e2e_json).expect("erc20 e2e db build failed");
+    erc20::round_trip_check(&erc20_e2e_res.blob, &erc20_e2e_json, &erc20_e2e_res.root)
+        .expect("erc20 e2e round-trip failed");
+    fs::write(&erc20_e2e_out, &erc20_e2e_res.blob).expect("write erc20_db_e2e.bin");
+    println!(
+        "dbgen: wrote {} ({} bytes, {} entries, e2e root = {})",
+        erc20_e2e_out.display(),
+        erc20_e2e_res.blob.len(),
+        erc20_e2e_res.entry_count,
+        hex::encode(erc20_e2e_res.root),
     );
 
     // ----- VK DB -----
@@ -198,6 +234,23 @@ fn main() {
         names_out.display(),
         names_res.blob.len(),
         hex::encode(names_res.root),
+    );
+
+    // ----- Names DB (e2e fixture) -----
+    //
+    // Small parallel set used ONLY under `--features e2e-test` (QEMU stub).
+    // The matching NAMES_DB_ROOT under `cfg(feature = "e2e-test")` is selected
+    // by the same gate, keeping the full host-side names blob out of the
+    // 256 KB NS flash. Same shape as the ERC20 / selectors / ERC-7730 splits.
+    let names_e2e_res = names::build_db(&names_e2e_json).expect("names e2e db build failed");
+    names::round_trip_check(&names_e2e_res.blob, &names_e2e_json, &names_e2e_res.root)
+        .expect("names e2e round-trip failed");
+    fs::write(&names_e2e_out, &names_e2e_res.blob).expect("write names_db_e2e.bin");
+    println!(
+        "dbgen: wrote {} ({} bytes, e2e root = {})",
+        names_e2e_out.display(),
+        names_e2e_res.blob.len(),
+        hex::encode(names_e2e_res.root),
     );
 
     // ----- Selectors DB (host-side blob) -----
@@ -325,8 +378,10 @@ fn main() {
     // descriptor root (for the Phase-3 trailer parser).
     let roots_rs = render_db_roots(
         &erc20_res.root,
+        &erc20_e2e_res.root,
         &vk_res.root,
         &names_res.root,
+        &names_e2e_res.root,
         &selectors_res.root,
         &selectors_e2e_res.root,
         &erc7730_res.root,
@@ -385,8 +440,10 @@ const DB_ROOTS_HEADER: &str = "\
 
 fn render_db_roots(
     erc20_root: &[u8; 32],
+    erc20_e2e_root: &[u8; 32],
     vk_root: &[u8; 32],
     names_root: &[u8; 32],
+    names_e2e_root: &[u8; 32],
     selectors_root: &[u8; 32],
     selectors_e2e_root: &[u8; 32],
     erc7730_root: &[u8; 32],
@@ -396,9 +453,21 @@ fn render_db_roots(
 
     let mut s = String::with_capacity(DB_ROOTS_HEADER.len() + 8 * 256);
     s.push_str(DB_ROOTS_HEADER);
+    // ERC20_DB_ROOT is e2e-split like SELECTOR_DB_ROOT: production firmware
+    // anchors the full multi-MB host-side DB; `e2e-test` builds anchor the
+    // tiny erc20-e2e fixture the QEMU NS stub bakes into 256 KB flash.
+    writeln!(s, "#[cfg(not(feature = \"e2e-test\"))]").unwrap();
     emit_root(&mut s, "ERC20_DB_ROOT", erc20_root);
+    writeln!(s, "#[cfg(feature = \"e2e-test\")]").unwrap();
+    emit_root(&mut s, "ERC20_DB_ROOT", erc20_e2e_root);
     emit_root(&mut s, "VK_DB_ROOT", vk_root);
+    // NAMES_DB_ROOT is e2e-split like SELECTOR_DB_ROOT / ERC20_DB_ROOT:
+    // production anchors the full host-side names DB; `e2e-test` anchors the
+    // tiny names-e2e fixture the QEMU NS stub bakes into 256 KB flash.
+    writeln!(s, "#[cfg(not(feature = \"e2e-test\"))]").unwrap();
     emit_root(&mut s, "NAMES_DB_ROOT", names_root);
+    writeln!(s, "#[cfg(feature = \"e2e-test\")]").unwrap();
+    emit_root(&mut s, "NAMES_DB_ROOT", names_e2e_root);
     writeln!(s, "#[cfg(not(feature = \"e2e-test\"))]").unwrap();
     emit_root(&mut s, "SELECTOR_DB_ROOT", selectors_root);
     writeln!(s, "#[cfg(feature = \"e2e-test\")]").unwrap();
