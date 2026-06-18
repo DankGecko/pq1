@@ -17,7 +17,7 @@ A Safe multisig transaction is normally signed in one of two ways:
    Later anyone can call `execTransaction` with the pre-approvals
    counted toward the threshold.
 
-PQSigner is a post-quantum smart account. It signs SLH-DSA (SPHINCS+C10),
+PQSigner is a post-quantum smart account. It signs SPHINCS+C10,
 not ECDSA, so path (1) is not consumable by Safe contracts today.
 Path (2) works perfectly: the wallet just sends a normal UserOp whose
 inner calldata is `approveHash(safeTxHash)`. The on-chain Safe doesn't
@@ -61,96 +61,30 @@ So Safe gets clear-signing at a fraction of the implementation +
 runtime cost — and reuses every existing display primitive the
 firmware already has for plain UserOps.
 
-## Wire format
+## Wire format & verifier — companion reference
 
-The trailer is appended to the standard `CMD_SIGN_USEROP` payload after
-the v3 CoW trailer and before the names section. Its length-prefix
-follows the same `[u16 BE len][payload]` framing every other trailer
-uses.
+The companion-facing spec for the `safe_v1` trailer is owned by
+**[companion-safe-tx-integration.md](companion-safe-tx-integration.md)** — read
+it for the wire detail and don't duplicate it here. In brief, that doc defines:
 
-### Payload layout (variable, ≤ ~4.4 KB)
+- the **281-byte canonical SafeTx** layout (`chain_id / safe_address / to /
+  value / data_hash / operation / gas fields / nonce`), framed as
+  `[u16 total_len][281 B canonical][u16 raw_data_len][raw_data ≤ MAX_TX_LEN]`,
+  with `SAFE_OFF_*` field offsets in `shared/src/lib.rs`;
+- the **outer UserOp shape** — `to = safe_address`, `value = 0`,
+  `inner_data = APPROVE_HASH_SELECTOR (0xd4d9bdcd) || safeTxHash` (36 B), trailer
+  attached; the signing path is otherwise a regular Type-2 SPHINCS+C10 UserOp;
+- the **8-step `verify_and_bind_trailer` pipeline**
+  (`secure/src/tx/eip712/safe/verify.rs`): framing → selector → calldata-len →
+  chain-pin → safe-addr-pin → operation-gate → `keccak256(raw_data) == data_hash`
+  → native `safeTxHash` re-derive + byte-compare;
+- the **downgrade gate**: an `approveHash`-shaped `inner_data` with no verified
+  trailer aborts with `"Safe sign / safe_v1 required"` (mirrors the CoW gate) so
+  a hostile NS can't strip the trailer to coerce blind-signing.
 
-```
-[u16 BE total_len]
-  [281 B canonical SafeTx]
-  [u16 BE raw_data_len]
-  [raw_data ≤ MAX_TX_LEN = 4096]
-```
-
-### Canonical SafeTx (281 bytes, big-endian)
-
-```
-[  0..  8) chain_id           u64 BE
-[  8.. 28) safe_address       20 B
-[ 28.. 48) to                 20 B
-[ 48.. 80) value              uint256 BE
-[ 80..112) data_hash          keccak256(raw_data) — verified by firmware
-[112]      operation          0=Call, 1=DelegateCall (refused in v1)
-[113..145) safe_tx_gas        uint256 BE
-[145..177) base_gas           uint256 BE
-[177..209) gas_price          uint256 BE
-[209..229) gas_token          20 B
-[229..249) refund_receiver    20 B
-[249..281) nonce              uint256 BE
-```
-
-Field offsets are exposed as `SAFE_OFF_*` constants in
-`shared/src/lib.rs` so the companion side can write directly into the
-matching offsets without recomputing them.
-
-### Outer UserOp shape
-
-For a Safe approval, the companion fills the regular `CMD_SIGN_USEROP`
-header so that:
-
-- `to_address = safe_address` (the wallet's UserOp targets the Safe).
-- `value = 0`.
-- `inner_data = APPROVE_HASH_SELECTOR (0xd4d9bdcd) || safeTxHash` — exactly
-  36 bytes.
-- The trailer described above is attached.
-
-That's it. The signing path is otherwise identical to a regular Type-2
-SLH-DSA UserOp.
-
-## What the firmware does
-
-`secure/src/nsc/cmd_sign_userop.rs`, after parsing trailers, dispatches
-to `crate::tx::eip712::safe::verify_and_bind_trailer` which runs the
-following 8-step pipeline. First failure wins; the trailer is then
-treated as absent and the downgrade gate (below) rejects the UserOp.
-
-1. **Trailer length / framing** — at least `281 + 2` bytes; declared
-   `raw_data_len` fits inside the supplied bundle and is `≤ MAX_TX_LEN`.
-2. **Selector** — `inner_data[..4] == 0xd4d9bdcd` (`approveHash(bytes32)`).
-3. **Calldata length** — `inner_data.len() == 36`.
-4. **Chain pinning** — `canonical.chain_id == userop.chain_id`. Prevents
-   replaying a Mainnet canonical against a UserOp on a different chain.
-5. **Safe-address pinning** — `canonical.safe_address == userop.to`. The
-   UserOp must call `approveHash` on the same Safe whose hash we're
-   approving.
-6. **Operation gate** — only `0` (Call) accepted in v1. DelegateCall
-   (`1`) is refused outright (see "DelegateCall" below).
-7. **Data-hash bind** — `keccak256(raw_data) == canonical.data_hash`.
-   The raw inner-call bytes the firmware will render must hash to what
-   Safe will check.
-8. **safeTxHash bind** — natively recompute the EIP-712 digest from the
-   canonical (Safe v1.3.0+ domain separator, struct hash) and byte-
-   compare against `inner_data[4..36]`. If those don't match, the
-   canonical we'd display and the hash that gets approved would describe
-   different transactions.
-
-After all 8 steps pass, the firmware has cryptographically-bound
-`(to, value, raw_data, operation, nonce, …)` and hands the
-`VerifiedSafeV1` to the renderer.
-
-### Downgrade-mitigation gate
-
-Symmetric to the CoW gate: if `inner_data.len() == 36 && inner_data[..4]
-== APPROVE_HASH_SELECTOR && safe_v1_verified.is_none()`, the firmware
-aborts the sign with status `InvalidPointer` and the OLED shows
-`"Safe sign / safe_v1 required"`. Without this gate, a hostile NS could
-strip the trailer and coerce the user into blind-signing the bytes32
-hash with no visibility into the SafeTx it commits to.
+The rest of *this* doc is the **firmware-side** view that doc doesn't cover: why
+the approveHash design works, exactly what renders on the OLED, the gas-refund
+drain surface, and the device test surface.
 
 ## What the user sees on the OLED
 
@@ -322,7 +256,7 @@ Companion (~/Documents/pq1-companion)             Device secure world
                                                   11. pick_sign_pages → render_safe_v1_pages
                                                   12. OLED renders header + inner pages
                                                   13. confirm() blocks for user button
-                                                  14. SLH-DSA-C10 sign UserOp
+                                                  14. SPHINCS+C10 sign UserOp
                                        ◄──────    15. Return Type-2 wrapper (4128 B)
 16. Submit UserOp via EntryPoint v0.6              
 17. EntryPoint runs PQSmartWallet.validateUserOp   
@@ -502,7 +436,7 @@ pre-existing on master and unrelated to this work.)
    no secret material; the `raw_data` field is plaintext intended for
    on-chain execution. NS sees nothing it didn't already have.
 2. **One signature primitive, post-quantum only.** The signature path
-   is unchanged — the wallet still emits SLH-DSA C10 over the UserOp's
+   is unchanged — the wallet still emits SPHINCS+C10 over the UserOp's
    SHA-256 sphincs digest. The Safe contract checks `approvedHashes`,
    not a signature. No ECDSA, no classical fallback.
 3. **No flash state added.** The trailer is a pure SRAM transient.

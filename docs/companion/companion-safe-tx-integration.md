@@ -8,6 +8,11 @@ writing any companion code — every rule listed in
 is enforced on-device and fails closed; getting one wrong does not
 silently downgrade, it bricks the sign attempt with a status line.
 
+> **This is the canonical `safe_v1` wire/verifier reference.** For the
+> *firmware-side* view of the same flow — what renders on the OLED page by
+> page, the gas-refund drain threat analysis, and the device test surface —
+> see [`safe-multisig-clear-sign.md`](safe-multisig-clear-sign.md).
+
 It assumes you already understand the broader companion-app surface
 ([`companion-app-integration.md`](companion-app-integration.md) and
 [`companion-batch-sign-integration.md`](companion-batch-sign-integration.md)).
