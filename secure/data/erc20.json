@@ -1229,7 +1229,6 @@
   {"chain_id": 1, "address": "0x2711018A5489Df0d9816bDB7670D58Ba23FB2D5e", "name": "Dinari SPTE", "symbol": "SPTE.D", "decimals": 18},
   {"chain_id": 1, "address": "0x271C616157e69A43B4977412A64183Cf110Edf16", "name": "Pareto Staked USP", "symbol": "SUSP", "decimals": 18},
   {"chain_id": 1, "address": "0x272F97b7a56a387aE942350bBC7Df5700f8a4576", "name": "Aave BAL", "symbol": "ABAL", "decimals": 18},
-  {"chain_id": 1, "address": "0x2730d6FdC86C95a74253BefFaA8306B40feDecbb", "name": "UNICORN", "symbol": "UNI", "decimals": 8},
   {"chain_id": 1, "address": "0x275f5Ad03be0Fa221B4C6649B8AeE09a42D9412A", "name": "Monavale", "symbol": "MONA", "decimals": 18},
   {"chain_id": 1, "address": "0x2767C27Eeaf3566082E74b963B6A0f5c9a46C8a1", "name": "Static Aave Ethereum ENS", "symbol": "stataEthENS", "decimals": 18},
   {"chain_id": 1, "address": "0x27702a26126e0B3702af63Ee09aC4d1A084EF628", "name": "Aleph Cloud", "symbol": "ALEPH", "decimals": 18},
