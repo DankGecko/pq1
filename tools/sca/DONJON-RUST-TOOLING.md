@@ -98,8 +98,8 @@ Program status is : insecure   (517/518 control-flow + 5359/5361 memory-access c
   checkct proof of the shuffle will always be INSECURE. A green run would require an
   oblivious/sort-based shuffle, which we explicitly chose not to build.
 
-### Machine-checked CT proofs — SECURE (the green-run drivers, DONE 2026-06-16)
-Three drivers mark a real secret and prove (for **all** secret values) that the function
+### Machine-checked CT proofs — SECURE (the green-run drivers, DONE 2026-06-16; +saes 2026-06-18)
+Four drivers mark a real secret and prove (for **all** secret values) that the function
 leaks nothing via control flow or memory address on thumbv8m. All **SECURE**:
 
 | Driver | Function (secret marked) | Verdict | Checks pass |
@@ -107,12 +107,18 @@ leaks nothing via control flow or memory address on thumbv8m. All **SECURE**:
 | `driver_kdf`  | `pqsigner_domain::kdf` (secret keying material) | **SECURE** | 117/117 CF · 750/750 mem |
 | `driver_fors` | `sphincs_c10::sim_internals::fors_secret` (secret `sk_seed`) | **SECURE** | 52/52 · 575/575 |
 | `driver_th`   | `sphincs_c10::sim_internals::th` (secret hash input) | **SECURE** | 141/141 · 1290/1290 |
+| `driver_saes` | `secure/src/cmac.rs::cmac_generic` framing — secret = the SAES/DHUK AES *output* (L, CBC states); coproc modelled data-oblivious | **SECURE** | 105/105 CF · 50/50 mem |
 
-So the SHA-256 KDF, the FORS secret-key PRF, and the core tweakable hash are machine-proven
-constant-time over their secret inputs — exactly the secret-touching primitives. (Run all
-four drivers with `cargo-checkct run --dir tools/sca`; the suite exits non-zero only because
-`driver` = the by-design-INSECURE shuffle. `sim_internals` needs the `sim-internals` feature,
-already set in the driver Cargo.tomls.)
+So the SHA-256 KDF, the FORS secret-key PRF, the core tweakable hash, **and the Tier-1
+SAES-CMAC(DHUK) KDF framing** are machine-proven constant-time over their secret inputs —
+exactly the secret-touching primitives. Notably `driver_saes` proves `double_l`'s GF(2^128)
+reduction (`if (input[0] & 0x80) { out[15] ^= 0x87 }` — a branch on the secret MSB of
+`L = AES(DHUK, 0)`) compiles **branchless** on thumbv8m, so the CMAC framing leaks nothing
+about the secret AES outputs. `driver_saes` `#[path]`-includes the production `cmac.rs`
+verbatim (no copy drift; the `#[cfg(test)]` vector module is gated out of the release build).
+(Run all five drivers with `cargo-checkct run --dir tools/sca`; the suite exits non-zero only
+because `driver` = the by-design-INSECURE shuffle. `sim_internals` needs the `sim-internals`
+feature, already set in the driver Cargo.tomls.)
 
 **Not attempted (binsec scope):** `verify` / `keygen` symbolically execute the full
 hypertree (≫ millions of instructions) and would time out — binsec's sweet spot is a single

@@ -1,5 +1,5 @@
 [workspace]
-members = ["driver", "driver_kdf", "driver_fors", "driver_th"]
+members = ["driver", "driver_kdf", "driver_fors", "driver_th", "driver_saes"]
 resolver = "2"
 
 [profile.release]
