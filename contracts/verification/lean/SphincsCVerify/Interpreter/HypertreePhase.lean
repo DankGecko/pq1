@@ -935,6 +935,59 @@ Drives `ht_layer_step` over the `D = 2` `forRange "layer"` loop = one
 base + `wordOf_treeNode`), `H_sib`/`hsig`/`hcount` from the per-layer sig bindings the
 grand composition feeds from `deserialise`. -/
 
+/-- One `execFor` iteration whose body falls through: continue from the body's result. -/
+theorem execFor_cont {n : Nat} (sha : List UInt8 → Spec.ByteVec 32) (sig : Spec.ByteVec n)
+    (v : String) (body : List Stmt) (rem cur : Nat) (vm : VM)
+    (h : (execList sha sig body { vm with env := setVar vm.env v cur }).2 = none) :
+    execFor sha sig v body (rem + 1) cur vm
+      = execFor sha sig v body rem (cur + 1) (execList sha sig body { vm with env := setVar vm.env v cur }).1 := by
+  rw [execFor]
+  rcases hp : execList sha sig body { vm with env := setVar vm.env v cur } with ⟨v', o⟩
+  rw [hp] at h; simp only at h; subst h; simp only [hp]
+
+/-- One `execFor` iteration whose body halts: the loop returns the body's result. -/
+theorem execFor_halt {n : Nat} (sha : List UInt8 → Spec.ByteVec 32) (sig : Spec.ByteVec n)
+    (v : String) (body : List Stmt) (rem cur : Nat) (vm : VM) (hh : Halt)
+    (h : (execList sha sig body { vm with env := setVar vm.env v cur }).2 = some hh) :
+    execFor sha sig v body (rem + 1) cur vm = execList sha sig body { vm with env := setVar vm.env v cur } := by
+  rw [execFor]
+  rcases hp : execList sha sig body { vm with env := setVar vm.env v cur } with ⟨v', o⟩
+  rw [hp] at h; simp only at h; subst h; simp only [hp]
+
+/-- `verifyHypertree` unrolled to its two `vhStep` applications (D = 2). -/
+theorem verifyHypertree_unroll (seed : ByteVec 32) (forsPk : ByteVec 16) (htIdx : Nat)
+    (layers : Array Spec.Hypertree.LayerSig) :
+    Spec.Hypertree.verifyHypertree seed forsPk htIdx layers
+      = (if (vhStep seed layers (vhStep seed layers ⟨false, forsPk, htIdx⟩ 0) 1).fst then none
+         else some (vhStep seed layers (vhStep seed layers ⟨false, forsPk, htIdx⟩ 0) 1).snd.fst) := by
+  rw [verifyHypertree_eq_foldl, show (List.range' 0 Spec.D) = ([0, 1] : List Nat) from rfl,
+      List.foldl_cons, List.foldl_cons, List.foldl_nil]
+
+/-- `vhStep` when `bad` already set: identity. -/
+theorem vhStep_bad (seed : ByteVec 32) (layers : Array Spec.Hypertree.LayerSig)
+    (acc : MProd Bool (MProd (ByteVec 16) Nat)) (layer : Nat) (hbad : acc.fst = true) :
+    vhStep seed layers acc layer = acc := by unfold vhStep; rw [if_pos hbad]
+
+/-- `vhStep` when not bad and the WOTS+C check fails (`pkFromSig = none`): sets `bad`. -/
+theorem vhStep_none (seed : ByteVec 32) (layers : Array Spec.Hypertree.LayerSig)
+    (acc : MProd Bool (MProd (ByteVec 16) Nat)) (layer : Nat) (hbad : acc.fst = false)
+    (hpk : Spec.Wots.pkFromSig seed (UInt32.ofNat layer) (UInt64.ofNat (acc.snd.snd >>> Spec.SubtreeH))
+        (UInt32.ofNat (acc.snd.snd &&& (1 <<< Spec.SubtreeH - 1))) acc.snd.fst
+        (layers.getD layer Spec.Hypertree.defaultLayerSig).wots = none) :
+    vhStep seed layers acc layer = ⟨true, acc.snd.fst, acc.snd.snd >>> Spec.SubtreeH⟩ := by
+  unfold vhStep; rw [if_neg (by rw [hbad]; decide)]; simp only [hpk]
+
+/-- `vhStep` when not bad and `pkFromSig = some wpk`: climbs the layer's auth path. -/
+theorem vhStep_some (seed : ByteVec 32) (layers : Array Spec.Hypertree.LayerSig)
+    (acc : MProd Bool (MProd (ByteVec 16) Nat)) (layer : Nat) (hbad : acc.fst = false) (wpk : ByteVec 16)
+    (hpk : Spec.Wots.pkFromSig seed (UInt32.ofNat layer) (UInt64.ofNat (acc.snd.snd >>> Spec.SubtreeH))
+        (UInt32.ofNat (acc.snd.snd &&& (1 <<< Spec.SubtreeH - 1))) acc.snd.fst
+        (layers.getD layer Spec.Hypertree.defaultLayerSig).wots = some wpk) :
+    vhStep seed layers acc layer = ⟨false, Spec.Hypertree.verifyAuthPath seed (UInt32.ofNat layer)
+        (UInt64.ofNat (acc.snd.snd >>> Spec.SubtreeH)) wpk (acc.snd.snd &&& (1 <<< Spec.SubtreeH - 1))
+        (layers.getD layer Spec.Hypertree.defaultLayerSig).authPath, acc.snd.snd >>> Spec.SubtreeH⟩ := by
+  unfold vhStep; rw [if_neg (by rw [hbad]; decide)]; simp only [hpk]
+
 /-- **`H_adrs` discharge** — the masked treeNode-base ADRS word equals
     `wordOf (treeNode layer idxTree (h+1) (p/2))`.  The base `layer<<<224 |
     idxTree<<<160 | 2<<<128` has bits only `≥ 128`, so `&&& MASK` (clear low 64) is the
@@ -978,5 +1031,197 @@ theorem treeNode_Hadrs (layer : UInt32) (idxTree : Nat) (hidx : idxTree < 2 ^ 64
       UInt32.toNat_ofNat_of_lt' (show p / 2 < UInt32.size from
         Nat.lt_of_le_of_lt (Nat.div_le_self _ _) (Nat.lt_of_lt_of_le hp (by decide))),
       (by decide : (UInt32.ofNat Spec.ADRS_TREE).toNat = 2), ← Nat.or_assoc]
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 4000 in
+/-- **The hypertree layer loop refines `verifyHypertree`.** Running the `D = 2`
+    `forRange "layer"` loop from the post-FORS entry VM (`currentNode = forsPk`,
+    `idxTree = htIdx`, `sigOff = 2336`, seed/consts/seed-mem) reverts exactly when
+    `verifyHypertree = none`, else binds `currentNode` to the hypertree root.  Unrolls
+    both sides (D = 2) and applies `ht_layer_step` per layer, mapping the digit-sum
+    gate to `pkFromSig` (`pkFromSig_eq`/`pkFromSig_none`) ↔ `vhStep`'s branches.  The
+    per-layer sig bindings (`Hbind`) are discharged from `deserialise` by the caller. -/
+theorem verifyHypertree_refine
+    (sig : ByteVec Spec.SignatureLen) (vm : VM)
+    (seed : ByteVec 32) (forsPk : ByteVec 16) (htIdx : Nat)
+    (layers : Array Spec.Hypertree.LayerSig)
+    (hidxbnd : htIdx < 2 ^ 64)
+    (hidxTree : vm.env "idxTree" = htIdx)
+    (hsigoff : vm.env "sigOff" = 2336)
+    (hcn : vm.env "currentNode" = wordOf (ByteVec.pad16 forsPk))
+    (hseedw : vm.env "seed" = wordOf seed)
+    (hsigbase : vm.env "sigBase" = 0)
+    (hN : vm.env "N_MASK" = NMASK)
+    (hOUT : vm.env "OUT" = 0x600)
+    (hseedmem : ∀ i, i < 32 → vm.mem (0 + i) = seed.data.getD i 0)
+    (Hbind : ∀ k, k < 2 →
+      (∀ i (h : i < ((layers.getD k Spec.Hypertree.defaultLayerSig).wots).chains.size),
+          ((layers.getD k Spec.Hypertree.defaultLayerSig).wots).chains[i]
+            = ByteVec.loadValue16 sig (2336 + 836 * k + 16 * i))
+      ∧ (calldataload sig (2336 + 836 * k + 688) >>> 224
+          = wordOf (ByteVec.u32ToB32 ((layers.getD k Spec.Hypertree.defaultLayerSig).wots).count))
+      ∧ (∀ hh, hh < Spec.SubtreeH →
+          calldataload sig (((2336 + 836 * k + 692) + hh <<< 4 % W) % W) &&& NMASK
+            = wordOf (ByteVec.pad16 (((layers.getD k Spec.Hypertree.defaultLayerSig).authPath).getD hh
+                (ByteVec.zero 16))))
+      ∧ ((layers.getD k Spec.Hypertree.defaultLayerSig).authPath.size = Spec.SubtreeH)) :
+    (Spec.Hypertree.verifyHypertree seed forsPk htIdx layers = none
+        → (execFor c10Oracle sig "layer" htLayerBody 2 0 vm).2 = some Halt.reverted)
+    ∧ (∀ finalNode, Spec.Hypertree.verifyHypertree seed forsPk htIdx layers = some finalNode →
+        (execFor c10Oracle sig "layer" htLayerBody 2 0 vm).2 = none
+        ∧ (execFor c10Oracle sig "layer" htLayerBody 2 0 vm).1.env "currentNode"
+            = wordOf (ByteVec.pad16 finalNode)
+        ∧ (execFor c10Oracle sig "layer" htLayerBody 2 0 vm).1.env "seed" = wordOf seed
+        ∧ (execFor c10Oracle sig "layer" htLayerBody 2 0 vm).1.env "sigBase" = 0
+        ∧ (execFor c10Oracle sig "layer" htLayerBody 2 0 vm).1.env "N_MASK" = NMASK
+        ∧ (execFor c10Oracle sig "layer" htLayerBody 2 0 vm).1.env "OUT" = 0x600
+        ∧ (∀ i, i < 32 → (execFor c10Oracle sig "layer" htLayerBody 2 0 vm).1.mem (0 + i)
+            = seed.data.getD i 0)) := by
+  obtain ⟨h0sig, h0count, h0sib, h0size⟩ := Hbind 0 (by decide)
+  obtain ⟨h1sig, h1count, h1sib, h1size⟩ := Hbind 1 (by decide)
+  -- ===== LAYER 0 entry VM vm0 = {vm with layer := 0}; apply ht_layer_step.
+  obtain ⟨vm0, hvm0⟩ : ∃ vm0, ({ vm with env := setVar vm.env "layer" 0 } : VM) = vm0 := ⟨_, rfl⟩
+  have hvm0env : vm0.env = setVar vm.env "layer" 0 := by rw [← hvm0]
+  have hvm0mem : vm0.mem = vm.mem := by rw [← hvm0]
+  have e0layer : vm0.env "layer" = (UInt32.ofNat 0).toNat := by rw [hvm0env]; rfl
+  have e0idx : vm0.env "idxTree" = htIdx := by rw [hvm0env, setVar_get_ne _ _ _ _ (by decide)]; exact hidxTree
+  have e0so : vm0.env "sigOff" = 2336 := by rw [hvm0env, setVar_get_ne _ _ _ _ (by decide)]; exact hsigoff
+  have e0cn : vm0.env "currentNode" = wordOf (ByteVec.pad16 forsPk) := by
+    rw [hvm0env, setVar_get_ne _ _ _ _ (by decide)]; exact hcn
+  have e0seed : vm0.env "seed" = wordOf seed := by rw [hvm0env, setVar_get_ne _ _ _ _ (by decide)]; exact hseedw
+  have e0sb : vm0.env "sigBase" = 0 := by rw [hvm0env, setVar_get_ne _ _ _ _ (by decide)]; exact hsigbase
+  have e0N : vm0.env "N_MASK" = NMASK := by rw [hvm0env, setVar_get_ne _ _ _ _ (by decide)]; exact hN
+  have e0OUT : vm0.env "OUT" = 0x600 := by rw [hvm0env, setVar_get_ne _ _ _ _ (by decide)]; exact hOUT
+  have e0mem : ∀ i, i < 32 → vm0.mem (0 + i) = seed.data.getD i 0 := by
+    intro i hi; rw [hvm0mem]; exact hseedmem i hi
+  have hstep0 := ht_layer_step sig vm0 seed (UInt32.ofNat 0) htIdx forsPk 2336
+    ((layers.getD 0 Spec.Hypertree.defaultLayerSig).wots)
+    ((layers.getD 0 Spec.Hypertree.defaultLayerSig).authPath)
+    (by decide) hidxbnd h0size e0layer e0idx e0so e0cn e0seed e0sb e0N e0OUT e0mem h0sig h0count
+    (treeNode_Hadrs (UInt32.ofNat 0) (htIdx >>> 9) (by
+      rw [Nat.shiftRight_eq_div_pow]; exact Nat.lt_of_le_of_lt (Nat.div_le_self _ _) hidxbnd))
+    h0sib
+  obtain ⟨va0, o0, hpair0⟩ : ∃ va0 o0, execList c10Oracle sig htLayerBody vm0 = (va0, o0) := ⟨_, _, rfl⟩
+  by_cases hg0 : SphincsCVerify.Util.digitSum (SphincsCVerify.Util.extractDigits
+        (Spec.wotsDigest seed (Spec.Adrs.wots (UInt32.ofNat 0) (UInt64.ofNat (htIdx >>> 9))
+          (UInt32.ofNat (htIdx &&& 0x1FF))) (ByteVec.pad16 forsPk)
+          ((layers.getD 0 Spec.Hypertree.defaultLayerSig).wots).count)) ≠ Spec.TargetSum
+  · -- LAYER-0 REVERT.
+    rw [if_pos hg0] at hstep0
+    rw [hpair0] at hstep0; simp only at hstep0; subst hstep0
+    have hpk0none : Spec.Wots.pkFromSig seed (UInt32.ofNat 0) (UInt64.ofNat (htIdx >>> Spec.SubtreeH))
+        (UInt32.ofNat (htIdx &&& (1 <<< Spec.SubtreeH - 1))) forsPk
+        (layers.getD 0 Spec.Hypertree.defaultLayerSig).wots = none :=
+      pkFromSig_none seed (UInt32.ofNat 0) (UInt64.ofNat (htIdx >>> 9))
+        (UInt32.ofNat (htIdx &&& 0x1FF)) forsPk _ hg0
+    have hVH : Spec.Hypertree.verifyHypertree seed forsPk htIdx layers = none := by
+      rw [verifyHypertree_unroll,
+          vhStep_none seed layers ⟨false, forsPk, htIdx⟩ 0 rfl hpk0none,
+          vhStep_bad seed layers ⟨true, forsPk, htIdx >>> Spec.SubtreeH⟩ 1 rfl]
+      rfl
+    have hloop : execFor c10Oracle sig "layer" htLayerBody 2 0 vm = (va0, some Halt.reverted) := by
+      rw [execFor, hvm0, hpair0]
+    exact ⟨fun _ => by rw [hloop], fun fn hs => by rw [hVH] at hs; exact Option.noConfusion hs⟩
+  · -- LAYER-0 PASS.
+    rw [if_neg hg0] at hstep0
+    obtain ⟨h0none, wpk0, hpk0, hcn1, hidx1, hso1, hseed1, hsb1, hN1, hOUT1, hmem1⟩ := hstep0
+    rw [hpair0] at h0none hcn1 hidx1 hso1 hseed1 hsb1 hN1 hOUT1 hmem1
+    simp only at h0none hcn1 hidx1 hso1 hseed1 hsb1 hN1 hOUT1 hmem1
+    subst h0none
+    have hpk0some : Spec.Wots.pkFromSig seed (UInt32.ofNat 0) (UInt64.ofNat (htIdx >>> Spec.SubtreeH))
+        (UInt32.ofNat (htIdx &&& (1 <<< Spec.SubtreeH - 1))) forsPk
+        (layers.getD 0 Spec.Hypertree.defaultLayerSig).wots = some wpk0 := hpk0
+    -- ===== LAYER 1 entry VM vm1 = {va0 with layer := 1}; apply ht_layer_step.
+    obtain ⟨vm1, hvm1⟩ : ∃ vm1, ({ va0 with env := setVar va0.env "layer" 1 } : VM) = vm1 := ⟨_, rfl⟩
+    have hvm1env : vm1.env = setVar va0.env "layer" 1 := by rw [← hvm1]
+    have hvm1mem : vm1.mem = va0.mem := by rw [← hvm1]
+    have e1layer : vm1.env "layer" = (UInt32.ofNat 1).toNat := by rw [hvm1env]; rfl
+    have e1idx : vm1.env "idxTree" = htIdx >>> 9 := by
+      rw [hvm1env, setVar_get_ne _ _ _ _ (by decide)]; exact hidx1
+    have e1so : vm1.env "sigOff" = 2336 + 836 := by
+      rw [hvm1env, setVar_get_ne _ _ _ _ (by decide)]; exact hso1
+    have e1cn : vm1.env "currentNode"
+        = wordOf (ByteVec.pad16 (Spec.Hypertree.verifyAuthPath seed (UInt32.ofNat 0)
+            (UInt64.ofNat (htIdx >>> 9)) wpk0 (htIdx &&& 0x1FF)
+            (layers.getD 0 Spec.Hypertree.defaultLayerSig).authPath)) := by
+      rw [hvm1env, setVar_get_ne _ _ _ _ (by decide)]; exact hcn1
+    have e1seed : vm1.env "seed" = wordOf seed := by
+      rw [hvm1env, setVar_get_ne _ _ _ _ (by decide)]; exact hseed1
+    have e1sb : vm1.env "sigBase" = 0 := by rw [hvm1env, setVar_get_ne _ _ _ _ (by decide)]; exact hsb1
+    have e1N : vm1.env "N_MASK" = NMASK := by rw [hvm1env, setVar_get_ne _ _ _ _ (by decide)]; exact hN1
+    have e1OUT : vm1.env "OUT" = 0x600 := by rw [hvm1env, setVar_get_ne _ _ _ _ (by decide)]; exact hOUT1
+    have e1mem : ∀ i, i < 32 → vm1.mem (0 + i) = seed.data.getD i 0 := by
+      intro i hi; rw [hvm1mem]; exact hmem1 i hi
+    have hidx1bnd : htIdx >>> 9 < 2 ^ 64 := by
+      rw [Nat.shiftRight_eq_div_pow]; exact Nat.lt_of_le_of_lt (Nat.div_le_self _ _) hidxbnd
+    have hstep1 := ht_layer_step sig vm1 seed (UInt32.ofNat 1) (htIdx >>> 9)
+      (Spec.Hypertree.verifyAuthPath seed (UInt32.ofNat 0) (UInt64.ofNat (htIdx >>> 9)) wpk0
+        (htIdx &&& 0x1FF) (layers.getD 0 Spec.Hypertree.defaultLayerSig).authPath)
+      (2336 + 836)
+      ((layers.getD 1 Spec.Hypertree.defaultLayerSig).wots)
+      ((layers.getD 1 Spec.Hypertree.defaultLayerSig).authPath)
+      (by decide) hidx1bnd h1size e1layer e1idx e1so e1cn e1seed e1sb e1N e1OUT e1mem h1sig h1count
+      (treeNode_Hadrs (UInt32.ofNat 1) ((htIdx >>> 9) >>> 9) (by
+        rw [Nat.shiftRight_eq_div_pow]; exact Nat.lt_of_le_of_lt (Nat.div_le_self _ _) hidx1bnd))
+      h1sib
+    obtain ⟨va1, o1, hpair1⟩ : ∃ va1 o1, execList c10Oracle sig htLayerBody vm1 = (va1, o1) := ⟨_, _, rfl⟩
+    -- the explicit layer-0 vhStep result (so layer-1 rewrites are SYNTACTIC, not metavar+defeq).
+    by_cases hg1 : SphincsCVerify.Util.digitSum (SphincsCVerify.Util.extractDigits
+          (Spec.wotsDigest seed (Spec.Adrs.wots (UInt32.ofNat 1) (UInt64.ofNat ((htIdx >>> 9) >>> 9))
+            (UInt32.ofNat ((htIdx >>> 9) &&& 0x1FF)))
+            (ByteVec.pad16 (Spec.Hypertree.verifyAuthPath seed (UInt32.ofNat 0)
+              (UInt64.ofNat (htIdx >>> 9)) wpk0 (htIdx &&& 0x1FF)
+              (layers.getD 0 Spec.Hypertree.defaultLayerSig).authPath))
+            ((layers.getD 1 Spec.Hypertree.defaultLayerSig).wots).count)) ≠ Spec.TargetSum
+    · -- LAYER-1 REVERT.
+      rw [if_pos hg1] at hstep1
+      rw [hpair1] at hstep1; simp only at hstep1; subst hstep1
+      have hpk1none : Spec.Wots.pkFromSig seed (UInt32.ofNat 1)
+          (UInt64.ofNat ((htIdx >>> Spec.SubtreeH) >>> Spec.SubtreeH))
+          (UInt32.ofNat ((htIdx >>> Spec.SubtreeH) &&& (1 <<< Spec.SubtreeH - 1)))
+          (Spec.Hypertree.verifyAuthPath seed (UInt32.ofNat 0) (UInt64.ofNat (htIdx >>> Spec.SubtreeH)) wpk0
+            (htIdx &&& (1 <<< Spec.SubtreeH - 1)) (layers.getD 0 Spec.Hypertree.defaultLayerSig).authPath)
+          (layers.getD 1 Spec.Hypertree.defaultLayerSig).wots = none :=
+        pkFromSig_none _ _ _ _ _ _ hg1
+      have hVH : Spec.Hypertree.verifyHypertree seed forsPk htIdx layers = none := by
+        rw [verifyHypertree_unroll, vhStep_some seed layers ⟨false, forsPk, htIdx⟩ 0 rfl wpk0 hpk0some,
+            vhStep_none seed layers
+              ⟨false, Spec.Hypertree.verifyAuthPath seed (UInt32.ofNat 0) (UInt64.ofNat (htIdx >>> Spec.SubtreeH))
+                wpk0 (htIdx &&& (1 <<< Spec.SubtreeH - 1)) (layers.getD 0 Spec.Hypertree.defaultLayerSig).authPath,
+                htIdx >>> Spec.SubtreeH⟩ 1 rfl hpk1none]
+        rfl
+      have hloop : execFor c10Oracle sig "layer" htLayerBody 2 0 vm = (va1, some Halt.reverted) := by
+        rw [execFor, hvm0, hpair0]; simp only []; rw [execFor, hvm1, hpair1]
+      exact ⟨fun _ => by rw [hloop], fun fn hs => by rw [hVH] at hs; exact Option.noConfusion hs⟩
+    · -- LAYER-1 PASS.
+      rw [if_neg hg1] at hstep1
+      obtain ⟨h1none, wpk1, hpk1, hcn2, hidx2, hso2, hseed2, hsb2, hN2, hOUT2, hmem2⟩ := hstep1
+      rw [hpair1] at h1none hcn2 hseed2 hsb2 hN2 hOUT2 hmem2
+      simp only at h1none hcn2 hseed2 hsb2 hN2 hOUT2 hmem2
+      subst h1none
+      have hpk1some : Spec.Wots.pkFromSig seed (UInt32.ofNat 1)
+          (UInt64.ofNat ((htIdx >>> Spec.SubtreeH) >>> Spec.SubtreeH))
+          (UInt32.ofNat ((htIdx >>> Spec.SubtreeH) &&& (1 <<< Spec.SubtreeH - 1)))
+          (Spec.Hypertree.verifyAuthPath seed (UInt32.ofNat 0) (UInt64.ofNat (htIdx >>> Spec.SubtreeH)) wpk0
+            (htIdx &&& (1 <<< Spec.SubtreeH - 1)) (layers.getD 0 Spec.Hypertree.defaultLayerSig).authPath)
+          (layers.getD 1 Spec.Hypertree.defaultLayerSig).wots = some wpk1 := hpk1
+      have hVH : Spec.Hypertree.verifyHypertree seed forsPk htIdx layers
+          = some (Spec.Hypertree.verifyAuthPath seed (UInt32.ofNat 1)
+              (UInt64.ofNat ((htIdx >>> Spec.SubtreeH) >>> Spec.SubtreeH)) wpk1
+              ((htIdx >>> Spec.SubtreeH) &&& (1 <<< Spec.SubtreeH - 1))
+              (layers.getD 1 Spec.Hypertree.defaultLayerSig).authPath) := by
+        rw [verifyHypertree_unroll, vhStep_some seed layers ⟨false, forsPk, htIdx⟩ 0 rfl wpk0 hpk0some,
+            vhStep_some seed layers
+              ⟨false, Spec.Hypertree.verifyAuthPath seed (UInt32.ofNat 0) (UInt64.ofNat (htIdx >>> Spec.SubtreeH))
+                wpk0 (htIdx &&& (1 <<< Spec.SubtreeH - 1)) (layers.getD 0 Spec.Hypertree.defaultLayerSig).authPath,
+                htIdx >>> Spec.SubtreeH⟩ 1 rfl wpk1 hpk1some]
+        rfl
+      have hloop : execFor c10Oracle sig "layer" htLayerBody 2 0 vm = (va1, none) := by
+        rw [execFor, hvm0, hpair0]; simp only []; rw [execFor, hvm1, hpair1]; simp only []; rw [execFor]
+      refine ⟨fun hn => by rw [hVH] at hn; exact Option.noConfusion hn, fun fn hs => ?_⟩
+      rw [hVH] at hs
+      obtain rfl := Option.some.inj hs
+      rw [hloop]
+      exact ⟨rfl, hcn2, hseed2, hsb2, hN2, hOUT2, hmem2⟩
 
 end SphincsCVerify.Interpreter.C10
