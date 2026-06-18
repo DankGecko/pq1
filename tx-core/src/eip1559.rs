@@ -117,6 +117,12 @@ impl U256 {
     /// the decimal point are removed if the fraction collapses to
     /// zeros.
     ///
+    /// The value is **rounded half-up** at the `frac_digits` boundary, not
+    /// truncated: `0.6666666` at `frac=6` renders `0.666667`, and a carry
+    /// can ripple into the integer part (`0.9999996` → `1.000000`). This
+    /// keeps the displayed figure the nearest representable value rather
+    /// than always understating it.
+    ///
     /// Examples (decimals=18, ETH):
     ///
     ///   - value = 0,                    frac=6, trim=false → "0.000000"
@@ -151,6 +157,44 @@ impl U256 {
 
         let total_decimals = decimals as usize;
         let frac = frac_digits as usize;
+
+        // --- 1b. Round half-up at the `frac` fractional boundary ----------
+        //
+        // We only ever DISPLAY `frac` fractional digits. Truncating the
+        // rest understates the magnitude (a WYSIWYS hazard — a sell of
+        // 0.6666666 would read 0.666666, less than reality). Round to
+        // nearest instead: if the first DROPPED fractional digit is >= 5,
+        // add one ulp at the last kept position and propagate the carry up
+        // through the integer part. The carry can grow `n_digits` (e.g.
+        // 0.9999996 -> 1.000000, or 9.9999996 -> 10.000000), so this runs
+        // BEFORE the integer-width is computed in step 3.
+        //
+        // When `frac >= total_decimals` every dropped position is a
+        // structural zero (the value has no digits that fine), so there is
+        // nothing to round and `round_idx` would underflow — guard on it.
+        if total_decimals > frac {
+            let round_idx = total_decimals - frac; // index of first KEPT digit
+            let drop_digit = if round_idx - 1 < n_digits {
+                digits[round_idx - 1]
+            } else {
+                0
+            };
+            if drop_digit >= 5 {
+                let mut carry = 1u8;
+                let mut i = round_idx;
+                // `digits` is [0u8; 80]; a 78-digit (2^256-1) value rounds
+                // up to at most 79 digits, so the carry stays in bounds.
+                while carry > 0 && i < digits.len() {
+                    let sum = digits[i] + carry;
+                    digits[i] = sum % 10;
+                    carry = sum / 10;
+                    if i >= n_digits && digits[i] != 0 {
+                        n_digits = i + 1;
+                    }
+                    i += 1;
+                }
+            }
+        }
 
         // --- 2. Decide how many fractional digits to actually emit ---------
         //
@@ -513,6 +557,66 @@ mod tests {
         let v = U256(buf);
         assert_eq!(format_to_string(&v, 18, 6, false).as_deref(), Some("1.500000"));
         assert_eq!(format_to_string(&v, 18, 6, true).as_deref(), Some("1.5"));
+    }
+
+    #[test]
+    fn format_rounds_half_up_at_frac() {
+        // 0.66666666666 ETH (18 decimals) shown at 6 frac digits: the 7th
+        // fractional digit is 6 (>= 5) so it rounds up to 0.666667 rather
+        // than truncating to 0.666666.
+        let v = u256_from_u64(666_666_666_660_000_000);
+        assert_eq!(format_to_string(&v, 18, 6, false).as_deref(), Some("0.666667"));
+    }
+
+    #[test]
+    fn format_rounds_down_below_half() {
+        // 0.6666664 → 7th digit is 4 (< 5) → stays 0.666666.
+        let v = u256_from_u64(666_666_400_000_000_000);
+        assert_eq!(format_to_string(&v, 18, 6, false).as_deref(), Some("0.666666"));
+    }
+
+    #[test]
+    fn format_round_carries_into_integer() {
+        // 0.9999996 → rounding the 6 kept digits carries all the way into
+        // the integer part: 1.000000 (int_digits grows 0 -> 1).
+        let v = u256_from_u64(999_999_600_000_000_000);
+        assert_eq!(format_to_string(&v, 18, 6, false).as_deref(), Some("1.000000"));
+        // trim drops the now-zero fraction → "1".
+        assert_eq!(format_to_string(&v, 18, 6, true).as_deref(), Some("1"));
+    }
+
+    #[test]
+    fn format_round_grows_integer_digit_count() {
+        // 9.9999996 → 10.000000: the carry adds a NEW most-significant
+        // integer digit (n_digits extends past the existing top).
+        let v = u256_from_u64(9_999_999_600_000_000_000);
+        assert_eq!(format_to_string(&v, 18, 6, false).as_deref(), Some("10.000000"));
+    }
+
+    #[test]
+    fn format_round_noop_when_frac_ge_decimals() {
+        // frac >= decimals: every dropped position is a structural zero,
+        // so no rounding occurs (1 wei stays exact, not rounded up).
+        let v = u256_from_u64(1);
+        assert_eq!(
+            format_to_string(&v, 18, 18, false).as_deref(),
+            Some("0.000000000000000001"),
+        );
+    }
+
+    #[test]
+    fn format_inflated_decimals_still_zero() {
+        // Documents the WYSIWYS finding: rounding does NOT rescue an
+        // inflated `decimals`. 10^21 base units (e.g. 1000 of an 18-dec
+        // token) labelled with a wrong 30-decimal value renders 0.000000
+        // — the magnitude vanishes regardless of rounding mode. Only a
+        // firmware decimals bound (see project_erc20_decimals_unbounded_
+        // wysiwys) closes this; the formatter is faithful to its input.
+        let v = u256_from_bigint_pow10(21);
+        assert_eq!(format_to_string(&v, 30, 6, false).as_deref(), Some("0.000000"));
+        // At 27 decimals the same amount shows 0.000001 — still a gross
+        // understatement of a 1000-token transfer, just not a clean zero.
+        assert_eq!(format_to_string(&v, 27, 6, false).as_deref(), Some("0.000001"));
     }
 
     #[test]
