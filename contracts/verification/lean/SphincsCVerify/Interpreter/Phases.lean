@@ -1068,8 +1068,9 @@ theorem lt_W_of_lt {x : Nat} (h : x < 4096) : x < W := by
   unfold W; exact Nat.lt_trans h (by decide)
 
 /-- `h <<< 4 % W = 16 * h` for `h < 256` (the sibling/secret stride; `16h < W`).
-    Covers both the `i`-loop (`i < 12`) and the `h`-loop (`h < 11`). -/
-private theorem shl4_small (h : Nat) (hh : h < 256) : h <<< 4 % W = 16 * h := by
+    Covers both the `i`-loop (`i < 12`) and the `h`-loop (`h < 11`).
+    De-privatized for the C10Refine Hbind authPath-offset discharge. -/
+theorem shl4_small (h : Nat) (hh : h < 256) : h <<< 4 % W = 16 * h := by
   rw [Nat.shiftLeft_eq, Nat.mod_eq_of_lt (lt_W_of_lt (by omega)), Nat.mul_comm]
 
 /-! ### 3-segment leaf hash
@@ -1607,6 +1608,207 @@ private theorem make_data_getD_beByte
             · simp only [if_neg (Nat.not_lt.2 h), if_neg (Nat.not_lt.2 h2), if_neg (Nat.not_lt.2 h3),
                 if_neg (Nat.not_lt.2 h4), if_neg (Nat.not_lt.2 h5), if_neg (Nat.not_lt.2 h6),
                 ofU32BE_getD_eq_beByte ha (i - 28) (by omega)]
+
+/-- **The big-endian word of `u32ToB32 c` is `c.toNat`.** The 32-byte encoding
+    places `c` in the low 4 bytes (28 zero bytes, then `ofU32BE c`); reading it
+    back as a 256-bit big-endian word recovers `c.toNat`. -/
+theorem wordOf_u32ToB32 (c : UInt32) : wordOf (ByteVec.u32ToB32 c) = c.toNat := by
+  apply eq_of_beByte
+  · exact wordOf_lt _
+  · exact Nat.lt_of_lt_of_le c.toNat_lt (by decide : (2 : Nat) ^ 32 ≤ 2 ^ 256)
+  · intro i hi
+    rw [beByte_wordOf_getD (ByteVec.u32ToB32 c) i hi]
+    have hdata : (ByteVec.u32ToB32 c).data
+        = Array.replicate 28 (0 : UInt8) ++ (ByteVec.ofU32BE c).data := rfl
+    rw [hdata, arr_append_getD _ _ 28 i Array.size_replicate]
+    by_cases h28 : i < 28
+    · rw [if_pos h28, beByte_u32_zero_lo c i h28,
+          Array.getD_eq_getD_getElem?, Array.getElem?_replicate, if_pos h28, Option.getD_some]
+    · rw [if_neg h28]
+      have hj : i - 28 < 4 := by omega
+      rw [ofU32BE_getD_eq_beByte c (i - 28) hj]
+      congr 1
+      omega
+
+/-! ## `count`-field bridge: `calldataload sig off >>> 224 = wordOf (u32ToB32 (loadU32BE sig off))`
+
+The deployed Yul reads the per-layer `count` as `shr(224, calldataload(off))` (top 4
+bytes of the 32-byte word at `off`), while the spec reads it as the `UInt32`
+`loadU32BE sig off` re-encoded by `u32ToB32`.  `count_bridge` proves the two agree.
+The route is byte-extensional (`eq_of_beByte`): the high-shift on the LHS picks the
+top four big-endian bytes, which are exactly the four signature bytes that
+`loadU32BE` assembles, and `u32ToB32` places them back in bytes `[28,32)`. -/
+
+/-- **`loadWord32` byte resolved to the raw signature byte.** For `j < 4`, byte `j`
+    of `loadWord32 sig off` is the raw signature byte at `off+j` (zero past the end),
+    matching `calldataload`'s zero-padded read. -/
+private theorem loadWord32_raw_byte {m : Nat} (sig : ByteVec m) (off j : Nat) (hj : j < 4) :
+    (ByteVec.loadWord32 sig off).data.getD j 0
+      = if h : off + j < m then sig.get ⟨off + j, h⟩ else 0 := by
+  unfold ByteVec.loadWord32
+  rw [Array.getD_eq_getD_getElem?, Array.getElem?_extract]
+  rw [Array.size_append, Array.size_extract, Array.size_replicate, sig.size_eq]
+  rw [if_pos (show j < min 32 (min (off + 32) m - off + 32) - 0 by omega), Nat.zero_add]
+  rw [Array.getElem?_append]
+  rw [Array.size_extract, sig.size_eq]
+  by_cases hc : off + j < m
+  · rw [if_pos (show j < min (off + 32) m - off by omega), dif_pos hc]
+    rw [Array.getElem?_extract, sig.size_eq,
+        if_pos (show j < min (off + 32) m - off by omega)]
+    rw [Array.getElem?_eq_getElem (show off + j < sig.data.size by rw [sig.size_eq]; exact hc),
+        Option.getD_some]
+    rfl
+  · rw [if_neg (show ¬ j < min (off + 32) m - off by omega), dif_neg hc]
+    rw [Array.getElem?_replicate]
+    by_cases hr : j - (min (off + 32) m - off) < 32
+    · rw [if_pos hr, Option.getD_some]
+    · rw [if_neg hr, Option.getD_none]
+
+/-- High-index (`k < 31`) big-endian bytes of a single `UInt8` value are zero — a
+    byte occupies only big-endian position 31. -/
+private theorem beByte_u8_lo (v : UInt8) (k : Nat) (hk : k < 31) : beByte v.toNat k = 0 := by
+  unfold beByte
+  have hx : v.toNat < 2 ^ 8 := v.toNat_lt
+  have hsh : v.toNat >>> (8 * (31 - k)) = 0 := by
+    rw [Nat.shiftRight_eq_div_pow]
+    apply Nat.div_eq_of_lt
+    exact Nat.lt_of_lt_of_le hx (Nat.pow_le_pow_right (by decide) (by omega))
+  rw [hsh]; rfl
+
+/-- Big-endian byte 31 of a single `UInt8` value is the byte itself. -/
+private theorem beByte_u8_hi (v : UInt8) : beByte v.toNat 31 = v := by
+  unfold beByte
+  rw [show 8 * (31 - 31) = 0 from rfl, Nat.shiftRight_zero, Nat.mod_eq_of_lt v.toNat_lt,
+      UInt8.ofNat_toNat]
+
+/-- **`loadU32BE`'s `Nat` value as a byte-aligned big-OR.** The four assembled
+    signature bytes occupy `Nat`-bit-positions `[24,32)`, `[16,24)`, `[8,16)`, `[0,8)`.
+    Shifts are written `8*3 / 8*2 / 8*1` so `beByte_shiftLeft_byte` applies directly. -/
+private theorem loadU32BE_toNat_or {m : Nat} (sig : ByteVec m) (off : Nat) :
+    (ByteVec.loadU32BE sig off).toNat
+      = ((if h : off < m then sig.get ⟨off, h⟩ else 0).toNat <<< (8 * 3))
+        ||| ((if h : off + 1 < m then sig.get ⟨off + 1, h⟩ else 0).toNat <<< (8 * 2))
+        ||| ((if h : off + 2 < m then sig.get ⟨off + 2, h⟩ else 0).toNat <<< (8 * 1))
+        ||| (if h : off + 3 < m then sig.get ⟨off + 3, h⟩ else 0).toNat := by
+  have hb : ∀ (b : UInt8) (n : Nat), n ≤ 24 → b.toNat <<< n < 2 ^ 32 := by
+    intro b n hn
+    rw [Nat.shiftLeft_eq]
+    calc b.toNat * 2 ^ n < 2 ^ 8 * 2 ^ n :=
+              (Nat.mul_lt_mul_right (Nat.two_pow_pos n)).2 b.toNat_lt
+      _ = 2 ^ (8 + n) := by rw [← Nat.pow_add]
+      _ ≤ 2 ^ 32 := Nat.pow_le_pow_right (by decide) (by omega)
+  unfold ByteVec.loadU32BE
+  rw [UInt32.toNat_or, UInt32.toNat_or, UInt32.toNat_or,
+      UInt32.toNat_shiftLeft, UInt32.toNat_shiftLeft, UInt32.toNat_shiftLeft,
+      UInt32.toNat_ofNat_of_lt' (Nat.lt_trans
+        (if h : off < m then sig.get ⟨off, h⟩ else 0).toNat_lt (by decide)),
+      UInt32.toNat_ofNat_of_lt' (Nat.lt_trans
+        (if h : off + 1 < m then sig.get ⟨off + 1, h⟩ else 0).toNat_lt (by decide)),
+      UInt32.toNat_ofNat_of_lt' (Nat.lt_trans
+        (if h : off + 2 < m then sig.get ⟨off + 2, h⟩ else 0).toNat_lt (by decide)),
+      UInt32.toNat_ofNat_of_lt' (Nat.lt_trans
+        (if h : off + 3 < m then sig.get ⟨off + 3, h⟩ else 0).toNat_lt (by decide))]
+  rw [show ((24 : UInt32).toNat % 32) = 24 from by decide,
+      show ((16 : UInt32).toNat % 32) = 16 from by decide,
+      show ((8 : UInt32).toNat % 32) = 8 from by decide,
+      Nat.mod_eq_of_lt (hb _ 24 (by omega)), Nat.mod_eq_of_lt (hb _ 16 (by omega)),
+      Nat.mod_eq_of_lt (hb _ 8 (by omega)),
+      show (8 * 3 : Nat) = 24 from rfl, show (8 * 2 : Nat) = 16 from rfl,
+      show (8 * 1 : Nat) = 8 from rfl]
+
+/-- **The bridge byte fact.** Big-endian byte `j+28` of `loadU32BE sig off`'s value
+    is the raw signature byte at `off+j` — i.e. equals byte `j` of `loadWord32 sig off`. -/
+private theorem loadU32BE_loadWord32_byte {m : Nat} (sig : ByteVec m) (off j : Nat) (hj : j < 4) :
+    beByte (ByteVec.loadU32BE sig off).toNat (j + 28)
+      = (ByteVec.loadWord32 sig off).data.getD j 0 := by
+  rw [loadWord32_raw_byte sig off j hj, loadU32BE_toNat_or sig off,
+      beByte_lor, beByte_lor, beByte_lor]
+  have hi : j + 28 < 32 := by omega
+  rw [beByte_shiftLeft_byte _ 3 (j + 28) hi, beByte_shiftLeft_byte _ 2 (j + 28) hi,
+      beByte_shiftLeft_byte _ 1 (j + 28) hi]
+  match j, hj with
+  | 0, _ =>
+      -- term0 (shift 3) survives at byte 31; terms 1,2 (≤31) and term3 vanish by lo.
+      rw [if_pos (by decide : (0 + 28) + 3 ≤ 31), if_pos (by decide : (0 + 28) + 2 ≤ 31),
+          if_pos (by decide : (0 + 28) + 1 ≤ 31)]
+      rw [show (0 + 28) + 3 = 31 from rfl, beByte_u8_hi,
+          beByte_u8_lo _ (0 + 28 + 2) (by decide), beByte_u8_lo _ (0 + 28 + 1) (by decide),
+          beByte_u8_lo _ (0 + 28) (by decide)]
+      rw [UInt8.or_zero, UInt8.or_zero, UInt8.or_zero]
+      simp only [Nat.add_zero]
+  | 1, _ =>
+      -- term1 (shift 2) survives at byte 31; term0 overruns (neg), terms 2,3 vanish by lo.
+      rw [if_neg (by decide : ¬ (1 + 28) + 3 ≤ 31), if_pos (by decide : (1 + 28) + 2 ≤ 31),
+          if_pos (by decide : (1 + 28) + 1 ≤ 31)]
+      rw [show (1 + 28) + 2 = 31 from rfl, beByte_u8_hi,
+          beByte_u8_lo _ (1 + 28 + 1) (by decide), beByte_u8_lo _ (1 + 28) (by decide)]
+      rw [UInt8.zero_or, UInt8.or_zero, UInt8.or_zero]
+  | 2, _ =>
+      -- term2 (shift 1) survives at byte 31; terms 0,1 overrun (neg), term3 vanishes by lo.
+      rw [if_neg (by decide : ¬ (2 + 28) + 3 ≤ 31), if_neg (by decide : ¬ (2 + 28) + 2 ≤ 31),
+          if_pos (by decide : (2 + 28) + 1 ≤ 31)]
+      rw [show (2 + 28) + 1 = 31 from rfl, beByte_u8_hi,
+          beByte_u8_lo _ (2 + 28) (by decide)]
+      rw [UInt8.zero_or, UInt8.zero_or, UInt8.or_zero]
+  | 3, _ =>
+      -- term3 (unshifted) survives at byte 31; terms 0,1,2 all overrun (neg).
+      rw [if_neg (by decide : ¬ (3 + 28) + 3 ≤ 31), if_neg (by decide : ¬ (3 + 28) + 2 ≤ 31),
+          if_neg (by decide : ¬ (3 + 28) + 1 ≤ 31)]
+      rw [show (3 + 28) = 31 from rfl, beByte_u8_hi]
+      rw [UInt8.zero_or, UInt8.zero_or, UInt8.zero_or]
+
+/-- **`count`-field bridge.** The deployed Yul's `shr(224, calldataload(off))` (the
+    top four big-endian bytes of the word at `off`) equals the spec's
+    `wordOf (u32ToB32 (loadU32BE sig off))` — i.e. the per-layer `count` `UInt32` the
+    spec parses, re-encoded as a 256-bit word. Byte-extensional via `eq_of_beByte`:
+    the `>>> 224` selects the top 4 bytes, which are exactly the bytes `loadU32BE`
+    assembles and `u32ToB32` places in `[28,32)`. -/
+theorem count_bridge {m : Nat} (sig : ByteVec m) (off : Nat) :
+    calldataload sig off >>> 224
+      = wordOf (ByteVec.u32ToB32 (ByteVec.loadU32BE sig off)) := by
+  rw [wordOf_u32ToB32]
+  -- `calldataload sig off < 2^256`, reused for both the LHS bound and the byte step.
+  have hcl : calldataload sig off < 2 ^ 256 := by
+    unfold calldataload; rw [wordOfBV_eq_wordOf]; exact wordOf_lt _
+  apply eq_of_beByte
+  · -- LHS bound: a right-shift only shrinks.
+    rw [Nat.shiftRight_eq_div_pow]
+    exact Nat.lt_of_le_of_lt (Nat.div_le_self _ _) hcl
+  · -- RHS bound: a UInt32 value fits in 2^256.
+    exact Nat.lt_of_lt_of_le (ByteVec.loadU32BE sig off).toNat_lt (by decide)
+  · intro i hi
+    -- Combine the outer `>>> 224` with `beByte`'s internal `>>> 8*(31-i)`.
+    have hlhs : beByte (calldataload sig off >>> 224) i
+        = UInt8.ofNat ((calldataload sig off >>> (224 + 8 * (31 - i))) % 256) := by
+      unfold beByte
+      rw [← Nat.shiftRight_add]
+    rw [hlhs]
+    by_cases hsmall : i < 28
+    · -- High shift wipes everything: 224 + 8*(31-i) ≥ 256 ≥ log2 X.
+      have hge : 224 + 8 * (31 - i) ≥ 256 := by omega
+      have hwipe : calldataload sig off >>> (224 + 8 * (31 - i)) = 0 := by
+        rw [Nat.shiftRight_eq_div_pow]
+        apply Nat.div_eq_of_lt
+        exact Nat.lt_of_lt_of_le hcl (Nat.pow_le_pow_right (by decide) hge)
+      rw [hwipe]
+      -- RHS byte i (i<28) of a UInt32 value is zero too.
+      rw [beByte_u32_zero_lo (ByteVec.loadU32BE sig off) i hsmall]
+      rfl
+    · -- 28 ≤ i < 32: the shift index collapses to byte (i-28) of the calldata word.
+      have hidx : 224 + 8 * (31 - i) = 8 * (31 - (i - 28)) := by omega
+      rw [hidx]
+      -- LHS now is `beByte (calldataload sig off) (i-28)` (unfold the def back).
+      have hlhs2 : UInt8.ofNat ((calldataload sig off >>> (8 * (31 - (i - 28)))) % 256)
+          = beByte (calldataload sig off) (i - 28) := rfl
+      rw [hlhs2]
+      -- calldataload sig off = wordOf (loadWord32 sig off); read back byte (i-28).
+      have hclword : calldataload sig off = wordOf (ByteVec.loadWord32 sig off) := by
+        unfold calldataload; rw [wordOfBV_eq_wordOf]
+      rw [hclword, beByte_wordOf_getD (ByteVec.loadWord32 sig off) (i - 28) (by omega)]
+      -- RHS: beByte (loadU32BE).toNat i = loadWord32 byte (i-28) via the bridge.
+      rw [show i = (i - 28) + 28 from by omega,
+          loadU32BE_loadWord32_byte sig off (i - 28) (by omega)]
+      congr 1
 
 /-- A value `< 2^m` shifted left by `k` with `m + k ≤ 256` stays `< 2^256`. -/
 theorem shl_lt_two_pow_256 (x m k : Nat) (hx : x < 2 ^ m) (hmk : m + k ≤ 256) :

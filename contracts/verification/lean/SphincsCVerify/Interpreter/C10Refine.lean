@@ -255,4 +255,72 @@ theorem verifyYulModel_unfold (pkSeed pkRoot message : ByteVec 32)
             (ByteVec.pad16 (Spec.Signature.deserialise sig).r) message)
           (Spec.Signature.deserialise sig) := rfl
 
+/-! ## Hbind discharge from `deserialise`
+
+`verifyHypertree_refine` takes a binding hypothesis `Hbind` relating the structured
+layer fields back to the raw calldata offsets. For `(deserialise sig).layers` these
+hold mechanically: chains/authPath are `loadValue16` at the matching offsets
+(`cl_masked_eq_wordOf`), the size is `Array.size_ofFn`, and the count is the
+separately-supplied bridge (`count_bridge`). -/
+
+/-- The `k`-th deserialised layer (`k < 2`), with its three `ofFn` fields exposed. -/
+theorem deserialise_layer (sig : ByteVec Spec.SignatureLen) (k : Nat) (hk : k < 2) :
+    (Spec.Signature.deserialise sig).layers.getD k Spec.Hypertree.defaultLayerSig
+      = { wots := { chains := Array.ofFn (n := Spec.L) (fun i : Fin Spec.L =>
+                      ByteVec.loadValue16 sig (Spec.SigForsTotal + k * Spec.SigHtLayer + i.val * Spec.N)),
+                    chainsLen := Array.size_ofFn,
+                    count := ByteVec.loadU32BE sig
+                      (Spec.SigForsTotal + k * Spec.SigHtLayer + Spec.L * Spec.N) },
+          authPath := Array.ofFn (n := Spec.SubtreeH) (fun h : Fin Spec.SubtreeH =>
+                        ByteVec.loadValue16 sig
+                          (Spec.SigForsTotal + k * Spec.SigHtLayer + Spec.L * Spec.N + 4 + h.val * Spec.N)),
+          authPathLen := Array.size_ofFn } := by
+  unfold Spec.Signature.deserialise
+  rw [Array.getD_eq_getD_getElem?, Array.getElem?_ofFn, dif_pos (show k < Spec.D from hk)]
+  rfl
+
+theorem htLayers_satisfy_Hbind (sig : ByteVec Spec.SignatureLen)
+    (hcount : ∀ k, k < 2 → calldataload sig (2336 + 836 * k + 688) >>> 224
+        = wordOf (ByteVec.u32ToB32 (((Spec.Signature.deserialise sig).layers.getD k
+            Spec.Hypertree.defaultLayerSig).wots).count)) :
+    ∀ k, k < 2 →
+      (∀ i (h : i < (((Spec.Signature.deserialise sig).layers.getD k
+            Spec.Hypertree.defaultLayerSig).wots).chains.size),
+          (((Spec.Signature.deserialise sig).layers.getD k Spec.Hypertree.defaultLayerSig).wots).chains[i]
+            = ByteVec.loadValue16 sig (2336 + 836 * k + 16 * i))
+      ∧ (calldataload sig (2336 + 836 * k + 688) >>> 224
+          = wordOf (ByteVec.u32ToB32 (((Spec.Signature.deserialise sig).layers.getD k
+              Spec.Hypertree.defaultLayerSig).wots).count))
+      ∧ (∀ hh, hh < Spec.SubtreeH →
+          calldataload sig (((2336 + 836 * k + 692) + hh <<< 4 % W) % W) &&& NMASK
+            = wordOf (ByteVec.pad16 ((((Spec.Signature.deserialise sig).layers.getD k
+                Spec.Hypertree.defaultLayerSig).authPath).getD hh (ByteVec.zero 16))))
+      ∧ (((Spec.Signature.deserialise sig).layers.getD k
+            Spec.Hypertree.defaultLayerSig).authPath.size = Spec.SubtreeH) := by
+  intro k hk
+  refine ⟨?_, hcount k hk, ?_, ?_⟩
+  · -- chains
+    intro i hi
+    simp only [deserialise_layer sig k hk, Array.getElem_ofFn]
+    congr 1
+    rw [Spec.sigForsTotal_eq_2336, Spec.sigHtLayer_eq_836, show Spec.N = 16 from rfl]
+    omega
+  · -- authPath
+    intro hh hhlt
+    have hh9 : hh < 9 := by have : Spec.SubtreeH = 9 := rfl; omega
+    have hofflt : (2336 + 836 * k + 692) + 16 * hh < W := lt_W_of_lt (by omega)
+    have hRHS : (((Spec.Signature.deserialise sig).layers.getD k
+          Spec.Hypertree.defaultLayerSig).authPath).getD hh (ByteVec.zero 16)
+        = ByteVec.loadValue16 sig
+            (Spec.SigForsTotal + k * Spec.SigHtLayer + Spec.L * Spec.N + 4 + hh * Spec.N) := by
+      rw [deserialise_layer sig k hk, Array.getD_eq_getD_getElem?, Array.getElem?_ofFn,
+          dif_pos (show hh < Spec.SubtreeH from hhlt), Option.getD_some]
+    have hoffeq : Spec.SigForsTotal + k * Spec.SigHtLayer + Spec.L * Spec.N + 4 + hh * Spec.N
+        = (2336 + 836 * k + 692) + 16 * hh := by
+      rw [Spec.sigForsTotal_eq_2336, Spec.sigHtLayer_eq_836, show Spec.N = 16 from rfl,
+          show Spec.L = 43 from rfl]; omega
+    rw [hRHS, hoffeq, shl4_small hh (by omega), Nat.mod_eq_of_lt hofflt, cl_masked_eq_wordOf]
+  · -- size
+    rw [deserialise_layer sig k hk]; exact Array.size_ofFn
+
 end SphincsCVerify.Interpreter.C10
