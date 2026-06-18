@@ -884,16 +884,56 @@ fn negative_verify_images_compares_streaming_hash_before_manifest_hash() {
     // distinguish: streaming-vs-fresh disagreement means hardware
     // (stop, contact support); manifest-vs-fresh means bytes don't
     // match the signed preimage (refresh release & retry).
+    // The comparisons are FI-hardened (see
+    // `negative_verify_images_binding_is_fi_hardened`): they read as
+    // `streaming_secure_ok` / `manifest_secure_ok` verdict bindings plus
+    // matching `if !..._ok` rejects, but the streaming reject must still
+    // precede the manifest reject so the ImageCheckError variants stay
+    // distinct.
     let streaming_check_pos = VERIFY_SRC
-        .find("if streaming_secure != fresh_secure {")
-        .expect("verify_images must compare streaming vs fresh secure");
+        .find("if !streaming_secure_ok || !streaming_ns_ok {")
+        .expect("verify_images must reject on streaming-vs-fresh mismatch");
     let manifest_check_pos = VERIFY_SRC
-        .find("if &fresh_secure != m.secure_hash() {")
-        .expect("verify_images must compare fresh vs manifest secure_hash");
+        .find("if !manifest_secure_ok {")
+        .expect("verify_images must reject on fresh-vs-manifest secure_hash mismatch");
     assert!(
         streaming_check_pos < manifest_check_pos,
         "streaming-vs-fresh comparison must precede manifest-vs-fresh — they surface as \
          distinct ImageCheckError variants the companion routes differently"
+    );
+}
+
+#[test]
+fn negative_verify_images_binding_is_fi_hardened() {
+    // Audit: FW-COMMIT single-fault firmware-signing bypass. The four
+    // 32-byte equalities binding the flashed bytes to the vendor-SIGNED
+    // manifest hashes are the SOLE signing gate at COMMIT. A bare `!=`
+    // reject is one instruction-skip from falling through to `Ok(())` —
+    // committing an UNSIGNED image — in stark asymmetry with BEGIN, whose
+    // signature verdict goes through the F-2 Hamming-distant sentinel.
+    // The fix matches that bar. Pin every load-bearing element so a revert
+    // to the bare compare fails CI.
+    assert!(
+        VERIFY_SRC.contains("use subtle::ConstantTimeEq;"),
+        "verify_images must use constant-time equality for the hash binds"
+    );
+    assert!(
+        !VERIFY_SRC.contains("if &fresh_secure != m.secure_hash() {")
+            && !VERIFY_SRC.contains("if &fresh_ns != m.nonsecure_hash() {"),
+        "the manifest-hash binds must NOT be a bare `!=` branch (single-fault bypass) — \
+         FI-harden them via the sentinel gate"
+    );
+    assert!(
+        VERIFY_SRC.contains("crate::fi::check_true_into_sentinel(|| {")
+            && VERIFY_SRC.contains("!= crate::fi::OK_SENTINEL"),
+        "verify_images must gate Ok(()) on a double-evaluated Hamming-distant sentinel over \
+         all four hash comparisons"
+    );
+    assert!(
+        VERIFY_SRC.contains("ct_eq(&m.secure_hash()[..])")
+            && VERIFY_SRC.contains("ct_eq(&m.nonsecure_hash()[..])"),
+        "the sentinel gate must RE-COMPUTE the manifest-hash comparisons (not re-read a \
+         stored bool) so a single fault on an earlier compare cannot survive to Ok"
     );
 }
 

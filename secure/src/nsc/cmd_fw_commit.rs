@@ -42,18 +42,52 @@ pub(super) unsafe fn run(_args: &GatewayArgs) -> u32 {
         return NscStatus::FwUpdateBadState as u32;
     };
 
-    // Re-hash + compare.
+    // Re-hash + compare. A successful verify_images proves the bytes
+    // streamed into the inactive slot match the vendor-signed manifest
+    // the user already confirmed at BEGIN.
     let manifest = ManifestRef::new(&ctx.manifest_bytes);
-    match fw_update::verify::verify_images(ctx, &manifest) {
-        Ok(()) => {}
-        Err(ImageCheckError::LengthMismatch)
-        | Err(ImageCheckError::StreamingHashMismatch) => {
-            return NscStatus::FwUpdateBadChunk as u32;
+    if let Err(e) = fw_update::verify::verify_images(ctx, &manifest) {
+        // Glitch-resistance (audit: FW-COMMIT single-fault bypass). A
+        // mismatch means the slot's bytes do NOT match the confirmed
+        // manifest — flash corruption (brown-out) OR an attacker trying
+        // to land a fault on the (now FI-hardened) `verify_images`
+        // binding. DROP the streaming context either way: previously it
+        // was left intact with no failure counter, so a glitch rig could
+        // re-issue CMD_FW_COMMIT indefinitely — zero user interaction per
+        // attempt — until a fault landed and an unsigned image committed.
+        // With the context dropped, a retry requires a fresh CMD_FW_BEGIN,
+        // which re-runs the F-7 manifest-signature verify AND the
+        // trusted-display install confirm (a physical button press) before
+        // re-streaming every chunk. Each glitch attempt is now a full,
+        // user-gated re-BEGIN + re-stream — not a tight in-place loop.
+        //
+        // We deliberately do NOT arm the admin-wipe here (unlike BEGIN's
+        // bad-signature path): a verify_images mismatch has a *benign*
+        // cause — flash corruption on a flaky USB transfer / brown-out —
+        // so wiping the user's wallet on a COMMIT mismatch would brick it
+        // on bad luck. The context drop is the bound; it carries no
+        // destructive false-positive.
+        //
+        // SAFETY: category 5 — exclusive write to `static mut FW_UPDATE`
+        // under the non-reentrant dispatcher + `HandlerGuard`. The dropped
+        // `FwUpdateCtx` zeroizes its bookkeeping via `ZeroizeOnDrop`. The
+        // `ctx`/`manifest` borrows are not used after this point — we
+        // return immediately below.
+        unsafe {
+            *core::ptr::addr_of_mut!(FW_UPDATE) = None;
         }
-        Err(ImageCheckError::SecureMismatch)
-        | Err(ImageCheckError::NonsecureMismatch) => {
-            return NscStatus::FwUpdateBadImage as u32;
-        }
+        secure_log!(
+            "[S][fwup] COMMIT verify_images FAIL ({:?}) — streaming context dropped",
+            e
+        );
+        return match e {
+            ImageCheckError::LengthMismatch | ImageCheckError::StreamingHashMismatch => {
+                NscStatus::FwUpdateBadChunk as u32
+            }
+            ImageCheckError::SecureMismatch | ImageCheckError::NonsecureMismatch => {
+                NscStatus::FwUpdateBadImage as u32
+            }
+        };
     }
 
     // No user prompt at COMMIT — finding A moved that to CMD_FW_BEGIN

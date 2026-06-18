@@ -1075,6 +1075,42 @@ fn negative_commit_writes_manifest_via_write_quadword_verified() {
 }
 
 #[test]
+fn negative_commit_drops_context_on_verify_images_failure() {
+    // Audit: FW-COMMIT single-fault firmware-signing bypass — RETRY
+    // amplifier. Previously a verify_images mismatch returned an error
+    // status but LEFT the streaming context intact, with no failure
+    // counter, so a glitch rig could re-issue CMD_FW_COMMIT in a tight,
+    // zero-interaction loop until a fault landed on the byte-bind and an
+    // unsigned image committed. The fix drops FW_UPDATE on ANY
+    // verify_images failure, so a retry requires a fresh, user-gated
+    // CMD_FW_BEGIN (re-runs the F-7 signature verify AND the
+    // trusted-display install confirm, then re-streams every chunk).
+    let fail_branch = COMMIT_SRC
+        .find("if let Err(e) = fw_update::verify::verify_images(ctx, &manifest) {")
+        .expect("COMMIT must handle verify_images failure in a dedicated branch");
+    let tail = &COMMIT_SRC[fail_branch..];
+    let drop_pos = tail
+        .find("*core::ptr::addr_of_mut!(FW_UPDATE) = None;")
+        .expect("COMMIT must drop the streaming context on verify_images failure");
+    let return_pos = tail
+        .find("return match e {")
+        .expect("COMMIT failure branch must return the mapped error");
+    assert!(
+        drop_pos < return_pos,
+        "the FW_UPDATE context drop must happen inside the failure branch, before its return"
+    );
+    // The drop must NOT cost the user their wallet: a verify_images
+    // mismatch has a benign cause (flash corruption / brown-out), so
+    // unlike BEGIN's bad-signature path the COMMIT failure path must NOT
+    // arm the admin wipe.
+    assert!(
+        !tail[..return_pos].contains("arm_wipe"),
+        "COMMIT verify_images failure must NOT arm the admin wipe — benign flash corruption \
+         would otherwise brick the user's wallet on a flaky transfer"
+    );
+}
+
+#[test]
 fn negative_commit_sets_try_once_tried_and_recomputes_crc() {
     // The signed manifest carries try_once = COMMITTED; the device
     // re-writes it as TRIED so FSBL can revert if the new slot

@@ -12,6 +12,7 @@ use core::ptr::read_volatile;
 
 use fw_manifest::ManifestRef;
 use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
 
 use crate::fw_update::FwUpdateCtx;
 use crate::hw::flash::{self, Slot};
@@ -56,17 +57,59 @@ pub fn verify_images(ctx: &FwUpdateCtx, m: &ManifestRef) -> Result<(), ImageChec
     let fresh_secure = hash_flash(flash::slot_secure_addr(slot), ctx.received_secure);
     let fresh_ns = hash_flash(flash::slot_ns_addr(slot), ctx.received_nonsecure);
 
-    if streaming_secure != fresh_secure {
+    // ── FI-hardened binding (audit: FW-COMMIT single-fault bypass) ──
+    //
+    // These four 32-byte equalities are the SOLE cryptographic binding
+    // between the bytes actually programmed into the inactive slot and
+    // the vendor-SIGNED manifest hashes (whose signature BEGIN already
+    // F-7-verified). A bare `if a != b { return Err }` reject is one
+    // instruction-skip / branch-flip away from falling through to
+    // `Ok(())` — at which point a non-matching (UNSIGNED, attacker)
+    // image commits, lifting the whole device's firmware-signing
+    // guarantee off a single fault. That asymmetry — BEGIN routes its
+    // signature verdict through the F-2 Hamming-distant sentinel while
+    // COMMIT did a bare `!=` — was the bug.
+    //
+    // Match BEGIN's bar: constant-time-compare each pair (no early-out
+    // timing oracle on WHERE two hashes first differ) and gate the final
+    // `Ok(())` on the AND of all four verdicts, re-derived inside
+    // `fi::check_true_into_sentinel` (double-evaluated + Hamming-distant
+    // sentinel) after a `wait_random()` desync. To reach `Ok` a glitch
+    // must now defeat BOTH a per-check reject below AND two independent
+    // re-evaluations of the compare inside the sentinel gate — ~2
+    // coordinated faults, the F-5/F-7 residual the rest of the firmware
+    // already lives at. Distinct error codes are retained for host
+    // diagnostics; the SECURITY decision is the aggregate sentinel gate.
+    let streaming_secure_ok = bool::from(streaming_secure[..].ct_eq(&fresh_secure[..]));
+    let streaming_ns_ok = bool::from(streaming_ns[..].ct_eq(&fresh_ns[..]));
+    let manifest_secure_ok = bool::from(fresh_secure[..].ct_eq(&m.secure_hash()[..]));
+    let manifest_ns_ok = bool::from(fresh_ns[..].ct_eq(&m.nonsecure_hash()[..]));
+
+    if !streaming_secure_ok || !streaming_ns_ok {
         return Err(ImageCheckError::StreamingHashMismatch);
     }
-    if streaming_ns != fresh_ns {
-        return Err(ImageCheckError::StreamingHashMismatch);
-    }
-    if &fresh_secure != m.secure_hash() {
+    if !manifest_secure_ok {
         return Err(ImageCheckError::SecureMismatch);
     }
-    if &fresh_ns != m.nonsecure_hash() {
+    if !manifest_ns_ok {
         return Err(ImageCheckError::NonsecureMismatch);
+    }
+
+    // Aggregate fail-closed gate. The closure RE-RUNS every comparison
+    // (it does not re-read the booleans above), and `check_true_into_sentinel`
+    // evaluates it twice, so a single fault on any one earlier compare
+    // cannot survive to `Ok`. `black_box` on each sub-verdict stops LLVM
+    // from CSE-ing these back into the booleans above and collapsing the
+    // redundancy (F-1).
+    crate::fi::wait_random();
+    let gate = crate::fi::check_true_into_sentinel(|| {
+        core::hint::black_box(bool::from(streaming_secure[..].ct_eq(&fresh_secure[..])))
+            && core::hint::black_box(bool::from(streaming_ns[..].ct_eq(&fresh_ns[..])))
+            && core::hint::black_box(bool::from(fresh_secure[..].ct_eq(&m.secure_hash()[..])))
+            && core::hint::black_box(bool::from(fresh_ns[..].ct_eq(&m.nonsecure_hash()[..])))
+    });
+    if gate != crate::fi::OK_SENTINEL {
+        return Err(ImageCheckError::SecureMismatch);
     }
     Ok(())
 }
