@@ -151,6 +151,17 @@ import SphincsCVerify
 #print axioms SphincsCVerify.Spec.Theorems.every_call_consumes_its_own_validated_credit
 #print axioms SphincsCVerify.Spec.Theorems.credit_lift_implies_verified_validate
 
+-- Claim 4 / Gap-2 (credits model) — GLOBAL aggregate completeness complement
+-- (work-todo FV-#5): in any successful trace from a clean transient, the number
+-- of money-moving execute/executeBatch steps is ≤ the number of validate steps,
+-- via a genuine mathlib-free finite-support credit sum (`sumOver`). The tight
+-- content is the credit-reserve conservation; the count bound is its S=[] corollary.
+-- Closure MUST be kernel-only {propext, Classical.choice, Quot.sound} — NO project
+-- axiom (this is a pure operational/arithmetic conservation over the model).
+#print axioms SphincsCVerify.Wallet.CreditLedger.creditConservation
+#print axioms SphincsCVerify.Wallet.CreditLedger.exec_count_le_validate_count
+#print axioms SphincsCVerify.Spec.Theorems.exec_count_le_validate_count
+
 -- Claim 4, transported to the deployed EXECUTE bytecode (A3.2-exec): a
 -- successful deployed executeWithOffchainCount / executeBatchWithOffchainCount
 -- required the matching validated-owner token on entry. Closure adds

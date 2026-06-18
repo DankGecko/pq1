@@ -32,3 +32,10 @@ import SphincsCVerify
 #print axioms SphincsCVerify.Wallet.Execute.execute_preserves_other_credits
 #print axioms SphincsCVerify.Spec.Theorems.every_call_consumes_its_own_validated_credit
 #print axioms SphincsCVerify.Spec.Theorems.credit_lift_implies_verified_validate
+
+-- Gap-2 (credits model) — GLOBAL aggregate completeness complement (work-todo
+-- FV-#5): `#executes ≤ #validates` over any successful clean-transient trace,
+-- via a mathlib-free finite-support credit sum. Expected closure: kernel-only.
+#print axioms SphincsCVerify.Wallet.CreditLedger.creditConservation
+#print axioms SphincsCVerify.Wallet.CreditLedger.exec_count_le_validate_count
+#print axioms SphincsCVerify.Spec.Theorems.exec_count_le_validate_count

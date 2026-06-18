@@ -51,6 +51,7 @@ import SphincsCVerify.Wallet.Invariants
 import SphincsCVerify.Wallet.SphincsDigestSpec
 import SphincsCVerify.Wallet.Execute
 import SphincsCVerify.Wallet.TxFlow
+import SphincsCVerify.Wallet.CreditLedger
 import SphincsCVerify.Crypto.EUFCMA
 
 namespace SphincsCVerify.Spec.Theorems
@@ -699,12 +700,20 @@ refactor — commit 84ae543 — replaced with the per-index `credits` map; the
 merge `b9f2e59` left the old-API ledger stranded on the new model). The
 single-token ledger proved a GLOBAL aggregate `#executes ≤ #validates`; the
 credits model proves the STRONGER PER-INDEX exactly-once bound directly from
-the `Execute` require/consume lemmas — without a global sum, which over
-`Nat → Nat` would need finite-support machinery this mathlib-free project
-omits. The per-index form IS the operative anti-replay (it rules out the
-"one validate → two executes" replay the existential gate cannot); a
-credits-native GLOBAL trace-ledger (summing over the trace's finitely-many
-touched indices) is a clean follow-up, tracked for the credit-subsystem owner.
+the `Execute` require/consume lemmas. The per-index form IS the operative
+anti-replay (it rules out the "one validate → two executes" replay the
+existential gate cannot).
+
+The credits-native GLOBAL aggregate (the completeness complement) is now ALSO
+proven — `exec_count_le_validate_count` below (work-todo FV-#5), via a genuine
+mathlib-free finite-support credit sum over the trace's finitely-many touched
+indices (`Wallet.CreditLedger.sumOver`, the "machinery this project omits" the
+playbook flagged). It is intentionally LOOSER than the per-index bound (it
+counts ALL validates, not just stamping ones — "stamping" is state-dependent and
+not a static `countP`); the per-index result remains operative. NOTE: this is
+NOT a revival of the deleted single-`validatedOwnerPlusOne` token ledger (which
+was unfaithful to the per-index bytecode) — it is rebuilt natively on the
+`credits : Nat → Nat` map.
 
 `#print axioms` for both = `{ propext, Classical.choice, Quot.sound }`
 (kernel-only — same closure as the existential `every_call_gated_by_verifier`).
@@ -756,5 +765,22 @@ theorem credit_lift_implies_verified_validate
   obtain ⟨op, ep, cid, vfn, d, owner, hstep, hOk, _, _⟩ :=
     Wallet.TxFlow.applyStep_credit_lift_only_by_validate_success h hwas hnow
   exact ⟨op, ep, cid, vfn, d, owner, hstep, hOk.1, hOk.2.1, hOk.2.2.2.1⟩
+
+/-- **Global credit aggregate (completeness complement).** In any successful
+    transaction trace from a clean transient (`∀ i, σ0.credits i = 0`), the
+    number of money-moving `execute`/`executeBatch` steps is ≤ the number of
+    `validate` steps. The credits-native GLOBAL bound (work-todo FV-#5), the
+    aggregate counterpart to the per-index exactly-once anti-replay above —
+    proven via a mathlib-free finite-support credit sum
+    (`Wallet.CreditLedger.creditConservation`). Looser than the per-index bound
+    (counts ALL validates, not just stamping ones); the per-index result remains
+    operative. Re-exported here alongside the rest of Claim 4. -/
+theorem exec_count_le_validate_count
+    (σ0 σf : Wallet.Execute.ExecState) (trace : List Wallet.TxFlow.Step)
+    (hrun : Wallet.TxFlow.runTrace σ0 trace = some σf)
+    (hinit : ∀ i, σ0.credits i = 0) :
+    trace.countP Wallet.CreditLedger.isExec
+      ≤ trace.countP Wallet.CreditLedger.isValidate :=
+  Wallet.CreditLedger.exec_count_le_validate_count σ0 σf trace hrun hinit
 
 end SphincsCVerify.Spec.Theorems
