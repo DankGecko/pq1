@@ -1168,10 +1168,34 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // budget AND surfacing as "Sig commit FAIL" the next time
     // `last_userop_count_set` enforced its old strict-monotonic
     // check.
-    let local_offchain =
+    // F-10 hardening (audit 2026-06-18 — bring this gate to the off-chain
+    // gate's bar, cmd_sign_offchain.rs §6): read each counter TWICE with a
+    // randomised delay between and refuse on disagreement, so a single
+    // stuck-at fault on the value-holding register after a good flash scan
+    // cannot carry a faulted count into the combined-cap check below. The
+    // reads forward+reverse-scan internally (F-12), so a glitched scan
+    // yields u64::MAX — rejected here and tripped by the saturating cap.
+    let local_offchain_a =
         unsafe { crate::offchain_state::offchain_count_read(&slot_flash_key) };
-    let last_userop_snapshot =
+    crate::fi::wait_random();
+    let local_offchain_b =
+        unsafe { crate::offchain_state::offchain_count_read(&slot_flash_key) };
+    if local_offchain_a != local_offchain_b || local_offchain_a == u64::MAX {
+        ui::show_status("Slot sign", "fi tampered");
+        return NscStatus::InternalError as u32;
+    }
+    let local_offchain = local_offchain_a;
+
+    let last_userop_a =
         unsafe { crate::offchain_state::last_userop_count_read(&slot_flash_key) };
+    crate::fi::wait_random();
+    let last_userop_b =
+        unsafe { crate::offchain_state::last_userop_count_read(&slot_flash_key) };
+    if last_userop_a != last_userop_b || last_userop_a == u64::MAX {
+        ui::show_status("Slot sign", "fi tampered");
+        return NscStatus::InternalError as u32;
+    }
+    let last_userop_snapshot = last_userop_a;
 
     // MEDIUM-2 (audit counter-replay 20260611): enforce the *combined*
     // SPHINCS+ few-time budget on-device. Off-chain EIP-1271 sigs are
@@ -1184,10 +1208,27 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // signatures. Refuse before signing if emitting one more would push
     // the combined total past MAX_SLOT_USES. Fail-closed: a glitched read
     // returns u64::MAX, which saturates and trips the gate.
-    let userop_sigs = unsafe { crate::offchain_state::userop_sigs_read(&slot_flash_key) };
+    let userop_sigs_a =
+        unsafe { crate::offchain_state::userop_sigs_read(&slot_flash_key) };
+    crate::fi::wait_random();
+    let userop_sigs_b =
+        unsafe { crate::offchain_state::userop_sigs_read(&slot_flash_key) };
+    if userop_sigs_a != userop_sigs_b {
+        ui::show_status("Slot sign", "fi tampered");
+        return NscStatus::InternalError as u32;
+    }
+    let userop_sigs = userop_sigs_a;
     if userop_sigs.saturating_add(local_offchain) >= MAX_SLOT_USES {
         ui::show_status("Slot exhausted", "rotate slot");
         return NscStatus::OffchainCapExceeded as u32;
+    }
+    // F-10 belt-and-braces: re-evaluate the cap after a `wait_random` so a
+    // single glitch on the comparison / branch above must ALSO land in
+    // this second window to reach the sign.
+    crate::fi::wait_random();
+    if userop_sigs.saturating_add(local_offchain) >= MAX_SLOT_USES {
+        ui::show_status("Slot sign", "fi tampered");
+        return NscStatus::InternalError as u32;
     }
     secure_log!(
         "[S][sign] slot_key={:02x?} local_offchain={} last_userop={} userop_sigs={}",
