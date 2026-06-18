@@ -179,7 +179,7 @@ pass cannot exercise:
   read-back-verified torn-write detection. Requires real STM32U585
   + a controlled brown-out rig. Tested on bench by `make e2e-hw` for
   the happy path; brown-out tolerance is documented in
-  `docs/optiga-brick-postmortem.md` rather than tested in CI.
+  `docs/secure-elements/optiga-brick-postmortem.md` rather than tested in CI.
 - **RCC PLL lock on real silicon.** `try_pll_160mhz` only fully
   exercises the VOSRDY path on real PWR_VOSR hardware; QEMU never
   enters the PLL loop. `make test-key-speed` is the closest in-suite

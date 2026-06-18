@@ -16,7 +16,7 @@
 > - Revision 3 (this file, 2026-04-30) consolidates both runs into a
 >   single coherent narrative so the next person doesn't have to
 >   reconstruct state across two delta sections. Earlier revisions
->   live in `git log -- docs/handoff-modularity-refactor.md` if you
+>   live in `git log -- docs/archive/handoff-modularity-refactor.md` if you
 >   need them.
 
 ---
@@ -86,7 +86,7 @@ two execution runs, the state is:
 | Pre-production status | `~/.claude/projects/-home-markus-Documents-sphincs-rust/memory/project_pre_production_status.md` |
 | Baseline metrics (pre-refactor) | `docs/work-todo.md` — section "Modularity refactor — baseline (2026-04-30)" |
 | Completion log entries (2 rows for the 2 runs) | `docs/work-todo.md` — last two rows of "Completion Log" |
-| This file | `docs/handoff-modularity-refactor.md` |
+| This file | `docs/archive/handoff-modularity-refactor.md` |
 
 ---
 
@@ -193,7 +193,7 @@ M  CLAUDE.md
 M  Cargo.lock
 M  Cargo.toml
 M  Makefile
-M  docs/handoff-modularity-refactor.md
+M  docs/archive/handoff-modularity-refactor.md
 M  docs/work-todo.md
 M  secure/Cargo.toml
 M  secure/src/aa/mod.rs                    # shim

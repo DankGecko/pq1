@@ -140,7 +140,7 @@ Deliverables:
 
 ---
 
-## Project context (condensed — full version in `docs/ai-research-briefing.md`)
+## Project context (condensed — full version in `docs/archive/ai-research-briefing.md`)
 
 **What this is.** PQSigner OS: a post-quantum ERC-4337 smart-wallet
 firmware for STM32U585 (Cortex-M33 + ARM TrustZone) on the
@@ -176,7 +176,7 @@ always-on), IWDG all at factory defaults. Stage 1 of a 5-stage brownout
 roadmap added reset-cause classification + verified flash writes; the
 rest is planned. `make stm32-harden-opts` is a one-time option-byte
 setup target (sets BOR3 + SRAM2_RST=0) but has not been run yet. See
-`docs/brownout-hardening.md` for the full plan.
+`docs/security/brownout-hardening.md` for the full plan.
 
 **VBAT.** Production hardware uses a **0.47 F supercap** (not a
 battery) on VBAT via Schottky from Vdd. Bounded retention (~12-24 h
@@ -230,7 +230,7 @@ A **post-quantum hardware wallet** designed so that *every* cryptographic primit
 
 The design target is a **STM32U585 + Infineon OPTIGA Trust M V3 + NXP EdgeLock SE050**. No single die, no single vendor, and no future cryptographically-relevant quantum computer should be able to recover the seed from harvested traffic or extracted ciphertext.
 
-> **Status: dual-SE implemented.** The TrustZone firmware boots and runs on a real **B-U585I-IOT02A** dev board (STM32U585, Cortex-M33). The secure world, SAU/GTZC configuration, and first-boot wizard execute on silicon. See [`docs/dev-board-setup.md`](docs/dev-board-setup.md) for board setup instructions. Both secure element drivers are written: **OPTIGA Trust M V3** (pure Rust IFX I2C stack + AES-128-CCM shielded connection) and **NXP SE050** (T1oI2C + SCP03). The dual-SE XOR entropy split is wired and tested — BIP-39 entropy is split across both chips. The ML-KEM inner-wrap, ML-DSA hybrid OEMiROT, custom PCB, and production STM32 bring-up are the remaining **target architecture** items. Read the [Implementation Status](#implementation-status) table for what actually exists and where it actually runs today.
+> **Status: dual-SE implemented.** The TrustZone firmware boots and runs on a real **B-U585I-IOT02A** dev board (STM32U585, Cortex-M33). The secure world, SAU/GTZC configuration, and first-boot wizard execute on silicon. See [`docs/hardware/dev-board-setup.md`](docs/hardware/dev-board-setup.md) for board setup instructions. Both secure element drivers are written: **OPTIGA Trust M V3** (pure Rust IFX I2C stack + AES-128-CCM shielded connection) and **NXP SE050** (T1oI2C + SCP03). The dual-SE XOR entropy split is wired and tested — BIP-39 entropy is split across both chips. The ML-KEM inner-wrap, ML-DSA hybrid OEMiROT, custom PCB, and production STM32 bring-up are the remaining **target architecture** items. Read the [Implementation Status](#implementation-status) table for what actually exists and where it actually runs today.
 
 ```
                   ┌──────────────────────────────────────────────────┐
@@ -394,32 +394,32 @@ what you need:**
 
 | If you want to… | Read |
 |---|---|
-| Understand the architecture top-down | `README.md` (this file) + `docs/architecture.md` |
+| Understand the architecture top-down | `README.md` (this file) + `docs/architecture/architecture.md` |
 | Navigate the code as a contributor | `CLAUDE.md` (project context, invariants, file map) |
-| Set up a B-U585I-IOT02A dev board | `docs/dev-board-setup.md`, `docs/hardware_requirements.md` |
+| Set up a B-U585I-IOT02A dev board | `docs/hardware/dev-board-setup.md`, `docs/hardware/hardware_requirements.md` |
 
 ### Plan + roadmap
 
 | If you want to… | Read |
 |---|---|
 | See the full backlog (what's done, what's planned) | `docs/work-todo.md` |
-| Synthesise the 2026-04-14 deep-research findings into "what to do next" | `docs/production-security.md` |
-| Drive a future AI-research session with project context | `docs/ai-research-briefing.md` + `docs/research-bundles/` |
+| Synthesise the 2026-04-14 deep-research findings into "what to do next" | `docs/security/production-security.md` |
+| Drive a future AI-research session with project context | `docs/archive/ai-research-briefing.md` + `docs/research-bundles/` |
 | See what's already been researched (raw artefacts) | `docs/research-bundles/results/` |
 
 ### Subsystem-specific design
 
 | If you want to… | Read |
 |---|---|
-| Understand the brownout / glitch / supervisor 5-stage rollout (BOR, PVD, ECC, IWDG, TAMP, supercap on VBAT) | `docs/brownout-hardening.md` |
-| Understand the SE050 PIN-lockout factory-reset design (admin UserID + 2-entry TAG_POLICY) | `docs/se050-factory-reset.md` |
-| Understand the SE050 native UserID PIN auth flow | `docs/se050-userid-pin-auth.md` |
-| Side-channel + fault-injection hardening requirements | `docs/HARDENING.md` (existing) + `docs/production-security.md` §2.1 (new) |
-| ERC-4337 wallet contract design | `docs/pq-aa-wallet-design.md` |
+| Understand the brownout / glitch / supervisor 5-stage rollout (BOR, PVD, ECC, IWDG, TAMP, supercap on VBAT) | `docs/security/brownout-hardening.md` |
+| Understand the SE050 PIN-lockout factory-reset design (admin UserID + 2-entry TAG_POLICY) | `docs/secure-elements/se050-factory-reset.md` |
+| Understand the SE050 native UserID PIN auth flow | `docs/secure-elements/se050-userid-pin-auth.md` |
+| Side-channel + fault-injection hardening requirements | `docs/security/HARDENING.md` (existing) + `docs/security/production-security.md` §2.1 (new) |
+| ERC-4337 wallet contract design | `docs/archive/pq-aa-wallet-design.md` |
 | OPTIGA Trust M integration (IFX I2C, shielded connection) | `docs/OPTIGATRUSTM/*.md` |
-| Firmware measurement / signed updates | `docs/sphincs-c7-firmware-integration.md`, README §"Firmware Update Model" |
-| USB protocol on the wire | `docs/usb-protocol-v2.md`, `docs/usb-hid-setup.md` |
-| OLED mirror / dev tooling | `docs/oled-mirror.md` |
+| Firmware measurement / signed updates | `docs/archive/sphincs-c7-firmware-integration.md`, README §"Firmware Update Model" |
+| USB protocol on the wire | `docs/companion/usb-protocol-v2.md`, `docs/hardware/usb-hid-setup.md` |
+| OLED mirror / dev tooling | `docs/hardware/oled-mirror.md` |
 
 ### Per-domain quick map (which doc covers each concern)
 
@@ -583,7 +583,7 @@ make e2e               # scripted end-to-end: all four trust levels in QEMU
 (deterministic provisioning + auto-confirm + dispatch logging), runs
 QEMU with stdin closed, and asserts every scenario routed to the
 right `TxKind` variant AND returned `NscStatus::Ok`. See
-[docs/architecture.md](docs/architecture.md) for the full test
+[docs/architecture/architecture.md](docs/architecture/architecture.md) for the full test
 spec and the four scenarios it runs.
 
 ## Cryptographic Primitives
@@ -846,7 +846,7 @@ A single secure element is a single point of trust. Whether the failure mode is 
 
 The cost is one extra I²C peripheral, ~$3 BOM, and ~50 ms added unlock latency.
 
-See [docs/architecture.md](docs/architecture.md) for the technical design, [docs/HARDENING.md](docs/HARDENING.md) for the consolidated hardening requirements, and [docs/m4-cowswap-eip712.md](docs/m4-cowswap-eip712.md) for the CowSwap EIP-712 order clear-signing handoff (deferred M4 milestone — read this before attempting that work).
+See [docs/architecture/architecture.md](docs/architecture/architecture.md) for the technical design, [docs/security/HARDENING.md](docs/security/HARDENING.md) for the consolidated hardening requirements, and [docs/archive/m4-cowswap-eip712.md](docs/archive/m4-cowswap-eip712.md) for the CowSwap EIP-712 order clear-signing handoff (deferred M4 milestone — read this before attempting that work).
 
 ## Implementation Status
 
@@ -1369,7 +1369,7 @@ Status: dual-SE implemented. Firmware boots on real B-U585I-IOT02A + QEMU mps2-a
 ### SE050 Integration
 
 **What:** Stores `half_E` of the XOR-split entropy. Communicates over I2C via SCP03 authenticated+encrypted channel. UserID PIN auth with 10-attempt hardware limit.
-**Key files:** `secure/src/se050/mod.rs`, `secure/src/se050/scp03.rs`, `secure/src/se050/apdu.rs`, `secure/src/se050/t1oi2c.rs`, `secure/src/se050/i2c.rs`, `docs/se050-userid-pin-auth.md`
+**Key files:** `secure/src/se050/mod.rs`, `secure/src/se050/scp03.rs`, `secure/src/se050/apdu.rs`, `secure/src/se050/t1oi2c.rs`, `secure/src/se050/i2c.rs`, `docs/secure-elements/se050-userid-pin-auth.md`
 **Object IDs:**
 - `0x7B06_0000` -- UserID (hardware PIN, max 10 attempts, non-deletable)
 - `0x7B06_0001` -- Raw entropy (32 B, policy: requires UserID auth)
@@ -1583,10 +1583,10 @@ make measure           # Build firmware + print 8 BIP-39 measurement words
 | `dbgen/` | Host-side Merkle DB builder |
 | `fwmeasure/` | Host-side firmware measurement: ELF → SHA-256 → 8 BIP-39 words |
 | `Makefile` | Build orchestration |
-| `docs/architecture.md` | Detailed technical architecture |
-| `docs/HARDENING.md` | Side-channel + fault hardening requirements |
-| `docs/pq-aa-wallet-design.md` | ERC-4337 wallet design spec |
-| `docs/se050-userid-pin-auth.md` | SE050 PIN auth design |
+| `docs/architecture/architecture.md` | Detailed technical architecture |
+| `docs/security/HARDENING.md` | Side-channel + fault hardening requirements |
+| `docs/archive/pq-aa-wallet-design.md` | ERC-4337 wallet design spec |
+| `docs/secure-elements/se050-userid-pin-auth.md` | SE050 PIN auth design |
 
 ## What NOT To Do
 
@@ -1610,18 +1610,18 @@ After completing any implementation task, check `docs/work-todo.md` to see if th
 
 For full details beyond this summary, read:
 - `README.md` -- Complete architecture, threat model, quantum threat analysis, security model, implementation status, shipping checklist, STM32 lockdown procedure
-- `docs/architecture.md` -- Detailed technical architecture (1390 lines)
-- `docs/HARDENING.md` -- Side-channel and fault-injection hardening requirements
-- `docs/pq-aa-wallet-design.md` -- ERC-4337 wallet design with two-tier PQ signers
-- `docs/se050-userid-pin-auth.md` -- SE050 UserID PIN authentication design
-- `docs/dev-board-setup.md` -- B-U585I-IOT02A devkit setup
-- `docs/hardware_requirements.md` -- BOM and hardware requirements
-- `docs/m4-cowswap-eip712.md` -- CowSwap EIP-712 clear-signing design (future M4)
+- `docs/architecture/architecture.md` -- Detailed technical architecture (1390 lines)
+- `docs/security/HARDENING.md` -- Side-channel and fault-injection hardening requirements
+- `docs/archive/pq-aa-wallet-design.md` -- ERC-4337 wallet design with two-tier PQ signers
+- `docs/secure-elements/se050-userid-pin-auth.md` -- SE050 UserID PIN authentication design
+- `docs/hardware/dev-board-setup.md` -- B-U585I-IOT02A devkit setup
+- `docs/hardware/hardware_requirements.md` -- BOM and hardware requirements
+- `docs/archive/m4-cowswap-eip712.md` -- CowSwap EIP-712 clear-signing design (future M4)
 - `docs/work-todo.md` -- Gap analysis: what's missing for full E2E hardware wallet
 
 
 
-### From `docs/architecture.md`
+### From `docs/architecture/architecture.md`
 
 # SPHINCS+ Post-Quantum Hardware Wallet — TrustZone Architecture
 
@@ -2323,8 +2323,8 @@ protocol implements `Eip712Protocol` in a sibling submodule under
 `secure/src/tx/eip712/` and registers itself in the static
 `PROTOCOLS` table; adding a second EIP-712 protocol is a sibling
 file plus a VK row, no edits to `nsc.rs`. See `secure/src/tx/eip712/` and
-**[docs/m4-cowswap-eip712-impl.md](./m4-cowswap-eip712-impl.md)** for
-implementation notes; **[docs/m4-cowswap-eip712.md](./m4-cowswap-eip712.md)**
+**[docs/companion/m4-cowswap-eip712-impl.md](./m4-cowswap-eip712-impl.md)** for
+implementation notes; **[docs/archive/m4-cowswap-eip712.md](./m4-cowswap-eip712.md)**
 captures the original handoff design sketch.
 
 ### Verification chain
@@ -3018,7 +3018,7 @@ All cryptographic crates run without heap allocation:
 
 
 
-### From `docs/pq-aa-wallet-design.md`
+### From `docs/archive/pq-aa-wallet-design.md`
 
 # Post-Quantum ERC-4337 Wallet: Final Design Spec
 
@@ -3582,7 +3582,7 @@ On-chain verification cost is prohibitive for both (4.4M/11.6M gas). Wrap verifi
 
 
 
-### From `docs/HARDENING.md`
+### From `docs/security/HARDENING.md`
 
 # Hardware Wallet Hardening Requirements
 
@@ -3959,7 +3959,7 @@ Things that must be acknowledged plainly:
 
 
 
-### From `docs/brownout-hardening.md`
+### From `docs/security/brownout-hardening.md`
 
 # Brownout & Glitch Hardening — Design + Roadmap
 
@@ -3999,7 +3999,7 @@ Current design addresses **E partially** (wipe flag) and **F partially**
 (panic handler zeroize). Everything else is unmitigated.
 
 **Cross-references to the 2026-04-14 deep-research round** (see
-`docs/production-security.md` for the full synthesis):
+`docs/security/production-security.md` for the full synthesis):
 
 - Bundle A (fault injection) confirms: **BOR/IWDG/ECC/TAMP factory
   defaults are directly attackable**. Masaryk U 2024/2025 thesis
@@ -4487,7 +4487,7 @@ Validated at each stage; the test matrix grows monotonically.
 - **Hard reset via NRST.** Same scope as probe-rs reset. Slightly more
   thorough (resets analog peripherals).
 - **Cold cycle via USB unplug.** True cold boot for both chips.
-  Manual, but validated end-to-end: see `docs/se050-factory-reset.md`
+  Manual, but validated end-to-end: see `docs/secure-elements/se050-factory-reset.md`
   and the `[E2E-CRASH]` test log.
 - **Programmable USB power switch** (e.g. uhubctl-compatible hub).
   ~$15. Automated cold cycles at any interval. Enables statistical
@@ -4614,11 +4614,11 @@ At the end of the roadmap the following will hold:
 | Verified flash writes | `secure/src/hw/flash.rs` (`write_quadword_verified`) |
 | Boot-time dispatch | `secure/src/main.rs` |
 | Option-byte setup | `Makefile` target `stm32-harden-opts` |
-| This doc | `docs/brownout-hardening.md` |
+| This doc | `docs/security/brownout-hardening.md` |
 
 
 
-### From `docs/production-security.md`
+### From `docs/security/production-security.md`
 
 # Production Security — synthesis of 2026-04-14 research round
 
@@ -4632,8 +4632,8 @@ finding below cites the responsible bundle plus any verification caveats.
 
 **Scope of this doc:** threats, mitigations, and architectural decisions
 that the research round surfaced. For the staged brownout-hardening
-rollout see `docs/brownout-hardening.md`. For the SE050 PIN-lockout
-factory-reset design see `docs/se050-factory-reset.md`.
+rollout see `docs/security/brownout-hardening.md`. For the SE050 PIN-lockout
+factory-reset design see `docs/secure-elements/se050-factory-reset.md`.
 
 ---
 
@@ -5139,7 +5139,7 @@ posture, excluding the on-chain verifier work for a SHAKE migration.
 
 - Not a code specification — see `docs/work-todo.md` for actionable
   tasks with file paths, and the code itself once implemented.
-- Not a threat model — see `docs/HARDENING.md` and `CLAUDE.md`
+- Not a threat model — see `docs/security/HARDENING.md` and `CLAUDE.md`
   invariants. This doc documents *mitigations* surfaced by research,
   not the overall threat taxonomy.
 - Not a replacement for primary-source documentation — every register
@@ -5150,7 +5150,7 @@ posture, excluding the on-chain verifier work for a SHAKE migration.
 
 
 
-### From `docs/ai-research-briefing.md`
+### From `docs/archive/ai-research-briefing.md`
 
 # AI Research Briefing — PQSigner OS
 
@@ -5213,7 +5213,7 @@ it last as the source of truth.*
   defaults** = effectively off/minimum. Stage 1 of the brownout
   roadmap added reset-cause classification and verified flash writes;
   Stage 2 will turn on BOR3, PVD, ECC, and wire an NMI handler. See
-  `docs/brownout-hardening.md` for the full 5-stage plan.
+  `docs/security/brownout-hardening.md` for the full 5-stage plan.
 
 **Reset behaviour (empirically verified on this board):**
 - `probe-rs reset` = SWD SYSRESETREQ. Classified as `ResetCause::Software`
@@ -5263,7 +5263,7 @@ not useful.
 - SE050 PIN-lockout factory reset via secondary admin UserID
   (`0x7B06_00A0`), admin PIN stored in secure flash page 125,
   two-entry TAG_POLICY on every user object. Full design +
-  production checklist: `docs/se050-factory-reset.md`.
+  production checklist: `docs/secure-elements/se050-factory-reset.md`.
 - SCP03 authenticated+encrypted channel on SE050. **Using NXP default
   static keys** — not rotated per device. Production plan: rotate +
   HUK-SAES wrap, tracked as `docs/work-todo.md` item 7.
@@ -5281,7 +5281,7 @@ not useful.
   any dev board).
 
 **Designed but not implemented:**
-- Brownout Stages 1.5–5 (see `docs/brownout-hardening.md`).
+- Brownout Stages 1.5–5 (see `docs/security/brownout-hardening.md`).
 - Hash-signature firmware update model (ML-DSA-44 signs the
   measurement hash; `docs/work-todo.md` item 14).
 - Immutable bootloader in WRP-locked flash (`docs/work-todo.md` item 15).
@@ -5368,7 +5368,7 @@ bundle E has not.)
 - **Voltage glitching on RDP byte read during boot** — dominant historical STM32 attack. Ledger Donjon's March 2025 statement that no public U5 glitch bypass existed (verified real, `ledger.com/why-secure-elements-make-a-crucial-difference-to-hardware-wallet-security`) was invalidated within months by the Simonik thesis at Masaryk University (verified real) demonstrating ~76% PIN-glitch bypass on STM32U5 silicon. Defences planned: BOR4, PVD, tamper monitors, option-byte RDP Level 2 with OEM1LOCK for production. **U5 is confirmed glitch-vulnerable** at the core level — not presumed, proven.
 - **EMFI** — possible against U5 core; no public attack. Defended via internal tamper (temp/voltage/clock), optional tamper mesh on production PCB.
 - **Power/EM side-channel on software crypto** — SLH-DSA on Cortex-M33 emits EM. Mitigation status unclear; needs dedicated research (see Prompt C below).
-- **Fault injection on signature verify / PIN compare** — partially mitigated (verify-before-release). Bundle A research found verify-after-sign is *not adequate* for SLH-DSA per Genêt TCHES 2023 + RFC 9814. **SLH-DSA double-compute on disjoint SRAM is mandatory** before production. PIN compare needs FihInt complement-storage + fail-in pattern + volatile reads. See `docs/production-security.md` §2.1 + work-todo.md #18.
+- **Fault injection on signature verify / PIN compare** — partially mitigated (verify-before-release). Bundle A research found verify-after-sign is *not adequate* for SLH-DSA per Genêt TCHES 2023 + RFC 9814. **SLH-DSA double-compute on disjoint SRAM is mandatory** before production. PIN compare needs FihInt complement-storage + fail-in pattern + volatile reads. See `docs/security/production-security.md` §2.1 + work-todo.md #18.
 - **I2C bus interposer between MCU and SE** — defended by SCP03 with auth + encrypt on every APDU. Keys need rotation for production. Bundle B research provides the concrete two-stage RDP provisioning protocol with per-device SCP03 keys derived via CMAC-KDF(FMK, "SCP03-ENC", SE050_UID), PUT KEY (KVN 0x0B → 0x11), HUK-SAES two-level wrapping. See work-todo.md #20.
 - **Dark Skippy / anti-klepto nonce exfiltration** — ECDSA-specific, does not apply to SLH-DSA (stateless hash-based signatures have no nonce). **Irrelevant to us.** Stating this explicitly so future research doesn't chase it.
 - **Cold boot / Volt Boot / UnTrustZone SRAM residue** — minimize seed time in SRAM; Stage 2 moves secrets to SRAM2 with hardware auto-erase.
@@ -5391,7 +5391,7 @@ attachment, and the session has everything it needs. See
 `docs/research-bundles/README.md` for the mapping.
 
 **Status as of last update:**
-- Prompt A (fault injection): ✅ run, results in `docs/research-bundles/results/`, synthesised to `docs/production-security.md` §2.1 + work-todo.md #18.
+- Prompt A (fault injection): ✅ run, results in `docs/research-bundles/results/`, synthesised to `docs/security/production-security.md` §2.1 + work-todo.md #18.
 - Prompt B (key management): ✅ run, results in same dir, synthesised §2.2 + #20 (partially superseded by E).
 - Prompt C (SLH-DSA SCA): ✅ run, synthesised §2.3 + #18.
 - Prompt D (USB hardening): ✅ run, synthesised §2.4 + #19.
@@ -5448,7 +5448,7 @@ OPTIGA's Platform Binding Secret is per-device-random but stored as
 raw bytes in secure flash page 126. HUK-SAES wrapping is listed as
 work-todo item 7 but unimplemented. STM32U585 has the SAES peripheral
 and a Hardware Unique Key per chip (not readable by firmware; only
-usable as a KEK via SAES). `docs/se050-factory-reset.md` §2a has a
+usable as a KEK via SAES). `docs/secure-elements/se050-factory-reset.md` §2a has a
 brief future-optimisation note.
 
 **Research question:**
@@ -5527,7 +5527,7 @@ improves the SCA posture or is orthogonal.
 interface. No UART, no BT, no NFC. The USB stack today is custom:
 Ledger-compatible APDU framing over HID for compatibility with
 existing wallet-host software, plus a custom PQSigner-native protocol
-for our own companion app (`docs/usb-protocol-v2.md`). The host
+for our own companion app (`docs/companion/usb-protocol-v2.md`). The host
 software running on the user's computer is not trusted — it's
 potentially the primary attack vector.
 
@@ -5627,12 +5627,12 @@ customer without requiring them to run an independent tool.
 
 | Concern | Path |
 |---|---|
-| This briefing | `docs/ai-research-briefing.md` |
-| Threat model + architecture | `README.md`, `docs/architecture.md`, `CLAUDE.md` |
-| Brownout hardening (5-stage plan) | `docs/brownout-hardening.md` |
-| SE050 PIN-lockout factory reset | `docs/se050-factory-reset.md` |
-| SE050 native UserID PIN design | `docs/se050-userid-pin-auth.md` |
-| Side-channel + FI hardening reqs | `docs/HARDENING.md` |
+| This briefing | `docs/archive/ai-research-briefing.md` |
+| Threat model + architecture | `README.md`, `docs/architecture/architecture.md`, `CLAUDE.md` |
+| Brownout hardening (5-stage plan) | `docs/security/brownout-hardening.md` |
+| SE050 PIN-lockout factory reset | `docs/secure-elements/se050-factory-reset.md` |
+| SE050 native UserID PIN design | `docs/secure-elements/se050-userid-pin-auth.md` |
+| Side-channel + FI hardening reqs | `docs/security/HARDENING.md` |
 | Work backlog + provisioning TODOs | `docs/work-todo.md` |
 | ERC-4337 wallet contract | `contracts/smart-wallet/src/` |
 | Secure world entry | `secure/src/main.rs` |

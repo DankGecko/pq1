@@ -28,7 +28,7 @@
 //!
 //! Migration of every `cmd_*.rs` to thread `NsPtr<T>` end-to-end is
 //! sequenced under Phase 7 of the modularity refactor (per
-//! `docs/handoff-modularity-refactor.md` §4.6 PR B). Until that lands,
+//! `docs/archive/handoff-modularity-refactor.md` §4.6 PR B). Until that lands,
 //! new code SHOULD use these types; existing call sites can adopt them
 //! incrementally without breaking the legacy `validate_ns_*_ptr(u32,
 //! usize)` API.

@@ -35,7 +35,7 @@ are checked by Lean; each is an axiom or an external dependency.
 
    The verifier itself implements FIPS 205-aligned SPHINCS+C10 in
    hand-tuned Yul. Lifting this to a Lean theorem is the subject of
-   `docs/handoff-verity-c10-verifier.md`.
+   `docs/archive/handoff-verity-c10-verifier.md`.
 
 2. **SHA-256 / Keccak-256 precompile correctness.** Both are
    axiomatised as the spec hash functions. Theorem #9

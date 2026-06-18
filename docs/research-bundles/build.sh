@@ -57,7 +57,7 @@ write_preamble() {
 
 ---
 
-## Project context (condensed — full version in `docs/ai-research-briefing.md`)
+## Project context (condensed — full version in `docs/archive/ai-research-briefing.md`)
 
 **What this is.** PQSigner OS: a post-quantum ERC-4337 smart-wallet
 firmware for STM32U585 (Cortex-M33 + ARM TrustZone) on the
@@ -93,7 +93,7 @@ always-on), IWDG all at factory defaults. Stage 1 of a 5-stage brownout
 roadmap added reset-cause classification + verified flash writes; the
 rest is planned. `make stm32-harden-opts` is a one-time option-byte
 setup target (sets BOR3 + SRAM2_RST=0) but has not been run yet. See
-`docs/brownout-hardening.md` for the full plan.
+`docs/security/brownout-hardening.md` for the full plan.
 
 **VBAT.** Production hardware uses a **0.47 F supercap** (not a
 battery) on VBAT via Schottky from Vdd. Bounded retention (~12-24 h
@@ -228,7 +228,7 @@ EOF
   append_code "$bundle" "secure/src/se050/scp03.rs" rust
   append_code "$bundle" "secure/src/optiga/shield.rs" rust
   append_code "$bundle" "secure/src/hw/flash.rs" rust
-  append_markdown "$bundle" "docs/se050-factory-reset.md"
+  append_markdown "$bundle" "docs/secure-elements/se050-factory-reset.md"
   echo "  built $bundle ($(wc -c < "$bundle") bytes)"
 }
 
@@ -331,8 +331,8 @@ EOF
   append_code "$bundle" "nonsecure/src/usb/transport.rs" rust
   append_code "$bundle" "nonsecure/src/usb/hid.rs" rust
   append_code "$bundle" "nonsecure/src/usb/commands.rs" rust
-  append_markdown "$bundle" "docs/usb-protocol-v2.md"
-  append_markdown "$bundle" "docs/usb-hid-setup.md"
+  append_markdown "$bundle" "docs/companion/usb-protocol-v2.md"
+  append_markdown "$bundle" "docs/hardware/usb-hid-setup.md"
   echo "  built $bundle ($(wc -c < "$bundle") bytes)"
 }
 
@@ -380,9 +380,9 @@ EOF
   {
     printf '\n## Relevant design docs (code footprint small — feature not implemented)\n'
   } >> "$bundle"
-  append_markdown "$bundle" "docs/architecture.md"
-  append_markdown "$bundle" "docs/pq-aa-wallet-design.md"
-  append_markdown "$bundle" "docs/HARDENING.md"
+  append_markdown "$bundle" "docs/architecture/architecture.md"
+  append_markdown "$bundle" "docs/archive/pq-aa-wallet-design.md"
+  append_markdown "$bundle" "docs/security/HARDENING.md"
   echo "  built $bundle ($(wc -c < "$bundle") bytes)"
 }
 
@@ -539,12 +539,12 @@ EOF
   } >> "$bundle"
   append_markdown "$bundle" "README.md"
   append_markdown "$bundle" "CLAUDE.md"
-  append_markdown "$bundle" "docs/architecture.md"
-  append_markdown "$bundle" "docs/pq-aa-wallet-design.md"
-  append_markdown "$bundle" "docs/HARDENING.md"
-  append_markdown "$bundle" "docs/brownout-hardening.md"
-  append_markdown "$bundle" "docs/production-security.md"
-  append_markdown "$bundle" "docs/ai-research-briefing.md"
+  append_markdown "$bundle" "docs/architecture/architecture.md"
+  append_markdown "$bundle" "docs/archive/pq-aa-wallet-design.md"
+  append_markdown "$bundle" "docs/security/HARDENING.md"
+  append_markdown "$bundle" "docs/security/brownout-hardening.md"
+  append_markdown "$bundle" "docs/security/production-security.md"
+  append_markdown "$bundle" "docs/archive/ai-research-briefing.md"
   append_code "$bundle" "secure/src/dual_se.rs" rust
   append_code "$bundle" "secure/src/nsc/mod.rs" rust
   echo "  built $bundle ($(wc -c < "$bundle") bytes)"

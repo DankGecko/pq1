@@ -7,7 +7,7 @@
 > of 384-byte ABI encoding, sentinel-address VK DB key instead of
 > domain-byte format change, no token registry / amount formatter in
 > v1, etc.). For the **as-built** description, read
-> [`docs/m4-cowswap-eip712-impl.md`](./m4-cowswap-eip712-impl.md). The
+> [`docs/companion/m4-cowswap-eip712-impl.md`](../companion/m4-cowswap-eip712-impl.md). The
 > "Gotchas" section below is still useful as background for future
 > circuit work.
 
@@ -187,7 +187,7 @@ that path integrates is the main firmware design decision — see §4.
 
 ### 1.5 Supporting docs already updated
 
-- `docs/architecture.md` — §"Building the ERC20 + VK databases" now
+- `docs/architecture/architecture.md` — §"Building the ERC20 + VK databases" now
   describes the `circuits/` pipeline. §"Release-review workflow" was
   rewritten to remove every reference to on-chain
   `clearSigningVKHash`. That language should **never** come back.
@@ -593,10 +593,10 @@ pub const EIP712_HEADER_LEN: usize =
   will pick it up automatically once `vk_file` points to a
   committed `.vk.bin`.
 - `circuits/circuits.json` — new row for `cowswap_eip712_order`.
-- `docs/architecture.md` — ZK clear-signing section gets a second
+- `docs/architecture/architecture.md` — ZK clear-signing section gets a second
   payload shape diagram. The "canonical leaf encoding" section
   stays the same.
-- `docs/m4-cowswap-eip712.md` (this file) — delete or mark as
+- `docs/archive/m4-cowswap-eip712.md` (this file) — delete or mark as
   "historical" once M4 is done.
 
 **NOT modified (explicitly):**
@@ -1139,7 +1139,7 @@ Do these in order. Each step has its own small verification.
 - [ ] Add scenario 6 to `nonsecure/src/e2e_test.rs`
 - [ ] Add assertions to the `Makefile` `e2e` target
 - [ ] `make e2e` — confirm all 6 scenarios pass
-- [ ] Update `docs/architecture.md` with the second payload
+- [ ] Update `docs/architecture/architecture.md` with the second payload
       shape (and delete this handoff file, or mark it
       historical)
 

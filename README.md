@@ -176,7 +176,7 @@ Every primitive that touches a secret, with PQ status. **Classical** entries are
 
 **Residual classical surface we accept:** OPTIGA Shielded Connection KDF (symmetric-only; worst case Grover-accelerated PBS brute force, still > 128-bit PQ); SE050 secure-channel auth (MITM needs real-time physical bus tampering on a powered device; the planned inner wrap means MITM still can't read the half); SE factory attestation (ECDSA — proof-of-presence only); OPTIGA/SE050 internal firmware (single-chip compromise leaks zero seed bits); U585 RDP-2 + HUK-SAES (the irreducible "extract the specific die" attack).
 
-**We explicitly do *not* defend against:** coerced unlock; an active CRQC adversary with sustained physical access to a powered, unlocked device; a fundamental break of SPHINCS+ / SHA-256 (civilization-scale; recovery is a firmware update to a SHA-3/SHAKE-based scheme); a break of ML-KEM (only used for confidentiality of stored halves — the signing key never depends on lattices); side-channel / fault attacks on U585 silicon (orthogonal to PQ; mitigated by TAMP / consumption-mask / verify-before-release / FI-hardened `gated_unlock` + `docs/HARDENING.md`).
+**We explicitly do *not* defend against:** coerced unlock; an active CRQC adversary with sustained physical access to a powered, unlocked device; a fundamental break of SPHINCS+ / SHA-256 (civilization-scale; recovery is a firmware update to a SHA-3/SHAKE-based scheme); a break of ML-KEM (only used for confidentiality of stored halves — the signing key never depends on lattices); side-channel / fault attacks on U585 silicon (orthogonal to PQ; mitigated by TAMP / consumption-mask / verify-before-release / FI-hardened `gated_unlock` + `docs/security/HARDENING.md`).
 
 **Why hash-based signatures for the actual money:** lattice schemes rely on LWE hardness with a far younger cryptanalytic track record than hash functions. For the signing key and firmware signing we use SPHINCS+C10, whose only assumption is SHA-256. If lattices fall, only the planned ML-KEM inner-wrap layer migrates; signatures and firmware verification are unaffected.
 
@@ -266,7 +266,7 @@ CI; the Lean kernel re-checks every proof, so AI output can never compromise
 soundness), with an adversarial spec-validation layer — property-based
 counterexample search on every spec before proof effort, plus differential
 fuzzing of the executable Lean spec against the real Rust crate on the host.
-Research and tool selection: [docs/lean-verification-research-2026-06.md](docs/lean-verification-research-2026-06.md).
+Research and tool selection: [docs/verification/lean-verification-research-2026-06.md](docs/verification/lean-verification-research-2026-06.md).
 
 What this unlocks, in value order:
 
@@ -344,7 +344,7 @@ Device (run):  BEGIN → CHUNK* → COMMIT writes bank 2; on COMMIT re-hash, sho
 - **Anti-rollback via OTP fuses** (1024 increments, survives RDP regression); no reset path.
 - **PIN unlock required on every `CMD_FW_*`** (the seed is never accessed, but this blocks silent re-flash of a stolen device). The at-rest vendor SK is Argon2id + XChaCha20-Poly1305 wrapped — only on the signing machine, never on the device.
 
-See [docs/firmware-update.md](docs/firmware-update.md) and [docs/reproducible-builds.md](docs/reproducible-builds.md).
+See [docs/firmware/firmware-update.md](docs/firmware/firmware-update.md) and [docs/firmware/reproducible-builds.md](docs/firmware/reproducible-builds.md).
 
 ## Build Modes
 
@@ -380,7 +380,7 @@ Each phase has a hard exit criterion before the next starts. Full backlog: `docs
 
 Nothing here is optional. Run through the entire list **per device class**, not per software release. Each item is something that has bricked, leaked, or burned a hardware-wallet vendor in the last decade.
 
-**A. Hardware design & PCB** *(full spec: [`docs/hardware_requirements.md`](docs/hardware_requirements.md))*
+**A. Hardware design & PCB** *(full spec: [`docs/hardware/hardware_requirements.md`](docs/hardware/hardware_requirements.md))*
 - [ ] PCB review by an embedded-security specialist (not the layout engineer)
 - [ ] Evaluate moving SE050 off the shared I2C1 (0x30 / 0x48) to a second peripheral; independent reset for each SE
 - [ ] No test pads / debug headers / probe points on any SE bus, OLED bus, button GPIO, or S-world peripheral
@@ -479,12 +479,12 @@ Each HDPL transition irrevocably hides the previous level's option bytes and OBK
 
 Start with this README → `CLAUDE.md` (invariants, file map, conventions) → `docs/work-todo.md` (backlog) → the subsystem doc for your task.
 
-- **Architecture / hardening:** `docs/architecture.md`, `docs/HARDENING.md`, `docs/threat-model.md`, `docs/production-security.md`, `docs/brownout-hardening.md`
-- **Secure elements:** `docs/se050-userid-pin-auth.md`, `docs/se050-factory-reset.md`, `docs/optiga-bringup-status.md`, `docs/OPTIGATRUSTM/*.md`
-- **Firmware / builds:** `docs/firmware-update.md`, `docs/reproducible-builds.md`
-- **Wallet / clear-signing:** `docs/pq-aa-wallet-design.md`, `docs/companion-app-integration.md`, `docs/erc7730-integration.md`, `docs/erc8213-fingerprints.md`, `docs/m4-cowswap-eip712.md`
-- **USB / dev:** `docs/usb-protocol-v2.md`, `docs/usb-hid-setup.md`, `docs/dev-board-setup.md`, `docs/hardware_requirements.md`
-- **Formal verification:** `contracts/verification/` (Lean proofs + axiom status), `docs/lean-verification-research-2026-06.md` (tooling research), work-todo §33 (firmware track)
+- **Architecture / hardening:** `docs/architecture/architecture.md`, `docs/security/HARDENING.md`, `docs/security/threat-model.md`, `docs/security/production-security.md`, `docs/security/brownout-hardening.md`
+- **Secure elements:** `docs/secure-elements/se050-userid-pin-auth.md`, `docs/secure-elements/se050-factory-reset.md`, `docs/secure-elements/optiga-bringup-status.md`, `docs/OPTIGATRUSTM/*.md`
+- **Firmware / builds:** `docs/firmware/firmware-update.md`, `docs/firmware/reproducible-builds.md`
+- **Wallet / clear-signing:** `docs/archive/pq-aa-wallet-design.md`, `docs/companion/companion-app-integration.md`, `docs/companion/erc7730-integration.md`, `docs/companion/erc8213-fingerprints.md`, `docs/archive/m4-cowswap-eip712.md`
+- **USB / dev:** `docs/companion/usb-protocol-v2.md`, `docs/hardware/usb-hid-setup.md`, `docs/hardware/dev-board-setup.md`, `docs/hardware/hardware_requirements.md`
+- **Formal verification:** `contracts/verification/` (Lean proofs + axiom status), `docs/verification/lean-verification-research-2026-06.md` (tooling research), work-todo §33 (firmware track)
 
 ## License
 

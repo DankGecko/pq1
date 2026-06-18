@@ -47,7 +47,7 @@
 //! property whose silent removal they would otherwise enable. Many
 //! cite CLAUDE.md Invariant #4 ("NS never sees secure-world
 //! peripherals") and the brownout-hardening contract documented in
-//! `docs/brownout-hardening.md` (referenced from `reset_cause.rs:7`).
+//! `docs/security/brownout-hardening.md` (referenced from `reset_cause.rs:7`).
 
 #![cfg(test)]
 

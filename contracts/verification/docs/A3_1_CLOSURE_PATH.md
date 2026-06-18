@@ -101,7 +101,7 @@ explosion:
   it entirely needs verified compilation (Verity stops at Yul; KEVM-to-spec is
   multi-person-year), which is why even the full deductive proof leaves a cited
   bridge — but a *much smaller* one (see §5). **Complementary bytecode-level
-  check (SOTA 2026-06, `docs/security-tooling-sota-2026-06.md` §2):** `hevm`
+  check (SOTA 2026-06, `docs/verification/security-tooling-sota-2026-06.md` §2):** `hevm`
   equivalence (and Kontrol/KEVM) can prove the *deployed bytecode* ≡ a reference
   Solidity verifier over all inputs with SHA-256 uninterpreted — a *different*
   equivalence than model↔spec, attacking R1 from the bytecode side; it bounds the

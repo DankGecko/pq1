@@ -17,12 +17,12 @@ point for getting Part A to compile.
 
 | Part | What it covers | Build status |
 |------|----------------|--------------|
-| **A** | `PQMultiOwnable` storage + writers, `PQSmartWalletFactory` salt + digest, `PQSmartWallet` dispatch. Files at `PQSigner/{Common,PQMultiOwnable,PQSmartWalletFactory,PQSmartWallet,Theorems}.lean`. | **Does not build** — imports fictional Verity modules. Blocked on Verity Phase 0 (see `docs/verity-v0.1.0-primitive-map.md`). Kept in-tree as the spec for what Verity v0.2.x+ must support. Lakefile root entry removed from default target. |
+| **A** | `PQMultiOwnable` storage + writers, `PQSmartWalletFactory` salt + digest, `PQSmartWallet` dispatch. Files at `PQSigner/{Common,PQMultiOwnable,PQSmartWalletFactory,PQSmartWallet,Theorems}.lean`. | **Does not build** — imports fictional Verity modules. Blocked on Verity Phase 0 (see `docs/archive/verity-v0.1.0-primitive-map.md`). Kept in-tree as the spec for what Verity v0.2.x+ must support. Lakefile root entry removed from default target. |
 | **B** | SPHINCS+C10 verifier (pure-Lean reference impl of `sphincs-c10/`). Files at `PQSigner/Verifier/{Params,Address,Hash,Wots,Merkle,Fors,Hypertree,Top}.lean`. ~40 closed theorems on closeable invariants + 2 documented axioms + 1 documented sorry. | **Builds clean** under Lean 4.22.0. `make build` succeeds. |
 
-See [docs/handoff-verity-c10-verifier.md](../../docs/handoff-verity-c10-verifier.md)
+See [docs/archive/handoff-verity-c10-verifier.md](../../docs/archive/handoff-verity-c10-verifier.md)
 for the original multi-quarter plan and
-[docs/verity-v0.1.0-primitive-map.md](../../docs/verity-v0.1.0-primitive-map.md)
+[docs/archive/verity-v0.1.0-primitive-map.md](../../docs/archive/verity-v0.1.0-primitive-map.md)
 for the Phase-0 upstream reconnaissance landed alongside Part B.
 
 ---
@@ -251,7 +251,7 @@ cd ../smart-wallet && forge test --match-contract Differential -vv
 See `TRUST_ASSUMPTIONS.md` for the full list. The highlights:
 
 1. **SPHINCS+C10 verifier correctness** — `SPHINCsC10Asm.sol` is
-   modelled as an opaque oracle. See `docs/handoff-verity-c10-verifier.md`
+   modelled as an opaque oracle. See `docs/archive/handoff-verity-c10-verifier.md`
    for the multi-quarter plan to lift this.
 2. **`solc 0.8.33` Yul → bytecode correctness** — pinned but trusted
    (Verity's own README acknowledges this; we inherit the trust).

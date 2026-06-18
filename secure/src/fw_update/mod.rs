@@ -79,7 +79,7 @@ pub mod verify;
 /// COMMIT auto-aborts with no further prompt (the user has already given
 /// their consent at BEGIN; an integrity failure is the device's
 /// responsibility to detect and report). See finding A in
-/// `docs/usb-fw-update-hardening.md` — moves the confirm forward from
+/// `docs/security/usb-fw-update-hardening.md` — moves the confirm forward from
 /// COMMIT to BEGIN so a user-cancel costs zero flash work + zero
 /// inactive-slot churn (matches Trezor's wf_firmware_update.c pattern).
 pub fn confirm_install(manifest: &ManifestRef) -> bool {
@@ -402,7 +402,7 @@ pub fn verify_manifest(
     // vendor-signed manifest, so the OTP bump only fires on
     // legitimate updates.
     //
-    // **Timing normalization (finding C in docs/usb-fw-update-hardening.md):**
+    // **Timing normalization (finding C in docs/security/usb-fw-update-hardening.md):**
     // we deliberately do NOT short-circuit on early failures — every
     // check below is executed regardless of any prior check's verdict.
     // Without this, an attacker timing the response could distinguish

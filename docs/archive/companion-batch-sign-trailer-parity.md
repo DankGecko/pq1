@@ -194,7 +194,7 @@ the matching trailer is routed:
   (ZK v3, with `uid.owner == the Safe`) and kind 4 (Safe v1) to the same
   `tx_idx` — order within the trailer list doesn't matter, the firmware
   verifies ZK v3 in a second pass. See
-  [`companion-safe-cowswap-presign.md`](companion-safe-cowswap-presign.md).
+  [`companion-safe-cowswap-presign.md`](../companion/companion-safe-cowswap-presign.md).
 
 The extension's batch builder should refuse to send a payload that
 omits the mandatory trailer — better to fail fast at the keystroke
@@ -238,7 +238,7 @@ Firmware side:
 * `secure/src/nsc/batch_trailers.rs` — new TLV parser.
 * `secure/src/nsc/cmd_sign_userop_batch.rs` — handler integration.
 * `nonsecure/src/e2e_test.rs::build_batch_payload` — emits v2.
-* `docs/companion-batch-sign-integration.md` — wire-format reference.
+* `docs/companion/companion-batch-sign-integration.md` — wire-format reference.
 
 Companion side
 (`~/Documents/PQ1/AmbireExtension/src/web/modules/hardware-wallet/libs/pq1/`):

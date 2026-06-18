@@ -44,7 +44,7 @@ deferred to it.
 | `secure/src/optiga/apdu.rs:66` | `const CMD_CLOSE_APPLICATION` | 4 | Only used by the removed `close_application`. |
 | `secure/src/optiga/apdu.rs:212` | `const DTYPE_BSTR` | 1 | Data-type tag never written into any metadata builder. |
 | `secure/src/optiga/apdu.rs:217` | `const DTYPE_UPCTR` | 1 | Documented as UPCTR tag but no `optiga-hw-counter` builder uses it (matches Trezor parity — chip pre-types `0xE120..0xE123` as UPCTR, no need to re-write). |
-| `secure/src/optiga/apdu.rs:474-482` | `pub unsafe fn close_application` | 4 | Per `docs/optiga-bringup-status.md`: "CloseApplication never emits a data response on this chip"; replaced by hard RST pulse. Only caller was the dead `reopen_application`. |
+| `secure/src/optiga/apdu.rs:474-482` | `pub unsafe fn close_application` | 4 | Per `docs/secure-elements/optiga-bringup-status.md`: "CloseApplication never emits a data response on this chip"; replaced by hard RST pulse. Only caller was the dead `reopen_application`. |
 | `secure/src/optiga/apdu.rs:670-691` | `pub unsafe fn get_random_mixed` | 1 | Mixer helper with no callers (XOR-mixing is done at the `crate::hw::rng_strong` layer instead). |
 | `secure/src/optiga/apdu.rs:767-783` | `pub unsafe fn write_data_object` | 1 | `SetDataObject` write-without-erase variant; every call site uses `set_data_object` with `PARAM_ERASE_WRITE`. |
 | `secure/src/optiga/mod.rs:670-677` | `unsafe fn OptigaTrustM::reopen_application` | 4 | Vestigial close/reopen recovery; the chip's wedged-after-N-writes throttle is now cleared by `hard_reset_and_reinit` (a real RST pulse). Doc note in `optiga-bringup-status.md` confirms removal. |

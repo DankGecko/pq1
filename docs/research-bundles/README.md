@@ -33,15 +33,15 @@ conversation context).
 | Letter | Topic | Primary code bundled |
 |---|---|---|
 | **A** | Fault-injection resistance for PQ signing + PIN path | `dual_se.rs`, `sign_and_emit.rs`, `cmd_request_unlock.rs`, `state.rs`, `crypto.rs` |
-| **B** | Production key management (SCP03 rotation, PBS wrap, HUK-SAES) | `se050/scp03.rs`, `optiga/shield.rs`, `hw/flash.rs`, `docs/se050-factory-reset.md` |
+| **B** | Production key management (SCP03 rotation, PBS wrap, HUK-SAES) | `se050/scp03.rs`, `optiga/shield.rs`, `hw/flash.rs`, `docs/secure-elements/se050-factory-reset.md` |
 | **C** | SLH-DSA side-channel landscape on Cortex-M33 | `crypto.rs`, `sign_and_emit.rs`, `cmd_sign_userop.rs`, `secure/Cargo.toml` |
-| **D** | USB stack hardening for USB-C-only design | `hw/usb_hw.rs`, `nonsecure/src/usb/*`, `docs/usb-protocol-v2.md` |
-| **E** | Supply-chain + provisioning attestation | `docs/architecture.md`, `docs/pq-aa-wallet-design.md`, `docs/HARDENING.md` |
-| **F** | Comparison against Trezor Safe 7 (Oct 2025) | `README.md`, `CLAUDE.md`, `docs/architecture.md`, `docs/pq-aa-wallet-design.md`, `docs/HARDENING.md`, `docs/brownout-hardening.md`, `docs/production-security.md`, `docs/ai-research-briefing.md`, `dual_se.rs`, `nsc/mod.rs` |
+| **D** | USB stack hardening for USB-C-only design | `hw/usb_hw.rs`, `nonsecure/src/usb/*`, `docs/companion/usb-protocol-v2.md` |
+| **E** | Supply-chain + provisioning attestation | `docs/architecture/architecture.md`, `docs/archive/pq-aa-wallet-design.md`, `docs/security/HARDENING.md` |
+| **F** | Comparison against Trezor Safe 7 (Oct 2025) | `README.md`, `CLAUDE.md`, `docs/architecture/architecture.md`, `docs/archive/pq-aa-wallet-design.md`, `docs/security/HARDENING.md`, `docs/security/brownout-hardening.md`, `docs/security/production-security.md`, `docs/archive/ai-research-briefing.md`, `dual_se.rs`, `nsc/mod.rs` |
 
 All tracks are orthogonal and can be run in parallel (one
 conversation per bundle). Results feed back into
-`docs/brownout-hardening.md`, `docs/work-todo.md`, and the
+`docs/security/brownout-hardening.md`, `docs/work-todo.md`, and the
 architecture docs.
 
 ## Regenerating bundles after code changes
@@ -88,7 +88,7 @@ Create a `docs/research-bundles/results/` subdirectory (not yet made)
 and drop the output markdown from each session in as
 `{LETTER}-{topic}.result.md`. When enough results have accumulated,
 synthesise findings into:
-- `docs/brownout-hardening.md` updates for hardware-supervisor advice
+- `docs/security/brownout-hardening.md` updates for hardware-supervisor advice
 - `docs/work-todo.md` line items for new gaps
 - New top-level design docs for architectural changes (e.g., a
   `docs/supply-chain.md` informed by bundle E's output)

@@ -596,7 +596,7 @@ pub const CMD_TZIC_STATUS: u32 = 201;
 // Factory production-line test firmware. Replaces the wizard / unlock path
 // with a USB-command server that the factory fixture drives to validate each
 // hardware component before flashing the factory_provisioning firmware. See
-// `docs/factory-prodtest.md` for the full command reference + fixture
+// `docs/provisioning/factory-prodtest.md` for the full command reference + fixture
 // integration guide.
 //
 // Phase A (landed 2026-05-19): GET_ID + DISPLAY_PATTERN

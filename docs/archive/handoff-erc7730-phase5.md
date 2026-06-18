@@ -75,12 +75,12 @@ Recommendation: do (a) for `Pages` — move the type to a non-gated module (e.g.
 
 Three new files + three updates:
 
-- `docs/erc7730-integration.md` (new): full spec of the on-device IR, trailer format, formatter coverage, what is and is not verified on-device. Include the "what NOT to do" footnote about ERC-8176 verification staying host-only (preserves invariant #5).
-- `docs/erc8213-fingerprints.md` (new): cross-device verification recipe with `cast` / `viem` / `safe-hash-rs` examples for each `Kind` variant.
-- `docs/companion-erc7730-integration.md` (new): trailer format from the companion side, lookup flow against `tools/companion-stub/erc7730_db.bin`, attestation policy file format.
+- `docs/companion/erc7730-integration.md` (new): full spec of the on-device IR, trailer format, formatter coverage, what is and is not verified on-device. Include the "what NOT to do" footnote about ERC-8176 verification staying host-only (preserves invariant #5).
+- `docs/companion/erc8213-fingerprints.md` (new): cross-device verification recipe with `cast` / `viem` / `safe-hash-rs` examples for each `Kind` variant.
+- `docs/archive/companion-erc7730-integration.md` (new): trailer format from the companion side, lookup flow against `tools/companion-stub/erc7730_db.bin`, attestation policy file format.
 - `README.md` (edit): mention `clearsigning.org` support, link the new docs.
 - `CLAUDE.md` (edit): add an entry to "Key File Map" for `pqsigner-erc7730/`, `secure/src/tx/erc7730_render/`, `secure/src/tx/display/erc7730/`, and `secure/src/tx/display/erc8213.rs`. Update "What NOT to do" to clarify "no on-device 8176 verification" and "no PersonalSign-of-pre-wrapped-hash inversions" (i.e., dapps that hard-check `wallet.isValidSignature(replaySafeHash(H), sig)` would double-wrap — that's a dapp bug, not a firmware bug, but worth documenting).
-- `docs/usb-protocol-v2.md` (edit): document `OFFCHAIN_KIND_EIP712_TYPED = 2` wire format that Phase 3 reserved + Phase 4 implemented.
+- `docs/companion/usb-protocol-v2.md` (edit): document `OFFCHAIN_KIND_EIP712_TYPED = 2` wire format that Phase 3 reserved + Phase 4 implemented.
 
 ### 11. **MAY** — Compact-mode display toggle
 
@@ -88,7 +88,7 @@ Phase 4 collapsed `Visibility::Optional` into `Visibility::Always`. Phase 5 may 
 
 ### 12. **MAY** — Timing-channel + stack-budget reviews
 
-- Visibility-rule evaluation paths are public (descriptor bytecode is Merkle-verified, not secret) — no secret-dependent timing concerns. Audit-grade: document this in `docs/HARDENING.md`.
+- Visibility-rule evaluation paths are public (descriptor bytecode is Merkle-verified, not secret) — no secret-dependent timing concerns. Audit-grade: document this in `docs/security/HARDENING.md`.
 - Walker recurses for nested calldata (capped at depth 4 in the renderer, depth 8 in the walker proper). Add a stack canary at the renderer entry point so a hostile descriptor that somehow defeats the depth cap cannot smash the stack silently.
 
 ---
@@ -170,7 +170,7 @@ Then add a row to `docs/work-todo.md`'s Completion Log: `YYYY-MM-DD — Phase 5:
 
 1. **Production attestation flip is wire-format-stable.** Flipping `allow_unattested_dev_descriptors = true → false` does NOT change the IR shape or the Merkle root format. It only changes which descriptors qualify for inclusion. The host pipeline rejects unattested descriptors at `dbgen` time; on-device firmware never sees them.
 2. **Dynamic-type support changes the Merkle root.** Adding shape-descriptor bytes to the IR header changes the per-leaf hash → `ERC7730_DESCRIPTORS_ROOT` changes → every existing companion-side `erc7730_db.bin` needs regeneration. Coordinate with companion app team. The `dbgen --check` gate catches this.
-3. **`personal_sign_replay_safe_hash` semantics.** When a dapp pre-wraps an EIP-712 hash and calls `wallet.isValidSignature(replaySafeHash(H), sig)`, the on-chain Solady will re-wrap it → double-wrap → verification fails. That's a dapp bug. Document in `docs/erc7730-integration.md` and `CLAUDE.md`.
+3. **`personal_sign_replay_safe_hash` semantics.** When a dapp pre-wraps an EIP-712 hash and calls `wallet.isValidSignature(replaySafeHash(H), sig)`, the on-chain Solady will re-wrap it → double-wrap → verification fails. That's a dapp bug. Document in `docs/companion/erc7730-integration.md` and `CLAUDE.md`.
 4. **Test gating.** `secure/src/tx/display/*` is `#[cfg(not(test))]`-gated because it depends on `crate::ui::*` hardware bindings. Renderer unit tests cannot run in host test mode without moving Pages or splitting the UI-bound parts. The Phase 5 fuzz-harness blocker (item 9) is the cleanest forcing function to fix this.
 5. **Optional → compact-mode distinction.** Phase 4 collapsed `Optional` into `Always`. A descriptor author who wants compact-mode behaviour today gets full-render instead. Phase 5's compact-mode toggle preserves backward compatibility (the wire byte was always present; only the renderer behaviour changes).
 6. **EIP-712 typed sign needs entropy unlock.** The kind=2 path derives a wallet address via `proxy_address(bootstrap_pubkey)` which needs the entropy reconstruction from §7 of `cmd_sign_offchain.rs`. Don't try to short-circuit the kind=2 path before the unlock + entropy decode — it'll panic on the missing entropy.
@@ -189,8 +189,8 @@ If something here disagrees with either plan, the plan is authoritative for *int
 
 ## References
 
-- Phase 3 handoff: `docs/handoff-erc7730-phase3.md`
-- Phase 2 handoff: `docs/handoff-erc7730-phase2.md`
+- Phase 3 handoff: `docs/archive/handoff-erc7730-phase3.md`
+- Phase 2 handoff: `docs/archive/handoff-erc7730-phase2.md`
 - Phase 4 work-todo entry: `docs/work-todo.md` (2026-05-14 row, Phase 4)
 - Phase 4 commit: `cfb0e89`
 - Clear Signing announcement (2026-05-12): <https://clearsigning.org> · <https://blog.ethereum.org/2026/05/12/clear-signing-announcement>

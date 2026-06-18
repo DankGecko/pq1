@@ -18,7 +18,7 @@ firmware emits looks like:
 Lines that don't match that shape are ignored, so the script is
 safe to feed raw semihosting log output.
 
-See docs/trezor-comparison.md §2.3 for the design context.
+See docs/architecture/trezor-comparison.md §2.3 for the design context.
 
 Examples:
 

@@ -17,7 +17,7 @@ Reference documentation for the **OPTIGA Trust M V3** (SLS32AIA) secure element 
 >   MCU page-124 attempt counter; 10-wrong-PIN brick + admin-wipe validated
 >   end-to-end.
 >
-> See `docs/optiga-bringup-status.md` and `docs/optiga-brick-postmortem.md`
+> See `docs/secure-elements/optiga-bringup-status.md` and `docs/secure-elements/optiga-brick-postmortem.md`
 > for the full timeline.
 
 **Hardware:** TRUSTMV3SHIELDTOBO1 Arduino shield + B-U585I-IOT02A dev board.

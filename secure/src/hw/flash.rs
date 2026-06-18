@@ -157,7 +157,7 @@ const KEY_PAGE_NUM: u32 = 127;
 // `hw::secret_keys::optiga_pairing_secret`, so there is nothing to
 // seal. The page is now reused as the cross-power-cycle FW-update
 // verify-failure counter (`fw_fail_*` below). See
-// `docs/optiga-brick-postmortem.md` for the history and the
+// `docs/secure-elements/optiga-brick-postmortem.md` for the history and the
 // hardening doc finding B / persistence follow-up for the new use.
 
 // ---------------------------------------------------------------------------
@@ -846,7 +846,7 @@ pub unsafe fn pin_attempts_reset() -> Result<(), ()> {
 // side's watermarks the controller honours (NSCR programs pages that
 // SECCR refuses because of the SECWMn watermark).
 //
-// Slot layout (see docs/firmware-update.md for the full picture):
+// Slot layout (see docs/firmware/firmware-update.md for the full picture):
 //
 //   Bank 1 (secure):
 //     FSBL             pages   0..3    0x0C00_0000  (32 KB, WRP-locked)

@@ -31,7 +31,7 @@ fn cargo_toml_declares_erc7730_dev_unattested_feature() {
     assert!(
         CARGO_TOML.contains("erc7730-dev-unattested = []"),
         "secure/Cargo.toml must declare the `erc7730-dev-unattested` feature \
-         (Phase 5 item 3 of `docs/handoff-erc7730-phase5.md`)."
+         (Phase 5 item 3 of `docs/archive/handoff-erc7730-phase5.md`)."
     );
 }
 

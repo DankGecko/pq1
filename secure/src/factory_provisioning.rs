@@ -7,7 +7,7 @@
 //! The factory operator does NOT need to understand the failure —
 //! they read the step + error code off the OLED and report it back.
 //! The error codes map to known failure classes in
-//! `docs/factory-provisioning.md`.
+//! `docs/provisioning/factory-provisioning.md`.
 //!
 //! ## Output state (success path)
 //!
@@ -165,7 +165,7 @@ impl FactoryStep {
 
 /// Error codes shown on the OLED. The full table — including operator
 /// hints + suggested remediation — lives in
-/// `docs/factory-provisioning.md`. Keep these numeric values STABLE
+/// `docs/provisioning/factory-provisioning.md`. Keep these numeric values STABLE
 /// across firmware versions so old field reports remain interpretable.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[repr(u16)]

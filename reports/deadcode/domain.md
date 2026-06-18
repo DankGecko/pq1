@@ -92,7 +92,7 @@ errors).
 
 - `docs/research-bundles/A-fault-injection.md`,
   `docs/research-bundles/C-slhdsa-side-channel.md`,
-  `docs/architecture.md` (multiple lines), `docs/m4-cowswap-eip712.md`
+  `docs/architecture/architecture.md` (multiple lines), `docs/archive/m4-cowswap-eip712.md`
   all still reference `derive_signing_key_from_entropy_fast`,
   `derive_bootstrap_key_from_entropy_fast`, `derive_main_*`,
   `main_signer_seed_from_bip39`, and `slhdsa_seed_from_bip39`.

@@ -4,7 +4,7 @@
 # (lake build) + the axiom discipline (no sorryAx). The kernel re-check is
 # the trust boundary: a wrong AI proof simply fails to compile, so AI output
 # can never compromise soundness. Mirrors the Lean-Squad pattern (research:
-# docs/lean-verification-research-2026-06.md) adapted to this make-driven repo.
+# docs/verification/lean-verification-research-2026-06.md) adapted to this make-driven repo.
 #
 # Usage:
 #   ai_prove.sh <module> "<target-description>"

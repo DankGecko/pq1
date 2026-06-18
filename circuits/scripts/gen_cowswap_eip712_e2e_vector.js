@@ -398,7 +398,7 @@ const input = {
   // v3.1 sub-precision flag. The example amounts (1000.0000 / 0.5000)
   // are both ≥ 10^-FRAC_DIGITS, so they render in normal mode (flag 0).
   // FormatTrimmedAmount also now range-checks raw_amount to 190 bits
-  // (docs/VULN-cowswap-zk-amount-overflow.md) — the example amounts are
+  // (docs/security/VULN-cowswap-zk-amount-overflow.md) — the example amounts are
   // ≪ 2^190 so witness generation is unaffected.
   sell_is_sub_precision: "0",
 

@@ -18,7 +18,7 @@
 > For current C10 integration:
 > - `CLAUDE.md` § "Status (2026-04, pre-production bring-up)" and § "Recovery / Key derivation"
 > - `docs/work-todo.md` (look for `2026-04-17 — C10 bootstrap cutover`)
-> - `docs/production-security.md` § 2.6 (device root-key architecture)
+> - `docs/security/production-security.md` § 2.6 (device root-key architecture)
 > - `sphincs-c10/` crate sources
 
 Context: the `sphincs-c7` Rust crate is implemented and verified against the Python reference signer and Solidity verifier. This document covers everything needed to wire it into the firmware, replacing the `slh-dsa` crate (SLH-DSA-SHA2-128f, 17,088-byte signatures) with `sphincs-c7` (keccak256-based, 3,704-byte signatures).

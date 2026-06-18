@@ -37,7 +37,7 @@ pub mod mirror;
 
 /// Screenshot-hash capture — emits a SHA-256 fingerprint per displayed
 /// frame over the secure log, parsed by `tools/ui_fixture.py` for UI
-/// regression testing. See `docs/trezor-comparison.md §2.3`.
+/// regression testing. See `docs/architecture/trezor-comparison.md §2.3`.
 #[cfg(feature = "ui-capture")]
 pub mod capture;
 

@@ -62,7 +62,7 @@ const CHAIN_BUF_LEN_SIGN: usize = SIGN_USEROP_HEADER_LEN
     // ERC-7730 clear-signing descriptor trailer (Phase 3): 2-byte
     // length + bundle (up to ERC7730_MAX_TRAILER_LEN = 5130 B). Sits
     // between self-attest and names per the wire-format ordering in
-    // `docs/handoff-erc7730-phase3.md` §"Canonical wire formats".
+    // `docs/archive/handoff-erc7730-phase3.md` §"Canonical wire formats".
     + 2
     + sphincs_tz_shared::ERC7730_MAX_TRAILER_LEN
     // Names trailer: 1-byte count + up to 4 × (2-byte length + bundle).
@@ -96,7 +96,7 @@ const CHAIN_BUF_LEN: usize = if CHAIN_BUF_LEN_SIGN_OR_BATCH > CHAIN_BUF_LEN_FW {
 /// real bound is `MANIFEST_SIZE = 8192`). Tighten per-CMD here so the
 /// step layer itself rejects oversized accumulations as soon as `lc`
 /// pushes past the *real* limit for that CMD. See finding #4 in
-/// `docs/usb-fw-update-hardening.md`.
+/// `docs/security/usb-fw-update-hardening.md`.
 ///
 /// Unknown CMDs fall back to the global max — execute_chain returns
 /// `INS_NOT_SUPPORTED` at the next layer, no behaviour change.
@@ -291,7 +291,7 @@ impl CommandRouter {
         // (~8 KB) of buffer accumulation for a bogus INS before the
         // execute-time `_ => SW_INS_NOT_SUPPORTED` arm finally rejects
         // it. Matches §19 "APDU CLA/INS allowlist at non-secure
-        // *before* any NSC gateway call" in `docs/production-security.md`.
+        // *before* any NSC gateway call" in `docs/security/production-security.md`.
         // Mirrors the explicit set in `execute_chain` below.
         let is_chained_ins = matches!(
             ins,

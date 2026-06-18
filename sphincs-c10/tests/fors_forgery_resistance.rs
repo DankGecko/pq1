@@ -37,7 +37,7 @@
 //!    signature **fails** `verify` — this file asserts that.
 //!  * **`fcee705a^` (pre-fix):** the same harness mints a signature that
 //!    `verify` **accepts** in well under a second (confirmed out-of-band; see
-//!    `docs/sphincs-c10-spec-conformance-checklist.md`). The archived sweep
+//!    `docs/verification/sphincs-c10-spec-conformance-checklist.md`). The archived sweep
 //!    `tools/sca/out/c10_sign_sweep.PREFIX-VULNERABLE.jsonl.bak` is the
 //!    historical record that the FI sweep was *blind* to this class.
 //!

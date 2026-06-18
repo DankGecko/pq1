@@ -1285,7 +1285,7 @@ fn main() -> ! {
     // main() just sits in WFI. The factory fixture drives the test
     // sequence via USB and decides per-component pass/fail.
     //
-    // See `docs/factory-prodtest.md` for the command reference +
+    // See `docs/provisioning/factory-prodtest.md` for the command reference +
     // fixture integration guide.
     #[cfg(feature = "prodtest")]
     unsafe {

@@ -44,7 +44,7 @@ pub enum Se050Error {
     /// destructive run (tests 14 `pin_counter_persists_across_reinit`
     /// + 17 `userid_silicon_lockout`) once the driver `reinit()`s after
     /// every failed verify — see the corrected analysis in
-    /// `docs/se050-silicon-findings.md` §4a.
+    /// `docs/secure-elements/se050-silicon-findings.md` §4a.
     ///
     /// **NOT 0x6982.** An earlier draft mapped SW=0x6982 here too,
     /// believing it was the lockout code. It is not — 0x6982 is the
@@ -456,7 +456,7 @@ fn build_policy(
 /// attempts (admin / duress UserIDs whose lockout is enforced on the MCU
 /// side) MUST use [`write_userid_unlimited`] explicitly.  The same table
 /// also caps PINs at 255 attempts; values >= 256 are rejected.  (S-7a
-/// fix — docs/security-review-2026-05.md §C-9.)
+/// fix — docs/security/security-review-2026-05.md §C-9.)
 ///
 /// Policy entries:
 ///   1. `auth_obj_id = <self>`, `ar = ALLOW_WRITE | ALLOW_DELETE | REQUIRE_SM`
@@ -761,7 +761,7 @@ pub unsafe fn verify_session(
         // suggested 0x6982 was the lockout code, but that was the
         // Finding-A3 session-pending TRANSIENT (recoverable via
         // `reinit()`), not a permanent lock — see
-        // `docs/se050-silicon-findings.md` §4. Mapping a recoverable
+        // `docs/secure-elements/se050-silicon-findings.md` §4. Mapping a recoverable
         // transient to `AuthMethodBlocked` → `PinLocked` →
         // `trigger_lockout_wipe` would risk a false-positive wipe, so
         // 0x6982 propagates as `Status(0x6982)` (→ `InternalError`,

@@ -28,7 +28,7 @@
 //! who rebuilds the firmware from source can reconstruct those 75 bytes
 //! from `(version, secure.elf, nonsecure.elf)` alone, compute the
 //! SHA-256, and verify the vendor signature — no manifest parsing, no
-//! `.pqfw` envelope. See `docs/firmware-update.md` for the
+//! `.pqfw` envelope. See `docs/firmware/firmware-update.md` for the
 //! verify-it-yourself recipe.
 //!
 //! The manifest fields like `vendor_pubkey_fpr`, `build_id`, `slot`,
@@ -251,7 +251,7 @@ pub enum VerifyError {
     /// invariant — these regions are unsigned and unused by the
     /// firmware, so a non-zero value is benign today but indicates a
     /// non-conformant signer (or a covert channel from a compromised
-    /// vendor key). See `docs/usb-fw-update-hardening.md` finding #5.
+    /// vendor key). See `docs/security/usb-fw-update-hardening.md` finding #5.
     BadReserved,
 }
 

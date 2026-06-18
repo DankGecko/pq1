@@ -133,7 +133,7 @@ bench = false
 # (plus a `RenderErr` split into a parser-level `ParamError` and a
 # renderer-level `RenderErr` wrapper) into the host-runnable
 # `pqsigner-erc7730` crate. The handoff
-# (`docs/handoff-erc7730-phase5.md` item 9) flags this as a
+# (`docs/archive/handoff-erc7730-phase5.md` item 9) flags this as a
 # >5-file-move cascade. Deferred — covered structurally by the
 # secure-crate unit tests at `secure/src/tx/erc7730_render/
 # params.rs::tests` until the move lands.

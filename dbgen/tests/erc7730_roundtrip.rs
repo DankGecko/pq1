@@ -19,7 +19,7 @@
 //! coverage — the seed corpus is exercised separately via the embedded
 //! `build_db_seed_corpus` unit test inside `dbgen::erc7730`.
 //!
-//! See `docs/handoff-erc7730-phase2.md` §"Verification recipe" — this
+//! See `docs/archive/handoff-erc7730-phase2.md` §"Verification recipe" — this
 //! test is what that recipe's step 2 (`cargo test -p dbgen --test
 //! erc7730_roundtrip`) refers to.
 

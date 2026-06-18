@@ -1,7 +1,7 @@
 # Safe multiSend clear-signing — companion app integration (delta)
 
 This document specifies **what changes for the companion app/extension**
-relative to [`companion-safe-cowswap-presign.md`](companion-safe-cowswap-presign.md)
+relative to [`companion-safe-cowswap-presign.md`](../companion/companion-safe-cowswap-presign.md)
 now that the firmware clear-signs Safe **multiSend batches**. Read that
 document first — everything it defines (trailers, orderUid construction,
 refusal model, batch TLV) still holds; this is the delta.

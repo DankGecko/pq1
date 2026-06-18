@@ -53,12 +53,12 @@ pub mod tzic;
 /// because enabling crypto-peripheral-fault monitoring (ITAMP9) during a
 /// probe-rs debug session on a dev board can false-trigger on glitch-sensitive
 /// SAES sequences. Port of Trezor's tamper driver; see
-/// `docs/trezor-comparison.md §2.5`.
+/// `docs/architecture/trezor-comparison.md §2.5`.
 #[cfg(all(feature = "stm32u585", feature = "tamp"))]
 pub mod tamp;
 
 /// TIM2-PWM power-consumption mask on PA5. Simplified (no-DMA) port of
-/// Trezor's `sec/consumption_mask/`; see `docs/trezor-comparison.md §3.1`.
+/// Trezor's `sec/consumption_mask/`; see `docs/architecture/trezor-comparison.md §3.1`.
 /// Feature-gated; init() + randomize() are no-ops without the feature.
 #[cfg(all(feature = "stm32u585", feature = "consumption-mask"))]
 pub mod consumption_mask;

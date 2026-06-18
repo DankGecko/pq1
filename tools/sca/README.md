@@ -205,7 +205,7 @@ tools/sca/
 > forgery resistance is covered separately by
 > `sphincs-c10/tests/fors_forgery_resistance.rs` (the end-to-end reassembly
 > simulator) + `tests/fors_position_binding.rs` (the position-binding property
-> test), and audited by `docs/sphincs-c10-spec-conformance-checklist.md`. Run
+> test), and audited by `docs/verification/sphincs-c10-spec-conformance-checklist.md`. Run
 > both classes; neither substitutes for the other.
 
 ## Roadmap — targets not yet wired

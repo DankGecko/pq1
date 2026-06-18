@@ -198,7 +198,7 @@ pub fn verify_and_bind_trailer_v1(
     }
 
     // Native field-overflow guard (defense-in-depth — mirrors the cowswap
-    // step 1b; see docs/VULN-cowswap-zk-amount-overflow.md).
+    // step 1b; see docs/security/VULN-cowswap-zk-amount-overflow.md).
     //
     // The amount-formatting v1 circuit (Aave Pool: supply/borrow/repay/
     // withdraw) renders the uint256 `amount`, which is ABI arg #2 at

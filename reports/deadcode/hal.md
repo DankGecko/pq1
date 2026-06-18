@@ -15,7 +15,7 @@ Files audited:
 no_std, zero dependencies). It is PR 1 of the Phase 6 modularity refactor;
 PRs 2–4 (`pqsigner-hal-stm32u5`, `pqsigner-hal-mock`, and the
 `secure`-side wiring that takes `&mut impl Platform`) are documented as
-deferred in `docs/handoff-modularity-refactor.md`. Consequently no other
+deferred in `docs/archive/handoff-modularity-refactor.md`. Consequently no other
 workspace crate currently `use`s anything from `pqsigner_hal::*` — a fact
 already called out in the handoff doc (§4.18 "pqsigner-hal trait crate is
 unused so far"). Every `pub` item in this crate is therefore part of the

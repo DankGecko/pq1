@@ -21,8 +21,8 @@ package «pqsigner-verity» where
 -- above is kept for future use when Verity v0.2.x lands the Phase-0
 -- primitives (precompile.sha256, calldata.read, bitfield ops,
 -- memory.scratch) that the on-chain Yul verifier needs. See
--- `docs/handoff-verity-c10-verifier.md` §4 Phase 0 and
--- `docs/verity-v0.1.0-primitive-map.md`.
+-- `docs/archive/handoff-verity-c10-verifier.md` §4 Phase 0 and
+-- `docs/archive/verity-v0.1.0-primitive-map.md`.
 @[default_target]
 lean_lib «Verifier» where
   roots := #[

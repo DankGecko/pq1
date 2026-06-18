@@ -17,7 +17,7 @@ Test phases:
      verify-failure counter so phase 3 doesn't pre-trip phase 4.
   4. Wipe-on-repeated-failure trigger — 5 consecutive bad manifests.
      After the 5th, the device arms the admin-wipe flag and sys_resets
-     (Finding B from docs/usb-fw-update-hardening.md). The test waits
+     (Finding B from docs/security/usb-fw-update-hardening.md). The test waits
      for the USB device to disappear from lsusb and re-enumerate, then
      verifies it's responsive again and runs one valid BEGIN to clear
      the flash-backed counter so the next run starts clean.
@@ -62,7 +62,7 @@ HID_FIRST_DATA = HID_REPORT_SIZE - 7  # 57 B after [chan(2)|tag(1)|seq(2)|len(2)
 HID_CONT_DATA = HID_REPORT_SIZE - 5   # 59 B after [chan(2)|tag(1)|seq(2)]
 CHANNEL_ID = 0x0001
 
-# APDU chaining (docs/usb-protocol-v2.md "Command Chaining"):
+# APDU chaining (docs/companion/usb-protocol-v2.md "Command Chaining"):
 #   P1=0x80 — more blocks follow
 #   P1=0x00 — last (or only) block; triggers execute on the device.
 P1_MORE = 0x80

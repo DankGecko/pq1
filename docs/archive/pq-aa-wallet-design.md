@@ -28,7 +28,7 @@
 > - `CLAUDE.md` § "Recovery / Key derivation" — actual KDF tags, slot derivation
 > - `contracts/smart-wallet/src/PQSmartWallet.sol` — `validateUserOp` dispatch
 > - `contracts/smart-wallet/src/verifiers/SPHINCsC10Asm.sol` — the verifier
-> - `docs/companion-app-integration.md` — wire format
+> - `docs/companion/companion-app-integration.md` — wire format
 
 A hardware-wallet-backed, seed-phrase-recoverable, post-quantum ERC-4337 account abstraction wallet. Built as a fork of Coinbase Smart Wallet, modified for stateful hash-based PQ signers with unlimited rotations and stable cross-chain addresses.
 

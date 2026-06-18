@@ -20,7 +20,7 @@
 //! admin-delete returns 0x6986 (no admin entry in its policy), and a
 //! transport `write_userid` UPDATE is *refused and preserves* the
 //! object (Finding A2 is RETRACTED — there is no destroy-on-failed-
-//! UPDATE; see `docs/se050-silicon-findings.md` §3). On the 2026-05-28
+//! UPDATE; see `docs/secure-elements/se050-silicon-findings.md` §3). On the 2026-05-28
 //! run a stranded UserID at `0x7B5F_0801` made `pin_attribute_read_-
 //! refused_on_user_userid` fail at provisioning. Bumping the whole
 //! carve-out to `0x7B5E_*` abandons the stranded `0x7B5F_*` generation

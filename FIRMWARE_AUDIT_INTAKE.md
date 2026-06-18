@@ -74,7 +74,7 @@ Not yet public. We will grant the review team a private mirror before the engage
 
 ## 6. Known pre-production caveats (tracked gates — *not* findings)
 
-The bench branch knowingly ships some regressions/incomplete items. Please **flag these in the report as confirmed** rather than re-discovering them as findings; each is a tracked production gate. Full detail in `docs/threat-model.md §9` and `docs/production-security.md`.
+The bench branch knowingly ships some regressions/incomplete items. Please **flag these in the report as confirmed** rather than re-discovering them as findings; each is a tracked production gate. Full detail in `docs/security/threat-model.md §9` and `docs/security/production-security.md`.
 
 1. **TAMP IRQ is log-only** (`hw/tamp.rs`) — must flip to `trigger_lockout_wipe()` before ship. (TAMP lives in GTZC2, the one remaining GTZC follow-up.)
 2. **Factory provisioning not yet automated** — un-rotated bench boards use **NXP SE050 factory-default SCP03 keys (published in AN12436)** + a development OPTIGA PBS. Per-device rotation ceremony is a hard production gate.
@@ -84,7 +84,7 @@ The bench branch knowingly ships some regressions/incomplete items. Please **fla
 6. **MPU privilege-banking absent** — the secure world is a single privilege tier; any S-world code can reach `secret_keys::derive_into`.
 7. **Debug instrumentation may be present on this branch** — `debug-log`, `secure_log!`, NS register dumps, semihosting prints. CI must gate production on `debug-log` / `e2e-test` / `mock-se` / `otp-hardcoded-master-key` / `ui-capture` **OFF** (`compile_error!` fences in `nsc/mod.rs` + the saes-self-test runner enforce most).
 8. **Domain-separation tags are sticky-but-renamable pre-launch** — `"sphincs-c6-v1"` is historical (was a different parameter set; now C10). Frozen forever post-first-shipment for cross-chain address stability — **do not propose renaming.**
-9. **NOTE — already fixed, ignore the stale doc text:** the TZSC/GTZC "regressed to all-NS" item in `docs/threat-model.md §9.3` is **out of date.** `secure/src/sau.rs` now wires a SECURE-allowlist (AES/HASH/RNG/PKA/SAES/I2C1/I2C2 secure; USB OTG FS stays NS) and `make gtzc-enforcement-hw` **passed on real silicon 2026-05-20** (commit `f3c7d20`). Please review the *current* `sau.rs`, not the §9.3 prose.
+9. **NOTE — already fixed, ignore the stale doc text:** the TZSC/GTZC "regressed to all-NS" item in `docs/security/threat-model.md §9.3` is **out of date.** `secure/src/sau.rs` now wires a SECURE-allowlist (AES/HASH/RNG/PKA/SAES/I2C1/I2C2 secure; USB OTG FS stays NS) and `make gtzc-enforcement-hw` **passed on real silicon 2026-05-20** (commit `f3c7d20`). Please review the *current* `sau.rs`, not the §9.3 prose.
 
 ## 7. Greatest concerns / scenarios we're trying to avoid
 
@@ -97,7 +97,7 @@ Ordered roughly by blast radius.
 5. **Dual-SE XOR split + three-way PIN lockstep** (invariants #1/#2). No code path may store full entropy on one chip, transmit a half across, or compare the PIN in MCU software. The MCU/OPTIGA/SE050 counters must stay in lockstep so 10 wrong attempts deterministically wipes both SEs + page 124 — look for desync or a glitch that defeats the pre-commit (`nsc::gated_unlock`).
 6. **Trusted-display clear-signing integrity.** The human-readable intent shown on the OLED and the hash actually signed must derive from the **same S-stack copy** — the companion never gets to substitute a digest. Covers the ERC-20 / Safe `SafeTx` / CowSwap `GPv2Order` / ERC-7730 decoders and the Groth16 ZK binding (`secure/src/{tx,zk}/`). A decode-vs-sign mismatch = user confirms X, signs Y.
 7. **SE tunnels + factory provisioning.** No plaintext secret may touch I2C; channel keys come from a Tier-1 SAES-CMAC(DHUK) KDF (`hw/secret_keys.rs`). Note the published SE050 default SCP03 keys (§6.2) — confirm the rotation gate and that the shielded-connection/SCP03 state machines fail closed on MAC/desync.
-8. **Firmware-update / boot integrity.** FSBL verifies a C10 sig over an **intentionally minimal 75-byte preimage** (`"PQFW_V1" ‖ version_be ‖ secure_hash ‖ nonsecure_hash`); A/B-slot selection + an OPTIGA monotonic counter block downgrade; COMMIT verify is FI-guarded. Audit `fsbl/`, `secure/src/fw_update/`, and host `fwsign/` for any preimage expansion, downgrade bypass, or a chunk written before its hash is checked. The install confirm is now a real trusted-display dialog at `CMD_FW_BEGIN`, *before* any destructive flash op (`fw_update::confirm_install`, `nsc/cmd_fw_begin.rs`); this path was hardened in May 2026 — timing-normalized `verify_manifest`, flash-backed verify-failure wipe, bounded image lengths, an anti-rollback HW test (`make fw-rollback-hw`) — see `docs/usb-fw-update-hardening.md`. Please confirm completeness rather than assuming it raw.
+8. **Firmware-update / boot integrity.** FSBL verifies a C10 sig over an **intentionally minimal 75-byte preimage** (`"PQFW_V1" ‖ version_be ‖ secure_hash ‖ nonsecure_hash`); A/B-slot selection + an OPTIGA monotonic counter block downgrade; COMMIT verify is FI-guarded. Audit `fsbl/`, `secure/src/fw_update/`, and host `fwsign/` for any preimage expansion, downgrade bypass, or a chunk written before its hash is checked. The install confirm is now a real trusted-display dialog at `CMD_FW_BEGIN`, *before* any destructive flash op (`fw_update::confirm_install`, `nsc/cmd_fw_begin.rs`); this path was hardened in May 2026 — timing-normalized `verify_manifest`, flash-backed verify-failure wipe, bounded image lengths, an anti-rollback HW test (`make fw-rollback-hw`) — see `docs/security/usb-fw-update-hardening.md`. Please confirm completeness rather than assuming it raw.
 9. **Untrusted-input parsers (memory safety, `no_std`).** USB APDU reassembly (`nonsecure/src/usb/`), EIP-712 typed-data, the ERC-7730 binary-IR walker, the ABI typed-call parser, RLP/calldata decode. All bounded-buffer/no-heap; the worry is OOB / length-confusion / integer-truncation on attacker-shaped input. A cargo-fuzz scaffold now covers the FW-update manifest verify chain (`fw-manifest/fuzz/`, `make fuzz-manifest`); **harnesses against `parse_cmd_sign_userop_input` and the USB APDU reassembler remain a gap** — fuzzing-corpus generation is welcome.
 10. **Off-chain counter + cap monotonicity** (invariants #7/#9). The flash-backed (page 123) per-slot `local_offchain_count` / `last_userop_count` store must be monotonic and unresettable: `MAX_OFFCHAIN_GAP = 100`, combined cap < 65,536, post-restore an unregistered slot must be refused. Audit the log-structured store + compaction (`offchain_state.rs`, `hw/flash.rs`) for a rollback/replay that mints free signatures, and the page-124 attempt counter for the same.
 
@@ -129,13 +129,13 @@ cargo test -p sphincs-c10 -p pqsigner-domain -p pqsigner-aa -p pqsigner-tx
 make fuzz-manifest       # cargo-fuzz the FW-update manifest verify chain
 ```
 
-**HW gotcha:** `probe-rs` doesn't implement semihosting `SYS_READC`, so any PIN-prompt path hangs on real silicon (`make e2e-hw`); use `make test-key-speed` or `make play-hw-display`. Feature-flag profiles: `mode-production` / `mode-bringup` / `mode-e2e` (`secure/Cargo.toml`, ~50 flags; `docs/feature-flags.md`).
+**HW gotcha:** `probe-rs` doesn't implement semihosting `SYS_READC`, so any PIN-prompt path hangs on real silicon (`make e2e-hw`); use `make test-key-speed` or `make play-hw-display`. Feature-flag profiles: `mode-production` / `mode-bringup` / `mode-e2e` (`secure/Cargo.toml`, ~50 flags; `docs/firmware/feature-flags.md`).
 
 ## 9. Reference docs (full model — not duplicated here)
 
-- `docs/threat-model.md` — assets (S0–S7), adversary tiers (T0–T7), trust boundaries, 16 attack surfaces.
-- `docs/production-security.md` — top critical findings + factory/RDP flow.
-- `docs/security-review-2026-05.md` — last internal review (open items H-/M-/L-).
-- `docs/usb-fw-update-hardening.md` — over-USB FW-update audit + threat model + fuzz scaffold (2026-05).
-- `docs/HARDENING.md`, `docs/brownout-hardening.md`, `docs/reproducible-builds.md`, `docs/firmware-update.md`.
+- `docs/security/threat-model.md` — assets (S0–S7), adversary tiers (T0–T7), trust boundaries, 16 attack surfaces.
+- `docs/security/production-security.md` — top critical findings + factory/RDP flow.
+- `docs/security/security-review-2026-05.md` — last internal review (open items H-/M-/L-).
+- `docs/security/usb-fw-update-hardening.md` — over-USB FW-update audit + threat model + fuzz scaffold (2026-05).
+- `docs/security/HARDENING.md`, `docs/security/brownout-hardening.md`, `docs/firmware/reproducible-builds.md`, `docs/firmware/firmware-update.md`.
 - `README.md` / `CLAUDE.md` — architecture, invariants, file map.

@@ -379,7 +379,7 @@ impl OptigaTrustM {
     ///
     /// Under `optiga-no-shield` this is a no-op — we never attempt
     /// PRL on chips where E140 is unreachable. See
-    /// `docs/optiga-brick-postmortem.md` §7.
+    /// `docs/secure-elements/optiga-brick-postmortem.md` §7.
     #[cfg(feature = "stm32u585")]
     pub fn load_pbs(&mut self) {
         #[cfg(feature = "optiga-no-shield")]
@@ -439,7 +439,7 @@ impl OptigaTrustM {
     /// `E140` is unreachable on a specific chip (e.g. the current bricked
     /// test chip), so that non-PRL paths (PIN HMAC verify, entropy
     /// read/write, factory reset of F1Dx) can still be exercised. See
-    /// `docs/optiga-brick-postmortem.md` §7.
+    /// `docs/secure-elements/optiga-brick-postmortem.md` §7.
     pub(crate) fn ensure_shield(&mut self) -> Result<(), OptigaError> {
         #[cfg(feature = "optiga-no-shield")]
         {
@@ -553,7 +553,7 @@ impl OptigaTrustM {
     ///   deleted), along with its dependency on
     ///   `measured_boot::firmware_hash` inside the wrap key — that
     ///   coupling is what bricked bench units on every rebuild (see
-    ///   `docs/optiga-brick-postmortem.md`). Switching roots between
+    ///   `docs/secure-elements/optiga-brick-postmortem.md`). Switching roots between
     ///   builds (e.g. `otp-hardcoded` → `saes-dhuk`) changes the PBS;
     ///   that's a re-pair, only possible while `E140.LcsO=Creation` —
     ///   which is exactly how board #1's bench OPTIGA was moved onto its
@@ -578,7 +578,7 @@ impl OptigaTrustM {
     /// freezes the metadata (a hardening step) but makes the PBS
     /// unrewriteable — only do it on a unit you intend to ship and have
     /// validated against sacrificial parts. See
-    /// `docs/optiga-brick-postmortem.md` §3, §5, §7 and
+    /// `docs/secure-elements/optiga-brick-postmortem.md` §3, §5, §7 and
     /// `docs/production-todo.md`.
     fn setup_pbs_no_handshake(&mut self) -> Result<(), OptigaError> {
         // Derive the PBS from the device hardware root on real
@@ -781,7 +781,7 @@ impl OptigaTrustM {
     /// **Why this gate exists.** The OPTIGA silently accepts `SetMetadata`
     /// APDUs carrying access-condition constructs it will not honor — it
     /// returns OK while storing nothing, or a truncated/altered form. Because
-    /// the `LcsO` ratchet is one-way (`docs/optiga-brick-postmortem.md` §1,
+    /// the `LcsO` ratchet is one-way (`docs/secure-elements/optiga-brick-postmortem.md` §1,
     /// §3), locking such a chip would freeze the WRONG access conditions
     /// forever — e.g. an F1D0 whose `Change` AC nobody can satisfy, bricking
     /// the PIN-HMAC secret. This helper refuses to lock unless the exact bytes
@@ -910,7 +910,7 @@ impl OptigaTrustM {
                         "[OPTIGA/prov] FAIL: F1D0 at LcsO=Op without the \
                          expected LUC Execute + Auto(F1D0) Change AC — cannot \
                          harden in place. Use a fresh part / OID-range bump. \
-                         See docs/optiga-brick-postmortem.md."
+                         See docs/secure-elements/optiga-brick-postmortem.md."
                     );
                     return Err(OptigaError::Status(0xE0));
                 }
@@ -1858,7 +1858,7 @@ impl OptigaTrustM {
         // we never use shielded connection, so we never write E140.
         // Keeps a chip with a bricked E140 (LcsO=op with lost PBS)
         // usable for all non-PRL paths. See
-        // `docs/optiga-brick-postmortem.md` §7.
+        // `docs/secure-elements/optiga-brick-postmortem.md` §7.
         #[cfg(feature = "optiga-no-shield")]
         {
             secure_log!("[OPTIGA/prov] step 1 skipped (feature optiga-no-shield; PRL is disabled)");

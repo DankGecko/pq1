@@ -89,7 +89,7 @@ passed against sacrificial parts.
       `Conf(E140)` to read (so the seed half isn't directly leaked
       without also extracting PBS from the MCU), this regression
       destroys the LUC defense layer that the threat model
-      (`docs/threat-model.md:125`) advertises as the primary online
+      (`docs/security/threat-model.md:125`) advertises as the primary online
       brute-force bound on the OPTIGA half.
 
       **Why `Change=Conf(E140)` is NOT sufficient.** A
@@ -156,13 +156,13 @@ passed against sacrificial parts.
          `current = limit - 1` + correct PIN → must still authorize
          and reset E120 to 0. Today the test only resets from low
          `current`.
-      6. `make ship-checklist` (see `docs/security-review-2026-05.md`
+      6. `make ship-checklist` (see `docs/security/security-review-2026-05.md`
          §F) asserts that a release binary's provisioning path
          calls `build_metadata_auth_ref_ship()` and never the
          bring-up variants. Static grep + compile-time fence both.
 
-      **Cross-references.** `docs/security-review-2026-05.md` §C-N
-      (this issue); `docs/threat-model.md` §"S3 — auth-equivalent"
+      **Cross-references.** `docs/security/security-review-2026-05.md` §C-N
+      (this issue); `docs/security/threat-model.md` §"S3 — auth-equivalent"
       (advertises the 10-attempt bound that this regression breaks);
       `secure/src/optiga/mod.rs:1216-1236` (admits `Change=ALW`
       enables the transient-auth bypass); `secure/src/optiga/apdu.rs:920-924,
@@ -208,7 +208,7 @@ passed against sacrificial parts.
 > no-op** (also why `flash-hw-optiga-reset` no-ops on the TRUSTMV3SHIELDTOBO1, and
 > why the "16/16 OK" escape-hatch claim below is stale — the 2026-04-22 run got
 > uniform `Status(0xFF)`). Cross-confirmed by the deep-research output
-> (`docs/provisioning-reference.md`, Matrix 2 + top correction box).
+> (`docs/provisioning/provisioning-reference.md`, Matrix 2 + top correction box).
 >
 > **Reframed threat:** the real Protected-Update trust-anchor pool is the
 > `DataType=0x11` slots (research: `0xE0E8/0xE0E9/0xE0EF`), which ship **empty at
@@ -459,7 +459,7 @@ blockers above stand; these refine accuracy + add residuals.
       `secret_bhk_regenerate()` is a crypto-erase of its encrypted flash
       store; we have no plaintext secret in MCU flash, and regenerating
       our BHK would brick the SE050's existing pairing — see
-      `docs/trezor-comparison.md` §5 and §6.5 for the full rationale).
+      `docs/architecture/trezor-comparison.md` §5 and §6.5 for the full rationale).
       **Staged rollout:**
       Phase 2A landed the cryptographic primitive (`cmac_bhk` +
       `derive_into_bhk` + `bhk-hardcoded-master-key` dev fallback) with
@@ -542,7 +542,7 @@ the BHK only roots the SCP03 *bus-encryption* channel. The security guarantee is
 "wipe the **secrets**" (half_E/half_O/master), which every wipe path does. Wiping
 the BHK additionally would brick the SE pairing without crypto-erasing anything
 (unlike Trezor, we don't store the secret in MCU flash under the BHK —
-`docs/trezor-comparison.md §6.5`). The hard-brick "lost immutable root" risk is the
+`docs/architecture/trezor-comparison.md §6.5`). The hard-brick "lost immutable root" risk is the
 **OPTIGA PBS** (on the DHUK, which survives mass-erase — that's *why* PBS is on
 DHUK), NOT the BHK.
 
@@ -738,7 +738,7 @@ signer, BLS verify is over public data) · add the MCU's own cert line to Matrix
 ### SE050 — SCP03 + ADMIN provisioning
 
 The SE050 half of the dual-SE also has irreversible steps (per
-`docs/se050-factory-reset.md` + work-todo #20). Summarising here:
+`docs/secure-elements/se050-factory-reset.md` + work-todo #20). Summarising here:
 
 - [ ] **SCP03 keys rotated per device** (work-todo #11). Derivation
       root and chip-state changes:
@@ -768,7 +768,7 @@ The SE050 half of the dual-SE also has irreversible steps (per
         free. The OPTIGA PBS is the opposite case — its E140 is bumped
         to `LcsO=Operational` (immutable), so its root must be the
         maximally-stable thing = the silicon DHUK. See
-        `docs/trezor-comparison.md §6.5` for the full reasoning.
+        `docs/architecture/trezor-comparison.md §6.5` for the full reasoning.
 
       **The irreversible part — GP PUT KEY ceremony (stage B)** — run
       ONCE per chip, at production-provisioning time only (see ordering
@@ -1085,7 +1085,7 @@ the broader secure-world isolation that production will need.
            this is a footgun. The audit + wipe-flip + IRQ-mode flip
            must all land in one diff so review can verify the trigger
            surface end-to-end.
-      Reference: `docs/trezor-comparison.md §2.5`,
+      Reference: `docs/architecture/trezor-comparison.md §2.5`,
       `core/embed/sec/tamper/stm32u5/tamper.c:100-207`. The Trezor
       production handler is the model — `reboot_with_rsod()` after
       backup-SRAM auto-erase via `TAMP_CR3=0`. PQSigner is one

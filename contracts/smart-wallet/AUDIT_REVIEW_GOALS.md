@@ -199,7 +199,7 @@ Questions:
 Question: Solady's `ERC1271` has had several revisions for nested
 EIP-712 handling. Is the version we pinned (`lib/solady`) compatible
 with the assumptions in `_erc1271IsValidSignatureNowCalldata`? See
-`docs/companion-app-integration.md` for the firmware-side wrapping that
+`docs/companion/companion-app-integration.md` for the firmware-side wrapping that
 must remain in lockstep.
 
 ### 3.8 ERC-7201 storage **[re-check]**

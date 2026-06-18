@@ -525,7 +525,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
 
     // ERC-7730 is an enhancement layer: a wrong / malformed / mis-bound
     // trailer MUST degrade gracefully to blind-sign instead of aborting
-    // the userop, per `docs/companion-erc7730-implementation-guide.md`
+    // the userop, per `docs/companion/companion-erc7730-implementation-guide.md`
     // §1: "If it ships a wrong / malformed / mis-bound trailer, the
     // firmware refuses the descriptor and falls back to blind-sign with
     // a brief status-line banner. Clear signing is never required — it

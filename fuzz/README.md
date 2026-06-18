@@ -3,7 +3,7 @@
 Coverage-guided libFuzzer targets for PQSigner's pure-logic parsers.
 The proptest sibling is `secure/src/fuzz_props.rs` (always-on, runs
 under `cargo test`); this directory adds the coverage-guided variant
-called out in `docs/trezor-comparison.md §2.4`.
+called out in `docs/architecture/trezor-comparison.md §2.4`.
 
 This is a **standalone workspace** — `Cargo.toml` at the repo root
 excludes `fuzz/` so cargo-fuzz's nightly + sanitizer requirements

@@ -12,7 +12,7 @@ REM   2. Run:    wsl --install
 REM   3. Reboot.
 REM   4. Open a new terminal here and run measure.bat.
 REM
-REM See docs/reproducible-builds.md for the full reproducibility story.
+REM See docs/firmware/reproducible-builds.md for the full reproducibility story.
 
 setlocal
 cd /d "%~dp0"

@@ -69,7 +69,7 @@ template PackBytes31(N_BLOCKS) {
     // fold. Without it `acc*256 + byte` is non-injective over the scalar
     // field, so `H_tx`/`H_str` bind only the packed fields, not the
     // bytes — a prover could forge a benign-displayed / malicious-signed
-    // calldata. See docs/VULN-cowswap-zk-bytepack-nonbinding.md.
+    // calldata. See docs/security/VULN-cowswap-zk-bytepack-nonbinding.md.
     component rc[TOTAL_BYTES];
     for (var i = 0; i < TOTAL_BYTES; i++) {
         rc[i] = Num2Bits(8);

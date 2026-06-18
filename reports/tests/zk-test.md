@@ -118,7 +118,7 @@ the negative suite attacks.
   expected digests, so any future divergence in the secure module
   surfaces immediately on the next run. Pulling the secure module into
   this crate (or vice versa) would require a workspace-level
-  refactor (see `docs/handoff-modularity-refactor.md`) and is out of
+  refactor (see `docs/archive/handoff-modularity-refactor.md`) and is out of
   scope.
 - **No timing / constant-time assertions.** This is host-only verifier
   code; the secure-world implementation runs in TrustZone with its own

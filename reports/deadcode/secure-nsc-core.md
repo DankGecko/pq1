@@ -38,7 +38,7 @@ None.
 
 ## Cross-slice observations
 - `secure/src/secure_element.rs:215` — `MockSecureElement::macd_all_initialized` is reported as dead by rustc under the `mock-se,debug-log,ui-semihosting` test config. Belongs to the `secure-nsc-small-cmds`/`shared` review surface, not this slice. Left alone.
-- Multiple pre-existing `unused_assignments` warnings in `state.rs:259` (`victim_tick` overwrite) are stylistic; leaving alone preserves the explicit "look for empty slot first, else LRU" loop shape that the security-review pass blessed in `docs/security-review-2026-05.md`.
+- Multiple pre-existing `unused_assignments` warnings in `state.rs:259` (`victim_tick` overwrite) are stylistic; leaving alone preserves the explicit "look for empty slot first, else LRU" loop shape that the security-review pass blessed in `docs/security/security-review-2026-05.md`.
 
 ## Skipped
 The following items look unused on a casual grep but are **intentional
@@ -46,7 +46,7 @@ infrastructure**, documented as such in code or design docs. Per the
 task's "bucket 2" rule they were left intact:
 
 - `SecureState::{last_chain_id, last_key_index, last_ots_index, has_signed}` and `{slot_master_entropy, slot_master_derived}` — write-only by current design; per `state.rs:64-68,82-89` and `tools/sca/README.md:1194` ("Follow-up (deferred)") these are F-14 complement-storage placeholders that earn future read sites their FI defense for free. Removing the fields would defeat the documented intent and force the FI work to be redone.
-- `secure/src/nsc/ns_ptr.rs` (whole file) — explicitly `#![allow(dead_code)]` and documented at the top of the file as Phase 7 typestate scaffolding adopted incrementally. `docs/handoff-modularity-refactor.md:688-695` notes the host tests are intentionally dormant (the `nsc` module is `#[cfg(not(test))]`-gated). Tools/sca SCA harnesses reference the F-8 fix pattern by name. Touching this file would erase planned future-adoption infrastructure.
+- `secure/src/nsc/ns_ptr.rs` (whole file) — explicitly `#![allow(dead_code)]` and documented at the top of the file as Phase 7 typestate scaffolding adopted incrementally. `docs/archive/handoff-modularity-refactor.md:688-695` notes the host tests are intentionally dormant (the `nsc` module is `#[cfg(not(test))]`-gated). Tools/sca SCA harnesses reference the F-8 fix pattern by name. Touching this file would erase planned future-adoption infrastructure.
 - All eleven `nsc_*` CMSE veneers in `mod.rs` — `#[no_mangle]` symbols emitted into the implib that NS links against. They look unreferenced inside the secure crate but are the production transport on stm32u585.
 
 ## Equivalence check

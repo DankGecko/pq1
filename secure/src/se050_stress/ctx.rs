@@ -118,7 +118,7 @@ impl<'a> StressCtx<'a> {
     /// Note: such a no-admin UserID is NOT removable by this helper —
     /// a transport `write_userid` UPDATE is *refused and preserves* the
     /// object (Finding A2 is retracted; there is no destroy-on-failed-
-    /// UPDATE — see `docs/se050-silicon-findings.md` §3). The only
+    /// UPDATE — see `docs/secure-elements/se050-silicon-findings.md` §3). The only
     /// cures are the UserID's own user-PIN self-delete or a carve-out
     /// OID-range bump; `oid::STRESS_BASE` was bumped `0x7B5F → 0x7B5E`
     /// for exactly this reason. `delete_scratch` therefore only
@@ -200,7 +200,7 @@ impl<'a> StressCtx<'a> {
     /// this helper calls `Se050::reinit()` whenever the verify leg
     /// fails, *after* the best-effort close. Cost is ~one SCP03
     /// handshake (~100-300 ms on silicon, ~ms on QEMU). See
-    /// `docs/se050-silicon-findings.md` §4 (raw evidence
+    /// `docs/secure-elements/se050-silicon-findings.md` §4 (raw evidence
     /// `b88gzpjod.output:1275-1281`).
     pub fn open_user_session(
         &mut self,

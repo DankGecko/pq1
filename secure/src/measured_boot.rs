@@ -34,7 +34,7 @@ use crate::ui::{display, input, show_status, DISPLAY_COLS};
 // FSBL + manifest region instead of the running slot the moment the A/B
 // layout relocates the image, making the FSBL-vs-secure-world fingerprint
 // cross-check (CLAUDE.md "divergence ⇒ tamper") mis-fire on honest
-// firmware. See docs/measured-boot.md and
+// firmware. See docs/security/measured-boot.md and
 // docs/audits/boot-fsbl-20260611-141459.md (MEDIUM-1).
 //
 // On STM32U585, CMSE veneers (.gnu.sgstubs) live in FLASH, so the last
@@ -96,7 +96,7 @@ fn flash_end() -> usize {
 /// the exact bytes the running image occupies in flash. This is the same
 /// range the WRP1A-rooted FSBL hashes for its trusted-display fingerprint,
 /// so an honest slot yields identical words on both rows regardless of
-/// which slot the firmware runs from (see docs/measured-boot.md).
+/// which slot the firmware runs from (see docs/security/measured-boot.md).
 pub fn firmware_hash() -> [u8; 32] {
     let base = image_base();
     let end = flash_end();

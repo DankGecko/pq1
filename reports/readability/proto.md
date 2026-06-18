@@ -119,7 +119,7 @@ for their own crate-scoped passes:
   legacy builder is still on a live code path or is residual demo/test
   scaffolding; if the latter, the constant + its single-purpose builder
   could be retired together.
-- `docs/sphincs-c7-firmware-integration.md` still talks about an
+- `docs/archive/sphincs-c7-firmware-integration.md` still talks about an
   `INIT_CODE_LEN = 4248` symbol that hasn't existed since the C10 cutover.
   Docs are out of scope for this review but worth a pass when the docs
   folder gets the same treatment.

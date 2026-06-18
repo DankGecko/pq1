@@ -3,7 +3,7 @@
   `sphincs-c10/src/lib.rs:149` (`VerifyingKey::verify`).
 
   Closes the Phase 7 deliverable from
-  `docs/handoff-verity-c10-verifier.md`. Top-level `verify` plus its
+  `docs/archive/handoff-verity-c10-verifier.md`. Top-level `verify` plus its
   closeable invariants:
 
     - `verify_length_enforced`     — sig len ≠ 4008 ⇒ false
@@ -114,7 +114,7 @@ theorem hmsg_domain_separator_matches_yul :
     of the two implementations has a bug; in practice they agree by
     construction (both target the same FIPS-style spec).
 
-    Future work (per `docs/handoff-verity-c10-verifier.md` §4 Phase 6):
+    Future work (per `docs/archive/handoff-verity-c10-verifier.md` §4 Phase 6):
     upstream Verity gains the Phase-0 primitives (precompile.sha256,
     calldata.read, bitfield ops, memory.scratch), enabling Verity to
     emit Yul from this Lean spec. At that point the Yul→Lean

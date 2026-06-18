@@ -99,7 +99,7 @@ fn main() -> ! {
     // branching. This is the trust root for the "subsequent updates
     // can't fake the words" property: the slot we are about to enter
     // never gets to display anything before the user has already seen
-    // FSBL's verdict for THESE bytes. See `docs/measured-boot.md`.
+    // FSBL's verdict for THESE bytes. See `docs/security/measured-boot.md`.
     render::render_fingerprint(&secure_digest);
 
     // SAFETY: we verified the slot's manifest signature and image

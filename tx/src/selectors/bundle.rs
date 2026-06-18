@@ -489,7 +489,7 @@ mod tests {
 
     #[test]
     fn self_attest_uint256_only() {
-        // The end-to-end example from docs/companion-selector-decoding.md.
+        // The end-to-end example from docs/companion/companion-selector-decoding.md.
         let text = b"transfer(uint256)";
         let sel = keccak4(text);
         assert_eq!(sel, [0x12, 0x51, 0x4b, 0xba]);

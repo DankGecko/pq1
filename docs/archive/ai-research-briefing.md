@@ -59,7 +59,7 @@ it last as the source of truth.*
   defaults** = effectively off/minimum. Stage 1 of the brownout
   roadmap added reset-cause classification and verified flash writes;
   Stage 2 will turn on BOR3, PVD, ECC, and wire an NMI handler. See
-  `docs/brownout-hardening.md` for the full 5-stage plan.
+  `docs/security/brownout-hardening.md` for the full 5-stage plan.
 
 **Reset behaviour (empirically verified on this board):**
 - `probe-rs reset` = SWD SYSRESETREQ. Classified as `ResetCause::Software`
@@ -109,7 +109,7 @@ not useful.
 - SE050 PIN-lockout factory reset via secondary admin UserID
   (`0x7B06_00A0`), admin PIN stored in secure flash page 125,
   two-entry TAG_POLICY on every user object. Full design +
-  production checklist: `docs/se050-factory-reset.md`.
+  production checklist: `docs/secure-elements/se050-factory-reset.md`.
 - SCP03 authenticated+encrypted channel on SE050. **Using NXP default
   static keys** — not rotated per device. Production plan: rotate +
   HUK-SAES wrap, tracked as `docs/work-todo.md` item 7.
@@ -127,7 +127,7 @@ not useful.
   any dev board).
 
 **Designed but not implemented:**
-- Brownout Stages 1.5–5 (see `docs/brownout-hardening.md`).
+- Brownout Stages 1.5–5 (see `docs/security/brownout-hardening.md`).
 - Hash-signature firmware update model (ML-DSA-44 signs the
   measurement hash; `docs/work-todo.md` item 14).
 - Immutable bootloader in WRP-locked flash (`docs/work-todo.md` item 15).
@@ -214,7 +214,7 @@ bundle E has not.)
 - **Voltage glitching on RDP byte read during boot** — dominant historical STM32 attack. Ledger Donjon's March 2025 statement that no public U5 glitch bypass existed (verified real, `ledger.com/why-secure-elements-make-a-crucial-difference-to-hardware-wallet-security`) was invalidated within months by the Simonik thesis at Masaryk University (verified real) demonstrating ~76% PIN-glitch bypass on STM32U5 silicon. Defences planned: BOR4, PVD, tamper monitors, option-byte RDP Level 2 with OEM1LOCK for production. **U5 is confirmed glitch-vulnerable** at the core level — not presumed, proven.
 - **EMFI** — possible against U5 core; no public attack. Defended via internal tamper (temp/voltage/clock), optional tamper mesh on production PCB.
 - **Power/EM side-channel on software crypto** — SLH-DSA on Cortex-M33 emits EM. Mitigation status unclear; needs dedicated research (see Prompt C below).
-- **Fault injection on signature verify / PIN compare** — partially mitigated (verify-before-release). Bundle A research found verify-after-sign is *not adequate* for SLH-DSA per Genêt TCHES 2023 + RFC 9814. **SLH-DSA double-compute on disjoint SRAM is mandatory** before production. PIN compare needs FihInt complement-storage + fail-in pattern + volatile reads. See `docs/production-security.md` §2.1 + work-todo.md #18.
+- **Fault injection on signature verify / PIN compare** — partially mitigated (verify-before-release). Bundle A research found verify-after-sign is *not adequate* for SLH-DSA per Genêt TCHES 2023 + RFC 9814. **SLH-DSA double-compute on disjoint SRAM is mandatory** before production. PIN compare needs FihInt complement-storage + fail-in pattern + volatile reads. See `docs/security/production-security.md` §2.1 + work-todo.md #18.
 - **I2C bus interposer between MCU and SE** — defended by SCP03 with auth + encrypt on every APDU. Keys need rotation for production. Bundle B research provides the concrete two-stage RDP provisioning protocol with per-device SCP03 keys derived via CMAC-KDF(FMK, "SCP03-ENC", SE050_UID), PUT KEY (KVN 0x0B → 0x11), HUK-SAES two-level wrapping. See work-todo.md #20.
 - **Dark Skippy / anti-klepto nonce exfiltration** — ECDSA-specific, does not apply to SLH-DSA (stateless hash-based signatures have no nonce). **Irrelevant to us.** Stating this explicitly so future research doesn't chase it.
 - **Cold boot / Volt Boot / UnTrustZone SRAM residue** — minimize seed time in SRAM; Stage 2 moves secrets to SRAM2 with hardware auto-erase.
@@ -237,7 +237,7 @@ attachment, and the session has everything it needs. See
 `docs/research-bundles/README.md` for the mapping.
 
 **Status as of last update:**
-- Prompt A (fault injection): ✅ run, results in `docs/research-bundles/results/`, synthesised to `docs/production-security.md` §2.1 + work-todo.md #18.
+- Prompt A (fault injection): ✅ run, results in `docs/research-bundles/results/`, synthesised to `docs/security/production-security.md` §2.1 + work-todo.md #18.
 - Prompt B (key management): ✅ run, results in same dir, synthesised §2.2 + #20 (partially superseded by E).
 - Prompt C (SLH-DSA SCA): ✅ run, synthesised §2.3 + #18.
 - Prompt D (USB hardening): ✅ run, synthesised §2.4 + #19.
@@ -294,7 +294,7 @@ OPTIGA's Platform Binding Secret is per-device-random but stored as
 raw bytes in secure flash page 126. HUK-SAES wrapping is listed as
 work-todo item 7 but unimplemented. STM32U585 has the SAES peripheral
 and a Hardware Unique Key per chip (not readable by firmware; only
-usable as a KEK via SAES). `docs/se050-factory-reset.md` §2a has a
+usable as a KEK via SAES). `docs/secure-elements/se050-factory-reset.md` §2a has a
 brief future-optimisation note.
 
 **Research question:**
@@ -373,7 +373,7 @@ improves the SCA posture or is orthogonal.
 interface. No UART, no BT, no NFC. The USB stack today is custom:
 Ledger-compatible APDU framing over HID for compatibility with
 existing wallet-host software, plus a custom PQSigner-native protocol
-for our own companion app (`docs/usb-protocol-v2.md`). The host
+for our own companion app (`docs/companion/usb-protocol-v2.md`). The host
 software running on the user's computer is not trusted — it's
 potentially the primary attack vector.
 
@@ -473,12 +473,12 @@ customer without requiring them to run an independent tool.
 
 | Concern | Path |
 |---|---|
-| This briefing | `docs/ai-research-briefing.md` |
-| Threat model + architecture | `README.md`, `docs/architecture.md`, `CLAUDE.md` |
-| Brownout hardening (5-stage plan) | `docs/brownout-hardening.md` |
-| SE050 PIN-lockout factory reset | `docs/se050-factory-reset.md` |
-| SE050 native UserID PIN design | `docs/se050-userid-pin-auth.md` |
-| Side-channel + FI hardening reqs | `docs/HARDENING.md` |
+| This briefing | `docs/archive/ai-research-briefing.md` |
+| Threat model + architecture | `README.md`, `docs/architecture/architecture.md`, `CLAUDE.md` |
+| Brownout hardening (5-stage plan) | `docs/security/brownout-hardening.md` |
+| SE050 PIN-lockout factory reset | `docs/secure-elements/se050-factory-reset.md` |
+| SE050 native UserID PIN design | `docs/secure-elements/se050-userid-pin-auth.md` |
+| Side-channel + FI hardening reqs | `docs/security/HARDENING.md` |
 | Work backlog + provisioning TODOs | `docs/work-todo.md` |
 | ERC-4337 wallet contract | `contracts/smart-wallet/src/` |
 | Secure world entry | `secure/src/main.rs` |

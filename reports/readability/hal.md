@@ -24,7 +24,7 @@ hygiene fixes; tightened `BootStage::ALL` to `Self`; documented the
   modularity refactor — PR 2 (`hal-stm32u5/`…), PR 3 (`hal-mock/`…),
   PR 4 (`secure/src/platform.rs` selects between the two)" narrative
   with a two-line statement of what the crate is. Refactor sequencing
-  belongs in `docs/handoff-modularity-refactor.md`, not in package
+  belongs in `docs/archive/handoff-modularity-refactor.md`, not in package
   manifests where it rots.
 - `hal/src/lib.rs:1–16` — same cleanup in the crate-level rustdoc:
   dropped Phase 6 / Phase 7 PR-history references and the
@@ -141,7 +141,7 @@ hygiene fixes; tightened `BootStage::ALL` to `Self`; documented the
 
 - `secure/src/hw/*` files don't yet implement the `pqsigner-hal`
   traits. That's tracked as Phase 6 PR 2 in
-  `docs/handoff-modularity-refactor.md` §4.2 and is out of scope
+  `docs/archive/handoff-modularity-refactor.md` §4.2 and is out of scope
   here. Once the impl crates land, the `// Intentionally NOT Debug`
   comment on `KeySelector` should propagate to the impl crate's
   internal types so the no-Debug-on-secrets rule is enforced

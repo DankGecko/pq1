@@ -31,7 +31,7 @@ checklist, architectural recommendation on co-processor USB.
 
 ---
 
-## Project context (condensed — full version in `docs/ai-research-briefing.md`)
+## Project context (condensed — full version in `docs/archive/ai-research-briefing.md`)
 
 **What this is.** PQSigner OS: a post-quantum ERC-4337 smart-wallet
 firmware for STM32U585 (Cortex-M33 + ARM TrustZone) on the
@@ -67,7 +67,7 @@ always-on), IWDG all at factory defaults. Stage 1 of a 5-stage brownout
 roadmap added reset-cause classification + verified flash writes; the
 rest is planned. `make stm32-harden-opts` is a one-time option-byte
 setup target (sets BOR3 + SRAM2_RST=0) but has not been run yet. See
-`docs/brownout-hardening.md` for the full plan.
+`docs/security/brownout-hardening.md` for the full plan.
 
 **VBAT.** Production hardware uses a **0.47 F supercap** (not a
 battery) on VBAT via Schottky from Vdd. Bounded retention (~12-24 h
@@ -1777,7 +1777,7 @@ impl CommandRouter {
 ```
 
 
-### From `docs/usb-protocol-v2.md`
+### From `docs/companion/usb-protocol-v2.md`
 
 # PQSigner USB Protocol v2
 
@@ -2360,7 +2360,7 @@ EIP-712 canonical field:        204 bytes (CowSwap GPv2Order v3)
 
 
 
-### From `docs/usb-hid-setup.md`
+### From `docs/hardware/usb-hid-setup.md`
 
 # USB HID Setup Guide
 

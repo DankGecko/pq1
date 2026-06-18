@@ -52,7 +52,7 @@ use core::convert::TryFrom;
 /// (and a per-format `static_head_words` field was added to the format
 /// header). `parse` strict-rejects any other value, so a descriptor
 /// compiled under the old, slot-confusable encoding can never be walked
-/// by this firmware. See `docs/VULN-erc7730-walker-slot-confusion.md`.
+/// by this firmware. See `docs/security/VULN-erc7730-walker-slot-confusion.md`.
 pub const SCHEMA_VER: u8 = 0x02;
 pub const HEADER_LEN: usize = 134;
 

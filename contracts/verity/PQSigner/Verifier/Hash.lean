@@ -3,7 +3,7 @@
 
   SHA-256 is treated as an axiomatised primitive (Verity v0.1.0 has
   no precompile.sha256 EDSL primitive — see
-  `docs/handoff-verity-c10-verifier.md` §4 Phase 0). All tweakable
+  `docs/archive/handoff-verity-c10-verifier.md` §4 Phase 0). All tweakable
   hashes are built on this single opaque.
 
   Convention (matches sphincs-c10/src/hash.rs:7-10):

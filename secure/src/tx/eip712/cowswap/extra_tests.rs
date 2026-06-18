@@ -219,7 +219,7 @@ fn negative_order_typehash_preimage_is_byte_stable() {
     assert_eq!(
         keccak(ORDER_TYPEHASH_PREIMAGE),
         expected_typehash,
-        "ORDER_TYPEHASH must equal 0xd5a25ba2… per docs/m4-cowswap-eip712-impl.md"
+        "ORDER_TYPEHASH must equal 0xd5a25ba2… per docs/companion/m4-cowswap-eip712-impl.md"
     );
 }
 
@@ -566,7 +566,7 @@ fn negative_shape_rejects_each_tail_pad_byte_nonzero() {
 }
 
 // ---------------------------------------------------------------------------
-// Field-overflow guard (docs/VULN-cowswap-zk-amount-overflow.md)
+// Field-overflow guard (docs/security/VULN-cowswap-zk-amount-overflow.md)
 // ---------------------------------------------------------------------------
 //
 // The CoW Groth16 circuit's `FormatTrimmedAmount` once computed

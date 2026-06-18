@@ -28,7 +28,7 @@ removed. Every backend (`oled` / `semihosting` / `noop` / `mirror` /
 `capture`), every wizard flow, and every PIN-entry result variant has
 live consumers under at least one shipping feature combo, so nothing
 else qualified. The `pub trait Ui` + 3 backend impls are documented in
-`docs/handoff-modularity-refactor.md` as deliberate Phase-10-PR-A
+`docs/archive/handoff-modularity-refactor.md` as deliberate Phase-10-PR-A
 scaffolding for a future Phase-7 / Phase-9 refactor and were left alone.
 
 ## Deletions applied
@@ -47,7 +47,7 @@ None — every deletion survived the equivalence check on first run.
 
 - `secure/src/ui/mod.rs:92-130` `pub trait Ui` and the 3 `impl Ui for
   backend::Display` blocks have no `dyn Ui` / `impl Ui` consumer
-  anywhere. Per `docs/handoff-modularity-refactor.md:128-129,278-281`
+  anywhere. Per `docs/archive/handoff-modularity-refactor.md:128-129,278-281`
   this is deliberate Phase-10-PR-A scaffolding for the Phase 7 / 9
   refactor that will let `cowswap_display.rs` and `safe_display.rs`
   take `&mut impl Ui`. Left alone (not bucket 1: explicitly planned for

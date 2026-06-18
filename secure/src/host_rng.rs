@@ -10,7 +10,7 @@
 //! `Rng` driver. The semihosting backend is fine for QEMU because the
 //! "device" is the host kernel CSPRNG.
 //!
-//! See `docs/architecture.md` "Porting to STM32U585" for the migration plan.
+//! See `docs/architecture/architecture.md` "Porting to STM32U585" for the migration plan.
 
 use cortex_m_semihosting::nr;
 

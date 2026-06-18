@@ -318,7 +318,7 @@ template FormatAmount(MAX_INT_DIGITS, DECIMALS) {
     // scale_factor up to 10^18 < 2^60, the product reaches ~2^314 and
     // wraps the field, letting a prover display a benign amount while
     // signing a huge one (same class as the CowSwap FormatTrimmedAmount
-    // bug — see docs/VULN-cowswap-zk-amount-overflow.md). Constraining
+    // bug — see docs/security/VULN-cowswap-zk-amount-overflow.md). Constraining
     // raw_amount to 190 bits gives raw_amount · scale_factor <
     // 2^190 · 10^18 < r over ℤ, so the product never wraps and the
     // recomposition is exact. 190 bits covers any displayable amount

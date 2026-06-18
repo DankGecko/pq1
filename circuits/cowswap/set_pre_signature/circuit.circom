@@ -82,7 +82,7 @@ template CsPackBytes31(N_BLOCKS) {
     // fold — without it `acc*256 + byte` is non-injective over the
     // scalar field and `H_tx`/`H_str` stop being byte-binding, letting a
     // prover forge a benign-displayed / malicious-signed setPreSignature
-    // call. See docs/VULN-cowswap-zk-bytepack-nonbinding.md.
+    // call. See docs/security/VULN-cowswap-zk-bytepack-nonbinding.md.
     component rc[TOTAL_BYTES];
     for (var i = 0; i < TOTAL_BYTES; i++) {
         rc[i] = Num2Bits(8);

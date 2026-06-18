@@ -149,7 +149,7 @@ struct SafeRenderInput<'a> {
     /// `refundReceiver == 0`). A *token* refund has no on-chain cap on
     /// `gasPrice`, so an attacker who hides these fields can drain the
     /// Safe's entire balance of a chosen ERC-20 behind a benign-looking
-    /// inner call. See `docs/safe-multisig-clear-sign.md`.
+    /// inner call. See `docs/companion/safe-multisig-clear-sign.md`.
     gas_price: [u8; 32],
     gas_token: [u8; 20],
     refund_receiver: [u8; 20],

@@ -11,7 +11,7 @@ responsible for:
 3. Attaching it to the sign request.
 
 This doc covers (1) and (2). The wire format itself + the on-device
-verification path live in `docs/erc7730-integration.md`.
+verification path live in `docs/companion/erc7730-integration.md`.
 
 ## Lookup against `erc7730_db.bin`
 
@@ -72,7 +72,7 @@ fn lookup(chain_id: u64, to: [u8; 20], dsep: Option<[u8; 32]>)
 
 ## Trailer assembly
 
-Wire format (`docs/erc7730-integration.md` §"Trailer format"):
+Wire format (`docs/companion/erc7730-integration.md` §"Trailer format"):
 
 ```
 [u16 BE bundle_len]
@@ -175,8 +175,8 @@ against `mode-production` so a shipping build never carries it.
 
 ## See also
 
-- `docs/erc7730-integration.md` — on-device IR + verification.
-- `docs/usb-protocol-v2.md` — sign-input wire layout + offchain kind=2.
-- `docs/companion-app-integration.md` — companion-side architecture.
+- `docs/companion/erc7730-integration.md` — on-device IR + verification.
+- `docs/companion/usb-protocol-v2.md` — sign-input wire layout + offchain kind=2.
+- `docs/companion/companion-app-integration.md` — companion-side architecture.
 - `tools/companion-stub/erc7730_db_e2e.bin` — the e2e fixture the
   firmware test suite uses.

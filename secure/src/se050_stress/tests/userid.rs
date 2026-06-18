@@ -148,7 +148,7 @@ stress_test!(SILICON_LOCKOUT, "userid_silicon_lockout", Tier::Destructive, silic
 ///
 /// **Probe redesign (A1 silicon finding, 2026-05-28).**
 /// `ReadObjectAttributes` is not policy-gate-independent on
-/// B-U585I-IOT02A (`docs/se050-silicon-findings.md` §2) — the chip
+/// B-U585I-IOT02A (`docs/secure-elements/se050-silicon-findings.md` §2) — the chip
 /// returns SW=0x6986 on a freshly-provisioned user-policy-gated
 /// UserID. We therefore cannot read `auth_attempts` directly to
 /// inspect the counter; instead this test infers the reset via burn
@@ -448,7 +448,7 @@ stress_test!(PIN_LOCKOUT_PERSISTS_ACROSS_REINIT, "pin_lockout_persists_across_re
 /// "`ReadObjectAttributes` does NOT consume PIN-counter slots" —
 /// the load-bearing claim behind invoking it during the boot-time
 /// MCU↔SE050 attempt-counter reconcile. The first silicon run
-/// (`docs/se050-silicon-findings.md` §2) showed B-U585I-IOT02A
+/// (`docs/secure-elements/se050-silicon-findings.md` §2) showed B-U585I-IOT02A
 /// refuses the read entirely (SW=0x6986) on a UserID gated by the
 /// standard two-entry policy
 /// `(self → ALLOW_WRITE|ALLOW_DELETE|REQUIRE_SM,

@@ -4,7 +4,7 @@
 //! can dispatch on *why* the chip came up. Distinguishes cold boot from
 //! software reset, watchdog bite, low-power illegal exit, and option-byte
 //! reload. Used by the brownout-hardening design (see
-//! `docs/brownout-hardening.md`) — abnormal causes (Watchdog / LowPower /
+//! `docs/security/brownout-hardening.md`) — abnormal causes (Watchdog / LowPower /
 //! Unknown) trigger defensive SRAM zeroization before the unlock path
 //! runs.
 //!

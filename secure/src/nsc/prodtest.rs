@@ -792,7 +792,7 @@ mod tests {
     fn positive_phase_c_handshake_rng_lens_pinned() {
         // Both handshake commands return 16 bytes — the fixture
         // parses on these offsets in its per-die uniqueness DB. Any
-        // change here must also update `docs/factory-prodtest.md`
+        // change here must also update `docs/provisioning/factory-prodtest.md`
         // and the host runner.
         assert_eq!(OPTIGA_HANDSHAKE_RNG_LEN, 16);
         assert_eq!(SE050_HANDSHAKE_RNG_LEN, 16);

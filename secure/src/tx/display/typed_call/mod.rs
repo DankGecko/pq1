@@ -1,6 +1,6 @@
 //! Phase 2 typed-args calldata renderer — the gate that fires between
 //! "calldata didn't decode as ERC-20" and the BLIND SIGN word-dump
-//! fallback. See `docs/calldata-decoding-handoff.md` for the full spec.
+//! fallback. See `docs/archive/calldata-decoding-handoff.md` for the full spec.
 //!
 //! Trust framing — Phase 2 trusts the *types* (vendor-curated text_sig,
 //! Merkle-verified, cross-checked against `calldata[0..4]`), not the

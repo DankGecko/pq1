@@ -17,7 +17,7 @@
 //! PE1 = camera connector CN7 only). RES first went to PD15/D2 but read flat
 //! on the LA at bring-up; moved to PE14 (unused SPI1_MISO = D12, on the solid
 //! CN13) which shares GPIOE with the proven-working DC/SPI pins. See
-//! `docs/nv3007-wiring.md`.
+//! `docs/hardware/nv3007-wiring.md`.
 //! ```
 //!
 //! ## Init sequence
@@ -95,7 +95,7 @@ pub const Y_OFFSET: u16 = 0;
 // RES choice (PD15, GPIOD, Arduino D2 on CN14) read flat on the LA — so RES
 // moved to **PE14** (the unused SPI1_MISO = Arduino **D12 = CN13 pin 5**): same
 // GPIOE bank as DC + the SPI pins (proven to drive), on the solid CN13
-// connector. The panel is write-only so MISO is free. See docs/nv3007-wiring.md.
+// connector. The panel is write-only so MISO is free. See docs/hardware/nv3007-wiring.md.
 
 /// DC (Data/Command) pin position on GPIOE (PE7 = Arduino D4). Drive HIGH
 /// for data, LOW for command. Configured as push-pull output by `init()`.

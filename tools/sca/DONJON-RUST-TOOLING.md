@@ -12,7 +12,7 @@ Two Ledger-Donjon tools brought up 2026-06-16 to complement the in-tree
   Welch-T-test / elastic alignment). Donjon's successor to `lascar` (now "legacy").
   Consumes `.npy` trace tensors — same data the `tools/sca` rainbow harnesses emit.
 
-See `docs/security-tooling-sota-2026-06.md` §1/§4 + work-todo §18b/§34.
+See `docs/verification/security-tooling-sota-2026-06.md` §1/§4 + work-todo §18b/§34.
 
 ---
 

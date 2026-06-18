@@ -19,7 +19,7 @@ use sphincs_tz_shared::{FW_IMAGE_KIND_NONSECURE, FW_IMAGE_KIND_SECURE};
 /// arithmetic in here is also belt-and-braces `checked_*` so a future code
 /// path that calls `write_chunk` directly without `check_chunk` (or a state
 /// corruption that violates the monotonic invariant) cannot overflow into
-/// adjacent flash. See finding #3 in `docs/usb-fw-update-hardening.md`.
+/// adjacent flash. See finding #3 in `docs/security/usb-fw-update-hardening.md`.
 ///
 /// Returns `Err(ChunkError::FlashError)` if a QW write fails; the
 /// streaming state is left consistent with what actually landed in

@@ -16,7 +16,7 @@
 LEAN_DIR := lean
 LAKE     ?= $(shell command -v lake 2>/dev/null || echo $$HOME/.elan/bin/lake)
 
-.PHONY: verify verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk verify-interp verify-storage-mutators verify-fv-lints verify-lean4checker verify-kontrol
+.PHONY: verify verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk verify-interp verify-storage-mutators verify-fv-lints verify-lean4checker verify-kontrol verify-halmos
 
 verify: verify-build
 	@cd $(LEAN_DIR) && $(LAKE) exe verify-test-vectors
@@ -68,6 +68,13 @@ verify-lean4checker:
 # build+prove. See kontrol/run_kontrol.sh + docs/KONTROL_SCOPING.md.
 verify-kontrol:
 	@bash kontrol/run_kontrol.sh
+
+# Halmos bytecode-level discharge of the A3.* bridge axioms: certifies the
+# compiled runtime codehashes match the pins, then symbolically executes the
+# deployed wallet/factory/verifier bytecode over the full check_* rule suite
+# (both compiler profiles). Source of truth: halmos/run_halmos.sh.
+verify-halmos:
+	@bash halmos/run_halmos.sh
 
 # Bulk executable-spec differential (A3.1 follow-up): regenerate the random
 # corpus from the Rust signer (slow; gated behind GEN=1), embed it, and run

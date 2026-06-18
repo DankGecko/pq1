@@ -53,7 +53,7 @@
 //!   names).** Companion supplies via existing trailers
 //!   (`Erc20Metadata`, `NameMeta`).
 //!
-//! See `docs/erc7730-integration.md` for the full spec, IR layout, and
+//! See `docs/companion/erc7730-integration.md` for the full spec, IR layout, and
 //! formatter coverage.
 
 #![no_std]

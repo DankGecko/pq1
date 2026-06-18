@@ -8,7 +8,7 @@ edition.workspace = true
 # `no_std`, no allocator, no hardware deps.
 #
 # Phase 5 PR 5.3 of the modularity refactor — see
-# `docs/handoff-modularity-refactor.md` §4.1.
+# `docs/archive/handoff-modularity-refactor.md` §4.1.
 #
 # The FI-hardened verify-before-release path and the
 # `WalletStore`-bound `provision_from_mnemonic` / `store_macd_encrypted`

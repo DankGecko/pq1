@@ -21,7 +21,7 @@
 > "this is how PQSigner uses two SEs."
 >
 > For current dual-SE architecture see `docs/OPTIGATRUSTM/`,
-> `docs/se050-userid-pin-auth.md`, `docs/se050-factory-reset.md`.
+> `docs/secure-elements/se050-userid-pin-auth.md`, `docs/secure-elements/se050-factory-reset.md`.
 
 ## What is TROPIC01?
 

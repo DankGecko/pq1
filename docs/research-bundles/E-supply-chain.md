@@ -33,7 +33,7 @@ customer to run an independent tool.
 
 ---
 
-## Project context (condensed — full version in `docs/ai-research-briefing.md`)
+## Project context (condensed — full version in `docs/archive/ai-research-briefing.md`)
 
 **What this is.** PQSigner OS: a post-quantum ERC-4337 smart-wallet
 firmware for STM32U585 (Cortex-M33 + ARM TrustZone) on the
@@ -69,7 +69,7 @@ always-on), IWDG all at factory defaults. Stage 1 of a 5-stage brownout
 roadmap added reset-cause classification + verified flash writes; the
 rest is planned. `make stm32-harden-opts` is a one-time option-byte
 setup target (sets BOR3 + SRAM2_RST=0) but has not been run yet. See
-`docs/brownout-hardening.md` for the full plan.
+`docs/security/brownout-hardening.md` for the full plan.
 
 **VBAT.** Production hardware uses a **0.47 F supercap** (not a
 battery) on VBAT via Schottky from Vdd. Bounded retention (~12-24 h
@@ -115,7 +115,7 @@ keys + HUK-SAES wrapping is a production-readiness item (work-todo #7).
 ## Relevant design docs (code footprint small — feature not implemented)
 
 
-### From `docs/architecture.md`
+### From `docs/architecture/architecture.md`
 
 # SPHINCS+ Post-Quantum Hardware Wallet — TrustZone Architecture
 
@@ -817,8 +817,8 @@ protocol implements `Eip712Protocol` in a sibling submodule under
 `secure/src/tx/eip712/` and registers itself in the static
 `PROTOCOLS` table; adding a second EIP-712 protocol is a sibling
 file plus a VK row, no edits to `nsc.rs`. See `secure/src/tx/eip712/` and
-**[docs/m4-cowswap-eip712-impl.md](./m4-cowswap-eip712-impl.md)** for
-implementation notes; **[docs/m4-cowswap-eip712.md](./m4-cowswap-eip712.md)**
+**[docs/companion/m4-cowswap-eip712-impl.md](./m4-cowswap-eip712-impl.md)** for
+implementation notes; **[docs/archive/m4-cowswap-eip712.md](./m4-cowswap-eip712.md)**
 captures the original handoff design sketch.
 
 ### Verification chain
@@ -1512,7 +1512,7 @@ All cryptographic crates run without heap allocation:
 
 
 
-### From `docs/pq-aa-wallet-design.md`
+### From `docs/archive/pq-aa-wallet-design.md`
 
 # Post-Quantum ERC-4337 Wallet: Final Design Spec
 
@@ -2076,7 +2076,7 @@ On-chain verification cost is prohibitive for both (4.4M/11.6M gas). Wrap verifi
 
 
 
-### From `docs/HARDENING.md`
+### From `docs/security/HARDENING.md`
 
 # Hardware Wallet Hardening Requirements
 

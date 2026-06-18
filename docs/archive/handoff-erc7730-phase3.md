@@ -2,7 +2,7 @@
 
 Date written: 2026-05-14. Last firmware status: Phase 1 + 2 complete on `master`.
 
-This is the "start here" doc for the next implementer (human or future Claude session) picking up Phase 3 of the clear-signing initiative. The full implementation plan now lives at `~/.claude/plans/carefully-read-understand-this-transient-feigenbaum.md` as a **5-phase** roadmap (consolidated 2026-05-14 from the original 9). Phase 2's handoff is at `docs/handoff-erc7730-phase2.md`; read it for the IR layout and host pipeline details — both are inputs to Phase 3 and must not drift.
+This is the "start here" doc for the next implementer (human or future Claude session) picking up Phase 3 of the clear-signing initiative. The full implementation plan now lives at `~/.claude/plans/carefully-read-understand-this-transient-feigenbaum.md` as a **5-phase** roadmap (consolidated 2026-05-14 from the original 9). Phase 2's handoff is at `docs/archive/handoff-erc7730-phase2.md`; read it for the IR layout and host pipeline details — both are inputs to Phase 3 and must not drift.
 
 ## Why we're doing this
 
@@ -452,7 +452,7 @@ If something here disagrees with the plan, the plan is authoritative for *intent
 
 ## References
 
-- Phase 2 handoff (input invariants): `docs/handoff-erc7730-phase2.md`
+- Phase 2 handoff (input invariants): `docs/archive/handoff-erc7730-phase2.md`
 - Clear Signing announcement (2026-05-12): <https://clearsigning.org> · <https://blog.ethereum.org/2026/05/12/clear-signing-announcement>
 - ERC-7730 spec: <https://eips.ethereum.org/EIPS/eip-7730>
 - ERC-7730 registry: <https://github.com/ethereum/clear-signing-erc7730-registry>

@@ -6,7 +6,7 @@ edition.workspace = true
 # ERC-4337 v0.6 UserOperation hash construction + EIP-1271 / Solady
 # nested-EIP-712 PersonalSign hash construction. Pure-logic, no_std,
 # zero hardware deps. Phase 5 PR 5.2 of the modularity refactor — see
-# `docs/handoff-modularity-refactor.md` §4.1.
+# `docs/archive/handoff-modularity-refactor.md` §4.1.
 #
 # Used by both the secure crate (cmd_sign_userop, cmd_sign_userop_batch,
 # cmd_sign_offchain) and any future host-side reference signer.

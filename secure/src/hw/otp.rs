@@ -43,7 +43,7 @@
 //! the root of trust for every on-device SE pairing; because it lives
 //! in OTP it survives firmware updates, which is what keeps the
 //! OPTIGA Shielded Connection alive through a reflash — see
-//! `docs/optiga-brick-postmortem.md` for the history.
+//! `docs/secure-elements/optiga-brick-postmortem.md` for the history.
 //!
 //! ## Programming quirks
 //!

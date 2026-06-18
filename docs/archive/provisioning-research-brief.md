@@ -159,6 +159,6 @@ Our own already-identified misconfiguration ship blockers are the seed of the
   (Resolved 2026-05-28; one silicon check open.)
 
 See `docs/production-todo.md` (per-chip one-way lockdown sequences + sacrificial
-pre-commit checklists + escape hatches) and `docs/HARDENING.md §9` (provisioning
+pre-commit checklists + escape hatches) and `docs/security/HARDENING.md §9` (provisioning
 security) for our current plan; this research should produce the authoritative,
 vendor-and-audit-sourced version of it.

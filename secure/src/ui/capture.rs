@@ -2,7 +2,7 @@
 //!
 //! Ported pattern from Trezor's `tests/ui_tests/common.py:131-132`
 //! (`SHA-256(Image.tobytes())` per screen, stored in `fixtures.json`).
-//! See `docs/trezor-comparison.md §2.3`.
+//! See `docs/architecture/trezor-comparison.md §2.3`.
 //!
 //! Why capture on-device instead of screenshotting from the host:
 //!

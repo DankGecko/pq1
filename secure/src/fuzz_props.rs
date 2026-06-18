@@ -15,7 +15,7 @@
 //!
 //! This is PQSigner's narrower, lighter-weight answer to Trezor's
 //! `crypto/fuzzer/` libFuzzer harnesses. See
-//! `docs/trezor-comparison.md §2.4` for the rationale. proptest is
+//! `docs/architecture/trezor-comparison.md §2.4` for the rationale. proptest is
 //! a compile-in test dependency — the `#[cfg(test)]` gate keeps it
 //! out of every firmware build. A coverage-guided cargo-fuzz setup
 //! would need a `[lib]` target on `sphincs-tz-secure`; adding that is

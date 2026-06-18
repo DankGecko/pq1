@@ -63,7 +63,7 @@ pub const COMPACT_MODE: bool = false;
 /// catches that class of bug — any stack overrun that smashes the
 /// canary panics the secure world (which the panic handler routes
 /// through `secure_log!` + halt) instead of being silently
-/// undetectable. See `docs/HARDENING.md §"ERC-7730 timing channels"`
+/// undetectable. See `docs/security/HARDENING.md §"ERC-7730 timing channels"`
 /// for the surrounding threat-model context.
 const STACK_CANARY: u32 = 0xDEAD_BEEF;
 
@@ -123,7 +123,7 @@ fn render_erc7730_pages_inner<'ir>(
     // walker's `body.get(slot..)` bound and is rejected, never silently
     // rendered. Field slots are always < static_head_words by
     // construction, so this never rejects a well-formed descriptor. See
-    // `docs/VULN-erc7730-walker-slot-confusion.md`.
+    // `docs/security/VULN-erc7730-walker-slot-confusion.md`.
     let body = head_bounded_body(&inner_data[4..], format.static_head_words)?;
 
     // 2. Allocate the page buffer (grows via push_blank).

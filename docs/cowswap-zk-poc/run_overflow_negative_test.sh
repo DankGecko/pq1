@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Circuit-level negative test for the FormatTrimmedAmount field-overflow
-# fix (docs/VULN-cowswap-zk-amount-overflow.md).
+# fix (docs/security/VULN-cowswap-zk-amount-overflow.md).
 #
 # Asserts that, on the FIXED circuit:
 #   1. the PoC forged witness (raw_amount ≈ 2^254) FAILS witness

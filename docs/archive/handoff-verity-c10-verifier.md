@@ -59,7 +59,7 @@ Wots,Merkle,Fors,Hypertree,Top}.lean`. It builds clean under Lean
   in isolation).
 
 **Phase-0 reconnaissance** landed at
-`docs/verity-v0.1.0-primitive-map.md`: complete inventory of Verity
+`docs/archive/verity-v0.1.0-primitive-map.md`: complete inventory of Verity
 v0.1.0's actual API (which is much smaller than was assumed when
 this handoff was written), gap table of 7 missing primitives, and
 draft upstream-issue bodies.

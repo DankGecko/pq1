@@ -153,7 +153,7 @@ This achieves hardware-backed PIN gating, but through crypto operations rather t
 > from any host secret). Provisioning is gated behind the `optiga-hw-counter`
 > Cargo feature and is **destructive on first run** (rewrites F1D0 metadata,
 > burns LUC ticks). See `secure/src/optiga/mod.rs` and
-> `docs/optiga-bringup-status.md` for the as-shipped flow.
+> `docs/secure-elements/optiga-bringup-status.md` for the as-shipped flow.
 
 ### Estimated Effort
 

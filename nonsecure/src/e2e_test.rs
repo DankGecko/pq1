@@ -1784,7 +1784,7 @@ fn main() -> ! {
 
     // Scenario 5n: ERC-7730 trailer with mismatched contract — firmware
     // must DROP the descriptor (binding fail banner) and fall through
-    // to blind-sign. Per docs/companion-erc7730-implementation-guide.md
+    // to blind-sign. Per docs/companion/companion-erc7730-implementation-guide.md
     // §1: "If it ships a wrong / malformed / mis-bound trailer, the
     // firmware refuses the descriptor and falls back to blind-sign with
     // a brief status-line banner. Clear signing is never required."

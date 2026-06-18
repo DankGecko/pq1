@@ -143,7 +143,7 @@ fn userid_no_admin_delete(ctx: &mut StressCtx) -> StressResult {
     // APDU (`check_exists` below) returns SW=0x6982 regardless of the
     // OID's actual state. `reinit()` (T=1' reset + fresh SCP03) flushes
     // that state so step 3's existence check probes the real chip.
-    // See `docs/se050-silicon-findings.md` §4.
+    // See `docs/secure-elements/se050-silicon-findings.md` §4.
     ctx.se().reinit()?;
 
     // Step 3: confirm the UserID is still on-chip.
@@ -548,7 +548,7 @@ stress_test!(AUDIT_UNAUTH_READ_REFUSED, "audit_unauth_read_refused", Tier::Safe,
 /// `user_pin` still authenticates. So the chip behaves correctly —
 /// the transport/admin-context UPDATE is cleanly refused (SW=0x6985)
 /// AND the original credential is preserved. No DoS, no substitution.
-/// See `docs/se050-silicon-findings.md` §3.
+/// See `docs/secure-elements/se050-silicon-findings.md` §3.
 ///
 /// Sequence per attack:
 ///   1. Provision USERID with `user_pin`; sanity-check `user_pin` works.

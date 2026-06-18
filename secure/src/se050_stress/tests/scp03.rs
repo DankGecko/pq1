@@ -79,7 +79,7 @@ stress_test!(APDU_BURST, "scp03_apdu_burst", Tier::Safe, apdu_burst);
 /// long op. On this bench that hit a hard T1oI2C transport-endurance
 /// limit: a sustained stream of LARGE SCP03 responses faults at ~31
 /// back-to-back 128-B responses (SW=0x6d00 then transport error) — see
-/// `docs/se050-silicon-findings.md` §4d. That limit is NOT production-
+/// `docs/secure-elements/se050-silicon-findings.md` §4d. That limit is NOT production-
 /// relevant (production `rng_strong` requests 32-B blocks at low
 /// volume) and is a separate transport-layer investigation. To keep
 /// this test a reliable sustained-load regression signal it now draws

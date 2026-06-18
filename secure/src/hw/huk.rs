@@ -21,7 +21,7 @@
 //!   immutable silicon state; neither changes across firmware
 //!   revisions. Secrets sealed under this key remain decryptable
 //!   through any legitimate reflash — the property that closed the
-//!   OPTIGA brick scenario (`docs/optiga-brick-postmortem.md`).
+//!   OPTIGA brick scenario (`docs/secure-elements/optiga-brick-postmortem.md`).
 //! * **Domain-separated.** Callers pass a short static tag so
 //!   multiple purposes (e.g. future at-rest sealing of companion
 //!   objects) all get independent keys from the same base material.

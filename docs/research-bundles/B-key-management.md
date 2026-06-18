@@ -28,7 +28,7 @@ other hardware wallets are useful.
 
 ---
 
-## Project context (condensed — full version in `docs/ai-research-briefing.md`)
+## Project context (condensed — full version in `docs/archive/ai-research-briefing.md`)
 
 **What this is.** PQSigner OS: a post-quantum ERC-4337 smart-wallet
 firmware for STM32U585 (Cortex-M33 + ARM TrustZone) on the
@@ -64,7 +64,7 @@ always-on), IWDG all at factory defaults. Stage 1 of a 5-stage brownout
 roadmap added reset-cause classification + verified flash writes; the
 rest is planned. `make stm32-harden-opts` is a one-time option-byte
 setup target (sets BOR3 + SRAM2_RST=0) but has not been run yet. See
-`docs/brownout-hardening.md` for the full plan.
+`docs/security/brownout-hardening.md` for the full plan.
 
 **VBAT.** Production hardware uses a **0.47 F supercap** (not a
 battery) on VBAT via Schottky from Vdd. Bounded retention (~12-24 h
@@ -1559,7 +1559,7 @@ pub unsafe fn is_wipe_armed() -> bool {
 ```
 
 
-### From `docs/se050-factory-reset.md`
+### From `docs/secure-elements/se050-factory-reset.md`
 
 # SE050 Factory Reset — Design and Production Checklist
 

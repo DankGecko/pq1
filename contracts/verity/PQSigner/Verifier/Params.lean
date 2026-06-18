@@ -1,7 +1,7 @@
 /-
   PQSigner.Verifier.Params — Lean port of `sphincs-c10/src/params.rs`.
 
-  Phase 1 of `docs/handoff-verity-c10-verifier.md`. Pure-Lean
+  Phase 1 of `docs/archive/handoff-verity-c10-verifier.md`. Pure-Lean
   (Lean stdlib only); no Verity dependency. Constants and the
   decomposition theorem for `SIGNATURE_LEN` so any future regression
   on the byte layout fails `lake build`.

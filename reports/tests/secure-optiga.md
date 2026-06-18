@@ -147,7 +147,7 @@ assumption fails the test, citing the assumption in the panic message.
   + the PCTR mask + the `PRESENCE_BIT` value captures the byte-level
   invariants; the state-machine logic deserves a follow-up where the
   pure parts are factored out (similar to the upcoming `hw::mmio`
-  factoring documented in `docs/handoff-unsafe-reduction.md`).
+  factoring documented in `docs/archive/handoff-unsafe-reduction.md`).
 - **`OptigaTrustM::factory_reset` admin path** — drives real chip
   APDUs; exercised on-target by `make optiga-admin-wipe-e2e` (see
   `secure/Cargo.toml::optiga-admin-wipe-e2e`). Out of scope for host.

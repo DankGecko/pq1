@@ -39,7 +39,7 @@ The on-chain verifier is the hand-tuned Yul contract at
 `contracts/smart-wallet/src/verifiers/SPHINCsC10Asm.sol`. Verity
 treats it as a black box (see `TRUST_ASSUMPTIONS.md` §1 — formal
 verification of the verifier itself is Part B,
-`docs/handoff-verity-c10-verifier.md`).
+`docs/archive/handoff-verity-c10-verifier.md`).
 
 The oracle:
 - is deterministic in its inputs,

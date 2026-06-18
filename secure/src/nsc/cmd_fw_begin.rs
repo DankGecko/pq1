@@ -26,7 +26,7 @@ use crate::hw::{flash, otp};
 use crate::timeout;
 
 /// Verify-failure counter for the glitch-resistance defense (finding B
-/// in `docs/usb-fw-update-hardening.md` — modelled on Trezor's repeated-
+/// in `docs/security/usb-fw-update-hardening.md` — modelled on Trezor's repeated-
 /// FW-failure → wipe pattern). Incremented on every BEGIN whose manifest
 /// is rejected (bad sig / bad version / bad length / etc.); reset to
 /// zero on every BEGIN that passes the full verify chain.
@@ -242,7 +242,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         Err(fw_manifest::VerifyError::BelowRollback) => {
             // Glitch-resistance: count consecutive verify failures so an
             // attacker can't iterate freely on signature/version glitches.
-            // See `docs/usb-fw-update-hardening.md` finding B.
+            // See `docs/security/usb-fw-update-hardening.md` finding B.
             record_verify_failure_and_maybe_wipe();
             return NscStatus::FwUpdateBadVersion as u32;
         }
@@ -261,7 +261,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // `base_addr + chunk_offset` finally tripped — overwriting the other
     // slot / FSBL pages / etc. in the meantime. (Trezor enforces the
     // analogous bound against `FIRMWARE_MAXSIZE`.) See
-    // `docs/usb-fw-update-hardening.md` finding #1.
+    // `docs/security/usb-fw-update-hardening.md` finding #1.
     if m.secure_len() > flash::SLOT_SECURE_CAPACITY
         || m.nonsecure_len() > flash::SLOT_NS_CAPACITY
     {
@@ -277,7 +277,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     record_verify_success();
 
     // Trusted-display install confirm BEFORE any destructive flash op
-    // (Trezor pattern, finding A in docs/usb-fw-update-hardening.md). A
+    // (Trezor pattern, finding A in docs/security/usb-fw-update-hardening.md). A
     // user-cancel here costs zero flash work and leaves the inactive
     // slot untouched. The fingerprint shown is the SIGNED
     // `manifest.secure_hash()`; COMMIT's `verify_images` re-hashes the

@@ -11,7 +11,7 @@
 //! Wire layouts here match the on-device parser in
 //! `pqsigner_erc7730::ir`. The 134-byte IR header uses **big-endian**
 //! integers (unlike the LE-encoded ERC20 / Names / Selectors DBs); see
-//! `docs/handoff-erc7730-phase2.md` "Endianness flip" gotcha.
+//! `docs/archive/handoff-erc7730-phase2.md` "Endianness flip" gotcha.
 //!
 //! ## Catalog blob layout (`tools/companion-stub/erc7730_db.bin`)
 //!
@@ -2018,7 +2018,7 @@ fn compile_path(
     //     static tuple) resolved to the wrong calldata word, so the
     //     trusted display showed one value while the contract executed on
     //     another. See `compile_structured_contract_path` +
-    //     `docs/VULN-erc7730-walker-slot-confusion.md`.
+    //     `docs/security/VULN-erc7730-walker-slot-confusion.md`.
     if root == PATHOP_ROOT_STRUCT && context_kind == CTX_CONTRACT {
         compile_structured_contract_path(&tokenize_path(rest)?, parsed, &mut out)?;
         return Ok(out);

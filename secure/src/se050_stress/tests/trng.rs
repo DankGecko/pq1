@@ -32,7 +32,7 @@ fn quality_basic(ctx: &mut StressCtx) -> StressResult {
     // `apdu::GET_RANDOM_MAX_CHUNK` + `get_random_size_boundary`), but a
     // sustained stream of LARGE responses (≥~128 B) exhausts a T1oI2C
     // transport limit on this bench (~31 back-to-back 128-B responses →
-    // SW=0x6d00 / transport fault; `docs/se050-silicon-findings.md`
+    // SW=0x6d00 / transport fault; `docs/secure-elements/se050-silicon-findings.md`
     // §4d). Small responses are robust — `scp03_apdu_burst` does 256
     // sustained 16-B draws without issue, and production `rng_strong`
     // only ever requests 32-B blocks. So this χ² sample is gathered in

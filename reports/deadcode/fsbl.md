@@ -74,7 +74,7 @@ in-slice helpers or to the workspace crates `fw-manifest`,
    fingerprint in the linked FSBL. As a plain `pub const` without
    `#[used]`, the compiler will in fact omit it from the linked image
    unless referenced; the rationale in the comment is therefore a touch
-   optimistic. `docs/security-review-2026-05.md:109` cites
+   optimistic. `docs/security/security-review-2026-05.md:109` cites
    `vendor_pubkey::VENDOR_PK_FPR` as the target of a future runtime
    self-test, so the const is intentional forward-looking infra. Leave
    it; the `pub use` in `vendor_pubkey.rs` should be widened to include

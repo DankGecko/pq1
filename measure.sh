@@ -7,7 +7,7 @@
 # builds the secure firmware in a hermetic environment and prints 8
 # BIP-39 words. Compare those words to what the device's OLED shows
 # at boot — match means the firmware on the device corresponds to this
-# git commit. See docs/reproducible-builds.md for the threat model.
+# git commit. See docs/firmware/reproducible-builds.md for the threat model.
 #
 # All toolchain pinning lives in flake.nix + flake.lock. This script is
 # only a thin bootstrap.

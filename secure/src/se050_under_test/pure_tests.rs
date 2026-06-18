@@ -391,7 +391,7 @@ fn positive_scp03_key_version_is_0x0b() {
 
 #[test]
 fn positive_scp03_external_authenticate_p1_is_0x33() {
-    // S-5 fix (docs/security-review-2026-05.md §C-7): EXTERNAL
+    // S-5 fix (docs/security/security-review-2026-05.md §C-7): EXTERNAL
     // AUTHENTICATE P1 must be 0x33 = C-MAC | C-DECRYPTION | R-MAC |
     // R-ENCRYPTION (GP Amendment D Table 7-6 page 35; mirrored in
     // NXP plug-and-trust `fsl_sss_se05x_scp03.c:186-198`
@@ -1085,7 +1085,7 @@ fn negative_admin_userid_provisioning_uses_no_admin_ref() {
 
 #[test]
 fn negative_user_userid_has_no_admin_ref_post_s6() {
-    // S-6 fix (docs/security-review-2026-05.md §C-8): the user
+    // S-6 fix (docs/security/security-review-2026-05.md §C-8): the user
     // UserID's policy MUST NOT contain an admin-delete entry.
     // If admin had DELETE on the user UserID, an admin
     // compromise could delete USERID_OBJ → recreate at the same
@@ -1685,7 +1685,7 @@ fn gap4_apdu_translates_0x6986_to_auth_method_blocked() {
     // which the classify-fn maps to `InternalError` (no wipe) — exactly
     // the bug Gap 4 closes.
     //
-    // Silicon correction (2026-05-28, `docs/se050-silicon-findings.md`
+    // Silicon correction (2026-05-28, `docs/secure-elements/se050-silicon-findings.md`
     // §4a): the lockout surfaces at `create_session` with SW=0x6986
     // (the chip refuses to open a session against a locked UserID),
     // not only at `verify_session`. BOTH call sites must translate it.

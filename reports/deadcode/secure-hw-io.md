@@ -70,7 +70,7 @@ None.
 - Out-of-scope: many `// SAFETY:` / `unsafe { ... }` blocks in
   `secure/src/hw/usb_hw.rs` (debug-log register dumps) and
   `secure/src/hw/i2c2_probe.rs` could be migrated to the `hw::mmio`
-  typed-handle pattern per `docs/handoff-unsafe-reduction.md`. Not dead
+  typed-handle pattern per `docs/archive/handoff-unsafe-reduction.md`. Not dead
   code — listed only for visibility.
 
 ## Skipped

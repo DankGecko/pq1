@@ -12,7 +12,7 @@ use crate::se050_stress::{StressCtx, StressResult, Tier};
 /// at varying body sizes.
 ///
 /// **Payload cap — CORRECTED TWICE on silicon (2026-05-28).** The
-/// original `docs/se050-silicon-findings.md` §5 #5 diagnosis ("1024-byte
+/// original `docs/secure-elements/se050-silicon-findings.md` §5 #5 diagnosis ("1024-byte
 /// write overruns the 1024-B `ApduBuf`") was WRONG, and so was the
 /// first correction (cap at 128 B). Two destructive runs established:
 ///
@@ -32,7 +32,7 @@ use crate::se050_stress::{StressCtx, StressResult, Tier};
 /// So the read-back ceiling on this silicon is somewhere in `32..64` B,
 /// with a flaky hard-hang failure mode above it — a genuine
 /// `read_authed` / T1oI2C large-response driver issue tracked in
-/// `docs/se050-silicon-findings.md` §4b. It is NOT production-relevant:
+/// `docs/secure-elements/se050-silicon-findings.md` §4b. It is NOT production-relevant:
 /// firmware only ever reads 32-byte objects (entropy / VK / bootstrap
 /// VK). To keep this test reliable and non-corrupting, the round-trip
 /// lengths are now capped at 32 B (the only sizes proven to round-trip

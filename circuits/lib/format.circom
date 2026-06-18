@@ -265,7 +265,7 @@ template FormatTrimmedAmount(MAX_INT_DIGITS, FRAC_DIGITS, MAX_DECIMALS) {
     // A malicious prover can then pick a benign (int, frac, remainder)
     // residue and back out a huge ~254-bit raw_amount preimage, making
     // the device DISPLAY a benign amount while SIGNING an astronomically
-    // large one. (See docs/VULN-cowswap-zk-amount-overflow.md.)
+    // large one. (See docs/security/VULN-cowswap-zk-amount-overflow.md.)
     //
     // Fix: constrain raw_amount to 190 bits. Then
     //   raw_amount · scale_factor < 2^190 · 10^18 < 2^249.8 < r

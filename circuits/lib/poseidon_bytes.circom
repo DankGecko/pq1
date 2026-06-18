@@ -44,7 +44,7 @@ include "../node_modules/circomlib/circuits/bitify.circom";
 // that pack to the SAME field elements as a *different* real on-chain
 // canonical, so Poseidon matches and the proof verifies while the device
 // signs an order it never displayed. See
-// docs/VULN-cowswap-zk-bytepack-nonbinding.md.
+// docs/security/VULN-cowswap-zk-bytepack-nonbinding.md.
 template PackBytes31(N_BLOCKS) {
     var TOTAL_BYTES = N_BLOCKS * 31;
 

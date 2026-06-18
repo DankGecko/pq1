@@ -226,7 +226,7 @@ pub fn check_true_into_sentinel<F: FnMut() -> bool, W: FnMut()>(mut cond: F, mut
 /// via the OTHER inequality — a glitch on the first branch can't
 /// land identically on the second.
 ///
-/// Per `docs/production-security.md` §2.4 "USB stack hardening
+/// Per `docs/security/production-security.md` §2.4 "USB stack hardening
 /// patterns" — same body as the reference implementation there.
 #[inline]
 #[must_use]

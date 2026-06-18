@@ -178,7 +178,7 @@ impl Se050 {
     ///
     /// **Production use (A3 mitigation, 2026-05-28).** Originally only
     /// the `se050-stress` harness called this. Silicon Finding A3
-    /// (`docs/se050-silicon-findings.md` §4) showed B-U585I-IOT02A
+    /// (`docs/secure-elements/se050-silicon-findings.md` §4) showed B-U585I-IOT02A
     /// leaves the chip in a "session-pending" state after a failed
     /// `verify_session` (and possibly a failed `delete_object_authed`
     /// / `close_session`); subsequent non-session APDUs — and even
@@ -542,7 +542,7 @@ impl Se050 {
     /// are policy-gate-independent in the SE050 design" with a citation
     /// to the NXP SDK `sss_pkcs11_pal_helpers.c:603-613` parser. The
     /// first end-to-end stress run on a real B-U585I-IOT02A
-    /// (`docs/se050-silicon-findings.md` §2; raw evidence
+    /// (`docs/secure-elements/se050-silicon-findings.md` §2; raw evidence
     /// `b88gzpjod.output:1503-1504`) showed the chip returns SW=0x6986
     /// (policy denial) on a freshly-created UserID gated by the standard
     /// two-entry policy `(self → ALLOW_WRITE|ALLOW_DELETE|REQUIRE_SM,
@@ -1687,7 +1687,7 @@ impl Se050 {
                     "[SE050/store] writing USERID_OBJ (pin_len={} max_attempts={}, no admin_ref — S-6)",
                     pin.len(), max_attempts
                 );
-                // S-6 fix (docs/security-review-2026-05.md §C-8): the
+                // S-6 fix (docs/security/security-review-2026-05.md §C-8): the
                 // user UserID's policy is created WITHOUT an admin
                 // delete-entry, so an admin-credential compromise can
                 // no longer delete USERID_OBJ → recreate it at the
@@ -1959,7 +1959,7 @@ impl Se050 {
 
         // Auth objects — post-S-6 the UserID's policy has NO admin-
         // delete entry (closes the substitution attack described in
-        // docs/security-review-2026-05.md §C-8). So admin-auth deletes
+        // docs/security/security-review-2026-05.md §C-8). So admin-auth deletes
         // on these will fail with SW=0x6986; that's expected, not an
         // error. They are still attempted (best-effort) and logged, but
         // survival is acceptable and does NOT fail the wipe. The user
@@ -2068,7 +2068,7 @@ impl Se050 {
         // above legitimately fails with SW=0x6986 post-S-6
         // (UserID has no admin-delete policy entry), leaving the chip
         // in a "session-pending" state per
-        // `docs/se050-silicon-findings.md` §4. Without recovery, every
+        // `docs/secure-elements/se050-silicon-findings.md` §4. Without recovery, every
         // subsequent non-session APDU — both the `iterative_delete_all`
         // sweep below AND the post-wipe `check_exists` verification —
         // returns SW=0x6982, which the `unwrap_or(false)` callers
@@ -2433,7 +2433,7 @@ impl Se050 {
     /// **A3 mitigation (2026-05-28).** On the failed-verify path the
     /// chip's session-pending state would surface SW=0x6982 from the
     /// NEXT `create_session` call (per
-    /// `docs/se050-silicon-findings.md` §4 + the stress run's tests
+    /// `docs/secure-elements/se050-silicon-findings.md` §4 + the stress run's tests
     /// 013/014/015 evidence). Without recovery, a user's 2nd-and-later
     /// wrong PIN would propagate as `UnlockError::InternalError`
     /// (via `Status(0x6982)` → `classify_se050_unlock_error`'s `_`

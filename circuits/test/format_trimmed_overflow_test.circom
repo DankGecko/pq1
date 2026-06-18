@@ -2,7 +2,7 @@ pragma circom 2.0.0;
 
 //
 // Negative test harness for the FormatTrimmedAmount field-overflow fix.
-// (docs/VULN-cowswap-zk-amount-overflow.md)
+// (docs/security/VULN-cowswap-zk-amount-overflow.md)
 //
 // Instantiates ONLY FormatTrimmedAmount with the CoW production
 // parameters (MAX_INT_DIGITS=10, FRAC_DIGITS=4, MAX_DECIMALS=18) and

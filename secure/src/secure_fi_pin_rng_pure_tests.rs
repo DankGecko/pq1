@@ -1700,7 +1700,7 @@ mod rng_source_text {
 // The "CRITICALLY NOT pulsed in `run()`" hazard (PE4 → SE050 ENA
 // cross-coupling that corrupted ENTROPY_OBJ) deserves a regression
 // guard. A silent re-add of PE4 to `run()` would resurrect the
-// original brick bug. See `docs/optiga-brick-postmortem.md`.
+// original brick bug. See `docs/secure-elements/optiga-brick-postmortem.md`.
 // ═════════════════════════════════════════════════════════════════════
 
 mod pin_diag_source_text {
@@ -1728,7 +1728,7 @@ mod pin_diag_source_text {
             "pin_diag::run() must NOT touch PE4 — that pin cross-couples \
              onto SE050 ENA via the OM-SE050ARD shield and a mid-NVM-write \
              pulse corrupts ENTROPY_OBJ (the original brick — see \
-             docs/optiga-brick-postmortem.md)."
+             docs/secure-elements/optiga-brick-postmortem.md)."
         );
     }
 

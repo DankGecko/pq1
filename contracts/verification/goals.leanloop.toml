@@ -14,7 +14,7 @@ Nat.testBit_shiftLeft + Nat.testBit_lt_two_pow; the missing piece is the bridge
 Mathlib lemma, e.g. around Nat.distrib/Nat.add of disjoint bits, or prove the
 bridge from scratch via testBit + Nat.add carry-freeness)."""
 
-# NOW-phase queue (docs/verification-targets-2026-06.md; uncomment as each goal
+# NOW-phase queue (docs/verification/verification-targets-2026-06.md; uncomment as each goal
 # file is created — see each target's "first step"):
 #
 # rank 1+2 DONE 2026-06-12 (ForsExtract.lean): read_bits_le_spec,

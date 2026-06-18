@@ -1,6 +1,6 @@
 # Verity v0.1.0 — primitive map for SPHINCS+C10 verifier port
 
-> Companion to `docs/handoff-verity-c10-verifier.md` §4 Phase 0.
+> Companion to `docs/archive/handoff-verity-c10-verifier.md` §4 Phase 0.
 >
 > Written 2026-05-11. Based on inspection of upstream
 > `lfglabs-dev/verity` at tag `v0.1.0` (commit

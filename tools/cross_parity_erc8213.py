@@ -2,7 +2,7 @@
 """Cross-implementation parity check for ERC-8213 signature/calldata
 fingerprints.
 
-Phase 5 item 7 (handoff: `docs/handoff-erc7730-phase5.md`) reserved this
+Phase 5 item 7 (handoff: `docs/archive/handoff-erc7730-phase5.md`) reserved this
 script for an independent `viem` + `safe-hash-rs` round-trip: regenerate
 the per-Kind fingerprint hashes that the firmware's
 `tx::display::erc8213.rs` formatters render, and assert byte-equality
@@ -21,5 +21,5 @@ Stub exits 0 so other CI lanes that depend on this script don't break.
 import sys
 
 print("TODO: integrate Cyfrin clearsig + viem + safe-hash-rs "
-      "(Phase 5 item 7 — handoff: docs/handoff-erc7730-phase5.md)")
+      "(Phase 5 item 7 — handoff: docs/archive/handoff-erc7730-phase5.md)")
 sys.exit(0)

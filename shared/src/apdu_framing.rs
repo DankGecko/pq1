@@ -346,7 +346,7 @@ impl HidFrameAssembler {
             // `rx_expected`. The host can recover by retrying its
             // seq=0 once the abort response (`Dropped`) arrives.
             // Tracks §19 P0 "Bounded APDU reassembly" in
-            // `docs/production-security.md` §2.4.
+            // `docs/security/production-security.md` §2.4.
             if self.rx_pos > 0 {
                 let stale = core::cmp::min(self.rx_pos, buf.len());
                 for b in &mut buf[..stale] {
@@ -375,7 +375,7 @@ impl HidFrameAssembler {
             // WOOT 2019 EMFI-on-min: if the result `take` doesn't
             // satisfy `take ≤ each input`, recompute via the opposite
             // branch direction. See `pqsigner-fi::fi_min` + finding in
-            // `docs/production-security.md` §2.4.
+            // `docs/security/production-security.md` §2.4.
             let take = pqsigner_fi::fi_min(
                 pqsigner_fi::fi_min(HID_FIRST_DATA, avail_in_frame),
                 self.rx_expected,

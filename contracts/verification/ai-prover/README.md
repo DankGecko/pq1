@@ -36,7 +36,7 @@ prompt, is the containment boundary there.
 
 ## Design notes
 Mirrors the Lean-Squad pattern (research:
-`docs/lean-verification-research-2026-06.md`) adapted to this
+`docs/verification/lean-verification-research-2026-06.md`) adapted to this
 make-driven repo. `PROMPT_TEMPLATE.md` carries the project's proven
 tactic patterns (loop.spec_decr_nat, step*, SetSliceLemmas, …) so the
 agent reuses them instead of rediscovering.

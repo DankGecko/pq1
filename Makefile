@@ -161,7 +161,7 @@ play-hw-display:
 # wizard / PIN / confirm flow (no `lcd-test` short-circuit). Input from the
 # physical gpio-buttons (LEFT=PC1/D8, RIGHT=PA8/D9). `ui-lcd` pulls in
 # `gpio-buttons` + `spi1-arduino`. Requires: ST-LINK + the NV3007 wired per
-# docs/nv3007-wiring.md (SPI on CN13 D10/D11/D13, DC=PE7/D4, RES→3V3, VCC+BLK→3V3,
+# docs/hardware/nv3007-wiring.md (SPI on CN13 D10/D11/D13, DC=PE7/D4, RES→3V3, VCC+BLK→3V3,
 # GND) + two buttons on the gpio-buttons pins. The OLED equivalent is
 # `play-hw-display` (kept for SSD1306 dev boards).
 play-hw-lcd:
@@ -226,7 +226,7 @@ play-hw-duress-ui:
 #
 # After running this once, every subsequent reset hardware-zeroizes
 # SRAM2 — put sensitive active-window state there (Stage 2 of the
-# brownout hardening roadmap; see docs/brownout-hardening.md).
+# brownout hardening roadmap; see docs/security/brownout-hardening.md).
 stm32-harden-opts:
 	@echo "==> Configuring brown-out supervision + SRAM2 auto-erase"
 	@echo "    BOR_LEV=3 (~2.7V), SRAM2_RST=0 (auto-erase on reset)"
@@ -522,7 +522,7 @@ e2e-erc7730-hw:
 	@echo "HW required — run on STM32U585 host with probe-rs + ST-LINK +"
 	@echo "  the Phase 5+ EIP-712 descriptor mirror landed (handoff item 2)."
 	@echo "Until then this target fails by design so CI doesn't silently skip"
-	@echo "  the hardware parity gate. See docs/handoff-erc7730-phase5.md item 8."
+	@echo "  the hardware parity gate. See docs/archive/handoff-erc7730-phase5.md item 8."
 	@false
 
 e2e-hw:
@@ -1313,7 +1313,7 @@ flash-hw-dual-se-oled-standalone: build-hw-dual-se-oled-standalone
 # Same full standalone firmware as `flash-hw-dual-se-oled-standalone`,
 # but on the NV3007 SPI LCD (`ui-lcd` — the shipping display backend as
 # of 2026-06-09) instead of the OLED. `ui-lcd` pulls in `gpio-buttons`
-# + `spi1-arduino`. Requires the NV3007 wired per docs/nv3007-wiring.md.
+# + `spi1-arduino`. Requires the NV3007 wired per docs/hardware/nv3007-wiring.md.
 # All the caveats on the OLED target (bench-only #3 tunnel keys via
 # dev-testkey, LcsO=Creation, wipe-for-wizard workflow) apply unchanged.
 build-hw-dual-se-lcd-standalone:
@@ -1424,7 +1424,7 @@ flash-hw-dual-se-oled-standalone-debug: build-hw-dual-se-oled-standalone-debug
 # every user OID (E140, F1D0..F1D4, F1E1) stays at LcsO=Creation
 # throughout provisioning — metadata remains mutable, data rewriteable,
 # no irreversible LcsO=Operational bump. This build is intended for
-# bench/dev use; see docs/optiga-brick-postmortem.md §5 + §7 before
+# bench/dev use; see docs/secure-elements/optiga-brick-postmortem.md §5 + §7 before
 # adding `optiga-lock-operational` for a real production unit.
 #
 # NOTE: this target violates invariant #1 (dual-chip seed split) — the
@@ -2861,7 +2861,7 @@ flash-hw-optiga-reset: optiga-reset-oids
 # workspace since cargo-fuzz needs nightly + libFuzzer + sanitizers).
 # Pure-logic parsers only — the proptest sibling that always runs is
 # in `secure/src/fuzz_props.rs`. See `fuzz/README.md` for setup and
-# `docs/trezor-comparison.md §2.4` for the rationale.
+# `docs/architecture/trezor-comparison.md §2.4` for the rationale.
 #
 # Usage:
 #   make fuzz-list                 -- list available targets
@@ -2989,7 +2989,7 @@ decoy-flicker-hw:
 # 40/25/15/8/3/0 ms (~4-5 s each, logged) so you can find the subliminal
 # threshold. Builds + flashes; then run + watch the panel:
 #   probe-rs run --chip STM32U585AIIx $(SECURE_ELF)
-# Requires the NV3007 wired per docs/nv3007-wiring.md.
+# Requires the NV3007 wired per docs/hardware/nv3007-wiring.md.
 decoy-flicker-lcd-hw:
 	@echo "==> Building decoy-flicker-test firmware for the NV3007 LCD..."
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
@@ -3010,7 +3010,7 @@ decoy-flicker-lcd-hw:
 # build that the factory operator flashes BEFORE the
 # factory_provisioning ceremony. Sits in WFI after boot, waiting for
 # the factory fixture to drive each component test via USB. See
-# `docs/factory-prodtest.md` for the command reference + fixture
+# `docs/provisioning/factory-prodtest.md` for the command reference + fixture
 # integration guide.
 #
 # Phase A (landed 2026-05-19): CMD_PRODTEST_GET_ID +
@@ -3066,7 +3066,7 @@ build-hw-prodtest:
 #   3. Reports the displayed status (success or numbered fail).
 #
 # Error code lookup table + operator manual:
-#   docs/factory-provisioning.md
+#   docs/provisioning/factory-provisioning.md
 #
 # Currently TARGETED but NOT YET VALIDATED on real silicon — this
 # builds a buildable factory image; bench-validation is a follow-up.
@@ -3223,7 +3223,7 @@ build-hw-lcd-bringup:
 # Phase-B LCD bring-up (NV3007). Flashes a firmware that short-circuits
 # main() into hw::lcd_nv3007::lcd_test_loop — the screen cycles
 # green -> red -> blue (~1 s each) forever. First on-silicon confirmation
-# that the wiring + the ported init sequence work. Wiring: docs/nv3007-wiring.md
+# that the wiring + the ported init sequence work. Wiring: docs/hardware/nv3007-wiring.md
 # (SPI on CN13 D10/D11/D13, DC=PE7/D4, RES=PD15/D2, VCC+BLK=3V3, GND).
 # Assumes TZ option bytes are already set (run any *-hw target once first).
 lcd-test-hw:
@@ -3246,7 +3246,7 @@ lcd-test-hw:
 # main() into ui::splash_test::run — the three assets/splash-1{6,7,8}-*.html
 # revisions (hyperspace -> horizon -> nebula), ported to no_std, cycle on the
 # LCD ~12 s each forever so you can judge how each looks on the real panel.
-# Same wiring as lcd-test-hw (docs/nv3007-wiring.md): SPI on CN13 D10/D11/D13,
+# Same wiring as lcd-test-hw (docs/hardware/nv3007-wiring.md): SPI on CN13 D10/D11/D13,
 # DC=PE7/D4, RES=3V3, VCC+BLK=3V3, GND. Assumes TZ option bytes are already set
 # (run any *-hw target once first). The first build pulls `micromath` into
 # Cargo.lock (cached locally, so it resolves offline).
@@ -3591,3 +3591,53 @@ tamarin:
 	tamarin-prover --prove contracts/verification/tamarin/pin_lockstep.spthy
 	@echo "==> Tamarin: SCP03 within-session no-replay (counter)"
 	tamarin-prover --prove contracts/verification/tamarin/scp03_replay.spthy
+
+# ---------------------------------------------------------------------------
+# Discoverability wrappers for the off-Makefile verification tools (SOTA
+# 2026-06 §1/§4; docs/tooling-and-systems.md §B). These four were installed
+# but had NO root make target, so an agent inventorying `make` targets missed
+# them. Each delegates to the canonical runner / vendored harness — the runner
+# scripts + tools/sca/DONJON-RUST-TOOLING.md remain the source of truth.
+#   halmos  = symbolic EVM execution of the deployed wallet bytecode (A3.* bridge)
+#   kontrol = KEVM proofs of the bootstrap-unremovable / owner-table invariants
+#   checkct = binsec relational CT proof of the secret primitives on thumbv8m
+#   muscat  = Donjon SCA (Welch-T TVLA / CPA) over the rainbow shuffle traces
+# ---------------------------------------------------------------------------
+.PHONY: halmos kontrol checkct muscat
+
+halmos:
+	$(MAKE) -C contracts/verification verify-halmos
+
+kontrol:
+	$(MAKE) -C contracts/verification verify-kontrol
+
+# binsec is OCaml + a local opam switch; ~/checkct_env.sh sets the nix PATH,
+# OPAMROOT, the `checkct` switch + gmp store paths (DONJON-RUST-TOOLING §1).
+# cargo-checkct lives in ~/repos/cargo-checkct (not on PATH). The kdf/fors/th
+# drivers prove SECURE; the `driver` (fisher_yates shuffle) is INSECURE BY
+# DESIGN (address-channel + statistical misalignment, not bitwise CT) so the
+# suite exits non-zero — the three green drivers are the signal, not the exit.
+checkct:
+	@test -f $(HOME)/checkct_env.sh || { echo "ERROR: ~/checkct_env.sh not found — see tools/sca/DONJON-RUST-TOOLING.md §1 (install binsec + the opam switch)"; exit 1; }
+	@test -x $(HOME)/repos/cargo-checkct/target/release/cargo-checkct || { echo "ERROR: cargo-checkct not built — git clone https://github.com/Ledger-Donjon/cargo-checkct ~/repos/cargo-checkct && cargo build --release"; exit 1; }
+	@echo "==> cargo-checkct: relational CT proof of kdf/fors/th (+ by-design-INSECURE fisher_yates shuffle) on thumbv8m"
+	@bash -c 'source $(HOME)/checkct_env.sh && export PATH="$(HOME)/repos/cargo-checkct/target/release:$(HOME)/.cargo/bin:$$PATH" && cargo-checkct run --dir tools/sca --timeout 300'
+
+# Muscat (Donjon SCA, successor to lascar): Welch-T TVLA + CPA. With TRACES_DIR
+# set, runs over those real .npy traces (see DONJON-RUST-TOOLING §2 for the
+# f9_traces.npz -> .npy pipeline). With no TRACES_DIR, generates the synthetic
+# self-test (ground-truth leaky S-box: TVLA fires, CPA recovers KEY[0]=0x2b) —
+# a standalone CI smoke that needs no rainbow run. Override the repo with
+# MUSCAT_DIR=...; first run builds the example (~10s).
+MUSCAT_DIR ?= $(HOME)/repos/muscat
+muscat:
+	@test -f $(MUSCAT_DIR)/examples/pqsigner_tvla_cpa.rs || { echo "ERROR: muscat harness missing at $(MUSCAT_DIR) — git clone https://github.com/Ledger-Donjon/muscat ~/repos/muscat && cp tools/sca/muscat/pqsigner_tvla_cpa.rs $(MUSCAT_DIR)/examples/ (+ the [[example]] stanza)"; exit 1; }
+ifeq ($(TRACES_DIR),)
+	@echo "==> Muscat: no TRACES_DIR — synthetic self-test (ground-truth leaky S-box)"
+	@rm -rf /tmp/pq1-muscat-selftest && mkdir -p /tmp/pq1-muscat-selftest/muscat_demo
+	cd /tmp/pq1-muscat-selftest && python3 $(CURDIR)/tools/sca/muscat/gen_pqsigner_shape.py
+	cd $(MUSCAT_DIR) && TRACES_DIR=/tmp/pq1-muscat-selftest/muscat_demo cargo run --release --example pqsigner_tvla_cpa
+else
+	@echo "==> Muscat: Welch-T TVLA + CPA over $(TRACES_DIR)"
+	cd $(MUSCAT_DIR) && TRACES_DIR=$(TRACES_DIR) cargo run --release --example pqsigner_tvla_cpa
+endif
