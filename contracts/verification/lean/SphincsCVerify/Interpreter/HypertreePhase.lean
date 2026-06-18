@@ -311,4 +311,38 @@ theorem ht_climb
   show wordOf (ByteVec.pad16 (htAcc seed layer tree leafNode leafIdx authPath Spec.SubtreeH).snd) = _
   rw [verifyAuthPath_eq_htAcc]
 
+/-! ### The interpreter per-layer body
+
+`htLayerBody` is one hypertree layer (`SPHINCsC10Asm.sol` L149-228, the body of
+`c10Program`'s `forRange "layer" (lit 2)`), built as `setup ++ wotsBody ++ setup2
+++ [the Merkle forRange] ++ finalize`. The big WOTS and Merkle parts reuse the
+already-defined `wotsBody` (Phases) and `htClimbBody` — so this is defeq to
+c10Program's inline layer body (`List.append` of literals flattens; `wotsBody`/
+`htClimbBody` unfold to the same statements). `ht_layer` (next) composes
+`wots_pkfromsig` and `ht_climb` over it = one `Spec.Hypertree.verifyHypertree` step. -/
+def htLayerBody : List Stmt :=
+  -- setup (L161-167): idxLeaf, idxTree>>=9, wotsAdrs, countOff, count
+  [ .letv "idxLeaf" (.bin .band (.var "idxTree") (.lit 0x1FF))
+  , .setv "idxTree" (.bin .shr (.lit 9) (.var "idxTree"))
+  , .letv "wotsAdrs"
+      (.bin .bor (.bin .shl (.lit 224) (.var "layer"))
+        (.bin .bor (.bin .shl (.lit 160) (.var "idxTree")) (.bin .shl (.lit 96) (.var "idxLeaf"))))
+  , .letv "countOff" (.bin .add (.var "sigOff") (.lit 688))
+  , .letv "count" (.bin .shr (.lit 224) (.calldataload (.bin .add (.var "sigBase") (.var "countOff")))) ]
+  -- the WOTS+C fragment (digit hash, digit-sum gate, chains, PK compress → "wotsPk")
+  ++ wotsBody
+  -- setup2 (L207-213): authOff, treeAdrs, merkleNode := wotsPk, mIdx := idxLeaf, merklePtr
+  ++ [ .letv "authOff" (.bin .add (.var "countOff") (.lit 4))
+     , .letv "treeAdrs"
+         (.bin .bor (.bin .shl (.lit 224) (.var "layer"))
+           (.bin .bor (.bin .shl (.lit 160) (.var "idxTree")) (.bin .shl (.lit 128) (.lit 2))))
+     , .letv "merkleNode" (.var "wotsPk")
+     , .letv "mIdx" (.var "idxLeaf")
+     , .letv "merklePtr" (.bin .add (.var "sigBase") (.var "authOff")) ]
+  -- the XMSS Merkle auth-path climb (9 levels)
+  ++ [ .forRange "h" (.lit 9) htClimbBody ]
+  -- finalize (L227-228): currentNode := merkleNode, sigOff := authOff + 144
+  ++ [ .setv "currentNode" (.var "merkleNode")
+     , .setv "sigOff" (.bin .add (.var "authOff") (.lit 144)) ]
+
 end SphincsCVerify.Interpreter.C10
