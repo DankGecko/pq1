@@ -103,4 +103,29 @@ theorem verifyAuthPath_eq_htAcc
       = (htAcc seed layer tree leafNode leafIdx authPath Spec.SubtreeH).snd := by
   rw [verifyAuthPath_eq_foldl]; rfl
 
+/-! ### The interpreter HT Merkle-climb body -/
+
+/-- The hypertree XMSS Merkle-climb inner body (`SPHINCsC10Asm.sol` L209-222),
+    written with raw constructors so it is defeq to the corresponding slice of
+    `c10Program`'s inner `forRange "h" (lit 9)` (the `TREEADRS_MASK` literal is
+    `0xFFFF…FF` top-fields, low 8 bytes zero — inlined here since C10Program's
+    `TREEADRS_MASK` def is private; defeq to `lit TREEADRS_MASK`). One auth-path
+    level: load+mask sibling, halve `mIdx`, store the `treeNode` ADRS at `0x20`
+    (mask `treeAdrs` then OR height+parentIdx), branchless-swap node/sibling into
+    `0x40`/`0x60`, hash the 4-segment pair, mask the digest back, recurse. -/
+def htClimbBody : List Stmt :=
+  [ .letv "sibling" (.bin .band (.calldataload (.bin .add (.var "merklePtr")
+        (.bin .shl (.lit 4) (.var "h")))) (.var "N_MASK"))
+  , .letv "parentIdx" (.bin .shr (.lit 1) (.var "mIdx"))
+  , .mstore (.lit 0x20)
+      (.bin .bor (.bin .band (.var "treeAdrs")
+            (.lit 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF0000000000000000))
+        (.bin .bor (.bin .shl (.lit 32) (.bin .add (.var "h") (.lit 1))) (.var "parentIdx")))
+  , .letv "s" (.bin .shl (.lit 5) (.bin .band (.var "mIdx") (.lit 1)))
+  , .mstore (.bin .bxor (.lit 0x40) (.var "s")) (.var "merkleNode")
+  , .mstore (.bin .bxor (.lit 0x60) (.var "s")) (.var "sibling")
+  , .sha256 (.lit 0x00) (.lit 0x80) (.var "OUT")
+  , .setv "merkleNode" (.bin .band (.mload (.var "OUT")) (.var "N_MASK"))
+  , .setv "mIdx" (.var "parentIdx") ]
+
 end SphincsCVerify.Interpreter.C10
