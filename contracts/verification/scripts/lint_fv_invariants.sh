@@ -286,12 +286,10 @@ COLLAPSED_DUMP="$(printf '%s\n' "${DUMP_OUT}" | awk '
   END { if (buf != "") print buf }
 ')"
 
-# (c.1) Gap-3 keccak axiom must be in the offchain closure.
-# NOTE (2026-06-18 review): this is a SUBSET (presence-only) check — it confirms
-# keccak_sha256_cross_separation is PRESENT but does NOT flag an unexpected EXTRA
-# axiom in the offchain closure, the same subset-only weakness (c.2) fixes for
-# theft_free below. Tightening c.1 to an exact-set compare is a tracked follow-up
-# (work-todo FV-frontier H-2 sibling); the kernel `#print axioms` remains the backstop.
+# (c.1) Gap-3: the offchain closure must contain keccak_sha256_cross_separation AND
+# nothing beyond {it + kernel} — an EXACT-set check (tightened 2026-06-18 to match (c.2);
+# a presence-only subset check would let a NEW axiom enter the Gap-3 defense's closure
+# silently). The kernel `#print axioms` remains the backstop.
 OFFCHAIN_LINE="$(printf '%s\n' "${COLLAPSED_DUMP}" \
   | { grep 'offchain_nested_disjoint_from_userop_digest' || true; })"
 
@@ -311,7 +309,36 @@ elif ! printf '%s\n' "${OFFCHAIN_LINE}" | grep -q 'keccak_sha256_cross_separatio
   err "\`replaySafeHash … ≠ sphincsDigest … ∨ BreaksHash\` reduction."
   C_EXIT=1
 else
-  printf '    PASS (c.1) — keccak_sha256_cross_separation in Gap-3 closure\n'
+  # (c.1-exact) no axiom in the offchain closure beyond {keccak_sha256_cross_separation}
+  # + kernel. Namespace-agnostic bracket parse (same shape as (c.2)).
+  OFF_BRACKET="$(printf '%s\n' "${OFFCHAIN_LINE}" \
+    | sed -n 's/.*axioms:[[:space:]]*\[\(.*\)\].*/\1/p')"
+  OFF_ALLOWED=( "propext" "Classical.choice" "Quot.sound" \
+                "SphincsCVerify.Wallet.OffchainBinding.keccak_sha256_cross_separation" )
+  OFF_EXTRA=""
+  if [ -z "${OFF_BRACKET//[[:space:]]/}" ]; then
+    err "(c.1) FAIL: could not parse the axiom list out of the offchain closure line:"
+    err "      ${OFFCHAIN_LINE}"
+    C_EXIT=1
+  else
+    while IFS= read -r ax; do
+      [ -z "${ax//[[:space:]]/}" ] && continue
+      ok=0
+      for a in "${OFF_ALLOWED[@]}"; do if [ "${a}" = "${ax}" ]; then ok=1; break; fi; done
+      [ "${ok}" -eq 0 ] && OFF_EXTRA="${OFF_EXTRA} ${ax}"
+    done <<< "$(printf '%s\n' "${OFF_BRACKET}" | tr ',' '\n' \
+                | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | { grep -v '^$' || true; } | sort -u)"
+  fi
+  if [ -n "${OFF_EXTRA//[[:space:]]/}" ]; then
+    err ""
+    err "(c.1) FAIL: offchain closure has UNEXPECTED axiom(s) beyond {keccak_sha256_cross_separation} + kernel:"
+    printf '      + %s\n' ${OFF_EXTRA} >&2
+    err "      ${OFFCHAIN_LINE}"
+    err "    A new axiom entered the Gap-3 defense's closure — confirm intended, then extend OFF_ALLOWED."
+    C_EXIT=1
+  else
+    printf '    PASS (c.1) — offchain closure = EXACTLY {keccak_sha256_cross_separation} + kernel (no missing, no extra)\n'
+  fi
 fi
 
 # (c.2) theft_free closure must contain exactly the expected named premises.

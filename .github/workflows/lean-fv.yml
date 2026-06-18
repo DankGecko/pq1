@@ -1,0 +1,68 @@
+name: Lean FV (SphincsCVerify)
+
+# CI gate for the Lean formal-verification suite. Until 2026-06-18 NONE of the
+# `lake`/`elan` verify-* checks ran in CI (the main ci.yml `paths-ignore`s
+# `**/*.lean` + `contracts/verification/**`), so the kernel axiom-cleanliness, the
+# H-2/H-3 axiom-closure gates, and the 0-`sorry` discipline were review-time only.
+# This dedicated workflow uses a POSITIVE `paths:` filter so it runs exactly when the
+# Lean sources / scripts change, and enforces:
+#   * `lake build SphincsCVerify` — 0 errors, 0 `sorry` (the kernel rejects either).
+#   * `verify-fv-lints` — the four FV-invariant sub-lints, incl. the EXACT-set
+#     theft_free (c.2) + offchain (c.1) axiom-closure tripwires and the opaque-guard.
+#   * `verify-audit` — sorry count + the #print-axioms dump (theft_free = exactly its
+#     11 documented axioms; execC10Asm_eq / deployed_verifier_refines_spec gated).
+#
+# SCOPE: `SphincsCVerify` is MATHLIB-FREE, so this needs only elan + a `lake` build
+# (no multi-GB mathlib cache). The `extracted/` (§33 Aeneas) project DOES import
+# mathlib and is a heavier follow-up job — intentionally NOT wired here yet.
+# The build includes high-heartbeat lemmas (Interpreter/Phases.lean), so it is slow;
+# the `.lake` cache amortizes unchanged modules across runs.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'contracts/verification/lean/**'
+      - 'contracts/verification/scripts/**'
+      - 'contracts/verification/Makefile'
+      - '.github/workflows/lean-fv.yml'
+  pull_request:
+    paths:
+      - 'contracts/verification/lean/**'
+      - 'contracts/verification/scripts/**'
+      - 'contracts/verification/Makefile'
+      - '.github/workflows/lean-fv.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lean-fv-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lean-fv:
+    name: lake build + FV-lints + axiom audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: install elan (toolchain pinned by lean-toolchain)
+        run: |
+          curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf \
+            | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: cache .lake build
+        uses: actions/cache@v4
+        with:
+          path: contracts/verification/lean/.lake/build
+          key: lean-fv-lake-${{ hashFiles('contracts/verification/lean/lean-toolchain', 'contracts/verification/lean/lakefile.toml') }}-${{ hashFiles('contracts/verification/lean/SphincsCVerify/**/*.lean') }}
+          restore-keys: |
+            lean-fv-lake-${{ hashFiles('contracts/verification/lean/lean-toolchain', 'contracts/verification/lean/lakefile.toml') }}-
+            lean-fv-lake-
+      - name: lake build SphincsCVerify (0 errors / 0 sorry)
+        run: cd contracts/verification/lean && lake build SphincsCVerify
+      - name: verify-fv-lints (axiom-closure exact-set + opaque-guard + escape-hatch)
+        run: make -C contracts/verification verify-fv-lints
+      - name: verify-audit (sorry count + #print axioms dump)
+        run: make -C contracts/verification verify-audit

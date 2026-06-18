@@ -38,8 +38,16 @@ TOP_LEVEL_KEYWORDS = (
 TOP_LEVEL_KW_RE = re.compile(
     r"^[ \t]*(?:" + "|".join(TOP_LEVEL_KEYWORDS) + r")\b"
 )
+# `: True := <proof>` — flags ANY theorem whose CONCLUSION is `True`, whether the
+# proof is `trivial` or any `by`-block (incl. `:= by <multi-line tactics> … trivial`).
+# The narrower prior pattern matched only `:= trivial` / `:= by trivial` and EVADED the
+# `:= by … trivial` form (2026-06-18 adversarial-review finding — the two
+# `*_nonvacuous` witnesses used exactly that shape yet passed the empty allowlist). A
+# `True` conclusion is vacuous regardless of the tactic block, so gating any `:= by`
+# proof of a `True` goal is correct. (`: True :=` requires the `:=` right after `True`,
+# so a hypothesis `(h : True)` is not matched — only the conclusion+proof boundary.)
 BODY_PATTERN_RE = re.compile(
-    r":\s*True\s*:=\s*(?:trivial|by\s+trivial|by\s*\n\s*trivial)"
+    r":\s*True\s*:=\s*(?:trivial|by\b)"
 )
 # An axiom's "True" conclusion appears as the last token before EOF or a
 # top-level next declaration. We look for `, True` or `: True` at end of
