@@ -30,7 +30,11 @@
 //! Strings are length-prefixed bytes; the verifier rejects any
 //! `name_len`/`symbol_len` greater than 64 bytes (cosmetic display
 //! limit) and rejects any non-ASCII byte (anti-spoof: a malicious DB
-//! row can't sneak homoglyphs onto the OLED).
+//! row can't sneak homoglyphs onto the OLED). It also rejects any
+//! `decimals` greater than [`MAX_DISPLAY_DECIMALS`] — an over-large
+//! `decimals` would scale a balance-draining amount down toward
+//! `0.000000` on the trusted display (a WYSIWYS hidden-magnitude
+//! hazard; see the constant's docs).
 //!
 //! ## Cross-checks before trusting the metadata
 //!
@@ -66,6 +70,31 @@ pub const MAX_ERC20_BUNDLE_LEN: usize = 64 + 1024 + 32;
 /// the OLED can't render is pointless and a foothold for spoofing.
 const MAX_DISPLAY_FIELD: usize = 64;
 
+/// Defence-in-depth upper bound on a token's `decimals`.
+///
+/// The trusted-UI amount formatter renders `amount / 10^decimals`, so an
+/// over-large `decimals` shrinks a cryptographically-bound, balance-draining
+/// `amount` toward `0.000000` on the OLED — a WYSIWYS hidden-magnitude
+/// hazard if the offloaded DB ever commits an inflated value. The DB
+/// `decimals` is sourced from third-party token lists (`build_erc20_db.py`
+/// takes `t["decimals"]` verbatim), **not** an on-chain `decimals()` call,
+/// so a buggy/poisoned list entry is the realistic threat.
+///
+/// `decimals` is itself Merkle-bound (it is part of the leaf), so this cap
+/// is not a binding check — a forged value already fails `verify_proof`.
+/// It is a curation-independent floor against *absurd / garbage* values
+/// (corrupt bytes, list typos, obviously-bogus 50–255 entries): a bundle
+/// above the cap fails verification and the caller falls back to the
+/// raw-hex render (`AddrHex` for CoW legs, `Erc20Unknown` for transfers),
+/// which shows magnitude faithfully.
+///
+/// 36 is 2× the ERC-20 standard (18) and comfortably above the highest
+/// value in real clear-signing use (bridged NEAR = 24), so no legitimate
+/// token is rejected. NOTE: a cap cannot catch *in-range* inflation (e.g.
+/// a DB `decimals` of 24 for a token whose on-chain value is 18) — closing
+/// that requires a build-time on-chain `decimals()` cross-check.
+const MAX_DISPLAY_DECIMALS: u8 = 36;
+
 /// Verify a bundle copied from the NS gateway buffer against `root`.
 /// On success, returns the decoded metadata. On failure, returns
 /// `None`.
@@ -86,6 +115,16 @@ pub fn verify_erc20_bundle<'a>(bundle: &'a [u8], root: &[u8; 32]) -> Option<Erc2
     off += 20;
     let decimals = *bundle.get(off)?;
     off += 1;
+
+    // Defence-in-depth WYSIWYS floor: refuse an absurd `decimals` rather
+    // than let the display scale a draining `amount` down to "0.000000".
+    // `decimals` is Merkle-bound below, so a forged value cannot pass
+    // regardless; rejecting here also fails fast on a corrupt/garbage leaf.
+    // See `MAX_DISPLAY_DECIMALS` for why a cap is a floor (not a complete
+    // fix) against in-range inflation.
+    if decimals > MAX_DISPLAY_DECIMALS {
+        return None;
+    }
 
     // Name (length-prefixed).
     let name_len = *bundle.get(off)? as usize;

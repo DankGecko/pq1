@@ -33,6 +33,33 @@ fn single_entry_fixture(
 }
 
 #[test]
+fn negative_oversize_decimals_rejected() {
+    // `decimals` above the MAX_DISPLAY_DECIMALS (36) cap is refused even
+    // though the leaf is Merkle-VALID (root == this leaf's hash). An
+    // over-large `decimals` would scale a balance-draining `amount` down
+    // toward "0.000000" on the trusted display — a WYSIWYS hidden-magnitude
+    // hazard. The cap is an independent gate on top of Merkle verification.
+    for d in [37u8, 50, 99, 255] {
+        let (root, bundle) = single_entry_fixture(1, &[0x11u8; 20], d, b"Evil Coin", b"EVIL");
+        assert!(
+            verify_erc20_bundle(&bundle, &root).is_none(),
+            "decimals={d} (> MAX_DISPLAY_DECIMALS) MUST be rejected even with a valid Merkle proof"
+        );
+    }
+}
+
+#[test]
+fn negative_decimals_at_cap_accepted() {
+    // 36 is the INCLUSIVE cap — a legitimate (if high-precision) token must
+    // still verify so the bound never rejects a real token. Pins the edge so
+    // a future tightening of the cap is a deliberate, visible change.
+    let (root, bundle) = single_entry_fixture(1, &[0x11u8; 20], 36, b"High Prec", b"HP");
+    let meta = verify_erc20_bundle(&bundle, &root)
+        .expect("decimals=36 (== MAX_DISPLAY_DECIMALS) MUST verify");
+    assert_eq!(meta.decimals, 36);
+}
+
+#[test]
 fn negative_truncated_header_rejected() {
     // Any length below header-fixed (8+20+1+1 = 30) must reject without
     // panicking — pins index-safe slicing.
