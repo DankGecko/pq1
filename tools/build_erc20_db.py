@@ -155,6 +155,34 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 LISTS_DIR = REPO / "build" / "token_lists"
 OUT_PATH = REPO / "secure" / "data" / "erc20.json"
 
+# Known impersonator / look-alike tokens to exclude unconditionally. Generated
+# by tools/scan_erc20_impersonators.py (offline symbol-collision scan): tokens
+# wearing a curated ticker at a non-canonical address vouched only by a
+# low-trust source. Without this, a rebuild from upstream lists would silently
+# re-add them. Missing file -> no exclusions.
+DENYLIST_PATH = REPO / "tools" / "erc20_impersonator_denylist.txt"
+
+
+def load_denylist() -> set[tuple[int, str]]:
+    """Return {(chain_id, address_lower)} parsed from DENYLIST_PATH. Lines are
+    `<chain_id> <address>  # optional comment`; blank/`#` lines ignored."""
+    deny: set[tuple[int, str]] = set()
+    if not DENYLIST_PATH.exists():
+        return deny
+    for line in DENYLIST_PATH.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        try:
+            cid = int(parts[0])
+        except ValueError:
+            continue
+        deny.add((cid, parts[1].lower()))
+    return deny
+
 # Uniswap Token List spec caps; also kept ≤ the on-device 64-byte field limit.
 NAME_MAX_CHARS = 60
 SYMBOL_MAX_CHARS = 20
@@ -370,10 +398,17 @@ def main() -> int:
         raw_rows.extend(rows)
     print(f"  total raw rows: {len(raw_rows)}", file=sys.stderr)
 
+    # Drop known impersonators before they enter the pool.
+    denylist = load_denylist()
+    denied = 0
+
     # Dedupe by (chain_id, addr). Prefer the highest-priority *canonical*
     # source's metadata; accumulate the contributing source set.
     pool: dict[tuple[int, str], dict] = {}
     for cid, addr, name, symbol, decimals, source, canonical in raw_rows:
+        if (cid, addr) in denylist:
+            denied += 1
+            continue
         prio = _source_priority(source) + (5 if canonical else 0)
         slot = pool.get((cid, addr))
         if slot is None:
@@ -386,6 +421,9 @@ def main() -> int:
             if prio > slot["prio"]:
                 slot.update(name=name, symbol=symbol, decimals=decimals, prio=prio)
 
+    if denylist:
+        print(f"  excluded {denied} rows via impersonator denylist "
+              f"({len(denylist)} entries)", file=sys.stderr)
     print(f"  unique (chain, address): {len(pool)}", file=sys.stderr)
 
     # Sanitize name/symbol; drop rows that don't survive the ASCII/length gate.
