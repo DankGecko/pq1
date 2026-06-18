@@ -295,17 +295,11 @@ fn pick_sign_pages_inner(
             let inner_meta = safe_inner_meta(erc20, &exec.decoded.to, exec.decoded.data);
             return render_safe_exec_pages(exec, Some(v3), inner_meta, resolver);
         }
-        return match &v3.readable {
-            Some(readable) => {
-                crate::tx::eip712::cowswap_display::render_cowswap_pages(
-                    &v3.canonical,
-                    readable,
-                )
-            }
-            None => crate::tx::eip712::cowswap_display::render_cowswap_pages_addr(
-                &v3.canonical,
-            ),
-        };
+        return crate::tx::eip712::cowswap_display::render_cowswap_pages(
+            &v3.canonical,
+            &v3.sell,
+            &v3.buy,
+        );
     }
     if let Some(v1) = v1 {
         return crate::zk::render_clear_sign_pages(tx, &v1.readable, resolver);

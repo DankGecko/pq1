@@ -54,8 +54,8 @@ use sphincs_tz_shared::{
     FLAG_REGISTER_SLOT, GPV2_SETTLEMENT_ADDRESS, MAX_SIGN_RESPONSE_LEN, MAX_SLOT_USES, MAX_TX_LEN,
     PQ_ADD_OWNER_BYTES_SELECTOR, PQ_CREATE_ACCOUNT_SELECTOR, PQ_INIT_CODE_LEN,
     PQ_SMART_WALLET_FACTORY, SAFE_V1_PAYLOAD_MAX, SET_PRE_SIGNATURE_SELECTOR,
-    SIGN_USEROP_HEADER_LEN, SIG_WRAPPER_LEN, SLOT_INDEX_MASK, ZK_CLEAR_SIGN_FIXED_LEN,
-    ZK_V3_FIXED_LEN, ZK_VK_BUNDLE_MAX_LEN,
+    SIGN_USEROP_HEADER_LEN, SIG_WRAPPER_LEN, SLOT_INDEX_MASK, COW_ORDER_TRAILER_MAX_LEN,
+    ZK_CLEAR_SIGN_FIXED_LEN, ZK_VK_BUNDLE_MAX_LEN,
 };
 use zeroize::{Zeroize, Zeroizing};
 
@@ -90,7 +90,7 @@ const SNAP_LEN: usize = SIGN_USEROP_HEADER_LEN
     + MAX_TX_LEN
     + 2 + MAX_ERC20_BUNDLE_LEN
     + 2 + ZK_CLEAR_SIGN_FIXED_LEN + ZK_VK_BUNDLE_MAX_LEN
-    + 2 + ZK_V3_FIXED_LEN + ZK_VK_BUNDLE_MAX_LEN
+    + 2 + COW_ORDER_TRAILER_MAX_LEN
     + 2 + SAFE_V1_PAYLOAD_MAX
     + 2 + MAX_SELECTOR_BUNDLE_LEN
     + 2 + MAX_SELF_ATTEST_BUNDLE_LEN
@@ -347,11 +347,12 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     };
     cursor = zk_v1.next_cursor;
 
-    // v3 CoW EIP-712 trailer: proof(384) || canonical(204) ||
-    // readable(128) || VK bundle. Companion sends the 716-byte fixed
-    // prefix; the NS gateway's `maybe_inject_vk_bundle_v3` appends
-    // the bundle. Absent is legal for non-CoW tx — the CoW
-    // downgrade-mitigation gate below enforces presence when needed.
+    // CoW order trailer: canonical(204) [|| sell_len(2) || sell_bundle
+    // || buy_len(2) || buy_bundle]. Companion sends the whole trailer;
+    // no NS-side injection (there is no VK bundle anymore — token
+    // metadata is decoded on-device from the ERC-20 bundles). Absent is
+    // legal for non-CoW tx — the CoW downgrade-mitigation gate below
+    // enforces presence when needed.
     //
     // Inlined instead of `trailer::read_optional_u16_prefixed` so the
     // OLED distinguishes the two failure modes (oversized declared
@@ -366,7 +367,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     } else {
         let declared = u16::from_be_bytes([snap[cursor], snap[cursor + 1]]) as usize;
         let payload_start = cursor + 2;
-        if declared > ZK_V3_FIXED_LEN + ZK_VK_BUNDLE_MAX_LEN {
+        if declared > COW_ORDER_TRAILER_MAX_LEN {
             // Dump four values across the 4-line OLED:
             //   line 1: "Sign v3 len>cap"
             //   line 2: "d=XXXX (data_len)"

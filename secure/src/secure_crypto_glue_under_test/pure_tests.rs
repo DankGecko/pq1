@@ -10,9 +10,7 @@
 use sha2::{Digest, Sha256};
 use sha3::Keccak256;
 
-use crate::db_roots::{
-    ERC20_DB_ROOT, ERC20_POSEIDON_ROOT, NAMES_DB_ROOT, SELECTOR_DB_ROOT, VK_DB_ROOT,
-};
+use crate::db_roots::{ERC20_DB_ROOT, NAMES_DB_ROOT, SELECTOR_DB_ROOT, VK_DB_ROOT};
 
 use super::offchain_state::{
     last_userop_count_read, last_userop_count_set, offchain_count_bump,
@@ -41,7 +39,6 @@ const DB_ROOTS_SRC: &str = include_str!("../db_roots.rs");
 fn positive_all_db_roots_are_32_bytes() {
     assert_eq!(ERC20_DB_ROOT.len(), 32);
     assert_eq!(VK_DB_ROOT.len(), 32);
-    assert_eq!(ERC20_POSEIDON_ROOT.len(), 32);
     assert_eq!(NAMES_DB_ROOT.len(), 32);
     assert_eq!(SELECTOR_DB_ROOT.len(), 32);
 }
@@ -54,7 +51,6 @@ fn positive_all_db_roots_are_non_zero() {
     for (name, root) in &[
         ("ERC20_DB_ROOT", &ERC20_DB_ROOT),
         ("VK_DB_ROOT", &VK_DB_ROOT),
-        ("ERC20_POSEIDON_ROOT", &ERC20_POSEIDON_ROOT),
         ("NAMES_DB_ROOT", &NAMES_DB_ROOT),
         ("SELECTOR_DB_ROOT", &SELECTOR_DB_ROOT),
     ] {
@@ -75,7 +71,6 @@ fn positive_db_roots_are_pairwise_distinct() {
     let roots = [
         ("ERC20", &ERC20_DB_ROOT),
         ("VK", &VK_DB_ROOT),
-        ("ERC20_POSEIDON", &ERC20_POSEIDON_ROOT),
         ("NAMES", &NAMES_DB_ROOT),
         ("SELECTOR", &SELECTOR_DB_ROOT),
     ];

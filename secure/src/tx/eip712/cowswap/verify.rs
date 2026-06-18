@@ -1,209 +1,205 @@
-//! Top-level verifier for a v3 CoW EIP-712 clear-sign trailer.
+//! Top-level verifier for a CoW order clear-sign trailer.
 //!
 //! This is the single entry point `cmd_sign_userop` calls when it sees
-//! an optional `zk_v3` trailer on a UserOp. Composes five checks, each
-//! load-bearing; first failure wins and the helper returns `None` so
-//! the handler treats the trailer as absent (and the downgrade gate
-//! rejects the UserOp outright for CoW setPreSignature).
+//! an optional CoW order trailer on a UserOp. The trust anchor is the
+//! native keccak `cross_check_setpresig_calldata`: it rebuilds the
+//! EIP-712 `struct_hash` over every GPv2Order field and byte-compares
+//! the resulting orderDigest against the orderUid embedded in the signed
+//! `setPreSignature` calldata. The C10 signature commits to that
+//! calldata, so once the cross-check passes the displayed order is
+//! provably the order the chain will act on — no SNARK involved.
 //!
-//! The pipeline stays named and ordered on purpose — every step maps
-//! to a specific attacker model documented in
-//! `CLAUDE.md` invariant #5:
+//! On top of that binding the verifier decodes each swap leg's token
+//! metadata (symbol + decimals) ON-DEVICE: the companion attaches an
+//! ERC-20 Merkle bundle per leg, the firmware verifies it against the
+//! rodata-pinned `ERC20_DB_ROOT` (the same root the ERC-20 transfer
+//! clear-sign path uses) and cross-checks the bundle's `(contract,
+//! chain_id)` against the canonical leg token + chain. A leg with no
+//! bundle — or whose bundle fails any check — degrades to `AddrHex`
+//! (raw address + uint256 hex), never a rejection. Token-metadata trust
+//! is therefore anchored in a firmware-pinned Merkle root exactly as the
+//! retired Groth16 path anchored it in a pinned Poseidon root; the host
+//! cannot forge a symbol/decimals for an address outside the committed
+//! set.
 //!
-//!   1. **Groth16 + H_root pin** — `crate::zk::verify_clear_sign_proof_v3`
-//!      verifies the Merkle-committed 3-pub VK bundle and pairs against
-//!      the rodata-pinned `ERC20_POSEIDON_ROOT`. Closes the "custom
-//!      H_root" attack.
-//!   2. **Sentinel + chain binding** — the verified VK must claim the
-//!      CoW v3 sentinel and the tx's `chain_id`. Prevents a valid proof
-//!      for protocol A on chain A from being displayed against tx B on
-//!      chain B.
-//!   3. **Calldata length** — setPreSignature is always exactly 164 B;
-//!      any other `inner_data.len()` cannot be a CoW flow and the v3
-//!      display never gets applied.
-//!   4. **Calldata shape** — selector / ABI offsets / `signed==true` /
-//!      tail zero-pad (replaces the v1 circuit's bytes-level proof).
-//!   5. **Cross-check** — rebuild the orderDigest from the canonical
-//!      bytes (struct_hash covers every GPv2Order field) and byte-
-//!      compare against `calldata[100..132]`, then check validTo and
-//!      owner against the UserOp sender. Binds the displayed order to
-//!      the exact orderUid the chain will see.
+//! Pipeline (first failure that touches the *binding* wins → `None`;
+//! leg-decode failures only downgrade the leg):
 //!
-//! Returns owned copies of `canonical` and `readable` so the handler
-//! can drop the snapshot buffer before rendering (and so zeroize-on-
-//! drop happens at a predictable scope).
+//!   1. **Calldata length** — setPreSignature is always exactly 164 B.
+//!   2. **Calldata shape** — selector / ABI offsets / `signed==true` /
+//!      tail zero-pad.
+//!   3. **Cross-check** — rebuild orderDigest from canonical and
+//!      byte-compare against `calldata[100..132]`; check validTo + owner.
+//!   4. **Per-leg decode** — Merkle-verify each attached bundle and
+//!      cross-check its token/chain against canonical.
+//!
+//! Returns an owned copy of `canonical` plus the two decoded legs so the
+//! handler can drop the snapshot buffer before rendering.
 
-use sphincs_tz_shared::{
-    COWSWAP_EIP712_SENTINEL, EIP712_CANONICAL_LEN, EIP712_PROOF_LEN, EIP712_STRING_LEN,
-    ZK_MAX_CALLDATA, ZK_V3_FIXED_LEN, ZK_V3_OFF_CANONICAL, ZK_V3_OFF_READABLE,
+use sphincs_tz_shared::{EIP712_CANONICAL_LEN, ZK_MAX_CALLDATA};
+
+use super::{
+    check_setpresig_calldata_shape, cross_check_setpresig_calldata, decode_canonical,
 };
 
-use super::{check_setpresig_calldata_shape, cross_check_setpresig_calldata};
+/// Maximum on-device token symbol length (matches
+/// `pqsigner_tx::erc20::bundle`'s `MAX_DISPLAY_FIELD`).
+pub const COW_LEG_SYMBOL_MAX: usize = 64;
 
-/// A v3 trailer that passed every verification step. The caller keeps
-/// the two fixed-size buffers on the stack until the trusted-UI render
-/// is done; nothing else references them.
+/// How a single swap leg should be rendered.
 ///
-/// Two flavours:
-///
-///   * `Full` — the regular proof-bearing trailer (716 B fixed prefix
-///     + VK bundle). The Groth16 proof binds `readable` to `canonical`
-///     and pins the Poseidon-Merkle ERC-20 registry; the trusted UI
-///     can therefore display formatted amounts and ticker symbols.
-///   * `AddrOnly` — a stripped trailer carrying only the 204-byte
-///     `canonical`. No proof, no readable, no registry lookup. Used by
-///     the host when one or both tokens are absent from the firmware-
-///     pinned Poseidon-Merkle registry: the order can still be
-///     clear-signed because `canonical → orderDigest → calldata.uid`
-///     is recomputable natively (keccak EIP-712), so every field of
-///     `GPv2Order` remains tamper-bound. The trusted UI shows raw
-///     20-byte token addresses instead of symbols.
-pub struct VerifiedCowswapV3 {
-    pub canonical: [u8; EIP712_CANONICAL_LEN],
-    /// `Some(_)` only for `Full` trailers — the Groth16-bound ASCII
-    /// readable. `None` for `AddrOnly`: the firmware renders pages
-    /// directly from `canonical` instead.
-    pub readable: Option<[u8; EIP712_STRING_LEN]>,
+///   * `Decoded` — the leg's ERC-20 bundle Merkle-verified against
+///     `ERC20_DB_ROOT` and its `(contract, chain_id)` matched the
+///     canonical leg token + chain. The trusted UI shows
+///     `<amount> <symbol>` with `decimals` applied.
+///   * `AddrHex` — no usable bundle: render the raw 20-byte token
+///     address + the full uint256 amount as hex. Still fully bound
+///     (canonical → orderDigest → calldata.uid), just unformatted.
+#[derive(Clone, Copy, Debug)]
+pub enum CowLeg {
+    Decoded {
+        decimals: u8,
+        /// Symbol bytes, owned so the snapshot buffer can be dropped
+        /// before render. Only the first `symbol_len` are valid.
+        symbol: [u8; COW_LEG_SYMBOL_MAX],
+        symbol_len: u8,
+    },
+    AddrHex,
 }
 
-/// End-to-end verification of a v3 CoW EIP-712 trailer against the
+impl CowLeg {
+    #[must_use]
+    pub fn is_decoded(&self) -> bool {
+        matches!(self, CowLeg::Decoded { .. })
+    }
+}
+
+/// A CoW order trailer that passed the binding cross-check. The caller
+/// keeps `canonical` on the stack until the trusted-UI render is done.
+pub struct VerifiedCowswapV3 {
+    pub canonical: [u8; EIP712_CANONICAL_LEN],
+    pub sell: CowLeg,
+    pub buy: CowLeg,
+}
+
+/// Decode one leg from its optional bundle slice. Returns `AddrHex`
+/// whenever the bundle is absent, fails Merkle verification, or its
+/// `(contract, chain_id)` does not match the canonical leg token + chain.
+fn decode_leg(bundle: Option<&[u8]>, expected_token: &[u8; 20], chain_id: u64) -> CowLeg {
+    let Some(bundle) = bundle else {
+        return CowLeg::AddrHex;
+    };
+    let Some(meta) = crate::erc20::bundle::verify_erc20_bundle(bundle) else {
+        return CowLeg::AddrHex;
+    };
+    // Cross-check: the bundle must describe THIS leg's token on THIS
+    // chain, otherwise NS could attach a valid (USDC, 6) bundle to
+    // mislabel an arbitrary attacker token.
+    if &meta.contract != expected_token || meta.chain_id != chain_id {
+        return CowLeg::AddrHex;
+    }
+    let sym = meta.symbol;
+    if sym.is_empty() || sym.len() > COW_LEG_SYMBOL_MAX {
+        return CowLeg::AddrHex;
+    }
+    let mut symbol = [0u8; COW_LEG_SYMBOL_MAX];
+    symbol[..sym.len()].copy_from_slice(sym);
+    CowLeg::Decoded {
+        decimals: meta.decimals,
+        symbol,
+        symbol_len: sym.len() as u8,
+    }
+}
+
+/// Read a `u16` BE length prefix at `off`, then the `len`-byte slice that
+/// follows, advancing the cursor. Returns `None` on any out-of-bounds
+/// (so a malformed trailer degrades to no-bundle rather than panicking).
+fn read_len_prefixed<'a>(buf: &'a [u8], off: &mut usize) -> Option<&'a [u8]> {
+    let lo = *off;
+    let len = usize::from(u16::from_be_bytes([*buf.get(lo)?, *buf.get(lo + 1)?]));
+    let start = lo + 2;
+    let end = start.checked_add(len)?;
+    let slice = buf.get(start..end)?;
+    *off = end;
+    Some(slice)
+}
+
+/// End-to-end verification of a CoW order trailer against the
 /// surrounding UserOp.
 ///
-/// * `v3_bundle` is the full snapshot slice starting at the trailer's
-///   first byte of payload (proof + canonical + readable + VK bundle).
-///   Its length must be at least `ZK_V3_FIXED_LEN`; anything shorter is
-///   a malformed trailer and returns `None`.
-/// * `inner_data` is the UserOp's inner calldata (the bytes that will
-///   reach the on-chain settlement contract). Must be exactly 164 B
-///   for a CoW setPreSignature; other lengths are treated as "not a
-///   CoW flow".
-/// * `chain_id` and `userop_sender` are pulled from the parsed header
-///   and are the subjects of the sentinel + owner cross-checks.
+/// * `cow_bundle` is the trailer payload: `canonical(204)` optionally
+///   followed by `sell_len(u16 BE) || sell_bundle || buy_len(u16 BE) ||
+///   buy_bundle`. A bare 204-byte payload renders both legs `AddrHex`.
+/// * `inner_data` is the UserOp's inner calldata; must be exactly 164 B
+///   (a setPreSignature call) or the trailer is treated as "not CoW".
+/// * `chain_id` / `userop_sender` are the cross-check subjects.
 ///
-/// Returns `Some(VerifiedCowswapV3)` only when every one of the five
-/// pipeline steps succeeds; `None` otherwise. The helper never panics
-/// on short / malformed input — length checks precede every slice
-/// conversion.
+/// Returns `Some(VerifiedCowswapV3)` only when the calldata
+/// length/shape/cross-check all pass; `None` otherwise. Never panics on
+/// short/malformed input — every slice access is bounds-checked.
 pub fn verify_and_bind_trailer(
-    v3_bundle: &[u8],
+    cow_bundle: &[u8],
     inner_data: &[u8],
     chain_id: u64,
     userop_sender: &[u8; 20],
 ) -> Option<VerifiedCowswapV3> {
-    // ── AddrOnly fast path ─────────────────────────────────────────
-    //
-    // Bundle is exactly the 204-byte canonical with no proof or
-    // readable. There is no Groth16 path, but the canonical →
-    // orderDigest → calldata.uid keccak chain still byte-binds every
-    // GPv2Order field to the calldata the chain will see. The trusted
-    // UI shows raw token addresses; no registry lookup is involved.
-    if v3_bundle.len() == EIP712_CANONICAL_LEN {
-        let canonical_bytes: &[u8; EIP712_CANONICAL_LEN] =
-            v3_bundle.try_into().ok()?;
-
-        if inner_data.len() != ZK_MAX_CALLDATA {
-            return None;
-        }
-        let calldata_array: &[u8; ZK_MAX_CALLDATA] = inner_data.try_into().ok()?;
-
-        super::check_setpresig_calldata_shape(calldata_array).ok()?;
-        super::cross_check_setpresig_calldata(
-            canonical_bytes,
-            calldata_array,
-            chain_id,
-            userop_sender,
-        )
-        .ok()?;
-
-        let mut canonical = [0u8; EIP712_CANONICAL_LEN];
-        canonical.copy_from_slice(canonical_bytes);
-        return Some(VerifiedCowswapV3 {
-            canonical,
-            readable: None,
-        });
-    }
-
-    if v3_bundle.len() < ZK_V3_FIXED_LEN {
+    // Canonical is the fixed 204-byte prefix; anything shorter is malformed.
+    if cow_bundle.len() < EIP712_CANONICAL_LEN {
         return None;
     }
+    let canonical_bytes: &[u8; EIP712_CANONICAL_LEN] =
+        cow_bundle[..EIP712_CANONICAL_LEN].try_into().ok()?;
 
-    // ── 1. Groth16 + H_root pin ─────────────────────────────────────
-    let proof_bytes: &[u8; EIP712_PROOF_LEN] =
-        v3_bundle[..EIP712_PROOF_LEN].try_into().ok()?;
-    let canonical_bytes: &[u8; EIP712_CANONICAL_LEN] = v3_bundle
-        [ZK_V3_OFF_CANONICAL..ZK_V3_OFF_CANONICAL + EIP712_CANONICAL_LEN]
-        .try_into()
-        .ok()?;
-    let readable_bytes: &[u8; EIP712_STRING_LEN] = v3_bundle
-        [ZK_V3_OFF_READABLE..ZK_V3_OFF_READABLE + EIP712_STRING_LEN]
-        .try_into()
-        .ok()?;
-    let vk_bundle = &v3_bundle[ZK_V3_FIXED_LEN..];
-
-    let verified = crate::zk::verify_clear_sign_proof_v3(
-        proof_bytes,
-        canonical_bytes,
-        readable_bytes,
-        vk_bundle,
-    )
-    .ok()?;
-
-    // ── 1b. Native field-overflow guard (defense-in-depth) ─────────
-    //
-    // The Groth16 proof binds `readable` (the formatted amounts shown on
-    // the trusted UI) to `canonical` via the circuit's
-    // `FormatTrimmedAmount`. That formatter multiplies the raw amount by
-    // a scale factor in the scalar field; a field-overflow forgery can
-    // make the recomposition wrap r so the device displays a benign
-    // amount while signing a huge one (docs/VULN-cowswap-zk-amount-
-    // overflow.md). The fixed circuit range-checks the amount to 190
-    // bits; we re-assert the SAME bound natively here so the class is
-    // closed from both sides — even a future circuit regression cannot
-    // get a display/actual mismatch past this gate. A legitimate
-    // displayable amount is ≤ ~2^93, far below 2^190.
-    let sell_amount: &[u8; 32] =
-        canonical_bytes[68..100].try_into().ok()?;
-    let buy_amount: &[u8; 32] =
-        canonical_bytes[100..132].try_into().ok()?;
-    if !super::amount_within_field_safe_bound(sell_amount)
-        || !super::amount_within_field_safe_bound(buy_amount)
-    {
-        return None;
-    }
-
-    // ── 2. Sentinel + chain binding ────────────────────────────────
-    if verified.chain_id != chain_id || verified.contract != COWSWAP_EIP712_SENTINEL {
-        return None;
-    }
-
-    // ── 3. Calldata length ─────────────────────────────────────────
-    //
-    // setPreSignature calldata is always exactly 164 bytes. Any other
-    // inner_data length cannot be a CoW setPreSignature flow — refuse
-    // to apply the v3 display path to non-CoW tx.
+    // ── 1. Calldata length ──────────────────────────────────────────
     if inner_data.len() != ZK_MAX_CALLDATA {
         return None;
     }
     let calldata_array: &[u8; ZK_MAX_CALLDATA] = inner_data.try_into().ok()?;
 
-    // ── 4. Calldata shape ──────────────────────────────────────────
+    // ── 2. Calldata shape ───────────────────────────────────────────
     check_setpresig_calldata_shape(calldata_array).ok()?;
 
-    // ── 5. Canonical → orderDigest / validTo / owner cross-check ──
-    cross_check_setpresig_calldata(
-        canonical_bytes,
-        calldata_array,
-        verified.chain_id,
-        userop_sender,
-    )
-    .ok()?;
+    // ── 3. Canonical → orderDigest / validTo / owner cross-check ────
+    //
+    // THE trust anchor. struct_hash covers every GPv2Order field, so
+    // byte equality against calldata[100..132] locks the entire order
+    // into the calldata the chain will see. The C10 sig commits to that
+    // calldata; everything below is display-only.
+    cross_check_setpresig_calldata(canonical_bytes, calldata_array, chain_id, userop_sender)
+        .ok()?;
+
+    // ── 4. Per-leg on-device token decode (display only) ────────────
+    //
+    // decode_canonical re-validates the enum byte ranges and yields the
+    // leg token addresses; the cross-check above already ran it, so this
+    // cannot fail here, but we fall back to AddrHex rather than reject if
+    // it somehow does — the binding is intact regardless.
+    let (sell_bundle, buy_bundle) = if cow_bundle.len() > EIP712_CANONICAL_LEN {
+        let mut off = EIP712_CANONICAL_LEN;
+        let s = read_len_prefixed(cow_bundle, &mut off);
+        let b = read_len_prefixed(cow_bundle, &mut off);
+        // A non-empty len==0 slice means "no bundle for this leg".
+        (
+            s.filter(|sl| !sl.is_empty()),
+            b.filter(|sl| !sl.is_empty()),
+        )
+    } else {
+        (None, None)
+    };
+
+    let (sell, buy) = match decode_canonical(canonical_bytes) {
+        Ok(order) => (
+            decode_leg(sell_bundle, &order.sell_token, order.chain_id),
+            decode_leg(buy_bundle, &order.buy_token, order.chain_id),
+        ),
+        Err(_) => (CowLeg::AddrHex, CowLeg::AddrHex),
+    };
 
     let mut canonical = [0u8; EIP712_CANONICAL_LEN];
     canonical.copy_from_slice(canonical_bytes);
-    let mut readable = [0u8; EIP712_STRING_LEN];
-    readable.copy_from_slice(readable_bytes);
     Some(VerifiedCowswapV3 {
         canonical,
-        readable: Some(readable),
+        sell,
+        buy,
     })
 }

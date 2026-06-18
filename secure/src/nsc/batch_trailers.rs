@@ -48,8 +48,8 @@ use sphincs_tz_shared::{
     SIGN_USEROP_BATCH_TRAILER_HEADER_LEN, TRAILERS_TOTAL_MAX_LEN, TRAILER_KIND_ERC20,
     TRAILER_KIND_ERC7730, TRAILER_KIND_NAME, TRAILER_KIND_SAFE_V1, TRAILER_KIND_SEL_CURATED,
     TRAILER_KIND_SEL_SELFATTEST, TRAILER_KIND_ZK_V1, TRAILER_KIND_ZK_V3,
-    TRAILER_TX_IDX_BATCH_WIDE, ZK_CLEAR_SIGN_FIXED_LEN, ZK_V3_FIXED_LEN, ZK_VK_BUNDLE_MAX_LEN,
-    ERC7730_MAX_TRAILER_LEN,
+    TRAILER_TX_IDX_BATCH_WIDE, COW_ORDER_BUNDLE_MAX, COW_ORDER_TRAILER_MAX_LEN,
+    ZK_CLEAR_SIGN_FIXED_LEN, ZK_VK_BUNDLE_MAX_LEN, ERC7730_MAX_TRAILER_LEN,
 };
 
 use crate::erc20::bundle::MAX_ERC20_BUNDLE_LEN;
@@ -68,13 +68,18 @@ pub const MAX_LEN_PER_KIND: [usize; 9] = [
     0,                                              // 0 — unused
     MAX_ERC20_BUNDLE_LEN,                           // 1 — ERC-20 metadata
     ZK_CLEAR_SIGN_FIXED_LEN + ZK_VK_BUNDLE_MAX_LEN, // 2 — ZK v1
-    ZK_V3_FIXED_LEN + ZK_VK_BUNDLE_MAX_LEN,         // 3 — ZK v3 CoW
+    COW_ORDER_TRAILER_MAX_LEN,                      // 3 — CoW order (on-device decode)
     SAFE_V1_PAYLOAD_MAX,                            // 4 — Safe v1
     MAX_SELECTOR_BUNDLE_LEN,                        // 5 — selector curated
     MAX_SELF_ATTEST_BUNDLE_LEN,                     // 6 — selector self-attest
     ERC7730_MAX_TRAILER_LEN,                        // 7 — ERC-7730 descriptor
     MAX_NAME_BUNDLE_LEN,                            // 8 — address-name bundle
 ];
+
+// Compile-time drift guard: proto pins `COW_ORDER_BUNDLE_MAX` as a
+// literal (proto is dep-free and can't import the tx crate), so this
+// trips the build if the real ERC-20 bundle cap ever moves.
+const _: () = assert!(COW_ORDER_BUNDLE_MAX == MAX_ERC20_BUNDLE_LEN);
 
 /// Highest valid kind value (inclusive). Anchors the dispatch match.
 pub const MAX_TRAILER_KIND: u8 = 8;
@@ -570,8 +575,11 @@ mod tests {
         );
         assert_eq!(
             MAX_LEN_PER_KIND[TRAILER_KIND_ZK_V3 as usize],
-            ZK_V3_FIXED_LEN + ZK_VK_BUNDLE_MAX_LEN
+            COW_ORDER_TRAILER_MAX_LEN
         );
+        // Drift guard: proto's COW_ORDER_BUNDLE_MAX literal must track
+        // the real per-leg ERC-20 bundle cap.
+        assert_eq!(COW_ORDER_BUNDLE_MAX, MAX_ERC20_BUNDLE_LEN);
         assert_eq!(MAX_LEN_PER_KIND[TRAILER_KIND_SAFE_V1 as usize], SAFE_V1_PAYLOAD_MAX);
         assert_eq!(
             MAX_LEN_PER_KIND[TRAILER_KIND_SEL_CURATED as usize],

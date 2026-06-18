@@ -782,14 +782,6 @@ pub const USEROP_PREFIX_LEN: usize = USEROP_HEADER_LEN + 4;
 ///   [172..204)  appData           (bytes32)        ← NEW in v3
 pub const EIP712_CANONICAL_LEN: usize = 204;
 
-/// Readable-string length (8 lines × 16 cols = 128). Wider than the
-/// EIP-1559 clear-sign path because v3 splits the amount and symbol
-/// onto separate lines, enabling MAX_INT_DIGITS=10 + 6-char symbols.
-pub const EIP712_STRING_LEN: usize = 128;
-
-/// Same Groth16 proof size as the EIP-1559 clear-sign path.
-pub const EIP712_PROOF_LEN: usize = 384;
-
 // ---------------------------------------------------------------------------
 // USB APDU protocol v2 — PQSigner native
 // ---------------------------------------------------------------------------
@@ -1319,74 +1311,59 @@ pub const ZK_CLEAR_SIGN_FIXED_LEN: usize = ZK_PROOF_LEN + ZK_MAX_CALLDATA + ZK_S
 pub const ZK_VK_BUNDLE_MAX_LEN: usize = 2048;
 
 // ═══════════════════════════════════════════════════════════════════════════
-//   CoW Protocol / GPv2Settlement — EIP-712 clear-sign v3
+//   CoW Protocol / GPv2Settlement — EIP-712 clear-sign (on-device decode)
 // ═══════════════════════════════════════════════════════════════════════════
 //
-// All constants for the v3 "render the full GPv2Order on the trusted UI"
-// flow live in this block. Three sub-groups:
-//
-//   1. Trailer layout          — ZK_V3_* shapes the SIGN_USEROP payload.
-//   2. Trailer field offsets   — ZK_V3_OFF_* index into the fixed prefix.
-//   3. Protocol-identity       — the setPreSignature selector, the real
-//                                GPv2Settlement contract address, and the
-//                                DB-lookup sentinel that keys the v3 VK.
-//
 // When the companion sends a CoW UserOp whose inner calldata is
-// `setPreSignature(orderUid, true)` on GPv2Settlement, it attaches a
-// third trailer section after the legacy `zk_bundle` slot:
+// `setPreSignature(orderUid, true)` on GPv2Settlement, it attaches a CoW
+// order trailer (kind `TRAILER_KIND_ZK_V3`, value 3 — name retained for
+// wire compatibility) after the legacy `zk_bundle` slot:
 //
-//   [zk_v3_len u16 BE] [zk_v3_bundle]
+//   [cow_len u16 BE] [cow_trailer]
 //
-// where `zk_v3_bundle` layout is:
+// where `cow_trailer` layout is:
 //
-//   [  0..  384) proof2     — 384-byte BLS12-381 Groth16 proof for
-//                             the v3 `cowswap_eip712_order` circuit.
-//   [384..  588) canonical  — 204-byte packed GPv2Order struct.
-//   [588..  716) readable2  — 128-byte 8×16 ASCII readable. The
-//                             firmware renders this byte-for-byte
-//                             across the middle pages of the trusted
-//                             UI flow.
-//   [716..     ) vk_bundle2 — 3-pub VK bundle injected by the NS
-//                             gateway (companion sends exactly
-//                             716 bytes; NS appends the bundle).
+//   [  0.. 204)  canonical    — 204-byte packed GPv2Order struct.
+//   [204.. 206)  sell_len u16 BE
+//   [206.. 206+sell_len)  sell_bundle — ERC-20 metadata + Merkle proof
+//                                       for the sell token (see
+//                                       `pqsigner_tx::erc20::bundle`).
+//   [..    +2 )  buy_len  u16 BE
+//   [..      )   buy_bundle  — ERC-20 metadata + Merkle proof for the
+//                              buy token.
 //
-// The v3 circuit binds `canonical` to `readable2` via Poseidon, and
-// the secure world natively re-keccaks `canonical` → orderDigest →
-// cross-checks against the calldata's `[100..132)` slice. Together
-// these replace the legacy v1 proof entirely for CoW setPreSignature.
+// A `*_len == 0` leg carries no bundle: the firmware renders that leg
+// as a raw token address + uint256 hex amount (the AddrOnly fallback),
+// exactly as it did before any token was in the DB. A canonical-only
+// trailer (204 B, no length-prefixed legs) renders both legs AddrOnly.
+//
+// There is NO Groth16 proof and NO Poseidon registry. The secure world
+// natively re-keccaks `canonical` → orderDigest and byte-compares it
+// against the calldata's `[100..132)` slice (`cross_check_setpresig_-
+// calldata`); that binding — not a SNARK — is the WYSIWYS trust anchor.
+// Each present leg's bundle is Merkle-verified on-device against
+// `ERC20_DB_ROOT` (the same root the ERC-20 transfer path uses), and the
+// bundle's `(contract, chain_id)` is cross-checked against the canonical
+// leg token + chain before its symbol/decimals reach the OLED.
 
-// ─── 1. Trailer layout ─────────────────────────────────────────────────────
+// ─── Trailer length cap ────────────────────────────────────────────────────
 
-/// Fixed prefix of the v3 trailer (proof2 + canonical + readable2).
-/// The NS gateway appends the VK bundle; see
-/// `nonsecure/src/usb/commands.rs::maybe_inject_vk_bundle_v3`.
-pub const ZK_V3_FIXED_LEN: usize = EIP712_PROOF_LEN + EIP712_CANONICAL_LEN + EIP712_STRING_LEN;
+/// Per-leg ERC-20 bundle cap. Mirrors `pqsigner_tx::erc20::bundle::
+/// MAX_ERC20_BUNDLE_LEN` (64 + 1024 + 32 = 1120); a compile-time assert
+/// in `secure/src/nsc/batch_trailers.rs` trips if that constant drifts.
+pub const COW_ORDER_BUNDLE_MAX: usize = 1120;
 
-// ─── 2. Trailer field offsets ──────────────────────────────────────────────
+/// Maximum CoW order trailer payload: canonical + two length-prefixed
+/// ERC-20 bundles.
+pub const COW_ORDER_TRAILER_MAX_LEN: usize =
+    EIP712_CANONICAL_LEN + 2 * (2 + COW_ORDER_BUNDLE_MAX);
 
-/// Offset of the 204-byte canonical GPv2Order within the fixed prefix.
-pub const ZK_V3_OFF_CANONICAL: usize = EIP712_PROOF_LEN;
-/// Offset of the 128-byte readable ASCII string within the fixed prefix.
-pub const ZK_V3_OFF_READABLE: usize = ZK_V3_OFF_CANONICAL + EIP712_CANONICAL_LEN;
-
-// ─── 3. Protocol-identity constants ────────────────────────────────────────
+// ─── Protocol-identity constants ───────────────────────────────────────────
 
 /// Function selector for `setPreSignature(bytes,bool)` on
 /// `GPv2Settlement` — companion's calldata[0..4] match against this
-/// triggers the mandatory-v3 gate in the secure world.
+/// triggers the mandatory CoW-order gate in the secure world.
 pub const SET_PRE_SIGNATURE_SELECTOR: [u8; 4] = [0xec, 0x6c, 0xb1, 0x3f];
-
-/// DB-lookup sentinel address for the v3 `cowswap_eip712_order` VK.
-///
-/// Differs from the real `GPV2Settlement` contract address
-/// (`0x9008...ab41`) by its last byte (`0x42`). Never appears on
-/// Ethereum — it is a pure (chain_id, contract) → VK DB key that
-/// distinguishes "v3 CoW EIP-712 VK" from "v1 setPreSignature calldata
-/// VK" without bumping `VK_DB_VERSION`.
-pub const COWSWAP_EIP712_SENTINEL: [u8; 20] = [
-    0x90, 0x08, 0xd1, 0x9f, 0x58, 0xaa, 0xbd, 0x9e, 0xd0, 0xd6, 0x09, 0x71, 0x56, 0x5a, 0xa8,
-    0x51, 0x05, 0x60, 0xab, 0x42,
-];
 
 /// Real `GPv2Settlement` contract address on every EVM chain CoW
 /// Protocol supports (CREATE2-deployed, address-identical). Used by
@@ -1675,7 +1652,10 @@ pub const SIGN_USEROP_BATCH_TX_PREFIX_LEN: usize = 20 + 32 + 2; // 54
 pub const TRAILER_KIND_ERC20: u8 = 1;
 /// ZK v1 clear-sign bundle (Groth16 + (calldata, readable) attest).
 pub const TRAILER_KIND_ZK_V1: u8 = 2;
-/// ZK v3 CoW EIP-712 bundle (Groth16 + Poseidon orderDigest binding).
+/// CoW order trailer (kind value 3; name retained for wire compat):
+/// canonical GPv2Order + two optional ERC-20 bundles, decoded + rendered
+/// on-device. orderDigest is keccak-cross-checked against the
+/// setPreSignature calldata; no Groth16, no Poseidon registry.
 pub const TRAILER_KIND_ZK_V3: u8 = 3;
 /// Safe v1 `approveHash` clear-sign bundle (281-byte canonical SafeTx).
 pub const TRAILER_KIND_SAFE_V1: u8 = 4;

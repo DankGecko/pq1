@@ -20,7 +20,7 @@
 > documentation. Treat this file as a TROPIC01 datasheet companion, not as
 > "this is how PQSigner uses two SEs."
 >
-> For current dual-SE architecture see `docs/OPTIGATRUSTM/`,
+> For current dual-SE architecture see `docs/secure-elements/OPTIGATRUSTM/`,
 > `docs/secure-elements/se050-userid-pin-auth.md`, `docs/secure-elements/se050-factory-reset.md`.
 
 ## What is TROPIC01?

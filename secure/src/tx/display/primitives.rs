@@ -640,6 +640,46 @@ pub(super) fn write_token_amount_two_rows(
     write_amount_two_rows_bytes(row1, row2, amount, decimals, frac, false, unit_bytes)
 }
 
+/// CoW swap-leg amount renderer. Formats a 32-byte big-endian amount
+/// with `decimals` applied and `symbol` appended, across up to two rows,
+/// reusing the same fixed-width (anti-spoof) machinery as the ERC-20
+/// transfer path. Keeps the `U256`/`Erc20Metadata`/`AmountFit` plumbing
+/// internal so `cowswap_display` (outside the `display` module) can call
+/// it with primitive types only.
+///
+/// Returns `false` on overflow — the magnitude exceeds two rows — and in
+/// that case writes a "(amount too big)" marker into `row2` rather than
+/// spilling onto an un-budgeted extra page. A decoded CoW amount is
+/// astronomically unlikely to overflow (it would need ~16+ decimal
+/// digits), but failing safe keeps the page count the renderer
+/// pre-computed exact.
+pub(crate) fn write_cow_leg_amount(
+    row1: &mut [u8; DISPLAY_COLS],
+    row2: &mut [u8; DISPLAY_COLS],
+    amount_be: &[u8; 32],
+    decimals: u8,
+    symbol: &[u8],
+) -> bool {
+    let amount = U256(*amount_be);
+    let meta = Erc20Metadata {
+        chain_id: 0,
+        contract: [0u8; 20],
+        decimals,
+        name: &[],
+        symbol,
+    };
+    match write_token_amount_two_rows(row1, row2, &amount, &meta) {
+        AmountFit::Full => true,
+        AmountFit::Overflow => {
+            *row1 = [b' '; DISPLAY_COLS];
+            *row2 = [b' '; DISPLAY_COLS];
+            let msg = b"(amount too big)";
+            row2[..msg.len()].copy_from_slice(msg);
+            false
+        }
+    }
+}
+
 fn single_row_amount_fixed(
     row: &mut [u8; DISPLAY_COLS],
     value: &U256,
