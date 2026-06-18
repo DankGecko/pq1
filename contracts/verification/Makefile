@@ -16,7 +16,7 @@
 LEAN_DIR := lean
 LAKE     ?= $(shell command -v lake 2>/dev/null || echo $$HOME/.elan/bin/lake)
 
-.PHONY: verify verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk verify-interp verify-transcription verify-storage-mutators verify-fv-lints verify-lean4checker verify-kontrol verify-halmos
+.PHONY: verify verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk verify-interp verify-transcription verify-independent-signer verify-storage-mutators verify-fv-lints verify-lean4checker verify-kontrol verify-halmos
 
 verify: verify-build
 	@python3 scripts/check_c10_transcription.py
@@ -112,6 +112,20 @@ verify-interp:
 # See docs/A3_1_ADVERSARIAL_REVIEW_2026-06-18.md.
 verify-transcription:
 	@python3 scripts/check_c10_transcription.py
+
+# A3.1 INDEPENDENT-SOURCE KAT leg (work-todo #7). A clean-room SHA-256 C10 signer
+# (scripts/independent_c10_signer.py) written from the deployed SPHINCsC10Asm.sol +
+# the documented PRF preimages — NOT transliterated from the Rust `sphincs-c10`
+# signer — giving implementation diversity for the differential oracle (today's
+# 3-way Lean/Yul/Rust vectors all originate from the ONE Rust signer). Two checks:
+#  (1) byte-equivalence — the independent signer reproduces the Rust pk_root + all 4
+#      valid KAT vectors BYTE-FOR-BYTE + round-trips fresh messages (pure Python, ~5s);
+#  (2) cross-verifier — the EXISTING Rust verifier accepts FRESH independent-signer
+#      output (the genuine independence guard vs a shared Python sign+verify bug).
+# Honest scope: diversity over the shared C10 spec, not a second spec. Needs python3.
+verify-independent-signer:
+	@python3 scripts/independent_c10_signer.py
+	@cd $(REPO_ROOT) && cargo test -p sphincs-c10 --test independent_signer_xcheck --release -- --nocapture
 
 # NIST CAVP SHA-256 conformance: regenerate the embedded vector module from
 # the official byte-oriented .rsp suite (cavp/ — idempotent) and replay ALL

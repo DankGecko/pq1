@@ -113,6 +113,12 @@ jobs:
             -p pqsigner-proto -p pqsigner-tx-core -p pqsigner-aa \
             -p pqsigner-domain -p pqsigner-tx -p pqsigner-erc7730 \
             -p sphincs-c10 -p pqsigner-fi
+      # A3.1 independent-source KAT leg (work-todo #7): the EXISTING Rust verifier
+      # must accept FRESH output from the clean-room Python C10 signer
+      # (contracts/verification/scripts/independent_c10_signer.py) — implementation
+      # diversity for the differential oracle. python3 is present on ubuntu-latest.
+      - name: independent C10 signer cross-verifier (Python signer -> Rust verify)
+        run: cargo test --locked -p sphincs-c10 --test independent_signer_xcheck --release
 
   secure-tests:
     name: Secure-world unit tests (host)
