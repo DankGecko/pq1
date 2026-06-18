@@ -128,4 +128,187 @@ def htClimbBody : List Stmt :=
   , .setv "merkleNode" (.bin .band (.mload (.var "OUT")) (.var "N_MASK"))
   , .setv "mIdx" (.var "parentIdx") ]
 
+/-- `(p &&& 1) <<< 5 % W` is `0` when `p` even, `32` when `p` odd (the branchless-swap
+    parity). Local copy of Phases' private `s_value`. -/
+private theorem s_value (p : Nat) :
+    (p &&& 1) <<< 5 % W = if p % 2 == 0 then 0 else 32 := by
+  rw [Nat.and_one_is_mod]
+  have h2 : p % 2 = 0 ∨ p % 2 = 1 := Nat.mod_two_eq_zero_or_one p
+  rcases h2 with h | h
+  · rw [h]; rfl
+  · rw [h]; rfl
+
+/-! ### One HT Merkle-climb level (clone of `fors_climb_step`)
+
+Same structure as `fors_climb_step` (branchless swap, `climbMem_thPair`, masked
+read-back), with `treeNode` ADRS (the `treeAdrs &&& TREEADRS_MASK` form), and the
+accumulator field order SWAPPED — `htAcc`/`htStep` are `⟨pathIdx, node⟩` (`.fst` =
+idx, `.snd` = node), the order `verifyAuthPath`'s `do`-block elaborates to. -/
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 4000 in
+theorem ht_climb_step
+    (sig : ByteVec Spec.SignatureLen)
+    (seed : ByteVec 32) (layer : UInt32) (tree : UInt64)
+    (leafNode : ByteVec 16) (leafIdx : Nat) (authPath : Array (ByteVec 16)) (tBase mptr : Nat)
+    (H_adrs : ∀ h, h < Spec.SubtreeH → ∀ p, p < 2 ^ 32 →
+        (tBase &&& 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF0000000000000000)
+          ||| (((h + 1) % W) <<< 32 % W ||| p >>> 1)
+        = wordOf (Spec.Adrs.treeNode layer tree (UInt32.ofNat (h + 1)) (UInt32.ofNat (p / 2))))
+    (H_sib : ∀ h, h < Spec.SubtreeH → calldataload sig ((mptr + h <<< 4 % W) % W) &&& NMASK
+        = wordOf (ByteVec.pad16 (authPath.getD h (ByteVec.zero 16))))
+    (cur : Nat) (hcur : cur < Spec.SubtreeH) (w : VM)
+    (hR : w.env "merkleNode"
+            = wordOf (ByteVec.pad16 (htAcc seed layer tree leafNode leafIdx authPath cur).snd)
+          ∧ w.env "mIdx" = (htAcc seed layer tree leafNode leafIdx authPath cur).fst
+          ∧ w.env "N_MASK" = NMASK ∧ w.env "OUT" = 0x600
+          ∧ w.env "treeAdrs" = tBase ∧ w.env "merklePtr" = mptr
+          ∧ (∀ i, i < 32 → w.mem (0 + i) = seed.data.getD i 0)
+          ∧ (htAcc seed layer tree leafNode leafIdx authPath cur).fst < 2 ^ 32) :
+    (execList c10Oracle sig htClimbBody { w with env := setVar w.env "h" cur }).2 = none
+    ∧ ((execList c10Oracle sig htClimbBody { w with env := setVar w.env "h" cur }).1.env "merkleNode"
+          = wordOf (ByteVec.pad16 (htAcc seed layer tree leafNode leafIdx authPath (cur + 1)).snd)
+        ∧ (execList c10Oracle sig htClimbBody { w with env := setVar w.env "h" cur }).1.env "mIdx"
+            = (htAcc seed layer tree leafNode leafIdx authPath (cur + 1)).fst
+        ∧ (execList c10Oracle sig htClimbBody { w with env := setVar w.env "h" cur }).1.env "N_MASK"
+            = NMASK
+        ∧ (execList c10Oracle sig htClimbBody { w with env := setVar w.env "h" cur }).1.env "OUT"
+            = 0x600
+        ∧ (execList c10Oracle sig htClimbBody { w with env := setVar w.env "h" cur }).1.env "treeAdrs"
+            = tBase
+        ∧ (execList c10Oracle sig htClimbBody { w with env := setVar w.env "h" cur }).1.env "merklePtr"
+            = mptr
+        ∧ (∀ i, i < 32 →
+            (execList c10Oracle sig htClimbBody { w with env := setVar w.env "h" cur }).1.mem (0 + i)
+              = seed.data.getD i 0)
+        ∧ (htAcc seed layer tree leafNode leafIdx authPath (cur + 1)).fst < 2 ^ 32) := by
+  obtain ⟨hRnode, hRpath, hRN, hROUT, hRtA, hRmptr, hRseed, hRbound⟩ := hR
+  unfold htClimbBody
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList]
+  refine ⟨rfl, ?_⟩
+  simp only [execStmt, eval, setVar, ite_true, ite_false, String.reduceEq,
+    hRN, hROUT, hRtA, hRmptr, hRnode, hRpath]
+  rw [htAcc_succ]
+  rw [H_adrs cur hcur (htAcc seed layer tree leafNode leafIdx authPath cur).fst hRbound,
+      H_sib cur hcur]
+  rw [s_value]
+  refine ⟨?node, ?path, trivial, trivial, trivial, trivial, ?mem, ?bound⟩
+  · by_cases hpar : (htAcc seed layer tree leafNode leafIdx authPath cur).fst % 2 == 0
+    · rw [if_pos hpar]
+      simp only [show (64 : Nat) ^^^ 0 = 64 from rfl, show (96 : Nat) ^^^ 0 = 96 from rfl]
+      rw [climbMem_thPair w.mem seed _ _ _ hRseed]
+      show _ = wordOf (ByteVec.pad16 (htStep seed layer tree authPath
+        (htAcc seed layer tree leafNode leafIdx authPath cur) cur).snd)
+      unfold htStep
+      rw [if_pos hpar]
+    · rw [if_neg hpar]
+      simp only [show (64 : Nat) ^^^ 32 = 96 from rfl, show (96 : Nat) ^^^ 32 = 64 from rfl]
+      rw [mstore32_comm _ 96 64 _ _ (by omega)]
+      rw [climbMem_thPair w.mem seed _ _ _ hRseed]
+      show _ = wordOf (ByteVec.pad16 (htStep seed layer tree authPath
+        (htAcc seed layer tree leafNode leafIdx authPath cur) cur).snd)
+      unfold htStep
+      rw [if_neg hpar]
+  · show ((htAcc seed layer tree leafNode leafIdx authPath cur).fst >>> 1)
+      = (htStep seed layer tree authPath
+          (htAcc seed layer tree leafNode leafIdx authPath cur) cur).fst
+    unfold htStep
+    rw [Nat.shiftRight_eq_div_pow, Nat.pow_one]
+    simp only []
+    split <;> rfl
+  · intro i hi
+    rw [writeRegion_frame _ _ _ (0 + i) (by omega)]
+    by_cases hpar : (htAcc seed layer tree leafNode leafIdx authPath cur).fst % 2 == 0
+    · rw [if_pos hpar]
+      simp only [show (64 : Nat) ^^^ 0 = 64 from rfl, show (96 : Nat) ^^^ 0 = 96 from rfl]
+      rw [mstore32_frame _ 96 _ (0 + i) (by omega), mstore32_frame _ 64 _ (0 + i) (by omega),
+          mstore32_frame _ 32 _ (0 + i) (by omega)]
+      exact hRseed i hi
+    · rw [if_neg hpar]
+      simp only [show (64 : Nat) ^^^ 32 = 96 from rfl, show (96 : Nat) ^^^ 32 = 64 from rfl]
+      rw [mstore32_frame _ 64 _ (0 + i) (by omega), mstore32_frame _ 96 _ (0 + i) (by omega),
+          mstore32_frame _ 32 _ (0 + i) (by omega)]
+      exact hRseed i hi
+  · show (htStep seed layer tree authPath
+        (htAcc seed layer tree leafNode leafIdx authPath cur) cur).fst < 2 ^ 32
+    have hfst : (htStep seed layer tree authPath
+        (htAcc seed layer tree leafNode leafIdx authPath cur) cur).fst
+        = (htAcc seed layer tree leafNode leafIdx authPath cur).fst / 2 := by
+      unfold htStep
+      by_cases hp : (htAcc seed layer tree leafNode leafIdx authPath cur).fst % 2 == 0
+      · rw [if_pos hp]
+      · rw [if_neg hp]
+    rw [hfst]
+    exact Nat.lt_of_le_of_lt (Nat.div_le_self _ 2) hRbound
+
+/-! ### The HT Merkle climb (clone of `fors_climb`) -/
+
+set_option maxHeartbeats 2000000 in
+set_option maxRecDepth 4000 in
+/-- **Hypertree XMSS Merkle climb.** Running the `SubtreeH=9`-level inner Merkle
+    climb (`htClimbBody`) from a VM whose env supplies the leaf node word
+    `merkleNode = wordOf (pad16 leafNode)` (the WOTS public key), leaf index
+    `mIdx = leafIdx`, the persisting consts, and `seed` in scratch `[0,0x20)`, falls
+    through (`.2 = none`) and binds `"merkleNode"` to
+    `wordOf (pad16 (verifyAuthPath seed layer tree leafNode leafIdx authPath))`.
+    Clone of `fors_climb` (no leaf hash; `treeNode` ADRS; `htAcc`'s swapped fields).
+    `hleaf : leafIdx < 2^32` seeds the running-pathIdx bound (free downstream: the
+    leaf index is `idxLeaf = idxTree &&& 0x1FF < 512`). -/
+theorem ht_climb
+    (sig : ByteVec Spec.SignatureLen) (vm : VM)
+    (seed : ByteVec 32) (layer : UInt32) (tree : UInt64)
+    (leafNode : ByteVec 16) (leafIdx : Nat) (authPath : Array (ByteVec 16))
+    (tBase mptr : Nat) (hleaf : leafIdx < 2 ^ 32)
+    (hNMASK : vm.env "N_MASK" = NMASK)
+    (hOUT : vm.env "OUT" = 0x600)
+    (htA : vm.env "treeAdrs" = tBase)
+    (hmptr : vm.env "merklePtr" = mptr)
+    (hnode : vm.env "merkleNode" = wordOf (ByteVec.pad16 leafNode))
+    (hpath : vm.env "mIdx" = leafIdx)
+    (hseed : ∀ i, i < 32 → vm.mem (0 + i) = seed.data.getD i 0)
+    (H_adrs : ∀ h, h < Spec.SubtreeH → ∀ p, p < 2 ^ 32 →
+        (tBase &&& 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF0000000000000000)
+          ||| (((h + 1) % W) <<< 32 % W ||| p >>> 1)
+        = wordOf (Spec.Adrs.treeNode layer tree (UInt32.ofNat (h + 1)) (UInt32.ofNat (p / 2))))
+    (H_sib : ∀ h, h < Spec.SubtreeH → calldataload sig ((mptr + h <<< 4 % W) % W) &&& NMASK
+        = wordOf (ByteVec.pad16 (authPath.getD h (ByteVec.zero 16)))) :
+    (execFor c10Oracle sig "h" htClimbBody Spec.SubtreeH 0 vm).2 = none
+    ∧ ((execFor c10Oracle sig "h" htClimbBody Spec.SubtreeH 0 vm).1).env "merkleNode"
+        = wordOf (ByteVec.pad16
+            (Spec.Hypertree.verifyAuthPath seed layer tree leafNode leafIdx authPath))
+    ∧ (∀ i, i < 32 → ((execFor c10Oracle sig "h" htClimbBody Spec.SubtreeH 0 vm).1).mem (0 + i)
+        = seed.data.getD i 0) := by
+  let R : Nat → VM → Prop := fun c w =>
+    w.env "merkleNode" = wordOf (ByteVec.pad16 (htAcc seed layer tree leafNode leafIdx authPath c).snd)
+    ∧ w.env "mIdx" = (htAcc seed layer tree leafNode leafIdx authPath c).fst
+    ∧ w.env "N_MASK" = NMASK ∧ w.env "OUT" = 0x600
+    ∧ w.env "treeAdrs" = tBase ∧ w.env "merklePtr" = mptr
+    ∧ (∀ i, i < 32 → w.mem (0 + i) = seed.data.getD i 0)
+    ∧ (htAcc seed layer tree leafNode leafIdx authPath c).fst < 2 ^ 32
+  have hstep : ∀ cur w, cur < Spec.SubtreeH → R cur w →
+      (execList c10Oracle sig htClimbBody { w with env := setVar w.env "h" cur }).2 = none ∧
+      R (cur + 1) (execList c10Oracle sig htClimbBody { w with env := setVar w.env "h" cur }).1 :=
+    fun cur w hcur hRcw =>
+      ht_climb_step sig seed layer tree leafNode leafIdx authPath tBase mptr
+        H_adrs H_sib cur hcur w hRcw
+  have hR0 : R 0 vm := by
+    refine ⟨?_, ?_, hNMASK, hOUT, htA, hmptr, hseed, ?_⟩
+    · rw [hnode, htAcc_zero]
+    · rw [hpath, htAcc_zero]
+    · rw [htAcc_zero]; exact hleaf
+  have hloop := execFor_invariant_lt c10Oracle sig "h" htClimbBody Spec.SubtreeH R hstep vm hR0
+  obtain ⟨hn, _, _, _, _, _, hmemfinal, _⟩ := hloop.2
+  refine ⟨hloop.1, ?_, hmemfinal⟩
+  rw [hn]
+  show wordOf (ByteVec.pad16 (htAcc seed layer tree leafNode leafIdx authPath Spec.SubtreeH).snd) = _
+  rw [verifyAuthPath_eq_htAcc]
+
 end SphincsCVerify.Interpreter.C10
