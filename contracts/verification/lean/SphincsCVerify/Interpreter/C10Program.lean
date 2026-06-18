@@ -203,7 +203,7 @@ def c10Program : List Stmt :=
           [ .mstore (eAdd (lit 0x40) (eShl (lit 5) (var "i"))) (ml (eAdd (lit 0x80) (eShl (lit 5) (var "i")))) ]
       , .sha256 (lit 0x00) (lit 0x5A0) (var "OUT")
       , .letv "wotsPk" (eAnd (ml (var "OUT")) (var "N_MASK"))
-        -- L203-222: Merkle auth path (9 levels)
+        -- L203-226: Merkle auth path (9 levels) + layer tail (currentNode := merkleNode; sigOff += 9*16)
       , .letv "authOff" (eAdd (var "countOff") (lit 4))
       , .letv "treeAdrs"
           (eOr (eShl (lit 224) (var "layer"))

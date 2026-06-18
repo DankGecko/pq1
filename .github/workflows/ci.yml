@@ -74,6 +74,15 @@ jobs:
         run: |
           python3 -m pip install --quiet semgrep
           semgrep --config .semgrep/pqsigner-invariants.yml --severity ERROR --error --metrics off
+      # A3.1 transcription-fidelity gate: the deployed verifier SOURCE
+      # (SPHINCsC10Asm.sol) and its Lean hand transcription (c10Program) must not
+      # drift. Positional constant cross-check (per `-- L<n>` anchors) + global set
+      # equality + statement-kind histogram. Pure Python, no Lean toolchain needed —
+      # this is the ONE A3.1 residual the kernel proof `execC10Asm_eq` cannot see (it
+      # relates c10Program<->spec, never c10Program<->.sol). See
+      # contracts/verification/docs/A3_1_ADVERSARIAL_REVIEW_2026-06-18.md.
+      - name: A3.1 c10Program <-> SPHINCsC10Asm.sol transcription lint
+        run: make -C contracts/verification verify-transcription
 
   prod-config-gate:
     name: Production feature-set gate (MED-2)

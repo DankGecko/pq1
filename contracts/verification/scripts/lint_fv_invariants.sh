@@ -287,6 +287,11 @@ COLLAPSED_DUMP="$(printf '%s\n' "${DUMP_OUT}" | awk '
 ')"
 
 # (c.1) Gap-3 keccak axiom must be in the offchain closure.
+# NOTE (2026-06-18 review): this is a SUBSET (presence-only) check — it confirms
+# keccak_sha256_cross_separation is PRESENT but does NOT flag an unexpected EXTRA
+# axiom in the offchain closure, the same subset-only weakness (c.2) fixes for
+# theft_free below. Tightening c.1 to an exact-set compare is a tracked follow-up
+# (work-todo FV-frontier H-2 sibling); the kernel `#print axioms` remains the backstop.
 OFFCHAIN_LINE="$(printf '%s\n' "${COLLAPSED_DUMP}" \
   | { grep 'offchain_nested_disjoint_from_userop_digest' || true; })"
 
@@ -349,7 +354,51 @@ else
     err "deleted). Reconcile the model + update THEFT_EXPECTED if intended."
     C_EXIT=1
   else
-    printf '    PASS (c.2) — theft_free closure = expected A1/A2/A3.1/A4/A5 + kernel triple\n'
+    # (c.2-exact) EXACT-set, not subset: the closure must contain NO axiom beyond
+    # the expected set. The MISSING loop above is subset-only; without this, a
+    # NEWLY-ADDED content-bearing axiom (or one whose TYPE was flipped false→true)
+    # entering theft_free's closure passes SILENTLY — `#print axioms` shows NAMES,
+    # not TYPES, so a type flip is invisible and an addition was previously caught
+    # only by a human reading the dump. (2026-06-18 adversarial-review finding H-2.)
+    # Parse the ACTUAL bracketed axiom list (everything between `axioms: [` and the
+    # closing `]`) and check EVERY token — namespace-AGNOSTIC, so a new axiom in ANY
+    # namespace (not only `SphincsCVerify.*` or the kernel names we happen to know) is
+    # caught. A grep for known prefixes would silently miss a `Foo.bar` axiom.
+    THEFT_BRACKET="$(printf '%s\n' "${THEFT_LINE}" \
+      | sed -n 's/.*axioms:[[:space:]]*\[\(.*\)\].*/\1/p')"
+    FOUND_AXII=""
+    if [ -z "${THEFT_BRACKET//[[:space:]]/}" ]; then
+      err "(c.2) FAIL: could not parse the axiom list out of theft_free's closure line"
+      err "    (expected '... depends on axioms: [ ... ]'). Got: ${THEFT_LINE}"
+      C_EXIT=1
+    else
+      FOUND_AXII="$(printf '%s\n' "${THEFT_BRACKET}" | tr ',' '\n' \
+        | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | { grep -v '^$' || true; } | sort -u)"
+    fi
+    EXTRA=""
+    while IFS= read -r ax; do
+      [ -z "${ax//[[:space:]]/}" ] && continue
+      found=0
+      for a in "${THEFT_EXPECTED[@]}" "${THEFT_KERNEL[@]}"; do
+        if [ "${a}" = "${ax}" ]; then found=1; break; fi
+      done
+      [ "${found}" -eq 0 ] && EXTRA="${EXTRA} ${ax}"
+    done <<< "${FOUND_AXII}"
+    if [ -n "${EXTRA//[[:space:]]/}" ]; then
+      err ""
+      err "(c) FAIL: theft_free closure has UNEXPECTED axiom(s) beyond the expected set:"
+      printf '      + %s\n' ${EXTRA} >&2
+      err "    Actual closure line:"
+      err "      ${THEFT_LINE}"
+      err ""
+      err "The trust base GREW: a new content-bearing axiom entered theft_free's"
+      err "closure, or one was flipped false->true (\`#print axioms\` shows NAMES not"
+      err "TYPES, so a type flip is invisible here — confirm by hand). If intended,"
+      err "add it to THEFT_EXPECTED with a justification; otherwise it is a regression."
+      C_EXIT=1
+    else
+      printf '    PASS (c.2) — theft_free closure = EXACTLY expected A1/A2/A3.1/A4/A5 + kernel triple (no missing, no extra)\n'
+    fi
   fi
 fi
 

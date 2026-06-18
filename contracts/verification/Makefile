@@ -16,9 +16,10 @@
 LEAN_DIR := lean
 LAKE     ?= $(shell command -v lake 2>/dev/null || echo $$HOME/.elan/bin/lake)
 
-.PHONY: verify verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk verify-interp verify-storage-mutators verify-fv-lints verify-lean4checker verify-kontrol verify-halmos
+.PHONY: verify verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk verify-interp verify-transcription verify-storage-mutators verify-fv-lints verify-lean4checker verify-kontrol verify-halmos
 
 verify: verify-build
+	@python3 scripts/check_c10_transcription.py
 	@cd $(LEAN_DIR) && $(LAKE) exe verify-test-vectors
 	@cd $(LEAN_DIR) && $(LAKE) exe verify-mutant-corpus
 
@@ -97,6 +98,20 @@ endif
 # docs/A3_1_CLOSURE_PATH.md §8). HARD CHECK (non-zero exit on any mismatch).
 verify-interp:
 	@cd $(LEAN_DIR) && $(LAKE) exe verify-interp
+
+# A3.1 transcription-fidelity lint (POSITIONAL). Cross-checks the hand transcription
+# c10Program (lean/SphincsCVerify/Interpreter/C10Program.lean) against the deployed
+# verifier SOURCE (../smart-wallet/src/verifiers/SPHINCsC10Asm.sol) — the single
+# residual the kernel proof `execC10Asm_eq` cannot see (it relates c10Program<->spec,
+# never c10Program<->.sol). Three checks: (A) POSITIONAL constant cross-check per the
+# `-- L<n>` anchors (catches a constant in the WRONG fragment — a cross-fragment swap —
+# which a flat/global check misses); (B) global constant-set equality; (C) statement-kind
+# histogram. Pure source lint, no lake build. A REGRESSION GATE, not a proof: intra-fragment
+# structural fidelity stays covered by `verify-interp`'s 396-vector corpus + `execC10Asm_eq`.
+# Negative-controls (a mutated constant; a cross-fragment swap) verified to FAIL it.
+# See docs/A3_1_ADVERSARIAL_REVIEW_2026-06-18.md.
+verify-transcription:
+	@python3 scripts/check_c10_transcription.py
 
 # NIST CAVP SHA-256 conformance: regenerate the embedded vector module from
 # the official byte-oriented .rsp suite (cavp/ — idempotent) and replay ALL

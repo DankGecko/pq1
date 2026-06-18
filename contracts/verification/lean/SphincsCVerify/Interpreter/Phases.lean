@@ -2105,9 +2105,23 @@ This is the *guard* the task demands: it does not re-prove a shape, it **applies
 `_dischargeable` guards, `H_idx` by computation. If any hypothesis ever reverts to the
 old *unsatisfiable* unbounded form, the corresponding `_dischargeable` term stops
 typechecking and THIS theorem fails to compile — exactly the regression that fences
-out re-introducing a vacuous hypothesis. -/
+out re-introducing a vacuous hypothesis.
+
+CONTENT-BEARING form (2026-06-18 review H-1): the conclusion is no longer `True`; it
+EXHIBITS a witness `vm0` for which `fors_tree_body`'s full refinement conclusion holds
+(a real claim about `forsTreeBody`'s execution, which a regressed body could not satisfy
+— unlike the prior `: True := by … trivial` shape that `()` always inhabits). -/
 private theorem fors_tree_body_nonvacuous (sig : ByteVec Spec.SignatureLen)
-    (seed : ByteVec 32) : True := by
+    (seed : ByteVec 32) :
+    ∃ (vm0 : VM),
+      (execList c10Oracle sig forsTreeBody vm0).2 = none
+      ∧ (∀ k, k < 32 →
+          (execList c10Oracle sig forsTreeBody vm0).1.mem (0x80 + 32 * 0 + k)
+            = (ByteVec.pad16 (Spec.Fors.reconstructRoot seed (0 : UInt64) (UInt32.ofNat 0)
+                (UInt32.ofNat 0) (ByteVec.loadValue16 sig (16 + 16 * 0))
+                ((Spec.Signature.deserialise sig).fors.authPaths.getD 0 #[]))).data.getD k 0)
+      ∧ (∀ i, i < 32 → (execList c10Oracle sig forsTreeBody vm0).1.mem (0 + i)
+            = seed.data.getD i 0) := by
   -- Concrete climb-entry env: every `fors_tree_body` env-precond var bound, dVal := 0.
   let env0 : VarEnv :=
     setVar (setVar (setVar (setVar (setVar (setVar (setVar (fun _ => 0)
@@ -2121,7 +2135,7 @@ private theorem fors_tree_body_nonvacuous (sig : ByteVec Spec.SignatureLen)
     decide
   -- Apply fors_tree_body; every hypothesis discharged. The mere fact that this
   -- term elaborates is the non-vacuity certificate.
-  have _inst := fors_tree_body sig vm0 seed (0 : UInt64) 0 (UInt32.ofNat 0)
+  have hfors := fors_tree_body sig vm0 seed (0 : UInt64) 0 (UInt32.ofNat 0)
     ((Spec.Signature.deserialise sig).fors.authPaths.getD 0 #[])
     (by decide)                                   -- ht : 0 < 12
     (by show env0 "htIdx" = (0 : UInt64).toNat; simp [env0, setVar])                -- hht
@@ -2140,7 +2154,7 @@ private theorem fors_tree_body_nonvacuous (sig : ByteVec Spec.SignatureLen)
     hidx0                                                                           -- H_idx
     (fun h hh p hp => H_adrs_dischargeable (0 : UInt64) 0 (by decide) h hh p hp)    -- H_adrs
     (fun h hh => H_sib_dischargeable sig 0 (by decide) h hh)                        -- H_sib
-  trivial
+  exact ⟨vm0, hfors⟩
 
 /-! ## FORS phase: the K-1 normal-tree i-loop, the last tree, and root compression
 
@@ -5511,10 +5525,23 @@ set_option maxRecDepth 8000 in
     is dischargeable with a concrete witness — `sigma.chains := Array.ofFn (loadValue16 …)`
     (size = L = 43, so `chainsLen` holds; the dependent getElem matches the calldata load) —
     and every env precondition is satisfiable (a concrete `env0`/`vm0`). Mirrors
-    `fors_tree_body_nonvacuous`: the mere elaboration of `wots_pkfromsig` applied to these
-    witnesses is the certificate (no `∀`-over-Nat hypothesis is left unsatisfiable). -/
+    `fors_tree_body_nonvacuous`.
+
+    CONTENT-BEARING form (2026-06-18 review H-1): the conclusion is no longer `True`. It
+    EXHIBITS witnesses `(sigma, vm0)` for which `wots_pkfromsig`'s full refinement conclusion
+    HOLDS — a real claim about `wotsBody`'s execution that a regressed/garbage body could not
+    satisfy (the prior `: True := by … trivial` shape would survive such a regression because
+    `()` always inhabits `True`). So the TYPE itself now carries the non-vacuity. -/
 private theorem wots_pkfromsig_nonvacuous (sig : ByteVec Spec.SignatureLen) (seed : ByteVec 32) :
-    True := by
+    ∃ (sigma : Spec.Wots.Sigma) (vm0 : VM),
+      (if SphincsCVerify.Util.digitSum (SphincsCVerify.Util.extractDigits
+            (Spec.wotsDigest seed (Spec.Adrs.wots 0 0 0) (ByteVec.pad16 (ByteVec.zero 16)) sigma.count))
+            ≠ Spec.TargetSum then
+          (execList c10Oracle sig wotsBody vm0).2 = some Halt.reverted
+        else
+          (execList c10Oracle sig wotsBody vm0).2 = none
+          ∧ ∃ wpk, Spec.Wots.pkFromSig seed 0 0 0 (ByteVec.zero 16) sigma = some wpk
+              ∧ (execList c10Oracle sig wotsBody vm0).1.env "wotsPk" = wordOf (ByteVec.pad16 wpk)) := by
   let sigma : Spec.Wots.Sigma :=
     { chains := Array.ofFn (n := 43) (fun i : Fin 43 => ByteVec.loadValue16 sig (0 + 16 * i.val))
       chainsLen := by rw [Array.size_ofFn]; rfl
@@ -5535,7 +5562,7 @@ private theorem wots_pkfromsig_nonvacuous (sig : ByteVec Spec.SignatureLen) (see
       "OUT" 0x600)
       "digitSum" 0
   let vm0 : VM := { mem := memOfBytes seed, env := env0 }
-  have _inst := wots_pkfromsig sig vm0 seed 0 0 0 (ByteVec.zero 16) sigma 0 (by decide)
+  have hwots := wots_pkfromsig sig vm0 seed 0 0 0 (ByteVec.zero 16) sigma 0 (by decide)
     (fun i h => by
       show (Array.ofFn (n := 43) (fun j : Fin 43 => ByteVec.loadValue16 sig (0 + 16 * j.val)))[i] = _
       rw [Array.getElem_ofFn])
@@ -5550,7 +5577,7 @@ private theorem wots_pkfromsig_nonvacuous (sig : ByteVec Spec.SignatureLen) (see
     (by show env0 "idxLeaf" = (0 : UInt32).toNat; simp [env0, setVar])
     (by show env0 "N_MASK" = NMASK; simp [env0, setVar])
     (by show env0 "OUT" = 0x600; simp [env0, setVar])
-  trivial
+  exact ⟨sigma, vm0, hwots⟩
 
 /-! ### `wotsBody` seed-window preservation (for the hypertree Merkle climb)
 

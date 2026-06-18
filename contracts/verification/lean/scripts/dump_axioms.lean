@@ -184,6 +184,16 @@ import SphincsCVerify
 #print axioms SphincsCVerify.Interpreter.C10.ht_climb
 #print axioms SphincsCVerify.Interpreter.C10.forIn_yield_eq_foldl_pointwise
 #print axioms SphincsCVerify.Interpreter.C10.verifyHypertree_eq_foldl
+
+-- A3.1 GRAND COMPOSITION + faithful-form bridge composite (directly gated per the
+-- 2026-06-18 adversarial review, H-3). `execC10Asm_eq` is the kernel keystone — the
+-- transcribed deployed Yul equals the declarative spec modulo the two N-mask guards;
+-- it MUST stay kernel-only {propext, Classical.choice, Quot.sound} (a sorry/native_decide
+-- regression here was previously caught only by the full rebuild). `deployed_verifier_refines_spec`
+-- composes A3.1 (`solidityVerifier_compiles_correctly`) with `execC10Asm_eq`; its closure
+-- must be exactly {kernel triple, solidityVerifier_compiles_correctly}.
+#print axioms SphincsCVerify.Interpreter.C10.execC10Asm_eq
+#print axioms SphincsCVerify.Bridge.deployed_verifier_refines_spec
 -- A3.1 generic env-frame (Interpreter/EnvFrame.lean): a var assigned nowhere is preserved.
 #print axioms SphincsCVerify.Interpreter.execStmt_env_frame
 #print axioms SphincsCVerify.Interpreter.execList_env_frame

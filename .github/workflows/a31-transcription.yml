@@ -1,0 +1,44 @@
+name: A3.1 transcription lint
+
+# Dedicated gate for the A3.1 hand-transcription residual: the deployed verifier
+# SOURCE (SPHINCsC10Asm.sol) and its Lean transcription (c10Program) must not drift.
+# This MUST run whenever EITHER side changes. The main `ci.yml` workflow `paths-ignore`s
+# `**/*.lean` and `contracts/verification/**`, so a PR that edits ONLY C10Program.lean
+# (the transcription side — the likelier drift) would skip ci.yml entirely. This
+# workflow uses a POSITIVE `paths:` filter so the lint fires exactly when transcription
+# drift is possible. Pure Python (no Lean/Foundry toolchain). See
+# contracts/verification/docs/A3_1_ADVERSARIAL_REVIEW_2026-06-18.md.
+#
+# Scope reminder: this lint is a REGRESSION GATE, not a proof. It is the ONLY
+# CI-enforced piece of the A3.1 Lean track (the `lake`/`elan` verify-* suite is run
+# locally / in review, not in CI). Intra-fragment structural fidelity stays covered by
+# the local `verify-interp` 396-vector corpus + the kernel `execC10Asm_eq`.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'contracts/smart-wallet/src/verifiers/SPHINCsC10Asm.sol'
+      - 'contracts/verification/lean/SphincsCVerify/Interpreter/C10Program.lean'
+      - 'contracts/verification/scripts/check_c10_transcription.py'
+      - 'contracts/verification/Makefile'
+      - '.github/workflows/a31-transcription.yml'
+  pull_request:
+    paths:
+      - 'contracts/smart-wallet/src/verifiers/SPHINCsC10Asm.sol'
+      - 'contracts/verification/lean/SphincsCVerify/Interpreter/C10Program.lean'
+      - 'contracts/verification/scripts/check_c10_transcription.py'
+      - 'contracts/verification/Makefile'
+      - '.github/workflows/a31-transcription.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  transcription-lint:
+    name: c10Program <-> SPHINCsC10Asm.sol
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: positional transcription-fidelity lint
+        run: make -C contracts/verification verify-transcription
