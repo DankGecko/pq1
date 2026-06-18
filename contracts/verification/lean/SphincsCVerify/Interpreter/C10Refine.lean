@@ -153,6 +153,26 @@ theorem hmsg_seed_mem (sig : ByteVec Spec.SignatureLen) (vm : VM)
       mstore32_frame _ 32 _ (0 + i) (by omega),
       mstore32_get _ 0 _ i hi]
 
+/-- `seed` is set by `hmsgFragment`'s head `letv` to `pkSeed`, never reassigned. -/
+theorem hmsg_post_seed (sig : ByteVec Spec.SignatureLen) (vm : VM) :
+    (execList c10Oracle sig hmsgFragment vm).1.env "seed" = vm.env "pkSeed" := by
+  unfold hmsgFragment
+  rw [execList]
+  simp only [execStmt]
+  refine Eq.trans (execList_env_frame c10Oracle sig _ "seed" _ ?_) ?_
+  · decide
+  · simp only [eval, setVar, ite_true]
+
+/-- `root` is set by `hmsgFragment`'s second `letv` to `pkRoot`, never reassigned. -/
+theorem hmsg_post_root (sig : ByteVec Spec.SignatureLen) (vm : VM) :
+    (execList c10Oracle sig hmsgFragment vm).1.env "root" = vm.env "pkRoot" := by
+  unfold hmsgFragment
+  rw [execList]; simp only [execStmt]
+  rw [execList]; simp only [execStmt]
+  refine Eq.trans (execList_env_frame c10Oracle sig _ "root" _ ?_) ?_
+  · decide
+  · simp only [eval, setVar, ite_true, String.reduceEq, ite_false]
+
 /-! ## FORS-phase post-conditions
 
 `fors_phase` exposes only `forsPk`/revert; the hypertree phase also needs the
@@ -248,10 +268,10 @@ theorem fors_post_sigBase (sig : ByteVec Spec.SignatureLen) (vm : VM)
 theorem verifyYulModel_unfold (pkSeed pkRoot message : ByteVec 32)
     (sig : ByteVec Spec.SignatureLen) :
     verifyYulModel pkSeed pkRoot message sig
-      = Spec.Hypertree.verifyWithDigest (ByteVec.pad16 (pkSeed.take 16 (by decide)))
-          (pkRoot.take 16 (by decide))
-          (Spec.hMsg (ByteVec.pad16 (pkSeed.take 16 (by decide)))
-            (ByteVec.pad16 (pkRoot.take 16 (by decide)))
+      = Spec.Hypertree.verifyWithDigest (ByteVec.pad16 (ByteVec.truncate16 pkSeed))
+          (ByteVec.truncate16 pkRoot)
+          (Spec.hMsg (ByteVec.pad16 (ByteVec.truncate16 pkSeed))
+            (ByteVec.pad16 (ByteVec.truncate16 pkRoot))
             (ByteVec.pad16 (Spec.Signature.deserialise sig).r) message)
           (Spec.Signature.deserialise sig) := rfl
 
@@ -329,6 +349,29 @@ theorem execList_pair {n : Nat} (sha : List UInt8 → Spec.ByteVec 32) (sig : Sp
     (h2 : (execList sha sig stmts vm).2 = none) :
     execList sha sig stmts vm = (v, none) := by rw [← h1, ← h2]
 
+/-- A halting head statement halts the whole list (with the same halt outcome). -/
+theorem execList_cons_halt {n : Nat} (sha : List UInt8 → Spec.ByteVec 32) (sig : Spec.ByteVec n)
+    (s : Stmt) (rest : List Stmt) (vm : VM) (hh : Halt)
+    (h : (execStmt sha sig s vm).2 = some hh) :
+    (execList sha sig (s :: rest) vm).2 = some hh := by
+  rw [execList]
+  rcases hst : execStmt sha sig s vm with ⟨vm', o⟩
+  rw [hst] at h
+  simp only at h
+  subst h
+  rfl
+
+/-- Phase composition, halt arm via `.2`: a halting `xs` halts `xs ++ ys`. -/
+theorem execList_append_halt2 {n : Nat} (sha : List UInt8 → Spec.ByteVec 32) (sig : Spec.ByteVec n)
+    (xs ys : List Stmt) (vm : VM) (hh : Halt) (h : (execList sha sig xs vm).2 = some hh) :
+    (execList sha sig (xs ++ ys) vm).2 = some hh := by
+  rw [execList_append]
+  rcases hp : execList sha sig xs vm with ⟨vm', o⟩
+  rw [hp] at h
+  simp only at h
+  subst h
+  rfl
+
 /-! ## Prefix guards
 
 `c10Program`'s prefix is two scratch `letv`s + three guards: a (dead) sig-length
@@ -360,5 +403,212 @@ theorem nmask_guard_fail (sig : ByteVec Spec.SignatureLen) (v : String) (key : B
   unfold execStmt
   rw [if_pos (by simp [eval, hkey, hN, of_decide_eq_false hfail])]
   simp [execList, execStmt, eval, mload32_mstore32_self]
+
+/-! ## The grand composition
+
+`execC10Asm` (the transcribed deployed Yul) equals
+`nMaskedB pkSeed && nMaskedB pkRoot && verifyYulModel` — the deployed verifier
+computes exactly the declarative spec `Spec.Signature.verify`, modulo the two
+leading N-mask guards. -/
+set_option maxHeartbeats 2000000 in
+theorem execC10Asm_eq (pkSeed pkRoot message : ByteVec 32) (sig : ByteVec Spec.SignatureLen) :
+    execC10Asm pkSeed pkRoot message sig
+      = (nMaskedB pkSeed && nMaskedB pkRoot && verifyYulModel pkSeed pkRoot message sig) := by
+  dsimp only [execC10Asm, execFrom]
+  rw [c10Program_decompose]
+  simp only [List.cons_append, List.nil_append]
+  -- Peel the two scratch letvs (N_MASK, OUT); name the resulting VM `v2`.
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+  generalize hv2def : (execStmt c10Oracle sig (.letv "OUT" (.lit 0x600))
+    (execStmt c10Oracle sig
+      (.letv "N_MASK" (.lit 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF00000000000000000000000000000000))
+      { mem := fun _ => 0,
+        env := setVar (setVar (setVar (fun _ => 0) "pkSeed" (wordOf pkSeed))
+          "pkRoot" (wordOf pkRoot)) "message" (wordOf message) }).1).1 = v2
+  have hv2ps : v2.env "pkSeed" = wordOf pkSeed := by
+    rw [← hv2def]; simp only [execStmt, eval, setVar, String.reduceEq, ite_true, ite_false]
+  have hv2pr : v2.env "pkRoot" = wordOf pkRoot := by
+    rw [← hv2def]; simp only [execStmt, eval, setVar, String.reduceEq, ite_true, ite_false]
+  have hv2msg : v2.env "message" = wordOf message := by
+    rw [← hv2def]; simp only [execStmt, eval, setVar, String.reduceEq, ite_true, ite_false]
+  have hv2N : v2.env "N_MASK" = NMASK := by
+    rw [← hv2def]; simp only [execStmt, eval, setVar, String.reduceEq, ite_true]; rfl
+  have hv2OUT : v2.env "OUT" = 0x600 := by
+    rw [← hv2def]; simp only [execStmt, eval, setVar, ite_true]
+  -- Peel the sig-length guard (always passes).
+  rw [execList_cons_none c10Oracle sig _ _ _ (by rw [sigLen_guard_pass]), sigLen_guard_pass]
+  -- Case on the pkSeed N-mask guard.
+  cases hS : nMaskedB pkSeed with
+  | false =>
+    -- pkSeed NOT N-masked: the guard returns 0 → verdict false; RHS = false && … = false.
+    rw [execList_cons_halt c10Oracle sig _ _ _ _
+        (nmask_guard_fail sig "pkSeed" pkSeed v2 hv2ps hv2N hS)]
+    rfl
+  | true =>
+    -- pkSeed passes; peel its guard, then case on pkRoot.
+    rw [execList_cons_none c10Oracle sig _ _ _
+          (by rw [nmask_guard_pass sig "pkSeed" pkSeed v2 hv2ps hv2N hS]),
+        nmask_guard_pass sig "pkSeed" pkSeed v2 hv2ps hv2N hS]
+    cases hR : nMaskedB pkRoot with
+    | false =>
+      -- pkRoot NOT N-masked: the guard returns 0 → false; RHS = true && false && … = false.
+      rw [execList_cons_halt c10Oracle sig _ _ _ _
+          (nmask_guard_fail sig "pkRoot" pkRoot v2 hv2pr hv2N hR)]
+      rfl
+    | true =>
+      -- BOTH N-MASKED: the two guards pass; run hmsg → FORS → hypertree → compare.
+      rw [execList_cons_none c10Oracle sig _ _ _
+            (by rw [nmask_guard_pass sig "pkRoot" pkRoot v2 hv2pr hv2N hR]),
+          nmask_guard_pass sig "pkRoot" pkRoot v2 hv2pr hv2N hR]
+      -- Now: execList (hmsgFragment ++ (forsPhaseFragment ++ htTail)) v2 = RHS.
+      have hSshape : pkSeed = ByteVec.pad16 (ByteVec.truncate16 pkSeed) := nMaskedB_shape hS
+      have hRshape : pkRoot = ByteVec.pad16 (ByteVec.truncate16 pkRoot) := nMaskedB_shape hR
+      -- The digest the spec & the FORS/HT phases share.
+      let DIG : ByteVec 32 := Spec.hMsg pkSeed pkRoot (ByteVec.pad16 (ByteVec.loadValue16 sig 0)) message
+      -- === hmsg phase ===
+      obtain ⟨hHnone, hHdig⟩ := hmsg_digest sig v2 pkSeed pkRoot message hSshape hRshape
+        hv2ps hv2pr hv2msg hv2N hv2OUT
+      obtain ⟨vmH, hvmH⟩ : ∃ v, (execList c10Oracle sig hmsgFragment v2).1 = v := ⟨_, rfl⟩
+      rw [execList_append_none c10Oracle sig hmsgFragment _ v2 vmH
+        (execList_pair _ _ _ _ _ hvmH hHnone)]
+      rw [hvmH] at hHdig
+      have hHseed : vmH.env "seed" = wordOf pkSeed := by rw [← hvmH, hmsg_post_seed]; exact hv2ps
+      have hHroot : vmH.env "root" = wordOf pkRoot := by rw [← hvmH, hmsg_post_root]; exact hv2pr
+      have hHN : vmH.env "N_MASK" = NMASK := by
+        rw [← hvmH]; exact (execList_env_frame c10Oracle sig hmsgFragment "N_MASK" v2 (by decide)).trans hv2N
+      have hHOUT : vmH.env "OUT" = 0x600 := by
+        rw [← hvmH]; exact (execList_env_frame c10Oracle sig hmsgFragment "OUT" v2 (by decide)).trans hv2OUT
+      have hHmem : ∀ i, i < 32 → vmH.mem (0 + i) = pkSeed.data.getD i 0 := by
+        intro i hi; rw [← hvmH, hmsg_seed_mem sig v2 hv2OUT i hi, hv2ps]
+        exact beByte_wordOf_getD pkSeed i hi
+      -- === reduce RHS to verifyWithDigest pkSeed (truncate16 pkRoot) DIG (deserialise sig) ===
+      simp only [Bool.true_and]
+      rw [verifyYulModel_unfold, ← hSshape, ← hRshape,
+          show (Spec.Signature.deserialise sig).r = ByteVec.loadValue16 sig 0 from rfl]
+      show _ = Spec.Hypertree.verifyWithDigest pkSeed (ByteVec.truncate16 pkRoot) DIG
+        (Spec.Signature.deserialise sig)
+      unfold Spec.Hypertree.verifyWithDigest
+      -- === FORS phase ===
+      have hFors := fors_phase sig vmH pkSeed DIG hHdig hHseed hHN hHOUT hHmem
+      by_cases hidx : (SphincsCVerify.Util.extractForsIndices DIG).getD (Spec.K - 1) 0 ≠ 0
+      · -- FORS forced-zero index nonzero: reverts → false; spec returns false too.
+        rw [if_pos hidx] at hFors
+        rw [execList_append_halt2 c10Oracle sig forsPhaseFragment _ vmH _ hFors,
+            if_pos hidx]
+      · -- FORS passes: forsPk = r.
+        rw [if_neg hidx] at hFors
+        obtain ⟨hFnone, r, hrec, hforsPk⟩ := hFors
+        obtain ⟨vmF, hvmF⟩ : ∃ v, (execList c10Oracle sig forsPhaseFragment vmH).1 = v := ⟨_, rfl⟩
+        rw [execList_append_none c10Oracle sig forsPhaseFragment _ vmH vmF
+          (execList_pair _ _ _ _ _ hvmF hFnone), if_neg hidx]
+        simp only [hrec]
+        rw [hvmF] at hforsPk
+        -- vmF facts.
+        have hFforsPk : vmF.env "forsPk" = wordOf (ByteVec.pad16 r) := hforsPk
+        have hFht : vmF.env "htIdx" = SphincsCVerify.Util.extractHtIndex DIG := by
+          rw [← hvmF]; exact fors_post_htIdx sig vmH DIG hHdig
+        have hFsb : vmF.env "sigBase" = 0 := by
+          rw [← hvmF]; exact fors_post_sigBase sig vmH hFnone
+        have hFseed : vmF.env "seed" = wordOf pkSeed := by
+          rw [← hvmF]; exact (fors_post_const sig vmH "seed" (by decide)).trans hHseed
+        have hFroot : vmF.env "root" = wordOf pkRoot := by
+          rw [← hvmF]; exact (fors_post_const sig vmH "root" (by decide)).trans hHroot
+        have hFN : vmF.env "N_MASK" = NMASK := by
+          rw [← hvmF]; exact (fors_post_const sig vmH "N_MASK" (by decide)).trans hHN
+        have hFOUT : vmF.env "OUT" = 0x600 := by
+          rw [← hvmF]; exact (fors_post_const sig vmH "OUT" (by decide)).trans hHOUT
+        have hFmem : ∀ i, i < 32 → vmF.mem (0 + i) = pkSeed.data.getD i 0 := by
+          intro i hi; rw [← hvmF, forsPhaseFragment_mem_low sig vmH hHOUT (0 + i) (by omega)]
+          exact hHmem i hi
+        -- === hypertree setup: peel the 3 letvs (currentNode, idxTree, sigOff). ===
+        rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+        rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+        rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+        generalize hvmS : (execStmt c10Oracle sig (.letv "sigOff" (.lit 2336))
+          (execStmt c10Oracle sig (.letv "idxTree" (.var "htIdx"))
+            (execStmt c10Oracle sig (.letv "currentNode" (.var "forsPk")) vmF).1).1).1 = vmS
+        have hSidx : vmS.env "idxTree" = SphincsCVerify.Util.extractHtIndex DIG := by
+          rw [← hvmS]; simp only [execStmt, eval, setVar, String.reduceEq, ite_true, ite_false]
+          exact hFht
+        have hSso : vmS.env "sigOff" = 2336 := by
+          rw [← hvmS]; simp only [execStmt, eval, setVar, ite_true]
+        have hScn : vmS.env "currentNode" = wordOf (ByteVec.pad16 r) := by
+          rw [← hvmS]; simp only [execStmt, eval, setVar, String.reduceEq, ite_true, ite_false]
+          exact hFforsPk
+        have hSseed : vmS.env "seed" = wordOf pkSeed := by
+          rw [← hvmS]; simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hFseed
+        have hSsb : vmS.env "sigBase" = 0 := by
+          rw [← hvmS]; simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hFsb
+        have hSN : vmS.env "N_MASK" = NMASK := by
+          rw [← hvmS]; simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hFN
+        have hSOUT : vmS.env "OUT" = 0x600 := by
+          rw [← hvmS]; simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hFOUT
+        have hSroot : vmS.env "root" = wordOf pkRoot := by
+          rw [← hvmS]; simp only [execStmt, eval, setVar, String.reduceEq, ite_false]; exact hFroot
+        have hSmem : ∀ i, i < 32 → vmS.mem (0 + i) = pkSeed.data.getD i 0 := by
+          intro i hi; rw [← hvmS]; simp only [execStmt, eval, setVar]; exact hFmem i hi
+        have hidxbnd : SphincsCVerify.Util.extractHtIndex DIG < 2 ^ 64 :=
+          Nat.lt_of_lt_of_le (SphincsCVerify.Util.extractHtIndex_lt DIG) (by decide)
+        -- count bridge for Hbind.
+        have hcount : ∀ k, k < 2 → calldataload sig (2336 + 836 * k + 688) >>> 224
+            = wordOf (ByteVec.u32ToB32 (((Spec.Signature.deserialise sig).layers.getD k
+                Spec.Hypertree.defaultLayerSig).wots).count) := by
+          intro k hk
+          rw [count_bridge, deserialise_layer sig k hk]
+          have hoff : 2336 + 836 * k + 688
+              = Spec.SigForsTotal + k * Spec.SigHtLayer + Spec.L * Spec.N := by
+            rw [Spec.sigForsTotal_eq_2336, Spec.sigHtLayer_eq_836, show Spec.L = 43 from rfl,
+              show Spec.N = 16 from rfl]; omega
+          rw [hoff]
+        have hHT := verifyHypertree_refine sig vmS pkSeed r (SphincsCVerify.Util.extractHtIndex DIG)
+          (Spec.Signature.deserialise sig).layers hidxbnd hSidx hSso hScn hSseed hSsb hSN hSOUT hSmem
+          (htLayers_satisfy_Hbind sig hcount)
+        -- The layer loop's `forRange` statement as an `execFor` (count `2`).
+        have hForStmt : execStmt c10Oracle sig (.forRange "layer" (.lit 2) htLayerBody) vmS
+            = execFor c10Oracle sig "layer" htLayerBody 2 0 vmS := by simp only [execStmt, eval]
+        -- === hypertree loop ===
+        by_cases hVH : Spec.Hypertree.verifyHypertree pkSeed r
+            (SphincsCVerify.Util.extractHtIndex DIG) (Spec.Signature.deserialise sig).layers = none
+        · -- some layer reverts: loop reverts → false; spec verifyHypertree=none → false.
+          simp only [hVH]
+          obtain ⟨hHTrev, _⟩ := hHT
+          have hloop : (execStmt c10Oracle sig (.forRange "layer" (.lit 2) htLayerBody) vmS).2
+              = some Halt.reverted := by rw [hForStmt]; exact hHTrev hVH
+          rw [execList_cons_halt c10Oracle sig _ _ _ _ hloop]
+        · -- hypertree succeeds with finalNode.
+          obtain ⟨finalNode, hfn⟩ := Option.ne_none_iff_exists'.mp hVH
+          simp only [hfn]
+          obtain ⟨_, hHTpass⟩ := hHT
+          obtain ⟨hLnone, hLcn, hLseed, hLsb, hLN, hLOUT, hLmem⟩ := hHTpass finalNode hfn
+          -- the loop falls through; peel it and the final compare.
+          have hloopStmt : (execStmt c10Oracle sig (.forRange "layer" (.lit 2) htLayerBody) vmS).2
+              = none := by rw [hForStmt]; exact hLnone
+          rw [execList_cons_none c10Oracle sig _ _ _ hloopStmt]
+          -- vmL = post-loop; env currentNode = wordOf (pad16 finalNode); root preserved.
+          obtain ⟨vmL, hvmL⟩ : ∃ v, (execStmt c10Oracle sig
+            (.forRange "layer" (.lit 2) htLayerBody) vmS).1 = v := ⟨_, rfl⟩
+          rw [hvmL]
+          have hLcn' : vmL.env "currentNode" = wordOf (ByteVec.pad16 finalNode) := by
+            rw [← hvmL, hForStmt]; exact hLcn
+          have hLroot : vmL.env "root" = wordOf (ByteVec.pad16 (ByteVec.truncate16 pkRoot)) := by
+            rw [← hvmL, hForStmt,
+              execFor_env_frame c10Oracle sig "layer" htLayerBody "root" (by decide) (by decide) 2 0 vmS,
+              hSroot]
+            exact congrArg wordOf hRshape
+          -- peel valid-letv, mstore, ret.
+          rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+          rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
+          rw [execList]
+          simp only [execStmt, eval, setVar, String.reduceEq, ite_true, hLcn', hLroot,
+            mload32_mstore32_self]
+          -- LHS = decide ((if wordOf(pad16 finalNode) = wordOf(pad16 (truncate16 pkRoot)) then 1 else 0)
+          --   % 2^256 = 1) = decide (finalNode = truncate16 pkRoot)  [the spec's compare]
+          by_cases hcmp : finalNode = ByteVec.truncate16 pkRoot
+          · rw [if_pos (show wordOf (ByteVec.pad16 finalNode)
+              = wordOf (ByteVec.pad16 (ByteVec.truncate16 pkRoot)) from by rw [hcmp])]
+            simp [hcmp]
+          · rw [if_neg (fun h => hcmp (pad16_wordOf_inj h))]
+            simp [hcmp]
 
 end SphincsCVerify.Interpreter.C10
