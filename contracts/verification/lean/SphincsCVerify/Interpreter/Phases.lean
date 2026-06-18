@@ -5108,6 +5108,20 @@ private theorem pkFromSig_eq
   -- The `else` branch is `some (thMulti seed (wotsPk …) chainValues)`; rewrite wotsEndptList → chainValues.
   rw [wotsEndptList_eq_chainValues sig seed layer tree kp msgHash sigma wotsPtr hsig]
 
+/-- **`pkFromSig` converse.** When the digit-sum check FAILS, `pkFromSig` returns `none`.
+    The `if_pos`/none branch of `pkFromSig`'s def — the linchpin of the hypertree layer
+    revert↔`bad` case analysis (`verifyHypertree_refine` maps a layer's digit-sum revert to
+    `vhStep`'s `pkFromSig = none → bad`). Must live here, before the seal below. -/
+theorem pkFromSig_none
+    (seed : ByteVec 32) (layer : UInt32) (tree : UInt64) (kp : UInt32)
+    (msgHash : ByteVec 16) (sigma : Spec.Wots.Sigma)
+    (hgate : SphincsCVerify.Util.digitSum (SphincsCVerify.Util.extractDigits
+        (Spec.wotsDigest seed (Spec.Adrs.wots layer tree kp) (ByteVec.pad16 msgHash) sigma.count))
+        ≠ Spec.TargetSum) :
+    Spec.Wots.pkFromSig seed layer tree kp msgHash sigma = none := by
+  simp only [Spec.Wots.pkFromSig]
+  rw [if_pos hgate]
+
 -- Seal pkFromSig + the base-w digit decoders so the capstone composition below
 -- never whnf-reduces them: they unfold to 43-fold digit folds over the (opaque,
 -- sealed) WOTS digest, which blows the heartbeat budget. `pkFromSig_eq` above

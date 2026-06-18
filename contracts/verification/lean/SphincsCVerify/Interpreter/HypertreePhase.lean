@@ -927,4 +927,56 @@ theorem ht_layer_step
         rw [← hv14, ← hv13]
         simp only [execStmt, eval]; exact hv12mem i hi
 
+/-! ### The hypertree layer loop refinement — `verifyHypertree_refine`
+
+Drives `ht_layer_step` over the `D = 2` `forRange "layer"` loop = one
+`Spec.Hypertree.verifyHypertree`.  The two `_Hadrs`/`_Hsib` per-layer hypotheses of
+`ht_layer_step` are discharged here: `H_adrs` purely (the treeNode ADRS word, masked
+base + `wordOf_treeNode`), `H_sib`/`hsig`/`hcount` from the per-layer sig bindings the
+grand composition feeds from `deserialise`. -/
+
+/-- **`H_adrs` discharge** — the masked treeNode-base ADRS word equals
+    `wordOf (treeNode layer idxTree (h+1) (p/2))`.  The base `layer<<<224 |
+    idxTree<<<160 | 2<<<128` has bits only `≥ 128`, so `&&& MASK` (clear low 64) is the
+    identity; then `wordOf_treeNode` recombines.  (Treelike `H_leafAdrs_dischargeable`,
+    plus the in-place base mask the climb performs.) -/
+theorem treeNode_Hadrs (layer : UInt32) (idxTree : Nat) (hidx : idxTree < 2 ^ 64) :
+    ∀ h, h < Spec.SubtreeH → ∀ p, p < 2 ^ 32 →
+      ((layer.toNat <<< 224 ||| idxTree <<< 160 ||| 2 <<< 128)
+          &&& 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF0000000000000000)
+        ||| (((h + 1) % W) <<< 32 % W ||| p >>> 1)
+      = wordOf (Spec.Adrs.treeNode layer (UInt64.ofNat idxTree) (UInt32.ofNat (h + 1))
+          (UInt32.ofNat (p / 2))) := by
+  intro h hh p hp
+  have hh9 : h < 9 := hh
+  have hmaskid : (layer.toNat <<< 224 ||| idxTree <<< 160 ||| 2 <<< 128)
+      &&& 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF0000000000000000
+    = layer.toNat <<< 224 ||| idxTree <<< 160 ||| 2 <<< 128 := by
+    have hshl : ∀ (x kk nn : Nat), x < 2 ^ nn → x <<< kk < 2 ^ (nn + kk) := by
+      intro x kk nn hx; rw [Nat.shiftLeft_eq, Nat.pow_add]
+      exact (Nat.mul_lt_mul_right (Nat.two_pow_pos kk)).mpr hx
+    have hfactor : layer.toNat <<< 224 ||| idxTree <<< 160 ||| 2 <<< 128
+        = (layer.toNat <<< 160 ||| idxTree <<< 96 ||| 2 <<< 64) <<< 64 := by
+      rw [Nat.shiftLeft_or_distrib, Nat.shiftLeft_or_distrib,
+          ← Nat.shiftLeft_add, ← Nat.shiftLeft_add, ← Nat.shiftLeft_add]
+    have hM : layer.toNat <<< 160 ||| idxTree <<< 96 ||| 2 <<< 64 < 2 ^ 192 := by
+      refine Nat.or_lt_two_pow (Nat.or_lt_two_pow ?_ ?_) ?_
+      · exact hshl layer.toNat 160 32 layer.toNat_lt
+      · exact Nat.lt_trans (hshl idxTree 96 64 hidx) (Nat.pow_lt_pow_right (by decide) (by decide))
+      · exact Nat.lt_trans (hshl 2 64 2 (by decide)) (Nat.pow_lt_pow_right (by decide) (by decide))
+    rw [hfactor, show (0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF0000000000000000 : Nat)
+          = (2 ^ 192 - 1) <<< 64 from by decide,
+        ← Nat.shiftLeft_and_distrib, Nat.and_two_pow_sub_one_eq_mod, Nat.mod_eq_of_lt hM]
+  rw [hmaskid, wordOf_treeNode]
+  have hh1 : (h + 1) % W = h + 1 := Nat.mod_eq_of_lt (lt_W_of_lt (by omega))
+  have hh1s : (h + 1) <<< 32 % W = (h + 1) <<< 32 :=
+    Nat.mod_eq_of_lt (shl_lt_two_pow_256 (h + 1) 4 32 (by omega) (by decide))
+  have hp2 : p >>> 1 = p / 2 := by rw [Nat.shiftRight_eq_div_pow, Nat.pow_one]
+  rw [hh1, hh1s, hp2, UInt64.toNat_ofNat_of_lt' hidx,
+      UInt32.toNat_ofNat_of_lt' (show h + 1 < UInt32.size from
+        Nat.lt_of_lt_of_le (show h + 1 < 4096 by omega) (by decide)),
+      UInt32.toNat_ofNat_of_lt' (show p / 2 < UInt32.size from
+        Nat.lt_of_le_of_lt (Nat.div_le_self _ _) (Nat.lt_of_lt_of_le hp (by decide))),
+      (by decide : (UInt32.ofNat Spec.ADRS_TREE).toNat = 2), ← Nat.or_assoc]
+
 end SphincsCVerify.Interpreter.C10
