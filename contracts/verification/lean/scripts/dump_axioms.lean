@@ -184,3 +184,7 @@ import SphincsCVerify
 #print axioms SphincsCVerify.Interpreter.C10.ht_climb
 #print axioms SphincsCVerify.Interpreter.C10.forIn_yield_eq_foldl_pointwise
 #print axioms SphincsCVerify.Interpreter.C10.verifyHypertree_eq_foldl
+-- A3.1 generic env-frame (Interpreter/EnvFrame.lean): a var assigned nowhere is preserved.
+#print axioms SphincsCVerify.Interpreter.execStmt_env_frame
+#print axioms SphincsCVerify.Interpreter.execList_env_frame
+#print axioms SphincsCVerify.Interpreter.execFor_env_frame
