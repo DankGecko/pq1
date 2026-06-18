@@ -99,8 +99,9 @@ private theorem mload32_writeRegion_digest (mem : ByteMemory) (off : Nat) (dig :
 The R segment laid into memory is `(calldataload sig 0) &&& N_MASK`, whose
 big-endian bytes are `pad16 (loadValue16 sig 0)`'s bytes. -/
 
-/-- `pad16 v`'s `i`-th byte (`getD`) is `v`'s byte for `i < 16`, else `0`. -/
-private theorem pad16_data_getD (v : ByteVec 16) (i : Nat) :
+/-- `pad16 v`'s `i`-th byte (`getD`) is `v`'s byte for `i < 16`, else `0`.
+    De-privatized for the C10Refine grand-composition glue. -/
+theorem pad16_data_getD (v : ByteVec 16) (i : Nat) :
     (ByteVec.pad16 v).data.getD i 0 = if i < 16 then v.data.getD i 0 else 0 := by
   -- (pad16 v).data = v.data ++ (zero 16).data = v.data ++ Array.replicate 16 0
   have hdata : (ByteVec.pad16 v).data = v.data ++ Array.replicate 16 (0 : UInt8) := rfl
@@ -160,8 +161,9 @@ private theorem R_beByte_eq {m : Nat} (sig : ByteVec m) (i : Nat) (hi : i < 32) 
 `ones 32` segment. -/
 
 /-- `beByte (wordOf v) i = v.data.getD i 0` for `i < 32` (the `getD` phrasing
-    `holdsSegs` consumes). -/
-private theorem beByte_wordOf_getD (v : ByteVec 32) (i : Nat) (hi : i < 32) :
+    `holdsSegs` consumes). De-privatized for the C10Refine grand-composition
+    glue (`wordOf_inj`, the N-mask byte bridge). -/
+theorem beByte_wordOf_getD (v : ByteVec 32) (i : Nat) (hi : i < 32) :
     beByte (wordOf v) i = v.data.getD i 0 := by
   rw [beByte_wordOf v ⟨i, hi⟩]
   unfold ByteVec.get
@@ -500,8 +502,9 @@ private theorem truncate16_data_getD (d : ByteVec 32) (i : Nat) (hi : i < 16) :
   rw [hdsz, if_pos (show i < min 16 32 - 0 by omega), Nat.zero_add,
       ← Array.getD_eq_getD_getElem?]
 
-/-- `(pad16 (truncate16 d))`'s `i`-th byte: `d`'s byte for `i < 16`, else `0`. -/
-private theorem pad16tr_getD (d : ByteVec 32) (i : Nat) :
+/-- `(pad16 (truncate16 d))`'s `i`-th byte: `d`'s byte for `i < 16`, else `0`.
+    De-privatized for the C10Refine grand-composition N-mask byte bridge. -/
+theorem pad16tr_getD (d : ByteVec 32) (i : Nat) :
     (ByteVec.pad16 (ByteVec.truncate16 d)).data.getD i 0
       = if i < 16 then d.data.getD i 0 else 0 := by
   have hdata : (ByteVec.pad16 (ByteVec.truncate16 d)).data
