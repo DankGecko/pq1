@@ -155,32 +155,38 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 LISTS_DIR = REPO / "build" / "token_lists"
 OUT_PATH = REPO / "secure" / "data" / "erc20.json"
 
-# Known impersonator / look-alike tokens to exclude unconditionally. Generated
-# by tools/scan_erc20_impersonators.py (offline symbol-collision scan): tokens
-# wearing a curated ticker at a non-canonical address vouched only by a
-# low-trust source. Without this, a rebuild from upstream lists would silently
-# re-add them. Missing file -> no exclusions.
-DENYLIST_PATH = REPO / "tools" / "erc20_impersonator_denylist.txt"
+# Token (chain, address) pairs to exclude unconditionally. Two denylists, both
+# applied; without them a rebuild from upstream lists would silently re-add the
+# entries. Missing files -> no exclusions.
+#   * erc20_impersonator_denylist.txt — SECURITY: look-alikes wearing a curated
+#     ticker at a non-canonical address (tools/scan_erc20_impersonators.py).
+#   * erc20_inactive_denylist.txt — QUALITY: dead tokens (0 recent transfers +
+#     low provenance) from the Alchemy activity screen / triage. Re-evaluable.
+DENYLIST_PATHS = [
+    REPO / "tools" / "erc20_impersonator_denylist.txt",
+    REPO / "tools" / "erc20_inactive_denylist.txt",
+]
 
 
 def load_denylist() -> set[tuple[int, str]]:
-    """Return {(chain_id, address_lower)} parsed from DENYLIST_PATH. Lines are
-    `<chain_id> <address>  # optional comment`; blank/`#` lines ignored."""
+    """Return {(chain_id, address_lower)} parsed from every DENYLIST_PATHS file.
+    Lines are `<chain_id> <address>  # optional comment`; blank/`#` lines ignored."""
     deny: set[tuple[int, str]] = set()
-    if not DENYLIST_PATH.exists():
-        return deny
-    for line in DENYLIST_PATH.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
+    for path in DENYLIST_PATHS:
+        if not path.exists():
             continue
-        parts = line.split()
-        if len(parts) < 2:
-            continue
-        try:
-            cid = int(parts[0])
-        except ValueError:
-            continue
-        deny.add((cid, parts[1].lower()))
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            try:
+                cid = int(parts[0])
+            except ValueError:
+                continue
+            deny.add((cid, parts[1].lower()))
     return deny
 
 # Uniswap Token List spec caps; also kept ≤ the on-device 64-byte field limit.
