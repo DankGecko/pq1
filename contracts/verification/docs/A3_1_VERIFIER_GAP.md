@@ -35,6 +35,56 @@
 > screen + EUF-CMA, not a symbolic proof. `AXIOM_STATUS.json` A3.1 is now
 > `discharged-bytecode`. The original analysis is retained below for history.
 
+> ## ✅ 2026-06-18 — model↔spec ∀ CLOSED in Lean (deductive interpreter-refinement)
+>
+> The closure path sketched at the bottom of this doc is now **executed**. The
+> deductive interpreter-refinement proof
+> `SphincsCVerify.Interpreter.C10.execC10Asm_eq`
+> (`Interpreter/C10Refine.lean`) proves, with SHA-256 kept **opaque** and **no**
+> symbolic engine:
+>
+> ```
+> execC10Asm pkSeed pkRoot message sig
+>   = (nMaskedB pkSeed && nMaskedB pkRoot && verifyYulModel pkSeed pkRoot message sig)
+> ```
+>
+> `#print axioms execC10Asm_eq = [propext, Classical.choice, Quot.sound]` —
+> kernel-clean, no `sorryAx`, no `native_decide`. So the R1-*internal*
+> `model ↔ spec` ∀ (over all 4008-byte sigs) is no longer carried by the
+> KAT/bulk corpus alone — it is **proven**. The only residual under A3.1 is now
+> the genuine R1 hand-transcription gap **bytecode ↔ `execC10Asm`** (the
+> statement-for-statement Yul transcription, diff-checkable + KAT/bulk-backed)
+> and R2 (the byte-addressed SHA-256 precompile memory, handled in
+> `Interpreter/Memory.lean`).
+>
+> ### ⚠️ Finding: the A3.1 axiom is stated TOO STRONGLY (false as a ∀)
+>
+> `Bridge.solidityVerifier_compiles_correctly` asserts
+> `∀ …, DeployedBytecode.SPHINCsC10Asm_verify = verifyYulModel`. This is **false
+> in full generality**: a **non-N-masked** `pkSeed`/`pkRoot` makes the deployed
+> bytecode return `false` (the L58-65 N-mask guard) while `verifyYulModel`
+> silently truncates (`.take 16`) and can return `true`. The **faithful** form,
+> proven by `execC10Asm_eq`, is
+> `DeployedBytecode = execC10Asm = nMaskedB pkSeed && nMaskedB pkRoot && verifyYulModel`.
+>
+> `theft_free`'s **conclusion still holds for the real system** — the factory
+> `createAccountPrecondition` requires `nMasked` on every key half, so
+> non-N-masked owner keys are unreachable; the axiom merely overclaims its
+> generality (it is faithful exactly on the reachable, N-masked states).
+>
+> **Tightening it (swap the axiom for `DeployedBytecode = execC10Asm`) is gated
+> on a not-yet-proven invariant.** `theft_free` uses the bridge in the
+> *completeness* direction (`Spec/Theorems.lean` existence half:
+> `rw [hbridge]; exact hverify`, concluding bytecode-accepts from spec-accepts),
+> which with the truthful `nMaskedB` form needs `nMaskedB pks ∧ nMaskedB pkr`.
+> Those require a proven reachable-state invariant "every installed owner has
+> N-masked key halves" — which does **not** exist yet (only `nMasked` as a
+> factory *precondition* + `hasNMaskLayout` as a *def*). Threading it is real
+> wallet-model invariant work (A3.2-`combinedCapInvariant`-style); a bare added
+> `(hN : nMasked owner)` hypothesis on `theft_free` would silently narrow the
+> headline theorem and is **not** an acceptable substitute. So the swap is left
+> as a scoped follow-up, not forced.
+
 ---
 
 **Date:** 2026-06-11. **Severity:** verification-stack honesty (no on-chain
