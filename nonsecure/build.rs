@@ -20,9 +20,12 @@ fn main() {
     // magic bytes. Production builds ship no blob, so there is nothing
     // to check.
     if env::var_os("CARGO_FEATURE_E2E_TEST").is_some() {
-        check_db_magic("../tools/companion-stub/erc20_db.bin", b"ERC2");
+        // The e2e NS stub bakes the TINY erc20 fixture blob (the full
+        // production erc20_db.bin is multi-MB and would overflow NS flash).
+        check_db_magic("../tools/companion-stub/erc20_db_e2e.bin", b"ERC2");
         check_db_magic("../tools/companion-stub/vk_db.bin", b"VKDB");
-        check_db_magic("../tools/companion-stub/names_db.bin", b"NAMS");
+        // e2e NS stub bakes the TINY names fixture (full names_db.bin can grow).
+        check_db_magic("../tools/companion-stub/names_db_e2e.bin", b"NAMS");
     }
 
     // ERC-7730 e2e trailer for Phase 3 smoke-test. Pre-computed at

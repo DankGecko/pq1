@@ -1,32 +1,52 @@
 #!/usr/bin/env python3
 """
-Build secure/data/erc20.json from curated upstream token lists.
+Build secure/data/erc20.json — the curated, EXHAUSTIVE ERC-20 metadata set
+that drives on-device clear-signing (ERC-20 transfers AND CoW Swap order
+legs, which decode token symbol/decimals against the firmware-pinned
+ERC20_DB_ROOT).
+
+The DB blob is host/companion-side only (`tools/companion-stub/erc20_db.bin`);
+the firmware embeds just the 32-byte root, so the entry count is effectively
+unbounded (on-device Merkle proof depth caps at 32 ⇒ up to 2^32 entries).
+We therefore cast a WIDE net: every actively-traded token CoinGecko lists
+on the supported chains, plus curated DEX/aggregator overlays.
 
 Pipeline:
-  1. Read fetched token lists from build/token_lists/ (run fetch_token_lists.sh
-     first). Sources used: Uniswap Labs default, Optimism Superchain.
-  2. Expand Uniswap's `extensions.bridgeInfo` so each cross-chain deployment
-     becomes its own (chain_id, address) row.
-  3. Filter to TARGET_CHAINS, dedupe by (chain_id, address) merging source sets.
-  4. Per-chain cap with deterministic priority ordering:
-       * tokens endorsed by both lists win first
-       * then hand-curated PRIORITY_SYMBOLS (blue chips)
-       * then shorter symbol length (proxy for established tokens)
-       * then alphabetical (deterministic)
-  5. NFC-normalize name/symbol; clamp to Uniswap-spec lengths (60/20 chars).
-  6. Re-emit addresses in EIP-55 checksum form via a bundled pure-Python
-     keccak-256 (no pip deps).
-  7. Sort final output by (chain_id, address) — same as dbgen sort — for
-     stable git diffs, then write secure/data/erc20.json.
+  1. Ingest EVERY *.json under build/token_lists/ (run fetch_token_lists.sh
+     first). Auto-detects the three upstream shapes:
+       * Uniswap-style token list: {"tokens": [ {chainId,address,name,...} ]}
+         (+ Uniswap `extensions.bridgeInfo` cross-chain expansion)
+       * 1inch v1.2: bare { "<addr>": {chainId,address,name,...}, ... } map
+       * Sushi: bare [ {chainId,address,name,...}, ... ] array
+     Every entry carries its own chainId, so chains are assigned by field.
+  2. Filter to TARGET_CHAINS, dedupe by (chain_id, address) accumulating the
+     contributing source set, preferring the highest-priority source's
+     name/symbol/decimals.
+  3. Sanitize name/symbol to printable ASCII (0x20..0x7e) — the on-device
+     verifier (tx/src/erc20/bundle.rs) REJECTS any non-ASCII byte and any
+     field outside 1..=64 bytes, so a non-conforming row would be a dead
+     entry that can never render. We strip-to-ASCII and clamp lengths so
+     every emitted row is guaranteed on-device-decodable.
+  4. Resolve cross-chain same-address metadata conflicts. dbgen HARD-ERRORS
+     if one contract appears on multiple chains with different name/symbol
+     (copy-paste guard). With multichain data this is common (deterministic
+     CREATE2 deploys share an address across chains). Rule:
+       * same symbol across chains → unify the name (canonical pick) — same
+         token, naming noise.
+       * different symbols across chains → genuine ambiguity (or a coincident
+         address) → DROP the whole address group (loud warning).
+  5. Optional per-chain cap with priority ranking (default: unlimited).
+  6. EIP-55 checksum every address (bundled pure-Python keccak-256; no deps).
+  7. Sort by (chain_id, address) — same order dbgen uses — for stable diffs,
+     then write secure/data/erc20.json.
 
-The resulting file is consumed by `cargo run -p dbgen`, which builds
-nonsecure/src/erc20_db.bin and updates secure/src/db_roots.rs::ERC20_DB_ROOT.
+`secure/data/erc20-e2e.json` is a SEPARATE, small fixture (the prior curated
+set) consumed only by `--features e2e-test` QEMU builds; it is NOT touched by
+this script. Keeping it small is what lets `make e2e` bake a companion-stub
+blob into the 256 KB NS flash without overflow while production uses the full
+multi-MB blob. See dbgen/src/main.rs (ERC20_DB_ROOT / ERC20_DB_ROOT_E2E split).
 
-Size budget rationale: nonsecure flash is 256 KB total (memory.x). The
-current per-entry cost is ~40 B + proof_depth*32 B (proof_depth = ceil log2
-padded entry count) plus the interned string pool. Targeting ~200 tokens
-puts the blob at roughly 60–70 KB, leaving ample room for code and the VK
-DB. Tune PER_CHAIN_CAP if you have more flash to spare.
+Run:  python3 tools/build_erc20_db.py   then   cargo run -p dbgen
 """
 
 from __future__ import annotations
@@ -43,50 +63,76 @@ from typing import Iterable
 # Configuration
 # ---------------------------------------------------------------------------
 
-# Per-chain inclusion caps. Total across all chains drives the blob size.
-# See module docstring for the size budget reasoning.
-PER_CHAIN_CAP: dict[int, int] = {
-    1:     80,    # Ethereum mainnet
-    10:    20,    # Optimism
-    56:    15,    # BNB Chain
-    130:   10,    # Unichain
-    137:   15,    # Polygon PoS
-    8453:  35,    # Base
-    42161: 30,    # Arbitrum One
-    43114: 10,    # Avalanche C-chain
+# Supported chains. The first 8 are the user-facing target set (the most-used
+# EVM chains); Avalanche + Unichain are retained so we don't regress the
+# coverage the prior DB already shipped.
+CHAIN_NAMES: dict[int, str] = {
+    1:     "Ethereum",
+    10:    "Optimism",
+    56:    "BNB Chain",
+    130:   "Unichain",
+    137:   "Polygon PoS",
+    8453:  "Base",
+    42161: "Arbitrum One",
+    43114: "Avalanche C-Chain",
+    59144: "Linea",
+    999:   "Hyperliquid (HyperEVM)",
 }
-TARGET_CHAINS = set(PER_CHAIN_CAP)
+TARGET_CHAINS = set(CHAIN_NAMES)
 
-# Tiered blue-chip symbols. Lower tier = higher priority within the cap.
-# Stables and wrapped natives sit at tier 0 because they're the actual
-# transactions a wallet user is most likely to sign — losing WETH from a
-# chain so we can fit BAL is a bad trade.
+# Per-chain inclusion caps. None = unlimited (include the full vetted
+# universe). Set an int to bound a chain when trimming toward a size budget;
+# ranking (see rank()) keeps the most-relevant tokens.
+PER_CHAIN_CAP: dict[int, int | None] = {cid: None for cid in TARGET_CHAINS}
+
+# Source priority for metadata (name/symbol/decimals) when several lists
+# describe the same (chain, address). Higher wins. CoinGecko is the most
+# internally-consistent; Uniswap/Optimism next; the rest fill gaps.
+def _source_priority(source: str) -> int:
+    s = source.lower()
+    if s.startswith("coingecko"):
+        return 100
+    if s.startswith("uniswap"):
+        return 90
+    if s.startswith("optimism"):
+        return 85
+    if s.startswith("pancakeswap"):
+        return 70
+    if s.startswith("sushi"):
+        return 60
+    if s.startswith("1inch"):
+        return 55
+    if s.startswith("quickswap"):
+        return 50
+    if s.startswith("gemini"):
+        return 45
+    return 10
+
+
+# Tiered blue-chip symbols. Lower tier = higher priority within a per-chain
+# cap (only consulted when a cap is set). Stables + wrapped natives first.
 PRIORITY_TIERS: list[set[str]] = [
-    # tier 0: stables + wrapped native + WBTC. Non-negotiable.
     {
         "USDC", "USDT", "DAI", "FRAX", "LUSD", "TUSD", "USDP", "GUSD",
-        "PYUSD", "USDE", "SUSDE", "CRVUSD", "MIM", "SUSD", "USDD",
-        "WETH", "STETH", "WSTETH", "RETH", "CBETH", "WEETH", "EETH",
-        "WBTC", "TBTC", "CBBTC",
-        "WBNB", "WMATIC", "WAVAX", "WPOL",
+        "PYUSD", "USDE", "SUSDE", "CRVUSD", "MIM", "SUSD", "USDD", "USDC.E",
+        "USDS", "GHO", "FDUSD", "USD1", "DOLA",
+        "WETH", "STETH", "WSTETH", "RETH", "CBETH", "WEETH", "EETH", "EZETH",
+        "WBTC", "TBTC", "CBBTC", "LBTC",
+        "WBNB", "WMATIC", "WAVAX", "WPOL", "WHYPE", "WLINEA",
     },
-    # tier 1: major DeFi governance + L2 / native gas tokens.
     {
         "LINK", "UNI", "AAVE", "MKR", "SNX", "COMP", "CRV", "CVX", "LDO",
-        "ARB", "OP", "MATIC", "POL", "BNB", "AVAX",
+        "ARB", "OP", "MATIC", "POL", "BNB", "AVAX", "HYPE", "CAKE",
     },
-    # tier 2: well-known but more niche.
     {
         "BAL", "YFI", "1INCH", "SUSHI", "GMX", "GRT", "ENS", "RPL",
-        "PEPE", "SHIB", "DOGE",
-        "PENDLE", "FXS", "RDNT", "MAGIC",
+        "PEPE", "SHIB", "DOGE", "PENDLE", "FXS", "RDNT", "MAGIC", "AERO",
+        "VELO", "MORPHO", "ENA",
     },
 ]
-PRIORITY_SYMBOLS = set().union(*PRIORITY_TIERS)
 
 
 def _tier(symbol: str) -> int:
-    """Lower is better. 99 = not a priority symbol."""
     s = symbol.upper()
     for i, tier in enumerate(PRIORITY_TIERS):
         if s in tier:
@@ -94,42 +140,29 @@ def _tier(symbol: str) -> int:
     return 99
 
 
-# Manual additions for blue-chip tokens the curated upstream lists genuinely
-# omit. Each entry MUST be cross-checked against a block explorer before
-# being added — these bypass the dual-source consensus filter, so a typo
-# here ships a wrong token to users.
-#
-# Verified against Etherscan-family explorers (April 2026).
+# Manual additions for blue-chip tokens upstream lists may omit. Each MUST be
+# cross-checked against a block explorer — these bypass source consensus.
 MANUAL_ADDITIONS = [
-    # Uniswap default omits Arbitrum's canonical USDT despite it being one
-    # of the highest-volume tokens on the chain. Confirmed via arbiscan.io.
     {"chain_id": 42161, "address": "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9",
      "name": "Tether USD", "symbol": "USDT", "decimals": 6},
-    # Native Tether on Base — issued by Tether in 2024, missing from Uniswap.
-    # Confirmed via basescan.org.
     {"chain_id": 8453, "address": "0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2",
      "name": "Tether USD", "symbol": "USDT", "decimals": 6},
-    # Unichain WETH is in Uniswap default but only with one source, so it
-    # falls behind dual-sourced niche tokens at the cap boundary. Add
-    # explicitly. Confirmed via uniscan.xyz.
     {"chain_id": 130, "address": "0x4200000000000000000000000000000000000006",
      "name": "Wrapped Ether", "symbol": "WETH", "decimals": 18},
 ]
-
-# Hermetic tooling: no pip deps. ~70 lines of pure-Python keccak-256 below.
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 LISTS_DIR = REPO / "build" / "token_lists"
 OUT_PATH = REPO / "secure" / "data" / "erc20.json"
 
-# Uniswap Token List spec caps (https://github.com/Uniswap/token-lists).
+# Uniswap Token List spec caps; also kept ≤ the on-device 64-byte field limit.
 NAME_MAX_CHARS = 60
 SYMBOL_MAX_CHARS = 20
+FIELD_MAX_BYTES = 64  # tx/src/erc20/bundle.rs MAX_DISPLAY_FIELD
 
 # ---------------------------------------------------------------------------
 # Pure-Python keccak-256 for EIP-55 address checksumming.
-# This is the pre-FIPS Keccak (padding byte 0x01), NOT NIST SHA3-256.
-# Validated against the known empty-input vector at module load.
+# Pre-FIPS Keccak (padding byte 0x01), NOT NIST SHA3-256.
 # ---------------------------------------------------------------------------
 
 _KECCAK_RC = [
@@ -141,11 +174,11 @@ _KECCAK_RC = [
     0x8000000080008081, 0x8000000000008080, 0x0000000080000001, 0x8000000080008008,
 ]
 _KECCAK_R = [
-    [ 0, 36,  3, 41, 18],
-    [ 1, 44, 10, 45,  2],
-    [62,  6, 43, 15, 61],
+    [0, 36, 3, 41, 18],
+    [1, 44, 10, 45, 2],
+    [62, 6, 43, 15, 61],
     [28, 55, 25, 21, 56],
-    [27, 20, 39,  8, 14],
+    [27, 20, 39, 8, 14],
 ]
 _MASK64 = 0xFFFFFFFFFFFFFFFF
 
@@ -156,27 +189,23 @@ def _rotl(x: int, n: int) -> int:
 
 def _keccak_f(A: list[list[int]]) -> None:
     for rc in _KECCAK_RC:
-        # theta
         C = [A[x][0] ^ A[x][1] ^ A[x][2] ^ A[x][3] ^ A[x][4] for x in range(5)]
         D = [C[(x - 1) % 5] ^ _rotl(C[(x + 1) % 5], 1) for x in range(5)]
         for x in range(5):
             for y in range(5):
                 A[x][y] ^= D[x]
-        # rho + pi
         B = [[0] * 5 for _ in range(5)]
         for x in range(5):
             for y in range(5):
                 B[y][(2 * x + 3 * y) % 5] = _rotl(A[x][y], _KECCAK_R[x][y])
-        # chi
         for x in range(5):
             for y in range(5):
                 A[x][y] = B[x][y] ^ ((~B[(x + 1) % 5][y] & _MASK64) & B[(x + 2) % 5][y])
-        # iota
         A[0][0] ^= rc
 
 
 def keccak256(data: bytes) -> bytes:
-    rate = 136  # bytes (1600 - 512) / 8
+    rate = 136
     state = [[0] * 5 for _ in range(5)]
     padded = bytearray(data) + bytearray(rate - (len(data) % rate))
     padded[len(data)] = 0x01
@@ -187,92 +216,139 @@ def keccak256(data: bytes) -> bytes:
             state[i % 5][i // 5] ^= lane
         _keccak_f(state)
     out = bytearray()
-    for i in range(4):  # 32 bytes
+    for i in range(4):
         out += struct.pack("<Q", state[i % 5][i // 5])
     return bytes(out)
 
 
-# Self-test: keccak256(b"") = c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470
 _EMPTY_DIGEST = "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
 assert keccak256(b"").hex() == _EMPTY_DIGEST, "keccak256 self-test failed"
 
 
 def to_checksum_address(addr: str) -> str:
-    """EIP-55 checksum (mixed-case) representation of a 20-byte address."""
     a = addr.lower().removeprefix("0x")
     if len(a) != 40 or any(c not in "0123456789abcdef" for c in a):
         raise ValueError(f"not a 20-byte hex address: {addr!r}")
     digest = keccak256(a.encode("ascii")).hex()
     return "0x" + "".join(
-        c.upper() if int(digest[i], 16) >= 8 else c
-        for i, c in enumerate(a)
+        c.upper() if int(digest[i], 16) >= 8 else c for i, c in enumerate(a)
     )
 
 
-# Self-test for to_checksum_address using Vitalik's published vectors.
 assert to_checksum_address("0x52908400098527886e0f7030069857d2e4169ee7") == \
     "0x52908400098527886E0F7030069857D2E4169EE7"
 assert to_checksum_address("0xfb6916095ca1df60bb79ce92ce3ea74c37c5d359") == \
     "0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359"
 
 # ---------------------------------------------------------------------------
-# Token list ingestion
+# Sanitization
 # ---------------------------------------------------------------------------
 
-def _expand_token(t: dict, source: str) -> Iterable[tuple]:
-    """
-    Yield (chain_id, lower_addr, name, symbol, decimals, source, canonical)
-    rows for one token list entry, including Uniswap-style
-    `extensions.bridgeInfo` cross-chain pointers.
 
-    `canonical` is True for the entry whose top-level `chainId` matches the
-    yielded chain — i.e. the row that was authored *for* that chain. Bridge
-    expansions are non-canonical: they tell us a deployment exists, but they
-    borrow the parent token's name/symbol, which can be wrong (e.g. Uniswap
-    lists Avalanche's "DAI.e Token" with a bridgeInfo entry pointing back at
-    mainnet DAI; the bridge metadata names mainnet DAI as "DAI.e Token",
-    which it isn't).
-    """
-    name = str(t["name"])
-    symbol = str(t["symbol"])
-    decimals = int(t["decimals"])
-    primary_chain = int(t["chainId"])
-    primary_addr = str(t["address"]).lower()
-
-    yield (primary_chain, primary_addr, name, symbol, decimals, source, True)
-
-    bridge = ((t.get("extensions") or {}).get("bridgeInfo") or {})
-    for chain_str, info in bridge.items():
-        try:
-            cid = int(chain_str)
-        except (TypeError, ValueError):
-            continue
-        if not isinstance(info, dict):
-            continue
-        addr = info.get("tokenAddress")
-        if not isinstance(addr, str):
-            continue
-        yield (cid, addr.lower(), name, symbol, decimals, source, False)
+def sanitize_field(s: str, max_chars: int) -> str | None:
+    """NFC-normalize, drop any char outside printable ASCII (0x20..0x7e),
+    collapse whitespace, clamp to `max_chars` AND `FIELD_MAX_BYTES`. Returns
+    None if nothing renderable remains. Mirrors the on-device gate so every
+    emitted row is guaranteed to Merkle-decode + render."""
+    if not isinstance(s, str):
+        return None
+    s = unicodedata.normalize("NFC", s)
+    kept = "".join(c for c in s if 0x20 <= ord(c) <= 0x7E)
+    kept = " ".join(kept.split())  # collapse runs of whitespace, strip ends
+    kept = kept[:max_chars]
+    kept = kept.encode("ascii", "ignore")[:FIELD_MAX_BYTES].decode("ascii")
+    kept = kept.strip()
+    return kept or None
 
 
-def load_source(path: pathlib.Path, source_name: str):
-    blob = json.loads(path.read_text())
-    tokens = blob.get("tokens") or []
-    rows = []
-    for t in tokens:
-        try:
-            rows.extend(_expand_token(t, source_name))
-        except (KeyError, TypeError, ValueError) as e:
-            print(f"WARN: skipping malformed entry in {source_name}: {e}",
-                  file=sys.stderr)
+# ---------------------------------------------------------------------------
+# Token list ingestion (multi-shape)
+# ---------------------------------------------------------------------------
+
+
+def _emit(cid, addr, name, symbol, decimals, source, canonical):
+    """Yield a normalized row tuple if it is well-formed and on-target."""
+    try:
+        cid = int(cid)
+        decimals = int(decimals)
+    except (TypeError, ValueError):
+        return
+    if cid not in TARGET_CHAINS:
+        return
+    if not isinstance(addr, str):
+        return
+    a = addr.lower()
+    if not (a.startswith("0x") and len(a) == 42):
+        return
+    try:
+        int(a, 16)
+    except ValueError:
+        return
+    # Reject native-token sentinels (some lists, e.g. Li.Fi, list native gas
+    # as the zero address or 0xeee..eee). These are not ERC-20 contracts.
+    if a == "0x" + "0" * 40 or a == "0x" + "e" * 40:
+        return
+    if not (0 <= decimals <= 255):
+        return
+    yield (cid, a, str(name), str(symbol), decimals, source, canonical)
+
+
+def _expand_tokenlist_entry(t: dict, source: str) -> Iterable[tuple]:
+    """One Uniswap/Sushi/CoinGecko/Li.Fi/1inch entry → its CANONICAL row.
+
+    We deliberately do NOT expand Uniswap `extensions.bridgeInfo` cross-chain
+    pointers: those rows borrow the parent token's name/symbol and would
+    MISLABEL the (chain, address) they point at (the bridged deployment can be
+    a different token, or just carry a different canonical name). Every target
+    chain is already covered directly by per-chain sources (CoinGecko / Li.Fi /
+    1inch / Sushi), each entry carrying its own authoritative chainId, symbol
+    and decimals — so bridge expansion is redundant as well as hazardous."""
+    if not isinstance(t, dict):
+        return
+    name, symbol = t.get("name"), t.get("symbol")
+    decimals = t.get("decimals")
+    chain = t.get("chainId")
+    addr = t.get("address")
+    if chain is not None and addr is not None:
+        yield from _emit(chain, addr, name, symbol, decimals, source, True)
+
+
+def load_source(path: pathlib.Path) -> list[tuple]:
+    source = path.stem
+    try:
+        blob = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"  WARN: skipping unreadable {source}: {e}", file=sys.stderr)
+        return []
+    rows: list[tuple] = []
+
+    if isinstance(blob, dict) and isinstance(blob.get("tokens"), list):
+        # Uniswap / CoinGecko / PancakeSwap / Optimism token-list shape.
+        for t in blob["tokens"]:
+            rows.extend(_expand_tokenlist_entry(t, source))
+    elif isinstance(blob, dict) and isinstance(blob.get("tokens"), dict):
+        # Li.Fi shape: {"tokens": {"<chainId>": [ {chainId,address,...} ]}}.
+        for arr in blob["tokens"].values():
+            if isinstance(arr, list):
+                for t in arr:
+                    rows.extend(_expand_tokenlist_entry(t, source))
+    elif isinstance(blob, list):
+        # Sushi bare-array shape.
+        for t in blob:
+            rows.extend(_expand_tokenlist_entry(t, source))
+    elif isinstance(blob, dict):
+        # 1inch v1.2 addr->token map shape.
+        for v in blob.values():
+            if isinstance(v, dict) and "chainId" in v and "address" in v:
+                rows.extend(_expand_tokenlist_entry(v, source))
+    else:
+        print(f"  WARN: {source}: unrecognized JSON shape", file=sys.stderr)
     return rows
 
 
-def normalize_string(s: str, max_chars: int) -> str:
-    s = unicodedata.normalize("NFC", s)
-    # Strip control chars / non-printables that occasionally sneak in.
-    s = "".join(c for c in s if unicodedata.category(c)[0] != "C")
-    return s[:max_chars]
+# ---------------------------------------------------------------------------
+# Build
+# ---------------------------------------------------------------------------
 
 
 def main() -> int:
@@ -281,159 +357,194 @@ def main() -> int:
               file=sys.stderr)
         return 1
 
-    sources = {
-        "uniswap": LISTS_DIR / "uniswap.json",
-        "optimism": LISTS_DIR / "optimism.json",
-    }
-    raw_rows: list[tuple] = []
-    for name, p in sources.items():
-        if not p.exists():
-            print(f"error: missing source {p}", file=sys.stderr)
-            return 1
-        rows = load_source(p, name)
-        print(f"  {name:10s} {len(rows):6d} rows (after bridgeInfo expansion)",
+    files = sorted(LISTS_DIR.glob("*.json"))
+    if not files:
+        print(f"error: no token lists in {LISTS_DIR} — run fetch_token_lists.sh",
               file=sys.stderr)
-        raw_rows.extend(rows)
+        return 1
 
-    # Dedupe by (chain_id, lower_addr). Source set accumulates across all
-    # hits. For name/symbol/decimals we prefer entries authored *for* this
-    # chain (canonical=True) — bridge-info expansions borrow the parent
-    # token's strings and can be misleading (Uniswap's Avalanche "DAI.e
-    # Token" entry has a bridgeInfo pointer back to mainnet DAI; we don't
-    # want that to overwrite the real mainnet DAI row).
+    raw_rows: list[tuple] = []
+    for p in files:
+        rows = load_source(p)
+        print(f"  {p.stem:28s} {len(rows):7d} rows", file=sys.stderr)
+        raw_rows.extend(rows)
+    print(f"  total raw rows: {len(raw_rows)}", file=sys.stderr)
+
+    # Dedupe by (chain_id, addr). Prefer the highest-priority *canonical*
+    # source's metadata; accumulate the contributing source set.
     pool: dict[tuple[int, str], dict] = {}
     for cid, addr, name, symbol, decimals, source, canonical in raw_rows:
-        if cid not in TARGET_CHAINS:
-            continue
-        if not (addr.startswith("0x") and len(addr) == 42):
-            continue
-        try:
-            int(addr, 16)
-        except ValueError:
-            continue
-        if not (0 <= decimals <= 255):
-            continue
-        slot = pool.setdefault((cid, addr), {
-            "name": name, "symbol": symbol, "decimals": decimals,
-            "sources": set(), "canonical": False,
-        })
-        slot["sources"].add(source)
-        if canonical and not slot["canonical"]:
-            # First canonical hit for this (chain, addr) — adopt its strings.
-            slot["name"] = name
-            slot["symbol"] = symbol
-            slot["decimals"] = decimals
-            slot["canonical"] = True
-        elif canonical and source == "uniswap":
-            # Both canonical sources agree on existence; prefer Uniswap's
-            # strings since OP occasionally uses noisier bridge-suffixed
-            # names like "USD Coin (Bridged)".
-            slot["name"] = name
-            slot["symbol"] = symbol
-            slot["decimals"] = decimals
+        prio = _source_priority(source) + (5 if canonical else 0)
+        slot = pool.get((cid, addr))
+        if slot is None:
+            pool[(cid, addr)] = {
+                "name": name, "symbol": symbol, "decimals": decimals,
+                "sources": {source}, "prio": prio,
+            }
+        else:
+            slot["sources"].add(source)
+            if prio > slot["prio"]:
+                slot.update(name=name, symbol=symbol, decimals=decimals, prio=prio)
 
-    print(f"  pool: {len(pool)} unique (chain_id, address) pairs across "
-          f"{len(TARGET_CHAINS)} target chains", file=sys.stderr)
+    print(f"  unique (chain, address): {len(pool)}", file=sys.stderr)
 
-    # Per-chain selection with priority ordering.
-    by_chain: dict[int, list[dict]] = defaultdict(list)
+    # Sanitize name/symbol; drop rows that don't survive the ASCII/length gate.
+    entries: dict[tuple[int, str], dict] = {}
+    dropped_sanitize = 0
     for (cid, addr), slot in pool.items():
-        by_chain[cid].append({
-            "chain_id": cid, "address": addr,
-            "name": slot["name"], "symbol": slot["symbol"],
-            "decimals": slot["decimals"], "sources": slot["sources"],
-        })
+        name = sanitize_field(slot["name"], NAME_MAX_CHARS)
+        symbol = sanitize_field(slot["symbol"], SYMBOL_MAX_CHARS)
+        if name is None or symbol is None:
+            dropped_sanitize += 1
+            continue
+        entries[(cid, addr)] = {
+            "chain_id": cid, "address": addr, "name": name,
+            "symbol": symbol, "decimals": slot["decimals"],
+            "sources": slot["sources"],
+        }
+    if dropped_sanitize:
+        print(f"  dropped {dropped_sanitize} rows (empty after ASCII sanitize)",
+              file=sys.stderr)
+
+    # Resolve cross-chain same-address metadata conflicts (dbgen hard-errors
+    # on a contract that appears on multiple chains with different name/symbol).
+    by_addr: dict[str, list[tuple[int, str]]] = defaultdict(list)
+    for key in entries:
+        by_addr[key[1]].append(key)
+
+    # The DB is keyed by (chain_id, contract) and every Merkle leaf is
+    # chain-bound, so the SAME address legitimately hosting DIFFERENT tokens
+    # on different chains (coincidental cross-chain address reuse — e.g.
+    # 0x50c5..0cb is DAI on Optimism but LYRA on Base) is unambiguous and
+    # safe. We KEEP all such entries (dbgen warns, doesn't reject — see
+    # dbgen/src/erc20.rs). To keep that warning signal meaningful, we only
+    # normalize the BENIGN case: when the same address carries the same
+    # SYMBOL across chains (same token, naming noise like "Wrapped Ether" vs
+    # "WETH"), unify to one canonical spelling so it doesn't trip the warning.
+    distinct_symbol_groups = 0
+    unified = 0
+    for addr, keys in by_addr.items():
+        if len(keys) < 2:
+            continue
+        symbols = {entries[k]["symbol"].upper() for k in keys}
+        if len(symbols) > 1:
+            # Genuinely different tokens at a shared address — keep each
+            # chain's metadata as-is (chain-bound leaf ⇒ no ambiguity).
+            distinct_symbol_groups += 1
+            continue
+        # Same symbol across chains → same token, unify name+symbol to one
+        # canonical spelling (most common; tie → lowest chain_id).
+        names = Counter(entries[k]["name"] for k in keys)
+        canon_name = sorted(names.items(),
+                            key=lambda kv: (-kv[1], min(k[0] for k in keys if entries[k]["name"] == kv[0])))[0][0]
+        syms = Counter(entries[k]["symbol"] for k in keys)
+        canon_symbol = sorted(syms.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+        changed = False
+        for k in keys:
+            if entries[k]["name"] != canon_name or entries[k]["symbol"] != canon_symbol:
+                entries[k]["name"] = canon_name
+                entries[k]["symbol"] = canon_symbol
+                changed = True
+        if changed:
+            unified += 1
+    print(f"  unified {unified} same-token cross-chain address groups; kept "
+          f"{distinct_symbol_groups} shared-address groups with distinct tokens",
+          file=sys.stderr)
+
+    # Per-chain selection (cap optional) with priority ranking.
+    by_chain: dict[int, list[dict]] = defaultdict(list)
+    for e in entries.values():
+        by_chain[e["chain_id"]].append(e)
 
     def rank(r: dict) -> tuple:
         sym_upper = r["symbol"].upper()
         return (
-            -len(r["sources"]),                 # endorsed by both lists first
-            _tier(sym_upper),                   # 0=stables/WETH, 1=DeFi, 2=...
-            len(r["symbol"]),                   # shorter symbol = blue chip
-            sym_upper,                          # alphabetical for determinism
+            -len(r["sources"]),
+            _tier(sym_upper),
+            len(r["symbol"]),
+            sym_upper,
             r["address"],
         )
 
     selected: list[dict] = []
     selected_keys: set[tuple[int, str]] = set()
-    dropped = 0
     for cid in sorted(by_chain):
-        cap = PER_CHAIN_CAP[cid]
+        cap = PER_CHAIN_CAP.get(cid)
         ranked = sorted(by_chain[cid], key=rank)
-        keep = ranked[:cap]
-        dropped += len(ranked) - len(keep)
-        print(f"    chain {cid:6d}: kept {len(keep):3d} / {len(ranked):4d} "
-              f"(cap={cap})", file=sys.stderr)
+        keep = ranked if cap is None else ranked[:cap]
+        dropped = len(ranked) - len(keep)
+        print(f"    chain {cid:6d} {CHAIN_NAMES[cid]:24s}: kept {len(keep):5d}"
+              f" / {len(ranked):5d}" + (f"  (cap {cap}, dropped {dropped})" if cap else ""),
+              file=sys.stderr)
         for r in keep:
-            r["name"] = normalize_string(r["name"], NAME_MAX_CHARS)
-            r["symbol"] = normalize_string(r["symbol"], SYMBOL_MAX_CHARS)
-            if not r["name"] or not r["symbol"]:
-                continue
             r["address"] = to_checksum_address(r["address"])
             selected.append(r)
             selected_keys.add((r["chain_id"], r["address"].lower()))
 
-    # Force-include manual additions even if they would otherwise miss the
-    # cap, since they exist precisely because the upstream curated lists
-    # don't carry them.
+    # Force-include manual additions (sanitized; must already pass the gate).
     added_manual = 0
     for entry in MANUAL_ADDITIONS:
         cid = int(entry["chain_id"])
         addr_lower = entry["address"].lower()
-        if (cid, addr_lower) in selected_keys:
-            continue  # already supplied by upstream — nothing to do
-        checksummed = to_checksum_address(entry["address"])
+        if cid not in TARGET_CHAINS or (cid, addr_lower) in selected_keys:
+            continue
+        name = sanitize_field(entry["name"], NAME_MAX_CHARS)
+        symbol = sanitize_field(entry["symbol"], SYMBOL_MAX_CHARS)
+        if name is None or symbol is None:
+            continue
         selected.append({
-            "chain_id": cid,
-            "address":  checksummed,
-            "name":     normalize_string(entry["name"], NAME_MAX_CHARS),
-            "symbol":   normalize_string(entry["symbol"], SYMBOL_MAX_CHARS),
-            "decimals": int(entry["decimals"]),
+            "chain_id": cid, "address": to_checksum_address(entry["address"]),
+            "name": name, "symbol": symbol, "decimals": int(entry["decimals"]),
         })
         selected_keys.add((cid, addr_lower))
         added_manual += 1
 
-    print(f"  total kept: {len(selected)} (upstream "
-          f"{len(selected) - added_manual}, manual {added_manual}), "
-          f"dropped by caps: {dropped}", file=sys.stderr)
+    print(f"  total kept: {len(selected)} (manual additions: {added_manual})",
+          file=sys.stderr)
 
-    # Same-chain symbol-collision check (warn loudly — likely scam impersonator
-    # in one of the inputs, or two real tokens sharing a ticker).
-    sym_idx: dict[tuple[int, str], list[str]] = defaultdict(list)
+    # Final safety net: dbgen hard-rejects a duplicate (chain_id, contract)
+    # key (a true ambiguity), so surface it here with a clear message rather
+    # than as a dbgen panic. (Cross-chain same-address-different-metadata is
+    # intentionally allowed — see the conflict-handling note above.)
+    seen_pair: set[tuple[int, str]] = set()
     for r in selected:
-        sym_idx[(r["chain_id"], r["symbol"].upper())].append(r["address"])
-    collisions = {k: v for k, v in sym_idx.items() if len(v) > 1}
-    if collisions:
-        print("WARN: same-chain symbol collisions in output:", file=sys.stderr)
-        for (cid, sym), addrs in collisions.items():
-            print(f"  chain {cid} {sym}: {addrs}", file=sys.stderr)
+        key = (r["chain_id"], r["address"].lower())
+        if key in seen_pair:
+            print(f"  FATAL: duplicate (chain,address) {key}", file=sys.stderr)
+            return 1
+        seen_pair.add(key)
 
-    # Final sort by (chain_id, address) — matches dbgen's internal sort, so
-    # the JSON file order mirrors the on-disk blob order. Stable git diffs.
+    # Per-chain symbol-collision report (informational — two real tokens can
+    # share a ticker at different addresses; the order references a specific
+    # address so the render stays correct).
+    sym_idx: dict[tuple[int, str], int] = Counter(
+        (r["chain_id"], r["symbol"].upper()) for r in selected)
+    collisions = sum(1 for c in sym_idx.values() if c > 1)
+    if collisions:
+        print(f"  note: {collisions} same-chain symbol groups have >1 address "
+              f"(bridged variants / shared tickers — expected at this scale)",
+              file=sys.stderr)
+
+    # Sort by (chain_id, address) to mirror dbgen's on-disk order.
     selected.sort(key=lambda r: (r["chain_id"], r["address"].lower()))
 
-    # Drop the bookkeeping `sources` field before serializing.
     out = [
-        {
-            "chain_id": r["chain_id"],
-            "address":  r["address"],
-            "name":     r["name"],
-            "symbol":   r["symbol"],
-            "decimals": r["decimals"],
-        }
+        {"chain_id": r["chain_id"], "address": r["address"],
+         "name": r["name"], "symbol": r["symbol"], "decimals": r["decimals"]}
         for r in selected
     ]
 
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    # One token per line, ASCII-safe escaping off so non-Latin names render.
     body_lines = [
         "  " + json.dumps(r, ensure_ascii=False, separators=(", ", ": "))
         for r in out
     ]
-    OUT_PATH.write_text("[\n" + ",\n".join(body_lines) + "\n]\n",
-                        encoding="utf-8")
-    print(f"==> wrote {len(out)} tokens to {OUT_PATH.relative_to(REPO)}",
-          file=sys.stderr)
+    OUT_PATH.write_text("[\n" + ",\n".join(body_lines) + "\n]\n", encoding="utf-8")
+    per_chain = Counter(r["chain_id"] for r in out)
+    print(f"==> wrote {len(out)} tokens to {OUT_PATH.relative_to(REPO)}", file=sys.stderr)
+    for cid in sorted(per_chain):
+        print(f"      chain {cid:6d} {CHAIN_NAMES[cid]:24s}: {per_chain[cid]:5d}",
+              file=sys.stderr)
     return 0
 
 

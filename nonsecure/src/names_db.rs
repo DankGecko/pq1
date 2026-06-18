@@ -25,8 +25,11 @@ use sphincs_tz_shared::db_format::{
 
 // Host-side blob (companion app); the device ships only `NAMES_DB_ROOT`.
 // Reached ONLY in `e2e-test` builds (QEMU companion stub). Mirrors
-// `selectors_db.rs`.
-static NAMES_DB: &[u8] = include_bytes!("../../tools/companion-stub/names_db.bin");
+// `selectors_db.rs`. We embed the TINY e2e fixture blob (`names_db_e2e.bin`),
+// not the full production `names_db.bin`, so the QEMU NS image stays within
+// 256 KB flash. Its proofs match `NAMES_DB_ROOT` under `cfg(e2e-test)` (see
+// dbgen/src/main.rs render_db_roots).
+static NAMES_DB: &[u8] = include_bytes!("../../tools/companion-stub/names_db_e2e.bin");
 
 /// Mirror of `secure::names::MAX_NAME_BUNDLES`. The secure side caps
 /// at this count, so NS must not exceed it or the extra bundles will
