@@ -1,12 +1,16 @@
-//! Non-secure-side ERC20 metadata DB lookup.
+//! Non-secure-side ERC20 metadata DB lookup — QEMU companion stub.
 //!
-//! The full DB blob is `include_bytes!`d into the NS firmware image
-//! as static rodata. The non-secure world walks its sorted index by
-//! `(chain_id, contract)`, builds a `(canonical_metadata,
-//! merkle_proof, leaf_index)` bundle, and forwards it to the secure
-//! world via the gateway. The secure world re-derives the leaf hash
-//! and verifies the Merkle proof against an embedded root before
-//! trusting any of it for trusted-UI display.
+//! The full DB blob lives on the HOST (companion app) under
+//! `tools/companion-stub/`; the production device ships no blob, only
+//! the `ERC20_DB_ROOT`. This module is compiled in ONLY under
+//! `e2e-test`, where the QEMU NS driver acts as a dev-only companion:
+//! it walks the sorted index by `(chain_id, contract)`, builds a
+//! `(canonical_metadata, merkle_proof, leaf_index)` bundle, and
+//! forwards it to the secure world via the gateway. On real hardware
+//! the companion app builds this same bundle. Either way the secure
+//! world re-derives the leaf hash and verifies the Merkle proof
+//! against the embedded root before trusting any of it for the
+//! trusted-UI display.
 //!
 //! This module is `#![no_std]`, no-alloc — bundles are written into
 //! a caller-supplied buffer.
@@ -19,7 +23,11 @@ use sphincs_tz_shared::db_format::{
     ERC20_HDR_OFF_VERSION,
 };
 
-static ERC20_DB: &[u8] = include_bytes!("erc20_db.bin");
+// The blob lives host-side under `tools/companion-stub/` (the
+// production device ships no blob — only the `ERC20_DB_ROOT`). This
+// `include_bytes!` is reached ONLY in `e2e-test` builds, where this
+// module acts as the QEMU companion stub. Mirrors `selectors_db.rs`.
+static ERC20_DB: &[u8] = include_bytes!("../../tools/companion-stub/erc20_db.bin");
 
 /// Build an ERC20 metadata bundle for `(chain_id, contract)`. Writes
 /// into `out` and returns the number of bytes written, or `None` if

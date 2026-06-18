@@ -578,6 +578,66 @@ fn append_both_selector_trailers(
     Some(o + n_sa)
 }
 
+/// Append an ERC-20 metadata trailer (slot 1) built by the host-side
+/// companion stub `erc20_db::build_bundle` for `(chain_id, token)`.
+/// This is the wire shape the real companion app emits now that the
+/// ERC-20 DB lives host-side: the device holds only `ERC20_DB_ROOT` and
+/// Merkle-verifies the bundle in S-world. ERC-20 is the first trailer
+/// slot, so every later slot is left absent (cursor == total ⇒ treated
+/// as empty), matching the `append_*_only_trailers` pattern. Returns the
+/// new offset, or `None` if the token isn't in the host DB.
+fn append_erc20_only_trailer(
+    buf: &mut [u8],
+    off: usize,
+    chain_id: u64,
+    token: &[u8; 20],
+) -> Option<usize> {
+    // Matches `MAX_ERC20_BUNDLE_LEN` in `secure/src/erc20/bundle.rs`.
+    let mut bundle = [0u8; 1120];
+    let n = crate::erc20_db::build_bundle(chain_id, token, &mut bundle)?;
+    if n > u16::MAX as usize {
+        return None;
+    }
+    buf[off..off + 2].copy_from_slice(&(n as u16).to_be_bytes());
+    buf[off + 2..off + 2 + n].copy_from_slice(&bundle[..n]);
+    Some(off + 2 + n)
+}
+
+/// Append an address-name trailer (slot 8) for `(chain_id, address)`
+/// built by the host-side companion stub `names_db::build_bundle`. The
+/// names section sits after the seven u16-prefixed trailer slots, so we
+/// emit seven zero-length prefixes (erc20 … erc7730), a 1-byte count,
+/// then the `[u16 len | bundle]`. Same trust model as ERC-20 — the
+/// device holds only `NAMES_DB_ROOT` and Merkle-verifies in S-world.
+/// Returns the new offset, or `None` if the address isn't in the host
+/// names DB.
+fn append_names_only_trailer(
+    buf: &mut [u8],
+    off: usize,
+    chain_id: u64,
+    address: &[u8; 20],
+) -> Option<usize> {
+    // Matches the `MAX_NAME_BUNDLE_LEN` upper bound.
+    let mut bundle = [0u8; 1200];
+    let n = crate::names_db::build_bundle(chain_id, address, &mut bundle)?;
+    if n > u16::MAX as usize {
+        return None;
+    }
+    // Seven empty u16 prefixes, secure-parser order:
+    // erc20, zk_v1, zk_v3, safe_v1, selector, self_attest, erc7730.
+    let mut o = off;
+    for _ in 0..7 {
+        buf[o..o + 2].copy_from_slice(&0u16.to_be_bytes());
+        o += 2;
+    }
+    buf[o] = 1; // names count
+    o += 1;
+    buf[o..o + 2].copy_from_slice(&(n as u16).to_be_bytes());
+    o += 2;
+    buf[o..o + n].copy_from_slice(&bundle[..n]);
+    Some(o + n)
+}
+
 /// One inner tx descriptor used by the batch e2e helper.
 struct E2eBatchTx<'a> {
     to: [u8; 20],
@@ -953,6 +1013,97 @@ fn main() -> ! {
             "[NS][e2e]   → selector bundle verified, t2_len={}",
             t2_len
         );
+    }
+
+    // Scenario 5v: companion-supplied ERC-20 metadata trailer.
+    //
+    // The ERC-20 DB now lives host-side (tools/companion-stub/erc20_db.bin);
+    // the device ships only ERC20_DB_ROOT. This scenario plays the
+    // companion: it builds the (chain_id, token) bundle via the host-stub
+    // `erc20_db::build_bundle` and attaches it as the slot-1 trailer. The
+    // secure world must Merkle-verify it against the pinned root and
+    // render the token-aware "Send TEL" page instead of Erc20Unknown.
+    // Registers a fresh slot on Base (8453) so the test is self-contained.
+    hprintln!("[NS][e2e] Scenario 5v: companion-supplied ERC-20 metadata trailer");
+    unsafe {
+        let chain_id: u64 = 8453; // Base — present in the ERC-20 DB
+        // Telcoin (TEL), 2 decimals — secure/data/erc20.json.
+        let tel_addr: [u8; 20] = [
+            0x09, 0xbe, 0x16, 0x92, 0xca, 0x16, 0xe0, 0x6f, 0x53, 0x6f, 0x00, 0x38, 0xff, 0x11,
+            0xd1, 0xda, 0x85, 0x24, 0xad, 0xb1,
+        ];
+        let recipient: [u8; 20] = [0xcd; 20];
+        // transfer(recipient, 12_345)
+        let mut calldata = [0u8; 4 + 32 + 32];
+        calldata[0..4].copy_from_slice(&[0xa9, 0x05, 0x9c, 0xbb]);
+        calldata[16..36].copy_from_slice(&recipient);
+        let amount: u64 = 12_345;
+        calldata[60..68].copy_from_slice(&amount.to_be_bytes());
+
+        let mut len = build_sign_payload(
+            &mut PAYLOAD_BUF,
+            chain_id,
+            5,    // fresh slot
+            true, // register (Type 1 + Type 2)
+            6,    // base nonce
+            &tel_addr,
+            0u128,
+            &calldata,
+        );
+        len = append_erc20_only_trailer(&mut PAYLOAD_BUF, len, chain_id, &tel_addr)
+            .expect("TEL must be in the host ERC-20 DB");
+
+        let status = nsc_api::sign_userop(&PAYLOAD_BUF[..len], &mut SIG_BUF);
+        assert_eq!(
+            status,
+            NscStatus::Ok as u32,
+            "scenario 5v must succeed (got {})",
+            status
+        );
+        let (t1_present, t2_len) = parse_response(&SIG_BUF);
+        assert!(t1_present, "scenario 5v registers a fresh slot ⇒ Type 1 present");
+        hprintln!("[NS][e2e]   → ERC-20 bundle verified, t2_len={}", t2_len);
+    }
+
+    // Scenario 5w: companion-supplied address-name trailer.
+    //
+    // The names DB also lives host-side now; the device ships only
+    // NAMES_DB_ROOT. The companion stub builds the (chain_id, address)
+    // bundle and attaches it as the trailing names section. The secure
+    // world Merkle-verifies it and may render the human-readable name in
+    // place of the raw 40-hex address. Uses a wildcard-chain entry.
+    hprintln!("[NS][e2e] Scenario 5w: companion-supplied address-name trailer");
+    unsafe {
+        let chain_id: u64 = 8453;
+        // Uniswap V3 Router — a wildcard-chain entry in names.json.
+        let router: [u8; 20] = [
+            0xe5, 0x92, 0x42, 0x7a, 0x0a, 0xec, 0xe9, 0x2d, 0xe3, 0xed, 0xee, 0x1f, 0x18, 0xe0,
+            0x15, 0x7c, 0x05, 0x86, 0x15, 0x64,
+        ];
+        // Plain value transfer to the named contract (no inner calldata).
+        let mut len = build_sign_payload(
+            &mut PAYLOAD_BUF,
+            chain_id,
+            6,    // fresh slot
+            true, // register
+            7,    // base nonce
+            &router,
+            1_000u128,
+            &[],
+        );
+        len = append_names_only_trailer(&mut PAYLOAD_BUF, len, chain_id, &router)
+            .expect("Uniswap V3 Router must be in the host names DB");
+
+        let status = nsc_api::sign_userop(&PAYLOAD_BUF[..len], &mut SIG_BUF);
+        assert_eq!(
+            status,
+            NscStatus::Ok as u32,
+            "scenario 5w must succeed (got {})",
+            status
+        );
+        let (t1_present, _t2_len) = parse_response(&SIG_BUF);
+        assert!(t1_present, "scenario 5w registers a fresh slot ⇒ Type 1 present");
+        hprintln!("[NS][e2e]   → names bundle verified");
     }
 
     // Scenario 5c: Selector cross-check enforcement.

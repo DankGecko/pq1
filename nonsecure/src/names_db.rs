@@ -1,12 +1,16 @@
-//! Non-secure-side address-name DB lookup.
+//! Non-secure-side address-name DB lookup — QEMU companion stub.
 //!
-//! The full blob is `include_bytes!`d into NS rodata. At sign time NS
-//! walks the sorted-by-`short_key` index, builds a
+//! The full blob lives on the HOST (companion app) under
+//! `tools/companion-stub/`; the production device ships no blob, only
+//! the `NAMES_DB_ROOT`. This module is compiled in ONLY under
+//! `e2e-test`, where the QEMU NS driver acts as a dev-only companion:
+//! it walks the sorted-by-`short_key` index, builds a
 //! `(chain_id, addr, name, merkle_proof)` bundle, and forwards it to
-//! the secure world via the gateway. The secure world re-derives the
-//! leaf hash from its own (tx-supplied) `(chain_id, addr)` and verifies
-//! the proof against the embedded `NAMES_DB_ROOT` before any name
-//! reaches the trusted UI.
+//! the secure world via the gateway. On real hardware the companion
+//! app builds this same bundle. The secure world re-derives the leaf
+//! hash from its own (tx-supplied) `(chain_id, addr)` and verifies the
+//! proof against the embedded `NAMES_DB_ROOT` before any name reaches
+//! the trusted UI.
 //!
 //! This module is `#![no_std]`, no-alloc — bundles are written into
 //! a caller-supplied buffer.
@@ -19,7 +23,10 @@ use sphincs_tz_shared::db_format::{
     NAMES_WILDCARD_CHAIN_ID,
 };
 
-static NAMES_DB: &[u8] = include_bytes!("names_db.bin");
+// Host-side blob (companion app); the device ships only `NAMES_DB_ROOT`.
+// Reached ONLY in `e2e-test` builds (QEMU companion stub). Mirrors
+// `selectors_db.rs`.
+static NAMES_DB: &[u8] = include_bytes!("../../tools/companion-stub/names_db.bin");
 
 /// Mirror of `secure::names::MAX_NAME_BUNDLES`. The secure side caps
 /// at this count, so NS must not exceed it or the extra bundles will

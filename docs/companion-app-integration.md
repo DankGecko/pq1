@@ -402,11 +402,15 @@ must be present (even if one length is zero).
 ```
 
 See [§12](#12-erc-20--zk-clear-sign-trailers) for trailer contents. The
-non-secure USB handler will **opportunistically inject** an ERC-20
-bundle when the companion omits all trailers and `(chain_id, to)` matches
-the NS-side token DB, and likewise a VK bundle when the companion supplied
-only the fixed ZK block without one. That mechanism is transparent to
-the companion — if you need deterministic behaviour (e.g. for tests),
+ERC-20, address-name, and VK databases all live **host-side** now (under
+`tools/companion-stub/`) — the device ships only their 32-byte Merkle
+roots. **The companion MUST build and attach these trailers itself**;
+there is no on-device fallback. If a trailer is omitted, the device
+degrades gracefully (unknown-token render / raw-hex address / blind-sign)
+— it can never be tricked into a forged display, since every bundle is
+Merkle-verified against the pinned root in the secure world. Build the
+bundles with the reference tool `tools/companion-stub/db_trailers.py`.
+For deterministic behaviour (e.g. for tests),
 construct the bundles yourself.
 
 ### Flags field (u32 BE)
@@ -895,7 +899,8 @@ Same as §11.3. The companion builds the inner `(to, value, data)` triple;
 the device shows a human-friendly confirmation page when:
 
 - `data` matches `transfer(address,uint256)` on a token from the ERC-20
-  DB (NS-side opportunistic inject, or companion-supplied).
+  DB and the companion attaches the matching ERC-20 metadata trailer
+  (the DB is host-side; see §12).
 - The `zk_bundle` trailer validates a Groth16 clear-sign attestation for
   the target protocol.
 
@@ -1064,13 +1069,17 @@ sha256(0x00 || chain_id[8 LE] || contract[20] || decimals[1] ||
 
 Internal Merkle nodes: `sha256(0x01 || left[32] || right[32])`.
 
-The secure world holds a 32-byte Merkle root; the bundle is the leaf
-record plus the sibling path. The NS-side companion ships a matching
-copy of this DB and looks up entries by `(chain_id, contract_addr)`.
+The secure world holds a 32-byte Merkle root (`ERC20_DB_ROOT`); the
+bundle is the leaf record plus the sibling path. The **host-side**
+database (`tools/companion-stub/erc20_db.bin`) is the companion's; it
+looks up entries by `(chain_id, contract_addr)` and builds the bundle
+(reference: `tools/companion-stub/db_trailers.py erc20`).
 
-If the companion omits the trailer entirely, the NS-side handler will
-look the token up in its own NS flash DB and inject the bundle on the
-companion's behalf — the secure world re-verifies every byte regardless.
+If the companion omits the trailer, the device renders the loud
+"unknown token" page — there is no on-device DB to fall back to. The
+secure world re-verifies every supplied byte against the pinned root, so
+a forged or substituted bundle is rejected (degrades to unknown token),
+never displayed as a real token.
 
 ### ZK clear-sign bundle
 
@@ -1089,8 +1098,11 @@ zk_bundle = proof(384) || calldata_attested(164) || readable(64) [|| vk_bundle]
 - `readable` — the human-readable string the proof attests to, null-padded
   to 64 bytes.
 - `vk_bundle` (optional) — the protocol VK plus its Merkle authentication
-  path against the on-device VK DB root. If omitted, the NS-side handler
-  looks up `(chain_id, to)` in the NS VK DB and injects the bundle.
+  path against the on-device VK DB root. The VK DB is host-side
+  (`tools/companion-stub/vk_db.bin`); the companion looks up `(chain_id, to)`
+  and appends the bundle (reference: `tools/companion-stub/db_trailers.py vk`).
+  If omitted, the device cannot verify the proof and falls back to
+  blind-sign — there is no on-device VK DB to inject from.
 
 The device Merkle-verifies the VK, runs the Groth16 verifier, displays
 the readable string on the OLED, and only then proceeds to the PIN-gated

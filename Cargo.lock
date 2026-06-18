@@ -636,6 +636,7 @@ dependencies = [
  "bls12_381_pka",
  "hex",
  "pqsigner-erc7730",
+ "pqsigner-tx",
  "pqsigner-tx-core",
  "serde",
  "serde_json",

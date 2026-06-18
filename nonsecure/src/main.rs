@@ -63,15 +63,19 @@ mod gtzc_test;
 // GTZC1 illegal-access → wipe escalation demo. Hardware-only.
 #[cfg(feature = "tzic-wipe-test")]
 mod tzic_wipe_test;
-// The trailer-injection DBs are consumed only by the USB-side APDU
-// router (`usb::commands::maybe_inject_*`). Gating them on `usb`
-// keeps the QEMU smoke build and the test entry points from baking
-// in the ~MB of static rodata blobs.
-#[cfg(feature = "usb")]
+// The ERC20 / Names / VK DB blobs live on the HOST (companion app)
+// under `tools/companion-stub/`, never in the firmware image — the
+// production device only holds the 32-byte Merkle roots and verifies
+// companion-supplied bundles against them. These modules are the
+// QEMU companion stub: the `e2e-test` driver `include_bytes!`s the
+// host blob and builds bundles so it can act as a dev-only companion
+// (mirrors `selectors_db` below). `gtzc-test` doesn't sign, so it's
+// excluded. Production `usb` builds compile none of this in.
+#[cfg(all(feature = "e2e-test", not(feature = "gtzc-test")))]
 mod erc20_db;
-#[cfg(feature = "usb")]
+#[cfg(all(feature = "e2e-test", not(feature = "gtzc-test")))]
 mod names_db;
-#[cfg(feature = "usb")]
+#[cfg(all(feature = "e2e-test", not(feature = "gtzc-test")))]
 mod vk_db;
 mod nsc_api;
 // The selectors DB blob lives on the host; only the e2e-test build

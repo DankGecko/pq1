@@ -1,9 +1,11 @@
-//! Non-secure-side ZK clear-signing VK DB lookup.
+//! Non-secure-side ZK clear-signing VK DB lookup — QEMU companion stub.
 //!
 //! Mirrors `erc20_db.rs`: the full pool of (chain_id, contract, vk)
-//! triples lives in NS rodata; this module walks the sorted index,
-//! finds the matching VK, and emits a bundle the secure world can
-//! Merkle-verify against its embedded root.
+//! triples lives on the HOST (companion app) under
+//! `tools/companion-stub/`; the production device ships no blob, only
+//! the `VK_DB_ROOT`. Compiled in ONLY under `e2e-test` (QEMU companion
+//! stub). It walks the sorted index, finds the matching VK, and emits
+//! a bundle the secure world Merkle-verifies against its embedded root.
 
 use sphincs_tz_shared::db_format::{
     read_u32_le, read_u64_le, VK_BLOB_LEN, VK_DB_ENTRY_LEN, VK_DB_HEADER_LEN, VK_DB_MAGIC,
@@ -12,7 +14,10 @@ use sphincs_tz_shared::db_format::{
     VK_HDR_OFF_VK_POOL_OFF,
 };
 
-static VK_DB: &[u8] = include_bytes!("vk_db.bin");
+// Host-side blob (companion app); the device ships only `VK_DB_ROOT`.
+// Reached ONLY in `e2e-test` builds (QEMU companion stub). Mirrors
+// `selectors_db.rs`.
+static VK_DB: &[u8] = include_bytes!("../../tools/companion-stub/vk_db.bin");
 
 /// Build a VK bundle for `(chain_id, contract)`. Writes into `out`
 /// and returns the number of bytes written, or `None` if not found

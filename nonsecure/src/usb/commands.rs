@@ -499,25 +499,16 @@ impl CommandRouter {
             return self.sw_response(SW_WRONG_LENGTH);
         }
 
-        // Opportunistically attach an ERC-20 metadata bundle if the
-        // companion didn't already include a trailer and the (chain_id,
-        // tx.to) pair matches a known token. The secure world still
-        // Merkle-verifies every byte before trusting it for display.
-        let effective_len = Self::maybe_inject_erc20_bundle(data_len);
-        // If the companion attached a ZK clear-sign trailer with just
-        // proof + calldata + readable (no VK bundle), look up the VK by
-        // (chain_id, tx.to) and append it so the secure world's
-        // Groth16 verifier has a Merkle-proven key to work with.
-        let effective_len = Self::maybe_inject_vk_bundle(effective_len);
-        // v3 CoW EIP-712 clear-sign: same treatment, but the lookup key
-        // is the COWSWAP_EIP712_SENTINEL rather than `tx.to` (the real
-        // GPv2Settlement contract). Must run AFTER the v1 injector so
-        // the outer trailer shape it parses is stable.
-        let effective_len = Self::maybe_inject_vk_bundle_v3(effective_len);
-        // Append address-name bundles for every tx address that hits
-        // the NS names DB. Secure world merkle-verifies each before
-        // letting any name reach the trusted UI.
-        let effective_len = Self::maybe_inject_names_bundles(effective_len);
+        // All metadata trailers (ERC-20 / VK / names / selector /
+        // ERC-7730 / …) are built by the companion and arrive inside the
+        // request — the DBs live host-side, the device holds only the
+        // pinned Merkle roots and verifies every byte in S-world. NS no
+        // longer looks anything up. We only normalise the positional
+        // trailer skeleton so a companion that sent a short prefix (or no
+        // trailers at all) still presents a well-formed, fail-safe layout
+        // to the secure parser — missing slots degrade to "unknown token"
+        // / raw-hex / blind-sign, never a forged display.
+        let effective_len = Self::ensure_trailer_skeleton(data_len);
 
         let status = nsc_api::sign_userop(
             &CHAIN_BUF[..effective_len],
@@ -667,310 +658,30 @@ impl CommandRouter {
         self.nsc_status_to_response(status)
     }
 
-    /// If the companion sent a bare `[header | data]` payload (no
-    /// trailer sections) and `(chain_id, tx.to)` hits the NS-side ERC-20
-    /// database, append an `[u16 BE len | bundle]` trailer inside
-    /// `CHAIN_BUF` so the secure world can render a token-aware
-    /// confirmation page instead of falling back to "Unknown token".
-    ///
-    /// Returns the (possibly extended) payload length. On any failure
-    /// (lookup miss, payload already has trailers, no room) returns
-    /// `received_len` unchanged — the secure world degrades gracefully
-    /// to `Erc20Unknown`.
-    unsafe fn maybe_inject_erc20_bundle(received_len: usize) -> usize {
-        if received_len < SIGN_USEROP_HEADER_LEN {
-            return received_len;
-        }
-
-        let data_len = u16::from_be_bytes([CHAIN_BUF[328], CHAIN_BUF[329]]) as usize;
-        let payload_end = SIGN_USEROP_HEADER_LEN + data_len;
-        if payload_end > received_len {
-            return received_len;
-        }
-        // Plain value transfer — no ERC-20 metadata needed.
-        if data_len == 0 {
-            return received_len;
-        }
-        // Two acceptable injection sites:
-        //  (a) Bare payload: companion sent no trailers, so we just
-        //      append `[u16 len | bundle]` at `payload_end`.
-        //  (b) Companion attached a trailer skeleton with the erc20
-        //      slot empty (`[0x00, 0x00]` at `payload_end..+2`). We
-        //      shift the rest of the buffer right by `bundle_len` and
-        //      overwrite the empty slot. Lets the function work even
-        //      when the companion pre-attached later trailers
-        //      (selector / self-attest / erc7730 / names skeleton).
-        let bare = received_len == payload_end;
-        let skeleton_empty_erc20 = received_len >= payload_end + 2
-            && CHAIN_BUF[payload_end] == 0
-            && CHAIN_BUF[payload_end + 1] == 0;
-        if !bare && !skeleton_empty_erc20 {
-            return received_len;
-        }
-
-        let chain_id = u64::from_be_bytes([
-            CHAIN_BUF[0],
-            CHAIN_BUF[1],
-            CHAIN_BUF[2],
-            CHAIN_BUF[3],
-            CHAIN_BUF[4],
-            CHAIN_BUF[5],
-            CHAIN_BUF[6],
-            CHAIN_BUF[7],
-        ]);
-        // Default lookup key is the outer tx.to. For Safe `execTransaction`
-        // UserOps the outer `to` is the Safe contract (which won't be in
-        // the ERC-20 DB), but the inner SafeTx target — encoded as the
-        // first head word of the calldata — IS the token contract when
-        // the Safe is being used to dispatch an ERC-20 transfer. Detect
-        // that selector and pivot the lookup to the inner address so the
-        // secure-world renderer sees a Merkle-verified Erc20Metadata
-        // bundle and surfaces the "Send USDC / Base USDC / amount" pages
-        // the user would get on a direct ERC-20 call.
-        //
-        // The inner read is purely advisory for DB lookup; the secure
-        // world still Merkle-verifies the bundle and re-decodes the
-        // execTransaction calldata via the strict verifier in
-        // `tx::eip712::safe::verify_and_bind_exec`, then enforces
-        // `bundle.contract == exec.decoded.to` inside
-        // `display::pick_sign_pages` before applying the metadata. A
-        // hostile companion that lies here only succeeds in either
-        // (a) hitting an unrelated DB row that mismatches the verifier's
-        // inner-to → bundle gets dropped → degrade to Erc20Unknown, or
-        // (b) hitting nothing at all → degrade to Erc20Unknown. No
-        // attribution can be lent to a wrong token.
-        let mut to = [0u8; 20];
-        let data_start = SIGN_USEROP_HEADER_LEN;
-        let data_end = data_start + data_len;
-        let exec_inner = data_len >= EXEC_TRANSACTION_MIN_CALLDATA_LEN
-            && CHAIN_BUF[data_start..data_start + 4] == EXEC_TRANSACTION_SELECTOR
-            // Canonical address word: top 12 bytes must be zero. If the
-            // companion / Safe encoded something non-canonical we fall
-            // back to the outer-to lookup (still safe — just no boost).
-            && CHAIN_BUF[data_start + 4..data_start + 4 + 12]
-                .iter()
-                .all(|&b| b == 0)
-            && data_end <= received_len;
-        if exec_inner {
-            to.copy_from_slice(&CHAIN_BUF[data_start + 4 + 12..data_start + 4 + 32]);
-        } else {
-            to.copy_from_slice(&CHAIN_BUF[276..296]);
-        }
-
-        // Matches `MAX_ERC20_BUNDLE_LEN` in `secure/src/erc20/bundle.rs`.
-        let mut bundle_buf = [0u8; 1120];
-        let Some(bundle_len) = crate::erc20_db::build_bundle(chain_id, &to, &mut bundle_buf) else {
-            return received_len;
-        };
-
-        let new_len = received_len + bundle_len + if bare { 2 } else { 0 };
-        if new_len > CHAIN_BUF_LEN {
-            return received_len;
-        }
-
-        if bare {
-            // Append fresh: `[u16 len | bundle]` at `payload_end`.
-            CHAIN_BUF[payload_end..payload_end + 2]
-                .copy_from_slice(&(bundle_len as u16).to_be_bytes());
-            CHAIN_BUF[payload_end + 2..payload_end + 2 + bundle_len]
-                .copy_from_slice(&bundle_buf[..bundle_len]);
-        } else {
-            // Skeleton case: rewrite the `[0x00, 0x00]` empty erc20 slot
-            // header to the real bundle length, then shift everything
-            // after the 2-byte header right by `bundle_len` to make room
-            // for the bundle bytes.
-            let tail_src_start = payload_end + 2;
-            let tail_end = received_len;
-            // copy_within handles overlapping ranges correctly.
-            CHAIN_BUF.copy_within(
-                tail_src_start..tail_end,
-                tail_src_start + bundle_len,
-            );
-            CHAIN_BUF[payload_end..payload_end + 2]
-                .copy_from_slice(&(bundle_len as u16).to_be_bytes());
-            CHAIN_BUF[payload_end + 2..payload_end + 2 + bundle_len]
-                .copy_from_slice(&bundle_buf[..bundle_len]);
-        }
-        new_len
-    }
-
-    /// Append a VK bundle to a fixed-length trailer section living at
-    /// `CHAIN_BUF[trailer_offset..received_len]`.
-    ///
-    /// Shared implementation for the v1 and v3 VK injectors — both
-    /// follow the same pattern: verify the trailer's declared length
-    /// matches `fixed_len` (the bare companion-sent shape, pre-bundle),
-    /// look up the `(chain_id, contract_key)` pair in the NS VK DB,
-    /// splice the bundle in right after the trailer's fixed prefix,
-    /// rewrite the trailer's length header. Any failure returns
-    /// `received_len` unchanged — the secure world handles the degraded
-    /// case downstream.
-    ///
-    /// The trailer does NOT have to be the last section of the payload:
-    /// a Safe-wrapped CoW presign carries a non-empty `safe_v1` section
-    /// *after* `zk_v3`, so the injector shifts any tail sections right
-    /// to open a gap (`copy_within`, same approach as the ERC-20
-    /// skeleton injector). The injection stays purely shape-driven —
-    /// only the exact bare `fixed_len` shape triggers it, so a payload
-    /// that already carries a VK bundle is never touched.
-    ///
-    /// The only non-shared piece is `(trailer_offset, fixed_len,
-    /// contract_key)` — the v1 injector passes `after_erc20`,
-    /// `ZK_CLEAR_SIGN_FIXED_LEN`, and the tx's `to` address; the v3
-    /// injector passes `after_zk`, `ZK_V3_FIXED_LEN`, and the
-    /// `COWSWAP_EIP712_SENTINEL`.
-    unsafe fn inject_vk_bundle_at(
-        received_len: usize,
-        trailer_offset: usize,
-        fixed_len: usize,
-        contract_key: &[u8; 20],
-    ) -> usize {
-        if trailer_offset + 2 > received_len {
-            return received_len;
-        }
-        let declared_len =
-            u16::from_be_bytes([CHAIN_BUF[trailer_offset], CHAIN_BUF[trailer_offset + 1]]) as usize;
-        // Only act on the exact bare shape. Anything else either already
-        // has a VK bundle attached or is malformed; let the secure world
-        // do the rejection.
-        if declared_len != fixed_len {
-            return received_len;
-        }
-        let trailer_end = trailer_offset + 2 + declared_len;
-        if trailer_end > received_len {
-            return received_len;
-        }
-
-        let chain_id = u64::from_be_bytes([
-            CHAIN_BUF[0], CHAIN_BUF[1], CHAIN_BUF[2], CHAIN_BUF[3],
-            CHAIN_BUF[4], CHAIN_BUF[5], CHAIN_BUF[6], CHAIN_BUF[7],
-        ]);
-
-        let mut vk_bundle_buf = [0u8; ZK_VK_BUNDLE_MAX_LEN];
-        let Some(vk_bundle_len) =
-            crate::vk_db::build_bundle(chain_id, contract_key, &mut vk_bundle_buf)
-        else {
-            return received_len;
-        };
-
-        let new_declared_len = declared_len + vk_bundle_len;
-        let new_len = received_len + vk_bundle_len;
-        if new_len > CHAIN_BUF_LEN || new_declared_len > u16::MAX as usize {
-            return received_len;
-        }
-
-        // Open a gap for the bundle when later sections follow the
-        // trailer (safe_v1 / selector / names …), then splice it in.
-        if trailer_end < received_len {
-            CHAIN_BUF.copy_within(trailer_end..received_len, trailer_end + vk_bundle_len);
-        }
-        CHAIN_BUF[trailer_end..trailer_end + vk_bundle_len]
-            .copy_from_slice(&vk_bundle_buf[..vk_bundle_len]);
-        CHAIN_BUF[trailer_offset..trailer_offset + 2]
-            .copy_from_slice(&(new_declared_len as u16).to_be_bytes());
-        new_len
-    }
-
-    /// If the companion attached a v1 ZK clear-sign trailer containing
-    /// just the fixed `proof + calldata + readable` block
-    /// (exactly `ZK_CLEAR_SIGN_FIXED_LEN` bytes) and
-    /// `(chain_id, tx.to)` hits the NS-side VK database, append the
-    /// looked-up VK bundle so the secure world's Groth16 verifier has
-    /// a Merkle-proven key to work with.
-    ///
-    /// Delegates to [`inject_vk_bundle_at`]; the only v1-specific work
-    /// is locating the v1 trailer (past the ERC-20 section) and
-    /// sourcing the contract key from the tx's `to` address.
-    unsafe fn maybe_inject_vk_bundle(received_len: usize) -> usize {
-        if received_len < SIGN_USEROP_HEADER_LEN {
-            return received_len;
-        }
-        let data_len = u16::from_be_bytes([CHAIN_BUF[328], CHAIN_BUF[329]]) as usize;
-        let after_data = SIGN_USEROP_HEADER_LEN + data_len;
-        if after_data + 2 > received_len {
-            return received_len;
-        }
-        let erc20_len =
-            u16::from_be_bytes([CHAIN_BUF[after_data], CHAIN_BUF[after_data + 1]]) as usize;
-        let after_erc20 = after_data + 2 + erc20_len;
-
-        let mut to = [0u8; 20];
-        to.copy_from_slice(&CHAIN_BUF[276..296]);
-
-        Self::inject_vk_bundle_at(received_len, after_erc20, ZK_CLEAR_SIGN_FIXED_LEN, &to)
-    }
-
-    /// Companion of `maybe_inject_vk_bundle`, but for the v3 CoW
-    /// EIP-712 clear-sign trailer: when the companion sends a 716-byte
-    /// `zk_v3` section (proof + canonical + readable, no VK bundle),
-    /// look up the v3 VK at `(chain_id, COWSWAP_EIP712_SENTINEL)` in
-    /// the VK DB and append the matching bundle so the secure world's
-    /// 3-pub Groth16 verifier has a Merkle-proven key.
-    ///
-    /// Looks up the VK by the sentinel, NOT by `tx.to` — the real
-    /// GPv2Settlement address keys the v1 setPreSignature VK; the
-    /// sentinel keys the v3 order VK. Both live in the same VK DB
-    /// under the same `(chain_id, contract)` schema.
-    unsafe fn maybe_inject_vk_bundle_v3(received_len: usize) -> usize {
-        if received_len < SIGN_USEROP_HEADER_LEN {
-            return received_len;
-        }
-        let data_len = u16::from_be_bytes([CHAIN_BUF[328], CHAIN_BUF[329]]) as usize;
-        let after_data = SIGN_USEROP_HEADER_LEN + data_len;
-        if after_data + 2 > received_len {
-            return received_len;
-        }
-        let erc20_len =
-            u16::from_be_bytes([CHAIN_BUF[after_data], CHAIN_BUF[after_data + 1]]) as usize;
-        let after_erc20 = after_data + 2 + erc20_len;
-        if after_erc20 + 2 > received_len {
-            return received_len;
-        }
-        let zk_len =
-            u16::from_be_bytes([CHAIN_BUF[after_erc20], CHAIN_BUF[after_erc20 + 1]]) as usize;
-        let after_zk = after_erc20 + 2 + zk_len;
-
-        Self::inject_vk_bundle_at(received_len, after_zk, ZK_V3_FIXED_LEN, &COWSWAP_EIP712_SENTINEL)
-    }
-
-    /// Append address-name bundles for every candidate address the
-    /// trusted UI is about to display whose `(chain_id, addr)` matches
-    /// an entry in the NS names DB. The secure world re-verifies each
-    /// bundle against the embedded `NAMES_DB_ROOT`, so failed or
-    /// tampered bundles only ever degrade the display back to raw hex.
-    ///
-    /// Candidates scanned (in order, deduplicated):
-    ///   * `tx.to`
-    ///   * ERC-20 `transfer` / `transferFrom` recipient
-    ///   * ERC-20 `approve` spender
-    ///
-    /// Trailer wire format (appended at `CHAIN_BUF[received_len..]`):
-    ///   `[count u8][len u16 BE][bundle] ... repeat `count` times`
-    ///
-    /// A count of 0 is never emitted — if there are no hits the
-    /// trailer is absent, which the secure world treats as "no
-    /// names bundles".
     /// Ensure the `[erc20][v1_zk][v3_zk][safe_v1][selector][self_attest][erc7730]`
     /// u16-prefixed trailer skeleton is fully present before `received_len`,
     /// padding any missing prefix with `[0x00, 0x00]`.
     ///
     /// Background: the secure-world sign_userop parser walks trailers
     /// positionally in that exact order and then reads the `names`
-    /// trailer at whatever cursor lands after them. If a caller sent a
-    /// payload that stops earlier in the chain (e.g. a CoW v3 sign-userop
-    /// emits only `erc20+v1_zk+v3_zk` and stops there, since the v3 VK
-    /// injector requires `trailer_end == received_len`), the secure
-    /// parser will consume the `[count][bundle_len][...]` framing of the
-    /// names trailer as `safe_v1`'s u16 length and the next pair as
-    /// `selector`'s — bytes that are almost always > the per-trailer
-    /// caps and trip "bad safe bundle" or "bad selector bundle" on the
-    /// OLED. (Earlier symptom: "Sign v3 len>cap" when only 1 prefix was
-    /// padded.)
+    /// trailer at whatever cursor lands after them. If the companion
+    /// sent a payload that stops earlier in the chain (e.g. only
+    /// `erc20+v1_zk+v3_zk`, or a bare `header+data` with no trailers at
+    /// all), the secure parser would consume the `[count][bundle_len][...]`
+    /// framing of the names trailer as `safe_v1`'s u16 length and the
+    /// next pair as `selector`'s — bytes that are almost always > the
+    /// per-trailer caps and trip "bad safe bundle" or "bad selector
+    /// bundle" on the OLED. (Earlier symptom: "Sign v3 len>cap" when
+    /// only 1 prefix was padded.)
     ///
     /// This helper walks the trailer chain and appends empty `[0, 0]`
     /// u16 prefixes for any section not yet encoded, returning the
     /// updated `received_len`. For a payload that already contains a
-    /// full skeleton this is a no-op.
+    /// full skeleton this is a no-op. It is the ONLY trailer
+    /// normalisation NS does now that the metadata DBs live host-side:
+    /// the companion builds every real bundle; NS just guarantees a
+    /// parseable, fail-safe skeleton so missing trailers degrade
+    /// gracefully (unknown token / raw hex / blind-sign).
     unsafe fn ensure_trailer_skeleton(received_len: usize) -> usize {
         if received_len < SIGN_USEROP_HEADER_LEN {
             return received_len;
@@ -1030,115 +741,6 @@ impl CommandRouter {
         new_len
     }
 
-    unsafe fn maybe_inject_names_bundles(received_len: usize) -> usize {
-        // Complete the `[erc20][v1_zk][v3_zk]` skeleton before appending
-        // names. See `ensure_trailer_skeleton` for the full rationale —
-        // without this, NS-injected names mis-parse as v1/v3 zk lengths
-        // in the secure world and fire "Sign v3 len>cap".
-        let received_len = Self::ensure_trailer_skeleton(received_len);
-        if received_len < SIGN_USEROP_HEADER_LEN {
-            return received_len;
-        }
-
-        let chain_id = u64::from_be_bytes([
-            CHAIN_BUF[0],
-            CHAIN_BUF[1],
-            CHAIN_BUF[2],
-            CHAIN_BUF[3],
-            CHAIN_BUF[4],
-            CHAIN_BUF[5],
-            CHAIN_BUF[6],
-            CHAIN_BUF[7],
-        ]);
-        let mut tx_to = [0u8; 20];
-        tx_to.copy_from_slice(&CHAIN_BUF[276..296]);
-
-        // Collect up to 4 distinct candidate addresses.
-        let mut candidates: [[u8; 20]; 4] = [[0u8; 20]; 4];
-        let mut cand_n = 0usize;
-        let push = |buf: &mut [[u8; 20]; 4], n: &mut usize, a: &[u8; 20]| {
-            if *a == [0u8; 20] {
-                return;
-            }
-            for slot in &buf[..*n] {
-                if slot == a {
-                    return;
-                }
-            }
-            if *n < buf.len() {
-                buf[*n] = *a;
-                *n += 1;
-            }
-        };
-        push(&mut candidates, &mut cand_n, &tx_to);
-
-        // Parse ERC-20 calldata off the unsigned tx to surface
-        // recipient/spender addresses too.
-        let data_len =
-            u16::from_be_bytes([CHAIN_BUF[328], CHAIN_BUF[329]]) as usize;
-        let data_end = SIGN_USEROP_HEADER_LEN + data_len;
-        if data_end <= received_len && data_len >= 4 + 32 + 32 {
-            let data = &CHAIN_BUF[SIGN_USEROP_HEADER_LEN..data_end];
-            let sel = &data[..4];
-            // transfer(address,uint256) = 0xa9059cbb
-            // approve(address,uint256)  = 0x095ea7b3
-            // transferFrom(address,address,uint256) = 0x23b872dd
-            if sel == [0xa9, 0x05, 0x9c, 0xbb] || sel == [0x09, 0x5e, 0xa7, 0xb3] {
-                let mut a = [0u8; 20];
-                a.copy_from_slice(&data[4 + 12..4 + 32]);
-                push(&mut candidates, &mut cand_n, &a);
-            } else if sel == [0x23, 0xb8, 0x72, 0xdd] && data_len >= 4 + 32 + 32 + 32 {
-                let mut from_a = [0u8; 20];
-                from_a.copy_from_slice(&data[4 + 12..4 + 32]);
-                let mut to_a = [0u8; 20];
-                to_a.copy_from_slice(&data[4 + 32 + 12..4 + 64]);
-                push(&mut candidates, &mut cand_n, &from_a);
-                push(&mut candidates, &mut cand_n, &to_a);
-            }
-        }
-
-        if cand_n == 0 {
-            return received_len;
-        }
-
-        // Reserve the count byte; we backfill it once we know how many
-        // bundles actually verified.
-        let count_off = received_len;
-        if count_off + 1 > CHAIN_BUF_LEN {
-            return received_len;
-        }
-        let mut cursor = count_off + 1;
-        let mut emitted = 0u8;
-        let mut bundle_buf = [0u8; 1200];
-
-        for i in 0..cand_n {
-            let addr = &candidates[i];
-            let Some(bundle_len) =
-                crate::names_db::build_bundle(chain_id, addr, &mut bundle_buf)
-            else {
-                continue;
-            };
-            if cursor + 2 + bundle_len > CHAIN_BUF_LEN || bundle_len > u16::MAX as usize {
-                break;
-            }
-            CHAIN_BUF[cursor..cursor + 2].copy_from_slice(&(bundle_len as u16).to_be_bytes());
-            cursor += 2;
-            CHAIN_BUF[cursor..cursor + bundle_len].copy_from_slice(&bundle_buf[..bundle_len]);
-            cursor += bundle_len;
-            emitted += 1;
-            if emitted as usize >= crate::names_db::MAX_NAME_BUNDLES {
-                break;
-            }
-        }
-
-        if emitted == 0 {
-            // Revert: nothing to attach, don't emit a lone count byte.
-            return received_len;
-        }
-
-        CHAIN_BUF[count_off] = emitted;
-        cursor
-    }
 
     // ===================================================================
     // GET_RESPONSE (CLA-agnostic)

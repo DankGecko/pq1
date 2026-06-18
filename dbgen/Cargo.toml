@@ -41,3 +41,8 @@ tempfile = "3"
 # world parser byte-for-byte. (Dev-only because the lib build does not
 # need this dep; only the test binary does.)
 pqsigner-erc7730 = { workspace = true }
+# On-device ERC-20 / names bundle verifiers + the shared Merkle proof
+# checker, used by the companion-stub round-trip test to confirm a
+# host-built bundle verifies against the pinned root (and a tampered
+# one is rejected) — the same trust check the secure world runs.
+pqsigner-tx = { workspace = true }
