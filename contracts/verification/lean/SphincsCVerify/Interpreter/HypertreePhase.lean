@@ -345,4 +345,72 @@ def htLayerBody : List Stmt :=
   ++ [ .setv "currentNode" (.var "merkleNode")
      , .setv "sigOff" (.bin .add (.var "authOff") (.lit 144)) ]
 
+/-! ### `verifyHypertree` as a fold
+
+Same `forIn → foldl` collapse as `verifyAuthPath_eq_foldl`, but the loop body has
+a 3-field mutable accumulator `⟨bad, currentNode, idxTree⟩` and an inner
+`pkFromSig` match. `vhStep` is one layer of that fold; once `bad` is set it is the
+identity (mirrors `if bad then pure ()`). -/
+-- Seal the heavy spec calls so the `forIn → foldl` `simp` does not try to whnf
+-- through the WOTS chain / SHA-256 (those seals in `Phases` are file-`local`, so
+-- they do not reach here — `verifyAuthPath_eq_foldl` only survived above because
+-- its body has no `pkFromSig`). Stays in force for `ht_layer`/`verifyHypertree_refine` too.
+attribute [local irreducible] Spec.Wots.pkFromSig Spec.Hypertree.verifyAuthPath
+
+/-- **Pointwise `forIn → foldl` bridge.** Like `List.forIn_pure_yield_eq_foldl`, but the
+    body need only *equal* `pure ∘ yield ∘ f` pointwise (`h`) rather than be syntactically
+    in that form — so a body with an inner `match` (whose auxiliary differs from a
+    transcribed copy) is matched by unification on the bound `body`, sidestepping the
+    `match`-aux syntactic mismatch that defeats `rw`/`simp` on the lambda directly. -/
+theorem forIn_yield_eq_foldl_pointwise {α β : Type _} (l : List α) (init : β)
+    (body : α → β → ForInStep β) (f : α → β → β)
+    (h : ∀ a b, body a b = ForInStep.yield (f a b)) :
+    forIn (m := Id) l init body = List.foldl (fun b a => f a b) init l := by
+  induction l generalizing init with
+  | nil => rfl
+  | cons a l ih =>
+    rw [List.forIn_cons, h a init]
+    exact ih (f a init)
+
+def vhStep (seed : ByteVec 32) (layers : Array Spec.Hypertree.LayerSig)
+    (acc : MProd Bool (MProd (ByteVec 16) Nat)) (layer : Nat) :
+    MProd Bool (MProd (ByteVec 16) Nat) :=
+  if acc.fst then acc
+  else
+    let idxLeaf := acc.snd.snd &&& ((1 <<< Spec.SubtreeH) - 1)
+    let idxTree' := acc.snd.snd >>> Spec.SubtreeH
+    let layerSig := layers.getD layer Spec.Hypertree.defaultLayerSig
+    match Spec.Wots.pkFromSig seed (UInt32.ofNat layer) (UInt64.ofNat idxTree')
+            (UInt32.ofNat idxLeaf) acc.snd.fst layerSig.wots with
+    | none => ⟨true, acc.snd.fst, idxTree'⟩
+    | some wotsPk =>
+      ⟨false, Spec.Hypertree.verifyAuthPath seed (UInt32.ofNat layer) (UInt64.ofNat idxTree')
+          wotsPk idxLeaf layerSig.authPath, idxTree'⟩
+
+theorem verifyHypertree_eq_foldl
+    (seed : ByteVec 32) (forsPk : ByteVec 16) (htIdx : Nat)
+    (layers : Array Spec.Hypertree.LayerSig) :
+    Spec.Hypertree.verifyHypertree seed forsPk htIdx layers
+      = (let r := (List.range' 0 Spec.D).foldl (vhStep seed layers)
+            (⟨false, forsPk, htIdx⟩ : MProd Bool (MProd (ByteVec 16) Nat))
+         if r.fst then none else some r.snd.fst) := by
+  rw [Spec.Hypertree.verifyHypertree]
+  set_option linter.deprecated false in
+  simp only [Std.Range.forIn_eq_forIn_range', Std.Range.size, Nat.sub_zero, Nat.add_sub_cancel,
+    Nat.div_one, Id.run, Id.bind_eq, Id.pure_eq]
+  rw [forIn_yield_eq_foldl_pointwise (f := fun layer r => vhStep seed layers r layer) (h := ?hpt)]
+  case hpt =>
+    intro layer r
+    show _ = ForInStep.yield (vhStep seed layers r layer)
+    simp only [vhStep]
+    by_cases hr : r.fst = true
+    · rw [if_pos hr, if_pos hr]
+    · rw [if_neg hr, if_neg hr]
+      simp only [Bool.not_eq_true] at hr
+      cases Spec.Wots.pkFromSig seed (UInt32.ofNat layer) (UInt64.ofNat (r.snd.snd >>> Spec.SubtreeH))
+          (UInt32.ofNat (r.snd.snd &&& 1 <<< Spec.SubtreeH - 1)) r.snd.fst
+          (layers.getD layer Spec.Hypertree.defaultLayerSig).wots with
+      | none => rfl
+      | some wotsPk => rw [hr]
+
 end SphincsCVerify.Interpreter.C10

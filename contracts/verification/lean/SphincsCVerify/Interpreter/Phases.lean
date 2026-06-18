@@ -5147,8 +5147,7 @@ theorem wots_pkfromsig
     (hidxTree : vm.env "idxTree" = tree.toNat)
     (hidxLeaf : vm.env "idxLeaf" = kp.toNat)
     (hN : vm.env "N_MASK" = NMASK)
-    (hOUT : vm.env "OUT" = 0x600)
-    (hds0 : vm.env "digitSum" = 0) :
+    (hOUT : vm.env "OUT" = 0x600) :
     (if SphincsCVerify.Util.digitSum (SphincsCVerify.Util.extractDigits
           (Spec.wotsDigest seed (Spec.Adrs.wots layer tree kp) (ByteVec.pad16 msgHash) sigma.count))
           ≠ Spec.TargetSum then
@@ -5195,7 +5194,9 @@ theorem wots_pkfromsig
   have hv1idxLeaf : v1.env "idxLeaf" = kp.toNat := by rw [hv1pv "idxLeaf" (by decide)]; exact hidxLeaf
   have hv1N : v1.env "N_MASK" = NMASK := by rw [hv1pv "N_MASK" (by decide)]; exact hN
   have hv1OUT : v1.env "OUT" = 0x600 := by rw [hv1pv "OUT" (by decide)]; exact hOUT
-  have hv1ds0 : v1.env "digitSum" = 0 := by rw [hv1pv "digitSum" (by decide)]; exact hds0
+  -- (the incoming `digitSum` is irrelevant: Phase 2's `letv "digitSum" 0` re-inits it
+  --  before the digit-sum loop — so no `hds0` precond is needed, which lets layer ≥ 1
+  --  reuse this lemma even though it enters with `digitSum = TargetSum` from the prior layer.)
   -- ===== Phase 2: letv "digitSum" 0 (re-init); then the digit-sum loop. =====
   rw [execList_cons_none c10Oracle sig _ _ _ (by simp only [execStmt])]
   obtain ⟨v2, hv2⟩ : ∃ v2, (execStmt c10Oracle sig (.letv "digitSum" (.lit 0)) v1).1 = v2 := ⟨_, rfl⟩
@@ -5330,7 +5331,6 @@ private theorem wots_pkfromsig_nonvacuous (sig : ByteVec Spec.SignatureLen) (see
     (by show env0 "idxLeaf" = (0 : UInt32).toNat; simp [env0, setVar])
     (by show env0 "N_MASK" = NMASK; simp [env0, setVar])
     (by show env0 "OUT" = 0x600; simp [env0, setVar])
-    (by show env0 "digitSum" = 0; simp [env0, setVar])
   trivial
 
 end SphincsCVerify.Interpreter.C10

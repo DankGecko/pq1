@@ -182,3 +182,5 @@ import SphincsCVerify
 -- A3.1 hypertree phase (Interpreter/HypertreePhase.lean): verifyAuthPath as a foldl.
 #print axioms SphincsCVerify.Interpreter.C10.verifyAuthPath_eq_foldl
 #print axioms SphincsCVerify.Interpreter.C10.ht_climb
+#print axioms SphincsCVerify.Interpreter.C10.forIn_yield_eq_foldl_pointwise
+#print axioms SphincsCVerify.Interpreter.C10.verifyHypertree_eq_foldl
