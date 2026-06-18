@@ -299,7 +299,7 @@ private theorem hmsgMem5_holdsSegs {m : Nat} (mem : ByteMemory)
 A helper that peels one non-halting statement off `execList`. -/
 
 /-- Peel a non-halting head statement off `execList`. -/
-private theorem execList_cons_none {n : Nat} (sha : List UInt8 → ByteVec 32)
+theorem execList_cons_none {n : Nat} (sha : List UInt8 → ByteVec 32)
     (sig : ByteVec n) (s : Stmt) (rest : List Stmt) (vm : VM)
     (h : (execStmt sha sig s vm).2 = none) :
     execList sha sig (s :: rest) vm = execList sha sig rest (execStmt sha sig s vm).1 := by
@@ -649,7 +649,7 @@ private def climbSegs (seed adrs left right : ByteVec 32) : List (ByteVec 32) :=
     three stores laid at the canonical `32/64/96` windows as `wordOf`-words, scratch
     `[0x00, 0x80)` holds `[seed, adrs, left, right]`. The `hmsgMem5_holdsSegs`
     analogue for the 4-segment `thPair`. -/
-private theorem climbMem_holdsSegs (mem : ByteMemory)
+theorem climbMem_holdsSegs (mem : ByteMemory)
     (seed adrs left right : ByteVec 32)
     (hseed : ∀ i, i < 32 → mem (0 + i) = seed.data.getD i 0) :
     holdsSegs (mstore32 (mstore32 (mstore32 mem 32 (wordOf adrs))
@@ -688,7 +688,7 @@ private theorem climbMem_holdsSegs (mem : ByteMemory)
     assembly) with `mload_masked_eq_wordOf_pad16` (output mask) and the spec identity
     `truncate16 (sha256 [seed,adrs,left,right]) = thPair …`. The 4-segment analogue
     of the H_msg digest read-back. -/
-private theorem climbMem_thPair (mem : ByteMemory)
+theorem climbMem_thPair (mem : ByteMemory)
     (seed adrs left right : ByteVec 32)
     (hseed : ∀ i, i < 32 → mem (0 + i) = seed.data.getD i 0) :
     (mload32 (writeRegion
@@ -722,7 +722,7 @@ private theorem climbMem_thPair (mem : ByteMemory)
   rfl
 
 /-- Disjoint 32-byte `mstore32` writes commute. -/
-private theorem mstore32_comm (mem : ByteMemory) (o1 o2 w1 w2 : Nat)
+theorem mstore32_comm (mem : ByteMemory) (o1 o2 w1 w2 : Nat)
     (hdisj : o1 + 32 ≤ o2 ∨ o2 + 32 ≤ o1) :
     mstore32 (mstore32 mem o1 w1) o2 w2 = mstore32 (mstore32 mem o2 w2) o1 w1 :=
   writeRegion_comm mem o1 o2 (beByte w1) (beByte w2) hdisj
@@ -1080,7 +1080,7 @@ private def leafSegs (seed adrs val : ByteVec 32) : List (ByteVec 32) := [seed, 
 /-- **Holds the leaf segments.** With `seed` already in window `0` and the two
     stores at `0x20`/`0x40` as `wordOf`-words, scratch `[0x00, 0x60)` holds
     `[seed, adrs, val]`. -/
-private theorem leafMem_holdsSegs (mem : ByteMemory) (seed adrs val : ByteVec 32)
+theorem leafMem_holdsSegs (mem : ByteMemory) (seed adrs val : ByteVec 32)
     (hseed : ∀ i, i < 32 → mem (0 + i) = seed.data.getD i 0) :
     holdsSegs (mstore32 (mstore32 mem 32 (wordOf adrs)) 64 (wordOf val)) 0
       (leafSegs seed adrs val) := by
@@ -1106,7 +1106,7 @@ private theorem leafMem_holdsSegs (mem : ByteMemory) (seed adrs val : ByteVec 32
 /-- **One leaf hash step ↔ `th`.** Running the precompile over the assembled leaf
     memory and masking the digest yields `wordOf (pad16 (th seed adrs val))`.
     The 3-segment analogue of `climbMem_thPair`. -/
-private theorem leafMem_th (mem : ByteMemory) (seed adrs val : ByteVec 32)
+theorem leafMem_th (mem : ByteMemory) (seed adrs val : ByteVec 32)
     (hseed : ∀ i, i < 32 → mem (0 + i) = seed.data.getD i 0) :
     (mload32 (writeRegion (mstore32 (mstore32 mem 32 (wordOf adrs)) 64 (wordOf val))
         0x600
