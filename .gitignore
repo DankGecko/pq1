@@ -11,3 +11,10 @@ __pycache__/
 
 # CycloneDX SBOM release sidecars (regenerate with `make sbom`)
 *.cdx.json
+
+# Per-developer MCP server config (SOTA 2026-06 §7 egress discipline). Holds
+# absolute local paths and could one day hold a network/secret-bearing server
+# — keep it user-local so it can't be accidentally committed. The REQUIRED
+# minimal shape (lean-lsp only; never a server with both repo-secret read and a
+# network tool) is documented in docs/tooling-and-systems.md.
+.mcp.json

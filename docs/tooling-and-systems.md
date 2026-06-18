@@ -95,4 +95,20 @@
 
 ---
 
+---
+
+## C. AGENTIC / EGRESS HARDENING (SOTA 2026-06 §7) — audited 2026-06-18
+
+A key-holding repo: the controls that keep a compromised dependency / tool / prompt from
+exfiltrating secrets or the firmware diff.
+
+| Control | Status | Where / how |
+|---------|--------|-------------|
+| **`.mcp.json` minimal surface** | ✅ audited clean | Sole MCP server = `lean-lsp` (local stdio Lean-LSP proxy — no network tool, no repo-secret read). **gitignored** so it stays user-local and can't accidentally commit absolute paths or a future network+secret-bearing server. **RULE:** never add an MCP server that has BOTH repo-secret read AND a network tool. |
+| **Net-isolation for fuzz/SCA tools** | ✅ `tools/sca/run-isolated.sh` | Runs any command with the network namespace dropped (unprivileged `bwrap --unshare-net`; **fails closed** if no sandbox is available). Wrap the binary/fuzz/SCA tools, which have no business reaching the network: `tools/sca/run-isolated.sh make -C tools/sca c10-sign`, `… make fuzz-all`. Validated: FS + cargo cache stay read-write, network is unreachable. |
+| **CI Action egress** | ✅ the 2026-06-18 workflows | `security-review.yml` runs on `pull_request` (NOT `pull_request_target`), is fork-guarded, no-ops without the key, and the action is **pinned to a reviewed SHA**; ClusterFuzzLite + nightly use only the scoped `GITHUB_TOKEN`. No workflow holds both repo-secret read and an unpinned network action. |
+| Per-subagent MCP allowlists | partial (low-pri) | The single local lean-lsp server is harmless, so there is no formal per-subagent allowlist yet. Revisit if a network/secret MCP server is ever added. |
+
+---
+
 *Maintenance: re-probe with the `docs-reorg-inventory` workflow (or just re-run the commands) when tools are added/moved. Linked from `docs/STATUS.md`. The Makefile + skills remain the source of truth; this file is the map.*
