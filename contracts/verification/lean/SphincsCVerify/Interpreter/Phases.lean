@@ -1061,7 +1061,7 @@ arithmetic the wrapper hypotheses are phrased in. -/
 
 /-- A value below `4096` is below `W = 2^256` (the only `decide`-on-`2^256` site;
     binary-`Nat` kernel arithmetic, instant). -/
-private theorem lt_W_of_lt {x : Nat} (h : x < 4096) : x < W := by
+theorem lt_W_of_lt {x : Nat} (h : x < 4096) : x < W := by
   unfold W; exact Nat.lt_trans h (by decide)
 
 /-- `h <<< 4 % W = 16 * h` for `h < 256` (the sibling/secret stride; `16h < W`).
@@ -1606,7 +1606,7 @@ private theorem make_data_getD_beByte
                 ofU32BE_getD_eq_beByte ha (i - 28) (by omega)]
 
 /-- A value `< 2^m` shifted left by `k` with `m + k ≤ 256` stays `< 2^256`. -/
-private theorem shl_lt_two_pow_256 (x m k : Nat) (hx : x < 2 ^ m) (hmk : m + k ≤ 256) :
+theorem shl_lt_two_pow_256 (x m k : Nat) (hx : x < 2 ^ m) (hmk : m + k ≤ 256) :
     x <<< k < 2 ^ 256 := by
   rw [Nat.shiftLeft_eq]
   calc x * 2 ^ k < 2 ^ m * 2 ^ k := by
