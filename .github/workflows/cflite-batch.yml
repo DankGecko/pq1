@@ -25,6 +25,10 @@ jobs:
         with:
           language: rust
           sanitizer: address
+          # PRIVATE repo: ClusterFuzzLite's helper clones the project repo
+          # internally — without a token the clone fails ("could not read
+          # Username"). The scoped GITHUB_TOKEN (contents: read) authenticates it.
+          github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Run fuzzers
         uses: google/clusterfuzzlite/actions/run_fuzzers@v1
         with:

@@ -36,6 +36,8 @@ jobs:
         with:
           language: rust
           sanitizer: address
+          # PRIVATE repo: authenticate ClusterFuzzLite's internal repo clone.
+          github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Run fuzzers
         uses: google/clusterfuzzlite/actions/run_fuzzers@v1
         with:
