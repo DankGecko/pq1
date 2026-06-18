@@ -1074,7 +1074,7 @@ fn negative_vendor_pubkey_does_not_inline_classical_keys() {
 
 #[test]
 fn positive_measurement_base_derives_from_image_link_symbol() {
-    // MEDIUM-1 fix (docs/audits/boot-fsbl-20260611-141459.md): the
+    // MEDIUM-1 fix (docs/security/audits/boot-fsbl-20260611-141459.md): the
     // measurement base must NOT be a hardcoded flash address. It is
     // derived from the `__vector_table` linker symbol (= `ORIGIN(FLASH)`,
     // the address the image is actually linked + loaded at), so it tracks

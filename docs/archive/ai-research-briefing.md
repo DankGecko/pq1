@@ -230,14 +230,14 @@ These are where research effort should go. Each subsection is a
 
 **For tools that accept only one attachment per session** (Claude web,
 etc.), we've pre-built self-contained bundle files under
-`docs/research-bundles/`. Each bundle combines the question + a
+`docs/security/research-bundles/`. Each bundle combines the question + a
 condensed version of this briefing + the relevant code excerpts into a
 single ~50-120 KB markdown file. Upload the bundle as the only
 attachment, and the session has everything it needs. See
-`docs/research-bundles/README.md` for the mapping.
+`docs/security/research-bundles/README.md` for the mapping.
 
 **Status as of last update:**
-- Prompt A (fault injection): ✅ run, results in `docs/research-bundles/results/`, synthesised to `docs/security/production-security.md` §2.1 + work-todo.md #18.
+- Prompt A (fault injection): ✅ run, results in `docs/security/research-bundles/results/`, synthesised to `docs/security/production-security.md` §2.1 + work-todo.md #18.
 - Prompt B (key management): ✅ run, results in same dir, synthesised §2.2 + #20 (partially superseded by E).
 - Prompt C (SLH-DSA SCA): ✅ run, synthesised §2.3 + #18.
 - Prompt D (USB hardening): ✅ run, synthesised §2.4 + #19.

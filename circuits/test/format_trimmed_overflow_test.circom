@@ -12,7 +12,7 @@ pragma circom 2.0.0;
 // raw_amount range check / recomposition — not on some unrelated hash
 // mismatch.
 //
-// Used by docs/cowswap-zk-poc/run_overflow_negative_test.sh:
+// Used by docs/security/cowswap-zk-poc/run_overflow_negative_test.sh:
 //   * the PoC forged witness (raw_amount ≈ 2^254) MUST fail witness
 //     generation (Num2Bits(190) constraint), proving the fix bites;
 //   * a benign witness (the same 0.2000 display, honest small amount)

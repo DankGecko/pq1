@@ -230,7 +230,7 @@ A **post-quantum hardware wallet** designed so that *every* cryptographic primit
 
 The design target is a **STM32U585 + Infineon OPTIGA Trust M V3 + NXP EdgeLock SE050**. No single die, no single vendor, and no future cryptographically-relevant quantum computer should be able to recover the seed from harvested traffic or extracted ciphertext.
 
-> **Status: dual-SE implemented.** The TrustZone firmware boots and runs on a real **B-U585I-IOT02A** dev board (STM32U585, Cortex-M33). The secure world, SAU/GTZC configuration, and first-boot wizard execute on silicon. See [`docs/hardware/dev-board-setup.md`](docs/hardware/dev-board-setup.md) for board setup instructions. Both secure element drivers are written: **OPTIGA Trust M V3** (pure Rust IFX I2C stack + AES-128-CCM shielded connection) and **NXP SE050** (T1oI2C + SCP03). The dual-SE XOR entropy split is wired and tested — BIP-39 entropy is split across both chips. The ML-KEM inner-wrap, ML-DSA hybrid OEMiROT, custom PCB, and production STM32 bring-up are the remaining **target architecture** items. Read the [Implementation Status](#implementation-status) table for what actually exists and where it actually runs today.
+> **Status: dual-SE implemented.** The TrustZone firmware boots and runs on a real **B-U585I-IOT02A** dev board (STM32U585, Cortex-M33). The secure world, SAU/GTZC configuration, and first-boot wizard execute on silicon. See [`docs/hardware/dev-board-setup.md`](../../hardware/dev-board-setup.md) for board setup instructions. Both secure element drivers are written: **OPTIGA Trust M V3** (pure Rust IFX I2C stack + AES-128-CCM shielded connection) and **NXP SE050** (T1oI2C + SCP03). The dual-SE XOR entropy split is wired and tested — BIP-39 entropy is split across both chips. The ML-KEM inner-wrap, ML-DSA hybrid OEMiROT, custom PCB, and production STM32 bring-up are the remaining **target architecture** items. Read the [Implementation Status](#implementation-status) table for what actually exists and where it actually runs today.
 
 ```
                   ┌──────────────────────────────────────────────────┐
@@ -404,8 +404,8 @@ what you need:**
 |---|---|
 | See the full backlog (what's done, what's planned) | `docs/work-todo.md` |
 | Synthesise the 2026-04-14 deep-research findings into "what to do next" | `docs/security/production-security.md` |
-| Drive a future AI-research session with project context | `docs/archive/ai-research-briefing.md` + `docs/research-bundles/` |
-| See what's already been researched (raw artefacts) | `docs/research-bundles/results/` |
+| Drive a future AI-research session with project context | `docs/archive/ai-research-briefing.md` + `docs/security/research-bundles/` |
+| See what's already been researched (raw artefacts) | `docs/security/research-bundles/results/` |
 
 ### Subsystem-specific design
 
@@ -416,7 +416,7 @@ what you need:**
 | Understand the SE050 native UserID PIN auth flow | `docs/secure-elements/se050-userid-pin-auth.md` |
 | Side-channel + fault-injection hardening requirements | `docs/security/HARDENING.md` (existing) + `docs/security/production-security.md` §2.1 (new) |
 | ERC-4337 wallet contract design | `docs/archive/pq-aa-wallet-design.md` |
-| OPTIGA Trust M integration (IFX I2C, shielded connection) | `docs/OPTIGATRUSTM/*.md` |
+| OPTIGA Trust M integration (IFX I2C, shielded connection) | `docs/secure-elements/OPTIGATRUSTM/*.md` |
 | Firmware measurement / signed updates | `docs/archive/sphincs-c7-firmware-integration.md`, README §"Firmware Update Model" |
 | USB protocol on the wire | `docs/companion/usb-protocol-v2.md`, `docs/hardware/usb-hid-setup.md` |
 | OLED mirror / dev tooling | `docs/hardware/oled-mirror.md` |
@@ -583,7 +583,7 @@ make e2e               # scripted end-to-end: all four trust levels in QEMU
 (deterministic provisioning + auto-confirm + dispatch logging), runs
 QEMU with stdin closed, and asserts every scenario routed to the
 right `TxKind` variant AND returned `NscStatus::Ok`. See
-[docs/architecture/architecture.md](docs/architecture/architecture.md) for the full test
+[docs/architecture/architecture.md](../../architecture/architecture.md) for the full test
 spec and the four scenarios it runs.
 
 ## Cryptographic Primitives
@@ -846,7 +846,7 @@ A single secure element is a single point of trust. Whether the failure mode is 
 
 The cost is one extra I²C peripheral, ~$3 BOM, and ~50 ms added unlock latency.
 
-See [docs/architecture/architecture.md](docs/architecture/architecture.md) for the technical design, [docs/security/HARDENING.md](docs/security/HARDENING.md) for the consolidated hardening requirements, and [docs/archive/m4-cowswap-eip712.md](docs/archive/m4-cowswap-eip712.md) for the CowSwap EIP-712 order clear-signing handoff (deferred M4 milestone — read this before attempting that work).
+See [docs/architecture/architecture.md](../../architecture/architecture.md) for the technical design, [docs/security/HARDENING.md](../HARDENING.md) for the consolidated hardening requirements, and [docs/archive/m4-cowswap-eip712.md](../../archive/m4-cowswap-eip712.md) for the CowSwap EIP-712 order clear-signing handoff (deferred M4 milestone — read this before attempting that work).
 
 ## Implementation Status
 
@@ -2323,8 +2323,8 @@ protocol implements `Eip712Protocol` in a sibling submodule under
 `secure/src/tx/eip712/` and registers itself in the static
 `PROTOCOLS` table; adding a second EIP-712 protocol is a sibling
 file plus a VK row, no edits to `nsc.rs`. See `secure/src/tx/eip712/` and
-**[docs/companion/m4-cowswap-eip712-impl.md](./m4-cowswap-eip712-impl.md)** for
-implementation notes; **[docs/archive/m4-cowswap-eip712.md](./m4-cowswap-eip712.md)**
+**[docs/companion/m4-cowswap-eip712-impl.md](../../companion/m4-cowswap-eip712-impl.md)** for
+implementation notes; **[docs/archive/m4-cowswap-eip712.md](../../archive/m4-cowswap-eip712.md)**
 captures the original handoff design sketch.
 
 ### Verification chain
@@ -4627,7 +4627,7 @@ sessions (bundles A, B, C, D — prompt E has not yet run) into a single
 actionable reference. It is *not* the code; it is the distilled plan.
 Implementation tasks track in `docs/work-todo.md` items #18-22.
 
-Raw research results live under `docs/research-bundles/results/`. Each
+Raw research results live under `docs/security/research-bundles/results/`. Each
 finding below cites the responsible bundle plus any verification caveats.
 
 **Scope of this doc:** threats, mitigations, and architectural decisions
@@ -5384,14 +5384,14 @@ These are where research effort should go. Each subsection is a
 
 **For tools that accept only one attachment per session** (Claude web,
 etc.), we've pre-built self-contained bundle files under
-`docs/research-bundles/`. Each bundle combines the question + a
+`docs/security/research-bundles/`. Each bundle combines the question + a
 condensed version of this briefing + the relevant code excerpts into a
 single ~50-120 KB markdown file. Upload the bundle as the only
 attachment, and the session has everything it needs. See
-`docs/research-bundles/README.md` for the mapping.
+`docs/security/research-bundles/README.md` for the mapping.
 
 **Status as of last update:**
-- Prompt A (fault injection): ✅ run, results in `docs/research-bundles/results/`, synthesised to `docs/security/production-security.md` §2.1 + work-todo.md #18.
+- Prompt A (fault injection): ✅ run, results in `docs/security/research-bundles/results/`, synthesised to `docs/security/production-security.md` §2.1 + work-todo.md #18.
 - Prompt B (key management): ✅ run, results in same dir, synthesised §2.2 + #20 (partially superseded by E).
 - Prompt C (SLH-DSA SCA): ✅ run, synthesised §2.3 + #18.
 - Prompt D (USB hardening): ✅ run, synthesised §2.4 + #19.

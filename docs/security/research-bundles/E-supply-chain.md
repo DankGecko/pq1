@@ -817,8 +817,8 @@ protocol implements `Eip712Protocol` in a sibling submodule under
 `secure/src/tx/eip712/` and registers itself in the static
 `PROTOCOLS` table; adding a second EIP-712 protocol is a sibling
 file plus a VK row, no edits to `nsc.rs`. See `secure/src/tx/eip712/` and
-**[docs/companion/m4-cowswap-eip712-impl.md](./m4-cowswap-eip712-impl.md)** for
-implementation notes; **[docs/archive/m4-cowswap-eip712.md](./m4-cowswap-eip712.md)**
+**[docs/companion/m4-cowswap-eip712-impl.md](../../companion/m4-cowswap-eip712-impl.md)** for
+implementation notes; **[docs/archive/m4-cowswap-eip712.md](../../archive/m4-cowswap-eip712.md)**
 captures the original handoff design sketch.
 
 ### Verification chain

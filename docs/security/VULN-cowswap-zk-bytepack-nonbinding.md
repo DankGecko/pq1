@@ -236,5 +236,5 @@ Analysis + construction only; no PoC witness generated yet. Next step to make it
 empirical: build the v3 zkey, hand `snarkjs`/`rapidsnark` a witness with
 out-of-range receiver/fee/appData signals solving the 7 block equations for a
 chosen malicious/benign pair, and confirm `groth16_verify_3pub` accepts it on a
-QEMU build. Mirrors the layout of `docs/cowswap-zk-poc/` from the amount-overflow
+QEMU build. Mirrors the layout of `docs/security/cowswap-zk-poc/` from the amount-overflow
 finding.

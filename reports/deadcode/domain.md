@@ -43,12 +43,12 @@ passing.
 | file:lines (pre-edit) | item | bucket | rationale |
 |---|---|---|---|
 | `domain/src/lib.rs:289-297` | `fn signing_key_from_parts_with_seed` | 1 (truly unused) | Private helper whose only two callers were the two `_fast` derivation paths deleted below. After removing both, this helper has no callers. |
-| `domain/src/lib.rs:341-359` | `pub fn derive_signing_key_from_entropy_fast` | 1 (truly unused) | `pub` re-exported via `secure/src/crypto.rs`, but workspace-wide grep finds no caller in any crate, host tool (`fwsign`, `fwmeasure`, `xtask`), test, or feature combination. The active fast path is `SLOT_CACHE` reconstitution in `secure/src/nsc/cmd_sign_*` which calls `SigningKey::from_parts` directly with the cached seeds, not via this helper. Only references are in `docs/research-bundles/` narrative. |
+| `domain/src/lib.rs:341-359` | `pub fn derive_signing_key_from_entropy_fast` | 1 (truly unused) | `pub` re-exported via `secure/src/crypto.rs`, but workspace-wide grep finds no caller in any crate, host tool (`fwsign`, `fwmeasure`, `xtask`), test, or feature combination. The active fast path is `SLOT_CACHE` reconstitution in `secure/src/nsc/cmd_sign_*` which calls `SigningKey::from_parts` directly with the cached seeds, not via this helper. Only references are in `docs/security/research-bundles/` narrative. |
 | `domain/src/lib.rs:361-375` | `pub fn derive_bootstrap_key_from_entropy_fast` | 1 (truly unused) | Symmetric with the above — no in-tree caller. Bootstrap keys are produced via `derive_c10_master_keypair_from_entropy*` (different KDF chain, the active one whose `masterPkSeed` / `masterPkRoot` feeds the on-chain CREATE2 salt). Only `derive_bootstrap_vk_from_entropy` in the legacy `"pqwallet-c7-bootstrap"` chain has a live consumer (`secure/src/crypto.rs:254`, `secure/src/se050/mod.rs:2241` cache the VK in `RMEM_BOOTSTRAP_VK`); the fast variant of that chain is unused. |
 | `domain/src/lib.rs:413-437` | `pub fn main_signer_seed_from_bip39` | 4 (vestigial / superseded) | Together with the three `derive_main_*` helpers below, this is the residual "per-chain main signer" key-class from an earlier design. The active design routes per-chain identity through the slot-key chain (`slot_master_entropy → slot_entropy → derive_c10_slot_keypair`), invariant #8 in `CLAUDE.md` ("Stateless slot selection"). The `"pqwallet-c7-main-{sk,pk}-seed"` KDF tags this function uses appear nowhere else and are not in the protected-tags list in `CLAUDE.md`. |
 | `domain/src/lib.rs:460-473` | `pub fn derive_main_key_from_entropy` | 4 (vestigial / superseded) | No caller anywhere in the workspace; the historical `work-todo.md` entry that introduced it (2026-04-14 row "Per-chain key derivation + OTS tracking") describes a flow since superseded by the unified-sign + slot-key path. |
 | `domain/src/lib.rs:475-485` | `pub fn derive_main_keypair_from_entropy` | 4 (vestigial / superseded) | Only consumer was `derive_main_vk_from_entropy` below. |
-| `domain/src/lib.rs:493-501` | `pub fn derive_main_vk_from_entropy` | 4 (vestigial / superseded) | No caller in any crate, host tool, or test. Only mentions are in `docs/research-bundles/` narrative. |
+| `domain/src/lib.rs:493-501` | `pub fn derive_main_vk_from_entropy` | 4 (vestigial / superseded) | No caller in any crate, host tool, or test. Only mentions are in `docs/security/research-bundles/` narrative. |
 | `domain/src/lib.rs:386-398` | Section banner "Two-tier key derivation: bootstrap + per-chain main signers" | 5 (stale comment) | After deleting the four main-signer helpers, the section heading and its commentary about `"pqwallet-c7-main"` are stale. Replaced with a tighter "Bootstrap key derivation (legacy `pqwallet-c7-bootstrap` tags)" banner that documents the cached-VK consumer relationship. |
 | `domain/src/lib.rs:744-748` | `pub fn slot_r` | 1 (truly unused) | Zero callers anywhere — the secure-side sign path never consumes a per-slot randomiser `r`; it uses `slot_entropy` → `derive_c10_slot_seeds` → C10 keygen and lets `sphincs_c10` randomise internally. The `"slot_r"` *byte string* is on `CLAUDE.md`'s protected-tags list, but that protects the KDF *label* from a casual rename; nothing on chain or in firmware actually computes this output. The companion-app-integration doc mention is a derivation-spec leftover with no implementation parity. |
 | `domain/src/lib.rs:752-765` | `fn slot_field` | 1 (truly unused) | Private helper whose only callers were `slot_entropy` and `slot_r`. After inlining the single remaining call into `slot_entropy`, this is dead. |
@@ -90,8 +90,8 @@ errors).
 
 ## Skipped
 
-- `docs/research-bundles/A-fault-injection.md`,
-  `docs/research-bundles/C-slhdsa-side-channel.md`,
+- `docs/security/research-bundles/A-fault-injection.md`,
+  `docs/security/research-bundles/C-slhdsa-side-channel.md`,
   `docs/architecture/architecture.md` (multiple lines), `docs/archive/m4-cowswap-eip712.md`
   all still reference `derive_signing_key_from_entropy_fast`,
   `derive_bootstrap_key_from_entropy_fast`, `derive_main_*`,

@@ -85,7 +85,7 @@ _(none — no deletions to bisect)_
 
 ## Skipped
 
-- `docs/SE050/SE-PLUG-TRUST-MW_04.07.01/**` — vendored NXP middleware
+- `docs/secure-elements/SE050/SE-PLUG-TRUST-MW_04.07.01/**` — vendored NXP middleware
   C sources; out of scope.
 - Phase-11 shim retirement (see above) — workspace-scoped refactor,
   not a `shared`-slice dead-code action.

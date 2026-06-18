@@ -5,7 +5,7 @@
 # (or similar) as a single file, paste nothing else, and the session
 # starts with all the context it needs.
 #
-# Run from repo root:  bash docs/research-bundles/build.sh
+# Run from repo root:  bash docs/security/research-bundles/build.sh
 # Or from this dir:    ./build.sh
 
 set -euo pipefail

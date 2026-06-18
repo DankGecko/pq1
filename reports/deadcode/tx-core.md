@@ -40,7 +40,7 @@ on `thumbv8m`) continue to check clean.
 
 | file:lines (pre-edit) | item | bucket | rationale |
 |---|---|---|---|
-| `tx-core/src/eip1559.rs:229-242` | `U256::format_decimal_fixed` | 1 (truly unused) | Trivial wrapper around `format_decimal(..., trim_trailing_zeros=false, ...)`. Workspace-wide grep finds zero callers in any crate or feature combination; the four call sites that actually need fixed-width fractional rendering (`secure/src/tx/display/{primitives,erc20_unknown,typed_call/mod}.rs`) call `format_decimal` directly with `trim_trailing_zeros = false`. Doc references in `docs/architecture/architecture.md`, `docs/research-bundles/E-supply-chain.md`, `docs/research-bundles/F-trezor-safe-7-comparison.md` are stale narrative — left for a separate docs pass. |
+| `tx-core/src/eip1559.rs:229-242` | `U256::format_decimal_fixed` | 1 (truly unused) | Trivial wrapper around `format_decimal(..., trim_trailing_zeros=false, ...)`. Workspace-wide grep finds zero callers in any crate or feature combination; the four call sites that actually need fixed-width fractional rendering (`secure/src/tx/display/{primitives,erc20_unknown,typed_call/mod}.rs`) call `format_decimal` directly with `trim_trailing_zeros = false`. Doc references in `docs/architecture/architecture.md`, `docs/security/research-bundles/E-supply-chain.md`, `docs/security/research-bundles/F-trezor-safe-7-comparison.md` are stale narrative — left for a separate docs pass. |
 | `tx-core/src/rlp.rs:129-132` | `ListIter::is_empty` | 1 (truly unused) | `#[must_use] pub const fn` with no callers anywhere in the workspace (verified by grep across `**/*.rs`). The parser uses the iterator's `next_item()` early-return on empty rest instead. |
 
 ## Reverted during bisect
@@ -63,8 +63,8 @@ on `thumbv8m.main-none-eabi`.
 ## Skipped
 
 - Doc files referencing `format_decimal_fixed` (`docs/architecture/architecture.md:1002`,
-  `docs/research-bundles/E-supply-chain.md:1092`,
-  `docs/research-bundles/F-trezor-safe-7-comparison.md:2598`,
+  `docs/security/research-bundles/E-supply-chain.md:1092`,
+  `docs/security/research-bundles/F-trezor-safe-7-comparison.md:2598`,
   `reports/readability/tx-core.md:42`). Out of scope for a code-only
   dead-code pass; symbol no longer exists, so the next docs sync should
   drop the references.

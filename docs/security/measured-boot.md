@@ -159,7 +159,7 @@ A hardcoded base would silently measure the FSBL + manifest region instead
 of the running slot the moment the A/B layout relocates the image, making
 this cross-check mis-fire on honest firmware (the "divergence ⇒ tamper"
 signal would then be permanently tripped and ignored). See
-`docs/audits/boot-fsbl-20260611-141459.md` (MEDIUM-1).
+`docs/security/audits/boot-fsbl-20260611-141459.md` (MEDIUM-1).
 
 > **Status of the cross-check.** Today's shipping build is **monolithic**
 > (no FSBL flashed), so only the self-attested secure-world row exists; the

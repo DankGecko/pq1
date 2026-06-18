@@ -94,7 +94,7 @@ consumers not visible in this repo:
   about `ZK_HEADER_LEN`/`ZK_MAX_CALLDATA`/etc. being unused imports — the
   source no longer imports them; the warnings reflect a prior build
   state. Ignored.
-- `docs/archive/sphincs-c7-firmware-integration.md`, `docs/research-bundles/*`
+- `docs/archive/sphincs-c7-firmware-integration.md`, `docs/security/research-bundles/*`
   reference deleted symbols (`WRAPPER_TOTAL_LEN`, `SIGNER_BOOTSTRAP`,
   `MAIN_PUBKEY_PAYLOAD_LEN`, `ZK_HEADER_LEN`). These are research notes
   and a deprecated cutover doc — out of scope (no live code path).

@@ -84,7 +84,7 @@ re-drifting.
 | **S-7d** | Empirical UserID-lockout SW mapping | **done** (on silicon) | none | `git ef3d00da` (Runs 3-4, B-U585I); `create_session` maps `0x6986`→`AuthMethodBlocked` `apdu.rs:679-692` | ⚠ **was marked open** — actually run. `0x6982` was a reverted red herring. **`docs/secure-elements/se050-silicon-findings.md` is stale (says 0x6982) — sync it.** |
 | **S-4** | OPTIGA lower-sev cleanups (5 sub-items) | partial | bench + code | `Conf(E140)` DoS branch live `apdu.rs:907`; F1D5/F1E1 naming split `apdu.rs:161` vs `mod.rs:37` | Items 2/3/5 are doc/code-doable now; item 1 needs a design+bench tradeoff; item 4 needs the board. |
 | **HIGH-1** | SCP03 default-keyed with PUBLISHED AN12436 factory keys (dev) → bus attacker extracts `half_E` | partial (code fenced) | **factory** | prod fence `nsc/mod.rs:378-388` (forces `se050-derived-scp03`); rotation wired `main.rs:1613`; anti-factory-key guard `scp03_logic.rs:252` | ⚠ **Corrected from the audit's as-found "open back-door" — code half is CLOSED** (same fence shape as S-1/S-3: factory keys dev-only, production won't compile without derived keys). Remaining = the per-unit `se050-rotate-scp03` **PUT KEY ceremony on silicon** + validation that rotation takes. |
-| **MED-2** | `e2e-test`/`dev-testkey` escape hatches ship fixed secrets; no prod-check CI gate | OPEN | code | `docs/audits/tz-tamper-debug-20260611-*.md` MEDIUM-2 | A CI/prod-config gate. |
+| **MED-2** | `e2e-test`/`dev-testkey` escape hatches ship fixed secrets; no prod-check CI gate | OPEN | code | `docs/security/audits/tz-tamper-debug-20260611-*.md` MEDIUM-2 | A CI/prod-config gate. |
 | — | **Claim 3 (PIN gate) is PROVISIONAL** | — | bench | `docs/security/threat-model.md` Claim 3 | Re-establish via `pin-gate-hw-counter-e2e` on a ratcheted sacrificial part once S-1 closes. |
 
 ---
@@ -96,7 +96,7 @@ re-drifting.
 | Area | Item | Status | Evidence / where | Source |
 |------|------|--------|------------------|--------|
 | OPTIGA | S-3 soft-counter `build_metadata_counter` compile-fence | open | `apdu.rs:971` ungated; `production-todo.md:188` | sec-review C-6 |
-| CI | Prod-config gate rejecting `e2e-test`/`dev-testkey` fixed secrets (MED-2) | open | `docs/audits/tz-tamper-debug-20260611-*.md` | audits/tz-tamper |
+| CI | Prod-config gate rejecting `e2e-test`/`dev-testkey` fixed secrets (MED-2) | open | `docs/security/audits/tz-tamper-debug-20260611-*.md` | audits/tz-tamper |
 | cargo-checkct | SAES-CMAC mirror driver (`driver_saes`) + a `make checkct` CI gate | partial | `checkct/driver_{kdf,fors,th}` exist (`b0944ecf`); no `driver_saes`, no `make checkct` | sota §1 |
 | on-chain Yul | **hevm equivalence** of `SPHINCsC10Asm` vs a reference Solidity verifier | open | no hevm harness/binary; halmos side done (39 rules) | sota §2 |
 | on-chain Yul | KAT oracle — independent-source leg (`crosscheck.py`) + `leanloop kat` leg | partial | 3-way *shared-corpus* differential already runs (Rust JSON → Yul `SPHINCsC10Asm.t.sol` + Lean `verify-test-vectors`); independent source not wired | sota §2 |
@@ -168,7 +168,7 @@ Compact ledger of security/verification items confirmed complete against the rep
 | Lean FV (Pass-2) | lean4checker gate; FV-invariant lints; 2 KAT near-miss vectors | `make verify-lean4checker`/`verify-fv-lints`; `KatVectors.lean:59-63` | targets exist |
 | Lean FV (Pass-2) | Kontrol/KEVM discharge A3.2/A3.3/A3.4 (30/30) on deployed bytecode | `7042de2d`,`b8cf51a8`,`2f675244`,`451a3ce2`,`df1c08e9`; backend installed | commit chain; re-run = compute |
 | Lean FV (Pass-2) | Quantitative log-domain floor (96-bit @ 2^16 cap, cap load-bearing) | `Crypto/Quantitative.lean` (axiom-free) | partial item — real-valued half open (§B) |
-| Audits | 2026-06-09 firmware-signing audit (12 findings) + 4 parallel paper-audits (2026-06-11) | `docs/security/security-audit-2026-06-firmware-signing.md` (all resolved); `docs/audits/*` | as-resolved record (except HIGH-1/MED-2 in §A) |
+| Audits | 2026-06-09 firmware-signing audit (12 findings) + 4 parallel paper-audits (2026-06-11) | `docs/security/security-audit-2026-06-firmware-signing.md` (all resolved); `docs/security/audits/*` | as-resolved record (except HIGH-1/MED-2 in §A) |
 
 ---
 
@@ -186,7 +186,7 @@ says what it authoritatively owns (don't duplicate it — link it).
 | `production-todo.md` | Factory irreversible-burn TODO | The **bench/factory closure of S-1/S-2/S-3** + E140/F1D1-4/global-LcsO ratchets | **OPTIGA LcsO bench spec + factory burn ceremony** (the metadata bytes) |
 | `docs/provisioning/provisioning-reference.md` | Hardened provisioning ceremony (untrusted-CM) | Corrects S-1/S-2 defaults: F1D0 ships `LcsO<op` not ALW; only `0xE0E0` ships a sample anchor | Provisioning ceremony shape + corrected OPTIGA default-state |
 | `docs/security/red-teaming.md` | EVT bench-attack matrix | Bench tasks: §5.1 S-5 bus capture, §5.4 S-1/2/3 lockdown, §5.5 S-7d, §6.3 TAMP | The physical pass/fail bars + required instruments |
-| `docs/audits/*-20260611-*.md` | 4 parallel adversarial paper-audits | se-tunnels HIGH-1 (SCP03 factory keys) — **code-fenced since the audit** (`nsc/mod.rs:378`), factory ceremony remains; tz-tamper MED-2 (prod-config gate, open); rest resolved-in-commit | The 2026-06-11 four-domain audit record (as-found — verify against current code) |
+| `docs/security/audits/*-20260611-*.md` | 4 parallel adversarial paper-audits | se-tunnels HIGH-1 (SCP03 factory keys) — **code-fenced since the audit** (`nsc/mod.rs:378`), factory ceremony remains; tz-tamper MED-2 (prod-config gate, open); rest resolved-in-commit | The 2026-06-11 four-domain audit record (as-found — verify against current code) |
 | `docs/security/security-audit-2026-06-firmware-signing.md` | WYSIWYS signing/display audit | None open — 12 findings resolved 2026-06-10 (C-1 native-ETH-value page) | The to/value/data→digest binding soundness proof |
 | `docs/secure-elements/se050-silicon-findings.md` | First on-silicon SE050 stress run (2026-05-28) | S-5 round-trip evidence; S-7d mapping ⚠ **stale: says 0x6982, code now 0x6986** | Empirical on-silicon SE050 status |
 | `docs/verification/c10-fips205-delta-audit.md` | FIPS-205 ↔ C10 deviation map | Scopes A3.1 (Lean spec ↔ Yul byte-layout); Rust↔Yul agree byte-for-byte | C10↔FIPS-205 deviation ledger |

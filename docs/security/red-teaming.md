@@ -5,7 +5,7 @@
 **Author:** generated from a codebase deep-dive (2026-06-12)
 **Scope:** what to attack, how, with which instrument, and the pass/fail bar — once the EVT board is provisioned and bumped to RDP-2.
 
-> This plan is the bench-attack companion to the existing paper audits in `docs/audits/`,
+> This plan is the bench-attack companion to the existing paper audits in `docs/security/audits/`,
 > `docs/security/security-review-2026-05.md`, and `docs/security/threat-model.md`. Those reason about the
 > design; this document is about putting probes on copper and glitches on rails.
 
@@ -350,7 +350,7 @@ peripheral RAZ-faults and bumps `hw::tzic::VIOLATION_COUNT`. `secure/src/sau.rs`
 
 **Pass.** Divergence is visible; display bus matches the screen.
 
-**Known gaps (from `docs/audits/boot-fsbl-*.md`).**
+**Known gaps (from `docs/security/audits/boot-fsbl-*.md`).**
 - **The shipping build is currently MONOLITHIC** — the FSBL is built but not actually flashed/booted;
   A/B slotting reads as live in code but is aspirational. Confirm the EVT's real boot path.
 - **Divergence detection is HUMAN-ONLY** — there is no automated on-device comparator between the
@@ -653,7 +653,7 @@ locked unit before sign-off.
 ## 12. References
 
 - Invariants & threat model: `docs/security/threat-model.md`, `README.md`
-- Audits: `docs/audits/{crypto-core,fault-injection,pin-unlock-lockstep,counter-replay-state,boot-fsbl,gateway-parsing,wysiwys-clearsign,sig-domain-separation}-*.md`
+- Audits: `docs/security/audits/{crypto-core,fault-injection,pin-unlock-lockstep,counter-replay-state,boot-fsbl,gateway-parsing,wysiwys-clearsign,sig-domain-separation}-*.md`
 - Security review + ship blockers: `docs/security/security-review-2026-05.md`, `docs/production-todo.md`, `docs/work-todo.md`
 - SE bring-up: `docs/secure-elements/optiga-bringup-status.md`, `docs/secure-elements/optiga-brick-postmortem.md`, `docs/secure-elements/se050-userid-pin-auth.md`, `docs/secure-elements/se050-stress-harness.md`
 - Hardening / boot: `docs/security/HARDENING.md`, `docs/security/measured-boot.md`, `docs/firmware/reproducible-builds.md`

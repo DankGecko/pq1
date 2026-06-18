@@ -50,7 +50,7 @@ The bundles are snapshots of the code. When relevant files change, re-
 run the builder:
 
 ```
-bash docs/research-bundles/build.sh
+bash docs/security/research-bundles/build.sh
 ```
 
 This regenerates all five from the current tree.
@@ -84,7 +84,7 @@ text. Negligible.
 
 ## After results arrive
 
-Create a `docs/research-bundles/results/` subdirectory (not yet made)
+Create a `docs/security/research-bundles/results/` subdirectory (not yet made)
 and drop the output markdown from each session in as
 `{LETTER}-{topic}.result.md`. When enough results have accumulated,
 synthesise findings into:

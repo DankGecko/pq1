@@ -578,7 +578,7 @@ fn negative_shape_rejects_each_tail_pad_byte_nonzero() {
 // natively in `verify_and_bind_trailer` so the class is closed from both
 // sides. These tests pin the native gate.
 
-/// The exact forged sellAmount from `docs/cowswap-zk-poc/`: the unique
+/// The exact forged sellAmount from `docs/security/cowswap-zk-poc/`: the unique
 /// `raw_amount = scaled_repr * (10^12)^-1 mod r` preimage of the benign
 /// "0.2000 USDC" residue. 254 bits — must be rejected.
 const POC_FORGED_SELL_AMOUNT: [u8; 32] = [

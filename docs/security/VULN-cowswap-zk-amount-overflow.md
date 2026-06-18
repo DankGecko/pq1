@@ -5,8 +5,8 @@
 (used by `circuits/cowswap/eip712_order/circuit.circom`)
 **Found:** 2026-06-10 (ZK clear-signing soundness audit)
 **Status:** **RESOLVED 2026-06-10** (both cowswap AND aave fully closed — circuit bound + native guard + regenerated VKs on both paths)
-**PoC:** `docs/cowswap-zk-poc/forge_amount_witness.py`
-**Negative test:** `docs/cowswap-zk-poc/run_overflow_negative_test.sh`
+**PoC:** `docs/security/cowswap-zk-poc/forge_amount_witness.py`
+**Negative test:** `docs/security/cowswap-zk-poc/run_overflow_negative_test.sh`
 
 ## Resolution (2026-06-10)
 

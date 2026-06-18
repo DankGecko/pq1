@@ -5,7 +5,7 @@ sessions (bundles A, B, C, D — prompt E has not yet run) into a single
 actionable reference. It is *not* the code; it is the distilled plan.
 Implementation tasks track in `docs/work-todo.md` items #18-22.
 
-Raw research results live under `docs/research-bundles/results/`. Each
+Raw research results live under `docs/security/research-bundles/results/`. Each
 finding below cites the responsible bundle plus any verification caveats.
 
 **Scope of this doc:** threats, mitigations, and architectural decisions

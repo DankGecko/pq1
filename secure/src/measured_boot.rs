@@ -35,7 +35,7 @@ use crate::ui::{display, input, show_status, DISPLAY_COLS};
 // layout relocates the image, making the FSBL-vs-secure-world fingerprint
 // cross-check (CLAUDE.md "divergence ⇒ tamper") mis-fire on honest
 // firmware. See docs/security/measured-boot.md and
-// docs/audits/boot-fsbl-20260611-141459.md (MEDIUM-1).
+// docs/security/audits/boot-fsbl-20260611-141459.md (MEDIUM-1).
 //
 // On STM32U585, CMSE veneers (.gnu.sgstubs) live in FLASH, so the last
 // flash content is at __veneer_limit.
