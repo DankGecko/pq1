@@ -1067,7 +1067,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             }
         }
     }
-    let mut pages = pick_sign_pages(
+    let mut pages = match pick_sign_pages(
         &tx_for_display,
         inner_data,
         zk_v3_verified.as_ref(),
@@ -1078,7 +1078,17 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         verified_meta.as_ref(),
         selector_verified.as_ref(),
         &resolver,
-    );
+    ) {
+        Ok(p) => p,
+        // Fail-closed (audit 2026-06-18 — native-value WYSIWYS gate): the
+        // chosen renderer filled MAX_PAGES, so the mandatory native-ETH
+        // value page could not be spliced. Refuse rather than release a
+        // signature over ETH the user never saw on the trusted display.
+        Err(()) => {
+            ui::show_status("Sign refused", "value unshown");
+            return NscStatus::InternalError as u32;
+        }
+    };
     // ERC-8213 fingerprint — show the calldata digest as the last
     // page so a user can cross-check against `cast` / `viem`. Always
     // appended (cap is 22 pages; longest renderer ≤ 14 pages, well

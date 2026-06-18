@@ -802,7 +802,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             ui::show_status("CoW sign", "v3 required (batch)");
             return NscStatus::InvalidPointer as u32;
         }
-        let inner_pages = pick_sign_pages(
+        let inner_pages = match pick_sign_pages(
             &tx_for_display,
             inner_data,
             r.and_then(|r| r.zk_v3.as_ref()),
@@ -813,7 +813,18 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             r.and_then(|r| r.erc20.as_ref()),
             r.and_then(|r| r.selector.as_ref()),
             &resolver,
-        );
+        ) {
+            Ok(p) => p,
+            // Fail-closed (audit 2026-06-18 — native-value WYSIWYS gate):
+            // this member's renderer filled MAX_PAGES so its native-ETH
+            // value page could not be spliced. Refuse the whole atomic
+            // batch rather than sign a member whose value the user never
+            // saw on the trusted display.
+            Err(()) => {
+                ui::show_status("Batch sign", "value unshown");
+                return NscStatus::InternalError as u32;
+            }
+        };
         let mut pages = wrap_pages_with_batch_banner(inner_pages, i, batch_count);
 
         // Per-tx ERC-8213 fingerprint. The user sees one fingerprint

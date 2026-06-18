@@ -212,6 +212,14 @@ impl Pages {
 /// through the Safe surface with the order as its inner pages. A bare
 /// CoW render would hide the SafeTx's signed refund parameters, which
 /// are a drain channel (see `safe_display.rs`).
+///
+/// # Refusal (fail-closed)
+///
+/// Returns `Err(())` when the dispatcher-level native-ETH value page is
+/// mandatory (`tx.value != 0`) but cannot be spliced because the chosen
+/// renderer already filled `MAX_PAGES`. Callers MUST map `Err(())` to a
+/// refuse-to-sign — releasing a signature whose native `value` was never
+/// displayed is exactly the C-1 ETH-drain class this gate exists to close.
 #[cfg(not(test))]
 #[allow(clippy::too_many_arguments)]
 pub fn pick_sign_pages(
@@ -225,24 +233,32 @@ pub fn pick_sign_pages(
     erc20: Option<&crate::erc20::bundle::Erc20Metadata<'_>>,
     selector: Option<&crate::selectors::SelectorMeta<'_>>,
     resolver: &crate::names::NameResolver<'_>,
-) -> Pages {
+) -> Result<Pages, ()> {
     let mut pages = pick_sign_pages_inner(
         tx, inner_data, v3, v1, safe_v1, safe_exec, erc7730, erc20, selector, resolver,
     );
-    // Dispatcher-level WYSIWYS invariant (audit C-1 / H-2 / M-8).
+    // Dispatcher-level WYSIWYS invariant (audit C-1 / H-2 / M-8; hardened
+    // 2026-06-18).
     //
     // The outer UserOp `value` is signed verbatim into
-    // `executeWithOffchainCount(ownerIndex, count, target, value, data)`,
-    // but several renderers historically surfaced only token / inner-tx
-    // semantics and never the native ETH. Rather than trust each renderer
-    // to opt in, EVERY sign confirm funnels through here: when `value`
-    // is non-zero we splice in a dedicated, loud value page right after
-    // the renderer's banner so the user always sees the ETH the signature
-    // commits to. A future renderer physically cannot forget it. The
-    // helper lives in `value_page.rs` so the host-test scaffold can mount
-    // and exercise the real body (this dispatcher is `cfg(not(test))`).
-    value_page::enforce_native_value_page(&mut pages, &tx.value);
-    pages
+    // `executeWithOffchainCount(ownerIndex, count, target, value, data)`
+    // and forwarded on chain via `target.call{value: value}(data)`, but
+    // several renderers surface only token / inner-tx semantics and never
+    // the native ETH. Rather than trust each renderer to opt in, EVERY
+    // sign confirm funnels through here: when `value` is non-zero we splice
+    // in a dedicated, loud value page right after the renderer's banner so
+    // the user always sees the ETH the signature commits to.
+    //
+    // `enforce_native_value_page` is now FI-hardened (the skip-on-zero
+    // decision is sentinel-gated, not a bare `if value.is_zero()`) and
+    // FAILS CLOSED: if `value != 0` and the loud page cannot be spliced
+    // (the renderer already filled `MAX_PAGES`), it returns `Err(())` and
+    // we propagate it so the caller REFUSES to sign rather than release a
+    // signature over ETH the user never saw. The helper lives in
+    // `value_page.rs` so the host-test scaffold can mount and exercise the
+    // real body (this dispatcher is `cfg(not(test))`).
+    value_page::enforce_native_value_page(&mut pages, &tx.value)?;
+    Ok(pages)
 }
 
 #[cfg(not(test))]
