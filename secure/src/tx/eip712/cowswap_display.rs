@@ -176,18 +176,65 @@ pub fn append_order_body_pages(
     write_line(&mut pages.row_mut(p, 3), "> next");
     p += 1;
 
-    // ── Fee + balance kinds ──────────────────────────────────────────
-    write_line(&mut pages.row_mut(p, 0), "Fee:");
-    write_fee_row(
-        &mut pages.row_mut(p, 1),
-        &canonical[OFF_FEE_AMOUNT..OFF_FEE_AMOUNT + 32],
-    );
+    // ── Fee (in sell token) + balance kinds ──────────────────────────
+    //
+    // The GPv2 `feeAmount` is denominated in the SELL token and is
+    // debited from the owner on settlement (the owner pays
+    // `sellAmount + feeAmount`; the solver keeps the fee). It is bound by
+    // the same orderDigest cross-check as every other field, so it MUST
+    // be shown at full magnitude — a benign `sellAmount` with an enormous
+    // `feeAmount` is a wallet-draining order otherwise.
+    //
+    // It is rendered with the SAME fixed-width anti-spoof formatter the
+    // sell leg uses (`write_cow_leg_amount`): when the sell leg decoded
+    // we apply its `decimals` + `symbol`; otherwise we show the raw
+    // integer (decimals = 0, no unit). Either way the formatter fails
+    // safe to "(amount too big)" rather than silently dropping the
+    // high-order bytes — the bug in the retired `write_fee_row`, which
+    // showed only the low 7 of 32 bytes (a 100-WETH fee read as ~0.06,
+    // and any multiple of 2^56 read as zero).
+    write_line(&mut pages.row_mut(p, 0), "Fee (sell tok):");
+    let fee: [u8; 32] = canonical[OFF_FEE_AMOUNT..OFF_FEE_AMOUNT + 32]
+        .try_into()
+        .expect("32-byte slice");
+    {
+        let page = pages.page_mut(p);
+        let (head, tail) = page.split_at_mut(2);
+        match sell {
+            CowLeg::Decoded {
+                decimals,
+                symbol,
+                symbol_len,
+                ..
+            } => {
+                crate::tx::display::primitives::write_cow_leg_amount(
+                    &mut head[1],
+                    &mut tail[0],
+                    &fee,
+                    *decimals,
+                    &symbol[..*symbol_len as usize],
+                );
+            }
+            CowLeg::AddrHex => {
+                crate::tx::display::primitives::write_cow_leg_amount(
+                    &mut head[1],
+                    &mut tail[0],
+                    &fee,
+                    0,
+                    &[],
+                );
+            }
+        }
+    }
+    // Balance kinds move to the footer row (the fee amount now occupies
+    // rows 1-2); the page stays a single page so the constant-8 body
+    // budget — and every Safe/multiSend page-budget pre-count — is
+    // unchanged.
     write_balance_row(
-        &mut pages.row_mut(p, 2),
+        &mut pages.row_mut(p, 3),
         canonical[OFF_SELL_TOKEN_BAL],
         canonical[OFF_BUY_TOKEN_BAL],
     );
-    write_line(&mut pages.row_mut(p, 3), "> next");
     p += 1;
 
     // ── appData ──────────────────────────────────────────────────────
@@ -449,17 +496,6 @@ fn write_partial_row(row: &mut [u8; DISPLAY_COLS], partial: u8) {
 
 /// Render the low 7 bytes of a 32-byte fee amount as "0x" + 14 hex
 /// chars = 16 chars exactly.
-fn write_fee_row(row: &mut [u8; DISPLAY_COLS], fee: &[u8]) {
-    *row = [b' '; DISPLAY_COLS];
-    row[0] = b'0';
-    row[1] = b'x';
-    let start = 32 - 7;
-    for i in 0..7 {
-        let b = fee[start + i];
-        row[2 + i * 2] = hex_nibble(b >> 4);
-        row[2 + i * 2 + 1] = hex_nibble(b & 0x0f);
-    }
-}
 
 /// Render the sell/buy balance kinds as:
 ///   "src:S dst:D"   where S ∈ {e,x,i} (erc20, external, internal)
