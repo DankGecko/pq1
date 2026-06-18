@@ -30,6 +30,7 @@ import SphincsCVerify.Spec.Bytes
 import SphincsCVerify.Wallet.Storage
 import SphincsCVerify.Wallet.ValidateUserOp
 import SphincsCVerify.Bridge.SolidityVerifier
+import SphincsCVerify.Interpreter.C10Program
 
 namespace SphincsCVerify.Bridge.EntryPoint
 
@@ -68,14 +69,17 @@ structure State where
       `validateUserOp`. -/
   walletCalled : Bool
 
-/-- The deployed verifier, modelled at the Lean level. By
-    `Bridge.yul_eq_refined` and the bridge axioms in
-    `Bridge/Refinement.lean` (A1, A3, A4), this Lean stub equals the
-    on-chain `SPHINCsC10Asm.verify` invocation. -/
+/-- The deployed verifier, modelled at the Lean level as the *faithful
+    transcription* of the on-chain Yul (`execC10Asm`, which includes the
+    two leading N-mask input guards the deployed bytecode runs before the
+    verify body). By `solidityVerifier_compiles_correctly` (A3.1) this Lean
+    function equals the on-chain `SPHINCsC10Asm.verify` invocation; by
+    `execC10Asm_eq` it equals `nMaskedB pkSeed && nMaskedB pkRoot &&
+    verifyYulModel …`, i.e. the declarative spec gated on N-masked keys. -/
 def deployedVerifier
     (pkSeed pkRoot : ByteVec 32) (digest : ByteVec 32)
     (sig : ByteVec SignatureLen) : Bool :=
-  verifyYulModel pkSeed pkRoot digest sig
+  SphincsCVerify.Interpreter.C10.execC10Asm pkSeed pkRoot digest sig
 
 /-! ## Transition -/
 

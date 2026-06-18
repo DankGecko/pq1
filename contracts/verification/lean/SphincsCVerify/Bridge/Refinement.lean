@@ -63,6 +63,7 @@ import SphincsCVerify.Wallet.ValidateUserOp
 import SphincsCVerify.Wallet.Execute
 import SphincsCVerify.Wallet.Factory
 import SphincsCVerify.Spec.Hash
+import SphincsCVerify.Interpreter.C10Refine
 
 namespace SphincsCVerify.Bridge
 
@@ -184,11 +185,24 @@ documentation. -/
         fixed; `verifyRefined_eq_spec` stays `rfl` over the faithful spec).
     Standing ceiling (coverage, NOT a falsity): a symbolic ∀-signature
     equivalence over all 4008-byte sigs is intractable under uninterpreted
-    SHA-256 (= A1); the ∀ is carried by the KAT + bulk + mutant screen. -/
+    SHA-256 (= A1); the ∀ is carried by the KAT + bulk + mutant screen.
+
+    FAITHFUL FORM (2026-06-18). The RHS is the *transcribed deployed Yul*
+    `Interpreter.C10.execC10Asm`, NOT the bare `verifyYulModel`. The
+    deployed bytecode rejects non-N-masked public keys before running the
+    verify body (the two `&&& NMASK == key` guards); `execC10Asm` keeps
+    those guards, `verifyYulModel` truncates them away. So the previous
+    `= verifyYulModel` statement was FALSE as a ∀ (a non-N-masked key makes
+    the bytecode return false while `verifyYulModel` can return true). The
+    two axioms are logically *incomparable* (they agree on N-masked keys,
+    disagree off them); this is a soundness CORRECTION, not a weakening.
+    `execC10Asm_eq` (Lean kernel) then unfolds `execC10Asm` to
+    `nMaskedB pkSeed && nMaskedB pkRoot && verifyYulModel …`, recovering the
+    declarative-spec connection on N-masked keys. -/
 axiom solidityVerifier_compiles_correctly :
     ∀ (pkSeed pkRoot : ByteVec 32) (message : ByteVec 32) (sig : ByteVec SignatureLen),
       DeployedBytecode.SPHINCsC10Asm_verify pkSeed pkRoot message sig
-        = verifyYulModel pkSeed pkRoot message sig
+        = SphincsCVerify.Interpreter.C10.execC10Asm pkSeed pkRoot message sig
 
 /-- **A3.2 — `PQSmartWallet.validateUserOp` matches `validateSignature`,
     on reachable states.**
@@ -451,15 +465,21 @@ axiom evm_bytecode_executes_correctly :
 
 /-! ## Composite refinement statement
 
-The deployed `SPHINCsC10Asm.verify` returns `true` iff the spec verifier
-`Spec.Signature.verify` returns `true`. Composes
-`verifyRefined_eq_spec` (Lean kernel) + `yul_eq_refined` (Lean kernel) +
-`solidityVerifier_compiles_correctly` (A3.1). -/
+The deployed `SPHINCsC10Asm.verify` returns `true` iff the public keys are
+N-masked AND the spec verifier `verifyYulModel` (= `Spec.Signature.verify`)
+returns `true`. Composes `solidityVerifier_compiles_correctly` (A3.1, now
+the faithful `= execC10Asm` form) + `execC10Asm_eq` (Lean kernel) +
+`verifyRefined_eq_spec`/`yul_eq_refined` (Lean kernel, inside
+`verifyYulModel`). The N-mask conjuncts are load-bearing, not cosmetic:
+the deployed bytecode genuinely rejects non-N-masked keys. -/
 
 theorem deployed_verifier_refines_spec
     (pkSeed pkRoot : ByteVec 32) (message : ByteVec 32) (sig : ByteVec SignatureLen) :
     DeployedBytecode.SPHINCsC10Asm_verify pkSeed pkRoot message sig
-      = verifyYulModel pkSeed pkRoot message sig :=
-  solidityVerifier_compiles_correctly pkSeed pkRoot message sig
+      = (SphincsCVerify.Interpreter.C10.nMaskedB pkSeed
+          && SphincsCVerify.Interpreter.C10.nMaskedB pkRoot
+          && verifyYulModel pkSeed pkRoot message sig) :=
+  (solidityVerifier_compiles_correctly pkSeed pkRoot message sig).trans
+    (SphincsCVerify.Interpreter.C10.execC10Asm_eq pkSeed pkRoot message sig)
 
 end SphincsCVerify.Bridge
