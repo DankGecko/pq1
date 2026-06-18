@@ -3610,12 +3610,18 @@ miri:
 #   make ui-golden                          # check against committed fixtures
 #   make ui-golden GOLDEN_MODE=--regenerate # re-baseline after an intentional UI change
 #
-# LOCAL / MANUAL gate (not in CI): capturing all 24 e2e scenarios' frames over
-# the QEMU semihosting backend emits each [UI-FP] line one trap per char, so a
-# full run is 10+ min — too slow/fragile for a CI gate as written. The
-# CI-viable version is a dedicated short-capture scenario (measured-boot + the
-# key dialogs only) instead of the full 24-scenario e2e. Regenerate the
-# committed fixtures only from a clean, intentional render (slow but correct).
+# LOCAL / MANUAL gate (not in CI). ROOT CAUSE (measured 2026-06-18): the
+# slowness is NOT the frame emit — it's that this captures frames WHILE running
+# the full 24-scenario sign-e2e, and each scenario's SPHINCS+C10 sign over
+# QEMU's SOFTWARE SHA-256 is seconds-to-minutes. A 150s bounded run reached
+# only Scenario 1 (≈ a full run would be ~60 min). The CI-viable redesign is a
+# dedicated RENDER-ONLY harness: render a curated set of representative screens
+# (measured-boot fingerprint + a handful of confirm dialogs) directly via the
+# display renderers, with NO signing — fast because it skips the C10 signs.
+# That harness (~a new `ui-golden`-mode entry that constructs representative
+# display inputs + flushes) is the unfinished piece; until then this target
+# runs the slow full-e2e capture and is local/manual only. Regenerate fixtures
+# only from a clean, intentional render.
 GOLDEN_MODE ?= --check
 ui-golden:
 	@echo "==> Building e2e suite with ui-capture (frame-fingerprint emitter)"
