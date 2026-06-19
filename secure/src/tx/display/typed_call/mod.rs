@@ -649,9 +649,15 @@ fn write_bytes_or_string_rows(
     let _ = p;
 }
 
-/// Array render (covers both `T[N]` and `T[]`):
+/// Array render (covers both `T[N]` and `T[]`), used only for the
+/// count <= 1 case (`render_arg` declines count > 1 outright):
 ///   row1: "[<N> items]"
-///   row2: "first: <decoded element>" (only if N > 0 and elem is renderable)
+///   row2: "first: <decoded element>" — only when the sole element renders
+///         in FULL on this inline row. Returns `false` (→ blind-sign
+///         fallback) for any element that would be truncated or elided
+///         (addresses, >=1e9 amounts, bytesN > 4): a partially-shown value
+///         on a decoded-looking page is the count==1 analog of the
+///         array-tail hiding bug (audit 2026-06-18).
 ///   row3: blank
 fn write_array_rows(
     row1: &mut [u8; DISPLAY_COLS],
@@ -707,7 +713,16 @@ fn write_array_rows(
                     p += 2;
                 }
             }
-            true
+            // WYSIWYS (audit 2026-06-18 — count==1 array elision). Only 5 of
+            // the 20 address bytes fit on this single inline row and the
+            // NameResolver is skipped, so a recipient shown here looks decoded
+            // yet is neither fully visible nor name/scam-checked. DECLINE so
+            // the arg falls back to the loud blind-sign flow (banner + full
+            // calldata SHA-256), matching the count>1 "refuse rather than
+            // truncate" rule. The earlier `count > 1` gate only caught hidden
+            // *tail* elements; a single attacker recipient was still truncated
+            // behind a decoded-looking page.
+            false
         }
         TypeRef::Bool => {
             let v = match abi::read_bool(body, first_elem_off) {
@@ -723,37 +738,41 @@ fn write_array_rows(
                 None => return false,
             };
             let mut tmp = [0u8; 96];
+            // WYSIWYS (audit 2026-06-18 — count==1 array elision). Render the
+            // element only if its full decimal fits on the inline row. If it
+            // would elide to "..." (any value needing >9 digits after the
+            // "first: " prefix — i.e. >=1e9 raw, which is essentially every
+            // non-dust 18-decimal amount), the magnitude would be invisible
+            // while still bound into the signed calldata. DECLINE instead, so
+            // the arg falls back to the loud blind-sign flow with the full
+            // calldata SHA-256. Mirrors the count>1 decline.
             match v.format_decimal(0, 0, false, &mut tmp) {
                 Some(n) if p + n <= DISPLAY_COLS => {
                     row2[p..p + n].copy_from_slice(&tmp[..n]);
+                    true
                 }
-                Some(_) => {
-                    let _ = write_str(row2, p, b"...");
-                }
-                None => {
-                    let _ = write_str(row2, p, b"!OVF");
-                }
+                _ => false,
             }
-            true
         }
         TypeRef::BytesN(n) => {
             let w = match abi::word(body, first_elem_off) {
                 Some(w) => w,
                 None => return false,
             };
-            let bytes_to_show = core::cmp::min(*n as usize, 4);
-            if p + 2 + 2 * bytes_to_show <= DISPLAY_COLS {
-                row2[p] = b'0';
-                row2[p + 1] = b'x';
+            let n = *n as usize;
+            // WYSIWYS (audit 2026-06-18 — count==1 array elision). Show in full
+            // only if all N bytes fit on the inline row; otherwise DECLINE
+            // rather than render a truncated "0x..a." that looks decoded.
+            if n == 0 || n > 4 || p + 2 + 2 * n > DISPLAY_COLS {
+                return false;
+            }
+            row2[p] = b'0';
+            row2[p + 1] = b'x';
+            p += 2;
+            for i in 0..n {
+                row2[p] = hex_nibble(w[i] >> 4);
+                row2[p + 1] = hex_nibble(w[i] & 0x0f);
                 p += 2;
-                for i in 0..bytes_to_show {
-                    row2[p] = hex_nibble(w[i] >> 4);
-                    row2[p + 1] = hex_nibble(w[i] & 0x0f);
-                    p += 2;
-                }
-                if (*n as usize) > bytes_to_show && p < DISPLAY_COLS {
-                    row2[p] = b'.';
-                }
             }
             true
         }
@@ -823,10 +842,40 @@ mod array_wysiwys_tests {
     }
 
     #[test]
-    fn single_element_dyn_array_renders_in_full() {
-        // 1 element is fully shown on its page — nothing hidden.
+    fn single_element_address_array_declines() {
+        // A 20-byte address cannot be shown in full on the inline "first:"
+        // row (only 5 of 20 bytes fit, name lookup skipped), so a single-
+        // element address[] must DECLINE to blind-sign rather than render a
+        // truncated, name-unchecked recipient that looks decoded
+        // (audit 2026-06-18 — count==1 array elision).
         let body = address_array_body(1);
-        assert_eq!(render_first_arg(b"f(address[])", &body), Some(true));
+        assert_eq!(render_first_arg(b"f(address[])", &body), Some(false));
+    }
+
+    /// Canonical `uint256[]` calldata body (no selector), one element `v`.
+    fn single_uint_array_body(v: u32) -> Vec<u8> {
+        let mut body = Vec::new();
+        body.extend_from_slice(&word_be32(32)); // offset to the length word
+        body.extend_from_slice(&word_be32(1)); // element count
+        body.extend_from_slice(&word_be32(v)); // the sole element
+        body
+    }
+
+    #[test]
+    fn single_element_small_uint_array_renders() {
+        // A 1-element uint256[] whose value fits the 9-col inline budget is
+        // shown in full — nothing hidden, so it renders.
+        let body = single_uint_array_body(12_345);
+        assert_eq!(render_first_arg(b"f(uint256[])", &body), Some(true));
+    }
+
+    #[test]
+    fn single_element_large_uint_array_declines() {
+        // 1e9 (10 digits) overflows the 9-col inline budget and would render
+        // as "first: ..." — the magnitude signed-but-not-shown. Any non-dust
+        // 18-decimal amount lands here. Must DECLINE, not elide.
+        let body = single_uint_array_body(1_000_000_000);
+        assert_eq!(render_first_arg(b"f(uint256[])", &body), Some(false));
     }
 
     #[test]
