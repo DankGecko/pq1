@@ -613,7 +613,7 @@ fn positive_batch_wrap_adds_banner_page() {
     let tx = sample_tx();
     let inner = render_pages(&tx, &resolver);
     let inner_len = inner.len;
-    let wrapped = wrap_pages_with_batch_banner(inner, 0, 3);
+    let wrapped = wrap_pages_with_batch_banner(inner, 0, 3).expect("banner fits");
     assert_eq!(wrapped.len, inner_len + 1);
     // Banner page is page 0
     let row1 = row_str(&wrapped.buf[0][1]);
@@ -1163,7 +1163,7 @@ fn negative_batch_banner_renders_one_based_index() {
     let tx = sample_tx();
     for idx in 0..4 {
         let inner = render_pages(&tx, &resolver);
-        let wrapped = wrap_pages_with_batch_banner(inner, idx, 4);
+        let wrapped = wrap_pages_with_batch_banner(inner, idx, 4).expect("banner fits");
         let row2 = row_str(&wrapped.buf[0][2]);
         let expected_one_based = format!("Tx {} of 4", idx + 1);
         assert!(row2.contains(&expected_one_based),
@@ -1174,19 +1174,17 @@ fn negative_batch_banner_renders_one_based_index() {
 
 #[test]
 fn negative_batch_banner_refuses_to_overflow_max_pages() {
-    // Assumption (batch.rs: 33-39): if inner.len + 1 > MAX_PAGES, the
-    // wrapper must fall back to the inner pages unchanged rather than
-    // truncating or panicking. This guards against future renderers
-    // growing past MAX_PAGES - 1 and silently dropping the banner OR
-    // the last inner page.
+    // Fail-closed contract (batch.rs, finding F5): if inner.len + 1 > MAX_PAGES
+    // the wrapper must return Err so the caller refuses to sign, rather than
+    // dropping the "BATCH SIGN | Tx i of N" banner and signing the bare inner
+    // pages. Previously this returned the inner pages unchanged (banner
+    // silently dropped) and the batch handler signed anyway.
     let mut huge = Pages::empty_with_len(MAX_PAGES);
     // Tag the inner so we can recognise it.
     huge.buf[0][0][0] = b'I';
     let wrapped = wrap_pages_with_batch_banner(huge, 0, 2);
-    assert_eq!(wrapped.len, MAX_PAGES,
-        "wrap must refuse to grow past MAX_PAGES");
-    assert_eq!(wrapped.buf[0][0][0], b'I',
-        "on refusal, inner pages must be returned unchanged");
+    assert!(wrapped.is_err(),
+        "wrap must refuse (Err) rather than drop the banner past MAX_PAGES");
 }
 
 // --- Pages container bounds --------------------------------------------------
@@ -1220,7 +1218,7 @@ fn negative_pages_row_mut_panics_on_row_out_of_range() {
 fn negative_max_pages_covers_personal_sign_worst_case() {
     // EIP-1271 PersonalSign render = 5 fixed + ceil(MAX/48) message
     // pages. CLAUDE.md fixes the message cap so the worst case fits in
-    // MAX_PAGES (currently 22). This test asserts the budget envelope —
+    // MAX_PAGES (currently 27). This test asserts the budget envelope —
     // if anyone bumps MAX_OFFCHAIN_PERSONAL_SIGN_LEN past what the
     // page bucket can accommodate, MAX_PAGES must grow to match.
     let max_message_pages = MAX_PAGES - 5;
@@ -1238,7 +1236,7 @@ fn negative_max_pages_matches_production_constant() {
     // copy and that source must stay in lockstep. Searches the
     // production source text rather than the gated-out module.
     let src = include_str!("../tx/display/mod.rs");
-    let needle = "pub const MAX_PAGES: usize = 24;";
+    let needle = "pub const MAX_PAGES: usize = 27;";
     assert!(src.contains(needle),
         "production tx/display/mod.rs no longer defines `{}` — either \
          bump MAX_PAGES here and update this test, OR fix the source.",

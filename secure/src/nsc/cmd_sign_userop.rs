@@ -998,7 +998,10 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // dispatcher's native-value page when the outer UserOp carries
     // ETH, plus the two ERC-8213 fingerprint pages appended below.
     {
-        let reserved = usize::from(value.iter().any(|&b| b != 0)) + 2;
+        // native-value page (when outer value != 0) + 2 ERC-8213
+        // fingerprint pages + 2 gas/fee pages (the dispatcher splices the
+        // gas pages for the Safe surface — audit 2026-06-19).
+        let reserved = usize::from(value.iter().any(|&b| b != 0)) + 2 + 2;
         match crate::tx::display::multisend_sign_gate(
             safe_v1_verified.as_ref(),
             safe_exec_verified.as_ref(),
@@ -1091,17 +1094,24 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         }
     };
     // ERC-8213 fingerprint — show the calldata digest as the last
-    // page so a user can cross-check against `cast` / `viem`. Always
-    // appended (cap is 22 pages; longest renderer ≤ 14 pages, well
-    // within budget). If the buffer is full (shouldn't happen with
-    // current renderers but the bound is enforced), the fingerprint
-    // is silently skipped — off-device verification still works.
+    // page so a user can cross-check against `cast` / `viem`. Cap is
+    // `MAX_PAGES` = 27; the worst single-tx Safe-multiSend flow lands on
+    // 26 = render 22 + 2 gas splice + 2 fingerprint, so the two fingerprint
+    // pages fit, and `multisend_sign_gate` reserves these pages. If the buffer
+    // is nonetheless full we fail closed (F5): the fingerprint binds the
+    // displayed intent to the signed calldata, so dropping it silently and
+    // signing anyway breaks that binding.
     let calldata_fingerprint =
         pqsigner_tx_core::erc8213::calldata_digest(inner_data);
-    let _ = crate::tx::display::erc8213::append_fingerprint_page(
+    if crate::tx::display::erc8213::append_fingerprint_page(
         &mut pages,
         crate::tx::display::erc8213::Kind::CalldataDigest(calldata_fingerprint),
-    );
+    )
+    .is_err()
+    {
+        ui::show_status("Sign refused", "fp unshown");
+        return NscStatus::InternalError as u32;
+    }
     match confirm(pages.as_slice()) {
         ConfirmResult::Confirmed => {}
         ConfirmResult::Cancelled => {

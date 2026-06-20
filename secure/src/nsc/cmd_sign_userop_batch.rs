@@ -763,10 +763,11 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         // DELEGATECALL must pass every hard rule and fit the trusted-
         // display page budget, else refuse the whole batch. Reserved
         // pages here: the dispatcher's native-value page when this
-        // member carries ETH, the two ERC-8213 fingerprint pages, and
-        // the batch banner page.
+        // member carries ETH, the two ERC-8213 fingerprint pages, the
+        // batch banner page, and the two gas/fee pages the dispatcher
+        // splices for the Safe surface (audit 2026-06-19).
         {
-            let reserved = usize::from(ptx.value.iter().any(|&b| b != 0)) + 2 + 1;
+            let reserved = usize::from(ptx.value.iter().any(|&b| b != 0)) + 2 + 1 + 2;
             match crate::tx::display::multisend_sign_gate(
                 routed[i].as_ref().and_then(|r| r.safe_v1.as_ref()),
                 safe_exec_verified.as_ref(),
@@ -825,17 +826,34 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                 return NscStatus::InternalError as u32;
             }
         };
-        let mut pages = wrap_pages_with_batch_banner(inner_pages, i, batch_count);
+        // Fail closed if the per-tx renderer ate the banner budget (F5):
+        // signing without the "BATCH SIGN | Tx i of N" anchor would release a
+        // Type-2 sig over a member the user couldn't place in the batch.
+        let mut pages = match wrap_pages_with_batch_banner(inner_pages, i, batch_count) {
+            Ok(p) => p,
+            Err(()) => {
+                ui::show_status("Batch sign", "banner unshown");
+                return NscStatus::InternalError as u32;
+            }
+        };
 
         // Per-tx ERC-8213 fingerprint. The user sees one fingerprint
         // per inner call; a separate batch-final fingerprint binds
         // the whole bundle below.
         let inner_digest =
             pqsigner_tx_core::erc8213::calldata_digest(inner_data);
-        let _ = crate::tx::display::erc8213::append_fingerprint_page(
+        // Fail closed if the fingerprint page can't be appended (F5): the
+        // digest ties the displayed intent to the signed calldata; dropping
+        // it silently and signing anyway breaks that binding.
+        if crate::tx::display::erc8213::append_fingerprint_page(
             &mut pages,
             crate::tx::display::erc8213::Kind::CalldataDigest(inner_digest),
-        );
+        )
+        .is_err()
+        {
+            ui::show_status("Batch sign", "digest unshown");
+            return NscStatus::InternalError as u32;
+        }
         batch_digest.update(&inner_digest);
 
         match confirm(pages.as_slice()) {
@@ -864,10 +882,18 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     };
     {
         let mut final_pages = build_final_summary_pages(batch_count);
-        let _ = crate::tx::display::erc8213::append_fingerprint_page(
+        // Fail closed if the batch-final fingerprint can't be appended (F5):
+        // it binds the whole bundle (keccak over the per-tx digests) to the
+        // single sig the user is about to authorise.
+        if crate::tx::display::erc8213::append_fingerprint_page(
             &mut final_pages,
             crate::tx::display::erc8213::Kind::Raw32(batch_final),
-        );
+        )
+        .is_err()
+        {
+            ui::show_status("Batch sign", "digest unshown");
+            return NscStatus::InternalError as u32;
+        }
         match confirm(final_pages.as_slice()) {
             ConfirmResult::Confirmed => {}
             ConfirmResult::Cancelled => {

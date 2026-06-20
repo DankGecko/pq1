@@ -550,10 +550,19 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                 account_deployed,
             ),
         };
-        let _ = crate::tx::display::erc8213::append_fingerprint_page(
+        // Fail closed if the EIP-712 final fingerprint page can't be appended
+        // (F5): it is the mandatory binding between the displayed typed-data
+        // intent and the digest being signed; dropping it silently and signing
+        // anyway is a confirm-without-fingerprint.
+        if crate::tx::display::erc8213::append_fingerprint_page(
             &mut pages,
             crate::tx::display::erc8213::Kind::Eip712Final(final_eip712),
-        );
+        )
+        .is_err()
+        {
+            crate::ui::show_status("Sign refused", "fp unshown");
+            return NscStatus::InternalError as u32;
+        }
         match confirm(pages.as_slice()) {
             ConfirmResult::Confirmed => {}
             ConfirmResult::Cancelled => {
@@ -689,10 +698,13 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             }
             _ => crate::tx::display::erc8213::Kind::Raw32(raw_h),
         };
-        let _ = crate::tx::display::erc8213::append_fingerprint_page(
-            &mut pages,
-            fingerprint_kind,
-        );
+        // Fail closed if the fingerprint page can't be appended (F5).
+        if crate::tx::display::erc8213::append_fingerprint_page(&mut pages, fingerprint_kind)
+            .is_err()
+        {
+            crate::ui::show_status("Sign refused", "fp unshown");
+            return NscStatus::InternalError as u32;
+        }
         match confirm(pages.as_slice()) {
             ConfirmResult::Confirmed => {}
             ConfirmResult::Cancelled => {

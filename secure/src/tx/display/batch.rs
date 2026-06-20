@@ -27,15 +27,19 @@ use crate::ui::{DISPLAY_COLS, DISPLAY_ROWS};
 /// `tx_index` is 0-based; the banner renders it as 1-based for the
 /// user (`Tx 1 of 3`, `Tx 2 of 3`, …).
 ///
-/// Refuses (returns the input unchanged) if `inner.len + 1 > MAX_PAGES`
-/// — the per-tx renderer ate the banner budget. This can only happen if
-/// a future renderer grows past `MAX_PAGES - 1`; surfaced in tests.
-pub fn wrap_pages_with_batch_banner(inner: Pages, tx_index: usize, batch_total: usize) -> Pages {
+/// Returns `Err(())` if `inner.len + 1 > MAX_PAGES` — the per-tx renderer ate
+/// the banner budget. The caller must then refuse to sign: dropping the
+/// "BATCH SIGN | Tx i of N" banner (finding F5) would release a Type-2 slot
+/// signature without the per-tx anchor that tells the user which member they
+/// are approving. Fail closed rather than signing the bare inner pages.
+pub fn wrap_pages_with_batch_banner(
+    inner: Pages,
+    tx_index: usize,
+    batch_total: usize,
+) -> Result<Pages, ()> {
     let new_len = inner.len + 1;
     if new_len > super::MAX_PAGES {
-        // Renderer overflowed our banner budget; fall back to the bare
-        // pages so the user at least sees the inner tx.
-        return inner;
+        return Err(());
     }
 
     let mut out = Pages::empty_with_len(new_len);
@@ -55,7 +59,7 @@ pub fn wrap_pages_with_batch_banner(inner: Pages, tx_index: usize, batch_total: 
         }
     }
 
-    out
+    Ok(out)
 }
 
 /// Build the one-page final summary that asks the user to authorise
