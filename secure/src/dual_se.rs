@@ -81,8 +81,17 @@ impl DualSecureElement {
     /// Open-coded (not via `rng_strong::fill`) to avoid the re-entrancy
     /// that would arise from calling `WalletStore::random` on the global
     /// SE while we already hold `&mut self`; direct field borrows of
-    /// `self.optiga` / `self.se050` are the clean path. Fail-closed on an
-    /// all-zero result (stuck-at-0 fault surviving all three sources).
+    /// `self.optiga` / `self.se050` are the clean path.
+    ///
+    /// Both-or-fail (finding F1): each SE's `random()` contribution is
+    /// mandatory — a failed read aborts provisioning rather than being
+    /// silently dropped. The previous `if …is_ok()` mixing let `half_o`
+    /// degrade to the platform TRNG alone when both SE reads failed or were
+    /// glitched: an attacker who influenced the STM32 TRNG and later extracted
+    /// the SE050 half could then recover the full seed (`half_E XOR half_O`),
+    /// defeating invariant #1. This matches the strict semantics of
+    /// `DualSecureElement::random`. Also fail-closed on an all-zero result
+    /// (stuck-at-0 fault surviving all three sources).
     fn generate_split_half(&mut self) -> Result<[u8; 32], SeError> {
         // `half_o` = the OPTIGA-side half in both the real and decoy
         // splits (the SE050 half is `entropy XOR half_o`).
@@ -92,17 +101,25 @@ impl DualSecureElement {
             return Err(SeError::InternalError);
         }
         let mut se_buf = [0u8; 32];
-        if self.optiga.random(&mut se_buf).is_ok() {
-            for i in 0..32 {
-                half_o[i] ^= se_buf[i];
-            }
+        self.optiga.random(&mut se_buf).map_err(|_| {
+            secure_log!("[DUAL/prov] optiga.random FAILED — refusing degraded split");
+            se_buf.zeroize();
+            half_o.zeroize();
+            SeError::InternalError
+        })?;
+        for i in 0..32 {
+            half_o[i] ^= se_buf[i];
         }
         se_buf.zeroize();
         crate::fi::wait_random();
-        if self.se050.random(&mut se_buf).is_ok() {
-            for i in 0..32 {
-                half_o[i] ^= se_buf[i];
-            }
+        self.se050.random(&mut se_buf).map_err(|_| {
+            secure_log!("[DUAL/prov] se050.random FAILED — refusing degraded split");
+            se_buf.zeroize();
+            half_o.zeroize();
+            SeError::InternalError
+        })?;
+        for i in 0..32 {
+            half_o[i] ^= se_buf[i];
         }
         se_buf.zeroize();
         crate::fi::zeroize_barrier();

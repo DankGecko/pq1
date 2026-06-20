@@ -1197,6 +1197,20 @@ fn positive_dual_se_three_source_random_for_half_o() {
         DUAL_SE_SRC.contains("self.se050.random(&mut se_buf)"),
         "half_o must mix in SE050 TRNG via .random()",
     );
+    // Both-or-fail (finding F1): each SE contribution is mandatory. A failed
+    // SE read must abort provisioning (`.map_err(...)?`), not be silently
+    // dropped via `if …is_ok()`, which would let half_o degrade to the
+    // platform TRNG alone and enable seed recovery from the SE050 half.
+    assert!(
+        DUAL_SE_SRC.contains("self.optiga.random(&mut se_buf).map_err(")
+            && DUAL_SE_SRC.contains("self.se050.random(&mut se_buf).map_err("),
+        "both SE .random() reads must be mandatory (map_err + ?), not soft-fail",
+    );
+    assert!(
+        !DUAL_SE_SRC.contains("self.optiga.random(&mut se_buf).is_ok()")
+            && !DUAL_SE_SRC.contains("self.se050.random(&mut se_buf).is_ok()"),
+        "SE .random() contributions must not be silently dropped on failure (F1)",
+    );
 }
 
 #[test]
