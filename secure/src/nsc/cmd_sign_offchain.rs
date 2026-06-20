@@ -376,7 +376,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     //   4. Render via `display::erc7730::render_erc7730_eip712_pages`
     //      so the user sees field-level descriptor pages, append the
     //      ERC-8213 `Eip712Final` fingerprint, and confirm. On render
-    //      failure, fall through to `render_eip1271_raw32_pages`.
+    //      failure, REFUSE (finding F6) — this is a verified known shape,
+    //      so we never fall back to a raw-hash blind sign here.
     let mut hash_to_sign = [0u8; 32];
     let mut wallet_addr = [0u8; 20];
     let mut already_confirmed = false;
@@ -539,16 +540,17 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             &resolver,
         ) {
             Ok(p) => p,
-            Err(_) => crate::tx::display::render_eip1271_raw32_pages(
-                chain_id,
-                account_index,
-                slot_index,
-                &final_eip712,
-                new_count,
-                last_userop,
-                MAX_SLOT_USES,
-                account_deployed,
-            ),
+            // Fail closed (finding F6): this descriptor already passed
+            // verify_erc7730_bundle + cross_check_eip712 — it is a known,
+            // verified shape. Falling back to render_eip1271_raw32_pages here
+            // (showing/signing the bare EIP-712 hash) turned the clear-sign
+            // path into a blind-sign oracle for a structured payload whenever
+            // an attacker could force a RenderErr. Refuse rather than
+            // blind-sign a value whose human-readable intent could not render.
+            Err(_) => {
+                crate::ui::show_status("Sign refused", "render failed");
+                return NscStatus::InternalError as u32;
+            }
         };
         // Fail closed if the EIP-712 final fingerprint page can't be appended
         // (F5): it is the mandatory binding between the displayed typed-data
