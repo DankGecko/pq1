@@ -1966,7 +1966,17 @@ _repro_one:
 # Note: --features are taken from $(RELEASE_FEATURES); the default is
 # the production feature set (no debug-log, no e2e-test, no mock-se).
 # Pass RELEASE_FEATURES=... on the command line to override.
-RELEASE_FEATURES ?= stm32u585,se050,optiga-trust-m,dual-se,ui-lcd
+#
+# Tier-1 channel-key roots (finding F8c): `saes-dhuk` routes
+# hw::secret_keys::derive_into through SAES-CMAC(DHUK) instead of the legacy
+# OTP-master + HKDF arm, and `se050-derived-scp03` makes SE050 SCP03 use
+# per-device derived keys instead of the published AN12436 factory constants.
+# Without these a default `make release` shipped non-Tier-1 roots, contrary to
+# invariant #3; the nsc/mod.rs require-fence now makes that a build error.
+# `bhk` (Tier-2 SE050 split) is deliberately NOT added — enabling it without
+# the phase-2B silicon provisioning yields zero-keyed derivations (see
+# secure/Cargo.toml); it remains a tracked follow-up.
+RELEASE_FEATURES ?= stm32u585,se050,optiga-trust-m,dual-se,ui-lcd,saes-dhuk,se050-derived-scp03
 
 # MED-2 ship gate (audits/tz-tamper-debug-20260611). Resolve the ACTUAL feature
 # set cargo would compile for the shipping image and fail if any never-ship

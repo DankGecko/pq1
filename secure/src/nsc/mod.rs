@@ -133,6 +133,43 @@ compile_error!(
      (interactive UI, OTP substituted with a compile-time constant)."
 );
 
+// Tier-1 channel-key REQUIRE-fence (finding F8c). The denylist fence above
+// stops dev/leaky features shipping; this one stops a shipping dual-SE image
+// going out with NON-Tier-1 channel-key roots. Without `saes-dhuk`,
+// hw::secret_keys::derive_into uses the legacy OTP-master + HKDF arm (not
+// SAES-CMAC(DHUK)); without `se050-derived-scp03`, se050::scp03::load_platform_keys
+// returns the PUBLISHED AN12436 factory SCP03 keys. A default `make release`
+// previously compiled both legacy roots silently — contrary to invariant #3
+// (E2E-encrypted SE tunnels; no attacker-known keys on the channel). Make a
+// missed opt-in a build error rather than a silent factory-key ship.
+//
+// Scoped to shipping dual-SE images (the production target). Bench/test images
+// opt out via `e2e-test` / `dev-testkey` (the same not-shippable markers the
+// denylist fence honours). `bhk` is intentionally NOT required here: enabling
+// it without phase-2B silicon provisioning produces zero-keyed derivations, so
+// the Tier-2 SE050 split stays a tracked follow-up, not a ship gate.
+#[cfg(all(
+    feature = "stm32u585",
+    not(debug_assertions),
+    not(feature = "e2e-test"),
+    not(feature = "dev-testkey"),
+    feature = "dual-se",
+    any(not(feature = "saes-dhuk"), not(feature = "se050-derived-scp03")),
+))]
+compile_error!(
+    "Shipping dual-SE hardware builds (stm32u585 + dual-se + !debug_assertions) \
+     must enable BOTH `saes-dhuk` and `se050-derived-scp03` (Tier-1 channel-key \
+     roots). Without `saes-dhuk` the SE-tunnel/pairing keys derive from the \
+     legacy OTP-master + HKDF path instead of SAES-CMAC(DHUK); without \
+     `se050-derived-scp03` the SE050 SCP03 channel uses the PUBLISHED AN12436 \
+     factory keys — both violate invariant #3 (no attacker-known keys on the SE \
+     channel). Add `saes-dhuk,se050-derived-scp03` to the build (they are in the \
+     default RELEASE_FEATURES). Bench/test images opt out with `e2e-test` or \
+     `dev-testkey`. Note: `bhk` (Tier-2 SE050 split) is a separate follow-up and \
+     must NOT be enabled until phase-2B BHK provisioning exists, or derivations \
+     are zero-keyed."
+);
+
 // Dedicated guard: `mode-production` + `erc7730-dev-unattested` is a
 // catastrophic combination. The `erc7730-dev-unattested` feature relaxes
 // the on-device attestation gate so ERC-7730 descriptors that failed the
