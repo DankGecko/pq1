@@ -67,7 +67,13 @@ pub fn init() {
         // 4-byte TRNG read at boot — the only place this module
         // touches `crate::rng`. Subsequent `randomize()` calls run
         // off the seeded state with zero RNG / semihosting cost.
-        seed_prng_from_rng();
+        //
+        // Fail closed (finding F12): a failed seed would leave the SCA mask
+        // emitting a predictable PWM duty. Panic rather than boot with a
+        // deterministic mask — the panic handler zeroizes and halts.
+        if seed_prng_from_rng().is_err() {
+            panic!("consumption_mask: strong-RNG seed failed; refusing maskless boot");
+        }
     }
     // First duty value so the PWM output isn't stuck at zero
     // before the first SysTick tick lands.
@@ -103,19 +109,29 @@ static mut PRNG_STATE: u32 = 0;
 /// quality matters more than the once-per-init cost (single SE
 /// round-trip at boot, no hot-path impact).
 #[cfg(feature = "consumption-mask")]
-unsafe fn seed_prng_from_rng() {
+unsafe fn seed_prng_from_rng() -> Result<(), ()> {
     let mut seed_bytes = [0u8; 4];
     // Strong fill, with fallback: on early-boot before SE channels
     // are up, `rng_strong::fill` falls through to platform TRNG only
     // (same as the old code). On normal operation it XOR-mixes
     // OPTIGA + SE050.
-    let _ = crate::rng_strong::fill(&mut seed_bytes);
-    // xorshift32 must not be seeded with 0 (state would stick).
-    let mut seed = u32::from_be_bytes(seed_bytes);
+    //
+    // Fail closed on RNG error (finding F12): the previous code discarded
+    // the `Err` (`let _ =`) leaving `seed_bytes` zero, then substituted a
+    // fixed constant seed. That produced a fully deterministic, attacker-
+    // predictable PWM-duty sequence — defeating the very randomisation this
+    // SCA countermeasure exists to provide. Propagate the failure so the
+    // caller refuses to run a maskless boot.
+    crate::rng_strong::fill(&mut seed_bytes)?;
+    // xorshift32 must not be seeded with 0 (state would stick). An all-zero
+    // strong-fill result is itself an RNG fault, so treat it as failure
+    // rather than silently substituting a constant.
+    let seed = u32::from_be_bytes(seed_bytes);
     if seed == 0 {
-        seed = 0xDEADBEEF;
+        return Err(());
     }
     PRNG_STATE = seed;
+    Ok(())
 }
 
 /// Write a fresh PRNG-derived duty cycle into TIM2 CCR1. Cost: ~10

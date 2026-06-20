@@ -958,12 +958,19 @@ fn negative_consumption_mask_xorshift_seeded_from_hw_trng() {
     // dropped the rng_strong call and started seeding from
     // SystemView ticks or similar would make the mask predictable.
     assert!(
-        CONSUMPTION_MASK_SRC.contains("crate::rng_strong::fill(&mut seed_bytes)"),
-        "consumption_mask's xorshift32 must seed from rng_strong::fill"
+        CONSUMPTION_MASK_SRC.contains("crate::rng_strong::fill(&mut seed_bytes)?"),
+        "consumption_mask's xorshift32 must seed from rng_strong::fill (and propagate its error)"
+    );
+    // Fail closed on a zero / failed seed (finding F12): the mask must NOT
+    // substitute a fixed constant — that produced a deterministic, attacker-
+    // predictable PWM duty. A zero seed is an RNG fault and returns Err.
+    assert!(
+        CONSUMPTION_MASK_SRC.contains("if seed == 0 {\n        return Err(());\n    }"),
+        "consumption_mask must fail closed (Err) on a 0 seed, not substitute a constant"
     );
     assert!(
-        CONSUMPTION_MASK_SRC.contains("if seed == 0 {\n        seed = 0xDEADBEEF;\n    }"),
-        "consumption_mask must guard against 0-seed xorshift sticky-state"
+        !CONSUMPTION_MASK_SRC.contains("0xDEADBEEF"),
+        "consumption_mask must not fall back to a fixed predictable seed constant (F12)"
     );
 }
 
