@@ -13,6 +13,18 @@
 #                              every_call_gated_by_verifier + corollary.
 #   make verify-clean        — remove build artefacts.
 
+# Fail pipelines on the first failing stage, not just the last (finding P4).
+# The `extract-*` gates run `charon ... 2>&1 | tail -1`; without pipefail the
+# pipeline's exit status is `tail`'s (always 0), so a Charon failure was masked
+# and the recipe proceeded to run Aeneas on the STALE .llbc — regenerating the
+# previously-committed Lean, matching the diff, and printing "OK" while the Rust
+# had actually drifted. With pipefail the failing Charon exit propagates and
+# make aborts the recipe before the stale .llbc is consumed. (Also un-masks the
+# `lake env lean ... | tee` axiom-check gates below.) bash is required because
+# POSIX sh does not guarantee `pipefail`.
+SHELL        := bash
+.SHELLFLAGS  := -o pipefail -c
+
 LEAN_DIR := lean
 LAKE     ?= $(shell command -v lake 2>/dev/null || echo $$HOME/.elan/bin/lake)
 
