@@ -70,7 +70,30 @@ fn main() {
             r.copy_from_slice(&bytes[16..]);
             (s, r, format!("FSBL_VENDOR_PUBKEY={path}"))
         } else {
-            println!("cargo:warning=FSBL_VENDOR_PUBKEY unset — using built-in dev fixture key. DO NOT USE FOR PRODUCTION.");
+            // SECURITY (finding F2): the dev fallback below derives a FIXED,
+            // committed SPHINCS+C10 vendor key (matching seed in
+            // `fwsign/src/subcommands/dev_pubkey.rs`). Anyone with the source
+            // tree can sign manifests that verify under it, so an FSBL built
+            // with this key must NEVER leave the bench. Previously this path
+            // only emitted a `cargo:warning` and built anyway — a
+            // release-profile FSBL with `FSBL_VENDOR_PUBKEY` unset silently
+            // embedded the public dev key. Now the dev fallback is an explicit
+            // opt-in: a build with neither the real pubkey nor `FSBL_ALLOW_DEV_KEY`
+            // is a hard error. `make fsbl` sets the opt-in for dev convenience;
+            // `make fsbl-release` sets neither and provides the real pubkey.
+            println!("cargo:rerun-if-env-changed=FSBL_ALLOW_DEV_KEY");
+            if env::var("FSBL_ALLOW_DEV_KEY").is_err() {
+                panic!(
+                    "FSBL_VENDOR_PUBKEY is unset and FSBL_ALLOW_DEV_KEY is not set. \
+                     Refusing to embed the committed development vendor key: an FSBL \
+                     built with it accepts firmware signed by anyone holding the \
+                     (public, in-tree) dev seed. Provide a real key via \
+                     `FSBL_VENDOR_PUBKEY=<32-byte pubkey>` (production, e.g. \
+                     `make fsbl-release`), or explicitly opt into the dev key with \
+                     `FSBL_ALLOW_DEV_KEY=1` (bench/dev only, e.g. `make fsbl`)."
+                );
+            }
+            println!("cargo:warning=FSBL_VENDOR_PUBKEY unset — using built-in dev fixture key (FSBL_ALLOW_DEV_KEY opt-in). DO NOT USE FOR PRODUCTION.");
             let dev_sk: [u8; 32] = [
                 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee,
                 0xff, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c,

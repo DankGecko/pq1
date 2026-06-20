@@ -1877,7 +1877,12 @@ measure: build-hw-dual-se-oled-standalone
 .PHONY: fsbl
 fsbl:
 	@echo "==> Building FSBL (FSBL_VENDOR_PUBKEY=$${FSBL_VENDOR_PUBKEY:-<dev fixture>})"
-	@$(RUSTFLAGS_VAR)="-C linker=arm-none-eabi-ld -C link-arg=-Tlink.x $(REPRO_FLAGS)" \
+	@# FSBL_ALLOW_DEV_KEY opts this dev target into fsbl/build.rs's committed
+	@# dev vendor key when FSBL_VENDOR_PUBKEY is unset (finding F2). A bare
+	@# `cargo build -p pqsigner-fsbl` without either env var now fails the
+	@# build instead of silently embedding the public dev key; `fsbl-release`
+	@# sets neither and supplies a real pubkey via FSBL_VENDOR_PUBKEY.
+	@FSBL_ALLOW_DEV_KEY=1 $(RUSTFLAGS_VAR)="-C linker=arm-none-eabi-ld -C link-arg=-Tlink.x $(REPRO_FLAGS)" \
 		cargo build --locked --release --target $(TARGET) --target-dir target/fsbl -p pqsigner-fsbl
 	@echo "==> FSBL built: $(FSBL_ELF)"
 	@size $(FSBL_ELF) 2>/dev/null || arm-none-eabi-size $(FSBL_ELF)
