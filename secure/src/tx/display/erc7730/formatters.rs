@@ -179,11 +179,13 @@ pub(super) fn container_addr(tx: &Eip1559Tx, idx: u16) -> Result<[u8; 20], Rende
     match idx {
         container_field::TO => tx.to.ok_or(RenderErr::Reject("7730 no to")),
         // `@.from` is the AA wallet's own address — derived elsewhere
-        // (cmd_sign_userop computes it). Phase 4 v1 surfaces "0x00…"
-        // since the renderer is at the display layer and doesn't have
-        // the bootstrap pubkey on hand. Phase 5 wires this if any
-        // descriptor needs it.
-        container_field::FROM => Ok([0u8; 20]),
+        // (cmd_sign_userop computes it) and not available at the display
+        // layer. Returning 0x00… here was a confirm-X-sign-Y (finding F4):
+        // the OLED showed 0x0000…0000 while the signed UserOp executed from
+        // the real, nonzero AA wallet. Refuse rather than render a zero for
+        // a nonzero signed value; wire a real @.from value in if a descriptor
+        // ever needs it.
+        container_field::FROM => Err(RenderErr::Reject("7730 from unbound")),
         _ => Err(RenderErr::Reject("7730 cnt no addr")),
     }
 }
@@ -239,7 +241,11 @@ fn render_raw(
     write_label_row(pages, p, field.label);
     let bytes = match resolve_path(ir, field.path_off, body)? {
         Resolved::Slot32(b) => *b,
-        Resolved::Container(idx) => container_u256(tx, idx).unwrap_or([0u8; 32]),
+        // Propagate the Reject instead of rendering a zero word for an
+        // unsupported container (finding F4): `unwrap_or([0u8; 32])` showed an
+        // all-zero 32-byte value while the signed UserOp committed a nonzero
+        // one (e.g. raw `@.to`). Fail closed.
+        Resolved::Container(idx) => container_u256(tx, idx)?,
     };
     // 64 hex chars over rows 1+2; row 3 = "> next".
     let [_, row1, row2, row3] = pages.page_mut(p);
