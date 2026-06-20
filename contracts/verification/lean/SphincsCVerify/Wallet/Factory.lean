@@ -23,17 +23,23 @@ open SphincsCVerify.Spec.Hypertree
 open SphincsCVerify.Wallet
 open ByteVec
 
-/-- Inhabited instance for `opaque` declaration below. The default
-    has no behavioural content. -/
-instance : Inhabited (ByteVec 26) :=
-  ⟨ByteVec.zero 26⟩
+/-- The domain tag prefixed before `(chainId, slot0PkSeed, slot0PkRoot)` in the
+    squat-defence digest. Sourced from `PqsignerProto.FACTORY_ADD_SLOT_DOMAIN`.
 
-/-- The 26-byte domain tag prefixed before `(chainId, slot0PkSeed, slot0PkRoot)`
-    in the squat-defence digest. Sourced from `PqsignerProto.FACTORY_ADD_SLOT_DOMAIN`.
-
-    We model it as an opaque 26-byte value (the exact bytes are
-    `pqsigner.factoryAddSlot.v1` per `proto/src/lib.rs`). -/
-opaque factoryAddSlotDomain : ByteVec 26
+    Concrete 25-byte value `b"pqwallet-factory-add-slot"` — byte-identical to
+    `proto/src/lib.rs::FACTORY_ADD_SLOT_DOMAIN`, the Solidity
+    `PqsignerProto.FACTORY_ADD_SLOT_DOMAIN` / `PQSmartWalletFactory.addSlot0Digest`,
+    and the firmware factory_calldata signing preimage. This was previously an
+    `opaque ByteVec 26` whose docstring claimed `pqsigner.factoryAddSlot.v1` — a
+    domain drift (finding P7): both the length (26 vs 25) and the bytes differed
+    from the digest the device actually signs and the deployed factory checks, so
+    the squat-defence proof (invariant #6) was not bound to the real digest.
+    Pinning the concrete bytes binds `addSlot0Digest` to the deployed preimage. -/
+def factoryAddSlotDomain : ByteVec 25 :=
+  ⟨#[0x70, 0x71, 0x77, 0x61, 0x6c, 0x6c, 0x65, 0x74, 0x2d,
+     0x66, 0x61, 0x63, 0x74, 0x6f, 0x72, 0x79, 0x2d,
+     0x61, 0x64, 0x64, 0x2d, 0x73, 0x6c, 0x6f, 0x74],
+   by decide⟩  -- "pqwallet-factory-add-slot"
 
 /-- The squat-defence digest: `sha256(DOMAIN ‖ chainId ‖ slot0PkSeed ‖ slot0PkRoot)`.
 
