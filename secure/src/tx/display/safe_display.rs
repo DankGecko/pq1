@@ -16,12 +16,20 @@
 //!      <chain name>              <addr full>            <inner kind hint>
 //!      > next                    <addr full>            > next
 //!
-//!   refund (2 pages, only when a gas refund is configured — i.e. any of
+//!   refund (3 pages, only when a gas refund is configured — i.e. any of
 //!          gasPrice / gasToken / refundReceiver is non-zero):
 //!          A: "! GAS REFUND" + "Safe pays in:" + token (addr or "ETH")
-//!          B: "Refund to:"   + refundReceiver (full addr, or "tx.origin")
-//!          Surfaces the Safe gas-refund drain channel — a *token* refund
-//!          has no on-chain gasPrice cap.
+//!          B: "Refund up to:" + worst-case (CEILING+baseGas)*gasPrice at
+//!             full token magnitude (CEILING over-approximates the runtime
+//!             gasUsed). This single total bounds every drain vector and
+//!             vanishes to 0 only when the worst-case debit is truly
+//!             negligible — so no drain can hide behind it.
+//!          C: "Refund to:"   + refundReceiver (full addr, or "tx.origin")
+//!          The total debit is (gasUsed+baseGas)*gasPrice with gasUsed
+//!          runtime; B shows the worst-case bound. A *token* refund has no
+//!          on-chain gasPrice cap, so without B an attacker could move the
+//!          Safe's whole balance "as gas" behind an amount-less screen
+//!          (audit 2026-06-19).
 //!
 //!   inner-ETH (1 page, only when SafeTx `value != 0` and the inner kind
 //!          is not PlainEth/EmptyCall): "Safe sends ETH:" + amount. The
@@ -98,6 +106,17 @@ use sphincs_tz_shared::GPV2_VAULT_RELAYER_ADDRESS;
 /// pages and the trailing confirm page.
 const SAFE_HEADER_PAGES: usize = 3;
 
+/// Over-approximation of the runtime `gasUsed` term used to bound the Safe
+/// gas-refund worst-case `(gasUsed + baseGas) * gasPrice` on the refund
+/// magnitude page. The on-chain `gasUsed` is not a signed field, so the
+/// trusted display cannot show an exact refund; it shows an upper bound
+/// using this ceiling (the Ethereum-mainnet block gas limit, a
+/// representative cap). For a legitimate refund this over-states the debit
+/// (hence the "up to" label); on chains with a higher block limit it is no
+/// longer a strict maximum but still scales with — and stays large for —
+/// any real drain. See the refund-page comment in `render_safe_pages_inner`.
+const GAS_USED_CEILING: u64 = 30_000_000;
+
 /// Which Safe flow the render is being driven from. Used to pick the
 /// banner string on page 0 and decide what to show on the metadata page
 /// (approveHash carries a SafeTx nonce in the canonical; execTransaction
@@ -153,6 +172,13 @@ struct SafeRenderInput<'a> {
     gas_price: [u8; 32],
     gas_token: [u8; 20],
     refund_receiver: [u8; 20],
+    /// SafeTx `baseGas` (signed, EIP-712 struct field). The refund debit is
+    /// `(gasUsed + baseGas) * gasPrice`; `baseGas` is uncapped, so an
+    /// attacker can drain via a huge `baseGas` with a tiny `gasPrice` (which
+    /// would make the per-gas RATE page look benign). We therefore also
+    /// render the `baseGas * gasPrice` base component so that drain vector
+    /// is visible (audit 2026-06-19, hardened after adversarial review).
+    base_gas: [u8; 32],
 }
 
 /// Render a verified `safe_v1` trailer.
@@ -203,6 +229,7 @@ pub fn render_safe_v1_pages(
         gas_price: tx.gas_price,
         gas_token: tx.gas_token,
         refund_receiver: tx.refund_receiver,
+        base_gas: tx.base_gas,
     };
     render_safe_pages_inner(&input, cow, erc20, resolver)
 }
@@ -248,6 +275,7 @@ pub fn render_safe_exec_pages(
         gas_price: d.gas_price,
         gas_token: d.gas_token,
         refund_receiver: d.refund_receiver,
+        base_gas: d.base_gas,
     };
     render_safe_pages_inner(&input, cow, erc20, resolver)
 }
@@ -353,7 +381,14 @@ fn render_safe_pages_inner(
         }
     };
     let inner_pages = inner_kind_page_count(&inner_kind);
-    let refund_pages = if refund_active { 2 } else { 0 };
+    // 3 pages when a gas refund is configured: token + worst-case refund
+    // MAGNITUDE + recipient (audit 2026-06-19). The on-chain debit is
+    // `(gasUsed + baseGas) * gasPrice`; `gasUsed` is runtime, so the
+    // magnitude page shows the worst-case total `(CEILING + baseGas) *
+    // gasPrice` — the one number that bounds every drain vector at full
+    // token magnitude. Kept in lockstep with the `multisend_sign_gate`
+    // `fixed` term.
+    let refund_pages = if refund_active { 3 } else { 0 };
     // Inner SafeTx `value` (ETH the Safe forwards to `to` on execution)
     // is shown inline only by the PlainEth branch. For every other inner
     // kind a non-zero value would otherwise be invisible even though it
@@ -442,7 +477,86 @@ fn render_safe_pages_inner(
         write_line(&mut pages.buf[next_page][3], "> next");
         next_page += 1;
 
-        // Page B: who receives the refund (full address, resolver-aware).
+        // Page B: the WORST-CASE refund magnitude (audit 2026-06-19;
+        // hardened across two adversarial review rounds).
+        //
+        // On-chain the Safe pays `(gasUsed + baseGas) * gasPrice` of
+        // `gasToken` to `refundReceiver`. `gasUsed` is a RUNTIME quantity,
+        // attacker-influenced via the inner call but BOUNDED by the block
+        // gas limit (`GAS_USED_CEILING`); `baseGas` and `gasPrice` are
+        // signed and uncapped. We therefore render the worst-case TOTAL
+        //
+        //     (GAS_USED_CEILING + baseGas) * gasPrice
+        //
+        // at full token magnitude. This is the right number to show because
+        // it equals the largest the refund debit can be, so it vanishes to
+        // "0.000000" ONLY when the actual worst-case debit is itself a
+        // negligible sub-unit amount — no real drain can hide behind it.
+        //
+        // Earlier attempts failed here: the `baseGas*gasPrice` FLOOR read
+        // "0" when an attacker set `baseGas = 0` and drained via `gasUsed`;
+        // and a per-gas RATE (`gasPrice` scaled by the token's decimals)
+        // rounded a 15-token gasUsed-driven drain to "0.000000" because the
+        // rate is divided by `10^decimals`. The TOTAL has neither flaw.
+        //
+        // `gasUsed` is over-approximated by a fixed ceiling rather than the
+        // exact runtime value, so for a legitimate refund this page shows an
+        // upper bound (labelled "up to"); a token gas-refund is rare and
+        // always worth scrutinising, so a conservative ceiling is the safe
+        // direction. On chains whose block limit exceeds the ceiling the
+        // bound is still large for any real drain (it scales with the
+        // drain), just not a strict maximum.
+        write_line(&mut pages.buf[next_page][0], "Refund up to:");
+        {
+            // baseGas + ceiling, reduced to u64 (a baseGas beyond u64 makes
+            // the worst case astronomically large → handled as overflow).
+            let (base_u64, base_overflow) = u64_be_tail(&input.base_gas);
+            let gas_units = base_u64.saturating_add(GAS_USED_CEILING);
+            let (worst, mul_overflow) =
+                U256(input.gas_price).saturating_mul_u64(gas_units);
+            let huge = base_overflow || mul_overflow;
+            let [_lbl, r1, r2, foot] = &mut pages.buf[next_page];
+            if huge {
+                // Exceeds 2^256 — unrenderable but unmistakably enormous.
+                // Fail loud; never a misleading small number.
+                write_line(r1, "!HUGE");
+                write_line(r2, "(refuse)");
+                write_line(foot, "@30M gas est");
+            } else {
+                // gasToken == 0 → ETH (18 dec). gasToken matching the
+                // address-checked inner bundle → its decimals + symbol.
+                // Otherwise the raw integer in base units. Overflow paints a
+                // loud banner rather than dropping the high-order digits.
+                let fit = if input.gas_token.iter().all(|&b| b == 0) {
+                    write_eth_two_rows(r1, r2, &worst)
+                } else if let Some(m) =
+                    erc20.filter(|m| m.contract == input.gas_token)
+                {
+                    write_token_amount_two_rows(r1, r2, &worst, m)
+                } else {
+                    let units = Erc20Metadata {
+                        chain_id: 0,
+                        contract: [0u8; 20],
+                        decimals: 0,
+                        name: &[],
+                        symbol: b"units",
+                    };
+                    write_token_amount_two_rows(r1, r2, &worst, &units)
+                };
+                write_line(
+                    foot,
+                    match fit {
+                        // Footer doubles as the gas-ceiling disclosure so the
+                        // "up to" is honest about its assumption.
+                        AmountFit::Full => "@30M gas est",
+                        AmountFit::Overflow => "!AMOUNT OVERFLOW",
+                    },
+                );
+            }
+        }
+        next_page += 1;
+
+        // Page C: who receives the refund (full address, resolver-aware).
         write_line(&mut pages.buf[next_page][0], "Refund to:");
         if input.refund_receiver.iter().all(|&b| b == 0) {
             write_line(&mut pages.buf[next_page][1], "tx.origin");
@@ -608,7 +722,7 @@ pub fn multisend_sign_gate(
         return MultisendGate::Reject("msend malformed");
     };
     let fixed = SAFE_HEADER_PAGES
-        + if refund_active { 2 } else { 0 }
+        + if refund_active { 3 } else { 0 } // token + worst-case magnitude + recipient
         + usize::from(safe_value_nonzero)
         + 1; // trailing confirm page
     if fixed + inner_pages + reserved_pages > super::MAX_PAGES {
@@ -1212,6 +1326,23 @@ fn write_safe_nonce_row(row: &mut [u8; DISPLAY_COLS], nonce_be: &[u8; 32]) {
         *row = [b' '; DISPLAY_COLS];
         let n = core::cmp::min(prefix.len(), row.len());
         row[..n].copy_from_slice(&prefix[..n]);
+    }
+}
+
+/// Decode the low 8 bytes of a 32-byte big-endian uint as a `u64`.
+/// Returns `(value, overflowed)` with `overflowed == true` (and `value ==
+/// u64::MAX`) when the high 24 bytes are non-zero — i.e. the operand
+/// exceeds `u64::MAX`. Used for the `baseGas * gasPrice` base-cost page via
+/// [`U256::saturating_mul_u64`]; a `baseGas` beyond `u64` makes the cost
+/// astronomically large, which the caller renders as a loud `!HUGE`.
+fn u64_be_tail(be: &[u8; 32]) -> (u64, bool) {
+    let high_nonzero = be[..24].iter().any(|&b| b != 0);
+    let mut tail = [0u8; 8];
+    tail.copy_from_slice(&be[24..32]);
+    if high_nonzero {
+        (u64::MAX, true)
+    } else {
+        (u64::from_be_bytes(tail), false)
     }
 }
 

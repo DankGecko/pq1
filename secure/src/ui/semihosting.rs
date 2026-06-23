@@ -17,7 +17,17 @@
 //! iteration and CAN interrupt blocking dialogs.
 
 use super::{Button, Press, DISPLAY_COLS, DISPLAY_ROWS};
-use cortex_m_semihosting::{hprintln, syscall};
+use cortex_m_semihosting::syscall;
+
+/// Resilient `hprintln!`: routes through [`crate::shio`] so QEMU's
+/// chardev wedging under `make e2e`'s `</dev/null` can't make the
+/// progress-bar / framebox output busy-spin forever (the "hangs during
+/// C10 sign" bug). Same call shape as `cortex_m_semihosting::hprintln!`.
+macro_rules! hprintln {
+    ($($arg:tt)*) => {
+        $crate::shio::println(format_args!($($arg)*))
+    };
+}
 
 pub struct Display {
     rows: [[u8; DISPLAY_COLS]; DISPLAY_ROWS],

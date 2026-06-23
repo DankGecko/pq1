@@ -63,18 +63,21 @@ use crate::ui::{DISPLAY_COLS, DISPLAY_ROWS};
 ///   * blind_sign (with verified FUNCTION)  → 10 pages
 ///   * contract_creation                    → 8 pages
 ///   * cowswap EIP-712 render (see
-///     `crate::tx::eip712::cowswap_display`) → 10 pages
+///     `crate::tx::eip712::cowswap_display`) → 10 pages, +2 gas-fee
+///     splice = 12
 ///   * Safe-wrapped CoW presign (Safe surface with the v3 order as its
-///     inner pages) → 3 header + 2 refund + 1 inner-ETH + 1 context
-///     banner + 8 body (addr mode) + 1 confirm = 16, +1 native-value
-///     splice + 2 ERC-8213 fingerprint pages = 19; +1 batch banner = 20
+///     inner pages) → 3 header + 3 refund + 1 inner-ETH + 1 context
+///     banner + 8 body (addr mode) + 1 confirm = 17, +1 native-value
+///     splice + 2 gas-fee splice + 2 ERC-8213 fingerprint pages = 22;
+///     +1 batch banner = 23
 ///   * Safe multiSend batch (per record: 1 divider + optional value
 ///     page + the record's own pages; the CoW record costs 1 banner +
 ///     6/8 body). NOT statically bounded — the handlers'
 ///     `multisend_sign_gate` page-budget check refuses any composition
 ///     whose exact total (same per-kind counts the renderer uses)
 ///     would exceed `MAX_PAGES`; the Safe-UI approve+presign flow in
-///     addr mode with refund pages + batch banner lands on 24 exactly.
+///     addr mode with 3 refund pages + batch banner + the +2 gas-fee
+///     splice lands on 27 exactly.
 ///   * typed_call (Phase 2 calldata decode) → up to 14 pages
 ///     (banner + up to 6 typed args + To + Value + Chain + 2 fee
 ///     pages + Nonce; declines past `MAX_TYPED_ARGS_RENDERED = 6`)
@@ -86,13 +89,27 @@ use crate::ui::{DISPLAY_COLS, DISPLAY_ROWS};
 ///     final confirm) + `ceil(MAX_OFFCHAIN_PERSONAL_SIGN_LEN / 48)`
 ///     message pages = up to 5 + ceil(700 / 48) = 5 + 15 = 20.
 ///
+/// Two dispatcher-level page splices add to the per-renderer counts above
+/// for the flows that don't emit them inline (applied in
+/// [`pick_sign_pages`] after the chosen renderer returns):
+///
+///   * native-ETH value page (+1) when the outer UserOp `value != 0`
+///     (`value_page::enforce_native_value_page`).
+///   * gas/fee pages (+2: "Max fee" + "Worst-case") for the Safe / CoW /
+///     v1-ZK surfaces, which — unlike value_transfer / erc20 / typed_call
+///     / blind_sign / erc7730 — do not show gas inline
+///     (`value_page::enforce_gas_pages`; audit 2026-06-19).
+///
 /// Bumping this costs `4 × 16 = 64` extra stack bytes per page (×2
 /// transiently while the batch banner wrap holds two `Pages`), so grow
 /// it deliberately and not speculatively. 22 → 24 accompanied the
-/// multiSend clear-sign feature so the worst realistic CoW flow
-/// (AddrOnly + refund + record values + batch banner + fingerprints)
-/// fits without truncation.
-pub const MAX_PAGES: usize = 24;
+/// multiSend clear-sign feature; 24 → 27 accompanied the Safe gas-refund
+/// magnitude page (+1 refund page: the worst-case
+/// (CEILING+baseGas)*gasPrice total) and the Safe/CoW gas/fee splice (+2)
+/// so the worst realistic flow — the Safe-UI approve+presign multiSend
+/// (AddrHex legs + 3 refund pages + record values + batch banner + gas +
+/// ERC-8213 fingerprints) — lands on 27 exactly without truncation.
+pub const MAX_PAGES: usize = 27;
 
 /// A buffer of up to [`MAX_PAGES`] pre-rendered confirmation pages.
 ///
@@ -259,6 +276,31 @@ pub fn pick_sign_pages(
     // `value_page.rs` so the host-test scaffold can mount and exercise the
     // real body (this dispatcher is `cfg(not(test))`).
     value_page::enforce_native_value_page(&mut pages, &tx.value)?;
+
+    // Dispatcher-level WYSIWYS invariant (audit 2026-06-19 — gas/fee pages).
+    //
+    // The five signed EntryPoint v0.6 fee fields (callGasLimit,
+    // verificationGasLimit, preVerificationGas, maxFeePerGas,
+    // maxPriorityFeePerGas) are committed to by the UserOp signature, and the
+    // wallet pays the resulting EntryPoint prefund out of its own native ETH.
+    // Most renderers emit the two standard gas pages inline (the same
+    // "Max fee" / "Worst-case" pair value_transfer shows), but the Safe, CoW
+    // and v1-ZK surfaces historically did NOT — so a fee-bomb UserOp (huge
+    // maxFeePerGas / gas limits, no paymaster) drained the wallet's ETH as
+    // gas behind a benign Safe/CoW confirm with no fee page on screen.
+    //
+    // Rather than trust each of those renderers to opt in, splice the same
+    // two pages here for exactly the flows that lack them. `needs_gas`
+    // mirrors the branch precedence in `pick_sign_pages_inner`: any
+    // v3 / v1 / safe trailer routes to a gas-less renderer; every other
+    // outcome (erc7730 / value / erc20 / typed-call / blind-sign) already
+    // shows gas, so splicing there would DOUBLE the pages. Fails CLOSED on a
+    // full buffer (same refuse-to-sign contract as the value page).
+    let needs_gas =
+        v3.is_some() || v1.is_some() || safe_v1.is_some() || safe_exec.is_some();
+    if needs_gas {
+        value_page::enforce_gas_pages(&mut pages, tx)?;
+    }
     Ok(pages)
 }
 

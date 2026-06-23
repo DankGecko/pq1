@@ -297,11 +297,20 @@ fn batch_write_bytes(buf: &mut [u8; MAX_EXECUTE_BATCH_CALLDATA_LEN], pos: usize,
     buf[pos..pos + d.len()].copy_from_slice(d);
 }
 
-pub fn reconstruct_execute_batch_calldata(
+/// In-place variant of [`reconstruct_execute_batch_calldata`]: fills a
+/// caller-provided `out` instead of returning an [`ExecuteBatchCallData`]
+/// by value. The secure batch-sign handler runs on a deep stack (snapshot
+/// in BSS, plus several KB of per-sign buffers) and an 18 KB
+/// return-by-value — through the `match`/`Result` the caller writes, NRVO
+/// does not reliably elide — costs a *second* transient 18 KB copy that
+/// overflowed the stack into BSS (clobbering adjacent statics). Writing the
+/// single caller-owned buffer keeps exactly one 18 KB buffer live.
+pub fn reconstruct_execute_batch_calldata_into(
+    out: &mut ExecuteBatchCallData,
     owner_index: u64,
     new_offchain_count: u64,
     txs: &[BatchInnerTx<'_>],
-) -> Result<ExecuteBatchCallData, BatchAaError> {
+) -> Result<(), BatchAaError> {
     if txs.is_empty() {
         return Err(BatchAaError::EmptyBatch);
     }
@@ -354,10 +363,12 @@ pub fn reconstruct_execute_batch_calldata(
         return Err(BatchAaError::CallDataTooLong);
     }
 
-    let mut out = ExecuteBatchCallData {
-        buf: [0u8; MAX_EXECUTE_BATCH_CALLDATA_LEN],
-        len: total,
-    };
+    // The caller owns `out` (avoids an 18 KB return-by-value copy on the
+    // secure sign stack). It may be dirty from a previous call, so clear
+    // it first: the element writers below only touch the live bytes and
+    // rely on the inter-element ABI padding reading back as zero.
+    out.buf.fill(0);
+    out.len = total;
 
     // ── Selector ───────────────────────────────────────────────────
     out.buf[0..SELECTOR_LEN].copy_from_slice(&EXECUTE_BATCH_SELECTOR);
@@ -446,6 +457,24 @@ pub fn reconstruct_execute_batch_calldata(
     }
     debug_assert_eq!(payload_pos, total);
 
+    Ok(())
+}
+
+/// By-value convenience wrapper over
+/// [`reconstruct_execute_batch_calldata_into`]. Allocates the
+/// [`ExecuteBatchCallData`] on the caller's frame — fine for host tests and
+/// any caller with stack to spare, but the secure batch handler uses the
+/// `_into` form to avoid the extra 18 KB copy (see its doc comment).
+pub fn reconstruct_execute_batch_calldata(
+    owner_index: u64,
+    new_offchain_count: u64,
+    txs: &[BatchInnerTx<'_>],
+) -> Result<ExecuteBatchCallData, BatchAaError> {
+    let mut out = ExecuteBatchCallData {
+        buf: [0u8; MAX_EXECUTE_BATCH_CALLDATA_LEN],
+        len: 0,
+    };
+    reconstruct_execute_batch_calldata_into(&mut out, owner_index, new_offchain_count, txs)?;
     Ok(out)
 }
 

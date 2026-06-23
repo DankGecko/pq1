@@ -39,7 +39,11 @@ macro_rules! secure_log {
         }
         #[cfg(not(feature = "stm32u585"))]
         {
-            cortex_m_semihosting::hprintln!($($arg)*);
+            // Resilient writer (see `crate::shio`): QEMU's chardev can
+            // wedge under `make e2e`'s `</dev/null`, and the upstream
+            // `hprintln!` busy-spins forever on the resulting 0-byte
+            // SYS_WRITE. `shio::println` drops instead of hanging.
+            $crate::shio::println(format_args!($($arg)*));
         }
     };
 }
@@ -75,6 +79,10 @@ mod boot_ns;
 mod crypto;
 mod fi;
 mod fih;
+// Resilient semihosting host-stdout writer (QEMU/dev only). Replaces the
+// busy-spinning `cortex_m_semihosting` write path that hangs `make e2e`.
+#[cfg(not(test))]
+mod shio;
 mod sign_rate;
 #[cfg(test)]
 mod fuzz_props;

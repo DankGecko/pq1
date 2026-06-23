@@ -154,16 +154,23 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
 
     // ── 3. TOCTOU snapshot ──────────────────────────────────────────
     //
+    // Shared with the sibling sign handlers via `super::SIGN_SNAP_BUF`
+    // (one buffer for all three; safe because the dispatcher is
+    // non-reentrant — see the buffer's doc comment). The const assert pins
+    // this handler's protocol max ≤ the shared buffer so the `..total_len`
+    // slice below (with `total_len <= SNAP_LEN`, checked at the header
+    // length gate above) can never overrun.
+    const _: () = assert!(SNAP_LEN <= super::SIGN_SNAP_BUF_LEN);
     // M1 fix: wipe any leftover payload from the PREVIOUS sign before
     // we fill it with this request.
-    static mut SNAP_BUF: [u8; SNAP_LEN] = [0u8; SNAP_LEN];
     {
-        let buf = &mut *core::ptr::addr_of_mut!(SNAP_BUF);
+        let buf = &mut *core::ptr::addr_of_mut!(super::SIGN_SNAP_BUF);
         for b in buf.iter_mut() {
             *b = 0;
         }
     }
-    let snap = &mut SNAP_BUF[..total_len];
+    let snap_full = &mut *core::ptr::addr_of_mut!(super::SIGN_SNAP_BUF);
+    let snap = &mut snap_full[..total_len];
     for i in 0..total_len {
         snap[i] = core::ptr::read_volatile(payload_ptr.add(i));
     }
@@ -1757,7 +1764,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // (names, EIP-712 readable text, recipients) that we don't want
     // leaving in BSS until the next sign overwrites it.
     {
-        let buf = &mut *core::ptr::addr_of_mut!(SNAP_BUF);
+        let buf = &mut *core::ptr::addr_of_mut!(super::SIGN_SNAP_BUF);
         for b in buf.iter_mut() {
             *b = 0;
         }

@@ -118,14 +118,21 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     }
 
     // ── 3. TOCTOU snapshot ──────────────────────────────────────────
-    static mut SNAP_BUF: [u8; SIGN_OFFCHAIN_INPUT_MAX_LEN] = [0u8; SIGN_OFFCHAIN_INPUT_MAX_LEN];
+    //
+    // Shared with the sibling sign handlers via `super::SIGN_SNAP_BUF`
+    // (one buffer for all three; safe under the non-reentrant dispatcher —
+    // see the buffer's doc comment). `total_len` was already gated `>
+    // SIGN_OFFCHAIN_INPUT_MAX_LEN` above, and the const assert pins that
+    // max ≤ the shared buffer, so the `..total_len` slice can never
+    // overrun.
+    const _: () = assert!(SIGN_OFFCHAIN_INPUT_MAX_LEN <= super::SIGN_SNAP_BUF_LEN);
     {
-        let buf = &mut *core::ptr::addr_of_mut!(SNAP_BUF);
+        let buf = &mut *core::ptr::addr_of_mut!(super::SIGN_SNAP_BUF);
         for b in buf.iter_mut() {
             *b = 0;
         }
     }
-    let snap_full = &mut *core::ptr::addr_of_mut!(SNAP_BUF);
+    let snap_full = &mut *core::ptr::addr_of_mut!(super::SIGN_SNAP_BUF);
     let snap = &mut snap_full[..total_len];
     for i in 0..total_len {
         snap[i] = core::ptr::read_volatile(in_ptr.add(i));
@@ -951,7 +958,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
 
     // L-2: wipe the TOCTOU snapshot on exit.
     {
-        let buf = &mut *core::ptr::addr_of_mut!(SNAP_BUF);
+        let buf = &mut *core::ptr::addr_of_mut!(super::SIGN_SNAP_BUF);
         for b in buf.iter_mut() {
             *b = 0;
         }

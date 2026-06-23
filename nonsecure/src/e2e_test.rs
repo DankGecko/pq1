@@ -1763,7 +1763,10 @@ fn main() -> ! {
         // registered for the test wallet). Anything else means the
         // wire-format dispatcher silently miscounted or the parser
         // accepted malformed bytes — that's a real bug.
-        const NSC_STATUS_INVALID_POINTER: u32 = 3;
+        // NscStatus::InvalidPointer == 4 (proto/src/lib.rs — CryptoError is
+        // 3, InvalidPointer is 4). The binding gate refuses a kind=2 typed
+        // sign whose 7730 trailer doesn't bind, returning InvalidPointer.
+        const NSC_STATUS_INVALID_POINTER: u32 = 4;
         const NSC_STATUS_OFFCHAIN_SLOT_UNREGISTERED: u32 = 17;
         assert!(
             status == NSC_STATUS_INVALID_POINTER

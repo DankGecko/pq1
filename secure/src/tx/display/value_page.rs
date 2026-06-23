@@ -20,7 +20,7 @@
 
 use super::primitives;
 use super::Pages;
-use crate::tx::eip1559::U256;
+use crate::tx::eip1559::{Eip1559Tx, U256};
 use crate::ui::{DISPLAY_COLS, DISPLAY_ROWS};
 
 /// Splice a loud native-ETH `value` page into an already-rendered page set
@@ -88,6 +88,48 @@ pub(super) fn enforce_native_value_page(pages: &mut Pages, value: &U256) -> Resu
     Ok(())
 }
 
+/// Splice the two standard gas/fee pages (identical to value_transfer
+/// pages 3-4) immediately before the renderer's trailing page (the confirm
+/// prompt on the Safe and CoW surfaces).
+///
+/// Called by [`super::pick_sign_pages`] for the Safe / CoW / v1-ZK
+/// surfaces, which — unlike every other renderer — do not emit gas pages
+/// of their own. The five EntryPoint v0.6 fee fields are committed to by
+/// the UserOp signature and the wallet pays the EntryPoint prefund out of
+/// its own native ETH; hiding them is a fee-bomb drain behind a benign
+/// confirm (audit 2026-06-19 — the WYSIWYS sibling of the native-value
+/// gate above).
+///
+/// Unlike [`enforce_native_value_page`] there is no skip-on-zero decision
+/// (gas is shown unconditionally, matching every other renderer), so there
+/// is no FI skip gate to harden here. The only failure mode is a full page
+/// buffer, which FAILS CLOSED: the check is performed up-front so the
+/// splice is atomic (never a single orphaned gas page) and the caller maps
+/// `Err(())` to a refuse-to-sign.
+pub(super) fn enforce_gas_pages(pages: &mut Pages, tx: &Eip1559Tx) -> Result<(), ()> {
+    // Atomic budget check: both pages or neither.
+    if pages.len + 2 > super::MAX_PAGES {
+        return Err(());
+    }
+    // Insert just before the trailing page so the gas pages read after the
+    // semantic content, matching value_transfer's "Max fee" / "Worst-case"
+    // ordering. `at` clamps to 0 for the (impossible here) empty-buffer case.
+    let at = pages.len.saturating_sub(1);
+    // Page A: "Max fee:" + max_fee_per_gas (gwei) + priority tip.
+    let a = insert_blank(pages, at)?;
+    primitives::write_line(pages.row_mut(a, 0), "Max fee:");
+    let _ = primitives::write_gwei(pages.row_mut(a, 1), &tx.max_fee_per_gas);
+    primitives::write_tip_row(pages.row_mut(a, 2), &tx.max_priority_fee_per_gas);
+    primitives::write_line(pages.row_mut(a, 3), "> next");
+    // Page B: "Worst-case:" + max_fee_per_gas * gas_limit (ETH) + gas limit.
+    let b = insert_blank(pages, a + 1)?;
+    primitives::write_line(pages.row_mut(b, 0), "Worst-case:");
+    primitives::write_fee_budget_row(pages.row_mut(b, 1), &tx.max_fee_per_gas, tx.gas_limit);
+    primitives::write_gas(pages.row_mut(b, 2), tx.gas_limit);
+    primitives::write_line(pages.row_mut(b, 3), "> next");
+    Ok(())
+}
+
 /// Insert a blank page at index `at`, shifting the pages currently at
 /// `at..len` one slot toward the back. Returns the index of the new
 /// (cleared) page, or `Err(())` when the buffer is already full.
@@ -116,6 +158,29 @@ mod tests {
         let mut v = [0u8; 32];
         v[31] = 1;
         U256(v)
+    }
+
+    fn gwei(n: u64) -> U256 {
+        // n * 1e9 wei, fits a u64 for any realistic gas price.
+        let wei = (n as u128) * 1_000_000_000u128;
+        let mut v = [0u8; 32];
+        v[16..32].copy_from_slice(&wei.to_be_bytes());
+        U256(v)
+    }
+
+    fn fee_tx() -> Eip1559Tx {
+        Eip1559Tx {
+            chain_id: 1,
+            nonce: 0,
+            max_priority_fee_per_gas: gwei(2),
+            max_fee_per_gas: gwei(50),
+            gas_limit: 21_000,
+            to: Some([0x11u8; 20]),
+            value: U256::zero(),
+            data_len: 0,
+            access_list_count: 0,
+            signing_hash: [0u8; 32],
+        }
     }
 
     /// Audit C-1 regression. The invariant is applied uniformly to the
@@ -179,5 +244,39 @@ mod tests {
         assert!(enforce_native_value_page(&mut pages, &one_wei()).is_ok());
         assert_eq!(pages.len, super::super::MAX_PAGES);
         assert_eq!(&pages.buf[1][0][..12], b"! NATIVE ETH");
+    }
+
+    /// Audit 2026-06-19 — gas/fee WYSIWYS splice. The two gas pages are
+    /// inserted right before the renderer's trailing (confirm) page, so a
+    /// Safe/CoW confirm can no longer hide the signed maxFeePerGas / gas
+    /// limits. Banner stays first, confirm stays last.
+    #[test]
+    fn gas_pages_spliced_before_confirm() {
+        let mut pages = Pages::with_len(3);
+        primitives::write_line(pages.row_mut(0, 0), "Sign CowSwap?");
+        primitives::write_line(pages.row_mut(2, 2), "L=Cancel");
+        assert!(enforce_gas_pages(&mut pages, &fee_tx()).is_ok());
+        assert_eq!(pages.len, 5, "two gas pages must be inserted");
+        // Original banner first; confirm shifted to the last slot.
+        assert_eq!(&pages.buf[0][0][..13], b"Sign CowSwap?");
+        assert_eq!(&pages.buf[4][2][..8], b"L=Cancel");
+        // Gas pages sit just before the confirm page.
+        assert_eq!(&pages.buf[2][0][..8], b"Max fee:");
+        assert_eq!(&pages.buf[3][0][..11], b"Worst-case:");
+    }
+
+    /// FAIL CLOSED + ATOMIC. With fewer than two free slots the gas splice
+    /// must refuse (caller refuses to sign) and leave the page set
+    /// untouched — never a single orphaned gas page hiding the other.
+    #[test]
+    fn gas_pages_insufficient_room_fails_closed_atomically() {
+        // Exactly one free slot — not enough for the two-page splice.
+        let mut pages = Pages::with_len(super::super::MAX_PAGES - 1);
+        let before = pages.len;
+        assert!(
+            enforce_gas_pages(&mut pages, &fee_tx()).is_err(),
+            "fewer than two free slots must fail closed"
+        );
+        assert_eq!(pages.len, before, "no page may be spliced (atomic)");
     }
 }

@@ -64,8 +64,9 @@ use super::ptr_validate::{validate_ns_read_ptr, validate_ns_write_ptr};
 use super::state::CachedSlot;
 use super::GatewayArgs;
 use crate::aa::userop::{
-    compute_sphincs_digest_v06, reconstruct_execute_batch_calldata, sha256_bytes,
-    AaUserOpParamsV06Sha256, BatchInnerTx, SHA256_EMPTY,
+    compute_sphincs_digest_v06, reconstruct_execute_batch_calldata_into, sha256_bytes,
+    AaUserOpParamsV06Sha256, BatchInnerTx, ExecuteBatchCallData, MAX_EXECUTE_BATCH_CALLDATA_LEN,
+    SHA256_EMPTY,
 };
 use crate::erc20::bundle::{verify_erc20_bundle, Erc20Metadata};
 use crate::names::{verify_name_bundle, NameResolver};
@@ -182,14 +183,21 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     }
 
     // ── 3. TOCTOU snapshot ──────────────────────────────────────────
-    static mut SNAP_BUF: [u8; SNAP_LEN] = [0u8; SNAP_LEN];
+    //
+    // Shared with the sibling sign handlers via `super::SIGN_SNAP_BUF`
+    // (one buffer for all three; safe under the non-reentrant dispatcher —
+    // see the buffer's doc comment). `total_len` was already gated `>
+    // SNAP_LEN` above, and the const assert pins `SNAP_LEN` ≤ the shared
+    // buffer, so the slice can never overrun.
+    const _: () = assert!(SNAP_LEN <= super::SIGN_SNAP_BUF_LEN);
     {
-        let buf = &mut *core::ptr::addr_of_mut!(SNAP_BUF);
+        let buf = &mut *core::ptr::addr_of_mut!(super::SIGN_SNAP_BUF);
         for b in buf.iter_mut() {
             *b = 0;
         }
     }
-    let snap = &mut SNAP_BUF[..total_len];
+    let snap_full = &mut *core::ptr::addr_of_mut!(super::SIGN_SNAP_BUF);
+    let snap = &mut snap_full[..total_len];
     for i in 0..total_len {
         snap[i] = core::ptr::read_volatile(payload_ptr.add(i));
     }
@@ -1020,19 +1028,28 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             data: &snap[p.data_off..p.data_off + p.data_len],
         };
     }
-    let t2_exec = match reconstruct_execute_batch_calldata(
+    // In-place fill of a single caller-owned buffer. Building the 18 KB
+    // `ExecuteBatchCallData` here and passing `&mut` to the reconstructor
+    // (rather than letting it return one by value) keeps exactly one such
+    // buffer on this already-deep sign stack — the return-by-value form
+    // left a second transient copy live that overflowed into BSS.
+    let mut t2_exec = ExecuteBatchCallData {
+        buf: [0u8; MAX_EXECUTE_BATCH_CALLDATA_LEN],
+        len: 0,
+    };
+    if reconstruct_execute_batch_calldata_into(
+        &mut t2_exec,
         t2_owner_index,
         new_offchain_count,
         &batch_view[..batch_count],
-    ) {
-        Ok(c) => c,
-        Err(_) => {
-            entropy.zeroize();
-            crate::fi::zeroize_barrier();
-            ui::show_status("Batch sign", "calldata too long");
-            return NscStatus::CryptoError as u32;
-        }
-    };
+    )
+    .is_err()
+    {
+        entropy.zeroize();
+        crate::fi::zeroize_barrier();
+        ui::show_status("Batch sign", "calldata too long");
+        return NscStatus::CryptoError as u32;
+    }
 
     // ── 9. Type 2 nonce ─────────────────────────────────────────────
     let mut type2_nonce = nonce;
@@ -1404,7 +1421,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     init_code_out.zeroize();
     // L-2: wipe the TOCTOU snapshot on exit. Mirror of cmd_sign_userop.
     {
-        let buf = &mut *core::ptr::addr_of_mut!(SNAP_BUF);
+        let buf = &mut *core::ptr::addr_of_mut!(super::SIGN_SNAP_BUF);
         for b in buf.iter_mut() {
             *b = 0;
         }

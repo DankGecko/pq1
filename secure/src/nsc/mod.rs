@@ -668,6 +668,37 @@ pub fn is_unlocked() -> bool {
     state::peek_state(|s| s.pin_verified.is_true_fi())
 }
 
+/// Shared TOCTOU snapshot buffer for the three mutually-exclusive sign
+/// handlers (`cmd_sign_userop`, `cmd_sign_userop_batch`,
+/// `cmd_sign_offchain`). Each used to own a private `static mut SNAP_BUF`
+/// sized to its own protocol maximum (≈25 KB / ≈41 KB / ≈5.7 KB). Because
+/// the dispatcher is single-threaded and non-reentrant (see
+/// [`HandlerGuard`] / [`handler_is_busy`]) exactly one of these handlers
+/// can be live at a time, so the three buffers were never simultaneously
+/// in use — they only ever cost permanent BSS.
+///
+/// Reserving all three independently pushed `.bss` up against the top of
+/// the 128 KB secure SRAM, leaving the deep `cmd_sign_userop` register-slot
+/// path (slot keygen + bootstrap keygen + two FI-doubled C10 signs, each
+/// holding several KB of stack buffers) with too little stack headroom: at
+/// its deepest the stack grew down past the BSS top and clobbered the
+/// adjacent `state::SLOT_CACHE` (its discriminant zeroed → `None`), making
+/// the Type-2 sign read an empty cache and return `InternalError`. Folding
+/// the snapshots into one buffer sized to the largest claimant reclaims the
+/// two idle copies (~31 KB of BSS) and restores ample stack headroom.
+///
+/// Each handler still validates its own payload length against its own
+/// protocol-max constant before copying; a `const` assert in each pins
+/// that constant ≤ [`SIGN_SNAP_BUF_LEN`] so an oversized handler can never
+/// silently overrun the shared buffer.
+pub(super) const SIGN_SNAP_BUF_LEN: usize =
+    sphincs_tz_shared::SIGN_USEROP_BATCH_MAX_PAYLOAD_LEN;
+
+/// The shared snapshot storage itself. Only ever borrowed (filled, parsed,
+/// then wiped) inside a single handler invocation, under the non-reentrant
+/// dispatcher — never aliased across handlers.
+pub(super) static mut SIGN_SNAP_BUF: [u8; SIGN_SNAP_BUF_LEN] = [0u8; SIGN_SNAP_BUF_LEN];
+
 /// HIGH-7 guard: depth counter incremented on handler entry,
 /// decremented on exit. SysTick refuses to wipe when depth > 0 so
 /// a long-running signing handler that holds stack-local copies of
