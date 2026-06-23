@@ -41,6 +41,19 @@ const ADDR_LEN: usize = 20;
 /// deref happens only after `validate_ns_write_ptr`; `static mut SE`
 /// access uses the single-threaded dispatcher invariant.
 pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
+    // HIGH-7 guard (audit gateway-parsing 20260623, LOW-1): the cache-miss
+    // path derives the bootstrap C10 keypair (~1 s keygen) while holding
+    // stack-local `master_secret` / `entropy` copies AND while borrowing the
+    // `STATE` singleton (pin-verified peek, `bootstrap_cache_insert`).
+    // Without this guard `handler_is_busy()` reads false for that whole
+    // window, so the SysTick idle-wipe (`zeroize_sensitive_state` ->
+    // `with_state`, the idle-wipe branch in `main::SysTick`) can take
+    // `&mut STATE` concurrently with this handler's borrow — an aliasing /
+    // data race on the secret-bearing singleton. Every other keygen/sign
+    // handler already holds this guard; match them so the wipe defers until
+    // this handler returns.
+    let _busy = super::HandlerGuard::enter();
+
     if super::state::peek_state(|s| s.pin_verified.check_sentinel()) != crate::fi::OK_SENTINEL {
         return NscStatus::NotInitialized as u32;
     }
