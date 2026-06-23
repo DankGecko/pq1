@@ -412,7 +412,19 @@ fn render_date(
         Resolved::Slot32(b) => *b,
         Resolved::Container(idx) => container_u256(tx, idx)?,
     };
-    let secs = read_u64_be_tail(&bytes);
+    let secs = match read_u64_be_tail(&bytes) {
+        Some(s) => s,
+        None => {
+            // Signed uint256 exceeds u64: its low 64 bits as a date/block
+            // would be unrelated to what is signed. Fail loud, never a
+            // misleading small value (audit 2026-06-23).
+            let [_, r1, r2, foot] = pages.page_mut(p);
+            write_line(r1, "! TIME >2^64");
+            write_line(r2, "(overflow)");
+            write_line(foot, "> next");
+            return Ok(());
+        }
+    };
     let enc = params.date_encoding.unwrap_or(DATE_ENC_TIMESTAMP);
     let [_, r1, r2, foot] = pages.page_mut(p);
     if enc == DATE_ENC_BLOCKHEIGHT {
@@ -448,7 +460,17 @@ fn render_duration(
         Resolved::Slot32(b) => *b,
         Resolved::Container(idx) => container_u256(tx, idx)?,
     };
-    let secs = read_u64_be_tail(&bytes);
+    let secs = match read_u64_be_tail(&bytes) {
+        Some(s) => s,
+        None => {
+            // Signed uint256 exceeds u64: fail loud rather than render a
+            // truncated duration (audit 2026-06-23).
+            let [_, r1, _r2, foot] = pages.page_mut(p);
+            write_line(r1, "! DUR >2^64");
+            write_line(foot, "> next");
+            return Ok(());
+        }
+    };
     let [_, r1, _r2, foot] = pages.page_mut(p);
     format_duration(secs, r1);
     write_line(foot, "> next");
@@ -670,13 +692,18 @@ pub(super) fn hex_nibble(n: u8) -> u8 {
     }
 }
 
-/// Read the low 8 bytes of a 32-byte BE word as a u64. High 24 bytes
-/// must be zero; we don't check that here (the formatter that calls
-/// this is responsible for the type expectation), so out-of-range
-/// values silently truncate. The seed corpus's `Date`/`Duration`
-/// fields are always u64-shaped.
-fn read_u64_be_tail(bytes: &[u8; 32]) -> u64 {
-    u64::from_be_bytes(bytes[24..].try_into().unwrap())
+/// Read the low 8 bytes of a 32-byte BE word as a u64, requiring the
+/// high 24 bytes to be zero. Returns `None` when the signed value exceeds
+/// `u64` — the caller MUST then paint a loud overflow marker rather than a
+/// silently-truncated date/duration. A companion controls these
+/// `uint256` words, so the pre-2026-06-23 silent truncation let a benign
+/// low-64-bit timestamp display while an unbounded validity window was
+/// signed (audit 2026-06-23 — date/duration high-byte truncation).
+fn read_u64_be_tail(bytes: &[u8; 32]) -> Option<u64> {
+    if bytes[..24].iter().any(|&b| b != 0) {
+        return None;
+    }
+    Some(u64::from_be_bytes(bytes[24..].try_into().unwrap()))
 }
 
 /// Format a u64 as decimal at `out[pos..]`. Returns the new position.
@@ -1057,5 +1084,35 @@ mod walker_slot_confusion_fixed {
         // Calldata too short to even contain the declared static head.
         let short = [0u8; 32]; // 1 word, but the format needs 2
         assert!(super::super::head_bounded_body(&short, 2).is_err());
+    }
+}
+
+#[cfg(test)]
+mod date_overflow_fixed {
+    //! REGRESSION (audit 2026-06-23 — date/duration high-byte truncation).
+    //! `read_u64_be_tail` used to keep only the low 8 bytes of a signed
+    //! `uint256`, so a companion-controlled `validBefore` / `validAfter`
+    //! with non-zero high bytes displayed a benign low-64-bit timestamp
+    //! while an unbounded validity window was signed. The reader now
+    //! rejects any value above `u64::MAX`; the date/duration renderers
+    //! paint a loud `! TIME >2^64` / `! DUR >2^64` marker on `None`.
+    use super::read_u64_be_tail;
+
+    #[test]
+    fn high_bytes_set_returns_none() {
+        let mut w = [0u8; 32];
+        w[23] = 1; // first byte above the low-8 tail
+        assert_eq!(read_u64_be_tail(&w), None);
+    }
+
+    #[test]
+    fn u64_range_round_trips() {
+        let mut w = [0u8; 32];
+        w[24..32].copy_from_slice(&u64::MAX.to_be_bytes());
+        assert_eq!(read_u64_be_tail(&w), Some(u64::MAX));
+        let mut five = [0u8; 32];
+        five[31] = 5;
+        assert_eq!(read_u64_be_tail(&five), Some(5));
+        assert_eq!(read_u64_be_tail(&[0u8; 32]), Some(0));
     }
 }
