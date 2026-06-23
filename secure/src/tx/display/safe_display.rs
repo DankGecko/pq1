@@ -1102,17 +1102,39 @@ fn append_erc20_tail_pages(
             }
         }
         None => {
-            // Raw amount (no decimals known) — hex tail across two rows
-            // so the user can compare against a dapp's hex.
+            // Raw amount, decimals unknown. Render the FULL integer
+            // magnitude (no decimals, "units" suffix) with a loud overflow
+            // banner — NEVER a middle-truncated hex that hides the
+            // magnitude (audit 2026-06-23 — Safe-inner unverified-ERC-20
+            // amount magnitude-hiding drain). The companion can force this
+            // `meta == None` arm for ANY token by withholding the optional
+            // ERC-20 metadata trailer, so the old head-7/tail-6 hex (bytes
+            // 7..26 dropped) let a benign-looking `0x000…0064` tail hide a
+            // huge transfer the wallet/Safe was signing. This mirrors the
+            // top-level `erc20_unknown` renderer (full decimal, loud
+            // overflow) and the refund-page unknown-token treatment.
             write_line(&mut pages.buf[next_page][0], "Raw amount:");
             if matches!(call, Erc20Call::Approve { .. }) && is_unlimited_amount(&amount) {
                 write_line(&mut pages.buf[next_page][1], "unlimited");
                 write_line(&mut pages.buf[next_page][2], "");
                 write_line(&mut pages.buf[next_page][3], "> next");
             } else {
+                let units = Erc20Metadata {
+                    chain_id: 0,
+                    contract: [0u8; 20],
+                    decimals: 0,
+                    name: &[],
+                    symbol: b"units",
+                };
                 let [_lbl, r1, r2, foot] = &mut pages.buf[next_page];
-                write_raw_uint_two_rows(r1, r2, &amount);
-                write_line(foot, "> next");
+                let fit = write_token_amount_two_rows(r1, r2, &amount, &units);
+                write_line(
+                    foot,
+                    match fit {
+                        AmountFit::Full => "> next",
+                        AmountFit::Overflow => "!AMOUNT OVERFLOW",
+                    },
+                );
             }
         }
     }
@@ -1382,33 +1404,10 @@ fn write_short_addr(row: &mut [u8; DISPLAY_COLS], addr: &[u8; 20]) {
     }
 }
 
-/// Render a U256 hex tail across two rows: row1 = "0x" + first 7 bytes,
-/// row2 = ".. " + last 6 bytes. Used for the unverified-token "raw
-/// amount" page where we don't know the decimals. Mirrors the calldata
-/// hash 2-row layout for visual consistency.
-fn write_raw_uint_two_rows(
-    row1: &mut [u8; DISPLAY_COLS],
-    row2: &mut [u8; DISPLAY_COLS],
-    value: &U256,
-) {
-    *row1 = [b' '; DISPLAY_COLS];
-    *row2 = [b' '; DISPLAY_COLS];
-    let hex = b"0123456789abcdef";
-    row1[0] = b'0';
-    row1[1] = b'x';
-    for i in 0..7 {
-        let b = value.0[i];
-        row1[2 + i * 2] = hex[(b >> 4) as usize];
-        row1[2 + i * 2 + 1] = hex[(b & 0x0f) as usize];
-    }
-    row2[0] = b'.';
-    row2[1] = b'.';
-    row2[2] = b'.';
-    row2[3] = b' ';
-    for i in 0..6 {
-        let b = value.0[26 + i];
-        row2[4 + i * 2] = hex[(b >> 4) as usize];
-        row2[4 + i * 2 + 1] = hex[(b & 0x0f) as usize];
-    }
-}
+// `write_raw_uint_two_rows` (head-7/tail-6 hex of a 32-byte amount) was
+// removed 2026-06-23: it hid the middle 19 bytes of the signed amount, a
+// magnitude-hiding WYSIWYS drain on the unverified-ERC-20 path. The
+// "Raw amount:" page now renders the full integer magnitude via
+// `write_token_amount_two_rows` with a loud overflow fallback (see the
+// `meta == None` arm of `append_erc20_tail_pages`).
 

@@ -140,11 +140,10 @@ pub mod erc7730;
 pub mod erc8213;
 
 // `safe_display` is intentionally NOT re-mounted: it includes a handful
-// of helpers (`write_short_addr`, `write_raw_uint_two_rows`, …) that
-// the host-side suite would mark unused and which we cannot
-// `#[allow(dead_code)]`-silence under the no-modification rule. Its
-// coverage lives in the firmware-side e2e harness; see
-// `reports/tests/secure-tx-display.md` "Coverage gaps".
+// of helpers (`write_short_addr`, …) that the host-side suite would mark
+// unused and which we cannot `#[allow(dead_code)]`-silence under the
+// no-modification rule. Its coverage lives in the firmware-side e2e
+// harness; see `reports/tests/secure-tx-display.md` "Coverage gaps".
 
 // `safe_mgmt` IS re-mounted: it has no unused helpers in the host-test
 // configuration, and its per-op renderers are pure-display logic that
