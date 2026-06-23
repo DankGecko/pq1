@@ -153,14 +153,18 @@ pub fn append_order_body_pages(
         Some(label) if receiver == [0u8; 20] => {
             write_line(&mut pages.row_mut(p, 1), label);
             write_line(&mut pages.row_mut(p, 2), "");
+            write_line(&mut pages.row_mut(p, 3), "> next");
         }
         _ => {
-            let page = pages.page_mut(p);
-            let (head, tail) = page.split_at_mut(2);
-            write_addr_two_rows(&mut head[1], &mut tail[0], &receiver);
+            // Full 40-hex across rows 1..3 (audit 2026-06-23 — LOW-5). The
+            // receiver is a fund destination; the old 2-row head-7/tail-6
+            // form hid 7 middle bytes, inconsistent with the full-address
+            // ERC-20 recipient page. The row budget is spent on the address
+            // (no "> next" footer), exactly like the Safe-address page.
+            let [_lbl, a, b, c] = pages.page_mut(p);
+            write_addr_full_three_rows(a, b, c, &receiver);
         }
     }
-    write_line(&mut pages.row_mut(p, 3), "> next");
     p += 1;
 
     // ── Expires + partiallyFillable ──────────────────────────────────
@@ -449,6 +453,42 @@ fn write_addr_two_rows(
         let b = addr[14 + i];
         row2[4 + i * 2] = hex_nibble(b >> 4);
         row2[4 + i * 2 + 1] = hex_nibble(b & 0x0f);
+    }
+}
+
+/// Full 40-hex address across three rows (7 / 8 / 5 bytes), mirroring
+/// `display::primitives::write_addr_full`. Local to this module because
+/// the `display::primitives` helpers are `pub(super)`-scoped to the
+/// display tree and not reachable from `tx::eip712`. Used for the CoW
+/// `receiver` page so every byte of a fund destination is shown (audit
+/// 2026-06-23 — LOW-5).
+fn write_addr_full_three_rows(
+    row1: &mut [u8; DISPLAY_COLS],
+    row2: &mut [u8; DISPLAY_COLS],
+    row3: &mut [u8; DISPLAY_COLS],
+    addr: &[u8; 20],
+) {
+    *row1 = [b' '; DISPLAY_COLS];
+    *row2 = [b' '; DISPLAY_COLS];
+    *row3 = [b' '; DISPLAY_COLS];
+    // Row 1: "0x" + bytes 0..7
+    row1[0] = b'0';
+    row1[1] = b'x';
+    for i in 0..7 {
+        row1[2 + i * 2] = hex_nibble(addr[i] >> 4);
+        row1[2 + i * 2 + 1] = hex_nibble(addr[i] & 0x0f);
+    }
+    // Row 2: bytes 7..15
+    for i in 0..8 {
+        let b = addr[7 + i];
+        row2[i * 2] = hex_nibble(b >> 4);
+        row2[i * 2 + 1] = hex_nibble(b & 0x0f);
+    }
+    // Row 3: bytes 15..20 (10 hex chars, padded to 16)
+    for i in 0..5 {
+        let b = addr[15 + i];
+        row3[i * 2] = hex_nibble(b >> 4);
+        row3[i * 2 + 1] = hex_nibble(b & 0x0f);
     }
 }
 
