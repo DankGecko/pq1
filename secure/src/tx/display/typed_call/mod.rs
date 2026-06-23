@@ -559,23 +559,16 @@ fn write_bytesn_rows(
             row2[i * 2 + 1] = hex_nibble(word[chars_r1 + i] & 0x0f);
         }
     } else {
-        // Head/tail elision: first 7 + ... + last 6 (matches the
-        // calldata-hash row helper in primitives.rs).
-        row1[0] = b'0';
-        row1[1] = b'x';
-        for i in 0..7 {
-            row1[2 + i * 2] = hex_nibble(word[i] >> 4);
-            row1[2 + i * 2 + 1] = hex_nibble(word[i] & 0x0f);
-        }
-        row2[0] = b'.';
-        row2[1] = b'.';
-        row2[2] = b'.';
-        row2[3] = b' ';
-        for i in 0..6 {
-            let b = word[n - 6 + i];
-            row2[4 + i * 2] = hex_nibble(b >> 4);
-            row2[4 + i * 2 + 1] = hex_nibble(b & 0x0f);
-        }
+        // N >= 16: the full 2N+2 hex chars do not fit the two rows this
+        // arg page has. A head/tail elision (first 7 + ... + last 6) would
+        // hide the middle bytes of a signed `bytesN` identifier — a
+        // brute-forceable display collision and the unfixed sibling of the
+        // array-tail elision (audit 2026-06-23 — bytesN>=16). DECLINE so
+        // the caller falls back to the loud blind-sign flow (banner + full
+        // calldata SHA-256) rather than render a truncated value that
+        // looks decoded. (The rows were cleared above; the caller discards
+        // this Pages on a decline.)
+        return false;
     }
     true
 }
@@ -893,5 +886,33 @@ mod array_wysiwys_tests {
         body.extend_from_slice(&word_be32(2));
         body.extend_from_slice(&word_be32(3));
         assert_eq!(render_first_arg(b"f(uint256[3])", &body), Some(false));
+    }
+
+    #[test]
+    fn bytes32_declines_to_blind_sign() {
+        // bytes32's 64 hex chars cannot fit the 2-row arg page; the pre-fix
+        // head/tail elision hid the middle 19 bytes (a brute-forceable
+        // display collision letting an attacker swap a signed identifier).
+        // It must DECLINE to blind-sign (audit 2026-06-23 — bytesN>=16).
+        let body = vec![0xABu8; 32];
+        assert_eq!(render_first_arg(b"f(bytes32)", &body), Some(false));
+    }
+
+    #[test]
+    fn bytes16_declines_to_blind_sign() {
+        // bytes16 = "0x" + 32 hex = 34 chars > 2 rows (32) → still elides →
+        // must decline. The boundary case just above the two-row budget.
+        let mut body = vec![0xCDu8; 16];
+        body.resize(32, 0); // right-pad to a full ABI word
+        assert_eq!(render_first_arg(b"f(bytes16)", &body), Some(false));
+    }
+
+    #[test]
+    fn bytes15_renders_in_full() {
+        // bytes15 = "0x" + 30 hex = 32 chars fits exactly two rows, so it
+        // renders in full — nothing hidden, no decline.
+        let mut body = vec![0xCDu8; 15];
+        body.resize(32, 0); // right-pad to a full ABI word
+        assert_eq!(render_first_arg(b"f(bytes15)", &body), Some(true));
     }
 }
