@@ -58,6 +58,7 @@ import sys
 import time
 import json
 import glob
+import hashlib
 import signal
 import multiprocessing as mp
 
@@ -69,6 +70,7 @@ ELF = os.path.join(HERE, "c10_sign_target", "target", "thumbv8m.main-none-eabi",
 OUT_DIR = os.path.join(HERE, "out")
 JSONL = os.path.join(OUT_DIR, "c10_sign_sweep.jsonl")
 PROGRESS = os.path.join(OUT_DIR, "c10_sign_sweep_progress.txt")
+META = os.path.join(OUT_DIR, "c10_sign_sweep.meta.json")   # binary-provenance sidecar (sha256 guard)
 
 RET = 0xAAAA_AAAA
 STACK_TOP = 0x9000_0000
@@ -78,13 +80,14 @@ SIG_ADDR = 0x6000_1000
 SIG_LEN = 4008
 BUDGET = 10_000_000_000
 TEST_MSG = bytes(range(32))
-TOTAL_EST = 6_625_000_000          # conservative post-fcee705a bound. Pre-fix bisect (2026-05-18)
-                                   # measured 6_622_918_000; the FORS ht_idx fix adds only ~266k
-                                   # instr (4 B into fors_secret's PRF — input 44 B→48 B, still one
-                                   # SHA block, no extra compression), so true count ≈ 6.6232 B.
-                                   # Rounded up so the sweep covers the whole function; any position
-                                   # past the true end returns 'short' (harmless). Re-measure exactly
-                                   # only if a future change alters sphincs-c10's instruction shape.
+TOTAL_EST = 5_504_700_000          # re-measured 2026-06-22 via bisect against the post-b12d4969
+                                   # (R-derivation hardening: grind_r now takes sk_seed) + CT-shuffle
+                                   # binary: 5,504,676,080 instr — DOWN 16.9% / -1.12B from the
+                                   # pre-hardening 6,622,918,000 (the hash.rs one-shot-sha256 refactor
+                                   # + Lemire-shuffle rewrite trimmed the sign). Rounded up so the
+                                   # sweep covers the whole function; positions past the true end
+                                   # return 'short' (harmless). The .meta.json sha256 guard (below)
+                                   # refuses a resume if the target ELF ever changes again.
 FN = "sca_c10_sign_verified"
 
 STRIDE = int(os.environ.get("C10_SWEEP_STRIDE", "500000"))
@@ -231,10 +234,52 @@ def _done_set():
     return done
 
 
+def _elf_sha256():
+    h = hashlib.sha256()
+    with open(ELF, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _resume_guard(elf_sha):
+    """Pin the run to its binary. Fault positions are ABSOLUTE instruction indices
+    into one specific ELF; if sphincs-c10 / pqsigner-fi / fi.rs change and the
+    target is recompiled, every checkpointed (model,pos) record aliases a DIFFERENT
+    instruction and a silent resume corrupts the coverage map (this exact footgun
+    cost a multi-day run once — the b12d4969 R-derivation hardening shifted the
+    sign by -1.12B instructions). So: if a non-empty checkpoint exists, its recorded
+    ELF sha256 MUST match the current ELF — else hard-stop and tell the operator to
+    archive + restart. No sidecar next to a checkpoint = unverifiable provenance =
+    also refuse. Fresh run (no checkpoint) writes the sidecar."""
+    have_ckpt = os.path.exists(JSONL) and os.path.getsize(JSONL) > 0
+    prev = None
+    if os.path.exists(META):
+        try:
+            prev = json.load(open(META)).get("elf_sha256")
+        except Exception:
+            prev = None
+    if have_ckpt and prev != elf_sha:
+        reason = (f"checkpoint ELF sha256 {prev} != current {elf_sha}"
+                  if prev else "checkpoint has no .meta.json provenance sidecar")
+        sys.exit(
+            "REFUSING TO RESUME — binary mismatch (would silently corrupt coverage).\n"
+            f"  {reason}\n"
+            "  Fault positions are absolute instruction indices; a changed binary\n"
+            "  aliases every record. Archive the old run, then re-run for a fresh start:\n"
+            f"    mv {JSONL} {JSONL}.OBSOLETE 2>/dev/null\n"
+            f"    mv {META} {META}.OBSOLETE 2>/dev/null\n")
+    with open(META, "w") as f:
+        json.dump({"elf_sha256": elf_sha, "total_est": TOTAL_EST,
+                   "stride": STRIDE, "fn": FN}, f, indent=2)
+
+
 def main():
     if not os.path.exists(ELF):
         sys.exit(f"ELF missing: {ELF}\n  build it: make -C {HERE} build-c10-sign")
     os.makedirs(OUT_DIR, exist_ok=True)
+    elf_sha = _elf_sha256()
+    _resume_guard(elf_sha)
 
     n_pos = (TOTAL_EST - 1) // STRIDE
     order = _progressive_order(n_pos)
@@ -243,6 +288,7 @@ def main():
 
     print("=== C10-sign FULL FI sweep (naive-parallel, checkpointing) ===")
     print(f"ELF:     {ELF}")
+    print(f"ELF sha256: {elf_sha}  (pinned in {os.path.basename(META)}; resume refuses on mismatch)")
     print(f"stride:  {STRIDE:,} instr  →  {len(positions):,} positions × {len(MODELS)} models "
           f"= {total_faults:,} faults")
     print(f"models:  {MODELS}  (order = compute priority)")
