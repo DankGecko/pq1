@@ -208,7 +208,9 @@ pub(super) fn dispatch(
     match op {
         FormatOp::Raw => render_raw(field, pages, ir, body, tx, params),
         FormatOp::Amount => render_amount(field, pages, ir, body, tx, params),
-        FormatOp::TokenAmount => render_token_amount(field, pages, ir, body, tx, erc20, params),
+        FormatOp::TokenAmount => {
+            render_token_amount(field, pages, ir, body, tx, erc20, resolver, params)
+        }
         FormatOp::NftName => render_nft_name(field, pages, ir, body, tx, resolver, params),
         FormatOp::Date => render_date(field, pages, ir, body, tx, params),
         FormatOp::Duration => render_duration(field, pages, ir, body, tx),
@@ -291,6 +293,7 @@ fn render_token_amount(
     body: &[u8],
     tx: &Eip1559Tx,
     erc20: Option<&Erc20Metadata<'_>>,
+    resolver: &NameResolver<'_>,
     params: &ParamSet<'_>,
 ) -> Result<(), RenderErr> {
     // Resolve the amount slot.
@@ -359,6 +362,28 @@ fn render_token_amount(
                     AmountFit::Overflow => "!AMOUNT OVERFLOW",
                 },
             );
+        }
+    }
+
+    // Audit 2026-06-25 MEDIUM-1: with no Merkle-verified metadata we cannot
+    // show decimals/symbol — but the token *identity* is still a signed
+    // operand. A descriptor that covers the token only via a `tokenPath`
+    // (Aave `withdraw` `asset`, Uniswap `tokenIn`/`tokenOut`) has no address
+    // field of its own, so a companion that withholds the optional ERC-20
+    // metadata trailer would otherwise have the user approve a
+    // transfer/withdraw/swap of an UNNAMED token. Render the resolved
+    // address on its own page (resolver-aware) so the contract identity is
+    // never omitted from the trusted display. We only emit the extra page in
+    // the unbound case — when `bound` is `Some` the symbol already names the
+    // token. If the address could not be resolved at all there is nothing to
+    // bind; the amount page already carries the loud `! raw, dec=?` footer,
+    // and the page-budget gate fails closed to blind-sign on overflow.
+    if bound.is_none() {
+        if let Some(addr) = token_addr {
+            let ap = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
+            write_label_row(pages, ap, b"Token (UNVERIFIED)");
+            let [_, ar1, ar2, ar3] = pages.page_mut(ap);
+            write_addr_full_or_name(ar1, ar2, ar3, &addr, tx.chain_id, resolver);
         }
     }
     Ok(())

@@ -19,8 +19,6 @@
 //! ⇒ `try_render_typed_call` returns `None` and the caller renders
 //! the Phase 1 BLIND SIGN flow with the FUNCTION page intact.
 
-use sha2::{Digest, Sha256};
-
 use super::primitives::{
     chain_name, hex_nibble, write_addr_full_or_name, write_chain, write_eth_two_rows,
     write_fee_budget_row, write_gas, write_gwei, write_line, write_nonce_row, write_tip_row,
@@ -240,8 +238,9 @@ fn render_arg(
             let payload_off = walked.body_off + 32;
             let payload = body.get(payload_off..payload_off + len as usize)?;
             let is_string = matches!(kind, TypeRef::String);
-            write_bytes_or_string_rows(r1, r2, r3, len, payload, is_string);
-            true
+            // Returns `false` for any non-empty payload → decline to
+            // blind-sign (audit 2026-06-25 LOW-1, parity with `bytesN>15`).
+            write_bytes_or_string_rows(r1, r2, r3, len, payload, is_string)
         }
         TypeRef::Array { elem, fixed_len } => {
             let count = walked.count;
@@ -573,11 +572,20 @@ fn write_bytesn_rows(
     true
 }
 
-/// Dynamic `bytes` / `string` render across three rows:
-///   row1: "len: <N>"
-///   row2: ASCII preview (first 14 chars + "…") for printable strings,
-///         "(non-ASCII)" otherwise.
-///   row3: "sha: <8 hex>…<8 hex>" — SHA-256 fingerprint head/tail.
+/// Dynamic `bytes` / `string`:
+///   - empty payload (`len == 0`): fully represented by the "len: 0" row →
+///     render and return `true`.
+///   - non-empty payload: DECLINE (return `false`).
+///
+/// Audit 2026-06-25 LOW-1 (parity with `write_bytesn_rows`): a head/tail
+/// SHA-256 fingerprint row anchors only 40 bits (`hash[0..3] ‖ hash[30..32]`)
+/// of an attacker-chosen, *signed* payload — the dynamic sibling of the
+/// `bytesN>15` decline. Showing it dressed up as a decoded field (under the
+/// arg label) understates how little of the payload the user can actually
+/// cross-check. Returning `false` makes `render_arg` bail the whole
+/// typed-call decode to the loud blind-sign flow (banner + selector + the
+/// full ERC-8213 256-bit calldata fingerprint the handler always appends),
+/// which hides nothing behind a truncated-but-decoded-looking value.
 fn write_bytes_or_string_rows(
     row1: &mut [u8; DISPLAY_COLS],
     row2: &mut [u8; DISPLAY_COLS],
@@ -585,7 +593,7 @@ fn write_bytes_or_string_rows(
     len: u32,
     payload: &[u8],
     is_string: bool,
-) {
+) -> bool {
     *row1 = [b' '; DISPLAY_COLS];
     *row2 = [b' '; DISPLAY_COLS];
     *row3 = [b' '; DISPLAY_COLS];
@@ -595,51 +603,16 @@ fn write_bytes_or_string_rows(
     p = write_decimal(row1, p, len as u64);
     let _ = p;
 
-    // Row 2: ASCII preview (only for `string` and only if all printable).
-    let preview_room = DISPLAY_COLS;
-    if is_string && payload.iter().all(|&b| (0x20..0x7f).contains(&b)) {
-        if payload.len() <= preview_room {
-            row2[..payload.len()].copy_from_slice(payload);
-        } else {
-            // first (preview_room - 1) chars + ellipsis '~'
-            let head = preview_room - 1;
-            row2[..head].copy_from_slice(&payload[..head]);
-            row2[head] = b'~';
-        }
-    } else if !is_string {
-        let _ = write_str(row2, 0, b"(binary)");
-    } else {
-        let _ = write_str(row2, 0, b"(non-ASCII)");
+    if len == 0 {
+        // Empty payload carries no hidden bytes; "len: 0" is a faithful,
+        // complete rendering. (`payload` is the empty slice here.)
+        let _ = (payload, is_string);
+        return true;
     }
 
-    // Row 3: "sha: <8 hex>…<8 hex>" — first 4 + last 4 bytes of digest.
-    let hash: [u8; 32] = {
-        let mut h = Sha256::new();
-        h.update(payload);
-        h.finalize().into()
-    };
-    let mut p = write_str(row3, 0, b"sha: ");
-    for i in 0..3 {
-        if p + 1 >= DISPLAY_COLS {
-            break;
-        }
-        row3[p] = hex_nibble(hash[i] >> 4);
-        row3[p + 1] = hex_nibble(hash[i] & 0x0f);
-        p += 2;
-    }
-    if p < DISPLAY_COLS {
-        row3[p] = b'.';
-        p += 1;
-    }
-    for i in 0..2 {
-        if p + 1 >= DISPLAY_COLS {
-            break;
-        }
-        row3[p] = hex_nibble(hash[30 + i] >> 4);
-        row3[p + 1] = hex_nibble(hash[30 + i] & 0x0f);
-        p += 2;
-    }
-    let _ = p;
+    // Non-empty: decline to the loud blind-sign flow (see doc comment). The
+    // rows are discarded by the caller on a decline.
+    false
 }
 
 /// Array render (covers both `T[N]` and `T[]`), used only for the

@@ -1003,6 +1003,18 @@ fn compile_one_format(
     // full signature is known — at build time.
     if context_kind == CTX_CONTRACT {
         check_contract_field_completeness(sig, fmt, &parsed)?;
+    } else {
+        // Audit 2026-06-25 HIGH-1: the typed-data sibling of H-3. Every
+        // EIP-712 member is folded into the signed `structHash =
+        // keccak(primary_type_hash || encoded_data)`, and each top-level
+        // member occupies exactly one head word (struct refs and dynamic
+        // types hash to a single word). The on-device exact-length gate
+        // forces `encoded_data` to the full member arity but does NOT check
+        // that every word reaches a page, so an under-declared descriptor
+        // could sign an effect-bearing member (e.g. a Permit2 `spender`)
+        // that the trusted display never shows. Enforce per-member coverage
+        // here at build time, exactly as the contract path does.
+        check_eip712_field_completeness(sig, fmt, &parsed)?;
     }
 
     // Selector / discriminator slot — 4 bytes. For EIP-712 we also keep
@@ -1516,6 +1528,66 @@ fn check_contract_field_completeness(
                     ));
                 }
             }
+        }
+    }
+    Ok(())
+}
+
+/// EIP-712 (typed-data) completeness lint — the typed-data sibling of
+/// [`check_contract_field_completeness`] (audit 2026-06-25 HIGH-1).
+///
+/// The signed value is `structHash = keccak256(primary_type_hash ||
+/// encoded_data)`, where `encoded_data` is the 32-bytes-per-member encoding
+/// of the primary type's top-level members in declaration order. Each
+/// top-level member is exactly ONE head word: value types encode inline,
+/// `bytes`/`string` encode as their keccak, and a nested struct member
+/// encodes as its `hashStruct` — one word regardless. So, unlike the
+/// contract path, there is no static-tuple-member granularity to chase; a
+/// per-top-member coverage check is both necessary and sufficient.
+///
+/// Refuse to pin a descriptor unless every member is accounted for by a
+/// field of its own (rendered or `visible:"never"`) or as another field's
+/// `tokenPath`. Without this, an honest-but-incomplete descriptor (the
+/// Permit/Permit2 approval shape is the canonical risk) would let the
+/// firmware sign a member such as `spender` that never reaches a page —
+/// exactly the signed-but-not-shown gap the contract lint already closes.
+fn check_eip712_field_completeness(
+    sig: &str,
+    fmt: &Format,
+    parsed: &ParsedFormatKey,
+) -> Result<(), String> {
+    if parsed.top_names.is_empty() {
+        return Ok(()); // zero-member type (degenerate; nothing to sign).
+    }
+
+    // Same coverage set as the contract path: each field's own path plus any
+    // `tokenPath` param. `visible:"never"` fields are included — an explicit
+    // hide is a conscious author decision.
+    let mut paths: Vec<&str> = Vec::with_capacity(fmt.fields.len() * 2);
+    for field in &fmt.fields {
+        paths.push(field.path.as_str());
+        if let Some(tp) = field
+            .params
+            .as_ref()
+            .and_then(|p| p.get("tokenPath"))
+            .and_then(|v| v.as_str())
+        {
+            paths.push(tp);
+        }
+    }
+
+    for (idx, top_name) in parsed.top_names.iter().enumerate() {
+        if !paths
+            .iter()
+            .any(|p| path_top_param_index(p, parsed) == Some(idx as u16))
+        {
+            return Err(format!(
+                "EIP-712 format `{sig}`: member #{idx} (`{top_name}`) is neither rendered, \
+                 explicitly hidden (`visible:\"never\"`), nor used as a `tokenPath`. Every \
+                 typed-data member is folded into the signed structHash, so the trusted \
+                 display must account for each one or it can omit an effect-bearing field \
+                 such as an approval `spender` (audit 2026-06-25 HIGH-1, EIP-712 completeness)"
+            ));
         }
     }
     Ok(())
@@ -3171,5 +3243,60 @@ mod tests {
         assert!(!path_covers_tuple_member("params[0]", "params", "amountIn"));
         assert!(!path_covers_tuple_member("@.value", "params", "amountIn"));
         assert!(!path_covers_tuple_member("$.metadata", "params", "amountIn"));
+    }
+
+    // Audit 2026-06-25 HIGH-1 — EIP-712 completeness lint regression guards.
+
+    /// Build an in-memory `Format` from a list of field paths.
+    fn fmt_with_paths(paths: &[&str]) -> Format {
+        let fields: Vec<serde_json::Value> = paths
+            .iter()
+            .map(|p| serde_json::json!({ "path": p, "format": "raw" }))
+            .collect();
+        serde_json::from_value(serde_json::json!({ "fields": fields }))
+            .expect("synthetic format deserializes")
+    }
+
+    const PERMIT2_KEY: &str =
+        "PermitTransferFrom(address token,address spender,uint256 amount,uint256 nonce,uint256 deadline)";
+
+    #[test]
+    fn eip712_completeness_rejects_omitted_member() {
+        // Renders only `token` + `amount`; `spender`/`nonce`/`deadline`
+        // are signed (folded into structHash) but never shown — the exact
+        // HIGH-1 Permit2 drain shape. The lint must refuse to pin it.
+        let parsed = parse_format_key(PERMIT2_KEY).unwrap();
+        let fmt = fmt_with_paths(&["token", "amount"]);
+        let err = check_eip712_field_completeness(PERMIT2_KEY, &fmt, &parsed)
+            .expect_err("incomplete EIP-712 descriptor must be rejected");
+        assert!(err.contains("spender"), "error should name the first omitted member: {err}");
+    }
+
+    #[test]
+    fn eip712_completeness_accepts_full_coverage() {
+        // Every member has a field — passes (mirrors the shipped
+        // circle-usdc-{rwa,twa} authorization descriptors).
+        let parsed = parse_format_key(PERMIT2_KEY).unwrap();
+        let fmt = fmt_with_paths(&["token", "spender", "amount", "nonce", "deadline"]);
+        assert!(check_eip712_field_completeness(PERMIT2_KEY, &fmt, &parsed).is_ok());
+    }
+
+    #[test]
+    fn eip712_completeness_accepts_tokenpath_coverage() {
+        // A member surfaced only as another field's `tokenPath` counts as
+        // covered (parity with the contract lint): here `token` rides on
+        // the `amount` field's tokenPath, and the rest have their own
+        // fields. `spender`/`nonce`/`deadline` still need fields.
+        let parsed = parse_format_key(PERMIT2_KEY).unwrap();
+        let fields = serde_json::json!({
+            "fields": [
+                { "path": "amount", "format": "tokenAmount", "params": { "tokenPath": "token" } },
+                { "path": "spender", "format": "addressName" },
+                { "path": "nonce", "format": "raw", "visible": "never" },
+                { "path": "deadline", "format": "raw" },
+            ]
+        });
+        let fmt: Format = serde_json::from_value(fields).unwrap();
+        assert!(check_eip712_field_completeness(PERMIT2_KEY, &fmt, &parsed).is_ok());
     }
 }
