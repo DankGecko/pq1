@@ -2941,10 +2941,40 @@ impl WalletStore for OptigaTrustM {
     }
 
     fn pin_attempt_count(&mut self) -> Option<u8> {
-        // SAFETY: `read_counter_raw` is `unsafe` because it touches
-        // the OPTIGA APDU stack; we hold `&mut self` so exclusive
-        // access is established.
-        unsafe { self.read_counter_raw() }
+        // MEDIUM-1 (audit pin-unlock 20260625): under `optiga-hw-counter`
+        // (the production config) the authoritative lockout is the silicon
+        // LUC at E120; the F1E1 soft counter is frozen at its provisioned 0
+        // (it doubles as the is_provisioned liveness sentinel and is never
+        // bumped/reset on this path). Reading F1E1 here made the boot
+        // reconcile compare page-124 against a CONSTANT — a dead detector
+        // that also false-wiped on a benign wrong-PIN-then-reboot. Return
+        // the live E120 `current` (attempts used) instead, so the MCU↔OPTIGA
+        // cross-check is meaningful and tracks page-124 in lockstep. The
+        // read needs the shielded link, so bring it up first; if it can't be
+        // established (early boot / unprovisioned chip) return None so the
+        // reconcile treats the leg as "unavailable, skip" rather than
+        // agreeing on a stale 0.
+        #[cfg(feature = "optiga-hw-counter")]
+        {
+            if self.ensure_shield().is_err() {
+                return None;
+            }
+            // SAFETY: exclusive `&mut self`; touches the OPTIGA APDU stack.
+            match unsafe { self.read_hw_pin_counter() } {
+                // (curr, 0) or None ⇒ unprovisioned / read failure.
+                Some((_, 0)) | None => None,
+                // Normalise to the MAX_ATTEMPTS scale (E120 limit is 32,
+                // MCU page-124 caps at MAX_ATTEMPTS=10) so the `!=` compare
+                // against the MCU used-count is on the same axis.
+                Some((curr, _limit)) => Some(curr.min(MAX_ATTEMPTS as u32) as u8),
+            }
+        }
+        #[cfg(not(feature = "optiga-hw-counter"))]
+        {
+            // SAFETY: `read_counter_raw` touches the OPTIGA APDU stack;
+            // we hold `&mut self` so exclusive access is established.
+            unsafe { self.read_counter_raw() }
+        }
     }
 
     fn factory_reset_admin(&mut self) -> Result<(), SeError> {

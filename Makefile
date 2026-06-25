@@ -1990,9 +1990,35 @@ PROD_FORBIDDEN = e2e-test dev-testkey mock-se debug-log otp-hardcoded-master-key
                  ui-capture ui-mirror bhk-hardcoded-master-key uart-console \
                  boot-pulse sca-trigger erc7730-dev-unattested optiga-reset-oids \
                  fw-rollback-e2e fwup-transport-e2e se050-scp03-allow-factory-fallback
+
+# HIGH-1 ship gate (audit pin-unlock 20260625): the denylist above stops
+# never-ship features, but a denylist CANNOT express "a required hardening
+# feature is MISSING". The S-1 OPTIGA-lockdown fence (nsc/mod.rs) is keyed on
+# `mode-production` ALONE (it performs the IRREVERSIBLE LcsO ratchet, so it must
+# never auto-fire on dev/test RELEASE hardware), so a release built WITHOUT
+# `mode-production` previously slipped through every gate while shipping F1D0
+# `Change=ALW` + mutable metadata — a desolder-bench seed-extraction path
+# (shared-PIN cascade across both SEs). This allowlist makes that omission a
+# LOUD build failure: a shipping image MUST carry the full production hardening
+# set. (Dev/bench hardware uses the `flash-hw-*` / `*-e2e` targets, NOT
+# `make release` / `prod-check`, so it is unaffected.)
+PROD_REQUIRED = mode-production optiga-lock-operational optiga-hw-counter \
+                consumption-mask tamp tamp-wipe tzic-wipe \
+                saes-dhuk se050-derived-scp03
+
+# Canonical production shipping feature set (the full hardened image). This is
+# what a real shipping build / CI prod-gate validates. Kept on ONE line so the
+# comma list survives `make` variable expansion (a backslash-newline would
+# inject a stray space into the feature string). NOTE: enabling
+# `optiga-lock-operational` performs the irreversible OPTIGA LcsO ratchet at
+# PROVISION time — only flash this onto a unit you intend to ship, after the
+# OTP-master burn (the `is_device_master_burned()` runtime guard refuses the
+# bump otherwise). See secure/Cargo.toml:553 + docs/production-todo.md.
+PROD_SHIP_FEATURES = stm32u585,se050,optiga-trust-m,dual-se,ui-lcd,usb,saes-dhuk,se050-derived-scp03,mode-production,optiga-lock-operational,optiga-hw-counter,consumption-mask,tamp,tamp-wipe,tzic-wipe
+
 .PHONY: prod-check
 prod-check:
-	@echo "==> prod-check (MED-2): resolving shipping feature set"
+	@echo "==> prod-check (MED-2 / HIGH-1): resolving shipping feature set"
 	@echo "    RELEASE_FEATURES = $(RELEASE_FEATURES)"
 	@feats=$$(cargo tree -p sphincs-tz-secure --no-default-features \
 		--features "$(RELEASE_FEATURES)" --target $(TARGET) \
@@ -2006,7 +2032,26 @@ prod-check:
 		echo "    forbidden set: $(PROD_FORBIDDEN)"; \
 		exit 1; \
 	fi; \
-	echo "==> prod-check: PASS — no never-ship feature in the resolved set"
+	missing=""; \
+	for f in $(PROD_REQUIRED); do \
+		echo "$$feats" | grep -qx "$$f" || missing="$$missing $$f"; \
+	done; \
+	if [ -n "$$missing" ]; then \
+		echo "==> prod-check: FAIL — shipping build is MISSING required hardening feature(s):$$missing"; \
+		echo "    required set : $(PROD_REQUIRED)"; \
+		echo "    (S-1/S-2 OPTIGA lockdown, hw PIN counter, SCA mask, tamper-wipe, Tier-1 SE keys)"; \
+		echo "    Build the real shipping image with:"; \
+		echo "      make release RELEASE_FEATURES=\"$(PROD_SHIP_FEATURES)\""; \
+		echo "    or run the shipping gate directly: make prod-check-ship"; \
+		exit 1; \
+	fi; \
+	echo "==> prod-check: PASS — no never-ship feature, all required hardening present"
+
+# Shipping-config gate: validate the canonical PROD_SHIP_FEATURES. This is what
+# CI runs (so the gate exercises the REAL hardened image, not the dev default).
+.PHONY: prod-check-ship
+prod-check-ship:
+	@$(MAKE) prod-check RELEASE_FEATURES="$(PROD_SHIP_FEATURES)"
 
 .PHONY: release
 release: prod-check

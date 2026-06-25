@@ -854,8 +854,35 @@ pub unsafe fn gated_unlock(
             return Err(UnlockError::PinLocked);
         }
 
-        if crate::hw::flash::pin_attempts_bump().is_err() {
-            // Flash write fault (PROGERR or readback mismatch).
+        // MEDIUM-2 (audit pin-unlock 20260625): FAIL-IN the pre-commit
+        // bump, mirroring the sentinel'd `allowed` gate above. `pin_attempts_bump`
+        // (now `#[inline(never)]`) programs the next QW and internally verifies
+        // the post-bump count; here we ALSO require — through the Hamming-distant
+        // sentinel — that the counter advanced by EXACTLY one relative to
+        // `pre_count`. The secure default is the `!= OK_SENTINEL` refusal: a
+        // single glitch that skips the `bl pin_attempts_bump` (leaving a stale
+        // `Ok`) or skips a refusal branch leaves the re-read count == `pre_count`,
+        // so `bumped` lands != OK_SENTINEL and we refuse WITHOUT calling the SE —
+        // the old `if ….is_err() { return }` shape let a skipped branch fall
+        // through into `se.unlock` with page-124 uncharged.
+        //
+        // NB: `check_true_into_sentinel` invokes its closure TWICE. The single
+        // mutating `pin_attempts_bump()` call therefore happens once, ABOVE the
+        // closure; the closure only RE-READS the counter (a side-effect-free
+        // flash read), so there is no double-bump.
+        let bump_result = crate::hw::flash::pin_attempts_bump();
+        let bumped = crate::fi::check_true_into_sentinel(|| {
+            // SAFETY: `pin_attempts_read` is a side-effect-free flash read;
+            // exclusive SE/flash access holds via the single-threaded
+            // dispatcher. The closure is a safe context (the enclosing
+            // `unsafe fn` body's implicit unsafe does not extend into it),
+            // so the read needs its own `unsafe` block.
+            bump_result == Ok(pre_count + 1)
+                && unsafe { crate::hw::flash::pin_attempts_read() } == pre_count + 1
+        });
+        if bumped != crate::fi::OK_SENTINEL {
+            // Flash write fault (PROGERR / readback mismatch), a faulted or
+            // skipped bump, or the counter did not advance by exactly one.
             // Refuse without ever calling the SE driver.
             return Err(UnlockError::InternalError);
         }
@@ -950,9 +977,12 @@ pub unsafe fn gated_unlock(
     }
 }
 
-/// Boot-time PIN-counter reconciliation across the three independent
-/// failed-attempts counters: MCU page-124, OPTIGA F1E1, SE050 USERID
-/// `auth_attempts` (§4 dual-chip PIN-lockout-sync hardening).
+/// Boot-time PIN-counter reconciliation across the independent
+/// failed-attempts counters: MCU page-124 and the OPTIGA PIN counter
+/// (silicon E120 LUC `current` under `optiga-hw-counter` — the production
+/// config — else the F1E1 soft counter). The SE050 USERID `auth_attempts`
+/// leg is unavailable in production (see the Correction note below).
+/// (§4 dual-chip PIN-lockout-sync hardening.)
 ///
 /// **Attack defended.** An attacker who can reset any ONE side
 /// — OPTIGA PBS reset (E140 Conf(E140) Auto on a glitched chip
@@ -990,14 +1020,20 @@ pub unsafe fn gated_unlock(
 /// reads return the same wrong value — out of scope for the
 /// single-fault threat model.
 ///
-/// **Correction note.** An earlier work-todo §4 entry (and this
-/// function's prior docstring) claimed SE050's counter could only
-/// be read via SW=0x63Cx on VERIFY, which would consume an
-/// attempt. That was incomplete: `ReadObjectAttributes` (INS_READ
-/// + P2_ATTRIBUTES) returns the USERID `auth_attempts` field over
-/// the transport SCP03 channel without authenticating, hence
-/// without consuming an attempt. The three-way reconcile relies
-/// on that path.
+/// **Correction note (audit pin-unlock 20260625).** Two earlier claims in
+/// this docstring were wrong and are retracted:
+///   - SE050's `auth_attempts` was said to be peekable via
+///     `ReadObjectAttributes` without consuming an attempt. On the
+///     production `USERID_OBJ` policy the chip answers SW=0x6986 (policy
+///     denial), so `Se050::pin_attempt_count` returns `None` and the SE050
+///     leg of this reconcile is skipped. See
+///     `se050::Se050::pin_attempt_count_raw` for the silicon evidence.
+///   - The OPTIGA leg formerly read the F1E1 soft counter, which is frozen
+///     at its provisioned 0 under `optiga-hw-counter` (the production
+///     config) — a dead comparison that also false-wiped on a benign
+///     wrong-PIN-then-reboot. `OptigaTrustM::pin_attempt_count` now reads
+///     the live E120 LUC `current` instead, so the MCU↔OPTIGA cross-check
+///     is meaningful and tracks page-124 in lockstep.
 ///
 /// Called once per boot from `main.rs` after SE init but before
 /// the gateway accepts any unlock command. On tamper detection it
@@ -1012,10 +1048,41 @@ where
     let se_used = se.pin_attempt_count();
     let se_split = se.pin_attempt_counts_divergent();
 
-    let mcu_vs_se = matches!(se_used, Some(s) if s != mcu);
+    // If no SE leg is readable (shield not yet up, or an unprovisioned chip
+    // at first boot) there is nothing to compare. Skip — but loudly, so the
+    // lost cross-check is visible rather than silently mistaken for
+    // agreement on a frozen value.
+    let se_count = match se_used {
+        Some(s) => s,
+        None => {
+            #[cfg(feature = "debug-log")]
+            secure_log!("[reconcile] SE attempt-counter leg unavailable — cross-check skipped");
+            return;
+        }
+    };
+
+    // Pre-commit invariant: MCU page-124 is bumped BEFORE the SE verify, so in
+    // every benign state MCU LEADS (or equals) the SE counter — `mcu == se`
+    // (the verify ran and both advanced) or `mcu == se + 1` (a power-cut or a
+    // transport error in the sub-ms window between the MCU bump and the
+    // SE-silicon bump). The SE counter EXCEEDING MCU is therefore the
+    // unambiguous tamper signal: it means page-124 was rolled back
+    // out-of-band (e.g. a TZ-bypass flash erase) while the SE silicon retained
+    // its count. Comparing `se > mcu` (NOT `se != mcu`) is what lets the live
+    // E120 leg detect the rollback WITHOUT false-wiping on benign power-cuts
+    // or flaky-I2C retries (which only ever make MCU lead, never the SE).
+    let mcu_vs_se = se_count > mcu;
     let tamper = mcu_vs_se || se_split;
 
-    if !tamper {
+    // FI hardening (audit pin-unlock 20260625): route the "no tamper, safe to
+    // continue boot" verdict through the Hamming-distant sentinel and FAIL-IN.
+    // The secure default is to WIPE: a single glitch that flips a real
+    // disagreement to `tamper = false` lands a value != OK_SENTINEL and falls
+    // through to the wipe path below rather than silently booting a tampered
+    // device. (Recomputed twice inside `check_true_into_sentinel`; `tamper` is
+    // a pure local, so the double evaluation has no side effect.)
+    let safe = crate::fi::check_true_into_sentinel(|| !tamper);
+    if safe == crate::fi::OK_SENTINEL {
         return;
     }
 
