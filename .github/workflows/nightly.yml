@@ -11,12 +11,18 @@ name: Nightly (heavy gates)
 # Runs nightly + on manual dispatch. The fast invariant/host/secure/contracts
 # gates stay in ci.yml on every push/PR.
 #
-# NOT here: `make ui-golden` (Trezor-style golden-screenshot regression). It
-# works, but capturing all 24 e2e scenarios' frames over the QEMU semihosting
-# backend (one trap per emitted char) runs 10+ min — too slow/fragile for a
-# CI gate as written. Kept a LOCAL/manual gate; the CI-viable version is a
-# dedicated short-capture scenario (measured-boot + the key dialogs only)
-# instead of the full 24-scenario e2e.
+#   * checkct     — cargo-checkct (binsec relational-CT proof of the 4 secure
+#                   drivers + the by-design-INSECURE shuffle control). The
+#                   binsec OCaml backend is the heavy part (opam, minutes).
+#   * ui-golden-render — the render-only golden gate (the "dedicated
+#                   short-capture" the note below used to call for): renders the
+#                   curated screen corpus via the production renderers + diffs
+#                   [UI-FP] fingerprints, no keygen/sign (seconds, not minutes).
+#
+# Still NOT here: the FULL `make ui-golden` (all 24 e2e scenarios over the QEMU
+# semihosting backend, 10+ min — the C10 signs over software SHA-256 dominate).
+# `ui-golden-render` (above) is the CI-viable replacement; the full e2e variant
+# stays a LOCAL/manual gate.
 
 on:
   schedule:
@@ -61,3 +67,48 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - name: make verify-repro
         run: make verify-repro
+
+  checkct:
+    name: cargo-checkct (binsec relational CT proof)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: stable
+          targets: thumbv8m.main-none-eabi
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      # binsec (+ unisim_archisec, bitwuzla) is the relational-CT backend —
+      # OCaml, not on crates.io, installed via opam. This is the heavy step
+      # (minutes); setup-ocaml caches the opam root across runs.
+      - uses: ocaml/setup-ocaml@e32b06a3e831ff2fbc6f08cf35be2085e3918014 # v3.6.1
+        with:
+          ocaml-compiler: "4.14.2"
+      - name: opam install binsec
+        run: opam install -y binsec.0.10.0
+      - name: build cargo-checkct (Ledger-Donjon)
+        run: |
+          git clone --depth 1 https://github.com/Ledger-Donjon/cargo-checkct ~/cargo-checkct
+          cd ~/cargo-checkct && cargo build --release
+      # Relational CT proof of kdf / fors / th / saes drivers; the fisher_yates
+      # shuffle is the by-design-INSECURE control (must report a leak).
+      - name: cargo-checkct run --dir tools/sca
+        run: |
+          eval $(opam env)
+          export PATH="$HOME/cargo-checkct/target/release:$PATH"
+          cargo-checkct run --dir tools/sca --timeout 300
+
+  ui-golden-render:
+    name: UI golden (render-only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: stable
+          targets: thumbv8m.main-none-eabi
+      - name: Install arm-none-eabi + qemu
+        run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi qemu-system-arm
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: make ui-golden-render
+        run: make ui-golden-render
