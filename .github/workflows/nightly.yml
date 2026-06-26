@@ -86,16 +86,20 @@ jobs:
           ocaml-compiler: "4.14.2"
       - name: opam install binsec
         run: opam install -y binsec.0.10.0
+      # The checkct driver crates reference `checkct_macros` at a path relative
+      # to a SIBLING `cargo-checkct/` (../../../../../cargo-checkct/...), so the
+      # tool must be cloned NEXT TO the repo checkout, not under $HOME.
       - name: build cargo-checkct (Ledger-Donjon)
         run: |
-          git clone --depth 1 https://github.com/Ledger-Donjon/cargo-checkct ~/cargo-checkct
-          cd ~/cargo-checkct && cargo build --release
+          dest="$(dirname "$GITHUB_WORKSPACE")/cargo-checkct"
+          git clone --depth 1 https://github.com/Ledger-Donjon/cargo-checkct "$dest"
+          cd "$dest" && cargo build --release
       # Relational CT proof of kdf / fors / th / saes drivers; the fisher_yates
       # shuffle is the by-design-INSECURE control (must report a leak).
       - name: cargo-checkct run --dir tools/sca
         run: |
           eval $(opam env)
-          export PATH="$HOME/cargo-checkct/target/release:$PATH"
+          export PATH="$(dirname "$GITHUB_WORKSPACE")/cargo-checkct/target/release:$PATH"
           cargo-checkct run --dir tools/sca --timeout 300
 
   ui-golden-render:
