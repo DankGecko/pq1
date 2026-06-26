@@ -140,6 +140,36 @@ with distinct `aad`, each on its own SE. `seal`/`open` already return/accept the
 stores. This *strengthens* HNDL: the harvested bus traffic is now only the 48 B
 `aead`, never the ML-KEM ciphertext.
 
+### Where does `ct` live? (piece-2b decision — `ct` is NOT a secret)
+
+The secure-flash bank-1 page map is nearly full of persistent data:
+
+| page | addr | use |
+|---|---|---|
+| 127 | `0x0C0F_E000` | key storage / Tropic01 pairing (8 KB) |
+| 126 | `0x0C0F_C000` | FW-update fail counter (was OPTIGA PBS) |
+| 125 | `0x0C0F_A000` | SE050 admin-wipe state |
+| 124 | — | PIN-attempt counter |
+| 123 | — | off-chain sig counter (log-structured) |
+
+A `ct` is **1568 B**; two halves × a few accounts is several KB → ~2 pages. But
+`ct` is **not a secret** (IND-CCA — it reveals nothing about the shared secret
+without `dk`), which opens three placements (a piece-2b decision, possibly
+user-facing because option C changes the unlock flow):
+
+- **A — MCU *secure* flash** (pages 122/121 below the persistent region, if free
+  under the secure watermark). Self-contained unlock; costs scarce secure pages.
+- **B — MCU *non-secure* flash.** Frees secure pages; a tampered `ct` only
+  *fails to open* (GCM tag) → DoS, never a secret leak. Self-contained unlock.
+- **C — off-device (companion stores `ct`).** Zero flash cost; but unlock now
+  needs the companion to supply `ct` — a new dependency the wallet currently
+  doesn't have (it reconstructs from the two SEs alone). Strongest "the device
+  holds no lattice ciphertext at rest" story; weakest availability.
+
+Recommendation to settle in 2b: **B (NS flash)** — keeps unlock self-contained,
+spends no secure pages, and `ct`'s non-secrecy makes NS placement safe. Flag to
+the user if A's secure-page budget or C's companion-dependency is preferred.
+
 ## Follow-ups (hardware / acceptance)
 
 - **Binary size:** `ml-kem` pulls `sha3 0.11` (Keccak) — a *second* hash stack
