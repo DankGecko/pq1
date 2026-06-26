@@ -473,18 +473,41 @@ fn render_date(
     let enc = params.date_encoding.unwrap_or(DATE_ENC_TIMESTAMP);
     let [_, r1, r2, foot] = pages.page_mut(p);
     if enc == DATE_ENC_BLOCKHEIGHT {
-        // "block #N" on row 1.
-        let mut row = [b' '; DISPLAY_COLS];
-        let mut pos = 0;
-        for &b in b"block #" {
-            if pos < row.len() {
+        // The block id is the signed deadline/expiry, so EVERY digit is
+        // security-relevant: a far-future block height must never render as a
+        // near one. The previous "block #N" form fed the full u64 `secs`
+        // straight into `write_decimal_into`, which silently DROPS low-order
+        // digits once the 16-col row fills. With the 7-char "block #" prefix
+        // only 9 digits fit, so a >=10-digit height rendered as its top 9
+        // digits — e.g. block 12_345_678_901 painted "block #123456789"
+        // (~100x understated, yet a plausible near deadline) while the
+        // signature committed to the full value. Show the full magnitude
+        // instead: the compact "block #N" inline form while every digit fits
+        // (the unchanged common case: heights < 1e9), otherwise a label on r1
+        // and the full number on its own row r2. An absurd >16-digit value
+        // (>= 1e16 — not a real block height on any chain) fails LOUD rather
+        // than truncating, mirroring the timestamp branch's `! YEAR >9999`
+        // and the `! CHAIN >2^64` guard (audit 2026-06-26 — the
+        // magnitude-hiding sibling of the date-year fix 7df062d3).
+        const BLOCK_PREFIX: &[u8] = b"block #";
+        if BLOCK_PREFIX.len() + decimal_digits(secs) <= DISPLAY_COLS {
+            let mut row = [b' '; DISPLAY_COLS];
+            let mut pos = 0;
+            for &b in BLOCK_PREFIX {
                 row[pos] = b;
                 pos += 1;
             }
+            write_decimal_into(&mut row, pos, secs);
+            *r1 = row;
+        } else if decimal_digits(secs) <= DISPLAY_COLS {
+            write_line(r1, "Block height:");
+            let mut row = [b' '; DISPLAY_COLS];
+            write_decimal_into(&mut row, 0, secs);
+            *r2 = row;
+        } else {
+            write_line(r1, "Block height:");
+            write_line(r2, "! >1e16 (ovf)");
         }
-        pos = write_decimal_into(&mut row, pos, secs);
-        let _ = pos;
-        *r1 = row;
     } else {
         format_iso8601_utc(secs, r1, r2);
     }
@@ -617,12 +640,21 @@ fn render_chain_id(
     };
     let [_, r1, r2, foot] = pages.page_mut(p);
     match read_u64_be_tail(&bytes) {
-        Some(cid) => {
+        Some(cid) if decimal_digits(cid) <= DISPLAY_COLS => {
             // "<decimal id>" on row 1, "<chain_name>" on row 2.
             let mut decimal = [b' '; DISPLAY_COLS];
             write_decimal_into(&mut decimal, 0, cid);
             *r1 = decimal;
             write_line(r2, chain_name(cid));
+        }
+        // A 17-20 digit chain id is <= u64 but cannot be shown in full on a
+        // 16-col row, and names no real EVM chain. Fail loud rather than let
+        // `write_decimal_into` silently drop the low digits (which would paint
+        // a different, smaller chain number than the one signed) — same policy
+        // as the >u64 arm below.
+        Some(_) => {
+            write_line(r1, "! CHAIN >1e16");
+            write_line(r2, "(too large)");
         }
         // A chain id wider than u64 cannot name a real EVM chain; fail loud
         // rather than render a truncated low-64-bit value (same policy as the
@@ -798,7 +830,31 @@ fn read_u64_be_tail(bytes: &[u8; 32]) -> Option<u64> {
     Some(u64::from_be_bytes(bytes[24..].try_into().unwrap()))
 }
 
+/// Number of decimal digits needed to render `n` (`0` counts as one
+/// digit). Used by the magnitude-critical formatters (block-height date,
+/// chain id) to detect — BEFORE painting — that `write_decimal_into` would
+/// have to drop low-order digits to fit the row, so they can render the
+/// full value across rows or fail loud instead of silently understating
+/// the signed magnitude.
+pub(super) fn decimal_digits(n: u64) -> usize {
+    let mut count = 1usize;
+    let mut m = n / 10;
+    while m > 0 {
+        count += 1;
+        m /= 10;
+    }
+    count
+}
+
 /// Format a u64 as decimal at `out[pos..]`. Returns the new position.
+///
+/// NOTE: this STOPS at the end of the row, silently dropping any digits
+/// that don't fit (it writes most-significant-first). That is acceptable
+/// only for callers where a dropped low-order digit is cosmetic
+/// (`format_duration`'s sub-day components, the interop chain-label
+/// prefix). Callers rendering a security-critical magnitude must gate on
+/// [`decimal_digits`] first — see `render_date` (blockHeight) and
+/// `render_chain_id` — so a magnitude is never silently understated.
 pub(super) fn write_decimal_into(
     out: &mut [u8; DISPLAY_COLS],
     pos: usize,
@@ -1420,6 +1476,24 @@ mod faithless_formatter_fixed {
     }
 
     #[test]
+    fn chain_id_seventeen_digits_within_u64_fails_loud() {
+        // A 17-digit chain id is <= u64 but cannot fit a 16-col row in full;
+        // `write_decimal_into` would silently drop its low digit, painting a
+        // different (smaller) chain number than the one signed. Fail loud.
+        let ir = ir_with_path(&slot_prog(0));
+        let mut body = [0u8; 32];
+        // 12_345_678_901_234_567 = 17 digits, < u64::MAX.
+        body[24..32].copy_from_slice(&12_345_678_901_234_567u64.to_be_bytes());
+        let tx = envelope_chain(1);
+        let mut pages = Pages::with_len(0);
+        render_chain_id(&field(FormatOp::ChainId), &mut pages, &ir, &body, &tx)
+            .expect("renders");
+        assert_eq!(&pages.buf[0][1][..13], b"! CHAIN >1e16");
+        // Never the silently-truncated top-16-digit value.
+        assert_ne!(&pages.buf[0][1][..4], b"1234");
+    }
+
+    #[test]
     fn token_ticker_unbound_shows_address_not_unknown() {
         // Field path -> head word 0 = token address; no erc20 metadata bound.
         // The faithful formatter must show the address (token identity), not
@@ -1480,5 +1554,139 @@ mod faithless_formatter_fixed {
         )
         .expect("renders");
         assert_eq!(&pages.buf[0][1][..4], b"USDC");
+    }
+}
+
+#[cfg(test)]
+mod block_height_magnitude_fixed {
+    //! REGRESSION (audit 2026-06-26 — magnitude-hiding class).
+    //!
+    //! `render_date`'s blockHeight branch rendered the signed u64 block id
+    //! with `write_decimal_into`, which silently drops low-order digits once
+    //! the 16-col row fills. With the 7-char "block #" prefix only 9 digits
+    //! fit, so a >=10-digit deadline rendered as its top 9 digits — e.g.
+    //! block 12_345_678_901 painted "block #123456789" (~100x understated),
+    //! a far-future authorization expiry the user reads as near while the
+    //! signature commits to the full value. Same display != signed
+    //! magnitude-hiding class as the date-year u16 truncation (commit
+    //! 7df062d3); the blockHeight sibling had no guard. The fix shows the
+    //! FULL magnitude (inline while it fits, else label + full number on r2)
+    //! and fails loud only for absurd >16-digit values.
+    use super::*;
+    use crate::tx::erc7730::{ContextKind, Erc7730Ir};
+
+    /// Throwaway IR whose `pool` holds one compiled path program at offset 1
+    /// (mirrors `faithless_formatter_fixed::ir_with_path`).
+    fn ir_with_path(prog: &[u8]) -> Erc7730Ir<'static> {
+        let mut pool = std::vec::Vec::with_capacity(prog.len() + 2);
+        pool.push(0x00);
+        pool.push(prog.len() as u8);
+        pool.extend_from_slice(prog);
+        let pool: &'static [u8] = std::boxed::Box::leak(pool.into_boxed_slice());
+        Erc7730Ir {
+            schema_ver: crate::tx::erc7730::SCHEMA_VER,
+            context_kind: ContextKind::Contract,
+            chain_id: 1,
+            contract: [0u8; 20],
+            descriptor_hash: [0u8; 32],
+            domain_separator: [0u8; 32],
+            owner: &[],
+            contract_name: &[],
+            pool,
+            formats: &[],
+            raw: &[],
+        }
+    }
+
+    fn slot0_prog() -> [u8; 4] {
+        [
+            PathOp::RootStructured as u8,
+            PathOp::FieldIdx as u8,
+            0,
+            0,
+        ]
+    }
+
+    fn envelope() -> Eip1559Tx {
+        Eip1559Tx {
+            chain_id: 1,
+            nonce: 0,
+            max_priority_fee_per_gas: U256::zero(),
+            max_fee_per_gas: U256::zero(),
+            gas_limit: 0,
+            to: Some([0u8; 20]),
+            value: U256::zero(),
+            data_len: 0,
+            access_list_count: 0,
+            signing_hash: [0u8; 32],
+        }
+    }
+
+    fn date_field() -> FieldEntry<'static> {
+        FieldEntry {
+            format_op: FormatOp::Date as u8,
+            label: b"Expiry",
+            path_off: 1,
+            param_off: 0,
+        }
+    }
+
+    /// Render a blockHeight `date` field over a signed word = `block`.
+    fn render_block(block: u64) -> Pages {
+        let ir = ir_with_path(&slot0_prog());
+        let mut body = [0u8; 32];
+        body[24..32].copy_from_slice(&block.to_be_bytes());
+        let tx = envelope();
+        let mut params = ParamSet::default();
+        params.date_encoding = Some(DATE_ENC_BLOCKHEIGHT);
+        let mut pages = Pages::with_len(0);
+        render_date(&date_field(), &mut pages, &ir, &body, &tx, &params).expect("renders");
+        pages
+    }
+
+    #[test]
+    fn small_block_height_renders_inline_unchanged() {
+        // < 1e9 (9 digits): the unchanged compact form on row 1.
+        let pages = render_block(21_000_000);
+        assert_eq!(&pages.buf[0][1][..15], b"block #21000000");
+    }
+
+    #[test]
+    fn nine_digit_block_height_still_inline() {
+        // 999_999_999 — the largest height that fits "block #N" on one row.
+        let pages = render_block(999_999_999);
+        assert_eq!(&pages.buf[0][1][..16], b"block #999999999");
+    }
+
+    #[test]
+    fn large_block_height_shows_full_magnitude_not_truncated() {
+        // The concrete exploit value: 12_345_678_901 (11 digits). The pre-fix
+        // code rendered "block #123456789" (top 9 digits, ~100x understated).
+        let pages = render_block(12_345_678_901);
+        // Row 1 must NOT be the truncated top-9 lie.
+        assert_ne!(&pages.buf[0][1][..15], b"block #12345678");
+        assert_eq!(&pages.buf[0][1][..13], b"Block height:");
+        // The FULL block id appears on row 2.
+        assert_eq!(&pages.buf[0][2][..11], b"12345678901");
+    }
+
+    #[test]
+    fn sixteen_digit_block_height_shows_full_on_row2() {
+        // 1_000_000_000_000_000 (16 digits) is the widest value still shown
+        // in full on its own 16-col row.
+        let pages = render_block(1_000_000_000_000_000);
+        assert_eq!(&pages.buf[0][1][..13], b"Block height:");
+        assert_eq!(&pages.buf[0][2][..16], b"1000000000000000");
+    }
+
+    #[test]
+    fn absurd_block_height_fails_loud_never_truncates() {
+        // >16 digits (>= 1e16 — not a real block height on any chain). Must
+        // fail loud, never paint a silently-truncated value.
+        let pages = render_block(12_345_678_901_234_567); // 17 digits
+        assert_eq!(&pages.buf[0][1][..13], b"Block height:");
+        assert_eq!(&pages.buf[0][2][..13], b"! >1e16 (ovf)");
+        // No truncated digit string anywhere on the value rows.
+        assert_ne!(&pages.buf[0][2][..4], b"1234");
     }
 }
