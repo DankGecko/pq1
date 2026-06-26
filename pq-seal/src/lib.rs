@@ -70,6 +70,8 @@
 //! RustCrypto-ACVP-validated; on-target NIST-vector + constant-time validation
 //! of the decaps path is a hardware follow-up.
 
+pub mod dual_se;
+
 use aes_gcm::aead::{AeadInPlace, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce, Tag};
 use hmac::{Hmac, Mac};
