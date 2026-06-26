@@ -465,16 +465,28 @@ fn render_safe_pages_inner(
     let mut next_page = SAFE_HEADER_PAGES;
     if refund_active {
         // Page A: banner + the token the refund is paid in.
-        write_line(&mut pages.buf[next_page][0], "! GAS REFUND");
-        write_line(&mut pages.buf[next_page][1], "Safe pays in:");
         if input.gas_token.iter().all(|&b| b == 0) {
+            write_line(&mut pages.buf[next_page][0], "! GAS REFUND");
+            write_line(&mut pages.buf[next_page][1], "Safe pays in:");
             write_line(&mut pages.buf[next_page][2], "ETH (native)");
+            write_line(&mut pages.buf[next_page][3], "> next");
         } else {
-            // Token refund (no gasPrice cap) — show the token address so
-            // the user can recognise "wait, that's my USDC".
-            write_short_addr(&mut pages.buf[next_page][2], &input.gas_token);
+            // Token refund (no on-chain gasPrice cap) — show the FULL token
+            // address, resolver-aware, so the user can actually recognise
+            // "wait, that's my USDC". The old `write_short_addr` showed only
+            // 6 of 20 bytes AND skipped the name DB, defeating that exact
+            // purpose: a draining refund denominated in a chosen ERC-20 could
+            // pass for a worthless-token refund because the user could read
+            // neither the full address nor the token's name (audit
+            // 2026-06-26). Mirrors the full-address treatment of the refund
+            // recipient (page C) and every other contract/recipient address
+            // on this surface. Still ONE page — the 40-hex / resolved name
+            // occupies rows 1-3 — so the 3-page refund budget and the
+            // `multisend_sign_gate` lockstep are unchanged.
+            write_line(&mut pages.buf[next_page][0], "! REFUND TOKEN:");
+            let [_lbl, a, b, c] = &mut pages.buf[next_page];
+            write_addr_full_or_name(a, b, c, &input.gas_token, tx.chain_id, resolver);
         }
-        write_line(&mut pages.buf[next_page][3], "> next");
         next_page += 1;
 
         // Page B: the WORST-CASE refund magnitude (audit 2026-06-19;
@@ -868,15 +880,22 @@ fn append_inner_kind_pages(
     let mut next_page = start;
     match kind {
         InnerKind::EmptyCall => {
-            // P_n: "Inner: empty call" / "Inner to:" / addr-summary / "> next"
-            write_line(&mut pages.buf[next_page][0], "Inner: empty");
-            write_line(&mut pages.buf[next_page][1], "(no calldata)");
-            // Use a compact name+truncated-hex form by writing just one
-            // row's worth of address. The full address is on the next
-            // page if we had room, but for the empty-call case we save
-            // a page.
-            write_short_addr(&mut pages.buf[next_page][2], &ctx.to);
-            write_line(&mut pages.buf[next_page][3], "> next");
+            // P_n: "Empty call to:" + the FULL target address (rows 1-3),
+            // resolver-aware. An empty call still triggers `to`'s
+            // receive()/fallback(), and `to` is a signed field, so it must be
+            // shown in full like every other inner `to`. EmptyCall was the one
+            // inner kind that never repeated `to` in full — the old
+            // `write_short_addr` showed 6 of 20 bytes and skipped the name DB
+            // (audit 2026-06-26), violating the per-record divider's own
+            // "ERC-20 / blind / mgmt pages repeat it in full" invariant. Stays
+            // ONE page (the 40-hex / resolved name fills rows 1-3), so
+            // `inner_kind_page_count` / `record_content_pages` (= 1) and the
+            // multiSend page-budget lockstep are unchanged.
+            write_line(&mut pages.buf[next_page][0], "Empty call to:");
+            {
+                let [_lbl, a, b, c] = &mut pages.buf[next_page];
+                write_addr_full_or_name(a, b, c, &ctx.to, ctx.chain_id, ctx.resolver);
+            }
             next_page += 1;
         }
         InnerKind::PlainEth => {

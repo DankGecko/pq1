@@ -698,7 +698,23 @@ fn write_array_rows(
             let _ = write_str(row2, p, if v { b"true" } else { b"false" });
             true
         }
-        TypeRef::Uint(_) | TypeRef::Int(_) => {
+        TypeRef::Int(_) => {
+            // Signed int array element: `read_u256` + the unsigned
+            // `format_decimal` below would print a negative element (sign bit
+            // set) as its unsigned magnitude — a sign flip the EVM does NOT
+            // make (it sign-extends on array access), so the displayed value
+            // could read positive while the signed calldata holds a negative
+            // (e.g. an `int8[]` word `0x..00c8` shows `200` but executes as
+            // `-56`). The top-level int path renders sign-aware via
+            // `write_int_two_rows`; this inline array row has no space for that
+            // form, so DECLINE to the loud blind-sign fallback rather than
+            // misrepresent the sign (audit 2026-06-26 — defense-in-depth; no
+            // curated `intN[]` selector reaches this today, but `SelfAttest`
+            // sigs can, and curator parity is checked only on parse, not render
+            // fidelity).
+            false
+        }
+        TypeRef::Uint(_) => {
             let v = match abi::read_u256(body, first_elem_off) {
                 Some(v) => v,
                 None => return false,
@@ -842,6 +858,21 @@ mod array_wysiwys_tests {
         // 18-decimal amount lands here. Must DECLINE, not elide.
         let body = single_uint_array_body(1_000_000_000);
         assert_eq!(render_first_arg(b"f(uint256[])", &body), Some(false));
+    }
+
+    #[test]
+    fn single_element_int_array_declines() {
+        // A signed `intN[]` element cannot be shown sign-aware on the inline
+        // "first:" row, so even a small magnitude that fits the budget as an
+        // unsigned value must DECLINE — otherwise a negative element renders
+        // positive (`0x..00c8` shows `200`, executes as `-56`). Contrast
+        // `single_element_small_uint_array_renders`, which renders the same
+        // word because an *unsigned* read has no sign to flip (audit
+        // 2026-06-26 — intN[] sign-flip).
+        let body = single_uint_array_body(200);
+        assert_eq!(render_first_arg(b"f(int8[])", &body), Some(false));
+        // Wider signed widths decline too.
+        assert_eq!(render_first_arg(b"f(int256[])", &body), Some(false));
     }
 
     #[test]
