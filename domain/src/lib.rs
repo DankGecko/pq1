@@ -131,6 +131,32 @@ pub fn sha256_bytes(input: &[u8]) -> [u8; 32] {
     Sha256::digest(input).into()
 }
 
+/// Single-shot HMAC-SHA512 over one contiguous message slice — the `Mac`
+/// one-shot equivalent, NOT the incremental `new_from_slice(key).update(a)
+/// .update(b)…finalize()` builder. HMAC processes its message as a byte
+/// stream, so any `update(a).update(b)…` sequence is byte-identical to
+/// `hmac_sha512_bytes(key, &[a, b, …].concat())`.
+///
+/// The bootstrap master step (`derive_c10_master_from_bip39_seed`) funnels its
+/// HMAC through THIS one function over a stack-built message buffer, rather
+/// than the `Mac`-trait builder, so the bootstrap derivation extracts cleanly
+/// through Charon/Aeneas (the builder explodes into `typenum`/`generic-array`/
+/// `Digest` soup; a single-shot `(&[u8],&[u8]) -> [u8;64]` is one opaque
+/// boundary — the HMAC analogue of [`sha256_bytes`]). Output bytes are
+/// unchanged — see the `differential_*` byte-identity tests + the
+/// `REF_PK_SEED`/`REF_SK_SEED` pins (the master feeds both).
+#[must_use]
+pub fn hmac_sha512_bytes(key: &[u8], msg: &[u8]) -> [u8; 64] {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha512;
+    let mut mac = <Hmac<Sha512> as Mac>::new_from_slice(key)
+        .expect("HMAC-SHA512 accepts any key length");
+    mac.update(msg);
+    let mut out = [0u8; 64];
+    out.copy_from_slice(&mac.finalize().into_bytes());
+    out
+}
+
 #[must_use]
 pub fn macd_init_input(master_secret: &[u8; 32], j: u8) -> [u8; 32] {
     kdf(b"sphincs-macd-init", master_secret, j)
@@ -510,34 +536,35 @@ pub fn derive_c10_master_from_bip39_seed(
     bip39_seed: &[u8; 64],
     account_index: u32,
 ) -> ([u8; 32], [u8; 32]) {
-    use hmac::{Hmac, Mac};
-    use sha2::Sha512;
-
-    // Step 1: HMAC-SHA512(domain, key-material) → 64-byte master.
+    // Step 1: HMAC-SHA512(domain, message) → 64-byte master, via the
+    // single-shot `hmac_sha512_bytes` (extraction-friendly; byte-identical to
+    // the prior `new_from_slice.update…finalize` builder — HMAC streams the
+    // message, so `update(bip39).update(acct_be)` == HMAC over the contiguous
+    // `bip39 ‖ acct_be`).
     //
     // Account 0: domain = b"sphincs-c6-v1" (13 ASCII bytes; NO length-
-    // prefix, NO NUL terminator — matches `keygen.rs:38` in the reference).
-    // The HMAC input is the BIP-39 seed only.
+    // prefix, NO NUL terminator — matches `keygen.rs:38` in the reference);
+    // message = the BIP-39 seed only.
     //
-    // Accounts 1..=255: domain = b"sphincs-c6-v1-acct"; HMAC input is
+    // Accounts 1..=255: domain = b"sphincs-c6-v1-acct"; message =
     // bip39_seed || account_index_be4. Folds the index into the master
     // entropy so each account has an independent C10 hypertree.
-    //
-    // Use the `Mac::new_from_slice` path explicitly because both `Mac`
-    // and `KeyInit` traits define an identically-named constructor.
     let domain: &[u8] = if account_index == 0 {
         b"sphincs-c6-v1"
     } else {
         b"sphincs-c6-v1-acct"
     };
-    let mut mac = <Hmac<Sha512> as Mac>::new_from_slice(domain)
-        .expect("HMAC-SHA512 accepts any key length");
-    mac.update(bip39_seed);
-    if account_index != 0 {
-        mac.update(&account_index.to_be_bytes());
-    }
-    let mut master = [0u8; 64];
-    master.copy_from_slice(&mac.finalize().into_bytes());
+    let mut master: [u8; 64] = if account_index == 0 {
+        hmac_sha512_bytes(domain, bip39_seed)
+    } else {
+        // message = bip39_seed[64] ‖ account_index_be[4] — 68 bytes.
+        let mut msg = [0u8; 68];
+        msg[0..64].copy_from_slice(bip39_seed);
+        msg[64..68].copy_from_slice(&account_index.to_be_bytes());
+        let m = hmac_sha512_bytes(domain, &msg);
+        msg.zeroize(); // wipe the bip39_seed copy
+        m
+    };
     let master_lo = &master[..32];
 
     // Step 2: pk_seed = mask_n(sha256("pk_seed"[7] || master[0..32]))  — 39 bytes.
