@@ -26,8 +26,11 @@
 #      same toolchain as lean/lean-toolchain — v4.22.0 oleans are only
 #      replayable by a v4.22.0 lean4checker).
 #   2. `lake build` lean/ (so every SphincsCVerify .olean is fresh).
-#   3. `lake env <lean4checker> SphincsCVerify` — replays the full env
-#      through the kernel.
+#   3. `lake env <lean4checker> --fresh <module>` for EACH module under
+#      SphincsCVerify/ — replays every declaration through the kernel in a
+#      fresh per-module environment. (The single whole-umbrella replay aborts
+#      on a duplicated auto-generated `_proof_` auxiliary — a harness env-merge
+#      artifact, not a soundness rejection; see the step-3 comment below.)
 #   4. Exits non-zero on ANY rejection.
 #
 # CONFIG (env overrides)
@@ -80,11 +83,35 @@ echo "[lean4checker] toolchain matched: ${PROJ_TC}"
 echo "[lean4checker] building lean/ (${LEAN_DIR}) ..."
 ( cd "${LEAN_DIR}" && "${LAKE}" build )
 
-# --- 3. external kernel re-check ------------------------------------------
-echo "[lean4checker] replaying '${MODULE}' through the Lean kernel ..."
-# Run inside the lean/ project env so the .olean search path is set; -v so a
-# CI log shows every module that was replayed. lean4checker exits non-zero on
-# the first declaration the kernel rejects.
-( cd "${LEAN_DIR}" && "${LAKE}" env "${L4C_EXE}" -v "${MODULE}" )
+# --- 3. external kernel re-check (PER-MODULE --fresh) ----------------------
+# lean4checker's whole-environment replay of the umbrella `SphincsCVerify`
+# ABORTS with `(kernel) constant has already been declared
+# 'SphincsCVerify.Interpreter.C10.beByte_shiftLeft_byte._proof_1_2'` — a
+# whole-env merge artifact of a duplicated auto-generated `_proof_` auxiliary
+# (introduced by the A3.1 Climb/Phases work), NOT a soundness rejection: EVERY
+# module replays clean INDIVIDUALLY. So we replay each module in a FRESH
+# environment via `--fresh` (the Mathlib-CI pattern), which re-checks every
+# declaration the project introduces through the kernel while sidestepping the
+# merge. (`--fresh` requires a single concrete module — the import-only umbrella
+# root is itself rejected, and is covered by checking all its sub-modules.)
+# Cost: ~50-75s/module (each --fresh re-replays the module's import closure), so
+# the full sweep is ~40-60 min — it's a MANUAL pre-release gate, not in CI.
+# A faster real fix is to rename/relocate the colliding A3.1 auxiliary so the
+# single umbrella replay works again (tracked in docs/work-todo.md).
+cd "${LEAN_DIR}"
+if [ "${MODULE}" = "SphincsCVerify" ]; then
+  mods="$(find SphincsCVerify -name '*.lean' | sed 's#\.lean$##; s#/#.#g' | sort)"
+  echo "[lean4checker] replaying $(echo "${mods}" | wc -l | tr -d ' ') modules through the Lean kernel (--fresh, per-module) ..."
+else
+  mods="${MODULE}"
+  echo "[lean4checker] replaying '${MODULE}' through the Lean kernel (--fresh) ..."
+fi
+n=0
+for m in ${mods}; do
+  n=$((n+1))
+  echo "[lean4checker]   --fresh ${m}"
+  "${LAKE}" env "${L4C_EXE}" --fresh "${m}" \
+    || fail "lean4checker REJECTED a declaration in '${m}' (kernel re-check failed)"
+done
 
-echo "[lean4checker] OK — kernel re-check ACCEPTED every declaration in '${MODULE}' (exit 0)."
+echo "[lean4checker] OK — kernel re-check ACCEPTED every declaration across ${n} module(s) (exit 0)."
