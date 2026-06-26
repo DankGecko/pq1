@@ -31,6 +31,7 @@ import Extracted.SlotKdf.SlotKdfSpec
 -- + the disclosed `sha256_pure_bytes` hash axiom (the FV-#2 single-shot SHA-256
 -- boundary), same category as `sha256_pure` / `keccak256_pure`.
 #print axioms Extracted.Equiv.slot_entropy_hashes_canonical_preimage
+#print axioms Extracted.Equiv.derive_c10_slot_seeds_byte_layout
 #print axioms Extracted.Equiv.deserialize_pin_state_rejects_bad_len
 #print axioms Extracted.Equiv.make_adrs_spec
 #print axioms Extracted.Equiv.set_chain_index_spec
