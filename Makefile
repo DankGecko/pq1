@@ -3823,6 +3823,21 @@ tamarin:
 	@echo "==> Tamarin: dual-SE XOR seed-split secrecy (one-time-pad, info-theoretic)"
 	tamarin-prover --prove contracts/verification/tamarin/seed_split_xor.spthy
 
+# CryptoVerif: the COMPUTATIONAL (game-based) companion to the symbolic models.
+# Proves dual-SE XOR seed-split secrecy with advantage 0 (a one-time pad, not a
+# computational assumption) — an UNCONDITIONAL bound, hence quantum-sound: a
+# CRQC cannot recover the seed from a single half. Runs via `cryptoverif` on
+# PATH or `nix-shell -p cryptoverif`.
+.PHONY: cryptoverif
+cryptoverif:
+	@echo "==> CryptoVerif: dual-SE XOR seed-split secrecy (computational; OTP advantage 0 ⇒ quantum-sound)"
+	@if command -v cryptoverif >/dev/null 2>&1; then \
+	  p=$$(dirname $$(dirname $$(readlink -f $$(command -v cryptoverif)))); \
+	  cryptoverif -lib $$p/libexec/default contracts/verification/cryptoverif/seed_split_secrecy.cv | grep -E 'RESULT|proved'; \
+	elif command -v nix-shell >/dev/null 2>&1; then \
+	  nix-shell -p cryptoverif --run 'p=$$(dirname $$(dirname $$(readlink -f $$(command -v cryptoverif)))); cryptoverif -lib $$p/libexec/default contracts/verification/cryptoverif/seed_split_secrecy.cv' | grep -E 'RESULT|proved'; \
+	else echo "ERROR: cryptoverif not found (try: nix-shell -p cryptoverif, or opam install cryptoverif)"; exit 1; fi
+
 # ---------------------------------------------------------------------------
 # Discoverability wrappers for the off-Makefile verification tools (SOTA
 # 2026-06 §1/§4; docs/tooling-and-systems.md §B). These four were installed

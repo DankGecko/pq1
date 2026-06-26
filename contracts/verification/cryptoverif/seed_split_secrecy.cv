@@ -1,0 +1,45 @@
+(* ===========================================================================
+   PQ-Signer — dual-SE XOR seed-split secrecy, COMPUTATIONAL proof (CryptoVerif)
+   ===========================================================================
+
+   Invariant #1 (CLAUDE.md / threat-model.md §S0): the 256-bit BIP-39 entropy is
+   XOR-split — `half_O` on the OPTIGA, `half_E` on the SE050 — so NEITHER chip
+   alone reveals any bit of the seed (secure/src/dual_se.rs).
+
+   The Tamarin model (contracts/verification/tamarin/seed_split_xor.spthy)
+   proves this SYMBOLICALLY (Dolev-Yao, builtins:xor). This model proves the
+   same property COMPUTATIONALLY: CryptoVerif's `Xor` one-time-pad equivalence
+   (`remove_xor`, advantage = 0 — information-theoretic) shows that an adversary
+   who sees the half CORRELATED with the seed (`half_E = seed xor pad`) gains
+   ZERO advantage at distinguishing the seed from a fresh random value.
+
+   Because the advantage is exactly 0 (a one-time pad, not a computational
+   assumption), this bound is *unconditional* — it holds against ANY adversary,
+   including a quantum one. That is the "quantum-soundness" the dual-SE split
+   needs: a CRQC that records the bus + breaks the classical SE channel still
+   cannot recover the seed from a single half. (The post-quantum confidentiality
+   of the half WHILE it crosses I²C is the separate ML-KEM inner-wrap concern —
+   docs/security/ml-kem-inner-wrap.md.)
+
+   Split construction (secure/src/dual_se.rs): `pad` (= half_O) is fresh random,
+   `half_E = seed xor pad`, so `seed = half_O xor half_E`. The model leaks the
+   correlated half (`half_E`); CryptoVerif must still prove the seed secret.
+   =========================================================================== *)
+
+type D [fixed, large].          (* a 256-bit entropy value / half *)
+
+expand Xor(D, xor, zero).       (* the one-time-pad equivalence (advantage 0) *)
+
+channel c, start.
+
+(* MAIN: the seed is secret even though the adversary observes one half
+   (here the half CORRELATED with the seed — the hard case). One-session
+   secrecy: the adversary cannot distinguish `seed` from a fresh random. *)
+query secret seed.
+
+process
+  in(start, ());
+  new seed: D;
+  new pad: D;                            (* half_O = pad  (fresh one-time pad) *)
+  let half_E: D = xor(seed, pad) in      (* half_E = seed xor pad *)
+  out(c, half_E)                         (* leak ONLY half_E to the adversary *)
