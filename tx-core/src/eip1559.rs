@@ -649,6 +649,63 @@ mod tests {
         );
     }
 
+    // Boundary KATs hardening U256::format_decimal — each pins an exact
+    // <-> / >-vs->= / round / carry / trim boundary that mutation testing
+    // (cargo-mutants, 2026-06-26) found the prior suite did NOT distinguish.
+    // The amount-display / WYSIWYS path: a boundary bug = the user confirms a
+    // different amount than was rendered, so these are security-relevant.
+    fn fd(val: u64, decimals: u32, frac: u32, trim: bool) -> Option<std::string::String> {
+        format_to_string(&u256_from_u64(val), decimals, frac, trim)
+    }
+
+    #[test]
+    fn format_decimal_round_half_up_boundary() {
+        // drop_digit >= 5 rounds up; drop_digit < 5 stays. Pins `>= 5` (a `> 5`
+        // mutant would make 1.5 render as "1") and the round_idx arithmetic.
+        assert_eq!(fd(15, 1, 0, false).as_deref(), Some("2"));  // 1.5 -> 2
+        assert_eq!(fd(14, 1, 0, false).as_deref(), Some("1"));  // 1.4 -> 1
+        assert_eq!(fd(25, 1, 0, false).as_deref(), Some("3"));  // 2.5 -> 3
+        assert_eq!(fd(249, 2, 1, false).as_deref(), Some("2.5")); // 2.49 -> 2.5
+        assert_eq!(fd(244, 2, 1, false).as_deref(), Some("2.4")); // 2.44 -> 2.4
+    }
+
+    #[test]
+    fn format_decimal_round_carry_propagates() {
+        // 9.5 -> 10 and 99.5 -> 100 exercise the carry loop (digits[i] = 9 + 1
+        // overflows, n_digits grows). Pins the `carry > 0 && i < len` loop —
+        // a `&&`->`||` or `>`->`>=` mutant mis-renders the carry.
+        assert_eq!(fd(95, 1, 0, false).as_deref(), Some("10"));   // 9.5 -> 10
+        assert_eq!(fd(995, 1, 0, false).as_deref(), Some("100")); // 99.5 -> 100
+        assert_eq!(fd(9995, 2, 1, false).as_deref(), Some("100.0")); // 99.95 -> 100.0
+    }
+
+    #[test]
+    fn format_decimal_subone_integer_is_zero() {
+        // value < 1 (n_digits <= total_decimals): integer part must be "0".
+        // Pins `n_digits > total_decimals` (a `>=` mutant drops the leading 0).
+        assert_eq!(fd(5, 2, 2, false).as_deref(), Some("0.05"));
+        assert_eq!(fd(50, 2, 2, false).as_deref(), Some("0.50"));
+        assert_eq!(fd(0, 2, 2, false).as_deref(), Some("0.00"));
+    }
+
+    #[test]
+    fn format_decimal_trailing_zero_trim_boundary() {
+        // trim collapses trailing fractional zeros (and the point if all go).
+        // Pins the `frac_emit > 0` / `d != 0` trim loop against `>=`/`==` mutants.
+        assert_eq!(fd(1500, 3, 3, true).as_deref(),  Some("1.5"));
+        assert_eq!(fd(1500, 3, 3, false).as_deref(), Some("1.500"));
+        assert_eq!(fd(1000, 3, 3, true).as_deref(),  Some("1"));     // all frac zeros + point gone
+        assert_eq!(fd(1000, 3, 3, false).as_deref(), Some("1.000"));
+        assert_eq!(fd(1050, 3, 3, true).as_deref(),  Some("1.05"));  // inner zero kept, trailing trimmed
+    }
+
+    #[test]
+    fn format_decimal_exact_multidigit_no_round() {
+        assert_eq!(fd(123456, 3, 3, false).as_deref(), Some("123.456"));
+        assert_eq!(fd(123456, 3, 2, false).as_deref(), Some("123.46")); // 123.456 -> 2 frac rounds
+        assert_eq!(fd(100, 2, 2, false).as_deref(),    Some("1.00"));
+    }
+
     #[test]
     fn format_huge_integer_returns_none_on_tight_buffer() {
         // Regression guard: the old formatter silently truncated the
