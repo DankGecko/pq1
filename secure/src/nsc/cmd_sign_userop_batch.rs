@@ -811,6 +811,23 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             ui::show_status("CoW sign", "v3 required (batch)");
             return NscStatus::InvalidPointer as u32;
         }
+        // Direct-path CoW target gate (audit 2026-06-26 — direct-path target
+        // unshown), the batch twin of the single-tx gate. A verified DIRECT
+        // (non-Safe-wrapped) v3 order renders via `render_cowswap_pages`,
+        // which shows the order but NOT this member's call target `ptx.to`;
+        // the signed `executeBatchWithOffchainCount(...)` forwards
+        // `ptx.to.call{value}(data)`. Unless that target IS the GPv2
+        // settlement singleton, refuse the whole atomic batch rather than
+        // sign a member whose attacker-chosen destination the CoW screen
+        // never showed.
+        if !crate::tx::eip712::safe::direct_cow_target_ok(
+            routed[i].as_ref().and_then(|r| r.zk_v3.as_ref()).is_some(),
+            safe_wrapped_cow,
+            &ptx.to,
+        ) {
+            ui::show_status("CoW sign", "bad target (batch)");
+            return NscStatus::InvalidPointer as u32;
+        }
         let inner_pages = match pick_sign_pages(
             &tx_for_display,
             inner_data,

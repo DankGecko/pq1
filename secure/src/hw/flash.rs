@@ -766,6 +766,13 @@ unsafe fn pin_attempts_scan_reverse() -> u8 {
 ///
 /// # Safety
 /// Same contract as [`pin_attempts_read`].
+///
+/// `#[inline(never)]` (MEDIUM-2, audit pin-unlock 20260625): the caller
+/// (`nsc::gated_unlock`) FAIL-INs on a missing bump, which only works if the
+/// bump is a real `bl` at the call site — an inlined body would let a glitch
+/// skip the program without leaving a skippable branch for the sentinel to
+/// catch.
+#[inline(never)]
 pub unsafe fn pin_attempts_bump() -> Result<u8, ()> {
     let pre = pin_attempts_read();
     if (pre as u32) >= PIN_ATTEMPTS_CAPACITY {

@@ -1236,7 +1236,7 @@ fn negative_max_pages_matches_production_constant() {
     // copy and that source must stay in lockstep. Searches the
     // production source text rather than the gated-out module.
     let src = include_str!("../tx/display/mod.rs");
-    let needle = "pub const MAX_PAGES: usize = 27;";
+    let needle = "pub const MAX_PAGES: usize = 28;";
     assert!(src.contains(needle),
         "production tx/display/mod.rs no longer defines `{}` — either \
          bump MAX_PAGES here and update this test, OR fix the source.",
@@ -1470,7 +1470,14 @@ fn positive_typed_call_renders_bool_arg() {
 }
 
 #[test]
-fn positive_typed_call_renders_dynamic_string_arg() {
+fn negative_typed_call_declines_non_empty_dynamic_string_arg() {
+    // Audit 2026-06-25 LOW-1: a non-empty dynamic `bytes`/`string` arg
+    // must DECLINE the typed-call decode (parity with the `bytesN>15`
+    // sibling) rather than render a 40-bit head/tail SHA-256 fingerprint
+    // of attacker-chosen, signed payload bytes. Declining bails the whole
+    // render to `None` → the loud Phase-1 BLIND SIGN flow (which still
+    // anchors the full payload via the handler's ERC-8213 256-bit
+    // fingerprint).
     let tx = sample_tx();
     let resolver = NameResolver::new();
     let sel = [0x55, 0x66, 0x77, 0x88];
@@ -1488,13 +1495,32 @@ fn positive_typed_call_renders_dynamic_string_arg() {
     let mut payload = [0u8; 32];
     payload[..5].copy_from_slice(b"hello");
     inner.extend_from_slice(&payload);
+    assert!(
+        try_render_typed_call(&tx, &inner, &meta, &resolver).is_none(),
+        "non-empty dynamic string arg must decline to blind-sign"
+    );
+}
+
+#[test]
+fn positive_typed_call_renders_empty_dynamic_string_arg() {
+    // An empty dynamic `string` (`len == 0`) carries no hidden bytes, so
+    // the "len: 0" row is a faithful, complete rendering — it still
+    // renders rather than declining.
+    let tx = sample_tx();
+    let resolver = NameResolver::new();
+    let sel = [0x55, 0x66, 0x77, 0x88];
+    let meta = curated_selector(b"say(string)", sel);
+    let mut inner = Vec::new();
+    inner.extend_from_slice(&sel);
+    // ABI head: offset = 0x20 (one word).
+    let mut head_off = [0u8; 32];
+    head_off[31] = 0x20;
+    inner.extend_from_slice(&head_off);
+    // Payload: length=0 word, no data.
+    inner.extend_from_slice(&[0u8; 32]);
     let pages = try_render_typed_call(&tx, &inner, &meta, &resolver)
-        .expect("string arg should render");
-    // Layout for dynamic string args: row 1 = "len: N", row 2 = preview.
-    assert_eq!(row_str(&pages.buf[1][1]), "len: 5");
-    let row2 = row_str(&pages.buf[1][2]);
-    assert!(row2.starts_with("hello"),
-        "ASCII string preview must show on row 2, got {:?}", row2);
+        .expect("empty string arg should render");
+    assert_eq!(row_str(&pages.buf[1][1]), "len: 0");
 }
 
 #[test]

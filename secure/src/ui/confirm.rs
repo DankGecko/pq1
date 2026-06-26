@@ -49,6 +49,17 @@ pub fn confirm(pages: &[Page]) -> ConfirmResult {
     #[cfg(not(feature = "e2e-test"))]
     {
         let mut idx: usize = 0;
+        // WYSIWYS scroll-to-end gate (2026-06-26): a long-press-right only
+        // CONFIRMS once the user has paged to the last page at least once;
+        // before that it is demoted to "advance one page". Without this a
+        // user could long-press on page 0 and authorise a signature without
+        // ever seeing the security-critical pages the dispatcher splices in
+        // (native-ETH value at index 1, gas/fee pages, Safe gas-refund
+        // pages, the ERC-8213 fingerprint) — defeating every per-page
+        // WYSIWYS mitigation in the firmware. Mirrors the identical
+        // `seen_last` gate the seed-backup wizard already enforces
+        // (`seed_wizard::show_mnemonic_simple`).
+        let mut seen_last = false;
         // HIGH-13 fix: do NOT reset the inactivity timer on entry.
         // NS can spam SIGN_USEROP / request-unlock calls; each call
         // lands us here and the old code reset the timer before the
@@ -60,6 +71,14 @@ pub fn confirm(pages: &[Page]) -> ConfirmResult {
 
         loop {
             render_page(&pages[idx]);
+            // Sticky: once the final page has been displayed, confirm is
+            // unlocked from any page. Reaching the last page requires
+            // short-right past every intermediate page (short-right advances
+            // one page at a time and is capped at the end), so the whole set
+            // has been shown before this flips true.
+            if idx + 1 >= pages.len() {
+                seen_last = true;
+            }
 
             let mut idle = || timeout::is_idle();
             let event = match input().wait_button(&mut idle) {
@@ -82,7 +101,17 @@ pub fn confirm(pages: &[Page]) -> ConfirmResult {
                         idx -= 1;
                     }
                 }
-                (Button::Right, Press::Long) => return ConfirmResult::Confirmed,
+                (Button::Right, Press::Long) => {
+                    if seen_last {
+                        return ConfirmResult::Confirmed;
+                    }
+                    // Not yet scrolled to the end — treat the long-press as
+                    // "next page" so the user is guided through the remaining
+                    // (possibly drain-bearing) pages before they can sign.
+                    if idx + 1 < pages.len() {
+                        idx += 1;
+                    }
+                }
                 (Button::Left, Press::Long) => return ConfirmResult::Cancelled,
             }
         }

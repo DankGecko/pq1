@@ -966,6 +966,26 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         return NscStatus::InvalidPointer as u32;
     }
 
+    // Direct-path CoW target gate (audit 2026-06-26 — direct-path target
+    // unshown). A verified DIRECT (non-Safe-wrapped) v3 order renders via
+    // `render_cowswap_pages`, which shows the order but NOT the UserOp call
+    // target. The signed `executeWithOffchainCount(...)` forwards
+    // `to_address.call{value}(data)` to an arbitrary target, so unless it IS
+    // the GPv2 settlement singleton the user would confirm a trusted CoW
+    // screen while signing a call (and any `value`) to an attacker-chosen,
+    // never-displayed address. The Safe-wrapped path already pins the inner
+    // target via `safe_inner_is_cow_presign`; this is its direct-arm twin.
+    // A legitimate direct presign always targets GPv2, so this never refuses
+    // a well-formed CoW UserOp.
+    if !crate::tx::eip712::safe::direct_cow_target_ok(
+        zk_v3_verified.is_some(),
+        cow_bind.via_safe,
+        &to_address,
+    ) {
+        ui::show_status("CoW sign", "bad target");
+        return NscStatus::InvalidPointer as u32;
+    }
+
     // Symmetric Safe `approveHash` gate. If the inner calldata claims
     // to be `approveHash(bytes32)`, a `safe_v1` trailer is mandatory.
     // Without this gate a hostile NS could strip the trailer and

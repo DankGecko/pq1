@@ -112,12 +112,18 @@ jobs:
           toolchain: stable
           targets: thumbv8m.main-none-eabi
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-      # Resolve the shipping feature set and hard-fail if any never-ship
-      # feature (e2e-test/dev-testkey/mock-se/debug-log/otp-hardcoded-master-key/
-      # ui-capture/… ) is active — including transitively. Belt-and-braces with
-      # the `mode-production` compile fences in nsc/mod.rs. Fast (cargo tree only).
-      - name: make prod-check
-        run: make prod-check
+      # Resolve the CANONICAL shipping feature set (PROD_SHIP_FEATURES) and
+      # hard-fail if any never-ship feature (e2e-test/dev-testkey/mock-se/
+      # debug-log/… ) is active OR any required hardening feature
+      # (mode-production/optiga-lock-operational/optiga-hw-counter/consumption-mask/
+      # tamp*/tzic-wipe/Tier-1 SE keys) is MISSING — including transitively.
+      # `prod-check-ship` pins the production feature string so the gate
+      # exercises the real hardened image, not the dev default. Belt-and-braces
+      # with the compile fences in nsc/mod.rs. Fast (cargo tree only).
+      # HIGH-1 (audit pin-unlock 20260625): the required-feature allowlist is
+      # what closes the "silent unhardened ship" gap.
+      - name: make prod-check-ship
+        run: make prod-check-ship
 
   host-tests:
     name: Host unit tests (pure-logic crates)

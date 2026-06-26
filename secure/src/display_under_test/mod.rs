@@ -35,9 +35,9 @@ use crate::ui::{DISPLAY_COLS, DISPLAY_ROWS};
 /// Mirrors the production `tx::display::MAX_PAGES`. Pinned by the
 /// `negative_max_pages_matches_production_constant` test. (22 → 24 with the
 /// multiSend clear-sign feature; 24 → 27 with the Safe gas-refund
-/// worst-case magnitude page + the Safe/CoW gas-fee splice — see the
-/// production doc comment.)
-pub const MAX_PAGES: usize = 27;
+/// worst-case magnitude page + the Safe/CoW gas-fee splice; 27 → 28 with the
+/// Safe `safeTxGas` page — see the production doc comment.)
+pub const MAX_PAGES: usize = 28;
 
 /// Mirrors the production `tx::display::Pages`. Fields and methods kept
 /// `pub` so the included submodules can construct and mutate them via

@@ -426,7 +426,18 @@ fn positive_confirm_empty_pages_returns_cancelled() {
 
 #[test]
 fn positive_confirm_long_button_semantics() {
-    assert!(CONFIRM_SRC.contains("(Button::Right, Press::Long) => return ConfirmResult::Confirmed,"));
+    // WYSIWYS scroll-to-end gate (2026-06-26): long-right CONFIRMS only once
+    // the last page has been displayed (`seen_last`); before that it is
+    // demoted to "advance one page" so the user cannot authorise a signature
+    // from page 0 without seeing the dispatcher-spliced value / gas / refund /
+    // fingerprint pages. Mirrors the seed wizard's `seen_last` gate.
+    assert!(CONFIRM_SRC.contains("let mut seen_last = false;"));
+    assert!(CONFIRM_SRC.contains("seen_last = true;"));
+    assert!(CONFIRM_SRC.contains("if seen_last {"));
+    assert!(CONFIRM_SRC.contains("return ConfirmResult::Confirmed;"));
+    // A long-right before the end must NOT confirm — it advances instead.
+    assert!(!CONFIRM_SRC
+        .contains("(Button::Right, Press::Long) => return ConfirmResult::Confirmed,"));
     assert!(CONFIRM_SRC.contains("(Button::Left, Press::Long) => return ConfirmResult::Cancelled,"));
 }
 

@@ -1300,9 +1300,17 @@ fn negative_gated_unlock_refuses_on_flash_bump_failure() {
     // mismatch) must refuse the attempt without ever calling the SE
     // driver. Otherwise an attacker who can glitch flash writes
     // could burn SE attempts without burning MCU attempts.
+    // MEDIUM-2 (audit pin-unlock 20260625): the bump gate is now FAIL-IN —
+    // the bump is called exactly once and its "advanced by exactly one"
+    // verdict is routed through the Hamming-distant sentinel, refusing on
+    // anything but OK_SENTINEL.
     assert!(
-        NSC_MOD_SRC.contains("pin_attempts_bump().is_err()"),
-        "gated_unlock must check pin_attempts_bump result"
+        NSC_MOD_SRC.contains("let bump_result = crate::hw::flash::pin_attempts_bump();"),
+        "gated_unlock must pre-commit the page-124 bump exactly once"
+    );
+    assert!(
+        NSC_MOD_SRC.contains("if bumped != crate::fi::OK_SENTINEL {"),
+        "gated_unlock must FAIL-IN the bump verdict via the Hamming-distant sentinel"
     );
     assert!(
         NSC_MOD_SRC.contains("UnlockError::InternalError"),

@@ -77,8 +77,8 @@
 
 use super::primitives::{
     chain_name, format_u64, write_addr_full_or_name, write_calldata_hash_rows, write_chain,
-    write_data_len_row, write_erc20_header, write_eth_two_rows, write_line, write_selector_row,
-    write_token_amount_two_rows, write_token_name, AmountFit,
+    write_data_len_row, write_erc20_header, write_eth_two_rows, write_gas, write_line,
+    write_selector_row, write_token_amount_two_rows, write_token_name, AmountFit,
 };
 use super::safe_mgmt::{
     classify_safe_mgmt, page_count as safe_mgmt_page_count, render_safe_mgmt_pages, SafeMgmtOp,
@@ -179,6 +179,16 @@ struct SafeRenderInput<'a> {
     /// render the `baseGas * gasPrice` base component so that drain vector
     /// is visible (audit 2026-06-19, hardened after adversarial review).
     base_gas: [u8; 32],
+    /// SafeTx `safeTxGas` (signed, EIP-712 struct field, canonical word 4).
+    /// It bounds the gas forwarded to the inner call; crucially, Safe's
+    /// `require(success || safeTxGas != 0 || gasPrice != 0)` means a NON-ZERO
+    /// `safeTxGas` lets `execTransaction` SUCCEED — burning the nonce and
+    /// paying any refund — even when the inner call runs out of gas and
+    /// reverts. A hidden non-zero `safeTxGas` therefore lets the displayed
+    /// inner action ("transfer 100 USDC") silently no-op while the user
+    /// believes it executed: a WYSIWYS integrity gap. Surfaced on its own
+    /// page whenever non-zero (audit 2026-06-26).
+    safe_tx_gas: [u8; 32],
 }
 
 /// Render a verified `safe_v1` trailer.
@@ -230,6 +240,7 @@ pub fn render_safe_v1_pages(
         gas_token: tx.gas_token,
         refund_receiver: tx.refund_receiver,
         base_gas: tx.base_gas,
+        safe_tx_gas: tx.safe_tx_gas,
     };
     render_safe_pages_inner(&input, cow, erc20, resolver)
 }
@@ -276,6 +287,7 @@ pub fn render_safe_exec_pages(
         gas_token: d.gas_token,
         refund_receiver: d.refund_receiver,
         base_gas: d.base_gas,
+        safe_tx_gas: d.safe_tx_gas,
     };
     render_safe_pages_inner(&input, cow, erc20, resolver)
 }
@@ -396,8 +408,21 @@ fn render_safe_pages_inner(
     let show_inner_eth = !inner_value.is_zero()
         && !matches!(inner_kind, InnerKind::PlainEth | InnerKind::EmptyCall);
     let inner_eth_pages = usize::from(show_inner_eth);
-    let total_pages =
-        SAFE_HEADER_PAGES + refund_pages + inner_eth_pages + inner_pages + 1; // +1 = confirm
+    // safeTxGas page (audit 2026-06-26): shown whenever non-zero — it is
+    // signed into the safeTxHash but invisible in the inner-tx semantics,
+    // and a non-zero value lets the inner call silently fail while the outer
+    // tx still succeeds (see `SafeRenderInput::safe_tx_gas`). Kept in
+    // lockstep with the `multisend_sign_gate` `fixed` term so the budget gate
+    // REFUSES (rather than truncates) any multiSend whose total would
+    // overflow MAX_PAGES.
+    let show_safe_tx_gas = input.safe_tx_gas.iter().any(|&b| b != 0);
+    let safe_tx_gas_pages = usize::from(show_safe_tx_gas);
+    let total_pages = SAFE_HEADER_PAGES
+        + refund_pages
+        + inner_eth_pages
+        + safe_tx_gas_pages
+        + inner_pages
+        + 1; // +1 = confirm
     let total_pages = core::cmp::min(total_pages, super::MAX_PAGES);
     let mut pages = Pages::with_len(total_pages);
 
@@ -465,16 +490,28 @@ fn render_safe_pages_inner(
     let mut next_page = SAFE_HEADER_PAGES;
     if refund_active {
         // Page A: banner + the token the refund is paid in.
-        write_line(&mut pages.buf[next_page][0], "! GAS REFUND");
-        write_line(&mut pages.buf[next_page][1], "Safe pays in:");
         if input.gas_token.iter().all(|&b| b == 0) {
+            write_line(&mut pages.buf[next_page][0], "! GAS REFUND");
+            write_line(&mut pages.buf[next_page][1], "Safe pays in:");
             write_line(&mut pages.buf[next_page][2], "ETH (native)");
+            write_line(&mut pages.buf[next_page][3], "> next");
         } else {
-            // Token refund (no gasPrice cap) — show the token address so
-            // the user can recognise "wait, that's my USDC".
-            write_short_addr(&mut pages.buf[next_page][2], &input.gas_token);
+            // Token refund (no on-chain gasPrice cap) — show the FULL token
+            // address, resolver-aware, so the user can actually recognise
+            // "wait, that's my USDC". The old `write_short_addr` showed only
+            // 6 of 20 bytes AND skipped the name DB, defeating that exact
+            // purpose: a draining refund denominated in a chosen ERC-20 could
+            // pass for a worthless-token refund because the user could read
+            // neither the full address nor the token's name (audit
+            // 2026-06-26). Mirrors the full-address treatment of the refund
+            // recipient (page C) and every other contract/recipient address
+            // on this surface. Still ONE page — the 40-hex / resolved name
+            // occupies rows 1-3 — so the 3-page refund budget and the
+            // `multisend_sign_gate` lockstep are unchanged.
+            write_line(&mut pages.buf[next_page][0], "! REFUND TOKEN:");
+            let [_lbl, a, b, c] = &mut pages.buf[next_page];
+            write_addr_full_or_name(a, b, c, &input.gas_token, tx.chain_id, resolver);
         }
-        write_line(&mut pages.buf[next_page][3], "> next");
         next_page += 1;
 
         // Page B: the WORST-CASE refund magnitude (audit 2026-06-19;
@@ -596,6 +633,33 @@ fn render_safe_pages_inner(
         next_page += 1;
     }
 
+    // ── Optional safeTxGas page ─────────────────────────────────────
+    //
+    // `safeTxGas` is signed into the safeTxHash but is invisible in the
+    // inner-tx semantics. A non-zero value lets `execTransaction` succeed
+    // even if the inner call runs out of gas (Safe's
+    // `require(success || safeTxGas != 0 || gasPrice != 0)`), so the inner
+    // action can silently no-op while the nonce is burned and any refund is
+    // paid. Surface it whenever non-zero (audit 2026-06-26).
+    if show_safe_tx_gas {
+        write_line(&mut pages.buf[next_page][0], "SafeTx gas:");
+        {
+            let [_lbl, r1, r2, foot] = &mut pages.buf[next_page];
+            let (units, overflow) = u64_be_tail(&input.safe_tx_gas);
+            if overflow {
+                // > u64 gas is absurd; never misrepresent it as a small value.
+                write_line(r1, "!HUGE (>u64)");
+            } else {
+                write_gas(r1, units);
+            }
+            // Why it matters: a non-zero safeTxGas can let the inner call
+            // silently fail while the outer Safe tx still succeeds.
+            write_line(r2, "inner may no-op");
+            write_line(foot, "> next");
+        }
+        next_page += 1;
+    }
+
     // ── Inner-tx pages ──────────────────────────────────────────────
     //
     // Single-call SafeTxs render exactly one classified inner; a
@@ -675,7 +739,7 @@ pub fn multisend_sign_gate(
 ) -> MultisendGate {
     // Same precedence as `safe::cow_binding::resolve_cow_binding`:
     // a verified approveHash context wins over exec.
-    let (operation, to, raw, safe_address, refund_active, safe_value_nonzero) =
+    let (operation, to, raw, safe_address, refund_active, safe_value_nonzero, safe_tx_gas_nonzero) =
         if let Some(s) = safe_v1 {
             let Ok(tx) = decode_canonical(&s.canonical) else {
                 // The verifier proved the canonical decodes; stay
@@ -691,6 +755,7 @@ pub fn multisend_sign_gate(
                     || tx.gas_token.iter().any(|&b| b != 0)
                     || tx.refund_receiver.iter().any(|&b| b != 0),
                 tx.value.iter().any(|&b| b != 0),
+                tx.safe_tx_gas.iter().any(|&b| b != 0),
             )
         } else if let Some(e) = safe_exec {
             let d = &e.decoded;
@@ -703,6 +768,7 @@ pub fn multisend_sign_gate(
                     || d.gas_token.iter().any(|&b| b != 0)
                     || d.refund_receiver.iter().any(|&b| b != 0),
                 d.value.iter().any(|&b| b != 0),
+                d.safe_tx_gas.iter().any(|&b| b != 0),
             )
         } else {
             return MultisendGate::NotMultiSend;
@@ -724,6 +790,7 @@ pub fn multisend_sign_gate(
     let fixed = SAFE_HEADER_PAGES
         + if refund_active { 3 } else { 0 } // token + worst-case magnitude + recipient
         + usize::from(safe_value_nonzero)
+        + usize::from(safe_tx_gas_nonzero) // safeTxGas page (audit 2026-06-26)
         + 1; // trailing confirm page
     if fixed + inner_pages + reserved_pages > super::MAX_PAGES {
         return MultisendGate::Reject("msend too long");
@@ -868,15 +935,22 @@ fn append_inner_kind_pages(
     let mut next_page = start;
     match kind {
         InnerKind::EmptyCall => {
-            // P_n: "Inner: empty call" / "Inner to:" / addr-summary / "> next"
-            write_line(&mut pages.buf[next_page][0], "Inner: empty");
-            write_line(&mut pages.buf[next_page][1], "(no calldata)");
-            // Use a compact name+truncated-hex form by writing just one
-            // row's worth of address. The full address is on the next
-            // page if we had room, but for the empty-call case we save
-            // a page.
-            write_short_addr(&mut pages.buf[next_page][2], &ctx.to);
-            write_line(&mut pages.buf[next_page][3], "> next");
+            // P_n: "Empty call to:" + the FULL target address (rows 1-3),
+            // resolver-aware. An empty call still triggers `to`'s
+            // receive()/fallback(), and `to` is a signed field, so it must be
+            // shown in full like every other inner `to`. EmptyCall was the one
+            // inner kind that never repeated `to` in full — the old
+            // `write_short_addr` showed 6 of 20 bytes and skipped the name DB
+            // (audit 2026-06-26), violating the per-record divider's own
+            // "ERC-20 / blind / mgmt pages repeat it in full" invariant. Stays
+            // ONE page (the 40-hex / resolved name fills rows 1-3), so
+            // `inner_kind_page_count` / `record_content_pages` (= 1) and the
+            // multiSend page-budget lockstep are unchanged.
+            write_line(&mut pages.buf[next_page][0], "Empty call to:");
+            {
+                let [_lbl, a, b, c] = &mut pages.buf[next_page];
+                write_addr_full_or_name(a, b, c, &ctx.to, ctx.chain_id, ctx.resolver);
+            }
             next_page += 1;
         }
         InnerKind::PlainEth => {

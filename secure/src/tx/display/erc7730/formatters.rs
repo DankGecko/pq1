@@ -208,7 +208,9 @@ pub(super) fn dispatch(
     match op {
         FormatOp::Raw => render_raw(field, pages, ir, body, tx, params),
         FormatOp::Amount => render_amount(field, pages, ir, body, tx, params),
-        FormatOp::TokenAmount => render_token_amount(field, pages, ir, body, tx, erc20, params),
+        FormatOp::TokenAmount => {
+            render_token_amount(field, pages, ir, body, tx, erc20, resolver, params)
+        }
         FormatOp::NftName => render_nft_name(field, pages, ir, body, tx, resolver, params),
         FormatOp::Date => render_date(field, pages, ir, body, tx, params),
         FormatOp::Duration => render_duration(field, pages, ir, body, tx),
@@ -217,7 +219,9 @@ pub(super) fn dispatch(
         FormatOp::Unit => render_unit(field, pages, ir, body, tx, params),
         FormatOp::Calldata => super::calldata_nested::render(field, pages, params),
         FormatOp::ChainId => render_chain_id(field, pages, ir, body, tx),
-        FormatOp::TokenTicker => render_token_ticker(field, pages, ir, body, tx, erc20, params),
+        FormatOp::TokenTicker => {
+            render_token_ticker(field, pages, ir, body, tx, erc20, resolver, params)
+        }
         FormatOp::InteroperableAddressName => {
             render_interop_address_name(field, pages, ir, body, tx, resolver)
         }
@@ -237,8 +241,6 @@ fn render_raw(
     tx: &Eip1559Tx,
     _params: &ParamSet<'_>,
 ) -> Result<(), RenderErr> {
-    let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
-    write_label_row(pages, p, field.label);
     let bytes = match resolve_path(ir, field.path_off, body)? {
         Resolved::Slot32(b) => *b,
         // Propagate the Reject instead of rendering a zero word for an
@@ -247,11 +249,31 @@ fn render_raw(
         // one (e.g. raw `@.to`). Fail closed.
         Resolved::Container(idx) => container_u256(tx, idx)?,
     };
-    // 64 hex chars over rows 1+2; row 3 = "> next".
-    let [_, row1, row2, row3] = pages.page_mut(p);
-    write_hex_word(row1, &bytes[..16]);
-    write_hex_word(row2, &bytes[16..]);
-    write_line(row3, "> next");
+    // A 16-col row holds 16 hex chars = 8 bytes, so the full 32-byte signed
+    // word needs FOUR hex rows. Render it across two pages (16 bytes each)
+    // so EVERY signed byte is shown. The old single-page form passed two
+    // 16-byte slices to `write_hex_word`, which caps at 8 bytes/row, so it
+    // silently dropped bytes 8..16 and 24..32 — for a big-endian uint256
+    // that is the entire low-order half, making any value < 2^64 render as
+    // all-zeros with a benign "> next" footer (WYSIWYS magnitude-hiding;
+    // fixed 2026-06-26). Page budget is enforced by `push_blank`'s
+    // PageBudget error, same as before.
+    let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
+    write_label_row(pages, p, field.label);
+    {
+        let [_, row1, row2, row3] = pages.page_mut(p);
+        write_hex_word(row1, &bytes[0..8]);
+        write_hex_word(row2, &bytes[8..16]);
+        write_line(row3, "1/2 > next");
+    }
+    let p2 = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
+    write_label_row(pages, p2, field.label);
+    {
+        let [_, row1, row2, row3] = pages.page_mut(p2);
+        write_hex_word(row1, &bytes[16..24]);
+        write_hex_word(row2, &bytes[24..32]);
+        write_line(row3, "2/2 > next");
+    }
     Ok(())
 }
 
@@ -291,6 +313,7 @@ fn render_token_amount(
     body: &[u8],
     tx: &Eip1559Tx,
     erc20: Option<&Erc20Metadata<'_>>,
+    resolver: &NameResolver<'_>,
     params: &ParamSet<'_>,
 ) -> Result<(), RenderErr> {
     // Resolve the amount slot.
@@ -361,6 +384,28 @@ fn render_token_amount(
             );
         }
     }
+
+    // Audit 2026-06-25 MEDIUM-1: with no Merkle-verified metadata we cannot
+    // show decimals/symbol — but the token *identity* is still a signed
+    // operand. A descriptor that covers the token only via a `tokenPath`
+    // (Aave `withdraw` `asset`, Uniswap `tokenIn`/`tokenOut`) has no address
+    // field of its own, so a companion that withholds the optional ERC-20
+    // metadata trailer would otherwise have the user approve a
+    // transfer/withdraw/swap of an UNNAMED token. Render the resolved
+    // address on its own page (resolver-aware) so the contract identity is
+    // never omitted from the trusted display. We only emit the extra page in
+    // the unbound case — when `bound` is `Some` the symbol already names the
+    // token. If the address could not be resolved at all there is nothing to
+    // bind; the amount page already carries the loud `! raw, dec=?` footer,
+    // and the page-budget gate fails closed to blind-sign on overflow.
+    if bound.is_none() {
+        if let Some(addr) = token_addr {
+            let ap = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
+            write_label_row(pages, ap, b"Token (UNVERIFIED)");
+            let [_, ar1, ar2, ar3] = pages.page_mut(ap);
+            write_addr_full_or_name(ar1, ar2, ar3, &addr, tx.chain_id, resolver);
+        }
+    }
     Ok(())
 }
 
@@ -428,18 +473,41 @@ fn render_date(
     let enc = params.date_encoding.unwrap_or(DATE_ENC_TIMESTAMP);
     let [_, r1, r2, foot] = pages.page_mut(p);
     if enc == DATE_ENC_BLOCKHEIGHT {
-        // "block #N" on row 1.
-        let mut row = [b' '; DISPLAY_COLS];
-        let mut pos = 0;
-        for &b in b"block #" {
-            if pos < row.len() {
+        // The block id is the signed deadline/expiry, so EVERY digit is
+        // security-relevant: a far-future block height must never render as a
+        // near one. The previous "block #N" form fed the full u64 `secs`
+        // straight into `write_decimal_into`, which silently DROPS low-order
+        // digits once the 16-col row fills. With the 7-char "block #" prefix
+        // only 9 digits fit, so a >=10-digit height rendered as its top 9
+        // digits — e.g. block 12_345_678_901 painted "block #123456789"
+        // (~100x understated, yet a plausible near deadline) while the
+        // signature committed to the full value. Show the full magnitude
+        // instead: the compact "block #N" inline form while every digit fits
+        // (the unchanged common case: heights < 1e9), otherwise a label on r1
+        // and the full number on its own row r2. An absurd >16-digit value
+        // (>= 1e16 — not a real block height on any chain) fails LOUD rather
+        // than truncating, mirroring the timestamp branch's `! YEAR >9999`
+        // and the `! CHAIN >2^64` guard (audit 2026-06-26 — the
+        // magnitude-hiding sibling of the date-year fix 7df062d3).
+        const BLOCK_PREFIX: &[u8] = b"block #";
+        if BLOCK_PREFIX.len() + decimal_digits(secs) <= DISPLAY_COLS {
+            let mut row = [b' '; DISPLAY_COLS];
+            let mut pos = 0;
+            for &b in BLOCK_PREFIX {
                 row[pos] = b;
                 pos += 1;
             }
+            write_decimal_into(&mut row, pos, secs);
+            *r1 = row;
+        } else if decimal_digits(secs) <= DISPLAY_COLS {
+            write_line(r1, "Block height:");
+            let mut row = [b' '; DISPLAY_COLS];
+            write_decimal_into(&mut row, 0, secs);
+            *r2 = row;
+        } else {
+            write_line(r1, "Block height:");
+            write_line(r2, "! >1e16 (ovf)");
         }
-        pos = write_decimal_into(&mut row, pos, secs);
-        let _ = pos;
-        *r1 = row;
     } else {
         format_iso8601_utc(secs, r1, r2);
     }
@@ -551,18 +619,51 @@ fn render_unit(
 fn render_chain_id(
     field: &FieldEntry<'_>,
     pages: &mut Pages,
-    _ir: &Erc7730Ir<'_>,
-    _body: &[u8],
+    ir: &Erc7730Ir<'_>,
+    body: &[u8],
     tx: &Eip1559Tx,
 ) -> Result<(), RenderErr> {
     let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
     write_label_row(pages, p, field.label);
+    // FAITHFUL formatter (audit 2026-06-26 — faithless-formatter class). Render
+    // the chain id at the field's OWN signed word, not `tx.chain_id`
+    // unconditionally. The old body discarded `field.path`/`body`, so a field
+    // pointing at a calldata / typed-data word (e.g. a cross-chain bridge's
+    // destination chain) displayed the UserOp's *execution* chain while the
+    // signature committed to a different value (display != signed) — and the
+    // host completeness lint still credited the field as covered, so the gap
+    // shipped unwarned. `@.chainId` resolves through the container arm to
+    // `tx.chain_id`, preserving the envelope use-case.
+    let bytes = match resolve_path(ir, field.path_off, body)? {
+        Resolved::Slot32(b) => *b,
+        Resolved::Container(idx) => container_u256(tx, idx)?,
+    };
     let [_, r1, r2, foot] = pages.page_mut(p);
-    // "<decimal id>" on row 1, "<chain_name>" on row 2.
-    let mut decimal = [b' '; DISPLAY_COLS];
-    write_decimal_into(&mut decimal, 0, tx.chain_id);
-    *r1 = decimal;
-    write_line(r2, chain_name(tx.chain_id));
+    match read_u64_be_tail(&bytes) {
+        Some(cid) if decimal_digits(cid) <= DISPLAY_COLS => {
+            // "<decimal id>" on row 1, "<chain_name>" on row 2.
+            let mut decimal = [b' '; DISPLAY_COLS];
+            write_decimal_into(&mut decimal, 0, cid);
+            *r1 = decimal;
+            write_line(r2, chain_name(cid));
+        }
+        // A 17-20 digit chain id is <= u64 but cannot be shown in full on a
+        // 16-col row, and names no real EVM chain. Fail loud rather than let
+        // `write_decimal_into` silently drop the low digits (which would paint
+        // a different, smaller chain number than the one signed) — same policy
+        // as the >u64 arm below.
+        Some(_) => {
+            write_line(r1, "! CHAIN >1e16");
+            write_line(r2, "(too large)");
+        }
+        // A chain id wider than u64 cannot name a real EVM chain; fail loud
+        // rather than render a truncated low-64-bit value (same policy as the
+        // date / duration `>2^64` guard).
+        None => {
+            write_line(r1, "! CHAIN >2^64");
+            write_line(r2, "(overflow)");
+        }
+    }
     write_line(foot, "> next");
     Ok(())
 }
@@ -574,19 +675,42 @@ fn render_token_ticker(
     body: &[u8],
     tx: &Eip1559Tx,
     erc20: Option<&Erc20Metadata<'_>>,
-    params: &ParamSet<'_>,
+    resolver: &NameResolver<'_>,
+    _params: &ParamSet<'_>,
 ) -> Result<(), RenderErr> {
     let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
     write_label_row(pages, p, field.label);
-    let addr = resolve_token_address(ir, body, tx, params).ok();
-    let [_, r1, _r2, foot] = pages.page_mut(p);
-    match (addr, erc20) {
-        (Some(a), Some(meta)) if a == meta.contract => {
-            write_line_bytes(r1, meta.symbol);
+    // FAITHFUL formatter (audit 2026-06-26 — faithless-formatter class). The
+    // token is the field's OWN resolved address word (FMT_TOKEN_TICKER carries
+    // no `tokenPath` param — dbgen emits none), so resolve `field.path` rather
+    // than a param. The old body resolved only `params.tokenPath`/`token`
+    // (always absent here, so it ALWAYS fell to "(unknown token)") and, when
+    // unbound, hid the token IDENTITY outright — yet the completeness lint
+    // credits `field.path` as covered, so the signed token operand went unshown.
+    let addr = match resolve_path(ir, field.path_off, body)? {
+        Resolved::Slot32(b) => {
+            // address is right-aligned in a 32-byte slot.
+            let mut a = [0u8; 20];
+            a.copy_from_slice(&b[12..]);
+            a
         }
-        _ => write_line(r1, "(unknown token)"),
+        Resolved::Container(idx) => container_addr(tx, idx)?,
+    };
+    match erc20 {
+        Some(meta) if addr == meta.contract => {
+            let [_, r1, _r2, foot] = pages.page_mut(p);
+            write_line_bytes(r1, meta.symbol);
+            write_line(foot, "> next");
+        }
+        // No Merkle-verified ticker for this address — NEVER hide the token
+        // identity. Show the full 40-hex address (resolver-aware) across rows
+        // 1-3 so the signed token operand is always on the trusted display
+        // (mirrors render_token_amount's unbound "Token (UNVERIFIED)" page).
+        _ => {
+            let [_, r1, r2, r3] = pages.page_mut(p);
+            write_addr_full_or_name(r1, r2, r3, &addr, tx.chain_id, resolver);
+        }
     }
-    write_line(foot, "> next");
     Ok(())
 }
 
@@ -706,7 +830,31 @@ fn read_u64_be_tail(bytes: &[u8; 32]) -> Option<u64> {
     Some(u64::from_be_bytes(bytes[24..].try_into().unwrap()))
 }
 
+/// Number of decimal digits needed to render `n` (`0` counts as one
+/// digit). Used by the magnitude-critical formatters (block-height date,
+/// chain id) to detect — BEFORE painting — that `write_decimal_into` would
+/// have to drop low-order digits to fit the row, so they can render the
+/// full value across rows or fail loud instead of silently understating
+/// the signed magnitude.
+pub(super) fn decimal_digits(n: u64) -> usize {
+    let mut count = 1usize;
+    let mut m = n / 10;
+    while m > 0 {
+        count += 1;
+        m /= 10;
+    }
+    count
+}
+
 /// Format a u64 as decimal at `out[pos..]`. Returns the new position.
+///
+/// NOTE: this STOPS at the end of the row, silently dropping any digits
+/// that don't fit (it writes most-significant-first). That is acceptable
+/// only for callers where a dropped low-order digit is cosmetic
+/// (`format_duration`'s sub-day components, the interop chain-label
+/// prefix). Callers rendering a security-critical magnitude must gate on
+/// [`decimal_digits`] first — see `render_date` (blockHeight) and
+/// `render_chain_id` — so a magnitude is never silently understated.
 pub(super) fn write_decimal_into(
     out: &mut [u8; DISPLAY_COLS],
     pos: usize,
@@ -746,6 +894,22 @@ fn format_iso8601_utc(
 ) {
     let (year, mon, day, hour, min, sec) = unix_to_ymdhms(secs);
 
+    // WYSIWYS (audit 2026-06-26 — date year truncation). The 4-digit
+    // "YYYY" field can only honestly show years 0..=9999. `read_u64_be_tail`
+    // accepts any timestamp <= u64::MAX (year ~584e9), and the prior
+    // `as u16` cast in `unix_to_ymdhms` wrapped the year mod 65536 — so a
+    // perpetual EIP-3009 `validBefore` (true year ~67570, unix ~2.07e12)
+    // rendered as a benign "2034" while the signature committed to an
+    // effectively-unbounded validity window. Fail LOUD, matching the
+    // sibling `! TIME >2^64` guard, so a far-future expiry can never read
+    // as a near one (display != signed).
+    if !(0..=9999).contains(&year) {
+        write_line(r1, "! YEAR >9999");
+        write_line(r2, "(far-future)");
+        return;
+    }
+    let year = year as u16; // safe: 0..=9999 after the guard above
+
     for cell in r1.iter_mut() {
         *cell = b' ';
     }
@@ -779,7 +943,7 @@ fn write_2digit(out: &mut [u8], n: u8) {
 
 /// Convert unix seconds → `(year, month, day, hour, min, sec)` UTC.
 /// Civil-from-days algorithm by Howard Hinnant (public domain).
-fn unix_to_ymdhms(secs: u64) -> (u16, u8, u8, u8, u8, u8) {
+fn unix_to_ymdhms(secs: u64) -> (i64, u8, u8, u8, u8, u8) {
     let days = (secs / 86_400) as i64;
     let sod = (secs % 86_400) as u32;
     let hour = (sod / 3600) as u8;
@@ -796,7 +960,12 @@ fn unix_to_ymdhms(secs: u64) -> (u16, u8, u8, u8, u8, u8) {
     let mp = (5 * doy + 2) / 153;
     let d = (doy - (153 * mp + 2) / 5 + 1) as u8;
     let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u8;
-    let year = (y + if m <= 2 { 1 } else { 0 }) as u16;
+    // Full i64 year — deliberately NOT truncated to u16. The old `as u16`
+    // cast wrapped the year mod 65536, so a far-future timestamp (a u64
+    // second count `read_u64_be_tail` accepts) rendered as a benign near
+    // year. `format_iso8601_utc` now fails loud on any year outside
+    // 0..=9999 (audit 2026-06-26 — date year truncation).
+    let year = y + if m <= 2 { 1 } else { 0 };
 
     (year, m, d, hour, min, sec)
 }
@@ -1114,5 +1283,410 @@ mod date_overflow_fixed {
         five[31] = 5;
         assert_eq!(read_u64_be_tail(&five), Some(5));
         assert_eq!(read_u64_be_tail(&[0u8; 32]), Some(0));
+    }
+}
+
+#[cfg(test)]
+mod date_year_truncation_fixed {
+    //! REGRESSION (audit 2026-06-26 — date year `u16` truncation).
+    //!
+    //! `read_u64_be_tail` accepts every timestamp `<= u64::MAX`, but
+    //! `unix_to_ymdhms` used to cast the computed year `as u16`, wrapping it
+    //! mod 65536. A companion-controlled `validBefore` (EIP-3009
+    //! `TransferWithAuthorization`, the pinned `circle-usdc-twa` descriptor,
+    //! `format:"date"`) of true year 67570 (unix ~2.07e12) therefore
+    //! rendered the benign "2034" while the signature committed to an
+    //! effectively-perpetual validity window — a display != signed gap and
+    //! the unfixed residual of the 2026-06-23 `>2^64` fix. The renderer now
+    //! returns the full i64 year and fails loud (`! YEAR >9999`) outside
+    //! 0..=9999.
+    use super::{format_iso8601_utc, unix_to_ymdhms, DISPLAY_COLS};
+
+    #[test]
+    fn unix_to_ymdhms_returns_untruncated_year() {
+        // 2.1e12 s ≈ year 68515 — far past the 4-digit field but within the
+        // u64 the date reader accepts. The year must come back whole, never
+        // wrapped (68515 mod 65536 = 2979 was the pre-fix lie).
+        let (year, ..) = unix_to_ymdhms(2_100_000_000_000);
+        assert!(year > 9999, "year must not wrap; got {year}");
+        assert_ne!(year, 2979, "year must not be the mod-65536 wrap value");
+    }
+
+    #[test]
+    fn far_future_timestamp_within_u64_fails_loud() {
+        // The concrete exploit vector: a perpetual `validBefore` that the
+        // reader passes (<= u64::MAX) must NEVER render as a plausible near
+        // year. It paints the loud marker instead.
+        let mut r1 = [b' '; DISPLAY_COLS];
+        let mut r2 = [b' '; DISPLAY_COLS];
+        format_iso8601_utc(2_100_000_000_000, &mut r1, &mut r2);
+        assert_eq!(&r1[..12], b"! YEAR >9999");
+        // And crucially must not read as any benign near year.
+        assert_ne!(&r1[..4], b"2979");
+        assert_ne!(&r1[..4], b"2034");
+    }
+
+    #[test]
+    fn year_9999_boundary_renders_but_year_10000_fails_loud() {
+        // 9999-12-31T23:59:59Z is the last honestly-renderable second.
+        let mut r1 = [b' '; DISPLAY_COLS];
+        let mut r2 = [b' '; DISPLAY_COLS];
+        format_iso8601_utc(253_402_300_799, &mut r1, &mut r2);
+        assert_eq!(&r1[..4], b"9999");
+        // 10000-01-01T00:00:00Z is the first that cannot.
+        let mut r1b = [b' '; DISPLAY_COLS];
+        let mut r2b = [b' '; DISPLAY_COLS];
+        format_iso8601_utc(253_402_300_800, &mut r1b, &mut r2b);
+        assert_eq!(&r1b[..12], b"! YEAR >9999");
+    }
+
+    #[test]
+    fn ordinary_dates_still_render_unchanged() {
+        let mut r1 = [b' '; DISPLAY_COLS];
+        let mut r2 = [b' '; DISPLAY_COLS];
+        // 2024-01-01T00:00:00Z.
+        format_iso8601_utc(1_704_067_200, &mut r1, &mut r2);
+        assert_eq!(&r1[..10], b"2024-01-01");
+        assert_eq!(&r2[..9], b"00:00:00 ");
+    }
+}
+
+#[cfg(test)]
+mod faithless_formatter_fixed {
+    //! REGRESSION (audit 2026-06-26 — faithless-formatter class).
+    //!
+    //! `render_chain_id` and `render_token_ticker` discarded `field.path` and
+    //! rendered an envelope / param value instead of the field's signed word,
+    //! while dbgen's completeness lint (`check_*_field_completeness`) credited
+    //! the field as covering its ABI word — a display != signed gap primed to
+    //! fire the moment a `chainId` / `tokenTicker` descriptor shipped (e.g. a
+    //! cross-chain bridge's destination chain). Both now resolve `field.path`
+    //! and render THAT word; `tokenTicker` additionally shows the token
+    //! identity (full address) when no Merkle-verified ticker is bound.
+    use super::*;
+    use crate::tx::erc7730::{container_field, ContextKind, Erc7730Ir};
+
+    /// Build a throwaway `Erc7730Ir` whose `pool` holds a single compiled path
+    /// program at offset 1 (mirrors `walker_slot_confusion_fixed::ir_with_path`).
+    fn ir_with_path(prog: &[u8]) -> Erc7730Ir<'static> {
+        let mut pool = std::vec::Vec::with_capacity(prog.len() + 2);
+        pool.push(0x00);
+        pool.push(prog.len() as u8);
+        pool.extend_from_slice(prog);
+        let pool: &'static [u8] = std::boxed::Box::leak(pool.into_boxed_slice());
+        Erc7730Ir {
+            schema_ver: crate::tx::erc7730::SCHEMA_VER,
+            context_kind: ContextKind::Contract,
+            chain_id: 1,
+            contract: [0u8; 20],
+            descriptor_hash: [0u8; 32],
+            domain_separator: [0u8; 32],
+            owner: &[],
+            contract_name: &[],
+            pool,
+            formats: &[],
+            raw: &[],
+        }
+    }
+
+    /// `RootStructured` path program reading head word `slot`.
+    fn slot_prog(slot: u16) -> [u8; 4] {
+        [
+            PathOp::RootStructured as u8,
+            PathOp::FieldIdx as u8,
+            (slot >> 8) as u8,
+            slot as u8,
+        ]
+    }
+
+    fn envelope_chain(chain_id: u64) -> Eip1559Tx {
+        Eip1559Tx {
+            chain_id,
+            nonce: 0,
+            max_priority_fee_per_gas: U256::zero(),
+            max_fee_per_gas: U256::zero(),
+            gas_limit: 0,
+            to: Some([0u8; 20]),
+            value: U256::zero(),
+            data_len: 0,
+            access_list_count: 0,
+            signing_hash: [0u8; 32],
+        }
+    }
+
+    fn field(op: FormatOp) -> FieldEntry<'static> {
+        FieldEntry {
+            format_op: op as u8,
+            label: b"Dest",
+            path_off: 1,
+            param_off: 0,
+        }
+    }
+
+    #[test]
+    fn chain_id_renders_field_word_not_envelope() {
+        // Field path -> head word 0 = 8453 (Base); envelope chain = 1 (Mainnet).
+        // The faithful formatter must show the SIGNED 8453, not the envelope 1.
+        let ir = ir_with_path(&slot_prog(0));
+        let mut body = [0u8; 32];
+        body[24..32].copy_from_slice(&8453u64.to_be_bytes());
+        let tx = envelope_chain(1);
+        let mut pages = Pages::with_len(0);
+        render_chain_id(&field(FormatOp::ChainId), &mut pages, &ir, &body, &tx)
+            .expect("renders");
+        assert_eq!(&pages.buf[0][1][..4], b"8453", "shows the field's signed chain id");
+        assert_eq!(
+            &pages.buf[0][2][..6],
+            b"(Base)",
+            "names the field's chain, not the envelope"
+        );
+        // The pre-fix lie was the envelope chain (1 / Mainnet).
+        assert_ne!(&pages.buf[0][2][..9], b"(Mainnet)");
+    }
+
+    #[test]
+    fn chain_id_container_root_still_shows_envelope() {
+        // `@.chainId` (container root) must keep rendering `tx.chain_id`.
+        let prog = [
+            PathOp::RootContainer as u8,
+            PathOp::FieldIdx as u8,
+            (container_field::CHAIN_ID >> 8) as u8,
+            container_field::CHAIN_ID as u8,
+        ];
+        let ir = ir_with_path(&prog);
+        let tx = envelope_chain(10); // Optimism
+        let mut pages = Pages::with_len(0);
+        render_chain_id(&field(FormatOp::ChainId), &mut pages, &ir, &[], &tx)
+            .expect("renders");
+        assert_eq!(&pages.buf[0][1][..2], b"10");
+        assert_eq!(&pages.buf[0][2][..10], b"(Optimism)");
+    }
+
+    #[test]
+    fn chain_id_above_u64_fails_loud() {
+        // A >u64 word can't name a real chain; never render a truncated value.
+        let ir = ir_with_path(&slot_prog(0));
+        let mut body = [0u8; 32];
+        body[0] = 1; // high byte set -> > u64
+        let tx = envelope_chain(1);
+        let mut pages = Pages::with_len(0);
+        render_chain_id(&field(FormatOp::ChainId), &mut pages, &ir, &body, &tx)
+            .expect("renders");
+        assert_eq!(&pages.buf[0][1][..13], b"! CHAIN >2^64");
+    }
+
+    #[test]
+    fn chain_id_seventeen_digits_within_u64_fails_loud() {
+        // A 17-digit chain id is <= u64 but cannot fit a 16-col row in full;
+        // `write_decimal_into` would silently drop its low digit, painting a
+        // different (smaller) chain number than the one signed. Fail loud.
+        let ir = ir_with_path(&slot_prog(0));
+        let mut body = [0u8; 32];
+        // 12_345_678_901_234_567 = 17 digits, < u64::MAX.
+        body[24..32].copy_from_slice(&12_345_678_901_234_567u64.to_be_bytes());
+        let tx = envelope_chain(1);
+        let mut pages = Pages::with_len(0);
+        render_chain_id(&field(FormatOp::ChainId), &mut pages, &ir, &body, &tx)
+            .expect("renders");
+        assert_eq!(&pages.buf[0][1][..13], b"! CHAIN >1e16");
+        // Never the silently-truncated top-16-digit value.
+        assert_ne!(&pages.buf[0][1][..4], b"1234");
+    }
+
+    #[test]
+    fn token_ticker_unbound_shows_address_not_unknown() {
+        // Field path -> head word 0 = token address; no erc20 metadata bound.
+        // The faithful formatter must show the address (token identity), not
+        // the old "(unknown token)" that hid the signed operand.
+        let ir = ir_with_path(&slot_prog(0));
+        let token = [0xABu8; 20];
+        let mut body = [0u8; 32];
+        body[12..32].copy_from_slice(&token);
+        let tx = envelope_chain(1);
+        let resolver = NameResolver::new();
+        let params = ParamSet::default();
+        let mut pages = Pages::with_len(0);
+        render_token_ticker(
+            &field(FormatOp::TokenTicker),
+            &mut pages,
+            &ir,
+            &body,
+            &tx,
+            None,
+            &resolver,
+            &params,
+        )
+        .expect("renders");
+        // Full address shown: write_addr_full_or_name paints "0x" + hex on r1.
+        assert_eq!(&pages.buf[0][1][..2], b"0x");
+        assert_eq!(pages.buf[0][1][2], b'a', "first nibble of 0xAB");
+        assert_eq!(pages.buf[0][1][3], b'b');
+        // The pre-fix hid the operand behind this literal.
+        assert_ne!(&pages.buf[0][1][..15], b"(unknown token)");
+    }
+
+    #[test]
+    fn token_ticker_bound_shows_symbol() {
+        let ir = ir_with_path(&slot_prog(0));
+        let token = [0xCDu8; 20];
+        let mut body = [0u8; 32];
+        body[12..32].copy_from_slice(&token);
+        let tx = envelope_chain(1);
+        let meta = Erc20Metadata {
+            chain_id: 1,
+            contract: token,
+            decimals: 6,
+            name: b"USD Coin",
+            symbol: b"USDC",
+        };
+        let resolver = NameResolver::new();
+        let params = ParamSet::default();
+        let mut pages = Pages::with_len(0);
+        render_token_ticker(
+            &field(FormatOp::TokenTicker),
+            &mut pages,
+            &ir,
+            &body,
+            &tx,
+            Some(&meta),
+            &resolver,
+            &params,
+        )
+        .expect("renders");
+        assert_eq!(&pages.buf[0][1][..4], b"USDC");
+    }
+}
+
+#[cfg(test)]
+mod block_height_magnitude_fixed {
+    //! REGRESSION (audit 2026-06-26 — magnitude-hiding class).
+    //!
+    //! `render_date`'s blockHeight branch rendered the signed u64 block id
+    //! with `write_decimal_into`, which silently drops low-order digits once
+    //! the 16-col row fills. With the 7-char "block #" prefix only 9 digits
+    //! fit, so a >=10-digit deadline rendered as its top 9 digits — e.g.
+    //! block 12_345_678_901 painted "block #123456789" (~100x understated),
+    //! a far-future authorization expiry the user reads as near while the
+    //! signature commits to the full value. Same display != signed
+    //! magnitude-hiding class as the date-year u16 truncation (commit
+    //! 7df062d3); the blockHeight sibling had no guard. The fix shows the
+    //! FULL magnitude (inline while it fits, else label + full number on r2)
+    //! and fails loud only for absurd >16-digit values.
+    use super::*;
+    use crate::tx::erc7730::{ContextKind, Erc7730Ir};
+
+    /// Throwaway IR whose `pool` holds one compiled path program at offset 1
+    /// (mirrors `faithless_formatter_fixed::ir_with_path`).
+    fn ir_with_path(prog: &[u8]) -> Erc7730Ir<'static> {
+        let mut pool = std::vec::Vec::with_capacity(prog.len() + 2);
+        pool.push(0x00);
+        pool.push(prog.len() as u8);
+        pool.extend_from_slice(prog);
+        let pool: &'static [u8] = std::boxed::Box::leak(pool.into_boxed_slice());
+        Erc7730Ir {
+            schema_ver: crate::tx::erc7730::SCHEMA_VER,
+            context_kind: ContextKind::Contract,
+            chain_id: 1,
+            contract: [0u8; 20],
+            descriptor_hash: [0u8; 32],
+            domain_separator: [0u8; 32],
+            owner: &[],
+            contract_name: &[],
+            pool,
+            formats: &[],
+            raw: &[],
+        }
+    }
+
+    fn slot0_prog() -> [u8; 4] {
+        [
+            PathOp::RootStructured as u8,
+            PathOp::FieldIdx as u8,
+            0,
+            0,
+        ]
+    }
+
+    fn envelope() -> Eip1559Tx {
+        Eip1559Tx {
+            chain_id: 1,
+            nonce: 0,
+            max_priority_fee_per_gas: U256::zero(),
+            max_fee_per_gas: U256::zero(),
+            gas_limit: 0,
+            to: Some([0u8; 20]),
+            value: U256::zero(),
+            data_len: 0,
+            access_list_count: 0,
+            signing_hash: [0u8; 32],
+        }
+    }
+
+    fn date_field() -> FieldEntry<'static> {
+        FieldEntry {
+            format_op: FormatOp::Date as u8,
+            label: b"Expiry",
+            path_off: 1,
+            param_off: 0,
+        }
+    }
+
+    /// Render a blockHeight `date` field over a signed word = `block`.
+    fn render_block(block: u64) -> Pages {
+        let ir = ir_with_path(&slot0_prog());
+        let mut body = [0u8; 32];
+        body[24..32].copy_from_slice(&block.to_be_bytes());
+        let tx = envelope();
+        let mut params = ParamSet::default();
+        params.date_encoding = Some(DATE_ENC_BLOCKHEIGHT);
+        let mut pages = Pages::with_len(0);
+        render_date(&date_field(), &mut pages, &ir, &body, &tx, &params).expect("renders");
+        pages
+    }
+
+    #[test]
+    fn small_block_height_renders_inline_unchanged() {
+        // < 1e9 (9 digits): the unchanged compact form on row 1.
+        let pages = render_block(21_000_000);
+        assert_eq!(&pages.buf[0][1][..15], b"block #21000000");
+    }
+
+    #[test]
+    fn nine_digit_block_height_still_inline() {
+        // 999_999_999 — the largest height that fits "block #N" on one row.
+        let pages = render_block(999_999_999);
+        assert_eq!(&pages.buf[0][1][..16], b"block #999999999");
+    }
+
+    #[test]
+    fn large_block_height_shows_full_magnitude_not_truncated() {
+        // The concrete exploit value: 12_345_678_901 (11 digits). The pre-fix
+        // code rendered "block #123456789" (top 9 digits, ~100x understated).
+        let pages = render_block(12_345_678_901);
+        // Row 1 must NOT be the truncated top-9 lie.
+        assert_ne!(&pages.buf[0][1][..15], b"block #12345678");
+        assert_eq!(&pages.buf[0][1][..13], b"Block height:");
+        // The FULL block id appears on row 2.
+        assert_eq!(&pages.buf[0][2][..11], b"12345678901");
+    }
+
+    #[test]
+    fn sixteen_digit_block_height_shows_full_on_row2() {
+        // 1_000_000_000_000_000 (16 digits) is the widest value still shown
+        // in full on its own 16-col row.
+        let pages = render_block(1_000_000_000_000_000);
+        assert_eq!(&pages.buf[0][1][..13], b"Block height:");
+        assert_eq!(&pages.buf[0][2][..16], b"1000000000000000");
+    }
+
+    #[test]
+    fn absurd_block_height_fails_loud_never_truncates() {
+        // >16 digits (>= 1e16 — not a real block height on any chain). Must
+        // fail loud, never paint a silently-truncated value.
+        let pages = render_block(12_345_678_901_234_567); // 17 digits
+        assert_eq!(&pages.buf[0][1][..13], b"Block height:");
+        assert_eq!(&pages.buf[0][2][..13], b"! >1e16 (ovf)");
+        // No truncated digit string anywhere on the value rows.
+        assert_ne!(&pages.buf[0][2][..4], b"1234");
     }
 }
