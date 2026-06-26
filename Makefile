@@ -3598,6 +3598,22 @@ sbom:
 	cargo cyclonedx --format json --all
 	@echo "==> sbom: wrote <crate>.cdx.json per workspace member (release sidecars)"
 
+# FIRMWARE SBOM keyed to the FSBL-measured hash (SOTA §8). `make sbom` answers
+# "what deps does this crate pull"; this answers "what deps went into THIS
+# firmware image" — it stamps the secure-world dep SBOM's root component with
+# the built ELF's measured SHA-256 (the value the FSBL measures + the device
+# shows at boot, via fwmeasure) so the manifest is provably the one that
+# produced the image. Build the firmware first so $(SECURE_ELF) exists (e.g.
+# `make e2e`, or `make release` with the shipping feature set + optiga-hw-counter).
+.PHONY: sbom-firmware
+sbom-firmware:
+	@command -v cargo-cyclonedx >/dev/null 2>&1 || { echo "ERROR: cargo-cyclonedx not found. Install: cargo install cargo-cyclonedx"; exit 1; }
+	@test -f $(SECURE_ELF) || { echo "ERROR: $(SECURE_ELF) not built — run 'make e2e' / 'make release' first"; exit 1; }
+	cargo build -p fwmeasure --release
+	cargo cyclonedx --format json --manifest-path secure/Cargo.toml
+	@mkdir -p target/release
+	python3 tools/sbom_firmware.py $(SECURE_ELF) secure/sphincs-tz-secure.cdx.json target/release/secure-firmware.cdx.json
+
 # ---------------------------------------------------------------------------
 # Host Rust formal verification (SOTA 2026-06 §1 adopt-now; work-todo §34).
 #   kani = bounded model-checking (panic / arithmetic-overflow / slice-OOB
