@@ -3576,6 +3576,17 @@ invariant-gates:
 	-@"$(SEMGREP)" --config .semgrep/pqsigner-invariants.yml --severity WARNING --metrics off --quiet
 	@echo "==> invariant-gates: PASS"
 
+# cargo-vet: dependency audit-ATTESTATION gate (SOTA §8 — complements cargo-deny's
+# bans/advisories/sources). Every dep must be either trusted-audited (we import
+# the Mozilla / Google / Bytecode-Alliance / Embark audit sets, pinned in
+# supply-chain/imports.lock) or explicitly exempted in supply-chain/config.toml,
+# so a NEW transitive dep forces an audit-or-exempt decision in a reviewable diff.
+# Audit down the exemption list over time: `cargo vet certify <crate> <ver>`.
+.PHONY: vet
+vet:
+	@command -v cargo-vet >/dev/null 2>&1 || { echo "ERROR: cargo-vet not found. Install: cargo install --locked cargo-vet"; exit 1; }
+	cargo vet --locked
+
 # Supply-chain SBOM (CycloneDX) — a release SIDECAR capturing the full dep tree
 # + licenses. NOT embedded in firmware (the secure-world binary is size-critical;
 # pair an external SBOM with the FSBL-measured hash, per the SOTA report §8).

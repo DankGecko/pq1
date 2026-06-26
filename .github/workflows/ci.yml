@@ -84,6 +84,24 @@ jobs:
       - name: A3.1 c10Program <-> SPHINCsC10Asm.sol transcription lint
         run: make -C contracts/verification verify-transcription
 
+  supply-chain-vet:
+    name: cargo-vet (dependency audit attestation)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      # Every dep must be trusted-audited (imported audit sets, pinned in
+      # supply-chain/imports.lock) or exempted in supply-chain/config.toml; a
+      # new unaudited transitive dep fails here. rust-cache caches the built
+      # cargo-vet binary so this is fast after the first run.
+      - name: cargo install cargo-vet
+        run: cargo install --locked cargo-vet
+      - name: cargo vet --locked
+        run: cargo vet --locked
+
   prod-config-gate:
     name: Production feature-set gate (MED-2)
     runs-on: ubuntu-latest
