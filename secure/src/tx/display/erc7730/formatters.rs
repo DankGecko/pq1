@@ -219,7 +219,9 @@ pub(super) fn dispatch(
         FormatOp::Unit => render_unit(field, pages, ir, body, tx, params),
         FormatOp::Calldata => super::calldata_nested::render(field, pages, params),
         FormatOp::ChainId => render_chain_id(field, pages, ir, body, tx),
-        FormatOp::TokenTicker => render_token_ticker(field, pages, ir, body, tx, erc20, params),
+        FormatOp::TokenTicker => {
+            render_token_ticker(field, pages, ir, body, tx, erc20, resolver, params)
+        }
         FormatOp::InteroperableAddressName => {
             render_interop_address_name(field, pages, ir, body, tx, resolver)
         }
@@ -594,18 +596,42 @@ fn render_unit(
 fn render_chain_id(
     field: &FieldEntry<'_>,
     pages: &mut Pages,
-    _ir: &Erc7730Ir<'_>,
-    _body: &[u8],
+    ir: &Erc7730Ir<'_>,
+    body: &[u8],
     tx: &Eip1559Tx,
 ) -> Result<(), RenderErr> {
     let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
     write_label_row(pages, p, field.label);
+    // FAITHFUL formatter (audit 2026-06-26 — faithless-formatter class). Render
+    // the chain id at the field's OWN signed word, not `tx.chain_id`
+    // unconditionally. The old body discarded `field.path`/`body`, so a field
+    // pointing at a calldata / typed-data word (e.g. a cross-chain bridge's
+    // destination chain) displayed the UserOp's *execution* chain while the
+    // signature committed to a different value (display != signed) — and the
+    // host completeness lint still credited the field as covered, so the gap
+    // shipped unwarned. `@.chainId` resolves through the container arm to
+    // `tx.chain_id`, preserving the envelope use-case.
+    let bytes = match resolve_path(ir, field.path_off, body)? {
+        Resolved::Slot32(b) => *b,
+        Resolved::Container(idx) => container_u256(tx, idx)?,
+    };
     let [_, r1, r2, foot] = pages.page_mut(p);
-    // "<decimal id>" on row 1, "<chain_name>" on row 2.
-    let mut decimal = [b' '; DISPLAY_COLS];
-    write_decimal_into(&mut decimal, 0, tx.chain_id);
-    *r1 = decimal;
-    write_line(r2, chain_name(tx.chain_id));
+    match read_u64_be_tail(&bytes) {
+        Some(cid) => {
+            // "<decimal id>" on row 1, "<chain_name>" on row 2.
+            let mut decimal = [b' '; DISPLAY_COLS];
+            write_decimal_into(&mut decimal, 0, cid);
+            *r1 = decimal;
+            write_line(r2, chain_name(cid));
+        }
+        // A chain id wider than u64 cannot name a real EVM chain; fail loud
+        // rather than render a truncated low-64-bit value (same policy as the
+        // date / duration `>2^64` guard).
+        None => {
+            write_line(r1, "! CHAIN >2^64");
+            write_line(r2, "(overflow)");
+        }
+    }
     write_line(foot, "> next");
     Ok(())
 }
@@ -617,19 +643,42 @@ fn render_token_ticker(
     body: &[u8],
     tx: &Eip1559Tx,
     erc20: Option<&Erc20Metadata<'_>>,
-    params: &ParamSet<'_>,
+    resolver: &NameResolver<'_>,
+    _params: &ParamSet<'_>,
 ) -> Result<(), RenderErr> {
     let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
     write_label_row(pages, p, field.label);
-    let addr = resolve_token_address(ir, body, tx, params).ok();
-    let [_, r1, _r2, foot] = pages.page_mut(p);
-    match (addr, erc20) {
-        (Some(a), Some(meta)) if a == meta.contract => {
-            write_line_bytes(r1, meta.symbol);
+    // FAITHFUL formatter (audit 2026-06-26 — faithless-formatter class). The
+    // token is the field's OWN resolved address word (FMT_TOKEN_TICKER carries
+    // no `tokenPath` param — dbgen emits none), so resolve `field.path` rather
+    // than a param. The old body resolved only `params.tokenPath`/`token`
+    // (always absent here, so it ALWAYS fell to "(unknown token)") and, when
+    // unbound, hid the token IDENTITY outright — yet the completeness lint
+    // credits `field.path` as covered, so the signed token operand went unshown.
+    let addr = match resolve_path(ir, field.path_off, body)? {
+        Resolved::Slot32(b) => {
+            // address is right-aligned in a 32-byte slot.
+            let mut a = [0u8; 20];
+            a.copy_from_slice(&b[12..]);
+            a
         }
-        _ => write_line(r1, "(unknown token)"),
+        Resolved::Container(idx) => container_addr(tx, idx)?,
+    };
+    match erc20 {
+        Some(meta) if addr == meta.contract => {
+            let [_, r1, _r2, foot] = pages.page_mut(p);
+            write_line_bytes(r1, meta.symbol);
+            write_line(foot, "> next");
+        }
+        // No Merkle-verified ticker for this address — NEVER hide the token
+        // identity. Show the full 40-hex address (resolver-aware) across rows
+        // 1-3 so the signed token operand is always on the trusted display
+        // (mirrors render_token_amount's unbound "Token (UNVERIFIED)" page).
+        _ => {
+            let [_, r1, r2, r3] = pages.page_mut(p);
+            write_addr_full_or_name(r1, r2, r3, &addr, tx.chain_id, resolver);
+        }
     }
-    write_line(foot, "> next");
     Ok(())
 }
 
@@ -1243,5 +1292,193 @@ mod date_year_truncation_fixed {
         format_iso8601_utc(1_704_067_200, &mut r1, &mut r2);
         assert_eq!(&r1[..10], b"2024-01-01");
         assert_eq!(&r2[..9], b"00:00:00 ");
+    }
+}
+
+#[cfg(test)]
+mod faithless_formatter_fixed {
+    //! REGRESSION (audit 2026-06-26 — faithless-formatter class).
+    //!
+    //! `render_chain_id` and `render_token_ticker` discarded `field.path` and
+    //! rendered an envelope / param value instead of the field's signed word,
+    //! while dbgen's completeness lint (`check_*_field_completeness`) credited
+    //! the field as covering its ABI word — a display != signed gap primed to
+    //! fire the moment a `chainId` / `tokenTicker` descriptor shipped (e.g. a
+    //! cross-chain bridge's destination chain). Both now resolve `field.path`
+    //! and render THAT word; `tokenTicker` additionally shows the token
+    //! identity (full address) when no Merkle-verified ticker is bound.
+    use super::*;
+    use crate::tx::erc7730::{container_field, ContextKind, Erc7730Ir};
+
+    /// Build a throwaway `Erc7730Ir` whose `pool` holds a single compiled path
+    /// program at offset 1 (mirrors `walker_slot_confusion_fixed::ir_with_path`).
+    fn ir_with_path(prog: &[u8]) -> Erc7730Ir<'static> {
+        let mut pool = std::vec::Vec::with_capacity(prog.len() + 2);
+        pool.push(0x00);
+        pool.push(prog.len() as u8);
+        pool.extend_from_slice(prog);
+        let pool: &'static [u8] = std::boxed::Box::leak(pool.into_boxed_slice());
+        Erc7730Ir {
+            schema_ver: crate::tx::erc7730::SCHEMA_VER,
+            context_kind: ContextKind::Contract,
+            chain_id: 1,
+            contract: [0u8; 20],
+            descriptor_hash: [0u8; 32],
+            domain_separator: [0u8; 32],
+            owner: &[],
+            contract_name: &[],
+            pool,
+            formats: &[],
+            raw: &[],
+        }
+    }
+
+    /// `RootStructured` path program reading head word `slot`.
+    fn slot_prog(slot: u16) -> [u8; 4] {
+        [
+            PathOp::RootStructured as u8,
+            PathOp::FieldIdx as u8,
+            (slot >> 8) as u8,
+            slot as u8,
+        ]
+    }
+
+    fn envelope_chain(chain_id: u64) -> Eip1559Tx {
+        Eip1559Tx {
+            chain_id,
+            nonce: 0,
+            max_priority_fee_per_gas: U256::zero(),
+            max_fee_per_gas: U256::zero(),
+            gas_limit: 0,
+            to: Some([0u8; 20]),
+            value: U256::zero(),
+            data_len: 0,
+            access_list_count: 0,
+            signing_hash: [0u8; 32],
+        }
+    }
+
+    fn field(op: FormatOp) -> FieldEntry<'static> {
+        FieldEntry {
+            format_op: op as u8,
+            label: b"Dest",
+            path_off: 1,
+            param_off: 0,
+        }
+    }
+
+    #[test]
+    fn chain_id_renders_field_word_not_envelope() {
+        // Field path -> head word 0 = 8453 (Base); envelope chain = 1 (Mainnet).
+        // The faithful formatter must show the SIGNED 8453, not the envelope 1.
+        let ir = ir_with_path(&slot_prog(0));
+        let mut body = [0u8; 32];
+        body[24..32].copy_from_slice(&8453u64.to_be_bytes());
+        let tx = envelope_chain(1);
+        let mut pages = Pages::with_len(0);
+        render_chain_id(&field(FormatOp::ChainId), &mut pages, &ir, &body, &tx)
+            .expect("renders");
+        assert_eq!(&pages.buf[0][1][..4], b"8453", "shows the field's signed chain id");
+        assert_eq!(
+            &pages.buf[0][2][..6],
+            b"(Base)",
+            "names the field's chain, not the envelope"
+        );
+        // The pre-fix lie was the envelope chain (1 / Mainnet).
+        assert_ne!(&pages.buf[0][2][..9], b"(Mainnet)");
+    }
+
+    #[test]
+    fn chain_id_container_root_still_shows_envelope() {
+        // `@.chainId` (container root) must keep rendering `tx.chain_id`.
+        let prog = [
+            PathOp::RootContainer as u8,
+            PathOp::FieldIdx as u8,
+            (container_field::CHAIN_ID >> 8) as u8,
+            container_field::CHAIN_ID as u8,
+        ];
+        let ir = ir_with_path(&prog);
+        let tx = envelope_chain(10); // Optimism
+        let mut pages = Pages::with_len(0);
+        render_chain_id(&field(FormatOp::ChainId), &mut pages, &ir, &[], &tx)
+            .expect("renders");
+        assert_eq!(&pages.buf[0][1][..2], b"10");
+        assert_eq!(&pages.buf[0][2][..10], b"(Optimism)");
+    }
+
+    #[test]
+    fn chain_id_above_u64_fails_loud() {
+        // A >u64 word can't name a real chain; never render a truncated value.
+        let ir = ir_with_path(&slot_prog(0));
+        let mut body = [0u8; 32];
+        body[0] = 1; // high byte set -> > u64
+        let tx = envelope_chain(1);
+        let mut pages = Pages::with_len(0);
+        render_chain_id(&field(FormatOp::ChainId), &mut pages, &ir, &body, &tx)
+            .expect("renders");
+        assert_eq!(&pages.buf[0][1][..13], b"! CHAIN >2^64");
+    }
+
+    #[test]
+    fn token_ticker_unbound_shows_address_not_unknown() {
+        // Field path -> head word 0 = token address; no erc20 metadata bound.
+        // The faithful formatter must show the address (token identity), not
+        // the old "(unknown token)" that hid the signed operand.
+        let ir = ir_with_path(&slot_prog(0));
+        let token = [0xABu8; 20];
+        let mut body = [0u8; 32];
+        body[12..32].copy_from_slice(&token);
+        let tx = envelope_chain(1);
+        let resolver = NameResolver::new();
+        let params = ParamSet::default();
+        let mut pages = Pages::with_len(0);
+        render_token_ticker(
+            &field(FormatOp::TokenTicker),
+            &mut pages,
+            &ir,
+            &body,
+            &tx,
+            None,
+            &resolver,
+            &params,
+        )
+        .expect("renders");
+        // Full address shown: write_addr_full_or_name paints "0x" + hex on r1.
+        assert_eq!(&pages.buf[0][1][..2], b"0x");
+        assert_eq!(pages.buf[0][1][2], b'a', "first nibble of 0xAB");
+        assert_eq!(pages.buf[0][1][3], b'b');
+        // The pre-fix hid the operand behind this literal.
+        assert_ne!(&pages.buf[0][1][..15], b"(unknown token)");
+    }
+
+    #[test]
+    fn token_ticker_bound_shows_symbol() {
+        let ir = ir_with_path(&slot_prog(0));
+        let token = [0xCDu8; 20];
+        let mut body = [0u8; 32];
+        body[12..32].copy_from_slice(&token);
+        let tx = envelope_chain(1);
+        let meta = Erc20Metadata {
+            chain_id: 1,
+            contract: token,
+            decimals: 6,
+            name: b"USD Coin",
+            symbol: b"USDC",
+        };
+        let resolver = NameResolver::new();
+        let params = ParamSet::default();
+        let mut pages = Pages::with_len(0);
+        render_token_ticker(
+            &field(FormatOp::TokenTicker),
+            &mut pages,
+            &ir,
+            &body,
+            &tx,
+            Some(&meta),
+            &resolver,
+            &params,
+        )
+        .expect("renders");
+        assert_eq!(&pages.buf[0][1][..4], b"USDC");
     }
 }
