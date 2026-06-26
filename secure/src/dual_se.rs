@@ -153,27 +153,44 @@ impl WalletStore for DualSecureElement {
 
         let mut half_o = self.generate_split_half()?;
         secure_log!("[DUAL/prov] rng OK (3-source XOR mix), calling optiga.provision");
-        let half_e = xor_32(entropy, &half_o);
+        let mut half_e = xor_32(entropy, &half_o);
+
+        // Under the ML-KEM hybrid inner wrap (#28), seal each half BEFORE it
+        // crosses I²C: the SE stores the 32-byte AES-GCM ciphertext (object
+        // size unchanged), and the 1568-byte ML-KEM ct + 16-byte tag go to the
+        // ct-store. Without the feature the raw half is stored — the validated
+        // direct-half flow, byte-for-byte. (`[u8; 32]` is Copy, so the
+        // non-wrapped arm just aliases the halves; all copies are zeroized below.)
+        #[cfg(feature = "mlkem-inner-wrap")]
+        let (mut se_half_o, mut se_half_e) = (
+            crate::pq_wrap::seal_half_for_se(crate::pq_wrap::HalfId::OptigaHalfO, 0, &half_o)
+                .map_err(|_| SeError::InternalError)?,
+            crate::pq_wrap::seal_half_for_se(crate::pq_wrap::HalfId::Se050HalfE, 0, &half_e)
+                .map_err(|_| SeError::InternalError)?,
+        );
+        #[cfg(not(feature = "mlkem-inner-wrap"))]
+        let (mut se_half_o, mut se_half_e) = (half_o, half_e);
 
         // Both SEs get the same master_secret (derived from full entropy).
         // This lets us cross-verify on unlock.
         //
-        // OPTIGA Trust M stores half_O as its "entropy" and master_secret
-        // behind the HMAC auth reference PIN gate.
-        // SE050 stores half_E as its "entropy" behind hardware UserID PIN gating.
-        //
-        // The VK and bootstrap VK are identical on both chips.
-        if let Err(e) = self.optiga.provision(&half_o, master_secret, vk, bootstrap_vk, pin) {
+        // OPTIGA Trust M stores its half-object + master_secret behind the HMAC
+        // auth reference PIN gate; SE050 stores its half-object behind hardware
+        // UserID PIN gating. The VK and bootstrap VK are identical on both chips.
+        if let Err(e) = self.optiga.provision(&se_half_o, master_secret, vk, bootstrap_vk, pin) {
             secure_log!("[DUAL/prov] optiga.provision FAILED: {:?}", e);
             return Err(e);
         }
         secure_log!("[DUAL/prov] optiga OK, calling se050.provision");
-        if let Err(e) = self.se050.provision(&half_e, master_secret, vk, bootstrap_vk, pin) {
+        if let Err(e) = self.se050.provision(&se_half_e, master_secret, vk, bootstrap_vk, pin) {
             secure_log!("[DUAL/prov] se050.provision FAILED: {:?}", e);
             return Err(e);
         }
 
         half_o.zeroize();
+        half_e.zeroize();
+        se_half_o.zeroize();
+        se_half_e.zeroize();
         crate::fi::zeroize_barrier();
 
         secure_log!("[DUAL] Provisioned: entropy XOR-split across OPTIGA Trust M + SE050");
@@ -375,6 +392,17 @@ impl WalletStore for DualSecureElement {
             &blob_o[..blob_o_len], &master_o
         ).map_err(|_| UnlockError::InternalError)?;
         blob_o.zeroize();
+        // Under the inner wrap, what the SE stored (and we just decrypted) is
+        // the 32-byte AES-GCM ciphertext; open it (ct + tag from the ct-store)
+        // to recover the real half_O. The borrow in `&half_o` ends before the
+        // re-assignment.
+        #[cfg(feature = "mlkem-inner-wrap")]
+        {
+            half_o = crate::pq_wrap::open_half_from_se(
+                crate::pq_wrap::HalfId::OptigaHalfO, 0, &half_o,
+            )
+            .map_err(|_| UnlockError::InternalError)?;
+        }
 
         let mut blob_e = [0u8; 64];
         let blob_e_len = self.se050.read_entropy_blob(&mut blob_e)
@@ -387,6 +415,14 @@ impl WalletStore for DualSecureElement {
             &blob_e[..blob_e_len], &master_e
         ).map_err(|_| UnlockError::InternalError)?;
         blob_e.zeroize();
+        // Same for half_E on the SE050.
+        #[cfg(feature = "mlkem-inner-wrap")]
+        {
+            half_e = crate::pq_wrap::open_half_from_se(
+                crate::pq_wrap::HalfId::Se050HalfE, 0, &half_e,
+            )
+            .map_err(|_| UnlockError::InternalError)?;
+        }
         let mut me = master_e;
         me.zeroize();
 
