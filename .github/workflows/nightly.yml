@@ -86,8 +86,13 @@ jobs:
           ocaml-compiler: "4.14.2"
       # Pin to the exact locally-validated backend set (the DONJON doc's 0.10.0
       # is stale; the working pair is binsec 0.11.1 + unisim_archisec 0.0.14).
-      - name: opam install binsec (pinned)
-        run: opam install -y binsec.0.11.1 unisim_archisec.0.0.14
+      # ORDER MATTERS: binsec compiles its ARM decoder (-arm-supported-modes,
+      # needed for thumbv8m) only when unisim_archisec is present at binsec
+      # BUILD time. Install unisim first, then (re)build binsec against it.
+      - name: opam install binsec backend (unisim first → binsec gets ARM)
+        run: |
+          opam install -y unisim_archisec.0.0.14
+          opam reinstall -y binsec.0.11.1 2>/dev/null || opam install -y binsec.0.11.1
       # The checkct driver crates reference `checkct_macros` at a path relative
       # to a SIBLING `cargo-checkct/` (../../../../../cargo-checkct/...), so the
       # tool must be cloned NEXT TO the repo checkout, not under $HOME — and
