@@ -3632,6 +3632,21 @@ miri:
 	MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-permissive-provenance" cargo +nightly miri test -p sphincs-tz-secure --no-default-features --features mock-se,debug-log,ui-semihosting -- ns_ptr ptr_validate
 	@echo "==> miri: PASS"
 
+# Mutation testing (SOTA 2026-06 §11 mutation-testing pilot): measures TEST
+# STRENGTH — cargo-mutants perturbs each function (flip </<=, >/>=, -/+, drop a
+# return value, …) and checks the test suite catches it. A "MISSED" mutant = a
+# behaviour the tests don't pin. Scope to the security-relevant pure-logic
+# crates (the adversarial parse + key-derivation surface). NOTE: many "missed"
+# mutants live in functions that are KANI-PROVEN (rlp decode_item /
+# bytes_to_u256 have #[kani::proof] harnesses cargo-mutants does NOT run) — so
+# read MISSED ∩ not-Kani-covered as the real gap. 2026-06-26 baseline:
+# pqsigner-tx-core 210/239 caught (88%); the real gap is U256::format_decimal
+# boundary conditions (the amount-display / WYSIWYS path) — hardening tracked.
+.PHONY: mutants
+mutants:
+	@command -v cargo-mutants >/dev/null 2>&1 || { echo "ERROR: cargo-mutants not found. Install: cargo install --locked cargo-mutants"; exit 1; }
+	cargo mutants $(or $(MUTANTS_ARGS),--package pqsigner-tx-core --package pqsigner-domain) -j4
+
 # UI golden-screenshot gate (Trezor-port, SOTA 2026-06 §6). Builds the e2e
 # suite with the `ui-capture` feature so every secure-world Display::flush()
 # emits a `[UI-FP] <idx> <sha256>` line (secure/src/ui/capture.rs), runs it
