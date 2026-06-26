@@ -71,6 +71,11 @@ jobs:
   checkct:
     name: cargo-checkct (binsec relational CT proof)
     runs-on: ubuntu-latest
+    # Manual-dispatch only (not the nightly schedule): it can't go green yet
+    # (see RESIDUAL below), so running it every night would just burn CI minutes
+    # on a yellow job. Run it with `gh workflow run nightly.yml` while working
+    # the from-source binsec build.
+    if: github.event_name == 'workflow_dispatch'
     # NON-BLOCKING (WIP). What's PROVEN to work in CI: opam + ocaml, the binsec
     # 0.11.1 / unisim_archisec install, the cargo-checkct build, and invoking
     # binsec with the exact local args. RESIDUAL: CI's opam-RELEASED binsec
