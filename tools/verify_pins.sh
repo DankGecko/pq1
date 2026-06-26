@@ -42,6 +42,13 @@
 #      * `rust-toolchain.toml` pins `channel = "nightly-YYYY-MM-DD"`
 #        or an exact semver, never bare `nightly` / `stable` / `beta`.
 #
+#   5. GitHub Actions                                       [.github/workflows]
+#      * Every third-party action `uses:`d in any workflow is pinned to a
+#        40-char commit SHA. Mutable tags (@vN / @main / @stable) can be
+#        force-moved upstream to run arbitrary code in CI — and some jobs ARE
+#        the verification gates (cargo-deny, reproducible-build, Kani). Local
+#        `./...` composite/reusable actions are exempt (they live in-repo).
+#
 # Output convention:
 #     [ok ]   check passed
 #     [FAIL]  check failed — script exits 1 with a fix hint
@@ -60,7 +67,7 @@ note() { printf "  [..] %s\n" "$*"; }
 fail_count=0
 trap 'printf "\nsupply-chain pin check FAILED — build refused.\n" >&2; exit 1' ERR
 
-echo "==> 1/4 Cargo workspace"
+echo "==> 1/5 Cargo workspace"
 
 # 1a. Cargo.lock in sync with all Cargo.toml files. Running
 #     `cargo metadata --locked --offline` would need a populated
@@ -103,9 +110,14 @@ ok "every registry dep in Cargo.lock has a SHA-256 checksum"
 #         git specs are banned here — we want the pin visible next
 #         to the URL).
 #       * the entire Cargo.toml tree is searched (excluding target/).
+#     Excludes target/ (build output) and node_modules/ (npm-vendored test
+#     fixtures inside foundry libs — e.g. webauthn-sol's hardhat harness ships
+#     a transitive rustbn.js/Cargo.toml with a branch= git dep; it is never a
+#     PQSigner build dep and a local `npm install` must not fail the gate).
 unpinned_git="$(grep -rn --include="Cargo.toml" 'git *= *"' . \
     2>/dev/null \
     | grep -v '^\./target' \
+    | grep -v '/node_modules/' \
     | grep -Ev 'rev *= *"[0-9a-fA-F]{40}"' || true)"
 if [ -n "$unpinned_git" ]; then
     fail "git dep(s) not pinned to a 40-char commit hash:
@@ -116,7 +128,7 @@ $unpinned_git
 fi
 ok "every 'git =' dep has a 40-char rev pin"
 
-echo "==> 2/4 Solidity lib submodules (foundry)"
+echo "==> 2/5 Solidity lib submodules (foundry)"
 
 lockf="contracts/smart-wallet/foundry.lock"
 if [ ! -f "$lockf" ]; then
@@ -173,7 +185,7 @@ if [ -d contracts/smart-wallet/lib ]; then
 fi
 ok "no lib/ directories outside foundry.lock"
 
-echo "==> 3/4 NPM (circuits/)"
+echo "==> 3/5 NPM (circuits/)"
 
 if [ ! -f circuits/package-lock.json ]; then
     fail "circuits/package-lock.json missing — npm has no pin source.
@@ -205,7 +217,7 @@ else
     note "npm not installed on PATH — skipped lockfile sync check"
 fi
 
-echo "==> 4/4 Rust toolchain"
+echo "==> 4/5 Rust toolchain"
 
 # rust-toolchain.toml must pin a dated nightly or exact semver.
 # Accepting bare 'nightly' / 'stable' / 'beta' would drift silently.
@@ -215,6 +227,29 @@ if ! grep -qE 'channel *= *"(nightly-[0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]+\.[0-9]+\.
        / 'stable' drifts silently when rustup updates the default."
 fi
 ok "rust-toolchain.toml channel is pinned"
+
+echo "==> 5/5 GitHub Actions (SHA pins)"
+
+# Every third-party action `uses:`d in .github/workflows must be pinned to a
+# 40-char commit SHA. A mutable @vN/@branch tag can be force-moved upstream to
+# run arbitrary code in CI — and some of these jobs ARE the verification gates
+# (cargo-deny, the reproducible-build byte-diff, Kani). Local `./...` actions
+# are exempt. Detect: a `uses:` whose ref after `@` is not 40 hex chars.
+if [ -d .github/workflows ]; then
+    unpinned_actions="$(grep -rnE '^[[:space:]]*-?[[:space:]]*uses:[[:space:]]+[^@[:space:]]+@' .github/workflows/ 2>/dev/null \
+        | grep -vE 'uses:[[:space:]]+\./' \
+        | grep -vE 'uses:[[:space:]]+[^@[:space:]]+@[0-9a-fA-F]{40}([[:space:]]|#|$)' || true)"
+    if [ -n "$unpinned_actions" ]; then
+        fail "GitHub Action(s) not pinned to a 40-char commit SHA:
+$unpinned_actions
+       fix: replace @vN / @branch with @<40-char-sha> # vN — resolve via
+       'gh api repos/<owner>/<repo>/commits/<tag> --jq .sha'. Mutable tags can
+       be force-moved upstream to run arbitrary code in CI."
+    fi
+    ok "every .github/workflows action is SHA-pinned"
+else
+    note ".github/workflows absent — skipped GitHub Action pin check"
+fi
 
 echo ""
 echo "==> all supply-chain pin checks passed."
