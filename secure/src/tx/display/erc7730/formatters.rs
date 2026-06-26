@@ -771,6 +771,22 @@ fn format_iso8601_utc(
 ) {
     let (year, mon, day, hour, min, sec) = unix_to_ymdhms(secs);
 
+    // WYSIWYS (audit 2026-06-26 — date year truncation). The 4-digit
+    // "YYYY" field can only honestly show years 0..=9999. `read_u64_be_tail`
+    // accepts any timestamp <= u64::MAX (year ~584e9), and the prior
+    // `as u16` cast in `unix_to_ymdhms` wrapped the year mod 65536 — so a
+    // perpetual EIP-3009 `validBefore` (true year ~67570, unix ~2.07e12)
+    // rendered as a benign "2034" while the signature committed to an
+    // effectively-unbounded validity window. Fail LOUD, matching the
+    // sibling `! TIME >2^64` guard, so a far-future expiry can never read
+    // as a near one (display != signed).
+    if !(0..=9999).contains(&year) {
+        write_line(r1, "! YEAR >9999");
+        write_line(r2, "(far-future)");
+        return;
+    }
+    let year = year as u16; // safe: 0..=9999 after the guard above
+
     for cell in r1.iter_mut() {
         *cell = b' ';
     }
@@ -804,7 +820,7 @@ fn write_2digit(out: &mut [u8], n: u8) {
 
 /// Convert unix seconds → `(year, month, day, hour, min, sec)` UTC.
 /// Civil-from-days algorithm by Howard Hinnant (public domain).
-fn unix_to_ymdhms(secs: u64) -> (u16, u8, u8, u8, u8, u8) {
+fn unix_to_ymdhms(secs: u64) -> (i64, u8, u8, u8, u8, u8) {
     let days = (secs / 86_400) as i64;
     let sod = (secs % 86_400) as u32;
     let hour = (sod / 3600) as u8;
@@ -821,7 +837,12 @@ fn unix_to_ymdhms(secs: u64) -> (u16, u8, u8, u8, u8, u8) {
     let mp = (5 * doy + 2) / 153;
     let d = (doy - (153 * mp + 2) / 5 + 1) as u8;
     let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u8;
-    let year = (y + if m <= 2 { 1 } else { 0 }) as u16;
+    // Full i64 year — deliberately NOT truncated to u16. The old `as u16`
+    // cast wrapped the year mod 65536, so a far-future timestamp (a u64
+    // second count `read_u64_be_tail` accepts) rendered as a benign near
+    // year. `format_iso8601_utc` now fails loud on any year outside
+    // 0..=9999 (audit 2026-06-26 — date year truncation).
+    let year = y + if m <= 2 { 1 } else { 0 };
 
     (year, m, d, hour, min, sec)
 }
@@ -1139,5 +1160,70 @@ mod date_overflow_fixed {
         five[31] = 5;
         assert_eq!(read_u64_be_tail(&five), Some(5));
         assert_eq!(read_u64_be_tail(&[0u8; 32]), Some(0));
+    }
+}
+
+#[cfg(test)]
+mod date_year_truncation_fixed {
+    //! REGRESSION (audit 2026-06-26 — date year `u16` truncation).
+    //!
+    //! `read_u64_be_tail` accepts every timestamp `<= u64::MAX`, but
+    //! `unix_to_ymdhms` used to cast the computed year `as u16`, wrapping it
+    //! mod 65536. A companion-controlled `validBefore` (EIP-3009
+    //! `TransferWithAuthorization`, the pinned `circle-usdc-twa` descriptor,
+    //! `format:"date"`) of true year 67570 (unix ~2.07e12) therefore
+    //! rendered the benign "2034" while the signature committed to an
+    //! effectively-perpetual validity window — a display != signed gap and
+    //! the unfixed residual of the 2026-06-23 `>2^64` fix. The renderer now
+    //! returns the full i64 year and fails loud (`! YEAR >9999`) outside
+    //! 0..=9999.
+    use super::{format_iso8601_utc, unix_to_ymdhms, DISPLAY_COLS};
+
+    #[test]
+    fn unix_to_ymdhms_returns_untruncated_year() {
+        // 2.1e12 s ≈ year 68515 — far past the 4-digit field but within the
+        // u64 the date reader accepts. The year must come back whole, never
+        // wrapped (68515 mod 65536 = 2979 was the pre-fix lie).
+        let (year, ..) = unix_to_ymdhms(2_100_000_000_000);
+        assert!(year > 9999, "year must not wrap; got {year}");
+        assert_ne!(year, 2979, "year must not be the mod-65536 wrap value");
+    }
+
+    #[test]
+    fn far_future_timestamp_within_u64_fails_loud() {
+        // The concrete exploit vector: a perpetual `validBefore` that the
+        // reader passes (<= u64::MAX) must NEVER render as a plausible near
+        // year. It paints the loud marker instead.
+        let mut r1 = [b' '; DISPLAY_COLS];
+        let mut r2 = [b' '; DISPLAY_COLS];
+        format_iso8601_utc(2_100_000_000_000, &mut r1, &mut r2);
+        assert_eq!(&r1[..12], b"! YEAR >9999");
+        // And crucially must not read as any benign near year.
+        assert_ne!(&r1[..4], b"2979");
+        assert_ne!(&r1[..4], b"2034");
+    }
+
+    #[test]
+    fn year_9999_boundary_renders_but_year_10000_fails_loud() {
+        // 9999-12-31T23:59:59Z is the last honestly-renderable second.
+        let mut r1 = [b' '; DISPLAY_COLS];
+        let mut r2 = [b' '; DISPLAY_COLS];
+        format_iso8601_utc(253_402_300_799, &mut r1, &mut r2);
+        assert_eq!(&r1[..4], b"9999");
+        // 10000-01-01T00:00:00Z is the first that cannot.
+        let mut r1b = [b' '; DISPLAY_COLS];
+        let mut r2b = [b' '; DISPLAY_COLS];
+        format_iso8601_utc(253_402_300_800, &mut r1b, &mut r2b);
+        assert_eq!(&r1b[..12], b"! YEAR >9999");
+    }
+
+    #[test]
+    fn ordinary_dates_still_render_unchanged() {
+        let mut r1 = [b' '; DISPLAY_COLS];
+        let mut r2 = [b' '; DISPLAY_COLS];
+        // 2024-01-01T00:00:00Z.
+        format_iso8601_utc(1_704_067_200, &mut r1, &mut r2);
+        assert_eq!(&r1[..10], b"2024-01-01");
+        assert_eq!(&r2[..9], b"00:00:00 ");
     }
 }
