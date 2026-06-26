@@ -295,6 +295,26 @@ pub fn optiga_pairing_secret() -> Result<[u8; 64], OtpError> {
     Ok(out)
 }
 
+/// 64-byte ML-KEM-1024 keypair seed (`d‖z`, the FIPS-203 `from_seed` input)
+/// for the dual-SE hybrid inner wrap. Device-bound, deterministic across
+/// boots, never stored in plaintext — same DHUK / dev-OTP axis as the OPTIGA
+/// PBS. See `docs/security/ml-kem-inner-wrap.md`.
+pub fn mlkem_seed() -> Result<[u8; 64], OtpError> {
+    let mut out = [0u8; 64];
+    derive_into(b"pqsigner/mlkem-seed-v1", &mut out)?;
+    Ok(out)
+}
+
+/// 32-byte hybrid HUK secret for the inner wrap's KDF
+/// (`K = HMAC-SHA256(huk_secret, mlkem_ss ‖ aad ‖ tag)`). A SEPARATE label
+/// from `mlkem_seed`, so the AEAD-key floor binds an independent device
+/// secret — a future ML-KEM break alone can't recover a half without it.
+pub fn mlkem_wrap_secret() -> Result<[u8; 32], OtpError> {
+    let mut out = [0u8; 32];
+    derive_into(b"pqsigner/mlkem-wrap-huk-v1", &mut out)?;
+    Ok(out)
+}
+
 /// 16-byte SE050 SCP03 encryption key. Rotated per device (replaces
 /// the published AN12436 default) once we wire this into the SE050
 /// SCP03 channel — see work-todo #20.

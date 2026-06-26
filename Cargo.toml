@@ -107,6 +107,7 @@ sphincs-c10       = { path = "sphincs-c10" }
 masked-sha2       = { path = "masked-sha2" }
 fw-manifest       = { path = "fw-manifest" }
 pqsigner-fi       = { path = "pqsigner-fi" }
+pqsigner-pq-seal  = { path = "pq-seal" }
 bls12_381 = { package = "bls12_381_pka", path = "bls12_381_pka", default-features = false, features = ["groups", "pairings"] }
 
 # no_std crypto shared by `secure` + `bip39`

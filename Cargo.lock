@@ -2202,6 +2202,7 @@ dependencies = [
  "pqsigner-domain",
  "pqsigner-erc7730",
  "pqsigner-fi",
+ "pqsigner-pq-seal",
  "pqsigner-tx",
  "pqsigner-tx-core",
  "proptest",

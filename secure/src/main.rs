@@ -153,6 +153,11 @@ mod optiga;
 mod dual_se;
 #[cfg(not(test))]
 mod measured_boot;
+// ML-KEM-1024 hybrid inner-wrap firmware adapter (binds pqsigner-pq-seal to
+// hw::huk + the TRNG). Gated on the self-test feature until piece 2b wires it
+// into the dual-SE provision/reconstruct path.
+#[cfg(feature = "mlkem-self-test")]
+mod pq_wrap;
 #[cfg(not(test))]
 mod ui;
 #[cfg(not(test))]
@@ -510,6 +515,28 @@ pub unsafe fn se_random(
     // `random` methods returning their backend-specific error
     // type; the trait method returns `Result<_, SeError>`).
     <_ as WalletStore>::random(se, buf)
+}
+
+/// ML-KEM inner-wrap self-test — runs under `mlkem-self-test` only. Round-trips
+/// a dummy half through the HUK-derived ML-KEM keypair + the TRNG via
+/// `pq_wrap::self_test` (which also checks cross-half AAD rejection), logs
+/// PASS/FAIL, exits cleanly via `SYS_EXIT` so `probe-rs`/QEMU returns. Never
+/// returns. This is the call that pulls ml-kem into the image (flash-delta
+/// measurement) and validates the `hw::huk` binding before piece 2b wires the
+/// wrap into provision/reconstruct.
+#[cfg(feature = "mlkem-self-test")]
+fn mlkem_self_test_and_halt() -> ! {
+    secure_log!("[S][mlkem] inner-wrap self-test ...");
+    if pq_wrap::self_test() {
+        secure_log!("[S][mlkem] self-test PASS");
+        cortex_m_semihosting::debug::exit(cortex_m_semihosting::debug::EXIT_SUCCESS);
+    } else {
+        secure_log!("[S][mlkem] self-test FAIL");
+        cortex_m_semihosting::debug::exit(cortex_m_semihosting::debug::EXIT_FAILURE);
+    }
+    loop {
+        cortex_m::asm::wfe();
+    }
 }
 
 /// SAES Tier-1 bring-up self-test — runs under `saes-self-test` only.
@@ -1024,6 +1051,12 @@ fn main() -> ! {
     // enabled — the driver module itself is gated on `saes-dhuk`.
     #[cfg(feature = "saes-self-test")]
     saes_self_test_and_halt();
+
+    // ML-KEM inner-wrap self-test (#28 piece 2b validation). Round-trips a
+    // dummy half through the HUK-derived keypair + TRNG, halts on PASS/FAIL.
+    // Does nothing unless `mlkem-self-test` is enabled.
+    #[cfg(feature = "mlkem-self-test")]
+    mlkem_self_test_and_halt();
 
     // Firmware anti-rollback test (feature `fw-rollback-e2e`). Runs the real
     // verify_manifest chain against dev-key-signed v1/v2/v3 manifests + test

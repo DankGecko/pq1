@@ -10,6 +10,10 @@ fw-manifest       = { workspace = true }
 # FI hardening primitives shared with FSBL — `secure/src/fi.rs` is a thin
 # shim over this crate, supplying the secure-world's TRNG-backed RNG.
 pqsigner-fi       = { workspace = true }
+# ML-KEM-1024 + HMAC(HUK) + AES-256-GCM hybrid inner wrap for the dual-SE
+# entropy halves (HNDL/CRQC defence). `secure/src/pq_wrap.rs` binds it to
+# `hw::huk` + the TRNG. See `docs/security/ml-kem-inner-wrap.md`.
+pqsigner-pq-seal  = { workspace = true }
 # Pure-logic tx primitives (RLP, EIP-1559 envelope, U256, keccak256).
 # Extracted from `secure/src/tx/{rlp,eip1559,hash}.rs` in Phase 5 PR 5.1.
 # `secure/src/tx/mod.rs` re-exports through it so existing call sites
@@ -401,6 +405,13 @@ saes-dhuk = ["stm32u585"]
 # with `debug-log` at the make-target level (see `saes-self-test-hw`).
 # Use `make saes-self-test-hw`.
 saes-self-test = ["saes-dhuk"]
+# Boot-time ML-KEM inner-wrap self-test: round-trips a dummy half through
+# `pq_wrap::{seal_half_hw, open_half_hw}` (the real HUK-derived keypair +
+# TRNG) and logs PASS/FAIL via `secure_log!`. OFF by default — it is what
+# pulls ml-kem into the image, so production builds that don't yet wire the
+# wrap pay zero size/CT cost. Validates the HUK binding + measures the
+# ml-kem flash delta before the provision/reconstruct rewiring lands.
+mlkem-self-test = ["stm32u585"]
 
 # Masked-SHA-256 overhead bench (work-todo §18 SHAKE-vs-SHA2 #2
 # measurement). Runs once at boot, DWT-times the masked gates +
