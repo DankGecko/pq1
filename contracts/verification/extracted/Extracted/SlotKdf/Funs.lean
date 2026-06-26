@@ -130,4 +130,69 @@ def derive_c10_slot_seeds
   let pk_seed1 := index_mut_back4 s16
   ok (sk_seed, pk_seed1)
 
+/-- [pqsigner_domain::slot_master_entropy_from_bip39]:
+    Source: 'domain/src/lib.rs', lines 409:0-437:1 -/
+def slot_master_entropy_from_bip39
+  (bip39_seed : Array Std.U8 64#usize) (account_index : Std.U32) :
+  Result (Array Std.U8 32#usize)
+  := do
+  if account_index = 0#u32
+  then
+    let buf := Array.repeat 85#usize 0#u8
+    let (s, index_mut_back) ←
+      core.array.Array.index_mut (core.ops.index.IndexMutSlice
+        (core.slice.index.SliceIndexRangeUsizeSlice Std.U8)) buf
+        { start := 0#usize, «end» := 20#usize }
+    let s1 ←
+      lift (Array.to_slice
+        (Array.make 20#usize [
+          112#u8, 113#u8, 119#u8, 97#u8, 108#u8, 108#u8, 101#u8, 116#u8, 45#u8,
+          115#u8, 108#u8, 111#u8, 116#u8, 45#u8, 109#u8, 97#u8, 115#u8, 116#u8,
+          101#u8, 114#u8
+          ]))
+    let s2 ← core.slice.Slice.copy_from_slice core.marker.CopyU8 s s1
+    let buf1 := index_mut_back s2
+    let (s3, index_mut_back1) ←
+      core.array.Array.index_mut (core.ops.index.IndexMutSlice
+        (core.slice.index.SliceIndexRangeUsizeSlice Std.U8)) buf1
+        { start := 20#usize, «end» := 84#usize }
+    let s4 ← lift (Array.to_slice bip39_seed)
+    let s5 ← core.slice.Slice.copy_from_slice core.marker.CopyU8 s3 s4
+    let buf2 := index_mut_back1 s5
+    let buf3 ← Array.update buf2 84#usize 0#u8
+    let s6 ← lift (Array.to_slice buf3)
+    sha256_bytes s6
+  else
+    let buf := Array.repeat 93#usize 0#u8
+    let (s, index_mut_back) ←
+      core.array.Array.index_mut (core.ops.index.IndexMutSlice
+        (core.slice.index.SliceIndexRangeUsizeSlice Std.U8)) buf
+        { start := 0#usize, «end» := 25#usize }
+    let s1 ←
+      lift (Array.to_slice
+        (Array.make 25#usize [
+          112#u8, 113#u8, 119#u8, 97#u8, 108#u8, 108#u8, 101#u8, 116#u8, 45#u8,
+          115#u8, 108#u8, 111#u8, 116#u8, 45#u8, 109#u8, 97#u8, 115#u8, 116#u8,
+          101#u8, 114#u8, 45#u8, 97#u8, 99#u8, 99#u8, 116#u8
+          ]))
+    let s2 ← core.slice.Slice.copy_from_slice core.marker.CopyU8 s s1
+    let buf1 := index_mut_back s2
+    let (s3, index_mut_back1) ←
+      core.array.Array.index_mut (core.ops.index.IndexMutSlice
+        (core.slice.index.SliceIndexRangeUsizeSlice Std.U8)) buf1
+        { start := 25#usize, «end» := 89#usize }
+    let s4 ← lift (Array.to_slice bip39_seed)
+    let s5 ← core.slice.Slice.copy_from_slice core.marker.CopyU8 s3 s4
+    let buf2 := index_mut_back1 s5
+    let (s6, index_mut_back2) ←
+      core.array.Array.index_mut (core.ops.index.IndexMutSlice
+        (core.slice.index.SliceIndexRangeUsizeSlice Std.U8)) buf2
+        { start := 89#usize, «end» := 93#usize }
+    let a ← lift (core.num.U32.to_be_bytes account_index)
+    let s7 ← lift (Array.to_slice a)
+    let s8 ← core.slice.Slice.copy_from_slice core.marker.CopyU8 s6 s7
+    let buf3 := index_mut_back2 s8
+    let s9 ← lift (Array.to_slice buf3)
+    sha256_bytes s9
+
 end pqsigner_domain

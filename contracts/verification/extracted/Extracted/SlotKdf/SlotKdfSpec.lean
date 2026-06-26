@@ -154,4 +154,83 @@ theorem derive_c10_slot_seeds_byte_layout (se : Std.Array U8 32#usize) :
     rw [setSlice_head16_of_32 _ _ (by simp) (by simp)]
     simp [List.map_append, List.map_take, List.map_drop, List.drop_replicate]
 
+/-! ## `slot_master_entropy_from_bip39` byte-layout (the account-binding step) -/
+
+/-- ASCII bytes of `"pqwallet-slot-master"`. -/
+def slotMasterLabel : List Nat :=
+  [112, 113, 119, 97, 108, 108, 101, 116, 45, 115, 108, 111, 116, 45, 109, 97, 115, 116, 101, 114]
+
+/-- ASCII bytes of `"pqwallet-slot-master-acct"`. -/
+def slotMasterAcctLabel : List Nat :=
+  [112, 113, 119, 97, 108, 108, 101, 116, 45, 115, 108, 111, 116, 45, 109, 97, 115, 116, 101, 114,
+   45, 97, 99, 99, 116]
+
+/-- Three contiguous `setSlice!`s (25 ‖ 64 ‖ 4 = 93) over any 93-byte base. -/
+theorem setSlice93_layout
+    (base a b c : List Nat) (hbase : base.length = 93)
+    (ha : a.length = 25) (hb : b.length = 64) (hc : c.length = 4) :
+    ((((base.setSlice! 0 a).setSlice! 25 b).setSlice! 89 c)) = a ++ b ++ c := by
+  simp only [List.setSlice!, ha, hb, hc, hbase,
+             List.length_append, List.take_append, List.drop_append, List.append_assoc]
+  simp +arith [List.take_of_length_le, List.drop_eq_nil_of_le, ha, hb, hc, hbase,
+               List.length_append, List.take_append, List.drop_append, List.drop_drop]
+
+/-- The account-0 path: two `setSlice!`s (20 ‖ 64) over an 85-byte base, then
+    `.set 84 0` for the trailing `kdf` index byte. The two segments cover
+    `[0,84)`, leaving one byte at 84 which `.set 84 0` forces to 0 — so the
+    result is `a ‖ b ‖ [0]` for any 85-byte base. -/
+theorem setSlice85_set_layout
+    (base a b : List Nat) (i v : Nat) (hbase : base.length = 85)
+    (ha : a.length = 20) (hb : b.length = 64) (hi : i = 84) (hv : v = 0) :
+    (((base.setSlice! 0 a).setSlice! 20 b).set i v) = a ++ b ++ [0] := by
+  subst hi hv
+  have h2 : (base.setSlice! 0 a).setSlice! 20 b = a ++ b ++ base.drop 84 := by
+    simp only [List.setSlice!, ha, hb, hbase,
+               List.length_append, List.take_append, List.drop_append, List.append_assoc]
+    simp +arith [List.take_of_length_le, List.drop_eq_nil_of_le, ha, hb, hbase,
+                 List.length_append, List.take_append, List.drop_append, List.drop_drop]
+  obtain ⟨x, hx⟩ := List.length_eq_one_iff.mp (show (base.drop 84).length = 1 by simp [hbase])
+  rw [h2, hx]
+  simp [ha, hb, List.set_append]
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 1000000 in
+/-- **`slot_master_entropy_from_bip39` byte-layout.** For all inputs, the
+    extracted derivation returns `sha256` of the account-bound preimage:
+    account 0 → `"pqwallet-slot-master" ‖ bip39_seed ‖ 0x00`;
+    account ≠ 0 → `"pqwallet-slot-master-acct" ‖ bip39_seed ‖ account_index_be`.
+    The account index is bound into the preimage (the account-0 path keeps the
+    historical `kdf` trailing `0x00`), so distinct accounts have distinct slot
+    master entropy. -/
+theorem slot_master_byte_layout (bip39 : Std.Array U8 64#usize) (acct : U32) :
+    pqsigner_domain.slot_master_entropy_from_bip39 bip39 acct ⦃ r =>
+      ∃ pre : Slice U8,
+        pre.val.map (·.val) = (if acct = 0#u32
+          then slotMasterLabel ++ bip39.val.map (·.val) ++ [0]
+          else slotMasterAcctLabel ++ bip39.val.map (·.val) ++ u32be acct.val)
+        ∧ r = sha256_pure_bytes pre ⦄ := by
+  have l_bip : (bip39.val).length = 64 := by have := bip39.property; simp_all
+  unfold pqsigner_domain.slot_master_entropy_from_bip39
+  simp only [sha256_bytes]
+  by_cases hacct : acct = 0#u32
+  · rw [if_pos hacct]
+    step*
+    refine ⟨_, ?_, rfl⟩
+    rw [if_pos hacct]
+    simp only [*, Array.set_val_eq, Array.val_to_slice, Array.length_to_slice,
+               List.map_setSlice!, List.map_set, Array.repeat_val, List.map_replicate,
+               Array.make, map_val_mk]
+    rw [setSlice85_set_layout _ _ _ _ _ (by simp) (by simp)
+          (by rw [List.length_map]; exact l_bip) (by decide) (by decide)]
+    simp [slotMasterLabel]
+  · rw [if_neg hacct]
+    step*
+    refine ⟨_, ?_, rfl⟩
+    rw [if_neg hacct]
+    simp only [*, Array.val_to_slice, Array.length_to_slice, List.map_setSlice!,
+               Array.repeat_val, Array.make, map_val_mk, toBEBytes32_map_toNat]
+    rw [setSlice93_layout _ _ _ _ (by simp) (by simp) (by rw [List.length_map]; exact l_bip)
+          (by simp [u32be])]
+    simp [slotMasterAcctLabel]
+
 end Extracted.Equiv
