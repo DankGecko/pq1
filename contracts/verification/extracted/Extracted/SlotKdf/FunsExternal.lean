@@ -33,3 +33,32 @@ axiom sha256_pure_bytes : Slice Std.U8 → Array Std.U8 32#usize
     spec over `slot_entropy` — which ends in this call — can assert success. -/
 noncomputable def sha256_bytes (s : Slice Std.U8) : Result (Array Std.U8 32#usize) :=
   ok (sha256_pure_bytes s)
+
+/-- The disclosed pure HMAC-SHA512 (a total `(key,msg) → [u8;64]` function) —
+    the bootstrap master primitive, same disclosed-boundary status as
+    `sha256_pure_bytes`. The bootstrap byte-layout theorem is about the HMAC
+    PREIMAGE (key + message), so it holds for any pure HMAC. -/
+axiom hmac_sha512_pure_bytes : Slice Std.U8 → Slice Std.U8 → Array Std.U8 64#usize
+
+/-- [pqsigner_domain::hmac_sha512_bytes]: the bootstrap single-shot HMAC-SHA512
+    boundary (opaque at extraction). TOTAL wrapper so a WP spec can assert
+    success (HMAC of byte slices never fails). -/
+noncomputable def hmac_sha512_bytes (key msg : Slice Std.U8) :
+    Result (Array Std.U8 64#usize) :=
+  ok (hmac_sha512_pure_bytes key msg)
+
+/-- `zeroize` of an array (the `Zeroize` trait impl): modeled TOTAL (identity) —
+    the ONLY property the byte-layout proof needs is that the call succeeds. Its
+    result is DISCARDED by `let _ ←` in the derivation (it wipes a scratch
+    buffer AFTER the output is computed), so the wipe semantics are irrelevant
+    to the output layout and intentionally not modeled here (secret-hygiene is a
+    separate concern). -/
+def Array.Insts.ZeroizeZeroize.zeroize {Z : Type} {N : Std.Usize}
+    (_inst : zeroize.Zeroize Z) (a : Array Z N) : Result (Array Z N) :=
+  ok a
+
+/-- `zeroize` blanket impl: modeled TOTAL (identity); result discarded — see
+    `Array.Insts.ZeroizeZeroize.zeroize`. -/
+def zeroize.Zeroize.Blanket.zeroize {Z : Type}
+    (_inst : zeroize.DefaultIsZeroes Z) (z : Z) : Result Z :=
+  ok z

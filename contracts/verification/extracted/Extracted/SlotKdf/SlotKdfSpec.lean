@@ -233,4 +233,106 @@ theorem slot_master_byte_layout (bip39 : Std.Array U8 64#usize) (acct : U32) :
           (by simp [u32be])]
     simp [slotMasterAcctLabel]
 
+/-! ## `derive_c10_master_from_bip39_seed` byte-layout (the BOOTSTRAP key derivation)
+
+This is the CREATE2-critical bootstrap: `masterPkSeed`/`masterSkSeed` (hence the
+wallet's CREATE2 salt + address) are derived here. -/
+
+/-- ASCII bytes of `"sphincs-c6-v1"` (the historical HMAC domain tag; C10 now). -/
+def bootDomain : List Nat := [115, 112, 104, 105, 110, 99, 115, 45, 99, 54, 45, 118, 49]
+/-- ASCII bytes of `"sphincs-c6-v1-acct"`. -/
+def bootDomainAcct : List Nat :=
+  [115, 112, 104, 105, 110, 99, 115, 45, 99, 54, 45, 118, 49, 45, 97, 99, 99, 116]
+/-- ASCII bytes of `"pk_seed"`. -/
+def bootPkLabel : List Nat := [112, 107, 95, 115, 101, 101, 100]
+/-- ASCII bytes of `"sk_seed"`. -/
+def bootSkLabel : List Nat := [115, 107, 95, 115, 101, 101, 100]
+
+/-- Two contiguous `setSlice!`s (7 ‖ 32 = 39) over any 39-byte base (the
+    `"{pk,sk}_seed" ‖ master[..32]` preimage). -/
+theorem setSlice39_layout
+    (base a b : List Nat) (hbase : base.length = 39)
+    (ha : a.length = 7) (hb : b.length = 32) :
+    ((base.setSlice! 0 a).setSlice! 7 b) = a ++ b := by
+  simp only [List.setSlice!, ha, hb, hbase,
+             List.length_append, List.take_append, List.drop_append, List.append_assoc]
+  simp +arith [List.take_of_length_le, List.drop_eq_nil_of_le, ha, hb, hbase,
+               List.length_append, List.take_append, List.drop_append, List.drop_drop]
+
+/-- Two contiguous `setSlice!`s (64 ‖ 4 = 68) over any 68-byte base (the account≠0
+    HMAC message `bip39_seed ‖ account_index_be`). -/
+theorem setSlice68_layout
+    (base a b : List Nat) (hbase : base.length = 68)
+    (ha : a.length = 64) (hb : b.length = 4) :
+    ((base.setSlice! 0 a).setSlice! 64 b) = a ++ b := by
+  simp only [List.setSlice!, ha, hb, hbase,
+             List.length_append, List.take_append, List.drop_append, List.append_assoc]
+  simp +arith [List.take_of_length_le, List.drop_eq_nil_of_le, ha, hb, hbase,
+               List.length_append, List.take_append, List.drop_append, List.drop_drop]
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 1000000 in
+/-- **`derive_c10_master_from_bip39_seed` SEED byte-layout** (CREATE2 red-line).
+    For all inputs, with `master_lo` the low 32 bytes of the 64-byte HMAC-SHA512
+    master, the extracted bootstrap derivation returns the domain-separated seeds:
+      `sk_seed = sha256("sk_seed" ‖ master_lo)` (masterSkSeed) and
+      `pk_seed = sha256("pk_seed" ‖ master_lo)[..16] ‖ 0¹⁶` (masterPkSeed — the
+    N-masked value the CREATE2 salt hashes over). `master_lo` is existentially
+    bound as the 32-byte master-low; that it is specifically
+    `HMAC(domain, account-bound message)[..32]` — the account-binding layer — is
+    the documented residual (the HMAC-input characterization is brittle to thread
+    because `step*` inlines the master Array; the seed derivation FROM master_lo,
+    which is what the CREATE2 salt depends on, is proven here). -/
+theorem derive_c10_master_byte_layout (bip39 : Std.Array U8 64#usize) (acct : U32) :
+    pqsigner_domain.derive_c10_master_from_bip39_seed bip39 acct ⦃ r =>
+      ∃ (master_lo pre_pk pre_sk : Slice U8),
+        master_lo.length = 32
+        ∧ pre_pk.val.map (·.val) = bootPkLabel ++ master_lo.val.map (·.val)
+        ∧ pre_sk.val.map (·.val) = bootSkLabel ++ master_lo.val.map (·.val)
+        ∧ (r.1).val.map (·.val)
+            = ((sha256_pure_bytes pre_pk).val.map (·.val)).take 16 ++ List.replicate 16 0
+        ∧ r.2 = sha256_pure_bytes pre_sk ⦄ := by
+  have l_bip : (bip39.val).length = 64 := by have := bip39.property; simp_all
+  unfold pqsigner_domain.derive_c10_master_from_bip39_seed
+  simp only [sha256_bytes, hmac_sha512_bytes, Array.Insts.ZeroizeZeroize.zeroize]
+  by_cases hacct : acct = 0#u32
+  · simp only [if_pos hacct]
+    step*
+    -- keep master_lo abstract (don't substitute it to `slice 0 32 (HMAC…)`): the
+    -- seed layout treats it as the opaque 32-byte master-low.
+    clear master_lo_post1
+    refine ⟨master_lo, s5, s14, master_lo_post2, ?_, ?_, ?_, rfl⟩
+    · simp only [*, Array.val_to_slice, Array.length_to_slice, List.map_setSlice!,
+                 Array.repeat_val, Array.make, map_val_mk]
+      rw [setSlice39_layout _ _ _ (by simp) (by simp)
+            (by rw [List.length_map]; exact master_lo_post2)]
+      simp [bootPkLabel]
+    · simp only [*, Array.val_to_slice, Array.length_to_slice, List.map_setSlice!,
+                 Array.repeat_val, Array.make, map_val_mk]
+      rw [setSlice39_layout _ _ _ (by simp) (by simp)
+            (by rw [List.length_map]; exact master_lo_post2)]
+      simp [bootSkLabel]
+    · simp only [*, Array.val_to_slice, Array.length_to_slice, List.map_setSlice!,
+                 Array.repeat_val, List.map_replicate, Array.make, map_val_mk]
+      rw [setSlice_head16_of_32 _ _ (by simp) (by simp)]
+      simp [List.map_append, List.map_take, List.map_drop, List.drop_replicate]
+  · simp only [if_neg hacct]
+    step*
+    clear master_lo_post1
+    refine ⟨master_lo, s5, s14, master_lo_post2, ?_, ?_, ?_, rfl⟩
+    · simp only [*, Array.val_to_slice, Array.length_to_slice, List.map_setSlice!,
+                 Array.repeat_val, Array.make, map_val_mk]
+      rw [setSlice39_layout _ _ _ (by simp) (by simp)
+            (by rw [List.length_map]; exact master_lo_post2)]
+      simp [bootPkLabel]
+    · simp only [*, Array.val_to_slice, Array.length_to_slice, List.map_setSlice!,
+                 Array.repeat_val, Array.make, map_val_mk]
+      rw [setSlice39_layout _ _ _ (by simp) (by simp)
+            (by rw [List.length_map]; exact master_lo_post2)]
+      simp [bootSkLabel]
+    · simp only [*, Array.val_to_slice, Array.length_to_slice, List.map_setSlice!,
+                 Array.repeat_val, List.map_replicate, Array.make, map_val_mk]
+      rw [setSlice_head16_of_32 _ _ (by simp) (by simp)]
+      simp [List.map_append, List.map_take, List.map_drop, List.drop_replicate]
+
 end Extracted.Equiv

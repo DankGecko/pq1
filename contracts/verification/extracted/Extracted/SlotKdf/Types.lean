@@ -15,4 +15,17 @@ set_option maxRecDepth 2048
 
 namespace pqsigner_domain
 
+/-- Trait declaration: [zeroize::Zeroize] (needed by the bootstrap rank's
+    `master.zeroize()` — the wipe whose result is discarded). -/
+@[rust_trait "zeroize::Zeroize"]
+structure zeroize.Zeroize (Self : Type) where
+  zeroize : Self → Result Self
+
+/-- Trait declaration: [zeroize::DefaultIsZeroes]. -/
+@[rust_trait "zeroize::DefaultIsZeroes"
+  (parentClauses := ["coremarkerCopyInst", "coredefaultDefaultInst"])]
+structure zeroize.DefaultIsZeroes (Self : Type) where
+  coremarkerCopyInst : core.marker.Copy Self
+  coredefaultDefaultInst : core.default.Default Self
+
 end pqsigner_domain

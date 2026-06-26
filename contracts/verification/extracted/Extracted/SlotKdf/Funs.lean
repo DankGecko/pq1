@@ -195,4 +195,128 @@ def slot_master_entropy_from_bip39
     let s9 ← lift (Array.to_slice buf3)
     sha256_bytes s9
 
+/-- Trait impl: [zeroize::Zeroize<@Z>] (blanket) -/
+@[reducible, rust_trait_impl "zeroize::Zeroize<@Z>"]
+def zeroize.Zeroize.Blanket {Z : Type} (DefaultIsZeroesInst :
+  zeroize.DefaultIsZeroes Z) : zeroize.Zeroize Z := {
+  zeroize := zeroize.Zeroize.Blanket.zeroize DefaultIsZeroesInst
+}
+
+/-- Trait impl: [zeroize::DefaultIsZeroes<u8>] -/
+@[reducible, rust_trait_impl "zeroize::DefaultIsZeroes<u8>"]
+def U8.Insts.ZeroizeDefaultIsZeroes : zeroize.DefaultIsZeroes Std.U8 := {
+  coremarkerCopyInst := core.marker.CopyU8
+  coredefaultDefaultInst := core.default.DefaultU8
+}
+
+/-- [pqsigner_domain::derive_c10_master_from_bip39_seed]:
+    Source: 'domain/src/lib.rs', lines 508:0-560:1 -/
+def derive_c10_master_from_bip39_seed
+  (bip39_seed : Array Std.U8 64#usize) (account_index : Std.U32) :
+  Result ((Array Std.U8 32#usize) × (Array Std.U8 32#usize))
+  := do
+  let domain ←
+    if account_index = 0#u32
+    then
+      ok (Array.to_slice
+        (Array.make 13#usize [
+          115#u8, 112#u8, 104#u8, 105#u8, 110#u8, 99#u8, 115#u8, 45#u8, 99#u8,
+          54#u8, 45#u8, 118#u8, 49#u8
+          ]))
+    else
+      ok (Array.to_slice
+        (Array.make 18#usize [
+          115#u8, 112#u8, 104#u8, 105#u8, 110#u8, 99#u8, 115#u8, 45#u8, 99#u8,
+          54#u8, 45#u8, 118#u8, 49#u8, 45#u8, 97#u8, 99#u8, 99#u8, 116#u8
+          ]))
+  let master ←
+    if account_index = 0#u32
+    then
+      do
+      let s ← lift (Array.to_slice bip39_seed)
+      hmac_sha512_bytes domain s
+    else
+      do
+      let msg := Array.repeat 68#usize 0#u8
+      let (s, index_mut_back) ←
+        core.array.Array.index_mut (core.ops.index.IndexMutSlice
+          (core.slice.index.SliceIndexRangeUsizeSlice Std.U8)) msg
+          { start := 0#usize, «end» := 64#usize }
+      let s1 ← lift (Array.to_slice bip39_seed)
+      let s2 ← core.slice.Slice.copy_from_slice core.marker.CopyU8 s s1
+      let msg1 := index_mut_back s2
+      let (s3, index_mut_back1) ←
+        core.array.Array.index_mut (core.ops.index.IndexMutSlice
+          (core.slice.index.SliceIndexRangeUsizeSlice Std.U8)) msg1
+          { start := 64#usize, «end» := 68#usize }
+      let a ← lift (core.num.U32.to_be_bytes account_index)
+      let s4 ← lift (Array.to_slice a)
+      let s5 ← core.slice.Slice.copy_from_slice core.marker.CopyU8 s3 s4
+      let msg2 := index_mut_back1 s5
+      let s6 ← lift (Array.to_slice msg2)
+      let m ← hmac_sha512_bytes domain s6
+      let _ ←
+        Array.Insts.ZeroizeZeroize.zeroize (zeroize.Zeroize.Blanket
+          U8.Insts.ZeroizeDefaultIsZeroes) msg2
+      ok m
+  let master_lo ←
+    core.array.Array.index (core.ops.index.IndexSlice
+      (core.slice.index.SliceIndexRangeToUsizeSlice Std.U8)) master
+      { «end» := 32#usize }
+  let pk_buf := Array.repeat 39#usize 0#u8
+  let (s, index_mut_back) ←
+    core.array.Array.index_mut (core.ops.index.IndexMutSlice
+      (core.slice.index.SliceIndexRangeUsizeSlice Std.U8)) pk_buf
+      { start := 0#usize, «end» := 7#usize }
+  let s1 ←
+    lift (Array.to_slice
+      (Array.make 7#usize [
+        112#u8, 107#u8, 95#u8, 115#u8, 101#u8, 101#u8, 100#u8
+        ]))
+  let s2 ← core.slice.Slice.copy_from_slice core.marker.CopyU8 s s1
+  let pk_buf1 := index_mut_back s2
+  let (s3, index_mut_back1) ←
+    core.array.Array.index_mut (core.ops.index.IndexMutSlice
+      (core.slice.index.SliceIndexRangeUsizeSlice Std.U8)) pk_buf1
+      { start := 7#usize, «end» := 39#usize }
+  let s4 ← core.slice.Slice.copy_from_slice core.marker.CopyU8 s3 master_lo
+  let pk_buf2 := index_mut_back1 s4
+  let s5 ← lift (Array.to_slice pk_buf2)
+  let pk_digest ← sha256_bytes s5
+  let pk_seed := Array.repeat 32#usize 0#u8
+  let (s6, index_mut_back2) ←
+    core.array.Array.index_mut (core.ops.index.IndexMutSlice
+      (core.slice.index.SliceIndexRangeToUsizeSlice Std.U8)) pk_seed
+      { «end» := 16#usize }
+  let s7 ←
+    core.array.Array.index (core.ops.index.IndexSlice
+      (core.slice.index.SliceIndexRangeToUsizeSlice Std.U8)) pk_digest
+      { «end» := 16#usize }
+  let s8 ← core.slice.Slice.copy_from_slice core.marker.CopyU8 s6 s7
+  let sk_buf := Array.repeat 39#usize 0#u8
+  let (s9, index_mut_back3) ←
+    core.array.Array.index_mut (core.ops.index.IndexMutSlice
+      (core.slice.index.SliceIndexRangeUsizeSlice Std.U8)) sk_buf
+      { start := 0#usize, «end» := 7#usize }
+  let s10 ←
+    lift (Array.to_slice
+      (Array.make 7#usize [
+        115#u8, 107#u8, 95#u8, 115#u8, 101#u8, 101#u8, 100#u8
+        ]))
+  let s11 ← core.slice.Slice.copy_from_slice core.marker.CopyU8 s9 s10
+  let sk_buf1 := index_mut_back3 s11
+  let (s12, index_mut_back4) ←
+    core.array.Array.index_mut (core.ops.index.IndexMutSlice
+      (core.slice.index.SliceIndexRangeUsizeSlice Std.U8)) sk_buf1
+      { start := 7#usize, «end» := 39#usize }
+  let s13 ← core.slice.Slice.copy_from_slice core.marker.CopyU8 s12 master_lo
+  let sk_buf2 := index_mut_back4 s13
+  let s14 ← lift (Array.to_slice sk_buf2)
+  let sk_seed ← sha256_bytes s14
+  let _ ←
+    Array.Insts.ZeroizeZeroize.zeroize (zeroize.Zeroize.Blanket
+      U8.Insts.ZeroizeDefaultIsZeroes) master
+  let pk_seed1 := index_mut_back2 s8
+  ok (pk_seed1, sk_seed)
+
 end pqsigner_domain
