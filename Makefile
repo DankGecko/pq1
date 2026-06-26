@@ -3708,6 +3708,8 @@ tamarin:
 	tamarin-prover --prove contracts/verification/tamarin/pin_lockstep.spthy
 	@echo "==> Tamarin: SCP03 within-session no-replay (counter)"
 	tamarin-prover --prove contracts/verification/tamarin/scp03_replay.spthy
+	@echo "==> Tamarin: dual-SE XOR seed-split secrecy (one-time-pad, info-theoretic)"
+	tamarin-prover --prove contracts/verification/tamarin/seed_split_xor.spthy
 
 # ---------------------------------------------------------------------------
 # Discoverability wrappers for the off-Makefile verification tools (SOTA
