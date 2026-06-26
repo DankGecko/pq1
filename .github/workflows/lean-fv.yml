@@ -14,7 +14,8 @@ name: Lean FV (SphincsCVerify)
 #
 # SCOPE: `SphincsCVerify` is MATHLIB-FREE, so this needs only elan + a `lake` build
 # (no multi-GB mathlib cache). The `extracted/` (§33 Aeneas) project DOES import
-# mathlib and is a heavier follow-up job — intentionally NOT wired here yet.
+# mathlib (different toolchain) and is gated by the sibling `lean-extracted.yml`
+# workflow (heavier: pins v4.30 + pulls the prebuilt mathlib cache).
 # The build includes high-heartbeat lemmas (Interpreter/Phases.lean), so it is slow;
 # the `.lake` cache amortizes unchanged modules across runs.
 

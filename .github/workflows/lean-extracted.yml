@@ -1,0 +1,73 @@
+name: Lean FV (extracted §33 Aeneas)
+
+# CI gate for the §33 Aeneas-extracted-code project
+# (contracts/verification/extracted/). The mathlib-free `SphincsCVerify` suite
+# is gated by lean-fv.yml; this is its heavier sibling — `extracted/` pins a
+# DIFFERENT toolchain (v4.30.0-rc2) and IMPORTS mathlib (via the `aeneas` Lean
+# backend dep), so it needs the prebuilt-mathlib cache and was intentionally
+# split out. It enforces the §33 axiom-discipline that `make verify-extracted`
+# checks: every Aeneas-extracted rank (the C10/UserOp/RLP/Decode/PinState/…
+# equivalence + spec theorems) builds with NO `sorry`, and `AxiomCheck.lean`'s
+# `#print axioms` dump contains NO `sorryAx` in any §33 theorem closure.
+#
+# Until 2026-06-26 this project had zero CI coverage — a `sorry`/axiom
+# regression in an extracted rank (e.g. the new PinState rejection rank) was
+# review-time only. Positive `paths:` filter so it runs exactly when the
+# extracted sources / the Makefile change; `lake exe cache get` pulls the
+# prebuilt mathlib oleans from the Lean reservoir (the pinned revision has a
+# published cache), so the job builds only the aeneas backend lib + the
+# Extracted ranks, not mathlib from source.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'contracts/verification/extracted/**'
+      - 'contracts/verification/Makefile'
+      - '.github/workflows/lean-extracted.yml'
+  pull_request:
+    paths:
+      - 'contracts/verification/extracted/**'
+      - 'contracts/verification/Makefile'
+      - '.github/workflows/lean-extracted.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lean-extracted-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lean-extracted:
+    name: lake build Extracted + no-sorryAx axiom gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: install elan (toolchain pinned by extracted/lean-toolchain = v4.30.0-rc2)
+        run: |
+          curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf \
+            | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      # Cache the whole `.lake` (the aeneas backend-lib oleans + the prebuilt
+      # mathlib oleans + the Extracted ranks). On a sources-unchanged hit this
+      # is a full restore; on a miss the restore-keys recover the heavy
+      # mathlib/aeneas oleans and only the changed Extracted modules rebuild.
+      - name: cache extracted/.lake
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: contracts/verification/extracted/.lake
+          key: lean-extracted-lake-${{ hashFiles('contracts/verification/extracted/lake-manifest.json', 'contracts/verification/extracted/lean-toolchain') }}-${{ hashFiles('contracts/verification/extracted/Extracted/**/*.lean', 'contracts/verification/extracted/Extracted.lean') }}
+          restore-keys: |
+            lean-extracted-lake-${{ hashFiles('contracts/verification/extracted/lake-manifest.json', 'contracts/verification/extracted/lean-toolchain') }}-
+            lean-extracted-lake-
+      # Pull prebuilt mathlib oleans (fast Azure download) so mathlib is never
+      # built from source. Best-effort: a cache miss falls through to a source
+      # build rather than failing the job.
+      - name: fetch prebuilt mathlib cache
+        run: cd contracts/verification/extracted && lake exe cache get || true
+      # Build the Extracted ranks + run the no-sorry / no-sorryAx axiom gate.
+      - name: verify-extracted (lake build + axiom-discipline gate)
+        run: make -C contracts/verification verify-extracted
