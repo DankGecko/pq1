@@ -239,8 +239,6 @@ fn render_raw(
     tx: &Eip1559Tx,
     _params: &ParamSet<'_>,
 ) -> Result<(), RenderErr> {
-    let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
-    write_label_row(pages, p, field.label);
     let bytes = match resolve_path(ir, field.path_off, body)? {
         Resolved::Slot32(b) => *b,
         // Propagate the Reject instead of rendering a zero word for an
@@ -249,11 +247,31 @@ fn render_raw(
         // one (e.g. raw `@.to`). Fail closed.
         Resolved::Container(idx) => container_u256(tx, idx)?,
     };
-    // 64 hex chars over rows 1+2; row 3 = "> next".
-    let [_, row1, row2, row3] = pages.page_mut(p);
-    write_hex_word(row1, &bytes[..16]);
-    write_hex_word(row2, &bytes[16..]);
-    write_line(row3, "> next");
+    // A 16-col row holds 16 hex chars = 8 bytes, so the full 32-byte signed
+    // word needs FOUR hex rows. Render it across two pages (16 bytes each)
+    // so EVERY signed byte is shown. The old single-page form passed two
+    // 16-byte slices to `write_hex_word`, which caps at 8 bytes/row, so it
+    // silently dropped bytes 8..16 and 24..32 — for a big-endian uint256
+    // that is the entire low-order half, making any value < 2^64 render as
+    // all-zeros with a benign "> next" footer (WYSIWYS magnitude-hiding;
+    // fixed 2026-06-26). Page budget is enforced by `push_blank`'s
+    // PageBudget error, same as before.
+    let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
+    write_label_row(pages, p, field.label);
+    {
+        let [_, row1, row2, row3] = pages.page_mut(p);
+        write_hex_word(row1, &bytes[0..8]);
+        write_hex_word(row2, &bytes[8..16]);
+        write_line(row3, "1/2 > next");
+    }
+    let p2 = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
+    write_label_row(pages, p2, field.label);
+    {
+        let [_, row1, row2, row3] = pages.page_mut(p2);
+        write_hex_word(row1, &bytes[16..24]);
+        write_hex_word(row2, &bytes[24..32]);
+        write_line(row3, "2/2 > next");
+    }
     Ok(())
 }
 

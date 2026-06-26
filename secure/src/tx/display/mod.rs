@@ -69,7 +69,7 @@ use crate::ui::{DISPLAY_COLS, DISPLAY_ROWS};
 ///     inner pages) → 3 header + 3 refund + 1 inner-ETH + 1 context
 ///     banner + 8 body (addr mode) + 1 confirm = 17, +1 native-value
 ///     splice + 2 gas-fee splice + 2 ERC-8213 fingerprint pages = 22;
-///     +1 batch banner = 23
+///     +1 batch banner = 23; +1 safeTxGas page (when non-zero) = 24
 ///   * Safe multiSend batch (per record: 1 divider + optional value
 ///     page + the record's own pages; the CoW record costs 1 banner +
 ///     6/8 body). NOT statically bounded — the handlers'
@@ -108,8 +108,12 @@ use crate::ui::{DISPLAY_COLS, DISPLAY_ROWS};
 /// (CEILING+baseGas)*gasPrice total) and the Safe/CoW gas/fee splice (+2)
 /// so the worst realistic flow — the Safe-UI approve+presign multiSend
 /// (AddrHex legs + 3 refund pages + record values + batch banner + gas +
-/// ERC-8213 fingerprints) — lands on 27 exactly without truncation.
-pub const MAX_PAGES: usize = 27;
+/// ERC-8213 fingerprints) — landed on 27. 27 → 28 accompanied the Safe
+/// `safeTxGas` page (+1, conditional on `safeTxGas != 0`; audit 2026-06-26),
+/// so that same worst-case flow carrying a non-zero `safeTxGas` lands on 28
+/// exactly without truncation. `multisend_sign_gate` counts the page too, so
+/// the budget still fails closed (refuse, never truncate).
+pub const MAX_PAGES: usize = 28;
 
 /// A buffer of up to [`MAX_PAGES`] pre-rendered confirmation pages.
 ///
