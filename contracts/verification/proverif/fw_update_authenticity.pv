@@ -22,14 +22,15 @@
        vendor actually signed that exact preimage. A malicious companion cannot
        forge a FW image without the vendor secret key.
 
-     * STRUCTURAL DOMAIN-SEPARATION GATE (present, not adversarially stressed):
-       the device structurally parses the signed bytes as a PQFW preimage
-       before accepting, so only `b"PQFW_V1"`-shaped bytes (the `preimage`
-       constructor) can install. This models the domain tag — but the model has
-       a SINGLE signer that only ever signs preimages, with no second signing
-       context emitting a non-preimage signature to replay. So this is "the gate
-       exists + only preimages install", NOT a proven cross-protocol-reuse-
-       resistance theorem. Authenticity below is the solidly-proven property.
+     * DOMAIN SEPARATION / cross-protocol-reuse resistance (PROVEN): the device
+       structurally parses the signed bytes as a PQFW preimage before accepting,
+       so only `b"PQFW_V1"`-shaped bytes (the `preimage` constructor) can
+       install. This is now adversarially STRESSED — `vendor_crossproto` models
+       the vendor root key signing ATTACKER-CHOSEN messages in another protocol
+       context (`other_msg(x)`), and the authenticity query STILL holds: the
+       device never installs those, because `other_msg` and `preimage` are
+       disjoint constructors (that disjointness IS the domain tag). So a vendor
+       signature made for any other purpose cannot be replayed as firmware.
 
    NOT modelled here (stateful — Tamarin's job, like the PIN-lockstep): the OTP
    ANTI-ROLLBACK floor (`verify_rollback`: fw_version > floor, monotonic OTP).
@@ -59,10 +60,17 @@ reduc forall m: bitstring, k: sskey; verifyget(sign(m, k), spk(k)) = m.
    device can structurally parse — and only PQFW-shaped bytes parse. *)
 fun preimage(bitstring, bitstring, bitstring): bitstring [data].
 
+(* A STRUCTURALLY-DISTINCT message shape the vendor key signs in some OTHER
+   protocol context (a different domain tag). The `preimage` and `other_msg`
+   constructors are disjoint, so `other_msg(x)` can never equal any
+   `preimage(v,sh,nsh)` — that disjointness IS the b"PQFW_V1" domain tag. *)
+fun other_msg(bitstring): bitstring [data].
+
 free net: channel.                 (* untrusted USB/companion transport *)
 free vendorsk: sskey [private].    (* vendor root key — never on the device *)
 
 event Sign(bitstring).      (* vendor signed this preimage *)
+event SignOther(bitstring). (* vendor signed a NON-firmware message (cross-protocol reuse) *)
 event Install(bitstring).   (* device accepted + installed this preimage *)
 
 (* Vendor (off-box, fwsign/): sign arbitrarily many genuine manifests. *)
@@ -71,6 +79,17 @@ let vendor =
         let pre = preimage(version, shash, nshash) in
         event Sign(pre);
         out(net, (pre, sign(pre, vendorsk)))  ).
+
+(* CROSS-PROTOCOL STRESS: the vendor root key ALSO signs ATTACKER-CHOSEN
+   messages in another protocol context (`other_msg(x)`, x picked by the
+   attacker over `net`). This is the domain-separation adversary the original
+   model lacked — it lets the attacker try to replay a vendor signature made
+   for a different purpose as a firmware image. *)
+let vendor_crossproto =
+    !(  in(net, x: bitstring);
+        let om = other_msg(x) in
+        event SignOther(om);
+        out(net, (om, sign(om, vendorsk)))  ).
 
 (* Device (secure/src/fw_update/verify.rs): receive a candidate (the attacker
    may have produced it). Accept iff (1) it structurally parses as a PQFW
@@ -91,4 +110,4 @@ query m: bitstring; event(Install(m)) ==> event(Sign(m)).
 query m: bitstring; event(Install(m)).
 
 process
-    ( vendor | device(spk(vendorsk)) | out(net, spk(vendorsk)) )
+    ( vendor | vendor_crossproto | device(spk(vendorsk)) | out(net, spk(vendorsk)) )
