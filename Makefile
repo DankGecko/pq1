@@ -2932,6 +2932,14 @@ FUZZ_LIBFUZZER_ARGS = $(if $(FUZZ_TIME),-- -max_total_time=$(FUZZ_TIME),)
 FUZZ_LD := $(shell ls -d /nix/store/*gcc-1[45]*-lib/lib 2>/dev/null | head -1)
 FUZZ_ENV := $(if $(FUZZ_LD),LD_LIBRARY_PATH=$(FUZZ_LD),)
 
+# Net-isolation (SOTA 2026-06 §7 egress discipline): the fuzzer RUN phase has no
+# business reaching the network, so wrap it in tools/sca/run-isolated.sh
+# (bwrap --unshare-net, fails closed). The BUILD stays networked (it's not
+# wrapped). Composed via `env` so it coexists with the optional FUZZ_ENV LD
+# prefix. Override with `make fuzz-all FUZZ_ISOLATE=` to disable (e.g. a host
+# without bwrap, or inside a CI container that already drops the network).
+FUZZ_ISOLATE ?= $(CURDIR)/tools/sca/run-isolated.sh
+
 .PHONY: fuzz-list fuzz-all fuzz-aa-userop-parse fuzz-rlp-decode-item fuzz-eip1559-parse fuzz-erc20-calldata fuzz-erc20-bundle fuzz-apdu-parse-header fuzz-hid-frame-assembler
 
 # Smoke the whole adversarial parse surface: run every target for FUZZ_TIME
@@ -2945,7 +2953,7 @@ fuzz-all:
 	@cd fuzz && for t in $$(cargo +nightly fuzz list); do \
 	  echo "==> fuzz $$t ($(or $(FUZZ_TIME),30)s)"; \
 	  mkdir -p corpus/$$t artifacts/$$t; \
-	  $(FUZZ_ENV) target/x86_64-unknown-linux-gnu/release/$$t corpus/$$t \
+	  $(FUZZ_ISOLATE) env $(FUZZ_ENV) target/x86_64-unknown-linux-gnu/release/$$t corpus/$$t \
 	    -max_total_time=$(or $(FUZZ_TIME),30) -rss_limit_mb=2048 -artifact_prefix=artifacts/$$t/ \
 	    2>&1 | grep -E "DONE|cov: [0-9]+ ft:|crash|deadly signal|SUMMARY" | tail -2; \
 	done; \
