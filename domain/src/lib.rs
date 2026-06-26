@@ -109,6 +109,28 @@ pub fn kdf_sha256(domain: &[u8], input: &[u8], index: u8) -> [u8; 32] {
     kdf(domain, input, index)
 }
 
+/// Single-shot SHA-256 over one contiguous byte slice — the
+/// `Digest::digest` one-shot, NOT the incremental `Sha256::new().update()…`
+/// builder. Semantically `Sha256::new().chain_update(input).finalize()`, so
+/// any `chain_update(a).chain_update(b)…` sequence is byte-identical to
+/// `sha256_bytes(&[a, b, …].concat())` (SHA-256 processes one byte stream).
+///
+/// The fixed-size C10 key-derivation chain (`derive_c10_master_from_bip39_seed`,
+/// `slot_entropy`, `derive_c10_slot_seeds`, the account≠0 slot-master) funnels
+/// every SHA-256 through THIS one function over a stack-built input buffer,
+/// rather than the `Digest`-trait builder, so the derivation extracts cleanly
+/// through Charon/Aeneas (the builder explodes into `typenum`/`generic-array`
+/// soup; a single-shot `&[u8] -> [u8;32]` is one opaque boundary). The output
+/// bytes are unchanged — see the `differential_*` byte-identity tests and the
+/// `REF_PK_SEED`/`REF_SK_SEED` pins. The generic [`kdf`] keeps the builder
+/// (its `&[u8]` inputs are unbounded — a fixed stack buffer could silently
+/// truncate), and the HMAC-SHA512 master step is a different primitive, both
+/// out of scope.
+#[must_use]
+pub fn sha256_bytes(input: &[u8]) -> [u8; 32] {
+    Sha256::digest(input).into()
+}
+
 #[must_use]
 pub fn macd_init_input(master_secret: &[u8; 32], j: u8) -> [u8; 32] {
     kdf(b"sphincs-macd-init", master_secret, j)
@@ -412,13 +434,21 @@ pub fn slot_master_entropy_from_bip39(
     account_index: u32,
 ) -> [u8; 32] {
     if account_index == 0 {
-        kdf_sha256(b"pqwallet-slot-master", bip39_seed, 0)
+        // == kdf("pqwallet-slot-master", bip39_seed, 0)
+        //  = sha256("pqwallet-slot-master"[20] ‖ bip39_seed[64] ‖ [0]) — 85 bytes.
+        //    (the trailing [0] is kdf's `index` byte — preserved byte-for-byte.)
+        let mut buf = [0u8; 85];
+        buf[0..20].copy_from_slice(b"pqwallet-slot-master");
+        buf[20..84].copy_from_slice(bip39_seed);
+        buf[84] = 0;
+        sha256_bytes(&buf)
     } else {
-        let mut h = Sha256::new();
-        h.update(b"pqwallet-slot-master-acct");
-        h.update(bip39_seed);
-        h.update(account_index.to_be_bytes());
-        h.finalize().into()
+        // sha256("pqwallet-slot-master-acct"[25] ‖ bip39_seed[64] ‖ account_index_be[4]) — 93 bytes.
+        let mut buf = [0u8; 93];
+        buf[0..25].copy_from_slice(b"pqwallet-slot-master-acct");
+        buf[25..89].copy_from_slice(bip39_seed);
+        buf[89..93].copy_from_slice(&account_index.to_be_bytes());
+        sha256_bytes(&buf)
     }
 }
 
@@ -510,22 +540,20 @@ pub fn derive_c10_master_from_bip39_seed(
     master.copy_from_slice(&mac.finalize().into_bytes());
     let master_lo = &master[..32];
 
-    // Step 2: pk_seed = mask_n(sha256("pk_seed" || master[0..32]))
+    // Step 2: pk_seed = mask_n(sha256("pk_seed"[7] || master[0..32]))  — 39 bytes.
     //   mask_n keeps bytes [0..16] and zeros bytes [16..32].
-    let pk_digest: [u8; 32] = Sha256::new()
-        .chain_update(b"pk_seed")
-        .chain_update(master_lo)
-        .finalize()
-        .into();
+    let mut pk_buf = [0u8; 39];
+    pk_buf[0..7].copy_from_slice(b"pk_seed");
+    pk_buf[7..39].copy_from_slice(master_lo);
+    let pk_digest: [u8; 32] = sha256_bytes(&pk_buf);
     let mut pk_seed = [0u8; 32];
     pk_seed[..16].copy_from_slice(&pk_digest[..16]);
 
-    // Step 3: sk_seed = sha256("sk_seed" || master[0..32])  (full 32 bytes, no mask).
-    let sk_seed: [u8; 32] = Sha256::new()
-        .chain_update(b"sk_seed")
-        .chain_update(master_lo)
-        .finalize()
-        .into();
+    // Step 3: sk_seed = sha256("sk_seed"[7] || master[0..32])  (full 32 bytes, no mask) — 39 bytes.
+    let mut sk_buf = [0u8; 39];
+    sk_buf[0..7].copy_from_slice(b"sk_seed");
+    sk_buf[7..39].copy_from_slice(master_lo);
+    let sk_seed: [u8; 32] = sha256_bytes(&sk_buf);
 
     master.zeroize();
 
@@ -633,30 +661,30 @@ fn c10_keygen_from_n_masked_seeds(
 /// on chain B.
 #[must_use]
 pub fn slot_entropy(master_entropy: &[u8; 32], chain_id: u64, slot_index: u32) -> [u8; 32] {
-    Sha256::new()
-        .chain_update(master_entropy)
-        .chain_update(b"slot_entropy")
-        .chain_update(chain_id.to_be_bytes())
-        .chain_update(slot_index.to_be_bytes())
-        .finalize()
-        .into()
+    // sha256(master_entropy[32] ‖ "slot_entropy"[12] ‖ chain_id_be[8] ‖ slot_index_be[4]) — 56 bytes.
+    let mut buf = [0u8; 56];
+    buf[0..32].copy_from_slice(master_entropy);
+    buf[32..44].copy_from_slice(b"slot_entropy");
+    buf[44..52].copy_from_slice(&chain_id.to_be_bytes());
+    buf[52..56].copy_from_slice(&slot_index.to_be_bytes());
+    sha256_bytes(&buf)
 }
 
 /// Derive the slot C10 `(sk_seed_32, pk_seed_32)` pair from slot entropy.
 /// `pk_seed_32` uses the N-mask layout (top 16 bytes populated, bottom 16
 /// zero) to match the on-chain `bytes32` shape expected by the C10 verifier.
 fn derive_c10_slot_seeds(slot_entropy: &[u8; 32]) -> ([u8; 32], [u8; 32]) {
-    let sk_seed: [u8; 32] = Sha256::new()
-        .chain_update(b"slot_c10_sk_seed")
-        .chain_update(slot_entropy)
-        .finalize()
-        .into();
+    // sk_seed = sha256("slot_c10_sk_seed"[16] ‖ slot_entropy[32]) — 48 bytes.
+    let mut sk_buf = [0u8; 48];
+    sk_buf[0..16].copy_from_slice(b"slot_c10_sk_seed");
+    sk_buf[16..48].copy_from_slice(slot_entropy);
+    let sk_seed: [u8; 32] = sha256_bytes(&sk_buf);
 
-    let pk_digest: [u8; 32] = Sha256::new()
-        .chain_update(b"slot_c10_pk_seed")
-        .chain_update(slot_entropy)
-        .finalize()
-        .into();
+    // pk_digest = sha256("slot_c10_pk_seed"[16] ‖ slot_entropy[32]) — 48 bytes.
+    let mut pk_buf = [0u8; 48];
+    pk_buf[0..16].copy_from_slice(b"slot_c10_pk_seed");
+    pk_buf[16..48].copy_from_slice(slot_entropy);
+    let pk_digest: [u8; 32] = sha256_bytes(&pk_buf);
     let mut pk_seed = [0u8; 32];
     pk_seed[..16].copy_from_slice(&pk_digest[..16]);
 
@@ -938,6 +966,163 @@ mod c10_derivation_tests {
             b'a'..=b'f' => c - b'a' + 10,
             b'A'..=b'F' => c - b'A' + 10,
             _ => panic!("bad hex nibble"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod differential_sha256_bytes_tests {
+    //! Byte-identity differential for the `sha256_bytes` refactor (FV-#2). The
+    //! fixed-size C10 derivation chain was rewritten from the incremental
+    //! `Sha256::new().chain_update(…)` builder to a single-shot
+    //! `sha256_bytes(&stack_buffer)` so it extracts cleanly through
+    //! Charon/Aeneas. This is the CREATE2-address RED LINE (invariant #6/#8):
+    //! the derived keys — hence every wallet's on-chain address — MUST NOT move.
+    //!
+    //! The `*_legacy` fns below are VERBATIM copies of the original builder
+    //! code; the tests assert the live fns produce byte-identical output across
+    //! the full account × chain_id × slot_index matrix, down to the CREATE2
+    //! salt `sha256(masterPkSeed ‖ masterPkRoot)`. Any mismatch is a refactor
+    //! bug, never acceptable variance.
+    use super::*;
+    use sha2::Digest;
+    use sphincs_tz_bip39::Mnemonic;
+
+    // --- verbatim ORIGINAL (pre-refactor) builder implementations ---------
+    fn slot_entropy_legacy(master_entropy: &[u8; 32], chain_id: u64, slot_index: u32) -> [u8; 32] {
+        Sha256::new()
+            .chain_update(master_entropy)
+            .chain_update(b"slot_entropy")
+            .chain_update(chain_id.to_be_bytes())
+            .chain_update(slot_index.to_be_bytes())
+            .finalize()
+            .into()
+    }
+
+    fn derive_c10_slot_seeds_legacy(slot_entropy: &[u8; 32]) -> ([u8; 32], [u8; 32]) {
+        let sk_seed: [u8; 32] = Sha256::new()
+            .chain_update(b"slot_c10_sk_seed")
+            .chain_update(slot_entropy)
+            .finalize()
+            .into();
+        let pk_digest: [u8; 32] = Sha256::new()
+            .chain_update(b"slot_c10_pk_seed")
+            .chain_update(slot_entropy)
+            .finalize()
+            .into();
+        let mut pk_seed = [0u8; 32];
+        pk_seed[..16].copy_from_slice(&pk_digest[..16]);
+        (sk_seed, pk_seed)
+    }
+
+    fn slot_master_entropy_from_bip39_legacy(bip39_seed: &[u8; 64], account_index: u32) -> [u8; 32] {
+        if account_index == 0 {
+            kdf_sha256(b"pqwallet-slot-master", bip39_seed, 0)
+        } else {
+            let mut h = Sha256::new();
+            h.update(b"pqwallet-slot-master-acct");
+            h.update(bip39_seed);
+            h.update(account_index.to_be_bytes());
+            h.finalize().into()
+        }
+    }
+
+    fn derive_c10_master_from_bip39_seed_legacy(
+        bip39_seed: &[u8; 64],
+        account_index: u32,
+    ) -> ([u8; 32], [u8; 32]) {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha512;
+        let domain: &[u8] = if account_index == 0 {
+            b"sphincs-c6-v1"
+        } else {
+            b"sphincs-c6-v1-acct"
+        };
+        let mut mac = <Hmac<Sha512> as Mac>::new_from_slice(domain).unwrap();
+        mac.update(bip39_seed);
+        if account_index != 0 {
+            mac.update(&account_index.to_be_bytes());
+        }
+        let mut master = [0u8; 64];
+        master.copy_from_slice(&mac.finalize().into_bytes());
+        let master_lo = &master[..32];
+        let pk_digest: [u8; 32] = Sha256::new()
+            .chain_update(b"pk_seed")
+            .chain_update(master_lo)
+            .finalize()
+            .into();
+        let mut pk_seed = [0u8; 32];
+        pk_seed[..16].copy_from_slice(&pk_digest[..16]);
+        let sk_seed: [u8; 32] = Sha256::new()
+            .chain_update(b"sk_seed")
+            .chain_update(master_lo)
+            .finalize()
+            .into();
+        (pk_seed, sk_seed)
+    }
+
+    #[test]
+    fn differential_full_matrix_byte_identical() {
+        let seeds: [[u8; 32]; 3] = [[0u8; 32], [0xAAu8; 32], [0x55u8; 32]];
+        let accounts: [u32; 3] = [0, 1, 255];
+        let chains: [u64; 4] = [0, 1, 8453, u64::MAX];
+        let slots: [u32; 3] = [0, 1, u32::MAX];
+
+        for entropy in &seeds {
+            let bip39: [u8; 64] = Mnemonic::from_entropy(entropy).to_seed("");
+            for &acct in &accounts {
+                assert_eq!(
+                    slot_master_entropy_from_bip39(&bip39, acct),
+                    slot_master_entropy_from_bip39_legacy(&bip39, acct),
+                    "slot_master_entropy drifted (acct={acct})"
+                );
+                assert_eq!(
+                    derive_c10_master_from_bip39_seed(&bip39, acct),
+                    derive_c10_master_from_bip39_seed_legacy(&bip39, acct),
+                    "derive_c10_master drifted (acct={acct})"
+                );
+                let sm = slot_master_entropy_from_bip39(&bip39, acct);
+                for &chain in &chains {
+                    for &slot in &slots {
+                        let se = slot_entropy(&sm, chain, slot);
+                        assert_eq!(
+                            se,
+                            slot_entropy_legacy(&sm, chain, slot),
+                            "slot_entropy drifted (acct={acct} chain={chain} slot={slot})"
+                        );
+                        assert_eq!(
+                            derive_c10_slot_seeds(&se),
+                            derive_c10_slot_seeds_legacy(&se),
+                            "derive_c10_slot_seeds drifted (acct={acct} chain={chain} slot={slot})"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn differential_create2_salt_unchanged() {
+        // CREATE2 salt = sha256(masterPkSeed ‖ masterPkRoot) — the ONLY
+        // KDF-dependent input to the wallet address. Assert new == legacy
+        // through the FULL bootstrap chain (incl. the unchanged c10 keygen).
+        fn salt(pk_seed: &[u8; 32], pk_root: &[u8; 32]) -> [u8; 32] {
+            let mut b = [0u8; 64];
+            b[..32].copy_from_slice(pk_seed);
+            b[32..].copy_from_slice(pk_root);
+            sha256_bytes(&b)
+        }
+        let bip39: [u8; 64] = Mnemonic::from_entropy(&[0x11u8; 32]).to_seed("");
+        for &acct in &[0u32, 1, 255] {
+            let (pk_seed_n, sk_seed_n) = derive_c10_master_from_bip39_seed(&bip39, acct);
+            let (_, pk_root_n) = c10_keygen_from_n_masked_seeds(&sk_seed_n, &pk_seed_n);
+            let (pk_seed_l, sk_seed_l) = derive_c10_master_from_bip39_seed_legacy(&bip39, acct);
+            let (_, pk_root_l) = c10_keygen_from_n_masked_seeds(&sk_seed_l, &pk_seed_l);
+            assert_eq!(
+                salt(&pk_seed_n, &pk_root_n),
+                salt(&pk_seed_l, &pk_root_l),
+                "CREATE2 salt moved (acct={acct}) — WALLET ADDRESS WOULD CHANGE"
+            );
         }
     }
 }
