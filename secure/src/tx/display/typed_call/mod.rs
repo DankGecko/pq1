@@ -221,9 +221,9 @@ fn render_arg(
             write_line(r1, if v { "true" } else { "false" });
             true
         }
-        TypeRef::Uint(_) => {
+        TypeRef::Uint(bits) => {
             let v = abi::read_u256(body, walked.body_off)?;
-            write_uint_two_rows(r1, r2, &v)
+            write_uint_two_rows(r1, r2, bits, &v)
         }
         TypeRef::Int(bits) => {
             let v = abi::read_u256(body, walked.body_off)?;
@@ -404,16 +404,56 @@ fn write_text_sig_rows(
     }
 }
 
+/// Zero every bit at position `>= bits` (counted from the LSB) of a
+/// 32-byte big-endian word, matching Solidity's calldata clean-up of a
+/// sub-256-bit `uintN` / positive-`intN` argument (`and(word, 2^N - 1)`
+/// / `signextend`). No-op for `bits >= 256`.
+///
+/// Shared by the `uintN` / `intN` value renderers and the count==1
+/// `uintN[]` element renderer so the trusted display shows exactly the
+/// magnitude the contract executes, never the raw 32-byte word (audit
+/// 2026-06-26 — typed-call integer over-display). Byte-for-byte the same
+/// masking the signed-int negative branch already used inline.
+fn mask_low_bits(word: &mut [u8; 32], bits: u16) {
+    let bits = bits as usize;
+    if bits >= 256 {
+        return;
+    }
+    let high_bytes_to_zero = (256 - bits) / 8;
+    for b in word.iter_mut().take(high_bytes_to_zero) {
+        *b = 0;
+    }
+    let extra_bits = (256 - bits) % 8;
+    if extra_bits != 0 {
+        word[high_bytes_to_zero] &= 0xff >> extra_bits;
+    }
+}
+
 /// `uintN` decimal across rows 1+2. Returns `false` only on truly
 /// pathological 78-digit values (the OLED can show 32 digits across
 /// two rows).
+///
+/// The 32-byte word is first cleaned to its low `bits` bits (audit
+/// 2026-06-26 — typed-call uintN over-display). Solidity's calldata
+/// decoder masks a `uintN` argument to `word & (2^N - 1)`, so a word
+/// carrying non-zero bits above N executes as the masked value while the
+/// raw word reads LARGER on screen — a `uint64` word `2^64 + 5` rendered
+/// `18446744073709551621` while the contract acted on `5`. The
+/// `address`/`bool` readers already reject such dirty words; masking here
+/// shows exactly the magnitude the contract executes (never larger), the
+/// most WYSIWYS-faithful choice. `mask_low_bits` is a no-op for
+/// `bits >= 256` (plain `uint256`).
 fn write_uint_two_rows(
     row1: &mut [u8; DISPLAY_COLS],
     row2: &mut [u8; DISPLAY_COLS],
+    bits: u16,
     value: &U256,
 ) -> bool {
     *row1 = [b' '; DISPLAY_COLS];
     *row2 = [b' '; DISPLAY_COLS];
+    let mut word = value.0;
+    mask_low_bits(&mut word, bits);
+    let value = U256(word);
     let mut tmp = [0u8; 96];
     match value.format_decimal(0, 0, false, &mut tmp) {
         Some(n) if n <= DISPLAY_COLS => {
@@ -467,20 +507,18 @@ fn write_int_two_rows(
             *b = s as u8;
             carry = s >> 8;
         }
-        // Mask to N bits.
-        if bits < 256 {
-            let high_bytes_to_zero = (256 - bits as usize) / 8;
-            for i in 0..high_bytes_to_zero {
-                tmp[i] = 0;
-            }
-            let extra_bits = (256 - bits as usize) % 8;
-            if extra_bits != 0 {
-                tmp[high_bytes_to_zero] &= 0xff >> extra_bits;
-            }
-        }
+        // Mask to N bits — the low-N two's-complement magnitude.
+        mask_low_bits(&mut tmp, bits);
         U256(tmp)
     } else {
-        *value
+        // Positive `intN`: Solidity sign-extends from bit N-1, so with the
+        // sign bit clear every higher bit is zero. Mask to N bits so dirty
+        // high bits the EVM discards cannot inflate the displayed magnitude
+        // (audit 2026-06-26 — typed-call intN over-display; sibling of the
+        // uintN fix). No-op for `bits >= 256`.
+        let mut tmp = value.0;
+        mask_low_bits(&mut tmp, bits);
+        U256(tmp)
     };
 
     let mut tmp = [0u8; 96];
@@ -714,11 +752,19 @@ fn write_array_rows(
             // fidelity).
             false
         }
-        TypeRef::Uint(_) => {
+        TypeRef::Uint(bits) => {
             let v = match abi::read_u256(body, first_elem_off) {
                 Some(v) => v,
                 None => return false,
             };
+            // Clean to N bits like the top-level uintN path (audit
+            // 2026-06-26 — typed-call uintN over-display): the fit check and
+            // the rendered digits must reflect the EXECUTED magnitude
+            // (`word & (2^N-1)`), not the raw word, so dirty high bits cannot
+            // inflate a count==1 element's preview.
+            let mut w = v.0;
+            mask_low_bits(&mut w, *bits);
+            let v = U256(w);
             let mut tmp = [0u8; 96];
             // WYSIWYS (audit 2026-06-18 — count==1 array elision). Render the
             // element only if its full decimal fits on the inline row. If it
@@ -767,6 +813,107 @@ fn write_array_rows(
 // Page-assembly tests live in the e2e harness (Scenario 5b/5d) since
 // they require an Eip1559Tx + NameResolver. Parser + ABI walker have
 // host-runnable unit tests in `crate::tx::typed_call::{parser, abi}`.
+
+#[cfg(test)]
+mod tests {
+    //! Regression tests for the `uintN` / `intN` calldata clean-up
+    //! (audit 2026-06-26 — typed-call integer over-display). The trusted
+    //! display must show `word & (2^N-1)` (the magnitude the contract
+    //! executes), never the raw 32-byte word, so dirty high bits cannot
+    //! make a value read LARGER on screen than it acts on chain.
+    use super::*;
+
+    /// Trailing-space-trimmed view of a rendered row.
+    fn trimmed(row: &[u8; DISPLAY_COLS]) -> &[u8] {
+        let end = row.iter().rposition(|&b| b != b' ').map_or(0, |i| i + 1);
+        &row[..end]
+    }
+
+    /// 32-byte BE word = `2^64 + 5` (a `uint64`/`int64` whose low 64 bits
+    /// are 5 but with a non-zero bit at position 64 the EVM discards).
+    fn word_2pow64_plus_5() -> [u8; 32] {
+        let mut w = [0u8; 32];
+        w[23] = 1; // bit 64
+        w[31] = 5; // low bits
+        w
+    }
+
+    #[test]
+    fn mask_low_bits_keeps_low_n() {
+        let mut w = word_2pow64_plus_5();
+        mask_low_bits(&mut w, 64);
+        let mut expect = [0u8; 32];
+        expect[31] = 5;
+        assert_eq!(w, expect, "bits above N must be zeroed");
+    }
+
+    #[test]
+    fn mask_low_bits_noop_for_256() {
+        let mut w = [0xabu8; 32];
+        let orig = w;
+        mask_low_bits(&mut w, 256);
+        assert_eq!(w, orig, "uint256 is never masked");
+    }
+
+    #[test]
+    fn mask_low_bits_partial_byte() {
+        // uint20: low 4 bits of byte 29 + all of bytes 30,31.
+        let mut w = [0xffu8; 32];
+        mask_low_bits(&mut w, 20);
+        assert_eq!(&w[..29], &[0u8; 29][..]);
+        assert_eq!(w[29], 0x0f);
+        assert_eq!(w[30], 0xff);
+        assert_eq!(w[31], 0xff);
+    }
+
+    #[test]
+    fn uint_n_dirty_high_bits_render_masked_value() {
+        let mut r1 = [b' '; DISPLAY_COLS];
+        let mut r2 = [b' '; DISPLAY_COLS];
+        assert!(write_uint_two_rows(&mut r1, &mut r2, 64, &U256(word_2pow64_plus_5())));
+        assert_eq!(
+            trimmed(&r1),
+            b"5",
+            "uint64 must show its executed low-64-bit value, not the raw word"
+        );
+        assert_eq!(trimmed(&r2), b"");
+    }
+
+    #[test]
+    fn uint256_renders_full_word_unmasked() {
+        let mut r1 = [b' '; DISPLAY_COLS];
+        let mut r2 = [b' '; DISPLAY_COLS];
+        assert!(write_uint_two_rows(&mut r1, &mut r2, 256, &U256(word_2pow64_plus_5())));
+        // bits == 256 ⇒ no mask: the whole 2^64 + 5 (20 digits) is shown,
+        // spilling across both rows (16 + 4).
+        let mut combined = [b' '; 2 * DISPLAY_COLS];
+        combined[..DISPLAY_COLS].copy_from_slice(&r1);
+        combined[DISPLAY_COLS..].copy_from_slice(&r2);
+        let end = combined.iter().rposition(|&b| b != b' ').map_or(0, |i| i + 1);
+        assert_eq!(&combined[..end], b"18446744073709551621");
+    }
+
+    #[test]
+    fn positive_int_n_dirty_high_bits_render_masked() {
+        // int64: sign bit (63) clear ⇒ positive; bit 64 is discarded.
+        let mut r1 = [b' '; DISPLAY_COLS];
+        let mut r2 = [b' '; DISPLAY_COLS];
+        assert!(write_int_two_rows(&mut r1, &mut r2, 64, &U256(word_2pow64_plus_5())));
+        assert_eq!(trimmed(&r1), b"5", "positive intN must mask the high bits the EVM signextends away");
+    }
+
+    #[test]
+    fn negative_int_n_unchanged() {
+        // int8 == -1 (low byte 0xFF, sign bit set). Masking must not
+        // regress the (already-correct) negative path.
+        let mut wbytes = [0u8; 32];
+        wbytes[31] = 0xff;
+        let mut r1 = [b' '; DISPLAY_COLS];
+        let mut r2 = [b' '; DISPLAY_COLS];
+        assert!(write_int_two_rows(&mut r1, &mut r2, 8, &U256(wbytes)));
+        assert_eq!(trimmed(&r1), b"-1");
+    }
+}
 
 #[cfg(test)]
 mod array_wysiwys_tests {

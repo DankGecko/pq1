@@ -65,7 +65,9 @@ pub use exec_decode::{verify_and_bind_exec, DecodedExec, VerifiedSafeExec};
 // downgrade gates so the "is this Safe inner call a CoW presign?"
 // predicate has exactly one definition.
 pub mod cow_binding;
-pub use cow_binding::{resolve_cow_binding, safe_inner_is_cow_presign, CowBinding};
+pub use cow_binding::{
+    direct_cow_target_ok, resolve_cow_binding, safe_inner_is_cow_presign, CowBinding,
+};
 
 // Pure-logic strict decoder + classifier for Safe `MultiSendCallOnly`
 // batches (SafeTx DELEGATECALL into the pinned multiSend deployments).

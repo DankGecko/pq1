@@ -185,6 +185,33 @@ pub fn resolve_cow_binding<'s>(
     }
 }
 
+/// WYSIWYS gate for a verified *direct* (non-Safe-wrapped) CoW v3 order
+/// (audit 2026-06-26 — direct-path target unshown).
+///
+/// `render_cowswap_pages` shows the decoded order but NOT the UserOp's
+/// inner-tx call target (`to_address`); the signed
+/// `executeWithOffchainCount(...)` forwards `to_address.call{value}(data)`
+/// to an arbitrary target. Unless that target IS the GPv2 settlement
+/// singleton, the trust-inspiring "CowSwap order" screen would accompany a
+/// call to an attacker-chosen, never-displayed target — a native-ETH drain
+/// (the value page shows the amount but not the destination) dressed as a
+/// gas-free CoW presign. The Safe-wrapped path already pins the *inner*
+/// target via [`safe_inner_is_cow_presign`]; this is the direct-arm twin.
+///
+/// Returns `true` when the target is acceptable (refuse on `false`). Only
+/// constrains the case the renderer can't show — a verified direct order;
+/// the Safe-wrapped path (`via_safe`) and the non-CoW paths are unaffected.
+/// A legitimate direct presign always targets GPv2, so this never refuses a
+/// well-formed CoW UserOp.
+#[must_use]
+pub fn direct_cow_target_ok(zk_v3_present: bool, via_safe: bool, to_address: &[u8; 20]) -> bool {
+    if zk_v3_present && !via_safe {
+        *to_address == GPV2_SETTLEMENT_ADDRESS
+    } else {
+        true
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -514,5 +541,39 @@ mod tests {
         let inner = [0u8; 36];
         let b = resolve_cow_binding(&inner, &SENDER, Some(&safe), None);
         assert!(!b.via_safe);
+    }
+
+    // ── direct-path target gate (audit 2026-06-26) ─────────────────
+
+    /// A verified direct v3 order MUST target the GPv2 settlement
+    /// singleton — anything else is a call to an unshown target behind a
+    /// CoW screen, so the handler must refuse.
+    #[test]
+    fn direct_v3_to_attacker_refused() {
+        assert!(
+            !direct_cow_target_ok(true, false, &[0xaa; 20]),
+            "direct v3 order to a non-settlement target must be refused"
+        );
+    }
+
+    /// A verified direct v3 order to the real settlement is fine.
+    #[test]
+    fn direct_v3_to_settlement_ok() {
+        assert!(direct_cow_target_ok(true, false, &GPV2_SETTLEMENT_ADDRESS));
+    }
+
+    /// The Safe-wrapped path pins the inner target itself, so the outer
+    /// `to_address` (the Safe) is not constrained by this gate.
+    #[test]
+    fn safe_wrapped_target_unconstrained() {
+        assert!(direct_cow_target_ok(true, true, &[0xaa; 20]));
+    }
+
+    /// No verified v3 ⇒ not a CoW render ⇒ gate is inert (other renderers
+    /// show the target themselves).
+    #[test]
+    fn no_v3_is_inert() {
+        assert!(direct_cow_target_ok(false, false, &[0xaa; 20]));
+        assert!(direct_cow_target_ok(false, true, &[0xaa; 20]));
     }
 }
