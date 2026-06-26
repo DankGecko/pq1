@@ -86,9 +86,16 @@ theorem lifetimeBudget_eq : LifetimeBudgetPerChain = 4294967296 := by decide
 
 A usage cap `C` is useful precisely because it bounds *every* admissible query
 count `q ≤ C`. These two lemmas carry a margin proved at the cap down to any
-`q` under it, so the on-chain caps (proved monotonic + unresettable elsewhere —
-`MultiOwnable.bumpSlot_monotonic`, `Invariants.combinedCap_inductive`) enforce
-the bound for all reachable states, not just the boundary. -/
+`q` under it. The cap itself is enforced AT RUNTIME by the deployed bytecode
+(Solidity-0.8 checked arithmetic on `slotUses[i] + offchainSigCount[i]`,
+reverting on overflow); the monotonicity building blocks
+(`MultiOwnable.bumpSlot_monotonic`, the P3 cross-counter preservation lemmas) +
+the per-step `combinedCap_inductive` are kernel facts, but a full
+`Reachable → q ≤ C` Lean theorem is not yet assembled (its reachability is
+currently backed by the Foundry invariant fuzz test — see P1 note on
+`theft_free_bytecode`). So the floor below holds for every state SATISFYING the
+cap; "for all reachable states" rests on the runtime cap, not (yet) a single
+kernel reachable-state theorem. -/
 
 /-- **EUF-CMA query-term margin is monotone in the cap.** If the linear query
     term meets the `2⁻ᵗ` floor at cap `C` (`C · 2ᵗ ≤ 2ⁿ`), it meets it for every
@@ -144,10 +151,13 @@ theorem generic_term_at_lifetime_budget :
 
 /-! ## Headline: the cap enforces the floor for every reachable usage
 
-Invariant #9's combined cap (`slotUses[i] + offchainSigCount[i] < MAX_SLOT_USES`,
-formalised as `Invariants.combinedCap_inductive`) guarantees the per-key signing
-count `q` never reaches `MAX_SLOT_USES`. Composing that with the monotone margin
-lemmas: at *every* reachable state both cited advantage terms sit below their
+Invariant #9's combined cap (`slotUses[i] + offchainSigCount[i] < MAX_SLOT_USES`)
+keeps the per-key signing count `q` below `MAX_SLOT_USES`. That cap is enforced
+at runtime by the deployed contract; the Lean `Invariants.combinedCap_inductive`
+proves the `validateSignature`-step preservation (a building block toward, but
+not yet, a full reachable-state theorem — see the P1 note). Composing the cap
+with the monotone margin lemmas: at *every* state under the cap both cited
+advantage terms sit below their
 floors — the EUF-CMA query term below `2⁻¹¹²` and the generic multi-target term
 below `2⁻⁹⁵` — with no appeal to the (cited, unquantified) adversary advantage
 `ε(A)`. This is the quantitative companion to `theft_free`'s qualitative
@@ -159,10 +169,40 @@ theorem advantage_floors_within_slot_cap {q : Nat} (hq : q ≤ MaxSlotUses) :
   ⟨queryTerm_le_of_le hq eufcma_term_at_slot_cap,
    genericTerm_le_of_le hq generic_term_at_slot_cap⟩
 
-/-- Same headline anchored at the bootstrap cap (Type-1 registration key). -/
+/-- Same headline anchored at the bootstrap cap (Type-1 registration key).
+
+    **P14 (cross-chain caveat).** `MaxBootstrapUses` is enforced PER CHAIN, but
+    the bootstrap key is chain-INDEPENDENT (invariant #6 requires it for
+    cross-chain address stability — the same key registers slot 0 on every
+    chain). So a single bootstrap key's true EUF-CMA query budget across `C`
+    chains is `C · MaxBootstrapUses`, not `MaxBootstrapUses`. This per-chain
+    theorem therefore bounds only the single-chain term; the cross-chain bound
+    is `advantage_floor_within_bootstrap_cap_crosschain` below, which shows the
+    floor degrades by `⌈log₂ C⌉` bits yet stays ≥ 96 bits for any realistic
+    deployment (it would take `C > 2^16` chains to erode below the operative
+    slot-generic floor). Mirrors the per-chain-vs-lifetime caveat the slot
+    aggregate already carries. -/
 theorem advantage_floor_within_bootstrap_cap {q : Nat} (hq : q ≤ MaxBootstrapUses) :
     q * 2 ^ 112 ≤ 2 ^ SecurityBits :=
   queryTerm_le_of_le hq eufcma_term_at_bootstrap_cap
+
+/-- **Cross-chain bootstrap-key floor (P14).** A bootstrap key signing across
+    `C` chains has total query budget `q ≤ C · MaxBootstrapUses`. For any
+    deployment spanning `C ≤ 2^16` chains the (weaker, generic-multi-target)
+    floor stays ≥ 96 bits: `q · 2^96 ≤ 2^SecurityBits = 2^128`. This is an
+    explicit CONDITIONAL honest bound — there is no on-chain cap on the number
+    of chains, so this does not assert `C ≤ 2^16` is enforced anywhere; it shows
+    that even a 65536-chain deployment keeps the bootstrap floor at the same
+    96-bit level as the operative per-slot generic term, so the per-key
+    cross-chain aggregation never becomes the binding floor in practice. -/
+theorem advantage_floor_within_bootstrap_cap_crosschain
+    {q C : Nat} (hq : q ≤ C * MaxBootstrapUses) (hC : C ≤ 2 ^ 16) :
+    q * 2 ^ 96 ≤ 2 ^ SecurityBits :=
+  Nat.le_trans (Nat.mul_le_mul hq (Nat.le_refl (2 ^ 96)))
+    (Nat.le_trans
+      (Nat.mul_le_mul (Nat.mul_le_mul hC (Nat.le_refl MaxBootstrapUses))
+        (Nat.le_refl (2 ^ 96)))
+      (by decide))
 
 /-! ## Multi-term bit-security floor (the faithful full bound)
 

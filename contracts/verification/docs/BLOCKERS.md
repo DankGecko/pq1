@@ -78,8 +78,15 @@ to their canonical digests.
     `validateSignature` transition)
   * `eip1271_forbids_bootstrap` (I-6; new
     `Wallet/IsValidSignature.lean`)
-  * `create2_address_chain_independent` strengthened with
-    `create2_salt_definition` (I-7)
+  * `create2_address_chain_independent` + `create2_salt_definition`
+    (I-7) — these kernel-prove only the **salt preimage's** chain-freeness
+    (`Factory.salt = sha256(masterPkSeed ‖ masterPkRoot)`, a preimage with
+    no chain id); they do **not** establish full CREATE2 *address*
+    determinism. The address-level leg `create2Address_chain_independent`
+    carries that as a *conditional* theorem whose hypotheses are EVM-TCB
+    facts (a singleton CREATE2 factory deployed to one address on every
+    chain + a frozen, chain-free `keccak256(initCode)`) — cited-TCB, not
+    modelled in Lean.
   * `factory_requires_bootstrap_sig` (I-8)
   * Storage-level no-reset/no-decrease lemmas (I-3 structurally)
 

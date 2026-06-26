@@ -3,10 +3,14 @@
 > **Honest status (2026-05-19).** This directory contains the
 > in-progress mechanisation of the theft-freedom theorem. The Lean 4
 > kernel checks the headline theorem
-> `SphincsCVerify.Spec.Theorems.theft_free`, but 6 of the 11 axioms in
-> its dependency closure have type `True` (no semantic content), and 1
-> axiom is about a Lean fiction (`Bridge.EntryPoint.handleOp`) rather
-> than the deployed EntryPoint v0.6. The proof in its present form is
+> `SphincsCVerify.Spec.Theorems.theft_free`. After the Tier-1.9
+> refactor its bridge axioms carry real propositional content (A1 and
+> the A3.x axioms are opaque-equality shapes equating the
+> deployed-bytecode symbols to the Lean model; A4 is a content-bearing
+> opaque-predicate marker), but the trust base still rests on cited-TCB
+> axioms — notably A2 (`entrypoint_honest`), which states a property of
+> the Lean `Bridge.EntryPoint.handleOp` model rather than the deployed
+> EntryPoint v0.6. The proof in its present form is
 > a model-level sanity check, not yet a mathematical guarantee about
 > the deployed bytecode. See
 > [`../docs/AXIOM_STATUS.json`](../docs/AXIOM_STATUS.json) for the
@@ -82,9 +86,12 @@ the audit script fails on any uncovered occurrence.
 
 The single headline theorem `SphincsCVerify.Spec.Theorems.theft_free`
 is kernel-checked, and its dependency closure matches the documented
-set. **But** the documented set includes six `True`-typed axioms
-(zero semantic content) and one "MISLEADING" axiom (about a Lean
-fiction, not the deployed contract). So the theorem reads:
+set. **But** the link to the deployed contracts still rests on
+cited-TCB axioms rather than in-kernel discharge: one "MISLEADING"
+axiom (A2, about a Lean fiction, not the deployed contract), plus the
+bridge axioms (A1/A3.x/A4 — content-bearing, discharged against pinned
+bytecode or cited as Ethereum TCB) and the cited EUF-CMA crypto layer
+(A5). So the theorem reads:
 
 > *Under the Lean state-transition model of EntryPoint v0.6 + the Lean
 > model of PQSmartWallet + Solidity-selectors-modelled-as-placeholders
@@ -93,15 +100,41 @@ fiction, not the deployed contract). So the theorem reads:
 > wrapped signature under an installed-owner key.
 
 The connection to the **deployed** bytecode is supplied by three
-axioms whose Lean type is literally `True`:
+axioms, all refactored out of the old `True` placeholder shape into
+content-bearing statements (verify each in `Bridge/Refinement.lean`):
 
-* `Bridge.solidityVerifier_compiles_correctly : ∀ ..., True` (A3)
-* `Bridge.evm_bytecode_executes_correctly : True` (A4)
-* `Bridge.precompile_0x02_is_FIPS_180_4 : ∀ ..., True` (A1)
+* `Bridge.solidityVerifier_compiles_correctly` (A3.1) —
+  **load-bearing.** Its conclusion is a real propositional equality,
+  `DeployedBytecode.SPHINCsC10Asm_verify … = Interpreter.C10.execC10Asm …`
+  (the faithful transcription of the deployed Yul, *not* the bare
+  `verifyYulModel`). It is **consumed** by `theft_free`: the existence
+  half rewrites the deployed-verifier symbol with this equality
+  (`rw [hbridge]; exact hverify`), so deleting the axiom leaves the
+  proof unprovable. Discharged against pinned bytecode (Halmos input
+  gates + executable Lean↔FIPS↔bytecode KAT); the residual ∀-signature
+  equivalence under uninterpreted SHA-256 is the standing ceiling
+  (= A1).
+* `Bridge.precompile_0x02_is_FIPS_180_4` (A1) — carries a real
+  equality type, `DeployedBytecode.SHA256_precompile input = sha256
+  input`. In `theft_free` it is a **non-consumed** cited-TCB marker:
+  pulled into the `#print axioms` closure via a `have` binding so the
+  closure self-documents the SHA-256-precompile boundary, but the
+  safety argument does not consume it. (It *is* genuinely consumed by
+  the bytecode/verifier-transport corollaries.)
+* `Bridge.evm_bytecode_executes_correctly` (A4) — its type is
+  `∀ (c : Wallet.Execute.Call), Bridge.evmDeliversCall c`, where
+  `evmDeliversCall` is an **opaque** predicate (kernel-irreducible —
+  it cannot be `trivial`/`rfl`-ed away). Like A1 it is a
+  **non-consumed** cited-TCB marker in `theft_free`, present in the
+  closure to name the EVM-delivers-the-emitted-CALL boundary, not a
+  semantic premise of the safety proof.
 
-These axioms appear in `#print axioms theft_free` for documentation
-but they constrain nothing in the kernel. Hostile removal of the
-axiom does not invalidate the proof.
+So A3.1 is genuinely load-bearing — remove it and `theft_free` no
+longer closes — while A1 and A4 are content-bearing but non-consumed
+TCB markers surfaced in the closure for completeness. None of the
+three is `True`-typed any more; the earlier "they constrain nothing /
+hostile removal does not invalidate the proof" claim held only before
+the Tier-1.9 refactor and is now false (decisively so for A3.1).
 
 Plus the cryptographic content:
 

@@ -399,13 +399,26 @@ def handleOpBytecode
     Same hypotheses and conclusion as `theft_free`, except the
     EntryPoint transition runs the wallet validation step at the opaque
     `DeployedBytecode.PQSmartWallet_validateUserOp` symbol — "the code
-    at the pinned codehash" — rather than at the Lean model. The extra
-    hypothesis `hInv` is the kernel-proven reachable-state invariant
-    (`Wallet/Invariants.lean::combinedCap_inductive`): A3.2's pointwise
-    equality is conditioned on it, because outside it the bytecode
-    reverts on a checked-arithmetic overflow where the ℕ-valued model
-    returns failure (a divergence on unreachable states only — see
-    AXIOM_STATUS.json A3.2).
+    at the pinned codehash" — rather than at the Lean model.
+
+    **P1 (honest status of `hInv`).** The extra hypothesis `hInv` (the
+    per-index combined cap `slotUses i + offchainSigCount i ≤ MaxSlotUses`)
+    is an ASSUMED hypothesis of this corollary, NOT a discharged kernel fact.
+    A3.2's pointwise equality is conditioned on it because outside it the
+    deployed bytecode reverts on a checked-arithmetic overflow where the
+    ℕ-valued model returns failure (a divergence on unreachable states only —
+    see AXIOM_STATUS.json A3.2). The REACHABILITY of `hInv` — what makes
+    "divergence on unreachable states only" true — is backed by the Solidity
+    Foundry invariant fuzz test (`contracts/smart-wallet/test/PQSmartWalletInvariants.t.sol`,
+    256 runs — fuzzing, NOT a kernel proof). In Lean the building blocks exist
+    but are not yet assembled into a `Reachable → hInv` theorem that would
+    discharge `hInv` here: `combinedCap_inductive` proves only the
+    `validateSignature` preservation STEP (no base case, no execute step) and is
+    currently cited but not applied by any proof; the P3 cross-counter
+    preservation lemmas (`Invariants.{setOffchain,bumpSlot,bumpBootstrap}_preserves_*`)
+    are further pieces. Until that assembly lands `hInv` stays an explicit
+    hypothesis — this corollary is a sound CONDITIONAL result, not an
+    unconditional one.
 
     `#print axioms theft_free_bytecode` = `theft_free`'s closure
     ∪ { solidityWallet_compiles_correctly }. -/
@@ -636,10 +649,21 @@ The composition is:
     the above into the trace-level statement.
 
 Removing any of {I-1, E-8, the `applyStep` token-write lemma} would
-leave the conclusion unprovable; under the bridge axioms the
-`verify_fn` of the model coincides with the deployed
-`SPHINCsC10Asm.verify` bytecode (A1, A3.1, A4), so "the model's
-verifier returned true" lifts to "the on-chain verifier returned true".
+leave the conclusion unprovable.
+
+**P13 (honest scope of `verify_fn`).** This trace-level theorem constrains
+the trace's OWN SUPPLIED `verify_fn` field — it is NOT pinned here to the
+deployed `SPHINCsC10Asm.verify`. Its `#print axioms` closure is kernel-only
+(`{propext, Classical.choice, Quot.sound}`, asserted by
+`scripts/dump_axioms_claim4.lean` and `make verify-exec-gate`), so it does NOT
+consume the A1/A3.1/A4 bridge axioms; the earlier wording "under the bridge
+axioms the model's `verify_fn` coincides with the deployed bytecode … lifts to
+the on-chain verifier" was unmechanized prose contradicted by that gate. The
+lift to the DEPLOYED verifier is performed in `theft_free` (via A2 + A3.1), not
+in this Claim-4 trace gate. Note also: this gate pins ETH-value-moving calls;
+`σ_pre` below is existentially quantified (some earlier trace state), not the
+wallet's reachable owner state, and value=0 call-graph pinning to the deployed
+verifier remains an OPEN obligation (see OPEN_PROOF_OBLIGATIONS / Claim 4).
 -/
 
 open SphincsCVerify.Wallet.TxFlow

@@ -28,10 +28,11 @@ SHELL        := bash
 LEAN_DIR := lean
 LAKE     ?= $(shell command -v lake 2>/dev/null || echo $$HOME/.elan/bin/lake)
 
-.PHONY: verify verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk verify-interp verify-transcription verify-independent-signer verify-storage-mutators verify-fv-lints verify-lean4checker verify-kontrol verify-halmos
+.PHONY: verify verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk verify-interp verify-transcription verify-independent-signer verify-storage-mutators verify-lean-proto-domain verify-fv-lints verify-lean4checker verify-kontrol verify-halmos
 
 verify: verify-build
 	@python3 scripts/check_c10_transcription.py
+	@python3 scripts/check_lean_proto_domain.py
 	@cd $(LEAN_DIR) && $(LAKE) exe verify-test-vectors
 	@cd $(LEAN_DIR) && $(LAKE) exe verify-mutant-corpus
 
@@ -45,6 +46,13 @@ verify: verify-build
 # resetter FAIL. See scripts/check_storage_mutators.sh.
 verify-storage-mutators:
 	@bash scripts/check_storage_mutators.sh
+
+# P7 source lint (no lake build): the Lean factory add-slot domain tag must be
+# byte-identical to proto::FACTORY_ADD_SLOT_DOMAIN, so the squat-defence proof
+# (invariant #6) stays bound to the digest the device actually signs. Closes
+# the "Lean-only domain drift undetected by the bytecode harnesses" residual.
+verify-lean-proto-domain:
+	@python3 scripts/check_lean_proto_domain.py
 
 # FV-invariant escape-hatch gate: fails CI on the audit anti-patterns over the
 # lean/ + extracted/ Lean SOURCE (comment-stripped). Four sub-lints:
@@ -152,11 +160,21 @@ verify-build:
 	@cd $(LEAN_DIR) && $(LAKE) build
 
 verify-audit:
-	@echo "=== Pending sorry tactics ==="
+	@echo "=== Build + capture compiler 'declaration uses sorry' warnings (P8: authoritative sorry gate) ==="
+	@cd $(LEAN_DIR) && $(LAKE) build 2>&1 | tee /tmp/pq_audit_build.out
+	@if grep -E "declaration uses 'sorry'" /tmp/pq_audit_build.out; then \
+	  echo "FAIL: a SphincsCVerify declaration uses 'sorry' (incomplete proof — the compiler caught it regardless of source position)"; exit 1; fi
+	@echo ""
+	@echo "=== Pending sorry tactics (textual belt-and-braces) ==="
 	@cd $(LEAN_DIR) && $(LAKE) env lean --run scripts/check_no_sorry.lean
 	@echo ""
-	@echo "=== Axiom dependency of headline theorems ==="
-	@cd $(LEAN_DIR) && $(LAKE) env lean scripts/dump_axioms.lean || true
+	@echo "=== Axiom dependency of headline theorems (P8: fail on sorryAx / elaboration error) ==="
+	@cd $(LEAN_DIR) && $(LAKE) env lean scripts/dump_axioms.lean > /tmp/pq_audit_axioms.out 2>&1; \
+	  status=$$?; cat /tmp/pq_audit_axioms.out; \
+	  if [ $$status -ne 0 ]; then echo "FAIL: dump_axioms.lean elaboration error (a pinned theorem may be renamed/missing — the dump no longer covers the headline closure)"; exit 1; fi
+	@if grep -q sorryAx /tmp/pq_audit_axioms.out; then \
+	  echo "FAIL: sorryAx in a headline/corollary axiom closure — a proof is incomplete"; exit 1; fi
+	@echo "OK: build emitted no 'uses sorry' warning and no headline/corollary closure contains sorryAx."
 
 verify-three-claims:
 	@bash scripts/verify-three-claims.sh
@@ -168,7 +186,15 @@ verify-exec-gate:
 	@echo "=== Axiom closure for Claim 4 theorems ==="
 	@echo "Expected closure: { propext, Classical.choice, Quot.sound } (kernel-only)"
 	@echo ""
-	@cd $(LEAN_DIR) && $(LAKE) env lean scripts/dump_axioms_claim4.lean
+	@cd $(LEAN_DIR) && $(LAKE) env lean scripts/dump_axioms_claim4.lean > /tmp/pq_claim4_axioms.out 2>&1; \
+	  status=$$?; cat /tmp/pq_claim4_axioms.out; \
+	  if [ $$status -ne 0 ]; then echo "FAIL: Claim-4 axiom dump elaboration error"; exit 1; fi
+	@# P8: actually ENFORCE kernel-only (was print-only). Fail on sorryAx or any
+	@# non-kernel axiom (bridge/crypto) entering a Claim-4 closure — e.g. if the
+	@# trace gate were ever pinned to the deployed verifier (which would pull in
+	@# A1/A3.1/A4 and is the P13 over-claim this gate now catches). The python
+	@# helper flattens `#print axioms`'s wrapped output before parsing.
+	@python3 scripts/check_axiom_closure.py /tmp/pq_claim4_axioms.out
 
 verify-bytecode-setup:
 	@bash halmos/setup_halmos.sh

@@ -104,6 +104,8 @@ rely on, but they must be disclosed, not hidden.
 - **What closes it:** Kontrol against the deployed EntryPoint v0.6 bytecode at
   `0x5FF1…2789` (the docs estimate an 8–12 month engagement). Otherwise cited
   OZ/ChainSecurity/Spearbit audits + 18 mo mainnet.
+- **Note:** A2 also underwrites half of the validated-callData ↔ executed-args
+  binding (the EntryPoint-relays-`op.callData` premise) — named in GAP-5b.
 
 ### GAP-5 — A4: EVM-executes-per-spec (incl. emitted-CALL byte delivery)
 - **What/why:** `evm_bytecode_executes_correctly` is a `True` marker. It also
@@ -112,6 +114,39 @@ rely on, but they must be disclosed, not hidden.
   passed; that the EVM then delivers those exact bytes is A4, not A3.2-exec).
 - **What closes it:** KEVM as the formal EVM-semantics referent. Universal
   Ethereum trust; essentially never discharged per-contract.
+
+### GAP-5b — validated-callData ↔ executed-args binding (A2 + A4, cited-TCB)
+This names — in one place — the executed↔signed calldata boundary that GAP-4
+(A2) and GAP-5 (A4) *jointly* underwrite; it is a localization of TCB that was
+always present, not a newly-found hole, and it does **not** weaken the proven
+half.
+- **What is proven (no gap):** the signed digest commits to `op.callData`.
+  `theft_free_with_calldata_binding` (kernel-checked) shows equal
+  `sphincsDigest` ⇒ equal preimage ⇒ equal callData, modulo a same-length
+  SHA-256 collision that lands in the cited-infeasible `BreaksHash` disjunct
+  (A5). So "a signature was verified" ⇒ "`op.callData` is fixed" is a theorem.
+- **What is NOT proven in Lean:** the binding from that *validated*
+  `op.callData` to the *executed* `(target, value, data)` actually delivered to
+  the external CALL. The EntryPoint bridge's `handleOp` applies a **free**
+  `effects` argument on the success path — `effects` is never constrained to
+  match `op.callData` — so the Lean model relates the digest to `op.callData`
+  but never relates `op.callData` to the executed args. That seam is two
+  cited-TCB facts:
+  - **A2 (GAP-4) — EntryPoint relays the signed `op.callData`.** EntryPoint
+    v0.6 invokes the wallet with exactly the validated `op.callData` (and only
+    after `validateUserOp` returned success). This relay is *cited
+    EntryPoint-v0.6 behaviour* taken as a premise (the shape of `handleOp` +
+    `entrypoint_honest` docstring item (3)); the **formal `entrypoint_honest`
+    axiom statement covers only dispatch-gating + no-direct-debit**, not the
+    relay itself.
+  - **A4 (GAP-5) — EVM forwarded-byte delivery.** The EVM then delivers those
+    exact decoded bytes to `target.call{value}(data)`
+    (`evm_bytecode_executes_correctly`; GAP-5's "the EVM then delivers those
+    exact bytes is A4").
+- **Why open / what closes it:** the same abstraction gap as GAP-4 and GAP-5 —
+  abstracted Lean models, not the deployed EntryPoint/EVM. Closed by Kontrol
+  against the deployed EntryPoint v0.6 (GAP-4) **and** KEVM as the EVM referent
+  (GAP-5); until then it is part of the named universal-Ethereum TCB.
 
 ### GAP-6 — A5: SPHINCS+C10 EUF-CMA, and the "+C" transition
 - **What/why:** `EUF_CMA_SPHINCSplusC` + 3 hardness-shape axioms are cited to
@@ -245,7 +280,7 @@ To drop every qualifier and claim "fully proven to the bytecode":
 - [ ] **GAP-2** — verifier ∀-signature equivalence via Kontrol/KEVM or Verity.
 - [ ] **GAP-7 / GAP-8** — bytecode discharges carried as Lean proof terms (Verity) or audited solver + upstreamed patch.
 - [ ] **GAP-9 / GAP-10 / GAP-11** — index/shape/credit envelopes generalised to ∀ (or Lean lemmas covering them). *Model halves of GAP-9 + GAP-10 closed 2026-06-12 by kernel lemmas (`validateSignature_unset_index_uniform`, `validateSignature_result_local`); GAP-11 CLOSED 2026-06-12 (per-index credit-counter model + bundle semantics + both-profile re-discharge; dispatch-revert direction documented as model-scope). Remaining: bytecode-side mapping-getter uniformity (GAP-9) and per-index slot isolation (GAP-10).*
-- [ ] **GAP-3 / GAP-4 / GAP-5 / GAP-6 / GAP-13** — either discharged (Kontrol/KEVM/Verity) or **explicitly accepted** as the named universal-Ethereum + crypto TCB, and the public claim worded to say so.
+- [ ] **GAP-3 / GAP-4 / GAP-5 / GAP-6 / GAP-13** (the validated-callData ↔ executed-args binding, GAP-5b, folds into GAP-4 + GAP-5) — either discharged (Kontrol/KEVM/Verity) or **explicitly accepted** as the named universal-Ethereum + crypto TCB, and the public claim worded to say so.
 
 With GAP-1 closed, the **maximal honest claim** is the one in
 [`THE_CLAIM.md`](THE_CLAIM.md): *control flow proven to the deployed

@@ -43,6 +43,7 @@ import SphincsCVerify.Wallet.ValidateUserOp
 import SphincsCVerify.Wallet.Factory
 import SphincsCVerify.Wallet.IsValidSignature
 import SphincsCVerify.Wallet.StorageLayout
+import SphincsCVerify.Wallet.OffchainBinding
 import SphincsCVerify.Crypto.EUFCMA
 
 namespace SphincsCVerify.Wallet.Invariants
@@ -252,6 +253,84 @@ theorem removeOwner_preserves_counters
         rw [hdec_false] at h
         simp at h
 
+/-! ### (I-3) Cross-counter preservation (P3)
+
+The single-counter `*_no_decrease` lemmas above show each bump-style mutator
+is monotonic in the ONE counter it nominally touches. To make the docstring
+claim "every mutator preserves the OTHER two counters" actually load-bearing
+(rather than asserted by English prose), the six lemmas below discharge the
+cross-counter preservation for `bumpBootstrap` / `bumpSlot` / `setOffchain`.
+They are trivially true of the model — each mutator updates exactly one record
+field — but stating them as theorems is what forbids a `setOffchainEvil` that
+also zeroed `slotUses` from satisfying the invariant suite. Mirrors the pattern
+the `addOwner`/`removeOwner` lemmas already establish (full three-counter
+preservation) and the `capOk_bootstrap_implies_strict` make-it-proof-load-bearing
+practice. -/
+
+/-- `bumpBootstrap` preserves every `slotUses[j]` (it only touches `bootstrapUses`). -/
+theorem bumpBootstrap_preserves_slotUses
+    (s : Storage) (cap : Nat) (s' : Storage) (j : Nat)
+    (h : Storage.bumpBootstrap s cap = some s') :
+    s.slotUses j = s'.slotUses j := by
+  unfold Storage.bumpBootstrap at h
+  by_cases hcap : s.bootstrapUses + 1 > cap
+  · simp [hcap] at h
+  · simp [hcap] at h; rw [← h]
+
+/-- `bumpBootstrap` preserves every `offchainSigCount[j]`. -/
+theorem bumpBootstrap_preserves_offchain
+    (s : Storage) (cap : Nat) (s' : Storage) (j : Nat)
+    (h : Storage.bumpBootstrap s cap = some s') :
+    s.offchainSigCount j = s'.offchainSigCount j := by
+  unfold Storage.bumpBootstrap at h
+  by_cases hcap : s.bootstrapUses + 1 > cap
+  · simp [hcap] at h
+  · simp [hcap] at h; rw [← h]
+
+/-- `bumpSlot` preserves `bootstrapUses` (it only touches `slotUses`). -/
+theorem bumpSlot_preserves_bootstrap
+    (s : Storage) (oi cap : Nat) (s' : Storage)
+    (h : Storage.bumpSlot s oi cap = some s') :
+    s.bootstrapUses = s'.bootstrapUses := by
+  unfold Storage.bumpSlot at h
+  by_cases hcap : s.slotUses oi + 1 > cap
+  · simp [hcap] at h
+  · simp [hcap] at h; rw [← h]
+
+/-- `bumpSlot` preserves every `offchainSigCount[j]`. -/
+theorem bumpSlot_preserves_offchain
+    (s : Storage) (oi cap : Nat) (s' : Storage) (j : Nat)
+    (h : Storage.bumpSlot s oi cap = some s') :
+    s.offchainSigCount j = s'.offchainSigCount j := by
+  unfold Storage.bumpSlot at h
+  by_cases hcap : s.slotUses oi + 1 > cap
+  · simp [hcap] at h
+  · simp [hcap] at h; rw [← h]
+
+/-- `setOffchain` preserves every `slotUses[j]` (it only touches `offchainSigCount`). -/
+theorem setOffchain_preserves_slotUses
+    (s : Storage) (oi newCount slotUsesNow cap : Nat) (s' : Storage) (j : Nat)
+    (h : Storage.setOffchain s oi newCount slotUsesNow cap = some s') :
+    s.slotUses j = s'.slotUses j := by
+  unfold Storage.setOffchain at h
+  by_cases hlt : newCount < s.offchainSigCount oi
+  · simp [hlt] at h
+  · by_cases hcap : slotUsesNow + newCount > cap
+    · simp [hlt, hcap] at h
+    · simp [hlt, hcap] at h; rw [← h]
+
+/-- `setOffchain` preserves `bootstrapUses`. -/
+theorem setOffchain_preserves_bootstrap
+    (s : Storage) (oi newCount slotUsesNow cap : Nat) (s' : Storage)
+    (h : Storage.setOffchain s oi newCount slotUsesNow cap = some s') :
+    s.bootstrapUses = s'.bootstrapUses := by
+  unfold Storage.setOffchain at h
+  by_cases hlt : newCount < s.offchainSigCount oi
+  · simp [hlt] at h
+  · by_cases hcap : slotUsesNow + newCount > cap
+    · simp [hlt, hcap] at h
+    · simp [hlt, hcap] at h; rw [← h]
+
 end Storage
 
 /-- **(I-3) No reset path.** The meta-statement: every state-mutating
@@ -264,19 +343,44 @@ end Storage
     on-chain meaning of CLAUDE.md invariant #7 "per-chain caps
     monotonic, unresettable".
 
-    Proven by composing the five no-decrease / counter-preservation
+    **P3 (cross-counter discharge).** Each of the three bump-style conjuncts
+    asserts ALL THREE counters at once — the counter it bumps is non-decreasing
+    AND the other two are preserved — matching the docstring's "monotonic in
+    bootstrapUses, slotUses, AND offchainSigCount" rather than only the one each
+    nominally touches. This makes the cross-counter preservation proof-load-
+    bearing: a `setOffchainEvil` that bumped `offchainSigCount` while zeroing
+    `slotUses` no longer satisfies the (now three-counter) `setOffchain`
+    conjunct. `addOwner`/`removeOwner` already carried full three-counter
+    preservation.
+
+    Caveat (P10, scope): these are the only *counter* mutators; `tryInitialize`
+    also writes the counter fields (it zeroes them at construction) but is gated
+    by the one-shot `nextOwnerIndex == 0` guard — see `initialize_called_exactly_once`
+    and the reachability note in the I-4 section. `no_reset_path` is a per-method
+    monotonicity statement, not an assembled reachable-state theorem; the
+    `tryInitialize` exclusion rests on that guard, not on this theorem.
+
+    Proven by composing the no-decrease + cross-counter preservation
     lemmas above; no axioms. -/
 theorem no_reset_path :
-    -- `bumpBootstrap` never decreases `bootstrapUses`.
+    -- `bumpBootstrap` never decreases `bootstrapUses`, preserves the others.
     (∀ (s : Storage) (cap : Nat) (s' : Storage),
-        Storage.bumpBootstrap s cap = some s' → s.bootstrapUses ≤ s'.bootstrapUses)
-    -- `bumpSlot` never decreases any `slotUses[j]`.
-    ∧ (∀ (s : Storage) (oi cap : Nat) (s' : Storage) (j : Nat),
-        Storage.bumpSlot s oi cap = some s' → s.slotUses j ≤ s'.slotUses j)
-    -- `setOffchain` never decreases any `offchainSigCount[j]`.
-    ∧ (∀ (s : Storage) (oi newCount slotUsesNow cap : Nat) (s' : Storage) (j : Nat),
+        Storage.bumpBootstrap s cap = some s' →
+          s.bootstrapUses ≤ s'.bootstrapUses
+          ∧ (∀ j, s.slotUses j = s'.slotUses j)
+          ∧ (∀ j, s.offchainSigCount j = s'.offchainSigCount j))
+    -- `bumpSlot` never decreases any `slotUses[j]`, preserves the others.
+    ∧ (∀ (s : Storage) (oi cap : Nat) (s' : Storage),
+        Storage.bumpSlot s oi cap = some s' →
+          (∀ j, s.slotUses j ≤ s'.slotUses j)
+          ∧ s.bootstrapUses = s'.bootstrapUses
+          ∧ (∀ j, s.offchainSigCount j = s'.offchainSigCount j))
+    -- `setOffchain` never decreases any `offchainSigCount[j]`, preserves the others.
+    ∧ (∀ (s : Storage) (oi newCount slotUsesNow cap : Nat) (s' : Storage),
         Storage.setOffchain s oi newCount slotUsesNow cap = some s' →
-          s.offchainSigCount j ≤ s'.offchainSigCount j)
+          (∀ j, s.offchainSigCount j ≤ s'.offchainSigCount j)
+          ∧ (∀ j, s.slotUses j = s'.slotUses j)
+          ∧ s.bootstrapUses = s'.bootstrapUses)
     -- `addOwner` preserves all three counters.
     ∧ (∀ (s : Storage) (o : OwnerBytes) (s' : Storage),
         Storage.addOwner s o = some s' →
@@ -288,12 +392,20 @@ theorem no_reset_path :
         Storage.removeOwner s i expected = some s' →
           s.bootstrapUses = s'.bootstrapUses
           ∧ (∀ j, s.slotUses j = s'.slotUses j)
-          ∧ (∀ j, s.offchainSigCount j = s'.offchainSigCount j)) :=
-  ⟨Storage.bumpBootstrap_no_decrease,
-   Storage.bumpSlot_no_decrease,
-   Storage.setOffchain_no_decrease_offchain,
-   Storage.addOwner_preserves_counters,
-   Storage.removeOwner_preserves_counters⟩
+          ∧ (∀ j, s.offchainSigCount j = s'.offchainSigCount j)) := by
+  refine ⟨?_, ?_, ?_, Storage.addOwner_preserves_counters, Storage.removeOwner_preserves_counters⟩
+  · intro s cap s' h
+    exact ⟨Storage.bumpBootstrap_no_decrease s cap s' h,
+           fun j => Storage.bumpBootstrap_preserves_slotUses s cap s' j h,
+           fun j => Storage.bumpBootstrap_preserves_offchain s cap s' j h⟩
+  · intro s oi cap s' h
+    exact ⟨fun j => Storage.bumpSlot_no_decrease s oi cap s' j h,
+           Storage.bumpSlot_preserves_bootstrap s oi cap s' h,
+           fun j => Storage.bumpSlot_preserves_offchain s oi cap s' j h⟩
+  · intro s oi newCount slotUsesNow cap s' h
+    exact ⟨fun j => Storage.setOffchain_no_decrease_offchain s oi newCount slotUsesNow cap s' j h,
+           fun j => Storage.setOffchain_preserves_slotUses s oi newCount slotUsesNow cap s' j h,
+           Storage.setOffchain_preserves_bootstrap s oi newCount slotUsesNow cap s' h⟩
 
 /-! ## (I-4) Bootstrap unremovability -/
 
@@ -675,15 +787,23 @@ theorem eip1271_forbids_bootstrap
 
 /-! ## (I-7) Address determinism -/
 
-/-- (I-7) **Address determinism / chain-independence.** The CREATE2 salt —
-    the only wallet-specific input to the proxy address — is `sha256` of the
+/-- (I-7) **Salt chain-independence.** The CREATE2 salt — the only
+    wallet-specific input to the proxy address — is `sha256` of the
     `(masterPkSeed ‖ masterPkRoot)` preimage, which contains **no chain id**,
-    so the deployed proxy address is identical on every chain (invariant #6).
-    The `chain1 chain2` parameters make the cross-chain framing explicit;
-    they provably cannot affect the result because `Factory.salt` takes no
-    chain id. (A bare `salt = salt` reflexive form would be vacuous; this
-    states the actual chain-free preimage, which would FAIL if the salt mixed
-    in a chain id — cf. `create2_salt_definition` below.) -/
+    so the salt is identical on every chain. This is the proof's actual
+    content for I-7; the address-level claim rests additionally on the
+    EVM-TCB facts named in `create2Address_chain_independent` below.
+
+    **P11 (honest scope).** This theorem pins only the SALT preimage's
+    chain-freeness — NOT the full CREATE2 address. The `chain1 chain2`
+    parameters are inert (they cannot affect `Factory.salt`, which takes no
+    chain id); they are retained only because `dump_axioms.lean` pins this
+    symbol's kernel-only closure. The full address
+    `keccak256(0xff ‖ deployer ‖ salt ‖ keccak256(initCode))[12:]` additionally
+    depends on the deployer (factory) address and `keccak256(initCode)`; their
+    chain-independence is an EVM-TCB fact (a singleton CREATE2 factory deployed
+    to the same address on every chain + a frozen `initCode`), made explicit in
+    `create2Address_chain_independent`. See `OPEN_PROOF_OBLIGATIONS.md` I-7. -/
 theorem create2_address_chain_independent
     (mpk_seed mpk_root : ByteVec 32) (chain1 chain2 : UInt64) :
     Factory.salt mpk_seed mpk_root
@@ -702,6 +822,38 @@ theorem create2_salt_definition
                    Spec.ByteSeg.ofByteVec mpk_root] := by
   unfold Factory.salt
   rfl
+
+/-- **CREATE2 address model (P11).** The deployed proxy address is
+    `keccak256(0xff ‖ deployer ‖ salt ‖ keccak256(initCode))` truncated to the
+    low 20 bytes; for the chain-independence argument only the dependency on
+    `(deployer, salt, initCodeHash)` matters, so we model it as the keccak of
+    those three (the `0xff` framing byte and `[12:]` truncation do not affect
+    the equality below). Reuses the model's single opaque `keccak256`. -/
+def create2Address (deployer salt initCodeHash : ByteVec 32) : ByteVec 32 :=
+  OffchainBinding.keccak256
+    [Spec.ByteSeg.ofByteVec deployer,
+     Spec.ByteSeg.ofByteVec salt,
+     Spec.ByteSeg.ofByteVec initCodeHash]
+
+/-- (I-7) **Address-level chain-independence (P11, address leg).** Unlike
+    `create2_address_chain_independent` (which pins only the salt), this names
+    the full CREATE2 address dependency and carries FORCE: with distinct
+    deployer (`d1`, `d2`) and init-code-hash (`ich1`, `ich2`) binders, the
+    hypotheses `d1 = d2` and `ich1 = ich2` — the EVM-TCB facts that the CREATE2
+    factory is a singleton deployed to one address on every chain and that the
+    `initCode` (hence its keccak) is frozen and chain-free — are USED, and the
+    chain-free content lives entirely in the shared `Factory.salt mpk_seed
+    mpk_root` argument (which provably takes no chain id). Conclusion: the
+    deployed address is identical across chains. This is the conditional the
+    cross-chain address guarantee actually rests on; it is NOT an unconditional
+    kernel theorem (the deployer/init-code chain-freeness is cited-TCB, not
+    modelled in Lean). -/
+theorem create2Address_chain_independent
+    (mpk_seed mpk_root : ByteVec 32) (d1 d2 ich1 ich2 : ByteVec 32)
+    (hd : d1 = d2) (hi : ich1 = ich2) :
+    create2Address d1 (Factory.salt mpk_seed mpk_root) ich1
+      = create2Address d2 (Factory.salt mpk_seed mpk_root) ich2 := by
+  subst hd; subst hi; rfl
 
 /-! ## (I-8) Squat-defence: factory requires bootstrap signature -/
 

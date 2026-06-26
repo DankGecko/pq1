@@ -33,28 +33,49 @@ is false.
   consensus client (Appel/VST-style). Universal Ethereum trust;
   outside any single contract project.
 
-## A2. EntryPoint v0.6 is unhackable
+## A2. EntryPoint v0.6 behaves like the `handleOp` model
 
 * **Lean.** `Bridge/EntryPoint.lean::entrypoint_honest`
-* **Scope.** The deployed EntryPoint v0.6 contract at
-  `0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789`:
-  * only invokes wallet execution after `wallet.validateUserOp`
-    returned the success sentinel;
-  * does not itself transfer wallet value;
-  * supplies `userOpHash` per ERC-4337 v0.6.
-* **Discharge.** Cited; per user decision A2 stays as a Lean fiction
-  (no Kontrol-against-deployed-bytecode discharge). The OZ /
-  ChainSecurity / Spearbit audits + 18+ months mainnet operation are
-  the trust basis.
-* **Elimination path.** Model EntryPoint v0.6 in Lean and discharge
-  against KEVM. 8-12 month engagement; out of current scope.
+* **Two distinct statements — keep them separate.**
+  * **(In-Lean) `entrypoint_honest` is a TAUTOLOGY over the ~10-line
+    model `handleOp`.** Its conclusion ("a wallet-balance decrement
+    implies `validateSignature` returned success, with the resulting
+    storage as post-state") is *provable from the definition of
+    `handleOp`*: the failure branch returns `σ` unchanged (so no
+    balance decrease is possible), and the success branch sets
+    `walletStorage` to exactly the `validateSignature` post-state. It
+    is declared as an `axiom` (not a `theorem`) only so it surfaces in
+    `theft_free`'s `#print axioms` closure as the named A2 marker — it
+    constrains nothing about the *real* contract and is **not** a
+    load-bearing cryptographic premise consumed by the proof. Removing
+    it would not create a logical gap that a genuine assumption fills;
+    the model `handleOp` already entails it.
+  * **(Cited-TCB) The genuine assumption is that the DEPLOYED
+    EntryPoint v0.6 bytecode at
+    `0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789` actually behaves like
+    `handleOp`** — i.e. it only invokes wallet execution after
+    `wallet.validateUserOp` returned the success sentinel, never itself
+    transfers wallet value, and supplies `userOpHash` per ERC-4337
+    v0.6. This is the load-bearing fact; it is **not** discharged in
+    Lean (the Lean model is a fiction we trust to mirror the contract).
+* **Discharge.** Cited. The OZ / ChainSecurity / Spearbit audits + 18+
+  months mainnet operation of the immutable EntryPoint v0.6 are the
+  trust basis for the deployed-bytecode-matches-`handleOp` assumption.
+* **Elimination path.** Model EntryPoint v0.6's real bytecode in Lean
+  and discharge the deployed-matches-`handleOp` assumption against KEVM
+  (Kontrol). This is the **separate** 8-12 month engagement; it
+  targets the cited-TCB statement above, **not** the tautological
+  in-Lean axiom (which proves nothing about the real contract and so
+  cannot be "discharged"). Out of current scope.
 
-### A2-noreplay. EntryPoint enforces `(sender, nonce)` uniqueness
-
-* **Lean.** `Bridge/EntryPoint.lean::entrypoint_no_replay`
-* **Scope.** A second `handleOp` with the same `(sender, nonce)` after
-  the first was accepted leaves the state unchanged.
-* **Discharge.** Same as A2 (cited EntryPoint v0.6 audits).
+> **`entrypoint_no_replay` — REMOVED 2026-06-14 (phantom).** A prior
+> A2-noreplay axiom (`(sender, nonce)` uniqueness) was deleted from the
+> Lean source: it was dangling (referenced by zero theorems) and
+> latent-false against its own model (`handleOp` never reads
+> `op.nonce`). EntryPoint v0.6's real `NonceManager` replay protection
+> remains a cited-TCB fact, simply not modelled in Lean and not needed
+> by any theorem. (Note: `docs/AXIOM_STATUS.json` may still carry a
+> stale `A2-noreplay` entry — see cross-file note.)
 
 ## A3. `solc 0.8.28` compiles the four PQ contracts correctly
 
@@ -114,19 +135,32 @@ per-claim corollaries unprovable.
 ## A4. EVM bytecode executes per specification
 
 * **Lean.** `Bridge/Refinement.lean::evm_bytecode_executes_correctly`
-* **Type.** `True` (per user decision, A4 stays as a cited-TCB marker;
-  not refactored to opaque-equality).
-* **Scope.** Every opcode the deployed bytecode uses executes per the
-  EVM spec (Cancun / per-chain configuration).
-* **Discharge.** Cited universal Ethereum TCB; KEVM is the
-  formal-EVM-semantics referent.
+* **Type.** `∀ (c : Wallet.Execute.Call), evmDeliversCall c` (content-bearing
+  form since 2026-06-14; was the prior `: True` placeholder). `evmDeliversCall`
+  is a kernel-irreducible `opaque` predicate — "the EVM faithfully transfers
+  `c.value` and delivers `c.data` to `c.target` per Cancun semantics" — so the
+  axiom *names* the EVM forwarded-byte delivery assumption instead of asserting
+  nothing.
+* **Scope.** Every external call the wallet bytecode emits on a non-reverting
+  execute path is faithfully delivered (value moved, calldata forwarded). This
+  is the boundary `theft_free`'s value-movement guarantee bottoms out on.
+* **Status in `theft_free`.** A4 is a **NON-CONSUMED TCB marker**: a
+  `have _a4_delivers := …` binding pulls it into `theft_free`'s `#print axioms`
+  closure (so the closure self-documents the EVM-delivery boundary), but the
+  safety proof does not consume it — deleting the binding leaves `theft_free`
+  proven. Its honesty value is the content-bearing *type*, not a logical
+  dependency. (Its closure presence relies on `evmDeliversCall` staying
+  `opaque`; the `lint_fv` (d) guard fails if `trivial` ever inhabits it.)
+* **Discharge.** Cited universal Ethereum TCB; KEVM / consensus-client
+  conformance is the formal-EVM-semantics referent. No in-Lean discharge
+  artifact is claimed.
 
 ## A5. SPHINCS+C10 is EUF-CMA secure
 
 * **Lean.** `Crypto/EUFCMA.lean::EUF_CMA_SPHINCSplusC` plus the three
   shape axioms in `Crypto/Assumptions.lean` (`SM_DT_TCR_F`, `ITSR_F`,
-  `hMsg_random_oracle`) and the new corollary
-  `sha256_injective_on_fixed_length`.
+  `hMsg_random_oracle`) and the collision-resistance reduction axiom
+  `sha256_collision_resistance`.
 * **Scope.** For every PPT adversary `A` making at most `Q` signing
   queries, `A`'s forgery probability is bounded by
   `ε(A) + Q · 2^-128`.
@@ -136,12 +170,24 @@ per-claim corollaries unprovable.
 * **Elimination path.** Extend the Barbosa et al. EasyCrypt
   development to SPHINCS+C. Multi-person-year research.
 
-### A5-injective. SHA-256 collision-free on equal-length inputs
+### A5-injective. SHA-256 collision-resistance (disjunctive reduction)
 
-* **Lean.** `Crypto/Assumptions.lean::sha256_injective_on_fixed_length`
-* **Scope.** Named corollary of SM_DT_TCR_F (when restricted to the
-  empty ADRS tweak). Used by Claim 1's
-  `sphincsDigest_field_binding` lemma.
+* **Lean.** `Crypto/Assumptions.lean::sha256_collision_resistance`
+* **Form (honest).** This is **not** an injectivity axiom — literal
+  injectivity (`equal digests ⟹ equal preimages`) is mathematically
+  FALSE on inputs longer than 32 bytes (pigeonhole). The Lean source
+  states the consistent **reduction** form: for two equal-length
+  segment lists with matching SHA-256 digests, EITHER the flattened
+  preimages are equal OR the cited SHA-256 hardness was broken
+  (`… ∨ BreaksHash`). A distinct same-length collision IS the cited
+  collision-resistance break (Barbosa et al. 2024 SM-DT-TCR, empty-ADRS
+  unkeyed collision-resistance); `BreaksHash` is opaque and never
+  assumed false.
+* **Scope.** Used by Claim 1's `sphincsDigest_field_binding` lemma,
+  which propagates the disjunct: equal `sphincsDigest(op)` digests imply
+  equal preimages — unless SHA-256 is broken. (The "A5-injective" label
+  is retained as a stable doc-anchor; the underlying axiom is the
+  collision-resistance reduction, not injectivity.)
 
 ## A6. Lean 4 kernel checks proofs correctly
 
@@ -155,15 +201,18 @@ per-claim corollaries unprovable.
 
 | Claim | Axioms cited in `#print axioms` of the corollary |
 |-------|--------------------------------------------------|
-| 1. Signature-to-execution binding | A6 (kernel), A5-injective (`sha256_injective_on_fixed_length`). The full `theft_free` adds A1, A2, A3.1, A4, A5 (4 sub-axioms). |
-| 2. Owner-set integrity + init atomicity | A6 only (`initialize_called_exactly_once` and `owner_set_nonempty_after_init` are purely structural). For bytecode-level enforcement, A3.4 (MultiOwnable) + A3.2 (Wallet) + A3.3 (Factory) are discharged by Certora. |
-| 3. Execution faithfulness + value flow | A6 only (`executeBatch_faithful` is purely operational). For bytecode-level enforcement, A3.2 (Wallet) is discharged by Halmos against pinned `PQSmartWallet` codehash. |
+| 1. Signature-to-execution binding | A6 (kernel) + `sha256_collision_resistance` (the A5-injective reduction). The full `theft_free` closure adds A1, A2, A3.1, A4, A5 (4 sub-axioms). **Scope of the in-kernel content:** the corollary binds the *signed digest* to the op's `callData` **field** (digest-uniqueness) and the `ownerIndex` (per-index transient credit) — it does NOT in-kernel prove that the bytes *executed* equal the bytes *signed*. That executed-call ⇄ signed-calldata binding rests on cited-TCB **A2** (deployed EntryPoint v0.6 relays `op.callData` verbatim to the wallet) + **A4** (the EVM forwards those bytes to the target). |
+| 2. Owner-set integrity + init atomicity | A6 only (`initialize_called_exactly_once` and `owner_set_nonempty_after_init` are purely structural). For bytecode-level enforcement, A3.4 (MultiOwnable) + A3.2 (Wallet) + A3.3 (Factory) are discharged by Halmos (see A3.* — the prior Certora rule-sets are superseded/alternative paths). |
+| 3. Execution faithfulness + value flow | A6 only (`executeBatch_faithful` is purely operational over the `Execute` model's `(targets, values, datas)` arguments). For bytecode-level enforcement, A3.2 (Wallet) is discharged by Halmos against pinned `PQSmartWallet` codehash. **Scope:** the in-kernel theorem proves the model dispatches its arguments faithfully and in order; that those arguments equal the *signed* batch (and reach the real callee) rests on cited-TCB A2 + A4, not on the kernel. |
 
 The minimal TCB shared by all three claims:
-**A6 (Lean kernel) + A5 (SPHINCS+C10 + the named injective corollary)
-+ A1 (SHA-256 precompile) + A2 (EntryPoint v0.6) + A4 (EVM bytecode)
-+ A3.1-A3.4 (per-contract solc correctness, each discharged by a
-Halmos session, Certora rule-set, or differential test).**
+**A6 (Lean kernel) + A5 (SPHINCS+C10 + the `sha256_collision_resistance`
+reduction corollary) + A1 (SHA-256 precompile) + A2
+(deployed-EntryPoint-v0.6-matches-`handleOp`) + A4 (EVM forwarded-byte
+delivery) + A3.1-A3.4 (per-contract solc correctness, each discharged
+by a Halmos session — plus, for A3.1, executable Lean↔FIPS↔bytecode KAT
++ bulk vectors; the prior Certora rule-sets remain as historical /
+alternative paths, not the current discharge).**
 
 ---
 
@@ -195,14 +244,19 @@ outside their scope.
 ## Three-claim headline statement
 
 > *Given* A1–A6 (with the per-contract A3 sub-axioms discharged by
-> Halmos and Certora against pinned codehashes), for any deployed
+> Halmos against pinned codehashes), for any deployed
 > `PQSmartWallet` proxy `W`:
 >
 > 1. **Signature-to-execution binding.** No successful
 >    `executeWithOffchainCount` / `executeBatchWithOffchainCount` runs
 >    without a SPHINCS+C10 signature valid under an installed owner
 >    key of `W` over a `sphincsDigest` that commits to the exact
->    chainId, sender, nonce, and calldata being executed.
+>    chainId, sender, nonce, and `callData` **field** of the signed op.
+>    (That this signed `callData` field equals the bytes actually
+>    *executed* by `W` and delivered to the target is the cited-TCB
+>    boundary A2 — EntryPoint relays `op.callData` verbatim — composed
+>    with A4 — the EVM forwards those bytes; the kernel proof binds the
+>    digest-to-field and the `ownerIndex`, not the executed payload.)
 >
 > 2. **Owner-set integrity + initialization atomicity.** The owner
 >    set is mutated only by self-call originating from a validated

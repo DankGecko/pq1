@@ -214,19 +214,26 @@ axiom solidityVerifier_compiles_correctly :
     parameter instantiated to `DeployedBytecode.SPHINCsC10Asm_verify`
     (so the on-chain wallet uses the on-chain verifier).
 
-    REACHABLE-STATE HYPOTHESIS. The equality is conditioned on the
-    per-index combined-cap invariant
+    REACHABLE-STATE HYPOTHESIS (P1 — honest status). The equality is
+    conditioned on the per-index combined-cap invariant
     `slotUses i + offchainSigCount i ≤ MaxSlotUses` (the unfolding of
-    `Wallet.Invariants.combinedCapInvariant`, which
-    `combinedCap_inductive` proves established at `initialize` and
-    preserved by every transition). The hypothesis is NOT decorative:
-    on states outside it the two sides genuinely diverge — the
-    deployed bytecode REVERTS (Solidity 0.8 checked arithmetic on
-    `slotUses[i] + offchainSigCount[i]`) where the ℕ-valued model
-    returns `Result.failure`. The unconditional `∀ s` equality is
-    therefore FALSE, and stating the axiom that way would be
-    undischargeable; conditioning on the kernel-proven invariant makes
-    the axiom exactly what the Halmos session proves.
+    `Wallet.Invariants.combinedCapInvariant`). This conditioning is an
+    ASSUMED hypothesis, not a discharged kernel fact: `combinedCap_inductive`
+    proves only the `validateSignature` preservation STEP (it has no base case
+    and no execute-phase step), and is currently CITED but NOT APPLIED by any
+    proof — so it does not establish "established at initialize and preserved by
+    every transition". The reachability is backed by the Solidity Foundry
+    invariant fuzz test (`PQSmartWalletInvariants.t.sol`, 256 runs — fuzzing),
+    with the P3 cross-counter lemmas as further building blocks toward a future
+    Lean `Reachable → cap` discharge. The hypothesis is NOT decorative: on
+    states outside it the two sides genuinely diverge — the deployed bytecode
+    REVERTS (Solidity 0.8 checked arithmetic on
+    `slotUses[i] + offchainSigCount[i]`) where the ℕ-valued model returns
+    `Result.failure`. The unconditional `∀ s` equality is therefore FALSE, and
+    stating the axiom that way would be undischargeable; conditioning on the
+    reachable-state cap is what makes the axiom exactly what the Halmos session
+    proves — but that cap is currently an assumption carried by the corollaries,
+    not a kernel-proven invariant.
 
     Discharge: Halmos pointwise-equivalence session
     `test/halmos/HalmosValidateUserOpEquiv.t.sol` (deployed runtime

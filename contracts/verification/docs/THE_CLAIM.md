@@ -58,7 +58,10 @@ Specifically and defensibly:
    no wallet balance decrease without the deployed verifier accepting an
    installed-owner C10 signature over the op's `sphincsDigest`) is **EUF-CMA-free**,
    resting on A2 (`entrypoint_honest`) + A3.1 (`solidityVerifier_compiles_correctly`)
-   + A1/A4; conjunct 2 (producing such a signature for an un-signed message
+   — A1/A4 ride along in the printed axiom closure as **non-consumed** TCB
+   markers, not semantic premises of conjunct 1 (deleting their `have` bindings
+   leaves `theft_free` proven; see Scope, below); conjunct 2 (producing such a
+   signature for an un-signed message
    would break SHA-256) is the **cited** Barbosa-et-al. reduction. So the
    substantive theft-freedom content is conjunct 1 (control-flow, discharged
    to bytecode); the cryptographic infeasibility is cited, not mechanised.
@@ -169,7 +172,10 @@ injected real defects were caught, most at compile time), but the scope is the
   `theft_free`'s 11-name closure as NON-CONSUMED TCB markers (surfaced via
   `have` bindings so `#print axioms` self-documents the on-chain TCB), NOT
   semantic premises — `theft_free`'s genuine 9 premises are A2 + A3.1 + A5(×4)
-  + kernel (deleting the markers leaves it proven). A4's content-bearing *type*
+  + kernel (deleting the markers leaves it proven). (A2 is consumed here, but
+  the in-Lean `entrypoint_honest` is itself a tautology over the `handleOp`
+  model; the genuine open EntryPoint assumption is the deployed-bytecode
+  discharge — see the A2 precision under "NOT claimable".) A4's content-bearing *type*
   is the real gain; the earlier "load-bearing in theft_free" wording was an
   over-claim. The `lint_axioms` gate now reports zero `: True`-typed axioms.
   `keccak256_pure`
@@ -237,6 +243,23 @@ Also still cited-TCB by decision (not "proven to bytecode"): **A2** EntryPoint
 v0.6 honesty, **A4** EVM-executes-per-spec (incl. the emitted-CALL byte
 delivery on the execute path), **A5** SPHINCS+C10 EUF-CMA (Barbosa et al.;
 the `+C` transition is a cited argument), **A1** SHA-256 precompile = FIPS.
+
+A precision on **A2**: the in-Lean `entrypoint_honest` axiom is, against the
+Lean EntryPoint model, a **tautology over `handleOp`** — its conclusion (a
+wallet-balance decrement implies `validateSignature` returned success with the
+matching post-storage) follows directly from `handleOp`'s own definition (the
+failure branch leaves the state untouched, so a decrement forces the success
+branch, where `walletStorage := s'`). It therefore adds no logical strength
+*inside* the model and could be restated as a `theorem`; what it carries is a
+**name** for the boundary. The genuine, still-open assumption it stands in for
+is the **bytecode-discharge of the deployed EntryPoint v0.6** — that the
+on-chain EntryPoint actually behaves like `handleOp`, including the
+validation-phase prefund debit (`missingAccountFunds`) and the
+paymaster/refund/nonce accounting that the model abstracts into the TCB. That
+discharge is **not** performed here; it is tracked separately (Kontrol against
+the deployed EntryPoint — the optional step 3 below) and rests today on the
+OpenZeppelin / ChainSecurity / Spearbit audits + the immutable, ≥18-month
+mainnet EntryPoint deployment, not on a Lean proof.
 
 ---
 

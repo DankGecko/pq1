@@ -99,6 +99,12 @@ def main (args : List String) : IO UInt32 := do
   let mut mismatches := 0
   let mut positives := 0
   let mut total := 0
+  -- P5: count the advertised GAP-1 defect-site mutants so the coverage line
+  -- printed below is non-vacuous. A future corpus edit that silently dropped
+  -- the defect-site sweeps would otherwise still print "incl. the GAP-1
+  -- defect-site sweeps" while exercising none of them.
+  let mut stradTail := 0
+  let mut countflip := 0
   for ej in entriesJson do
     match parseEntry ej with
     | .error e => do
@@ -107,6 +113,8 @@ def main (args : List String) : IO UInt32 := do
     | .ok entry => do
       total := total + 1
       if entry.expectValid then positives := positives + 1
+      if "strad-tail".isPrefixOf entry.label then stradTail := stradTail + 1
+      if "countflip".isPrefixOf entry.label then countflip := countflip + 1
       let got := runEntry entry
       if got != entry.expectValid then
         mismatches := mismatches + 1
@@ -123,6 +131,15 @@ def main (args : List String) : IO UInt32 := do
     return 1
   if mismatches > 0 then
     IO.eprintln s!"FAIL: {mismatches} Lean ↔ bytecode disagreement(s) — the executable spec drifted."
+    return 1
+  -- P5 defect-site presence guard: the coverage claim is only meaningful if the
+  -- GAP-1 defect-site mutants are actually present (16 strad-tail byteflips +
+  -- 8 countflips = the L0/L1 WOTS+C target-sum boundary). Refuse to print the
+  -- "incl. defect-site sweeps" line otherwise.
+  IO.println s!"defect-sites : {stradTail} strad-tail + {countflip} countflip (GAP-1 sweep)"
+  if stradTail < 16 || countflip < 8 then
+    IO.eprintln s!"FAIL: defect-site coverage shrank (strad-tail={stradTail} <16 or \
+      countflip={countflip} <8) — the GAP-1 defect-site sweep was dropped from the corpus."
     return 1
   IO.println "OK: Spec.Signature.verify reproduces the deployed verifier's accept/reject"
   IO.println "    decision on the full mutant corpus (incl. the GAP-1 defect-site sweeps)."

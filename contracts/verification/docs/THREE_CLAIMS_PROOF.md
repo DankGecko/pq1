@@ -24,9 +24,19 @@ trust assumptions documented in [`TRUST_ASSUMPTIONS.md`](TRUST_ASSUMPTIONS.md).
 What this kills:
 - Cross-chain replay (chainId is part of the digest preimage)
 - Cross-account replay (sender address is part of the digest preimage)
-- Nonce reuse (delegated to EntryPoint v0.6 via `entrypoint_no_replay`)
-- Calldata substitution between validation and execution phases
-  (transient-storage parity check + cryptographic field binding)
+- Nonce reuse (delegated to the deployed EntryPoint v0.6 — a cited-TCB fact
+  under A2; the former `entrypoint_no_replay` axiom was DELETED 2026-06-14 as
+  dangling + latent-false, nonce-replay protection is the EntryPoint's job,
+  not a Lean axiom)
+- Calldata substitution between the signed digest and what executes —
+  the userOpHash digest cryptographically commits to `sha256(callData)`
+  (kernel theorem `theft_free_with_calldata_binding`, via SHA-256
+  collision-resistance). NOTE: that EntryPoint relays *exactly*
+  `op.callData` to the wallet and the EVM delivers the resulting CALL is
+  the cited-TCB leg (A2 EntryPoint relay-fidelity + A4 EVM delivery), NOT
+  an in-kernel check. The in-kernel transient-storage credit binds only
+  `ownerIndex`, and the field binding gives only digest-uniqueness —
+  neither pins the signed→executed calldata relay.
 - Bugs in the SPHINCS+C10 verification path or the ERC-1271
   `replaySafeHash` wrapper (verifier matches the Lean Yul model
   via A3.1)
@@ -49,15 +59,27 @@ What this kills:
 ### Claim 3 — Execution faithfulness under batching and value flow
 
 > `executeBatchWithOffchainCount` performs exactly the sequence of
-> `(target, value, data)` tuples the owner signed, in order, with no
-> hidden calls, no caller other than EntryPoint-or-self reaching the
-> executor, and total ETH outflow equals what the signed batch
-> specifies. No reentrancy path lets a callback alter the remainder
-> of the batch or re-enter validation.
+> `(target, value, data)` tuples passed to it, in order, with no hidden
+> calls, no caller other than EntryPoint-or-self reaching the executor,
+> and total ETH outflow equals the sum of the batch's values.
+
+Scope (honest): the kernel theorems pin the executed sequence to the
+`executeBatch` *arguments* (order-preserving, value-sum exact). That those
+arguments equal *what the owner signed* is the signed↔executed relay leg,
+which rests on A2 (EntryPoint relays the signed `callData`) + A4 (EVM
+delivers the CALL), cited-TCB — not an in-kernel theorem. "No callback
+alters the remainder of the batch / re-enters validation" follows from the
+model being a straight-line, no-loop construction (`buildBatchCalls` is a
+pure function of the inputs) plus E-1 (`execute_caller_is_entrypoint` —
+only EntryPoint reaches the executor); it is NOT a separately proven
+reentrancy theorem (E-7 restates E-5 verbatim — same statement, same
+proof).
 
 What this kills:
 - Long tail of "validation passed but something weird executed" bugs
-- Malicious-target reentrancy into the account itself
+- Malicious-target reentrancy into the account itself (via E-1's
+  EntryPoint-only executor gate + the no-loop batch model; not a
+  standalone reentrancy theorem — see the Claim 3 scope note)
 - Batch-ordering exploits
 
 ### Claim 4 — Execution-gate non-bypass (call-graph)
@@ -151,7 +173,12 @@ Closure: `propext, Quot.sound, sha256_injective_on_fixed_length`.
 - `addOwner_preserves_index0`, `removeOwner_preserves_index0`,
   `bumpBootstrap_preserves_ownerAtIndex`, `bumpSlot_preserves_ownerAtIndex`,
   `setOffchain_preserves_ownerAtIndex` — composite invariance
-- `create2_address_chain_independent` (I-7)
+- `create2_address_chain_independent` (I-7) — kernel-proves only that the
+  CREATE2 salt's preimage carries no chain id (salt chain-freeness); the
+  full address's chain-independence additionally rests on address-level
+  EVM-TCB facts (a singleton CREATE2 factory at one address per chain +
+  frozen `initCode`), made explicit in the conditional theorem
+  `create2Address_chain_independent`
 - `factory_requires_bootstrap_sig` (I-8)
 - `eip1271_forbids_bootstrap` (I-6)
 - `storage_mutations_preserve_impl_slot_disjointness` (composes
@@ -190,8 +217,10 @@ All 8 theorems:
 - E-4 `execute_clears_token`
 - E-5 `executeBatch_runs_in_signed_order`
 - E-6 `executeBatch_value_outflow_eq_sum_values`
-- E-7 `executeBatch_callback_preserves_loop` (calldata-immutability
-  shape)
+- E-7 `executeBatch_callback_preserves_loop` — a verbatim restatement of
+  E-5 (`executeBatch_runs_in_signed_order`): identical statement and
+  identical proof, so it adds the calldata-immutability *framing* but no
+  independent reentrancy content
 - E-8 `execute_only_validateSig_authorises`
 
 Closure: `propext, Classical.choice, Quot.sound` (purely operational —
@@ -238,15 +267,25 @@ Composes:
   headline statement.
 
 Closure: `propext, Classical.choice, Quot.sound` (kernel-only — no
-new axioms; reuses I-1 and E-8). Under the existing bridge axioms
-(A1 + A3.1 + A4) the model-level `verify_fn = true` lifts to "the
-deployed `SPHINCsC10Asm.verify` bytecode returned `true`", giving
-the on-chain corollary.
+new axioms; reuses I-1 and E-8; confirmed by
+`scripts/dump_axioms_claim4.lean`). IMPORTANT scope: this trace gate
+constrains the `verify_fn` field *supplied* in each trace's `validate`
+step — it is a model-level statement and is NOT lifted here to the
+deployed `SPHINCsC10Asm.verify` bytecode. Its closure carries no bridge
+axiom, so there is no in-kernel "A1 + A3.1 + A4 lift" of this gate to the
+on-chain verifier. The deployed-verifier connection is made separately,
+and only for value-moving paths, by `theft_free` (via A2 + A3.1): a
+wallet-balance decrement implies the *deployed* verifier accepted an
+installed-owner C10 sig over the op digest. Pinning the pure call-graph
+gate — value=0 external calls — to the on-chain verifier remains an OPEN
+obligation (`OPEN_PROOF_OBLIGATIONS.md`).
 
-The conclusion is existential ("some validated step in the trace"),
-not per-call attribution — that strengthening is in
-`OPEN_PROOF_OBLIGATIONS.md`. The existential is already sufficient
-to rule out the bypass attack: a trace containing zero verifier-true
+The conclusion is existential: it yields *some* abstract pre-state
+`σ_pre` and a `StepVerified` step in the trace. `σ_pre` is existentially
+quantified — not pinned to be the reachable on-chain wallet state — and
+the result is not per-call attribution (that strengthening is in
+`OPEN_PROOF_OBLIGATIONS.md`). The existential is already sufficient to
+rule out the bypass attack: a trace containing zero verifier-true
 validates cannot produce any external call.
 
 **Halmos** — `test/halmos/HalmosExecute.t.sol::check_execute_requires_validated_owner_index`
@@ -362,7 +401,7 @@ pin in `test/PinnedCodehashes.t.sol`. The CI gate fails until:
 |------|------|
 | `Spec/Theorems.lean` | Headline theorem `theft_free` + per-claim corollaries `theft_free_with_calldata_binding`, `executeBatch_faithful`, `every_call_gated_by_verifier`, `no_call_without_prior_verifier_acceptance` |
 | `Bridge/Refinement.lean` | A1, A3 sub-axioms in `opaque + axiom-equality` shape |
-| `Bridge/EntryPoint.lean` | A2 + `entrypoint_no_replay` |
+| `Bridge/EntryPoint.lean` | A2 (`entrypoint_honest`) — the `entrypoint_no_replay` axiom was DELETED 2026-06-14 |
 | `Bridge/SolidityVerifier.lean` | Yul-shape model of `SPHINCsC10Asm.verify` |
 | `Crypto/EUFCMA.lean` | A5 + `cannot_forge_without_breaking_SHA256` |
 | `Crypto/Assumptions.lean` | SM_DT_TCR_F + ITSR_F + hMsg_random_oracle + `sha256_injective_on_fixed_length` |

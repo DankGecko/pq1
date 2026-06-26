@@ -26,10 +26,16 @@
 #     to keep this as-is rather than discharge against deployed
 #     EntryPoint v0.6 bytecode.
 #   - The three crypto-shape axioms (SM_DT_TCR_F, ITSR_F,
-#     hMsg_random_oracle) — cited Barbosa et al. ASIACRYPT 2024
-#     EUF-CMA reduction; mechanising the advantage bound in Lean is a
-#     multi-person-year effort.
-
-SphincsCVerify.Crypto.SM_DT_TCR_F
-SphincsCVerify.Crypto.ITSR_F
-SphincsCVerify.Crypto.hMsg_random_oracle
+#     hMsg_random_oracle) — REMOVED from this allowlist 2026-06-26 (P15):
+#     they were upgraded 2026-06-14 from `: True` / `∀_, True` placeholders
+#     to opaque `_Shape : Prop` types (`SM_DT_TCR_F_Shape`, `ITSR_F_Shape`,
+#     `hMsg_RO_Shape` in Crypto/Assumptions.lean), carrying real cited
+#     propositional content (Barbosa et al. ASIACRYPT 2024 EUF-CMA
+#     reduction; mechanising the advantage bound in Lean is a
+#     multi-person-year effort). Exactly like A4, a non-`True`-typed axiom
+#     must NOT be on this `True`-only allowlist — leaving them here implied
+#     they were still vacuous markers, which is no longer accurate.
+#
+# The allowlist is now EMPTY: there are no `True`-typed placeholder axioms
+# left in `SphincsCVerify/` (lint_axioms reports "True-typed axioms
+# (allowlisted): 0").

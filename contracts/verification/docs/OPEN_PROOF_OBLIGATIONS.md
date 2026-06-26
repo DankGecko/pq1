@@ -64,8 +64,14 @@ signature check.
   `fors_section_consistent`, `ht_layer0_consistent`, `ht_layer1_consistent`,
   and the composite `verifyRefined_eq_spec`.
 
-Output: `verify_signs` and `verifyRefined_eq_spec` closed; the verifier is
-proven functionally correct against a kernel-computable SHA-256 model.
+Output (target): `verify_signs` *discharged* (not merely compiling under
+an assumed `consistent sk`) and `verifyRefined_eq_spec` closed; the
+verifier proven functionally correct against a kernel-computable SHA-256
+model. Current state: `verifyRefined_eq_spec` and the kernel-computable
+SHA-256 model are done; `verify_signs` compiles but its `consistent sk`
+hypothesis is **still undischarged** (and is provably false for the
+present placeholder `Spec.Signer.sign` stub — see the status-snapshot
+caveat), so the round-trip leg is open Group V work.
 
 ### Group W — Wallet invariants
 
@@ -95,9 +101,15 @@ back **in scope** under this revised plan). Discharge:
   `bumpSlot` / `setOffchain` in isolation.
 * New theorem `eip1271_forbids_bootstrap` (I-6) — `_erc1271IsValidSignatureNowCalldata`
   rejects `ownerIndex == 0` for every input.
-* `Wallet/Invariants.lean::create2_address_chain_independent` (I-7) —
-  strengthen the current `rfl` placeholder against a real Factory model
-  that captures the CREATE2 preimage.
+* `Wallet/Invariants.lean::create2_address_chain_independent` (I-7) — pins the
+  SALT preimage's chain-freeness (kernel). The address-level leg is now modelled
+  (P11) by `create2Address_chain_independent`, which names the CREATE2 address
+  `keccak256(0xff ‖ deployer ‖ salt ‖ keccak256(initCode))` and proves
+  chain-independence CONDITIONAL on the EVM-TCB facts `deployer1 = deployer2`
+  (singleton CREATE2 factory deployed to one address per chain) and
+  `initCodeHash1 = initCodeHash2` (frozen initCode). OPEN residual: the
+  chain-freeness of the deployer address and `keccak256(initCode)` is cited-TCB,
+  not modelled in Lean.
 * New theorem `factory_requires_bootstrap_sig` (I-8) — `createAccount`
   fails unless the bootstrap C10 signature over `addSlot0Digest(chainId,
   slot0PkSeed, slot0PkRoot)` verifies.
@@ -171,9 +183,9 @@ A1–A6 as its only non-Lean-kernel dependencies.
 |---|---|
 | B — Bridge to deployed bytecode | ✅ `entrypoint_honest` added; `solidityVerifier_compiles_correctly` generalised. |
 | C — Cryptographic axioms / EUF-CMA wiring | ✅ `cannot_forge_without_breaking_SHA256` closed; restructured `EUF_CMA_SPHINCSplusC` takes the three primitives as preconditions. |
-| W — Wallet invariants | ✅ I-1, I-2, I-3, I-4, I-5 (full inductive), I-6, I-7, I-8 closed. Decoder concretised. |
+| W — Wallet invariants | ⚠️ partial. I-1, I-2, I-3, I-4, I-6, I-8 closed; decoder concretised. **I-5 (combined cap):** the cross-counter preservation lemmas (`combinedCap_preserved_by_bumpSlot` / `combinedCap_preserved_by_setOffchain` / `combinedCap_preserved_by_bumpBootstrap`) and the inductive step `combinedCap_inductive` are kernel-proven, but the "invariant holds in the pre-state" premise (`hi` / `hInv`) is an **assumed hypothesis** — its reachability backing is the Foundry fuzz/invariant suite (`PQSmartWalletInvariants.t.sol::invariant_combined_cap_*`), not a kernel reachability proof; the kernel content is the preservation step plus the now-added cross-counter lemmas. **I-7 (address determinism): open at the address level — only the SALT is proven chain-independent** (`create2_address_chain_independent`, `rfl`); full CREATE2-address chain-independence (`create2Address_chain_independent`) is a *conditional* theorem whose `deployer = deployer` / `initCodeHash = initCodeHash` premises are cited EVM-TCB facts (singleton factory address + frozen `initCode`), not modelled in Lean. |
 | T — Top-level | ✅ `theft_free` closed with the required axiom set. |
-| V — Verifier functional correctness | ✅ **Zero `sorry`s as of 2026-05-18.** `load_R_consistent`, `verifyRefined_eq_spec`, and `verify_signs` all closed (see `BLOCKERS.md` for the close-out summary). `Spec/Hash.lean::sha256` is now kernel-computable (FIPS 180-4 port from Trail of Bits scroll-fv), sealed `@[irreducible]` so the crypto axioms remain unchanged. NIST CAVS test vectors verified. The classical four round-trip sub-lemmas now live as the load-bearing definition of `consistent sk` — proving consistency for any honestly-keygen'd `sk` remains a future engineering task but is not in the dependency closure of `theft_free`. |
+| V — Verifier functional correctness | ⚠️ **Zero `sorry`s as of 2026-05-18, but read the round-trip caveat.** `verifyRefined_eq_spec` is closed (`rfl`); `Spec/Hash.lean::sha256` is now kernel-computable (FIPS 180-4 port from Trail of Bits scroll-fv), sealed `@[irreducible]` so the crypto axioms remain unchanged; NIST CAVS test vectors verify. **`verify_signs` COMPILES but is NOT a discharged round-trip proof.** It closes by a one-line appeal to its hypothesis `consistent sk` (`hc message sig hsign`), and `consistent` is currently **unsatisfiable** — provably FALSE — for the placeholder `Spec.Signer.sign` stub: that stub emits all-zero WOTS+ chains with `count = 0`, so the layer-0 WOTS+C digit-sum ≠ `TargetSum` and the spec verifier rejects the stub's own output, contradicting `consistent`. The classical four round-trip sub-lemmas now live as the load-bearing definition of `consistent sk`, but discharging `consistent` for any honestly-keygen'd `sk` first requires completing the reference signer (`Spec/Signer.lean`) — that remains **Group V open work**. Round-trip correctness today rests on the Rust reference signer's 10-vector KAT + bulk tests, **not** a kernel proof. None of this is in the dependency closure of `theft_free`, which uses only the accept ⇒ verifier-returned-true direction plus A5. |
 
 ## What this proves and what it does not
 
