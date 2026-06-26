@@ -97,12 +97,52 @@ The verify chain (run from `fw_update::verify_manifest`):
 2. `verify_crc` — CRC-32 IEEE over `[0..OFF_CRC32)` (covers everything
    incl. the signature region — flipping any byte breaks CRC first).
 3. `verify_digest` — recomputes `SHA-256(signed_preimage)`, compares to
-   the manifest's stored digest. Recomputed, not trusted.
+   the manifest's stored digest. Recomputed, not trusted. **F15: wrapped
+   in `fi::check_true_into_sentinel`** (was a bare `?` reject pre-F15).
 4. `verify_vendor_fpr` — `SHA-256(pk_seed||pk_root) == manifest.fpr`.
 5. `verify_signature` — `sphincs_c10::verify(pk, digest, sig)`, wrapped
    in `fi::check_true_into_sentinel` (F-7 FI hardening: double-evaluate
    with `wait_random` between, sentinel commit).
-6. `verify_rollback` — `fw_version > rollback_floor` (strict).
+6. `verify_rollback` — `fw_version > rollback_floor` (strict). **F15:
+   wrapped in `fi::check_true_into_sentinel`**, and `rollback_floor()`
+   itself is now a voted `max(a,b)` of two OTP reads (a single under-count
+   would lower the floor and admit a downgrade — the sentinel can't catch
+   that because both evaluations consume the same faulted floor).
+
+### 2.3.1 F15 — FI-verdict parity across the verify chain (boot + update)
+
+The F-7 campaign hardened only the expensive C10 **signature** verdict with
+`check_true_into_sentinel`. F15 (EF swarm scan) observed that the adjacent
+verdicts that give the signature *meaning* — digest-binding (the sole link of
+`(fw_version, secure_hash, nonsecure_hash)` to the signed digest) and
+anti-rollback — were bare single-conditional rejects, so booting a substituted
+or downgraded (but validly-signed) image dropped back to a 1-fault bar even
+though the signature needs ~2. Closed across both verify paths:
+
+- **Secure-world `fw_update::verify_manifest`** — `verify_digest` and
+  `verify_rollback` now route through `check_true_into_sentinel` (parity with
+  `verify_signature`); `scrub_sentinel_register()` separates paired sentinel
+  callsites (F-15.r1 stale-r0 defence).
+- **FSBL `filter_valid`** (runs *pre-PIN on every boot* — the true root of
+  trust) — same hardening for `verify_digest` + `verify_rollback`.
+- **FSBL `verify::verify_images`** — the two image-hash equalities (the sole
+  boot-time binding of flash bytes to the signed hashes) now gate the success
+  path on an aggregate verdict re-evaluated inside `check_true_into_sentinel`
+  with `black_box`, mirroring the secure-world COMMIT-time `verify_images`
+  (`b72dd0ee`) that this leg had been left out of.
+- **OTP rollback-floor read** — `rollback_floor()` is a voted `max(a,b)` of two
+  independent passes in both `fsbl/src/otp.rs` and `secure/src/hw/otp.rs`.
+
+**Accepted residual — `try_once_flag`.** The try-once boot-state byte sits
+*outside* the signed 75-byte preimage (`"PQFW_V1" || fw_version || secure_hash
+|| nonsecure_hash`), integrity-protected only by CRC. A flash-write attacker
+can flip it, but doing so merely *selects between two slots that are each
+signature-verified and above the rollback floor* — it cannot admit unsigned
+code, only a bounded revert to a previously-installed signed image. Signing it
+would require expanding the frozen preimage, which CLAUDE.md explicitly forbids
+("Do not expand the signed FW-update preimage" — auditors must be able to
+reconstruct it from `(version, secure.elf, nonsecure.elf)` alone). Left as a
+documented, bounded residual rather than a format change.
 
 ---
 

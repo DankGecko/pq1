@@ -44,3 +44,22 @@ fn wait_random() {
 pub fn check_true_into_sentinel<F: FnMut() -> bool>(cond: F) -> u32 {
     pqsigner_fi::check_true_into_sentinel(cond, wait_random)
 }
+
+/// Scrub the AAPCS return register (`r0`) to a known non-sentinel value
+/// between paired `check_true_into_sentinel` callsites — mirror of
+/// `secure::fi::scrub_sentinel_register` (F-15.r1). Without this, a
+/// branch-skip glitch on the second `bl check_true_into_sentinel` would
+/// leave the *stale* `OK_SENTINEL` from the first call in `r0`, so the
+/// caller's `cmp r0, #OK_SENTINEL` passes without ever faulting the second
+/// gate. After this call `r0` holds `0`, so a skip of the next `bl` makes
+/// the compare fail and the gate reject.
+#[inline(never)]
+pub fn scrub_sentinel_register() {
+    wait_random();
+    #[cfg(all(target_arch = "arm", not(test)))]
+    unsafe {
+        // SAFETY: zero-clobber on the ARM AAPCS return register; touches
+        // neither memory nor stack.
+        core::arch::asm!("mov r0, #0", out("r0") _, options(nomem, nostack));
+    }
+}

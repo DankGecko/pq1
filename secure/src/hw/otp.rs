@@ -232,7 +232,29 @@ pub enum OtpError {
 
 /// Read the current rollback floor (count of zero bits in the OTP
 /// tally region). Pure read, no programming.
+///
+/// F15 hardening: the floor feeds the FW-update `verify_rollback` verdict; a
+/// single faulted word-read that under-counts zero bits would LOWER the floor
+/// and admit a validly-signed *downgrade*. Sentinel-hardening `verify_rollback`
+/// alone cannot catch this (both evaluations consume the same faulted floor),
+/// so the read itself is voted: take `max(a, b)` of two independent passes.
+/// `max` is the conservative vote for a monotonic floor on the ADMISSION path —
+/// a single under-count is overridden by the correct pass (defeating the
+/// downgrade), an over-count only rejects more (fail-closed). Two clean reads
+/// agree, so the common path is unchanged.
+///
+/// **This vote is ONLY correct for the verify/admission path.** `bump_to` does
+/// NOT use it: for an irreversible OTP write the `max(a,b)` over-bias is wrong
+/// (a glitched-high read would skip a needed bump; a glitched-low read would
+/// overshoot and brick), so `bump_to` reads `rollback_floor_once` twice and
+/// fails closed on disagreement — see its body.
 pub fn rollback_floor() -> u32 {
+    let a = rollback_floor_once();
+    let b = rollback_floor_once();
+    a.max(b)
+}
+
+fn rollback_floor_once() -> u32 {
     let mut count: u32 = 0;
     for i in 0..ROLLBACK_WORDS {
         // SAFETY: `i < ROLLBACK_WORDS = 32`, so `OTP_W0 + i words` stays
@@ -253,7 +275,27 @@ pub unsafe fn bump_to(target: u32) -> Result<(), OtpError> {
         return Err(OtpError::OutOfBudget);
     }
 
-    let current = rollback_floor();
+    // F15: `bump_to` needs the TRUE current floor — both for this idempotency
+    // skip AND for the bit-walk start below. It must NOT reuse the verify-path
+    // `rollback_floor()` (which votes `max(a,b)` so a glitched-LOW read can't
+    // admit a downgrade): that conservative-HIGH vote is exactly WRONG here.
+    //   * A glitched-HIGH `current` would falsely satisfy `current >= target`
+    //     and SKIP a needed bump — and this early return runs BEFORE the
+    //     post-write readback, so nothing would catch it (the same FI-asymmetry
+    //     F15 closes elsewhere).
+    //   * A glitched-LOW `current` would over-size `to_clear` and OVERSHOOT the
+    //     floor past `target`, risking a brick (verify_rollback then rejects the
+    //     just-installed version).
+    // An irreversible OTP write must therefore FAIL CLOSED on a read glitch, not
+    // act on a voted estimate: read twice (raw) and require agreement; on
+    // disagreement abort (the COMMIT caller retries on a clean read).
+    let c1 = rollback_floor_once();
+    crate::fi::wait_random();
+    let c2 = rollback_floor_once();
+    if c1 != c2 {
+        return Err(OtpError::ProgramError);
+    }
+    let current = c1;
     if current >= target {
         return Ok(());
     }
@@ -322,9 +364,14 @@ pub unsafe fn bump_to(target: u32) -> Result<(), OtpError> {
     // readback would then return `< target`, the open-coded `if` is
     // glitchable, but the hamming-distant sentinel in `fi::check_true`
     // requires multiple cooperating faults to bypass.
-    let after1 = rollback_floor();
+    // F15: the readback uses RAW single reads (`rollback_floor_once`), NOT the
+    // verify-path `rollback_floor()` max(a,b). "Did the floor REACH target?"
+    // wants the conservative direction — two INDEPENDENT raw reads that must
+    // BOTH be `>= target`, so a single glitched-HIGH read cannot false-pass the
+    // "bump succeeded" check. (max(a,b) would over-report and weaken it.)
+    let after1 = rollback_floor_once();
     crate::fi::wait_random();
-    let after2 = rollback_floor();
+    let after2 = rollback_floor_once();
     if crate::fi::check_true_into_sentinel(|| after1 >= target && after2 >= target) != crate::fi::OK_SENTINEL {
         return Err(OtpError::ProgramError);
     }

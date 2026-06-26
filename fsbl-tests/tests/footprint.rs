@@ -61,6 +61,13 @@ fn fsbl_release_flash_sections_fit_in_32kb() {
     let status = Command::new("cargo")
         .current_dir(&workspace)
         .env("RUSTFLAGS", "-C linker=arm-none-eabi-ld -C link-arg=-Tlink.x")
+        // F2: a release FSBL build hard-fails unless a real vendor pubkey
+        // (FSBL_VENDOR_PUBKEY) or the explicit dev opt-in (FSBL_ALLOW_DEV_KEY)
+        // is set. This is a SIZE test — the key content is irrelevant to the
+        // footprint, and the built-in dev fixture key is the right size — so
+        // opt into it here. (Production size is identical: a real 32-byte
+        // pubkey embeds the same way.)
+        .env("FSBL_ALLOW_DEV_KEY", "1")
         .args([
             "build",
             "--locked",

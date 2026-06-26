@@ -425,7 +425,6 @@ pub fn verify_manifest(
     // evidence this defends against.
     let s_err = m.verify_structural();
     let c_err = m.verify_crc();
-    let d_err = m.verify_digest();
     let f_err = m.verify_vendor_fpr(
         &vendor_pubkey::VENDOR_PK_SEED,
         &vendor_pubkey::VENDOR_PK_ROOT,
@@ -437,18 +436,39 @@ pub fn verify_manifest(
         )
         .is_ok()
     });
-    let r_err = m.verify_rollback(rollback_floor);
+    // F15 hardening: give the digest-binding and anti-rollback verdicts the
+    // SAME double-evaluation sentinel discipline as `verify_signature` above.
+    // Pre-F15 these were bare `d_err?` / `r_err?` single-conditional rejects:
+    // a single fault that skipped one `?` decoupled the signed digest from the
+    // actual `(fw_version, secure_hash, nonsecure_hash)` fields — letting an
+    // attacker reuse a validly-signed manifest with substituted image-hash
+    // fields — or admitted a below-floor (downgraded) image, even though the
+    // signature itself needs ~2 coordinated faults. `verify_digest` /
+    // `verify_rollback` are cheap (SHA-256 over 75 B / an integer compare), so
+    // the extra evaluations cost nothing next to the C10 verify, and the
+    // timing-normalization property is preserved (all checks still run on every
+    // input). `scrub_sentinel_register()` between paired sentinel callsites
+    // defeats the stale-r0 branch-skip (see fi.rs F-15.r1).
+    crate::fi::scrub_sentinel_register();
+    let digest_verdict = crate::fi::check_true_into_sentinel(|| m.verify_digest().is_ok());
+    crate::fi::scrub_sentinel_register();
+    let rollback_verdict =
+        crate::fi::check_true_into_sentinel(|| m.verify_rollback(rollback_floor).is_ok());
 
     // Now report errors in the documented chain order. The work above is
     // already done; this just picks which Err (if any) to surface.
     s_err?;
     c_err?;
-    d_err?;
+    if digest_verdict != crate::fi::OK_SENTINEL {
+        return Err(VerifyError::BadDigest);
+    }
     f_err?;
     if sig_verdict != crate::fi::OK_SENTINEL {
         return Err(VerifyError::BadSignature);
     }
-    r_err?;
+    if rollback_verdict != crate::fi::OK_SENTINEL {
+        return Err(VerifyError::BelowRollback);
+    }
     Ok(())
 }
 

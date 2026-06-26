@@ -123,9 +123,21 @@ fn main() -> ! {
 fn filter_valid<'a>(m: &'a ManifestRef<'a>, floor: u32) -> Option<&'a ManifestRef<'a>> {
     m.verify_structural().ok()?;
     m.verify_crc().ok()?;
-    m.verify_digest().ok()?;
+    // F15 hardening: the digest-binding and anti-rollback verdicts run pre-PIN
+    // on every boot and are the only things that give the signature meaning —
+    // `verify_digest` is the sole binding of `(fw_version, secure_hash,
+    // nonsecure_hash)` to the signed digest, and `verify_rollback` blocks a
+    // validly-signed *downgrade*. Pre-F15 they were bare `.ok()?`
+    // single-conditional rejects (one instruction-skip from falling through),
+    // while only `verify_signature` was sentinel-gated. Route both through the
+    // same `check_true_into_sentinel` discipline, with `scrub_sentinel_register`
+    // between paired sentinel callsites to defeat the stale-r0 branch-skip.
+    if fi::check_true_into_sentinel(|| m.verify_digest().is_ok()) != fi::OK_SENTINEL {
+        return None;
+    }
     m.verify_vendor_fpr(&vendor_pubkey::VENDOR_PK_SEED, &vendor_pubkey::VENDOR_PK_ROOT)
         .ok()?;
+    fi::scrub_sentinel_register();
     let sig_verdict = fi::check_true_into_sentinel(|| {
         m.verify_signature(&vendor_pubkey::VENDOR_PK_SEED, &vendor_pubkey::VENDOR_PK_ROOT)
             .is_ok()
@@ -133,7 +145,10 @@ fn filter_valid<'a>(m: &'a ManifestRef<'a>, floor: u32) -> Option<&'a ManifestRe
     if sig_verdict != fi::OK_SENTINEL {
         return None;
     }
-    m.verify_rollback(floor).ok()?;
+    fi::scrub_sentinel_register();
+    if fi::check_true_into_sentinel(|| m.verify_rollback(floor).is_ok()) != fi::OK_SENTINEL {
+        return None;
+    }
     Some(m)
 }
 

@@ -329,17 +329,19 @@ fn negative_verify_manifest_runs_full_chain_in_documented_order() {
     let order = [
         // Finding C timing normalization removed the `?` short-circuit:
         // every check is called unconditionally and errors are reported
-        // in order afterwards. The CALL-SITE ordering still needs to
-        // match the documented chain. We use the `let <name> = ...`
-        // capture-site substrings rather than bare method names so the
-        // (longer) comment block above the function doesn't accidentally
-        // match first.
+        // in order afterwards. F15 then routed the digest-binding and
+        // rollback verdicts through `check_true_into_sentinel` (parity with
+        // the signature), so the call-site order is now structural, crc,
+        // fpr, sig, digest, rollback. The ONE security-critical ordering
+        // constraint — `verify_rollback` runs AFTER `verify_signature`, so a
+        // forged manifest cannot probe the OTP floor via a chosen-version
+        // timing oracle — is preserved and asserted separately below.
         "let s_err = m.verify_structural()",
         "let c_err = m.verify_crc()",
-        "let d_err = m.verify_digest()",
         "let f_err = m.verify_vendor_fpr(",
         "let sig_verdict = crate::fi::check_true_into_sentinel(",
-        "let r_err = m.verify_rollback(rollback_floor)",
+        "let digest_verdict = crate::fi::check_true_into_sentinel(|| m.verify_digest().is_ok())",
+        "let rollback_verdict =",
     ];
     let mut last = 0usize;
     for step in order {
@@ -353,6 +355,27 @@ fn negative_verify_manifest_runs_full_chain_in_documented_order() {
         );
         last = pos;
     }
+
+    // F15 regression guard: the digest-binding and anti-rollback verdicts MUST
+    // stay routed through the redundant-recompute `check_true_into_sentinel`
+    // gate (not a bare `d_err?`/`r_err?` single-conditional reject), and the
+    // OTP floor read MUST stay voted. If a refactor drops these the boot/update
+    // root of trust falls back to a 1-fault bar around the gates that give the
+    // signature meaning.
+    assert!(
+        FW_MOD_SRC.contains("check_true_into_sentinel(|| m.verify_digest().is_ok())"),
+        "F15: verify_digest must be sentinel-hardened (not a bare `?` reject)"
+    );
+    assert!(
+        FW_MOD_SRC.contains("check_true_into_sentinel(|| m.verify_rollback(rollback_floor).is_ok())"),
+        "F15: verify_rollback must be sentinel-hardened (not a bare `?` reject)"
+    );
+    // `verify_rollback` after `verify_signature` (OTP-floor oracle defence).
+    assert!(
+        FW_MOD_SRC.find("let sig_verdict = crate::fi::check_true_into_sentinel(").unwrap()
+            < FW_MOD_SRC.find("let rollback_verdict =").unwrap(),
+        "verify_rollback must run after verify_signature"
+    );
 }
 
 #[test]

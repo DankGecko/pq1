@@ -11,6 +11,7 @@
 use fw_manifest::ManifestRef;
 use sha2::{Digest, Sha256};
 
+use crate::fi;
 use crate::slot::{slot_ns_addr, slot_secure_addr, Slot};
 
 /// Verify the secure + nonsecure images for `slot` hash to the
@@ -38,11 +39,34 @@ pub fn verify_images(slot: Slot, m: &ManifestRef) -> Option<[u8; 32]> {
     }
 
     let actual_secure = hash_flash_region(secure_base, secure_len);
-    if &actual_secure != m.secure_hash() {
+    let actual_ns = hash_flash_region(ns_base, ns_len);
+
+    // F15 hardening: these two 32-byte image-hash equalities are the SOLE
+    // boot-time binding between the bytes in flash and the vendor-SIGNED
+    // manifest hashes (whose signature `filter_valid` already sentinel-verified).
+    // Pre-F15 each was a bare `if &a != b { return None }` — one instruction-
+    // skip / branch-flip from falling through to `Some(..)` and BOOTING an
+    // UNSIGNED (attacker-substituted) image, even though the signature gate
+    // needs ~2 faults. This mirrors the secure-world COMMIT-time `verify_images`
+    // (secure/src/fw_update/verify.rs): gate the success path on an aggregate
+    // verdict re-evaluated inside `check_true_into_sentinel` (double-eval +
+    // Hamming-distant sentinel after a wait-random desync), with `black_box`
+    // stopping LLVM from CSE-ing the redundant compares back into the early
+    // rejects. The compared hashes are PUBLIC, so a plain `==` (not constant-
+    // time) leaks nothing and keeps the FSBL footprint lean (no `subtle` dep).
+    let secure_ok = actual_secure == *m.secure_hash();
+    let ns_ok = actual_ns == *m.nonsecure_hash();
+    if !secure_ok {
         return None;
     }
-    let actual_ns = hash_flash_region(ns_base, ns_len);
-    if &actual_ns != m.nonsecure_hash() {
+    if !ns_ok {
+        return None;
+    }
+    let gate = fi::check_true_into_sentinel(|| {
+        core::hint::black_box(actual_secure == *m.secure_hash())
+            && core::hint::black_box(actual_ns == *m.nonsecure_hash())
+    });
+    if gate != fi::OK_SENTINEL {
         return None;
     }
     Some(actual_secure)

@@ -1214,13 +1214,17 @@ fn negative_verify_manifest_runs_full_chain_in_documented_order() {
     // names. To make sure we're picking up the CALL SITES rather than
     // the prose, grep for the `let <name> = ...` capture-site form
     // unique to the function body.
+    // F15 reordered the call sites (digest + rollback now sentinel-gated like
+    // the signature): structural, crc, fpr, sig, digest, rollback. The
+    // security-critical constraint (rollback AFTER signature → no OTP-floor
+    // chosen-version oracle) is preserved and asserted below.
     let order = [
         "let s_err = m.verify_structural()",
         "let c_err = m.verify_crc()",
-        "let d_err = m.verify_digest()",
         "let f_err = m.verify_vendor_fpr(",
         "let sig_verdict = crate::fi::check_true_into_sentinel(",
-        "let r_err = m.verify_rollback(",
+        "let digest_verdict = crate::fi::check_true_into_sentinel(|| m.verify_digest().is_ok())",
+        "let rollback_verdict =",
     ];
     let mut last = 0;
     for step in order {
@@ -1233,6 +1237,17 @@ fn negative_verify_manifest_runs_full_chain_in_documented_order() {
         );
         last = pos;
     }
+
+    // F15 regression guard: digest + rollback stay sentinel-hardened.
+    assert!(
+        FW_UPDATE_MOD_SRC.contains("check_true_into_sentinel(|| m.verify_digest().is_ok())"),
+        "F15: verify_digest must be sentinel-hardened (not a bare `?` reject)"
+    );
+    assert!(
+        FW_UPDATE_MOD_SRC
+            .contains("check_true_into_sentinel(|| m.verify_rollback(rollback_floor).is_ok())"),
+        "F15: verify_rollback must be sentinel-hardened (not a bare `?` reject)"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────
