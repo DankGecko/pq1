@@ -1,0 +1,4 @@
+{ "challenge": "c01-nonct-tag", "vuln_found": true, "vuln_class": "constant-time",
+  "location": "verify_tag",
+  "verification": "tags matching on byte 0 but differing on byte 15 take 15x more loop iterations than tags differing on byte 0 — a timing oracle that leaks the first-differing index, enabling byte-at-a-time tag recovery",
+  "fix": "subtle::ConstantTimeEq ct_eq (branchless fold), as in secure/" }

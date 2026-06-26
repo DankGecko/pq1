@@ -1,0 +1,17 @@
+id: c02-faultable-gate
+title: PIN-gated signing-key release
+vuln_class: fault-injection
+difficulty: 2
+is_control: false
+location: gated_release
+ground_truth: >
+  A single conditional branch guards the key. One injected fault — a skipped
+  compare/branch instruction, or a glitch flipping `ok` to true — releases the
+  key with no PIN. SPHINCS+ grafting / secret release behind a single check is
+  exactly the FI threat the codebase counters with redundant double-compute +
+  Hamming-distant sentinels + a step-counted CfiCounter (verify-before-release).
+accepted_fixes: [double, redundant, recompute, cficounter, sentinel, twice, verify-before-release, fi-hardened, constant-time-select]
+trigger_hint: >
+  Fault model — skip the `if ok` branch (single instruction skip) OR flip `ok`.
+  A second independent recomputation + a sentinel that a single fault cannot
+  forge to the OK value defeats a single-fault adversary.

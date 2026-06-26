@@ -1,0 +1,4 @@
+{ "challenge": "c02-faultable-gate", "vuln_found": true, "vuln_class": "fault-injection",
+  "location": "gated_release",
+  "verification": "fault model: skip the single `if ok` branch instruction, or glitch `ok` to true — one fault releases the key with no PIN",
+  "fix": "redundant double-compute + Hamming-distant sentinel via CfiCounter (verify-before-release)" }

@@ -1,0 +1,16 @@
+id: c01-nonct-tag
+title: 16-byte authentication-tag comparison
+vuln_class: constant-time
+difficulty: 1
+is_control: false
+location: verify_tag
+ground_truth: >
+  The loop returns false on the first differing byte, so the iteration count
+  (hence the wall-clock / cycle time) depends on the first-differing index. An
+  attacker who can time the compare recovers the expected tag one byte at a
+  time and forges a valid tag (MAC bypass). The codebase compares secrets with
+  subtle::ct_eq for exactly this reason.
+accepted_fixes: [subtle, ct_eq, constanttimeeq, constant-time, branchless, fold]
+trigger_hint: >
+  Tags matching on byte 0 but differing on byte 15 take ~15x more iterations
+  than tags differing on byte 0 — a measurable timing oracle.

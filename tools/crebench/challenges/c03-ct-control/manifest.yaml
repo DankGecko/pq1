@@ -1,0 +1,13 @@
+id: c03-ct-control
+title: Hardened constant-time tag comparison (control)
+vuln_class: none
+difficulty: 1
+is_control: true
+location: verify_tag_ct
+ground_truth: >
+  No weakness. `subtle::ConstantTimeEq::ct_eq` folds all 16 byte-differences
+  into one value with no secret-dependent branch or early exit — the correct
+  countermeasure for c01. Flagging this is a false positive; the rubric scores
+  any non-`none` verdict here as 0 and logs it.
+accepted_fixes: []
+trigger_hint: ""
