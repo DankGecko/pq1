@@ -272,21 +272,24 @@ theorem setSlice68_layout
 
 set_option maxHeartbeats 4000000 in
 set_option maxRecDepth 1000000 in
-/-- **`derive_c10_master_from_bip39_seed` SEED byte-layout** (CREATE2 red-line).
-    For all inputs, with `master_lo` the low 32 bytes of the 64-byte HMAC-SHA512
-    master, the extracted bootstrap derivation returns the domain-separated seeds:
-      `sk_seed = sha256("sk_seed" ‖ master_lo)` (masterSkSeed) and
-      `pk_seed = sha256("pk_seed" ‖ master_lo)[..16] ‖ 0¹⁶` (masterPkSeed — the
-    N-masked value the CREATE2 salt hashes over). `master_lo` is existentially
-    bound as the 32-byte master-low; that it is specifically
-    `HMAC(domain, account-bound message)[..32]` — the account-binding layer — is
-    the documented residual (the HMAC-input characterization is brittle to thread
-    because `step*` inlines the master Array; the seed derivation FROM master_lo,
-    which is what the CREATE2 salt depends on, is proven here). -/
+/-- **`derive_c10_master_from_bip39_seed` FULL byte-layout** (CREATE2 red-line,
+    incl. the account-binding HMAC inputs). For all inputs, the extracted
+    bootstrap derivation computes `master_lo = HMAC-SHA512(key, msg)[..32]` where
+    `key` is `"sphincs-c6-v1"` (acct 0) / `"sphincs-c6-v1-acct"` (acct≠0) and
+    `msg` is `bip39_seed` (acct 0) / `bip39_seed ‖ account_index_be` (acct≠0) —
+    so the account index is bound into the master — and returns the
+    domain-separated seeds `sk_seed = sha256("sk_seed" ‖ master_lo)` (masterSkSeed)
+    and `pk_seed = sha256("pk_seed" ‖ master_lo)[..16] ‖ 0¹⁶` (masterPkSeed — the
+    N-masked value the CREATE2 salt hashes over). The HMAC primitive itself stays
+    opaque, so this proves the account-bound PREIMAGE structure (distinct-account
+    ⇒ distinct-master needs HMAC collision-resistance, out of scope). -/
 theorem derive_c10_master_byte_layout (bip39 : Std.Array U8 64#usize) (acct : U32) :
     pqsigner_domain.derive_c10_master_from_bip39_seed bip39 acct ⦃ r =>
-      ∃ (master_lo pre_pk pre_sk : Slice U8),
-        master_lo.length = 32
+      ∃ (key msg master_lo pre_pk pre_sk : Slice U8),
+        master_lo.val = ((hmac_sha512_pure_bytes key msg).val).take 32
+        ∧ key.val.map (·.val) = (if acct = 0#u32 then bootDomain else bootDomainAcct)
+        ∧ msg.val.map (·.val) = (if acct = 0#u32 then bip39.val.map (·.val)
+                                  else bip39.val.map (·.val) ++ u32be acct.val)
         ∧ pre_pk.val.map (·.val) = bootPkLabel ++ master_lo.val.map (·.val)
         ∧ pre_sk.val.map (·.val) = bootSkLabel ++ master_lo.val.map (·.val)
         ∧ (r.1).val.map (·.val)
@@ -298,39 +301,67 @@ theorem derive_c10_master_byte_layout (bip39 : Std.Array U8 64#usize) (acct : U3
   by_cases hacct : acct = 0#u32
   · simp only [if_pos hacct]
     step*
-    -- keep master_lo abstract (don't substitute it to `slice 0 32 (HMAC…)`): the
-    -- seed layout treats it as the opaque 32-byte master-low.
-    clear master_lo_post1
-    refine ⟨master_lo, s5, s14, master_lo_post2, ?_, ?_, ?_, rfl⟩
-    · simp only [*, Array.val_to_slice, Array.length_to_slice, List.map_setSlice!,
+    -- key = "sphincs-c6-v1" label slice (proof-irrelevant vs the inlined _proof),
+    -- msg = bip39.to_slice; master_lo/pre_pk/pre_sk are step* binders.
+    refine ⟨Array.to_slice (Array.make 13#usize
+              [115#u8, 112#u8, 104#u8, 105#u8, 110#u8, 99#u8, 115#u8, 45#u8, 99#u8,
+               54#u8, 45#u8, 118#u8, 49#u8] (by decide)),
+            Array.to_slice bip39, master_lo, s5, s14, ?_, ?_, ?_, ?_, ?_, ?_, rfl⟩
+    · -- C_hmac: master_lo = HMAC(key,msg)[..32]
+      rw [master_lo_post1]; simp [List.slice, Array.val_to_slice, x_post]
+    · -- C_key: key.val.map = "sphincs-c6-v1"
+      simp [Array.val_to_slice, Array.make, map_val_mk, bootDomain]
+    · -- C_msg: msg.val.map = bip39 (acct 0)
+      simp [Array.val_to_slice]
+    · clear master_lo_post1
+      simp only [*, Array.val_to_slice, Array.length_to_slice, List.map_setSlice!,
                  Array.repeat_val, Array.make, map_val_mk]
       rw [setSlice39_layout _ _ _ (by simp) (by simp)
             (by rw [List.length_map]; exact master_lo_post2)]
       simp [bootPkLabel]
-    · simp only [*, Array.val_to_slice, Array.length_to_slice, List.map_setSlice!,
+    · clear master_lo_post1
+      simp only [*, Array.val_to_slice, Array.length_to_slice, List.map_setSlice!,
                  Array.repeat_val, Array.make, map_val_mk]
       rw [setSlice39_layout _ _ _ (by simp) (by simp)
             (by rw [List.length_map]; exact master_lo_post2)]
       simp [bootSkLabel]
-    · simp only [*, Array.val_to_slice, Array.length_to_slice, List.map_setSlice!,
+    · clear master_lo_post1
+      simp only [*, Array.val_to_slice, Array.length_to_slice, List.map_setSlice!,
                  Array.repeat_val, List.map_replicate, Array.make, map_val_mk]
       rw [setSlice_head16_of_32 _ _ (by simp) (by simp)]
       simp [List.map_append, List.map_take, List.map_drop, List.drop_replicate]
   · simp only [if_neg hacct]
     step*
-    clear master_lo_post1
-    refine ⟨master_lo, s5, s14, master_lo_post2, ?_, ?_, ?_, rfl⟩
-    · simp only [*, Array.val_to_slice, Array.length_to_slice, List.map_setSlice!,
+    -- key = "sphincs-c6-v1-acct" label slice; msg = x (the bip39‖acct_be buffer slice).
+    refine ⟨Array.to_slice (Array.make 18#usize
+              [115#u8, 112#u8, 104#u8, 105#u8, 110#u8, 99#u8, 115#u8, 45#u8, 99#u8,
+               54#u8, 45#u8, 118#u8, 49#u8, 45#u8, 97#u8, 99#u8, 99#u8, 116#u8] (by decide)),
+            x, master_lo, s5, s14, ?_, ?_, ?_, ?_, ?_, ?_, rfl⟩
+    · -- C_hmac: master_lo = HMAC(key,msg)[..32]
+      rw [master_lo_post1]; simp [List.slice, Array.val_to_slice]
+    · -- C_key: key.val.map = "sphincs-c6-v1-acct"
+      simp [Array.val_to_slice, Array.make, map_val_mk, bootDomainAcct]
+    · -- C_msg: x.val.map = bip39 ++ account_index_be  (the 68-byte buffer)
+      simp only [*, Array.val_to_slice, Array.length_to_slice, List.map_setSlice!,
+                 Array.repeat_val, List.map_replicate, Array.make, map_val_mk,
+                 toBEBytes32_map_toNat]
+      rw [setSlice68_layout _ _ _ (by simp) (by rw [List.length_map]; exact l_bip)
+            (by simp [u32be])]
+      simp
+    · clear master_lo_post1
+      simp only [*, Array.val_to_slice, Array.length_to_slice, List.map_setSlice!,
                  Array.repeat_val, Array.make, map_val_mk]
       rw [setSlice39_layout _ _ _ (by simp) (by simp)
             (by rw [List.length_map]; exact master_lo_post2)]
       simp [bootPkLabel]
-    · simp only [*, Array.val_to_slice, Array.length_to_slice, List.map_setSlice!,
+    · clear master_lo_post1
+      simp only [*, Array.val_to_slice, Array.length_to_slice, List.map_setSlice!,
                  Array.repeat_val, Array.make, map_val_mk]
       rw [setSlice39_layout _ _ _ (by simp) (by simp)
             (by rw [List.length_map]; exact master_lo_post2)]
       simp [bootSkLabel]
-    · simp only [*, Array.val_to_slice, Array.length_to_slice, List.map_setSlice!,
+    · clear master_lo_post1
+      simp only [*, Array.val_to_slice, Array.length_to_slice, List.map_setSlice!,
                  Array.repeat_val, List.map_replicate, Array.make, map_val_mk]
       rw [setSlice_head16_of_32 _ _ (by simp) (by simp)]
       simp [List.map_append, List.map_take, List.map_drop, List.drop_replicate]
