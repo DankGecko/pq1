@@ -366,4 +366,78 @@ theorem derive_c10_master_byte_layout (bip39 : Std.Array U8 64#usize) (acct : U3
       rw [setSlice_head16_of_32 _ _ (by simp) (by simp)]
       simp [List.map_append, List.map_take, List.map_drop, List.drop_replicate]
 
+/-! ## §1 deepening — derivation injectivity (domain separation) + the
+    key-collision ⇒ hash-collision reduction.
+
+    The byte-layout ranks prove each key seed is `hash(preimage)` with the
+    `(account, chain, slot)` inputs in fixed positions. Here we prove the
+    PREIMAGE map is INJECTIVE in those inputs (pure, no crypto), so any two
+    distinct inputs yield distinct preimages — the derivation never internally
+    aliases. Composed with a byte-layout rank, this yields: distinct inputs ⇒
+    the keys differ UNLESS the hash collided (the honest reduction; we do NOT
+    assume the hash is injective, which is false). -/
+
+/-- Big-endian 4-byte decomposition is injective on `< 2^32`. -/
+theorem u32be_inj {x y : Nat} (hx : x < 2 ^ 32) (hy : y < 2 ^ 32)
+    (h : u32be x = u32be y) : x = y := by
+  simp only [u32be, List.cons.injEq] at h
+  omega
+
+/-- Big-endian 8-byte decomposition is injective on `< 2^64`. -/
+theorem u64be_inj {x y : Nat} (hx : x < 2 ^ 64) (hy : y < 2 ^ 64)
+    (h : u64be x = u64be y) : x = y := by
+  simp only [u64be, List.cons.injEq] at h
+  omega
+
+/-- **Cross-chain isolation (preimage injectivity in `chain_id`).** For a fixed
+    master + slot, distinct chain ids give distinct `slot_entropy` preimages.
+    (Pure list fact: the chain bytes occupy a fixed window of the preimage.) -/
+theorem slotEntropyPreimage_chain_inj {m : List Nat} {c1 c2 s : Nat}
+    (hc1 : c1 < 2 ^ 64) (hc2 : c2 < 2 ^ 64)
+    (h : slotEntropyPreimage m c1 s = slotEntropyPreimage m c2 s) : c1 = c2 := by
+  apply u64be_inj hc1 hc2
+  unfold slotEntropyPreimage at h
+  -- cancel the common `u32be s` suffix, then the `m ++ label` prefix
+  exact List.append_right_injective _ (List.append_left_injective _ h)
+
+/-- Contrapositive: distinct chain ids ⇒ distinct `slot_entropy` preimages. -/
+theorem slotEntropyPreimage_chain_ne {m : List Nat} {c1 c2 s : Nat}
+    (hc1 : c1 < 2 ^ 64) (hc2 : c2 < 2 ^ 64) (hne : c1 ≠ c2) :
+    slotEntropyPreimage m c1 s ≠ slotEntropyPreimage m c2 s :=
+  fun h => hne (slotEntropyPreimage_chain_inj hc1 hc2 h)
+
+/-- **Per-slot isolation (preimage injectivity in `slot_index`).** For a fixed
+    master + chain, distinct slot indices give distinct `slot_entropy` preimages
+    (the slot bytes are the trailing window). -/
+theorem slotEntropyPreimage_slot_inj {m : List Nat} {c s1 s2 : Nat}
+    (hs1 : s1 < 2 ^ 32) (hs2 : s2 < 2 ^ 32)
+    (h : slotEntropyPreimage m c s1 = slotEntropyPreimage m c s2) : s1 = s2 := by
+  apply u32be_inj hs1 hs2
+  unfold slotEntropyPreimage at h
+  exact List.append_right_injective _ h
+
+/-- Contrapositive: distinct slot indices ⇒ distinct `slot_entropy` preimages. -/
+theorem slotEntropyPreimage_slot_ne {m : List Nat} {c s1 s2 : Nat}
+    (hs1 : s1 < 2 ^ 32) (hs2 : s2 < 2 ^ 32) (hne : s1 ≠ s2) :
+    slotEntropyPreimage m c s1 ≠ slotEntropyPreimage m c s2 :=
+  fun h => hne (slotEntropyPreimage_slot_inj hs1 hs2 h)
+
+/-- **Cross-chain key reuse ⇒ a genuine SHA-256 collision.** If two slices `p1`,
+    `p2` are the canonical `slot_entropy` preimages for the same master+slot but
+    DISTINCT chains, and their hashes coincide (i.e. the slot keys collide
+    cross-chain), then `(p1, p2)` is a SHA-256 collision: distinct inputs, equal
+    digest. So cross-chain slot-key reuse is impossible UNLESS SHA-256 collides —
+    the honest reduction (we never assume the hash is injective). Compose with
+    `slot_entropy_hashes_canonical_preimage` to supply `hp1`/`hp2`. -/
+theorem slot_entropy_crosschain_reduction {m : List Nat} {c1 c2 s : Nat}
+    {p1 p2 : Slice U8}
+    (hc1 : c1 < 2 ^ 64) (hc2 : c2 < 2 ^ 64) (hne : c1 ≠ c2)
+    (hp1 : p1.val.map (·.val) = slotEntropyPreimage m c1 s)
+    (hp2 : p2.val.map (·.val) = slotEntropyPreimage m c2 s)
+    (hcol : sha256_pure_bytes p1 = sha256_pure_bytes p2) :
+    p1.val ≠ p2.val ∧ sha256_pure_bytes p1 = sha256_pure_bytes p2 := by
+  refine ⟨fun heq => ?_, hcol⟩
+  apply slotEntropyPreimage_chain_ne hc1 hc2 hne
+  rw [← hp1, ← hp2, heq]
+
 end Extracted.Equiv

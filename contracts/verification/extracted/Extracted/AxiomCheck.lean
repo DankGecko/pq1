@@ -34,6 +34,11 @@ import Extracted.SlotKdf.SlotKdfSpec
 #print axioms Extracted.Equiv.derive_c10_slot_seeds_byte_layout
 #print axioms Extracted.Equiv.slot_master_byte_layout
 #print axioms Extracted.Equiv.derive_c10_master_byte_layout
+-- §1 deepening: derivation injectivity (PURE — kernel-only closure) + the
+-- key-collision ⇒ hash-collision reduction (adds only sha256_pure_bytes).
+#print axioms Extracted.Equiv.slotEntropyPreimage_chain_inj
+#print axioms Extracted.Equiv.slotEntropyPreimage_slot_inj
+#print axioms Extracted.Equiv.slot_entropy_crosschain_reduction
 #print axioms Extracted.Equiv.deserialize_pin_state_rejects_bad_len
 #print axioms Extracted.Equiv.make_adrs_spec
 #print axioms Extracted.Equiv.set_chain_index_spec
