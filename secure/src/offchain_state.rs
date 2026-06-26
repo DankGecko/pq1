@@ -69,11 +69,20 @@ mod backend {
 #[cfg(not(any(feature = "stm32u585", feature = "pka-accel")))]
 mod backend {
     //! SRAM-backed mock used by QEMU. Storage is a fixed-size table of
-    //! `(slot_key, offchain, last_userop, registered)` records. Lost on
+    //! `(slot_key, offchain, last_userop, userop_sigs)` records. Lost on
     //! power cycle, which exactly mirrors the seed-restore semantics —
-    //! a fresh-from-seed firmware has no flash record of any slot, so
-    //! `is_registered` returns false until the first `register_slot`
-    //! call. Tests that want to simulate a recovery just call
+    //! a fresh-from-seed firmware has no flash record of any slot.
+    //!
+    //! **F13:** registration is derived from RECORD EXISTENCE (`find().is_some()`),
+    //! not a separate `registered` flag. In production flash a slot is
+    //! "registered" iff any page-123 journal entry exists for it, and EVERY
+    //! value-write (`bump`/`promote_to`/`last_userop_count_set`/
+    //! `userop_sigs_bump`) creates such an entry. The pre-F13 mock set
+    //! `registered` only on an explicit `register_slot` call, so a value-write
+    //! that registers the slot in flash left the mock reporting unregistered —
+    //! a host-vs-flash drift that let invariant-#9 host tests pass where
+    //! production would behave differently. Deriving from `used` removes that
+    //! drift. Tests that want to simulate a recovery call
     //! `crate::offchain_state::reset_for_test()`.
 
     const MAX_SLOTS: usize = 128;
@@ -84,7 +93,6 @@ mod backend {
         offchain: u64,
         last_userop: u64,
         userop_sigs: u64,
-        registered: bool,
         used: bool,
     }
 
@@ -93,7 +101,6 @@ mod backend {
         offchain: 0,
         last_userop: 0,
         userop_sigs: 0,
-        registered: false,
         used: false,
     }; MAX_SLOTS];
 
@@ -115,7 +122,6 @@ mod backend {
                 e.offchain = 0;
                 e.last_userop = 0;
                 e.userop_sigs = 0;
-                e.registered = false;
                 e.used = true;
                 return Some(i);
             }
@@ -138,19 +144,19 @@ mod backend {
     }
 
     pub unsafe fn offchain_count_is_registered(slot_key: &[u8; 8]) -> bool {
-        match find(slot_key) {
-            Some(i) => (*core::ptr::addr_of!(TABLE))[i].registered,
-            None => false,
-        }
+        // F13: registration == record existence, matching production flash
+        // (any page-123 journal entry => registered). Every value-write
+        // allocates an entry, so this reports the same truth flash would.
+        find(slot_key).is_some()
     }
 
     pub unsafe fn offchain_count_register_slot(slot_key: &[u8; 8]) -> Result<(), ()> {
-        let idx = match find(slot_key) {
-            Some(i) => i,
-            None => allocate(slot_key).ok_or(())?,
-        };
-        (*core::ptr::addr_of_mut!(TABLE))[idx].registered = true;
-        Ok(())
+        // F13: registering just ensures an entry exists (the production journal
+        // would gain a record); existence is what `is_registered` reads.
+        match find(slot_key) {
+            Some(_) => Ok(()),
+            None => allocate(slot_key).map(|_| ()).ok_or(()),
+        }
     }
 
     pub unsafe fn offchain_count_bump(slot_key: &[u8; 8], new_count: u64) -> Result<(), ()> {
@@ -234,7 +240,6 @@ mod backend {
                 offchain: 0,
                 last_userop: 0,
                 userop_sigs: 0,
-                registered: false,
                 used: false,
             };
         }

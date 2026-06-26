@@ -513,8 +513,23 @@ fn ct_eq_8(a: &[u8], b: &[u8]) -> bool {
 /// moment its SM layer processed the command (GP Amd D §6.2.6: per
 /// command sent, not per protected response). Only a verify/decrypt
 /// failure of a *protected* response (R-MAC mismatch — a forgery, not a
-/// card response) leaves the counter untouched, and that path kills the
-/// session anyway.
+/// card response) leaves the counter untouched.
+///
+/// **F8 (corrected):** that R-MAC-mismatch path returns `Err(RMacMismatch)`
+/// but does NOT itself clear `session.active` (an earlier comment claimed it
+/// "kills the session" — it does not). The channel still fails CLOSED: no
+/// plaintext is ever released on the mismatch (the early sentinel reject plus
+/// the F-28 infective release gate XOR-garble half_E unless a fresh,
+/// independent R-MAC recompute matches), and the seed half is only ever read,
+/// never sent, and always travels as R-ENC ciphertext on the bus. A desynced
+/// session is an availability concern, not a confidentiality/integrity one:
+/// the counter desync makes every SUBSEQUENT command error too, so the unlock
+/// fails closed, and the SE error paths re-`reinit()` (full SELECT + fresh
+/// `establish`) before the session is reused. Do NOT "fix" this by setting
+/// `session.active = false` here — that flips `send_apdu` into its
+/// pre-handshake cleartext branch (apdu.rs), turning a fail-CLOSED desync into
+/// a fail-OPEN plaintext downgrade on I2C (the exact invariant-#3 break this
+/// guards against).
 pub fn unwrap_response(
     session: &mut Scp03Session,
     wrapped: &[u8],

@@ -391,6 +391,24 @@ These are the load-bearing invariants. The numbered list mirrors CLAUDE.md "Non-
 8. **Stateless slot selection.** Defeats per-signature flash-state corruption attacks — the only per-signature flash state is the page-123 EIP-1271 counter; everything else is companion-supplied and re-derived in SRAM.
 9. **Off-chain sig counter, combined cap.** Defeats EIP-1271 over-spending; defeats post-restore unregistered-slot signing.
 
+**F3 residual — page-123 compaction crash-atomicity.** The page-123 off-chain
+counter store is a log-structured journal compacted in place (erase-then-replay,
+single page, no two-phase staging), so a physical power-loss / reset timed
+*inside* the compaction window can tear it. Because "slot registered" is derived
+from "≥1 journal entry exists", a tear could leave a slot registered with a
+counter rolled back. This is **physical-fault-only** (not companion-reachable —
+it needs a precisely-timed reset during compaction). The compaction now replays
+the unbounded, no-on-chain-backstop `USEROP_SIGS` few-time tally **first** per
+slot (`flash.rs::compact_page`), so the security-critical "registered but
+few-time tally rolled back" state is unreachable: a tear before it leaves the
+slot *unregistered* (invariant #9 forces a Type-1 re-registration), and a tear
+after can only roll back the COUNT/USEROP counters, which are bounded by the
+firmware gap ≤ `MAX_OFFCHAIN_GAP` and backstopped by the on-chain
+`_setOffchainSigCount`/`slotUses` monotonicity. The remaining bounded
+COUNT/USEROP roll-back, and full crash-atomicity via a two-page ping-pong /
+commit marker, are tracked as a hardening follow-up. The **on-chain** caps
+(invariant #7) are unaffected — they live in contract storage, not flash.
+
 The hardening regressions that knowingly violate one or more of these are listed in §9.
 
 ---

@@ -205,6 +205,15 @@ pub(super) unsafe fn run(_args: &GatewayArgs) -> u32 {
         return NscStatus::FwUpdateFlashError as u32;
     }
 
+    // F10: the install is now fully committed (OTP bumped, manifest written,
+    // boot-state points at the new slot). This is the ONLY place the
+    // manifest-verify-failure wipe budget is cleared — a completed, user-
+    // confirmed update earns honest users a fresh budget, while a BEGIN→cancel
+    // loop (which never reaches here) can no longer reset it. Non-fatal if the
+    // flash erase inside fails (worst case: a few stale failures carry over,
+    // still bounded by the threshold).
+    super::cmd_fw_begin::reset_verify_failure_tally();
+
     // 4. Drop the context (zeroize manifest bytes + running hashes).
     // SAFETY: category 5 — exclusive write to `static mut FW_UPDATE`
     // under the non-reentrant dispatcher. The dropped `FwUpdateCtx`'s

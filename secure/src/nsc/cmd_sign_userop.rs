@@ -1468,7 +1468,15 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                     c10_sk.pk_seed(), c10_sk.pk_root(), &factory_digest, &factory_sig);
                 (v1, v2)
             };
-            if crate::fi::check_true_into_sentinel(|| fv1 && fv2) != crate::fi::OK_SENTINEL {
+            // F16: `black_box` each verdict so LLVM cannot CSE-merge the
+            // helper's two closure evaluations into one (the F-1 idiom the
+            // single-bool gates here already use). The genuinely CSE-proof
+            // redundancy is the two `verify()` calls separated by `wait_random`
+            // above; this brings the AND-of-two outer gate up to the same bar.
+            if crate::fi::check_true_into_sentinel(|| {
+                core::hint::black_box(fv1) && core::hint::black_box(fv2)
+            }) != crate::fi::OK_SENTINEL
+            {
                 entropy.zeroize();
                 crate::fi::zeroize_barrier();
                 ui::show_status("FactorySig", "verify FAIL");
@@ -1572,7 +1580,11 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                     c10_sk.pk_seed(), c10_sk.pk_root(), &t1_digest, &bootstrap_sig);
                 (v1, v2)
             };
-            if crate::fi::check_true_into_sentinel(|| bv1 && bv2) != crate::fi::OK_SENTINEL {
+            // F16: black_box each verdict (see the factory-sig gate above).
+            if crate::fi::check_true_into_sentinel(|| {
+                core::hint::black_box(bv1) && core::hint::black_box(bv2)
+            }) != crate::fi::OK_SENTINEL
+            {
                 entropy.zeroize();
                 crate::fi::zeroize_barrier();
                 ui::show_status("Type1 sig", "verify FAIL");
@@ -1665,7 +1677,10 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         let v2 = sphincs_c10::verify(slot_ref.pk_seed(), slot_ref.pk_root(), &t2_digest, &t2_sig);
         (v1, v2)
     };
-    if crate::fi::check_true_into_sentinel(|| v1 && v2) != crate::fi::OK_SENTINEL {
+    // F16: black_box each verdict (see the factory-sig gate above).
+    if crate::fi::check_true_into_sentinel(|| core::hint::black_box(v1) && core::hint::black_box(v2))
+        != crate::fi::OK_SENTINEL
+    {
         entropy.zeroize();
         crate::fi::zeroize_barrier();
         ui::show_status("Sig verify", "FAIL");

@@ -295,7 +295,7 @@ fn render_amount(
     let decimals = u32::from(params.decimals.unwrap_or(18));
     let unit_bytes = params.base.unwrap_or(b"ETH");
     let [_, r1, r2, foot] = pages.page_mut(p);
-    let fit = write_amount_two_rows(r1, r2, &value, decimals, 6, true, ascii_str(unit_bytes));
+    let fit = write_amount_two_rows(r1, r2, &value, decimals, 6, true, true, ascii_str(unit_bytes));
     write_line(
         foot,
         match fit {
@@ -359,7 +359,7 @@ fn render_token_amount(
                 }
             }
             let fit =
-                write_amount_two_rows(r1, r2, &value, decimals, 6, true, ascii_str(ticker));
+                write_amount_two_rows(r1, r2, &value, decimals, 6, true, true, ascii_str(ticker));
             write_line(
                 foot,
                 match fit {
@@ -374,7 +374,7 @@ fn render_token_amount(
             // render 10^12× off while *looking* authoritative. Show the
             // RAW integer (no scaling) and label the unknown scale loudly
             // so the user knows the magnitude is uninterpreted.
-            let fit = write_amount_two_rows(r1, r2, &value, 0, 0, false, "");
+            let fit = write_amount_two_rows(r1, r2, &value, 0, 0, false, true, "");
             write_line(
                 foot,
                 match fit {
@@ -605,7 +605,7 @@ fn render_unit(
     let decimals = u32::from(params.decimals.unwrap_or(0));
     let unit_bytes = params.base.unwrap_or(b"");
     let [_, r1, r2, foot] = pages.page_mut(p);
-    let fit = write_amount_two_rows(r1, r2, &value, decimals, 6, true, ascii_str(unit_bytes));
+    let fit = write_amount_two_rows(r1, r2, &value, decimals, 6, true, true, ascii_str(unit_bytes));
     write_line(
         foot,
         match fit {

@@ -110,10 +110,16 @@ enum Cmd {
         #[arg(long)]
         key: std::path::PathBuf,
 
-        /// Monotonic firmware version. Must be strictly greater than the
-        /// last signed version (tracked in `$XDG_DATA_HOME/fwsign/ledger`)
-        /// and also strictly greater than the current OTP rollback
-        /// floor on every device that will receive this release.
+        /// Firmware version (encoded in the signed manifest). Should be
+        /// strictly greater than the current OTP rollback floor on every
+        /// device that will receive this release — THAT is the real,
+        /// silicon-enforced anti-rollback gate (`verify_rollback` against the
+        /// OTP floor). The `$XDG_DATA_HOME/fwsign/ledger` is RECORD-ONLY
+        /// provenance: `sign` appends to it but does NOT read it back to refuse
+        /// a non-increasing version (F11) — enforcing that here would break the
+        /// documented reproducible re-sign workflow (re-signing an already-
+        /// recorded version must reproduce identical bytes). Treat the ledger
+        /// as an audit trail, not a monotonicity guard.
         #[arg(long)]
         version: u32,
 

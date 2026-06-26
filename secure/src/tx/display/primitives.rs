@@ -97,6 +97,22 @@ pub(super) enum AmountFit {
     Overflow,
 }
 
+/// F14#3 collapse-to-zero guard: true iff `digits` (a `format_decimal`
+/// output) represents zero — every byte is `'0'` or the decimal point.
+///
+/// Used to refuse rendering a NONZERO transfer amount that scaled by an
+/// (untrusted) `decimals` formats to `"0"` / `"0.000000"`. A poisoned
+/// ERC-7730 descriptor could otherwise inflate `params.decimals` so a
+/// balance-draining amount paints as a harmless-looking near-zero — the user
+/// confirms "0" while signing a large transfer. Amount sinks pass
+/// `reject_zero_collapse = true` so they paint the loud overflow banner
+/// instead; FEE/gas formatters (gwei/wei) pass `false` because a genuinely
+/// tiny fee rendering as `"0.000"` is truthful, not a hidden magnitude.
+#[inline]
+pub(super) fn formatted_collapses_to_zero(value: &U256, digits: &[u8]) -> bool {
+    !value.is_zero() && digits.iter().all(|&b| b == b'0' || b == b'.')
+}
+
 /// Try to emit `<amount> <unit>` on a single row.
 ///
 ///   * `trim_trailing_zeros = true` for ETH/gwei (shorter form looks
@@ -112,6 +128,7 @@ pub(super) fn try_write_amount_single_row(
     decimals: u32,
     frac_digits: u32,
     trim_trailing_zeros: bool,
+    reject_zero_collapse: bool,
     unit: &str,
 ) -> bool {
     let unit_bytes = unit.as_bytes();
@@ -125,6 +142,12 @@ pub(super) fn try_write_amount_single_row(
         Some(n) if n <= budget => n,
         _ => return false,
     };
+    // F14#3: refuse a nonzero amount that collapsed to all-zero digits (the
+    // caller falls back to the 2-row sink, which also rejects → overflow
+    // banner). Fee/gas callers pass `reject_zero_collapse = false`.
+    if reject_zero_collapse && formatted_collapses_to_zero(value, &tmp[..n]) {
+        return false;
+    }
 
     *row = [b' '; DISPLAY_COLS];
     row[..n].copy_from_slice(&tmp[..n]);
@@ -150,6 +173,7 @@ pub(super) fn write_amount_two_rows(
     decimals: u32,
     frac_digits: u32,
     trim_trailing_zeros: bool,
+    reject_zero_collapse: bool,
     unit: &str,
 ) -> AmountFit {
     *row1 = [b' '; DISPLAY_COLS];
@@ -162,6 +186,13 @@ pub(super) fn write_amount_two_rows(
         None => return AmountFit::Overflow,
     };
     let digits = &tmp[..n];
+
+    // F14#3: a nonzero transfer amount that scaled to all-zero digits is a
+    // hidden-magnitude render — paint the loud overflow banner, never a
+    // misleading near-zero. (Fee/gas paths pass `reject_zero_collapse = false`.)
+    if reject_zero_collapse && formatted_collapses_to_zero(value, digits) {
+        return AmountFit::Overflow;
+    }
 
     // Prefer to split the formatted string at the decimal point so row 1
     // is "<integer>" and row 2 is ".<fraction> <unit>".
@@ -396,13 +427,15 @@ pub(super) fn write_eth_two_rows(
     row2: &mut [u8; DISPLAY_COLS],
     value: &U256,
 ) -> AmountFit {
-    // Single row if the fixed-width form fits.
-    if try_write_amount_single_row(row1, value, 18, ETH_FRAC_DIGITS, false, "ETH") {
+    // Single row if the fixed-width form fits. `reject_zero_collapse = true`:
+    // an ETH transfer is an amount, so a nonzero value rendering as
+    // "0.000000 ETH" must overflow loudly, not hide its magnitude (F14#3).
+    if try_write_amount_single_row(row1, value, 18, ETH_FRAC_DIGITS, false, true, "ETH") {
         *row2 = [b' '; DISPLAY_COLS];
         return AmountFit::Full;
     }
     // Otherwise spill the SAME fixed-width form across two rows.
-    write_amount_two_rows(row1, row2, value, 18, ETH_FRAC_DIGITS, false, "ETH")
+    write_amount_two_rows(row1, row2, value, 18, ETH_FRAC_DIGITS, false, true, "ETH")
 }
 
 /// Paint a gas-price value in gwei on a single row. Uses 3 fractional
@@ -410,15 +443,18 @@ pub(super) fn write_eth_two_rows(
 /// more room. Returns `false` if even the integer form doesn't fit —
 /// in practice only possible for attacker-crafted 2^256-class inputs.
 pub(super) fn write_gwei(row: &mut [u8; DISPLAY_COLS], value: &U256) -> bool {
+    // `reject_zero_collapse = false`: a genuinely tiny gas price rendering as
+    // "0.000 gwei" is truthful (a fee, not a transfer amount), so do NOT flip
+    // it to an overflow banner (F14#3 applies only to transfer amounts).
     for &frac in &[3u32, 2, 1, 0] {
-        if try_write_amount_single_row(row, value, 9, frac, true, "gwei") {
+        if try_write_amount_single_row(row, value, 9, frac, true, false, "gwei") {
             return true;
         }
     }
     // Last-ditch: raw wei as integer, labelled "wei". Prevents a silent
     // gap on the screen; the user sees an unexpectedly large number.
     for &frac in &[0u32] {
-        if try_write_amount_single_row(row, value, 0, frac, true, "wei") {
+        if try_write_amount_single_row(row, value, 0, frac, true, false, "wei") {
             return true;
         }
     }
@@ -696,6 +732,12 @@ fn single_row_amount_fixed(
         Some(n) if n <= budget => n,
         _ => return false,
     };
+    // F14#3: token amounts always reject the zero-collapse — fall back to the
+    // 2-row sink (which also rejects → overflow banner) rather than paint a
+    // nonzero amount as "0".
+    if formatted_collapses_to_zero(value, &tmp[..n]) {
+        return false;
+    }
     *row = [b' '; DISPLAY_COLS];
     row[..n].copy_from_slice(&tmp[..n]);
     row[n] = b' ';
@@ -721,6 +763,11 @@ fn write_amount_two_rows_bytes(
         None => return AmountFit::Overflow,
     };
     let digits = &tmp[..n];
+
+    // F14#3: token amounts reject the nonzero-collapse-to-zero render.
+    if formatted_collapses_to_zero(value, digits) {
+        return AmountFit::Overflow;
+    }
 
     let dot_pos = digits.iter().position(|&b| b == b'.');
     let unit_copy = core::cmp::min(unit_bytes.len(), DISPLAY_COLS.saturating_sub(1));

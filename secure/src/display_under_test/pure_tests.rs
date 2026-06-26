@@ -313,7 +313,7 @@ fn positive_write_calldata_hash_rows_paints_head_and_tail() {
 fn positive_try_write_amount_single_row_fits() {
     let mut row = [b' '; DISPLAY_COLS];
     let v = u256_from_u64(123);
-    let ok = try_write_amount_single_row(&mut row, &v, 0, 0, true, "wei");
+    let ok = try_write_amount_single_row(&mut row, &v, 0, 0, true, true, "wei");
     assert!(ok);
     assert_eq!(row_str(&row), "123 wei");
 }
@@ -323,10 +323,40 @@ fn positive_write_amount_two_rows_integer_plus_unit() {
     let mut r1 = [b' '; DISPLAY_COLS];
     let mut r2 = [b' '; DISPLAY_COLS];
     let v = u256_from_u64(123_456_789);
-    let fit = write_amount_two_rows(&mut r1, &mut r2, &v, 0, 0, true, "TOKEN");
+    let fit = write_amount_two_rows(&mut r1, &mut r2, &v, 0, 0, true, true, "TOKEN");
     assert_eq!(fit, AmountFit::Full);
     assert_eq!(row_str(&r1), "123456789");
     assert_eq!(row_str(&r2), "TOKEN");
+}
+
+/// F14#3 regression: a NONZERO amount that scales (via an untrusted
+/// `decimals`) to all-zero display digits must overflow loudly, never paint a
+/// misleading "0.000000". A poisoned ERC-7730 descriptor could otherwise hide
+/// a balance-draining magnitude behind a harmless-looking near-zero.
+#[test]
+fn f14_3_nonzero_amount_collapsing_to_zero_overflows() {
+    // 1 token-unit displayed at 30 decimals with 6 fractional digits → "0.000000".
+    let v = u256_from_u64(1);
+    let mut r1 = [b' '; DISPLAY_COLS];
+    let mut r2 = [b' '; DISPLAY_COLS];
+    // Amount path (reject_zero_collapse = true) → Overflow.
+    let fit = write_amount_two_rows(&mut r1, &mut r2, &v, 30, 6, true, true, "TKN");
+    assert_eq!(fit, AmountFit::Overflow, "nonzero amount collapsing to 0 must overflow");
+    // Single-row amount path likewise refuses.
+    let mut row = [b' '; DISPLAY_COLS];
+    let ok = try_write_amount_single_row(&mut row, &v, 30, 6, true, true, "TKN");
+    assert!(!ok, "single-row amount must refuse the zero-collapse");
+    // Fee path (reject_zero_collapse = false): a genuinely tiny fee renders as
+    // "0.000000" truthfully and is NOT flipped to overflow.
+    let mut frow = [b' '; DISPLAY_COLS];
+    let ok_fee = try_write_amount_single_row(&mut frow, &v, 30, 6, true, false, "gwei");
+    assert!(ok_fee, "fee path keeps the truthful near-zero render");
+    // A true zero is unaffected on the amount path (it really is zero).
+    let zero = u256_from_u64(0);
+    let mut z1 = [b' '; DISPLAY_COLS];
+    let mut z2 = [b' '; DISPLAY_COLS];
+    let zfit = write_amount_two_rows(&mut z1, &mut z2, &zero, 18, 6, true, true, "ETH");
+    assert_eq!(zfit, AmountFit::Full, "a true zero amount renders normally");
 }
 
 #[test]

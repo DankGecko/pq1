@@ -78,6 +78,33 @@ pub(super) fn build(
         crate::crypto::c10_sign_verified_with_progress(master_c10_sk, &factory_digest, progress)
             .map_err(|_| NscStatus::CryptoError)?;
 
+    // F11: outer verify-before-release FI gate, symmetric with the Type 1/2
+    // sign release in cmd_sign_userop. `c10_sign_verified_with_progress`
+    // already verifies-before-release internally, and the factory sig is
+    // re-verified on-chain by the deployed factory (a faulted sig → revert,
+    // not forgery) — but parity with the other sign handlers closes the
+    // post-sign / pre-copy window where a glitch could corrupt `factory_sig`
+    // or `factory_digest` before it lands in the initCode blob. Two `verify()`
+    // calls split by `wait_random` + a black_box'd AND-of-two sentinel gate.
+    let v1 = sphincs_c10::verify(
+        master_c10_sk.pk_seed(),
+        master_c10_sk.pk_root(),
+        &factory_digest,
+        &factory_sig,
+    );
+    crate::fi::wait_random();
+    let v2 = sphincs_c10::verify(
+        master_c10_sk.pk_seed(),
+        master_c10_sk.pk_root(),
+        &factory_digest,
+        &factory_sig,
+    );
+    if crate::fi::check_true_into_sentinel(|| core::hint::black_box(v1) && core::hint::black_box(v2))
+        != crate::fi::OK_SENTINEL
+    {
+        return Err(NscStatus::CryptoError);
+    }
+
     out[228..228 + C10_SIG_LEN].copy_from_slice(&factory_sig);
 
     // Sanity: padding from 228 + 4008 = 4236 to 4260 is zero (already from fill(0)).

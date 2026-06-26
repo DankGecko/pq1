@@ -155,11 +155,19 @@ fn record_verify_failure_and_maybe_wipe() {
     }
 }
 
-/// Reset both the in-RAM and the flash-backed failure tallies after a
-/// manifest passes the full verify chain + length bounds. Successful
-/// updates don't accumulate failures over a device's lifetime.
+/// Reset both the in-RAM and the flash-backed failure tallies.
+///
+/// **F10:** this is called from `cmd_fw_commit` ONLY on a fully-completed,
+/// user-confirmed install (after `verify_images` + `boot_state::write`
+/// succeed), NOT from BEGIN. Pre-F10 it fired in BEGIN the moment a manifest
+/// passed verify — so an attacker holding a valid (public) manifest could
+/// BEGIN → reset the wipe budget → cancel before the destructive erase →
+/// repeat, defeating the §7.8 bound on repeated manifest-verify fault attempts
+/// (the budget must monotonically bound those attempts, only clearing on a real
+/// install). Anchoring the reset on COMMIT-success forces every budget clear
+/// through a full re-BEGIN + re-stream + physical confirm + bit-perfect COMMIT.
 #[inline(never)]
-fn record_verify_success() {
+pub(super) fn reset_verify_failure_tally() {
     // SAFETY: single-threaded, non-reentrant gateway path; sole writer.
     unsafe {
         core::ptr::write_volatile(
@@ -271,10 +279,12 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         return NscStatus::FwUpdateBadManifest as u32;
     }
 
-    // Manifest passes the full verify chain (signature, rollback, vendor,
-    // structural, length bound) — reset the glitch-defense counter so
-    // legit updates don't accumulate failures over the device's lifetime.
-    record_verify_success();
+    // F10: do NOT reset the glitch-defense counter here. A manifest passing
+    // the verify chain at BEGIN is necessary but not sufficient — the budget
+    // must bound repeated verify-fault attempts until an install actually
+    // COMPLETES, otherwise a valid-manifest BEGIN→cancel loop clears it for
+    // free. The reset now lives on the COMMIT-success path
+    // (`reset_verify_failure_tally`, called from `cmd_fw_commit`).
 
     // Trusted-display install confirm BEFORE any destructive flash op
     // (Trezor pattern, finding A in docs/security/usb-fw-update-hardening.md). A

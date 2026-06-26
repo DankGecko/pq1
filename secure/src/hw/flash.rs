@@ -1529,8 +1529,44 @@ unsafe fn compact_page() -> Result<(), ()> {
     // Replay: write surviving entries at the start of the page. Each
     // present (slot, type) projection is written to the next blank QW;
     // blanks only advance as we write, so no regression is possible.
+    //
+    // F3 crash-atomicity: `compact_page` is erase-then-replay on a SINGLE
+    // page with no two-phase staging, so a power-loss / reset BETWEEN the
+    // erase and the end of replay can tear it. Because "registered" ==
+    // "≥1 entry exists", the dangerous torn state is "slot registered but
+    // its counter rolled back to 0" — the F-12 forward/reverse double-scan
+    // cannot catch it (both scans agree on the durably-gone data). We make
+    // the SECURITY-critical instance of that state UNREACHABLE by replaying
+    // `USEROP_SIGS` FIRST for each slot:
+    //
+    //   * USEROP_SIGS is the unbounded, NO-on-chain-backstop few-time-key
+    //     sig tally (off-chain / withheld slot-key sigs eroding the C10
+    //     few-time margin). Writing it first means the instant a slot
+    //     becomes registered after a torn compaction, its tally is already
+    //     the true high-water mark. A tear BEFORE it leaves the slot
+    //     unregistered → invariant #9 forces a Type-1 re-registration (safe).
+    //   * COUNT (offchain) and USEROP (last on-chain userop count) are
+    //     written after. A tear that rolls THESE back is bounded: COUNT is
+    //     backstopped by the on-chain `_setOffchainSigCount` monotonicity +
+    //     the firmware gap ≤ MAX_OFFCHAIN_GAP, and USEROP reflects landed
+    //     userops the on-chain `slotUses` cap independently rejects.
+    //
+    // Residual (tracked): a torn COUNT/USEROP roll-back is still possible but
+    // bounded as above. Full crash-atomicity (two-page ping-pong / commit
+    // marker) is a larger flash-layout change; see docs/security/threat-model.md.
     for j in 0..n {
         let entry = table[j];
+        if entry.has_userop_sigs {
+            // F3 + MEDIUM-2: the durable few-time-sig tally is written FIRST so
+            // a torn compaction can never leave a registered slot with this
+            // (unbacked) counter rolled back to zero.
+            let qw = entry_qw(&entry.slot_key, OFFCHAIN_TYPE_USEROP_SIGS, entry.userop_sigs);
+            let blank = find_next_blank_idx().ok_or(())?;
+            // SAFETY: target QW is inside page 123 and was just erased.
+            unsafe {
+                write_quadword_verified(OFFCHAIN_PAGE_ADDR + blank * OFFCHAIN_QW_SIZE, &qw)?
+            };
+        }
         if entry.has_userop {
             let qw = entry_qw(&entry.slot_key, OFFCHAIN_TYPE_USEROP, entry.last_userop_count);
             let blank = find_next_blank_idx().ok_or(())?;
@@ -1541,17 +1577,6 @@ unsafe fn compact_page() -> Result<(), ()> {
         }
         if entry.has_offchain {
             let qw = entry_qw(&entry.slot_key, OFFCHAIN_TYPE_COUNT, entry.offchain_count);
-            let blank = find_next_blank_idx().ok_or(())?;
-            // SAFETY: target QW is inside page 123 and was just erased.
-            unsafe {
-                write_quadword_verified(OFFCHAIN_PAGE_ADDR + blank * OFFCHAIN_QW_SIZE, &qw)?
-            };
-        }
-        if entry.has_userop_sigs {
-            // MEDIUM-2: preserve the durable UserOp-signature tally across
-            // compaction. Mirrors the USEROP/COUNT replay exactly — losing
-            // it here would roll the combined-cap tally back to zero.
-            let qw = entry_qw(&entry.slot_key, OFFCHAIN_TYPE_USEROP_SIGS, entry.userop_sigs);
             let blank = find_next_blank_idx().ok_or(())?;
             // SAFETY: target QW is inside page 123 and was just erased.
             unsafe {

@@ -810,7 +810,13 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         let v2 = sphincs_c10::verify(slot_ref.pk_seed(), slot_ref.pk_root(), &hash_to_sign, &sig);
         (v1, v2)
     };
-    if crate::fi::check_true_into_sentinel(|| v1 && v2) != crate::fi::OK_SENTINEL {
+    // F16: black_box each verdict so LLVM cannot CSE-merge the helper's two
+    // closure evaluations (the F-1 idiom the single-bool gates here already
+    // use); the two `verify()` calls split by `wait_random` above are the
+    // CSE-proof redundancy, this matches their bar.
+    if crate::fi::check_true_into_sentinel(|| core::hint::black_box(v1) && core::hint::black_box(v2))
+        != crate::fi::OK_SENTINEL
+    {
         crate::ui::show_status("Sig verify", "FAIL");
         return NscStatus::CryptoError as u32;
     }

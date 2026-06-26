@@ -229,9 +229,14 @@ make verify-repro RELEASE_FEATURES=...
 
 ## Common gotchas
 
-- **Forgot to bump the version.** `fwsign sign` refuses if `--version`
-  is not strictly greater than the last signed version recorded in
-  `~/.local/share/fwsign/ledger.jsonl`. Bump and retry.
+- **Forgot to bump the version.** `fwsign sign` does NOT refuse a
+  non-increasing `--version` (F11): the `~/.local/share/fwsign/ledger.jsonl`
+  is a record-only audit trail, not a monotonicity guard — enforcing a refusal
+  here would break reproducible re-signing of an already-recorded version. The
+  real, silicon-enforced anti-rollback is the on-device OTP rollback floor
+  (`verify_rollback` rejects any `fw_version <= floor` at BEGIN and at FSBL
+  boot). Still bump the version per release; the device — not `fwsign` — is
+  what blocks a downgrade.
 - **Different build host → different ELFs.** Reproducibility depends
   on the pinned toolchain + the `--remap-path-prefix` flags. If
   you're signing from a laptop that isn't on `nightly-2026-04-06`,
