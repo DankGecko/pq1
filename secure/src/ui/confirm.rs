@@ -126,3 +126,15 @@ fn render_page(page: &Page) {
     }
     d.flush();
 }
+
+/// Render a sequence of pre-rendered pages WITHOUT waiting for input — each is
+/// drawn + flushed (which, under `ui-capture`, emits a `[UI-FP]` fingerprint).
+/// The render-only golden harness ([`crate::ui::golden`]) uses this to capture
+/// screens directly, skipping the C10 keygen/sign that makes the e2e-based
+/// ui-golden too slow on QEMU's software SHA-256.
+#[cfg(feature = "ui-golden-render")]
+pub fn render_capture_pages(pages: &[Page]) {
+    for page in pages {
+        render_page(page);
+    }
+}

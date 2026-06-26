@@ -419,6 +419,12 @@ mlkem-self-test = []
 # direct-half flow is the default); turning it on is the migration. See
 # `docs/security/ml-kem-inner-wrap.md`.
 mlkem-inner-wrap = []
+# Render-only golden-screenshot harness (#21): a FAST ui-golden gate. At boot,
+# renders a curated set of display screens through the production renderers +
+# captures [UI-FP] fingerprints, then halts — no C10 keygen/sign (which makes
+# the e2e-based `ui-golden` too slow on QEMU software SHA-256). Implies
+# `ui-capture` (the fingerprint emitter). Dev-only.
+ui-golden-render = ["ui-capture"]
 
 # Masked-SHA-256 overhead bench (work-todo §18 SHAKE-vs-SHA2 #2
 # measurement). Runs once at boot, DWT-times the masked gates +

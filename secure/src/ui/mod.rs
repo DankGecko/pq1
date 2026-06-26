@@ -42,6 +42,9 @@ pub mod mirror;
 pub mod capture;
 
 pub mod confirm;
+// Render-only golden-screenshot harness (#21 — fast ui-golden).
+#[cfg(feature = "ui-golden-render")]
+pub mod golden;
 pub mod pin_entry;
 pub mod seed_wizard;
 /// F-24 stage D: constant-time glyph blit for secret-bearing display rows.

@@ -3756,6 +3756,42 @@ ui-golden:
 	if [ $$rc -eq 0 ]; then echo "==> ui-golden: PASS"; else echo "==> ui-golden: FAIL (rc=$$rc)"; fi; \
 	exit $$rc
 
+# Render-only golden gate (#21) — a FAST ui-golden. Renders the curated screen
+# corpus through the production renderers (`ui::golden`) + captures [UI-FP],
+# with NO C10 keygen/sign — the e2e-based `ui-golden` above is slow (signs over
+# QEMU software SHA-256 dominate: it reached one scenario in ~150 s). The secure
+# image halts right after rendering, so the NS image is only a loader payload
+# (never executed). Catches renderer regressions (layout / text / byte drift)
+# in seconds.
+#   make ui-golden-render               # check vs tests/ui_golden_render_fixtures.json
+#   make ui-golden-render-bless         # re-baseline after an intentional UI change
+.PHONY: ui-golden-render ui-golden-render-bless
+ui-golden-render:
+	@echo "==> Building secure (ui-golden-render harness) + NS loader payload"
+	@$(RUSTFLAGS_VAR)="-C linker=arm-none-eabi-ld -C link-arg=-Tlink.x $(REPRO_FLAGS)" \
+		cargo build --locked --release --target $(TARGET) --target-dir target/secure \
+			-p sphincs-tz-secure --no-default-features \
+			--features mock-se,debug-log,ui-semihosting,ui-golden-render
+	@$(RUSTFLAGS_VAR)="-C linker=arm-none-eabi-ld -C link-arg=-Tlink.x $(REPRO_FLAGS)" \
+		cargo build --locked --release --target $(TARGET) --target-dir target/nonsecure \
+			-p sphincs-tz-nonsecure --features e2e-test
+	@echo "==> Rendering the curated screen corpus under QEMU, capturing [UI-FP]"
+	@log=$$(mktemp); \
+	qemu-system-arm \
+		-M mps2-an505 -monitor null -serial null -nographic \
+		-chardev stdio,id=hostio \
+		-semihosting-config enable=on,target=native,chardev=hostio \
+		-kernel $(SECURE_ELF) \
+		-device loader,file=$(NONSECURE_ELF) </dev/null 2>&1 | tee $$log >/dev/null; \
+	echo "==> ui-golden-render ($(GOLDEN_MODE)) vs tests/ui_golden_render_fixtures.json"; \
+	rc=0; python3 tools/ui_fixture.py $(GOLDEN_MODE) tests/ui_golden_render_fixtures.json < $$log || rc=$$?; \
+	rm -f $$log; \
+	if [ $$rc -eq 0 ]; then echo "==> ui-golden-render: PASS"; else echo "==> ui-golden-render: FAIL (rc=$$rc)"; fi; \
+	exit $$rc
+
+ui-golden-render-bless:
+	@$(MAKE) ui-golden-render GOLDEN_MODE=--regenerate
+
 # Symbolic-model (ProVerif, Dolev-Yao) proof of the dual-SE seed-unlock protocol:
 # seed secrecy under partial compromise (Claims 1/2) + the PIN-gate authentication
 # + the anti-vacuity positive control. See contracts/verification/proverif/README.md.

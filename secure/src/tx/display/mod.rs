@@ -36,7 +36,9 @@ mod safe_mgmt;
 mod slot_rotation;
 mod typed_call;
 mod value_page;
-mod value_transfer;
+// `pub(crate)` so the render-only golden harness (`ui::golden`) can drive the
+// renderer directly; private otherwise.
+pub(crate) mod value_transfer;
 
 pub use blind_sign::render_blind_sign_pages;
 pub use eip1271::{render_eip1271_personal_sign_pages, render_eip1271_raw32_pages};

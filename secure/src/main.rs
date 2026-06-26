@@ -1058,6 +1058,12 @@ fn main() -> ! {
     #[cfg(feature = "mlkem-self-test")]
     mlkem_self_test_and_halt();
 
+    // Render-only golden-screenshot harness (#21). Renders the curated screen
+    // corpus + emits [UI-FP] fingerprints, then halts — no keygen/sign. Does
+    // nothing unless `ui-golden-render` is enabled.
+    #[cfg(feature = "ui-golden-render")]
+    crate::ui::golden::render_golden_and_halt();
+
     // Firmware anti-rollback test (feature `fw-rollback-e2e`). Runs the real
     // verify_manifest chain against dev-key-signed v1/v2/v3 manifests + test
     // floors, proving downgrade rejection with NO irreversible side effects
