@@ -411,7 +411,14 @@ saes-self-test = ["saes-dhuk"]
 # pulls ml-kem into the image, so production builds that don't yet wire the
 # wrap pay zero size/CT cost. Validates the HUK binding + measures the
 # ml-kem flash delta before the provision/reconstruct rewiring lands.
-mlkem-self-test = ["stm32u585"]
+mlkem-self-test = []
+# Route the dual-SE provision/reconstruct through the ML-KEM hybrid inner wrap
+# (#28 piece 2b-2): each entropy half is sealed before it crosses I²C — the SE
+# stores the 32-byte AES-GCM ciphertext (unchanged object size), the 1568-byte
+# ML-KEM ct + 16-byte tag live in MCU flash. OFF by default (the validated
+# direct-half flow is the default); turning it on is the migration. See
+# `docs/security/ml-kem-inner-wrap.md`.
+mlkem-inner-wrap = []
 
 # Masked-SHA-256 overhead bench (work-todo §18 SHAKE-vs-SHA2 #2
 # measurement). Runs once at boot, DWT-times the masked gates +

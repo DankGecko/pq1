@@ -153,10 +153,10 @@ mod optiga;
 mod dual_se;
 #[cfg(not(test))]
 mod measured_boot;
-// ML-KEM-1024 hybrid inner-wrap firmware adapter (binds pqsigner-pq-seal to
-// hw::huk + the TRNG). Gated on the self-test feature until piece 2b wires it
-// into the dual-SE provision/reconstruct path.
-#[cfg(feature = "mlkem-self-test")]
+// ML-KEM-1024 hybrid inner-wrap firmware adapter (binds pqsigner-pq-seal to the
+// device key hierarchy + the TRNG). Compiled under the self-test feature OR
+// when the wrap is wired into the dual-SE provision/reconstruct path.
+#[cfg(any(feature = "mlkem-self-test", feature = "mlkem-inner-wrap"))]
 mod pq_wrap;
 #[cfg(not(test))]
 mod ui;
