@@ -53,6 +53,9 @@ members = [
     "bip39",
     "fwmeasure",
     "sphincs-c10",
+    # ML-KEM-1024 + AES-256-GCM encrypt-to-self inner wrap for the
+    # dual-SE entropy halves (Harvest-Now-Decrypt-Later defence).
+    "pq-seal",
     # First-order boolean-masked SHA-256 building blocks. Measures the
     # masking overhead vs the HASH peripheral to settle the
     # SHAKE-vs-SHA2 question (work-todo §18). Pure no_std logic.

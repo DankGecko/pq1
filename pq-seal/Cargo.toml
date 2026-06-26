@@ -1,0 +1,16 @@
+[package]
+name = "pqsigner-pq-seal"
+version = "0.1.0"
+edition = "2021"
+description = "ML-KEM-1024 + AES-256-GCM encrypt-to-self inner wrap for the dual-SE entropy halves (Harvest-Now-Decrypt-Later defence). Pure no_std logic."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+# FIPS 203 ML-KEM-1024 (RustCrypto, ACVP-validated). no_std; drop `alloc`.
+ml-kem = { version = "0.3.2", default-features = false, features = ["zeroize"] }
+# AES-256-GCM DEM — already a workspace dep (domain/secure). In-place, no alloc.
+aes-gcm = { version = "0.10", default-features = false, features = ["aes"] }
+zeroize = { version = "1", default-features = false }
+
+[dev-dependencies]
+hex = "0.4"
