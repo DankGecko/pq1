@@ -1,9 +1,19 @@
 # Handoff — Aeneas extraction of `domain::{de,}serialize_pin_state` (next §33 rank)
 
-**Status (2026-06-16): pipeline VALIDATED end-to-end; rank EXTRACTION-READY; one
-bounded infra step (a `Chunks` iterator-adapter model) remains before the proof
-can be landed clean.** This doc captures the recipe + the remaining work so the
-rank can be finished without re-deriving any of it.
+**Status (2026-06-26): REJECTION RANK LANDED.** The `Chunks` iterator-adapter
+model + the malformed-length rejection theorem are in
+`contracts/verification/extracted/Extracted/PinState/` (commit — see Completion
+Log): `deserialize_pin_state_rejects_bad_len` proves every `len=0 ∨ len>481`
+blob is rejected with `Err` (no panic, no array population), kernel-clean
+`{propext, Classical.choice, Quot.sound}`, wired into `AxiomCheck.lean`,
+`make verify-extracted` green. The `Chunks`/`Enumerate.next` externals are
+content-axiom-free DEFs (`FunsExternal.lean`/`TypesExternal.lean`). **Remaining:
+the deeper ROUND-TRIP rank** (`deserialize (serialize …) = Ok …`, the
+chunks/enumerate fold-invariant proof) is still open — see "Proof targets"
+below. The recipe/findings below are retained for that follow-on.
+
+_(Original status 2026-06-16: pipeline VALIDATED end-to-end; rank
+EXTRACTION-READY; the `Chunks` infra step — now DONE.)_
 
 ## Why this rank
 

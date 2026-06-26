@@ -24,7 +24,9 @@ import Extracted.UserOpEquiv
 import Extracted.UserOpEquivByteLayout
 import Extracted.SpecBridge
 import Extracted.ForsLoop
+import Extracted.PinState.PinStateSpec
 
+#print axioms Extracted.Equiv.deserialize_pin_state_rejects_bad_len
 #print axioms Extracted.Equiv.make_adrs_spec
 #print axioms Extracted.Equiv.set_chain_index_spec
 #print axioms Extracted.Equiv.compute_user_op_hash_terminates

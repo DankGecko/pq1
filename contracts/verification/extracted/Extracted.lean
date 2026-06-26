@@ -23,3 +23,4 @@ import Extracted.Sha256Pure
 import Extracted.HashPure
 import Extracted.Hash.Funs
 import Extracted.HashSpecs
+import Extracted.PinState.PinStateSpec
