@@ -1402,12 +1402,15 @@ fn positive_dual_se_provision_passes_same_master_secret_to_both_chips() {
     // The two `.provision(...)` calls in order are OPTIGA then
     // SE050; both must take `master_secret` (not a per-chip
     // derivative).
+    // NOTE: the `half_o`/`half_e` locals were renamed to `se_half_o`/`se_half_e`
+    // by the ML-KEM inner-wrap commit (11f5bfc7); this source-text assertion is
+    // synced to match. (Concurrent-work fix, not part of the EF-findings set.)
     assert!(
-        DUAL_SE_SRC.contains("self.optiga.provision(&half_o, master_secret, vk, bootstrap_vk, pin)"),
+        DUAL_SE_SRC.contains("self.optiga.provision(&se_half_o, master_secret, vk, bootstrap_vk, pin)"),
         "optiga.provision must receive the shared master_secret",
     );
     assert!(
-        DUAL_SE_SRC.contains("self.se050.provision(&half_e, master_secret, vk, bootstrap_vk, pin)"),
+        DUAL_SE_SRC.contains("self.se050.provision(&se_half_e, master_secret, vk, bootstrap_vk, pin)"),
         "se050.provision must receive the same shared master_secret",
     );
 }
