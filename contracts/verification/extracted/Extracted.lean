@@ -24,3 +24,4 @@ import Extracted.HashPure
 import Extracted.Hash.Funs
 import Extracted.HashSpecs
 import Extracted.PinState.PinStateSpec
+import Extracted.SlotKdf.SlotKdfSpec
