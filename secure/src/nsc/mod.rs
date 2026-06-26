@@ -133,6 +133,38 @@ compile_error!(
      (interactive UI, OTP substituted with a compile-time constant)."
 );
 
+// ML-KEM inner-wrap ship gate (#28 piece 2b). `mlkem-inner-wrap` routes the
+// dual-SE provision/reconstruct through the ML-KEM hybrid wrap, but its
+// ct-store (`pq_wrap::ct_store`) is currently SRAM-backed — a QEMU-validation
+// stand-in that is LOST on reboot, so a real device could provision but never
+// unlock after a power cycle. The persistent flash ct-store + on-silicon
+// validation of the hardware key path are piece 2b-d (NOT done). Forbid it on a
+// production hardware release; single-boot bench/test images (e2e-test /
+// dev-testkey) may opt in to validate the wrap on silicon. NOTE: the QEMU
+// dev-key path (`pq_wrap::device_keys` under `not(stm32u585)`) is structurally
+// impossible here — a hardware image is always `stm32u585`, which selects the
+// real `hw::secret_keys` derivation, never the deterministic dev keys.
+#[cfg(all(
+    feature = "mlkem-inner-wrap",
+    feature = "stm32u585",
+    not(debug_assertions),
+    not(feature = "e2e-test"),
+    not(feature = "dev-testkey"),
+))]
+compile_error!(
+    "mlkem-inner-wrap (#28 piece 2b) must not be in a production hardware \
+     release: its ct-store is SRAM-backed (QEMU-validation only — lost on \
+     reboot, so unlock-after-power-cycle would fail), and the persistent flash \
+     ct-store + on-silicon hardware-key validation (piece 2b-d) are not done. \
+     Bench it via a single-boot hardware test image (e2e-test / dev-testkey)."
+);
+// Belt-and-braces: the canonical ship profile must never carry it.
+#[cfg(all(feature = "mode-production", feature = "mlkem-inner-wrap"))]
+compile_error!(
+    "mode-production and mlkem-inner-wrap are mutually exclusive (#28 piece \
+     2b-d not done — SRAM ct-store). Remove mlkem-inner-wrap from production."
+);
+
 // Tier-1 channel-key REQUIRE-fence (finding F8c). The denylist fence above
 // stops dev/leaky features shipping; this one stops a shipping dual-SE image
 // going out with NON-Tier-1 channel-key roots. Without `saes-dhuk`,
