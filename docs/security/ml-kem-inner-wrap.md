@@ -102,8 +102,42 @@ unaffected (README §"why hash-based signatures for the actual money").
 | 1 | **`pqsigner-pq-seal` primitive (hybrid)** — ML-KEM-1024 + HMAC(HUK) + AES-256-GCM `seal`/`open`, deterministic keypair from a 64-byte seed, ct-bound nonce, context AAD, no_std/thumbv8m-clean, clippy-pedantic-clean, 9 KATs (round-trip, no-leak, **hybrid-floor wrong-HUK**, wrong-seed, **wrong-AAD no-cross-replay**, tamper-ct/aead, determinism, fresh-randomness, bounds) | ✅ **done** |
 | 2 | Firmware wiring — derive `seed` + `huk_secret` via two `hw::huk` labels, draw `m` from the TRNG, build `aad` = chip‖half‖account, `seal`/`open` at the dual-SE store/read boundary (`secure/src/dual_se.rs`) | ⏳ next |
 | — | README/CLAUDE.md #3 hybrid-framing update (line 143 table + line 175 HNDL para now also rest on the HUK floor, not the ML-KEM sk alone) — coordinated with piece 2 (README untouched while "not yet wired" stays accurate + avoids agent-branch churn) | ⏳ with piece 2 |
-| 3 | SE object sizing + provisioning — the stored blob grows 32 B → 1616 B per half; confirm OPTIGA `0xF1D1` / SE050 binary-object capacity, adjust object metadata | ⏳ |
+| 3 | SE object sizing + provisioning — **RESOLVED (see Storage layout): the blob does NOT fit OPTIGA, so split it — ct → MCU flash, aead → SE.** | ⏳ |
 | 4 | Migrate OPTIGA/SE050 reads onto the wrap; trace-verify the seed never appears in plaintext on either bus | ⏳ |
+
+## Storage layout — the blob does NOT fit on the SE (resolved 2026-06-26)
+
+The naive "store the whole 1616 B sealed blob on the SE" is **infeasible** on
+OPTIGA (`docs/secure-elements/OPTIGATRUSTM/commands-and-oids.md`,
+`hardware-specs.md`):
+
+| limit | value | vs the 1616 B blob |
+|---|---|---|
+| `0xF1D1` (today's `half_O` slot, Type-3 arbitrary data) | **140 B** | ✗ way over |
+| largest OPTIGA Type-2 arbitrary-data object | **1500 B** | ✗ over |
+| OPTIGA I2C buffer `TRUSTX_I2C_MAX_BUF_LEN` | **1557 B** | ✗ can't even transit in one APDU |
+
+So the ML-KEM ciphertext (1568 B) cannot live on OPTIGA. **Resolution — split
+the sealed blob:**
+
+- **`ct` (1568 B, ML-KEM ciphertext) → MCU secure flash** (a per-(chip,half,
+  account) slot). It is not a secret on its own — IND-CCA says `ct` reveals
+  nothing about `ss` without the `dk` (the HUK-derived seed). Keeping it on the
+  MCU means **the bus never even sees it.**
+- **`aead` (`gcm_ct ‖ tag`, 48 B for a 32 B half) → the SE** (fits F1D1's 140 B
+  with room to spare; SE050 binary object likewise). This is the "stored half":
+  opaque without `K = HMAC(huk, Decaps(dk, ct) ‖ aad)`, i.e. without the MCU's
+  `ct` **and** `huk` **and** `dk`-seed.
+
+**Dual-SE property preserved** (invariant #1 — neither chip alone reveals a
+half): the SE holds only `aead` (needs the MCU's `ct`+`huk` to open); the MCU
+holds `ct`+`huk`+`dk`-seed but NOT `aead` (on the SE) — so a full MCU flash dump
+still cannot recover a half without the SE's `aead` (and its retry-counter +
+PIN gate). And the XOR split stands: `half_O`/`half_E` are sealed independently
+with distinct `aad`, each on its own SE. `seal`/`open` already return/accept the
+`ct ‖ aead` concatenation, so piece 2 just slices it at `CT_LEN` for the two
+stores. This *strengthens* HNDL: the harvested bus traffic is now only the 48 B
+`aead`, never the ML-KEM ciphertext.
 
 ## Follow-ups (hardware / acceptance)
 
