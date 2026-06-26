@@ -15,30 +15,64 @@ time. This is the dominant PQ residual (README §threat-model): *"until the
 inner wrap lands, the SE channels carry plaintext halves under the classical
 SE-vendor AE layers."*
 
-## Design — KEM-DEM "encrypt-to-self"
+## Why HYBRID, not ML-KEM-only
 
-The MCU (secure world) holds ONE ML-KEM-1024 (FIPS 203) keypair. Each half is
-sealed with **ML-KEM-1024 + AES-256-GCM** *before* it touches I²C, so the
-classical SE channel carries only PQ-opaque ciphertext.
+The MCU seals AND opens — this is encrypt-**to-self**, i.e. symmetric encryption
+where the KEM degenerates to "encrypt to my own public key." For self-sealed
+data, ML-KEM-only would be *strictly weaker* than AES-256-GCM under a HUK key.
+Walk the HNDL adversary through both:
+
+| construction | recover a harvested half by … |
+|---|---|
+| AES-256-GCM-to-self (key=KDF(HUK)) | break AES-256 (~2¹²⁸ Grover) **or** extract the die's HUK (physical) |
+| ML-KEM-only-to-self | break **ML-KEM** (ct→shared secret, **no physical access**) **or** extract HUK |
+
+ML-KEM-only *adds* a recovery path — "break ML-KEM" — that needs no physical
+access and rests on the exact lattice assumption the project distrusts
+everywhere else (it's *why* the signing key is SPHINCS+/SHA-256: hashes have a
+longer cryptanalytic track record — README §"why hash-based signatures"). The
+README's own bar is *"a NIST PQC standard **or** a Grover-resistant symmetric
+primitive"* — AES-256 qualifies. So we bind **both** secrets into the AEAD key:
 
 ```
-seal(seed, m, pt):                       open(seed, ct‖aead):
+K = HMAC-SHA256(key = huk_secret, msg = mlkem_shared_secret ‖ aad ‖ tag)
+```
+
+- **Break ML-KEM alone** (recover the shared secret from `ct`) → still needs
+  `huk_secret` to form `K`. Useless without physically extracting *this* die's HUK.
+- **Extract HUK alone** → still needs the ML-KEM shared secret (the lattice).
+
+`K` can therefore **never drop below the AES-256/HUK floor**, while ML-KEM keeps
+the NIST-PQC confidentiality layer for defence-in-depth + crypto-agility + the
+PQ1 brand. (Decision: hybrid, after the 2026-06-26 design review flagged the
+self-seal equivalence; the user picked hybrid over plain AES-256-to-self to
+retain the PQ layer.)
+
+## Construction — KEM-DEM with a hybrid key
+
+The MCU holds ONE ML-KEM-1024 (FIPS 203) keypair derived from the HUK-bound seed:
+
+```
+seal(seed, m, huk, aad, pt):              open(seed, huk, aad, ct‖aead):
   dk = ML-KEM.from_seed(seed)              dk = ML-KEM.from_seed(seed)
-  ek = dk.encapsulation_key()              K  = ML-KEM.Decaps(dk, ct)
-  (ct, K) = ML-KEM.Encaps(ek; m)           pt = AES-256-GCM.Open(K, ct‖aead)
-  aead = AES-256-GCM.Seal(K, pt)           return pt
-  store ct ‖ aead on the SE
+  (ct, ss) = Encaps(dk.ek; m)              ss = Decaps(dk, ct)
+  K = HMAC(huk, ss ‖ aad ‖ tag)            K  = HMAC(huk, ss ‖ aad ‖ tag)
+  n = SHA256("…nonce" ‖ ct ‖ aad)[..12]    n  = SHA256("…nonce" ‖ ct ‖ aad)[..12]
+  aead = AES-256-GCM(K, n, aad, pt)        pt = AES-256-GCM.open(K, n, aad, aead)
+  store ct ‖ aead on the SE                return pt
 ```
 
-`K` (32-byte ML-KEM shared secret) is the AES-256 key. A fresh `K` is produced
-for **every** seal (the encapsulation message `m` is fresh TRNG), so the
-`(key, nonce)` pair is unique even with a fixed all-zero GCM nonce — textbook
-KEM-DEM. ML-KEM decapsulation uses *implicit rejection* (never errors — a bad
-ciphertext yields a pseudo-random `K`); the **GCM tag** is the authenticator,
-so a tampered `ct`, tampered `aead`, or wrong device `seed` all fail at `open`.
+A fresh shared secret `ss` is produced for **every** seal (the encapsulation
+message `m` is fresh TRNG), so `(K, n)` is unique. ML-KEM decapsulation uses
+*implicit rejection* (never errors — a bad ciphertext yields a pseudo-random
+`ss`); the **GCM tag** is the authenticator, so a tampered `ct`/`aead`, the
+wrong `seed`, the wrong `huk`, or the wrong `aad` all fail at `open`. The nonce
+is bound to `ct ‖ aad` (recomputed at open, not transmitted). The caller binds
+**`aad` = (chip-id ‖ half-id ‖ account_index)** so a blob can never be replayed
+as the other half or another account.
 
 Wire layout of the stored blob: `ct (1568) ‖ gcm_ct (pt_len) ‖ tag (16)`. For a
-32-byte half: **1616 bytes**. AAD = `b"pqsigner-inner-wrap-v1"` (domain sep).
+32-byte half: **1616 bytes**.
 
 ### Key derivation — refinement of the "stored sk" plan
 
@@ -65,8 +99,9 @@ unaffected (README §"why hash-based signatures for the actual money").
 
 | # | Piece | Status |
 |---|-------|--------|
-| 1 | **`pqsigner-pq-seal` primitive** — ML-KEM-1024 + AES-256-GCM `seal`/`open`, deterministic keypair from a 64-byte seed, no_std/thumbv8m-clean, 8 KATs (round-trip, no-leak, tamper-ct, tamper-aead, wrong-seed, determinism, fresh-randomness, bounds) | ✅ **done** |
-| 2 | Firmware wiring — derive the seed via `hw::huk`, draw `m` from the TRNG, `seal`/`open` at the dual-SE store/read boundary (`secure/src/dual_se.rs`) | ⏳ next |
+| 1 | **`pqsigner-pq-seal` primitive (hybrid)** — ML-KEM-1024 + HMAC(HUK) + AES-256-GCM `seal`/`open`, deterministic keypair from a 64-byte seed, ct-bound nonce, context AAD, no_std/thumbv8m-clean, clippy-pedantic-clean, 9 KATs (round-trip, no-leak, **hybrid-floor wrong-HUK**, wrong-seed, **wrong-AAD no-cross-replay**, tamper-ct/aead, determinism, fresh-randomness, bounds) | ✅ **done** |
+| 2 | Firmware wiring — derive `seed` + `huk_secret` via two `hw::huk` labels, draw `m` from the TRNG, build `aad` = chip‖half‖account, `seal`/`open` at the dual-SE store/read boundary (`secure/src/dual_se.rs`) | ⏳ next |
+| — | README/CLAUDE.md #3 hybrid-framing update (line 143 table + line 175 HNDL para now also rest on the HUK floor, not the ML-KEM sk alone) — coordinated with piece 2 (README untouched while "not yet wired" stays accurate + avoids agent-branch churn) | ⏳ with piece 2 |
 | 3 | SE object sizing + provisioning — the stored blob grows 32 B → 1616 B per half; confirm OPTIGA `0xF1D1` / SE050 binary-object capacity, adjust object metadata | ⏳ |
 | 4 | Migrate OPTIGA/SE050 reads onto the wrap; trace-verify the seed never appears in plaintext on either bus | ⏳ |
 
