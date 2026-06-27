@@ -17,7 +17,11 @@ and proves `verifyAuthPath` of an honest path reconstructs the tree root, by a
 clean loop-invariant induction (`htAcc_climbs`) over the climb height via
 `htAcc_succ`. Signer-independent (abstract over the leaf function `lf`), so the
 FORS and hypertree legs reuse it. Axiom closure `[propext, Classical.choice,
-Quot.sound]` — purely kernel (holds for any `thPair`). The remaining work below
+Quot.sound]` — purely kernel (holds for any `thPair`).
+
+**Sub-lemma 2 of 4 — `wots_chain_roundtrip` — DONE** (`SphincsCVerify/Verifier/WotsRoundtrip.lean`): the WOTS+ chain-composition `chainHash_compose` + `wots_chain_roundtrip`, closure `[propext, Quot.sound]`.
+
+The remaining work below
 is unchanged: complete the signer, then sub-lemmas 2–4 + assembly.
 
 ## Where it stands (2026-06-26)
