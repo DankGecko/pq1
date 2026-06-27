@@ -62,6 +62,12 @@ mod test_vectors;
 #[cfg(test)]
 mod extra_tests;
 
+// Accurate end-to-end decode vectors (CowSwap / Safe-wrapped / Safe-MultiSend)
+// whose digests + safeTxHashes are cross-checked against an independent ethers
+// v6 reference. See `e2e_decode_tests.rs`.
+#[cfg(test)]
+mod e2e_decode_tests;
+
 // ---------------------------------------------------------------------------
 // Public addresses
 // ---------------------------------------------------------------------------

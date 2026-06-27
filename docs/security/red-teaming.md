@@ -81,6 +81,39 @@ Highest-value targets, in order:
 show you ciphertext or nothing — that's a *pass for confidentiality*, not a measurement of
 the secret. Point a different instrument at the secret's quality.
 
+### 3.1 On-hand bench instrument — Rigol MHO934
+
+The team's primary scope is a **Rigol MHO934** (350 MHz, 4 GSa/s, 12-bit, 4 analog + 16 digital
+channels, Wi-Fi/BT, USB-C, optional AFG). It is unusually well-suited here because it doubles as a
+**logic analyzer** *and* a **power-analysis front end** in one box — the 12-bit vertical resolution
+(vs the usual 8-bit) is what makes it usable for SCA, and the 16 digital channels cover all three
+serial buses at once.
+
+| Capability of the MHO934 | What it covers in this plan | Gear it still needs |
+|---|---|---|
+| 16 digital ch + serial decode (I²C/SPI) | §5.1, §5.2 bus confidentiality; §5.3 "no MCU PIN compare"; §6.2/§7.7 LCD-SPI; §4.2 bus check | SOIC clips / SE050-ARD breakout; flying leads |
+| 4 analog ch, 12-bit, 4 GSa/s | §4.4 SPHINCS leakage map (SPA); §4.4/§6.7 CPA/DPA; §5.5 SE VERIFY timing; §6.7 PA5 mask scope | shunt (1–10 Ω) **or** current probe; low-noise diff amp; the `sca-trigger` GPIO |
+| Optional AFG | crude VCC glitching for §6.3/§9 (drive a crowbar MOSFET) | crowbar MOSFET board; better: a real glitcher |
+| Wi-Fi/BT/USB-C | headless trace offload to the capture/CPA host | — |
+
+**What the scope alone cannot do** (so budget accessories): no EM injection; power SCA needs a
+shunt or current probe in the core supply; FI *exploitation* needs a real glitcher
+(ChipWhisperer-Husky / NewAE Scaffold) — the AFG only does crude VCC crowbar; a cheap **H-field
+near-field probe** is a high-value add-on for localized EM SCA on the HASH/SAES/PKA blocks without
+cutting the rail.
+
+**Team workstream split** (four owners, mapped to the sections below):
+
+- **(A) Bus / logic — start here, scope-only.** §5.1, §5.2, §5.3, §7.7, §4.2 bus checks. Cheapest,
+  highest signal: directly falsifies Invariants #3/#4 and catches a debug/bring-up build that leaks
+  a secret on the wire before EVT ships. Needs only clips.
+- **(B) Power SCA.** §4.4 (build the SPHINCS leakage/trigger map first — it's the prerequisite for
+  everything in C and D), CPA on the C10 secret-seed/WOTS path and on SAES-DHUK (§6.5), mask
+  on/off quantification (§6.7).
+- **(C) Timing.** §5.5 SE VERIFY right-vs-wrong-PIN deltas; firmware `ct_eq` variance (§8.x).
+- **(D) Fault injection.** §6.3, §9 two-fault campaign — *aimed by (B)'s leakage map*; AFG-crowbar
+  for first light, glitcher for real campaigns.
+
 ---
 
 ## 4. Crypto core: RNG, seed, key derivation, FI
