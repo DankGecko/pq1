@@ -8,6 +8,18 @@ guarantee (the wallet must accept firmware-produced signatures), not a safety
 gap. Effort: **person-months** — the bulk is completing the reference signer,
 which is currently a partial stub. This document makes that concrete.
 
+## STATUS UPDATE (2026-06-27)
+
+**Sub-lemma 1 of 4 — `merkle_roundtrip` — DONE** (`SphincsCVerify/Verifier/MerkleRoundtrip.lean`,
+commit on master). Defines the honest signer-side Merkle tree `mtNode` + auth
+path `mtAuthPath` (matching `htStep`'s `thPair`+`Adrs.treeNode` shape exactly)
+and proves `verifyAuthPath` of an honest path reconstructs the tree root, by a
+clean loop-invariant induction (`htAcc_climbs`) over the climb height via
+`htAcc_succ`. Signer-independent (abstract over the leaf function `lf`), so the
+FORS and hypertree legs reuse it. Axiom closure `[propext, Classical.choice,
+Quot.sound]` — purely kernel (holds for any `thPair`). The remaining work below
+is unchanged: complete the signer, then sub-lemmas 2–4 + assembly.
+
 ## Where it stands (2026-06-26)
 
 - `verify_signs` is **proven from** `consistent sk` (a one-line appeal); the

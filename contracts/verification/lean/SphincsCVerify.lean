@@ -28,6 +28,7 @@ import SphincsCVerify.Spec.Theorems
 -- module implements, and the equivalence theorem connecting it to Spec.
 import SphincsCVerify.Verifier.Refined
 import SphincsCVerify.Verifier.Equivalence
+import SphincsCVerify.Verifier.MerkleRoundtrip
 
 -- Stratum B: ERC-4337 / Coinbase wallet scaffolding
 import SphincsCVerify.Wallet.Storage
