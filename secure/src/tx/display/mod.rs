@@ -258,9 +258,13 @@ pub fn pick_sign_pages(
     selector: Option<&crate::selectors::SelectorMeta<'_>>,
     resolver: &crate::names::NameResolver<'_>,
 ) -> Result<Pages, ()> {
+    // `pick_sign_pages_inner` returns `Err(())` when a Safe-surface render
+    // refuses (page budget exceeded / page-accounting self-check failed);
+    // propagate it so the handler maps it to a refuse-to-sign rather than
+    // showing a buffer with a hidden signed value (audit 2026-06-27).
     let mut pages = pick_sign_pages_inner(
         tx, inner_data, v3, v1, safe_v1, safe_exec, erc7730, erc20, selector, resolver,
-    );
+    )?;
     // Dispatcher-level WYSIWYS invariant (audit C-1 / H-2 / M-8; hardened
     // 2026-06-18).
     //
@@ -323,7 +327,7 @@ fn pick_sign_pages_inner(
     erc20: Option<&crate::erc20::bundle::Erc20Metadata<'_>>,
     selector: Option<&crate::selectors::SelectorMeta<'_>>,
     resolver: &crate::names::NameResolver<'_>,
-) -> Pages {
+) -> Result<Pages, ()> {
     if let Some(v3) = v3 {
         // Safe-wrapped CoW presign: when the v3 order was verified
         // against a Safe flow's inner calldata (the handler bound uid
@@ -344,14 +348,14 @@ fn pick_sign_pages_inner(
             let inner_meta = safe_inner_meta(erc20, &exec.decoded.to, exec.decoded.data);
             return render_safe_exec_pages(exec, Some(v3), inner_meta, resolver);
         }
-        return crate::tx::eip712::cowswap_display::render_cowswap_pages(
+        return Ok(crate::tx::eip712::cowswap_display::render_cowswap_pages(
             &v3.canonical,
             &v3.sell,
             &v3.buy,
-        );
+        ));
     }
     if let Some(v1) = v1 {
-        return crate::zk::render_clear_sign_pages(tx, &v1.readable, resolver);
+        return Ok(crate::zk::render_clear_sign_pages(tx, &v1.readable, resolver));
     }
     if let Some(safe) = safe_v1 {
         // For Safe inner-tx ERC-20 rendering, only apply the outer
@@ -372,7 +376,7 @@ fn pick_sign_pages_inner(
     }
     if let Some(d) = erc7730 {
         match erc7730::render_erc7730_pages(tx, inner_data, d, erc20, resolver) {
-            Ok(pages) => return pages,
+            Ok(pages) => return Ok(pages),
             Err(crate::tx::erc7730_render::RenderErr::Reject(msg)) => {
                 crate::ui::show_status("Sign", msg);
                 // Fall through to the next ladder rung so the user
@@ -386,13 +390,13 @@ fn pick_sign_pages_inner(
         }
     }
     if inner_data.is_empty() {
-        return render_pages(tx, resolver);
+        return Ok(render_pages(tx, resolver));
     }
     match crate::erc20::calldata::parse_erc20_calldata(inner_data) {
-        Some(call) => match erc20 {
+        Some(call) => Ok(match erc20 {
             Some(meta) => render_erc20_known_pages(tx, &call, meta, resolver),
             None => render_erc20_unknown_pages(tx, &call, resolver),
-        },
+        }),
         // The verified selector → text-sig mapping (if any) is only
         // consulted when nothing else has decoded the calldata. Phase 2
         // first tries to ABI-decode the calldata against the verified
@@ -405,10 +409,10 @@ fn pick_sign_pages_inner(
                 if let Some(pages) =
                     typed_call::try_render_typed_call(tx, inner_data, meta, resolver)
                 {
-                    return pages;
+                    return Ok(pages);
                 }
             }
-            render_blind_sign_pages(tx, inner_data, selector, resolver)
+            Ok(render_blind_sign_pages(tx, inner_data, selector, resolver))
         }
     }
 }

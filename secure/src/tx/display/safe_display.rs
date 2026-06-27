@@ -106,6 +106,55 @@ use sphincs_tz_shared::GPV2_VAULT_RELAYER_ADDRESS;
 /// pages and the trailing confirm page.
 const SAFE_HEADER_PAGES: usize = 3;
 
+/// FI-robust "must this signed-value page be shown?" decision.
+///
+/// Returns `true` (SHOW) unless `safe_to_skip` is proven true through a
+/// Hamming-distant sentinel double-evaluation (`fi::check_true_into_sentinel`
+/// + `black_box`). A single glitch on the `safe_to_skip` predicate therefore
+/// cannot turn a fund-bearing page from SHOW into SKIP — it can only fail
+/// *towards* showing the page. This is the Safe-surface analogue of
+/// `value_page::enforce_native_value_page`'s skip gate, and is shared by the
+/// renderer AND the budget gate so a fault in either path defaults to the
+/// safe (show / over-count) direction (audit 2026-06-27 — HIGH: the
+/// inner-ETH / refund / safeTxGas page presence was previously a bare
+/// `.iter().any()` boolean, single-fault-skippable like the pre-fix
+/// native-value gate).
+fn must_show_unless_robustly_skippable(safe_to_skip: bool) -> bool {
+    crate::fi::check_true_into_sentinel(|| core::hint::black_box(safe_to_skip))
+        != crate::fi::OK_SENTINEL
+}
+
+/// True when EVERY byte of `field` is zero — the "robustly absent" predicate
+/// fed to [`must_show_unless_robustly_skippable`]. Kept as one helper so the
+/// renderer and the gate test field-presence identically (no divergence).
+fn all_zero(field: &[u8]) -> bool {
+    field.iter().all(|&b| b == 0)
+}
+
+/// SafeTx refund is configured when ANY of `gasPrice` / `gasToken` /
+/// `refundReceiver` is non-zero. One source of truth for the renderer and
+/// the budget gate.
+fn refund_is_active(gas_price: &[u8; 32], gas_token: &[u8; 20], refund_receiver: &[u8; 20]) -> bool {
+    must_show_unless_robustly_skippable(
+        all_zero(gas_price) && all_zero(gas_token) && all_zero(refund_receiver),
+    )
+}
+
+/// Fixed (non-inner-tx, non-inner-ETH) Safe overhead page count:
+/// header(3) + refund(0|3) + safeTxGas(0|1) + trailing confirm(1).
+///
+/// The SINGLE source of truth shared by `render_safe_pages_inner`'s
+/// `total_pages` and `multisend_sign_gate`'s `fixed`, so the count the gate
+/// approves and the count the renderer produces can never diverge (a
+/// divergence is what would otherwise drive the renderer's page-accounting
+/// refusal / the historic silent `min(.., MAX_PAGES)` truncation).
+fn safe_fixed_overhead_pages(refund_active: bool, safe_tx_gas_active: bool) -> usize {
+    SAFE_HEADER_PAGES
+        + if refund_active { 3 } else { 0 }
+        + usize::from(safe_tx_gas_active)
+        + 1 // trailing confirm page
+}
+
 /// Over-approximation of the runtime `gasUsed` term used to bound the Safe
 /// gas-refund worst-case `(gasUsed + baseGas) * gasPrice` on the refund
 /// magnitude page. The on-chain `gasUsed` is not a signed field, so the
@@ -208,7 +257,7 @@ pub fn render_safe_v1_pages(
     cow: Option<&VerifiedCowswapV3>,
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
-) -> Pages {
+) -> Result<Pages, ()> {
     // The verifier already proved the canonical decodes; mirror that
     // success here without re-erroring (a fresh `Err` would only fire
     // if the trailer parser was bypassed, which is impossible).
@@ -267,7 +316,7 @@ pub fn render_safe_exec_pages(
     cow: Option<&VerifiedCowswapV3>,
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
-) -> Pages {
+) -> Result<Pages, ()> {
     let d = &exec.decoded;
     // The verifier proved `operation` is either 0 (Call) or an
     // allowlisted MultiSendCallOnly DELEGATECALL; the Op row + record
@@ -293,12 +342,19 @@ pub fn render_safe_exec_pages(
 }
 
 /// Shared rendering body for both approveHash and execTransaction.
+///
+/// Returns `Err(())` — mapped by the dispatcher to a refuse-to-sign — when
+/// the page budget is exceeded or the page-accounting self-check fails. It
+/// NEVER silently truncates: a page that renders a signed value (inner ETH,
+/// gas refund, a multiSend record) must either be shown or the signature
+/// refused (audit 2026-06-27 — fail-closed replacement for the historic
+/// `min(total_pages, MAX_PAGES)` clamp).
 fn render_safe_pages_inner(
     input: &SafeRenderInput<'_>,
     cow: Option<&VerifiedCowswapV3>,
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
-) -> Pages {
+) -> Result<Pages, ()> {
     // Local field aliases to keep the existing rendering body readable.
     // We deliberately preserve the names the previous monolithic
     // function used (`tx.to`, `safe.raw_data`, …) so the diff stays
@@ -324,9 +380,12 @@ fn render_safe_pages_inner(
     // whenever any refund field is set — a non-zero gasToken /
     // refundReceiver with gasPrice 0 is anomalous enough to show too.
     // Two pages: banner + gasToken, then the full refundReceiver address.
-    let refund_active = input.gas_price.iter().any(|&b| b != 0)
-        || input.gas_token.iter().any(|&b| b != 0)
-        || input.refund_receiver.iter().any(|&b| b != 0);
+    // FI-robust: defaults to SHOW unless all three refund fields are
+    // provably zero (see `must_show_unless_robustly_skippable`). A hidden
+    // *token* refund is a full-ERC-20-balance drain channel, so a single
+    // fault must never be able to skip these pages.
+    let refund_active =
+        refund_is_active(&input.gas_price, &input.gas_token, &input.refund_receiver);
 
     // Decide inner-tx flavor up-front so we can size the page count.
     // ERC-20 calldata renders as `Erc20Known` only when metadata is
@@ -393,20 +452,24 @@ fn render_safe_pages_inner(
         }
     };
     let inner_pages = inner_kind_page_count(&inner_kind);
-    // 3 pages when a gas refund is configured: token + worst-case refund
-    // MAGNITUDE + recipient (audit 2026-06-19). The on-chain debit is
-    // `(gasUsed + baseGas) * gasPrice`; `gasUsed` is runtime, so the
-    // magnitude page shows the worst-case total `(CEILING + baseGas) *
-    // gasPrice` — the one number that bounds every drain vector at full
-    // token magnitude. Kept in lockstep with the `multisend_sign_gate`
-    // `fixed` term.
-    let refund_pages = if refund_active { 3 } else { 0 };
+    // The refund block is 3 pages when configured (token + worst-case refund
+    // MAGNITUDE + recipient, audit 2026-06-19); that count now lives in the
+    // shared `safe_fixed_overhead_pages` so the renderer and the budget gate
+    // cannot disagree about it.
+    //
     // Inner SafeTx `value` (ETH the Safe forwards to `to` on execution)
     // is shown inline only by the PlainEth branch. For every other inner
     // kind a non-zero value would otherwise be invisible even though it
     // is bound into the signed safeTxHash, so splice a dedicated page.
-    let show_inner_eth = !inner_value.is_zero()
-        && !matches!(inner_kind, InnerKind::PlainEth | InnerKind::EmptyCall);
+    // FI-robust: defaults to SHOW unless the inner value is provably zero or
+    // the value is already rendered inline (PlainEth / EmptyCall). The
+    // inner-ETH the Safe forwards to `to` is committed into the signed
+    // safeTxHash and is gated ONLY here — the dispatcher's
+    // `enforce_native_value_page` covers the *outer* UserOp value, not this
+    // one — so a single-fault skip would hide an ETH drain (audit 2026-06-27).
+    let inline_value_kind = matches!(inner_kind, InnerKind::PlainEth | InnerKind::EmptyCall);
+    let show_inner_eth =
+        must_show_unless_robustly_skippable(inner_value.is_zero() || inline_value_kind);
     let inner_eth_pages = usize::from(show_inner_eth);
     // safeTxGas page (audit 2026-06-26): shown whenever non-zero — it is
     // signed into the safeTxHash but invisible in the inner-tx semantics,
@@ -415,15 +478,22 @@ fn render_safe_pages_inner(
     // lockstep with the `multisend_sign_gate` `fixed` term so the budget gate
     // REFUSES (rather than truncates) any multiSend whose total would
     // overflow MAX_PAGES.
-    let show_safe_tx_gas = input.safe_tx_gas.iter().any(|&b| b != 0);
-    let safe_tx_gas_pages = usize::from(show_safe_tx_gas);
-    let total_pages = SAFE_HEADER_PAGES
-        + refund_pages
-        + inner_eth_pages
-        + safe_tx_gas_pages
-        + inner_pages
-        + 1; // +1 = confirm
-    let total_pages = core::cmp::min(total_pages, super::MAX_PAGES);
+    // FI-robust (same rationale): a hidden non-zero safeTxGas lets the inner
+    // call silently no-op while the nonce is burned and any refund paid.
+    let show_safe_tx_gas = must_show_unless_robustly_skippable(all_zero(&input.safe_tx_gas));
+    let total_pages =
+        safe_fixed_overhead_pages(refund_active, show_safe_tx_gas) + inner_eth_pages + inner_pages;
+    // Fail CLOSED, never truncate: a page that renders a signed value must be
+    // shown or the signature refused. The old `min(total_pages, MAX_PAGES)`
+    // silently dropped trailing pages (records) when the gate/renderer page
+    // counts diverged — exactly the signed-but-not-shown class this audit
+    // closes (2026-06-27). `multisend_sign_gate` already refuses over-budget
+    // multiSends up front; this is the renderer-local backstop for every
+    // Safe shape (single-call included), so the WYSIWYS guarantee no longer
+    // rests solely on the external gate.
+    if total_pages > super::MAX_PAGES {
+        return Err(());
+    }
     let mut pages = Pages::with_len(total_pages);
 
     // ── Page 0: banner + chain ──────────────────────────────────────
@@ -687,15 +757,32 @@ fn render_safe_pages_inner(
         }
     }
 
-    // ── Final: confirm prompt ───────────────────────────────────────
-    if next_page < total_pages {
-        write_line(&mut pages.buf[next_page][0], "Long-press to");
-        write_line(&mut pages.buf[next_page][1], "");
-        write_line(&mut pages.buf[next_page][2], "L=Cancel");
-        write_line(&mut pages.buf[next_page][3], "R=Confirm");
+    // ── Page-accounting self-check (WYSIWYS class backstop) ─────────
+    //
+    // Every page that was COUNTED into `total_pages` must have been
+    // WRITTEN: the inner-tx appenders advance `next_page` by exactly the
+    // page count `inner_kind_page_count` reported, the fixed/refund/value/
+    // gas pages were spliced above, and the trailing confirm page occupies
+    // the final slot — so the invariant is `next_page + 1 == total_pages`.
+    //
+    // If it ever fails, the renderer produced fewer (or more) pages than it
+    // counted — i.e. a page that renders a signed value was dropped, or a
+    // gate/renderer page-count divergence slipped through. Rather than show
+    // a buffer with a hidden value we refuse to sign. This is the generic
+    // net that closes the whole "signed-but-not-shown via a dropped page"
+    // class, independent of any single presence flag being right
+    // (audit 2026-06-27).
+    if next_page + 1 != total_pages {
+        return Err(());
     }
 
-    pages
+    // ── Final: confirm prompt ───────────────────────────────────────
+    write_line(&mut pages.buf[next_page][0], "Long-press to");
+    write_line(&mut pages.buf[next_page][1], "");
+    write_line(&mut pages.buf[next_page][2], "L=Cancel");
+    write_line(&mut pages.buf[next_page][3], "R=Confirm");
+
+    Ok(pages)
 }
 
 // ---------------------------------------------------------------------------
@@ -751,11 +838,13 @@ pub fn multisend_sign_gate(
                 tx.to,
                 s.raw_data,
                 tx.safe_address,
-                tx.gas_price.iter().any(|&b| b != 0)
-                    || tx.gas_token.iter().any(|&b| b != 0)
-                    || tx.refund_receiver.iter().any(|&b| b != 0),
-                tx.value.iter().any(|&b| b != 0),
-                tx.safe_tx_gas.iter().any(|&b| b != 0),
+                // SAME FI-robust flags + helpers the renderer uses, so the
+                // gate's `fixed` and the renderer's `total_pages` cannot
+                // diverge (and a fault biases both toward over-counting →
+                // refuse, the fail-closed direction).
+                refund_is_active(&tx.gas_price, &tx.gas_token, &tx.refund_receiver),
+                must_show_unless_robustly_skippable(all_zero(&tx.value)),
+                must_show_unless_robustly_skippable(all_zero(&tx.safe_tx_gas)),
             )
         } else if let Some(e) = safe_exec {
             let d = &e.decoded;
@@ -764,11 +853,9 @@ pub fn multisend_sign_gate(
                 d.to,
                 d.data,
                 e.safe_address,
-                d.gas_price.iter().any(|&b| b != 0)
-                    || d.gas_token.iter().any(|&b| b != 0)
-                    || d.refund_receiver.iter().any(|&b| b != 0),
-                d.value.iter().any(|&b| b != 0),
-                d.safe_tx_gas.iter().any(|&b| b != 0),
+                refund_is_active(&d.gas_price, &d.gas_token, &d.refund_receiver),
+                must_show_unless_robustly_skippable(all_zero(&d.value)),
+                must_show_unless_robustly_skippable(all_zero(&d.safe_tx_gas)),
             )
         } else {
             return MultisendGate::NotMultiSend;
@@ -787,11 +874,11 @@ pub fn multisend_sign_gate(
     else {
         return MultisendGate::Reject("msend malformed");
     };
-    let fixed = SAFE_HEADER_PAGES
-        + if refund_active { 3 } else { 0 } // token + worst-case magnitude + recipient
-        + usize::from(safe_value_nonzero)
-        + usize::from(safe_tx_gas_nonzero) // safeTxGas page (audit 2026-06-26)
-        + 1; // trailing confirm page
+    // Shared overhead helper (header + refund + safeTxGas + confirm) — the
+    // SAME function the renderer's `total_pages` uses — plus the inner-ETH
+    // page, so the gate counts exactly what the renderer will produce.
+    let fixed = safe_fixed_overhead_pages(refund_active, safe_tx_gas_nonzero)
+        + usize::from(safe_value_nonzero);
     if fixed + inner_pages + reserved_pages > super::MAX_PAGES {
         return MultisendGate::Reject("msend too long");
     }
