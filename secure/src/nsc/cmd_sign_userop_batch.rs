@@ -44,8 +44,8 @@
 //! way it submits any other; only the inner `callData` differs.
 
 use sphincs_tz_shared::{
-    NscStatus, ACCOUNT_INDEX_MASK, ACCOUNT_INDEX_SHIFT, APPROVE_HASH_CALLDATA_LEN,
-    APPROVE_HASH_SELECTOR, C10_SIG_LEN, FLAG_INCLUDE_INIT_CODE, FLAG_REGISTER_SLOT,
+    NscStatus, ACCOUNT_INDEX_MASK, ACCOUNT_INDEX_SHIFT, C10_SIG_LEN, FLAG_INCLUDE_INIT_CODE,
+    FLAG_REGISTER_SLOT,
     GPV2_SETTLEMENT_ADDRESS, MAX_BATCH_TXS, MAX_SIGN_RESPONSE_LEN, MAX_SLOT_USES, MAX_TX_LEN,
     PQ_ADD_OWNER_BYTES_SELECTOR, PQ_CREATE_ACCOUNT_SELECTOR, PQ_INIT_CODE_LEN,
     PQ_SMART_WALLET_FACTORY, SET_PRE_SIGNATURE_SELECTOR, SIGN_USEROP_BATCH_HEADER_LEN,
@@ -725,10 +725,14 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             ui::show_status("CoW sign", "v3 required (batch)");
             return NscStatus::InvalidPointer as u32;
         }
-        let safe_selector = inner_data.len() >= 4 && inner_data[..4] == APPROVE_HASH_SELECTOR;
-        let safe_calldata_len = inner_data.len() == APPROVE_HASH_CALLDATA_LEN;
-        if safe_selector
-            && safe_calldata_len
+        // Keyed on the SELECTOR ALONE — the batch twin of the single-tx
+        // approveHash gate. `Safe.approveHash(bytes32)` ignores trailing
+        // calldata on-chain, so an exact `len == 36` test was bypassable
+        // with one padding byte → generic blind-sign of an invisible SafeTx
+        // pre-approval (audit 2026-06-28). `is_approve_hash_claim` is the
+        // SAME shared predicate the single-tx handler uses, so the two
+        // cannot drift.
+        if crate::tx::eip712::safe::is_approve_hash_claim(inner_data)
             && routed[i].as_ref().and_then(|r| r.safe_v1.as_ref()).is_none()
         {
             ui::show_status("Safe sign", "safe_v1 required (batch)");

@@ -1072,9 +1072,23 @@ fn negative_slice_pins_cow_downgrade_mitigation_gate() {
 fn negative_slice_pins_safe_downgrade_mitigation_gate() {
     // Symmetric for Safe approveHash: must require the safe_v1
     // trailer when the inner calldata claims approveHash.
-    assert!(CMD_SIGN_USEROP_SRC.contains("APPROVE_HASH_SELECTOR"));
-    assert!(CMD_SIGN_USEROP_SRC.contains("APPROVE_HASH_CALLDATA_LEN"));
+    //
+    // The gate keys on the SELECTOR ALONE via the shared
+    // `is_approve_hash_claim` predicate (audit 2026-06-28). It must NOT
+    // re-introduce an exact calldata-length test: `Safe.approveHash` ignores
+    // trailing calldata on-chain, so a `len == APPROVE_HASH_CALLDATA_LEN`
+    // gate was bypassable with one padding byte → generic blind-sign of an
+    // invisible SafeTx pre-approval.
+    assert!(
+        CMD_SIGN_USEROP_SRC.contains("is_approve_hash_claim"),
+        "the approveHash gate must use the selector-only claim predicate"
+    );
     assert!(CMD_SIGN_USEROP_SRC.contains("safe_v1_verified.is_none()"));
+    // Regression guard: the bypassable exact-length test must NOT come back.
+    assert!(
+        !CMD_SIGN_USEROP_SRC.contains("APPROVE_HASH_CALLDATA_LEN"),
+        "approveHash gate must not key on an exact calldata length (length-bypass)"
+    );
 }
 
 #[test]

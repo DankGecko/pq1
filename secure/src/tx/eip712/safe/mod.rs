@@ -35,10 +35,10 @@
 
 use super::{keccak, Eip712Error};
 use sphincs_tz_shared::{
-    SAFE_DOMAIN_TYPEHASH, SAFE_OFF_BASE_GAS, SAFE_OFF_CHAIN_ID, SAFE_OFF_DATA_HASH,
-    SAFE_OFF_GAS_PRICE, SAFE_OFF_GAS_TOKEN, SAFE_OFF_NONCE, SAFE_OFF_OPERATION,
-    SAFE_OFF_REFUND_RECEIVER, SAFE_OFF_SAFE_ADDRESS, SAFE_OFF_SAFE_TX_GAS, SAFE_OFF_TO,
-    SAFE_OFF_VALUE, SAFE_TX_TYPEHASH, SAFE_V1_CANONICAL_LEN,
+    APPROVE_HASH_SELECTOR, SAFE_DOMAIN_TYPEHASH, SAFE_OFF_BASE_GAS, SAFE_OFF_CHAIN_ID,
+    SAFE_OFF_DATA_HASH, SAFE_OFF_GAS_PRICE, SAFE_OFF_GAS_TOKEN, SAFE_OFF_NONCE,
+    SAFE_OFF_OPERATION, SAFE_OFF_REFUND_RECEIVER, SAFE_OFF_SAFE_ADDRESS, SAFE_OFF_SAFE_TX_GAS,
+    SAFE_OFF_TO, SAFE_OFF_VALUE, SAFE_TX_TYPEHASH, SAFE_V1_CANONICAL_LEN,
 };
 
 // Unlike the CoW v3 path (which calls into `crate::zk` and so is
@@ -106,6 +106,34 @@ pub struct SafeTx {
     pub gas_token: [u8; 20],
     pub refund_receiver: [u8; 20],
     pub nonce: [u8; 32],
+}
+
+/// True when `inner_data` bears the Safe `approveHash(bytes32)` selector and
+/// therefore MUST clear-sign through a verified `safe_v1` trailer — keyed on
+/// the **selector alone** (audit 2026-06-28 — approveHash gate length bypass).
+///
+/// The handler-side mandatory gate that forces `approveHash` to clear-sign
+/// previously required an *exact* calldata length (`== APPROVE_HASH_CALLDATA_LEN`,
+/// 36 B). That is a parser differential against the on-chain Safe singleton:
+/// `Safe.approveHash(bytes32)` decodes word `[4..36]` and **ignores trailing
+/// calldata** (Solidity external dispatch never reverts on extra bytes). So a
+/// hostile companion could append a single padding byte — `selector ‖ hash(32)
+/// ‖ 0x00`, length 37 — to make the exact-length test false, skip the gate, and
+/// fall through to a *generic blind-sign* of an `approveHash` that on-chain
+/// pre-approves an arbitrary, never-displayed SafeTx (a Safe treats an owner's
+/// `approveHash` as that owner's full signature on the whole SafeTx). The
+/// `safe_v1` verifier (`verify.rs`) also bails on `len != 36`, so an over-long
+/// `approveHash` has no clear-sign path at all — it could ONLY blind-sign.
+///
+/// Keying on the selector alone (matching the CoW `setPreSignature` gate, which
+/// was already length-robust) closes the differential: any `approveHash`-
+/// selectored inner call that did not produce a verified `safe_v1` canonical is
+/// refused, never blind-signed. A well-formed clear-signable `approveHash` is
+/// exactly 36 B and always arrives with its verifying trailer, so this never
+/// refuses a legitimate one.
+#[must_use]
+pub fn is_approve_hash_claim(inner_data: &[u8]) -> bool {
+    inner_data.len() >= 4 && inner_data[..4] == APPROVE_HASH_SELECTOR
 }
 
 /// Parse the 281-byte canonical packed SafeTx into structured fields.
@@ -346,5 +374,51 @@ mod typehash_tests {
         // as `uint8` in the canonical text signature.
         let sig: &[u8] = b"execTransaction(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes)";
         assert_eq!(selector_of(sig), EXEC_TRANSACTION_SELECTOR);
+    }
+
+    /// Audit 2026-06-28 regression — `approveHash` gate length bypass.
+    ///
+    /// The mandatory clear-sign gate must fire on the SELECTOR ALONE, never
+    /// on an exact calldata length, because `Safe.approveHash(bytes32)`
+    /// ignores trailing calldata on-chain. A trailing-byte-padded
+    /// `approveHash` (length 37) must still be claimed by the gate so the
+    /// handler refuses rather than blind-signing an invisible SafeTx
+    /// pre-approval.
+    #[test]
+    fn approve_hash_claim_keys_on_selector_not_length() {
+        let sel = APPROVE_HASH_SELECTOR;
+        // Canonical, clear-signable shape: selector + 32-byte hash = 36 B.
+        let mut exact = [0u8; 36];
+        exact[..4].copy_from_slice(&sel);
+        assert!(is_approve_hash_claim(&exact), "exact-36 approveHash claimed");
+
+        // THE BYPASS: selector + hash + one trailing padding byte = 37 B.
+        // Must STILL be claimed (old `== 36` test missed this and let it
+        // fall through to a generic blind-sign).
+        let mut padded = [0u8; 37];
+        padded[..4].copy_from_slice(&sel);
+        assert!(
+            is_approve_hash_claim(&padded),
+            "trailing-byte approveHash must still be claimed"
+        );
+
+        // Over-long by many bytes: still claimed.
+        let mut long = [0u8; 200];
+        long[..4].copy_from_slice(&sel);
+        assert!(is_approve_hash_claim(&long), "long approveHash claimed");
+
+        // Selector-only (no hash word yet): still claimed (the Safe would
+        // zero-pad the arg; refusing is the only safe outcome).
+        assert!(is_approve_hash_claim(&sel), "selector-only approveHash claimed");
+
+        // A non-approveHash selector is NOT claimed (must not over-gate
+        // legitimate ordinary calls into refusal).
+        let mut other = [0u8; 68];
+        other[..4].copy_from_slice(&[0xa9, 0x05, 0x9c, 0xbb]); // erc20 transfer
+        assert!(!is_approve_hash_claim(&other), "erc20 transfer not claimed");
+
+        // Calldata shorter than a selector cannot be an approveHash claim.
+        assert!(!is_approve_hash_claim(&[0xd4, 0xd9, 0xbd]), "sub-selector not claimed");
+        assert!(!is_approve_hash_claim(&[]), "empty not claimed");
     }
 }

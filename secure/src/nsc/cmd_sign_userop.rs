@@ -48,8 +48,7 @@
 //! (fault-injection guard, double-evaluated).
 
 use sphincs_tz_shared::{
-    NscStatus, ACCOUNT_INDEX_MASK, ACCOUNT_INDEX_SHIFT, APPROVE_HASH_CALLDATA_LEN,
-    APPROVE_HASH_SELECTOR, C10_SIG_LEN, ERC7730_MAX_TRAILER_LEN,
+    NscStatus, ACCOUNT_INDEX_MASK, ACCOUNT_INDEX_SHIFT, C10_SIG_LEN, ERC7730_MAX_TRAILER_LEN,
     EXEC_TRANSACTION_MIN_CALLDATA_LEN, EXEC_TRANSACTION_SELECTOR, FLAG_INCLUDE_INIT_CODE,
     FLAG_REGISTER_SLOT, GPV2_SETTLEMENT_ADDRESS, MAX_SIGN_RESPONSE_LEN, MAX_SLOT_USES, MAX_TX_LEN,
     PQ_ADD_OWNER_BYTES_SELECTOR, PQ_CREATE_ACCOUNT_SELECTOR, PQ_INIT_CODE_LEN,
@@ -1007,9 +1006,17 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // Without this gate a hostile NS could strip the trailer and
     // coerce the user into blind-signing the bytes32 hash with no
     // visibility into what SafeTx it commits to.
-    let safe_selector = inner_data.len() >= 4 && inner_data[..4] == APPROVE_HASH_SELECTOR;
-    let safe_calldata_len = inner_data.len() == APPROVE_HASH_CALLDATA_LEN;
-    if safe_selector && safe_calldata_len && safe_v1_verified.is_none() {
+    //
+    // Keyed on the SELECTOR ALONE (like the CoW `setPreSignature` gate
+    // above), NOT an exact calldata length: `Safe.approveHash(bytes32)`
+    // ignores trailing calldata on-chain, so the old `len == 36` test was
+    // a parser differential — `selector ‖ hash ‖ 0x00` (37 B) skipped the
+    // gate AND failed `safe_v1` verify, falling to a generic blind-sign of
+    // an approveHash that pre-approves an arbitrary SafeTx (audit
+    // 2026-06-28). `is_approve_hash_claim` closes the differential.
+    if crate::tx::eip712::safe::is_approve_hash_claim(inner_data)
+        && safe_v1_verified.is_none()
+    {
         ui::show_status("Safe sign", "safe_v1 required");
         return NscStatus::InvalidPointer as u32;
     }
