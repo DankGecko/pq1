@@ -18,3 +18,6 @@ __pycache__/
 # minimal shape (lean-lsp only; never a server with both repo-secret read and a
 # network tool) is documented in docs/tooling-and-systems.md.
 .mcp.json
+
+# local RPC endpoints for tools/verify_erc20_decimals.py (may contain secret keys)
+tools/erc20_rpc.json
