@@ -23,6 +23,16 @@ use super::Pages;
 use crate::tx::eip1559::{Eip1559Tx, U256};
 use crate::ui::{DISPLAY_COLS, DISPLAY_ROWS};
 
+/// SHA-256("") — the sentinel the companion sends for an absent
+/// `paymasterAndData` (mirrors `crate::aa::userop::SHA256_EMPTY`; copied
+/// here so the host-test `#[path]` mount of this file does not pull in the
+/// `aa` crate). Used by [`enforce_paymaster_page`] to decide presence.
+const SHA256_OF_EMPTY: [u8; 32] = [
+    0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14, 0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f, 0xb9,
+    0x24, 0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c, 0xa4, 0x95, 0x99, 0x1b, 0x78, 0x52,
+    0xb8, 0x55,
+];
+
 /// Splice a loud native-ETH `value` page into an already-rendered page set
 /// when `value != 0`, reporting whether the WYSIWYS invariant holds.
 ///
@@ -130,6 +140,80 @@ pub(super) fn enforce_gas_pages(pages: &mut Pages, tx: &Eip1559Tx) -> Result<(),
     Ok(())
 }
 
+/// Splice a loud "! PAYMASTER SET" page when the UserOp carries a
+/// non-empty `paymasterAndData` field, reporting whether the WYSIWYS
+/// invariant holds.
+///
+/// **STATUS — ACCEPTED RISK, not a ship blocker (decision 2026-06-27, owner
+/// confirmed 2026-06-28).** The paymaster-unshown gap below was assessed and
+/// explicitly does NOT warrant a fix: PQ1 ships no paymaster-using companion
+/// flow, so the page is *optional* belt-and-suspenders hardening retained in
+/// the tree rather than a required WYSIWYS closure. It is wired into both
+/// sign handlers and behaves exactly like the mandatory gates, but its
+/// absence would not block a release. Do not re-raise the underlying issue;
+/// keep this note if the gate is touched.
+///
+/// The EntryPoint v0.6 `paymasterAndData` is committed to by the UserOp
+/// signature (its digest is folded into `compute_sphincs_digest_v06`),
+/// but the firmware only ever receives `sha256(paymasterAndData)` over the
+/// wire — it cannot show *which* paymaster, only that one is present. A
+/// paymaster materially changes the transaction's economics: gas is paid by
+/// the sponsor instead of the wallet's native ETH, and a *token* paymaster's
+/// `postOp` debits the user in ERC-20 tokens. A malicious companion can
+/// route an otherwise-benign UserOp through a paymaster the user previously
+/// approved, draining tokens as "gas" behind a confirm whose only fee page
+/// ("Worst-case: X ETH") actively misdirects. Hiding the paymaster is
+/// therefore the same signed-but-not-shown class as the native-value gate
+/// above (audit 2026-06-27).
+///
+/// `paymaster_and_data_hash` is the on-wire `sha256(paymasterAndData)`
+/// (the companion sends [`SHA256_OF_EMPTY`] when no paymaster is set), and
+/// presence is recomputed from those bytes *inside* the sentinel closure so
+/// a single glitch on one comparison cannot force the skip. Two hardening
+/// properties mirror [`enforce_native_value_page`]:
+///
+///   * **FI-hardened skip decision.** The dangerous outcome is *skipping*
+///     the warning when a paymaster IS present, so the skip path is gated on
+///     a Hamming-distant sentinel proof that the hash equals the empty-bytes
+///     hash. A single fault that tries to force the skip on a present
+///     paymaster cannot produce `OK_SENTINEL`, so control falls through to
+///     the mandatory splice.
+///   * **Fails CLOSED on a full page buffer.** If a paymaster is present and
+///     the page cannot be spliced (`pages.len == MAX_PAGES`), returns
+///     `Err(())` so the caller REFUSES to sign rather than release a
+///     signature over a sponsor the user never saw.
+///
+/// Returns `Ok(())` when the invariant holds (no paymaster, or the loud page
+/// was spliced) and `Err(())` when a mandatory page could not be spliced.
+pub(crate) fn enforce_paymaster_page(
+    pages: &mut Pages,
+    paymaster_and_data_hash: &[u8; 32],
+) -> Result<(), ()> {
+    // Skip ONLY on a sentinel-robust proof that the hash is the empty-bytes
+    // hash (no paymaster). Recompute the byte compare inside the closure (it
+    // is double-evaluated, `black_box`'d to defeat CSE) so a glitch on a
+    // single load/compare cannot mask a present paymaster. Any other
+    // outcome — non-empty hash, or a glitched compare — flows to the
+    // mandatory splice below.
+    let may_skip = crate::fi::check_true_into_sentinel(|| {
+        core::hint::black_box(*paymaster_and_data_hash == SHA256_OF_EMPTY)
+    });
+    if may_skip == crate::fi::OK_SENTINEL {
+        return Ok(());
+    }
+    // Paymaster present (or the absence-check was faulted): a loud page is
+    // MANDATORY. Splice it right after the banner; `?` fails CLOSED when the
+    // buffer is full so the caller refuses to sign instead of hiding the
+    // sponsor.
+    let at = if pages.len >= 1 { 1 } else { 0 };
+    let idx = insert_blank(pages, at)?;
+    primitives::write_line(pages.row_mut(idx, 0), "! PAYMASTER SET");
+    primitives::write_line(pages.row_mut(idx, 1), "Gas sponsored");
+    primitives::write_line(pages.row_mut(idx, 2), "may debit tokens");
+    primitives::write_line(pages.row_mut(idx, 3), "> next");
+    Ok(())
+}
+
 /// Insert a blank page at index `at`, shifting the pages currently at
 /// `at..len` one slot toward the back. Returns the index of the new
 /// (cleared) page, or `Err(())` when the buffer is already full.
@@ -148,6 +232,37 @@ fn insert_blank(pages: &mut Pages, at: usize) -> Result<usize, ()> {
     pages.buf[at] = [[b' '; DISPLAY_COLS]; DISPLAY_ROWS];
     pages.len += 1;
     Ok(at)
+}
+
+/// WYSIWYS per-flow address-match gate for the DIRECT ERC-20 render path
+/// (audit 2026-06-28 — `v1_ms` metadata mis-attribution).
+///
+/// `crate::tx::display::pick_sign_pages_inner` reaches its direct ERC-20
+/// branch only when NO Safe / CoW / v1 context verified — i.e. the wallet
+/// itself is `msg.sender` and `tx.to` IS the token being called. The only
+/// legitimate metadata attribution there is therefore `meta.contract ==
+/// tx.to`.
+///
+/// The handler-side acceptance gate (`verified_meta`) is deliberately more
+/// permissive: it also admits a bundle whose token sits inside a Safe-flow
+/// multiSend record (the `exec_ms` / `v1_ms` / `safe_exec_inner_*`
+/// disjuncts), because the Safe surfaces re-match the label per record. On
+/// the direct path those disjuncts are NOT valid — a `transfer` to token Y
+/// must never render with token T's name / symbol / decimals just because
+/// some (unrelated, possibly non-verifying) Safe trailer referenced T.
+///
+/// Returns `true` only when the bundle's contract equals the call target,
+/// so the caller can fall back to the raw `erc20_unknown` render on any
+/// mismatch (including the no-target contract-creation shape). This is the
+/// per-flow gate the handler trailer-acceptance comments rely on; it pairs
+/// with the source-side disjunct gating in `cmd_sign_userop.rs` so a single
+/// fault at either layer cannot mis-attribute.
+#[must_use]
+pub(crate) fn direct_erc20_meta_matches(
+    meta_contract: &[u8; 20],
+    tx_to: Option<&[u8; 20]>,
+) -> bool {
+    tx_to.is_some_and(|to| meta_contract == to)
 }
 
 #[cfg(test)]
@@ -200,6 +315,50 @@ mod tests {
         assert_eq!(&pages.buf[1][0][..12], b"! NATIVE ETH");
         // The original body shifted back by one — nothing clobbered.
         assert_eq!(&pages.buf[3][2][..8], b"L=Cancel");
+    }
+
+    /// Audit 2026-06-28 regression — `v1_ms` metadata mis-attribution.
+    /// On the DIRECT ERC-20 render path the bundle metadata may only be
+    /// applied when its contract matches the call target. A bundle for
+    /// token T (e.g. routed via a bogus `safe_v1` multiSend record) must
+    /// NOT be applied to a `transfer` whose `tx.to` is the unrelated token
+    /// Y — otherwise the OLED would show "Send <T.symbol>" with T's
+    /// decimals for a transfer of Y.
+    #[test]
+    fn direct_erc20_meta_gate_rejects_mismatched_contract() {
+        let token_y = [0xAAu8; 20]; // the real call target
+        let token_t = [0xBBu8; 20]; // the bundle's (mis-attributed) token
+        // Mismatch → reject (renderer falls back to erc20_unknown).
+        assert!(!direct_erc20_meta_matches(&token_t, Some(&token_y)));
+    }
+
+    /// Positive: a legitimate direct ERC-20 call (bundle contract == the
+    /// call target) is accepted, so the rich `erc20_known` render still
+    /// fires for honest transfers.
+    #[test]
+    fn direct_erc20_meta_gate_accepts_matching_contract() {
+        let token = [0xCDu8; 20];
+        assert!(direct_erc20_meta_matches(&token, Some(&token)));
+    }
+
+    /// A contract-creation / no-`to` shape can never match a token bundle,
+    /// so the gate declines (fail-safe to raw render) rather than panicking
+    /// or accepting a bundle for a `None` target.
+    #[test]
+    fn direct_erc20_meta_gate_rejects_absent_target() {
+        let token = [0x01u8; 20];
+        assert!(!direct_erc20_meta_matches(&token, None));
+    }
+
+    /// A near-miss (single trailing byte differs) is still a mismatch —
+    /// the compare is full-width, not a truncated prefix.
+    #[test]
+    fn direct_erc20_meta_gate_is_full_width() {
+        let mut a = [0x42u8; 20];
+        let mut b = [0x42u8; 20];
+        a[19] = 0x00;
+        b[19] = 0x01;
+        assert!(!direct_erc20_meta_matches(&a, Some(&b)));
     }
 
     /// A zero `value` must NOT add a page (no spurious "0 ETH" page), and
@@ -278,5 +437,45 @@ mod tests {
             "fewer than two free slots must fail closed"
         );
         assert_eq!(pages.len, before, "no page may be spliced (atomic)");
+    }
+
+    /// Audit 2026-06-27 — paymaster WYSIWYS. A present paymaster must splice
+    /// a loud page right after the banner so the user can never authorise a
+    /// sponsored UserOp (whose token-paymaster may debit ERC-20 for "gas")
+    /// without seeing it.
+    #[test]
+    fn paymaster_present_inserts_loud_page_after_banner() {
+        let present = [0x11u8; 32]; // any non-empty-bytes hash
+        let mut pages = Pages::with_len(3);
+        primitives::write_line(pages.row_mut(0, 0), "Send ETH?");
+        primitives::write_line(pages.row_mut(2, 2), "L=Cancel");
+        assert!(enforce_paymaster_page(&mut pages, &present).is_ok());
+        assert_eq!(pages.len, 4, "a paymaster page must be inserted");
+        assert_eq!(&pages.buf[0][0][..9], b"Send ETH?");
+        assert_eq!(&pages.buf[1][0][..15], b"! PAYMASTER SET");
+        assert_eq!(&pages.buf[3][2][..8], b"L=Cancel");
+    }
+
+    /// Absent paymaster (hash == SHA-256("")) must add no page and report Ok.
+    #[test]
+    fn paymaster_absent_adds_no_page() {
+        let mut pages = Pages::with_len(3);
+        assert!(enforce_paymaster_page(&mut pages, &SHA256_OF_EMPTY).is_ok());
+        assert_eq!(pages.len, 3);
+    }
+
+    /// FAIL CLOSED. A present paymaster that cannot be spliced because the
+    /// renderer already filled the budget must return `Err(())` (caller
+    /// refuses to sign), never silently drop the warning.
+    #[test]
+    fn paymaster_present_full_buffer_fails_closed() {
+        let present = [0x11u8; 32];
+        let mut pages = Pages::with_len(super::super::MAX_PAGES);
+        let before = pages.len;
+        assert!(
+            enforce_paymaster_page(&mut pages, &present).is_err(),
+            "present paymaster on a full buffer must fail closed"
+        );
+        assert_eq!(pages.len, before, "no page may be spliced or dropped");
     }
 }

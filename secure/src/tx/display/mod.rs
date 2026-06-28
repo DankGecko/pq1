@@ -40,6 +40,7 @@ mod value_page;
 // renderer directly; private otherwise.
 pub(crate) mod value_transfer;
 
+pub(crate) use value_page::enforce_paymaster_page;
 pub use blind_sign::render_blind_sign_pages;
 pub use eip1271::{render_eip1271_personal_sign_pages, render_eip1271_raw32_pages};
 pub use erc20_known::render_erc20_known_pages;
@@ -393,10 +394,35 @@ fn pick_sign_pages_inner(
         return Ok(render_pages(tx, resolver));
     }
     match crate::erc20::calldata::parse_erc20_calldata(inner_data) {
-        Some(call) => Ok(match erc20 {
-            Some(meta) => render_erc20_known_pages(tx, &call, meta, resolver),
-            None => render_erc20_unknown_pages(tx, &call, resolver),
-        }),
+        Some(call) => {
+            // WYSIWYS per-flow address-match gate (audit 2026-06-28 —
+            // `v1_ms` metadata mis-attribution).
+            //
+            // This is the DIRECT ERC-20 branch: control only reaches here
+            // when NO Safe / CoW / v1 context was verified (every Safe
+            // surface returned above through its own `safe_inner_meta`
+            // re-match). On a direct call the wallet itself is `msg.sender`
+            // and `tx.to` IS the token contract, so the ONLY legitimate
+            // attribution is `meta.contract == tx.to`.
+            //
+            // The handler-side acceptance gate (`verified_meta`) also
+            // admits a bundle whose contract sits inside a Safe-flow
+            // multiSend record (`exec_ms` / `v1_ms` / `safe_exec_inner_*`).
+            // Those disjuncts are evaluated from companion trailer bytes
+            // and are NOT valid on the direct path — a transfer to token Y
+            // must never render with token T's name/symbol/decimals just
+            // because an (unrelated, possibly non-verifying) Safe trailer
+            // referenced T. Re-check the address here and fall back to the
+            // raw `erc20_unknown` render on any mismatch. This is the
+            // per-flow gate the handler comments rely on; previously it
+            // existed only for the Safe surfaces.
+            let matched = erc20
+                .filter(|meta| value_page::direct_erc20_meta_matches(&meta.contract, tx.to.as_ref()));
+            Ok(match matched {
+                Some(meta) => render_erc20_known_pages(tx, &call, meta, resolver),
+                None => render_erc20_unknown_pages(tx, &call, resolver),
+            })
+        }
         // The verified selector → text-sig mapping (if any) is only
         // consulted when nothing else has decoded the calldata. Phase 2
         // first tries to ABI-decode the calldata against the verified

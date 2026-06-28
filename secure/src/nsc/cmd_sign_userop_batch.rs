@@ -907,6 +907,23 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     };
     {
         let mut final_pages = build_final_summary_pages(batch_count);
+        // Paymaster WYSIWYS gate (audit 2026-06-27). `paymaster_and_data_hash`
+        // is folded into the signed sphincs digest (§"Type 2" below), so the
+        // batch signature commits to whatever paymaster the companion chose,
+        // yet no renderer surfaces it. It is a single UserOp-level field
+        // (one paymaster for the whole batch), so it is shown ONCE here on the
+        // final-summary pages rather than once per inner tx. FI-hardened
+        // (sentinel skip-on-empty) and fails CLOSED — refuse the whole atomic
+        // batch rather than sign a sponsor the user never saw.
+        if crate::tx::display::enforce_paymaster_page(
+            &mut final_pages,
+            &paymaster_and_data_hash,
+        )
+        .is_err()
+        {
+            ui::show_status("Batch sign", "paymaster unshown");
+            return NscStatus::InternalError as u32;
+        }
         // Fail closed if the batch-final fingerprint can't be appended (F5):
         // it binds the whole bundle (keccak over the per-tx digests) to the
         // single sig the user is about to authorise.

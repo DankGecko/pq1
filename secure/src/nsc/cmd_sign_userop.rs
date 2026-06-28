@@ -673,91 +673,14 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
 
     // ── 7. Verify optional trailers ────────────────────────────────
 
-    // 7a. ERC-20 bundle — Merkle-verified token metadata, cross-checked
-    // against the tx's chain_id + recipient address.
-    //
-    // Two acceptable recipient values:
-    //   (a) the outer tx `to_address` (direct ERC-20 call from the
-    //       wallet — `tx.to` IS the token contract);
-    //   (b) the inner SafeTx target decoded from `execTransaction`
-    //       calldata (Safe-wrapped ERC-20 — outer `to_address` is the
-    //       Safe contract, but the bundle attributes to the token the
-    //       Safe is about to call). Without this branch a Safe-wrapped
-    //       USDC tx fell through to `Erc20Unknown` on the OLED even
-    //       after the NS-side injector correctly looked up the inner
-    //       USDC address. Renderer paths in `pick_sign_pages` still
-    //       enforce their own per-flow address-match gate, so this is
-    //       defence-in-depth, not the sole check.
-    let verified_meta: Option<Erc20Metadata<'_>> = if erc20.len > 0 {
-        let bundle_slice = &snap[erc20.start..erc20.start + erc20.len];
-        match verify_erc20_bundle(bundle_slice) {
-            Some(meta) => {
-                let outer_to_match = match tx_for_display.to {
-                    Some(addr) => addr == meta.contract,
-                    None => false,
-                };
-                let safe_exec_inner_match = inner_data.len()
-                    >= EXEC_TRANSACTION_MIN_CALLDATA_LEN
-                    && inner_data[..4] == EXEC_TRANSACTION_SELECTOR
-                    && inner_data[4..16].iter().all(|&b| b == 0)
-                    && {
-                        let mut inner_to = [0u8; 20];
-                        inner_to.copy_from_slice(&inner_data[16..36]);
-                        inner_to == meta.contract
-                    };
-                // (c) a multiSend RECORD targets the token: the Safe
-                //     flows batch e.g. `[approve(USDC), setPreSignature]`
-                //     through MultiSendCallOnly, so the metadata's
-                //     contract sits one level deeper — inside a packed
-                //     record of either the exec calldata's `data` or
-                //     the (here still unverified — metadata is display-
-                //     label trust, and the renderer re-matches per
-                //     record) safe_v1 trailer's raw_data.
-                //     `any_record_to_matches` returns false for
-                //     anything that isn't a well-formed multiSend.
-                let msend_record_match = {
-                    let exec_ms = inner_data.len() >= 4
-                        && inner_data[..4] == EXEC_TRANSACTION_SELECTOR
-                        && crate::tx::eip712::safe::exec_decode::decode_exec_transaction(
-                            inner_data,
-                        )
-                        .map(|d| {
-                            crate::tx::eip712::safe::multi_send::any_record_to_matches(
-                                d.data,
-                                &meta.contract,
-                            )
-                        })
-                        .unwrap_or(false);
-                    let v1_ms = safe_v1.len
-                        >= sphincs_tz_shared::SAFE_V1_CANONICAL_LEN + 2
-                        && {
-                            let b = &snap[safe_v1.start..safe_v1.start + safe_v1.len];
-                            let raw_len = u16::from_be_bytes([
-                                b[sphincs_tz_shared::SAFE_V1_CANONICAL_LEN],
-                                b[sphincs_tz_shared::SAFE_V1_CANONICAL_LEN + 1],
-                            ]) as usize;
-                            let start = sphincs_tz_shared::SAFE_V1_CANONICAL_LEN + 2;
-                            start.checked_add(raw_len).is_some_and(|end| end <= b.len())
-                                && crate::tx::eip712::safe::multi_send::any_record_to_matches(
-                                    &b[start..start + raw_len],
-                                    &meta.contract,
-                                )
-                        };
-                    exec_ms || v1_ms
-                };
-                if meta.chain_id == chain_id
-                    && (outer_to_match || safe_exec_inner_match || msend_record_match)
-                {
-                    Some(meta)
-                } else {
-                    None
-                }
-            }
-            None => None,
-        }
-    } else {
-        None
-    };
+    // 7a. ERC-20 bundle metadata attribution is resolved in §7c-bis-erc20
+    // below — AFTER the Safe-context verifications (`safe_v1_verified` /
+    // `safe_exec_verified`). The acceptance gate admits a bundle whose
+    // token sits inside a Safe-flow multiSend record, and those disjuncts
+    // MUST require the corresponding Safe context to have actually verified
+    // (not just inspect raw companion trailer bytes — audit 2026-06-28).
+    // Computing it here would force the disjuncts to run before the Safe
+    // verdicts exist.
 
     // 7b. v1 ZK clear-sign — circuit-attested (calldata, readable)
     // pair + VK bundle Merkle-committed to VK_DB_ROOT. See
@@ -830,6 +753,99 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             None
         } else {
             v
+        }
+    } else {
+        None
+    };
+
+    // 7c-bis-erc20. ERC-20 bundle → display metadata (deferred from §7a).
+    //
+    // Merkle-verified token metadata, cross-checked against the tx's
+    // chain_id + the address it is meant to label. Accepted attributions:
+    //   (a) the outer tx `to_address` — a DIRECT ERC-20 call: the wallet
+    //       is `msg.sender` and `tx.to` IS the token contract;
+    //   (b) the inner SafeTx target decoded from a *verified*
+    //       `execTransaction` (Safe-wrapped ERC-20 — outer `to_address`
+    //       is the Safe, the bundle labels the token the Safe will call);
+    //   (c) a multiSend RECORD inside a *verified* Safe context targets
+    //       the token (the Safe-UI batches e.g. `[approve(USDC),
+    //       setPreSignature]` through MultiSendCallOnly).
+    //
+    // Defence in depth (audit 2026-06-28 — `v1_ms` mis-attribution): the
+    // Safe-flow disjuncts (b)/(c) are gated on the corresponding Safe
+    // context having ACTUALLY VERIFIED (`safe_exec_verified` /
+    // `safe_v1_verified` is `Some`), not on raw companion trailer bytes.
+    // Previously `v1_ms` matched a token referenced by an *unverified*
+    // `safe_v1` trailer, which — on the direct render path — let a
+    // transfer to token Y be labelled with token T's name/symbol/decimals.
+    // The renderer ALSO re-checks `meta.contract == tx.to` on the direct
+    // branch (`display::pick_sign_pages_inner`); both layers must be
+    // defeated for a single fault to mis-attribute.
+    let verified_meta: Option<Erc20Metadata<'_>> = if erc20.len > 0 {
+        let bundle_slice = &snap[erc20.start..erc20.start + erc20.len];
+        match verify_erc20_bundle(bundle_slice) {
+            Some(meta) => {
+                let outer_to_match = match tx_for_display.to {
+                    Some(addr) => addr == meta.contract,
+                    None => false,
+                };
+                // (b) inner SafeTx target — only when the exec context
+                //     verified (else the decoded `inner_to` is unauthent-
+                //     icated companion bytes).
+                let safe_exec_inner_match = safe_exec_verified.is_some()
+                    && inner_data.len() >= EXEC_TRANSACTION_MIN_CALLDATA_LEN
+                    && inner_data[..4] == EXEC_TRANSACTION_SELECTOR
+                    && inner_data[4..16].iter().all(|&b| b == 0)
+                    && {
+                        let mut inner_to = [0u8; 20];
+                        inner_to.copy_from_slice(&inner_data[16..36]);
+                        inner_to == meta.contract
+                    };
+                // (c) a multiSend RECORD targets the token — only inside a
+                //     VERIFIED Safe context. `any_record_to_matches`
+                //     returns false for anything that isn't a well-formed
+                //     multiSend; the renderer re-matches per record before
+                //     applying the label.
+                let msend_record_match = {
+                    let exec_ms = safe_exec_verified.is_some()
+                        && inner_data.len() >= 4
+                        && inner_data[..4] == EXEC_TRANSACTION_SELECTOR
+                        && crate::tx::eip712::safe::exec_decode::decode_exec_transaction(
+                            inner_data,
+                        )
+                        .map(|d| {
+                            crate::tx::eip712::safe::multi_send::any_record_to_matches(
+                                d.data,
+                                &meta.contract,
+                            )
+                        })
+                        .unwrap_or(false);
+                    let v1_ms = safe_v1_verified.is_some()
+                        && safe_v1.len >= sphincs_tz_shared::SAFE_V1_CANONICAL_LEN + 2
+                        && {
+                            let b = &snap[safe_v1.start..safe_v1.start + safe_v1.len];
+                            let raw_len = u16::from_be_bytes([
+                                b[sphincs_tz_shared::SAFE_V1_CANONICAL_LEN],
+                                b[sphincs_tz_shared::SAFE_V1_CANONICAL_LEN + 1],
+                            ]) as usize;
+                            let start = sphincs_tz_shared::SAFE_V1_CANONICAL_LEN + 2;
+                            start.checked_add(raw_len).is_some_and(|end| end <= b.len())
+                                && crate::tx::eip712::safe::multi_send::any_record_to_matches(
+                                    &b[start..start + raw_len],
+                                    &meta.contract,
+                                )
+                        };
+                    exec_ms || v1_ms
+                };
+                if meta.chain_id == chain_id
+                    && (outer_to_match || safe_exec_inner_match || msend_record_match)
+                {
+                    Some(meta)
+                } else {
+                    None
+                }
+            }
+            None => None,
         }
     } else {
         None
@@ -1027,8 +1043,12 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     {
         // native-value page (when outer value != 0) + 2 ERC-8213
         // fingerprint pages + 2 gas/fee pages (the dispatcher splices the
-        // gas pages for the Safe surface — audit 2026-06-19).
-        let reserved = usize::from(value.iter().any(|&b| b != 0)) + 2 + 2;
+        // gas pages for the Safe surface — audit 2026-06-19) + the paymaster
+        // page when paymasterAndData is non-empty (audit 2026-06-27).
+        let reserved = usize::from(value.iter().any(|&b| b != 0))
+            + usize::from(paymaster_and_data_hash != SHA256_EMPTY)
+            + 2
+            + 2;
         match crate::tx::display::multisend_sign_gate(
             safe_v1_verified.as_ref(),
             safe_exec_verified.as_ref(),
@@ -1120,6 +1140,20 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             return NscStatus::InternalError as u32;
         }
     };
+    // Paymaster WYSIWYS gate (audit 2026-06-27). `paymaster_and_data_hash` is
+    // folded into the signed sphincs digest below, so the signature commits
+    // to whatever paymaster the companion chose — but no renderer surfaces
+    // it. A companion can route an otherwise-benign UserOp through a
+    // token-paymaster the user previously approved, draining ERC-20 as "gas"
+    // behind the confirm (the "Worst-case ETH" page actively misdirects). The
+    // firmware only has sha256(paymasterAndData) so it cannot show *which*
+    // paymaster, but it splices a loud "! PAYMASTER SET" page whenever one is
+    // present. FI-hardened (sentinel skip-on-empty) and fails CLOSED on a
+    // full buffer — refuse rather than sign a sponsor the user never saw.
+    if crate::tx::display::enforce_paymaster_page(&mut pages, &paymaster_and_data_hash).is_err() {
+        ui::show_status("Sign refused", "paymaster unshown");
+        return NscStatus::InternalError as u32;
+    }
     // ERC-8213 fingerprint — show the calldata digest as the last
     // page so a user can cross-check against `cast` / `viem`. Cap is
     // `MAX_PAGES` = 27; the worst single-tx Safe-multiSend flow lands on
