@@ -126,7 +126,7 @@
     {
       "construct": "theft_free_bytecode hInv — the per-index combined cap (slotUses i + offchainSigCount i <= MaxSlotUses)",
       "witness": "SphincsCVerify.Wallet.Invariants.combinedCapInvariant_empty",
-      "why": "the empty/genesis storage satisfies the combined cap, so the cap hypothesis (and the Reachable headline, whose base case is genesis) is NOT vacuous — there is a reachable state the conditional actually fires on."
+      "why": "the empty storage satisfies the combined cap, so the cap hypothesis hInv is NOT vacuous — a state the conditional actually fires on exists. (SCOPE: this witnesses the CAP. theft_free_bytecode_reachable's separate `Reachable` hypothesis is inhabited by the `Reachable.genesis` CONSTRUCTOR — structural, not a C9-enforced witness: pinning a constructor's #print-axioms is not meaningful, and it avoids editing Invariants.lean.)"
     },
     {
       "construct": "post-deploy combined cap (the factory-initialised state)",
