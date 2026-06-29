@@ -26,7 +26,7 @@ Quot.sound]` — purely kernel (holds for any `thPair`).
 ## ALL FOUR ROUND-TRIP SUB-LEMMAS DONE (2026-06-29)
 
 merkle_roundtrip, wots_chain_roundtrip + wots_pk_roundtrip, fors_roundtrip (per-tree), hypertree_roundtrip — all kernel-clean, on master, wired into the SphincsCVerify root, no sorry. Remaining to close `consistent sk`:
-1. **FORS-pk aggregate** — `reconstructForsPk` round-trip = K× `fors_roundtrip` (per FORS tree) + the last-tree leaf + `computeForsPk`/`thMulti` compression (mirrors `wots_pk_roundtrip`'s `List.map_congr_left` aggregate shape). Gives `reconstructForsPk seed digest sig.fors = some forsPk` for an honest `sig.fors`.
+1. **FORS-pk aggregate — `fors_pk_roundtrip` — DONE** (`Verifier/ForsRoundtrip.lean`): honest FORS+C sig ⇒ `reconstructForsPk seed digest sig = some (computeForsPk … (honest roots))`, via per-tree `fors_roundtrip` + `Array.ofFn` congruence; closure `[propext, Classical.choice, Quot.sound]`. **The full verifier-side round-trip layer is now proven** — every verifier reconstruction (merkle/wots-pk/fors-pk/hypertree) has its honest round-trip lemma.
 2. **Signer completion** — replace `Spec/Signer.lean::sign`'s zero-array placeholders with the real `mtNode`/`mtAuthPath` (FORS + hypertree subtree auth paths) + WOTS chains + the D=2 layer messages, so the honest-layer/honest-fors hypotheses of the sub-lemmas are *what `sign` actually emits*.
 3. **`verify` decomposition + assembly** — `verifyWithDigest` → forced-zero gate (grindR ensures last FORS index 0) → `reconstructForsPk` (piece 1) → `verifyHypertree` (`hypertree_roundtrip`) → compare to pkRoot; the digest agreement is `grindR`'s postcondition. Compose into `consistent sk`, discharging `verify_signs`.
 

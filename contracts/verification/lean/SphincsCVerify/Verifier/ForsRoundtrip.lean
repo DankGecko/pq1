@@ -96,4 +96,48 @@ theorem fors_roundtrip (seed : ByteVec 32) (htIdx : UInt64) (treeIdx : UInt32)
     forsAcc_climbs seed htIdx treeIdx lf leafIdx h32 Spec.A (Nat.le_refl _)]
   simp [Nat.div_eq_of_lt hlt]
 
+open SphincsCVerify.Util in
+/-- **`fors_pk_roundtrip`.** The FORS public-key aggregate: an honest FORS+C
+    signature (each of the `K-1` normal trees carries the honest secret-leaf +
+    subtree auth path under leaf function `lf t`, and the forced-zero last index
+    holds) reconstructs to the honest FORS public key — the `computeForsPk`
+    (`thMulti`) compression of the `K-1` reconstructed tree roots plus the
+    leaf-only last-tree root. Each normal tree round-trips by `fors_roundtrip`;
+    the aggregate by `Array.ofFn` congruence. The forced-zero gate is discharged
+    by `hzero`; the leaf-index bounds by `hbound` (each `< 2^A`, itself a
+    consequence of `readBitsLe_lt`). -/
+theorem fors_pk_roundtrip (seed digest : ByteVec 32) (sig : Spec.Fors.ForsSig)
+    (lf : Nat → Nat → ByteVec 16)
+    (hzero : (extractForsIndices digest).getD (Spec.K - 1) 0 = 0)
+    (hbound : ∀ t, t < Spec.K - 1 → (extractForsIndices digest).getD t 0 < 2 ^ Spec.A)
+    (hsec : ∀ t, t < Spec.K - 1 →
+      sig.secrets.getD t (ByteVec.zero 16) = lf t ((extractForsIndices digest).getD t 0))
+    (hpath : ∀ t, t < Spec.K - 1 →
+      sig.authPaths.getD t #[]
+        = forsMtAuthPath seed (UInt64.ofNat (extractHtIndex digest)) (UInt32.ofNat t) (lf t)
+            ((extractForsIndices digest).getD t 0)) :
+    Spec.Fors.reconstructForsPk seed digest sig
+      = some (Spec.Fors.computeForsPk seed (UInt64.ofNat (extractHtIndex digest))
+          ((Array.ofFn (n := Spec.K - 1) fun t : Fin (Spec.K - 1) =>
+              forsMtNode seed (UInt64.ofNat (extractHtIndex digest)) (UInt32.ofNat t.val) (lf t.val)
+                Spec.A 0).push
+            (Spec.th seed
+              (Spec.Adrs.forsNode (UInt64.ofNat (extractHtIndex digest)) (UInt32.ofNat (Spec.K - 1)) 0 0)
+              (ByteVec.pad16 (sig.secrets.getD (Spec.K - 1) (ByteVec.zero 16)))))) := by
+  have hofn :
+      (Array.ofFn (n := Spec.K - 1) fun t : Fin (Spec.K - 1) =>
+          Spec.Fors.reconstructRoot seed (UInt64.ofNat (extractHtIndex digest)) (UInt32.ofNat t.val)
+            (UInt32.ofNat ((extractForsIndices digest).getD t.val 0))
+            (sig.secrets.getD t.val (ByteVec.zero 16)) (sig.authPaths.getD t.val #[]))
+        = (Array.ofFn (n := Spec.K - 1) fun t : Fin (Spec.K - 1) =>
+            forsMtNode seed (UInt64.ofNat (extractHtIndex digest)) (UInt32.ofNat t.val) (lf t.val)
+              Spec.A 0) := by
+    congr 1
+    funext t
+    rw [hsec t.val t.isLt, hpath t.val t.isLt]
+    exact fors_roundtrip seed (UInt64.ofNat (extractHtIndex digest)) (UInt32.ofNat t.val) (lf t.val)
+      ((extractForsIndices digest).getD t.val 0) (hbound t.val t.isLt)
+  simp only [Spec.Fors.reconstructForsPk]
+  rw [if_neg (not_not_intro hzero), hofn]
+
 end SphincsCVerify.Interpreter.C10
