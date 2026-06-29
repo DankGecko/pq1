@@ -1,4 +1,7 @@
-# Handoff — `verify_signs` completeness (Group V round-trip leg)
+# Handoff — `verify_signs` completeness — **CLOSED 2026-06-29**
+
+**RESOLVED.** `honest_consistent : WellFormed sk → consistent sk` is proven kernel-clean in `SphincsCVerify/Verifier/HonestConsistent.lean` (closure `[propext, Classical.choice, Quot.sound]`, wired into the root, no sorry). All three increments done: (1) grind postconditions (`Spec/SignerPost.lean`), (2) reference signer completion (`Spec/Signer.lean` + `Spec/Treehash.lean`), (3) the `WellFormed`/`honest_consistent` assembly. `consistent`/`verify_signs` were NOT weakened; `honest_consistent` is the new top-level theorem supplying the honestly-keygen content `verify_signs` consumes. The historical plan below is retained for reference.
+
 
 Scoping + attack plan for discharging `Spec/Theorems.lean::verify_signs`'s
 `consistent sk` hypothesis. This is the open *completeness* (round-trip) leg of
