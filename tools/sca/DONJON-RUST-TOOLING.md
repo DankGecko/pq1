@@ -53,6 +53,31 @@ cd <repo-root>
 cargo-checkct run --dir tools/sca --timeout 300     # finds tools/sca/checkct/
 ```
 
+#### CI recipe (the from-source binsec requirement — diagnosed 2026-06-29)
+
+A nightly `checkct` job exists in `.github/workflows/nightly.yml` but is
+manual-dispatch + `continue-on-error` until the binsec build below lands.
+Reproduced in a throwaway opam switch, the precise requirement is:
+
+* **binsec MUST be built from source** (`git clone binsec/binsec; git checkout
+  0.11.1; dune build @install; dune install`), NOT `opam install binsec`. The
+  opam package builds `dune build -p binsec`, and under `-p` the ARM decoder
+  (`binsec.isa.armv7`, a dune `(select)` on `unisim_archisec.arm32dba`) and the
+  checkct plugin end up mutually exclusive — the opam binary always rejects
+  either `-arm-supported-modes thumb` or `-checkct`, never has both.
+* **unisim_archisec + a solver must be present in the switch BEFORE the binsec
+  build** so the `(select)` resolves to the enabled ARM decoder and the checkct
+  plugin compiles: `opam install unisim_archisec.0.0.14 z3 bitwuzla bitwuzla-cxx`.
+* **Use a CLEAN switch with no opam-`binsec` ever installed.** A mixed
+  install makes the binsec binary dynlink a plugin `.cmxs` compiled against a
+  different binsec base → `Dynlink ... undefined symbol camlBinsec_base__Logger`.
+
+So the CI job is: setup-ocaml (fresh switch) → `opam install unisim_archisec z3
+bitwuzla bitwuzla-cxx` → clone+`dune build @install`+`dune install` binsec →
+build cargo-checkct (sibling clone) → `cargo-checkct run --dir tools/sca`,
+gating on per-driver results (4 secure + the shuffle control insecure), since
+the suite always exits non-zero (the shuffle is the by-design-insecure control).
+
 `--dir` is the directory *containing* a folder literally named `checkct/`. The vendored
 workspace `tools/sca/checkct/` path-deps `sphincs-c10` (repo-relative) and
 `checkct_macros` (assumes `~/repos/cargo-checkct` is a sibling of this repo — adjust the

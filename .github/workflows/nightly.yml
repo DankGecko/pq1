@@ -76,16 +76,20 @@ jobs:
     # on a yellow job. Run it with `gh workflow run nightly.yml` while working
     # the from-source binsec build.
     if: github.event_name == 'workflow_dispatch'
-    # NON-BLOCKING (WIP). What's PROVEN to work in CI: opam + ocaml, the binsec
-    # 0.11.1 / unisim_archisec install, the cargo-checkct build, and invoking
-    # binsec with the exact local args. RESIDUAL: CI's opam-RELEASED binsec
-    # rejects the -checkct / -arm-supported-modes plugin args that the LOCAL
-    # binsec accepts — the local one was built FROM SOURCE (binsec/binsec, per
-    # tools/sca/DONJON-RUST-TOOLING.md §1) with those plugins compiled in, which
-    # a from-opam-release build doesn't reproduce. Closing this needs a
-    # from-source binsec build (or a prebuilt binsec image) in CI. Until then
-    # the validated gate is LOCAL `make checkct`; this job documents the path +
-    # proves the surrounding infra, without making the nightly red.
+    # NON-BLOCKING (WIP). Root cause FULLY DIAGNOSED (2026-06-29, reproduced in a
+    # throwaway opam switch — see tools/sca/DONJON-RUST-TOOLING.md §1 "CI recipe"):
+    # the opam-released `binsec` package builds with `dune build -p binsec`, which
+    # builds the optional ARM decoder (binsec.isa.armv7, a dune `(select)` on
+    # unisim_archisec) XOR the checkct plugin (gated on a solver) — never BOTH at
+    # once, so it always rejects either `-arm-supported-modes` or `-checkct`. The
+    # working LOCAL binsec is built FROM SOURCE (`dune build @install`, no `-p`)
+    # with unisim_archisec + a solver (z3/bitwuzla) present, which compiles both.
+    # The remaining CI work is a from-source binsec in a CLEAN switch (no
+    # opam-`binsec` ever installed — a mixed install dynlinks a plugin .cmxs built
+    # against a different binsec base → `undefined symbol camlBinsec_base__Logger`).
+    # PROVEN in CI: opam/ocaml + binsec/unisim install + cargo-checkct build +
+    # binsec invocation. Until the from-source job lands, the validated gate is
+    # LOCAL `make checkct`; this documents the exact recipe without a red nightly.
     continue-on-error: true
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
