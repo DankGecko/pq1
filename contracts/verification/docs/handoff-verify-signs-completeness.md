@@ -30,8 +30,25 @@ merkle_roundtrip, wots_chain_roundtrip + wots_pk_roundtrip, fors_roundtrip (per-
 2. **Signer completion** — replace `Spec/Signer.lean::sign`'s zero-array placeholders with the real `mtNode`/`mtAuthPath` (FORS + hypertree subtree auth paths) + WOTS chains + the D=2 layer messages, so the honest-layer/honest-fors hypotheses of the sub-lemmas are *what `sign` actually emits*.
 3. **`verify` decomposition + assembly** — `verifyWithDigest` → forced-zero gate (grindR ensures last FORS index 0) → `reconstructForsPk` (piece 1) → `verifyHypertree` (`hypertree_roundtrip`) → compare to pkRoot; the digest agreement is `grindR`'s postcondition. Compose into `consistent sk`, discharging `verify_signs`.
 
-The remaining work below
-is unchanged: complete the signer, then sub-lemmas 2–4 + assembly.
+## TRACTABILITY AUDIT (2026-06-29) — the phase IS provable; here is the exact plan
+
+Audited `Spec/Signer.lean` + `Spec/Theorems.lean` before the signer rebuild (the
+one constraint that decides whether `consistent` is even *statable*):
+
+- **`grindR` and `findCount` are TOTAL, not `partial`.** Both are `def … termination_by limit - …` + `decreasing_by` (the loop is bounded by the `limit` parameter; returns `none` past it). So `sign sk m = some sig` carries full kernel-usable information — the worst-case "opaque partial grind ⇒ unprovable" blocker does NOT apply. `sign` is `noncomputable` (fine for proofs, ≠ partial).
+- **`consistent sk` is FALSE for an arbitrary `sk`** (its docstring concedes this — it needs `pkRoot = the hypertree top root`). So do **NOT** try to prove `consistent sk` unconditionally, and do **NOT** weaken `consistent`'s definition or `verify_signs`. Instead prove a **new** theorem `honest_consistent : WellFormed sk → consistent sk`, where `WellFormed sk` packages: `sk.pkRoot = the honest hypertree top root built from (sk.skSeed, sk.pkSeed)` (the keygen-consistency the Rust `SigningKey::keygen` enforces). `verify_signs` stays as-is (it already takes `consistent sk` as a hypothesis).
+
+### Remaining increments (each committable, in usual style)
+
+1. **Grind postcondition lemmas** (clean loop inductions over the bounded `let rec loop`; foundation for the assembly):
+   - `grindR … = some (r, digest) → readBitsLe digest ((K-1)*A) A = 0` — the forced-zero `hzero` (gated by Signer.lean:112).
+   - `grindR … = some (r, digest) → digest = hMsg (pad16 pkSeed) (pad16 pkRoot) (pad16 r) message` — the **digest agreement** (so `verify`'s recomputed digest = `sign`'s); `verify` recomputes `hMsg … (pad16 sig.r) message` and `sig.r = r`.
+   - `findCount … = some (count, d) → digitSum (extractDigits d) = TargetSum ∧ d = wotsDigest seed (Adrs.wots …) msgHash count` — the `hsum` + the `hdig` for `wots_pk_roundtrip` (gated by Signer.lean:74).
+   - (`let rec loop` ⇒ access via the generated `grindR.loop`/`findCount.loop` aux + its `.eq`/induction; or restate with an explicit fuel `Nat.rec`.)
+2. **Signer completion** (the bulk; invasive — edits `sign`). Replace the three zero-array placeholders so the round-trip hypotheses hold **by construction** (advisor: define `sign` to emit `forsMtAuthPath`/`keygenPk`-chains/`mtAuthPath` *directly*, so `hsec`/`hpath`/`hchains`/`hwots` are `rfl`):
+   - `forsAuthPaths[t] := forsMtAuthPath (pad16 pkSeed) htIdx (ofNat t) (fun j => forsSecret skSeed (ofNat t) (ofNat j)) (forsIndices.getD t 0)`.
+   - the D=2 `layers` must be **per-layer** (not `Array.replicate D layerSig`): layer 0 WOTS-signs `forsPk`, layer 1 WOTS-signs layer 0's subtree root — the cross-layer message threading is the real signing logic (needs the honest subtree treehash to compute layer 0's root before layer 1's WOTS digits). Each layer's `wots.chains[i] := chainHash … (wotsSecret …) 0 digit_i` and `authPath := mtAuthPath …` over the `keygenPk` leaves.
+3. **`WellFormed` + `honest_consistent` assembly** — `WellFormed sk` ties `sk.pkRoot` to the layer-1 top root `mtNode … SubtreeH 0` that `hypertree_roundtrip` produces; then `honest_consistent`: `sign = some sig` exposes the honest `(r, fors, layers)`; `verify` recomputes the same digest (grind postcondition 2), `verifyWithDigest`'s forced-zero gate passes (postcondition 1), `reconstructForsPk = some forsPk` (`fors_pk_roundtrip`), `verifyHypertree = some pkRoot` (`hypertree_roundtrip` + `WellFormed`), final `decide (pkRoot = pkRoot) = true`.
 
 ## Where it stands (2026-06-26)
 
