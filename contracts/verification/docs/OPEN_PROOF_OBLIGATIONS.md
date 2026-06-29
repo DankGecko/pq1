@@ -24,6 +24,20 @@ be discharged in the single phase below.
 | A5 | SPHINCS+C10 is EUF-CMA secure (composed bound from SHA-256 SM-DT-TCR + ITSR + random-oracle modelling of `H_msg`). | `Crypto/EUFCMA.lean::EUF_CMA_SPHINCSplusC` plus the three SHA-256 axioms in `Crypto/Assumptions.lean` |
 | A6 | The Lean 4 kernel checks proofs correctly. | Universal. |
 
+> **Deferred by decision — stylistic, NOT owed (2026-06-29).** A2's in-Lean
+> `entrypoint_honest` is a *tautology over the `handleOp` model* (its conclusion
+> follows from `handleOp`'s definition); it is an `axiom` only to surface A2 in
+> `theft_free`'s `#print axioms` closure. It *could* be restated as an opaque
+> non-consumed marker (like A4's `evmDeliversCall`) so the closure **names** the
+> deployed-EntryPoint + prefund assumption instead of showing a provable tautology.
+> This is **deliberately not done**: the gain is marginal — the tautology is
+> already disclosed (`TRUST_ASSUMPTIONS.md` A2, `ASSURANCE_CASE.md` §4, the axiom
+> docstring), and `make verify-proof-mutation` (A2-load-bearing) +
+> `verify-ledger-consistency` now characterize A2 mechanically — while the cost is a
+> change to `theft_free`'s **pinned** closure (re-pin `verify-ledger-consistency`
+> `signature_pins` + `lint_fv` c.2 + `dump_axioms` + ~7 docs in lockstep). Revisit
+> only if a concrete need arises that this cannot meet a better way.
+
 The hardware-wallet firmware, side-channel resistance, MEV/bundler griefing,
 gas/DoS bounds, and frontend key management are out of scope.
 
