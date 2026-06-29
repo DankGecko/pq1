@@ -345,16 +345,19 @@ These are not defects to be closed; they are stated so an auditor sees them as
 | D2 | Deployed EntryPoint v0.6 ≡ `handleOp` | A2 | CITED-TCB — Kontrol-vs-EntryPoint not done | `TRUST_ASSUMPTIONS.md` A2 |
 | D3 | EIP-1271 surface bytecode binding | G8 | **LARGELY CLOSED 2026-06-29** — `HalmosIsValidSignature` (3 rules, both profiles): forbids-bootstrap clean bytecode ∀; non-bypass/view-only per-property B over installed reps (`ownerAtIndex` ceiling = A3.2). Residual: no symbolic-∀ over unset indices; no Lean bridge corollary | `PROOF_MAP.md` I-6 |
 | D4 | A5 quantitative / `+C` bit-security | G3 | CITED-TCB (irreducible §6.3); `+C` outside corpus | `EUFCMA.lean`, roadmap T1.1 |
-| D5 | Rust→Lean (Charon/Aeneas) faithfulness | extracted specs | Charon has no foundational soundness proof; gate = regen-diff + KAT `#eval` | roadmap T1.3 |
+| D5 | Rust→Lean (Charon/Aeneas) faithfulness | extracted specs | **PARTLY MITIGATED 2026-06-29.** Two gates now: (i) regen-diff (`make extract-*`, 11 modules) catches un-re-extracted Rust changes; (ii) **NEW differential** (`make verify-extract-differential`) EXECUTES the extracted Lean vs **executed-Rust** expected (`signed_preimage`, 6 vectors + negative control) — the only layer that catches a *consistently-wrong* translation. Both are **tier C (corpus)**: they shrink the TCB on tested inputs, NOT a ∀. Charon still has no foundational soundness proof (cited-TCB). Coverage gap logged: only `signed_preimage` so far (slices/`to_be_bytes`); parsers/derivations not yet swept. | roadmap T1.3, `ExtractDiffCheck.lean` |
 | D6 | Firmware invariants #2/#3/#4 + clear-sign | §5 | OUT OF SCOPE — silicon-E2E only | `docs/security/` |
 | D7 | G9 mask uniformity / `master_secret` confidentiality | G9 | hardware-TRNG + computational (scoped, §5) | `SplitSecrecy.lean` Scope block |
 | D8 | A1 silicon / keccak (no verified hash) | §6.1/6.2 | IRREDUCIBLE cited-TCB | this doc §6 |
 | D9 | In-kernel EUF-CMA conjunct non-operational (`isForgery` unsatisfiable for honestly-signable msgs) — security carried by the cited reduction, not the in-Lean conjunct | G3 | DOCUMENTED (sibling of the A2 in-Lean tautology) | `AXIOM_STATUS.json` A5-EUFCMA (P9), roadmap §0 |
 
-**Closed this session:** (1) the former "hInv reachability is fuzz-backed" defeater
-(G4) — now a kernel inductive invariant; (2) the EIP-1271 model-only gap (D3/G8) —
-now bytecode-discharged: the forbids-bootstrap headline is a clean ∀ on the deployed
-bytecode, plus per-property B (non-bypass / view-only) over installed reps.
+**Closed / advanced this session:** (1) the former "hInv reachability is fuzz-backed"
+defeater (G4) — now a kernel inductive invariant; (2) the EIP-1271 model-only gap
+(D3/G8) — now bytecode-discharged: the forbids-bootstrap headline is a clean ∀ on the
+deployed bytecode, plus per-property B (non-bypass / view-only) over installed reps;
+(3) the Charon/Aeneas faithfulness defeater (D5) — partly mitigated by the new
+extracted-Lean-vs-executed-Rust differential gate (`make verify-extract-differential`),
+tier C, on `signed_preimage` (coverage gap logged).
 
 ---
 

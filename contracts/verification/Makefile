@@ -234,7 +234,25 @@ EXTRACTED_DIR := extracted
 PQLEAN        := $(HOME)/.local/share/pqsigner-lean
 REPO_ROOT     := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
 
-.PHONY: verify-extracted extract-sphincs-adrs extract-aa-userop extract-fors-index
+.PHONY: verify-extracted verify-extract-differential extract-sphincs-adrs extract-aa-userop extract-fors-index
+
+# roadmap T1.3 (ii) — extracted-Lean vs shipped-Rust DIFFERENTIAL gate.
+# The `extract-*` regen-diff targets catch a Rust change that was not re-extracted;
+# they do NOT catch a CONSISTENTLY-WRONG Charon/Aeneas translation. This gate
+# EXECUTES the extracted Lean functions on vectors whose EXPECTED outputs were
+# produced by running the SHIPPED Rust (`fw-manifest/tests/gen_extract_vectors.rs`)
+# and fails on any divergence. Includes a permanent negative control. CORPUS
+# evidence (tier C) — shrinks the Charon faithfulness TCB on tested inputs, not a ∀.
+#   make verify-extract-differential          replay committed (Rust-generated) vectors
+#   make verify-extract-differential GEN=1    re-execute the Rust to regenerate them
+verify-extract-differential:
+ifeq ($(GEN),1)
+	@echo "=== regenerating EXPECTED outputs from the SHIPPED Rust (ground truth) ==="
+	@cd $(REPO_ROOT) && cargo test -p fw-manifest --test gen_extract_vectors --release -- --nocapture 2>&1 \
+	  | grep -E 'gen_extract_vectors:|test result'
+endif
+	@cd $(EXTRACTED_DIR) && $(LAKE) build Extracted.ExtractDiffVectors 2>&1 | tail -1
+	@cd $(EXTRACTED_DIR) && $(LAKE) env lean Extracted/ExtractDiffCheck.lean
 
 verify-extracted:
 	@cd $(EXTRACTED_DIR) && $(LAKE) build 2>&1 | tee /tmp/pq_extracted_build.out
