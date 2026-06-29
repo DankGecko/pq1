@@ -125,6 +125,11 @@ import SphincsCVerify
 #print axioms SphincsCVerify.Wallet.Invariants.eip1271_forbids_bootstrap
 #print axioms SphincsCVerify.Wallet.Invariants.factory_requires_bootstrap_sig
 #print axioms SphincsCVerify.Crypto.cannot_forge_without_breaking_SHA256
+-- P9 / conjunct-2 tie-in: EUF-CMA instantiated at the actual op's sphincsDigest
+-- (answers the "detached ∀-rider, never instantiated" finding). Closure MUST be
+-- exactly the A5 axioms + kernel (additive — adds NO new axiom; consumes only
+-- what theft_free already carries). Conditionally non-vacuous; P9 irreducible.
+#print axioms SphincsCVerify.Wallet.Invariants.unauthorized_userop_breaks_hash
 #print axioms SphincsCVerify.Bridge.yul_eq_refined
 -- Headline theorem — should depend on exactly:
 --   propext, Classical.choice, Quot.sound  (Lean kernel)

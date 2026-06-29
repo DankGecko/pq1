@@ -119,7 +119,41 @@ def isForgery
     Consistency: conclusion is the opaque `BreaksHash`, never `False`; and the
     `KeyHistory` conjunct of `isForgery` makes the empty-transcript valid-KAT
     witness unformable. Both firewalls are exercised by the guard lemmas
-    below and the regression probe in `scripts/`. -/
+    below and the regression probe in `scripts/`.
+
+    ## Why the "non-operational conjunct" (EF-P9) is IRREDUCIBLE here, not a gap
+
+    EF reviewers (and the `Wallet/Invariants.lean::unauthorized_userop_breaks_hash`
+    tie-in) observe that this conjunct, threaded into `theft_free`, is *vacuous on
+    operational messages*: `KeyHistory.signed_recorded` (completeness — everything
+    `sk` signs is recorded) makes `isForgery sk transcript msgStar _`
+    UNSATISFIABLE whenever `sk` can sign `msgStar`, because then `msgStar` is
+    recorded and `¬ transcriptHasMsg` fails. The natural "fix" — drop
+    `signed_recorded` so a not-yet-queried message gives a genuine forgery — is
+    UNSOUND, and provably so in this qualitative (non-PPT) model:
+
+      drop `signed_recorded`, take any `sk`, the empty transcript `[]`, any
+      message `m`, and the HONEST signature `s := Signer.sign sk m`. Then
+      `isForgery sk [] m s` holds: `KeyHistory sk []` (its remaining conjunct
+      `mem_signed` is vacuous on `[]`); `Hypertree.verify sk.pkSeed sk.pkRoot m
+      s = true` (an honest signature verifies — `Verifier.HonestConsistent.
+      honest_consistent`); and `¬ transcriptHasMsg [] m` (empty). So an HONEST
+      signature would satisfy `isForgery`, and this axiom would make `BreaksHash`
+      a PROVABLE THEOREM. The 2026-06-14 opaque-conclusion firewall only blocks
+      a `False`-detonation; it does nothing against `BreaksHash`-provable — and
+      once `BreaksHash` is provable, every `_ ∨ BreaksHash` reduction
+      (`sha256_collision_resistance`, the calldata-binding corollary) collapses to
+      its right disjunct, a WORSE vacuity in the exact axiom-set that was
+      inconsistent once before.
+
+    `honest_sig_not_forgery` below is the mechanized witness that `signed_recorded`
+    is doing this work (it is precisely what proves an honest sig is NOT a
+    forgery). The separation "satisfiable by real forgeries, unsatisfiable by
+    honest sigs" simply IS the PPT (computationally-bounded) adversary, which a
+    qualitative shadow cannot express (see the "What is LOST" note above). So P9 is
+    an irreducible ceiling of the non-probabilistic model — honestly documented,
+    not a wiring defect; closing it needs the probability backbone (EasyCrypt /
+    SSProve), out of scope. -/
 axiom EUF_CMA_SPHINCSplusC :
     SM_DT_TCR_F_Shape →
     ITSR_F_Shape →

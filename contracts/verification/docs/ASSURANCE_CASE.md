@@ -215,13 +215,19 @@ G0  theft-free + integrity (theft_free / theft_free_bytecode)
   its *consistency / non-vacuity fence*: `honest_sig_not_forgery` +
   `keyHistory_empty_signs_nothing` (closure `{propext, Quot.sound}`) make the
   empty-transcript valid-KAT detonator unformable.
-- **Honest caveat (P9 — non-operational conjunct).** The `KeyHistory` binding that
-  kills the detonator *also* makes `isForgery` unsatisfiable for any message the
-  honest signer can sign — so over the operational message space the in-kernel
-  EUF-CMA conjunct is **decorative**; the cited reduction (not an in-Lean theorem)
-  carries the unforgeability. This is the sibling of the A2 in-Lean tautology — a
-  documented residual (AXIOM_STATUS A5-EUFCMA "P9", roadmap §0), surfaced here, not
-  hidden.
+- **Honest caveat (P9 — non-operational conjunct; now INSTANTIATED + PROVEN
+  IRREDUCIBLE).** The `KeyHistory` binding that kills the detonator *also* makes
+  `isForgery` unsatisfiable for any message the honest signer can sign — so over the
+  operational message space the in-kernel EUF-CMA conjunct is decorative; the cited
+  reduction carries the unforgeability. Two upgrades (2026-06-29): the conjunct IS
+  now instantiated at the transition's own values
+  (`Invariants.unauthorized_userop_breaks_hash` — EUF-CMA at `msgStar =
+  sphincsDigest(op)`; additive, no new axiom), answering the "detached ∀-rider"
+  PoC; and the vacuity is **proven irreducible**, not a wiring gap — dropping
+  `KeyHistory.signed_recorded` would let an honest signature satisfy `isForgery`
+  (via `honest_consistent`), making `BreaksHash` a *provable theorem* (a worse
+  vacuity), so the separation needed is the PPT adversary the qualitative shadow
+  cannot express (proof in `EUFCMA.lean`). See D9.
 - **Quantitative companion (`K`, standalone).** `Crypto/Quantitative.lean` turns the
   shipped `2^16` cap into a kernel-checked **96-bit** generic-attack floor
   (`min(FORS+C 143, birthday 112, multi-target 96)`), shown load-bearing (+4 bits
@@ -349,7 +355,7 @@ These are not defects to be closed; they are stated so an auditor sees them as
 | D6 | Firmware invariants #2/#3/#4 + clear-sign | §5 | OUT OF SCOPE — silicon-E2E only | `docs/security/` |
 | D7 | G9 mask uniformity / `master_secret` confidentiality | G9 | hardware-TRNG + computational (scoped, §5) | `SplitSecrecy.lean` Scope block |
 | D8 | A1 silicon / keccak (no verified hash) | §6.1/6.2 | IRREDUCIBLE cited-TCB | this doc §6 |
-| D9 | In-kernel EUF-CMA conjunct non-operational (`isForgery` unsatisfiable for honestly-signable msgs) — security carried by the cited reduction, not the in-Lean conjunct | G3 | DOCUMENTED (sibling of the A2 in-Lean tautology) | `AXIOM_STATUS.json` A5-EUFCMA (P9), roadmap §0 |
+| D9 | In-kernel EUF-CMA conjunct non-operational (`isForgery` unsatisfiable for honestly-signable msgs) — security carried by the cited reduction, not the in-Lean conjunct | G3 | **DOCUMENTED + PROVEN-IRREDUCIBLE 2026-06-29.** The conjunct IS now instantiated at the transition's own values (`Invariants.unauthorized_userop_breaks_hash` — EUF-CMA at `msgStar = sphincsDigest(op)`, answering the "detached ∀-rider" PoC; additive, no new axiom). The vacuity is shown IRREDUCIBLE, not a wiring gap: dropping `KeyHistory.signed_recorded` makes an HONEST signature satisfy `isForgery` (empty transcript + `honest_consistent`-verifying sig), making `BreaksHash` a *provable theorem* and collapsing every `∨ BreaksHash` reduction — a worse vacuity. The satisfiable-by-forgeries / unsatisfiable-by-honest-sigs separation IS the PPT adversary, inexpressible in the qualitative shadow (needs EasyCrypt/SSProve). Proof written into `EUFCMA.lean` axiom docstring. | `EUFCMA.lean`, `AXIOM_STATUS.json` A5-EUFCMA (P9), roadmap §0 |
 
 **Closed / advanced this session:** (1) the former "hInv reachability is fuzz-backed"
 defeater (G4) — now a kernel inductive invariant; (2) the EIP-1271 model-only gap

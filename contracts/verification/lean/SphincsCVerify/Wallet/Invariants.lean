@@ -1013,6 +1013,48 @@ theorem userop_acceptance_implies_signed_or_break
   rw [hdig] at hverify
   exact hverify
 
+/-- **(P9 / conjunct-2 tie-in) Unforgeability INSTANTIATED at the actual UserOp.**
+    The EUF-CMA reduction applied at the transition's OWN values: if the spec
+    verifier accepts `innerSig` under owner key `sk` over the op's `sphincsDigest`,
+    and that digest is NOT in `sk`'s honest signing history, then a SHA-256
+    hardness assumption is broken.
+
+    This exhibits the instantiation the "detached ∀-rider" PoC said was absent —
+    `theft_free`'s conjunct-2 (`∀ sk t m s, isForgery → BreaksHash`) IS structurally
+    applicable at `msgStar = sphincsDigest op`, `sigStar = innerSig`, the accepting
+    owner's key. Stated at the `Hypertree.verify` layer where `isForgery` lives;
+    aligning the on-chain ByteVec accept (`validateSignature` via the deployed
+    verifier — `userop_acceptance_implies_signed_or_break` above) with this
+    `Hypertree`-level accept is the A3.1 reconstruction-layer refinement (the active
+    front), so the deployed-bytecode link is the existing A3.1 axiom, not re-proven
+    here.
+
+    **HONEST SCOPE (P9 — IRREDUCIBLE, not a wiring gap).** The firing premise
+    `¬ transcriptHasMsg transcript (sphincsDigest op…)` — "the legitimate keyholder
+    did not sign this op" — is, in this qualitative (non-PPT, total-signer) model,
+    the same conditional the model cannot make hold automatically: see the
+    irreducibility note on `Crypto.EUF_CMA_SPHINCSplusC`. Dropping the
+    `KeyHistory.signed_recorded` completeness firewall so the premise "always" holds
+    would let an HONEST signature satisfy `isForgery` (empty transcript +
+    `honest_consistent`-verifying sig + nothing recorded), making `BreaksHash` a
+    provable theorem and collapsing every `∨ BreaksHash` reduction — a WORSE vacuity
+    than P9, in the axiom-set that was inconsistent once before. So this corollary is
+    *structurally instantiable and conditionally non-vacuous*, NOT an unconditional
+    theorem; that residual is the honest ceiling of the qualitative shadow (the PPT
+    adversary `EUFCMA.lean`'s docstring declares out of scope), not a fixable gap. -/
+theorem unauthorized_userop_breaks_hash
+    (sk : Signer.SigningKey) (transcript : Crypto.Transcript)
+    (op : UserOperation) (entryPoint : ByteVec 20) (chainId : Nat)
+    (innerSig : Hypertree.Signature)
+    (hist : Crypto.KeyHistory sk transcript)
+    (haccept : Hypertree.verify sk.pkSeed sk.pkRoot
+        (sphincsDigest op entryPoint chainId) innerSig = true)
+    (hunsigned : ¬ Crypto.transcriptHasMsg transcript
+        (sphincsDigest op entryPoint chainId)) :
+    Crypto.BreaksHash :=
+  Crypto.cannot_forge_without_breaking_SHA256 sk transcript
+    (sphincsDigest op entryPoint chainId) innerSig ⟨hist, haccept, hunsigned⟩
+
 /-! ## Envelope-closure lemmas for the Halmos A3.2 validate session
     (GAP-9 / GAP-10 in `docs/MISSING_FOR_FULL_BYTECODE_PROOF.md`)
 
