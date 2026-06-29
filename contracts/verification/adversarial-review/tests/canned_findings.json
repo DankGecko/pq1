@@ -1,0 +1,17 @@
+{
+  "findings": [
+    {
+      "id": "canned-example-finding",
+      "v_class": "V5",
+      "severity": "info",
+      "target": "contracts/verification/docs/AXIOM_STATUS.json:closures",
+      "title": "CANNED self-test finding (not a real defect)",
+      "claim": "This is a fixture used by `run_review.py --backend generic --cmd 'cat tests/canned_findings.json'` to prove the orchestration end-to-end without an LLM call.",
+      "defect": "It exercises extract_json + aggregate + render_report. If you see this in a real report, you ran the self-test backend by mistake.",
+      "poc": "NONE — fixture",
+      "confidence": 0.0,
+      "suggested_fix": "Use --backend claude or --backend codex for a real review."
+    }
+  ],
+  "honest_residual": "This is canned fixture output. It checks the harness, not the codebase. A real review must use an LLM backend (claude/codex) that actually reads the target files."
+}

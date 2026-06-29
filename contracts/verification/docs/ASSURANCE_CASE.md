@@ -45,6 +45,29 @@ ban scan all of `SphincsCVerify/**`); the *exact-closure tripwire* is enforced
 specifically on `theft_free` + the Gap-3 off-chain axiom. See
 `docs/verification/fv-soundness-roadmap-2026-06.md` §0.
 
+Two further anti-vacuity gates were added 2026-06-29 (closing the recurring EF
+*vacuity* findings P9-dead-conjunct and P1-undischarged-advertised):
+- **`make verify-proof-mutation`** (`scripts/check_proof_mutations.py` + manifest
+  `lean/scripts/proof_mutations.json`) — the proof-side `cargo-mutants`: deletes
+  each load-bearing axiom / weakens a key lemma and asserts the rebuild *reacts as
+  this ledger claims* (load-bearing ⇒ build breaks; A1/A4 markers ⇒ stay green +
+  the closure drops *exactly* the named axiom; A3.4 zero-consumer ⇒ stays green;
+  `reachable_implies_combinedCap` is confirmed load-bearing for the G4 reachable
+  headline). Materiality-guarded (no-op = hard fail) + permanent canary.
+- **`make verify-ledger-consistency`** (`scripts/check_ledger_consistency.py`) —
+  makes `AXIOM_STATUS.json` falsifiable against the live dump: exact-set `closures`
+  per theorem + headline `signature_pins` (catches a re-introduced raw `hInv` —
+  the G4/P1 surface — which axiom-closure checks cannot see) + count/status/no-
+  undocumented-axiom checks, cross-checked against the `lint_fv` pin. Wired-in
+  `--self-test` negative control.
+
+The full method (the V1–V11 green-but-hollow catalog these gates close, and the
+V8/V9/V11 classes **no** gate can close) and the on-demand, framework-agnostic
+adversarial-review kit (`contracts/verification/adversarial-review/`, runnable
+under Claude Code / Codex / any LLM) live in
+[`docs/verification/fv-adversarial-review-playbook.md`](../../../docs/verification/fv-adversarial-review-playbook.md).
+The gates stop us *re-discovering* the same vacuity; they do not make us *sure*.
+
 ---
 
 ## 1. The top claim

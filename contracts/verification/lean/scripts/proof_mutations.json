@@ -1,0 +1,179 @@
+{
+  "doc": "Proof-mutation manifest for verify-proof-mutation (the proof-side analogue of cargo-mutants). Each entry mutates the Lean source in a way whose outcome is KNOWN, and the runner (scripts/check_proof_mutations.py) asserts the rebuild matches `expect`. A green-when-it-should-be-red = a vacuity (V4 dead conjunct) or a broken claim, caught. Most entries EXECUTE a specific falsifiability claim AXIOM_STATUS.json makes in prose ('deleting X leaves theft_free proven', 'A3.4 has zero consumers', 'reachable_implies_combinedCap is load-bearing for the P1 discharge'). DELETION is done by RENAMING the declaration (single-line, materially-different by construction, robust to whitespace) so every downstream reference becomes an unknown identifier. Each mutation is applied to ONE file, fully rebuilt (lake build SphincsCVerify rebuilds the changed module + all reverse-dependencies — mathlib stays cached), then ALWAYS reverted. CLOSES V4 (dead conjunct) + the load-bearingness claims; does NOT close V7 (latent-FALSE axiom — a false axiom that still type-checks is invisible to mutation while lean/ is mathlib-free) or V11 (wrong spec). See docs/fv-adversarial-review-playbook.md §A.",
+  "tiers": {
+    "quick": "canary + 2 highest-value (smoke; ~3 rebuilds)",
+    "default": "the curated 8 (load-bearing premises + non-load-bearing markers + the P1 non-vacuity guard)",
+    "full": "default + the corollary bridge-axiom load-bearing checks (~13 rebuilds)"
+  },
+  "mutations": [
+    {
+      "id": "canary",
+      "tier": "quick",
+      "v_class": "harness",
+      "expect": "build_fails",
+      "file": "SphincsCVerify/Spec/Theorems.lean",
+      "find": "  subst hExec\n",
+      "replace": "  subst hExec_CANARY_NONEXISTENT\n",
+      "rationale": "PERMANENT CANARY. Breaks theft_free's proof with an unknown identifier. If this does NOT fail the build, the mutation harness itself is broken (it cannot detect a break in the most important file) — and every other result is meaningless. Non-negotiable per the adversarial-review playbook.",
+      "ledger_claim": "n/a — harness self-check"
+    },
+    {
+      "id": "A3.1-load-bearing",
+      "tier": "quick",
+      "v_class": "V4",
+      "expect": "build_fails",
+      "file": "SphincsCVerify/Bridge/Refinement.lean",
+      "find": "axiom solidityVerifier_compiles_correctly :",
+      "replace": "axiom solidityVerifier_compiles_correctly_MUT :",
+      "rationale": "A3.1 is the load-bearing verifier<->bytecode bridge. theft_free's existence conjunct rewrites the deployed verifier into the Lean model via it. Renaming it must break theft_free.",
+      "ledger_claim": "headline_status_explanation: 'Removing solidityVerifier ... would leave the corresponding per-claim corollaries unprovable.'"
+    },
+    {
+      "id": "A2-load-bearing",
+      "tier": "default",
+      "v_class": "V4",
+      "expect": "build_fails",
+      "file": "SphincsCVerify/Bridge/EntryPoint.lean",
+      "find": "axiom entrypoint_honest",
+      "replace": "axiom entrypoint_honest_MUT",
+      "rationale": "A2 is consumed by theft_free's first line (hSuccess := entrypoint_honest ...). Renaming must break theft_free.",
+      "ledger_claim": "A2 status_detail: a genuine SEMANTIC premise of theft_free."
+    },
+    {
+      "id": "A5-EUFCMA-load-bearing",
+      "tier": "default",
+      "v_class": "V4",
+      "expect": "build_fails",
+      "file": "SphincsCVerify/Crypto/EUFCMA.lean",
+      "find": "axiom EUF_CMA_SPHINCSplusC :",
+      "replace": "axiom EUF_CMA_SPHINCSplusC_MUT :",
+      "rationale": "A5 underlies cannot_forge_without_breaking_SHA256, theft_free's conjunct-2 rider. Renaming must break theft_free.",
+      "ledger_claim": "A5-EUFCMA: 'threads the cited crypto into conjunct 2.'"
+    },
+    {
+      "id": "P1-reachable-load-bearing",
+      "tier": "default",
+      "v_class": "V4",
+      "expect": "build_fails",
+      "file": "SphincsCVerify/Wallet/Invariants.lean",
+      "find": "theorem reachable_implies_combinedCap (s : Storage) (i : Nat) (h : Reachable s) :",
+      "replace": "theorem reachable_implies_combinedCap_MUT (s : Storage) (i : Nat) (h : Reachable s) :",
+      "rationale": "THE FLAGSHIP P1 GUARD. theft_free_bytecode_reachable derives the combined cap from reachable_implies_combinedCap. If the lemma is renamed (i.e. the discharge does not actually USE it), the reachable headline must break. Proves the P1 discharge is not a dead `have`.",
+      "ledger_claim": "A3.2 status_detail: 'theft_free_bytecode_reachable consumes Reachable instead of the bald hInv.'"
+    },
+    {
+      "id": "A4-marker-closure-drop",
+      "tier": "default",
+      "v_class": "V5-exact",
+      "expect": "build_passes",
+      "file": "SphincsCVerify/Spec/Theorems.lean",
+      "find": "    have _a4_delivers : Bridge.evmDeliversCall (default : Wallet.Execute.Call) :=\n      Bridge.evm_bytecode_executes_correctly (default : Wallet.Execute.Call)",
+      "replace": "    -- have _a4_delivers : Bridge.evmDeliversCall (default : Wallet.Execute.Call) :=\n    --   Bridge.evm_bytecode_executes_correctly (default : Wallet.Execute.Call)",
+      "closure_check": {
+        "theorem": "SphincsCVerify.Spec.Theorems.theft_free",
+        "expect_axioms": [
+          "Classical.choice", "Quot.sound", "propext",
+          "SphincsCVerify.Bridge.EntryPoint.entrypoint_honest",
+          "SphincsCVerify.Bridge.precompile_0x02_is_FIPS_180_4",
+          "SphincsCVerify.Bridge.solidityVerifier_compiles_correctly",
+          "SphincsCVerify.Crypto.EUF_CMA_SPHINCSplusC",
+          "SphincsCVerify.Crypto.ITSR_F",
+          "SphincsCVerify.Crypto.SM_DT_TCR_F",
+          "SphincsCVerify.Crypto.hMsg_random_oracle"
+        ]
+      },
+      "rationale": "Executes the ledger's CORRECTED claim verbatim: A4 is a NON-CONSUMED marker — deleting its `have` binding leaves theft_free PROVEN, and A4 (evm_bytecode_executes_correctly) DROPS from the closure (to exactly these 10 names). EXACT-SET, not count: confirms the precise axiom that left, not merely that one did.",
+      "ledger_claim": "critical_alert / A4 status_detail: 'deleting that binding (axiom retained) leaves theft_free proven (closure drops to 9 ... A1/A4 as named non-consumed TCB markers).'"
+    },
+    {
+      "id": "A1-marker-closure-drop",
+      "tier": "default",
+      "v_class": "V5-exact",
+      "expect": "build_passes",
+      "file": "SphincsCVerify/Spec/Theorems.lean",
+      "find": "    have := Bridge.precompile_0x02_is_FIPS_180_4 []",
+      "replace": "    -- have := Bridge.precompile_0x02_is_FIPS_180_4 []",
+      "closure_check": {
+        "theorem": "SphincsCVerify.Spec.Theorems.theft_free",
+        "expect_axioms": [
+          "Classical.choice", "Quot.sound", "propext",
+          "SphincsCVerify.Bridge.EntryPoint.entrypoint_honest",
+          "SphincsCVerify.Bridge.evm_bytecode_executes_correctly",
+          "SphincsCVerify.Bridge.solidityVerifier_compiles_correctly",
+          "SphincsCVerify.Crypto.EUF_CMA_SPHINCSplusC",
+          "SphincsCVerify.Crypto.ITSR_F",
+          "SphincsCVerify.Crypto.SM_DT_TCR_F",
+          "SphincsCVerify.Crypto.hMsg_random_oracle"
+        ]
+      },
+      "rationale": "Symmetric to A4: A1 (precompile_0x02_is_FIPS_180_4) is a non-consumed marker; commenting its `have` leaves theft_free proven and DROPS A1 from the closure (to exactly these 10 names).",
+      "ledger_claim": "A1 status_detail: 'a named NON-CONSUMED cited-TCB marker ... deleting both markers leaves theft_free proven over its 9 genuine premises.'"
+    },
+    {
+      "id": "A3.4-non-load-bearing",
+      "tier": "default",
+      "v_class": "V5-load",
+      "expect": "build_passes",
+      "file": "SphincsCVerify/Bridge/Refinement.lean",
+      "find": "axiom solidityMultiOwnable_compiles_correctly :",
+      "replace": "axiom solidityMultiOwnable_compiles_correctly_MUT :",
+      "rationale": "Executes the P10 honesty claim: A3.4 has ZERO theorem consumers. Renaming it must leave the build GREEN — if renaming A3.4 breaks something, the 'not load-bearing' claim is false and the ledger must be corrected.",
+      "ledger_claim": "A3.4 status_detail: 'A3.4 has ZERO theorem consumers ... removing it leaves every per-claim corollary still provable.'"
+    },
+    {
+      "id": "A3.2-load-bearing",
+      "tier": "full",
+      "v_class": "V4",
+      "expect": "build_fails",
+      "file": "SphincsCVerify/Bridge/Refinement.lean",
+      "find": "axiom solidityWallet_compiles_correctly :",
+      "replace": "axiom solidityWallet_compiles_correctly_MUT :",
+      "rationale": "A3.2 is in theft_free_bytecode's closure. Renaming must break theft_free_bytecode.",
+      "ledger_claim": "A3.2: 'theft_free_bytecode (closure += solidityWallet_compiles_correctly).'"
+    },
+    {
+      "id": "A3.3-load-bearing",
+      "tier": "full",
+      "v_class": "V4",
+      "expect": "build_fails",
+      "file": "SphincsCVerify/Bridge/Refinement.lean",
+      "find": "axiom solidityFactory_compiles_correctly :",
+      "replace": "axiom solidityFactory_compiles_correctly_MUT :",
+      "rationale": "A3.3 is in factory_squat_defence_bytecode's closure. Renaming must break it.",
+      "ledger_claim": "A3.3: 'factory_squat_defence_bytecode transports I-8 ... via this axiom.'"
+    },
+    {
+      "id": "A3.2-exec-load-bearing",
+      "tier": "full",
+      "v_class": "V4",
+      "expect": "build_fails",
+      "file": "SphincsCVerify/Bridge/Refinement.lean",
+      "find": "axiom solidityWalletExecute_compiles_correctly :",
+      "replace": "axiom solidityWalletExecute_compiles_correctly_MUT :",
+      "rationale": "A3.2-exec is in deployed_execute_requires_prior_token's closure. Renaming must break it.",
+      "ledger_claim": "A3.2-exec: 'deployed_execute_requires_prior_token carries it.'"
+    },
+    {
+      "id": "Gap3-keccak-load-bearing",
+      "tier": "full",
+      "v_class": "V4",
+      "expect": "build_fails",
+      "file": "SphincsCVerify/Wallet/OffchainBinding.lean",
+      "find": "axiom keccak_sha256_cross_separation",
+      "replace": "axiom keccak_sha256_cross_separation_MUT",
+      "rationale": "The Gap-3 RAW32-oracle defense (offchain_nested_disjoint_from_userop_digest) closes over keccak_sha256_cross_separation. Renaming must break it.",
+      "ledger_claim": "A6-keccak: 'Enters ONLY offchain_nested_disjoint_from_userop_digest's closure.'"
+    },
+    {
+      "id": "A5-collision-load-bearing",
+      "tier": "full",
+      "v_class": "V4",
+      "expect": "build_fails",
+      "file": "SphincsCVerify/Crypto/Assumptions.lean",
+      "find": "axiom sha256_collision_resistance :",
+      "replace": "axiom sha256_collision_resistance_MUT :",
+      "rationale": "theft_free_with_calldata_binding closes over sha256_collision_resistance. Renaming must break it.",
+      "ledger_claim": "A5-collision-resistance: 'theft_free_with_calldata_binding ... close over this consistent axiom.'"
+    }
+  ]
+}

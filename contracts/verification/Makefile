@@ -28,7 +28,7 @@ SHELL        := bash
 LEAN_DIR := lean
 LAKE     ?= $(shell command -v lake 2>/dev/null || echo $$HOME/.elan/bin/lake)
 
-.PHONY: verify verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk verify-interp verify-transcription verify-independent-signer verify-storage-mutators verify-lean-proto-domain verify-fv-lints verify-lean4checker verify-kontrol verify-halmos
+.PHONY: verify verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk verify-interp verify-transcription verify-independent-signer verify-storage-mutators verify-lean-proto-domain verify-fv-lints verify-lean4checker verify-kontrol verify-halmos verify-ledger-consistency verify-proof-mutation
 
 verify: verify-build
 	@python3 scripts/check_c10_transcription.py
@@ -69,6 +69,43 @@ verify-lean-proto-domain:
 # documented in the script header).
 verify-fv-lints: verify-build
 	@bash scripts/lint_fv_invariants.sh
+
+# LEDGER-CONSISTENCY gate (anti-vacuity class V5: "advertised != actual"). Makes
+# the human-facing assurance ledger (docs/AXIOM_STATUS.json) FALSIFIABLE against
+# the live Lean truth: cross-checks the advertised `closures` (exact-set, per
+# theorem), the headline `signature_pins` (statement-shape — catches a
+# re-introduced raw hypothesis like the EF P1/hInv finding, invisible to closure
+# checks), the per-status summary COUNTS, the no-undocumented / no-phantom axiom
+# invariants, and status hygiene — against `dump_axioms.lean` + the Lean source +
+# the lint_fv THEFT_EXPECTED pin (single authoritative source). Reads the built
+# oleans (runs the dump), so depends on verify-build. Ships its own WIRED-IN
+# NEGATIVE CONTROL: `python3 scripts/check_ledger_consistency.py --self-test`
+# corrupts each check's input and asserts it fires (proves the gate is not vacuous).
+# CAVEAT: the live source is `#print axioms`, which under-reports in lean v4.22.0;
+# verify-lean4checker is the completeness backstop. See the script header and
+# docs/fv-adversarial-review-playbook.md §B.
+verify-ledger-consistency: verify-build
+	@python3 scripts/check_ledger_consistency.py --self-test
+	@python3 scripts/check_ledger_consistency.py
+
+# PROOF-MUTATION gate (anti-vacuity class V4: "dead conjunct / vacuous lemma").
+# The proof-side analogue of cargo-mutants: for each entry in
+# lean/scripts/proof_mutations.json it DELETES (by rename) a load-bearing axiom
+# or WEAKENS a lemma and asserts the rebuild REACTS as the ledger claims — a
+# load-bearing axiom's removal must break the build; a non-consumed marker's
+# removal must leave it green AND drop EXACTLY the advertised axiom from the
+# closure; a zero-consumer axiom (A3.4) must stay green. A green-when-it-should-
+# be-red is a vacuity, caught. Each mutation asserts it MATERIALLY changed the
+# file (no-op = HARD FAIL, never a skip), fully rebuilds (no stale-cache false
+# pass), and ALWAYS reverts; a permanent CANARY must trip or the harness is void.
+# SLOW (each mutation = a full `lake build SphincsCVerify`). Tiers:
+#   MUTATIONS=quick   make verify-proof-mutation   # canary + A3.1 (smoke)
+#   (default)         make verify-proof-mutation   # curated 8
+#   MUTATIONS=full    make verify-proof-mutation   # + corollary bridge axioms (13)
+# Does NOT catch V7 (latent-FALSE axiom — still type-checks) or V11 (wrong spec).
+# See scripts/check_proof_mutations.py + docs/fv-adversarial-review-playbook.md §B.
+verify-proof-mutation: verify-build
+	@python3 scripts/check_proof_mutations.py
 
 # EXTERNAL kernel re-check gate (deep-research rec #1). lean/ is Lean v4.22.0,
 # inside the pre-#8842 collectAxioms under-report window, so `#print axioms`

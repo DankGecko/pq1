@@ -1,0 +1,116 @@
+{
+  "name": "pqsigner-fv-adversarial-review",
+  "version": 1,
+  "doc": "Machine-readable protocol for the PQSigner FV adversarial review. Framework-AGNOSTIC: run_review.py drives ANY backend (Claude Code, Codex, a raw LLM, a future agent) that can read a prompt and emit JSON. The reviewer persona + the green-but-hollow catalog live in PROMPT.md; this file defines WHAT to review (angles + targets), HOW MANY independent passes (reviewers) and the agreement rule (quorum), and the STRICT output schema every backend must satisfy. See docs/fv-adversarial-review-playbook.md for the full method and README.md to run it.",
+
+  "defaults": {
+    "reviewers": 2,
+    "quorum": 2,
+    "jobs": 1,
+    "comment": "reviewers = independent passes per angle (cross-vote); quorum = passes that must agree for a finding to be 'confirmed'. Defaults are rate-limit-gentle (2 passes, serial). For a stronger adversarial pass use reviewers=3 quorum=2 (majority). jobs>1 parallelises but can trip provider rate limits."
+  },
+
+  "root": "../../..",
+  "root_doc": "Repo root, relative to this protocol file. Target globs below resolve from here so the review can span firmware (secure/, fsbl/) AND proofs (contracts/verification/).",
+
+  "angles": [
+    {
+      "id": "lean-vacuity",
+      "title": "Lean proof vacuity (V1-V4, V6, V10)",
+      "instructions": "Hunt green-but-hollow LEAN proofs. For each theorem in scope, separate the CLAIM (what the name/comment advertises) from the GUARANTEE (what the statement actually establishes). Look for: vacuous antecedents (a hypothesis no input satisfies -> the theorem is about nothing); dead conjuncts / unused hypotheses (deleting them changes nothing); `: True`-typed or `trivial`-closed statements dressed as content; conclusions weaker than the name implies; stub `def`s the theorem quantifies over (noncomputable placeholder signers/oracles); and `#print axioms`-bypass via native_decide/reduceBool/@[implemented_by]. For every candidate, name a PoC: the mutation that SHOULD break it but would not, or the input the antecedent can never take. The proof-mutation gate (scripts/check_proof_mutations.py) and lint_fv_invariants.sh exist — assume they run; find what they MISS.",
+      "targets": [
+        "contracts/verification/lean/SphincsCVerify/**/*.lean",
+        "contracts/verification/lean/scripts/dump_axioms.lean"
+      ]
+    },
+    {
+      "id": "ledger-honesty",
+      "title": "Ledger advertised-vs-actual (V5, V7)",
+      "instructions": "Compare the human-facing assurance claims against the machine truth. Read AXIOM_STATUS.json (status, closures, signature_pins, summary counts), THE_CLAIM.md, THREE_CLAIMS_PROOF.md, ASSURANCE_CASE.md, README assurance lines. For each advertised 'discharged'/'proven'/'kernel-checked' claim, ask: does the cited artifact ACTUALLY establish it, or a weaker/adjacent thing? Look for: a status of 'discharged' over a hypothesis still carried raw (the P1/hInv class); an axiom advertised as a 'marker' that is actually load-bearing (or vice-versa); a closure claim that omits an axiom the dump shows; counts that drift from the array; a codehash pin that is stale; a 'fully proven to bytecode' that is really KAT+mutant testing. PoC = the exact divergence (ledger says X, dump/source says Y).",
+      "targets": [
+        "contracts/verification/docs/AXIOM_STATUS.json",
+        "contracts/verification/docs/THE_CLAIM.md",
+        "contracts/verification/docs/THREE_CLAIMS_PROOF.md",
+        "contracts/verification/docs/ASSURANCE_CASE.md",
+        "contracts/verification/docs/TRUST_ASSUMPTIONS.md",
+        "contracts/verification/docs/MISSING_FOR_FULL_BYTECODE_PROOF.md"
+      ]
+    },
+    {
+      "id": "spec-faithfulness",
+      "title": "Model != deployed artifact (V8, V9, V11)",
+      "instructions": "Attack the bridge between the verified MODEL and the real ARTIFACT. The proofs are over Lean models / Halmos transcriptions / extracted Lean; the guarantees only transfer if those faithfully mirror the deployed bytecode, the shipped Rust firmware, and the wire formats. Look for: a Lean model that accepts inputs the bytecode rejects (or vice-versa); a Halmos 'pointwise equivalence' against a hand-written LeanModel.sol that itself diverges from the contract; a wrong-quantifier proof (claims forall, proves it for representatives / concrete keys only — the A3.2 unset-index ceiling, the A3.1 forall-signature ceiling); an extracted-Lean function that drifted from the Rust it was extracted from; a domain-tag / digest preimage in Lean that differs from proto/the device. PoC = a concrete input where model and artifact disagree, or the precise quantifier gap.",
+      "targets": [
+        "contracts/verification/lean/SphincsCVerify/Bridge/**/*.lean",
+        "contracts/verification/lean/SphincsCVerify/Interpreter/**/*.lean",
+        "contracts/verification/extracted/Extracted/**/*.lean",
+        "contracts/smart-wallet/test/halmos/**/*.sol",
+        "contracts/verification/docs/A3_1_VERIFIER_GAP.md",
+        "contracts/verification/docs/KONTROL_SCOPING.md"
+      ]
+    },
+    {
+      "id": "crypto-soundness",
+      "title": "Crypto reduction soundness (V7, V2)",
+      "instructions": "Attack the cryptographic axioms for LATENT FALSITY and inconsistency — the class mutation testing canNOT catch (a false axiom still type-checks while lean/ is mathlib-free). Read Crypto/Assumptions.lean, EUFCMA.lean, the EUF_CMA_INCONSISTENCY.md history, the BreaksHash firewall. Look for: an axiom that is mathematically FALSE as stated (the sha256_injective-on-fixed-length class — pigeonhole-false, non-detonatable only because no mathlib); a reduction that can conclude False / lets `¬ BreaksHash` be derived (re-detonating the EUF-CMA inconsistency); a 'shape' axiom that is secretly `True`; a conjunct that is non-operational (isForgery unsatisfiable for any real message). PoC = the falsifying witness (the collision, the empty-transcript forgery) or the inconsistency derivation.",
+      "targets": [
+        "contracts/verification/lean/SphincsCVerify/Crypto/**/*.lean",
+        "contracts/verification/lean/SphincsCVerify/Wallet/OffchainBinding.lean",
+        "contracts/verification/docs/EUF_CMA_INCONSISTENCY.md"
+      ]
+    },
+    {
+      "id": "firmware-fi",
+      "title": "Firmware FI / control-flow gates (F1-F16 surface)",
+      "instructions": "Attack the FIRMWARE security gates the EF firmware findings targeted. Read the FI-hardened sign paths, the rollback/counter logic, the FW-update verify chain, the offchain counter store. Look for: an outer verify gate the optimiser can fold (missing black_box / volatile); a sentinel/CFI counter that is checked but not consumed; a fail-OPEN default where fail-closed is required; a counter that can be replayed or skipped; a 'voted max(a,b)' that should fail-closed-on-disagreement (or vice-versa); a digest preimage that omits a field. PoC = the fault/input/ordering that bypasses the gate. NOTE: firmware is not Lean-proven; the bar is a concrete bypass, not a proof gap.",
+      "targets": [
+        "secure/src/nsc/cmd_sign_userop.rs",
+        "secure/src/nsc/cmd_sign_userop_batch.rs",
+        "secure/src/nsc/cmd_sign_offchain.rs",
+        "secure/src/crypto.rs",
+        "secure/src/fi.rs",
+        "secure/src/offchain_state.rs",
+        "secure/src/fw_update/**/*.rs",
+        "fsbl/src/**/*.rs",
+        "secure/src/hw/otp.rs"
+      ]
+    }
+  ],
+
+  "backends": {
+    "claude": "cat {prompt_file} | claude -p --output-format text --allowedTools Read Grep Glob",
+    "codex": "codex exec --skip-git-repo-check --sandbox read-only - < {prompt_file}",
+    "generic": "{cmd}"
+  },
+  "backends_doc": "A backend is any shell command that reads the assembled prompt (the {prompt_file} placeholder is replaced with a temp file path) and writes the model's JSON answer to stdout. claude/codex are AGENTS with file-read tools, so the prompt lists target paths and they read them — the templates MUST grant read access or the agent denies/hangs in non-interactive mode: `claude -p` needs `--allowedTools Read Grep Glob`; `codex exec` needs `--sandbox read-only` (lets the model read files, blocks writes). These templates match backends/claude.sh + backends/codex.sh exactly (keep them in sync). For a tool-less backend (raw API), pass --inline-files so file contents are embedded in the prompt. The 'generic' backend takes --cmd verbatim (use it for self-test: --backend generic --cmd 'cat tests/canned_findings.json'). The model's JSON answer may be surrounded by reasoning/tool logs on stdout; run_review.py brace-scans for the last balanced {findings:...} object.",
+
+  "output_schema": {
+    "type": "object",
+    "required": ["findings", "honest_residual"],
+    "properties": {
+      "findings": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["id", "v_class", "severity", "target", "title", "claim", "defect", "poc", "confidence"],
+          "properties": {
+            "id": {"type": "string", "doc": "short kebab slug, unique within this answer"},
+            "v_class": {"type": "string", "doc": "V1..V11 (see PROMPT.md), or 'FW' for a firmware bypass, or 'NA'"},
+            "severity": {"enum": ["critical", "high", "medium", "low", "info"]},
+            "target": {"type": "string", "doc": "file:Lnn or fully-qualified symbol"},
+            "title": {"type": "string"},
+            "claim": {"type": "string", "doc": "what the artifact ASSERTS / advertises"},
+            "defect": {"type": "string", "doc": "why the guarantee is hollow/false/weaker than the claim"},
+            "poc": {"type": "string", "doc": "MANDATORY: the concrete reproduction (mutation that should break it but does not; input the predicate should reject but accepts; the falsifying witness; the bypass ordering). If you could NOT produce one, write 'NONE' and set severity to low/info."},
+            "confidence": {"type": "number", "doc": "0.0-1.0 self-assessed"},
+            "suggested_fix": {"type": "string"}
+          }
+        }
+      },
+      "honest_residual": {
+        "type": "string",
+        "doc": "MANDATORY eliminative-argumentation field: what you could NOT verify, what you assumed true, which targets you did not fully read, and where your own findings might be wrong. A review that claims to have found everything is itself a V-class failure."
+      }
+    }
+  }
+}
