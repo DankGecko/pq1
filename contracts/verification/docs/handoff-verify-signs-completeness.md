@@ -40,7 +40,7 @@ one constraint that decides whether `consistent` is even *statable*):
 
 ### Remaining increments (each committable, in usual style)
 
-1. **Grind postcondition lemmas** (clean loop inductions over the bounded `let rec loop`; foundation for the assembly):
+1. **Grind postcondition lemmas — DONE** (`Spec/SignerPost.lean`): `grindR_post` (forced-zero + digest agreement), `findCount_post` (target-sum + wotsDigest shape), `extractForsIndices_getD` (index = A-bit window). Each a one-line `fun_induction` over the bounded `let rec loop`; closure `[propext, Quot.sound]` (the grinds). Originally scoped as (clean loop inductions over the bounded `let rec loop`; foundation for the assembly):
    - `grindR … = some (r, digest) → readBitsLe digest ((K-1)*A) A = 0` — the forced-zero `hzero` (gated by Signer.lean:112).
    - `grindR … = some (r, digest) → digest = hMsg (pad16 pkSeed) (pad16 pkRoot) (pad16 r) message` — the **digest agreement** (so `verify`'s recomputed digest = `sign`'s); `verify` recomputes `hMsg … (pad16 sig.r) message` and `sig.r = r`.
    - `findCount … = some (count, d) → digitSum (extractDigits d) = TargetSum ∧ d = wotsDigest seed (Adrs.wots …) msgHash count` — the `hsum` + the `hdig` for `wots_pk_roundtrip` (gated by Signer.lean:74).

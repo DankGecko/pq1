@@ -23,6 +23,7 @@ import SphincsCVerify.Spec.Hypertree
 import SphincsCVerify.Spec.Signature
 import SphincsCVerify.Spec.Signer
 import SphincsCVerify.Spec.Theorems
+import SphincsCVerify.Spec.SignerPost
 
 -- Stratum A (refined): the offset-indexed verifier the Solidity asm
 -- module implements, and the equivalence theorem connecting it to Spec.
