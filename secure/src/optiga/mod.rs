@@ -726,13 +726,69 @@ impl OptigaTrustM {
     /// Read access on the counter is `Always`, so no shielded connection or
     /// PIN is required.
     fn check_provisioned(&mut self) -> bool {
-        if self.init().is_err() {
-            return false;
+        // The counter read can hit the same SCTR=0x40 PRL-alert wedge that
+        // `random()` self-heals against: once host/chip PRL state diverges
+        // the chip bounces every exchange with the 7-byte `08 40` alert
+        // (observed on bench board #1, 2026-06-29). The old single-shot
+        // read mapped that bounce to `None` → "unprovisioned", dropping a
+        // PROVISIONED wallet into the first-boot wizard — where a stray
+        // "New Wallet" overwrites the seed. Mirror `random()`'s bounded
+        // self-heal, and crucially distinguish a TRANSPORT wedge from a
+        // CLEAN app-level "blank chip" answer so the two never conflate.
+        for attempt in 0..2u8 {
+            // init() each pass: after a drop below it RST-pulses +
+            // soft-resets the chip, clearing the wedged PRL/`08 40` state.
+            if self.init().is_err() {
+                self.ready = false;
+                self.shield.active = false;
+                continue;
+            }
+            let mut buf = [0u8; 4];
+            match unsafe {
+                apdu::get_data_object(
+                    &mut self.ifx,
+                    &mut self.shield,
+                    apdu::OID_COUNTER,
+                    0,
+                    1,
+                    &mut buf,
+                )
+            } {
+                // Clean read of a real counter value → provisioned (unless
+                // it's the factory-reset sentinel written by factory_reset).
+                Ok(n) if n > 0 => return buf[0] != RESET_SENTINEL,
+                // Clean but empty read → genuinely blank/fresh chip.
+                Ok(_) => return false,
+                // Chip answered at the APP layer (non-zero OPTIGA status:
+                // object uninitialised) → fresh chip. No point retrying a
+                // clean answer.
+                Err(OptigaError::Status(_)) | Err(OptigaError::NotProvisioned) => {
+                    return false;
+                }
+                // TRANSPORT/shield/I2C/CRC failure = the PRL wedge. Drop the
+                // session so the next init() RST-clears it, then retry once.
+                Err(e) => {
+                    secure_log!(
+                        "[OPTIGA/prov-check] counter read {:?} — drop PRL, re-init + retry ({}/2)",
+                        e,
+                        attempt + 1
+                    );
+                    self.ready = false;
+                    self.shield.active = false;
+                }
+            }
         }
-        match unsafe { self.read_counter_raw() } {
-            Some(v) if v != RESET_SENTINEL => true,
-            _ => false,
-        }
+        // Both passes hit a transport wedge (NOT a clean blank read — a
+        // fresh chip answers at the app layer above). Fail SAFE: do not
+        // report "blank", which would auto-launch the first-boot wizard and
+        // risk overwriting a provisioned wallet on a glitch. Report
+        // provisioned so boot routes to the unlock path, which fails cleanly
+        // with NotProvisioned on a truly dead/blank chip instead of
+        // re-provisioning. Recover a persistently wedged chip by power-cycling.
+        secure_log!(
+            "[OPTIGA/prov-check] counter unreadable after self-heal — assuming PROVISIONED (fail-safe; power-cycle if stuck)"
+        );
+        true
     }
 
     /// Lock an OID's lifecycle to Operational.
