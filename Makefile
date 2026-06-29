@@ -903,22 +903,42 @@ stsafe-probe:
 
 # SE050 factory reset: wipe all objects, then halt.
 # Run this once to clear stale SE050 state, then flash normal firmware.
-# Assumes the stale UserID is at 0x7B06_0000 or 0x7B00_2000 (legacy) and
-# the PIN is one of: 00000000, 12345678, 11111111. Each wrong attempt
-# consumes one of the SE050's 10 PIN tries against that UserID; a correct
-# PIN auto-resets the counter. Status reported on OLED + semihosting:
-# clean / wrong-PIN / blocked.
+# The firmware sweeps UserIDs 0x7B10_0000 (current v6 range), 0x7B0E_0000,
+# 0x7B06_0000, 0x7B00_2000 (legacy) against PINs {00000000, 12345678,
+# 11111111}. Each wrong attempt consumes one of the SE050's 10 PIN tries
+# against that UserID; a correct PIN auto-resets the counter. Status
+# reported on LCD + semihosting: clean / wrong-PIN / blocked.
+#
+# Feature notes: this is a hardware (stm32u585) release image, so it MUST
+# carry `dev-testkey` to clear the `nsc/mod.rs` ship-blocker fences
+# (debug-log / factory-default-SCP03 / consumption-mask) — the same fences
+# the normal `*-standalone-debug` builds satisfy. It also needs `usb` so
+# `hw::usb_hw` (referenced unconditionally by cmd_fw_begin/commit) compiles.
+# `dev-testkey` substitutes the OTP master with the same compile-time
+# constant the bench firmware uses, so the SCP03 channel + admin keys match
+# the provisioned chip. The wipe itself only needs the user PIN, not admin.
 se050-reset:
 	@echo "==> Building SE050 factory-reset firmware..."
-	@echo "    Assumes dev PIN in {00000000, 12345678, 11111111}"
-	@echo "    and stale UserID at 0x7B06_0000 or 0x7B00_2000."
-	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
+	@echo "    Sweeps UserIDs {0x7B10_0000, 0x7B0E_0000, 0x7B06_0000, 0x7B00_2000}"
+	@echo "    against dev PINs {00000000, 12345678, 11111111}."
+	@# Redirect the CMSE import-library to a reset-specific path so this
+	@# secure relink does NOT clobber the shared $(VENEERS). Otherwise a
+	@# later cache-HIT `flash-hw-*` (secure not rebuilt → veneers.o NOT
+	@# regenerated) would link the NS image against THIS build's veneer
+	@# addresses → NS calls land on non-SG addresses → SecureFault INVEP
+	@# at the first gateway call. (Hit on bench board #1, 2026-06-29.)
+	$(RUSTFLAGS_VAR)="$(subst $(VENEERS),$(CURDIR)/target/veneers-se050-reset.o,$(RUSTFLAGS_SECURE_HW))" \
 	cargo build --locked --release --target $(TARGET) --target-dir target/secure \
-		-p sphincs-tz-secure --no-default-features --features se050-factory-reset,ui-noop,stm32u585,debug-log
+		-p sphincs-tz-secure --no-default-features \
+		--features se050-factory-reset,dev-testkey,ui-lcd,stm32u585,usb,debug-log
 	@echo "==> Flashing reset firmware..."
 	probe-rs download --chip STM32U585AIIx $(SECURE_ELF)
-	@echo "==> Running factory reset (watch semihosting output)..."
-	probe-rs run --chip STM32U585AIIx $(SECURE_ELF)
+	@echo "==> Running factory reset (150s timeout; watch LCD + semihosting for clean/wrong-PIN/blocked)..."
+	@echo "    (heavily-reused bench chips hold many objects; the authenticated"
+	@echo "     pass + UserID self-delete can take a while across all UserID/PIN combos)"
+	-@timeout 150 probe-rs run --chip STM32U585AIIx $(SECURE_ELF) || true
+	@echo "==> Reset run finished. Re-flash normal firmware, e.g.:"
+	@echo "      make flash-hw-dual-se-lcd-standalone-debug"
 
 # Full device factory reset: wipe every piece of persistent state that
 # accumulates during provisioning + signing, so the device returns to a
