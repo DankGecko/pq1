@@ -22,6 +22,7 @@ import SphincsCVerify.Spec.Fors
 import SphincsCVerify.Spec.Hypertree
 import SphincsCVerify.Spec.Signature
 import SphincsCVerify.Spec.Signer
+import SphincsCVerify.Spec.Treehash
 import SphincsCVerify.Spec.Theorems
 import SphincsCVerify.Spec.SignerPost
 

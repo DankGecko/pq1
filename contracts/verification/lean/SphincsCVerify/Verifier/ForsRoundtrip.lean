@@ -15,22 +15,9 @@ namespace SphincsCVerify.Interpreter.C10
 
 open SphincsCVerify SphincsCVerify.Spec
 
-/-- The honest FORS Merkle tree node at `(level, idx)`: level-0 leaf is `th` of
-    the secret `lf idx`; internal nodes are `thPair`, all under `Adrs.forsNode`
-    — matching `forsStep`'s reconstruction shape exactly. -/
-def forsMtNode (seed : ByteVec 32) (htIdx : UInt64) (treeIdx : UInt32) (lf : Nat → ByteVec 16) :
-    Nat → Nat → ByteVec 16
-  | 0, idx =>
-      Spec.th seed (Spec.Adrs.forsNode htIdx treeIdx 0 (UInt32.ofNat idx)) (ByteVec.pad16 (lf idx))
-  | (ℓ + 1), idx =>
-      Spec.thPair seed (Spec.Adrs.forsNode htIdx treeIdx (UInt32.ofNat (ℓ + 1)) (UInt32.ofNat idx))
-        (ByteVec.pad16 (forsMtNode seed htIdx treeIdx lf ℓ (2 * idx)))
-        (ByteVec.pad16 (forsMtNode seed htIdx treeIdx lf ℓ (2 * idx + 1)))
-
-/-- The honest FORS auth path for `leafIdx`: the sibling node at each level. -/
-def forsMtAuthPath (seed : ByteVec 32) (htIdx : UInt64) (treeIdx : UInt32) (lf : Nat → ByteVec 16)
-    (leafIdx : Nat) : Array (ByteVec 16) :=
-  Array.ofFn (n := Spec.A) fun h => forsMtNode seed htIdx treeIdx lf h.val (sibIdx leafIdx h.val)
+-- `forsMtNode`, `forsMtAuthPath` (the honest FORS tree) now live in
+-- `Spec.Treehash` (reused by the reference signer); `sibIdx` likewise.
+-- Referenced here via `open SphincsCVerify.Spec`.
 
 theorem forsMtAuthPath_getD (seed : ByteVec 32) (htIdx : UInt64) (treeIdx : UInt32)
     (lf : Nat → ByteVec 16) (leafIdx c : Nat) (hcs : c < Spec.A) :

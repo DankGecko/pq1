@@ -12,32 +12,15 @@
    (`Interpreter/HypertreePhase.lean`); the proof is a clean loop invariant by
    induction on the climb height via `htAcc_succ`. -/
 import SphincsCVerify.Interpreter.HypertreePhase
+import SphincsCVerify.Spec.Treehash
 
 namespace SphincsCVerify.Interpreter.C10
 
 open SphincsCVerify SphincsCVerify.Spec
 
-/-- Sibling index at climb level `h` for the leaf `leafIdx`: the index `p`'s
-    sibling in the Merkle tree, where `p = leafIdx / 2^h` is the ancestor index
-    at that level. -/
-def sibIdx (leafIdx h : Nat) : Nat :=
-  let p := leafIdx / 2 ^ h
-  if p % 2 = 0 then p + 1 else p - 1
-
-/-- The honest signer-side Merkle tree node at `(level, idx)` over leaves `lf`,
-    using the exact `Adrs.treeNode` + `thPair` shape `htStep` reconstructs with. -/
-def mtNode (seed : ByteVec 32) (layer : UInt32) (tree : UInt64) (lf : Nat → ByteVec 16) :
-    Nat → Nat → ByteVec 16
-  | 0, idx => lf idx
-  | (ℓ + 1), idx =>
-      Spec.thPair seed (Spec.Adrs.treeNode layer tree (UInt32.ofNat (ℓ + 1)) (UInt32.ofNat idx))
-        (ByteVec.pad16 (mtNode seed layer tree lf ℓ (2 * idx)))
-        (ByteVec.pad16 (mtNode seed layer tree lf ℓ (2 * idx + 1)))
-
-/-- The honest auth path for `leafIdx`: the sibling node at each climb level. -/
-def mtAuthPath (seed : ByteVec 32) (layer : UInt32) (tree : UInt64) (lf : Nat → ByteVec 16)
-    (leafIdx : Nat) : Array (ByteVec 16) :=
-  Array.ofFn (n := Spec.SubtreeH) fun h => mtNode seed layer tree lf h.val (sibIdx leafIdx h.val)
+-- `sibIdx`, `mtNode`, `mtAuthPath` (the honest XMSS tree) now live in
+-- `Spec.Treehash` so the reference signer can emit them; referenced here via
+-- `open SphincsCVerify.Spec`.
 
 /-- The honest auth path at any climb level `< SubtreeH` is the sibling node. -/
 theorem mtAuthPath_getD (seed : ByteVec 32) (layer : UInt32) (tree : UInt64)
