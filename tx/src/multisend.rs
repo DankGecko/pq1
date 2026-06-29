@@ -132,6 +132,110 @@ pub fn decode_multisend(data: &[u8]) -> Result<&[u8], MsError> {
 }
 
 // ---------------------------------------------------------------------------
+// Inner packed-record walk (layer 2)
+// ---------------------------------------------------------------------------
+//
+// Extracted here, verbatim and behaviour-identical, alongside the
+// outer-framing decoder so the per-record loop is host-runnable and can
+// be exercised by the `revm`/MultiSendCallOnly bytecode differential
+// (move 3 of the firmware bounded-verification plan) — the one layer the
+// Kani canonical-acceptance proof on `decode_multisend` structurally
+// cannot reach, because the packed-record encoding mirrors
+// MultiSendCallOnly's hand-rolled assembly rather than standard ABI.
+// `secure/src/tx/eip712/safe/multi_send.rs` re-exports `MsRecord` and
+// `MsRecordIter` unchanged, so `summarize`, `classify_record_kind`, the
+// renderer, and the full test suite keep working.
+
+/// Fixed per-record header: `operation(1) || to(20) || value(32) ||
+/// dataLen(32)`, followed by `data(dataLen)`. Packed encoding — no
+/// padding between records.
+pub const MS_RECORD_HEADER_LEN: usize = 1 + 20 + 32 + 32;
+
+/// One packed multiSend record. `data` borrows from the same snapshot
+/// the multiSend calldata lives in.
+#[derive(Copy, Clone, Debug)]
+pub struct MsRecord<'a> {
+    /// Raw operation byte. `summarize` (and therefore every accepted
+    /// payload) requires this to be 0; the iterator itself reports it
+    /// verbatim so tests can probe the rejection.
+    pub operation: u8,
+    pub to: [u8; 20],
+    /// Native value forwarded with the record's call, uint256 BE.
+    pub value: [u8; 32],
+    pub data: &'a [u8],
+}
+
+impl MsRecord<'_> {
+    #[must_use]
+    pub fn value_is_zero(&self) -> bool {
+        self.value.iter().all(|&b| b == 0)
+    }
+}
+
+/// Iterator over the packed records slice returned by
+/// [`decode_multisend`]. Yields `Err` once on the first malformed
+/// record, then `None`. The cursor must land exactly on the slice end
+/// — a partial trailing record is [`MsError::TruncatedRecord`].
+pub struct MsRecordIter<'a> {
+    packed: &'a [u8],
+    cursor: usize,
+    failed: bool,
+}
+
+impl<'a> MsRecordIter<'a> {
+    #[must_use]
+    pub fn new(packed: &'a [u8]) -> Self {
+        Self {
+            packed,
+            cursor: 0,
+            failed: false,
+        }
+    }
+}
+
+impl<'a> Iterator for MsRecordIter<'a> {
+    type Item = Result<MsRecord<'a>, MsError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.failed || self.cursor == self.packed.len() {
+            return None;
+        }
+        let rest = &self.packed[self.cursor..];
+        if rest.len() < MS_RECORD_HEADER_LEN {
+            self.failed = true;
+            return Some(Err(MsError::TruncatedRecord));
+        }
+        let operation = rest[0];
+        let mut to = [0u8; 20];
+        to.copy_from_slice(&rest[1..21]);
+        let mut value = [0u8; 32];
+        value.copy_from_slice(&rest[21..53]);
+        let data_len = match read_u32_word(&rest[53..85]) {
+            Ok(l) => l,
+            Err(_) => {
+                self.failed = true;
+                return Some(Err(MsError::BadRecordDataLen));
+            }
+        };
+        let data_end = match MS_RECORD_HEADER_LEN.checked_add(data_len) {
+            Some(e) if e <= rest.len() => e,
+            _ => {
+                self.failed = true;
+                return Some(Err(MsError::TruncatedRecord));
+            }
+        };
+        let data = &rest[MS_RECORD_HEADER_LEN..data_end];
+        self.cursor += data_end;
+        Some(Ok(MsRecord {
+            operation,
+            to,
+            value,
+            data,
+        }))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Bounded verification (Kani)
 // ---------------------------------------------------------------------------
 

@@ -44,6 +44,14 @@ sphincs-tz-shared = { path = "../shared" }
 toml             = "0.8"
 pqsigner-proto   = { path = "../proto" }
 sphincs-tz-shared = { path = "../shared" }
+# DEV-ONLY EVM ground-truth oracle for the multiSend record-walk
+# differential (`tests/multisend_record_walk_differential.rs`). revm runs
+# the real MultiSendCallOnly bytecode so the host-extracted `MsRecordIter`
+# is checked against the chain's actual record dispatch — NEVER a firmware
+# dependency (this is the `workspace.exclude`'d fuzz crate, and these are
+# dev-deps not compiled into any `cargo fuzz` libFuzzer target).
+revm             = "41"
+hex              = "0.4"
 
 [[bin]]
 name = "aa_userop_parse_header"
