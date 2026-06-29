@@ -50,7 +50,21 @@ one constraint that decides whether `consistent` is even *statable*):
    - Then, with the defs accessible:
    - `forsAuthPaths[t] := forsMtAuthPath (pad16 pkSeed) htIdx (ofNat t) (fun j => forsSecret skSeed (ofNat t) (ofNat j)) (forsIndices.getD t 0)`.
    - the D=2 `layers` must be **per-layer** (not `Array.replicate D layerSig`): layer 0 WOTS-signs `forsPk`, layer 1 WOTS-signs layer 0's subtree root — the cross-layer message threading is the real signing logic (needs the honest subtree treehash to compute layer 0's root before layer 1's WOTS digits). Each layer's `wots.chains[i] := chainHash … (wotsSecret …) 0 digit_i` and `authPath := mtAuthPath …` over the `keygenPk` leaves.
-3. **`WellFormed` + `honest_consistent` assembly** — `WellFormed sk` ties `sk.pkRoot` to the layer-1 top root `mtNode … SubtreeH 0` that `hypertree_roundtrip` produces; then `honest_consistent`: `sign = some sig` exposes the honest `(r, fors, layers)`; `verify` recomputes the same digest (grind postcondition 2), `verifyWithDigest`'s forced-zero gate passes (postcondition 1), `reconstructForsPk = some forsPk` (`fors_pk_roundtrip`), `verifyHypertree = some pkRoot` (`hypertree_roundtrip` + `WellFormed`), final `decide (pkRoot = pkRoot) = true`.
+3. **`WellFormed` + `honest_consistent` assembly** — the capstone (increment 2 DONE 2026-06-29: `sign` now emits the honest structures; this is what remains).
+
+   **Key structural fact (verified 2026-06-29).** The top layer's tree index is ALWAYS 0, so the top root is message-independent (= `pkRoot`): `extractHtIndex digest = readBitsLe digest (K*A) H < 2^H` and `H = D*SubtreeH = 18 = 2*SubtreeH`, so `idxTree1 = (htIdx >>> SubtreeH) >>> SubtreeH = htIdx >>> 18 = 0`. Prove this as a lemma (`readBitsLe_lt` + `Nat.shiftRight` arithmetic).
+
+   **`WellFormed sk`** := `sk.pkRoot = mtNode (pad16 sk.pkSeed) (UInt32.ofNat 1) (UInt64.ofNat 0) (fun kp => Wots.keygenPk (pad16 sk.pkSeed) sk.skSeed (UInt32.ofNat 1) (UInt64.ofNat 0) (UInt32.ofNat kp)) SubtreeH 0` — the fixed top-tree (layer 1, tree 0) root.
+
+   **`honest_consistent : WellFormed sk → consistent sk`** proof:
+   - `intro hwf m sig hsign`. Destructure `sign`'s three nested matches in `hsign` (`grindR`/`findCount` layer 0/`findCount` layer 1) — any `none` ⇒ `none = some sig` absurd; all `some` ⇒ `sig = {honest r, fors, layers}` (the explicit struct; `split`/`simp only` + `Option.some.injEq`).
+   - Unfold `verify`/`verifyWithDigest` on the honest `sig`. **Digest agreement** `digest = hMsg (pad16 pkSeed) (pad16 pkRoot) (pad16 r) m` ⇒ `verify`'s recomputed digest = `sign`'s `digest` (`grindR_post`, with `sig.r = r`).
+   - **Forced-zero gate**: `(extractForsIndices digest).getD (K-1) 0 = readBitsLe digest ((K-1)*A) A = 0` (`extractForsIndices_getD` + `grindR_post`) ⇒ `if_neg`, proceed.
+   - **`reconstructForsPk = some forsPk`** (`fors_pk_roundtrip`): `hzero` (above), `hbound` (`extractForsIndices_getD` + `readBitsLe_lt`), `hsec`/`hpath` hold **by construction** (`sign`'s `forsSecrets`/`forsAuthPaths` are the matching `Array.ofFn`/`forsMtAuthPath`). The resulting `forsPk` is exactly `sign`'s `forsPk` (both `computeForsPk` over the same honest roots).
+   - **`verifyHypertree seed forsPk htIdx layers = some root1`** (`hypertree_roundtrip`): `hwots0`/`hwots1` via `wots_pk_roundtrip` (`hsum`/`hdig` from `findCount_post`; `hchains` by construction — `sign`'s `chains` are the matching `chainHash` `Array.ofFn`; `hbound` from `readBitsLe_lt`); `hpath0`/`hpath1` by construction (`mtAuthPath`); `hidx0`/`hidx1` from `readBitsLe_lt` (idxLeaf < 2^SubtreeH). NB layer 1's message is `root0` = `sign`'s `root0` = `mtNode …` (cross-layer threading lines up by construction).
+   - `root1 = mtNode … (ofNat idxTree1) … = mtNode … (ofNat 0) …` (idxTree1=0 fact) `= pkRoot` (`WellFormed`). Final `decide (root1 = pkRoot) = decide (pkRoot = pkRoot) = true`.
+
+   Do NOT weaken `consistent`/`verify_signs`. `honest_consistent` is the new top-level theorem; `verify_signs` already consumes `consistent sk` as a hypothesis, so a downstream `verify_signs_of_wellformed` can chain them if desired.
 
 ## Where it stands (2026-06-26)
 
