@@ -21,7 +21,7 @@ Quot.sound]` — purely kernel (holds for any `thPair`).
 
 **Sub-lemma 2 of 4 — `wots_chain_roundtrip` — DONE** (`SphincsCVerify/Verifier/WotsRoundtrip.lean`): the WOTS+ chain-composition `chainHash_compose` + `wots_chain_roundtrip`, closure `[propext, Quot.sound]`.
 
-**Sub-lemma 3 of 4 — `fors_roundtrip` — DONE** (`SphincsCVerify/Verifier/ForsRoundtrip.lean`): FORS tree round-trip (`forsMtNode`/`forsMtAuthPath` + `forsAcc_climbs`), mirrors merkle_roundtrip; closure `[propext, Classical.choice, Quot.sound]`. Sub-lemma 4 (hypertree D=2) next needs a full `wots_pk_roundtrip` (the aggregate WOTS pk from an honest signature over all L chains + thMulti + the digit-sum/TargetSum), then composes wots_pk_roundtrip + merkle_roundtrip across the 2 layers.
+**Sub-lemma 3 of 4 — `fors_roundtrip` — DONE** (`SphincsCVerify/Verifier/ForsRoundtrip.lean`): FORS tree round-trip (`forsMtNode`/`forsMtAuthPath` + `forsAcc_climbs`), mirrors merkle_roundtrip; closure `[propext, Classical.choice, Quot.sound]`. **Sub-lemma 4 part 1/2 — `wots_pk_roundtrip` — DONE** (appended to `WotsRoundtrip.lean`): honest WOTS sig (each chain `chainHash secret 0 dᵢ`) ⇒ `Wots.pkFromSig = some (Wots.keygenPk)`, via per-chain `wots_chain_roundtrip` + `List.map_congr_left`; closure `[propext, Quot.sound]`. Sub-lemma 4 part 2/2 = the D=2 hypertree composition: define the honest hypertree over the WOTS pks, prove `verifyHypertree` of the honest layers reconstructs `pk_root` — each layer is `wots_pk_roundtrip` (leaf = keygenPk) then `merkle_roundtrip` (subtree, `lf = keygenPk`-at-kp), with layer ℓ root = layer ℓ+1 msgHash; index split `idxLeaf = idxTree & (2^SubtreeH-1)`, `idxTree >>= SubtreeH`.
 
 The remaining work below
 is unchanged: complete the signer, then sub-lemmas 2–4 + assembly.

@@ -43,4 +43,40 @@ theorem wots_chain_roundtrip (seed : ByteVec 32) (a : Spec.Adrs) (secret : ByteV
   rw [Nat.zero_add] at h
   rw [h, Nat.add_sub_cancel' hd]
 
+/-- Local default for `Array (ByteVec 16)` indexing (`[i]!`); matches the
+    explicit `zero 16` default the spec's `pkFromSig` uses, so `getElem!_pos`
+    bridges the two. -/
+local instance : Inhabited (ByteVec 16) := ⟨ByteVec.zero 16⟩
+
+open SphincsCVerify.Util in
+/-- **`wots_pk_roundtrip`.** The WOTS+ public-key aggregate: when each of the `L`
+    signature chains is the honest `chainHash secret 0 dᵢ` (secret chained to its
+    digit), `pkFromSig` recovers the honest WOTS+ public key `keygenPk` — the
+    `thMulti` compression of the `L` chain tops. The digit-sum gate is discharged
+    by `hsum`. Each chain round-trips by `wots_chain_roundtrip`; the `L`-fold
+    aggregate follows by `List.map` congruence. (First half of sub-lemma 4.) -/
+theorem wots_pk_roundtrip (seed skSeed : ByteVec 32) (layer : UInt32) (tree : UInt64) (kp : UInt32)
+    (msgHash : ByteVec 16) (sigma : Spec.Wots.Sigma) (digits : Array Nat)
+    (hdig : digits
+      = extractDigits (Spec.wotsDigest seed (Spec.Adrs.wots layer tree kp) (ByteVec.pad16 msgHash)
+          sigma.count))
+    (hsum : digitSum digits = Spec.TargetSum)
+    (hbound : ∀ i, i < Spec.L → digits[i]! ≤ Spec.W - 1)
+    (hchains : ∀ i, i < Spec.L →
+      sigma.chains[i]! = Spec.chainHash seed
+          (Spec.Adrs.setChainIndex (Spec.Adrs.wots layer tree kp) (UInt32.ofNat i))
+          (Spec.wotsSecret skSeed layer tree kp (UInt32.ofNat i)) 0 digits[i]!) :
+    Spec.Wots.pkFromSig seed layer tree kp msgHash sigma
+      = some (Spec.Wots.keygenPk seed skSeed layer tree kp) := by
+  simp only [Spec.Wots.pkFromSig, Spec.Wots.keygenPk, ← hdig]
+  rw [if_neg (not_not_intro hsum), Option.some.injEq]
+  congr 1
+  apply List.map_congr_left
+  intro i hi
+  have hiL : i < Spec.L := List.mem_range.mp hi
+  have hsz : i < sigma.chains.size := by rw [sigma.chainsLen]; exact hiL
+  rw [dif_pos hsz, show sigma.chains[i] = sigma.chains[i]! from (getElem!_pos sigma.chains i hsz).symm,
+    hchains i hiL]
+  exact wots_chain_roundtrip seed _ _ digits[i]! (hbound i hiL)
+
 end SphincsCVerify.Interpreter.C10
