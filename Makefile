@@ -3714,6 +3714,11 @@ miri:
 	@echo "==> Miri: secure-world NS-pointer deref + validation (the genuine host-reachable unsafe)"
 	@# permissive-provenance: the NS-ptr boundary is a legitimate int->ptr cast.
 	MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-permissive-provenance" cargo +nightly miri test -p sphincs-tz-secure --no-default-features --features mock-se,debug-log,ui-semihosting -- ns_ptr ptr_validate
+	@echo "==> Miri (tree-borrows): shared NS-pointer deref primitives over a REAL allocation"
+	@# the secure-crate pass above can't deref (its addr is a u32, never a host ptr); the
+	@# extracted shared primitives run read_volatile/write_volatile/from_raw_parts on a real
+	@# stack allocation, so tree-borrows actually vets the deref for aliasing/provenance UB.
+	MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test -p sphincs-tz-shared -- ns_ptr_validate
 	@echo "==> miri: PASS"
 
 # Mutation testing (SOTA 2026-06 §11 mutation-testing pilot): measures TEST
