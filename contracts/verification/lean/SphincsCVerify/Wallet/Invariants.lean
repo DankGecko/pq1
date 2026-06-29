@@ -331,6 +331,26 @@ theorem setOffchain_preserves_bootstrap
     · simp [hlt, hcap] at h
     · simp [hlt, hcap] at h; rw [← h]
 
+/-- `setOffchain` at index `oi` preserves `offchainSigCount[j]` for every OTHER
+    index `j ≠ oi` (it writes only `offchainSigCount[oi]`). Needed by the
+    `Reachable → combinedCap` induction's execute step on the off-target index:
+    a `setOffchain` at `oi` leaves index `i ≠ oi`'s combined cap untouched. -/
+theorem setOffchain_preserves_offchain_other
+    (s : Storage) (oi newCount slotUsesNow cap : Nat) (s' : Storage) (j : Nat)
+    (hj : j ≠ oi)
+    (h : Storage.setOffchain s oi newCount slotUsesNow cap = some s') :
+    s.offchainSigCount j = s'.offchainSigCount j := by
+  unfold Storage.setOffchain at h
+  by_cases hlt : newCount < s.offchainSigCount oi
+  · simp [hlt] at h
+  · by_cases hcap : slotUsesNow + newCount > cap
+    · simp [hlt, hcap] at h
+    · simp [hlt, hcap] at h
+      rw [← h]
+      show s.offchainSigCount j
+        = (fun i_1 => if i_1 = oi then newCount else s.offchainSigCount i_1) j
+      simp [hj]
+
 end Storage
 
 /-- **(I-3) No reset path.** The meta-statement: every state-mutating
@@ -769,6 +789,99 @@ theorem validateSignature_bootstrap_cap_strict
   have h0' : d'.ownerIndex = 0 := by rw [← hdd]; exact h0
   have hcap_neq : capOk s op d'.ownerIndex ≠ false := by rw [hcapTrue]; decide
   exact capOk_bootstrap_implies_strict s op d'.ownerIndex h0' hcap_neq
+
+/-! ### (I-5) Reachable-state discharge of the combined cap (P1 / hInv)
+
+The bytecode theorem `theft_free_bytecode` is *conditioned* on the combined cap
+holding in the pre-state (`hInv`). Pre-this-section that hypothesis was an
+ASSUMED reachable-state invariant whose reachability was only Foundry-fuzzed.
+This section discharges it as a genuine inductive invariant: a `Reachable`
+predicate over the wallet `Storage` (genesis + the gated EntryPoint-driven
+transitions) plus `reachable_implies_combinedCap`, proven by induction from the
+existing single-step preservation lemmas.
+
+**Transition completeness (soundness crux, EF P7).** The constructors are the
+EXACT set of operations that mutate `slotUses`/`offchainSigCount`/`bootstrapUses`:
+`validateSignature` (Type-1/2 sign → `bumpForOwner`), the `setOffchain` storage
+effect of `executeWithOffchainCount`, `tryInitialize` (factory init → zeroes),
+and `addOwner`/`removeOwner` (which don't touch the cap counters). The raw
+`bumpSlot`/`bumpBootstrap` primitives are NOT separate transitions — they are
+only ever called *gated* inside `validateSignature` (where `capOk` supplies the
+STRICT precondition `bumpSlot` preservation needs); exposing a raw bump would
+need a new constructor here (and `check_storage_mutators.sh` would flag the new
+mutator). The proof lives in the SAME Lean layer that `theft_free_bytecode`
+consumes the cap in, so it introduces no new model↔bytecode transcription TCB.
+
+This makes the EF-P1 conditioning a kernel-proven inductive invariant: the
+companion corollary `theft_free_bytecode_reachable` (Spec/Theorems.lean) takes
+`Reachable σ.walletStorage` and derives `hInv` here, instead of assuming it. -/
+
+/-- The empty (freshly-CREATE2'd) storage satisfies the combined cap (0 + 0). -/
+theorem combinedCapInvariant_empty (i cap : Nat) :
+    combinedCapInvariant Storage.empty i cap := by
+  simp [combinedCapInvariant, Storage.empty]
+
+/-- The post-`initialize` storage satisfies the combined cap (counters are 0). -/
+theorem combinedCapInvariant_initialised (bootstrap slot0 : OwnerBytes) (i cap : Nat) :
+    combinedCapInvariant (Storage.initialised bootstrap slot0) i cap := by
+  simp [combinedCapInvariant, Storage.initialised]
+
+/-- **Reachable wallet storage states.** Genesis (`Storage.empty`) plus the
+    gated EntryPoint-driven transitions. See the section docstring for why this
+    is the complete, faithful transition set. -/
+inductive Reachable : Storage → Prop where
+  | genesis : Reachable Storage.empty
+  | init (s s' : Storage) (bootstrap slot0 : OwnerBytes)
+      (hr : Reachable s)
+      (h : Storage.tryInitialize s bootstrap slot0 = some s') : Reachable s'
+  | validate (s s' : Storage) (op : UserOperation) (ep : ByteVec 20) (cid : Nat)
+      (vfn : ByteVec 32 → ByteVec 32 → ByteVec 32 → ByteVec SignatureLen → Bool)
+      (hr : Reachable s)
+      (h : validateSignature s op ep cid vfn = (Result.success, s')) : Reachable s'
+  | execStep (s s' : Storage) (oi nc : Nat)
+      (hr : Reachable s)
+      (h : Storage.setOffchain s oi nc (s.slotUses oi) MaxSlotUses = some s') : Reachable s'
+  | addOwnerStep (s s' : Storage) (o : OwnerBytes)
+      (hr : Reachable s)
+      (h : Storage.addOwner s o = some s') : Reachable s'
+  | removeOwnerStep (s s' : Storage) (idx : Nat) (expected : OwnerBytes)
+      (hr : Reachable s)
+      (h : Storage.removeOwner s idx expected = some s') : Reachable s'
+
+/-- **(I-5, P1) The combined cap holds on every reachable state.** The headline
+    bytecode theorem's `hInv` hypothesis, discharged as a real inductive
+    invariant (init + every gated transition preserves it) rather than left as
+    a fuzz-backed assumption. -/
+theorem reachable_implies_combinedCap (s : Storage) (i : Nat) (h : Reachable s) :
+    combinedCapInvariant s i MaxSlotUses := by
+  induction h with
+  | genesis => exact combinedCapInvariant_empty i MaxSlotUses
+  | init s s' bootstrap slot0 hr h ih =>
+      unfold Storage.tryInitialize at h
+      by_cases hni : s.nextOwnerIndex ≠ 0
+      · simp [hni] at h
+      · simp [hni] at h
+        rw [← h]
+        exact combinedCapInvariant_initialised bootstrap slot0 i MaxSlotUses
+  | validate s s' op ep cid vfn hr h ih =>
+      exact combinedCap_inductive s op ep cid vfn s' i ih h
+  | execStep s s' oi nc hr h ih =>
+      by_cases hieq : i = oi
+      · subst hieq
+        exact combinedCap_preserved_by_setOffchain s i nc (s.slotUses i) MaxSlotUses s' h rfl
+      · unfold combinedCapInvariant at ih ⊢
+        rw [← Storage.setOffchain_preserves_slotUses s oi nc (s.slotUses oi) MaxSlotUses s' i h,
+            ← Storage.setOffchain_preserves_offchain_other s oi nc (s.slotUses oi)
+                MaxSlotUses s' i hieq h]
+        exact ih
+  | addOwnerStep s s' o hr h ih =>
+      unfold combinedCapInvariant at ih ⊢
+      obtain ⟨_, hslot, hoff⟩ := Storage.addOwner_preserves_counters s o s' h
+      rw [← hslot i, ← hoff i]; exact ih
+  | removeOwnerStep s s' idx expected hr h ih =>
+      unfold combinedCapInvariant at ih ⊢
+      obtain ⟨_, hslot, hoff⟩ := Storage.removeOwner_preserves_counters s idx expected s' h
+      rw [← hslot i, ← hoff i]; exact ih
 
 /-! ## (I-6) EIP-1271 forbids bootstrap
 

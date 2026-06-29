@@ -119,6 +119,15 @@ import SphincsCVerify
 -- wallet step is the opaque deployed-bytecode symbol.
 #print axioms SphincsCVerify.Spec.Theorems.theft_free_bytecode
 
+-- P1 (I-5) reachability discharge. `reachable_implies_combinedCap` is KERNEL-ONLY
+-- ([propext, Quot.sound]) — the hInv conditioning is a kernel-proven inductive
+-- invariant, not a fuzz-backed assumption. `theft_free_bytecode_reachable` takes
+-- `Reachable σ.walletStorage` instead of the bald hInv and derives the cap; its
+-- closure MUST equal theft_free_bytecode's (the discharge adds no axiom). The
+-- Reachable hypothesis is NON-VACUOUS: `Reachable.genesis : Reachable Storage.empty`.
+#print axioms SphincsCVerify.Wallet.Invariants.reachable_implies_combinedCap
+#print axioms SphincsCVerify.Spec.Theorems.theft_free_bytecode_reachable
+
 -- Bytecode-transported squat-defence (I-8) — exactly
 -- solidityFactory_compiles_correctly (A3.3) + kernel.
 #print axioms SphincsCVerify.Spec.Theorems.factory_squat_defence_bytecode

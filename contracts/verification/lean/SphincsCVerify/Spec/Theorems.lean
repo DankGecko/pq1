@@ -401,24 +401,24 @@ def handleOpBytecode
     `DeployedBytecode.PQSmartWallet_validateUserOp` symbol — "the code
     at the pinned codehash" — rather than at the Lean model.
 
-    **P1 (honest status of `hInv`).** The extra hypothesis `hInv` (the
-    per-index combined cap `slotUses i + offchainSigCount i ≤ MaxSlotUses`)
-    is an ASSUMED hypothesis of this corollary, NOT a discharged kernel fact.
-    A3.2's pointwise equality is conditioned on it because outside it the
-    deployed bytecode reverts on a checked-arithmetic overflow where the
-    ℕ-valued model returns failure (a divergence on unreachable states only —
-    see AXIOM_STATUS.json A3.2). The REACHABILITY of `hInv` — what makes
-    "divergence on unreachable states only" true — is backed by the Solidity
-    Foundry invariant fuzz test (`contracts/smart-wallet/test/PQSmartWalletInvariants.t.sol`,
-    256 runs — fuzzing, NOT a kernel proof). In Lean the building blocks exist
-    but are not yet assembled into a `Reachable → hInv` theorem that would
-    discharge `hInv` here: `combinedCap_inductive` proves only the
-    `validateSignature` preservation STEP (no base case, no execute step) and is
-    currently cited but not applied by any proof; the P3 cross-counter
-    preservation lemmas (`Invariants.{setOffchain,bumpSlot,bumpBootstrap}_preserves_*`)
-    are further pieces. Until that assembly lands `hInv` stays an explicit
-    hypothesis — this corollary is a sound CONDITIONAL result, not an
-    unconditional one.
+    **P1 (status of `hInv` — now kernel-discharged via reachability).** The
+    extra hypothesis `hInv` (the per-index combined cap
+    `slotUses i + offchainSigCount i ≤ MaxSlotUses`) conditions A3.2's pointwise
+    equality because outside it the deployed bytecode reverts on a
+    checked-arithmetic overflow where the ℕ-valued model returns failure (a
+    divergence on unreachable states only — see AXIOM_STATUS.json A3.2). This
+    theorem keeps `hInv` as a raw hypothesis (it is what the A3.2 axiom is stated
+    against), but the REACHABILITY of `hInv` is now a kernel-PROVEN inductive
+    invariant, NOT a Foundry-fuzz-backed assumption: `Invariants.Reachable`
+    (genesis + the gated EntryPoint transitions) +
+    `Invariants.reachable_implies_combinedCap` (`[propext, Quot.sound]`, kernel-
+    only) assemble `combinedCap_inductive` + the P3 cross-counter preservation
+    lemmas + the init base case into `Reachable s → ∀ i, combinedCapInvariant s i`.
+    The discharged corollary is `theft_free_bytecode_reachable` below: it takes
+    `Reachable σ.walletStorage` instead of `hInv` and derives the cap — its
+    `#print axioms` is IDENTICAL to this theorem's (the discharge adds no axiom).
+    It stays (correctly) conditional on reachability — not unconditional — since
+    off the cap the bytecode reverts with no characterising axiom (EF P1).
 
     `#print axioms theft_free_bytecode` = `theft_free`'s closure
     ∪ { solidityWallet_compiles_correctly }. -/
@@ -466,6 +466,42 @@ theorem theft_free_bytecode
     rw [hwallet]
     rfl
   exact theft_free op σ σ' effects hExec' hDecrease
+
+/-- **Theft-freedom on the deployed bytecode, conditioned on REACHABILITY
+    (P1 discharge).** Identical to `theft_free_bytecode` except the combined-cap
+    hypothesis `hInv` is replaced by `Invariants.Reachable σ.walletStorage` — and
+    the cap is then DERIVED via the kernel-proven inductive invariant
+    `Invariants.reachable_implies_combinedCap`, rather than ASSUMED. The theorem
+    stays (correctly) conditional on reachability: off the cap the deployed
+    bytecode reverts where the ℕ-model returns failure, and no axiom characterises
+    that branch, so an unconditional ∀-σ version is not provable with the current
+    axiom set (EF P1). The win is that the conditioning is now a genuine
+    inductive-invariant theorem (init + every gated transition preserves the cap),
+    NOT a Foundry-fuzz-backed assumption. `#print axioms` is unchanged from
+    `theft_free_bytecode` (the discharge is kernel-only — no new axiom). -/
+theorem theft_free_bytecode_reachable
+    (op : UserOperation)
+    (σ σ' : Bridge.EntryPoint.State)
+    (effects : Bridge.EntryPoint.Address → Nat → Nat)
+    (hReach : Invariants.Reachable σ.walletStorage)
+    (hExec : handleOpBytecode σ op effects = σ')
+    (hDecrease : σ'.balance σ.walletAddress < σ.balance σ.walletAddress) :
+    (∃ (ownerIndex : Nat) (owner : OwnerBytes)
+       (pkSeed pkRoot : ByteVec 32) (digest : ByteVec 32)
+       (innerSig : ByteVec SignatureLen),
+      decodeWrappedSig op.signature = some ⟨ownerIndex, innerSig⟩
+      ∧ σ.walletStorage.ownerAtIndex ownerIndex = some owner
+      ∧ pkSeed = owner.raw.take 32 (by decide)
+      ∧ pkRoot = owner.raw.drop 32 (by decide)
+      ∧ digest = sphincsDigest op σ.entryPointAddress σ.chainId
+      ∧ Bridge.DeployedBytecode.SPHINCsC10Asm_verify pkSeed pkRoot digest innerSig = true)
+    ∧ (∀ (sk : Signer.SigningKey)
+         (transcript : Crypto.Transcript)
+         (msgStar : ByteVec 32) (sigStar : Hypertree.Signature),
+        Crypto.isForgery sk transcript msgStar sigStar → Crypto.BreaksHash) :=
+  theft_free_bytecode op σ σ' effects
+    (fun i => Invariants.reachable_implies_combinedCap σ.walletStorage i hReach)
+    hExec hDecrease
 
 
 /-- **Factory squat-defence, stated against the deployed factory
