@@ -27,6 +27,7 @@ import SphincsCVerify.Spec.Wots
 import SphincsCVerify.Spec.Fors
 import SphincsCVerify.Spec.Hypertree
 import SphincsCVerify.Spec.Signature
+import SphincsCVerify.Spec.Treehash
 import SphincsCVerify.Util.Bits
 
 namespace SphincsCVerify.Spec.Signer
@@ -125,42 +126,82 @@ def grindR
     `Theorems.verify_signs`. -/
 noncomputable def sign
     (sk : SigningKey) (message : ByteVec 32) (limit : Nat := 10_000_000) :
-    Option Signature := Id.run do
-  let _seed := pad16 sk.pkSeed
-  -- (Signing produces a structured `Signature`; the byte-level
-  -- 4008-byte serialisation is in `Signature.serialise`, with a
-  -- round-trip theorem `deserialise (serialise s) = s` in `Bytes.lean`.)
+    Option Signature :=
+  -- (Signing produces a structured `Signature`; the byte-level 4008-byte
+  -- serialisation is in `Signature.serialise`, with a round-trip theorem
+  -- `deserialise (serialise s) = s` in `Bytes.lean`.)
   match grindR sk.skSeed sk.pkSeed sk.pkRoot message limit with
-  | none => pure none
+  | none => none
   | some (r, digest) =>
+    let seed := pad16 sk.pkSeed
     let forsIndices := extractForsIndices digest
-    let _htIdx := extractHtIndex digest
-    -- For each of the K-1 normal FORS trees, compute (secret, authPath, root).
-    -- The reference signer uses iterative Treehash; the *spec* form here is
-    -- declarative.
+    let htIdxNat := extractHtIndex digest
+    let htIdx : UInt64 := UInt64.ofNat htIdxNat
+    -- FORS+C: honest leaf secrets + honest Merkle auth paths (under sk_seed).
     let forsSecrets : Array (ByteVec 16) :=
       Array.ofFn (n := K) fun i =>
-        let leafIdx := UInt32.ofNat (forsIndices.getD i.val 0)
-        forsSecret sk.skSeed (UInt32.ofNat i.val) leafIdx
-    -- Auth paths for the K-1 normal trees: declarative spec via siblings
-    -- in the FORS Merkle tree under sk_seed.
+        forsSecret sk.skSeed (UInt32.ofNat i.val) (UInt32.ofNat (forsIndices.getD i.val 0))
     let forsAuthPaths : Array (Array (ByteVec 16)) :=
-      Array.ofFn (n := K - 1) fun _t =>
-        Array.replicate A (zero 16)
+      Array.ofFn (n := K - 1) fun t =>
+        forsMtAuthPath seed htIdx (UInt32.ofNat t.val)
+          (fun j => forsSecret sk.skSeed (UInt32.ofNat t.val) (UInt32.ofNat j))
+          (forsIndices.getD t.val 0)
     let fors : Fors.ForsSig :=
-      { secrets := forsSecrets,
-        secretsLen := Array.size_ofFn,
-        authPaths := forsAuthPaths,
-        authPathsLen := Array.size_ofFn }
-    -- For each HT layer: declarative spec of WOTS+C + auth path.
-    let layerSig : Hypertree.LayerSig :=
-      { wots := { chains := Array.replicate L (zero 16),
-                  chainsLen := Array.size_replicate,
-                  count := 0 },
-        authPath := Array.replicate SubtreeH (zero 16),
-        authPathLen := Array.size_replicate }
-    let layers : Array Hypertree.LayerSig :=
-      Array.replicate D layerSig
-    pure (some ⟨r, fors, layers, Array.size_replicate⟩)
+      { secrets := forsSecrets, secretsLen := Array.size_ofFn,
+        authPaths := forsAuthPaths, authPathsLen := Array.size_ofFn }
+    -- The honest FORS public key = `computeForsPk` over the honest tree roots
+    -- (K-1 normal roots + the leaf-only forced-zero last tree) — layer 0's msg.
+    let forsPk : ByteVec 16 :=
+      Fors.computeForsPk seed htIdx
+        ((Array.ofFn (n := K - 1) fun t : Fin (K - 1) =>
+            forsMtNode seed htIdx (UInt32.ofNat t.val)
+              (fun j => forsSecret sk.skSeed (UInt32.ofNat t.val) (UInt32.ofNat j)) A 0).push
+          (th seed (Adrs.forsNode htIdx (UInt32.ofNat (K - 1)) 0 0)
+            (pad16 (forsSecrets.getD (K - 1) (zero 16)))))
+    let mask : Nat := (1 <<< SubtreeH) - 1
+    -- Hypertree layer 0: WOTS+C over the FORS public key.
+    let idxLeaf0 := htIdxNat &&& mask
+    let idxTree0 := htIdxNat >>> SubtreeH
+    let lf0 : Nat → ByteVec 16 := fun kp =>
+      Wots.keygenPk seed sk.skSeed (UInt32.ofNat 0) (UInt64.ofNat idxTree0) (UInt32.ofNat kp)
+    match findCount seed (UInt32.ofNat 0) (UInt64.ofNat idxTree0) (UInt32.ofNat idxLeaf0)
+            (pad16 forsPk) limit with
+    | none => none
+    | some (count0, d0) =>
+      let digits0 := extractDigits d0
+      let chains0 : Array (ByteVec 16) :=
+        Array.ofFn (n := L) fun i =>
+          chainHash seed
+            (Adrs.setChainIndex (Adrs.wots (UInt32.ofNat 0) (UInt64.ofNat idxTree0)
+              (UInt32.ofNat idxLeaf0)) (UInt32.ofNat i.val))
+            (wotsSecret sk.skSeed (UInt32.ofNat 0) (UInt64.ofNat idxTree0) (UInt32.ofNat idxLeaf0)
+              (UInt32.ofNat i.val)) 0 (digits0.getD i.val 0)
+      let layer0 : Hypertree.LayerSig :=
+        { wots := { chains := chains0, chainsLen := Array.size_ofFn, count := count0 },
+          authPath := mtAuthPath seed (UInt32.ofNat 0) (UInt64.ofNat idxTree0) lf0 idxLeaf0,
+          authPathLen := mtAuthPath_size _ _ _ _ _ }
+      let root0 : ByteVec 16 := mtNode seed (UInt32.ofNat 0) (UInt64.ofNat idxTree0) lf0 SubtreeH 0
+      -- Hypertree layer 1: WOTS+C over layer 0's subtree root.
+      let idxLeaf1 := idxTree0 &&& mask
+      let idxTree1 := idxTree0 >>> SubtreeH
+      let lf1 : Nat → ByteVec 16 := fun kp =>
+        Wots.keygenPk seed sk.skSeed (UInt32.ofNat 1) (UInt64.ofNat idxTree1) (UInt32.ofNat kp)
+      match findCount seed (UInt32.ofNat 1) (UInt64.ofNat idxTree1) (UInt32.ofNat idxLeaf1)
+              (pad16 root0) limit with
+      | none => none
+      | some (count1, d1) =>
+        let digits1 := extractDigits d1
+        let chains1 : Array (ByteVec 16) :=
+          Array.ofFn (n := L) fun i =>
+            chainHash seed
+              (Adrs.setChainIndex (Adrs.wots (UInt32.ofNat 1) (UInt64.ofNat idxTree1)
+                (UInt32.ofNat idxLeaf1)) (UInt32.ofNat i.val))
+              (wotsSecret sk.skSeed (UInt32.ofNat 1) (UInt64.ofNat idxTree1) (UInt32.ofNat idxLeaf1)
+                (UInt32.ofNat i.val)) 0 (digits1.getD i.val 0)
+        let layer1 : Hypertree.LayerSig :=
+          { wots := { chains := chains1, chainsLen := Array.size_ofFn, count := count1 },
+            authPath := mtAuthPath seed (UInt32.ofNat 1) (UInt64.ofNat idxTree1) lf1 idxLeaf1,
+            authPathLen := mtAuthPath_size _ _ _ _ _ }
+        some { r := r, fors := fors, layers := #[layer0, layer1], layersLen := rfl }
 
 end SphincsCVerify.Spec.Signer
