@@ -75,7 +75,13 @@ noncomputable def replaySafeHash
     explicit: the raw dapp hash is `replaySafeHash`-nested before the inner C10
     verification. (`IsValidSignature.erc1271IsValidSignature` models the inner
     hook, which receives the already-nested hash; this composes the nesting the
-    Solady `ERC1271` base performs in the public `isValidSignature`.) -/
+    Solady `ERC1271` base performs in the public `isValidSignature`.)
+
+    NOTE — this is a NON-CONSUMED reference model. It documents the nesting
+    composition for the reader; the disjointness theorem below does not call it
+    (it reasons about `replaySafeHash`'s outermost keccak directly). The bytecode
+    binding of the EIP-1271 dispatch is carried separately by
+    `test/halmos/HalmosIsValidSignature.t.sol` (G8), not by this model. -/
 noncomputable def erc1271IsValidSignatureNested
     (s : Storage)
     (rawHash personalSignTypeHash domainSep : ByteVec 32)
@@ -87,14 +93,22 @@ noncomputable def erc1271IsValidSignatureNested
     (replaySafeHash rawHash personalSignTypeHash domainSep eip712Prefix)
     signature verify_fn
 
-/-- **Gap-3 / RAW32-oracle defense.** The value the off-chain path signs
-    (`replaySafeHash …`) is never equal to any UserOp's `sphincsDigest` (or a
-    SHA-256 hardness assumption is broken). Because a C10 signature binds its
-    32-byte message (A3.1/A5), an off-chain signature is therefore never a valid
-    UserOp signature — closing the companion-controlled forgery oracle a
-    bare-signed 32-byte value would open. The off-chain message is a keccak-256
-    image; the UserOp message is a SHA-256 image; disjointness reduces to
-    `keccak_sha256_cross_separation`. -/
+/-- **Gap-3 / RAW32-oracle defense — message-image disjointness.** What this
+    theorem proves: the value the off-chain path signs (`replaySafeHash …`, a
+    keccak-256 image) is never equal to any UserOp's `sphincsDigest` (a SHA-256
+    image) — unless a SHA-256 hardness assumption is broken (`∨ BreaksHash`).
+    Disjointness reduces to the cited `keccak_sha256_cross_separation` axiom.
+
+    **Honest scope of the RAW32-oracle claim.** The inference from this
+    message-disjointness to "an off-chain C10 signature is therefore never a
+    valid UserOp signature" is the EUF-CMA property (A5): a signature binds its
+    message, so a signature over the (distinct) off-chain message is not a
+    signature over any UserOp digest absent a forgery. That message⇒signature
+    step is carried by the cited A5 reduction and is NOT separately mechanized in
+    this corollary — it is exactly the conjunct-2 tie-in that
+    `userop_acceptance_implies_signed_or_break` instantiates for the on-chain
+    path. So this theorem alone establishes message-disjointness, not
+    signature-non-validity. -/
 theorem offchain_nested_disjoint_from_userop_digest
     (rawHash personalSignTypeHash domainSep : ByteVec 32) (eip712Prefix : ByteSeg)
     (op : UserOperation) (entryPoint : ByteVec 20) (chainId : Nat) :

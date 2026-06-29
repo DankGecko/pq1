@@ -90,9 +90,17 @@ def createAccountPrecondition
   ∧ nMasked slot0PkSeed ∧ nMasked slot0PkRoot
   ∧ ¬(slot0PkSeed = masterPkSeed ∧ slot0PkRoot = masterPkRoot)
 
-/-- The CREATE2 salt depends only on `(masterPkSeed, masterPkRoot)` —
-    it does NOT depend on `chainId`. This is invariant #6 (same 24
-    words → same address on every chain). -/
+/-- The CREATE2 **salt** does not depend on `chainId` — the `salt` function takes
+    only `(masterPkSeed, masterPkRoot)`, so the two chain parameters here are
+    unused (witnessing that no chainId enters the salt). This is the salt-preimage
+    leg of invariant #6.
+
+    **Honest scope (P11).** This is NOT the address-level claim. "Same 24 words →
+    same *address* on every chain" additionally requires the EVM-TCB facts that
+    the deployer (singleton factory) and `keccak256(initCode)` are themselves
+    chain-free; that conditional address-level theorem is
+    `Invariants.create2Address_chain_independent` (with `d1=d2` / `ich1=ich2`
+    hypotheses), not this reflexive salt fact. -/
 theorem salt_chain_independent
     (masterPkSeed masterPkRoot : ByteVec 32) (_chain1 _chain2 : UInt64) :
     salt masterPkSeed masterPkRoot = salt masterPkSeed masterPkRoot := by

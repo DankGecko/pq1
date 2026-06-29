@@ -101,6 +101,27 @@ removeOwner
 EOF
 )
 
+# (C) Names of defs whose body ASSIGNS a cap-counter field — `bootstrapUses :=`,
+#     `slotUses :=`, or `offchainSigCount :=` — by ANY construction syntax
+#     (`{ s with ... }` OR a full record literal `{ bootstrapUses := 0, ... }`)
+#     and regardless of return type (`Storage`, `Option Storage`, `Except _
+#     Storage`, a tuple, …). This is the load-bearing gate: it keys on the
+#     SEMANTIC act of writing a counter, so a resetter cannot evade it by hiding
+#     behind a wrapper return type + a full record literal (the gap an
+#     adversarial PoC demonstrated against filters (A)+(B), which key on
+#     return-type and `{ s with }` syntax respectively). Allow-list = exactly the
+#     defs that legitimately write a counter: the two all-zero genesis
+#     constructors + the three monotone bumpers. addOwner / removeOwner /
+#     tryInitialize do NOT write a cap-counter field.
+ALLOWLIST_COUNTER_ASSIGN=$(cat <<'EOF'
+empty
+initialised
+bumpBootstrap
+bumpSlot
+setOffchain
+EOF
+)
+
 ###############################################################################
 # EXTRACTION
 #
@@ -176,12 +197,30 @@ ACTUAL_S_WITH="$(printf '%s\n' "${STORAGE_BLOCK}" | awk '
   END { flush() }
 ' | sort -u)"
 
+# (C) Names of defs that ASSIGN a cap-counter field (any syntax / any return
+#     type). Same per-def body collapse as (B), but matching the counter-field
+#     `:=` write directly rather than the `{ s with` syntax — so a full record
+#     literal behind a wrapper return type cannot slip through.
+ACTUAL_COUNTER_ASSIGN="$(printf '%s\n' "${STORAGE_BLOCK}" | awk '
+  function flush(   joined) {
+    if (cur != "") {
+      joined = body
+      gsub(/[[:space:]]+/, " ", joined)
+      if (joined ~ /(bootstrapUses|slotUses|offchainSigCount)[[:space:]]*:=/) print cur
+    }
+  }
+  /^def / { flush(); cur = $2; body = $0; next }
+  { body = body " " $0 }
+  END { flush() }
+' | sort -u)"
+
 ###############################################################################
 # COMPARE
 ###############################################################################
 
 EXPECTED_A="$(printf '%s\n' "${ALLOWLIST_RETURNS_STORAGE}" | grep -v '^[[:space:]]*$' | sort -u)"
 EXPECTED_B="$(printf '%s\n' "${ALLOWLIST_S_WITH}" | grep -v '^[[:space:]]*$' | sort -u)"
+EXPECTED_C="$(printf '%s\n' "${ALLOWLIST_COUNTER_ASSIGN}" | grep -v '^[[:space:]]*$' | sort -u)"
 
 EXIT=0
 
@@ -236,6 +275,34 @@ if [ -n "${MISSING_B//[[:space:]]/}" ]; then
   EXIT=1
 fi
 
+# --- Set (C): cap-counter-assigning defs (the load-bearing semantic gate) ---
+NEW_C="$(comm -13 <(printf '%s\n' "${EXPECTED_C}") <(printf '%s\n' "${ACTUAL_COUNTER_ASSIGN}"))"
+MISSING_C="$(comm -23 <(printf '%s\n' "${EXPECTED_C}") <(printf '%s\n' "${ACTUAL_COUNTER_ASSIGN}"))"
+
+if [ -n "${NEW_C//[[:space:]]/}" ]; then
+  err ""
+  err "FAIL: NEW def(s) ASSIGN a cap-counter field (bootstrapUses / slotUses /"
+  err "offchainSigCount) but are not in the allow-list:"
+  printf '  + %s\n' ${NEW_C} >&2
+  err ""
+  err "A def that writes a cap counter is a mutator REGARDLESS of its return"
+  err "type or construction syntax (this gate caught what filters (A)+(B) miss:"
+  err "a wrapper return type + a full record literal). The I-3 closed-world"
+  err "guarantee (\`no_reset_path\` + \`Reachable\` completeness) no longer holds"
+  err "until you BOTH: (1) add a no-decrease / counter-preservation lemma and a"
+  err "matching \`Reachable\` transition, AND (2) add the name to"
+  err "ALLOWLIST_COUNTER_ASSIGN here."
+  EXIT=1
+fi
+
+if [ -n "${MISSING_C//[[:space:]]/}" ]; then
+  err ""
+  err "FAIL: allow-listed cap-counter-assigning def(s) no longer present:"
+  printf '  - %s\n' ${MISSING_C} >&2
+  err "Update ALLOWLIST_COUNTER_ASSIGN to match."
+  EXIT=1
+fi
+
 ###############################################################################
 # REPORT
 ###############################################################################
@@ -248,8 +315,13 @@ if [ "${EXIT}" -eq 0 ]; then
   printf '      %s\n' ${ACTUAL_RETURNS_STORAGE}
   printf '    { s with } record-update defs (allow):   %s\n' "${N_B}"
   printf '      %s\n' ${ACTUAL_S_WITH}
+  N_C="$(printf '%s\n' "${ACTUAL_COUNTER_ASSIGN}" | grep -c . || true)"
+  printf '    cap-counter-assigning defs (allow):      %s\n' "${N_C}"
+  printf '      %s\n' ${ACTUAL_COUNTER_ASSIGN}
   printf '    Every Storage mutator is covered by a no_reset_path conjunct\n'
-  printf '    (Wallet/Invariants.lean). I-3 closed-world gate intact.\n'
+  printf '    (Wallet/Invariants.lean). I-3 closed-world gate intact, including\n'
+  printf '    the semantic counter-assignment gate (C) — wrapper/record-literal\n'
+  printf '    resetters cannot evade.\n'
 fi
 
 exit "${EXIT}"
