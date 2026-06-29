@@ -21,6 +21,8 @@ Quot.sound]` — purely kernel (holds for any `thPair`).
 
 **Sub-lemma 2 of 4 — `wots_chain_roundtrip` — DONE** (`SphincsCVerify/Verifier/WotsRoundtrip.lean`): the WOTS+ chain-composition `chainHash_compose` + `wots_chain_roundtrip`, closure `[propext, Quot.sound]`.
 
+**Sub-lemma 3 of 4 — `fors_roundtrip` — DONE** (`SphincsCVerify/Verifier/ForsRoundtrip.lean`): FORS tree round-trip (`forsMtNode`/`forsMtAuthPath` + `forsAcc_climbs`), mirrors merkle_roundtrip; closure `[propext, Classical.choice, Quot.sound]`. Sub-lemma 4 (hypertree D=2) next needs a full `wots_pk_roundtrip` (the aggregate WOTS pk from an honest signature over all L chains + thMulti + the digit-sum/TargetSum), then composes wots_pk_roundtrip + merkle_roundtrip across the 2 layers.
+
 The remaining work below
 is unchanged: complete the signer, then sub-lemmas 2–4 + assembly.
 

@@ -30,6 +30,7 @@ import SphincsCVerify.Verifier.Refined
 import SphincsCVerify.Verifier.Equivalence
 import SphincsCVerify.Verifier.MerkleRoundtrip
 import SphincsCVerify.Verifier.WotsRoundtrip
+import SphincsCVerify.Verifier.ForsRoundtrip
 
 -- Stratum B: ERC-4337 / Coinbase wallet scaffolding
 import SphincsCVerify.Wallet.Storage
