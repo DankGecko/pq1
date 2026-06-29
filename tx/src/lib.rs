@@ -4,6 +4,8 @@
 //!
 //! - [`erc20`] — ERC-20 metadata Merkle DB + strict `transfer` /
 //!   `transferFrom` / `approve` calldata decoder + dispatch.
+//! - [`multisend`] — strict Safe `MultiSendCallOnly` outer-framing
+//!   decoder (Kani canonical-acceptance / soundness verified).
 //! - [`names`] — address-name DB + stack-resident [`names::NameResolver`].
 //! - [`selectors`] — function-selector → text-sig DB.
 //!
@@ -27,5 +29,6 @@ extern crate std;
 mod wire;
 
 pub mod erc20;
+pub mod multisend;
 pub mod names;
 pub mod selectors;

@@ -40,6 +40,16 @@ use super::cow_binding::safe_inner_is_cow_presign;
 use super::mgmt_decode::{classify_safe_mgmt, page_count as mgmt_page_count, SafeMgmtOp};
 use crate::erc20::calldata::{parse_erc20_calldata, Erc20Call};
 
+// The strict outer-framing decoder, its 32-byte word reader, and the
+// refusal taxonomy were extracted, verbatim and behaviour-identical,
+// into the host-compilable `pqsigner-tx` crate so they can be
+// Kani-bounded-verified (canonical-acceptance / soundness — see
+// `pqsigner_tx::multisend::verification`). Re-exported here so every
+// caller below (`is_multisend_claim`, `MsRecordIter`, `summarize`,
+// `multisend_verdict`, the test suite, …) and the four external call
+// sites keep working unchanged.
+pub use pqsigner_tx::multisend::{decode_multisend, read_u32_word, MsError};
+
 /// Fixed per-record header: `operation(1) || to(20) || value(32) ||
 /// dataLen(32)`, followed by `data(dataLen)`. Packed encoding — no
 /// padding between records.
@@ -75,111 +85,10 @@ pub fn is_multisend_claim(operation: u8, to: &[u8; 20], data: &[u8]) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Strict decode
+// Strict decode — `decode_multisend`, `read_u32_word`, and `MsError`
+// now live in `pqsigner_tx::multisend` (re-exported above) so they can
+// be Kani-bounded. The record iterator below still consumes them.
 // ---------------------------------------------------------------------------
-
-/// Decode / classification failures. Every variant is a hard refusal —
-/// there is no degraded render for a DELEGATECALL payload.
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub enum MsError {
-    /// Calldata shorter than `selector + offset word + length word`.
-    ShortInput,
-    /// `calldata[..4] != multiSend(bytes)`.
-    WrongSelector,
-    /// The `bytes` head offset is not exactly 32 (the only value the
-    /// canonical Solidity encoding produces).
-    BadOffset,
-    /// The `bytes` length word has bits above u32, or the declared
-    /// payload runs past the calldata end.
-    BadLength,
-    /// Calldata extends past the zero-padded payload end, or the
-    /// padding bytes are non-zero. Trailing garbage could carry a
-    /// second, undisplayed payload interpretation.
-    BadPadding,
-    /// A record header or its declared `data` runs past the packed
-    /// slice end.
-    TruncatedRecord,
-    /// A record's `dataLen` word has bits above u32.
-    BadRecordDataLen,
-    /// A record's `operation` byte is not 0 (Call). MultiSendCallOnly
-    /// reverts on-chain for these; we refuse on-device for the same
-    /// reason — a nested DELEGATECALL is not honestly clear-signable.
-    RecordOpNotCall,
-    /// Zero records, or more than [`MULTISEND_MAX_RECORDS`].
-    BadRecordCount,
-}
-
-impl MsError {
-    /// Short (≤16 col) status-line reason for the refusal banner.
-    #[must_use]
-    pub fn as_status_str(self) -> &'static str {
-        match self {
-            MsError::ShortInput
-            | MsError::WrongSelector
-            | MsError::BadOffset
-            | MsError::BadLength
-            | MsError::BadPadding
-            | MsError::TruncatedRecord
-            | MsError::BadRecordDataLen => "msend malformed",
-            MsError::RecordOpNotCall => "msend rec op!=0",
-            MsError::BadRecordCount => "msend rec count",
-        }
-    }
-}
-
-/// Read a 32-byte ABI word as `usize`, requiring all bits above u32 to
-/// be zero (calldata is u16-bounded upstream anyway).
-fn read_u32_word(word: &[u8]) -> Result<usize, MsError> {
-    debug_assert_eq!(word.len(), 32);
-    if word[..28].iter().any(|&b| b != 0) {
-        return Err(MsError::BadLength);
-    }
-    Ok(u32::from_be_bytes([word[28], word[29], word[30], word[31]]) as usize)
-}
-
-/// Strictly decode `multiSend(bytes)` calldata down to the packed
-/// records slice.
-///
-/// Canonical-encoding-only: head offset must be exactly 0x20, the
-/// total calldata length must equal `4 + 64 + ceil32(len)` and every
-/// padding byte must be zero. Anything else is refused — the firmware
-/// never renders a payload whose on-chain decoding could differ from
-/// the on-device one.
-pub fn decode_multisend(data: &[u8]) -> Result<&[u8], MsError> {
-    if data.len() < 4 + 64 {
-        return Err(MsError::ShortInput);
-    }
-    if data[..4] != MULTI_SEND_SELECTOR {
-        return Err(MsError::WrongSelector);
-    }
-    let head = &data[4..];
-    // Offset word: the canonical encoding of a single dynamic `bytes`
-    // argument always places the tail immediately after the one-word
-    // head, i.e. offset == 32.
-    if read_u32_word(&head[0..32]).map_err(|_| MsError::BadOffset)? != 32 {
-        return Err(MsError::BadOffset);
-    }
-    let len = read_u32_word(&head[32..64])?;
-    let payload_start = 64usize;
-    let payload_end = payload_start.checked_add(len).ok_or(MsError::BadLength)?;
-    if payload_end > head.len() {
-        return Err(MsError::BadLength);
-    }
-    // Exact-length + zero-padding: Solidity pads the bytes tail to a
-    // 32-byte boundary with zeros and emits nothing after it.
-    let padded_end = payload_end
-        .checked_add(31)
-        .ok_or(MsError::BadLength)?
-        / 32
-        * 32;
-    if head.len() != padded_end {
-        return Err(MsError::BadPadding);
-    }
-    if head[payload_end..padded_end].iter().any(|&b| b != 0) {
-        return Err(MsError::BadPadding);
-    }
-    Ok(&head[payload_start..payload_end])
-}
 
 // ---------------------------------------------------------------------------
 // Record iterator
