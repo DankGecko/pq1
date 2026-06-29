@@ -254,3 +254,18 @@ import SphincsCVerify
 -- signer (ASSUMED — `sign` is hand-written/noncomputable and verifier-derived; see the
 -- trust-base note in Verifier/HonestConsistent.lean). Bridge (b) is a follow-up to anchor.
 #print axioms SphincsCVerify.Interpreter.C10.honest_consistent
+
+-- NON-VACUITY WITNESS COVERAGE (verify-ledger-consistency C9). A `K` (kernel)
+-- proof is only meaningful if the hypothesis it conditions on is SATISFIABLE —
+-- `#print axioms` is green on a vacuously-true conditional too. These ∃-style
+-- witnesses prove the headline hypotheses are inhabited on the operational input
+-- space, so the discharge is not vacuous. The ledger's `witness_coverage` block
+-- pins each (construct -> witness); C9 fails CI if a witness drops from this dump
+-- or its closure leaves the allowed set (a witness proven via a vacuous/false
+-- axiom would be circular). Adapted from LeanLoop's `vet` HYP probe, but
+-- mathlib-free (PQSigner's lean/ carries no Plausible) — hand-witnesses, enforced.
+-- `combinedCapInvariant_empty` witnesses theft_free_bytecode's `hInv` (the empty
+-- store satisfies the combined cap); `..._initialised` the post-deploy state.
+-- (H_adrs/H_sib_dischargeable + execute_step_satisfiable above are the rest.)
+#print axioms SphincsCVerify.Wallet.Invariants.combinedCapInvariant_empty
+#print axioms SphincsCVerify.Wallet.Invariants.combinedCapInvariant_initialised

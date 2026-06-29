@@ -336,6 +336,30 @@ def check_no_sorry(live_text: str) -> list[str]:
     return ["C8 sorryAx present in a tracked closure — a proof is incomplete."] if "sorryAx" in live_text else []
 
 
+def check_witness_coverage(ledger: dict, live: dict[str, set[str]]) -> list[str]:
+    """C9 — ENFORCED non-vacuity-witness coverage. Each `witness_coverage` entry
+    names a hand-written witness lemma proving a headline hypothesis is satisfiable
+    (so the K conditional that conditions on it is not vacuous). The witness must
+    (a) be PRESENT in the live dump (tracked by dump_axioms.lean + compiled) and
+    (b) be KERNEL-ONLY — a non-vacuity witness that itself leans on a project axiom
+    could be circular (the axiom might be the very thing being witnessed)."""
+    fails = []
+    for entry in ledger.get("witness_coverage", []):
+        w = entry["witness"]
+        construct = entry.get("construct", "?")
+        if w not in live:
+            fails.append(f"C9 witness `{w}` (for {construct}) is NOT in the live dump — the "
+                         f"hypothesis would be UNWITNESSED (possibly vacuous). Restore the lemma "
+                         f"or add `#print axioms {w}` to dump_axioms.lean.")
+            continue
+        rogue = live[w] - KERNEL
+        if rogue:
+            fails.append(f"C9 witness `{w}` closure carries non-kernel axiom(s) {sorted(rogue)} — a "
+                         f"non-vacuity witness must be kernel-only, else it may be circular (resting "
+                         f"on the very assumption it claims to witness).")
+    return fails
+
+
 # --------------------------------------------------------------------------- #
 # source-ident harvest (for C4)
 # --------------------------------------------------------------------------- #
@@ -410,6 +434,12 @@ def self_test() -> int:
         pin_ledger2, lambda r: "theorem theft_free (hInv : X) : True := by trivial")))
     # C8: sorryAx -> must fire
     cases.append(("C8", check_no_sorry("'x' depends on axioms: [sorryAx]")))
+    # C9: witness missing from the dump -> must fire
+    wc_ledger = {"witness_coverage": [{"construct": "cap", "witness": "Foo.cap_witness"}]}
+    cases.append(("C9 missing", check_witness_coverage(wc_ledger, {})))
+    # C9: witness present but rests on a non-kernel axiom -> must fire
+    cases.append(("C9 rogue", check_witness_coverage(
+        wc_ledger, {"Foo.cap_witness": {"propext", "Some.project_axiom"}})))
     # control: a CLEAN input must NOT fire (guards against always-fire vacuity)
     clean = check_closures(ledger, live_ok)
 
@@ -476,11 +506,13 @@ def main() -> int:
     fails += check_status_hygiene(ledger)
     fails += check_signature_pins(ledger, reader)
     fails += check_no_sorry(live_text)
+    fails += check_witness_coverage(ledger, live)
 
     print("=== verify-ledger-consistency (advertised AXIOM_STATUS.json vs live Lean truth) ===")
     print(f"  closures tracked: {len(ledger.get('closures', {}))} | "
           f"axioms documented: {len(ledger.get('axioms', []))} | "
-          f"signature pins: {len(ledger.get('signature_pins', {}))}")
+          f"signature pins: {len(ledger.get('signature_pins', {}))} | "
+          f"witnesses: {len(ledger.get('witness_coverage', []))}")
     print("  NOTE: live source is `#print axioms` (under-reports in lean v4.22.0); "
           "verify-lean4checker is the completeness backstop.")
     if fails:

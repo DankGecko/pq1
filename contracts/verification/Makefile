@@ -76,7 +76,10 @@ verify-fv-lints: verify-build
 # theorem), the headline `signature_pins` (statement-shape — catches a
 # re-introduced raw hypothesis like the EF P1/hInv finding, invisible to closure
 # checks), the per-status summary COUNTS, the no-undocumented / no-phantom axiom
-# invariants, and status hygiene — against `dump_axioms.lean` + the Lean source +
+# invariants, status hygiene, and C9 ENFORCED non-vacuity-witness coverage (the
+# `witness_coverage` block: every headline hypothesis has a kernel-only witness
+# lemma present in the dump — closes the playbook §B gap #3) — against
+# `dump_axioms.lean` + the Lean source +
 # the lint_fv THEFT_EXPECTED pin (single authoritative source). Reads the built
 # oleans (runs the dump), so depends on verify-build. Ships its own WIRED-IN
 # NEGATIVE CONTROL: `python3 scripts/check_ledger_consistency.py --self-test`
