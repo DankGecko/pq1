@@ -58,7 +58,7 @@ run_symbolic() {
   echo "==> [2/2] Halmos symbolic execution of the deployed bytecode [profile=${profile}]"
   FOUNDRY_PROFILE="${profile}" forge build --ast >/dev/null 2>&1
   FOUNDRY_PROFILE="${profile}" halmos \
-    --match-contract 'Halmos(ValidateUserOpEquiv|ValidateUserOp|ExecuteEquiv|Execute|MultiOwnable|Verifier|Factory)' \
+    --match-contract 'Halmos(ValidateUserOpEquiv|ValidateUserOp|ExecuteEquiv|Execute|MultiOwnable|Verifier|Factory|IsValidSignature)' \
     --solver "${SOLVER}" --loop 4 \
     | tee "/tmp/pq1-halmos-run-${profile}.txt" | grep -E "Running|\[PASS\]|\[FAIL\]|\[ERROR\]|Symbolic test result"
 
@@ -69,7 +69,7 @@ run_symbolic() {
   local passes
   passes=$(grep -c "\[PASS\]" "/tmp/pq1-halmos-run-${profile}.txt" || true)
   echo "==> PASS: ${passes} bytecode rules verified [profile=${profile}]"
-  echo "    (A3.1 verifier gates / A3.2 validate equiv / A3.2-exec execute equiv / A3.3 factory iff / A3.4 owner table)"
+  echo "    (A3.1 verifier gates / A3.2 validate equiv / A3.2-exec execute equiv / A3.3 factory iff / A3.4 owner table / EIP-1271 isValidSignature G8)"
 }
 
 run_symbolic default

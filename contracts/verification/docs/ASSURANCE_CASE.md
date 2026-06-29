@@ -76,7 +76,7 @@ G0  theft-free + integrity (theft_free / theft_free_bytecode)
 │   ├─ G4  reachable-state caps (the gate's precondition) K   ← UPGRADED this session
 │   ├─ G5  execution faithfulness (signed tuple = run) .. K + B (+ T for byte delivery)
 │   ├─ G6  owner-set integrity / init-once / no-UUPS .... K + B  (model + harness, not bridged)
-│   └─ G8  EIP-1271 forbids bootstrap, domain-sep ....... K  (no bytecode corollary)
+│   └─ G8  EIP-1271 forbids bootstrap, domain-sep ....... K + B  (forbids-bootstrap clean ∀; non-bypass installed-reps)  ← B NEW
 │
 ├─ S2  the verifier accepts only genuine signatures
 │   └─ G2  deployed verifier ≡ Lean spec, ∀ signatures .. C  (∀-symbolic = standing ceiling)
@@ -157,17 +157,31 @@ G0  theft-free + integrity (theft_free / theft_free_bytecode)
 - **Artifact.** `factory_squat_defence_bytecode` (K, closure +A3.3);
   Halmos `HalmosFactory` (B) on pinned factory codehash. **Defeater.** A3.3.
 
-### G8 — EIP-1271 path · **K only (no bytecode corollary)**
+### G8 — EIP-1271 path · **K + B (per-property)**  ← B ADDED this session
 - **Claim.** `isValidSignature` forbids the bootstrap key (`ownerIndex==0`),
-  nests via Solady EIP-712, and an off-chain-nested value is never a UserOp
-  `sphincsDigest` (RAW32 forgery-oracle defense).
-- **Artifact.** `eip1271_forbids_bootstrap` (K); `Wallet/OffchainBinding.lean`
+  nests via Solady EIP-712, returns the `0x1626ba7e` magic ONLY on verifier-accept,
+  bumps no counter; and an off-chain-nested value is never a UserOp `sphincsDigest`
+  (RAW32 forgery-oracle defense).
+- **Artifact (K).** `eip1271_forbids_bootstrap`; `Wallet/OffchainBinding.lean`
   (closure += `keccak_sha256_cross_separation`, an `∨ BreaksHash` cross-hash axiom).
-- **Defeater / gap.** **No `*_bytecode` corollary and no Halmos/Kontrol harness** —
-  unlike G1/G5/G7, the EIP-1271 surface binds only the Lean *model*. (G6 also lacks
-  a bytecode corollary but at least has an independent harness; G8 has neither.)
-  Tracked in `PROOF_MAP.md` (I-6). The keccak/SHA-256 non-collision is a cited
-  hardness assumption (keccak256 opaque).
+- **Artifact (B) — NEW 2026-06-29.** `test/halmos/HalmosIsValidSignature.t.sol`
+  (3 rules, PASS on BOTH profiles): `check_isValidSignature_forbids_bootstrap` is a
+  clean bytecode **∀** over `hash` + the symbolic verifier answer — `ownerIndex 0`
+  is rejected BEFORE the `ownerAtIndex` read and BEFORE the keccak nesting, so the
+  G8 headline is proven on the deployed bytecode; `_nonbypass_slot1` (magic ⇒
+  verifier-true) and `_no_counter_bump` (view-only) over the **installed** slot
+  index 1.
+- **Defeater / disclosed ceiling (matches A3.2 exactly).** The non-bypass /
+  view-only rules sweep the installed index 1 as a **concrete rep** — a symbolic
+  non-installed index `NotConcreteError`s on the `ownerAtIndex` dynamic-bytes getter
+  (the same Halmos engine ceiling A3.2 carries). So the *forbids-bootstrap headline*
+  is a clean bytecode ∀, but the non-bypass property is **per-property B over
+  installed reps, not a symbolic ∀** over all indices. keccak (`replaySafeHash`)
+  stays uninterpreted (the honest hash boundary); the keccak/SHA-256 non-collision
+  is the cited `keccak_sha256_cross_separation` axiom. There is **no**
+  `solidityEip1271_compiles_correctly` bridge axiom — the Halmos session is the
+  bytecode evidence standing on its own (as the per-property `HalmosValidateUserOp`
+  rules do for A3.2), not consumed by a Lean corollary.
 
 ### G2 — Deployed verifier ≡ Lean spec, for all signatures · **C (standing ceiling)**
 - **Claim.** `SPHINCsC10Asm.verify` bytecode = `verifyYulModel` for **all** 4008-byte
@@ -308,7 +322,7 @@ These are not defects to be closed; they are stated so an auditor sees them as
 |---|----------------|------|--------|-----------|
 | D1 | Verifier ∀-signature ≡ bytecode (symbolic) | G2 | OPEN — corpus + active refinement build | `A3_1_CLOSURE_PATH.md` |
 | D2 | Deployed EntryPoint v0.6 ≡ `handleOp` | A2 | CITED-TCB — Kontrol-vs-EntryPoint not done | `TRUST_ASSUMPTIONS.md` A2 |
-| D3 | EIP-1271 surface has no bytecode corollary | G8 | OPEN (model-only) | `PROOF_MAP.md` I-6 |
+| D3 | EIP-1271 surface bytecode binding | G8 | **LARGELY CLOSED 2026-06-29** — `HalmosIsValidSignature` (3 rules, both profiles): forbids-bootstrap clean bytecode ∀; non-bypass/view-only per-property B over installed reps (`ownerAtIndex` ceiling = A3.2). Residual: no symbolic-∀ over unset indices; no Lean bridge corollary | `PROOF_MAP.md` I-6 |
 | D4 | A5 quantitative / `+C` bit-security | G3 | CITED-TCB (irreducible §6.3); `+C` outside corpus | `EUFCMA.lean`, roadmap T1.1 |
 | D5 | Rust→Lean (Charon/Aeneas) faithfulness | extracted specs | Charon has no foundational soundness proof; gate = regen-diff + KAT `#eval` | roadmap T1.3 |
 | D6 | Firmware invariants #2/#3/#4 + clear-sign | §5 | OUT OF SCOPE — silicon-E2E only | `docs/security/` |
@@ -316,8 +330,10 @@ These are not defects to be closed; they are stated so an auditor sees them as
 | D8 | A1 silicon / keccak (no verified hash) | §6.1/6.2 | IRREDUCIBLE cited-TCB | this doc §6 |
 | D9 | In-kernel EUF-CMA conjunct non-operational (`isForgery` unsatisfiable for honestly-signable msgs) — security carried by the cited reduction, not the in-Lean conjunct | G3 | DOCUMENTED (sibling of the A2 in-Lean tautology) | `AXIOM_STATUS.json` A5-EUFCMA (P9), roadmap §0 |
 
-**Closed this session:** the former "hInv reachability is fuzz-backed" defeater (G4)
-— now a kernel inductive invariant.
+**Closed this session:** (1) the former "hInv reachability is fuzz-backed" defeater
+(G4) — now a kernel inductive invariant; (2) the EIP-1271 model-only gap (D3/G8) —
+now bytecode-discharged: the forbids-bootstrap headline is a clean ∀ on the deployed
+bytecode, plus per-property B (non-bypass / view-only) over installed reps.
 
 ---
 
