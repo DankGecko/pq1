@@ -60,6 +60,11 @@ import Extracted.SlotKdf.SlotKdfSpec
 #print axioms Extracted.Equiv.extract_digits_spec
 #print axioms Extracted.Equiv.extract_digits_lt
 #print axioms Extracted.Equiv.signed_preimage_spec
+-- FW-update supply-chain integrity (domain-tag cross-protocol separation +
+-- authorizes-exactly-one-firmware) over the frozen 75-B PQFW_V1 preimage.
+#print axioms Extracted.Equiv.preimage_layout_injective
+#print axioms Extracted.Equiv.layout_domain_tag_prefix
+#print axioms Extracted.Equiv.signed_preimage_authorizes_one_firmware
 #print axioms Extracted.Equiv.roundtrip_11_id
 #print axioms Extracted.Equiv.beValue_lt
 #print axioms Extracted.Equiv.bytes_to_u64_spec

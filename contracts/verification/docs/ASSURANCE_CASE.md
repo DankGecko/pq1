@@ -91,7 +91,8 @@ G0  theft-free + integrity (theft_free / theft_free_bytecode)
 │   └─ A6  Lean kernel ................................... X
 │
 └─ S5  firmware / hardware invariants (mostly OUT OF SCOPE — §5)
-    └─ G9  dual-chip seed split reveals no bit ........... K (IT core, scoped)  ← NEW this session
+    ├─ G9  dual-chip seed split reveals no bit ........... K (IT core, scoped)  ← NEW this session
+    └─ G10 FW-update preimage: domain-sep + 1-firmware ... K (extracted spec)   ← NEW this session
         (the other firmware invariants: silicon-E2E only, no Lean coverage)
 ```
 
@@ -288,6 +289,26 @@ device-wide guarantee.
 
 This narrows the "5 of 9 invariants unproven" statement to **#1 partially proven
 (IT core), 4 still silicon-E2E-only.**
+
+### G10 — FW-update signed preimage: domain-separated + authorizes one firmware · **K**  ← NEW
+- **Status — NEW 2026-06-29.** The CLAUDE.md "frozen 75-B preimage" + fw-manifest
+  "the `PQFW_V1` domain tag stops cross-protocol signature reuse" prose claims now
+  have kernel backing, over the **Aeneas-extracted** firmware spec
+  (`extracted/Extracted/FwManifestSpec.lean`, gated by `make verify-extracted`).
+- **Proven (kernel `[propext, Classical.choice, Quot.sound]`, SHA-opaque).**
+  `preimage_layout_injective` (the 75-byte layout determines its fields uniquely);
+  `layout_domain_tag_prefix` (every preimage begins with `PQFW_V1` ⇒ structurally
+  distinct from any non-tagged signed domain — cross-protocol separation at the
+  preimage layer); `signed_preimage_authorizes_one_firmware` (equal `signed_preimage`
+  outputs ⇒ equal version-bytes + secure/nonsecure hashes — composes
+  `signed_preimage_spec` with the layout injectivity). Frozen 75-B *size* is
+  enforced by the return type (`Array Std.U8 75#usize`).
+- **Defeater / scope.** SHA-opaque: these are facts about the *preimage*; the step
+  "distinct preimage ⇒ distinct digest" is the cited SHA-256 collision-resistance
+  (separate). The release key is single-use (signs only FW manifests), so this is
+  supply-chain *integrity / unambiguity* (one signature ⇄ one firmware build), not a
+  cross-key confusion defense. Rests on the Rust→Lean extraction TCB (D5) like every
+  extracted spec.
 
 ---
 
