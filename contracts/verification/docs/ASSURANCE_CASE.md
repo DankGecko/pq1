@@ -141,6 +141,15 @@ G0  theft-free + integrity (theft_free / theft_free_bytecode)
 - **Defeater.** That the executed bytes *reach* the callee and the value *moves* is
   **A4** (`T`) — the EVM forwarded-byte delivery, not a kernel fact; and that the
   signed `callData` field equals what EntryPoint relays is **A2** (`T`).
+- **(EF-#15) "executed `(target,value,data)` = signed `callData`" — decomposed
+  (2026-06-29).** The PoC ("validate callData X, execute independent args Y") is a
+  4-link chain (see the `Spec/Theorems.lean` §4c note): (1) digest commits
+  `sha256(op.callData)` — `theft_free_with_calldata_binding` (K, mod `BreaksHash`);
+  (2) EntryPoint relays `op.callData` as the execute calldata — **A2** (T, the wallet
+  can't self-check; the Lean model abstracts the relay); (3) deployed execute decodes
+  calldata→args & runs them — `HalmosExecuteEquiv` (B); (4) model dispatches in order
+  — `executeBatch_faithful` (K). So #15 is an **A2-relay residual** (folds into
+  defeater D2), NOT a missing Lean decode proof — link 3 discharges the decode.
 
 ### G6 — Owner-set integrity / init-once / no-UUPS · **K (model) + B (independent)**
 - **Artifact.** `cannot_remove_bootstrap`, `initialize_called_exactly_once`,

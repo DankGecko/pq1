@@ -534,7 +534,26 @@ below restate the load-bearing gate — *a money-moving execute requires
 the in-transaction validated-owner token* — against the OPAQUE deployed
 execute symbols, so `#print axioms` names the execute bridge axioms
 (A3.2-exec). They are the Lean-side counterpart of the Halmos session
-`test/halmos/HalmosExecuteEquiv.t.sol`. -/
+`test/halmos/HalmosExecuteEquiv.t.sol`.
+
+**(EF-#15) "executed `(target,value,data)` = the SIGNED `callData`" — binding
+decomposition.** A PoC asks whether a verifier-true validate of `op.callData = X`
+can be followed by an execute of independent args `Y ≠ decode(X)`. The full binding
+is a 4-link chain, of which ONLY the EntryPoint relay is not Lean-mechanized:
+  1. signed digest ⇒ `sha256(op.callData)` committed — `theft_free_with_calldata_binding`
+     + `Wallet.SphincsDigestSpec.sphincsDigest_field_binding` (Lean, modulo `BreaksHash`).
+  2. EntryPoint passes `op.callData` verbatim as the wallet's execute calldata —
+     **A2 cited-TCB** (the deployed EntryPoint v0.6 invocation behaviour; the wallet
+     cannot self-verify it, and the Lean `Execute` model abstracts the relay by
+     taking the args directly — exactly the model-abstraction the PoC probes).
+  3. the deployed `executeWithOffchainCount` bytecode ABI-decodes its calldata into
+     `(ownerIndex, target, value, data)` and runs exactly those — `HalmosExecuteEquiv`
+     over a symbolic `ownerIndex` + symbolic args (A3.2-exec / B).
+  4. the Lean `Execute` model dispatches those args in order — `executeBatch_faithful` (K).
+So the executed payload IS bound to the signed `callData` modulo link 2 (A2). #15 is
+therefore an **A2-relay residual** (irreducible cited-TCB, same boundary
+TRUST_ASSUMPTIONS A2 already names), NOT a missing Lean decode proof — the decode is
+discharged at link 3, the digest-binding at link 1. -/
 
 open SphincsCVerify.Wallet.Execute
 
