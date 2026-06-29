@@ -26,8 +26,27 @@
 //! These helpers are called on every `cmd_*` entry; keeping them in a
 //! single tiny file makes the memory-boundary invariants easy to audit.
 
+use sphincs_tz_shared::ns_ptr_validate::{ns_read_window_ok, ns_write_window_ok, NsRegions};
 use sphincs_tz_shared::{
     NS_FLASH_BASE, NS_FLASH_END, NS_SRAM_BASE, NS_SRAM_END, SHARED_MAILBOX_BASE, SHARED_MAILBOX_END,
+};
+
+/// The non-secure memory map this build validates against, assembled
+/// from the cfg-gated `pqsigner-proto` linker constants. The pure
+/// window-check arithmetic (null reject, `usize → u32` truncation
+/// reject, `ptr + len` overflow reject, constant-window containment,
+/// shared-mailbox disjointness) lives in
+/// [`sphincs_tz_shared::ns_ptr_validate`] — host-compilable and
+/// Kani-proven *sound* (`cargo kani -p sphincs-tz-shared`). This is the
+/// single concrete map the firmware feeds it; the hardware `TT`/SAU
+/// re-classification below is ANDed in on top.
+const NS_REGIONS: NsRegions = NsRegions {
+    ns_sram_base: NS_SRAM_BASE,
+    ns_sram_end: NS_SRAM_END,
+    ns_flash_base: NS_FLASH_BASE,
+    ns_flash_end: NS_FLASH_END,
+    mailbox_base: SHARED_MAILBOX_BASE,
+    mailbox_end: SHARED_MAILBOX_END,
 };
 
 /// ARMv8-M `TT` (Test Target) — ask the SAU/IDAU for the security
@@ -115,32 +134,16 @@ fn tt_range_is_ns(_ptr: u32, _len: usize) -> bool {
 /// and does not overlap the shared mailbox.
 #[inline]
 pub(super) fn validate_ns_write_ptr(ptr: u32, len: usize) -> bool {
-    if ptr == 0 {
+    // Pure constant-window arithmetic (null / truncation / overflow /
+    // containment / mailbox-disjoint) — Kani-proven sound in
+    // `sphincs_tz_shared::ns_ptr_validate`.
+    if !ns_write_window_ok(&NS_REGIONS, ptr, len) {
         return false;
     }
-    // The validator reasons in 32-bit address space; an oversized
-    // `usize` would silently truncate in the `len as u32` cast below
-    // and approve a range orders of magnitude larger than measured.
-    // No-op on 32-bit ARM (`usize == u32`); defensive on hosts/tests.
-    if len > u32::MAX as usize {
-        return false;
-    }
-    let end = match ptr.checked_add(len as u32) {
-        Some(e) => e,
-        None => return false,
-    };
-    if !(ptr >= NS_SRAM_BASE && end <= NS_SRAM_END) {
-        return false;
-    }
-    // Reject any overlap with the shared mailbox region.
-    if ptr < SHARED_MAILBOX_END && end > SHARED_MAILBOX_BASE {
-        return false;
-    }
-    // HIGH-1: double-check against the SAU in hardware.
-    if !tt_range_is_ns(ptr, len) {
-        return false;
-    }
-    true
+    // HIGH-1: double-check against the SAU in hardware. Evaluated only
+    // when the window check already passed, preserving the original
+    // short-circuit order.
+    tt_range_is_ns(ptr, len)
 }
 
 /// Validate that `ptr + len` falls entirely within a non-secure memory
@@ -149,27 +152,14 @@ pub(super) fn validate_ns_write_ptr(ptr: u32, len: usize) -> bool {
 /// payloads like an unsigned tx). The shared mailbox is excluded.
 #[inline]
 pub(super) fn validate_ns_read_ptr(ptr: u32, len: usize) -> bool {
-    if ptr == 0 {
+    // Pure constant-window arithmetic (NS SRAM *or* NS flash, mailbox-
+    // disjoint when in SRAM) — Kani-proven sound in
+    // `sphincs_tz_shared::ns_ptr_validate`.
+    if !ns_read_window_ok(&NS_REGIONS, ptr, len) {
         return false;
     }
-    if len > u32::MAX as usize {
-        return false;
-    }
-    let end = match ptr.checked_add(len as u32) {
-        Some(e) => e,
-        None => return false,
-    };
-    let in_sram = ptr >= NS_SRAM_BASE && end <= NS_SRAM_END;
-    let in_flash = ptr >= NS_FLASH_BASE && end <= NS_FLASH_END;
-    if !(in_sram || in_flash) {
-        return false;
-    }
-    if in_sram && ptr < SHARED_MAILBOX_END && end > SHARED_MAILBOX_BASE {
-        return false;
-    }
-    // HIGH-1: double-check against the SAU in hardware.
-    if !tt_range_is_ns(ptr, len) {
-        return false;
-    }
-    true
+    // HIGH-1: double-check against the SAU in hardware. Evaluated only
+    // when the window check already passed, preserving the original
+    // short-circuit order.
+    tt_range_is_ns(ptr, len)
 }

@@ -23,6 +23,10 @@
 // Implementation modules that need a home but aren't pure-IDL.
 pub mod apdu_framing;
 pub mod db_format;
+// Pure NS-pointer range-validation arithmetic + volatile-copy primitives,
+// extracted host-verifiable from `secure/src/nsc/{ptr_validate,ns_ptr}.rs`
+// for Kani (soundness) + Miri (tree-borrows) — see module docs.
+pub mod ns_ptr_validate;
 
 // Re-export every protocol constant + enum + wire-format size from the
 // new authoritative crate. Glob-import so adding constants to

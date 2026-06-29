@@ -36,6 +36,7 @@
 #![allow(dead_code)]
 
 use core::marker::PhantomData;
+use sphincs_tz_shared::ns_ptr_validate::{ns_as_slice, ns_read_volatile_into, ns_write_volatile_from};
 use sphincs_tz_shared::NscStatus;
 
 use super::ptr_validate::{validate_ns_read_ptr, validate_ns_write_ptr};
@@ -165,12 +166,12 @@ impl<T> ReadPtr<T> {
         // `read_volatile` byte-by-byte realises the TOCTOU snapshot
         // — the compiler is forbidden from eliding or batching the
         // reads, so a hostile NS cannot present different bytes to
-        // the validator vs. the consumer.
+        // the validator vs. the consumer. The per-byte volatile loop
+        // is the host-shared, Miri-tree-borrows-vetted primitive
+        // `ns_read_volatile_into`; `dst.len() == self.len` (asserted
+        // above) is its precondition.
         unsafe {
-            let src = self.addr as *const u8;
-            for i in 0..self.len {
-                dst[i] = core::ptr::read_volatile(src.add(i));
-            }
+            ns_read_volatile_into(self.addr as *const u8, dst);
         }
     }
 
@@ -197,7 +198,8 @@ impl<T> ReadPtr<T> {
         // documented in `# Safety` above, that NS will not mutate the
         // range for the returned lifetime — single-threaded gateway
         // makes this trivially true for the duration of one handler.
-        unsafe { core::slice::from_raw_parts(self.addr as *const u8, self.len) }
+        // Delegates to the host-shared `ns_as_slice` (`from_raw_parts`).
+        unsafe { ns_as_slice(self.addr as *const u8, self.len) }
     }
 }
 
@@ -236,12 +238,12 @@ impl<T> WritePtr<T> {
         // NS-classified, NS-writable (NS-SRAM, not NS-flash), and
         // does not overlap the shared mailbox. `write_volatile` per
         // byte forces the compiler to emit one store per source byte
-        // — NS observers cannot see torn / partial words mid-copy.
+        // — NS observers cannot see torn / partial words mid-copy. The
+        // per-byte volatile loop is the host-shared, Miri-tree-borrows-
+        // vetted primitive `ns_write_volatile_from`; `src.len() ==
+        // self.len` (asserted above) is its precondition.
         unsafe {
-            let dst = self.addr as *mut u8;
-            for (i, &b) in src.iter().enumerate() {
-                core::ptr::write_volatile(dst.add(i), b);
-            }
+            ns_write_volatile_from(self.addr as *mut u8, src);
         }
     }
 }

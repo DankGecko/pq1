@@ -3701,6 +3701,8 @@ kani:
 	cargo kani -p pqsigner-tx
 	@echo "==> Kani: ERC-7730 IR header parser (offset-bounds safety)"
 	cargo kani -p pqsigner-erc7730 --harness erc7730_ir_parse_panic_free
+	@echo "==> Kani: NS-pointer validation (window soundness: accept => in-NS, no-wrap, mailbox-disjoint, no usize->u32 trunc; unbounded/loop-free + accept/reject controls)"
+	cargo kani -p sphincs-tz-shared
 	@echo "==> kani: PASS"
 
 miri:

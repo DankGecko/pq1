@@ -36,3 +36,9 @@ pqsigner-fi = { path = "../pqsigner-fi" }
 # compile this dependency. See also `secure/src/fuzz_props.rs` for the
 # matching harness over the secure-side parsers.
 proptest = "1"
+
+# `#[cfg(kani)]` appears in `ns_ptr_validate.rs` (host-verifiable
+# NS-pointer soundness harnesses, run via `cargo kani -p
+# sphincs-tz-shared`). Register the cfg so non-Kani builds don't warn.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)"] }
