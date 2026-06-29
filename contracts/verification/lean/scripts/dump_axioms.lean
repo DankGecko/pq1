@@ -212,3 +212,12 @@ import SphincsCVerify
 #print axioms SphincsCVerify.Interpreter.execStmt_env_frame
 #print axioms SphincsCVerify.Interpreter.execList_env_frame
 #print axioms SphincsCVerify.Interpreter.execFor_env_frame
+
+-- (FV-#4) verify_signs COMPLETENESS — honest_consistent : WellFormed sk → consistent sk.
+-- The completed reference signer round-trips with the spec verifier. Closure kernel-only
+-- {propext, Classical.choice, Quot.sound} (no new axiom). SCOPE: this is a COMPLETENESS
+-- (usability) result, NOT in theft_free's closure. Meaningful as "firmware sigs accepted
+-- on-chain" only via spec-verify = on-chain verifier (A3.1) PLUS spec-Signer.sign = firmware
+-- signer (ASSUMED — `sign` is hand-written/noncomputable and verifier-derived; see the
+-- trust-base note in Verifier/HonestConsistent.lean). Bridge (b) is a follow-up to anchor.
+#print axioms SphincsCVerify.Interpreter.C10.honest_consistent

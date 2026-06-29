@@ -6,7 +6,27 @@
    and hypertree round-trips (`Verifier/*Roundtrip.lean`), and the completed
    reference signer (`Spec/Signer.lean`). `consistent`/`verify_signs` are
    unchanged — this is the new top-level theorem discharging `consistent`'s
-   honestly-keygen'd content. -/
+   honestly-keygen'd content.
+
+   ## SCOPE / TRUST BASE (read before citing this result)
+
+   This is a *completeness* (usability) guarantee, NOT a safety one: it is not in
+   `theft_free`'s dependency closure. It says "the spec signer round-trips with
+   the spec verifier". Read as "the firmware's signatures are accepted on-chain"
+   only via TWO bridges:
+     (a) spec-`verify` = the on-chain verifier — REAL, anchored by A3.1
+         (`execC10Asm`=spec) + the independent-KAT leg.
+     (b) spec-`Signer.sign` = the firmware signer — **ASSUMED**. `Spec.Signer.sign`
+         is a hand-written, `noncomputable`, un-anchored model. It was completed
+         (commit b75e5a47) by reverse-engineering it to emit the verifier's own
+         reconstruction shapes (`mtAuthPath`/`forsMtAuthPath`/`keygenPk`-chains),
+         so the round-trip hypotheses discharge by construction. The proof
+         therefore CANNOT detect an unfaithful-but-self-consistent `sign` (one
+         that mis-derives an ADRS/hash in a way the verifier reconstruction also
+         mis-uses). Bridge (b) is a trust-base item.
+   Follow-up to strengthen (b): cross-check `Spec.Signer.sign` against an
+   independent anchor — the Rust/Python KAT oracle or `serialise`/`deserialise`
+   + the deployed verifier path — rather than leaving it verifier-derived. -/
 import SphincsCVerify.Spec.SignerPost
 import SphincsCVerify.Spec.Theorems
 import SphincsCVerify.Verifier.ForsRoundtrip
