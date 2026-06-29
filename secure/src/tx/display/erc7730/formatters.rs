@@ -763,15 +763,30 @@ fn render_encrypted(
     pages: &mut Pages,
     params: &ParamSet<'_>,
 ) -> Result<(), RenderErr> {
-    let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
-    write_label_row(pages, p, field.label);
-    let [_, r1, r2, foot] = pages.page_mut(p);
-    write_line(r1, "[ENCRYPTED]");
-    if let Some(fb) = params.fallback_label {
-        write_line_bytes(r2, fb);
-    }
-    write_line(foot, "> next");
-    Ok(())
+    // WYSIWYS (audit 2026-06-29 — encrypted formatter signed-but-not-shown).
+    //
+    // The old body painted a benign "[ENCRYPTED]" + descriptor-pinned
+    // `fallback_label` page and returned `Ok(())` WITHOUT ever resolving the
+    // field's path — so the 32-byte signed operand at that path (a recipient,
+    // an amount, a spender) was committed to the digest but NEVER shown, on a
+    // page that looks like a normal clear-sign confirmation. It was the only
+    // formatter that "succeeds" while hiding a signed value; every sibling
+    // (`render_enum`, `render_nft_name`, …) declines-to-blind when it cannot
+    // faithfully display, which routes the whole tx to a loud blind-sign page.
+    // Because the field is a normal *visible* field (not `visible:"never"`),
+    // the dbgen H-3 coverage lint credited it as shown — there was no build-
+    // time or on-device signal that an operand was hidden.
+    //
+    // There is no honest way to clear-sign a value the format says to hide, so
+    // REJECT (decline-to-blind) exactly like `render_enum`: the dispatcher
+    // falls through to the blind-sign ladder (loud warning + raw calldata
+    // fingerprint) on the UserOp path, and refuses on the off-chain typed
+    // path. `dbgen::parse_format_name` additionally refuses `format:
+    // "encrypted"` at build time, so the pinned corpus can never emit this
+    // opcode — this arm is the runtime safety net if a hand-built TLV ever
+    // sets 0x0E.
+    let _ = (field, pages, params);
+    Err(RenderErr::Reject("7730 encrypted field"))
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1688,5 +1703,103 @@ mod block_height_magnitude_fixed {
         assert_eq!(&pages.buf[0][2][..13], b"! >1e16 (ovf)");
         // No truncated digit string anywhere on the value rows.
         assert_ne!(&pages.buf[0][2][..4], b"1234");
+    }
+}
+
+#[cfg(test)]
+mod encrypted_formatter_declines {
+    //! REGRESSION (audit 2026-06-29 — `encrypted` formatter signed-but-not-shown).
+    //!
+    //! `render_encrypted` used to paint a benign "[ENCRYPTED]" + descriptor
+    //! `fallback_label` page and return `Ok(())` WITHOUT resolving the field's
+    //! path — so the 32-byte signed operand at that path (recipient / amount /
+    //! spender) was committed to the digest but never shown, on a page that
+    //! looks like a normal clear-sign confirmation. It was the only formatter
+    //! that "succeeds" while hiding a signed value, and because the field is a
+    //! normal *visible* field the dbgen H-3 coverage lint credited it as
+    //! shown. It now declines-to-blind (`RenderErr::Reject`) like `render_enum`,
+    //! so the dispatcher falls through to the loud blind-sign ladder (UserOp
+    //! path) / refuses (off-chain typed path). `dbgen::parse_format_name` also
+    //! refuses `format:"encrypted"` at build time.
+    use super::*;
+    use crate::tx::erc7730::{ContextKind, Erc7730Ir};
+
+    fn empty_ir() -> Erc7730Ir<'static> {
+        Erc7730Ir {
+            schema_ver: crate::tx::erc7730::SCHEMA_VER,
+            context_kind: ContextKind::Contract,
+            chain_id: 1,
+            contract: [0u8; 20],
+            descriptor_hash: [0u8; 32],
+            domain_separator: [0u8; 32],
+            owner: &[],
+            contract_name: &[],
+            pool: &[],
+            formats: &[],
+            raw: &[],
+        }
+    }
+
+    fn envelope() -> Eip1559Tx {
+        Eip1559Tx {
+            chain_id: 1,
+            nonce: 0,
+            max_priority_fee_per_gas: U256::zero(),
+            max_fee_per_gas: U256::zero(),
+            gas_limit: 0,
+            to: Some([0u8; 20]),
+            value: U256::zero(),
+            data_len: 0,
+            access_list_count: 0,
+            signing_hash: [0u8; 32],
+        }
+    }
+
+    /// `render_encrypted` must REJECT — never emit a confirmable page — even
+    /// when a `fallback_label` is present (the worst case: the descriptor
+    /// supplies a plausible benign label the old code would have shown).
+    #[test]
+    fn render_encrypted_declines_to_blind_even_with_fallback_label() {
+        let mut params = ParamSet::default();
+        params.fallback_label = Some(b"Recipient address");
+        let field = FieldEntry {
+            format_op: FormatOp::Encrypted as u8,
+            label: b"Recipient",
+            path_off: 0,
+            param_off: 0,
+        };
+        let mut pages = Pages::with_len(0);
+        let r = render_encrypted(&field, &mut pages, &params);
+        assert!(
+            matches!(r, Err(RenderErr::Reject("7730 encrypted field"))),
+            "encrypted formatter must decline-to-blind, got {r:?}"
+        );
+        // No page may be produced — a confirmable "[ENCRYPTED]" page is exactly
+        // the signed-but-not-shown surface this fix removes.
+        assert_eq!(pages.len, 0, "encrypted field must not emit a page");
+    }
+
+    /// Routed through `dispatch`, a `FormatOp::Encrypted` field aborts the
+    /// whole descriptor render (Err) so the tx falls to the blind-sign ladder
+    /// — it can never produce a benign clear-sign page that hides the operand.
+    #[test]
+    fn dispatch_encrypted_aborts_render() {
+        let ir = empty_ir();
+        let tx = envelope();
+        let body = [0u8; 32];
+        let resolver = crate::names::NameResolver::new();
+        let params = ParamSet::default();
+        let field = FieldEntry {
+            format_op: FormatOp::Encrypted as u8,
+            label: b"amount",
+            path_off: 0,
+            param_off: 0,
+        };
+        let mut pages = Pages::with_len(0);
+        let r = dispatch(
+            &field, &mut pages, &ir, &body, &tx, None, &resolver, &params,
+        );
+        assert!(r.is_err(), "encrypted field must abort the descriptor render");
+        assert_eq!(pages.len, 0, "no page may be emitted for an encrypted field");
     }
 }

@@ -1391,7 +1391,23 @@ fn parse_format_name(name: &str) -> Result<u8, String> {
         "chainId" => FMT_CHAIN_ID,
         "tokenTicker" => FMT_TOKEN_TICKER,
         "interoperableAddressName" => FMT_INTEROP_ADDR_NAME,
-        "encrypted" => FMT_ENCRYPTED,
+        // WYSIWYS (audit 2026-06-29): `encrypted` is REFUSED. There is no
+        // honest way to clear-sign a value the format says to hide — the
+        // firmware renderer would commit the field's path to the signed
+        // digest while showing only a benign "[ENCRYPTED]" label, a
+        // signed-but-not-shown operand on a page that looks like a normal
+        // confirmation. A field that genuinely must not be displayed has to
+        // be `visible:"never"` (excluded from the signed-and-shown set), not
+        // rendered as `encrypted`. The firmware `render_encrypted` also
+        // declines-to-blind as a runtime safety net.
+        "encrypted" => {
+            return Err(
+                "format `encrypted` is refused: it hides a signed operand \
+                 (WYSIWYS). Use `visible:\"never\"` for fields that must not \
+                 be displayed."
+                    .to_string(),
+            )
+        }
         other => return Err(format!("unknown format `{other}`")),
     })
 }
