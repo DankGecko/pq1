@@ -23,6 +23,25 @@ import SphincsCVerify
 #print axioms SphincsCVerify.Crypto.Quantitative.c10_cap_is_load_bearing
 #print axioms SphincsCVerify.Crypto.Quantitative.securityFloor_antitone_in_qBits
 
+-- Dual-SE XOR split-secrecy (Crypto/SplitSecrecy.lean): the SOUND combinatorial
+-- core of CLAUDE.md invariant #1 ("neither chip alone reveals any bit") — the
+-- one-time-pad exactly-one-mask/bijection structure, plus the FAITHFUL deployed
+-- (nonzero-mask) statement (halfE_deployed_*: leak = exactly one excluded
+-- entropy, Δ ≤ 2⁻²⁵⁶). KERNEL-ONLY {propext, Quot.sound} (NO Classical.choice,
+-- NO native/ofReduceBool — the one `decide` is kernel reduction on literals).
+-- The security reading additionally needs a uniform+independent mask (TRNG), NOT
+-- proven here — see the Scope block in SplitSecrecy.lean. Pin EVERY load-bearing
+-- lemma (the distributional bijections do NOT ride dual_split_2of2_structure).
+#print axioms SphincsCVerify.Crypto.SplitSecrecy.halfE_unique_mask
+#print axioms SphincsCVerify.Crypto.SplitSecrecy.halfE_equiconsistent
+#print axioms SphincsCVerify.Crypto.SplitSecrecy.halfE_pushforward_bijective
+#print axioms SphincsCVerify.Crypto.SplitSecrecy.halfO_pushforward_bijective
+#print axioms SphincsCVerify.Crypto.SplitSecrecy.halfE_deployed_consistent
+#print axioms SphincsCVerify.Crypto.SplitSecrecy.halfE_deployed_excludes_self
+#print axioms SphincsCVerify.Crypto.SplitSecrecy.dual_split_2of2_structure
+#print axioms SphincsCVerify.Crypto.SplitSecrecy.joint_determines_entropy
+#print axioms SphincsCVerify.Crypto.SplitSecrecy.halfE_nondegenerate
+
 -- A3.1 deductive-closure track (Interpreter/Memory.lean): byte-addressed memory
 -- frame/disjointness lemmas (residual R2). Kernel-only, mathlib-free, NO new
 -- content axiom (the precompile hash is a parameter). See A3_1_CLOSURE_PATH.md.

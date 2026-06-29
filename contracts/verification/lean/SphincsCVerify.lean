@@ -54,6 +54,7 @@ import SphincsCVerify.Wallet.TxFlow
 import SphincsCVerify.Crypto.Assumptions
 import SphincsCVerify.Crypto.EUFCMA
 import SphincsCVerify.Crypto.Quantitative
+import SphincsCVerify.Crypto.SplitSecrecy
 
 -- Stratum C: bridge to the Solidity verifier and EntryPoint v0.6
 import SphincsCVerify.Bridge.SolidityVerifier
