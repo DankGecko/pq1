@@ -350,6 +350,22 @@ pub fn build_db(
     build_db_inner(input_dir, &policy, None)
 }
 
+/// Compile a SINGLE descriptor file, tolerantly. Returns the emitted IR
+/// entries on success, or a descriptive reason on failure. Unlike
+/// [`build_db`] this does NOT build a Merkle tree and does NOT hard-fail
+/// the caller — it is the per-descriptor primitive behind the registry
+/// coverage scan (`xtask scan-registry`), which tallies how much of the
+/// upstream ERC-7730 registry the on-device renderer can clear-sign today
+/// and groups the rest by why it was skipped. `registry_root` resolves
+/// any `includes` templates (the registry repo root).
+pub fn try_compile_one(
+    path: &Path,
+    policy: &Policy,
+    registry_root: Option<&Path>,
+) -> Result<Vec<Emitted>, String> {
+    compile_descriptor(path, policy, registry_root)
+}
+
 fn build_db_inner(
     input_dir: &Path,
     policy: &Policy,
@@ -2666,13 +2682,16 @@ fn resolve_include_path(
             ));
         }
         registry_root.join(parts[4])
-    } else if include_ref.starts_with("./") || include_ref.starts_with("../") {
+    } else {
+        // Any other reference (`./foo.json`, `../foo.json`, or a bare
+        // sibling filename like `common-AggregationRouterV4.json` — the
+        // registry's actual convention) resolves against the descriptor's
+        // OWN directory. The outside-registry-root guard below still bounds
+        // the result, so a `../../../etc/passwd` include is refused.
         descriptor_path
             .parent()
             .ok_or_else(|| "descriptor path has no parent".to_string())?
             .join(include_ref)
-    } else {
-        registry_root.join(include_ref)
     };
 
     let canonical = candidate.canonicalize().map_err(|e| {

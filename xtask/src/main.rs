@@ -21,6 +21,7 @@ fn main() -> ExitCode {
     match subcmd {
         "gen-solidity-constants" => cmd_gen_solidity_constants(&args[1..]),
         "gen-erc7730-descriptors" => cmd_gen_erc7730_descriptors(&args[1..]),
+        "scan-registry" => cmd_scan_registry(&args[1..]),
         "" | "help" | "--help" | "-h" => {
             print_help();
             ExitCode::SUCCESS
@@ -953,5 +954,228 @@ mod tests {
                  adding constants requires a conscious update to this allowlist",
             );
         }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// scan-registry — render-coverage scan over the upstream ERC-7730 registry
+// ─────────────────────────────────────────────────────────────────────
+
+/// Per-category skip examples retained for the report (the printed summary
+/// shows the first few; the `--report` file gets all of them).
+const EXAMPLES_PER_CATEGORY: usize = 500;
+
+/// `(count, [(registry-relative path, raw skip reason)])` for one skip category.
+type SkipBucket = (usize, Vec<(String, String)>);
+
+/// `scan-registry --registry-root <dir> [--input <dir>] [--policy <path>]
+/// [--report <path>]`
+///
+/// Tolerantly compiles every descriptor under `--input` (default
+/// `<registry-root>/registry`) through the SAME `dbgen::erc7730` pipeline
+/// the firmware-pinned catalog uses, and tallies how many the on-device
+/// renderer can clear-sign today vs. how many are skipped and why. Read-
+/// only — writes nothing into the firmware corpus; it answers "how much of
+/// the real registry can PQ1 clear-sign, and what is the rest blocked on".
+fn cmd_scan_registry(args: &[String]) -> ExitCode {
+    let mut registry_root: Option<PathBuf> = None;
+    let mut input: Option<PathBuf> = None;
+    let mut policy_path: Option<PathBuf> = None;
+    let mut report_path: Option<PathBuf> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--registry-root" => {
+                i += 1;
+                registry_root = args.get(i).map(PathBuf::from);
+            }
+            "--input" => {
+                i += 1;
+                input = args.get(i).map(PathBuf::from);
+            }
+            "--policy" => {
+                i += 1;
+                policy_path = args.get(i).map(PathBuf::from);
+            }
+            "--report" => {
+                i += 1;
+                report_path = args.get(i).map(PathBuf::from);
+            }
+            other => {
+                eprintln!("scan-registry: unknown flag `{other}`");
+                return ExitCode::FAILURE;
+            }
+        }
+        i += 1;
+    }
+
+    let registry_root = match registry_root {
+        Some(r) => r,
+        None => {
+            eprintln!("scan-registry: --registry-root <dir> is required");
+            return ExitCode::FAILURE;
+        }
+    };
+    let workspace_root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap_or_default())
+        .parent()
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    let input = input.unwrap_or_else(|| registry_root.join("registry"));
+    let policy_path =
+        policy_path.unwrap_or_else(|| workspace_root.join("secure/data/erc7730/policy.toml"));
+
+    let policy = match dbgen::erc7730::load_policy(&policy_path) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("scan-registry: load policy {}: {e}", policy_path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let mut files: Vec<PathBuf> = Vec::new();
+    collect_json_recursive(&input, &mut files);
+    files.sort();
+    if files.is_empty() {
+        eprintln!("scan-registry: no .json descriptors under {}", input.display());
+        return ExitCode::FAILURE;
+    }
+
+    let mut ok_files = 0usize;
+    let mut ok_leaves = 0usize;
+    let mut covered_projects: std::collections::BTreeSet<String> = Default::default();
+    // category -> (count, example (relpath, raw reason) list)
+    let mut skips: std::collections::BTreeMap<&'static str, SkipBucket> = Default::default();
+
+    for f in &files {
+        let rel = f
+            .strip_prefix(&registry_root)
+            .unwrap_or(f)
+            .to_string_lossy()
+            .to_string();
+        match dbgen::erc7730::try_compile_one(f, &policy, Some(&registry_root)) {
+            Ok(entries) => {
+                ok_files += 1;
+                ok_leaves += entries.len();
+                covered_projects.insert(project_of(&rel));
+            }
+            Err(reason) => {
+                let cat = skip_category(&reason);
+                let e = skips.entry(cat).or_default();
+                e.0 += 1;
+                if e.1.len() < EXAMPLES_PER_CATEGORY {
+                    e.1.push((rel, reason));
+                }
+            }
+        }
+    }
+
+    let total = files.len();
+    let skipped: usize = skips.values().map(|(c, _)| c).sum();
+    let mut by_count: Vec<(&&'static str, &SkipBucket)> = skips.iter().collect();
+    by_count.sort_by_key(|(_, bucket)| std::cmp::Reverse(bucket.0));
+
+    let mut out = String::new();
+    let _ = writeln!(out, "# ERC-7730 registry render-coverage scan\n");
+    let _ = writeln!(out, "input:    {}", input.display());
+    let _ = writeln!(out, "policy:   {} (allow_unattested_dev_descriptors = {})", policy_path.display(), policy.allow_unattested_dev_descriptors);
+    let _ = writeln!(out, "\n## Summary");
+    let _ = writeln!(out, "descriptors scanned:        {total}");
+    let pct = (ok_files * 100).checked_div(total).unwrap_or(0);
+    let _ = writeln!(out, "COMPILE (renderable today):  {ok_files}  ({pct}%) -> {ok_leaves} catalog leaves, across {} projects", covered_projects.len());
+    let _ = writeln!(out, "skipped:                     {skipped}");
+    let _ = writeln!(out, "\n## Skipped, by reason (what the rest is blocked on)");
+    for (cat, (count, examples)) in &by_count {
+        let _ = writeln!(out, "\n### {count}  {cat}");
+        for (path, reason) in examples.iter() {
+            let short: String = reason.chars().take(140).collect();
+            let _ = writeln!(out, "    - {path}\n        {short}");
+        }
+    }
+    let _ = writeln!(out, "\n## Covered projects ({})", covered_projects.len());
+    let cps: Vec<&String> = covered_projects.iter().collect();
+    let _ = writeln!(out, "    {}", cps.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "));
+
+    print!("{out}");
+    if let Some(rp) = report_path {
+        if let Err(e) = fs::write(&rp, &out) {
+            eprintln!("scan-registry: write report {}: {e}", rp.display());
+            return ExitCode::FAILURE;
+        }
+        println!("\nscan-registry: wrote {}", rp.display());
+    }
+    ExitCode::SUCCESS
+}
+
+fn collect_json_recursive(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
+    let Ok(rd) = fs::read_dir(dir) else { return };
+    for entry in rd.flatten() {
+        let p = entry.path();
+        if p.is_dir() {
+            // Skip the registry's `tests/` fixture dirs.
+            if p.file_name().is_some_and(|n| n == "tests") {
+                continue;
+            }
+            collect_json_recursive(&p, out);
+        } else if is_descriptor_file(&p) {
+            out.push(p);
+        }
+    }
+}
+
+/// True only for standalone ERC-7730 descriptors. The registry mixes, in
+/// the same dirs: `calldata-*.json` / `eip712-*.json` (the descriptors),
+/// `common-*.json` (include-only templates with no `context`, pulled in via
+/// `includes`), and `*.tests.json` (test fixtures). Only the first kind is a
+/// compilable descriptor; counting the rest would mis-report coverage.
+fn is_descriptor_file(p: &std::path::Path) -> bool {
+    let Some(name) = p.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    name.ends_with(".json")
+        && !name.contains(".tests.")
+        && (name.starts_with("calldata-") || name.starts_with("eip712-"))
+}
+
+/// The project segment of a registry-relative path (`registry/aave/...` ->
+/// `aave`, `ercs/...` -> `ercs`), for the covered-projects roll-up.
+fn project_of(rel: &str) -> String {
+    let parts: Vec<&str> = rel.split('/').collect();
+    match parts.as_slice() {
+        [first, second, ..] if *first == "registry" => second.to_string(),
+        [first, ..] => first.to_string(),
+        _ => rel.to_string(),
+    }
+}
+
+/// Bucket a dbgen compile error into a coarse "what's blocking it" category.
+/// Ordered most-specific-first; the raw reason is still shown per example.
+fn skip_category(msg: &str) -> &'static str {
+    let m = msg;
+    if m.contains("array index") || m.contains("array slice") || m.contains("ArrayIdx") {
+        "array-path (needs dynamic-array walker)"
+    } else if m.contains("dynamic tuple") || m.contains("is dynamic") || m.contains("calldata tail") {
+        "dynamic-ABI-type (needs dynamic-array walker)"
+    } else if m.contains("spanning") && m.contains("words") {
+        "multi-word static field (>32B)"
+    } else if m.contains("includes") {
+        "includes-unresolved"
+    } else if m.contains("nested calldata") || m.contains("encrypted") {
+        "unsupported formatter (nested-calldata / encrypted)"
+    } else if m.contains("nft") {
+        "unsupported formatter (nft)"
+    } else if m.contains("enum") {
+        "enum issue"
+    } else if m.contains("completeness") || m.contains("not covered") || m.contains("must cover") || m.contains("uncovered") {
+        "completeness lint (un-displayed field)"
+    } else if m.contains("MAX_IR_LEN") || m.contains("exceeds") || m.contains("too large") || m.contains("too long") {
+        "IR too large (>4KiB)"
+    } else if m.contains("policy") || m.contains("attest") {
+        "attestation policy"
+    } else if m.starts_with("schema") || m.starts_with("parse") || m.contains("schema:") || m.contains("missing field") || m.contains("unknown field") {
+        "schema / parse"
+    } else if m.contains("selector") || m.contains("signature") || m.contains("encodeType") || m.contains("primary") {
+        "selector / type-signature"
+    } else {
+        "other"
     }
 }
