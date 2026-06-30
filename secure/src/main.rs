@@ -552,7 +552,7 @@ fn saes_self_test_and_halt() -> ! {
     // RDP1 boot diagnostic — bring the OLED up the moment we enter the
     // self-test so even at RDP ≥ 1 (UART silent, SWD halt denied) the
     // screen retains a visible state of how far the firmware got.
-    #[cfg(feature = "ui-oled")]
+    #[cfg(feature = "ui-lcd")]
     {
         ui::init();
         let d = ui::display();
@@ -572,7 +572,7 @@ fn saes_self_test_and_halt() -> ! {
     // Stage 7: uart::init returned (relevant only if uart-console is on).
     #[cfg(feature = "boot-pulse")]
     unsafe { hw::boot_pulse::pulse(7); }
-    #[cfg(feature = "ui-oled")]
+    #[cfg(feature = "ui-lcd")]
     {
         let d = ui::display();
         d.draw_line(1, "BOOT 7 uart up");
@@ -582,7 +582,7 @@ fn saes_self_test_and_halt() -> ! {
     match hw::saes::init() {
         Ok(()) => {
             secure_log!("[S][saes] init OK");
-            #[cfg(feature = "ui-oled")]
+            #[cfg(feature = "ui-lcd")]
             {
                 let d = ui::display();
                 d.draw_line(2, "saes init OK");
@@ -596,7 +596,7 @@ fn saes_self_test_and_halt() -> ! {
                 hw::uart::write_str("[S][saes] init FAIL\r\n");
                 hw::uart::flush();
             }
-            #[cfg(feature = "ui-oled")]
+            #[cfg(feature = "ui-lcd")]
             {
                 let d = ui::display();
                 d.draw_line(2, "saes init FAIL");
@@ -620,7 +620,7 @@ fn saes_self_test_and_halt() -> ! {
                 hw::uart::write_str("[S][saes] === self_test FAIL ===\r\n");
                 hw::uart::flush();
             }
-            #[cfg(feature = "ui-oled")]
+            #[cfg(feature = "ui-lcd")]
             {
                 let d = ui::display();
                 d.draw_line(3, "self_test FAIL");
@@ -652,7 +652,7 @@ fn saes_self_test_and_halt() -> ! {
                 hw::uart::write_str("\r\n");
                 hw::uart::flush();
             }
-            #[cfg(feature = "ui-oled")]
+            #[cfg(feature = "ui-lcd")]
             {
                 const HEX: &[u8; 16] = b"0123456789abcdef";
                 let mut buf = [0u8; 16];
@@ -695,7 +695,7 @@ fn saes_self_test_and_halt() -> ! {
                 hw::uart::write_str("\r\n");
                 hw::uart::flush();
             }
-            #[cfg(feature = "ui-oled")]
+            #[cfg(feature = "ui-lcd")]
             {
                 let d = ui::display();
                 d.draw_line(0, "BHK self_test FAIL");
@@ -915,17 +915,16 @@ fn main() -> ! {
         hw::hash::init_clock();
         #[cfg(feature = "boot-pulse")]
         hw::boot_pulse::pulse(3);
-        // When SE050 is also active, its i2c_hw::init() configures I2C1 at
-        // 400 kHz after SAU init — skip the OLED's 100 kHz init to avoid
-        // a redundant peripheral reset.  SSD1306 supports 400 kHz.
-        #[cfg(all(feature = "ui-oled", not(feature = "se050")))]
+        // Early RDP1 boot diagnostic on the NV3007 LCD (non-se050 builds only;
+        // se050 builds defer display init until after their i2c_hw setup). The
+        // LCD is SPI and self-initializing via `ui::init()` → `lcd::init()`, so
+        // there is no separate bus init here (the OLED's I2C path was removed).
+        #[cfg(all(feature = "ui-lcd", not(feature = "se050")))]
         {
-            hw::i2c::init(mhz);
-            // RDP1 boot diagnostic — OLED visible from this point onward.
             ui::init();
             let d = ui::display();
             d.clear();
-            d.draw_line(0, "BOOT 3 i2c+oled");
+            d.draw_line(0, "BOOT 3 lcd up");
             d.flush();
         }
         secure_log!("[S] RCC: {} MHz + HSI48 + TRNG configured", mhz);
@@ -971,7 +970,7 @@ fn main() -> ! {
     sau::init();
     #[cfg(feature = "boot-pulse")]
     unsafe { hw::boot_pulse::pulse(4); }
-    #[cfg(all(feature = "ui-oled", not(feature = "se050")))]
+    #[cfg(all(feature = "ui-lcd", not(feature = "se050")))]
     {
         let d = ui::display();
         d.draw_line(1, "BOOT 4 sau OK");
@@ -1032,7 +1031,7 @@ fn main() -> ! {
         hw::consumption_mask::init();
         secure_log!("[S] Consumption mask initialised (TIM2 CH1 PWM on PA5)");
     }
-    #[cfg(all(feature = "ui-oled", not(feature = "se050")))]
+    #[cfg(all(feature = "ui-lcd", not(feature = "se050")))]
     {
         let d = ui::display();
         d.draw_line(2, "BOOT 5 rng OK");
@@ -1259,19 +1258,6 @@ fn main() -> ! {
     // Skipped in automated e2e tests which need non-interactive boot.
     #[cfg(not(feature = "e2e-test"))]
     measured_boot::run();
-
-    // ---- QR-code screen test ----
-    // Renders the companion-app QR + URL, then halts. Used to iterate on
-    // the QR layout in isolation without going through the rest of boot.
-    // Triggered by: make qr-screen
-    #[cfg(feature = "qr-screen-test")]
-    {
-        ui::display().qr_splash();
-        secure_log!("[S] QR screen rendered — halting");
-        loop {
-            cortex_m::asm::wfi();
-        }
-    }
 
     // Try to load a previously saved per-device pairing key for the
     // Tropic01. If found, sessions use pairing slot 1 (per-device)

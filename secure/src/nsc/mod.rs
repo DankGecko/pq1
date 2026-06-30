@@ -98,7 +98,6 @@ mod trailer;
     any(
         feature = "debug-log",
         feature = "ui-semihosting",
-        feature = "ui-mirror",
         feature = "ui-capture",
         feature = "mock-se",
         feature = "otp-hardcoded-master-key",
@@ -532,34 +531,15 @@ compile_error!(
 // a build error.
 // ---------------------------------------------------------------------------
 
-#[cfg(all(feature = "ui-semihosting", feature = "ui-oled"))]
-compile_error!(
-    "UI backends `ui-semihosting` and `ui-oled` are mutually exclusive. \
-     Pick exactly one. The Makefile recipes set the right combination; \
-     a manual `cargo build -p secure --features ...` must also pick one."
-);
-
 #[cfg(all(feature = "ui-semihosting", feature = "ui-noop"))]
 compile_error!(
     "UI backends `ui-semihosting` and `ui-noop` are mutually exclusive. \
      Pick exactly one."
 );
 
-#[cfg(all(feature = "ui-oled", feature = "ui-noop"))]
-compile_error!(
-    "UI backends `ui-oled` and `ui-noop` are mutually exclusive. \
-     Pick exactly one."
-);
-
 #[cfg(all(feature = "ui-lcd", feature = "ui-semihosting"))]
 compile_error!(
     "UI backends `ui-lcd` and `ui-semihosting` are mutually exclusive. \
-     Pick exactly one."
-);
-
-#[cfg(all(feature = "ui-lcd", feature = "ui-oled"))]
-compile_error!(
-    "UI backends `ui-lcd` and `ui-oled` are mutually exclusive. \
      Pick exactly one."
 );
 
@@ -579,15 +559,13 @@ compile_error!(
     target_arch = "arm",
     not(any(
         feature = "ui-semihosting",
-        feature = "ui-oled",
         feature = "ui-noop",
         feature = "ui-lcd",
     ))
 ))]
 compile_error!(
-    "Exactly one UI backend must be selected: `ui-semihosting`, `ui-oled`, \
-     `ui-noop`, or `ui-lcd`. (`ui-mirror` implies `ui-oled`; `ui-capture` \
-     composes with any backend.)"
+    "Exactly one UI backend must be selected: `ui-semihosting`, `ui-noop`, \
+     or `ui-lcd`. (`ui-capture` composes with any backend.)"
 );
 
 // ---------------------------------------------------------------------------

@@ -5,9 +5,9 @@
 //! * `ui-semihosting` — mock backend that prints a 4x16 framebox to the QEMU
 //!   console and reads "buttons" from semihosting `READC`. Used for QEMU
 //!   development today.
-//! * `ui-oled` — real backend that drives an SSD1306 128x32 I2C OLED via the
-//!   `ssd1306` crate and reads two GPIO buttons via `embedded-hal`. Used on
-//!   the STM32U585 + SSD1306 0.91"/0.96" OLED hardware.
+//! * `ui-lcd` — real backend that drives an NV3007 142×428 SPI LCD
+//!   (`hw::lcd_nv3007`) and reads two GPIO buttons. The only shipping display
+//!   backend (the SSD1306 `ui-oled` backend was removed 2026-06-30).
 //!
 //! Both backends export the same `Display` and `Input` types so the rest of
 //! the secure world is backend-agnostic.
@@ -16,11 +16,6 @@
 mod semihosting;
 #[cfg(feature = "ui-semihosting")]
 pub use semihosting::{Display, Input};
-
-#[cfg(feature = "ui-oled")]
-mod oled;
-#[cfg(feature = "ui-oled")]
-pub use oled::{Display, Input};
 
 #[cfg(feature = "ui-noop")]
 mod noop;
@@ -31,9 +26,6 @@ pub use noop::{Display, Input};
 mod lcd;
 #[cfg(feature = "ui-lcd")]
 pub use lcd::{Display, Input};
-
-#[cfg(feature = "ui-mirror")]
-pub mod mirror;
 
 /// Screenshot-hash capture — emits a SHA-256 fingerprint per displayed
 /// frame over the secure log, parsed by `tools/ui_fixture.py` for UI
@@ -49,10 +41,9 @@ pub mod pin_entry;
 pub mod seed_wizard;
 /// F-24 stage D: constant-time glyph blit for secret-bearing display rows.
 /// Bypasses address-keyed font lookups for the seed wizard's word rows. Used by
-/// both the `ui-oled` (SSD1306 page blit) and `ui-lcd` (RGB565 via
-/// `secret_glyph_cols`) backends; the `ui-semihosting`/`ui-noop` backends don't
-/// render pixels.
-#[cfg(any(feature = "ui-oled", feature = "ui-lcd"))]
+/// the `ui-lcd` (RGB565 via `secret_glyph_cols`) backend; the
+/// `ui-semihosting`/`ui-noop` backends don't render pixels.
+#[cfg(feature = "ui-lcd")]
 pub mod secret_text;
 
 /// Bench-only animated splash-screen preview for the NV3007 LCD. Ports the
@@ -94,8 +85,8 @@ pub enum Press {
 }
 
 /// Trusted-display capability. Phase 10 PR A of the modularity refactor
-/// codifies the surface every UI backend (`semihosting`, `oled`,
-/// `noop`, `mirror`, `capture`) exposes, so future code can take
+/// codifies the surface every UI backend (`semihosting`, `lcd`,
+/// `noop`, `capture`) exposes, so future code can take
 /// `&mut impl Ui` instead of being implicitly tied to whichever backend
 /// the active feature gate selects.
 ///
@@ -134,14 +125,6 @@ impl Ui for semihosting::Display {
     #[inline] fn splash(&mut self) { self.splash() }
 }
 
-#[cfg(feature = "ui-oled")]
-impl Ui for oled::Display {
-    #[inline] fn clear(&mut self) { self.clear() }
-    #[inline] fn draw_line(&mut self, row: usize, text: &str) { self.draw_line(row, text) }
-    #[inline] fn flush(&mut self) { self.flush() }
-    #[inline] fn splash(&mut self) { self.splash() }
-}
-
 #[cfg(feature = "ui-noop")]
 impl Ui for noop::Display {
     #[inline] fn clear(&mut self) { self.clear() }
@@ -171,9 +154,6 @@ static mut INPUT: Option<Input> = None;
 
 /// Initialize the global Display and Input. Must be called once at boot.
 pub fn init() {
-    #[cfg(feature = "ui-mirror")]
-    mirror::init();
-
     unsafe {
         let d = &raw mut DISPLAY;
         let i = &raw mut INPUT;

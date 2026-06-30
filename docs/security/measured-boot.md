@@ -180,11 +180,13 @@ signal would then be permanently tripped and ignored). See
   the secure-image digest on success.
 - `fsbl/src/main.rs` — calls `render::render_fingerprint(&secure_digest)`
   after slot selection, before `branch::into_slot`.
-- `fsbl/src/render.rs::render_fingerprint` — OLED end-to-end driver
+- `fsbl/src/render.rs::render_fingerprint` — NV3007 LCD end-to-end driver
   (init, draw, flush, hold).
-- `fsbl/src/oled.rs` — minimal SSD1306 + I2C1 driver. Drops every
-  secure-world dep (`embedded-graphics`, `secure_log!`,
-  `hw::mmio::Reg32`); ~3.5 KB compiled.
+- `fsbl/src/nv3007.rs` — minimal NV3007 142×428 SPI LCD driver (ported from
+  the bench-validated secure `ui-lcd` driver). Drops every secure-world dep
+  (`embedded-graphics`, `secure_log!`, `hw::mmio::Reg32`); 16 MHz-calibrated
+  `delay_ms`, SWRESET (RES tied to 3V3). The SSD1306 OLED driver was removed
+  2026-06-30 — only the NV3007 LCD ships.
 - `sphincs_tz_bip39::firmware_fingerprint_lines` — pure layout
   function shared between FSBL and `secure/src/measured_boot.rs`.
 
@@ -194,7 +196,7 @@ signal would then be permanently tripped and ignored). See
   pinning, fingerprint_lines correctness for known digests.
 - `fsbl-tests/tests/footprint.rs` — CI gate, FSBL release ≤ 32 KB.
 - `fsbl-tests/tests/source_invariants.rs` — `verify_images` returns
-  digest, FSBL renders before branch, no-OLED graceful fallback,
+  digest, FSBL renders before branch, NV3007 hardware-validated constants,
   `measured_boot` survives.
 - `fwmeasure/tests/byte_identity.rs` — host `fwmeasure` output matches
   `firmware_fingerprint_lines` for the same digest.

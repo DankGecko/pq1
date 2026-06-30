@@ -368,7 +368,7 @@ pub fn self_test() -> Result<(), SaesError> {
     // RDP1 boot diagnostic: write fingerprint to OLED so the user can
     // read it visually even at RDP ≥ 1 where neither SWD nor (hopefully
     // not) UART work. The caller is responsible for `ui::init()`.
-    #[cfg(feature = "ui-oled")]
+    #[cfg(feature = "ui-lcd")]
     {
         const HEX: &[u8; 16] = b"0123456789abcdef";
         let mut buf = [0u8; 16];

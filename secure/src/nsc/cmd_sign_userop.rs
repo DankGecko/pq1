@@ -197,7 +197,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     let account_index = (flags & ACCOUNT_INDEX_MASK) >> ACCOUNT_INDEX_SHIFT;
     let slot_index = flags & SLOT_INDEX_MASK;
 
-    #[cfg(all(feature = "e2e-test", feature = "ui-oled"))]
+    #[cfg(all(feature = "e2e-test", feature = "ui-lcd"))]
     {
         static mut E2E_CALL_NO: u8 = 0;
         // SAFETY: category 5 — `E2E_CALL_NO` is a `static mut` debug-

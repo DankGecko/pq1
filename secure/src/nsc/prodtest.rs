@@ -589,7 +589,7 @@ const STEP_RIGHT_TIMEOUT: u8 = 0x21;
 const STEP_RIGHT_WRONG: u8 = 0x22;
 const STEP_BOTH_TIMEOUT: u8 = 0x31;
 
-#[cfg(all(feature = "gpio-buttons", feature = "ui-oled"))]
+#[cfg(all(feature = "gpio-buttons", feature = "ui-lcd"))]
 fn show_button_prompt(line0: &str, line1: &str) {
     let d = crate::ui::display();
     d.clear();
@@ -697,7 +697,7 @@ pub(super) unsafe fn cmd_button_test_run(args: &GatewayArgs) -> u32 {
         return NscStatus::InvalidPointer as u32;
     }
 
-    #[cfg(all(feature = "gpio-buttons", feature = "ui-oled"))]
+    #[cfg(all(feature = "gpio-buttons", feature = "ui-lcd"))]
     let step_status = {
         show_button_prompt("PRESS LEFT", "  (10 s)");
         let s1 = run_single_button_step(true, STEP_LEFT_TIMEOUT, STEP_LEFT_WRONG);
@@ -727,7 +727,7 @@ pub(super) unsafe fn cmd_button_test_run(args: &GatewayArgs) -> u32 {
     // If gpio-buttons or ui-oled is somehow off (shouldn't be — the
     // prodtest feature pulls both in), report a generic timeout so the
     // fixture sees the build profile is wrong.
-    #[cfg(not(all(feature = "gpio-buttons", feature = "ui-oled")))]
+    #[cfg(not(all(feature = "gpio-buttons", feature = "ui-lcd")))]
     let step_status: u8 = STEP_LEFT_TIMEOUT;
 
     let out = args.arg1 as *mut u8;

@@ -56,7 +56,7 @@ mod branch;
 mod fi;
 mod glyphs;
 mod manifest;
-mod oled;
+mod nv3007;
 mod otp;
 mod render;
 mod slot;
@@ -67,7 +67,19 @@ use slot::Slot;
 
 /// Top-level boot entry.
 #[entry]
+// Under `lcd-test` the boot body below is intentionally dead (the LCD self-test
+// diverges first), so suppress the expected unreachable-code warning for that
+// build only — the normal build stays warning-clean.
+#[cfg_attr(feature = "lcd-test", allow(unreachable_code))]
 fn main() -> ! {
+    // Bench-only NV3007 LCD bring-up self-test (`make fsbl-lcd-test-hw`):
+    // short-circuit the entire boot path into the LCD driver loop so the
+    // display port is validated on real silicon WITHOUT a signed slot. Never
+    // returns; the slot-verification body below is dead under this feature
+    // (DCE'd) so the lcd-test image stays inside the FSBL FLASH region.
+    #[cfg(feature = "lcd-test")]
+    nv3007::lcd_test_loop();
+
     // Read both manifest pages into stack-local 8 KB buffers. 16 KB
     // of our 16 KB RAM budget — we'll zero these out before branch,
     // and the slot's reset handler will re-init RAM anyway.
@@ -86,7 +98,7 @@ fn main() -> ! {
     // Check image hashes. A manifest can pass signature verification
     // but still fail if the actual slot contents were torn. On success
     // we also capture the secure-image digest so the FSBL can render
-    // the firmware fingerprint on the OLED from the same trusted bytes
+    // the firmware fingerprint on the LCD from the same trusted bytes
     // it just verified — without re-hashing.
     let img_ok_a = valid_a.and_then(|m| verify::verify_images(Slot::A, m).map(|d| (m, d)));
     let img_ok_b = valid_b.and_then(|m| verify::verify_images(Slot::B, m).map(|d| (m, d)));
@@ -95,7 +107,7 @@ fn main() -> ! {
         halt();
     };
 
-    // Render the 8-BIP-39-word firmware fingerprint on the OLED before
+    // Render the 8-BIP-39-word firmware fingerprint on the LCD before
     // branching. This is the trust root for the "subsequent updates
     // can't fake the words" property: the slot we are about to enter
     // never gets to display anything before the user has already seen

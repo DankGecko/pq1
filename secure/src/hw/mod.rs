@@ -24,9 +24,6 @@ pub mod rng;
 #[cfg(all(feature = "stm32u585", feature = "hw-sha256"))]
 pub mod hash;
 
-#[cfg(all(feature = "stm32u585", feature = "ui-oled"))]
-pub mod i2c;
-
 #[cfg(all(feature = "stm32u585", feature = "usb"))]
 pub mod usb_hw;
 

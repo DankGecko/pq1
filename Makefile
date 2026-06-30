@@ -81,7 +81,7 @@ empty :=
 space := $(empty) $(empty)
 NS_FEATURES_ARG = $(if $(NS_FEATURES_LIST),--features $(subst $(space),$(comma),$(NS_FEATURES_LIST)),)
 
-.PHONY: all clean secure nonsecure run play play-hw-display run-tropic01 run-hw setup-serial e2e e2e-hw e2e-erc7730-hw e2e-hw-display e2e-hw-dual-se build-hw flash-hw test test-unit test-solidity test-formal-verification verify-theft-free test-key-speed test-update-hw qr-screen measure factory-reset optiga-reset-oids flash-hw-optiga-reset verify-pins
+.PHONY: all clean secure nonsecure run play play-hw-display run-tropic01 run-hw setup-serial e2e e2e-hw e2e-erc7730-hw e2e-hw-display e2e-hw-dual-se build-hw flash-hw test test-unit test-solidity test-formal-verification verify-theft-free test-key-speed test-update-hw measure factory-reset optiga-reset-oids flash-hw-optiga-reset verify-pins
 
 # Supply-chain audit. Hard-fails if any dependency is not cryptographically
 # pinned (Cargo.lock checksums, git rev= pins, foundry.lock matching
@@ -141,7 +141,7 @@ play-hw-display:
 	@FSBL_VENDOR_PUBKEY=$(DEV_VENDOR_PUBKEY) $(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 		cargo build --locked --release --target $(TARGET) --target-dir target/secure \
 			-p sphincs-tz-secure --no-default-features \
-			--features mock-se,debug-log,ui-oled,stm32u585,dev-testkey,gpio-buttons
+			--features mock-se,debug-log,ui-lcd,stm32u585,dev-testkey,gpio-buttons
 	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
 	@$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
 		cargo build --locked --release --target $(TARGET) --target-dir target/nonsecure \
@@ -196,7 +196,7 @@ play-hw-duress-ui:
 	@FSBL_VENDOR_PUBKEY=$(DEV_VENDOR_PUBKEY) $(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 		cargo build --locked --release --target $(TARGET) --target-dir target/secure \
 			-p sphincs-tz-secure --no-default-features \
-			--features mock-se,debug-log,ui-oled,stm32u585,dev-testkey,duress-ui-test,gpio-buttons
+			--features mock-se,debug-log,ui-lcd,stm32u585,dev-testkey,duress-ui-test,gpio-buttons
 	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
 	@$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
 		cargo build --locked --release --target $(TARGET) --target-dir target/nonsecure \
@@ -257,9 +257,9 @@ run-tropic01: setup-serial
 
 # Real STM32U585 hardware build (full): real chip + real OLED + real buttons.
 # This target only BUILDS — flashing is done with probe-rs / openocd / etc.
-# It will not link until the ui-oled backend is fully wired up.
+# It will not link until the ui-lcd backend is fully wired up.
 run-hw:
-	$(MAKE) FEATURES=tropic01-se,ui-oled,pka-accel,consumption-mask,stm32u585 all
+	$(MAKE) FEATURES=tropic01-se,ui-lcd,pka-accel,consumption-mask,stm32u585 all
 
 # Real STM32U585 hardware build (semihosting): mock SE + semihosting UI.
 # Uses probe-rs semihosting for I/O — same interactive model as QEMU
@@ -547,7 +547,7 @@ e2e-hw:
 
 # Same e2e suite on real STM32U585, but with OLED display output.
 # The SSD1306 128x64 OLED is driven via I2C1 (PB8=SCL, PB9=SDA).
-# Uses ui-oled instead of ui-semihosting so the UI renders on the
+# Uses ui-lcd instead of ui-semihosting so the UI renders on the
 # physical display rather than the probe-rs console.
 # Requires: ST-LINK connected, SSD1306 OLED wired to PB8/PB9/3V3/GND.
 e2e-hw-display:
@@ -555,7 +555,7 @@ e2e-hw-display:
 	@FSBL_VENDOR_PUBKEY=$(DEV_VENDOR_PUBKEY) $(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 		cargo build --locked --release --target $(TARGET) --target-dir target/secure \
 			-p sphincs-tz-secure --no-default-features \
-			--features mock-se,debug-log,ui-oled,e2e-test,stm32u585
+			--features mock-se,debug-log,ui-lcd,e2e-test,stm32u585
 	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
 	@$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
 		cargo build --locked --release --target $(TARGET) --target-dir target/nonsecure \
@@ -576,7 +576,7 @@ e2e-hw-display:
 # Exercises the post-cutover stateless-slot flow (Type 1 + Type 2,
 # cross-chain slot rotation) end-to-end through real silicon:
 #   * dual-se   — OPTIGA + SE050 XOR-split provision + unlock
-#   * ui-oled   — status on the physical SSD1306 (PB8=SCL, PB9=SDA)
+#   * ui-lcd   — status on the physical SSD1306 (PB8=SCL, PB9=SDA)
 #   * e2e-test  — auto-provisions fixed mnemonic + PIN, pre-unlocks
 #                 the gateway (probe-rs cannot serve SYS_READC)
 #   * otp-hardcoded-master-key — avoids burning real OTP each run
@@ -594,7 +594,7 @@ e2e-hw-dual-se:
 	@FSBL_VENDOR_PUBKEY=$(DEV_VENDOR_PUBKEY) $(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 		cargo build --locked --release --target $(TARGET) --target-dir target/secure \
 			-p sphincs-tz-secure --no-default-features \
-			--features dual-se,ui-oled,debug-log,e2e-test,e2e-skip-admin-wipe,stm32u585,otp-hardcoded-master-key
+			--features dual-se,ui-lcd,debug-log,e2e-test,e2e-skip-admin-wipe,stm32u585,otp-hardcoded-master-key
 	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
 	@$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
 		cargo build --locked --release --target $(TARGET) --target-dir target/nonsecure \
@@ -875,20 +875,6 @@ button-test:
 	@echo "==> Running button test (Ctrl-C to quit)..."
 	probe-rs run --chip STM32U585AIIx $(SECURE_ELF)
 
-# Companion-app QR-code screen in isolation: flash a firmware that
-# renders the QR + install URL on the OLED at boot and halts. Nothing
-# else runs — no SEs, no PIN flow, no NS world. Power-cycle or press
-# reset to re-run. Requires the SSD1306 OLED on I2C1 (PB8/PB9).
-qr-screen:
-	@echo "==> Building QR-screen test firmware..."
-	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
-	cargo build --locked --release --target $(TARGET) --target-dir target/secure \
-		-p sphincs-tz-secure --no-default-features --features qr-screen-test,debug-log
-	@echo "==> Flashing QR-screen firmware..."
-	probe-rs download --chip STM32U585AIIx $(SECURE_ELF)
-	@echo "==> Running QR screen (Ctrl-C to quit; the OLED holds the image)..."
-	probe-rs run --chip STM32U585AIIx $(SECURE_ELF)
-
 # STSAFE-A110 I2C2 bus probe: detect on-board secure element.
 # Scans I2C2 (PH4/PH5) for the STSAFE-A110 at 0x20 and any other devices.
 stsafe-probe:
@@ -1083,7 +1069,7 @@ se050-admin-wipe-e2e:
 #                                    SE050_STRESS_ONLY filter)
 # `make se050-stress-list`         — host-side catalog dump (no flash)
 
-SE050_STRESS_FEATURES = se050-stress,ui-oled,stm32u585,debug-log,e2e-test,otp-hardcoded-master-key,usb
+SE050_STRESS_FEATURES = se050-stress,ui-lcd,stm32u585,debug-log,e2e-test,otp-hardcoded-master-key,usb
 
 # Cache-bust the secure-crate build whenever the SE050_STRESS_* env vars
 # change. cargo doesn't include env vars in its fingerprint, so without
@@ -1194,7 +1180,7 @@ flash-hw-se050-rotate-scp03:
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 	cargo build --release --target $(TARGET) --target-dir target/secure \
 		-p sphincs-tz-secure --no-default-features \
-		--features se050-rotate-scp03,bhk,stm32u585,ui-oled,debug-log,e2e-test
+		--features se050-rotate-scp03,bhk,stm32u585,ui-lcd,debug-log,e2e-test
 	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
 	cargo build --release --target $(TARGET) --target-dir target/nonsecure \
@@ -1240,7 +1226,7 @@ se050-admin-extract-attempt-e2e:
 build-hw-se050-oled:
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 	cargo build --locked --release --target $(TARGET) --target-dir target/secure \
-		-p sphincs-tz-secure --no-default-features --features se050,gpio-buttons,ui-oled,stm32u585,usb,debug-log
+		-p sphincs-tz-secure --no-default-features --features se050,gpio-buttons,ui-lcd,stm32u585,usb,debug-log
 	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
 	cargo build --locked --release --target $(TARGET) --target-dir target/nonsecure \
@@ -1252,7 +1238,7 @@ build-hw-se050-oled:
 build-hw-se050-oled-standalone:
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 	cargo build --locked --release --target $(TARGET) --target-dir target/secure \
-		-p sphincs-tz-secure --no-default-features --features se050,gpio-buttons,ui-oled,stm32u585,usb
+		-p sphincs-tz-secure --no-default-features --features se050,gpio-buttons,ui-lcd,stm32u585,usb
 	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
 	cargo build --locked --release --target $(TARGET) --target-dir target/nonsecure \
@@ -1281,7 +1267,7 @@ flash-hw-se050-oled-standalone: build-hw-se050-oled-standalone
 # Feature set: `dual-se` (= optiga-trust-m + se050), `optiga-hw-counter`
 # (OPTIGA E120 for the PIN-attempt counter), `dev-testkey` (stable OTP
 # master across flashes so the derived SE050 admin PIN matches what
-# wipe-for-wizard derives), `ui-oled`, `gpio-buttons`, `stm32u585`,
+# wipe-for-wizard derives), `ui-lcd`, `gpio-buttons`, `stm32u585`,
 # `usb`. Deliberately DOES NOT include `optiga-lock-operational`;
 # every OPTIGA user OID stays at LcsO=Creation through provisioning.
 #
@@ -1311,7 +1297,7 @@ build-hw-dual-se-oled-standalone:
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 	cargo build --locked --release --target $(TARGET) --target-dir target/secure \
 		-p sphincs-tz-secure --no-default-features \
-		--features dual-se,optiga-hw-counter,dev-testkey,gpio-buttons,ui-oled,stm32u585,usb
+		--features dual-se,optiga-hw-counter,dev-testkey,gpio-buttons,ui-lcd,stm32u585,usb
 	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
 	cargo build --locked --release --target $(TARGET) --target-dir target/nonsecure \
@@ -1411,13 +1397,13 @@ flash-hw-dual-se-lcd-standalone-debug: build-hw-dual-se-lcd-standalone-debug
 # disconnecting kills the semihosting channel but the device will
 # continue to run. Safe against the `probe-rs` `SYS_READC` gap (see
 # CLAUDE.md "Hardware testing under probe-rs") because this build uses
-# `gpio-buttons` + `ui-oled` — PIN / mnemonic entry goes through real
+# `gpio-buttons` + `ui-lcd` — PIN / mnemonic entry goes through real
 # button presses, not semihosting input.
 build-hw-dual-se-oled-standalone-debug:
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 	cargo build --locked --release --target $(TARGET) --target-dir target/secure \
 		-p sphincs-tz-secure --no-default-features \
-		--features dual-se,optiga-hw-counter,dev-testkey,gpio-buttons,ui-oled,stm32u585,usb,debug-log
+		--features dual-se,optiga-hw-counter,dev-testkey,gpio-buttons,ui-lcd,stm32u585,usb,debug-log
 	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
 	cargo build --locked --release --target $(TARGET) --target-dir target/nonsecure \
@@ -1453,7 +1439,7 @@ flash-hw-dual-se-oled-standalone-debug: build-hw-dual-se-oled-standalone-debug
 build-hw-optiga-oled-standalone:
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 	cargo build --locked --release --target $(TARGET) --target-dir target/secure \
-		-p sphincs-tz-secure --no-default-features --features optiga-trust-m,gpio-buttons,ui-oled,stm32u585,usb
+		-p sphincs-tz-secure --no-default-features --features optiga-trust-m,gpio-buttons,ui-lcd,stm32u585,usb
 	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
 	cargo build --locked --release --target $(TARGET) --target-dir target/nonsecure \
@@ -1511,7 +1497,7 @@ optiga-factory-reset-hw:
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 	cargo build --locked --release --target $(TARGET) --target-dir target/secure \
 		-p sphincs-tz-secure --no-default-features \
-		--features optiga-nuclear-reset,stm32u585,ui-oled,gpio-buttons,debug-log
+		--features optiga-nuclear-reset,stm32u585,ui-lcd,gpio-buttons,debug-log
 	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
 	cargo build --locked --release --target $(TARGET) --target-dir target/nonsecure \
@@ -1563,7 +1549,7 @@ optiga-preprovision-hw:
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 	cargo build --locked --release --target $(TARGET) --target-dir target/secure \
 		-p sphincs-tz-secure --no-default-features \
-		--features optiga-trust-m,stm32u585,ui-oled,gpio-buttons,e2e-test,e2e-skip-unlock,otp-hardcoded-master-key,debug-log
+		--features optiga-trust-m,stm32u585,ui-lcd,gpio-buttons,e2e-test,e2e-skip-unlock,otp-hardcoded-master-key,debug-log
 	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
 	cargo build --locked --release --target $(TARGET) --target-dir target/nonsecure \
@@ -1602,7 +1588,7 @@ flash-hw-optiga-oled-standalone-testkey:
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 	cargo build --locked --release --target $(TARGET) --target-dir target/secure \
 		-p sphincs-tz-secure --no-default-features \
-		--features optiga-trust-m,gpio-buttons,ui-oled,stm32u585,usb,dev-testkey,debug-log
+		--features optiga-trust-m,gpio-buttons,ui-lcd,stm32u585,usb,dev-testkey,debug-log
 	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
 	cargo build --locked --release --target $(TARGET) --target-dir target/nonsecure \
@@ -1633,7 +1619,7 @@ flash-hw-optiga-oled-testkey:
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 	cargo build --locked --release --target $(TARGET) --target-dir target/secure \
 		-p sphincs-tz-secure --no-default-features \
-		--features optiga-trust-m,gpio-buttons,ui-oled,stm32u585,usb,dev-testkey,debug-log
+		--features optiga-trust-m,gpio-buttons,ui-lcd,stm32u585,usb,dev-testkey,debug-log
 	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
 	cargo build --locked --release --target $(TARGET) --target-dir target/nonsecure \
@@ -1875,7 +1861,7 @@ test-all:
 # Displays the same 8 BIP-39 words the device shows at boot.
 #
 # Uses the same secure-world build as `flash-hw-dual-se-oled-standalone`
-# (features: dual-se,optiga-hw-counter,dev-testkey,gpio-buttons,ui-oled,
+# (features: dual-se,optiga-hw-counter,dev-testkey,gpio-buttons,ui-lcd,
 # stm32u585,usb), so the words printed here match what the OLED shows
 # after that flash target runs. To measure a different feature matrix
 # (e.g. the production set without `dev-testkey`), use `make release`
@@ -1906,6 +1892,27 @@ fsbl:
 		cargo build --locked --release --target $(TARGET) --target-dir target/fsbl -p pqsigner-fsbl
 	@echo "==> FSBL built: $(FSBL_ELF)"
 	@size $(FSBL_ELF) 2>/dev/null || arm-none-eabi-size $(FSBL_ELF)
+
+# Isolated NV3007 LCD bring-up test for the FSBL display port. Builds the FSBL
+# with the `lcd-test` feature (short-circuits boot into `nv3007::lcd_test_loop`
+# — NO signed slot needed) and runs it on real silicon via probe-rs. Watch the
+# LCD: full-screen green -> red -> blue, then a sample 8-word fingerprint,
+# repeating. The FSBL links at the boot base 0x0C000000 (= SECBOOTADD0 word
+# 0x180000), same as the `*-standalone` secure builds, so this assumes the
+# board is already TZEN=1 with that SECBOOTADD0 (the state any
+# `flash-hw-*-standalone` / `lcd-test-hw` target leaves). If the LCD stays
+# dark, run one standalone target once to set the option bytes, then re-run
+# this. Re-flash the real secure world afterwards to restore normal boot.
+# Requires the NV3007 wired per docs/hardware/nv3007-wiring.md. Ctrl-C to detach.
+.PHONY: fsbl-lcd-test-hw
+fsbl-lcd-test-hw:
+	@echo "==> Building FSBL NV3007 LCD bring-up test (lcd-test short-circuit)..."
+	@FSBL_ALLOW_DEV_KEY=1 $(RUSTFLAGS_VAR)="-C linker=arm-none-eabi-ld -C link-arg=-Tlink.x $(REPRO_FLAGS)" \
+		cargo build --locked --release --target $(TARGET) --target-dir target/fsbl -p pqsigner-fsbl --features lcd-test
+	@size $(FSBL_ELF) 2>/dev/null || arm-none-eabi-size $(FSBL_ELF)
+	@echo "==> Flashing FSBL to the boot base + running. Watch the LCD:"
+	@echo "    green -> red -> blue, then 8 words, repeating. Ctrl-C to detach."
+	@probe-rs run --chip STM32U585AIIx $(FSBL_ELF)
 
 # Production-only: refuse to build the FSBL without FSBL_VENDOR_PUBKEY.
 # Use this in the release pipeline.
@@ -2007,7 +2014,7 @@ RELEASE_FEATURES ?= stm32u585,se050,optiga-trust-m,dual-se,ui-lcd,saes-dhuk,se05
 # nsc/mod.rs: this also catches a release built as `stm32u585,…` WITHOUT
 # mode-production. `make release` depends on it; CI runs it as a fast gate.
 PROD_FORBIDDEN = e2e-test dev-testkey mock-se debug-log otp-hardcoded-master-key \
-                 ui-capture ui-mirror bhk-hardcoded-master-key uart-console \
+                 ui-capture bhk-hardcoded-master-key uart-console \
                  boot-pulse sca-trigger erc7730-dev-unattested optiga-reset-oids \
                  fw-rollback-e2e fwup-transport-e2e se050-scp03-allow-factory-fallback
 
@@ -2136,7 +2143,7 @@ flash-hw-optiga-bringup:
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 	cargo build --locked --release --target $(TARGET) --target-dir target/secure \
 		-p sphincs-tz-secure --no-default-features \
-		--features optiga-trust-m,stm32u585,ui-oled,debug-log,e2e-test,otp-hardcoded-master-key
+		--features optiga-trust-m,stm32u585,ui-lcd,debug-log,e2e-test,otp-hardcoded-master-key
 	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
 	cargo build --locked --release --target $(TARGET) --target-dir target/nonsecure \
@@ -2181,7 +2188,7 @@ flash-hw-optiga-bringup-write-only:
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 	cargo build --locked --release --target $(TARGET) --target-dir target/secure \
 		-p sphincs-tz-secure --no-default-features \
-		--features optiga-trust-m,stm32u585,ui-oled,debug-log,e2e-test,otp-hardcoded-master-key,e2e-skip-unlock
+		--features optiga-trust-m,stm32u585,ui-lcd,debug-log,e2e-test,otp-hardcoded-master-key,e2e-skip-unlock
 	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
 	cargo build --locked --release --target $(TARGET) --target-dir target/nonsecure \
@@ -2217,7 +2224,7 @@ flash-hw-optiga-unlock-test:
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 	cargo build --release --target $(TARGET) --target-dir target/secure \
 		-p sphincs-tz-secure --no-default-features \
-		--features optiga-trust-m,stm32u585,ui-oled,debug-log,e2e-test,otp-hardcoded-master-key
+		--features optiga-trust-m,stm32u585,ui-lcd,debug-log,e2e-test,otp-hardcoded-master-key
 	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
 	cargo build --release --target $(TARGET) --target-dir target/nonsecure \
@@ -2269,7 +2276,7 @@ optiga-hw-counter-e2e:
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 	cargo build --release --target $(TARGET) --target-dir target/secure \
 		-p sphincs-tz-secure --no-default-features \
-		--features optiga-hw-counter-e2e,stm32u585,ui-oled,debug-log,e2e-test,otp-hardcoded-master-key
+		--features optiga-hw-counter-e2e,stm32u585,ui-lcd,debug-log,e2e-test,otp-hardcoded-master-key
 	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
 	cargo build --release --target $(TARGET) --target-dir target/nonsecure \
@@ -2290,7 +2297,7 @@ optiga-admin-wipe-e2e:
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 	cargo build --release --target $(TARGET) --target-dir target/secure \
 		-p sphincs-tz-secure --no-default-features \
-		--features optiga-admin-wipe-e2e,stm32u585,ui-oled,debug-log,e2e-test,otp-hardcoded-master-key
+		--features optiga-admin-wipe-e2e,stm32u585,ui-lcd,debug-log,e2e-test,otp-hardcoded-master-key
 	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
 	cargo build --release --target $(TARGET) --target-dir target/nonsecure \
@@ -2355,7 +2362,7 @@ dual-se-multi-unlock-e2e:
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 	cargo build --release --target $(TARGET) --target-dir target/secure \
 		-p sphincs-tz-secure --no-default-features \
-		--features dual-se-multi-unlock-e2e,stm32u585,ui-oled,debug-log,e2e-test,otp-hardcoded-master-key
+		--features dual-se-multi-unlock-e2e,stm32u585,ui-lcd,debug-log,e2e-test,otp-hardcoded-master-key
 	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
 	cargo build --release --target $(TARGET) --target-dir target/nonsecure \
@@ -2391,7 +2398,7 @@ dual-se-admin-wipe-e2e:
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 	cargo build --release --target $(TARGET) --target-dir target/secure \
 		-p sphincs-tz-secure --no-default-features \
-		--features dual-se-admin-wipe-e2e,stm32u585,ui-oled,debug-log,e2e-test,otp-hardcoded-master-key
+		--features dual-se-admin-wipe-e2e,stm32u585,ui-lcd,debug-log,e2e-test,otp-hardcoded-master-key
 	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
 	cargo build --release --target $(TARGET) --target-dir target/nonsecure \
@@ -2439,7 +2446,7 @@ dual-se-bhk-e2e:
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 	cargo build --release --target $(TARGET) --target-dir target/secure \
 		-p sphincs-tz-secure --no-default-features \
-		--features dual-se-admin-wipe-e2e,stm32u585,ui-oled,debug-log,e2e-test,saes-dhuk,bhk
+		--features dual-se-admin-wipe-e2e,stm32u585,ui-lcd,debug-log,e2e-test,saes-dhuk,bhk
 	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
 	cargo build --release --target $(TARGET) --target-dir target/nonsecure \
@@ -2489,7 +2496,7 @@ duress-timing-hw:
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 	cargo build --release --target $(TARGET) --target-dir target/secure \
 		-p sphincs-tz-secure --no-default-features \
-		--features duress-probe-e2e,stm32u585,ui-oled,e2e-test,otp-hardcoded-master-key
+		--features duress-probe-e2e,stm32u585,ui-lcd,e2e-test,otp-hardcoded-master-key
 	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
 	cargo build --release --target $(TARGET) --target-dir target/nonsecure \
@@ -2512,7 +2519,7 @@ duress-probe-hw:
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 	cargo build --release --target $(TARGET) --target-dir target/secure \
 		-p sphincs-tz-secure --no-default-features \
-		--features duress-probe-e2e,stm32u585,ui-oled,debug-log,e2e-test,otp-hardcoded-master-key
+		--features duress-probe-e2e,stm32u585,ui-lcd,debug-log,e2e-test,otp-hardcoded-master-key
 	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
 	cargo build --release --target $(TARGET) --target-dir target/nonsecure \
@@ -2536,7 +2543,7 @@ duress-provision-hw:
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 	cargo build --release --target $(TARGET) --target-dir target/secure \
 		-p sphincs-tz-secure --no-default-features \
-		--features duress-provision-e2e,stm32u585,ui-oled,debug-log,e2e-test,otp-hardcoded-master-key
+		--features duress-provision-e2e,stm32u585,ui-lcd,debug-log,e2e-test,otp-hardcoded-master-key
 	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
 	cargo build --release --target $(TARGET) --target-dir target/nonsecure \
@@ -2559,7 +2566,7 @@ pin-gate-hw-counter-e2e:
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 	cargo build --release --target $(TARGET) --target-dir target/secure \
 		-p sphincs-tz-secure --no-default-features \
-		--features pin-gate-hw-counter-e2e,stm32u585,ui-oled,debug-log,e2e-test,otp-hardcoded-master-key
+		--features pin-gate-hw-counter-e2e,stm32u585,ui-lcd,debug-log,e2e-test,otp-hardcoded-master-key
 	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
 	cargo build --release --target $(TARGET) --target-dir target/nonsecure \
@@ -2584,7 +2591,7 @@ pin-gate-wipe-e2e:
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 	cargo build --release --target $(TARGET) --target-dir target/secure \
 		-p sphincs-tz-secure --no-default-features \
-		--features pin-gate-wipe-e2e,stm32u585,ui-oled,debug-log,e2e-test,otp-hardcoded-master-key
+		--features pin-gate-wipe-e2e,stm32u585,ui-lcd,debug-log,e2e-test,otp-hardcoded-master-key
 	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
 	cargo build --release --target $(TARGET) --target-dir target/nonsecure \
@@ -2882,7 +2889,7 @@ pin-gate-e2e:
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 	cargo build --release --target $(TARGET) --target-dir target/secure \
 		-p sphincs-tz-secure --no-default-features \
-		--features pin-gate-e2e,stm32u585,ui-oled,debug-log,e2e-test,otp-hardcoded-master-key
+		--features pin-gate-e2e,stm32u585,ui-lcd,debug-log,e2e-test,otp-hardcoded-master-key
 	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
 	cargo build --release --target $(TARGET) --target-dir target/nonsecure \
@@ -2910,7 +2917,7 @@ flash-hw-optiga-shield-handshake-only:
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 	cargo build --release --target $(TARGET) --target-dir target/secure \
 		-p sphincs-tz-secure --no-default-features \
-		--features optiga-trust-m,stm32u585,ui-oled,debug-log,e2e-test,otp-hardcoded-master-key,e2e-skip-unlock,e2e-skip-provision
+		--features optiga-trust-m,stm32u585,ui-lcd,debug-log,e2e-test,otp-hardcoded-master-key,e2e-skip-unlock,e2e-skip-provision
 	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
 	cargo build --release --target $(TARGET) --target-dir target/nonsecure \
@@ -2955,7 +2962,7 @@ flash-hw-optiga-reset: optiga-reset-oids
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW) -C debug-assertions=on" \
 	cargo build --locked --release --target $(TARGET) --target-dir target/secure \
 		-p sphincs-tz-secure --no-default-features \
-		--features dual-se,optiga-reset-oids,stm32u585,ui-oled,debug-log,usb
+		--features dual-se,optiga-reset-oids,stm32u585,ui-lcd,debug-log,usb
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
 	cargo build --locked --release --target $(TARGET) --target-dir target/nonsecure \
 		-p sphincs-tz-nonsecure --features stm32u585,usb
@@ -3087,7 +3094,7 @@ decoy-flicker-hw:
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 	cargo build --release --target $(TARGET) --target-dir target/secure \
 		-p sphincs-tz-secure --no-default-features \
-		--features decoy-flicker-test,mock-se,debug-log,ui-oled,stm32u585,dev-testkey
+		--features decoy-flicker-test,mock-se,debug-log,ui-lcd,stm32u585,dev-testkey
 	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
 	cargo build --release --target $(TARGET) --target-dir target/nonsecure \
@@ -3174,7 +3181,7 @@ build-hw-prodtest:
 # Build profile:
 #   - dual-se (required): both SEs must be alive to be provisioned.
 #   - stm32u585 (required): real silicon target.
-#   - ui-oled (required): the operator needs the OLED panel.
+#   - ui-lcd (required): the operator needs the OLED panel.
 #   - dev-testkey: factory uses the deterministic OTP-master constant
 #     during bring-up of this target. **REMOVE for real production**
 #     once the OTP-burn-from-TRNG path has been bench-validated.

@@ -15,11 +15,10 @@
 //!    AFTER slot selection and BEFORE `branch::into_slot(...)`. This
 //!    is the trust-chain property: the user sees FSBL's verdict for
 //!    the slot's bytes before the slot ever gets to display anything.
-//! 3. `fsbl/src/oled.rs::Oled` has a `present: bool` field, and
-//!    `Oled::init` sets it to `false` on probe failure (no-OLED
-//!    graceful fallback). `flush` and `draw_text` short-circuit when
-//!    `!present`. A future refactor that turns a missing OLED into a
-//!    halt() would trip this test before reaching prod.
+//! 3. `fsbl/src/nv3007.rs` keeps the hardware-validated NV3007 constants
+//!    (`X_OFFSET=12`, SWRESET reset, the 16 MHz `delay_ms` calibration). The
+//!    OLED backend was removed 2026-06-30; only the NV3007 SPI LCD ships, and
+//!    each of these pins silently breaks the boot fingerprint render if wrong.
 //! 4. `secure/src/measured_boot.rs` still calls `firmware_hash()` —
 //!    the secondary self-attested screen survives as defense in depth.
 //! 5. The render glue in `fsbl/src/render.rs` uses the bip39 crate's
@@ -108,37 +107,37 @@ fn negative_main_renders_fingerprint_before_branching() {
 }
 
 // ---------------------------------------------------------------------------
-// 3. no-OLED graceful fallback
+// 3. FSBL NV3007 LCD driver keeps the hardware-validated constants
+//
+// The OLED backend was removed 2026-06-30; the boot fingerprint now renders
+// on the NV3007 SPI LCD (`fsbl/src/nv3007.rs`, ported from the bench-validated
+// secure `ui-lcd` driver). The three pins below each *silently* break the
+// render if wrong (advisor's bring-up landmines), so lock them.
 // ---------------------------------------------------------------------------
 
 #[test]
-fn negative_no_oled_fallback_present_flag_drives_renders() {
-    let src = read_workspace_file("fsbl/src/oled.rs");
+fn negative_nv3007_keeps_hardware_validated_constants() {
+    let src = read_workspace_file("fsbl/src/nv3007.rs");
 
+    // Production NV3007 BlockWrite gutter — wrong offset = shifted/torn image.
     assert!(
-        src.contains("present: bool"),
-        "Oled struct must carry a `present: bool` so the no-OLED graceful fallback can \
-         short-circuit subsequent renders without halting FSBL"
+        src.contains("const X_OFFSET: u16 = 12;"),
+        "nv3007.rs must keep the production NV3007 X_OFFSET=12 (BlockWrite gutter)"
     );
 
-    // init() must set present=false on probe failure (the early-return
-    // path when neither SSD1306 address ACKs).
+    // RES is tied to 3V3 on this board, so the panel is reset in software with
+    // SWRESET (0x01), NOT a RES pin pulse (which does nothing here).
     assert!(
-        src.contains("self.present = false;"),
-        "Oled::init must set self.present = false when the I2C probe fails — a board without \
-         an OLED daughterboard MUST still boot into the slot. UX regression, not a security \
-         failure (FSBL still verified the slot signature + hash)."
+        src.contains("write_cmd(0x01); // SWRESET"),
+        "nv3007.rs must reset via SWRESET (0x01) — RES is tied to 3V3, a pin pulse is a no-op"
     );
 
-    // flush() must early-return when !present.
-    let flush_section = src
-        .split("pub fn flush(&self)")
-        .nth(1)
-        .expect("Oled::flush body");
+    // The FSBL runs at 16 MHz (HSI reset default, no PLL bring-up), so delay_ms
+    // MUST use the 16 MHz nop calibration — NOT the secure driver's 160 MHz
+    // `cortex_m::asm::delay`, which would run 10× long and read as a boot hang.
     assert!(
-        flush_section.contains("if !self.present"),
-        "Oled::flush must early-return on `!self.present` — otherwise a missing OLED would \
-         flood I2C with timeouts."
+        src.contains("for _ in 0..4_000 {"),
+        "nv3007::delay_ms must use the FSBL's 16 MHz nop calibration (4_000/ms), not 160 MHz"
     );
 }
 
@@ -189,6 +188,6 @@ fn positive_workspace_layout_sanity() {
     let _ = PathBuf::from("fsbl/src/render.rs");
     let _ = PathBuf::from("fsbl/src/verify.rs");
     let _ = PathBuf::from("fsbl/src/main.rs");
-    let _ = PathBuf::from("fsbl/src/oled.rs");
+    let _ = PathBuf::from("fsbl/src/nv3007.rs");
     let _ = PathBuf::from("secure/src/measured_boot.rs");
 }

@@ -2,7 +2,6 @@
 //! slice.
 //!
 //! Slice files in scope:
-//!   - `secure/src/hw/i2c.rs`        (I2C1 OLED driver — write path)
 //!   - `secure/src/hw/i2c_hw.rs`     (I2C1 SE050 init — hw only, no API)
 //!   - `secure/src/hw/i2c2_probe.rs` (I2C2 bus-scan — `stsafe-probe` dev)
 //!   - `secure/src/hw/spi.rs`        (SPI master, `embedded_hal::SpiDevice`)
@@ -30,7 +29,6 @@
 
 #![cfg(test)]
 
-const I2C_SRC: &str = include_str!("../hw/i2c.rs");
 const I2C_HW_SRC: &str = include_str!("../hw/i2c_hw.rs");
 const I2C2_PROBE_SRC: &str = include_str!("../hw/i2c2_probe.rs");
 const SPI_SRC: &str = include_str!("../hw/spi.rs");
@@ -59,86 +57,7 @@ fn contains_in_code(src: &str, needle: &str) -> bool {
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// 1. POSITIVE — I2C1 (i2c.rs, OLED driver)
-// ═════════════════════════════════════════════════════════════════════
-
-#[test]
-fn positive_i2c_secure_alias_base() {
-    assert!(I2C_SRC.contains("const I2C1: u32 = 0x5000_5400;"));
-}
-
-#[test]
-fn positive_i2c_rcc_secure_alias() {
-    assert!(I2C_SRC.contains("const RCC_S: u32 = 0x5602_0C00;"));
-}
-
-#[test]
-fn positive_i2c_gpiob_secure_alias() {
-    assert!(I2C_SRC.contains("const GPIOB_S: u32 = 0x5202_0400;"));
-}
-
-#[test]
-fn positive_i2c_100khz_timing_at_160mhz() {
-    // PRESC=9 (÷10) → 16 MHz tick, SCLDEL=4, SDADEL=2, SCLH=63, SCLL=79
-    assert!(I2C_SRC.contains("0x9042_3F4F"));
-}
-
-#[test]
-fn positive_i2c_100khz_timing_at_qemu_clock() {
-    // PRESC=0 fallback for 16 MHz sysclk (QEMU).
-    assert!(I2C_SRC.contains("0x0042_3F4F"));
-}
-
-#[test]
-fn positive_i2c_pin_assignments_pb8_pb9() {
-    // MODER bits [17:16] for PB8 (SCL), [19:18] for PB9 (SDA), AF mode (0b10).
-    assert!(I2C_SRC.contains("(0b10 << 16) | (0b10 << 18)"));
-    // OTYPER bits 8,9 = 1 (open-drain — required for I2C).
-    assert!(I2C_SRC.contains("(1 << 8) | (1 << 9)"));
-}
-
-#[test]
-fn positive_i2c_af4_in_afrh() {
-    // PB8 = AF4 (bits [3:0]), PB9 = AF4 (bits [7:4]).
-    assert!(I2C_SRC.contains("(4 << 0) | (4 << 4)"));
-}
-
-#[test]
-fn positive_i2c_isr_bit_positions() {
-    assert!(I2C_SRC.contains("const TXIS: u32 = 1 << 1;"));
-    assert!(I2C_SRC.contains("const NACKF: u32 = 1 << 4;"));
-    assert!(I2C_SRC.contains("const STOPF: u32 = 1 << 5;"));
-    assert!(I2C_SRC.contains("const TCR: u32 = 1 << 7;"));
-    assert!(I2C_SRC.contains("const BERR: u32 = 1 << 8;"));
-    assert!(I2C_SRC.contains("const ARLO: u32 = 1 << 9;"));
-    assert!(I2C_SRC.contains("const BUSY: u32 = 1 << 15;"));
-}
-
-#[test]
-fn positive_i2c_empty_write_returns_true() {
-    // The empty-input fast path must exist — passing &[] to write() is a
-    // valid no-op used by callers that batch frames.
-    assert!(I2C_SRC.contains("if total == 0 {\n        return true;\n    }"));
-}
-
-#[test]
-fn positive_i2c_reload_chunk_at_255() {
-    // NBYTES in CR2 is 8-bit, so transfers > 255 B use RELOAD chunking.
-    assert!(I2C_SRC.contains("if remaining > 255 { 255 } else { remaining };"));
-    // RELOAD bit 24 set when not the last chunk.
-    assert!(I2C_SRC.contains("1 << 24; // RELOAD"));
-    // AUTOEND bit 25 set when last chunk.
-    assert!(I2C_SRC.contains("1 << 25; // AUTOEND"));
-}
-
-#[test]
-fn positive_i2c_start_bit_only_on_first_chunk() {
-    // START (bit 13) is OR'd into CR2 only when offset == 0.
-    assert!(I2C_SRC.contains("if offset == 0 {\n            cr2 |= 1 << 13; // START"));
-}
-
-// ═════════════════════════════════════════════════════════════════════
-// 2. POSITIVE — I2C1 hardware init (i2c_hw.rs, SE050)
+// 1. POSITIVE — I2C1 hardware init (i2c_hw.rs, SE050)
 // ═════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -611,13 +530,6 @@ fn positive_buttons_sysclk_detection_via_cfgr_sws() {
 // ═════════════════════════════════════════════════════════════════════
 
 #[test]
-fn positive_mod_i2c_oled_gate() {
-    assert!(HW_MOD_SRC.contains(
-        "#[cfg(all(feature = \"stm32u585\", feature = \"ui-oled\"))]\npub mod i2c;"
-    ));
-}
-
-#[test]
 fn positive_mod_i2c_hw_se_gate() {
     assert!(HW_MOD_SRC.contains(
         "#[cfg(all(feature = \"stm32u585\", any(feature = \"se050\", feature = \"optiga-trust-m\")))]\npub mod i2c_hw;"
@@ -670,14 +582,6 @@ fn positive_mod_i2c2_probe_gate() {
 // peripherals) or — worse, for the future TZSC reclassification — let
 // the non-secure world re-route the SE bus and steal frames.
 // ═════════════════════════════════════════════════════════════════════
-
-#[test]
-fn negative_i2c_does_not_use_ns_alias_for_i2c1() {
-    assert!(
-        !contains_in_code(I2C_SRC, "0x4000_5400"),
-        "I2C1 NS alias forbidden in code — must use Secure alias 0x5000_5400 (CLAUDE.md invariant #3: encrypted-tunnel-only SE IO)",
-    );
-}
 
 #[test]
 fn negative_i2c_hw_does_not_use_ns_alias_for_i2c1() {
@@ -849,7 +753,7 @@ fn negative_no_classical_signer_referenced_in_hw_io() {
         "FORS+C",
     ];
     for src in [
-        I2C_SRC, I2C_HW_SRC, I2C2_PROBE_SRC, SPI_SRC, SPI_HW_SRC, USB_HW_SRC, UART_SRC,
+        I2C_HW_SRC, I2C2_PROBE_SRC, SPI_SRC, SPI_HW_SRC, USB_HW_SRC, UART_SRC,
         BUTTONS_SRC, HW_MOD_SRC,
     ] {
         for needle in banned {
@@ -886,7 +790,7 @@ fn negative_no_software_pin_compare_in_hw_io() {
         "MAX_ATTEMPTS",
     ];
     for src in [
-        I2C_SRC, I2C_HW_SRC, I2C2_PROBE_SRC, SPI_SRC, SPI_HW_SRC, USB_HW_SRC, UART_SRC,
+        I2C_HW_SRC, I2C2_PROBE_SRC, SPI_SRC, SPI_HW_SRC, USB_HW_SRC, UART_SRC,
         BUTTONS_SRC,
     ] {
         for needle in banned_substrings {
@@ -909,7 +813,7 @@ fn negative_no_software_pin_compare_in_hw_io() {
 fn negative_no_heap_types_in_hw_io_sources() {
     let banned: &[&str] = &["String::new", "Vec::new", "Box::new", "vec![", "alloc::"];
     for src in [
-        I2C_SRC, I2C_HW_SRC, I2C2_PROBE_SRC, SPI_SRC, SPI_HW_SRC, USB_HW_SRC, UART_SRC,
+        I2C_HW_SRC, I2C2_PROBE_SRC, SPI_SRC, SPI_HW_SRC, USB_HW_SRC, UART_SRC,
         BUTTONS_SRC,
     ] {
         for needle in banned {
@@ -922,43 +826,7 @@ fn negative_no_heap_types_in_hw_io_sources() {
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// 16. NEGATIVE — I2C OLED write defends against bus faults
-// ═════════════════════════════════════════════════════════════════════
-
-#[test]
-fn negative_i2c_write_aborts_on_nack() {
-    // On NACKF the write loop clears error flags + returns false — it
-    // must NOT silently retry, which could deliver partial frames after
-    // a slave reset.
-    assert!(I2C_SRC.contains("if isr & (NACKF | BERR | ARLO) != 0 {"));
-    assert!(I2C_SRC.contains("REG.icr.write(NACKF | BERR | ARLO | STOPF);\n                    return false;"));
-}
-
-#[test]
-fn negative_i2c_write_aborts_on_busy_stuck() {
-    // If BUSY never clears, attempt PE-cycle recovery, then return false
-    // — never block forever.
-    assert!(I2C_SRC.contains("// Bus stuck busy — attempt recovery by disabling/re-enabling PE."));
-}
-
-#[test]
-fn negative_i2c_write_aborts_on_txis_timeout() {
-    // The TXIS-wait loop is bounded.
-    assert!(I2C_SRC.contains("// Abort: disable PE, clear, re-enable."));
-}
-
-#[test]
-fn negative_i2c_write_chunk_size_clamped_at_255() {
-    // CR2.NBYTES is 8-bit. The driver must clamp chunk size at 255 or
-    // larger payloads silently truncate.
-    assert!(
-        I2C_SRC.contains("if remaining > 255 { 255 } else { remaining };"),
-        "I2C write must clamp NBYTES at 255 — larger values silently truncate (CR2.NBYTES is 8 bits)",
-    );
-}
-
-// ═════════════════════════════════════════════════════════════════════
-// 17. NEGATIVE — Dev-only features documented as "NEVER ship"
+// 16. NEGATIVE — Dev-only features documented as "NEVER ship"
 // ═════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -1059,19 +927,6 @@ fn negative_spi_hw_does_not_reclassify_tropic01_bus_to_ns() {
 // ═════════════════════════════════════════════════════════════════════
 
 #[test]
-fn negative_i2c_busy_wait_is_bounded() {
-    // Every status-bit poll loop must have a `t -= 1; if t == 0` decrement.
-    assert!(I2C_SRC.contains("const TIMEOUT: u32 = 10_000_000;"));
-    // Count `t -= 1` occurrences — there are several loops, all must
-    // decrement.
-    let decrements = I2C_SRC.matches("t -= 1;").count();
-    assert!(
-        decrements >= 4,
-        "i2c.rs must have at least 4 bounded `t -= 1` decrements (one per poll loop)",
-    );
-}
-
-#[test]
 fn negative_spi_busy_wait_is_bounded() {
     assert!(SPI_SRC.contains("const TIMEOUT_LOOPS: u32 = 1_000_000;"));
     assert!(SPI_SRC.contains("for _ in 0..TIMEOUT_LOOPS"));
@@ -1092,14 +947,6 @@ fn negative_i2c2_probe_busy_wait_is_bounded() {
 // documented SAFETY blocks). They must not bleed into i2c.rs /
 // i2c_hw.rs / spi_hw.rs / usb_hw.rs / uart.rs / buttons.rs.
 // ═════════════════════════════════════════════════════════════════════
-
-#[test]
-fn negative_i2c_no_raw_volatile_ops() {
-    assert!(
-        !I2C_SRC.contains("read_volatile") && !I2C_SRC.contains("write_volatile"),
-        "i2c.rs must funnel all MMIO through `hw::mmio::{{Reg32, RoReg32}}`",
-    );
-}
 
 #[test]
 fn negative_i2c_hw_no_raw_volatile_ops() {
@@ -1250,21 +1097,6 @@ fn negative_uart_write_byte_has_no_secret_param() {
 // ═════════════════════════════════════════════════════════════════════
 // 24. NEGATIVE — Public surface stays minimal
 // ═════════════════════════════════════════════════════════════════════
-
-#[test]
-fn negative_i2c_public_surface_only_init_and_write() {
-    // The OLED driver must expose only `init(sysclk_mhz)` and
-    // `write(addr, data) -> bool`. No raw register-read API, no
-    // half-formed slave-mode helper.
-    let pub_fns: Vec<_> = I2C_SRC
-        .lines()
-        .filter(|l| l.trim_start().starts_with("pub fn ") || l.trim_start().starts_with("pub unsafe fn "))
-        .collect();
-    assert_eq!(
-        pub_fns.len(), 2,
-        "i2c.rs must expose exactly 2 public fns (init, write); found {:?}", pub_fns,
-    );
-}
 
 #[test]
 fn negative_i2c_hw_public_surface_only_init() {

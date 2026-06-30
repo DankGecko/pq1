@@ -595,7 +595,6 @@ fn positive_production_build_blocks_dev_features() {
     let must_be_listed = &[
         "debug-log",
         "ui-semihosting",
-        "ui-mirror",
         "ui-capture",
         "mock-se",
         "otp-hardcoded-master-key",

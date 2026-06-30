@@ -6,9 +6,8 @@
 //!   - `secure/src/ui/pin_entry.rs`   (2-button 8-digit PIN entry)
 //!   - `secure/src/ui/seed_wizard.rs` (BIP-39 wizard flows)
 //!   - `secure/src/ui/capture.rs`     (`ui-capture` SHA-256 fingerprint emit)
-//!   - `secure/src/ui/oled.rs`        (SSD1306 backend)
+//!   - `secure/src/ui/lcd.rs`         (NV3007 SPI LCD backend — the shipping display)
 //!   - `secure/src/ui/semihosting.rs` (QEMU mock backend)
-//!   - `secure/src/ui/mirror.rs`      (RTT framebuffer mirror)
 //!   - `secure/src/ui/noop.rs`        (headless USB backend)
 //!
 //! Every file except this scaffold imports hardware-only peers
@@ -33,10 +32,9 @@ const CONFIRM_SRC: &str = include_str!("../ui/confirm.rs");
 const PIN_SRC: &str = include_str!("../ui/pin_entry.rs");
 const WIZARD_SRC: &str = include_str!("../ui/seed_wizard.rs");
 const CAPTURE_SRC: &str = include_str!("../ui/capture.rs");
-const OLED_SRC: &str = include_str!("../ui/oled.rs");
 const SEMI_SRC: &str = include_str!("../ui/semihosting.rs");
-const MIRROR_SRC: &str = include_str!("../ui/mirror.rs");
 const NOOP_SRC: &str = include_str!("../ui/noop.rs");
+const LCD_SRC: &str = include_str!("../ui/lcd.rs");
 
 // ─────────────────────────────────────────────────────────────────────
 // Section 1 — POSITIVE: layout constants + trait surface
@@ -65,11 +63,11 @@ fn positive_ui_trait_surface() {
 
 #[test]
 fn positive_three_ui_backends_impl_the_trait() {
-    // semihosting / oled / noop each get an `impl Ui for X::Display`.
-    // Each delegates straight into the inherent method. mirror &
-    // capture are non-Display modules and intentionally do NOT.
+    // semihosting / lcd / noop each get an `impl Ui for X::Display`.
+    // Each delegates straight into the inherent method. capture is a
+    // non-Display module and intentionally does NOT.
     assert!(MOD_SRC.contains("impl Ui for semihosting::Display"));
-    assert!(MOD_SRC.contains("impl Ui for oled::Display"));
+    assert!(MOD_SRC.contains("impl Ui for lcd::Display"));
     assert!(MOD_SRC.contains("impl Ui for noop::Display"));
     // Delegation shape: every backend calls into self.<method>(), not
     // a re-implementation. Pin one canonical line per backend.
@@ -156,7 +154,7 @@ fn positive_progress_clamps_percent_above_100() {
 // ─────────────────────────────────────────────────────────────────────
 
 /// Mirrors the inline filter in `semihosting::draw_line` and
-/// `oled::draw_line`: any byte outside 0x20..=0x7e is rewritten to
+/// `lcd::draw_line`: any byte outside 0x20..=0x7e is rewritten to
 /// `'?'`. Pinning this defends the trusted display against a hostile
 /// DB row that tries to smuggle Unicode-lookalike glyphs into a value
 /// or address row.
@@ -181,7 +179,7 @@ fn positive_ascii_filter_pin_in_both_backends() {
     // regression-test UI fingerprints.
     let needle = "if (0x20..=0x7e).contains(&b) { b } else { b'?' };";
     assert!(SEMI_SRC.contains(needle));
-    assert!(OLED_SRC.contains(needle));
+    assert!(LCD_SRC.contains(needle));
 }
 
 #[test]
@@ -470,8 +468,7 @@ fn positive_confirm_idle_wipe_propagates_to_caller() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Section 7 — POSITIVE: capture / mirror / oled / noop / semihosting
-//   backend invariants
+// Section 7 — POSITIVE: capture / noop / semihosting backend invariants
 // ─────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -492,43 +489,6 @@ fn positive_capture_hex_uses_lowercase_alphabet() {
     // tokens), so a flip to uppercase would invalidate every
     // existing fixture.
     assert!(CAPTURE_SRC.contains("10..=15 => b'a' + (n - 10),"));
-}
-
-#[test]
-fn positive_mirror_frame_magic_and_size() {
-    // Frame header: 0xFB 0x32 len_lo len_hi <512-byte fb>.
-    // Host decoder hard-codes these magic bytes.
-    assert!(MIRROR_SRC.contains("let header = [0xFB, 0x32, (512u16 & 0xFF) as u8, (512u16 >> 8) as u8];"));
-    assert!(MIRROR_SRC.contains("pub fn push(fb: &[u8; 512])"));
-}
-
-#[test]
-fn positive_mirror_button_byte_protocol_matches_semihosting() {
-    // mirror.rs reuses semihosting.rs's keymap (h/l/a/d short, H/L/A/D
-    // long). Drifting one without the other would break the
-    // ui-mirror tool silently.
-    assert!(MIRROR_SRC.contains("`h/a`=LEFT short, `l/d`=RIGHT"));
-    assert!(MIRROR_SRC.contains("`H/A`=LEFT long, `L/D`=RIGHT long"));
-}
-
-#[test]
-fn positive_oled_i2c_address_probes_3c_then_3d() {
-    assert!(OLED_SRC.contains("const SSD1306_ADDR_PRIMARY: u8 = 0x3C;"));
-    assert!(OLED_SRC.contains("const SSD1306_ADDR_ALT: u8 = 0x3D;"));
-}
-
-#[test]
-fn positive_oled_data_control_byte_is_0x40() {
-    // 0x40 == "Co=0, D/C#=1 → data stream". Any other prefix byte
-    // would be interpreted as a command and corrupt the display.
-    assert!(OLED_SRC.contains("chunk[0] = 0x40; // Co=0, D/C#=1 → data stream"));
-}
-
-#[test]
-fn positive_oled_framebuffer_is_4_pages_x_128_bytes() {
-    assert!(OLED_SRC.contains("buf: [u8; 512]"));
-    assert!(OLED_SRC.contains("for page in 0..4 {"));
-    assert!(OLED_SRC.contains("let start = page * 128;"));
 }
 
 #[test]
@@ -700,7 +660,7 @@ fn negative_ascii_filter_truncates_at_16_columns() {
     // is written.
     assert_eq!(&row[..], b"ABCDEFGHIJKLMNOP");
     assert!(SEMI_SRC.contains("if col >= DISPLAY_COLS {"));
-    assert!(OLED_SRC.contains("if col >= DISPLAY_COLS {"));
+    assert!(LCD_SRC.contains("if col >= DISPLAY_COLS {"));
 }
 
 #[test]
@@ -711,8 +671,8 @@ fn negative_draw_line_drops_out_of_range_rows() {
     // length-prefixed field).
     assert!(SEMI_SRC.contains("if row >= DISPLAY_ROWS {"));
     assert!(SEMI_SRC.contains("return;"));
-    assert!(OLED_SRC.contains("if row >= DISPLAY_ROWS {"));
-    assert!(OLED_SRC.contains("return;"));
+    assert!(LCD_SRC.contains("if row >= DISPLAY_ROWS {"));
+    assert!(LCD_SRC.contains("return;"));
 }
 
 #[test]
@@ -775,17 +735,6 @@ fn negative_capture_frame_counter_is_monotonic() {
 }
 
 #[test]
-fn negative_mirror_documented_as_never_ship_in_production() {
-    // CLAUDE.md "What NOT to do": no `ui-mirror` in production.
-    // The header comment in mirror.rs commits to this. Removing it
-    // would lose the "make prod-check rejects" guarantee.
-    assert!(MIRROR_SRC.contains("NEVER ship in production."));
-    assert!(MIRROR_SRC.contains("`make prod-check` rejects any build that has"));
-    // Also: the whole file must be feature-gated.
-    assert!(MIRROR_SRC.contains("#![cfg(feature = \"ui-mirror\")]"));
-}
-
-#[test]
 fn negative_capture_documented_as_dev_only_via_debug_log_feature() {
     // ui-capture lights up `secure_log!` lines; if it ever shipped
     // in production it would dump every UI frame to the secure log
@@ -826,35 +775,6 @@ fn negative_noop_input_auto_confirms_short_right() {
 }
 
 #[test]
-fn negative_oled_init_returns_silently_when_display_absent() {
-    // Attack: bench board boots with no OLED attached, and the
-    // init() path tries to enter a tight write loop against an
-    // unACKed I2C address. Without the early-return, the boot would
-    // wedge before the SE drivers come up. The fallback emits a
-    // log line and returns — keeps the rest of the firmware alive.
-    assert!(OLED_SRC.contains("[S][OLED] no display found on I2C1 — skipping"));
-    let probe_pos = OLED_SRC
-        .find("[S][OLED] no display found on I2C1 — skipping")
-        .expect("no-display message must exist");
-    let after = &OLED_SRC[probe_pos..];
-    assert!(
-        after.contains("return;"),
-        "init() must return early when no display is found"
-    );
-}
-
-#[test]
-fn negative_oled_charge_pump_command_is_present() {
-    // The 128×32 SSD1306 modules ship without an external charge
-    // pump — the display panel pixel high voltage is generated by
-    // the on-chip 7.5V charge pump, enabled by the 0x8D, 0x14
-    // command pair. Without it, init() runs to completion but the
-    // OLED stays dark. Pin the command pair so a refactor that
-    // "cleans up" the init sequence catches this regression.
-    assert!(OLED_SRC.contains("0x8D, 0x14, // Charge pump ON"));
-}
-
-#[test]
 fn negative_pin_random_start_falls_through_on_rng_failure() {
     // F-20 fallback: if `rng_strong::fill` errors, the buffer stays
     // at zero (legacy behaviour). The file documents this trade-
@@ -892,36 +812,6 @@ fn negative_progress_bar_clamps_above_100_pct() {
     assert!(MOD_SRC.contains("let pct = if percent > 100 { 100 } else { percent };"));
     let bar = ref_render_bar(250);
     assert_eq!(&bar[..], b"[##############]");
-}
-
-#[test]
-fn negative_oled_flush_resets_address_window_each_call() {
-    // Attack: after init(), some other peripheral re-uses the OLED
-    // I2C bus, leaves the SSD1306 column/page pointer at an
-    // arbitrary location, and the next flush_fb writes 512 bytes
-    // starting from there — corrupting an entire half of the
-    // display. The defense is that `flush_fb` re-issues the col-0
-    // page-0 window command (0x21 0x00 0x7F, 0x22 0x00 0x03) on
-    // every frame.
-    let flush_pos = OLED_SRC
-        .find("fn flush_fb(&self) {")
-        .expect("flush_fb must exist");
-    let body = &OLED_SRC[flush_pos..];
-    // Both column- and page-window commands must appear before the
-    // 4×128-byte page write loop.
-    let col_cmd = body
-        .find("hw::i2c::write(addr, &[0x00, 0x21, 0x00, 0x7F]);")
-        .expect("flush_fb must re-set column window 0..127");
-    let page_cmd = body
-        .find("hw::i2c::write(addr, &[0x00, 0x22, 0x00, 0x03]);")
-        .expect("flush_fb must re-set page window 0..3");
-    let loop_pos = body
-        .find("for page in 0..4 {")
-        .expect("flush_fb must contain the per-page write loop");
-    assert!(
-        col_cmd < loop_pos && page_cmd < loop_pos,
-        "flush_fb must re-issue both address-window commands before the page write loop"
-    );
 }
 
 #[test]
