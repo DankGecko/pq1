@@ -3529,7 +3529,10 @@ mod tests {
         let dir = root.join("secure/data/erc7730");
         let policy = dir.join("policy.toml");
         let res = build_db(&dir, &policy).expect("build seed corpus");
-        assert!(res.leaf_count >= 6, "expected ≥6 leaves, got {}", res.leaf_count);
+        // `secure/data/erc7730/` is now a synthetic-only render-test corpus
+        // (the protocol fixtures were duplicates of the vendored registry —
+        // the PROD corpus built tolerantly elsewhere), so the floor is ≥1.
+        assert!(res.leaf_count >= 1, "expected ≥1 leaf, got {}", res.leaf_count);
         round_trip_check(&res).expect("round-trip");
     }
 

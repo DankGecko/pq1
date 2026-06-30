@@ -48,13 +48,41 @@ fn workspace_root() -> PathBuf {
 }
 
 /// Compile the checked-in seed corpus into a Merkle catalog. Doing this
-/// per-test is cheap (8 JSON files, a few hundred ms) and keeps each
-/// test self-contained — no `static` / `OnceLock` plumbing required.
+/// per-test is cheap (the seed dir is now a tiny synthetic-only render-test
+/// corpus) and keeps each test self-contained — no `static` / `OnceLock`
+/// plumbing required.
 fn build_seed() -> dbgen::erc7730::Erc7730BuildResult {
     let root = workspace_root();
     let dir = root.join("secure/data/erc7730");
     let policy = dir.join("policy.toml");
     dbgen::erc7730::build_db(&dir, &policy).expect("compile seed corpus")
+}
+
+/// The PROD catalog — the vendored upstream registry, built tolerantly
+/// (the corpus switch). This is what `tools/companion-stub/erc7730_db.bin`
+/// and the firmware-pinned `ERC7730_DESCRIPTORS_ROOT` are built from, so a
+/// render test that exercises a REAL protocol descriptor (Aave/Tether/WETH/
+/// wstETH/…) must drive it from THIS root, not a hand-authored duplicate.
+///
+/// The 776-leaf registry build is several hundred ms, and ~16 tests use it,
+/// so memoize it in a `OnceLock` — built once per test binary, not per test.
+/// Returns a `&'static`, so callers pass it straight to `find_leaf(res, …)`
+/// (NOT `&res`) and read `res.blob` / `res.root` directly.
+fn build_registry() -> &'static dbgen::erc7730::Erc7730BuildResult {
+    static REGISTRY: std::sync::OnceLock<dbgen::erc7730::Erc7730BuildResult> =
+        std::sync::OnceLock::new();
+    REGISTRY.get_or_init(|| {
+        let root = workspace_root();
+        let reg = root.join("secure/data/erc7730-registry");
+        let policy = root.join("secure/data/erc7730/policy.toml");
+        let (res, _skips) = dbgen::erc7730::build_db_tolerant(
+            &reg.join("registry"),
+            &policy,
+            Some(&reg),
+        )
+        .expect("build registry corpus");
+        res
+    })
 }
 
 /// Locate a leaf by `(source filename, chain_id)` so a multi-chain
@@ -274,9 +302,14 @@ fn find_page_by_label(pages: &Pages, label: &str) -> usize {
 
 #[test]
 fn positive_seed_corpus_compiles() {
+    // `secure/data/erc7730/` is now a synthetic-only render-test corpus: the
+    // protocol fixtures that used to live here were duplicates of the vendored
+    // registry (the PROD corpus, exercised via `build_registry()` in the
+    // repointed render tests). Only the synthetic non-registry fixtures remain,
+    // so the floor is ≥1.
     let res = build_seed();
     assert!(
-        res.leaf_count >= 6,
+        res.leaf_count >= 1,
         "seed corpus has shrunk below the sanity floor ({} leaves)",
         res.leaf_count
     );
@@ -334,8 +367,8 @@ fn diagnostic_dump_seed_corpus_path_offsets() {
 
 #[test]
 fn positive_usdt_transfer_mainnet_renders_send_intent() {
-    let res = build_seed();
-    let entry = find_leaf(&res, "tether-usdt.json", 1);
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-usdt.json", 1);
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
     let verified =
         verify_erc7730_bundle(&bundle, &res.root).expect("verify");
@@ -405,8 +438,8 @@ fn positive_usdt_transfer_mainnet_renders_send_intent() {
 
 #[test]
 fn positive_usdt_approve_unlimited_renders_approve_intent() {
-    let res = build_seed();
-    let entry = find_leaf(&res, "tether-usdt.json", 1);
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-usdt.json", 1);
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
     let verified =
         verify_erc7730_bundle(&bundle, &res.root).expect("verify");
@@ -470,10 +503,58 @@ fn positive_usdt_approve_unlimited_renders_approve_intent() {
     );
 }
 
+/// Multi-chain chain-pinning: USDT's registry descriptor carries Mainnet (1)
+/// AND Polygon (137) deployments under the SAME JSON. Picking the chain-137
+/// leaf (contract 0xc2132D…8e8F, the bridged Polygon USDT) proves the
+/// renderer + bundle verifier bind to the right `(chain_id, contract)` leaf —
+/// a Mainnet tx must never render against the Polygon leaf and vice-versa.
+/// Replaces the deleted vacuous `circle-usdc` chain-pinning test, which fed
+/// an EIP-712 descriptor calldata it could never render (its
+/// `find_format_by_selector` guard early-returned, asserting nothing).
+#[test]
+fn positive_usdt_transfer_polygon_chain_pinning() {
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-usdt.json", 137);
+    // The chain-137 leaf is the bridged Polygon USDT, a different address
+    // from Mainnet's 0xdAC17… — proves we picked the right deployment.
+    let polygon_usdt =
+        hex::decode("c2132D05D31c914a87C6611C10748AEb04B58e8F").unwrap();
+    assert_eq!(
+        &entry.contract[..],
+        &polygon_usdt[..],
+        "chain-137 leaf must bind the Polygon USDT contract"
+    );
+
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
+    assert_eq!(verified.ir.chain_id, 137, "verified leaf is chain 137");
+    assert_eq!(&verified.ir.contract, &polygon_usdt[..], "verified leaf contract");
+
+    let calldata = calldata_transfer([0x33u8; 20], u256_from_u64(100_000_000));
+    assert_selector_matches(&verified.ir, &calldata, "transfer(address,uint256)");
+
+    let tx = envelope(137, entry.contract);
+    let usdt_meta = Erc20Metadata {
+        chain_id: 137,
+        contract: entry.contract,
+        decimals: 6,
+        name: b"Tether USD",
+        symbol: b"USDT",
+    };
+    let resolver = NameResolver::new();
+    let pages = render_erc7730_pages(&tx, &calldata, &verified, Some(&usdt_meta), &resolver)
+        .expect("render");
+    assert_all_pages_printable(&pages);
+
+    // The Polygon leaf renders the same "Send" intent as Mainnet.
+    let [r0, ..] = page_strs(&pages, 0);
+    assert_eq!(r0, "Sign: Send");
+}
+
 #[test]
 fn positive_weth_deposit_pulls_value_from_envelope() {
-    let res = build_seed();
-    let entry = find_leaf(&res, "weth.json", 1);
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-weth.json", 1);
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
     let verified =
         verify_erc7730_bundle(&bundle, &res.root).expect("verify");
@@ -527,75 +608,13 @@ fn positive_weth_deposit_pulls_value_from_envelope() {
 // rather than the renderer's public API. A future test pass that
 // reaches into `cmd_sign_offchain` would close that gap; for now we
 // limit coverage to the contract-context path above.
-
-#[test]
-fn positive_usdc_transfer_polygon_uses_correct_chain_pinning() {
-    // USDC's circle-usdc-twa.json carries the Mainnet deployment as
-    // well as several L2s. Picking Polygon (137) here proves the
-    // renderer + bundle verifier do NOT cross-bind the descriptor
-    // entries: a Mainnet USDC tx must never render against the Polygon
-    // leaf's descriptor (which has the same JSON but a different
-    // `(chain_id, contract)` binding).
-    let res = build_seed();
-    let entries: Vec<_> = res
-        .entries
-        .iter()
-        .filter(|e| {
-            e.source
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map_or(false, |n| n.starts_with("circle-usdc"))
-        })
-        .collect();
-    if entries.is_empty() {
-        return; // seed corpus changed; skip rather than fail
-    }
-    let entry = entries[0];
-    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
-    let verified =
-        verify_erc7730_bundle(&bundle, &res.root).expect("verify");
-
-    let calldata = calldata_transfer([0x55u8; 20], u256_from_u64(1_234_500_000));
-    if verified.ir.find_format_by_selector(&[0xa9, 0x05, 0x9c, 0xbb])
-        .expect("formats ok")
-        .is_none()
-    {
-        return; // descriptor doesn't include transfer; not the leaf we want
-    }
-
-    let tx = envelope(verified.ir.chain_id, verified.ir.contract);
-    let usdc_meta = Erc20Metadata {
-        chain_id: verified.ir.chain_id,
-        contract: verified.ir.contract,
-        decimals: 6,
-        name: b"USD Coin",
-        symbol: b"USDC",
-    };
-    let resolver = NameResolver::new();
-    let pages = render_erc7730_pages(
-        &tx,
-        &calldata,
-        &verified,
-        Some(&usdc_meta),
-        &resolver,
-    )
-    .expect("render");
-
-    assert_all_pages_printable(&pages);
-
-    // Pinning check: the rendered page set MUST exhibit "Sign: Send"
-    // (the intent for circle-usdc transfer) and the USDC ticker
-    // somewhere — proves we picked up the right format from THIS
-    // descriptor, not a stale cached one.
-    let [intent_r0, _, _, _] = page_strs(&pages, 0);
-    assert_eq!(intent_r0, "Sign: Send");
-    let amount_page = find_page_by_label(&pages, "Amount");
-    let amount_blob = page_strs(&pages, amount_page).join("\n");
-    assert!(
-        amount_blob.contains("USDC"),
-        "USDC ticker missing on amount page:\n{amount_blob}",
-    );
-}
+//
+// (Multi-chain chain-pinning is now exercised by
+// `positive_usdt_transfer_polygon_chain_pinning` above, against the real
+// registry USDT descriptor's chain-137 leaf. The former
+// `positive_usdc_transfer_polygon_uses_correct_chain_pinning` was vacuous:
+// it fed `transfer` calldata to an EIP-712 `circle-usdc` descriptor whose
+// `find_format_by_selector` guard always early-returned, asserting nothing.)
 
 #[test]
 fn negative_unknown_selector_returns_no_format() {
@@ -603,13 +622,13 @@ fn negative_unknown_selector_returns_no_format() {
     // format — an unknown selector means "blind sign should handle
     // this", which the dispatcher achieves by getting `RenderErr::
     // NoFormat` back from us and proceeding down the ladder.
-    let res = build_seed();
-    let entry = find_leaf(&res, "weth.json", 1);
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-weth.json", 1);
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
     let verified =
         verify_erc7730_bundle(&bundle, &res.root).expect("verify");
 
-    // 0xdeadbeef — selector not in any seed-corpus format.
+    // 0xdeadbeef — selector not in the registry WETH descriptor (deposit only).
     let calldata = vec![0xde, 0xad, 0xbe, 0xef];
     let tx = envelope(1, entry.contract);
     let resolver = NameResolver::new();
@@ -626,8 +645,8 @@ fn negative_unknown_selector_returns_no_format() {
 fn negative_short_calldata_rejects() {
     // Less than 4 bytes — can't even extract a selector. The renderer
     // must reject cleanly so the caller falls through to blind-sign.
-    let res = build_seed();
-    let entry = find_leaf(&res, "weth.json", 1);
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-weth.json", 1);
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
     let verified =
         verify_erc7730_bundle(&bundle, &res.root).expect("verify");
@@ -742,8 +761,8 @@ fn positive_erc8213_labels_cover_every_kind() {
 
 #[test]
 fn positive_aave_borrow_renders_enum_label() {
-    let res = build_seed();
-    let entry = find_leaf(&res, "aave-v3-pool.json", 1);
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-lpv3.json", 1);
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
     let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
 
@@ -770,8 +789,10 @@ fn positive_aave_borrow_renders_enum_label() {
     assert_eq!(r0, "Sign: Borrow");
 
     // The enum page must show the RESOLVED label "variable", not the bare
-    // index "2" (audit M-7).
-    let enum_page = find_page_by_label(&pages, "Interest mode");
+    // index "2" (audit M-7). The registry's field label is "Interest Rate
+    // mode" (18 chars); row 0 is truncated to DISPLAY_COLS (16), so the page
+    // header reads "Interest Rate mo".
+    let enum_page = find_page_by_label(&pages, "Interest Rate mo");
     let rows = page_strs(&pages, enum_page);
     assert!(
         rows[1].contains("variable"),
@@ -785,8 +806,8 @@ fn positive_aave_borrow_renders_enum_label() {
 
 #[test]
 fn negative_aave_borrow_unknown_enum_value_declines_to_blind() {
-    let res = build_seed();
-    let entry = find_leaf(&res, "aave-v3-pool.json", 1);
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-lpv3.json", 1);
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
     let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
 
@@ -809,14 +830,14 @@ fn negative_aave_borrow_unknown_enum_value_declines_to_blind() {
     }
 }
 
-/// Pack-expansion sanity: the hand-authored wstETH `wrap(uint256)`
+/// Pack-expansion sanity: the registry Lido `wstETH.wrap(uint256)`
 /// descriptor renders the right intent + field label. A render test
 /// (not just round-trip) catches descriptor-authoring slips — wrong
 /// path, selector, or label — that re-parse + Merkle-verify can't.
 #[test]
 fn positive_wsteth_wrap_renders_intent_and_amount_label() {
-    let res = build_seed();
-    let entry = find_leaf(&res, "wsteth.json", 1);
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-wstETH.json", 1);
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
     let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
 
@@ -825,41 +846,64 @@ fn positive_wsteth_wrap_renders_intent_and_amount_label() {
     assert_selector_matches(&verified.ir, &calldata, "wrap(uint256)");
 
     let tx = envelope(1, entry.contract);
+    // The registry wrap field is `tokenAmount` with `token` = stETH
+    // (0xae7ab9…), so supply stETH ERC-20 metadata (18 decimals) for the
+    // amount to render — mirrors how the USDT tests pass `Some(erc20)`.
+    let steth: [u8; 20] = hex::decode("ae7ab96520DE3A18E5e111B5EaAb095312D7fE84")
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let steth_meta = Erc20Metadata {
+        chain_id: 1,
+        contract: steth,
+        decimals: 18,
+        name: b"Liquid staked Ether 2.0",
+        symbol: b"stETH",
+    };
     let resolver = NameResolver::new();
-    let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver).expect("render");
+    let pages =
+        render_erc7730_pages(&tx, &calldata, &verified, Some(&steth_meta), &resolver)
+            .expect("render");
     assert_all_pages_printable(&pages);
 
     let [r0, ..] = page_strs(&pages, 0);
     assert_eq!(r0, "Sign: Wrap stETH");
     // The amount field must render under its authored label (proves
     // `#._stETHAmount` resolved to the right static-head slot).
-    let _amt_page = find_page_by_label(&pages, "Amount to wrap");
+    let _amt_page = find_page_by_label(&pages, "stETH amount");
 }
 
-/// Constant-annotation field (path-less `{value, label}`): the wstETH `wrap`
-/// descriptor carries `value: "$.metadata.constants.tokenLabel"`, which the
-/// host resolves to the literal "Wrapped stETH" and the device renders
-/// verbatim under its label — no calldata binding. This is the construct
-/// the ERC-4626/7540 vault templates use (the registry coverage lever that
-/// took render-coverage 40% -> 76%).
+/// Constant-annotation field (path-less `{value, label}`): the registry
+/// yield.xyz USDe-vault `deposit(uint256,address)` descriptor carries
+/// `{ "label": "Share ticker", "format": "raw", "value":
+/// "$.metadata.constants.vaultTicker" }`, which the host resolves to the
+/// literal "stk-USDe" and the device renders verbatim under its label — no
+/// calldata binding. This is the construct the ERC-4626/7540 vault templates
+/// use (the registry coverage lever that took render-coverage 40% -> 76%).
 #[test]
 fn positive_wsteth_wrap_renders_constant_annotation_field() {
-    let res = build_seed();
-    let entry = find_leaf(&res, "wsteth.json", 1);
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-yieldxyz-usde-vault.json", 1);
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
     let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
 
-    let mut calldata = keccak256(b"wrap(uint256)")[..4].to_vec();
-    calldata.extend_from_slice(&u256_from_u64(1).0);
+    // deposit(uint256 _underlying, address receiver).
+    let mut calldata = keccak256(b"deposit(uint256,address)")[..4].to_vec();
+    calldata.extend_from_slice(&u256_from_u64(1_000_000).0); // _underlying
+    let mut recv = [0u8; 32];
+    recv[12..].copy_from_slice(&[0x55u8; 20]); // receiver
+    calldata.extend_from_slice(&recv);
+    assert_selector_matches(&verified.ir, &calldata, "deposit(uint256,address)");
+
     let tx = envelope(1, entry.contract);
     let resolver = NameResolver::new();
     let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver).expect("render");
     assert_all_pages_printable(&pages);
 
-    let page = find_page_by_label(&pages, "Token");
+    let page = find_page_by_label(&pages, "Share ticker");
     let rows = page_strs(&pages, page);
     assert!(
-        rows.iter().any(|r| r.contains("Wrapped stETH")),
+        rows.iter().any(|r| r.contains("stk-USDe")),
         "constant-annotation field must render the resolved string: rows={rows:?}",
     );
 }
@@ -913,7 +957,7 @@ fn lido_array_field<'a>(
 #[test]
 fn positive_lido_request_withdrawals_renders_every_element() {
     let res = build_seed();
-    let entry = find_leaf(&res, "lido-withdrawal-queue.json", 1);
+    let entry = find_leaf(&res, "synthetic-uint256-array-amount.json", 1);
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
     let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
 
@@ -958,7 +1002,7 @@ fn array_resolve_matches_walk_differential() {
     // When the Kani-proven `walk` accepts the body, our resolver must agree
     // EXACTLY on (element-start, count). (Not the converse — we are stricter.)
     let res = build_seed();
-    let entry = find_leaf(&res, "lido-withdrawal-queue.json", 1);
+    let entry = find_leaf(&res, "synthetic-uint256-array-amount.json", 1);
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
     let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
     let (field, shw) = lido_array_field(&verified.ir);
@@ -1041,7 +1085,7 @@ fn array_routing_is_structural_not_last_byte() {
 #[test]
 fn adversarial_array_resolve_declines_hostile_bodies() {
     let res = build_seed();
-    let entry = find_leaf(&res, "lido-withdrawal-queue.json", 1);
+    let entry = find_leaf(&res, "synthetic-uint256-array-amount.json", 1);
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
     let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
     let (field, shw) = lido_array_field(&verified.ir);

@@ -62,6 +62,49 @@ fn build_registry() -> Erc7730BuildResult {
     res
 }
 
+/// ANTI-RECURRENCE GUARD. The vendored upstream registry
+/// (`secure/data/erc7730-registry/`) is the SOURCE OF TRUTH and the pinned
+/// prod corpus. A hand-authored render-test fixture in `secure/data/erc7730/`
+/// must NOT duplicate a registry descriptor by `(chainId, contract)` — that is
+/// exactly the redundancy the corpus switch removed (we had hand-authored
+/// Aave/Lido/Tether/WETH that the registry already shipped). Render tests must
+/// either exercise the REAL registry descriptor (via `build_registry()`), or
+/// use a SYNTHETIC, non-registry address. Fails loudly if anyone reintroduces a
+/// protocol fixture the registry already covers.
+#[test]
+fn fixtures_do_not_duplicate_the_registry() {
+    use std::collections::BTreeSet;
+    let fixtures = build_seed();
+    let registry = build_registry();
+    let reg: BTreeSet<(u64, [u8; 20])> =
+        registry.entries.iter().map(|e| (e.chain_id, e.contract)).collect();
+    let mut dups: Vec<String> = fixtures
+        .entries
+        .iter()
+        .filter(|e| reg.contains(&(e.chain_id, e.contract)))
+        .map(|e| {
+            format!(
+                "  {} — chain {} contract 0x{}",
+                e.source.file_name().and_then(|n| n.to_str()).unwrap_or("?"),
+                e.chain_id,
+                hex::encode(e.contract),
+            )
+        })
+        .collect();
+    dups.sort();
+    dups.dedup();
+    assert!(
+        dups.is_empty(),
+        "hand-authored render fixture(s) in secure/data/erc7730/ duplicate the authoritative \
+         vendored registry by (chainId, contract):\n{}\n\
+         The registry (secure/data/erc7730-registry/) is the source of truth + the pinned prod \
+         corpus. Repoint the render test at the REAL registry descriptor (`build_registry()`), or \
+         use a SYNTHETIC non-registry address. Never hand-author a descriptor for a protocol the \
+         registry already covers.",
+        dups.join("\n"),
+    );
+}
+
 fn extract_proof(blob: &[u8], leaf_index: usize, proof_depth: usize) -> Vec<[u8; 32]> {
     // Catalog header layout — see `dbgen::erc7730` module doc.
     let proofs_off = u32::from_le_bytes(blob[28..32].try_into().unwrap()) as usize;
@@ -94,10 +137,14 @@ fn synth_bundle(ir: &[u8], leaf_index: u32, proof: &[[u8; 32]]) -> Vec<u8> {
 
 #[test]
 fn seed_corpus_compiles_and_round_trips() {
-    let res = build_seed();
+    // The hand-authored `secure/data/erc7730/` is now a synthetic-only
+    // render-test corpus (1 leaf), so the Merkle round-trip runs against the
+    // PROD corpus — the vendored registry — which is what `db_roots.rs` pins
+    // and where the ≥6-leaf sanity floor still means something.
+    let res = build_registry();
     assert!(
         res.leaf_count >= 6,
-        "seed corpus shrunk below sanity threshold: {} leaves",
+        "registry corpus shrunk below sanity threshold: {} leaves",
         res.leaf_count
     );
     round_trip_check(&res).expect("round-trip");
