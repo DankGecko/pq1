@@ -23,7 +23,13 @@
 //! ‖ payload ‖ zero-pad-to-32`, with nothing trailing and every pad
 //! byte zero. So the on-device decode can never structurally disagree
 //! with on-chain decoding, and no hidden trailing "second payload" can
-//! ride a DELEGATECALL batch the user blind-confirms. See the
+//! ride a DELEGATECALL batch the user blind-confirms.
+//!
+//! The inner packed-record walk ([`MsRecordIter`]) is proven too: over
+//! symbolic payloads, an all-`Ok` walk **exactly partitions** the payload
+//! (`Σ (header + data) == payload.len()` — no hidden trailing record/data
+//! the device never renders) and every displayed field (`operation`,
+//! `to`, `value`, `data`) is the verbatim payload bytes. See the
 //! `#[cfg(kani)] mod verification` harnesses at the bottom of this file.
 
 use sphincs_tz_shared::MULTI_SEND_SELECTOR;
@@ -349,5 +355,207 @@ mod verification {
         buf[35] = 0x20; // offset == 0x20, length word == 0 (empty payload)
         // one extra byte at [68] beyond the 68-byte canonical empty frame
         assert_eq!(decode_multisend(&buf), Err(MsError::BadPadding));
+    }
+
+    // -----------------------------------------------------------------------
+    // Inner packed-record walk (`MsRecordIter`) — the layer the
+    // canonical-acceptance proof above structurally cannot reach (the packed
+    // encoding mirrors MultiSendCallOnly's hand-rolled assembly, not standard
+    // ABI). Slice 3 sampled it differentially against the real deployed
+    // bytecode in revm; these harnesses prove it as theorems over symbolic
+    // payloads: the records exactly partition the payload (no hidden trailing
+    // record/data the device never renders) and every displayed field is the
+    // verbatim payload bytes.
+    // -----------------------------------------------------------------------
+
+    /// Exact tiling / partition soundness: if the walk over a symbolic packed
+    /// slice yields a sequence of records that are all `Ok` and then `None`
+    /// (never an `Err`), the records consume **every** payload byte —
+    /// `Σ (MS_RECORD_HEADER_LEN + rec.data.len()) == packed.len()`, with
+    /// nothing trailing and nothing overlapping.
+    ///
+    /// We track an independent record-start offset `off` and, on each accepted
+    /// record, re-read the declared `dataLen` straight from the header bytes at
+    /// `off` (`assert_eq!(rec.data.len(), dl)`). Over ALL symbolic input this
+    /// forces the iterator's cursor to equal `off` (a divergent cursor would
+    /// read a different `dataLen` word for some input), so `off += 85 + dl`
+    /// provably tracks the cursor and the closing `off == len` is the real
+    /// no-hidden-trailing-bytes statement — scalar-only, no pointer arithmetic.
+    ///
+    /// Bound: `N = 180` admits ≤ 2 records (`2 * 85 = 170 ≤ 180 < 255`). The
+    /// per-record step is uniform, so two records exercise the cross-record
+    /// induction; the `> MULTISEND_MAX_RECORDS` cap lives in `summarize`, not
+    /// the iterator, and is out of scope here.
+    #[kani::proof]
+    #[kani::unwind(40)]
+    fn record_walk_exact_tiling() {
+        const N: usize = 180;
+        let packed: [u8; N] = kani::any();
+        let len: usize = kani::any();
+        kani::assume(len <= N);
+        let p = &packed[..len];
+
+        let mut iter = MsRecordIter::new(p);
+        let mut off = 0usize;
+        let mut all_ok = true;
+        // ≤ 2 accepted records fit in N; +2 polls of headroom for the
+        // terminating None/Err (a too-small loop would only ever make the
+        // closing assert FAIL on a partial walk, never pass spuriously).
+        for _ in 0..4 {
+            match iter.next() {
+                Some(Ok(rec)) => {
+                    // A record is only yielded with its full header in-bounds
+                    // at the cursor; pin `off` to it by matching the declared
+                    // dataLen read directly from the header bytes at `off`.
+                    assert!(off + MS_RECORD_HEADER_LEN <= p.len());
+                    let dl = u32::from_be_bytes([
+                        p[off + 81],
+                        p[off + 82],
+                        p[off + 83],
+                        p[off + 84],
+                    ]) as usize;
+                    assert_eq!(rec.data.len(), dl);
+                    off += MS_RECORD_HEADER_LEN + dl;
+                    assert!(off <= p.len());
+                }
+                Some(Err(_)) => {
+                    all_ok = false;
+                    break;
+                }
+                None => break,
+            }
+        }
+        if all_ok {
+            // No hidden trailing record/data: an all-`Ok` walk consumes every
+            // payload byte (the iterator returns `None` only at cursor == len,
+            // and cursor == off was pinned per record above).
+            assert_eq!(off, p.len());
+        }
+    }
+
+    /// Field fidelity (soundness): every field the trusted UI would render from
+    /// an accepted record — `operation`, `to`, `value`, and the `data` slice —
+    /// is the **verbatim** payload bytes at the record's position, not a
+    /// misaligned or corrupted copy. The declared `dataLen` is re-read
+    /// independently from the header word so the `data` compare is anchored to
+    /// the header position, not to the iterator's own length.
+    ///
+    /// Bound: `N = 120` (one record: 85-byte header + ≤ 35 data) at offset 0.
+    /// The per-record field logic reads relative to the cursor, so offset 0 is
+    /// representative; the concrete two-record control below pins a record at a
+    /// non-zero offset, and `record_walk_exact_tiling` pins the cross-record
+    /// offset advance.
+    #[kani::proof]
+    #[kani::unwind(121)]
+    fn record_walk_field_fidelity() {
+        const N: usize = 120;
+        let packed: [u8; N] = kani::any();
+        let len: usize = kani::any();
+        kani::assume(len <= N);
+        let p = &packed[..len];
+
+        let mut iter = MsRecordIter::new(p);
+        if let Some(Ok(rec)) = iter.next() {
+            // The first record sits at offset 0.
+            assert_eq!(rec.operation, p[0]);
+            let mut i = 0usize;
+            while i < 20 {
+                assert_eq!(rec.to[i], p[1 + i]);
+                i += 1;
+            }
+            let mut j = 0usize;
+            while j < 32 {
+                assert_eq!(rec.value[j], p[21 + j]);
+                j += 1;
+            }
+            let dl = u32::from_be_bytes([p[81], p[82], p[83], p[84]]) as usize;
+            assert_eq!(rec.data.len(), dl);
+            let mut k = 0usize;
+            while k < dl {
+                assert_eq!(rec.data[k], p[MS_RECORD_HEADER_LEN + k]);
+                k += 1;
+            }
+        }
+    }
+
+    /// Non-vacuity (positive control): a concrete two-record payload — record A
+    /// (`to = 0x11..`, `data = aa bb` → 87 B) then record B (`to = 0x22..`,
+    /// empty data → 85 B), total 172 B with no trailing — is walked to exactly
+    /// two records with the expected fields and then `None`. This also pins a
+    /// record (B) at a non-zero offset (87), covering cross-boundary field
+    /// reads the symbolic offset-0 harness cannot.
+    #[kani::proof]
+    #[kani::unwind(40)]
+    fn record_walk_accepts_two_records() {
+        let mut packed = [0u8; 172];
+        // Record A header at 0: op 0, to = 0x11.., value 0, dataLen 2.
+        let mut i = 1usize;
+        while i < 21 {
+            packed[i] = 0x11;
+            i += 1;
+        }
+        packed[84] = 2; // dataLen word low byte
+        packed[85] = 0xaa;
+        packed[86] = 0xbb;
+        // Record B header at 87: op 0, to = 0x22.., value 0, dataLen 0.
+        let mut j = 88usize;
+        while j < 108 {
+            packed[j] = 0x22;
+            j += 1;
+        }
+
+        let mut iter = MsRecordIter::new(&packed);
+        match iter.next() {
+            Some(Ok(r)) => {
+                assert_eq!(r.operation, 0);
+                assert_eq!(r.to, [0x11u8; 20]);
+                assert!(r.value_is_zero());
+                assert_eq!(r.data.len(), 2);
+                assert_eq!(r.data[0], 0xaa);
+                assert_eq!(r.data[1], 0xbb);
+            }
+            _ => panic!("record A must decode Ok"),
+        }
+        match iter.next() {
+            Some(Ok(r)) => {
+                assert_eq!(r.to, [0x22u8; 20]);
+                assert_eq!(r.data.len(), 0);
+            }
+            _ => panic!("record B must decode Ok"),
+        }
+        // Exact tiling: nothing left after the two records.
+        assert!(iter.next().is_none());
+    }
+
+    /// Non-vacuity (on-point negative control): one full 85-byte record
+    /// followed by 10 trailing bytes — too few for another header — must be
+    /// surfaced as `Err(TruncatedRecord)`, NOT silently dropped via `None`.
+    /// This is exactly the "hidden trailing bytes the device never renders"
+    /// threat that `record_walk_exact_tiling` forecloses.
+    #[kani::proof]
+    #[kani::unwind(40)]
+    fn record_walk_rejects_trailing_partial() {
+        let packed = [0u8; 95]; // 85-byte header (op 0, dataLen 0) + 10 trailing
+        let mut iter = MsRecordIter::new(&packed);
+        assert!(matches!(iter.next(), Some(Ok(_))));
+        assert!(matches!(
+            iter.next(),
+            Some(Err(MsError::TruncatedRecord))
+        ));
+    }
+
+    /// Non-vacuity (negative control): a lone header declaring `dataLen = 1`
+    /// with no byte to back it must be refused (`TruncatedRecord`) rather than
+    /// fabricating an out-of-bounds `data` slice.
+    #[kani::proof]
+    #[kani::unwind(40)]
+    fn record_walk_rejects_data_overrun() {
+        let mut packed = [0u8; 85];
+        packed[84] = 1; // dataLen = 1, but the slice ends at the header
+        let mut iter = MsRecordIter::new(&packed);
+        assert!(matches!(
+            iter.next(),
+            Some(Err(MsError::TruncatedRecord))
+        ));
     }
 }

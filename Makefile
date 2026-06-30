@@ -3697,7 +3697,7 @@ kani:
 	@echo "==> Kani: domain recovery parser (deserialize_pin_state)"
 	cargo kani -p pqsigner-domain --harness deserialize_pin_state_panic_free
 	@echo "==> Kani: ERC-20 calldata decoder (panic-free + transfer no-misdecode)"
-	@echo "         + Safe multiSend decoder (canonical-acceptance soundness + accept/reject controls)"
+	@echo "         + Safe multiSend decoder (outer-frame canonical-acceptance soundness + inner record-walk exact-tiling/partition + field-fidelity soundness + accept/reject controls)"
 	@echo "         + CoW GPv2Order canonical decode (decode-soundness: accept<=>enum-in-range, verbatim field offsets + accept/reject controls)"
 	@echo "         + typed-call ABI walker (no-read-past-end soundness + accept/reject controls)"
 	@echo "         + Safe SafeTx decode (canonical typed-data: accept<=>operation-in-range, verbatim offsets; execTransaction: no-read-past-end + fixed-field soundness + accept/reject controls)"
