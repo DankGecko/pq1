@@ -60,7 +60,7 @@ pub const CTX_CONTRACT: u8 = 0x01;
 pub const CTX_EIP712: u8 = 0x02;
 
 pub const MAX_IR_LEN: usize = 4096;
-pub const MAX_FORMATS: usize = 16;
+pub const MAX_FORMATS: usize = 32;
 pub const MAX_FIELDS_PER_FORMAT: usize = 24;
 pub const MAX_NESTING: usize = 8;
 pub const MAX_POOL_ENTRY_LEN: usize = 256;

@@ -62,9 +62,22 @@ exactly the **dynamic-array walker** (`docs/erc7730-dynamic-array-walker-design.
 — the security-sensitive build that relaxes `head_bounded_body`. This scan is
 the concrete justification for it: it's the DeFi-aggregator unlock.
 
-### 3. A few — `MAX_FORMATS` cap (16)
-1inch AggregationRouter V6 declares 21–23 formats > our `MAX_FORMATS = 16`. A
-one-const bump (e.g. 16 → 32) recovers them; re-check the IR-size cap.
+### 3. `MAX_FORMATS` cap (16 → 32, done — but a prerequisite, NOT a standalone win)
+1inch AggregationRouter V6 declares 21–23 formats > the old `MAX_FORMATS = 16`.
+Bumped to 32 (safe: the formats section is bounded by `MAX_IR_LEN = 4096`, our
+≤16-format corpus is byte-identical so the pinned root is unchanged). **This
+recovered 0 net descriptors** — measured. Why: those >16-format aggregators
+*also* use dynamic args, and `compile_formats` `?`-propagates the first
+unsupported format, failing the WHOLE descriptor (so 1inch's 22 renderable
+functions die with its 1 dynamic `swap`). The bump is necessary-but-not-
+sufficient: the count check gates *before* per-format compile, so without
+`MAX_FORMATS ≥ 23` the aggregators can never compile even once the blockers
+below are lifted. The two real aggregator levers:
+- **per-format tolerance** — skip the unsupported formats within a descriptor
+  and render the rest. A skipped format just falls to loud blind-sign (same as
+  no descriptor), so it is a pure, bounded win; it belongs in the tolerant
+  registry-import path (corpus switch), not the curation-strict `build_db`.
+- the **dynamic-array walker** (#2) — for the swaps themselves.
 
 ### 4. Minor
 - **2** — multi-word static fields (>32 B), e.g. p2p validator `(uint96, address)`
