@@ -714,6 +714,86 @@ pub fn sha256_bytes(data: &[u8]) -> [u8; 32] {
 }
 
 // ---------------------------------------------------------------------------
+// Unified sign-input header arithmetic kernels (extracted for Kani).
+//
+// These are the load-bearing arithmetic leaves of the companion-facing
+// `nsc::cmd_sign_userop` / `_batch` wire parsers (the offset-table parse is
+// inlined into the `unsafe` handler, unreachable from a host fuzz/Kani target).
+// They are used IN PLACE at the handler's existing sites — `#[inline]`, so with
+// cross-crate LTO they fold back into identical codegen, preserving the F-11
+// fault-injection structure (the redundant flags reads + recheck are untouched;
+// only the `& MASK >> SHIFT` arithmetic and the `data_len` bound route through
+// here). Kani then proves exactly the arithmetic the 2026-06-29 audit named.
+// Scope: this proves flag-decode totality + the `data_len` inner-slice bound;
+// the fixed-offset reads remain guarded by the handler's length gate.
+// ---------------------------------------------------------------------------
+
+/// Decode the unified sign-input `flags` bitfield (CLAUDE.md wire format):
+/// bit 31 = INCLUDE_INIT_CODE, bit 30 = REGISTER_SLOT, bits 29..22 =
+/// account_index (8b), bits 21..0 = slot_index (22b). Returns
+/// `(include_init_code, register_slot, account_index, slot_index)`. Pure +
+/// total (every `u32` is valid).
+#[inline]
+#[must_use]
+pub fn decode_flags(flags: u32) -> (bool, bool, u32, u32) {
+    let include_init_code = (flags & pqsigner_proto::FLAG_INCLUDE_INIT_CODE) != 0;
+    let register_slot = (flags & pqsigner_proto::FLAG_REGISTER_SLOT) != 0;
+    let account_index =
+        (flags & pqsigner_proto::ACCOUNT_INDEX_MASK) >> pqsigner_proto::ACCOUNT_INDEX_SHIFT;
+    let slot_index = flags & pqsigner_proto::SLOT_INDEX_MASK;
+    (include_init_code, register_slot, account_index, slot_index)
+}
+
+/// Validate the header's `data_len` against the snapshot length `total_len`:
+/// the inner-tx data slice the handler then cuts
+/// (`snap[SIGN_USEROP_HEADER_LEN .. SIGN_USEROP_HEADER_LEN + data_len]`) must
+/// be fully in bounds and `data_len ≤ MAX_TX_LEN`. Returns the validated length
+/// or `None` to refuse — the single gate that stops a companion-chosen
+/// `data_len` from driving an out-of-bounds read of the snapshot buffer.
+#[inline]
+#[must_use]
+pub fn validate_data_len(total_len: usize, data_len_raw: u16) -> Option<usize> {
+    let data_len = data_len_raw as usize;
+    if data_len > pqsigner_proto::MAX_TX_LEN {
+        return None;
+    }
+    match pqsigner_proto::SIGN_USEROP_HEADER_LEN.checked_add(data_len) {
+        Some(end) if end <= total_len => Some(data_len),
+        _ => None,
+    }
+}
+
+#[cfg(kani)]
+mod kani_harnesses {
+    use super::{decode_flags, validate_data_len};
+
+    /// `decode_flags` is total (panic/overflow-free for every `u32`) and its
+    /// extracted bitfields are bounded to their documented widths (8b account,
+    /// 22b slot) — also pins the proto mask widths.
+    #[kani::proof]
+    fn decode_flags_total_and_bounded() {
+        let f: u32 = kani::any();
+        let (_init, _reg, acct, slot) = decode_flags(f);
+        assert!(acct <= 0xFF);
+        assert!(slot <= (1u32 << 22) - 1);
+    }
+
+    /// Whenever `validate_data_len` accepts, the inner-tx data slice
+    /// `[HEADER_LEN, HEADER_LEN + data_len)` is in bounds of `total_len` and
+    /// `data_len ≤ MAX_TX_LEN` — so no companion `data_len` can drive an OOB
+    /// read. Loop-free; panic/overflow-free for every `(total_len, data_len)`.
+    #[kani::proof]
+    fn validate_data_len_keeps_inner_slice_in_bounds() {
+        let total_len: usize = kani::any();
+        let raw: u16 = kani::any();
+        if let Some(d) = validate_data_len(total_len, raw) {
+            assert!(d <= pqsigner_proto::MAX_TX_LEN);
+            assert!(pqsigner_proto::SIGN_USEROP_HEADER_LEN + d <= total_len);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Unit tests — run on the host with `cargo test -p pqsigner-aa`.
 // ---------------------------------------------------------------------------
 #[cfg(test)]

@@ -48,12 +48,12 @@
 //! (fault-injection guard, double-evaluated).
 
 use sphincs_tz_shared::{
-    NscStatus, ACCOUNT_INDEX_MASK, ACCOUNT_INDEX_SHIFT, C10_SIG_LEN, ERC7730_MAX_TRAILER_LEN,
+    NscStatus, C10_SIG_LEN, ERC7730_MAX_TRAILER_LEN,
     EXEC_TRANSACTION_MIN_CALLDATA_LEN, EXEC_TRANSACTION_SELECTOR, FLAG_INCLUDE_INIT_CODE,
     FLAG_REGISTER_SLOT, GPV2_SETTLEMENT_ADDRESS, MAX_SIGN_RESPONSE_LEN, MAX_SLOT_USES, MAX_TX_LEN,
     PQ_ADD_OWNER_BYTES_SELECTOR, PQ_CREATE_ACCOUNT_SELECTOR, PQ_INIT_CODE_LEN,
     PQ_SMART_WALLET_FACTORY, SAFE_V1_PAYLOAD_MAX, SET_PRE_SIGNATURE_SELECTOR,
-    SIGN_USEROP_HEADER_LEN, SIG_WRAPPER_LEN, SLOT_INDEX_MASK, COW_ORDER_TRAILER_MAX_LEN,
+    SIGN_USEROP_HEADER_LEN, SIG_WRAPPER_LEN, COW_ORDER_TRAILER_MAX_LEN,
     ZK_CLEAR_SIGN_FIXED_LEN, ZK_VK_BUNDLE_MAX_LEN,
 };
 use zeroize::{Zeroize, Zeroizing};
@@ -192,10 +192,11 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         return NscStatus::InternalError as u32;
     }
     let flags = flags_a;
-    let include_init_code = (flags & FLAG_INCLUDE_INIT_CODE) != 0;
-    let register_slot = (flags & FLAG_REGISTER_SLOT) != 0;
-    let account_index = (flags & ACCOUNT_INDEX_MASK) >> ACCOUNT_INDEX_SHIFT;
-    let slot_index = flags & SLOT_INDEX_MASK;
+    // FI structure preserved: `flags` is read twice (above) + rechecked below;
+    // this only routes the bitfield EXTRACTION through the Kani-proven
+    // `decode_flags` kernel (`#[inline]` → identical codegen under LTO).
+    let (include_init_code, register_slot, account_index, slot_index) =
+        crate::aa::userop::decode_flags(flags);
 
     #[cfg(all(feature = "e2e-test", feature = "ui-lcd"))]
     {
@@ -246,12 +247,19 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     to_address.copy_from_slice(&snap[276..296]);
     let mut value = [0u8; 32];
     value.copy_from_slice(&snap[296..328]);
-    let data_len = u16::from_be_bytes([snap[328], snap[329]]) as usize;
-
-    if data_len > MAX_TX_LEN || SIGN_USEROP_HEADER_LEN + data_len > total_len {
-        ui::show_status("Sign", "bad data_len");
-        return NscStatus::InvalidPointer as u32;
-    }
+    // Kani-proven `validate_data_len`: keeps the inner-tx data slice
+    // `snap[HEADER_LEN..HEADER_LEN+data_len]` (cut below) in bounds + caps it at
+    // MAX_TX_LEN, so no companion `data_len` can drive an OOB read.
+    let data_len = match crate::aa::userop::validate_data_len(
+        total_len,
+        u16::from_be_bytes([snap[328], snap[329]]),
+    ) {
+        Some(d) => d,
+        None => {
+            ui::show_status("Sign", "bad data_len");
+            return NscStatus::InvalidPointer as u32;
+        }
+    };
 
     // Flag-combination invariants (post-Coinbase-port):
     //   * INCLUDE_INIT_CODE and REGISTER_SLOT are mutually exclusive —
@@ -285,9 +293,10 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         ui::show_status("Sign", "fi tampered");
         return NscStatus::InternalError as u32;
     }
-    let include_init_code_r = (flags_recheck & FLAG_INCLUDE_INIT_CODE) != 0;
-    let register_slot_r = (flags_recheck & FLAG_REGISTER_SLOT) != 0;
-    let slot_index_r = flags_recheck & SLOT_INDEX_MASK;
+    // Same kernel as the first decode (the redundant read + this recheck ARE
+    // the F-11 countermeasure; account_index is not rechecked, as before).
+    let (include_init_code_r, register_slot_r, _account_index_r, slot_index_r) =
+        crate::aa::userop::decode_flags(flags_recheck);
     if include_init_code_r != include_init_code
         || register_slot_r != register_slot
         || slot_index_r != slot_index

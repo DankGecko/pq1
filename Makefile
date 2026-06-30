@@ -3719,6 +3719,8 @@ kani:
 	cargo kani -p pqsigner-erc7730
 	@echo "==> Kani: NS-pointer validation (window soundness: accept => in-NS, no-wrap, mailbox-disjoint, no usize->u32 trunc; unbounded/loop-free + accept/reject controls)"
 	cargo kani -p sphincs-tz-shared
+	@echo "==> Kani: unified sign-input header kernels (decode_flags total+bitfield-bounded; validate_data_len keeps the inner-tx slice in-bounds — used in place by nsc::cmd_sign_userop)"
+	cargo kani -p pqsigner-aa
 	@echo "==> kani: PASS"
 
 miri:
