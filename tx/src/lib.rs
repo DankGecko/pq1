@@ -2,6 +2,8 @@
 //!
 //! Hosts:
 //!
+//! - [`cowswap_order`] — pure field-decode of the 204-byte canonical
+//!   CowSwap `GPv2Order` packed encoding (Kani decode-soundness verified).
 //! - [`erc20`] — ERC-20 metadata Merkle DB + strict `transfer` /
 //!   `transferFrom` / `approve` calldata decoder + dispatch.
 //! - [`multisend`] — strict Safe `MultiSendCallOnly` outer-framing
@@ -28,6 +30,7 @@ extern crate std;
 
 mod wire;
 
+pub mod cowswap_order;
 pub mod erc20;
 pub mod multisend;
 pub mod names;

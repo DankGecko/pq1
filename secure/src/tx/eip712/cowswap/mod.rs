@@ -106,86 +106,26 @@ const COWSWAP_DOMAIN_VERSION: &[u8] = b"v2";
 // Decoded order
 // ---------------------------------------------------------------------------
 
-/// Decoded GPv2Order fields. Borrows nothing — every field is owned.
-#[derive(Clone, Copy, Debug)]
-pub struct GpV2Order {
-    pub chain_id: u64,
-    pub sell_token: [u8; 20],
-    pub buy_token: [u8; 20],
-    pub receiver: [u8; 20],
-    pub sell_amount: [u8; 32],
-    pub buy_amount: [u8; 32],
-    pub fee_amount: [u8; 32],
-    pub valid_to: u32,
-    pub kind: u8,
-    pub partially_fillable: u8,
-    pub sell_token_balance: u8,
-    pub buy_token_balance: u8,
-    pub app_data: [u8; 32],
-}
+// `GpV2Order` and the pure 204-byte canonical field-decode live in the
+// host-compilable, Kani-verified `pqsigner_tx::cowswap_order` (decode
+// soundness: accept ⟺ enum bytes in range, every field a verbatim copy
+// from its canonical offset). Re-exported here so `struct_hash`,
+// `compute_digest`, the cross-check, and every test/caller are unchanged.
+pub use pqsigner_tx::cowswap_order::GpV2Order;
 
 /// Parse the 204-byte canonical packed encoding into structured
 /// fields. Validates the small-enum byte ranges (kind,
 /// partiallyFillable, balance kinds) so an out-of-range NS payload
 /// is rejected before it can produce a digest.
+///
+/// Thin shim over the Kani-verified [`pqsigner_tx::cowswap_order::decode_canonical`];
+/// maps its single failure mode onto the secure-world [`Eip712Error`] so
+/// the signature and every caller stay byte-identical.
 pub fn decode_canonical(canonical: &[u8; 204]) -> Result<GpV2Order, Eip712Error> {
-    let chain_id = u64::from_be_bytes([
-        canonical[0], canonical[1], canonical[2], canonical[3],
-        canonical[4], canonical[5], canonical[6], canonical[7],
-    ]);
-
-    let mut sell_token = [0u8; 20];
-    sell_token.copy_from_slice(&canonical[8..28]);
-    let mut buy_token = [0u8; 20];
-    buy_token.copy_from_slice(&canonical[28..48]);
-    let mut receiver = [0u8; 20];
-    receiver.copy_from_slice(&canonical[48..68]);
-
-    let mut sell_amount = [0u8; 32];
-    sell_amount.copy_from_slice(&canonical[68..100]);
-    let mut buy_amount = [0u8; 32];
-    buy_amount.copy_from_slice(&canonical[100..132]);
-    let mut fee_amount = [0u8; 32];
-    fee_amount.copy_from_slice(&canonical[132..164]);
-
-    let valid_to = u32::from_be_bytes([
-        canonical[164],
-        canonical[165],
-        canonical[166],
-        canonical[167],
-    ]);
-
-    let kind = canonical[168];
-    let partially_fillable = canonical[169];
-    let sell_token_balance = canonical[170];
-    let buy_token_balance = canonical[171];
-
-    if kind > 1
-        || partially_fillable > 1
-        || sell_token_balance > 2
-        || buy_token_balance > 1
-    {
-        return Err(Eip712Error::EnumOutOfRange);
-    }
-
-    let mut app_data = [0u8; 32];
-    app_data.copy_from_slice(&canonical[172..204]);
-
-    Ok(GpV2Order {
-        chain_id,
-        sell_token,
-        buy_token,
-        receiver,
-        sell_amount,
-        buy_amount,
-        fee_amount,
-        valid_to,
-        kind,
-        partially_fillable,
-        sell_token_balance,
-        buy_token_balance,
-        app_data,
-    })
+    // `CowOrderDecodeError` has exactly one variant (`EnumOutOfRange`); the
+    // map is total.
+    pqsigner_tx::cowswap_order::decode_canonical(canonical)
+        .map_err(|_| Eip712Error::EnumOutOfRange)
 }
 
 // ---------------------------------------------------------------------------

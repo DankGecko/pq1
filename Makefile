@@ -3698,6 +3698,7 @@ kani:
 	cargo kani -p pqsigner-domain --harness deserialize_pin_state_panic_free
 	@echo "==> Kani: ERC-20 calldata decoder (panic-free + transfer no-misdecode)"
 	@echo "         + Safe multiSend decoder (canonical-acceptance soundness + accept/reject controls)"
+	@echo "         + CoW GPv2Order canonical decode (decode-soundness: accept<=>enum-in-range, verbatim field offsets + accept/reject controls)"
 	cargo kani -p pqsigner-tx
 	@echo "==> Kani: ERC-7730 IR header parser (offset-bounds safety)"
 	cargo kani -p pqsigner-erc7730 --harness erc7730_ir_parse_panic_free
