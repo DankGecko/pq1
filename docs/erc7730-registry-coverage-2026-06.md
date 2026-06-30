@@ -99,11 +99,16 @@ below are lifted. The two real aggregator levers:
    tables (the swaps inside still need #4-walker, but approvals/etc. render).
 3. **Dynamic-array walker** (#2) — the firewalled security build; aggregator/
    multicall/batch unlock. Its own design→review→Kani pass.
-4. **Corpus switch** — once #1 lands, replace the hand-authored seeds with a
-   tolerant registry import (build the surviving subset's Merkle root from the
-   pinned registry); keep only the tiny `erc7730-e2e/` fixtures hand-authored.
-   Then, separately, the production attestation flip (`allow_unattested = false`
-   + real `trusted_attesters`).
+4. ✅ **Corpus switch — DONE (2026-06-30).** The firmware-pinned
+   `ERC7730_DESCRIPTORS_ROOT` is now the vendored registry import: **776 leaves**
+   (root `2762c6ce…`), built tolerantly (per-descriptor + per-format) from
+   `secure/data/erc7730-registry/`. `dbgen` main + the drift gate source PROD
+   from it; the hand-authored `secure/data/erc7730/` is now the render-test
+   fixture set. Firmware footprint unchanged (32-byte root); the 657 KB catalog
+   blob lives in the companion. Tools: `xtask {scan,build,vendor}-registry`.
+   Still separate: the production attestation flip (`allow_unattested = false`
+   + real `trusted_attesters`), and gitignoring the regeneratable companion
+   blobs.
 
 ## Notes
 - Scan run in dev policy (`allow_unattested_dev_descriptors = true`) — it measures

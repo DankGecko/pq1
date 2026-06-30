@@ -224,7 +224,9 @@ fn is_solidity_string_safe(bytes: &[u8]) -> bool {
 // gen-erc7730-descriptors
 // ─────────────────────────────────────────────────────────────────────
 
-const ERC7730_DEFAULT_INPUT: &str = "secure/data/erc7730";
+// PROD catalog now sources from the vendored upstream registry (the corpus
+// switch); the policy still lives with the hand-authored render-test fixtures.
+const ERC7730_DEFAULT_INPUT: &str = "secure/data/erc7730-registry/registry";
 const ERC7730_DEFAULT_POLICY: &str = "secure/data/erc7730/policy.toml";
 const ERC7730_DEFAULT_E2E_INPUT: &str = "secure/data/erc7730-e2e";
 const ERC7730_DEFAULT_OUT: &str = "tools/companion-stub/erc7730_db.bin";
@@ -324,9 +326,13 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
         .e2e_out_binary
         .unwrap_or_else(|| workspace_root.join(ERC7730_DEFAULT_E2E_OUT));
 
-    // Build both prod + e2e catalogs.
-    let prod = match dbgen::erc7730::build_db(&input_dir, &policy) {
-        Ok(r) => r,
+    // Build both prod + e2e catalogs. PROD is the tolerant registry build
+    // (the corpus switch) — `input_dir` is `<registry>/registry`, so its parent
+    // is the registry root used to resolve `includes`. E2E stays strict.
+    let registry_root = input_dir.parent().map(|p| p.to_path_buf());
+    let prod = match dbgen::erc7730::build_db_tolerant(&input_dir, &policy, registry_root.as_deref())
+    {
+        Ok((r, _skips)) => r,
         Err(e) => {
             eprintln!("error: prod build failed: {e}");
             return ExitCode::FAILURE;

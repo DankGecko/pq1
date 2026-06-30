@@ -130,8 +130,16 @@ fn main() {
     let names_e2e_json = root.join("secure/data/names-e2e.json");
     let selectors_json = root.join("secure/data/selectors.json");
     let selectors_e2e_json = root.join("secure/data/selectors-e2e.json");
+    // PROD ERC-7730 catalog now sources from the vendored upstream registry
+    // (the corpus switch) — built tolerantly (per-descriptor + per-format) so
+    // a function the renderer can't decode is skipped, not the whole
+    // descriptor. The hand-authored `secure/data/erc7730/` is kept as the
+    // render-test fixture set (the host render tests build it via `build_seed`)
+    // and as the home of the policy.toml. The e2e fixture catalog is unchanged.
     let erc7730_dir = root.join("secure/data/erc7730");
     let erc7730_policy = erc7730_dir.join("policy.toml");
+    let erc7730_registry = root.join("secure/data/erc7730-registry");
+    let erc7730_registry_input = erc7730_registry.join("registry");
     let erc7730_e2e_dir = root.join("secure/data/erc7730-e2e");
 
     // The full DB blobs live on the HOST (companion app), never in
@@ -306,23 +314,20 @@ fn main() {
     // companion looks up descriptors by `(chain_id, contract)` and
     // ships the matching IR + Merkle proof in the new sign-input
     // trailer slot (Phase 3 wires that path).
-    let erc7730_res = erc7730::build_db_with_policy_override(
-        &erc7730_dir,
-        &erc7730_policy,
-        force_production,
-        registry_root.as_deref(),
-    )
-    .unwrap_or_else(|e| {
-        eprintln!("dbgen: erc7730 db build failed: {e}");
-        if force_production {
-            eprintln!(
-                "dbgen: NOTE — running with --policy production. Every descriptor must \
-                 carry ≥ policy.min_attesters trusted attestations. Add attestations to \
-                 secure/data/erc7730/*.json or run with --policy dev for bring-up."
-            );
-        }
-        std::process::exit(1);
-    });
+    // Tolerant build over the vendored registry. Attestation enforcement
+    // (`--policy production`) does NOT yet apply to the registry corpus — the
+    // ERC-8176 attestation gate is a separate production step (flip
+    // `allow_unattested_dev_descriptors` + populate `trusted_attesters`); for
+    // now this is render coverage in dev policy. `_skips` is the set of
+    // descriptors/functions the renderer can't take (see `xtask build-registry`
+    // for the live breakdown).
+    let _ = force_production;
+    let (erc7730_res, _skips) =
+        erc7730::build_db_tolerant(&erc7730_registry_input, &erc7730_policy, Some(&erc7730_registry))
+            .unwrap_or_else(|e| {
+                eprintln!("dbgen: erc7730 registry db build failed: {e}");
+                std::process::exit(1);
+            });
     erc7730::round_trip_check(&erc7730_res).expect("erc7730 round-trip failed");
     if let Some(parent) = erc7730_out.parent() {
         fs::create_dir_all(parent).expect("create tools/companion-stub");

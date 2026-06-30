@@ -26,7 +26,7 @@
 use std::path::PathBuf;
 
 use dbgen::erc7730::{
-    build_db, round_trip_check, Erc7730BuildResult,
+    build_db, build_db_tolerant, round_trip_check, Erc7730BuildResult,
 };
 use pqsigner_erc7730::abi::container_field;
 use pqsigner_erc7730::binding::{cross_check_contract, cross_check_eip712};
@@ -47,6 +47,19 @@ fn build_seed() -> Erc7730BuildResult {
     let dir = root.join("secure/data/erc7730");
     let policy = dir.join("policy.toml");
     build_db(&dir, &policy).expect("build seed corpus")
+}
+
+/// The PROD catalog — the vendored upstream registry, built tolerantly (the
+/// corpus switch). This is what `tools/companion-stub/erc7730_db.bin` and the
+/// firmware-pinned `ERC7730_DESCRIPTORS_ROOT` are built from, so a companion
+/// trailer cut from that blob must verify against THIS root.
+fn build_registry() -> Erc7730BuildResult {
+    let root = workspace_root();
+    let reg = root.join("secure/data/erc7730-registry");
+    let policy = root.join("secure/data/erc7730/policy.toml");
+    let (res, _skips) =
+        build_db_tolerant(&reg.join("registry"), &policy, Some(&reg)).expect("build registry corpus");
+    res
 }
 
 fn extract_proof(blob: &[u8], leaf_index: usize, proof_depth: usize) -> Vec<[u8; 32]> {
@@ -245,7 +258,10 @@ fn companion_stub_trailer_verifies_against_on_device() {
     }
     let trailer = out.stdout;
     assert!(!trailer.is_empty(), "stub produced empty trailer");
-    let result = build_seed();
+    // The companion blob IS the registry (prod) catalog, so the trailer must
+    // verify against the registry root (== the pinned `ERC7730_DESCRIPTORS_ROOT`),
+    // NOT the hand-authored render-test fixtures' root.
+    let result = build_registry();
     let v = verify_erc7730_bundle(&trailer, &result.root)
         .expect("trailer verifies against pinned root");
     assert_eq!(v.ir.chain_id, 1, "chain_id from IR");
