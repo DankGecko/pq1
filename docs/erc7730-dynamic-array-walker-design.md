@@ -105,6 +105,61 @@ the **length word** for dynamic args — step past it to reach elements).
    renders both amounts / the indexed amount) + negative (index past the
    array length declines-to-blind).
 
+## Deep-dive findings (2026-06-30) — design sharpened
+
+A pre-implementation orientation pass corrected the v1 scope and locked the
+safe shape:
+
+1. **Single-index (`arr[i]` / `arr[-1]`) is UNSAFE — it is the array-tail-hiding
+   HIGH.** Rendering `amounts[0]` while `amounts` has N elements hides
+   `amounts[1..]` — the contract executes on all N, the user sees one. This is
+   the exact class fixed for the typed-call renderer (Completion Log 2026-06-18:
+   `render_arg`'s Array arm DECLINES on `count>1`). So **v1 must be `ArrayAll`
+   (`arr[]`)** — render EVERY element (one row/page each), bounded by the page
+   budget, declining-to-blind if `count` exceeds the budget. `ArrayIdx`/
+   `ArrayLast` single-value stay refused (they cannot be made WYSIWYS-safe).
+   This makes v1 a *multi-value* render — the thing the original doc deferred —
+   so v1 IS the multi-value path, just bounded to one top-level `T[]`.
+
+2. **Reuse `walk`'s proven word-readers, do not hand-roll.** `walk`
+   (`tx/src/typed_call/abi.rs`, Kani-proven no-read-past-end) already has
+   `read_offset_word` / `read_length_word` (top-28-bytes-zero + `MAX_DYNAMIC_LEN`)
+   and `word`. Make `read_offset_word`/`read_length_word` `pub` and use them for
+   the offset→length→element follow, so the ERC-7730 array path inherits the same
+   hardened ABI-faithful checks `walk` uses (reading the SAME element the EVM
+   decodes is what keeps it slot-confusion-free).
+
+3. **Preserve the head-bound for scalars.** Replace `head_bounded_body`'s
+   pre-truncation (contract-calldata path only) with passing the FULL body +
+   `static_head_words` into `resolve_path`; scalar `FieldIdx`-only paths still
+   require `slot < static_head_words` (the VULN slot-confusion defense, now
+   explicit). Only an `ArrayAll` path may follow the dynamic tail, and only after
+   its array arg's offset word (which lives IN the head) passes the same bound.
+   Keep an up-front `body.len() >= static_head_words*32` check (preserves the
+   short-head reject `head_bounded_body` gave). The EIP-712 path keeps its exact
+   `head_bounded_body`.
+
+4. **No `SCHEMA_VER` bump.** `ArrayAll` (PathOp `0x24`) is a reserved opcode that
+   dbgen has never emitted and the device currently REJECTS; emitting it changes
+   no existing field's meaning, and a firmware without walker support
+   declines-to-blind on it (safe). Unlike the `0x01→0x02` bump, no `FieldIdx`
+   semantics change.
+
+5. **Verification gates (all required):** new Kani harness — `ArrayAll` resolve
+   stays in-bounds + per-element span ⊆ body over a symbolic body/offset/length;
+   **VULN re-validation** — the existing `walker_slot_confusion_fixed` scalar
+   test (a scalar slot reaching the tail must still reject) passes unchanged;
+   **array-tail-hiding re-validation** — a multi-element array renders ALL
+   elements or declines (never a partial); **differential** — the element words
+   read equal `walk`'s decode for the same calldata; render test — Lido
+   `requestWithdrawals(uint256[] amounts, address owner)`; **adversarial-review
+   workflow** before commit.
+
+**Net:** v1 is one top-level dynamic `T[]` of static primitives, rendered in
+full via `ArrayAll`, page-budget-bounded, declining-to-blind on overflow or any
+out-of-scope shape — reusing `walk`'s hardened readers and preserving the scalar
+head-bound defense byte-for-byte.
+
 ## Pairs with
 
 Pack expansion: once landed, add the Lido `WithdrawalQueue` descriptor and
