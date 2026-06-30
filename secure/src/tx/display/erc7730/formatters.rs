@@ -203,6 +203,12 @@ pub(super) fn dispatch(
     resolver: &NameResolver<'_>,
     params: &ParamSet<'_>,
 ) -> Result<(), RenderErr> {
+    // A constant-annotation field carries no path; render its literal
+    // (attested, Merkle-pinned) string directly, bypassing the format-op
+    // path resolution (which would reject on the absent path).
+    if let Some(cv) = params.const_value {
+        return render_const(field, pages, cv);
+    }
     let op = FormatOp::try_from(field.format_op)
         .map_err(|_| RenderErr::Reject("7730 bad format op"))?;
     match op {
@@ -566,6 +572,31 @@ fn render_address_name(
     write_label_row(pages, p, field.label);
     let [_, r1, r2, r3] = pages.page_mut(p);
     write_addr_full_or_name(r1, r2, r3, &addr, tx.chain_id, resolver);
+    Ok(())
+}
+
+/// Render a constant-annotation field — a path-less `{value,label}` whose
+/// `value` is a fixed (attested) string carried in the IR pool. Not bound
+/// to calldata, so there is no path to resolve: it shows the same text for
+/// every transaction (e.g. the ERC-4626 vault share/asset tickers). The
+/// string is Merkle-pinned, so it is no more trusted than the field label
+/// or intent banner.
+fn render_const(
+    field: &FieldEntry<'_>,
+    pages: &mut Pages,
+    value: &[u8],
+) -> Result<(), RenderErr> {
+    let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
+    write_label_row(pages, p, field.label);
+    let [_, r1, r2, r3] = pages.page_mut(p);
+    let rows: [&mut [u8; DISPLAY_COLS]; 3] = [r1, r2, r3];
+    let mut chunks = value.chunks(DISPLAY_COLS);
+    for row in rows {
+        match chunks.next() {
+            Some(c) => write_line_bytes(row, c),
+            None => write_line_bytes(row, b""),
+        }
+    }
     Ok(())
 }
 

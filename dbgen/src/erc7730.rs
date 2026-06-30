@@ -117,6 +117,11 @@ const PARAM_NESTED_SELECTOR: u8 = 0x3C;
 const PARAM_NESTED_CALLEE: u8 = 0x3D;
 const PARAM_FALLBACK_LABEL: u8 = 0x3E;
 const PARAM_VISIBILITY: u8 = 0x3F;
+/// Constant annotation string for a path-less ERC-7730 field
+/// (`{ "value": "...", "label": "...", "format": "raw" }`). The field is
+/// not bound to calldata — it renders the literal (attested) string. Used
+/// pervasively by the ERC-4626 / ERC-7540 vault templates.
+const PARAM_CONST_VALUE: u8 = 0x40;
 
 // Visibility byte values (matching `pqsigner_erc7730::ir::Visibility`).
 const VIS_ALWAYS: u8 = 0x00;
@@ -254,7 +259,14 @@ struct Format {
 
 #[derive(Debug, Deserialize)]
 struct FieldDef {
-    path: String,
+    /// Absent for a constant-annotation field (see `value`).
+    #[serde(default)]
+    path: Option<String>,
+    /// Constant annotation string for a path-less field. Mutually
+    /// exclusive with `path`. ERC-7730 allows `{ value, label, format }`
+    /// with no path — a fixed (attested) string, not bound to calldata.
+    #[serde(default)]
+    value: Option<serde_json::Value>,
     #[serde(default)]
     label: Option<String>,
     #[serde(default)]
@@ -1137,25 +1149,54 @@ fn compile_one_field(
     pool: &mut Pool,
     enum_offsets: &BTreeMap<String, u16>,
 ) -> Result<CompiledFieldOut, String> {
-    // 1. Compile the path bytecode.
-    let path_program = compile_path(&field.path, context_kind, parsed)
-        .map_err(|e| format!("format `{sig}` field[{field_idx}] path `{}`: {e}", field.path))?;
-    if path_program.len() > MAX_PATH_PROGRAM_LEN {
-        return Err(format!(
-            "format `{sig}` field[{field_idx}] path program too long ({} > {MAX_PATH_PROGRAM_LEN})",
-            path_program.len()
-        ));
-    }
-    let mut path_blob = Vec::with_capacity(1 + path_program.len());
-    path_blob.push(path_program.len() as u8);
-    path_blob.extend_from_slice(&path_program);
-    let path_off = pool.intern(&path_blob)?;
+    // 1. Compile the path bytecode — OR, for a path-less constant
+    //    annotation field, capture its literal string.
+    let (path_off, const_value): (u16, Option<String>) = match field.path.as_deref() {
+        Some(path) => {
+            let path_program = compile_path(path, context_kind, parsed)
+                .map_err(|e| format!("format `{sig}` field[{field_idx}] path `{path}`: {e}"))?;
+            if path_program.len() > MAX_PATH_PROGRAM_LEN {
+                return Err(format!(
+                    "format `{sig}` field[{field_idx}] path program too long ({} > {MAX_PATH_PROGRAM_LEN})",
+                    path_program.len()
+                ));
+            }
+            let mut path_blob = Vec::with_capacity(1 + path_program.len());
+            path_blob.push(path_program.len() as u8);
+            path_blob.extend_from_slice(&path_program);
+            (pool.intern(&path_blob)?, None)
+        }
+        None => {
+            // Constant-annotation field: a string `value`, no path. Renders
+            // the literal attested string (e.g. the ERC-4626 vault note).
+            let v = field.value.as_ref().ok_or_else(|| {
+                format!("format `{sig}` field[{field_idx}] has neither `path` nor `value`")
+            })?;
+            let raw = v.as_str().ok_or_else(|| {
+                format!("format `{sig}` field[{field_idx}] constant `value` must be a string")
+            })?;
+            let resolved = resolve_string_or_const(raw, ctx)
+                .map_err(|e| format!("format `{sig}` field[{field_idx}] constant `value`: {e}"))?;
+            let s = clean_ascii_truncated(&resolved, MAX_POOL_TLV_PAYLOAD);
+            if s.is_empty() {
+                return Err(format!(
+                    "format `{sig}` field[{field_idx}] constant `value` is empty / non-printable"
+                ));
+            }
+            (0u16, Some(s))
+        }
+    };
 
-    // 2. Decide formatter opcode.
-    let format_op = parse_format_name(field.format.as_deref().unwrap_or("raw"))?;
+    // 2. Decide formatter opcode. A constant field renders its literal
+    //    string regardless of the descriptor's `format`, so pin it to raw.
+    let format_op = if const_value.is_some() {
+        FMT_RAW
+    } else {
+        parse_format_name(field.format.as_deref().unwrap_or("raw"))?
+    };
 
     // 3. Compile params + visibility into a single TLV blob.
-    let param_blob = compile_params(
+    let mut param_blob = compile_params(
         sig,
         field_idx,
         format_op,
@@ -1166,6 +1207,9 @@ fn compile_one_field(
         ctx,
         enum_offsets,
     )?;
+    if let Some(cv) = &const_value {
+        push_tlv(&mut param_blob, PARAM_CONST_VALUE, cv.as_bytes())?;
+    }
     let param_off = if param_blob.is_empty() {
         0u16
     } else {
@@ -1506,7 +1550,10 @@ fn check_contract_field_completeness(
     // included — an explicit hide is a conscious author decision.
     let mut paths: Vec<&str> = Vec::with_capacity(fmt.fields.len() * 2);
     for field in &fmt.fields {
-        paths.push(field.path.as_str());
+        // Constant-annotation fields (no `path`) surface no calldata word.
+        if let Some(p) = field.path.as_deref() {
+            paths.push(p);
+        }
         if let Some(tp) = field
             .params
             .as_ref()
@@ -1597,7 +1644,10 @@ fn check_eip712_field_completeness(
     // hide is a conscious author decision.
     let mut paths: Vec<&str> = Vec::with_capacity(fmt.fields.len() * 2);
     for field in &fmt.fields {
-        paths.push(field.path.as_str());
+        // Constant-annotation fields (no `path`) surface no calldata word.
+        if let Some(p) = field.path.as_deref() {
+            paths.push(p);
+        }
         if let Some(tp) = field
             .params
             .as_ref()
@@ -2893,6 +2943,24 @@ fn resolve_u256_or_const(s: &str, ctx: &CompileCtx) -> Result<[u8; 32], String> 
         return parse_hex32(hex);
     }
     parse_hex32(s)
+}
+
+/// Resolve a constant-annotation field's `value`: either a literal string,
+/// or a `$.metadata.constants.X` reference into the descriptor's metadata
+/// constants (the ERC-4626 / ERC-7540 vault templates reference
+/// `vaultTicker` / `underlyingTicker` this way).
+fn resolve_string_or_const(s: &str, ctx: &CompileCtx) -> Result<String, String> {
+    if let Some(c) = s.strip_prefix("$.metadata.constants.") {
+        let v = ctx
+            .constants
+            .get(c)
+            .ok_or_else(|| format!("constant `{c}` not defined"))?;
+        return v
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| format!("constant `{c}` is not a string"));
+    }
+    Ok(s.to_string())
 }
 
 /// Transliterate non-printable / non-ASCII bytes to '?', then trim to

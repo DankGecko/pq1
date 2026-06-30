@@ -17,11 +17,17 @@ tallies pass/fail-by-reason. It writes nothing into the firmware corpus.
 
 ## Headline
 
-| | |
-|---|---|
-| Real descriptors scanned | **372** |
-| **Renderable today (no new work)** | **149 (40%)** → 550 catalog leaves, **31 projects** |
-| Skipped | 223 |
+| | initial scan | after `value`-field support |
+|---|---|---|
+| Real descriptors scanned | 372 | 372 |
+| **Renderable** | 149 (40%) → 550 leaves, 31 projects | **283 (76%) → 684 leaves, 33 projects** |
+| Skipped | 223 | 89 |
+
+> **Update:** the #1 lever below (path-less `value`-constant fields) **landed** —
+> render-coverage went **40% → 76%** (the ERC-4626/7540 vault ecosystem). The
+> remaining numbers in this doc are the *initial* scan; the per-reason table
+> still holds, minus the now-resolved 136 "missing path" bucket. The next lever
+> is the dynamic-array walker (≈38).
 
 **Covered projects (31):** 1inch (partial), benqi, celo, circle, corestake,
 degate, ethena, flyingtulip, hyperliquid, layerswap, ledgerquest, lens, lido,
@@ -35,7 +41,7 @@ path to more is well-defined, low-risk work (below), not hand-authoring.
 
 ## What the rest is blocked on (ROI-ordered)
 
-### 1. ~136 — path-less `value`-constant fields (host parser; BIGGEST lever)
+### 1. ~136 — path-less `value`-constant fields (host parser) — ✅ DONE (40%→76%)
 All 136 fail serde with `missing field \`path\``. Root cause: ERC-7730 allows a
 **constant annotation field** — `{ "value": "...", "label": "...", "format": "raw" }`
 with no `path` (a fixed string, not bound to calldata). Our `dbgen` `FieldDef`
@@ -73,8 +79,9 @@ one-const bump (e.g. 16 → 32) recovers them; re-check the IR-size cap.
 
 ## Recommended sequence
 
-1. **`value`-constant field support** (#1) — small, low-risk, ~doubles coverage
-   by unblocking the vault ecosystem. Do first.
+1. ✅ **`value`-constant field support** (#1) — DONE. 40%→76% by unblocking the
+   vault ecosystem (`FieldDef.path` optional + `value` + `$.metadata.constants`
+   resolution; `PARAM_CONST_VALUE` 0x40; device `render_const`).
 2. **`MAX_FORMATS` 16 → 32** (#3) — trivial, recovers the big aggregators' format
    tables (the swaps inside still need #4-walker, but approvals/etc. render).
 3. **Dynamic-array walker** (#2) — the firewalled security build; aggregator/

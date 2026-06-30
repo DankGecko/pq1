@@ -61,6 +61,9 @@ pub const PARAM_NESTED_SELECTOR: u8 = 0x3C;
 pub const PARAM_NESTED_CALLEE: u8 = 0x3D;
 pub const PARAM_FALLBACK_LABEL: u8 = 0x3E;
 pub const PARAM_VISIBILITY: u8 = 0x3F;
+/// Constant annotation string for a path-less field (`{value,label,format}`
+/// with no path). The renderer shows the literal (attested) string.
+pub const PARAM_CONST_VALUE: u8 = 0x40;
 
 /// `dbgen::erc7730::DATE_ENC_TIMESTAMP` — unix-seconds u64.
 pub const DATE_ENC_TIMESTAMP: u8 = 0x00;
@@ -99,6 +102,9 @@ pub struct ParamSet<'a> {
     pub nested_selector: Option<&'a [u8; 4]>,
     pub nested_callee: Option<&'a [u8; 20]>,
     pub fallback_label: Option<&'a [u8]>,
+    /// Constant annotation string for a path-less field. When `Some`, the
+    /// renderer shows this literal text instead of resolving a path.
+    pub const_value: Option<&'a [u8]>,
     /// Always populated. Defaults to `Always` when no VISIBILITY TLV is
     /// present.
     pub visibility: Visibility,
@@ -126,6 +132,7 @@ impl<'a> Default for ParamSet<'a> {
             nested_selector: None,
             nested_callee: None,
             fallback_label: None,
+            const_value: None,
             visibility: Visibility::Always,
             visibility_values: None,
         }
@@ -240,6 +247,7 @@ pub fn parse<'a>(
                 );
             }
             PARAM_FALLBACK_LABEL => p.fallback_label = Some(payload),
+            PARAM_CONST_VALUE => p.const_value = Some(payload),
             PARAM_VISIBILITY => {
                 if payload.is_empty() {
                     return Err(RenderErr::Reject("7730 empty visibility"));
@@ -464,6 +472,23 @@ mod tests {
             p.visibility_values,
             Some(&[0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF][..])
         );
+    }
+
+    #[test]
+    fn parses_const_value() {
+        // PARAM_CONST_VALUE carries the resolved constant-annotation string.
+        let label = b"Wrapped stETH";
+        let mut body = std::vec::Vec::new();
+        body.push(PARAM_CONST_VALUE);
+        body.push(label.len() as u8);
+        body.extend_from_slice(label);
+        let mut pool = std::vec![0xFFu8, body.len() as u8];
+        pool.extend_from_slice(&body);
+        let bytes = ir_with_pool(&pool);
+        let ir = Erc7730Ir::parse(&bytes).unwrap();
+        let p = parse(&ir, 1).unwrap();
+        assert_eq!(p.const_value, Some(&label[..]));
+        assert!(p.token_path.is_none());
     }
 }
 

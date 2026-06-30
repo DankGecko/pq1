@@ -835,3 +835,31 @@ fn positive_wsteth_wrap_renders_intent_and_amount_label() {
     // `#._stETHAmount` resolved to the right static-head slot).
     let _amt_page = find_page_by_label(&pages, "Amount to wrap");
 }
+
+/// Constant-annotation field (path-less `{value, label}`): the wstETH `wrap`
+/// descriptor carries `value: "$.metadata.constants.tokenLabel"`, which the
+/// host resolves to the literal "Wrapped stETH" and the device renders
+/// verbatim under its label — no calldata binding. This is the construct
+/// the ERC-4626/7540 vault templates use (the registry coverage lever that
+/// took render-coverage 40% -> 76%).
+#[test]
+fn positive_wsteth_wrap_renders_constant_annotation_field() {
+    let res = build_seed();
+    let entry = find_leaf(&res, "wsteth.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
+
+    let mut calldata = keccak256(b"wrap(uint256)")[..4].to_vec();
+    calldata.extend_from_slice(&u256_from_u64(1).0);
+    let tx = envelope(1, entry.contract);
+    let resolver = NameResolver::new();
+    let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver).expect("render");
+    assert_all_pages_printable(&pages);
+
+    let page = find_page_by_label(&pages, "Token");
+    let rows = page_strs(&pages, page);
+    assert!(
+        rows.iter().any(|r| r.contains("Wrapped stETH")),
+        "constant-annotation field must render the resolved string: rows={rows:?}",
+    );
+}
