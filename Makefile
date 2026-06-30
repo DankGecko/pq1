@@ -1,3 +1,13 @@
+# `make` / `make help` lists every runnable target that carries a `## ` blurb
+# (self-documenting — derived from the Makefile itself, so it can't drift the
+# way a hand-maintained count does). Add `## one-liner` to a target's rule line
+# to surface it. For the FV / spec-assurance targets see
+# `make -C contracts/verification help`.
+.DEFAULT_GOAL := help
+.PHONY: help
+help: ## Show the main runnable targets (those with a description)
+	@grep -hE '^[a-zA-Z0-9_.-]+:.*## ' $(MAKEFILE_LIST) | sort | awk -F':.*## ' '!seen[$$1]++ {printf "  \033[36m%-26s\033[0m %s\n", $$1, $$2}'
+
 TARGET = thumbv8m.main-none-eabi
 RUSTFLAGS_VAR = CARGO_TARGET_THUMBV8M_MAIN_NONE_EABI_RUSTFLAGS
 VENEERS = $(CURDIR)/target/veneers.o
@@ -88,7 +98,7 @@ NS_FEATURES_ARG = $(if $(NS_FEATURES_LIST),--features $(subst $(space),$(comma),
 # checked-out submodules, circuits/package-lock.json SRI integrity,
 # dated-nightly rust-toolchain). See tools/verify_pins.sh for the exact
 # rules. Every release-path target below depends on this.
-verify-pins:
+verify-pins: ## Certify deployed-bytecode codehash pins
 	@tools/verify_pins.sh
 
 all: verify-pins secure nonsecure
@@ -108,7 +118,7 @@ nonsecure: secure
 # We attach semihosting to a dedicated stdio chardev so SYS_READC can read
 # from the host terminal — this is what the secure UI mock uses to receive
 # "button" input ('l'/'h' = short, 'L'/'H' = long).
-run: all
+run: all ## Non-interactive QEMU smoke (mock SE)
 	qemu-system-arm \
 		-M mps2-an505 \
 		-monitor null \
@@ -128,7 +138,7 @@ run: all
 # tools/wallet_run.py spawns QEMU under the hood, owns the terminal in
 # raw mode, and forwards button events through the existing semihosting
 # single-char protocol.
-play: all
+play: all ## Interactive QEMU (arrow-key UI)
 	@python3 tools/wallet_run.py
 
 # Interactive two-button wallet on real STM32U585 with SSD1306 OLED display.
@@ -136,7 +146,7 @@ play: all
 # Display renders on the physical OLED; button input comes from your laptop
 # keyboard via probe-rs semihosting READC.
 # Requires: ST-LINK connected, SSD1306 OLED wired to PB8/PB9/3V3/GND.
-play-hw-display:
+play-hw-display: ## Interactive OLED + arrow-key forwarding (HW)
 	@echo "==> Building secure + nonsecure for interactive OLED play"
 	@FSBL_VENDOR_PUBKEY=$(DEV_VENDOR_PUBKEY) $(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 		cargo build --locked --release --target $(TARGET) --target-dir target/secure \
@@ -258,13 +268,13 @@ run-tropic01: setup-serial
 # Real STM32U585 hardware build (full): real chip + real OLED + real buttons.
 # This target only BUILDS — flashing is done with probe-rs / openocd / etc.
 # It will not link until the ui-lcd backend is fully wired up.
-run-hw:
+run-hw: ## Run on real hardware via probe-rs
 	$(MAKE) FEATURES=tropic01-se,ui-lcd,pka-accel,consumption-mask,stm32u585 all
 
 # Real STM32U585 hardware build (semihosting): mock SE + semihosting UI.
 # Uses probe-rs semihosting for I/O — same interactive model as QEMU
 # but running on the real Cortex-M33.
-build-hw:
+build-hw: ## Build the real-hardware STM32U585 image
 	$(MAKE) FEATURES=mock-se,debug-log,ui-semihosting,stm32u585 all
 
 # Flash and run on real STM32U585 via probe-rs + OpenOCD.
@@ -312,7 +322,7 @@ flash-hw: build-hw
 #                                        tx envelope.)
 #
 # Pass → exits 0. Any missing assertion or non-zero status → exits 1.
-e2e:
+e2e: ## Automated unified-sign E2E (QEMU)
 	@echo "==> Building secure + nonsecure with e2e-test feature (QEMU mailbox transport)"
 	@$(RUSTFLAGS_VAR)="-C linker=arm-none-eabi-ld -C link-arg=-Tlink.x $(REPRO_FLAGS)" \
 		cargo build --locked --release --target $(TARGET) --target-dir target/secure \
@@ -406,7 +416,7 @@ e2e:
 # Requires: ST-LINK connected, STM32_Programmer_CLI on PATH.
 # Pass: exits 0 with "[NS][bench] === PASS ===" on stdout.
 # Fail: exits 1 if any sign returns non-Ok or the PASS line is missing.
-test-key-speed:
+test-key-speed: ## DWT-timed signing bench on HW
 	@echo "==> Building secure (e2e-test auto-provision) + NS (bench-key-speed) + SHA-256 HW accel"
 	@FSBL_VENDOR_PUBKEY=$(DEV_VENDOR_PUBKEY) $(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 		cargo build --locked --release --target $(TARGET) --target-dir target/secure \
@@ -525,7 +535,7 @@ e2e-erc7730-hw:
 	@echo "  the hardware parity gate. See docs/archive/handoff-erc7730-phase5.md item 8."
 	@false
 
-e2e-hw:
+e2e-hw: ## Unified-sign E2E on real STM32U585 (probe-rs)
 	@echo "==> Building e2e + stm32u585"
 	@FSBL_VENDOR_PUBKEY=$(DEV_VENDOR_PUBKEY) $(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 		cargo build --locked --release --target $(TARGET) --target-dir target/secure \
@@ -653,7 +663,7 @@ e2e-hw-dual-se:
 #
 # Requires: ST-LINK on B-U585I-IOT02A. Non-destructive (no SE writes,
 # no PIN attempts). Safe to re-run.
-gtzc-enforcement-hw:
+gtzc-enforcement-hw: ## 7/7 secure-peripheral RAZ-fault on NS access (HW)
 	@echo "==> Building GTZC1 enforcement test (secure + stm32u585 + e2e-test + mock-se)"
 	@FSBL_VENDOR_PUBKEY=$(DEV_VENDOR_PUBKEY) $(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 		cargo build --locked --release --target $(TARGET) --target-dir target/secure \
@@ -990,7 +1000,7 @@ factory-reset:
 # Uses test object IDs (0x7B07_xxxx) so it doesn't touch any real
 # wallet provisioning. Repeatable on the same chip.
 # Watch semihosting for "[E2E] FACTORY-RESET ROUNDTRIP: PASS"/"FAIL".
-se050-reset-e2e:
+se050-reset-e2e: ## SE050 factory-reset roundtrip (HW)
 	@echo "==> Building SE050 reset-roundtrip e2e firmware..."
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 	cargo build --locked --release --target $(TARGET) --target-dir target/secure \
@@ -1106,7 +1116,7 @@ define SE050_STRESS_RUN
 endef
 
 # Run the full Tier::Safe catalog.
-se050-stress:
+se050-stress: ## SE050 on-silicon stress catalog (HW)
 	@echo "==> Building SE050 stress firmware (Tier::Safe)..."
 	$(RUSTFLAGS_VAR)="$(SE050_STRESS_RUSTFLAGS)" \
 	cargo build --locked --release --target $(TARGET) --target-dir target/secure \
@@ -1661,7 +1671,7 @@ flash-hw-usb: build-hw-usb
 
 # Run all three test layers: Rust unit tests, Foundry Solidity tests, and
 # the full e2e suite under QEMU.
-test: test-unit test-solidity e2e
+test: test-unit test-solidity e2e ## Host test bundle: unit + solidity + e2e
 	@echo "==> ALL TEST LAYERS PASSED"
 
 # Host-side Rust unit tests for pure logic (aa, tx modules).
@@ -1671,7 +1681,7 @@ test: test-unit test-solidity e2e
 # an explicit feature set, dead-code warnings on unreachable feature-gated
 # modules would either litter the output or, under `-D warnings`, fail the
 # build outright.
-test-unit:
+test-unit: ## Rust workspace unit tests (host)
 	@echo "==> Running Rust unit tests (host)"
 	@cargo test --locked -p sphincs-tz-secure \
 	    --no-default-features \
@@ -1709,14 +1719,14 @@ check-erc7730-descriptors:
 	@cargo run --locked -q -p pqsigner-xtask -- gen-erc7730-descriptors --check
 
 # Foundry tests for the PQ smart-wallet contracts.
-test-solidity:
+test-solidity: ## Foundry tests for the smart-wallet contracts
 	@echo "==> Running Foundry tests"
 	@cd contracts/smart-wallet && forge test
 
 # Lean 4 formal verification — type-checks the SphincsCVerify project.
 # See contracts/verification/README.md for what this proves and what it
 # leaves to the TCB.
-test-formal-verification:
+test-formal-verification: ## Lean FV suite + axiom audit
 	@echo "==> Building SphincsCVerify Lean project"
 	@$(MAKE) -C contracts/verification verify
 	@echo "==> Auditing axioms + sorry inventory"
@@ -1814,8 +1824,8 @@ verify-theft-free:
 #   make e2e, make e2e-hw, make play, make run, make test-key-speed,
 #   make pin-gate-*-hw, make optiga-hw-counter-e2e, ...
 .PHONY: test-all
-test-all: SHELL := /usr/bin/env bash
-test-all:
+test-all: SHELL := /usr/bin/env bash ## Everything host-runnable
+test-all: ## Everything host-runnable
 	@set -uo pipefail; \
 	pass=0; fail=0; failed=(); idx=0; \
 	run() { \
@@ -1867,7 +1877,7 @@ test-all:
 # (e.g. the production set without `dev-testkey`), use `make release`
 # instead — it runs `verify-repro` and prints both secure + nonsecure
 # measurements from the verified ELFs.
-measure: build-hw-dual-se-oled-standalone
+measure: build-hw-dual-se-oled-standalone ## Build + print the 8 BIP-39 measurement words
 	cargo run --locked -p fwmeasure -- $(SECURE_ELF)
 
 # Build the first-stage bootloader for real STM32U585 hardware.
@@ -1943,7 +1953,7 @@ fsbl-release:
 # implib into identical NS crates yields an identical NS ELF, so the
 # whole reproducibility story holds.
 .PHONY: verify-repro
-verify-repro:
+verify-repro: ## Reproducible-build byte-diff of secure+nonsecure (slow)
 	@echo "==> Reproducibility check (FEATURES=$(FEATURES))"
 	@rm -rf target/repro-a target/repro-b
 	@$(MAKE) --no-print-directory _repro_one \
@@ -2265,7 +2275,7 @@ flash-hw-optiga-unlock-test:
 # dispatcher at main.rs halts before the fast-path ever runs.
 #
 # Watch semihosting for "[E2E-OPTIGA-ADMIN] ADMIN-WIPE ROUNDTRIP: PASS"/"FAIL".
-optiga-hw-counter-e2e:
+optiga-hw-counter-e2e: ## Provision E120 LUC + drive PIN cycles (HW)
 	@echo "==> Building OPTIGA hardware PIN counter (E120 + LUC) e2e firmware..."
 	@echo "    This rewrites F1D0 metadata to the LUC-binding variant and"
 	@echo "    provisions E120 as the silicon PIN counter. LcsO stays at"
@@ -2558,7 +2568,7 @@ duress-provision-hw:
 	@echo "==> Running duress provision validation (watch for DURESS PROVISION VALIDATION: PASS)..."
 	@probe-rs run --chip STM32U585AIIx $(SECURE_ELF)
 
-pin-gate-hw-counter-e2e:
+pin-gate-hw-counter-e2e: ## Three-way MCU+OPTIGA+SE050 PIN-sync E2E (HW)
 	@echo "==> Building combined sync + desync recovery e2e firmware..."
 	@echo "    Exercises MCU page-124 + OPTIGA E120 + SE050 UserID counters"
 	@echo "    together under dual-se + optiga-hw-counter. WIPES wallet state"
@@ -2581,7 +2591,7 @@ pin-gate-hw-counter-e2e:
 	@echo "==> Running combined sync + desync e2e (watch for SYNC+DESYNC ROUNDTRIP: PASS)..."
 	@probe-rs run --chip STM32U585AIIx $(SECURE_ELF)
 
-pin-gate-wipe-e2e:
+pin-gate-wipe-e2e: ## 10 wrong PINs -> factory-reset both SEs (HW)
 	@echo "==> Building MCU-MAX-ATTEMPTS lockout-wipe dispatch e2e firmware..."
 	@echo "    DESTRUCTIVE: burns 10 wrong PINs → SE050 UserID silicon-locks,"
 	@echo "    MCU counter saturates, E120 LUC at 10. Then fires"
@@ -2630,7 +2640,7 @@ wipe-for-wizard-rerun:
 	@echo "    (no rebuild, no NS re-flash, no TZ option-byte rewrite)"
 	@probe-rs run --chip STM32U585AIIx $(SECURE_ELF)
 
-wipe-for-wizard:
+wipe-for-wizard: ## Dev: wipe both SEs + page 124, halt (HW)
 	@echo "==> Building dev wipe-for-wizard firmware..."
 	@echo "    DESTRUCTIVE (wallet state): wipes OPTIGA user OIDs,"
 	@echo "    SE050 user objects + admin UserID, MCU page 124."
@@ -2744,7 +2754,7 @@ bench-masked-sha-hw:
 		echo "==> bench-masked-sha: FAIL (missing completion marker)"; exit 1; \
 	fi
 
-saes-self-test-hw:
+saes-self-test-hw: ## SAES SW + DHUK round-trip + fingerprint (HW)
 	@echo "==> Building SAES Tier-1 self-test firmware..."
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 	cargo build --release --target $(TARGET) --target-dir target/secure \
@@ -3668,7 +3678,7 @@ vet:
 # Licenses are RECORDED here, not gated (a license gate is a compliance tripwire,
 # not a security property — see deny.toml). Output `*.cdx.json` is gitignored.
 .PHONY: sbom
-sbom:
+sbom: ## Generate the software bill of materials
 	@command -v cargo-cyclonedx >/dev/null 2>&1 || { echo "ERROR: cargo-cyclonedx not found. Install: cargo install cargo-cyclonedx"; exit 1; }
 	cargo cyclonedx --format json --all
 	@echo "==> sbom: wrote <crate>.cdx.json per workspace member (release sidecars)"
@@ -3700,7 +3710,7 @@ sbom-firmware:
 # build, so these do NOT cover those — see work-todo §34.
 # ---------------------------------------------------------------------------
 .PHONY: kani miri ui-golden
-kani:
+kani: ## Bounded model-checking on firmware decoders/counters
 	@command -v cargo-kani >/dev/null 2>&1 || { echo "ERROR: cargo-kani not found. Install: cargo install --locked kani-verifier && cargo kani setup"; exit 1; }
 	@echo "==> Kani: tx-core RLP parsers (decode_item used<=len, bytes_to_u256)"
 	cargo kani -p pqsigner-tx-core
@@ -3909,7 +3919,7 @@ kontrol:
 # drivers prove SECURE; the `driver` (fisher_yates shuffle) is INSECURE BY
 # DESIGN (address-channel + statistical misalignment, not bitwise CT) so the
 # suite exits non-zero — the three green drivers are the signal, not the exit.
-checkct:
+checkct: ## Constant-time check (cargo-checkct)
 	@test -f $(HOME)/checkct_env.sh || { echo "ERROR: ~/checkct_env.sh not found — see tools/sca/DONJON-RUST-TOOLING.md §1 (install binsec + the opam switch)"; exit 1; }
 	@test -x $(HOME)/repos/cargo-checkct/target/release/cargo-checkct || { echo "ERROR: cargo-checkct not built — git clone https://github.com/Ledger-Donjon/cargo-checkct ~/repos/cargo-checkct && cargo build --release"; exit 1; }
 	@echo "==> cargo-checkct: relational CT proof of kdf/fors/th (+ by-design-INSECURE fisher_yates shuffle) on thumbv8m"

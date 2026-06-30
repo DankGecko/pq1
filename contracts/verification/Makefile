@@ -28,9 +28,18 @@ SHELL        := bash
 LEAN_DIR := lean
 LAKE     ?= $(shell command -v lake 2>/dev/null || echo $$HOME/.elan/bin/lake)
 
+# `make` / `make help` lists every runnable target that carries a `## ` blurb
+# (the self-documenting convention — it can't drift from reality the way a
+# hand-maintained list does). Add `## one-liner` to a target's rule line to
+# surface it here.
+.DEFAULT_GOAL := help
+.PHONY: help
+help: ## Show the runnable FV targets (those with a description)
+	@grep -hE '^[a-zA-Z0-9_.-]+:.*## ' $(MAKEFILE_LIST) | sort | awk -F':.*## ' '!seen[$$1]++ {printf "  \033[36m%-30s\033[0m %s\n", $$1, $$2}'
+
 .PHONY: verify verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk verify-interp verify-transcription verify-independent-signer verify-storage-mutators verify-lean-proto-domain verify-fv-lints verify-lean4checker verify-kontrol verify-halmos verify-ledger-consistency verify-proof-mutation
 
-verify: verify-build
+verify: verify-build ## Default FV bundle: build + transcription + KAT + mutant-corpus
 	@python3 scripts/check_c10_transcription.py
 	@python3 scripts/check_lean_proto_domain.py
 	@cd $(LEAN_DIR) && $(LAKE) exe verify-test-vectors
@@ -44,14 +53,14 @@ verify: verify-build
 # forces a conscious allow-list update + a matching no-decrease lemma. Pure
 # source lint (no lake build); positive=current tree PASS, negative=fake
 # resetter FAIL. See scripts/check_storage_mutators.sh.
-verify-storage-mutators:
+verify-storage-mutators: ## I-3 closed-world Storage-mutator allowlist gate
 	@bash scripts/check_storage_mutators.sh
 
 # P7 source lint (no lake build): the Lean factory add-slot domain tag must be
 # byte-identical to proto::FACTORY_ADD_SLOT_DOMAIN, so the squat-defence proof
 # (invariant #6) stays bound to the digest the device actually signs. Closes
 # the "Lean-only domain drift undetected by the bytecode harnesses" residual.
-verify-lean-proto-domain:
+verify-lean-proto-domain: ## Lean factory domain tag == proto (P7)
 	@python3 scripts/check_lean_proto_domain.py
 
 # FV-invariant escape-hatch gate: fails CI on the audit anti-patterns over the
@@ -67,7 +76,7 @@ verify-lean-proto-domain:
 # Sub-lints (c)/(d) read the built oleans, so this depends on verify-build.
 # See scripts/lint_fv_invariants.sh (positive=clean tree PASS; negative trips
 # documented in the script header).
-verify-fv-lints: verify-build
+verify-fv-lints: verify-build ## FV anti-vacuity sub-lints (escape-hatch/closures/opaque-guard)
 	@bash scripts/lint_fv_invariants.sh
 
 # LEDGER-CONSISTENCY gate (anti-vacuity class V5: "advertised != actual"). Makes
@@ -87,7 +96,7 @@ verify-fv-lints: verify-build
 # CAVEAT: the live source is `#print axioms`, which under-reports in lean v4.22.0;
 # verify-lean4checker is the completeness backstop. See the script header and
 # docs/fv-adversarial-review-playbook.md §B.
-verify-ledger-consistency: verify-build
+verify-ledger-consistency: verify-build ## AXIOM_STATUS.json falsifiable vs live dump (closures/pins/witnesses)
 	@python3 scripts/check_ledger_consistency.py --self-test
 	@python3 scripts/check_ledger_consistency.py
 
@@ -107,7 +116,7 @@ verify-ledger-consistency: verify-build
 #   MUTATIONS=full    make verify-proof-mutation   # + corollary bridge axioms (13)
 # Does NOT catch V7 (latent-FALSE axiom — still type-checks) or V11 (wrong spec).
 # See scripts/check_proof_mutations.py + docs/fv-adversarial-review-playbook.md §B.
-verify-proof-mutation: verify-build
+verify-proof-mutation: verify-build ## Proof-side cargo-mutants: delete axiom/weaken lemma, expect break (SLOW)
 	@python3 scripts/check_proof_mutations.py
 
 # EXTERNAL kernel re-check gate (deep-research rec #1). lean/ is Lean v4.22.0,
@@ -118,7 +127,7 @@ verify-proof-mutation: verify-build
 # version-matched lean4checker at ~/lean4checker (see scripts/run_lean4checker.sh
 # header for the one-time build: git clone + checkout v4.22.0 + lake build);
 # override the location with LEAN4CHECKER_DIR=...
-verify-lean4checker:
+verify-lean4checker: ## External kernel re-check (true axiom closure; SLOW)
 	@bash scripts/run_lean4checker.sh
 
 # Model-to-bytecode (D): Kontrol/KEVM symbolic-execution proofs DIRECTLY against
@@ -127,14 +136,14 @@ verify-lean4checker:
 # bootstrap-unremovable owner-table slice (A3.4 / invariant #6). Requires a K
 # backend (`kup install kontrol` via Nix, or the RV Docker image); ~5 min
 # build+prove. See kontrol/run_kontrol.sh + docs/KONTROL_SCOPING.md.
-verify-kontrol:
+verify-kontrol: ## Kontrol/KEVM symbolic proofs on deployed bytecode (heavy)
 	@bash kontrol/run_kontrol.sh
 
 # Halmos bytecode-level discharge of the A3.* bridge axioms: certifies the
 # compiled runtime codehashes match the pins, then symbolically executes the
 # deployed wallet/factory/verifier bytecode over the full check_* rule suite
 # (both compiler profiles). Source of truth: halmos/run_halmos.sh.
-verify-halmos:
+verify-halmos: ## Halmos symbolic discharge of A3.* bridge axioms (heavy)
 	@bash halmos/run_halmos.sh
 
 # Bulk executable-spec differential (A3.1 follow-up): regenerate the random
@@ -143,7 +152,7 @@ verify-halmos:
 # oracle's verdict. Non-zero exit on any mismatch. The committed
 # bulk_vectors.json + BulkVectors.lean make the default run reproducible
 # without re-signing.
-verify-bulk:
+verify-bulk: ## Bulk executable-spec differential (Lean vs Rust oracle)
 ifeq ($(GEN),1)
 	@cd $(REPO_ROOT) && cargo test -p sphincs-c10 --test gen_bulk_vectors --release -- --nocapture
 	@cd $(LEAN_DIR) && python3 scripts/gen_bulk_lean.py
@@ -156,7 +165,7 @@ endif
 # Spec.Signature.verify AND == the KAT/bulk ground-truth verdict on every vector.
 # The load-bearing precondition for the interpreter-refinement proof (see
 # docs/A3_1_CLOSURE_PATH.md §8). HARD CHECK (non-zero exit on any mismatch).
-verify-interp:
+verify-interp: ## A3.1 interpreter<->bytecode KAT+bulk replay
 	@cd $(LEAN_DIR) && $(LAKE) exe verify-interp
 
 # A3.1 transcription-fidelity lint (POSITIONAL). Cross-checks the hand transcription
@@ -170,7 +179,7 @@ verify-interp:
 # structural fidelity stays covered by `verify-interp`'s 396-vector corpus + `execC10Asm_eq`.
 # Negative-controls (a mutated constant; a cross-fragment swap) verified to FAIL it.
 # See docs/A3_1_ADVERSARIAL_REVIEW_2026-06-18.md.
-verify-transcription:
+verify-transcription: ## A3.1 c10Program <-> .sol positional transcription lint
 	@python3 scripts/check_c10_transcription.py
 
 # A3.1 INDEPENDENT-SOURCE KAT leg (work-todo #7). A clean-room SHA-256 C10 signer
@@ -183,7 +192,7 @@ verify-transcription:
 #  (2) cross-verifier — the EXISTING Rust verifier accepts FRESH independent-signer
 #      output (the genuine independence guard vs a shared Python sign+verify bug).
 # Honest scope: diversity over the shared C10 spec, not a second spec. Needs python3.
-verify-independent-signer:
+verify-independent-signer: ## Clean-room C10 signer cross-check
 	@python3 scripts/independent_c10_signer.py
 	@cd $(REPO_ROOT) && cargo test -p sphincs-c10 --test independent_signer_xcheck --release -- --nocapture
 
@@ -192,14 +201,14 @@ verify-independent-signer:
 # ShortMsg + LongMsg vectors plus the full SHAVS Monte Carlo procedure
 # through the executable FIPS 180-4 spec (Spec/Sha256Impl.lean). Compiled
 # IO-level comparison; non-zero exit on any mismatch so CI can gate.
-verify-cavp:
+verify-cavp: ## NIST CAVP SHA-256 conformance over the FIPS spec
 	@python3 scripts/gen_cavp_vectors.py
 	@cd $(LEAN_DIR) && $(LAKE) exe verify-cavp
 
-verify-build:
+verify-build: ## lake build SphincsCVerify (the kernel gate)
 	@cd $(LEAN_DIR) && $(LAKE) build
 
-verify-audit:
+verify-audit: ## no-sorryAx + #print-axioms closure dump
 	@echo "=== Build + capture compiler 'declaration uses sorry' warnings (P8: authoritative sorry gate) ==="
 	@cd $(LEAN_DIR) && $(LAKE) build 2>&1 | tee /tmp/pq_audit_build.out
 	@if grep -E "declaration uses 'sorry'" /tmp/pq_audit_build.out; then \
@@ -216,10 +225,10 @@ verify-audit:
 	  echo "FAIL: sorryAx in a headline/corollary axiom closure — a proof is incomplete"; exit 1; fi
 	@echo "OK: build emitted no 'uses sorry' warning and no headline/corollary closure contains sorryAx."
 
-verify-three-claims:
+verify-three-claims: ## The three security-claim summary
 	@bash scripts/verify-three-claims.sh
 
-verify-exec-gate:
+verify-exec-gate: ## Claim-4 trace gate closure (kernel-only)
 	@echo "=== Building TxFlow + Spec.Theorems (Claim 4 dep closure) ==="
 	@cd $(LEAN_DIR) && $(LAKE) build SphincsCVerify.Wallet.TxFlow SphincsCVerify.Spec.Theorems
 	@echo ""
@@ -236,7 +245,7 @@ verify-exec-gate:
 	@# helper flattens `#print axioms`'s wrapped output before parsing.
 	@python3 scripts/check_axiom_closure.py /tmp/pq_claim4_axioms.out
 
-verify-bytecode-setup:
+verify-bytecode-setup: ## One-time Halmos setup
 	@bash halmos/setup_halmos.sh
 
 # Bytecode-level discharge of the A3.* bridge axioms: certifies the
@@ -247,10 +256,10 @@ verify-bytecode-setup:
 # session for A3.2. Run `make verify-bytecode-setup` once first.
 # Set PQ1_HALMOS_BOTH_PROFILES=1 to also re-run the symbolic suite under the
 # deploy profile.
-verify-bytecode:
+verify-bytecode: ## Halmos bytecode-level A3.* discharge (heavy)
 	@bash halmos/run_halmos.sh
 
-verify-clean:
+verify-clean: ## rm -rf .lake build
 	@cd $(LEAN_DIR) && rm -rf .lake build
 
 # ---------------------------------------------------------------------------
@@ -285,7 +294,7 @@ REPO_ROOT     := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
 # evidence (tier C) — shrinks the Charon faithfulness TCB on tested inputs, not a ∀.
 #   make verify-extract-differential          replay committed (Rust-generated) vectors
 #   make verify-extract-differential GEN=1    re-execute the Rust to regenerate them
-verify-extract-differential:
+verify-extract-differential: ## Extracted-Lean vs shipped-Rust differential
 ifeq ($(GEN),1)
 	@echo "=== regenerating EXPECTED outputs from the SHIPPED Rust (ground truth) ==="
 	@cd $(REPO_ROOT) && cargo test -p fw-manifest --test gen_extract_vectors --release -- --nocapture 2>&1 \
@@ -294,7 +303,7 @@ endif
 	@cd $(EXTRACTED_DIR) && $(LAKE) build Extracted.ExtractDiffVectors 2>&1 | tail -1
 	@cd $(EXTRACTED_DIR) && $(LAKE) env lean Extracted/ExtractDiffCheck.lean
 
-verify-extracted:
+verify-extracted: ## S33 Aeneas-extracted build + axiom-discipline
 	@cd $(EXTRACTED_DIR) && $(LAKE) build 2>&1 | tee /tmp/pq_extracted_build.out
 	@if grep -E "Extracted/[^ ]*\.lean:.*declaration uses" /tmp/pq_extracted_build.out; then \
 	  echo "FAIL: an Extracted/ declaration uses 'sorry' (incomplete proof)"; exit 1; fi
@@ -349,7 +358,7 @@ extract-fors-index:
 # definitions (SpecVendored.lean) and the FIPS 180-4 SHA-256 definitions
 # (Sha256Vendored.lean, source Spec/Sha256Impl.lean).
 .PHONY: verify-spec-vendored-fidelity
-verify-spec-vendored-fidelity:
+verify-spec-vendored-fidelity: ## Vendored-spec fidelity check
 	@python3 scripts/check_vendored_spec.py
 
 # §33 — AI-prover loop: drive a headless Claude agent to close ONE proof

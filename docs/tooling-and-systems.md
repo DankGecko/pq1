@@ -16,7 +16,7 @@
 ### Build / test / run
 | Tool | Invoke | Source of truth |
 |------|--------|-----------------|
-| **make** (144 top-level targets) | `make play` (interactive QEMU) · `run` (QEMU smoke, mock-SE) · `e2e` (unified-sign QEMU) · `e2e-hw` (probe-rs on real U585) · `measure` (8 BIP-39 words) · `test` = `test-unit test-solidity e2e` | `Makefile` |
+| **make** (~160 targets) | **`make help`** — the self-documented index of runnable targets (never drifts; add `## blurb` to a rule line to surface it). Highlights: `play` (interactive QEMU) · `run` (QEMU smoke, mock-SE) · `e2e` (unified-sign QEMU) · `e2e-hw` (probe-rs on real U585) · `measure` (8 BIP-39 words) · `test` = `test-unit test-solidity e2e` | `Makefile` (`make help`) |
 | ~80 HW/flash/SE variants | `make *-hw`, `make flash-*`, `make *-e2e` | `Makefile` (read it) |
 
 ### Contract / EVM verification
@@ -36,7 +36,7 @@
 ### Proof (Lean)
 | Tool | Installed | Invoke | Source of truth |
 |------|-----------|--------|-----------------|
-| **Lean 4 + Lake** | ✅ `~/.elan/bin` | `make test-formal-verification` · `make verify-theft-free` · the `contracts/verification/Makefile` `verify-*` targets | `contracts/verification/{lean,extracted}` |
+| **Lean 4 + Lake** | ✅ `~/.elan/bin` | `make test-formal-verification` · `make verify-theft-free` · **`make -C contracts/verification help`** lists the full `verify-*` FV / spec-assurance suite (fast per-PR + heavy/nightly) | `contracts/verification/{lean,extracted}` (`make -C contracts/verification help`) |
 | **lean-lsp MCP** | ✅ (sole MCP server) | `mcp__lean-lsp__*` (lean_goal/diagnostic/verify/loogle/…); `uvx lean-lsp-mcp`, `LEAN_PROJECT_PATH=contracts/verification/extracted` | `.mcp.json` |
 | **lean4checker** | ⚠ build-on-demand | `contracts/verification/scripts/run_lean4checker.sh` builds it version-matched at runtime (no pre-built binary) | that script |
 
