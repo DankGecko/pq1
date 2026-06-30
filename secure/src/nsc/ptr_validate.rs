@@ -122,10 +122,20 @@ fn tt_range_is_ns(ptr: u32, len: usize) -> bool {
 
 #[cfg(not(feature = "stm32u585"))]
 fn tt_range_is_ns(_ptr: u32, _len: usize) -> bool {
-    // QEMU workaround: there is no real SAU in the mps2-an505 path
-    // we care about; the constant-window checks below are the only
-    // validator. Always allow — the caller guarantees the range
-    // was also verified against the constant window.
+    // DELIBERATE NO-OP ON HOST/QEMU — NOT a missing check, do not "fix" it by
+    // modelling SAU regions here. The `TT` instruction queries the real silicon
+    // SAU; there is NO faithful host model of it (SAU Region 1, the NSC
+    // carve-out, is a link-time symbol with no host value). A *discriminating*
+    // host model would DIVERGE from silicon (the device's NS windows are
+    // subsets of its SAU NS regions, so the hardware `TT` returns NS for every
+    // window-accepted address — including the mailbox); a *non-discriminating*
+    // one is exactly this `true`. Returning `true` is therefore the honest host
+    // behaviour: the load-bearing range gate is the constant-window check the
+    // caller already ran (`ns_{read,write}_window_ok`, host-exercised +
+    // Kani-proven), and the ONLY drift a host model could catch — a window
+    // escaping its SAU region — is caught at COMPILE TIME by the subset
+    // assertion in `secure/src/sau.rs`. Real `TT` semantics are validated on
+    // silicon (`make gtzc-enforcement-hw`), not here. (Item 4, audit 2026-06-29.)
     true
 }
 

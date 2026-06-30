@@ -519,13 +519,26 @@ fn positive_only_region_1_is_nsc() {
         SAU_SRC.contains("configure_sau_region(1, veneer_base, nsc_end, true);"),
         "region 1 must be the NSC veneer block (`nsc = true`)"
     );
+    // Region 0 (NS flash) + Region 2 (NS SRAM) are configured from the
+    // centralized `SAU_NS_*` consts (2026-06-30, compile-time subset-checked
+    // against the proto NS windows). Both must stay `nsc = false`.
     assert!(
-        SAU_SRC.contains(", false); // bank 2 NS"),
-        "region 0 STM32U585 branch must be NS flash (`nsc = false`)"
+        SAU_SRC.contains("configure_sau_region(0, SAU_NS_FLASH_BASE, SAU_NS_FLASH_END, false);"),
+        "region 0 must be NS flash (`nsc = false`)"
     );
     assert!(
-        SAU_SRC.contains(", false); // SRAM2 NS"),
-        "region 2 STM32U585 branch must be NS SRAM (`nsc = false`)"
+        SAU_SRC.contains("configure_sau_region(2, SAU_NS_SRAM_BASE, SAU_NS_SRAM_END, false);"),
+        "region 2 must be NS SRAM (`nsc = false`)"
+    );
+    // Pin the STM32U585 NS-region bases (the bank-2 NS-flash + SRAM2-NS aliases
+    // the old inline `// bank 2 NS` / `// SRAM2 NS` literals encoded).
+    assert!(
+        SAU_SRC.contains("const SAU_NS_FLASH_BASE: u32 = 0x0810_0000;"),
+        "STM32U585 NS flash base must be the bank-2 NS alias 0x0810_0000"
+    );
+    assert!(
+        SAU_SRC.contains("const SAU_NS_SRAM_BASE: u32 = 0x2003_0000;"),
+        "STM32U585 NS SRAM base must be the SRAM2 NS alias 0x2003_0000"
     );
     assert!(
         SAU_SRC.contains("configure_sau_region(3, 0x4000_0000, 0x4FFF_FFFF, false);"),

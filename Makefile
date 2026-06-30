@@ -3073,6 +3073,9 @@ fuzz-erc7730-walker:
 fuzz-erc7730-render-dispatch:
 	cd fuzz && cargo +nightly fuzz run erc7730_render_dispatch $(FUZZ_LIBFUZZER_ARGS)
 
+fuzz-multisend-decode:
+	cd fuzz && cargo +nightly fuzz run multisend_decode $(FUZZ_LIBFUZZER_ARGS)
+
 # F-24 stage E Phase 1 — hardware flicker validation harness for the
 # decoy-mnemonic-frame defense. Builds a minimal secure firmware that
 # short-circuits `main()` into `ui::seed_wizard::decoy_flicker_test_loop`

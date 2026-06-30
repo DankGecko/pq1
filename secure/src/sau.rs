@@ -10,6 +10,61 @@
 /// and the `extern "C"` veneer-symbol address-of taken from the linker.
 
 use crate::hw::mmio::Reg32;
+use sphincs_tz_shared::{NS_FLASH_BASE, NS_FLASH_END, NS_SRAM_BASE, NS_SRAM_END};
+
+// ---------------------------------------------------------------------------
+// SAU NS-region bounds (centralized from the inline literals in `init()` so
+// they can be cross-checked at compile time, 2026-06-30).
+//
+// These are the regions the ARMv8-M SAU marks Non-Secure on this target. END
+// is INCLUSIVE here (SAU RLAR semantics).
+//
+// Item 4 of the 2026-06-29 coverage audit. The NS-pointer validator's
+// constant-window check (proto `NS_{SRAM,FLASH}_{BASE,END}`,
+// `shared::ns_ptr_validate`) is the load-bearing, host-exercised, Kani-proven
+// range gate. The hardware `TT` re-classification layered on top
+// (`nsc::ptr_validate::tt_range_is_ns`) is a silicon-only defense-in-depth
+// second factor — its host stub returns `true` because there is NO faithful
+// host SAU model (SAU Region 1, the NSC carve-out, is a link-time symbol; a
+// *discriminating* host model would DIVERGE from silicon, a non-discriminating
+// one is a no-op since the windows are subsets of the SAU regions). The one
+// drift a host model could catch — the proto NS windows escaping OUTSIDE these
+// SAU NS regions, which would let a window-"valid" NS pointer target a SECURE
+// byte the real `TT` rejects — is asserted at compile time below instead,
+// which is strictly better than a runtime no-op.
+#[cfg(not(feature = "stm32u585"))]
+const SAU_NS_FLASH_BASE: u32 = 0x0020_0000;
+#[cfg(not(feature = "stm32u585"))]
+const SAU_NS_FLASH_END: u32 = 0x003F_FFFF;
+#[cfg(not(feature = "stm32u585"))]
+const SAU_NS_SRAM_BASE: u32 = 0x2802_0000;
+#[cfg(not(feature = "stm32u585"))]
+const SAU_NS_SRAM_END: u32 = 0x29FF_FFFF;
+
+#[cfg(feature = "stm32u585")]
+const SAU_NS_FLASH_BASE: u32 = 0x0810_0000;
+#[cfg(feature = "stm32u585")]
+const SAU_NS_FLASH_END: u32 = 0x081F_FFFF;
+#[cfg(feature = "stm32u585")]
+const SAU_NS_SRAM_BASE: u32 = 0x2003_0000;
+#[cfg(feature = "stm32u585")]
+const SAU_NS_SRAM_END: u32 = 0x2003_FFFF;
+
+// Compile-time SAU/window subset check (per-cfg — each target build evaluates
+// its own consts). The proto NS-pointer-validation windows MUST sit inside the
+// SAU NS regions; a drift means a window-accepted NS pointer could resolve to a
+// SECURE byte on silicon (where the real `TT` would reject it). Window END is
+// EXCLUSIVE (proto), SAU END is INCLUSIVE — hence `NS_*_END - 1`.
+const _: () = {
+    assert!(
+        NS_FLASH_BASE >= SAU_NS_FLASH_BASE && NS_FLASH_END - 1 <= SAU_NS_FLASH_END,
+        "proto NS_FLASH window escaped the SAU NS-flash region (ptr-validation/SAU drift)"
+    );
+    assert!(
+        NS_SRAM_BASE >= SAU_NS_SRAM_BASE && NS_SRAM_END - 1 <= SAU_NS_SRAM_END,
+        "proto NS_SRAM window escaped the SAU NS-SRAM region (ptr-validation/SAU drift)"
+    );
+};
 
 // SAU register addresses (ARMv8-M standard, same on both targets).
 const SAU_CTRL_ADDR: u32 = 0xE000_EDD0;
@@ -345,11 +400,9 @@ pub fn init() {
     // Disable SAU while configuring.
     SAU.ctrl.write(0);
 
-    // Region 0: NS code flash
-    #[cfg(not(feature = "stm32u585"))]
-    configure_sau_region(0, 0x0020_0000, 0x003F_FFFF, false);
-    #[cfg(feature = "stm32u585")]
-    configure_sau_region(0, 0x0810_0000, 0x081F_FFFF, false); // bank 2 NS
+    // Region 0: NS code flash (bounds centralized above + compile-time
+    // subset-checked against the proto NS_FLASH window).
+    configure_sau_region(0, SAU_NS_FLASH_BASE, SAU_NS_FLASH_END, false);
 
     // Region 1: NSC veneers (placed in secure flash by linker).
     // SAFETY: `__veneer_base` / `__veneer_limit` are linker-defined symbols;
@@ -368,11 +421,9 @@ pub fn init() {
     };
     configure_sau_region(1, veneer_base, nsc_end, true);
 
-    // Region 2: NS data SRAM
-    #[cfg(not(feature = "stm32u585"))]
-    configure_sau_region(2, 0x2802_0000, 0x29FF_FFFF, false);
-    #[cfg(feature = "stm32u585")]
-    configure_sau_region(2, 0x2003_0000, 0x2003_FFFF, false); // SRAM2 NS
+    // Region 2: NS data SRAM (bounds centralized above + compile-time
+    // subset-checked against the proto NS_SRAM window).
+    configure_sau_region(2, SAU_NS_SRAM_BASE, SAU_NS_SRAM_END, false);
 
     // Region 3: NS peripherals
     configure_sau_region(3, 0x4000_0000, 0x4FFF_FFFF, false);

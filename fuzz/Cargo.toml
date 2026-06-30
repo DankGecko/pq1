@@ -136,6 +136,17 @@ test = false
 doc = false
 bench = false
 
+# Strict Safe `multiSend` decoder (`pqsigner_tx::multisend`): outer-frame
+# decode + per-record walk. The DELEGATECALL-into-MultiSendCallOnly shape the
+# Safe UI emits; every record must decode exactly or the tx refuses (a
+# DELEGATECALL is never blind-signed). Complements the in-crate Kani proofs.
+[[bin]]
+name = "multisend_decode"
+path = "fuzz_targets/multisend_decode.rs"
+test = false
+doc = false
+bench = false
+
 # DEFERRED — Phase 5 item 9: `erc7730_params_parse` harness.
 # Requires moving `secure/src/tx/erc7730_render/{params,visibility}.rs`
 # (plus a `RenderErr` split into a parser-level `ParamError` and a
