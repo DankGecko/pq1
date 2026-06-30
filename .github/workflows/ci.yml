@@ -140,6 +140,18 @@ jobs:
             -p pqsigner-proto -p pqsigner-tx-core -p pqsigner-aa \
             -p pqsigner-domain -p pqsigner-tx -p pqsigner-erc7730 \
             -p sphincs-c10 -p pqsigner-fi
+      # ERC-7730 descriptor catalog gate: (1) the firmware-pinned
+      # `ERC7730_DESCRIPTORS_ROOT` in secure/src/db_roots.rs must match a
+      # fresh dbgen build — catches a forgotten `cargo run -p dbgen` after a
+      # descriptor edit (a stale root would silently fail closed on-device);
+      # (2) every compiled IR re-parses through the on-device parser and its
+      # Merkle proof re-verifies. Targets exist locally as
+      # `make check-erc7730-descriptors`; wired here so the catalog can never
+      # drift on merge.
+      - name: ERC-7730 descriptor catalog in-sync (drift gate)
+        run: cargo run --locked -q -p pqsigner-xtask -- gen-erc7730-descriptors --check
+      - name: ERC-7730 dbgen round-trip (IR re-parse + proof re-verify)
+        run: cargo test --locked -p dbgen --test erc7730_roundtrip
       # A3.1 independent-source KAT leg (work-todo #7): the EXISTING Rust verifier
       # must accept FRESH output from the clean-room Python C10 signer
       # (contracts/verification/scripts/independent_c10_signer.py) — implementation

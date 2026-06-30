@@ -11,6 +11,7 @@
 //! resolving unchanged. The UI-bound formatters / nested-calldata
 //! recursor remain under `secure/src/tx/display/erc7730::`.
 
+pub mod enums;
 pub mod params;
 pub mod visibility;
 

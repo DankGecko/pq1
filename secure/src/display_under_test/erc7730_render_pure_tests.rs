@@ -168,6 +168,33 @@ fn calldata_deposit() -> Vec<u8> {
     vec![0xd0, 0xe3, 0x0d, 0xb0]
 }
 
+/// Aave V3 `borrow(address asset, uint256 amount, uint256 interestRateMode,
+/// uint16 referralCode, address onBehalfOf)` — all-static 5-word head.
+/// Used to exercise the `enum` formatter on `interestRateMode`.
+fn calldata_borrow(
+    asset: [u8; 20],
+    amount: U256,
+    interest_rate_mode: U256,
+    referral_code: u16,
+    on_behalf_of: [u8; 20],
+) -> Vec<u8> {
+    let mut data = Vec::with_capacity(4 + 5 * 32);
+    let sel = keccak256(b"borrow(address,uint256,uint256,uint16,address)");
+    data.extend_from_slice(&sel[..4]);
+    let mut asset_w = [0u8; 32];
+    asset_w[12..].copy_from_slice(&asset);
+    data.extend_from_slice(&asset_w);
+    data.extend_from_slice(&amount.0);
+    data.extend_from_slice(&interest_rate_mode.0);
+    let mut ref_w = [0u8; 32];
+    ref_w[30..].copy_from_slice(&referral_code.to_be_bytes());
+    data.extend_from_slice(&ref_w);
+    let mut obo_w = [0u8; 32];
+    obo_w[12..].copy_from_slice(&on_behalf_of);
+    data.extend_from_slice(&obo_w);
+    data
+}
+
 /// Re-confirm the function selector we synthesised actually keccaks to
 /// what the descriptor expects. Catches a "we mis-built the calldata"
 /// bug before the renderer ever sees it. Mirrors the firmware's own
@@ -702,4 +729,109 @@ fn positive_erc8213_labels_cover_every_kind() {
             std::any::type_name_of_val(&kind)
         );
     }
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// Enum formatter (FormatOp 0x08) — Aave V3 `borrow`. This is the FIRST and
+// only descriptor that emits an enum table, so these two tests are the
+// sole end-to-end coverage of the host `encode_enum_table` → on-device
+// `enums::lookup_enum_label` → `render_enum` round trip. The dbgen
+// round-trip / Kani suites NEVER render a page, so without these a broken
+// `render_enum` would ship green.
+// ───────────────────────────────────────────────────────────────────────
+
+#[test]
+fn positive_aave_borrow_renders_enum_label() {
+    let res = build_seed();
+    let entry = find_leaf(&res, "aave-v3-pool.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
+
+    // interestRateMode = 2 → "variable" in the descriptor's enum.
+    let calldata = calldata_borrow(
+        [0x11u8; 20],
+        u256_from_u64(500),
+        u256_from_u64(2),
+        0,
+        [0x44u8; 20],
+    );
+    assert_selector_matches(
+        &verified.ir,
+        &calldata,
+        "borrow(address,uint256,uint256,uint16,address)",
+    );
+
+    let tx = envelope(1, entry.contract);
+    let resolver = NameResolver::new();
+    let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver).expect("render");
+    assert_all_pages_printable(&pages);
+
+    let [r0, ..] = page_strs(&pages, 0);
+    assert_eq!(r0, "Sign: Borrow");
+
+    // The enum page must show the RESOLVED label "variable", not the bare
+    // index "2" (audit M-7).
+    let enum_page = find_page_by_label(&pages, "Interest mode");
+    let rows = page_strs(&pages, enum_page);
+    assert!(
+        rows[1].contains("variable"),
+        "enum index 2 must resolve to label 'variable': rows={rows:?}",
+    );
+    assert!(
+        !rows.iter().any(|r| r.trim() == "2"),
+        "must not render the bare enum index: rows={rows:?}",
+    );
+}
+
+#[test]
+fn negative_aave_borrow_unknown_enum_value_declines_to_blind() {
+    let res = build_seed();
+    let entry = find_leaf(&res, "aave-v3-pool.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
+
+    // interestRateMode = 7 is outside the declared set {0,1,2}; the whole
+    // descriptor render must reject so the ladder falls to loud blind-sign
+    // rather than rendering an unrecognised value under the verified banner.
+    let calldata = calldata_borrow(
+        [0x11u8; 20],
+        u256_from_u64(500),
+        u256_from_u64(7),
+        0,
+        [0x44u8; 20],
+    );
+    let tx = envelope(1, entry.contract);
+    let resolver = NameResolver::new();
+    match render_erc7730_pages(&tx, &calldata, &verified, None, &resolver) {
+        Err(crate::tx::erc7730_render::RenderErr::Reject(_)) => {}
+        Err(other) => panic!("expected a Reject decline-to-blind, got {other:?}"),
+        Ok(_) => panic!("unknown enum value must decline-to-blind, but render succeeded"),
+    }
+}
+
+/// Pack-expansion sanity: the hand-authored wstETH `wrap(uint256)`
+/// descriptor renders the right intent + field label. A render test
+/// (not just round-trip) catches descriptor-authoring slips — wrong
+/// path, selector, or label — that re-parse + Merkle-verify can't.
+#[test]
+fn positive_wsteth_wrap_renders_intent_and_amount_label() {
+    let res = build_seed();
+    let entry = find_leaf(&res, "wsteth.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
+
+    let mut calldata = keccak256(b"wrap(uint256)")[..4].to_vec();
+    calldata.extend_from_slice(&u256_from_u64(1_500_000_000_000_000_000).0); // 1.5e18
+    assert_selector_matches(&verified.ir, &calldata, "wrap(uint256)");
+
+    let tx = envelope(1, entry.contract);
+    let resolver = NameResolver::new();
+    let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver).expect("render");
+    assert_all_pages_printable(&pages);
+
+    let [r0, ..] = page_strs(&pages, 0);
+    assert_eq!(r0, "Sign: Wrap stETH");
+    // The amount field must render under its authored label (proves
+    // `#._stETHAmount` resolved to the right static-head slot).
+    let _amt_page = find_page_by_label(&pages, "Amount to wrap");
 }

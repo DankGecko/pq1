@@ -577,14 +577,42 @@ fn render_enum(
     tx: &Eip1559Tx,
     params: &ParamSet<'_>,
 ) -> Result<(), RenderErr> {
-    // Audit M-7: the Phase-4 stub rendered the raw enum index (e.g.
-    // "Side: 1") instead of the resolved label ("Side: SELL"), discarding
-    // the enum resolution while keeping the semantic label — opaque and
-    // misreadable under the verified intent banner. Until the enum-pool
-    // resolver lands, REJECT so the ladder falls through to blind-sign
-    // (consistent with `Calldata` / `MustMatch`).
-    let _ = (field, pages, ir, body, tx, params);
-    Err(RenderErr::Reject("7730 enum unsupported"))
+    // Resolve the field's value (a single static-head word). `@`-container
+    // enums are not a shape any descriptor uses, so a container resolution
+    // is refused (decline-to-blind) rather than guessed.
+    let value: [u8; 32] = match resolve_path(ir, field.path_off, body)? {
+        Resolved::Slot32(b) => *b,
+        Resolved::Container(_) => return Err(RenderErr::Reject("7730 enum on container")),
+    };
+    // The descriptor MUST carry an `enum_ref` → the interned value→label
+    // table; without it there is nothing to resolve against.
+    let enum_off = params
+        .enum_ref
+        .ok_or(RenderErr::Reject("7730 enum no ref"))?;
+    // Audit M-7: render the RESOLVED label, never the bare index. A value
+    // outside the declared set, or a malformed table, declines-to-blind
+    // rather than showing an opaque/garbled gloss under the verified
+    // intent banner (consistent with `Calldata` / `MustMatch`).
+    let label = crate::tx::erc7730_render::enums::lookup_enum_label(ir.pool, enum_off, &value)?
+        .ok_or(RenderErr::Reject("7730 enum value unknown"))?;
+    // A label longer than the three value rows would have to be truncated
+    // on the trusted display — refuse rather than show a partial gloss.
+    if label.len() > 3 * DISPLAY_COLS {
+        return Err(RenderErr::Reject("7730 enum label too long"));
+    }
+    let _ = tx;
+    let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
+    write_label_row(pages, p, field.label);
+    let [_, r1, r2, r3] = pages.page_mut(p);
+    let rows: [&mut [u8; DISPLAY_COLS]; 3] = [r1, r2, r3];
+    let mut chunks = label.chunks(DISPLAY_COLS);
+    for row in rows {
+        match chunks.next() {
+            Some(c) => write_line_bytes(row, c),
+            None => write_line_bytes(row, b""),
+        }
+    }
+    Ok(())
 }
 
 fn render_unit(

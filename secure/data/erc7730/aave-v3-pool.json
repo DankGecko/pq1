@@ -151,6 +151,50 @@
             "visible": "never"
           }
         ]
+      },
+      "borrow(address asset, uint256 amount, uint256 interestRateMode, uint16 referralCode, address onBehalfOf)": {
+        "$id": "borrow",
+        "intent": "Borrow",
+        "fields": [
+          {
+            "path": "amount",
+            "format": "tokenAmount",
+            "label": "Amount to borrow",
+            "params": {
+              "tokenPath": "asset"
+            },
+            "visible": "always"
+          },
+          {
+            "path": "interestRateMode",
+            "format": "enum",
+            "label": "Interest mode",
+            "params": {
+              "$ref": "$.metadata.enums.interestRateMode"
+            },
+            "visible": "always"
+          },
+          {
+            "label": "Referral Code",
+            "path": "referralCode",
+            "visible": "never"
+          },
+          {
+            "path": "onBehalfOf",
+            "format": "addressName",
+            "label": "Debt recipient",
+            "params": {
+              "types": [
+                "eoa"
+              ],
+              "sources": [
+                "local",
+                "ens"
+              ]
+            },
+            "visible": "always"
+          }
+        ]
       }
     }
   }
