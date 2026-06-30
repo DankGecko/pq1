@@ -22,9 +22,9 @@
 //! Once the value-list extension ships, `IfNotIn` / `MustMatch` will
 //! consult `params.visibility_values` (a `[u8 count][u8 elem_len][bytes
 //! ; count * elem_len]` sub-TLV) and compare against the resolved
-//! [`crate::tx::erc7730::AbiValue`] via byte-wise canonical encoding.
+//! [`crate::abi::AbiValue`] via byte-wise canonical encoding.
 
-use crate::tx::erc7730::{AbiValue, Visibility};
+use crate::{abi::AbiValue, ir::Visibility};
 
 use super::params::ParamSet;
 
@@ -207,6 +207,62 @@ mod tests {
         match should_render(&p, None) {
             Action::Reject(_) => (),
             other => panic!("expected Reject, got {:?}", other),
+        }
+    }
+}
+
+#[cfg(kani)]
+mod kani_harnesses {
+    use super::*;
+
+    /// Action variant discriminant — compares at the variant level
+    /// without touching the `Reject` `&'static str` payload. Comparing
+    /// the `&str` directly makes CBMC unwind `memcmp` over a fat-pointer
+    /// length it can't statically bound; the action *variant* (Render /
+    /// Skip / Reject) is the behavioural contract here, and the exact
+    /// banner literal is a code constant pinned by the unit tests
+    /// (`must_match_rejects_in_phase_4`).
+    fn variant_code(a: &Action) -> u8 {
+        match a {
+            Action::Render => 0,
+            Action::Skip => 1,
+            Action::Reject(_) => 2,
+        }
+    }
+
+    /// Totality + spec-conformance of the visibility evaluator.
+    ///
+    /// For every byte that decodes to a valid `Visibility` (the IR/param
+    /// parser rejects out-of-range bytes upstream — see
+    /// `params::kani_harnesses::params_visibility_gate_and_value_sound`)
+    /// and both compact-mode settings, `should_render_with_mode` is total
+    /// (never panics) and returns EXACTLY the documented action variant.
+    /// Exhaustive over the full `(visibility, compact)` domain.
+    #[kani::proof]
+    fn should_render_with_mode_total_and_spec() {
+        let vb: u8 = kani::any();
+        let compact: bool = kani::any();
+        if let Ok(v) = Visibility::try_from(vb) {
+            let mut params = ParamSet::default();
+            params.visibility = v;
+            // `resolved` is discarded by the evaluator in every arm, so
+            // `None` is representative of the whole `Option<&AbiValue>`
+            // domain for the totality + spec claim.
+            let got = variant_code(&should_render_with_mode(&params, None, compact));
+            let want = match v {
+                Visibility::Always => 0,                       // Render
+                Visibility::Never => 1,                        // Skip
+                Visibility::Optional => {
+                    if compact {
+                        1 // Skip
+                    } else {
+                        0 // Render
+                    }
+                }
+                Visibility::IfNotIn => 0,                      // Render
+                Visibility::MustMatch => 2,                    // Reject
+            };
+            assert_eq!(got, want);
         }
     }
 }

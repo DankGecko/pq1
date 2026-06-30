@@ -66,4 +66,5 @@ pub mod abi;
 pub mod binding;
 pub mod bundle;
 pub mod ir;
+pub mod render;
 pub mod walker;

@@ -3703,7 +3703,9 @@ kani:
 	@echo "         + Safe SafeTx decode (canonical typed-data: accept<=>operation-in-range, verbatim offsets; execTransaction: no-read-past-end + fixed-field soundness + accept/reject controls)"
 	cargo kani -p pqsigner-tx
 	@echo "==> Kani: ERC-7730 IR header parser (offset-bounds safety)"
-	cargo kani -p pqsigner-erc7730 --harness erc7730_ir_parse_panic_free
+	@echo "         + TLV param parser (panic/OOB-free over symbolic pool+offset; per-tag width/value soundness: enum_ref/decimals/token/visibility; reject unknown-tag + out-of-range visibility byte)"
+	@echo "         + visibility evaluator (should_render_with_mode total + spec-exact over all (visibility,compact))"
+	cargo kani -p pqsigner-erc7730
 	@echo "==> Kani: NS-pointer validation (window soundness: accept => in-NS, no-wrap, mailbox-disjoint, no usize->u32 trunc; unbounded/loop-free + accept/reject controls)"
 	cargo kani -p sphincs-tz-shared
 	@echo "==> kani: PASS"

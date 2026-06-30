@@ -38,7 +38,7 @@
 //! unknown tag must NOT silently render: it might describe semantics
 //! the renderer can't honour.
 
-use crate::tx::erc7730::{Erc7730Ir, Visibility};
+use crate::ir::{Erc7730Ir, Visibility};
 
 use super::RenderErr;
 
@@ -260,7 +260,7 @@ pub fn parse<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tx::erc7730::{Erc7730Ir, Visibility, HEADER_LEN, SCHEMA_VER};
+    use crate::ir::{Erc7730Ir, Visibility, HEADER_LEN, SCHEMA_VER};
 
     /// Build a minimal IR blob with the supplied pool bytes.
     fn ir_with_pool(pool: &[u8]) -> std::vec::Vec<u8> {
@@ -464,5 +464,250 @@ mod tests {
             p.visibility_values,
             Some(&[0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF][..])
         );
+    }
+}
+
+#[cfg(kani)]
+mod kani_harnesses {
+    //! Bounded verification of the ERC-7730 TLV parameter parser over
+    //! symbolic (companion-supplied) descriptor-pool bytes.
+    //!
+    //! The parser reads ONLY `ir.pool`, so each harness constructs an
+    //! `Erc7730Ir` whose other fields are dummy and whose `pool` is the
+    //! symbolic byte array — isolating `parse` from the IR header parser
+    //! (covered separately by `ir::kani_harnesses::erc7730_ir_parse_panic_free`).
+    //!
+    //! Bound (honest): the per-tag soundness harnesses are EXHAUSTIVE over
+    //! a single TLV entry's content (symbolic tag / length / payload bytes,
+    //! payload bounded to the in-pool capacity). Multi-entry *cursor-tiling
+    //! fidelity* (entry N+1 begins exactly where N ended, no overlap/gap
+    //! across records) is closed only for panic / slice-OOB freedom by
+    //! `params_parse_panic_free`, NOT for full multi-record value soundness
+    //! — the same scoping the SOTA doc applies to multiSend layer-2.
+
+    use super::*;
+    use crate::ir::ContextKind;
+
+    /// Build an `Erc7730Ir` whose only meaningful field is `pool`. Every
+    /// other field is a fixed dummy: `parse` never reads them.
+    fn mk_ir(pool: &[u8]) -> Erc7730Ir<'_> {
+        Erc7730Ir {
+            schema_ver: 0,
+            context_kind: ContextKind::Contract,
+            chain_id: 0,
+            contract: [0u8; 20],
+            descriptor_hash: [0u8; 32],
+            domain_separator: [0u8; 32],
+            owner: &[],
+            contract_name: &[],
+            pool,
+            formats: &[],
+            raw: &[],
+        }
+    }
+
+    /// Panic / arithmetic-overflow / slice-OOB freedom for the whole
+    /// multi-TLV walk over an arbitrary pool, an arbitrary in-bounds pool
+    /// length, AND an arbitrary `param_off` (so a hostile offset cannot
+    /// panic the parser either). This is the "dynamic offsets/lengths stay
+    /// in-bounds — no read past end" property over the cursor loop; Kani's
+    /// default checks discharge it. Bound: N-byte pool, loop unwound to N/2+1.
+    #[kani::proof]
+    #[kani::unwind(10)]
+    fn params_parse_panic_free() {
+        const N: usize = 16;
+        let pool: [u8; N] = kani::any();
+        let len: usize = kani::any();
+        kani::assume(len <= N);
+        let off: u16 = kani::any();
+        let ir = mk_ir(&pool[..len]);
+        let _ = parse(&ir, off);
+    }
+
+    // ---- per-tag soundness (offset PINNED at param_off = 1) -------------
+    //
+    // Layout for `param_off = 1`, single TLV occupying the whole blob:
+    //   pool[0]            filler (param_off points at pool[1])
+    //   pool[1] = blob_len = 2 + L
+    //   pool[2] = tag
+    //   pool[3] = L (payload_len)
+    //   pool[4 .. 4+L]     payload
+    // `assume(pool[1] == 2 + L)` makes the single TLV span the whole body;
+    // `assume(4 + L <= N)` keeps the payload in-pool so the only reject is
+    // the per-tag width/value gate (body-overflow rejects are the
+    // panic-free harness's job). All assertions reconstruct the expected
+    // value from the ORIGINAL `pool` at the fixed offset — never from the
+    // parser's cursor — so they cannot pass by re-checking the parser
+    // against itself.
+
+    /// `enum_ref` (0x37): accept ⟺ exactly 2 payload bytes, and the stored
+    /// value is the big-endian u16 of those bytes read at the fixed offset.
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn params_enum_ref_width_and_value_sound() {
+        const N: usize = 10;
+        let pool: [u8; N] = kani::any();
+        let l = pool[3] as usize;
+        kani::assume((pool[1] as usize) == 2 + l);
+        kani::assume(4 + l <= N);
+        kani::assume(pool[2] == PARAM_ENUM_REF);
+        let ir = mk_ir(&pool);
+        match parse(&ir, 1) {
+            Ok(p) => {
+                assert!(l == 2);
+                assert_eq!(p.enum_ref, Some(u16::from_be_bytes([pool[4], pool[5]])));
+            }
+            Err(_) => assert!(l != 2),
+        }
+    }
+
+    /// `decimals` (0x38): accept ⟺ exactly 1 payload byte, and the stored
+    /// value is that byte read at the fixed offset.
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn params_decimals_width_and_value_sound() {
+        const N: usize = 8;
+        let pool: [u8; N] = kani::any();
+        let l = pool[3] as usize;
+        kani::assume((pool[1] as usize) == 2 + l);
+        kani::assume(4 + l <= N);
+        kani::assume(pool[2] == PARAM_DECIMALS);
+        let ir = mk_ir(&pool);
+        match parse(&ir, 1) {
+            Ok(p) => {
+                assert!(l == 1);
+                assert_eq!(p.decimals, Some(pool[4]));
+            }
+            Err(_) => assert!(l != 1),
+        }
+    }
+
+    /// `token` (0x31): accept ⟺ exactly 20 payload bytes, and the stored
+    /// `&[u8; 20]` is the verbatim 20-byte window at the fixed offset.
+    ///
+    /// Unwind 24: the only loop with > a couple of iterations is the
+    /// builtin `memcmp` for the 20-byte `&[u8; 20]` value comparison
+    /// (needs ≥ 21); the single-TLV walk is one iteration.
+    #[kani::proof]
+    #[kani::unwind(24)]
+    fn params_token_width_and_value_sound() {
+        const N: usize = 24;
+        let pool: [u8; N] = kani::any();
+        let l = pool[3] as usize;
+        kani::assume((pool[1] as usize) == 2 + l);
+        kani::assume(4 + l <= N);
+        kani::assume(pool[2] == PARAM_TOKEN);
+        let ir = mk_ir(&pool);
+        match parse(&ir, 1) {
+            Ok(p) => {
+                assert!(l == 20);
+                let want: &[u8; 20] = (&pool[4..24]).try_into().unwrap();
+                assert_eq!(p.token, Some(want));
+            }
+            Err(_) => assert!(l != 20),
+        }
+    }
+
+    /// `visibility` (0x3F): accept ⟺ non-empty payload AND a first byte in
+    /// the valid Visibility range (≤ 4). On accept the variant equals
+    /// `Visibility::try_from(payload[0])` and the value-list tail (Phase 5)
+    /// is exactly `payload[1..]` when longer than one byte. This is the
+    /// "reject out-of-range enum selector" property for the visibility byte.
+    ///
+    /// Unwind 10 covers the `memcmp` for the (≤ 5-byte) `visibility_values`
+    /// slice comparison plus the one-iteration single-TLV walk.
+    #[kani::proof]
+    #[kani::unwind(10)]
+    fn params_visibility_gate_and_value_sound() {
+        const N: usize = 10;
+        let pool: [u8; N] = kani::any();
+        let l = pool[3] as usize;
+        kani::assume((pool[1] as usize) == 2 + l);
+        kani::assume(4 + l <= N);
+        kani::assume(pool[2] == PARAM_VISIBILITY);
+        let ir = mk_ir(&pool);
+        match parse(&ir, 1) {
+            Ok(p) => {
+                assert!(l >= 1);
+                assert!(pool[4] <= 4);
+                assert_eq!(p.visibility, Visibility::try_from(pool[4]).unwrap());
+                if l > 1 {
+                    assert_eq!(p.visibility_values, Some(&pool[5..4 + l]));
+                } else {
+                    assert_eq!(p.visibility_values, None);
+                }
+            }
+            Err(_) => assert!(l == 0 || pool[4] > 4),
+        }
+    }
+
+    // ---- self-anchored non-vacuity controls ----------------------------
+
+    /// Positive control: a concrete, canonical multi-TLV blob
+    /// (decimals + token + visibility=Never) is ACCEPTED and decodes to
+    /// exactly the expected fields. Without this every biconditional Ok
+    /// branch above could in principle be vacuous; this witnesses that the
+    /// parser genuinely accepts a realistic descriptor.
+    ///
+    /// Unwind 24: the 20-byte `memcmp` for the token value comparison
+    /// dominates; the three-entry TLV walk is well within this bound.
+    #[kani::proof]
+    #[kani::unwind(24)]
+    fn params_accepts_concrete() {
+        // Whole array pre-seeded with the token payload byte (0xAB); the
+        // structural bytes are then patched in. No harness-side loop.
+        let mut pool = [0xABu8; 30];
+        pool[0] = 0xFF; // filler
+        pool[1] = 28; // blob_len = 3 (decimals) + 22 (token) + 3 (visibility)
+        pool[2] = PARAM_DECIMALS;
+        pool[3] = 1;
+        pool[4] = 6;
+        pool[5] = PARAM_TOKEN;
+        pool[6] = 20;
+        // pool[7..27] already 0xAB (token payload)
+        pool[27] = PARAM_VISIBILITY;
+        pool[28] = 1;
+        pool[29] = Visibility::Never as u8;
+        let ir = mk_ir(&pool);
+        let p = parse(&ir, 1).expect("canonical multi-TLV param blob must decode");
+        assert_eq!(p.decimals, Some(6));
+        assert_eq!(p.token, Some(&[0xAB; 20]));
+        assert_eq!(p.visibility, Visibility::Never);
+        assert_eq!(p.visibility_values, None);
+    }
+
+    /// On-point negative: a tag outside the 16 known tags (`< 0x30 ||
+    /// > 0x3F`) is REJECTED regardless of its symbolic payload — a hostile
+    /// descriptor cannot smuggle an unknown TLV past the renderer.
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn params_rejects_unknown_tag() {
+        const N: usize = 8;
+        let pool: [u8; N] = kani::any();
+        let l = pool[3] as usize;
+        kani::assume((pool[1] as usize) == 2 + l);
+        kani::assume(4 + l <= N);
+        let tag = pool[2];
+        kani::assume(tag < 0x30 || tag > 0x3F);
+        let ir = mk_ir(&pool);
+        assert!(parse(&ir, 1).is_err());
+    }
+
+    /// On-point negative: a VISIBILITY TLV whose first byte is out of the
+    /// valid range (> 4) is REJECTED. This is exactly the "NS supplies an
+    /// out-of-range visibility selector" threat the gate exists to stop.
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn params_rejects_visibility_byte_gt_4() {
+        const N: usize = 8;
+        let pool: [u8; N] = kani::any();
+        let l = pool[3] as usize;
+        kani::assume((pool[1] as usize) == 2 + l);
+        kani::assume(4 + l <= N);
+        kani::assume(l >= 1);
+        kani::assume(pool[2] == PARAM_VISIBILITY);
+        kani::assume(pool[4] > 4);
+        let ir = mk_ir(&pool);
+        assert!(parse(&ir, 1).is_err());
     }
 }
