@@ -42,7 +42,8 @@
 //!      slice files + `nsc/mod.rs` veneers that the load-bearing
 //!      gates remain in place: pin-verified check, NS pointer
 //!      validation, TOCTOU `read_volatile` snapshot, FI-hardened
-//!      signature verify, OTP-bump-before-manifest-write ordering,
+//!      signature verify, OTP-bump-LAST ordering (anti-brick: floor
+//!      raised only after manifest + boot-state are written & re-verified),
 //!      `TRY_ONCE_TRIED` write + CRC recompute, write-quadword-verified
 //!      use, `HandlerGuard::enter()` before any `static mut`
 //!      `FW_UPDATE` deref, no classical signers anywhere in the
@@ -964,10 +965,10 @@ fn negative_begin_resets_activity_timer_after_seed() {
 // ─────────────────────────────────────────────────────────────────────
 // 14. Negative: source-text invariant pins — COMMIT ordering
 //
-// `cmd_fw_commit.rs`: the order of `verify_images` → `confirm_commit`
-// → `otp::bump_to` → manifest write → boot-state write → reset is
-// security-critical. Each step's "before" pin defends a specific
-// attack.
+// `cmd_fw_commit.rs`: the order of `verify_images` → manifest write →
+// boot-state write → from-flash re-verify → `otp::bump_to` → reset is
+// security-critical. Each step's ordering pin defends a specific
+// failure mode — the OTP bump is LAST (anti-brick).
 // ─────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -1027,12 +1028,17 @@ fn negative_begin_user_cancel_short_circuits_before_erase() {
 }
 
 #[test]
-fn negative_commit_bumps_otp_before_writing_new_manifest() {
-    // Documented in cmd_fw_commit.rs:79-88: rollback-floor bump
-    // must happen BEFORE the manifest write so a reset between
-    // them leaves the floor raised — closing the "an attacker
-    // power-cycles after manifest write but before OTP bump" window
-    // for replaying older releases.
+fn negative_commit_bumps_otp_last_after_manifest_and_boot_state() {
+    // ANTI-BRICK (docs/VULN-fwcommit-otp-before-commit-brick.md). The
+    // irreversible OTP rollback-floor bump must be the LAST flash write —
+    // AFTER the new manifest AND the boot-state pointer are written and
+    // re-verified. The previous ordering bumped OTP FIRST; a power-loss
+    // between the bump and the manifest write floored out the OLD
+    // (last-known-good) slot while the NEW slot was not yet a valid
+    // candidate → FSBL finds no bootable slot → `halt()` → permanent
+    // brick. With the bump LAST, any torn commit leaves the old slot
+    // bootable (FSBL reverts to it) — a lost-and-retried update, never a
+    // brick.
     let body = COMMIT_SRC;
     let otp_pos = body
         .find("otp::bump_to(new_rollback_floor)")
@@ -1040,9 +1046,18 @@ fn negative_commit_bumps_otp_before_writing_new_manifest() {
     let manifest_write_pos = body
         .find("flash::write_quadword_verified")
         .expect("COMMIT must program the new manifest");
+    let boot_state_pos = body
+        .find("boot_state::write(&new_boot_state)")
+        .expect("COMMIT must write boot_state");
     assert!(
-        otp_pos < manifest_write_pos,
-        "OTP rollback-floor bump must precede the new manifest write — anti-replay across reset"
+        manifest_write_pos < otp_pos,
+        "new manifest write must PRECEDE the OTP bump — the new slot must be a valid \
+         candidate before the old slot is floored out (anti-brick)"
+    );
+    assert!(
+        boot_state_pos < otp_pos,
+        "boot-state write must PRECEDE the OTP bump — both slots stay valid until the \
+         floor is raised last (anti-brick)"
     );
 
     // Anti-brick + anti-downgrade (fw-update audit 20260611): the floor
@@ -1059,6 +1074,33 @@ fn negative_commit_bumps_otp_before_writing_new_manifest() {
     assert!(
         body.contains("otp::bump_to(new_rollback_floor)") && !body.contains("otp::bump_to(new_version)"),
         "COMMIT must bump to new_rollback_floor (fw_version - 1), never to fw_version itself"
+    );
+}
+
+#[test]
+fn negative_commit_reverifies_new_slot_from_flash_before_otp_bump() {
+    // Hardening (anti-brick gate): before the irreversible OTP bump, COMMIT
+    // must re-verify FROM FLASH that the new slot is a valid FSBL candidate
+    // under the floor it is about to write — in particular the strict
+    // `verify_rollback(new_rollback_floor)` keystone, which proves the new
+    // floor cannot reject the very slot being committed. If this gate ever
+    // moved after the OTP bump (or were deleted) the bump would no longer be
+    // guarded by a from-flash candidacy proof.
+    let body = COMMIT_SRC;
+    let otp_pos = body
+        .find("otp::bump_to(new_rollback_floor)")
+        .expect("COMMIT must call otp::bump_to");
+    let reverify_pos = body
+        .find("verify_rollback(new_rollback_floor)")
+        .expect("COMMIT must re-verify the committed manifest's rollback floor before the bump");
+    assert!(
+        reverify_pos < otp_pos,
+        "the from-flash rollback re-verify must run BEFORE the OTP bump — the floor is \
+         raised only once the new slot is proven a valid candidate"
+    );
+    assert!(
+        body.contains("ManifestRef::new(flash_manifest)"),
+        "the re-verify must read the just-written manifest back FROM FLASH (not only the RAM copy)"
     );
 }
 
@@ -1142,8 +1184,10 @@ fn negative_commit_writes_boot_state_last_before_reset() {
     // boot_state::write is the single atomic "now boot from the new
     // slot" commit point. Writing it before the manifest is fully
     // programmed would have FSBL try to boot a torn slot. Writing
-    // it after sys_reset is impossible. The fixed order is OTP →
-    // manifest → boot_state → sys_reset.
+    // it after sys_reset is impossible. The fixed order is
+    // manifest → boot_state → from-flash re-verify → OTP → sys_reset
+    // (OTP LAST is the anti-brick property — see
+    // negative_commit_bumps_otp_last_after_manifest_and_boot_state).
     let manifest_pos = COMMIT_SRC
         .find("flash::write_quadword_verified")
         .expect("COMMIT must program the manifest");
