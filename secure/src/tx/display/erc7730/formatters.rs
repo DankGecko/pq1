@@ -36,6 +36,11 @@ use super::super::primitives::{
 };
 use crate::tx::eip1559::{Eip1559Tx, U256};
 use crate::tx::erc7730::{container_field, Erc7730Ir, FieldEntry, FormatOp, PathOp};
+// `resolve_array` (the load-bearing dynamic-array tail resolver, which reuses
+// `walk`'s Kani-proven readers) lives in the host crate so it is itself
+// Kani-verifiable; `render_array` is a thin renderer over its result, and the
+// tests reach it as `formatters::resolve_array`.
+pub(crate) use crate::tx::erc7730_render::array::resolve_array;
 use crate::tx::erc7730_render::params::{
     ParamSet, DATE_ENC_BLOCKHEIGHT, DATE_ENC_TIMESTAMP,
 };
@@ -598,6 +603,179 @@ fn render_const(
         }
     }
     Ok(())
+}
+
+/// True iff the field's compiled path is STRUCTURALLY a render-every-element
+/// array path: `RootStructured` then `FieldIdx*` then exactly `ArrayAll`.
+///
+/// Validates the opcode STRUCTURE, not just `prog.last() == 0x24` — a scalar
+/// field's terminal `FieldIdx` whose 2-byte arg's low byte is `0x24`
+/// (`PathOp::ArrayAll`) must NOT misroute to `render_array` (it would still
+/// decline-to-blind there, but it would needlessly blind-sign an otherwise
+/// clear-signable scalar field).
+pub(crate) fn path_ends_with_array_all(
+    ir: &Erc7730Ir<'_>,
+    path_off: u16,
+) -> Result<bool, RenderErr> {
+    if path_off == 0 {
+        return Ok(false);
+    }
+    let off = path_off as usize;
+    let len = *ir
+        .pool
+        .get(off)
+        .ok_or(RenderErr::Reject("7730 bad path off"))? as usize;
+    let prog = ir
+        .pool
+        .get(off + 1..off + 1 + len)
+        .ok_or(RenderErr::Reject("7730 truncated path"))?;
+    if prog.first() != Some(&(PathOp::RootStructured as u8)) {
+        return Ok(false);
+    }
+    let mut p = 1usize;
+    while let Some(&op) = prog.get(p) {
+        if op == PathOp::FieldIdx as u8 {
+            if p + 3 > prog.len() {
+                return Ok(false);
+            }
+            p += 3;
+        } else if op == PathOp::ArrayAll as u8 {
+            return Ok(p + 1 == prog.len()); // ArrayAll must be the final op
+        } else {
+            return Ok(false);
+        }
+    }
+    Ok(false)
+}
+
+/// Render EVERY element of a sole top-level dynamic array (`<arg>.[]`).
+///
+/// Safety (WYSIWYS): the array's offset word lives in the static head and is
+/// bound by the same `slot < static_head_words` guard as scalar fields; the
+/// tail is then followed via `walk`'s hardened `read_offset_word` /
+/// `read_length_word` (so the device reads the SAME bytes the EVM decodes),
+/// and TWO exact-placement equalities pin the array as the entire dynamic
+/// tail — `offset == head_end` and `offset + 32 + count*32 == body.len()` —
+/// which (given the dbgen sole-dynamic-arg constraint) forecloses the whole
+/// aliasing / overlap / trailing-garbage surface. EVERY element is rendered
+/// (or the field declines-to-blind): showing a subset is the array-tail-
+/// hiding hazard.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn render_array(
+    field: &FieldEntry<'_>,
+    pages: &mut Pages,
+    ir: &Erc7730Ir<'_>,
+    full_body: &[u8],
+    static_head_words: u16,
+    tx: &Eip1559Tx,
+    erc20: Option<&Erc20Metadata<'_>>,
+    resolver: &NameResolver<'_>,
+    params: &ParamSet<'_>,
+) -> Result<(), RenderErr> {
+    let (elems_start, count) = resolve_array(field, ir, full_body, static_head_words)?;
+
+    // 8. Header page: "<label>" + "<count> items" (makes the total explicit;
+    //    also the count==0 page).
+    let hp = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
+    write_label_row(pages, hp, field.label);
+    {
+        let [_, r1, _r2, _r3] = pages.page_mut(hp);
+        write_count_row(r1, count);
+    }
+
+    // 9. One page per element — EVERY element (array-tail-hiding closed).
+    let fmt = FormatOp::try_from(field.format_op).map_err(|_| RenderErr::Reject("7730 arr fmt"))?;
+    for i in 0..count {
+        let elem_start = elems_start
+            .checked_add(i.checked_mul(32).ok_or(RenderErr::Reject("7730 arr ovf"))?)
+            .ok_or(RenderErr::Reject("7730 arr ovf"))?;
+        let word = full_body
+            .get(elem_start..elem_start + 32)
+            .ok_or(RenderErr::Reject("7730 arr elem oob"))?;
+        let word32: &[u8; 32] = word.try_into().map_err(|_| RenderErr::Reject("7730 arr elem"))?;
+        render_array_element(field, fmt, word32, pages, tx, erc20, resolver, params)?;
+    }
+    Ok(())
+}
+
+/// Write "<count> items" into a 16-col row (count ≤ MAX_ARRAY_RENDER).
+fn write_count_row(row: &mut [u8; DISPLAY_COLS], count: usize) {
+    *row = [b' '; DISPLAY_COLS];
+    let mut digits = [0u8; 8];
+    let mut n = count;
+    let mut dlen = 0;
+    if n == 0 {
+        digits[0] = b'0';
+        dlen = 1;
+    } else {
+        while n > 0 && dlen < digits.len() {
+            digits[dlen] = b'0' + (n % 10) as u8;
+            n /= 10;
+            dlen += 1;
+        }
+    }
+    let mut pos = 0;
+    for i in (0..dlen).rev() {
+        if pos < DISPLAY_COLS {
+            row[pos] = digits[i];
+            pos += 1;
+        }
+    }
+    for &b in b" items" {
+        if pos < DISPLAY_COLS {
+            row[pos] = b;
+            pos += 1;
+        }
+    }
+}
+
+/// Render one array element (a 32-byte word) as one page. v1 supports the
+/// element formats that make sense for a list: amount, addressName, raw.
+#[allow(clippy::too_many_arguments)]
+fn render_array_element(
+    field: &FieldEntry<'_>,
+    fmt: FormatOp,
+    word: &[u8; 32],
+    pages: &mut Pages,
+    tx: &Eip1559Tx,
+    _erc20: Option<&Erc20Metadata<'_>>,
+    resolver: &NameResolver<'_>,
+    params: &ParamSet<'_>,
+) -> Result<(), RenderErr> {
+    let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
+    write_label_row(pages, p, field.label);
+    match fmt {
+        FormatOp::Amount => {
+            let value = U256(*word);
+            let decimals = u32::from(params.decimals.unwrap_or(18));
+            let unit = params.base.unwrap_or(b"");
+            let [_, r1, r2, foot] = pages.page_mut(p);
+            let fit =
+                write_amount_two_rows(r1, r2, &value, decimals, 6, true, true, ascii_str(unit));
+            write_line(
+                foot,
+                match fit {
+                    AmountFit::Full => "> next",
+                    AmountFit::Overflow => "!AMOUNT OVERFLOW",
+                },
+            );
+            Ok(())
+        }
+        FormatOp::AddressName => {
+            let mut a = [0u8; 20];
+            a.copy_from_slice(&word[12..]);
+            let [_, r1, r2, r3] = pages.page_mut(p);
+            write_addr_full_or_name(r1, r2, r3, &a, tx.chain_id, resolver);
+            Ok(())
+        }
+        FormatOp::Raw => {
+            let [_, r1, r2, _foot] = pages.page_mut(p);
+            write_hex_word(r1, &word[..16]);
+            write_hex_word(r2, &word[16..]);
+            Ok(())
+        }
+        _ => Err(RenderErr::Reject("7730 arr elem fmt unsup")),
+    }
 }
 
 fn render_enum(

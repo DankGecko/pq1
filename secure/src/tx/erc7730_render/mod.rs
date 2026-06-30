@@ -14,4 +14,4 @@
 //! UI-bound formatters / nested-calldata recursor remain under
 //! `crate::tx::display::erc7730::`.
 
-pub use pqsigner_erc7730::render::{enums, params, visibility, RenderErr};
+pub use pqsigner_erc7730::render::{array, enums, params, visibility, RenderErr};

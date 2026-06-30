@@ -1,0 +1,38 @@
+{
+  "$schema": "../../specs/erc7730-v2.schema.json",
+  "context": {
+    "$id": "LidoWithdrawalQueue",
+    "contract": {
+      "deployments": [
+        { "chainId": 1, "address": "0x889edC2eDab5f40e902b864aD4d7AdE8E412F9B1" }
+      ]
+    }
+  },
+  "metadata": {
+    "owner": "Lido DAO",
+    "info": { "url": "https://lido.fi" },
+    "contractName": "WithdrawalQueue"
+  },
+  "display": {
+    "formats": {
+      "requestWithdrawals(uint256[] _amounts, address _owner)": {
+        "intent": "Request stETH withdrawal",
+        "fields": [
+          {
+            "label": "Amount",
+            "format": "amount",
+            "path": "_amounts.[]",
+            "visible": "always"
+          },
+          {
+            "label": "Owner",
+            "format": "addressName",
+            "path": "_owner",
+            "params": { "types": ["eoa", "wallet"], "sources": ["local", "ens"] },
+            "visible": "always"
+          }
+        ]
+      }
+    }
+  }
+}

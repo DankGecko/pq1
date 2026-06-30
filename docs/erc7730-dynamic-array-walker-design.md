@@ -1,4 +1,22 @@
-# ERC-7730 dynamic-array walker — design (firewalled from the Enum/pack work)
+# ERC-7730 dynamic-array walker — design + implementation
+
+**Status: IMPLEMENTED (v1, 2026-06-30).** Sole-dynamic-array `<arg>.[]`
+render-all is live: dbgen gate (`compile_array_all_path`), device
+`resolve_array` + `render_array` (scalar path byte-identical), reusing `walk`'s
+hardened readers + two exact-placement equalities. Verified by: an independent
+5-lens **adversarial-review workflow** (verdict SHIP, 0 confirmed breaks), the
+`walk` **differential**, an **11-case adversarial test suite**, and a **Kani
+proof** of `resolve_array` (panic/OOB/overflow-freedom + in-bounds element span
+over a symbolic body — `pqsigner-erc7730/src/render/array.rs`). Two depth-1
+single-points-of-failure the review flagged were closed: the EIP-712 ArrayAll
+dbgen-gate gap + the last-byte routing footgun. Residual follow-ups (review
+ranked non-blocking): a page-budget-mid-loop test and an element-type/FormatOp
+coupling gate (already depth-2 via EVM-revert + the overflow banner).
+
+The remainder of this doc is the original design (firewalled from the Enum/pack
+work), preserved for the record.
+
+---
 
 **Status:** design-only, NOT implemented. This is the security-sensitive
 half of the "new formatter / walker" work. It is deliberately kept out of

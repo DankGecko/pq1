@@ -863,3 +863,254 @@ fn positive_wsteth_wrap_renders_constant_annotation_field() {
         "constant-annotation field must render the resolved string: rows={rows:?}",
     );
 }
+
+// ───────────────────────────────────────────────────────────────────────
+// Dynamic-array walker (sole-dynamic-array `<arg>.[]` render-all).
+// Security-critical: it follows the dynamic calldata tail, the slot-
+// confusion attack surface. All of the resolution safety lives in
+// `formatters::resolve_array`; these tests drive it directly with crafted
+// HOSTILE bodies (the descriptor is the trusted/pinned input, the calldata
+// body is attacker-controlled) and diff it against the Kani-proven `walk`.
+// ───────────────────────────────────────────────────────────────────────
+
+/// Canonical `requestWithdrawals(uint256[],address)` calldata BODY (no
+/// selector): `offset(0x40) | owner | length | amounts…`.
+fn rw_body(amounts: &[U256], owner: [u8; 20]) -> Vec<u8> {
+    let mut b = Vec::new();
+    b.extend_from_slice(&u256_from_u64(64).0); // offset to _amounts
+    let mut ow = [0u8; 32];
+    ow[12..].copy_from_slice(&owner);
+    b.extend_from_slice(&ow); // _owner
+    b.extend_from_slice(&u256_from_u64(amounts.len() as u64).0); // length
+    for a in amounts {
+        b.extend_from_slice(&a.0);
+    }
+    b
+}
+
+fn rw_calldata(amounts: &[U256], owner: [u8; 20]) -> Vec<u8> {
+    let mut d = keccak256(b"requestWithdrawals(uint256[],address)")[..4].to_vec();
+    d.extend_from_slice(&rw_body(amounts, owner));
+    d
+}
+
+/// The Lido `_amounts.[]` array field + the format's `static_head_words`,
+/// from the trusted/pinned descriptor.
+fn lido_array_field<'a>(
+    ir: &'a Erc7730Ir<'a>,
+) -> (crate::tx::erc7730::FieldEntry<'a>, u16) {
+    let sel = keccak256(b"requestWithdrawals(uint256[],address)");
+    let s4: [u8; 4] = sel[..4].try_into().unwrap();
+    let format = ir.find_format_by_selector(&s4).unwrap().unwrap();
+    let field = format
+        .fields()
+        .filter_map(Result::ok)
+        .find(|f| f.label == b"Amount")
+        .expect("the `_amounts.[]` array field");
+    (field, format.static_head_words)
+}
+
+#[test]
+fn positive_lido_request_withdrawals_renders_every_element() {
+    let res = build_seed();
+    let entry = find_leaf(&res, "lido-withdrawal-queue.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
+
+    // 1.0 / 2.5 / 0.3 stETH (18 decimals).
+    let amounts = [
+        u256_from_u64(1_000_000_000_000_000_000),
+        u256_from_u64(2_500_000_000_000_000_000),
+        u256_from_u64(300_000_000_000_000_000),
+    ];
+    let owner = [0x55u8; 20];
+    let calldata = rw_calldata(&amounts, owner);
+    assert_selector_matches(&verified.ir, &calldata, "requestWithdrawals(uint256[],address)");
+
+    let tx = envelope(1, entry.contract);
+    let resolver = NameResolver::new();
+    let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver).expect("render");
+    assert_all_pages_printable(&pages);
+
+    let dump = dump_pages(&pages);
+    // Header makes the count explicit. `write_amount_two_rows` splits an
+    // amount across an integer row + a fraction row, so 2.5 → "2" / ".5".
+    assert!(dump.contains("3 items"), "count header missing:\n{dump}");
+    assert!(dump.contains(".5"), "amount 2.5 (fraction) missing:\n{dump}");
+    assert!(dump.contains(".3"), "amount 0.3 (fraction) missing:\n{dump}");
+    // ARRAY-TAIL-HIDING CLOSED, asserted concretely: one header page + EXACTLY
+    // one page per element (3) all labelled "Amount" — never fewer.
+    let amount_pages = pages
+        .as_slice()
+        .iter()
+        .filter(|p| row_str(&p[0]) == "Amount")
+        .count();
+    assert_eq!(
+        amount_pages, 4,
+        "expected 1 header + 3 element pages (every element shown):\n{dump}"
+    );
+    // owner page present.
+    let _ = find_page_by_label(&pages, "Owner");
+}
+
+#[test]
+fn array_resolve_matches_walk_differential() {
+    // When the Kani-proven `walk` accepts the body, our resolver must agree
+    // EXACTLY on (element-start, count). (Not the converse — we are stricter.)
+    let res = build_seed();
+    let entry = find_leaf(&res, "lido-withdrawal-queue.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
+    let (field, shw) = lido_array_field(&verified.ir);
+
+    let parsed =
+        pqsigner_tx::typed_call::parser::parse_text_sig(b"requestWithdrawals(uint256[],address)")
+            .unwrap();
+
+    for amounts in [
+        vec![],
+        vec![u256_from_u64(7)],
+        vec![u256_from_u64(7), u256_from_u64(8), u256_from_u64(9)],
+    ] {
+        let body = rw_body(&amounts, [0x11u8; 20]);
+        let walked = pqsigner_tx::typed_call::abi::walk(&parsed, &body).expect("walk accepts");
+        let amounts_arg = walked.args[0]; // body_off = the length word
+        let (elems_start, count) =
+            super::erc7730::formatters::resolve_array(&field, &verified.ir, &body, shw)
+                .expect("resolver accepts the same canonical body");
+        assert_eq!(count, amounts_arg.count as usize, "count disagrees with walk");
+        assert_eq!(
+            elems_start,
+            amounts_arg.body_off + 32,
+            "element-start disagrees with walk (walk body_off is the length word)"
+        );
+        // element words must be byte-identical to what walk points at.
+        for i in 0..count {
+            let mine = &body[elems_start + i * 32..elems_start + i * 32 + 32];
+            assert_eq!(mine, &amounts[i].0, "element {i} word mismatch");
+        }
+    }
+}
+
+/// Minimal IR blob carrying just `pool` (CTX_CONTRACT, empty formats) so a
+/// test can drive `path_ends_with_array_all` over hand-built path programs.
+fn ir_bytes_with_pool(pool: &[u8]) -> Vec<u8> {
+    let hl = pqsigner_erc7730::ir::HEADER_LEN;
+    let pool_len = pool.len() as u16;
+    let mut buf = vec![0u8; hl];
+    buf[0] = pqsigner_erc7730::ir::SCHEMA_VER;
+    buf[1] = 0x01; // CTX_CONTRACT
+    buf[2..10].copy_from_slice(&1u64.to_be_bytes());
+    buf[126..128].copy_from_slice(&(hl as u16).to_be_bytes()); // metadata_off
+    buf[128..130].copy_from_slice(&((hl as u16) + pool_len).to_be_bytes()); // formats_off
+    buf[130..132].copy_from_slice(&pool_len.to_be_bytes()); // pool_len
+    buf[132..134].copy_from_slice(&1u16.to_be_bytes()); // formats_len (count byte)
+    buf.extend_from_slice(pool);
+    buf.push(0u8); // format count = 0
+    buf
+}
+
+#[test]
+fn array_routing_is_structural_not_last_byte() {
+    // A SCALAR path [Root][FieldIdx(arg=0x0024)] ends in the byte 0x24, which
+    // == PathOp::ArrayAll — but it is NOT an array path. The structural router
+    // must return false (→ scalar dispatch / clear-sign), NOT misroute it to
+    // render_array (which would needlessly blind-sign a clear-signable field).
+    let mut pool = vec![0xFFu8]; // offset-0 filler
+    let scalar_off = pool.len() as u16;
+    pool.push(4);
+    pool.extend_from_slice(&[0x10, 0x20, 0x00, 0x24]); // Root, FieldIdx(0x0024)
+    let array_off = pool.len() as u16;
+    pool.push(5);
+    pool.extend_from_slice(&[0x10, 0x20, 0x00, 0x00, 0x24]); // Root, FieldIdx(0), ArrayAll
+    let bytes = ir_bytes_with_pool(&pool);
+    let ir = pqsigner_erc7730::ir::Erc7730Ir::parse(&bytes).unwrap();
+
+    assert!(
+        !super::erc7730::formatters::path_ends_with_array_all(&ir, scalar_off).unwrap(),
+        "scalar FieldIdx whose arg low byte is 0x24 must NOT route to render_array"
+    );
+    assert!(
+        super::erc7730::formatters::path_ends_with_array_all(&ir, array_off).unwrap(),
+        "a real Root+FieldIdx+ArrayAll path routes to render_array"
+    );
+    // PathOp::ArrayAll is the wire constant the router + dbgen agree on.
+    assert_eq!(pqsigner_erc7730::ir::PathOp::ArrayAll as u8, 0x24);
+}
+
+#[test]
+fn adversarial_array_resolve_declines_hostile_bodies() {
+    let res = build_seed();
+    let entry = find_leaf(&res, "lido-withdrawal-queue.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
+    let (field, shw) = lido_array_field(&verified.ir);
+    let ir = &verified.ir;
+    let resolve =
+        |body: &[u8]| super::erc7730::formatters::resolve_array(&field, ir, body, shw);
+
+    // Baseline: a canonical 2-element body resolves to (elems_start=96, count=2).
+    let canon = rw_body(&[u256_from_u64(1), u256_from_u64(2)], [0x11u8; 20]);
+    assert_eq!(resolve(&canon).unwrap(), (96, 2));
+
+    // (1) offset word top-28-bytes nonzero (huge offset) → decline.
+    let mut b = canon.clone();
+    b[0] = 0x01;
+    assert!(resolve(&b).is_err(), "huge offset must decline");
+
+    // (2) offset != head-end (gap after the head) → decline.
+    let mut b = canon.clone();
+    b[31] = 96; // offset 0x60 instead of 0x40
+    assert!(resolve(&b).is_err(), "non-head-end offset must decline");
+
+    // (3) offset points INTO the head (alias the owner word) → decline.
+    let mut b = canon.clone();
+    b[31] = 32;
+    assert!(resolve(&b).is_err(), "offset-into-head must decline");
+
+    // (4a) length word top-28-bytes nonzero → decline.
+    let mut b = canon.clone();
+    b[64] = 0x01; // first byte of the length word (at offset 64)
+    assert!(resolve(&b).is_err(), "huge length (top bytes) must decline");
+
+    // (4b) length > MAX_DYNAMIC_LEN → decline.
+    let mut b = rw_body(&[u256_from_u64(1)], [0x11u8; 20]);
+    // overwrite the length word (offset 64) with MAX_DYNAMIC_LEN + 1.
+    let big = (1u32 << 20) + 1;
+    b[64 + 28..64 + 32].copy_from_slice(&big.to_be_bytes());
+    assert!(resolve(&b).is_err(), "length over the cap must decline");
+
+    // (5a) length OVER-claims (says 3, body holds 2) → decline (not whole tail).
+    let mut b = canon.clone();
+    b[64 + 31] = 3;
+    assert!(resolve(&b).is_err(), "length over-claim must decline");
+
+    // (5b) length UNDER-claims (says 1, body holds 2) → decline (not whole tail).
+    let mut b = canon.clone();
+    b[64 + 31] = 1;
+    assert!(resolve(&b).is_err(), "length under-claim must decline");
+
+    // (6) body truncated mid-element (drop the last 16 bytes of a 2-elem body).
+    let b = &canon[..canon.len() - 16];
+    assert!(resolve(b).is_err(), "truncated-mid-element must decline");
+
+    // (7) body length not a multiple of 32 (drop 1 byte) → decline.
+    let b = &canon[..canon.len() - 1];
+    assert!(resolve(b).is_err(), "non-32-aligned body must decline");
+
+    // (8) count == 0 → VALID (renders an empty page, no panic); resolver Ok(_, 0).
+    let empty = rw_body(&[], [0x11u8; 20]);
+    assert_eq!(resolve(&empty).unwrap().1, 0, "empty array is valid, count 0");
+
+    // (9) count large-but-in-bounds (9 > MAX_ARRAY_RENDER=8) → decline, not 9 pages.
+    let nine: Vec<U256> = (0..9).map(|i| u256_from_u64(i)).collect();
+    let b = rw_body(&nine, [0x11u8; 20]);
+    assert!(resolve(&b).is_err(), "over-cap element count must decline");
+
+    // (10) head absent entirely (body shorter than the static head) → decline.
+    let b = &canon[..16];
+    assert!(resolve(b).is_err(), "short-head must decline");
+
+    // none of the above panicked — the decline-or-safe property holds over all
+    // crafted bodies (no UB, no slice-OOB), the core adversarial guarantee.
+}

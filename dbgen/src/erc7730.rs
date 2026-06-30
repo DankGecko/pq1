@@ -2193,16 +2193,23 @@ fn compile_path(
                 out.extend_from_slice(&idx.to_be_bytes());
                 cur_top = Some(name);
             }
-            PathSeg::ArrayIdx(i) => {
-                out.push(PATHOP_ARRAY_IDX);
-                out.extend_from_slice(&i.to_be_bytes());
-            }
-            PathSeg::ArrayLast => out.push(PATHOP_ARRAY_LAST),
-            PathSeg::ArrayAll => out.push(PATHOP_ARRAY_ALL),
-            PathSeg::ArraySlice(a, b) => {
-                out.push(PATHOP_ARRAY_SLICE);
-                out.extend_from_slice(&a.to_be_bytes());
-                out.extend_from_slice(&b.to_be_bytes());
+            // Array ops have no meaning on the `@`/`$` envelope roots or in
+            // EIP-712 `encodeData` (every member is exactly one word, no
+            // dynamic tail). Refuse them here so a hazardous descriptor is
+            // never EMITTED — making the device-side `render_array` decline
+            // (which it does anyway) a SECOND line of defence, not the only
+            // one. (The contract-calldata `#` root handles `[]` via the gated
+            // `compile_array_all_path`.)
+            PathSeg::ArrayIdx(_)
+            | PathSeg::ArrayLast
+            | PathSeg::ArrayAll
+            | PathSeg::ArraySlice(_, _) => {
+                return Err(
+                    "array op (`[i]`/`[-1]`/`[]`/slice) is only supported as `<arg>.[]` on a \
+                     contract-calldata (`#`) dynamic array — not on `@`/`$` envelope roots or \
+                     EIP-712 typed-data members"
+                        .to_string(),
+                )
             }
         }
     }
@@ -2228,6 +2235,15 @@ fn compile_structured_contract_path(
     parsed: &ParsedFormatKey,
     out: &mut Vec<u8>,
 ) -> Result<(), String> {
+    // A trailing `[]` (ArrayAll) renders EVERY element of a top-level dynamic
+    // array — the only array op the renderer supports. Single-index `[i]` /
+    // `[-1]` / slices stay refused below: showing one element hides the rest
+    // (the array-tail-hiding WYSIWYS hazard). See the dynamic-array-walker
+    // design doc for the safety argument.
+    if matches!(segs.last(), Some(PathSeg::ArrayAll)) {
+        return compile_array_all_path(&segs[..segs.len() - 1], parsed, out);
+    }
+
     let mut names: Vec<&str> = Vec::with_capacity(segs.len());
     for seg in segs {
         match seg {
@@ -2235,7 +2251,8 @@ fn compile_structured_contract_path(
             _ => {
                 return Err(
                     "contract calldata path uses array index/slice — unsupported \
-                     (dynamic-tail access; the static-head walker cannot follow it)"
+                     (dynamic-tail access; only `<arg>.[]` render-all of a sole \
+                      dynamic array is supported)"
                         .to_string(),
                 )
             }
@@ -2311,6 +2328,85 @@ fn compile_structured_contract_path(
         }
     }
     Ok(())
+}
+
+/// Compile a `<arg>.[]` path that renders EVERY element of a top-level
+/// dynamic array of static primitives. Emits `FieldIdx(offset-word-slot) +
+/// ArrayAll`. Refuses unless the array is a top-level `T[]` (T a static
+/// primitive) AND the SOLE dynamic argument of the function — the on-device
+/// renderer then enforces EXACT tail placement (offset == head-end, array ==
+/// the whole tail), which is what makes following the dynamic tail WYSIWYS-
+/// safe without a full ABI walk. Single-index `[i]` / `[-1]` / slices stay
+/// refused (they would hide the array's other elements).
+fn compile_array_all_path(
+    name_segs: &[PathSeg<'_>],
+    parsed: &ParsedFormatKey,
+    out: &mut Vec<u8>,
+) -> Result<(), String> {
+    // The element selector applies to a single TOP-LEVEL argument only.
+    let name = match name_segs {
+        [PathSeg::Name(n)] => *n,
+        _ => {
+            return Err(
+                "array `[]` path must be a single top-level argument (e.g. `amounts.[]`)"
+                    .to_string(),
+            )
+        }
+    };
+    let pos = parsed
+        .top_names
+        .iter()
+        .position(|n| n == name)
+        .ok_or_else(|| format!("array `[]` path field `{name}` is not in the function signature"))?;
+    let this_ty = &parsed.top_types[pos];
+    if dynamic_array_static_elem(this_ty).is_none() {
+        return Err(format!(
+            "array `[]` path field `{name}` (`{this_ty}`) must be a dynamic array of a static \
+             primitive (uintN/intN/address/bool/bytesN); nested / dynamic / tuple element arrays \
+             are unsupported"
+        ));
+    }
+    // SOLE dynamic-arg constraint: the array's tail must be the ENTIRE dynamic
+    // tail so the renderer's exact-placement equality checks pin its location.
+    let dyn_count = parsed
+        .top_types
+        .iter()
+        .filter(|t| matches!(static_head_words(t), Ok(HeadWidth::Dynamic)))
+        .count();
+    if dyn_count != 1 {
+        return Err(format!(
+            "array `[]` path requires the array to be the SOLE dynamic argument \
+             (this function has {dyn_count}); the renderer needs the array tail to be the \
+             entire dynamic tail"
+        ));
+    }
+    // Offset-word slot = sum of preceding args' head widths (the array's one
+    // offset word lives here, in the static head).
+    let mut slot: u32 = 0;
+    for ty in &parsed.top_types[..pos] {
+        slot = slot.saturating_add(head_slot_words(ty)?);
+    }
+    let arg: u16 = slot
+        .try_into()
+        .map_err(|_| format!("head slot {slot} for `{name}` overflows u16"))?;
+    out.push(PATHOP_FIELD_IDX);
+    out.extend_from_slice(&arg.to_be_bytes());
+    out.push(PATHOP_ARRAY_ALL);
+    Ok(())
+}
+
+/// `Some(elem_type)` iff `ty` is a dynamic array `T[]` whose element `T` is a
+/// static primitive (one 32-byte word, not a tuple or nested array).
+fn dynamic_array_static_elem(ty: &str) -> Option<&str> {
+    let ty = ty.trim();
+    let base = ty.strip_suffix("[]")?;
+    if base.is_empty() || base.starts_with('(') || base.contains('[') {
+        return None; // tuple element or nested array
+    }
+    match static_head_words(base) {
+        Ok(HeadWidth::Words(1)) => Some(base),
+        _ => None,
+    }
 }
 
 /// Total ABI static head width of a format, in 32-byte words — the number
@@ -3161,6 +3257,40 @@ mod tests {
         let p = parse_format_key("f(uint256[] xs, address to)").unwrap();
         assert!(compile_path("#.xs[0]", CTX_CONTRACT, &p).is_err(), "array index");
         assert!(compile_path("#.nope", CTX_CONTRACT, &p).is_err(), "unknown name");
+    }
+
+    #[test]
+    fn compile_array_all_gate() {
+        // ACCEPT: `<arg>.[]` render-all on a SOLE top-level dynamic array of a
+        // static primitive → FieldIdx(offset-slot) + ArrayAll.
+        let p = parse_format_key("requestWithdrawals(uint256[] _amounts, address _owner)").unwrap();
+        let prog = compile_path("_amounts.[]", CTX_CONTRACT, &p).unwrap();
+        assert_eq!(prog[0], PATHOP_ROOT_STRUCT);
+        assert_eq!(prog[1], PATHOP_FIELD_IDX);
+        assert_eq!(u16::from_be_bytes([prog[2], prog[3]]), 0, "_amounts is arg 0");
+        assert_eq!(prog[4], PATHOP_ARRAY_ALL);
+        assert_eq!(prog.len(), 5, "Root + one FieldIdx + ArrayAll");
+
+        // REFUSE: single-index / last (array-tail-hiding — would show a subset).
+        assert!(compile_path("_amounts[0]", CTX_CONTRACT, &p).is_err(), "single index");
+        assert!(compile_path("_amounts[-1]", CTX_CONTRACT, &p).is_err(), "last");
+
+        // REFUSE: NOT the sole dynamic arg (two dynamic args break the
+        // exact-tail-placement assumption the device relies on).
+        let two_dyn = parse_format_key("f(uint256[] a, bytes b)").unwrap();
+        assert!(compile_path("a.[]", CTX_CONTRACT, &two_dyn).is_err(), "non-sole-dynamic");
+
+        // REFUSE: dynamic element type (`string[]`) and nested array (`uint256[][]`).
+        let dyn_elem = parse_format_key("f(string[] xs)").unwrap();
+        assert!(compile_path("xs.[]", CTX_CONTRACT, &dyn_elem).is_err(), "dynamic element");
+        let nested = parse_format_key("f(uint256[][] xs)").unwrap();
+        assert!(compile_path("xs.[]", CTX_CONTRACT, &nested).is_err(), "nested array");
+
+        // REFUSE: array op in EIP-712 / envelope context (gate-hardening — `[]`
+        // is contract-calldata-only; EIP-712 encodeData has no dynamic tail).
+        assert!(compile_path("xs.[]", CTX_EIP712, &dyn_elem).is_err(), "eip712 array");
+        let any = parse_format_key("Order(uint256[] notes, address owner)").unwrap();
+        assert!(compile_path("notes.[]", CTX_EIP712, &any).is_err(), "eip712 array (uint)");
     }
 
     #[test]

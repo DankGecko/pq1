@@ -249,7 +249,12 @@ fn is_static_primitive(parsed: &ParsedSig<'_>, id: TypeId) -> bool {
 
 /// Read a 32-byte word as a u32 offset. Top 28 bytes MUST be zero;
 /// otherwise the calldata is malformed (or attacker-crafted).
-fn read_offset_word(word: &[u8]) -> Option<usize> {
+///
+/// `pub` so the ERC-7730 dynamic-array renderer
+/// (`secure/src/tx/display/erc7730/formatters.rs::render_array`) follows a
+/// dynamic-array tail through the EXACT same hardened reader `walk` uses,
+/// rather than re-implementing the top-28-bytes-zero gate.
+pub fn read_offset_word(word: &[u8]) -> Option<usize> {
     if word.len() != 32 {
         return None;
     }
@@ -263,7 +268,9 @@ fn read_offset_word(word: &[u8]) -> Option<usize> {
 
 /// Read a 32-byte length word, capping at u32::MAX. Same top-zero gate
 /// as offsets — anything past 4 GiB is malformed for our purposes.
-fn read_length_word(word: &[u8]) -> Option<u32> {
+///
+/// `pub` for the ERC-7730 dynamic-array renderer (see `read_offset_word`).
+pub fn read_length_word(word: &[u8]) -> Option<u32> {
     if word.len() != 32 {
         return None;
     }

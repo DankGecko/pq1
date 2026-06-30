@@ -24,7 +24,7 @@
 //! [`crate::tx::erc7730_render::RenderErr`].
 
 mod calldata_nested;
-mod formatters;
+pub(crate) mod formatters;
 mod intent;
 
 use crate::erc20::bundle::Erc20Metadata;
@@ -125,6 +125,11 @@ fn render_erc7730_pages_inner<'ir>(
     // construction, so this never rejects a well-formed descriptor. See
     // `docs/security/VULN-erc7730-walker-slot-confusion.md`.
     let body = head_bounded_body(&inner_data[4..], format.static_head_words)?;
+    // The FULL (untruncated) body is handed ONLY to the dynamic-array
+    // renderer, which follows a sole-dynamic-array tail with its own exact-
+    // placement bounds checks. Scalar fields keep using the head-bounded
+    // `body` above — their slot-confusion defense is unchanged.
+    let full_body = &inner_data[4..];
 
     // 2. Allocate the page buffer (grows via push_blank).
     let mut pages = Pages::with_len(0);
@@ -133,7 +138,16 @@ fn render_erc7730_pages_inner<'ir>(
     intent::render_intent_banner(&mut pages, &descriptor.ir, &format)?;
 
     // 4. Iterate fields.
-    render_fields(&mut pages, &descriptor.ir, &format, body, tx, erc20, resolver)?;
+    render_fields(
+        &mut pages,
+        &descriptor.ir,
+        &format,
+        body,
+        full_body,
+        tx,
+        erc20,
+        resolver,
+    )?;
 
     // 5. Envelope pages (chain / fee / nonce). Mirrors the tail of the
     //    erc20_known renderer so the user always sees gas + chain
@@ -255,10 +269,14 @@ fn render_erc7730_eip712_pages_inner<'ir>(
 
     let mut pages = Pages::with_len(0);
     intent::render_intent_banner(&mut pages, &descriptor.ir, &format)?;
+    // EIP-712 `encodeData` is all one-word members — no dynamic tail — so the
+    // full body IS the head body; an `[]` field (nonsensical here) safely
+    // declines inside `render_array` (its tail/length checks fail).
     render_fields(
         &mut pages,
         &descriptor.ir,
         &format,
+        body,
         body,
         &synth_tx,
         erc20,
@@ -287,6 +305,7 @@ fn render_fields(
     ir: &crate::tx::erc7730::Erc7730Ir<'_>,
     format: &crate::tx::erc7730::FormatHeader<'_>,
     body: &[u8],
+    full_body: &[u8],
     tx: &Eip1559Tx,
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
@@ -295,9 +314,28 @@ fn render_fields(
         let field = field_result.map_err(|_| RenderErr::Reject("7730 bad field"))?;
         let params = parse_params(ir, field.param_off)?;
         match should_render_with_mode(&params, None, COMPACT_MODE) {
-            Action::Render => formatters::dispatch(
-                &field, pages, ir, body, tx, erc20, resolver, &params,
-            )?,
+            Action::Render => {
+                // A field whose path ends in `[]` (ArrayAll) renders every
+                // element of a sole dynamic array — it needs the FULL body and
+                // its own exact-placement tail walk. Every other field stays on
+                // the head-bounded `body` + the existing formatter dispatch
+                // (byte-identical scalar path).
+                if formatters::path_ends_with_array_all(ir, field.path_off)? {
+                    formatters::render_array(
+                        &field,
+                        pages,
+                        ir,
+                        full_body,
+                        format.static_head_words,
+                        tx,
+                        erc20,
+                        resolver,
+                        &params,
+                    )?;
+                } else {
+                    formatters::dispatch(&field, pages, ir, body, tx, erc20, resolver, &params)?;
+                }
+            }
             Action::Skip => continue,
             Action::Reject(msg) => return Err(RenderErr::Reject(msg)),
         }
