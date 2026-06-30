@@ -67,3 +67,10 @@ jobs:
         run: make -C contracts/verification verify-fv-lints
       - name: verify-audit (sorry count + #print axioms dump)
         run: make -C contracts/verification verify-audit
+      - name: verify-ledger-consistency (AXIOM_STATUS.json falsifiable vs live dump)
+        # Cheap given the build above: re-runs the dump + cross-checks the advertised
+        # closures / signature-pins / counts / no-undocumented-axiom / C9 witness
+        # coverage against the live Lean truth + the lint_fv pin. Ships its own
+        # --self-test negative control (asserted first). The SLOW sibling
+        # verify-proof-mutation runs in nightly.yml, not here.
+        run: make -C contracts/verification verify-ledger-consistency
