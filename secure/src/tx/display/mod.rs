@@ -28,6 +28,7 @@ mod erc20_known;
 mod erc20_unknown;
 pub mod erc7730;
 pub mod erc8213;
+mod offchain_sync;
 pub(super) mod primitives;
 #[cfg(not(test))]
 mod safe_display;
@@ -49,6 +50,7 @@ pub use erc20_unknown::render_erc20_unknown_pages;
 pub use safe_display::{
     multisend_sign_gate, render_safe_exec_pages, render_safe_v1_pages, MultisendGate,
 };
+pub use offchain_sync::build_offchain_sync_pages;
 pub use slot_rotation::build_slot_rotation_pages;
 pub use value_transfer::render_pages;
 

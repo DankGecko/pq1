@@ -1587,6 +1587,49 @@ unsafe fn compact_page() -> Result<(), ()> {
     Ok(())
 }
 
+/// Count distinct live slot keys currently in the page, saturating at
+/// `MAX_DISTINCT_SLOTS`. Lightweight companion to the `write_entry` Layer-2
+/// cap (see [`crate::offchain_state::MAX_DISTINCT_SLOTS`]): it dedups seen keys
+/// into a small fixed table (`MAX_DISTINCT_SLOTS` × 8 bytes ≈ 1 KB stack —
+/// deliberately NOT the ~10 KB `[SlotEntry; MAX_ACTIVE_SLOTS]` compaction
+/// table, given the documented secure-world stack pressure) and stops as soon
+/// as it has seen `MAX_DISTINCT_SLOTS` distinct keys, since the only caller
+/// compares `>= MAX_DISTINCT_SLOTS`. Stale / blank QWs are skipped exactly as
+/// `scan_page_into_table` / `is_registered_forward` skip them.
+fn distinct_slot_count_capped() -> usize {
+    const CAP: usize = crate::offchain_state::MAX_DISTINCT_SLOTS;
+    let mut seen = [[0u8; 8]; CAP];
+    let mut n = 0usize;
+    for i in 0..OFFCHAIN_CAPACITY {
+        let addr = OFFCHAIN_PAGE_ADDR + i * OFFCHAIN_QW_SIZE;
+        match parse_entry(addr) {
+            None => break,               // first truly-blank QW — end of journal
+            Some((0, _, _)) => continue, // stale / undecodable — skip, keep scanning
+            Some((_, sk, _)) => {
+                let mut found = false;
+                for s in seen[..n].iter() {
+                    if *s == sk {
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    seen[n] = sk;
+                    n += 1;
+                    if n >= CAP {
+                        // Already at the cap; the sole caller refuses a new
+                        // slot at this point and more distinct keys can only
+                        // keep n == CAP, so stop early (bounds-safe: the last
+                        // write was seen[CAP-1]).
+                        return n;
+                    }
+                }
+            }
+        }
+    }
+    n
+}
+
 /// Append a journal entry, compacting first if the page is full and
 /// self-healing the page if it inherited unwritable garbage from the
 /// pre-all-C10 per-slot state.
@@ -1607,6 +1650,32 @@ unsafe fn compact_page() -> Result<(), ()> {
 /// # Safety
 /// Programs page 123.
 unsafe fn write_entry(qw: &[u8; 16]) -> Result<(), ()> {
+    // Layer-2 structural cap (page-123 exhaustion → permanent-brick fix; see
+    // docs/VULN-offchain-sync-page123-exhaustion-brick.md and
+    // crate::offchain_state::MAX_DISTINCT_SLOTS). Refuse to create a NEW
+    // distinct slot once the page already holds MAX_DISTINCT_SLOTS of them, so
+    // the page can never reach the un-compactable state that bricks every sign
+    // path. Updates to an already-present slot are always allowed — they can't
+    // grow the distinct-slot set. This sits ABOVE compact_page (which replays
+    // via write_quadword_verified and bypasses write_entry), so existing slots
+    // always re-compact; only brand-new slots beyond the cap are refused. The
+    // distinct scan runs ONLY on the new-slot branch, so steady-state
+    // existing-slot writes pay only the cheap presence check — negligible
+    // against the ~1 s C10 sign. This does NOT weaken HIGH-1/F3: nothing is
+    // evicted or erased, the few-time `userop_sigs` tally is untouched.
+    let mut sk = [0u8; 8];
+    sk.copy_from_slice(&qw[0..8]);
+    // SAFETY: page-123 journal read only (same contract as the other readers).
+    let already_present = unsafe { offchain_count_is_registered(&sk) };
+    let distinct = if already_present {
+        0 // ignored by may_create_distinct_slot when present; skips the scan
+    } else {
+        distinct_slot_count_capped()
+    };
+    if !crate::offchain_state::may_create_distinct_slot(distinct, already_present) {
+        return Err(());
+    }
+
     if find_next_blank_idx().is_none() {
         // SAFETY: caller asserts page 123 is writable; compaction is
         // power-loss-tolerant per its doc comment.

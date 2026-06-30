@@ -19,13 +19,27 @@
 //!       [13..21) target_count  (u64 BE)
 //!   * Output: no body, SW only.
 //!
-//! Security note: the host is fully trusted to drive slot use already
-//! (it picks `account_index` / `slot_index`, signs whatever payload it
-//! likes, etc.). Letting it set a floor on `last_userop_count` is no
-//! stronger a primitive than the existing slot-rotation flow and
-//! cannot exfiltrate state. The on-chain combined-cap check
-//! (`slotUses + offchainSigCount <= cap`) still enforces the per-slot
-//! budget regardless of what the firmware emits.
+//! Security note: the *value* set here is harmless — the host already drives
+//! slot use (it picks `account_index` / `slot_index`, signs what it likes), and
+//! the on-chain combined-cap check (`slotUses + offchainSigCount <= cap`) still
+//! enforces the per-slot budget regardless of what the firmware emits.
+//!
+//! What the value-only reasoning missed (page-123 exhaustion → permanent-brick;
+//! `docs/VULN-offchain-sync-page123-exhaustion-brick.md`): the durable *write*
+//! mints a fresh page-123 journal entry for a companion-chosen, seed-independent
+//! `slot_key`. With no consent gate a hostile companion can spray distinct
+//! `(account,chain,slot)` tuples to fill the page and wedge compaction into a
+//! permanent, seed-survivable signing brick. Two defences now apply:
+//!   1. **Consent (here):** creating a slot the firmware has NOT seen before
+//!      requires an explicit trusted-display `confirm()` — a spray would need
+//!      one physical confirm per distinct tuple. Re-syncs of an already-
+//!      registered slot are idempotent floor bumps and stay confirm-free. This
+//!      mirrors the `cmd_sign_offchain` MEDIUM-3 "defer the durable write until
+//!      after confirm" discipline.
+//!   2. **Structural cap:** `offchain_state::MAX_DISTINCT_SLOTS` (enforced at the
+//!      flash `write_entry` chokepoint and the host mock) refuses a new distinct
+//!      slot past a budget chosen so compaction can never fail — the page is
+//!      provably un-wedgeable by any caller, confirmed or not.
 
 use sphincs_tz_shared::{NscStatus, MAX_ACCOUNT_INDEX, OFFCHAIN_SYNC_INPUT_LEN};
 
@@ -78,6 +92,37 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
 
     let slot_key =
         crate::offchain_state::slot_key_compute(account_index as u8, chain_id, slot_index);
+
+    // Consent gate (page-123 exhaustion → permanent-brick fix; see the module
+    // Security note + docs/VULN-offchain-sync-page123-exhaustion-brick.md). A
+    // durable write for a slot the firmware has NOT seen before mints a new
+    // page-123 journal entry for a companion-chosen, seed-independent slot_key;
+    // an unbounded spray of distinct tuples would fill the page and wedge
+    // compaction into a permanent signing brick. Require an explicit trusted-
+    // display confirm before creating a new slot — a spray would need one
+    // physical confirm per distinct tuple (infeasible). Re-syncs of an already-
+    // registered slot are idempotent floor bumps and stay confirm-free. The
+    // Layer-2 distinct-slot cap (offchain_state/flash) is the structural backstop.
+    // (Bare unsafe call matches this file's existing facade-call convention.)
+    if !crate::offchain_state::offchain_count_is_registered(&slot_key) {
+        use crate::ui::confirm::{confirm, ConfirmResult};
+        let pages = crate::tx::display::build_offchain_sync_pages(
+            account_index as u8,
+            chain_id,
+            slot_index,
+        );
+        match confirm(pages.as_slice()) {
+            ConfirmResult::Confirmed => {}
+            ConfirmResult::Cancelled => {
+                crate::ui::show_status("Cancelled", "");
+                return NscStatus::UserRejected as u32;
+            }
+            ConfirmResult::IdleWipe => {
+                super::zeroize_sensitive_state();
+                return NscStatus::IdleWipe as u32;
+            }
+        }
+    }
 
     // `last_userop_count_set` is tolerant of `target <= current` (no-op).
     // The repair branch in `cmd_sign_userop::run` will pick up the new

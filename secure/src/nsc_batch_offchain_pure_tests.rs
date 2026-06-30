@@ -749,6 +749,48 @@ fn negative_offchain_sync_rejects_wrong_input_length() {
     assert!(CMD_OFFCHAIN_SYNC_SRC.contains("NscStatus::InvalidPointer"));
 }
 
+#[test]
+fn negative_offchain_sync_confirms_new_slot_before_durable_write() {
+    // page-123 exhaustion → permanent-brick fix
+    // (docs/VULN-offchain-sync-page123-exhaustion-brick.md). CMD_OFFCHAIN_SYNC
+    // mints a durable page-123 entry for a companion-chosen, seed-independent
+    // slot_key. Without consent a hostile companion sprays distinct tuples to
+    // fill the page and wedge compaction into a permanent signing brick. The
+    // handler MUST require a trusted-display confirm before creating a slot it
+    // has not seen before — keyed on `!offchain_count_is_registered` so re-syncs
+    // of a known slot stay confirm-free — and the confirm MUST precede the
+    // durable write (cmd_sign_offchain MEDIUM-3 "defer write until after confirm").
+    assert!(
+        CMD_OFFCHAIN_SYNC_SRC.contains("offchain_count_is_registered"),
+        "SYNC must branch on registration so only NEW slots prompt for consent",
+    );
+    assert!(
+        CMD_OFFCHAIN_SYNC_SRC.contains("build_offchain_sync_pages"),
+        "SYNC must render the trusted-display consent page for a new slot",
+    );
+    assert!(
+        CMD_OFFCHAIN_SYNC_SRC.contains("confirm(pages.as_slice())"),
+        "SYNC must call confirm() for a new slot",
+    );
+    // Fail-closed: only Confirmed proceeds; Cancelled/IdleWipe refuse the write.
+    assert!(
+        CMD_OFFCHAIN_SYNC_SRC.contains("ConfirmResult::Confirmed")
+            && CMD_OFFCHAIN_SYNC_SRC.contains("NscStatus::UserRejected"),
+        "SYNC confirm must be fail-closed (only Confirmed proceeds)",
+    );
+    // Ordering: the consent gate must come BEFORE the durable `last_userop_count_set`.
+    let gate = CMD_OFFCHAIN_SYNC_SRC
+        .find("confirm(pages.as_slice())")
+        .expect("confirm gate present");
+    let write = CMD_OFFCHAIN_SYNC_SRC
+        .find("last_userop_count_set")
+        .expect("durable write present");
+    assert!(
+        gate < write,
+        "consent confirm must precede the durable page-123 write (no pre-confirm mint)",
+    );
+}
+
 // ── 8f. Account-index range check (CLAUDE.md "8b account_index (0..=255)")
 
 #[test]

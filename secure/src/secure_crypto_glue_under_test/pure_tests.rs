@@ -13,9 +13,9 @@ use sha3::Keccak256;
 use crate::db_roots::{ERC20_DB_ROOT, NAMES_DB_ROOT, SELECTOR_DB_ROOT};
 
 use super::offchain_state::{
-    last_userop_count_read, last_userop_count_set, offchain_count_bump,
+    last_userop_count_read, last_userop_count_set, may_create_distinct_slot, offchain_count_bump,
     offchain_count_is_registered, offchain_count_promote_to, offchain_count_read,
-    offchain_count_register_slot, slot_key_compute,
+    offchain_count_register_slot, slot_key_compute, MAX_DISTINCT_SLOTS,
 };
 
 // ─────────────────────────────────────────────────────────────────────
@@ -25,6 +25,9 @@ use super::offchain_state::{
 const CRYPTO_SRC: &str = include_str!("../crypto.rs");
 const DUAL_SE_SRC: &str = include_str!("../dual_se.rs");
 const OFFCHAIN_SRC: &str = include_str!("../offchain_state.rs");
+// Flash-backed journal is stm32u585-only and host-untested at runtime; pin the
+// Layer-2 distinct-slot cap wiring (page-123 exhaustion fix) as source text.
+const FLASH_SRC: &str = include_str!("../hw/flash.rs");
 const AA_SHIM_SRC: &str = include_str!("../aa/mod.rs");
 const ERC20_SHIM_SRC: &str = include_str!("../erc20/mod.rs");
 const NAMES_SHIM_SRC: &str = include_str!("../names/mod.rs");
@@ -821,10 +824,90 @@ fn positive_offchain_state_flash_backed_branch_routes_to_hw_flash() {
 }
 
 #[test]
-fn positive_offchain_state_mock_max_slots_is_128() {
+fn positive_offchain_state_mock_max_slots_tracks_distinct_cap() {
+    // Single source of truth: the mock table is sized to the shared
+    // distinct-slot cap, so the host/QEMU backend fail-closes at exactly the
+    // numeric budget the flash backend enforces (no host-vs-silicon drift).
     assert!(
-        OFFCHAIN_SRC.contains("const MAX_SLOTS: usize = 128;"),
-        "mock backend's MAX_SLOTS must be 128 (matches QEMU test budget)",
+        OFFCHAIN_SRC.contains("const MAX_SLOTS: usize = super::MAX_DISTINCT_SLOTS;"),
+        "mock backend's MAX_SLOTS must derive from the shared MAX_DISTINCT_SLOTS cap",
+    );
+}
+
+// ── page-123 exhaustion → permanent-brick fix
+// (docs/VULN-offchain-sync-page123-exhaustion-brick.md). The journal can be
+// wedged into a permanent signing brick by spraying distinct slot keys until
+// compaction fail-closes. The structural cap makes that impossible by
+// construction; these pin the cap and its policy.
+
+#[test]
+fn positive_offchain_distinct_cap_is_structurally_unwedgeable() {
+    // A slot occupies ≤3 quad-words after compaction (COUNT / USEROP /
+    // USEROP_SIGS) on a 512-QW page (hw::flash OFFCHAIN_CAPACITY), and
+    // compaction projects into a 256-entry SRAM table (MAX_ACTIVE_SLOTS).
+    // Capping distinct slots so BOTH hold makes compaction provably unable to
+    // fail — which is exactly what removes the permanent-brick wedge.
+    assert!(
+        MAX_DISTINCT_SLOTS.checked_mul(3).expect("no overflow") <= 512,
+        "MAX_DISTINCT_SLOTS*3 must fit the 512-QW page, else compaction can wedge",
+    );
+    assert!(
+        MAX_DISTINCT_SLOTS <= 256,
+        "MAX_DISTINCT_SLOTS must fit the 256-entry compaction projection table",
+    );
+    assert_eq!(
+        MAX_DISTINCT_SLOTS, 128,
+        "distinct-slot cap pinned to 128 (page-123 un-wedgeable budget)",
+    );
+}
+
+#[test]
+fn positive_offchain_may_create_distinct_slot_policy() {
+    // An update to an ALREADY-PRESENT slot can never grow the distinct-slot
+    // set, so it must never be refused — at any occupancy, even past the cap.
+    for d in [
+        0usize,
+        1,
+        MAX_DISTINCT_SLOTS - 1,
+        MAX_DISTINCT_SLOTS,
+        MAX_DISTINCT_SLOTS + 5,
+    ] {
+        assert!(
+            may_create_distinct_slot(d, true),
+            "update to a present slot must never be refused (distinct_live={d})",
+        );
+    }
+    // A NEW slot is allowed iff strictly below the cap. Boundary at 127/128/129.
+    assert!(may_create_distinct_slot(0, false));
+    assert!(may_create_distinct_slot(MAX_DISTINCT_SLOTS - 1, false));
+    assert!(
+        !may_create_distinct_slot(MAX_DISTINCT_SLOTS, false),
+        "the (cap+1)-th distinct slot MUST be refused — this is the brick backstop",
+    );
+    assert!(!may_create_distinct_slot(MAX_DISTINCT_SLOTS + 1, false));
+}
+
+#[test]
+fn positive_flash_write_entry_gates_new_slots_through_shared_cap() {
+    // flash.rs is stm32u585-only (host-untested at runtime), so pin the
+    // chokepoint wiring as source text: the single durable-append site
+    // (write_entry) must gate brand-new slot creation through the shared
+    // policy fn + cap, using the lightweight distinct counter.
+    assert!(
+        FLASH_SRC.contains("fn write_entry"),
+        "flash must keep write_entry as the single durable-append chokepoint",
+    );
+    assert!(
+        FLASH_SRC.contains("may_create_distinct_slot"),
+        "write_entry must gate new slots via the shared may_create_distinct_slot policy",
+    );
+    assert!(
+        FLASH_SRC.contains("distinct_slot_count_capped"),
+        "write_entry must count distinct slots (capped scan) for the gate",
+    );
+    assert!(
+        FLASH_SRC.contains("MAX_DISTINCT_SLOTS"),
+        "flash cap must reference the shared MAX_DISTINCT_SLOTS budget",
     );
 }
 

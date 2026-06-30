@@ -32,6 +32,50 @@ pub fn slot_key_compute(account_index: u8, chain_id: u64, slot_index: u32) -> [u
     out
 }
 
+/// Hard cap on the number of **distinct** slot keys the per-slot off-chain
+/// journal will ever create. A brand-new slot is refused once this many are
+/// already live; updates to an *already-present* slot are always allowed.
+///
+/// **Why this exists (page-123 exhaustion → permanent-brick fix; see
+/// `docs/VULN-offchain-sync-page123-exhaustion-brick.md`).** The flash backend
+/// stores the journal as a log on a single 512-quad-word page (`OFFCHAIN_CAPACITY`
+/// in `hw::flash`). Compaction (`hw::flash::compact_page`) *fail-closes* — by the
+/// HIGH-1/F3 anti-rollback design it refuses (never erases) — when the page holds
+/// more distinct slots than its SRAM projection table (`MAX_ACTIVE_SLOTS = 256`)
+/// or when the post-compaction projection would not fit the page. Once that state
+/// is reached the page is permanently un-writable, and because *every* sign path
+/// writes the page after computing its signature, the device can no longer produce
+/// any signature for any slot — a permanent, seed-survivable brick. An untrusted
+/// companion could reach it by spraying distinct `(account,chain,slot)` tuples via
+/// `CMD_OFFCHAIN_SYNC`.
+///
+/// **Why 128 is provably un-wedgeable.** A slot occupies at most 3 quad-words after
+/// compaction (one each COUNT / USEROP / USEROP_SIGS). Capping distinct slots at
+/// `D` guarantees compaction can never fail iff `D * 3 <= 512` (replay space) **and**
+/// `D <= 256` (projection table). `128 * 3 = 384 <= 512` (≥128 QW of headroom) and
+/// `128 <= 256`, so compaction is impossible to wedge by construction. 128 also
+/// matches the host/QEMU mock backend's table size, so both backends enforce the
+/// identical numeric budget. The structural maximum is 170 (`170 * 3 = 510 <= 512`).
+///
+/// This is a **device-lifetime** budget on distinct tuples ever used — slots are
+/// never evicted (`userop_sigs` is non-evictable; evicting it would reset the
+/// few-time-key margin, weakening HIGH-1/F3). At the cap, new-slot creation fails
+/// *gracefully* (existing slots keep signing; no brick).
+pub const MAX_DISTINCT_SLOTS: usize = 128;
+
+/// Policy decision shared by both storage backends: may a durable write that
+/// would create a **new** distinct slot proceed?
+///
+/// `already_present` ⇒ always `true` (an update to a known slot never grows the
+/// distinct-slot set, so it can never push the page toward the un-compactable
+/// state). Otherwise it is allowed only while `distinct_live < MAX_DISTINCT_SLOTS`.
+/// Pure and host-testable; the flash `write_entry` chokepoint and the mock backend
+/// both gate new-slot creation through it (see [`MAX_DISTINCT_SLOTS`]).
+#[must_use]
+pub fn may_create_distinct_slot(distinct_live: usize, already_present: bool) -> bool {
+    already_present || distinct_live < MAX_DISTINCT_SLOTS
+}
+
 #[cfg(feature = "stm32u585")]
 mod backend {
     pub unsafe fn offchain_count_read(slot_key: &[u8; 8]) -> u64 {
@@ -85,7 +129,13 @@ mod backend {
     //! drift. Tests that want to simulate a recovery call
     //! `crate::offchain_state::reset_for_test()`.
 
-    const MAX_SLOTS: usize = 128;
+    // Table size IS the distinct-slot cap on this backend: `allocate` (only
+    // reached for an absent slot) returns `None` once every entry is `used`,
+    // so a brand-new slot is refused at exactly `MAX_DISTINCT_SLOTS` distinct
+    // keys while updates to existing slots still succeed — the same numeric
+    // budget the flash backend enforces via `may_create_distinct_slot`. Single
+    // source of truth: [`super::MAX_DISTINCT_SLOTS`].
+    const MAX_SLOTS: usize = super::MAX_DISTINCT_SLOTS;
 
     #[derive(Clone, Copy)]
     struct Entry {
