@@ -9,6 +9,12 @@
 //! - [`multisend`] — strict Safe `MultiSendCallOnly` outer-framing
 //!   decoder (Kani canonical-acceptance / soundness verified).
 //! - [`names`] — address-name DB + stack-resident [`names::NameResolver`].
+//! - [`safe_tx`] — pure byte-layout decoders for the Safe SafeTx
+//!   clear-sign path: the 281-byte canonical typed-data
+//!   ([`safe_tx::decode_canonical`], Kani exhaustive biconditional) and
+//!   the `execTransaction(...)` calldata with dynamic `data`/`signatures`
+//!   ([`safe_tx::decode_exec_transaction`], Kani no-read-past-end +
+//!   fixed-field soundness).
 //! - [`selectors`] — function-selector → text-sig DB.
 //!
 //! The `verify_*_bundle` Merkle verifiers all take a `root: &[u8; 32]`
@@ -34,5 +40,6 @@ pub mod cowswap_order;
 pub mod erc20;
 pub mod multisend;
 pub mod names;
+pub mod safe_tx;
 pub mod selectors;
 pub mod typed_call;

@@ -32,150 +32,51 @@
 //! callers must keep the input alive for the render lifetime (the
 //! TOCTOU-snapshot buffer in `cmd_sign_userop` already does).
 
-use sphincs_tz_shared::{EXEC_TRANSACTION_MIN_CALLDATA_LEN, EXEC_TRANSACTION_SELECTOR};
+// Re-exported for the tests below + `super::*` consumers. `pub use`
+// keeps them used in the firmware (non-test) build too.
+pub use sphincs_tz_shared::{EXEC_TRANSACTION_MIN_CALLDATA_LEN, EXEC_TRANSACTION_SELECTOR};
 
 use super::Eip712Error;
 
-/// Decoded `execTransaction` arguments. `data` and `signatures` borrow
-/// from the input calldata; everything else is owned by value so the
-/// struct is `Copy`-friendly except for those two slice fields.
-#[derive(Clone, Copy, Debug)]
-pub struct DecodedExec<'a> {
-    pub to: [u8; 20],
-    pub value: [u8; 32],
-    /// `0` = `Call`, `1` = `DelegateCall`. Already range-checked.
-    pub operation: u8,
-    pub safe_tx_gas: [u8; 32],
-    pub base_gas: [u8; 32],
-    pub gas_price: [u8; 32],
-    pub gas_token: [u8; 20],
-    pub refund_receiver: [u8; 20],
-    pub data: &'a [u8],
-    pub signatures: &'a [u8],
-}
+/// Decoded `execTransaction` arguments — re-exported from the
+/// host-compilable, Kani-verified [`pqsigner_tx::safe_tx`]
+/// (panic / OOB-freedom over symbolic offset/length words +
+/// fixed-field decode soundness). `data` and `signatures` borrow from
+/// the input calldata; everything else is owned by value. Re-exported
+/// here so the renderer, the CoW-binding glue, and every test/caller
+/// stay byte-identical.
+pub use pqsigner_tx::safe_tx::DecodedExec;
 
-/// Decode a 32-byte ABI word interpreted as a canonical `address`:
-/// top 12 bytes MUST be zero, low 20 bytes are the address.
-fn read_address_word_off(word: &[u8; 32]) -> Result<[u8; 20], Eip712Error> {
-    if word[..12].iter().any(|&b| b != 0) {
-        return Err(Eip712Error::NonCanonicalAddress);
+/// Map the pure-logic decode error onto the secure-world `Eip712Error`.
+/// The variants correspond 1:1 (the decoder's failure modes are a subset
+/// of `Eip712Error`), so the wrapper below returns exactly the same
+/// variant the inline decoder used to — every test assertion is unchanged.
+fn map_exec_err(e: pqsigner_tx::safe_tx::SafeExecDecodeError) -> Eip712Error {
+    use pqsigner_tx::safe_tx::SafeExecDecodeError as E;
+    match e {
+        E::ShortInput => Eip712Error::ShortInput,
+        E::WrongSelector => Eip712Error::WrongSelector,
+        E::NonCanonicalAddress => Eip712Error::NonCanonicalAddress,
+        E::OffsetOverflow => Eip712Error::OffsetOverflow,
+        E::EnumOutOfRange => Eip712Error::EnumOutOfRange,
+        E::TruncatedDynamic => Eip712Error::TruncatedDynamic,
     }
-    let mut a = [0u8; 20];
-    a.copy_from_slice(&word[12..32]);
-    Ok(a)
-}
-
-/// Decode a 32-byte ABI word as a `usize` (representing an offset or
-/// length). Bits above 32 must be zero — offsets / lengths fit in u32 by
-/// construction (calldata length is u16-bounded upstream anyway).
-fn read_offset_word_off(word: &[u8; 32]) -> Result<usize, Eip712Error> {
-    if word[..28].iter().any(|&b| b != 0) {
-        return Err(Eip712Error::OffsetOverflow);
-    }
-    Ok(u32::from_be_bytes([word[28], word[29], word[30], word[31]]) as usize)
 }
 
 /// Parse `execTransaction(...)` calldata into structured fields.
 ///
 /// Returns the decoded struct on success, or a specific `Eip712Error` on
-/// any of the hardening-rule violations. Callers in the firmware drop
-/// the trailer to "refuse to sign" on `Err`; tests can assert the exact
-/// variant.
+/// any of the hardening-rule violations (selector / minimum-length /
+/// canonical-address / `operation ∈ {0,1}` / dynamic-tail bounds).
+/// Callers in the firmware drop the trailer to "refuse to sign" on `Err`;
+/// tests assert the exact variant.
+///
+/// Thin shim over the Kani-verified
+/// [`pqsigner_tx::safe_tx::decode_exec_transaction`]; maps its error onto
+/// the secure-world [`Eip712Error`] so the signature and every caller
+/// stay byte-identical.
 pub fn decode_exec_transaction(cd: &[u8]) -> Result<DecodedExec<'_>, Eip712Error> {
-    // Minimum-length / selector gate.
-    if cd.len() < EXEC_TRANSACTION_MIN_CALLDATA_LEN {
-        return Err(Eip712Error::ShortInput);
-    }
-    if cd[..4] != EXEC_TRANSACTION_SELECTOR {
-        return Err(Eip712Error::WrongSelector);
-    }
-
-    // The head starts immediately after the selector. All offsets in the
-    // ABI encoding are measured from the start of this head region.
-    let head = &cd[4..];
-
-    // Helper that pulls a fixed-size word out of `head` by word index
-    // (0..=9). Bounded by the `cd.len() >= MIN_CALLDATA_LEN` check above.
-    let word_at = |idx: usize| -> &[u8; 32] {
-        let off = idx * 32;
-        let s: &[u8; 32] = head[off..off + 32].try_into().expect("word slice");
-        s
-    };
-
-    // 10 head words = 320 bytes. We checked `cd.len() >= MIN_CALLDATA_LEN`
-    // (selector + 10*32 + 2*32) so `head[..320]` always exists.
-    let to = read_address_word_off(word_at(0))?;
-    let value: [u8; 32] = *word_at(1);
-    let data_off_w = *word_at(2);
-    let operation_w = word_at(3);
-    let safe_tx_gas: [u8; 32] = *word_at(4);
-    let base_gas: [u8; 32] = *word_at(5);
-    let gas_price: [u8; 32] = *word_at(6);
-    let gas_token = read_address_word_off(word_at(7))?;
-    let refund_receiver = read_address_word_off(word_at(8))?;
-    let sigs_off_w = *word_at(9);
-
-    // Operation = uint8 left-padded to 32. Top 31 bytes must be zero.
-    if operation_w[..31].iter().any(|&b| b != 0) {
-        return Err(Eip712Error::EnumOutOfRange);
-    }
-    let operation = operation_w[31];
-    if operation > 1 {
-        return Err(Eip712Error::EnumOutOfRange);
-    }
-
-    let data_off = read_offset_word_off(&data_off_w)?;
-    let sigs_off = read_offset_word_off(&sigs_off_w)?;
-
-    // Each tail starts with a u256 length, followed by the bytes. The
-    // tails MUST sit after the 320-byte head; that's the canonical
-    // encoding Solidity produces. Pathologically-formed calldata could
-    // point earlier, which we refuse — the on-device display would
-    // otherwise show whatever bytes were before the head.
-    let data = read_dynamic_bytes(head, data_off)?;
-    let signatures = read_dynamic_bytes(head, sigs_off)?;
-
-    Ok(DecodedExec {
-        to,
-        value,
-        operation,
-        safe_tx_gas,
-        base_gas,
-        gas_price,
-        gas_token,
-        refund_receiver,
-        data,
-        signatures,
-    })
-}
-
-/// Read a dynamic `bytes` argument out of `head` at the given offset.
-/// The 32 bytes at `head[offset..offset+32]` are the length; the payload
-/// follows. The function returns `Err` if the offset / length addresses
-/// any byte outside `head`.
-fn read_dynamic_bytes(head: &[u8], offset: usize) -> Result<&[u8], Eip712Error> {
-    // Tail must start after the 320-byte head (10 words × 32). Solidity
-    // encodes it that way; refusing earlier offsets prevents an attacker
-    // from pointing the bytes argument back into the head and confusing
-    // the renderer.
-    if offset < 10 * 32 {
-        return Err(Eip712Error::OffsetOverflow);
-    }
-    if offset.checked_add(32).map_or(true, |end| end > head.len()) {
-        return Err(Eip712Error::TruncatedDynamic);
-    }
-    let len_word: &[u8; 32] = head[offset..offset + 32]
-        .try_into()
-        .expect("length word slice");
-    let len = read_offset_word_off(len_word)?;
-    let payload_start = offset + 32;
-    let payload_end = payload_start
-        .checked_add(len)
-        .ok_or(Eip712Error::OffsetOverflow)?;
-    if payload_end > head.len() {
-        return Err(Eip712Error::TruncatedDynamic);
-    }
-    Ok(&head[payload_start..payload_end])
+    pqsigner_tx::safe_tx::decode_exec_transaction(cd).map_err(map_exec_err)
 }
 
 // ---------------------------------------------------------------------------

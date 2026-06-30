@@ -3700,6 +3700,7 @@ kani:
 	@echo "         + Safe multiSend decoder (canonical-acceptance soundness + accept/reject controls)"
 	@echo "         + CoW GPv2Order canonical decode (decode-soundness: accept<=>enum-in-range, verbatim field offsets + accept/reject controls)"
 	@echo "         + typed-call ABI walker (no-read-past-end soundness + accept/reject controls)"
+	@echo "         + Safe SafeTx decode (canonical typed-data: accept<=>operation-in-range, verbatim offsets; execTransaction: no-read-past-end + fixed-field soundness + accept/reject controls)"
 	cargo kani -p pqsigner-tx
 	@echo "==> Kani: ERC-7730 IR header parser (offset-bounds safety)"
 	cargo kani -p pqsigner-erc7730 --harness erc7730_ir_parse_panic_free

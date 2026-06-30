@@ -35,10 +35,7 @@
 
 use super::{keccak, Eip712Error};
 use sphincs_tz_shared::{
-    APPROVE_HASH_SELECTOR, SAFE_DOMAIN_TYPEHASH, SAFE_OFF_BASE_GAS, SAFE_OFF_CHAIN_ID,
-    SAFE_OFF_DATA_HASH, SAFE_OFF_GAS_PRICE, SAFE_OFF_GAS_TOKEN, SAFE_OFF_NONCE,
-    SAFE_OFF_OPERATION, SAFE_OFF_REFUND_RECEIVER, SAFE_OFF_SAFE_ADDRESS, SAFE_OFF_SAFE_TX_GAS,
-    SAFE_OFF_TO, SAFE_OFF_VALUE, SAFE_TX_TYPEHASH, SAFE_V1_CANONICAL_LEN,
+    APPROVE_HASH_SELECTOR, SAFE_DOMAIN_TYPEHASH, SAFE_TX_TYPEHASH, SAFE_V1_CANONICAL_LEN,
 };
 
 // Unlike the CoW v3 path (which calls into `crate::zk` and so is
@@ -86,27 +83,13 @@ mod extra_tests;
 // Decoded SafeTx
 // ---------------------------------------------------------------------------
 
-/// Decoded SafeTx fields. Borrows nothing — every field is owned and
-/// the returned struct is `Copy`. Mirrors Safe's Solidity struct order
-/// for the EIP-712 typehash, with byte arrays preserved at their
-/// natural width (addresses 20 B, uint256 32 B BE).
-#[derive(Clone, Copy, Debug)]
-pub struct SafeTx {
-    pub chain_id: u64,
-    pub safe_address: [u8; 20],
-    pub to: [u8; 20],
-    pub value: [u8; 32],
-    pub data_hash: [u8; 32],
-    /// Operation byte: `0` = Call, `1` = DelegateCall. Other values
-    /// are rejected by [`decode_canonical`].
-    pub operation: u8,
-    pub safe_tx_gas: [u8; 32],
-    pub base_gas: [u8; 32],
-    pub gas_price: [u8; 32],
-    pub gas_token: [u8; 20],
-    pub refund_receiver: [u8; 20],
-    pub nonce: [u8; 32],
-}
+/// Decoded SafeTx fields — re-exported from the host-compilable,
+/// Kani-verified [`pqsigner_tx::safe_tx`] (decode-soundness: accept ⟺
+/// `operation ≤ 1`, every field a verbatim copy from its canonical
+/// offset). Borrows nothing — every field is owned and the struct is
+/// `Copy`. Re-exported here so `struct_hash`, `compute_safe_tx_hash`,
+/// the renderer, and every test/caller stay byte-identical.
+pub use pqsigner_tx::safe_tx::SafeTx;
 
 /// True when `inner_data` bears the Safe `approveHash(bytes32)` selector and
 /// therefore MUST clear-sign through a verified `safe_v1` trailer — keyed on
@@ -138,62 +121,20 @@ pub fn is_approve_hash_claim(inner_data: &[u8]) -> bool {
 
 /// Parse the 281-byte canonical packed SafeTx into structured fields.
 ///
-/// The only range check today is on `operation`: Safe's Solidity
-/// definition uses an `Enum.Operation` whose only legal values are 0
-/// (`Call`) and 1 (`DelegateCall`). Anything else is rejected here so
-/// `compute_safe_tx_hash` and the rendering path never see an invalid
-/// canonical.
+/// The only range check is on `operation`: Safe's Solidity definition
+/// uses an `Enum.Operation` whose only legal values are 0 (`Call`) and 1
+/// (`DelegateCall`). Anything else is rejected so `compute_safe_tx_hash`
+/// and the rendering path never see an invalid canonical.
+///
+/// Thin shim over the Kani-verified
+/// [`pqsigner_tx::safe_tx::decode_canonical`] (decode-soundness: accept ⟺
+/// `operation ≤ 1`, every field a verbatim copy from its canonical
+/// offset); maps its single failure mode onto the secure-world
+/// [`Eip712Error`] so the signature and every caller stay byte-identical.
 pub fn decode_canonical(canonical: &[u8; SAFE_V1_CANONICAL_LEN]) -> Result<SafeTx, Eip712Error> {
-    let chain_id = u64::from_be_bytes([
-        canonical[SAFE_OFF_CHAIN_ID],
-        canonical[SAFE_OFF_CHAIN_ID + 1],
-        canonical[SAFE_OFF_CHAIN_ID + 2],
-        canonical[SAFE_OFF_CHAIN_ID + 3],
-        canonical[SAFE_OFF_CHAIN_ID + 4],
-        canonical[SAFE_OFF_CHAIN_ID + 5],
-        canonical[SAFE_OFF_CHAIN_ID + 6],
-        canonical[SAFE_OFF_CHAIN_ID + 7],
-    ]);
-    let mut safe_address = [0u8; 20];
-    safe_address.copy_from_slice(&canonical[SAFE_OFF_SAFE_ADDRESS..SAFE_OFF_SAFE_ADDRESS + 20]);
-    let mut to = [0u8; 20];
-    to.copy_from_slice(&canonical[SAFE_OFF_TO..SAFE_OFF_TO + 20]);
-    let mut value = [0u8; 32];
-    value.copy_from_slice(&canonical[SAFE_OFF_VALUE..SAFE_OFF_VALUE + 32]);
-    let mut data_hash = [0u8; 32];
-    data_hash.copy_from_slice(&canonical[SAFE_OFF_DATA_HASH..SAFE_OFF_DATA_HASH + 32]);
-    let operation = canonical[SAFE_OFF_OPERATION];
-    if operation > 1 {
-        return Err(Eip712Error::EnumOutOfRange);
-    }
-    let mut safe_tx_gas = [0u8; 32];
-    safe_tx_gas.copy_from_slice(&canonical[SAFE_OFF_SAFE_TX_GAS..SAFE_OFF_SAFE_TX_GAS + 32]);
-    let mut base_gas = [0u8; 32];
-    base_gas.copy_from_slice(&canonical[SAFE_OFF_BASE_GAS..SAFE_OFF_BASE_GAS + 32]);
-    let mut gas_price = [0u8; 32];
-    gas_price.copy_from_slice(&canonical[SAFE_OFF_GAS_PRICE..SAFE_OFF_GAS_PRICE + 32]);
-    let mut gas_token = [0u8; 20];
-    gas_token.copy_from_slice(&canonical[SAFE_OFF_GAS_TOKEN..SAFE_OFF_GAS_TOKEN + 20]);
-    let mut refund_receiver = [0u8; 20];
-    refund_receiver
-        .copy_from_slice(&canonical[SAFE_OFF_REFUND_RECEIVER..SAFE_OFF_REFUND_RECEIVER + 20]);
-    let mut nonce = [0u8; 32];
-    nonce.copy_from_slice(&canonical[SAFE_OFF_NONCE..SAFE_OFF_NONCE + 32]);
-
-    Ok(SafeTx {
-        chain_id,
-        safe_address,
-        to,
-        value,
-        data_hash,
-        operation,
-        safe_tx_gas,
-        base_gas,
-        gas_price,
-        gas_token,
-        refund_receiver,
-        nonce,
-    })
+    // `SafeTxDecodeError` has exactly one variant (`EnumOutOfRange`); the
+    // map is total.
+    pqsigner_tx::safe_tx::decode_canonical(canonical).map_err(|_| Eip712Error::EnumOutOfRange)
 }
 
 // ---------------------------------------------------------------------------
