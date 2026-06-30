@@ -81,8 +81,16 @@ const PATHOP_ROOT_STRUCT: u8 = 0x10;
 const PATHOP_ROOT_CONTAINER: u8 = 0x11;
 const PATHOP_ROOT_METADATA: u8 = 0x12;
 const PATHOP_FIELD_IDX: u8 = 0x20;
+// Wire constants for the device-side path bytecode. dbgen only EMITS
+// ArrayAll (render-all of a sole dynamic array); single-index / slice / last
+// are deliberately never emitted (they would hide an array's other elements),
+// but the values are kept here as the canonical wire space shared with the
+// on-device `PathOp` enum.
+#[allow(dead_code)]
 const PATHOP_ARRAY_IDX: u8 = 0x21;
+#[allow(dead_code)]
 const PATHOP_ARRAY_SLICE: u8 = 0x22;
+#[allow(dead_code)]
 const PATHOP_ARRAY_LAST: u8 = 0x23;
 const PATHOP_ARRAY_ALL: u8 = 0x24;
 
@@ -319,7 +327,7 @@ pub fn build_db_with_policy_override(
     if force_production {
         policy.allow_unattested_dev_descriptors = false;
     }
-    build_db_inner(input_dir, &policy, registry_root)
+    build_db_inner(input_dir, &policy, registry_root, false, &mut Vec::new())
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -359,7 +367,7 @@ pub fn build_db(
     policy_path: &Path,
 ) -> Result<Erc7730BuildResult, String> {
     let policy = load_policy(policy_path)?;
-    build_db_inner(input_dir, &policy, None)
+    build_db_inner(input_dir, &policy, None, false, &mut Vec::new())
 }
 
 /// Compile a SINGLE descriptor file, tolerantly. Returns the emitted IR
@@ -378,16 +386,78 @@ pub fn try_compile_one(
     compile_descriptor(path, policy, registry_root)
 }
 
+/// A descriptor (or sub-tree) the tolerant build skipped, with why.
+#[derive(Debug, Clone)]
+pub struct SkipReport {
+    pub source: PathBuf,
+    pub reason: String,
+}
+
+/// Tolerant variant of [`build_db`] for the registry import (the corpus
+/// switch). Recursively compiles every `calldata-*.json` / `eip712-*.json`
+/// descriptor under `input_dir`, SKIPPING (with a [`SkipReport`]) any
+/// descriptor that fails to compile or whose (chain,contract,type) leaf
+/// duplicates an earlier one, instead of hard-failing the whole build. The
+/// surviving leaves are Merkle-tree-hashed exactly as the strict build, so
+/// the resulting root is a faithful catalog of "everything the on-device
+/// renderer can clear-sign from this registry". `registry_root` resolves
+/// `includes` templates.
+pub fn build_db_tolerant(
+    input_dir: &Path,
+    policy_path: &Path,
+    registry_root: Option<&Path>,
+) -> Result<(Erc7730BuildResult, Vec<SkipReport>), String> {
+    let policy = load_policy(policy_path)?;
+    let mut skips: Vec<SkipReport> = Vec::new();
+    let result = build_db_inner(input_dir, &policy, registry_root, true, &mut skips)?;
+    Ok((result, skips))
+}
+
+/// Recursively collect standalone ERC-7730 descriptor files (the same
+/// `calldata-*` / `eip712-*` filter the scanner uses), skipping `tests/`
+/// fixture dirs and `common-*` / `*.tests.*` include-templates.
+fn collect_descriptors(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(rd) = fs::read_dir(dir) else { return };
+    for entry in rd.flatten() {
+        let p = entry.path();
+        if p.is_dir() {
+            if p.file_name().is_some_and(|n| n == "tests") {
+                continue;
+            }
+            collect_descriptors(&p, out);
+        } else if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
+            if name.ends_with(".json")
+                && !name.contains(".tests.")
+                && (name.starts_with("calldata-") || name.starts_with("eip712-"))
+            {
+                out.push(p);
+            }
+        }
+    }
+}
+
 fn build_db_inner(
     input_dir: &Path,
     policy: &Policy,
     registry_root: Option<&Path>,
+    tolerant: bool,
+    skips: &mut Vec<SkipReport>,
 ) -> Result<Erc7730BuildResult, String> {
-    let mut sources: Vec<PathBuf> = fs::read_dir(input_dir)
-        .map_err(|e| format!("read_dir {}: {e}", input_dir.display()))?
-        .filter_map(|entry| entry.ok().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|x| x == "json"))
-        .collect();
+    // The strict path keeps its flat, name-agnostic read (our hand-authored
+    // corpus is a flat dir of `*.json`); the tolerant path walks the
+    // registry's nested `registry/<project>/` tree and filters to real
+    // descriptor files.
+    let mut sources: Vec<PathBuf> = if tolerant {
+        let mut v = Vec::new();
+        collect_descriptors(input_dir, &mut v);
+        v
+    } else {
+        fs::read_dir(input_dir)
+            .map_err(|e| format!("read_dir {}: {e}", input_dir.display()))?
+            .filter_map(|entry| entry.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|x| x == "json"))
+            .collect()
+    };
     sources.sort();
 
     if sources.is_empty() {
@@ -399,10 +469,14 @@ fn build_db_inner(
 
     let mut emitted: Vec<Emitted> = Vec::with_capacity(sources.len() * 2);
     for src in &sources {
-        let entries = compile_descriptor(src, policy, registry_root).map_err(|e| {
-            format!("{}: {e}", src.display())
-        })?;
-        emitted.extend(entries);
+        match compile_descriptor(src, policy, registry_root) {
+            Ok(entries) => emitted.extend(entries),
+            Err(e) if tolerant => skips.push(SkipReport {
+                source: src.clone(),
+                reason: e,
+            }),
+            Err(e) => return Err(format!("{}: {e}", src.display())),
+        }
     }
 
     if emitted.is_empty() {
@@ -416,26 +490,38 @@ fn build_db_inner(
         )
     });
 
-    // 2. Reject (chain_id, contract, primary_type_hash) duplicates —
-    //    almost always a curation bug.
-    for w in emitted.windows(2) {
-        if w[0].chain_id == w[1].chain_id
-            && w[0].contract == w[1].contract
-            && w[0].primary_type_hash == w[1].primary_type_hash
-            && w[0].context_kind == w[1].context_kind
-        {
-            return Err(format!(
-                "duplicate (chain_id={}, contract=0x{}, primary_type_hash=0x{}, ctx={}) — \
-                 sources: {} vs {}",
-                w[0].chain_id,
-                hex::encode(w[0].contract),
-                hex::encode(w[0].primary_type_hash),
-                w[0].context_kind,
-                w[0].source.display(),
-                w[1].source.display(),
-            ));
+    // 2. Handle (chain_id, contract, primary_type_hash, ctx) duplicates.
+    //    Strict: a dup is almost always a curation bug → hard-error.
+    //    Tolerant: the registry legitimately ships the same token/contract
+    //    in several files (or across projects) → drop the later leaf + record.
+    let mut deduped: Vec<Emitted> = Vec::with_capacity(emitted.len());
+    for e in emitted {
+        if let Some(prev) = deduped.last() {
+            if prev.chain_id == e.chain_id
+                && prev.contract == e.contract
+                && prev.primary_type_hash == e.primary_type_hash
+                && prev.context_kind == e.context_kind
+            {
+                let msg = format!(
+                    "duplicate (chain_id={}, contract=0x{}, primary_type_hash=0x{}, ctx={}) — \
+                     sources: {} vs {}",
+                    prev.chain_id,
+                    hex::encode(prev.contract),
+                    hex::encode(prev.primary_type_hash),
+                    prev.context_kind,
+                    prev.source.display(),
+                    e.source.display(),
+                );
+                if tolerant {
+                    skips.push(SkipReport { source: e.source.clone(), reason: msg });
+                    continue;
+                }
+                return Err(msg);
+            }
         }
+        deduped.push(e);
     }
+    let mut emitted = deduped;
 
     // 3. Assign leaf indices, compute leaf hashes, build the tree.
     for (i, e) in emitted.iter_mut().enumerate() {

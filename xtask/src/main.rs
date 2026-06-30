@@ -22,6 +22,7 @@ fn main() -> ExitCode {
         "gen-solidity-constants" => cmd_gen_solidity_constants(&args[1..]),
         "gen-erc7730-descriptors" => cmd_gen_erc7730_descriptors(&args[1..]),
         "scan-registry" => cmd_scan_registry(&args[1..]),
+        "build-registry" => cmd_build_registry(&args[1..]),
         "" | "help" | "--help" | "-h" => {
             print_help();
             ExitCode::SUCCESS
@@ -1104,6 +1105,100 @@ fn cmd_scan_registry(args: &[String]) -> ExitCode {
         println!("\nscan-registry: wrote {}", rp.display());
     }
     ExitCode::SUCCESS
+}
+
+/// `build-registry --registry-root <dir> [--input <dir>] [--policy <path>]
+/// [--report <path>]`
+///
+/// Tolerantly builds the ERC-7730 catalog (Merkle root + leaves) from the
+/// upstream registry via `dbgen::erc7730::build_db_tolerant` — the corpus
+/// switch. Reports the leaf count, root, and skips (descriptors / dup leaves
+/// the on-device renderer can't take). Read-only for now: it does NOT yet
+/// overwrite the firmware-pinned root (the vendoring + prod-root restructure
+/// is the follow-up step); use it to see exactly what the registry corpus
+/// builds to.
+fn cmd_build_registry(args: &[String]) -> ExitCode {
+    let mut registry_root: Option<PathBuf> = None;
+    let mut input: Option<PathBuf> = None;
+    let mut policy_path: Option<PathBuf> = None;
+    let mut report_path: Option<PathBuf> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--registry-root" => {
+                i += 1;
+                registry_root = args.get(i).map(PathBuf::from);
+            }
+            "--input" => {
+                i += 1;
+                input = args.get(i).map(PathBuf::from);
+            }
+            "--policy" => {
+                i += 1;
+                policy_path = args.get(i).map(PathBuf::from);
+            }
+            "--report" => {
+                i += 1;
+                report_path = args.get(i).map(PathBuf::from);
+            }
+            other => {
+                eprintln!("build-registry: unknown flag `{other}`");
+                return ExitCode::FAILURE;
+            }
+        }
+        i += 1;
+    }
+    let Some(registry_root) = registry_root else {
+        eprintln!("build-registry: --registry-root <dir> is required");
+        return ExitCode::FAILURE;
+    };
+    let workspace_root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap_or_default())
+        .parent()
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    let input = input.unwrap_or_else(|| registry_root.join("registry"));
+    let policy_path =
+        policy_path.unwrap_or_else(|| workspace_root.join("secure/data/erc7730/policy.toml"));
+
+    let (result, skips) =
+        match dbgen::erc7730::build_db_tolerant(&input, &policy_path, Some(&registry_root)) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("build-registry: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+
+    println!("# ERC-7730 tolerant registry build");
+    println!("input:   {}", input.display());
+    println!("leaves:  {}", result.leaf_count);
+    println!("root:    {}", hex_lower(&result.root));
+    println!("skipped: {} descriptor(s)/leaf(s)", skips.len());
+
+    if let Some(rp) = report_path {
+        let mut out = String::new();
+        let _ = writeln!(out, "# tolerant registry build — {} leaves, {} skipped\n", result.leaf_count, skips.len());
+        let _ = writeln!(out, "root: {}\n", hex_lower(&result.root));
+        for s in &skips {
+            let rel = s.source.strip_prefix(&registry_root).unwrap_or(&s.source);
+            let short: String = s.reason.chars().take(160).collect();
+            let _ = writeln!(out, "- {}\n    {}", rel.display(), short);
+        }
+        if let Err(e) = fs::write(&rp, &out) {
+            eprintln!("build-registry: write report {}: {e}", rp.display());
+            return ExitCode::FAILURE;
+        }
+        println!("wrote {}", rp.display());
+    }
+    ExitCode::SUCCESS
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
 }
 
 fn collect_json_recursive(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
