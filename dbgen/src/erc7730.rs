@@ -383,7 +383,8 @@ pub fn try_compile_one(
     policy: &Policy,
     registry_root: Option<&Path>,
 ) -> Result<Vec<Emitted>, String> {
-    compile_descriptor(path, policy, registry_root)
+    // The coverage scan reports whole-descriptor compilability (strict).
+    compile_descriptor(path, policy, registry_root, false)
 }
 
 /// A descriptor (or sub-tree) the tolerant build skipped, with why.
@@ -469,7 +470,7 @@ fn build_db_inner(
 
     let mut emitted: Vec<Emitted> = Vec::with_capacity(sources.len() * 2);
     for src in &sources {
-        match compile_descriptor(src, policy, registry_root) {
+        match compile_descriptor(src, policy, registry_root, tolerant) {
             Ok(entries) => emitted.extend(entries),
             Err(e) if tolerant => skips.push(SkipReport {
                 source: src.clone(),
@@ -751,6 +752,7 @@ fn compile_descriptor(
     path: &Path,
     policy: &Policy,
     registry_root: Option<&Path>,
+    tolerant: bool,
 ) -> Result<Vec<Emitted>, String> {
     let raw = fs::read(path).map_err(|e| format!("read: {e}"))?;
     let mut json: serde_json::Value =
@@ -846,7 +848,8 @@ fn compile_descriptor(
     let (context_kind, deployments) =
         resolve_deployments(&descriptor.context).map_err(|e| format!("deployments: {e}"))?;
 
-    let (formats_section, pool_initial) = compile_formats(&descriptor.display, context_kind, &mut ctx)?;
+    let (formats_section, pool_initial) =
+        compile_formats(&descriptor.display, context_kind, &mut ctx, tolerant)?;
 
     // For each deployment we emit a distinct IR (same body, different
     // header bytes). The pool/format bytes are byte-identical between
@@ -1046,55 +1049,85 @@ fn compile_formats(
     display: &Display,
     context_kind: u8,
     ctx: &mut CompileCtx,
+    tolerant: bool,
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
     let n = display.formats.len();
     if n == 0 {
         return Err("display.formats is empty".to_string());
     }
-    if n > MAX_FORMATS {
-        return Err(format!(
-            "format count {n} > MAX_FORMATS ({MAX_FORMATS})"
-        ));
+    if !tolerant && n > MAX_FORMATS {
+        return Err(format!("format count {n} > MAX_FORMATS ({MAX_FORMATS})"));
     }
 
     let mut pool = Pool::new();
 
-    // First pre-intern referenced enum tables so $ref resolution can
-    // emit pool offsets without re-walking.
+    // Pre-intern referenced enum tables so $ref resolution can emit pool
+    // offsets without re-walking. In tolerant mode a bad / undefined enum is
+    // skipped here (the format(s) referencing it then fail to compile and are
+    // themselves skipped below); strict mode hard-errors.
     let mut enum_offsets: BTreeMap<String, u16> = BTreeMap::new();
-
-    // Pre-scan each format's fields for $.metadata.enums.X references.
     for (_sig, fmt) in display.formats.iter() {
         for field in &fmt.fields {
-            if let Some(params) = &field.params {
-                if let Some(refstr) = params
-                    .get("$ref")
-                    .and_then(|v| v.as_str())
-                    .or_else(|| params.get("ref").and_then(|v| v.as_str()))
-                {
-                    if let Some(name) = refstr.strip_prefix("$.metadata.enums.") {
-                        if !enum_offsets.contains_key(name) {
-                            let table = ctx
-                                .enums
-                                .get(name)
-                                .ok_or_else(|| format!("enum `{name}` referenced but not defined"))?;
-                            let encoded = encode_enum_table(table).map_err(|e| {
-                                format!("enum `{name}` encoding: {e}")
-                            })?;
-                            let off = pool.push_raw(&encoded)?;
-                            enum_offsets.insert(name.to_string(), off);
-                        }
-                    }
-                }
+            let Some(params) = &field.params else { continue };
+            let Some(refstr) = params
+                .get("$ref")
+                .and_then(|v| v.as_str())
+                .or_else(|| params.get("ref").and_then(|v| v.as_str()))
+            else {
+                continue;
+            };
+            let Some(name) = refstr.strip_prefix("$.metadata.enums.") else {
+                continue;
+            };
+            if enum_offsets.contains_key(name) {
+                continue;
             }
+            let encoded = match ctx
+                .enums
+                .get(name)
+                .ok_or_else(|| format!("enum `{name}` referenced but not defined"))
+                .and_then(|table| {
+                    encode_enum_table(table).map_err(|e| format!("enum `{name}` encoding: {e}"))
+                }) {
+                Ok(enc) => enc,
+                Err(_) if tolerant => continue,
+                Err(e) => return Err(e),
+            };
+            let off = pool.push_raw(&encoded)?;
+            enum_offsets.insert(name.to_string(), off);
         }
     }
 
-    // Compile each format.
-    let mut formats_buf: Vec<u8> = Vec::new();
-    formats_buf.push(n as u8);
+    // Compile each format. Tolerant mode keeps the compilable formats and
+    // SKIPS the rest — a partially-supported descriptor (e.g. an aggregator
+    // whose `approve` compiles but whose dynamic `swap` does not) still
+    // clear-signs its renderable functions; the dropped functions blind-sign
+    // exactly as if the descriptor were absent. Strict mode `?`-fails the
+    // whole descriptor on the first bad format (a curation bug in our corpus).
+    let mut survivors: Vec<Vec<u8>> = Vec::with_capacity(n);
     for (sig, fmt) in display.formats.iter() {
-        compile_one_format(sig, fmt, context_kind, ctx, &mut pool, &enum_offsets, &mut formats_buf)?;
+        if tolerant && survivors.len() >= MAX_FORMATS {
+            break; // bound the IR; remaining functions blind-sign
+        }
+        let mut one: Vec<u8> = Vec::new();
+        match compile_one_format(sig, fmt, context_kind, ctx, &mut pool, &enum_offsets, &mut one) {
+            Ok(()) => survivors.push(one),
+            Err(_) if tolerant => {}
+            Err(e) => return Err(e),
+        }
+    }
+
+    if survivors.is_empty() {
+        return Err("no compilable formats in descriptor".to_string());
+    }
+
+    // [count][format…] — count is the SURVIVOR count (== n in strict mode, so
+    // the strict catalog is byte-identical).
+    let body_len: usize = survivors.iter().map(Vec::len).sum();
+    let mut formats_buf: Vec<u8> = Vec::with_capacity(1 + body_len);
+    formats_buf.push(survivors.len() as u8);
+    for one in &survivors {
+        formats_buf.extend_from_slice(one);
     }
 
     Ok((formats_buf, pool.into_bytes()))
@@ -3377,6 +3410,41 @@ mod tests {
         assert!(compile_path("xs.[]", CTX_EIP712, &dyn_elem).is_err(), "eip712 array");
         let any = parse_format_key("Order(uint256[] notes, address owner)").unwrap();
         assert!(compile_path("notes.[]", CTX_EIP712, &any).is_err(), "eip712 array (uint)");
+    }
+
+    #[test]
+    fn per_format_tolerance_keeps_compilable_drops_unrenderable() {
+        use serde_json::json;
+        // `transfer(...)` compiles; the `swap` format's single-index array
+        // path does NOT (single index is refused — array-tail-hiding).
+        let display: Display = serde_json::from_value(json!({
+            "formats": {
+                "transfer(address to, uint256 value)": {
+                    "intent": "Send",
+                    "fields": [
+                        { "path": "to", "label": "To", "format": "raw" },
+                        { "path": "value", "label": "Amount", "format": "raw" }
+                    ]
+                },
+                "swap(uint256[] amounts)": {
+                    "intent": "Swap",
+                    "fields": [ { "path": "amounts[0]", "label": "Amt", "format": "raw" } ]
+                }
+            }
+        }))
+        .unwrap();
+        let mut ctx = CompileCtx {
+            constants: serde_json::Map::new(),
+            enums: serde_json::Map::new(),
+            descriptor_hash: [0u8; 32],
+            owner: String::new(),
+            contract_name: String::new(),
+        };
+        // STRICT: the unrenderable `swap` fails the WHOLE descriptor.
+        assert!(compile_formats(&display, CTX_CONTRACT, &mut ctx, false).is_err());
+        // TOLERANT: keep the renderable `transfer`, drop `swap` → 1 format.
+        let (buf, _pool) = compile_formats(&display, CTX_CONTRACT, &mut ctx, true).unwrap();
+        assert_eq!(buf[0], 1, "exactly one surviving format (transfer)");
     }
 
     #[test]
