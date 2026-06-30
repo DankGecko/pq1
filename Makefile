@@ -1,12 +1,17 @@
 # `make` / `make help` lists every runnable target that carries a `## ` blurb
 # (self-documenting — derived from the Makefile itself, so it can't drift the
 # way a hand-maintained count does). Add `## one-liner` to a target's rule line
-# to surface it. For the FV / spec-assurance targets see
-# `make -C contracts/verification help`.
+# to surface it. `make help` also appends the FV / spec-assurance suite from
+# contracts/verification/; `make help-verify` shows just that suite.
 .DEFAULT_GOAL := help
-.PHONY: help
-help: ## Show the main runnable targets (those with a description)
+.PHONY: help help-verify
+help: ## Show the main runnable targets (root + the FV suite below)
 	@grep -hE '^[a-zA-Z0-9_.-]+:.*## ' $(MAKEFILE_LIST) | sort | awk -F':.*## ' '!seen[$$1]++ {printf "  \033[36m%-26s\033[0m %s\n", $$1, $$2}'
+	@printf '\n  \033[1mFV / spec-assurance\033[0m  (run with: make -C contracts/verification <target>)\n'
+	@$(MAKE) --no-print-directory -C contracts/verification help | grep -v 'runnable FV targets' || true
+
+help-verify: ## Show only the FV / spec-assurance targets (contracts/verification)
+	@$(MAKE) --no-print-directory -C contracts/verification help
 
 TARGET = thumbv8m.main-none-eabi
 RUSTFLAGS_VAR = CARGO_TARGET_THUMBV8M_MAIN_NONE_EABI_RUSTFLAGS
