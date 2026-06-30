@@ -21,6 +21,14 @@
 // here is the parser + ABI walker (always compiled, host-testable).
 #[cfg(not(test))]
 pub mod display;
+// Host-test builds re-point `crate::tx::display` at the `display_under_test`
+// scaffold (which `#[path]`-mounts the real renderer bodies + a byte-buffer
+// `Pages`/`primitives`). This lets the test-mounted `cowswap_display` /
+// `safe_display` — which reference `crate::tx::display::{Pages, primitives}`
+// by ABSOLUTE path (their canonical home is `eip712`/`display`, where `super`
+// is not the display tree) — resolve to the real formatters under test.
+#[cfg(test)]
+pub(crate) use crate::display_under_test as display;
 pub mod eip712;
 pub mod erc7730;
 pub mod erc7730_render;

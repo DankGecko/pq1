@@ -23,6 +23,14 @@ pub mod safe;
 // so its cross-check invariants can be unit-tested on the host.
 #[cfg(not(test))]
 pub mod cowswap_display;
+// Host-test mount: `cowswap_display`'s `crate::tx::display::{Pages, primitives}`
+// absolute paths resolve to the `display_under_test` scaffold (via the
+// `#[cfg(test)] pub use … as display` alias in `tx/mod.rs`), and the
+// `crate::ui::{DISPLAY_COLS,DISPLAY_ROWS}` it needs come from the test `ui`
+// stub. So the real renderer body runs on host (render-faithfulness tests in
+// `display_under_test/cowswap_render_pure_tests.rs`).
+#[cfg(test)]
+pub mod cowswap_display;
 
 #[cfg(test)]
 mod keccak_tests;

@@ -139,11 +139,17 @@ pub mod erc7730;
 #[path = "../tx/display/erc8213.rs"]
 pub mod erc8213;
 
-// `safe_display` is intentionally NOT re-mounted: it includes a handful
-// of helpers (`write_short_addr`, …) that the host-side suite would mark
-// unused and which we cannot `#[allow(dead_code)]`-silence under the
-// no-modification rule. Its coverage lives in the firmware-side e2e
-// harness; see `reports/tests/secure-tx-display.md` "Coverage gaps".
+// `safe_display` IS re-mounted (2026-06-30). Its absolute `crate::tx::display::
+// {Pages,primitives}` + `crate::tx::eip712::cowswap_display::*` paths now
+// resolve via the `#[cfg(test)] pub(crate) use … as display` alias in
+// `tx/mod.rs` and the test mount of `cowswap_display` in `eip712/mod.rs`.
+// `#[allow(dead_code)]` because under the test build the binary crate's
+// production callers (`pick_sign_pages`, the handlers) are gated out, so the
+// public entry points would otherwise warn as unused. Render-faithfulness
+// tests in `safe_display_render_pure_tests.rs`.
+#[path = "../tx/display/safe_display.rs"]
+#[allow(dead_code)]
+pub mod safe_display;
 
 // `safe_mgmt` IS re-mounted: it has no unused helpers in the host-test
 // configuration, and its per-op renderers are pure-display logic that
@@ -159,3 +165,9 @@ mod erc7730_render_pure_tests;
 
 #[cfg(test)]
 mod safe_mgmt_render_pure_tests;
+
+#[cfg(test)]
+mod cowswap_render_pure_tests;
+
+#[cfg(test)]
+mod safe_display_render_pure_tests;

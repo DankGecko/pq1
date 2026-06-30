@@ -531,6 +531,65 @@ fn positive_erc20_known_transfer_eight_pages() {
     assert_eq!(row_str(&pages.buf[7][3]), "R=Confirm");
 }
 
+/// Concatenate ASCII-hex digits across rows 1..3 of a page (drops "0x",
+/// spaces, "..." separators) so a full 40-hex address can be matched.
+fn page_hex(pages: &Pages, page: usize) -> String {
+    (1..DISPLAY_ROWS)
+        .flat_map(|r| row_str(&pages.buf[page][r]).chars().collect::<Vec<_>>())
+        .filter(char::is_ascii_hexdigit)
+        .collect::<String>()
+        .to_lowercase()
+}
+
+#[test]
+fn positive_erc20_known_transfer_binds_amount_digits_and_recipient_hex() {
+    // Item 2 of the 2026-06-29 coverage audit: the prior tests asserted only
+    // the LABELS ("Amount:", "Recipient:") — never the rendered digits/hex.
+    // The amount + recipient are the security-critical fields; bind them to
+    // the DECODED `Erc20Call`, exercising the real `write_token_amount_two_rows`
+    // + `write_addr_full` formatters.
+    let tx = sample_tx();
+    let resolver = NameResolver::new();
+    let meta = usdc_metadata(); // 6 decimals, "USDC"
+    let recipient = [0x33u8; 20];
+    let call = Erc20Call::Transfer {
+        to: recipient,
+        amount: u256_from_u64(100_000_000), // 100.000000 USDC
+    };
+    let pages = render_erc20_known_pages(&tx, &call, &meta, &resolver);
+
+    // Amount page (2): the rendered integer digits + symbol, not just "Amount:".
+    let amount = format!("{}|{}", row_str(&pages.buf[2][1]), row_str(&pages.buf[2][2]));
+    assert!(amount.contains("100"), "amount must render the integer 100; got {amount:?}");
+    assert!(amount.contains("USDC"), "amount must carry the symbol; got {amount:?}");
+
+    // Recipient page (1): the FULL 40-hex recipient across rows 1-3.
+    let want: String = recipient.iter().map(|b| format!("{b:02x}")).collect();
+    assert!(
+        page_hex(&pages, 1).contains(&want),
+        "recipient page must show the full 40-hex recipient {want}"
+    );
+}
+
+#[test]
+fn negative_erc20_amount_digits_nonvacuous() {
+    // Non-vacuity: a different decoded amount must change the rendered digits
+    // (proves the assertion binds the decoded value, not a constant).
+    let tx = sample_tx();
+    let resolver = NameResolver::new();
+    let meta = usdc_metadata();
+    let mk = |raw: u64| {
+        let call = Erc20Call::Transfer { to: [0x33; 20], amount: u256_from_u64(raw) };
+        let p = render_erc20_known_pages(&tx, &call, &meta, &resolver);
+        format!("{}|{}", row_str(&p.buf[2][1]), row_str(&p.buf[2][2]))
+    };
+    let a100 = mk(100_000_000); // 100 USDC
+    let a250 = mk(250_000_000); // 250 USDC
+    assert!(a100.contains("100") && !a100.contains("250"));
+    assert!(a250.contains("250") && !a250.contains("100"));
+    assert_ne!(a100, a250);
+}
+
 #[test]
 fn positive_erc20_known_approve_unlimited_renders_word() {
     let mut tx = sample_tx();
