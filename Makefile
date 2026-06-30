@@ -288,7 +288,7 @@ build-hw: ## Build the real-hardware STM32U585 image
 # The option byte setup (TZEN, SECWM, SECBOOTADD0) only needs to be done
 # once after a chip erase. Subsequent flashes can skip step 2 if OBs are
 # already configured.
-flash-hw: build-hw
+flash-hw: build-hw ## Flash + run on real STM32U585 (probe-rs/OpenOCD)
 	probe-rs download --chip STM32U585AIIx $(NONSECURE_ELF)
 	probe-rs download --chip STM32U585AIIx $(SECURE_ELF)
 	@echo "==> Configuring TrustZone option bytes..."
@@ -483,7 +483,7 @@ test-key-speed: ## DWT-timed signing bench on HW
 # Requires: ST-LINK connected, STM32_Programmer_CLI on PATH.
 # Pass: exits 0 with "[NS][fwup-test] === PASS ===" on stdout.
 # Fail: exits 1 if any test case fails or the PASS marker is missing.
-test-update-hw:
+test-update-hw: ## Firmware-update (CMD_FW_*) E2E on HW (non-destructive)
 	@echo "==> Building secure (e2e-test auto-unlock) + NS (fwup-hw-test) + SHA-256 HW accel"
 	@FSBL_VENDOR_PUBKEY=$(DEV_VENDOR_PUBKEY) $(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 		cargo build --locked --release --target $(TARGET) --target-dir target/secure \
@@ -966,7 +966,7 @@ se050-reset:
 #
 # Prompts for confirmation. Requires ST-LINK connected and
 # STM32_Programmer_CLI on PATH.
-factory-reset:
+factory-reset: ## Full device factory reset — wipe all persistent state (HW)
 	@echo "==> FACTORY RESET"
 	@echo "    Wipes: SE050 data objects + all STM32 flash (pages 123-127 + firmware)"
 	@echo "    You MUST re-flash firmware afterwards — the chip will be blank."
@@ -1658,7 +1658,7 @@ flash-hw-se050-oled: build-hw-se050-oled
 	@python3 tools/wallet_run_hw.py
 
 # Flash USB-enabled build to real STM32U585.
-flash-hw-usb: build-hw-usb
+flash-hw-usb: build-hw-usb ## Flash the USB-HID build to STM32U585
 	probe-rs download --chip STM32U585AIIx $(NONSECURE_ELF)
 	probe-rs download --chip STM32U585AIIx $(SECURE_ELF)
 	@echo "==> Configuring TrustZone option bytes..."
@@ -1891,7 +1891,7 @@ measure: build-hw-dual-se-oled-standalone ## Build + print the 8 BIP-39 measurem
 # Budget: 32 KB at 0x0C00_0000 (pages 0–3 of bank 1). Current footprint
 # is ~18 KB with software SHA-256.
 .PHONY: fsbl
-fsbl:
+fsbl: ## Build the immutable first-stage bootloader (~18 KB)
 	@echo "==> Building FSBL (FSBL_VENDOR_PUBKEY=$${FSBL_VENDOR_PUBKEY:-<dev fixture>})"
 	@# FSBL_ALLOW_DEV_KEY opts this dev target into fsbl/build.rs's committed
 	@# dev vendor key when FSBL_VENDOR_PUBKEY is unset (finding F2). A bare
@@ -1927,7 +1927,7 @@ fsbl-lcd-test-hw:
 # Production-only: refuse to build the FSBL without FSBL_VENDOR_PUBKEY.
 # Use this in the release pipeline.
 .PHONY: fsbl-release
-fsbl-release:
+fsbl-release: ## Build the release FSBL (release pipeline)
 	@if [ -z "$${FSBL_VENDOR_PUBKEY}" ]; then \
 		echo "ERROR: fsbl-release requires FSBL_VENDOR_PUBKEY=path/to/pubkey.bin"; \
 		echo "       Use 'make fsbl' for dev builds with the built-in fixture."; \
@@ -2054,7 +2054,7 @@ PROD_REQUIRED = mode-production optiga-lock-operational optiga-hw-counter \
 PROD_SHIP_FEATURES = stm32u585,se050,optiga-trust-m,dual-se,ui-lcd,usb,saes-dhuk,se050-derived-scp03,mode-production,optiga-lock-operational,optiga-hw-counter,consumption-mask,tamp,tamp-wipe,tzic-wipe
 
 .PHONY: prod-check
-prod-check:
+prod-check: ## Production-readiness gate (no debug/e2e/mock-se; ship-blockers)
 	@echo "==> prod-check (MED-2 / HIGH-1): resolving shipping feature set"
 	@echo "    RELEASE_FEATURES = $(RELEASE_FEATURES)"
 	@feats=$$(cargo tree -p sphincs-tz-secure --no-default-features \
@@ -2087,11 +2087,11 @@ prod-check:
 # Shipping-config gate: validate the canonical PROD_SHIP_FEATURES. This is what
 # CI runs (so the gate exercises the REAL hardened image, not the dev default).
 .PHONY: prod-check-ship
-prod-check-ship:
+prod-check-ship: ## Strict ship gate — prod-check against the hardened image
 	@$(MAKE) prod-check RELEASE_FEATURES="$(PROD_SHIP_FEATURES)"
 
 .PHONY: release
-release: prod-check
+release: prod-check ## Build the signed release package (runs prod-check first)
 	@echo "==> Release build (features: $(RELEASE_FEATURES))"
 	@echo "==> SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH)"
 	@$(MAKE) verify-repro FEATURES=$(RELEASE_FEATURES)
@@ -2893,7 +2893,7 @@ saes-self-test-hw-rdp0-regress:
 		SECWM2_PSTRT=0x7F SECWM2_PEND=0x0 SECBOOTADD0=0x180000
 	@echo "==> Regression complete — board is back at RDP0."
 
-pin-gate-e2e:
+pin-gate-e2e: ## PIN-gate three-way sync E2E (QEMU)
 	@echo "==> Building PIN-gate roundtrip e2e firmware..."
 	@echo "    WARNING: this build will WIPE wallet state on BOTH chips."
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
@@ -3030,7 +3030,7 @@ FUZZ_ISOLATE ?= $(CURDIR)/tools/sca/run-isolated.sh
 # are Kani-proven panic-free on bounded input, so a crash = a real unbounded-path
 # bug OR a harness artifact — decide which before "fixing"). Last full run
 # (2026-06-17): all 11 targets non-vacuous (cov 23-133), 0 crashes.
-fuzz-all:
+fuzz-all: ## Run every cargo-fuzz target for FUZZ_TIME
 	@cd fuzz && cargo +nightly fuzz build
 	@cd fuzz && for t in $$(cargo +nightly fuzz list); do \
 	  echo "==> fuzz $$t ($(or $(FUZZ_TIME),30)s)"; \
@@ -3042,7 +3042,7 @@ fuzz-all:
 	c=$$(find artifacts -type f \( -name 'crash-*' -o -name 'oom-*' \) 2>/dev/null | wc -l); \
 	echo "==> fuzz-all done; crash artifacts: $$c (triage any under fuzz/artifacts/)"
 
-fuzz-list:
+fuzz-list: ## List the cargo-fuzz targets
 	@echo "Available fuzz targets (see fuzz/README.md):"
 	@cd fuzz && cargo +nightly fuzz list 2>/dev/null || \
 		(echo "  cargo-fuzz not installed. Install with:"; \
@@ -3408,7 +3408,7 @@ splash-test-hw:
 	@echo "==> Running — watch the LCD cycle the 3 splash revisions. Ctrl-C to detach."
 	@probe-rs run --chip STM32U585AIIx $(SECURE_ELF)
 
-clean:
+clean: ## Remove build artifacts
 	rm -rf target/secure target/nonsecure target/veneers.o
 
 
@@ -3649,7 +3649,7 @@ fwup-transport-hw-iwdg: dev-pubkey-fixture fwup-transport-fixture
 # Deps gated by cargo-deny [bans]; source gated by .semgrep/pqsigner-invariants.yml.
 .PHONY: invariant-gates
 SEMGREP ?= $(shell command -v semgrep 2>/dev/null || echo $(HOME)/.venvs/semgrep/bin/semgrep)
-invariant-gates:
+invariant-gates: ## Local invariant gates (cargo-deny + semgrep + transcription)
 	@echo "==> [1/3] supply-chain (deps): cargo deny check advisories bans sources"
 	@echo "    bans=invariant #5 (no classical signer); advisories=real CVEs"
 	@echo "    (unmaintained is workspace-scoped); sources=registry/remote guard."
@@ -3733,7 +3733,7 @@ kani: ## Bounded model-checking on firmware decoders/counters
 	cargo kani -p pqsigner-aa
 	@echo "==> kani: PASS"
 
-miri:
+miri: ## Miri UB check on host crates
 	@rustup component list --toolchain nightly --installed 2>/dev/null | grep -q '^miri' || rustup component add miri --toolchain nightly
 	@echo "==> Miri: FI volatile helpers"
 	MIRIFLAGS="-Zmiri-disable-isolation" cargo +nightly miri test -p pqsigner-fi
@@ -3760,7 +3760,7 @@ miri:
 # pqsigner-tx-core 210/239 caught (88%); the real gap is U256::format_decimal
 # boundary conditions (the amount-display / WYSIWYS path) — hardening tracked.
 .PHONY: mutants
-mutants:
+mutants: ## cargo-mutants on the firmware logic crates
 	@command -v cargo-mutants >/dev/null 2>&1 || { echo "ERROR: cargo-mutants not found. Install: cargo install --locked cargo-mutants"; exit 1; }
 	cargo mutants $(or $(MUTANTS_ARGS),--package pqsigner-tx-core --package pqsigner-domain) -j4
 
@@ -3822,7 +3822,7 @@ ui-golden:
 #   make ui-golden-render               # check vs tests/ui_golden_render_fixtures.json
 #   make ui-golden-render-bless         # re-baseline after an intentional UI change
 .PHONY: ui-golden-render ui-golden-render-bless
-ui-golden-render:
+ui-golden-render: ## Render UI golden frames + compare to baseline
 	@echo "==> Building secure (ui-golden-render harness) + NS loader payload"
 	@$(RUSTFLAGS_VAR)="-C linker=arm-none-eabi-ld -C link-arg=-Tlink.x $(REPRO_FLAGS)" \
 		cargo build --locked --release --target $(TARGET) --target-dir target/secure \
@@ -3852,7 +3852,7 @@ ui-golden-render-bless:
 # seed secrecy under partial compromise (Claims 1/2) + the PIN-gate authentication
 # + the anti-vacuity positive control. See contracts/verification/proverif/README.md.
 .PHONY: proverif
-proverif:
+proverif: ## ProVerif symbolic protocol-model verification
 	@command -v proverif >/dev/null 2>&1 || { echo "ERROR: proverif not found. Install: opam install --assume-depexts proverif (CLI build needs no GTK)"; exit 1; }
 	@echo "==> ProVerif: dual-SE seed-unlock (secrecy + PIN-gate auth)"
 	proverif contracts/verification/proverif/dual_se_unlock.pv
@@ -3870,7 +3870,7 @@ proverif:
 # all-three reset is the documented residual. Companion to the ProVerif secrecy
 # model. See contracts/verification/tamarin/README.md.
 .PHONY: tamarin
-tamarin:
+tamarin: ## Tamarin symbolic protocol-model verification
 	@command -v tamarin-prover >/dev/null 2>&1 || { echo "ERROR: tamarin-prover not found. Install the prebuilt linux64 binary + the maude backend (both need no sudo/GHC; see contracts/verification/tamarin/README.md)"; exit 1; }
 	@echo "==> Tamarin: three-way PIN-attempt lockstep reconcile"
 	tamarin-prover --prove contracts/verification/tamarin/pin_lockstep.spthy
@@ -3885,7 +3885,7 @@ tamarin:
 # CRQC cannot recover the seed from a single half. Runs via `cryptoverif` on
 # PATH or `nix-shell -p cryptoverif`.
 .PHONY: cryptoverif
-cryptoverif:
+cryptoverif: ## CryptoVerif computational protocol proof
 	@echo "==> CryptoVerif: dual-SE XOR seed-split secrecy (computational; OTP advantage 0 ⇒ quantum-sound)"
 	@if command -v cryptoverif >/dev/null 2>&1; then \
 	  p=$$(dirname $$(dirname $$(readlink -f $$(command -v cryptoverif)))); \
@@ -3907,10 +3907,10 @@ cryptoverif:
 # ---------------------------------------------------------------------------
 .PHONY: halmos kontrol checkct muscat
 
-halmos:
+halmos: ## Halmos symbolic exec (smart-wallet harnesses)
 	$(MAKE) -C contracts/verification verify-halmos
 
-kontrol:
+kontrol: ## Kontrol/KEVM proofs on the deployed bytecode
 	$(MAKE) -C contracts/verification verify-kontrol
 
 # binsec is OCaml + a local opam switch; ~/checkct_env.sh sets the nix PATH,
@@ -3932,7 +3932,7 @@ checkct: ## Constant-time check (cargo-checkct)
 # a standalone CI smoke that needs no rainbow run. Override the repo with
 # MUSCAT_DIR=...; first run builds the example (~10s).
 MUSCAT_DIR ?= $(HOME)/repos/muscat
-muscat:
+muscat: ## MUSCAT side-channel (SCA) analysis
 	@test -f $(MUSCAT_DIR)/examples/pqsigner_tvla_cpa.rs || { echo "ERROR: muscat harness missing at $(MUSCAT_DIR) — git clone https://github.com/Ledger-Donjon/muscat ~/repos/muscat && cp tools/sca/muscat/pqsigner_tvla_cpa.rs $(MUSCAT_DIR)/examples/ (+ the [[example]] stanza)"; exit 1; }
 ifeq ($(TRACES_DIR),)
 	@echo "==> Muscat: no TRACES_DIR — synthetic self-test (ground-truth leaky S-box)"
