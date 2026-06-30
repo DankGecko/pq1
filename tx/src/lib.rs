@@ -35,3 +35,4 @@ pub mod erc20;
 pub mod multisend;
 pub mod names;
 pub mod selectors;
+pub mod typed_call;
