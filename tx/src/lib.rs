@@ -7,9 +7,12 @@
 //! - [`erc20`] — ERC-20 metadata Merkle DB + strict `transfer` /
 //!   `transferFrom` / `approve` calldata decoder + dispatch.
 //! - [`multisend`] — strict Safe `MultiSendCallOnly` outer-framing
-//!   decoder + inner packed-record walk (Kani canonical-acceptance on the
-//!   outer frame; inner-walk exact-tiling/partition + field-fidelity
-//!   soundness — every displayed field verbatim from symbolic payloads).
+//!   decoder + inner packed-record walk + per-record display
+//!   classification / page-budget accounting (Kani: outer canonical-
+//!   acceptance; inner-walk exact-tiling/partition + field-fidelity;
+//!   page-budget per-record page bound + the no-hidden-value WYSIWYS
+//!   soundness + CoW-first precedence — `records_pages_total`'s own
+//!   panic-freedom is compositional from these parts).
 //! - [`names`] — address-name DB + stack-resident [`names::NameResolver`].
 //! - [`safe_mgmt`] — strict selector + fixed-arg decoder for Safe
 //!   owner/module/guard/fallback management ops

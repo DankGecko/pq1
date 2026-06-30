@@ -55,22 +55,13 @@ use sphincs_tz_shared::{
 
 use super::{multi_send, VerifiedSafeExec, VerifiedSafeV1};
 
-/// Does this Safe inner call claim to be a CoW `setPreSignature`?
-///
-/// Mirrors the direct-path downgrade-gate predicate in
-/// `cmd_sign_userop` (`cow_selector && cow_target`): target must be
-/// the GPv2Settlement singleton (same CREATE2 address on every chain
-/// CoW supports) and the selector must match. Deliberately does NOT
-/// check the full 164-byte shape — the gate must also fire for a
-/// malformed or `signed == false` calldata so those refuse loudly
-/// instead of falling through to a blind-sign page the user might
-/// habituate to confirming.
-#[must_use]
-pub fn safe_inner_is_cow_presign(inner_to: &[u8; 20], raw_data: &[u8]) -> bool {
-    *inner_to == GPV2_SETTLEMENT_ADDRESS
-        && raw_data.len() >= 4
-        && raw_data[..4] == SET_PRE_SIGNATURE_SELECTOR
-}
+// `safe_inner_is_cow_presign` (the pure CoW-presign predicate: target ==
+// GPv2Settlement singleton + `setPreSignature` selector, no full-shape
+// check) was extracted, verbatim, into `pqsigner_tx::multisend` so the
+// page-budget classification that consumes it is host-compilable and
+// Kani-bounded. Re-exported here so `resolve_safe_arm`, `safe_display`,
+// the `safe` mod re-export, and the tests keep using it unchanged.
+pub use pqsigner_tx::multisend::safe_inner_is_cow_presign;
 
 /// Resolved CoW-binding target: which calldata the v3 trailer must
 /// shape-check + digest-bind against, and whose address the orderUid's

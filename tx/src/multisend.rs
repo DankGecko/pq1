@@ -10,10 +10,14 @@
 //! these three items unchanged, so every existing caller, the record
 //! iterator, the classifier, and the full test suite keep working.
 //!
-//! Dependency closure is intentionally tiny: only
-//! [`sphincs_tz_shared::MULTI_SEND_SELECTOR`] (a `pqsigner-proto`
-//! constant, re-exported). No hashing, no `cow_binding`, no record
-//! classification — those stay in `secure/`.
+//! Dependency closure stays pure: `pqsigner-proto` constants plus the
+//! already-extracted `crate::{erc20, safe_mgmt}` decoders. The per-record
+//! display classification + page-budget accounting (layer 3 —
+//! `MsRecordKind` / `classify_record_kind` / `record_content_pages` /
+//! `record_needs_value_page` / `records_pages_total`) and the pure
+//! `safe_inner_is_cow_presign` predicate live here too; only the
+//! verified-context glue (`resolve_cow_binding`, `VerifiedSafe*`) and the
+//! summary/verdict layer stay in `secure/`. No hashing, no zk.
 //!
 //! ## The proven property (canonical-acceptance / soundness)
 //!
@@ -32,7 +36,10 @@
 //! `to`, `value`, `data`) is the verbatim payload bytes. See the
 //! `#[cfg(kani)] mod verification` harnesses at the bottom of this file.
 
-use sphincs_tz_shared::MULTI_SEND_SELECTOR;
+use sphincs_tz_shared::{GPV2_SETTLEMENT_ADDRESS, MULTI_SEND_SELECTOR, SET_PRE_SIGNATURE_SELECTOR};
+
+use crate::erc20::calldata::{parse_erc20_calldata, Erc20Call};
+use crate::safe_mgmt::{classify_safe_mgmt, page_count as mgmt_page_count, SafeMgmtOp};
 
 /// Decode / classification failures. Every variant is a hard refusal —
 /// there is no degraded render for a DELEGATECALL payload.
@@ -239,6 +246,152 @@ impl<'a> Iterator for MsRecordIter<'a> {
             data,
         }))
     }
+}
+
+// ---------------------------------------------------------------------------
+// Per-record display classification + page accounting (layer 3)
+// ---------------------------------------------------------------------------
+//
+// Extracted here, verbatim and behaviour-identical, so the page-budget
+// gate the renderer relies on is host-compilable and Kani-bounded. Its
+// whole dependency closure is pure / already in this crate:
+// `safe_inner_is_cow_presign` (the pure CoW-presign predicate, below),
+// `classify_safe_mgmt` + `page_count` (`crate::safe_mgmt`),
+// `parse_erc20_calldata` + `Erc20Call` (`crate::erc20::calldata`), and the
+// outer/inner decode above. The verified-context glue
+// (`resolve_cow_binding`, `VerifiedSafe*`, the summary/verdict layer) stays
+// in `secure/`. The firmware re-exports these from
+// `secure/src/tx/eip712/safe/{cow_binding,multi_send}.rs` unchanged, so the
+// renderer (`safe_display`) and the test suite keep working.
+
+/// Does this Safe inner call claim to be a CoW `setPreSignature`?
+///
+/// Mirrors the direct-path downgrade-gate predicate in `cmd_sign_userop`
+/// (`cow_selector && cow_target`): target must be the GPv2Settlement
+/// singleton (same CREATE2 address on every chain CoW supports) and the
+/// selector must match. Deliberately does NOT check the full 164-byte
+/// shape — the gate must also fire for a malformed or `signed == false`
+/// calldata so those refuse loudly instead of falling through to a
+/// blind-sign page the user might habituate to confirming.
+#[must_use]
+pub fn safe_inner_is_cow_presign(inner_to: &[u8; 20], raw_data: &[u8]) -> bool {
+    *inner_to == GPV2_SETTLEMENT_ADDRESS
+        && raw_data.len() >= 4
+        && raw_data[..4] == SET_PRE_SIGNATURE_SELECTOR
+}
+
+/// Display classification of one record — the per-record analogue of
+/// the Safe renderer's `InnerKind` ladder, factored here (host-
+/// testable) so the page-budget gate and the renderer derive page
+/// counts from the SAME classification and physically cannot disagree.
+#[derive(Copy, Clone, Debug)]
+pub enum MsRecordKind {
+    /// Empty calldata, zero value.
+    EmptyCall,
+    /// Empty calldata, non-zero value — plain ETH transfer.
+    PlainEth,
+    /// Strict ERC-20 transfer / transferFrom / approve shape. Renders
+    /// "known" (symbol + decimals) only if verified metadata address-
+    /// matches; page count is identical either way.
+    Erc20(Erc20Call),
+    /// Record targets the Safe itself with a recognised singleton op.
+    SafeMgmt(SafeMgmtOp),
+    /// Record targets the Safe itself with an unrecognised selector.
+    UnknownSafeSelf,
+    /// Claims `setPreSignature` on GPv2Settlement. Renders as the full
+    /// CoW order (banner + shared body) for the unique bound record;
+    /// the gates guarantee a verified zk_v3 exists by render time.
+    CowPresignClaim,
+    /// Anything else — loud per-record blind-sign (selector + length +
+    /// data hash), same trust level as today's single blind inner.
+    Blind,
+}
+
+/// Classify one record for display. Mirrors the single-call ladder in
+/// `display::safe_display`: CoW claim first (disjoint target), then
+/// Safe self-calls, then empty/ERC-20/blind.
+#[must_use]
+pub fn classify_record_kind(
+    to: &[u8; 20],
+    value_is_zero: bool,
+    data: &[u8],
+    safe_address: &[u8; 20],
+) -> MsRecordKind {
+    if safe_inner_is_cow_presign(to, data) {
+        return MsRecordKind::CowPresignClaim;
+    }
+    if to == safe_address && !data.is_empty() {
+        return match classify_safe_mgmt(data) {
+            Some(op) => MsRecordKind::SafeMgmt(op),
+            None => MsRecordKind::UnknownSafeSelf,
+        };
+    }
+    if data.is_empty() {
+        return if value_is_zero {
+            MsRecordKind::EmptyCall
+        } else {
+            MsRecordKind::PlainEth
+        };
+    }
+    match parse_erc20_calldata(data) {
+        Some(call) => MsRecordKind::Erc20(call),
+        None => MsRecordKind::Blind,
+    }
+}
+
+/// Content pages for one classified record (excluding its divider page
+/// and any spliced value page). `cow_body_pages` = 1 banner + the
+/// shared order body (6 proof-mode / 8 AddrOnly).
+#[must_use]
+pub fn record_content_pages(kind: &MsRecordKind, cow_body_pages: usize) -> usize {
+    match kind {
+        MsRecordKind::EmptyCall => 1,
+        MsRecordKind::PlainEth => 2,
+        // header + recipient + amount + contract; +1 for the transferFrom
+        // `From (debited)` page (lockstep with
+        // `safe_display::{append_erc20_tail_pages, inner_kind_page_count}`).
+        MsRecordKind::Erc20(call) => 4 + usize::from(matches!(call, Erc20Call::TransferFrom { .. })),
+        MsRecordKind::SafeMgmt(op) => mgmt_page_count(op),
+        MsRecordKind::UnknownSafeSelf | MsRecordKind::Blind => 3,
+        MsRecordKind::CowPresignClaim => cow_body_pages,
+    }
+}
+
+/// Does this record need a dedicated "record sends ETH" page? PlainEth
+/// shows its value inline; EmptyCall is zero-value by definition; every
+/// other kind would otherwise sign a hidden per-record `value`.
+#[must_use]
+pub fn record_needs_value_page(kind: &MsRecordKind, value_is_zero: bool) -> bool {
+    !value_is_zero && !matches!(kind, MsRecordKind::PlainEth | MsRecordKind::EmptyCall)
+}
+
+/// Total inner pages a decoded multiSend payload renders: per record,
+/// 1 divider page + optional value page + content pages. `None` when
+/// the payload doesn't decode (callers gate on `multisend_verdict`
+/// first, so `None` here is defensive).
+///
+/// This is exact, not an upper bound: the renderer classifies through
+/// the same [`classify_record_kind`] and counts through the same
+/// [`record_content_pages`], so gate and render agree by construction.
+#[must_use]
+pub fn records_pages_total(
+    data: &[u8],
+    safe_address: &[u8; 20],
+    cow_body_pages: usize,
+) -> Option<usize> {
+    let packed = decode_multisend(data).ok()?;
+    let mut total = 0usize;
+    for rec in MsRecordIter::new(packed) {
+        let rec = rec.ok()?;
+        let value_is_zero = rec.value_is_zero();
+        let kind = classify_record_kind(&rec.to, value_is_zero, rec.data, safe_address);
+        total += 1; // divider
+        if record_needs_value_page(&kind, value_is_zero) {
+            total += 1;
+        }
+        total += record_content_pages(&kind, cow_body_pages);
+    }
+    Some(total)
 }
 
 // ---------------------------------------------------------------------------
@@ -557,5 +710,136 @@ mod verification {
             iter.next(),
             Some(Err(MsError::TruncatedRecord))
         ));
+    }
+
+    // -----------------------------------------------------------------------
+    // Per-record display classification + page accounting (layer 3) — the
+    // page-budget gate `safe_display` relies on to refuse (never truncate) a
+    // batch whose render would exceed MAX_PAGES. Kani proves the GATE's
+    // accounting at the per-record granularity: a per-record page BOUND, the
+    // no-hidden-value WYSIWYS soundness, and the CoW-first classification
+    // precedence. Two scope notes:
+    //
+    //  * Gate == renderer equality is NOT Kani-proven — it rests on
+    //    by-construction (gate and renderer call these same extracted fns) +
+    //    the `safe_display`/`multi_send` host tests (`pages_total_*`); the
+    //    renderer is `#[cfg(not(test))]`, out of Kani's reach.
+    //  * `records_pages_total` is NOT given its own end-to-end harness (CBMC
+    //    unwinds its whole decode+classify call graph, which doesn't converge
+    //    affordably). Its panic/overflow/OOB-freedom is established
+    //    COMPOSITIONALLY from its already-proven parts: `decode_multisend` over
+    //    symbolic framing (`decode_multisend_canonical_acceptance`, slice 1),
+    //    the inner walk (slice 9), `classify_record_kind` panic-freedom over
+    //    symbolic records (`per_record_page_bound` / `no_hidden_value` below,
+    //    `[u8; 100]` data covering every branch), and the per-record page bound
+    //    (`per_record_page_bound`). The multi-record `total += ..` accumulation
+    //    cannot `usize`-overflow: `records_pages_total` runs at one call site
+    //    (`safe_display.rs:424`) BEFORE the `≤ MULTISEND_MAX_RECORDS` verdict
+    //    gate, so the bound is payload-length-derived, NOT the verdict count —
+    //    each record is ≥ 85 B, so a bounded multiSend payload holds only tens
+    //    of records, each contributing ≤ `cow_body.max(5) + 2`; the
+    //    `safe_display` caller then refuses any total `> MAX_PAGES`. The
+    //    concrete end-to-end counts stay covered by the `pages_total_*` host
+    //    tests.
+    // -----------------------------------------------------------------------
+
+    /// P1 — a single record never contributes more than `cow_body_pages.max(5)
+    /// + 2` pages (1 divider + ≤ 1 value page + ≤ `max(5, cow_body)` content;
+    /// the SafeMgmt arm's `page_count ≤ 3 ≤ 5` is discharged inside). This
+    /// bounds ONE record; the multi-record sum's overflow-freedom rests on the
+    /// bounded multiSend payload (each record ≥ 85 B → only tens of records),
+    /// NOT on this per-record proof — see the module note above. A crafted
+    /// record still can't inflate its own page count past the bound.
+    #[kani::proof]
+    #[kani::unwind(101)]
+    fn per_record_page_bound() {
+        const M: usize = 100;
+        let to: [u8; 20] = kani::any();
+        let safe_address: [u8; 20] = kani::any();
+        let data: [u8; M] = kani::any();
+        let dlen: usize = kani::any();
+        kani::assume(dlen <= M);
+        let value_is_zero: bool = kani::any();
+        let cow_body_pages: usize = kani::any();
+        kani::assume(cow_body_pages <= 9);
+
+        let kind = classify_record_kind(&to, value_is_zero, &data[..dlen], &safe_address);
+        let content = record_content_pages(&kind, cow_body_pages);
+        assert!(content <= cow_body_pages.max(5));
+        let per_record =
+            1 + usize::from(record_needs_value_page(&kind, value_is_zero)) + content;
+        assert!(per_record <= cow_body_pages.max(5) + 2);
+    }
+
+    /// P2 (load-bearing) — no hidden per-record value (WYSIWYS). A record
+    /// carrying non-zero native `value` either gets a dedicated "sends ETH"
+    /// page or classifies as `PlainEth` (which renders the value inline on its
+    /// content pages); the value is NEVER silently dropped. `value_is_zero` is
+    /// DERIVED from a symbolic 32-byte value exactly as `records_pages_total`
+    /// derives it from `rec.value_is_zero()`, so the impossible
+    /// `(EmptyCall, value≠0)` state — which `classify` never emits — cannot be
+    /// spuriously constructed.
+    #[kani::proof]
+    #[kani::unwind(101)]
+    fn no_hidden_value() {
+        const M: usize = 100;
+        let to: [u8; 20] = kani::any();
+        let safe_address: [u8; 20] = kani::any();
+        let data: [u8; M] = kani::any();
+        let dlen: usize = kani::any();
+        kani::assume(dlen <= M);
+        let value: [u8; 32] = kani::any();
+        let value_is_zero = value.iter().all(|&b| b == 0);
+
+        let kind = classify_record_kind(&to, value_is_zero, &data[..dlen], &safe_address);
+        if !value_is_zero {
+            assert!(
+                record_needs_value_page(&kind, value_is_zero)
+                    || matches!(kind, MsRecordKind::PlainEth)
+            );
+        }
+    }
+
+    /// P3 — classification precedence: a record that is a CoW `setPreSignature`
+    /// claim classifies as `CowPresignClaim` even in the conflicting case where
+    /// it ALSO targets the Safe itself (`to == safe_address`). The CoW arm is
+    /// checked first, so such a record renders as the full CoW order, never as
+    /// a Safe-mgmt / unknown-self blob.
+    #[kani::proof]
+    #[kani::unwind(101)]
+    fn cow_presign_precedence() {
+        const M: usize = 100;
+        let data: [u8; M] = kani::any();
+        let dlen: usize = kani::any();
+        kani::assume(dlen <= M);
+        let to: [u8; 20] = kani::any();
+        let value_is_zero: bool = kani::any();
+        kani::assume(safe_inner_is_cow_presign(&to, &data[..dlen]));
+        // The conflict: the record both is a CoW presign claim AND targets the
+        // Safe itself.
+        let safe_address = to;
+        assert!(matches!(
+            classify_record_kind(&to, value_is_zero, &data[..dlen], &safe_address),
+            MsRecordKind::CowPresignClaim
+        ));
+    }
+
+    /// Non-vacuity (positive control): the classification arms the soundness
+    /// harnesses constrain are reachable — a CoW presign record classifies as
+    /// `CowPresignClaim` (content = `cow_body_pages`), and a non-zero-value
+    /// opaque record is `Blind` and requires a value page.
+    #[kani::proof]
+    #[kani::unwind(40)]
+    fn classify_concrete_controls() {
+        let mut presign = [0u8; 4];
+        presign.copy_from_slice(&SET_PRE_SIGNATURE_SELECTOR);
+        let cow_kind = classify_record_kind(&GPV2_SETTLEMENT_ADDRESS, true, &presign, &[0x5a; 20]);
+        assert!(matches!(cow_kind, MsRecordKind::CowPresignClaim));
+        assert_eq!(record_content_pages(&cow_kind, 9), 9);
+
+        let blind = [0xde, 0xad, 0xbe, 0xef];
+        let blind_kind = classify_record_kind(&[0x11; 20], false, &blind, &[0x5a; 20]);
+        assert!(matches!(blind_kind, MsRecordKind::Blind));
+        assert!(record_needs_value_page(&blind_kind, false));
     }
 }
