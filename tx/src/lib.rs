@@ -9,6 +9,12 @@
 //! - [`multisend`] — strict Safe `MultiSendCallOnly` outer-framing
 //!   decoder (Kani canonical-acceptance / soundness verified).
 //! - [`names`] — address-name DB + stack-resident [`names::NameResolver`].
+//! - [`safe_mgmt`] — strict selector + fixed-arg decoder for Safe
+//!   owner/module/guard/fallback management ops
+//!   ([`safe_mgmt::classify_safe_mgmt`], Kani decode-soundness: accept ⟹
+//!   length-exact + selector-match + canonical address words + faithful
+//!   threshold, reconstructed from the original bytes; plus
+//!   selector-gating reject).
 //! - [`safe_tx`] — pure byte-layout decoders for the Safe SafeTx
 //!   clear-sign path: the 281-byte canonical typed-data
 //!   ([`safe_tx::decode_canonical`], Kani exhaustive biconditional) and
@@ -40,6 +46,7 @@ pub mod cowswap_order;
 pub mod erc20;
 pub mod multisend;
 pub mod names;
+pub mod safe_mgmt;
 pub mod safe_tx;
 pub mod selectors;
 pub mod typed_call;

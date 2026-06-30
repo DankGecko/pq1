@@ -3701,6 +3701,7 @@ kani:
 	@echo "         + CoW GPv2Order canonical decode (decode-soundness: accept<=>enum-in-range, verbatim field offsets + accept/reject controls)"
 	@echo "         + typed-call ABI walker (no-read-past-end soundness + accept/reject controls)"
 	@echo "         + Safe SafeTx decode (canonical typed-data: accept<=>operation-in-range, verbatim offsets; execTransaction: no-read-past-end + fixed-field soundness + accept/reject controls)"
+	@echo "         + Safe management-op decoder (classify_safe_mgmt: accept => length-exact + selector-match + canonical address words + faithful threshold, reconstructed from original bytes; selector-gating reject + accept/reject controls)"
 	cargo kani -p pqsigner-tx
 	@echo "==> Kani: ERC-7730 IR header parser (offset-bounds safety)"
 	@echo "         + TLV param parser (panic/OOB-free over symbolic pool+offset; per-tag width/value soundness: enum_ref/decimals/token/visibility; reject unknown-tag + out-of-range visibility byte)"
