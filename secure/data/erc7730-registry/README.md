@@ -1,7 +1,14 @@
 # Vendored ERC-7730 registry (compilable subset)
 
-This tree is the **vendored compilable subset** of the upstream
-[`ethereum/clear-signing-erc7730-registry`](https://github.com/ethereum/clear-signing-erc7730-registry).
+**Upstream provenance:** vendored from
+[`ethereum/clear-signing-erc7730-registry`](https://github.com/ethereum/clear-signing-erc7730-registry)
+at commit **`784c87c925e8438e7b4736b2af85a501f8d2a265`** (2026-06-30). The
+firmware-pinned `ERC7730_DESCRIPTORS_ROOT` is a trust anchor derived from this
+exact upstream state — record the new SHA here whenever you re-vendor, so the
+root stays reproducible/auditable. (TODO: have `xtask vendor-registry` stamp
+this automatically via `git -C <registry-root> rev-parse HEAD`.)
+
+This tree is the **vendored compilable subset** of that registry.
 It is the SOURCE of the firmware-pinned `ERC7730_DESCRIPTORS_ROOT` once the
 corpus switch lands — committed in-repo so the root is reproducible and CI can
 rebuild-and-verify it without fetching an external repo.
