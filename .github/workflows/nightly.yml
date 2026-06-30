@@ -18,6 +18,11 @@ name: Nightly (heavy gates)
 #                   short-capture" the note below used to call for): renders the
 #                   curated screen corpus via the production renderers + diffs
 #                   [UI-FP] fingerprints, no keygen/sign (seconds, not minutes).
+#   * proof-mutation — proof-side cargo-mutants (anti-vacuity V4): delete each
+#                   load-bearing axiom / weaken a key lemma and assert the
+#                   rebuild reacts as AXIOM_STATUS.json claims. 8 full
+#                   `lake build`s — too slow for per-PR; the fast sibling
+#                   verify-ledger-consistency runs in lean-fv.yml.
 #
 # Still NOT here: the FULL `make ui-golden` (all 24 e2e scenarios over the QEMU
 # semihosting backend, 10+ min — the C10 signs over software SHA-256 dominate).
@@ -156,3 +161,30 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - name: make ui-golden-render
         run: make ui-golden-render
+
+  proof-mutation:
+    name: Proof-mutation (anti-vacuity V4 — dead axiom/lemma)
+    runs-on: ubuntu-latest
+    # Too slow for per-PR (default tier = 8 mutations, each a full
+    # `lake build SphincsCVerify`); the fast sibling verify-ledger-consistency
+    # runs per-PR in lean-fv.yml. See docs/fv-adversarial-review-playbook.md §B.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: install elan (toolchain pinned by lean-toolchain)
+        run: |
+          curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf \
+            | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: restore .lake build (warm baseline from the lean-fv gate; RESTORE-ONLY)
+        # restore-only: a mutation run leaves the last mutant's stale olean in
+        # .lake, so this job must NOT write back to the shared lean-fv cache key.
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: contracts/verification/lean/.lake/build
+          key: lean-fv-lake-${{ hashFiles('contracts/verification/lean/lean-toolchain', 'contracts/verification/lean/lakefile.toml') }}-${{ hashFiles('contracts/verification/lean/SphincsCVerify/**/*.lean') }}
+          restore-keys: |
+            lean-fv-lake-${{ hashFiles('contracts/verification/lean/lean-toolchain', 'contracts/verification/lean/lakefile.toml') }}-
+            lean-fv-lake-
+      - name: make verify-proof-mutation (default tier; reverts every mutation)
+        run: make -C contracts/verification verify-proof-mutation
