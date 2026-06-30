@@ -2581,9 +2581,15 @@ fn resolve_field_index(
 
 enum PathSeg<'a> {
     Name(&'a str),
+    // `ArrayIdx`/`ArraySlice` carry index payloads the tokenizer still parses,
+    // but the compiler now REFUSES these ops (single-index / slice would hide
+    // an array's other elements), so the payloads are never read — only the
+    // variant identity matters for the refusal.
+    #[allow(dead_code)]
     ArrayIdx(u32),
     ArrayLast,
     ArrayAll,
+    #[allow(dead_code)]
     ArraySlice(u32, u32),
 }
 

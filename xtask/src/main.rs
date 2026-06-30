@@ -23,6 +23,7 @@ fn main() -> ExitCode {
         "gen-erc7730-descriptors" => cmd_gen_erc7730_descriptors(&args[1..]),
         "scan-registry" => cmd_scan_registry(&args[1..]),
         "build-registry" => cmd_build_registry(&args[1..]),
+        "vendor-registry" => cmd_vendor_registry(&args[1..]),
         "" | "help" | "--help" | "-h" => {
             print_help();
             ExitCode::SUCCESS
@@ -1179,6 +1180,18 @@ fn cmd_build_registry(args: &[String]) -> ExitCode {
         let mut out = String::new();
         let _ = writeln!(out, "# tolerant registry build — {} leaves, {} skipped\n", result.leaf_count, skips.len());
         let _ = writeln!(out, "root: {}\n", hex_lower(&result.root));
+        // Sorted leaf keys (chain:contract:typehash) for cross-build diffing.
+        let mut keys: Vec<String> = result
+            .entries
+            .iter()
+            .map(|e| format!("{}:{}:{}", e.chain_id, hex_lower(&e.contract), hex_lower(&e.primary_type_hash)))
+            .collect();
+        keys.sort();
+        let _ = writeln!(out, "## leaf keys ({})", keys.len());
+        for k in &keys {
+            let _ = writeln!(out, "LEAF {k}");
+        }
+        let _ = writeln!(out, "\n## skips");
         for s in &skips {
             let rel = s.source.strip_prefix(&registry_root).unwrap_or(&s.source);
             let short: String = s.reason.chars().take(160).collect();
@@ -1191,6 +1204,157 @@ fn cmd_build_registry(args: &[String]) -> ExitCode {
         println!("wrote {}", rp.display());
     }
     ExitCode::SUCCESS
+}
+
+/// `vendor-registry --registry-root <dir> [--out <dir>] [--policy <path>]`
+///
+/// Vendors the COMPILABLE SUBSET of the upstream registry into the repo (default
+/// `secure/data/erc7730-registry/`) so the firmware-pinned root can be rebuilt
+/// from in-repo sources (reproducible builds / CI). Copies every descriptor that
+/// contributes ≥ 1 leaf (via `build_db_tolerant`) PLUS every include template
+/// (`ercs/*.json`, `common-*.json`), preserving the registry-relative tree so
+/// `includes` still resolve, then VERIFIES the vendored tree rebuilds the
+/// identical Merkle root (the faithfulness proof).
+fn cmd_vendor_registry(args: &[String]) -> ExitCode {
+    let mut registry_root: Option<PathBuf> = None;
+    let mut out: Option<PathBuf> = None;
+    let mut policy_path: Option<PathBuf> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--registry-root" => {
+                i += 1;
+                registry_root = args.get(i).map(PathBuf::from);
+            }
+            "--out" => {
+                i += 1;
+                out = args.get(i).map(PathBuf::from);
+            }
+            "--policy" => {
+                i += 1;
+                policy_path = args.get(i).map(PathBuf::from);
+            }
+            other => {
+                eprintln!("vendor-registry: unknown flag `{other}`");
+                return ExitCode::FAILURE;
+            }
+        }
+        i += 1;
+    }
+    let Some(registry_root) = registry_root else {
+        eprintln!("vendor-registry: --registry-root <dir> is required");
+        return ExitCode::FAILURE;
+    };
+    let workspace_root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap_or_default())
+        .parent()
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    let out = out.unwrap_or_else(|| workspace_root.join("secure/data/erc7730-registry"));
+    let policy_path =
+        policy_path.unwrap_or_else(|| workspace_root.join("secure/data/erc7730/policy.toml"));
+    let input = registry_root.join("registry");
+
+    // 1. Tolerant build over the registry → the survivor descriptor sources.
+    let (result, _skips) =
+        match dbgen::erc7730::build_db_tolerant(&input, &policy_path, Some(&registry_root)) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("vendor-registry: registry build: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+    let orig_root = result.root;
+    let descriptor_count = result
+        .entries
+        .iter()
+        .map(|e| &e.source)
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+
+    // 2. Vendor every `*.json` in each survivor descriptor's PROJECT DIR (so its
+    //    sibling include templates — `common-*.json`, `<proj>-common-*.json`,
+    //    etc., whatever they're named — come along) plus all `ercs/*.json`.
+    //    Include resolution is sibling- or `../../ercs/`-relative, so this is
+    //    the complete closure; the faithfulness check below proves it.
+    let mut dirs: std::collections::BTreeSet<PathBuf> = result
+        .entries
+        .iter()
+        .filter_map(|e| e.source.parent().map(PathBuf::from))
+        .collect();
+    dirs.insert(registry_root.join("ercs"));
+    let mut files: std::collections::BTreeSet<PathBuf> = std::collections::BTreeSet::new();
+    for dir in &dirs {
+        collect_dir_jsons(dir, &mut files);
+    }
+    let support_count = files.len().saturating_sub(descriptor_count);
+
+    // 3. Clean the tool-managed subdirs, then copy preserving registry-relative paths.
+    for sub in ["registry", "ercs"] {
+        let _ = fs::remove_dir_all(out.join(sub));
+    }
+    let mut copied = 0usize;
+    for src in &files {
+        let Ok(rel) = src.strip_prefix(&registry_root) else {
+            continue;
+        };
+        let dst = out.join(rel);
+        if let Some(parent) = dst.parent() {
+            if let Err(e) = fs::create_dir_all(parent) {
+                eprintln!("vendor-registry: mkdir {}: {e}", parent.display());
+                return ExitCode::FAILURE;
+            }
+        }
+        if let Err(e) = fs::copy(src, &dst) {
+            eprintln!("vendor-registry: copy {}: {e}", src.display());
+            return ExitCode::FAILURE;
+        }
+        copied += 1;
+    }
+
+    // 4. Reproducibility proof: the vendored tree must rebuild the IDENTICAL root.
+    let (vresult, _) =
+        match dbgen::erc7730::build_db_tolerant(&out.join("registry"), &policy_path, Some(&out)) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("vendor-registry: rebuild from vendored tree: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+    if vresult.root != orig_root {
+        eprintln!(
+            "vendor-registry: FAITHFULNESS CHECK FAILED — vendored root {} != registry root {} \
+             (an include template is missing from the vendored subset)",
+            hex_lower(&vresult.root),
+            hex_lower(&orig_root)
+        );
+        return ExitCode::FAILURE;
+    }
+
+    println!("vendored {copied} files ({descriptor_count} leaf-bearing descriptors + {support_count} sibling/template files)");
+    println!("out:   {}", out.display());
+    println!("root:  {} (reproduced from the vendored tree ✓)", hex_lower(&orig_root));
+    println!("leaves: {}", vresult.leaf_count);
+    ExitCode::SUCCESS
+}
+
+/// Collect every `*.json` under `dir` (recursively, skipping `tests/` fixture
+/// dirs and `*.tests.json`) — both descriptors and their sibling include
+/// templates. Used to vendor a whole project dir so any `includes` resolves.
+fn collect_dir_jsons(dir: &std::path::Path, out: &mut std::collections::BTreeSet<PathBuf>) {
+    let Ok(rd) = fs::read_dir(dir) else { return };
+    for entry in rd.flatten() {
+        let p = entry.path();
+        if p.is_dir() {
+            if p.file_name().is_some_and(|n| n == "tests") {
+                continue;
+            }
+            collect_dir_jsons(&p, out);
+        } else if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
+            if name.ends_with(".json") && !name.contains(".tests.") {
+                out.insert(p);
+            }
+        }
+    }
 }
 
 fn hex_lower(bytes: &[u8]) -> String {
