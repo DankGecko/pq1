@@ -13,21 +13,17 @@
 //! - `secure/data/selectors-e2e.json`    — tiny e2e fixture variant
 //! - `secure/data/erc7730/*.json`        — ERC-7730 clear-signing descriptors
 //! - `secure/data/erc7730/policy.toml`   — ERC-8176 attestation policy
-//! - `secure/data/vks.json` + `secure/data/vks/*.bin` — Groth16 VK bundle
 //!
 //! Generated artifacts:
 //!
 //! - `nonsecure/src/erc20_db.bin`        — ERC-20 metadata blob (NS rodata)
-//! - `nonsecure/src/vk_db.bin`           — VK blob (NS rodata)
 //! - `nonsecure/src/names_db.bin`        — Names blob (NS rodata)
 //! - `tools/companion-stub/selectors_db.bin`     — Selectors blob (host)
 //! - `tools/companion-stub/selectors_db_e2e.bin` — Selectors e2e fixture
 //! - `tools/companion-stub/erc7730_db.bin`       — ERC-7730 catalog (host)
 //! - `tools/companion-stub/erc7730_db_e2e.bin`   — ERC-7730 e2e fixture
 //! - `secure/src/db_roots.rs`            — compiled-in Merkle roots
-//! - `secure/data/vks.review.txt`        — VK vendor-signing review
 //! - `secure/data/erc7730.review.txt`    — ERC-7730 vendor-signing review
-//! - `circles/generated/erc20_poseidon_tree.json` — Poseidon companion
 
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -35,15 +31,10 @@ use std::fs;
 use std::path::Path;
 
 pub mod erc20;
-pub mod erc20_poseidon;
 pub mod erc7730;
 pub mod merkle;
 pub mod names;
-#[path = "../../secure/src/zk/generated/poseidon_constants.rs"]
-pub mod poseidon_constants;
-pub mod poseidon;
 pub mod selectors;
-pub mod vks;
 
 // ─── Helpers shared between sub-modules ──────────────────────────────
 

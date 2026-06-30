@@ -49,7 +49,7 @@ use sphincs_tz_shared::{
     TRAILER_KIND_ERC7730, TRAILER_KIND_NAME, TRAILER_KIND_SAFE_V1, TRAILER_KIND_SEL_CURATED,
     TRAILER_KIND_SEL_SELFATTEST, TRAILER_KIND_ZK_V1, TRAILER_KIND_ZK_V3,
     TRAILER_TX_IDX_BATCH_WIDE, COW_ORDER_BUNDLE_MAX, COW_ORDER_TRAILER_MAX_LEN,
-    ZK_CLEAR_SIGN_FIXED_LEN, ZK_VK_BUNDLE_MAX_LEN, ERC7730_MAX_TRAILER_LEN,
+    ERC7730_MAX_TRAILER_LEN,
 };
 
 use crate::erc20::bundle::MAX_ERC20_BUNDLE_LEN;
@@ -67,7 +67,7 @@ use crate::ui;
 pub const MAX_LEN_PER_KIND: [usize; 9] = [
     0,                                              // 0 — unused
     MAX_ERC20_BUNDLE_LEN,                           // 1 — ERC-20 metadata
-    ZK_CLEAR_SIGN_FIXED_LEN + ZK_VK_BUNDLE_MAX_LEN, // 2 — ZK v1
+    0,                                              // 2 — ZK v1 (retired; must be empty)
     COW_ORDER_TRAILER_MAX_LEN,                      // 3 — CoW order (on-device decode)
     SAFE_V1_PAYLOAD_MAX,                            // 4 — Safe v1
     MAX_SELECTOR_BUNDLE_LEN,                        // 5 — selector curated
@@ -569,10 +569,9 @@ mod tests {
         // Drift guard: bump kind caps in the table whenever the
         // verifier-side const bumps.
         assert_eq!(MAX_LEN_PER_KIND[TRAILER_KIND_ERC20 as usize], MAX_ERC20_BUNDLE_LEN);
-        assert_eq!(
-            MAX_LEN_PER_KIND[TRAILER_KIND_ZK_V1 as usize],
-            ZK_CLEAR_SIGN_FIXED_LEN + ZK_VK_BUNDLE_MAX_LEN
-        );
+        // ZK v1 is retired — its cap is 0 so any non-empty record of
+        // that legacy kind is rejected at parse time.
+        assert_eq!(MAX_LEN_PER_KIND[TRAILER_KIND_ZK_V1 as usize], 0);
         assert_eq!(
             MAX_LEN_PER_KIND[TRAILER_KIND_ZK_V3 as usize],
             COW_ORDER_TRAILER_MAX_LEN

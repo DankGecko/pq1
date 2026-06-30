@@ -166,6 +166,21 @@
             "visible": "always"
           },
           {
+            "path": "onBehalfOf",
+            "format": "addressName",
+            "label": "On behalf of",
+            "params": {
+              "types": [
+                "eoa"
+              ],
+              "sources": [
+                "local",
+                "ens"
+              ]
+            },
+            "visible": "always"
+          },
+          {
             "path": "interestRateMode",
             "format": "enum",
             "label": "Interest mode",
@@ -178,11 +193,28 @@
             "label": "Referral Code",
             "path": "referralCode",
             "visible": "never"
+          }
+        ]
+      },
+      "repay(address asset, uint256 amount, uint256 interestRateMode, address onBehalfOf)": {
+        "$id": "repay",
+        "intent": "Repay",
+        "fields": [
+          {
+            "path": "amount",
+            "format": "tokenAmount",
+            "label": "Amount to repay",
+            "params": {
+              "tokenPath": "asset",
+              "threshold": "$.metadata.constants.max",
+              "message": "Max"
+            },
+            "visible": "always"
           },
           {
             "path": "onBehalfOf",
             "format": "addressName",
-            "label": "Debt recipient",
+            "label": "On behalf of",
             "params": {
               "types": [
                 "eoa"
@@ -193,6 +225,11 @@
               ]
             },
             "visible": "always"
+          },
+          {
+            "label": "Interest Rate Mode",
+            "path": "interestRateMode",
+            "visible": "never"
           }
         ]
       }

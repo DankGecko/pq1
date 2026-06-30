@@ -4,13 +4,15 @@ Date: 2026-04-24
 Scope: `/home/nicola/repos/trezor-firmware` (monorepo, all models) vs `/home/nicola/repos/PQSigner_OS`
 Primary architectural twin: **T3W1 ("Trezor Safe 7") — STM32U5A9 + Optiga Trust M** — same MCU family, same SE chip, same TrustZone-M substrate.
 
+> **2026-06-30 — fresh critical pass extending this doc:** see **[`trezor-comparison-critical-port-2026-06.md`](./trezor-comparison-critical-port-2026-06.md)** (Trezor HEAD `a0fe1eccc2`). It covers areas this doc deliberately skipped (trusted-display UI framework, runtime resilience: HardFault/IWDG, RDI) and **critically re-examines several verdicts here** — notably it corrects: §2.4 NSC ptr-validate (now **closed-via-Kani**, C-3); §8.3 Pattern 2 OTP read-back (**already done** `otp.rs:372-377`, C-4); §3.2 SAES key-privilege split (**applet artifact, do not chase** — `7fb272bade`, C-2); the §8.2/§8.5 "monolithic S-world is fine, `secmon` N/A" stance (**deferred-with-rationale, not N/A** — `secmon` re-analysed: it is a separate signed image that trusts NS for what-you-sign, so a full port is declined on principle, but an MPU-lite S-privilege split of the largest attacker-data parsers — typed-call ABI / ERC-7730 walker / EIP-712 decoders, **not** the deprecated ZK Groth16 verifier — is the real residual; C-1); and refreshes the §8.6 THP text (which still cites the removed OLED). New code ports are ranked in that doc's TL;DR and tracked in `work-todo.md` under "Trezor critical-port pass (2026-06-30)".
+
 ## TL;DR
 
 Trezor has shipped three hardware generations on ARMv8-M + Optiga Trust M. Their firmware carries ~7 years of post-mortem scar tissue that PQSigner can inherit without paying the same tuition. The highest-signal findings are:
 
 1. **PQSigner's current GTZC1_TZSC=0 "everything NS" regression has a direct, verified Trezor fix** — adopt their per-peripheral S-allowlist.
 2. **Counter-gated SE authorization**, **OTP-derived PBS**, **MCU pre-commit PIN counter**, and **domain-separated secret_keys via HKDF-Expand** are all Trezor patterns PQSigner already tracks or has landed. These findings validate existing `work-todo.md` items #4/#24 and `hw/secret_keys.rs`.
-3. **Genuine gaps not yet tracked:** prodtest factory firmware, screenshot-hash UI regression, ~~libFuzzer corpus for APDU+NSC~~ (APDU side landed 2026-05-13 in `fuzz/` — 5 cargo-fuzz targets over the workspace pure-logic parsers; NSC ptr-validate side still pending), vendor-header-hash OTP lock, multi-source TAMP enable list, glitch-sentinel `wait_random`, richer OTP layout (batch/SN/vendor-lock/manufacturing-lock).
+3. **Genuine gaps not yet tracked:** prodtest factory firmware, screenshot-hash UI regression, ~~libFuzzer corpus for APDU+NSC~~ (APDU side landed 2026-05-13 in `fuzz/` — 5 cargo-fuzz targets over the workspace pure-logic parsers; NSC ptr-validate side now **closed-via-Kani 2026-06-30** — see §2.4 / C-3), vendor-header-hash OTP lock, multi-source TAMP enable list, glitch-sentinel `wait_random`, richer OTP layout (batch/SN/vendor-lock/manufacturing-lock).
 4. **Morale/validation:** `MODEL_BOARDLOADER_PQ_KEYS` at `core/embed/models/T3W1/model_T3W1.h:48-51` shows Trezor is wiring PQ signature verification into their boardloader — PQSigner's PQ-only stance is not niche.
 
 Trezor is **classical-crypto-first with a PQ overlay coming**; PQSigner is PQ-only. Most value is in *patterns* (boot chain, storage shape, fault-injection countermeasures, test harnesses) and *concrete register/metadata values* — not primitives.
@@ -309,7 +311,7 @@ Trezor's prodtest is a separate, signed, UART-CRC-framed command shell with ~300
 
 ### 2.3 Screenshot-hash UI regression tests
 
-**Gap:** PQSigner has no UI regression coverage. Any OLED render change can silently break confirmation screens.
+**Gap:** PQSigner has no UI regression coverage. Any OLED render change can silently break confirmation screens. **[UPDATE 2026-06-30 — partially closed (te-2).]** A golden frame-hash gate now exists (`secure/src/ui/golden.rs`, CI `nightly.yml ui-golden-render`) but covers only the `value_transfer` screen; the WYSIWYS-critical Safe/CoW/ERC-7730/EIP-1271 renderers still have only *semantic* byte-binding tests, no pixel gate — extending the golden gate to them is tracked as **te-2**. (The display is the NV3007 LCD; the SSD1306 OLED was removed 2026-06-30.)
 
 **Trezor (`tests/ui_tests/common.py:131-132` + `fixtures.json`):** each test emits framebuffer bytes → `SHA-256(Image.tobytes())`; fixture stores hash per `[model][group][test_name]`. `client.debug.reseed(0)` locks RNG so screens are deterministic.
 
@@ -317,7 +319,7 @@ Trezor's prodtest is a separate, signed, UART-CRC-framed command shell with ~300
 
 ### 2.4 libFuzzer corpus for APDU parser + NSC validation
 
-**Status:** ✅ proptest sibling landed earlier (`secure/src/fuzz_props.rs` — 16 always-on `proptest!` targets for the workspace pure-logic parsers); ✅ coverage-guided libFuzzer harness landed 2026-05-13 (`fuzz/`, standalone workspace, 5 targets); 🟡 NSC pointer validation deferred (needs relocation out of the `not(test)`-gated `secure::nsc` first).
+**Status:** ✅ proptest sibling landed earlier (`secure/src/fuzz_props.rs` — 16 always-on `proptest!` targets for the workspace pure-logic parsers); ✅ coverage-guided libFuzzer harness landed 2026-05-13 (`fuzz/`, standalone workspace, 5 targets); ~~🟡 NSC pointer validation deferred~~ **✅ CLOSED-via-Kani 2026-06-30 (C-3):** the window arithmetic was relocated to host-buildable `shared/src/ns_ptr_validate.rs` (`ns_write_window_ok`/`ns_read_window_ok`) and is *exhaustively Kani-proved* (`#[cfg(kani)]` `ns_write_sound`/`ns_read_sound` + non-vacuity controls, `make kani`) — strictly subsumes the owed libFuzzer target for a loop-free predicate. Only residual = the device-only ARMv8-M TT/SAU classification (HIGH-1), host-stubbed and unreachable by any host harness.
 
 **Trezor (`crypto/fuzzer/`):** libFuzzer harnesses for BIP32, base58, ECDSA, SHA256. Build: `FUZZER=1 make fuzzer`. No APDU/USB protocol fuzzer on their side either, but the C harness shape is the template.
 
@@ -404,6 +406,8 @@ FLASH_OTP_BLOCK_MANUFACTURING_LOCK   = 8  // irreversible "provisioning done"
 `core/embed/sys/mpu/stm32u5/mpu.c:43-134, 554-557` — 5 fixed regions + 3 banked. `MPU_MODE_APP_SAES` grants unprivileged SAES + TAMPER access during narrow crypto windows, then snaps back. Enforces W^X on every data region. PQSigner currently uses only SAU; MPU is unused. Adding MPU is the standard DEP defense and costs ~150 LOC.
 
 Related, and a genuine gap PQSigner does not have: Trezor's `secure_aes` exposes the hardware-key selectors at *two* privilege tiers — `SECURE_AES_KEY_XORK_SP` (secure-**privileged**) vs `SECURE_AES_KEY_XORK_SN` (secure-**non-privileged**), and `SECURE_AES_KEY_DHUK_SP` (`sec/secure_aes/inc/sec/secure_aes.h:30-33`). The MPU `MODE_APP_SAES` band is what enforces it: only privileged secure code can ask the SAES for the privileged-tier key. So a bug in less-trusted secure-world code can't reach the most-sensitive key selector even though it's "in the secure world". PQSigner has TrustZone S/NS but **one privilege level inside the S-world** — `secret_keys::derive_into{,_bhk}` (and therefore `SAES-CMAC(DHUK,…)` / `SAES-CMAC(BHK,…)`) is callable from any S-world code. Closing this needs the MPU split above *plus* gating the SAES key-selector behind privileged mode; until then, the mitigation is "the whole S-world image is small and audited." Track as a hardening-pass item, not a bring-up item.
+
+> **[UPDATE 2026-06-30 — C-2: re-verdict to "do not chase the SAES split."]** Verified in Trezor: the unprivileged `XORK_SN` selector is reachable only under `#ifdef USE_APPLETS`, and commit `7fb272bade` ("remove unprivileged SAES on U5G models") *deletes* it on the T3W1/U5G twin. The split exists to fence *applet* code from the privileged key — PQSigner has **no applet model** (one privilege level, selector reachable only by the audited S-image), so this specific gap never existed here. **Re-verdict: applet-model artifact, aligned with the U5G removal — do not chase.** (The separate MPU/DEP W^X recommendation in the first paragraph of §3.2 stands, and is the legitimate kernel of the `secmon`/intra-S-isolation question — see `trezor-comparison-critical-port-2026-06.md` §C-1.)
 
 ### 3.3 Pre-commit PIN counter (MCU-authoritative)
 
@@ -500,7 +504,7 @@ Per `CLAUDE.md` Development Posture: PQSigner is pre-production bring-up. Items 
 3. `prodtest/` project — own entry point, own signing key slot, feature-gated (§2.1). Unblocks clean factory provisioning + prevents another bench-chip brick.
 4. `FLASH_OTP_BLOCK_VENDOR_HEADER_LOCK` + FSBL check (§1.2).
 5. `secure/src/hw/tamp.rs` with Trezor's U5 TAMP register map (§2.5).
-6. ~~cargo-fuzz harness for `parse_cmd_sign_userop_input` + NSC pointer validation (§2.4)~~ — **partially landed (2026-05-13):** `fuzz/` with 5 libFuzzer targets covering `aa::userop::parse_header` (the `parse_cmd_sign_userop_input` analog) + RLP / EIP-1559 / ERC-20 calldata / ERC-20 bundle. NSC ptr-validate side still owed (needs relocation out of `secure::nsc`, similar refactor to `crate::scp03_logic`).
+6. ~~cargo-fuzz harness for `parse_cmd_sign_userop_input` + NSC pointer validation (§2.4)~~ — **partially landed (2026-05-13):** `fuzz/` with 5 libFuzzer targets covering `aa::userop::parse_header` (the `parse_cmd_sign_userop_input` analog) + RLP / EIP-1559 / ERC-20 calldata / ERC-20 bundle. ~~NSC ptr-validate side still owed~~ **CLOSED-via-Kani 2026-06-30** (`shared/src/ns_ptr_validate.rs` + `make kani`; see §2.4 / C-3).
 7. Screenshot-hash UI fixtures in `make e2e` (§2.3) — *also bring-up-safe; regression coverage for UI iteration.*
 
 **Defer until UI/touchscreen/product decisions land:**
@@ -606,7 +610,7 @@ Trezor: boardloader → bootloader → secmon → kernel → firmware. PQSigner:
 
 **Pattern 1 — register zero-out at the jump.** Trezor's `jump_to_next_stage(addr, args)` is a naked asm routine that zeroes R0-R12 + R14 and disables MSPLIM before `BX LR` to the next-stage vector table (`boardloader/main.c:365`, secmon's `jump_to_vectbl_ns` similar). PQSigner's FSBL→firmware handoff currently does not register-scrub.
 
-**Pattern 2 — monotonic counter write-then-read-verify at every handoff.** `monoctr_write(MONOCTR_BOOTLOADER_VERSION, hdr->monotonic)` is followed by a read-back; failure halts. PQSigner has OTP fuses for the equivalent role but doesn't do the read-back verify — we trust the fuse-burn hardware.
+**Pattern 2 — monotonic counter write-then-read-verify at every handoff.** `monoctr_write(MONOCTR_BOOTLOADER_VERSION, hdr->monotonic)` is followed by a read-back; failure halts. ~~PQSigner has OTP fuses for the equivalent role but doesn't do the read-back verify — we trust the fuse-burn hardware.~~ **[UPDATE 2026-06-30 — C-4: this was stale. PQSigner *does* read back, and harder.]** `otp.rs::bump_to` (the rollback-floor burn) reads the floor back **twice** (`after1`/`after2` via raw `rollback_floor_once`), both required `>= target`, gated through `fi::check_true_into_sentinel` (`secure/src/hw/otp.rs:372-377`) — strictly stronger than Trezor's single write-then-read-ensure-equal. DONE; remove the old `[P3, audit-only]` open line.
 
 **Pattern 3 — VTRUST flags in the manifest.** A 16-bit `vtrust` field in the vendor header gates provisioning mode, secret access level, vendor-screen display behavior. The bootloader enforces it BEFORE calling `secret_prepare_fw(...)`. PQSigner's FSBL doesn't have an equivalent — manifest is signed but doesn't carry runtime-policy flags.
 
@@ -695,7 +699,7 @@ Trezor recently added a full session-protocol replacement for their legacy plain
 Trezor's threat model: a malicious USB host program (or USB middleware, or multi-tenant host stack) shouldn't be able to (a) read PIN/passphrase/seed in transit, (b) MITM the host↔device conversation, or (c) replay old commands.
 
 **PQSigner threat model on transport.** Our USB HID + Ledger APDU framing is unauthenticated and unencrypted at the host↔device layer. **However:**
-- The PIN never crosses the USB cable — it's entered on the trusted UI (button-driven OLED PIN entry inside the secure world), never visible to the NS USB stack.
+- The PIN never crosses the USB cable — it's entered on the trusted UI (button-driven PIN entry on the NV3007 LCD inside the secure world — *the SSD1306 OLED was removed 2026-06-30*), never visible to the NS USB stack.
 - The seed never crosses the USB cable — it's reconstructed entirely inside the secure world from the two SE-stored XOR halves, and signing happens there; only signatures (public) leave.
 - SCP03 protects the device↔SE050 link inside the device; SE050 entropy halves are never on the bus unencrypted.
 

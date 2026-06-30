@@ -54,7 +54,6 @@ use sphincs_tz_shared::{
     PQ_ADD_OWNER_BYTES_SELECTOR, PQ_CREATE_ACCOUNT_SELECTOR, PQ_INIT_CODE_LEN,
     PQ_SMART_WALLET_FACTORY, SAFE_V1_PAYLOAD_MAX, SET_PRE_SIGNATURE_SELECTOR,
     SIGN_USEROP_HEADER_LEN, SIG_WRAPPER_LEN, COW_ORDER_TRAILER_MAX_LEN,
-    ZK_CLEAR_SIGN_FIXED_LEN, ZK_VK_BUNDLE_MAX_LEN,
 };
 use zeroize::{Zeroize, Zeroizing};
 
@@ -88,7 +87,7 @@ use crate::ui;
 const SNAP_LEN: usize = SIGN_USEROP_HEADER_LEN
     + MAX_TX_LEN
     + 2 + MAX_ERC20_BUNDLE_LEN
-    + 2 + ZK_CLEAR_SIGN_FIXED_LEN + ZK_VK_BUNDLE_MAX_LEN
+    + 2 // reserved: retired ZK clear-sign slot (length field only, must be 0)
     + 2 + COW_ORDER_TRAILER_MAX_LEN
     + 2 + SAFE_V1_PAYLOAD_MAX
     + 2 + MAX_SELECTOR_BUNDLE_LEN
@@ -350,17 +349,23 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     };
     cursor = erc20.next_cursor;
 
-    let zk_v1 = match super::trailer::read_optional_u16_prefixed(
+    // Retired ZK (Groth16) clear-sign slot. The Groth16 verifier was
+    // removed (Aave clear-signing moved to the native ERC-7730 path);
+    // the 2-byte length field is kept reserved for wire-offset stability
+    // of the trailers that follow. `max_len = 0` makes the read
+    // fail-closed: a non-zero declared length is rejected, and no proof
+    // bytes are ever parsed.
+    let zk_reserved = match super::trailer::read_optional_u16_prefixed(
         snap,
         cursor,
         total_len,
-        ZK_CLEAR_SIGN_FIXED_LEN + ZK_VK_BUNDLE_MAX_LEN,
-        "bad zk bundle",
+        0,
+        "zk slot retired (must be 0)",
     ) {
         Ok(t) => t,
         Err(s) => return s,
     };
-    cursor = zk_v1.next_cursor;
+    cursor = zk_reserved.next_cursor;
 
     // CoW order trailer: canonical(204) [|| sell_len(2) || sell_bundle
     // || buy_len(2) || buy_bundle]. Companion sends the whole trailer;
@@ -393,7 +398,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             const HEX: &[u8] = b"0123456789abcdef";
             let d = data_len as u16;
             let e = erc20.len as u16;
-            let z = zk_v1.len as u16;
+            let z = zk_reserved.len as u16;
             let v = declared as u16;
 
             let mut line2 = [b' '; 16];
@@ -690,19 +695,10 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // Computing it here would force the disjuncts to run before the Safe
     // verdicts exist.
 
-    // 7b. v1 ZK clear-sign — circuit-attested (calldata, readable)
-    // pair + VK bundle Merkle-committed to VK_DB_ROOT. See
-    // `zk::verify_and_bind_trailer_v1` for the full trust chain.
-    let zk_v1_verified = if zk_v1.len > 0 {
-        crate::zk::verify_and_bind_trailer_v1(
-            &snap[zk_v1.start..zk_v1.start + zk_v1.len],
-            inner_data,
-            chain_id,
-            &to_address,
-        )
-    } else {
-        None
-    };
+    // 7b. (retired) v1 ZK clear-sign. The Groth16 path was removed —
+    // Aave clear-signing now flows through the native ERC-7730 verifier
+    // (§7c-quinquies / `erc7730_verified`). The wire slot is parsed as a
+    // reserved zero-length field above (`zk_reserved`).
 
     // 7c. `safe_v1` Safe-multisig `approveHash` cross-check —
     // 8-step all-native pipeline (length → selector → calldata len →
@@ -1138,7 +1134,6 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         &tx_for_display,
         inner_data,
         zk_v3_verified.as_ref(),
-        zk_v1_verified.as_ref(),
         safe_v1_verified.as_ref(),
         safe_exec_verified.as_ref(),
         erc7730_verified.as_ref(),

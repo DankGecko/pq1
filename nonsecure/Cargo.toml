@@ -7,9 +7,9 @@ edition.workspace = true
 default = []
 # Non-interactive automated end-to-end test mode. Replaces the
 # default interactive main() with a scripted runner that exercises
-# all four trust levels (value transfer, ERC20 known, BLIND SIGN,
-# ZK clear sign) in sequence and prints PASS/FAIL lines a host
-# harness can grep.
+# the sign-dispatch trust levels (value transfer, ERC20 known, blind
+# sign, Safe / CoW clear-sign, ERC-7730 typed render, batch) in
+# sequence and prints PASS/FAIL lines a host harness can grep.
 #
 # Enables panic-semihosting's `exit` feature so a failing assertion
 # inside the test runner terminates QEMU (via SYS_EXIT) instead of

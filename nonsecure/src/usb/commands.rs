@@ -41,8 +41,7 @@ use crate::nsc_api;
 /// Maximum accumulated command data across chained APDUs. Size reflects
 /// the worst-case unified sign payload: `SIGN_USEROP_HEADER_LEN`-byte
 /// header + max inner-tx calldata (`MAX_TX_LEN`) + optional 2-byte prefix
-/// + max ERC-20 bundle + optional 2-byte prefix + max ZK clear-sign
-/// bundle (proof + calldata + readable + VK bundle).
+/// + max ERC-20 bundle + the (retired) 2-byte ZK clear-sign reserved slot.
 ///
 /// Also accommodates `INS_V2_FW_BEGIN`'s 8 KB manifest — the max
 /// function below resolves to whichever of the two use cases is
@@ -52,9 +51,7 @@ const CHAIN_BUF_LEN_SIGN: usize = SIGN_USEROP_HEADER_LEN
     + MAX_TX_LEN
     + 2
     + 1120
-    + 2
-    + ZK_CLEAR_SIGN_FIXED_LEN
-    + ZK_VK_BUNDLE_MAX_LEN
+    + 2 // reserved: retired ZK clear-sign slot (length field only, must be 0)
     // CoW order trailer: 2-byte length + canonical + two ERC-20 bundles.
     + 2
     + COW_ORDER_TRAILER_MAX_LEN

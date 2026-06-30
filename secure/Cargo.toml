@@ -67,10 +67,6 @@ zeroize = { workspace = true }
 # (default-features = false).
 micromath = { version = "2.1", default-features = false, optional = true }
 
-# BLS12-381 pairing for Groth16 ZK proof verification (no_std, no alloc).
-# Uses our fork which adds a `pka` feature for STM32U585 hardware acceleration.
-bls12_381 = { workspace = true }
-
 # TROPIC01 secure element (for real chip mode).
 #
 # SECURITY: `rev =` is the ONLY supply-chain pin here — there is no
@@ -154,7 +150,6 @@ mode-e2e        = ["debug-log", "e2e-test"]             # full e2e suite includi
 mode-bench      = ["debug-log", "e2e-test"]             # bench harness — e2e minus the skip-* flags
 
 # 5. accelerators axis (composes — pick any subset)
-accel-pka              = ["pka-accel"]
 accel-tamp             = ["tamp"]
 accel-consumption-mask = ["consumption-mask"]
 accel-saes-dhuk        = ["saes-dhuk"]
@@ -170,7 +165,6 @@ mock-se = []
 tropic01-se = ["dep:tropic01", "dep:x25519-dalek", "dep:embedded-hal"]
 ui-semihosting = []
 ui-noop = []  # Silent no-op UI for standalone USB operation (no debugger)
-pka-accel = ["bls12_381/pka"]  # STM32U585 PKA hardware acceleration for BLS12-381 Fp arithmetic
 # Real STM32U585 hardware target (vs QEMU mps2-an505). Pulls in `hw-sha256`
 # because on real silicon we always want the HASH peripheral — the software
 # `sha2::Sha256` path would waste ~19x the signing time for no reason.

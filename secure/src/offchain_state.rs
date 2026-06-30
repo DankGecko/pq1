@@ -1,7 +1,7 @@
 //! Feature-agnostic facade over per-slot off-chain sig counter storage.
 //!
-//! On real STM32U585 hardware (`stm32u585` or `pka-accel` feature
-//! present, where `crate::hw::flash` is available) every call routes
+//! On real STM32U585 hardware (`stm32u585` feature present, where
+//! `crate::hw::flash` is available) every call routes
 //! into the flash-backed log-structured store on bank-1 page 123 — the
 //! durable, power-loss-tolerant implementation. On QEMU and other host
 //! / non-flash builds the calls go to a SRAM-backed mock that lives in
@@ -11,7 +11,7 @@
 //! know which backend is active.
 //!
 //! Why a facade and not a direct cfg-flag inside `hw::flash`? The `hw`
-//! module itself is feature-gated (`#[cfg(any(stm32u585, pka-accel))]`),
+//! module itself is feature-gated (`#[cfg(feature = "stm32u585")]`),
 //! so `crate::hw::flash` simply does not exist on a default QEMU build.
 //! Touching `crate::hw::*` directly from `crate::nsc::cmd_sign_*` would
 //! force every QEMU build to also enable an unrelated hardware
@@ -32,7 +32,7 @@ pub fn slot_key_compute(account_index: u8, chain_id: u64, slot_index: u32) -> [u
     out
 }
 
-#[cfg(any(feature = "stm32u585", feature = "pka-accel"))]
+#[cfg(feature = "stm32u585")]
 mod backend {
     pub unsafe fn offchain_count_read(slot_key: &[u8; 8]) -> u64 {
         crate::hw::flash::offchain_count_read(slot_key)
@@ -66,7 +66,7 @@ mod backend {
     }
 }
 
-#[cfg(not(any(feature = "stm32u585", feature = "pka-accel")))]
+#[cfg(not(feature = "stm32u585"))]
 mod backend {
     //! SRAM-backed mock used by QEMU. Storage is a fixed-size table of
     //! `(slot_key, offchain, last_userop, userop_sigs)` records. Lost on

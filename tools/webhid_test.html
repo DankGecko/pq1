@@ -202,7 +202,6 @@
     </div>
     <div class="actions">
       <button id="testUsdcBtn" class="secondary" disabled>Test: USDC transfer (Base)</button>
-      <button id="testZkAaveBtn" class="secondary" disabled>Test: ZK clear-sign (Aave V3 supply)</button>
       <button id="testTypedCallBtn" class="secondary" disabled>Test: typed-call render (transfer(uint256))</button>
     </div>
   </div>
@@ -366,7 +365,6 @@ function setButtonState(connected, unlocked) {
   $('lockBtn').disabled = !connected;
   $('signBtn').disabled = !unlocked;
   $('testUsdcBtn').disabled = !unlocked;
-  $('testZkAaveBtn').disabled = !unlocked;
   $('testTypedCallBtn').disabled = !unlocked;
 }
 
@@ -920,7 +918,9 @@ const DeviceAPI = {
 // Optional trailer sections (after inner-tx calldata), in order:
 //   * `erc20Bundle`     — Merkle-verified ERC-20 metadata (token name /
 //                         symbol / decimals).
-//   * `zkBundle`        — Groth16 v1 clear-sign attestation.
+//   * (zk v1 reserved)  — the Groth16 clear-sign slot was retired; it
+//                         is always written zero-length so the framing
+//                         stays positional (firmware rejects non-zero).
 //   * (zk_v3 + safe_v1) — written as zero-length when not provided;
 //                         present here so the framing stays positional.
 //   * `selectorBundle`  — curated `(selector, text_sig)` Merkle bundle
@@ -948,7 +948,8 @@ function buildSignPayload(p) {
   if (data.length > 0xFFFF) throw new Error('inner data too long');
 
   const erc20Bundle = p.erc20Bundle || new Uint8Array(0);
-  const zkBundle = p.zkBundle || new Uint8Array(0);
+  // Retired ZK (Groth16) clear-sign slot — always empty; kept positional.
+  const zkReserved = new Uint8Array(0);
   const selectorBundle = p.selectorBundle || new Uint8Array(0);
   const selfAttestBundle = p.selfAttestBundle || new Uint8Array(0);
   if (selectorBundle.length > 0 && selfAttestBundle.length > 0) {
@@ -1002,7 +1003,6 @@ function buildSignPayload(p) {
   // pre-Phase-2 wire shape.
   const anyTrailer =
     erc20Bundle.length > 0 ||
-    zkBundle.length > 0 ||
     selectorBundle.length > 0 ||
     selfAttestBundle.length > 0;
   if (!anyTrailer) {
@@ -1015,7 +1015,7 @@ function buildSignPayload(p) {
   // treated by the firmware as "zero name bundles".
   //
   //   slot 0: erc20 bundle
-  //   slot 1: zk v1 (Groth16) clear-sign trailer
+  //   slot 1: (retired) zk v1 clear-sign trailer — always empty
   //   slot 2: zk v3 (CowSwap EIP-712) trailer
   //   slot 3: safe_v1 multisig trailer
   //   slot 4: curated selector bundle
@@ -1027,7 +1027,7 @@ function buildSignPayload(p) {
   // firmware's positional parser stays aligned.
   const slots = [
     erc20Bundle,
-    zkBundle,
+    zkReserved,
     p.zkV3Bundle || new Uint8Array(0),
     p.safeV1Bundle || new Uint8Array(0),
     selectorBundle,
@@ -1676,24 +1676,9 @@ function buildErc20TransferCalldata(to, amountUnits) {
   return concatBytes([selector, toPadded, amt]);
 }
 
-// Aave V3 Pool Mainnet supply(1000 USDC) — same vectors the pre-cutover
-// `make e2e` suite used. Groth16 proof + 164-byte attested calldata +
-// 64-byte attested readable string. Device looks the VK up in its
-// on-device DB and Merkle-verifies before running the pairing check.
-const AAVE_V3_POOL_MAINNET = '0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2';
-const AAVE_PROOF_HEX = '0d5fe2f5098c666c7fb409bae469a885c90b817e0f3b5433247d3db20d2fb7d521c029a0048b2f21c8f0295e2132d0e8105b2bcc3b956fa69df266756d27510c19eecdd8364dc16c3bb14d5d4b156c9da5ff8a3e68f9769cb8056e2e017481aa0499b198ae514d30791153790036f9a01ddc9d94708989aa6184e0d9c50e858382568012e8a0d4cb45a90a6378643b5f0dad10bc4ad49e8ad6263614a28f62ec74190238c805b062b72dbc1eb725bb89e823bf5ba5323f6dc89b33cdb35a82c211777a18a902cd1a96e192dd0e755b5196f2d90ec3e36ffa06f8cd1c0d89c5362b0b2f73e6dc6249c004b41073efdd4510667a37a0bb421994d8e4bd50eaf611d77d2f13a3c8093c2b172164ddef147d0677a77eb90ed34a17371ab7c669b9cd0f11cd451510ec5e926a469d1bab95c2e6f3e9e285b805801506557275520e27fa7f3772d3c3739412e021b1b74196c315c8dbc2377b989581332e6a95e0e1148274b02d8425a1c797db17793627843fb4f1674637e20b7996627b0138b76a2c';
-const AAVE_CALLDATA_HEX = '617ba037000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48000000000000000000000000000000000000000000000000000000003b9aca00000000000000000000000000742d35cc6634c0532925a3b844bc454e4438f44e00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000';
-const AAVE_READABLE_HEX = '537570706c7920303030303030313030302e30303030303030303030303030303030303020555344430000000000000000000000000000000000000000000000';
-// The real inner-tx calldata is the first 132 bytes of the attested
-// ZK calldata (selector + 4 * 32 bytes of abi-encoded args). The
-// remaining 32 bytes of the attested 164-byte buffer are the circuit's
-// zero-padding and must match byte-for-byte on-device.
-const AAVE_INNER_CALLDATA_LEN = 132;
-
 async function runSignWithParams(params, description) {
   $('signBtn').disabled = true;
   $('testUsdcBtn').disabled = true;
-  $('testZkAaveBtn').disabled = true;
   try {
     log(`Running ${description} — confirm on device...`, 'info');
     const { initCode, type1, type2 } = await DeviceAPI.signUserOp(params);
@@ -1717,7 +1702,6 @@ async function runSignWithParams(params, description) {
   } finally {
     $('signBtn').disabled = false;
     $('testUsdcBtn').disabled = false;
-    $('testZkAaveBtn').disabled = false;
   }
 }
 
@@ -1750,43 +1734,9 @@ $('testUsdcBtn').addEventListener('click', async () => {
   await runSignWithParams(params, 'USDC on Base transfer');
 });
 
-$('testZkAaveBtn').addEventListener('click', async () => {
-  const attestedCalldata = hexToBytes(AAVE_CALLDATA_HEX);
-  const proof = hexToBytes(AAVE_PROOF_HEX);
-  const readable = hexToBytes(AAVE_READABLE_HEX);
-  if (proof.length !== 384 || attestedCalldata.length !== 164 || readable.length !== 64) {
-    log('ZK vector length mismatch — vectors are corrupt', 'err');
-    return;
-  }
-  const innerData = attestedCalldata.slice(0, AAVE_INNER_CALLDATA_LEN);
-  const zkBundle = concatBytes([proof, attestedCalldata, readable]); // 612 B, VK appended on-device
-  // Mirror the form for transparency.
-  $('chainId').value = '1';
-  $('to').value = AAVE_V3_POOL_MAINNET;
-  $('value').value = '0';
-  $('data').value = '0x' + bytesToHex(innerData);
-  const params = {
-    chainId: 1n,
-    accountIndex: activeAccountIndex >>> 0,
-    slotIndex: Number($('slotIndex').value) >>> 0,
-    registerSlot: $('registerSlot').checked,
-    includeInitCode: $('includeInitCode').checked,
-    sender: ($('senderAddr').value.trim() || ('0x' + '42'.repeat(20))),
-    entryPoint: ENTRY_POINT_V06,
-    nonce: BigInt($('nonce').value || '0'),
-    verGas: DEFAULT_GAS.verGas,
-    callGas: DEFAULT_GAS.callGas,
-    preVerificationGas: DEFAULT_GAS.preVerificationGas,
-    maxPriorityFeePerGas: DEFAULT_GAS.maxPriorityFeePerGas,
-    maxFeePerGas: DEFAULT_GAS.maxFeePerGas,
-    paymasterAndDataHash: SHA256_EMPTY,
-    to: AAVE_V3_POOL_MAINNET,
-    value: 0n,
-    data: '0x' + bytesToHex(innerData),
-    zkBundle,
-  };
-  await runSignWithParams(params, 'ZK clear-sign Aave V3 supply');
-});
+// (The "Test: ZK clear-sign (Aave V3 supply)" demo was removed with the
+// Groth16 ZK clear-sign retirement — Aave now clear-signs through the
+// native ERC-7730 path. See docs/archive/zk-clear-sign-retirement.md.)
 
 // Typed-call render (transfer(uint256), self-attest path).
 //

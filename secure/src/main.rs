@@ -160,8 +160,6 @@ mod measured_boot;
 mod pq_wrap;
 #[cfg(not(test))]
 mod ui;
-#[cfg(not(test))]
-mod zk;
 
 /// Factory provisioning state machine (`factory-provisioning`
 /// feature). One-shot ceremony the factory operator flashes and
@@ -401,19 +399,8 @@ mod se050_under_test;
 #[cfg(test)]
 mod secure_se_misc_pure_tests;
 
-// ── Test-only scaffold for the `secure-zk` slice ──
-//
-// The production `zk` module is `#[cfg(not(test))]` because the
-// `render_clear_sign_pages` renderer pulls `crate::tx::display` (itself
-// `cfg(not(test))`) and `crate::ui::*`. The pure-logic verifier files
-// (`groth16.rs`, `poseidon.rs`, `vk_bundle.rs`) compile fine on host;
-// this scaffold re-mounts them under a parallel module tree so the
-// secure-side BLS12-381 Groth16 verifier + Poseidon hash + VK-bundle
-// Merkle decoder can be exercised against the committed
-// `test_vectors.rs` / `vk_data.rs` fixtures and adversarial inputs.
-// See `reports/tests/secure-zk.md`.
-#[cfg(test)]
-mod zk_under_test;
+// (The `secure-zk` test scaffold was removed when the Groth16 ZK
+// clear-sign path was retired — see docs/archive/zk-clear-sign-retirement.md.)
 
 // ── Test-only scaffold for the `secure-ui` slice ──
 //
@@ -3651,13 +3638,9 @@ fn main() -> ! {
         }
     }
 
-    // Initialize PKA hardware accelerator for BLS12-381 field arithmetic.
-    // Preloads the Fp modulus into PKA RAM (stays resident for all operations).
-    #[cfg(feature = "pka-accel")]
-    unsafe {
-        hw::pka::init();
-        secure_log!("[S] PKA initialized (BLS12-381 Fp accelerated)");
-    }
+    // (The PKA hardware accelerator was removed with the Groth16 ZK
+    // clear-sign path — BLS12-381 was its only consumer. See
+    // docs/archive/zk-clear-sign-retirement.md.)
 
     // Initialize USB OTG FS hardware (clocks, GPIO, UCPD) when targeting
     // real hardware with USB enabled.  Must run after rcc::init() and

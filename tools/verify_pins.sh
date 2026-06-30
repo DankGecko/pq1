@@ -28,21 +28,11 @@
 #      * Every lib/<name>/ present has a corresponding foundry.lock
 #        entry (no unpinned libs).
 #
-#   3. NPM (circuits/)                                            [Node]
-#      * `circuits/package-lock.json` exists (NOT just
-#        package.json).
-#      * `npm ci --dry-run --ignore-scripts --prefix circuits`
-#        succeeds — i.e. the lockfile is in sync with package.json
-#        and has SRI integrity hashes for every resolved package.
-#      * We greps package-lock.json to confirm there are no
-#        `"integrity": null` entries (happens when a dep is
-#        git-sourced without a checksum).
-#
-#   4. Rust toolchain                                       [rust-toolchain]
+#   3. Rust toolchain                                       [rust-toolchain]
 #      * `rust-toolchain.toml` pins `channel = "nightly-YYYY-MM-DD"`
 #        or an exact semver, never bare `nightly` / `stable` / `beta`.
 #
-#   5. GitHub Actions                                       [.github/workflows]
+#   4. GitHub Actions                                       [.github/workflows]
 #      * Every third-party action `uses:`d in any workflow is pinned to a
 #        40-char commit SHA. Mutable tags (@vN / @main / @stable) can be
 #        force-moved upstream to run arbitrary code in CI — and some jobs ARE
@@ -67,7 +57,7 @@ note() { printf "  [..] %s\n" "$*"; }
 fail_count=0
 trap 'printf "\nsupply-chain pin check FAILED — build refused.\n" >&2; exit 1' ERR
 
-echo "==> 1/5 Cargo workspace"
+echo "==> 1/4 Cargo workspace"
 
 # 1a. Cargo.lock in sync with all Cargo.toml files. Running
 #     `cargo metadata --locked --offline` would need a populated
@@ -128,7 +118,7 @@ $unpinned_git
 fi
 ok "every 'git =' dep has a 40-char rev pin"
 
-echo "==> 2/5 Solidity lib submodules (foundry)"
+echo "==> 2/4 Solidity lib submodules (foundry)"
 
 lockf="contracts/smart-wallet/foundry.lock"
 if [ ! -f "$lockf" ]; then
@@ -185,39 +175,11 @@ if [ -d contracts/smart-wallet/lib ]; then
 fi
 ok "no lib/ directories outside foundry.lock"
 
-echo "==> 3/5 NPM (circuits/)"
+# (The NPM / circuits/ check was removed with the Groth16 ZK clear-sign
+# retirement — the Circom circuit sources are gone. See
+# docs/archive/zk-clear-sign-retirement.md.)
 
-if [ ! -f circuits/package-lock.json ]; then
-    fail "circuits/package-lock.json missing — npm has no pin source.
-       fix: cd circuits && npm install, then commit package-lock.json."
-fi
-ok "circuits/package-lock.json exists"
-
-# Any entry with "integrity": null or missing integrity would mean
-# a non-hash-verifiable dep (usually a git-sourced one). npm@8+ always
-# emits integrity for registry deps; missing = supply-chain hole.
-if grep -qE '"integrity": *null' circuits/package-lock.json; then
-    fail "circuits/package-lock.json has entries with null integrity.
-       fix: only depend on packages that npm publishes with SRI
-       hashes (registry deps), not unpinned git deps."
-fi
-ok "every circuits/package-lock.json entry has an SRI integrity hash"
-
-# npm ci --dry-run succeeds iff package.json and package-lock.json
-# agree. --ignore-scripts blocks postinstall attacks during the check
-# itself; the real build must run through 'npm ci' too.
-if command -v npm >/dev/null 2>&1; then
-    if ! (cd circuits && npm ci --dry-run --ignore-scripts >/dev/null 2>&1); then
-        fail "circuits/package-lock.json is out of sync with package.json.
-       fix: cd circuits && npm install (regenerates the lockfile),
-       then review the diff and commit."
-    fi
-    ok "circuits/ npm ci --dry-run clean"
-else
-    note "npm not installed on PATH — skipped lockfile sync check"
-fi
-
-echo "==> 4/5 Rust toolchain"
+echo "==> 3/4 Rust toolchain"
 
 # rust-toolchain.toml must pin a dated nightly or exact semver.
 # Accepting bare 'nightly' / 'stable' / 'beta' would drift silently.
@@ -228,7 +190,7 @@ if ! grep -qE 'channel *= *"(nightly-[0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]+\.[0-9]+\.
 fi
 ok "rust-toolchain.toml channel is pinned"
 
-echo "==> 5/5 GitHub Actions (SHA pins)"
+echo "==> 4/4 GitHub Actions (SHA pins)"
 
 # Every third-party action `uses:`d in .github/workflows must be pinned to a
 # 40-char commit SHA. A mutable @vN/@branch tag can be force-moved upstream to

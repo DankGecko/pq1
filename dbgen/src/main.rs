@@ -3,25 +3,20 @@
 //!
 //! Reads:
 //!   secure/data/erc20.json
-//!   secure/data/vks.json
-//!   secure/data/vks/<file>.bin
 //!   secure/data/names.json
 //!   secure/data/selectors.json
 //!   secure/data/selectors-e2e.json
 //!   secure/data/erc7730/*.json
 //!   secure/data/erc7730/policy.toml
 //!
-//! Writes (checked into the repo, like the existing
-//! tools/export_zk_constants.js outputs):
+//! Writes (checked into the repo):
 //!   tools/companion-stub/erc20_db.bin   (host-side; companion app)
-//!   tools/companion-stub/vk_db.bin      (host-side; companion app)
 //!   tools/companion-stub/names_db.bin   (host-side; companion app)
 //!   tools/companion-stub/selectors_db.bin
 //!   tools/companion-stub/selectors_db_e2e.bin
 //!   tools/companion-stub/erc7730_db.bin
 //!   tools/companion-stub/erc7730_db_e2e.bin
 //!   secure/src/db_roots.rs
-//!   secure/data/vks.review.txt
 //!   secure/data/erc7730.review.txt
 //!
 //! Run manually after editing the JSON sources:
@@ -32,7 +27,6 @@
 //! QEMU companion stub; production firmware ships no blob, only the
 //! root, and verifies companion-supplied bundles):
 //!   nonsecure/src/erc20_db.rs   (ERC20 metadata)
-//!   nonsecure/src/vk_db.rs      (ZK clear-signing VKs)
 //!   nonsecure/src/names_db.rs   (address-name lookup)
 //!
 //! Both crates physically share the on-disk format definition via
@@ -42,7 +36,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use dbgen::{erc20, erc7730, names, selectors, vks};
+use dbgen::{erc20, erc7730, names, selectors};
 
 const REPO_ROOT_CARGO: &str = env!("CARGO_MANIFEST_DIR");
 
@@ -123,8 +117,6 @@ fn main() {
     let erc20_json = root.join("secure/data/erc20.json");
     // Small parallel ERC-20 fixture for `--features e2e-test` QEMU builds.
     let erc20_e2e_json = root.join("secure/data/erc20-e2e.json");
-    let vks_json = root.join("secure/data/vks.json");
-    let vks_dir = root.join("secure/data/vks");
     let names_json = root.join("secure/data/names.json");
     // Small parallel Names fixture for `--features e2e-test` QEMU builds.
     let names_e2e_json = root.join("secure/data/names-e2e.json");
@@ -148,14 +140,13 @@ fn main() {
     // (via the generated `db_roots.rs`) and Merkle-verifies every
     // companion-supplied bundle against it. The `tools/companion-stub/`
     // copies double as the QEMU e2e companion stub (see the
-    // `e2e-test`-gated `nonsecure/src/{erc20,vk,names}_db.rs`).
+    // `e2e-test`-gated `nonsecure/src/{erc20,names}_db.rs`).
     let erc20_out = root.join("tools/companion-stub/erc20_db.bin");
     // Tiny e2e fixture blob — see the selectors/erc7730 e2e split below.
     // The full erc20_db.bin can be many MB (host/companion-side only); this
     // small parallel blob is what the `e2e-test` NS stub bakes into 256 KB
     // flash without overflow, matched by ERC20_DB_ROOT under `cfg(e2e-test)`.
     let erc20_e2e_out = root.join("tools/companion-stub/erc20_db_e2e.bin");
-    let vk_out = root.join("tools/companion-stub/vk_db.bin");
     let names_out = root.join("tools/companion-stub/names_db.bin");
     // Tiny e2e fixture blob — the full names_db.bin can grow large
     // (host/companion-side only); this small parallel blob is what the
@@ -176,7 +167,6 @@ fn main() {
     let erc7730_e2e_out = root.join("tools/companion-stub/erc7730_db_e2e.bin");
     let erc7730_review_out = root.join("secure/data/erc7730.review.txt");
     let roots_out = root.join("secure/src/db_roots.rs");
-    let review_out = root.join("secure/data/vks.review.txt");
 
     // ----- ERC20 metadata DB -----
     // All three host-side blobs share the tools/companion-stub dir;
@@ -218,19 +208,8 @@ fn main() {
         hex::encode(erc20_e2e_res.root),
     );
 
-    // ----- VK DB -----
-    let vk_res = vks::build_db(&vks_json, &vks_dir).expect("vk db build failed");
-    vks::round_trip_check(&vk_res.blob, &vks_json, &vks_dir, &vk_res.root)
-        .expect("vk round-trip failed");
-    fs::write(&vk_out, &vk_res.blob).expect("write vk_db.bin");
-    fs::write(&review_out, &vk_res.review_text).expect("write vks.review.txt");
-    println!(
-        "dbgen: wrote {} ({} bytes, root = {})",
-        vk_out.display(),
-        vk_res.blob.len(),
-        hex::encode(vk_res.root),
-    );
-    println!("dbgen: wrote {}", review_out.display());
+    // (The Groth16 VK DB was removed with the ZK clear-sign retirement —
+    // see docs/archive/zk-clear-sign-retirement.md.)
 
     // ----- Names DB -----
     let names_res = names::build_db(&names_json).expect("names db build failed");
@@ -378,13 +357,12 @@ fn main() {
     //
     // This is the only file the secure-world build sees from the DBs.
     // The 32-byte Merkle roots baked into the secure image: the
-    // SHA-256 ERC-20 + VK + Names roots (for the transfer display /
-    // VK bundle verifier / address-name lookup paths) and the ERC-7730
-    // descriptor root (for the Phase-3 trailer parser).
+    // SHA-256 ERC-20 + Names + Selectors roots (for the transfer
+    // display / address-name lookup / selector text-sig paths) and the
+    // ERC-7730 descriptor root (for the Phase-3 trailer parser).
     let roots_rs = render_db_roots(
         &erc20_res.root,
         &erc20_e2e_res.root,
-        &vk_res.root,
         &names_res.root,
         &names_e2e_res.root,
         &selectors_res.root,
@@ -399,14 +377,14 @@ fn main() {
 }
 
 const DB_ROOTS_HEADER: &str = "\
-//! Merkle roots of the (host-side) ERC20 + VK + Names + Selectors + ERC-7730 databases.
+//! Merkle roots of the (host-side) ERC20 + Names + Selectors + ERC-7730 databases.
 //!
 //! Generated by `cargo run -p dbgen` from secure/data/erc20.json,
-//! secure/data/vks.json, secure/data/names.json,
+//! secure/data/names.json,
 //! secure/data/selectors.json, and secure/data/erc7730/*.json.
 //! DO NOT EDIT BY HAND.
 //!
-//! NONE of the DB blobs ship in the firmware image. The ERC20 / VK /
+//! NONE of the DB blobs ship in the firmware image. The ERC20 /
 //! Names / Selectors / ERC-7730 blobs all live on the host (companion
 //! app) under `tools/companion-stub/` and are forwarded over USB as
 //! per-tx `(entry, merkle_proof, leaf_index)` bundles. The secure
@@ -446,7 +424,6 @@ const DB_ROOTS_HEADER: &str = "\
 fn render_db_roots(
     erc20_root: &[u8; 32],
     erc20_e2e_root: &[u8; 32],
-    vk_root: &[u8; 32],
     names_root: &[u8; 32],
     names_e2e_root: &[u8; 32],
     selectors_root: &[u8; 32],
@@ -465,7 +442,6 @@ fn render_db_roots(
     emit_root(&mut s, "ERC20_DB_ROOT", erc20_root);
     writeln!(s, "#[cfg(feature = \"e2e-test\")]").unwrap();
     emit_root(&mut s, "ERC20_DB_ROOT", erc20_e2e_root);
-    emit_root(&mut s, "VK_DB_ROOT", vk_root);
     // NAMES_DB_ROOT is e2e-split like SELECTOR_DB_ROOT / ERC20_DB_ROOT:
     // production anchors the full host-side names DB; `e2e-test` anchors the
     // tiny names-e2e fixture the QEMU NS stub bakes into 256 KB flash.

@@ -10,20 +10,20 @@ fn main() {
     println!("cargo:rerun-if-changed=memory.x");
     println!("cargo:rerun-if-changed=memory-stm32u585.x");
 
-    // Stale-blob protection. The ERC20 / VK / Names databases live on
+    // Stale-blob protection. The ERC20 / Names databases live on
     // the HOST (companion app) under `tools/companion-stub/` — they are
     // NOT in the firmware image. They're `include_bytes!`'d only by the
-    // `e2e-test` QEMU companion stub (`nonsecure/src/{erc20,vk,names}_db.rs`),
+    // `e2e-test` QEMU companion stub (`nonsecure/src/{erc20,names}_db.rs`),
     // so the stale-blob magic check is gated to `e2e-test` and points at
     // the host-side copies. The classic failure mode is "edited the JSON,
     // forgot to regenerate" — catch it at build time by sniffing the
     // magic bytes. Production builds ship no blob, so there is nothing
-    // to check.
+    // to check. (The VK blob was removed with the Groth16 ZK clear-sign
+    // retirement — see docs/archive/zk-clear-sign-retirement.md.)
     if env::var_os("CARGO_FEATURE_E2E_TEST").is_some() {
         // The e2e NS stub bakes the TINY erc20 fixture blob (the full
         // production erc20_db.bin is multi-MB and would overflow NS flash).
         check_db_magic("../tools/companion-stub/erc20_db_e2e.bin", b"ERC2");
-        check_db_magic("../tools/companion-stub/vk_db.bin", b"VKDB");
         // e2e NS stub bakes the TINY names fixture (full names_db.bin can grow).
         check_db_magic("../tools/companion-stub/names_db_e2e.bin", b"NAMS");
     }

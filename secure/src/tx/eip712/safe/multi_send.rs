@@ -37,8 +37,6 @@ use sphincs_tz_shared::{
 };
 
 use super::cow_binding::safe_inner_is_cow_presign;
-use super::mgmt_decode::{classify_safe_mgmt, page_count as mgmt_page_count, SafeMgmtOp};
-use crate::erc20::calldata::{parse_erc20_calldata, Erc20Call};
 
 // The strict outer-framing decoder, its 32-byte word reader, the refusal
 // taxonomy, AND the inner packed-record walk (`MsRecord` + `MsRecordIter`)
@@ -53,7 +51,8 @@ use crate::erc20::calldata::{parse_erc20_calldata, Erc20Call};
 // call sites (`safe_display`, `cowswap::e2e_decode_tests`) keep working
 // unchanged.
 pub use pqsigner_tx::multisend::{
-    decode_multisend, read_u32_word, MsError, MsRecord, MsRecordIter,
+    classify_record_kind, decode_multisend, read_u32_word, record_needs_value_page,
+    records_pages_total, MsError, MsRecord, MsRecordIter, MsRecordKind,
 };
 
 /// Is `to` one of the canonical `MultiSendCallOnly` deployments?
@@ -211,122 +210,19 @@ pub fn multisend_verdict(operation: u8, to: &[u8; 20], raw: &[u8]) -> MsVerdict 
 }
 
 // ---------------------------------------------------------------------------
-// Per-record display classification + page accounting
+// Per-record display classification + page accounting (layer 3)
 // ---------------------------------------------------------------------------
-
-/// Display classification of one record — the per-record analogue of
-/// the Safe renderer's `InnerKind` ladder, factored here (host-
-/// testable) so the page-budget gate and the renderer derive page
-/// counts from the SAME classification and physically cannot disagree.
-#[derive(Copy, Clone, Debug)]
-pub enum MsRecordKind {
-    /// Empty calldata, zero value.
-    EmptyCall,
-    /// Empty calldata, non-zero value — plain ETH transfer.
-    PlainEth,
-    /// Strict ERC-20 transfer / transferFrom / approve shape. Renders
-    /// "known" (symbol + decimals) only if verified metadata address-
-    /// matches; page count is identical either way.
-    Erc20(Erc20Call),
-    /// Record targets the Safe itself with a recognised singleton op.
-    SafeMgmt(SafeMgmtOp),
-    /// Record targets the Safe itself with an unrecognised selector.
-    UnknownSafeSelf,
-    /// Claims `setPreSignature` on GPv2Settlement. Renders as the full
-    /// CoW order (banner + shared body) for the unique bound record;
-    /// the gates guarantee a verified zk_v3 exists by render time.
-    CowPresignClaim,
-    /// Anything else — loud per-record blind-sign (selector + length +
-    /// data hash), same trust level as today's single blind inner.
-    Blind,
-}
-
-/// Classify one record for display. Mirrors the single-call ladder in
-/// `display::safe_display`: CoW claim first (disjoint target), then
-/// Safe self-calls, then empty/ERC-20/blind.
-#[must_use]
-pub fn classify_record_kind(
-    to: &[u8; 20],
-    value_is_zero: bool,
-    data: &[u8],
-    safe_address: &[u8; 20],
-) -> MsRecordKind {
-    if safe_inner_is_cow_presign(to, data) {
-        return MsRecordKind::CowPresignClaim;
-    }
-    if to == safe_address && !data.is_empty() {
-        return match classify_safe_mgmt(data) {
-            Some(op) => MsRecordKind::SafeMgmt(op),
-            None => MsRecordKind::UnknownSafeSelf,
-        };
-    }
-    if data.is_empty() {
-        return if value_is_zero {
-            MsRecordKind::EmptyCall
-        } else {
-            MsRecordKind::PlainEth
-        };
-    }
-    match parse_erc20_calldata(data) {
-        Some(call) => MsRecordKind::Erc20(call),
-        None => MsRecordKind::Blind,
-    }
-}
-
-/// Content pages for one classified record (excluding its divider page
-/// and any spliced value page). `cow_body_pages` = 1 banner + the
-/// shared order body (6 proof-mode / 8 AddrOnly).
-#[must_use]
-pub fn record_content_pages(kind: &MsRecordKind, cow_body_pages: usize) -> usize {
-    match kind {
-        MsRecordKind::EmptyCall => 1,
-        MsRecordKind::PlainEth => 2,
-        // header + recipient + amount + contract; +1 for the transferFrom
-        // `From (debited)` page (lockstep with
-        // `safe_display::{append_erc20_tail_pages, inner_kind_page_count}`).
-        MsRecordKind::Erc20(call) => 4 + usize::from(matches!(call, Erc20Call::TransferFrom { .. })),
-        MsRecordKind::SafeMgmt(op) => mgmt_page_count(op),
-        MsRecordKind::UnknownSafeSelf | MsRecordKind::Blind => 3,
-        MsRecordKind::CowPresignClaim => cow_body_pages,
-    }
-}
-
-/// Does this record need a dedicated "record sends ETH" page? PlainEth
-/// shows its value inline; EmptyCall is zero-value by definition; every
-/// other kind would otherwise sign a hidden per-record `value`.
-#[must_use]
-pub fn record_needs_value_page(kind: &MsRecordKind, value_is_zero: bool) -> bool {
-    !value_is_zero && !matches!(kind, MsRecordKind::PlainEth | MsRecordKind::EmptyCall)
-}
-
-/// Total inner pages a decoded multiSend payload renders: per record,
-/// 1 divider page + optional value page + content pages. `None` when
-/// the payload doesn't decode (callers gate on [`multisend_verdict`]
-/// first, so `None` here is defensive).
-///
-/// This is exact, not an upper bound: the renderer classifies through
-/// the same [`classify_record_kind`] and counts through the same
-/// [`record_content_pages`], so gate and render agree by construction.
-#[must_use]
-pub fn records_pages_total(
-    data: &[u8],
-    safe_address: &[u8; 20],
-    cow_body_pages: usize,
-) -> Option<usize> {
-    let packed = decode_multisend(data).ok()?;
-    let mut total = 0usize;
-    for rec in MsRecordIter::new(packed) {
-        let rec = rec.ok()?;
-        let value_is_zero = rec.value_is_zero();
-        let kind = classify_record_kind(&rec.to, value_is_zero, rec.data, safe_address);
-        total += 1; // divider
-        if record_needs_value_page(&kind, value_is_zero) {
-            total += 1;
-        }
-        total += record_content_pages(&kind, cow_body_pages);
-    }
-    Some(total)
-}
+//
+// `MsRecordKind`, `classify_record_kind`, `record_content_pages`,
+// `record_needs_value_page`, and `records_pages_total` were extracted,
+// verbatim and behaviour-identical, into `pqsigner_tx::multisend`
+// (re-exported above) so the page-budget gate is host-compilable and
+// Kani-bounded (panic/OOB-freedom + per-record page bound + the
+// no-hidden-value soundness — see `pqsigner_tx::multisend::verification`).
+// Their whole dependency closure is pure / already in `pqsigner-tx`
+// (`safe_inner_is_cow_presign`, `classify_safe_mgmt`/`page_count`,
+// `parse_erc20_calldata`); the verified-context glue (`resolve_cow_binding`,
+// `VerifiedSafe*`) and the summary/verdict layer above stay here.
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -435,6 +331,7 @@ mod tests {
         ZERO_VALUE,
     };
     use super::*;
+    use crate::erc20::calldata::Erc20Call;
     use sphincs_tz_shared::{GPV2_SETTLEMENT_ADDRESS, GPV2_VAULT_RELAYER_ADDRESS, SET_PRE_SIGNATURE_SELECTOR};
     extern crate alloc;
     use alloc::vec::Vec;

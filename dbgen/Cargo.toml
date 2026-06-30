@@ -18,11 +18,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"
 hex = { workspace = true }
-# Host-side Poseidon over BLS12-381 for the parallel ERC20 Merkle tree
-# the CowSwap EIP-712 v3 circuit indexes. PKA feature stays off — this
-# crate runs on the host, not the STM32U585 — which is already the
-# workspace default.
-bls12_381 = { workspace = true }
 # Pure-logic keccak256 for ERC-7730 EIP-712 domain-separator
 # computation. Same wrapper the firmware uses.
 pqsigner-tx-core = { workspace = true }

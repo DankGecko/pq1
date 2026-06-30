@@ -78,7 +78,6 @@ use crate::tx::eip712::cowswap::VerifiedCowswapV3;
 use crate::tx::eip712::safe::VerifiedSafeV1;
 use crate::tx::erc7730::VerifiedDescriptor;
 use crate::ui;
-use crate::zk::VerifiedClearSignV1;
 
 use super::batch_trailers::parse_all as parse_batch_trailers;
 
@@ -107,7 +106,6 @@ struct ParsedTx {
 /// fixed-size buffers, hence no `'a` on those variants.
 struct RoutedTrailers<'a> {
     erc20: Option<Erc20Metadata<'a>>,
-    zk_v1: Option<VerifiedClearSignV1>,
     zk_v3: Option<VerifiedCowswapV3>,
     safe_v1: Option<VerifiedSafeV1<'a>>,
     erc7730: Option<VerifiedDescriptor<'a>>,
@@ -120,7 +118,6 @@ impl<'a> RoutedTrailers<'a> {
     fn empty() -> Self {
         Self {
             erc20: None,
-            zk_v1: None,
             zk_v3: None,
             safe_v1: None,
             erc7730: None,
@@ -432,24 +429,13 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                 }
             }
             TRAILER_KIND_ZK_V1 => {
-                let ptx = parsed[rec.tx_idx as usize].as_ref().unwrap();
-                let inner_data: &[u8] = &snap[ptx.data_off..ptx.data_off + ptx.data_len];
-                let v_opt = crate::zk::verify_and_bind_trailer_v1(
-                    bytes,
-                    inner_data,
-                    chain_id,
-                    &ptx.to,
-                );
-                let ok = v_opt.is_some();
-                crate::fi::wait_random();
-                if crate::fi::check_true_into_sentinel(|| core::hint::black_box(ok))
-                    != crate::fi::OK_SENTINEL
-                {
-                    continue;
-                }
-                routed[rec.tx_idx as usize]
-                    .get_or_insert_with(RoutedTrailers::empty)
-                    .zk_v1 = v_opt;
+                // Retired: the Groth16 ZK clear-sign path was removed
+                // (Aave clear-signing moved to the native ERC-7730
+                // verifier). A record carrying this legacy kind is
+                // ignored — the inner tx falls through to the native
+                // ERC-7730 / value / blind-sign renderers. No proof is
+                // ever verified.
+                continue;
             }
             TRAILER_KIND_ZK_V3 => {
                 // Deferred to pass 2 (§5d below). The CoW binding
@@ -836,7 +822,6 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             &tx_for_display,
             inner_data,
             r.and_then(|r| r.zk_v3.as_ref()),
-            r.and_then(|r| r.zk_v1.as_ref()),
             r.and_then(|r| r.safe_v1.as_ref()),
             safe_exec_verified.as_ref(),
             r.and_then(|r| r.erc7730.as_ref()),
