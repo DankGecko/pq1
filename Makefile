@@ -85,9 +85,9 @@ NS_FEATURES_ARG = $(if $(NS_FEATURES_LIST),--features $(subst $(space),$(comma),
 
 # Supply-chain audit. Hard-fails if any dependency is not cryptographically
 # pinned (Cargo.lock checksums, git rev= pins, foundry.lock matching
-# checked-out submodules, circuits/package-lock.json SRI integrity,
-# dated-nightly rust-toolchain). See tools/verify_pins.sh for the exact
-# rules. Every release-path target below depends on this.
+# checked-out submodules, dated-nightly rust-toolchain). See
+# tools/verify_pins.sh for the exact rules. Every release-path target
+# below depends on this.
 verify-pins:
 	@tools/verify_pins.sh
 
@@ -259,7 +259,7 @@ run-tropic01: setup-serial
 # This target only BUILDS — flashing is done with probe-rs / openocd / etc.
 # It will not link until the ui-lcd backend is fully wired up.
 run-hw:
-	$(MAKE) FEATURES=tropic01-se,ui-lcd,pka-accel,consumption-mask,stm32u585 all
+	$(MAKE) FEATURES=tropic01-se,ui-lcd,consumption-mask,stm32u585 all
 
 # Real STM32U585 hardware build (semihosting): mock SE + semihosting UI.
 # Uses probe-rs semihosting for I/O — same interactive model as QEMU
@@ -295,21 +295,13 @@ flash-hw: build-hw
 # asserts that the secure-world dispatcher routed each scenario to the
 # right TxKind variant + that every scenario returned NscStatus::Ok.
 #
-# Scenarios:
-#   1. value_transfer   → ValueTransfer
-#   2. erc20_known      → Erc20Known     (USDC mainnet, bundle from NS DB)
-#   3. blind_sign       → ContractCall   (Uniswap router selector only)
-#   4. zk_clear_sign    → ZkClearSign    (Aave V3 supply, VK bundle from NS DB)
-#   5. cowswap_pre_sign → ZkClearSign    (GPv2Settlement.setPreSignature,
-#                                         in-tree Circom circuit, VK bundle
-#                                         from NS DB)
-#   6. cowswap_eip712_order → ZkClearSignMsg
-#                                       (CowSwap GPv2Order EIP-712 typed-data
-#                                        message signing — M4. Native keccak
-#                                        digest in the secure world, bound
-#                                        to a Poseidon-hashed canonical
-#                                        encoding via Groth16. No on-chain
-#                                        tx envelope.)
+# The authoritative scenario list is the `for line in ...` assertion
+# block below (Scenarios 1–6, including the 5a–5u sub-scenarios). It
+# covers value transfers, known/unknown ERC-20, blind-sign, slot
+# rotation, Safe approveHash / exec clear-sign, selector + self-attest
+# + ERC-7730 typed render, atomic batch sign, and Safe-wrapped CoW
+# pre-sign (all on-device native decode — the Groth16 ZK clear-sign
+# path was retired, see docs/archive/zk-clear-sign-retirement.md).
 #
 # Pass → exits 0. Any missing assertion or non-zero status → exits 1.
 e2e:

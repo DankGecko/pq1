@@ -12,9 +12,6 @@
 /// DHCSR) and the QEMU SSE-200 MPC blocks.
 pub mod mmio;
 
-#[cfg(feature = "pka-accel")]
-pub mod pka;
-
 #[cfg(feature = "stm32u585")]
 pub mod rcc;
 

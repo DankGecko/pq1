@@ -55,7 +55,7 @@ OPTL_ELF := $(OPTL_DIR)/target/$(TARGET)/release/sca-optiga-lock-target
 DONJON   ?= donjon-sca
 SCARED   ?= scared-sca
 
-.PHONY: build build-kdf build-c10v build-fw-verify build-ns-ptr build-c10-sign build-cap build-dispatch build-flashctr build-saes-kdf build-scp03 build-rng-strong build-optiga-lock build-groth16 fi fi-twofault c10 pin c10v fw-verify ns-ptr c10-sign cap dispatch flashctr kdf saes-kdf scp03-fi scp03-leakage rng-strong optiga-lock wait-random-leak bip39-leak seed-deriv-leak recovery-leak seedwizard-exact-leak glyph-leak groth16 groth16-full f9-retest f9-deeper f9-scared-collect f9-scared sweeps doctor clean
+.PHONY: build build-kdf build-c10v build-fw-verify build-ns-ptr build-c10-sign build-cap build-dispatch build-flashctr build-saes-kdf build-scp03 build-rng-strong build-optiga-lock fi fi-twofault c10 pin c10v fw-verify ns-ptr c10-sign cap dispatch flashctr kdf saes-kdf scp03-fi scp03-leakage rng-strong optiga-lock wait-random-leak bip39-leak seed-deriv-leak recovery-leak seedwizard-exact-leak glyph-leak f9-retest f9-deeper f9-scared-collect f9-scared sweeps doctor clean
 
 build: $(FI_ELF)
 
@@ -102,26 +102,8 @@ build-flashctr: $(FCT_ELF)
 $(FCT_ELF): $(FCT_DIR)/src/main.rs $(FCT_DIR)/memory.x $(FCT_DIR)/build.rs $(FCT_DIR)/Cargo.toml ../../pqsigner-fi/src/lib.rs ../../secure/src/hw/flash.rs
 	cargo build --release --target $(TARGET) --manifest-path $(FCT_DIR)/Cargo.toml
 
-GROTH16_DIR := groth16_target
-GROTH16_ELF := $(GROTH16_DIR)/target/$(TARGET)/release/sca-groth16-target
-build-groth16: $(GROTH16_ELF)
-$(GROTH16_ELF): $(GROTH16_DIR)/src/main.rs $(GROTH16_DIR)/memory.x $(GROTH16_DIR)/build.rs $(GROTH16_DIR)/Cargo.toml ../../bls12_381_pka/src/lib.rs
-	cargo build --release --target $(TARGET) --manifest-path $(GROTH16_DIR)/Cargo.toml
-
-# Fault-injection sweep over the real Groth16 verifier. Targets the
-# clear-sign feature (Aave / CowSwap / etc.) — a fault that flips a
-# reject into an accept lets an attacker forge ZK clear-sign verifications.
-#
-# `make groth16`       — baseline validator + sparse skip-fault sweep
-#                        (164 positions in [bad_total-5K, bad_total-900)
-#                        at step 25). ~13 min total.
-# `make groth16-full`  — full 30K-insn × 3-fault-model sweep. ~25-100h.
-#                        Intended for overnight runs; tee stdout to a log.
-groth16: build-groth16
-	$(DONJON) run fault_sweep_groth16.py
-
-groth16-full: build-groth16
-	$(DONJON) run fault_sweep_groth16.py --full
+# (The Groth16 fault-injection sweep was removed with the ZK clear-sign
+# retirement — see docs/archive/zk-clear-sign-retirement.md.)
 
 build-saes-kdf: $(SKDF_ELF)
 

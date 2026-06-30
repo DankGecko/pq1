@@ -251,7 +251,6 @@ pub fn pick_sign_pages(
     tx: &crate::tx::eip1559::Eip1559Tx,
     inner_data: &[u8],
     v3: Option<&crate::tx::eip712::cowswap::VerifiedCowswapV3>,
-    v1: Option<&crate::zk::VerifiedClearSignV1>,
     safe_v1: Option<&crate::tx::eip712::safe::VerifiedSafeV1<'_>>,
     safe_exec: Option<&crate::tx::eip712::safe::VerifiedSafeExec<'_>>,
     erc7730: Option<&crate::tx::erc7730::VerifiedDescriptor<'_>>,
@@ -264,7 +263,7 @@ pub fn pick_sign_pages(
     // propagate it so the handler maps it to a refuse-to-sign rather than
     // showing a buffer with a hidden signed value (audit 2026-06-27).
     let mut pages = pick_sign_pages_inner(
-        tx, inner_data, v3, v1, safe_v1, safe_exec, erc7730, erc20, selector, resolver,
+        tx, inner_data, v3, safe_v1, safe_exec, erc7730, erc20, selector, resolver,
     )?;
     // Dispatcher-level WYSIWYS invariant (audit C-1 / H-2 / M-8; hardened
     // 2026-06-18).
@@ -295,20 +294,20 @@ pub fn pick_sign_pages(
     // maxPriorityFeePerGas) are committed to by the UserOp signature, and the
     // wallet pays the resulting EntryPoint prefund out of its own native ETH.
     // Most renderers emit the two standard gas pages inline (the same
-    // "Max fee" / "Worst-case" pair value_transfer shows), but the Safe, CoW
-    // and v1-ZK surfaces historically did NOT — so a fee-bomb UserOp (huge
+    // "Max fee" / "Worst-case" pair value_transfer shows), but the Safe and
+    // CoW surfaces historically did NOT — so a fee-bomb UserOp (huge
     // maxFeePerGas / gas limits, no paymaster) drained the wallet's ETH as
     // gas behind a benign Safe/CoW confirm with no fee page on screen.
     //
     // Rather than trust each of those renderers to opt in, splice the same
     // two pages here for exactly the flows that lack them. `needs_gas`
     // mirrors the branch precedence in `pick_sign_pages_inner`: any
-    // v3 / v1 / safe trailer routes to a gas-less renderer; every other
+    // v3 / safe trailer routes to a gas-less renderer; every other
     // outcome (erc7730 / value / erc20 / typed-call / blind-sign) already
     // shows gas, so splicing there would DOUBLE the pages. Fails CLOSED on a
     // full buffer (same refuse-to-sign contract as the value page).
     let needs_gas =
-        v3.is_some() || v1.is_some() || safe_v1.is_some() || safe_exec.is_some();
+        v3.is_some() || safe_v1.is_some() || safe_exec.is_some();
     if needs_gas {
         value_page::enforce_gas_pages(&mut pages, tx)?;
     }
@@ -321,7 +320,6 @@ fn pick_sign_pages_inner(
     tx: &crate::tx::eip1559::Eip1559Tx,
     inner_data: &[u8],
     v3: Option<&crate::tx::eip712::cowswap::VerifiedCowswapV3>,
-    v1: Option<&crate::zk::VerifiedClearSignV1>,
     safe_v1: Option<&crate::tx::eip712::safe::VerifiedSafeV1<'_>>,
     safe_exec: Option<&crate::tx::eip712::safe::VerifiedSafeExec<'_>>,
     erc7730: Option<&crate::tx::erc7730::VerifiedDescriptor<'_>>,
@@ -354,9 +352,6 @@ fn pick_sign_pages_inner(
             &v3.sell,
             &v3.buy,
         ));
-    }
-    if let Some(v1) = v1 {
-        return Ok(crate::zk::render_clear_sign_pages(tx, &v1.readable, resolver));
     }
     if let Some(safe) = safe_v1 {
         // For Safe inner-tx ERC-20 rendering, only apply the outer

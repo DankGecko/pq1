@@ -121,55 +121,5 @@ fn companion_stub_names_verifies_against_on_device() {
     );
 }
 
-#[test]
-fn companion_stub_vk_verifies_against_on_device() {
-    // CowSwap Settlement on mainnet — a VK entry in vks.json.
-    let contract = "0x9008D19f58AAbD9eD0D60971565AA8510560ab41";
-    let Some(bundle) = build_bundle("vk", 1, contract) else {
-        return;
-    };
-    let root = workspace_root();
-    let res = dbgen::vks::build_db(
-        &root.join("secure/data/vks.json"),
-        &root.join("secure/data/vks"),
-    )
-    .expect("build vk db");
-
-    // The full VK parse lives in the secure crate, but the security-
-    // critical step is the Merkle proof against VK_DB_ROOT, which is the
-    // host-runnable `pqsigner_tx::erc20::merkle::verify_proof`. Re-derive
-    // the canonical leaf exactly as `secure/src/zk/vk_bundle.rs` does:
-    // chain_id(8 LE) || contract(20) || vk(1056).
-    const VK_BLOB_LEN: usize = 1056;
-    assert!(bundle.len() > 8 + 20 + VK_BLOB_LEN + 8, "vk bundle too short");
-    let leaf_index = u32::from_le_bytes(
-        bundle[8 + 20 + VK_BLOB_LEN..8 + 20 + VK_BLOB_LEN + 4]
-            .try_into()
-            .unwrap(),
-    ) as usize;
-    let proof_depth = u32::from_le_bytes(
-        bundle[8 + 20 + VK_BLOB_LEN + 4..8 + 20 + VK_BLOB_LEN + 8]
-            .try_into()
-            .unwrap(),
-    ) as usize;
-    let canonical = &bundle[..8 + 20 + VK_BLOB_LEN];
-    let proof = &bundle[8 + 20 + VK_BLOB_LEN + 8..];
-    assert_eq!(proof.len(), proof_depth * 32, "proof length consistent");
-
-    assert!(
-        pqsigner_tx::erc20::merkle::verify_proof(
-            canonical, leaf_index, proof, proof_depth, &res.root,
-        ),
-        "vk bundle Merkle proof must verify against the pinned VK root"
-    );
-
-    // Forge-resistance: flip a byte inside the VK blob.
-    let mut bad = canonical.to_vec();
-    bad[8 + 20 + 10] ^= 0x01;
-    assert!(
-        !pqsigner_tx::erc20::merkle::verify_proof(
-            &bad, leaf_index, proof, proof_depth, &res.root,
-        ),
-        "tampered VK leaf must be rejected"
-    );
-}
+// (The VK-bundle round-trip test was removed with the Groth16 ZK
+// clear-sign retirement — see docs/archive/zk-clear-sign-retirement.md.)

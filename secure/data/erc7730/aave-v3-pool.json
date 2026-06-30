@@ -151,6 +151,83 @@
             "visible": "never"
           }
         ]
+      },
+      "borrow(address asset, uint256 amount, uint256 interestRateMode, uint16 referralCode, address onBehalfOf)": {
+        "$id": "borrow",
+        "intent": "Borrow",
+        "fields": [
+          {
+            "path": "amount",
+            "format": "tokenAmount",
+            "label": "Amount to borrow",
+            "params": {
+              "tokenPath": "asset"
+            },
+            "visible": "always"
+          },
+          {
+            "path": "onBehalfOf",
+            "format": "addressName",
+            "label": "On behalf of",
+            "params": {
+              "types": [
+                "eoa"
+              ],
+              "sources": [
+                "local",
+                "ens"
+              ]
+            },
+            "visible": "always"
+          },
+          {
+            "label": "Interest Rate Mode",
+            "path": "interestRateMode",
+            "visible": "never"
+          },
+          {
+            "label": "Referral Code",
+            "path": "referralCode",
+            "visible": "never"
+          }
+        ]
+      },
+      "repay(address asset, uint256 amount, uint256 interestRateMode, address onBehalfOf)": {
+        "$id": "repay",
+        "intent": "Repay",
+        "fields": [
+          {
+            "path": "amount",
+            "format": "tokenAmount",
+            "label": "Amount to repay",
+            "params": {
+              "tokenPath": "asset",
+              "threshold": "$.metadata.constants.max",
+              "message": "Max"
+            },
+            "visible": "always"
+          },
+          {
+            "path": "onBehalfOf",
+            "format": "addressName",
+            "label": "On behalf of",
+            "params": {
+              "types": [
+                "eoa"
+              ],
+              "sources": [
+                "local",
+                "ens"
+              ]
+            },
+            "visible": "always"
+          },
+          {
+            "label": "Interest Rate Mode",
+            "path": "interestRateMode",
+            "visible": "never"
+          }
+        ]
       }
     }
   }

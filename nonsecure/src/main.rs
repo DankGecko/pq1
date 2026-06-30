@@ -75,8 +75,6 @@ mod tzic_wipe_test;
 mod erc20_db;
 #[cfg(all(feature = "e2e-test", not(feature = "gtzc-test")))]
 mod names_db;
-#[cfg(all(feature = "e2e-test", not(feature = "gtzc-test")))]
-mod vk_db;
 mod nsc_api;
 // The selectors DB blob lives on the host; only the e2e-test build
 // stubs in a companion-side bundle builder so the QEMU NS test

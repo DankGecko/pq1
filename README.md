@@ -57,7 +57,7 @@ Each item below is implemented today (QEMU and/or real STM32U585), partial, or p
 - **Dual secure elements (split entropy)** — BIP-39 entropy is XOR-split: `half_O` on OPTIGA, `half_E` on SE050. Either chip alone reveals zero bits. `E = HKDF(half_O ⊕ half_E)` happens only in S-SRAM during unlock, then zeroized. *(Validated on silicon; both on I2C1 at 0x30 / 0x48.)*
 - **Three-way PIN counter sync** — silicon-monotonic counters on MCU page 124 (FI-hardened pre-commit), OPTIGA E120 LUC bound to F1D0 Execute (immune to PBS extraction), and SE050 silicon UserID. `MAX_ATTEMPTS = 10` on any one dispatches `factory_reset_admin` + page-124 erase; `CMD_GET_REMAINING` returns the min. *(Validated: `make pin-gate-hw-counter-e2e`, `make pin-gate-wipe-e2e`.)*
 - **Three-tier DHUK + BHK + OTP key hierarchy** — Tier 1 (DHUK, `SAES-CMAC(DHUK, label‖counter)`) is **landed** behind `saes-dhuk`. At RDP0 the DHUK is an ST-substituted constant shared across boards (per-die uniqueness only at RDP ≥ 1). Tier 2 (BHK) and the OTP-salt repurpose are planned.
-- **Trusted-display clear-signing** — every signable artifact is decoded and rendered in S-world before confirm. **Safe** EIP-712 `SafeTx` and **CoW Swap** EIP-712 `GPv2Order` are verified in-world (`secure/src/tx/eip712/{safe,cowswap}/`); for CoW Swap a Groth16 proof over BLS12-381 binds the displayed intent to the order. **ERC-20** transfers render symbol/decimals from a Merkle-verified metadata bundle; **ERC-7730** descriptors render field-level pages. Unknown shapes (incl. Safe `multiSend` batches) fall, loudly, to blind-sign.
+- **Trusted-display clear-signing** — every signable artifact is decoded and rendered in S-world before confirm, all by **native on-device decoders** (no ZK proof). **Safe** EIP-712 `SafeTx` and **CoW Swap** EIP-712 `GPv2Order` are verified in-world (`secure/src/tx/eip712/{safe,cowswap}/`) and decoded locally. **ERC-20** transfers and CoW order legs render symbol/decimals from a Merkle-verified metadata bundle; **ERC-7730** descriptors (incl. Aave v3) render field-level pages. Unknown shapes (incl. Safe `multiSend` batches) fall, loudly, to blind-sign. *(An earlier Groth16/BLS12-381 ZK clear-sign verifier was retired 2026-06-30 — see `docs/archive/zk-clear-sign-retirement.md`.)*
 - **Boot-time self-test & measurement** — `hw::hash::init_clock()` runs a `SHA-256("abc")` KAT (halt on mismatch); `make saes-self-test-hw` runs the SAES round-trip + 8-byte DHUK fingerprint. The secure-world image hash is rendered as 8 BIP-39 words on the OLED for trustless comparison against `fwmeasure`.
 - **Hardening hooks** — STM32U585 TAMP (Trezor-port; log-only on this branch, production flips to `trigger_lockout_wipe()`), TIM2 CH1 PWM consumption mask (PA5), UI-capture screenshot-hash harness. All feature-gated; CI keeps them out of production.
 - **No heap** — `#![no_std]`, stack-only, no `Vec`/`Box`/`String`. `zeroize` on every secret; `subtle` for constant-time compares; `// SAFETY:` on every `unsafe`.
@@ -99,22 +99,20 @@ Expected real-hardware key-speed (`hw-sha256`, auto under `stm32u585`): first-si
 
 ```
 sphincs_rust/
-├── secure/        TrustZone SECURE world (main.rs, crypto.rs, sau.rs, nsc/, aa/, tx/, zk/,
+├── secure/        TrustZone SECURE world (main.rs, crypto.rs, sau.rs, nsc/, aa/, tx/,
 │                  optiga/, se050/, dual_se.rs, fw_update/, measured_boot.rs, ui/, hw/)
 ├── nonsecure/     NON-SECURE world: USB HID + APDU v2 router, NS gateway caller, e2e runner,
-│                  generated erc20_db.bin / vk_db.bin
+│                  generated erc20_db.bin / names_db.bin
 ├── shared/        Cross-world #[repr(C)] types, NscStatus, CMD constants, wire-format sizes
 ├── proto/         pqsigner-proto — protocol constants/enums/sizes (source of truth for Solidity)
 ├── sphincs-c10/   SPHINCS+C10 signing library (no_std, SHA-256)
 ├── bip39/         24-word English BIP-39 (no_std)
 ├── domain/ tx-core/ aa/ tx/ hal/ pqsigner-erc7730/   pure-logic workspace crates
-├── bls12_381_pka/ BLS12-381 fork with PKA feature for STM32U585
 ├── contracts/smart-wallet/   Foundry project — PQSmartWallet, Factory, PQMultiOwnable,
 │                             verifiers/SPHINCsC10Asm.sol (stateless Yul C10 verifier)
 ├── fsbl/          immutable first-stage bootloader (PQ A/B selector, ~18 KB)
 ├── fwsign/ fwmeasure/ fw-manifest/   host signer/verifier, measurement tool, manifest chain
-├── dbgen/         host ERC20/VK DB + Merkle-tree builder
-├── circuits/ zk-test/   in-tree Circom circuits + Groth16 host harness
+├── dbgen/         host ERC20/names/selectors/ERC-7730 DB + Merkle-tree builder
 ├── tools/         webhid_test.html, wallet_run_hw.py, …
 └── docs/          architecture.md, HARDENING.md, work-todo.md, threat-model.md, …
 ```
@@ -128,9 +126,10 @@ Two embedded read-only DBs ship in **non-secure rodata**, both Merkle-anchored t
 | DB | Source | NS artifact | Secure anchor |
 |---|---|---|---|
 | ERC20 metadata | `secure/data/erc20.json` | `nonsecure/src/erc20_db.bin` | `ERC20_DB_ROOT` |
-| ZK clear-signing VKs | `secure/data/vks.json` + `vks/*.vk.bin` | `nonsecure/src/vk_db.bin` | `VK_DB_ROOT` |
+| Address names | `secure/data/names.json` | `nonsecure/src/names_db.bin` | `NAMES_DB_ROOT` |
+| ERC-7730 descriptors | `secure/data/erc7730/*.json` | `tools/companion-stub/erc7730_db.bin` | `ERC7730_DESCRIPTORS_ROOT` |
 
-`cargo run -p dbgen` reads the JSON, builds a SHA-256 Merkle tree, appends per-entry proofs, and writes both `.bin` files, `db_roots.rs`, and a human-readable `vks.review.txt` traceability manifest. All generated files are committed so downstream builds don't need the Rust host toolchain. `nonsecure/build.rs` sniffs the magic bytes (`ERC2` / `VKDB`) and fails the build with a "run `cargo run -p dbgen`" message if the JSON drifted from the `.bin`. The trust chain is fully offline: firmware-signing key → root in secure flash → Merkle proof walk → verification. Adding a token or a ZK protocol: edit the JSON (and for ZK, add the circuit + 960-byte VK via the `circuits/` toolchain), rerun `dbgen`, audit the `vks.review.txt` diff, commit the regenerated files.
+`cargo run -p dbgen` reads the JSON, builds a SHA-256 Merkle tree, appends per-entry proofs, and writes the `.bin` files plus `db_roots.rs`. All generated files are committed so downstream builds don't need the Rust host toolchain. `nonsecure/build.rs` sniffs the magic bytes (`ERC2` / `NAMS`) and fails the build with a "run `cargo run -p dbgen`" message if the JSON drifted from the `.bin`. The trust chain is fully offline: firmware-signing key → root in secure flash → Merkle proof walk → verification. Adding a token or a contract descriptor: edit the JSON, rerun `dbgen`, commit the regenerated files. *(A ZK-VK DB lived here for the Groth16 clear-sign path; it was removed when that path was retired — see `docs/archive/zk-clear-sign-retirement.md`.)*
 
 ## Cryptographic Primitives
 
@@ -155,8 +154,8 @@ Every primitive that touches a secret, with PQ status. **Classical** entries are
 | **Slot derivation** | `slot_entropy = sha256(slot_master‖"slot_entropy"‖chain_id_be8‖slot_index_be4)`; `slot_sk_seed = sha256("slot_c10_sk_seed"‖slot_entropy)`; `slot_pk_seed = sha256("slot_c10_pk_seed"‖slot_entropy) & N_MASK` | 32 B sk, 16 B pk | ✅ | **Chain-bound** (post-Coinbase port): slot keys differ per chain. Stateless within the 2¹⁸ tree; cached in SRAM for the unlock session only |
 | **Anti-rollback counter** | OTP fuses (1024 increments, RDP-regression-resistant) | — | ✅ | One-way by design, no reset path |
 | **TRNG mixing** | STM32 TRNG today; planned ⊕ OPTIGA ⊕ SE050 TRNG | 32 B | ✅ | Quantum offers nothing against true randomness |
-| **ZK clear-sign verifier** | Groth16 over BLS12-381 (4 pairings, no alloc) | proof 384 B, vk 960 B | ❌ | Display-only — gates *what is shown before signing*, never reaches the seed |
-| **ZK / ERC20 DB auth** | SHA-256 Merkle tree over pinned leaves; 32-byte root in secure flash | root 32 B | ✅ | Anchored to the firmware-signing key; fully offline (no on-chain governance lookups) |
+| **Clear-sign decoders** | Native on-device decode (Safe / CoW / ERC-7730 / ERC-20 / typed-call) | — | ❌ | Display-only — gates *what is shown before signing*, never reaches the seed. (Groth16 ZK verifier retired 2026-06-30, see `docs/archive/zk-clear-sign-retirement.md`) |
+| **Clear-sign DB auth** | SHA-256 Merkle tree over pinned leaves; 32-byte root in secure flash | root 32 B | ✅ | Anchored to the firmware-signing key; fully offline (no on-chain governance lookups) |
 
 **Choices frozen at launch** (changing any reproduces a different keypair / on-chain address — today a re-provisioning cost on bench boards, not a user-visible fork):
 
@@ -312,7 +311,7 @@ Any claim of "verified" in docs or marketing must carry the assumption list.
 | Standalone Tropic01 path (Noise_KK1 + MACD) | 🟢 HW (not used in dual-SE) |
 | Trusted UI (OLED + 2-button), seed wizard / PIN entry / confirm dialogs | 🟢 QEMU + HW |
 | `#![no_std]`/no-heap/zeroize, panic-handler wipe, inactivity timeout | 🟢 QEMU + HW |
-| ZK clear-sign (Groth16/Poseidon over BLS12-381); ERC20 + VK DBs + Merkle verifier | 🟢 QEMU |
+| Native clear-sign (Safe / CoW / ERC-7730 / ERC-20); Merkle-verified DBs | 🟢 QEMU |
 | EIP-712 Safe + CoW Swap verifiers; ERC-7730 renderer | 🟢 QEMU |
 | Automated e2e (`make e2e` QEMU; `make e2e-hw` silicon) | 🟢 |
 | ERC-1967 proxy contracts (PQSmartWallet + Factory + PQMultiOwnable), Foundry suite | 🟢 |
@@ -360,7 +359,7 @@ See [docs/firmware/firmware-update.md](docs/firmware/firmware-update.md) and [do
 | `stm32u585` | Real hardware target (vs QEMU `mps2-an505`). **Implies `hw-sha256`** |
 | `hw-sha256` | Route `sphincs-c10` SHA-256 through the HASH peripheral |
 | `ui-semihosting` / `ui-oled` / `ui-noop` | Console (QEMU) / SSD1306 OLED / silent |
-| `usb` / `pka-accel` | USB OTG init / route BLS12-381 Fp through the PKA |
+| `usb` | USB OTG init |
 | `debug-log` / `e2e-test` / `mock-se` / `otp-hardcoded-master-key` / `ui-capture` | **Dev/test only — CI gates these OFF for production** |
 
 Mode aliases: `mode-production` (no dev features) · `mode-bringup` (`debug-log`) · `mode-e2e` · `mode-bench`.

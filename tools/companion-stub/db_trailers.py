@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
-"""Companion-stub: build ERC-20 / address-name / ZK-VK sign-input
+"""Companion-stub: build ERC-20 / address-name sign-input
 bundles from the host-side DB blobs.
 
-These three DBs used to be baked into the firmware (`include_bytes!`'d
+These DBs used to be baked into the firmware (`include_bytes!`'d
 into the non-secure image). They now live entirely host-side, under
-`tools/companion-stub/{erc20,vk,names}_db.bin`, exactly like the
+`tools/companion-stub/{erc20,names}_db.bin`, exactly like the
 selectors and ERC-7730 DBs. The device ships only the 32-byte Merkle
-roots (`ERC20_DB_ROOT` / `NAMES_DB_ROOT` / `VK_DB_ROOT` in
+roots (`ERC20_DB_ROOT` / `NAMES_DB_ROOT` in
 `secure/src/db_roots.rs`) and Merkle-verifies every companion-supplied
 bundle against them in the secure world before any byte reaches the
-trusted UI.
+trusted UI. (A ZK-VK bundle kind existed here for the Groth16 clear-sign
+path; it was removed when that path was retired — see
+docs/archive/zk-clear-sign-retirement.md.)
 
 This module is the reference implementation a real companion app
-follows. It mirrors the firmware's `nonsecure/src/{erc20,vk,names}_db.rs`
+follows. It mirrors the firmware's `nonsecure/src/{erc20,names}_db.rs`
 `build_bundle` functions byte-for-byte — the dbgen round-trip test
 `companion_stub_*_verifies_against_on_device` feeds this script's output
 back through the on-device verifier, so the two stay locked together.
@@ -30,10 +32,6 @@ Usage:
     # Address-name trailer (chain 0 = wildcard fallback handled internally):
     python3 tools/companion-stub/db_trailers.py names \\
         --chain 1 --contract 0xE592427A0AEce92De3Edee1F18E0157C05861564
-
-    # ZK verification-key trailer for (chain, verifier contract):
-    python3 tools/companion-stub/db_trailers.py vk \\
-        --chain 1 --contract 0x9008D19f58AAbD9eD0D60971565AA8510560ab41
 
     # List the entries in a blob:
     python3 tools/companion-stub/db_trailers.py erc20 --list
@@ -77,13 +75,6 @@ NAMES_ENTRY_OFF_NAME_OFF = 16
 NAMES_SHORT_KEY_TAG = b"pqsigner-name-key-v1"
 NAMES_WILDCARD_CHAIN_ID = 0
 
-VK_MAGIC = b"VKDB"
-VK_ENTRY_LEN = 32
-VK_ENTRY_OFF_CHAIN_ID = 0
-VK_ENTRY_OFF_CONTRACT = 8
-VK_ENTRY_OFF_VK_ID = 28
-VK_BLOB_LEN = 1056
-
 
 def _parse_address(s: str) -> bytes:
     s = s.lower().strip()
@@ -96,9 +87,8 @@ def _parse_address(s: str) -> bytes:
 
 def _header(blob: bytes, magic: bytes, pool_off_at: int = 16) -> dict:
     """Parse the common 32-byte header. The pool-offset field is at
-    offset 16 for the ERC-20 / Names DBs (`pool_off`), but at offset 20
-    for the VK DB (`vk_pool_off`) — offset 16 there holds `vk_count`.
-    proof_depth (24) and proofs_off (28) are identical across all three."""
+    offset 16 for the ERC-20 / Names DBs (`pool_off`). proof_depth (24)
+    and proofs_off (28) are identical across the DBs."""
     if len(blob) < HEADER_LEN:
         raise ValueError(f"blob too short: {len(blob)} < {HEADER_LEN}")
     if blob[:4] != magic:
@@ -112,7 +102,7 @@ def _header(blob: bytes, magic: bytes, pool_off_at: int = 16) -> dict:
     (proofs_off,) = struct.unpack_from("<I", blob, 28)
     return {
         "entry_cnt": entry_cnt,
-        "pool_off": pool_off,  # = vk_pool_off for the VK DB
+        "pool_off": pool_off,
         "proof_depth": proof_depth,
         "proofs_off": proofs_off,
     }
@@ -209,44 +199,13 @@ def build_names_bundle(blob: bytes, chain_id: int, address: bytes) -> bytes:
     return bytes(out)
 
 
-# ── VK ─────────────────────────────────────────────────────────────────
-def build_vk_bundle(blob: bytes, chain_id: int, contract: bytes) -> bytes:
-    # vk_pool_off lives at header offset 20 (offset 16 is vk_count).
-    hdr = _header(blob, VK_MAGIC, pool_off_at=20)  # pool_off here = vk_pool_off
-    idx = None
-    for i in range(hdr["entry_cnt"]):
-        base = HEADER_LEN + i * VK_ENTRY_LEN
-        (e_chain,) = struct.unpack_from("<Q", blob, base + VK_ENTRY_OFF_CHAIN_ID)
-        e_contract = bytes(
-            blob[base + VK_ENTRY_OFF_CONTRACT : base + VK_ENTRY_OFF_CONTRACT + 20]
-        )
-        if e_chain == chain_id and e_contract == contract:
-            idx = i
-            break
-    if idx is None:
-        raise SystemExit(f"no VK entry for chain={chain_id} contract=0x{contract.hex()}")
-
-    base = HEADER_LEN + idx * VK_ENTRY_LEN
-    vk_id = blob[base + VK_ENTRY_OFF_VK_ID]
-    vk_start = hdr["pool_off"] + vk_id * VK_BLOB_LEN
-    vk = bytes(blob[vk_start : vk_start + VK_BLOB_LEN])
-    if len(vk) != VK_BLOB_LEN:
-        raise SystemExit(f"truncated blob: VK pool slot {vk_id}")
-
-    out = bytearray()
-    out += struct.pack("<Q", chain_id)
-    out += contract
-    out += vk
-    out += struct.pack("<I", idx)
-    out += struct.pack("<I", hdr["proof_depth"])
-    out += _proof(blob, hdr, idx)
-    return bytes(out)
+# (The VK bundle builder was removed with the Groth16 ZK clear-sign
+# retirement — see docs/archive/zk-clear-sign-retirement.md.)
 
 
 _KINDS = {
     "erc20": (ERC20_MAGIC, ERC20_ENTRY_LEN, build_erc20_bundle, "erc20_db.bin"),
     "names": (NAMES_MAGIC, NAMES_ENTRY_LEN, build_names_bundle, "names_db.bin"),
-    "vk": (VK_MAGIC, VK_ENTRY_LEN, build_vk_bundle, "vk_db.bin"),
 }
 
 

@@ -49,7 +49,6 @@ const CONSUMPTION_MASK_SRC: &str = include_str!("../hw/consumption_mask.rs");
 const SCA_TRIGGER_SRC: &str = include_str!("../hw/sca_trigger.rs");
 const RCC_SRC: &str = include_str!("../hw/rcc.rs");
 const RNG_SRC: &str = include_str!("../hw/rng.rs");
-const PKA_SRC: &str = include_str!("../hw/pka.rs");
 const BOOT_PULSE_SRC: &str = include_str!("../hw/boot_pulse.rs");
 const BOOT_STATE_SRC: &str = include_str!("../hw/boot_state.rs");
 const HW_MOD_SRC: &str = include_str!("../hw/mod.rs");
@@ -233,35 +232,9 @@ fn positive_rng_condrst_bit_30() {
     assert!(RNG_SRC.contains("const CONDRST: u32 = 1 << 30;"));
 }
 
-#[test]
-fn positive_pka_peripheral_secure_alias() {
-    assert!(PKA_SRC.contains("const PKA_BASE: u32 = 0x520C_2000;"));
-}
-
-#[test]
-fn positive_pka_ram_offsets_match_rm0456() {
-    // RM0456 standalone-mode operand layout:
-    // NB_BITS@0x408, OP1@0xA50, OP2@0xC68, RESULT@0xE78, OP3@0x1088.
-    assert!(PKA_SRC.contains("const RAM_NB_BITS_ADDR: u32 = PKA_RAM_BASE + 0x0008;"));
-    assert!(PKA_SRC.contains("const PKA_RAM_BASE: u32 = PKA_BASE + 0x400;"));
-    assert!(PKA_SRC.contains("const RAM_OP1: u32 = PKA_BASE + 0x0A50;"));
-    assert!(PKA_SRC.contains("const RAM_OP2: u32 = PKA_BASE + 0x0C68;"));
-    assert!(PKA_SRC.contains("const RAM_RESULT: u32 = PKA_BASE + 0x0E78;"));
-    assert!(PKA_SRC.contains("const RAM_MODULUS: u32 = PKA_BASE + 0x1088;"));
-}
-
-#[test]
-fn positive_pka_montgomery_mul_opcode() {
-    // PKA_CR.MODE = 0x10 selects Montgomery mul. Any other value would
-    // start the wrong primitive (the bls12_381 fork relies on this).
-    assert!(PKA_SRC.contains("const MODE_MONTGOMERY_MUL: u32 = 0x10;"));
-}
-
-#[test]
-fn positive_pka_bls12_381_field_size_384_bits() {
-    assert!(PKA_SRC.contains("const BLS12_381_BITS: u32 = 384;"));
-    assert!(PKA_SRC.contains("const N_LIMBS: usize = 12;"));
-}
+// (PKA peripheral source-introspection tests removed — the PKA driver
+// was deleted with the Groth16 ZK clear-sign retirement; BLS12-381 field
+// arithmetic was its only consumer.)
 
 #[test]
 fn positive_tamp_secure_alias_and_irqn_2() {
@@ -722,20 +695,6 @@ pub mod tamp;"##),
     );
 }
 
-#[test]
-fn negative_pka_module_gated_on_pka_accel_only() {
-    // Per the slice's mod.rs comment: pka.rs is gated only on
-    // pka-accel because the bls12_381 fork is the sole consumer.
-    // Tightening the gate to require stm32u585 would prevent host
-    // testing of the BLS12-381 fork's `pka` feature. Loosening it
-    // (no gate at all) would compile pka.rs into every build.
-    assert!(
-        HW_MOD_SRC.contains(r##"#[cfg(feature = "pka-accel")]
-pub mod pka;"##),
-        "hw/mod.rs must keep pka behind the `pka-accel` feature gate"
-    );
-}
-
 // ═════════════════════════════════════════════════════════════════════
 // 9. NEGATIVE — register address attacks (wrong-alias rejection)
 // ═════════════════════════════════════════════════════════════════════
@@ -765,17 +724,6 @@ fn negative_rng_uses_secure_alias_not_ns_alias() {
     assert!(
         !RNG_SRC.contains("const RNG: u32 = 0x420C_0800;"),
         "RNG driver must NOT use NS alias 0x420C_0800 — bus-faulted at first boot"
-    );
-}
-
-#[test]
-fn negative_pka_uses_secure_alias_not_ns_alias() {
-    // NS alias 0x420C_2000 is rejected because TZSC marks PKA secure
-    // by default; secure alias 0x520C_2000 is the only working one.
-    assert!(PKA_SRC.contains("const PKA_BASE: u32 = 0x520C_2000;"));
-    assert!(
-        !PKA_SRC.contains("const PKA_BASE: u32 = 0x420C_2000;"),
-        "PKA driver must NOT use NS alias 0x420C_2000 — TZ blocks it"
     );
 }
 
@@ -922,7 +870,6 @@ fn negative_no_classical_signer_in_platform_slice() {
             ("sca_trigger.rs", SCA_TRIGGER_SRC),
             ("rcc.rs", RCC_SRC),
             ("rng.rs", RNG_SRC),
-            ("pka.rs", PKA_SRC),
             ("boot_pulse.rs", BOOT_PULSE_SRC),
             ("boot_state.rs", BOOT_STATE_SRC),
         ] {
@@ -1354,41 +1301,8 @@ fn negative_tamp_init_skips_external_pins() {
     assert!(!body.contains("ITAMP10E"));
 }
 
-// ═════════════════════════════════════════════════════════════════════
-// 17. NEGATIVE — PKA driver assumptions (BLS12-381 only consumer)
-// ═════════════════════════════════════════════════════════════════════
-
-#[test]
-fn negative_pka_bls12_381_modulus_limbs_in_little_endian_order() {
-    // BLS12-381 base prime p — limb order is LSB-first per RM0456
-    // §"PKA RAM layout". Reversing the limbs would still compile
-    // and pass the init handshake, but every Montgomery mul would
-    // return garbage. Pin the canonical limbs[0]..limbs[11].
-    assert!(PKA_SRC.contains("0xFFFF_AAAB, 0xFFFF_FFFF, 0xB9FE_FFFF, 0x1EAB_FFFE,"));
-    assert!(PKA_SRC.contains("0xF6B0_F624, 0x6730_D2A0, 0xF385_12BF, 0x6477_4B84,"));
-    assert!(PKA_SRC.contains("0x4B1B_A7B6, 0x434B_ACD7, 0x397F_E69A, 0x1A01_11EA,"));
-}
-
-#[test]
-fn negative_pka_extern_hook_no_mangle_for_bls12_381_fork() {
-    // The bls12_381 fork resolves the firmware-side accelerator via
-    // `extern "Rust"` lookup on `bls12_381_pka_mont_mul`. Renaming
-    // or removing `#[no_mangle]` would silently fall back to the
-    // software path (which on STM32U585 is 100× slower and would
-    // miss the OPTIGA/Tropic01 expected timing budgets).
-    assert!(PKA_SRC.contains("#[no_mangle]"));
-    assert!(PKA_SRC.contains("pub unsafe extern \"Rust\" fn bls12_381_pka_mont_mul"));
-}
-
-#[test]
-fn negative_pka_writes_terminator_word_past_operand() {
-    // RM0456 specifies an N_LIMBS+1 zero terminator after each
-    // operand. Without it, stale PKA RAM bytes from a previous op
-    // would extend the operand size and the engine would compute
-    // on garbage.
-    let body = extract_body(PKA_SRC, "fn write_operand(slot: Reg32, limbs: &[u32; N_LIMBS]) {");
-    assert!(body.contains("slot.write_at(N_LIMBS, 0);"));
-}
+// (Section 17 — PKA driver assumption tests — removed with the Groth16
+// ZK clear-sign retirement; BLS12-381 was the PKA driver's only consumer.)
 
 // ═════════════════════════════════════════════════════════════════════
 // 18. NEGATIVE — RCC must keep HSI16-baseline-before-PLL fallback

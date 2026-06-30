@@ -116,13 +116,8 @@ sphincs_rust/
 │       │   ├── dispatch.rs       # dispatch_tx() → TxKind trust level
 │       │   ├── merkle.rs         # sha256 Merkle proof verifier (shared with VK DB)
 │       │   └── bundle.rs         # NS → S metadata bundle parser + verifier
-│       ├── zk/                # ZK clear-signing verifier (no_std, no alloc)
-│       │   ├── mod.rs            # Module entry + size constants
-│       │   ├── groth16.rs        # BLS12-381 Groth16 verifier (4 individual pairings)
-│       │   ├── poseidon.rs       # Poseidon hash over BLS12-381 scalar field (alpha=5)
-│       │   ├── poseidon_constants.rs  # Auto-generated round constants + MDS matrices
-│       │   ├── vk_bundle.rs      # NS → S VK bundle parser + Merkle verifier
-│       │   └── test_data/        # vk_bytes.bin, vk_hash.bin (Aave V3 reference VK)
+│       │   # (secure/src/zk/ — the Groth16 ZK clear-sign verifier — was
+│       │   #  retired 2026-06-30; see docs/archive/zk-clear-sign-retirement.md)
 │       └── ui/
 │           ├── mod.rs         #   Display + Input + global singletons
 │           ├── pin_entry.rs   #   2-button 8-digit PIN entry (+ confirm helper)
@@ -131,18 +126,12 @@ sphincs_rust/
 │
 ├── secure/data/              # Curated source data for dbgen
 │   ├── erc20.json            # (chain_id, address, name, symbol, decimals) rows
-│   ├── vks.json              # Protocol VK manifest
-│   ├── vks/*.vk.bin          # Per-protocol 960-byte Groth16 VKs
-│   └── vks.review.txt        # Generated: release-review manifest (sha256 per VK)
+│   ├── names.json            # (chain_id, address, label) rows
+│   └── erc7730/*.json        # ERC-7730 clear-signing descriptors
 │
 ├── dbgen/                    # Host-side DB + Merkle tree builder
 │   ├── Cargo.toml
-│   └── src/{main,erc20,vks,merkle}.rs
-│
-├── zk-test/                  # Host-side end-to-end test for the ZK verifier
-│   ├── Cargo.toml            #   bls12_381 + sha2 (host std), no QEMU needed
-│   └── src/main.rs           #   Mirrors the secure-world Poseidon + Groth16 path,
-│                             #   exercises ZKlarity's proof_supply.json on the host
+│   └── src/{main,erc20,names,selectors,erc7730,merkle}.rs
 │
 ├── tools/
 │   └── export_zk_constants.js # Exports Poseidon round constants from
@@ -705,28 +694,36 @@ NS World                          Secure World                        TROPIC01 C
    from sig_buf
 ```
 
-## ZK Clear Signing
+## ZK Clear Signing — RETIRED (2026-06-30)
+
+> **This subsystem has been removed.** The on-device Groth16 / BLS12-381
+> ZK clear-sign verifier is gone; the clear-sign trust model is now
+> **native on-device decode** for every shape (Safe, CoW Swap, ERC-7730,
+> ERC-20, typed-call), anchored in firmware-pinned Merkle roots. The only
+> path the ZK verifier still served — Aave v3 `borrow`/`repay` — was
+> ported to the native ERC-7730 descriptor with no clear-sign regression.
+> See `docs/archive/zk-clear-sign-retirement.md`. The historical
+> description below is retained for context only.
 
 For supported DeFi protocols (Aave V3, CowSwap `setPreSignature`, and
 CowSwap EIP-712 `GPv2Order` typed-data signing), the secure world
-refuses to display a "human-readable" action string on the trusted UI
-unless a **Groth16 zero-knowledge proof** cryptographically certifies
-that the string is a faithful interpretation of the raw bytes being
-signed. This closes a long-standing trust hole in hardware wallets:
-today, the companion app on the host is free to render `swap 1 ETH for
+refused to display a "human-readable" action string on the trusted UI
+unless a **Groth16 zero-knowledge proof** cryptographically certified
+that the string was a faithful interpretation of the raw bytes being
+signed. This closed a long-standing trust hole in hardware wallets:
+the companion app on the host is free to render `swap 1 ETH for
 3000 USDC` while the chip is asked to sign a calldata blob that
-actually drains the caller's balance to an attacker.
+actually drains the caller's balance to an attacker. (That same
+guarantee is now provided by decoding the calldata on-device directly,
+rather than by verifying an off-device proof about it.)
 
-The architecture follows the [ZKNOX clear-signing
-proposal](https://zknox.org). The Aave V3 circuit is a byte-identical copy
-of [ZKNoxHQ/ZKlarity](https://github.com/ZKNoxHQ/ZKlarity) (see
-`circuits/UPSTREAM.md` for provenance and the unresolved license note);
-the CowSwap `setPreSignature` circuit is written in-tree under
-`circuits/cowswap/set_pre_signature/`, and the M4 EIP-712 GPv2Order
-circuit lives at `circuits/cowswap/eip712_order/`. Proving runs
-off-device, on either a watchtower service or the user's companion;
-the wallet only ever runs the **verifier**, which is small enough
-(`#![no_std]`, no `alloc`) to fit inside the secure world.
+The architecture followed the [ZKNOX clear-signing
+proposal](https://zknox.org). The Aave V3 circuit was a byte-identical copy
+of [ZKNoxHQ/ZKlarity](https://github.com/ZKNoxHQ/ZKlarity); the CowSwap
+circuits were written in-tree. Proving ran off-device, on either a
+watchtower service or the user's companion; the wallet only ever ran the
+**verifier**, which was small enough (`#![no_std]`, no `alloc`) to fit
+inside the secure world.
 
 The wallet supports two distinct sign-time payload shapes:
 

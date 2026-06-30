@@ -280,8 +280,11 @@ mod stm32 {
     //   through the `pqsigner_sha256_*` extern fns.
     // - RNG (bit 13): STM32 TRNG; backbone of `rng_strong::fill`
     //   (the 3-source XOR per F-13/§10 work).
-    // - PKA (bit 14): BLS12-381 pairing accelerator for the
-    //   Groth16 ZK clear-signing verifier.
+    // - PKA (bit 14): public-key accelerator. No longer driven by
+    //   firmware (the Groth16 ZK clear-sign verifier that used it was
+    //   retired — see docs/archive/zk-clear-sign-retirement.md), but
+    //   still marked SECURE defensively so a stale NS driver can't poke
+    //   the peripheral.
     // - SAES (bit 15): Tier-1 KDF (DHUK / BHK derivation) — the
     //   single most secret-bearing peripheral on the bus.
     const SECCFGR3_AES_BIT:  u32 = 1 << 11;
