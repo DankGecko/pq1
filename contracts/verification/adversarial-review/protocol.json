@@ -74,6 +74,22 @@
         "fsbl/src/**/*.rs",
         "secure/src/hw/otp.rs"
       ]
+    },
+    {
+      "id": "kani-decoder-vacuity",
+      "title": "Firmware Kani harness vacuity + scope (V1/V3/V6/V8/V11 + G3) -- the FIRST non-Lean surface profile; model new surfaces on this",
+      "instructions": "Hunt VACUOUS or SCOPE-LIMITED firmware Kani proofs -- the ~76 #[kani::proof] harnesses (in #[cfg(kani)] mod verification blocks) gating the clear-sign decoders + counters + the FW-update manifest. The mechanical gate (scripts/check_kani_mutations.py + kani_mutations.json, `make verify-kani-mutation`) already screens for a load-bearing mutation a harness fails to catch -- ASSUME it runs; find what it structurally CANNOT: (V1) a kani::assume(...) so tight it empties the input space (assume(false), or a precondition no real companion input satisfies) so the harness proves nothing; (V3) a #[kani::proof] with no assertion, or asserting a tautology / a definitional identity; (V6) a decoder verified against a re-implementation of ITSELF (a self-derived oracle, not an independent reference); (V8 -- THE BIG ONE) a BOUNDED proof presented as universal: #[kani::unwind(N)] / a fixed [u8; N] symbolic buffer / kani::any::<[u8;N]>() where the comment or ledger implies for-all but only <=N records / <=N bytes are covered (multiSend is bounded to <=2 records at N=180) -- ask whether the caller's cap actually makes the bound sound, or whether an adversary payload past N is simply unproven; (V11 -- THE OTHER BIG ONE) a harness proving 'no panic / no OOB / canonical accept' when the WYSIWYS threat is 'the RENDER matches the calldata' -- the renderer is #[cfg(not(test))] and OUT of Kani's reach, so gate==renderer rests on by-construction + host tests, NOT the Kani proof; attack any implication that a decode-decision proof secures the DISPLAY. Also G3 (coverage): which decoders / sign-paths / counter-transitions have NO harness at all? Cross-reference contracts/verification/docs/FV_SURFACE_MAP.md -- this firmware-Kani surface has never had a first adversarial pass. PoC per finding: the concrete input past the bound (V8), a load-bearing mutation kani_mutations.json omits (V1/V6), or the wrong-property gap (V11). Tag v_class V1/V3/V6/V8/V11 or G3.",
+      "targets": [
+        "tx/src/multisend.rs",
+        "tx/src/cowswap_order.rs",
+        "tx/src/safe_tx.rs",
+        "tx/src/typed_call/parser.rs",
+        "fw-manifest/src/lib.rs",
+        "aa/src/userop.rs",
+        "shared/src/ns_ptr_validate.rs",
+        "scripts/kani_mutations.json",
+        "contracts/verification/docs/FV_SURFACE_MAP.md"
+      ]
     }
   ],
 

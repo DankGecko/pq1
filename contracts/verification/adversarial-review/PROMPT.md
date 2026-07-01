@@ -71,6 +71,27 @@ control-flow/fault bypass** of a security gate — a missing `black_box` the
 optimiser folds, a fail-OPEN default, a replayable counter, a digest preimage
 missing a field — and tag it `v_class: "FW"`.)
 
+## System-level classes (G1–G5) — beyond "is the theorem hollow" (playbook Part A2)
+
+These attack the assurance SYSTEM around a sound proof, not the theorem. A sound
+theorem behind a gate that never runs is a green tree that overstates.
+- **G1 — Gate-enforcement vacuity.** A gate is green-when-run but never RUNS on the diff
+  it polices — wrong `paths:` filter, `continue-on-error`, `workflow_dispatch`-only, or
+  unwired. *PoC: a merged commit that touched the policed surface without triggering the
+  gate.* (Mechanized: `make verify-gate-enforcement`.)
+- **G2 — Cited-TCB reality drift.** A cited (unmodeled) assumption is stale/false about the
+  DEPLOYED world (a pinned codehash the chain no longer serves; a "singleton factory" with
+  a second deployment). *PoC: the live artifact ≠ the cited one.*
+- **G3 — Coverage-completeness.** A threat/surface with NO claim — proven a lot about X,
+  nothing about Y, invisible because there is no red row. *PoC: a threat with no covering
+  claim, or an FV surface with no adversarial pass (see `contracts/verification/docs/FV_SURFACE_MAP.md`).*
+- **G4 — Verification-tool trust.** The checker itself (CBMC/Kani, Halmos/KEVM, binsec, the
+  Lean kernel + `#print axioms` under-report) has a bug or disclosed limit. *PoC: a
+  divergence between two independent engines on the same artifact.*
+- **G5 — Qualitative-shadow.** The proof captures the reduction's SHAPE but omits the
+  concrete `Pr ≤ ε` bound, presented as if quantitative. *PoC: the claim implies a bound
+  the proof never establishes.*
+
 ---
 
 ## Method
@@ -111,7 +132,7 @@ last/only top-level JSON value.
   "findings": [
     {
       "id": "kebab-slug",
-      "v_class": "V1".."V11" | "FW" | "NA",
+      "v_class": "V1".."V11" | "G1".."G5" | "FW" | "NA",
       "severity": "critical" | "high" | "medium" | "low" | "info",
       "target": "path/to/file:Lnn  OR  Fully.Qualified.symbol",
       "title": "one line",

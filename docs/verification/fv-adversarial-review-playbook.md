@@ -108,7 +108,7 @@ reviewed. To review one, set SCOPE to it AND swap the claims inventory: the Kani
 + scripts/kani_mutations.json (V1/V3/V8 — a harness that asserts nothing / is bounded
 trivially / samples where ∀ is needed); the protocol .pv/.spthy + their expected verdicts
 (V2 tautological query); the checkct/.t.sol drivers; the extracted/ §33 ranks. The V1–V11
-catalog transfers unchanged — only the artifacts change.
+catalog transfers unchanged — only the artifacts change. The FIRST such profile is BUILT: the `kani-decoder-vacuity` angle in `contracts/verification/adversarial-review/protocol.json` (run `python3 run_review.py --angle kani-decoder-vacuity`) — its `instructions` field is the per-surface V-mode manifestation (V1 empty-assume · V3 no-assert · V6 self-oracle · V8 bounded-N-as-∀ · V11 gate≠renderer · G3 uncovered decoders). Model each new surface angle on it; the persona (`PROMPT.md`) is shared.
 
 ATTACK PROTOCOL — walk EVERY V1–V11 mode against each claim in scope:
   V1 vacuous antecedent · V2 tautological axiom/hyp · V3 trivial conclusion ·
