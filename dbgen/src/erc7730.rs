@@ -2139,6 +2139,47 @@ fn path_is_native_value(path: &str) -> bool {
     matches!(path.trim(), "@.value" | "@value")
 }
 
+/// An INERT top-level parameter role: it tells the user WHO signs or WHEN the
+/// call is valid, never WHAT the call does. Showing only inert fields is the
+/// hole `VULN-erc7730-rule1-inert-field-nonaddr-action-hide` drives through —
+/// a `MetaTransaction(nonce, from, bytes functionSignature)` descriptor that
+/// renders `from`+`nonce` (both inert) while hiding `functionSignature` (the
+/// entire meta-executed action) paints a reassuring banner over a blind-sign.
+///
+/// Deliberately NARROW: self-identity (`from`/`sender`/`owner`/`holder`) and
+/// replay/time roles (`nonce`/`salt`/`deadline`/`valid*`/`expiry`). It does
+/// NOT include `signer`/`to`/`spender`/`recipient`/`target`/`account` — those
+/// name the address a call ACTS ON (Celo `authorizeVoteSigner(address signer)`
+/// shows exactly `signer`, a genuine effect), so treating them as inert would
+/// wrongly refuse legitimate clear-signs. Case-insensitive; a single leading
+/// `_` (common Solidity arg style) is stripped before matching.
+///
+/// NOTE — this is a RULE 1 refinement (require a shown EFFECT-BEARING field),
+/// NOT a rule-3 hidden-value gate. The deliberate "no rule-3 structural gate
+/// for hidden non-address values" decision recorded at the tail of
+/// [`check_field_visibility`] (2026-07-01) stands; rule 1 asks a different
+/// question — is anything effect-bearing SHOWN — and closes the live Rarible
+/// meta-tx witness (shows only `from`+`nonce`) that the residual analysis does
+/// not, with zero corpus false positives.
+fn is_inert_role_name(name: &str) -> bool {
+    let n = name.trim().trim_start_matches('_').to_ascii_lowercase();
+    matches!(
+        n.as_str(),
+        "from"
+            | "sender"
+            | "owner"
+            | "holder"
+            | "nonce"
+            | "salt"
+            | "deadline"
+            | "validafter"
+            | "validuntil"
+            | "validbefore"
+            | "expiry"
+            | "expiration"
+    )
+}
+
 /// Does the reviewed policy allowlist re-permit hiding argument `arg_path`
 /// on function `sig`? Only entries WITH a non-empty rationale count (a
 /// rationale-less entry fails safe → ignored). Leading `#.` on either side
@@ -2203,22 +2244,40 @@ fn check_field_visibility(
         return Ok(()); // zero-argument function / degenerate type — nothing to hide.
     }
 
-    // Rule 1 — the trusted screen must not be parameter-less: at least one
-    // visible field must surface a calldata argument (a `tokenAmount` field
-    // counts — its own `path` resolves to the amount argument) OR the native
-    // transaction value (a payable `submit`/stake whose ETH is the intent).
-    let any_shown_meaningful = fmt.fields.iter().any(|f| {
+    // Rule 1 — the trusted screen must surface a genuinely EFFECT-BEARING
+    // field, not merely SOME argument. A visible field satisfies rule 1 when
+    // it resolves to a calldata argument that is NOT an inert self-identity /
+    // replay role (a `tokenAmount`'s `path` resolves to the amount argument; a
+    // routing/target address resolves to its param) OR to the native tx value
+    // (a payable `submit`/stake whose ETH is the intent).
+    //
+    // Counting ANY shown argument (the pre-fix behaviour) let a descriptor
+    // render only `from`+`nonce` — both inert — while hiding its sole
+    // effect-bearing operand, painting a reassuring banner over a blind-sign
+    // (`VULN-erc7730-rule1-inert-field-nonaddr-action-hide`; live witness the
+    // Rarible `MetaTransaction` meta-tx forwarder). Requiring a non-inert
+    // shown field refuses that shape while still passing Celo
+    // `authorizeVoteSigner(address signer)` (the shown `signer` IS the effect).
+    let any_shown_effect = fmt.fields.iter().any(|f| {
         !field_is_hidden(f)
             && f.path.as_deref().is_some_and(|p| {
-                path_top_param_index(p, parsed).is_some() || path_is_native_value(p)
+                path_is_native_value(p)
+                    || path_top_param_index(p, parsed).is_some_and(|idx| {
+                        parsed
+                            .top_names
+                            .get(idx as usize)
+                            .is_some_and(|nm| !is_inert_role_name(nm))
+                    })
             })
     });
-    if !any_shown_meaningful {
+    if !any_shown_effect {
         return Err(format!(
-            "format `{sig}`: every argument is `visible:\"never\"` (or unrendered) and the \
-             native value is not shown — a clear-signed known shape must surface at least one \
-             effect-bearing field, else the trusted display shows only a reassuring banner \
-             while the user blind-signs the call (WYSIWYS; \
+            "format `{sig}`: every shown field is an inert self-identity / replay role \
+             (`from`/`owner`/`nonce`/`salt`/`deadline`/…) or the format is parameter-less, and \
+             the native value is not shown — a clear-signed known shape must surface at least one \
+             EFFECT-BEARING field (an amount, a routing/target address, or a state-changing \
+             operand), else the trusted display shows only a reassuring banner while the user \
+             blind-signs the call (WYSIWYS; VULN-erc7730-rule1-inert-field-nonaddr-action-hide / \
              VULN-erc7730-visible-never-noparam-clearsign). Drop the format or make an \
              effect-bearing field visible."
         ));
@@ -4659,6 +4718,61 @@ mod tests {
     fn fmt_from_fields(fields_json: &str) -> Format {
         serde_json::from_str(&format!(r#"{{"fields": {fields_json}}}"#))
             .expect("valid test Format JSON")
+    }
+
+    // ── VULN-erc7730-rule1-inert-field-nonaddr-action-hide (Rule 1) ──────
+
+    #[test]
+    fn rule1_inert_only_meta_tx_rejected() {
+        // THE LIVE WITNESS: Rarible `MetaTransaction` renders `from`+`nonce`
+        // (both inert) and hides `functionSignature` (the entire executed
+        // action). Rule 1 must refuse — a reassuring banner over a blind-sign.
+        let sig = "MetaTransaction(uint256 nonce, address from, bytes functionSignature)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_from_fields(
+            r#"[
+              {"path":"from","label":"User Address","format":"raw"},
+              {"path":"nonce","label":"Meta Transaction Nonce","format":"raw"},
+              {"path":"functionSignature","label":"Function Signature","visible":"never"}
+            ]"#,
+        );
+        let err = check_field_visibility(sig, &fmt, &parsed, CTX_EIP712, &[])
+            .expect_err("inert-only clear-sign must be refused");
+        assert!(err.contains("inert"), "rule-1 message names inert roles: {err}");
+    }
+
+    #[test]
+    fn rule1_shown_effect_address_ok() {
+        // Celo `authorizeVoteSigner(address signer, ...)` shows `signer` — the
+        // address being granted authority IS the effect. Must NOT be treated
+        // as inert (the false-positive a naive inert list would trip).
+        let sig = "authorizeVoteSigner(address signer, uint8 v, bytes32 r, bytes32 s)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_from_fields(
+            r#"[
+              {"path":"signer","label":"Signer","format":"addressName"},
+              {"path":"r","label":"r","visible":"never"},
+              {"path":"s","label":"s","visible":"never"}
+            ]"#,
+        );
+        assert!(
+            check_field_visibility(sig, &fmt, &parsed, CTX_CONTRACT, &[]).is_ok(),
+            "a shown non-inert address (`signer`) satisfies rule 1"
+        );
+    }
+
+    #[test]
+    fn rule1_shown_amount_ok() {
+        // A shown amount alongside a hidden inert `from` satisfies rule 1.
+        let sig = "pay(address from, uint256 amount)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_from_fields(
+            r#"[
+              {"path":"from","label":"From","format":"addressName"},
+              {"path":"amount","label":"Amount","format":"raw"}
+            ]"#,
+        );
+        assert!(check_field_visibility(sig, &fmt, &parsed, CTX_CONTRACT, &[]).is_ok());
     }
 
     #[test]
