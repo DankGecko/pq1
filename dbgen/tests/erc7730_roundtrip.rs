@@ -26,7 +26,8 @@
 use std::path::PathBuf;
 
 use dbgen::erc7730::{
-    build_db, build_db_tolerant, round_trip_check, Erc7730BuildResult,
+    build_db, build_db_tolerant, load_policy, round_trip_check, try_compile_one,
+    Erc7730BuildResult,
 };
 use pqsigner_erc7730::abi::container_field;
 use pqsigner_erc7730::binding::{cross_check_contract, cross_check_eip712};
@@ -547,5 +548,37 @@ fn wrong_root_is_rejected() {
     assert!(
         matches!(err, pqsigner_erc7730::bundle::BundleError::Merkle),
         "expected Merkle, got {err:?}"
+    );
+}
+
+/// CURATION GUARD (re-vendor durability). The single-hop Uniswap V3 swaps
+/// (`exactInputSingle` / `exactOutputSingle`) clear-sign ONLY because the vendored
+/// descriptor hides the redundant `sqrtPriceLimitX96` price bound
+/// (`visible:"never"`) to satisfy the H-3 tuple-member-completeness lint — a
+/// curation that `xtask vendor-registry` would DROP when it re-copies from
+/// upstream (which omits it). A STRICT compile of the vendored descriptor
+/// succeeds only if EVERY format compiles: the curated single-hop pair AND the
+/// Tier B slice/array tokenPaths (`exactInput`/`exactOutput` `params.path.[0:20]`/
+/// `[-20:]`, V2 `swap*ForTokens` `path.[0]`/`[-1]`). So this fails LOUD if either
+/// the curation is dropped on re-vendor or a Tier B slice regression lands —
+/// exactly the two silent-regression paths the single-hop render tests don't cover.
+#[test]
+fn vendored_uniswap_v3_router_curation_and_slices_all_compile() {
+    let root = workspace_root();
+    let reg = root.join("secure/data/erc7730-registry");
+    let desc = reg.join("registry/uniswap/calldata-UniswapV3Router02.json");
+    let policy =
+        load_policy(&root.join("secure/data/erc7730/policy.toml")).expect("load policy");
+    let emitted = try_compile_one(&desc, &policy, Some(&reg)).expect(
+        "vendored Uniswap V3 Router must compile strictly — if this fails, the \
+         sqrtPriceLimitX96 curation was dropped (re-vendor) or a Tier B slice regressed",
+    );
+    assert_eq!(emitted.len(), 1, "one Uniswap leaf (mainnet chain 1)");
+    let ir = Erc7730Ir::parse(&emitted[0].ir_bytes).expect("Uniswap IR parses");
+    let n = ir.format_iter().filter(|f| f.is_ok()).count();
+    assert_eq!(
+        n, 6,
+        "all 6 Uniswap formats must compile (exactInputSingle, exactOutputSingle, \
+         exactInput, exactOutput, swapExactTokensForTokens, swapTokensForExactTokens)"
     );
 }

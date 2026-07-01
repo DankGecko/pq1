@@ -142,6 +142,41 @@ This retires the "HARD-slice DEX hot path — DEFER" decision below **for the to
 half**; the rendered-VALUE packed-path slices (paraswap beneficiary/pool) remain deferred (higher
 risk, byte-coverage-completeness still required).
 
+**Post-landing hardening (2026-07-01):** (1) a **re-vendor curation guard** —
+`dbgen/tests/erc7730_roundtrip.rs::vendored_uniswap_v3_router_curation_and_slices_all_compile`
+strict-compiles the vendored descriptor and asserts all 6 formats survive, so it fails LOUD if
+`vendor-registry` drops the Tier A `sqrtPriceLimitX96` hide OR a Tier B slice regresses (the
+single-hop pair has no render test, so this closes both silent-regression paths). (2) the dead
+`walker::{resolve_program,resolve_path,path_bytes,WalkerCtx}` re-export was **removed** from the
+firmware surface (`secure/src/tx/erc7730.rs`) — the Phase-3 walker's `ArrayIdx=u32`/`ArraySlice=u32+u32`
+encoding is incompatible with the live Tier B `u16`/`from_end` encoding; keeping it re-exported was a
+confirm-vs-execute tripwire (the live path never used it — it walks paths via `formatters` +
+`render::resolve`).
+
+## EIP-712 order render (UniswapX / CoW-style intent orders) — SCOUTED, firewalled HARD, do NOT build inline
+
+The remaining real *swap volume* not yet covered is intent-based orders. Scouted the actual
+descriptors (2026-07-01) rather than trusting the table — the lesson from the Uniswap re-grounding:
+
+- **UniswapX (`eip712-UniswapX-{DutchOrder,ExclusiveDutchOrder,LimitOrder}`, `eip712-uniswap-V2DutchOrder`):
+  0 leaves — fully declined.** Their primary type is a deep nested-struct (`PermitWitnessTransferFrom` →
+  `DutchOrder` → `DutchOutput[] outputs` → `OrderInfo`/`TokenPermissions`), and EVERY `tokenPath` points at a
+  nested-struct member (`permitted.token`, `witness.inputToken`, `witness.outputs.[].token`). Blocked by the
+  **EIP-712 nested-struct belt** (`render_erc7730_eip712_pages` rejects `PARAM_NESTED_STRUCT`) — a *deliberate*
+  WYSIWYS control (`docs/VULN-erc7730-eip712-nested-struct-address-hide.md`), NOT a missing feature —
+  **plus** array-of-struct rendering (`DutchOutput[]`).
+- **Permit2 (`eip712-uniswap-permit2`): already 15 leaves** (the non-nested formats clear-sign; the nested
+  `TokenPermissions` witness format is belt-rejected). **1inch AggregationRouterV6: already 27 leaves** (3 of
+  its descriptors compile); the residual is rendered-value slices + include-resolution.
+
+**Recommendation: do NOT build EIP-712 order render inline.** Unlike the calldata tokenPath slice (a
+by-addition capability with a clean tokenPath-only firewall), UniswapX render requires *relaxing* the
+nested-struct belt AND adding EIP-712 array-of-struct — both security-sensitive. If pursued it is a
+**firewalled, design-doc-first, adversarial-review-gated campaign** (the dynamic-array-walker discipline),
+scoped to the nested-struct-address-hide threat model. The cheap, clean clear-signing wins (Permit +74,
+C1/C2/C3, Morpho, DEX calldata swaps) are banked; what remains is HARD/security-sensitive, upstream-content,
+or the orthogonal ERC-8176 attestation flip (blocked on ecosystem).
+
 ## Decision: the HARD-slice engine (the 53-function DEX hot path) — DEFER, with a specified safe subset
 
 **Decision (2026-07-01): do NOT build a general byte-slice engine now.** It is the highest-risk
