@@ -1,6 +1,20 @@
 # ERC-7730 nested-EIP-712 struct rendering — design (Phase 5 "deep types"), 2026-07-01
 
-**Status:** DESIGN (pre-implementation). This is the firewalled, design-doc-first capability that
+**Status: IMPLEMENTED (v1, 2026-07-01).** Commits A `8bc675e8` (SCHEMA_VER 0x03 + dbgen v0x03
+recursive-IR emission) → B `cf3cff72` (pure `pqsigner-erc7730/src/render/nested.rs` parser/cursor/
+coverage + Kani) → C `7ea2c5f5` (`OFFCHAIN_KIND_EIP712_TYPED_V3` wire kind + `hash_struct` binding
+primitive) → D `a7ca96dc` (belt INVERTED — `render_nested_struct` binds + renders; E1 pinned
+reconciliation; E2 visibility-aware coverage). v1 ships **Permit2 `PermitSingle`** (the flagship
+approve): the nested `PermitDetails` amount + expiration + token clear-sign, bound by
+`keccak(pinned type_hash ‖ nested_ed) == the committed hashStruct word`. Decisive non-vacuity proof:
+`v3_permit_single_binding_is_non_vacuous` (flip ANY of 160 nested/committed bytes → decline). A 5-lens
+adversarial-review workflow found **1 confirmed HIGH** (E2 credited a `visible:"never"` sub-field's
+coverage) — fixed in D (coverage credits only sub-fields that actually render). **Not yet shipped:**
+`PermitTransferFrom` (dropped by a pre-existing completeness lint — undeclared `nonce`; a one-line
+curation unlocks it) and array-of-struct (`PermitBatch` / UniswapX `DutchOutput[]`) = v2. The design
+below is retained as the authoritative spec; §10 (E1–E5) is what the implementation follows.
+
+This is the firewalled, design-doc-first capability that
 lifts the on-device `PARAM_NESTED_STRUCT` belt for a *bounded, cryptographically-bound* subset —
 the EIP-712 analog of the calldata FollowOffset resolver. It unlocks the clear-signing of
 intent-based orders (Permit2, then UniswapX / CoW-style), a real product differentiator.
