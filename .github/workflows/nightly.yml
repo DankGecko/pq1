@@ -57,6 +57,11 @@ jobs:
           cargo kani setup
       - name: make kani
         run: make kani
+      - name: make verify-kani-mutation (anti-vacuity — break a decoder, expect a harness to redden)
+        # Kani-side mirror of the Lean verify-proof-mutation gate: each mutation
+        # recompiles a crate + runs one harness (~1-4 min), all reverted. See
+        # scripts/kani_mutations.json + docs/fv-adversarial-review-playbook.md.
+        run: make verify-kani-mutation
 
   verify-repro:
     name: Reproducible-build byte-diff

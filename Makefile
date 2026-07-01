@@ -3736,6 +3736,20 @@ kani: ## Bounded model-checking on firmware decoders/counters
 	cargo kani -p fw-manifest
 	@echo "==> kani: PASS"
 
+# Kani-side anti-vacuity gate — the mirror of the Lean `verify-proof-mutation`
+# (contracts/verification). For each entry in scripts/kani_mutations.json it
+# breaks a decoder/gate function the way a specific harness is supposed to catch
+# and asserts that harness flips to VERIFICATION:- FAILED — a green-when-it-
+# should-be-red = a vacuous / under-constrained Kani proof. Institutionalises
+# the per-slice manual mutation checks (work-todo §35 P3). Slow (recompiles a
+# crate + runs one harness per mutation, ~1-4 min each) → nightly, not per-PR.
+#   make verify-kani-mutation                 # default tier (all 6 mutations)
+#   make verify-kani-mutation MUTATIONS=quick # canary + the fast fw-manifest/aa ones
+.PHONY: verify-kani-mutation
+verify-kani-mutation: ## anti-vacuity: break a decoder, expect a Kani harness to turn red
+	@command -v cargo-kani >/dev/null 2>&1 || { echo "ERROR: cargo-kani not found. Install: cargo install --locked kani-verifier && cargo kani setup"; exit 1; }
+	python3 scripts/check_kani_mutations.py
+
 miri: ## Miri UB check on host crates
 	@rustup component list --toolchain nightly --installed 2>/dev/null | grep -q '^miri' || rustup component add miri --toolchain nightly
 	@echo "==> Miri: FI volatile helpers"

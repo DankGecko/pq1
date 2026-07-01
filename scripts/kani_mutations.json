@@ -1,0 +1,71 @@
+{
+  "_comment": "verify-kani-mutation manifest — the Kani-side analogue of the Lean verify-proof-mutation gate (anti-vacuity for the firmware bounded-verification harnesses). For each entry, mutate a decoder/gate function in a way a specific Kani harness MUST catch, run ONLY that harness, and assert it flips to `VERIFICATION:- FAILED`. A green-when-it-should-be-red = a vacuous / under-constrained harness (the exact failure class the per-slice manual mutation checks caught by hand; this makes them a standing gate — work-todo §34/§35). Paths are relative to the repo root. Every entry uses `expect: kani_fails` (the load-bearing mutation must be caught); the `canary` doubles as the machinery-health check (if it survives, ALL results are void).",
+  "mutations": [
+    {
+      "id": "canary",
+      "tier": "quick",
+      "crate": "fw-manifest",
+      "harness": "rollback_boundary",
+      "file": "fw-manifest/src/lib.rs",
+      "find": "self.fw_version() > rollback_floor",
+      "replace": "true",
+      "expect": "kani_fails",
+      "note": "verify_rollback always-accepts -> the rollback_boundary biconditional (is_ok() <=> version > floor) MUST break. If this SURVIVES, the harness machinery is broken (kani not running / output not parsed) and every result is void."
+    },
+    {
+      "id": "rollback_off_by_one",
+      "tier": "quick",
+      "crate": "fw-manifest",
+      "harness": "rollback_boundary",
+      "file": "fw-manifest/src/lib.rs",
+      "find": "self.fw_version() > rollback_floor",
+      "replace": "self.fw_version() >= rollback_floor",
+      "expect": "kani_fails",
+      "note": "the real anti-rollback off-by-one: `>=` would let a version==floor reinstall slip past the OTP rollback floor."
+    },
+    {
+      "id": "aa_execute_abi_offset",
+      "tier": "quick",
+      "crate": "pqsigner-aa",
+      "harness": "reconstruct_execute_layout",
+      "file": "aa/src/userop.rs",
+      "find": "out.buf[p + WORD - 1] = 0xa0;",
+      "replace": "out.buf[p + WORD - 1] = 0xc0;",
+      "expect": "kani_fails",
+      "note": "the execute(...) head->tail ABI offset byte; a wrong value = calldata the on-chain wallet mis-decodes into a different call."
+    },
+    {
+      "id": "multisend_record_walk_tiling",
+      "tier": "default",
+      "crate": "pqsigner-tx",
+      "harness": "record_walk_exact_tiling",
+      "file": "tx/src/multisend.rs",
+      "find": "self.cursor += data_end;",
+      "replace": "self.cursor += data_end + 1;",
+      "expect": "kani_fails",
+      "note": "perturb the multiSend record-walk cursor advance -> the exact-tiling partition proof MUST break (a hidden byte would ride between records)."
+    },
+    {
+      "id": "multisend_hidden_value",
+      "tier": "default",
+      "crate": "pqsigner-tx",
+      "harness": "no_hidden_value",
+      "file": "tx/src/multisend.rs",
+      "find": "!value_is_zero && !matches!(kind, MsRecordKind::PlainEth | MsRecordKind::EmptyCall)",
+      "replace": "!value_is_zero && !matches!(kind, MsRecordKind::PlainEth | MsRecordKind::EmptyCall | MsRecordKind::Blind)",
+      "expect": "kani_fails",
+      "note": "excluding Blind from the value-page rule would silently drop a Blind record's non-zero native value -> the no-hidden-value WYSIWYS proof MUST break."
+    },
+    {
+      "id": "cowswap_field_offset",
+      "tier": "default",
+      "crate": "pqsigner-tx",
+      "harness": "decode_canonical_soundness",
+      "file": "tx/src/cowswap_order.rs",
+      "find": "sell_token.copy_from_slice(&canonical[8..28]);",
+      "replace": "sell_token.copy_from_slice(&canonical[9..29]);",
+      "expect": "kani_fails",
+      "note": "shift a GPv2Order field read by one byte -> the verbatim-offset decode-soundness biconditional MUST break."
+    }
+  ]
+}
