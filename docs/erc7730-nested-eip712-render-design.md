@@ -304,3 +304,94 @@ order, type_hash pinned + foundry-checked, member_count, addr_word_bmp, sub_fiel
 kind → device recurse+render (atomic, E1 reconciliation) → Kani (adversarial nested_blob) → flip→decline
 real-vector render tests (Permit2 PermitSingle/PermitTransferFrom) → impl adversarial review.
 
+## 11. v2 — array-of-struct (`T[]`), 2026-07-02 (DESIGN)
+
+**Status: DESIGN (pre-implementation).** v1 shipped single-level NON-array nested structs. v2 adds a
+`T[] members` member — the last piece the clean Permit2 target needs (`PermitBatch`) and a prerequisite
+for UniswapX `DutchOutput[]` (which additionally needs v3 deep-nesting + the `fields` group syntax + a
+dynamic `bytes` member — OUT of v2 scope). v2 target = **Permit2 `PermitBatch`** ONLY:
+`PermitBatch(PermitDetails[] details,address spender,uint256 sigDeadline)` — identical to `PermitSingle`
+except `details` is an ARRAY of the same `PermitDetails`; the sub-fields are `details.[].amount` /
+`details.[].expiration` / tokenPath `details.[].token` (the `.[]` stripped for LOCAL resolution — local
+ordinals are identical to v1).
+
+### 11.1 The array binding (EIP-712 `T[]` encoding — the spine)
+
+EIP-712 encodes a struct array `T[]` as `keccak256( hashStruct(el0) ‖ hashStruct(el1) ‖ … ‖ hashStruct(elN) )`,
+where each `hashStruct(el_i) = keccak256(typeHash_T ‖ encodeData(el_i))`. So the committed parent word
+for `details` is that outer keccak. The device:
+1. reads `elem_count` (wire, bounded by `MAX_NESTED_ARRAY`);
+2. for each element `i`: reads the next `nested_ed` record (EXACTLY `member_count × 32`, rule 1),
+   computes `elem_hs_i = hash_struct(typeHash, elem_ed_i)`, and folds `elem_hs_i` into a running keccak
+   of the concatenation (and retains the `elem_ed_i` slice, bounded);
+3. requires `keccak(concat of elem_hs) == committed` (constant-time) — **before rendering anything**;
+4. runs the E2 coverage check ONCE (every element has the same pinned struct shape → same `addr_word_bmp`
+   + same sub-field local ordinals);
+5. renders each element's visible sub-fields against its `elem_ed_i` (with an element-index divider).
+
+Collect-verify-then-render (not render-during-verify) preserves WYSIWYS + atomicity: nothing is shown
+until the WHOLE array binds. The retained `elem_ed_i` slices sit in a bounded `[&[u8]; MAX_NESTED_ARRAY]`
+on the stack (no_std, no heap).
+
+### 11.2 Wire — `[u16 elem_count]` prefix on `is_array` records (reserved by §10 E3)
+
+For an `is_array` anchor the `nested_blob` section is
+`[u16 elem_count]  [u16 len][elem0_ed]  [u16 len][elem1_ed]  …  [u16 len][elemN_ed]`. Non-array (v1)
+records stay `[u16 len][nested_ed]` with NO prefix — the payload `flags` bit0 tells the device which wire
+shape to expect. The E1 reconciliation is UNCHANGED: an array anchor is still ONE descent point
+(`records_consumed += 1`), and `cursor == nested_blob.len()` proves the `elem_count` prefix + all element
+records were consumed exactly (a padded/short blob → decline).
+
+**`elem_count == 0` → EXPLICIT decline (review fix).** Do NOT rely on the top-level "no visible members"
+belt — a `PermitBatch` also has a `visible:always` `spender`, which renders a page, so that belt PASSES
+even with an empty array. A companion could bind an empty batch with `committed = keccak256("")` (a fixed
+constant that hashes cleanly) and clear-sign "spender + zero allowances" — confusing, not the intended
+decline. `render_nested_struct` refuses `elem_count == 0` outright (an empty batch signs nothing worth
+showing); tested.
+
+### 11.3 The gate relaxation (the security-sensitive part)
+
+`check_eip712_member_addresses` (dbgen) currently REFUSES an array-of-struct that reaches an address:
+*"the device cannot address elements, so any address inside cannot be shown."* v2 makes that premise
+false — the device renders per element. **Edit:** for a single-level array-of-struct, DESCEND into the
+element struct and apply the SAME address-coverage logic as the non-array case, matching the `M.[].<addr>`
+per-element path shape (an address is "shown" iff a per-element render field or a shown per-element
+`tokenPath` reaches it). A HIDDEN address inside an array element still REFUSES (unchanged for the
+uncovered case). Bounded: only single-level `T[]` where `T` is a struct with elementary members; a
+`T[]` whose element reaches a nested struct or a deeper array stays refused (v3). The relaxation is
+gated so it can only widen coverage for shapes the emission + device actually support; anything else
+falls to the bare-marker belt (decline).
+
+**The E2 device backstop is unchanged and still independent:** the per-element `addr_word_bmp` coverage
+check runs on-device regardless of the gate, so an array element with an uncovered address word declines
+even if the (relaxed) gate had a defect — exactly the standalone-control promise, now for arrays.
+
+**Impl-review target (review fix):** the gate's per-element coverage matcher MUST correctly resolve `.[]`
+paths — `details.[].token` (the shown-amount tokenPath) has to map to the element's token word. If the
+existing matcher doesn't understand `.[]`, the failure is either a silent false-refuse (PermitBatch drops
+→ dead feature) or, worse, a mis-match that passes an uncovered address. Needs a targeted dbgen test
+(the E2 device backstop is the safety net, but the gate logic is tested directly). Foundry-pin the
+2-element array binding (`keccak(hashStruct(el0)‖hashStruct(el1))`) before building — same discipline as
+the v1 typeHashes.
+
+### 11.4 Caps + fail-closed
+
+`MAX_NESTED_ARRAY = 6` (review fix — 8 was against the budget: banner + spender + 8×(amount + expiration
++ divider ≈ 3) + chain + confirm ≈ 27 vs `MAX_PAGES = 28`; 6 leaves headroom). Page-budget overflow
+(`pages.push_blank()` → `Err`) MUST decline, NEVER truncate — a truncated array tail is the array-hiding
+WYSIWYS break one level down. `elem_count == 0`, `elem_count > MAX_NESTED_ARRAY`, any `elem_ed_i.len() !=
+member_count*32`, concat-hash mismatch, page-budget overflow, or an uncovered address → single hard `Err`
+that discards all pushed pages (E4-1 atomicity, unchanged).
+
+### 11.5 Build order (mirrors v1)
+
+dbgen: relax the gate for covered single-level `T[]` + teach `try_compile_eip712_nested` to accept an
+array member (recognize `M.[].child`, strip `.[]`, set `flags` bit0=1, keep v1 local ordinals) →
+device: the array branch in `render_nested_struct` (read `elem_count`, collect-verify-concat, per-element
+render) + `MAX_NESTED_ARRAY` → wire: the `is_array` `elem_count` prefix in `cmd_sign_offchain` (unchanged
+kind — the shape is self-describing via the payload flags) → Kani (adversarial `elem_count` + records) →
+flip→decline real-vector tests (a REAL 2-element `PermitBatch`: both elements render; flip ANY element's
+ANY word — or the committed array word, or `elem_count` — → decline; a per-element non-vacuity that also
+proves element `i`'s content can't masquerade as element `j`) → impl 5-lens adversarial review. UniswapX
+`DutchOutput[]` stays belt-declined until v3 (deep + groups + bytes).
+
