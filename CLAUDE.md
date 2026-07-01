@@ -339,6 +339,8 @@ Pure-logic primitives live in standalone workspace crates so host signers / benc
 
 After completing implementation tasks, check `docs/work-todo.md` and tick off matching items; add a row to the Completion Log with the date + one-line summary.
 
+**Docs hygiene — amend, don't duplicate.** Before creating a new doc, `grep`/`find` over `docs/` + `contracts/verification/docs/` (and the "Deep-dive docs" list below) for one that already covers the topic and update *that* instead. This repo has many overlapping docs (`STATUS.md`, `FV_VALUE_AND_GAPS.md`, `THE_CLAIM.md`, the `docs/*-sota-*.md` surveys, per-subsystem status/postmortem files), and a parallel new doc almost always duplicates an existing one and drifts stale. Prefer additive dated `UPDATE <date>` notes + a snapshot-date bump over rewriting (preserves the honest history the FV docs depend on). Create a new doc only when no existing one fits the scope.
+
 ## Deep-dive docs
 
 - `README.md` — full architecture, threat model, shipping checklist
