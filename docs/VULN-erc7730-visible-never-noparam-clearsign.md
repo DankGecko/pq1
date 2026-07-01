@@ -100,3 +100,22 @@ In both `render_erc7730_pages_inner` (calldata) and `render_erc7730_eip712_pages
 
 - ~88 registry leaves now blind-sign (fail-safe UX regression). Curators can restore specific clear-sign UX by adding reviewed `hidden_address_allow` entries (with rationale) and re-running `dbgen` — a deliberate, logged human decision, not a silent default.
 - The gate is now a CI-enforceable invariant on every `vendor-registry` resync (`gen-erc7730-descriptors --check`), so a future corpus update cannot silently re-introduce a hidden-recipient descriptor.
+- **EIP-712 sibling — CLOSED** (`2f4cc810`, `VULN-erc7730-eip712-nested-struct-address-hide`): rule 2 now descends nested EIP-712 struct members (`check_eip712_member_addresses`) + a `PARAM_NESTED_STRUCT` on-device belt.
+
+## Non-address hidden-value residual (analysed 2026-07-01 — DECISION: no structural gate; attestation-backstopped)
+
+Rule 1/rule 2 force every **`address`** argument (and static-tuple / nested-struct address member) to be shown. They deliberately do **not** cover a hidden **non-address** effect-bearing value (a `uint256 amount`, a `bytes` payload, a `uint256[]` batch). This section records why closing that with a structural gate is **not** the right move, so it is not re-litigated.
+
+**Why addresses are special (and non-address values are not).** A hidden `address` is *rare-to-hide-legitimately* and *always fund-routing*, giving rule 2 a favourable true-positive / false-positive ratio (the live FlyingTulip witness above). A hidden non-address value has neither property: it is **type-indistinguishable** from a benign hide (a `uint256` amount vs a `uint256` deadline; a `bytes` executed-call vs an opaque attestation `signature`; a `uint256[]` batch of amounts vs a `uint256[]` batch of gas hints), and the corpus hides such values **legitimately at scale**.
+
+**Empirical measurement (the decisive evidence).** Two candidate rule-3 gates were implemented and measured against the live vendored corpus:
+- **`bytes`/`string`/array variant** → dropped 2 leaves (Ondo `GMTokenManager.{mint,redeem}WithAttestation`), both hiding a `bytes signature` — an **opaque attestation signature** the user cannot validate by eye and which routes no funds. **0 true positives, 2 false positives.**
+- **arrays-only variant** → dropped 0 leaves but silently refused **5 formats** inside multi-format descriptors: Lido `claimWithdrawals`/`claimWithdrawalsTo` (hidden `_hints:uint256[]` — gas-traversal hints), 1inch `cancelOrders` (hidden `makerTraits:uint256[]`, with `orderHashes` shown), celo `governance.propose`/`executeHotfix` (hidden `dataLengths:uint256[]` — packed-call split lengths, with `destinations`/`values` shown). **0 true positives, 5 false positives.**
+
+Both variants catch **no real threat** in the corpus and only tax benign descriptors — the inverse of rule 2's ratio. A hidden non-address value is therefore left to blind-sign only if a descriptor *also* fails rule 1 (nothing shown) or rule 2 (a hidden address); a descriptor that shows the recipient/intent and hides an auxiliary value stays clear-signed.
+
+**What already covers the high-severity cases** (so the residual is genuinely narrow):
+- **Native `@.value`** is *always* spliced on-device by the FI-hardened `enforce_native_value_page` whenever `tx.value != 0`, regardless of the descriptor — a hidden payable value is shown.
+- **Bare ERC-20 `transfer`/`approve`** render via the native ERC-20 decoder (`erc20_known`/`erc20_unknown`), which shows amount + recipient independent of any descriptor.
+
+**The residual, scoped honestly:** a descriptor that hides an effect-bearing **scalar calldata value or payload** (e.g. a non-ERC-20 contract's amount, or an executed `bytes`) *while the recipient/intent IS shown*. Severity **MEDIUM** — funds go to a shown party, bounded by balance/allowance; it needs a malicious/careless descriptor in the Merkle-pinned root, not attacker calldata. Because it is type-indistinguishable from the benign hides the corpus makes constantly, the real backstop is **ERC-8176 attestation** (`allow_unattested_dev_descriptors = false` + real `trusted_attesters`), which makes the corpus trusted-*and*-attested — a content control, not a shape control. This mirrors the HARD-slice decision (`docs/erc7730-coverage-blocker-analysis-2026-07.md`): where a structural gate would over-fire with no true positives, the honest close is native coverage + documented residual + attestation, not a net-negative gate.

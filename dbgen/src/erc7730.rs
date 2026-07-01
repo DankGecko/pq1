@@ -2288,6 +2288,24 @@ fn check_field_visibility(
             }
         }
     }
+
+    // NOTE (non-address hidden-value residual, 2026-07-01): there is deliberately
+    // NO rule-3 structural gate for hidden NON-address values. An empirical pass
+    // (both a `bytes`/`string`/array variant and an arrays-only variant, measured
+    // against the live corpus) found 0 true positives and only false positives:
+    // the corpus hides non-address values legitimately at scale (deadlines /
+    // tickets / hints as `uint`; attestation signatures as `bytes`; gas-hint /
+    // order-trait / packed-data-length batches as `uint256[]`), always alongside
+    // the effect-bearing fields being shown. Unlike an `address` (rare-to-hide and
+    // always fund-routing → rule 2), a hidden non-address value is
+    // type-indistinguishable from a benign one, so a structural gate over-fires
+    // with no security benefit. The two highest-severity cases are covered
+    // elsewhere (native `@.value` is always spliced on-device by
+    // `enforce_native_value_page`; bare ERC-20 transfer/approve render via the
+    // native decoder). The remaining residual — a descriptor that hides an
+    // effect-bearing scalar value/payload while the recipient/intent IS shown — is
+    // bounded / MEDIUM and attestation-backstopped. See
+    // `docs/VULN-erc7730-visible-never-noparam-clearsign.md` § non-address residual.
     Ok(())
 }
 
