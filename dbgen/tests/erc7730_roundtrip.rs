@@ -676,10 +676,10 @@ fn keccak_hex(s: &str) -> String {
 ///      expiration → date(timestamp), render FieldIdx(2).
 ///    `nonce` (local word 3) + top-level `sigDeadline` stay hidden — the hash
 ///    still covers them (member_count pins the blob length; E5 + rule 3).
-///  * `PermitTransferFrom` → DROPPED (pre-existing completeness lint: its top
-///    member `nonce` (uint256) is undeclared in the vendored descriptor). A
-///    one-line curation (`nonce` `visible:"never"`) unlocks it — v1 follow-up,
-///    NOT a nested-renderer gap.
+///  * `PermitTransferFrom` → the minimal binding (`TokenPermissions`, 2 members),
+///    unlocked by the hand-curated `nonce` `visible:"never"` completeness field
+///    (upstream omits it; guarded by
+///    `vendored_permit2_transfer_from_curation_compiles`).
 ///  * `PermitBatch` (`PermitDetails[]`, array-of-struct) → DROPPED by the
 ///    pre-existing visibility gate (v1 scope boundary), so its format is ABSENT.
 #[test]
@@ -740,16 +740,30 @@ fn permit2_nested_anchor_emission_is_byte_exact() {
         "date encoding = timestamp"
     );
 
-    // ── PermitTransferFrom — DROPPED (undeclared `nonce`), so ABSENT. ──
-    // When the descriptor is curated (v1 follow-up) this flips to a present
-    // anchor with typeHash(TokenPermissions)=0x618358ac…; until then, assert it
-    // is genuinely absent so the follow-up is visible + un-forgotten.
+    // ── PermitTransferFrom (minimal binding — TokenPermissions, 2 members) ──
+    // Unlocked by the hand-curated `nonce` `visible:"never"` field. word_pos 0
+    // (permitted is member 0), pinned typeHash(TokenPermissions), member_count 2,
+    // addr_word_bmp 0x01 (token), one sub-field (amount, tokenPath word 0).
     let ptf = hex_bytes("939c21a48a8dbe3a9a2404a1d46691e4d39f6583d6ec6b35714604c986d80106");
-    assert!(
-        ir.format_iter()
-            .map(|f| f.expect("format parses"))
-            .all(|f| f.type_hash[..] != ptf[..]),
-        "PermitTransferFrom is dropped until the `nonce` completeness curation lands"
+    let payload = nested_anchor_payload(&ir, &ptf).expect("PermitTransferFrom anchor present");
+    assert_eq!(payload[0], 0x03);
+    assert_eq!(u16::from_be_bytes([payload[1], payload[2]]), 0, "permitted is member 0");
+    assert_eq!(
+        &payload[3..35],
+        &hex_bytes("618358ac3db8dc274f0cd8829da7e234bd48cd73c4a740aede1adec9846d06a1")[..],
+        "pinned typeHash(TokenPermissions)"
+    );
+    assert_eq!(u16::from_be_bytes([payload[35], payload[36]]), 2, "TokenPermissions has 2 members");
+    assert_eq!(payload[37], 0, "non-array");
+    assert_eq!(payload[38], 0x01, "token is address");
+    assert_eq!(payload[39], 1, "one visible sub-field (amount)");
+    let (ptf_sf0, _) = read_subfield(&payload, 40);
+    assert_eq!(ptf_sf0.format_op, 0x03, "tokenAmount");
+    assert_eq!(pool_entry(&ir, ptf_sf0.path_off), [0x10, 0x20, 0x00, 0x01], "amount = local word 1");
+    assert_eq!(
+        find_tlv(pool_entry(&ir, ptf_sf0.param_off), 0x30).expect("tokenPath TLV"),
+        [0x10, 0x20, 0x00, 0x00],
+        "tokenPath = local word 0 (token)"
     );
 
     // ── PermitBatch (array-of-struct) — v1 scope boundary: DROPPED, absent. ──
@@ -762,5 +776,35 @@ fn permit2_nested_anchor_emission_is_byte_exact() {
             .map(|f| f.expect("format parses"))
             .all(|f| f.type_hash[..] != batch[..]),
         "PermitBatch (array-of-struct) must be absent in v1 (dropped by the visibility gate)"
+    );
+}
+
+/// RE-VENDOR GUARD (Tier A curation discipline — mirrors
+/// `vendored_uniswap_v3_router_curation_and_slices_all_compile`). Upstream's
+/// Permit2 `PermitTransferFrom` OMITS its `nonce` member, so the EIP-712
+/// completeness lint DROPS the whole format. We hand-curate a `nonce`
+/// `visible:"never"` field into the vendored descriptor
+/// (`secure/data/erc7730-registry/registry/uniswap/eip712-uniswap-permit2.json`)
+/// to unlock it. `xtask vendor-registry` re-copying from upstream would SILENTLY
+/// drop that curation; this fails LOUD if `PermitTransferFrom`
+/// (typeHash `0x939c21a4…`) is no longer clear-signable in the shipped DB.
+#[test]
+fn vendored_permit2_transfer_from_curation_compiles() {
+    let registry = build_registry();
+    let permit2 = hex_bytes("000000000022d473030f116ddee9f6b43ac78ba3");
+    let leaf = registry
+        .entries
+        .iter()
+        .find(|e| e.contract[..] == permit2[..])
+        .expect("Permit2 leaf present");
+    let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("permit2 IR parses");
+    let ptf = hex_bytes("939c21a48a8dbe3a9a2404a1d46691e4d39f6583d6ec6b35714604c986d80106");
+    assert!(
+        ir.format_iter()
+            .map(|f| f.expect("format parses"))
+            .any(|f| f.type_hash[..] == ptf[..]),
+        "PermitTransferFrom dropped — the `nonce` visible:never curation was lost \
+         (re-vendored from upstream?). Re-apply it to \
+         secure/data/erc7730-registry/registry/uniswap/eip712-uniswap-permit2.json"
     );
 }

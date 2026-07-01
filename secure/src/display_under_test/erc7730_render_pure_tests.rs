@@ -1960,6 +1960,81 @@ fn v3_reconciliation_rejects_trailing_nested_blob() {
     );
 }
 
+// typeHash(TokenPermissions(address token,uint256 amount)) — foundry.
+const TOKEN_PERMISSIONS_TYPEHASH: [u8; 32] = [
+    0x61, 0x83, 0x58, 0xac, 0x3d, 0xb8, 0xdc, 0x27, 0x4f, 0x0c, 0xd8, 0x82, 0x9d, 0xa7, 0xe2, 0x34,
+    0xbd, 0x48, 0xcd, 0x73, 0xc4, 0xa7, 0x40, 0xae, 0xde, 0x1a, 0xde, 0xc9, 0x84, 0x6d, 0x06, 0xa1,
+];
+// typeHash(PermitTransferFrom(TokenPermissions permitted,address spender,uint256 nonce,uint256 deadline)...) — foundry.
+const PERMIT_TRANSFER_FROM_TYPEHASH: [u8; 32] = [
+    0x93, 0x9c, 0x21, 0xa4, 0x8a, 0x8d, 0xbe, 0x3a, 0x9a, 0x24, 0x04, 0xa1, 0xd4, 0x66, 0x91, 0xe4,
+    0xd3, 0x9f, 0x65, 0x83, 0xd6, 0xec, 0x6b, 0x35, 0x71, 0x46, 0x04, 0xc9, 0x86, 0xd8, 0x01, 0x06,
+];
+
+/// The MINIMAL nested binding: Permit2 `PermitTransferFrom` (`TokenPermissions`,
+/// 2 members) — unlocked by the `nonce` curation. Proves the v0x03 machinery
+/// handles a smaller struct than PermitSingle end-to-end: the nested amount +
+/// token render, top-level spender + deadline show, `nonce` (top word 2) hides,
+/// AND flipping the committed `permitted` word declines (binding is live for the
+/// 2-member shape too).
+#[test]
+fn v3_permit_transfer_from_renders_and_flip_declines() {
+    let res = build_registry();
+    let leaf = find_leaf(res, "eip712-uniswap-permit2.json", 1);
+    let token = [0xA0u8, 0xb8, 0x69, 0x91, 0xc6, 0x21, 0x8b, 0x36, 0xc1, 0xd1, 0x9D, 0x4a, 0x2e,
+        0x9E, 0xb0, 0xcE, 0x36, 0x06, 0xeB, 0x48]; // USDC
+    let spender = [0x3fu8, 0xC9, 0x1A, 0x3a, 0xfd, 0x70, 0x39, 0x5C, 0xd4, 0x96, 0xC6, 0x47, 0xd5,
+        0xa6, 0xcC, 0x9D, 0x4B, 0x2b, 0x7F, 0xAD];
+
+    // nested_ed (TokenPermissions) = token | amount (2 words).
+    let mut nested_ed = std::vec![0u8; 64];
+    nested_ed[12..32].copy_from_slice(&token);
+    nested_ed[32 + 24..64].copy_from_slice(&500_000_000u64.to_be_bytes()); // 500 USDC
+    let permitted_hs = super::erc7730::nested::hash_struct(&TOKEN_PERMISSIONS_TYPEHASH, &nested_ed);
+
+    // top_ed (PermitTransferFrom) = permitted | spender | nonce | deadline (4 words).
+    let mut top_ed = std::vec![0u8; 128];
+    top_ed[0..32].copy_from_slice(&permitted_hs);
+    top_ed[32 + 12..64].copy_from_slice(&spender);
+    top_ed[64 + 24..96].copy_from_slice(&42u64.to_be_bytes()); // nonce (HIDDEN)
+    top_ed[96 + 24..128].copy_from_slice(&1_735_689_600u64.to_be_bytes()); // deadline (SHOWN)
+
+    let mut nested_blob = std::vec![0u8; 2];
+    nested_blob[0..2].copy_from_slice(&(nested_ed.len() as u16).to_be_bytes());
+    nested_blob.extend_from_slice(&nested_ed);
+
+    let render = |ed: &[u8], blob: &[u8]| {
+        let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("permit2 IR parses");
+        let verified = VerifiedDescriptor { ir };
+        let resolver = NameResolver::new();
+        super::erc7730::render_erc7730_eip712_pages_v3(
+            1, &[0u8; 20], &PERMIT_TRANSFER_FROM_TYPEHASH, ed, blob, &verified, None, &resolver,
+        )
+    };
+
+    let pages = render(&top_ed, &nested_blob).expect("valid PermitTransferFrom clear-signs");
+    assert_all_pages_printable(&pages);
+    let dump = dump_pages(&pages).to_lowercase();
+    assert!(dump.contains("3fc9"), "spender must be shown:\n{dump}");
+    assert!(dump.contains("500000000"), "nested amount must render:\n{dump}");
+    assert!(dump.contains("2025"), "deadline date must render:\n{dump}");
+    assert!(!dump.contains("hidden"), "sanity");
+
+    // Flip the committed `permitted` hashStruct word → decline (binding live).
+    for byte in [0usize, 15, 31] {
+        let mut ed = top_ed.clone();
+        ed[byte] ^= 0x01;
+        assert!(
+            render(&ed, &nested_blob).is_err(),
+            "flipping committed permitted word byte {byte} must decline"
+        );
+    }
+    // Flip a nested word → decline.
+    let mut blob = nested_blob.clone();
+    blob[2 + 40] ^= 0x01; // inside the amount word
+    assert!(render(&top_ed, &blob).is_err(), "flipping nested amount must decline");
+}
+
 /// EIP-2612 Permit `owner` allowlist (`hidden_address_allow`): the canonical
 /// Ledger permit template hides `owner` (== the signer) + `nonce` and shows
 /// `spender` / `value` / `deadline`. Without the allowlist entry rule 2 refuses
