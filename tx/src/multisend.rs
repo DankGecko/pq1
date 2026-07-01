@@ -35,6 +35,15 @@
 //! the device never renders) and every displayed field (`operation`,
 //! `to`, `value`, `data`) is the verbatim payload bytes. See the
 //! `#[cfg(kani)] mod verification` harnesses at the bottom of this file.
+//!
+//! **Per-record DELEGATECALL refusal — scope.** The walk harnesses prove field
+//! *extraction* (the displayed `operation` byte equals the verbatim payload
+//! byte), NOT the *validation* that `operation == 0`. The per-record "reject any
+//! `op != 0`" gate lives in `summarize()` (secure world), backed defense-in-depth
+//! by the on-chain `MultiSendCallOnly` revert (`is_multisend_claim` pins the
+//! batch `to` to `MULTISEND_CALL_ONLY_ADDRESSES`, so any `op != 0` record reverts
+//! on-chain). The `op == 0` validation is NOT yet a Kani target — see
+//! `ADVERSARIAL_REVIEW_KANI_2026-07-01.md` finding 3b-1 (work-todo §35 (k)).
 
 use sphincs_tz_shared::{GPV2_SETTLEMENT_ADDRESS, MULTI_SEND_SELECTOR, SET_PRE_SIGNATURE_SELECTOR};
 
@@ -733,9 +742,13 @@ mod verification {
     //    symbolic records (`per_record_page_bound` / `no_hidden_value` below,
     //    `[u8; 100]` data covering every branch), and the per-record page bound
     //    (`per_record_page_bound`). The multi-record `total += ..` accumulation
-    //    cannot `usize`-overflow: `records_pages_total` runs at one call site
-    //    (`safe_display.rs:424`) BEFORE the `≤ MULTISEND_MAX_RECORDS` verdict
-    //    gate, so the bound is payload-length-derived, NOT the verdict count —
+    //    cannot `usize`-overflow, INDEPENDENT of the verdict count cap: the
+    //    bound is payload-length-derived. (`records_pages_total` has TWO
+    //    callers — `safe_display.rs:424` in the renderer, where the record
+    //    count is applied via the `count > 0` guard *after* this call, and
+    //    `safe_display.rs:873` in the multiSend sign-gate, where the
+    //    `≤ MULTISEND_MAX_RECORDS` verdict runs *before* it; overflow-freedom
+    //    holds at both sites regardless of ordering.) Not the verdict count —
     //    each record is ≥ 85 B, so a bounded multiSend payload holds only tens
     //    of records, each contributing ≤ `cow_body.max(5) + 2`; the
     //    `safe_display` caller then refuses any total `> MAX_PAGES`. The
