@@ -1021,6 +1021,15 @@ pub unsafe fn erase_ns_page(page: u8) -> Result<(), ()> {
         lock_ns();
         cortex_m::asm::dsb();
         cortex_m::asm::isb();
+        // Invalidate ICACHE after the bank-2 erase/program, matching the
+        // bank-1 helpers (see the file header comment: "after every
+        // successful erase or program, call icache_invalidate()"). Without
+        // this, a same-power-cycle re-flash whose target lines were cached
+        // by a prior read (e.g. COMMIT's verify_images hashing the slot)
+        // makes the verified read-back observe STALE bytes and fail the
+        // compare — a spurious FlashError that dogs the FW-update retry
+        // until a power cycle, even though the flash is correct.
+        icache_invalidate();
 
         if sr & ERR_MASK != 0 {
             clear_errors_ns();
@@ -1078,6 +1087,15 @@ unsafe fn write_ns_quadword(addr: u32, data: &[u8; 16]) -> Result<(), ()> {
         lock_ns();
         cortex_m::asm::dsb();
         cortex_m::asm::isb();
+        // Invalidate ICACHE after the bank-2 erase/program, matching the
+        // bank-1 helpers (see the file header comment: "after every
+        // successful erase or program, call icache_invalidate()"). Without
+        // this, a same-power-cycle re-flash whose target lines were cached
+        // by a prior read (e.g. COMMIT's verify_images hashing the slot)
+        // makes the verified read-back observe STALE bytes and fail the
+        // compare — a spurious FlashError that dogs the FW-update retry
+        // until a power cycle, even though the flash is correct.
+        icache_invalidate();
 
         if sr & ERR_MASK != 0 {
             clear_errors_ns();
@@ -1134,6 +1152,12 @@ pub unsafe fn erase_secure_page(page: u32) -> Result<(), ()> {
         lock();
         cortex_m::asm::dsb();
         cortex_m::asm::isb();
+        // Invalidate ICACHE after the bank-1 slot-page erase, matching the
+        // other secure erase/program helpers (file header comment). A
+        // stale cached line here would make a subsequent verified re-flash
+        // read back the pre-erase bytes and spuriously fail (see the
+        // erase_ns_page / write_ns_quadword twins).
+        icache_invalidate();
 
         if sr & ERR_MASK != 0 {
             clear_errors();
@@ -1995,6 +2019,17 @@ pub unsafe fn offchain_count_promote_to(slot_key: &[u8; 8], target: u64) -> Resu
     }
     let slot_key = &sk_a;
 
+    // Value-inflation brick defence (see
+    // `docs/VULN-offchain-sync-value-inflation-slot-brick.md` and
+    // `crate::offchain_state::OFFCHAIN_COUNT_CEILING`): never promote the
+    // monotonic off-chain counter to a value at or above `MAX_SLOT_USES`. A
+    // companion-inflated `last_userop` reaches this promote via the sign-path
+    // repair branch; clamping here is the structural chokepoint that keeps every
+    // caller (sync + both sign paths) from durably tripping the combined-cap gate
+    // forever. The clamp never clips a legitimate value — a truthful on-chain
+    // `offchainSigCount` is always `< MAX_SLOT_USES`.
+    let target = crate::offchain_state::clamp_offchain_count(target);
+
     let pre = offchain_count_read(slot_key);
     if target <= pre {
         return Ok(());
@@ -2027,6 +2062,16 @@ pub unsafe fn last_userop_count_set(slot_key: &[u8; 8], count: u64) -> Result<()
         return Err(());
     }
     let slot_key = &sk_a;
+
+    // Value-inflation brick defence (see
+    // `docs/VULN-offchain-sync-value-inflation-slot-brick.md` and
+    // `crate::offchain_state::OFFCHAIN_COUNT_CEILING`): the `count` here is the
+    // untrusted companion's `CMD_OFFCHAIN_SYNC` target. Clamp it below
+    // `MAX_SLOT_USES` so a hostile floor bump cannot be promoted into the
+    // monotonic off-chain counter and permanently trip the combined-cap gate. A
+    // legitimate on-chain `offchainSigCount` is always `< MAX_SLOT_USES`, so the
+    // clamp is a no-op for every honest sync.
+    let count = crate::offchain_state::clamp_offchain_count(count);
 
     let pre = last_userop_count_read(slot_key);
     if count < pre {

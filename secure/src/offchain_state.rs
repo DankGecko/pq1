@@ -76,6 +76,50 @@ pub fn may_create_distinct_slot(distinct_live: usize, already_present: bool) -> 
     already_present || distinct_live < MAX_DISTINCT_SLOTS
 }
 
+/// Hard ceiling on any per-slot off-chain counter a durable write may store.
+///
+/// **Why this exists (value-inflation → consent-free durable slot brick; see
+/// `docs/VULN-offchain-sync-value-inflation-slot-brick.md`).** The untrusted
+/// companion supplies the `target_count` written to `last_userop` by
+/// `CMD_OFFCHAIN_SYNC`, and that value is promoted verbatim into the monotonic
+/// `offchain` counter by the sign paths' repair branch
+/// (`offchain_count_promote_to`). The combined-cap gates
+/// (`cmd_sign_userop`/`cmd_sign_offchain`) refuse **every** future signature for
+/// a slot once `userop_sigs + offchain >= MAX_SLOT_USES`. Because the counters are
+/// monotonic with no reset path (invariant #7) and the flash key is seed-
+/// independent, an un-clamped write of `>= MAX_SLOT_USES` is a **permanent,
+/// seed-survivable, consent-free brick** of that slot. Clamping every durable
+/// write to this ceiling makes that state unreachable: a clamped counter always
+/// leaves the slot with at least one usable signature, so reaching the cap
+/// requires a real, user-confirmed signature — never a bare sync APDU.
+///
+/// **Why `MAX_SLOT_USES - 1` is exactly right (never rejects a legitimate sync).**
+/// The on-chain combined cap is strict — `slotUses + offchainSigCount < MAX_SLOT_USES`
+/// (invariant #7) — so a truthful on-chain `offchainSigCount` (the only value a
+/// legitimate sync mirrors) can never exceed `MAX_SLOT_USES - 1`. The clamp
+/// therefore only ever clips a value the chain itself would reject, and is a
+/// no-op for every honest flow. At the ceiling the slot is still signable (both
+/// gates admit `offchain <= MAX_SLOT_USES - 1`); one more real signature reaches
+/// the legitimate exhausted state at `MAX_SLOT_USES`.
+pub const OFFCHAIN_COUNT_CEILING: u64 = sphincs_tz_shared::MAX_SLOT_USES - 1;
+
+/// Clamp a companion- or snapshot-supplied off-chain counter to
+/// [`OFFCHAIN_COUNT_CEILING`]. Single source of truth for the value-inflation
+/// brick defence: every durable writer of the `offchain` / `last_userop`
+/// counters funnels through this so a single missed site cannot re-open the hole
+/// (defence in depth — the source-side clamp in `cmd_offchain_sync`, the two
+/// flash setters, and both mock-backend setters all call it). Pure and
+/// host-testable.
+#[inline]
+#[must_use]
+pub const fn clamp_offchain_count(count: u64) -> u64 {
+    if count > OFFCHAIN_COUNT_CEILING {
+        OFFCHAIN_COUNT_CEILING
+    } else {
+        count
+    }
+}
+
 #[cfg(feature = "stm32u585")]
 mod backend {
     pub unsafe fn offchain_count_read(slot_key: &[u8; 8]) -> u64 {
@@ -228,6 +272,9 @@ mod backend {
         slot_key: &[u8; 8],
         target: u64,
     ) -> Result<(), ()> {
+        // Value-inflation brick defence: clamp before storing, mirroring the
+        // flash backend (see `super::OFFCHAIN_COUNT_CEILING`).
+        let target = super::clamp_offchain_count(target);
         let idx = match find(slot_key) {
             Some(i) => i,
             None => allocate(slot_key).ok_or(())?,
@@ -240,6 +287,10 @@ mod backend {
     }
 
     pub unsafe fn last_userop_count_set(slot_key: &[u8; 8], count: u64) -> Result<(), ()> {
+        // Value-inflation brick defence: clamp the companion-supplied floor
+        // before storing, mirroring the flash backend (see
+        // `super::OFFCHAIN_COUNT_CEILING`).
+        let count = super::clamp_offchain_count(count);
         let idx = match find(slot_key) {
             Some(i) => i,
             None => allocate(slot_key).ok_or(())?,

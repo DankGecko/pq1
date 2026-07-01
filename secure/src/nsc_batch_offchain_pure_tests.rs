@@ -779,15 +779,78 @@ fn negative_offchain_sync_confirms_new_slot_before_durable_write() {
         "SYNC confirm must be fail-closed (only Confirmed proceeds)",
     );
     // Ordering: the consent gate must come BEFORE the durable `last_userop_count_set`.
+    // Anchor the write search on the CALL form (`last_userop_count_set(`), not the
+    // bare identifier: doc comments in this handler now reference the function by
+    // name (e.g. the value-inflation clamp block), and a bare-identifier `find`
+    // would match the earliest comment mention instead of the real call site —
+    // falsely failing this ordering pin. The comment writes the name backtick-
+    // wrapped (`` `last_userop_count_set` ``), never followed by `(`, so the
+    // paren-anchored search matches only the durable write.
     let gate = CMD_OFFCHAIN_SYNC_SRC
         .find("confirm(pages.as_slice())")
         .expect("confirm gate present");
     let write = CMD_OFFCHAIN_SYNC_SRC
-        .find("last_userop_count_set")
+        .find("last_userop_count_set(")
         .expect("durable write present");
     assert!(
         gate < write,
         "consent confirm must precede the durable page-123 write (no pre-confirm mint)",
+    );
+}
+
+#[test]
+fn negative_offchain_sync_clamps_target_before_durable_write() {
+    // Value-inflation → consent-free durable slot brick fix
+    // (docs/VULN-offchain-sync-value-inflation-slot-brick.md). For an ALREADY-
+    // registered slot the confirm gate is skipped, so a hostile `target_count`
+    // reaches the durable write with no user interaction; promoted into the
+    // monotonic off-chain counter it would trip the combined-cap gate forever.
+    // The handler MUST clamp `target_count` to the ceiling, and the clamp MUST
+    // precede the durable `last_userop_count_set` so it applies on EVERY path
+    // (registered slots included, which never hit the confirm branch).
+    assert!(
+        CMD_OFFCHAIN_SYNC_SRC.contains("clamp_offchain_count(target_count)"),
+        "SYNC must clamp the untrusted target_count (value-inflation brick defence)",
+    );
+    let clamp = CMD_OFFCHAIN_SYNC_SRC
+        .find("clamp_offchain_count(target_count)")
+        .expect("source clamp present");
+    let write = CMD_OFFCHAIN_SYNC_SRC
+        .find("last_userop_count_set")
+        .expect("durable write present");
+    assert!(
+        clamp < write,
+        "target_count clamp must precede the durable write (applies on the \
+         confirm-free registered-slot path too)",
+    );
+}
+
+#[test]
+fn negative_offchain_sync_confirms_value_inflation_on_registered_slot() {
+    // Value-inflation → consent-free durable slot brick fix, defence-in-depth
+    // layer 2 (docs/VULN-offchain-sync-value-inflation-slot-brick.md). The clamp
+    // blocks the permanent cap-tripping brick; this confirm additionally denies
+    // the consent-free *near-exhaustion* of an already-registered slot. The gate
+    // must fire when the sync would RAISE the stored floor (not only for a new
+    // slot), and the raise-check must read the stored `last_userop` value.
+    assert!(
+        CMD_OFFCHAIN_SYNC_SRC.contains("last_userop_count_read"),
+        "SYNC must read the stored floor to detect a value-inflating sync",
+    );
+    assert!(
+        CMD_OFFCHAIN_SYNC_SRC.contains("target_count > crate::offchain_state::last_userop_count_read"),
+        "the confirm gate must fire on a floor-RAISING sync, not just a new slot",
+    );
+    // The raise detection must precede (feed) the confirm gate.
+    let raise = CMD_OFFCHAIN_SYNC_SRC
+        .find("raises_floor")
+        .expect("raise-detection present");
+    let gate = CMD_OFFCHAIN_SYNC_SRC
+        .find("confirm(pages.as_slice())")
+        .expect("confirm gate present");
+    assert!(
+        raise < gate,
+        "the value-inflation raise check must feed the confirm gate",
     );
 }
 

@@ -90,21 +90,52 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         return NscStatus::InvalidPointer as u32;
     }
 
+    // Value-inflation → consent-free durable slot brick defence (Layer 1;
+    // `docs/VULN-offchain-sync-value-inflation-slot-brick.md`). `target_count` is
+    // fully companion-controlled and, for an already-registered slot, is written
+    // durably WITHOUT a confirm (the gate below only fires for new slots). The
+    // sign paths promote it verbatim into the monotonic `offchain` counter, so an
+    // un-clamped `>= MAX_SLOT_USES` would permanently trip the combined-cap gate —
+    // a seed-survivable, consent-free brick of the slot. Clamp it to
+    // `OFFCHAIN_COUNT_CEILING` (`MAX_SLOT_USES - 1`) at the source: a truthful
+    // on-chain `offchainSigCount` (the only value a legitimate sync mirrors) is
+    // always `< MAX_SLOT_USES`, so this never rejects an honest sync, while a
+    // hostile inflation can no longer reach the brick state. Belt-and-braces: the
+    // durable flash setters clamp again (see `crate::offchain_state`), so a single
+    // skipped site cannot re-open the hole.
+    let target_count = crate::offchain_state::clamp_offchain_count(target_count);
+
     let slot_key =
         crate::offchain_state::slot_key_compute(account_index as u8, chain_id, slot_index);
 
-    // Consent gate (page-123 exhaustion → permanent-brick fix; see the module
-    // Security note + docs/VULN-offchain-sync-page123-exhaustion-brick.md). A
-    // durable write for a slot the firmware has NOT seen before mints a new
-    // page-123 journal entry for a companion-chosen, seed-independent slot_key;
-    // an unbounded spray of distinct tuples would fill the page and wedge
-    // compaction into a permanent signing brick. Require an explicit trusted-
-    // display confirm before creating a new slot — a spray would need one
-    // physical confirm per distinct tuple (infeasible). Re-syncs of an already-
-    // registered slot are idempotent floor bumps and stay confirm-free. The
-    // Layer-2 distinct-slot cap (offchain_state/flash) is the structural backstop.
-    // (Bare unsafe call matches this file's existing facade-call convention.)
-    if !crate::offchain_state::offchain_count_is_registered(&slot_key) {
+    // Consent gate — two brick classes, one confirm.
+    //
+    // (a) NEW-SLOT (page-123 exhaustion → permanent-brick fix; module Security
+    //     note + docs/VULN-offchain-sync-page123-exhaustion-brick.md). A durable
+    //     write for a slot the firmware has NOT seen before mints a new page-123
+    //     journal entry for a companion-chosen, seed-independent slot_key; an
+    //     unbounded spray of distinct tuples would wedge compaction into a
+    //     permanent signing brick. One physical confirm per distinct tuple makes
+    //     a spray infeasible.
+    //
+    // (b) VALUE-INFLATION (docs/VULN-offchain-sync-value-inflation-slot-brick.md).
+    //     Even on an ALREADY-registered slot, a sync that RAISES `last_userop` is
+    //     promoted into the monotonic off-chain counter and burns the slot's
+    //     few-time budget toward exhaustion with no user interaction. The clamp
+    //     above already blocks the permanent, cap-tripping brick; this confirm
+    //     additionally denies the *consent-free near-exhaustion* that would
+    //     otherwise let a hostile companion force the slot-rotation treadmill.
+    //     A raise only ever occurs on genuine recovery (post-reflash catch-up —
+    //     itself a NEW slot, case (a) — or a rare multi-device floor advance),
+    //     so gating it costs an honest user at most one confirm while removing
+    //     the attacker's silent lever. Fail-safe: if this read glitches the sync
+    //     is over-gated (an extra confirm), never under-gated.
+    //
+    // An idempotent re-sync (`target <= stored`) is a no-op and stays confirm-
+    // free. Bare unsafe facade calls match this file's existing convention.
+    let is_new_slot = !crate::offchain_state::offchain_count_is_registered(&slot_key);
+    let raises_floor = target_count > crate::offchain_state::last_userop_count_read(&slot_key);
+    if is_new_slot || raises_floor {
         use crate::ui::confirm::{confirm, ConfirmResult};
         let pages = crate::tx::display::build_offchain_sync_pages(
             account_index as u8,

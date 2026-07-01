@@ -13,10 +13,12 @@ use sha3::Keccak256;
 use crate::db_roots::{ERC20_DB_ROOT, NAMES_DB_ROOT, SELECTOR_DB_ROOT};
 
 use super::offchain_state::{
-    last_userop_count_read, last_userop_count_set, may_create_distinct_slot, offchain_count_bump,
-    offchain_count_is_registered, offchain_count_promote_to, offchain_count_read,
-    offchain_count_register_slot, slot_key_compute, MAX_DISTINCT_SLOTS,
+    clamp_offchain_count, last_userop_count_read, last_userop_count_set, may_create_distinct_slot,
+    offchain_count_bump, offchain_count_is_registered, offchain_count_promote_to,
+    offchain_count_read, offchain_count_register_slot, slot_key_compute, MAX_DISTINCT_SLOTS,
+    OFFCHAIN_COUNT_CEILING,
 };
+use sphincs_tz_shared::MAX_SLOT_USES;
 
 // ─────────────────────────────────────────────────────────────────────
 // 0. Slice source-text fixtures.
@@ -789,6 +791,140 @@ fn positive_offchain_mock_last_userop_set_tolerates_regression_as_noop() {
             "last_userop_count must NOT regress on a stale set call",
         );
     }
+}
+
+// ── Value-inflation → consent-free durable slot brick fix
+// (docs/VULN-offchain-sync-value-inflation-slot-brick.md). CMD_OFFCHAIN_SYNC
+// writes an untrusted, unclamped `target_count` into `last_userop`; the sign
+// paths promote it verbatim into the monotonic `offchain` counter, so a value
+// `>= MAX_SLOT_USES` permanently trips the combined-cap gate — a seed-survivable,
+// consent-free brick. The clamp to OFFCHAIN_COUNT_CEILING (= MAX_SLOT_USES - 1)
+// at every durable writer makes that state unreachable. These pin the clamp.
+
+#[test]
+fn positive_offchain_ceiling_is_max_slot_uses_minus_one() {
+    // The ceiling must be exactly one below the cap: the combined-cap gate
+    // refuses at `>= MAX_SLOT_USES`, and a truthful on-chain `offchainSigCount`
+    // (the only value a legitimate sync mirrors) is always `< MAX_SLOT_USES`
+    // (strict on-chain cap `slotUses + offchainSigCount < MAX_SLOT_USES`). So
+    // `MAX_SLOT_USES - 1` both blocks the brick and never clips an honest sync.
+    assert_eq!(
+        OFFCHAIN_COUNT_CEILING,
+        MAX_SLOT_USES - 1,
+        "ceiling must be MAX_SLOT_USES - 1 (off-by-one here re-opens the brick)",
+    );
+}
+
+#[test]
+fn positive_clamp_offchain_count_boundaries() {
+    // Passthrough below/at the ceiling.
+    assert_eq!(clamp_offchain_count(0), 0);
+    assert_eq!(clamp_offchain_count(1), 1);
+    assert_eq!(clamp_offchain_count(OFFCHAIN_COUNT_CEILING), OFFCHAIN_COUNT_CEILING);
+    // Clip at and above the cap — the exact attack value MAX_SLOT_USES (the FI
+    // double-read guard only rejects u64::MAX, so 65_536 would otherwise sail
+    // through) and the saturating extreme.
+    assert_eq!(clamp_offchain_count(MAX_SLOT_USES), OFFCHAIN_COUNT_CEILING);
+    assert_eq!(clamp_offchain_count(MAX_SLOT_USES + 1), OFFCHAIN_COUNT_CEILING);
+    assert_eq!(clamp_offchain_count(u64::MAX), OFFCHAIN_COUNT_CEILING);
+}
+
+#[test]
+fn positive_clamped_counter_never_trips_combined_cap_gate() {
+    // The combined-cap gate refuses when `userop_sigs + offchain >= MAX_SLOT_USES`
+    // (cmd_sign_userop) / when `userop_sigs + (offchain+1) > MAX_SLOT_USES`
+    // (cmd_sign_offchain). A slot whose off-chain counter was clamped (no Type-2
+    // sigs yet, userop_sigs = 0) must remain signable, i.e. NOT bricked.
+    let offchain = clamp_offchain_count(u64::MAX); // worst-case attacker input
+    let userop_sigs = 0u64;
+    assert!(
+        userop_sigs.saturating_add(offchain) < MAX_SLOT_USES,
+        "a clamped counter must leave the slot signable (userop gate)",
+    );
+    assert!(
+        userop_sigs.saturating_add(offchain + 1) <= MAX_SLOT_USES,
+        "a clamped counter must leave one off-chain sig (offchain gate)",
+    );
+}
+
+#[test]
+fn negative_offchain_mock_sync_inflation_cannot_brick_slot() {
+    // End-to-end reproduction of the vuln against the mock backend: an untrusted
+    // sync sets `last_userop` to the exact attack value MAX_SLOT_USES; a
+    // subsequent sign promotes it into `offchain`. Pre-fix, `offchain` would land
+    // at MAX_SLOT_USES and the combined-cap gate would refuse forever. Post-fix,
+    // both durable writers clamp, so the slot stays below the cap and signable.
+    let key = slot_key_compute(201, 202, 203);
+    unsafe {
+        // Attacker's CMD_OFFCHAIN_SYNC path.
+        last_userop_count_set(&key, MAX_SLOT_USES).expect("sync ok");
+        assert!(
+            last_userop_count_read(&key) < MAX_SLOT_USES,
+            "sync must not durably store a counter at/above the cap",
+        );
+        // Sign-path repair branch promotes last_userop into offchain.
+        let last = last_userop_count_read(&key);
+        offchain_count_promote_to(&key, last).expect("promote ok");
+        let offchain = offchain_count_read(&key);
+        assert!(
+            offchain < MAX_SLOT_USES,
+            "promoted off-chain counter must stay below the cap (else permanent brick)",
+        );
+        // The combined-cap gate (userop_sigs = 0) still admits a signature.
+        assert!(
+            0u64.saturating_add(offchain) < MAX_SLOT_USES,
+            "slot must remain signable after a hostile inflation sync",
+        );
+    }
+}
+
+#[test]
+fn negative_offchain_mock_promote_to_over_cap_is_clamped() {
+    // Direct guard on the sign-path promote chokepoint: even a promote target of
+    // u64::MAX (a glitched/hostile last_userop snapshot) must clamp, never store
+    // a value that trips the cap.
+    let key = slot_key_compute(211, 212, 213);
+    unsafe {
+        offchain_count_promote_to(&key, u64::MAX).expect("promote ok");
+        assert_eq!(
+            offchain_count_read(&key),
+            OFFCHAIN_COUNT_CEILING,
+            "promote must clamp to the ceiling, not store an over-cap value",
+        );
+    }
+}
+
+// ── Source-text pins: the clamp must be wired at every durable writer, so a
+// future refactor that drops a site surfaces here (defence-in-depth intent).
+
+#[test]
+fn positive_offchain_clamp_helper_and_ceiling_defined() {
+    assert!(
+        OFFCHAIN_SRC.contains("pub const fn clamp_offchain_count"),
+        "offchain_state.rs must define the clamp_offchain_count chokepoint",
+    );
+    assert!(
+        OFFCHAIN_SRC.contains("pub const OFFCHAIN_COUNT_CEILING: u64 = sphincs_tz_shared::MAX_SLOT_USES - 1;"),
+        "OFFCHAIN_COUNT_CEILING must be MAX_SLOT_USES - 1 (off-by-one re-opens brick)",
+    );
+    // Both mock-backend durable setters must call the clamp.
+    assert_eq!(
+        OFFCHAIN_SRC.matches("super::clamp_offchain_count(").count(),
+        2,
+        "both mock durable setters (promote_to + last_userop_count_set) must clamp",
+    );
+}
+
+#[test]
+fn positive_flash_backend_clamps_both_durable_setters() {
+    assert_eq!(
+        FLASH_SRC
+            .matches("crate::offchain_state::clamp_offchain_count(")
+            .count(),
+        2,
+        "flash last_userop_count_set + offchain_count_promote_to must both clamp \
+         (value-inflation brick defence)",
+    );
 }
 
 // ── Source-text pins for `offchain_state.rs` — the mock must
