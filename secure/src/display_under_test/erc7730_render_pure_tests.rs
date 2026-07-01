@@ -997,6 +997,108 @@ fn positive_lido_request_withdrawals_renders_every_element() {
     let _ = find_page_by_label(&pages, "Owner");
 }
 
+/// The REAL registry Lido `requestWithdrawals` leaf — a `tokenAmount` `uint256[]`
+/// array (the synthetic fixture uses `format:amount`; EVERY registry `uint256[]`
+/// uses `tokenAmount`, so this is the shape the synthetic cannot exercise, and
+/// the render-faithfulness spot-check on a real registry descriptor).
+/// BOUND branch: with Merkle-verified stETH metadata the shared token is
+/// resolved ONCE and every element renders as a scaled `stETH` amount.
+#[test]
+fn positive_registry_lido_tokenamount_array_bound_renders_steth() {
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-WithdrawalQueueERC721.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
+
+    // 1.0 / 2.5 / 0.3 stETH (18 decimals).
+    let amounts = [
+        u256_from_u64(1_000_000_000_000_000_000),
+        u256_from_u64(2_500_000_000_000_000_000),
+        u256_from_u64(300_000_000_000_000_000),
+    ];
+    let calldata = rw_calldata(&amounts, [0x55u8; 20]);
+    assert_selector_matches(&verified.ir, &calldata, "requestWithdrawals(uint256[],address)");
+
+    // Registry `token` is the stETH constant (0xae7ab9…); supply its metadata.
+    let steth: [u8; 20] = hex::decode("ae7ab96520DE3A18E5e111B5EaAb095312D7fE84")
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let steth_meta = Erc20Metadata {
+        chain_id: 1,
+        contract: steth,
+        decimals: 18,
+        name: b"Liquid staked Ether 2.0",
+        symbol: b"stETH",
+    };
+    let tx = envelope(1, entry.contract);
+    let resolver = NameResolver::new();
+    let pages = render_erc7730_pages(&tx, &calldata, &verified, Some(&steth_meta), &resolver)
+        .expect("render");
+    assert_all_pages_printable(&pages);
+
+    let dump = dump_pages(&pages);
+    assert!(dump.contains("3 items"), "count header missing:\n{dump}");
+    assert!(dump.contains(".5"), "amount 2.5 fraction missing:\n{dump}");
+    // WYSIWYS: EXACTLY the 3 element pages (label "Amount") show the bound
+    // symbol — proves the shared token was Merkle-bound and applied per element
+    // (not declined-to-blind), and array-tail-hiding stays closed (all shown).
+    let steth_element_pages = pages
+        .as_slice()
+        .iter()
+        .filter(|p| row_str(&p[0]) == "Amount" && (1..=2).any(|r| row_str(&p[r]).contains("stETH")))
+        .count();
+    assert_eq!(steth_element_pages, 3, "every element must render as stETH:\n{dump}");
+    // Bound → no UNVERIFIED token page.
+    let unverified = pages
+        .as_slice()
+        .iter()
+        .filter(|p| row_str(&p[0]).contains("UNVERIFIE"))
+        .count();
+    assert_eq!(unverified, 0, "bound token must not show UNVERIFIED:\n{dump}");
+    let _ = find_page_by_label(&pages, "Beneficiary");
+}
+
+/// Same registry leaf, UNBOUND branch (audit M-4 + M-1): with NO Merkle-verified
+/// metadata each element renders as a loud RAW integer (never a scaled decimal
+/// with an assumed scale) and the token identity is named EXACTLY ONCE — not
+/// per element.
+#[test]
+fn positive_registry_lido_tokenamount_array_unbound_raw_and_one_token_page() {
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-WithdrawalQueueERC721.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
+
+    let amounts = [
+        u256_from_u64(1_000_000_000_000_000_000),
+        u256_from_u64(2_500_000_000_000_000_000),
+    ];
+    let calldata = rw_calldata(&amounts, [0x55u8; 20]);
+    let tx = envelope(1, entry.contract);
+    let resolver = NameResolver::new();
+    // No stETH metadata supplied → unbound.
+    let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver).expect("render");
+    assert_all_pages_printable(&pages);
+
+    let dump = dump_pages(&pages);
+    // M-4: every element footer is the loud raw/unknown-scale marker.
+    let raw_footers = pages
+        .as_slice()
+        .iter()
+        .filter(|p| row_str(&p[3]).contains("raw, dec=?"))
+        .count();
+    assert_eq!(raw_footers, 2, "both unbound elements must render loud raw:\n{dump}");
+    // M-1: the token is named EXACTLY ONCE (a per-element page would be noise
+    // and could push the array past the page budget).
+    let token_pages = pages
+        .as_slice()
+        .iter()
+        .filter(|p| row_str(&p[0]).contains("UNVERIFIE"))
+        .count();
+    assert_eq!(token_pages, 1, "unbound token must be named exactly once:\n{dump}");
+}
+
 #[test]
 fn array_resolve_matches_walk_differential() {
     // When the Kani-proven `walk` accepts the body, our resolver must agree

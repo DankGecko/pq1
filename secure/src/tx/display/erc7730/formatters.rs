@@ -685,6 +685,39 @@ pub(super) fn render_array(
 
     // 9. One page per element — EVERY element (array-tail-hiding closed).
     let fmt = FormatOp::try_from(field.format_op).map_err(|_| RenderErr::Reject("7730 arr fmt"))?;
+
+    // A `tokenAmount` array (Lido `requestWithdrawals(uint256[] _amounts, …)`)
+    // renders every element as an amount of the SAME token — the descriptor's
+    // `token` is a constant or a sibling scalar field shared by all elements.
+    // Resolve + Merkle-bind it ONCE, so each element shows the verified
+    // decimals/symbol. SLOT-CONFUSION DISCIPLINE: the token sub-resolution
+    // reads the STATIC HEAD only (`resolve_array` already proved the array
+    // offset == static_head_words*32, so the head is exactly this prefix) —
+    // never the array-data tail. A token that cannot be Merkle-bound is named
+    // ONCE (audit M-1) and its elements fall back to loud raw (audit M-4).
+    let bound_token: Option<(u32, &[u8])> = if fmt == FormatOp::TokenAmount {
+        let head_end = (static_head_words as usize)
+            .saturating_mul(32)
+            .min(full_body.len());
+        let head = &full_body[..head_end];
+        let token_addr = resolve_token_address(ir, head, tx, params).ok();
+        let b = match (token_addr, erc20) {
+            (Some(a), Some(m)) if a == m.contract => Some((u32::from(m.decimals), m.symbol)),
+            _ => None,
+        };
+        if b.is_none() {
+            if let Some(addr) = token_addr {
+                let ap = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
+                write_label_row(pages, ap, b"Token (UNVERIFIED)");
+                let [_, ar1, ar2, ar3] = pages.page_mut(ap);
+                write_addr_full_or_name(ar1, ar2, ar3, &addr, tx.chain_id, resolver);
+            }
+        }
+        b
+    } else {
+        None
+    };
+
     for i in 0..count {
         let elem_start = elems_start
             .checked_add(i.checked_mul(32).ok_or(RenderErr::Reject("7730 arr ovf"))?)
@@ -693,7 +726,7 @@ pub(super) fn render_array(
             .get(elem_start..elem_start + 32)
             .ok_or(RenderErr::Reject("7730 arr elem oob"))?;
         let word32: &[u8; 32] = word.try_into().map_err(|_| RenderErr::Reject("7730 arr elem"))?;
-        render_array_element(field, fmt, word32, pages, tx, erc20, resolver, params)?;
+        render_array_element(field, fmt, word32, pages, tx, bound_token, resolver, params)?;
     }
     Ok(())
 }
@@ -730,7 +763,10 @@ fn write_count_row(row: &mut [u8; DISPLAY_COLS], count: usize) {
 }
 
 /// Render one array element (a 32-byte word) as one page. v1 supports the
-/// element formats that make sense for a list: amount, addressName, raw.
+/// element formats that make sense for a list: amount, tokenAmount,
+/// addressName, raw. `bound_token` is the `(decimals, symbol)` of the array's
+/// shared token, Merkle-bound ONCE by [`render_array`] (`None` = not bound /
+/// not a tokenAmount array) — never re-resolved per element.
 #[allow(clippy::too_many_arguments)]
 fn render_array_element(
     field: &FieldEntry<'_>,
@@ -738,7 +774,7 @@ fn render_array_element(
     word: &[u8; 32],
     pages: &mut Pages,
     tx: &Eip1559Tx,
-    _erc20: Option<&Erc20Metadata<'_>>,
+    bound_token: Option<(u32, &[u8])>,
     resolver: &NameResolver<'_>,
     params: &ParamSet<'_>,
 ) -> Result<(), RenderErr> {
@@ -759,6 +795,40 @@ fn render_array_element(
                     AmountFit::Overflow => "!AMOUNT OVERFLOW",
                 },
             );
+            Ok(())
+        }
+        FormatOp::TokenAmount => {
+            // Amount of the array's shared token. `bound_token` was resolved +
+            // Merkle-verified once by the caller. Bound → scaled value + symbol;
+            // unbound → loud RAW integer (audit M-4: never scale with an
+            // assumed decimals), with the token identity already named once by
+            // the caller's `Token (UNVERIFIED)` page.
+            let value = U256(*word);
+            let [_, r1, r2, foot] = pages.page_mut(p);
+            match bound_token {
+                Some((decimals, ticker)) => {
+                    let fit = write_amount_two_rows(
+                        r1, r2, &value, decimals, 6, true, true, ascii_str(ticker),
+                    );
+                    write_line(
+                        foot,
+                        match fit {
+                            AmountFit::Full => "> next",
+                            AmountFit::Overflow => "!AMOUNT OVERFLOW",
+                        },
+                    );
+                }
+                None => {
+                    let fit = write_amount_two_rows(r1, r2, &value, 0, 0, false, true, "");
+                    write_line(
+                        foot,
+                        match fit {
+                            AmountFit::Full => "! raw, dec=?",
+                            AmountFit::Overflow => "!AMOUNT OVERFLOW",
+                        },
+                    );
+                }
+            }
             Ok(())
         }
         FormatOp::AddressName => {
