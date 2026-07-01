@@ -766,17 +766,37 @@ fn permit2_nested_anchor_emission_is_byte_exact() {
         "tokenPath = local word 0 (token)"
     );
 
-    // ── PermitBatch (array-of-struct) — v1 scope boundary: DROPPED, absent. ──
+    // ── PermitBatch (array-of-struct, v2) — now emits an is_array anchor. ──
+    // Identical to PermitSingle's anchor (same PermitDetails struct + sub-fields)
+    // EXCEPT flags bit0 = 1 (is_array). The DEVICE still declines it (the array
+    // render is the gated commit); dbgen emits it so the wire is ready.
     let batch = hex_bytes(&keccak_hex(
         "PermitBatch(PermitDetails[] details,address spender,uint256 sigDeadline)\
          PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)",
     ));
-    assert!(
-        ir.format_iter()
-            .map(|f| f.expect("format parses"))
-            .all(|f| f.type_hash[..] != batch[..]),
-        "PermitBatch (array-of-struct) must be absent in v1 (dropped by the visibility gate)"
+    let payload = nested_anchor_payload(&ir, &batch).expect("PermitBatch anchor present (v2)");
+    assert_eq!(payload[0], 0x03);
+    assert_eq!(u16::from_be_bytes([payload[1], payload[2]]), 0, "details is member 0");
+    assert_eq!(
+        &payload[3..35],
+        &hex_bytes("65626cad6cb96493bf6f5ebea28756c966f023ab9e8a83a7101849d5573b3678")[..],
+        "pinned typeHash(PermitDetails) — same struct as PermitSingle"
     );
+    assert_eq!(u16::from_be_bytes([payload[35], payload[36]]), 4, "PermitDetails has 4 members");
+    assert_eq!(payload[37], 0x01, "flags bit0 = is_array (v2)");
+    assert_eq!(payload[38], 0x01, "addr_word_bmp: token is address");
+    assert_eq!(payload[39], 2, "amount + expiration shown per element");
+    let (b_sf0, b_next) = read_subfield(&payload, 40);
+    assert_eq!(b_sf0.format_op, 0x03, "tokenAmount");
+    assert_eq!(pool_entry(&ir, b_sf0.path_off), [0x10, 0x20, 0x00, 0x01], "amount local word 1");
+    assert_eq!(
+        find_tlv(pool_entry(&ir, b_sf0.param_off), 0x30).expect("tokenPath TLV"),
+        [0x10, 0x20, 0x00, 0x00],
+        "tokenPath = local word 0 (token) — `.[]` stripped for local resolution"
+    );
+    let (b_sf1, _) = read_subfield(&payload, b_next);
+    assert_eq!(b_sf1.format_op, 0x05, "date");
+    assert_eq!(pool_entry(&ir, b_sf1.path_off), [0x10, 0x20, 0x00, 0x02], "expiration local word 2");
 }
 
 /// RE-VENDOR GUARD (Tier A curation discipline — mirrors

@@ -1642,29 +1642,56 @@ enum NestedPlan {
     /// A flat top-level field (its index into `fmt.fields`).
     Flat(usize),
     /// A nested-struct anchor: the struct top-member name, its word position in
-    /// the parent `encodeData`, its struct base type, and the `fmt.fields`
-    /// indices of its visible children (in descriptor order).
+    /// the parent `encodeData`, its struct base type, whether it is an ARRAY of
+    /// that struct (v2), and the `fmt.fields` indices of its visible children (in
+    /// descriptor order).
     Anchor {
         top: String,
         word_pos: u16,
         base: String,
+        is_array: bool,
         children: Vec<usize>,
     },
 }
 
+/// Strip the nested-member prefix from a descriptor path, returning the single
+/// elementary child segment. `top.child` (v1) → `child`; `top.[].child` (v2
+/// array) → `child`. Returns `None` if the path doesn't match, has an unexpected
+/// array bracket, or names more than one further segment (deeper nesting = v3).
+fn strip_nested_child<'a>(path: &'a str, top: &str, is_array: bool) -> Option<&'a str> {
+    let rest = path.trim().strip_prefix(top)?.strip_prefix('.')?;
+    let rest = if is_array {
+        rest.strip_prefix("[].")?
+    } else {
+        rest
+    };
+    if rest.is_empty() || rest.contains('.') || rest.contains('[') {
+        return None;
+    }
+    Some(rest)
+}
+
 /// Try to compile an EIP-712 format that has ≥1 nested-struct member into the
-/// v0x03 recursive-IR shape (§4 + §10 of the design doc). Returns
-/// `Some((records, nested_descent_count))` on a v1-supported shape (single-level,
-/// NON-array, elementary children), or `Ok(None)` to fall back to the
-/// bare-marker belt (the caller then emits flat fields + `[0x01]` so the device
-/// declines the WHOLE format). `Err` only on a genuine build error.
+/// v0x03 recursive-IR shape (§4 + §10 + §11 of the design doc). Returns
+/// `Some((records, nested_descent_count))` on a supported shape, or `Ok(None)`
+/// to fall back to the bare-marker belt (the caller then emits flat fields +
+/// `[0x01]` so the device declines the WHOLE format). `Err` only on a genuine
+/// build error.
 ///
-/// v1 supported subset — anything outside it returns `Ok(None)`:
-///   * struct top members must be NON-array (`PermitDetails[]` → v2);
-///   * children are single-level (`details.amount`; `a.b.c` → v3);
+/// Supported subset — anything outside it returns `Ok(None)`:
+///   * a single-level nested struct member (v1, `details.amount`) OR a
+///     single-level ARRAY of a struct (v2, `details.[].amount`, `flags` bit0=1);
+///     the `.[]` is stripped so local ordinals are identical either way;
+///   * children are single-level (`a.b.c` / `a.[].b.c` → v3);
+///   * the element/struct members are ELEMENTARY (a nested struct or deeper
+///     array inside → v3);
 ///   * children use only the {raw, amount, tokenAmount(local tokenPath), date}
 ///     formats with the v1 param vocabulary;
 ///   * every address-typed local word is covered by a visible child (E2).
+///
+/// NOTE: v2 array anchors are EMITTED here (the wire is ready), but the on-device
+/// ARRAY render is a separate, adversarial-review-gated commit — until then the
+/// device declines any `is_array` anchor.
 fn try_compile_eip712_nested(
     sig: &str,
     fmt: &Format,
@@ -1683,29 +1710,31 @@ fn try_compile_eip712_nested(
             plan.push(NestedPlan::Flat(i));
             continue;
         };
-        // v1 is single-level NON-array: any array op touching a member → defer.
-        if path.contains('[') {
-            return Ok(None);
-        }
-        let mut segs = path.split('.');
-        let top = segs.next().unwrap_or("");
+        let top = path.split('.').next().unwrap_or("").trim();
         let Some(pos) = parsed.top_names.iter().position(|n| n == top) else {
-            // Unknown top member — let the flat path surface the real error.
+            // Unknown top member — let the flat path surface the real error, but
+            // an array op on an unknown/non-struct member is not a shape we model.
             return Ok(None);
         };
         let (base, is_array) = split_array_suffix(&parsed.top_types[pos]);
         if !type_is_struct(base, parsed) {
-            // Non-struct top member → flat field.
+            // Non-struct top member → flat field (unless it carries an array op
+            // we don't model as a nested descent).
+            if path.contains('[') {
+                return Ok(None);
+            }
             plan.push(NestedPlan::Flat(i));
             continue;
         }
-        // Struct top member.
-        if is_array {
-            return Ok(None); // array-of-struct is v2
+        // Struct top member. v2 supports a single-level array of an
+        // elementary-member struct; anything deeper → defer (belt-decline).
+        if is_array && !array_element_is_v2_supported(base, parsed) {
+            return Ok(None);
         }
-        // Exactly ONE further segment (`top.child`); no child or `a.b.c` → defer.
-        let child = segs.next();
-        if child.is_none() || segs.next().is_some() {
+        // The single elementary child segment: `top.child` (v1) or
+        // `top.[].child` (v2 array). Anything else (whole-struct render,
+        // `a.b.c`, indexed `[0]`) → defer.
+        if strip_nested_child(path, top, is_array).is_none() {
             return Ok(None);
         }
         let word_pos =
@@ -1720,6 +1749,7 @@ fn try_compile_eip712_nested(
                 top: top.to_string(),
                 word_pos,
                 base: base.to_string(),
+                is_array,
                 children: std::vec![i],
             });
         }
@@ -1748,9 +1778,11 @@ fn try_compile_eip712_nested(
                 top,
                 word_pos,
                 base,
+                is_array,
                 children,
-            } => match compile_nested_anchor(sig, fmt, parsed, top, *word_pos, base, children, pool)?
-            {
+            } => match compile_nested_anchor(
+                sig, fmt, parsed, top, *word_pos, base, *is_array, children, pool,
+            )? {
                 Some(cf) => {
                     compiled.push(cf);
                     descent_count += 1;
@@ -1779,6 +1811,7 @@ fn compile_nested_anchor(
     top: &str,
     word_pos: u16,
     base: &str,
+    is_array: bool,
     children: &[usize],
     pool: &mut Pool,
 ) -> Result<Option<CompiledFieldOut>, String> {
@@ -1816,10 +1849,11 @@ fn compile_nested_anchor(
     for &fi in children {
         let field = &fmt.fields[fi];
         let path = field.path.as_deref().unwrap_or("");
-        // child = the single segment after `top.`.
-        let child = match path.strip_prefix(top).and_then(|r| r.strip_prefix('.')) {
-            Some(c) if !c.is_empty() && !c.contains('.') && !c.contains('[') => c,
-            _ => return Ok(None),
+        // child = the single elementary segment after `top.` (v1) or `top.[].`
+        // (v2 array). Local ordinals are identical either way (each array element
+        // is one `base` struct).
+        let Some(child) = strip_nested_child(path, top, is_array) else {
+            return Ok(None);
         };
         let Some(local_ord) = members.iter().position(|(n, _)| n == child) else {
             return Ok(None);
@@ -1829,7 +1863,7 @@ fn compile_nested_anchor(
 
         // Child's format_op + LOCAL param blob (v1 vocabulary only).
         let Some((format_op, param_blob)) =
-            compile_nested_subfield_params(field, top, members, &mut covered)?
+            compile_nested_subfield_params(field, top, is_array, members, &mut covered)?
         else {
             return Ok(None);
         };
@@ -1878,7 +1912,7 @@ fn compile_nested_anchor(
     payload.extend_from_slice(&word_pos.to_be_bytes());
     payload.extend_from_slice(&type_hash);
     payload.extend_from_slice(&(member_count as u16).to_be_bytes());
-    payload.push(0u8); // flags: bit0 is_array = 0 (v1 non-array); rest reserved
+    payload.push(u8::from(is_array)); // flags: bit0 = is_array (v2); rest reserved 0
     payload.extend_from_slice(&addr_bmp);
     payload.push(sub_field_cnt);
     payload.extend_from_slice(&sub_fields);
@@ -1912,6 +1946,7 @@ fn compile_nested_anchor(
 fn compile_nested_subfield_params(
     field: &FieldDef,
     top: &str,
+    is_array: bool,
     members: &[(String, String)],
     covered: &mut [bool],
 ) -> Result<Option<(u8, Vec<u8>)>, String> {
@@ -1953,11 +1988,10 @@ fn compile_nested_subfield_params(
             let Some(tp) = params.get("tokenPath").and_then(|v| v.as_str()) else {
                 return Ok(None);
             };
-            // Strip the `top.` prefix; the remaining single segment is the local
-            // token member.
-            let tok_child = match tp.strip_prefix(top).and_then(|r| r.strip_prefix('.')) {
-                Some(c) if !c.is_empty() && !c.contains('.') && !c.contains('[') => c,
-                _ => return Ok(None), // cross-struct / array / deep tokenPath → v2+
+            // Strip the `top.` (v1) or `top.[].` (v2 array) prefix; the remaining
+            // single segment is the local token member.
+            let Some(tok_child) = strip_nested_child(tp, top, is_array) else {
+                return Ok(None); // cross-struct / indexed / deep tokenPath → v3
             };
             let Some(tok_ord) = members.iter().position(|(n, _)| n == tok_child) else {
                 return Ok(None);
@@ -2849,8 +2883,25 @@ fn check_eip712_member_addresses(
 
     if type_is_struct(base, parsed) {
         if is_array {
-            // Array-of-struct: the device cannot address elements, so any
-            // address inside cannot be shown — refuse unless allowlisted.
+            // Array-of-struct. v2 renders EVERY element (`M.[].child`), so an
+            // address inside CAN be shown — for a v2-supported element (a struct
+            // of ELEMENTARY members: no nested struct, no deeper array) descend
+            // and apply the SAME per-element coverage check as the non-array
+            // case, with `M.[].child` paths. An element that itself reaches a
+            // nested struct or a deeper array is NOT v2-renderable → keep the
+            // original refuse-if-reaches-address (fail-closed; v3 territory).
+            if array_element_is_v2_supported(base, parsed) {
+                let members = parsed.struct_defs.get(base).cloned().unwrap_or_default();
+                for (m_name, m_ty) in &members {
+                    let child_path = format!("{member_path}.[].{m_name}");
+                    let (_, child_is_array) = split_array_suffix(m_ty);
+                    check_eip712_member_addresses(
+                        sig, fmt, parsed, allow, &child_path, m_ty, child_is_array, depth + 1,
+                        visited,
+                    )?;
+                }
+                return Ok(());
+            }
             let mut probe: Vec<String> = Vec::new();
             if struct_reaches_address(base, parsed, depth, &mut probe)
                 && !visibility_allowlisted(allow, sig, member_path)
@@ -2903,11 +2954,15 @@ fn check_eip712_member_addresses(
 }
 
 /// Does descriptor `path` resolve to exactly the dotted typed-data member
-/// `member_path` (e.g. `details.token`, `witness.info.reactor`)? A leading
-/// `#`/`.` is normalised away; `@`-container / `$`-metadata roots cover no
-/// message member. Any array segment (`[…]`) means the path does not name a
-/// single scalar member and is rejected — matching the device, which cannot
-/// address an individual array element.
+/// `member_path` (e.g. `details.token`, `details.[].token`, `witness.info.reactor`)?
+/// A leading `#`/`.` is normalised away; `@`-container / `$`-metadata roots cover
+/// no message member. The whole-array WILDCARD segment `[]` IS matchable — v2
+/// renders EVERY element of a `T[]`, so a per-element field/tokenPath
+/// `M.[].child` covers `M.[].child` for every element. An INDEXED / sliced
+/// segment (`[0]`, `[-1]`, `[0:20]`) names a specific element the gate cannot
+/// reason about per-element and is rejected. Segments are compared literally, so
+/// `[]` matches only `[]` (never a named member), keeping the address-coverage
+/// decision exact.
 fn path_matches_member(path: &str, member_path: &str) -> bool {
     let p = path.trim();
     let rest = if let Some(r) = p.strip_prefix('#') {
@@ -2917,10 +2972,16 @@ fn path_matches_member(path: &str, member_path: &str) -> bool {
     } else {
         p
     };
-    if rest.contains('[') {
+    // Reject INDEXED/sliced array segments (a specific element); allow the
+    // whole-array wildcard `[]`.
+    if rest
+        .split('.')
+        .any(|seg| seg.contains('[') && seg.trim() != "[]")
+    {
         return false;
     }
-    // Compare dot-separated segments, trimming incidental whitespace.
+    // Compare dot-separated segments, trimming incidental whitespace. `[]`
+    // compares literally, so it matches only another `[]` wildcard segment.
     let mut a = rest.split('.').map(str::trim);
     let mut b = member_path.split('.').map(str::trim);
     loop {
@@ -3129,6 +3190,22 @@ fn split_array_suffix(ty: &str) -> (&str, bool) {
 /// defined in the format key's tail.
 fn type_is_struct(base: &str, parsed: &ParsedFormatKey) -> bool {
     parsed.struct_defs.contains_key(base)
+}
+
+/// A v2-renderable array element: a struct ALL of whose members are ELEMENTARY
+/// (no member is itself a struct or an array). Deeper element shapes (a nested
+/// struct or an array-in-element) are v3, so the address gate keeps its
+/// fail-closed refuse for them. Kept in lockstep with the on-device array render
+/// + emission, which only handle a single-level array of an elementary-member
+/// struct.
+fn array_element_is_v2_supported(base: &str, parsed: &ParsedFormatKey) -> bool {
+    let Some(members) = parsed.struct_defs.get(base) else {
+        return false;
+    };
+    members.iter().all(|(_n, ty)| {
+        let (b, is_array) = split_array_suffix(ty);
+        !is_array && !type_is_struct(b, parsed)
+    })
 }
 
 /// True when the EIP-712 struct `base` transitively reaches an `address`
@@ -4842,6 +4919,49 @@ mod tests {
             strip_param_names("(address _to, uint256 _value)"),
             "(address,uint256)"
         );
+    }
+
+    // The v2 array gate hinges on `path_matches_member` correctly resolving the
+    // `.[]` whole-array wildcard (advisor review target): a per-element field
+    // `M.[].addr` must COVER the element address `M.[].addr` (else PermitBatch/
+    // Rarible false-refuse), while an INDEXED/sliced segment must NOT match (it
+    // names one element the gate can't reason about → a hidden-address risk).
+    #[test]
+    fn path_matches_member_array_wildcard() {
+        // v2 whole-array wildcard: a per-element field covers the element member.
+        assert!(path_matches_member("details.[].token", "details.[].token"));
+        assert!(path_matches_member("creators.[].account", "creators.[].account"));
+        // Different member under the same array → NOT covered.
+        assert!(!path_matches_member("details.[].amount", "details.[].token"));
+        // A non-array field must NOT cover an array member, and vice-versa.
+        assert!(!path_matches_member("details.token", "details.[].token"));
+        assert!(!path_matches_member("details.[].token", "details.token"));
+        // INDEXED / sliced segments name a specific element → rejected (the
+        // security-critical case: they must never satisfy per-element coverage).
+        assert!(!path_matches_member("details.[0].token", "details.[].token"));
+        assert!(!path_matches_member("details.[-1].token", "details.[].token"));
+        assert!(!path_matches_member("details.[0:20].token", "details.[].token"));
+        // v1 (non-array) matching is unchanged.
+        assert!(path_matches_member("details.token", "details.token"));
+        assert!(!path_matches_member("details.token", "details.amount"));
+        assert!(path_matches_member("#.details.token", "details.token"));
+        assert!(!path_matches_member("@.to", "details.token"));
+    }
+
+    #[test]
+    fn strip_nested_child_v1_and_v2() {
+        // v1 (non-array): `top.child`.
+        assert_eq!(strip_nested_child("details.amount", "details", false), Some("amount"));
+        // v2 (array): `top.[].child`.
+        assert_eq!(strip_nested_child("details.[].amount", "details", true), Some("amount"));
+        assert_eq!(strip_nested_child("creators.[].account", "creators", true), Some("account"));
+        // Mismatched array-ness → None.
+        assert_eq!(strip_nested_child("details.[].amount", "details", false), None);
+        assert_eq!(strip_nested_child("details.amount", "details", true), None);
+        // Deeper (`a.b.c`) or indexed → None (v3 / unsupported).
+        assert_eq!(strip_nested_child("details.[].a.b", "details", true), None);
+        assert_eq!(strip_nested_child("details.[0].amount", "details", true), None);
+        assert_eq!(strip_nested_child("other.amount", "details", false), None);
     }
 
     #[test]

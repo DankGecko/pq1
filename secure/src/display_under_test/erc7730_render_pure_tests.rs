@@ -1889,6 +1889,34 @@ fn permit_single_valid_vectors() -> (std::vec::Vec<u8>, std::vec::Vec<u8>) {
     permit_single_vectors(token, 1_000_000_000, 1_735_689_600, 0, spender, 1_735_689_600)
 }
 
+/// Walk an EIP-712 IR's formats section and return the byte offset of the
+/// `nested_descent_count` byte of the format whose `type_hash == target`.
+/// Mirrors `ir::FormatIter` (fixed prefix 9 B: selector(4) field_count(1)
+/// intent_len(1) static_head_words(2) nested_descent_count(1); then intent;
+/// then type_hash(32) for EIP-712; then `field_count` FieldEntry records).
+fn eip712_format_ndc_offset(ir_bytes: &[u8], target: &[u8; 32]) -> Option<usize> {
+    let formats_off = u16::from_be_bytes([ir_bytes[128], ir_bytes[129]]) as usize;
+    let count = *ir_bytes.get(formats_off)? as usize;
+    let mut p = formats_off + 1;
+    for _ in 0..count {
+        let entry_start = p;
+        let field_count = *ir_bytes.get(p + 4)? as usize;
+        let intent_len = *ir_bytes.get(p + 5)? as usize;
+        p += 9 + intent_len; // fixed prefix + intent
+        let th = ir_bytes.get(p..p + 32)?;
+        let matched = th == target;
+        p += 32; // EIP-712 type_hash
+        for _ in 0..field_count {
+            let label_len = *ir_bytes.get(p + 1)? as usize;
+            p += 2 + label_len + 4; // format_op + label_len + label + path_off + param_off
+        }
+        if matched {
+            return Some(entry_start + 8);
+        }
+    }
+    None
+}
+
 /// THE reconciliation tripwire test (advisor blocker #1 — the E1 pinned-count
 /// control). The flip→decline tests all reject at the BINDING (step 6), which
 /// returns before render_fields completes, so they never exercise the
@@ -1906,12 +1934,14 @@ fn v3_reconciliation_rejects_wrong_pinned_descent_count() {
     let leaf = find_leaf(res, "eip712-uniswap-permit2.json", 1);
     let (top_ed, nested_blob) = permit_single_valid_vectors();
 
-    // Locate the format header's nested_descent_count byte: after the 1-byte
-    // format-count prefix, the fixed prefix is selector(4)+field_count(1)+
-    // intent_len(1)+static_head_words(2) = 8, so nested_descent_count is at
-    // formats_off + 1 + 8. (Permit2's leaf has exactly one format: PermitSingle.)
-    let formats_off = u16::from_be_bytes([leaf.ir_bytes[128], leaf.ir_bytes[129]]) as usize;
-    let ndc_off = formats_off + 1 + 8;
+    // Locate PermitSingle's format header nested_descent_count byte. The permit2
+    // leaf now carries three formats (PermitSingle, PermitTransferFrom,
+    // PermitBatch), so we WALK the formats section to find PermitSingle's entry
+    // (by its type_hash) rather than assuming it is first. Within a format entry
+    // the fixed prefix is selector(4)+field_count(1)+intent_len(1)+
+    // static_head_words(2) = 8, so nested_descent_count sits at entry_start + 8.
+    let ndc_off = eip712_format_ndc_offset(&leaf.ir_bytes, &PERMIT_SINGLE_TYPEHASH)
+        .expect("PermitSingle format present in the permit2 leaf");
 
     let render_patched = |ndc: u8| {
         let mut ir_bytes = leaf.ir_bytes.clone();
@@ -2033,6 +2063,39 @@ fn v3_permit_transfer_from_renders_and_flip_declines() {
     let mut blob = nested_blob.clone();
     blob[2 + 40] ^= 0x01; // inside the amount word
     assert!(render(&top_ed, &blob).is_err(), "flipping nested amount must decline");
+}
+
+/// PermitBatch is `PermitDetails[]` (v2 array-of-struct). dbgen now EMITS its
+/// `is_array` anchor (the gate relaxed + the wire is ready), but the on-device
+/// ARRAY render is the GATED commit — so the device must still DECLINE it: the
+/// belt is inverted for single nested structs, NOT yet for arrays.
+/// `render_nested_struct` rejects `is_array` right after parsing the payload
+/// (before it reads the committed word or the blob), so ANY top_ed / blob
+/// declines. Locks the "arrays decline until the v2 render lands" boundary.
+#[test]
+fn v3_permit_batch_array_still_declines() {
+    let res = build_registry();
+    let leaf = find_leaf(res, "eip712-uniswap-permit2.json", 1);
+    // PermitBatch primary-type hash (foundry).
+    let pth: [u8; 32] = [
+        0xaf, 0x1b, 0x0d, 0x30, 0xd2, 0xca, 0xb0, 0x38, 0x0e, 0x68, 0xf0, 0x68, 0x90, 0x07, 0xe3,
+        0x25, 0x49, 0x93, 0xc5, 0x96, 0xf2, 0xfd, 0xd0, 0xaa, 0xa7, 0xf4, 0xd0, 0x4f, 0x79, 0x44,
+        0x08, 0x63,
+    ];
+    // details(array word) | spender | sigDeadline — content irrelevant (declined
+    // on the is_array marker before any of it is read).
+    let top_ed = std::vec![0u8; 96];
+    let nested_blob = std::vec![0u8; 4]; // never reached
+    let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("permit2 IR parses");
+    let verified = VerifiedDescriptor { ir };
+    let resolver = NameResolver::new();
+    assert!(
+        super::erc7730::render_erc7730_eip712_pages_v3(
+            1, &[0u8; 20], &pth, &top_ed, &nested_blob, &verified, None, &resolver,
+        )
+        .is_err(),
+        "PermitBatch (is_array) must decline until the v2 array render lands"
+    );
 }
 
 /// EIP-2612 Permit `owner` allowlist (`hidden_address_allow`): the canonical
