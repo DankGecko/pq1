@@ -193,3 +193,46 @@ jobs:
             lean-fv-lake-
       - name: make verify-proof-mutation (default tier; reverts every mutation)
         run: make -C contracts/verification verify-proof-mutation
+
+  protocol-models:
+    name: Protocol models (ProVerif + Tamarin symbolic gate)
+    runs-on: ubuntu-latest
+    # The 8 design-layer symbolic models (dual-SE seed-split, three-way
+    # PIN-lockstep, SCP03 + OPTIGA-shield tunnels, FW-update authenticity).
+    # `make proverif`/`tamarin` exit 0 whether a query is true or false and the
+    # models carry designed `is false` residuals, so this runs the assert-the-
+    # verdicts gate (scripts/check_protocol_models.py), NOT a bare run.
+    # CryptoVerif is EXPLICITLY excluded here (PROTOCOL_MODELS=proverif,tamarin):
+    # it installs cleanly only via nix (its `-lib` path is nix-layout-specific)
+    # and its one property is already gated by tamarin/seed_split_xor.spthy.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      # ProVerif is OCaml, installed via opam. --assume-depexts skips the GTK
+      # depext (the CLI needs no GUI). PINNED to 2.05 — the exact version the
+      # scripts/check_protocol_models.py verdict baseline was produced with; an
+      # unpinned bump could shift the counts spuriously. setup-ocaml caches opam.
+      - uses: ocaml/setup-ocaml@e32b06a3e831ff2fbc6f08cf35be2085e3918014 # v3.6.1
+        with:
+          ocaml-compiler: "4.14.2"
+      - name: opam install proverif 2.05 (CLI-only)
+        run: opam install -y --assume-depexts proverif.2.05
+      # Tamarin + its Maude backend: upstream prebuilt linux64 binaries, PINNED
+      # to the exact versions the baseline used (1.12.0 / 3.5.1). No sudo/GHC.
+      - name: install tamarin-prover 1.12.0 + maude 3.5.1 (prebuilt binaries)
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL https://github.com/tamarin-prover/tamarin-prover/releases/download/1.12.0/tamarin-prover-1.12.0-linux64-ubuntu.tar.gz | tar xz
+          install -m755 tamarin-prover "$HOME/.local/bin/tamarin-prover"
+          curl -fsSL -o maude.zip https://github.com/maude-lang/Maude/releases/download/Maude3.5.1/Maude-3.5.1-linux-x86_64.zip
+          unzip -oq maude.zip
+          m="$(find . -name maude -type f | head -1)"
+          install -m755 "$m" "$HOME/.local/bin/maude"
+          # Maude loads its *.maude prelude from alongside the binary (or MAUDE_LIB).
+          find "$(dirname "$m")" -maxdepth 1 -name '*.maude' -exec cp {} "$HOME/.local/bin/" \;
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "MAUDE_LIB=$HOME/.local/bin" >> "$GITHUB_ENV"
+      - name: verify-protocol-models (proverif + tamarin — the 8 symbolic models)
+        run: |
+          eval $(opam env)
+          make verify-protocol-models PROTOCOL_MODELS=proverif,tamarin

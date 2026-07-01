@@ -3911,6 +3911,22 @@ cryptoverif: ## CryptoVerif computational protocol proof
 	  nix-shell -p cryptoverif --run 'p=$$(dirname $$(dirname $$(readlink -f $$(command -v cryptoverif)))); cryptoverif -lib $$p/libexec/default contracts/verification/cryptoverif/seed_split_secrecy.cv' | grep -E 'RESULT|proved'; \
 	else echo "ERROR: cryptoverif not found (try: nix-shell -p cryptoverif, or opam install cryptoverif)"; exit 1; fi
 
+# Protocol-model regression GATE — the third anti-vacuity sibling of
+# verify-proof-mutation (Lean) + verify-kani-mutation (firmware harnesses).
+# `make proverif`/`tamarin`/`cryptoverif` RUN the tools but exit 0 whether a
+# query is true or false, and the models carry DESIGNED `is false` residuals —
+# so a bare run is not a gate. This asserts each model's verdict pattern vs a
+# committed per-file baseline (scripts/check_protocol_models.py) and exits
+# non-zero on any drift (a true->false flip, a falsified lemma, a lost proof).
+# Select families with PROTOCOL_MODELS (default all); CI runs proverif,tamarin
+# (the 8 symbolic models) — cryptoverif is local-only (nix-`-lib` install).
+#   make verify-protocol-models                                 # all 3 families (needs nix for cryptoverif)
+#   make verify-protocol-models PROTOCOL_MODELS=proverif,tamarin # the CI subset
+PROTOCOL_MODELS ?= proverif,tamarin,cryptoverif
+.PHONY: verify-protocol-models
+verify-protocol-models: ## anti-vacuity: assert the protocol models' verdicts vs baseline
+	PROTOCOL_MODELS="$(PROTOCOL_MODELS)" python3 scripts/check_protocol_models.py
+
 # ---------------------------------------------------------------------------
 # Discoverability wrappers for the off-Makefile verification tools (SOTA
 # 2026-06 §1/§4; docs/tooling-and-systems.md §B). These four were installed
