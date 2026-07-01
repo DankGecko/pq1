@@ -84,3 +84,58 @@ rationale = "Lido stETH staking referral tag — routes no funds. The effect is 
 signature = "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"
 path = "owner"
 rationale = "EIP-2612 Permit owner == the signer (permit() reverts unless ecrecover(sig)==owner), so a device-produced usable permit always has owner==our own account; it routes no third-party funds. The effect-bearing spender/value/deadline are shown. Canonical Ledger erc2612 template, included by 74 token descriptors."
+
+# Celo sorted-linked-list POSITION HINTS (`lesser`/`greater`). Celo's Election
+# and Governance keep validator groups / proposals in a doubly-linked list
+# sorted by votes; a vote/revoke supplies the addresses ADJACENT to the caller's
+# new position so the contract splices in O(1) without re-sorting. These are
+# hints derived from current on-chain list state (the SDK computes them) — they
+# route no funds, and a wrong hint only makes the tx revert. The effect-bearing
+# fields (`group` + `value`) are shown; `index` is a non-address uint hint (rule
+# 2 doesn't gate it). One entry per (signature, address-hint) pair.
+[[hidden_address_allow]]
+signature = "vote(address group, uint256 value, address lesser, address greater)"
+path = "lesser"
+rationale = "Celo Election sorted-list position hint — routes no funds; the vote's group + value are shown. A wrong hint only reverts."
+[[hidden_address_allow]]
+signature = "vote(address group, uint256 value, address lesser, address greater)"
+path = "greater"
+rationale = "Celo Election sorted-list position hint — routes no funds; the vote's group + value are shown. A wrong hint only reverts."
+[[hidden_address_allow]]
+signature = "revokeActive(address group, uint256 value, address lesser, address greater, uint256 index)"
+path = "lesser"
+rationale = "Celo Election sorted-list position hint — routes no funds; the revoke's group + value are shown. A wrong hint only reverts."
+[[hidden_address_allow]]
+signature = "revokeActive(address group, uint256 value, address lesser, address greater, uint256 index)"
+path = "greater"
+rationale = "Celo Election sorted-list position hint — routes no funds; the revoke's group + value are shown. A wrong hint only reverts."
+[[hidden_address_allow]]
+signature = "revokePending(address group, uint256 value, address lesser, address greater, uint256 index)"
+path = "lesser"
+rationale = "Celo Election sorted-list position hint — routes no funds; the revoke's group + value are shown. A wrong hint only reverts."
+[[hidden_address_allow]]
+signature = "revokePending(address group, uint256 value, address lesser, address greater, uint256 index)"
+path = "greater"
+rationale = "Celo Election sorted-list position hint — routes no funds; the revoke's group + value are shown. A wrong hint only reverts."
+[[hidden_address_allow]]
+signature = "revokeAllActive(address group, address lesser, address greater, uint256 index)"
+path = "lesser"
+rationale = "Celo Election sorted-list position hint — routes no funds; the revoke's group is shown. A wrong hint only reverts."
+[[hidden_address_allow]]
+signature = "revokeAllActive(address group, address lesser, address greater, uint256 index)"
+path = "greater"
+rationale = "Celo Election sorted-list position hint — routes no funds; the revoke's group is shown. A wrong hint only reverts."
+[[hidden_address_allow]]
+signature = "addFirstMember(address validator, address lesser, address greater)"
+path = "lesser"
+rationale = "Celo Validators sorted-list position hint — routes no funds; the validator being added is shown. A wrong hint only reverts."
+[[hidden_address_allow]]
+signature = "addFirstMember(address validator, address lesser, address greater)"
+path = "greater"
+rationale = "Celo Validators sorted-list position hint — routes no funds; the validator being added is shown. A wrong hint only reverts."
+
+# wstETH staking referral tag (mirrors the allowlisted Lido `submit(_referral)`).
+[[hidden_address_allow]]
+signature = "stakeETH(address _referral)"
+path = "_referral"
+rationale = "wstETH staking referral tag — routes no funds; the effect is the staked @.value (shown). The referral only credits a marketing partner and cannot redirect the stake."
