@@ -1691,15 +1691,17 @@ fn belt_rejects_all_hidden_contract_format() {
 // `PARAM_NESTED_STRUCT` marker into the firmware-pinned catalog.
 // ───────────────────────────────────────────────────────────────────────
 #[test]
-fn belt_rejects_eip712_nested_struct_permit2() {
+fn v2_kind_declines_nested_permit2() {
+    // Post-Phase-5: a nested-struct format signed via the OLD kind
+    // (`render_erc7730_eip712_pages`, no `nested_blob`) MUST still decline — the
+    // descent finds no DFS record to bind the `PermitDetails` hashStruct word,
+    // so the whole render Rejects. A companion must use the V3 entry. This keeps
+    // the "old kind never clear-signs a nested format" guarantee.
     let res = build_registry();
     let leaf = find_leaf(res, "eip712-uniswap-permit2.json", 1);
     let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("permit2 IR parses");
     assert!(matches!(ir.context_kind, ContextKind::Eip712));
 
-    // Take whichever nested-struct format survived compilation; drive the
-    // renderer with its real primary-type hash so the format is FOUND (not
-    // a NoFormat miss) and we reach the field-walk belt.
     let fmt = ir
         .format_iter()
         .next()
@@ -1709,24 +1711,167 @@ fn belt_rejects_eip712_nested_struct_permit2() {
     let encoded_data = std::vec![0u8; fmt.static_head_words as usize * 32];
 
     let verified = VerifiedDescriptor { ir };
-    let verifying_contract = [0u8; 20];
     let resolver = NameResolver::new();
     match super::erc7730::render_erc7730_eip712_pages(
         1,
-        &verifying_contract,
+        &[0u8; 20],
         &pth,
         &encoded_data,
         &verified,
         None,
         &resolver,
     ) {
-        Err(crate::tx::erc7730_render::RenderErr::Reject(msg)) => {
-            assert!(msg.contains("nested struct"), "belt reject message: {msg}");
+        Err(crate::tx::erc7730_render::RenderErr::Reject(_)) => {}
+        Err(other) => panic!("expected a nested Reject, got {other:?}"),
+        Ok(_) => panic!("nested Permit2 format must NOT clear-sign via the V2 (no-nested-blob) path"),
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// THE DECISIVE nested-EIP-712 test (design §3 rule 6): a REAL Permit2
+// PermitSingle typed message drives the V3 render path. (a) proves the nested
+// members render (amount + expiration date + spender shown; nonce + sigDeadline
+// hidden); (b) proves the binding is NON-VACUOUS — flipping ANY nested word
+// (shown OR hidden) OR the committed top-level `details` word flips to DECLINE.
+// (a) alone would pass even if the keccak binding were never checked; (b) is
+// what proves shown ⟺ signed.
+// ───────────────────────────────────────────────────────────────────────
+
+// typeHash(PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)) — foundry.
+const PERMIT_DETAILS_TYPEHASH: [u8; 32] = [
+    0x65, 0x62, 0x6c, 0xad, 0x6c, 0xb9, 0x64, 0x93, 0xbf, 0x6f, 0x5e, 0xbe, 0xa2, 0x87, 0x56, 0xc9,
+    0x66, 0xf0, 0x23, 0xab, 0x9e, 0x8a, 0x83, 0xa7, 0x10, 0x18, 0x49, 0xd5, 0x57, 0x3b, 0x36, 0x78,
+];
+
+/// Build a valid PermitSingle (top `encoded_data`, `nested_blob`) for a concrete
+/// order. `nested_ed` = token | amount | expiration | nonce (4 words); the top
+/// `details` word is the REAL `hashStruct(PermitDetails)` = the device's binding
+/// target. Returns `(top_ed[96], nested_blob[2+128])`.
+fn permit_single_vectors(
+    token: [u8; 20],
+    amount: u64,
+    expiration: u64,
+    nonce: u64,
+    spender: [u8; 20],
+    sig_deadline: u64,
+) -> (std::vec::Vec<u8>, std::vec::Vec<u8>) {
+    let mut nested_ed = std::vec![0u8; 128];
+    nested_ed[12..32].copy_from_slice(&token);
+    nested_ed[32 + 24..64].copy_from_slice(&amount.to_be_bytes());
+    nested_ed[64 + 24..96].copy_from_slice(&expiration.to_be_bytes());
+    nested_ed[96 + 24..128].copy_from_slice(&nonce.to_be_bytes());
+
+    // The committed word IS the real hashStruct — the same primitive the device
+    // recomputes and binds against (not circular: the device uses the IR-pinned
+    // type_hash + the blob's nested_ed; a flip in either breaks the equality).
+    let details_hs = super::erc7730::nested::hash_struct(&PERMIT_DETAILS_TYPEHASH, &nested_ed);
+
+    let mut top_ed = std::vec![0u8; 96];
+    top_ed[0..32].copy_from_slice(&details_hs);
+    top_ed[32 + 12..64].copy_from_slice(&spender);
+    top_ed[64 + 24..96].copy_from_slice(&sig_deadline.to_be_bytes());
+
+    let mut nested_blob = std::vec![0u8; 2];
+    nested_blob[0..2].copy_from_slice(&(nested_ed.len() as u16).to_be_bytes());
+    nested_blob.extend_from_slice(&nested_ed);
+
+    (top_ed, nested_blob)
+}
+
+#[test]
+fn v3_permit_single_renders_nested_members() {
+    let res = build_registry();
+    let leaf = find_leaf(res, "eip712-uniswap-permit2.json", 1);
+    let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("permit2 IR parses");
+    // PermitSingle primary-type hash (the only surviving Permit2 format).
+    let pth: [u8; 32] = [
+        0xf3, 0x84, 0x1c, 0xd1, 0xff, 0x00, 0x85, 0x02, 0x6a, 0x63, 0x27, 0xb6, 0x20, 0xb6, 0x79,
+        0x97, 0xce, 0x40, 0xf2, 0x82, 0xc8, 0x8a, 0x8e, 0x90, 0x5a, 0x7a, 0x56, 0x26, 0xe3, 0x10,
+        0xf3, 0xd0,
+    ];
+    let token = [0xA0u8, 0xb8, 0x69, 0x91, 0xc6, 0x21, 0x8b, 0x36, 0xc1, 0xd1, 0x9D, 0x4a, 0x2e,
+        0x9E, 0xb0, 0xcE, 0x36, 0x06, 0xeB, 0x48]; // USDC
+    let spender = [0x3fu8, 0xC9, 0x1A, 0x3a, 0xfd, 0x70, 0x39, 0x5C, 0xd4, 0x96, 0xC6, 0x47, 0xd5,
+        0xa6, 0xcC, 0x9D, 0x4B, 0x2b, 0x7F, 0xAD]; // Universal Router
+    let (top_ed, nested_blob) =
+        permit_single_vectors(token, 1_000_000_000, 1_735_689_600, 0, spender, 1_735_689_600);
+
+    let verified = VerifiedDescriptor { ir };
+    let resolver = NameResolver::new();
+    let pages = super::erc7730::render_erc7730_eip712_pages_v3(
+        1,
+        &[0u8; 20],
+        &pth,
+        &top_ed,
+        &nested_blob,
+        &verified,
+        None,
+        &resolver,
+    )
+    .expect("valid PermitSingle clear-signs via V3");
+    assert_all_pages_printable(&pages);
+    let dump = dump_pages(&pages).to_lowercase();
+    // spender (top-level, shown).
+    assert!(dump.contains("3fc9"), "spender must be shown:\n{dump}");
+    // nested amount = 1_000_000_000 → without token metadata it renders raw
+    // (`! raw, dec=?`); the digits must appear.
+    assert!(dump.contains("1000000000"), "nested amount must render:\n{dump}");
+    // nested expiration is a timestamp date → a 2025 date renders.
+    assert!(dump.contains("2025"), "nested expiration date must render:\n{dump}");
+}
+
+#[test]
+fn v3_permit_single_binding_is_non_vacuous() {
+    let res = build_registry();
+    let leaf = find_leaf(res, "eip712-uniswap-permit2.json", 1);
+    let pth: [u8; 32] = [
+        0xf3, 0x84, 0x1c, 0xd1, 0xff, 0x00, 0x85, 0x02, 0x6a, 0x63, 0x27, 0xb6, 0x20, 0xb6, 0x79,
+        0x97, 0xce, 0x40, 0xf2, 0x82, 0xc8, 0x8a, 0x8e, 0x90, 0x5a, 0x7a, 0x56, 0x26, 0xe3, 0x10,
+        0xf3, 0xd0,
+    ];
+    let token = [0xA0u8, 0xb8, 0x69, 0x91, 0xc6, 0x21, 0x8b, 0x36, 0xc1, 0xd1, 0x9D, 0x4a, 0x2e,
+        0x9E, 0xb0, 0xcE, 0x36, 0x06, 0xeB, 0x48];
+    let spender = [0x3fu8, 0xC9, 0x1A, 0x3a, 0xfd, 0x70, 0x39, 0x5C, 0xd4, 0x96, 0xC6, 0x47, 0xd5,
+        0xa6, 0xcC, 0x9D, 0x4B, 0x2b, 0x7F, 0xAD];
+    let (top_ed, nested_blob) =
+        permit_single_vectors(token, 1_000_000_000, 1_735_689_600, 0, spender, 1_735_689_600);
+
+    let render = |ed: &[u8], blob: &[u8]| {
+        let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("permit2 IR parses");
+        let verified = VerifiedDescriptor { ir };
+        let resolver = NameResolver::new();
+        super::erc7730::render_erc7730_eip712_pages_v3(
+            1, &[0u8; 20], &pth, ed, blob, &verified, None, &resolver,
+        )
+    };
+
+    // Baseline: renders.
+    assert!(render(&top_ed, &nested_blob).is_ok(), "baseline must render");
+
+    // (b1) Flip EVERY byte of EVERY nested word (shown token/amount/expiration
+    // AND hidden nonce) — each flip breaks keccak(type_hash‖nested_ed) ==
+    // committed → DECLINE. Proves the binding covers the COMPLETE member, not
+    // just the shown subset.
+    for word in 0..4usize {
+        for byte in 0..32usize {
+            let mut blob = nested_blob.clone();
+            blob[2 + word * 32 + byte] ^= 0x01; // flip one bit inside nested_ed
+            assert!(
+                render(&top_ed, &blob).is_err(),
+                "flipping nested word {word} byte {byte} must decline (binding is live)"
+            );
         }
-        Err(other) => panic!("expected nested-struct belt Reject, got {other:?}"),
-        Ok(_) => panic!(
-            "Permit2 nested-struct EIP-712 format must be belt-rejected, but it clear-signed"
-        ),
+    }
+
+    // (b2) Flip the committed top-level `details` hashStruct word → the device's
+    // recomputed hashStruct no longer matches → DECLINE.
+    for byte in 0..32usize {
+        let mut ed = top_ed.clone();
+        ed[byte] ^= 0x01;
+        assert!(
+            render(&ed, &nested_blob).is_err(),
+            "flipping committed details word byte {byte} must decline"
+        );
     }
 }
 

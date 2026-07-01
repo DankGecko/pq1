@@ -199,41 +199,64 @@ pub fn static_word_index(prog: &[u8]) -> Option<usize> {
 }
 
 /// Validate a nested-struct block's sub-fields against the PINNED metadata,
-/// INDEPENDENT of the build gate (E2 + E4-2). For every visible sub-field:
+/// INDEPENDENT of the build gate (E2 + E4-2). For every sub-field:
 ///   * its render path is a static local word `< member_count` (E4-2 — a word
 ///     `≥ member_count` would read the adjacent DFS record; a dynamic render
 ///     path can't address a static `nested_ed` word → both `Reject`);
-///   * a `tokenAmount`'s `tokenPath` local word is credited as covered.
+///   * a local word is credited as COVERED (shown) ONLY if the sub-field
+///     actually renders — i.e. `should_render_with_mode(.., compact) == Render`.
+///     A `visible:"never"` (or COMPACT-skipped) sub-field is HIDDEN, so its
+///     render/tokenPath words do NOT satisfy the address-coverage backstop:
+///     crediting a hidden field would let an address word be "covered" yet never
+///     displayed — the exact WYSIWYS break E2 exists to prevent, and it must
+///     hold independent of build-gate correctness (this is why the visibility
+///     filter lives HERE, not only in dbgen). `compact` MUST equal the value the
+///     renderer uses (`COMPACT_MODE`) so coverage tracks the render exactly.
 /// Then EVERY address-typed local word (per `addr_word_bmp`) must be covered by
-/// some sub-field's render word OR tokenPath word — else decline. This delivers
-/// the belt's "survives a gate regression" promise as a standalone control.
+/// some SHOWN sub-field's render word OR tokenPath word — else decline.
 pub fn validate_nested_structure(
     ir: &Erc7730Ir<'_>,
     np: &NestedStructParam<'_>,
+    compact: bool,
 ) -> Result<(), RenderErr> {
+    use super::visibility::{should_render_with_mode, Action};
+
     let mc = np.member_count as usize;
     let mut covered = [false; MAX_NESTED_MEMBERS];
 
     for entry in np.sub_fields() {
         let sf: FieldEntry<'_> = entry.map_err(|_| RenderErr::Reject("7730 nested subfield"))?;
+        let params = super::params::parse(ir, sf.param_off)?;
+        // A word counts as shown ONLY if this sub-field actually renders. A
+        // hidden field (never / compact-skipped / must-match-reject) covers
+        // NOTHING for the address backstop.
+        let shown = matches!(
+            should_render_with_mode(&params, None, compact),
+            Action::Render
+        );
 
         // Render path → a static local word strictly inside the nested struct.
+        // Bounds-checked for EVERY sub-field (E4-2), credited only if shown.
         let prog = path_bytes(ir, sf.path_off).map_err(|_| RenderErr::Reject("7730 nested path"))?;
         let w = static_word_index(prog).ok_or(RenderErr::Reject("7730 nested dyn subfield"))?;
         if w >= mc {
             return Err(RenderErr::Reject("7730 nested ord oob"));
         }
-        covered[w] = true;
+        if shown {
+            covered[w] = true;
+        }
 
-        // tokenPath (if any) → the local word it IDs is covered too (E2 credits
-        // the token address a tokenAmount reaches, which is never a render word).
-        let params = super::params::parse(ir, sf.param_off)?;
+        // tokenPath (if any) → the local word it IDs is covered too, but only
+        // when the amount field is SHOWN (E2 credits a *shown-amount* tokenPath;
+        // a hidden amount's tokenPath does not surface the address).
         if let Some(tp) = params.token_path {
             if let Some(tw) = static_word_index(tp) {
                 if tw >= mc {
                     return Err(RenderErr::Reject("7730 nested tok oob"));
                 }
-                covered[tw] = true;
+                if shown {
+                    covered[tw] = true;
+                }
             }
         }
     }
@@ -402,7 +425,8 @@ mod tests {
         let np = parse_nested_struct_param(&payload).unwrap();
         let ir_bytes = ir_with_pool(&permit_single_pool());
         let ir = Erc7730Ir::parse(&ir_bytes).unwrap();
-        validate_nested_structure(&ir, &np).expect("token address is covered by the tokenPath");
+        validate_nested_structure(&ir, &np, false)
+            .expect("token address is covered by the shown-amount tokenPath");
     }
 
     #[test]
@@ -416,9 +440,56 @@ mod tests {
         let ir_bytes = ir_with_pool(&permit_single_pool());
         let ir = Erc7730Ir::parse(&ir_bytes).unwrap();
         assert!(
-            validate_nested_structure(&ir, &np).is_err(),
+            validate_nested_structure(&ir, &np, false).is_err(),
             "an address-typed word with no covering sub-field must decline"
         );
+    }
+
+    #[test]
+    fn validate_declines_address_covered_only_by_hidden_field() {
+        // The confirmed adversarial-review finding (E2 visibility gap): make the
+        // amount sub-field `visible:"never"` — its tokenPath still POINTS at the
+        // token address (word 0), but because the field is HIDDEN at render time
+        // it must NOT satisfy the address-coverage backstop. Else the token
+        // address is signed but never displayed (WYSIWYS break). Compare to
+        // `validate_covers_token_address_via_tokenpath`, which passes because the
+        // amount is shown.
+        let payload = permit_single_payload_amount_never();
+        let np = parse_nested_struct_param(&payload).unwrap();
+        let ir_bytes = ir_with_pool(&permit_single_pool_amount_never());
+        let ir = Erc7730Ir::parse(&ir_bytes).unwrap();
+        assert!(
+            validate_nested_structure(&ir, &np, false).is_err(),
+            "a `visible:never` sub-field must NOT cover the token address (E2 visibility)"
+        );
+    }
+
+    /// Like `permit_single_payload` but the amount sub-field's `param_off` points
+    /// at a pool blob carrying its tokenPath AND a `visible:never` TLV (pool
+    /// offset 18, see `permit_single_pool_amount_never`). The amount sub-field's
+    /// `param_off` occupies payload bytes `[47..49]` (header 40 + fmt(1) +
+    /// label_len(1) + "amt"(3) + path_off(2) = 47).
+    fn permit_single_payload_amount_never() -> std::vec::Vec<u8> {
+        let mut p = permit_single_payload();
+        p[47..49].copy_from_slice(&18u16.to_be_bytes());
+        p
+    }
+
+    /// The base pool (amount render @1, tokenPath blob @6, expiration render @13,
+    /// ending at offset 18) plus a `tokenPath + visible:never` blob at offset 18.
+    fn permit_single_pool_amount_never() -> std::vec::Vec<u8> {
+        let mut pool = permit_single_pool(); // len == 18
+        assert_eq!(pool.len(), 18);
+        // off 18: [len=9][PARAM_TOKEN_PATH(0x30) 4 | 10 20 00 00]
+        //                [PARAM_VISIBILITY(0x3F) 1 | 01 (VIS_NEVER)]
+        pool.push(9);
+        pool.push(0x30);
+        pool.push(4);
+        pool.extend_from_slice(&[0x10, 0x20, 0x00, 0x00]);
+        pool.push(0x3F);
+        pool.push(1);
+        pool.push(0x01);
+        pool
     }
 }
 

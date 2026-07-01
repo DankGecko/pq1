@@ -138,7 +138,9 @@ fn render_erc7730_pages_inner<'ir>(
     // 3. Banner — page 0.
     intent::render_intent_banner(&mut pages, &descriptor.ir, &format)?;
 
-    // 4. Iterate fields.
+    // 4. Iterate fields. Contract-context formats never carry a
+    //    `PARAM_NESTED_STRUCT` field (dbgen only emits it for EIP-712), so the
+    //    nested descent never triggers here — pass an empty context.
     let field_pages_before = pages.as_slice().len();
     render_fields(
         &mut pages,
@@ -149,6 +151,7 @@ fn render_erc7730_pages_inner<'ir>(
         tx,
         erc20,
         resolver,
+        &mut NestedCtx::default(),
     )?;
 
     // 4b. WYSIWYS belt (VULN-erc7730-visible-never-noparam-clearsign). A
@@ -199,11 +202,15 @@ pub fn render_erc7730_eip712_pages<'ir>(
     // elimination.
     unsafe { core::ptr::write_volatile(&mut canary, STACK_CANARY) };
 
+    // V2 kind: no nested-struct section (an empty `nested_blob`). A nested
+    // format signed via kind=2 therefore Rejects at the descent (no record to
+    // pull) — a companion must use `OFFCHAIN_KIND_EIP712_TYPED_V3`.
     let result = render_erc7730_eip712_pages_inner(
         chain_id,
         verifying_contract,
         primary_type_hash,
         encoded_data,
+        &[],
         descriptor,
         erc20,
         resolver,
@@ -225,16 +232,13 @@ pub fn render_erc7730_eip712_pages<'ir>(
 /// companion-supplied DFS `nested_blob` (`[u16 len][nested_ed]` records) that
 /// backs the nested-struct DISPLAY binding.
 ///
-/// Phase 5 Commit C (plumbing only): the on-device belt still declines EVERY
-/// nested-struct format to blind-sign — `nested_blob` is bounds-checked +
-/// exact-consumed at the wire level (`cmd_sign_offchain`) and accepted here so
-/// the API is stable, but the descent is NOT yet wired. A non-nested V3 message
-/// therefore renders identically to a V2 one, and a nested one declines. Commit
-/// D inverts the belt: this entry will thread `nested_blob` into a nested-aware
-/// renderer that verifies `hash_struct(pinned type_hash, nested_ed) ==
-/// committed_word` before expanding the members, and enforces the E1
-/// reconciliation. Gated behind flip→decline real-vector tests + adversarial
-/// review.
+/// The device threads `nested_blob` into the nested-aware renderer: for each
+/// `PARAM_NESTED_STRUCT` member it verifies `hash_struct(pinned type_hash,
+/// nested_ed) == the committed hashStruct word` (constant-time) BEFORE expanding
+/// the members, and enforces the E1 reconciliation (`records_consumed ==
+/// pinned nested_descent_count` ∧ `cursor == nested_blob.len()`). The bare
+/// `0x01` belt marker (an unsupported nested shape) still declines the whole
+/// format — the fail-safe, inverted not removed.
 pub fn render_erc7730_eip712_pages_v3<'ir>(
     chain_id: u64,
     verifying_contract: &[u8; 20],
@@ -245,18 +249,31 @@ pub fn render_erc7730_eip712_pages_v3<'ir>(
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
 ) -> Result<Pages, RenderErr> {
-    // Commit C: descent not yet wired — the belt declines nested formats. The
-    // wire-level parse has already bounds-checked + exact-consumed `nested_blob`.
-    let _ = nested_blob;
-    render_erc7730_eip712_pages(
+    // Stack canary (Phase 5 item 11) — same discipline as the V2 entry.
+    let mut canary: u32 = 0;
+    // SAFETY: unique local, volatile write defeats dead-store elimination.
+    unsafe { core::ptr::write_volatile(&mut canary, STACK_CANARY) };
+
+    let result = render_erc7730_eip712_pages_inner(
         chain_id,
         verifying_contract,
         primary_type_hash,
         encoded_data,
+        nested_blob,
         descriptor,
         erc20,
         resolver,
-    )
+    );
+
+    // SAFETY: same slot we wrote to above.
+    let final_canary = unsafe { core::ptr::read_volatile(&canary) };
+    assert!(
+        final_canary == STACK_CANARY,
+        "ERC-7730 EIP-712 V3 renderer stack canary smashed (got {:#x}, expected {:#x})",
+        final_canary,
+        STACK_CANARY
+    );
+    result
 }
 
 fn render_erc7730_eip712_pages_inner<'ir>(
@@ -264,6 +281,7 @@ fn render_erc7730_eip712_pages_inner<'ir>(
     verifying_contract: &[u8; 20],
     primary_type_hash: &[u8; 32],
     encoded_data: &[u8],
+    nested_blob: &[u8],
     descriptor: &'ir VerifiedDescriptor<'ir>,
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
@@ -330,6 +348,11 @@ fn render_erc7730_eip712_pages_inner<'ir>(
     // full body IS the head body; an `[]` field (nonsensical here) safely
     // declines inside `render_array` (its tail/length checks fail).
     let field_pages_before = pages.as_slice().len();
+    let mut nested_ctx = NestedCtx {
+        blob: nested_blob,
+        cursor: 0,
+        records_consumed: 0,
+    };
     render_fields(
         &mut pages,
         &descriptor.ir,
@@ -339,7 +362,20 @@ fn render_erc7730_eip712_pages_inner<'ir>(
         &synth_tx,
         erc20,
         resolver,
+        &mut nested_ctx,
     )?;
+    // E1 reconciliation (the top-level analog of the belt): the device must have
+    // BOUND every nested descent point the descriptor pins, and consumed the
+    // WHOLE `nested_blob`. `nested_descent_count` is dbgen-pinned INDEPENDENT of
+    // this traversal, so a regression that makes descent conditional
+    // under-consumes and trips here; a `cursor != blob.len()` means a companion
+    // padded the blob with an unbound record (E4-3). Either → decline.
+    if nested_ctx.records_consumed != format.nested_descent_count as u16 {
+        return Err(RenderErr::Reject("7730 nested descent mismatch"));
+    }
+    if nested_ctx.cursor != nested_blob.len() {
+        return Err(RenderErr::Reject("7730 nested blob trailing"));
+    }
     // WYSIWYS belt (VULN-erc7730-visible-never-noparam-clearsign), typed-data
     // sibling of the calldata guard above. A typed-data format that declares
     // members but renders none (all `visible:"never"`) would sign an
@@ -367,6 +403,19 @@ fn head_bounded_body(body: &[u8], static_head_words: u16) -> Result<&[u8], Rende
     body.get(..head_len).ok_or(RenderErr::Reject("7730 short head"))
 }
 
+/// Threaded through [`render_fields`] to carry the nested-EIP-712 struct DFS
+/// state (Phase 5). Empty (`Default`) for the calldata path and for a non-nested
+/// typed message; a V3 typed message supplies the companion `blob` and the
+/// renderer advances `cursor` + `records_consumed` as it binds each nested
+/// member. The EIP-712 inner reconciles the final state against the format's
+/// PINNED `nested_descent_count` (E1) + `blob.len()` (E4-3).
+#[derive(Default)]
+struct NestedCtx<'a> {
+    blob: &'a [u8],
+    cursor: usize,
+    records_consumed: u16,
+}
+
 fn render_fields(
     pages: &mut Pages,
     ir: &crate::tx::erc7730::Erc7730Ir<'_>,
@@ -376,67 +425,204 @@ fn render_fields(
     tx: &Eip1559Tx,
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
+    nested: &mut NestedCtx<'_>,
 ) -> Result<(), RenderErr> {
     for field_result in format.fields() {
         let field = field_result.map_err(|_| RenderErr::Reject("7730 bad field"))?;
         let params = parse_params(ir, field.param_off)?;
-        // On-device belt for VULN-erc7730-eip712-nested-struct-address-hide:
-        // a nested-struct member is a single opaque `hashStruct` word this
-        // renderer cannot expand, so decline the WHOLE format to blind-sign
-        // rather than painting the word as a garbage value or silently
-        // skipping a hidden struct that routes funds. Checked before the
-        // visibility decision so a `visible:"never"` nested struct still
-        // trips it. The build-time gate (`check_field_visibility` descent) is
-        // the primary defense; this survives a gate regression and is the
-        // hook point for the future Phase-5 faithful nested renderer.
-        // Declines on EITHER form of the marker (bare `0x01` belt or the
-        // structured v0x03 block) until Phase 5 Commit D inverts it to descend
-        // + bind the v0x03 block.
-        if params.nested_struct.is_some() {
-            return Err(RenderErr::Reject("7730 eip712 nested struct"));
-        }
-        match should_render_with_mode(&params, None, COMPACT_MODE) {
-            Action::Render => {
-                // A field whose path ends in `[]` (ArrayAll) renders every
-                // element of a sole dynamic array — it needs the FULL body and
-                // its own exact-placement tail walk. Every other field stays on
-                // the head-bounded `body` + the existing formatter dispatch
-                // (byte-identical scalar path).
-                if formatters::path_ends_with_array_all(ir, field.path_off)? {
-                    formatters::render_array(
-                        &field,
-                        pages,
-                        ir,
-                        full_body,
-                        format.static_head_words,
-                        tx,
-                        erc20,
-                        resolver,
-                        &params,
-                    )?;
-                } else if formatters::path_is_dynamic_leaf(ir, field.path_off)? {
-                    // C1: a dynamic `bytes`/`string` leaf — its value is in the
-                    // calldata tail (needs the FULL body).
-                    formatters::render_dynamic_bytes(
-                        &field, pages, ir, full_body, tx, erc20, resolver, &params,
-                    )?;
-                } else if formatters::path_needs_full_body(ir, field.path_off)?
-                    || formatters::token_path_needs_full_body(&params)
-                {
-                    // C2 / Tier B: a scalar field reached by descending a dynamic
-                    // offset (dynamic-tuple member) — OR a `tokenAmount` whose
-                    // `tokenPath` extracts a token id from a dynamic swap leg
-                    // (packed `bytes path`, `address[]`), even if the amount field
-                    // itself is static-head. Same scalar renderers, FULL body.
-                    formatters::dispatch(&field, pages, ir, full_body, tx, erc20, resolver, &params)?;
-                } else {
-                    // Static-head scalar — head-bounded body (byte-identical).
-                    formatters::dispatch(&field, pages, ir, body, tx, erc20, resolver, &params)?;
-                }
+        // Nested-EIP-712 struct descent (Phase 5). E1: the descent + keccak
+        // binding run on the STRUCTURAL marker ALONE, BEFORE and INDEPENDENT of
+        // the visibility decision — a hidden/skipped sub-field is just a word
+        // the hash already covers, but the WHOLE member's `hashStruct` word is
+        // ALWAYS bound. `params.nested_struct` carries the raw payload; the bare
+        // `0x01` belt marker (an unsupported nested shape dbgen refused to
+        // expand) still declines the whole format — the fail-safe, inverted not
+        // removed. See `docs/erc7730-nested-eip712-render-design.md`.
+        if let Some(payload) = params.nested_struct {
+            if payload.first() == Some(&0x01) {
+                // Bare belt marker: dbgen could not build a v0x03 block for this
+                // nested member (array / depth>1 / uncovered address / …) →
+                // decline the WHOLE format to blind-sign.
+                return Err(RenderErr::Reject("7730 eip712 nested unsupported"));
             }
-            Action::Skip => continue,
-            Action::Reject(msg) => return Err(RenderErr::Reject(msg)),
+            render_nested_struct(pages, ir, payload, body, nested, tx, erc20, resolver)?;
+            continue;
         }
+        render_one_field(
+            pages,
+            ir,
+            &field,
+            &params,
+            body,
+            full_body,
+            format.static_head_words,
+            tx,
+            erc20,
+            resolver,
+        )?;
+    }
+    Ok(())
+}
+
+/// Render one already-parsed field (top-level OR a nested sub-field) against
+/// `body` (+ `full_body` for the dynamic-tail cases). Extracted so the nested
+/// descent renders a sub-field byte-identically to a top-level field, with the
+/// nested member's `encodeData` as the body (LOCAL resolution).
+#[allow(clippy::too_many_arguments)]
+fn render_one_field(
+    pages: &mut Pages,
+    ir: &crate::tx::erc7730::Erc7730Ir<'_>,
+    field: &crate::tx::erc7730::FieldEntry<'_>,
+    params: &crate::tx::erc7730_render::params::ParamSet<'_>,
+    body: &[u8],
+    full_body: &[u8],
+    static_head_words: u16,
+    tx: &Eip1559Tx,
+    erc20: Option<&Erc20Metadata<'_>>,
+    resolver: &NameResolver<'_>,
+) -> Result<(), RenderErr> {
+    match should_render_with_mode(params, None, COMPACT_MODE) {
+        Action::Render => {
+            // A field whose path ends in `[]` (ArrayAll) renders every
+            // element of a sole dynamic array — it needs the FULL body and
+            // its own exact-placement tail walk. Every other field stays on
+            // the head-bounded `body` + the existing formatter dispatch
+            // (byte-identical scalar path). A nested sub-field never routes
+            // here (nested_ed is exact-length, no `[]` member in v1).
+            if formatters::path_ends_with_array_all(ir, field.path_off)? {
+                formatters::render_array(
+                    field,
+                    pages,
+                    ir,
+                    full_body,
+                    static_head_words,
+                    tx,
+                    erc20,
+                    resolver,
+                    params,
+                )?;
+            } else if formatters::path_is_dynamic_leaf(ir, field.path_off)? {
+                // C1: a dynamic `bytes`/`string` leaf — its value is in the
+                // calldata tail (needs the FULL body).
+                formatters::render_dynamic_bytes(
+                    field, pages, ir, full_body, tx, erc20, resolver, params,
+                )?;
+            } else if formatters::path_needs_full_body(ir, field.path_off)?
+                || formatters::token_path_needs_full_body(params)
+            {
+                // C2 / Tier B: a scalar field reached by descending a dynamic
+                // offset (dynamic-tuple member) — OR a `tokenAmount` whose
+                // `tokenPath` extracts a token id from a dynamic swap leg
+                // (packed `bytes path`, `address[]`), even if the amount field
+                // itself is static-head. Same scalar renderers, FULL body.
+                formatters::dispatch(field, pages, ir, full_body, tx, erc20, resolver, params)?;
+            } else {
+                // Static-head scalar — head-bounded body (byte-identical).
+                formatters::dispatch(field, pages, ir, body, tx, erc20, resolver, params)?;
+            }
+            Ok(())
+        }
+        Action::Skip => Ok(()),
+        Action::Reject(msg) => Err(RenderErr::Reject(msg)),
+    }
+}
+
+/// Bind + render one nested-EIP-712 struct member (Phase 5, v1 single-level).
+///
+/// The security spine: the member's `hashStruct` word sits at `word_pos` of the
+/// SIGNED `parent_body`. The companion supplies the member's `encodeData` as the
+/// next DFS record in `nested.blob`; this function requires
+/// `keccak(dbgen-pinned type_hash ‖ nested_ed) == that committed word`
+/// (constant-time) BEFORE rendering any sub-field → shown ⟺ signed by
+/// collision-resistance. Every decline is a hard `Err` that unwinds the whole
+/// render (the caller discards the partial `Pages`), so a mismatch never leaks a
+/// partially-rendered nested member (E4-1 atomicity).
+#[allow(clippy::too_many_arguments)]
+fn render_nested_struct(
+    pages: &mut Pages,
+    ir: &crate::tx::erc7730::Erc7730Ir<'_>,
+    payload: &[u8],
+    parent_body: &[u8],
+    nested: &mut NestedCtx<'_>,
+    tx: &Eip1559Tx,
+    erc20: Option<&Erc20Metadata<'_>>,
+    resolver: &NameResolver<'_>,
+) -> Result<(), RenderErr> {
+    use pqsigner_erc7730::render::nested as pn;
+    use subtle::ConstantTimeEq;
+
+    // 1. Parse the pinned v0x03 payload (bounds-checked, pure).
+    let np = pn::parse_nested_struct_param(payload)?;
+    // 2. v1 is single-level NON-array. An array member is a v2 shape dbgen does
+    //    NOT emit as a v0x03 block; refuse belt-and-suspenders.
+    if np.is_array {
+        return Err(RenderErr::Reject("7730 nested array v2"));
+    }
+    // 3. The committed `hashStruct` word in the parent's signed encoded_data.
+    let wp = (np.word_pos as usize)
+        .checked_mul(32)
+        .ok_or(RenderErr::Reject("7730 nested wp ovf"))?;
+    let committed = parent_body
+        .get(wp..wp + 32)
+        .ok_or(RenderErr::Reject("7730 nested wp oob"))?;
+    let committed: &[u8; 32] = committed
+        .try_into()
+        .map_err(|_| RenderErr::Reject("7730 nested cw"))?;
+
+    // 4. Pull the next DFS `nested_ed` record + COUNT it (E1: unconditional).
+    let (nested_ed, new_cursor) = pn::read_next_nested_ed(nested.blob, nested.cursor)?;
+    nested.cursor = new_cursor;
+    nested.records_consumed = nested
+        .records_consumed
+        .checked_add(1)
+        .ok_or(RenderErr::Reject("7730 nested count ovf"))?;
+
+    // 5. Exact length: `nested_ed == member_count × 32` (rule 1 — hash the
+    //    COMPLETE member, so trailing signed-but-unshown words are impossible).
+    let expected = (np.member_count as usize)
+        .checked_mul(32)
+        .ok_or(RenderErr::Reject("7730 nested mc ovf"))?;
+    if nested_ed.len() != expected {
+        return Err(RenderErr::Reject("7730 nested ed len"));
+    }
+
+    // 6. THE BINDING — keccak(pinned type_hash ‖ nested_ed) == committed word,
+    //    constant-time. Shown ⟺ signed by collision-resistance.
+    let hs = nested::hash_struct(np.type_hash, nested_ed);
+    if !bool::from(hs.ct_eq(committed)) {
+        return Err(RenderErr::Reject("7730 nested binding"));
+    }
+
+    // 7. E2 address-coverage backstop + E4-2 local-ordinal bounds (pure,
+    //    independent of the build gate). Every address-typed local word must be
+    //    bound by a SHOWN sub-field's render path OR its tokenPath — `COMPACT_MODE`
+    //    is threaded so coverage tracks exactly what the renderer displays (a
+    //    hidden/skipped sub-field covers nothing).
+    pn::validate_nested_structure(ir, &np, COMPACT_MODE)?;
+
+    // 8. Render each visible sub-field against `nested_ed` (LOCAL resolution).
+    for sf in np.sub_fields() {
+        let sf = sf.map_err(|_| RenderErr::Reject("7730 nested subfield"))?;
+        let sf_params = parse_params(ir, sf.param_off)?;
+        // v1 is single-level: a nested sub-field (depth > 1) is a v3 shape dbgen
+        // does not emit — decline rather than recurse into un-verified territory.
+        if sf_params.nested_struct.is_some() {
+            return Err(RenderErr::Reject("7730 nested depth v3"));
+        }
+        // `nested_ed` is the exact-length member body (no dynamic tail), so
+        // body == full_body and the static head width is the member count.
+        render_one_field(
+            pages,
+            ir,
+            &sf,
+            &sf_params,
+            nested_ed,
+            nested_ed,
+            np.member_count,
+            tx,
+            erc20,
+            resolver,
+        )?;
     }
     Ok(())
 }
