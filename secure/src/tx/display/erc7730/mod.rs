@@ -332,7 +332,18 @@ fn render_fields(
                         resolver,
                         &params,
                     )?;
+                } else if formatters::path_is_dynamic_leaf(ir, field.path_off)? {
+                    // C1: a dynamic `bytes`/`string` leaf — its value is in the
+                    // calldata tail (needs the FULL body).
+                    formatters::render_dynamic_bytes(
+                        &field, pages, ir, full_body, tx, erc20, resolver, &params,
+                    )?;
+                } else if formatters::path_needs_full_body(ir, field.path_off)? {
+                    // C2: a scalar field reached by descending a dynamic offset
+                    // (dynamic-tuple member) — same scalar renderers, FULL body.
+                    formatters::dispatch(&field, pages, ir, full_body, tx, erc20, resolver, &params)?;
                 } else {
+                    // Static-head scalar — head-bounded body (byte-identical).
                     formatters::dispatch(&field, pages, ir, body, tx, erc20, resolver, &params)?;
                 }
             }

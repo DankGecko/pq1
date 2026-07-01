@@ -92,46 +92,25 @@ pub(super) fn resolve_path<'a>(
 
     match root {
         PathOp::RootStructured => {
-            // Sum FieldIdx values → byte slot.
-            let mut slot = 0usize;
-            while p < prog.len() {
-                let op = PathOp::try_from(prog[p])
-                    .map_err(|_| RenderErr::Reject("7730 bad op"))?;
-                p += 1;
-                match op {
-                    PathOp::FieldIdx => {
-                        if p + 2 > prog.len() {
-                            return Err(RenderErr::Reject("7730 trunc field"));
-                        }
-                        let idx = u16::from_be_bytes([prog[p], prog[p + 1]]) as usize;
-                        p += 2;
-                        slot = slot
-                            .checked_add(idx)
-                            .ok_or(RenderErr::Reject("7730 slot ovf"))?;
-                    }
-                    PathOp::ArrayIdx
-                    | PathOp::ArrayLast
-                    | PathOp::ArraySlice
-                    | PathOp::ArrayAll
-                    | PathOp::RootStructured
-                    | PathOp::RootContainer
-                    | PathOp::RootMetadata => {
-                        return Err(RenderErr::Reject("7730 path op p4 unsup"));
-                    }
+            // Navigation ops (`FieldIdx` / `FollowOffset`) → the leaf's byte
+            // position. A pure-static-head path (FieldIdx-only) resolves to the
+            // same slot-sum word the legacy resolver read (byte-identical — the
+            // slot-confusion tests pin this); `FollowOffset` adds tuple / dynamic
+            // tail-follow (C1/C2). `body` is head-bounded for static fields and
+            // the full body for `FollowOffset` fields (routed in `render_fields`).
+            match crate::tx::erc7730_render::resolve::resolve_structured(&prog[p..], body)? {
+                crate::tx::erc7730_render::resolve::Leaf::Word(off) => {
+                    let word = body
+                        .get(off..off + 32)
+                        .ok_or(RenderErr::Reject("7730 short body"))?;
+                    Ok(Resolved::Slot32(<&[u8; 32]>::try_from(word).unwrap()))
+                }
+                // A dynamic (`bytes`/`string`) leaf is not a scalar word: the
+                // dynamic-leaf renderer handles it via `resolve_dynamic`.
+                crate::tx::erc7730_render::resolve::Leaf::Dynamic(_) => {
+                    Err(RenderErr::Reject("7730 dyn leaf not scalar"))
                 }
             }
-            let start = slot
-                .checked_mul(32)
-                .ok_or(RenderErr::Reject("7730 slot ovf"))?;
-            let end = start
-                .checked_add(32)
-                .ok_or(RenderErr::Reject("7730 slot ovf"))?;
-            let word = body
-                .get(start..end)
-                .ok_or(RenderErr::Reject("7730 short body"))?;
-            // Slice → array conversion is infallible (we just checked
-            // the length) but TryInto wants Result, so unwrap is fine.
-            Ok(Resolved::Slot32(<&[u8; 32]>::try_from(word).unwrap()))
         }
         PathOp::RootContainer => {
             if p + 3 > prog.len() {
@@ -154,7 +133,8 @@ pub(super) fn resolve_path<'a>(
         | PathOp::ArrayIdx
         | PathOp::ArrayLast
         | PathOp::ArraySlice
-        | PathOp::ArrayAll => Err(RenderErr::Reject("7730 path no root")),
+        | PathOp::ArrayAll
+        | PathOp::FollowOffset => Err(RenderErr::Reject("7730 path no root")),
     }
 }
 
@@ -646,6 +626,164 @@ pub(crate) fn path_ends_with_array_all(
         }
     }
     Ok(false)
+}
+
+/// Scan a compiled structured path's opcodes → `(needs_full_body, is_dynamic_leaf)`.
+///
+/// * `needs_full_body` — the path descends through a `FollowOffset` (a dynamic
+///   arg / dynamic tuple), so it must resolve against the FULL calldata body,
+///   not the head-bounded slice.
+/// * `is_dynamic_leaf` — the leaf itself is a dynamic `bytes`/`string` blob (the
+///   program ends on `FollowOffset`), routed to [`render_dynamic_bytes`].
+///
+/// Any non-`FieldIdx`/`FollowOffset` op (e.g. `ArrayAll`) → `(false,false)`:
+/// arrays route via [`path_ends_with_array_all`], scalars via the head path.
+fn scan_path_ops(ir: &Erc7730Ir<'_>, path_off: u16) -> Result<(bool, bool), RenderErr> {
+    if path_off == 0 {
+        return Ok((false, false));
+    }
+    let off = path_off as usize;
+    let len = *ir
+        .pool
+        .get(off)
+        .ok_or(RenderErr::Reject("7730 bad path off"))? as usize;
+    let prog = ir
+        .pool
+        .get(off + 1..off + 1 + len)
+        .ok_or(RenderErr::Reject("7730 truncated path"))?;
+    if prog.first() != Some(&(PathOp::RootStructured as u8)) {
+        return Ok((false, false));
+    }
+    let mut p = 1usize;
+    let mut has_follow = false;
+    let mut ends_on_follow = false;
+    while let Some(&op) = prog.get(p) {
+        if op == PathOp::FieldIdx as u8 {
+            if p + 3 > prog.len() {
+                return Ok((false, false));
+            }
+            p += 3;
+            ends_on_follow = false;
+        } else if op == PathOp::FollowOffset as u8 {
+            has_follow = true;
+            ends_on_follow = true;
+            p += 1;
+        } else {
+            return Ok((false, false));
+        }
+    }
+    Ok((has_follow, ends_on_follow))
+}
+
+/// The path descends a dynamic offset → resolve against the full calldata body.
+pub(crate) fn path_needs_full_body(ir: &Erc7730Ir<'_>, path_off: u16) -> Result<bool, RenderErr> {
+    Ok(scan_path_ops(ir, path_off)?.0)
+}
+
+/// The leaf is a dynamic `bytes`/`string` blob (C1) → [`render_dynamic_bytes`].
+pub(crate) fn path_is_dynamic_leaf(ir: &Erc7730Ir<'_>, path_off: u16) -> Result<bool, RenderErr> {
+    Ok(scan_path_ops(ir, path_off)?.1)
+}
+
+/// Resolve a dynamic (`bytes`/`string`) leaf to its data slice (full body).
+fn resolve_dynamic<'a>(
+    ir: &Erc7730Ir<'_>,
+    path_off: u16,
+    body: &'a [u8],
+) -> Result<&'a [u8], RenderErr> {
+    use crate::tx::erc7730_render::resolve::{read_dynamic, resolve_structured, Leaf};
+    if path_off == 0 {
+        return Err(RenderErr::Reject("7730 dyn no path"));
+    }
+    let off = path_off as usize;
+    let len = *ir
+        .pool
+        .get(off)
+        .ok_or(RenderErr::Reject("7730 bad path off"))? as usize;
+    let prog = ir
+        .pool
+        .get(off + 1..off + 1 + len)
+        .ok_or(RenderErr::Reject("7730 truncated path"))?;
+    if prog.first() != Some(&(PathOp::RootStructured as u8)) {
+        return Err(RenderErr::Reject("7730 dyn bad root"));
+    }
+    match resolve_structured(&prog[1..], body)? {
+        Leaf::Dynamic(o) => read_dynamic(body, o),
+        Leaf::Word(_) => Err(RenderErr::Reject("7730 dyn leaf is word")),
+    }
+}
+
+/// C1: render a dynamic `bytes`/`string` field. A string-shaped payload (all
+/// printable ASCII, within a small page budget) renders as TEXT — genuine
+/// clear-signing (`send("alice")` shows `alice`). An opaque or oversized `bytes`
+/// renders as its LENGTH + a short hex preview + a LOUD marker — never a
+/// misleading full-hex wall (a 500-byte hex dump on a 16-col screen is decoding,
+/// not clear-signing; keep it an honest "opaque blob, N bytes").
+const DYN_TEXT_MAX: usize = 3 * DISPLAY_COLS;
+#[allow(clippy::too_many_arguments)]
+pub(super) fn render_dynamic_bytes(
+    field: &FieldEntry<'_>,
+    pages: &mut Pages,
+    ir: &Erc7730Ir<'_>,
+    full_body: &[u8],
+    _tx: &Eip1559Tx,
+    _erc20: Option<&Erc20Metadata<'_>>,
+    _resolver: &NameResolver<'_>,
+    _params: &ParamSet<'_>,
+) -> Result<(), RenderErr> {
+    let data = resolve_dynamic(ir, field.path_off, full_body)?;
+    let printable = !data.is_empty() && data.iter().all(|&b| (0x20..0x7f).contains(&b));
+    let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
+    write_label_row(pages, p, field.label);
+    if printable && data.len() <= DYN_TEXT_MAX {
+        let [_, r1, r2, r3] = pages.page_mut(p);
+        let rows: [&mut [u8; DISPLAY_COLS]; 3] = [r1, r2, r3];
+        for (i, row) in rows.into_iter().enumerate() {
+            let start = i * DISPLAY_COLS;
+            if start >= data.len() {
+                break;
+            }
+            let end = (start + DISPLAY_COLS).min(data.len());
+            write_line_bytes(row, &data[start..end]);
+        }
+    } else {
+        let [_, r1, r2, foot] = pages.page_mut(p);
+        write_bytes_len_row(r1, data.len());
+        write_hex_word(r2, data); // first ≤8 bytes as a preview
+        write_line_bytes(foot, b"! opaque bytes");
+    }
+    Ok(())
+}
+
+/// Write `"<n> bytes"` into a 16-col row.
+fn write_bytes_len_row(row: &mut [u8; DISPLAY_COLS], n: usize) {
+    *row = [b' '; DISPLAY_COLS];
+    let mut digits = [0u8; 20];
+    let mut m = n;
+    let mut dlen = 0;
+    if m == 0 {
+        digits[0] = b'0';
+        dlen = 1;
+    } else {
+        while m > 0 && dlen < digits.len() {
+            digits[dlen] = b'0' + (m % 10) as u8;
+            m /= 10;
+            dlen += 1;
+        }
+    }
+    let mut pos = 0;
+    for i in (0..dlen).rev() {
+        if pos < DISPLAY_COLS {
+            row[pos] = digits[i];
+            pos += 1;
+        }
+    }
+    for &b in b" bytes" {
+        if pos < DISPLAY_COLS {
+            row[pos] = b;
+            pos += 1;
+        }
+    }
 }
 
 /// Render EVERY element of a sole top-level dynamic array (`<arg>.[]`).

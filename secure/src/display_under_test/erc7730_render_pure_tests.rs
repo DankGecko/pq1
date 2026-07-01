@@ -1215,6 +1215,74 @@ fn all_compiled_registry_array_leaves_render() {
     );
 }
 
+// ───────────────────────────────────────────────────────────────────────
+// C1 — dynamic `bytes`/`string` leaf (FollowOffset). The value lives in the
+// calldata tail; the device follows the ABI offset at the arg's head slot and
+// reads the length-prefixed blob — the SAME position the contract decodes.
+// ───────────────────────────────────────────────────────────────────────
+
+/// `f(bytes arg)` calldata: selector + `[offset=32][len][data padded to 32]`.
+fn calldata_sole_bytes(sig: &[u8], data: &[u8]) -> Vec<u8> {
+    let mut cd = keccak256(sig)[..4].to_vec();
+    cd.extend_from_slice(&u256_from_u64(32).0); // offset to the bytes arg
+    cd.extend_from_slice(&u256_from_u64(data.len() as u64).0); // length
+    if !data.is_empty() {
+        let mut padded = data.to_vec();
+        while padded.len() % 32 != 0 {
+            padded.push(0);
+        }
+        cd.extend_from_slice(&padded);
+    }
+    cd
+}
+
+/// WYSIWYS value-equality: a printable `bytes` payload renders as the exact
+/// ASCII text — differential over several payloads (celo `addStorageRoot(bytes
+/// url)`, chain 42220, the real registry leaf).
+#[test]
+fn c1_dynamic_bytes_renders_exact_text() {
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-celo_accounts.json", 42220);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
+    let tx = envelope(42220, entry.contract);
+    let resolver = NameResolver::new();
+
+    for url in [&b"a"[..], b"https://ex.io/s", b"ipfs://Qm12345"] {
+        let calldata = calldata_sole_bytes(b"addStorageRoot(bytes)", url);
+        assert_selector_matches(&verified.ir, &calldata, "addStorageRoot(bytes)");
+        let pages =
+            render_erc7730_pages(&tx, &calldata, &verified, None, &resolver).expect("render");
+        assert_all_pages_printable(&pages);
+        let dump = dump_pages(&pages);
+        assert!(
+            dump.contains(core::str::from_utf8(url).unwrap()),
+            "C1 must render the exact payload {url:?} (value-equality):\n{dump}"
+        );
+        let _ = find_page_by_label(&pages, "Storage Root URL");
+    }
+}
+
+/// The opaque-bytes rule: non-printable / oversized `bytes` render as their
+/// LENGTH + a loud marker — never a misleading full-hex wall.
+#[test]
+fn c1_opaque_bytes_renders_length_and_loud_marker() {
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-celo_accounts.json", 42220);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
+    let tx = envelope(42220, entry.contract);
+    let resolver = NameResolver::new();
+
+    let payload = [0xFFu8; 40]; // binary, 40 bytes → opaque
+    let calldata = calldata_sole_bytes(b"addStorageRoot(bytes)", &payload);
+    let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver).expect("render");
+    assert_all_pages_printable(&pages);
+    let dump = dump_pages(&pages);
+    assert!(dump.contains("40 bytes"), "opaque bytes must show length:\n{dump}");
+    assert!(dump.contains("opaque"), "opaque bytes must be loudly marked:\n{dump}");
+}
+
 #[test]
 fn array_resolve_matches_walk_differential() {
     // When the Kani-proven `walk` accepts the body, our resolver must agree

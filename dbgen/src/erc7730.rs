@@ -93,6 +93,10 @@ const PATHOP_ARRAY_SLICE: u8 = 0x22;
 #[allow(dead_code)]
 const PATHOP_ARRAY_LAST: u8 = 0x23;
 const PATHOP_ARRAY_ALL: u8 = 0x24;
+/// Follow the ABI offset word at the current head slot into the calldata tail
+/// (C1 dynamic `bytes`/`string`; C2 dynamic-tuple descent). Device:
+/// `render::resolve::resolve_structured`.
+const PATHOP_FOLLOW_OFFSET: u8 = 0x25;
 
 const FMT_RAW: u8 = 0x01;
 const FMT_AMOUNT: u8 = 0x02;
@@ -2421,10 +2425,21 @@ fn compile_structured_contract_path(
                     ))
                 }
                 HeadWidth::Dynamic => {
-                    return Err(format!(
-                        "path field `{name}` is dynamic (`{this_ty}`); its value is in the \
-                         calldata tail, not the static head, and is not readable by the walker"
-                    ))
+                    // C1: a dynamic `bytes`/`string` leaf. Its head slot holds an
+                    // ABI offset word; emit FollowOffset so the device follows it
+                    // to the length-prefixed blob in the tail (reading the SAME
+                    // position the contract decodes). Dynamic ARRAYS are rendered
+                    // via the `<arg>.[]` (`compile_array_all_path`) route, not
+                    // here; a bare dynamic tuple is not a displayable leaf.
+                    let t = this_ty.trim();
+                    if t == "bytes" || t == "string" {
+                        out.push(PATHOP_FOLLOW_OFFSET);
+                    } else {
+                        return Err(format!(
+                            "path field `{name}` is dynamic (`{this_ty}`) and not a `bytes`/`string` \
+                             leaf; dynamic arrays render via `<arg>.[]`, dynamic tuples are not a leaf"
+                        ));
+                    }
                 }
             }
         } else {

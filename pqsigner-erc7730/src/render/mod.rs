@@ -14,6 +14,7 @@
 pub mod array;
 pub mod enums;
 pub mod params;
+pub mod resolve;
 pub mod visibility;
 
 /// Why the ERC-7730 renderer refused to take responsibility for this

@@ -157,7 +157,8 @@ pub fn resolve_program<'a, 'b>(
         | PathOp::ArrayIdx
         | PathOp::ArraySlice
         | PathOp::ArrayLast
-        | PathOp::ArrayAll => return Err(IrError::BadField),
+        | PathOp::ArrayAll
+        | PathOp::FollowOffset => return Err(IrError::BadField),
     };
 
     // 2. Descend.
@@ -206,6 +207,11 @@ pub fn resolve_program<'a, 'b>(
                 return Err(IrError::BadField);
             }
             PathOp::ArrayAll => {
+                return Err(IrError::BadField);
+            }
+            // `FollowOffset` is a `resolve::resolve_structured` op (the calldata
+            // path resolver), never valid in the AbiNode walker's descent.
+            PathOp::FollowOffset => {
                 return Err(IrError::BadField);
             }
         }

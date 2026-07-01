@@ -163,6 +163,11 @@ pub enum PathOp {
     ArrayLast = 0x23,
     /// `[]` — whole array iteration.
     ArrayAll = 0x24,
+    /// Follow the ABI offset word at the current position into the calldata
+    /// tail (dynamic arg / dynamic tuple / dynamic leaf). See
+    /// `render::resolve::resolve_structured`. A reserved op like `ArrayAll`:
+    /// firmware that predates it declines-to-blind rather than mis-reads.
+    FollowOffset = 0x25,
 }
 
 impl TryFrom<u8> for PathOp {
@@ -177,6 +182,7 @@ impl TryFrom<u8> for PathOp {
             0x22 => Ok(PathOp::ArraySlice),
             0x23 => Ok(PathOp::ArrayLast),
             0x24 => Ok(PathOp::ArrayAll),
+            0x25 => Ok(PathOp::FollowOffset),
             _ => Err(IrError::BadField),
         }
     }
