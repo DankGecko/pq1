@@ -80,3 +80,62 @@ V4/5/6 are HARD-slice.
 
 **Caveats:** these tiers are a static path-shape read; a C0 function can still be blocked at render
 by ERC20_DB_ROOT (tokenAmount) / ENS (addressName) / MAX_FORMATS / page-budget — orthogonal gaps.
+
+## Landed since this analysis (2026-07-01)
+
+- **C1** (dynamic `bytes`/`string`, FollowOffset resolver), **C2** (flat dynamic-tuple members), **C3**
+  (multi-dynamic args + relaxed multi-array). Corpus 776→806, then mhaas's `visible:"never"` WYSIWYS
+  gate trimmed hidden-address descriptors (→706).
+- **Nested field-GROUP flattening** (`feat(erc7730): flatten nested field-GROUPS`, 7325e9f0). Morpho
+  Blue's `marketParams` nested-group descriptor now clear-signs — the C2 "tuple-nav" leverage the table
+  above scored for Morpho. Pure dbgen parser feature; the combined member paths ride the existing
+  width-aware compiler + gates. Corpus 706→708 (+2, Morpho mainnet+Base only). The other 9 nested-group
+  registry descriptors (paraswap/uniswap/flare) correctly stay declined (dynamic tuples / arrays-of-
+  tuples / EIP-712 — the gates reject them). Morpho's **static** `marketParams` was the only one whose
+  members live at fixed head slots; the dynamic-tuple / array-of-tuple nested groups remain in HARD-*.
+
+## Decision: the HARD-slice engine (the 53-function DEX hot path) — DEFER, with a specified safe subset
+
+**Decision (2026-07-01): do NOT build a general byte-slice engine now.** It is the highest-risk
+capability in the whole coverage frontier and its high-value cases are structurally the *most*
+dangerous. The 53 functions stay declined-to-loud-blind-sign (the honest raw target/selector ladder),
+which is a safe, non-misleading UX — not a silent gap.
+
+**What the registry actually slices** (every slice path in the vendored corpus, by shape):
+
+| Shape | Registry witnesses | Source length | Risk |
+|---|---|---|---|
+| Negative index `[-1]` | `pools.[-1]` (16) | **runtime** (dynamic array) | last-element depends on an attacker-influenceable count word |
+| Negative-open `[-n:]` | `to.[-20:]`, `dex/dex2/dex3.[-20:]` (12+), `goodUntil.[-4:]`, `mintRecipient/destinationCaller.[-20:]` | **runtime** (dynamic `bytes`) | "last n bytes" is relative to a length word the descriptor cannot bound |
+| Fixed positive `[a:b]` into **dynamic** bytes | `hookData.[32:52]`, `hookData.[52:53]`, `takerTraits.[:1]`, `#.data.[:1]` | **runtime** | reads protocol-internal offsets inside an un-ABI-framed blob; no framing to bound-check |
+| Fixed/neg slice of a **fixed-length** source (`bytesN`, static-tuple member) | *(rare; e.g. a `bytes32`-packed flag+addr)* | **compile-time** | normalizable to an absolute positive range at build time |
+
+**Why the high-value cases are the risky ones.** The DEX swap volume lives in the packed-path slices —
+`dex.[-20:]` (extract the pool/token address packed into the low bytes of a **dynamic** `bytes` leg) and
+`hookData.[32:52]` (a field at a protocol-chosen offset inside an un-delimited blob). Both read a
+**runtime-length** source: the extraction position (`len - 20`) or the validity of a fixed offset
+(`52 ≤ len`) depends on the ABI length word, which the companion controls. Worse, showing one slice
+**hides the rest of the source** — the same array-tail-hiding / slot-confusion WYSIWYS hazard the
+walker fix (`docs/security/VULN-erc7730-walker-slot-confusion.md`) closed for whole words. A slice
+engine without a *byte-coverage completeness* proof (every byte of the sliced source shown or provably
+inert) would reintroduce exactly that class: "show `[32:52]`, blind-sign `[0:32]` and `[53:]`."
+
+**The one bounded-safe subset** (a specification for whenever this is picked up, NOT a green light):
+
+> A slice `[a:b]` (or a negative slice normalized to positive at build time) is admissible **only** when
+> its source has a **compile-time-fixed length** — a static head word `bytesN` (N ≤ 32) or a
+> fixed-width static-tuple member — so the build can (1) resolve the slice to an **absolute** byte range
+> `[a', b')` with `0 ≤ a' < b' ≤ N` checked at compile time, and (2) enforce a **byte-coverage
+> completeness lint**: every byte `[0, N)` of the source is either surfaced by some visible slice or
+> explicitly declared inert (mirroring the tuple-member completeness lint). The device then reads a
+> deterministic, in-bounds byte range of a head word it already bounds — no length word in the trust
+> path, no hidden tail. It ships as its own increment with its own adversarial-review + Kani-bounded
+> landing (the array-walker discipline), and **excludes every runtime-length source** — dynamic
+> `bytes` / `T[]`, negative index `[-1]`, and the DEX packed-path — from the near-term build.
+
+**Honest leverage of that subset:** LOW. Almost every registry slice is on a *dynamic* source
+(packed `bytes` paths, `pools.[-1]` on a dynamic array), so the fixed-length-source subset unlocks few
+of the 53 while the DEX volume stays out. That asymmetry — low-value-safe vs high-value-dangerous — is
+precisely why the general engine is deferred rather than incrementally grown: unlike C1/C2, there is no
+cheap, safe first slice that de-risks the dangerous ones. Revisit only with a dedicated
+adversarial-review + Kani campaign scoped to the runtime-length packed-path threat model.
