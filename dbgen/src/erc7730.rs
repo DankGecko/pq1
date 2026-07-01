@@ -3634,11 +3634,24 @@ mod tests {
     }
 
     #[test]
-    fn compile_path_rejects_dynamic_target() {
+    fn compile_path_dynamic_bytes_ok_bare_array_rejected() {
+        // C1 (FollowOffset resolver): a dynamic `bytes` / `string` field IS now
+        // clear-signable — its value sits in the calldata tail and the device
+        // follows the offset word to render it (celo `addStorageRoot(bytes url)`
+        // / `send(string)`). Was a hard reject before C1.
         let p = parse_format_key("f(bytes data)").unwrap();
-        assert!(compile_path("#.data", CTX_CONTRACT, &p).is_err());
+        assert!(
+            compile_path("#.data", CTX_CONTRACT, &p).is_ok(),
+            "C1: dynamic bytes field is clear-signable"
+        );
+        // A BARE whole dynamic array (no `.[]` render-all) is still rejected — an
+        // array is not a single displayable word; use `<arg>.[]` to render its
+        // elements (see `compile_array_all_gate`).
         let p = parse_format_key("f(uint256[] xs)").unwrap();
-        assert!(compile_path("#.xs", CTX_CONTRACT, &p).is_err());
+        assert!(
+            compile_path("#.xs", CTX_CONTRACT, &p).is_err(),
+            "bare whole-array target has no single-word rendering"
+        );
     }
 
     #[test]
@@ -3672,10 +3685,14 @@ mod tests {
         assert!(compile_path("_amounts[0]", CTX_CONTRACT, &p).is_err(), "single index");
         assert!(compile_path("_amounts[-1]", CTX_CONTRACT, &p).is_err(), "last");
 
-        // REFUSE: NOT the sole dynamic arg (two dynamic args break the
-        // exact-tail-placement assumption the device relies on).
+        // ACCEPT (C3): an array that is NOT the sole dynamic arg. The device's
+        // `resolve_array_multi` relaxes the two exact-tail-placement equalities
+        // to bounds (offset >= head_end, offset+32+count*32 <= len), so a
+        // multi-dynamic array still renders every element from its
+        // signature-fixed head slot (`batchTransfer(uint256[] a, address[] r)`).
+        // dbgen emits a FollowOffset marker for this case; still WYSIWYS.
         let two_dyn = parse_format_key("f(uint256[] a, bytes b)").unwrap();
-        assert!(compile_path("a.[]", CTX_CONTRACT, &two_dyn).is_err(), "non-sole-dynamic");
+        assert!(compile_path("a.[]", CTX_CONTRACT, &two_dyn).is_ok(), "C3: multi-dynamic array");
 
         // REFUSE: dynamic element type (`string[]`) and nested array (`uint256[][]`).
         let dyn_elem = parse_format_key("f(string[] xs)").unwrap();
