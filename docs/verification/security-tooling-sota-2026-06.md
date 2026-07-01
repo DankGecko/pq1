@@ -132,6 +132,8 @@ feed the *same* vector set to three consumers: the Rust `sphincs-c10` crate, the
 
 ## 3. Firmware formal verification — Rust FV + LeanLoop
 
+> **UPDATE 2026-07-01 — currency re-check + wall-closure.** Web-researched whether newer versions/tools close the walls the firmware-FV track hit. Verdict: **we are current, not behind** — Kani 0.67.0 is the latest release, CBMC 6.8.0 is pinned-by-Kani + irrelevant, Aeneas is ~3 wk behind (low value). The real lever is three experimental Kani `-Z` features **already in 0.67.0**: `-Z function-contracts` (closes the `records_pages_total` composition wall via modular contract+`stub_verified` proofs — the top actionable finding) and `-Z loop-contracts` (reopens the big-`.any()`/CRC scans — empirically feasible: a 3995-B scan verified in 0.05 s with no unwind bound), both unstable → run under the existing anti-vacuity gates. The **crypto-opacity wall (SHA-256/SPHINCS+C10) is FUNDAMENTAL** — every tool below reproduces the `--opaque` boundary (even hax, the crypto specialist, axiomatizes SHA-256), so it correctly stays a Lean/Aeneas hardness axiom + fuzz. **Don't chase:** Verus wholesale (invasive `verus!{}` on `#![no_std]`), Prusti (unmaintained), RefinedRust (Coq/Iris ≥ Aeneas), any tool "that handles crypto" (all hit the same boundary). One genuinely-new future capability: **hax→ProVerif/F\*** for verifying the *actual Rust* of the protocol code (OPTIGA-Shield/SCP03/PIN-lockstep) against the secrecy props we hand-model — a partial down-payment on the invariant #1-#4 model→Rust span, but heavy + crypto-boundary-limited. Full prioritized roadmap (P1-P7 + F1-F3 + don't-chase) is tracked in **`docs/work-todo.md` §35**.
+
 ### Rust verifiers beyond Aeneas→Lean
 
 | Tool | Proves | unsafe? | PQ-Signer fit | Rec |
