@@ -50,17 +50,18 @@
     {
       "id": "kani",
       "make": "make kani",
-      "polices_paths": ["tx/src/**", "pqsigner-erc7730/src/**", "fw-manifest/src/**", "aa/src/**", "shared/src/**"],
+      "polices_paths": ["tx/src/**", "pqsigner-erc7730/src/**", "fw-manifest/src/**", "aa/src/**", "shared/src/**", "domain/src/**", "tx-core/src/**"],
       "runs_in": "nightly.yml",
       "enforcement": "nightly",
-      "note": "~76 harnesses, minutes -> nightly."
+      "note": "93 #[kani::proof] harnesses across 17 files (2026-07-01 census); minutes -> nightly. polices_paths must list every crate `make kani` runs `cargo kani -p` on (Makefile: pqsigner-tx-core, pqsigner-domain, pqsigner-tx, pqsigner-erc7730, sphincs-tz-shared, pqsigner-aa, fw-manifest) — the 2026-07-01 kani review (ADVERSARIAL_REVIEW_KANI_2026-07-01.md, finding gate-enforcement-kani-polices-omits-domain-txcore) caught domain/src + tx-core/src missing here."
     },
     {
       "id": "verify-kani-mutation",
       "make": "make verify-kani-mutation",
       "polices_paths": ["tx/src/multisend.rs", "tx/src/cowswap_order.rs", "fw-manifest/src/lib.rs", "aa/src/userop.rs"],
       "runs_in": "nightly.yml",
-      "enforcement": "nightly"
+      "enforcement": "nightly",
+      "note": "CURATED per-slice anti-vacuity subset: 6 mutations across these 4 files ONLY. It does NOT screen the other 13 harness-bearing files (57 of 93 harnesses) for vacuity — do not read this as comprehensive Kani-vacuity coverage. See ADVERSARIAL_REVIEW_KANI_2026-07-01.md finding surfacemap-kani-mutation-gate-scope-leak."
     },
     {
       "id": "verify-protocol-models",
