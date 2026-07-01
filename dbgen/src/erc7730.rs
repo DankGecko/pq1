@@ -55,7 +55,7 @@ use crate::merkle::{node_hash, verify_proof, MerkleTree};
 use pqsigner_erc7730::bundle::{leaf_hash, verify_erc7730_bundle};
 use pqsigner_erc7730::ir::{
     Erc7730Ir, CONTRACT_NAME_FIELD_LEN, CTX_CONTRACT, CTX_EIP712, HEADER_LEN, MAX_FIELDS_PER_FORMAT,
-    MAX_FORMATS, MAX_IR_LEN, OWNER_FIELD_LEN, SCHEMA_VER,
+    MAX_FORMATS, MAX_IR_LEN, MAX_NESTED_MEMBERS, OWNER_FIELD_LEN, SCHEMA_VER,
 };
 use pqsigner_tx_core::hash::keccak256;
 use serde::Deserialize;
@@ -1428,30 +1428,44 @@ fn compile_one_format(
             type_is_struct(base, &parsed)
         });
 
-    // Compile every field's path + params first (so offsets are
-    // stable before we emit the format header).
-    let mut compiled: Vec<CompiledFieldOut> = Vec::with_capacity(fmt.fields.len());
-
-    for (i, field) in fmt.fields.iter().enumerate() {
-        let cf = compile_one_field(
-            sig,
-            i,
-            field,
-            context_kind,
-            &parsed,
-            ctx,
-            pool,
-            enum_offsets,
-            has_nested_struct && i == 0,
-        )?;
-        compiled.push(cf);
-    }
+    // Compile every field's path + params first (so offsets are stable before
+    // we emit the format header). An EIP-712 format with a nested-struct member
+    // is restructured into the v0x03 recursive-IR shape — each supported nested
+    // member becomes ONE anchor field carrying `PARAM_NESTED_STRUCT` with its
+    // visible children as LOCAL sub-fields (Phase 5,
+    // `docs/erc7730-nested-eip712-render-design.md`). An unsupported nested
+    // shape (array / depth>1 / uncompilable child / uncovered address) falls
+    // back to flat fields + the bare `[0x01]` belt marker so the device
+    // declines the whole format to blind-sign. `nested_descent_count` is the E1
+    // reconciliation pin: the number of nested descent points the device MUST
+    // bind, derived HERE (independent of the render traversal).
+    let (compiled, nested_descent_count): (Vec<CompiledFieldOut>, u8) = if has_nested_struct {
+        match try_compile_eip712_nested(sig, fmt, &parsed, ctx, pool, enum_offsets)? {
+            Some(res) => res,
+            None => (
+                compile_flat_fields(sig, fmt, context_kind, &parsed, ctx, pool, enum_offsets, true)?,
+                0,
+            ),
+        }
+    } else {
+        (
+            compile_flat_fields(sig, fmt, context_kind, &parsed, ctx, pool, enum_offsets, false)?,
+            0,
+        )
+    };
 
     // Emit format header.
     out.extend_from_slice(&selector); // 4 B
     out.push(compiled.len() as u8); // 1 B field_count
     out.push(intent.len() as u8); // 1 B intent_len
     out.extend_from_slice(&static_head_words.to_be_bytes()); // 2 B static_head_words
+    // Schema v3: E1 reconciliation pin — the count of nested-EIP-712 struct
+    // descent points (`PARAM_NESTED_STRUCT` v0x03 anchors) the device MUST bind
+    // before signing. Independent of the render traversal, so a regression that
+    // makes descent conditional under-consumes and declines. `0` until the
+    // nested-anchor emission lands (next increment) and for every non-nested /
+    // contract format.
+    out.push(nested_descent_count); // 1 B nested_descent_count
     out.extend_from_slice(intent.as_bytes()); // intent_len B
     // EIP-712 only: full 32-byte primary-type hash (audit M-5). Contract
     // formats omit this so their on-wire bytes are unchanged.
@@ -1588,6 +1602,425 @@ fn compile_one_field(
         path_off,
         param_off,
     })
+}
+
+/// Compile a format's fields as flat top-level records (the pre-Phase-5
+/// behaviour). `emit_bare_marker` parks the bare `[0x01]` `PARAM_NESTED_STRUCT`
+/// belt marker on the first field so the device declines the whole format —
+/// used for an EIP-712 format whose nested-struct shape is not v1-supported.
+#[allow(clippy::too_many_arguments)]
+fn compile_flat_fields(
+    sig: &str,
+    fmt: &Format,
+    context_kind: u8,
+    parsed: &ParsedFormatKey,
+    ctx: &mut CompileCtx,
+    pool: &mut Pool,
+    enum_offsets: &BTreeMap<String, u16>,
+    emit_bare_marker: bool,
+) -> Result<Vec<CompiledFieldOut>, String> {
+    let mut compiled: Vec<CompiledFieldOut> = Vec::with_capacity(fmt.fields.len());
+    for (i, field) in fmt.fields.iter().enumerate() {
+        let cf = compile_one_field(
+            sig,
+            i,
+            field,
+            context_kind,
+            parsed,
+            ctx,
+            pool,
+            enum_offsets,
+            emit_bare_marker && i == 0,
+        )?;
+        compiled.push(cf);
+    }
+    Ok(compiled)
+}
+
+/// One planned output record for an EIP-712 nested-struct format.
+enum NestedPlan {
+    /// A flat top-level field (its index into `fmt.fields`).
+    Flat(usize),
+    /// A nested-struct anchor: the struct top-member name, its word position in
+    /// the parent `encodeData`, its struct base type, and the `fmt.fields`
+    /// indices of its visible children (in descriptor order).
+    Anchor {
+        top: String,
+        word_pos: u16,
+        base: String,
+        children: Vec<usize>,
+    },
+}
+
+/// Try to compile an EIP-712 format that has ≥1 nested-struct member into the
+/// v0x03 recursive-IR shape (§4 + §10 of the design doc). Returns
+/// `Some((records, nested_descent_count))` on a v1-supported shape (single-level,
+/// NON-array, elementary children), or `Ok(None)` to fall back to the
+/// bare-marker belt (the caller then emits flat fields + `[0x01]` so the device
+/// declines the WHOLE format). `Err` only on a genuine build error.
+///
+/// v1 supported subset — anything outside it returns `Ok(None)`:
+///   * struct top members must be NON-array (`PermitDetails[]` → v2);
+///   * children are single-level (`details.amount`; `a.b.c` → v3);
+///   * children use only the {raw, amount, tokenAmount(local tokenPath), date}
+///     formats with the v1 param vocabulary;
+///   * every address-typed local word is covered by a visible child (E2).
+fn try_compile_eip712_nested(
+    sig: &str,
+    fmt: &Format,
+    parsed: &ParsedFormatKey,
+    ctx: &mut CompileCtx,
+    pool: &mut Pool,
+    enum_offsets: &BTreeMap<String, u16>,
+) -> Result<Option<(Vec<CompiledFieldOut>, u8)>, String> {
+    let mut plan: Vec<NestedPlan> = Vec::new();
+    // top-member name -> index into `plan` of its anchor (first appearance).
+    let mut anchor_at: BTreeMap<String, usize> = BTreeMap::new();
+
+    for (i, field) in fmt.fields.iter().enumerate() {
+        // Const-annotation / path-less fields are always flat top-level.
+        let Some(path) = field.path.as_deref() else {
+            plan.push(NestedPlan::Flat(i));
+            continue;
+        };
+        // v1 is single-level NON-array: any array op touching a member → defer.
+        if path.contains('[') {
+            return Ok(None);
+        }
+        let mut segs = path.split('.');
+        let top = segs.next().unwrap_or("");
+        let Some(pos) = parsed.top_names.iter().position(|n| n == top) else {
+            // Unknown top member — let the flat path surface the real error.
+            return Ok(None);
+        };
+        let (base, is_array) = split_array_suffix(&parsed.top_types[pos]);
+        if !type_is_struct(base, parsed) {
+            // Non-struct top member → flat field.
+            plan.push(NestedPlan::Flat(i));
+            continue;
+        }
+        // Struct top member.
+        if is_array {
+            return Ok(None); // array-of-struct is v2
+        }
+        // Exactly ONE further segment (`top.child`); no child or `a.b.c` → defer.
+        let child = segs.next();
+        if child.is_none() || segs.next().is_some() {
+            return Ok(None);
+        }
+        let word_pos =
+            u16::try_from(pos).map_err(|_| format!("format `{sig}`: too many top members"))?;
+        if let Some(&ai) = anchor_at.get(top) {
+            if let NestedPlan::Anchor { children, .. } = &mut plan[ai] {
+                children.push(i);
+            }
+        } else {
+            anchor_at.insert(top.to_string(), plan.len());
+            plan.push(NestedPlan::Anchor {
+                top: top.to_string(),
+                word_pos,
+                base: base.to_string(),
+                children: std::vec![i],
+            });
+        }
+    }
+
+    // Second pass — compile each planned record.
+    let mut compiled: Vec<CompiledFieldOut> = Vec::with_capacity(plan.len());
+    let mut descent_count: u16 = 0;
+    for item in &plan {
+        match item {
+            NestedPlan::Flat(i) => {
+                let cf = compile_one_field(
+                    sig,
+                    *i,
+                    &fmt.fields[*i],
+                    CTX_EIP712,
+                    parsed,
+                    ctx,
+                    pool,
+                    enum_offsets,
+                    false,
+                )?;
+                compiled.push(cf);
+            }
+            NestedPlan::Anchor {
+                top,
+                word_pos,
+                base,
+                children,
+            } => match compile_nested_anchor(sig, fmt, parsed, top, *word_pos, base, children, pool)?
+            {
+                Some(cf) => {
+                    compiled.push(cf);
+                    descent_count += 1;
+                }
+                // A child we couldn't compile → belt-decline the WHOLE format.
+                None => return Ok(None),
+            },
+        }
+    }
+
+    let descent_count = u8::try_from(descent_count)
+        .map_err(|_| format!("format `{sig}`: too many nested descents"))?;
+    Ok(Some((compiled, descent_count)))
+}
+
+/// Compile one nested-struct anchor into a `PARAM_NESTED_STRUCT` v0x03 record.
+/// Returns `Ok(None)` (→ caller belt-declines the format) on any shape outside
+/// the v1 subset. Pins `type_hash` from `struct_defs` (never companion-supplied),
+/// the `member_count` = the NESTED struct's own word count, an `addr_word_bitmap`
+/// (E2), and the visible children as LOCAL sub-fields (E5 local ordinals).
+#[allow(clippy::too_many_arguments)]
+fn compile_nested_anchor(
+    sig: &str,
+    fmt: &Format,
+    parsed: &ParsedFormatKey,
+    top: &str,
+    word_pos: u16,
+    base: &str,
+    children: &[usize],
+    pool: &mut Pool,
+) -> Result<Option<CompiledFieldOut>, String> {
+    let Some(members) = parsed.struct_defs.get(base) else {
+        return Ok(None);
+    };
+    let member_count = members.len();
+    if member_count == 0 || member_count > MAX_NESTED_MEMBERS {
+        return Ok(None);
+    }
+    // type_hash = keccak(encodeType(nested)) — dbgen-PINNED (rule 3). A failure
+    // to build the canonical `encodeType` (malformed / undefined referenced
+    // struct) is NOT a hard error: fall back to the bare-marker belt so the
+    // format still survives compilation (declined), exactly as it did before
+    // Phase 5, rather than being dropped from the corpus.
+    let type_hash = match eip712_nested_type_hash(base, &parsed.struct_defs) {
+        Ok(th) => th,
+        Err(_) => return Ok(None),
+    };
+
+    // address-word bitmap (E2): bit i set iff local member i is address-typed.
+    let bmp_len = member_count.div_ceil(8);
+    let mut addr_bmp = std::vec![0u8; bmp_len];
+    for (i, (_name, ty)) in members.iter().enumerate() {
+        if eip712_member_word_is_address(ty) {
+            addr_bmp[i / 8] |= 1u8 << (i % 8);
+        }
+    }
+
+    // Compile each visible child into a SubField record; `covered[w]` tracks the
+    // local words a child binds to a page (render path OR tokenPath) for E2.
+    let mut covered = std::vec![false; member_count];
+    let mut sub_fields: Vec<u8> = Vec::new();
+    let mut sub_field_cnt: u8 = 0;
+    for &fi in children {
+        let field = &fmt.fields[fi];
+        let path = field.path.as_deref().unwrap_or("");
+        // child = the single segment after `top.`.
+        let child = match path.strip_prefix(top).and_then(|r| r.strip_prefix('.')) {
+            Some(c) if !c.is_empty() && !c.contains('.') && !c.contains('[') => c,
+            _ => return Ok(None),
+        };
+        let Some(local_ord) = members.iter().position(|(n, _)| n == child) else {
+            return Ok(None);
+        };
+        let local_ord = u16::try_from(local_ord).expect("member_count ≤ MAX_NESTED_MEMBERS");
+        covered[local_ord as usize] = true; // the render path reads this word
+
+        // Child's format_op + LOCAL param blob (v1 vocabulary only).
+        let Some((format_op, param_blob)) =
+            compile_nested_subfield_params(field, top, members, &mut covered)?
+        else {
+            return Ok(None);
+        };
+
+        // Local render path: RootStructured + FieldIdx(local_ord).
+        let render_prog = [
+            PATHOP_ROOT_STRUCT,
+            PATHOP_FIELD_IDX,
+            (local_ord >> 8) as u8,
+            (local_ord & 0xff) as u8,
+        ];
+        let path_off = intern_path_program(pool, &render_prog)?;
+        let param_off = if param_blob.is_empty() {
+            0u16
+        } else {
+            intern_param_blob(pool, &param_blob)?
+        };
+
+        // SubField record: format_op | label_len | label | path_off | param_off
+        // (byte-identical to a top-level field record — the device reuses the
+        // same per-field renderer with `nested_ed` as the body).
+        let label = clean_ascii_truncated(field.label.as_deref().unwrap_or(""), 254);
+        sub_fields.push(format_op);
+        sub_fields.push(label.len() as u8);
+        sub_fields.extend_from_slice(label.as_bytes());
+        sub_fields.extend_from_slice(&path_off.to_be_bytes());
+        sub_fields.extend_from_slice(&param_off.to_be_bytes());
+        sub_field_cnt = sub_field_cnt
+            .checked_add(1)
+            .ok_or_else(|| format!("format `{sig}`: too many nested sub-fields"))?;
+    }
+
+    // E2 self-check: every address-typed local word must be covered by a visible
+    // child. The device enforces this independently, but a dbgen that emitted an
+    // uncovered-address block would produce a dead (always-declined) descriptor,
+    // so bail to the bare-marker belt here.
+    for i in 0..member_count {
+        if (addr_bmp[i / 8] >> (i % 8)) & 1 == 1 && !covered[i] {
+            return Ok(None);
+        }
+    }
+
+    // Assemble the v0x03 PARAM_NESTED_STRUCT payload.
+    let mut payload: Vec<u8> = Vec::new();
+    payload.push(0x03); // version byte: structured block (vs bare `0x01` belt)
+    payload.extend_from_slice(&word_pos.to_be_bytes());
+    payload.extend_from_slice(&type_hash);
+    payload.extend_from_slice(&(member_count as u16).to_be_bytes());
+    payload.push(0u8); // flags: bit0 is_array = 0 (v1 non-array); rest reserved
+    payload.extend_from_slice(&addr_bmp);
+    payload.push(sub_field_cnt);
+    payload.extend_from_slice(&sub_fields);
+    // The payload is wrapped in a `push_tlv` (2-byte header) then interned with a
+    // 1-byte length prefix, so it must leave room: `2 + payload.len() ≤
+    // MAX_POOL_TLV_PAYLOAD`. Overflow → belt-decline rather than truncate.
+    if payload.len() > MAX_POOL_TLV_PAYLOAD - 2 {
+        return Ok(None);
+    }
+
+    let mut param_blob: Vec<u8> = Vec::new();
+    push_tlv(&mut param_blob, PARAM_NESTED_STRUCT, &payload)?;
+    let param_off = intern_param_blob(pool, &param_blob)?;
+
+    // The anchor record renders nothing itself (the device descends on the
+    // marker, ignoring `format_op`/`path_off`); the label carries the member
+    // name for `erc7730.review.txt` readability.
+    let label = clean_ascii_truncated(top, 254);
+    Ok(Some(CompiledFieldOut {
+        format_op: FMT_RAW,
+        label: label.into_bytes(),
+        path_off: 0,
+        param_off,
+    }))
+}
+
+/// Build a nested sub-field's format_op + LOCAL param TLV blob (v1 vocabulary:
+/// visibility + tokenAmount local `tokenPath` + date encoding). Returns
+/// `Ok(None)` for any param shape outside v1 (→ caller belt-declines the format).
+/// Marks `covered[w]` for the local word a `tokenPath` IDs (E2 coverage).
+fn compile_nested_subfield_params(
+    field: &FieldDef,
+    top: &str,
+    members: &[(String, String)],
+    covered: &mut [bool],
+) -> Result<Option<(u8, Vec<u8>)>, String> {
+    let format_op = parse_format_name(field.format.as_deref().unwrap_or("raw"))?;
+    let mut out: Vec<u8> = Vec::new();
+
+    // Visibility — encode only if not the default `always`.
+    if let Some(v) = field.visible.as_deref() {
+        let byte = match v {
+            "always" => VIS_ALWAYS,
+            "never" => VIS_NEVER,
+            "optional" => VIS_OPTIONAL,
+            "if_not_in" | "ifNotIn" => VIS_IF_NOT_IN,
+            "must_match" | "mustMatch" => VIS_MUST_MATCH,
+            _ => return Ok(None),
+        };
+        if byte != VIS_ALWAYS {
+            push_tlv(&mut out, PARAM_VISIBILITY, &[byte])?;
+        }
+    }
+
+    let params = field.params.as_ref().and_then(|p| p.as_object());
+
+    match format_op {
+        FMT_RAW | FMT_AMOUNT => {
+            // Elementary: no path-bearing params modelled in v1. If the
+            // descriptor attaches params we don't understand, defer.
+            if params.is_some_and(|o| !o.is_empty()) {
+                return Ok(None);
+            }
+        }
+        FMT_TOKEN_AMOUNT => {
+            let Some(params) = params else { return Ok(None) };
+            // v1 supports ONLY a local `tokenPath` (`top.child`) — no fixed
+            // token, threshold, or message.
+            if params.keys().any(|k| k != "tokenPath") {
+                return Ok(None);
+            }
+            let Some(tp) = params.get("tokenPath").and_then(|v| v.as_str()) else {
+                return Ok(None);
+            };
+            // Strip the `top.` prefix; the remaining single segment is the local
+            // token member.
+            let tok_child = match tp.strip_prefix(top).and_then(|r| r.strip_prefix('.')) {
+                Some(c) if !c.is_empty() && !c.contains('.') && !c.contains('[') => c,
+                _ => return Ok(None), // cross-struct / array / deep tokenPath → v2+
+            };
+            let Some(tok_ord) = members.iter().position(|(n, _)| n == tok_child) else {
+                return Ok(None);
+            };
+            let tok_ord = u16::try_from(tok_ord).expect("member_count ≤ MAX_NESTED_MEMBERS");
+            covered[tok_ord as usize] = true; // the token address word is bound
+            let tok_prog = [
+                PATHOP_ROOT_STRUCT,
+                PATHOP_FIELD_IDX,
+                (tok_ord >> 8) as u8,
+                (tok_ord & 0xff) as u8,
+            ];
+            push_tlv(&mut out, PARAM_TOKEN_PATH, &tok_prog)?;
+        }
+        FMT_DATE => {
+            if let Some(params) = params {
+                if params.keys().any(|k| k != "encoding") {
+                    return Ok(None);
+                }
+                if let Some(enc) = params.get("encoding").and_then(|v| v.as_str()) {
+                    let b = match enc {
+                        "timestamp" => DATE_ENC_TIMESTAMP,
+                        "blockheight" => DATE_ENC_BLOCKHEIGHT,
+                        _ => return Ok(None),
+                    };
+                    push_tlv(&mut out, PARAM_DATE_ENCODING, &[b])?;
+                }
+            }
+        }
+        _ => return Ok(None), // any other nested format → v2+/unsupported
+    }
+
+    Ok(Some((format_op, out)))
+}
+
+/// Intern a path program into the pool (length-prefixed). Mirrors the inline
+/// idiom in `compile_one_field`.
+fn intern_path_program(pool: &mut Pool, prog: &[u8]) -> Result<u16, String> {
+    if prog.len() > MAX_PATH_PROGRAM_LEN {
+        return Err(format!(
+            "nested path program too long ({} > {MAX_PATH_PROGRAM_LEN})",
+            prog.len()
+        ));
+    }
+    let mut blob = Vec::with_capacity(1 + prog.len());
+    blob.push(prog.len() as u8);
+    blob.extend_from_slice(prog);
+    pool.intern(&blob)
+}
+
+/// Intern a param TLV blob into the pool (length-prefixed). Mirrors the inline
+/// idiom in `compile_one_field`.
+fn intern_param_blob(pool: &mut Pool, param_blob: &[u8]) -> Result<u16, String> {
+    if param_blob.len() > MAX_POOL_TLV_PAYLOAD {
+        return Err(format!(
+            "nested param blob too long ({} > {MAX_POOL_TLV_PAYLOAD})",
+            param_blob.len()
+        ));
+    }
+    let mut blob = Vec::with_capacity(1 + param_blob.len());
+    blob.push(param_blob.len() as u8);
+    blob.extend_from_slice(param_blob);
+    pool.intern(&blob)
 }
 
 fn compile_params(

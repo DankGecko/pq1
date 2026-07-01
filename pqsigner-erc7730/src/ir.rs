@@ -50,11 +50,25 @@ use core::convert::TryFrom;
 /// IR schema version. Bumped `0x01 → 0x02` when calldata `FieldIdx`
 /// args changed meaning from *logical ordinals* to *ABI head-word slots*
 /// (and a per-format `static_head_words` field was added to the format
-/// header). `parse` strict-rejects any other value, so a descriptor
-/// compiled under the old, slot-confusable encoding can never be walked
-/// by this firmware. See `docs/security/VULN-erc7730-walker-slot-confusion.md`.
-pub const SCHEMA_VER: u8 = 0x02;
+/// header). Bumped `0x02 → 0x03` for the nested-EIP-712 struct renderer
+/// (Phase 5): the format header gained a `nested_descent_count` pin (the
+/// E1 reconciliation tripwire — see `docs/erc7730-nested-eip712-render-design.md`
+/// §10), and `PARAM_NESTED_STRUCT` grew from a bare `[0x01]` belt marker to
+/// a self-describing payload whose leading version byte selects bare-decline
+/// (`0x01`) vs the structured v0x03 block (`0x03`). `parse` strict-rejects any
+/// other value, so a descriptor compiled under the old, slot-confusable
+/// encoding can never be walked by this firmware — and a 0x02 DB can never be
+/// mixed-interpreted by 0x03 firmware. Firmware + DB ship together under one
+/// pinned Merkle root, so the bump is clean.
+/// See `docs/security/VULN-erc7730-walker-slot-confusion.md`.
+pub const SCHEMA_VER: u8 = 0x03;
 pub const HEADER_LEN: usize = 134;
+
+/// Upper bound on a nested EIP-712 struct's own member count (the number
+/// of 32-byte words in ITS `encodeData`). Bounds `addr_word_bmp` size
+/// (`ceil(member_count/8)` ≤ 4 B) and keeps the Kani binding-verifier
+/// harness tractable. Permit2's structs have ≤4 members; leave headroom.
+pub const MAX_NESTED_MEMBERS: usize = 32;
 
 pub const CTX_CONTRACT: u8 = 0x01;
 pub const CTX_EIP712: u8 = 0x02;
@@ -422,13 +436,14 @@ impl<'a> Erc7730Ir<'a> {
 /// (`dbgen::erc7730::compile_one_format`):
 ///
 /// ```text
-///   selector          [u8; 4]
-///   field_count       u8       (≤ MAX_FIELDS_PER_FORMAT)
-///   intent_len        u8       (≤ 254, printable ASCII)
-///   static_head_words u16 BE   (ABI static head, in 32-byte words)
-///   intent            [u8; intent_len]
-///   type_hash         [u8; 32] (EIP-712 context ONLY — see below)
-///   field             [u8; ...]*  (field_count entries — see FieldEntry)
+///   selector             [u8; 4]
+///   field_count          u8       (≤ MAX_FIELDS_PER_FORMAT)
+///   intent_len           u8       (≤ 254, printable ASCII)
+///   static_head_words    u16 BE   (ABI static head, in 32-byte words)
+///   nested_descent_count u8       (schema v3 — E1 reconciliation pin)
+///   intent               [u8; intent_len]
+///   type_hash            [u8; 32] (EIP-712 context ONLY — see below)
+///   field                [u8; ...]*  (field_count entries — see FieldEntry)
 /// ```
 ///
 /// `static_head_words` is the number of 32-byte words in the function's
@@ -454,6 +469,15 @@ pub struct FormatHeader<'a> {
     /// calldata/typed-data body to this length before walking fields, so
     /// any path slot reaching past the static head is rejected. Schema v2.
     pub static_head_words: u16,
+    /// Number of nested-EIP-712 struct descent points in this format (the
+    /// count of `PARAM_NESTED_STRUCT` v0x03 anchors, recursively). Pinned by
+    /// dbgen from `struct_defs` — INDEPENDENT of the render traversal — so the
+    /// E1 reconciliation (`records_consumed == nested_descent_count`) is a real
+    /// regression tripwire, not a tautology: a future edit that makes descent
+    /// conditional drops the runtime consume-count below this pin → decline.
+    /// `0` for every contract-context format and every non-nested EIP-712
+    /// format. Schema v3.
+    pub nested_descent_count: u8,
     /// Trimmed printable ASCII intent string ("Sign", "Wrap", …).
     pub intent: &'a [u8],
     /// Full 32-byte EIP-712 primary-type hash (`keccak256(encodeType)`).
@@ -553,8 +577,8 @@ impl<'a> Iterator for FormatIter<'a> {
         self.remaining -= 1;
         let mut p = self.cursor;
         // Header: 4 (selector) + 1 (field_count) + 1 (intent_len)
-        //         + 2 (static_head_words).
-        if p + 8 > self.buf.len() {
+        //         + 2 (static_head_words) + 1 (nested_descent_count).
+        if p + 9 > self.buf.len() {
             return Some(Err(IrError::BadFormat));
         }
         let mut selector = [0u8; 4];
@@ -565,7 +589,8 @@ impl<'a> Iterator for FormatIter<'a> {
         }
         let intent_len = self.buf[p + 5] as usize;
         let static_head_words = u16::from_be_bytes([self.buf[p + 6], self.buf[p + 7]]);
-        p += 8;
+        let nested_descent_count = self.buf[p + 8];
+        p += 9;
         if p + intent_len > self.buf.len() {
             return Some(Err(IrError::BadFormat));
         }
@@ -603,6 +628,7 @@ impl<'a> Iterator for FormatIter<'a> {
             selector,
             field_count,
             static_head_words,
+            nested_descent_count,
             intent,
             type_hash,
             fields_buf,

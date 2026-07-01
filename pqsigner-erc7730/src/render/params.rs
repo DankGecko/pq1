@@ -120,11 +120,16 @@ pub struct ParamSet<'a> {
     /// Phase 4 only sees this when the VISIBILITY TLV's payload is
     /// longer than 1 byte; current `dbgen` only emits a 1-byte payload.
     pub visibility_values: Option<&'a [u8]>,
-    /// Set when this field carries the `PARAM_NESTED_STRUCT` marker: the
-    /// EIP-712 format contains a nested struct member the device cannot
-    /// faithfully expand, so the caller must decline the whole format to
-    /// blind-sign (`VULN-erc7730-eip712-nested-struct-address-hide`).
-    pub nested_struct: bool,
+    /// Set (to the raw `PARAM_NESTED_STRUCT` payload) when this field is a
+    /// nested-EIP-712 struct anchor. The payload's leading version byte selects
+    /// the shape: `0x01` = the bare belt marker (an unsupported nested member
+    /// the device declines the WHOLE format for —
+    /// `VULN-erc7730-eip712-nested-struct-address-hide`); `0x03` = the
+    /// structured v0x03 descent block (`word_pos | type_hash | member_count |
+    /// flags | addr_word_bmp | sub_fields`, parsed by the nested renderer).
+    /// Until the belt is inverted (Phase 5 Commit D), the caller declines on
+    /// EITHER form — the fail-safe.
+    pub nested_struct: Option<&'a [u8]>,
 }
 
 impl<'a> Default for ParamSet<'a> {
@@ -148,7 +153,7 @@ impl<'a> Default for ParamSet<'a> {
             const_value: None,
             visibility: Visibility::Always,
             visibility_values: None,
-            nested_struct: false,
+            nested_struct: None,
         }
     }
 }
@@ -263,13 +268,16 @@ pub fn parse<'a>(
             PARAM_FALLBACK_LABEL => p.fallback_label = Some(payload),
             PARAM_CONST_VALUE => p.const_value = Some(payload),
             PARAM_NESTED_STRUCT => {
-                // Presence is the signal; require the canonical 1-byte `0x01`
-                // payload so a malformed marker fails closed rather than
-                // being silently ignored.
-                if payload != [0x01] {
-                    return Err(RenderErr::Reject("7730 bad nested-struct marker"));
+                // A leading version byte selects the shape. `0x01` = bare belt
+                // marker; `0x03` = structured v0x03 descent block. Any other
+                // leading byte (or an empty payload) fails closed. The payload
+                // is stored raw; the renderer's belt declines on either form
+                // until Phase 5 Commit D inverts it to descend on `0x03`.
+                match payload.first() {
+                    Some(0x01) if payload.len() == 1 => p.nested_struct = Some(payload),
+                    Some(0x03) => p.nested_struct = Some(payload),
+                    _ => return Err(RenderErr::Reject("7730 bad nested-struct marker")),
                 }
-                p.nested_struct = true;
             }
             PARAM_VISIBILITY => {
                 if payload.is_empty() {
@@ -357,14 +365,33 @@ mod tests {
         let bytes = ir_with_pool(&pool);
         let ir = Erc7730Ir::parse(&bytes).unwrap();
         let p = parse(&ir, 1).unwrap();
-        assert!(p.nested_struct, "marker sets the flag");
+        assert_eq!(
+            p.nested_struct,
+            Some(&[0x01u8][..]),
+            "bare marker stores its payload"
+        );
+    }
+
+    #[test]
+    fn parses_nested_struct_v3_block() {
+        // 0x41 [0x03 ...] → the structured v0x03 block is stored raw for the
+        // nested renderer (leading version byte 0x03).
+        let pool = std::vec![0xFFu8, 4, 0x41, 0x02, 0x03, 0x00];
+        let bytes = ir_with_pool(&pool);
+        let ir = Erc7730Ir::parse(&bytes).unwrap();
+        let p = parse(&ir, 1).unwrap();
+        assert_eq!(
+            p.nested_struct,
+            Some(&[0x03u8, 0x00][..]),
+            "v0x03 block stored raw"
+        );
     }
 
     #[test]
     fn default_has_no_nested_struct_flag() {
         let bytes = ir_with_pool(&[]);
         let ir = Erc7730Ir::parse(&bytes).unwrap();
-        assert!(!parse(&ir, 0).unwrap().nested_struct);
+        assert!(parse(&ir, 0).unwrap().nested_struct.is_none());
     }
 
     #[test]

@@ -349,7 +349,10 @@ fn render_fields(
         // trips it. The build-time gate (`check_field_visibility` descent) is
         // the primary defense; this survives a gate regression and is the
         // hook point for the future Phase-5 faithful nested renderer.
-        if params.nested_struct {
+        // Declines on EITHER form of the marker (bare `0x01` belt or the
+        // structured v0x03 block) until Phase 5 Commit D inverts it to descend
+        // + bind the v0x03 block.
+        if params.nested_struct.is_some() {
             return Err(RenderErr::Reject("7730 eip712 nested struct"));
         }
         match should_render_with_mode(&params, None, COMPACT_MODE) {

@@ -582,3 +582,185 @@ fn vendored_uniswap_v3_router_curation_and_slices_all_compile() {
          exactInput, exactOutput, swapExactTokensForTokens, swapTokensForExactTokens)"
     );
 }
+
+// ── Nested-EIP-712 v0x03 anchor emission (Phase 5 v1) ──────────────────────
+
+fn hex_bytes(s: &str) -> Vec<u8> {
+    assert!(s.len() % 2 == 0);
+    (0..s.len() / 2)
+        .map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).unwrap())
+        .collect()
+}
+
+/// A length-prefixed pool entry (`[u8 len][bytes]`) at `off`; `off == 0` → empty.
+fn pool_entry<'a>(ir: &Erc7730Ir<'a>, off: u16) -> &'a [u8] {
+    if off == 0 {
+        return &[];
+    }
+    let o = off as usize;
+    let len = ir.pool[o] as usize;
+    &ir.pool[o + 1..o + 1 + len]
+}
+
+/// First TLV payload with `tag` in a param blob (`[tag][len][payload]`*).
+fn find_tlv(blob: &[u8], tag: u8) -> Option<&[u8]> {
+    let mut c = 0usize;
+    while c + 2 <= blob.len() {
+        let t = blob[c];
+        let l = blob[c + 1] as usize;
+        let pl = &blob[c + 2..c + 2 + l];
+        if t == tag {
+            return Some(pl);
+        }
+        c += 2 + l;
+    }
+    None
+}
+
+struct SubField {
+    format_op: u8,
+    path_off: u16,
+    param_off: u16,
+}
+
+/// Read one `{format_op, label_len, label, path_off, param_off}` sub-field
+/// record from `payload` at `p`; returns the record + the next cursor.
+fn read_subfield(payload: &[u8], p: usize) -> (SubField, usize) {
+    let format_op = payload[p];
+    let label_len = payload[p + 1] as usize;
+    let q = p + 2 + label_len;
+    let path_off = u16::from_be_bytes([payload[q], payload[q + 1]]);
+    let param_off = u16::from_be_bytes([payload[q + 2], payload[q + 3]]);
+    (
+        SubField {
+            format_op,
+            path_off,
+            param_off,
+        },
+        q + 4,
+    )
+}
+
+/// The nested-struct anchor payload of `fmt` (the `PARAM_NESTED_STRUCT` = 0x41
+/// TLV), or `None` if the format has no v0x03 anchor.
+fn nested_anchor_payload(ir: &Erc7730Ir<'_>, type_hash: &[u8]) -> Option<Vec<u8>> {
+    let fmt = ir
+        .format_iter()
+        .map(|f| f.expect("format parses"))
+        .find(|f| f.type_hash[..] == type_hash[..])?;
+    let payload = fmt
+        .fields()
+        .map(|f| f.expect("field parses"))
+        .find_map(|fe| find_tlv(pool_entry(ir, fe.param_off), 0x41).map(<[u8]>::to_vec));
+    payload.map(|pl| {
+        // Also cross-check the E1 pin as a side effect of every lookup.
+        assert_eq!(fmt.nested_descent_count, 1, "one nested descent point");
+        pl
+    })
+}
+
+fn keccak_hex(s: &str) -> String {
+    let h = keccak256(s.as_bytes());
+    h.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Byte-level proof of the nested-EIP-712 v0x03 anchor emission (Phase 5 v1),
+/// against the REAL shipped DB (the tolerant registry build — the one the pinned
+/// Merkle root is cut from, so this is exactly what the device parses).
+///
+///  * `PermitSingle` → anchor: version 0x03, word_pos 0 (details is the FIRST
+///    *member* — proves member order, not field order), foundry-pinned
+///    `typeHash(PermitDetails)`, member_count 4, flags 0, addr_word_bmp 0x01
+///    (only local word 0 = token is an address), two LOCAL sub-fields:
+///      amount → tokenAmount, render FieldIdx(1), tokenPath FieldIdx(0)=token;
+///      expiration → date(timestamp), render FieldIdx(2).
+///    `nonce` (local word 3) + top-level `sigDeadline` stay hidden — the hash
+///    still covers them (member_count pins the blob length; E5 + rule 3).
+///  * `PermitTransferFrom` → DROPPED (pre-existing completeness lint: its top
+///    member `nonce` (uint256) is undeclared in the vendored descriptor). A
+///    one-line curation (`nonce` `visible:"never"`) unlocks it — v1 follow-up,
+///    NOT a nested-renderer gap.
+///  * `PermitBatch` (`PermitDetails[]`, array-of-struct) → DROPPED by the
+///    pre-existing visibility gate (v1 scope boundary), so its format is ABSENT.
+#[test]
+fn permit2_nested_anchor_emission_is_byte_exact() {
+    let registry = build_registry();
+    let permit2 = hex_bytes("000000000022d473030f116ddee9f6b43ac78ba3");
+    let leaf = registry
+        .entries
+        .iter()
+        .find(|e| e.contract[..] == permit2[..])
+        .expect("Permit2 leaf present in the shipped registry DB");
+    let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("permit2 IR parses");
+
+    // ── PermitSingle ──
+    let single = hex_bytes("f3841cd1ff0085026a6327b620b67997ce40f282c88a8e905a7a5626e310f3d0");
+    let payload = nested_anchor_payload(&ir, &single).expect("PermitSingle anchor present");
+    assert_eq!(payload[0], 0x03, "structured v0x03 block (not the bare 0x01 belt)");
+    assert_eq!(
+        u16::from_be_bytes([payload[1], payload[2]]),
+        0,
+        "word_pos 0 — details is member 0 (member order, not field order)"
+    );
+    assert_eq!(
+        &payload[3..35],
+        &hex_bytes("65626cad6cb96493bf6f5ebea28756c966f023ab9e8a83a7101849d5573b3678")[..],
+        "pinned typeHash(PermitDetails) matches foundry"
+    );
+    assert_eq!(
+        u16::from_be_bytes([payload[35], payload[36]]),
+        4,
+        "member_count 4 (PermitDetails' OWN word count — pins the blob length)"
+    );
+    assert_eq!(payload[37], 0, "flags: non-array");
+    assert_eq!(payload[38], 0x01, "addr_word_bmp: only local word 0 (token) is address");
+    assert_eq!(payload[39], 2, "two visible sub-fields (amount + expiration)");
+    let (sf0, next) = read_subfield(&payload, 40);
+    assert_eq!(sf0.format_op, 0x03, "sub-field 0 is tokenAmount");
+    assert_eq!(
+        pool_entry(&ir, sf0.path_off),
+        [0x10, 0x20, 0x00, 0x01],
+        "amount render path = RootStructured+FieldIdx(1) (local word 1)"
+    );
+    assert_eq!(
+        find_tlv(pool_entry(&ir, sf0.param_off), 0x30).expect("tokenPath TLV"),
+        [0x10, 0x20, 0x00, 0x00],
+        "tokenPath = RootStructured+FieldIdx(0) (local word 0 = token)"
+    );
+    let (sf1, _) = read_subfield(&payload, next);
+    assert_eq!(sf1.format_op, 0x05, "sub-field 1 is date");
+    assert_eq!(
+        pool_entry(&ir, sf1.path_off),
+        [0x10, 0x20, 0x00, 0x02],
+        "expiration render path = RootStructured+FieldIdx(2) (local word 2)"
+    );
+    assert_eq!(
+        find_tlv(pool_entry(&ir, sf1.param_off), 0x36).expect("date-encoding TLV"),
+        [0x00],
+        "date encoding = timestamp"
+    );
+
+    // ── PermitTransferFrom — DROPPED (undeclared `nonce`), so ABSENT. ──
+    // When the descriptor is curated (v1 follow-up) this flips to a present
+    // anchor with typeHash(TokenPermissions)=0x618358ac…; until then, assert it
+    // is genuinely absent so the follow-up is visible + un-forgotten.
+    let ptf = hex_bytes("939c21a48a8dbe3a9a2404a1d46691e4d39f6583d6ec6b35714604c986d80106");
+    assert!(
+        ir.format_iter()
+            .map(|f| f.expect("format parses"))
+            .all(|f| f.type_hash[..] != ptf[..]),
+        "PermitTransferFrom is dropped until the `nonce` completeness curation lands"
+    );
+
+    // ── PermitBatch (array-of-struct) — v1 scope boundary: DROPPED, absent. ──
+    let batch = hex_bytes(&keccak_hex(
+        "PermitBatch(PermitDetails[] details,address spender,uint256 sigDeadline)\
+         PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)",
+    ));
+    assert!(
+        ir.format_iter()
+            .map(|f| f.expect("format parses"))
+            .all(|f| f.type_hash[..] != batch[..]),
+        "PermitBatch (array-of-struct) must be absent in v1 (dropped by the visibility gate)"
+    );
+}
