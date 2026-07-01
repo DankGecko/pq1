@@ -198,3 +198,93 @@ addresses left-padded, etc.), DFS order.
   change; confirm no other consumer pins 0x02.
 - Whether v1 emits the nested block only for the two Permit2 formats (corpus delta small, low blast
   radius) and leaves UniswapX belt-declined until v2/v3.
+
+## 10. Schema-review outcome + MANDATED edits (2026-07-01) — the authoritative impl spec
+
+A 5-lens adversarial review of this schema (before any code) confirmed the **binding spine is SOUND**
+(`keccak(pinned type_hash ‖ companion nested_ed) == committed word`, checked constant-time before
+render, gives shown==signed by collision-resistance under full companion control of `ed` and
+`nested_ed`) and the **exact-length `member_count×32`** discipline. Verdict: *implement-with-edits*.
+The following are BINDING and supersede the affected parts above. Implementation follows §2 (binding) +
+§3 (rules) as amended here.
+
+### E1 — Unconditional descent + binding at every depth (Gap C, HIGH — the #1 invariant)
+
+The `PARAM_NESTED_STRUCT` descent — pull the next `nested_ed` record, verify
+`keccak(type_hash ‖ nested_ed) == committed_word` — MUST run on the **structural marker alone**,
+evaluated **BEFORE and INDEPENDENT of** `should_render_with_mode` / `COMPACT_MODE` / any
+value-conditional visibility, at **every** depth. Only the *rendering* of an already-bound sub-field
+may be visibility-gated; a hidden/skipped sub-field is just a word the hash already covers. The natural
+"recurse sub-fields through the visibility loop" implementation (and any future COMPACT_MODE re-enable
+of the dormant `Action::Skip` path) would silently reintroduce the fixed nested-address-hide VULN — this
+is exactly what the schema-first review exists to prevent. dbgen **forces the anchor member's visibility
+to `Always`** and asserts it. **Fail-loud reconciliation (mandatory):** after the whole format renders,
+`records_consumed == (number of nested-descent points in the format)` AND `cursor == nested_blob_len`,
+else decline. (This is the top-level analog of the belt: the device proves it bound every nested word.)
+
+### E2 — Standalone address-coverage backstop: address-word bitmap in the TLV (Gap A, HIGH)
+
+Rule 1 forbids only *trailing* unshown words; it permits a hidden *interior* member. So a bound-but-
+unshown interior **address** word (e.g. `PermitDetails.token` omitted) renders benign while the keccak
+check still passes — the hidden-tail attack pushed one level down, reachable under any `check_eip712_
+member_addresses` build-gate defect. §3-rule-2 promises the belt "survives a gate regression"; the TLV
+as first drafted cannot deliver that. **Edit:** `PARAM_NESTED_STRUCT` payload gains a dbgen-derived
+`addr_word_bitmap` (one bit per local word, set iff that member's type is address-bearing — computed
+from `struct_defs`). The device **declines the whole format** if any address-typed local word is not
+covered by a visible sub-field's `path` or shown-amount `tokenPath` (or an explicit reviewed-allowlist
+entry) — **independent of** whether the build gate ran correctly. The belt is thus a standalone control,
+not a mirror of the gate.
+
+### E3 — Wire version at the WIRE level, not the descriptor (Gap B, MEDIUM — framing blocker)
+
+The `nested_blob` presence cannot be gated on the descriptor `SCHEMA_VER`: that lives inside the trailer
+that `cmd_sign_offchain` parses AFTER the post-`ed` `u16` slot, so the device can't tell whether that
+`u16` is `nested_blob_len` or `trailer_len` before parsing the not-yet-reached trailer (and "always
+present" misreads a v0x02 companion's `trailer_len`). **Edit:** allocate a new wire kind
+`OFFCHAIN_KIND_EIP712_TYPED_V3` whose parser UNCONDITIONALLY expects
+`… [ed_len][ed] [u16 nested_blob_len][nested_blob] [u16 trailer_len][trailer]` (`nested_blob_len == 0`
+when the format has no nested struct). v0x02 companions stay on `OFFCHAIN_KIND_EIP712_TYPED` unchanged —
+true backward-compat. Drop the "or the field is absent" option. **Also reserve** a `[u16 elem_count]`
+prefix on `is_array` records now (bounded by `MAX_NESTED_ARRAY`) so v2 arrays are self-delimiting
+without a second wire bump.
+
+### E4 — Three fail-closed invariants (Gap D, MEDIUM)
+
+1. **Atomicity.** Every decline trigger is a single hard error that unwinds and DISCARDS all
+   already-pushed pages — the confirm dialog never receives a partially-rendered page set. No
+   per-sub-field skip-and-continue.
+2. **Local bounds.** Every SubField requires `local_ordinal < member_count`; each `nested_ed` is exactly
+   `member_count × 32` and a sub-field read is bounded to it (the per-record analog of `head_bounded_body`).
+   An ordinal `≥ member_count` would read into the ADJACENT DFS record (cross-struct slot-confusion) —
+   decline instead.
+3. **Total consumption.** The DFS parse must end EXACTLY at `nested_blob_len` (folds into E1): a shortfall
+   (fewer records than descent points) or trailing bytes → decline.
+
+### E5 — Precise sub-field local-ordinal + member_count (Gap E, LOW)
+
+A SubField's **LOCAL ordinal = the member's index in the NESTED struct's own `struct_defs` member list**
+(declaration order == its `encodeData` word index) — derived identically to `word_pos`, NOT the
+visible-sub-field index (which would read `amount`→word 0 = the token address, a mis-scale) and NOT
+`resolve_field_index`/`inner_names` (empty for EIP-712 → ABI-hash garbage). Correct **`member_count` =
+the NESTED struct's own member count** (# of 32-byte words in ITS `encodeData`), not the parent's.
+**One authoritative DFS order** is used by BOTH sides — the device's descriptor-field descent order; the
+companion guide MUST specify records in that exact order (with the E1 reconciliation catching any drift).
+
+### Net updated `PARAM_NESTED_STRUCT` payload (v0x03)
+
+```
+word_pos       : u16 BE      -- member hashStruct word index in PARENT encoded_data (member order)
+type_hash      : [u8; 32]    -- keccak(encodeType(nested)), pinned (rule 3)
+member_count   : u16 BE      -- NESTED struct's own member count (== nested_ed / 32) (E5, rule 1)
+flags          : u8          -- bit0 = is_array (v2); rest reserved 0
+addr_word_bmp  : ceil(member_count/8) bytes -- bit i set iff local word i is address-bearing (E2)
+sub_field_cnt  : u8
+sub_fields     : [SubField]  -- visible only; LOCAL ordinals per E5; may recurse (PARAM_NESTED_STRUCT)
+```
+
+Everything else in §1–§9 stands. v1 build order: dbgen recursive-IR emission (word_pos from member
+order, type_hash pinned + foundry-checked, member_count, addr_word_bmp, sub_fields local ordinals) →
+`hashStruct` primitive + binding verifier (E1 unconditional, E2 backstop, E4 bounds) → `TYPED_V3` wire
+kind → device recurse+render (atomic, E1 reconciliation) → Kani (adversarial nested_blob) → flip→decline
+real-vector render tests (Permit2 PermitSingle/PermitTransferFrom) → impl adversarial review.
+
