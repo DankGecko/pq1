@@ -765,7 +765,10 @@ pub fn validate_data_len(total_len: usize, data_len_raw: u16) -> Option<usize> {
 
 #[cfg(kani)]
 mod kani_harnesses {
-    use super::{decode_flags, validate_data_len};
+    use super::{
+        decode_flags, reconstruct_execute_calldata, validate_data_len, Eip1559Tx, EXECUTE_SELECTOR,
+        SELECTOR_LEN, U256, WORD,
+    };
 
     /// `decode_flags` is total (panic/overflow-free for every `u32`) and its
     /// extracted bitfields are bounded to their documented widths (8b account,
@@ -789,6 +792,145 @@ mod kani_harnesses {
         if let Some(d) = validate_data_len(total_len, raw) {
             assert!(d <= pqsigner_proto::MAX_TX_LEN);
             assert!(pqsigner_proto::SIGN_USEROP_HEADER_LEN + d <= total_len);
+        }
+    }
+
+    /// Panic / overflow / slice-OOB freedom of `reconstruct_execute_calldata`
+    /// over symbolic inputs — it runs on companion-supplied `(ownerIndex,
+    /// offchainCount, tx, data)` and must terminate for every input
+    /// (contract-creation `to == None` and over-long calldata are the two hard
+    /// refusals; everything else builds the buffer). Pure byte-assembly, no
+    /// hash — so it is fully Kani-reachable (unlike the userOpHash keccak).
+    #[kani::proof]
+    #[kani::unwind(65)]
+    fn reconstruct_execute_panic_free() {
+        const M: usize = 64;
+        let owner_index: u64 = kani::any();
+        let new_offchain_count: u64 = kani::any();
+        let to_present: bool = kani::any();
+        let to: [u8; 20] = kani::any();
+        let value: [u8; 32] = kani::any();
+        let data: [u8; M] = kani::any();
+        let dlen: usize = kani::any();
+        kani::assume(dlen <= M);
+        let tx = Eip1559Tx {
+            to: if to_present { Some(to) } else { None },
+            value: U256(value),
+            ..Default::default()
+        };
+        let _ = reconstruct_execute_calldata(owner_index, new_offchain_count, &tx, &data[..dlen]);
+    }
+
+    /// Layout soundness (EXHAUSTIVE for `dlen <= 64`): when
+    /// `reconstruct_execute_calldata` returns `Ok`, the buffer is byte-for-byte
+    /// the canonical `execute(...)` ABI encoding — `selector || ownerIndex ||
+    /// offchainCount || target || value || offset(0xa0) || dataLen || data ||
+    /// zero-pad`, every uint right-aligned with top bytes zero, the address
+    /// left-padded, and `len == 4 + 6*32 + ceil32(dlen)`. This is EXACTLY the
+    /// calldata the on-chain wallet executes; a layout bug = the userOp runs
+    /// something other than what was signed.
+    #[kani::proof]
+    #[kani::unwind(65)]
+    fn reconstruct_execute_layout() {
+        const M: usize = 64;
+        let owner_index: u64 = kani::any();
+        let new_offchain_count: u64 = kani::any();
+        let to: [u8; 20] = kani::any();
+        let value: [u8; 32] = kani::any();
+        let data: [u8; M] = kani::any();
+        let dlen: usize = kani::any();
+        kani::assume(dlen <= M);
+        let tx = Eip1559Tx {
+            to: Some(to),
+            value: U256(value),
+            ..Default::default()
+        };
+
+        if let Ok(out) =
+            reconstruct_execute_calldata(owner_index, new_offchain_count, &tx, &data[..dlen])
+        {
+            let b = &out.buf;
+            let padded = (dlen + 31) & !31usize;
+            assert_eq!(out.len, SELECTOR_LEN + 6 * WORD + padded);
+
+            // selector [0..4]
+            let mut i = 0;
+            while i < 4 {
+                assert_eq!(b[i], EXECUTE_SELECTOR[i]);
+                i += 1;
+            }
+            // ownerIndex word [4..36]: top 24 zero, u64 BE in the low 8
+            let ob = owner_index.to_be_bytes();
+            let mut z = 4;
+            while z < 28 {
+                assert_eq!(b[z], 0);
+                z += 1;
+            }
+            let mut j = 0;
+            while j < 8 {
+                assert_eq!(b[28 + j], ob[j]);
+                j += 1;
+            }
+            // newOffchainCount word [36..68]
+            let cb = new_offchain_count.to_be_bytes();
+            let mut z2 = 36;
+            while z2 < 60 {
+                assert_eq!(b[z2], 0);
+                z2 += 1;
+            }
+            let mut k = 0;
+            while k < 8 {
+                assert_eq!(b[60 + k], cb[k]);
+                k += 1;
+            }
+            // target word [68..100]: 12 zero + 20-byte left-padded address
+            let mut z3 = 68;
+            while z3 < 80 {
+                assert_eq!(b[z3], 0);
+                z3 += 1;
+            }
+            let mut t = 0;
+            while t < 20 {
+                assert_eq!(b[80 + t], to[t]);
+                t += 1;
+            }
+            // value word [100..132] verbatim
+            let mut v = 0;
+            while v < 32 {
+                assert_eq!(b[100 + v], value[v]);
+                v += 1;
+            }
+            // offset word [132..164]: all zero except the 0xa0 low byte
+            let mut z4 = 132;
+            while z4 < 163 {
+                assert_eq!(b[z4], 0);
+                z4 += 1;
+            }
+            assert_eq!(b[163], 0xa0);
+            // dataLen word [164..196]
+            let db = (dlen as u64).to_be_bytes();
+            let mut z5 = 164;
+            while z5 < 188 {
+                assert_eq!(b[z5], 0);
+                z5 += 1;
+            }
+            let mut d = 0;
+            while d < 8 {
+                assert_eq!(b[188 + d], db[d]);
+                d += 1;
+            }
+            // data tail [196..196+dlen] verbatim
+            let mut e = 0;
+            while e < dlen {
+                assert_eq!(b[196 + e], data[e]);
+                e += 1;
+            }
+            // zero-pad [196+dlen..len]
+            let mut pz = 196 + dlen;
+            while pz < out.len {
+                assert_eq!(b[pz], 0);
+                pz += 1;
+            }
         }
     }
 }
