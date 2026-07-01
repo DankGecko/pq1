@@ -1770,6 +1770,7 @@ fn parse_format_name(name: &str) -> Result<u8, String> {
 /// `"exactInputSingle((address tokenIn,address tokenOut,...) params)"`.
 /// We strip parameter names for the keccak selector but keep them
 /// indexed for path resolution.
+#[derive(Debug)]
 struct ParsedFormatKey {
     /// Types-only signature, e.g. `"exactInputSingle((address,address,...))"`.
     types_signature: String,
@@ -2221,6 +2222,29 @@ fn hidden_address_err(sig: &str, arg_path: &str) -> String {
     )
 }
 
+/// The first name that appears more than once in `names` (empty names —
+/// which no path can address — are ignored). A duplicate name defeats the
+/// NAME-keyed tuple-member coverage/visibility gates
+/// (`check_contract_field_completeness` + `check_field_visibility` rule 2 both
+/// test membership with the position-blind `path_covers_tuple_member`): one
+/// field would "cover" two distinct ABI slots, so an aliased effect-bearing
+/// member (e.g. a duplicated `collateralToken` address that co-defines a
+/// Morpho market) is signed but never rendered — a WYSIWYS break behind a
+/// reassuring clear-sign. `parse_format_key` rejects it fail-closed. A real
+/// Solidity function signature / struct never has duplicate parameter names,
+/// so this refuses only malformed / crafted descriptors (→ loud blind-sign).
+fn first_duplicate_name(names: &[String]) -> Option<&str> {
+    for (i, n) in names.iter().enumerate() {
+        if n.is_empty() {
+            continue;
+        }
+        if names[..i].iter().any(|m| m == n) {
+            return Some(n);
+        }
+    }
+    None
+}
+
 fn parse_format_key(sig: &str) -> Result<ParsedFormatKey, String> {
     let sig = sig.trim();
     let name_end = sig
@@ -2272,6 +2296,20 @@ fn parse_format_key(sig: &str) -> Result<ParsedFormatKey, String> {
                 names.push(last_ident(inner_arg).to_string());
                 types.push(strip_one_arg(inner_arg));
             }
+            // WYSIWYS: the completeness + visibility gates resolve tuple members
+            // by NAME (position-blind `path_covers_tuple_member`). A duplicate
+            // member name would let ONE field cover TWO distinct ABI slots, so an
+            // aliased effect-bearing member (e.g. a duplicated `collateralToken`
+            // address that co-defines a Morpho market) is signed but never shown.
+            // Reject fail-closed (a real Solidity struct has no dup member names).
+            if let Some(dup) = first_duplicate_name(&names) {
+                return Err(format!(
+                    "tuple `{outer_name}` has duplicate member name `{dup}`; the on-device \
+                     renderer and the completeness/visibility gates address tuple members by \
+                     name, so a duplicate would hide the aliased member behind a trusted \
+                     clear-sign (WYSIWYS). Refused."
+                ));
+            }
             inner_names.insert(outer_name.to_string(), names);
             inner_types.insert(outer_name.to_string(), types);
             let _ = stripped; // silence unused
@@ -2279,6 +2317,17 @@ fn parse_format_key(sig: &str) -> Result<ParsedFormatKey, String> {
             top_names.push(last_ident(arg).to_string());
             top_types.push(strip_one_arg(arg));
         }
+    }
+
+    // Symmetric top-level guard. `path_top_param_index` IS position-aware, so a
+    // duplicate top-level name is already caught downstream by completeness —
+    // but reject it here too, fail-closed, so the rule is uniform with the
+    // tuple-member guard above and a crafted descriptor never reaches the gates.
+    if let Some(dup) = first_duplicate_name(&top_names) {
+        return Err(format!(
+            "format key has duplicate top-level argument name `{dup}`; a real function \
+             signature has no duplicate parameter names. Refused."
+        ));
     }
 
     Ok(ParsedFormatKey {
@@ -3664,6 +3713,96 @@ mod tests {
         assert_eq!(inner.len(), 7);
         assert_eq!(inner[0], "tokenIn");
         assert_eq!(inner[4], "amountIn");
+    }
+
+    // ── Duplicate-member-name WYSIWYS guard (adversarial-review finding 2026-07-01) ──
+
+    /// A crafted descriptor with a DUPLICATE tuple-member name is refused. The
+    /// Morpho `supply` witness: inner member #1 (`collateralToken`) renamed to a
+    /// DUPLICATE of member #0 (`loanToken`). Types are identical (both `address`)
+    /// so `strip_param_names` yields the real selector and the descriptor would
+    /// dispatch on genuine `supply()` calls — but the name-keyed gates would let
+    /// the single `loanToken` field cover BOTH slots, hiding the effect-bearing
+    /// `collateralToken` (part of the Morpho market id) behind a trusted clear-sign.
+    #[test]
+    fn parse_format_key_rejects_duplicate_tuple_member_name() {
+        let err = parse_format_key(
+            "supply((address loanToken, address loanToken, address oracle, address irm, uint256 lltv) marketParams, uint256 assets, uint256 shares, address onBehalf, bytes data)",
+        )
+        .expect_err("duplicate tuple-member name must be refused");
+        assert!(err.contains("duplicate member name"), "err names the cause: {err}");
+        assert!(err.contains("loanToken"), "err names the dup: {err}");
+        // The real, distinct-named Morpho signature still parses.
+        assert!(parse_format_key(
+            "supply((address loanToken, address collateralToken, address oracle, address irm, uint256 lltv) marketParams, uint256 assets, uint256 shares, address onBehalf, bytes data)",
+        )
+        .is_ok());
+    }
+
+    /// Symmetric guard: a duplicate TOP-LEVEL argument name is refused too.
+    #[test]
+    fn parse_format_key_rejects_duplicate_top_level_name() {
+        let err = parse_format_key("f(address to, uint256 to)")
+            .expect_err("duplicate top-level name must be refused");
+        assert!(err.contains("duplicate top-level argument name"), "{err}");
+    }
+
+    /// Proves the parse_format_key guard is LOAD-BEARING: if a duplicate-named
+    /// tuple ever reached the gates, BOTH `check_contract_field_completeness` and
+    /// `check_field_visibility` (name-keyed, position-blind) would WRONGLY accept
+    /// it — one `loanToken` field "covers" both inner slots, so the aliased
+    /// address at slot 1 is deemed both covered and shown. The gates are
+    /// insufficient alone; rejecting duplicates in the parser is what closes it.
+    #[test]
+    fn dup_member_gates_are_insufficient_without_parse_guard() {
+        // Hand-build the ParsedFormatKey the OLD parser produced (dup `loanToken`
+        // at inner slots 0 AND 1), bypassing the new guard.
+        let s = |x: &str| x.to_string();
+        let mut inner_names = BTreeMap::new();
+        inner_names.insert(
+            s("marketParams"),
+            vec![s("loanToken"), s("loanToken"), s("oracle"), s("irm"), s("lltv")],
+        );
+        let mut inner_types = BTreeMap::new();
+        inner_types.insert(
+            s("marketParams"),
+            vec![s("address"), s("address"), s("address"), s("address"), s("uint256")],
+        );
+        let parsed = ParsedFormatKey {
+            types_signature: s("supply((address,address,address,address,uint256),uint256,uint256,address,bytes)"),
+            top_names: vec![s("marketParams"), s("assets"), s("shares"), s("onBehalf"), s("data")],
+            top_types: vec![
+                s("(address,address,address,address,uint256)"),
+                s("uint256"),
+                s("uint256"),
+                s("address"),
+                s("bytes"),
+            ],
+            inner_names,
+            inner_types,
+        };
+        // The malicious descriptor shows one loanToken field but NO collateralToken.
+        let fmt = fmt_from_fields(
+            r##"[
+              {"path":"#.marketParams.loanToken","label":"Loan","format":"addressName"},
+              {"path":"#.marketParams.oracle","label":"Oracle","format":"addressName"},
+              {"path":"#.marketParams.irm","label":"Irm","format":"addressName"},
+              {"path":"#.marketParams.lltv","label":"Lltv","format":"raw"},
+              {"path":"#.assets","label":"Assets","format":"raw"},
+              {"path":"#.shares","label":"Shares","format":"raw"},
+              {"path":"#.onBehalf","label":"On Behalf","format":"addressName"},
+              {"path":"#.data","label":"Data","format":"raw"}
+            ]"##,
+        );
+        // BOTH gates WRONGLY accept — the hole the parse guard closes.
+        assert!(
+            check_contract_field_completeness("supply(...)", &fmt, &parsed).is_ok(),
+            "completeness is name-keyed → one loanToken field covers both slots"
+        );
+        assert!(
+            check_field_visibility("supply(...)", &fmt, &parsed, CTX_CONTRACT, &[]).is_ok(),
+            "visibility rule 2 is name-keyed → aliased address deemed shown"
+        );
     }
 
     #[test]
