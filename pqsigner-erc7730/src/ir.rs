@@ -643,6 +643,29 @@ pub struct FieldIter<'a> {
     remaining: u8,
 }
 
+impl<'a> FieldIter<'a> {
+    /// Iterate `count` [`FieldEntry`] records from an arbitrary buffer. The
+    /// sub-field records inside a `PARAM_NESTED_STRUCT` v0x03 block share the
+    /// FieldEntry wire format (`format_op | label_len | label | path_off |
+    /// param_off`), so the nested-struct renderer reuses this exact parser —
+    /// including its label-ASCII + bounds checks — instead of re-implementing
+    /// it. Schema v3.
+    pub fn from_buf(buf: &'a [u8], count: u8) -> Self {
+        FieldIter {
+            buf,
+            cursor: 0,
+            remaining: count,
+        }
+    }
+
+    /// Bytes consumed so far. Used by the nested renderer to assert the
+    /// sub-field records consume EXACTLY the block (no trailing bytes) — the
+    /// per-block half of the E4-3 total-consumption invariant.
+    pub fn cursor(&self) -> usize {
+        self.cursor
+    }
+}
+
 impl<'a> Iterator for FieldIter<'a> {
     type Item = Result<FieldEntry<'a>, IrError>;
 

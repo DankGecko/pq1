@@ -13,6 +13,7 @@
 
 pub mod array;
 pub mod enums;
+pub mod nested;
 pub mod params;
 pub mod resolve;
 pub mod visibility;
