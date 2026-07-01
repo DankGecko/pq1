@@ -1,9 +1,11 @@
 # What the formal-verification stack has actually bought us (empirical calibration)
 
-**Snapshot date: 2026-06-29.** Counts below are a claim about the *surveyed git
-history up to this date*, not a timeless statement about FV's capability. A
-future defect or soundness catch should update this file, not silently falsify a
-sentence in it.
+**Snapshot date: 2026-07-01** (re-surveyed from the original 2026-06-29 to fold
+in the *executed* firmware bounded-verification track — the actionable highest-
+ROI gap-closer this file flagged has since landed; see the **UPDATE 2026-07-01**
+notes below). Counts below are a claim about the *surveyed git history up to this
+date*, not a timeless statement about FV's capability. A future defect or
+soundness catch should update this file, not silently falsify a sentence in it.
 
 **This file is NOT a source of truth for what is *claimable*.** That is
 [`THE_CLAIM.md`](./THE_CLAIM.md) (the SSOT for the claimable / not-claimable
@@ -119,6 +121,32 @@ run on the *host* toolchain over host-reachable logic, and the highest-risk
 much about *where they can look* as about the code being clean. That, too, is
 the coverage gap, not a clean bill of health.
 
+> **UPDATE 2026-07-01 — "where they can look" has since been widened
+> deliberately.** The clear-sign decode/classify surface — the structural layer
+> of the exact path where the real HIGHs lived — was *extracted* into
+> host-compilable workspace crates (`pqsigner-tx`, `pqsigner-erc7730`,
+> `sphincs-tz-shared`, plus the `fw-manifest` FW-update chain) and exhaustively
+> Kani-verified at the gate-DECISION layer: ≈70 harnesses (as of this snapshot:
+> `pqsigner-tx` 46, `pqsigner-erc7730` 15, `sphincs-tz-shared`/NS-ptr 8,
+> `fw-manifest` 2) across multiSend (outer frame → inner record walk →
+> classification/page-budget), CoW `GPv2Order`, typed-call ABI, SafeTx, ERC-7730
+> TLV/visibility, Safe-mgmt, the NS-pointer TOCTOU window (unbounded soundness),
+> and the FW-update manifest (rollback boundary + signed-preimage layout), plus a
+> `revm`/MultiSendCallOnly bytecode differential and a Miri tree-borrows pass —
+> all nightly/per-push
+> gated by `make kani`/`make miri` (see `docs/work-todo.md` §34 Completion Log,
+> 2026-06-30/07-01). Still **0 bugs**, but now over *exhaustive* decoder-decision
+> coverage rather than host-reachable *sampling*, so those decoders stand as a
+> machine-checked **regression fence** (a future decode/classify regression
+> fails CI). Two honest residuals remain: **(a)** the fence is on the
+> *structural* decode/classify layer; the HIGHs' *semantic* layer (ERC-20
+> metadata attribution, the `#[cfg(not(test))]` renderer, on-chain `decimals`
+> data) stays audit + host-test covered — gate==renderer is by-construction plus
+> the `pages_total_*` / render-faithfulness host tests, NOT Kani; **(b)** the
+> on-target `unsafe` (CMSE veneers, raw MMIO) is still `thumbv8m`-only — only the
+> NS-pointer ABI was cleanly extractable and Kani/Miri-checked. So the coverage
+> gap is *narrowed at the structural-decode layer*, not eliminated.
+
 ---
 
 ## The two genuinely-uncaptured gaps (status)
@@ -148,6 +176,26 @@ work:
    cited-TCB residual, paired with the actionable highest-ROI move (extend the
    Rust↔Lean differential + Kani to the clear-signing decoders + counter
    arithmetic — the surfaces where the real HIGHs lived).
+
+   > **UPDATE 2026-07-01 — the paired highest-ROI move is DONE; the #1–#4 span
+   > stays open.** The actionable mitigation landed: ≈70 Kani harnesses + a revm
+   > differential + a Miri tree-borrows pass now exhaustively fence the
+   > *decode/classify decisions* of the clear-sign path (multiSend, CoW,
+   > typed-call, SafeTx, ERC-7730, Safe-mgmt), the NS-pointer TOCTOU window, and
+   > the FW-update manifest authority gates (rollback + signed-preimage layout);
+   > the counter-arithmetic half is partial — the sign-input header kernels
+   > (`decode_flags`/`validate_data_len`) and the recovery pin-state parser are
+   > Kani-proven, while the page-123 off-chain-counter *cap/gap* logic stays
+   > deferred (it lives in unextractable `unsafe` flash RMW and is already
+   > Halmos/Kontrol-proven on-chain). Details per slice in the §34 Completion Log
+   > (2026-06-30/07-01). **What this closes:** the exact clear-sign surface where
+   > the HIGHs' *structural* layer lived is now machine-checked + regression-
+   > fenced. **What it does NOT close (this bullet's actual gap):** the
+   > model→Rust **spanning theorem for invariants #1–#4** — a Kani decoder-
+   > decision proof is a different property from a secrecy/reachability span over
+   > `dual_se.rs` / `offchain_state.rs` / the SE drivers. So this bullet's gap
+   > remains open as an honest cited-TCB residual; only its paired pragmatic
+   > mitigation is delivered.
 
    > **Scope correction (2026-06-29):** an earlier draft of this entry wrongly
    > framed the closure as "Aeneas-extract the dual-SE/flash subsystem" and
