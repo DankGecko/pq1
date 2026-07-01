@@ -2443,12 +2443,15 @@ fn compile_structured_contract_path(
                 }
             }
         } else {
-            // Must descend into a STATIC tuple (members inlined in head).
+            // Descend into a tuple. A STATIC tuple inlines its members in the
+            // head, so the member's `FieldIdx` simply sums onto the tuple's head
+            // slot (no FollowOffset — the legacy behaviour). C2: a DYNAMIC tuple
+            // (one with a dynamic member) places its data in the tail; emit
+            // `FollowOffset` after the tuple's head-slot `FieldIdx` so the device
+            // jumps to the tuple's data region and reads the member relative to
+            // it — the same position the contract's decoder uses.
             if static_head_words(this_ty)? == HeadWidth::Dynamic {
-                return Err(format!(
-                    "path descends into dynamic tuple `{name}` (`{this_ty}`); its members live \
-                     in the calldata tail and cannot be reached by fixed head offset"
-                ));
+                out.push(PATHOP_FOLLOW_OFFSET);
             }
             let inner = parsed.inner_types.get(name).ok_or_else(|| {
                 format!("path descends into `{name}`, which is not a parsed tuple argument")

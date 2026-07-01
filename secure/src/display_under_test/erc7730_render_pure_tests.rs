@@ -1283,6 +1283,49 @@ fn c1_opaque_bytes_renders_length_and_loud_marker() {
     assert!(dump.contains("opaque"), "opaque bytes must be loudly marked:\n{dump}");
 }
 
+/// C2 — dynamic-tuple member navigation (FieldIdx → FollowOffset → FieldIdx).
+/// WYSIWYS value-equality: the device follows the tuple's offset into the tail
+/// and reads each member at the SAME position the contract decodes. Synthetic
+/// `setConfig((uint256 amount, address target, bytes note) cfg)` (dynamic tuple
+/// via the `bytes note` member) at a non-registry address — full value control.
+#[test]
+fn c2_dynamic_tuple_members_render_exact_values() {
+    let res = build_seed();
+    let entry = find_leaf(&res, "synthetic-dynamic-tuple.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
+
+    // calldata: selector + [offset=32] + tuple[amount, target, note_off=96]
+    //           + [note_len][note].
+    let target = [0x77u8; 20];
+    let mut cd = keccak256(b"setConfig((uint256,address,bytes))")[..4].to_vec();
+    cd.extend_from_slice(&u256_from_u64(32).0); // offset → cfg tuple region
+    cd.extend_from_slice(&u256_from_u64(0xABCDE).0); // cfg.amount (tuple slot 0)
+    let mut t = [0u8; 32];
+    t[12..].copy_from_slice(&target);
+    cd.extend_from_slice(&t); // cfg.target (tuple slot 1)
+    cd.extend_from_slice(&u256_from_u64(96).0); // cfg.note offset (rel. to tuple)
+    cd.extend_from_slice(&u256_from_u64(2).0); // note len
+    cd.extend_from_slice(&{
+        let mut n = [0u8; 32];
+        n[..2].copy_from_slice(b"hi");
+        n
+    });
+    assert_selector_matches(&verified.ir, &cd, "setConfig((uint256,address,bytes))");
+
+    let tx = envelope(1, entry.contract);
+    let resolver = NameResolver::new();
+    let pages = render_erc7730_pages(&tx, &cd, &verified, None, &resolver).expect("render");
+    assert_all_pages_printable(&pages);
+    let dump = dump_pages(&pages).to_lowercase();
+    // cfg.amount = 0xABCDE (raw hex word) — proves the tuple member was read.
+    assert!(dump.contains("abcde"), "cfg.amount not read from the tuple:\n{dump}");
+    // cfg.target = 0x7777…77 (addressName, unresolved → raw address).
+    assert!(dump.contains("7777"), "cfg.target not read from the tuple:\n{dump}");
+    let _ = find_page_by_label(&pages, "Amount");
+    let _ = find_page_by_label(&pages, "Target");
+}
+
 #[test]
 fn array_resolve_matches_walk_differential() {
     // When the Kani-proven `walk` accepts the body, our resolver must agree

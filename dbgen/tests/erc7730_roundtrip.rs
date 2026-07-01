@@ -402,7 +402,7 @@ fn seed_corpus_path_programs_parse() {
                         PathOp::FieldIdx => 2,
                         PathOp::ArrayIdx => 4,
                         PathOp::ArraySlice => 8,
-                        PathOp::ArrayLast | PathOp::ArrayAll => 0,
+                        PathOp::ArrayLast | PathOp::ArrayAll | PathOp::FollowOffset => 0,
                     };
                     assert!(
                         p <= prog.len(),
