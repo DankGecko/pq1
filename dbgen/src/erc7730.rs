@@ -401,6 +401,9 @@ pub struct Emitted {
     pub source: PathBuf,
     pub descriptor_id: String,
     pub descriptor_hash: [u8; 32],
+    /// ERC-8176 `descriptorHash` = keccak256(RFC-8785 JCS(resolved descriptor)).
+    /// The EAS attestation binding (host-only; not in the device IR).
+    pub erc8176_hash: [u8; 32],
     pub chain_id: u64,
     pub contract: [u8; 20],
     pub context_kind: u8,
@@ -870,8 +873,19 @@ fn compile_descriptor(
         ));
     }
 
-    // Compute the descriptor_hash once over the canonical JSON.
-    let descriptor_hash = sha256_of(&jcs_canonicalize(&json)?);
+    // Compute the descriptor hashes once over the canonical (RFC-8785 JCS)
+    // JSON. Two different hashes over the SAME canonical bytes:
+    //   - `descriptor_hash` (SHA-256) — the INTERNAL IR/leaf identifier, baked
+    //     into the firmware-pinned Merkle tree (SHA-256 per the PQ-stack
+    //     convention: "SHA-256 inside the PQ stack, keccak only for EVM").
+    //   - `erc8176_hash` (keccak-256) — the ERC-8176 `descriptorHash`: the value
+    //     an auditor attests on the Ethereum Attestation Service (EAS schema
+    //     0xe023ee…, `bytes32 descriptorHash`). EVM/keccak, HOST-ONLY (the device
+    //     never computes it); surfaced in the review file so an auditor can look
+    //     each descriptor up on EAS. See `docs/erc8176-attestation-status.md`.
+    let jcs = jcs_canonicalize(&json)?;
+    let descriptor_hash = sha256_of(&jcs);
+    let erc8176_hash = pqsigner_tx_core::hash::keccak256(&jcs);
 
     // Extract the descriptor ID (used for the review file).
     let descriptor_id = descriptor
@@ -939,6 +953,7 @@ fn compile_descriptor(
             source: path.to_path_buf(),
             descriptor_id: descriptor_id.clone(),
             descriptor_hash,
+            erc8176_hash,
             chain_id,
             contract: contract_addr,
             context_kind,
@@ -3757,6 +3772,21 @@ fn merge_descriptors(
     }
 }
 
+/// LEGACY / dev-mode-only attestation gate. This models an OUTDATED shape —
+/// an embedded `attestations` array with an `attester` string — that predates
+/// the finalized ERC-8176. Real ERC-8176 attestations are NOT embedded in the
+/// descriptor: they are Ethereum Attestation Service (EAS) records (mainnet
+/// schema 0xe023ee…, `bytes32 descriptorHash`) that an auditor signs, keyed by
+/// `descriptorHash = keccak256(JCS(descriptor))` (our `erc8176_hash`). So this
+/// identity-only check is inert against the real corpus (no descriptor carries
+/// such an array) and stays gated behind `allow_unattested_dev_descriptors`.
+///
+/// The production-flip readiness is measured OUT OF BAND by
+/// `tools/erc8176_eas_coverage.py` (`make erc8176-coverage`), which computes
+/// each descriptor's `erc8176_hash` and queries EAS for real attestations. As
+/// of 2026-07 the EAS schema has ~0 real attestations, so the flip is blocked
+/// on the attestation ecosystem populating — NOT on this code. See
+/// `docs/erc8176-attestation-status.md`.
 fn enforce_policy(json: &serde_json::Value, policy: &Policy) -> Result<(), String> {
     if policy.allow_unattested_dev_descriptors {
         return Ok(());
@@ -3824,12 +3854,13 @@ fn render_review(entries: &[Emitted], policy: &Policy, root: &[u8; 32]) -> Strin
         };
         s.push_str(&format!(
             "[{:04}] ctx={ctx} chain_id={} contract=0x{} \
-             primary_type=0x{} descriptor_hash=0x{} ir_len={} source={}\n",
+             primary_type=0x{} descriptor_hash=0x{} erc8176_hash=0x{} ir_len={} source={}\n",
             e.leaf_index,
             e.chain_id,
             hex::encode(e.contract),
             hex::encode(e.primary_type_hash),
             hex::encode(e.descriptor_hash),
+            hex::encode(e.erc8176_hash),
             e.ir_bytes.len(),
             e.source.file_name().unwrap().to_string_lossy(),
         ));
@@ -4568,6 +4599,34 @@ mod tests {
             serde_json::from_str(r#"[3,1,2]"#).unwrap();
         let out = jcs_canonicalize(&v).unwrap();
         assert_eq!(out, br#"[3,1,2]"#);
+    }
+
+    /// ERC-8176 `descriptorHash` = keccak256(RFC-8785 JCS(descriptor)). Golden
+    /// vectors whose keccak values were computed INDEPENDENTLY (foundry
+    /// `cast keccak` over the canonical JCS string) — so this locks our JCS +
+    /// keccak against a third-party implementation, which is what makes our hash
+    /// byte-match what an auditor attests on EAS. (Additionally cross-validated
+    /// end-to-end on a real registry descriptor: `ledgerquest/eip712-ledgerquest`
+    /// → 0x16a312e2…acad… via both dbgen and python-JCS+`cast keccak`.)
+    #[test]
+    fn erc8176_hash_golden_vectors() {
+        use pqsigner_tx_core::hash::keccak256;
+        // Key sort (b→a becomes a,b), array order preserved, integers.
+        let v: serde_json::Value = serde_json::from_str(r#"{"b":2,"a":[1,"x"]}"#).unwrap();
+        let jcs = jcs_canonicalize(&v).unwrap();
+        assert_eq!(jcs, br#"{"a":[1,"x"],"b":2}"#);
+        assert_eq!(
+            hex::encode(keccak256(&jcs)),
+            "6fc0cf5686e5292611ba7b595e551c0e49fe88c20fc60a5820e22acdb010beb1"
+        );
+        // String escaping: value a"b\c → "a\"b\\c".
+        let v2: serde_json::Value = serde_json::from_str(r#"{"s":"a\"b\\c"}"#).unwrap();
+        let jcs2 = jcs_canonicalize(&v2).unwrap();
+        assert_eq!(jcs2, br#"{"s":"a\"b\\c"}"#);
+        assert_eq!(
+            hex::encode(keccak256(&jcs2)),
+            "8cd0880e152d264b68eecb43ff71f6978922ea7234ca7b5fde387f68b744ee2a"
+        );
     }
 
     #[test]

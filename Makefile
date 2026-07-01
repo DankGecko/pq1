@@ -1707,13 +1707,17 @@ test-unit: ## Rust workspace unit tests (host)
 #   make check-codegen
 #
 # Or as part of `make prod-check` (Phase 2 onwards).
-.PHONY: check-codegen check-erc7730-descriptors
+.PHONY: check-codegen check-erc7730-descriptors erc8176-coverage
 check-codegen: check-erc7730-descriptors
 	@echo "==> codegen artifacts in sync"
 
 check-erc7730-descriptors:
 	@echo "==> Checking ERC-7730 descriptor catalog (xtask --check)"
 	@cargo run --locked -q -p pqsigner-xtask -- gen-erc7730-descriptors --check
+
+erc8176-coverage: ## Report ERC-8176 (EAS) attestation coverage of the ERC-7730 corpus
+	@echo "==> Querying EAS for ERC-8176 attestation coverage (needs network)"
+	@python3 tools/erc8176_eas_coverage.py
 
 # Foundry tests for the PQ smart-wallet contracts.
 test-solidity: ## Foundry tests for the smart-wallet contracts

@@ -77,6 +77,10 @@ V4/5/6 are HARD-slice.
 4. **Attestation is the orthogonal, arguably bigger, security lever:** we render in dev-mode
    (`allow_unattested`), trusting registry *content* without cryptographically enforcing ERC-8176
    attestations. Flipping that gate is "trusted-and-attested," independent of render coverage.
+   **Status (2026-07):** the flip is blocked on the attestation *ecosystem* (near-zero real EAS
+   attestations), not on our code — our ERC-8176 `descriptorHash` binding + an EAS-coverage tripwire
+   (`make erc8176-coverage`) are landed and cross-validated. See
+   [`erc8176-attestation-status.md`](./erc8176-attestation-status.md).
 
 **Caveats:** these tiers are a static path-shape read; a C0 function can still be blocked at render
 by ERC20_DB_ROOT (tokenAmount) / ENS (addressName) / MAX_FORMATS / page-budget — orthogonal gaps.
