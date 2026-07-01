@@ -52,6 +52,16 @@ const READ_RETRY_DELAY: u32 = 50_000;
 /// Max I2C read retries when SE050 NACKs (busy processing).
 const MAX_READ_RETRIES: u32 = 1000;
 
+/// Max response frames (I-frames + interspersed WTX) the receive loop will
+/// accept before giving up. A conformant SE050 answers any APDU in a handful
+/// of chained I-frames (<= a few KB / IFSC), plus at most `MAX_WTX_RETRIES`
+/// waiting-time extensions — well under this bound. The cap exists so a
+/// glitched / brown-out-confused / swapped SE that emits an unbounded stream
+/// of frames (e.g. empty chained I-frames, which advance nothing) turns into
+/// a clean `Protocol` error the unlock/boot retry path handles, instead of
+/// wedging the CPU in an infinite receive loop until a power cycle.
+const MAX_RESP_FRAMES: u32 = MAX_WTX_RETRIES + 1024;
+
 // PCB byte masks
 const PCB_I_BLOCK: u8 = 0x00; // Bit 7 = 0
 const PCB_I_CHAIN: u8 = 0x20; // Bit 5 = chaining (more frames follow)
@@ -235,8 +245,17 @@ impl T1State {
         // --- Receive phase: collect response I-frames ---
         let mut resp_offset = 0;
         let mut wtx_count = 0u32;
+        let mut frame_count = 0u32;
 
         loop {
+            // Total-frame backstop: a conformant SE finishes in a handful of
+            // frames; an unbounded stream (glitched/hostile part) becomes a
+            // clean error instead of an infinite loop (see MAX_RESP_FRAMES).
+            frame_count += 1;
+            if frame_count > MAX_RESP_FRAMES {
+                return Err(T1Error::Protocol);
+            }
+
             self.read_frame(&mut rx_buf)?;
             let (rx_pcb, inf) = validate_frame(&rx_buf)?;
 
@@ -259,6 +278,16 @@ impl T1State {
 
             if rx_pcb & 0xC0 == 0x80 {
                 // R-frame (unexpected in receive phase)
+                return Err(T1Error::Protocol);
+            }
+
+            // A chained I-frame (more-data bit set) that carries no payload
+            // is never a valid continuation: it advances `resp_offset` by 0,
+            // so the BufferOverflow guard below can never trip and the loop
+            // would ACK-and-repeat forever on a stuck/hostile SE. Reject it
+            // as a protocol error (the frame-count backstop above would also
+            // catch it, but this fails fast and is unambiguous).
+            if (rx_pcb & PCB_I_CHAIN) != 0 && inf.is_empty() {
                 return Err(T1Error::Protocol);
             }
 

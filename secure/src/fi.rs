@@ -46,13 +46,32 @@ pub use pqsigner_fi::{FAIL_SENTINEL, OK_SENTINEL};
 fn rng_byte() -> u8 {
     #[cfg(not(test))]
     {
-        crate::rng::byte()
+        // Non-secret delay length only. A transient STM32U5 TRNG seed/clock
+        // error (`SECS`/`CECS`, a documented occasional event ST's own HAL
+        // treats as retry-able) must NOT be fatal here: `crate::rng::byte()`
+        // `.expect()`s on failure, and `wait_random` runs thousands of times
+        // per signature, so a single hiccup would panic the secure world
+        // mid-sign and hang the device until a power cycle. Degrade to the
+        // last good TRNG byte instead — the value only sets a delay duration
+        // and leaks no secret (see the rationale above). Still platform-only
+        // TRNG, never `rng_strong` (the sign-latency cliff).
+        let b = crate::rng::byte_nonsecret(FI_DELAY_LAST_GOOD.load(Ordering::Relaxed));
+        FI_DELAY_LAST_GOOD.store(b, Ordering::Relaxed);
+        b
     }
     #[cfg(test)]
     {
         7
     }
 }
+
+/// Last successfully-read TRNG byte, reused as the [`rng_byte`] fallback
+/// when a transient TRNG error would otherwise panic. Non-secret (delay
+/// length only); the seed value is irrelevant.
+#[cfg(not(test))]
+static FI_DELAY_LAST_GOOD: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0x5A);
+#[cfg(not(test))]
+use core::sync::atomic::Ordering;
 
 /// Trezor's `wait_random()` (port of
 /// `core/embed/sec/random_delays/stm32/random_delays.c:186-202`), specialized

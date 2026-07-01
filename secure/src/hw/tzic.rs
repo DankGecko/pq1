@@ -253,12 +253,18 @@ pub(crate) unsafe fn trigger_intrusion_wipe() -> ! {
     //    `soft_disconnect_then_reset` is acceptable because the
     //    handler doesn't return to thread mode (it resets the chip),
     //    and UI/I2C are deliberately untouched (see the docstring
-    //    comment above on exception-context constraints). `usb` is a
-    //    hard dependency of every `stm32u585` image anyway (the
-    //    `cmd_fw_*` handlers reference `usb_hw` unconditionally), so a
-    //    shipping build that satisfies the `nsc/mod.rs` tamper fence
-    //    always has it.
+    //    comment above on exception-context constraints).
+    //
+    //    `hw::usb_hw` only exists in the USB image (`stm32u585` + `usb`).
+    //    A display-only / semihosting / probe-rs bench image (`stm32u585`
+    //    without `usb`, e.g. the `tzic-wipe` demo target) and the QEMU
+    //    build have no USB peripheral, so they take the plain `sys_reset`
+    //    below — the page-125 wipe flag armed above still drives the
+    //    post-reset SE scrub. Both arms diverge (`-> !`).
+    #[cfg(all(feature = "stm32u585", feature = "usb"))]
     crate::hw::usb_hw::soft_disconnect_then_reset();
+    #[cfg(not(all(feature = "stm32u585", feature = "usb")))]
+    cortex_m::peripheral::SCB::sys_reset();
 }
 
 /// Total illegal-access events since boot. Stable read from thread

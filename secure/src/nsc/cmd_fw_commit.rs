@@ -313,11 +313,15 @@ pub(super) unsafe fn run(_args: &GatewayArgs) -> u32 {
     // shows "reconnecting" across it. The companion app simply waits for
     // the device to come back.
     ui::show_status("Update OK", "reconnecting...");
-    #[cfg(feature = "stm32u585")]
+    // Only the USB image (`stm32u585` + `usb`) has `hw::usb_hw`. A
+    // display-only / semihosting / probe-rs bench image (`stm32u585`
+    // without `usb`, e.g. `make e2e-hw-dual-se`) and the QEMU build both
+    // take the plain `sys_reset` below — no USB host port to keep alive,
+    // and the new firmware boots either way. Both arms diverge (`-> !`).
+    #[cfg(all(feature = "stm32u585", feature = "usb"))]
     unsafe {
         crate::hw::usb_hw::cc_open_then_reset();
     }
-    // QEMU / non-hw fallback — sys_reset works cleanly there.
-    #[cfg(not(feature = "stm32u585"))]
+    #[cfg(not(all(feature = "stm32u585", feature = "usb")))]
     cortex_m::peripheral::SCB::sys_reset();
 }

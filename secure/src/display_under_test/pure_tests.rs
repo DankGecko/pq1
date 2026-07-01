@@ -1242,6 +1242,49 @@ fn negative_slot_rotation_shows_index() {
         "slot_index must be visible on row 2");
 }
 
+#[test]
+fn negative_slot_rotation_never_panics_across_22bit_field() {
+    // The `slot_index` FLAG-word field is 22 bits (0..=4_194_303); the
+    // sign handlers reject only `register_slot && slot_index == 0`, so a
+    // buggy or hostile companion can drive any other value into
+    // build_slot_rotation_pages BEFORE the confirm dialog. Pre-fix,
+    // write_new_slot laid the 10-byte "New slot: " prefix then wrote each
+    // decimal digit at buf[10 + i] into a [u8; 16] row — so any 7-digit
+    // value (>= 1_000_000) indexed buf[16] and panicked the secure world,
+    // aborting the sign and hanging the device until a power cycle. Every
+    // value in the field must render without panicking.
+    for &idx in &[
+        0u32, 1, 9, 10, 99, 999_999, 1_000_000, 1_000_005, 4_194_303, 4_194_303 / 2,
+    ] {
+        let _ = build_slot_rotation_pages(idx);
+    }
+    // Sweep the low range densely and stride across the top of the field
+    // to exercise every digit width and the exact 6->7 digit boundary.
+    for idx in 0u32..=3_000 {
+        let _ = build_slot_rotation_pages(idx);
+    }
+    let mut idx = 100_000u32;
+    while idx <= 4_194_303 {
+        let _ = build_slot_rotation_pages(idx);
+        idx += 7919; // prime stride
+    }
+}
+
+#[test]
+fn negative_slot_rotation_row_is_exactly_display_cols_for_large_index() {
+    // Robustness for pathological indices must not corrupt the fixed row
+    // width: even a truncated 7-digit value yields a full 16-col row (all
+    // page rows are DISPLAY_COLS wide by construction).
+    let pages = build_slot_rotation_pages(4_194_303);
+    assert_eq!(pages.buf[0][2].len(), DISPLAY_COLS,
+        "row 2 must stay exactly DISPLAY_COLS wide");
+    // And the fitting case still shows the full number.
+    let small = build_slot_rotation_pages(42);
+    let row2 = row_str(&small.buf[0][2]);
+    assert!(row2.contains("New slot: 42"),
+        "small slot index must render in full, got {:?}", row2);
+}
+
 // --- Batch banner: 1-based UI, refuse to overflow MAX_PAGES ---------------
 
 #[test]

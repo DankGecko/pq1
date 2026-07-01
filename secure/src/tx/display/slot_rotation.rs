@@ -54,24 +54,45 @@ fn write_centered(row: &mut [u8; DISPLAY_COLS], text: &[u8]) {
 }
 
 fn write_new_slot(row: &mut [u8; DISPLAY_COLS], slot_index: u32) {
+    // `slot_index` is the raw 22-bit FLAG-word field (0..=4_194_303); the
+    // sign handlers only reject `register_slot && slot_index == 0`, so any
+    // other value — including a buggy or hostile companion's 7-digit
+    // garbage — reaches here. Every write below is bounded to the 16-col
+    // row so no `slot_index` can index past `buf`/`row` and panic the
+    // secure world mid-render (a panic here would abort the sign and hang
+    // the device until a power cycle). Values that don't fit after the
+    // prefix are truncated on the display only — the on-chain Type-1 sig,
+    // not this advisory page, binds the real index.
     let mut buf = [b' '; DISPLAY_COLS];
     let prefix = b"New slot: ";
     let mut p = 0usize;
     for &c in prefix.iter() {
+        if p >= DISPLAY_COLS {
+            break;
+        }
         buf[p] = c;
         p += 1;
     }
     p += write_dec(&mut buf, p, slot_index as usize);
-    let len = p;
+    // `write_dec` never writes past `DISPLAY_COLS`, so `p <= DISPLAY_COLS`
+    // and the centering math below cannot underflow or overrun.
+    let len = core::cmp::min(p, DISPLAY_COLS);
     *row = [b' '; DISPLAY_COLS];
     let start = (DISPLAY_COLS - len) / 2;
     row[start..start + len].copy_from_slice(&buf[..len]);
 }
 
+/// Write `value` as decimal digits into `buf` starting at `pos`, stopping
+/// at the row edge. Returns the number of digits actually written (which
+/// may be fewer than `value` has, if it would overflow the row). Never
+/// indexes past `buf.len()`.
 fn write_dec(buf: &mut [u8; DISPLAY_COLS], pos: usize, value: usize) -> usize {
     if value == 0 {
-        buf[pos] = b'0';
-        return 1;
+        if pos < DISPLAY_COLS {
+            buf[pos] = b'0';
+            return 1;
+        }
+        return 0;
     }
     let mut tmp = [0u8; 20];
     let mut n = 0;
@@ -81,8 +102,13 @@ fn write_dec(buf: &mut [u8; DISPLAY_COLS], pos: usize, value: usize) -> usize {
         v /= 10;
         n += 1;
     }
+    let mut written = 0usize;
     for i in 0..n {
+        if pos + i >= DISPLAY_COLS {
+            break;
+        }
         buf[pos + i] = tmp[n - 1 - i];
+        written += 1;
     }
-    n
+    written
 }

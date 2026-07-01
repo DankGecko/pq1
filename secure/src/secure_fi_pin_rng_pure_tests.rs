@@ -513,9 +513,11 @@ mod fi_source_text {
             .unwrap_or(FI_SRC.len());
         let body = &FI_SRC[pos..end.min(FI_SRC.len())];
         assert!(
-            body.contains("crate::rng::byte()"),
-            "fi::rng_byte body must call platform-only `crate::rng::byte()` \
-             — see fi.rs:30-37 for why rng_strong would explode sign latency."
+            body.contains("crate::rng::byte_nonsecret("),
+            "fi::rng_byte body must call the platform-only, non-panicking \
+             `crate::rng::byte_nonsecret()` (a transient TRNG error must not \
+             panic the signer mid-sign) — NOT rng_strong (sign-latency \
+             cliff). See fi.rs:30-44 for the rationale."
         );
         assert!(
             !body.contains("rng_strong::byte") && !body.contains("rng_strong::fill"),

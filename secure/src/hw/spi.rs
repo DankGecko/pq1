@@ -156,6 +156,13 @@ impl Stm32Spi {
 
         let mut tx_idx: usize = 0;
         let mut rx_idx: usize = 0;
+        // Stall watchdog: reset on any TX/RX progress, tripped after
+        // TIMEOUT_LOOPS iterations with none. Without it, a wedged/absent
+        // SPI peripheral (SPE not latched, MISO stuck, TROPIC01 unpowered or
+        // mis-wired) never asserts SR_RXP or SR_OVR, so `rx_idx` never
+        // advances and this loop spins forever — matching the bounded
+        // wait_eot_and_disable sibling turns that into a clean Timeout.
+        let mut stall: u32 = 0;
 
         while rx_idx < data.len() {
             let sr = REG.sr.read();
@@ -167,6 +174,8 @@ impl Stm32Spi {
                 return Err(SpiError::Overrun);
             }
 
+            let mut progressed = false;
+
             // Feed TX FIFO if space available and we have bytes left
             if tx_idx < data.len() && sr & SR_TXP != 0 {
                 // Write single byte to TXDR (8-bit access).
@@ -177,6 +186,7 @@ impl Stm32Spi {
                     core::ptr::write_volatile(REG.txdr_addr as *mut u8, data[tx_idx]);
                 }
                 tx_idx += 1;
+                progressed = true;
             }
 
             // Drain RX FIFO if data available
@@ -190,6 +200,17 @@ impl Stm32Spi {
                 };
                 data[rx_idx] = b;
                 rx_idx += 1;
+                progressed = true;
+            }
+
+            if progressed {
+                stall = 0;
+            } else {
+                stall += 1;
+                if stall > TIMEOUT_LOOPS {
+                    REG.cr1.clear_bits(CR1_SPE);
+                    return Err(SpiError::Timeout);
+                }
             }
         }
 

@@ -244,6 +244,15 @@ impl ShieldedConnection {
 
         // AES-128-CCM encrypt
         let mut ciphertext_and_tag = [0u8; 600];
+        // Guard the internal scratch too: the line-230 check validates the
+        // caller's `out`, but the CCM output (`plaintext.len()` + 8-byte tag)
+        // is staged here first, and a plaintext larger than this buffer would
+        // overrun it and panic. Only the dev-only protected-update path emits
+        // APDUs this large (all shipping shielded APDUs are small), but keep
+        // wrap_command total so it can never OOB-panic.
+        if plaintext.len() + CCM_TAG_LEN > ciphertext_and_tag.len() {
+            return Err(ShieldError::BufferOverflow);
+        }
         let ct_len = aes128_ccm_encrypt(
             &self.enc_key,
             &nonce,
@@ -454,9 +463,29 @@ impl ShieldedConnection {
         let dec_nonce = Self::build_nonce(&self.dec_nonce_base, master_seq);
         let slave_ct = &resp2[SC_HEADER_LEN..n2];
         let slave_pt_len = slave_ct.len() - CCM_TAG_LEN;
+
+        // Upper-bound the plaintext against the fixed 64-byte `slave_plain`
+        // sink BEFORE decrypting. `n2` is bounded only by `resp2.len()`
+        // (128) inside `transceive_prl`, so a frame with `n2 > 77` yields
+        // `slave_pt_len > 64`; `aes128_ccm_decrypt` would then write past
+        // `slave_plain` and panic (bounds-check), aborting the unlock. The
+        // I2C bus is the explicitly-untrusted channel this shielded
+        // connection exists to protect (invariant #3), and a merely
+        // malfunctioning OPTIGA is plausible-malformed input — so this
+        // must fail closed, mirroring the `plaintext_len > out.len()` guard
+        // `unwrap_response` already carries on the steady-state path. (A
+        // conformant SlaveFinished is exactly 36 B of plaintext.)
+        let mut slave_plain = [0u8; 64];
+        if slave_pt_len > slave_plain.len() {
+            secure_log!(
+                "[OPTIGA/shield] SlaveFinished plaintext too long ({}B > {}B)",
+                slave_pt_len,
+                slave_plain.len()
+            );
+            return Err(ShieldError::HandshakeFailed);
+        }
         let dec_aad = Self::build_aad(SCTR_HANDSHAKE_FINISHED, master_seq, slave_pt_len as u16);
 
-        let mut slave_plain = [0u8; 64];
         let ok = aes128_ccm_decrypt(
             &self.dec_key,
             &dec_nonce,

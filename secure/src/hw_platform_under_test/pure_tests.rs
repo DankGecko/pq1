@@ -1020,6 +1020,38 @@ fn negative_flash_icache_invalidated_after_every_erase() {
 }
 
 #[test]
+fn negative_flash_bank2_program_erase_invalidate_icache() {
+    // Bank-2 (NS-slot) and secure-slot program/erase helpers MUST invalidate
+    // ICACHE too — the bug this pins was that only the bank-1 twins did, so a
+    // same-power-cycle FW-update re-flash whose target lines were cached by a
+    // prior read (COMMIT's verify_images) saw STALE bytes in the verified
+    // read-back and returned a spurious FlashError until a power cycle. Pin
+    // each of the three previously-missing helpers individually so the
+    // asymmetry cannot silently reappear.
+    for (name, sig) in [
+        (
+            "write_ns_quadword",
+            "unsafe fn write_ns_quadword(addr: u32, data: &[u8; 16]) -> Result<(), ()> {",
+        ),
+        (
+            "erase_ns_page",
+            "pub unsafe fn erase_ns_page(page: u8) -> Result<(), ()> {",
+        ),
+        (
+            "erase_secure_page",
+            "pub unsafe fn erase_secure_page(page: u32) -> Result<(), ()> {",
+        ),
+    ] {
+        let body = extract_body(FLASH_SRC, sig);
+        assert!(
+            body.contains("icache_invalidate();"),
+            "{name} must call icache_invalidate() before returning (stale-readback \
+             spurious-FlashError defence — matches the bank-1 helpers)"
+        );
+    }
+}
+
+#[test]
 fn negative_flash_write_slot_quadword_bank_dispatch_rejects_out_of_range() {
     // The dispatcher MUST return Err for addresses outside both
     // bank-1 and bank-2 ranges — never silently write to a random

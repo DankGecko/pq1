@@ -81,8 +81,13 @@ fn arm_wipe_and_reset() -> ! {
     let _ = unsafe { flash::arm_wipe_flag() };
 
     // Soft-disconnect USB so companion / dmesg watchers see a clean
-    // `USB disconnect` event before the human-facing OLED prompt.
-    #[cfg(feature = "stm32u585")]
+    // `USB disconnect` event before the human-facing OLED prompt. Only
+    // when the USB command channel is actually compiled in (`usb`): a
+    // semihosting / probe-rs / display-only bench image builds
+    // `stm32u585` WITHOUT `usb` (e.g. `make e2e-hw-dual-se`,
+    // `make flash-hw-se050-lcd`), where `hw::usb_hw` does not exist and
+    // there is no USB peripheral to disconnect.
+    #[cfg(all(feature = "stm32u585", feature = "usb"))]
     unsafe {
         crate::hw::usb_hw::soft_disconnect();
     }
@@ -99,11 +104,19 @@ fn arm_wipe_and_reset() -> ! {
     // auto-detect the wiped state. This is the HW-proven cc_open path
     // (the dmesg re-enumeration evidence came from the wipe-trigger
     // e2e). ~20-25 s latency (mostly boot).
-    #[cfg(feature = "stm32u585")]
+    //
+    // Only the USB image (`stm32u585` + `usb`) has `hw::usb_hw`. A
+    // display-only / semihosting / probe-rs bench image (`stm32u585`
+    // without `usb`, e.g. `make e2e-hw-dual-se`) and the QEMU build both
+    // take the plain `sys_reset` below: there is no USB host port to keep
+    // alive across the reboot, and the page-125 wipe flag armed above
+    // still drives the post-reset scrub. Both arms diverge (`-> !`), so
+    // exactly one runs and the function never returns.
+    #[cfg(all(feature = "stm32u585", feature = "usb"))]
     unsafe {
         crate::hw::usb_hw::cc_open_then_reset();
     }
-    #[cfg(not(feature = "stm32u585"))]
+    #[cfg(not(all(feature = "stm32u585", feature = "usb")))]
     cortex_m::peripheral::SCB::sys_reset();
 }
 

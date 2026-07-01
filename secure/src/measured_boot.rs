@@ -126,6 +126,16 @@ pub fn firmware_hash() -> [u8; 32] {
 /// Title screen duration in SysTick ticks (~1 ms each).
 const TITLE_MS: u32 = 1_500;
 
+/// Fallback bound for the phase-1 title spin: if `timeout::now()` has not
+/// advanced by a single tick after this many spins, the SysTick tick source
+/// isn't running yet (QEMU starts it after `measured_boot`), and the
+/// `< TITLE_MS` deadline would otherwise never be reached — spinning
+/// forever. This is far more iterations than one ~1 ms SysTick period takes
+/// on any supported clock, so on real hardware (where SysTick runs before
+/// `measured_boot`) `now()` always advances long before this and the bound
+/// never truncates the real title delay.
+const TITLE_STALLED_TICK_SPINS: u32 = 2_000_000;
+
 /// Word screen auto-dismiss delay in SysTick ticks (~1 ms each).
 const WORDS_MS: u32 = 4_000;
 
@@ -203,12 +213,28 @@ pub fn run() {
     }
 
     // Phase 1: title screen — tells the user what's coming.
-    // Uses SysTick (running on STM32U585); on QEMU SysTick isn't
-    // started yet so now() stays 0 and the loop exits immediately.
+    //
+    // Driven by SysTick via timeout::now(). On real STM32U585 hardware
+    // SysTick is already running (main::setup_systick runs before
+    // measured_boot), so now() advances and this exits after TITLE_MS. On
+    // QEMU SysTick is started *after* measured_boot (see main.rs — the
+    // #[cfg(stm32u585)] setup_systick is skipped, and the QEMU one runs
+    // later), so now() is frozen at 0 here: t0 == 0 and
+    // `0.wrapping_sub(0) < TITLE_MS` is permanently true. A bare deadline
+    // loop therefore spins FOREVER, wedging boot at the title screen (the
+    // words + gateway never appear). The TITLE_STALLED_TICK_SPINS fallback
+    // detects the stopped tick source (counter never advances) and skips
+    // the cosmetic delay instead of hanging.
     show_status("OS Fingerprint", "");
     let t0 = timeout::now();
+    let mut spins: u32 = 0;
     while timeout::now().wrapping_sub(t0) < TITLE_MS {
         cortex_m::asm::nop();
+        spins = spins.saturating_add(1);
+        if spins >= TITLE_STALLED_TICK_SPINS && timeout::now() == t0 {
+            // Tick source hasn't moved — not running yet. Don't hang.
+            break;
+        }
     }
 
     // Phase 2: show all 8 words, auto-dismiss after 4 s or any button.

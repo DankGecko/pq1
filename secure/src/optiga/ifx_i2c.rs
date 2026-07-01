@@ -105,6 +105,17 @@ const MAX_PAYLOAD_PER_FRAME: usize = MAX_FRAME_SIZE - DL_HEADER_SIZE - TL_HEADER
 /// so we don't time out mid-verify.
 const MAX_POLL_RETRIES: u32 = 3000;
 
+/// Max frames (data + interspersed ACK control frames) the receive loop
+/// will accept for one response before giving up. OPTIGA responses are
+/// small (metadata / PBS / get-random / hmac-verify), a handful of chained
+/// frames at most, so this is a large margin. The bound exists because the
+/// ACK-control-frame path `continue`s WITHOUT advancing `total_len` or any
+/// counter: a stuck/glitched OPTIGA (or bus MITM) that keeps re-presenting
+/// an ACK while never delivering the data frame would otherwise spin the
+/// loop forever, wedging boot/unlock. With the cap it becomes a clean
+/// `BadResponse` the caller's retry path handles.
+const MAX_RX_FRAMES: u32 = 256;
+
 /// I2C_STATE response-ready bit (bit 6 of byte 0).
 const STATE_RESP_READY: u8 = 0x40;
 
@@ -484,8 +495,19 @@ impl IfxState {
     /// Returns total response APDU bytes (PCTR stripped).
     unsafe fn receive_response(&mut self, resp: &mut [u8]) -> Result<usize, IfxError> {
         let mut total_len: usize = 0;
+        let mut frame_count: u32 = 0;
 
         loop {
+            // Bound the total frames per response. The ACK-control-frame path
+            // below `continue`s without advancing `total_len`, so without
+            // this a chip stuck presenting ACKs would loop forever (see
+            // MAX_RX_FRAMES). Data-frame chaining is separately bounded by
+            // the FrameTooLarge check.
+            frame_count += 1;
+            if frame_count > MAX_RX_FRAMES {
+                return Err(IfxError::BadResponse);
+            }
+
             // Poll for response data frame
             self.poll_response_ready()?;
 
