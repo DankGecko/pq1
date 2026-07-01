@@ -28,18 +28,18 @@ pub const MAX_ATTEMPTS: u8 = 10;
 pub const MAX_TX_LEN: usize = 4096;
 
 // ---------------------------------------------------------------------------
-// ZK clear signing constants (must match ZKlarity circuit parameters)
+// CoW Swap on-device decode — canonical inner-calldata length.
+// (Legacy `ZK_*` name kept for wire compatibility. The Groth16 ZK clear-sign
+// path was retired 2026-06-30 — see docs/archive/zk-clear-sign-retirement.md;
+// ZK_STRING_LEN / ZK_PROOF_LEN / ZK_CLEAR_SIGN_FIXED_LEN / ZK_VK_BUNDLE_MAX_LEN
+// were removed with it. This constant survives because the native CoW v3
+// EIP-712 verifier still length-checks the `setPreSignature` inner calldata.)
 // ---------------------------------------------------------------------------
 
-/// Maximum calldata size (ZKlarity circuit MAX_CALLDATA = 164 bytes).
-/// This is the raw smart contract calldata (selector + ABI-encoded params).
+/// Canonical `setPreSignature` inner-calldata length for the CoW v3 on-device
+/// decode (selector + ABI-encoded params), 164 bytes. Name retained for wire
+/// compatibility with the retired ZK path.
 pub const ZK_MAX_CALLDATA: usize = 164;
-
-/// Human-readable string length (ZKlarity circuit STRING_LEN = 64 bytes).
-pub const ZK_STRING_LEN: usize = 64;
-
-/// Groth16 proof size: π.A (96) + π.B (192) + π.C (96) = 384 bytes.
-pub const ZK_PROOF_LEN: usize = 384;
 
 // ---------------------------------------------------------------------------
 // Non-secure memory boundaries — used by secure world to validate NS pointers.
@@ -95,7 +95,8 @@ pub const CMD_GET_REMAINING: u32 = 1;
 pub const CMD_REQUEST_UNLOCK: u32 = 2;
 pub const CMD_GET_PUBKEY: u32 = 3;
 // CMD 4 reserved (was CMD_SIGN in v1)
-pub const CMD_CLEAR_SIGN: u32 = 5;
+// CMD 5 reserved (was CMD_CLEAR_SIGN — Groth16 ZK clear-sign; retired
+// 2026-06-30, see docs/archive/zk-clear-sign-retirement.md)
 // CMD 6 reserved (was CMD_CLEAR_SIGN_MSG — standalone EIP-712 typed-data
 // signing; the only EIP-712 consumer is now the v3 trailer cross-check
 // inside CMD_SIGN_USEROP, so the standalone path was removed).
@@ -1282,8 +1283,8 @@ pub const SLOT_INDEX_MASK: u32 =
 /// | 330 |  N  | data |
 /// | 330+N | 2 | erc20_bundle_len (u16 BE; 0 = no bundle) |
 /// | 332+N | B | erc20_bundle (Merkle-verified ERC-20 metadata, see `erc20::bundle`) |
-/// | 332+N+B | 2 | zk_bundle_len (u16 BE; 0 = no ZK clear-sign) |
-/// | 334+N+B | Z | zk_bundle (Groth16 proof + calldata + readable string + VK bundle) |
+/// | 332+N+B | 2 | zk_bundle_len (u16 BE; RETIRED — kept reserved, MUST be 0) |
+/// | 334+N+B | 0 | zk_bundle slot (Groth16 ZK path retired 2026-06-30; no bytes parsed) |
 ///
 /// All three trailing sections are optional. When a section's length is
 /// zero the next section immediately follows.
@@ -1296,19 +1297,10 @@ pub const SIGN_USEROP_HEADER_LEN: usize =
 /// Compile-time sanity check: header ends exactly at `data_len`.
 const _: () = assert!(SIGN_USEROP_HEADER_LEN == 330);
 
-/// ZK clear-sign bundle header layout (prepended to the variable-length
-/// VK bundle bytes):
-///
-/// | off | size | field |
-/// |-----|------|-------|
-/// |  0  | 384  | Groth16 proof (π.A || π.B || π.C) |
-/// | 384 | 164  | circuit-attested calldata (right-zero-padded) |
-/// | 548 |  64  | readable UTF-8 string (null-padded) |
-pub const ZK_CLEAR_SIGN_FIXED_LEN: usize = ZK_PROOF_LEN + ZK_MAX_CALLDATA + ZK_STRING_LEN;
-
-/// Maximum size of the VK bundle tail supplied after the fixed
-/// ZK_CLEAR_SIGN_FIXED_LEN prefix.
-pub const ZK_VK_BUNDLE_MAX_LEN: usize = 2048;
+// The ZK v1 clear-sign bundle constants (ZK_CLEAR_SIGN_FIXED_LEN /
+// ZK_VK_BUNDLE_MAX_LEN, and the ZK_PROOF_LEN / ZK_STRING_LEN they summed) were
+// removed with the Groth16 retirement (2026-06-30). The wire slot is kept
+// reserved (length MUST be 0); see docs/archive/zk-clear-sign-retirement.md.
 
 // ═══════════════════════════════════════════════════════════════════════════
 //   CoW Protocol / GPv2Settlement — EIP-712 clear-sign (on-device decode)
@@ -1986,7 +1978,6 @@ const _: () = {
         CMD_GET_REMAINING,
         CMD_REQUEST_UNLOCK,
         CMD_GET_PUBKEY,
-        CMD_CLEAR_SIGN,
         CMD_SIGN_USEROP,
         CMD_GET_BOOTSTRAP_PUBKEY,
         CMD_GET_MAIN_PUBKEY,

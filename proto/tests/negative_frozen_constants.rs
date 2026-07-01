@@ -172,21 +172,11 @@ fn negative_gpv2_settlement_address_frozen() {
     );
 }
 
-#[test]
-fn negative_cowswap_sentinel_differs_from_settlement_only_in_last_byte() {
-    // First 19 bytes identical, last byte differs by exactly 1 (0x41 → 0x42).
-    assert_eq!(
-        COWSWAP_EIP712_SENTINEL[..19],
-        GPV2_SETTLEMENT_ADDRESS[..19],
-        "the sentinel must share its first 19 bytes with the real settlement address — they are the same address with a discriminator byte"
-    );
-    assert_ne!(
-        COWSWAP_EIP712_SENTINEL[19], GPV2_SETTLEMENT_ADDRESS[19],
-        "the sentinel and the real settlement address MUST differ in their last byte; otherwise the DB lookup would also match real on-chain calls"
-    );
-    assert_eq!(GPV2_SETTLEMENT_ADDRESS[19], 0x41);
-    assert_eq!(COWSWAP_EIP712_SENTINEL[19], 0x42);
-}
+// (Removed 2026-06-30: `negative_cowswap_sentinel_differs_from_settlement_only_in_last_byte`
+// tested `COWSWAP_EIP712_SENTINEL` — a fake-settlement-address discriminator used
+// only by the retired Poseidon/ZK DB lookup. The native EIP-712 CoW path has no
+// such sentinel; the constant was removed with the Groth16 retirement. The real
+// settlement address stays frozen by `negative_gpv2_settlement_address_frozen` above.)
 
 #[test]
 fn negative_gpv2_vault_relayer_address_frozen() {

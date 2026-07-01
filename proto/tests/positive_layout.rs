@@ -346,23 +346,19 @@ fn positive_max_execute_calldata_covers_worst_case() {
 // ───────────────────────────────────────────────────────────────────────
 
 #[test]
-fn positive_zk_v3_layout_sums() {
-    assert_eq!(
-        ZK_V3_FIXED_LEN,
-        EIP712_PROOF_LEN + EIP712_CANONICAL_LEN + EIP712_STRING_LEN
-    );
-    assert_eq!(ZK_V3_OFF_CANONICAL, EIP712_PROOF_LEN);
-    assert_eq!(
-        ZK_V3_OFF_READABLE,
-        ZK_V3_OFF_CANONICAL + EIP712_CANONICAL_LEN
-    );
-    // Spec EIP-712 canonical packed GPv2Order: 204 B
+fn positive_cow_v3_trailer_layout() {
+    // Native EIP-712 CoW v3 trailer (post Groth16-ZK retirement, 2026-06-30):
+    // the canonical packed GPv2Order followed by up to two Merkle-bundle
+    // sections. There is NO proof / readable-string slot any more — the
+    // readable intent is decoded on-device. `TRAILER_KIND_ZK_V3 = 3` keeps its
+    // legacy name for wire compatibility.
     assert_eq!(EIP712_CANONICAL_LEN, 204);
-    // 8×16 readable
-    assert_eq!(EIP712_STRING_LEN, 128);
-    // Groth16 proof π.A(96)+π.B(192)+π.C(96)
-    assert_eq!(EIP712_PROOF_LEN, 384);
-    assert_eq!(EIP712_PROOF_LEN, ZK_PROOF_LEN);
+    assert_eq!(COW_ORDER_BUNDLE_MAX, 1120);
+    assert_eq!(TRAILER_KIND_ZK_V3, 3);
+    assert_eq!(
+        COW_ORDER_TRAILER_MAX_LEN,
+        EIP712_CANONICAL_LEN + 2 * (2 + COW_ORDER_BUNDLE_MAX)
+    );
 }
 
 // ───────────────────────────────────────────────────────────────────────
