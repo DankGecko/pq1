@@ -1099,6 +1099,122 @@ fn positive_registry_lido_tokenamount_array_unbound_raw_and_one_token_page() {
     assert_eq!(token_pages, 1, "unbound token must be named exactly once:\n{dump}");
 }
 
+/// COMPLETENESS + FAITHFULNESS over the WHOLE prod registry: enumerates every
+/// compiled sole-dynamic-array (`<arg>.[]`) field across all 776 leaves and
+/// checks two things the roundtrip/Kani tests can't (they never render):
+///
+/// 1. **Coverage guard** — every compiled array's element `format_op` has a
+///    `render_array_element` arm (`Raw`/`Amount`/`TokenAmount`/`AddressName`).
+///    If a `unit`/`calldata`/nested array ever slips the dbgen gate into the
+///    corpus, it would silently decline-to-blind on a real user tx; this fails
+///    loudly instead. (This is the durable regression guard.)
+/// 2. **End-to-end render** — the sole-dynamic arrays whose siblings my generic
+///    calldata satisfies actually RENDER every element (array-tail-hiding
+///    closed). `visible:never` arrays (e.g. `setAllowedTargets`, Raw+hidden)
+///    and multi-field functions my stub calldata can't fully satisfy simply
+///    don't reach the ≥4-page bar — that's fine, they're covered by (1) and
+///    must not crash.
+#[test]
+fn all_compiled_registry_array_leaves_render() {
+    // render_array_element arms: Raw=0x01, Amount=0x02, TokenAmount=0x03,
+    // AddressName=0x07 (see pqsigner_erc7730::ir::FormatOp).
+    const HANDLED: &[u8] = &[0x01, 0x02, 0x03, 0x07];
+    let res = build_registry();
+    let mut all_arrays: Vec<(String, u8)> = Vec::new();
+    let mut rendered: Vec<(String, u8)> = Vec::new();
+
+    for entry in res.entries.iter() {
+        let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+        let Ok(verified) = verify_erc7730_bundle(&bundle, &res.root) else {
+            continue;
+        };
+        let mut arrays: Vec<([u8; 4], usize, Vec<u8>, u8)> = Vec::new();
+        for format in verified.ir.format_iter() {
+            let Ok(format) = format else { continue };
+            for field in format.fields() {
+                let Ok(field) = field else { continue };
+                let is_arr = super::erc7730::formatters::path_ends_with_array_all(
+                    &verified.ir,
+                    field.path_off,
+                )
+                .unwrap_or(false);
+                if is_arr {
+                    arrays.push((
+                        format.selector,
+                        format.static_head_words as usize,
+                        field.label.to_vec(),
+                        field.format_op,
+                    ));
+                }
+            }
+        }
+
+        for (selector, shw, label, fmt_op) in arrays {
+            let key = format!(
+                "{}  sel={}  elem_fmt={}",
+                entry.source.file_name().and_then(|n| n.to_str()).unwrap_or("?"),
+                hex::encode(selector),
+                fmt_op,
+            );
+            all_arrays.push((key.clone(), fmt_op));
+
+            // Canonical SOLE-dynamic-array calldata: selector + head (all words
+            // = head_end, so the array's offset slot reads `offset == head_end`
+            // whichever slot it is, and every other head field renders that
+            // value as a scalar) + tail `[count=3][1][2][3]`.
+            let head_end = shw * 32;
+            let mut cd = selector.to_vec();
+            for _ in 0..shw {
+                cd.extend_from_slice(&u256_from_u64(head_end as u64).0);
+            }
+            cd.extend_from_slice(&u256_from_u64(3).0); // count
+            for i in 1..=3u64 {
+                cd.extend_from_slice(&u256_from_u64(i).0);
+            }
+
+            let tx = envelope(entry.chain_id, entry.contract);
+            let resolver = NameResolver::new();
+            let want_bytes = &label[..label.len().min(DISPLAY_COLS)];
+            let want = String::from_utf8_lossy(want_bytes);
+            let want = want.trim_end();
+            // A render must never CRASH on a corpus leaf; a decline (Err) or a
+            // hidden/unsatisfied field (0 label pages) is acceptable here.
+            if let Ok(pages) = render_erc7730_pages(&tx, &cd, &verified, None, &resolver) {
+                let label_pages = pages.as_slice().iter().filter(|p| row_str(&p[0]) == want).count();
+                if label_pages >= 4 {
+                    // header + 3 element pages: every element shown.
+                    rendered.push((key, fmt_op));
+                }
+            }
+        }
+    }
+
+    // (1) Coverage guard — the durable regression check.
+    let unhandled: Vec<&(String, u8)> =
+        all_arrays.iter().filter(|(_, f)| !HANDLED.contains(f)).collect();
+    assert!(
+        unhandled.is_empty(),
+        "compiled ArrayAll field(s) whose element format has NO render_array_element arm \
+         (would silently decline-to-blind if visible — add the arm or tighten the dbgen \
+         gate):\n{unhandled:#?}",
+    );
+
+    // (2) End-to-end non-vacuity — real sole-dynamic arrays render every element.
+    eprintln!(
+        "compiled registry array fields: {} total, {} rendered end-to-end",
+        all_arrays.len(),
+        rendered.len()
+    );
+    for (k, _f) in &rendered {
+        eprintln!("  RENDER  {k}");
+    }
+    assert!(
+        rendered.len() >= 6,
+        "expected several sole-dynamic array leaves to render every element, found {}",
+        rendered.len()
+    );
+}
+
 #[test]
 fn array_resolve_matches_walk_differential() {
     // When the Kani-proven `walk` accepts the body, our resolver must agree
