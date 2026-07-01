@@ -98,6 +98,33 @@ by ERC20_DB_ROOT (tokenAmount) / ENS (addressName) / MAX_FORMATS / page-budget �
   tuples / EIP-712 — the gates reject them). Morpho's **static** `marketParams` was the only one whose
   members live at fixed head slots; the dynamic-tuple / array-of-tuple nested groups remain in HARD-*.
 
+## Uniswap re-grounding — the "DEX bucket has no clean capability" call was WRONG (2026-07-01)
+
+A closer read of `calldata-UniswapV3Router02.json` (six formats) overturns the earlier "Uniswap = niche
+HARD-slice, deferred" dismissal, which reasoned from the stale summary table rather than the descriptor:
+
+- **Single-hop `exactInputSingle` / `exactOutputSingle` (the flagship V3 swaps) need NO slice.** `params`
+  is a **static tuple**; `tokenPath` is `params.tokenIn` / `params.tokenOut` (static members). They were
+  blocked *only* by the H-3 tuple-member-completeness lint on ONE unaccounted member — `sqrtPriceLimitX96`.
+  **Tier A fix (landed):** the vendored descriptor now hides that member (`visible:"never"`) with rationale
+  — it is a price bound already dominated by the shown `amountOutMinimum` slippage floor, routes no funds,
+  cannot change token/amount/recipient, so hiding it is WYSIWYS-safe (same class as a hidden `nonce`/`index`).
+  Zero resolver code; +1 leaf (corpus 783→784). **⚠ Curation caveat:** this edit lives in the *vendored*
+  `secure/data/erc7730-registry/...json`; `xtask vendor-registry` re-copies from source and would drop it —
+  re-apply the two `{ "path": "params.sqrtPriceLimitX96", ... "visible": "never" }` fields after any re-vendor.
+
+- **The slices that DO remain are `tokenPath`-only across the DEX majors** — a token *identification* key for
+  the amount's symbol/decimals, never a rendered value. `[0:20]` = input token, `[-20:]` = output token,
+  `[0]`/`[-1]` = first/last of an `address[]`. Registry reach of a bounded tokenPath-slice resolver: **6 DEX
+  descriptors** (uniswap, quickswap, 1inch, flyingtulip, paraswap ×2). The **tokenPath-only invariant**
+  (slice/index permitted in `tokenPath` position, compile-time-rejected in a rendered `path`) cleanly excludes
+  the genuinely-dangerous rendered-value slices — paraswap's `pools.[-1]` / `beneficiaryAndApproveFlag.[-20:]`
+  (a shown pool/beneficiary **address**) and 1inch's `goodUntil.[-4:]` (a shown timestamp) all stay declined —
+  while unlocking the identification-only cases. This is **Tier B** (below), built as its own adversarial-review
+  + Kani-bounded landing (the array-walker discipline). The asymmetry that justifies the invariant: a tokenPath
+  failure mis-scales an *amount* (recipient + selector + "a swap is happening" stay correct), whereas a
+  rendered-value-slice failure shows a wrong *recipient* — direct theft. tokenPath slices are the safe half.
+
 ## Decision: the HARD-slice engine (the 53-function DEX hot path) — DEFER, with a specified safe subset
 
 **Decision (2026-07-01): do NOT build a general byte-slice engine now.** It is the highest-risk
