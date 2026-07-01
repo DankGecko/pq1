@@ -77,6 +77,17 @@
       "replace": "false",
       "expect": "kani_fails",
       "note": "disable the per-record op==0 DELEGATECALL-refusal in summarize_packed -> a payload carrying an op!=0 record is now accepted, so summarize_accept_implies_all_call's `Ok => forall record: operation==0` re-walk assertion MUST break. Verified 2026-07-01 by hand: mutation -> VERIFICATION:- FAILED via assert_failed_inner (the assert_eq!(rec.operation, 0) firing), unmutated -> SUCCESSFUL. Closes finding 3b-1's anti-vacuity guard (ADVERSARIAL_REVIEW_KANI_2026-07-01.md); the only kani_mutations entry outside the original 4-file curated set."
+    },
+    {
+      "id": "safe_exec_noncanonical_address",
+      "tier": "default",
+      "crate": "pqsigner-tx",
+      "harness": "decode_exec_rejects_noncanonical_address",
+      "file": "tx/src/safe_tx.rs",
+      "find": "word[..12].iter().any(|&b| b != 0)",
+      "replace": "false",
+      "expect": "kani_fails",
+      "note": "disable read_address_word_off's top-12-zero address-canonicity reject -> a dirty-padding address word (to/gas_token/refund_receiver) is accepted, so decode_exec_rejects_noncanonical_address (expects NonCanonicalAddress) MUST break. Verified 2026-07-02 by hand: mutation -> BOTH decode_exec_rejects_noncanonical_address AND decode_exec_soundness (accept-direction top-12==0 assert) -> VERIFICATION:- FAILED; unmutated -> SUCCESSFUL. Closes finding 3b/#4 (exec address canonicity had NO harness; deleting the reject kept all 12 safe_tx harnesses green)."
     }
   ]
 }

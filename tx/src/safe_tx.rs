@@ -587,6 +587,10 @@ mod verification {
             let mut to = [0u8; 20];
             to.copy_from_slice(&cd[4 + 12..4 + 32]);
             assert_eq!(d.to, to);
+            // accept ⟹ `to`'s top-12 padding is zero (canonical address — the
+            // `read_address_word_off` reject; finding 3b/#4). Without this a
+            // deleted reject would accept a dirty-padding address unseen.
+            assert!(cd[4..4 + 12].iter().all(|&b| b == 0));
 
             // `value`: word 1 (uint256).
             let mut value = [0u8; 32];
@@ -614,6 +618,10 @@ mod verification {
             let mut refund_receiver = [0u8; 20];
             refund_receiver.copy_from_slice(&cd[4 + 8 * 32 + 12..4 + 9 * 32]);
             assert_eq!(d.refund_receiver, refund_receiver);
+            // accept ⟹ gas_token (word 7) / refund_receiver (word 8) top-12
+            // padding is zero (canonical addresses; finding 3b/#4).
+            assert!(cd[4 + 7 * 32..4 + 7 * 32 + 12].iter().all(|&b| b == 0));
+            assert!(cd[4 + 8 * 32..4 + 8 * 32 + 12].iter().all(|&b| b == 0));
         }
     }
 
@@ -704,6 +712,40 @@ mod verification {
         assert!(matches!(
             decode_exec_transaction(&cd),
             Err(SafeExecDecodeError::EnumOutOfRange)
+        ));
+    }
+
+    /// Non-vacuity (negative, finding 3b/#4): a non-zero byte in the top-12
+    /// padding of ANY address word — `to` (word 0), `gas_token` (word 7), or
+    /// `refund_receiver` (word 8) — ⇒ `NonCanonicalAddress`. The `to`/gas_token/
+    /// refund_receiver reject shares `read_address_word_off`; deleting its
+    /// top-12 check leaves this control AND the `decode_exec_soundness`
+    /// accept-direction asserts red. Stops an attacker smuggling high-order
+    /// bytes past the address padding (`kani_mutations.json:
+    /// safe_exec_noncanonical_address`).
+    #[kani::proof]
+    #[kani::unwind(33)]
+    fn decode_exec_rejects_noncanonical_address() {
+        // `to` — word 0, dirty top byte.
+        let mut cd = minimal_exec_calldata();
+        cd[4] = 1;
+        assert!(matches!(
+            decode_exec_transaction(&cd),
+            Err(SafeExecDecodeError::NonCanonicalAddress)
+        ));
+        // `gas_token` — word 7, dirty top byte.
+        let mut cd = minimal_exec_calldata();
+        cd[4 + 7 * 32] = 1;
+        assert!(matches!(
+            decode_exec_transaction(&cd),
+            Err(SafeExecDecodeError::NonCanonicalAddress)
+        ));
+        // `refund_receiver` — word 8, dirty top byte.
+        let mut cd = minimal_exec_calldata();
+        cd[4 + 8 * 32] = 1;
+        assert!(matches!(
+            decode_exec_transaction(&cd),
+            Err(SafeExecDecodeError::NonCanonicalAddress)
         ));
     }
 
