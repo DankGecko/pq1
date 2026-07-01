@@ -31,8 +31,8 @@ pub(crate) mod nested;
 use crate::erc20::bundle::Erc20Metadata;
 use crate::names::NameResolver;
 use super::primitives::{
-    chain_name, write_chain, write_fee_budget_row, write_gas, write_gwei, write_line,
-    write_nonce_row, write_tip_row,
+    chain_name, write_array_item_row, write_chain, write_fee_budget_row, write_gas, write_gwei,
+    write_line, write_nonce_row, write_tip_row,
 };
 use crate::tx::eip1559::Eip1559Tx;
 use crate::tx::erc7730::VerifiedDescriptor;
@@ -527,16 +527,17 @@ fn render_one_field(
     }
 }
 
-/// Bind + render one nested-EIP-712 struct member (Phase 5, v1 single-level).
+/// Bind + render one nested-EIP-712 member — a single struct (v1) OR a
+/// single-level array-of-struct (`T[]`, v2).
 ///
-/// The security spine: the member's `hashStruct` word sits at `word_pos` of the
-/// SIGNED `parent_body`. The companion supplies the member's `encodeData` as the
-/// next DFS record in `nested.blob`; this function requires
-/// `keccak(dbgen-pinned type_hash ‖ nested_ed) == that committed word`
-/// (constant-time) BEFORE rendering any sub-field → shown ⟺ signed by
-/// collision-resistance. Every decline is a hard `Err` that unwinds the whole
-/// render (the caller discards the partial `Pages`), so a mismatch never leaks a
-/// partially-rendered nested member (E4-1 atomicity).
+/// The security spine: the member's committed word sits at `word_pos` of the
+/// SIGNED `parent_body`. For a single struct it is `keccak(type_hash ‖ ed)`; for
+/// an array it is `keccak(hashStruct(el0) ‖ … ‖ hashStruct(elN))` (the EIP-712
+/// `T[]` encoding). The device requires that committed word to equal the value it
+/// recomputes from the companion's `nested.blob` (constant-time) BEFORE rendering
+/// ANY sub-field → shown ⟺ signed by collision-resistance. Every decline is a
+/// hard `Err` that unwinds the whole render (the caller discards the partial
+/// `Pages`), so a mismatch never leaks a partially-rendered member (E4-1).
 #[allow(clippy::too_many_arguments)]
 fn render_nested_struct(
     pages: &mut Pages,
@@ -553,64 +554,122 @@ fn render_nested_struct(
 
     // 1. Parse the pinned v0x03 payload (bounds-checked, pure).
     let np = pn::parse_nested_struct_param(payload)?;
-    // 2. v1 is single-level NON-array. An array member is a v2 shape dbgen does
-    //    NOT emit as a v0x03 block; refuse belt-and-suspenders.
-    if np.is_array {
-        return Err(RenderErr::Reject("7730 nested array v2"));
-    }
-    // 3. The committed `hashStruct` word in the parent's signed encoded_data.
+
+    // 2. The committed word in the parent's SIGNED encoded_data.
     let wp = (np.word_pos as usize)
         .checked_mul(32)
         .ok_or(RenderErr::Reject("7730 nested wp ovf"))?;
-    let committed = parent_body
+    let committed: &[u8; 32] = parent_body
         .get(wp..wp + 32)
-        .ok_or(RenderErr::Reject("7730 nested wp oob"))?;
-    let committed: &[u8; 32] = committed
+        .ok_or(RenderErr::Reject("7730 nested wp oob"))?
         .try_into()
         .map_err(|_| RenderErr::Reject("7730 nested cw"))?;
 
-    // 4. Pull the next DFS `nested_ed` record + COUNT it (E1: unconditional).
-    let (nested_ed, new_cursor) = pn::read_next_nested_ed(nested.blob, nested.cursor)?;
-    nested.cursor = new_cursor;
+    // 3. Count this member as ONE descent point (E1) — single OR array. The
+    //    dbgen-pinned `nested_descent_count` counts anchors, not records, so the
+    //    reconciliation holds for arrays (the `cursor == blob.len()` check proves
+    //    the element records were consumed exactly).
     nested.records_consumed = nested
         .records_consumed
         .checked_add(1)
         .ok_or(RenderErr::Reject("7730 nested count ovf"))?;
 
-    // 5. Exact length: `nested_ed == member_count × 32` (rule 1 — hash the
-    //    COMPLETE member, so trailing signed-but-unshown words are impossible).
+    // 4. Each element's `encodeData` is EXACTLY `member_count × 32` (rule 1).
     let expected = (np.member_count as usize)
         .checked_mul(32)
         .ok_or(RenderErr::Reject("7730 nested mc ovf"))?;
+
+    if np.is_array {
+        // ── v2 array-of-struct ─────────────────────────────────────────────
+        // Wire: `[u16 elem_count]` then `elem_count` × `[u16 len][elem_ed]`.
+        let ec = nested
+            .blob
+            .get(nested.cursor..nested.cursor + 2)
+            .ok_or(RenderErr::Reject("7730 nested no elemcount"))?;
+        let elem_count = u16::from_be_bytes([ec[0], ec[1]]) as usize;
+        nested.cursor += 2;
+        // `elem_count == 0` does NOT trip the top-level "no visible members" belt
+        // (a sibling top-level field renders), so a companion could bind
+        // `keccak("")` and clear-sign an empty batch — decline explicitly.
+        if elem_count == 0 {
+            return Err(RenderErr::Reject("7730 nested array empty"));
+        }
+        if elem_count > pqsigner_erc7730::ir::MAX_NESTED_ARRAY {
+            return Err(RenderErr::Reject("7730 nested array cap"));
+        }
+
+        // Collect every element (bounded stack buffer), verifying each is exactly
+        // `member_count × 32`, THEN bind the whole array BEFORE rendering
+        // (collect-verify-then-render preserves WYSIWYS + atomicity).
+        let mut elems: [&[u8]; pqsigner_erc7730::ir::MAX_NESTED_ARRAY] =
+            [&[][..]; pqsigner_erc7730::ir::MAX_NESTED_ARRAY];
+        for slot in elems.iter_mut().take(elem_count) {
+            let (elem_ed, nc) = pn::read_next_nested_ed(nested.blob, nested.cursor)?;
+            nested.cursor = nc;
+            if elem_ed.len() != expected {
+                return Err(RenderErr::Reject("7730 nested ed len"));
+            }
+            *slot = elem_ed;
+        }
+        // THE ARRAY BINDING — keccak(concat of per-element hashStructs) ==
+        // committed, constant-time. A lied `elem_count`, a swapped/edited element,
+        // or a wrong committed word all break the equality → decline.
+        let bind = nested::hash_struct_array(np.type_hash, &elems[..elem_count]);
+        if !bool::from(bind.ct_eq(committed)) {
+            return Err(RenderErr::Reject("7730 nested array binding"));
+        }
+        // E2 address-coverage + E4-2 bounds ONCE (every element is the same
+        // pinned struct shape → same addr_word_bmp + sub-field ordinals).
+        pn::validate_nested_structure(ir, &np, COMPACT_MODE)?;
+        // Render each element with an "Item i of N" divider. `push_blank` → Err
+        // on page-budget overflow → decline (NEVER truncate a tail — that is the
+        // array-hiding WYSIWYS break one level down).
+        for (i, elem_ed) in elems.iter().enumerate().take(elem_count) {
+            let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
+            write_array_item_row(pages.row_mut(p, 0), i, elem_count);
+            render_nested_subfields(pages, ir, &np, elem_ed, tx, erc20, resolver)?;
+        }
+        return Ok(());
+    }
+
+    // ── v1 single nested struct ────────────────────────────────────────────
+    let (nested_ed, nc) = pn::read_next_nested_ed(nested.blob, nested.cursor)?;
+    nested.cursor = nc;
     if nested_ed.len() != expected {
         return Err(RenderErr::Reject("7730 nested ed len"));
     }
-
-    // 6. THE BINDING — keccak(pinned type_hash ‖ nested_ed) == committed word,
-    //    constant-time. Shown ⟺ signed by collision-resistance.
+    // THE BINDING — keccak(pinned type_hash ‖ nested_ed) == committed word.
     let hs = nested::hash_struct(np.type_hash, nested_ed);
     if !bool::from(hs.ct_eq(committed)) {
         return Err(RenderErr::Reject("7730 nested binding"));
     }
-
-    // 7. E2 address-coverage backstop + E4-2 local-ordinal bounds (pure,
-    //    independent of the build gate). Every address-typed local word must be
-    //    bound by a SHOWN sub-field's render path OR its tokenPath — `COMPACT_MODE`
-    //    is threaded so coverage tracks exactly what the renderer displays (a
-    //    hidden/skipped sub-field covers nothing).
     pn::validate_nested_structure(ir, &np, COMPACT_MODE)?;
+    render_nested_subfields(pages, ir, &np, nested_ed, tx, erc20, resolver)?;
+    Ok(())
+}
 
-    // 8. Render each visible sub-field against `nested_ed` (LOCAL resolution).
+/// Render every visible sub-field of a nested struct against `nested_ed` (its
+/// exact-length member body — LOCAL resolution). Shared by the v1 single-struct
+/// path and each v2 array element. A sub-field that is itself nested (depth > 1)
+/// is a v3 shape dbgen does not emit — decline rather than recurse into
+/// un-verified territory.
+fn render_nested_subfields(
+    pages: &mut Pages,
+    ir: &crate::tx::erc7730::Erc7730Ir<'_>,
+    np: &pqsigner_erc7730::render::nested::NestedStructParam<'_>,
+    nested_ed: &[u8],
+    tx: &Eip1559Tx,
+    erc20: Option<&Erc20Metadata<'_>>,
+    resolver: &NameResolver<'_>,
+) -> Result<(), RenderErr> {
     for sf in np.sub_fields() {
         let sf = sf.map_err(|_| RenderErr::Reject("7730 nested subfield"))?;
         let sf_params = parse_params(ir, sf.param_off)?;
-        // v1 is single-level: a nested sub-field (depth > 1) is a v3 shape dbgen
-        // does not emit — decline rather than recurse into un-verified territory.
         if sf_params.nested_struct.is_some() {
             return Err(RenderErr::Reject("7730 nested depth v3"));
         }
-        // `nested_ed` is the exact-length member body (no dynamic tail), so
-        // body == full_body and the static head width is the member count.
+        // `nested_ed` is exact-length (no dynamic tail): body == full_body, and
+        // the static head width is the member count.
         render_one_field(
             pages,
             ir,

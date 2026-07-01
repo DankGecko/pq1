@@ -304,9 +304,18 @@ order, type_hash pinned + foundry-checked, member_count, addr_word_bmp, sub_fiel
 kind → device recurse+render (atomic, E1 reconciliation) → Kani (adversarial nested_blob) → flip→decline
 real-vector render tests (Permit2 PermitSingle/PermitTransferFrom) → impl adversarial review.
 
-## 11. v2 — array-of-struct (`T[]`), 2026-07-02 (DESIGN)
+## 11. v2 — array-of-struct (`T[]`), 2026-07-02 (IMPLEMENTED)
 
-**Status: DESIGN (pre-implementation).** v1 shipped single-level NON-array nested structs. v2 adds a
+**Status: IMPLEMENTED.** dbgen emission + gate relaxation landed `93fbec79`; the device array render
+landed after a clean 5-lens adversarial review (0 findings). Permit2 **`PermitBatch`** clear-signs each
+element (`Item i of N` divider), bound by `keccak(concat of per-element hashStructs) == committed`
+(foundry-pinned 2-element vector `0xfd1160ad…`). `elem_count == 0` and `> MAX_NESTED_ARRAY = 6` decline;
+the flip→decline test flips every element word + the committed word + a lied `elem_count` → all decline.
+Bonus: Rarible ERC-721/1155 lazy-mint orders (`Part[] creators/royalties`, shown addresses) also render
+via the same machinery (their `string tokenURI` shows as a raw hashStruct word — a pre-existing v1
+limitation for `string` members, not a security issue). The design below stands.
+
+v1 shipped single-level NON-array nested structs. v2 adds a
 `T[] members` member — the last piece the clean Permit2 target needs (`PermitBatch`) and a prerequisite
 for UniswapX `DutchOutput[]` (which additionally needs v3 deep-nesting + the `fields` group syntax + a
 dynamic `bytes` member — OUT of v2 scope). v2 target = **Permit2 `PermitBatch`** ONLY:

@@ -70,6 +70,13 @@ pub const HEADER_LEN: usize = 134;
 /// harness tractable. Permit2's structs have ≤4 members; leave headroom.
 pub const MAX_NESTED_MEMBERS: usize = 32;
 
+/// Upper bound on the element count of a nested EIP-712 array-of-struct member
+/// (`T[]`, v2). Bounds the device's page budget — each element renders its
+/// visible sub-fields plus a divider, and the whole array must fit inside
+/// `MAX_PAGES` after the banner/chain/confirm pages — and the collect-verify
+/// buffer. `elem_count > MAX_NESTED_ARRAY` (or `== 0`) declines. Schema v3.
+pub const MAX_NESTED_ARRAY: usize = 6;
+
 pub const CTX_CONTRACT: u8 = 0x01;
 pub const CTX_EIP712: u8 = 0x02;
 

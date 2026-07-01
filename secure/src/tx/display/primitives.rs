@@ -538,6 +538,28 @@ pub(super) fn write_fee_budget_row(
     }
 }
 
+/// "Item X of Y" divider row for a nested array-of-struct (`T[]`) render (v2) —
+/// separates each element's page group. `idx` is 0-based; the row shows 1-based.
+pub(super) fn write_array_item_row(row: &mut [u8; DISPLAY_COLS], idx: usize, count: usize) {
+    *row = [b' '; DISPLAY_COLS];
+    let mut pos = append(row, 0, b"Item ");
+    let mut tmp = [0u8; 20];
+    if let Some(n) = format_u64((idx as u64).saturating_add(1), &mut tmp) {
+        if pos + n <= DISPLAY_COLS {
+            row[pos..pos + n].copy_from_slice(&tmp[..n]);
+            pos += n;
+        }
+    }
+    pos = append(row, pos, b" of ");
+    if let Some(n) = format_u64(count as u64, &mut tmp) {
+        if pos + n <= DISPLAY_COLS {
+            row[pos..pos + n].copy_from_slice(&tmp[..n]);
+            pos += n;
+        }
+    }
+    let _ = pos;
+}
+
 pub(super) fn write_nonce_row(row: &mut [u8; DISPLAY_COLS], nonce: u64) {
     *row = [b' '; DISPLAY_COLS];
     let mut pos = append(row, 0, b"Nonce: ");

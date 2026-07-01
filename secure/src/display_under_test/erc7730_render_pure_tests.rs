@@ -2065,37 +2065,128 @@ fn v3_permit_transfer_from_renders_and_flip_declines() {
     assert!(render(&top_ed, &blob).is_err(), "flipping nested amount must decline");
 }
 
-/// PermitBatch is `PermitDetails[]` (v2 array-of-struct). dbgen now EMITS its
-/// `is_array` anchor (the gate relaxed + the wire is ready), but the on-device
-/// ARRAY render is the GATED commit — so the device must still DECLINE it: the
-/// belt is inverted for single nested structs, NOT yet for arrays.
-/// `render_nested_struct` rejects `is_array` right after parsing the payload
-/// (before it reads the committed word or the blob), so ANY top_ed / blob
-/// declines. Locks the "arrays decline until the v2 render lands" boundary.
+// PermitBatch primary-type hash (foundry).
+const PERMIT_BATCH_TYPEHASH: [u8; 32] = [
+    0xaf, 0x1b, 0x0d, 0x30, 0xd2, 0xca, 0xb0, 0x38, 0x0e, 0x68, 0xf0, 0x68, 0x90, 0x07, 0xe3, 0x25,
+    0x49, 0x93, 0xc5, 0x96, 0xf2, 0xfd, 0xd0, 0xaa, 0xa7, 0xf4, 0xd0, 0x4f, 0x79, 0x44, 0x08, 0x63,
+];
+
+/// A REAL 2-element Permit2 `PermitBatch` (v2 array-of-struct). el0 = USDC/1e9/
+/// 2025-01-01/nonce0, el1 = WETH/5e18/2026-01-01/nonce1. The committed `details`
+/// word is the foundry-pinned array binding `keccak(hashStruct(el0)‖hashStruct(el1))
+/// = 0x57b01054…` (recomputed here via the SAME device primitive — not circular:
+/// the device recomputes from the IR-pinned type_hash + the blob; a flip in
+/// either breaks the equality). Returns `(top_ed[96], nested_blob)`.
+fn permit_batch_vectors() -> (std::vec::Vec<u8>, std::vec::Vec<u8>) {
+    let usdc = [0xA0u8, 0xb8, 0x69, 0x91, 0xc6, 0x21, 0x8b, 0x36, 0xc1, 0xd1, 0x9D, 0x4a, 0x2e,
+        0x9E, 0xb0, 0xcE, 0x36, 0x06, 0xeB, 0x48];
+    let weth = [0xC0u8, 0x2a, 0xaA, 0x39, 0xb2, 0x23, 0xFE, 0x8D, 0x0A, 0x0e, 0x5C, 0x4F, 0x27,
+        0xeA, 0xD9, 0x08, 0x3C, 0x75, 0x6C, 0xc2];
+    let spender = [0x3fu8, 0xC9, 0x1A, 0x3a, 0xfd, 0x70, 0x39, 0x5C, 0xd4, 0x96, 0xC6, 0x47, 0xd5,
+        0xa6, 0xcC, 0x9D, 0x4B, 0x2b, 0x7F, 0xAD];
+
+    let mut el0 = std::vec![0u8; 128];
+    el0[12..32].copy_from_slice(&usdc);
+    el0[32 + 24..64].copy_from_slice(&1_000_000_000u64.to_be_bytes());
+    el0[64 + 24..96].copy_from_slice(&1_735_689_600u64.to_be_bytes());
+    let mut el1 = std::vec![0u8; 128];
+    el1[12..32].copy_from_slice(&weth);
+    el1[32 + 24..64].copy_from_slice(&5_000_000_000_000_000_000u64.to_be_bytes());
+    el1[64 + 24..96].copy_from_slice(&1_767_225_600u64.to_be_bytes());
+    el1[96 + 24..128].copy_from_slice(&1u64.to_be_bytes());
+
+    let details_word =
+        super::erc7730::nested::hash_struct_array(&PERMIT_DETAILS_TYPEHASH, &[&el0[..], &el1[..]]);
+    let mut top_ed = std::vec![0u8; 96];
+    top_ed[0..32].copy_from_slice(&details_word);
+    top_ed[32 + 12..64].copy_from_slice(&spender);
+    top_ed[64 + 24..96].copy_from_slice(&1_735_689_600u64.to_be_bytes());
+
+    // nested_blob = [u16 elem_count=2] [u16 128][el0] [u16 128][el1].
+    let mut blob = std::vec![0u8, 2]; // elem_count = 2
+    blob.extend_from_slice(&128u16.to_be_bytes());
+    blob.extend_from_slice(&el0);
+    blob.extend_from_slice(&128u16.to_be_bytes());
+    blob.extend_from_slice(&el1);
+    (top_ed, blob)
+}
+
 #[test]
-fn v3_permit_batch_array_still_declines() {
+fn v3_permit_batch_array_renders_both_elements() {
     let res = build_registry();
     let leaf = find_leaf(res, "eip712-uniswap-permit2.json", 1);
-    // PermitBatch primary-type hash (foundry).
-    let pth: [u8; 32] = [
-        0xaf, 0x1b, 0x0d, 0x30, 0xd2, 0xca, 0xb0, 0x38, 0x0e, 0x68, 0xf0, 0x68, 0x90, 0x07, 0xe3,
-        0x25, 0x49, 0x93, 0xc5, 0x96, 0xf2, 0xfd, 0xd0, 0xaa, 0xa7, 0xf4, 0xd0, 0x4f, 0x79, 0x44,
-        0x08, 0x63,
-    ];
-    // details(array word) | spender | sigDeadline — content irrelevant (declined
-    // on the is_array marker before any of it is read).
-    let top_ed = std::vec![0u8; 96];
-    let nested_blob = std::vec![0u8; 4]; // never reached
+    let (top_ed, blob) = permit_batch_vectors();
     let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("permit2 IR parses");
     let verified = VerifiedDescriptor { ir };
     let resolver = NameResolver::new();
-    assert!(
+    let pages = super::erc7730::render_erc7730_eip712_pages_v3(
+        1, &[0u8; 20], &PERMIT_BATCH_TYPEHASH, &top_ed, &blob, &verified, None, &resolver,
+    )
+    .expect("valid 2-element PermitBatch clear-signs");
+    assert_all_pages_printable(&pages);
+    let dump = dump_pages(&pages).to_lowercase();
+    // Both element amounts render (raw, no token metadata → `! raw, dec=?`; a
+    // 19-digit value splits across two display rows, so match the leading run).
+    assert!(dump.contains("1000000000"), "element 0 (USDC 1e9) amount:\n{dump}");
+    assert!(dump.contains("5000000000000000"), "element 1 (WETH 5e18) amount:\n{dump}");
+    // Distinct token addresses (unverified pages) prove per-element resolution.
+    assert!(dump.contains("a0b86991c6218b"), "element 0 token (USDC):\n{dump}");
+    assert!(dump.contains("c02aaa39"), "element 1 token (WETH):\n{dump}");
+    // The "Item 1 of 2" / "Item 2 of 2" dividers.
+    assert!(dump.contains("item 1 of 2"), "element 0 divider:\n{dump}");
+    assert!(dump.contains("item 2 of 2"), "element 1 divider:\n{dump}");
+    // Both element expiration dates.
+    assert!(dump.contains("2025"), "element 0 expiration:\n{dump}");
+    assert!(dump.contains("2026"), "element 1 expiration:\n{dump}");
+}
+
+#[test]
+fn v3_permit_batch_array_binding_is_non_vacuous() {
+    let res = build_registry();
+    let leaf = find_leaf(res, "eip712-uniswap-permit2.json", 1);
+    let (top_ed, blob) = permit_batch_vectors();
+
+    let render = |ed: &[u8], b: &[u8]| {
+        let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("permit2 IR parses");
+        let verified = VerifiedDescriptor { ir };
+        let resolver = NameResolver::new();
         super::erc7730::render_erc7730_eip712_pages_v3(
-            1, &[0u8; 20], &pth, &top_ed, &nested_blob, &verified, None, &resolver,
+            1, &[0u8; 20], &PERMIT_BATCH_TYPEHASH, ed, b, &verified, None, &resolver,
         )
-        .is_err(),
-        "PermitBatch (is_array) must decline until the v2 array render lands"
-    );
+    };
+    assert!(render(&top_ed, &blob).is_ok(), "baseline renders");
+
+    // (a) Flip ONE bit inside EACH element word (both elements, shown + hidden
+    // words) → the concat hashStruct no longer matches `committed` → DECLINE.
+    // `blob` layout: elem_count(2) then [len(2) el0(128)] [len(2) el1(128)];
+    // element bytes start at offset 4 (el0) and 4+128+2=134 (el1).
+    for (base, label) in [(4usize, "el0"), (134usize, "el1")] {
+        for word in 0..4usize {
+            let mut b = blob.clone();
+            b[base + word * 32] ^= 0x01;
+            assert!(
+                render(&top_ed, &b).is_err(),
+                "flipping {label} word {word} must decline (array binding is live)"
+            );
+        }
+    }
+    // (b) Flip the committed `details` array word → DECLINE.
+    for byte in [0usize, 31] {
+        let mut ed = top_ed.clone();
+        ed[byte] ^= 0x01;
+        assert!(render(&ed, &blob).is_err(), "flipping committed array word byte {byte} declines");
+    }
+    // (c) Lie about elem_count (claim 1) — the concat over 1 element != committed
+    // (which bound 2) → DECLINE (element-count is implicitly bound by the hash).
+    let mut b = blob.clone();
+    b[0] = 0;
+    b[1] = 1;
+    assert!(render(&top_ed, &b).is_err(), "lying elem_count=1 must decline");
+    // (d) elem_count = 0 → explicit decline (the empty-batch attack).
+    let mut b0 = blob.clone();
+    b0[0] = 0;
+    b0[1] = 0;
+    assert!(render(&top_ed, &b0).is_err(), "elem_count=0 must decline (empty batch)");
 }
 
 /// EIP-2612 Permit `owner` allowlist (`hidden_address_allow`): the canonical
