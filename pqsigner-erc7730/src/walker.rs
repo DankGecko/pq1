@@ -1,9 +1,22 @@
-//! Path-bytecode interpreter.
+//! Path-bytecode interpreter (Phase 3 — LEGACY, not on the live render path).
 //!
 //! Resolves a compiled ERC-7730 path program against a caller-supplied
 //! ABI tree (`#`-root), transaction-envelope view (`@`-root), or
-//! descriptor metadata pool (`$`-root) and yields an `AbiValue` for the
-//! Phase 4 formatter layer.
+//! descriptor metadata pool (`$`-root) and yields an `AbiValue`.
+//!
+//! ⚠ **NOT the live resolver, and its extraction-op wire encoding DIFFERS from
+//! the live one.** The shipping Phase-4 render path does NOT call this walker —
+//! it needs an [`AbiView`] tree the on-device IR does not carry, so the firmware
+//! walks path programs directly in `secure/.../display/erc7730/formatters.rs`
+//! (scalars) and `render::resolve::{resolve_structured, resolve_token_address}`
+//! (dynamic-tail / tokenPath extraction). This module's `ArrayIdx = u32 BE`,
+//! `ArraySlice = u32 start + u32 end` (below) is the ORIGINAL Phase-3 encoding
+//! and is INCOMPATIBLE with the live Tier B tokenPath extraction encoding
+//! (`ArrayIdx = u16`, `ArraySlice = u16 start + u16 len(=20) + 1 B from_end`,
+//! emitted by `dbgen::compile_token_path` and read by `resolve_token_address`).
+//! Do NOT wire this walker for tokenPath / extraction-op resolution — it would
+//! misparse a u16 index as u32 (confirm-vs-execute desync). It is kept for the
+//! Phase-3 tests and the `AbiView`-based model only.
 //!
 //! ## Wire format
 //!

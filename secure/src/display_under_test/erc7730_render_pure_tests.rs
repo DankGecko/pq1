@@ -1767,3 +1767,236 @@ fn erc2612_permit_renders_spender_hides_owner() {
         "owner is allowlist-hidden and must NOT appear:\n{dump}"
     );
 }
+
+// ───────────────────────────────────────────────────────────────────────
+// Tier B: tokenPath byte-slice / array-index resolver — Uniswap swaps.
+//
+// The token IDENTITY for a swap amount lives packed inside a dynamic leg:
+// `exactInput` `params.path.[0:20]` (input token) / `[-20:]` (output token),
+// and V2 `swapExactTokensForTokens` `path.[0]` / `[-1]`. These tests drive REAL
+// ABI-encoded multi-hop calldata and assert the resolved token — proving the
+// slice extracts the correct 20 bytes end-to-end: the ERC-20 symbol renders on a
+// leg's amount page ONLY when the slice matches that leg's real token (a wrong
+// extraction would miss the metadata and fall to raw). The magnitude is asserted
+// too (the amount itself resolves through the dynamic tuple / static head).
+// ───────────────────────────────────────────────────────────────────────
+const UNI_V3: [u8; 20] = [
+    0x68, 0xb3, 0x46, 0x58, 0x33, 0xfb, 0x72, 0xa7, 0x0e, 0xcd, 0xf4, 0x85, 0xe0, 0xe4, 0xc7, 0xbd,
+    0x86, 0x65, 0xfc, 0x45,
+];
+const TOKEN_IN: [u8; 20] = [0x11; 20];
+const TOKEN_MID: [u8; 20] = [0xAB; 20];
+const TOKEN_OUT: [u8; 20] = [0x22; 20];
+
+fn meta(contract: [u8; 20], decimals: u8, symbol: &'static [u8]) -> Erc20Metadata<'static> {
+    Erc20Metadata {
+        chain_id: 1,
+        contract,
+        decimals,
+        name: symbol,
+        symbol,
+    }
+}
+
+/// Uniswap V3 packed path: `token0 ‖ fee(3B) ‖ token1`.
+fn packed_v3_path(token0: [u8; 20], fee: u32, token1: [u8; 20]) -> Vec<u8> {
+    let mut p = Vec::new();
+    p.extend_from_slice(&token0);
+    p.extend_from_slice(&fee.to_be_bytes()[1..4]); // 3-byte fee
+    p.extend_from_slice(&token1);
+    p
+}
+
+/// `exactInput((bytes path, address recipient, uint256 amountIn, uint256 amountOutMinimum))`.
+fn calldata_exact_input(
+    token0: [u8; 20],
+    fee: u32,
+    token1: [u8; 20],
+    recipient: [u8; 20],
+    amount_in: U256,
+    amount_out_min: U256,
+) -> Vec<u8> {
+    let mut d = Vec::new();
+    d.extend_from_slice(&[0xb8, 0x58, 0x18, 0x3f]); // exactInput selector
+    d.extend_from_slice(&u256_from_u64(0x20).0); // offset to params tuple
+    // params tuple head (4 words): path-offset, recipient, amountIn, amountOutMin.
+    d.extend_from_slice(&u256_from_u64(128).0); // path offset (relative to tuple start)
+    let mut rec = [0u8; 32];
+    rec[12..].copy_from_slice(&recipient);
+    d.extend_from_slice(&rec);
+    d.extend_from_slice(&amount_in.0);
+    d.extend_from_slice(&amount_out_min.0);
+    // path blob: [len][packed, padded to 32].
+    let path = packed_v3_path(token0, fee, token1);
+    d.extend_from_slice(&u256_from_u64(path.len() as u64).0);
+    let mut padded = path;
+    while padded.len() % 32 != 0 {
+        padded.push(0);
+    }
+    d.extend_from_slice(&padded);
+    d
+}
+
+/// `swap*ForTokens(uint256 a0, uint256 a1, address[] path, address to)`
+/// (same layout for `swapExactTokensForTokens` / `swapTokensForExactTokens`).
+fn calldata_v2_swap(
+    selector: [u8; 4],
+    a0: U256,
+    a1: U256,
+    path: &[[u8; 20]],
+    to: [u8; 20],
+) -> Vec<u8> {
+    let mut d = Vec::new();
+    d.extend_from_slice(&selector);
+    d.extend_from_slice(&a0.0);
+    d.extend_from_slice(&a1.0);
+    d.extend_from_slice(&u256_from_u64(128).0); // offset to path array (4-word head)
+    let mut t = [0u8; 32];
+    t[12..].copy_from_slice(&to);
+    d.extend_from_slice(&t);
+    d.extend_from_slice(&u256_from_u64(path.len() as u64).0); // element count
+    for a in path {
+        let mut w = [0u8; 32];
+        w[12..].copy_from_slice(a);
+        d.extend_from_slice(&w);
+    }
+    d
+}
+
+fn render_uni(calldata: &[u8], token: Option<&Erc20Metadata<'_>>) -> Pages {
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-UniswapV3Router02.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
+    let tx = envelope(1, UNI_V3);
+    let resolver = NameResolver::new();
+    render_erc7730_pages(&tx, calldata, &verified, token, &resolver).expect("render")
+}
+
+#[test]
+fn uniswap_exact_input_binds_input_token_from_head_slice() {
+    // `[0:20]` = input token. amountIn 1.5 TKA (6 decimals).
+    let calldata = calldata_exact_input(
+        TOKEN_IN,
+        3000,
+        TOKEN_OUT,
+        [0x33; 20],
+        u256_from_u64(1_500_000),
+        u256_from_u64(4_000_000_000_000_000_000),
+    );
+    let m = meta(TOKEN_IN, 6, b"TKA");
+    let pages = render_uni(&calldata, Some(&m));
+    assert_all_pages_printable(&pages);
+
+    let p = find_page_by_label(&pages, "Amount to Send");
+    let rows = page_strs(&pages, p);
+    assert!(
+        rows.iter().any(|r| r.contains("TKA")),
+        "input token id from params.path.[0:20] must bind → TKA: {rows:?}"
+    );
+    // The amount wraps across the two value rows on the 16-col display.
+    let val = format!("{}{}", rows[1], rows[2]);
+    assert!(
+        val.contains("1.5"),
+        "amountIn magnitude must resolve through the dynamic tuple: {rows:?}"
+    );
+    // Per-leg: the OUTPUT leg (token1 != TKA metadata) must NOT show TKA.
+    let po = find_page_by_label(&pages, "Minimum to Recei");
+    let ro = page_strs(&pages, po);
+    assert!(
+        !ro.iter().any(|r| r.contains("TKA")),
+        "output leg must not inherit the input token's symbol: {ro:?}"
+    );
+}
+
+#[test]
+fn uniswap_exact_input_binds_output_token_from_tail_slice() {
+    // `[-20:]` = output token. amountOutMinimum 4 TKB (18 decimals).
+    let calldata = calldata_exact_input(
+        TOKEN_IN,
+        3000,
+        TOKEN_OUT,
+        [0x33; 20],
+        u256_from_u64(1_500_000),
+        u256_from_u64(4_000_000_000_000_000_000),
+    );
+    let m = meta(TOKEN_OUT, 18, b"TKB");
+    let pages = render_uni(&calldata, Some(&m));
+    let p = find_page_by_label(&pages, "Minimum to Recei");
+    let rows = page_strs(&pages, p);
+    assert!(
+        rows.iter().any(|r| r.contains("TKB")),
+        "output token id from params.path.[-20:] must bind → TKB: {rows:?}"
+    );
+    assert!(
+        rows.iter().any(|r| r.contains('4')),
+        "amountOutMinimum magnitude must resolve: {rows:?}"
+    );
+}
+
+#[test]
+fn uniswap_v2_swap_binds_first_and_last_array_element() {
+    // 3-hop path so `[-1]` genuinely selects the LAST element, not index 1.
+    let path = [TOKEN_IN, TOKEN_MID, TOKEN_OUT];
+    // `swapExactTokensForTokens`: amountIn tokenPath = path.[0].
+    let cd_in = calldata_v2_swap(
+        [0x47, 0x2b, 0x43, 0xf3],
+        u256_from_u64(1_500_000),
+        u256_from_u64(1),
+        &path,
+        [0x33; 20],
+    );
+    let ma = meta(TOKEN_IN, 6, b"TKA");
+    let pages = render_uni(&cd_in, Some(&ma));
+    let p = find_page_by_label(&pages, "Amount to Send");
+    let rows = page_strs(&pages, p);
+    assert!(
+        rows.iter().any(|r| r.contains("TKA")),
+        "path.[0] must bind the first element → TKA: {rows:?}"
+    );
+
+    // `swapTokensForExactTokens`: amountOut tokenPath = path.[-1] (last element).
+    // amountOut = 4 TKB (18 decimals); amountInMax's path.[0] leg stays unbound.
+    let cd_out = calldata_v2_swap(
+        [0x42, 0x71, 0x2a, 0x67],
+        u256_from_u64(4_000_000_000_000_000_000),
+        u256_from_u64(1_500_000),
+        &path,
+        [0x33; 20],
+    );
+    let mb = meta(TOKEN_OUT, 18, b"TKB");
+    let pages2 = render_uni(&cd_out, Some(&mb));
+    let p2 = find_page_by_label(&pages2, "Amount to Receiv");
+    let rows2 = page_strs(&pages2, p2);
+    assert!(
+        rows2.iter().any(|r| r.contains("TKB")),
+        "path.[-1] must bind the LAST element (3-hop) → TKB: {rows2:?}"
+    );
+    // Non-vacuity: the last element is TOKEN_OUT, not TOKEN_MID.
+    assert!(
+        !rows2.iter().any(|r| r.contains("TKM")),
+        "path.[-1] must not pick the middle element: {rows2:?}"
+    );
+}
+
+#[test]
+fn uniswap_slice_binding_is_non_vacuous_decoy_token() {
+    // A decoy token NOT in the path must NOT bind — proves the symbol renders
+    // only when the extracted slice equals the metadata contract (a wrong slice
+    // would silently fall to the raw-amount fallback, never a wrong symbol).
+    let calldata = calldata_exact_input(
+        TOKEN_IN,
+        3000,
+        TOKEN_OUT,
+        [0x33; 20],
+        u256_from_u64(1_500_000),
+        u256_from_u64(4_000_000_000_000_000_000),
+    );
+    let decoy = meta([0x99; 20], 6, b"DEC");
+    let pages = render_uni(&calldata, Some(&decoy));
+    let dump = dump_pages(&pages);
+    assert!(
+        !dump.contains("DEC"),
+        "decoy token (not in path) must never bind:\n{dump}"
+    );
+}

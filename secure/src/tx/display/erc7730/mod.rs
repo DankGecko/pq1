@@ -377,9 +377,14 @@ fn render_fields(
                     formatters::render_dynamic_bytes(
                         &field, pages, ir, full_body, tx, erc20, resolver, &params,
                     )?;
-                } else if formatters::path_needs_full_body(ir, field.path_off)? {
-                    // C2: a scalar field reached by descending a dynamic offset
-                    // (dynamic-tuple member) — same scalar renderers, FULL body.
+                } else if formatters::path_needs_full_body(ir, field.path_off)?
+                    || formatters::token_path_needs_full_body(&params)
+                {
+                    // C2 / Tier B: a scalar field reached by descending a dynamic
+                    // offset (dynamic-tuple member) — OR a `tokenAmount` whose
+                    // `tokenPath` extracts a token id from a dynamic swap leg
+                    // (packed `bytes path`, `address[]`), even if the amount field
+                    // itself is static-head. Same scalar renderers, FULL body.
                     formatters::dispatch(&field, pages, ir, full_body, tx, erc20, resolver, &params)?;
                 } else {
                     // Static-head scalar — head-bounded body (byte-identical).

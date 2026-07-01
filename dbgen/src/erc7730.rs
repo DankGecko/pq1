@@ -81,16 +81,17 @@ const PATHOP_ROOT_STRUCT: u8 = 0x10;
 const PATHOP_ROOT_CONTAINER: u8 = 0x11;
 const PATHOP_ROOT_METADATA: u8 = 0x12;
 const PATHOP_FIELD_IDX: u8 = 0x20;
-// Wire constants for the device-side path bytecode. dbgen only EMITS
-// ArrayAll (render-all of a sole dynamic array); single-index / slice / last
-// are deliberately never emitted (they would hide an array's other elements),
-// but the values are kept here as the canonical wire space shared with the
-// on-device `PathOp` enum.
-#[allow(dead_code)]
+// Wire constants for the device-side path bytecode (canonical wire space shared
+// with the on-device `PathOp` enum). In a rendered-VALUE path dbgen emits only
+// ArrayAll (render-all of a sole dynamic array) — single-index / slice / last are
+// refused there (they would hide an array's other elements). ArrayIdx / ArraySlice
+// / ArrayLast ARE emitted, but ONLY inside a `tokenAmount`'s `PARAM_TOKEN_PATH`
+// TLV (token-IDENTITY extraction from a dynamic swap leg — Tier B, see
+// `compile_token_path_extraction`), never in a rendered-value program. Encoding:
+// ArrayIdx = op + u16 BE index; ArraySlice = op + u16 BE start + u16 BE len(=20) +
+// 1 B from_end; ArrayLast = op. Device: `render::resolve::resolve_token_address`.
 const PATHOP_ARRAY_IDX: u8 = 0x21;
-#[allow(dead_code)]
 const PATHOP_ARRAY_SLICE: u8 = 0x22;
-#[allow(dead_code)]
 const PATHOP_ARRAY_LAST: u8 = 0x23;
 const PATHOP_ARRAY_ALL: u8 = 0x24;
 /// Follow the ABI offset word at the current head slot into the calldata tail
@@ -1632,7 +1633,7 @@ fn compile_params(
     match format_op {
         FMT_TOKEN_AMOUNT => {
             if let Some(tp) = params.get("tokenPath").and_then(|v| v.as_str()) {
-                let prog = compile_path(tp, context_kind, parsed)
+                let prog = compile_token_path(tp, context_kind, parsed)
                     .map_err(|e| format!("tokenPath `{tp}`: {e}"))?;
                 push_tlv(&mut out, PARAM_TOKEN_PATH, &prog)?;
             }
@@ -3063,10 +3064,39 @@ fn parse_fixed_array_len(suffix: &str) -> Result<Option<u32>, String> {
         .map_err(|_| format!("bad fixed-array length in `{suffix}`"))
 }
 
+/// Compile a rendered-VALUE path (the field's own `path`). Array index / byte
+/// slice ops are REFUSED here — showing one element/slice of a value hides the
+/// rest (the array-tail-hiding WYSIWYS hazard). This is the load-bearing half of
+/// the tokenPath-only-slice invariant: only [`compile_token_path`] may emit an
+/// extraction op, so a slice can never reach a shown value.
 fn compile_path(
     path: &str,
     context_kind: u8,
     parsed: &ParsedFormatKey,
+) -> Result<Vec<u8>, String> {
+    compile_path_inner(path, context_kind, parsed, false)
+}
+
+/// Compile a `tokenPath` (a `tokenAmount`'s token-IDENTIFICATION address).
+/// Unlike [`compile_path`] this MAY end in a single byte-slice / array-index
+/// extraction op (`params.path.[0:20]`, `path.[-1]`) resolving the token address
+/// packed inside a dynamic swap leg. The 20 bytes feed only an ERC-20 decimals/
+/// symbol lookup — never a shown address — so a wrong extraction degrades an
+/// amount to raw + `! raw, dec=?` (audit M-4), never a wrong recipient. See the
+/// device resolver `render::resolve::resolve_token_address`.
+fn compile_token_path(
+    path: &str,
+    context_kind: u8,
+    parsed: &ParsedFormatKey,
+) -> Result<Vec<u8>, String> {
+    compile_path_inner(path, context_kind, parsed, true)
+}
+
+fn compile_path_inner(
+    path: &str,
+    context_kind: u8,
+    parsed: &ParsedFormatKey,
+    is_token_path: bool,
 ) -> Result<Vec<u8>, String> {
     let path = path.trim();
     if path.is_empty() {
@@ -3099,7 +3129,7 @@ fn compile_path(
     //     another. See `compile_structured_contract_path` +
     //     `docs/security/VULN-erc7730-walker-slot-confusion.md`.
     if root == PATHOP_ROOT_STRUCT && context_kind == CTX_CONTRACT {
-        compile_structured_contract_path(&tokenize_path(rest)?, parsed, &mut out)?;
+        compile_structured_contract_path(&tokenize_path(rest)?, parsed, &mut out, is_token_path)?;
         return Ok(out);
     }
 
@@ -3128,7 +3158,8 @@ fn compile_path(
             PathSeg::ArrayIdx(_)
             | PathSeg::ArrayLast
             | PathSeg::ArrayAll
-            | PathSeg::ArraySlice(_, _) => {
+            | PathSeg::ArraySlice(_, _)
+            | PathSeg::ArraySliceLast(_) => {
                 return Err(
                     "array op (`[i]`/`[-1]`/`[]`/slice) is only supported as `<arg>.[]` on a \
                      contract-calldata (`#`) dynamic array — not on `@`/`$` envelope roots or \
@@ -3159,6 +3190,7 @@ fn compile_structured_contract_path(
     segs: &[PathSeg<'_>],
     parsed: &ParsedFormatKey,
     out: &mut Vec<u8>,
+    is_token_path: bool,
 ) -> Result<(), String> {
     // A trailing `[]` (ArrayAll) renders EVERY element of a top-level dynamic
     // array — the only array op the renderer supports. Single-index `[i]` /
@@ -3167,6 +3199,25 @@ fn compile_structured_contract_path(
     // design doc for the safety argument.
     if matches!(segs.last(), Some(PathSeg::ArrayAll)) {
         return compile_array_all_path(&segs[..segs.len() - 1], parsed, out);
+    }
+
+    // tokenPath ONLY: a trailing extraction op (`[i]` / `[-1]` / `[a:b]` /
+    // `[-N:]`) pulls a token IDENTIFICATION address out of a dynamic swap leg
+    // (packed `bytes path`, or an `address[]`). For a rendered VALUE path this
+    // is refused — the names loop below hits its `_ => reject` arm — which is
+    // the load-bearing half of the tokenPath-only-slice invariant.
+    if is_token_path {
+        if let Some(last) = segs.last() {
+            if matches!(
+                last,
+                PathSeg::ArrayIdx(_)
+                    | PathSeg::ArrayLast
+                    | PathSeg::ArraySlice(_, _)
+                    | PathSeg::ArraySliceLast(_)
+            ) {
+                return compile_token_path_extraction(&segs[..segs.len() - 1], last, parsed, out);
+            }
+        }
     }
 
     let mut names: Vec<&str> = Vec::with_capacity(segs.len());
@@ -3264,6 +3315,167 @@ fn compile_structured_contract_path(
                 .map(Vec::as_slice)
                 .unwrap_or(&[]);
             level_types = inner.as_slice();
+        }
+    }
+    Ok(())
+}
+
+/// Compile a `tokenPath` that ends in an extraction op, resolving a token
+/// address packed inside a dynamic swap leg. `name_segs` navigates to the
+/// dynamic container (all `Name`s, ≤ 2 levels, same width-aware head-slot walk
+/// as a normal path); `extract` is its terminal `[i]` / `[-1]` / `[a:b]` /
+/// `[-N:]` op. Emits `FieldIdx… + FollowOffset + <extraction op>`.
+///
+/// Type discipline (build-time — a hazardous descriptor never compiles):
+///   * `[a:b]` / `[-N:]` require the container to be dynamic `bytes`/`string`
+///     and the slice width to be **exactly 20** (an address). Uniswap
+///     `params.path.[0:20]` (input token) / `[-20:]` (output token). This
+///     rejects paraswap's 32-byte word slices (`#.data.[292:324]`).
+///   * `[i]` / `[-1]` require a dynamic `address[]` (element read as an
+///     address). Uniswap V2 `swapExactTokensForTokens` `path.[0]` / `[-1]`.
+/// The device resolver (`render::resolve::resolve_token_address`) re-validates
+/// every bound at runtime and degrades any failure to raw-amount.
+fn compile_token_path_extraction(
+    name_segs: &[PathSeg<'_>],
+    extract: &PathSeg<'_>,
+    parsed: &ParsedFormatKey,
+    out: &mut Vec<u8>,
+) -> Result<(), String> {
+    const ADDR_SLICE_LEN: u32 = 20;
+
+    let mut names: Vec<&str> = Vec::with_capacity(name_segs.len());
+    for seg in name_segs {
+        match seg {
+            PathSeg::Name(n) => names.push(n),
+            _ => {
+                return Err(
+                    "tokenPath extraction op (`[i]`/`[-1]`/slice) must be the terminal segment"
+                        .to_string(),
+                )
+            }
+        }
+    }
+    if names.is_empty() {
+        return Err("tokenPath extraction names no field".to_string());
+    }
+    if names.len() > 2 {
+        return Err(format!(
+            "tokenPath `{}` descends {} levels; only top-level and one tuple level are supported",
+            names.join("."),
+            names.len()
+        ));
+    }
+
+    let mut level_names: &[String] = &parsed.top_names;
+    let mut level_types: &[String] = &parsed.top_types;
+    for (depth, &name) in names.iter().enumerate() {
+        let terminal = depth == names.len() - 1;
+        let pos = level_names
+            .iter()
+            .position(|n| n == name)
+            .ok_or_else(|| format!("tokenPath field `{name}` is not in the function signature"))?;
+        let mut slot: u32 = 0;
+        for ty in &level_types[..pos] {
+            slot = slot.saturating_add(head_slot_words(ty)?);
+        }
+        let arg: u16 = slot
+            .try_into()
+            .map_err(|_| format!("head slot {slot} for `{name}` overflows u16"))?;
+        out.push(PATHOP_FIELD_IDX);
+        out.extend_from_slice(&arg.to_be_bytes());
+
+        let this_ty = level_types[pos].trim();
+        if !terminal {
+            // Descend a tuple (dynamic tuple → FollowOffset), same as the value path.
+            if static_head_words(this_ty)? == HeadWidth::Dynamic {
+                out.push(PATHOP_FOLLOW_OFFSET);
+            }
+            let inner = parsed.inner_types.get(name).ok_or_else(|| {
+                format!("tokenPath descends into `{name}`, which is not a parsed tuple argument")
+            })?;
+            level_names = parsed
+                .inner_names
+                .get(name)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            level_types = inner.as_slice();
+            continue;
+        }
+
+        // Terminal: the container the extraction reads. Must be dynamic; follow
+        // its head-slot offset to the tail region, then emit the extraction op.
+        match extract {
+            PathSeg::ArraySlice(_, _) | PathSeg::ArraySliceLast(_) => {
+                if this_ty != "bytes" && this_ty != "string" {
+                    return Err(format!(
+                        "tokenPath byte-slice needs a dynamic `bytes`/`string` container, got `{this_ty}`"
+                    ));
+                }
+                let (start, from_end) = match extract {
+                    PathSeg::ArraySlice(a, b) => {
+                        let len = b.checked_sub(*a).filter(|l| *l > 0).ok_or_else(|| {
+                            format!("tokenPath slice `[{a}:{b}]` is empty or reversed")
+                        })?;
+                        if len != ADDR_SLICE_LEN {
+                            return Err(format!(
+                                "tokenPath slice `[{a}:{b}]` is {len} bytes; only a 20-byte address \
+                                 slice is accepted (packed-path token id)"
+                            ));
+                        }
+                        (*a, false)
+                    }
+                    PathSeg::ArraySliceLast(n) => {
+                        if *n != ADDR_SLICE_LEN {
+                            return Err(format!(
+                                "tokenPath tail slice `[-{n}:]` is {n} bytes; only a 20-byte address \
+                                 slice is accepted"
+                            ));
+                        }
+                        (0u32, true)
+                    }
+                    _ => unreachable!(),
+                };
+                let start_u16: u16 = start
+                    .try_into()
+                    .map_err(|_| format!("tokenPath slice start {start} overflows u16"))?;
+                out.push(PATHOP_FOLLOW_OFFSET);
+                out.push(PATHOP_ARRAY_SLICE);
+                out.extend_from_slice(&start_u16.to_be_bytes());
+                out.extend_from_slice(&(ADDR_SLICE_LEN as u16).to_be_bytes());
+                out.push(u8::from(from_end));
+            }
+            PathSeg::ArrayIdx(_) | PathSeg::ArrayLast => {
+                // Dynamic `address[]` — element read as a 32-byte word, low 20 =
+                // address. Reject fixed-length arrays and non-address elements.
+                let open = find_last_array_open(this_ty).ok_or_else(|| {
+                    format!("tokenPath index needs a dynamic `address[]`, got `{this_ty}`")
+                })?;
+                if parse_fixed_array_len(&this_ty[open..])?.is_some() {
+                    return Err(format!(
+                        "tokenPath index needs a DYNAMIC array (`T[]`), got fixed `{this_ty}`"
+                    ));
+                }
+                let base = this_ty[..open].trim();
+                if base != "address" {
+                    return Err(format!(
+                        "tokenPath index element is `{base}`, not `address` — refusing to read a \
+                         non-address word as a token id"
+                    ));
+                }
+                out.push(PATHOP_FOLLOW_OFFSET);
+                match extract {
+                    PathSeg::ArrayIdx(i) => {
+                        let i_u16: u16 = (*i)
+                            .try_into()
+                            .map_err(|_| format!("tokenPath index {i} overflows u16"))?;
+                        out.push(PATHOP_ARRAY_IDX);
+                        out.extend_from_slice(&i_u16.to_be_bytes());
+                    }
+                    PathSeg::ArrayLast => out.push(PATHOP_ARRAY_LAST),
+                    _ => unreachable!(),
+                }
+            }
+            _ => unreachable!("extract is one of the four op variants"),
         }
     }
     Ok(())
@@ -3407,16 +3619,16 @@ fn resolve_field_index(
 
 enum PathSeg<'a> {
     Name(&'a str),
-    // `ArrayIdx`/`ArraySlice` carry index payloads the tokenizer still parses,
-    // but the compiler now REFUSES these ops (single-index / slice would hide
-    // an array's other elements), so the payloads are never read — only the
-    // variant identity matters for the refusal.
-    #[allow(dead_code)]
-    ArrayIdx(u32),
-    ArrayLast,
-    ArrayAll,
-    #[allow(dead_code)]
-    ArraySlice(u32, u32),
+    // Array index / slice ops. For a rendered VALUE path these are still
+    // REFUSED (single-index / slice would hide an array's other elements — the
+    // array-tail-hiding WYSIWYS hazard). They are accepted ONLY as the terminal
+    // op of a `tokenPath` (token IDENTIFICATION, not a shown value) — see
+    // `compile_structured_contract_path`'s `is_token_path` branch.
+    ArrayIdx(u32),        // `[i]`   — element i of a `T[]`
+    ArrayLast,            // `[-1]`  — last element of a `T[]`
+    ArrayAll,             // `[]`    — render every element (value path)
+    ArraySlice(u32, u32), // `[a:b]` — byte slice `[a, b)` of a dynamic `bytes`
+    ArraySliceLast(u32),  // `[-N:]` — last N bytes of a dynamic `bytes`
 }
 
 fn tokenize_path(rest: &str) -> Result<Vec<PathSeg<'_>>, String> {
@@ -3441,15 +3653,25 @@ fn tokenize_path(rest: &str) -> Result<Vec<PathSeg<'_>>, String> {
                 } else if body_trim == "-1" || body_trim == "last" {
                     out.push(PathSeg::ArrayLast);
                 } else if let Some((a, b)) = body_trim.split_once(':') {
-                    let a: u32 = a
-                        .trim()
-                        .parse()
-                        .map_err(|_| format!("slice start `{a}` not u32"))?;
-                    let b: u32 = b
-                        .trim()
-                        .parse()
-                        .map_err(|_| format!("slice end `{b}` not u32"))?;
-                    out.push(PathSeg::ArraySlice(a, b));
+                    let a = a.trim();
+                    let b = b.trim();
+                    if let Some(neg) = a.strip_prefix('-') {
+                        // `[-N:]` — last N bytes of a dynamic `bytes` (the tail
+                        // must be open; `[-N:M]` is not a shape any descriptor uses).
+                        if !b.is_empty() {
+                            return Err(format!(
+                                "negative-start slice `[{body_trim}]` must be open-ended (`[-N:]`)"
+                            ));
+                        }
+                        let n: u32 = neg
+                            .parse()
+                            .map_err(|_| format!("slice tail count `{neg}` not u32"))?;
+                        out.push(PathSeg::ArraySliceLast(n));
+                    } else {
+                        let a: u32 = a.parse().map_err(|_| format!("slice start `{a}` not u32"))?;
+                        let b: u32 = b.parse().map_err(|_| format!("slice end `{b}` not u32"))?;
+                        out.push(PathSeg::ArraySlice(a, b));
+                    }
                 } else if let Ok(n) = body_trim.parse::<u32>() {
                     out.push(PathSeg::ArrayIdx(n));
                 } else {
@@ -4519,6 +4741,155 @@ mod tests {
         let p = parse_format_key("f(uint256[] xs, address to)").unwrap();
         assert!(compile_path("#.xs[0]", CTX_CONTRACT, &p).is_err(), "array index");
         assert!(compile_path("#.nope", CTX_CONTRACT, &p).is_err(), "unknown name");
+    }
+
+    // ── Tier B: tokenPath byte-slice / array-index (tokenPath-ONLY) ──────────
+    #[test]
+    fn token_path_slice_ops_are_tokenpath_only() {
+        // The load-bearing invariant: a slice / index op compiles as a
+        // `tokenPath` (token id inside a dynamic leg) but is REFUSED in a
+        // rendered VALUE path — showing one element/slice of a value hides the
+        // rest (array-tail-hiding WYSIWYS hazard) and for an address would be a
+        // wrong recipient. This is exactly what keeps paraswap `pools.[-1]` /
+        // `beneficiaryAndApproveFlag.[-20:]` (rendered ADDRESS values) declined
+        // even after Tier B enabled slice parsing.
+        let p = parse_format_key("exactInput(bytes path, uint256 amountIn)").unwrap();
+        assert!(compile_token_path("path.[0:20]", CTX_CONTRACT, &p).is_ok(), "tokenPath [0:20]");
+        assert!(compile_token_path("path.[-20:]", CTX_CONTRACT, &p).is_ok(), "tokenPath [-20:]");
+        assert!(compile_path("path.[0:20]", CTX_CONTRACT, &p).is_err(), "VALUE slice refused");
+        assert!(compile_path("path.[-20:]", CTX_CONTRACT, &p).is_err(), "VALUE tail slice refused");
+
+        let a = parse_format_key("swap(uint256 amountIn, address[] path)").unwrap();
+        assert!(compile_token_path("path.[0]", CTX_CONTRACT, &a).is_ok(), "tokenPath [0]");
+        assert!(compile_token_path("path.[-1]", CTX_CONTRACT, &a).is_ok(), "tokenPath [-1]");
+        assert!(compile_path("path.[0]", CTX_CONTRACT, &a).is_err(), "VALUE index refused");
+        assert!(compile_path("path.[-1]", CTX_CONTRACT, &a).is_err(), "VALUE last refused");
+    }
+
+    #[test]
+    fn token_path_slice_width_and_type_guards() {
+        // Only a 20-byte ADDRESS slice — rejects paraswap's 32-byte word slices
+        // (`#.data.[292:324]`) and 1inch's 4-byte timestamp tail (`goodUntil.[-4:]`).
+        let b = parse_format_key("f(bytes data)").unwrap();
+        assert!(compile_token_path("data.[0:20]", CTX_CONTRACT, &b).is_ok(), "20-byte slice ok");
+        assert!(compile_token_path("data.[292:324]", CTX_CONTRACT, &b).is_err(), "32-byte word slice refused");
+        assert!(compile_token_path("data.[0:16]", CTX_CONTRACT, &b).is_err(), "non-20 slice refused");
+        assert!(compile_token_path("data.[-4:]", CTX_CONTRACT, &b).is_err(), "4-byte tail refused");
+
+        // Container-type discipline: slice needs dynamic `bytes`, index needs
+        // dynamic `address[]` (not a scalar, not `uint256[]`, not a fixed array).
+        let s = parse_format_key("g(uint256 x)").unwrap();
+        assert!(compile_token_path("x.[0:20]", CTX_CONTRACT, &s).is_err(), "slice on scalar refused");
+        let u = parse_format_key("h(uint256[] xs)").unwrap();
+        assert!(compile_token_path("xs.[0]", CTX_CONTRACT, &u).is_err(), "non-address element refused");
+        let fx = parse_format_key("k(address[3] fixd)").unwrap();
+        assert!(compile_token_path("fixd.[0]", CTX_CONTRACT, &fx).is_err(), "fixed array refused");
+    }
+
+    #[test]
+    fn token_path_slice_emits_terminal_extraction_op() {
+        let p = parse_format_key("exactInput(bytes path, uint256 amountIn)").unwrap();
+        let prog = compile_token_path("path.[0:20]", CTX_CONTRACT, &p).unwrap();
+        assert_eq!(prog[0], PATHOP_ROOT_STRUCT);
+        assert!(prog.contains(&PATHOP_FOLLOW_OFFSET), "FollowOffset into the bytes region");
+        assert!(prog.contains(&PATHOP_ARRAY_SLICE), "ArraySlice op emitted");
+        assert_eq!(*prog.last().unwrap(), 0x00, "[0:20] from_end flag = 0");
+        let progl = compile_token_path("path.[-20:]", CTX_CONTRACT, &p).unwrap();
+        assert_eq!(*progl.last().unwrap(), 0x01, "[-20:] from_end flag = 1");
+
+        let a = parse_format_key("swap(uint256 amountIn, address[] path)").unwrap();
+        assert!(compile_token_path("path.[0]", CTX_CONTRACT, &a).unwrap().contains(&PATHOP_ARRAY_IDX));
+        assert_eq!(
+            *compile_token_path("path.[-1]", CTX_CONTRACT, &a).unwrap().last().unwrap(),
+            PATHOP_ARRAY_LAST
+        );
+    }
+
+    // Byte-exact compile→device round-trip on the FROZEN tokenPath wire format.
+    // dbgen `compile_token_path` and the device `resolve::resolve_token_address`
+    // are two halves of one on-chain-adjacent contract: any one-sided wire edit
+    // (reorder ArraySlice start/len, flip from_end, change ArrayIdx width) is a
+    // confirm-vs-execute desync. This test compiles the real shapes and resolves
+    // the SAME bytes on the device side against a hand-built body, asserting the
+    // extracted 20-byte address — so a one-sided edit fails here even if both the
+    // dbgen-shape tests and the device unit tests still pass on their own.
+    #[test]
+    fn token_path_compile_device_round_trip() {
+        use pqsigner_erc7730::render::resolve::resolve_token_address;
+
+        fn word(bytes32: [u8; 32]) -> [u8; 32] {
+            bytes32
+        }
+        fn u(n: u64) -> [u8; 32] {
+            let mut w = [0u8; 32];
+            w[24..].copy_from_slice(&n.to_be_bytes());
+            w
+        }
+        fn addr_word(a: [u8; 20]) -> [u8; 32] {
+            let mut w = [0u8; 32];
+            w[12..].copy_from_slice(&a);
+            w
+        }
+        // Resolve a compiled program (strip the RootStructured byte) on the device.
+        fn resolve(prog: &[u8], body: &[u8]) -> [u8; 20] {
+            assert_eq!(prog[0], PATHOP_ROOT_STRUCT);
+            resolve_token_address(&prog[1..], body).expect("device resolves the compiled program")
+        }
+
+        let t_in = [0x11u8; 20];
+        let t_out = [0x22u8; 20];
+        let t_mid = [0xABu8; 20];
+
+        // exactInput: params (dynamic tuple) → path (dynamic bytes) → [0:20]/[-20:].
+        let p = parse_format_key(
+            "exactInput((bytes path, address recipient, uint256 amountIn, uint256 amountOutMinimum) params)",
+        )
+        .unwrap();
+        let mut body = Vec::new();
+        body.extend_from_slice(&u(32)); // [0]   offset to params tuple
+        body.extend_from_slice(&u(128)); // [32]  offset to path (rel. to tuple start)
+        body.extend_from_slice(&addr_word([0x33; 20])); // [64]  recipient
+        body.extend_from_slice(&u(1)); // [96]  amountIn
+        body.extend_from_slice(&u(2)); // [128] amountOutMinimum
+        body.extend_from_slice(&u(43)); // [160] path len = 20+3+20
+        let mut packed = Vec::new();
+        packed.extend_from_slice(&t_in);
+        packed.extend_from_slice(&[0x00, 0x0b, 0xb8]); // fee
+        packed.extend_from_slice(&t_out);
+        while packed.len() % 32 != 0 {
+            packed.push(0);
+        }
+        body.extend_from_slice(&packed); // [192] packed path
+
+        let prog_in = compile_token_path("params.path.[0:20]", CTX_CONTRACT, &p).unwrap();
+        assert_eq!(resolve(&prog_in, &body), t_in, "[0:20] → input token");
+        let prog_out = compile_token_path("params.path.[-20:]", CTX_CONTRACT, &p).unwrap();
+        assert_eq!(resolve(&prog_out, &body), t_out, "[-20:] → output token");
+
+        // swapExactTokensForTokens: address[] path → [0] / [-1] (3-hop).
+        let s =
+            parse_format_key("swapExactTokensForTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to)")
+                .unwrap();
+        let mut sbody = Vec::new();
+        sbody.extend_from_slice(&u(1)); // [0]  amountIn
+        sbody.extend_from_slice(&u(2)); // [32] amountOutMin
+        sbody.extend_from_slice(&u(128)); // [64] offset to path array
+        sbody.extend_from_slice(&addr_word([0x33; 20])); // [96] to
+        sbody.extend_from_slice(&u(3)); // [128] count = 3
+        sbody.extend_from_slice(&addr_word(t_in)); // [160] path[0]
+        sbody.extend_from_slice(&addr_word(t_mid)); // [192] path[1]
+        sbody.extend_from_slice(&addr_word(t_out)); // [224] path[2]
+
+        let prog_first = compile_token_path("path.[0]", CTX_CONTRACT, &s).unwrap();
+        assert_eq!(resolve(&prog_first, &sbody), t_in, "[0] → first element");
+        let prog_last = compile_token_path("path.[-1]", CTX_CONTRACT, &s).unwrap();
+        assert_eq!(resolve(&prog_last, &sbody), t_out, "[-1] → last element (3-hop, not middle)");
+
+        // Static tokenPath (no extraction op): a plain `address` argument.
+        let f = parse_format_key("g(address token)").unwrap();
+        let gbody = word(addr_word(t_in));
+        let prog_static = compile_token_path("token", CTX_CONTRACT, &f).unwrap();
+        assert_eq!(resolve(&prog_static, &gbody), t_in, "static address word");
     }
 
     #[test]

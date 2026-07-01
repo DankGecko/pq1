@@ -125,6 +125,23 @@ HARD-slice, deferred" dismissal, which reasoned from the stale summary table rat
   failure mis-scales an *amount* (recipient + selector + "a swap is happening" stay correct), whereas a
   rendered-value-slice failure shows a wrong *recipient* — direct theft. tokenPath slices are the safe half.
 
+### Tier B LANDED (2026-07-01)
+
+The bounded tokenPath-only slice/index resolver shipped. `dbgen` `compile_token_path` emits a
+terminal `ArraySlice`/`ArrayIdx`/`ArrayLast` op (only for a `tokenPath`, never a rendered value);
+the device `render::resolve::resolve_token_address` follows the same hardened `resolve_structured`
+nav then extracts a 20-byte address, degrading any OOB/wrong read to raw-amount (`! raw, dec=?`,
+audit M-4). Kani proves panic-/OOB-freedom over adversarial calldata for the three real program
+shapes; host render tests bind each swap leg's token symbol+magnitude to real ABI-encoded calldata
+(+ decoy non-vacuity); dbgen tests pin the tokenPath-only invariant + the 20-byte-address width
+guard (which keeps paraswap `#.data.[292:324]` / 1inch `goodUntil.[-4:]` declined). Impact: Uniswap
+V3 Router IR 446→811 (multi-hop `exactInput`/`exactOutput` + V2 `swap*ForTokens`), QuickSwap
+450→1088; corpus root `5c9a64db`→`8d65b027`. Full safety model:
+[`security/erc7730-tokenpath-slice-resolver.md`](./security/erc7730-tokenpath-slice-resolver.md).
+This retires the "HARD-slice DEX hot path — DEFER" decision below **for the tokenPath (identification)
+half**; the rendered-VALUE packed-path slices (paraswap beneficiary/pool) remain deferred (higher
+risk, byte-coverage-completeness still required).
+
 ## Decision: the HARD-slice engine (the 53-function DEX hot path) — DEFER, with a specified safe subset
 
 **Decision (2026-07-01): do NOT build a general byte-slice engine now.** It is the highest-risk

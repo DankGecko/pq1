@@ -706,6 +706,39 @@ pub(crate) fn path_is_dynamic_leaf(ir: &Erc7730Ir<'_>, path_off: u16) -> Result<
     Ok(scan_path_ops(ir, path_off)?.1)
 }
 
+/// A `tokenAmount`'s `tokenPath` descends a `FollowOffset` (dynamic tuple /
+/// `bytes` / `address[]`) → the token id lives in the calldata tail, so the
+/// field must resolve against the FULL body even when its OWN amount path is
+/// static-head (e.g. `swapExactTokensForTokens`: static `amountIn`, dynamic
+/// `path.[0]` token id). Parses ops properly (a `FieldIdx` slot byte can equal
+/// `FollowOffset`'s opcode, so a raw byte scan would false-positive). Any
+/// extraction op (`ArrayIdx`/`ArrayLast`/`ArraySlice`) is emitted only AFTER a
+/// `FollowOffset`, so scanning to the first follow suffices.
+pub(crate) fn token_path_needs_full_body(params: &ParamSet<'_>) -> bool {
+    let Some(tp) = params.token_path else {
+        return false;
+    };
+    if tp.first() != Some(&(PathOp::RootStructured as u8)) {
+        return false;
+    }
+    let mut p = 1usize;
+    while let Some(&op) = tp.get(p) {
+        match PathOp::try_from(op) {
+            Ok(PathOp::FieldIdx) => {
+                if p + 3 > tp.len() {
+                    return false;
+                }
+                p += 3;
+            }
+            Ok(PathOp::FollowOffset) => return true,
+            // A static-head tokenPath (or a malformed one) resolves head-bounded;
+            // if it turns out to need the tail it declines to the raw fallback.
+            _ => return false,
+        }
+    }
+    false
+}
+
 /// Resolve a dynamic (`bytes`/`string`) leaf to its data slice (full body).
 fn resolve_dynamic<'a>(
     ir: &Erc7730Ir<'_>,
@@ -1544,14 +1577,26 @@ fn resolve_token_address(
     params: &ParamSet<'_>,
 ) -> Result<[u8; 20], RenderErr> {
     if let Some(tp) = params.token_path {
-        // tp is a path program (NO leading length byte — dbgen pushes
-        // it raw via `push_tlv(PARAM_TOKEN_PATH, &prog)`). Resolve
-        // it directly without re-parsing through `path_bytes`.
-        return resolve_path_bytes(tp, body, tx).map(|w| {
-            let mut a = [0u8; 20];
-            a.copy_from_slice(&w[12..]);
-            a
-        });
+        // tp is a path program (NO leading length byte — dbgen pushes it raw via
+        // `push_tlv(PARAM_TOKEN_PATH, &prog)`). A `RootStructured` tokenPath goes
+        // through the hardened `resolve::resolve_token_address`, which handles the
+        // static-word case (`params.tokenIn`) AND the Tier-B extraction ops
+        // (`params.path.[0:20]`, `path.[-1]`) that pull a token id out of a
+        // dynamic swap leg. Container / other roots keep the legacy word→low-20.
+        if tp.is_empty() {
+            return Err(RenderErr::Reject("7730 empty tokpath"));
+        }
+        let root = PathOp::try_from(tp[0]).map_err(|_| RenderErr::Reject("7730 bad tokpath root"))?;
+        return match root {
+            PathOp::RootStructured => {
+                crate::tx::erc7730_render::resolve::resolve_token_address(&tp[1..], body)
+            }
+            _ => resolve_path_bytes(tp, body, tx).map(|w| {
+                let mut a = [0u8; 20];
+                a.copy_from_slice(&w[12..]);
+                a
+            }),
+        };
     }
     if let Some(t) = params.token {
         return Ok(*t);
