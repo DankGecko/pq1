@@ -66,3 +66,21 @@ allow_unattested_dev_descriptors = true
 signature = "submit(address _referral)"
 path = "_referral"
 rationale = "Lido stETH staking referral tag — routes no funds. The effect is the staked msg.value, shown loud on the native-value page ('Amount to stake'); the referral only credits a marketing partner and cannot redirect the stake or its stETH."
+
+# EIP-2612 Permit `owner` — the canonical Ledger permit template
+# (`ercs/eip712-erc2612-permit.json`, included by 74 token descriptors). This
+# loosens rule 2 via its intended allowlist for a genuinely-benign hidden
+# address. Safe because `owner` is DEFINITIONALLY the signer: an EIP-2612
+# `permit()` reverts unless `ecrecover(sig) == owner`, so any permit this device
+# produces that is on-chain-usable has `owner == our own account` — hiding it
+# cannot authorize a third party's funds. The risk-bearing fields ARE shown:
+# `spender` (who gets the allowance, raw), `value` (how much, tokenAmount),
+# `deadline` (until when, date). CONSCIOUS trade-off: in the 256-account wallet,
+# `owner` is the only field that would disambiguate WHICH sub-account signs —
+# hiding it means the permit screen doesn't show that (still not a WYSIWYS break:
+# funds only ever move from the signing account). `nonce` is a non-address
+# replay counter (rule 2 doesn't gate it).
+[[hidden_address_allow]]
+signature = "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"
+path = "owner"
+rationale = "EIP-2612 Permit owner == the signer (permit() reverts unless ecrecover(sig)==owner), so a device-produced usable permit always has owner==our own account; it routes no third-party funds. The effect-bearing spender/value/deadline are shown. Canonical Ledger erc2612 template, included by 74 token descriptors."

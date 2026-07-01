@@ -1729,3 +1729,41 @@ fn belt_rejects_eip712_nested_struct_permit2() {
         ),
     }
 }
+
+/// EIP-2612 Permit `owner` allowlist (`hidden_address_allow`): the canonical
+/// Ledger permit template hides `owner` (== the signer) + `nonce` and shows
+/// `spender` / `value` / `deadline`. Without the allowlist entry rule 2 refuses
+/// it and all 74 token permits blind-sign; with it, they clear-sign. This drives
+/// a REAL restored permit (LINK) through the EIP-712 render path and proves the
+/// effect-bearing `spender` renders while `owner` stays hidden — the exact
+/// WYSIWYS content of the allowlist decision.
+#[test]
+fn erc2612_permit_renders_spender_hides_owner() {
+    let res = build_registry();
+    let leaf = find_leaf(res, "eip712-permit-ethereum-link.json", 1);
+    let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("permit IR parses");
+    assert!(matches!(ir.context_kind, ContextKind::Eip712));
+    let fmt = ir.format_iter().next().expect("≥1 format").expect("valid header");
+    let pth = fmt.type_hash;
+
+    // encoded_data = owner | spender | value | nonce | deadline (5 head words).
+    let mut ed = std::vec![0u8; 5 * 32];
+    ed[12..32].copy_from_slice(&[0x11u8; 20]); // owner   (HIDDEN, == signer)
+    ed[44..64].copy_from_slice(&[0x22u8; 20]); // spender (SHOWN)
+    ed[64 + 29..96].copy_from_slice(&[0x0A, 0xBC, 0xDE]); // value = 0x0abcde (SHOWN)
+    ed[96 + 24..128].copy_from_slice(&0x6767_6767u64.to_be_bytes()); // deadline ts (SHOWN)
+
+    let verified = VerifiedDescriptor { ir };
+    let resolver = NameResolver::new();
+    let pages = super::erc7730::render_erc7730_eip712_pages(
+        1, &[0u8; 20], &pth, &ed, &verified, None, &resolver,
+    )
+    .expect("permit clear-signs (owner allowlisted)");
+    assert_all_pages_printable(&pages);
+    let dump = dump_pages(&pages).to_lowercase();
+    assert!(dump.contains("2222"), "spender must be shown:\n{dump}");
+    assert!(
+        !dump.contains("1111"),
+        "owner is allowlist-hidden and must NOT appear:\n{dump}"
+    );
+}
