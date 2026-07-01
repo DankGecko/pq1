@@ -1,0 +1,88 @@
+{
+  "_comment": "verify-gate-enforcement manifest — closes catalog class G1 (gate-enforcement vacuity) from docs/verification/fv-adversarial-review-playbook.md Part A2. Each soundness/anti-vacuity gate declares WHAT source surface it polices, WHICH workflow must run it, and its ENFORCEMENT level. check_gate_enforcement.py asserts the live CI wiring matches — a gate that is green-when-run but never RUNS on the diff it polices (wrong `paths:` filter, `continue-on-error`, workflow_dispatch-only, or unwired) is exactly as dangerous as a hollow proof (the 2026-07-01 F1 finding: verify-ledger-consistency never fired on AXIOM_STATUS.json-only edits). enforcement: 'per_pr_blocking' = must run on push/pull_request, non-continue-on-error, and the trigger `paths:` must COVER polices_paths; 'nightly' = must be invoked by a scheduled workflow; 'local_documented' = deliberately not CI-gated (a NOTE, never a failure) — must carry a `why`. polices_paths are repo-relative prefixes/globs the gate is responsible for.",
+  "workflows_dir": ".github/workflows",
+  "gates": [
+    {
+      "id": "verify-ledger-consistency",
+      "make": "make -C contracts/verification verify-ledger-consistency",
+      "polices_paths": ["contracts/verification/docs/**", "contracts/verification/lean/**"],
+      "runs_in": "lean-fv.yml",
+      "enforcement": "per_pr_blocking",
+      "note": "F1 (2026-07-01): docs/** was ABSENT from lean-fv.yml paths, so ledger-only edits never triggered it. Fixed 5c623c5d."
+    },
+    {
+      "id": "verify-fv-lints",
+      "make": "make -C contracts/verification verify-fv-lints",
+      "polices_paths": ["contracts/verification/lean/**"],
+      "runs_in": "lean-fv.yml",
+      "enforcement": "per_pr_blocking"
+    },
+    {
+      "id": "verify-audit",
+      "make": "make -C contracts/verification verify-audit",
+      "polices_paths": ["contracts/verification/lean/**"],
+      "runs_in": "lean-fv.yml",
+      "enforcement": "per_pr_blocking"
+    },
+    {
+      "id": "verify-storage-mutators",
+      "make": "make -C contracts/verification verify-storage-mutators",
+      "polices_paths": ["contracts/verification/lean/SphincsCVerify/Wallet/Storage.lean"],
+      "runs_in": "lean-fv.yml",
+      "enforcement": "per_pr_blocking",
+      "note": "was UNWIRED before 2026-07-01 (grep .github/ = 0); wired into lean-fv.yml 5c623c5d."
+    },
+    {
+      "id": "verify-proof-mutation",
+      "make": "make -C contracts/verification verify-proof-mutation",
+      "polices_paths": ["contracts/verification/lean/**", "contracts/verification/lean/scripts/proof_mutations.json"],
+      "runs_in": "nightly.yml",
+      "enforcement": "nightly",
+      "note": "slow (a full lake build per mutation) -> nightly, not per-PR (documented in nightly.yml)."
+    },
+    {
+      "id": "miri",
+      "make": "make miri",
+      "polices_paths": ["secure/src/fi.rs", "secure/src/nsc/**", "tx-core/src/**"],
+      "runs_in": "ci.yml",
+      "enforcement": "per_pr_blocking"
+    },
+    {
+      "id": "kani",
+      "make": "make kani",
+      "polices_paths": ["tx/src/**", "pqsigner-erc7730/src/**", "fw-manifest/src/**", "aa/src/**", "shared/src/**"],
+      "runs_in": "nightly.yml",
+      "enforcement": "nightly",
+      "note": "~76 harnesses, minutes -> nightly."
+    },
+    {
+      "id": "verify-kani-mutation",
+      "make": "make verify-kani-mutation",
+      "polices_paths": ["tx/src/multisend.rs", "tx/src/cowswap_order.rs", "fw-manifest/src/lib.rs", "aa/src/userop.rs"],
+      "runs_in": "nightly.yml",
+      "enforcement": "nightly"
+    },
+    {
+      "id": "verify-protocol-models",
+      "make": "make verify-protocol-models",
+      "polices_paths": ["contracts/verification/proverif/**", "contracts/verification/tamarin/**"],
+      "runs_in": "nightly.yml",
+      "enforcement": "nightly"
+    },
+    {
+      "id": "verify-repro",
+      "make": "make verify-repro",
+      "polices_paths": ["secure/src/**", "nonsecure/src/**"],
+      "runs_in": "nightly.yml",
+      "enforcement": "nightly"
+    },
+    {
+      "id": "checkct",
+      "make": "make checkct",
+      "polices_paths": ["tools/sca/checkct/**", "domain/src/kdf.rs", "sphincs-c10/src/**"],
+      "runs_in": "nightly.yml",
+      "enforcement": "local_documented",
+      "why": "the `checkct` job is workflow_dispatch-only + continue-on-error (WIP): the opam-released binsec can't build the ARM decoder + checkct plugin together; needs a from-source binsec in a clean CI switch. Validated gate is LOCAL `make checkct`. Tracked in nightly.yml comment + tools/sca/DONJON-RUST-TOOLING.md."
+    }
+  ]
+}

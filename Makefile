@@ -3927,6 +3927,16 @@ PROTOCOL_MODELS ?= proverif,tamarin,cryptoverif
 verify-protocol-models: ## anti-vacuity: assert the protocol models' verdicts vs baseline
 	PROTOCOL_MODELS="$(PROTOCOL_MODELS)" python3 scripts/check_protocol_models.py
 
+# Gate-enforcement lint — closes catalog class G1 (fv-adversarial-review-playbook
+# Part A2). Asserts every soundness gate in scripts/gate_enforcement.json actually
+# FIRES on the diff it polices (invoked by a job, path-triggered on its surface,
+# blocking) — a gate that is green-when-run but never RUNS is false assurance (the
+# 2026-07-01 F1 finding: verify-ledger-consistency never fired on ledger-only edits).
+# Fast (grep + YAML parse, no build) → per-PR. `--self-test` = negative control.
+.PHONY: verify-gate-enforcement
+verify-gate-enforcement: ## G1: assert every soundness gate is actually CI-enforced on its surface
+	python3 scripts/check_gate_enforcement.py
+
 # ---------------------------------------------------------------------------
 # Discoverability wrappers for the off-Makefile verification tools (SOTA
 # 2026-06 §1/§4; docs/tooling-and-systems.md §B). These four were installed

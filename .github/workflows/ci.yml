@@ -234,3 +234,17 @@ jobs:
       - name: forge test (default profile)
         working-directory: contracts/smart-wallet
         run: forge test
+
+  gate-enforcement:
+    name: G1 — gate-enforcement lint (every soundness gate fires on its surface)
+    runs-on: ubuntu-latest
+    # Closes catalog class G1 (docs/verification/fv-adversarial-review-playbook.md
+    # Part A2): a soundness gate that is green-when-run but never RUNS on the diff it
+    # polices is false assurance. Fast (YAML + Makefile parse, no build) -> per-PR.
+    # Meta: this lint must itself be CI-enforced, or it is its own G1.
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: verify-gate-enforcement
+        run: |
+          python3 -m pip install --quiet pyyaml
+          make verify-gate-enforcement
