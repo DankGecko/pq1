@@ -135,6 +135,23 @@ const PARAM_VISIBILITY: u8 = 0x3F;
 /// pervasively by the ERC-4626 / ERC-7540 vault templates.
 const PARAM_CONST_VALUE: u8 = 0x40;
 
+/// Format-level flag (parked on an EIP-712 format's first field) marking
+/// that the primary type carries at least one nested struct member — a
+/// single opaque `hashStruct` word the on-device renderer cannot expand.
+/// The device declines the whole format to blind-sign on seeing it, so a
+/// nested member (and any `address` inside it) is never partially
+/// clear-signed or rendered as a garbage word
+/// (`VULN-erc7730-eip712-nested-struct-address-hide`, on-device belt). The
+/// build-time visibility gate is the primary defense; this is the
+/// defense-in-depth backstop that survives a gate regression and is where
+/// the future Phase-5 nested renderer will hook faithful expansion.
+const PARAM_NESTED_STRUCT: u8 = 0x41;
+
+/// Maximum EIP-712 struct nesting the gate will walk before failing closed.
+/// Matches the on-device `ir::MAX_NESTING`; a type deeper than this (or a
+/// malformed cyclic one) is refused rather than reasoned about.
+const MAX_STRUCT_DEPTH: usize = 8;
+
 // Visibility byte values (matching `pqsigner_erc7730::ir::Visibility`).
 const VIS_ALWAYS: u8 = 0x00;
 const VIS_NEVER: u8 = 0x01;
@@ -1380,6 +1397,21 @@ fn compile_one_format(
     let static_head_words = format_static_head_words(context_kind, &parsed)
         .map_err(|e| format!("format `{sig}`: {e}"))?;
 
+    // On-device belt for `VULN-erc7730-eip712-nested-struct-address-hide`:
+    // an EIP-712 primary type with a nested struct member carries an opaque
+    // `hashStruct` word the device cannot expand. Flag it here (parked on the
+    // first field, since the header schema has no spare byte) so the device
+    // declines the whole format to blind-sign rather than partially
+    // clear-signing it or painting a struct word as a garbage value. The
+    // build-time visibility gate above is the primary defense; this is the
+    // defense-in-depth backstop. Only meaningful for EIP-712 (contract keys
+    // have no `struct_defs`).
+    let has_nested_struct = context_kind == CTX_EIP712
+        && parsed.top_types.iter().any(|ty| {
+            let (base, _) = split_array_suffix(ty);
+            type_is_struct(base, &parsed)
+        });
+
     // Compile every field's path + params first (so offsets are
     // stable before we emit the format header).
     let mut compiled: Vec<CompiledFieldOut> = Vec::with_capacity(fmt.fields.len());
@@ -1394,6 +1426,7 @@ fn compile_one_format(
             ctx,
             pool,
             enum_offsets,
+            has_nested_struct && i == 0,
         )?;
         compiled.push(cf);
     }
@@ -1438,6 +1471,7 @@ fn compile_one_field(
     ctx: &mut CompileCtx,
     pool: &mut Pool,
     enum_offsets: &BTreeMap<String, u16>,
+    emit_nested_marker: bool,
 ) -> Result<CompiledFieldOut, String> {
     // 1. Compile the path bytecode — OR, for a path-less constant
     //    annotation field, capture its literal string.
@@ -1499,6 +1533,13 @@ fn compile_one_field(
     )?;
     if let Some(cv) = &const_value {
         push_tlv(&mut param_blob, PARAM_CONST_VALUE, cv.as_bytes())?;
+    }
+    // Format-level nested-struct marker (see `has_nested_struct` in
+    // `compile_one_format`). Parked on the first field; the device rejects
+    // the whole format on encountering it. Payload is a single `0x01` so the
+    // TLV is self-describing and a zero-length variant can be reserved later.
+    if emit_nested_marker {
+        push_tlv(&mut param_blob, PARAM_NESTED_STRUCT, &[0x01])?;
     }
     let param_off = if param_blob.is_empty() {
         0u16
@@ -1790,6 +1831,17 @@ struct ParsedFormatKey {
     /// Inner member *types* for tuple-typed top args, positionally aligned
     /// with [`inner_names`](Self::inner_names).
     inner_types: BTreeMap<String, Vec<String>>,
+    /// EIP-712 referenced struct definitions parsed from the trailing
+    /// `Struct(member…)Struct2(member…)` tail of an `encodeType` format key
+    /// (`struct_name -> [(member_name, member_type)]`). Empty for contract
+    /// format keys (which carry no such tail) and for EIP-712 primary types
+    /// that reference no sub-structs. Needed to descend into nested typed-
+    /// data members: a top-level member whose type is a struct name is a
+    /// single opaque `hashStruct` word on the wire, so a fund-routing
+    /// `address` nested inside it is committed to the signature yet invisible
+    /// unless the visibility gate walks these definitions
+    /// (`VULN-erc7730-eip712-nested-struct-address-hide`).
+    struct_defs: BTreeMap<String, Vec<(String, String)>>,
 }
 
 /// Audit H-3 — contract-context field-completeness lint.
@@ -1911,9 +1963,20 @@ fn check_contract_field_completeness(
 /// of the primary type's top-level members in declaration order. Each
 /// top-level member is exactly ONE head word: value types encode inline,
 /// `bytes`/`string` encode as their keccak, and a nested struct member
-/// encodes as its `hashStruct` — one word regardless. So, unlike the
-/// contract path, there is no static-tuple-member granularity to chase; a
-/// per-top-member coverage check is both necessary and sufficient.
+/// encodes as its `hashStruct` — one word regardless. So, for the *signed-
+/// word coverage* purpose, there is no static-tuple-member granularity to
+/// chase here: a per-top-member coverage check accounts for every top-level
+/// word (which is what this lint proves).
+///
+/// The distinct hazard of an `address` hidden *inside* a nested struct
+/// member's `hashStruct` word (committed to the signature yet invisible) is
+/// NOT a coverage gap — the top-level member is still one declared word — so
+/// it is handled where it belongs: [`check_field_visibility`] descends the
+/// parsed `struct_defs` and requires every nested address to be shown, and
+/// the on-device `PARAM_NESTED_STRUCT` belt declines any nested-struct format
+/// to blind-sign (`VULN-erc7730-eip712-nested-struct-address-hide`). Keeping
+/// this lint at top-level granularity avoids over-refusing a benign
+/// address-free hidden sub-struct.
 ///
 /// Refuse to pin a descriptor unless every member is accounted for by a
 /// field of its own (rendered or `visible:"never"`) or as another field's
@@ -2152,7 +2215,6 @@ fn check_field_visibility(
 
         // Contract static-tuple members are addressed individually by the
         // renderer (mirrors the completeness lint) — descend one level.
-        // EIP-712 members are one head word each, no descent.
         let members = if context_kind == CTX_CONTRACT
             && top_ty.starts_with('(')
             && top_ty.ends_with(')')
@@ -2165,6 +2227,23 @@ fn check_field_visibility(
         } else {
             None
         };
+
+        // EIP-712 typed-data member whose type is a nested struct: its
+        // `address`es live behind an opaque `hashStruct` word, so descend
+        // through the parsed struct definitions and require each nested
+        // address to be shown — the fix for
+        // `VULN-erc7730-eip712-nested-struct-address-hide`. Scalar EIP-712
+        // members (and contract members) fall through to the checks below.
+        if context_kind == CTX_EIP712 {
+            let (base, is_array) = split_array_suffix(top_ty);
+            if type_is_struct(base, parsed) {
+                let mut visited: Vec<String> = Vec::new();
+                check_eip712_member_addresses(
+                    sig, fmt, parsed, allow, top_name, top_ty, is_array, 0, &mut visited,
+                )?;
+                continue;
+            }
+        }
 
         match members {
             Some((member_names, member_types)) => {
@@ -2212,6 +2291,121 @@ fn check_field_visibility(
     Ok(())
 }
 
+/// Recursively require every `address` reachable through an EIP-712 nested
+/// struct `member` (at descriptor path `member_path`, ABI/struct type
+/// `member_ty`) to be shown by a visible field — or re-permitted by a
+/// reviewed [`HiddenAddressAllow`]. The fix for
+/// `VULN-erc7730-eip712-nested-struct-address-hide`.
+///
+/// * A struct member (`member_ty` names a struct in the parsed tail) is
+///   descended: each of its members is checked at path
+///   `member_path.<inner>`. An *array*-of-struct member is not individually
+///   addressable on device, so if it (transitively) reaches any address the
+///   whole member must be allowlisted, else it is refused.
+/// * A scalar `address` member must be covered by a visible field whose
+///   `path` (or shown-amount `tokenPath`) resolves to exactly `member_path`.
+///
+/// Bounded by [`MAX_STRUCT_DEPTH`] and a `visited` set; a type too deep or
+/// (malformed) cyclic is refused rather than reasoned about.
+#[allow(clippy::too_many_arguments)]
+fn check_eip712_member_addresses(
+    sig: &str,
+    fmt: &Format,
+    parsed: &ParsedFormatKey,
+    allow: &[HiddenAddressAllow],
+    member_path: &str,
+    member_ty: &str,
+    is_array: bool,
+    depth: usize,
+    visited: &mut Vec<String>,
+) -> Result<(), String> {
+    let (base, _) = split_array_suffix(member_ty);
+
+    if type_is_struct(base, parsed) {
+        if is_array {
+            // Array-of-struct: the device cannot address elements, so any
+            // address inside cannot be shown — refuse unless allowlisted.
+            let mut probe: Vec<String> = Vec::new();
+            if struct_reaches_address(base, parsed, depth, &mut probe)
+                && !visibility_allowlisted(allow, sig, member_path)
+            {
+                return Err(hidden_address_err(sig, member_path));
+            }
+            return Ok(());
+        }
+        if depth >= MAX_STRUCT_DEPTH || visited.iter().any(|v| v == base) {
+            // Too deep / cyclic to reason about: fail closed on any address.
+            let mut probe: Vec<String> = Vec::new();
+            if struct_reaches_address(base, parsed, depth, &mut probe)
+                && !visibility_allowlisted(allow, sig, member_path)
+            {
+                return Err(hidden_address_err(sig, member_path));
+            }
+            return Ok(());
+        }
+        visited.push(base.to_string());
+        // Clone the member list so the recursive borrow of `parsed` is
+        // immutable-only (host build; not perf-critical).
+        let members = parsed.struct_defs.get(base).cloned().unwrap_or_default();
+        for (m_name, m_ty) in &members {
+            let child_path = format!("{member_path}.{m_name}");
+            let (_, child_is_array) = split_array_suffix(m_ty);
+            check_eip712_member_addresses(
+                sig, fmt, parsed, allow, &child_path, m_ty, child_is_array, depth + 1, visited,
+            )?;
+        }
+        visited.pop();
+        return Ok(());
+    }
+
+    // Scalar (non-struct) member: only `address`-bearing types matter.
+    if !type_contains_address(base) {
+        return Ok(());
+    }
+    let shown = fmt.fields.iter().any(|f| {
+        !field_is_hidden(f)
+            && (f
+                .path
+                .as_deref()
+                .is_some_and(|p| path_matches_member(p, member_path))
+                || field_token_path(f).is_some_and(|tp| path_matches_member(tp, member_path)))
+    });
+    if !shown && !visibility_allowlisted(allow, sig, member_path) {
+        return Err(hidden_address_err(sig, member_path));
+    }
+    Ok(())
+}
+
+/// Does descriptor `path` resolve to exactly the dotted typed-data member
+/// `member_path` (e.g. `details.token`, `witness.info.reactor`)? A leading
+/// `#`/`.` is normalised away; `@`-container / `$`-metadata roots cover no
+/// message member. Any array segment (`[…]`) means the path does not name a
+/// single scalar member and is rejected — matching the device, which cannot
+/// address an individual array element.
+fn path_matches_member(path: &str, member_path: &str) -> bool {
+    let p = path.trim();
+    let rest = if let Some(r) = p.strip_prefix('#') {
+        r.trim_start_matches('.')
+    } else if p.starts_with('@') || p.starts_with('$') {
+        return false;
+    } else {
+        p
+    };
+    if rest.contains('[') {
+        return false;
+    }
+    // Compare dot-separated segments, trimming incidental whitespace.
+    let mut a = rest.split('.').map(str::trim);
+    let mut b = member_path.split('.').map(str::trim);
+    loop {
+        match (a.next(), b.next()) {
+            (Some(x), Some(y)) if x == y => continue,
+            (None, None) => return true,
+            _ => return false,
+        }
+    }
+}
+
 fn hidden_address_err(sig: &str, arg_path: &str) -> String {
     format!(
         "format `{sig}`: address argument `{arg_path}` is `visible:\"never\"` and never shown \
@@ -2254,6 +2448,14 @@ fn parse_format_key(sig: &str) -> Result<ParsedFormatKey, String> {
     let rest = &sig[name_end..];
 
     let (args_str, types_args_str) = split_arg_list(rest)?;
+
+    // Anything after the primary type's argument list is the EIP-712
+    // `encodeType` tail: zero or more referenced struct definitions
+    // (`Struct(member…)Struct2(member…)`). `split_arg_list` matched only the
+    // FIRST paren group, so `rest[args_str.len()..]` is exactly this tail
+    // (empty for a contract selector or a struct-free typed-data type). The
+    // gate walks these to reach `address`es nested inside struct members.
+    let struct_defs = parse_struct_defs(&rest[args_str.len()..])?;
 
     let types_signature = format!("{fname}{types_args_str}");
 
@@ -2336,7 +2538,97 @@ fn parse_format_key(sig: &str) -> Result<ParsedFormatKey, String> {
         top_types,
         inner_names,
         inner_types,
+        struct_defs,
     })
+}
+
+/// Parse the trailing struct-definition list of an EIP-712 `encodeType`
+/// string — the part after the primary type's own argument list. The
+/// canonical encoding appends every referenced struct, sorted, as
+/// `Name(type name,type name,…)`; e.g. the tail of
+/// `PermitSingle(PermitDetails details,…)PermitDetails(address token,…)`
+/// is `PermitDetails(address token,…)`. Returns `name -> [(member_name,
+/// member_type)]`. Names may be forward-referenced (a struct member whose
+/// type is defined later in the tail), so callers must parse the whole tail
+/// before resolving any member type.
+///
+/// Fails closed: a malformed tail (missing `(`, unbalanced parens, a
+/// non-identifier name, or a duplicate definition) is an error, so a
+/// hand-authored descriptor is rejected and a tolerant-corpus one drops to
+/// blind-sign rather than silently under-parsing (which is what let the
+/// nested-address hide slip the gate in the first place).
+fn parse_struct_defs(tail: &str) -> Result<BTreeMap<String, Vec<(String, String)>>, String> {
+    let mut defs: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
+    let mut rest = tail.trim();
+    while !rest.is_empty() {
+        let open = rest
+            .find('(')
+            .ok_or_else(|| format!("malformed EIP-712 struct-def tail (no `(`): `{rest}`"))?;
+        let name = rest[..open].trim();
+        if name.is_empty() || first_ident_or_empty(name) != name {
+            return Err(format!("bad EIP-712 struct name in tail: `{name}`"));
+        }
+        let close = find_matching_paren(rest.as_bytes(), open)
+            .ok_or_else(|| format!("unbalanced parens in EIP-712 struct def `{name}`"))?;
+        let body = &rest[open + 1..close];
+        let mut members: Vec<(String, String)> = Vec::new();
+        for m in split_top_args(body) {
+            let m = m.trim();
+            if m.is_empty() {
+                continue;
+            }
+            members.push((last_ident(m).to_string(), strip_one_arg(m)));
+        }
+        if defs.insert(name.to_string(), members).is_some() {
+            return Err(format!("duplicate EIP-712 struct def `{name}`"));
+        }
+        rest = rest[close + 1..].trim_start();
+    }
+    Ok(defs)
+}
+
+/// Split an ABI/typed-data type into its base type and whether it carries
+/// any array suffix: `"DutchOutput[]"` → `("DutchOutput", true)`,
+/// `"address"` → `("address", false)`, `"uint256[3][]"` → `("uint256",
+/// true)`. Array elements are never individually addressable on device, so
+/// the `is_array` flag gates the nested-address descent.
+fn split_array_suffix(ty: &str) -> (&str, bool) {
+    match ty.find('[') {
+        Some(i) => (ty[..i].trim(), true),
+        None => (ty.trim(), false),
+    }
+}
+
+/// True when `base` (an array-stripped type name) is an EIP-712 struct
+/// defined in the format key's tail.
+fn type_is_struct(base: &str, parsed: &ParsedFormatKey) -> bool {
+    parsed.struct_defs.contains_key(base)
+}
+
+/// True when the EIP-712 struct `base` transitively reaches an `address`
+/// (directly, through a nested struct, or through an array-of-struct). Used
+/// to decide whether an array-of-struct member — whose elements the device
+/// cannot address individually — hides a fund-routing address. Bounded by
+/// `MAX_STRUCT_DEPTH` and a visited set, so a (malformed) cyclic type is
+/// treated as "contains an address" (fail-safe: refuse to clear-sign).
+fn struct_reaches_address(base: &str, parsed: &ParsedFormatKey, depth: usize, visited: &mut Vec<String>) -> bool {
+    if depth > MAX_STRUCT_DEPTH || visited.iter().any(|v| v == base) {
+        return true; // fail safe — cannot prove address-free
+    }
+    let Some(members) = parsed.struct_defs.get(base) else {
+        return false; // unknown non-struct base carries no address token here
+    };
+    visited.push(base.to_string());
+    let reaches = members.iter().any(|(_, mty)| {
+        let (mbase, _is_array) = split_array_suffix(mty);
+        if type_is_struct(mbase, parsed) {
+            struct_reaches_address(mbase, parsed, depth + 1, visited)
+        } else {
+            type_contains_address(mbase)
+        }
+    });
+    visited.pop();
+    reaches
 }
 
 /// `arg_list` starts with `(`. Returns the original substring plus a
@@ -3780,6 +4072,7 @@ mod tests {
             ],
             inner_names,
             inner_types,
+            struct_defs: BTreeMap::new(), // contract-context: no EIP-712 struct defs
         };
         // The malicious descriptor shows one loanToken field but NO collateralToken.
         let fmt = fmt_from_fields(
@@ -4565,6 +4858,254 @@ mod tests {
         let err = check_field_visibility(sig, &fmt, &parsed, CTX_EIP712, &[])
             .expect_err("hidden typed-data spender must be refused");
         assert!(err.contains("spender"), "names the hidden member: {err}");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // EIP-712 nested-struct fund-routing address hide
+    // (VULN-erc7730-eip712-nested-struct-address-hide). The visible:"never"
+    // gate above only walked TOP-LEVEL members; an `address` nested inside a
+    // struct member's opaque `hashStruct` word escaped it. These guard the
+    // struct-def parse, the descent, and the on-device belt marker.
+    // ─────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_struct_defs_from_encodetype_tail() {
+        // Canonical two-level.
+        let p =
+            parse_format_key("Order(Meta info,uint256 amount)Meta(address spender,uint256 flags)")
+                .unwrap();
+        assert_eq!(p.top_names, ["info", "amount"]);
+        assert_eq!(p.top_types, ["Meta", "uint256"]);
+        assert_eq!(
+            p.struct_defs.get("Meta").expect("Meta parsed"),
+            &vec![
+                ("spender".to_string(), "address".to_string()),
+                ("flags".to_string(), "uint256".to_string()),
+            ]
+        );
+
+        // Real Uniswap Permit2 single.
+        let p = parse_format_key(
+            "PermitSingle(PermitDetails details,address spender,uint256 sigDeadline)\
+             PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)",
+        )
+        .unwrap();
+        assert_eq!(p.top_types[0], "PermitDetails");
+        assert_eq!(
+            p.struct_defs.get("PermitDetails").unwrap()[0],
+            ("token".to_string(), "address".to_string())
+        );
+
+        // Forward-referenced structs (UniswapX ExclusiveDutchOrder — a member
+        // whose struct type is defined LATER in the tail; canonical EIP-712
+        // sorts struct defs, so forward refs are the norm).
+        let p = parse_format_key(
+            "PermitWitnessTransferFrom(TokenPermissions permitted,address spender,uint256 nonce,\
+             uint256 deadline,ExclusiveDutchOrder witness)DutchOutput(address token,\
+             uint256 startAmount,uint256 endAmount,address recipient)ExclusiveDutchOrder(\
+             OrderInfo info,uint256 decayStartTime,uint256 decayEndTime,address exclusiveFiller,\
+             uint256 exclusivityOverrideBps,address inputToken,uint256 inputStartAmount,\
+             uint256 inputEndAmount,DutchOutput[] outputs)OrderInfo(address reactor,address swapper,\
+             uint256 nonce,uint256 deadline,address additionalValidationContract,\
+             bytes additionalValidationData)TokenPermissions(address token,uint256 amount)",
+        )
+        .unwrap();
+        for s in ["ExclusiveDutchOrder", "OrderInfo", "DutchOutput", "TokenPermissions"] {
+            assert!(p.struct_defs.contains_key(s), "parsed {s}");
+        }
+        let edo = p.struct_defs.get("ExclusiveDutchOrder").unwrap();
+        assert!(edo.iter().any(|(n, t)| n == "outputs" && t == "DutchOutput[]"));
+    }
+
+    #[test]
+    fn visibility_eip712_nested_hidden_address_rejected() {
+        // THE canonical exploit: a benign `amount` renders while `info` (a
+        // Meta struct hiding `spender`) is `visible:"never"`. Pre-fix the
+        // gate blessed it (Meta is not the `address` token); post-fix the
+        // descent reaches `info.spender`.
+        let sig = "Order(Meta info,uint256 amount)Meta(address spender,uint256 flags)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_from_fields(
+            r#"[
+              {"path":"amount","label":"Amount","format":"raw"},
+              {"path":"info","label":"Info","visible":"never"}
+            ]"#,
+        );
+        let err = check_field_visibility(sig, &fmt, &parsed, CTX_EIP712, &[])
+            .expect_err("hidden nested spender must be refused");
+        assert!(err.contains("info.spender"), "names the nested member: {err}");
+    }
+
+    #[test]
+    fn visibility_eip712_nested_address_shown_accepted() {
+        // Same shape, but `info.spender` is surfaced by a visible field →
+        // no hidden fund-routing address, gate passes.
+        let sig = "Order(Meta info,uint256 amount)Meta(address spender,uint256 flags)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_from_fields(
+            r#"[
+              {"path":"amount","label":"Amount","format":"raw"},
+              {"path":"info.spender","label":"Spender","format":"addressName"}
+            ]"#,
+        );
+        assert!(
+            check_field_visibility(sig, &fmt, &parsed, CTX_EIP712, &[]).is_ok(),
+            "shown nested address should pass"
+        );
+    }
+
+    #[test]
+    fn visibility_eip712_permit_single_hidden_token_rejected() {
+        // Real Uniswap Permit2: hiding `details` hides `details.token`, the
+        // token being approved — a nested fund-routing address.
+        let sig = "PermitSingle(PermitDetails details,address spender,uint256 sigDeadline)\
+             PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_from_fields(
+            r#"[
+              {"path":"spender","label":"Spender","format":"addressName"},
+              {"path":"details","label":"Details","visible":"never"},
+              {"path":"sigDeadline","label":"Deadline","visible":"never"}
+            ]"#,
+        );
+        let err = check_field_visibility(sig, &fmt, &parsed, CTX_EIP712, &[])
+            .expect_err("hidden Permit2 token must be refused");
+        assert!(err.contains("details.token"), "names nested token: {err}");
+    }
+
+    #[test]
+    fn visibility_eip712_nested_no_address_accepted() {
+        // A nested struct with NO address is not a fund-routing hazard;
+        // hiding it (while showing a top-level effect field) passes the build
+        // gate. The on-device marker still declines it to blind-sign, but the
+        // gate must not over-refuse an address-free hidden sub-struct.
+        let sig = "Order(Meta info,uint256 amount)Meta(uint256 a,uint256 b)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_from_fields(
+            r#"[
+              {"path":"amount","label":"Amount","format":"raw"},
+              {"path":"info","label":"Info","visible":"never"}
+            ]"#,
+        );
+        assert!(check_field_visibility(sig, &fmt, &parsed, CTX_EIP712, &[]).is_ok());
+    }
+
+    #[test]
+    fn visibility_eip712_array_of_struct_address_rejected() {
+        // `details` is `PermitDetails[]` — array-of-struct with a nested
+        // `token` address. Elements aren't individually addressable on
+        // device, so a nested address can't be shown → refuse.
+        let sig = "PermitBatch(PermitDetails[] details,address spender,uint256 sigDeadline)\
+             PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_from_fields(
+            r#"[
+              {"path":"spender","label":"Spender","format":"addressName"},
+              {"path":"details","label":"Details","visible":"never"},
+              {"path":"sigDeadline","label":"Deadline","visible":"never"}
+            ]"#,
+        );
+        let err = check_field_visibility(sig, &fmt, &parsed, CTX_EIP712, &[])
+            .expect_err("array-of-struct nested address must be refused");
+        assert!(err.contains("details"), "names the array member: {err}");
+    }
+
+    #[test]
+    fn visibility_eip712_nested_address_allowlisted() {
+        // A reviewed allowlist entry (with rationale) re-permits ONE hidden
+        // nested address, exactly like the top-level rule.
+        let sig = "Order(Meta info,uint256 amount)Meta(address spender,uint256 flags)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_from_fields(
+            r#"[
+              {"path":"amount","label":"Amount","format":"raw"},
+              {"path":"info","label":"Info","visible":"never"}
+            ]"#,
+        );
+        let allow = vec![HiddenAddressAllow {
+            signature: sig.to_string(),
+            path: "info.spender".to_string(),
+            rationale: "test: routes no funds".to_string(),
+        }];
+        assert!(check_field_visibility(sig, &fmt, &parsed, CTX_EIP712, &allow).is_ok());
+    }
+
+    #[test]
+    fn nested_struct_marker_emitted_on_first_field() {
+        // A nested-struct EIP-712 format that PASSES the gate (no nested
+        // address) is pinned with the PARAM_NESTED_STRUCT belt on field[0].
+        let sig = "Order(Meta info,uint256 amount)Meta(uint256 a,uint256 b)";
+        let parsed = parse_format_key(sig).unwrap();
+        let field0: FieldDef =
+            serde_json::from_str(r#"{"path":"amount","label":"Amount","format":"raw"}"#).unwrap();
+        let mut ctx = CompileCtx {
+            constants: serde_json::Map::new(),
+            enums: serde_json::Map::new(),
+            descriptor_hash: [0u8; 32],
+            owner: String::new(),
+            contract_name: String::new(),
+            hidden_address_allow: Vec::new(),
+        };
+        let mut pool = Pool::new();
+        let cf = compile_one_field(
+            sig,
+            0,
+            &field0,
+            CTX_EIP712,
+            &parsed,
+            &mut ctx,
+            &mut pool,
+            &BTreeMap::new(),
+            true,
+        )
+        .unwrap();
+        let bytes = pool.into_bytes();
+        let off = cf.param_off as usize;
+        assert!(off != 0, "marker forces a non-empty param blob");
+        let len = bytes[off] as usize;
+        let blob = &bytes[off + 1..off + 1 + len];
+        // Walk the TLV blob and assert PARAM_NESTED_STRUCT (0x41 / [0x01]).
+        let mut found = false;
+        let mut c = 0;
+        while c + 2 <= blob.len() {
+            let tag = blob[c];
+            let l = blob[c + 1] as usize;
+            if tag == PARAM_NESTED_STRUCT {
+                assert_eq!(&blob[c + 2..c + 2 + l], &[0x01]);
+                found = true;
+            }
+            c += 2 + l;
+        }
+        assert!(found, "PARAM_NESTED_STRUCT emitted on field[0]");
+    }
+
+    #[test]
+    fn nested_struct_marker_not_emitted_without_nested_struct() {
+        // A struct-free EIP-712 primary type gets no marker (has_nested_struct
+        // is false → the belt only fires for genuinely un-expandable types).
+        let sig = "Permit(address owner,address spender,uint256 value)";
+        let parsed = parse_format_key(sig).unwrap();
+        assert!(parsed.struct_defs.is_empty());
+        let has_nested = parsed.top_types.iter().any(|ty| {
+            let (base, _) = split_array_suffix(ty);
+            type_is_struct(base, &parsed)
+        });
+        assert!(!has_nested, "no nested struct → no marker");
+    }
+
+    #[test]
+    fn path_matches_member_exact() {
+        assert!(path_matches_member("info.spender", "info.spender"));
+        assert!(path_matches_member("#.info.spender", "info.spender"));
+        assert!(path_matches_member("witness.info.reactor", "witness.info.reactor"));
+        // Parent alone does NOT cover a nested member.
+        assert!(!path_matches_member("info", "info.spender"));
+        // A deeper path is not the member.
+        assert!(!path_matches_member("info.spender.x", "info.spender"));
+        // Array hop / envelope roots never match a scalar member.
+        assert!(!path_matches_member("info.outputs[0].recipient", "info.outputs.recipient"));
+        assert!(!path_matches_member("@.value", "info.spender"));
+        assert!(!path_matches_member("$.x", "info.spender"));
     }
 
     #[test]

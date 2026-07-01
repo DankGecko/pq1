@@ -1678,3 +1678,54 @@ fn belt_rejects_all_hidden_contract_format() {
         ),
     }
 }
+
+// ───────────────────────────────────────────────────────────────────────
+// VULN-erc7730-eip712-nested-struct-address-hide — on-device belt.
+//
+// A pinned EIP-712 descriptor whose primary type has a nested struct member
+// (a single opaque `hashStruct` word this renderer cannot expand) MUST be
+// declined to blind-sign, not partially clear-signed or mis-resolved. Driven
+// by the REAL Uniswap Permit2 descriptor from the vendored registry (its
+// `PermitSingle` / `PermitTransferFrom` nest a `PermitDetails` /
+// `TokenPermissions` struct), so the test also proves dbgen emitted the
+// `PARAM_NESTED_STRUCT` marker into the firmware-pinned catalog.
+// ───────────────────────────────────────────────────────────────────────
+#[test]
+fn belt_rejects_eip712_nested_struct_permit2() {
+    let res = build_registry();
+    let leaf = find_leaf(res, "eip712-uniswap-permit2.json", 1);
+    let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("permit2 IR parses");
+    assert!(matches!(ir.context_kind, ContextKind::Eip712));
+
+    // Take whichever nested-struct format survived compilation; drive the
+    // renderer with its real primary-type hash so the format is FOUND (not
+    // a NoFormat miss) and we reach the field-walk belt.
+    let fmt = ir
+        .format_iter()
+        .next()
+        .expect("≥1 Permit2 format")
+        .expect("valid format header");
+    let pth = fmt.type_hash;
+    let encoded_data = std::vec![0u8; fmt.static_head_words as usize * 32];
+
+    let verified = VerifiedDescriptor { ir };
+    let verifying_contract = [0u8; 20];
+    let resolver = NameResolver::new();
+    match super::erc7730::render_erc7730_eip712_pages(
+        1,
+        &verifying_contract,
+        &pth,
+        &encoded_data,
+        &verified,
+        None,
+        &resolver,
+    ) {
+        Err(crate::tx::erc7730_render::RenderErr::Reject(msg)) => {
+            assert!(msg.contains("nested struct"), "belt reject message: {msg}");
+        }
+        Err(other) => panic!("expected nested-struct belt Reject, got {other:?}"),
+        Ok(_) => panic!(
+            "Permit2 nested-struct EIP-712 format must be belt-rejected, but it clear-signed"
+        ),
+    }
+}

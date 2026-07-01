@@ -340,6 +340,18 @@ fn render_fields(
     for field_result in format.fields() {
         let field = field_result.map_err(|_| RenderErr::Reject("7730 bad field"))?;
         let params = parse_params(ir, field.param_off)?;
+        // On-device belt for VULN-erc7730-eip712-nested-struct-address-hide:
+        // a nested-struct member is a single opaque `hashStruct` word this
+        // renderer cannot expand, so decline the WHOLE format to blind-sign
+        // rather than painting the word as a garbage value or silently
+        // skipping a hidden struct that routes funds. Checked before the
+        // visibility decision so a `visible:"never"` nested struct still
+        // trips it. The build-time gate (`check_field_visibility` descent) is
+        // the primary defense; this survives a gate regression and is the
+        // hook point for the future Phase-5 faithful nested renderer.
+        if params.nested_struct {
+            return Err(RenderErr::Reject("7730 eip712 nested struct"));
+        }
         match should_render_with_mode(&params, None, COMPACT_MODE) {
             Action::Render => {
                 // A field whose path ends in `[]` (ArrayAll) renders every

@@ -975,3 +975,100 @@ mod tests {
         assert_eq!(digest_a, digest_b);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Bounded verification (Kani)
+// ---------------------------------------------------------------------------
+//
+// The manifest is the first untrusted artifact on the firmware-update path
+// (`CMD_FW_BEGIN` accumulates 8 KB from a USB host and hands them straight to
+// the secure-world / FSBL verify chain). Panic-freedom of that chain is
+// already covered exhaustively by the `proptest` harness above and the
+// `fw-manifest/fuzz` libfuzzer targets. These Kani harnesses prove the GATE
+// DECISIONS themselves — exhaustively over the full symbolic domain, not
+// sampled — for the two Kani-reachable AUTHORITY-bearing checks: the rollback
+// boundary and the exact signed-preimage layout. The structural gate
+// (`verify_structural`) is defense-in-depth / DoS fast-reject and NOT
+// authority-bearing; it is left ENTIRELY to fuzz/proptest coverage
+// (`bad_magic_always_rejected`, `verifier_chain_never_panics`) because its
+// 3995-byte reserved-region `.any()` scan does not unwind affordably in CBMC
+// (see the note at the end of this module). The crypto steps (`verify_digest`
+// / `verify_signature` / `verify_vendor_fpr` = SHA-256 / SPHINCS+C10) and the
+// 8188-byte `verify_crc` stay fuzz/proptest-covered too — opaque crypto
+// boundary or too large to unwind, and none is authority-bearing beyond what
+// the signature already covers.
+#[cfg(kani)]
+mod verification {
+    use super::*;
+
+    /// Anti-rollback boundary (EXHAUSTIVE). `verify_rollback(floor)` accepts
+    /// IFF the manifest's `fw_version` is STRICTLY above the OTP floor, over
+    /// all `(version, floor)`. Pins the `>` — a `>=` would let a
+    /// `version == floor` reinstall slip past the anti-rollback gate (the real
+    /// off-by-one). The version this gate reads is the SAME
+    /// `read_u32_be(OFF_FW_VERSION)` field the signed preimage covers (one
+    /// field, so rollback binds the SIGNED version by construction — no
+    /// unsigned-copy gap).
+    #[kani::proof]
+    fn rollback_boundary() {
+        let mut bytes = [0u8; MANIFEST_SIZE];
+        let ver_b: [u8; 4] = kani::any();
+        bytes[OFF_FW_VERSION..OFF_FW_VERSION + 4].copy_from_slice(&ver_b);
+        let floor: u32 = kani::any();
+        let m = ManifestRef::new(&bytes);
+        assert_eq!(
+            m.verify_rollback(floor).is_ok(),
+            u32::from_be_bytes(ver_b) > floor
+        );
+    }
+
+    /// Signed-preimage layout (EXHAUSTIVE). Over symbolic `(version,
+    /// secure_hash, nonsecure_hash)`, `signed_preimage` is byte-for-byte
+    /// `DOMAIN_TAG(7) ‖ version_be(4) ‖ secure_hash(32) ‖ nonsecure_hash(32)`
+    /// = 75 B. This is EXACTLY the message the vendor's SPHINCS+C10 key signs
+    /// and that an independent auditor reconstructs from
+    /// `(version, secure.elf, nonsecure.elf)`; a layout bug (wrong offset,
+    /// dropped tag) would sign/verify over the wrong bytes — a
+    /// domain-separation break.
+    #[kani::proof]
+    #[kani::unwind(40)]
+    fn signed_preimage_layout() {
+        let version: u32 = kani::any();
+        let secure_hash: [u8; 32] = kani::any();
+        let nonsecure_hash: [u8; 32] = kani::any();
+        let pre = signed_preimage(version, &secure_hash, &nonsecure_hash);
+
+        let mut t = 0;
+        while t < 7 {
+            assert_eq!(pre[t], DOMAIN_TAG[t]);
+            t += 1;
+        }
+        let vb = version.to_be_bytes();
+        let mut i = 0;
+        while i < 4 {
+            assert_eq!(pre[7 + i], vb[i]);
+            i += 1;
+        }
+        let mut s = 0;
+        while s < 32 {
+            assert_eq!(pre[11 + s], secure_hash[s]);
+            s += 1;
+        }
+        let mut n = 0;
+        while n < 32 {
+            assert_eq!(pre[43 + n], nonsecure_hash[n]);
+            n += 1;
+        }
+    }
+
+    // NOTE: `verify_structural` gets NO Kani harness. Its reserved-region
+    // check scans 3995 bytes with `.any()`, which forces CBMC to unwind that
+    // loop ≥ 3996 times (the unwinding assertion fires even for a
+    // concrete-input control that short-circuits at the first byte), and that
+    // does not converge affordably. It is non-authority-bearing (fast-reject /
+    // DoS hygiene — authority is the crypto + rollback + preimage above), so
+    // its coverage is left ENTIRELY to `proptest` (`bad_magic_always_rejected`,
+    // `verifier_chain_never_panics`) + the `fw-manifest/fuzz` libfuzzer
+    // targets, which exercise it over random 8 KB blobs for panic-freedom and
+    // magic rejection.
+}

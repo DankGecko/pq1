@@ -3728,6 +3728,8 @@ kani: ## Bounded model-checking on firmware decoders/counters
 	cargo kani -p sphincs-tz-shared
 	@echo "==> Kani: unified sign-input header kernels (decode_flags total+bitfield-bounded; validate_data_len keeps the inner-tx slice in-bounds — used in place by nsc::cmd_sign_userop)"
 	cargo kani -p pqsigner-aa
+	@echo "==> Kani: FW-update manifest AUTHORITY gates (rollback-boundary biconditional [pins > not >=]; signed-preimage layout exhaustive) — gate DECISIONS, complementing the proptest/libfuzzer panic-freedom + fuzz coverage of the structural/CRC/crypto gates"
+	cargo kani -p fw-manifest
 	@echo "==> kani: PASS"
 
 miri: ## Miri UB check on host crates
