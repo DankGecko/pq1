@@ -32,9 +32,7 @@
 //! through to a render path that mislabels it — keeping them one
 //! function makes that drift impossible.
 
-use sphincs_tz_shared::{
-    MULTISEND_CALL_ONLY_ADDRESSES, MULTISEND_MAX_RECORDS, MULTI_SEND_SELECTOR,
-};
+use sphincs_tz_shared::{MULTISEND_CALL_ONLY_ADDRESSES, MULTI_SEND_SELECTOR};
 
 use super::cow_binding::safe_inner_is_cow_presign;
 
@@ -52,7 +50,7 @@ use super::cow_binding::safe_inner_is_cow_presign;
 // unchanged.
 pub use pqsigner_tx::multisend::{
     classify_record_kind, decode_multisend, read_u32_word, record_needs_value_page,
-    records_pages_total, MsError, MsRecord, MsRecordIter, MsRecordKind,
+    records_pages_total, summarize, MsError, MsRecord, MsRecordIter, MsRecordKind, MsSummary,
 };
 
 /// Is `to` one of the canonical `MultiSendCallOnly` deployments?
@@ -97,53 +95,13 @@ pub fn is_multisend_claim(operation: u8, to: &[u8; 20], data: &[u8]) -> bool {
 // Summary + acceptance verdict
 // ---------------------------------------------------------------------------
 
-/// Shape facts about a fully-decoded multiSend payload.
-#[derive(Copy, Clone, Debug)]
-pub struct MsSummary {
-    pub record_count: usize,
-    /// Number of records claiming to be a CoW `setPreSignature`
-    /// (target == GPv2Settlement, selector match). Exactly one zk_v3
-    /// trailer rides a sign request, so only `0` (generic batch) and
-    /// `1` (CoW flow) are signable; `>= 2` is refused upstream.
-    pub presign_claims: usize,
-    /// Record index of the (last) presign claim. Meaningful only when
-    /// `presign_claims == 1`.
-    pub presign_idx: usize,
-}
-
-/// Decode + validate the payload's hard rules: strict framing, 1..=
-/// [`MULTISEND_MAX_RECORDS`] records, every record `operation == 0`.
-/// Counts presign claims (selector-level only — the full 164-byte
-/// shape stays in the CoW pipeline so a malformed or `signed == false`
-/// presign refuses loudly there instead of blind-rendering).
-pub fn summarize(data: &[u8]) -> Result<MsSummary, MsError> {
-    let packed = decode_multisend(data)?;
-    let mut record_count = 0usize;
-    let mut presign_claims = 0usize;
-    let mut presign_idx = 0usize;
-    for rec in MsRecordIter::new(packed) {
-        let rec = rec?;
-        if rec.operation != 0 {
-            return Err(MsError::RecordOpNotCall);
-        }
-        if record_count == MULTISEND_MAX_RECORDS {
-            return Err(MsError::BadRecordCount);
-        }
-        if safe_inner_is_cow_presign(&rec.to, rec.data) {
-            presign_claims += 1;
-            presign_idx = record_count;
-        }
-        record_count += 1;
-    }
-    if record_count == 0 {
-        return Err(MsError::BadRecordCount);
-    }
-    Ok(MsSummary {
-        record_count,
-        presign_claims,
-        presign_idx,
-    })
-}
+// `MsSummary`, `summarize`, and `summarize_packed` moved to
+// `pqsigner_tx::multisend` (re-exported above) so the per-record
+// `operation == 0` DELEGATECALL-refusal is Kani-bounded
+// (`summarize_accept_implies_all_call`, finding 3b-1 in
+// ADVERSARIAL_REVIEW_KANI_2026-07-01.md). Behaviour is byte-identical —
+// the loop, including the op→count-cap→presign→count==0 precedence, moved
+// verbatim.
 
 /// The data slice of the unique presign-claiming record, when there is
 /// exactly one. The CoW-binding resolver binds the zk_v3 trailer to
@@ -332,7 +290,10 @@ mod tests {
     };
     use super::*;
     use crate::erc20::calldata::Erc20Call;
-    use sphincs_tz_shared::{GPV2_SETTLEMENT_ADDRESS, GPV2_VAULT_RELAYER_ADDRESS, SET_PRE_SIGNATURE_SELECTOR};
+    use sphincs_tz_shared::{
+        GPV2_SETTLEMENT_ADDRESS, GPV2_VAULT_RELAYER_ADDRESS, MULTISEND_MAX_RECORDS,
+        SET_PRE_SIGNATURE_SELECTOR,
+    };
     extern crate alloc;
     use alloc::vec::Vec;
 

@@ -1875,6 +1875,91 @@ fn v3_permit_single_binding_is_non_vacuous() {
     }
 }
 
+// PermitSingle primary-type hash (foundry) — shared by the reconciliation tests.
+const PERMIT_SINGLE_TYPEHASH: [u8; 32] = [
+    0xf3, 0x84, 0x1c, 0xd1, 0xff, 0x00, 0x85, 0x02, 0x6a, 0x63, 0x27, 0xb6, 0x20, 0xb6, 0x79, 0x97,
+    0xce, 0x40, 0xf2, 0x82, 0xc8, 0x8a, 0x8e, 0x90, 0x5a, 0x7a, 0x56, 0x26, 0xe3, 0x10, 0xf3, 0xd0,
+];
+
+fn permit_single_valid_vectors() -> (std::vec::Vec<u8>, std::vec::Vec<u8>) {
+    let token = [0xA0u8, 0xb8, 0x69, 0x91, 0xc6, 0x21, 0x8b, 0x36, 0xc1, 0xd1, 0x9D, 0x4a, 0x2e,
+        0x9E, 0xb0, 0xcE, 0x36, 0x06, 0xeB, 0x48];
+    let spender = [0x3fu8, 0xC9, 0x1A, 0x3a, 0xfd, 0x70, 0x39, 0x5C, 0xd4, 0x96, 0xC6, 0x47, 0xd5,
+        0xa6, 0xcC, 0x9D, 0x4B, 0x2b, 0x7F, 0xAD];
+    permit_single_vectors(token, 1_000_000_000, 1_735_689_600, 0, spender, 1_735_689_600)
+}
+
+/// THE reconciliation tripwire test (advisor blocker #1 — the E1 pinned-count
+/// control). The flip→decline tests all reject at the BINDING (step 6), which
+/// returns before render_fields completes, so they never exercise the
+/// reconciliation's REJECT path. Here the blob binds correctly (render_fields
+/// completes, records_consumed == 1) but the format header's PINNED
+/// `nested_descent_count` is hand-patched to a WRONG value → the after-render
+/// `records_consumed != nested_descent_count` check FIRES → decline. Proves the
+/// pinned count is actually compared (the control is NON-tautological + the path
+/// is reachable), mirroring the dbgen byte-patch test style. In production the
+/// IR is Merkle-pinned so this byte can't be forged; the test proves the device
+/// logic catches a (future) dbgen regression that emits the wrong count.
+#[test]
+fn v3_reconciliation_rejects_wrong_pinned_descent_count() {
+    let res = build_registry();
+    let leaf = find_leaf(res, "eip712-uniswap-permit2.json", 1);
+    let (top_ed, nested_blob) = permit_single_valid_vectors();
+
+    // Locate the format header's nested_descent_count byte: after the 1-byte
+    // format-count prefix, the fixed prefix is selector(4)+field_count(1)+
+    // intent_len(1)+static_head_words(2) = 8, so nested_descent_count is at
+    // formats_off + 1 + 8. (Permit2's leaf has exactly one format: PermitSingle.)
+    let formats_off = u16::from_be_bytes([leaf.ir_bytes[128], leaf.ir_bytes[129]]) as usize;
+    let ndc_off = formats_off + 1 + 8;
+
+    let render_patched = |ndc: u8| {
+        let mut ir_bytes = leaf.ir_bytes.clone();
+        assert_eq!(ir_bytes[ndc_off], 1, "PermitSingle pins exactly one descent point");
+        ir_bytes[ndc_off] = ndc;
+        let ir = Erc7730Ir::parse(&ir_bytes).expect("patched IR still parses");
+        let verified = VerifiedDescriptor { ir };
+        let resolver = NameResolver::new();
+        super::erc7730::render_erc7730_eip712_pages_v3(
+            1, &[0u8; 20], &PERMIT_SINGLE_TYPEHASH, &top_ed, &nested_blob, &verified, None, &resolver,
+        )
+    };
+
+    // Claim TWO descent points but only one record binds → 1 != 2 → decline.
+    assert!(
+        render_patched(2).is_err(),
+        "records_consumed(1) != pinned nested_descent_count(2) must decline"
+    );
+    // Claim ZERO → 1 != 0 → decline (a regression that stopped emitting the pin).
+    assert!(
+        render_patched(0).is_err(),
+        "records_consumed(1) != pinned nested_descent_count(0) must decline"
+    );
+}
+
+/// The other half of E4-3 (total consumption): a valid nested_blob plus one
+/// trailing byte → after the DFS binds the single record, cursor != blob.len()
+/// → decline. (nested_blob is display-only/unsigned, so padding is hygiene not a
+/// live exploit — but the cursor check must fire.)
+#[test]
+fn v3_reconciliation_rejects_trailing_nested_blob() {
+    let res = build_registry();
+    let leaf = find_leaf(res, "eip712-uniswap-permit2.json", 1);
+    let (top_ed, mut nested_blob) = permit_single_valid_vectors();
+    nested_blob.push(0xEE); // one unconsumed trailing byte
+
+    let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("permit2 IR parses");
+    let verified = VerifiedDescriptor { ir };
+    let resolver = NameResolver::new();
+    assert!(
+        super::erc7730::render_erc7730_eip712_pages_v3(
+            1, &[0u8; 20], &PERMIT_SINGLE_TYPEHASH, &top_ed, &nested_blob, &verified, None, &resolver,
+        )
+        .is_err(),
+        "cursor != nested_blob.len() (trailing byte) must decline"
+    );
+}
+
 /// EIP-2612 Permit `owner` allowlist (`hidden_address_allow`): the canonical
 /// Ledger permit template hides `owner` (== the signer) + `nonce` and shows
 /// `spender` / `value` / `deadline`. Without the allowlist entry rule 2 refuses

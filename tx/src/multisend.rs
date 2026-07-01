@@ -36,16 +36,21 @@
 //! `to`, `value`, `data`) is the verbatim payload bytes. See the
 //! `#[cfg(kani)] mod verification` harnesses at the bottom of this file.
 //!
-//! **Per-record DELEGATECALL refusal — scope.** The walk harnesses prove field
-//! *extraction* (the displayed `operation` byte equals the verbatim payload
-//! byte), NOT the *validation* that `operation == 0`. The per-record "reject any
-//! `op != 0`" gate lives in `summarize()` (secure world), backed defense-in-depth
-//! by the on-chain `MultiSendCallOnly` revert (`is_multisend_claim` pins the
-//! batch `to` to `MULTISEND_CALL_ONLY_ADDRESSES`, so any `op != 0` record reverts
-//! on-chain). The `op == 0` validation is NOT yet a Kani target — see
-//! `ADVERSARIAL_REVIEW_KANI_2026-07-01.md` finding 3b-1 (work-todo §35 (k)).
+//! **Per-record DELEGATECALL refusal — now bounded-Kani-proven (finding 3b-1).**
+//! The record-walk harnesses prove field *extraction* (the displayed `operation`
+//! byte equals the verbatim payload byte); the *validation* that `operation == 0`
+//! (no nested DELEGATECALL) is the [`summarize_packed`] gate. Harness
+//! `summarize_accept_implies_all_call` proves `summarize_packed(p).is_ok()` ⟹
+//! every record's `operation == 0` over symbolic payloads (≤ 2 records, the D1
+//! bound — BOUNDED-∀, not full-∀), and `kani_mutations.json:
+//! multisend_op0_delegatecall` guards it against vacuity. Backed defense-in-depth
+//! by the on-chain `MultiSendCallOnly` revert (`is_multisend_claim` pins the batch
+//! `to` to `MULTISEND_CALL_ONLY_ADDRESSES`). See
+//! `ADVERSARIAL_REVIEW_KANI_2026-07-01.md` finding 3b-1.
 
-use sphincs_tz_shared::{GPV2_SETTLEMENT_ADDRESS, MULTI_SEND_SELECTOR, SET_PRE_SIGNATURE_SELECTOR};
+use sphincs_tz_shared::{
+    GPV2_SETTLEMENT_ADDRESS, MULTISEND_MAX_RECORDS, MULTI_SEND_SELECTOR, SET_PRE_SIGNATURE_SELECTOR,
+};
 
 use crate::erc20::calldata::{parse_erc20_calldata, Erc20Call};
 use crate::safe_mgmt::{classify_safe_mgmt, page_count as mgmt_page_count, SafeMgmtOp};
@@ -401,6 +406,78 @@ pub fn records_pages_total(
         total += record_content_pages(&kind, cow_body_pages);
     }
     Some(total)
+}
+
+// ---------------------------------------------------------------------------
+// Summary + acceptance verdict (the per-record `operation == 0` gate)
+// ---------------------------------------------------------------------------
+
+/// Shape facts about a fully-decoded multiSend payload. Produced only for a
+/// payload that passed every hard rule in [`summarize_packed`].
+#[derive(Copy, Clone, Debug)]
+pub struct MsSummary {
+    pub record_count: usize,
+    /// Number of records claiming to be a CoW `setPreSignature` (target ==
+    /// GPv2Settlement, selector match). Only `0` (generic batch) and `1` (CoW
+    /// flow) are signable; `>= 2` is refused upstream.
+    pub presign_claims: usize,
+    /// Record index of the (last) presign claim. Meaningful only when
+    /// `presign_claims == 1`.
+    pub presign_idx: usize,
+}
+
+/// Validate the packed-records slice's hard rules and summarise it: strict
+/// record framing (via [`MsRecordIter`]), **every record `operation == 0`**
+/// (no nested DELEGATECALL), `1..=MULTISEND_MAX_RECORDS` records, and a count
+/// of CoW `setPreSignature` claims.
+///
+/// This is the per-record DELEGATECALL-refusal gate. [`summarize`] composes it
+/// with [`decode_multisend`]. The in-loop check order — `operation != 0`
+/// **before** the record-count cap before the presign count — is behaviour (a
+/// `> MULTISEND_MAX_RECORDS` batch whose first record is a DELEGATECALL still
+/// refuses with `RecordOpNotCall`, not `BadRecordCount`); do not reorder.
+///
+/// Kani-bounded by `summarize_accept_implies_all_call` (≤ 2 records):
+/// `summarize_packed(p).is_ok()` ⟹ every record's `operation == 0`.
+pub fn summarize_packed(packed: &[u8]) -> Result<MsSummary, MsError> {
+    let mut record_count = 0usize;
+    let mut presign_claims = 0usize;
+    let mut presign_idx = 0usize;
+    for rec in MsRecordIter::new(packed) {
+        let rec = rec?;
+        if rec.operation != 0 {
+            return Err(MsError::RecordOpNotCall);
+        }
+        if record_count == MULTISEND_MAX_RECORDS {
+            return Err(MsError::BadRecordCount);
+        }
+        if safe_inner_is_cow_presign(&rec.to, rec.data) {
+            presign_claims += 1;
+            presign_idx = record_count;
+        }
+        record_count += 1;
+    }
+    if record_count == 0 {
+        return Err(MsError::BadRecordCount);
+    }
+    Ok(MsSummary {
+        record_count,
+        presign_claims,
+        presign_idx,
+    })
+}
+
+/// Decode + validate `multiSend(bytes)` calldata: strict outer framing
+/// ([`decode_multisend`]) then [`summarize_packed`]. Every render/sign path
+/// that walks records for display or CoW-binding gates on this returning `Ok`
+/// first (`safe_display` multiSend arm at :421, `cow_binding` at :110; the
+/// divider walk at safe_display :1335 is "unreachable post-gate"), so the
+/// `operation == 0` refusal is mandatory — an `op != 0` record makes this
+/// `Err(RecordOpNotCall)`, which downgrades the whole batch to a loud
+/// blind-sign page.
+pub fn summarize(data: &[u8]) -> Result<MsSummary, MsError> {
+    let packed = decode_multisend(data)?;
+    summarize_packed(packed)
 }
 
 // ---------------------------------------------------------------------------
@@ -854,5 +931,90 @@ mod verification {
         let blind_kind = classify_record_kind(&[0x11; 20], false, &blind, &[0x5a; 20]);
         assert!(matches!(blind_kind, MsRecordKind::Blind));
         assert!(record_needs_value_page(&blind_kind, false));
+    }
+
+    /// **DELEGATECALL-refusal soundness (finding 3b-1).** The per-record
+    /// `operation == 0` gate in [`summarize_packed`] is the one keeping a nested
+    /// DELEGATECALL out of a clear-signed batch. This proves the security
+    /// direction over a symbolic packed payload: **acceptance implies no
+    /// DELEGATECALL** — `summarize_packed(p).is_ok()` ⟹ every record the walk
+    /// yields has `operation == 0`. The re-walk of `MsRecordIter` (itself proven
+    /// exact-tiling / field-fidelity above) is an INDEPENDENT oracle: it never
+    /// consults `summarize_packed`'s rejection logic, so deleting the
+    /// `operation != 0` check makes an `op != 0` record accept here and this
+    /// assertion FAIL (`kani_mutations.json: multisend_op0_delegatecall`).
+    ///
+    /// Bound: `N = 180` admits ≤ 2 records (the same D1 bound as
+    /// `record_walk_exact_tiling`) — BOUNDED-∀, not full-∀. The per-record op
+    /// check is uniform, so ≤ 2 records exercise it; the `> MULTISEND_MAX_RECORDS`
+    /// count cap is a separate (`BadRecordCount`) gate, not under test here.
+    #[kani::proof]
+    #[kani::unwind(40)]
+    fn summarize_accept_implies_all_call() {
+        const N: usize = 180;
+        let packed: [u8; N] = kani::any();
+        let len: usize = kani::any();
+        kani::assume(len <= N);
+        let p = &packed[..len];
+
+        if summarize_packed(p).is_ok() {
+            // Independent re-walk: every accepted record is a CALL (op == 0).
+            let mut iter = MsRecordIter::new(p);
+            for _ in 0..4 {
+                match iter.next() {
+                    Some(Ok(rec)) => assert_eq!(rec.operation, 0),
+                    _ => break,
+                }
+            }
+        }
+    }
+
+    /// Non-vacuity (negative control): a concrete two-record payload whose
+    /// SECOND record declares `operation = 1` (DELEGATECALL) is refused with
+    /// `RecordOpNotCall`. The accept branch of the symbolic harness above is
+    /// therefore reachable-but-excluded for an `op != 0` record — the
+    /// implication is not vacuously true.
+    #[kani::proof]
+    #[kani::unwind(40)]
+    fn summarize_rejects_delegatecall_record() {
+        // Record A at 0: op 0, to = 0x11.., empty data (85 B). Record B at 85:
+        // op 1 (DELEGATECALL), to = 0x22.., empty data (85 B). Total 170 B.
+        let mut packed = [0u8; 170];
+        let mut i = 1usize;
+        while i < 21 {
+            packed[i] = 0x11;
+            i += 1;
+        }
+        packed[85] = 1; // record B operation byte = DELEGATECALL
+        let mut j = 86usize;
+        while j < 106 {
+            packed[j] = 0x22;
+            j += 1;
+        }
+        assert!(matches!(
+            summarize_packed(&packed),
+            Err(MsError::RecordOpNotCall)
+        ));
+    }
+
+    /// Non-vacuity (positive control): a concrete two-record all-CALL payload is
+    /// accepted (`Ok`) with `record_count == 2` — the accept branch is reachable.
+    #[kani::proof]
+    #[kani::unwind(40)]
+    fn summarize_accepts_two_call_records() {
+        // Two op-0 records, 85 B each (empty data), total 170 B.
+        let mut packed = [0u8; 170];
+        let mut i = 1usize;
+        while i < 21 {
+            packed[i] = 0x11;
+            i += 1;
+        }
+        let mut j = 86usize;
+        while j < 106 {
+            packed[j] = 0x22;
+            j += 1;
+        }
+        let s = summarize_packed(&packed).expect("two call records accepted");
+        assert_eq!(s.record_count, 2);
     }
 }

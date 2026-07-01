@@ -66,6 +66,17 @@
       "replace": "sell_token.copy_from_slice(&canonical[9..29]);",
       "expect": "kani_fails",
       "note": "shift a GPv2Order field read by one byte -> the verbatim-offset decode-soundness biconditional MUST break."
+    },
+    {
+      "id": "multisend_op0_delegatecall",
+      "tier": "default",
+      "crate": "pqsigner-tx",
+      "harness": "summarize_accept_implies_all_call",
+      "file": "tx/src/multisend.rs",
+      "find": "rec.operation != 0",
+      "replace": "false",
+      "expect": "kani_fails",
+      "note": "disable the per-record op==0 DELEGATECALL-refusal in summarize_packed -> a payload carrying an op!=0 record is now accepted, so summarize_accept_implies_all_call's `Ok => forall record: operation==0` re-walk assertion MUST break. Verified 2026-07-01 by hand: mutation -> VERIFICATION:- FAILED via assert_failed_inner (the assert_eq!(rec.operation, 0) firing), unmutated -> SUCCESSFUL. Closes finding 3b-1's anti-vacuity guard (ADVERSARIAL_REVIEW_KANI_2026-07-01.md); the only kani_mutations entry outside the original 4-file curated set."
     }
   ]
 }
