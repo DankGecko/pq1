@@ -713,7 +713,13 @@ mod kani_harnesses {
         kani::assume((pool[1] as usize) == 2 + l);
         kani::assume(4 + l <= N);
         let tag = pool[2];
-        kani::assume(tag < 0x30 || tag > 0x3F);
+        // "Unknown" = outside the CONTIGUOUS known-tag range `[0x30, PARAM_CONST_VALUE]`.
+        // NB: the top bound is the HIGHEST known tag, not 0x3F — `PARAM_CONST_VALUE`
+        // (0x40) was added above the original 0x30..=0x3F block (b37a052f), so a
+        // stale `tag > 0x3F` assumption wrongly classifies 0x40 as unknown and the
+        // harness fails on a tag the parser correctly accepts. Keep this bound in
+        // sync with the highest `PARAM_*` constant.
+        kani::assume(tag < 0x30 || tag > PARAM_CONST_VALUE);
         let ir = mk_ir(&pool);
         assert!(parse(&ir, 1).is_err());
     }

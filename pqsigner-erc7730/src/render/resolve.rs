@@ -269,7 +269,11 @@ mod kani_harness {
     /// declines-to-blind on ANY hostile input rather than crashing, and any
     /// returned leaf position is in-bounds.
     #[kani::proof]
-    #[kani::unwind(6)]
+    // Covers BOTH loops the harness reaches: the ≤7-step program loop AND the
+    // 28-byte top-zero scan inside `read_offset_word`/`read_length_word` (the
+    // same reader the sibling `resolve_array_multi` harness unwinds at 34). A
+    // lower bound (was 6) fails the unwinding assertion on the reader loop.
+    #[kani::unwind(34)]
     fn resolve_structured_panic_free_and_in_bounds() {
         const PROG_LEN: usize = 7; // up to 2 FieldIdx + FollowOffset shapes
         const BODY_LEN: usize = 160; // 5 words
