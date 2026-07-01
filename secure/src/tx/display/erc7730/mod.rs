@@ -26,6 +26,7 @@
 mod calldata_nested;
 pub(crate) mod formatters;
 mod intent;
+pub(crate) mod nested;
 
 use crate::erc20::bundle::Erc20Metadata;
 use crate::names::NameResolver;
@@ -217,6 +218,45 @@ pub fn render_erc7730_eip712_pages<'ir>(
         STACK_CANARY
     );
     result
+}
+
+/// Entry point for the `OFFCHAIN_KIND_EIP712_TYPED_V3 = 3` sign path — the
+/// nested-EIP-712 variant. Identical to [`render_erc7730_eip712_pages`] plus the
+/// companion-supplied DFS `nested_blob` (`[u16 len][nested_ed]` records) that
+/// backs the nested-struct DISPLAY binding.
+///
+/// Phase 5 Commit C (plumbing only): the on-device belt still declines EVERY
+/// nested-struct format to blind-sign — `nested_blob` is bounds-checked +
+/// exact-consumed at the wire level (`cmd_sign_offchain`) and accepted here so
+/// the API is stable, but the descent is NOT yet wired. A non-nested V3 message
+/// therefore renders identically to a V2 one, and a nested one declines. Commit
+/// D inverts the belt: this entry will thread `nested_blob` into a nested-aware
+/// renderer that verifies `hash_struct(pinned type_hash, nested_ed) ==
+/// committed_word` before expanding the members, and enforces the E1
+/// reconciliation. Gated behind flip→decline real-vector tests + adversarial
+/// review.
+pub fn render_erc7730_eip712_pages_v3<'ir>(
+    chain_id: u64,
+    verifying_contract: &[u8; 20],
+    primary_type_hash: &[u8; 32],
+    encoded_data: &[u8],
+    nested_blob: &[u8],
+    descriptor: &'ir VerifiedDescriptor<'ir>,
+    erc20: Option<&Erc20Metadata<'_>>,
+    resolver: &NameResolver<'_>,
+) -> Result<Pages, RenderErr> {
+    // Commit C: descent not yet wired — the belt declines nested formats. The
+    // wire-level parse has already bounds-checked + exact-consumed `nested_blob`.
+    let _ = nested_blob;
+    render_erc7730_eip712_pages(
+        chain_id,
+        verifying_contract,
+        primary_type_hash,
+        encoded_data,
+        descriptor,
+        erc20,
+        resolver,
+    )
 }
 
 fn render_erc7730_eip712_pages_inner<'ir>(

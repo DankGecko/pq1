@@ -1003,10 +1003,34 @@ pub const MAX_OFFCHAIN_EIP712_TYPED_LEN: usize =
     2 + 32 + 32 + 2 + MAX_OFFCHAIN_EIP712_ENCODED_DATA_LEN
         + 2 + ERC7730_MAX_TRAILER_LEN;
 
+/// Maximum length of the `nested_blob` section carried inside a
+/// `OFFCHAIN_KIND_EIP712_TYPED_V3` payload (nested-EIP-712 struct rendering,
+/// Phase 5). The blob is a DFS-ordered concatenation of `[u16 len][nested_ed]`
+/// records; each `nested_ed` is exactly `member_count × 32` bytes
+/// (`member_count ≤ MAX_NESTED_MEMBERS = 32` → ≤ 1024 B) and there is one record
+/// per nested descent point (bounded by depth × breadth). 2 KB covers the v1
+/// (single-level) and near-term v2 (small array / one deeper level) shapes with
+/// headroom; the device further bounds each record against the pinned
+/// `member_count` and the DFS cursor against this length.
+pub const MAX_OFFCHAIN_EIP712_NESTED_LEN: usize = 2048;
+
+/// Maximum payload length for `OFFCHAIN_KIND_EIP712_TYPED_V3` — the v0x03
+/// variant that inserts a nested-encodeData section between `encoded_data` and
+/// the trailer. Layout: `domainSep_present(2) + domainSeparator(32) +
+/// primaryTypeHash(32) + encoded_data_len(2) + encoded_data +
+/// nested_blob_len(2) + nested_blob + erc7730_trailer(2 + payload)`.
+pub const MAX_OFFCHAIN_EIP712_TYPED_V3_LEN: usize =
+    2 + 32 + 32 + 2 + MAX_OFFCHAIN_EIP712_ENCODED_DATA_LEN
+        + 2 + MAX_OFFCHAIN_EIP712_NESTED_LEN
+        + 2 + ERC7730_MAX_TRAILER_LEN;
+
 /// Maximum input length the gateway will accept for `CMD_SIGN_OFFCHAIN`.
 /// Sized for the largest valid request across all kinds.
 pub const SIGN_OFFCHAIN_INPUT_MAX_LEN: usize = SIGN_OFFCHAIN_HEADER_LEN
-    + max_usize(MAX_OFFCHAIN_PERSONAL_SIGN_LEN, MAX_OFFCHAIN_EIP712_TYPED_LEN);
+    + max_usize(
+        MAX_OFFCHAIN_PERSONAL_SIGN_LEN,
+        max_usize(MAX_OFFCHAIN_EIP712_TYPED_LEN, MAX_OFFCHAIN_EIP712_TYPED_V3_LEN),
+    );
 
 /// `const`-evaluable `max` over `usize`. Not in core::cmp yet.
 const fn max_usize(a: usize, b: usize) -> usize {
@@ -1023,6 +1047,20 @@ pub const OFFCHAIN_KIND_PERSONAL_SIGN: u8 = 1;
 /// trailer's IR binding against the supplied domain and renders the
 /// descriptor's clear-signing pages instead of a raw hex hash.
 pub const OFFCHAIN_KIND_EIP712_TYPED: u8 = 2;
+/// EIP-712 typed-data whose descriptor renders a NESTED struct member
+/// (Phase 5 nested-EIP-712 rendering). Wire-identical to
+/// `OFFCHAIN_KIND_EIP712_TYPED` except it UNCONDITIONALLY inserts a
+/// `nested_blob_len(2) || nested_blob` section between `encoded_data` and the
+/// trailer (`nested_blob_len == 0` when the format has no nested struct). The
+/// signed digest is byte-identical to `OFFCHAIN_KIND_EIP712_TYPED`
+/// (`keccak(0x1901 || domainSep || keccak(primaryTypeHash || encoded_data))`);
+/// the `nested_blob` feeds the DISPLAY binding ONLY — the device verifies
+/// `keccak(pinned type_hash || nested_ed) == the committed hashStruct word`
+/// before rendering the nested members. A separate wire kind (not a trailer
+/// flag) so the parser knows the post-`ed` `u16` is `nested_blob_len`, not
+/// `trailer_len`, WITHOUT first reading the not-yet-reached trailer (design §10
+/// E3). v0x02 companions stay on `OFFCHAIN_KIND_EIP712_TYPED` unchanged.
+pub const OFFCHAIN_KIND_EIP712_TYPED_V3: u8 = 3;
 
 // ─── ERC-7730 clear-signing descriptor trailer ───────────────────────
 //

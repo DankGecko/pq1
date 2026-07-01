@@ -52,9 +52,11 @@
 
 use sphincs_tz_shared::{
     EIP6492_BLOB_LEN, EIP6492_FACTORY_CALLDATA_LEN, MAX_ACCOUNT_INDEX,
-    MAX_OFFCHAIN_EIP712_ENCODED_DATA_LEN, MAX_OFFCHAIN_EIP712_TYPED_LEN, MAX_OFFCHAIN_GAP,
+    MAX_OFFCHAIN_EIP712_ENCODED_DATA_LEN, MAX_OFFCHAIN_EIP712_NESTED_LEN,
+    MAX_OFFCHAIN_EIP712_TYPED_LEN, MAX_OFFCHAIN_EIP712_TYPED_V3_LEN, MAX_OFFCHAIN_GAP,
     MAX_OFFCHAIN_PERSONAL_SIGN_LEN, MAX_SLOT_USES, NscStatus, OFFCHAIN_FLAGS_MASK,
-    OFFCHAIN_FLAG_ACCOUNT_DEPLOYED, OFFCHAIN_KIND_EIP712_TYPED, OFFCHAIN_KIND_PERSONAL_SIGN,
+    OFFCHAIN_FLAG_ACCOUNT_DEPLOYED, OFFCHAIN_KIND_EIP712_TYPED, OFFCHAIN_KIND_EIP712_TYPED_V3,
+    OFFCHAIN_KIND_PERSONAL_SIGN,
     OFFCHAIN_KIND_RAW32, PQ_SMART_WALLET_FACTORY, SIGNATURE_LEN, SIGN_OFFCHAIN_HEADER_LEN,
     SIGN_OFFCHAIN_INPUT_FLAGS_OFF, SIGN_OFFCHAIN_INPUT_KIND_OFF, SIGN_OFFCHAIN_INPUT_MAX_LEN,
     SIGN_OFFCHAIN_INPUT_PAYLOAD_LEN_OFF, SIGN_OFFCHAIN_INPUT_PAYLOAD_OFF,
@@ -211,6 +213,19 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             // Minimum payload: dsep_present(2) + dsep(32) + pth(32) +
             // edl(2) + edata(0) + trailer_len(2) + trailer(0) = 70 B.
             if payload_len < 2 + 32 + 32 + 2 + 2 {
+                crate::ui::show_status("EIP-1271", "typed too short");
+                return NscStatus::InvalidPointer as u32;
+            }
+        }
+        OFFCHAIN_KIND_EIP712_TYPED_V3 => {
+            if payload_len > MAX_OFFCHAIN_EIP712_TYPED_V3_LEN {
+                crate::ui::show_status("EIP-1271", "typed too long");
+                return NscStatus::InvalidPointer as u32;
+            }
+            // Minimum payload: dsep_present(2) + dsep(32) + pth(32) + edl(2) +
+            // edata(0) + nested_blob_len(2) + nested_blob(0) + trailer_len(2) +
+            // trailer(0) = 72 B (the extra 2 B vs kind=2 is the nested_blob_len).
+            if payload_len < 2 + 32 + 32 + 2 + 2 + 2 {
                 crate::ui::show_status("EIP-1271", "typed too short");
                 return NscStatus::InvalidPointer as u32;
             }
@@ -389,7 +404,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     let mut wallet_addr = [0u8; 20];
     let mut already_confirmed = false;
 
-    if kind == OFFCHAIN_KIND_EIP712_TYPED {
+    if kind == OFFCHAIN_KIND_EIP712_TYPED || kind == OFFCHAIN_KIND_EIP712_TYPED_V3 {
+        let is_v3 = kind == OFFCHAIN_KIND_EIP712_TYPED_V3;
         let mut p = 0usize;
         let domain_sep_present =
             u16::from_be_bytes([payload[p], payload[p + 1]]) != 0;
@@ -415,6 +431,31 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         }
         let encoded_data = &payload[p..p + encoded_data_len];
         p += encoded_data_len;
+        // V3 ONLY: a nested-encodeData section between `ed` and the trailer —
+        // `[u16 nested_blob_len][nested_blob]`. A DFS concatenation of
+        // `[u16 len][nested_ed]` records that backs the nested-struct display
+        // binding; `nested_blob_len == 0` when the format has no nested struct.
+        // The SIGNED digest is UNCHANGED — this feeds DISPLAY only. Parsing it
+        // here (before the trailer) keeps the final `p + trailer_len ==
+        // payload.len()` check below the wire-level EXACT-consumption guard
+        // (E4-3 top half): every byte between `ed` and the trailer is accounted.
+        let nested_blob: &[u8] = if is_v3 {
+            if p + 2 > payload.len() {
+                crate::ui::show_status("EIP-1271", "no nested len");
+                return NscStatus::InvalidPointer as u32;
+            }
+            let nb_len = u16::from_be_bytes([payload[p], payload[p + 1]]) as usize;
+            p += 2;
+            if nb_len > MAX_OFFCHAIN_EIP712_NESTED_LEN || p + nb_len > payload.len() {
+                crate::ui::show_status("EIP-1271", "bad nested len");
+                return NscStatus::InvalidPointer as u32;
+            }
+            let nb = &payload[p..p + nb_len];
+            p += nb_len;
+            nb
+        } else {
+            &[]
+        };
         // Trailer: `[u16 BE len][bundle]`.
         if p + 2 > payload.len() {
             crate::ui::show_status("EIP-1271", "no trailer");
@@ -537,15 +578,29 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         // Render via the ERC-7730 descriptor + append fingerprint.
         use crate::ui::confirm::{confirm, ConfirmResult};
         let resolver = crate::names::NameResolver::new();
-        let mut pages = match crate::tx::display::erc7730::render_erc7730_eip712_pages(
-            chain_id,
-            &v.ir.contract,
-            &primary_type_hash,
-            encoded_data,
-            &v,
-            None,
-            &resolver,
-        ) {
+        let render_result = if is_v3 {
+            crate::tx::display::erc7730::render_erc7730_eip712_pages_v3(
+                chain_id,
+                &v.ir.contract,
+                &primary_type_hash,
+                encoded_data,
+                nested_blob,
+                &v,
+                None,
+                &resolver,
+            )
+        } else {
+            crate::tx::display::erc7730::render_erc7730_eip712_pages(
+                chain_id,
+                &v.ir.contract,
+                &primary_type_hash,
+                encoded_data,
+                &v,
+                None,
+                &resolver,
+            )
+        };
+        let mut pages = match render_result {
             Ok(p) => p,
             // Fail closed (finding F6): this descriptor already passed
             // verify_erc7730_bundle + cross_check_eip712 — it is a known,
@@ -649,8 +704,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                 )
             };
         }
-        OFFCHAIN_KIND_EIP712_TYPED => {
-            // hash_to_sign already populated in §7b.
+        OFFCHAIN_KIND_EIP712_TYPED | OFFCHAIN_KIND_EIP712_TYPED_V3 => {
+            // hash_to_sign already populated + confirmed in §7b.
         }
         _ => return NscStatus::InternalError as u32, // unreachable past §4
     }
