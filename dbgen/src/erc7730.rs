@@ -2724,6 +2724,112 @@ fn struct_reaches_address(base: &str, parsed: &ParsedFormatKey, depth: usize, vi
     reaches
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// Nested-EIP-712 (Phase 5) — per-struct metadata derivation.
+//
+// The device binds a nested-struct member by re-hashing
+// `keccak(typeHash(nested) ‖ nested_ed)` and requiring equality with the
+// committed parent word (see `docs/erc7730-nested-eip712-render-design.md`).
+// `typeHash(nested)` must be dbgen-PINNED and canonical, so these functions
+// rebuild the EIP-712 `encodeType` string from the parsed `struct_defs` and
+// hash it. Pure host logic; unit-tested against foundry `cast keccak`.
+// ─────────────────────────────────────────────────────────────────────
+
+#[allow(dead_code)] // Phase-5 nested-EIP-712: wired into IR emission in the next increment
+type StructDefs = BTreeMap<String, Vec<(String, String)>>;
+
+/// Reconstruct a single struct's canonical `encodeType` component:
+/// `Name(type1 name1,type2 name2,…)` — the exact form the registry's format
+/// key uses (space between type and name, comma between members, no other
+/// whitespace), so `keccak` of the assembled string matches the on-chain
+/// `typeHash`.
+#[allow(dead_code)] // Phase-5 nested-EIP-712: wired into IR emission in the next increment
+fn eip712_struct_def_string(name: &str, defs: &StructDefs) -> Result<String, String> {
+    let members = defs
+        .get(name)
+        .ok_or_else(|| format!("EIP-712 struct `{name}` has no definition"))?;
+    let mut s = String::with_capacity(name.len() + 2 + members.len() * 16);
+    s.push_str(name);
+    s.push('(');
+    for (i, (mname, mty)) in members.iter().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        s.push_str(mty);
+        s.push(' ');
+        s.push_str(mname);
+    }
+    s.push(')');
+    Ok(s)
+}
+
+/// Transitively collect the struct types `name` references (array suffixes
+/// stripped), EXCLUDING `name` itself. Bounded by `MAX_STRUCT_DEPTH`; a cyclic
+/// / too-deep type errors (fail-closed — the format then drops to blind-sign).
+#[allow(dead_code)] // Phase-5 nested-EIP-712: wired into IR emission in the next increment
+fn eip712_collect_struct_deps(
+    name: &str,
+    defs: &StructDefs,
+    out: &mut std::collections::BTreeSet<String>,
+    depth: usize,
+) -> Result<(), String> {
+    if depth > MAX_STRUCT_DEPTH {
+        return Err(format!("EIP-712 struct `{name}` nests deeper than {MAX_STRUCT_DEPTH}"));
+    }
+    let Some(members) = defs.get(name) else {
+        return Ok(());
+    };
+    for (_, mty) in members {
+        let (base, _is_array) = split_array_suffix(mty);
+        if defs.contains_key(base) && out.insert(base.to_string()) {
+            eip712_collect_struct_deps(base, defs, out, depth + 1)?;
+        }
+    }
+    Ok(())
+}
+
+/// Canonical EIP-712 `encodeType(name)` = `name`'s own def followed by the defs
+/// of every transitively-referenced struct, sorted alphabetically (the EIP-712
+/// rule). `BTreeSet` iterates in sorted order, so the concatenation is canonical.
+#[allow(dead_code)] // Phase-5 nested-EIP-712: wired into IR emission in the next increment
+fn eip712_encode_type(name: &str, defs: &StructDefs) -> Result<String, String> {
+    let mut deps: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    eip712_collect_struct_deps(name, defs, &mut deps, 0)?;
+    deps.remove(name); // a self-referential type keeps only one copy of its own def
+    let mut out = eip712_struct_def_string(name, defs)?;
+    for dep in &deps {
+        out.push_str(&eip712_struct_def_string(dep, defs)?);
+    }
+    Ok(out)
+}
+
+/// `typeHash(nested)` = `keccak256(encodeType(nested))` — dbgen-pinned, emitted
+/// into the IR so the device can bind `keccak(typeHash ‖ nested_ed) == committed`.
+#[allow(dead_code)] // Phase-5 nested-EIP-712: wired into IR emission in the next increment
+fn eip712_nested_type_hash(name: &str, defs: &StructDefs) -> Result<[u8; 32], String> {
+    Ok(keccak256(eip712_encode_type(name, defs)?.as_bytes()))
+}
+
+/// The NESTED struct's OWN member count — the number of 32-byte words in its
+/// `encodeData`, which pins the exact `nested_ed` length (`member_count × 32`)
+/// the device consumes and hashes (design rule 1 / E5).
+#[allow(dead_code)] // Phase-5 nested-EIP-712: wired into IR emission in the next increment
+fn eip712_member_count(name: &str, defs: &StructDefs) -> Result<usize, String> {
+    defs.get(name)
+        .map(Vec::len)
+        .ok_or_else(|| format!("EIP-712 struct `{name}` has no definition"))
+}
+
+/// Whether a nested member's OWN 32-byte word is an `address` (so it must be
+/// covered by a visible sub-field — the E2 standalone belt backstop). A member
+/// whose type is itself a struct is a `hashStruct` word (its interior addresses
+/// are covered by that struct's own descent + bitmap), not an address; an
+/// array member is an offset/hash word (v2). So v1 marks only bare `address`.
+#[allow(dead_code)] // Phase-5 nested-EIP-712: wired into IR emission in the next increment
+fn eip712_member_word_is_address(mty: &str) -> bool {
+    mty.trim() == "address"
+}
+
 /// `arg_list` starts with `(`. Returns the original substring plus a
 /// types-only version (parameter names stripped).
 fn split_arg_list(s: &str) -> Result<(String, String), String> {
@@ -5477,6 +5583,58 @@ mod tests {
         }
         let edo = p.struct_defs.get("ExclusiveDutchOrder").unwrap();
         assert!(edo.iter().any(|(n, t)| n == "outputs" && t == "DutchOutput[]"));
+    }
+
+    #[test]
+    fn eip712_nested_type_hash_matches_foundry() {
+        // v1 targets — foundry `cast keccak` of the exact `encodeType`.
+        let p = parse_format_key(
+            "PermitSingle(PermitDetails details,address spender,uint256 sigDeadline)\
+             PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)",
+        )
+        .unwrap();
+        assert_eq!(
+            hex::encode(eip712_nested_type_hash("PermitDetails", &p.struct_defs).unwrap()),
+            "65626cad6cb96493bf6f5ebea28756c966f023ab9e8a83a7101849d5573b3678",
+        );
+        assert_eq!(eip712_member_count("PermitDetails", &p.struct_defs).unwrap(), 4);
+
+        let p2 = parse_format_key(
+            "PermitTransferFrom(TokenPermissions permitted,address spender,uint256 nonce,\
+             uint256 deadline)TokenPermissions(address token,uint256 amount)",
+        )
+        .unwrap();
+        assert_eq!(
+            hex::encode(eip712_nested_type_hash("TokenPermissions", &p2.struct_defs).unwrap()),
+            "618358ac3db8dc274f0cd8829da7e234bd48cd73c4a740aede1adec9846d06a1",
+        );
+
+        // Transitive + alphabetical sort + dedup (de-risks v2). encodeType(A) =
+        // def(A) ‖ sorted[def(B), def(C)].
+        let mut defs: StructDefs = BTreeMap::new();
+        defs.insert(
+            "A".into(),
+            vec![("b".into(), "B".into()), ("x".into(), "address".into())],
+        );
+        defs.insert(
+            "B".into(),
+            vec![("y".into(), "address".into()), ("c".into(), "C".into())],
+        );
+        defs.insert("C".into(), vec![("z".into(), "uint256".into())]);
+        assert_eq!(
+            eip712_encode_type("A", &defs).unwrap(),
+            "A(B b,address x)B(address y,C c)C(uint256 z)",
+        );
+        assert_eq!(
+            hex::encode(eip712_nested_type_hash("A", &defs).unwrap()),
+            "a8b08b15aeb75ef0b731673e33d2e8b4523c703d6ecebbbd56975cd9af217ad4",
+        );
+
+        // Address-word predicate (E2 bitmap source): only a bare `address`
+        // member's own word is an address; a struct member is a hashStruct word.
+        assert!(eip712_member_word_is_address("address"));
+        assert!(!eip712_member_word_is_address("uint160"));
+        assert!(!eip712_member_word_is_address("PermitDetails"));
     }
 
     #[test]
