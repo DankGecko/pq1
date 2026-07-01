@@ -217,8 +217,11 @@ G0  theft-free + integrity (theft_free / theft_free_bytecode)
   rules do for A3.2), not consumed by a Lean corollary.
 
 ### G2 — Deployed verifier ≡ Lean spec, for all signatures · **C (standing ceiling)**
-- **Claim.** `SPHINCsC10Asm.verify` bytecode = `verifyYulModel` for **all** 4008-byte
-  signatures (A3.1).
+- **Claim.** `SPHINCsC10Asm.verify` bytecode = `execC10Asm` for **all** 4008-byte
+  signatures (A3.1). `execC10Asm` unfolds (via the `execC10Asm_eq` kernel lemma) to
+  `verifyYulModel` **on N-masked keys**; the bare `= verifyYulModel` shape is FALSE
+  off N-masked keys (the bytecode's `and(key,N_MASK)==key` guards) and was corrected
+  to `= execC10Asm` at `Bridge/Refinement.lean`. Claim synced 2026-07-01 (FV review a31).
 - **Status.** **Corpus-discharged, not ∀-symbolic.** Executable Lean↔FIPS↔bytecode
   KAT (10/10, both directions) + bulk 384/384 + ~250-mutant wrong-accept screen +
   Halmos input-gate rules. The ∀-signature symbolic equivalence is **intractable

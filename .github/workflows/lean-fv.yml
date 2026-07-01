@@ -25,12 +25,19 @@ on:
     paths:
       - 'contracts/verification/lean/**'
       - 'contracts/verification/scripts/**'
+      # Ledger/assurance docs: so verify-ledger-consistency actually FIRES on
+      # AXIOM_STATUS.json-only edits (FV adversarial-review F1, 2026-07-01 —
+      # these edits previously matched no positive path and were path-ignored
+      # by ci.yml, so the gate advertised to police ledger drift never ran).
+      - 'contracts/verification/docs/**'
       - 'contracts/verification/Makefile'
       - '.github/workflows/lean-fv.yml'
   pull_request:
     paths:
       - 'contracts/verification/lean/**'
       - 'contracts/verification/scripts/**'
+      # Ledger/assurance docs (FV review F1) — see the push trigger above.
+      - 'contracts/verification/docs/**'
       - 'contracts/verification/Makefile'
       - '.github/workflows/lean-fv.yml'
 
@@ -74,3 +81,10 @@ jobs:
         # --self-test negative control (asserted first). The SLOW sibling
         # verify-proof-mutation runs in nightly.yml, not here.
         run: make -C contracts/verification verify-ledger-consistency
+      - name: verify-storage-mutators (I-3 closed-world — no unverified cap-counter mutator)
+        # Grep-based closed-world lint (no build) — was UNWIRED (FV review, 2026-07-01):
+        # reachable_implies_combinedCap / no_reset_path are sound only if the
+        # Reachable/no-decrease constructors are the COMPLETE set of Storage
+        # mutators; a new resetter added to Storage.lean would type-check green
+        # beside them. No other gate (closures/ledger/proof-mutation) can catch it.
+        run: make -C contracts/verification verify-storage-mutators
