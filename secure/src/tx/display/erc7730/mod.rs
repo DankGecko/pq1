@@ -138,6 +138,7 @@ fn render_erc7730_pages_inner<'ir>(
     intent::render_intent_banner(&mut pages, &descriptor.ir, &format)?;
 
     // 4. Iterate fields.
+    let field_pages_before = pages.as_slice().len();
     render_fields(
         &mut pages,
         &descriptor.ir,
@@ -148,6 +149,22 @@ fn render_erc7730_pages_inner<'ir>(
         erc20,
         resolver,
     )?;
+
+    // 4b. WYSIWYS belt (VULN-erc7730-visible-never-noparam-clearsign). A
+    // contract-context known shape that DECLARES fields but renders NONE of
+    // them — every field `visible:"never"` — would otherwise present a
+    // trusted clear-sign (banner + envelope + confirm) with none of the
+    // call's parameters shown: a blind-sign wearing a reassuring clear-sign
+    // banner, worse than an honest loud blind-sign. Refuse and fall through
+    // to the blind-sign ladder (raw target / selector). The build-time
+    // visibility gate (`dbgen::erc7730::check_field_visibility`) already
+    // prevents such descriptors entering the Merkle-pinned root; this is the
+    // on-device structural backstop that holds even if one ever slips in.
+    // Zero-field formats (`deposit()`) declare no fields and are unaffected;
+    // payable stakes (`submit`) render their `@.value` field and pass.
+    if format.field_count > 0 && pages.as_slice().len() == field_pages_before {
+        return Err(RenderErr::Reject("7730 no visible fields"));
+    }
 
     // 5. Envelope pages (chain / fee / nonce). Mirrors the tail of the
     //    erc20_known renderer so the user always sees gas + chain
@@ -272,6 +289,7 @@ fn render_erc7730_eip712_pages_inner<'ir>(
     // EIP-712 `encodeData` is all one-word members — no dynamic tail — so the
     // full body IS the head body; an `[]` field (nonsensical here) safely
     // declines inside `render_array` (its tail/length checks fail).
+    let field_pages_before = pages.as_slice().len();
     render_fields(
         &mut pages,
         &descriptor.ir,
@@ -282,6 +300,15 @@ fn render_erc7730_eip712_pages_inner<'ir>(
         erc20,
         resolver,
     )?;
+    // WYSIWYS belt (VULN-erc7730-visible-never-noparam-clearsign), typed-data
+    // sibling of the calldata guard above. A typed-data format that declares
+    // members but renders none (all `visible:"never"`) would sign an
+    // off-chain approval showing nothing; refuse so the caller falls back to
+    // the honest raw-digest page. No native-value rescue exists for EIP-712,
+    // so the guard is unconditional.
+    if format.field_count > 0 && pages.as_slice().len() == field_pages_before {
+        return Err(RenderErr::Reject("7730 no visible members"));
+    }
     append_eip712_chain_page(&mut pages, chain_id)?;
     append_confirm_page(&mut pages)?;
     Ok(pages)

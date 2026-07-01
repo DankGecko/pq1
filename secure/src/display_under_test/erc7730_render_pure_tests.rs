@@ -1530,3 +1530,82 @@ fn adversarial_array_resolve_declines_hostile_bodies() {
     // none of the above panicked — the decline-or-safe property holds over all
     // crafted bodies (no UB, no slice-OOB), the core adversarial guarantee.
 }
+
+// ───────────────────────────────────────────────────────────────────────
+// WYSIWYS belt — VULN-erc7730-visible-never-noparam-clearsign.
+//
+// A contract-context format that DECLARES a field but renders NONE (the
+// field is `visible:"never"`) must be refused on-device so the dispatcher
+// falls through to the honest blind-sign ladder instead of a parameter-less
+// clear-sign. The build-time visibility gate refuses to COMPILE an
+// all-`never` format, so this drives the belt directly: compile a valid
+// one-field format with the field `visible:"optional"` (passes the gate and
+// emits a visibility TLV), flip that TLV to `never` in the IR bytes, and
+// render the patched descriptor — the exact bad-DB shape the belt exists to
+// catch even though the gate makes it unshippable.
+// ───────────────────────────────────────────────────────────────────────
+#[test]
+fn belt_rejects_all_hidden_contract_format() {
+    use pqsigner_erc7730::ir::HEADER_LEN;
+
+    // 1. Compile a valid one-field descriptor (field visible → passes gate).
+    let dir = std::env::temp_dir().join(format!("pq_erc7730_belt_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let contract = [0xABu8; 20];
+    let addr_hex: String = contract.iter().map(|b| format!("{b:02x}")).collect();
+    let desc = format!(
+        r#"{{
+          "context": {{ "contract": {{ "deployments": [
+            {{ "chainId": 1, "address": "0x{addr_hex}" }}
+          ] }} }},
+          "metadata": {{ "owner": "Belt", "contractName": "Belt" }},
+          "display": {{ "formats": {{
+            "poke(uint256 amount)": {{
+              "intent": "Poke",
+              "fields": [
+                {{ "path": "amount", "label": "Amount", "format": "raw", "visible": "optional" }}
+              ]
+            }}
+          }} }}
+        }}"#
+    );
+    std::fs::write(dir.join("belt.json"), desc).expect("write desc");
+    let policy = workspace_root().join("secure/data/erc7730/policy.toml");
+    let res = dbgen::erc7730::build_db(&dir, &policy).expect("compile one-field descriptor");
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut ir_bytes = res.entries[0].ir_bytes.clone();
+
+    // 2. Flip the field's visibility TLV `optional (0x02)` → `never (0x01)`.
+    //    Search past the fixed header only (its sha256 descriptor_hash could
+    //    coincidentally hold the 3-byte pattern). push_tlv layout is
+    //    `[kind=0x3F][len=0x01][value]`.
+    let pat = [0x3Fu8, 0x01, 0x02];
+    let hits: Vec<usize> = (HEADER_LEN..ir_bytes.len().saturating_sub(2))
+        .filter(|&i| ir_bytes[i..i + 3] == pat)
+        .collect();
+    assert_eq!(hits.len(), 1, "exactly one visibility TLV to flip, found {hits:?}");
+    ir_bytes[hits[0] + 2] = 0x01; // VIS_NEVER
+
+    // 3. Render the patched IR directly (bypass Merkle verify — we test only
+    //    the belt, and VerifiedDescriptor.ir is a public field).
+    let ir = Erc7730Ir::parse(&ir_bytes).expect("patched IR still parses");
+    assert!(matches!(ir.context_kind, ContextKind::Contract));
+    let verified = VerifiedDescriptor { ir };
+
+    let mut calldata = Vec::new();
+    calldata.extend_from_slice(&keccak256(b"poke(uint256)")[..4]);
+    calldata.extend_from_slice(&u256_from_u64(42).0);
+    let tx = envelope(1, contract);
+    let resolver = NameResolver::new();
+
+    match render_erc7730_pages(&tx, &calldata, &verified, None, &resolver) {
+        Err(crate::tx::erc7730_render::RenderErr::Reject(msg)) => {
+            assert!(msg.contains("no visible fields"), "belt reject message: {msg}");
+        }
+        Err(other) => panic!("expected belt Reject, got a different RenderErr: {other:?}"),
+        Ok(_) => panic!(
+            "all-hidden contract format must be belt-rejected, but it rendered clear-sign pages"
+        ),
+    }
+}

@@ -301,6 +301,36 @@ pub struct Policy {
     pub trusted_attesters: Vec<String>,
     #[serde(default)]
     pub allow_unattested_dev_descriptors: bool,
+    /// WYSIWYS visibility allowlist (`VULN-erc7730-visible-never-noparam-
+    /// clearsign`). Each entry re-permits ONE otherwise-refused hidden
+    /// `address` argument on ONE function, after human review. Empty by
+    /// default: with no entries, every `visible:"never"` fund-routing address
+    /// drops the format to loud blind-sign. See [`check_field_visibility`].
+    #[serde(default)]
+    pub hidden_address_allow: Vec<HiddenAddressAllow>,
+}
+
+/// One reviewed exemption to the WYSIWYS hidden-address rule
+/// ([`check_field_visibility`]). Re-permits a specific hidden `address`
+/// argument on a specific function — e.g. a router `executor` whose economic
+/// effect is bounded by a shown min-return, a relayer/fee-collector, or a
+/// linked-list `lesser`/`greater` hint that routes no funds. Honoured ONLY
+/// when `rationale` is non-empty, so a reviewer must record WHY the hide is
+/// safe; an entry without a rationale fails safe (ignored → blind-sign).
+#[derive(Debug, Deserialize, Default, Clone)]
+pub struct HiddenAddressAllow {
+    /// Exact format key (function signature WITH parameter names), matched
+    /// verbatim against the descriptor's format key. A verbatim match means
+    /// an upstream rename silently retires the exemption (fails safe).
+    pub signature: String,
+    /// The hidden argument's descriptor path (e.g. `executor` or
+    /// `order.executor`), matched against the offending argument (a leading
+    /// `#.` is optional).
+    pub path: String,
+    /// Human rationale — REQUIRED. An entry with an empty rationale is
+    /// ignored (fails safe → the format blind-signs).
+    #[serde(default)]
+    pub rationale: String,
 }
 
 pub fn load_policy(path: &Path) -> Result<Policy, String> {
@@ -846,6 +876,7 @@ fn compile_descriptor(
         descriptor_hash,
         owner: owner.clone(),
         contract_name: contract_name.clone(),
+        hidden_address_allow: policy.hidden_address_allow.clone(),
     };
 
     // Decide context kind + collect deployment tuples.
@@ -988,6 +1019,10 @@ struct CompileCtx {
     owner: String,
     #[allow(dead_code)]
     contract_name: String,
+    /// Reviewed WYSIWYS hidden-address exemptions from the active policy
+    /// (see [`check_field_visibility`]). Cloned in per descriptor so the
+    /// per-format gate can consult it without re-threading `Policy`.
+    hidden_address_allow: Vec<HiddenAddressAllow>,
 }
 
 /// Pool-with-cache used while compiling a single descriptor. Interns
@@ -1167,6 +1202,17 @@ fn compile_one_format(
         // here at build time, exactly as the contract path does.
         check_eip712_field_completeness(sig, fmt, &parsed)?;
     }
+
+    // WYSIWYS visibility gate (`VULN-erc7730-visible-never-noparam-
+    // clearsign`). Completeness above only proves every argument is
+    // *declared* (rendered OR `visible:"never"`); it deliberately blesses an
+    // explicit hide. This gate proves the effect-bearing arguments are
+    // *shown* — refusing a format that surfaces NONE of its arguments, or
+    // that hides a fund-routing `address` behind a trusted clear-sign. A
+    // refused format drops to loud blind-sign (tolerant corpus) or hard-
+    // errors a hand-authored strict descriptor so we fix it — never a
+    // reassuring parameter-less clear-sign.
+    check_field_visibility(sig, fmt, &parsed, context_kind, &ctx.hidden_address_allow)?;
 
     // Selector / discriminator slot — 4 bytes. For EIP-712 we also keep
     // the FULL 32-byte primary-type hash so the on-device renderer can
@@ -1850,6 +1896,208 @@ fn path_top_param_index(path: &str, parsed: &ParsedFormatKey) -> Option<u16> {
         .iter()
         .position(|nm| nm == seg)
         .map(|p| p as u16)
+}
+
+/// True when the ABI type string (parameter names already stripped by
+/// [`parse_format_key`]) carries at least one `address` component:
+/// `address`, `address[]`, `address[3]`, or a tuple / tuple-array containing
+/// an address. ABI has no other type whose token is `address`, so a
+/// token-exact scan is precise — `uint256` / `bytes32` / `bool` / `string`
+/// never false-hit.
+fn type_contains_address(ty: &str) -> bool {
+    ty.split(|c: char| matches!(c, '(' | ')' | '[' | ']' | ',') || c.is_whitespace())
+        .any(|tok| tok == "address")
+}
+
+/// A field is *hidden* iff it is explicitly `visible:"never"`. Every other
+/// visibility (`always` / absent / `optional` / `ifNotIn`) is potentially
+/// shown, and `mustMatch` makes the on-device renderer reject the WHOLE
+/// format (→ blind-sign), so none of them can leave an argument signed-but-
+/// silently-hidden behind a clear-sign.
+fn field_is_hidden(field: &FieldDef) -> bool {
+    field.visible.as_deref() == Some("never")
+}
+
+/// The `tokenPath` param of a `tokenAmount`-style field, if any. A shown
+/// amount whose `tokenPath` points at an address argument surfaces that
+/// address's identity (name/symbol/decimals) to the user, which counts as
+/// showing the address for the WYSIWYS rule.
+fn field_token_path(field: &FieldDef) -> Option<&str> {
+    field
+        .params
+        .as_ref()
+        .and_then(|p| p.get("tokenPath"))
+        .and_then(|v| v.as_str())
+}
+
+/// A field path that surfaces the transaction's native value (`msg.value`)
+/// via the `@`-envelope. Showing the native value is a meaningful,
+/// effect-bearing thing to render (a payable `submit` / stake whose ETH IS
+/// the intent), so a visible native-value field satisfies rule 1 even when
+/// every calldata argument is a deliberately-hidden tag.
+fn path_is_native_value(path: &str) -> bool {
+    matches!(path.trim(), "@.value" | "@value")
+}
+
+/// Does the reviewed policy allowlist re-permit hiding argument `arg_path`
+/// on function `sig`? Only entries WITH a non-empty rationale count (a
+/// rationale-less entry fails safe → ignored). Leading `#.` on either side
+/// is normalised away.
+fn visibility_allowlisted(allow: &[HiddenAddressAllow], sig: &str, arg_path: &str) -> bool {
+    fn norm(p: &str) -> &str {
+        p.trim().trim_start_matches('#').trim_start_matches('.')
+    }
+    let want = norm(arg_path);
+    allow.iter().any(|e| {
+        !e.rationale.trim().is_empty() && e.signature == sig && norm(&e.path) == want
+    })
+}
+
+/// WYSIWYS visibility gate — the sibling of the completeness lints
+/// ([`check_contract_field_completeness`] /
+/// [`check_eip712_field_completeness`]) that closes
+/// `VULN-erc7730-visible-never-noparam-clearsign`.
+///
+/// Completeness proves every calldata / typed-data word is *declared* by
+/// some field (rendered OR `visible:"never"`), so nothing is signed the
+/// descriptor never mentions. It deliberately treats an explicit hide as a
+/// conscious author decision — correct for a nonce / deadline / referral,
+/// but exactly the hole a hostile-or-careless (auto-vendored) descriptor
+/// drives through: mark the recipient / target `visible:"never"` and the
+/// device clear-signs a reassuring banner with the fund-routing argument
+/// invisible.
+///
+/// This gate adds the missing invariant — a clear-signed known shape must
+/// SHOW its effect-bearing arguments — via two fail-safe rules (a refused
+/// format drops to loud blind-sign in the tolerant corpus, or hard-errors a
+/// hand-authored strict descriptor so we fix it):
+///
+///  1. **No parameter-less clear-sign.** A function that takes ≥1 argument
+///     must surface at least one of them (a visible field whose path
+///     resolves to a calldata / typed argument). Refuses the all-
+///     `visible:"never"` witness (`setAllowedTarget`, `transferOwnership`,
+///     …) that renders banner + envelope + confirm and nothing else.
+///  2. **No hidden fund-routing address.** Every `address`-typed argument
+///     (top-level, and — for the contract path — each individually-
+///     addressable static-tuple member) must be shown, either directly or
+///     as the `tokenPath` of a shown amount. A hidden address is refused
+///     unless a reviewed [`HiddenAddressAllow`] policy entry re-permits it
+///     with a written rationale (router-executor-behind-min-output /
+///     relayer / linked-list hint). This is what stops the *next* corpus
+///     resync from silently shipping a recipient-hiding transfer/withdraw
+///     descriptor.
+///
+/// The on-device renderer carries a coarse structural backstop for rule 1
+/// (a contract format that declares fields but renders none falls through to
+/// blind-sign), but rule 2 has no cheap on-device analogue — the device
+/// can't reconstruct which hidden field was an `address` — so this build-
+/// time gate is the load-bearing guarantee against partial hides.
+fn check_field_visibility(
+    sig: &str,
+    fmt: &Format,
+    parsed: &ParsedFormatKey,
+    context_kind: u8,
+    allow: &[HiddenAddressAllow],
+) -> Result<(), String> {
+    if parsed.top_names.is_empty() {
+        return Ok(()); // zero-argument function / degenerate type — nothing to hide.
+    }
+
+    // Rule 1 — the trusted screen must not be parameter-less: at least one
+    // visible field must surface a calldata argument (a `tokenAmount` field
+    // counts — its own `path` resolves to the amount argument) OR the native
+    // transaction value (a payable `submit`/stake whose ETH is the intent).
+    let any_shown_meaningful = fmt.fields.iter().any(|f| {
+        !field_is_hidden(f)
+            && f.path.as_deref().is_some_and(|p| {
+                path_top_param_index(p, parsed).is_some() || path_is_native_value(p)
+            })
+    });
+    if !any_shown_meaningful {
+        return Err(format!(
+            "format `{sig}`: every argument is `visible:\"never\"` (or unrendered) and the \
+             native value is not shown — a clear-signed known shape must surface at least one \
+             effect-bearing field, else the trusted display shows only a reassuring banner \
+             while the user blind-signs the call (WYSIWYS; \
+             VULN-erc7730-visible-never-noparam-clearsign). Drop the format or make an \
+             effect-bearing field visible."
+        ));
+    }
+
+    // Rule 2 — no hidden `address` argument (unless reviewed-allowlisted).
+    for (idx, top_name) in parsed.top_names.iter().enumerate() {
+        let top_ty = &parsed.top_types[idx];
+
+        // Contract static-tuple members are addressed individually by the
+        // renderer (mirrors the completeness lint) — descend one level.
+        // EIP-712 members are one head word each, no descent.
+        let members = if context_kind == CTX_CONTRACT
+            && top_ty.starts_with('(')
+            && top_ty.ends_with(')')
+        {
+            parsed
+                .inner_names
+                .get(top_name)
+                .zip(parsed.inner_types.get(top_name))
+                .filter(|(names, _)| !names.is_empty())
+        } else {
+            None
+        };
+
+        match members {
+            Some((member_names, member_types)) => {
+                for (m_idx, member) in member_names.iter().enumerate() {
+                    let m_ty = member_types.get(m_idx).map(String::as_str).unwrap_or("");
+                    if !type_contains_address(m_ty) {
+                        continue;
+                    }
+                    let shown = fmt.fields.iter().any(|f| {
+                        !field_is_hidden(f)
+                            && (f
+                                .path
+                                .as_deref()
+                                .is_some_and(|p| path_covers_tuple_member(p, top_name, member))
+                                || field_token_path(f)
+                                    .is_some_and(|tp| path_covers_tuple_member(tp, top_name, member)))
+                    });
+                    if !shown {
+                        let arg_path = format!("{top_name}.{member}");
+                        if !visibility_allowlisted(allow, sig, &arg_path) {
+                            return Err(hidden_address_err(sig, &arg_path));
+                        }
+                    }
+                }
+            }
+            None => {
+                if !type_contains_address(top_ty) {
+                    continue;
+                }
+                let shown = fmt.fields.iter().any(|f| {
+                    !field_is_hidden(f)
+                        && (f
+                            .path
+                            .as_deref()
+                            .is_some_and(|p| path_top_param_index(p, parsed) == Some(idx as u16))
+                            || field_token_path(f)
+                                .is_some_and(|tp| path_top_param_index(tp, parsed) == Some(idx as u16)))
+                });
+                if !shown && !visibility_allowlisted(allow, sig, top_name) {
+                    return Err(hidden_address_err(sig, top_name));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn hidden_address_err(sig: &str, arg_path: &str) -> String {
+    format!(
+        "format `{sig}`: address argument `{arg_path}` is `visible:\"never\"` and never shown \
+         (nor surfaced as a shown amount's `tokenPath`) — a hidden fund-routing address behind a \
+         trusted clear-sign is a WYSIWYS break (VULN-erc7730-visible-never-noparam-clearsign). \
+         Show it, or add a reviewed `hidden_address_allow` policy entry with a rationale if the \
+         address routes no funds (e.g. a router executor bounded by a shown min-return)."
+    )
 }
 
 fn parse_format_key(sig: &str) -> Result<ParsedFormatKey, String> {
@@ -3469,6 +3717,7 @@ mod tests {
             descriptor_hash: [0u8; 32],
             owner: String::new(),
             contract_name: String::new(),
+            hidden_address_allow: Vec::new(),
         };
         // STRICT: the unrenderable `swap` fails the WHOLE descriptor.
         assert!(compile_formats(&display, CTX_CONTRACT, &mut ctx, false).is_err());
@@ -3663,6 +3912,225 @@ mod tests {
         assert!(!path_covers_tuple_member("params[0]", "params", "amountIn"));
         assert!(!path_covers_tuple_member("@.value", "params", "amountIn"));
         assert!(!path_covers_tuple_member("$.metadata", "params", "amountIn"));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // WYSIWYS visibility gate — VULN-erc7730-visible-never-noparam-clearsign.
+    // Completeness (above) blesses `visible:"never"`; these guard that the
+    // effect-bearing arguments are actually SHOWN.
+    // ─────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn type_contains_address_is_token_exact() {
+        assert!(type_contains_address("address"));
+        assert!(type_contains_address("address[]"));
+        assert!(type_contains_address("address[3]"));
+        assert!(type_contains_address("(address,uint256)"));
+        assert!(type_contains_address("(uint256,address)[]"));
+        // No false positives on non-address ABI types.
+        assert!(!type_contains_address("uint256"));
+        assert!(!type_contains_address("bytes32"));
+        assert!(!type_contains_address("bool"));
+        assert!(!type_contains_address("string"));
+        assert!(!type_contains_address("(uint256,bytes32)"));
+    }
+
+    #[test]
+    fn visibility_all_hidden_rejected() {
+        // The live witness: `setAllowedTarget` hides BOTH params → the device
+        // would clear-sign banner + envelope + confirm with nothing shown.
+        let sig = "setAllowedTarget(address target, bool allowed)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_from_fields(
+            r#"[
+              {"path":"target","label":"Target","visible":"never"},
+              {"path":"allowed","label":"Allowed","visible":"never"}
+            ]"#,
+        );
+        let err = check_field_visibility(sig, &fmt, &parsed, CTX_CONTRACT, &[])
+            .expect_err("all-hidden format must be refused");
+        assert!(err.contains("surface at least one"), "rule-1 message: {err}");
+    }
+
+    #[test]
+    fn visibility_hidden_recipient_rejected() {
+        // The canonical future-drain: recipient hidden, amount shown.
+        let sig = "transfer(address to, uint256 amount)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_from_fields(
+            r#"[
+              {"path":"to","label":"To","format":"addressName","visible":"never"},
+              {"path":"amount","label":"Amount","format":"raw"}
+            ]"#,
+        );
+        let err = check_field_visibility(sig, &fmt, &parsed, CTX_CONTRACT, &[])
+            .expect_err("hidden recipient must be refused");
+        assert!(err.contains("`to`"), "names the hidden address: {err}");
+    }
+
+    #[test]
+    fn visibility_all_shown_transfer_ok() {
+        let sig = "transfer(address to, uint256 amount)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_from_fields(
+            r#"[
+              {"path":"to","label":"To","format":"addressName"},
+              {"path":"amount","label":"Amount","format":"raw"}
+            ]"#,
+        );
+        assert!(check_field_visibility(sig, &fmt, &parsed, CTX_CONTRACT, &[]).is_ok());
+    }
+
+    #[test]
+    fn visibility_zero_arg_ok() {
+        let sig = "deposit()";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_from_fields("[]");
+        assert!(check_field_visibility(sig, &fmt, &parsed, CTX_CONTRACT, &[]).is_ok());
+    }
+
+    #[test]
+    fn visibility_hidden_nonaddress_ok() {
+        // A hidden non-address (nonce) is fine — only fund-routing addresses
+        // are load-bearing for rule 2, and the shown recipient satisfies rule 1.
+        let sig = "bump(address to, uint256 nonce)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_from_fields(
+            r#"[
+              {"path":"to","label":"To","format":"addressName"},
+              {"path":"nonce","label":"Nonce","visible":"never"}
+            ]"#,
+        );
+        assert!(check_field_visibility(sig, &fmt, &parsed, CTX_CONTRACT, &[]).is_ok());
+    }
+
+    #[test]
+    fn visibility_tokenpath_surfaced_address_ok() {
+        // Ondo pattern: the token address is hidden as its own field but is the
+        // `tokenPath` of a SHOWN amount, so its identity reaches the user.
+        let sig = "subscribe(address depositToken, uint256 depositAmount)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_from_fields(
+            r#"[
+              {"path":"depositAmount","label":"Deposit","format":"tokenAmount","params":{"tokenPath":"depositToken"}},
+              {"path":"depositToken","label":"Token","visible":"never"}
+            ]"#,
+        );
+        assert!(check_field_visibility(sig, &fmt, &parsed, CTX_CONTRACT, &[]).is_ok());
+    }
+
+    #[test]
+    fn visibility_tuple_member_hidden_address_rejected() {
+        // A static-tuple member the renderer addresses individually.
+        let sig = "exec((address recipient, uint256 amount) order)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_from_fields(
+            r#"[
+              {"path":"order.recipient","label":"To","format":"addressName","visible":"never"},
+              {"path":"order.amount","label":"Amount","format":"raw"}
+            ]"#,
+        );
+        let err = check_field_visibility(sig, &fmt, &parsed, CTX_CONTRACT, &[])
+            .expect_err("hidden tuple-member address must be refused");
+        assert!(err.contains("order.recipient"), "names the member: {err}");
+    }
+
+    #[test]
+    fn visibility_allowlist_requires_rationale() {
+        // Router-executor pattern: `executor` hidden, output recipient shown.
+        let sig = "swap(address executor, address dstReceiver, uint256 amount)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_from_fields(
+            r#"[
+              {"path":"executor","label":"Executor","visible":"never"},
+              {"path":"dstReceiver","label":"To","format":"addressName"},
+              {"path":"amount","label":"Amount","format":"raw"}
+            ]"#,
+        );
+        // Refused with no allowlist.
+        assert!(check_field_visibility(sig, &fmt, &parsed, CTX_CONTRACT, &[]).is_err());
+        // A rationale-less entry fails safe (still refused).
+        let no_rationale = [HiddenAddressAllow {
+            signature: sig.to_string(),
+            path: "executor".to_string(),
+            rationale: String::new(),
+        }];
+        assert!(
+            check_field_visibility(sig, &fmt, &parsed, CTX_CONTRACT, &no_rationale).is_err(),
+            "an allowlist entry without a rationale must not re-permit the hide"
+        );
+        // A reviewed entry with a rationale re-permits it.
+        let reviewed = [HiddenAddressAllow {
+            signature: sig.to_string(),
+            path: "executor".to_string(),
+            rationale: "router executor; effect bounded by shown min-return".to_string(),
+        }];
+        assert!(check_field_visibility(sig, &fmt, &parsed, CTX_CONTRACT, &reviewed).is_ok());
+        // The exemption is scoped to (signature, path): a different function
+        // with the same param name is NOT covered.
+        let other_sig = "drain(address executor)";
+        let other_parsed = parse_format_key(other_sig).unwrap();
+        let other_fmt =
+            fmt_from_fields(r#"[{"path":"executor","label":"x","visible":"never"}]"#);
+        assert!(
+            check_field_visibility(other_sig, &other_fmt, &other_parsed, CTX_CONTRACT, &reviewed)
+                .is_err(),
+            "allowlist entry must not leak across signatures"
+        );
+    }
+
+    #[test]
+    fn visibility_eip712_hidden_address_member_rejected() {
+        // The typed-data analogue: a Permit `spender` set `visible:"never"`
+        // signs an off-chain approval to an unseen address.
+        let sig = "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_from_fields(
+            r#"[
+              {"path":"owner","label":"Owner","format":"addressName"},
+              {"path":"spender","label":"Spender","format":"addressName","visible":"never"},
+              {"path":"value","label":"Value","format":"raw"},
+              {"path":"nonce","label":"Nonce","visible":"never"},
+              {"path":"deadline","label":"Deadline","visible":"never"}
+            ]"#,
+        );
+        let err = check_field_visibility(sig, &fmt, &parsed, CTX_EIP712, &[])
+            .expect_err("hidden typed-data spender must be refused");
+        assert!(err.contains("spender"), "names the hidden member: {err}");
+    }
+
+    #[test]
+    fn visibility_gate_runs_inside_compile_one_format() {
+        // Integration: the witness format is refused by the full compile path,
+        // not just the standalone checker — so the tolerant corpus drops it to
+        // blind-sign and it can never ship as a trusted clear-sign.
+        let sig = "setAllowedTarget(address target, bool allowed)";
+        let fmt = fmt_from_fields(
+            r#"[
+              {"path":"target","label":"Target","visible":"never"},
+              {"path":"allowed","label":"Allowed","visible":"never"}
+            ]"#,
+        );
+        let mut ctx = CompileCtx {
+            constants: serde_json::Map::new(),
+            enums: serde_json::Map::new(),
+            descriptor_hash: [0u8; 32],
+            owner: String::new(),
+            contract_name: String::new(),
+            hidden_address_allow: Vec::new(),
+        };
+        let mut pool = Pool::new();
+        let mut out = Vec::new();
+        let res = compile_one_format(
+            sig,
+            &fmt,
+            CTX_CONTRACT,
+            &mut ctx,
+            &mut pool,
+            &BTreeMap::new(),
+            &mut out,
+        );
+        assert!(res.is_err(), "compile_one_format must refuse the all-hidden witness");
     }
 
     // Audit 2026-06-25 HIGH-1 — EIP-712 completeness lint regression guards.

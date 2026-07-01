@@ -50,3 +50,19 @@ trusted_attesters = [
 # attestation chain is not yet wired. Flip to `false` before
 # production. CI gates production builds on this being `false`.
 allow_unattested_dev_descriptors = true
+
+# ─────────────────────────────────────────────────────────────────────
+# WYSIWYS hidden-address allowlist (VULN-erc7730-visible-never-noparam-
+# clearsign). Each entry re-permits ONE `visible:"never"` ADDRESS argument
+# on ONE function, after human review. Without a matching entry, a hidden
+# fund-routing address drops the whole format to loud blind-sign. The
+# `rationale` is REQUIRED — an empty rationale is ignored (fails safe →
+# blind-sign). `signature` matches the descriptor's format key verbatim;
+# `path` matches the hidden argument (leading `#.` optional). See
+# `dbgen::erc7730::check_field_visibility`.
+# ─────────────────────────────────────────────────────────────────────
+
+[[hidden_address_allow]]
+signature = "submit(address _referral)"
+path = "_referral"
+rationale = "Lido stETH staking referral tag — routes no funds. The effect is the staked msg.value, shown loud on the native-value page ('Amount to stake'); the referral only credits a marketing partner and cannot redirect the stake or its stETH."
