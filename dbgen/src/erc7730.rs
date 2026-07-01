@@ -269,7 +269,7 @@ struct Format {
     fields: Vec<FieldDef>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct FieldDef {
     /// Absent for a constant-annotation field (see `value`).
     #[serde(default)]
@@ -287,6 +287,17 @@ struct FieldDef {
     params: Option<serde_json::Value>,
     #[serde(default)]
     visible: Option<String>,
+    /// Nested field GROUP (ERC-7730 struct/tuple display). A field with a
+    /// `fields` sub-array is a GROUP whose own `path` (e.g. `#.marketParams`)
+    /// anchors its children's relative paths (e.g. `loanToken`); it carries no
+    /// leaf `format`. [`flatten_field_groups`] expands a group into per-member
+    /// leaf fields with combined paths (`#.marketParams.loanToken`) BEFORE any
+    /// completeness / visibility / compile gate runs, so the on-device renderer
+    /// (which addresses each ABI head-word slot individually) never sees the
+    /// group node. Morpho Blue's `marketParams((address,address,address,address,
+    /// uint256))` is the canonical case.
+    #[serde(default)]
+    fields: Option<Vec<FieldDef>>,
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1100,12 +1111,34 @@ fn compile_formats(
 
     let mut pool = Pool::new();
 
+    // Flatten nested field GROUPS (ERC-7730 `fields` sub-arrays, e.g. Morpho's
+    // `marketParams` tuple) into per-member leaf fields with combined paths
+    // ONCE, up front, so the enum pre-pass AND the compile loop see identical
+    // fields. A malformed group (no anchoring path / too deeply nested) drops
+    // that one format in tolerant mode — exactly as a compile failure would —
+    // and hard-errors in strict mode. See [`flatten_field_groups`].
+    let mut flat: Vec<(&str, Format)> = Vec::with_capacity(n);
+    for (sig, fmt) in display.formats.iter() {
+        match flatten_field_groups(&fmt.fields) {
+            Ok(fields) => flat.push((
+                sig.as_str(),
+                Format {
+                    _id: fmt._id.clone(),
+                    intent: fmt.intent.clone(),
+                    fields,
+                },
+            )),
+            Err(_) if tolerant => {} // malformed group → drop to blind-sign
+            Err(e) => return Err(format!("format `{sig}`: {e}")),
+        }
+    }
+
     // Pre-intern referenced enum tables so $ref resolution can emit pool
     // offsets without re-walking. In tolerant mode a bad / undefined enum is
     // skipped here (the format(s) referencing it then fail to compile and are
     // themselves skipped below); strict mode hard-errors.
     let mut enum_offsets: BTreeMap<String, u16> = BTreeMap::new();
-    for (_sig, fmt) in display.formats.iter() {
+    for (_sig, fmt) in flat.iter() {
         for field in &fmt.fields {
             let Some(params) = &field.params else { continue };
             let Some(refstr) = params
@@ -1144,7 +1177,7 @@ fn compile_formats(
     // exactly as if the descriptor were absent. Strict mode `?`-fails the
     // whole descriptor on the first bad format (a curation bug in our corpus).
     let mut survivors: Vec<Vec<u8>> = Vec::with_capacity(n);
-    for (sig, fmt) in display.formats.iter() {
+    for &(sig, ref fmt) in flat.iter() {
         if tolerant && survivors.len() >= MAX_FORMATS {
             break; // bound the IR; remaining functions blind-sign
         }
@@ -1170,6 +1203,94 @@ fn compile_formats(
     }
 
     Ok((formats_buf, pool.into_bytes()))
+}
+
+/// Maximum nesting depth for ERC-7730 field GROUPS (`fields` sub-arrays).
+/// Morpho's `marketParams` is one level; a real descriptor never needs many.
+/// Bounding the recursion keeps a pathological (or hostile) descriptor from
+/// blowing the host stack during flattening.
+const MAX_FIELD_GROUP_DEPTH: usize = 4;
+
+/// Expand ERC-7730 nested field GROUPS into a flat field list with combined
+/// paths. A field that carries a non-empty `fields` sub-array is a GROUP: its
+/// own `path` (e.g. `#.marketParams`) prefixes each child's relative `path`
+/// (e.g. `loanToken`) → `#.marketParams.loanToken`, recursively; leaf fields
+/// pass through unchanged (with `fields` cleared).
+///
+/// This is purely syntactic path rewriting. The combined paths are compiled by
+/// the SAME width-aware [`compile_structured_contract_path`] and filtered by the
+/// SAME completeness / visibility / two-level-descent gates as a hand-authored
+/// flat path, so flattening can only PRODUCE candidate paths — it bypasses no
+/// safety gate. A group over a dynamic tuple / array / more than two levels
+/// compiles to a path the existing gates reject, so the whole format drops to
+/// loud blind-sign (tolerant corpus) rather than mis-rendering. Running it once
+/// up front means the enum pre-pass and the compile loop see identical fields.
+fn flatten_field_groups(fields: &[FieldDef]) -> Result<Vec<FieldDef>, String> {
+    let mut out = Vec::with_capacity(fields.len());
+    flatten_field_groups_into(fields, None, 0, &mut out)?;
+    Ok(out)
+}
+
+fn flatten_field_groups_into(
+    fields: &[FieldDef],
+    prefix: Option<&str>,
+    depth: usize,
+    out: &mut Vec<FieldDef>,
+) -> Result<(), String> {
+    if depth > MAX_FIELD_GROUP_DEPTH {
+        return Err(format!(
+            "field group nesting exceeds MAX_FIELD_GROUP_DEPTH ({MAX_FIELD_GROUP_DEPTH})"
+        ));
+    }
+    for field in fields {
+        let combined = combine_field_path(prefix, field.path.as_deref());
+        match field.fields.as_deref() {
+            Some(children) if !children.is_empty() => {
+                // GROUP node: must carry a `path` to anchor its children (a
+                // group with no path has nothing for the members to be relative
+                // to). It contributes no leaf itself.
+                let group_prefix = combined.ok_or_else(|| {
+                    "field group has a `fields` sub-array but no `path` to anchor its members"
+                        .to_string()
+                })?;
+                flatten_field_groups_into(children, Some(&group_prefix), depth + 1, out)?;
+            }
+            _ => {
+                // Leaf field: emit a copy carrying the combined path, no
+                // sub-`fields`. Everything else (format/params/label/visible/
+                // value) is preserved verbatim.
+                let mut leaf = field.clone();
+                leaf.path = combined;
+                leaf.fields = None;
+                out.push(leaf);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Combine a group `prefix` path with a child's relative `path`.
+/// `#.marketParams` + `loanToken` → `#.marketParams.loanToken`. A child that
+/// is itself absolute (`#`/`@`/`$`) is taken verbatim (spec-noncompliant under
+/// a group, but we never fabricate a nonsensical double-rooted path); a leading
+/// `.` on the child is absorbed.
+fn combine_field_path(prefix: Option<&str>, child: Option<&str>) -> Option<String> {
+    match (prefix, child) {
+        (None, c) => c.map(str::to_string),
+        (Some(p), None) => Some(p.to_string()),
+        (Some(p), Some(c)) => {
+            let c = c.trim();
+            if c.starts_with('#') || c.starts_with('@') || c.starts_with('$') {
+                Some(c.to_string())
+            } else {
+                Some(format!(
+                    "{}.{}",
+                    p.trim_end_matches('.'),
+                    c.trim_start_matches('.')
+                ))
+            }
+        }
+    }
 }
 
 fn compile_one_format(
@@ -3631,6 +3752,197 @@ mod tests {
         assert_eq!(head_slot_of(&compile_path("#.to", CTX_CONTRACT, &p).unwrap()), 2);
         assert_eq!(head_slot_of(&compile_path("#.s.y", CTX_CONTRACT, &p).unwrap()), 1);
         assert_eq!(head_slot_of(&compile_path("#.s.x", CTX_CONTRACT, &p).unwrap()), 0);
+    }
+
+    // ── Nested field-GROUP flattening (Morpho Blue `marketParams`) ──
+
+    /// The Morpho Blue `marketParams` GROUP (a static tuple of 4 addresses +
+    /// lltv) flattens to per-member combined paths, and every field — including
+    /// the scalars/addresses that land AFTER the 5-word tuple — compiles to its
+    /// absolute ABI head-word slot. This is the exact non-leading-static-tuple
+    /// slot-confusion case at 5-word width: `assets` MUST resolve to head word
+    /// 5, not logical ordinal 1.
+    #[test]
+    fn flatten_morpho_static_tuple_group_slots() {
+        let sig = "borrow((address loanToken, address collateralToken, address oracle, address irm, uint256 lltv) marketParams, uint256 assets, uint256 shares, address onBehalf, address receiver)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_from_fields(
+            r##"[
+              {"path":"#.marketParams","fields":[
+                {"path":"loanToken","label":"Loan","format":"addressName"},
+                {"path":"collateralToken","label":"Collat","format":"addressName"},
+                {"path":"oracle","label":"Oracle","format":"addressName"},
+                {"path":"irm","label":"Irm","format":"addressName"},
+                {"path":"lltv","label":"Lltv","format":"raw"}
+              ]},
+              {"path":"#.assets","label":"Assets","format":"raw"},
+              {"path":"#.shares","label":"Shares","format":"raw"},
+              {"path":"#.onBehalf","label":"On Behalf","format":"addressName"},
+              {"path":"#.receiver","label":"Receiver","format":"addressName"}
+            ]"##,
+        );
+        let flat = flatten_field_groups(&fmt.fields).expect("flatten ok");
+        let paths: Vec<&str> = flat.iter().map(|f| f.path.as_deref().unwrap()).collect();
+        assert_eq!(
+            paths,
+            vec![
+                "#.marketParams.loanToken",
+                "#.marketParams.collateralToken",
+                "#.marketParams.oracle",
+                "#.marketParams.irm",
+                "#.marketParams.lltv",
+                "#.assets",
+                "#.shares",
+                "#.onBehalf",
+                "#.receiver",
+            ],
+            "group expands in place, preserving declaration order"
+        );
+        let slot = |p: &str| head_slot_of(&compile_path(p, CTX_CONTRACT, &parsed).unwrap());
+        assert_eq!(slot("#.marketParams.loanToken"), 0);
+        assert_eq!(slot("#.marketParams.collateralToken"), 1);
+        assert_eq!(slot("#.marketParams.oracle"), 2);
+        assert_eq!(slot("#.marketParams.irm"), 3);
+        assert_eq!(slot("#.marketParams.lltv"), 4);
+        assert_eq!(slot("#.assets"), 5, "assets lands AFTER the 5-word tuple");
+        assert_eq!(slot("#.shares"), 6);
+        assert_eq!(slot("#.onBehalf"), 7);
+        assert_eq!(slot("#.receiver"), 8);
+    }
+
+    /// Morpho `supply(... marketParams, assets, shares, onBehalf, bytes data)`:
+    /// the dynamic `bytes data` sits at head word 8 (after the 5-word tuple +
+    /// three scalars). C1 emits `FieldIdx(8) + FollowOffset` so the device reads
+    /// the SAME tail blob the contract decodes — the tuple-width accounting and
+    /// the C1 follow must compose correctly.
+    #[test]
+    fn flatten_morpho_bytes_after_tuple_follows_offset() {
+        let sig = "supply((address loanToken, address collateralToken, address oracle, address irm, uint256 lltv) marketParams, uint256 assets, uint256 shares, address onBehalf, bytes data)";
+        let parsed = parse_format_key(sig).unwrap();
+        let prog = compile_path("#.data", CTX_CONTRACT, &parsed).unwrap();
+        assert_eq!(prog[0], PATHOP_ROOT_STRUCT);
+        assert_eq!(prog[1], PATHOP_FIELD_IDX);
+        assert_eq!(
+            u16::from_be_bytes([prog[2], prog[3]]),
+            8,
+            "bytes `data` at head word 8 (5-word tuple + assets + shares + onBehalf)"
+        );
+        assert_eq!(prog[4], PATHOP_FOLLOW_OFFSET, "dynamic bytes → FollowOffset");
+        assert_eq!(prog.len(), 5, "no trailing ops");
+    }
+
+    /// Flatten runs BEFORE the completeness + visibility gates (the ordering
+    /// that makes the feature real): the flattened Morpho `borrow` fields cover
+    /// every marketParams member and surface every address, so both gates pass.
+    /// If the ORIGINAL (unflattened) `#.marketParams` group reached the gates,
+    /// completeness would reject (`marketParams.loanToken` uncovered) and the
+    /// format would blind-sign.
+    #[test]
+    fn flatten_morpho_borrow_passes_completeness_and_visibility() {
+        let sig = "borrow((address loanToken, address collateralToken, address oracle, address irm, uint256 lltv) marketParams, uint256 assets, uint256 shares, address onBehalf, address receiver)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_from_fields(
+            r##"[
+              {"path":"#.marketParams","fields":[
+                {"path":"loanToken","label":"Loan","format":"addressName"},
+                {"path":"collateralToken","label":"Collat","format":"addressName"},
+                {"path":"oracle","label":"Oracle","format":"addressName"},
+                {"path":"irm","label":"Irm","format":"addressName"},
+                {"path":"lltv","label":"Lltv","format":"raw"}
+              ]},
+              {"path":"#.assets","label":"Assets","format":"raw"},
+              {"path":"#.shares","label":"Shares","format":"raw"},
+              {"path":"#.onBehalf","label":"On Behalf","format":"addressName"},
+              {"path":"#.receiver","label":"Receiver","format":"addressName"}
+            ]"##,
+        );
+        let flat = Format {
+            _id: None,
+            intent: Some("Borrow".to_string()),
+            fields: flatten_field_groups(&fmt.fields).unwrap(),
+        };
+        check_contract_field_completeness(sig, &flat, &parsed)
+            .expect("every marketParams member is covered after flatten");
+        check_field_visibility(sig, &flat, &parsed, CTX_CONTRACT, &[])
+            .expect("every address argument is shown after flatten");
+    }
+
+    /// Flatten is the identity on a flat (non-nested) field list — proves the
+    /// feature is purely ADDITIVE: a descriptor without groups is byte-for-byte
+    /// unchanged, so the corpus delta is exactly the nested-group additions.
+    #[test]
+    fn flatten_flat_fields_unchanged() {
+        let fmt = fmt_from_fields(
+            r##"[{"path":"#.to","label":"To","format":"addressName"},
+                {"path":"#.amount","label":"Amt","format":"raw"}]"##,
+        );
+        let flat = flatten_field_groups(&fmt.fields).unwrap();
+        let paths: Vec<Option<String>> = flat.iter().map(|f| f.path.clone()).collect();
+        assert_eq!(
+            paths,
+            vec![Some("#.to".to_string()), Some("#.amount".to_string())]
+        );
+    }
+
+    /// A GROUP anchored on a dynamic array-of-tuples flattens (syntactically) to
+    /// `#.orders.[].maker`, but the width-aware compiler REFUSES it — a
+    /// per-element tuple-member read is not a static-head access. The flatten
+    /// smuggles nothing past the gate; the whole format drops to blind-sign.
+    #[test]
+    fn flatten_array_of_tuple_group_rejected_by_compiler() {
+        // (1) Flatten is purely SYNTACTIC: a GROUP anchored on a dynamic array
+        // `#.orders.[]` with a `maker` subfield flattens to the combined
+        // per-element path `#.orders.[].maker`.
+        let fmt = fmt_from_fields(
+            r##"[{"path":"#.orders.[]","fields":[
+                  {"path":"maker","label":"Maker","format":"addressName"},
+                  {"path":"amount","label":"Amount","format":"raw"}
+            ]}]"##,
+        );
+        let flat = flatten_field_groups(&fmt.fields).expect("flatten is syntactic");
+        assert!(
+            flat.iter()
+                .any(|f| f.path.as_deref() == Some("#.orders.[].maker")),
+            "flatten produced the combined per-element path"
+        );
+        // (2) ...but the width-aware compiler REFUSES an array op in the MIDDLE
+        // of a path (a per-element tuple-member read is a dynamic-tail access,
+        // not a static-head read), so the format drops to blind-sign — the
+        // flatten smuggles nothing past the gate. (An array-of-tuple SIGNATURE
+        // is additionally rejected earlier by `parse_format_key`; this pins the
+        // compile-level defense that holds even for a parseable outer type.)
+        let parsed = parse_format_key("fill(uint256[] orders)").unwrap();
+        assert!(
+            compile_path("#.orders.[].maker", CTX_CONTRACT, &parsed).is_err(),
+            "array op mid-path (per-element member) must be refused by the compiler"
+        );
+    }
+
+    /// A group with a `fields` sub-array but no anchoring `path` is refused
+    /// (nothing for the members to be relative to) — fail-closed.
+    #[test]
+    fn flatten_group_without_path_rejected() {
+        let fmt = fmt_from_fields(
+            r#"[{"fields":[{"path":"x","label":"X","format":"raw"}]}]"#,
+        );
+        let err = flatten_field_groups(&fmt.fields).expect_err("group needs a path");
+        assert!(err.contains("no `path`"), "error explains the anchor: {err}");
+    }
+
+    /// Pathologically deep group nesting is refused, not silently flattened —
+    /// a host-stack-safety bound on hostile/malformed descriptors.
+    #[test]
+    fn flatten_depth_bound_enforced() {
+        let mut inner = r#"{"path":"leaf","label":"L","format":"raw"}"#.to_string();
+        for _ in 0..(MAX_FIELD_GROUP_DEPTH + 2) {
+            inner = format!(r#"{{"path":"g","fields":[{inner}]}}"#);
+        }
+        let fmt = fmt_from_fields(&format!("[{inner}]"));
+        let err = flatten_field_groups(&fmt.fields).expect_err("too-deep nest refused");
+        assert!(
+            err.contains("MAX_FIELD_GROUP_DEPTH"),
+            "error cites the depth bound: {err}"
+        );
     }
 
     #[test]

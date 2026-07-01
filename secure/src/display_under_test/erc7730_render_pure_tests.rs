@@ -1369,6 +1369,75 @@ fn c3_multi_dynamic_arrays_render_exact_elements() {
     let _ = find_page_by_label(&pages, "Recipients");
 }
 
+/// Morpho Blue `borrow` — the nested static-tuple GROUP (`marketParams`)
+/// unlocked by field-group flattening. Drives the REAL shipping registry leaf
+/// (`calldata-MorphoBlue.json`, mainnet). WYSIWYS differential value-equality:
+/// every member of the 5-word `marketParams` tuple AND every post-tuple
+/// argument renders from its EXACT ABI head-word slot — `assets` at head word
+/// 5, `receiver` at head word 8 (the non-leading-static-tuple slots the
+/// slot-confusion fix guards). If the flatten mis-computed any member's slot,
+/// the rendered value would differ from the encoded word and this fails.
+#[test]
+fn morpho_borrow_nested_tuple_group_renders_exact_values() {
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-MorphoBlue.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
+
+    // Distinct, recognizable words at each of the 9 head slots.
+    let addr_word = |a: [u8; 20]| {
+        let mut w = [0u8; 32];
+        w[12..].copy_from_slice(&a);
+        w
+    };
+    let loan = [0x11u8; 20];
+    let collat = [0x22u8; 20];
+    let oracle = [0x33u8; 20];
+    let irm = [0x44u8; 20];
+    let on_behalf = [0x66u8; 20];
+    let receiver = [0x77u8; 20];
+
+    let types_sig =
+        "borrow((address,address,address,address,uint256),uint256,uint256,address,address)";
+    let mut cd = keccak256(types_sig.as_bytes())[..4].to_vec();
+    cd.extend_from_slice(&addr_word(loan)); // slot 0: loanToken
+    cd.extend_from_slice(&addr_word(collat)); // slot 1: collateralToken
+    cd.extend_from_slice(&addr_word(oracle)); // slot 2: oracle
+    cd.extend_from_slice(&addr_word(irm)); // slot 3: irm
+    cd.extend_from_slice(&u256_from_u64(0xBEEF).0); // slot 4: lltv
+    cd.extend_from_slice(&u256_from_u64(0xA55E5).0); // slot 5: assets (AFTER tuple)
+    cd.extend_from_slice(&u256_from_u64(0).0); // slot 6: shares
+    cd.extend_from_slice(&addr_word(on_behalf)); // slot 7: onBehalf
+    cd.extend_from_slice(&addr_word(receiver)); // slot 8: receiver
+    // Confirms the selector matches AND `borrow` actually compiled into the IR.
+    assert_selector_matches(&verified.ir, &cd, types_sig);
+
+    let tx = envelope(1, entry.contract);
+    let resolver = NameResolver::new();
+    let pages = render_erc7730_pages(&tx, &cd, &verified, None, &resolver).expect("render");
+    assert_all_pages_printable(&pages);
+    let dump = dump_pages(&pages).to_lowercase();
+
+    // Tuple members read from their exact slots (addresses not in ERC20_DB/ENS
+    // render as the raw calldata address — still faithful to the signed word).
+    assert!(dump.contains("1111"), "loanToken (tuple slot 0) not read:\n{dump}");
+    assert!(dump.contains("2222"), "collateralToken (tuple slot 1) not read:\n{dump}");
+    assert!(dump.contains("3333"), "oracle (tuple slot 2) not read:\n{dump}");
+    assert!(dump.contains("4444"), "irm (tuple slot 3) not read:\n{dump}");
+    assert!(dump.contains("beef"), "lltv (tuple slot 4) not read:\n{dump}");
+    // Post-tuple args at their WIDTH-AWARE head slots (not logical ordinals).
+    assert!(
+        dump.contains("a55e5"),
+        "assets (head slot 5, AFTER the 5-word tuple) not read:\n{dump}"
+    );
+    assert!(dump.contains("6666"), "onBehalf (head slot 7) not read:\n{dump}");
+    assert!(dump.contains("7777"), "receiver (head slot 8) not read:\n{dump}");
+    // Labels the descriptor declares are present.
+    let _ = find_page_by_label(&pages, "Loan Token");
+    let _ = find_page_by_label(&pages, "Assets");
+    let _ = find_page_by_label(&pages, "Receiver");
+}
+
 #[test]
 fn array_resolve_matches_walk_differential() {
     // When the Kani-proven `walk` accepts the body, our resolver must agree
