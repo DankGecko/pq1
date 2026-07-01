@@ -619,6 +619,9 @@ pub(crate) fn path_ends_with_array_all(
                 return Ok(false);
             }
             p += 3;
+        } else if op == PathOp::FollowOffset as u8 {
+            // Multi-dynamic array marker (`FieldIdx* FollowOffset ArrayAll`).
+            p += 1;
         } else if op == PathOp::ArrayAll as u8 {
             return Ok(p + 1 == prog.len()); // ArrayAll must be the final op
         } else {
@@ -626,6 +629,24 @@ pub(crate) fn path_ends_with_array_all(
         }
     }
     Ok(false)
+}
+
+/// A `<arg>.[]` array path is MULTI-dynamic (relaxed `MultiInTail` placement)
+/// iff it carries a `FollowOffset` marker before the terminal `ArrayAll`.
+fn array_all_is_multi(ir: &Erc7730Ir<'_>, path_off: u16) -> Result<bool, RenderErr> {
+    if path_off == 0 {
+        return Ok(false);
+    }
+    let off = path_off as usize;
+    let len = *ir
+        .pool
+        .get(off)
+        .ok_or(RenderErr::Reject("7730 bad path off"))? as usize;
+    let prog = ir
+        .pool
+        .get(off + 1..off + 1 + len)
+        .ok_or(RenderErr::Reject("7730 truncated path"))?;
+    Ok(prog.contains(&(PathOp::FollowOffset as u8)))
 }
 
 /// Scan a compiled structured path's opcodes → `(needs_full_body, is_dynamic_leaf)`.
@@ -810,7 +831,20 @@ pub(super) fn render_array(
     resolver: &NameResolver<'_>,
     params: &ParamSet<'_>,
 ) -> Result<(), RenderErr> {
-    let (elems_start, count) = resolve_array(field, ir, full_body, static_head_words)?;
+    // Sole-dynamic array → the Kani-proven exact-placement resolver; a
+    // multi-dynamic array (FollowOffset marker) → the relaxed sibling, which
+    // still reads the array at its signature-fixed offset (WYSIWYS) but allows
+    // other dynamic args to own the rest of the tail.
+    let (elems_start, count) = if array_all_is_multi(ir, field.path_off)? {
+        crate::tx::erc7730_render::array::resolve_array_multi(
+            field,
+            ir,
+            full_body,
+            static_head_words,
+        )?
+    } else {
+        resolve_array(field, ir, full_body, static_head_words)?
+    };
 
     // 8. Header page: "<label>" + "<count> items" (makes the total explicit;
     //    also the count==0 page).
@@ -931,6 +965,24 @@ fn render_array_element(
                 match fit {
                     AmountFit::Full => "> next",
                     AmountFit::Overflow => "!AMOUNT OVERFLOW",
+                },
+            );
+            Ok(())
+        }
+        FormatOp::Unit => {
+            // A value with a unit suffix (e.g. a percentage list) — same shape
+            // as the scalar `render_unit` (decimals default 0 + the unit string).
+            let value = U256(*word);
+            let decimals = u32::from(params.decimals.unwrap_or(0));
+            let unit = params.base.unwrap_or(b"");
+            let [_, r1, r2, foot] = pages.page_mut(p);
+            let fit =
+                write_amount_two_rows(r1, r2, &value, decimals, 6, true, true, ascii_str(unit));
+            write_line(
+                foot,
+                match fit {
+                    AmountFit::Full => "> next",
+                    AmountFit::Overflow => "!UNIT OVERFLOW",
                 },
             );
             Ok(())

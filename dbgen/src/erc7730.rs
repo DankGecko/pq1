@@ -2503,19 +2503,21 @@ fn compile_array_all_path(
              are unsupported"
         ));
     }
-    // SOLE dynamic-arg constraint: the array's tail must be the ENTIRE dynamic
-    // tail so the renderer's exact-placement equality checks pin its location.
+    // The array's own offset word lives in the static head (its slot is
+    // computed below). If it is the SOLE dynamic arg the device uses the
+    // maximally-pinned exact-placement resolver; with ≥2 dynamic args the array
+    // is only one tail object, so we emit a FollowOffset marker (below) that
+    // routes the device to the relaxed `resolve_array_multi` (still WYSIWYS: the
+    // offset word is at the array's signature-fixed slot).
     let dyn_count = parsed
         .top_types
         .iter()
         .filter(|t| matches!(static_head_words(t), Ok(HeadWidth::Dynamic)))
         .count();
-    if dyn_count != 1 {
-        return Err(format!(
-            "array `[]` path requires the array to be the SOLE dynamic argument \
-             (this function has {dyn_count}); the renderer needs the array tail to be the \
-             entire dynamic tail"
-        ));
+    if dyn_count == 0 {
+        // Unreachable: `dynamic_array_static_elem` already proved the array is a
+        // dynamic `T[]`. Defensive.
+        return Err("array `[]` path on a function with no dynamic argument".to_string());
     }
     // Offset-word slot = sum of preceding args' head widths (the array's one
     // offset word lives here, in the static head).
@@ -2528,6 +2530,10 @@ fn compile_array_all_path(
         .map_err(|_| format!("head slot {slot} for `{name}` overflows u16"))?;
     out.push(PATHOP_FIELD_IDX);
     out.extend_from_slice(&arg.to_be_bytes());
+    if dyn_count > 1 {
+        // Multi-dynamic: route the device to the relaxed placement resolver.
+        out.push(PATHOP_FOLLOW_OFFSET);
+    }
     out.push(PATHOP_ARRAY_ALL);
     Ok(())
 }

@@ -1117,8 +1117,8 @@ fn positive_registry_lido_tokenamount_array_unbound_raw_and_one_token_page() {
 #[test]
 fn all_compiled_registry_array_leaves_render() {
     // render_array_element arms: Raw=0x01, Amount=0x02, TokenAmount=0x03,
-    // AddressName=0x07 (see pqsigner_erc7730::ir::FormatOp).
-    const HANDLED: &[u8] = &[0x01, 0x02, 0x03, 0x07];
+    // AddressName=0x07, Unit=0x09 (see pqsigner_erc7730::ir::FormatOp).
+    const HANDLED: &[u8] = &[0x01, 0x02, 0x03, 0x07, 0x09];
     let res = build_registry();
     let mut all_arrays: Vec<(String, u8)> = Vec::new();
     let mut rendered: Vec<(String, u8)> = Vec::new();
@@ -1324,6 +1324,49 @@ fn c2_dynamic_tuple_members_render_exact_values() {
     assert!(dump.contains("7777"), "cfg.target not read from the tuple:\n{dump}");
     let _ = find_page_by_label(&pages, "Amount");
     let _ = find_page_by_label(&pages, "Target");
+}
+
+/// C3 — MULTI-dynamic array (relaxed `MultiInTail` placement). Two `<arg>.[]`
+/// arrays in one function: the exact-placement "whole tail" pin no longer holds,
+/// so each array follows its signature-fixed offset into the tail. WYSIWYS
+/// value-equality: every element of BOTH arrays renders from the exact decoded
+/// position. Synthetic `batchTransfer(uint256[] amounts, address[] recipients)`
+/// at a non-registry address.
+#[test]
+fn c3_multi_dynamic_arrays_render_exact_elements() {
+    let res = build_seed();
+    let entry = find_leaf(&res, "synthetic-multi-array.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
+
+    // head [off_amounts=64][off_recipients=160]
+    // tail amounts:[2][7][9]  recipients:[1][0xAA…AA]
+    let mut cd = keccak256(b"batchTransfer(uint256[],address[])")[..4].to_vec();
+    cd.extend_from_slice(&u256_from_u64(64).0); // offset → amounts
+    cd.extend_from_slice(&u256_from_u64(160).0); // offset → recipients
+    cd.extend_from_slice(&u256_from_u64(2).0); // amounts.len = 2
+    cd.extend_from_slice(&u256_from_u64(7).0); // amounts[0]
+    cd.extend_from_slice(&u256_from_u64(9).0); // amounts[1]
+    cd.extend_from_slice(&u256_from_u64(1).0); // recipients.len = 1
+    let mut rec = [0u8; 32];
+    rec[12..].copy_from_slice(&[0xAAu8; 20]);
+    cd.extend_from_slice(&rec); // recipients[0]
+    assert_selector_matches(&verified.ir, &cd, "batchTransfer(uint256[],address[])");
+
+    let tx = envelope(1, entry.contract);
+    let resolver = NameResolver::new();
+    let pages = render_erc7730_pages(&tx, &cd, &verified, None, &resolver).expect("render");
+    assert_all_pages_printable(&pages);
+    let dump = dump_pages(&pages);
+    // Both element counts (array-tail-hiding closed) + the exact element values.
+    assert!(dump.contains("2 items"), "amounts count missing:\n{dump}");
+    assert!(dump.contains("1 items"), "recipients count missing:\n{dump}");
+    // amounts 7 and 9 render (amount format, 18 decimals → tiny fractions, but
+    // the integer digits 7 and 9 appear); recipients 0xAA… renders.
+    assert!(dump.contains('7') && dump.contains('9'), "amount elements missing:\n{dump}");
+    assert!(dump.to_lowercase().contains("aaaa"), "recipient element missing:\n{dump}");
+    let _ = find_page_by_label(&pages, "Amounts");
+    let _ = find_page_by_label(&pages, "Recipients");
 }
 
 #[test]

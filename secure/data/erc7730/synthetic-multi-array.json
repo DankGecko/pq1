@@ -1,0 +1,33 @@
+{
+  "$schema": "../../specs/erc7730-v2.schema.json",
+  "context": {
+    "$id": "SyntheticMultiArray",
+    "contract": {
+      "deployments": [
+        { "chainId": 1, "address": "0x000000000000000000000000000000000000000C" }
+      ]
+    }
+  },
+  "metadata": {
+    "owner": "Synthetic Test Fixture",
+    "info": { "url": "https://example.invalid" },
+    "contractName": "SyntheticMultiArray"
+  },
+  "display": {
+    "formats": {
+      "batchTransfer(uint256[] amounts, address[] recipients)": {
+        "intent": "Batch Transfer",
+        "fields": [
+          { "label": "Amounts", "format": "amount", "path": "amounts.[]", "visible": "always" },
+          {
+            "label": "Recipients",
+            "format": "addressName",
+            "path": "recipients.[]",
+            "params": { "types": ["eoa"] },
+            "visible": "always"
+          }
+        ]
+      }
+    }
+  }
+}
