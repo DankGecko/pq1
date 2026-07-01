@@ -9,9 +9,11 @@ approve): the nested `PermitDetails` amount + expiration + token clear-sign, bou
 `keccak(pinned type_hash ‖ nested_ed) == the committed hashStruct word`. Decisive non-vacuity proof:
 `v3_permit_single_binding_is_non_vacuous` (flip ANY of 160 nested/committed bytes → decline). A 5-lens
 adversarial-review workflow found **1 confirmed HIGH** (E2 credited a `visible:"never"` sub-field's
-coverage) — fixed in D (coverage credits only sub-fields that actually render). **Not yet shipped:**
-`PermitTransferFrom` (dropped by a pre-existing completeness lint — undeclared `nonce`; a one-line
-curation unlocks it) and array-of-struct (`PermitBatch` / UniswapX `DutchOutput[]`) = v2. The design
+coverage) — fixed in D (coverage credits only sub-fields that actually render). **`PermitTransferFrom`
+(`TokenPermissions`, the minimal 2-member binding) now also ships** (`9b61783b`) — upstream omits its
+`nonce`, so a hand-curated `nonce` `visible:"never"` completeness field unlocks it (Tier A curation
+discipline, guarded by `vendored_permit2_transfer_from_curation_compiles`). **Not yet shipped:**
+array-of-struct (`PermitBatch` / UniswapX `DutchOutput[]`) = v2. The design
 below is retained as the authoritative spec; §10 (E1–E5) is what the implementation follows.
 
 This is the firewalled, design-doc-first capability that
