@@ -64,6 +64,14 @@ pub const PARAM_VISIBILITY: u8 = 0x3F;
 /// Constant annotation string for a path-less field (`{value,label,format}`
 /// with no path). The renderer shows the literal (attested) string.
 pub const PARAM_CONST_VALUE: u8 = 0x40;
+/// Format-level flag (emitted by `dbgen` on an EIP-712 format's first field)
+/// marking that the primary type carries a nested struct member — a single
+/// opaque `hashStruct` word the renderer cannot expand. When set, the
+/// renderer declines the WHOLE format to blind-sign, so a nested member (and
+/// any `address` inside it) is never partially clear-signed or painted as a
+/// garbage word (`VULN-erc7730-eip712-nested-struct-address-hide`, on-device
+/// belt behind the build-time visibility gate).
+pub const PARAM_NESTED_STRUCT: u8 = 0x41;
 
 /// `dbgen::erc7730::DATE_ENC_TIMESTAMP` — unix-seconds u64.
 pub const DATE_ENC_TIMESTAMP: u8 = 0x00;
@@ -112,6 +120,11 @@ pub struct ParamSet<'a> {
     /// Phase 4 only sees this when the VISIBILITY TLV's payload is
     /// longer than 1 byte; current `dbgen` only emits a 1-byte payload.
     pub visibility_values: Option<&'a [u8]>,
+    /// Set when this field carries the `PARAM_NESTED_STRUCT` marker: the
+    /// EIP-712 format contains a nested struct member the device cannot
+    /// faithfully expand, so the caller must decline the whole format to
+    /// blind-sign (`VULN-erc7730-eip712-nested-struct-address-hide`).
+    pub nested_struct: bool,
 }
 
 impl<'a> Default for ParamSet<'a> {
@@ -135,6 +148,7 @@ impl<'a> Default for ParamSet<'a> {
             const_value: None,
             visibility: Visibility::Always,
             visibility_values: None,
+            nested_struct: false,
         }
     }
 }
@@ -248,6 +262,15 @@ pub fn parse<'a>(
             }
             PARAM_FALLBACK_LABEL => p.fallback_label = Some(payload),
             PARAM_CONST_VALUE => p.const_value = Some(payload),
+            PARAM_NESTED_STRUCT => {
+                // Presence is the signal; require the canonical 1-byte `0x01`
+                // payload so a malformed marker fails closed rather than
+                // being silently ignored.
+                if payload != [0x01] {
+                    return Err(RenderErr::Reject("7730 bad nested-struct marker"));
+                }
+                p.nested_struct = true;
+            }
             PARAM_VISIBILITY => {
                 if payload.is_empty() {
                     return Err(RenderErr::Reject("7730 empty visibility"));
@@ -324,6 +347,33 @@ mod tests {
         let p = parse(&ir, 1).unwrap();
         assert_eq!(p.visibility, Visibility::Never);
         assert!(p.visibility_values.is_none());
+    }
+
+    #[test]
+    fn parses_nested_struct_marker() {
+        // 0x41 [0x01] → nested_struct flag set (VULN-erc7730-eip712-nested-
+        // struct-address-hide on-device belt).
+        let pool = std::vec![0xFFu8, 3, 0x41, 0x01, 0x01];
+        let bytes = ir_with_pool(&pool);
+        let ir = Erc7730Ir::parse(&bytes).unwrap();
+        let p = parse(&ir, 1).unwrap();
+        assert!(p.nested_struct, "marker sets the flag");
+    }
+
+    #[test]
+    fn default_has_no_nested_struct_flag() {
+        let bytes = ir_with_pool(&[]);
+        let ir = Erc7730Ir::parse(&bytes).unwrap();
+        assert!(!parse(&ir, 0).unwrap().nested_struct);
+    }
+
+    #[test]
+    fn rejects_malformed_nested_struct_marker() {
+        // Wrong payload (0x00 instead of 0x01) must fail closed.
+        let pool = std::vec![0xFFu8, 3, 0x41, 0x01, 0x00];
+        let bytes = ir_with_pool(&pool);
+        let ir = Erc7730Ir::parse(&bytes).unwrap();
+        assert!(parse(&ir, 1).is_err(), "bad marker payload rejected");
     }
 
     #[test]
