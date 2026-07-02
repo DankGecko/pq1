@@ -805,15 +805,17 @@ fn positive_aave_borrow_renders_enum_label() {
 }
 
 #[test]
-fn negative_aave_borrow_unknown_enum_value_declines_to_blind() {
+fn positive_aave_borrow_unknown_enum_value_renders_raw_index_loudly() {
+    // review 3.3: interestRateMode = 7 is outside the declared set {0,1,2}. The
+    // OLD behaviour declined the WHOLE tx to blind-sign; the spec says render
+    // the raw value. Now the enum field renders the exact index (7) with a loud
+    // `! enum: unknown` marker — WYSIWYS-honest (the real signed value is shown,
+    // not a substituted gloss) and strictly better than blind-signing.
     let res = build_registry();
     let entry = find_leaf(res, "calldata-lpv3.json", 1);
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
     let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
 
-    // interestRateMode = 7 is outside the declared set {0,1,2}; the whole
-    // descriptor render must reject so the ladder falls to loud blind-sign
-    // rather than rendering an unrecognised value under the verified banner.
     let calldata = calldata_borrow(
         [0x11u8; 20],
         u256_from_u64(500),
@@ -823,11 +825,20 @@ fn negative_aave_borrow_unknown_enum_value_declines_to_blind() {
     );
     let tx = envelope(1, entry.contract);
     let resolver = NameResolver::new();
-    match render_erc7730_pages(&tx, &calldata, &verified, None, &resolver) {
-        Err(crate::tx::erc7730_render::RenderErr::Reject(_)) => {}
-        Err(other) => panic!("expected a Reject decline-to-blind, got {other:?}"),
-        Ok(_) => panic!("unknown enum value must decline-to-blind, but render succeeded"),
-    }
+    let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver)
+        .expect("unknown enum value must now RENDER (loud raw index), not decline");
+    assert_all_pages_printable(&pages);
+
+    // Locate the enum field page by its (truncated) label and assert BOTH the
+    // raw index and the loud unknown marker appear ON THAT PAGE (not elsewhere
+    // — the envelope nonce is also 7).
+    let enum_page = find_page_by_label(&pages, "Interest Rate mo");
+    let rows = page_strs(&pages, enum_page).join(" ");
+    assert!(rows.contains('7'), "raw enum index 7 must render:\n{rows}");
+    assert!(
+        rows.contains("enum: unknown"),
+        "loud unknown-enum marker must render:\n{rows}"
+    );
 }
 
 /// Pack-expansion sanity: the registry Lido `wstETH.wrap(uint256)`

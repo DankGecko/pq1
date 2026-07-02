@@ -1076,12 +1076,30 @@ fn render_enum(
     let enum_off = params
         .enum_ref
         .ok_or(RenderErr::Reject("7730 enum no ref"))?;
-    // Audit M-7: render the RESOLVED label, never the bare index. A value
-    // outside the declared set, or a malformed table, declines-to-blind
-    // rather than showing an opaque/garbled gloss under the verified
-    // intent banner (consistent with `Calldata` / `MustMatch`).
-    let label = crate::tx::erc7730_render::enums::lookup_enum_label(ir.pool, enum_off, &value)?
-        .ok_or(RenderErr::Reject("7730 enum value unknown"))?;
+    // Audit M-7: render the RESOLVED label, never a garbled gloss. A malformed
+    // table still declines. An UNKNOWN value (not in the declared set) renders
+    // the raw index loudly instead of declining the whole tx (review 3.3, spec:
+    // "an enum value outside the set is shown as its raw value"). Showing the
+    // exact signed integer + a loud `! enum: unknown` marker is WYSIWYS-honest
+    // (the user sees the real value, not a substituted gloss) and strictly more
+    // informative than blind-signing everything.
+    let Some(label) =
+        crate::tx::erc7730_render::enums::lookup_enum_label(ir.pool, enum_off, &value)?
+    else {
+        let _ = tx;
+        let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
+        write_label_row(pages, p, field.label);
+        let [_, r1, r2, foot] = pages.page_mut(p);
+        let fit = write_amount_two_rows(r1, r2, &U256(value), 0, 6, true, true, "");
+        write_line(
+            foot,
+            match fit {
+                AmountFit::Full => "! enum: unknown",
+                AmountFit::Overflow => "!ENUM OVERFLOW",
+            },
+        );
+        return Ok(());
+    };
     // A label longer than the three value rows would have to be truncated
     // on the trusted display — refuse rather than show a partial gloss.
     if label.len() > 3 * DISPLAY_COLS {

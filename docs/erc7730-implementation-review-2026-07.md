@@ -68,6 +68,14 @@ tolerant mode; (b) CI step validating every vendored descriptor against the pinn
 JSON schema (`specs/erc7730-v2.schema.json`). Effort M. Files: dbgen/src/erc7730.rs:188-314,
 2060+, CI workflow.
 
+**STATUS (2026-07-02): top-level field/format keys DONE** (c87dcb70) — `#[serde(flatten)]`
+catch-all + per-format gate; `encryption`/`iteration` gated, `$id`/`interpolatedIntent`/`separator`
+ignored (data-driven, 0 corpus false positives). An **adversarial-verify pass found + I fixed**
+a def-body bypass (4ff2a120): an unmodeled key on a `$.display.definitions` body slipped the
+gate through the `$ref` merge — now gated in `resolve_display_refs`. **REMAINING follow-ups:**
+(i) params SUB-key gating (a `decimls` typo silently drops decimals — params is a raw `Value`,
+needs per-format valid-key allowlists); (ii) the CI JSON-schema step (b).
+
 ### 1.4 The skip report is discarded; the review file lists no fields and no skips
 `dbgen/src/main.rs:304` does `let (erc7730_res, _skips) = build_db_tolerant(…)` — in the
 shipping path the only record of dropped/degraded descriptors is thrown away.
