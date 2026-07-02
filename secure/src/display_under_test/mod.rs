@@ -124,8 +124,11 @@ pub fn golden_grid_hash(pages: &Pages) -> [u8; 32] {
     h.finalize().into()
 }
 
-#[path = "../tx/display/primitives.rs"]
-pub mod primitives;
+// `primitives` was extracted to the host crate so it can be fuzzed directly;
+// re-export it here (instead of `#[path]`-mounting the shim) so every mounted
+// render file's `super::primitives::*` / `super::super::primitives::*` resolves
+// to the same byte-writers the device build uses.
+pub use pqsigner_erc7730::display::primitives;
 
 #[path = "../tx/display/value_transfer.rs"]
 pub mod value_transfer;

@@ -3141,6 +3141,9 @@ fuzz-erc7730-walker:
 fuzz-erc7730-render-dispatch:
 	cd fuzz && cargo +nightly fuzz run erc7730_render_dispatch $(FUZZ_LIBFUZZER_ARGS)
 
+fuzz-erc7730-display-primitives:
+	cd fuzz && cargo +nightly fuzz run erc7730_display_primitives $(FUZZ_LIBFUZZER_ARGS)
+
 fuzz-multisend-decode:
 	cd fuzz && cargo +nightly fuzz run multisend_decode $(FUZZ_LIBFUZZER_ARGS)
 
