@@ -377,10 +377,9 @@ pub(super) fn write_addr_full_or_name(
             row2[1..1 + n2].copy_from_slice(&rest[..n2]);
         }
 
-        // Row 2: truncated hex for disambiguation — "0xAABBCCDD…EEFFAABB"
-        // (first 4 bytes, ellipsis, last 4 bytes). 2 + 8 + 1 + 8 = 19 chars,
-        // fits in 16? No — we only have 16 cols. Use 3 + 3 bytes instead:
-        // "0x112233…AABBCC" = 2+6+1+6 = 15 chars.
+        // Row 3: truncated hex for disambiguation — first 3 bytes, a TWO-dot
+        // ellipsis, last 3 bytes: "0x112233..AABBCC" = 2+6+2+6 = 16 cols (fits
+        // exactly). A single dot read like a typo inside the hex (review 4.13).
         row3[0] = b'0';
         row3[1] = b'x';
         for i in 0..3 {
@@ -388,11 +387,11 @@ pub(super) fn write_addr_full_or_name(
             row3[2 + i * 2 + 1] = hex_nibble(addr[i] & 0x0f);
         }
         row3[8] = b'.';
-        // compact one-dot ellipsis in a single column
+        row3[9] = b'.';
         for i in 0..3 {
             let b = addr[17 + i];
-            row3[9 + i * 2] = hex_nibble(b >> 4);
-            row3[9 + i * 2 + 1] = hex_nibble(b & 0x0f);
+            row3[10 + i * 2] = hex_nibble(b >> 4);
+            row3[10 + i * 2 + 1] = hex_nibble(b & 0x0f);
         }
     } else {
         write_addr_full(row1, row2, row3, addr);
