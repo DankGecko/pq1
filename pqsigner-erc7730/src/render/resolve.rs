@@ -760,4 +760,46 @@ mod kani_harness {
         body[32] = 0x01; // top-28-bytes nonzero -> read_offset_word rejects
         assert!(resolve_structured(&prog, &body).is_err());
     }
+
+    // TOKEN-IDENTITY BYTE-BINDING (2026-07-02). `resolve_token_address` decides
+    // WHICH token the displayed amount is denominated in — a WYSIWYS-critical
+    // fact (showing "USDC" for a call that moves a different token is a spoof).
+    // The tok_* harnesses above are panic-free-only. This proves the common
+    // static-address-word path (`params.tokenIn`, no extraction op) byte-binds:
+    // the resolved 20-byte address is EXACTLY the low 20 bytes of the calldata
+    // word at the named slot — no drift from the word the contract's ABI decoder
+    // reads.
+
+    /// ∀ body: if `resolve_token_address([FieldIdx(1)], body)` (a static address
+    /// word at slot 1, no extraction) accepts, the returned address equals EXACTLY
+    /// `body[44..64]` — the low 20 bytes (`[off+12 .. off+32]`) of the word at
+    /// `off = 32`. A slot-arithmetic or truncation drift would violate this.
+    #[kani::proof]
+    #[kani::unwind(34)]
+    fn resolve_token_address_static_word_byte_binds() {
+        const BODY_LEN: usize = 128;
+        let prog = [FI, 0, 1]; // FieldIdx(1); no FollowOffset -> static Word leaf
+        let body: [u8; BODY_LEN] = kani::any();
+        if let Ok(addr) = resolve_token_address(&prog, &body) {
+            // off = region(0) + slot(1)*32 = 32; low 20 = body[32+12 .. 32+32].
+            assert!(addr[..] == body[44..64]);
+        }
+    }
+
+    /// Non-vacuity witness: a concrete body IS accepted and binds to the placed
+    /// address — so the ∀ harness above is not vacuously true.
+    #[kani::proof]
+    #[kani::unwind(34)]
+    fn resolve_token_address_static_word_accepts_concrete() {
+        let prog = [FI, 0, 1];
+        let mut body = [0u8; 128];
+        // place a distinctive 20-byte address in the low 20 of the slot-1 word.
+        let mut i = 44usize;
+        while i < 64 {
+            body[i] = 0xAB;
+            i += 1;
+        }
+        let addr = resolve_token_address(&prog, &body).expect("well-formed ⇒ accepted");
+        assert!(addr == [0xABu8; 20]);
+    }
 }
