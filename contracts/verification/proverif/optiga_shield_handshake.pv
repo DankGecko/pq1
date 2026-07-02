@@ -17,8 +17,12 @@
    ABSTRACTIONS (stated): PBS as one symbolic key; TLS-PRF / cryptograms /
    AES-CCM-8 as symbolic functions (perfect crypto); the exact 4-step framing
    abstracted to a nonce-exchange + PRF-derived session key. Faithful for the
-   session-key secrecy, mutual authentication, and half_O-confidentiality
-   questions below.
+   mutual authentication and half_O-confidentiality questions below. (Finding F3:
+   the session key `s = prf(pbs, hrnd, ornd)` is never leaked — a STRUCTURAL
+   consequence of PBS-secrecy, since PBS is never output — but that is NOT a
+   separately-queried RESULT here; the shipped queries ask mutual-auth + half_O
+   confidentiality only, so this docstring no longer advertises "session-key secrecy"
+   as a third proven question.)
 
    NOTE: half_O is ONE XOR half — by Claim 1 it is useless without half_E (proved
    in dual_se_unlock.pv). So the residual here is a channel-confidentiality fact,
@@ -99,6 +103,15 @@ free halfOB: bitstring [private].
 query attacker(halfOB).
 query h: bitstring, c: bitstring; event(HostAccepted(h, c)) ==> event(OptSent(h, c)).
 query h: bitstring, c: bitstring; event(OptAccepted(h, c)) ==> event(HostSent(h, c)).
+(* Anti-vacuity witnesses (finding F1/pv-se-1; mirrors the PM-2 fix in
+   dual_se_unlock.pv). The baseline auth events MUST be reachable — else a dead
+   honest leg turns both correspondences AND half_O secrecy vacuously-true while
+   the count-only verify-protocol-models gate stays green. A reachable event query
+   reports `is false`; both MUST stay false. (Mutation-demonstrated: breaking the
+   baseline optiga leg left the gate at true=3/false=1 GREEN with the auth queries
+   vacuously-true.) *)
+query h: bitstring, c: bitstring; event(HostAccepted(h, c)).
+query h: bitstring, c: bitstring; event(OptAccepted(h, c)).
 let scenarioBaseline = ( optiga(pbsB, halfOB) | host(pbsB, halfOB) ).
 
 (* === RESIDUAL: PBS leak (DHUK extraction, S2) + captured session => half_O

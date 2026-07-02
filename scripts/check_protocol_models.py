@@ -55,9 +55,9 @@ TAM_DIR = REPO_ROOT / "contracts" / "verification" / "tamarin"
 # (file, expect_true, expect_false) — per .pv. `cannot be proved` must be 0.
 PROVERIF = [
     ("dual_se_unlock.pv", 5, 3),  # +2 false = the ReleasedHalfO/E reachability witnesses (PM-2, 2026-07-02): a reachable event query reports `is false`; both MUST stay false (reachable) or the honest legs went dead + the secrecy verdicts turned vacuous.
-    ("scp03_handshake.pv", 3, 1),
-    ("optiga_shield_handshake.pv", 3, 1),
-    ("scp03_replay.pv", 1, 0),
+    ("scp03_handshake.pv", 3, 5),  # +4 false = the CardSent/HostAccepted/HostSent/CardAccepted reachability witnesses (F2, 2026-07-02): the baseline card/host legs must stay reachable or pinB + both mutual-auth correspondences turn vacuous while pinR stays false.
+    ("optiga_shield_handshake.pv", 3, 3),  # +2 false = the HostAccepted/OptAccepted reachability witnesses (F1, 2026-07-02): the baseline optiga/host legs must stay reachable or both mutual-auth correspondences + half_O secrecy turn vacuous (mutation-demonstrated).
+    ("scp03_replay.pv", 1, 1),  # +1 false = the Accept reachability witness (F2, 2026-07-02): the card must be able to accept a genuine command or event(Accept)==>event(Send) holds vacuously.
     ("fw_update_authenticity.pv", 1, 1),
 ]
 # (file, expect_verified) — per .spthy. `falsified` must be 0.

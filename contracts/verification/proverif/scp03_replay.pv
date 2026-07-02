@@ -75,5 +75,9 @@ let card =
    header for why ProVerif over-approximates it.) *)
 query ctr: bitstring, cmd: bitstring;
     event(Accept(ctr, cmd)) ==> event(Send(ctr, cmd)).
+(* Anti-vacuity witness (finding F2/pv-scp03-1; generalized PM-2): the card MUST
+   be able to accept a genuine command, else `Accept ==> Send` holds vacuously (no
+   Accept ever fires) while the count-gate stays green. Reachable => `is false`. *)
+query ctr: bitstring, cmd: bitstring; event(Accept(ctr, cmd)).
 
 process ( out(hch, c0) | out(cch, c0) | host | card )

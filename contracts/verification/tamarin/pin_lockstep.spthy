@@ -17,6 +17,13 @@ begin
    can RESET one counter (OPTIGA via the S-1 glitch / SE050 delete-recreate /
    a TZ-bypass MCU-erase) to try to win back attempts.
 
+   MODEL SCOPE (2026-07-02, finding F5): this model does NOT model the wrong-PIN
+   BUMP rule — it abstracts each counter to a STATUS ('fresh'/'zeroed', see below)
+   and proves the RECONCILE property (a reset/desync from an assumed-synced baseline
+   is caught), NOT the "every wrong PIN bumps all three" lockstep dynamics. The theory
+   name `DualSE_PinLockstep` and the README "move in lockstep" describe the DEPLOYED
+   system; the lemmas here prove reconcile-catches-desync only.
+
    !! MODEL <-> CODE FIDELITY CAVEAT (2026-07-02, finding PM-1) !!
    This model wipes on ANY disagreement (a SYMMETRIC reconcile). The DEPLOYED
    reconcile_pin_attempts (secure/src/nsc/mod.rs) is DIRECTIONAL:

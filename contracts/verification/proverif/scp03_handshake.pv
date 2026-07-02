@@ -48,7 +48,9 @@ event CardAccepted(bitstring, bitstring). (* card accepted the host's cryptogram
 (* ---------------------------------------------------------------------------
    SCOPE (added 2026-07-02, finding PM-3): the process below runs the card/host
    legs a BOUNDED number of times — there is NO `!` replication in this model — so
-   the mutual-auth (injective-agreement) and PIN-secrecy results are proven for a
+   the mutual-auth (NON-injective agreement — `event(A) ==> event(B)`, not the
+   injective `inj-event`; injectivity / no-replay is ../tamarin/scp03_replay.spthy's
+   job, finding F4) and PIN-secrecy results are proven for a
    SINGLE session, NOT across unbounded concurrent/replayed sessions. The SCP03
    monotonic counter + the pinned session-key derivation are what bound cross-
    session replay on-device; a `!`-replicated variant (to prove cross-session
@@ -96,6 +98,15 @@ query attacker(pinB).                                  (* expect: secret *)
 (* mutual authentication: an accept implies the peer actually ran. *)
 query h: bitstring, c: bitstring; event(HostAccepted(h, c)) ==> event(CardSent(h, c)).
 query h: bitstring, c: bitstring; event(CardAccepted(h, c)) ==> event(HostSent(h, c)).
+(* Anti-vacuity witnesses (finding F2/pv-scp03-1; generalized PM-2). The baseline
+   card/host legs — a structurally SEPARATE process from the event-free `cardL/hostL`
+   residual — must be reachable, else pinB goes vacuously-secret AND both
+   correspondences vacuously-true while the residual (pinR) stays false and nothing
+   catches it. A reachable event query reports `is false`; all four MUST stay false. *)
+query h: bitstring, c: bitstring; event(CardSent(h, c)).
+query h: bitstring, c: bitstring; event(HostAccepted(h, c)).
+query h: bitstring, c: bitstring; event(HostSent(h, c)).
+query h: bitstring, c: bitstring; event(CardAccepted(h, c)).
 let scenarioBaseline = ( card(staticB, pinB) | host(staticB, pinB) ).
 
 (* Event-free legs for the residual scenario: with the static key leaked the
