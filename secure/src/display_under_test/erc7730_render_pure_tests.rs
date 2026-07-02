@@ -613,24 +613,13 @@ fn positive_weth_deposit_pulls_value_from_envelope() {
     assert_eq!(owner_r, "WETH");
     assert_eq!(contract_r, "WETH");
 
-    // Amount page — 0.5 ETH at 18 decimals. `write_amount_two_rows`
-    // splits the integer / decimal across two rows on small values, so
-    // the rendered page reads `"Amount" / "0" / ".5 ETH" / "> next"`.
-    // Both halves must be visible somewhere on the page, and the ETH
-    // unit must appear.
+    // Amount page — 0.5 ETH at 18 decimals. review 4.3: the amount now prefers
+    // a SINGLE row ("0.5 ETH") instead of the old split ("0" / ".5 ETH").
     let amount_page = find_page_by_label(&pages, "Amount");
     let amount_rows = page_strs(&pages, amount_page);
-    let amount_blob = amount_rows.join("\n");
-    let single_row = amount_blob.contains("0.5") || amount_blob.contains("0,5");
-    let split_rows = amount_rows.iter().any(|r| r.trim_end() == "0")
-        && amount_rows.iter().any(|r| r.contains(".5") || r.contains(",5"));
-    assert!(
-        single_row || split_rows,
-        "weth.deposit amount should print '0.5 ETH' (single- or split-row), got:\n{amount_blob}",
-    );
-    assert!(
-        amount_blob.contains("ETH"),
-        "amount unit missing: {amount_blob}",
+    assert_eq!(
+        amount_rows[1], "0.5 ETH",
+        "amount must render on a single row (4.3), got:\n{amount_rows:?}",
     );
 }
 

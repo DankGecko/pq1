@@ -31,8 +31,8 @@
 use crate::erc20::bundle::Erc20Metadata;
 use crate::names::NameResolver;
 use super::super::primitives::{
-    chain_name, write_addr_full, write_addr_full_or_name, write_amount_two_rows,
-    write_line, AmountFit,
+    chain_name, write_addr_full, write_addr_full_or_name, write_amount_single_or_two_rows,
+    write_amount_two_rows, write_line, AmountFit,
 };
 use crate::tx::eip1559::{Eip1559Tx, U256};
 use crate::tx::erc7730::{container_field, Erc7730Ir, FieldEntry, FormatOp, PathOp};
@@ -268,7 +268,8 @@ fn render_amount(
     let decimals = u32::from(params.decimals.unwrap_or(18));
     let unit_bytes = params.base.unwrap_or(b"ETH");
     let [_, r1, r2, foot] = pages.page_mut(p);
-    let fit = write_amount_two_rows(r1, r2, &value, decimals, 6, true, true, ascii_str(unit_bytes));
+    let fit =
+        write_amount_single_or_two_rows(r1, r2, &value, decimals, 6, true, true, ascii_str(unit_bytes));
     write_line(
         foot,
         match fit {
@@ -338,7 +339,7 @@ fn render_token_amount(
     } else {
         match bound {
             Some((decimals, ticker)) => {
-                let fit = write_amount_two_rows(
+                let fit = write_amount_single_or_two_rows(
                     r1, r2, &value, decimals, 6, true, true, ascii_str(ticker),
                 );
                 write_line(
@@ -1169,7 +1170,8 @@ fn render_unit(
     let decimals = u32::from(params.decimals.unwrap_or(0));
     let unit_bytes = params.base.unwrap_or(b"");
     let [_, r1, r2, foot] = pages.page_mut(p);
-    let fit = write_amount_two_rows(r1, r2, &value, decimals, 6, true, true, ascii_str(unit_bytes));
+    let fit =
+        write_amount_single_or_two_rows(r1, r2, &value, decimals, 6, true, true, ascii_str(unit_bytes));
     write_line(
         foot,
         match fit {

@@ -246,6 +246,49 @@ pub(super) fn write_amount_two_rows(
     }
 }
 
+/// Paint `<amount> <unit>` preferring a SINGLE row (`"0.5 ETH"`), spilling to
+/// two rows only when it doesn't fit — the same single-row-first policy the
+/// native ETH/token paths already use (`write_eth_two_rows`), so an ERC-7730
+/// amount no longer always splits into a lone integer row + a `".5 unit"` row.
+/// Blanks `row2` on the single-row path. Preserves the F14#3 zero-collapse
+/// guard: BOTH sinks reject a nonzero value that formats to all-zero digits, so
+/// the single-row shortcut can never hide a magnitude the two-row form would
+/// have flagged. (review 4.3)
+#[allow(clippy::too_many_arguments)]
+pub(super) fn write_amount_single_or_two_rows(
+    row1: &mut [u8; DISPLAY_COLS],
+    row2: &mut [u8; DISPLAY_COLS],
+    value: &U256,
+    decimals: u32,
+    frac_digits: u32,
+    trim_trailing_zeros: bool,
+    reject_zero_collapse: bool,
+    unit: &str,
+) -> AmountFit {
+    if try_write_amount_single_row(
+        row1,
+        value,
+        decimals,
+        frac_digits,
+        trim_trailing_zeros,
+        reject_zero_collapse,
+        unit,
+    ) {
+        *row2 = [b' '; DISPLAY_COLS];
+        return AmountFit::Full;
+    }
+    write_amount_two_rows(
+        row1,
+        row2,
+        value,
+        decimals,
+        frac_digits,
+        trim_trailing_zeros,
+        reject_zero_collapse,
+        unit,
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Address rendering — FULL 40 hex chars across three rows
 // ---------------------------------------------------------------------------
