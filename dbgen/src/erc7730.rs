@@ -686,7 +686,7 @@ fn build_db_inner(
     }
     assert_eq!(blob.len(), total_size);
 
-    let review_text = render_review(&emitted, policy, &root);
+    let review_text = render_review(&emitted, skips, policy, &root);
 
     Ok(Erc7730BuildResult {
         blob,
@@ -1210,6 +1210,11 @@ fn compile_formats(
     // exactly as if the descriptor were absent. Strict mode `?`-fails the
     // whole descriptor on the first bad format (a curation bug in our corpus).
     let mut survivors: Vec<Vec<u8>> = Vec::with_capacity(n);
+    // Capture per-format blockers so the "no compilable formats" skip carries
+    // *why* each function died, not just that the descriptor is dead (review
+    // finding 1.4 — the umbrella reason was un-actionable). Only used when
+    // every format fails; on partial success the survivors clear-sign.
+    let mut format_errs: Vec<String> = Vec::new();
     for &(sig, ref fmt) in flat.iter() {
         if tolerant && survivors.len() >= MAX_FORMATS {
             break; // bound the IR; remaining functions blind-sign
@@ -1217,13 +1222,22 @@ fn compile_formats(
         let mut one: Vec<u8> = Vec::new();
         match compile_one_format(sig, fmt, context_kind, ctx, &mut pool, &enum_offsets, &mut one) {
             Ok(()) => survivors.push(one),
-            Err(_) if tolerant => {}
+            Err(e) if tolerant => {
+                // Record `funcName: reason` (drop the arg list from the sig for
+                // readability; the reason is what matters for triage).
+                let fn_name = sig.split('(').next().unwrap_or(sig);
+                format_errs.push(format!("{fn_name}: {e}"));
+            }
             Err(e) => return Err(e),
         }
     }
 
     if survivors.is_empty() {
-        return Err("no compilable formats in descriptor".to_string());
+        return Err(if format_errs.is_empty() {
+            "no compilable formats in descriptor".to_string()
+        } else {
+            format!("no compilable formats in descriptor — {}", format_errs.join("; "))
+        });
     }
 
     // [count][format…] — count is the SURVIVOR count (== n in strict mode, so
@@ -4720,14 +4734,150 @@ fn enforce_policy(json: &serde_json::Value, policy: &Policy) -> Result<(), Strin
 // Review file (vendor-readable summary).
 // ─────────────────────────────────────────────────────────────────────
 
-fn render_review(entries: &[Emitted], policy: &Policy, root: &[u8; 32]) -> String {
+/// Short display name for a `FormatOp` discriminant, for the review file's
+/// per-field breakdown. Mirrors `pqsigner_erc7730::ir::FormatOp` — kept as a
+/// flat table (not `FormatOp::try_from(..).map(|o| format!("{o:?}"))`) so an
+/// unknown/out-of-range op renders visibly as `?<hex>` rather than eliding.
+fn fmt_op_name(op: u8) -> &'static str {
+    match op {
+        0x01 => "raw",
+        0x02 => "amount",
+        0x03 => "tokenAmount",
+        0x04 => "nftName",
+        0x05 => "date",
+        0x06 => "duration",
+        0x07 => "addressName",
+        0x08 => "enum",
+        0x09 => "unit",
+        0x0A => "calldata",
+        0x0B => "chainId",
+        0x0C => "tokenTicker",
+        0x0D => "interopAddressName",
+        0x0E => "encrypted",
+        _ => "?unknown",
+    }
+}
+
+/// Bucket a tolerant-build skip reason into a coarse category, for the
+/// committed review file's skip roll-up. Mirrors (and corrects) the xtask
+/// scanner's `skip_category`: the completeness lint is checked **before**
+/// the attestation/policy bucket, because a completeness message that names
+/// a `visible:"never"` / hidden field would otherwise be mis-bucketed as an
+/// attestation-policy skip (review finding, xtask/src/main.rs:1417).
+fn review_skip_category(msg: &str) -> &'static str {
+    let m = msg;
+    if m.contains("duplicate (chain_id=") {
+        "duplicate leaf (deduped)"
+    } else if m.contains("no compilable formats") {
+        // Umbrella reason when EVERY format in a descriptor failed; the
+        // per-format blocker is not surfaced today (see the note in
+        // `compile_descriptor`). Bucketed separately so it doesn't swamp
+        // "other" and so a resync that flips a whole descriptor dead is
+        // visible.
+        "whole-descriptor dead (all formats blocked)"
+    } else if m.contains("completeness")
+        || m.contains("not covered")
+        || m.contains("must cover")
+        || m.contains("uncovered")
+        || m.contains("hidden")
+        || m.contains("visible")
+    {
+        "completeness lint (un-displayed field)"
+    } else if m.contains("array index") || m.contains("array slice") || m.contains("ArrayIdx") {
+        "array-path (needs value-path slice/index resolver)"
+    } else if m.contains("dynamic tuple") || m.contains("is dynamic") || m.contains("calldata tail") {
+        "dynamic-ABI-type (needs walker)"
+    } else if m.contains("spanning") && m.contains("words") {
+        "multi-word static field (>32B)"
+    } else if m.contains("includes") {
+        "includes-unresolved"
+    } else if m.contains("unresolved $ref") || m.contains("definition") {
+        "unresolved $ref / definition"
+    } else if m.contains("nested calldata") || m.contains("encrypted") {
+        "unsupported formatter (nested-calldata / encrypted)"
+    } else if m.contains("nft") {
+        "unsupported formatter (nft)"
+    } else if m.contains("enum") {
+        "enum issue"
+    } else if m.contains("MAX_IR_LEN") || m.contains("exceeds") || m.contains("too large") || m.contains("too long") {
+        "IR too large (>4KiB)"
+    } else if m.contains("unconsumed") || m.contains("unknown key") || m.contains("unrecognized") {
+        "unmodeled descriptor key"
+    } else if m.contains("policy") || m.contains("attest") {
+        "attestation policy"
+    } else if m.starts_with("schema") || m.starts_with("parse") || m.contains("schema:") || m.contains("missing field") {
+        "schema / parse"
+    } else if m.contains("selector") || m.contains("signature") || m.contains("encodeType") || m.contains("primary") {
+        "selector / type-signature"
+    } else {
+        "other"
+    }
+}
+
+/// Decode one leaf's IR into a per-field breakdown (op + label) plus a count
+/// of *degraded* fields — `raw`-op fields with an empty label, the signature
+/// of a descriptor whose author-intended formatting was silently lost (e.g. a
+/// dropped `$ref`; review finding 1.1). Returns `(lines, field_count,
+/// degraded_count)`. Never panics: a parse failure yields a single visible
+/// error line so the catalogue still reconciles.
+fn review_field_breakdown(ir_bytes: &[u8]) -> (Vec<String>, usize, usize) {
+    let mut lines = Vec::new();
+    let mut n_fields = 0usize;
+    let mut n_degraded = 0usize;
+    let ir = match Erc7730Ir::parse(ir_bytes) {
+        Ok(ir) => ir,
+        Err(e) => {
+            lines.push(format!("         · <IR PARSE ERROR: {e:?}>"));
+            return (lines, 0, 0);
+        }
+    };
+    for fmt in ir.format_iter() {
+        let Ok(fmt) = fmt else {
+            lines.push("         · <malformed format entry>".to_string());
+            break;
+        };
+        for field in fmt.fields() {
+            let Ok(field) = field else {
+                lines.push("         · <malformed field entry>".to_string());
+                break;
+            };
+            n_fields += 1;
+            let label = String::from_utf8_lossy(field.label);
+            let degraded = field.format_op == 0x01 && field.label.is_empty();
+            if degraded {
+                n_degraded += 1;
+            }
+            lines.push(format!(
+                "         · [0x{}] op={:<12} label='{}'{}",
+                hex::encode(fmt.selector),
+                fmt_op_name(field.format_op),
+                label,
+                if degraded { "  <-- DEGRADED (raw, no label)" } else { "" },
+            ));
+        }
+    }
+    (lines, n_fields, n_degraded)
+}
+
+fn render_review(
+    entries: &[Emitted],
+    skips: &[SkipReport],
+    policy: &Policy,
+    root: &[u8; 32],
+) -> String {
     let mut s = String::with_capacity(2048);
     s.push_str("# ERC-7730 descriptor catalogue\n");
     s.push_str("# Generated by `cargo run -p dbgen`. DO NOT EDIT BY HAND.\n");
     s.push_str("#\n");
     s.push_str("# Each row is one entry in the firmware-pinned Merkle tree at\n");
-    s.push_str("# ERC7730_DESCRIPTORS_ROOT. Auditors should reconcile every row\n");
+    s.push_str("# ERC7730_DESCRIPTORS_ROOT, followed by its per-field breakdown\n");
+    s.push_str("# (op + label, decoded from the emitted IR — i.e. what actually\n");
+    s.push_str("# RENDERS on-device, not what the JSON claims). A `degraded` count\n");
+    s.push_str("# flags raw-op fields with no label: author-intended formatting\n");
+    s.push_str("# that was silently lost. Auditors should reconcile every row\n");
     s.push_str("# against the source JSON and the upstream attestation chain.\n");
+    s.push_str("# The trailing `## skips` section lists every descriptor the\n");
+    s.push_str("# tolerant build dropped (compile failure or dedup), by reason.\n");
     s.push_str(&format!("# Root: 0x{}\n", hex::encode(root)));
     s.push_str(&format!(
         "# Policy: min_attesters={} allow_unattested_dev_descriptors={}\n",
@@ -4743,15 +4893,20 @@ fn render_review(entries: &[Emitted], policy: &Policy, root: &[u8; 32]) -> Strin
         s.push_str("# CI MUST reject production builds in this mode.\n");
     }
     s.push('\n');
+
+    let mut total_degraded = 0usize;
     for e in entries {
         let ctx = if e.context_kind == CTX_CONTRACT {
             "contract"
         } else {
             "eip712"
         };
+        let (field_lines, n_fields, n_degraded) = review_field_breakdown(&e.ir_bytes);
+        total_degraded += n_degraded;
         s.push_str(&format!(
             "[{:04}] ctx={ctx} chain_id={} contract=0x{} \
-             primary_type=0x{} descriptor_hash=0x{} erc8176_hash=0x{} ir_len={} source={}\n",
+             primary_type=0x{} descriptor_hash=0x{} erc8176_hash=0x{} ir_len={} \
+             fields={} degraded={} source={}\n",
             e.leaf_index,
             e.chain_id,
             hex::encode(e.contract),
@@ -4759,8 +4914,49 @@ fn render_review(entries: &[Emitted], policy: &Policy, root: &[u8; 32]) -> Strin
             hex::encode(e.descriptor_hash),
             hex::encode(e.erc8176_hash),
             e.ir_bytes.len(),
+            n_fields,
+            n_degraded,
             e.source.file_name().unwrap().to_string_lossy(),
         ));
+        for line in field_lines {
+            s.push_str(&line);
+            s.push('\n');
+        }
+    }
+
+    // ── Skip roll-up ─────────────────────────────────────────────────
+    // Committed + drift-gated, so a resync that drops descriptors to
+    // blind-sign shows up as a reviewable diff with reasons (finding 1.4).
+    s.push_str("\n## skips (");
+    s.push_str(&skips.len().to_string());
+    s.push_str(" total)\n");
+    if total_degraded > 0 {
+        s.push_str(&format!(
+            "## WARNING: {total_degraded} DEGRADED field(s) across accepted leaves \
+             (raw-op, no label — silently lost formatting; see finding 1.1)\n"
+        ));
+    }
+    if !skips.is_empty() {
+        // Category counts (sorted by category name for stable diffs).
+        let mut by_cat: BTreeMap<&'static str, usize> = BTreeMap::new();
+        for sk in skips {
+            *by_cat.entry(review_skip_category(&sk.reason)).or_insert(0) += 1;
+        }
+        s.push_str("#\n# by category:\n");
+        for (cat, n) in &by_cat {
+            s.push_str(&format!("#   {n:>4}  {cat}\n"));
+        }
+        s.push('\n');
+        // Per-skip detail, sorted by source path for stable diffs.
+        let mut sorted: Vec<&SkipReport> = skips.iter().collect();
+        sorted.sort_by(|a, b| a.source.cmp(&b.source));
+        for sk in sorted {
+            s.push_str(&format!(
+                "{} — {}\n",
+                sk.source.display(),
+                sk.reason.replace('\n', " "),
+            ));
+        }
     }
     s
 }

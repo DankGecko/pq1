@@ -301,12 +301,24 @@ fn main() {
     // descriptors/functions the renderer can't take (see `xtask build-registry`
     // for the live breakdown).
     let _ = force_production;
-    let (erc7730_res, _skips) =
+    let (erc7730_res, skips) =
         erc7730::build_db_tolerant(&erc7730_registry_input, &erc7730_policy, Some(&erc7730_registry))
             .unwrap_or_else(|e| {
                 eprintln!("dbgen: erc7730 registry db build failed: {e}");
                 std::process::exit(1);
             });
+    // The full per-skip detail + category roll-up is embedded in the
+    // committed, drift-gated `erc7730.review.txt` (see `render_review`); echo
+    // just the count here so an operator running dbgen sees at a glance that
+    // descriptors were dropped rather than the report being silently discarded
+    // (review finding 1.4).
+    if !skips.is_empty() {
+        eprintln!(
+            "dbgen: erc7730 tolerant build skipped {} descriptor(s) — see the \
+             `## skips` section of secure/data/erc7730.review.txt for reasons",
+            skips.len(),
+        );
+    }
     erc7730::round_trip_check(&erc7730_res).expect("erc7730 round-trip failed");
     if let Some(parent) = erc7730_out.parent() {
         fs::create_dir_all(parent).expect("create tools/companion-stub");
