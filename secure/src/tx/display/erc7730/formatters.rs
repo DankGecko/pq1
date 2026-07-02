@@ -166,7 +166,7 @@ pub(super) fn container_addr(tx: &Eip1559Tx, idx: u16) -> Result<[u8; 20], Rende
         // `@.from` is the AA wallet's own address — derived elsewhere
         // (cmd_sign_userop computes it) and not available at the display
         // layer. Returning 0x00… here was a confirm-X-sign-Y (finding F4):
-        // the OLED showed 0x0000…0000 while the signed UserOp executed from
+        // the display showed 0x0000…0000 while the signed UserOp executed from
         // the real, nonzero AA wallet. Refuse rather than render a zero for
         // a nonzero signed value; wire a real @.from value in if a descriptor
         // ever needs it.
@@ -395,7 +395,7 @@ fn render_token_amount(
     Ok(())
 }
 
-/// Render `"unlimited <ticker>"` into a single 16-col OLED row. Used
+/// Render `"unlimited <ticker>"` into a single 16-col display row. Used
 /// by `render_token_amount` when the descriptor's `threshold` param
 /// classifies the on-chain value as the approve-all sentinel.
 fn write_unlimited_row(row: &mut [u8; DISPLAY_COLS], ticker: &[u8]) {

@@ -1,9 +1,9 @@
-//! End-to-end render tests for the ERC-7730 / ERC-8213 OLED renderers.
+//! End-to-end render tests for the ERC-7730 / ERC-8213 display renderers.
 //!
 //! Each test builds a realistic transaction (chain + to + calldata),
 //! verifies the firmware-pinned bundle via `verify_erc7730_bundle`, then
 //! runs the on-device renderer at `super::erc7730::render_erc7730_pages`
-//! and asserts the resulting 4-row × 16-col OLED pages line-by-line
+//! and asserts the resulting 4-row × 16-col display pages line-by-line
 //! against the strings a user would actually see on the device.
 //!
 //! Why this exists: existing tests cover the host pipeline (`dbgen`),
@@ -363,7 +363,7 @@ fn diagnostic_dump_seed_corpus_path_offsets() {
 // aave-v3-pool.* and circle-usdc-*) now render their full clear-sign
 // page sequence.
 //
-// The three tests below assert the user-visible OLED text end-to-end.
+// The three tests below assert the user-visible display text end-to-end.
 
 #[test]
 fn positive_usdt_transfer_mainnet_renders_send_intent() {

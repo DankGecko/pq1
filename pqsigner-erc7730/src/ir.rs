@@ -13,7 +13,7 @@
 //!
 //! ```text
 //!   off  size  field
-//!    0    1   schema_ver         (0x02)
+//!    0    1   schema_ver         (0x03 — see SCHEMA_VER)
 //!    1    1   context_kind       (CTX_CONTRACT | CTX_EIP712)
 //!    2    8   chain_id (u64 BE)  (for EIP-712: domain.chainId)
 //!   10   20   contract           (for EIP-712: domain.verifyingContract)
@@ -37,7 +37,7 @@
 //!
 //! - 4 KiB per IR (covers 99% of registry by inspection; host pipeline
 //!   rejects oversize)
-//! - 16 formats per descriptor
+//! - 32 formats per descriptor (MAX_FORMATS)
 //! - 24 fields per format
 //! - 8 levels of nested calldata recursion
 //! - 256 B per individual pool entry
@@ -296,7 +296,7 @@ impl<'a> Erc7730Ir<'a> {
     /// * declare pool/formats offsets that overlap or extend past EOF
     /// * carry non-printable bytes in the `owner` / `contract_name`
     ///   slots (anti-spoof: a hostile descriptor must not sneak
-    ///   homoglyphs onto the trusted OLED)
+    ///   homoglyphs onto the trusted display)
     pub fn parse(bytes: &'a [u8]) -> Result<Self, IrError> {
         if bytes.len() > MAX_IR_LEN {
             return Err(IrError::TooLarge);
