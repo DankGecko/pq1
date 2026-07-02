@@ -294,13 +294,24 @@ fn main() {
     // ships the matching IR + Merkle proof in the new sign-input
     // trailer slot (Phase 3 wires that path).
     // Tolerant build over the vendored registry. Attestation enforcement
-    // (`--policy production`) does NOT yet apply to the registry corpus — the
-    // ERC-8176 attestation gate is a separate production step (flip
-    // `allow_unattested_dev_descriptors` + populate `trusted_attesters`); for
-    // now this is render coverage in dev policy. `_skips` is the set of
-    // descriptors/functions the renderer can't take (see `xtask build-registry`
-    // for the live breakdown).
-    let _ = force_production;
+    // (`--policy production`) does NOT yet apply to the SHIPPING registry corpus
+    // — the ERC-8176 attestation gate is a separate production step (flip
+    // `allow_unattested_dev_descriptors` + populate `trusted_attesters`), and
+    // near-zero real EAS attestations exist yet. The corpus is therefore built
+    // in DEV policy regardless of the flag. Rather than let `--policy
+    // production` build the shipping catalogue unattested WHILE APPEARING to
+    // enforce attestation (an operator could ship believing it was attested),
+    // refuse it explicitly here (review 2.3). Remove this fence when the
+    // ERC-8176 flip lands and the tolerant path honours the policy.
+    if force_production {
+        eprintln!(
+            "dbgen: --policy production is not yet supported for the ERC-7730 registry \
+             corpus (ERC-8176 attestation enforcement is not wired; the corpus builds in \
+             dev policy). Refusing rather than silently building the shipping catalogue \
+             unattested under a production flag."
+        );
+        std::process::exit(1);
+    }
     let (erc7730_res, skips) =
         erc7730::build_db_tolerant(&erc7730_registry_input, &erc7730_policy, Some(&erc7730_registry))
             .unwrap_or_else(|e| {

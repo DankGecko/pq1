@@ -252,6 +252,29 @@ fn unmodeled_key_in_definition_body_is_gated() {
     );
 }
 
+#[test]
+fn misnamed_descriptor_is_flagged_unscanned() {
+    // review 2.3 (filename-convention tripwire): a *.json that carries a
+    // descriptor shape (context+display) but doesn't match calldata-*/eip712-*
+    // would be SILENTLY dropped by the scanner on an upstream rename. It must
+    // instead be flagged UNSCANNED in the (drift-gated) skip report.
+    let dir = make_tempdir("misnamed");
+    fs::write(dir.join("policy.toml"), POLICY_DEV_2).unwrap();
+    fs::write(dir.join("calldata-valid.json"), VALID_SIBLING_02).unwrap();
+    // Mis-named (wrong prefix) — looks like a descriptor, must be flagged.
+    fs::write(dir.join("swapRouter.json"), transfer_descriptor("To", "Amount")).unwrap();
+
+    let (res, skips) =
+        build_db_tolerant(&dir, &dir.join("policy.toml"), Some(&dir)).expect("build");
+    assert_eq!(res.leaf_count, 1, "only the correctly-named descriptor is scanned");
+    assert!(
+        skips.iter().any(|s| s.reason.contains("UNSCANNED")
+            && s.source.file_name().and_then(|n| n.to_str()) == Some("swapRouter.json")),
+        "mis-named descriptor must be flagged UNSCANNED: {:?}",
+        skips.iter().map(|s| &s.reason).collect::<Vec<_>>()
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Item 2: `includes` resolution
 // ─────────────────────────────────────────────────────────────────────

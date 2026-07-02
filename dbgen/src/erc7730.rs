@@ -554,6 +554,37 @@ fn collect_descriptors(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// Filename-convention tripwire (review 2.3). Collect `*.json` files under
+/// `dir` that were NOT scanned by [`collect_descriptors`] (they don't match the
+/// `calldata-*`/`eip712-*` prefix and aren't `tests/`/`common-*`/`*.tests.*`
+/// include-templates) yet carry a descriptor shape (top-level `"context"` +
+/// `"display"`). A cheap substring peek is sufficient for a tripwire — a false
+/// positive just adds a visible, reviewable skip line, never a wrong render.
+fn collect_unscanned_descriptor_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(rd) = fs::read_dir(dir) else { return };
+    for entry in rd.flatten() {
+        let p = entry.path();
+        if p.is_dir() {
+            if p.file_name().is_some_and(|n| n == "tests") {
+                continue;
+            }
+            collect_unscanned_descriptor_files(&p, out);
+        } else if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
+            let scanned = name.ends_with(".json")
+                && !name.contains(".tests.")
+                && (name.starts_with("calldata-") || name.starts_with("eip712-"));
+            let is_template = name.starts_with("common-") || name.contains(".tests.");
+            if name.ends_with(".json") && !scanned && !is_template {
+                if let Ok(text) = fs::read_to_string(&p) {
+                    if text.contains("\"context\"") && text.contains("\"display\"") {
+                        out.push(p);
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn build_db_inner(
     input_dir: &Path,
     policy: &Policy,
@@ -568,6 +599,23 @@ fn build_db_inner(
     let mut sources: Vec<PathBuf> = if tolerant {
         let mut v = Vec::new();
         collect_descriptors(input_dir, &mut v);
+        // Filename-convention tripwire (review 2.3): flag any `*.json` that
+        // LOOKS like a descriptor (has a top-level `context` + `display`) but
+        // wasn't scanned because it doesn't match `calldata-*`/`eip712-*`. An
+        // upstream naming change would otherwise silently drop it from the
+        // catalogue; record each so it surfaces in the drift-gated skip report.
+        let mut unscanned = Vec::new();
+        collect_unscanned_descriptor_files(input_dir, &mut unscanned);
+        unscanned.sort();
+        for p in unscanned {
+            skips.push(SkipReport {
+                source: p,
+                reason: "UNSCANNED: filename does not match calldata-*/eip712-* but the file \
+                         carries a descriptor `context`+`display` — an upstream naming change \
+                         would silently drop it. Rename it or extend the scanner (review 2.3)."
+                    .to_string(),
+            });
+        }
         v
     } else {
         fs::read_dir(input_dir)
@@ -5222,7 +5270,9 @@ fn fmt_op_name(op: u8) -> &'static str {
 /// attestation-policy skip (review finding, xtask/src/main.rs:1417).
 fn review_skip_category(msg: &str) -> &'static str {
     let m = msg;
-    if m.contains("duplicate (chain_id=") {
+    if m.contains("UNSCANNED") {
+        "unscanned (filename convention — review 2.3)"
+    } else if m.contains("duplicate (chain_id=") {
         "duplicate leaf (deduped)"
     } else if m.contains("no compilable formats") {
         // Umbrella reason when EVERY format in a descriptor failed; the
