@@ -37,6 +37,44 @@
 //! TOCTOU half that catches a stale linker map — is the hardware check
 //! and is *out of scope here* (host-stubbed `true`).
 
+// -----------------------------------------------------------------------------
+// Compile-time NS-window ⊆ SAU-NS-region check (review finding: ns_ptr V11 —
+// "proves range ⊆ NS window, not ∉ secure").
+// -----------------------------------------------------------------------------
+// The Kani harnesses below prove `accept ⟹ range ⊆ [ns_sram_base, ns_sram_end)`.
+// That implies the range is `∉ secure` ONLY because the NS window sits inside the
+// hardware NS-DESIGNATED (SAU) region, which the SAU marks non-secure. That
+// premise was asserted only in `secure/src/sau.rs` — a crate the advertised
+// `cargo kani -p sphincs-tz-shared` never compiles — so the harness crate did NOT
+// itself establish `∉ secure`. Mirror the sau.rs assertion HERE so it is compiled
+// with the harnesses. `SAU_NS_*` are the hardware NS bounds (KEEP IN SYNC with the
+// per-cfg consts in `secure/src/sau.rs`); NS-window END is EXCLUSIVE (proto),
+// SAU END is INCLUSIVE (RLAR) — hence `NS_*_END - 1`.
+#[cfg(not(feature = "stm32u585"))]
+mod sau_ns {
+    pub const SRAM_BASE: u32 = 0x2802_0000;
+    pub const SRAM_END: u32 = 0x29FF_FFFF;
+    pub const FLASH_BASE: u32 = 0x0020_0000;
+    pub const FLASH_END: u32 = 0x003F_FFFF;
+}
+#[cfg(feature = "stm32u585")]
+mod sau_ns {
+    pub const SRAM_BASE: u32 = 0x2003_0000;
+    pub const SRAM_END: u32 = 0x2003_FFFF;
+    pub const FLASH_BASE: u32 = 0x0810_0000;
+    pub const FLASH_END: u32 = 0x081F_FFFF;
+}
+const _: () = {
+    assert!(
+        crate::NS_SRAM_BASE >= sau_ns::SRAM_BASE && crate::NS_SRAM_END - 1 <= sau_ns::SRAM_END,
+        "NS_SRAM window escaped the SAU NS-SRAM region — a window-valid NS pointer could target SECURE SRAM",
+    );
+    assert!(
+        crate::NS_FLASH_BASE >= sau_ns::FLASH_BASE && crate::NS_FLASH_END - 1 <= sau_ns::FLASH_END,
+        "NS_FLASH window escaped the SAU NS-flash region — a window-valid NS pointer could target SECURE flash",
+    );
+};
+
 /// The non-secure memory map the validator checks a pointer range
 /// against. In firmware these fields come from `pqsigner-proto`'s
 /// cfg-gated linker constants (re-exported at this crate's root); the
