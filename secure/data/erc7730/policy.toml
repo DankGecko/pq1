@@ -139,3 +139,39 @@ rationale = "Celo Validators sorted-list position hint — routes no funds; the 
 signature = "stakeETH(address _referral)"
 path = "_referral"
 rationale = "wstETH staking referral tag — routes no funds; the effect is the staked @.value (shown). The referral only credits a marketing partner and cannot redirect the stake."
+
+# ── 1inch AggregationRouter `swap` — executor/srcReceiver bounded by min-return ──
+# Adversarial-review-gated belt relaxation (4-lens security review, 0 surviving
+# findings; see the commit + `docs/erc7730-implementation-review-2026-07.md` §3.0
+# item 3). The `swap` entrypoint's ONLY debit from the signer is exactly
+# `desc.amount` of `desc.srcToken` (shown as the "Send" amount) — the router does
+# NOT relay the signer's approvals to the executor, so a hidden/malicious executor
+# cannot pull more than the shown amount or reach the signer's other tokens. The
+# router then reverts unless `returnAmount` of `desc.dstToken` reaches
+# `desc.dstReceiver` (both shown) meeting `desc.minReturnAmount` (shown). So
+# `caller`/`executor` (the aggregation-executor contract) and `desc.srcReceiver`
+# (where the input is routed for the swap) are execution intermediaries that can
+# only make the swap REVERT — never redirect funds or cause a loss beyond the
+# shown input. Reviewed & judged NON-blocking: (a) `desc.flags & _PARTIAL_FILL`
+# relaxes the check to a fair RATE bound with unspent srcToken refunded (a smaller
+# swap at the shown rate, no loss — and a *hidden-flags* property that showing
+# these addresses would not change); (b) `_REQUIRES_EXTRA_ETH` forwards msg.value
+# to the executor, but the firmware's mandatory native-value page surfaces any ETH
+# outflow. V3 == V4 signature. The pools-slice swap variants (unoswap/uniswapV3Swap)
+# stay correctly DECLINED (rendered-value array slice = the array-tail-hiding HIGH).
+[[hidden_address_allow]]
+signature = "swap(address caller, (address srcToken, address dstToken, address srcReceiver, address dstReceiver, uint256 amount, uint256 minReturnAmount, uint256 flags, bytes permit) desc, bytes data)"
+path = "caller"
+rationale = "1inch AggregationRouter V3/V4 swap executor — the router's only signer debit is desc.amount of desc.srcToken (shown) and it does not relay approvals to the executor, so caller cannot pull more than the shown amount; the swap reverts unless >= desc.minReturnAmount of desc.dstToken (shown) reaches desc.dstReceiver (shown). A malicious caller can only make the swap revert."
+[[hidden_address_allow]]
+signature = "swap(address caller, (address srcToken, address dstToken, address srcReceiver, address dstReceiver, uint256 amount, uint256 minReturnAmount, uint256 flags, bytes permit) desc, bytes data)"
+path = "desc.srcReceiver"
+rationale = "1inch AggregationRouter V3/V4 swap input intermediary — where desc.amount of desc.srcToken (shown, the only signer debit) is routed for execution. The swap reverts unless >= desc.minReturnAmount of desc.dstToken (shown) reaches desc.dstReceiver (shown), so srcReceiver cannot keep the input without reverting; a malicious srcReceiver can only make the swap revert."
+[[hidden_address_allow]]
+signature = "swap(address executor, (address srcToken, address dstToken, address srcReceiver, address dstReceiver, uint256 amount, uint256 minReturnAmount, uint256 flags) desc, bytes permit, bytes data)"
+path = "executor"
+rationale = "1inch AggregationRouter V5 swap executor — the router's only signer debit is desc.amount of desc.srcToken (shown) and it does not relay approvals to the executor, so executor cannot pull more than the shown amount; the swap reverts unless >= desc.minReturnAmount of desc.dstToken (shown) reaches desc.dstReceiver (shown). A malicious executor can only make the swap revert."
+[[hidden_address_allow]]
+signature = "swap(address executor, (address srcToken, address dstToken, address srcReceiver, address dstReceiver, uint256 amount, uint256 minReturnAmount, uint256 flags) desc, bytes permit, bytes data)"
+path = "desc.srcReceiver"
+rationale = "1inch AggregationRouter V5 swap input intermediary — where desc.amount of desc.srcToken (shown, the only signer debit) is routed for execution. The swap reverts unless >= desc.minReturnAmount of desc.dstToken (shown) reaches desc.dstReceiver (shown), so srcReceiver cannot keep the input without reverting; a malicious srcReceiver can only make the swap revert."
