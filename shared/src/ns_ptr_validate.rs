@@ -228,6 +228,16 @@ mod verification {
     /// B/C in u128 are non-vacuous precisely because they hold for the
     /// untruncated `len`: that is what makes the `len > u32::MAX` guard
     /// load-bearing.
+    ///
+    /// Honest scope (finding §2 info): in the ACCEPT branch, B and C re-express
+    /// `ns_write_window_ok`'s OWN accept conditions in u128 — they are a
+    /// consistency / no-32-bit-truncation re-derivation, not an independent
+    /// oracle. The independently load-bearing parts are D and A (the
+    /// `usize → u32` truncation + address-wrap residual, which the predicate's
+    /// 32-bit arithmetic could otherwise hide) plus the negative reject controls
+    /// below (ranges outside NS / straddling the mailbox that the predicate MUST
+    /// refuse). See also finding 8: this proves `accept ⟹ range ⊆ NS window`,
+    /// not `⟹ ∉ secure` — the NS∩secure=∅ premise lives in `secure/src/sau.rs`.
     #[kani::proof]
     fn ns_write_sound() {
         let ptr: u32 = kani::any();

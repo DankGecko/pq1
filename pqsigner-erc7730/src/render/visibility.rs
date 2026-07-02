@@ -238,6 +238,14 @@ mod kani_harnesses {
     /// and both compact-mode settings, `should_render_with_mode` is total
     /// (never panics) and returns EXACTLY the documented action variant.
     /// Exhaustive over the full `(visibility, compact)` domain.
+    ///
+    /// Honest scope (finding §2 info): `want` below re-expresses the documented
+    /// truth table, so this is a SPEC-CONFORMANCE check (the evaluator matches
+    /// its truth table), not an independent property. For `IfNotIn`/`MustMatch`
+    /// that table is the value-INDEPENDENT Phase-4 placeholder (`IfNotIn` renders
+    /// unconditionally, `MustMatch` always rejects — the value-list hide is not
+    /// yet wire-encoded; see the module header), so this certifies the current
+    /// fail-closed no-op semantics, NOT a value-based hide control.
     #[kani::proof]
     fn should_render_with_mode_total_and_spec() {
         let vb: u8 = kani::any();

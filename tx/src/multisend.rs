@@ -47,6 +47,15 @@
 //! by the on-chain `MultiSendCallOnly` revert (`is_multisend_claim` pins the batch
 //! `to` to `MULTISEND_CALL_ONLY_ADDRESSES`). See
 //! `ADVERSARIAL_REVIEW_KANI_2026-07-01.md` finding 3b-1.
+//!
+//! **Pointer-width scope (finding 3b-3).** These harnesses run under
+//! `cargo kani` at the HOST target (64-bit `usize`); the shipped decoder runs on
+//! thumbv8m (32-bit `usize`). The decode DECISIONS transfer because on the ACCEPT
+//! path every length/offset is `≤ N` (the bounded symbolic buffer), well inside
+//! 32-bit range, so no accept-vs-reject verdict differs between widths; on the
+//! REJECT path the `checked_add`/`checked_mul` overflow guards fail-closed at
+//! either width. Not mechanically re-proven at 32-bit — run kani with
+//! `-C target-pointer-width=32` to close it.
 
 use sphincs_tz_shared::{
     GPV2_SETTLEMENT_ADDRESS, MULTISEND_MAX_RECORDS, MULTI_SEND_SELECTOR, SET_PRE_SIGNATURE_SELECTOR,
