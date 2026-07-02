@@ -227,11 +227,24 @@ impl ApduBuf {
 
 /// Send an APDU and return the response data (without SW).
 ///
-/// If an SCP03 session is active, the APDU is MAC'd and encrypted before
-/// sending (`scp03::wrap_apdu`), the wire response is MAC-verified and
-/// decrypted (`scp03::unwrap_response`), and the SW is parsed from the
-/// resulting plaintext. The Le byte is stripped before MAC computation
-/// and re-appended afterward (ISO 7816-4 Case 4).
+/// Requires a live SCP03 session and fails CLOSED (`Se050Error::Scp03`)
+/// without one — an application APDU is never sent in cleartext
+/// (invariant #3; idle-relock fix 2026-07-02). The only legitimate
+/// pre-session exchanges (SELECT, INITIALIZE UPDATE, EXTERNAL
+/// AUTHENTICATE) drive `t1.transceive` directly and never come through
+/// here, so an inactive session at this point is a state bug (e.g. the
+/// lock-path zeroize ran and `Se050::init()` has not re-established
+/// yet), not a cleartext phase. The old fallback pushed the APDU out
+/// unwrapped as CLA=0x80: the chip refuses that with 0x6982/0x6985
+/// while its own session survives — and had the chip-side session been
+/// gone too, `verify_session` would have carried the PIN in plaintext
+/// on the I2C bus.
+///
+/// The APDU is MAC'd and encrypted before sending (`scp03::wrap_apdu`),
+/// the wire response is MAC-verified and decrypted
+/// (`scp03::unwrap_response`), and the SW is parsed from the resulting
+/// plaintext. The Le byte is stripped before MAC computation and
+/// re-appended afterward (ISO 7816-4 Case 4).
 ///
 /// S-5 fix: previously the response was read straight off the wire (SW
 /// + TLV from the ciphertext / un-MAC'd body), which silently broke if
@@ -244,7 +257,13 @@ pub unsafe fn send_apdu(
     apdu: &[u8],
     resp_buf: &mut [u8],
 ) -> Result<usize, Se050Error> {
-    let (tx_buf, tx_len) = if scp03.active {
+    if !scp03.active {
+        #[cfg(feature = "debug-log")]
+        secure_log!("[SE050] send_apdu REFUSED: no SCP03 session (init/reinit required)");
+        return Err(Se050Error::Scp03);
+    }
+
+    let (tx_buf, tx_len) = {
         // Detect Lc and Le for proper SCP03 wrapping
         let (hdr_len, lc_val) = if apdu.len() >= 7 && apdu[4] == 0x00 {
             (7usize, ((apdu[5] as usize) << 8) | (apdu[6] as usize))
@@ -278,10 +297,6 @@ pub unsafe fn send_apdu(
             }
         }
         (wrapped, wlen)
-    } else {
-        let mut buf = [0u8; MAX_APDU];
-        buf[..apdu.len()].copy_from_slice(apdu);
-        (buf, apdu.len())
     };
 
     #[cfg(feature = "debug-log")]
@@ -313,12 +328,8 @@ pub unsafe fn send_apdu(
     // (pre-S-5) the body was cleartext but unauthenticated.  Either
     // way, unwrap_response is now the only correct path.
     let mut unwrapped = [0u8; MAX_APDU];
-    let (resp_slice, resp_len) = if scp03.active {
-        let m = super::scp03::unwrap_response(scp03, &raw_resp[..n], &mut unwrapped)?;
-        (&unwrapped[..m], m)
-    } else {
-        (&raw_resp[..n], n)
-    };
+    let m = super::scp03::unwrap_response(scp03, &raw_resp[..n], &mut unwrapped)?;
+    let (resp_slice, resp_len) = (&unwrapped[..m], m);
 
     let sw = ((resp_slice[resp_len - 2] as u16) << 8) | (resp_slice[resp_len - 1] as u16);
 

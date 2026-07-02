@@ -132,9 +132,12 @@ impl Scp03Session {
     /// (`s_enc`/`s_mac`/`s_rmac`) that wrap `half_E` on the SE050 I2C bus
     /// would persist in secure SRAM through the entire locked state, where
     /// they could combine with a captured bus transcript to recover the
-    /// half. Clearing `active` makes the next SE access re-run
-    /// `scp03::establish` (the existing lazy-establish path checked at
-    /// `send_apdu`). (audit secret-lifecycle 20260611, MEDIUM-1)
+    /// half. Re-establishment is the caller's job: `Se050::zeroize_caches`
+    /// pairs this with `ready = false` so the next SE access re-runs the
+    /// full `init()` handshake. There is deliberately NO lazy establish
+    /// inside `send_apdu` — it fails CLOSED (`Se050Error::Scp03`) on an
+    /// inactive session instead of downgrading to cleartext. (audit
+    /// secret-lifecycle 20260611, MEDIUM-1; idle-relock fix 2026-07-02)
     pub fn zeroize_session(&mut self) {
         use zeroize::Zeroize;
         self.s_enc.zeroize();
@@ -526,10 +529,14 @@ fn ct_eq_8(a: &[u8], b: &[u8]) -> bool {
 /// the counter desync makes every SUBSEQUENT command error too, so the unlock
 /// fails closed, and the SE error paths re-`reinit()` (full SELECT + fresh
 /// `establish`) before the session is reused. Do NOT "fix" this by setting
-/// `session.active = false` here — that flips `send_apdu` into its
-/// pre-handshake cleartext branch (apdu.rs), turning a fail-CLOSED desync into
-/// a fail-OPEN plaintext downgrade on I2C (the exact invariant-#3 break this
-/// guards against).
+/// `session.active = false` here. Historically that flipped `send_apdu` into
+/// a pre-handshake cleartext branch — a fail-OPEN plaintext downgrade on I2C,
+/// the exact invariant-#3 break this guards against. Since the idle-relock
+/// fix (2026-07-02) `send_apdu` refuses outright on an inactive session, so
+/// the downgrade is structurally gone — but clearing the flag here is still
+/// wrong: it would swap the observable per-command SW errors the `reinit()`
+/// recovery paths key off for a blanket local refusal, hiding the desync
+/// without adding safety.
 pub fn unwrap_response(
     session: &mut Scp03Session,
     wrapped: &[u8],

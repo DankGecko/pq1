@@ -213,10 +213,22 @@ impl Se050 {
 
     /// Initialize the SE050: T1oI2C reset, applet SELECT, SCP03 establish.
     ///
-    /// Called lazily on first use. Subsequent calls are no-ops.
+    /// Called lazily on first use. Subsequent calls are no-ops only while
+    /// the SCP03 session is live: `ready && !scp03.active` — the state the
+    /// lock / idle-wipe zeroize leaves behind — re-runs the FULL sequence
+    /// (idle-relock fix 2026-07-02). Short-circuiting on the stale `ready`
+    /// flag alone is what made every post-relock APDU run session-less:
+    /// the chip (whose own SCP03 session was still up) refused them with
+    /// 0x6982/0x6985 and a correct PIN surfaced as "Wrong PIN".
     pub fn init(&mut self) -> Result<(), Se050Error> {
         if self.ready {
-            return Ok(());
+            if self.scp03.active {
+                return Ok(());
+            }
+            // Same recovery contract as `reinit()`: discard the dead
+            // session state, then fall through to the full handshake.
+            self.ready = false;
+            self.scp03 = Scp03Session::new();
         }
 
         unsafe {
@@ -2817,8 +2829,17 @@ impl WalletStore for Se050 {
         // MEDIUM-1 (audit secret-lifecycle 20260611): also tear down the
         // live SCP03 session keys so they don't outlive the unlock session
         // in SRAM. Lock / idle-wipe / panic reach here via
-        // `nsc::zeroize_sensitive_state`; the next SE access re-establishes.
+        // `nsc::zeroize_sensitive_state`.
         self.scp03.zeroize_session();
+        // Idle-relock fix (2026-07-02): drop `ready` WITH the session.
+        // Leaving it set made the next `init()` a no-op, so the post-lock
+        // re-unlock ran session-less — `send_apdu` (then) downgraded to
+        // cleartext CLA=0x80, the chip refused with 0x6982/0x6985, and a
+        // correct PIN rendered as "Wrong PIN" while burning a page-124
+        // attempt per retry. Cleared, the next SE access re-runs the full
+        // T=1' reset + SELECT + SCP03 establish — the same re-handshake-
+        // on-next-access contract as OPTIGA's `ensure_shield`.
+        self.ready = false;
     }
 
     fn random(&mut self, buf: &mut [u8]) -> Result<(), SeError> {

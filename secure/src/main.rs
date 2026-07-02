@@ -3629,9 +3629,15 @@ fn main() -> ! {
                         secure_log!("[S] PIN locked out");
                         break;
                     }
-                    Err(_) => {
+                    Err(secure_element::UnlockError::PinIncorrect) => {
                         ui::show_status("Wrong PIN", "try again");
                         secure_log!("[S] Wrong PIN");
+                    }
+                    Err(_) => {
+                        // InternalError — SE/transport trouble, not a PIN
+                        // verdict (see the PendSV re-unlock twin).
+                        ui::show_status("Unlock error", "try again");
+                        secure_log!("[S] Boot unlock failed: internal/SE error (not a PIN mismatch)");
                     }
                 }
             }
@@ -3869,9 +3875,18 @@ fn PendSV() {
                     secure_log!("[S] PIN locked out");
                     break;
                 }
-                Err(_) => {
+                Err(secure_element::UnlockError::PinIncorrect) => {
                     ui::show_status("Wrong PIN", "try again");
                     secure_log!("[S] Wrong PIN on re-unlock");
+                }
+                Err(_) => {
+                    // InternalError: the SE leg failed before/without a
+                    // chip-side PIN compare (transport / session / FI
+                    // gate). The page-124 pre-commit attempt is still
+                    // burned (fail-closed), but the PIN was never judged
+                    // — don't render it as "Wrong PIN".
+                    ui::show_status("Unlock error", "try again");
+                    secure_log!("[S] Re-unlock failed: internal/SE error (not a PIN mismatch)");
                 }
             }
         }
