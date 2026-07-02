@@ -227,6 +227,27 @@ pub fn validate_nested_structure(
     for entry in np.sub_fields() {
         let sf: FieldEntry<'_> = entry.map_err(|_| RenderErr::Reject("7730 nested subfield"))?;
         let params = super::params::parse(ir, sf.param_off)?;
+
+        // v3 depth-2+: a nested-anchor sub-field (itself a `PARAM_NESTED_STRUCT`,
+        // e.g. `witness.info` / `witness.outputs`). Its render `path_off` is a
+        // placeholder (word 0), NOT a static-word program — so it must be handled
+        // HERE, before any `static_word_index` on the placeholder (which could
+        // otherwise mis-credit coverage). Its word is a struct/array `hashStruct`
+        // word — never an `address` bit in THIS struct's `addr_word_bmp` — so it
+        // needs no address coverage; only bound-check its `word_pos` against THIS
+        // (the CONTAINING) struct's `member_count` (E4-2 — a `word_pos >= mc`
+        // would bind the adjacent DFS record). The interior addresses of the
+        // nested struct are covered by ITS OWN `validate_nested_structure` when the
+        // renderer recurses into it. (A bare `0x01` belt marker fails the version
+        // check in `parse_nested_struct_param` → decline, matching the renderer.)
+        if let Some(payload) = params.nested_struct {
+            let child = parse_nested_struct_param(payload)?;
+            if child.word_pos as usize >= mc {
+                return Err(RenderErr::Reject("7730 nested anchor ord oob"));
+            }
+            continue;
+        }
+
         // A word counts as shown ONLY if this sub-field actually renders. A
         // hidden field (never / compact-skipped / must-match-reject) covers
         // NOTHING for the address backstop.
@@ -442,6 +463,76 @@ mod tests {
         assert!(
             validate_nested_structure(&ir, &np, false).is_err(),
             "an address-typed word with no covering sub-field must decline"
+        );
+    }
+
+    /// v3 depth-2: `validate_nested_structure` must handle a sub-field that is
+    /// ITSELF a nested anchor (`witness.info` / `witness.outputs`). Its render
+    /// `path_off` is a placeholder — validate must read the sub-anchor's OWN
+    /// `word_pos` and bound-check it against the CONTAINING struct's
+    /// `member_count` (E4-2), NOT run `static_word_index` on the placeholder. A
+    /// `word_pos < member_count` passes (the interior addresses are covered by the
+    /// sub-anchor's own validate during the recursion); `word_pos >= member_count`
+    /// declines (it would otherwise bind the adjacent DFS record).
+    #[test]
+    fn validate_handles_nested_anchor_subfield_word_pos_bound() {
+        // Parent struct: member_count 3, NO address words (addr_bmp 0x00), ONE
+        // sub-field that is a nested anchor at `child_word_pos`.
+        let build = |child_word_pos: u16| -> std::vec::Vec<u8> {
+            // Child v0x03 payload (member_count 2, no sub-fields).
+            let mut child = std::vec![NESTED_V3];
+            child.extend_from_slice(&child_word_pos.to_be_bytes());
+            child.extend_from_slice(&[0xCDu8; 32]); // type_hash (opaque)
+            child.extend_from_slice(&2u16.to_be_bytes()); // member_count 2
+            child.push(0x00); // flags: non-array
+            child.push(0x00); // addr_word_bmp (mc 2 → 1 byte)
+            child.push(0); // sub_field_cnt 0
+            // Pool: off 0 filler; off 1 = param blob [blob_len][0x41 tag][tlv_len][child].
+            let mut pool = std::vec![0xFFu8];
+            let blob_len = 2 + child.len();
+            pool.push(blob_len as u8);
+            pool.push(0x41); // PARAM_NESTED_STRUCT
+            pool.push(child.len() as u8);
+            pool.extend_from_slice(&child);
+            // Parent payload: member_count 3, addr_bmp 0x00, one nested-anchor
+            // sub-field (FMT_RAW 0x01, label "sub", path_off 0 placeholder,
+            // param_off 1 → the child TLV blob above).
+            let mut parent = std::vec![NESTED_V3];
+            parent.extend_from_slice(&0u16.to_be_bytes()); // word_pos 0
+            parent.extend_from_slice(&[0xABu8; 32]); // type_hash
+            parent.extend_from_slice(&3u16.to_be_bytes()); // member_count 3
+            parent.push(0x00); // flags
+            parent.push(0x00); // addr_word_bmp (mc 3 → 1 byte, no address words)
+            parent.push(1); // sub_field_cnt 1
+            parent.push(0x01); // FMT_RAW
+            parent.push(3);
+            parent.extend_from_slice(b"sub");
+            parent.extend_from_slice(&0u16.to_be_bytes()); // path_off placeholder
+            parent.extend_from_slice(&1u16.to_be_bytes()); // param_off → child TLV
+                                                           // pack (parent, pool) into a length-tagged vec: [parent_len:2][parent][pool]
+            let mut out = std::vec::Vec::new();
+            out.extend_from_slice(&(parent.len() as u16).to_be_bytes());
+            out.extend_from_slice(&parent);
+            out.extend_from_slice(&pool);
+            out
+        };
+        let run = |child_word_pos: u16| -> Result<(), RenderErr> {
+            let packed = build(child_word_pos);
+            let parent_len = u16::from_be_bytes([packed[0], packed[1]]) as usize;
+            let parent = &packed[2..2 + parent_len];
+            let pool = &packed[2 + parent_len..];
+            let np = parse_nested_struct_param(parent).unwrap();
+            let ir_bytes = ir_with_pool(pool);
+            let ir = Erc7730Ir::parse(&ir_bytes).unwrap();
+            validate_nested_structure(&ir, &np, false)
+        };
+        // child word_pos 2 < parent member_count 3 → OK (bound-check passes; a
+        // struct word is not an address bit, so no coverage is required).
+        assert!(run(2).is_ok(), "nested-anchor sub-field at an in-bounds word_pos passes");
+        // child word_pos 3 == member_count → out of bounds → decline (E4-2).
+        assert!(
+            run(3).is_err(),
+            "nested-anchor sub-field word_pos >= member_count must decline (cross-struct confusion)"
         );
     }
 

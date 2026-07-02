@@ -1,6 +1,7 @@
 {
   "$schema": "../../specs/erc7730-v2.schema.json",
   "includes": "uniswap-common-eip712.json",
+  "_curation_note": "PQSigner Tier-A curation (v3 nested-EIP-712): the upstream descriptor hides the whole `witness.info` (OrderInfo) struct and `witness.exclusiveFiller` with visible:\"never\". PQSigner's WYSIWYS belt REFUSES a hidden address behind a trusted clear-sign (a nested struct is not a licence to hide the addresses it carries), so we SHOW the OrderInfo fund-routing/plumbing addresses (reactor, swapper, additionalValidationContract) and the exclusiveFiller as raw fields, and only keep the non-address order metadata (nonce, deadline, additionalValidationData) hidden. tokenPaths are authored ABSOLUTE (matches the on-device local resolver). See docs/erc7730-nested-eip712-render-design.md §12.",
   "display": {
     "formats": {
       "PermitWitnessTransferFrom(TokenPermissions permitted,address spender,uint256 nonce,uint256 deadline,ExclusiveDutchOrder witness)DutchOutput(address token,uint256 startAmount,uint256 endAmount,address recipient)ExclusiveDutchOrder(OrderInfo info,uint256 decayStartTime,uint256 decayEndTime,address exclusiveFiller,uint256 exclusivityOverrideBps,address inputToken,uint256 inputStartAmount,uint256 inputEndAmount,DutchOutput[] outputs)OrderInfo(address reactor,address swapper,uint256 nonce,uint256 deadline,address additionalValidationContract,bytes additionalValidationData)TokenPermissions(address token,uint256 amount)": {
@@ -20,21 +21,31 @@
             "params": { "tokenPath": "witness.inputToken" }
           },
           {
-            "path": "witness.outputs.[]",
+            "path": "witness.info",
             "fields": [
-              { "path": "endAmount", "label": "Minimum amounts to receive", "format": "tokenAmount", "params": { "tokenPath": "token" } },
-              { "path": "recipient", "label": "On Addresses", "format": "raw" }
+              { "path": "reactor", "label": "Order reactor", "format": "raw" },
+              { "path": "swapper", "label": "Order swapper", "format": "raw" },
+              { "path": "nonce", "label": "Order nonce", "visible": "never" },
+              { "path": "deadline", "label": "Order deadline", "visible": "never" },
+              { "path": "additionalValidationContract", "label": "Validation contract", "format": "raw" },
+              { "path": "additionalValidationData", "label": "Validation data", "visible": "never" }
             ]
           },
+          {
+            "path": "witness.outputs.[]",
+            "fields": [
+              { "path": "endAmount", "label": "Minimum amounts to receive", "format": "tokenAmount", "params": { "tokenPath": "witness.outputs.[].token" } },
+              { "path": "recipient", "label": "On Addresses", "format": "raw" },
+              { "path": "startAmount", "label": "Output start amount", "visible": "never" }
+            ]
+          },
+          { "path": "witness.exclusiveFiller", "label": "Exclusive filler", "format": "raw" },
           { "path": "deadline", "label": "Approval expire", "format": "date", "params": { "encoding": "timestamp" } },
           { "label": "Nonce", "path": "nonce", "visible": "never" },
-          { "label": "Witness Info", "path": "witness.info", "visible": "never" },
           { "label": "Witness Decay Start Time", "path": "witness.decayStartTime", "visible": "never" },
           { "label": "Witness Decay End Time", "path": "witness.decayEndTime", "visible": "never" },
-          { "label": "Witness Exclusive Filler", "path": "witness.exclusiveFiller", "visible": "never" },
           { "label": "Witness Exclusivity Override Bps", "path": "witness.exclusivityOverrideBps", "visible": "never" },
-          { "label": "Witness Input End Amount", "path": "witness.inputEndAmount", "visible": "never" },
-          { "label": "Witness Outputs Start Amount", "path": "witness.outputs.[].startAmount", "visible": "never" }
+          { "label": "Witness Input End Amount", "path": "witness.inputEndAmount", "visible": "never" }
         ]
       }
     }

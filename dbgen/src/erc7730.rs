@@ -1915,19 +1915,6 @@ enum NestedPlan {
 /// elementary child segment. `top.child` (v1) → `child`; `top.[].child` (v2
 /// array) → `child`. Returns `None` if the path doesn't match, has an unexpected
 /// array bracket, or names more than one further segment (deeper nesting = v3).
-fn strip_nested_child<'a>(path: &'a str, top: &str, is_array: bool) -> Option<&'a str> {
-    let rest = path.trim().strip_prefix(top)?.strip_prefix('.')?;
-    let rest = if is_array {
-        rest.strip_prefix("[].")?
-    } else {
-        rest
-    };
-    if rest.is_empty() || rest.contains('.') || rest.contains('[') {
-        return None;
-    }
-    Some(rest)
-}
-
 /// Try to compile an EIP-712 format that has ≥1 nested-struct member into the
 /// v0x03 recursive-IR shape (§4 + §10 + §11 of the design doc). Returns
 /// `Some((records, nested_descent_count))` on a supported shape, or `Ok(None)`
@@ -1988,10 +1975,15 @@ fn try_compile_eip712_nested(
         if is_array && !array_element_is_v2_supported(base, parsed) {
             return Ok(None);
         }
-        // The single elementary child segment: `top.child` (v1) or
-        // `top.[].child` (v2 array). Anything else (whole-struct render,
-        // `a.b.c`, indexed `[0]`) → defer.
-        if strip_nested_child(path, top, is_array).is_none() {
+        // The path must be strictly UNDER this struct member (a child). A bare
+        // `top` (whole-struct render) or an indexed `[0]` defers; deep children
+        // (`top.info.reactor` v3, `top.outputs.[].endAmount` v3, `top.child` v1,
+        // `top.[].child` v2) are all handled by the recursive block compiler.
+        let mut top_prefix = top.to_string();
+        if is_array {
+            top_prefix.push_str(".[]");
+        }
+        if strip_abs_prefix(path, &top_prefix).is_none() {
             return Ok(None);
         }
         let word_pos =
@@ -2040,9 +2032,14 @@ fn try_compile_eip712_nested(
             } => match compile_nested_anchor(
                 sig, fmt, parsed, top, *word_pos, base, *is_array, children, pool,
             )? {
-                Some(cf) => {
+                Some((cf, descents)) => {
                     compiled.push(cf);
-                    descent_count += 1;
+                    // RECURSIVE count (§12.5): this anchor + every nested
+                    // sub-anchor it contains, so the E1 reconciliation pin matches
+                    // the device's per-`render_nested_struct` `records_consumed`.
+                    descent_count = descent_count
+                        .checked_add(descents)
+                        .ok_or_else(|| format!("format `{sig}`: too many nested descents"))?;
                 }
                 // A child we couldn't compile → belt-decline the WHOLE format.
                 None => return Ok(None),
@@ -2055,23 +2052,76 @@ fn try_compile_eip712_nested(
     Ok(Some((compiled, descent_count)))
 }
 
-/// Compile one nested-struct anchor into a `PARAM_NESTED_STRUCT` v0x03 record.
-/// Returns `Ok(None)` (→ caller belt-declines the format) on any shape outside
-/// the v1 subset. Pins `type_hash` from `struct_defs` (never companion-supplied),
-/// the `member_count` = the NESTED struct's own word count, an `addr_word_bitmap`
-/// (E2), and the visible children as LOCAL sub-fields (E5 local ordinals).
+/// Strip an absolute member prefix from a descriptor path, returning the path
+/// RELATIVE to the struct/element that `prefix` names — or `None` if `path` is
+/// not STRICTLY under `prefix` (a bare `prefix` = whole-struct reference → None).
+/// `prefix` for an ARRAY element includes the trailing `.[]` (e.g.
+/// `witness.outputs.[]`), so `witness.outputs.[].endAmount` → `endAmount`.
+fn strip_abs_prefix<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
+    let rest = path.trim().strip_prefix(prefix)?.strip_prefix('.')?;
+    if rest.is_empty() {
+        return None;
+    }
+    Some(rest)
+}
+
+/// True iff an EIP-712 member type is a STATIC single-word scalar whose
+/// `encodeData` word IS its value: `address` / `bool` / `uintN` / `intN` /
+/// `bytesN` (`1 ≤ N ≤ 32`). A dynamic `bytes`/`string` (word = `keccak256(value)`,
+/// not the value), an array (`T[]`), or a struct (word = `hashStruct`) is NOT a
+/// static scalar. §12.6 hardening: an ELEMENTARY (non-struct) nested sub-field
+/// must pass this or the compiler belt-declines — otherwise a *visible* dynamic
+/// member would render its hash word as if it were the scalar value (shown≠signed).
+fn eip712_member_is_static_scalar(mty: &str) -> bool {
+    let t = mty.trim();
+    if t.contains('[') {
+        return false; // any array
+    }
+    if t == "address" || t == "bool" {
+        return true;
+    }
+    if t == "bytes" || t == "string" {
+        return false; // dynamic — encodeData word is keccak256(value)
+    }
+    if let Some(bits) = t.strip_prefix("uint").or_else(|| t.strip_prefix("int")) {
+        return matches!(bits.parse::<u16>(), Ok(n) if (8..=256).contains(&n) && n % 8 == 0);
+    }
+    if let Some(n) = t.strip_prefix("bytes") {
+        return matches!(n.parse::<u16>(), Ok(k) if (1..=32).contains(&k));
+    }
+    false
+}
+
+/// Compile one EIP-712 struct/array member into a `PARAM_NESTED_STRUCT` v0x03
+/// PAYLOAD (version…sub_fields), returning `(payload, descent_count)` where
+/// `descent_count` counts THIS anchor + every recursively-nested sub-anchor (the
+/// E1 reconciliation pin, §12.5). RECURSIVE (v3): a child whose first path
+/// segment names a struct member becomes a nested sub-anchor (recurse,
+/// `is_array=false`); a segment naming an array-of-struct member becomes a nested
+/// ARRAY sub-anchor (recurse, `is_array=true`, elements must be v2-supported
+/// elementary structs). Elementary children stay v1-style LOCAL sub-fields.
+/// `Ok(None)` (→ caller belt-declines the WHOLE format) on any unsupported shape:
+/// depth `> MAX_STRUCT_DEPTH`, an uncompilable child, a *visible* dynamic member,
+/// an uncovered address (E2), or a payload that overflows the pool TLV. Pins
+/// `type_hash`/`member_count`/`addr_word_bmp` from `struct_defs` (never companion
+/// data). `abs_prefix` is this element's absolute descriptor path (with `.[]` for
+/// an array element); `children` are the `fmt.fields` indices under it.
 #[allow(clippy::too_many_arguments)]
-fn compile_nested_anchor(
+fn compile_nested_block(
     sig: &str,
     fmt: &Format,
     parsed: &ParsedFormatKey,
-    top: &str,
-    word_pos: u16,
+    pool: &mut Pool,
     base: &str,
     is_array: bool,
+    word_pos: u16,
+    abs_prefix: &str,
     children: &[usize],
-    pool: &mut Pool,
-) -> Result<Option<CompiledFieldOut>, String> {
+    depth: usize,
+) -> Result<Option<(Vec<u8>, u16)>, String> {
+    if depth > MAX_STRUCT_DEPTH {
+        return Ok(None); // fail-closed: too deep to reason about / bound
+    }
     let Some(members) = parsed.struct_defs.get(base) else {
         return Ok(None);
     };
@@ -2079,17 +2129,17 @@ fn compile_nested_anchor(
     if member_count == 0 || member_count > MAX_NESTED_MEMBERS {
         return Ok(None);
     }
-    // type_hash = keccak(encodeType(nested)) — dbgen-PINNED (rule 3). A failure
-    // to build the canonical `encodeType` (malformed / undefined referenced
-    // struct) is NOT a hard error: fall back to the bare-marker belt so the
-    // format still survives compilation (declined), exactly as it did before
-    // Phase 5, rather than being dropped from the corpus.
+    // type_hash = keccak(encodeType(nested)) — dbgen-PINNED (rule 3). An
+    // encodeType build failure (malformed / undefined referenced struct) is NOT a
+    // hard error: fall back to the bare-marker belt so the format still survives
+    // compilation (declined), exactly as pre-Phase-5.
     let type_hash = match eip712_nested_type_hash(base, &parsed.struct_defs) {
         Ok(th) => th,
         Err(_) => return Ok(None),
     };
 
-    // address-word bitmap (E2): bit i set iff local member i is address-typed.
+    // address-word bitmap (E2): bit i set iff local member i is bare `address`
+    // (a struct/array member word is a hashStruct/array word, never an address).
     let bmp_len = member_count.div_ceil(8);
     let mut addr_bmp = std::vec![0u8; bmp_len];
     for (i, (_name, ty)) in members.iter().enumerate() {
@@ -2098,65 +2148,147 @@ fn compile_nested_anchor(
         }
     }
 
-    // Compile each visible child into a SubField record; `covered[w]` tracks the
-    // local words a child binds to a page (render path OR tokenPath) for E2.
+    // Group children by their first RELATIVE path segment (member name), in
+    // FIRST-APPEARANCE order — this fixes the DFS descent/wire order (§12.4). An
+    // elementary member → one v1-style sub-field; a struct/array-of-struct member
+    // (with deeper children) → one nested sub-anchor (recurse).
+    let mut group_order: Vec<String> = Vec::new();
+    let mut groups: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for &fi in children {
+        let path = fmt.fields[fi].path.as_deref().unwrap_or("");
+        let Some(rel) = strip_abs_prefix(path, abs_prefix) else {
+            return Ok(None); // not strictly under this element (bare-struct ref, etc.)
+        };
+        let seg = rel.split(['.', '[']).next().unwrap_or("").trim();
+        if seg.is_empty() {
+            return Ok(None);
+        }
+        if !groups.contains_key(seg) {
+            group_order.push(seg.to_string());
+        }
+        groups.entry(seg.to_string()).or_default().push(fi);
+    }
+
+    // `covered[w]` tracks the local words a SHOWN child binds (render path OR
+    // tokenPath) for the E2 self-check.
     let mut covered = std::vec![false; member_count];
     let mut sub_fields: Vec<u8> = Vec::new();
     let mut sub_field_cnt: u8 = 0;
-    for &fi in children {
-        let field = &fmt.fields[fi];
-        let path = field.path.as_deref().unwrap_or("");
-        // child = the single elementary segment after `top.` (v1) or `top.[].`
-        // (v2 array). Local ordinals are identical either way (each array element
-        // is one `base` struct).
-        let Some(child) = strip_nested_child(path, top, is_array) else {
-            return Ok(None);
-        };
-        let Some(local_ord) = members.iter().position(|(n, _)| n == child) else {
-            return Ok(None);
-        };
-        let local_ord = u16::try_from(local_ord).expect("member_count ≤ MAX_NESTED_MEMBERS");
-        covered[local_ord as usize] = true; // the render path reads this word
+    let mut descent_count: u16 = 1; // this block itself
 
-        // Child's format_op + LOCAL param blob (v1 vocabulary only).
-        let Some((format_op, param_blob)) =
-            compile_nested_subfield_params(field, top, is_array, members, &mut covered)?
-        else {
+    for seg in &group_order {
+        let seg_children = &groups[seg];
+        let Some(local_ord) = members.iter().position(|(n, _)| n == seg) else {
             return Ok(None);
         };
+        let local_ord_u16 = u16::try_from(local_ord).expect("member_count ≤ MAX_NESTED_MEMBERS");
+        let (seg_base, seg_is_array) = split_array_suffix(&members[local_ord].1);
 
-        // Local render path: RootStructured + FieldIdx(local_ord).
-        let render_prog = [
-            PATHOP_ROOT_STRUCT,
-            PATHOP_FIELD_IDX,
-            (local_ord >> 8) as u8,
-            (local_ord & 0xff) as u8,
-        ];
-        let path_off = intern_path_program(pool, &render_prog)?;
-        let param_off = if param_blob.is_empty() {
-            0u16
+        if type_is_struct(seg_base, parsed) {
+            // ── nested sub-anchor (struct member, or array-of-struct member) ──
+            // An array-of-struct element must be v2-renderable (elementary members)
+            // to match the on-device per-element render; deeper shapes defer.
+            if seg_is_array && !array_element_is_v2_supported(seg_base, parsed) {
+                return Ok(None);
+            }
+            let mut child_prefix = std::format!("{abs_prefix}.{seg}");
+            if seg_is_array {
+                child_prefix.push_str(".[]");
+            }
+            let Some((child_payload, child_descents)) = compile_nested_block(
+                sig,
+                fmt,
+                parsed,
+                pool,
+                seg_base,
+                seg_is_array,
+                local_ord_u16,
+                &child_prefix,
+                seg_children,
+                depth + 1,
+            )?
+            else {
+                return Ok(None);
+            };
+            if child_payload.len() > MAX_POOL_TLV_PAYLOAD - 2 {
+                return Ok(None);
+            }
+            let mut param_blob: Vec<u8> = Vec::new();
+            push_tlv(&mut param_blob, PARAM_NESTED_STRUCT, &child_payload)?;
+            let param_off = intern_param_blob(pool, &param_blob)?;
+            // A nested-anchor sub-field renders nothing itself (its word is a
+            // struct/array hashStruct word — never an address bit, so it needs no
+            // E2 coverage); the device recurses on the marker, ignoring path_off.
+            let label = clean_ascii_truncated(seg, 254);
+            sub_fields.push(FMT_RAW);
+            sub_fields.push(label.len() as u8);
+            sub_fields.extend_from_slice(label.as_bytes());
+            sub_fields.extend_from_slice(&0u16.to_be_bytes()); // path_off placeholder
+            sub_fields.extend_from_slice(&param_off.to_be_bytes());
+            sub_field_cnt = sub_field_cnt
+                .checked_add(1)
+                .ok_or_else(|| format!("format `{sig}`: too many nested sub-fields"))?;
+            descent_count = descent_count
+                .checked_add(child_descents)
+                .ok_or_else(|| format!("format `{sig}`: too many nested descents"))?;
         } else {
-            intern_param_blob(pool, &param_blob)?
-        };
-
-        // SubField record: format_op | label_len | label | path_off | param_off
-        // (byte-identical to a top-level field record — the device reuses the
-        // same per-field renderer with `nested_ed` as the body).
-        let label = clean_ascii_truncated(field.label.as_deref().unwrap_or(""), 254);
-        sub_fields.push(format_op);
-        sub_fields.push(label.len() as u8);
-        sub_fields.extend_from_slice(label.as_bytes());
-        sub_fields.extend_from_slice(&path_off.to_be_bytes());
-        sub_fields.extend_from_slice(&param_off.to_be_bytes());
-        sub_field_cnt = sub_field_cnt
-            .checked_add(1)
-            .ok_or_else(|| format!("format `{sig}`: too many nested sub-fields"))?;
+            // ── elementary member → v1-style LOCAL sub-field ──
+            // Exactly one field per elementary member; a deeper path into a
+            // non-struct (`seg.more`) is malformed → decline.
+            if seg_children.len() != 1 {
+                return Ok(None);
+            }
+            let fi = seg_children[0];
+            let field = &fmt.fields[fi];
+            let path = field.path.as_deref().unwrap_or("");
+            let rel = strip_abs_prefix(path, abs_prefix).unwrap_or("");
+            if rel != *seg {
+                return Ok(None); // `seg.more` where `seg` is not a struct
+            }
+            // §12.6 ABI-type gate: a member that CAN render must be a STATIC
+            // single-word scalar (else a dynamic `bytes`/`string` would mis-render
+            // its `keccak256(value)` word as the value). A `visible:"never"` member
+            // is a bound-but-unrendered word, so its type is irrelevant — skip the
+            // gate so a hidden dynamic member (e.g. OrderInfo.additionalValidationData
+            // `bytes`) does not false-decline the whole format.
+            let is_hidden = field.visible.as_deref() == Some("never");
+            if !is_hidden && !eip712_member_is_static_scalar(&members[local_ord].1) {
+                return Ok(None);
+            }
+            covered[local_ord] = true; // the render path reads this word
+            let Some((format_op, param_blob)) =
+                compile_nested_subfield_params(field, abs_prefix, members, &mut covered)?
+            else {
+                return Ok(None);
+            };
+            let render_prog = [
+                PATHOP_ROOT_STRUCT,
+                PATHOP_FIELD_IDX,
+                (local_ord_u16 >> 8) as u8,
+                (local_ord_u16 & 0xff) as u8,
+            ];
+            let path_off = intern_path_program(pool, &render_prog)?;
+            let param_off = if param_blob.is_empty() {
+                0u16
+            } else {
+                intern_param_blob(pool, &param_blob)?
+            };
+            let label = clean_ascii_truncated(field.label.as_deref().unwrap_or(""), 254);
+            sub_fields.push(format_op);
+            sub_fields.push(label.len() as u8);
+            sub_fields.extend_from_slice(label.as_bytes());
+            sub_fields.extend_from_slice(&path_off.to_be_bytes());
+            sub_fields.extend_from_slice(&param_off.to_be_bytes());
+            sub_field_cnt = sub_field_cnt
+                .checked_add(1)
+                .ok_or_else(|| format!("format `{sig}`: too many nested sub-fields"))?;
+        }
     }
 
     // E2 self-check: every address-typed local word must be covered by a visible
-    // child. The device enforces this independently, but a dbgen that emitted an
-    // uncovered-address block would produce a dead (always-declined) descriptor,
-    // so bail to the bare-marker belt here.
+    // child (else a dead / always-declined descriptor). The device enforces this
+    // independently; the primary build gate already refused any hidden address at
+    // any depth BEFORE compilation.
     for i in 0..member_count {
         if (addr_bmp[i / 8] >> (i % 8)) & 1 == 1 && !covered[i] {
             return Ok(None);
@@ -2173,27 +2305,57 @@ fn compile_nested_anchor(
     payload.extend_from_slice(&addr_bmp);
     payload.push(sub_field_cnt);
     payload.extend_from_slice(&sub_fields);
-    // The payload is wrapped in a `push_tlv` (2-byte header) then interned with a
-    // 1-byte length prefix, so it must leave room: `2 + payload.len() ≤
-    // MAX_POOL_TLV_PAYLOAD`. Overflow → belt-decline rather than truncate.
+    if payload.len() > MAX_POOL_TLV_PAYLOAD - 2 {
+        return Ok(None); // overflow → belt-decline rather than truncate
+    }
+    Ok(Some((payload, descent_count)))
+}
+
+/// Compile one TOP-LEVEL nested-struct anchor into a `PARAM_NESTED_STRUCT` v0x03
+/// record, returning `(record, descent_count)` where `descent_count` includes
+/// every recursively-nested sub-anchor. Thin wrapper over [`compile_nested_block`]
+/// (which owns the recursion) — builds the element's absolute prefix, wraps the
+/// payload in the pool TLV, and emits the anchor field.
+#[allow(clippy::too_many_arguments)]
+fn compile_nested_anchor(
+    sig: &str,
+    fmt: &Format,
+    parsed: &ParsedFormatKey,
+    top: &str,
+    word_pos: u16,
+    base: &str,
+    is_array: bool,
+    children: &[usize],
+    pool: &mut Pool,
+) -> Result<Option<(CompiledFieldOut, u16)>, String> {
+    let mut abs_prefix = top.to_string();
+    if is_array {
+        abs_prefix.push_str(".[]");
+    }
+    let Some((payload, descent_count)) = compile_nested_block(
+        sig, fmt, parsed, pool, base, is_array, word_pos, &abs_prefix, children, 1,
+    )?
+    else {
+        return Ok(None);
+    };
     if payload.len() > MAX_POOL_TLV_PAYLOAD - 2 {
         return Ok(None);
     }
-
     let mut param_blob: Vec<u8> = Vec::new();
     push_tlv(&mut param_blob, PARAM_NESTED_STRUCT, &payload)?;
     let param_off = intern_param_blob(pool, &param_blob)?;
-
-    // The anchor record renders nothing itself (the device descends on the
-    // marker, ignoring `format_op`/`path_off`); the label carries the member
-    // name for `erc7730.review.txt` readability.
+    // The anchor record renders nothing itself; the label carries the member name
+    // for `erc7730.review.txt` readability.
     let label = clean_ascii_truncated(top, 254);
-    Ok(Some(CompiledFieldOut {
-        format_op: FMT_RAW,
-        label: label.into_bytes(),
-        path_off: 0,
-        param_off,
-    }))
+    Ok(Some((
+        CompiledFieldOut {
+            format_op: FMT_RAW,
+            label: label.into_bytes(),
+            path_off: 0,
+            param_off,
+        },
+        descent_count,
+    )))
 }
 
 /// Build a nested sub-field's format_op + LOCAL param TLV blob (v1 vocabulary:
@@ -2202,8 +2364,7 @@ fn compile_nested_anchor(
 /// Marks `covered[w]` for the local word a `tokenPath` IDs (E2 coverage).
 fn compile_nested_subfield_params(
     field: &FieldDef,
-    top: &str,
-    is_array: bool,
+    abs_prefix: &str,
     members: &[(String, String)],
     covered: &mut [bool],
 ) -> Result<Option<(u8, Vec<u8>)>, String> {
@@ -2237,19 +2398,23 @@ fn compile_nested_subfield_params(
         }
         FMT_TOKEN_AMOUNT => {
             let Some(params) = params else { return Ok(None) };
-            // v1 supports ONLY a local `tokenPath` (`top.child`) — no fixed
-            // token, threshold, or message.
+            // Only a local `tokenPath` (a sibling token member of THIS struct) —
+            // no fixed token, threshold, or message.
             if params.keys().any(|k| k != "tokenPath") {
                 return Ok(None);
             }
             let Some(tp) = params.get("tokenPath").and_then(|v| v.as_str()) else {
                 return Ok(None);
             };
-            // Strip the `top.` (v1) or `top.[].` (v2 array) prefix; the remaining
-            // single segment is the local token member.
-            let Some(tok_child) = strip_nested_child(tp, top, is_array) else {
-                return Ok(None); // cross-struct / indexed / deep tokenPath → v3
+            // Strip THIS element's absolute prefix; the remaining single segment
+            // is the local token member (a cross-struct / indexed / deep tokenPath
+            // does not resolve here → defer). Authored ABSOLUTE (matches v2).
+            let Some(tok_child) = strip_abs_prefix(tp, abs_prefix) else {
+                return Ok(None);
             };
+            if tok_child.contains('.') || tok_child.contains('[') {
+                return Ok(None); // not a single local segment
+            }
             let Some(tok_ord) = members.iter().position(|(n, _)| n == tok_child) else {
                 return Ok(None);
             };
@@ -5388,19 +5553,35 @@ mod tests {
     }
 
     #[test]
-    fn strip_nested_child_v1_and_v2() {
-        // v1 (non-array): `top.child`.
-        assert_eq!(strip_nested_child("details.amount", "details", false), Some("amount"));
-        // v2 (array): `top.[].child`.
-        assert_eq!(strip_nested_child("details.[].amount", "details", true), Some("amount"));
-        assert_eq!(strip_nested_child("creators.[].account", "creators", true), Some("account"));
-        // Mismatched array-ness → None.
-        assert_eq!(strip_nested_child("details.[].amount", "details", false), None);
-        assert_eq!(strip_nested_child("details.amount", "details", true), None);
-        // Deeper (`a.b.c`) or indexed → None (v3 / unsupported).
-        assert_eq!(strip_nested_child("details.[].a.b", "details", true), None);
-        assert_eq!(strip_nested_child("details.[0].amount", "details", true), None);
-        assert_eq!(strip_nested_child("other.amount", "details", false), None);
+    fn strip_abs_prefix_relative_remainder() {
+        // Returns the FULL remaining path relative to the element `prefix`
+        // (the recursion strips one prefix level per depth). v1/v2/v3 shapes:
+        assert_eq!(strip_abs_prefix("details.amount", "details"), Some("amount"));
+        assert_eq!(strip_abs_prefix("details.[].amount", "details.[]"), Some("amount"));
+        assert_eq!(strip_abs_prefix("witness.info.reactor", "witness"), Some("info.reactor"));
+        assert_eq!(
+            strip_abs_prefix("witness.outputs.[].endAmount", "witness.outputs.[]"),
+            Some("endAmount")
+        );
+        // A bare element reference (whole-struct) or a non-match → None.
+        assert_eq!(strip_abs_prefix("witness", "witness"), None);
+        assert_eq!(strip_abs_prefix("other.amount", "details"), None);
+        // Array-ness must match the prefix: a `[]` element path under a
+        // non-array prefix leaves the bracket in the remainder (still stripped
+        // one level per recursion, so this is the parent's view).
+        assert_eq!(strip_abs_prefix("details.[].amount", "details"), Some("[].amount"));
+    }
+
+    #[test]
+    fn eip712_member_is_static_scalar_gate() {
+        // Static single-word scalars → true.
+        for t in ["address", "bool", "uint256", "uint160", "uint48", "int128", "bytes32", "bytes1"] {
+            assert!(eip712_member_is_static_scalar(t), "{t} must be a static scalar");
+        }
+        // Dynamic / composite → false (would mis-render keccak(value)/hashStruct).
+        for t in ["bytes", "string", "uint256[]", "address[]", "DutchOutput", "bytes33", "uint7", "uint"] {
+            assert!(!eip712_member_is_static_scalar(t), "{t} must NOT be a static scalar");
+        }
     }
 
     #[test]

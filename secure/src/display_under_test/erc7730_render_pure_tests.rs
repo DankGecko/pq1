@@ -2593,3 +2593,462 @@ fn uniswap_slice_binding_is_non_vacuous_decoy_token() {
         "decoy token (not in path) must never bind:\n{dump}"
     );
 }
+
+// ───────────────────────────────────────────────────────────────────────
+// v3 DEEP NESTING + NESTED-ARRAY-IN-STRUCT — UniswapX ExclusiveDutchOrder.
+//
+// Signed struct: PermitWitnessTransferFrom(TokenPermissions permitted, address
+// spender, uint256 nonce, uint256 deadline, ExclusiveDutchOrder witness). The
+// `witness` is a depth-1 nested struct that ITSELF contains a nested struct
+// `info` (OrderInfo, depth 2 — curated to SHOW reactor/swapper/validationContract)
+// and a nested array-of-struct `outputs` (DutchOutput[], depth 2). The binding
+// chains keccak(typeHash ‖ ed) top-down to the signed digest at EVERY level:
+//   top_ed[0]=hashStruct(permitted), top_ed[4]=hashStruct(witness);
+//   witness_ed[0]=hashStruct(info), witness_ed[8]=hashStructArray(outputs).
+// DFS blob order = device descent order = permitted | witness | info |
+// {elem_count=2, out0, out1} (info before outputs = the curated field order).
+// ───────────────────────────────────────────────────────────────────────
+
+/// Parse a 64-char hex string into a `[u8; 32]` (test-local; the foundry-pinned
+/// typeHashes are easier to read as hex than as byte arrays).
+fn hx32(s: &str) -> [u8; 32] {
+    let mut o = [0u8; 32];
+    for (i, b) in o.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&s[2 * i..2 * i + 2], 16).unwrap();
+    }
+    o
+}
+
+// PermitWitnessTransferFrom(...ExclusiveDutchOrder witness) primary type hash
+// (the value dbgen emits into the format header; see erc7730.review.txt).
+const EXCLUSIVE_DUTCH_PRIMARY: &str =
+    "2846b6ca8e0ecdbc9ca7696f16bdf77b3baf48504ac14d6a541484ec197e91eb";
+
+/// Build a valid 2-output UniswapX `ExclusiveDutchOrder`: `(top_ed[160],
+/// nested_blob)`. Every committed word is the REAL chained `hashStruct`
+/// (recomputed via the device primitive — NOT circular: the device rebuilds each
+/// from the IR-pinned typeHash + the companion blob; a flip in either breaks the
+/// equality). `nested_blob` is the device's DFS descent order.
+fn exclusive_dutch_vectors() -> (std::vec::Vec<u8>, std::vec::Vec<u8>) {
+    use super::erc7730::nested::{hash_struct, hash_struct_array};
+    let order_info_th = hx32("7daca11202c64729871927c37d75933f1852e430627cd4b8f4844087e312e94b");
+    let dutch_output_th = hx32("45058f030836a1ec7cb9636dad15d25676157364aaf76d8dad81a6b2c267610f");
+    let edo_th = hx32("24d8514d0b2bd650779acf204b79c73859aaafd6fd011c00669d143a7b891419");
+    let token_permissions_th =
+        hx32("618358ac3db8dc274f0cd8829da7e234bd48cd73c4a740aede1adec9846d06a1");
+
+    let word_addr = |a: [u8; 20]| {
+        let mut w = [0u8; 32];
+        w[12..].copy_from_slice(&a);
+        w
+    };
+    let word_u = |n: u64| {
+        let mut w = [0u8; 32];
+        w[24..].copy_from_slice(&n.to_be_bytes());
+        w
+    };
+    let usdc = [0xA0u8, 0xb8, 0x69, 0x91, 0xc6, 0x21, 0x8b, 0x36, 0xc1, 0xd1, 0x9D, 0x4a, 0x2e,
+        0x9E, 0xb0, 0xcE, 0x36, 0x06, 0xeB, 0x48];
+    let weth = [0xC0u8, 0x2a, 0xaA, 0x39, 0xb2, 0x23, 0xFE, 0x8D, 0x0A, 0x0e, 0x5C, 0x4F, 0x27,
+        0xeA, 0xD9, 0x08, 0x3C, 0x75, 0x6C, 0xc2];
+    let dai = [0x6Bu8, 0x17, 0x54, 0x74, 0xE8, 0x90, 0x94, 0xC4, 0x4D, 0xa9, 0x8b, 0x95, 0x4E,
+        0xed, 0xeA, 0xC4, 0x95, 0x27, 0x1d, 0x0F];
+
+    // permitted_ed (TokenPermissions: token, amount).
+    let mut permitted_ed = std::vec![0u8; 64];
+    permitted_ed[0..32].copy_from_slice(&word_addr(usdc));
+    permitted_ed[32..64].copy_from_slice(&word_u(5_000_005)); // approve amount
+    let permitted_word = hash_struct(&token_permissions_th, &permitted_ed);
+
+    // info_ed (OrderInfo: reactor, swapper, nonce, deadline, validationContract, validationData).
+    let mut info_ed = std::vec![0u8; 192];
+    info_ed[0..32].copy_from_slice(&word_addr([0x22; 20])); // reactor (SHOWN)
+    info_ed[32..64].copy_from_slice(&word_addr([0x33; 20])); // swapper (SHOWN)
+    info_ed[64..96].copy_from_slice(&word_u(42)); // nonce (hidden)
+    info_ed[96..128].copy_from_slice(&word_u(1_700_000_000)); // deadline (hidden)
+    info_ed[128..160].copy_from_slice(&word_addr([0x44; 20])); // additionalValidationContract (SHOWN)
+    info_ed[160..192].copy_from_slice(&[0xAB; 32]); // additionalValidationData word (hidden bytes hash)
+    let info_word = hash_struct(&order_info_th, &info_ed);
+
+    // out_i_ed (DutchOutput: token, startAmount, endAmount, recipient).
+    let mk_out = |token: [u8; 20], end: u64, recip: [u8; 20]| {
+        let mut o = std::vec![0u8; 128];
+        o[0..32].copy_from_slice(&word_addr(token));
+        o[32..64].copy_from_slice(&word_u(1)); // startAmount (hidden)
+        o[64..96].copy_from_slice(&word_u(end)); // endAmount (SHOWN)
+        o[96..128].copy_from_slice(&word_addr(recip)); // recipient (SHOWN)
+        o
+    };
+    let out0 = mk_out(dai, 2_000_002, [0x66; 20]);
+    let out1 = mk_out(usdc, 3_000_003, [0x66; 20]);
+    let outputs_word = hash_struct_array(&dutch_output_th, &[&out0[..], &out1[..]]);
+
+    // witness_ed (ExclusiveDutchOrder, 9 words).
+    let mut witness_ed = std::vec![0u8; 288];
+    witness_ed[0..32].copy_from_slice(&info_word); // info (depth-2 struct)
+    witness_ed[32..64].copy_from_slice(&word_u(1_699_000_000)); // decayStartTime (hidden)
+    witness_ed[64..96].copy_from_slice(&word_u(1_699_500_000)); // decayEndTime (hidden)
+    witness_ed[96..128].copy_from_slice(&word_addr([0x55; 20])); // exclusiveFiller (SHOWN)
+    witness_ed[128..160].copy_from_slice(&word_u(0)); // exclusivityOverrideBps (hidden)
+    witness_ed[160..192].copy_from_slice(&word_addr(weth)); // inputToken (covered via tokenPath)
+    witness_ed[192..224].copy_from_slice(&word_u(1_000_001)); // inputStartAmount (SHOWN)
+    witness_ed[224..256].copy_from_slice(&word_u(900_000)); // inputEndAmount (hidden)
+    witness_ed[256..288].copy_from_slice(&outputs_word); // outputs (depth-2 array)
+    let witness_word = hash_struct(&edo_th, &witness_ed);
+
+    // top_ed (PermitWitnessTransferFrom, 5 words).
+    let mut top_ed = std::vec![0u8; 160];
+    top_ed[0..32].copy_from_slice(&permitted_word); // permitted
+    top_ed[32..64].copy_from_slice(&word_addr([0x11; 20])); // spender (SHOWN)
+    top_ed[64..96].copy_from_slice(&word_u(7)); // nonce (hidden)
+    top_ed[96..128].copy_from_slice(&word_u(1_735_689_600)); // deadline 2025-01-01 (SHOWN date)
+    top_ed[128..160].copy_from_slice(&witness_word); // witness
+
+    // nested_blob DFS: permitted | witness | info | {elem_count=2, out0, out1}.
+    let mut blob = std::vec::Vec::new();
+    let push_rec = |blob: &mut std::vec::Vec<u8>, ed: &[u8]| {
+        blob.extend_from_slice(&(ed.len() as u16).to_be_bytes());
+        blob.extend_from_slice(ed);
+    };
+    push_rec(&mut blob, &permitted_ed);
+    push_rec(&mut blob, &witness_ed);
+    push_rec(&mut blob, &info_ed);
+    blob.extend_from_slice(&2u16.to_be_bytes()); // outputs elem_count
+    push_rec(&mut blob, &out0);
+    push_rec(&mut blob, &out1);
+
+    (top_ed, blob)
+}
+
+/// (a) The decisive DEPTH-2 render: a real 2-output ExclusiveDutchOrder clear-signs
+/// through the recursive descent — top spender, the depth-2 `info` addresses
+/// (reactor/swapper/validationContract, curated SHOW), the depth-1 exclusiveFiller,
+/// the nested `outputs[]` array (per-element endAmount + recipient with dividers),
+/// the tokenAmounts, and the deadline date. A decline here means the DFS order /
+/// recursion / chained binding is wrong (the render `.expect()`s success).
+#[test]
+fn v3_exclusive_dutch_order_renders_deep_nested() {
+    let res = build_registry();
+    let leaf = find_leaf(res, "eip712-UniswapX-ExclusiveDutchOrder.json", 1);
+    let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("ExclusiveDutchOrder IR parses");
+    let pth = hx32(EXCLUSIVE_DUTCH_PRIMARY);
+    let (top_ed, blob) = exclusive_dutch_vectors();
+    let verified = VerifiedDescriptor { ir };
+    let resolver = NameResolver::new();
+    let pages = super::erc7730::render_erc7730_eip712_pages_v3(
+        1, &[0u8; 20], &pth, &top_ed, &blob, &verified, None, &resolver,
+    )
+    .expect("valid ExclusiveDutchOrder clear-signs via V3 (depth-2 recursion)");
+    assert_all_pages_printable(&pages);
+    let dump = dump_pages(&pages).to_lowercase();
+    // top-level spender (0x11..).
+    assert!(dump.contains("1111111111111111"), "spender must be shown:\n{dump}");
+    // depth-2 OrderInfo addresses (the curated SHOW — reactor/swapper/validation).
+    assert!(dump.contains("2222222222222222"), "info.reactor must render (depth 2):\n{dump}");
+    assert!(dump.contains("3333333333333333"), "info.swapper must render (depth 2):\n{dump}");
+    assert!(dump.contains("4444444444444444"), "info.validationContract must render (depth 2):\n{dump}");
+    // depth-1 exclusiveFiller (curated SHOW).
+    assert!(dump.contains("5555555555555555"), "exclusiveFiller must render:\n{dump}");
+    // depth-2 nested-array outputs: recipients + per-element endAmounts + dividers.
+    assert!(dump.contains("6666666666666666"), "output recipient must render:\n{dump}");
+    assert!(dump.contains("2000002"), "out0 endAmount must render:\n{dump}");
+    assert!(dump.contains("3000003"), "out1 endAmount must render:\n{dump}");
+    assert!(dump.contains("item 1 of 2"), "output element 0 divider:\n{dump}");
+    assert!(dump.contains("item 2 of 2"), "output element 1 divider:\n{dump}");
+    // witness.inputStartAmount ("Spend max") + permitted amount + deadline date.
+    assert!(dump.contains("1000001"), "inputStartAmount must render:\n{dump}");
+    assert!(dump.contains("5000005"), "permitted amount must render:\n{dump}");
+    assert!(dump.contains("2025"), "deadline date must render:\n{dump}");
+}
+
+/// (b) THE decisive DEPTH-2 non-vacuity proof: the chained binding must be live
+/// at EVERY depth. Flipping ANY single bit of the `nested_blob` (any word of
+/// permitted / witness / info / either output element — shown OR hidden — or any
+/// record length / elem_count) OR either top-level committed word (permitted @0,
+/// witness @4) flips the render to DECLINE. If any flip still rendered, that byte
+/// would be signed-bound but unchecked — the WYSIWYS break this test exists to
+/// catch. (a) alone passes even if the deep binding is never verified; (b) proves
+/// shown ⟺ signed through the whole tree.
+#[test]
+fn v3_exclusive_dutch_binding_is_non_vacuous() {
+    let res = build_registry();
+    let leaf = find_leaf(res, "eip712-UniswapX-ExclusiveDutchOrder.json", 1);
+    let pth = hx32(EXCLUSIVE_DUTCH_PRIMARY);
+    let (top_ed, blob) = exclusive_dutch_vectors();
+
+    let render = |ed: &[u8], b: &[u8]| {
+        let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("EDO IR parses");
+        let verified = VerifiedDescriptor { ir };
+        let resolver = NameResolver::new();
+        super::erc7730::render_erc7730_eip712_pages_v3(
+            1, &[0u8; 20], &pth, ed, b, &verified, None, &resolver,
+        )
+    };
+
+    assert!(render(&top_ed, &blob).is_ok(), "baseline must render");
+
+    // (b1) Flip EVERY byte of the WHOLE nested_blob (every ed word at depths 1
+    // AND 2 — shown and hidden — plus every record-length header and the
+    // elem_count). Each is bound: an ed flip breaks a chained hashStruct; a
+    // length/count flip mis-parses a record → length mismatch / OOB. All DECLINE.
+    for i in 0..blob.len() {
+        let mut b = blob.clone();
+        b[i] ^= 0x01;
+        assert!(
+            render(&top_ed, &b).is_err(),
+            "flipping nested_blob byte {i} must decline (binding live at all depths)"
+        );
+    }
+
+    // (b2) Flip every byte of the two TOP-LEVEL committed words (permitted @word0,
+    // witness @word4) — the roots of the two binding chains. DECLINE.
+    for byte in (0..32).chain(128..160) {
+        let mut ed = top_ed.clone();
+        ed[byte] ^= 0x01;
+        assert!(
+            render(&ed, &blob).is_err(),
+            "flipping top committed byte {byte} must decline"
+        );
+    }
+}
+
+/// (c) The E1 reconciliation FIRES at depth 2: the ExclusiveDutchOrder pins
+/// `nested_descent_count = 4` (permitted + witness + info + outputs — counted
+/// RECURSIVELY). Patch that byte to a wrong value → the after-render
+/// `records_consumed(4) != nested_descent_count` check declines. This is the ONLY
+/// exerciser of the reconciliation reject path at depth 2 (every blob-flip in (b)
+/// rejects at a BINDING first). Proves dbgen counts sub-anchors recursively AND
+/// the device compares the pinned count.
+#[test]
+fn v3_exclusive_dutch_reconciliation_rejects_wrong_pinned_descent_count() {
+    let res = build_registry();
+    let leaf = find_leaf(res, "eip712-UniswapX-ExclusiveDutchOrder.json", 1);
+    let pth = hx32(EXCLUSIVE_DUTCH_PRIMARY);
+    let (top_ed, blob) = exclusive_dutch_vectors();
+    let ndc_off = eip712_format_ndc_offset(&leaf.ir_bytes, &pth)
+        .expect("ExclusiveDutchOrder format present in the shipped DB");
+
+    let render_patched = |ndc: u8| {
+        let mut ir_bytes = leaf.ir_bytes.clone();
+        assert_eq!(
+            ir_bytes[ndc_off], 4,
+            "ExclusiveDutchOrder pins FOUR descent points (permitted+witness+info+outputs, recursive)"
+        );
+        ir_bytes[ndc_off] = ndc;
+        let ir = Erc7730Ir::parse(&ir_bytes).expect("patched IR still parses");
+        let verified = VerifiedDescriptor { ir };
+        let resolver = NameResolver::new();
+        super::erc7730::render_erc7730_eip712_pages_v3(
+            1, &[0u8; 20], &pth, &top_ed, &blob, &verified, None, &resolver,
+        )
+    };
+    // Under-count (3, e.g. a regression that failed to count the depth-2 `info`
+    // sub-anchor) and over-count (5) both mismatch records_consumed(4) → decline.
+    assert!(render_patched(3).is_err(), "records_consumed(4) != pinned 3 must decline");
+    assert!(render_patched(5).is_err(), "records_consumed(4) != pinned 5 must decline");
+}
+
+/// (d) Cross-struct DFS slot-confusion at depth 2 (E4-2, one level deeper than v1):
+/// reordering the interior DFS records — feeding the `outputs` section where the
+/// device expects the `info` record — must DECLINE. The device reads the next
+/// record's `[u16 len]` (here the outputs `elem_count` = 2) as `info`'s length,
+/// which ≠ OrderInfo's `member_count × 32` (192) → decline. A companion cannot
+/// swap sub-trees behind a passing outer binding.
+#[test]
+fn v3_exclusive_dutch_reordered_records_decline() {
+    let res = build_registry();
+    let leaf = find_leaf(res, "eip712-UniswapX-ExclusiveDutchOrder.json", 1);
+    let pth = hx32(EXCLUSIVE_DUTCH_PRIMARY);
+    let (top_ed, blob) = exclusive_dutch_vectors();
+    // Blob layout: permitted[0..66] | witness[66..356] | info[356..550] | outputs[550..].
+    // Swap the info record and the outputs section.
+    let mut reordered = std::vec::Vec::new();
+    reordered.extend_from_slice(&blob[0..356]); // permitted + witness (unchanged)
+    reordered.extend_from_slice(&blob[550..]); // outputs section, now where info was
+    reordered.extend_from_slice(&blob[356..550]); // info record, now last
+    assert_eq!(reordered.len(), blob.len(), "reorder preserves total length");
+
+    let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("EDO IR parses");
+    let verified = VerifiedDescriptor { ir };
+    let resolver = NameResolver::new();
+    assert!(
+        super::erc7730::render_erc7730_eip712_pages_v3(
+            1, &[0u8; 20], &pth, &top_ed, &reordered, &verified, None, &resolver,
+        )
+        .is_err(),
+        "reordered interior DFS records (outputs where info expected) must decline"
+    );
+}
+
+/// v3 second shipped descriptor: UniswapX plain `DutchOrder` (no exclusiveFiller /
+/// exclusivityOverrideBps — a 7-member witness, otherwise identical machinery to
+/// ExclusiveDutchOrder). Proves the recursion + curation are not EDO-specific: the
+/// depth-2 `info` addresses + nested `outputs[]` array + tokenAmounts render, and a
+/// flip of a depth-2 word (info) OR the top witness commitment declines.
+#[test]
+fn v3_dutch_order_renders_deep_nested_and_flip_declines() {
+    use super::erc7730::nested::{hash_struct, hash_struct_array};
+    let res = build_registry();
+    let leaf = find_leaf(res, "eip712-UniswapX-DutchOrder.json", 1);
+    // PermitWitnessTransferFrom(...DutchOrder witness) primary type hash.
+    let pth = hx32("f69aa722d3ed4edcfb9d5a29bf72a4d1fd0a2b90c570c4791dcde3f5dcd89c0b");
+    let order_info_th = hx32("7daca11202c64729871927c37d75933f1852e430627cd4b8f4844087e312e94b");
+    let dutch_output_th = hx32("45058f030836a1ec7cb9636dad15d25676157364aaf76d8dad81a6b2c267610f");
+    let dutch_order_th = hx32("701a429bb9f0181256c459ce5000b7e7677ccc459ebb6229e1bd778e024a5973");
+    let token_permissions_th =
+        hx32("618358ac3db8dc274f0cd8829da7e234bd48cd73c4a740aede1adec9846d06a1");
+
+    let wa = |a: [u8; 20]| {
+        let mut w = [0u8; 32];
+        w[12..].copy_from_slice(&a);
+        w
+    };
+    let wu = |n: u64| {
+        let mut w = [0u8; 32];
+        w[24..].copy_from_slice(&n.to_be_bytes());
+        w
+    };
+    let weth = [0xC0u8, 0x2a, 0xaA, 0x39, 0xb2, 0x23, 0xFE, 0x8D, 0x0A, 0x0e, 0x5C, 0x4F, 0x27,
+        0xeA, 0xD9, 0x08, 0x3C, 0x75, 0x6C, 0xc2];
+    let dai = [0x6Bu8, 0x17, 0x54, 0x74, 0xE8, 0x90, 0x94, 0xC4, 0x4D, 0xa9, 0x8b, 0x95, 0x4E,
+        0xed, 0xeA, 0xC4, 0x95, 0x27, 0x1d, 0x0F];
+
+    // permitted (TokenPermissions: token, amount).
+    let mut permitted_ed = std::vec![0u8; 64];
+    permitted_ed[0..32].copy_from_slice(&wa(weth));
+    permitted_ed[32..64].copy_from_slice(&wu(7_000_007));
+    let permitted_word = hash_struct(&token_permissions_th, &permitted_ed);
+
+    // info (OrderInfo, 6 words) — reactor/swapper/validationContract SHOWN.
+    let mut info_ed = std::vec![0u8; 192];
+    info_ed[0..32].copy_from_slice(&wa([0x2Au8; 20])); // reactor
+    info_ed[32..64].copy_from_slice(&wa([0x3Au8; 20])); // swapper
+    info_ed[64..96].copy_from_slice(&wu(9)); // nonce (hidden)
+    info_ed[96..128].copy_from_slice(&wu(1_700_000_000)); // deadline (hidden)
+    info_ed[128..160].copy_from_slice(&wa([0x4Au8; 20])); // validationContract
+    info_ed[160..192].copy_from_slice(&[0xCD; 32]); // validationData word (hidden)
+    let info_word = hash_struct(&order_info_th, &info_ed);
+
+    // one output (DutchOutput: token, startAmount, endAmount, recipient).
+    let mut out0 = std::vec![0u8; 128];
+    out0[0..32].copy_from_slice(&wa(dai));
+    out0[32..64].copy_from_slice(&wu(1));
+    out0[64..96].copy_from_slice(&wu(4_000_004)); // endAmount SHOWN
+    out0[96..128].copy_from_slice(&wa([0x6Au8; 20])); // recipient SHOWN
+    let outputs_word = hash_struct_array(&dutch_output_th, &[&out0[..]]);
+
+    // witness (DutchOrder, 7 words): info(0), decayStart(1), decayEnd(2),
+    // inputToken(3), inputStartAmount(4), inputEnd(5), outputs(6).
+    let mut witness_ed = std::vec![0u8; 224];
+    witness_ed[0..32].copy_from_slice(&info_word);
+    witness_ed[32..64].copy_from_slice(&wu(1_699_000_000));
+    witness_ed[64..96].copy_from_slice(&wu(1_699_500_000));
+    witness_ed[96..128].copy_from_slice(&wa(weth)); // inputToken (via tokenPath)
+    witness_ed[128..160].copy_from_slice(&wu(8_000_008)); // inputStartAmount SHOWN
+    witness_ed[160..192].copy_from_slice(&wu(7_000_000));
+    witness_ed[192..224].copy_from_slice(&outputs_word);
+    let witness_word = hash_struct(&dutch_order_th, &witness_ed);
+
+    // top (PermitWitnessTransferFrom, 5 words).
+    let mut top_ed = std::vec![0u8; 160];
+    top_ed[0..32].copy_from_slice(&permitted_word);
+    top_ed[32..64].copy_from_slice(&wa([0x1Au8; 20])); // spender SHOWN
+    top_ed[64..96].copy_from_slice(&wu(11)); // nonce hidden
+    top_ed[96..128].copy_from_slice(&wu(1_735_689_600)); // deadline 2025 SHOWN
+    top_ed[128..160].copy_from_slice(&witness_word);
+
+    // DFS blob: permitted | witness | info | {elem_count=1, out0}.
+    let mut blob = std::vec::Vec::new();
+    let push_rec = |b: &mut std::vec::Vec<u8>, ed: &[u8]| {
+        b.extend_from_slice(&(ed.len() as u16).to_be_bytes());
+        b.extend_from_slice(ed);
+    };
+    push_rec(&mut blob, &permitted_ed);
+    push_rec(&mut blob, &witness_ed);
+    push_rec(&mut blob, &info_ed);
+    blob.extend_from_slice(&1u16.to_be_bytes()); // elem_count = 1
+    push_rec(&mut blob, &out0);
+
+    let render = |ed: &[u8], b: &[u8]| {
+        let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("DutchOrder IR parses");
+        let verified = VerifiedDescriptor { ir };
+        let resolver = NameResolver::new();
+        super::erc7730::render_erc7730_eip712_pages_v3(
+            1, &[0u8; 20], &pth, ed, b, &verified, None, &resolver,
+        )
+    };
+
+    let pages = render(&top_ed, &blob).expect("valid DutchOrder clear-signs (depth-2)");
+    assert_all_pages_printable(&pages);
+    let dump = dump_pages(&pages).to_lowercase();
+    assert!(dump.contains("2a2a2a2a2a2a"), "info.reactor (depth 2):\n{dump}");
+    assert!(dump.contains("3a3a3a3a3a3a"), "info.swapper (depth 2):\n{dump}");
+    assert!(dump.contains("4a4a4a4a4a4a"), "info.validationContract (depth 2):\n{dump}");
+    assert!(dump.contains("6a6a6a6a6a6a"), "output recipient (depth 2):\n{dump}");
+    assert!(dump.contains("4000004"), "out0 endAmount:\n{dump}");
+    assert!(dump.contains("8000008"), "inputStartAmount:\n{dump}");
+    assert!(dump.contains("item 1 of 1"), "single-output divider:\n{dump}");
+
+    // Flip a depth-2 info word → info binding breaks → decline. Blob layout:
+    // permitted[2..66] | witness[68..292] | info[294..486] | ...
+    let mut b = blob.clone();
+    b[300] ^= 0x01; // inside info_ed (reactor word)
+    assert!(render(&top_ed, &b).is_err(), "flip depth-2 info word declines");
+    // Flip the top witness commitment → decline.
+    let mut ed = top_ed.clone();
+    ed[140] ^= 0x01; // inside witness_word (top word 4)
+    assert!(render(&ed, &blob).is_err(), "flip top witness commitment declines");
+}
+
+/// v3 corpus-wide safety: the recursive descent is a GENERAL capability, so it
+/// also recompiled other pre-existing nested EIP-712 descriptors (e.g. Rarible
+/// ExchangeV2 `makeAsset`/`takeAsset`) from flat records into v0x03 anchors. This
+/// asserts the whole corpus's nested-EIP-712 leaves are PANIC-SAFE and fail-closed:
+/// every format carrying a nested anchor, fed a benign-but-wrong `nested_blob`
+/// (empty / zeros / all-0xFF adversarial lengths), must return a `Result`
+/// (Ok or a decline) WITHOUT panicking / OOB — the recursion + `read_next_nested_ed`
+/// bounds-checks hold for every shipped descriptor, not just the UniswapX targets.
+#[test]
+fn v3_all_nested_eip712_leaves_are_panic_safe_and_fail_closed() {
+    let res = build_registry();
+    let resolver = NameResolver::new();
+    let mut nested_leaf_formats = 0usize;
+    for entry in res.entries.iter() {
+        let Ok(ir) = Erc7730Ir::parse(&entry.ir_bytes) else { continue };
+        if !matches!(ir.context_kind, ContextKind::Eip712) {
+            continue;
+        }
+        let chain = ir.chain_id;
+        let contract = ir.contract;
+        for format in ir.format_iter() {
+            let Ok(fmt) = format else { continue };
+            if fmt.nested_descent_count == 0 {
+                continue; // no nested anchor in this format
+            }
+            nested_leaf_formats += 1;
+            let pth = fmt.type_hash;
+            let ed = std::vec![0u8; fmt.static_head_words as usize * 32];
+            for blob in [
+                std::vec::Vec::new(),
+                std::vec![0u8; 64],
+                std::vec![0xFFu8; 300],
+            ] {
+                let verified = VerifiedDescriptor {
+                    ir: Erc7730Ir::parse(&entry.ir_bytes).unwrap(),
+                };
+                // A wrong blob must decline (Err), never render a mis-bound page and
+                // never panic. We assert only "does not panic + returns Result";
+                // the render function's own bounds-checks do the rest.
+                let _ = super::erc7730::render_erc7730_eip712_pages_v3(
+                    chain, &contract, &pth, &ed, &blob, &verified, None, &resolver,
+                );
+            }
+        }
+    }
+    // permit2 (Single/Batch/TransferFrom) + UniswapX Dutch/ExclusiveDutch + Rarible
+    // ExchangeV2/wrapper/erc-721/erc-1155 × many chains → dozens of nested formats.
+    assert!(
+        nested_leaf_formats >= 8,
+        "expected many nested EIP-712 leaf-formats across the corpus, got {nested_leaf_formats}"
+    );
+}

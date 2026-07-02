@@ -404,3 +404,225 @@ ANY word — or the committed array word, or `elem_count` — → decline; a per
 proves element `i`'s content can't masquerade as element `j`) → impl 5-lens adversarial review. UniswapX
 `DutchOutput[]` stays belt-declined until v3 (deep + groups + bytes).
 
+## 12. v3 — deep nesting + nested-array-in-struct (UniswapX Dutch orders), 2026-07-02
+
+**Status: IMPLEMENTED (2026-07-02).** Schema review + implementation review both CLEAR. Ships UniswapX
+`PermitWitnessTransferFrom` **DutchOrder** and **ExclusiveDutchOrder** (Permit2 witness transfers) — the
+depth-1 `witness` renders its depth-2 nested struct `info` (OrderInfo — reactor/swapper/validationContract
+curated SHOW) and its depth-2 nested array-of-struct `outputs` (DutchOutput[]), all bound by the chained
+`keccak(pinned type_hash ‖ ed) == committed` at every level, rooted at the signed digest. dbgen: recursive
+`compile_nested_block` (word_pos from member order, pinned type_hash, recursive `nested_descent_count`, ABI-type
+gate on shown sub-fields, E2 self-check at every level). Device: `render_nested_subfields` recurses into
+`render_nested_struct` (shared DFS `NestedCtx` cursor, `MAX_NESTED_DEPTH = 8` guard); `validate_nested_structure`
+special-cases nested-anchor sub-fields (word_pos bound-checked vs the CONTAINING count, fail-closed). Tests:
+byte-exact recursive-anchor emission (`nested_descent_count = 4`, four foundry-pinned typeHashes, `outputs`
+`is_array`); depth-2 render (both descriptors); the decisive **876-flip non-vacuity** (every blob byte + both
+top commitments → decline); reconciliation firing at depth 2 (patched pinned count → decline); reordered-record
+decline (cross-struct confusion); a corpus-wide panic-safety smoke test over every nested EIP-712 leaf; v1/v2
+byte-exact emission preserved. thumbv8m no_std build clean.
+
+**Schema review (2026-07-02):** two passes (the 3 stalled lenses re-run tightly-scoped), 12 raw findings, **0
+survived refutation** — recursive binding SOUND, depth-2 E1/E2/E4 hold, DFS framing unambiguous. Two refuted
+findings folded in as hardening (mechanize the §12.1 belt-decline via an ABI-type check on SHOWN sub-fields; the
+`validate` nested-anchor special-case bound-checks `word_pos` vs the CONTAINING count, fail-closed before any
+`static_word_index`).
+
+**Implementation review (2026-07-02):** 5 lenses, 2 raw findings, **0 survived**. (1) *Generalization* — the
+`strip_nested_child → strip_abs_prefix` change is a GENERAL depth-N capability, so it also recompiled the
+pre-existing shipping **Rarible ExchangeV2 / exchange-wrapper** EIP-712 descriptors from flat records into v3
+nested anchors (`makeAsset`/`takeAsset` now expand). Refuted as a defect (fail-closed: the device binds+renders
+or declines, never mis-renders — the same binding spine); closed honestly with the corpus-wide panic-safety
+smoke test proving EVERY nested EIP-712 leaf (permit2 / UniswapX / Rarible / …) is bounds-safe + fail-closed on
+adversarial blobs. (2) *Latent* — dbgen's E2 self-check credits a hidden member's coverage unconditionally
+(the device credits only SHOWN); harmless + unreachable under the curation (the primary build gate refuses any
+hidden address at any depth BEFORE compilation), left as-is to keep v1/v2 emission byte-identical, noted here.
+
+v1 = single-level struct; v2 = top-level array-of-struct.
+v3 unlocks the marquee intent target — **UniswapX** `PermitWitnessTransferFrom` (Dutch / Exclusive-Dutch
+orders) — which needs the two capabilities v1/v2 lack: a nested struct **whose members are themselves
+nested** (depth ≥ 2), and an **array-of-struct that sits INSIDE a nested struct** (`witness.outputs`).
+
+### 12.1 The target shape (what v3 actually has to do)
+
+The signed top-level struct is
+`PermitWitnessTransferFrom(TokenPermissions permitted, address spender, uint256 nonce, uint256 deadline,
+ExclusiveDutchOrder witness)` (DutchOrder is the same without `exclusiveFiller`/`exclusivityOverrideBps`).
+The interesting member is `witness` (ExclusiveDutchOrder), a **depth-1 nested struct** that itself
+contains:
+
+```
+ExclusiveDutchOrder                              (witness, depth 1 — nested struct)
+├── info : OrderInfo                             (depth 2 — nested struct)
+│   ├── reactor : address                        ← SHOW (curated)
+│   ├── swapper : address                        ← SHOW (curated)
+│   ├── nonce, deadline : uint256                ← hidden (non-address, bound word)
+│   ├── additionalValidationContract : address   ← SHOW (curated)
+│   └── additionalValidationData : bytes         ← hidden (non-address, opaque bound word)
+├── decayStartTime/decayEndTime/…  : uint256     ← hidden (non-address)
+├── exclusiveFiller : address                    ← SHOW (curated; Exclusive only)
+├── inputToken : address                         ← covered by inputStartAmount's tokenPath
+├── inputStartAmount : uint256                   ← SHOW (tokenAmount, "Spend max")
+├── inputEndAmount : uint256                     ← hidden
+└── outputs : DutchOutput[]                       (depth 2 — array-of-struct)
+    └── DutchOutput{ token, startAmount(hidden), endAmount(SHOW tokenAmount), recipient(SHOW) }
+```
+
+**Scope-narrowing that falls out of reading the descriptor (do NOT over-build):**
+- **`fields` groups are already handled.** `flatten_field_groups` normalises the descriptor's
+  `{ "path": "witness.outputs.[]", "fields": [...] }` group into flat leaf paths
+  (`witness.outputs.[].endAmount`, …) *before* `try_compile_eip712_nested` runs. No group parsing in the
+  nested compiler.
+- **Dynamic `bytes` is MOOT.** `OrderInfo.additionalValidationData` is the only dynamic member; in EIP-712
+  a `bytes` member's `encodeData` word is `keccak256(value)` — a fixed 32-byte word. We HIDE it (non-address),
+  so it is simply one word `member_count` counts + the hash covers, never rendered. **No dynamic-bytes
+  rendering is built.** (A *shown* dynamic nested member stays out of scope → belt-decline.)
+- **What v3 genuinely adds:** (a) **depth-2 recursion** — render `info` as a nested struct *inside* `witness`;
+  (b) **nested-array-in-struct** — render `outputs` (a `T[]`) *inside* `witness`. Both re-use the existing
+  binding machinery; the change is making the descent RECURSIVE.
+
+### 12.2 The security decision: SHOW the OrderInfo addresses (no allowlist) — MANDATORY
+
+The upstream Ledger descriptor marks `witness.info` (and, for Exclusive, `witness.exclusiveFiller`)
+`visible:"never"`. Our build gate (`check_eip712_member_addresses`) recursively descends and — correctly —
+**refuses** it today (`review.txt`: *"address argument `witness.info.reactor` is `visible:"never"`… a hidden
+fund-routing address behind a trusted clear-sign is a WYSIWYS break"*). All four UniswapX order descriptors
+currently produce **zero leaves** for exactly this reason. This is the belt's whole raison d'être firing.
+
+**Decision (settled — not an open choice): CURATE the descriptor to SHOW the addresses.** Add visible
+`raw` fields for `witness.info.reactor`, `witness.info.swapper`, `witness.info.additionalValidationContract`
+(and `witness.exclusiveFiller` for Exclusive). Do **NOT** reach for a `hidden_address_allow` policy entry:
+- The `additionalValidationContract` is an *arbitrary settlement hook* — precisely the address a careful
+  user must SEE, not the one we rationalise hiding. "Routes no funds" is not a clean rationale for a hook
+  that runs during settlement.
+- `swapper` is an `address` word, so E2 (the on-device standalone backstop) requires it covered regardless
+  of the gate — showing it is the only clean way to satisfy both controls without an allowlist.
+- This matches the user's standing direction (genuine, in-depth, SECURE coverage; build hard levers
+  properly; don't hedge) and our stricter-than-registry stance (we don't trust "the descriptor said hide").
+- We do **not** pin `reactor` to canonical UniswapX deployments. Showing the raw address is honest and
+  sufficient; address-pinning is a maintenance burden reserved for DELEGATECALL-class risk (why MultiSend
+  got it and this does not). `spender` (the Permit2-authorised token puller) is already shown raw, which is
+  the real fund-drain mitigation; the reactor/swapper/hook are order-identity + settlement plumbing that we
+  now additionally surface.
+
+The non-address members (`nonce`, `deadline`, `additionalValidationData`, the decay/override/inputEnd
+scalars) stay hidden — E2 only mandates *address* words; they remain bound (counted in `member_count`,
+covered by the hashStruct) but not rendered. The curation is a Tier-A vendored edit
+(guarded by a dbgen `…_curation_compiles` test), exactly like the v1 Permit2 `nonce` curation.
+
+### 12.3 The recursive binding chains to the signed digest (the spine, unchanged)
+
+Nothing about the binding changes — it just *chains*. `witness`'s hashStruct word sits at word 4 of the
+top-level signed `ed`; `info`'s hashStruct word sits at word 0 of `witness`'s `ed`; `outputs`'s `T[]` word
+sits at word 8 of `witness`'s `ed`. The device verifies, top-down, constant-time, BEFORE rendering:
+
+```
+top_ed[4*32..] == keccak(typeHash(ExclusiveDutchOrder) ‖ witness_ed)      ← witness binding (parent = top_ed)
+   witness_ed[0*32..] == keccak(typeHash(OrderInfo) ‖ info_ed)            ← info   binding (parent = witness_ed)
+   witness_ed[8*32..] == keccak( ‖_i keccak(typeHash(DutchOutput)‖out_i)) ← outputs binding (parent = witness_ed)
+```
+
+Each level's `parent_body` is the enclosing struct's `nested_ed`. By collision-resistance the whole tree of
+shown content is bound to the top-level signed digest — a companion cannot show any `info`/`outputs` content
+other than what the signature commits to. `render_nested_struct(child_payload, parent_body = enclosing_ed)`
+already does exactly this; v3 just calls it recursively with the parent's `nested_ed` as `parent_body`.
+
+### 12.4 DFS wire order (unchanged framing; more records)
+
+`nested_blob` stays the DFS concatenation of `[u16 len][ed]` records (arrays keep the `[u16 elem_count]`
+prefix). Depth-2 simply produces more records, consumed in **device descent order** — the order dbgen emits
+sub-fields (descriptor-field order, nested sub-anchor at its first child). For ExclusiveDutchOrder with N
+outputs the DFS record stream is:
+
+```
+permitted_ed | witness_ed | info_ed | [outputs: elem_count, out0_ed, … outN_ed]
+```
+
+No wire-kind change: `OFFCHAIN_KIND_EIP712_TYPED_V3` already carries an opaque length-delimited `nested_blob`;
+`cmd_sign_offchain` treats it as opaque and the renderer's recursive cursor consumes it. The companion guide
+gains a depth-2 DFS subsection. Any order/count/length drift → binding mismatch or E1 reconciliation →
+decline (fail-closed).
+
+### 12.5 The depth-2 bugs to target explicitly (v1/v2 tests do NOT reach these)
+
+1. **`nested_descent_count` MUST be counted RECURSIVELY.** `witness → {info, outputs}` = **3** anchors under
+   one top field (+ `permitted` = 4 total). The current `try_compile_eip712_nested` does `descent_count += 1`
+   per *top* anchor only. If sub-anchors aren't counted, the E1 reconciliation (`records_consumed ==
+   nested_descent_count`) false-passes or false-declines. dbgen must accumulate the recursive count; a
+   flip→decline test **patches the pinned count at depth 2** and asserts decline (the only exerciser of the
+   reconciliation reject path — as found in v1, binding-flips reject *before* reconciliation runs).
+2. **Cross-struct DFS slot-confusion, one level deeper.** A test that feeds `info_ed` where `outputs` (or a
+   different-shape record) is expected must decline — the length check + binding catch it, but assert it at
+   depth 2.
+3. **Device recursion depth guard.** `render_nested_subfields → render_nested_struct` gets an explicit
+   `depth` param bounded by `MAX_STRUCT_DEPTH` (matches dbgen's gate depth), so the descent is Kani-bounded
+   and stack-safe even against a (hypothetical) crafted-deep pinned IR.
+
+### 12.6 dbgen — recursive anchor compilation
+
+`compile_nested_anchor` becomes recursive. For a struct member's children it groups by the **next** path
+segment (relative to that struct): an elementary segment → a v1-style SubField (local ordinal); a segment
+that is itself a struct member → a nested sub-anchor (recurse, `is_array=false`); a segment `seg.[]…` whose
+member type is `T[]` of a struct → a nested array sub-anchor (recurse, `is_array=1`). Each anchor pins its
+own `type_hash`/`member_count`/`addr_word_bmp` and returns its recursive descent count. The E2 self-check
+(every address-typed local word covered) runs at **every** level — an uncovered address at any depth →
+`Ok(None)` (belt-decline the whole format), never a dead descriptor. Bounded by `MAX_STRUCT_DEPTH`.
+
+Array elements stay ELEMENTARY (`array_element_is_v2_supported`) — a `T[]` whose element reaches a nested
+struct or deeper array stays refused (keeps per-element DFS accounting flat). `witness.outputs` (DutchOutput,
+all elementary) qualifies; the *recursion* is only ever on the SINGLE-struct path (`witness` → `info`,
+`witness` → `outputs`), which keeps the descent-count + cursor accounting linear.
+
+**Mechanize the §12.1 belt-decline (schema-review hardening, dbgen).** An elementary sub-field's compiler
+(`compile_nested_subfield_params`) today dispatches on the descriptor `format` NAME only. It MUST additionally
+assert the member's ABI TYPE (from `struct_defs`) is a STATIC SINGLE-WORD scalar — `address` / `uintN` /
+`intN` / `bytesN` (`N ≤ 32`) / `bool`. A *visible* `bytes`/`string` (dynamic — its `encodeData` word is
+`keccak256(value)`, not the value) or a bare struct/array member must return `Ok(None)` → belt-decline the
+whole format, NOT render the hash word as if it were the scalar (a shown≠signed mis-render). This makes §12.1's
+"a shown dynamic nested member → belt-decline" a real check rather than an asserted one. For our targets the
+only dynamic member (`additionalValidationData`) is hidden, so this never fires — but it closes the gap for a
+future descriptor and is tested with a synthetic visible-`bytes` sub-field.
+
+### 12.7 device — recursive descent + `validate_nested_structure` awareness
+
+`render_nested_subfields` gains `nested: &mut NestedCtx` + `depth: u8`. A sub-field carrying
+`PARAM_NESTED_STRUCT` no longer declines (`"nested depth v3"`) — it recurses into `render_nested_struct`
+with the current `nested_ed` as `parent_body` and `depth+1` (declining at `depth >= MAX_STRUCT_DEPTH`). The
+DFS cursor + `records_consumed` are shared, so the recursion consumes the next blob record and counts one
+more descent — the E1 reconciliation (`records_consumed == pinned count` ∧ `cursor == blob.len()`) still
+holds tree-wide.
+
+`validate_nested_structure` must tolerate a nested-anchor sub-field: its render `path_off` is a placeholder
+(0), not a static word program, so the E2 loop parses the sub-field's `PARAM_NESTED_STRUCT` `word_pos`
+instead, bound-checks `word_pos < member_count` — where `member_count` is the **CONTAINING** struct's (`np`
+being validated), NOT the child anchor's carried count (schema-review hardening: using the child's count would
+false-decline every Dutch order) — and does NOT credit it as address coverage (a struct/array word is never an
+address bit in the parent bmp; its interior addresses are covered by ITS OWN `validate_nested_structure`
+during the recursion). The special-case is fail-closed and MUST be reached BEFORE any `static_word_index`
+call on the placeholder `path_off` (running `static_word_index(path_bytes(ir, 0))` on a nested-anchor sub-field
+must never mis-credit coverage — detect `nested_struct.is_some()` FIRST). Elementary sub-fields are unchanged.
+Both dbgen's E2 self-check and the on-device E2 credit coverage only for a SHOWN sub-field; the primary build
+gate (`check_eip712_member_addresses`) already refused any hidden address at any depth BEFORE compilation, so
+no hidden address reaches this path.
+
+### 12.8 Caps + fail-closed (page budget is the practical output cap)
+
+`MAX_STRUCT_DEPTH = 8` (dbgen) bounds nesting; `MAX_NESTED_ARRAY = 6` bounds `outputs`. In practice the
+`MAX_PAGES = 28` budget is the binding constraint: a curated ExclusiveDutchOrder with 1 output renders ~20
+pages; each extra output adds ~3, so ~3 outputs is the realistic ceiling before `push_blank → Err →
+decline`. That is **safe** (declines, never truncates a tail — the array-hiding WYSIWYS break) and rare
+(most UniswapX orders have 1–2 outputs). Every v3 decline trigger — depth overflow, uncovered address at any
+level, page budget, any binding/length/count mismatch, reconciliation shortfall — is a single hard `Err`
+that discards all pushed pages (E4-1 atomicity, unchanged).
+
+### 12.9 Build order (mirrors v1/v2, staged + gated)
+
+§12 design → **schema adversarial review** (this doc, before code) → dbgen recursive anchor compilation +
+recursive descent count → curate DutchOrder + ExclusiveDutchOrder descriptors (show OrderInfo addresses) →
+device recursion (thread `NestedCtx` + depth; depth guard; `validate_nested_structure` nested-anchor
+awareness) → regen DB (`erc7730_db.bin` + `review.txt`) → foundry vectors (typeHash EDO/DutchOrder/OrderInfo/
+DutchOutput + the depth-2 chained binding) + Kani (bounded recursive descent, panic/OOB-free) → **depth-2
+flip→decline real-vector tests** (every word at depth 1 AND 2 → decline; patch pinned `nested_descent_count`
+at depth 2 → decline; swap an interior DFS record → decline; the curated addresses + outputs render) → impl
+5-lens adversarial review → commit (my files by path) + push. LimitOrder / V2DutchOrder are the same
+machinery + more curation — follow-on, not this increment.
+

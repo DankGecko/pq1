@@ -737,19 +737,39 @@ fn keccak_hex(s: &str) -> String {
 ///    `vendored_permit2_transfer_from_curation_compiles`).
 ///  * `PermitBatch` (`PermitDetails[]`, array-of-struct) → DROPPED by the
 ///    pre-existing visibility gate (v1 scope boundary), so its format is ABSENT.
+/// The shipped-registry IR of the entry at `contract` whose format set carries
+/// `type_hash`. Multiple descriptors can share a contract address: the Permit2
+/// contract (`0x…22D473`) hosts BOTH the permit2.json forms (PermitSingle /
+/// PermitBatch / PermitTransferFrom) AND the UniswapX `PermitWitnessTransferFrom`
+/// Dutch orders (which are Permit2 witness transfers, signed against Permit2). So
+/// pick the entry that actually carries the wanted format, not merely the first
+/// at that address (which is now an ambiguous, order-dependent match).
+fn leaf_ir_carrying(registry: &Erc7730BuildResult, contract: &[u8], type_hash: &[u8]) -> Option<Vec<u8>> {
+    registry
+        .entries
+        .iter()
+        .filter(|e| e.contract[..] == contract[..])
+        .find(|e| {
+            Erc7730Ir::parse(&e.ir_bytes).is_ok_and(|ir| {
+                ir.format_iter()
+                    .any(|f| f.map(|h| h.type_hash[..] == type_hash[..]).unwrap_or(false))
+            })
+        })
+        .map(|e| e.ir_bytes.clone())
+}
+
 #[test]
 fn permit2_nested_anchor_emission_is_byte_exact() {
     let registry = build_registry();
     let permit2 = hex_bytes("000000000022d473030f116ddee9f6b43ac78ba3");
-    let leaf = registry
-        .entries
-        .iter()
-        .find(|e| e.contract[..] == permit2[..])
-        .expect("Permit2 leaf present in the shipped registry DB");
-    let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("permit2 IR parses");
+    // The permit2.json descriptor's leaf — the one carrying PermitSingle
+    // (`f3841cd1…`); all three permit2 forms live in this single leaf.
+    let single = hex_bytes("f3841cd1ff0085026a6327b620b67997ce40f282c88a8e905a7a5626e310f3d0");
+    let ir_bytes = leaf_ir_carrying(&registry, &permit2, &single)
+        .expect("permit2.json leaf carrying PermitSingle present in the shipped DB");
+    let ir = Erc7730Ir::parse(&ir_bytes).expect("permit2 IR parses");
 
     // ── PermitSingle ──
-    let single = hex_bytes("f3841cd1ff0085026a6327b620b67997ce40f282c88a8e905a7a5626e310f3d0");
     let payload = nested_anchor_payload(&ir, &single).expect("PermitSingle anchor present");
     assert_eq!(payload[0], 0x03, "structured v0x03 block (not the bare 0x01 belt)");
     assert_eq!(
@@ -867,19 +887,99 @@ fn permit2_nested_anchor_emission_is_byte_exact() {
 fn vendored_permit2_transfer_from_curation_compiles() {
     let registry = build_registry();
     let permit2 = hex_bytes("000000000022d473030f116ddee9f6b43ac78ba3");
-    let leaf = registry
-        .entries
-        .iter()
-        .find(|e| e.contract[..] == permit2[..])
-        .expect("Permit2 leaf present");
-    let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("permit2 IR parses");
     let ptf = hex_bytes("939c21a48a8dbe3a9a2404a1d46691e4d39f6583d6ec6b35714604c986d80106");
+    // No permit2-contract entry carrying PermitTransferFrom == the curation was
+    // lost. (The Permit2 contract also hosts the UniswapX Dutch orders, so a plain
+    // first-match on the contract address would be ambiguous.)
     assert!(
-        ir.format_iter()
-            .map(|f| f.expect("format parses"))
-            .any(|f| f.type_hash[..] == ptf[..]),
+        leaf_ir_carrying(&registry, &permit2, &ptf).is_some(),
         "PermitTransferFrom dropped — the `nonce` visible:never curation was lost \
          (re-vendored from upstream?). Re-apply it to \
          secure/data/erc7730-registry/registry/uniswap/eip712-uniswap-permit2.json"
     );
+}
+
+/// Recursively collect every `PARAM_NESTED_STRUCT` (0x41) anchor reachable from a
+/// v0x03 payload as `(type_hash, is_array)` — this anchor plus every nested
+/// sub-anchor (depth 2+). Payload layout: `0x03 | word_pos:2 | type_hash:32 |
+/// member_count:2 | flags:1 | addr_bmp:ceil(mc/8) | sub_field_cnt:1 | sub_fields`.
+fn collect_nested_anchors(ir: &Erc7730Ir<'_>, payload: &[u8], out: &mut Vec<([u8; 32], bool)>) {
+    assert_eq!(payload[0], 0x03, "structured v0x03 anchor");
+    let mut th = [0u8; 32];
+    th.copy_from_slice(&payload[3..35]);
+    let member_count = u16::from_be_bytes([payload[35], payload[36]]) as usize;
+    let is_array = payload[37] & 0x01 != 0;
+    out.push((th, is_array));
+    let bmp_len = member_count.div_ceil(8);
+    let sfc_off = 38 + bmp_len;
+    let sub_field_cnt = payload[sfc_off] as usize;
+    let mut p = sfc_off + 1;
+    for _ in 0..sub_field_cnt {
+        let (sf, next) = read_subfield(payload, p);
+        p = next;
+        // A sub-field that is itself a nested anchor points (via param_off) at a
+        // PARAM_NESTED_STRUCT TLV in the pool — recurse into it.
+        if let Some(child) = find_tlv(pool_entry(ir, sf.param_off), 0x41) {
+            collect_nested_anchors(ir, child, out);
+        }
+    }
+}
+
+/// DEPTH-2 dbgen emission (v3): the UniswapX `ExclusiveDutchOrder`
+/// `PermitWitnessTransferFrom` compiles to a RECURSIVE anchor tree — top-level
+/// `permitted` (TokenPermissions) + `witness` (ExclusiveDutchOrder), and inside
+/// `witness` the depth-2 `info` (OrderInfo, nested struct) + `outputs` (DutchOutput[],
+/// nested ARRAY). All four typeHashes are the foundry-pinned canonical encodeType
+/// hashes, `outputs` carries the `is_array` flag, and `nested_descent_count == 4`
+/// (counted RECURSIVELY — the depth-2 sub-anchors, not just the two top anchors).
+#[test]
+fn uniswapx_exclusive_dutch_recursive_anchor_emission() {
+    let registry = build_registry();
+    let permit2 = hex_bytes("000000000022d473030f116ddee9f6b43ac78ba3");
+    // The ExclusiveDutchOrder order is a Permit2 witness transfer, so it lives at
+    // the Permit2 contract; disambiguate by its primary type hash.
+    let edo_primary =
+        hex_bytes("2846b6ca8e0ecdbc9ca7696f16bdf77b3baf48504ac14d6a541484ec197e91eb");
+    let ir_bytes = leaf_ir_carrying(&registry, &permit2, &edo_primary)
+        .expect("ExclusiveDutchOrder leaf present in the shipped DB");
+    let ir = Erc7730Ir::parse(&ir_bytes).expect("EDO IR parses");
+    let fmt = ir
+        .format_iter()
+        .map(|f| f.expect("format parses"))
+        .find(|f| f.type_hash[..] == edo_primary[..])
+        .expect("EDO PermitWitnessTransferFrom format");
+
+    // E1 pin: FOUR descent points (permitted + witness + info + outputs).
+    assert_eq!(
+        fmt.nested_descent_count, 4,
+        "nested_descent_count must count sub-anchors RECURSIVELY (permitted+witness+info+outputs)"
+    );
+
+    // Walk every anchor in the format (top-level fields → recurse).
+    let mut anchors: Vec<([u8; 32], bool)> = Vec::new();
+    for fe in fmt.fields().map(|f| f.expect("field parses")) {
+        if let Some(payload) = find_tlv(pool_entry(&ir, fe.param_off), 0x41) {
+            collect_nested_anchors(&ir, payload, &mut anchors);
+        }
+    }
+    assert_eq!(anchors.len(), 4, "exactly four anchors in the tree");
+
+    let has = |hexth: &str, want_array: bool| {
+        let th = hex_bytes(hexth);
+        anchors
+            .iter()
+            .any(|(a, arr)| a[..] == th[..] && *arr == want_array)
+    };
+    // permitted → TokenPermissions (single). typeHash(TokenPermissions).
+    assert!(has("618358ac3db8dc274f0cd8829da7e234bd48cd73c4a740aede1adec9846d06a1", false),
+        "permitted anchor: TokenPermissions (single)");
+    // witness → ExclusiveDutchOrder (single). foundry encodeType hash.
+    assert!(has("24d8514d0b2bd650779acf204b79c73859aaafd6fd011c00669d143a7b891419", false),
+        "witness anchor: ExclusiveDutchOrder (single, depth 1)");
+    // info → OrderInfo (single, depth 2).
+    assert!(has("7daca11202c64729871927c37d75933f1852e430627cd4b8f4844087e312e94b", false),
+        "info sub-anchor: OrderInfo (single, depth 2)");
+    // outputs → DutchOutput[] (ARRAY, depth 2).
+    assert!(has("45058f030836a1ec7cb9636dad15d25676157364aaf76d8dad81a6b2c267610f", true),
+        "outputs sub-anchor: DutchOutput (ARRAY, depth 2)");
 }

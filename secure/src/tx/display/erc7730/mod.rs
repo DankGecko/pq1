@@ -55,6 +55,14 @@ use super::Pages;
 /// the const-only switch).
 pub const COMPACT_MODE: bool = false;
 
+/// Maximum nested-EIP-712 struct descent depth the device renders (v3 deep
+/// types). A top-level nested-struct anchor is depth 1; a struct/array-of-struct
+/// member of it is depth 2, etc. Kept in lockstep with dbgen's `MAX_STRUCT_DEPTH`
+/// (8): the pinned IR is finite, but the device enforces its own bound so the
+/// recursion is Kani-tractable and stack-safe even against a crafted-deep IR — a
+/// deeper member declines the whole format (fail-closed).
+const MAX_NESTED_DEPTH: u8 = 8;
+
 /// Belt-and-braces stack canary for the ERC-7730 renderer (Phase 5
 /// item 11). The walker recurses for nested calldata (capped at depth
 /// 4 in the renderer, depth 8 in the walker proper); a hostile
@@ -445,7 +453,7 @@ fn render_fields(
                 // decline the WHOLE format to blind-sign.
                 return Err(RenderErr::Reject("7730 eip712 nested unsupported"));
             }
-            render_nested_struct(pages, ir, payload, body, nested, tx, erc20, resolver)?;
+            render_nested_struct(pages, ir, payload, body, nested, 1, tx, erc20, resolver)?;
             continue;
         }
         render_one_field(
@@ -545,12 +553,21 @@ fn render_nested_struct(
     payload: &[u8],
     parent_body: &[u8],
     nested: &mut NestedCtx<'_>,
+    depth: u8,
     tx: &Eip1559Tx,
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
 ) -> Result<(), RenderErr> {
     use pqsigner_erc7730::render::nested as pn;
     use subtle::ConstantTimeEq;
+
+    // Bound the recursion (v3 depth-2+): the pinned IR is finite, but a
+    // depth guard keeps the descent Kani-bounded and stack-safe even against a
+    // (hypothetical) crafted-deep pinned IR. `MAX_NESTED_DEPTH` matches dbgen's
+    // `MAX_STRUCT_DEPTH`; a deeper member declines the whole format.
+    if depth > MAX_NESTED_DEPTH {
+        return Err(RenderErr::Reject("7730 nested too deep"));
+    }
 
     // 1. Parse the pinned v0x03 payload (bounds-checked, pure).
     let np = pn::parse_nested_struct_param(payload)?;
@@ -627,7 +644,7 @@ fn render_nested_struct(
         for (i, elem_ed) in elems.iter().enumerate().take(elem_count) {
             let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
             write_array_item_row(pages.row_mut(p, 0), i, elem_count);
-            render_nested_subfields(pages, ir, &np, elem_ed, tx, erc20, resolver)?;
+            render_nested_subfields(pages, ir, &np, elem_ed, nested, depth, tx, erc20, resolver)?;
         }
         return Ok(());
     }
@@ -644,7 +661,7 @@ fn render_nested_struct(
         return Err(RenderErr::Reject("7730 nested binding"));
     }
     pn::validate_nested_structure(ir, &np, COMPACT_MODE)?;
-    render_nested_subfields(pages, ir, &np, nested_ed, tx, erc20, resolver)?;
+    render_nested_subfields(pages, ir, &np, nested_ed, nested, depth, tx, erc20, resolver)?;
     Ok(())
 }
 
@@ -653,11 +670,14 @@ fn render_nested_struct(
 /// path and each v2 array element. A sub-field that is itself nested (depth > 1)
 /// is a v3 shape dbgen does not emit — decline rather than recurse into
 /// un-verified territory.
+#[allow(clippy::too_many_arguments)]
 fn render_nested_subfields(
     pages: &mut Pages,
     ir: &crate::tx::erc7730::Erc7730Ir<'_>,
     np: &pqsigner_erc7730::render::nested::NestedStructParam<'_>,
     nested_ed: &[u8],
+    nested: &mut NestedCtx<'_>,
+    depth: u8,
     tx: &Eip1559Tx,
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
@@ -665,11 +685,34 @@ fn render_nested_subfields(
     for sf in np.sub_fields() {
         let sf = sf.map_err(|_| RenderErr::Reject("7730 nested subfield"))?;
         let sf_params = parse_params(ir, sf.param_off)?;
-        if sf_params.nested_struct.is_some() {
-            return Err(RenderErr::Reject("7730 nested depth v3"));
+        // v3 depth-2+: a sub-field that is ITSELF a nested struct/array-of-struct
+        // (`witness.info`, `witness.outputs`). Recurse: the CURRENT struct's
+        // `nested_ed` is the child's `parent_body` — the child's committed
+        // `hashStruct`/array word sits at its `word_pos` inside `nested_ed`, which
+        // this struct's binding already verified against its own parent. The shared
+        // DFS `nested` cursor consumes the next record + counts one more descent
+        // (E1 reconciliation); `depth + 1` is bounded by the guard in
+        // `render_nested_struct`. The bare `0x01` belt marker (an unsupported nested
+        // shape dbgen refused to expand) still declines the WHOLE format.
+        if let Some(sf_payload) = sf_params.nested_struct {
+            if sf_payload.first() == Some(&0x01) {
+                return Err(RenderErr::Reject("7730 nested subfield unsupported"));
+            }
+            render_nested_struct(
+                pages,
+                ir,
+                sf_payload,
+                nested_ed,
+                nested,
+                depth + 1,
+                tx,
+                erc20,
+                resolver,
+            )?;
+            continue;
         }
-        // `nested_ed` is exact-length (no dynamic tail): body == full_body, and
-        // the static head width is the member count.
+        // Elementary sub-field. `nested_ed` is exact-length (no dynamic tail):
+        // body == full_body, and the static head width is the member count.
         render_one_field(
             pages,
             ir,
