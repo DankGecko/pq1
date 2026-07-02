@@ -52,7 +52,6 @@
 
 use sphincs_tz_shared::{
     EIP6492_BLOB_LEN, EIP6492_FACTORY_CALLDATA_LEN, MAX_ACCOUNT_INDEX,
-    MAX_OFFCHAIN_EIP712_ENCODED_DATA_LEN, MAX_OFFCHAIN_EIP712_NESTED_LEN,
     MAX_OFFCHAIN_EIP712_TYPED_LEN, MAX_OFFCHAIN_EIP712_TYPED_V3_LEN, MAX_OFFCHAIN_GAP,
     MAX_OFFCHAIN_PERSONAL_SIGN_LEN, MAX_SLOT_USES, NscStatus, OFFCHAIN_FLAGS_MASK,
     OFFCHAIN_FLAG_ACCOUNT_DEPLOYED, OFFCHAIN_KIND_EIP712_TYPED, OFFCHAIN_KIND_EIP712_TYPED_V3,
@@ -406,72 +405,30 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
 
     if kind == OFFCHAIN_KIND_EIP712_TYPED || kind == OFFCHAIN_KIND_EIP712_TYPED_V3 {
         let is_v3 = kind == OFFCHAIN_KIND_EIP712_TYPED_V3;
-        let mut p = 0usize;
-        let domain_sep_present =
-            u16::from_be_bytes([payload[p], payload[p + 1]]) != 0;
-        p += 2;
-        if !domain_sep_present {
-            crate::ui::show_status("EIP-1271", "7730 missing ds");
-            return NscStatus::InvalidPointer as u32;
-        }
-        let mut domain_separator = [0u8; 32];
-        domain_separator.copy_from_slice(&payload[p..p + 32]);
-        p += 32;
-        let mut primary_type_hash = [0u8; 32];
-        primary_type_hash.copy_from_slice(&payload[p..p + 32]);
-        p += 32;
-        let encoded_data_len =
-            u16::from_be_bytes([payload[p], payload[p + 1]]) as usize;
-        p += 2;
-        if encoded_data_len > MAX_OFFCHAIN_EIP712_ENCODED_DATA_LEN
-            || p + encoded_data_len > payload.len()
+        // Framing decode extracted to the host-Kani'd pure parser
+        // (`pqsigner_aa::offchain_header::parse_eip712_typed_frame`): panic/OOB-
+        // free + EXACT-consumption (the `trailer` ends at `payload.len()`, no
+        // hidden trailing bytes) proven over symbolic payloads
+        // (`cargo kani -p pqsigner-aa`, guarded by `kani_mutations.json:
+        // offchain_eip712_exact_consumption`). Behaviour-identical to the prior
+        // inline walk — the same refusal banner on each error (mapped via
+        // `Eip712FrameError::status_str`) and the same domain_separator /
+        // primary_type_hash / encoded_data / nested_blob (V3) / trailer sections.
+        // The upstream kind-dispatch `payload_len` min/max gate stays in place.
+        let frame = match pqsigner_aa::offchain_header::parse_eip712_typed_frame(payload, is_v3)
         {
-            crate::ui::show_status("EIP-1271", "bad ed_len");
-            return NscStatus::InvalidPointer as u32;
-        }
-        let encoded_data = &payload[p..p + encoded_data_len];
-        p += encoded_data_len;
-        // V3 ONLY: a nested-encodeData section between `ed` and the trailer —
-        // `[u16 nested_blob_len][nested_blob]`. A DFS concatenation of
-        // `[u16 len][nested_ed]` records that backs the nested-struct display
-        // binding; `nested_blob_len == 0` when the format has no nested struct.
-        // The SIGNED digest is UNCHANGED — this feeds DISPLAY only. Parsing it
-        // here (before the trailer) keeps the final `p + trailer_len ==
-        // payload.len()` check below the wire-level EXACT-consumption guard
-        // (E4-3 top half): every byte between `ed` and the trailer is accounted.
-        let nested_blob: &[u8] = if is_v3 {
-            if p + 2 > payload.len() {
-                crate::ui::show_status("EIP-1271", "no nested len");
+            Ok(f) => f,
+            Err(e) => {
+                crate::ui::show_status("EIP-1271", e.status_str());
                 return NscStatus::InvalidPointer as u32;
             }
-            let nb_len = u16::from_be_bytes([payload[p], payload[p + 1]]) as usize;
-            p += 2;
-            if nb_len > MAX_OFFCHAIN_EIP712_NESTED_LEN || p + nb_len > payload.len() {
-                crate::ui::show_status("EIP-1271", "bad nested len");
-                return NscStatus::InvalidPointer as u32;
-            }
-            let nb = &payload[p..p + nb_len];
-            p += nb_len;
-            nb
-        } else {
-            &[]
         };
-        // Trailer: `[u16 BE len][bundle]`.
-        if p + 2 > payload.len() {
-            crate::ui::show_status("EIP-1271", "no trailer");
-            return NscStatus::InvalidPointer as u32;
-        }
-        let trailer_len = u16::from_be_bytes([payload[p], payload[p + 1]]) as usize;
-        p += 2;
-        if trailer_len == 0 {
-            crate::ui::show_status("EIP-1271", "empty trailer");
-            return NscStatus::InvalidPointer as u32;
-        }
-        if p + trailer_len != payload.len() {
-            crate::ui::show_status("EIP-1271", "bad trailer_len");
-            return NscStatus::InvalidPointer as u32;
-        }
-        let trailer = &payload[p..p + trailer_len];
+        let domain_separator = frame.domain_separator;
+        let primary_type_hash = frame.primary_type_hash;
+        let encoded_data = frame.encoded_data;
+        let encoded_data_len = encoded_data.len();
+        let nested_blob = frame.nested_blob;
+        let trailer = frame.trailer;
         let v = match crate::tx::erc7730::verify_erc7730_bundle(
             trailer,
             &crate::db_roots::ERC7730_DESCRIPTORS_ROOT,

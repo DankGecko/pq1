@@ -198,6 +198,17 @@
       "replace": "let payload_start = offset;",
       "expect": "kani_fails",
       "note": "shift the dynamic `data` payload start by -32 (read the length word as the payload) -> the rendered data slice starts 32 bytes early. decode_exec_data_slice_fidelity (d.data[i] == head[data_off+32+i], verbatim, for <=8-byte payloads; data_off + declared length re-read INDEPENDENTLY from the head bytes) MUST break. Verified 2026-07-02 by hand: mutation -> VERIFICATION:- FAILED; unmutated -> SUCCESSFUL. Closes finding \u00a72 #5 (the empty-tail decode_exec_soundness + the single concrete offset-320 witness did not cover the data-slice content for symbolic offsets; the module note declined the biconditional as decoder-echo, but the payload-shift is a real gap this bounded fidelity harness closes)."
+    },
+    {
+      "id": "offchain_eip712_exact_consumption",
+      "tier": "default",
+      "crate": "pqsigner-aa",
+      "harness": "parse_frame_panic_free_and_exact",
+      "file": "aa/src/offchain_header.rs",
+      "find": "if p + trailer_len != payload.len() {",
+      "replace": "if p + trailer_len > payload.len() {",
+      "expect": "kani_fails",
+      "note": "weaken the EIP-712 typed-frame EXACT-consumption guard (`!=` -> `>`) so a payload with hidden trailing bytes after the trailer is accepted -> parse_frame_panic_free_and_exact's `trailer ends at payload.len()` assertion MUST break. Verified 2026-07-02 by hand: mutation -> VERIFICATION:- FAILED; unmutated -> SUCCESSFUL. Closes review finding (h): the offchain EIP712_TYPED/_V3 companion header parser had no host-Kani coverage; now extracted to pqsigner_aa::offchain_header (behaviour-identical, re-wired into cmd_sign_offchain.rs) + panic/OOB + exact-consumption harnesses."
     }
   ]
 }
