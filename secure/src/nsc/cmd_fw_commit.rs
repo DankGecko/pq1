@@ -142,7 +142,7 @@ pub(super) unsafe fn run(_args: &GatewayArgs) -> u32 {
     // `fw_version <= floor`, and `floor >= 0`).
     let new_rollback_floor = new_version.saturating_sub(1);
 
-    // ANTI-BRICK ORDERING (docs/VULN-fwcommit-otp-before-commit-brick.md).
+    // ANTI-BRICK ORDERING (docs/security/vulns/VULN-fwcommit-otp-before-commit-brick.md).
     // The irreversible OTP rollback-floor bump is the LAST flash write in
     // this handler, performed only AFTER the new slot's manifest + the
     // boot-state pointer are durably written and re-verified from the

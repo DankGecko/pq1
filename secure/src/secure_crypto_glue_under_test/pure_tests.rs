@@ -794,7 +794,7 @@ fn positive_offchain_mock_last_userop_set_tolerates_regression_as_noop() {
 }
 
 // ── Value-inflation → consent-free durable slot brick fix
-// (docs/VULN-offchain-sync-value-inflation-slot-brick.md). CMD_OFFCHAIN_SYNC
+// (docs/security/vulns/VULN-offchain-sync-value-inflation-slot-brick.md). CMD_OFFCHAIN_SYNC
 // writes an untrusted, unclamped `target_count` into `last_userop`; the sign
 // paths promote it verbatim into the monotonic `offchain` counter, so a value
 // `>= MAX_SLOT_USES` permanently trips the combined-cap gate — a seed-survivable,
@@ -971,7 +971,7 @@ fn positive_offchain_state_mock_max_slots_tracks_distinct_cap() {
 }
 
 // ── page-123 exhaustion → permanent-brick fix
-// (docs/VULN-offchain-sync-page123-exhaustion-brick.md). The journal can be
+// (docs/security/vulns/VULN-offchain-sync-page123-exhaustion-brick.md). The journal can be
 // wedged into a permanent signing brick by spraying distinct slot keys until
 // compaction fail-closes. The structural cap makes that impossible by
 // construction; these pin the cap and its policy.

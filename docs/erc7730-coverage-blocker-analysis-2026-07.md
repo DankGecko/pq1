@@ -163,7 +163,7 @@ descriptors (2026-07-01) rather than trusting the table — the lesson from the 
   `DutchOrder` → `DutchOutput[] outputs` → `OrderInfo`/`TokenPermissions`), and EVERY `tokenPath` points at a
   nested-struct member (`permitted.token`, `witness.inputToken`, `witness.outputs.[].token`). Blocked by the
   **EIP-712 nested-struct belt** (`render_erc7730_eip712_pages` rejects `PARAM_NESTED_STRUCT`) — a *deliberate*
-  WYSIWYS control (`docs/VULN-erc7730-eip712-nested-struct-address-hide.md`), NOT a missing feature —
+  WYSIWYS control (`docs/security/vulns/VULN-erc7730-eip712-nested-struct-address-hide.md`), NOT a missing feature —
   **plus** array-of-struct rendering (`DutchOutput[]`).
 - **Permit2 (`eip712-uniswap-permit2`): already 15 leaves** (the non-nested formats clear-sign; the nested
   `TokenPermissions` witness format is belt-rejected). **1inch AggregationRouterV6: already 27 leaves** (3 of
@@ -199,7 +199,7 @@ which is a safe, non-misleading UX — not a silent gap.
 **runtime-length** source: the extraction position (`len - 20`) or the validity of a fixed offset
 (`52 ≤ len`) depends on the ABI length word, which the companion controls. Worse, showing one slice
 **hides the rest of the source** — the same array-tail-hiding / slot-confusion WYSIWYS hazard the
-walker fix (`docs/security/VULN-erc7730-walker-slot-confusion.md`) closed for whole words. A slice
+walker fix (`docs/security/vulns/VULN-erc7730-walker-slot-confusion.md`) closed for whole words. A slice
 engine without a *byte-coverage completeness* proof (every byte of the sliced source shown or provably
 inert) would reintroduce exactly that class: "show `[32:52]`, blind-sign `[0:32]` and `[53:]`."
 

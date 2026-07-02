@@ -566,7 +566,7 @@ fn negative_shape_rejects_each_tail_pad_byte_nonzero() {
 }
 
 // ---------------------------------------------------------------------------
-// Field-overflow guard (docs/security/VULN-cowswap-zk-amount-overflow.md)
+// Field-overflow guard (docs/security/vulns/VULN-cowswap-zk-amount-overflow.md)
 // ---------------------------------------------------------------------------
 //
 // The CoW Groth16 circuit's `FormatTrimmedAmount` once computed

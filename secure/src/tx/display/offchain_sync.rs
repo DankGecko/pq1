@@ -9,7 +9,7 @@
 //! `(account_index, chain_id, slot_index)` tuple. With no consent gate a hostile
 //! companion can spray distinct tuples to fill the page and wedge compaction
 //! into a permanent, seed-survivable signing brick
-//! (`docs/VULN-offchain-sync-page123-exhaustion-brick.md`).
+//! (`docs/security/vulns/VULN-offchain-sync-page123-exhaustion-brick.md`).
 //!
 //! This is the trusted-display affirmative-consent step the handler shows
 //! before writing an entry for a slot it has **not** seen before — exactly the

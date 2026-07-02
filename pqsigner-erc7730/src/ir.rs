@@ -60,7 +60,7 @@ use core::convert::TryFrom;
 /// encoding can never be walked by this firmware — and a 0x02 DB can never be
 /// mixed-interpreted by 0x03 firmware. Firmware + DB ship together under one
 /// pinned Merkle root, so the bump is clean.
-/// See `docs/security/VULN-erc7730-walker-slot-confusion.md`.
+/// See `docs/security/vulns/VULN-erc7730-walker-slot-confusion.md`.
 pub const SCHEMA_VER: u8 = 0x03;
 pub const HEADER_LEN: usize = 134;
 

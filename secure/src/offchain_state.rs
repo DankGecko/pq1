@@ -37,7 +37,7 @@ pub fn slot_key_compute(account_index: u8, chain_id: u64, slot_index: u32) -> [u
 /// already live; updates to an *already-present* slot are always allowed.
 ///
 /// **Why this exists (page-123 exhaustion → permanent-brick fix; see
-/// `docs/VULN-offchain-sync-page123-exhaustion-brick.md`).** The flash backend
+/// `docs/security/vulns/VULN-offchain-sync-page123-exhaustion-brick.md`).** The flash backend
 /// stores the journal as a log on a single 512-quad-word page (`OFFCHAIN_CAPACITY`
 /// in `hw::flash`). Compaction (`hw::flash::compact_page`) *fail-closes* — by the
 /// HIGH-1/F3 anti-rollback design it refuses (never erases) — when the page holds
@@ -79,7 +79,7 @@ pub fn may_create_distinct_slot(distinct_live: usize, already_present: bool) -> 
 /// Hard ceiling on any per-slot off-chain counter a durable write may store.
 ///
 /// **Why this exists (value-inflation → consent-free durable slot brick; see
-/// `docs/VULN-offchain-sync-value-inflation-slot-brick.md`).** The untrusted
+/// `docs/security/vulns/VULN-offchain-sync-value-inflation-slot-brick.md`).** The untrusted
 /// companion supplies the `target_count` written to `last_userop` by
 /// `CMD_OFFCHAIN_SYNC`, and that value is promoted verbatim into the monotonic
 /// `offchain` counter by the sign paths' repair branch

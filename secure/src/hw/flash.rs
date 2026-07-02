@@ -1675,7 +1675,7 @@ fn distinct_slot_count_capped() -> usize {
 /// Programs page 123.
 unsafe fn write_entry(qw: &[u8; 16]) -> Result<(), ()> {
     // Layer-2 structural cap (page-123 exhaustion → permanent-brick fix; see
-    // docs/VULN-offchain-sync-page123-exhaustion-brick.md and
+    // docs/security/vulns/VULN-offchain-sync-page123-exhaustion-brick.md and
     // crate::offchain_state::MAX_DISTINCT_SLOTS). Refuse to create a NEW
     // distinct slot once the page already holds MAX_DISTINCT_SLOTS of them, so
     // the page can never reach the un-compactable state that bricks every sign
@@ -2020,7 +2020,7 @@ pub unsafe fn offchain_count_promote_to(slot_key: &[u8; 8], target: u64) -> Resu
     let slot_key = &sk_a;
 
     // Value-inflation brick defence (see
-    // `docs/VULN-offchain-sync-value-inflation-slot-brick.md` and
+    // `docs/security/vulns/VULN-offchain-sync-value-inflation-slot-brick.md` and
     // `crate::offchain_state::OFFCHAIN_COUNT_CEILING`): never promote the
     // monotonic off-chain counter to a value at or above `MAX_SLOT_USES`. A
     // companion-inflated `last_userop` reaches this promote via the sign-path
@@ -2064,7 +2064,7 @@ pub unsafe fn last_userop_count_set(slot_key: &[u8; 8], count: u64) -> Result<()
     let slot_key = &sk_a;
 
     // Value-inflation brick defence (see
-    // `docs/VULN-offchain-sync-value-inflation-slot-brick.md` and
+    // `docs/security/vulns/VULN-offchain-sync-value-inflation-slot-brick.md` and
     // `crate::offchain_state::OFFCHAIN_COUNT_CEILING`): the `count` here is the
     // untrusted companion's `CMD_OFFCHAIN_SYNC` target. Clamp it below
     // `MAX_SLOT_USES` so a hostile floor bump cannot be promoted into the

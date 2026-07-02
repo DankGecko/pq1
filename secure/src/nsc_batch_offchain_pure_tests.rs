@@ -758,7 +758,7 @@ fn negative_offchain_sync_rejects_wrong_input_length() {
 #[test]
 fn negative_offchain_sync_confirms_new_slot_before_durable_write() {
     // page-123 exhaustion → permanent-brick fix
-    // (docs/VULN-offchain-sync-page123-exhaustion-brick.md). CMD_OFFCHAIN_SYNC
+    // (docs/security/vulns/VULN-offchain-sync-page123-exhaustion-brick.md). CMD_OFFCHAIN_SYNC
     // mints a durable page-123 entry for a companion-chosen, seed-independent
     // slot_key. Without consent a hostile companion sprays distinct tuples to
     // fill the page and wedge compaction into a permanent signing brick. The
@@ -807,7 +807,7 @@ fn negative_offchain_sync_confirms_new_slot_before_durable_write() {
 #[test]
 fn negative_offchain_sync_clamps_target_before_durable_write() {
     // Value-inflation → consent-free durable slot brick fix
-    // (docs/VULN-offchain-sync-value-inflation-slot-brick.md). For an ALREADY-
+    // (docs/security/vulns/VULN-offchain-sync-value-inflation-slot-brick.md). For an ALREADY-
     // registered slot the confirm gate is skipped, so a hostile `target_count`
     // reaches the durable write with no user interaction; promoted into the
     // monotonic off-chain counter it would trip the combined-cap gate forever.
@@ -834,7 +834,7 @@ fn negative_offchain_sync_clamps_target_before_durable_write() {
 #[test]
 fn negative_offchain_sync_confirms_value_inflation_on_registered_slot() {
     // Value-inflation → consent-free durable slot brick fix, defence-in-depth
-    // layer 2 (docs/VULN-offchain-sync-value-inflation-slot-brick.md). The clamp
+    // layer 2 (docs/security/vulns/VULN-offchain-sync-value-inflation-slot-brick.md). The clamp
     // blocks the permanent cap-tripping brick; this confirm additionally denies
     // the consent-free *near-exhaustion* of an already-registered slot. The gate
     // must fire when the sync would RAISE the stored floor (not only for a new

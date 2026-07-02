@@ -23,7 +23,7 @@ half of the "new formatter / walker" work. It is deliberately kept out of
 the Enum-formatter + pack-expansion change set because it **relaxes a
 documented security control** (`head_bounded_body`) and therefore needs its
 own review, its own Kani harnesses, and explicit re-validation against
-`docs/security/VULN-erc7730-walker-slot-confusion.md`.
+`docs/security/vulns/VULN-erc7730-walker-slot-confusion.md`.
 
 ## Problem
 
@@ -59,7 +59,7 @@ reserves the `ArrayIdx/ArraySlice/ArrayLast/ArrayAll` `PathOp`s (0x21–0x24)
 `head_bounded_body` is a **defense**, not a limitation. It was added with
 the `SCHEMA_VER 0x01 → 0x02` bump and the width-aware head-word path slots
 to close the *slot-confusion* class
-(`docs/security/VULN-erc7730-walker-slot-confusion.md`): a malformed or
+(`docs/security/vulns/VULN-erc7730-walker-slot-confusion.md`): a malformed or
 hostile descriptor whose path slot lands in the dynamic tail must be
 **rejected**, never silently rendered, because an offset word in the head
 is not the value — rendering it would confirm-X-sign-Y. Loosening the

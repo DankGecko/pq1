@@ -10,9 +10,9 @@ Files read in this second pass:
 
 - `docs/security/adversarial-review/clear-signing-adversarial-review.md`
 - `docs/erc7730-implementation-review-2026-07.md`
-- `docs/VULN-erc7730-visible-never-noparam-clearsign.md`
-- `docs/VULN-erc7730-rule1-inert-field-nonaddr-action-hide.md`
-- `docs/VULN-erc7730-eip712-nested-struct-address-hide.md`
+- `docs/security/vulns/VULN-erc7730-visible-never-noparam-clearsign.md`
+- `docs/security/vulns/VULN-erc7730-rule1-inert-field-nonaddr-action-hide.md`
+- `docs/security/vulns/VULN-erc7730-eip712-nested-struct-address-hide.md`
 - `dbgen/src/erc7730.rs`
 - `dbgen/tests/erc7730_roundtrip.rs`
 - `dbgen/tests/erc7730_phase5_policy_and_includes.rs`

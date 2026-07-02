@@ -22,7 +22,7 @@ the EIP-712 analog of the calldata FollowOffset resolver. It unlocks the clear-s
 intent-based orders (Permit2, then UniswapX / CoW-style), a real product differentiator.
 
 Owner discipline: this relaxes a deliberate security control (the nested-struct-address-hide belt,
-`docs/VULN-erc7730-eip712-nested-struct-address-hide.md`). It ships only through the array-walker
+`docs/security/vulns/VULN-erc7730-eip712-nested-struct-address-hide.md`). It ships only through the array-walker
 discipline: bounded subset → this doc → adversarial-review-gated (schema first, then impl) → Kani +
 real-vector flip→decline tests → belt stays as the default-decline fail-safe.
 

@@ -250,7 +250,7 @@ pub const SETPRESIG_VALID_TO_OFFSET: usize = SETPRESIG_OWNER_OFFSET + SETPRESIG_
 pub const SETPRESIG_VALID_TO_LEN: usize = 4;
 
 // ---------------------------------------------------------------------------
-// Field-overflow defense-in-depth (see docs/security/VULN-cowswap-zk-amount-overflow.md)
+// Field-overflow defense-in-depth (see docs/security/vulns/VULN-cowswap-zk-amount-overflow.md)
 // ---------------------------------------------------------------------------
 
 /// Bit-width the CoW Groth16 circuit range-checks `raw_amount` to, so

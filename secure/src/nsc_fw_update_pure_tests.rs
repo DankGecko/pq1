@@ -1041,7 +1041,7 @@ fn negative_begin_user_cancel_short_circuits_before_erase() {
 
 #[test]
 fn negative_commit_bumps_otp_last_after_manifest_and_boot_state() {
-    // ANTI-BRICK (docs/VULN-fwcommit-otp-before-commit-brick.md). The
+    // ANTI-BRICK (docs/security/vulns/VULN-fwcommit-otp-before-commit-brick.md). The
     // irreversible OTP rollback-floor bump must be the LAST flash write —
     // AFTER the new manifest AND the boot-state pointer are written and
     // re-verified. The previous ordering bumped OTP FIRST; a power-loss

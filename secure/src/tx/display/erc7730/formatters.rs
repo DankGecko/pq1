@@ -1775,7 +1775,7 @@ mod walker_slot_confusion_fixed {
     //! head-slot program, the walker reads the EVM-decoded word (display
     //! == signed); and the head-bound guard rejects any slot that reaches
     //! past the format's static head. See
-    //! `docs/security/VULN-erc7730-walker-slot-confusion.md`.
+    //! `docs/security/vulns/VULN-erc7730-walker-slot-confusion.md`.
     use super::*;
     use crate::tx::erc7730::{ContextKind, Erc7730Ir};
 

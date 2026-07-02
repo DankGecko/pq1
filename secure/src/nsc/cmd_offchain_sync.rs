@@ -25,7 +25,7 @@
 //! enforces the per-slot budget regardless of what the firmware emits.
 //!
 //! What the value-only reasoning missed (page-123 exhaustion → permanent-brick;
-//! `docs/VULN-offchain-sync-page123-exhaustion-brick.md`): the durable *write*
+//! `docs/security/vulns/VULN-offchain-sync-page123-exhaustion-brick.md`): the durable *write*
 //! mints a fresh page-123 journal entry for a companion-chosen, seed-independent
 //! `slot_key`. With no consent gate a hostile companion can spray distinct
 //! `(account,chain,slot)` tuples to fill the page and wedge compaction into a
@@ -91,7 +91,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     }
 
     // Value-inflation → consent-free durable slot brick defence (Layer 1;
-    // `docs/VULN-offchain-sync-value-inflation-slot-brick.md`). `target_count` is
+    // `docs/security/vulns/VULN-offchain-sync-value-inflation-slot-brick.md`). `target_count` is
     // fully companion-controlled and, for an already-registered slot, is written
     // durably WITHOUT a confirm (the gate below only fires for new slots). The
     // sign paths promote it verbatim into the monotonic `offchain` counter, so an
@@ -111,14 +111,14 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // Consent gate — two brick classes, one confirm.
     //
     // (a) NEW-SLOT (page-123 exhaustion → permanent-brick fix; module Security
-    //     note + docs/VULN-offchain-sync-page123-exhaustion-brick.md). A durable
+    //     note + docs/security/vulns/VULN-offchain-sync-page123-exhaustion-brick.md). A durable
     //     write for a slot the firmware has NOT seen before mints a new page-123
     //     journal entry for a companion-chosen, seed-independent slot_key; an
     //     unbounded spray of distinct tuples would wedge compaction into a
     //     permanent signing brick. One physical confirm per distinct tuple makes
     //     a spray infeasible.
     //
-    // (b) VALUE-INFLATION (docs/VULN-offchain-sync-value-inflation-slot-brick.md).
+    // (b) VALUE-INFLATION (docs/security/vulns/VULN-offchain-sync-value-inflation-slot-brick.md).
     //     Even on an ALREADY-registered slot, a sync that RAISES `last_userop` is
     //     promoted into the monotonic off-chain counter and burns the slot's
     //     few-time budget toward exhaustion with no user interaction. The clamp

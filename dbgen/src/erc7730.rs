@@ -3378,7 +3378,7 @@ fn check_field_visibility(
     // native decoder). The remaining residual — a descriptor that hides an
     // effect-bearing scalar value/payload while the recipient/intent IS shown — is
     // bounded / MEDIUM and attestation-backstopped. See
-    // `docs/VULN-erc7730-visible-never-noparam-clearsign.md` § non-address residual.
+    // `docs/security/vulns/VULN-erc7730-visible-never-noparam-clearsign.md` § non-address residual.
     Ok(())
 }
 
@@ -4274,7 +4274,7 @@ fn compile_path_inner(
     //     static tuple) resolved to the wrong calldata word, so the
     //     trusted display showed one value while the contract executed on
     //     another. See `compile_structured_contract_path` +
-    //     `docs/security/VULN-erc7730-walker-slot-confusion.md`.
+    //     `docs/security/vulns/VULN-erc7730-walker-slot-confusion.md`.
     if root == PATHOP_ROOT_STRUCT && context_kind == CTX_CONTRACT {
         compile_structured_contract_path(&tokenize_path(rest)?, parsed, &mut out, is_token_path)?;
         return Ok(out);

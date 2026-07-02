@@ -132,7 +132,7 @@ fn render_erc7730_pages_inner<'ir>(
     // walker's `body.get(slot..)` bound and is rejected, never silently
     // rendered. Field slots are always < static_head_words by
     // construction, so this never rejects a well-formed descriptor. See
-    // `docs/security/VULN-erc7730-walker-slot-confusion.md`.
+    // `docs/security/vulns/VULN-erc7730-walker-slot-confusion.md`.
     let body = head_bounded_body(&inner_data[4..], format.static_head_words)?;
     // The FULL (untruncated) body is handed ONLY to the dynamic-array
     // renderer, which follows a sole-dynamic-array tail with its own exact-

@@ -97,7 +97,7 @@ const BHK_LEN: usize = 32;
 // mutually exclusive, and the counter wins because its erase is
 // unconditional. Fail the build while the two pages collide so this can
 // never ship silently. Relocate ONE owner to a free page (see
-// docs/VULN-page126-bhk-fwfail-collision-brick.md) and this assertion
+// docs/security/vulns/VULN-page126-bhk-fwfail-collision-brick.md) and this assertion
 // clears automatically.
 const _: () = assert!(
     BHK_PAGE_ADDR != flash::FW_FAIL_PAGE_ADDR,
