@@ -2358,10 +2358,39 @@ fn compile_nested_anchor(
     )))
 }
 
-/// Build a nested sub-field's format_op + LOCAL param TLV blob (v1 vocabulary:
-/// visibility + tokenAmount local `tokenPath` + date encoding). Returns
-/// `Ok(None)` for any param shape outside v1 (→ caller belt-declines the format).
-/// Marks `covered[w]` for the local word a `tokenPath` IDs (E2 coverage).
+/// Parse a JSON `threshold` literal — a `0x…` hex string (≤ 64 nibbles) or a
+/// non-negative JSON number — into a 32-byte BE u256, right-aligned. Returns
+/// `None` for a `$`-const reference or a malformed value (the nested-subfield
+/// path has no `ctx` for const resolution, so such a threshold defers to
+/// belt-decline rather than being mis-parsed).
+fn parse_literal_u256(v: &serde_json::Value) -> Option<[u8; 32]> {
+    match v {
+        serde_json::Value::String(s) => {
+            let h = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X"))?;
+            if h.is_empty() || h.len() > 64 || !h.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return None;
+            }
+            let padded = format!("{h:0>64}");
+            let mut out = [0u8; 32];
+            for (i, b) in out.iter_mut().enumerate() {
+                *b = u8::from_str_radix(&padded[2 * i..2 * i + 2], 16).ok()?;
+            }
+            Some(out)
+        }
+        serde_json::Value::Number(n) => {
+            let x = n.as_u64()?;
+            let mut out = [0u8; 32];
+            out[24..32].copy_from_slice(&x.to_be_bytes());
+            Some(out)
+        }
+        _ => None,
+    }
+}
+
+/// Build a nested sub-field's format_op + LOCAL param TLV blob (visibility +
+/// tokenAmount local `tokenPath` / `threshold` / `message` + date encoding).
+/// Returns `Ok(None)` for any param shape we do not model (→ caller belt-declines
+/// the format). Marks `covered[w]` for the local word a `tokenPath` IDs (E2 coverage).
 fn compile_nested_subfield_params(
     field: &FieldDef,
     abs_prefix: &str,
@@ -2398,9 +2427,14 @@ fn compile_nested_subfield_params(
         }
         FMT_TOKEN_AMOUNT => {
             let Some(params) = params else { return Ok(None) };
-            // Only a local `tokenPath` (a sibling token member of THIS struct) —
-            // no fixed token, threshold, or message.
-            if params.keys().any(|k| k != "tokenPath") {
+            // A local `tokenPath` (required) plus the OPTIONAL `threshold` +
+            // `message` "unlimited"-style display (the same top-level tokenAmount
+            // vocabulary the device already renders). A fixed `token` or any other
+            // key is not modelled in the nested path → defer to belt-decline.
+            if params
+                .keys()
+                .any(|k| !matches!(k.as_str(), "tokenPath" | "threshold" | "message"))
+            {
                 return Ok(None);
             }
             let Some(tp) = params.get("tokenPath").and_then(|v| v.as_str()) else {
@@ -2427,6 +2461,20 @@ fn compile_nested_subfield_params(
                 (tok_ord & 0xff) as u8,
             ];
             push_tlv(&mut out, PARAM_TOKEN_PATH, &tok_prog)?;
+            // Optional threshold: a member `value >= threshold` renders `message`
+            // (e.g. an all-ones limit → "Unlimited"). Parse a LITERAL hex/number
+            // directly — the nested path has no `ctx` for const resolution, so a
+            // `$`-const threshold defers (belt-decline).
+            if let Some(th) = params.get("threshold") {
+                let Some(raw) = parse_literal_u256(th) else {
+                    return Ok(None);
+                };
+                push_tlv(&mut out, PARAM_THRESHOLD, &raw)?;
+            }
+            if let Some(msg) = params.get("message").and_then(|v| v.as_str()) {
+                let s = clean_ascii_truncated(msg, MAX_POOL_TLV_PAYLOAD);
+                push_tlv(&mut out, PARAM_MESSAGE, s.as_bytes())?;
+            }
         }
         FMT_DATE => {
             if let Some(params) = params {

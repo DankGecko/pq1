@@ -623,6 +623,29 @@ fn positive_weth_deposit_pulls_value_from_envelope() {
     );
 }
 
+#[test]
+fn positive_native_amount_uses_chain_ticker_not_eth_on_polygon() {
+    // review 3.5: the `amount` format defaults to the chain's NATIVE ticker,
+    // not always "ETH". A Polygon (137) descriptor must render "POL". (The WETH
+    // deposit test above covers the chain-1 → ETH case by render.)
+    let res = build_seed();
+    let entry = find_leaf(&res, "synthetic-native-amount.json", 137);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
+
+    let mut calldata = keccak256(b"pay(uint256)")[..4].to_vec();
+    calldata.extend_from_slice(&u256_from_u64(500_000_000_000_000_000).0); // 0.5
+    assert_selector_matches(&verified.ir, &calldata, "pay(uint256)");
+    let tx = envelope(137, entry.contract);
+    let resolver = NameResolver::new();
+    let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver).expect("render");
+
+    let amount_page = find_page_by_label(&pages, "Amount");
+    let rows = page_strs(&pages, amount_page).join(" ");
+    assert!(rows.contains("POL"), "Polygon native amount must render POL:\n{rows}");
+    assert!(!rows.contains("ETH"), "must NOT render ETH on Polygon:\n{rows}");
+}
+
 // NOTE: The corresponding EIP-712 path (`render_erc7730_eip712_pages`)
 // would be the right way to exercise USDC's TransferWithAuthorization
 // descriptor — but the firmware-side EIP-712 entry point requires the
@@ -3396,4 +3419,87 @@ fn v3_v2_dutch_order_renders_deep_nested_and_flip_declines() {
     let mut ed = top_ed.clone();
     ed[140] ^= 0x01; // inside witness_word
     assert!(render(&ed, &blob).is_err(), "flip top witness commitment declines");
+}
+
+/// Nested `tokenAmount` FULL vocabulary (threshold + message) in a top-level
+/// array-of-struct: flyingtulip SessionManager `Session(...AssetLimit[] limits...)`.
+/// Each `AssetLimit(token, limit)` renders `limit` as a tokenAmount whose
+/// `threshold = max-uint` maps to the message "Unlimited" — the same "approve
+/// unlimited" display the top-level path has, now reachable inside a nested
+/// element. Proves the dbgen nested-subfield vocabulary extension end-to-end
+/// (element 0 = a normal limit renders the number; element 1 = max-uint renders
+/// "Unlimited").
+#[test]
+fn v3_session_manager_nested_tokenamount_threshold_renders_unlimited() {
+    use super::erc7730::nested::{hash_struct, hash_struct_array};
+    let res = build_registry();
+    let leaf = find_leaf(res, "eip712-SessionManager-FT.json", 1);
+    let pth = hx32("10e2e916a5d944a9c9fa82748951934e444783850c4cb366694967607dbd2fc5");
+    let asset_limit_th = hx32("269888c0029efe9424c548a264e5ee66803094ad203b068ca44e278b02db9d6f");
+    let wa = |a: [u8; 20]| {
+        let mut w = [0u8; 32];
+        w[12..].copy_from_slice(&a);
+        w
+    };
+    let wu = |n: u64| {
+        let mut w = [0u8; 32];
+        w[24..].copy_from_slice(&n.to_be_bytes());
+        w
+    };
+    let usdc = [0xA0u8, 0xb8, 0x69, 0x91, 0xc6, 0x21, 0x8b, 0x36, 0xc1, 0xd1, 0x9D, 0x4a, 0x2e,
+        0x9E, 0xb0, 0xcE, 0x36, 0x06, 0xeB, 0x48];
+    let weth = [0xC0u8, 0x2a, 0xaA, 0x39, 0xb2, 0x23, 0xFE, 0x8D, 0x0A, 0x0e, 0x5C, 0x4F, 0x27,
+        0xeA, 0xD9, 0x08, 0x3C, 0x75, 0x6C, 0xc2];
+
+    // AssetLimit: token, limit (2 words). el0 normal, el1 = max-uint → "Unlimited".
+    let mut el0 = std::vec![0u8; 64];
+    el0[0..32].copy_from_slice(&wa(usdc));
+    el0[32..64].copy_from_slice(&wu(1_000_001)); // a finite limit
+    let mut el1 = std::vec![0u8; 64];
+    el1[0..32].copy_from_slice(&wa(weth));
+    el1[32..64].copy_from_slice(&[0xFFu8; 32]); // max-uint => >= threshold => "Unlimited"
+    let limits_word = hash_struct_array(&asset_limit_th, &[&el0[..], &el1[..]]);
+    let _ = hash_struct; // (single-struct primitive unused here; array path only)
+
+    // Session top_ed (8 words): owner, delegate, validAfter, validUntil, maxCalls,
+    // maxFeeBps, limits, salt.
+    let mut top_ed = std::vec![0u8; 256];
+    top_ed[0..32].copy_from_slice(&wa([0x71; 20])); // owner
+    top_ed[32..64].copy_from_slice(&wa([0x72; 20])); // delegate
+    top_ed[64..96].copy_from_slice(&wu(1_735_689_600)); // validAfter (2025)
+    top_ed[96..128].copy_from_slice(&wu(1_767_225_600)); // validUntil (2026)
+    top_ed[128..160].copy_from_slice(&wu(50)); // maxCalls
+    top_ed[160..192].copy_from_slice(&wu(30)); // maxFeeBps
+    top_ed[192..224].copy_from_slice(&limits_word); // limits (array)
+    top_ed[224..256].copy_from_slice(&[0xAB; 32]); // salt (hidden)
+
+    // nested_blob: the single `limits` array descent — [elem_count=2][el0][el1].
+    let mut blob = std::vec::Vec::new();
+    blob.extend_from_slice(&2u16.to_be_bytes());
+    blob.extend_from_slice(&64u16.to_be_bytes());
+    blob.extend_from_slice(&el0);
+    blob.extend_from_slice(&64u16.to_be_bytes());
+    blob.extend_from_slice(&el1);
+
+    let render = |ed: &[u8], b: &[u8]| {
+        let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("SessionManager IR parses");
+        let verified = VerifiedDescriptor { ir };
+        let resolver = NameResolver::new();
+        super::erc7730::render_erc7730_eip712_pages_v3(
+            1, &[0u8; 20], &pth, ed, b, &verified, None, &resolver,
+        )
+    };
+    let pages = render(&top_ed, &blob).expect("valid SessionManager clear-signs");
+    assert_all_pages_printable(&pages);
+    let dump = dump_pages(&pages).to_lowercase();
+    assert!(dump.contains("7171717171"), "owner shown:\n{dump}");
+    assert!(dump.contains("7272727272"), "delegate shown:\n{dump}");
+    assert!(dump.contains("2025") && dump.contains("2026"), "validAfter/Until dates:\n{dump}");
+    assert!(dump.contains("1000001"), "element 0 finite limit renders the number:\n{dump}");
+    assert!(dump.contains("unlimited"), "element 1 (max-uint) renders the threshold message 'Unlimited':\n{dump}");
+    assert!(dump.contains("item 1 of 2") && dump.contains("item 2 of 2"), "per-element dividers:\n{dump}");
+    // Flip a nested word (element 1's limit) → array binding breaks → decline.
+    let mut b = blob.clone();
+    b[2 + 2 + 64 + 2 + 40] ^= 0x01; // inside el1's limit word
+    assert!(render(&top_ed, &b).is_err(), "flip el1 limit declines");
 }
