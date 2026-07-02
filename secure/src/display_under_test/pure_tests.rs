@@ -746,19 +746,24 @@ fn positive_pages_row_mut_within_bounds() {
 // --- KDF-tag-stability analog: pin chain-name strings ----------------------
 
 #[test]
-fn negative_chain_name_unknown_chain_marked_unverified() {
-    // Assumption: any chain id NOT on the curated list must visibly
-    // warn the user the firmware can't confirm what network they're on
-    // — otherwise an attacker on an obscure chain looks identical to
-    // mainnet on screen.  This pins the exact string.
-    for sneaky in [0u64, 2, 11, 250, 100000, u64::MAX] {
+fn negative_chain_name_unknown_chain_marked_unknown() {
+    // A chain id NOT on the curated list renders "(unknown chain)". The numeric
+    // id is ALWAYS shown on the row above (`write_chain`), so this label is
+    // advisory — an obscure chain does NOT look like mainnet (its id differs on
+    // screen). We reserve the stronger "UNVERIFIED" marker for an unverified
+    // *token* so it keeps a single meaning (review 4.8). Pins the exact string.
+    for unknown in [0u64, 2, 11, 100000, u64::MAX] {
         assert_eq!(
-            chain_name(sneaky),
-            "(UNVERIFIED)",
-            "unknown chain {} must render '(UNVERIFIED)' — see invariant in primitives.rs",
-            sneaky,
+            chain_name(unknown),
+            "(unknown chain)",
+            "unlisted chain {} must render '(unknown chain)' — see invariant in primitives.rs",
+            unknown,
         );
     }
+    // Newly-labelled registry chains must NOT fall through to the unknown label.
+    assert_eq!(chain_name(43114), "(Avalanche)");
+    assert_eq!(chain_name(59144), "(Linea)");
+    assert_eq!(chain_name(146), "(Sonic)");
 }
 
 #[test]
@@ -1411,14 +1416,26 @@ fn negative_chain_name_list_pinned() {
     for needle in [
         "1 => \"(Mainnet)\"",
         "10 => \"(Optimism)\"",
+        "14 => \"(Flare)\"",
+        "30 => \"(Rootstock)\"",
         "56 => \"(BSC)\"",
         "100 => \"(Gnosis)\"",
         "137 => \"(Polygon)\"",
+        "146 => \"(Sonic)\"",
+        "250 => \"(Fantom)\"",
+        "324 => \"(zkSync Era)\"",
+        "999 => \"(HyperEVM)\"",
+        "1329 => \"(Sei)\"",
+        "8217 => \"(Kaia)\"",
         "8453 => \"(Base)\"",
         "42161 => \"(Arbitrum)\"",
+        "42220 => \"(Celo)\"",
+        "43114 => \"(Avalanche)\"",
+        "59144 => \"(Linea)\"",
+        "534352 => \"(Scroll)\"",
         "11155111 => \"(Sepolia)\"",
         "84532 => \"(BaseSepolia)\"",
-        "_ => \"(UNVERIFIED)\"",
+        "_ => \"(unknown chain)\"",
     ] {
         assert!(src.contains(needle),
             "primitives.rs chain_name must keep `{}`", needle);

@@ -406,8 +406,14 @@ proves element `i`'s content can't masquerade as element `j`) → impl 5-lens ad
 
 ## 12. v3 — deep nesting + nested-array-in-struct (UniswapX Dutch orders), 2026-07-02
 
-**Status: IMPLEMENTED (2026-07-02).** Schema review + implementation review both CLEAR. Ships UniswapX
-`PermitWitnessTransferFrom` **DutchOrder** and **ExclusiveDutchOrder** (Permit2 witness transfers) — the
+**Status: IMPLEMENTED (2026-07-02).** Schema review + implementation review both CLEAR. Ships **all four**
+UniswapX `PermitWitnessTransferFrom` order variants (Permit2 witness transfers): **DutchOrder**,
+**ExclusiveDutchOrder**, **LimitOrder** (element struct `OutputToken(token,amount,recipient)`, no decay), and
+**V2DutchOrder** (adds a `cosigner` address, curated SHOW like `exclusiveFiller`; `baseInput*`/`baseOutputs`).
+The recursion machinery is unchanged for the latter two — they are pure Tier-A curation (show the OrderInfo
+addresses + cosigner, absolute tokenPaths), verified by render + flip tests + the corpus-wide panic-safety
+smoke test; the vendored type strings are trusted the same as for Dutch/ExclusiveDutch (a wrong type declines,
+never mis-signs). The
 depth-1 `witness` renders its depth-2 nested struct `info` (OrderInfo — reactor/swapper/validationContract
 curated SHOW) and its depth-2 nested array-of-struct `outputs` (DutchOutput[]), all bound by the chained
 `keccak(pinned type_hash ‖ ed) == committed` at every level, rooted at the signed digest. dbgen: recursive
@@ -623,6 +629,9 @@ awareness) → regen DB (`erc7730_db.bin` + `review.txt`) → foundry vectors (t
 DutchOutput + the depth-2 chained binding) + Kani (bounded recursive descent, panic/OOB-free) → **depth-2
 flip→decline real-vector tests** (every word at depth 1 AND 2 → decline; patch pinned `nested_descent_count`
 at depth 2 → decline; swap an interior DFS record → decline; the curated addresses + outputs render) → impl
-5-lens adversarial review → commit (my files by path) + push. LimitOrder / V2DutchOrder are the same
-machinery + more curation — follow-on, not this increment.
+5-lens adversarial review → commit (my files by path) + push. **LimitOrder + V2DutchOrder shipped 2026-07-02**
+as pure curation on this (now-reviewed) machinery — ZERO code delta (only the two vendored descriptors + render
+tests + DB regen), so the ceremony was proportionately reduced to advisor-level + compile (the build gate proves
+every address is shown, else the format would be skipped) + render/flip tests + the corpus panic-safety smoke
+test. All six UniswapX order descriptors now clear-sign; none remain skipped.
 

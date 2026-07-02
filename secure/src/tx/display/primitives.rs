@@ -360,22 +360,39 @@ pub(super) fn write_addr_full_or_name(
 // Chain identification
 // ---------------------------------------------------------------------------
 
-/// Human-readable chain label. The secure world recognises only the
-/// ids on this list; anything else renders as `(UNVERIFIED)` so the
-/// user is visibly warned that the firmware could not confirm what
-/// network this transaction targets.
+/// Human-readable chain label, shown on the row BELOW the numeric
+/// `Chain: <id>` (`write_chain`) — so the id is always the ground truth and
+/// this label is advisory. The list covers the chains the vendored ERC-7730
+/// registry actually ships descriptors for (a wrong label would misrepresent
+/// the network, so only high-confidence mainnet ids are added; the rest fall
+/// through to `(unknown chain)`). We say `(unknown chain)` rather than
+/// `(UNVERIFIED)` so the stronger `UNVERIFIED` marker keeps a single meaning
+/// (an unverified *token*); the numeric id shown above already lets the user
+/// confirm the network.
 pub(super) fn chain_name(chain_id: u64) -> &'static str {
     match chain_id {
         1 => "(Mainnet)",
         10 => "(Optimism)",
+        14 => "(Flare)",
+        30 => "(Rootstock)",
         56 => "(BSC)",
         100 => "(Gnosis)",
         137 => "(Polygon)",
+        146 => "(Sonic)",
+        250 => "(Fantom)",
+        324 => "(zkSync Era)",
+        999 => "(HyperEVM)",
+        1329 => "(Sei)",
+        8217 => "(Kaia)",
         8453 => "(Base)",
         42161 => "(Arbitrum)",
+        42220 => "(Celo)",
+        43114 => "(Avalanche)",
+        59144 => "(Linea)",
+        534352 => "(Scroll)",
         11155111 => "(Sepolia)",
         84532 => "(BaseSepolia)",
-        _ => "(UNVERIFIED)",
+        _ => "(unknown chain)",
     }
 }
 
