@@ -92,7 +92,7 @@ fn add_owner_with_threshold_pages_no_risk() {
 
     // P0: intent + threshold + (no risk row) + nav
     assert_eq!(row_str(&pages.buf[0][0]), "Add Safe owner");
-    assert_eq!(row_str(&pages.buf[0][1]), "New thrshld: 3");
+    assert_eq!(row_str(&pages.buf[0][1]), "Threshold: 3");
     assert_eq!(row_str(&pages.buf[0][2]), ""); // no risk
     assert_eq!(row_str(&pages.buf[0][3]), "> next");
 
@@ -116,7 +116,7 @@ fn add_owner_with_threshold_one_renders_multisig_off_risk() {
     };
     let pages = render(&op, 2);
     assert_eq!(row_str(&pages.buf[0][0]), "Add Safe owner");
-    assert_eq!(row_str(&pages.buf[0][1]), "New thrshld: 1");
+    assert_eq!(row_str(&pages.buf[0][1]), "Threshold: 1");
     assert_eq!(row_str(&pages.buf[0][2]), "! MULTISIG OFF");
     assert_eq!(row_str(&pages.buf[0][3]), "> next");
 }
@@ -128,17 +128,30 @@ fn add_owner_with_threshold_overflow_surfaces_marker() {
         new_threshold: ThresholdValue::Overflow,
     };
     let pages = render(&op, 2);
-    // `"New thrshld: " + "!>2^16"` packs into 16 cols: 13 + 6 = 19 → the
-    // formatter truncates the suffix to fit the remaining 3 cols.
+    // `"Threshold: " + "!>64k"` packs into 16 cols exactly: 11 + 5 = 16.
     let r1 = row_str(&pages.buf[0][1]);
     assert!(
-        r1.starts_with("New thrshld: "),
+        r1.starts_with("Threshold: "),
         "overflow row must keep prefix label: got {r1:?}"
     );
     assert!(
         r1.contains("!>"),
-        "overflow row must carry the >2^16 marker: got {r1:?}"
+        "overflow row must carry the >u16 marker: got {r1:?}"
     );
+}
+
+#[test]
+fn change_threshold_four_digit_renders_full_value_not_blank() {
+    // Regression: the old "New thrshld: " (13-col) label left only 3 digit
+    // columns, so a 4-5 digit threshold rendered as a silent BLANK row. The
+    // "Threshold: " (11-col) label fits all of u16. (The value itself is
+    // unrealistic for a real Safe, but the display must never blank a signed
+    // parameter.)
+    let op = SafeMgmtOp::ChangeThreshold {
+        new_threshold: ThresholdValue::Fits(1234),
+    };
+    let pages = render(&op, 1);
+    assert_eq!(row_str(&pages.buf[0][1]), "Threshold: 1234");
 }
 
 // ───────────────────────────────────────────────────────────────────────
@@ -156,7 +169,7 @@ fn remove_owner_pages_with_sentinel_prev() {
 
     // P0: intent + threshold + (no risk) + nav
     assert_eq!(row_str(&pages.buf[0][0]), "Remove Safe ownr");
-    assert_eq!(row_str(&pages.buf[0][1]), "New thrshld: 2");
+    assert_eq!(row_str(&pages.buf[0][1]), "Threshold: 2");
     assert_eq!(row_str(&pages.buf[0][2]), "");
     assert_eq!(row_str(&pages.buf[0][3]), "> next");
 
@@ -248,7 +261,7 @@ fn change_threshold_no_risk() {
     };
     let pages = render(&op, 1);
     assert_eq!(row_str(&pages.buf[0][0]), "Change thrshld");
-    assert_eq!(row_str(&pages.buf[0][1]), "New thrshld: 3");
+    assert_eq!(row_str(&pages.buf[0][1]), "Threshold: 3");
     assert_eq!(row_str(&pages.buf[0][2]), "");
     assert_eq!(row_str(&pages.buf[0][3]), "> next");
 }
@@ -272,7 +285,7 @@ fn change_threshold_zero_renders_thrshld_zero_risk() {
         new_threshold: ThresholdValue::Fits(0),
     };
     let pages = render(&op, 1);
-    assert_eq!(row_str(&pages.buf[0][1]), "New thrshld: 0");
+    assert_eq!(row_str(&pages.buf[0][1]), "Threshold: 0");
     assert_eq!(row_str(&pages.buf[0][2]), "! THRSHLD = 0");
 }
 

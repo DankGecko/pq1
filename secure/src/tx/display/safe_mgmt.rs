@@ -205,10 +205,14 @@ pub(super) fn render_safe_mgmt_pages(
     p
 }
 
-/// Render `New thrshld: <N>` (or `! >2^16` on overflow) into one row.
+/// Render `Threshold: <N>` (or `! >2^16` on overflow) into one row.
 fn write_threshold_row(row: &mut [u8; DISPLAY_COLS], t: &ThresholdValue) {
     *row = [b' '; DISPLAY_COLS];
-    let prefix = b"New thrshld: ";
+    // "Threshold: " is 11 cols, leaving 5 for the digits so any u16 threshold
+    // (0..=65535) fits. The old "New thrshld: " (13 cols) left only 3 digits,
+    // so a 4-5 digit value rendered as a silent BLANK row (no number, no
+    // marker) instead of the signed threshold.
+    let prefix = b"Threshold: ";
     let n_pre = core::cmp::min(prefix.len(), row.len());
     row[..n_pre].copy_from_slice(&prefix[..n_pre]);
     match *t {
@@ -218,11 +222,18 @@ fn write_threshold_row(row: &mut [u8; DISPLAY_COLS], t: &ThresholdValue) {
                 let start = n_pre;
                 if start + width <= row.len() {
                     row[start..start + width].copy_from_slice(&tmp[..width]);
+                } else {
+                    // Unreachable for a u16 with the 11-col prefix, but never
+                    // leave the value blank: show a loud marker rather than a
+                    // silently-empty threshold field.
+                    let suffix = b"!ovf";
+                    let n = core::cmp::min(suffix.len(), row.len() - start);
+                    row[start..start + n].copy_from_slice(&suffix[..n]);
                 }
             }
         }
         ThresholdValue::Overflow => {
-            let suffix = b"!>2^16";
+            let suffix = b"!>64k";
             let start = n_pre;
             let n = core::cmp::min(suffix.len(), row.len() - start);
             row[start..start + n].copy_from_slice(&suffix[..n]);

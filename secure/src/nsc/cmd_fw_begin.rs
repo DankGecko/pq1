@@ -310,9 +310,17 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         return NscStatus::UserRejected as u32;
     }
 
-    // Determine inactive slot (the one we're NOT currently running).
-    let active = fw_update::read_active_slot();
-    let inactive = match active {
+    // Determine the inactive slot (the one we're NOT currently running) from
+    // the hardware VTOR, NOT the boot-state page. `read_active_slot()` trusts
+    // boot_state, which can diverge from the actually-running slot after an
+    // FSBL try-once revert (e.g. a same-version reinstall leaves both slots
+    // valid and FSBL reverts to the loser while boot_state still names the
+    // winner). In that diverged state, inverting the boot-state slot would
+    // select the LIVE slot as the erase target and wipe the running secure
+    // image. `running_slot()` reads the VTOR the FSBL set at hand-off, which
+    // cannot diverge, so the inverted slot is always genuinely inactive.
+    let running = fw_update::running_slot();
+    let inactive = match running {
         flash::Slot::A => flash::Slot::B,
         flash::Slot::B => flash::Slot::A,
     };
@@ -331,7 +339,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // SAFETY: `flash::erase_slot` is `unsafe fn` because it mutates
     // bank-2 flash (irreversible per-page erase). Called only here in
     // the inactive-slot prepare step; we just established `inactive`
-    // is the not-currently-running slot via `read_active_slot()` and
+    // is the not-currently-running slot via `running_slot()` (the
+    // FSBL-set VTOR, which cannot diverge from the live slot) and
     // PIN-verified above, so erasing it cannot brick the live image.
     unsafe {
         if flash::erase_slot(inactive).is_err() {

@@ -14,32 +14,34 @@
 //! verifying them dominates runtime. We stream-hash those images
 //! directly from flash in `verify.rs` — no RAM copy needed.
 
-use core::ptr::read_volatile;
 use fw_manifest::{ManifestRef, MANIFEST_SIZE};
 
 use crate::slot::{manifest_addr, Slot};
 
-/// Read a manifest from flash into a stack-allocated 8 KB buffer.
+/// Borrow a manifest **directly from its memory-mapped flash page** — no RAM
+/// copy. The returned [`ManifestRef`] reads its fields straight from flash.
 ///
-/// We copy instead of using the memory-mapped region directly because
-/// `ManifestRef` needs a `&[u8; MANIFEST_SIZE]` reference with a
-/// normal (aligned) Rust pointer. The flash address *is* a normal
-/// pointer, but borrow-checker ergonomics are simpler with an owned
-/// buffer. 8 KB on the stack is well within the 16 KB FSBL RAM budget.
-pub fn read(slot: Slot) -> [u8; MANIFEST_SIZE] {
-    let src = manifest_addr(slot) as *const u8;
-    let mut buf = [0u8; MANIFEST_SIZE];
-    for (i, byte) in buf.iter_mut().enumerate() {
-        // SAFETY: `manifest_addr(slot)` is a fixed, known-valid flash
-        // address in secure bank 1. `i < MANIFEST_SIZE` by the loop
-        // bound, so `src.add(i)` stays inside the manifest page.
-        *byte = unsafe { read_volatile(src.add(i)) };
-    }
-    buf
-}
-
-/// Convenience: read + wrap in a `ManifestRef`. The returned reference
-/// borrows the caller's buffer.
-pub fn as_ref(buf: &[u8; MANIFEST_SIZE]) -> ManifestRef<'_> {
-    ManifestRef::new(buf)
+/// This is what keeps the FSBL inside its 16 KB RAM budget, and it is the
+/// no-copy design this module's doc-comment has always described. The prior
+/// `read()` copied each 8 KB manifest into a stack `[u8; MANIFEST_SIZE]`; with
+/// BOTH slots' buffers live simultaneously across the multi-KB-stack
+/// SPHINCS+C10 verify, `main`'s boot frame reserved ~24.7 KB and overran the
+/// 16 KB stack (`_stack_start = 0x3000_4000`, no MSPLIM) — a silent stack
+/// overflow / HardFault on the immutable, WRP1A-locked bootloader (it was never
+/// caught because QEMU/e2e load the secure world directly and the only
+/// HW-exercised FSBL path short-circuits before this verify body). Borrowing
+/// flash removes both 8 KB copies.
+///
+/// SAFETY / correctness: flash is read-only during FSBL execution (the only
+/// FSBL flash write is the separate boot-state page), so the bytes are stable
+/// and a non-volatile borrow is sound; `manifest_addr(slot)` is a fixed,
+/// always-mapped, 8 KB-aligned address in secure bank 1; `[u8; N]` has
+/// alignment 1; and the reference never escapes the FSBL to untrusted code.
+pub fn at(slot: Slot) -> ManifestRef<'static> {
+    let ptr = manifest_addr(slot) as *const [u8; MANIFEST_SIZE];
+    // SAFETY: see the doc above — `ptr` addresses the always-mapped, read-only,
+    // MANIFEST_SIZE-byte manifest page (alignment 1); the `'static` borrow is of
+    // immutable memory-mapped flash that outlives every FSBL use.
+    let bytes: &'static [u8; MANIFEST_SIZE] = unsafe { &*ptr };
+    ManifestRef::new(bytes)
 }

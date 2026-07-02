@@ -1064,6 +1064,16 @@ pub unsafe fn iterative_delete_all(
     Ok((deleted, failed, true))
 }
 
+/// Hard cap on ReadIDList pages per sweep cycle. The SE050 holds at most a few
+/// hundred objects and an honest chip terminates the page walk via `more ==
+/// 0x00` after a handful of pages (each page carries up to ~256 4-byte IDs), so
+/// 64 is unreachable on real hardware. Without it the inner loop's only exit is
+/// the chip-controlled `more`/`list_byte_len` fields, so a glitching or hostile
+/// SE could hold `more == 0x01` forever and hang the wipe. Same uncapped-
+/// peripheral-loop class already bounded in `t1oi2c` (`MAX_RESP_FRAMES`) and
+/// `ifx_i2c` (`MAX_RX_FRAMES`).
+const MAX_LIST_PAGES: usize = 64;
+
 unsafe fn sweep(
     t1: &mut T1State,
     scp03: &mut Scp03Session,
@@ -1077,18 +1087,21 @@ unsafe fn sweep(
         let mut cycle_failed = 0u16;
         let mut output_offset: u16 = 0;
 
-        loop {
+        for _ in 0..MAX_LIST_PAGES {
             let (more, list_byte_len, d, f) =
                 delete_id_list_page(t1, scp03, output_offset, session_id)?;
-            cycle_deleted += d;
-            cycle_failed += f;
+            // Saturating: `d`/`f` are diagnostic counts; on a hostile SE they
+            // could otherwise overflow the u16 accumulator (~256 IDs/page ×
+            // MAX_LIST_PAGES) and panic under `overflow-checks = true`.
+            cycle_deleted = cycle_deleted.saturating_add(d);
+            cycle_failed = cycle_failed.saturating_add(f);
             output_offset = output_offset.saturating_add(list_byte_len as u16);
             if more != 0x01 || list_byte_len == 0 {
                 break;
             }
         }
 
-        total_deleted += cycle_deleted;
+        total_deleted = total_deleted.saturating_add(cycle_deleted);
         last_failed = cycle_failed;
         if cycle_deleted == 0 {
             break;

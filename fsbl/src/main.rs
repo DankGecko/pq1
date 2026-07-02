@@ -80,13 +80,16 @@ fn main() -> ! {
     #[cfg(feature = "lcd-test")]
     nv3007::lcd_test_loop();
 
-    // Read both manifest pages into stack-local 8 KB buffers. 16 KB
-    // of our 16 KB RAM budget — we'll zero these out before branch,
-    // and the slot's reset handler will re-init RAM anyway.
-    let buf_a = manifest::read(Slot::A);
-    let buf_b = manifest::read(Slot::B);
-    let m_a = manifest::as_ref(&buf_a);
-    let m_b = manifest::as_ref(&buf_b);
+    // Borrow both manifest pages directly from memory-mapped flash — NO RAM
+    // copy. Copying both into stack-local `[u8; MANIFEST_SIZE]` (8 KB each)
+    // buffers held 16 KB live across the multi-KB-stack SPHINCS+C10 verify and
+    // peaked `main`'s frame at ~24.7 KB against a 16 KB RAM budget with no
+    // MSPLIM — a silent stack overflow / HardFault of the immutable bootloader.
+    // The pages are stable, readable flash throughout boot (verify_images
+    // already streams the image regions straight from flash), so borrowing
+    // them costs no stack. See `manifest::at`.
+    let m_a = manifest::at(Slot::A);
+    let m_b = manifest::at(Slot::B);
 
     let floor = otp::rollback_floor();
 

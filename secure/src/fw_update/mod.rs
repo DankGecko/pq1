@@ -372,6 +372,45 @@ pub fn read_active_slot() -> Slot {
     }
 }
 
+/// Determine which slot the CPU is **currently executing from**, read from the
+/// authoritative hardware source rather than the boot-state page.
+///
+/// The FSBL points the secure Vector Table Offset Register (`SCB->VTOR`,
+/// `0xE000_ED08`) at the booted slot's secure vector base at hand-off
+/// (`fsbl/src/branch.rs`), and the secure world only ever rewrites the
+/// *non-secure* alias `VTOR_NS` (`0xE002_ED08`, `boot_ns.rs`) — so secure VTOR
+/// still names the running slot for the whole session.
+///
+/// This exists because [`read_active_slot`] (which trusts the boot-state page)
+/// can diverge from the actually-running slot after an FSBL try-once revert:
+/// a same-version reinstall leaves both slots valid, FSBL reverts to the loser,
+/// but the boot-state page still names the winner. `CMD_FW_BEGIN` erases the
+/// slot it is *not* running from, so it MUST use this — trusting the diverged
+/// boot-state there would erase the LIVE secure image out from under the CPU.
+/// VTOR cannot diverge, so it is the safe basis for that choice.
+///
+/// Falls back to [`read_active_slot`] if VTOR matches neither slot base (never
+/// expected on a slot-booted device) or off the ARM firmware target (host
+/// tests, where the register is not memory-mapped).
+pub fn running_slot() -> Slot {
+    #[cfg(target_arch = "arm")]
+    {
+        // ARMv8-M secure System Control Block VTOR (offset 0x08 from the SCB
+        // base 0xE000_ED00). Distinct from VTOR_NS at 0xE002_ED08.
+        const SCB_VTOR: *const u32 = 0xE000_ED08 as *const u32;
+        // SAFETY: SCB_VTOR is the always-present core VTOR register; a plain
+        // volatile read of it has no side effects and never faults.
+        let vtor = unsafe { core::ptr::read_volatile(SCB_VTOR) };
+        if vtor == flash::SLOT_A_SECURE_ADDR {
+            return Slot::A;
+        }
+        if vtor == flash::SLOT_B_SECURE_ADDR {
+            return Slot::B;
+        }
+    }
+    read_active_slot()
+}
+
 /// Run the full structural + cryptographic check chain on a manifest,
 /// returning the VerifyError at the first failing step. Used at both
 /// BEGIN (as an early reject) and COMMIT (as a defence-in-depth

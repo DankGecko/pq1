@@ -11,7 +11,7 @@
 //! Page layout (variable, capped at [`super::MAX_PAGES`]):
 //!
 //! ```text
-//!   0: "Approve Safe TX"     1: "Safe:"             2: "SafeTx Nonce: N"
+//!   0: "Approve Safe TX"     1: "Safe:"             2: "SafeTx #N"
 //!      Chain: <n>                <addr full>            Op: Call
 //!      <chain name>              <addr full>            <inner kind hint>
 //!      > next                    <addr full>            > next
@@ -1483,11 +1483,16 @@ fn write_safe_nonce_row(row: &mut [u8; DISPLAY_COLS], nonce_be: &[u8; 32]) {
             nonce_be[30],
             nonce_be[31],
         ]);
-        // Reuse the existing nonce-row primitive but with our own
-        // label so it reads "SafeTx Nonce: N" rather than "Nonce: N".
-        // We can't reuse write_nonce_row's prefix, so format here.
+        // Use our own label so this can't be confused with the inner-tx
+        // `write_nonce_row` "Nonce:" — but keep it short. On a 16-column row
+        // "SafeTx Nonce: " (14 cols) left only 2 columns for digits, so any
+        // nonce >= 100 (i.e. essentially every active Safe, whose nonce
+        // increments per executed tx) rendered as the "!O" overflow marker and
+        // the user could not read it to cross-check against the dApp. "SafeTx #"
+        // (8 cols) leaves 8 digit columns (up to 99_999_999) — more than any
+        // realistic Safe nonce; anything larger still falls to the loud marker.
         *row = [b' '; DISPLAY_COLS];
-        let prefix = b"SafeTx Nonce: ";
+        let prefix = b"SafeTx #";
         let n_pre = core::cmp::min(prefix.len(), row.len());
         row[..n_pre].copy_from_slice(&prefix[..n_pre]);
         let mut tmp = [0u8; 20];

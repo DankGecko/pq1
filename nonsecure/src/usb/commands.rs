@@ -946,7 +946,11 @@ impl CommandRouter {
             return self.sw_response(SW_WRONG_LENGTH);
         }
         let n = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
-        if n == 0 || n > 256 {
+        // Cap at 254, not 256: prodtest_finalize appends a 2-byte status word at
+        // RESP_BUF[n..n+2], so n==256 would write RESP_BUF[256..258] one past the
+        // 256-byte buffer end (an OOB panic in the factory bring-up tool). The
+        // companion samples in <=254-byte chunks.
+        if n == 0 || n > 254 {
             return self.sw_response(SW_WRONG_LENGTH);
         }
         let n_usize = n as usize;

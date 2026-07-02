@@ -285,15 +285,34 @@ fn spi_begin(tsize: u16) {
     modify(SPI_CR1, |v| v | CR1_CSTART);
 }
 
+/// Bounded poll of an SPI status flag. Spins until `flag` is set or the cap is
+/// hit, returning whether it was seen. On a healthy panel the flag is ready
+/// within microseconds, so the cap (~10M iterations ≈ a few seconds at the
+/// 16 MHz FSBL clock) never trips in normal operation — it exists only so a
+/// STALLED SPI/LCD (dead panel, cracked ribbon, cold-solder joint) cannot hang
+/// the immutable, WRP1A-locked bootloader forever: the FSBL arms no watchdog,
+/// so an unbounded `while` here would be an unrecoverable boot hang. On timeout
+/// we give up on this transfer and let boot proceed — a broken display renders
+/// nothing either way, so booting (device still usable over USB) beats hanging.
+#[inline]
+fn spi_wait(flag: u32) -> bool {
+    for _ in 0..10_000_000u32 {
+        if (rd(SPI_SR) & flag) != 0 {
+            return true;
+        }
+    }
+    false
+}
+
 fn spi_send_byte(b: u8) {
-    while (rd(SPI_SR) & SR_TXP) == 0 {}
+    let _ = spi_wait(SR_TXP);
     // SAFETY: TXDR is a real MMIO register; CFG1 set DSIZE=7 (8-bit), so a
     // byte-wide store is the access the peripheral expects.
     unsafe { write_volatile(SPI_TXDR as *mut u8, b) }
 }
 
 fn spi_end() {
-    while (rd(SPI_SR) & SR_EOT) == 0 {}
+    let _ = spi_wait(SR_EOT);
     // ES0499 mitigation: let the last SCK pulse complete before dropping SPE.
     cortex_m::asm::delay(16);
     modify(SPI_CR1, |v| v & !CR1_SPE);

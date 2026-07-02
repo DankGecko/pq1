@@ -684,6 +684,57 @@ fn negative_read_active_slot_falls_back_to_slot_a_on_unpopulated_state() {
     );
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// A8. Negative: `running_slot()` reads the hardware VTOR, not boot_state.
+//
+// BEGIN erases the slot it is NOT running from. If it derived that from
+// the boot-state page (`read_active_slot`), an FSBL try-once revert (e.g.
+// a same-version reinstall) could leave boot_state naming the winner while
+// the CPU actually runs the loser, so the inversion would target the LIVE
+// slot and erase the running secure image. `running_slot()` reads the
+// secure VTOR the FSBL set at hand-off, which cannot diverge. Pin the
+// authoritative source, the secure-vs-NS register address, and the
+// slot-base mapping.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn negative_running_slot_reads_secure_vtor_not_boot_state() {
+    // Must read the SECURE VTOR (0xE000_ED08), NOT VTOR_NS (0xE002_ED08):
+    // the NS alias is rewritten by boot_ns and would name the wrong table.
+    assert!(
+        FW_MOD_SRC.contains("0xE000_ED08 as *const u32"),
+        "running_slot must read the secure VTOR at 0xE000_ED08"
+    );
+    assert!(
+        !FW_MOD_SRC.contains("0xE002_ED08 as *const u32")
+            && !FW_MOD_SRC.contains("0xE002_ED08 as *mut u32"),
+        "running_slot must NOT read VTOR_NS (0xE002_ED08) as a register — that \
+         is the non-secure alias, rewritten by boot_ns (a prose mention is fine)"
+    );
+    // Must map the VTOR base to the matching slot's secure region.
+    assert!(
+        FW_MOD_SRC.contains("vtor == flash::SLOT_A_SECURE_ADDR")
+            && FW_MOD_SRC.contains("vtor == flash::SLOT_B_SECURE_ADDR"),
+        "running_slot must map the VTOR value to the slot whose secure base it equals"
+    );
+    // The VTOR read is ARM-target only; host tests fall back to read_active_slot.
+    assert!(
+        FW_MOD_SRC.contains("#[cfg(target_arch = \"arm\")]"),
+        "running_slot's raw VTOR read must be gated to the ARM firmware target"
+    );
+}
+
+#[test]
+fn negative_begin_erase_target_uses_running_slot() {
+    // The erase-target selection must consume running_slot(), not the
+    // divergence-prone read_active_slot(). This is the F4 reliability fix:
+    // erasing the running slot hard-faults the device mid-update.
+    assert!(
+        FW_MOD_SRC.contains("pub fn running_slot() -> Slot {"),
+        "fw_update must expose running_slot() for BEGIN's erase-target choice"
+    );
+}
+
 // ═════════════════════════════════════════════════════════════════════
 // SECTION B — `fw_update/staging.rs`
 // ═════════════════════════════════════════════════════════════════════

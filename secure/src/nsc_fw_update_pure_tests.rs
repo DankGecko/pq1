@@ -929,18 +929,30 @@ fn negative_begin_distinguishes_rollback_from_bad_manifest() {
 }
 
 #[test]
-fn negative_begin_picks_inactive_slot_via_read_active_slot() {
-    // Picking the wrong slot would erase the running firmware —
-    // would brick the device on next reset. Pin the load-bearing
-    // computation.
+fn negative_begin_picks_inactive_slot_via_running_slot() {
+    // Picking the wrong slot would erase the RUNNING firmware out from
+    // under the CPU (hard fault mid-BEGIN + destructive erase of the live
+    // image). BEGIN must derive the running slot from the hardware VTOR
+    // (`running_slot()`), NOT the boot-state page (`read_active_slot()`):
+    // boot_state can diverge from the actually-running slot after an FSBL
+    // try-once revert (a same-version reinstall leaves both slots valid, so
+    // FSBL reverts to the loser while boot_state still names the winner),
+    // and trusting it there would invert to the live slot. Pin the
+    // load-bearing computation to the divergence-proof source.
     assert!(
-        BEGIN_SRC.contains("fw_update::read_active_slot()"),
-        "BEGIN must consult read_active_slot to discover which slot is currently running"
+        BEGIN_SRC.contains("fw_update::running_slot()"),
+        "BEGIN must consult running_slot() (hardware VTOR) — not read_active_slot() \
+         (boot_state, which can diverge) — to discover which slot is currently running"
+    );
+    assert!(
+        !BEGIN_SRC.contains("let running = fw_update::read_active_slot()")
+            && !BEGIN_SRC.contains("let active = fw_update::read_active_slot()"),
+        "BEGIN must not derive the erase target from the boot-state page"
     );
     assert!(
         BEGIN_SRC.contains("flash::Slot::A => flash::Slot::B")
             && BEGIN_SRC.contains("flash::Slot::B => flash::Slot::A"),
-        "BEGIN must invert the active slot to pick the inactive target"
+        "BEGIN must invert the running slot to pick the inactive target"
     );
 }
 
