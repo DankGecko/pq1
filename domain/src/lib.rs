@@ -759,8 +759,26 @@ pub fn derive_c10_slot_keypair_with_progress(
 }
 
 // ---------------------------------------------------------------------------
-// PIN state serialization (used by the mock-SE MACD path)
+// PIN state serialization — the software MAC-and-Destroy (MACD) path.
+// NON-PRODUCTION: mock-SE (dev/QEMU) + Tropic01 backends ONLY.
 // ---------------------------------------------------------------------------
+//
+// The MACD chain (`macd_init_input`/`macd_pin_input` + `serialize_pin_state`/
+// `deserialize_pin_state`) stores the master secret encrypted once per allowed
+// attempt, so only the correct PIN decrypts a slot and a wrong-PIN cycle
+// destroys one. This is the *software* PIN-gating pipeline for backends that
+// lack a silicon PIN counter — the mock SE (dev/QEMU) and the Tropic01 SE.
+// AUTHORITATIVE: `secure/src/pin.rs` — "SE050 / OPTIGA backends do the PIN
+// compare inside the chip instead of through this MACD pipeline."
+//
+// The SHIPPING dual-SE (OPTIGA Trust M + SE050) configuration does NOT use any
+// of this: PIN compare is silicon-enforced (CLAUDE.md invariant #2 — "No
+// software PIN compare"), entropy is XOR-split across the two chips (invariant
+// #1), and `master_secret` is not even sealed here — the real SE `provision`
+// discards its `master_secret` argument and `unlock` recomputes it from the
+// authenticated entropy half (`secure/src/se050/mod.rs`, `optiga/mod.rs`). So
+// the sole Kani harness below fences a non-production recovery parser, not a
+// shipping auth gate.
 
 /// Encrypted master-secret slot: AES-GCM ciphertext (32 B) ‖ tag (16 B).
 pub const PER_SLOT_CT_LEN: usize = 32 + AES_GCM_TAG_LEN;
@@ -831,7 +849,12 @@ mod kani_harnesses {
     /// recovery parser. (The `num_slots > MAX_ATTEMPTS` guard is what keeps the
     /// `encrypted_secrets[i]` write in bounds; Kani confirms it suffices.)
     ///
-    /// Scope: host-reachable pure-logic recovery parser (no_std).
+    /// Scope: host-reachable pure-logic recovery parser (no_std) for the
+    /// software MACD PIN-state blob — the NON-PRODUCTION path used only by the
+    /// mock-SE (dev/QEMU) and Tropic01 backends (see the section header above).
+    /// It is NOT the shipping dual-SE auth gate (OPTIGA/SE050 PIN-compare in
+    /// silicon, invariant #2), so this proves panic-freedom of a non-production
+    /// recovery parser — not coverage of a production PIN gate.
     #[kani::proof]
     #[kani::unwind(12)]
     fn deserialize_pin_state_panic_free() {
