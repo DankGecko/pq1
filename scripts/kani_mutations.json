@@ -121,6 +121,17 @@
       "replace": "Ok((Item::Bytes(&input[..1]), 0))",
       "expect": "kani_fails",
       "note": "under-report the single-byte item's consumed count (used 1 -> 0) -> ListIter's `&self.rest[used..]` would re-read the same byte (a parse desync). The strengthened `assert_eq!(used, header_len + payload.len())` (header_len derived independently from the RLP prefix byte) MUST break; the old `used <= len` assert would have PASSED with used=0. Verified 2026-07-02 by hand: mutation -> VERIFICATION:- FAILED; unmutated -> SUCCESSFUL. Closes finding §2 #10."
+    },
+    {
+      "id": "erc20_transferfrom_to_offset",
+      "tier": "default",
+      "crate": "pqsigner-tx",
+      "harness": "parse_erc20_transfer_from_no_misdecode",
+      "file": "tx/src/erc20/calldata.rs",
+      "find": "let to = decode_address_word(&body[32..64])",
+      "replace": "let to = decode_address_word(&body[0..32])",
+      "expect": "kani_fails",
+      "note": "read transferFrom's `to` from word 0 (the `from` word) instead of word 1 -> the display would show the WRONG recipient for the approval-drain arm. parse_erc20_transfer_from_no_misdecode (decoded to == encoded to, forall) MUST break. Verified 2026-07-02 by hand: mutation -> VERIFICATION:- FAILED; unmutated -> SUCCESSFUL. Closes finding §2 #9 (only `transfer` had a forall no-misdecode harness; approve/transferFrom rested on point-tests)."
     }
   ]
 }

@@ -152,4 +152,51 @@ mod kani_harnesses {
             _ => panic!("a well-formed transfer calldata must decode to Transfer"),
         }
     }
+
+    /// No-misdecode for `transferFrom(from, to, amount)` (finding §2 #9): the
+    /// same ∀ display-integrity property proved for `transfer`, now for the arm
+    /// that moves SOMEONE ELSE's tokens (the approval-drain vector). Every
+    /// well-formed calldata decodes to `TransferFrom` with exactly the encoded
+    /// from / to / amount — the display can't swap them.
+    #[kani::proof]
+    #[kani::unwind(64)]
+    fn parse_erc20_transfer_from_no_misdecode() {
+        let from: [u8; 20] = kani::any();
+        let to: [u8; 20] = kani::any();
+        let amount: [u8; 32] = kani::any();
+        let mut data = [0u8; 100];
+        data[0..4].copy_from_slice(&SELECTOR_TRANSFER_FROM);
+        data[16..36].copy_from_slice(&from); // word 0 (right-justified)
+        data[48..68].copy_from_slice(&to); // word 1 (right-justified)
+        data[68..100].copy_from_slice(&amount); // word 2
+        match parse_erc20_calldata(&data) {
+            Some(Erc20Call::TransferFrom { from: pf, to: pt, amount: pa }) => {
+                assert!(pf == from, "decoded `from` must equal the encoded `from`");
+                assert!(pt == to, "decoded `to` must equal the encoded `to`");
+                assert!(pa.0 == amount, "decoded amount must equal the encoded amount");
+            }
+            _ => panic!("a well-formed transferFrom must decode to TransferFrom"),
+        }
+    }
+
+    /// No-misdecode for `approve(spender, amount)` (finding §2 #9): the display
+    /// can't show a spender/amount different from the signed bytes. `approve` is
+    /// the primary allowance-grant (drain-enable) path.
+    #[kani::proof]
+    #[kani::unwind(64)]
+    fn parse_erc20_approve_no_misdecode() {
+        let spender: [u8; 20] = kani::any();
+        let amount: [u8; 32] = kani::any();
+        let mut data = [0u8; 68];
+        data[0..4].copy_from_slice(&SELECTOR_APPROVE);
+        data[16..36].copy_from_slice(&spender);
+        data[36..68].copy_from_slice(&amount);
+        match parse_erc20_calldata(&data) {
+            Some(Erc20Call::Approve { spender: ps, amount: pa }) => {
+                assert!(ps == spender, "decoded spender must equal the encoded spender");
+                assert!(pa.0 == amount, "decoded amount must equal the encoded amount");
+            }
+            _ => panic!("a well-formed approve must decode to Approve"),
+        }
+    }
 }
