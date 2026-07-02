@@ -253,6 +253,63 @@ def completeness(manifest: dict) -> list[str]:
     return fails
 
 
+def _workspace_crate_dirs() -> dict:
+    """package-name -> repo-relative source dir (parsed from each crate's Cargo.toml)."""
+    out: dict = {}
+    for cargo in REPO_ROOT.glob("*/Cargo.toml"):
+        try:
+            m = re.search(r'^\s*name\s*=\s*"([^"]+)"', cargo.read_text(encoding="utf-8"), re.M)
+        except OSError:
+            continue
+        if m:
+            out[m.group(1)] = cargo.parent.name
+    return out
+
+
+def _makefile_kani_crates() -> list[str]:
+    """Crates `make kani` runs `cargo kani -p` on, parsed from the `kani:` target block."""
+    try:
+        lines = (REPO_ROOT / "Makefile").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    crates, in_kani = [], False
+    for ln in lines:
+        if re.match(r"^kani:", ln):
+            in_kani = True
+            continue
+        if in_kani and re.match(r"^[A-Za-z0-9_.-]+:", ln):  # next top-level target
+            break
+        if in_kani:
+            m = re.search(r"cargo kani -p (\S+)", ln)
+            if m:
+                crates.append(m.group(1))
+    return crates
+
+
+def kani_makefile_coverage(policed: list[str], kani_crates: list[str], crate_dirs: dict) -> list[str]:
+    """REVERSE-CHECK (finding §2 #6): every crate `make kani` actually runs
+    `cargo kani -p` on must have its `<dir>/src/` covered by the kani gate's
+    `polices_paths`. The forward `check_gate` only asserts the trigger `paths:` cover
+    the DECLARED polices_paths; nothing asserts the declared surface matches what the
+    target RUNS — so a new `cargo kani -p <crate>` added to the Makefile without
+    updating polices_paths would silently escape a (future per-PR) kani path filter.
+    This is exactly the domain/src + tx-core/src omission the 2026-07-01 kani review
+    found (gate-enforcement-kani-polices-omits-domain-txcore)."""
+    fails = []
+    norm = [_norm_prefix(p) for p in policed]
+    for c in sorted(set(kani_crates)):
+        d = crate_dirs.get(c)
+        if d is None:
+            fails.append(f"kani-reverse: Makefile `cargo kani -p {c}` maps to no workspace crate dir.")
+            continue
+        want = f"{d}/src/"
+        if not any(want.startswith(n) for n in norm):
+            fails.append(f"kani-reverse: `make kani` runs `cargo kani -p {c}` but `{d}/src/**` is NOT covered "
+                         f"by the kani gate's polices_paths (a future per-PR kani would drop that crate's "
+                         f"harnesses — finding §2 #6).")
+    return fails
+
+
 def main() -> int:
     self_test = "--self-test" in sys.argv[1:]
     try:
@@ -279,7 +336,13 @@ def main() -> int:
         if not any("paths-ignore" in m for m in fi):
             print("  SELF-TEST FAILED: paths-ignore-excluded gate NOT caught — harness void.", file=sys.stderr)
             return 2
-        print(f"  self-test OK: allowlist gap caught ({len(fa)}), paths-ignore gap caught ({len(fi)}).")
+        # 3rd control: an uncovered crate `make kani` runs must be caught by the reverse-check.
+        rc = kani_makefile_coverage(["tx/src/**"], ["pqsigner-domain"], {"pqsigner-domain": "domain"})
+        if not rc:
+            print("  SELF-TEST FAILED: uncovered kani-Makefile crate NOT caught — harness void.", file=sys.stderr)
+            return 2
+        print(f"  self-test OK: allowlist gap caught ({len(fa)}), paths-ignore gap caught ({len(fi)}), "
+              f"kani-reverse gap caught ({len(rc)}).")
         return 0
 
     print(f"=== verify-gate-enforcement ({len(gates)} gates) ===")
@@ -288,6 +351,10 @@ def main() -> int:
     for g in gates:
         all_fails += check_gate(g)
     all_fails += completeness(manifest)
+    kani_gate = next((g for g in gates if g["id"] == "kani"), None)
+    if kani_gate:
+        all_fails += kani_makefile_coverage(kani_gate.get("polices_paths", []),
+                                            _makefile_kani_crates(), _workspace_crate_dirs())
 
     print()
     if all_fails:
