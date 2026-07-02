@@ -202,20 +202,22 @@ contract PQSmartWalletInvariantsTest is StdInvariant, Test {
             "Claim 2/3 violation: bootstrapUses decreased");
     }
 
-    /// **inv_combined_cap.** For each slot, `slotUses[i] +
-    /// offchainSigCount[i] <= MAX_SLOT_USES`. (I-5 inductive invariant.)
-    function invariant_combined_cap_slot0() external view {
-        uint256 i = 0;
-        uint256 sum = wallet.slotUses(i) + wallet.offchainSigCount(i);
-        assertTrue(sum <= wallet.MAX_SLOT_USES(),
-            "Claim 2/3 violation: combined cap exceeded (slot 0)");
-    }
-
-    function invariant_combined_cap_slot1() external view {
-        uint256 i = 1;
-        uint256 sum = wallet.slotUses(i) + wallet.offchainSigCount(i);
-        assertTrue(sum <= wallet.MAX_SLOT_USES(),
-            "Claim 2/3 violation: combined cap exceeded (slot 1)");
+    /// **inv_combined_cap.** For EVERY installed owner index,
+    /// `slotUses[i] + offchainSigCount[i] <= MAX_SLOT_USES` (I-5 inductive
+    /// invariant). Loops over all live indices `0 .. nextOwnerIndex()-1`
+    /// rather than hardcoding slots 0 and 1: slot 0 is the bootstrap index,
+    /// validation-gated to `addOwnerBytes` so it never accumulates
+    /// slot/offchain counts (the old hardcoded slot-0 check was therefore
+    /// vacuously true), and any slot `>= 2` that `handler_addOwner` installs
+    /// — and `handler_executeOffchainCount` then bumps up to
+    /// `_activeSlotIndex()` — was previously never invariant-checked at all.
+    function invariant_combined_cap_all_slots() external view {
+        uint256 n = wallet.nextOwnerIndex();
+        for (uint256 i = 0; i < n; i++) {
+            uint256 sum = wallet.slotUses(i) + wallet.offchainSigCount(i);
+            assertTrue(sum <= wallet.MAX_SLOT_USES(),
+                "Claim 2/3 violation: combined cap exceeded");
+        }
     }
 
     /// **inv_bootstrapUses_capped.** Bootstrap cap is never exceeded.
