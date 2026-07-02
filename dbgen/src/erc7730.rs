@@ -577,9 +577,17 @@ fn build_db_inner(
     });
 
     // 2. Handle (chain_id, contract, primary_type_hash, ctx) duplicates.
-    //    Strict: a dup is almost always a curation bug → hard-error.
-    //    Tolerant: the registry legitimately ships the same token/contract
-    //    in several files (or across projects) → drop the later leaf + record.
+    //    Byte-identical IRs are benign — the registry legitimately ships the
+    //    same token/contract across projects, or a file lists a deployment
+    //    twice — so drop the later one (record a skip in tolerant mode).
+    //    NON-identical IRs are a trust hazard (review 2.2): the two descriptors
+    //    render DIFFERENTLY for the SAME on-chain (chain, contract), and the
+    //    survivor was being chosen by lexicographic source-path order — so an
+    //    upstream PR adding an alphabetically-earlier file could silently swap
+    //    which descriptor the device trusts on the next re-vendor. Refuse in
+    //    BOTH modes: force a deliberate human resolution (curate one out) at
+    //    build/re-vendor time rather than trusting a filename-order winner. We
+    //    vendor the registry, so this fails at re-vendor review, never in prod.
     let mut deduped: Vec<Emitted> = Vec::with_capacity(emitted.len());
     for e in emitted {
         if let Some(prev) = deduped.last() {
@@ -588,21 +596,41 @@ fn build_db_inner(
                 && prev.primary_type_hash == e.primary_type_hash
                 && prev.context_kind == e.context_kind
             {
-                let msg = format!(
-                    "duplicate (chain_id={}, contract=0x{}, primary_type_hash=0x{}, ctx={}) — \
-                     sources: {} vs {}",
+                let key = format!(
+                    "chain_id={}, contract=0x{}, primary_type_hash=0x{}, ctx={}",
                     prev.chain_id,
                     hex::encode(prev.contract),
                     hex::encode(prev.primary_type_hash),
                     prev.context_kind,
+                );
+                if prev.ir_bytes == e.ir_bytes {
+                    // Benign byte-identical dup.
+                    if tolerant {
+                        skips.push(SkipReport {
+                            source: e.source.clone(),
+                            reason: format!(
+                                "duplicate ({key}) byte-identical to {} — deduped",
+                                prev.source.display(),
+                            ),
+                        });
+                        continue;
+                    }
+                    // Strict corpus: even an identical dup is a curation bug.
+                    return Err(format!(
+                        "duplicate ({key}) — sources: {} vs {}",
+                        prev.source.display(),
+                        e.source.display(),
+                    ));
+                }
+                return Err(format!(
+                    "CONFLICT: non-identical duplicate leaf ({key}) — sources {} vs {} compile \
+                     to DIFFERENT IR. The device would trust whichever sorts first by source \
+                     path (a silent trust-swap on re-vendor). Resolve by curating one descriptor \
+                     out of the vendored tree, or — if both are legitimately needed — ensure they \
+                     target distinct deployments.",
                     prev.source.display(),
                     e.source.display(),
-                );
-                if tolerant {
-                    skips.push(SkipReport { source: e.source.clone(), reason: msg });
-                    continue;
-                }
-                return Err(msg);
+                ));
             }
         }
         deduped.push(e);

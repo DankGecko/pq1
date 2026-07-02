@@ -14,7 +14,9 @@
 use std::fs;
 use std::path::PathBuf;
 
-use dbgen::erc7730::{build_db, build_db_with_policy_override, Erc7730BuildResult};
+use dbgen::erc7730::{
+    build_db, build_db_tolerant, build_db_with_policy_override, Erc7730BuildResult,
+};
 
 fn expect_err(res: Result<Erc7730BuildResult, String>, msg: &str) -> String {
     match res {
@@ -71,6 +73,73 @@ fn build_db_default_matches_dev_override() {
         .expect("override(false) build");
     assert_eq!(a.blob, b.blob, "blob diverged");
     assert_eq!(a.root, b.root, "root diverged");
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// review 2.2: duplicate-leaf precedence (byte-identical dedup vs conflict)
+// ─────────────────────────────────────────────────────────────────────
+
+const POLICY_DEV_2: &str =
+    "allow_unattested_dev_descriptors = true\nmin_attesters = 0\ntrusted_attesters = []\n";
+
+/// A minimal compilable calldata descriptor for `transfer(address,uint256)` at
+/// chain 1 / contract 0x…01, parameterised by the two field labels (so two
+/// instances with different labels compile to DIFFERENT IR for the SAME leaf
+/// key).
+fn transfer_descriptor(to_label: &str, amt_label: &str) -> String {
+    format!(
+        r#"{{
+  "context": {{ "contract": {{ "deployments": [{{ "chainId": 1, "address": "0x0000000000000000000000000000000000000001" }}] }} }},
+  "metadata": {{ "owner": "Dup Test", "contractName": "DupTest" }},
+  "display": {{ "formats": {{ "transfer(address to, uint256 amount)": {{
+      "intent": "Send",
+      "fields": [
+        {{ "path": "to", "format": "addressName", "label": "{to_label}", "visible": "always" }},
+        {{ "path": "amount", "format": "raw", "label": "{amt_label}", "visible": "always" }}
+      ] }} }} }}
+}}"#
+    )
+}
+
+#[test]
+fn dup_leaf_byte_identical_is_deduped_not_error() {
+    // Same (chain, contract) in two differently-named files with IDENTICAL
+    // content → identical IR → benign dedup: build succeeds, one leaf, and the
+    // drop is recorded as a byte-identical skip (review 2.2).
+    let dir = make_tempdir("dup_identical");
+    fs::write(dir.join("policy.toml"), POLICY_DEV_2).unwrap();
+    let d = transfer_descriptor("To", "Amount");
+    fs::write(dir.join("calldata-a.json"), &d).unwrap();
+    fs::write(dir.join("calldata-b.json"), &d).unwrap();
+
+    let (res, skips) = build_db_tolerant(&dir, &dir.join("policy.toml"), Some(&dir))
+        .expect("byte-identical dup must dedupe cleanly, not error");
+    assert_eq!(res.leaf_count, 1, "identical dup must collapse to one leaf");
+    assert!(
+        skips.iter().any(|s| s.reason.contains("byte-identical")),
+        "the dropped identical dup must be recorded as byte-identical: {:?}",
+        skips.iter().map(|s| &s.reason).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn dup_leaf_non_identical_is_conflict_error() {
+    // Same (chain, contract) but DIFFERENT IR (different field labels) → the
+    // device would trust whichever sorts first by filename (a silent trust-swap
+    // on re-vendor). Must hard-error, not pick a filename-order winner.
+    let dir = make_tempdir("dup_conflict");
+    fs::write(dir.join("policy.toml"), POLICY_DEV_2).unwrap();
+    fs::write(dir.join("calldata-a.json"), transfer_descriptor("To", "Amount")).unwrap();
+    fs::write(dir.join("calldata-b.json"), transfer_descriptor("Recipient", "Value")).unwrap();
+
+    let err = match build_db_tolerant(&dir, &dir.join("policy.toml"), Some(&dir)) {
+        Ok(_) => panic!("non-identical dup MUST hard-error (review 2.2)"),
+        Err(e) => e,
+    };
+    assert!(
+        err.contains("CONFLICT") && err.contains("non-identical duplicate"),
+        "unexpected error for non-identical dup: {err}"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────
