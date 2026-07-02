@@ -209,6 +209,17 @@
       "replace": "if p + trailer_len > payload.len() {",
       "expect": "kani_fails",
       "note": "weaken the EIP-712 typed-frame EXACT-consumption guard (`!=` -> `>`) so a payload with hidden trailing bytes after the trailer is accepted -> parse_frame_panic_free_and_exact's `trailer ends at payload.len()` assertion MUST break. Verified 2026-07-02 by hand: mutation -> VERIFICATION:- FAILED; unmutated -> SUCCESSFUL. Closes review finding (h): the offchain EIP712_TYPED/_V3 companion header parser had no host-Kani coverage; now extracted to pqsigner_aa::offchain_header (behaviour-identical, re-wired into cmd_sign_offchain.rs) + panic/OOB + exact-consumption harnesses."
+    },
+    {
+      "id": "usb_apdu_reassembly_bounds",
+      "tier": "default",
+      "crate": "sphincs-tz-shared",
+      "harness": "process_frame_continuation_no_oob",
+      "file": "shared/src/apdu_framing.rs",
+      "find": "Some(e) if e <= buf.len() && e <= MAX_APDU_RX => e,",
+      "replace": "Some(e) => e,",
+      "expect": "kani_fails",
+      "note": "remove the HID-reassembly continuation bounds guard so `buf[rx_pos..end]` writes past the caller's reassembly buffer -> process_frame_continuation_no_oob (arbitrary assembler state incl. rx_pos over MAX_APDU_RX + a symbolic continuation frame) MUST hit an out-of-bounds slice write. Verified 2026-07-02 by hand: mutation -> VERIFICATION:- FAILED; unmutated -> SUCCESSFUL. Closes the S-USB-OVERFLOW row of contracts/verification/docs/THREAT_CLAIM_MAP.md (UNCLAIMED -> PARTIAL): the attacker-facing USB APDU reassembly (shared/src/apdu_framing.rs, the one layer between a malicious USB host and the firmware) had proptest fuzz coverage but no exhaustive Kani panic/OOB proof. NB: with buf sized exactly MAX_APDU_RX the two guard conjuncts (e <= buf.len(), e <= MAX_APDU_RX) are individually redundant so dropping ONE is not catchable; this removes the guard entirely (the load-bearing memory-safety check)."
     }
   ]
 }

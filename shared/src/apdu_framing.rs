@@ -830,3 +830,156 @@ mod fuzz_props {
         assert_eq!(asm.rx_expected(), 0);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Kani harnesses — EXHAUSTIVE (∀) panic / out-of-bounds-write freedom for the
+// attacker-facing USB reassembly + framing.
+//
+// The `fuzz_props` proptest harness above SAMPLES random inputs; these PROVE
+// the property for ALL inputs. They close the `S-USB-OVERFLOW` row of
+// `contracts/verification/docs/THREAT_CLAIM_MAP.md` ("Buffer overflow in APDU
+// reassembly", UNCLAIMED → PARTIAL): the reassembly + framing + chain-cursor
+// are the one layer between "anything a malicious USB host can send" and the
+// rest of the firmware. (The per-command dispatch in
+// `nonsecure::usb::commands` stays host-uncompilable — the other half of the
+// §35 P7 USB-decoder item — so this is PARTIAL, not COVERED.)
+//
+// In Rust an out-of-bounds slice write PANICS (`copy_from_slice` length
+// mismatch / index OOB), so Kani's built-in bounds/overflow/panic checks ARE
+// the no-OOB-write proof; the explicit asserts add the semantic bounds the
+// callers rely on. Host 64-bit `usize`; every length here is ≤ MAX_APDU_RX
+// (4096) ≪ 2³², so there is no 32-bit-`usize` divergence on the thumbv8m
+// target (same faithfulness note as the multiSend host-width caveat, §35 3b-3).
+// ---------------------------------------------------------------------------
+#[cfg(kani)]
+mod kani_harnesses {
+    use super::*;
+
+    // `HidFrameAssembler::process_frame` writes host-controlled bytes into the
+    // caller's reassembly buffer at `buf[..take]` / `buf[rx_pos..end]`. An
+    // out-of-bounds write there IS `S-USB-OVERFLOW`. Both harnesses below run
+    // over a **fully arbitrary** assembler state (all four private fields
+    // `kani::any()`) and an arbitrary 64-byte frame + arbitrary claimed length
+    // `n`. Arbitrary-state (rather than an assumed inductive invariant) is SOUND
+    // and strictly stronger because every write is guarded independent of prior
+    // state, so even an unreachable state simply drops — no state assumption to
+    // be made vacuous (kills the V1 risk). `buf` is sized exactly `MAX_APDU_RX`
+    // so BOTH live guards `e <= buf.len()` and `e <= MAX_APDU_RX` are exercised.
+    // The two paths are split ONLY to keep CBMC tractable (the seq-0-interrupt
+    // scrub is an up-to-`MAX_APDU_RX` loop); together they cover every branch.
+
+    /// Continuation path (seq != 0) — the **overflow-critical** write
+    /// `buf[rx_pos..end]` from an ARBITRARY `rx_pos` (incl. at/over the
+    /// `MAX_APDU_RX` boundary). Proves the `end = rx_pos.checked_add(take)` with
+    /// `e <= buf.len() && e <= MAX_APDU_RX` gate keeps it in-bounds for all
+    /// inputs. No scrub on this path (the scrub is seq == 0 only) → small unwind.
+    #[kani::proof]
+    #[kani::unwind(64)]
+    fn process_frame_continuation_no_oob() {
+        let mut buf = [0u8; MAX_APDU_RX];
+        let mut asm = HidFrameAssembler {
+            channel_id: kani::any(),
+            rx_expected: kani::any(),
+            rx_pos: kani::any(),
+            rx_seq: kani::any(),
+        };
+        let mut report: [u8; HID_REPORT_SIZE] = kani::any();
+        // Force a continuation frame. The append path is reachable (non-vacuous)
+        // when the arbitrary `channel`/`rx_seq` match the frame's; otherwise it
+        // drops — both explored.
+        let seq: u16 = kani::any();
+        kani::assume(seq != 0);
+        report[3..5].copy_from_slice(&seq.to_be_bytes());
+        let n: usize = kani::any();
+        let outcome = asm.process_frame(&report, n, &mut buf);
+        if let FrameOutcome::ApduComplete(len) = outcome {
+            assert!(len <= MAX_APDU_RX);
+        }
+        // NOTE: `asm.rx_pos <= MAX_APDU_RX` is a *reachable-state* invariant, not
+        // an all-state one — an early-drop (`n<5` / wrong tag / PingEcho) returns
+        // without resetting, so from an arbitrary (unreachable) `rx_pos` it can
+        // stay huge. That is harmless (no write occurs on those paths — Kani's
+        // built-in bounds checks prove it), so we do NOT assert it here; the
+        // no-out-of-bounds-write property is what closes S-USB-OVERFLOW.
+    }
+
+    /// First-frame + seq-0-interrupt scrub path (seq == 0). Covers the
+    /// first-frame length parse / clamp / copy (`rx_pos == 0`, no scrub) and the
+    /// abort-scrub `buf[..min(rx_pos, buf.len())]` + reset (`rx_pos > 0`).
+    /// `rx_pos` is bounded so the min-clamped scrub memset stays within a
+    /// tractable unwind; the scrub is in-bounds by construction for ANY
+    /// `rx_pos` (the `min(_, buf.len())` clamp), and the full range up to
+    /// `MAX_APDU_RX` is exercised by the `hid_frame_*` proptest harnesses above.
+    #[kani::proof]
+    #[kani::unwind(131)]
+    fn process_frame_first_and_scrub_no_oob() {
+        let mut buf = [0u8; MAX_APDU_RX];
+        let mut asm = HidFrameAssembler {
+            channel_id: kani::any(),
+            rx_expected: kani::any(),
+            rx_pos: kani::any(),
+            rx_seq: kani::any(),
+        };
+        kani::assume(asm.rx_pos <= 128);
+        let mut report: [u8; HID_REPORT_SIZE] = kani::any();
+        report[3] = 0; // seq == 0
+        report[4] = 0;
+        let n: usize = kani::any();
+        let outcome = asm.process_frame(&report, n, &mut buf);
+        if let FrameOutcome::ApduComplete(len) = outcome {
+            assert!(len <= MAX_APDU_RX);
+        }
+        // NOTE: `asm.rx_pos <= MAX_APDU_RX` is a *reachable-state* invariant, not
+        // an all-state one — an early-drop (`n<5` / wrong tag / PingEcho) returns
+        // without resetting, so from an arbitrary (unreachable) `rx_pos` it can
+        // stay huge. That is harmless (no write occurs on those paths — Kani's
+        // built-in bounds checks prove it), so we do NOT assert it here; the
+        // no-out-of-bounds-write property is what closes S-USB-OVERFLOW.
+    }
+
+    /// `ChainState::step` advances the chained-APDU write cursor; the caller
+    /// then copies `lc` bytes to `buf[write_at..write_at + lc]`. Prove the
+    /// cursor can never escape `buf_capacity`, over an arbitrary prior state
+    /// and arbitrary `(ins, p1, lc, cap)` incl. `lc` near `usize::MAX` (the
+    /// `checked_add` overflow guard): `pos <= cap` after every step, and every
+    /// `Appended` / `Execute` outcome has `write_at + lc <= cap` so the
+    /// caller's copy is in-bounds. No `assume` — the `np <= buf_capacity` gate
+    /// makes both properties hold from any starting `pos`.
+    #[kani::proof]
+    fn chain_step_cursor_within_capacity() {
+        let mut st = ChainState {
+            ins: kani::any(),
+            pos: kani::any(),
+        };
+        let ins: u8 = kani::any();
+        let p1: u8 = kani::any();
+        let lc: usize = kani::any();
+        let cap: usize = kani::any();
+        let outcome = st.step(ins, p1, lc, cap);
+        assert!(st.pos() <= cap);
+        match outcome {
+            ChainStepOutcome::Appended { write_at, lc: l }
+            | ChainStepOutcome::Execute { write_at, lc: l, .. } => {
+                // The caller's `buf[write_at..write_at + l]` copy is in-bounds.
+                assert!(write_at.checked_add(l).is_some_and(|e| e <= cap));
+            }
+            ChainStepOutcome::ProtocolError | ChainStepOutcome::WrongLength => {}
+        }
+    }
+
+    /// `parse_apdu_header` is the first parse every USB byte hits. Prove it is
+    /// panic-free ∀ and that a successful parse yields `data.len() == lc` with
+    /// `lc` inside the input — the invariant `route_v2` + the chain machine
+    /// rely on. Loop-free; a 16-byte symbolic input exercises both the
+    /// `HeaderTooShort`, `LcOverrun`, and OK (`5 + lc <= len`) arms.
+    #[kani::proof]
+    fn parse_apdu_header_sound() {
+        let arr: [u8; 16] = kani::any();
+        let len: usize = kani::any();
+        kani::assume(len <= arr.len());
+        if let Ok(h) = parse_apdu_header(&arr[..len]) {
+            assert!(h.data.len() == h.lc);
+            assert!(h.lc <= len);
+        }
+    }
+}
