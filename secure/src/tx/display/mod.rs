@@ -376,11 +376,15 @@ fn pick_sign_pages_inner(
         match erc7730::render_erc7730_pages(tx, inner_data, d, erc20, resolver) {
             Ok(pages) => return Ok(pages),
             Err(crate::tx::erc7730_render::RenderErr::Reject(msg)) => {
-                crate::ui::show_status("Sign", msg);
-                // Fall through to the next ladder rung so the user
-                // still sees the transaction in a less-rich form
-                // (typed-call selector / blind-sign / ERC-20). The
-                // banner above gives them the reason.
+                // `msg` is a developer trace tag (e.g. "7730 nested blob
+                // trailing") — not user-facing text, and several exceed the
+                // 16-col row. Show the user ONE clear line and keep the tag in
+                // the debug log (review 4.12). Fall through to the next ladder
+                // rung so they still see the tx in a less-rich form (typed-call
+                // selector / blind-sign / ERC-20).
+                crate::secure_log!("erc7730 clear-sign declined: {}", msg);
+                let _ = msg;
+                crate::ui::show_status("Can't clear-sign", "review raw sign");
             }
             Err(_) => {
                 // NoFormat / PageBudget — fall through silently.
