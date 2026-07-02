@@ -52,6 +52,7 @@ order they will bite you.
    - [7.4 USDC TransferWithAuthorization (EIP-712 typed)](#74-usdc-transferwithauthorization-eip-712-typed)
    - [7.5 Atomic batch (Type 1 + Type 2 in one user confirm)](#75-atomic-batch-type-1--type-2-in-one-user-confirm)
    - [7.6 UniswapX ExclusiveDutchOrder (kind=3, depth-2 nested)](#76-uniswapx-exclusivedutchorder-kind3-depth-2-nested)
+   - [7.7 1inch aggregation swap — what "Minimum receive" means (partial-fill caveat)](#77-1inch-aggregation-swap--what-minimum-receive-means-partial-fill-caveat)
 8. [Firmware response handling](#8-firmware-response-handling)
 9. [Failure modes and how to test them](#9-failure-modes-and-how-to-test-them)
 10. [Versioning and root rotation](#10-versioning-and-root-rotation)
@@ -771,6 +772,41 @@ amount, each output's min-receive amount + recipient (`Item i of N`), and the de
 all cryptographically bound to the signed digest. `DutchOrder` (no exclusiveFiller),
 `LimitOrder` (`OutputToken`, 3-member element), and `V2DutchOrder` (adds `cosigner`,
 `baseInput*`/`baseOutputs`) follow the identical record pattern with their own member layouts.
+
+### 7.7 1inch aggregation `swap` — what "Minimum receive" means (partial-fill caveat)
+
+1inch AggregationRouter V3/V4/V5 `swap` clear-signs (it's a normal `CMD_SIGN_USEROP`
+calldata sign, §6.1 — the descriptor is `1inch/calldata-AggregationRouterV5.json`
+et al.). The device shows three fields and hides two by a **reviewed** policy
+exemption (`secure/data/erc7730/policy.toml`, `hidden_address_allow`):
+
+| shown | hidden (allowlisted / non-address) |
+|---|---|
+| **Send** — `desc.amount` of `desc.srcToken` | `caller`/`executor`, `desc.srcReceiver` (execution intermediaries) |
+| **Minimum receive** — `desc.minReturnAmount` of `desc.dstToken` | `desc.flags`, `permit`, `data` |
+| **Beneficiary** — `desc.dstReceiver` | |
+
+Why hiding `executor`/`srcReceiver` is safe: the router's ONLY debit from the signer
+is exactly the shown `desc.amount` of `desc.srcToken` (it does not relay the signer's
+approvals to the executor), and it reverts unless at least `desc.minReturnAmount` of
+`desc.dstToken` reaches `desc.dstReceiver` — all shown. A malicious executor/srcReceiver
+can only make the swap **revert**, never redirect funds or spend beyond the shown amount.
+
+**Caveat companions MUST convey to users — read "Send" as a MAX and "Minimum receive"
+as the FULL-fill floor.** When `desc.flags & _PARTIAL_FILL` (bit 0) is set (the device
+does not display flags), 1inch may fill the swap PARTIALLY: it spends *up to* `desc.amount`,
+delivers *at least the shown rate* (`minReturnAmount / amount`) on the spent portion, and
+REFUNDS the unspent `srcToken`. So a partial fill receives proportionally less than the
+shown "Minimum receive" — but at ≥ the signed rate, with the remainder returned. This is
+**user-favourable** (the signer is never forced to over-spend or accept a worse rate), so
+the device does not scare-flag it; but a companion UI should present a `_PARTIAL_FILL`
+swap as "swap **up to** {amount} {srcToken} for **at least** {minReturn} {dstToken} (at
+this rate; may fill partially and refund the rest)". The same principle applies to any
+partial-fillable swap: the on-device "minimum receive" is the maximum-fill floor.
+
+The pools-slice `swap` variants (`unoswap`, `uniswapV3Swap`, …) are NOT clear-signable —
+they carry a rendered-value array slice (`pools.[-1]`) that would hide the rest of the
+array, so the device correctly declines them (loud blind-sign).
 
 ## 8. Firmware response handling
 
