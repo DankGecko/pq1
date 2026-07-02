@@ -88,6 +88,17 @@
       "replace": "false",
       "expect": "kani_fails",
       "note": "disable read_address_word_off's top-12-zero address-canonicity reject -> a dirty-padding address word (to/gas_token/refund_receiver) is accepted, so decode_exec_rejects_noncanonical_address (expects NonCanonicalAddress) MUST break. Verified 2026-07-02 by hand: mutation -> BOTH decode_exec_rejects_noncanonical_address AND decode_exec_soundness (accept-direction top-12==0 assert) -> VERIFICATION:- FAILED; unmutated -> SUCCESSFUL. Closes finding 3b/#4 (exec address canonicity had NO harness; deleting the reject kept all 12 safe_tx harnesses green)."
+    },
+    {
+      "id": "array_element_cap",
+      "tier": "default",
+      "crate": "pqsigner-erc7730",
+      "harness": "resolve_array_rejects_over_cap",
+      "file": "pqsigner-erc7730/src/render/array.rs",
+      "find": "if count > MAX_ARRAY_RENDER {",
+      "replace": "if false {",
+      "expect": "kani_fails",
+      "note": "disable the dynamic-array element cap (step 7) -> a 9-element sole-tail body is accepted, so resolve_array_rejects_over_cap (expects Reject) MUST break. Verified 2026-07-02 by hand: mutation -> VERIFICATION:- FAILED; unmutated -> SUCCESSFUL. Closes finding §2 #2 (the cap was UNREACHABLE in the symbolic panic-free harnesses at N=160/224 which admit only count<=2/4, so `count<=MAX_ARRAY_RENDER` there was vacuous; the concrete control at 384 B exercises it)."
     }
   ]
 }

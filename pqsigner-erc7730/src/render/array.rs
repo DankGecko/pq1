@@ -400,7 +400,11 @@ mod kani_harnesses {
                 assert!(end <= full_body.len());
                 // Exact-tail placement: the array IS the whole tail.
                 assert!(end == full_body.len());
-                assert!(count <= MAX_ARRAY_RENDER);
+                // NOTE: at N=160 a SoleWholeTail admits only count ≤ 2, so an
+                // `assert!(count <= MAX_ARRAY_RENDER)` here would be VACUOUS (the
+                // count > 8 reject is structurally unreachable). The cap is
+                // exercised by the concrete `resolve_array_rejects_over_cap`
+                // control below instead (finding §2 #2).
             }
             Err(_) => {}
         }
@@ -426,9 +430,35 @@ mod kani_harnesses {
                 let span = count.checked_mul(32).unwrap();
                 let end = elems_start.checked_add(span).unwrap();
                 assert!(end <= full_body.len());
-                assert!(count <= MAX_ARRAY_RENDER);
+                // Vacuous cap assert removed: at N=224 a MultiInTail admits only
+                // count ≤ 4 here — see resolve_array_rejects_over_cap (finding §2 #2).
             }
             Err(_) => {}
         }
+    }
+
+    /// Non-vacuity (finding §2 #2): the human/page-budget element cap
+    /// (`count > MAX_ARRAY_RENDER` ⇒ Reject) is UNREACHABLE in the symbolic
+    /// panic-free harnesses above — at N=160/224 a `SoleWholeTail` admits only
+    /// ≤2/≤4 elements, so `count <= MAX_ARRAY_RENDER` there is vacuously true and
+    /// deleting the reject kept both green. This concrete control feeds a
+    /// well-formed 9-element sole-tail body (array offset 0x40, length word 9,
+    /// nine element words = 384 B; `total == len_end(96) + 9*32 == body.len()`,
+    /// so it passes the whole-tail gate and reaches step 7) and asserts the cap
+    /// fires. Deleting `if count > MAX_ARRAY_RENDER` accepts it ⇒ this FAILS
+    /// (`kani_mutations.json: array_element_cap`).
+    #[kani::proof]
+    #[kani::unwind(34)]
+    fn resolve_array_rejects_over_cap() {
+        let pool = [0xFFu8, 5, 0x10, 0x20, 0x00, 0x00, 0x24];
+        let ir = mk_ir(&pool);
+        let field = FieldEntry { format_op: 0x02, label: b"a", path_off: 1, param_off: 0 };
+        let mut b = [0u8; 384];
+        b[31] = 64; // array offset word = 0x40 (tail begins after the 2 head words)
+        b[95] = 9; // length word low byte = 9 (> MAX_ARRAY_RENDER = 8)
+        assert!(matches!(
+            resolve_array(&field, &ir, &b, 2),
+            Err(RenderErr::Reject("7730 arr too many elems"))
+        ));
     }
 }
