@@ -183,3 +183,97 @@ head-bound defense byte-for-byte.
 Pack expansion: once landed, add the Lido `WithdrawalQueue` descriptor and
 re-evaluate DEX-aggregator descriptors (most still need static-tuple +
 dynamic-`bytes`-never handling, which is broader than v1).
+
+---
+
+## v2 design — rendered-value index/slice (review 3.0#2), 2026-07-02
+
+**Status: DESIGN-ONLY. Not implemented. Supersedes the review's "+53 formats"
+estimate with an honest safety classification.** This section scopes the
+"value-path slice/index resolver" the 2026-07 implementation review ranked as
+the #2 coverage unlock (`docs/erc7730-implementation-review-2026-07.md` §3.0).
+The headline finding: **most of the "+53" is NOT a missing feature — it is
+blocked by the array-tail-hiding invariant this doc already established
+(v1 Deep-dive finding #1). It cannot be "unlocked" by a resolver change; only
+by render-all or a reviewed per-descriptor curation.**
+
+### What is actually blocked (from the drift-gated skip report)
+
+`secure/data/erc7730.review.txt`'s `## skips` section (auto-generated per
+finding 1.4) is now the authoritative, always-current inventory. The blocked
+value index/slice shapes, by kind:
+
+| Shape | Example (fn / field) | Count* | Kind |
+|---|---|---|---|
+| `arr.[-1]` rendered as an addressName **value** | 1inch `unoswap*`/`uniswapV3Swap*` `pools.[-1]` | 12+ | **array-tail-hiding (UNSAFE as single-value)** |
+| `bytes.[a:b]` byte-range on a rendered value | paraswap-v6.2 `#.data.[292:324]` | 2+ | word-slice value extraction |
+| `arr.[].member` (array-of-struct member) | flyingtulip `limits.[].limit` | 2 | nested array (→ EIP-712 v3 / §11 territory) |
+| `bytes[].[]` dynamic-element array | kiln `validators_.[]` | 1 | dynamic-element array (out of v1 scope) |
+
+*Counts are from the current 35-descriptor prod skip set; the full upstream
+(372 descriptors) 1inch V3/V4/V5 families push the `pools.[-1]` count toward
+the review's ~49. Re-derive from the skip report at review time — do not trust
+a frozen number.
+
+### Safety classification (the load-bearing part)
+
+1. **`arr.[-1]` / `arr.[i]` rendered as a field VALUE is the array-tail-hiding
+   HIGH** (v1 Deep-dive #1, and the typed-call `render_arg` Array-arm
+   `count>1` decline). Showing `pools[-1]` while `pools` has N elements hides
+   `pools[0..-1]` — the contract executes the whole route, the user sees one
+   hop. A resolver that simply emits `ArrayIdx`/`ArrayLast` for a value path
+   would REOPEN this HIGH. **This is why the 1inch slice fns stay declined, and
+   it is correct.** The dbgen gate's `is_token_path` guard
+   (`compile_structured_contract_path`) is the load-bearing line: extraction
+   ops are allowed ONLY inside a `tokenPath` (identification), never a rendered
+   value.
+
+2. **`tokenPath: arr.[-1]` (token IDENTIFICATION) is already supported** — the
+   Tier-B resolver (`compile_token_path_extraction` + `resolve.rs` `Extract`)
+   landed for Uniswap/QuickSwap. So any 1inch leg whose LAST pool is consumed
+   as a `tokenAmount`'s `tokenPath` (not a standalone addressName field) already
+   works once its `$ref` resolves (finding 1.1). Before counting a 1inch fn as
+   "blocked by slices", check the skip report: if the failing field is
+   `format:addressName path:pools.[-1]` it is the unsafe value shape; if it is a
+   `tokenAmount` with `params.tokenPath:pools.[-1]` it already compiles.
+
+3. **`bytes.[a:b]` word-range** (paraswap `data.[292:324]`) is a value
+   extraction from an opaque packed blob. Faithful ONLY if the 32-byte-word
+   boundary and the packing are pinned; the current extractor deliberately
+   rejects non-20-byte / non-canonical slices. Low value (the surrounding
+   fields already carry the intent) and high risk — keep declined.
+
+### The only safe unlocks (each its own review + Kani landing)
+
+- **A) Render-ALL route pools** (`pools.[]` instead of `pools.[-1]`): safe
+  (shows every element), reuses the shipped v1 `ArrayAll` path, but low value —
+  route pools are opaque addresses the user cannot verify, and an N-hop route
+  blows the 28-page budget fast. Net: mostly declines-to-blind on real routes.
+  Not worth building for 1inch.
+- **B) Reviewed per-descriptor curation — "identified token + hidden-route
+  marker".** For a swap where the economic outcome is bounded by a SHOWN
+  `minReturn`/`minReceiveAmount`, the intermediate route is not effect-bearing
+  in the WYSIWYS sense (the user is protected by the min-return). Surface the
+  output token (via `tokenPath: pools.[-1]`, the identification path that is
+  already safe) AND a loud `route via N pools (not shown)` page, gated on:
+  (i) a shown min-return field in the SAME format, (ii) a `policy.toml`
+  curation entry with a written rationale (like `hidden_address_allow`),
+  (iii) Kani + a render test proving the min-return is present and the marker
+  renders. This is the genuine unlock for the 1inch volume — and it is a
+  curation + policy mechanism, **not** a value-slice resolver.
+- **C) Nested array-of-struct member** (`limits.[].limit`) is EIP-712 v3 /
+  calldata §11 territory (per-element group render), tracked separately
+  (review 3.0#4 / #6), not here.
+
+### Recommendation
+
+Do **not** build a rendered-value single-index/`[-1]` resolver — it reopens the
+array-tail-hiding HIGH. Instead: (1) rely on finding 1.1 ($ref) + the existing
+tokenPath extractor to unlock the 1inch legs whose token identity is a
+`tokenPath` (free, already landed); (2) if the remaining 1inch addressName-value
+`pools.[-1]` volume is judged worth it, pursue **unlock B** (min-return-gated
+curation + hidden-route marker) as a design-doc-first, policy-driven,
+adversarial-review-gated change — reusing the safe identification path, never a
+value-single-index resolver. Update `docs/erc7730-implementation-review-2026-07.md`
+§3.0 item 2 to reflect that "+53 via a slice resolver" is not the shape of the
+safe unlock.
