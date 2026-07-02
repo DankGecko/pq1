@@ -230,6 +230,15 @@ pub struct MockSecureElement {
     /// itself after one shot so a single `simulate_glitch(true)`
     /// affects exactly one operation.
     glitch_armed: bool,
+    /// Realism knob for the half-provision brick regression
+    /// (`provision_from_mnemonic`): when set, `provision()` writes its
+    /// slots (so `is_provisioned()` would read `true`) and THEN returns
+    /// `Err`, modelling a transient SE fault that lands after the sentinel
+    /// object is written but before provisioning completes.
+    force_provision_err: bool,
+    /// Count of `factory_reset_admin` calls — lets the rollback regression
+    /// assert the failed-provision path actually wiped before halting.
+    factory_reset_admin_calls: u32,
 }
 
 impl MockSecureElement {
@@ -241,7 +250,22 @@ impl MockSecureElement {
             macd_initialized: [false; NUM_MACD_SLOTS],
             macd_state: [[0u8; 32]; NUM_MACD_SLOTS],
             glitch_armed: false,
+            force_provision_err: false,
+            factory_reset_admin_calls: 0,
         }
+    }
+
+    /// Arm the half-provision fault: the next `provision()` writes its slots
+    /// then returns `Err`, so `is_provisioned()` reads `true` on a "failed"
+    /// provision — the exact seam the `provision_from_mnemonic` rollback
+    /// must defuse. See the `failed_provision_rolls_back_*` regression.
+    pub fn force_provision_err(&mut self) {
+        self.force_provision_err = true;
+    }
+
+    /// How many times `factory_reset_admin` has been invoked (rollback test).
+    pub fn factory_reset_admin_calls(&self) -> u32 {
+        self.factory_reset_admin_calls
     }
 
     /// Arm a one-shot glitch — the next `mac_and_destroy` call returns
@@ -355,6 +379,27 @@ impl WalletStore for MockSecureElement {
         pin: &[u8; 8],
     ) -> Result<(), SeError> {
         crate::crypto::store_macd_encrypted(self, entropy, master_secret, vk, bootstrap_vk, pin);
+        if self.force_provision_err {
+            // Slots ARE written (is_provisioned() would read true), but we
+            // report failure — modelling a transient SE fault after the
+            // sentinel write. See `force_provision_err`.
+            return Err(SeError::InternalError);
+        }
+        Ok(())
+    }
+
+    fn factory_reset_admin(&mut self) -> Result<(), SeError> {
+        // Model the real `DualSecureElement`: wipe the persistent slots so
+        // `is_provisioned()` reads false (on hardware the OPTIGA leg going
+        // blank does this even though the S-6 SE050 USERID survives), and
+        // record the call for the rollback regression.
+        self.factory_reset_admin_calls += 1;
+        for slot in 0..NUM_RMEM_SLOTS {
+            self.rmem_occupied[slot] = false;
+            self.rmem_len[slot] = 0;
+            self.rmem_data[slot] = [0u8; MAX_RMEM_DATA];
+        }
+        self.zeroize_caches();
         Ok(())
     }
 
@@ -452,6 +497,43 @@ mod tests {
         assert!(
             se.r_mem_read(3, &mut bvk_buf).is_ok(),
             "bootstrap-VK slot must be populated"
+        );
+    }
+
+    /// A provision that fails PART-WAY must ROLL BACK (wipe) before it
+    /// halts, so the device is never left half-provisioned. Without the
+    /// rollback, a transient SE fault after the SE050 `USERID_OBJ` write
+    /// leaves `is_provisioned()` reading `true` with no usable entropy: the
+    /// first-boot wizard never re-runs, yet every correct-PIN `unlock()`
+    /// returns `InternalError` (missing `ENTROPY_OBJ`) — a soft-brick at
+    /// setup with no user-discoverable recovery. Regression for that brick:
+    /// the failed provision must (a) not return silently, and (b) invoke
+    /// `factory_reset_admin`, which clears the slots the partial write left
+    /// so the next cold boot sees a clean, re-provisionable device.
+    #[test]
+    fn failed_provision_rolls_back_before_halting() {
+        let mut se = MockSecureElement::new();
+        se.force_provision_err();
+        let mnemonic = Mnemonic::from_entropy(&[0u8; 32]);
+        let pin = [b'1', b'2', b'3', b'4', 0, 0, 0, 0];
+
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            provision_from_mnemonic(&mut se, &mnemonic, &pin, None);
+        }))
+        .is_err();
+
+        assert!(panicked, "a failed provision must not return silently");
+        assert!(
+            se.factory_reset_admin_calls() >= 1,
+            "failed provision must roll back via factory_reset_admin"
+        );
+        // The rollback must clear the slots the partial provision wrote, so
+        // the next boot re-runs the wizard on a clean device rather than a
+        // half-provisioned one that can never unlock.
+        let mut buf = [0u8; 64];
+        assert!(
+            se.r_mem_read(0, &mut buf).is_err(),
+            "rollback must clear the entropy slot (no half-provisioned state)"
         );
     }
 

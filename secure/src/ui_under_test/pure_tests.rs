@@ -347,6 +347,20 @@ fn positive_seed_wizard_verify_picks_three_distinct_indices() {
         count += 1;
     }
     assert_eq!(out, [5, 11, 7]);
+
+    // Reliability pin: the pick must use the NON-panicking RNG helper with
+    // a fallback that VARIES per `count`. A bare `rng::byte()` would
+    // `.expect()`-halt the first-boot wizard on a transient TRNG fault; a
+    // FIXED fallback (e.g. `byte_nonsecret(0)`) would make every candidate
+    // identical and spin this distinctness loop forever. Guard both.
+    assert!(
+        WIZARD_SRC.contains("rng::byte_nonsecret(count as u8) % (WORD_COUNT as u8)"),
+        "pick_three_distinct must use a count-varying non-secret RNG fallback"
+    );
+    assert!(
+        !WIZARD_SRC.contains("rng::byte() % (WORD_COUNT as u8)"),
+        "pick_three_distinct must not use the panicking bare rng::byte()"
+    );
 }
 
 #[test]

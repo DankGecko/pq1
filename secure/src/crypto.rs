@@ -258,9 +258,33 @@ pub fn provision_from_mnemonic(
     drop(sk);
     let bootstrap_vk = derive_bootstrap_vk_from_entropy(&entropy);
 
-    store
+    if store
         .provision(&entropy, &master_secret, &vk_bytes, &bootstrap_vk, pin)
-        .expect("provisioning failed");
+        .is_err()
+    {
+        // A provision that fails PART-WAY (e.g. a transient SE050 I²C fault
+        // after the UserID object is written but before the entropy object)
+        // must not leave the device half-provisioned. `is_provisioned()`
+        // keys the SE050 leg on `USERID_OBJ` existence, so a bare panic here
+        // would leave `is_provisioned() == true` with no entropy half: the
+        // wizard would NEVER re-run, yet every correct-PIN `unlock()` would
+        // return `InternalError` (missing `ENTROPY_OBJ`) with no user-
+        // discoverable recovery — a soft-brick at first-boot setup.
+        //
+        // Roll back (best-effort) before halting so the next cold boot
+        // restarts the wizard cleanly: `factory_reset_admin` wipes the OPTIGA
+        // leg unconditionally, flipping `is_provisioned()` to false (the S-6
+        // non-admin-deletable SE050 `USERID_OBJ` may survive, but the AND
+        // across both SEs already reads false once OPTIGA is blank). It arms
+        // the crash-safe wipe flag first, so a fault mid-rollback is resumed
+        // on the following boot. Mirrors the duress-decoy rollback below.
+        entropy.zeroize();
+        crate::fi::zeroize_barrier();
+        master_secret.zeroize();
+        crate::fi::zeroize_barrier();
+        let _ = store.factory_reset_admin();
+        panic!("provisioning failed — rolled back for wizard restart");
+    }
 
     entropy.zeroize();
     crate::fi::zeroize_barrier();

@@ -82,6 +82,32 @@ const BHK_PAGE_NUM: u32 = 126;
 const BHK_LEN: usize = 32;
 
 // ---------------------------------------------------------------------------
+// COMPILE-TIME BRICK GUARD — page-126 double-ownership.
+//
+// The "bank-2-only" assumption above is FALSE. The firmware-update
+// verify-failure counter (`hw::flash::FW_FAIL_PAGE_ADDR`) ALSO occupies
+// page 126, and `hw::flash::fw_fail_reset()` ERASES that page on EVERY
+// successful `CMD_FW_COMMIT` (cmd_fw_commit → reset_verify_failure_tally →
+// fw_fail_reset). If the BHK is stored there, the once-a-year firmware
+// update wipes it — and the SE050 SCP03 session keys + admin PIN derived
+// from the BHK can never be reconstructed, so the SE050 is permanently
+// unpaired: half_E is unreadable → seed unrecoverable → hard brick on every
+// device, on the update path. flash.rs assumes page 126 is "dedicated to
+// this counter" while bhk.rs assumes the FW path "can never touch it" —
+// mutually exclusive, and the counter wins because its erase is
+// unconditional. Fail the build while the two pages collide so this can
+// never ship silently. Relocate ONE owner to a free page (see
+// docs/VULN-page126-bhk-fwfail-collision-brick.md) and this assertion
+// clears automatically.
+const _: () = assert!(
+    BHK_PAGE_ADDR != flash::FW_FAIL_PAGE_ADDR,
+    "page-126 collision: the wrapped-BHK store and the FW-update verify-fail \
+     counter both occupy 0x0C0F_C000; every FW-COMMIT erases it, wiping the \
+     BHK and permanently unpairing the SE050 (brick on the annual update). \
+     Relocate one owner to a free flash page before enabling `bhk`."
+);
+
+// ---------------------------------------------------------------------------
 // TAMP — secure alias.
 // ---------------------------------------------------------------------------
 

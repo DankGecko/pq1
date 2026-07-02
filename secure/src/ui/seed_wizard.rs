@@ -611,7 +611,16 @@ pub fn verify_mnemonic(m: &Mnemonic) -> WizardResult {
 fn pick_three_distinct(out: &mut [u8; 3]) {
     let mut count = 0usize;
     while count < 3 {
-        let candidate = rng::byte() % (WORD_COUNT as u8);
+        // Which 3 of the 24 words to re-verify is NON-SECRET (it leaks
+        // nothing about the seed), so a transient STM32U5 TRNG seed/clock
+        // error here must NOT `.expect()`-panic and halt the first-boot
+        // wizard (bare `rng::byte()` does). Use the graceful non-secret
+        // helper, with a fallback of `count` (0/1/2 — always < WORD_COUNT
+        // and mutually distinct) so the loop still terminates with a valid
+        // pick on a persistent fault. A FIXED fallback would make every
+        // candidate identical and spin this loop forever — strictly worse
+        // than the panic — so the fallback MUST vary with `count`.
+        let candidate = rng::byte_nonsecret(count as u8) % (WORD_COUNT as u8);
         if out[..count].iter().any(|&c| c == candidate) {
             continue;
         }
