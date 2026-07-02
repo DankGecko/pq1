@@ -41,6 +41,8 @@ help: ## Show the runnable FV targets (those with a description)
 
 verify: verify-build ## Default FV bundle: build + transcription + KAT + mutant-corpus
 	@python3 scripts/check_c10_transcription.py
+	@python3 scripts/check_c10_transcription_ast.py
+	@python3 scripts/test_c10_transcription_ast_negative.py
 	@python3 scripts/check_lean_proto_domain.py
 	@cd $(LEAN_DIR) && $(LAKE) exe verify-test-vectors
 	@cd $(LEAN_DIR) && $(LAKE) exe verify-mutant-corpus
@@ -175,12 +177,24 @@ verify-interp: ## A3.1 interpreter<->bytecode KAT+bulk replay
 # never c10Program<->.sol). Three checks: (A) POSITIONAL constant cross-check per the
 # `-- L<n>` anchors (catches a constant in the WRONG fragment — a cross-fragment swap —
 # which a flat/global check misses); (B) global constant-set equality; (C) statement-kind
-# histogram. Pure source lint, no lake build. A REGRESSION GATE, not a proof: intra-fragment
-# structural fidelity stays covered by `verify-interp`'s 396-vector corpus + `execC10Asm_eq`.
+# histogram. Pure source lint, no lake build. A REGRESSION GATE, not a proof.
 # Negative-controls (a mutated constant; a cross-fragment swap) verified to FAIL it.
-# See docs/A3_1_ADVERSARIAL_REVIEW_2026-06-18.md.
-verify-transcription: ## A3.1 c10Program <-> .sol positional transcription lint
+#
+# The STATISTICAL lint's documented hole — an intra-fragment edit that preserves the
+# constant-set + kind-histogram + gate-vars (a same-kind statement REORDER, a non-gate
+# var swap, a non-commutative operand-order swap) — is now closed by the STRUCTURAL check
+# `check_c10_transcription_ast.py`: it PARSES both sides into the `Interpreter.Yul` AST and
+# asserts TREE EQUALITY, so a reorder/var-swap/operand-swap flips the tree and fails. The
+# negative-control harness `test_c10_transcription_ast_negative.py` proves 3 such mutants are
+# invisible to the statistical lint yet caught by the structural check. HONEST SCOPE: this
+# upgrades the source<->AST leg from statistical to STRUCTURAL; it does NOT close R1 — the
+# solc source->deployed-bytecode leg is untouched, and the parser + its 2 normalization rules
+# (error-string mstore elision; return-var init) are themselves the TCB. See
+# docs/A3_1_ADVERSARIAL_REVIEW_2026-06-18.md + docs/A3_1_CLOSURE_PATH.md §8.
+verify-transcription: ## A3.1 c10Program <-> .sol transcription checks (positional + structural)
 	@python3 scripts/check_c10_transcription.py
+	@python3 scripts/check_c10_transcription_ast.py
+	@python3 scripts/test_c10_transcription_ast_negative.py
 
 # A3.1 INDEPENDENT-SOURCE KAT leg (work-todo #7). A clean-room SHA-256 C10 signer
 # (scripts/independent_c10_signer.py) written from the deployed SPHINCsC10Asm.sol +

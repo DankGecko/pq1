@@ -213,6 +213,19 @@ bypass-construction finder completed and produced one genuinely useful finding:
   corpus is behaviour-preserving, hence not a real fault — and the full `lake build`
   (c10Program_decompose + execC10Asm_eq) pins the entire structure besides.
 
+**UPDATE 2026-07-02 — those "bypass classes" now have a SOURCE-LEVEL CI gate.** The
+operand-order-swap / var-ref-elsewhere / same-kind-reorder classes above (previously
+"caught by the `verify-interp` corpus" — a *local* run, not CI-enforced) are now caught
+directly at the source level by the **structural** transcription check
+`check_c10_transcription_ast.py` (in `make verify-transcription` + the
+`a31-transcription.yml` CI gate). It parses `SPHINCsC10Asm.sol` and the `c10Program`
+literal into the `Interpreter.Yul` AST and asserts **tree equality**, so a reorder /
+var-swap / operand-swap flips the tree and FAILS — with three such mutants proven
+invisible to the statistical lint yet caught here (`test_c10_transcription_ast_negative.py`).
+Honest scope: this upgrades the **R1a source↔AST** leg from statistical to structural in
+CI; R1b (solc source→bytecode) is untouched and the parser + its two normalization rules
+are the new TCB. See `A3_1_CLOSURE_PATH.md` §8 (2026-07-02 entry).
+
 ## Reproduce
 
 ```

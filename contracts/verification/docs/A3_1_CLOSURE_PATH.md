@@ -381,12 +381,38 @@ with the climb lemmas as the loop-refinement engine.
     `beByte_mload32`/`slice_toArray_eq_flatten`, all `theorem`) — not an open design
     question. **`contracts/verity/` is a DEAD scaffold** (pins an unlanded Verity
     version); the proof was done in `lean/SphincsCVerify/Interpreter/`, not there.
-  - **The sole remaining A3.1 residual is R1** — the deployed-bytecode ↔ hand-
-    transcribed-AST (`c10Program`) equality, backed by the positional lint
-    `check_c10_transcription.py` + the 396-vector corpus. R1 is a deliberate cited-TCB
-    of the kind every verified contract carries (the only ways to shrink it further —
-    a Lean Yul-subset parser, or KEVM-in-Lean — are multi-week / upstream-gated).
+  - **The sole remaining A3.1 residual is R1** — factor it into **(R1a)** the
+    `c10Program` AST ↔ `SPHINCsC10Asm.sol` **source** hand-transcription and **(R1b)**
+    the `.sol` source ↔ **deployed EVM bytecode** (solc). R1a is now backed by the
+    positional lint `check_c10_transcription.py` **+ the STRUCTURAL AST check
+    `check_c10_transcription_ast.py`** (2026-07-02, below) + the 396-vector corpus; R1b
+    is the irreducible compiler leg (verified compilation is multi-person-year). R1 is a
+    deliberate cited-TCB of the kind every verified contract carries.
   Read the log below as HISTORY, not current status.
+
+- **UPDATE 2026-07-02 — R1a hand-transcription upgraded STATISTICAL → STRUCTURAL
+  (the time-boxed "Yul-parser" bet).** `check_c10_transcription_ast.py` +
+  `test_c10_transcription_ast_negative.py` (wired into `make verify-transcription` +
+  the `a31-transcription.yml` CI gate). The check **parses both sides into the
+  `Interpreter.Yul` AST** — a recursive-descent parser over the `.sol` `assembly { }`
+  block, and a parser over the committed `C10Program.lean` `def c10Program` literal
+  (the exact artifact `execC10Asm_eq` consumes, parsed in place) — and asserts **tree
+  equality** (`564` AST nodes each side, structurally identical). This closes the
+  statistical lint's *documented* hole: an intra-fragment edit that preserves the
+  constant-set + kind-histogram + gate-vars (a same-kind statement **reorder**, a
+  non-gate `var "X"→var "Y"` **swap**, a non-commutative **operand-order** swap). Three
+  such mutants are proven **invisible to the statistical lint yet caught by the
+  structural check** (the negative-control harness — old-lint PASS / new-check FAIL on
+  each). **HONEST SCOPE (does NOT close R1):** it upgrades **R1a source↔AST only**, from
+  statistical to structural; **R1b (solc source→bytecode) is untouched**, and the parser
+  + its **two** normalization rules (error-string `mstore` elision; return-var
+  `valid := E → letv`) are now themselves the TCB. The human-review surface shrinks from
+  "eyeball the whole ~200-line transcription" to "review a small general parser + two
+  enumerable rules." It is a stronger regression gate + structural cross-check, **not**
+  the in-kernel `parseYul = c10Program` `decide`-proof (that — a Lean Yul-subset parser
+  or KEVM-in-Lean — remains the multi-week / upstream-gated item; `native_decide` would
+  also drag `Lean.ofReduceBool` into the audit closure, so it is deliberately host-side).
+  `theft_free`/`execC10Asm_eq` closures UNCHANGED (pure-Python gate, no Lean edit).
 
 - **2026-06-17 — PROOF PHASE (step 5) WELL UNDERWAY.** All reusable interpreter-
   refinement infrastructure + the first phase + the hardest climb shape are PROVEN
