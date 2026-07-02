@@ -490,6 +490,61 @@ mod verification {
         }
     }
 
+    /// SOUNDNESS — TWO dynamic tails `f(bytes, bytes)` (2026-07-02). The
+    /// existing walk harnesses all use ≤ 1 dynamic tail, so the cross-tail
+    /// `tail_cursor` carry (`offset != tail_cursor` gate, abi.rs:135) is never
+    /// exercised: with two dynamic args the SECOND tail's offset must equal the
+    /// FIRST tail's PADDED end, so the two payloads are packed canonically —
+    /// disjoint, in argument order, no gap, no overlap. A carry bug (arg1
+    /// aliasing arg0's payload, or a hidden gap between them) would let the
+    /// trusted display show one arg's bytes as another's. Proves, ∀ body: on
+    /// accept, arg1 starts EXACTLY at arg0's padded tail end (hence strictly
+    /// after arg0's renderer read — no aliasing) and both reads are in bounds.
+    #[kani::proof]
+    #[kani::unwind(33)]
+    fn walk_two_dyn_tails_cross_carry_disjoint() {
+        const N: usize = 160; // 5 words: 2 offset words (head) + len/payload/len tail
+        let data: [u8; N] = kani::any();
+        let len: usize = kani::any();
+        kani::assume(len <= N);
+        let body = &data[..len];
+
+        let mut arena = TypeArena::new();
+        let a0 = arena.alloc(TypeRef::Bytes).unwrap();
+        let a1 = arena.alloc(TypeRef::Bytes).unwrap();
+        let mut args = [0u16; MAX_ARGS];
+        args[0] = a0;
+        args[1] = a1;
+        let parsed = ParsedSig { name: &b"f"[..], args, arg_count: 2, arena };
+
+        // In-Kani reachability witness: canonical f(bytes,bytes) — a 64-byte head
+        // (two offset words 0x40, 0x60) then two empty payloads. arg1's offset
+        // 0x60 == arg0's padded end (64 + 32 + 0). The SAME `parsed` accepts it.
+        let mut canon = [0u8; 128];
+        canon[31] = 0x40; // arg0 offset == 64 (start of the tail after the head)
+        canon[63] = 0x60; // arg1 offset == 96 (arg0's padded end)
+        assert!(walk(&parsed, &canon).is_some());
+
+        if let Some(w) = walk(&parsed, body) {
+            assert_eq!(w.arg_count, 2);
+            let a0 = w.args[0];
+            let a1 = w.args[1];
+            // Two dynamic args ⇒ a 64-byte head of two offset words.
+            assert_eq!(a0.body_off, 64);
+            // CROSS-TAIL CARRY: arg1 begins EXACTLY at arg0's padded tail end
+            // (the `tail_cursor` invariant the single-tail harnesses never reach).
+            let arg0_padded_end = 64usize + 32 + round_up_to_32(a0.count as u64).unwrap() as usize;
+            assert_eq!(a1.body_off, arg0_padded_end);
+            // ⇒ strictly after arg0's UNPADDED renderer read: the payloads cannot
+            //   alias, and there is no gap (canonical packing).
+            assert!(a1.body_off >= renderer_read_end(&parsed, &a0));
+            assert!(a1.body_off > a0.body_off);
+            // Both tails' renderer reads stay in bounds.
+            assert!(renderer_read_end(&parsed, &a0) <= body.len());
+            assert!(renderer_read_end(&parsed, &a1) <= body.len());
+        }
+    }
+
     /// SOUNDNESS (bonus, generality) — a single arg whose TYPE is chosen
     /// symbolically across the structural classes {static primitive,
     /// address, dynamic bytes, dynamic array, static array}, over symbolic
