@@ -360,6 +360,34 @@ with the climb lemmas as the loop-refinement engine.
     reduction. `verify-build` green (43/43), `verify-audit` 0-sorry, `theft_free`
     closure UNCHANGED (the interpreter modules are leaves).
 
+- **UPDATE 2026-07-02 — STEPS 5 & 6 LANDED; this progress log below is SUPERSEDED.**
+  The entries below (dated ≤ 2026-06-17) say the proof phase is "well underway" and
+  step 6 is "USER-GATED / keep the old axiom in place" — **both are stale.** The
+  grand composition landed **2026-06-18** and is now the shipped state, confirmed by
+  a live `#print axioms` probe (2026-07-02):
+  - `Interpreter.C10.execC10Asm_eq` (`C10Refine.lean:414`) is a COMPLETE kernel proof
+    for **all** 4008-byte signatures — `execC10Asm = nMaskedB pkSeed && nMaskedB pkRoot
+    && verifyYulModel` — with closure **exactly `[propext, Classical.choice, Quot.sound]`**
+    (no `sorry`, no bytecode axiom on this leg). So the **model↔spec ∀-signature
+    equivalence — the part historically flagged "intractable" — is DEDUCTIVELY CLOSED**,
+    hash kept opaque, no symbolic engine.
+  - Step 6 is done, not user-gated: the axiom was swapped to `= execC10Asm`
+    (`Bridge/Refinement.lean:202`), `deployedVerifier := execC10Asm`
+    (`Bridge/EntryPoint.lean:82`), and **`theft_free` already threads it** via
+    `deployed_verifier_refines_spec` (`Refinement.lean:484` = the R1 axiom `.trans
+    execC10Asm_eq`). `#print axioms deployed_verifier_refines_spec` = kernel triple +
+    `solidityVerifier_compiles_correctly` only.
+  - **R2 (SHA-256 byte-addressed-memory bridge) is CLOSED** (`Sha256Bridge.lean`
+    `beByte_mload32`/`slice_toArray_eq_flatten`, all `theorem`) — not an open design
+    question. **`contracts/verity/` is a DEAD scaffold** (pins an unlanded Verity
+    version); the proof was done in `lean/SphincsCVerify/Interpreter/`, not there.
+  - **The sole remaining A3.1 residual is R1** — the deployed-bytecode ↔ hand-
+    transcribed-AST (`c10Program`) equality, backed by the positional lint
+    `check_c10_transcription.py` + the 396-vector corpus. R1 is a deliberate cited-TCB
+    of the kind every verified contract carries (the only ways to shrink it further —
+    a Lean Yul-subset parser, or KEVM-in-Lean — are multi-week / upstream-gated).
+  Read the log below as HISTORY, not current status.
+
 - **2026-06-17 — PROOF PHASE (step 5) WELL UNDERWAY.** All reusable interpreter-
   refinement infrastructure + the first phase + the hardest climb shape are PROVEN
   (Phases.lean / Yul.lean / Sha256Bridge.lean; all `[propext, Classical.choice,

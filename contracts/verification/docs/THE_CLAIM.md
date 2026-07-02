@@ -227,9 +227,19 @@ Do **not** say any of the following:
   and verifier `0xeb1e3fcd…` **exactly — addresses and codehashes**. See
   Claimable #6 and `DEPLOYED_BYTECODE_PIN_CAVEAT.md`.
 * ~~"The SPHINCS+C10 verifier's functional equivalence to bytecode is proven
-  for all signatures."~~ It is validated on the **10-vector KAT** (executable
-  Lean↔bytecode, both directions) + the ~250-mutant wrong-accept screen, not
-  by a symbolic ∀-signature proof (intractable under uninterpreted SHA-256).
+  for all signatures."~~ **Precision (2026-07-02): this splits into two legs,
+  and the harder-sounding one is DONE.** (1) The verifier-**model** ↔ **spec**
+  ∀-equivalence (`execC10Asm = verifyYulModel` on N-masked keys, for *all* 4008-byte
+  signatures) is **kernel-PROVEN** deductively — `Interpreter.C10.execC10Asm_eq`,
+  closure `[propext, Classical.choice, Quot.sound]`, hash kept opaque, no symbolic
+  engine (the earlier "intractable under uninterpreted SHA-256" applied only to
+  *symbolic-search* engines like Halmos/KEVM, not to this interpreter-refinement).
+  (2) The **bytecode** ↔ model leg (R1: deployed `SPHINCsC10Asm.verify` = the
+  hand-transcribed `c10Program` AST) is what remains **corpus-validated** — the
+  10-vector KAT (executable Lean↔bytecode, both directions) + ~250-mutant screen +
+  the positional transcription lint — a deliberate cited-TCB, not a defect. So do
+  not say "proven for all signatures to bytecode"; DO say "the model↔spec ∀ is
+  kernel-proven; the model↔bytecode transcription is corpus-validated cited-TCB."
 
 The three-way **Rust↔Solidity↔Lean** differential IS now real on the full
 functional verify (the Lean leg was made executably faithful 2026-06-13 —
