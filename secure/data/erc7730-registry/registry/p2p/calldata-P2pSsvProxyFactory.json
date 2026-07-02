@@ -11,6 +11,7 @@
     }
   },
   "metadata": { "owner": "P2P Staking", "info": { "url": "https://www.p2p.org/" }, "contractName": "P2pSsvProxyFactory" },
+  "_curation_note": "PQSigner Tier-A curation: upstream showed the client fee but hid the REFERRER fee tuple (basisPoints + recipient) with visible:\"never\". A fee recipient is fund-routing, so PQSigner's WYSIWYS belt REFUSES hiding it — we SHOW the referrer fee recipient (raw) + rate (bps), matching the client fee. See docs/erc7730-implementation-review-2026-07.md §3.0.",
   "display": {
     "formats": {
       "addEth(bytes32 _eth2WithdrawalCredentials, uint96 _ethAmountPerValidatorInWei, (uint96 basisPoints, address recipient) _clientConfig, (uint96 basisPoints, address recipient) _referrerConfig, bytes _extraData)": {
@@ -33,10 +34,8 @@
             "params": { "base": "bps", "decimals": 0 },
             "visible": "always"
           },
-          { "label": "Client Config", "path": "#._clientConfig", "visible": "never" },
-          { "label": "Referrer Config", "path": "#._referrerConfig", "visible": "never" },
-          { "label": "Referrer Config Basis Points", "path": "#._referrerConfig.basisPoints", "visible": "never" },
-          { "label": "Referrer Config Recipient", "path": "#._referrerConfig.recipient", "visible": "never" },
+          { "label": "Referrer fee (bps)", "format": "unit", "params": { "base": "bps", "decimals": 0 }, "path": "#._referrerConfig.basisPoints", "visible": "always" },
+          { "label": "Referrer fee recipient", "format": "raw", "path": "#._referrerConfig.recipient", "visible": "always" },
           { "label": "Extra Data", "path": "#._extraData", "visible": "never" }
         ]
       }
