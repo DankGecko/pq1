@@ -39,6 +39,6 @@ proptest = "1"
 
 # `#[cfg(kani)]` appears in `ns_ptr_validate.rs` (host-verifiable
 # NS-pointer soundness harnesses, run via `cargo kani -p
-# sphincs-tz-shared`). Register the cfg so non-Kani builds don't warn.
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)"] }
+# sphincs-tz-shared`); the workspace check-cfg registers it.
+[lints]
+workspace = true

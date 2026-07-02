@@ -37,7 +37,5 @@ sphincs-tz-bip39 = { workspace = true, features = ["full-wordlist"] }
 sphincs-c10 = { workspace = true }
 pqsigner-proto = { workspace = true }
 
-[lints.rust]
-# `kani` is set only by cargo-kani (#[cfg(kani)] proof harnesses); register it
-# so normal builds do not emit unexpected_cfgs warnings. See work-todo §34.
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)"] }
+[lints]
+workspace = true

@@ -19,3 +19,8 @@ sha3 = { version = "0.10", default-features = false }
 
 [dev-dependencies]
 hex = { workspace = true }
+
+# `#[cfg(kani)]` proof harnesses in userop.rs; the workspace check-cfg
+# registers `kani`/`lean_extract` so non-Kani builds don't warn.
+[lints]
+workspace = true

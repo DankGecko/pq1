@@ -32,3 +32,8 @@ std = []
 # terminate without panic for arbitrary 8 KB byte input. Host-only;
 # never compiled into FSBL or device firmware.
 proptest = "1"
+
+# `#[cfg(kani)]` proof harnesses in lib.rs; the workspace check-cfg
+# registers `kani`/`lean_extract` so non-Kani builds don't warn.
+[lints]
+workspace = true

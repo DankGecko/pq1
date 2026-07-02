@@ -86,6 +86,16 @@ resolver = "2"
 [workspace.package]
 edition = "2021"
 
+# Single-switch workspace lint policy. Member crates opt in with
+# `[lints]\nworkspace = true`. Today this only declares the custom
+# `cfg` names the codebase uses so `unexpected_cfgs` stays quiet:
+#   * `kani`        — bounded-model-check harnesses (`#[cfg(kani)]`)
+#   * `lean_extract` — Aeneas→Lean extraction gate
+# Previously each crate carried its own `[lints.rust] unexpected_cfgs`
+# block (and several that use these cfgs had none, so they warned).
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)", "cfg(lean_extract)"] }
+
 # Shared dependency versions. Member crates opt in with
 # `dep = { workspace = true }` and may add features on top, but they
 # cannot override the version or default-features.
