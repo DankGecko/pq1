@@ -10,7 +10,7 @@
 
 ---
 
-## Part A — The TrustZone-boundary failure catalog (TZ1–TZ8)
+## Part A — The TrustZone-boundary failure catalog (TZ1–TZ9)
 
 | # | Failure mode | What it looks like | Status (this tree) | Detection | Auto? |
 |---|---|---|---|---|---|
@@ -22,8 +22,9 @@
 | TZ6 | **GTZC / SAU misconfig** | a secure peripheral left NS-accessible, or a validation window that drifts outside the SAU NS region | **DEFENDED.** `GTZC1_TZSC_SECCFGR{1,3}` = default-secure allowlist (I2C1/2, AES/HASH/RNG/PKA/SAES secure; OTG stays NS) after the CRIT-4 `0x0`-everything fix (`sau.rs:352-354`); **compile-time subset assert** proves proto `NS_*` windows sit inside the SAU NS regions (`sau.rs:58-67`); source-text pins on register addresses + SECCFGR bits (`main_sau_pure_tests.rs`). **Residual**: `TZSC_SECCFGR4` (AHB3) + GTZC2 (TAMP) at NS reset default — flagged open in CLAUDE.md; the `debug_assert_eq!` readback is compiled out of release | Source-text invariants (`main_sau_pure_tests.rs`); silicon `make gtzc-enforcement-hw`; verify the subset-assert arithmetic against the real linker `memory.x` (the `NS_*_END-1` inclusive/exclusive juggling `sau.rs:60-65`) | ✅ compile assert + source pins / silicon bench |
 | TZ7 | **Single-fault gate bypass** | a fault skips a pointer/length/unlock gate | **DEFENDED.** `validate_read`/`validate_write` run the predicate **twice** through `fi::check_true_into_sentinel` with `wait_random()` between, each sentinel checked independently (`ns_ptr.rs:83-93`) — two coordinated faults required. `gated_unlock` gates are all sentinel-wrapped | Rainbow FI sweep `tools/sca/fault_sweep_ns_ptr.py`; confirm no bare `if !ok` on a boundary gate | ✅ FI sweep (smoke) |
 | TZ8 | **Non-reentrancy / shared-buffer leakage** | `HANDLER_DEPTH` breached, or the shared sign snapshot buffer not wiped before fill, leaking a prior request | **DEFENDED.** `HandlerGuard`/`HANDLER_DEPTH` (`AtomicU32`, `mod.rs:727-764`) enforces the single-threaded invariant every `unsafe` SAFETY comment relies on; wipe-before-fill on the shared `SIGN_SNAP_BUF` (`cmd_sign_userop.rs:164-169`). **Residual**: a handler that fills the buffer but returns early before wiping is a leak vector (the BSS/stack-clobber history `mod.rs:681-703` shows this region is stack-pressure-sensitive) | Audit each sign handler's early-return paths for a fill-without-wipe; confirm the guard covers every veneer | ⚠ partial (review) |
+| TZ9 | **Config left un-frozen (post-boot mutability) — the TZ-lock row** | SAU regions / GTZC1 TZSC attributes / AIRCR security-config stay writable after boot, so a fault flip or a stray secure-world write can re-classify secure SRAM as NS, mark SAES NS, or re-point the secure vector table — a layer *below* the signing-path FI (TZ6 asks "is the config right?"; TZ9 asks "can it still be *changed*?") | **✅ FIXED 2026-07-02 (tz-2, Trezor-port `tz_init.c`).** `sau::lock_security_config` at the end of `init()` (`stm32u585`) sets SYSCFG `CSLCKR` LOCKSAU\|LOCKSVTAIRCR + GTZC1 `TZSC_CR.LCK` + AIRCR PRIS/BFHFNMINS (SYSRESETREQS gated behind `mode-production` so bench keeps its NS warm-reset), freezing the SAU regions + TZSC per-peripheral attributes + AIRCR sec-config *after* they are programmed. Reset-scoped (re-applied every boot). AIRCR `BFHFNMINS=0` also reinforces the rr-1 HardFault handler (fault taken S-side). GTZC2 (TAMP) deliberately NOT locked — unconfigured on this branch. This is the **runtime sibling** of the irreversible burns in the [silicon-lockdown](./silicon-lockdown-adversarial-review.md) playbook. **Residual**: silicon-only — `thumbv8m` compile + host source-invariant test (`main_sau_pure_tests.rs::positive_tz2_locks_security_config_after_enabling_sau`, register bytes cross-checked vs CMSIS); needs on-silicon boot + `make gtzc-enforcement-hw` run *after* the lock lands | Source-invariant test (fence STRING + register bytes, not line); silicon boot + `make gtzc-enforcement-hw` post-lock | ✅ compile + source pin / silicon bench |
 
-**Read this catalog as the answer to "can a malicious NS world cross the boundary or extract a secret?"** For TZ1/TZ2/TZ6/TZ7 the answer is *no* by construction, each row naming the mechanism. **TZ4 is the one found-this-surface residual** (a LOW divergent validator, now in work-todo). TZ3/TZ5/TZ8 are defended in the core but have **inlined-path / early-return residuals that are the adversary's job** — the proven window/typestate kernel is sound, so push on the parse paths the Kani harnesses explicitly exclude.
+**Read this catalog as the answer to "can a malicious NS world cross the boundary or extract a secret?"** For TZ1/TZ2/TZ6/TZ7/TZ9 the answer is *no* by construction, each row naming the mechanism. **TZ4 is the one found-this-surface residual** (a LOW divergent validator, now in work-todo). TZ3/TZ5/TZ8 are defended in the core but have **inlined-path / early-return residuals that are the adversary's job** — the proven window/typestate kernel is sound, so push on the parse paths the Kani harnesses explicitly exclude.
 
 ---
 
@@ -63,7 +64,8 @@ SCOPE THIS RUN: {{e.g. "every cmd_* handler's length handling" | "the SAU/GTZC c
 ATTACK PROTOCOL — walk EVERY TZ1–TZ8 mode against each entry point in scope:
   TZ1 unvalidated deref · TZ2 TOCTOU double-read · TZ3 length/offset outside a proven
   kernel · TZ4 divergent/weaker validator · TZ5 secret egress via the gateway ·
-  TZ6 GTZC/SAU misconfig · TZ7 single-fault gate bypass · TZ8 non-reentrancy/buffer leak.
+  TZ6 GTZC/SAU misconfig · TZ7 single-fault gate bypass · TZ8 non-reentrancy/buffer leak ·
+  TZ9 config left un-frozen (post-boot mutability — the tz-2 lock).
 
 For each candidate finding you MUST produce a FALSIFIABLE PoC, one of:
   - a handler path that slices the snapshot with an NS-influenced length NOT routed
