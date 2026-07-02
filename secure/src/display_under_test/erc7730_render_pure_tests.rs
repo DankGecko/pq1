@@ -574,6 +574,75 @@ fn positive_erc7730_golden_grid_hash() {
     assert_eq!(h, GOLDEN, "ERC-7730 render golden changed — re-bless if intentional. got={h:?}");
 }
 
+#[test]
+fn positive_aave_withdraw_eth_renders_native_currency() {
+    // Item-1 `nativeCurrencyAddress`: Aave `WrappedTokenGatewayV3.withdrawETH`'s
+    // `amount` is a `tokenAmount` whose `token` AND `nativeCurrencyAddress` are
+    // both the native-ETH sentinel `0x0`. The renderer must resolve it to chain
+    // NATIVE currency — 18 decimals + `native_ticker` ("ETH" on mainnet) —
+    // WITHOUT an ERC-20 lookup (we pass `erc20 = None`) and WITHOUT emitting the
+    // "Token (UNVERIFIED)" identity page for the sentinel address.
+    //
+    // Non-vacuity: if `is_native` silently flipped false the amount would fall
+    // through to the unbound branch — raw integer "1500000000000000000",
+    // footer "! raw, dec=?", plus a "Token (UNVERIFIED)" page for `0x0`. Every
+    // assertion below (positive "1.5"/"ETH", negative UNVERIFIED/"! raw, dec=?")
+    // therefore discriminates the feature working from not.
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-WrappedTokenGatewayV3.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
+
+    // withdrawETH(address pool, uint256 amount, address to) — 1.5 ETH, chosen
+    // to exercise 18-decimal FRACTIONAL formatting (not a round integer).
+    let pool = [0x55u8; 20];
+    let to = [0x33u8; 20];
+    let amount = u256_from_u64(1_500_000_000_000_000_000); // 1.5e18 wei
+    let mut calldata = Vec::with_capacity(4 + 3 * 32);
+    let sel = keccak256(b"withdrawETH(address,uint256,address)");
+    calldata.extend_from_slice(&sel[..4]);
+    let mut pool_w = [0u8; 32];
+    pool_w[12..].copy_from_slice(&pool);
+    calldata.extend_from_slice(&pool_w);
+    calldata.extend_from_slice(&amount.0);
+    let mut to_w = [0u8; 32];
+    to_w[12..].copy_from_slice(&to);
+    calldata.extend_from_slice(&to_w);
+    assert_selector_matches(&verified.ir, &calldata, "withdrawETH(address,uint256,address)");
+
+    let tx = envelope(1, entry.contract);
+    let resolver = NameResolver::new();
+    // erc20 = None: native rendering must NOT depend on any companion metadata.
+    let pages =
+        render_erc7730_pages(&tx, &calldata, &verified, None, &resolver).expect("render");
+    assert_all_pages_printable(&pages);
+    let dump = dump_pages(&pages);
+
+    // Intent banner.
+    assert_eq!(page_strs(&pages, 0)[0], "Withdraw", "intent banner:\n{dump}");
+
+    // (a) Native amount: 18-dec fractional "1.5" + chain native ticker "ETH".
+    assert!(dump.contains("1.5"), "native amount should render 1.5:\n{dump}");
+    assert!(dump.contains("ETH"), "native amount must carry ticker ETH:\n{dump}");
+
+    // (b) NO unbound-token artefacts — the sentinel is native, not an unverified
+    // ERC-20. These strings appear ONLY when `is_native` is false.
+    assert!(
+        !dump.contains("Token (UNVERIFIED)"),
+        "native render must NOT emit a token-identity page for the 0x0 sentinel:\n{dump}",
+    );
+    assert!(
+        !dump.contains("! raw, dec=?"),
+        "native render must NOT fall through to the raw-integer unbound path:\n{dump}",
+    );
+
+    // Pool page: the curation unlock (was `visible:"never"` → now `raw`/always).
+    assert!(
+        dump.to_lowercase().contains("5555"),
+        "curated pool address must render as raw hex:\n{dump}",
+    );
+}
+
 /// Multi-chain chain-pinning: USDT's registry descriptor carries Mainnet (1)
 /// AND Polygon (137) deployments under the SAME JSON. Picking the chain-137
 /// leaf (contract 0xc2132D…8e8F, the bridged Polygon USDT) proves the
