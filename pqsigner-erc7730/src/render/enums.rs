@@ -316,4 +316,69 @@ mod kani_harnesses {
             }
         }
     }
+
+    /// Value-soundness over a TWO-entry table (finding §2 #3). The single-entry
+    /// harness above only proves the match where "first match" is trivially the
+    /// right entry; with two UNIQUE keys this proves the linear scan returns the
+    /// label of the entry whose key ACTUALLY matches — not merely entry 0's
+    /// label. A mutation that returns the first entry unconditionally (or always
+    /// matches key 0) is caught HERE: a value matching key1 (and not key0)
+    /// must return label1. Layout at enum_off = 1:
+    ///   pool[1]=2 (count); entry0 pool[2..10]=key0,[10]=1,[11]=label0;
+    ///   entry1 pool[12..20]=key1,[20]=1,[21]=label1.
+    #[kani::proof]
+    #[kani::unwind(28)]
+    fn enum_two_entry_value_sound() {
+        let mut pool = [0u8; 22];
+        pool[0] = 0xFF;
+        pool[1] = 2; // count
+        for i in 2..10 {
+            pool[i] = kani::any();
+        }
+        pool[10] = 1;
+        let label0: u8 = kani::any();
+        kani::assume((0x20..0x7f).contains(&label0));
+        pool[11] = label0;
+        for i in 12..20 {
+            pool[i] = kani::any();
+        }
+        pool[20] = 1;
+        let label1: u8 = kani::any();
+        kani::assume((0x20..0x7f).contains(&label1));
+        pool[21] = label1;
+
+        let mut k0 = [0u8; 8];
+        k0.copy_from_slice(&pool[2..10]);
+        let key0 = u64::from_be_bytes(k0);
+        let mut k1 = [0u8; 8];
+        k1.copy_from_slice(&pool[12..20]);
+        let key1 = u64::from_be_bytes(k1);
+        // Enum keys are unique by construction — pin it so at most one entry
+        // matches and the returned label is unambiguous.
+        kani::assume(key0 != key1);
+
+        let value: [u8; 32] = kani::any();
+        let high_zero = value[..24].iter().all(|&b| b == 0);
+        let mut vlo = [0u8; 8];
+        vlo.copy_from_slice(&value[24..32]);
+        let value_key = u64::from_be_bytes(vlo);
+
+        match lookup_enum_label(&pool, 1, &value) {
+            Ok(Some(lbl)) => {
+                // Accept ⟹ the value matched a key, and the returned label is
+                // exactly THAT entry's label (not merely entry 0's).
+                assert!(high_zero);
+                if value_key == key0 {
+                    assert_eq!(lbl, &pool[11..12]); // label0
+                } else {
+                    assert!(value_key == key1);
+                    assert_eq!(lbl, &pool[21..22]); // label1
+                }
+            }
+            Ok(None) => {
+                assert!(!high_zero || (value_key != key0 && value_key != key1));
+            }
+            Err(_) => assert!(false), // well-formed table → no reject path
+        }
+    }
 }
