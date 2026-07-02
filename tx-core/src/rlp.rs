@@ -183,8 +183,30 @@ mod kani_harnesses {
             buf[i] = kani::any();
             i += 1;
         }
-        if let Ok((_item, used)) = decode_item(&buf[..len]) {
+        if let Ok((item, used)) = decode_item(&buf[..len]) {
             assert!(used <= len, "decode_item consumed past the input");
+            // STRONGER (finding §2 #10): `used` is EXACTLY the item's byte span
+            // (header + payload) — the invariant `ListIter`'s `&self.rest[used..]`
+            // relies on to land on the NEXT item. `used <= len` alone would let an
+            // UNDER-reported `used` (a silent parse desync vs any reference
+            // decoder) pass. `header_len` is derived INDEPENDENTLY from the RLP
+            // prefix byte here (not from the decoder), so this is not a self-oracle.
+            let payload = match item {
+                Item::Bytes(b) | Item::List(b) => b,
+            };
+            let first = buf[0];
+            let header_len = if first <= 0x7f {
+                0 // single-byte item: the byte IS the payload, no prefix
+            } else if first <= 0xb7 {
+                1 // short string
+            } else if first <= 0xbf {
+                1 + (first - 0xb7) as usize // long string
+            } else if first <= 0xf7 {
+                1 // short list
+            } else {
+                1 + (first - 0xf7) as usize // long list
+            };
+            assert_eq!(used, header_len + payload.len());
         }
     }
 

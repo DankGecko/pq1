@@ -110,6 +110,17 @@
       "replace": "true",
       "expect": "kani_fails",
       "note": "make lookup_enum_label's per-entry key comparison always-true -> the first entry matches any (high-zero) value, so the returned label is entry 0's regardless of which key the value actually matches. enum_two_entry_value_sound (a value matching key1, not key0, must return label1) MUST break. Verified 2026-07-02 by hand: mutation -> enum_two_entry_value_sound (and enum_single_entry_value_sound) VERIFICATION:- FAILED; unmutated -> SUCCESSFUL. Closes finding §2 #3 (the single-entry harness only proved the match where first==correct; the multi-entry return-the-matching-entry property was unverified)."
+    },
+    {
+      "id": "rlp_used_underreport",
+      "tier": "quick",
+      "crate": "pqsigner-tx-core",
+      "harness": "decode_item_panic_free_and_used_in_bounds",
+      "file": "tx-core/src/rlp.rs",
+      "find": "Ok((Item::Bytes(&input[..1]), 1))",
+      "replace": "Ok((Item::Bytes(&input[..1]), 0))",
+      "expect": "kani_fails",
+      "note": "under-report the single-byte item's consumed count (used 1 -> 0) -> ListIter's `&self.rest[used..]` would re-read the same byte (a parse desync). The strengthened `assert_eq!(used, header_len + payload.len())` (header_len derived independently from the RLP prefix byte) MUST break; the old `used <= len` assert would have PASSED with used=0. Verified 2026-07-02 by hand: mutation -> VERIFICATION:- FAILED; unmutated -> SUCCESSFUL. Closes finding §2 #10."
     }
   ]
 }
