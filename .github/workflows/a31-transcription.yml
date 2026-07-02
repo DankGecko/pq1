@@ -9,10 +9,19 @@ name: A3.1 transcription lint
 # drift is possible. Pure Python (no Lean/Foundry toolchain). See
 # contracts/verification/docs/A3_1_ADVERSARIAL_REVIEW_2026-06-18.md.
 #
-# Scope reminder: this lint is a REGRESSION GATE, not a proof. It is the ONLY
-# CI-enforced piece of the A3.1 Lean track (the `lake`/`elan` verify-* suite is run
-# locally / in review, not in CI). Intra-fragment structural fidelity stays covered by
-# the local `verify-interp` 396-vector corpus + the kernel `execC10Asm_eq`.
+# `verify-transcription` runs THREE pure-Python checks: (1) the POSITIONAL statistical
+# lint (constant-sets / kind-histogram / gate-vars); (2) the STRUCTURAL AST check
+# (check_c10_transcription_ast.py) — parses both the .sol Yul and the c10Program literal
+# into the Interpreter.Yul AST and asserts TREE EQUALITY, closing the statistical lint's
+# intra-fragment hole (reorder / var-swap / operand-swap); (3) the NEGATIVE-CONTROL harness
+# proving those mutants are invisible to (1) yet caught by (2).
+#
+# Scope reminder: these are REGRESSION GATES + a structural cross-check, not a proof. They
+# are the ONLY CI-enforced piece of the A3.1 Lean track (the `lake`/`elan` verify-* suite
+# runs locally / in review, not in CI). The structural check now covers intra-fragment
+# source<->AST fidelity in CI (previously local-only); the source->deployed-bytecode leg
+# (R1) and the both-N-masked functional behaviour stay covered by the local `verify-interp`
+# 396-vector corpus + the kernel `execC10Asm_eq`.
 
 on:
   push:
@@ -21,6 +30,8 @@ on:
       - 'contracts/smart-wallet/src/verifiers/SPHINCsC10Asm.sol'
       - 'contracts/verification/lean/SphincsCVerify/Interpreter/C10Program.lean'
       - 'contracts/verification/scripts/check_c10_transcription.py'
+      - 'contracts/verification/scripts/check_c10_transcription_ast.py'
+      - 'contracts/verification/scripts/test_c10_transcription_ast_negative.py'
       - 'contracts/verification/Makefile'
       - '.github/workflows/a31-transcription.yml'
   pull_request:
@@ -28,6 +39,8 @@ on:
       - 'contracts/smart-wallet/src/verifiers/SPHINCsC10Asm.sol'
       - 'contracts/verification/lean/SphincsCVerify/Interpreter/C10Program.lean'
       - 'contracts/verification/scripts/check_c10_transcription.py'
+      - 'contracts/verification/scripts/check_c10_transcription_ast.py'
+      - 'contracts/verification/scripts/test_c10_transcription_ast_negative.py'
       - 'contracts/verification/Makefile'
       - '.github/workflows/a31-transcription.yml'
 
@@ -40,5 +53,5 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - name: positional transcription-fidelity lint
+      - name: transcription-fidelity checks (positional lint + structural AST + negative controls)
         run: make -C contracts/verification verify-transcription
