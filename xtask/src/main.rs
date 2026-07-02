@@ -1,8 +1,14 @@
 //! `pqsigner-xtask` — host-side codegen and tooling.
 //!
-//! See `Cargo.toml` for the design rationale. Today the single
-//! subcommand is `gen-solidity-constants`, which renders a Solidity
-//! library from the public constants in `pqsigner-proto`.
+//! See `Cargo.toml` for the design rationale. Subcommands (run `xtask help`):
+//!   * `gen-solidity-constants` — render the Solidity `PqsignerProto` library
+//!     from the public constants in `pqsigner-proto`.
+//!   * `gen-erc7730-descriptors` — compile + Merkle-anchor the ERC-7730 catalog.
+//!   * `scan-registry` / `build-registry` — read-only upstream-registry coverage
+//!     probes (how much PQ1 can clear-sign; what the full corpus builds to).
+//!   * `vendor-registry` — vendor the leaf-contributing registry into the repo
+//!     and verify it rebuilds the identical Merkle root.
+//! The `gen-*` commands take `--check` (rebuild-in-memory + drift-diff) for CI.
 
 use std::env;
 use std::fmt::Write as _;
@@ -61,6 +67,25 @@ Subcommands:
       With --check: rebuild in-memory and compare against the checked-in
       artifacts; exit non-zero on drift. CI uses this gate, mirroring
       the gen-solidity-constants pattern.
+
+  scan-registry [--registry-root PATH] [--input PATH] [--policy PATH]
+                [--report PATH]
+      Read-only coverage probe: tolerantly compile every descriptor under
+      the upstream registry through the on-device pipeline and tally how
+      many PQ1 can clear-sign today vs. skipped-and-why. Writes nothing
+      into the firmware corpus.
+
+  build-registry [--registry-root PATH] [--input PATH] [--policy PATH]
+                 [--report PATH]
+      Build the full upstream registry via `build_db_tolerant` (the corpus
+      switch) and report leaf count, root, and skips. Read-only: does NOT
+      overwrite the firmware-pinned root.
+
+  vendor-registry [--registry-root PATH] [--out PATH] [--policy PATH]
+      Vendor every leaf-contributing descriptor + include template into the
+      repo (default `secure/data/erc7730-registry/`), preserving the tree so
+      `includes` resolve, then VERIFY the vendored tree rebuilds the identical
+      Merkle root (reproducible-build faithfulness proof).
 
   help
       Print this message.

@@ -378,7 +378,7 @@ peripheral RAZ-faults and bumps `hw::tzic::VIOLATION_COUNT`. `secure/src/sau.rs`
 **Tests.**
 - Corrupt the secure image in flash (glitch a write, or a malformed `CMD_FW_CHUNK`); reboot;
   confirm the rendered fingerprint changes (tamper detectable by comparison).
-- LCD-SPI capture during the fingerprint render: confirm the 8 words shown on the OLED match the
+- LCD-SPI capture during the fingerprint render: confirm the 8 words shown on the NV3007 LCD match the
   SPI bus exactly (no hidden/extra content), and constant-time word lookup (`word_bytes_at`).
 
 **Pass.** Divergence is visible; display bus matches the screen.
@@ -493,23 +493,13 @@ value page appears each time. **Pass:** no path hides native value.
 
 - **Refund block (HIGH — fixed):** non-zero `gasToken`/`gasPrice`/`refundReceiver` must render a
   loud 2-page refund block (`project_safe_refund_wysiwys_gap`). Craft a token-refund SafeTx; confirm.
-- **multiSend (`0x8d80ff0a`) has no on-device decoder** — must fall to **loud blind-sign**, never a
-  silent benign render. Craft a multiSend batch; confirm the blind banner + calldata hash + `to`.
+- **multiSend (`0x8d80ff0a`) clear-signs per record** (shipped 2026-06-12, `secure/src/tx/eip712/safe/multi_send.rs`) — it is NOT a blind-sign path any more. The bar: each packed record is strictly decoded (per-record `operation==0`, ≤6 records, exact framing) and routed through the same inner ladder (ERC-20 / ETH / Safe-mgmt / CoW / loud per-record blind) with divider pages; `operation==1` (DELEGATECALL) is accepted ONLY against the three pinned canonical `MultiSendCallOnly` deployments; ANY framing/rule violation or page-budget overflow must **refuse to sign** (a DELEGATECALL is never blind-signed). **Test:** craft (a) a well-formed batch → per-record clear-sign with dividers; (b) a record with `operation==1` to a non-pinned address → refuse; (c) over-long / malformed framing → refuse. **Fail:** a silent benign render of an undecoded/rule-violating batch, OR a refusal of a valid batch. (`operation==0` calls to a MultiSend address stay loud blind-sign — under CALL the Safe isn't msg.sender for the records.)
 - **Safe-wrapped CoW pre-sign:** confirm the order binds to `orderUid.owner == the Safe` and renders
   Safe context + full order intent. `secure/src/tx/eip712/safe/cow_binding.rs`.
 
-### 7.3 CowSwap ZK proof binding — **check the byte-pack forgery status**
+### 7.3 CowSwap order binding — **native on-device decode (ZK path RETIRED)**
 
-The Groth16 path attests the displayed order matches the signed payload. **Two CRITICAL forgeries
-were found here:** the amount-overflow forgery (`project_cowswap_zk_amount_overflow`, fixed
-2026-06-10) and the **byte-pack non-binding** forgery (`PackBytes31` lacking `Num2Bits(8)` →
-display-vs-signed divergence). The amount-overflow fix is in; **confirm the byte-pack fix landed on
-the EVT image** — `secure/src/zk/`, circuits, and the VK/`VK_DB_ROOT` must all be the
-range-checked versions. **Test:** attempt to build a proof where displayed order ≠ canonical order
-with out-of-range witness bytes; witness generation must fail the `Num2Bits` constraint, and the
-firmware cross-check in `cowswap/verify.rs` must reject a mismatched canonical/readable pair.
-**Pass:** no benign-display/malicious-sign proof verifies. *(If the VK on the EVT predates the fix,
-this is a CRITICAL finding — the memory `project_cowswap_zk_bytepack_nonbinding` is the reference.)*
+The Groth16/BLS12-381 ZK clear-sign path was **removed 2026-06-30** (`docs/archive/zk-clear-sign-retirement.md`); CoW (and Aave) clear-signing is now a fully native on-device decoder. There is no `secure/src/zk/`, no circuits, and no VK/`VK_DB_ROOT` on the EVT image — a red-teamer finding any of those present is itself a finding (stale build). The binding to check today is the native one: the EIP-712 `GPv2Order` is verified in S-world (`secure/src/tx/eip712/cowswap/`) and the order payload is decoded on-device, with token name/symbol/decimals from the firmware-pinned `ERC20_DB_ROOT`. **Test:** construct a settlement calldata whose decoded order ≠ the rendered intent (wrong token, amount, or receiver) and confirm `cowswap/verify.rs` rejects the mismatched canonical/readable pair; also confirm an unknown sell/buy token falls to a loud page rather than a friendly-but-wrong symbol. **Pass:** no benign-display/malicious-sign order verifies. *(The historical ZK amount-overflow / byte-pack forgeries no longer apply — that code is gone.)*
 
 ### 7.4 ERC-7730 / typed-call
 
@@ -540,7 +530,7 @@ shows a paymaster page (it doesn't today) and whether a substituted paymaster wi
 divert funds on-chain. **This is the one clear-sign item still worth a fresh on-device + on-chain
 investigation.**
 
-### 7.7 LCD/OLED trusted-display bus
+### 7.7 NV3007 LCD trusted-display bus
 
 LA on the LCD SPI during high-value signs: confirm every rendered character appears on the bus and
 **no secret** (PIN, mnemonic word, key) ever crosses the display bus. Confirm seed-wizard decoy
@@ -653,8 +643,9 @@ Confirm on the actual EVT image / unit:
 - [ ] **Consumption-mask** active and unbiased; measurably raises CPA trace count.
 - [ ] **Debug** RDP-2 set; forbidden features `compile_error!`; no debug strings in the ELF.
 - [ ] **Boot** confirm monolithic-vs-A/B reality; note the human-only fingerprint comparison gap.
-- [ ] **CowSwap ZK** the byte-pack range-check fix (`Num2Bits`) and matching VK/`VK_DB_ROOT` are on
-      the EVT image.
+- [ ] **CowSwap (native decode)** the EVT image has NO ZK verifier / circuits / `VK_DB_ROOT`
+      (retired 2026-06-30); order binding is the native `cowswap/verify.rs` canonical-vs-readable
+      cross-check against the pinned `ERC20_DB_ROOT` (§7.3).
 
 ---
 

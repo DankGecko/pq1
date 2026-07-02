@@ -35,7 +35,7 @@ Attacks the design *does not* defend against are written down in §10 with the s
 | **S4 — identity-equivalent** | Per-die DHUK (factory-fused), BHK (Stage 2 planned), STM32 OTP master, factory-burnt vendor pubkey hash | STM32 silicon — DHUK only accessible via SAES, never as memory | Decap-class only; downstream wraps fail open if extracted but the on-device PIN gate (§7.4) still applies |
 | **S5 — integrity-equivalent** | Firmware secure/nonsecure images, FSBL, on-chain bytecode at the deployed proxy + factory + implementation + verifier addresses, vendor C10 signing key (off-device, HSM) | Flash (FSBL: WRP1A-locked pages 0–3), on-chain CREATE2-derived addresses, vendor HSM | Persistent backdoor or substituted code path; downstream affects S0–S3 |
 | **S6 — availability** | Three-way PIN counters, on-chain per-chain caps, page-123 offchain counter | MCU page 124, OPTIGA E120 LUC, SE050 UserID, on-chain storage | Brick (DoS) — funds frozen but not extracted. Note: bricking is a *defence outcome*, not an attack outcome we care about preventing |
-| **S7 — privacy** | Wallet on-chain identity ↔ user, list of signed transactions, BIP-39 measurement words | On-chain (public), local OLED (transient), companion app (depends on app) | Surveillance / deanonymisation; not financial loss |
+| **S7 — privacy** | Wallet on-chain identity ↔ user, list of signed transactions, BIP-39 measurement words | On-chain (public), local NV3007 LCD (transient), companion app (depends on app) | Surveillance / deanonymisation; not financial loss |
 
 The shipping invariant is: **no attack that does not break at least one S4 asset AND the S3 asset (user PIN) AND the S5 firmware integrity reaches an S0 asset.** The dual-SE split, the three-way PIN gate, and the FI-hardened verify-before-release together encode that invariant in silicon-anchored code.
 
@@ -49,7 +49,7 @@ A boundary is *non-trivial* when its two sides are governed by different keys, d
 |---|---|---|---|
 | **B-USB** Companion ↔ device | USB HID, APDU v2 (`nonsecure/src/usb/{commands,hid,transport}.rs`) | Device trusts companion *only* for non-secret metadata (chain_id, slot_index, flags, displayed tx fields); never for secret material | NS-side parser → NSC veneer |
 | **B-NSC** NS ↔ S (TrustZone-M) | CMSE `cmse-nonsecure-entry` veneers on STM32U585; shared-memory mailbox on QEMU | S **never** trusts NS pointers, lengths, or contents without validation + copy-in | `secure/src/nsc/{ptr_validate,ns_ptr}.rs`; every `cmd_*::run` copies NS buffers to S-stack before parse |
-| **B-UI** S ↔ user (OLED + 2 buttons) | Trusted-path dialogs (`secure/src/ui/{confirm,pin_entry,seed_wizard}.rs`); buttons + OLED are S-owned peripherals via GTZC | User trusts what they see; S trusts only what they physically pressed | NS opinion of a button press is ignored — the S-only TIM2 inactivity timer is not reset by NS pings (§7.6) |
+| **B-UI** S ↔ user (NV3007 LCD + 2 buttons) | Trusted-path dialogs (`secure/src/ui/{confirm,pin_entry,seed_wizard}.rs`); buttons + LCD are S-owned peripherals via GTZC | User trusts what they see; S trusts only what they physically pressed | NS opinion of a button press is ignored — the S-only TIM2 inactivity timer is not reset by NS pings (§7.6) |
 | **B-OPT** S ↔ OPTIGA Trust M V3 | OPTIGA Shielded Connection (TLS-PRF + AES-128-CCM-8); PBS provisioned at factory under Tier-1 DHUK-derived wrap | S trusts OPTIGA only for the `half_O` bits it returns under successful E120/F1D0 silicon-gated read | `secure/src/optiga/{shield,apdu,ifx_i2c}.rs` |
 | **B-SE0** S ↔ SE050 | SCP03 (AES-CMAC + AES-CBC); admin UserID derived from OTP master via `secret_keys`; user UserID is the PIN-derived bytes | S trusts SE050 only for `half_E` bits returned under successful user-UserID read | `secure/src/se050/{scp03,apdu,t1oi2c}.rs` |
 | **B-OTP** S firmware ↔ STM32 OTP | One-way SAES-CMAC(DHUK, label‖ctr) key derivation; OTP master in OTP block, vendor-pubkey hash planned | OTP is silicon-immutable post-burn | `secure/src/hw/{otp,huk,secret_keys}.rs` |
@@ -167,9 +167,9 @@ Until the ML-KEM-1024 inner wrap lands, the residual is "a CRQC adversary who ca
 Mechanism: `fsbl/` immutable bootloader, `fw-manifest/` verify chain, OPTIGA monotonic counter (E1E0) cross-checked at COMMIT. FSBL pages are WRP1A-locked. Falsifiable by attempting a flashing of an unsigned or downgraded blob.
 
 **Claim 9 — Trusted UI faithfully renders signed semantics.**
-> Whatever the OLED shows in a confirm screen is exactly what the signed `userOpHash` preimage commits to; the user pressing both buttons binds their consent to the displayed bytes.
+> Whatever the NV3007 LCD shows in a confirm screen is exactly what the signed `userOpHash` preimage commits to; the user pressing both buttons binds their consent to the displayed bytes.
 
-Mechanism: the confirmation page renderer (`secure/src/tx/display/*`) runs in S-world, reads from the S-stack copy of the parsed UserOp, displays from S-owned OLED via S-driven SPI/I²C. The page-renderer code is what hashes into `userOpHash` (i.e. there is no second path that displays one thing and signs another). For ERC-20 the recipient symbol/decimals come from a Merkle-verified bundle (`secure/src/erc20/` checks against the firmware-baked `ERC20_DB_ROOT`); unknown contracts fall through to "⚠ BLIND SIGNING". For ZK clear-signed paths, the string is signed by a Groth16 proof that the calldata semantically equals the string. Falsifiable by constructing a malicious bundle and observing rejection.
+Mechanism: the confirmation page renderer (`secure/src/tx/display/*`) runs in S-world, reads from the S-stack copy of the parsed UserOp, displays from the S-owned NV3007 LCD via S-driven SPI. The page-renderer code is what hashes into `userOpHash` (i.e. there is no second path that displays one thing and signs another). For ERC-20 the recipient symbol/decimals come from a Merkle-verified bundle (`secure/src/erc20/` checks against the firmware-baked `ERC20_DB_ROOT`); unknown contracts fall through to "⚠ BLIND SIGNING". For structured clear-signed paths (Safe SafeTx / multiSend, CoW `GPv2Order`, ERC-7730 descriptors, typed-call ABI) the payload is decoded **natively on-device** in S-world and the decode is cross-checked against the signed bytes (e.g. `cowswap/verify.rs` binds the rendered order to the settlement calldata; the Safe EIP-712 hash is recomputed locally). *(An earlier design proved this binding with a Groth16/BLS12-381 ZK verifier; that path was retired 2026-06-30 — `docs/archive/zk-clear-sign-retirement.md`.)* Falsifiable by constructing a malicious bundle/calldata and observing rejection.
 
 ---
 
@@ -251,9 +251,9 @@ The single biggest attack class against hardware wallets historically: the devic
 |---|---|---|---|
 | Companion supplies forged calldata; device shows a friendly string and signs malicious bytes | T0 | The string and the signed `userOpHash` are derived from the *same* S-stack copy. The render path *is* the hash path. | A *parser* bug that decodes one way and displays another is the residual; covered by typed-call ABI tests + EIP-712 vectors in `secure/src/tx/eip712/{cowswap,safe}/` |
 | ERC-20 with a spoofed token contract address | T2 (chain) | ERC-20 metadata bundle is Merkle-verified against the firmware-baked `ERC20_DB_ROOT`; unknown tokens fall through to "⚠ BLIND SIGNING" warning | Unknown contracts still sign — user must reject blind-sign or use clear-sign |
-| Hostile dapp tricks user into clear-signing wrong semantics | T0 | ZK clear-sign Groth16 proof: the string is cryptographically certified to be a faithful ABI interpretation of the raw calldata. VK pool is Merkle-rooted into S-flash, so even a compromised NS cannot substitute a malicious VK | Per-protocol — today Aave V3 supply; expansion is a feature-add, not a security gap |
+| Hostile dapp tricks user into clear-signing wrong semantics | T0 | Native on-device decode cross-checked against the signed bytes: Safe/CoW EIP-712 verified in S-world, ERC-20 metadata + ERC-7730 descriptors Merkle-rooted into S-flash (a compromised NS cannot substitute a malicious descriptor/root). Anything undecodable falls to loud blind-sign, never a friendly-but-wrong string | Per-protocol coverage expands as a feature-add, not a security gap |
 | NS fakes a "user pressed both buttons" to S | T0 (firmware) | The confirm dialog reads buttons via S-owned GPIO; NS cannot drive the GPIO. The inactivity timer is S-only TIM-driven; NS pings do not reset it. | Tamper of S-owned GPIO is a T2+ surface |
-| NS races / spoofs the OLED to show a friendly screen | T0 | OLED bus (SPI for SSD1306 variant) is S-owned via GTZC | Pending TZSC restore (§9.3) |
+| NS races / spoofs the LCD to show a friendly screen | T0 | The NV3007 LCD SPI bus is S-owned via GTZC | TZSC enforcement silicon-validated 2026-05-20 (§9.3) |
 | EIP-1271 path used to authorise arbitrary action (Replay against a different chain or wallet) | T0 | EIP-1271 verifier nests the raw hash via Solady EIP-712 with `chainId` and `address(this)` baked in; bootstrap key (`ownerIndex == 0`) forbidden on this path | Mismatch between companion's wrapping and on-device wrapping would refuse to validate — handler hashes the same way |
 
 ### 7.7 Firmware integrity (boot)
@@ -475,10 +475,10 @@ Out of scope of the wallet. The wallet signs what the user confirms on the trust
 A passive on-chain observer can correlate a wallet's deterministic CREATE2 address across chains. The same 24 words → same address on every chain is a *feature* (recovery UX); the privacy cost is acknowledged. Mitigation must come from off-device tooling (per-tx address rotation requires breaking Claim 6, which we explicitly do not do).
 
 ### 10.9 Stuck-in-display-pipeline bugs
-If a future contract uses ABI patterns the typed-call parser doesn't handle, the user sees "⚠ BLIND SIGNING" and signs at their own risk. We do not ship a typed-call parser that decodes unfamiliar ABIs into friendly strings without ZK proofs (§7.6). This is a *feature* — refusing to invent a display is safer than inventing one wrongly.
+If a future contract uses ABI patterns the typed-call parser doesn't handle, the user sees "⚠ BLIND SIGNING" and signs at their own risk. We do not ship a typed-call parser that decodes unfamiliar ABIs into friendly strings without a firmware-pinned descriptor / Merkle-verified binding (§7.6). This is a *feature* — refusing to invent a display is safer than inventing one wrongly.
 
 ### 10.10 Bugs in our dependencies
-`sphincs-c10/` is in-tree and reviewed line-by-line. `bls12_381_pka/` is a forked dependency for the ZK clear-sign path. `bip39/` is in-tree. Every external crate that touches secrets is pinned and reviewed. Despite that, "every shipped wallet vulnerability in history" is implementation bug. The honest residual is: an implementation bug in a code path we have not yet audited or that lands post-audit is the most likely failure mode. Mitigation = external audit before shipping + bug bounty + gradual rollout, per HARDENING §12.
+`sphincs-c10/` is in-tree and reviewed line-by-line. (`bls12_381_pka/` was a forked dependency for the retired ZK clear-sign path — removed 2026-06-30; any residue is dead weight, not a live attack surface.) `bip39/` is in-tree. Every external crate that touches secrets is pinned and reviewed. Despite that, "every shipped wallet vulnerability in history" is implementation bug. The honest residual is: an implementation bug in a code path we have not yet audited or that lands post-audit is the most likely failure mode. Mitigation = external audit before shipping + bug bounty + gradual rollout, per HARDENING §12.
 
 ---
 
@@ -505,7 +505,7 @@ Tests that *should* exist but don't yet:
 - An analogous `make optiga-admin-extract-attempt-e2e` mirroring the SE050 test for Claim 2's OPTIGA side.
 - A scripted FI sweep — voltage glitch on the PIN-verify branch — even at home-equipment hardness, to characterise residual against §7.4 / §7.9.
 - Zeroization-verification SRAM scan after every signing test (HARDENING §11).
-- Screenshot-hash UI regression covering every confirm-dialog state, including blind-sign and ZK clear-sign paths (`docs/architecture/trezor-comparison.md §2.3`).
+- Screenshot-hash UI regression covering every confirm-dialog state, including blind-sign and the native clear-sign paths (`docs/architecture/trezor-comparison.md §2.3`).
 
 ---
 
@@ -557,6 +557,6 @@ Cross-references:
 
 ## 14. One-line Summary
 
-**To extract funds from a shipping PQSigner OS device, an adversary must simultaneously break (a) the OPTIGA silicon PIN gate, (b) the SE050 silicon PIN gate, and (c) either the STM32U585 firmware integrity chain or its silicon-side OTP — each of which has its own monotonic 10-attempt destructive wipe — and must do all of this before any of the three counters strike out *or* the device's 120-second inactivity timer wipes S-SRAM, and must do it without leaving a measured-boot fingerprint that the user can see on the trusted OLED.**
+**To extract funds from a shipping PQSigner OS device, an adversary must simultaneously break (a) the OPTIGA silicon PIN gate, (b) the SE050 silicon PIN gate, and (c) either the STM32U585 firmware integrity chain or its silicon-side OTP — each of which has its own monotonic 10-attempt destructive wipe — and must do all of this before any of the three counters strike out *or* the device's 120-second inactivity timer wipes S-SRAM, and must do it without leaving a measured-boot fingerprint that the user can see on the trusted NV3007 LCD.**
 
 If any one of those three barriers holds, funds stay.
