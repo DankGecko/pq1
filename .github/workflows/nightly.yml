@@ -152,6 +152,34 @@ jobs:
             echo "==> checkct: FAIL — a secure driver leaked or the shuffle control stopped firing"; exit 1
           fi
 
+  firmware-check:
+    name: Firmware target compile-check (stm32u585, both worlds)
+    runs-on: ubuntu-latest
+    # No CI job compiled a real stm32u585 image before this (2026-07-02): every
+    # cross-build used the QEMU feature set (mock-se/ui-semihosting), and the
+    # prod-config gate is cargo-tree-only — so a compile break anywhere in the
+    # large `#[cfg(feature = "stm32u585")]` surface (SE drivers, HW MMIO, CMSE
+    # veneers, LCD) shipped silently until someone built at the bench. `cargo
+    # check` (not a full build) is fast and catches exactly that. The pinned
+    # nightly is auto-selected via rust-toolchain.toml (CMSE
+    # `C-cmse-nonsecure-entry` needs it) — the action just provides the target.
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: stable
+          targets: thumbv8m.main-none-eabi
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: cargo check — secure world (dual-SE hardened bench set)
+        run: |
+          cargo check --locked -p sphincs-tz-secure --target thumbv8m.main-none-eabi \
+            --no-default-features \
+            --features dual-se,optiga-hw-counter,saes-dhuk,ui-lcd,stm32u585,usb
+      - name: cargo check — non-secure world (USB)
+        run: |
+          cargo check --locked -p sphincs-tz-nonsecure --target thumbv8m.main-none-eabi \
+            --no-default-features --features stm32u585,usb
+
   ui-golden-render:
     name: UI golden (render-only)
     runs-on: ubuntu-latest

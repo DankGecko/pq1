@@ -15,7 +15,7 @@ A **post-quantum ERC-4337 hardware wallet** (the **PQ1**) where every primitive 
                   │                                                   │
                   │  ┌───────────────── SECURE WORLD ───────────────┐ │   ┌──── NON-SECURE WORLD ────┐
                   │  │                                                │ │   │                          │
-                  │  │  PIN → gated_unlock (page-124 pre-commit)      │ │   │  USB HID / OLED forward  │
+                  │  │  PIN → gated_unlock (page-124 pre-commit)      │ │   │  USB HID / LCD forward   │
                   │  │     → SE-derived auth via hw::secret_keys      │ │   │  Companion app drives    │
    ┌──────────┐   │  │     → SAES-CMAC(DHUK, label) [Tier 1]          │ │   │  (chain_id, slot_index,  │
    │ OPTIGA   │◄──┼──┤                                                │ │   │   flags) per sign call   │
@@ -58,7 +58,7 @@ Each item below is implemented today (QEMU and/or real STM32U585), partial, or p
 - **Three-way PIN counter sync** — silicon-monotonic counters on MCU page 124 (FI-hardened pre-commit), OPTIGA E120 LUC bound to F1D0 Execute (immune to PBS extraction), and SE050 silicon UserID. `MAX_ATTEMPTS = 10` on any one dispatches `factory_reset_admin` + page-124 erase; `CMD_GET_REMAINING` returns the min. *(Validated: `make pin-gate-hw-counter-e2e`, `make pin-gate-wipe-e2e`.)*
 - **Three-tier DHUK + BHK + OTP key hierarchy** — Tier 1 (DHUK, `SAES-CMAC(DHUK, label‖counter)`) is **landed** behind `saes-dhuk`. At RDP0 the DHUK is an ST-substituted constant shared across boards (per-die uniqueness only at RDP ≥ 1). Tier 2 (BHK) and the OTP-salt repurpose are planned.
 - **Trusted-display clear-signing** — every signable artifact is decoded and rendered in S-world before confirm, all by **native on-device decoders** (no ZK proof). **Safe** EIP-712 `SafeTx` and **CoW Swap** EIP-712 `GPv2Order` are verified in-world (`secure/src/tx/eip712/{safe,cowswap}/`) and decoded locally. **ERC-20** transfers and CoW order legs render symbol/decimals from a Merkle-verified metadata bundle; **ERC-7730** descriptors (incl. Aave v3) render field-level pages. Unknown shapes (incl. Safe `multiSend` batches) fall, loudly, to blind-sign. *(An earlier Groth16/BLS12-381 ZK clear-sign verifier was retired 2026-06-30 — see `docs/archive/zk-clear-sign-retirement.md`.)*
-- **Boot-time self-test & measurement** — `hw::hash::init_clock()` runs a `SHA-256("abc")` KAT (halt on mismatch); `make saes-self-test-hw` runs the SAES round-trip + 8-byte DHUK fingerprint. The secure-world image hash is rendered as 8 BIP-39 words on the OLED for trustless comparison against `fwmeasure`.
+- **Boot-time self-test & measurement** — `hw::hash::init_clock()` runs a `SHA-256("abc")` KAT (halt on mismatch); `make saes-self-test-hw` runs the SAES round-trip + 8-byte DHUK fingerprint. The secure-world image hash is rendered as 8 BIP-39 words on the NV3007 LCD for trustless comparison against `fwmeasure`.
 - **Hardening hooks** — STM32U585 TAMP (Trezor-port; log-only on this branch, production flips to `trigger_lockout_wipe()`), TIM2 CH1 PWM consumption mask (PA5), UI-capture screenshot-hash harness. All feature-gated; CI keeps them out of production.
 - **No heap** — `#![no_std]`, stack-only, no `Vec`/`Box`/`String`. `zeroize` on every secret; `subtle` for constant-time compares; `// SAFETY:` on every `unsafe`.
 
@@ -83,7 +83,7 @@ make measure            # print the 8 BIP-39 measurement words for this build
 Build a dual-SE production-target firmware:
 
 ```bash
-make FEATURES="dual-se,stm32u585,ui-oled,saes-dhuk,usb" all
+make FEATURES="dual-se,stm32u585,ui-lcd,saes-dhuk,usb" all
 ```
 
 Expected real-hardware key-speed (`hw-sha256`, auto under `stm32u585`): first-sign ≤ 3 s (master keygen + slot keygen + 2× sign); Type-2 cached slot ≈ 1.1 s; second-chain first-sign ≈ 2.5 s. Substantially higher means the HASH peripheral isn't being used.
@@ -110,7 +110,7 @@ sphincs_rust/
 ├── domain/ tx-core/ aa/ tx/ hal/ pqsigner-erc7730/   pure-logic workspace crates
 ├── contracts/smart-wallet/   Foundry project — PQSmartWallet, Factory, PQMultiOwnable,
 │                             verifiers/SPHINCsC10Asm.sol (stateless Yul C10 verifier)
-├── fsbl/          immutable first-stage bootloader (PQ A/B selector, ~18 KB)
+├── fsbl/          immutable first-stage bootloader (PQ A/B selector, ~32 KB — near its 32 KB cap)
 ├── fwsign/ fwmeasure/ fw-manifest/   host signer/verifier, measurement tool, manifest chain
 ├── dbgen/         host ERC20/names/selectors/ERC-7730 DB + Merkle-tree builder
 ├── tools/         webhid_test.html, wallet_run_hw.py, …
@@ -119,9 +119,9 @@ sphincs_rust/
 
 See `CLAUDE.md` for the full per-file map and the non-negotiable invariants.
 
-## On-device databases (ERC20 + ZK VK)
+## On-device databases (ERC-20 / names / ERC-7730)
 
-Two embedded read-only DBs ship in **non-secure rodata**, both Merkle-anchored to 32-byte roots pinned in secure flash (`secure/src/db_roots.rs`):
+Three embedded read-only DBs ship in **non-secure rodata**, all Merkle-anchored to 32-byte roots pinned in secure flash (`secure/src/db_roots.rs`):
 
 | DB | Source | NS artifact | Secure anchor |
 |---|---|---|---|
@@ -215,7 +215,7 @@ Every step runs in the **secure world**; NS drives nothing more sensitive than "
 
 ```
 1. SECURE BOOT      FSBL verifies the SPHINCS+C10 sig of both images → SAU/IDAU/MPC/GTZC →
-                    mark OLED bus, button GPIOs, both SE buses, TRNG/HASH/SAES/PKA/TAMP/BKPSRAM
+                    mark LCD bus, button GPIOs, both SE buses, TRNG/HASH/SAES/PKA/TAMP/BKPSRAM
                     Secure-only → SHA-256 KAT (halt on FAIL) → SAES self-test (feature-gated)
 2. ATTESTATION      (planned) nonce ← TRNG; verify each SE's factory cert vs pinned vendor root +
                     pinned UID. FAIL → tamper screen + halt. PASS → boot NS, show "Enter PIN"
@@ -236,7 +236,7 @@ Every step runs in the **secure world**; NS drives nothing more sensitive than "
                     cached secrets + stack + registers, loop-twice + verify → "Locked" screen
 ```
 
-**Invariants the dual-SE design hangs on:** (1) the trusted path is contiguous button → S-ISR → OLED → S-world (GTZC marks all of it Secure-only); (2) the PIN buffer never crosses the NSC boundary — there is no `enter_pin(bytes)` call, only `request_unlock()`; (3) activity is defined by S-world button presses, never NS pings; (4) PIN counter sync is three-way and boot reconciles to the strictest; (5) the firmware is stateless w.r.t. slot selection — no `next_q`-in-flash, no per-signature flash writes (slot keys re-derived on demand; SPHINCS+C10 is stateless within its 2¹⁸ tree).
+**Invariants the dual-SE design hangs on:** (1) the trusted path is contiguous button → S-ISR → LCD → S-world (GTZC marks all of it Secure-only); (2) the PIN buffer never crosses the NSC boundary — there is no `enter_pin(bytes)` call, only `request_unlock()`; (3) activity is defined by S-world button presses, never NS pings; (4) PIN counter sync is three-way and boot reconciles to the strictest; (5) the firmware is stateless w.r.t. slot selection — no `next_q`-in-flash, no per-signature flash writes (slot keys re-derived on demand; SPHINCS+C10 is stateless within its 2¹⁸ tree).
 
 ## Formal Verification (Lean 4)
 
@@ -299,7 +299,7 @@ Any claim of "verified" in docs or marketing must carry the assumption list.
 
 | Component | Status |
 |---|---|
-| TrustZone partitioning (SAU + IDAU + MPC/GTZC) | 🟢 QEMU + HW (GTZC2 USB-OTG attribution regression — see `CLAUDE.md`) |
+| TrustZone partitioning (SAU + IDAU + MPC/GTZC) | 🟢 QEMU + HW (TZSC enforcement + USB coexistence silicon-validated 2026-05-20; only TAMP/GTZC2 follow-up open) |
 | NSC gateway (NS pointer validation, CMSE veneers / mailbox) | 🟢 QEMU + HW |
 | BIP-39 → SPHINCS+C10 derivation, master + per-slot, multi-account (256/seed) | 🟢 QEMU + HW |
 | OPTIGA Trust M V3: IFX I2C + APDU + Shielded Connection | 🟢 HW |
@@ -309,7 +309,7 @@ Any claim of "verified" in docs or marketing must carry the assumption list.
 | Tier 1 SAES-CMAC(DHUK) KDF + SAES driver self-test | 🟢 HW |
 | `sphincs-c10` library; HW SHA-256 routing (HASH peripheral, boot KAT) | 🟢 QEMU + HW |
 | Standalone Tropic01 path (Noise_KK1 + MACD) | 🟢 HW (not used in dual-SE) |
-| Trusted UI (OLED + 2-button), seed wizard / PIN entry / confirm dialogs | 🟢 QEMU + HW |
+| Trusted UI (NV3007 LCD + 2-button), seed wizard / PIN entry / confirm dialogs | 🟢 QEMU + HW |
 | `#![no_std]`/no-heap/zeroize, panic-handler wipe, inactivity timeout | 🟢 QEMU + HW |
 | Native clear-sign (Safe / CoW / ERC-7730 / ERC-20); Merkle-verified DBs | 🟢 QEMU |
 | EIP-712 Safe + CoW Swap verifiers; ERC-7730 renderer | 🟢 QEMU |
@@ -358,7 +358,7 @@ See [docs/firmware/firmware-update.md](docs/firmware/firmware-update.md) and [do
 | `tamp` / `consumption-mask` | TAMP (log-only on this branch) / TIM2 CH1 PWM SCA mask on PA5 |
 | `stm32u585` | Real hardware target (vs QEMU `mps2-an505`). **Implies `hw-sha256`** |
 | `hw-sha256` | Route `sphincs-c10` SHA-256 through the HASH peripheral |
-| `ui-semihosting` / `ui-oled` / `ui-noop` | Console (QEMU) / SSD1306 OLED / silent |
+| `ui-semihosting` / `ui-lcd` / `ui-noop` | Console (QEMU) / NV3007 SPI LCD / silent |
 | `usb` | USB OTG init |
 | `debug-log` / `e2e-test` / `mock-se` / `otp-hardcoded-master-key` / `ui-capture` | **Dev/test only — CI gates these OFF for production** |
 
@@ -371,7 +371,7 @@ Each phase has a hard exit criterion before the next starts. Full backlog: `docs
 - **Phase 0 — bring-up complete (today).** All-C10 firmware boots on the B-U585I-IOT02A; dual-SE split, three-way PIN sync, Tier-1 DHUK KDF, OPTIGA Shielded-Connection unlock, SE050 admin-wipe, and the FSBL firmware-update path all run end-to-end. The branch carries known production-invariant regressions (see `CLAUDE.md`).
 - **Phase 1 — close the bring-up regressions (in progress).** Restore the GTZC `TZSC_SECCFGR` allowlist (incl. GTZC2 USB-OTG); strip `debug-log`/`e2e-test`/`mock-se` from production builds + restore the `compile_error!` fences; remove dev log/register dumps; wire TAMP IRQ → `trigger_lockout_wipe()`; move BOR/inactivity to the Secure-only TIM; land Tier 2 (BHK); step a board to RDP1 and re-validate per-die DHUK uniqueness.
 - **Phase 2 — PQ inner wrap + boot-time attestation (still on the devkit).** Add the ML-KEM-1024 inner wrap (HUK-SAES-wrapped sk; `ct‖aead` on each SE); migrate the OPTIGA/SE050 reads onto it; pin a SPHINCS+C10 device-identity cert; implement mixed-RNG and PIN digit scrambling. Exit: the seed never appears in plaintext on either bus (trace-verified).
-- **Phase 3 — custom PCB, HUK-SAES, GTZC, production peripheral set.** Design/review the PCB (U585 + both SEs + OLED + buttons + tamper mesh + EMI can); HUK-SAES wrap the at-rest secrets; GTZC-mark every Secure-only peripheral; MPU boundaries; block DMA into S-SRAM; wire case switch / tamper mesh / temp sensor / BOR to the wipe ISR (measure bulk-cap holdup on real HW).
+- **Phase 3 — custom PCB, HUK-SAES, GTZC, production peripheral set.** Design/review the PCB (U585 + both SEs + NV3007 LCD + buttons + tamper mesh + EMI can); HUK-SAES wrap the at-rest secrets; GTZC-mark every Secure-only peripheral; MPU boundaries; block DMA into S-SRAM; wire case switch / tamper mesh / temp sensor / BOR to the wipe ISR (measure bulk-cap holdup on real HW).
 - **Phase 4 — secure boot, provisioning, lockdown.** Finalise the immutable FSBL (WRP1A-locked); build the HSM-backed provisioning pipeline (air-gapped C10 vendor key, two-person rule); run the full 13-step bring-up sequence on a sacrificial unit incl. the irreversible RDP-2 burn; verify the locked unit refuses unsigned firmware and SWD/JTAG.
 - **Phase 5 — pre-launch validation.** External audit, FI + SCA lab time on the locked PCB, public bug bounty before any sale, gradual rollout with a long observation window.
 
@@ -382,7 +382,7 @@ Nothing here is optional. Run through the entire list **per device class**, not 
 **A. Hardware design & PCB** *(full spec: [`docs/hardware/hardware_requirements.md`](docs/hardware/hardware_requirements.md))*
 - [ ] PCB review by an embedded-security specialist (not the layout engineer)
 - [ ] Evaluate moving SE050 off the shared I2C1 (0x30 / 0x48) to a second peripheral; independent reset for each SE
-- [ ] No test pads / debug headers / probe points on any SE bus, OLED bus, button GPIO, or S-world peripheral
+- [ ] No test pads / debug headers / probe points on any SE bus, LCD bus, button GPIO, or S-world peripheral
 - [ ] Tamper mesh across all four layers over U585 + both SEs; case switch → TAMP with pull + noise filter
 - [ ] BOR threshold + bulk capacitance **measured on real HW** so the wipe ISR completes before V_dd collapses
 - [ ] Temperature sensor across the operating envelope; cold-boot threshold tested; no exposed SWD/JTAG after assembly
@@ -457,7 +457,7 @@ The STM32U585 boot ROM + OEMiROT enforce "this chip only runs firmware signed by
 
 ```
 HDPL0  System Bootloader (immutable) — dispatches to the FSBL per option bytes
-HDPL1  Our FSBL (~18 KB, WRP1A-locked) — holds the 32-byte C10 vendor key, the per-device
+HDPL1  Our FSBL (~32 KB, WRP1A-locked, near its 32 KB cap) — holds the 32-byte C10 vendor key, the per-device
        C10 device-identity cert, and the 1024-bit OTP rollback floor. For each A/B slot in
        version order: reconstruct the 75-byte preimage, verify the C10 sig + version > floor,
        jump on success / try the other slot / else halt

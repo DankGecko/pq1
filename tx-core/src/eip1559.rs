@@ -689,6 +689,20 @@ mod tests {
     }
 
     #[test]
+    fn format_decimal_round_drop_is_only_significant_digit() {
+        // The dropped digit IS the value's only significant digit (kept
+        // position is a structural zero) — the "smallest-magnitude amount
+        // rounds up, not to zero" WYSIWYS case. 0.05 at frac=1 rounds to 0.1;
+        // 0.04 stays 0.0. Pins the `round_idx - 1 < n_digits` drop-digit guard
+        // (a `round_idx / 1` == `round_idx` mutant, cargo-mutants 177:43, reads
+        // drop_digit=0 here and understates 0.05 as "0.0"). This is a distinct
+        // survivor from the fd(15,…)="2" boundary above (there the kept digit
+        // is non-zero, so n_digits != round_idx and the mutant is inert).
+        assert_eq!(fd(5, 2, 1, false).as_deref(), Some("0.1")); // 0.05 -> 0.1
+        assert_eq!(fd(4, 2, 1, false).as_deref(), Some("0.0")); // 0.04 -> 0.0
+    }
+
+    #[test]
     fn format_decimal_trailing_zero_trim_boundary() {
         // trim collapses trailing fractional zeros (and the point if all go).
         // Pins the `frac_emit > 0` / `d != 0` trim loop against `>=`/`==` mutants.

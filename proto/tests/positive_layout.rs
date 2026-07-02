@@ -207,19 +207,27 @@ fn positive_sign_offchain_output_deployed_layout() {
 #[test]
 fn positive_sign_offchain_max_input_bounds_personal_sign() {
     // Phase 3 (ERC-7730) added an optional EIP-712 typed-data path
-    // (MAX_OFFCHAIN_EIP712_TYPED_LEN) plus an attestation trailer.
-    // The max-input bound is now the longer of the two payload
-    // shapes + the trailer:
-    //   header + max(personal_sign, eip712_typed_len_with_trailer).
+    // (MAX_OFFCHAIN_EIP712_TYPED_LEN) plus an attestation trailer; Phase 5
+    // added the v0x03 nested-EIP-712 variant (MAX_OFFCHAIN_EIP712_TYPED_V3_LEN,
+    // which inserts a nested-encodeData blob before the trailer). The
+    // max-input bound is the longest of the THREE payload shapes:
+    //   header + max(personal_sign, eip712_typed, eip712_typed_v3).
+    // (The V3 variant is the largest, so it sets the ceiling.)
     assert_eq!(
         SIGN_OFFCHAIN_INPUT_MAX_LEN,
         SIGN_OFFCHAIN_HEADER_LEN
             + core::cmp::max(
                 MAX_OFFCHAIN_PERSONAL_SIGN_LEN,
-                MAX_OFFCHAIN_EIP712_TYPED_LEN,
+                core::cmp::max(
+                    MAX_OFFCHAIN_EIP712_TYPED_LEN,
+                    MAX_OFFCHAIN_EIP712_TYPED_V3_LEN,
+                ),
             )
     );
     assert_eq!(MAX_OFFCHAIN_PERSONAL_SIGN_LEN, 700);
+    // V3 (nested) is the ceiling — guards against a future refactor that
+    // drops it from the SIGN_OFFCHAIN_INPUT_MAX_LEN formula.
+    assert!(MAX_OFFCHAIN_EIP712_TYPED_V3_LEN > MAX_OFFCHAIN_EIP712_TYPED_LEN);
 }
 
 #[test]

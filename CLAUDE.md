@@ -230,7 +230,7 @@ Pure-logic primitives live in standalone workspace crates so host signers / benc
 | Path | Purpose |
 |------|---------|
 | `secure/src/main.rs` | Entry: SAU → RCC → SAES self-test → provision → unlock → boot NS. |
-| `secure/src/sau.rs` | SAU + GTZC config (currently regressed — see Pre-Production Caveats). |
+| `secure/src/sau.rs` | SAU + GTZC config (TZSC enforcement silicon-validated 2026-05-20; only TAMP/GTZC2 follow-up open — see Pre-Production Caveats). |
 | `secure/src/crypto.rs` | Re-export shim over `pqsigner-domain` + FI-hardened `c10_sign_verified*` + `WalletStore`-bound `provision_from_mnemonic` / `store_macd_encrypted`. |
 | `secure/src/aa/mod.rs` | Re-export shim over `pqsigner-aa`. |
 | `secure/src/tx/mod.rs` | Re-export shim over `pqsigner-tx-core` + display + EIP-712. |
@@ -301,7 +301,7 @@ Pure-logic primitives live in standalone workspace crates so host signers / benc
 | `fwmeasure/` | Host firmware measurement tool. |
 | `fw-manifest/` | no_std FW-update manifest format + verify chain. |
 | `fwsign/` | Host release-signing: `keygen`/`pubkey`/`sign`/`verify`/`verify-release`/`extract-sig`/`inspect`. |
-| `fsbl/` | Immutable first-stage bootloader (~18 KB). |
+| `fsbl/` | Immutable first-stage bootloader (~32 KB — ~99% of its frozen 32 KB WRP1A budget). |
 | `dbgen/` | Merkle-DB builder (ERC-20 / names / selectors / ERC-7730 descriptor roots). |
 | `xtask/` | Host workspace tooling — codegen, doc-checks, release packaging. |
 | `tools/webhid_test.html`, `tools/wallet_run_hw.py` | Browser companion + probe-rs arrow-key forwarder. |

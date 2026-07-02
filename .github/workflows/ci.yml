@@ -134,12 +134,23 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      # `--tests` (NOT `--lib`): run each crate's integration suites in tests/
+      # as well as its in-crate unit tests. The tests/ dirs hold almost all of
+      # the frozen-wire-format, KDF-tag-stability, and RAW32-forgery-oracle
+      # regression assertions — `--lib` silently skipped every one of them, so
+      # they went completely un-run in CI until this was fixed (2026-07-02; the
+      # switch immediately surfaced a stale proto max-input-len assertion that
+      # had drifted when the v0x03 nested-EIP-712 path landed). fsbl-tests is
+      # deliberately excluded here — its footprint test cross-compiles to
+      # thumbv8m and belongs in a firmware-target job, not this host job.
       - name: cargo test (pure-logic crates)
         run: |
-          cargo test --locked --lib \
+          cargo test --locked --tests \
             -p pqsigner-proto -p pqsigner-tx-core -p pqsigner-aa \
             -p pqsigner-domain -p pqsigner-tx -p pqsigner-erc7730 \
-            -p sphincs-c10 -p pqsigner-fi
+            -p sphincs-c10 -p pqsigner-fi \
+            -p sphincs-tz-bip39 -p fw-manifest -p sphincs-tz-shared \
+            -p pqsigner-hal -p pqsigner-pq-seal -p masked-sha2 -p pqsigner-xtask
       # ERC-7730 descriptor catalog gate: (1) the firmware-pinned
       # `ERC7730_DESCRIPTORS_ROOT` in secure/src/db_roots.rs must match a
       # fresh dbgen build — catches a forgotten `cargo run -p dbgen` after a
@@ -150,6 +161,12 @@ jobs:
       # drift on merge.
       - name: ERC-7730 descriptor catalog in-sync (drift gate)
         run: cargo run --locked -q -p pqsigner-xtask -- gen-erc7730-descriptors --check
+      # proto -> Solidity freshness: PqsignerProto.sol must be a byte-for-byte
+      # render of the current proto constants (the on-chain verifier depends on
+      # them). This gate was claimed in xtask help + Natspec but wired nowhere
+      # until 2026-07-02.
+      - name: proto -> Solidity constants in-sync (PqsignerProto.sol drift)
+        run: make check-solidity-constants
       - name: ERC-7730 dbgen round-trip (IR re-parse + proof re-verify)
         run: cargo test --locked -p dbgen --test erc7730_roundtrip
       # A3.1 independent-source KAT leg (work-todo #7): the EXISTING Rust verifier

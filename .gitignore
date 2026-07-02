@@ -21,3 +21,11 @@ __pycache__/
 
 # local RPC endpoints for tools/verify_erc20_decimals.py (may contain secret keys)
 tools/erc20_rpc.json
+
+# cargo-mutants output (regenerate with `make mutants`) — large, machine-local
+/mutants.out/
+/mutants.out.old/
+# optiga-reset manifest/fragment build output (gen_reset_manifests.py OUT_DIR)
+tools/optiga_reset/out/
+# Serena MCP plugin project cache (per-checkout, machine-local)
+.serena/

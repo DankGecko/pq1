@@ -184,3 +184,70 @@ fn positive_c10_master_and_slot_have_independent_keypairs() {
     assert_ne!(master_pk_seed, slot_pk_seed, "master vs slot pk_seed must differ");
     assert_ne!(master_pk_root, slot_pk_root, "master vs slot pk_root must differ");
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// split_seed_48 region binding + KAT (mutation-testing gap, 2026-07-02)
+//
+// `derive_signing_key` splits the 48-byte seed as sk_seed = seed[0..32],
+// pk_seed = seed[32..48]. The pre-existing smoke test only checked that
+// the VK is 32 bytes long, so cargo-mutants could swap/truncate those
+// ranges undetected. These bind the two regions to the derived key.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn positive_split_seed_48_binds_sk_region_to_key() {
+    // Changing ONLY the sk_seed region (seed[0..32]) must change the key
+    // (it feeds the hypertree root, i.e. VK bytes 16..32 = pk_root).
+    let mut a = [0u8; SEED_LEN];
+    a[32..48].copy_from_slice(&[0xA5u8; 16]); // fix the pk region
+    let mut b = a;
+    a[0..32].copy_from_slice(&[0x11u8; 32]);
+    b[0..32].copy_from_slice(&[0x22u8; 32]);
+    assert_ne!(
+        derive_signing_key(&a).verifying_key().to_bytes(),
+        derive_signing_key(&b).verifying_key().to_bytes(),
+        "sk_seed region must be bound into the derived key"
+    );
+}
+
+#[test]
+fn positive_split_seed_48_binds_pk_region_to_key() {
+    // Changing ONLY the pk_seed region (seed[32..48]) must change the key
+    // — pk_seed IS VK bytes 0..16 and also perturbs the hypertree root.
+    let mut a = [0u8; SEED_LEN];
+    a[0..32].copy_from_slice(&[0x5Au8; 32]); // fix the sk region
+    let mut b = a;
+    a[32..48].copy_from_slice(&[0x33u8; 16]);
+    b[32..48].copy_from_slice(&[0x44u8; 16]);
+    assert_ne!(
+        derive_signing_key(&a).verifying_key().to_bytes(),
+        derive_signing_key(&b).verifying_key().to_bytes(),
+        "pk_seed region must be bound into the derived key"
+    );
+}
+
+#[test]
+fn positive_derive_signing_key_kat() {
+    // Pinned KAT: seed = 0x5A×32 (sk) ‖ 0xA5×16 (pk) → fixed VK.
+    // The VK is pk_seed(16) ‖ pk_root(16): the first 16 bytes MUST equal
+    // the pk region (0xA5×16) — a direct witness that split_seed_48 routes
+    // seed[32..48] to pk_seed — and pk_root is derived from the sk region.
+    // A range swap/truncation in split_seed_48 breaks this exact value.
+    let mut seed = [0u8; SEED_LEN];
+    seed[0..32].copy_from_slice(&[0x5Au8; 32]);
+    seed[32..48].copy_from_slice(&[0xA5u8; 16]);
+    let vk = derive_signing_key(&seed).verifying_key().to_bytes();
+    let mut expected = [0u8; 32];
+    expected[0..16].copy_from_slice(&[0xA5u8; 16]); // pk_seed == pk region
+    // pk_root (hypertree root over sk=0x5A, pk=0xA5):
+    for (i, b) in [
+        0x32u8, 0x69, 0x2c, 0xd8, 0x49, 0x06, 0xf3, 0x00, 0x91, 0xcf, 0x0f, 0x5b, 0x6a, 0xcf,
+        0x63, 0x41,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        expected[16 + i] = b;
+    }
+    assert_eq!(vk, expected, "derive_signing_key recovery-contract KAT drifted");
+}

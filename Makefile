@@ -1683,16 +1683,16 @@ test-unit: ## Rust workspace unit tests (host)
 	@cargo test --locked -p sphincs-tz-secure \
 	    --no-default-features \
 	    --features mock-se,debug-log,ui-semihosting
-	@echo "==> Running pqsigner-tx-core unit tests (host)"
-	@cargo test --locked -p pqsigner-tx-core --lib
-	@echo "==> Running pqsigner-aa unit tests (host)"
-	@cargo test --locked -p pqsigner-aa --lib
-	@echo "==> Running pqsigner-domain unit tests (host)"
-	@cargo test --locked -p pqsigner-domain --lib
-	@echo "==> Running pqsigner-tx unit tests (host)"
-	@cargo test --locked -p pqsigner-tx --lib
-	@echo "==> Running pqsigner-erc7730 unit tests (host)"
-	@cargo test --locked -p pqsigner-erc7730 --lib
+	@echo "==> Running pure-logic crate tests (host, --tests: unit + integration)"
+	@# `--tests` (NOT `--lib`) so the tests/ integration suites run too — the
+	@# frozen-format, KDF-tag-stability, and RAW32-forgery regressions live there.
+	@# Kept in lockstep with the CI host-tests job (.github/workflows/ci.yml).
+	@cargo test --locked --tests \
+	    -p pqsigner-proto -p pqsigner-tx-core -p pqsigner-aa \
+	    -p pqsigner-domain -p pqsigner-tx -p pqsigner-erc7730 \
+	    -p sphincs-c10 -p pqsigner-fi \
+	    -p sphincs-tz-bip39 -p fw-manifest -p sphincs-tz-shared \
+	    -p pqsigner-hal -p pqsigner-pq-seal -p masked-sha2 -p pqsigner-xtask
 	@echo "==> Running dbgen ERC-7730 round-trip integration tests (host)"
 	@cargo test --locked -p dbgen --test erc7730_roundtrip
 
@@ -1707,13 +1707,25 @@ test-unit: ## Rust workspace unit tests (host)
 #   make check-codegen
 #
 # Or as part of `make prod-check` (Phase 2 onwards).
-.PHONY: check-codegen check-erc7730-descriptors erc8176-coverage
-check-codegen: check-erc7730-descriptors
+.PHONY: check-codegen check-erc7730-descriptors check-solidity-constants erc8176-coverage
+check-codegen: check-erc7730-descriptors check-solidity-constants
 	@echo "==> codegen artifacts in sync"
 
 check-erc7730-descriptors:
 	@echo "==> Checking ERC-7730 descriptor catalog (xtask --check)"
 	@cargo run --locked -q -p pqsigner-xtask -- gen-erc7730-descriptors --check
+
+# proto -> Solidity freshness gate: the generated PqsignerProto.sol must be a
+# byte-for-byte render of the current pqsigner-proto constants. `--check` prints
+# the fresh render to stdout; we diff it against the checked-in copy so a
+# forgotten `gen-solidity-constants` after a proto edit fails closed (the
+# on-chain verifier depends on these constants). Was previously claimed to run
+# in CI but was wired nowhere (fixed 2026-07-02).
+check-solidity-constants:
+	@echo "==> Checking proto -> Solidity constants (PqsignerProto.sol drift)"
+	@cargo run --locked -q -p pqsigner-xtask -- gen-solidity-constants --check \
+	    | diff - contracts/smart-wallet/src/generated/PqsignerProto.sol \
+	    || { echo "PqsignerProto.sol is stale — run: cargo run -p pqsigner-xtask -- gen-solidity-constants"; exit 1; }
 
 erc8176-coverage: ## Report ERC-8176 (EAS) attestation coverage of the ERC-7730 corpus
 	@echo "==> Querying EAS for ERC-8176 attestation coverage (needs network)"
@@ -1890,9 +1902,9 @@ measure: build-hw-dual-se-oled-standalone ## Build + print the 8 BIP-39 measurem
 # firmware, and vice versa.
 #
 # Budget: 32 KB at 0x0C00_0000 (pages 0–3 of bank 1). Current footprint
-# is ~18 KB with software SHA-256.
+# is ~32 KB (~99% of its 32 KB WRP1A budget) with software SHA-256.
 .PHONY: fsbl
-fsbl: ## Build the immutable first-stage bootloader (~18 KB)
+fsbl: ## Build the immutable first-stage bootloader (must fit 32 KB WRP1A)
 	@echo "==> Building FSBL (FSBL_VENDOR_PUBKEY=$${FSBL_VENDOR_PUBKEY:-<dev fixture>})"
 	@# FSBL_ALLOW_DEV_KEY opts this dev target into fsbl/build.rs's committed
 	@# dev vendor key when FSBL_VENDOR_PUBKEY is unset (finding F2). A bare
@@ -1902,7 +1914,17 @@ fsbl: ## Build the immutable first-stage bootloader (~18 KB)
 	@FSBL_ALLOW_DEV_KEY=1 $(RUSTFLAGS_VAR)="-C linker=arm-none-eabi-ld -C link-arg=-Tlink.x $(REPRO_FLAGS)" \
 		cargo build --locked --release --target $(TARGET) --target-dir target/fsbl -p pqsigner-fsbl
 	@echo "==> FSBL built: $(FSBL_ELF)"
-	@size $(FSBL_ELF) 2>/dev/null || arm-none-eabi-size $(FSBL_ELF)
+	@# Headroom gate: the FSBL is physically capped at 32 KB (WRP1A-locked
+	@# pages 0-3, fsbl/memory-stm32u585.x). It is currently ~99% full — a
+	@# careless addition would silently overflow the linker region. Fail hard
+	@# on overflow, WARN past 95%. (2026-07-02: was ~18 KB when the docs were
+	@# written; the NV3007 fingerprint renderer grew it to ~32 KB.)
+	@arm-none-eabi-size -B $(FSBL_ELF) | awk -v cap=32768 -v warn=95 'NR==2 { \
+	  used=$$1+$$2; pct=used*100.0/cap; \
+	  printf "==> FSBL: %d B of %d B (%.1f%% of 32 KB), %d B free\n", used, cap, pct, cap-used; \
+	  if (used>cap) { print "==> FSBL: FAIL — exceeds the 32 KB WRP1A budget"; exit 1 } \
+	  if (pct>=warn) { printf "==> FSBL: WARN — over %d%% of the frozen budget (only %d B headroom)\n", warn, cap-used } \
+	}'
 
 # Isolated NV3007 LCD bring-up test for the FSBL display port. Builds the FSBL
 # with the `lcd-test` feature (short-circuits boot into `nv3007::lcd_test_loop`
@@ -2091,6 +2113,39 @@ prod-check: ## Production-readiness gate (no debug/e2e/mock-se; ship-blockers)
 prod-check-ship: ## Strict ship gate — prod-check against the hardened image
 	@$(MAKE) prod-check RELEASE_FEATURES="$(PROD_SHIP_FEATURES)"
 
+# Image size / budget report. The secure image must fit its 464 KB A/B slot
+# (SLOT_SECURE_CAPACITY = 58*8*1024, secure/src/hw/flash.rs) — enforced only
+# on-device at update time + in the FSBL boot check, NEVER at build time (the
+# secure linker script allows 984K, so the linker can't catch a slot overflow).
+# The NS world runs on the stack left over after .bss/.data in its 64 KB SRAM2
+# (nonsecure/memory-stm32u585.x), which is already tight. This target surfaces
+# both before a flash. Wired into `release`; run standalone after any firmware
+# build too. (2026-07-02: nothing printed image size before this.)
+SECURE_SLOT_CAP := 475136
+NS_SRAM_CAP := 65536
+NS_STACK_WARN := 12288
+NS_STACK_MIN := 2048
+.PHONY: size-report
+size-report: ## Report secure/NS/FSBL image sizes against their flash/SRAM budgets
+	@echo "==> Image size report"
+	@if [ -f target/release/secure.elf ]; then \
+	  arm-none-eabi-size -B target/release/secure.elf | awk -v cap=$(SECURE_SLOT_CAP) 'NR==2 { \
+	    used=$$1+$$2; pct=used*100.0/cap; \
+	    printf "    secure : %d B of %d B slot (%.1f%%), %d B free\n", used, cap, pct, cap-used; \
+	    if (used>cap) { print "    secure : FAIL — image exceeds the 464 KB A/B slot"; exit 1 } \
+	    if (pct>=85) { printf "    secure : WARN — over 85%% of the slot\n" } }'; \
+	else echo "    secure : (no target/release/secure.elf — run make release)"; fi
+	@if [ -f target/release/nonsecure.elf ]; then \
+	  arm-none-eabi-size -B target/release/nonsecure.elf | awk -v cap=$(NS_SRAM_CAP) -v warn=$(NS_STACK_WARN) -v min=$(NS_STACK_MIN) 'NR==2 { \
+	    stat=$$2+$$3; free=cap-stat; \
+	    printf "    ns     : %d B static (.data+.bss) of %d B SRAM2, %d B left for stack\n", stat, cap, free; \
+	    if (free<min) { printf "    ns     : FAIL — under %d B stack reserve\n", min; exit 1 } \
+	    if (free<warn) { printf "    ns     : WARN — under %d B stack headroom (NS SRAM2 is tight)\n", warn } }'; \
+	else echo "    ns     : (no target/release/nonsecure.elf — run make release)"; fi
+	@if [ -f $(FSBL_ELF) ]; then \
+	  arm-none-eabi-size -B $(FSBL_ELF) | awk 'NR==2 { u=$$1+$$2; printf "    fsbl   : %d B of 32768 B (%.1f%%), %d B free\n", u, u*100.0/32768, 32768-u }'; \
+	fi
+
 .PHONY: release
 release: prod-check ## Build the signed release package (runs prod-check first)
 	@echo "==> Release build (features: $(RELEASE_FEATURES))"
@@ -2101,6 +2156,8 @@ release: prod-check ## Build the signed release package (runs prod-check first)
 	    target/release/secure.elf
 	@cp target/repro-a/nonsecure/$(TARGET)/release/sphincs-tz-nonsecure \
 	    target/release/nonsecure.elf
+	@echo ""
+	@$(MAKE) size-report
 	@echo ""
 	@echo "==> Secure measurement:"
 	@cargo run --locked -q -p fwmeasure -- target/release/secure.elf 2>/dev/null | sed 's/^/    /'

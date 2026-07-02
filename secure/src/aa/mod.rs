@@ -20,21 +20,19 @@
 //! the secure world from primitive inputs — see the `pqsigner-aa`
 //! crate docs for the full reasoning.
 //!
-//! ## No on-device initCode construction
+//! ## On-device initCode construction (deploy path)
 //!
-//! Earlier revisions had an `init_code` helper that built the
-//! initCode for first-deployment UserOps against the now-deleted
-//! `PQCoinbaseSmartWalletFactory`. The current `PQSmartWalletFactory`
-//! takes only `(bytes32 masterPkSeed, bytes32 masterPkRoot)` — no
-//! bootstrap signature, no on-device factory call payload — so the
-//! wallet is deployed **externally** (by the companion, a relayer, or
-//! any anon account with gas) before the firmware ever signs a UserOp
-//! against it.
-//!
-//! Keeping this module purely post-deploy means the signed
-//! `userOpHash` always carries `init_code_hash = KECCAK_EMPTY`, so the
-//! trusted UI never needs to display a factory call payload it cannot
-//! meaningfully validate.
+//! (Corrected 2026-07-02 — an earlier revision wrongly claimed the
+//! firmware never builds initCode; that described a retired factory.)
+//! `PQSmartWalletFactory.createAccount` requires a **bootstrap C10
+//! signature** over `addSlot0Digest(...)` (squat-defence), so the deploy
+//! authorisation is produced in the secure world: `CMD_GET_INIT_CODE`
+//! (`cmd_get_init_code.rs`) emits the full 4280-byte `initCode` (factory
+//! ‖ ABI-encoded `createAccount` + `factorySig`); a deploy sign
+//! (`FLAG_INCLUDE_INIT_CODE`, `slot_index == 0`, mutually exclusive with
+//! `FLAG_REGISTER_SLOT`) prepends it and signs a real `init_code_hash`,
+//! not `KECCAK_EMPTY`; the counterfactual EIP-6492 path embeds
+//! `initCode[20..]` as `factoryCalldata`. See CLAUDE.md "Wire formats".
 
 pub use pqsigner_aa::eip1271;
 pub use pqsigner_aa::eip6492;

@@ -53,7 +53,7 @@ use sphincs_tz_shared::{
     EIP6492_FACTORY_CALLDATA_LEN, EIP6492_FACTORY_CALLDATA_PADDED, EIP6492_INNER_WRAPPER_LEN,
     EIP6492_MAGIC, ERC7730_MAX_TRAILER_LEN, EXECUTE_BATCH_SELECTOR, FLAG_INCLUDE_INIT_CODE,
     FLAG_REGISTER_SLOT, MAX_ACCOUNT_INDEX, MAX_BATCH_TXS, MAX_OFFCHAIN_EIP712_TYPED_LEN,
-    MAX_OFFCHAIN_GAP, MAX_OFFCHAIN_PERSONAL_SIGN_LEN,
+    MAX_OFFCHAIN_EIP712_TYPED_V3_LEN, MAX_OFFCHAIN_GAP, MAX_OFFCHAIN_PERSONAL_SIGN_LEN,
     MAX_SIGN_RESPONSE_LEN, MAX_SLOT_USES, MAX_TX_LEN, NscStatus, OFFCHAIN_FLAGS_MASK,
     OFFCHAIN_FLAG_ACCOUNT_DEPLOYED, OFFCHAIN_KIND_PERSONAL_SIGN, OFFCHAIN_KIND_RAW32,
     OFFCHAIN_STATUS_INPUT_LEN, OFFCHAIN_STATUS_OUTPUT_LAST_USEROP_OFF,
@@ -218,18 +218,24 @@ fn negative_sign_offchain_personal_sign_max_payload_unchanged() {
 
 #[test]
 fn negative_sign_offchain_input_max_len_equals_header_plus_max_personal_sign() {
-    // Worst-case input: header + max(personal_sign, eip712_typed).
-    // The firmware's TOCTOU snapshot is sized to this bound; any
-    // drift would either overflow SNAP_BUF (smaller bound, larger
-    // snap) or refuse valid traffic (larger bound, smaller snap).
-    // Phase 3 (ERC-7730) widened this to include the EIP-712 typed-
-    // data path + attestation trailer.
+    // Worst-case input: header + max over ALL payload kinds. The
+    // firmware's TOCTOU snapshot is sized to this bound; any drift would
+    // either overflow SNAP_BUF (smaller bound, larger snap) or refuse
+    // valid traffic (larger bound, smaller snap). Phase 3 added the
+    // EIP-712 typed-data path + attestation trailer; Phase 5 added the
+    // v0x03 nested variant (MAX_OFFCHAIN_EIP712_TYPED_V3_LEN), which is now
+    // the largest shape and sets the ceiling — this assertion omitted it
+    // (stale two-way max, fixed 2026-07-02, the secure-crate mirror of the
+    // same proto/tests drift).
     assert_eq!(
         SIGN_OFFCHAIN_INPUT_MAX_LEN,
         SIGN_OFFCHAIN_HEADER_LEN
             + core::cmp::max(
                 MAX_OFFCHAIN_PERSONAL_SIGN_LEN,
-                MAX_OFFCHAIN_EIP712_TYPED_LEN,
+                core::cmp::max(
+                    MAX_OFFCHAIN_EIP712_TYPED_LEN,
+                    MAX_OFFCHAIN_EIP712_TYPED_V3_LEN,
+                ),
             )
     );
 }
