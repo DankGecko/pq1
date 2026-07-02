@@ -277,3 +277,86 @@ adversarial-review-gated change — reusing the safe identification path, never 
 value-single-index resolver. Update `docs/erc7730-implementation-review-2026-07.md`
 §3.0 item 2 to reflect that "+53 via a slice resolver" is not the shape of the
 safe unlock.
+
+---
+
+## v3 design — calldata array-of-tuple (review 3.0#4), 2026-07-02
+
+**Status: DESIGN-ONLY. Not implemented.** The review's #1 *large* engineering
+item and the one that unlocks the aggregator/bundler tail. It is the **calldata
+analog of the shipped EIP-712 v2 §11 array-of-struct** render
+(`docs/erc7730-nested-eip712-render-design.md`) — reuse that design's shape and
+gates, translated from EIP-712 `hashStruct` encoding to calldata ABI encoding.
+
+### What is blocked (from the skip report)
+
+`parse_format_key` cannot parse a top-level `(...)[] name` array-of-tuple arg;
+it errors "top-level tuple arg has no name" (misleading — the tuple IS named).
+The blocked, batch-shaped functions:
+
+| Descriptor | Array-of-tuple arg | Fns | Note |
+|---|---|---|---|
+| safe `BatchExecutor` | `(address to, uint256 value, bytes data)[] calls` | 1 | simplest shape (one dynamic member: `data`) |
+| morpho `MorphoBundlerV3` | `(address to, bytes data, uint256 value, bool skipRevert, bytes32 callbackHash)[] bundle` | 2 (`multicall`/`reenter`) | the only morpho gap |
+| flare `RewardManager` | `(bytes32[] merkleProof, (…) body)[] _proofs` | 4 | NESTED (array + inner tuple) — hardest |
+| paraswap `Augustus-v6.2` | `((…8 fields…) order, bytes sig, …)[] orders` | ~2 | deep + dynamic bytes members |
+| okx | (various batch args) | ~12 | the bulk of okx's 0/26 |
+
+### Shape & safety
+
+Each element is a tuple; the render must show EVERY element (array-tail-hiding
+invariant — never a single index) OR decline. This is the SAME multi-value
+render the v1 `ArrayAll` and the EIP-712 array-of-struct already do, so it
+inherits their WYSIWYS argument: per-element group pages, bounded by the page
+budget, declining-to-blind on overflow. The security-critical addition over v1
+is that elements are **tuples with their own (possibly dynamic) members**, so
+each element needs the per-member offset/length follow that `walk` already does
+for a top-level tuple — applied per array element.
+
+### Plumbing (mirror EIP-712 §11, translate to calldata)
+
+1. **dbgen `parse_format_key`**: accept a trailing `(...)[] name` top-level arg;
+   parse the inner tuple's member names/types (reuse the existing tuple parser).
+   Emit a v0x03-style **array-of-tuple anchor** (like the nested-EIP-712 anchor):
+   element tuple type, member count, per-member `FieldIdx`/format, and the
+   address-word bitmap for the WYSIWYS/completeness checks — run the SAME
+   completeness + visibility gates per member as a static tuple.
+2. **device**: extend `resolve_array` to, per element, decode the element tuple
+   with `walk`'s hardened readers (offset → element head → per-member
+   offset/length for dynamic members), reading the SAME bytes the EVM decodes
+   (slot-confusion-free). Render each element as a member group with divider
+   pages, exactly like the EIP-712 array-of-struct render
+   (`secure/src/tx/display/erc7730/nested.rs`).
+3. **Scope v3.0 to the FLAT element tuple** (safe, dynamic-`bytes`-member OK):
+   Safe `BatchExecutor` + Morpho `bundle` + okx batches. **Defer** the nested
+   element (flare `_proofs` = `bytes32[]` + inner tuple) and the deep Augustus
+   `orders` (8-field order + multiple dynamic bytes) to v3.1 — they need
+   array-in-tuple + multi-dynamic-member handling that is a separate risk step.
+   The `bytes data` member of a bundle element is itself embedded calldata; v3.0
+   renders it via the calldata-fallback (review 3.1: hash + `callee`), NOT a
+   recursive inner-CALL decode (that is the deliberately-deferred nested-calldata
+   engine; the native Safe path already covers the high-value multiSend case).
+
+### Gates (all required, mirror v1 + the nested-EIP-712 landing)
+
+- New Kani harness: the per-element tuple decode stays in-bounds over a symbolic
+  body/offset/length; element span ⊆ body; rejects `count` past budget.
+- `walk` differential: per-element member words equal `walk`'s decode.
+- Array-tail re-validation: a multi-element `calls[]` renders ALL elements or
+  declines — never a partial.
+- Completeness/visibility per element member (a hidden `to`/`value` in a bundle
+  element is the same WYSIWYS hazard as a hidden top-level arg).
+- Render test: Safe `BatchExecutor([(a,1,0x…),(b,2,0x…)])` renders both records.
+- 5-lens adversarial-review workflow before commit.
+- **SCHEMA_VER**: a new array-of-tuple anchor op the device currently rejects →
+  a v2-firmware declines-to-blind on it (safe); decide per the nested-EIP-712
+  precedent whether it warrants a bump (it added a new anchor without a bump
+  because old firmware rejected the unknown op — same reasoning applies).
+
+### Net
+
+v3.0 (flat element tuple, dynamic-bytes-via-fallback) unlocks Safe
+BatchExecutor + Morpho bundler + most okx batches (~15 fns) as a design-doc-
+first, adversarial-review-gated, Kani-backed landing that REUSES the shipped
+array + nested-struct machinery. Nested/deep element tuples (flare, Augustus)
+are v3.1.
