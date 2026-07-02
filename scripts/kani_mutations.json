@@ -187,6 +187,17 @@
       "replace": "        {}",
       "expect": "kani_fails",
       "note": "[\u00a72 #1: ERC-7730 leaf-offset bounds reject (slow ~460s -> full tier)] Drops the final leaf bounds reject so resolve_structured returns Ok(Leaf::Word/Dynamic(pos)) even when pos+32 > body.len() (a FieldIdx-terminated program with a large slot). The harness asserts every returned leaf offset satisfies off.checked_add(32) <= body.len(), which the removed check enforced. Verified 2026-07-02 by a workflow agent in an isolated worktree (mutation -> VERIFICATION:- FAILED, revert -> SUCCESSFUL); the file is UNCHANGED on origin/master since (0 commits in 63e29450..e4afbafa), so the deterministic kani verification transfers. Closes finding \u00a72 #1 (mutation-gate breadth: this file had harnesses but no vacuity screen)."
+    },
+    {
+      "id": "safe_exec_data_slice_shift",
+      "tier": "default",
+      "crate": "pqsigner-tx",
+      "harness": "decode_exec_data_slice_fidelity",
+      "file": "tx/src/safe_tx.rs",
+      "find": "let payload_start = offset + 32;",
+      "replace": "let payload_start = offset;",
+      "expect": "kani_fails",
+      "note": "shift the dynamic `data` payload start by -32 (read the length word as the payload) -> the rendered data slice starts 32 bytes early. decode_exec_data_slice_fidelity (d.data[i] == head[data_off+32+i], verbatim, for <=8-byte payloads; data_off + declared length re-read INDEPENDENTLY from the head bytes) MUST break. Verified 2026-07-02 by hand: mutation -> VERIFICATION:- FAILED; unmutated -> SUCCESSFUL. Closes finding \u00a72 #5 (the empty-tail decode_exec_soundness + the single concrete offset-320 witness did not cover the data-slice content for symbolic offsets; the module note declined the biconditional as decoder-echo, but the payload-shift is a real gap this bounded fidelity harness closes)."
     }
   ]
 }

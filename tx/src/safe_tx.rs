@@ -796,4 +796,43 @@ mod verification {
             Err(SafeExecDecodeError::ShortInput)
         ));
     }
+
+    /// Data-slice fidelity (finding §2 #5): upgrades the dynamic `data` guarantee from
+    /// "OOB-freedom + reject set" (the module note above) to "the rendered slice is the
+    /// VERBATIM payload bytes at the canonically-computed position" — for BOUNDED
+    /// payloads (≤ 8 bytes, to keep the byte-compare finite). `data_off` (word 2's low
+    /// bytes) and the declared length are re-read INDEPENDENTLY from the raw head bytes
+    /// (not the decoder's variables), so a payload-shift mutation in `read_dynamic_bytes`
+    /// (`payload_start = offset` instead of `offset + 32`) — which makes `d.data` start
+    /// 32 bytes early at ANY accepted offset — flips this to FAILED. The empty-tail
+    /// `decode_exec_soundness` + the single concrete `decode_exec_accepts_canonical`
+    /// witness (fixed offset 320) do not close that shift for symbolic offsets
+    /// (`kani_mutations.json: safe_exec_data_slice_shift`).
+    #[kani::proof]
+    #[kani::unwind(41)]
+    fn decode_exec_data_slice_fidelity() {
+        let cd: [u8; 452] = kani::any();
+        if let Ok(d) = decode_exec_transaction(&cd) {
+            let data_len = d.data.len();
+            kani::assume(data_len <= 8); // keep the byte-compare loop finite
+            let head = &cd[4..];
+            // word 2 (data offset), low 4 bytes — equals the decoder's `data_off` on
+            // accept (accept ⟹ the offset word's high bytes are zero).
+            let data_off = u32::from_be_bytes([head[92], head[93], head[94], head[95]]) as usize;
+            // declared length re-read from the length word at `data_off` (low 4 bytes).
+            let decl_len = u32::from_be_bytes([
+                head[data_off + 28],
+                head[data_off + 29],
+                head[data_off + 30],
+                head[data_off + 31],
+            ]) as usize;
+            assert_eq!(data_len, decl_len);
+            // Verbatim content: d.data[i] == head[data_off + 32 + i] for every i.
+            let mut i = 0usize;
+            while i < data_len {
+                assert_eq!(d.data[i], head[data_off + 32 + i]);
+                i += 1;
+            }
+        }
+    }
 }
