@@ -126,12 +126,29 @@ bench = false
 # Phase 5 item 9 — render-dispatch harness. Drives the renderer's
 # descriptor-side path (IR parse → find_format_by_selector → field
 # iteration) against arbitrary bytes. The full per-formatter Pages
-# emission stays out of scope until `Pages` is ungated out of
-# `secure/src/tx/display/` (the renderer entry depends on
-# hardware-only `crate::ui::*` bindings).
+# emission is a separate, larger follow-up: `Pages` is written directly
+# (~415 `.buf`/`.len` field accesses) by the whole `tx::display` tree, so
+# host-linking the dispatch is a `pub(super)→pub` field widening + moving
+# `Pages` and the five ERC-7730 render files — scoped in
+# `docs/erc7730-renderer-fuzzability.md`, NOT a wall. The highest-
+# panic-density slice (the amount/decimal byte-writers) is already
+# host-fuzzed by `erc7730_display_primitives` below.
 [[bin]]
 name = "erc7730_render_dispatch"
 path = "fuzz_targets/erc7730_render_dispatch.rs"
+test = false
+doc = false
+bench = false
+
+# The display *primitives* — the pure row-buffer byte-writers
+# (`pqsigner_erc7730::display::primitives`) that scale an
+# attacker-controlled `U256` (from calldata) into a 16-col row under
+# `overflow-checks = true`. A slip there is a panic = DoS on the trusted
+# display; the descriptor-side harnesses above never reach this byte
+# arithmetic. See `docs/erc7730-renderer-fuzzability.md`.
+[[bin]]
+name = "erc7730_display_primitives"
+path = "fuzz_targets/erc7730_display_primitives.rs"
 test = false
 doc = false
 bench = false

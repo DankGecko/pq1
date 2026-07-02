@@ -1426,7 +1426,9 @@ fn negative_chain_name_list_pinned() {
     // removal of an entry forces the test to be re-acked. Mirrors the
     // KDF-tag-stability discipline from CLAUDE.md "no casual KDF tag
     // changes".
-    let src = include_str!("../tx/display/primitives.rs");
+    // `primitives.rs` was extracted to the host crate (host-fuzzable byte
+    // writers); pin against its new canonical location.
+    let src = include_str!("../../../pqsigner-erc7730/src/display/primitives.rs");
     for needle in [
         "1 => \"(Mainnet)\"",
         "10 => \"(Optimism)\"",
