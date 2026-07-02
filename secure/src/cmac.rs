@@ -38,9 +38,14 @@ pub(crate) fn double_l(input: &[u8; 16]) -> [u8; 16] {
         out[i] = (b << 1) | carry;
         carry = (b >> 7) & 1;
     }
-    if (input[0] & 0x80) != 0 {
-        out[15] ^= 0x87;
-    }
+    // Constant-time conditional reduction. `input[0]` is secret (the CMAC subkey
+    // material L / K1); a data-dependent `if` here is a control-flow side channel.
+    // Under the shipped `opt-level="s"` profile LLVM compiled the former
+    // `if (input[0] & 0x80) != 0 { out[15] ^= 0x87 }` to a secret-MSB branch
+    // (checkct `driver_saes`: 2 CF leaks, 2026-07-02). This mask is byte-for-byte
+    // identical and branch-free: `input[0] >> 7 ∈ {0,1}` → `mask ∈ {0x00, 0xFF}`.
+    let mask = 0u8.wrapping_sub(input[0] >> 7);
+    out[15] ^= mask & 0x87;
     out
 }
 

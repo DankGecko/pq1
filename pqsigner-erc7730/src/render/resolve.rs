@@ -697,4 +697,67 @@ mod kani_harness {
         let body: [u8; KBODY] = kani::any();
         let _ = resolve_token_address(&prog, &body);
     }
+
+    // ----------------------------------------------------------------------
+    // NO-MISDECODE / BYTE-BINDING (2026-07-02). The existing
+    // `resolve_structured_panic_free_and_in_bounds` proves the resolver never
+    // crashes and any leaf is in-bounds — but NOT that the resolved leaf lands
+    // on the *right* word. That gap matters: `resolve_structured` decides WHICH
+    // 32-byte word becomes the value the user sees on the trusted display
+    // (the documented E2 walker-slot-confusion HIGH path). These harnesses
+    // upgrade the coverage from in-bounds to a ∀ byte-binding: for a single
+    // `FollowOffset` descent, the resolved DYNAMIC leaf position equals EXACTLY
+    // the ABI offset word an independent decoder reads — no additive drift from
+    // the region base or the FieldIdx slot. `read_offset_word` (the same
+    // hardened reader `walk` uses) is the independent oracle.
+
+    /// ∀ body: if `resolve_structured([FieldIdx(1), FollowOffset], body)`
+    /// accepts a dynamic leaf at `pos`, then `pos` is EXACTLY the region-relative
+    /// offset word at `body[32..64]` — the resolver's region/slot arithmetic
+    /// (region += offset; slot := 0; pos := region + slot*32) collapses to the
+    /// offset word with no drift. A bug that added the FieldIdx slot into `pos`,
+    /// failed to reset `slot`, or shifted the region base would violate this.
+    #[kani::proof]
+    #[kani::unwind(34)]
+    fn resolve_structured_followoffset_byte_binds_to_offset_word() {
+        const BODY_LEN: usize = 160; // 5 words
+        let prog = [FI, 0, 1, FO]; // FieldIdx(1) ; FollowOffset -> dynamic leaf
+        let body: [u8; BODY_LEN] = kani::any();
+        if let Ok(Leaf::Dynamic(pos)) = resolve_structured(&prog, &body) {
+            // Independent oracle: the offset word at slot 1 (region base 0).
+            let expected = read_offset_word(&body[32..64])
+                .expect("accepted the FollowOffset ⇒ its offset word was valid");
+            assert!(pos == expected); // byte-binding: resolved leaf == offset word
+            assert!(pos + 32 <= body.len()); // the leaf's length word is present
+        }
+        // (A program ending in FollowOffset can only yield `Dynamic` — the
+        //  `ended_on_follow` flag rules out `Word` — so no `Word` arm here.)
+    }
+
+    /// Non-vacuity witness: a concrete well-formed body IS accepted and binds to
+    /// the expected position — so the ∀ harness above is not vacuously true.
+    #[kani::proof]
+    #[kani::unwind(34)]
+    fn resolve_structured_binding_accepts_concrete() {
+        let prog = [FI, 0, 1, FO];
+        let mut body = [0u8; 160];
+        // offset word at body[32..64]: big-endian value 64 in the low 4 bytes.
+        body[63] = 64; // region := 64, leaf at 64..96 (in bounds)
+        let leaf = resolve_structured(&prog, &body).expect("well-formed ⇒ accepted");
+        assert!(leaf == Leaf::Dynamic(64));
+        assert!(read_offset_word(&body[32..64]) == Some(64));
+    }
+
+    /// Negative control: a dirty top byte in the offset word makes the hardened
+    /// `read_offset_word` reject, so the resolver declines-to-blind (never
+    /// silently reads a truncated/aliased position). Gives the binding teeth.
+    #[kani::proof]
+    #[kani::unwind(34)]
+    fn resolve_structured_binding_rejects_dirty_offset() {
+        let prog = [FI, 0, 1, FO];
+        let mut body = [0u8; 160];
+        body[63] = 64;
+        body[32] = 0x01; // top-28-bytes nonzero -> read_offset_word rejects
+        assert!(resolve_structured(&prog, &body).is_err());
+    }
 }
