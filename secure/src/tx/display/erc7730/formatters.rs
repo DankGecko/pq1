@@ -405,15 +405,37 @@ fn render_nft_name(
     _resolver: &NameResolver<'_>,
     _params: &ParamSet<'_>,
 ) -> Result<(), RenderErr> {
-    // Audit M-7: the Phase-4 stub rendered the raw on-chain integer (the
-    // NFT token id) under the semantic `NftName` label and discarded the
-    // collection-name resolution — an opaque number wearing a verified
-    // intent banner. Until the NFT-name resolver lands, REJECT so the
-    // priority ladder falls through to blind-sign (consistent with how
-    // `Calldata` and `MustMatch` already reject), rather than presenting
-    // a misreadable value as if it were resolved.
-    let _ = (field, pages, ir, body, tx);
-    Err(RenderErr::Reject("7730 nftName unsupported"))
+    // The ERC-7730 spec's own fallback for an unresolved NFT is "a raw int
+    // token ID". We have no NFT-name DB, so we ALWAYS render that fallback —
+    // FAITHFULLY. A token id is an IDENTIFIER, not an amount: it must never go
+    // through the amount path, where a large ERC-1155 / structured id would hit
+    // AmountFit::Overflow and render "!OVERFLOW" while the tx STILL clear-signs
+    // — a verified banner hiding WHICH nft (the exact false-confidence class the
+    // `calldata` formatter stays declined for). Small ids render as a decimal;
+    // anything that doesn't cleanly fit shows EVERY byte via the shared raw
+    // two-page path. Rendered plainly (not under a name-implying gloss), so it
+    // satisfies the spec fallback without reopening the original M-7 concern —
+    // which was the opposite failure: a bare int dressed up as a resolved name.
+    // (review 3.2; deliberately overrides the prior M-7 decline.)
+    let value = match resolve_path(ir, field.path_off, body)? {
+        Resolved::Slot32(b) => *b,
+        Resolved::Container(idx) => container_u256(tx, idx)?,
+    };
+    let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
+    write_label_row(pages, p, field.label);
+    match read_u64_be_tail(&value) {
+        // Fits u64 AND the decimal fits one row (no dropped digit) → "<id>".
+        Some(id) if decimal_digits(id) <= DISPLAY_COLS => {
+            let [_, r1, _r2, foot] = pages.page_mut(p);
+            write_decimal_into(r1, 0, id);
+            // ≤16 cols: makes clear it's the raw id, no resolved NFT name.
+            write_line(foot, "! raw nft id");
+            Ok(())
+        }
+        // Large / full-uint256 id → show every byte (never a magnitude-hiding
+        // overflow marker). Reuses the hardened scalar-raw two-page renderer.
+        _ => write_raw_word_two_pages(pages, p, field.label, &value),
+    }
 }
 
 fn render_date(

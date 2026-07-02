@@ -893,6 +893,62 @@ fn positive_aave_borrow_unknown_enum_value_renders_raw_index_loudly() {
     );
 }
 
+#[test]
+fn positive_nftname_renders_small_token_id_as_decimal_real_leaf() {
+    // review 3.2: nftName no longer declines the whole tx. The spec fallback is
+    // "a raw int token ID"; with no NFT-name DB we render it plainly. Real leaf:
+    // flyingtulip PftNft `approve(address to, uint256 tokenId)` where tokenId is
+    // the nftName "Position". A small id renders as a decimal + a loud no-name
+    // marker (verified BY RENDER on a real registry descriptor).
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-PftNft.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
+
+    let calldata = calldata_approve([0x11u8; 20], u256_from_u64(1036));
+    assert_selector_matches(&verified.ir, &calldata, "approve(address,uint256)");
+    let tx = envelope(1, entry.contract);
+    let resolver = NameResolver::new();
+    let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver)
+        .expect("nftName must now render, not decline the tx");
+    assert_all_pages_printable(&pages);
+
+    let dump = dump_pages(&pages);
+    assert!(dump.contains("1036"), "raw token id 1036 must render:\n{dump}");
+    assert!(dump.contains("raw nft id"), "loud raw-id marker must render:\n{dump}");
+}
+
+#[test]
+fn positive_nftname_large_id_shows_all_bytes_never_overflow_real_leaf() {
+    // THE load-bearing case (advisor): a large / structured token id (ERC-1155
+    // style) must show EVERY byte, NEVER a magnitude-hiding "!OVERFLOW" that
+    // clear-signs while hiding WHICH nft — the false-confidence class. A token
+    // id is an identifier, not an amount, so it must not route through the
+    // amount path.
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-PftNft.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
+
+    // Full-width id with a nonzero HIGH byte → forces the faithful raw path.
+    let mut id = [0u8; 32];
+    id[0] = 0xAB;
+    id[31] = 0xCD;
+    let calldata = calldata_approve([0x11u8; 20], U256(id));
+    let tx = envelope(1, entry.contract);
+    let resolver = NameResolver::new();
+    let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver).expect("render");
+    assert_all_pages_printable(&pages);
+
+    let dump = dump_pages(&pages);
+    assert!(
+        !dump.contains("OVERFLOW"),
+        "a large token id must NOT overflow-hide (would clear-sign hiding the nft):\n{dump}"
+    );
+    assert!(dump.contains("ab"), "high byte 0xAB must render:\n{dump}");
+    assert!(dump.contains("cd"), "low byte 0xCD must render:\n{dump}");
+}
+
 /// Pack-expansion sanity: the registry Lido `wstETH.wrap(uint256)`
 /// descriptor renders the right intent + field label. A render test
 /// (not just round-trip) catches descriptor-authoring slips — wrong
