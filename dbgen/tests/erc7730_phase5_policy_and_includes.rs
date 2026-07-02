@@ -143,6 +143,81 @@ fn dup_leaf_non_identical_is_conflict_error() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// review 1.3: unmodeled top-level field/format keys gate the format
+// ─────────────────────────────────────────────────────────────────────
+
+/// A clean, always-compilable transfer descriptor at contract 0x…02 (distinct
+/// from the 0x…01 fixtures) so the tolerant build has ≥1 leaf — otherwise
+/// build_db_tolerant errors with "no IR entries emitted" and drops `skips`.
+const VALID_SIBLING_02: &str = r#"{
+  "context": { "contract": { "deployments": [{ "chainId": 1, "address": "0x0000000000000000000000000000000000000002" }] } },
+  "metadata": { "owner": "Sib", "contractName": "Sib" },
+  "display": { "formats": { "transfer(address to, uint256 amount)": {
+      "intent": "Send",
+      "fields": [
+        { "path": "to", "format": "addressName", "label": "To", "visible": "always" },
+        { "path": "amount", "format": "raw", "label": "Amount", "visible": "always" }
+      ] } } }
+}"#;
+
+fn transfer_with_extra_field_key(extra_key: &str, extra_val: &str) -> String {
+    format!(
+        r#"{{
+  "context": {{ "contract": {{ "deployments": [{{ "chainId": 1, "address": "0x0000000000000000000000000000000000000001" }}] }} }},
+  "metadata": {{ "owner": "T", "contractName": "T" }},
+  "display": {{ "formats": {{ "transfer(address to, uint256 amount)": {{
+      "intent": "Send",
+      "fields": [
+        {{ "path": "to", "format": "addressName", "label": "To", "visible": "always" }},
+        {{ "path": "amount", "format": "raw", "label": "Amt", "visible": "always", "{extra_key}": {extra_val} }}
+      ] }} }} }}
+}}"#
+    )
+}
+
+#[test]
+fn unmodeled_field_key_is_skipped_with_reason() {
+    // A field carrying a key dbgen doesn't model (a typo or foreign key) must
+    // NOT silently compile — the format skips-loud, naming the offending key
+    // (finding 1.3; the $ref-silent-drop failure class).
+    let dir = make_tempdir("unmodeled_key");
+    fs::write(dir.join("policy.toml"), POLICY_DEV_2).unwrap();
+    fs::write(dir.join("calldata-gated.json"), transfer_with_extra_field_key("bogusKey", "1")).unwrap();
+    fs::write(dir.join("calldata-valid.json"), VALID_SIBLING_02).unwrap();
+
+    let (res, skips) =
+        build_db_tolerant(&dir, &dir.join("policy.toml"), Some(&dir)).expect("tolerant build");
+    assert_eq!(res.leaf_count, 1, "only the clean sibling leaf survives");
+    assert!(
+        skips.iter().any(|s| s.reason.contains("unmodeled descriptor key")
+            && s.reason.contains("bogusKey")),
+        "skip must name the unmodeled key: {:?}",
+        skips.iter().map(|s| &s.reason).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn semantic_key_encryption_is_gated_not_ignored() {
+    // `encryption` is a VALID v2 key, but dbgen doesn't implement it; rendering
+    // as if absent would mis-represent the field, so it must gate (skip-loud),
+    // not silently ignore (finding 1.3).
+    let dir = make_tempdir("encryption_gated");
+    fs::write(dir.join("policy.toml"), POLICY_DEV_2).unwrap();
+    fs::write(dir.join("calldata-gated.json"), transfer_with_extra_field_key("encryption", r#"{"a":1}"#)).unwrap();
+    fs::write(dir.join("calldata-valid.json"), VALID_SIBLING_02).unwrap();
+
+    let (res, skips) =
+        build_db_tolerant(&dir, &dir.join("policy.toml"), Some(&dir)).expect("tolerant build");
+    assert_eq!(res.leaf_count, 1, "only the clean sibling leaf survives");
+    assert!(
+        skips.iter().any(|s| s.reason.contains("unmodeled descriptor key")
+            && s.reason.contains("encryption")),
+        "encryption must gate the format: {:?}",
+        skips.iter().map(|s| &s.reason).collect::<Vec<_>>()
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Item 2: `includes` resolution
 // ─────────────────────────────────────────────────────────────────────
 //

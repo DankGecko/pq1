@@ -293,6 +293,13 @@ struct Format {
     #[serde(default)]
     intent: Option<String>,
     fields: Vec<FieldDef>,
+    /// v2 `interpolatedIntent` — valid but unrendered (we show `intent`);
+    /// modelled (ignored) so it doesn't trip the 1.3 unknown-key gate.
+    #[serde(rename = "interpolatedIntent", default)]
+    _interpolated_intent: Option<serde_json::Value>,
+    /// Catch-all for unmodelled top-level format keys (finding 1.3).
+    #[serde(flatten)]
+    unknown: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -335,6 +342,29 @@ struct FieldDef {
     /// uint256))` is the canonical case.
     #[serde(default)]
     fields: Option<Vec<FieldDef>>,
+    /// `$id` — cosmetic field/group id; deserialize-and-ignore (modelled so it
+    /// doesn't trip the 1.3 gate below).
+    #[serde(rename = "$id", default)]
+    _id: Option<serde_json::Value>,
+    /// `separator` — cosmetic digit-group separator. dbgen renders numbers
+    /// ungrouped, so this is deserialize-and-ignore (same value, no grouping).
+    /// Modelled (not gated): a purely cosmetic key must not drop a descriptor
+    /// to blind-sign.
+    #[serde(rename = "separator", default)]
+    _separator: Option<serde_json::Value>,
+    /// Catch-all for any field key NOT modelled above. A non-empty map means
+    /// the descriptor uses a construct dbgen doesn't understand — historically
+    /// that was silently dropped (e.g. `$ref` before it was modelled → the
+    /// field degraded to unlabeled raw, finding 1.1). Now surfaced: the format
+    /// is skipped-with-reason (tolerant) / hard-errors (strict) so an unmodelled
+    /// key can't silently change what a trusted clear-sign renders (finding
+    /// 1.3). The valid-but-SEMANTIC keys `encryption` (field is encrypted) and
+    /// `iteration` (fieldGroup array display) are DELIBERATELY not modelled so
+    /// they land here and skip-loud — dbgen implements neither, and rendering
+    /// as if they were absent would mis-represent the signed data. params
+    /// SUB-keys are still tolerated for forward-compat (a narrower surface).
+    #[serde(flatten)]
+    unknown: BTreeMap<String, serde_json::Value>,
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1175,6 +1205,24 @@ impl Pool {
     }
 }
 
+/// First unmodelled top-level key across `fields` (recursing into field
+/// GROUPS), or `None`. Feeds the 1.3 gate: a `fields[]`-element key dbgen
+/// doesn't model would otherwise be silently dropped, changing what a trusted
+/// clear-sign renders (the `$ref` failure class, finding 1.1).
+fn first_unmodeled_field_key(fields: &[FieldDef]) -> Option<String> {
+    for f in fields {
+        if let Some(k) = f.unknown.keys().next() {
+            return Some(k.clone());
+        }
+        if let Some(children) = &f.fields {
+            if let Some(inner) = first_unmodeled_field_key(children) {
+                return Some(inner);
+            }
+        }
+    }
+    None
+}
+
 fn compile_formats(
     display: &Display,
     context_kind: u8,
@@ -1204,6 +1252,27 @@ fn compile_formats(
     let mut flat: Vec<(&str, Format)> = Vec::with_capacity(n);
     for (sig, fmt) in display.formats.iter() {
         let fn_name = sig.split('(').next().unwrap_or(sig);
+        // 1.3: an unmodelled top-level format/field key would be silently
+        // dropped — exactly how `$ref` shipped degraded raw (finding 1.1).
+        // Refuse the format instead of guessing. params SUB-keys are still
+        // tolerated for forward-compat (a separate, narrower surface).
+        if let Some(key) = fmt
+            .unknown
+            .keys()
+            .next()
+            .cloned()
+            .or_else(|| first_unmodeled_field_key(&fmt.fields))
+        {
+            let msg = format!(
+                "{fn_name}: unmodeled descriptor key `{key}` — dbgen does not act on it and \
+                 would silently drop it; refusing (finding 1.3)"
+            );
+            if tolerant {
+                format_errs.push(msg);
+                continue;
+            }
+            return Err(format!("format `{sig}`: {msg}"));
+        }
         // Resolve field-level `$.display.definitions` `$ref`s BEFORE flatten +
         // compile, so the completeness lint and the field compiler both see the
         // referenced format/params (finding 1.1). Resolution failure drops the
@@ -1224,6 +1293,8 @@ fn compile_formats(
                     _id: fmt._id.clone(),
                     intent: fmt.intent.clone(),
                     fields,
+                    _interpolated_intent: None,
+                    unknown: BTreeMap::new(),
                 },
             )),
             // Was a silent drop; record it so the skip report shows why.
@@ -1398,6 +1469,10 @@ fn resolve_display_refs(
             // Definitions are leaf format specs; carry a group definition
             // through if one ever appears (flatten then expands it).
             fields: def.fields.clone(),
+            _id: None,
+            // Cosmetic separator: reference-local else definition (unemitted).
+            _separator: field._separator.clone().or_else(|| def._separator.clone()),
+            unknown: BTreeMap::new(),
         });
     }
     Ok(out)
@@ -5622,6 +5697,8 @@ mod tests {
             _id: None,
             intent: Some("Borrow".to_string()),
             fields: flatten_field_groups(&fmt.fields).unwrap(),
+            _interpolated_intent: None,
+            unknown: BTreeMap::new(),
         };
         check_contract_field_completeness(sig, &flat, &parsed)
             .expect("every marketParams member is covered after flatten");
