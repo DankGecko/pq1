@@ -282,7 +282,34 @@ safe unlock.
 
 ## v3 design — calldata array-of-tuple (review 3.0#4), 2026-07-02
 
-**Status: DESIGN-ONLY. Not implemented.** The review's #1 *large* engineering
+> **⚠️ PREMISE SUPERSEDED — LEVER CLOSED-PENDING-A-REAL-TARGET (verified 2026-07-02, same day).**
+> Do **not** implement the plan below as written: built properly, the
+> array-of-tuple engine unlocks **0 genuine coverage** in the current prod
+> registry. This is a *value* finding, not an effort one. The complete prod
+> array-of-tuple target set is exactly **four** descriptors, and every one is
+> either declined-by-design or has no informative field:
+>
+> | Descriptor | Element field(s) rendered | Why the engine unlocks nothing |
+> |---|---|---|
+> | `morpho/MorphoBundlerV3` (`multicall`/`reenter`) | sole field = `bundle.[].data` as **`format: calldata`** | `calldata` (nested-call) is **deliberately declined** — the hash+callee fallback was adversarially **rejected today** (review 3.1, `calldata_nested.rs`): an opaque inner-call digest under a "clear-signed" banner is a false-confidence hazard. Even with the array engine, the only field declines-to-blind. |
+> | `safe/BatchExecutor` (`batchExecute`) | sole field = `calls.[].data` as **`format: calldata`** | Same calldata-decline as Morpho. Also redundant with the native S-world Safe path. |
+> | `flare/RewardManager-Flare` + `-Songbird` | `_proofs.[]` = **nested** `(bytes32[] merkleProof, (…rewardEpochId, beneficiary, amount, claimType) body)[]` | The inner `body` carries `beneficiary`+`amount` → **fund-routing, must be shown** → needs the hard **v3.1 nested** array-in-tuple render, not v3.0. Niche reward-claim; low value. |
+> | `okx` (the design's "~12 fns", the supposed volume) | — | **Not vendored into the prod registry at all.** Was an upstream-only count. |
+>
+> The v3.0 plan below assumed Morpho/BatchExecutor would render their `data`
+> member via a calldata-fallback (§step 3) — but that fallback was rejected on
+> the *same day* this design was written, so the plan's own premise is stale.
+>
+> **Re-open this lever only when a real target appears:** a **non-calldata,
+> non-nested** array-of-tuple descriptor (elements rendering *static* members —
+> addresses/amounts — the way the EIP-712 array-of-struct render already does)
+> enters the prod registry, **or** okx is vendored *and* shown to render static
+> members (not calldata). At that point the plumbing below is still the right
+> shape; today it has nothing to render. Re-derive the target set from
+> `secure/data/erc7730.review.txt`'s `## skips` (grep `top-level tuple arg has
+> no name`) before rebuilding — do not trust this table to stay current.
+
+**Status (original, now superseded): DESIGN-ONLY. Not implemented.** The review's #1 *large* engineering
 item and the one that unlocks the aggregator/bundler tail. It is the **calldata
 analog of the shipped EIP-712 v2 §11 array-of-struct** render
 (`docs/erc7730-nested-eip712-render-design.md`) — reuse that design's shape and
