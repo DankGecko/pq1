@@ -31,8 +31,8 @@
 use crate::erc20::bundle::Erc20Metadata;
 use crate::names::NameResolver;
 use super::super::primitives::{
-    chain_name, write_addr_full, write_addr_full_or_name, write_amount_single_or_two_rows,
-    write_amount_two_rows, write_line, AmountFit,
+    chain_name, native_ticker, write_addr_full, write_addr_full_or_name,
+    write_amount_single_or_two_rows, write_amount_two_rows, write_line, AmountFit,
 };
 use crate::tx::eip1559::{Eip1559Tx, U256};
 use crate::tx::erc7730::{container_field, Erc7730Ir, FieldEntry, FormatOp, PathOp};
@@ -266,7 +266,10 @@ fn render_amount(
     };
     let value = U256(raw);
     let decimals = u32::from(params.decimals.unwrap_or(18));
-    let unit_bytes = params.base.unwrap_or(b"ETH");
+    // The `amount` format is the chain's NATIVE currency; default the ticker
+    // per chain (POL/BNB/AVAX/…) instead of always "ETH" (review 3.5). A
+    // descriptor-supplied `params.base` still overrides.
+    let unit_bytes = params.base.unwrap_or_else(|| native_ticker(tx.chain_id));
     let [_, r1, r2, foot] = pages.page_mut(p);
     let fit =
         write_amount_single_or_two_rows(r1, r2, &value, decimals, 6, true, true, ascii_str(unit_bytes));

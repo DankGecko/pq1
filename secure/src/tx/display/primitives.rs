@@ -439,6 +439,32 @@ pub(super) fn chain_name(chain_id: u64) -> &'static str {
     }
 }
 
+/// Native-currency ticker for a chain — the default unit for the ERC-7730
+/// `amount` format when the descriptor doesn't pin `params.base`. Previously
+/// hardcoded "ETH", so a Polygon/BSC/Avalanche native amount rendered with the
+/// WRONG ticker (review 3.5). Only the chains whose native symbol is certain
+/// are mapped; unknown chains keep the "ETH" default (most unmapped EVM chains
+/// are ETH-gas L2s, and a descriptor-supplied `base` always overrides). ETH-gas
+/// L2s (Optimism/Base/Arbitrum/Linea/Scroll/zkSync/Sepolia) also resolve to ETH
+/// via the fallback, so they need no explicit arm.
+pub(super) fn native_ticker(chain_id: u64) -> &'static [u8] {
+    match chain_id {
+        56 => b"BNB",
+        137 => b"POL",
+        146 => b"S",
+        250 => b"FTM",
+        100 => b"xDAI",
+        42220 => b"CELO",
+        43114 => b"AVAX",
+        14 => b"FLR",
+        30 => b"RBTC",
+        999 => b"HYPE",
+        1329 => b"SEI",
+        8217 => b"KAIA",
+        _ => b"ETH",
+    }
+}
+
 pub(super) fn write_chain(row: &mut [u8; DISPLAY_COLS], chain_id: u64) {
     *row = [b' '; DISPLAY_COLS];
     let prefix = b"Chain: ";

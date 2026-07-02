@@ -17,7 +17,7 @@ use core::cmp::min;
 
 use super::{Pages, MAX_PAGES};
 use super::primitives::{
-    chain_name, format_u64, hex_nibble, write_addr_full, write_addr_full_or_name,
+    chain_name, format_u64, hex_nibble, native_ticker, write_addr_full, write_addr_full_or_name,
     write_calldata_hash_rows, write_chain, write_data_len_row, write_eth_two_rows,
     write_fee_budget_row, write_gas, write_gwei, write_line, write_nonce_row,
     write_selector_row, write_tip_row, write_token_amount_two_rows,
@@ -204,6 +204,20 @@ fn positive_chain_name_known_chains() {
     assert_eq!(chain_name(42161), "(Arbitrum)");
     assert_eq!(chain_name(11155111), "(Sepolia)");
     assert_eq!(chain_name(84532), "(BaseSepolia)");
+}
+
+#[test]
+fn positive_native_ticker_per_chain() {
+    // review 3.5: the `amount` format's default unit is the chain's native
+    // ticker. Non-ETH chains must map to their own symbol.
+    assert_eq!(native_ticker(137), b"POL");
+    assert_eq!(native_ticker(56), b"BNB");
+    assert_eq!(native_ticker(43114), b"AVAX");
+    assert_eq!(native_ticker(42220), b"CELO");
+    // Mainnet + ETH-gas L2s + unknown chains keep the ETH default.
+    assert_eq!(native_ticker(1), b"ETH");
+    assert_eq!(native_ticker(8453), b"ETH");
+    assert_eq!(native_ticker(999_999), b"ETH");
 }
 
 #[test]
