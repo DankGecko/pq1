@@ -382,7 +382,11 @@ fn pick_sign_pages_inner(
                 // the debug log (review 4.12). Fall through to the next ladder
                 // rung so they still see the tx in a less-rich form (typed-call
                 // selector / blind-sign / ERC-20).
-                crate::secure_log!("erc7730 clear-sign declined: {}", msg);
+                // Bare invocation — `secure_log!` is a `macro_rules!` in
+                // main.rs without `#[macro_export]`, textually scoped: the
+                // `crate::secure_log!` path form fails E0433 under
+                // `debug-log` (only the cfg'd-out no-op arm is suggested).
+                secure_log!("erc7730 clear-sign declined: {}", msg);
                 let _ = msg;
                 crate::ui::show_status("Can't clear-sign", "review raw sign");
             }
