@@ -27,6 +27,27 @@
 //!
 //! Step 3 wires this stub through the formatter dispatcher; Phase 5
 //! replaces it with the recursive renderer.
+//!
+//! ## Deferral confirmed (review 3.1, adversarial-reviewed 2026-07-02)
+//!
+//! The 2026-07 review proposed a "hash of the embedded calldata + resolved
+//! callee" fallback (instead of declining) to keep the outer tx's sibling
+//! fields clear. Reviewed and DEFERRED — declining stays. Rationale:
+//!  1. Declining is fail-safe (blind-sign the whole tx); a hash page is NOT —
+//!     an opaque inner-call digest under a "clear-signed" banner is a
+//!     false-confidence hazard (the user can't verify what the inner call
+//!     does from a hash, yet the flow looks decoded).
+//!  2. Generic nested-calldata is a deliberate project non-goal — the native
+//!     Safe/CoW S-world verifiers already decode the high-value inner calls.
+//!  3. The live `op=calldata` leaves are NOT the Safe `execTransaction` shape
+//!     one might assume: they are 1inch V6 aggregator inner-swaps
+//!     (`calldata-AggregationRouterV6.json`, the `data`/`Swap` field) + kiln —
+//!     a real fallback for those wants the inner call actually DECODED via the
+//!     callee's own descriptor (the deferred recursion), not a hash.
+//!
+//! Bar for ever landing a non-recursive fallback: `calleePath` MUST resolve to
+//! a TRUSTED name, the page MUST carry an unmistakable "inner call NOT decoded"
+//! marker, and it MUST add value beyond what the native Safe path already gives.
 
 use crate::tx::erc7730::FieldEntry;
 use crate::tx::erc7730_render::params::ParamSet;
