@@ -44,12 +44,14 @@ order they will bite you.
    - [6.2 CMD_SIGN_USEROP_BATCH (0x32)](#62-cmd_sign_userop_batch-0x32)
    - [6.3 CMD_SIGN_OFFCHAIN (0x62) — kind=2 EIP-712 typed](#63-cmd_sign_offchain-0x62--kind2-eip-712-typed)
    - [6.4 CMD_SIGN_OFFCHAIN — kind=0 / kind=1 fingerprint pages](#64-cmd_sign_offchain--kind0--kind1-fingerprint-pages)
+   - [6.5 CMD_SIGN_OFFCHAIN — kind=3 EIP-712 typed with NESTED structs (Permit2 / UniswapX)](#65-cmd_sign_offchain--kind3-eip-712-typed-with-nested-structs-permit2--uniswapx)
 7. [Worked examples](#7-worked-examples)
    - [7.1 USDT transfer on mainnet](#71-usdt-transfer-on-mainnet)
    - [7.2 USDT approve unlimited](#72-usdt-approve-unlimited)
    - [7.3 WETH deposit (zero-arg, value from envelope)](#73-weth-deposit-zero-arg-value-from-envelope)
    - [7.4 USDC TransferWithAuthorization (EIP-712 typed)](#74-usdc-transferwithauthorization-eip-712-typed)
    - [7.5 Atomic batch (Type 1 + Type 2 in one user confirm)](#75-atomic-batch-type-1--type-2-in-one-user-confirm)
+   - [7.6 UniswapX ExclusiveDutchOrder (kind=3, depth-2 nested)](#76-uniswapx-exclusivedutchorder-kind3-depth-2-nested)
 8. [Firmware response handling](#8-firmware-response-handling)
 9. [Failure modes and how to test them](#9-failure-modes-and-how-to-test-them)
 10. [Versioning and root rotation](#10-versioning-and-root-rotation)
@@ -417,6 +419,94 @@ fixed banner pages plus the ERC-8213 fingerprint of the hash being
 signed. No companion-side action needed for clear-sign; do attach a
 names section if you want the wallet name resolved.
 
+### 6.5 CMD_SIGN_OFFCHAIN — kind=3 EIP-712 typed with NESTED structs (Permit2 / UniswapX)
+
+Some EIP-712 messages have a **nested-struct member** — a struct (or an
+array-of-struct) inside the signed struct. On-chain EIP-712 encodes each such
+member as a single opaque word (`hashStruct` for a struct, `keccak(∥ hashStruct)`
+for an array), so `encoded_data` alone can only show that 32-byte hash, not what
+is inside. Permit2 `PermitSingle`/`PermitBatch`/`PermitTransferFrom` and all six
+UniswapX order variants (`DutchOrder`, `ExclusiveDutchOrder`, `LimitOrder`,
+`V2DutchOrder`, …) are of this shape.
+
+**When to use kind=3:** iff the descriptor's format for this `primary_type_hash`
+declares nested members — i.e. its pinned format header has
+`nested_descent_count > 0`. (If it is `0`, use kind=2 §6.3; kind=3 with an empty
+`nested_blob` also works but kind=2 is simpler.) A format that has nested members
+MUST be signed via kind=3 — kind=2 provides no `nested_blob`, so the device finds
+no record to bind the nested `hashStruct` word and declines the whole render.
+
+The payload is kind=2's, with a `nested_blob` section inserted **between**
+`encoded_data` and the trailer:
+
+```
+header = u8(account) | u8_be(chain) | u32_be(slot) | u8(kind=3) | u16_be(payload_len) | u8(flags)
+
+payload =
+    u16_be(1)                          // domain_sep_present (must be 1)
+ || u8[32] domain_separator
+ || u8[32] primary_type_hash            // keccak256(full typeString)
+ || u16_be(encoded_data_len)            // ≤ 512
+ || u8[encoded_data_len] encoded_data   // viem::encodeAbiParameters — the SIGNED top struct body
+ || u16_be(nested_blob_len)             // ≤ 2048 (MAX_OFFCHAIN_EIP712_NESTED_LEN); 0 if no nested member
+ || u8[nested_blob_len] nested_blob     // DFS records, see below — DISPLAY-ONLY, not signed
+ || u16_be(trailer_len)                 // ERC-7730 bundle (§5)
+ || u8[trailer_len] trailer
+```
+
+The **signed digest is UNCHANGED** — the firmware still signs
+`keccak(0x1901 ∥ domain_separator ∥ keccak(primary_type_hash ∥ encoded_data))`.
+The `nested_blob` feeds ONLY the on-device display binding, which proves the shown
+nested content equals the opaque words already inside `encoded_data`. A wrong
+`nested_blob` can therefore only cause a **decline**, never a wrong signature.
+
+#### Building `nested_blob` — DFS record order
+
+`nested_blob` is a **depth-first** concatenation of one record per nested descent
+point, in the **exact order the device descends the descriptor's fields**. The
+descent order is: walk the format's fields top-to-bottom; each nested-struct or
+array-of-struct member is a descent point; recurse **into** a nested struct
+depth-first (its own nested members' records come immediately after its record,
+before the parent's later sibling records). This is deterministic and computable
+from the descriptor alone — build your records by mirroring that walk.
+
+Two record shapes, chosen by whether the member is an array:
+
+```
+single nested struct  (a struct member):
+    u16_be(len) || u8[len] nested_ed              // len == member_count × 32
+
+array-of-struct       (a T[] member):
+    u16_be(elem_count)                            // 1..=6 (MAX_NESTED_ARRAY); 0 is REJECTED
+ || u16_be(len) || u8[len] elem0_ed               // each len == member_count × 32
+ || u16_be(len) || u8[len] elem1_ed
+ || …                                             // elem_count records
+```
+
+- `nested_ed` (and each `elem_i_ed`) is the **EIP-712 `encodeData` of that nested
+  struct** — exactly `member_count × 32` bytes, where `member_count` is the nested
+  struct's OWN member count (from its EIP-712 type). It is `viem::encodeAbiParameters`
+  of the nested struct's members: `address`/`uintN`/`bytesN`/`bool` in their natural
+  ABI word; a **dynamic** `bytes`/`string` member as its `keccak256(value)` word; a
+  **nested struct** member as its `hashStruct` word; a **T[]** member as its
+  `keccak(∥ hashStruct)` word. (Same rules as the on-chain `encodeData` — the device
+  re-hashes it and checks `keccak(pinned_typeHash ∥ nested_ed)` equals the parent's
+  committed word, so it must be byte-identical to what the contract would hash.)
+- Include **every** member's word (shown or hidden) — `member_count` pins the length
+  and the device hashes the whole record. Omitting the hidden words breaks the binding.
+- Depth: a nested struct that itself has a nested member produces its own record,
+  then recurses (its child's record follows). Up to `MAX_NESTED_DEPTH = 8`.
+
+**Reconciliation the firmware enforces (get any of these wrong → decline):**
+- exactly one record per pinned descent point (records consumed == `nested_descent_count`);
+- the DFS cursor ends EXACTLY at `nested_blob_len` (no trailing/padding bytes);
+- each `nested_ed` length == the pinned `member_count × 32`;
+- `elem_count` in `1..=6`;
+- the chained `keccak(typeHash ∥ ed) == committed word` at every level.
+
+None of these is a security risk if wrong (the blob is display-only), but the order
+will not clear-sign — so mirror the device's field-descent order precisely.
+
 ## 7. Worked examples
 
 These examples assume:
@@ -627,6 +717,60 @@ Page N: "Cancel / Confirm"
 Attaching the trailer only changes the Type 2 rendering; the Type 1
 slot-registration UserOp is always rendered as `"Register slot N
 (once-only)"` boilerplate regardless.
+
+### 7.6 UniswapX ExclusiveDutchOrder (kind=3, depth-2 nested)
+
+The user signs a Permit2 `PermitWitnessTransferFrom` whose `witness` is an
+`ExclusiveDutchOrder`. This exercises the full nested machinery: a depth-1 nested
+struct (`witness`) that itself contains a depth-2 nested struct (`witness.info`,
+`OrderInfo`) AND a depth-2 nested array-of-struct (`witness.outputs`,
+`DutchOutput[]`). Its pinned format declares `nested_descent_count = 4`
+(`permitted` + `witness` + `info` + `outputs`), so you MUST use kind=3.
+
+`encoded_data` is the SIGNED top struct body — 5 words for
+`PermitWitnessTransferFrom(TokenPermissions permitted, address spender, uint256
+nonce, uint256 deadline, ExclusiveDutchOrder witness)`:
+
+```
+encoded_data (160 B) = hashStruct(permitted) | spender | nonce | deadline | hashStruct(witness)
+```
+
+`nested_blob` mirrors the device's depth-first descent. The descent order is
+`permitted` (top anchor), then `witness` (top anchor) → into `witness`: `info`
+(nested struct) then `outputs` (nested array). So the records are:
+
+```
+nested_blob =
+    u16_be(64)  || permitted_ed        // TokenPermissions: token | amount           (2 words)
+ || u16_be(288) || witness_ed          // ExclusiveDutchOrder encodeData              (9 words):
+                                        //   hashStruct(info) | decayStartTime | decayEndTime |
+                                        //   exclusiveFiller | exclusivityOverrideBps | inputToken |
+                                        //   inputStartAmount | inputEndAmount | keccak(∥ hashStruct(outputs))
+ || u16_be(192) || info_ed             // OrderInfo: reactor | swapper | nonce | deadline |
+                                        //   additionalValidationContract | keccak(additionalValidationData)  (6 words)
+ || u16_be(2)                          // outputs elem_count = 2
+ || u16_be(128) || out0_ed             // DutchOutput: token | startAmount | endAmount | recipient  (4 words)
+ || u16_be(128) || out1_ed             // DutchOutput #2
+```
+
+Key points a companion gets wrong:
+- `witness_ed[0]` (the `info` word) must equal `keccak(typeHash(OrderInfo) ∥ info_ed)`,
+  and `witness_ed[8]` (the `outputs` word) must equal `keccak(hashStruct(out0) ∥
+  hashStruct(out1))` — i.e. the nested records and their parent's committed words must
+  be mutually consistent, exactly as on-chain. If you build `witness_ed` from a real
+  order these already hold; if you hand-craft them, they must chain.
+- `additionalValidationData` is a `bytes` member → its word is `keccak256(the bytes)`,
+  NOT the bytes; include that one word (it is hidden on-screen but the hash covers it).
+- Records for `info` come BEFORE `outputs` because the curated descriptor lists the
+  `witness.info` field group before the `witness.outputs.[]` group. Match the descriptor's
+  field order.
+
+The device renders: the approve amount, `spender`, the OrderInfo `reactor`/`swapper`/
+`validationContract` (curated shown), the `exclusiveFiller`, the input "Spend max"
+amount, each output's min-receive amount + recipient (`Item i of N`), and the deadline —
+all cryptographically bound to the signed digest. `DutchOrder` (no exclusiveFiller),
+`LimitOrder` (`OutputToken`, 3-member element), and `V2DutchOrder` (adds `cosigner`,
+`baseInput*`/`baseOutputs`) follow the identical record pattern with their own member layouts.
 
 ## 8. Firmware response handling
 
