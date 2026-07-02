@@ -120,6 +120,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "driver_ct_eq"
+version = "0.0.0"
+dependencies = [
+ "checkct_macros",
+ "rand_core",
+ "subtle",
+]
+
+[[package]]
 name = "driver_fors"
 version = "0.0.0"
 dependencies = [

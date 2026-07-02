@@ -75,7 +75,7 @@ Reproduced in a throwaway opam switch, the precise requirement is:
 So the CI job is: setup-ocaml (fresh switch) → `opam install unisim_archisec z3
 bitwuzla bitwuzla-cxx` → clone+`dune build @install`+`dune install` binsec →
 build cargo-checkct (sibling clone) → `cargo-checkct run --dir tools/sca`,
-gating on per-driver results (4 secure + the shuffle control insecure), since
+gating on per-driver results (5 secure — kdf/fors/th/saes/ct_eq — + the shuffle control insecure), since
 the suite always exits non-zero (the shuffle is the by-design-insecure control).
 
 `--dir` is the directory *containing* a folder literally named `checkct/`. The vendored

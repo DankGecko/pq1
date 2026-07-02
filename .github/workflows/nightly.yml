@@ -11,7 +11,7 @@ name: Nightly (heavy gates)
 # Runs nightly + on manual dispatch. The fast invariant/host/secure/contracts
 # gates stay in ci.yml on every push/PR.
 #
-#   * checkct     — cargo-checkct (binsec relational-CT proof of the 4 secure
+#   * checkct     — cargo-checkct (binsec relational-CT proof of the 5 secure
 #                   drivers + the by-design-INSECURE shuffle control). The
 #                   binsec OCaml backend is the heavy part (opam, minutes).
 #   * ui-golden-render — the render-only golden gate (the "dedicated
@@ -135,9 +135,9 @@ jobs:
       # `cargo-checkct run` ALWAYS exits non-zero: the by-design-INSECURE
       # fisher_yates shuffle (`driver`) is the CONTROL that proves the tool
       # detects leaks. So gate on the per-driver RESULTS, not the exit code —
-      # the 4 real drivers (kdf/fors/th/saes) must be secure AND the shuffle
-      # control must still report insecure (4 secure + 1 insecure).
-      - name: cargo-checkct relational CT proof (4 secure + shuffle control)
+      # the 5 real drivers (kdf/fors/th/saes/ct_eq) must be secure AND the shuffle
+      # control must still report insecure (5 secure + 1 insecure).
+      - name: cargo-checkct relational CT proof (5 secure + shuffle control)
         run: |
           eval $(opam env)
           export PATH="$(dirname "$GITHUB_WORKSPACE")/cargo-checkct/target/release:$PATH"
@@ -145,8 +145,8 @@ jobs:
           echo "$out"
           secure=$(printf '%s\n' "$out" | grep -c 'Program status is : secure')
           insecure=$(printf '%s\n' "$out" | grep -c 'Program status is : insecure')
-          echo "==> secure=$secure (expect 4: kdf/fors/th/saes)  insecure=$insecure (expect 1: shuffle control)"
-          if [ "$secure" -eq 4 ] && [ "$insecure" -eq 1 ]; then
+          echo "==> secure=$secure (expect 5: kdf/fors/th/saes/ct_eq)  insecure=$insecure (expect 1: shuffle control)"
+          if [ "$secure" -eq 5 ] && [ "$insecure" -eq 1 ]; then
             echo "==> checkct: PASS"
           else
             echo "==> checkct: FAIL — a secure driver leaked or the shuffle control stopped firing"; exit 1

@@ -1,0 +1,12 @@
+[package]
+name = "driver_ct_eq"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[dependencies]
+rand_core = "0.6.4"
+checkct_macros = { path = "../../../../../cargo-checkct/checkct_macros" }
+# Same `subtle` the firmware pins (secure/Cargo.toml: 2.6, no_std). The whole
+# point is to certify THIS crate's `ct_eq` lowering under the shipped profile.
+subtle = { version = "2.6", default-features = false }
