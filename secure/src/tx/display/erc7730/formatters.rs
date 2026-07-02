@@ -315,46 +315,55 @@ fn render_token_amount(
     write_label_row(pages, p, field.label);
     let [_, r1, r2, foot] = pages.page_mut(p);
 
-    match bound {
-        Some((decimals, ticker)) => {
-            // Threshold check (Aragon/Coinbase Wallet/Rabby convention):
-            // when the descriptor supplies a `threshold` param and the
-            // on-chain value is greater-than-or-equal, render
-            // "unlimited <ticker>" instead of the digit string. BE byte
-            // arrays compare lexicographically — which is the same as
-            // numeric on full-width u256, so a direct `>=` over the raw
-            // bytes is correct.
-            if let Some(threshold) = params.threshold {
-                if value.0 >= *threshold {
-                    write_unlimited_row(r1, ticker);
-                    write_line(foot, "> next");
-                    return Ok(());
-                }
+    // Threshold / approve-all sentinel check, HOISTED ABOVE the bound match
+    // (review 4.5). When the descriptor supplies a `threshold` and the value is
+    // ≥ it, this is an "unlimited" approval — the single most dangerous action.
+    // For a BOUND token it renders "unlimited <ticker>". For an UNKNOWN
+    // (unbound) token the raw 2^256-1 used to fall through and render
+    // "!AMOUNT OVERFLOW" (an alarming banner, no value) — exactly when trust is
+    // LOWEST. Render "unlimited" clearly instead, marked "(unverified)" so the
+    // missing token identity stays loud (the identity page below still shows
+    // the address). BE byte arrays compare lexicographically == numeric on a
+    // full-width u256, so a direct `>=` over the raw bytes is correct.
+    let is_unlimited = params.threshold.is_some_and(|t| value.0 >= *t);
+    if is_unlimited {
+        match bound {
+            Some((_, ticker)) => write_unlimited_row(r1, ticker),
+            None => {
+                write_line(r1, "unlimited");
+                write_line(r2, "(unverified)");
             }
-            let fit =
-                write_amount_two_rows(r1, r2, &value, decimals, 6, true, true, ascii_str(ticker));
-            write_line(
-                foot,
-                match fit {
-                    AmountFit::Full => "> next",
-                    AmountFit::Overflow => "!AMOUNT OVERFLOW",
-                },
-            );
         }
-        None => {
-            // Audit M-4: never present a scaled decimal with an assumed
-            // scale. Without verified `decimals` a 6-decimal token would
-            // render 10^12× off while *looking* authoritative. Show the
-            // RAW integer (no scaling) and label the unknown scale loudly
-            // so the user knows the magnitude is uninterpreted.
-            let fit = write_amount_two_rows(r1, r2, &value, 0, 0, false, true, "");
-            write_line(
-                foot,
-                match fit {
-                    AmountFit::Full => "! raw, dec=?",
-                    AmountFit::Overflow => "!AMOUNT OVERFLOW",
-                },
-            );
+        write_line(foot, "> next");
+    } else {
+        match bound {
+            Some((decimals, ticker)) => {
+                let fit = write_amount_two_rows(
+                    r1, r2, &value, decimals, 6, true, true, ascii_str(ticker),
+                );
+                write_line(
+                    foot,
+                    match fit {
+                        AmountFit::Full => "> next",
+                        AmountFit::Overflow => "!AMOUNT OVERFLOW",
+                    },
+                );
+            }
+            None => {
+                // Audit M-4: never present a scaled decimal with an assumed
+                // scale. Without verified `decimals` a 6-decimal token would
+                // render 10^12× off while *looking* authoritative. Show the
+                // RAW integer (no scaling) and label the unknown scale loudly
+                // so the user knows the magnitude is uninterpreted.
+                let fit = write_amount_two_rows(r1, r2, &value, 0, 0, false, true, "");
+                write_line(
+                    foot,
+                    match fit {
+                        AmountFit::Full => "! raw, dec=?",
+                        AmountFit::Overflow => "!AMOUNT OVERFLOW",
+                    },
+                );
+            }
         }
     }
 

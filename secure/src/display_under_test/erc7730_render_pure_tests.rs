@@ -503,6 +503,41 @@ fn positive_usdt_approve_unlimited_renders_approve_intent() {
     );
 }
 
+#[test]
+fn positive_usdt_approve_unlimited_unbound_renders_unlimited_not_overflow() {
+    // review 4.5: an unlimited approval of an UNKNOWN (unbound) token used to
+    // render "!AMOUNT OVERFLOW" — the raw 2^256-1 overflows the amount
+    // formatter, an alarming banner with no meaning for the single most
+    // dangerous action, exactly when trust is LOWEST. It must now render
+    // "unlimited" + "(unverified)". Same REAL USDT approve descriptor
+    // (threshold set), but NO metadata supplied → the token cannot bind.
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-usdt.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
+
+    let calldata = calldata_approve([0x44u8; 20], u256_max());
+    let tx = envelope(1, entry.contract);
+    let resolver = NameResolver::new();
+    let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver).expect("render");
+    assert_all_pages_printable(&pages);
+
+    let amount_page = find_page_by_label(&pages, "Amount");
+    let amount_blob = page_strs(&pages, amount_page).join("\n");
+    assert!(
+        amount_blob.to_lowercase().contains("unlimited"),
+        "unbound approve(MAX) must render 'unlimited', got:\n{amount_blob}"
+    );
+    assert!(
+        !amount_blob.contains("OVERFLOW"),
+        "must NOT render the alarming overflow banner for an unlimited approve:\n{amount_blob}"
+    );
+    assert!(
+        amount_blob.contains("(unverified)"),
+        "unbound must mark the missing token identity:\n{amount_blob}"
+    );
+}
+
 /// Multi-chain chain-pinning: USDT's registry descriptor carries Mainnet (1)
 /// AND Polygon (137) deployments under the SAME JSON. Picking the chain-137
 /// leaf (contract 0xc2132D…8e8F, the bridged Polygon USDT) proves the
