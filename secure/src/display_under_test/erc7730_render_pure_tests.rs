@@ -408,7 +408,7 @@ fn positive_usdt_transfer_mainnet_renders_send_intent() {
 
     // Page 0: intent banner.
     let [r0, r1, r2, r3] = page_strs(&pages, 0);
-    assert_eq!(r0, "Sign: Send");
+    assert_eq!(r0, "Send");
     assert_eq!(r1, "Tether Limited");
     assert_eq!(r2, "Tether USD");
     assert_eq!(r3, "> next");
@@ -475,7 +475,7 @@ fn positive_usdt_approve_unlimited_renders_approve_intent() {
     assert_all_pages_printable(&pages);
 
     let [intent_r0, _, _, _] = page_strs(&pages, 0);
-    assert_eq!(intent_r0, "Sign: Approve");
+    assert_eq!(intent_r0, "Approve");
 
     // Spender page must be present (labelled "Spender" per the
     // descriptor).
@@ -548,7 +548,7 @@ fn positive_usdt_transfer_polygon_chain_pinning() {
 
     // The Polygon leaf renders the same "Send" intent as Mainnet.
     let [r0, ..] = page_strs(&pages, 0);
-    assert_eq!(r0, "Sign: Send");
+    assert_eq!(r0, "Send");
 }
 
 #[test]
@@ -574,7 +574,7 @@ fn positive_weth_deposit_pulls_value_from_envelope() {
     assert_all_pages_printable(&pages);
 
     let [intent_r0, owner_r, contract_r, _] = page_strs(&pages, 0);
-    assert_eq!(intent_r0, "Sign: Wrap");
+    assert_eq!(intent_r0, "Wrap");
     assert_eq!(owner_r, "WETH");
     assert_eq!(contract_r, "WETH");
 
@@ -663,9 +663,11 @@ fn negative_short_calldata_rejects() {
 
 #[test]
 fn positive_intent_truncation_is_safe() {
-    // ERC-7730 intent labels live in 10 chars after "Sign: " — verify
-    // that the seed corpus' actual intents fit, AND that the rendered
-    // row never exceeds DISPLAY_COLS = 16.
+    // The intent banner now wraps the intent across two rows (up to 32 chars,
+    // a visible `~` marker beyond that) instead of the old 10-char "Sign: "
+    // prefix form, so an intent of ANY length renders safely (no silent clip).
+    // Verify the seed corpus' intents stay within the host-pipeline ASCII cap
+    // (≤ 254 B) and that every rendered row stays within DISPLAY_COLS = 16.
     let res = build_seed();
     for entry in &res.entries {
         let bundle =
@@ -678,15 +680,65 @@ fn positive_intent_truncation_is_safe() {
         for fmt in verified.ir.format_iter() {
             let fmt = fmt.expect("format header parses");
             assert!(
-                fmt.intent.len() <= 32,
-                "intent oversized in source: {:?}",
+                fmt.intent.len() <= 254,
+                "intent exceeds the host-pipeline ASCII cap: {:?}",
                 core::str::from_utf8(fmt.intent).unwrap_or("<bin>")
             );
-            // The renderer pads to exactly DISPLAY_COLS so length-16
-            // post-truncation is the invariant we assert at the page
-            // level via `assert_all_pages_printable`.
+            // The banner caps every row at DISPLAY_COLS and marks truncation
+            // with `~`; the row-length invariant is asserted at the page level
+            // via `assert_all_pages_printable` (and the wrap/marker behaviour by
+            // `positive_long_intent_wraps_and_marks_truncation`).
         }
     }
+}
+
+#[test]
+fn positive_long_intent_wraps_and_marks_truncation() {
+    // review 4.1: the intent banner drops the old "Sign: " prefix and wraps the
+    // intent across rows 0-1 (32 chars). A >32-char intent gets a visible `~`
+    // marker in the last cell — never a silent clip.
+    let res = build_seed();
+    let entry = find_leaf(&res, "synthetic-long-intent.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
+
+    let mut calldata = keccak256(b"f(uint256)")[..4].to_vec();
+    calldata.extend_from_slice(&u256_from_u64(1).0);
+    assert_selector_matches(&verified.ir, &calldata, "f(uint256)");
+
+    let tx = envelope(1, entry.contract);
+    let resolver = NameResolver::new();
+    let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver).expect("render");
+    assert_all_pages_printable(&pages);
+
+    // "Withdraw Collateral from the Morpho Market" (42 chars) → rows 0-1.
+    let [r0, r1, ..] = page_strs(&pages, 0);
+    assert_eq!(r0, "Withdraw Collate", "row 0 = first 16 chars, no `Sign:` prefix");
+    assert!(
+        r1.starts_with("ral from the"),
+        "row 1 = intent continuation, got {r1:?}"
+    );
+    assert!(r1.ends_with('~'), "row 1 must mark truncation with `~`, got {r1:?}");
+}
+
+#[test]
+fn positive_medium_intent_wraps_two_rows_no_marker() {
+    // review 4.1: a 17..32-char intent uses both rows with NO marker.
+    // "Request stETH withdrawal" (24 chars) → "Request stETH wi" / "thdrawal".
+    let res = build_seed();
+    let entry = find_leaf(&res, "synthetic-uint256-array-amount.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
+
+    let calldata = rw_calldata(&[u256_from_u64(1_000_000_000_000_000_000)], [0x55u8; 20]);
+    let tx = envelope(1, entry.contract);
+    let resolver = NameResolver::new();
+    let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver).expect("render");
+
+    let [r0, r1, ..] = page_strs(&pages, 0);
+    assert_eq!(r0, "Request stETH wi");
+    assert_eq!(r1, "thdrawal");
+    assert!(!r1.contains('~'), "24 chars fits two rows → no marker");
 }
 
 #[test]
@@ -786,7 +838,7 @@ fn positive_aave_borrow_renders_enum_label() {
     assert_all_pages_printable(&pages);
 
     let [r0, ..] = page_strs(&pages, 0);
-    assert_eq!(r0, "Sign: Borrow");
+    assert_eq!(r0, "Borrow");
 
     // The enum page must show the RESOLVED label "variable", not the bare
     // index "2" (audit M-7). The registry's field label is "Interest Rate
@@ -878,7 +930,7 @@ fn positive_wsteth_wrap_renders_intent_and_amount_label() {
     assert_all_pages_printable(&pages);
 
     let [r0, ..] = page_strs(&pages, 0);
-    assert_eq!(r0, "Sign: Wrap stETH");
+    assert_eq!(r0, "Wrap stETH");
     // The amount field must render under its authored label (proves
     // `#._stETHAmount` resolved to the right static-head slot).
     let _amt_page = find_page_by_label(&pages, "stETH amount");
@@ -3051,4 +3103,217 @@ fn v3_all_nested_eip712_leaves_are_panic_safe_and_fail_closed() {
         nested_leaf_formats >= 8,
         "expected many nested EIP-712 leaf-formats across the corpus, got {nested_leaf_formats}"
     );
+}
+
+/// v3 third shipped order: UniswapX `LimitOrder`. Element struct is
+/// `OutputToken(token, amount, recipient)` — 3 members (no decay/startAmount);
+/// witness `LimitOrder(info, inputToken, inputAmount, outputs)` — 4 members.
+/// Same depth-2 recursion + curation as the Dutch orders; proves the machinery
+/// handles a different element/witness shape.
+#[test]
+fn v3_limit_order_renders_deep_nested_and_flip_declines() {
+    use super::erc7730::nested::{hash_struct, hash_struct_array};
+    let res = build_registry();
+    let leaf = find_leaf(res, "eip712-UniswapX-LimitOrder.json", 1);
+    let pth = hx32("e35e6a28e8d076114130d5989df14ccf68b92dc3ed629938e43f54ab543d79bb");
+    let order_info_th = hx32("7daca11202c64729871927c37d75933f1852e430627cd4b8f4844087e312e94b");
+    let output_token_th = hx32("46cd70b1b585091773aef9064bdcdd0dbe1268072af330b4abfccf1bdf7b4d7b");
+    let limit_order_th = hx32("a7d1cc35867af6b68aad3c7171d2f51fc824592dd93d17c26bb4c65da6cec678");
+    let token_permissions_th =
+        hx32("618358ac3db8dc274f0cd8829da7e234bd48cd73c4a740aede1adec9846d06a1");
+    let wa = |a: [u8; 20]| {
+        let mut w = [0u8; 32];
+        w[12..].copy_from_slice(&a);
+        w
+    };
+    let wu = |n: u64| {
+        let mut w = [0u8; 32];
+        w[24..].copy_from_slice(&n.to_be_bytes());
+        w
+    };
+    let weth = [0xC0u8, 0x2a, 0xaA, 0x39, 0xb2, 0x23, 0xFE, 0x8D, 0x0A, 0x0e, 0x5C, 0x4F, 0x27,
+        0xeA, 0xD9, 0x08, 0x3C, 0x75, 0x6C, 0xc2];
+    let dai = [0x6Bu8, 0x17, 0x54, 0x74, 0xE8, 0x90, 0x94, 0xC4, 0x4D, 0xa9, 0x8b, 0x95, 0x4E,
+        0xed, 0xeA, 0xC4, 0x95, 0x27, 0x1d, 0x0F];
+
+    let mut permitted_ed = std::vec![0u8; 64];
+    permitted_ed[0..32].copy_from_slice(&wa(weth));
+    permitted_ed[32..64].copy_from_slice(&wu(6_000_006));
+    let permitted_word = hash_struct(&token_permissions_th, &permitted_ed);
+
+    let mut info_ed = std::vec![0u8; 192];
+    info_ed[0..32].copy_from_slice(&wa([0x2b; 20])); // reactor
+    info_ed[32..64].copy_from_slice(&wa([0x3b; 20])); // swapper
+    info_ed[64..96].copy_from_slice(&wu(5));
+    info_ed[96..128].copy_from_slice(&wu(1_700_000_000));
+    info_ed[128..160].copy_from_slice(&wa([0x4b; 20])); // validationContract
+    info_ed[160..192].copy_from_slice(&[0xEE; 32]);
+    let info_word = hash_struct(&order_info_th, &info_ed);
+
+    // OutputToken: token, amount, recipient (3 words).
+    let mut out0 = std::vec![0u8; 96];
+    out0[0..32].copy_from_slice(&wa(dai));
+    out0[32..64].copy_from_slice(&wu(5_000_005)); // amount SHOWN
+    out0[64..96].copy_from_slice(&wa([0x6b; 20])); // recipient SHOWN
+    let outputs_word = hash_struct_array(&output_token_th, &[&out0[..]]);
+
+    // LimitOrder: info, inputToken, inputAmount, outputs (4 words).
+    let mut witness_ed = std::vec![0u8; 128];
+    witness_ed[0..32].copy_from_slice(&info_word);
+    witness_ed[32..64].copy_from_slice(&wa(weth)); // inputToken (tokenPath)
+    witness_ed[64..96].copy_from_slice(&wu(9_000_009)); // inputAmount SHOWN
+    witness_ed[96..128].copy_from_slice(&outputs_word);
+    let witness_word = hash_struct(&limit_order_th, &witness_ed);
+
+    let mut top_ed = std::vec![0u8; 160];
+    top_ed[0..32].copy_from_slice(&permitted_word);
+    top_ed[32..64].copy_from_slice(&wa([0x1b; 20])); // spender SHOWN
+    top_ed[64..96].copy_from_slice(&wu(13));
+    top_ed[96..128].copy_from_slice(&wu(1_735_689_600)); // deadline SHOWN
+    top_ed[128..160].copy_from_slice(&witness_word);
+
+    let mut blob = std::vec::Vec::new();
+    let push_rec = |b: &mut std::vec::Vec<u8>, ed: &[u8]| {
+        b.extend_from_slice(&(ed.len() as u16).to_be_bytes());
+        b.extend_from_slice(ed);
+    };
+    push_rec(&mut blob, &permitted_ed);
+    push_rec(&mut blob, &witness_ed);
+    push_rec(&mut blob, &info_ed);
+    blob.extend_from_slice(&1u16.to_be_bytes());
+    push_rec(&mut blob, &out0);
+
+    let render = |ed: &[u8], b: &[u8]| {
+        let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("LimitOrder IR parses");
+        let verified = VerifiedDescriptor { ir };
+        let resolver = NameResolver::new();
+        super::erc7730::render_erc7730_eip712_pages_v3(
+            1, &[0u8; 20], &pth, ed, b, &verified, None, &resolver,
+        )
+    };
+    let pages = render(&top_ed, &blob).expect("valid LimitOrder clear-signs (depth-2)");
+    assert_all_pages_printable(&pages);
+    let dump = dump_pages(&pages).to_lowercase();
+    assert!(dump.contains("2b2b2b2b2b2b"), "info.reactor:\n{dump}");
+    assert!(dump.contains("3b3b3b3b3b3b"), "info.swapper:\n{dump}");
+    assert!(dump.contains("4b4b4b4b4b4b"), "info.validationContract:\n{dump}");
+    assert!(dump.contains("6b6b6b6b6b6b"), "output recipient:\n{dump}");
+    assert!(dump.contains("5000005"), "OutputToken.amount:\n{dump}");
+    assert!(dump.contains("9000009"), "inputAmount:\n{dump}");
+    assert!(dump.contains("item 1 of 1"), "single-output divider:\n{dump}");
+    // Blob: permitted[2..66] | witness[68..196] | info[198..390] | ...
+    let mut b = blob.clone();
+    b[200] ^= 0x01; // inside info_ed (reactor word)
+    assert!(render(&top_ed, &b).is_err(), "flip depth-2 info word declines");
+    let mut ed = top_ed.clone();
+    ed[140] ^= 0x01; // inside witness_word (top word 4)
+    assert!(render(&ed, &blob).is_err(), "flip top witness commitment declines");
+}
+
+/// v3 fourth shipped order: UniswapX `V2DutchOrder`. Adds a `cosigner` address
+/// (curated SHOW, like exclusiveFiller) and `baseInput*`/`baseOutputs` naming;
+/// element struct is `DutchOutput` (4 words). Same depth-2 recursion + curation.
+#[test]
+fn v3_v2_dutch_order_renders_deep_nested_and_flip_declines() {
+    use super::erc7730::nested::{hash_struct, hash_struct_array};
+    let res = build_registry();
+    let leaf = find_leaf(res, "eip712-uniswap-V2DutchOrder.json", 1);
+    let pth = hx32("a8cc1ce2c3d1c6f1ff0072b7a47d6e2876fef4f7f92648cd166fdd6dec0a7465");
+    let order_info_th = hx32("7daca11202c64729871927c37d75933f1852e430627cd4b8f4844087e312e94b");
+    let dutch_output_th = hx32("45058f030836a1ec7cb9636dad15d25676157364aaf76d8dad81a6b2c267610f");
+    let v2_dutch_th = hx32("329eaec63622cb5aa75f27611d76543f9d296718b239698143334aac9a0ea378");
+    let token_permissions_th =
+        hx32("618358ac3db8dc274f0cd8829da7e234bd48cd73c4a740aede1adec9846d06a1");
+    let wa = |a: [u8; 20]| {
+        let mut w = [0u8; 32];
+        w[12..].copy_from_slice(&a);
+        w
+    };
+    let wu = |n: u64| {
+        let mut w = [0u8; 32];
+        w[24..].copy_from_slice(&n.to_be_bytes());
+        w
+    };
+    let weth = [0xC0u8, 0x2a, 0xaA, 0x39, 0xb2, 0x23, 0xFE, 0x8D, 0x0A, 0x0e, 0x5C, 0x4F, 0x27,
+        0xeA, 0xD9, 0x08, 0x3C, 0x75, 0x6C, 0xc2];
+    let dai = [0x6Bu8, 0x17, 0x54, 0x74, 0xE8, 0x90, 0x94, 0xC4, 0x4D, 0xa9, 0x8b, 0x95, 0x4E,
+        0xed, 0xeA, 0xC4, 0x95, 0x27, 0x1d, 0x0F];
+
+    let mut permitted_ed = std::vec![0u8; 64];
+    permitted_ed[0..32].copy_from_slice(&wa(weth));
+    permitted_ed[32..64].copy_from_slice(&wu(6_000_006));
+    let permitted_word = hash_struct(&token_permissions_th, &permitted_ed);
+
+    let mut info_ed = std::vec![0u8; 192];
+    info_ed[0..32].copy_from_slice(&wa([0x2c; 20]));
+    info_ed[32..64].copy_from_slice(&wa([0x3c; 20]));
+    info_ed[64..96].copy_from_slice(&wu(5));
+    info_ed[96..128].copy_from_slice(&wu(1_700_000_000));
+    info_ed[128..160].copy_from_slice(&wa([0x4c; 20]));
+    info_ed[160..192].copy_from_slice(&[0xEE; 32]);
+    let info_word = hash_struct(&order_info_th, &info_ed);
+
+    // DutchOutput: token, startAmount(hidden), endAmount, recipient (4 words).
+    let mut out0 = std::vec![0u8; 128];
+    out0[0..32].copy_from_slice(&wa(dai));
+    out0[32..64].copy_from_slice(&wu(1));
+    out0[64..96].copy_from_slice(&wu(4_000_004)); // endAmount SHOWN
+    out0[96..128].copy_from_slice(&wa([0x6c; 20])); // recipient SHOWN
+    let outputs_word = hash_struct_array(&dutch_output_th, &[&out0[..]]);
+
+    // V2DutchOrder: info, cosigner, baseInputToken, baseInputStartAmount,
+    // baseInputEndAmount, baseOutputs (6 words).
+    let mut witness_ed = std::vec![0u8; 192];
+    witness_ed[0..32].copy_from_slice(&info_word);
+    witness_ed[32..64].copy_from_slice(&wa([0x5c; 20])); // cosigner SHOWN
+    witness_ed[64..96].copy_from_slice(&wa(weth)); // baseInputToken (tokenPath)
+    witness_ed[96..128].copy_from_slice(&wu(8_000_008)); // baseInputStartAmount SHOWN
+    witness_ed[128..160].copy_from_slice(&wu(7_000_000)); // baseInputEndAmount (hidden)
+    witness_ed[160..192].copy_from_slice(&outputs_word);
+    let witness_word = hash_struct(&v2_dutch_th, &witness_ed);
+
+    let mut top_ed = std::vec![0u8; 160];
+    top_ed[0..32].copy_from_slice(&permitted_word);
+    top_ed[32..64].copy_from_slice(&wa([0x1c; 20])); // spender SHOWN
+    top_ed[64..96].copy_from_slice(&wu(13));
+    top_ed[96..128].copy_from_slice(&wu(1_735_689_600));
+    top_ed[128..160].copy_from_slice(&witness_word);
+
+    let mut blob = std::vec::Vec::new();
+    let push_rec = |b: &mut std::vec::Vec<u8>, ed: &[u8]| {
+        b.extend_from_slice(&(ed.len() as u16).to_be_bytes());
+        b.extend_from_slice(ed);
+    };
+    push_rec(&mut blob, &permitted_ed);
+    push_rec(&mut blob, &witness_ed);
+    push_rec(&mut blob, &info_ed);
+    blob.extend_from_slice(&1u16.to_be_bytes());
+    push_rec(&mut blob, &out0);
+
+    let render = |ed: &[u8], b: &[u8]| {
+        let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("V2DutchOrder IR parses");
+        let verified = VerifiedDescriptor { ir };
+        let resolver = NameResolver::new();
+        super::erc7730::render_erc7730_eip712_pages_v3(
+            1, &[0u8; 20], &pth, ed, b, &verified, None, &resolver,
+        )
+    };
+    let pages = render(&top_ed, &blob).expect("valid V2DutchOrder clear-signs (depth-2)");
+    assert_all_pages_printable(&pages);
+    let dump = dump_pages(&pages).to_lowercase();
+    assert!(dump.contains("2c2c2c2c2c2c"), "info.reactor:\n{dump}");
+    assert!(dump.contains("3c3c3c3c3c3c"), "info.swapper:\n{dump}");
+    assert!(dump.contains("4c4c4c4c4c4c"), "info.validationContract:\n{dump}");
+    assert!(dump.contains("5c5c5c5c5c5c"), "cosigner (curated SHOW):\n{dump}");
+    assert!(dump.contains("6c6c6c6c6c6c"), "output recipient:\n{dump}");
+    assert!(dump.contains("4000004"), "baseOutputs endAmount:\n{dump}");
+    assert!(dump.contains("8000008"), "baseInputStartAmount:\n{dump}");
+    assert!(dump.contains("item 1 of 1"), "single-output divider:\n{dump}");
+    // Blob: permitted[2..66] | witness[68..260] | info[262..454] | ...
+    let mut b = blob.clone();
+    b[264] ^= 0x01; // inside info_ed
+    assert!(render(&top_ed, &b).is_err(), "flip depth-2 info word declines");
+    let mut ed = top_ed.clone();
+    ed[140] ^= 0x01; // inside witness_word
+    assert!(render(&ed, &blob).is_err(), "flip top witness commitment declines");
 }

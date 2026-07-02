@@ -1,0 +1,26 @@
+{
+  "$schema": "../../specs/erc7730-v2.schema.json",
+  "context": {
+    "$id": "SyntheticLongIntent",
+    "contract": {
+      "deployments": [
+        { "chainId": 1, "address": "0x000000000000000000000000000000000000000F" }
+      ]
+    }
+  },
+  "metadata": {
+    "owner": "Synthetic Test Fixture",
+    "info": { "url": "https://example.invalid" },
+    "contractName": "SyntheticLongIntent"
+  },
+  "display": {
+    "formats": {
+      "f(uint256 x)": {
+        "intent": "Withdraw Collateral from the Morpho Market",
+        "fields": [
+          { "path": "x", "format": "raw", "label": "X", "visible": "always" }
+        ]
+      }
+    }
+  }
+}

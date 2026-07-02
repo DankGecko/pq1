@@ -56,22 +56,42 @@ pub(super) fn render_intent_banner(
 
     let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
 
-    // Row 0: "Sign: <intent>" (intent is ASCII-clean, ≤ 254 B by host
-    // pipeline; we trim to 16 - "Sign: ".len() = 10 chars).
-    let mut row0 = [b' '; 16];
-    for (i, &b) in b"Sign: ".iter().enumerate() {
-        row0[i] = b;
-    }
-    let intent_cap = row0.len() - 6;
-    let intent_take = format.intent.len().min(intent_cap);
-    row0[6..6 + intent_take].copy_from_slice(&format.intent[..intent_take]);
+    // The intent is the descriptor author's single most important string (the
+    // flow title). The confirm page + the field pages already establish this is
+    // a signing flow, so we DROP the old "Sign: " prefix — which left only 10
+    // chars and chopped "Withdraw Collateral from Morpho Market" to
+    // "Sign: Withdraw C" — and give the intent up to TWO rows (32 chars).
+    //
+    // Layout (intent is ASCII-clean, ≤ 254 B by the host pipeline):
+    //   short intent (≤ 16): row0 = intent, row1 = owner, row2 = contract name;
+    //   long intent  (> 16): rows 0-1 = intent (32 chars, a visible `~` in the
+    //                        last cell when it runs past 32), row2 = contract
+    //                        name (owner drops — the intent earns the space).
+    //   row3 = "> next" nav hint (unchanged, for cross-page consistency).
+    const W: usize = 16;
+    let intent = format.intent;
+
+    let mut row0 = [b' '; W];
+    let r0_take = intent.len().min(W);
+    row0[..r0_take].copy_from_slice(&intent[..r0_take]);
     *pages.row_mut(p, 0) = row0;
 
-    // Row 1: owner.
-    write_line_bytes(pages.row_mut(p, 1), ir.owner);
-    // Row 2: contract name.
-    write_line_bytes(pages.row_mut(p, 2), ir.contract_name);
-    // Row 3: "> next" navigation hint.
+    if intent.len() > W {
+        let mut row1 = [b' '; W];
+        let end = intent.len().min(2 * W);
+        let take = end - W;
+        row1[..take].copy_from_slice(&intent[W..end]);
+        // Meaning-bearing truncation marker: the intent runs past what two rows
+        // can show, so replace the last cell with `~` (never silently clip).
+        if intent.len() > 2 * W {
+            row1[W - 1] = b'~';
+        }
+        *pages.row_mut(p, 1) = row1;
+        write_line_bytes(pages.row_mut(p, 2), ir.contract_name);
+    } else {
+        write_line_bytes(pages.row_mut(p, 1), ir.owner);
+        write_line_bytes(pages.row_mut(p, 2), ir.contract_name);
+    }
     write_line(pages.row_mut(p, 3), "> next");
 
     Ok(())
