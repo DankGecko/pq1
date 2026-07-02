@@ -217,6 +217,41 @@ fn semantic_key_encryption_is_gated_not_ignored() {
     );
 }
 
+#[test]
+fn unmodeled_key_in_definition_body_is_gated() {
+    // finding 1.3 (definitions-body bypass, verify pass 2026-07-02): an
+    // unmodeled key on a $.display.definitions BODY must gate through the $ref
+    // channel, exactly like one on the reference object or an inline field —
+    // otherwise resolve_display_refs silently discards it on merge (the 1.1
+    // silent-drop class, through the very mechanism 1.1 introduced).
+    let dir = make_tempdir("def_body_key");
+    fs::write(dir.join("policy.toml"), POLICY_DEV_2).unwrap();
+    let d = r#"{
+      "context": { "contract": { "deployments": [{ "chainId": 1, "address": "0x0000000000000000000000000000000000000001" }] } },
+      "metadata": { "owner": "T", "contractName": "T" },
+      "display": {
+        "definitions": { "amt": { "format": "raw", "label": "Amt", "bogusDefKey": 1 } },
+        "formats": { "transfer(address to, uint256 amount)": {
+          "intent": "Send",
+          "fields": [
+            { "path": "to", "format": "addressName", "label": "To", "visible": "always" },
+            { "path": "amount", "$ref": "$.display.definitions.amt", "visible": "always" }
+          ] } } }
+    }"#;
+    fs::write(dir.join("calldata-gated.json"), d).unwrap();
+    fs::write(dir.join("calldata-valid.json"), VALID_SIBLING_02).unwrap();
+
+    let (res, skips) =
+        build_db_tolerant(&dir, &dir.join("policy.toml"), Some(&dir)).expect("tolerant build");
+    assert_eq!(res.leaf_count, 1, "only the clean sibling survives; the def-body key must gate");
+    assert!(
+        skips.iter().any(|s| s.reason.contains("unmodeled key")
+            && s.reason.contains("bogusDefKey")),
+        "skip must name the definition-body key: {:?}",
+        skips.iter().map(|s| &s.reason).collect::<Vec<_>>()
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Item 2: `includes` resolution
 // ─────────────────────────────────────────────────────────────────────

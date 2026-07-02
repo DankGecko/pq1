@@ -346,10 +346,12 @@ struct FieldDef {
     /// doesn't trip the 1.3 gate below).
     #[serde(rename = "$id", default)]
     _id: Option<serde_json::Value>,
-    /// `separator` — cosmetic digit-group separator. dbgen renders numbers
-    /// ungrouped, so this is deserialize-and-ignore (same value, no grouping).
-    /// Modelled (not gated): a purely cosmetic key must not drop a descriptor
-    /// to blind-sign.
+    /// `separator` — cosmetic ARRAY-element separator (v2 schema: a string with
+    /// an `{index}` placeholder used to join a rendered array's elements).
+    /// dbgen renders each array element on its own page/row, so the join string
+    /// is irrelevant — deserialize-and-ignore. Modelled (not gated): a purely
+    /// cosmetic key must not drop a descriptor to blind-sign, and each element's
+    /// value still renders individually (WYSIWYS holds). 0 corpus fields use it.
     #[serde(rename = "separator", default)]
     _separator: Option<serde_json::Value>,
     /// Catch-all for any field key NOT modelled above. A non-empty map means
@@ -1451,6 +1453,27 @@ fn resolve_display_refs(
                 "display definition `{name}` itself carries a `$ref` — transitive \
                  display-definition references are not permitted"
             ));
+        }
+        // 1.3 parity through the definitions ingress: the format-level gate in
+        // `compile_formats` scans the reference OBJECT and inline fields, but a
+        // definition BODY is only seen here. An unmodelled key on the definition
+        // would otherwise be silently discarded on merge (`unknown` is zeroed
+        // below) — reopening the exact silent-drop class (a def-carried
+        // `encryption` would render ciphertext as plaintext under a verified
+        // banner). Gate it here, matching the inline-field treatment. (finding
+        // 1.3 definitions-body bypass, verify pass 2026-07-02)
+        if let Some(k) = def.unknown.keys().next() {
+            return Err(format!(
+                "display definition `{name}` carries unmodeled key `{k}` — dbgen does not \
+                 act on it and would silently drop it via the $ref merge; refusing (finding 1.3)"
+            ));
+        }
+        if let Some(children) = &def.fields {
+            if let Some(k) = first_unmodeled_field_key(children) {
+                return Err(format!(
+                    "display definition `{name}` group carries unmodeled key `{k}` — refusing (finding 1.3)"
+                ));
+            }
         }
         let params = match (def.params.clone(), field.params.clone()) {
             (None, None) => None,
