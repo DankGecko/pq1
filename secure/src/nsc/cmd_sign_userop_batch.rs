@@ -133,7 +133,7 @@ impl<'a> RoutedTrailers<'a> {
 /// (`SE`, `SLOT_CACHE`, `SNAP_BUF`) accessed under the non-reentrant
 /// dispatcher + `HandlerGuard`.
 pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
-    use crate::ui::confirm::{confirm, ConfirmResult};
+    use crate::ui::confirm::{confirm_checked, ConfirmResult};
 
     // Same handler-busy guard as the single-tx path: prevents SysTick
     // from zeroing `master_secret` while we're holding stack-local
@@ -627,7 +627,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // gate it once before any inner-tx render.
     if register_slot {
         let rotate_pages = crate::tx::display::build_slot_rotation_pages(slot_index);
-        match confirm(rotate_pages.as_slice()) {
+        let (cr, cr_verdict) = confirm_checked(rotate_pages.as_slice());
+        match cr {
             ConfirmResult::Confirmed => {}
             ConfirmResult::Cancelled => {
                 ui::show_status("Cancelled", "");
@@ -637,6 +638,11 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                 super::zeroize_sensitive_state();
                 return NscStatus::IdleWipe as u32;
             }
+        }
+        // FI belt (UI1 / work-todo #12c): affirmative-sentinel gate; fail closed.
+        if cr_verdict != crate::fi::OK_SENTINEL {
+            super::zeroize_sensitive_state();
+            return NscStatus::UserRejected as u32;
         }
     }
 
@@ -870,7 +876,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         }
         batch_digest.update(&inner_digest);
 
-        match confirm(pages.as_slice()) {
+        let (cr, cr_verdict) = confirm_checked(pages.as_slice());
+        match cr {
             ConfirmResult::Confirmed => {}
             ConfirmResult::Cancelled => {
                 ui::show_status("Cancelled", "");
@@ -880,6 +887,12 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                 super::zeroize_sensitive_state();
                 return NscStatus::IdleWipe as u32;
             }
+        }
+        // FI belt (UI1 / work-todo #12c): per-tx affirmative-sentinel gate. A
+        // belt trip aborts the WHOLE batch (return), never falls to the next tx.
+        if cr_verdict != crate::fi::OK_SENTINEL {
+            super::zeroize_sensitive_state();
+            return NscStatus::UserRejected as u32;
         }
     }
 
@@ -925,7 +938,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             ui::show_status("Batch sign", "digest unshown");
             return NscStatus::InternalError as u32;
         }
-        match confirm(final_pages.as_slice()) {
+        let (cr, cr_verdict) = confirm_checked(final_pages.as_slice());
+        match cr {
             ConfirmResult::Confirmed => {}
             ConfirmResult::Cancelled => {
                 ui::show_status("Cancelled", "");
@@ -935,6 +949,11 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                 super::zeroize_sensitive_state();
                 return NscStatus::IdleWipe as u32;
             }
+        }
+        // FI belt (UI1 / work-todo #12c): affirmative-sentinel gate; fail closed.
+        if cr_verdict != crate::fi::OK_SENTINEL {
+            super::zeroize_sensitive_state();
+            return NscStatus::UserRejected as u32;
         }
     }
 

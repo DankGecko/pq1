@@ -72,6 +72,12 @@ pub const PARAM_CONST_VALUE: u8 = 0x40;
 /// garbage word (`VULN-erc7730-eip712-nested-struct-address-hide`, on-device
 /// belt behind the build-time visibility gate).
 pub const PARAM_NESTED_STRUCT: u8 = 0x41;
+/// A `tokenAmount`'s `nativeCurrencyAddress` sentinel (20 B). When the field's
+/// resolved token address equals this sentinel, the amount is rendered as the
+/// chain's NATIVE currency (18 decimals, `native_ticker(chain_id)`) instead of
+/// an ERC-20 lookup — so an ETH leg (`0xEeee…`/`0x0`) shows "1.5 ETH" rather than
+/// a raw `! raw, dec=?` integer (ERC-7730 `nativeCurrencyAddress`).
+pub const PARAM_NATIVE_CURRENCY: u8 = 0x42;
 
 /// `dbgen::erc7730::DATE_ENC_TIMESTAMP` — unix-seconds u64.
 pub const DATE_ENC_TIMESTAMP: u8 = 0x00;
@@ -130,6 +136,10 @@ pub struct ParamSet<'a> {
     /// Until the belt is inverted (Phase 5 Commit D), the caller declines on
     /// EITHER form — the fail-safe.
     pub nested_struct: Option<&'a [u8]>,
+    /// A `tokenAmount`'s native-currency sentinel address (`PARAM_NATIVE_CURRENCY`,
+    /// 20 B). `Some` when the descriptor declares `nativeCurrencyAddress`; the
+    /// renderer treats a resolved token equal to it as the chain native currency.
+    pub native_currency: Option<&'a [u8; 20]>,
 }
 
 impl<'a> Default for ParamSet<'a> {
@@ -154,6 +164,7 @@ impl<'a> Default for ParamSet<'a> {
             visibility: Visibility::Always,
             visibility_values: None,
             nested_struct: None,
+            native_currency: None,
         }
     }
 }
@@ -203,6 +214,13 @@ pub fn parse<'a>(
                     payload
                         .try_into()
                         .map_err(|_| RenderErr::Reject("7730 bad token"))?,
+                );
+            }
+            PARAM_NATIVE_CURRENCY => {
+                p.native_currency = Some(
+                    payload
+                        .try_into()
+                        .map_err(|_| RenderErr::Reject("7730 bad native ccy"))?,
                 );
             }
             PARAM_THRESHOLD => {

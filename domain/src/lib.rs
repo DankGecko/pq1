@@ -357,10 +357,14 @@ pub fn derive_signing_key(seed: &[u8; SEED_LEN]) -> SigningKey {
 #[must_use]
 pub fn slhdsa_seed_from_bip39(bip39_seed: &[u8; 64]) -> [u8; SEED_LEN] {
     let mut out = [0u8; SEED_LEN];
-    let chunk0 = kdf_sha256(b"sphincsc7-sk-seed", bip39_seed, 0);
+    let mut chunk0 = kdf_sha256(b"sphincsc7-sk-seed", bip39_seed, 0);
     let chunk1 = kdf_sha256(b"sphincsc7-pk-seed", bip39_seed, 0);
     out[0..32].copy_from_slice(&chunk0); // sk_seed: full 32 bytes
     out[32..48].copy_from_slice(&chunk1[..16]); // pk_seed: first 16 bytes
+    // `chunk0` is the secret 32-byte sk_seed; scrub this frame's copy. The
+    // returned `out` is the caller's to wipe (they do). `chunk1` is the
+    // public pk_seed material. (secret-lifecycle audit 2026-07-01)
+    chunk0.zeroize();
     out
 }
 
@@ -406,10 +410,13 @@ pub fn derive_keypair_from_entropy(entropy: &[u8; ENTROPY_LEN]) -> (SigningKey, 
 #[must_use]
 pub fn bootstrap_seed_from_bip39(bip39_seed: &[u8; 64]) -> [u8; SEED_LEN] {
     let mut out = [0u8; SEED_LEN];
-    let chunk0 = kdf_sha256(b"pqwallet-c7-bootstrap-sk-seed", bip39_seed, 0);
+    let mut chunk0 = kdf_sha256(b"pqwallet-c7-bootstrap-sk-seed", bip39_seed, 0);
     let chunk1 = kdf_sha256(b"pqwallet-c7-bootstrap-pk-seed", bip39_seed, 0);
     out[0..32].copy_from_slice(&chunk0);
     out[32..48].copy_from_slice(&chunk1[..16]);
+    // `chunk0` is the secret bootstrap sk_seed; scrub this frame's copy.
+    // (secret-lifecycle audit 2026-07-01)
+    chunk0.zeroize();
     out
 }
 
@@ -467,14 +474,18 @@ pub fn slot_master_entropy_from_bip39(
         buf[0..20].copy_from_slice(b"pqwallet-slot-master");
         buf[20..84].copy_from_slice(bip39_seed);
         buf[84] = 0;
-        sha256_bytes(&buf)
+        let out = sha256_bytes(&buf);
+        buf.zeroize(); // `buf` embeds the 64-byte BIP-39 seed; scrub it (2026-07-01)
+        out
     } else {
         // sha256("pqwallet-slot-master-acct"[25] ‖ bip39_seed[64] ‖ account_index_be[4]) — 93 bytes.
         let mut buf = [0u8; 93];
         buf[0..25].copy_from_slice(b"pqwallet-slot-master-acct");
         buf[25..89].copy_from_slice(bip39_seed);
         buf[89..93].copy_from_slice(&account_index.to_be_bytes());
-        sha256_bytes(&buf)
+        let out = sha256_bytes(&buf);
+        buf.zeroize(); // `buf` embeds the 64-byte BIP-39 seed; scrub it (2026-07-01)
+        out
     }
 }
 
@@ -582,6 +593,10 @@ pub fn derive_c10_master_from_bip39_seed(
     sk_buf[7..39].copy_from_slice(master_lo);
     let sk_seed: [u8; 32] = sha256_bytes(&sk_buf);
 
+    // `pk_buf` / `sk_buf` both embed `master_lo` (master[0..32], secret);
+    // scrub the frame copies alongside `master`. (secret-lifecycle 2026-07-01)
+    pk_buf.zeroize();
+    sk_buf.zeroize();
     master.zeroize();
 
     (pk_seed, sk_seed)
@@ -694,7 +709,9 @@ pub fn slot_entropy(master_entropy: &[u8; 32], chain_id: u64, slot_index: u32) -
     buf[32..44].copy_from_slice(b"slot_entropy");
     buf[44..52].copy_from_slice(&chain_id.to_be_bytes());
     buf[52..56].copy_from_slice(&slot_index.to_be_bytes());
-    sha256_bytes(&buf)
+    let out = sha256_bytes(&buf);
+    buf.zeroize(); // `buf` embeds the secret master_entropy; scrub it (2026-07-01)
+    out
 }
 
 /// Derive the slot C10 `(sk_seed_32, pk_seed_32)` pair from slot entropy.
@@ -715,6 +732,10 @@ fn derive_c10_slot_seeds(slot_entropy: &[u8; 32]) -> ([u8; 32], [u8; 32]) {
     let mut pk_seed = [0u8; 32];
     pk_seed[..16].copy_from_slice(&pk_digest[..16]);
 
+    // `sk_buf` / `pk_buf` both embed the secret `slot_entropy`; scrub the
+    // frame copies (the caller wipes `slot_entropy` itself). (2026-07-01)
+    sk_buf.zeroize();
+    pk_buf.zeroize();
     (sk_seed, pk_seed)
 }
 

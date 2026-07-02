@@ -144,6 +144,29 @@ fn negative_sell_amount_nonvacuous() {
 }
 
 #[test]
+fn positive_cowswap_golden_grid_hash() {
+    // te-2: full-grid golden over the canonical CowSwap SELL render. Binds
+    // every rendered cell (header/kind banner, both legs, the 40-hex token
+    // pages, dividers) so a layout regression the per-substring asserts miss
+    // still trips. Re-bless GOLDEN only for an INTENTIONAL layout change.
+    let token = [0x33u8; 20];
+    let c = sell_canonical(token, 1_500_000_000);
+    let pages = render_cowswap_pages(&c, &leg(b"USDC", 6), &leg(b"WETH", 18));
+    let h = super::golden_grid_hash(&pages);
+
+    // Non-vacuity: flipping the canonical sellAmount MUST move the digest.
+    let c2 = sell_canonical(token, 2_700_000_000);
+    let h2 = super::golden_grid_hash(&render_cowswap_pages(&c2, &leg(b"USDC", 6), &leg(b"WETH", 18)));
+    assert_ne!(h, h2, "golden hash must bind rendered content (sellAmount change did not move it)");
+
+    const GOLDEN: [u8; 32] = [
+        142, 85, 132, 133, 106, 125, 212, 52, 60, 225, 218, 75, 139, 0, 3, 193, 120, 121, 210,
+        134, 178, 254, 10, 88, 186, 141, 14, 183, 134, 47, 238, 228,
+    ];
+    assert_eq!(h, GOLDEN, "CowSwap render golden changed — re-bless if intentional. got={h:?}");
+}
+
+#[test]
 fn negative_fee_high_bytes_never_collapse_to_small_number() {
     // THE documented bug class: a fee whose value lives in the HIGH bytes of
     // the 32-byte word must never render as a small number (the retired

@@ -1183,9 +1183,17 @@ fn positive_crypto_uses_rng_strong_not_plain_rng() {
         CRYPTO_SRC.contains("crate::rng_strong::fill(&mut opt_rand_buf)"),
         "OptRand draw must use rng_strong::fill (3-source XOR)",
     );
+    // sca-3: the FI double-compute draws an INDEPENDENT shuffle seed per
+    // pass (SCA de-alignment + closes the deterministic HW-HASH-fault
+    // seam). Both draws must use rng_strong::fill (3-source XOR), never
+    // the single-TRNG `rng::fill`.
     assert!(
-        CRYPTO_SRC.contains("crate::rng_strong::fill(&mut shuffle_seed_buf)"),
-        "Shuffle seed must use rng_strong::fill (3-source XOR)",
+        CRYPTO_SRC.contains("crate::rng_strong::fill(&mut shuffle_seed_a)"),
+        "Shuffle seed A must use rng_strong::fill (3-source XOR)",
+    );
+    assert!(
+        CRYPTO_SRC.contains("crate::rng_strong::fill(&mut shuffle_seed_b)"),
+        "Shuffle seed B must use rng_strong::fill (3-source XOR)",
     );
 }
 

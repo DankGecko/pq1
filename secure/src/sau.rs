@@ -391,6 +391,95 @@ mod stm32 {
         // on this branch), so its IER mask is 0.
         crate::hw::tzic::configure(seccfgr1, seccfgr2, seccfgr3, 0);
     }
+
+    // ---- tz-2 (Trezor-port) lock registers ----
+    // SYSCFG @ APB3, secure alias: SYSCFG_BASE_S = PERIPH_BASE_S(0x5000_0000)
+    // + APB3 offset(0x0600_0000) + 0x0400 = 0x5600_0400; CSLCKR @ +0x10.
+    // (CMSIS `stm32u585xx.h`: LOCKSVTAIRCR=bit0, LOCKSAU=bit2.)
+    const SYSCFG_CSLCKR_ADDR: u32 = 0x5600_0410;
+    const CSLCKR_LOCKSVTAIRCR: u32 = 1 << 0; // freeze secure VTOR + AIRCR sec-cfg
+    const CSLCKR_LOCKSAU: u32 = 1 << 2; // freeze SAU regions
+
+    // GTZC1 TZSC control register @ TZSC_BASE + 0x00; LCK = bit 0
+    // (CMSIS `GTZC_TZSC_CR_LCK_Msk`).
+    const TZSC_CR_ADDR: u32 = TZSC_BASE; // + 0x00
+    const TZSC_CR_LCK: u32 = 1 << 0;
+
+    // ARMv8-M SCB AIRCR (core register) security attributes (core_cm33.h).
+    const SCB_AIRCR_ADDR: u32 = 0xE000_ED0C;
+    const AIRCR_VECTKEY: u32 = 0x05FA << 16; // required on every write
+    const AIRCR_VECTKEY_MASK: u32 = 0xFFFF << 16;
+    const AIRCR_PRIS: u32 = 1 << 14; // secure IRQs outprioritize NS
+    const AIRCR_BFHFNMINS: u32 = 1 << 13; // 0 = BusFault/HardFault/NMI are SECURE
+    #[cfg(feature = "mode-production")]
+    const AIRCR_SYSRESETREQS: u32 = 1 << 3; // restrict SYSRESETREQ to secure
+
+    /// **tz-2 (Trezor-port `tz_init.c:132-145,410-415`) — freeze the
+    /// TrustZone security configuration once it is fully programmed.**
+    ///
+    /// Called at the very end of [`super::init`], after all four SAU
+    /// regions + GTZC are set. Nothing reconfigures SAU/TZSC after boot,
+    /// so locking removes the residual "a fault flip or a stray
+    /// secure-world write re-classifies secure SRAM as NS / marks SAES NS"
+    /// surface — a layer *below* the signing-path FI defense. Universal
+    /// Trezor STM32U5 practice, reset-scoped, ~cheap.
+    ///
+    /// Also fixes the SCB AIRCR security attributes: `PRIS` (secure
+    /// interrupts outprioritize NS) and `BFHFNMINS=0` (BusFault/HardFault/
+    /// NMI are taken in the SECURE state — this *reinforces* the rr-1
+    /// `HardFault` handler, which must run S-side to reach the
+    /// secret-zeroize path). `SYSRESETREQS` (restrict `SYSRESETREQ` to
+    /// secure) is set ONLY under `mode-production`, so the bench keeps its
+    /// NS-initiated `cc_open_then_reset` USB-C warm reset. `LOCKSVTAIRCR`
+    /// freezes the AIRCR *security-config* bits, not the reset trigger.
+    ///
+    /// GTZC2 (RTC-domain: TAMP / BKP-SRAM) is intentionally NOT locked —
+    /// it is not configured on this branch (the tracked TAMP/GTZC2
+    /// follow-up); locking an unconfigured controller would freeze its NS
+    /// reset default.
+    pub fn lock_security_config() {
+        // SAFETY: core + peripheral security registers, 4-byte aligned,
+        // owned exclusively by the single-threaded boot path.
+        let aircr = unsafe { Reg32::new(SCB_AIRCR_ADDR) };
+        let syscfg_cslckr = unsafe { Reg32::new(SYSCFG_CSLCKR_ADDR) };
+        let tzsc_cr = unsafe { Reg32::new(TZSC_CR_ADDR) };
+
+        // (1) AIRCR — set the security attributes BEFORE they are frozen
+        // by LOCKSVTAIRCR below. VECTKEY must be re-supplied on every
+        // write, and the read returns VECTKEYSTAT in the top half, so this
+        // is an explicit read-clear-set-write (not `set_bits`).
+        let mut v = aircr.read();
+        v &= !AIRCR_VECTKEY_MASK;
+        v |= AIRCR_VECTKEY | AIRCR_PRIS;
+        v &= !AIRCR_BFHFNMINS;
+        #[cfg(feature = "mode-production")]
+        {
+            v |= AIRCR_SYSRESETREQS;
+        }
+        aircr.write(v);
+        cortex_m::asm::dsb();
+
+        // (2) Freeze SAU regions + AIRCR security-config, (3) freeze GTZC1
+        // TZSC per-peripheral attributes. Both lock bits are sticky-set.
+        syscfg_cslckr.set_bits(CSLCKR_LOCKSAU | CSLCKR_LOCKSVTAIRCR);
+        tzsc_cr.set_bits(TZSC_CR_LCK);
+        cortex_m::asm::dsb();
+        cortex_m::asm::isb();
+
+        // Write-readback self-check (the lock bits read back set; AIRCR is
+        // NOT checked here — a read returns VECTKEYSTAT, not VECTKEY).
+        let want = CSLCKR_LOCKSAU | CSLCKR_LOCKSVTAIRCR;
+        debug_assert_eq!(
+            syscfg_cslckr.read() & want,
+            want,
+            "SYSCFG_CSLCKR SAU/AIRCR lock bits not set"
+        );
+        debug_assert_eq!(
+            tzsc_cr.read() & TZSC_CR_LCK,
+            TZSC_CR_LCK,
+            "GTZC1 TZSC CR.LCK not set"
+        );
+    }
 }
 
 pub fn init() {
@@ -435,4 +524,11 @@ pub fn init() {
     SAU.ctrl.write(1);
     cortex_m::asm::dsb();
     cortex_m::asm::isb();
+
+    // tz-2 (Trezor-port): now that SAU + GTZC are fully programmed, freeze
+    // the security configuration (SAU + GTZC1 TZSC + AIRCR sec-attrs) so a
+    // later fault/stray write cannot rewrite it. See `lock_security_config`.
+    // stm32u585 only (QEMU MPC path has no equivalent lock).
+    #[cfg(feature = "stm32u585")]
+    stm32::lock_security_config();
 }

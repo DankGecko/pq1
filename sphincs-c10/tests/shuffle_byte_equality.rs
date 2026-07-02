@@ -88,3 +88,35 @@ fn sign_wrapper_matches_zero_seed_shuffle() {
         "the no-shuffle wrapper must produce identical bytes to ShuffleSeed::zero()"
     );
 }
+
+#[test]
+fn two_distinct_nonzero_shuffles_byte_equal() {
+    // The FI double-compute in secure `crypto::c10_sign_verified*` now feeds
+    // an INDEPENDENT shuffle seed to each of its two passes (SCA de-alignment
+    // + closing the deterministic HW-HASH-fault seam). The constant-time
+    // `ct_eq` gate between the two 4008-byte signatures only holds if TWO
+    // DISTINCT NONZERO seeds yield byte-identical output — the other tests
+    // here only compare each seed against `zero()`, so assert the
+    // nonzero-vs-nonzero case directly (it's the exact equality the signing
+    // path depends on; a regression here would turn every hardware signature
+    // into a false-reject DoS).
+    let sk = SigningKey::keygen(SK_SEED, PK_SEED);
+
+    let mut seed_a = [0u8; 32];
+    seed_a[0] = 0x11;
+    seed_a[13] = 0x77;
+    seed_a[31] = 0xC3;
+    let mut seed_b = [0u8; 32];
+    seed_b[1] = 0x22;
+    seed_b[17] = 0x88;
+    seed_b[30] = 0xD4;
+
+    let sig_a = sk.sign_with_shuffle_silent(&MSG, None, &ShuffleSeed(seed_a));
+    let sig_b = sk.sign_with_shuffle_silent(&MSG, None, &ShuffleSeed(seed_b));
+    assert_eq!(
+        sig_a.as_slice(),
+        sig_b.as_slice(),
+        "two distinct nonzero shuffle seeds must yield byte-identical sigs \
+         (the FI double-compute ct_eq gate depends on this)"
+    );
+}

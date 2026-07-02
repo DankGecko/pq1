@@ -492,6 +492,69 @@ fn positive_sau_init_sequence_is_disable_program_enable_with_barriers() {
 }
 
 #[test]
+fn positive_tz2_locks_security_config_after_enabling_sau() {
+    // tz-2 (Trezor-port): after the four SAU regions + GTZC are programmed
+    // and SAU is enabled, `init()` must freeze the security config so a
+    // later fault/stray write cannot rewrite SAU/TZSC/AIRCR. The lock MUST
+    // come AFTER `SAU.ctrl.write(1)` (locking mid-program would freeze a
+    // half-configured SAU). Pin call-site + ordering + register bytes so a
+    // silent removal or an address typo surfaces here (this config is
+    // silicon-only, so host tests are the first line of defense).
+    let init_start = SAU_SRC.find("pub fn init()").expect("init() must exist");
+    let init = &SAU_SRC[init_start..];
+    let enable = init
+        .find("SAU.ctrl.write(1);")
+        .expect("init() must enable SAU");
+    let lock = init
+        .find("stm32::lock_security_config();")
+        .expect("init() must call stm32::lock_security_config() (tz-2)");
+    assert!(
+        enable < lock,
+        "tz-2: lock_security_config() must run AFTER SAU is enabled+programmed"
+    );
+
+    // Register bytes cross-checked vs CMSIS stm32u585xx.h / core_cm33.h.
+    for needle in [
+        "const SYSCFG_CSLCKR_ADDR: u32 = 0x5600_0410;",
+        "const CSLCKR_LOCKSVTAIRCR: u32 = 1 << 0;",
+        "const CSLCKR_LOCKSAU: u32 = 1 << 2;",
+        "const TZSC_CR_ADDR: u32 = TZSC_BASE;",
+        "const TZSC_CR_LCK: u32 = 1 << 0;",
+        "const SCB_AIRCR_ADDR: u32 = 0xE000_ED0C;",
+        "const AIRCR_PRIS: u32 = 1 << 14;",
+        "const AIRCR_BFHFNMINS: u32 = 1 << 13;",
+        // The two lock writes + the AIRCR fixup must all be present.
+        "syscfg_cslckr.set_bits(CSLCKR_LOCKSAU | CSLCKR_LOCKSVTAIRCR);",
+        "tzsc_cr.set_bits(TZSC_CR_LCK);",
+        "v |= AIRCR_VECTKEY | AIRCR_PRIS;",
+        "v &= !AIRCR_BFHFNMINS;",
+    ] {
+        assert!(
+            SAU_SRC.contains(needle),
+            "tz-2: sau.rs must contain `{needle}`"
+        );
+    }
+
+    // SYSRESETREQS must stay mode-production-gated so the bench keeps its
+    // NS-initiated USB-C warm reset.
+    assert!(
+        SAU_SRC.contains("#[cfg(feature = \"mode-production\")]\n    const AIRCR_SYSRESETREQS: u32 = 1 << 3;"),
+        "tz-2: AIRCR_SYSRESETREQS must be gated behind mode-production"
+    );
+
+    // GTZC2 (RTC-domain: TAMP/BKP) must NOT be locked — it is unconfigured
+    // on this branch (tracked TAMP/GTZC2 follow-up), and locking it would
+    // freeze its NS reset default. There is exactly ONE TZSC CR lock write
+    // (GTZC1); a second would indicate a GTZC2 lock crept in. ("GTZC2"
+    // appears in comments, so count the actual lock write instead.)
+    assert_eq!(
+        SAU_SRC.matches("set_bits(TZSC_CR_LCK)").count(),
+        1,
+        "tz-2: exactly one GTZC1 TZSC CR.LCK write; a second implies GTZC2 got locked"
+    );
+}
+
+#[test]
 fn positive_sau_region_count_is_four() {
     // The boot path programs exactly four regions: NS flash, NSC
     // veneers, NS data SRAM, NS peripherals. A fifth region would
@@ -871,6 +934,37 @@ fn negative_panic_handler_halts_with_wfi_not_bkpt() {
     assert!(
         !body.contains("cortex_m::asm::bkpt"),
         "panic handler must NEVER bkpt() — would HardFault on standalone boots"
+    );
+}
+
+#[test]
+fn negative_hardfault_handler_zeroizes_then_resets_and_never_se_wipes() {
+    // rr-1: a synchronous CPU fault (the canonical fault-injection glitch
+    // symptom) must scrub the SRAM secret caches and then RESET, not sit in
+    // the default infinite loop with master_secret/entropy/slot key live.
+    // Equally load-bearing: it must NOT trigger the destructive dual-SE
+    // intrusion wipe — that would let a single induced fault brick the
+    // wallet (DoS). Pin all three invariants against the source so a future
+    // refactor can't silently weaken the fault backstop.
+    let hf_start = MAIN_SRC
+        .find("unsafe fn HardFault(")
+        .expect("HardFault handler must exist (rr-1)");
+    let body_start = hf_start + MAIN_SRC[hf_start..].find('{').expect("HardFault body must open");
+    let body_end = body_start + MAIN_SRC[body_start..].find("\n}\n").expect("HardFault must close");
+    let body = &MAIN_SRC[body_start..body_end];
+    assert!(
+        body.contains("nsc::zeroize_sensitive_state();"),
+        "HardFault handler must zeroize SRAM secrets before resetting"
+    );
+    assert!(
+        body.contains("SCB::sys_reset()"),
+        "HardFault handler must reset (re-enter the FSBL) after zeroizing"
+    );
+    assert!(
+        !body.contains("trigger_intrusion_wipe"),
+        "HardFault handler must NOT arm the destructive dual-SE wipe — a single \
+         induced fault must not be able to brick the wallet (reserve SE wipe for \
+         a confirmed TAMP/GTZC tamper)"
     );
 }
 

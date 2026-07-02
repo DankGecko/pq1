@@ -305,14 +305,30 @@ fn render_token_amount(
     // symbol to display.
     let token_addr = resolve_token_address(ir, body, tx, params).ok();
 
+    // Native-currency sentinel (`nativeCurrencyAddress`): a resolved token equal
+    // to the descriptor's sentinel (`0xEeee…`/`0x0`) IS the chain native currency,
+    // so render 18 decimals + `native_ticker(chain_id)` ("1.5 ETH") rather than an
+    // ERC-20 lookup. Takes precedence over the `erc20` bundle: the sentinel is not
+    // a real ERC-20 contract, and this is a Merkle-pinned descriptor decision (the
+    // sentinel is baked into the IR), so it needs no companion metadata and emits
+    // no "Token (UNVERIFIED)" page.
+    let is_native = matches!(
+        (token_addr, params.native_currency),
+        (Some(addr), Some(native)) if &addr == native
+    );
+
     // Match against the supplied `erc20` bundle only when the addresses
     // agree. A `None` here means the token could NOT be bound to a
     // Merkle-verified metadata entry — we do not know its decimals.
-    let bound: Option<(u32, &[u8])> = match (token_addr, erc20) {
-        (Some(addr), Some(meta)) if addr == meta.contract => {
-            Some((u32::from(meta.decimals), meta.symbol))
+    let bound: Option<(u32, &[u8])> = if is_native {
+        Some((18, native_ticker(tx.chain_id)))
+    } else {
+        match (token_addr, erc20) {
+            (Some(addr), Some(meta)) if addr == meta.contract => {
+                Some((u32::from(meta.decimals), meta.symbol))
+            }
+            _ => None,
         }
-        _ => None,
     };
 
     let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;

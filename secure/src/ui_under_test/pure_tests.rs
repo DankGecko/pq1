@@ -433,7 +433,9 @@ fn positive_confirm_empty_pages_returns_cancelled() {
     // and bail. Without this, the subsequent `pages[idx]` index
     // would panic.
     assert!(CONFIRM_SRC.contains("if pages.is_empty() {"));
-    assert!(CONFIRM_SRC.contains("return ConfirmResult::Cancelled;"));
+    // Empty-pages bails as a non-affirmative (Cancelled, FAIL_SENTINEL) so the
+    // caller's FI belt also refuses to sign (UI1 / work-todo #12c).
+    assert!(CONFIRM_SRC.contains("return (ConfirmResult::Cancelled, crate::fi::FAIL_SENTINEL);"));
 }
 
 #[test]
@@ -446,11 +448,17 @@ fn positive_confirm_long_button_semantics() {
     assert!(CONFIRM_SRC.contains("let mut seen_last = false;"));
     assert!(CONFIRM_SRC.contains("seen_last = true;"));
     assert!(CONFIRM_SRC.contains("if seen_last {"));
-    assert!(CONFIRM_SRC.contains("return ConfirmResult::Confirmed;"));
+    // FI-hardened accept (UI1 / work-todo #12c): the affirmative branch borns
+    // the sign-gate sentinel HERE, from `seen_last`, alongside the `Confirmed`
+    // verdict — so the enum and the sentinel are two words set at the same
+    // decision point. Dropping this un-hardens the confirm gate.
+    assert!(CONFIRM_SRC.contains("crate::fi::check_true_into_sentinel(|| seen_last)"));
     // A long-right before the end must NOT confirm — it advances instead.
     assert!(!CONFIRM_SRC
         .contains("(Button::Right, Press::Long) => return ConfirmResult::Confirmed,"));
-    assert!(CONFIRM_SRC.contains("(Button::Left, Press::Long) => return ConfirmResult::Cancelled,"));
+    // Cancel returns a non-affirmative sentinel (FAIL_SENTINEL) so the caller's
+    // FI belt refuses to sign even if the reject-arm return is fault-skipped.
+    assert!(CONFIRM_SRC.contains("(ConfirmResult::Cancelled, crate::fi::FAIL_SENTINEL)"));
 }
 
 #[test]
@@ -470,7 +478,8 @@ fn positive_confirm_e2e_test_fastpath_renders_all_pages_first() {
     assert!(CONFIRM_SRC.contains("#[cfg(feature = \"e2e-test\")]"));
     assert!(CONFIRM_SRC.contains("for page in pages.iter() {"));
     assert!(CONFIRM_SRC.contains("render_page(page);"));
-    assert!(CONFIRM_SRC.contains("return ConfirmResult::Confirmed;"));
+    // e2e fast-path returns the affirmative sentinel so hardened callers accept.
+    assert!(CONFIRM_SRC.contains("return (ConfirmResult::Confirmed, crate::fi::OK_SENTINEL);"));
 }
 
 #[test]
@@ -478,7 +487,7 @@ fn positive_confirm_idle_wipe_propagates_to_caller() {
     // When `input().wait_button` returns None (idle timeout fired),
     // the dialog must propagate the wipe — not silently retry, not
     // confirm.
-    assert!(CONFIRM_SRC.contains("None => return ConfirmResult::IdleWipe,"));
+    assert!(CONFIRM_SRC.contains("None => return (ConfirmResult::IdleWipe, crate::fi::FAIL_SENTINEL),"));
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -542,12 +551,15 @@ fn negative_confirm_must_not_reset_activity_on_entry() {
     // and the start of the `loop {`. There must be NO call to
     // `timeout::reset_activity()` in that prologue.
     let body = &CONFIRM_SRC;
+    // The input loop lives in `confirm_checked` (the FI-hardened impl that
+    // `confirm` delegates to, UI1 / work-todo #12c); the HIGH-13 prologue
+    // invariant applies to that loop's prologue.
     let prologue_start = body
-        .find("pub fn confirm(pages: &[Page]) -> ConfirmResult {")
-        .expect("confirm fn must exist");
+        .find("pub fn confirm_checked(pages: &[Page]) -> (ConfirmResult, u32) {")
+        .expect("confirm_checked fn must exist");
     let loop_start = body[prologue_start..]
         .find("loop {")
-        .expect("confirm must contain a main loop")
+        .expect("confirm_checked must contain a main loop")
         + prologue_start;
     let prologue = &body[prologue_start..loop_start];
     assert!(

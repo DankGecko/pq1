@@ -441,8 +441,11 @@ fn positive_confirm_install_calls_trusted_ui_outside_e2e_test() {
         "build_version_page(",
         "build_fingerprint_page(",
         "build_confirm_prompt_page(",
-        "ui::confirm::{confirm, ConfirmResult, Page}",
-        "matches!(confirm(&pages), ConfirmResult::Confirmed)",
+        "ui::confirm::{confirm_checked, ConfirmResult, Page}",
+        // FI-hardened accept (UI1 / work-todo #12c): require BOTH the Confirmed
+        // verdict AND the affirmative sentinel — dropping the sentinel conjunct
+        // would silently un-harden the FW-update confirm.
+        "matches!(cr, ConfirmResult::Confirmed) && cr_verdict == crate::fi::OK_SENTINEL",
     ] {
         assert!(
             non_e2e_block.contains(landmark),

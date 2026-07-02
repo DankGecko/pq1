@@ -135,42 +135,65 @@ pub fn c10_sign_verified_with_progress(
     let opt_rand: Option<&[u8; sphincs_c10::params::N]> = Some(&opt_rand_buf);
     cfi.bump(CFI_STEP_OPT_RAND);
 
-    // **F-16 (DPA-defence) shuffle seed.** Drawn once per signing
-    // call via `rng_strong::fill` (STM32 ⊕ OPTIGA ⊕ SE050 XOR-fold)
-    // and fed UNCHANGED to both double-compute signs — re-drawing
-    // per sign would still be cryptographically sound but would
-    // produce different shuffle orders → divergent internal hash
-    // streams → divergent register-level state during the
-    // double-compute (sig outputs would still be byte-equal per
-    // F-16's byte-equality oracle, but the F-13 ct_eq still holds).
+    // **F-16 (DPA-defence) shuffle seeds — one INDEPENDENT seed per
+    // double-compute pass.** Each of the two mandatory signs draws its
+    // own fresh seed from `rng_strong::fill` (STM32 ⊕ OPTIGA ⊕ SE050
+    // XOR-fold). The shuffle randomises only the COMPUTATION ORDER of
+    // WOTS chains (43! ≈ 10^52 per layer) and FORS trees (13! ≈ 6×10^9);
+    // the produced signature bytes are byte-identical for ANY seed
+    // (proven invariant `sphincs-c10/src/shuffle.rs`, regression-tested
+    // for two distinct nonzero seeds in `tests/shuffle_byte_equality.rs`
+    // `two_distinct_nonzero_shuffles_byte_equal`). So the two 4008-byte
+    // signatures stay byte-identical (F-13 ct_eq) and verify-before-
+    // release still holds unchanged — this stays fully inside the
+    // double-compute → compare → verify countermeasure and does NOT
+    // weaken it.
     //
-    // The shuffle seed randomises the COMPUTATION order of WOTS
-    // chains (43! ≈ 10^52 per layer) and FORS trees (13! ≈ 6×10^9).
-    // Profiled-DPA averaging relies on the same secret hash landing
-    // at the same sample index across traces; the shuffle moves
-    // chain-i's hashes to a random sample per signature, breaking
-    // alignment. See `sphincs-c10/src/shuffle.rs` for the
-    // correctness invariant (byte-identical output across any
-    // shuffle seed).
-    let mut shuffle_seed_buf = [0u8; 32];
+    // Why INDEPENDENT seeds, not one shared seed fed to both passes:
+    //   - SCA: a shared seed makes both passes traverse WOTS/FORS in the
+    //     SAME order → two perfectly time-aligned traces of the same
+    //     secret computation per signature (a free ~√2 profiled-DPA
+    //     denoise) on the exact alignment this shuffle exists to deny.
+    //     Independent seeds keep the two passes mutually mis-aligned.
+    //   - FI: under `hw-sha256` the HW SHA-256 engine is a single point
+    //     trusted by BOTH signs and the verify. A *deterministic*,
+    //     position-triggered HASH fault would otherwise corrupt sign_a
+    //     and sign_b at the SAME computation step → identical faulted
+    //     output → slip the ct_eq gate (the Genêt TCHES-2023 grafting
+    //     class the double-compute exists to block). Independent order
+    //     lands the same fault on DIFFERENT WOTS/FORS positions per pass
+    //     → divergent sigs → caught by ct_eq.
+    // Failure-mode note: were byte-invariance ever to fail for some
+    // (sk, msg, opt_rand), the effect is a false-reject signing DoS
+    // (fail-closed), never a forged or leaked signature. (Contrast
+    // `opt_rand` above, which IS part of the signature value and is
+    // therefore DELIBERATELY shared across both passes.)
+    let mut shuffle_seed_a = [0u8; 32];
+    let mut shuffle_seed_b = [0u8; 32];
     #[cfg(not(test))]
-    if crate::rng_strong::fill(&mut shuffle_seed_buf).is_err() {
+    if crate::rng_strong::fill(&mut shuffle_seed_a).is_err()
+        || crate::rng_strong::fill(&mut shuffle_seed_b).is_err()
+    {
+        shuffle_seed_a.zeroize();
+        shuffle_seed_b.zeroize();
         opt_rand_buf.zeroize();
         crate::fi::zeroize_barrier();
         return Err(());
     }
-    let shuffle = sphincs_c10::shuffle::ShuffleSeed(shuffle_seed_buf);
-    // `[u8; 32]` is `Copy`, so the constructor above copied — wipe
-    // the stack local now that the secret lives inside the
-    // `ZeroizeOnDrop` wrapper.
-    shuffle_seed_buf.zeroize();
+    let shuffle_a = sphincs_c10::shuffle::ShuffleSeed(shuffle_seed_a);
+    let shuffle_b = sphincs_c10::shuffle::ShuffleSeed(shuffle_seed_b);
+    // `[u8; 32]` is `Copy`, so the constructors above copied — wipe the
+    // stack locals now that each secret lives inside its `ZeroizeOnDrop`
+    // wrapper.
+    shuffle_seed_a.zeroize();
+    shuffle_seed_b.zeroize();
     crate::fi::zeroize_barrier();
     cfi.bump(CFI_STEP_SHUFFLE);
 
-    let sig_a = sk.sign_with_shuffle(msg_hash, opt_rand, &shuffle, progress);
+    let sig_a = sk.sign_with_shuffle(msg_hash, opt_rand, &shuffle_a, progress);
     cfi.bump(CFI_STEP_SIGN_A);
     crate::fi::wait_random();
-    let sig_b = sk.sign_with_shuffle(msg_hash, opt_rand, &shuffle, |_| {});
+    let sig_b = sk.sign_with_shuffle(msg_hash, opt_rand, &shuffle_b, |_| {});
     cfi.bump(CFI_STEP_SIGN_B);
 
     // Constant-time comparison of the 4008-byte signatures.

@@ -538,6 +538,42 @@ fn positive_usdt_approve_unlimited_unbound_renders_unlimited_not_overflow() {
     );
 }
 
+#[test]
+fn positive_erc7730_golden_grid_hash() {
+    // te-2: full-grid golden over a canonical ERC-7730 render (the REAL USDT
+    // approve descriptor). ERC-7730 is the highest-churn WYSIWYS surface (it
+    // now also carries Aave clear-signing) and the per-field asserts elsewhere
+    // check only the amount/label cells; this binds the WHOLE rendered grid so
+    // an intent-banner / divider / row-shift regression trips even if the
+    // checked substrings survive. Re-bless GOLDEN only for an INTENTIONAL
+    // layout change. (Firmware `ui/golden.rs` cannot cover this screen — its
+    // input needs the host-only dbgen registry, built here.)
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-usdt.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
+    let tx = envelope(1, entry.contract);
+    let resolver = NameResolver::new();
+
+    let calldata = calldata_approve([0x44u8; 20], u256_max());
+    let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver).expect("render");
+    let h = super::golden_grid_hash(&pages);
+
+    // Non-vacuity: a different spender address MUST move the digest (the
+    // spender renders on-page), proving the hash binds rendered content.
+    let calldata2 = calldata_approve([0x77u8; 20], u256_max());
+    let h2 = super::golden_grid_hash(
+        &render_erc7730_pages(&tx, &calldata2, &verified, None, &resolver).expect("render"),
+    );
+    assert_ne!(h, h2, "golden hash must bind rendered content (spender change did not move it)");
+
+    const GOLDEN: [u8; 32] = [
+        77, 248, 30, 45, 138, 234, 105, 255, 20, 91, 87, 227, 23, 72, 186, 236, 153, 199, 132,
+        131, 180, 224, 139, 84, 166, 179, 89, 244, 146, 181, 170, 176,
+    ];
+    assert_eq!(h, GOLDEN, "ERC-7730 render golden changed — re-bless if intentional. got={h:?}");
+}
+
 /// Multi-chain chain-pinning: USDT's registry descriptor carries Mainnet (1)
 /// AND Polygon (137) deployments under the SAME JSON. Picking the chain-137
 /// leaf (contract 0xc2132D…8e8F, the bridged Polygon USDT) proves the

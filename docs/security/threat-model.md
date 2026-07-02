@@ -166,6 +166,8 @@ Until the ML-KEM-1024 inner wrap lands, the residual is "a CRQC adversary who ca
 
 Mechanism: `fsbl/` immutable bootloader, `fw-manifest/` verify chain, OPTIGA monotonic counter (E1E0) cross-checked at COMMIT. FSBL pages are WRP1A-locked. Falsifiable by attempting a flashing of an unsigned or downgraded blob.
 
+> **CORRECTION (2026-07-02, verified against source).** The "OPTIGA monotonic counter (E1E0) cross-checked at COMMIT" mechanism above is **not implemented**: `secure/src/nsc/cmd_fw_commit.rs` performs **no** OPTIGA counter read — anti-rollback rests **entirely on the STM32 OTP rollback floor** (`hw/otp.rs`; `verify_rollback` requires `fw_version > floor` strict, enforced at BEGIN and at FSBL boot; the OTP `bump_to(new_version-1)` is the last irreversible write). This is a sound single-layer anti-rollback — the drift is that the doc advertised a second (OPTIGA) layer that does not exist. Either read this claim as "STM32-OTP-only anti-rollback," or implement the OPTIGA-counter layer if defense-in-depth is wanted (tracked: work-todo #12c, adversarial-review FW10). E1E0/F1E1 counters are currently used only for PIN/duress attempts, not FW versioning.
+
 **Claim 9 — Trusted UI faithfully renders signed semantics.**
 > Whatever the NV3007 LCD shows in a confirm screen is exactly what the signed `userOpHash` preimage commits to; the user pressing both buttons binds their consent to the displayed bytes.
 
@@ -408,6 +410,26 @@ firmware gap ≤ `MAX_OFFCHAIN_GAP` and backstopped by the on-chain
 COUNT/USEROP roll-back, and full crash-atomicity via a two-page ping-pong /
 commit marker, are tracked as a hardening follow-up. The **on-chain** caps
 (invariant #7) are unaffected — they live in contract storage, not flash.
+
+**SOL6 design note — cross-slot `removeOwnerAtIndex` authorization (owner
+management).** In `PQSmartWallet._validateSignature`, the H-3 ownerIndex-parity
+check (calldata's first arg must equal the signed wrapper `ownerIndex`) is
+**deliberately skipped for the `removeOwnerAtIndex` selector** — its first arg is
+a *removal* index, not the signer's index. The consequence is that any active
+slot key at index *i* ≥ 1 can sign `removeOwnerAtIndex(j, ownerBytes_j)` for any
+*other* non-bootstrap slot *j* ≥ 1 (`ownerAtIndex(j)` is a public getter, so the
+`ownerBytes_j` argument is not secret). This is an **intra-wallet availability**
+property, **not fund theft**: a removed slot cannot move funds, the bootstrap
+owner (index 0) is `removeOwnerAtIndex`-unremovable (`_removeOwnerAtIndex`
+rejects index 0), and the bootstrap key can re-add any pruned slot, so recovery
+holds. It is surfaced here for completeness — the code comment in
+`_validateSignature` indicates it is intended, and the behavior is **pinned by
+`test_sol6_crossSlotRemoveIsAcceptedByDesign`** so a future decision to bind
+*i == j* for the remove selector is a deliberate change, not a silent
+regression. Whether "any slot may prune any other slot" should be tightened to
+"a slot may only remove itself" (binding *i == j*) is an **open design decision**
+for the owner-management model; it does not affect `theft_free`
+(no fund movement) and would require re-freezing the wallet codehash.
 
 The hardening regressions that knowingly violate one or more of these are listed in §9.
 

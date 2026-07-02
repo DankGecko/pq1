@@ -103,7 +103,7 @@ const SNAP_LEN: usize = SIGN_USEROP_HEADER_LEN
 /// `SNAP_BUF`) is touched under the single-threaded dispatcher
 /// invariant + `HandlerGuard` (HIGH-7).
 pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
-    use crate::ui::confirm::{confirm, ConfirmResult};
+    use crate::ui::confirm::{confirm_checked, ConfirmResult};
 
     // HIGH-7 fix: mark the handler as busy so SysTick's background
     // idle-wipe path cannot zero out `master_secret` while we still
@@ -1118,7 +1118,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // cost visible to the user.
     if register_slot {
         let rotate_pages = crate::tx::display::build_slot_rotation_pages(slot_index);
-        match confirm(rotate_pages.as_slice()) {
+        let (cr, cr_verdict) = confirm_checked(rotate_pages.as_slice());
+        match cr {
             ConfirmResult::Confirmed => {}
             ConfirmResult::Cancelled => {
                 ui::show_status("Cancelled", "");
@@ -1128,6 +1129,13 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                 super::zeroize_sensitive_state();
                 return NscStatus::IdleWipe as u32;
             }
+        }
+        // FI belt (UI1 / work-todo #12c): reach signing ONLY on the affirmative
+        // sentinel born at confirm's accept branch. A skipped reject-arm return
+        // is caught here; fail closed (zeroize + reject).
+        if cr_verdict != crate::fi::OK_SENTINEL {
+            super::zeroize_sensitive_state();
+            return NscStatus::UserRejected as u32;
         }
     }
     let mut pages = match pick_sign_pages(
@@ -1184,7 +1192,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         ui::show_status("Sign refused", "fp unshown");
         return NscStatus::InternalError as u32;
     }
-    match confirm(pages.as_slice()) {
+    let (cr, cr_verdict) = confirm_checked(pages.as_slice());
+    match cr {
         ConfirmResult::Confirmed => {}
         ConfirmResult::Cancelled => {
             ui::show_status("Cancelled", "");
@@ -1194,6 +1203,13 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             super::zeroize_sensitive_state();
             return NscStatus::IdleWipe as u32;
         }
+    }
+    // FI belt (UI1 / work-todo #12c): reach signing ONLY on the affirmative
+    // sentinel born at confirm's accept branch. A skipped reject-arm return is
+    // caught here; fail closed (zeroize + reject).
+    if cr_verdict != crate::fi::OK_SENTINEL {
+        super::zeroize_sensitive_state();
+        return NscStatus::UserRejected as u32;
     }
 
     // ── 9. Reconstruct entropy + derive slot master ────────────────

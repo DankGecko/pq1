@@ -95,6 +95,35 @@ impl Pages {
     }
 }
 
+/// **te-2 (Trezor-port) — canonical golden hash over a rendered `Pages`
+/// grid.**
+///
+/// Hashes the page count then every *used* page's full row×col ASCII grid,
+/// so ANY change to layout, spacing, truncation, divider placement, row
+/// position, or page count changes the digest. This is the pixel-golden
+/// gate's host-runnable complement for the security-critical decode-and-
+/// render screens (Safe / CoW / ERC-7730): the per-substring faithfulness
+/// assertions in these modules check that *specific* fields render, but a
+/// full-grid golden also catches WYSIWYS regressions *elsewhere* on the
+/// page (a shifted label, a dropped divider, a truncation the substring
+/// check doesn't look at). The firmware `ui/golden.rs` gate covers the
+/// LCD pixel-font layer for `value_transfer`; the Safe/CoW/ERC-7730 inputs
+/// need host-only dbgen fixtures, so their golden gate lives here.
+///
+/// Intentional layout changes require re-blessing the `GOLDEN_*` constant
+/// in the calling test — that explicit step is the point of a golden gate.
+pub fn golden_grid_hash(pages: &Pages) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update((pages.len as u32).to_be_bytes());
+    for page in pages.as_slice() {
+        for row in page {
+            h.update(&row[..]);
+        }
+    }
+    h.finalize().into()
+}
+
 #[path = "../tx/display/primitives.rs"]
 pub mod primitives;
 

@@ -171,6 +171,38 @@ fn debug_log_safe(f: impl FnOnce()) {
     }
 }
 
+/// **H-1 (Trezor-port) — a wedged HASH engine must fail LOUD, not
+/// silently return a stale digest.**
+///
+/// The STM32U5 HASH peripheral exposes NO hardware fault flag (`HASH_SR`
+/// carries only DINIS/DCIS/BUSY), so a stuck engine can only be observed
+/// as a completion-wait that never finishes. The old timeout paths just
+/// `return`ed — leaving the caller's `out` buffer untouched (stale prior
+/// digest / stack garbage). `sphincs-c10` would then consume that
+/// non-digest, and because the same HW engine feeds sign_a, sign_b, AND
+/// the verify-before-release, all three could ingest the same bad value,
+/// silently defeating the FI double-compute.
+///
+/// We route the fault to the SAME posture as the `HardFault` handler
+/// (`main.rs`, rr-1): wipe every in-SRAM secret cache, barrier, then
+/// `sys_reset()`. A hash that timed out mid-signature has no safe
+/// continuation, and parking with `wfe` (as the boot KAT does, where no
+/// secret exists yet) would strand `master_secret` + the cached slot key
+/// live in SRAM through the idle window — exactly the exposure rr-1
+/// closes. A reset re-zeroes `.bss` and the WRP1A-locked FSBL re-verifies
+/// the active slot before any secret is reconstructed from the PIN.
+///
+/// (If the engine is wedged at *boot* — inside the self-test's `init` →
+/// `wait_ready` — this reset-loops instead of halting; a HASH engine that
+/// cannot leave BUSY at cold boot is a dead device either way, and a
+/// reset retry is the right response to a possibly-transient stall.)
+#[inline(never)]
+fn hash_engine_fault() -> ! {
+    crate::nsc::zeroize_sensitive_state();
+    crate::fi::zeroize_barrier();
+    cortex_m::peripheral::SCB::sys_reset()
+}
+
 #[inline]
 fn wait_ready() {
     let mut t = 0u32;
@@ -183,7 +215,9 @@ fn wait_ready() {
                     "[S] hash: wait_ready TIMEOUT, SR={:#x}", sr
                 );
             });
-            return;
+            // H-1: the engine is wedged BUSY — do NOT continue (the next
+            // hash would start on a stuck peripheral). Zeroize + reset.
+            hash_engine_fault();
         }
     }
 }
@@ -328,7 +362,11 @@ pub unsafe extern "C" fn pqsigner_sha256_final(out: *mut u8) {
                     sr, cr, str_v, remaining_bits
                 );
             });
-            return;
+            // H-1: the digest never completed. The OLD behaviour returned
+            // here with `out` UNWRITTEN — a stale/garbage 32 bytes that
+            // sphincs-c10 would consume as a digest (both FI passes + the
+            // verify could ingest the same bad value). Fail loud instead.
+            hash_engine_fault();
         }
     }
 

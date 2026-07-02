@@ -775,7 +775,7 @@ fn negative_offchain_sync_confirms_new_slot_before_durable_write() {
         "SYNC must render the trusted-display consent page for a new slot",
     );
     assert!(
-        CMD_OFFCHAIN_SYNC_SRC.contains("confirm(pages.as_slice())"),
+        CMD_OFFCHAIN_SYNC_SRC.contains("confirm_checked(pages.as_slice())"),
         "SYNC must call confirm() for a new slot",
     );
     // Fail-closed: only Confirmed proceeds; Cancelled/IdleWipe refuse the write.
@@ -793,7 +793,7 @@ fn negative_offchain_sync_confirms_new_slot_before_durable_write() {
     // wrapped (`` `last_userop_count_set` ``), never followed by `(`, so the
     // paren-anchored search matches only the durable write.
     let gate = CMD_OFFCHAIN_SYNC_SRC
-        .find("confirm(pages.as_slice())")
+        .find("confirm_checked(pages.as_slice())")
         .expect("confirm gate present");
     let write = CMD_OFFCHAIN_SYNC_SRC
         .find("last_userop_count_set(")
@@ -852,7 +852,7 @@ fn negative_offchain_sync_confirms_value_inflation_on_registered_slot() {
         .find("raises_floor")
         .expect("raise-detection present");
     let gate = CMD_OFFCHAIN_SYNC_SRC
-        .find("confirm(pages.as_slice())")
+        .find("confirm_checked(pages.as_slice())")
         .expect("confirm gate present");
     assert!(
         raise < gate,

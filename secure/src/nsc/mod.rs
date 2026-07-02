@@ -250,6 +250,22 @@ compile_error!(
      circuits boot into a firmware anti-rollback test — never a shipping image."
 );
 
+// Dedicated guard: `mode-production` + `ui-noop` (trusted-UI finding UI2,
+// work-todo #12c). `ui-noop` is the silent headless Display/Input backend used
+// only by dev/test targets (all of which also carry `e2e-test`/`mock-se`).
+// Under the scroll-to-end `confirm()`, its `wait_button` returns `(Right,Short)`
+// forever, so a headless build cannot obtain a genuine physical confirm — every
+// sign would hang, or, if the hang were "fixed" by returning `(Right,Long)`,
+// AUTO-CONFIRM every signature with zero physical consent (a total trusted-path
+// bypass). A shipping image MUST drive a real display backend (`ui-lcd`).
+#[cfg(all(feature = "mode-production", feature = "ui-noop"))]
+compile_error!(
+    "mode-production and ui-noop are mutually exclusive. ui-noop is the silent \
+     headless UI backend (dev/test only): it cannot obtain a genuine physical \
+     confirm — every sign would hang, or auto-confirm with zero user consent if \
+     the hang were 'fixed'. Ship with a real display backend (`ui-lcd`)."
+);
+
 // Dedicated guard: `fwup-transport-e2e` is the over-USB FW-update transport
 // e2e test. It short-circuits CMD_FW_COMMIT to stop *before* the OTP
 // rollback-floor bump + boot-state write + sys_reset, so the chip stays
@@ -1375,6 +1391,17 @@ pub extern "cmse-nonsecure-entry" fn nsc_lock() -> u32 {
 #[no_mangle]
 pub extern "cmse-nonsecure-entry" fn nsc_register_heartbeat(addr: u32) -> u32 {
     secure_log!("[NSC] register_heartbeat(0x{:08x})", addr);
+    // TZ4 / work-todo #12b: validate the NS-supplied 4-byte heartbeat address
+    // through the SAME FI-doubled NS-pointer typestate every other veneer uses
+    // (`validate_read` runs `validate_ns_read_ptr` twice through
+    // `check_true_into_sentinel`). This adds the shared-mailbox-disjoint check
+    // and the hardware `TT`/SAU reclassification that iwdg's inline window check
+    // lacked, and requires two coordinated faults to bypass. `iwdg`'s own
+    // alignment+window check stays as defense-in-depth (and covers the 4-byte
+    // alignment the `read_volatile(_ as *const u32)` in SysTick relies on).
+    if ns_ptr::NsPtr::<u8>::new(addr).validate_read(4).is_err() {
+        return 1;
+    }
     if crate::hw::iwdg::register_ns_heartbeat(addr) {
         0
     } else {

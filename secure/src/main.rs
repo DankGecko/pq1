@@ -3896,6 +3896,42 @@ fn PendSV() {
     }
 }
 
+/// **rr-1 (Trezor-port) — route synchronous CPU faults to zeroize + reset.**
+///
+/// Without this, a glitch-induced (or bug-induced) `HardFault` lands in
+/// cortex-m-rt's default handler — an infinite loop with `master_secret`,
+/// the reconstructed entropy, and the cached slot `SigningKey` all still
+/// live in secure SRAM. A CPU fault is the canonical *symptom* of a fault-
+/// injection glitch (the same class of attack the FI-hardened signing path
+/// defends against), so it must not leave secrets recoverable in the idle
+/// window. We wipe the SRAM secret caches, then `sys_reset()`: startup
+/// re-zeroes `.bss` and the WRP1A-locked FSBL re-verifies the active slot
+/// before any secret is reconstructed from the PIN, closing the window.
+///
+/// We deliberately do **NOT** arm `hw::tzic::trigger_intrusion_wipe` here:
+/// that destroys the dual-SE key shares, so routing *every* induced fault to
+/// it would turn a single glitch into an unrecoverable wallet-brick (DoS).
+/// PQSigner keeps no seed in flash (dual-SE XOR, re-derived after PIN), so a
+/// plain reset already closes the extraction window; the destructive SE wipe
+/// stays reserved for a *confirmed* TAMP/GTZC tamper event. Mirrors Trezor's
+/// `systask_exit_fault -> reboot_with_rsod` and this repo's brownout Stage-2.
+///
+/// The escalated `{Mem,Bus,Usage,Secure}Fault` handlers all funnel into
+/// `HardFault` on a Cortex-M33 by default, so this one handler is the
+/// security-critical backstop; per-fault handlers are diagnostics-only.
+#[cfg(all(not(test), feature = "stm32u585"))]
+#[cortex_m_rt::exception]
+unsafe fn HardFault(_ef: &cortex_m_rt::ExceptionFrame) -> ! {
+    // FI-hardened wipe of every in-SRAM secret cache (master_secret,
+    // slot_master_entropy, cached slot SigningKey, FwUpdateCtx), each store
+    // fenced inside `zeroize_sensitive_state`; the trailing barrier keeps the
+    // wipe from being reordered past the reset.
+    nsc::zeroize_sensitive_state();
+    crate::fi::zeroize_barrier();
+    // Full system reset (AIRCR.SYSRESETREQ) — diverges. NOT the SE wipe.
+    cortex_m::peripheral::SCB::sys_reset()
+}
+
 /// Custom panic handler: zeroizes all sensitive state before halting.
 /// This ensures secrets don't persist in RAM after a crash.
 #[cfg(not(test))]

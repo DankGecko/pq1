@@ -533,7 +533,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         );
 
         // Render via the ERC-7730 descriptor + append fingerprint.
-        use crate::ui::confirm::{confirm, ConfirmResult};
+        use crate::ui::confirm::{confirm_checked, ConfirmResult};
         let resolver = crate::names::NameResolver::new();
         let render_result = if is_v3 {
             crate::tx::display::erc7730::render_erc7730_eip712_pages_v3(
@@ -584,7 +584,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             crate::ui::show_status("Sign refused", "fp unshown");
             return NscStatus::InternalError as u32;
         }
-        match confirm(pages.as_slice()) {
+        let (cr, cr_verdict) = confirm_checked(pages.as_slice());
+        match cr {
             ConfirmResult::Confirmed => {}
             ConfirmResult::Cancelled => {
                 crate::ui::show_status("Cancelled", "");
@@ -594,6 +595,11 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                 super::zeroize_sensitive_state();
                 return NscStatus::IdleWipe as u32;
             }
+        }
+        // FI belt (UI1 / work-todo #12c): affirmative-sentinel gate; fail closed.
+        if cr_verdict != crate::fi::OK_SENTINEL {
+            super::zeroize_sensitive_state();
+            return NscStatus::UserRejected as u32;
         }
         already_confirmed = true;
     }
@@ -674,7 +680,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // we render the existing personal-sign / raw32 pages and append
     // the ERC-8213 fingerprint here.
     if !already_confirmed {
-        use crate::ui::confirm::{confirm, ConfirmResult};
+        use crate::ui::confirm::{confirm_checked, ConfirmResult};
         // For raw32 the user-meaningful value is the dapp's raw hash H
         // (= payload), NOT the firmware-internal replay-safe nesting now
         // held in `hash_to_sign`. Show + fingerprint H so the user can
@@ -726,7 +732,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             crate::ui::show_status("Sign refused", "fp unshown");
             return NscStatus::InternalError as u32;
         }
-        match confirm(pages.as_slice()) {
+        let (cr, cr_verdict) = confirm_checked(pages.as_slice());
+        match cr {
             ConfirmResult::Confirmed => {}
             ConfirmResult::Cancelled => {
                 crate::ui::show_status("Cancelled", "");
@@ -736,6 +743,11 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                 super::zeroize_sensitive_state();
                 return NscStatus::IdleWipe as u32;
             }
+        }
+        // FI belt (UI1 / work-todo #12c): affirmative-sentinel gate; fail closed.
+        if cr_verdict != crate::fi::OK_SENTINEL {
+            super::zeroize_sensitive_state();
+            return NscStatus::UserRejected as u32;
         }
     }
 

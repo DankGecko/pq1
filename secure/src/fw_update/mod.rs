@@ -90,7 +90,7 @@ pub fn confirm_install(manifest: &ManifestRef) -> bool {
     }
     #[cfg(not(feature = "e2e-test"))]
     {
-        use crate::ui::confirm::{confirm, ConfirmResult, Page};
+        use crate::ui::confirm::{confirm_checked, ConfirmResult, Page};
         use sphincs_tz_bip39::hash_to_word_indices;
 
         let new_version = manifest.fw_version();
@@ -116,7 +116,12 @@ pub fn confirm_install(manifest: &ManifestRef) -> bool {
             build_confirm_prompt_page(),
         ];
 
-        matches!(confirm(&pages), ConfirmResult::Confirmed)
+        let (cr, cr_verdict) = confirm_checked(&pages);
+        // FI belt (UI1 / work-todo #12c): require BOTH the Confirmed verdict AND
+        // the affirmative sentinel born at confirm's accept branch — a skipped or
+        // forged accept fails closed to `false`, so COMMIT aborts and the image
+        // is not installed.
+        matches!(cr, ConfirmResult::Confirmed) && cr_verdict == crate::fi::OK_SENTINEL
     }
 }
 

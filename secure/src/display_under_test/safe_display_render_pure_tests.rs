@@ -134,6 +134,36 @@ fn positive_safe_erc20_inner_binds_amount_recipient_and_safe_address() {
 }
 
 #[test]
+fn positive_safe_golden_grid_hash() {
+    // te-2: full-grid golden over the canonical Safe-wrapped ERC-20 render.
+    // The per-substring asserts above check that specific fields render; this
+    // binds EVERY rendered cell, so a layout / divider / truncation / page-
+    // count regression anywhere on the page trips here even if the checked
+    // substrings survive. Re-bless GOLDEN only for an INTENTIONAL layout change.
+    let recipient: [u8; 20] = core::array::from_fn(|i| 0xabu8.wrapping_add(i as u8));
+    let (bundle, cd) = build_trailer(recipient, 250_000_000);
+    let v = verify_and_bind_trailer(&bundle, &cd, CHAIN_ID, &SAFE_ADDR).expect("bind");
+    let meta = usdc_meta();
+    let resolver = NameResolver::new();
+    let pages = render_safe_v1_pages(&v, None, Some(&meta), &resolver).expect("render");
+    let h = super::golden_grid_hash(&pages);
+
+    // Non-vacuity: a different inner amount MUST change the digest, proving
+    // the hash actually binds rendered content (not a constant).
+    let (b2, cd2) = build_trailer(recipient, 999_000_000);
+    let v2 = verify_and_bind_trailer(&b2, &cd2, CHAIN_ID, &SAFE_ADDR).expect("bind");
+    let h2 =
+        super::golden_grid_hash(&render_safe_v1_pages(&v2, None, Some(&meta), &resolver).expect("render"));
+    assert_ne!(h, h2, "golden hash must bind rendered content (amount change did not move it)");
+
+    const GOLDEN: [u8; 32] = [
+        164, 215, 245, 20, 203, 214, 152, 231, 107, 230, 63, 80, 106, 79, 146, 71, 56, 161, 72,
+        99, 45, 196, 201, 250, 246, 124, 168, 70, 35, 203, 23, 76,
+    ];
+    assert_eq!(h, GOLDEN, "Safe render golden changed — re-bless if intentional. got={h:?}");
+}
+
+#[test]
 fn negative_safe_erc20_amount_nonvacuous() {
     // Flip the inner amount: the rendered digits must track the bound raw_data,
     // not be a constant. 250 vs 777 USDC; neither appears in the fixed addresses.

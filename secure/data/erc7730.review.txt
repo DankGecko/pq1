@@ -10,7 +10,7 @@
 # against the source JSON and the upstream attestation chain.
 # The trailing `## skips` section lists every descriptor the
 # tolerant build dropped (compile failure or dedup), by reason.
-# Root: 0xe7797a453cb1ee729be6ad86bc16604aa83affd6e2e57074fa1726b852ecad96
+# Root: 0x5dc17b91d6d24b11d07296f375ed0a75293e2cdc2e20ae595c0b92a10e90492d
 # Policy: min_attesters=2 allow_unattested_dev_descriptors=true
 # Trusted attesters (3):
 #   - eip155:1:0x0000000000000000000000000000000000000001
@@ -3040,7 +3040,7 @@
          · [0xe4832905] op=raw          label='Delegatee'
          · [0xe4832905] op=raw          label='Nonce'
          · [0xe4832905] op=raw          label='Expiry'
-[0261] ctx=contract chain_id=1 contract=0xdef171fe48cf0115b1d80b88dc8eab59176fee57 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0xe0efa652bf41370b4c55d5384c687c9c6e34c68b103c0ef05ba2eca3059034a1 erc8176_hash=0x7f52775921826414acfeeab334e5bc8022dc228406a912493ed62e3d62d76e37 ir_len=280 fields=4 degraded=0 source=calldata-AugustusSwapper-v5.json
+[0261] ctx=contract chain_id=1 contract=0xdef171fe48cf0115b1d80b88dc8eab59176fee57 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0xe0efa652bf41370b4c55d5384c687c9c6e34c68b103c0ef05ba2eca3059034a1 erc8176_hash=0x7f52775921826414acfeeab334e5bc8022dc228406a912493ed62e3d62d76e37 ir_len=324 fields=4 degraded=0 source=calldata-AugustusSwapper-v5.json
          · [0x935fb84b] op=tokenAmount  label='Maximum to Send'
          · [0x935fb84b] op=tokenAmount  label='Amount to Receive'
          · [0x54840d1a] op=tokenAmount  label='Amount to Send'
@@ -4270,7 +4270,7 @@
          · [0xea0e2920] op=raw          label='Totp'
          · [0xdddd43cd] op=raw          label='Proposer address'
          · [0xdddd43cd] op=raw          label='Totp'
-[0388] ctx=contract chain_id=56 contract=0xdef171fe48cf0115b1d80b88dc8eab59176fee57 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0xe0efa652bf41370b4c55d5384c687c9c6e34c68b103c0ef05ba2eca3059034a1 erc8176_hash=0x7f52775921826414acfeeab334e5bc8022dc228406a912493ed62e3d62d76e37 ir_len=280 fields=4 degraded=0 source=calldata-AugustusSwapper-v5.json
+[0388] ctx=contract chain_id=56 contract=0xdef171fe48cf0115b1d80b88dc8eab59176fee57 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0xe0efa652bf41370b4c55d5384c687c9c6e34c68b103c0ef05ba2eca3059034a1 erc8176_hash=0x7f52775921826414acfeeab334e5bc8022dc228406a912493ed62e3d62d76e37 ir_len=324 fields=4 degraded=0 source=calldata-AugustusSwapper-v5.json
          · [0x935fb84b] op=tokenAmount  label='Maximum to Send'
          · [0x935fb84b] op=tokenAmount  label='Amount to Receive'
          · [0x54840d1a] op=tokenAmount  label='Amount to Send'
@@ -4849,7 +4849,7 @@
          · [0x29138802] op=raw          label='signatureDeadline'
          · [0x903d668d] op=raw          label='unfollowerProfileId'
          · [0x903d668d] op=raw          label='signatureDeadline'
-[0446] ctx=contract chain_id=137 contract=0xdef171fe48cf0115b1d80b88dc8eab59176fee57 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0xe0efa652bf41370b4c55d5384c687c9c6e34c68b103c0ef05ba2eca3059034a1 erc8176_hash=0x7f52775921826414acfeeab334e5bc8022dc228406a912493ed62e3d62d76e37 ir_len=280 fields=4 degraded=0 source=calldata-AugustusSwapper-v5.json
+[0446] ctx=contract chain_id=137 contract=0xdef171fe48cf0115b1d80b88dc8eab59176fee57 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0xe0efa652bf41370b4c55d5384c687c9c6e34c68b103c0ef05ba2eca3059034a1 erc8176_hash=0x7f52775921826414acfeeab334e5bc8022dc228406a912493ed62e3d62d76e37 ir_len=324 fields=4 degraded=0 source=calldata-AugustusSwapper-v5.json
          · [0x935fb84b] op=tokenAmount  label='Maximum to Send'
          · [0x935fb84b] op=tokenAmount  label='Amount to Receive'
          · [0x54840d1a] op=tokenAmount  label='Amount to Send'

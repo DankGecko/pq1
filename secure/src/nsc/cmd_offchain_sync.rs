@@ -136,13 +136,14 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     let is_new_slot = !crate::offchain_state::offchain_count_is_registered(&slot_key);
     let raises_floor = target_count > crate::offchain_state::last_userop_count_read(&slot_key);
     if is_new_slot || raises_floor {
-        use crate::ui::confirm::{confirm, ConfirmResult};
+        use crate::ui::confirm::{confirm_checked, ConfirmResult};
         let pages = crate::tx::display::build_offchain_sync_pages(
             account_index as u8,
             chain_id,
             slot_index,
         );
-        match confirm(pages.as_slice()) {
+        let (cr, cr_verdict) = confirm_checked(pages.as_slice());
+        match cr {
             ConfirmResult::Confirmed => {}
             ConfirmResult::Cancelled => {
                 crate::ui::show_status("Cancelled", "");
@@ -152,6 +153,11 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                 super::zeroize_sensitive_state();
                 return NscStatus::IdleWipe as u32;
             }
+        }
+        // FI belt (UI1 / work-todo #12c): affirmative-sentinel gate; fail closed.
+        if cr_verdict != crate::fi::OK_SENTINEL {
+            super::zeroize_sensitive_state();
+            return NscStatus::UserRejected as u32;
         }
     }
 

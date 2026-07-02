@@ -147,6 +147,9 @@ const PARAM_CONST_VALUE: u8 = 0x40;
 /// defense-in-depth backstop that survives a gate regression and is where
 /// the future Phase-5 nested renderer will hook faithful expansion.
 const PARAM_NESTED_STRUCT: u8 = 0x41;
+// A `tokenAmount`'s `nativeCurrencyAddress` sentinel (20 B): a resolved token
+// equal to it renders as the chain native currency (18 decimals, native_ticker).
+const PARAM_NATIVE_CURRENCY: u8 = 0x42;
 
 /// Maximum EIP-712 struct nesting the gate will walk before failing closed.
 /// Matches the on-device `ir::MAX_NESTING`; a type deeper than this (or a
@@ -2625,6 +2628,16 @@ fn compile_params(
             if let Some(t) = params.get("token").and_then(|v| v.as_str()) {
                 let bytes = resolve_address_or_const(t, ctx)?;
                 push_tlv(&mut out, PARAM_TOKEN, &bytes)?;
+            }
+            // `nativeCurrencyAddress` (a `0x…`/`$`-const sentinel): when the
+            // resolved token equals it, the device renders the chain native
+            // currency (18 dec, native_ticker) instead of an ERC-20 lookup — so an
+            // ETH leg shows "1.5 ETH", not `! raw, dec=?`. Single-address form (the
+            // registry's shape); an array form has no sentinel emitted (safe
+            // fallback: renders as an unknown token, never mislabelled).
+            if let Some(nca) = params.get("nativeCurrencyAddress").and_then(|v| v.as_str()) {
+                let bytes = resolve_address_or_const(nca, ctx)?;
+                push_tlv(&mut out, PARAM_NATIVE_CURRENCY, &bytes)?;
             }
             if let Some(th) = params.get("threshold") {
                 let raw = match th {

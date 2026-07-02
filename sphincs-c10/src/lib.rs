@@ -105,12 +105,18 @@ impl SigningKey {
     /// `pk_root` must have been computed by building the full hypertree
     /// from `(sk_seed, pk_seed)`. Use [`Self::keygen`] for the normal path.
     #[must_use]
-    pub fn from_parts(sk_seed: [u8; 32], pk_seed: [u8; N], pk_root: [u8; N]) -> Self {
-        Self {
+    pub fn from_parts(mut sk_seed: [u8; 32], pk_seed: [u8; N], pk_root: [u8; N]) -> Self {
+        let key = Self {
             sk_seed,
             pk_seed,
             pk_root,
-        }
+        };
+        // See `keygen`: `sk_seed` is `Copy`, so the struct field above is a
+        // *copy* and this parameter's stack slot still holds the secret seed.
+        // Scrub the frame copy (the stored field is wiped via ZeroizeOnDrop).
+        // (secret-lifecycle audit 2026-07-01)
+        sk_seed.zeroize();
+        key
     }
 
     /// Derive the signing key by building the full hypertree.
@@ -119,13 +125,21 @@ impl SigningKey {
     /// top layer. On Cortex-M33 this takes ~2-3 seconds. Call once at
     /// provisioning time, not on every sign.
     #[must_use]
-    pub fn keygen(sk_seed: [u8; 32], pk_seed: [u8; N]) -> Self {
+    pub fn keygen(mut sk_seed: [u8; 32], pk_seed: [u8; N]) -> Self {
         let pk_root = hypertree::compute_pk_root(&sk_seed, &pk_seed);
-        Self {
+        let key = Self {
             sk_seed,
             pk_seed,
             pk_root,
-        }
+        };
+        // `sk_seed` is `Copy`: the struct field above is a *copy*, so this
+        // parameter's stack slot still holds the secret seed after keygen
+        // returns. Scrub it — otherwise a caller's own `sk_seed.zeroize()`
+        // (e.g. `pqsigner-domain::derive_signing_key`) is defeated by the
+        // residue in this frame. The stored field is wiped via ZeroizeOnDrop.
+        // (secret-lifecycle audit 2026-07-01)
+        sk_seed.zeroize();
+        key
     }
 
     /// Return the corresponding verifying key.

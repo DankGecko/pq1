@@ -27,8 +27,26 @@ pub enum ConfirmResult {
 pub type Page = [[u8; DISPLAY_COLS]; DISPLAY_ROWS];
 
 pub fn confirm(pages: &[Page]) -> ConfirmResult {
+    confirm_checked(pages).0
+}
+
+/// FI-hardened variant of [`confirm`]: returns the [`ConfirmResult`] together
+/// with a Hamming-distant sentinel that is [`crate::fi::OK_SENTINEL`] ONLY when
+/// the result is an affirmative `Confirmed` produced at the accept branch
+/// (long-right after the scroll-to-end gate). Every other return path — cancel,
+/// idle-wipe, empty-pages — yields a value that is NOT `OK_SENTINEL`.
+///
+/// Sign paths MUST gate signing on `sentinel == crate::fi::OK_SENTINEL` and fail
+/// closed otherwise. The verdict and the sentinel are two independent words both
+/// set at the decision point, so a single instruction-skip of a reject-arm
+/// `return` (which leaves the verdict non-`Confirmed`) is caught by the sentinel
+/// reading `FAIL_SENTINEL`, and a single value-fault flipping the verdict to
+/// `Confirmed` in transit is caught by the sentinel still reading
+/// `FAIL_SENTINEL` — forging a signature past the confirm gate needs two
+/// consistent faults. (Closes trusted-UI finding UI1 / work-todo #12c.)
+pub fn confirm_checked(pages: &[Page]) -> (ConfirmResult, u32) {
     if pages.is_empty() {
-        return ConfirmResult::Cancelled;
+        return (ConfirmResult::Cancelled, crate::fi::FAIL_SENTINEL);
     }
 
     // ---- e2e-test fast-path ----
@@ -43,7 +61,7 @@ pub fn confirm(pages: &[Page]) -> ConfirmResult {
         for page in pages.iter() {
             render_page(page);
         }
-        return ConfirmResult::Confirmed;
+        return (ConfirmResult::Confirmed, crate::fi::OK_SENTINEL);
     }
 
     #[cfg(not(feature = "e2e-test"))]
@@ -83,7 +101,7 @@ pub fn confirm(pages: &[Page]) -> ConfirmResult {
             let mut idle = || timeout::is_idle();
             let event = match input().wait_button(&mut idle) {
                 Some(ev) => ev,
-                None => return ConfirmResult::IdleWipe,
+                None => return (ConfirmResult::IdleWipe, crate::fi::FAIL_SENTINEL),
             };
 
             // A button event IS real user activity — reset the timer
@@ -103,7 +121,16 @@ pub fn confirm(pages: &[Page]) -> ConfirmResult {
                 }
                 (Button::Right, Press::Long) => {
                     if seen_last {
-                        return ConfirmResult::Confirmed;
+                        // Affirmative accept. Born the sentinel HERE, at the
+                        // decision point, from `seen_last` (the scroll-to-end
+                        // gate) — NOT recomputed from the returned enum, which a
+                        // value-fault could forge. The `Confirmed` verdict and
+                        // the sign-gate sentinel are two independent words set
+                        // at the same instruction.
+                        return (
+                            ConfirmResult::Confirmed,
+                            crate::fi::check_true_into_sentinel(|| seen_last),
+                        );
                     }
                     // Not yet scrolled to the end — treat the long-press as
                     // "next page" so the user is guided through the remaining
@@ -112,7 +139,9 @@ pub fn confirm(pages: &[Page]) -> ConfirmResult {
                         idx += 1;
                     }
                 }
-                (Button::Left, Press::Long) => return ConfirmResult::Cancelled,
+                (Button::Left, Press::Long) => {
+                    return (ConfirmResult::Cancelled, crate::fi::FAIL_SENTINEL)
+                }
             }
         }
     }

@@ -1085,6 +1085,56 @@ contract PQSmartWalletTest is Test {
         assertEq(w.offchainSigCount(99), 0, "victim slot must NOT be poisoned");
     }
 
+    // SOL6 (adversarial-review on-chain / work-todo #12c) — PINS CURRENT
+    // BEHAVIOR, does not ratify it. `removeOwnerAtIndex` is DELIBERATELY exempt
+    // from the H-3 ownerIndex-parity check (`selector !=
+    // this.removeOwnerAtIndex.selector` in `_validateSignature`), so a slot key
+    // at index i can sign a removal of a DIFFERENT non-bootstrap slot j — the
+    // mirror of `test_audit_h3_rejectsMismatchedOwnerIndex`, where the same
+    // slot-1 signer is REJECTED for `execute(99)`. Impact is intra-wallet
+    // AVAILABILITY, not fund theft: the bootstrap owner (index 0) is unremovable
+    // and can re-add any pruned slot. This test locks the current design so that
+    // binding i==j for the remove selector in future is a DELIBERATE flip (this
+    // test then fails and must be updated), never a silent regression. Whether
+    // the behavior is DESIRABLE is a threat-model decision — see
+    // docs/security/threat-model.md §8.
+    function test_sol6_crossSlotRemoveIsAcceptedByDesign() public {
+        PQSmartWallet w = _deployWallet(); // owner 0 = bootstrap, owner 1 = slot0
+        c10.setValid(true);
+
+        // Bootstrap installs a second removable slot at index 2 (the execute
+        // half of an addOwner pair; EntryPoint-gated direct call).
+        bytes memory slot1Bytes = abi.encodePacked(SLOT1_PK_SEED, SLOT1_PK_ROOT);
+        vm.prank(ENTRY_POINT_ADDR);
+        w.addOwnerBytes(slot1Bytes);
+        assertEq(w.ownerAtIndex(2), slot1Bytes, "slot at index 2 installed");
+
+        // Slot key at index 1 signs removal of the UNRELATED slot at index 2:
+        // wrapper ownerIndex = 1 (signer), calldata removal index = 2.
+        bytes memory callData = abi.encodeCall(w.removeOwnerAtIndex, (2, slot1Bytes));
+        bytes memory sig = _wrapSig(1, _fakeC10Sig());
+        vm.prank(ENTRY_POINT_ADDR);
+        uint256 vd =
+            w.validateUserOp(_packedOp(address(w), callData, sig), bytes32(uint256(0x5016)), 0);
+        assertEq(
+            vd, 0,
+            "SOL6: cross-slot removeOwnerAtIndex is accepted by design (remove is H-3-exempt)"
+        );
+
+        // Execute half: the removal actually lands, driven by the slot-1 signer.
+        vm.prank(ENTRY_POINT_ADDR);
+        w.removeOwnerAtIndex(2, slot1Bytes);
+        assertEq(w.ownerAtIndex(2).length, 0, "slot 2 pruned by the slot-1 signer");
+
+        // Recovery holds: the (unremovable) bootstrap owner can re-add the slot.
+        vm.prank(ENTRY_POINT_ADDR);
+        w.addOwnerBytes(slot1Bytes);
+        assertEq(
+            w.ownerAtIndex(w.nextOwnerIndex() - 1), slot1Bytes,
+            "bootstrap re-adds the pruned slot (availability recovery)"
+        );
+    }
+
     function test_audit_h3_acceptsMatchingOwnerIndex() public {
         // Regression: the parity check must not block the legitimate
         // case where wrapper and calldata both name slot 1.
