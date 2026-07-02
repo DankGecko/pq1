@@ -997,6 +997,54 @@ fn positive_lido_request_withdrawals_renders_every_element() {
     let _ = find_page_by_label(&pages, "Owner");
 }
 
+/// review finding 1.2 — a `raw`-formatted ARRAY ELEMENT must show EVERY signed
+/// byte. The old array Raw arm passed two 16-byte slices to `write_hex_word`
+/// (caps at 8 bytes/row), silently dropping bytes 8..16 and 24..32 — so a value
+/// living there rendered as all-zeros (WYSIWYS magnitude-hiding, the array
+/// sibling of the fixed scalar `render_raw` bug). This feeds an element word
+/// with a nonzero byte in BOTH dropped ranges (byte 8 = 0xAA, byte 31 = 0x7B)
+/// and asserts both appear on the rendered pages — they would BOTH be invisible
+/// under the old form.
+#[test]
+fn positive_raw_array_element_shows_all_bytes_not_zeros() {
+    let res = build_seed();
+    let entry = find_leaf(&res, "synthetic-raw-array.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
+
+    // One bytes32 element: byte[8]=0xAA (in the dropped 8..16 range) and
+    // byte[31]=0x7B (in the dropped 24..32 range); everything else zero.
+    let mut elem = [0u8; 32];
+    elem[8] = 0xAA;
+    elem[31] = 0x7B;
+    let calldata = {
+        let mut d = Vec::with_capacity(4 + 3 * 32);
+        d.extend_from_slice(&keccak256(b"record(bytes32[])")[..4]);
+        d.extend_from_slice(&u256_from_u64(0x20).0); // offset to the array
+        d.extend_from_slice(&u256_from_u64(1).0); // length = 1
+        d.extend_from_slice(&elem); // element 0
+        d
+    };
+    assert_selector_matches(&verified.ir, &calldata, "record(bytes32[])");
+
+    let tx = envelope(1, entry.contract);
+    let resolver = NameResolver::new();
+    let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver).expect("render");
+    assert_all_pages_printable(&pages);
+    let dump = dump_pages(&pages);
+
+    // Both previously-dropped bytes must now render.
+    assert!(
+        dump.contains("aa"),
+        "byte 8 (0xAA, range 8..16) must render — the old form dropped it:\n{dump}"
+    );
+    assert!(
+        dump.contains("7b"),
+        "byte 31 (0x7B, low word, range 24..32) must render — the old form \
+         dropped it, hiding any BE value < 2^64 as all-zeros:\n{dump}"
+    );
+}
+
 /// review finding 1.1 — field-level `$ref` into `$.display.definitions` must
 /// resolve, verified BY RENDER (not just "it compiled to a leaf", the exact
 /// failure mode that shipped the degraded 1inch/paraswap routers). The

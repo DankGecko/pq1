@@ -241,31 +241,13 @@ fn render_raw(
         Resolved::Container(idx) => container_u256(tx, idx)?,
     };
     // A 16-col row holds 16 hex chars = 8 bytes, so the full 32-byte signed
-    // word needs FOUR hex rows. Render it across two pages (16 bytes each)
-    // so EVERY signed byte is shown. The old single-page form passed two
-    // 16-byte slices to `write_hex_word`, which caps at 8 bytes/row, so it
-    // silently dropped bytes 8..16 and 24..32 — for a big-endian uint256
-    // that is the entire low-order half, making any value < 2^64 render as
-    // all-zeros with a benign "> next" footer (WYSIWYS magnitude-hiding;
-    // fixed 2026-06-26). Page budget is enforced by `push_blank`'s
-    // PageBudget error, same as before.
+    // word needs FOUR hex rows across two pages, so EVERY signed byte is shown
+    // (WYSIWYS magnitude-hiding; fixed 2026-06-26). Shared with the
+    // array-element Raw path via `write_raw_word_two_pages` so they can't
+    // diverge again. Page budget is enforced by `push_blank`'s PageBudget error.
     let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
     write_label_row(pages, p, field.label);
-    {
-        let [_, row1, row2, row3] = pages.page_mut(p);
-        write_hex_word(row1, &bytes[0..8]);
-        write_hex_word(row2, &bytes[8..16]);
-        write_line(row3, "1/2 > next");
-    }
-    let p2 = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
-    write_label_row(pages, p2, field.label);
-    {
-        let [_, row1, row2, row3] = pages.page_mut(p2);
-        write_hex_word(row1, &bytes[16..24]);
-        write_hex_word(row2, &bytes[24..32]);
-        write_line(row3, "2/2 > next");
-    }
-    Ok(())
+    write_raw_word_two_pages(pages, p, field.label, &bytes)
 }
 
 fn render_amount(
@@ -1062,10 +1044,13 @@ fn render_array_element(
             Ok(())
         }
         FormatOp::Raw => {
-            let [_, r1, r2, _foot] = pages.page_mut(p);
-            write_hex_word(r1, &word[..16]);
-            write_hex_word(r2, &word[16..]);
-            Ok(())
+            // The array-element sibling of the scalar `render_raw` fix. The old
+            // form passed two 16-byte slices to `write_hex_word` (caps at 8
+            // bytes/row), silently dropping bytes 8..16 and 24..32 — a BE
+            // uint256 < 2^64 rendered as all-zeros (WYSIWYS magnitude-hiding,
+            // finding 1.2). Spill across two pages via the shared helper so
+            // every signed byte shows. `p` was already pushed + labelled above.
+            write_raw_word_two_pages(pages, p, field.label, word)
         }
         _ => Err(RenderErr::Reject("7730 arr elem fmt unsup")),
     }
@@ -1338,10 +1323,14 @@ pub(super) fn write_line_bytes(row: &mut [u8; DISPLAY_COLS], text: &[u8]) {
     row[..n].copy_from_slice(&text[..n]);
 }
 
-/// Write 16 bytes of hex (32 chars) into a 16-col row. Used by Raw +
-/// fingerprint pages. We deliberately do NOT include the "0x" prefix
-/// — the next-page row would lose 2 visual chars and the hex pages
-/// are visually anchored by row separators.
+/// Write up to **8 bytes** as hex (≤16 chars) into a 16-col row. A 16-col row
+/// holds 16 hex chars = 8 bytes, so a slice longer than 8 bytes is **silently
+/// clamped to its first 8 bytes** — callers MUST pass ≤8-byte slices. A full
+/// 32-byte word therefore needs FOUR rows across two pages; use
+/// [`write_raw_word_two_pages`] (never two 16-byte slices, which drop the
+/// low-order half — the WYSIWYS magnitude-hiding bug fixed 2026-06-26 for the
+/// scalar path and 2026-07 for the array-element path, finding 1.2). We
+/// deliberately omit the "0x" prefix so the hex fills the row.
 fn write_hex_word(row: &mut [u8; DISPLAY_COLS], bytes: &[u8]) {
     for cell in row.iter_mut() {
         *cell = b' ';
@@ -1351,6 +1340,36 @@ fn write_hex_word(row: &mut [u8; DISPLAY_COLS], bytes: &[u8]) {
         row[i * 2] = hex_nibble(b >> 4);
         row[i * 2 + 1] = hex_nibble(b & 0x0F);
     }
+}
+
+/// Render a full 32-byte word as hex across TWO pages (four 8-byte rows), so
+/// EVERY signed byte is shown. A single page holds only 16 hex bytes, so a
+/// one-page form silently drops bytes 16..32 — the entire low-order half of a
+/// big-endian uint256, making any value < 2^128 render as leading-zeros and
+/// any value < 2^64 render as all-zeros (WYSIWYS magnitude-hiding). The scalar
+/// (`render_raw`) and array-element (`render_array_element`) Raw paths MUST
+/// share this helper so a fix to one reaches both (they diverged once —
+/// finding 1.2). The FIRST page must already be pushed and label-written
+/// (`first_page`); the second is pushed + labelled here.
+fn write_raw_word_two_pages(
+    pages: &mut Pages,
+    first_page: usize,
+    label: &[u8],
+    word: &[u8; 32],
+) -> Result<(), RenderErr> {
+    {
+        let [_, r1, r2, foot] = pages.page_mut(first_page);
+        write_hex_word(r1, &word[0..8]);
+        write_hex_word(r2, &word[8..16]);
+        write_line(foot, "1/2 > next");
+    }
+    let p2 = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
+    write_label_row(pages, p2, label);
+    let [_, r1, r2, foot] = pages.page_mut(p2);
+    write_hex_word(r1, &word[16..24]);
+    write_hex_word(r2, &word[24..32]);
+    write_line(foot, "2/2 > next");
+    Ok(())
 }
 
 #[inline]
