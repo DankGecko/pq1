@@ -50,6 +50,7 @@
             "format": "raw",
             "visible": "always"
           },
+          { "path": "reveal.blindingFactor", "label": "Blinding factor", "visible": "never" },
           {
             "path": "reveal.walletPubKeyHash",
             "label": "Wallet pubkey hash",

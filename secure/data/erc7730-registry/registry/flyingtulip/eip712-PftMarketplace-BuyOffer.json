@@ -76,7 +76,8 @@
               "encoding": "timestamp"
             },
             "visible": "always"
-          }
+          },
+          { "path": "nonce", "label": "Nonce", "visible": "never" }
         ],
         "interpolatedIntent": "PUT offer {price}"
       }
