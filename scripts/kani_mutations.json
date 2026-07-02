@@ -132,6 +132,61 @@
       "replace": "let to = decode_address_word(&body[0..32])",
       "expect": "kani_fails",
       "note": "read transferFrom's `to` from word 0 (the `from` word) instead of word 1 -> the display would show the WRONG recipient for the approval-drain arm. parse_erc20_transfer_from_no_misdecode (decoded to == encoded to, forall) MUST break. Verified 2026-07-02 by hand: mutation -> VERIFICATION:- FAILED; unmutated -> SUCCESSFUL. Closes finding §2 #9 (only `transfer` had a forall no-misdecode harness; approve/transferFrom rested on point-tests)."
+    },
+    {
+      "id": "safe_mgmt_addr_word_offset",
+      "tier": "default",
+      "crate": "pqsigner-tx",
+      "harness": "classify_safe_mgmt_accepts_canonical_add_owner",
+      "file": "tx/src/safe_mgmt.rs",
+      "find": "    addr.copy_from_slice(&word[12..32]);",
+      "replace": "    addr.copy_from_slice(&word[11..31]);",
+      "expect": "kani_fails",
+      "note": "[\u00a72 #1: Safe-mgmt owner/module address decode] Breaks decode_addr_word: reads the 20-byte address one byte too low (word[11..31] instead of the canonical word[12..32]), so the decoded owner is shifted off the ABI-encoded word. The concrete non-vacuity harness asserts new_owner[0]==0xaa and new_owner[19]==0xbb at their exact canonical offsets, which the shifted decode violates. Verified 2026-07-02 by a workflow agent in an isolated worktree (mutation -> VERIFICATION:- FAILED, revert -> SUCCESSFUL); the file is UNCHANGED on origin/master since (0 commits in 63e29450..e4afbafa), so the deterministic kani verification transfers. Closes finding \u00a72 #1 (mutation-gate breadth: this file had harnesses but no vacuity screen)."
+    },
+    {
+      "id": "abi_dyn_payload_len",
+      "tier": "default",
+      "crate": "pqsigner-tx",
+      "harness": "walk_dyn_bytes_read_in_bounds",
+      "file": "tx/src/typed_call/abi.rs",
+      "find": "                    ArgClass::DynBytes | ArgClass::DynString => length as u64,",
+      "replace": "                    ArgClass::DynBytes | ArgClass::DynString => 0,",
+      "expect": "kani_fails",
+      "note": "[\u00a72 #1: typed-call ABI dynamic-tail bounds] Breaks the dynamic bytes/string payload-size accounting in walk: treats every dynamic payload as zero-length, so the tail bounds check (end = offset+32+padded_payload) under-reserves space and walk accepts a frame whose actual renderer read extent (body_off+32+count) runs past body.len(). The soundness harness reconstructs the renderer's UNPADDED read extent independently via renderer_read_end and asserts it is <= body.len(); the mutation makes that assertion (abi.rs:417) fail. Verified 2026-07-02 by a workflow agent in an isolated worktree (mutation -> VERIFICATION:- FAILED, revert -> SUCCESSFUL); the file is UNCHANGED on origin/master since (0 commits in 63e29450..e4afbafa), so the deterministic kani verification transfers. Closes finding \u00a72 #1 (mutation-gate breadth: this file had harnesses but no vacuity screen)."
+    },
+    {
+      "id": "ns_ptr_mailbox_straddle",
+      "tier": "default",
+      "crate": "sphincs-tz-shared",
+      "harness": "ns_rejects_mailbox_straddle_control",
+      "file": "shared/src/ns_ptr_validate.rs",
+      "find": "    if ptr < r.mailbox_end && end > r.mailbox_base {",
+      "replace": "    if ptr > r.mailbox_end && end > r.mailbox_base {",
+      "expect": "kani_fails",
+      "note": "[\u00a72 #1: NS-ptr shared-mailbox overlap reject] Flips the write-path shared-mailbox overlap reject in ns_write_window_ok: `ptr < r.mailbox_end` -> `ptr > r.mailbox_end`. This makes a range straddling the mailbox lower boundary (ptr = mailbox_base-4, len 8) pass the overlap guard, so the TOCTOU-critical mailbox carve-out is no longer rejected. Find string is unique to line 90 (line 122's read-path check is prefixed `if in_sram && ptr ...`). Verified 2026-07-02 by a workflow agent in an isolated worktree (mutation -> VERIFICATION:- FAILED, revert -> SUCCESSFUL); the file is UNCHANGED on origin/master since (0 commits in 63e29450..e4afbafa), so the deterministic kani verification transfers. Closes finding \u00a72 #1 (mutation-gate breadth: this file had harnesses but no vacuity screen)."
+    },
+    {
+      "id": "params_enum_ref_endianness",
+      "tier": "default",
+      "crate": "pqsigner-erc7730",
+      "harness": "params_enum_ref_width_and_value_sound",
+      "file": "pqsigner-erc7730/src/render/params.rs",
+      "find": "                p.enum_ref = Some(u16::from_be_bytes([payload[0], payload[1]]));",
+      "replace": "                p.enum_ref = Some(u16::from_be_bytes([payload[1], payload[0]]));",
+      "expect": "kani_fails",
+      "note": "[\u00a72 #1: ERC-7730 enum_ref u16 decode] Swaps the two enum_ref payload bytes, breaking the big-endian u16 value decode. The harness reconstructs the expected value as u16::from_be_bytes([pool[4], pool[5]]) from the original pool at the fixed offset, so the swap produces the wrong value whenever payload[0]!=payload[1]. Verified 2026-07-02 by a workflow agent in an isolated worktree (mutation -> VERIFICATION:- FAILED, revert -> SUCCESSFUL); the file is UNCHANGED on origin/master since (0 commits in 63e29450..e4afbafa), so the deterministic kani verification transfers. Closes finding \u00a72 #1 (mutation-gate breadth: this file had harnesses but no vacuity screen)."
+    },
+    {
+      "id": "resolve_leaf_oob_reject",
+      "tier": "full",
+      "crate": "pqsigner-erc7730",
+      "harness": "resolve_structured_panic_free_and_in_bounds",
+      "file": "pqsigner-erc7730/src/render/resolve.rs",
+      "find": "        return Err(RenderErr::Reject(\"7730 res leaf oob\"));",
+      "replace": "        {}",
+      "expect": "kani_fails",
+      "note": "[\u00a72 #1: ERC-7730 leaf-offset bounds reject (slow ~460s -> full tier)] Drops the final leaf bounds reject so resolve_structured returns Ok(Leaf::Word/Dynamic(pos)) even when pos+32 > body.len() (a FieldIdx-terminated program with a large slot). The harness asserts every returned leaf offset satisfies off.checked_add(32) <= body.len(), which the removed check enforced. Verified 2026-07-02 by a workflow agent in an isolated worktree (mutation -> VERIFICATION:- FAILED, revert -> SUCCESSFUL); the file is UNCHANGED on origin/master since (0 commits in 63e29450..e4afbafa), so the deterministic kani verification transfers. Closes finding \u00a72 #1 (mutation-gate breadth: this file had harnesses but no vacuity screen)."
     }
   ]
 }
