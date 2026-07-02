@@ -68,7 +68,7 @@ theorem slot_entropy_hashes_canonical_preimage
   -- setSlice! expansion produces (master fills bytes [0..32)).
   have l_master : master.val.length = 32 := by have := master.property; simp_all
   unfold pqsigner_domain.slot_entropy
-  simp only [sha256_bytes]
+  simp only [sha256_bytes, Array.Insts.ZeroizeZeroize.zeroize]
   step*
   refine ⟨_, ?_, rfl⟩
   -- `s12 = to_slice buf4`, so strip the `to_slice` (Array.val_to_slice) IN THE
@@ -135,7 +135,7 @@ theorem derive_c10_slot_seeds_byte_layout (se : Std.Array U8 32#usize) :
             = ((sha256_pure_bytes pre_pk).val.map (·.val)).take 16 ++ List.replicate 16 0 ⦄ := by
   have l_se : (se.val).length = 32 := by have := se.property; simp_all
   unfold pqsigner_domain.derive_c10_slot_seeds
-  simp only [sha256_bytes]
+  simp only [sha256_bytes, Array.Insts.ZeroizeZeroize.zeroize]
   step*
   refine ⟨s6, s13, ?_, ?_, rfl, ?_⟩
   · -- sk preimage layout
@@ -211,7 +211,7 @@ theorem slot_master_byte_layout (bip39 : Std.Array U8 64#usize) (acct : U32) :
         ∧ r = sha256_pure_bytes pre ⦄ := by
   have l_bip : (bip39.val).length = 64 := by have := bip39.property; simp_all
   unfold pqsigner_domain.slot_master_entropy_from_bip39
-  simp only [sha256_bytes]
+  simp only [sha256_bytes, Array.Insts.ZeroizeZeroize.zeroize]
   by_cases hacct : acct = 0#u32
   · rw [if_pos hacct]
     step*
