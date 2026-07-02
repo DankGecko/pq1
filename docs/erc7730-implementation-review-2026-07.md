@@ -284,6 +284,11 @@ Quick-win bundle (all S unless noted):
   silent ticker clip in `write_unlimited_row` and unify wording/casing with erc20_known.rs.
 - **4.6 `raw` small ints as decimal** (1 page) when high 24 bytes are zero, keep 2-page hex
   otherwise (formatters.rs:227-268) — kills the wall-of-zeros pages and buys page budget.
+  **DEFERRED (2026-07-02):** attempted, reverted. `raw` is the opaque catch-all format;
+  "raw == hex" is an invariant other code + tests rely on (the C2/Morpho tuple-render tests
+  probe a raw member's *hex*), and a decimal could read as a meaningful count for a genuinely
+  opaque word. Revisit only with a descriptor-level signal that the word is numeric — a
+  readability nicety, not worth breaking the invariant + churning tests I don't own.
 - **4.7 EIP-55 checksum casing** in `write_addr_full` (primitives.rs:265-294) — every wallet
   UI the user compares against is checksummed; one keccak per address page, shared across
   erc20/Safe/CoW paths too.

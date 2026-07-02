@@ -6560,6 +6560,72 @@ mod tests {
         assert_eq!(out[0].label.as_deref(), Some("A"));
     }
 
+    // ── review 5.3: single-source the wire vocabulary ───────────────────
+    /// The dbgen-local `PATHOP_*`/`FMT_*`/`PARAM_*`/`VIS_*` constants are
+    /// "mirrored by comment discipline" from the on-device `pqsigner_erc7730`
+    /// enums. Pin them to the crate so a silent divergence — the exact
+    /// confirm-vs-execute desync class the walker header warns about — fails CI
+    /// instead of shipping a mis-encoded IR into the trusted root.
+    #[test]
+    fn wire_vocab_single_sourced_from_crate() {
+        use pqsigner_erc7730::ir::{FormatOp, PathOp, Visibility};
+        use pqsigner_erc7730::render::params;
+
+        // Path opcodes.
+        assert_eq!(PATHOP_ROOT_STRUCT, PathOp::RootStructured as u8);
+        assert_eq!(PATHOP_ROOT_CONTAINER, PathOp::RootContainer as u8);
+        assert_eq!(PATHOP_ROOT_METADATA, PathOp::RootMetadata as u8);
+        assert_eq!(PATHOP_FIELD_IDX, PathOp::FieldIdx as u8);
+        assert_eq!(PATHOP_ARRAY_IDX, PathOp::ArrayIdx as u8);
+        assert_eq!(PATHOP_ARRAY_SLICE, PathOp::ArraySlice as u8);
+        assert_eq!(PATHOP_ARRAY_LAST, PathOp::ArrayLast as u8);
+        assert_eq!(PATHOP_ARRAY_ALL, PathOp::ArrayAll as u8);
+        assert_eq!(PATHOP_FOLLOW_OFFSET, PathOp::FollowOffset as u8);
+
+        // Formatter opcodes.
+        assert_eq!(FMT_RAW, FormatOp::Raw as u8);
+        assert_eq!(FMT_AMOUNT, FormatOp::Amount as u8);
+        assert_eq!(FMT_TOKEN_AMOUNT, FormatOp::TokenAmount as u8);
+        assert_eq!(FMT_NFT_NAME, FormatOp::NftName as u8);
+        assert_eq!(FMT_DATE, FormatOp::Date as u8);
+        assert_eq!(FMT_DURATION, FormatOp::Duration as u8);
+        assert_eq!(FMT_ADDRESS_NAME, FormatOp::AddressName as u8);
+        assert_eq!(FMT_ENUM, FormatOp::Enum as u8);
+        assert_eq!(FMT_UNIT, FormatOp::Unit as u8);
+        assert_eq!(FMT_CALLDATA, FormatOp::Calldata as u8);
+        assert_eq!(FMT_CHAIN_ID, FormatOp::ChainId as u8);
+        assert_eq!(FMT_TOKEN_TICKER, FormatOp::TokenTicker as u8);
+        assert_eq!(FMT_INTEROP_ADDR_NAME, FormatOp::InteroperableAddressName as u8);
+        assert_eq!(FMT_ENCRYPTED, FormatOp::Encrypted as u8);
+
+        // Param TLV tags.
+        assert_eq!(PARAM_TOKEN_PATH, params::PARAM_TOKEN_PATH);
+        assert_eq!(PARAM_TOKEN, params::PARAM_TOKEN);
+        assert_eq!(PARAM_THRESHOLD, params::PARAM_THRESHOLD);
+        assert_eq!(PARAM_MESSAGE, params::PARAM_MESSAGE);
+        assert_eq!(PARAM_ADDR_TYPES, params::PARAM_ADDR_TYPES);
+        assert_eq!(PARAM_ADDR_SOURCES, params::PARAM_ADDR_SOURCES);
+        assert_eq!(PARAM_DATE_ENCODING, params::PARAM_DATE_ENCODING);
+        assert_eq!(PARAM_ENUM_REF, params::PARAM_ENUM_REF);
+        assert_eq!(PARAM_DECIMALS, params::PARAM_DECIMALS);
+        assert_eq!(PARAM_BASE, params::PARAM_BASE);
+        assert_eq!(PARAM_PREFIX, params::PARAM_PREFIX);
+        assert_eq!(PARAM_SUFFIX, params::PARAM_SUFFIX);
+        assert_eq!(PARAM_NESTED_SELECTOR, params::PARAM_NESTED_SELECTOR);
+        assert_eq!(PARAM_NESTED_CALLEE, params::PARAM_NESTED_CALLEE);
+        assert_eq!(PARAM_FALLBACK_LABEL, params::PARAM_FALLBACK_LABEL);
+        assert_eq!(PARAM_VISIBILITY, params::PARAM_VISIBILITY);
+        assert_eq!(PARAM_CONST_VALUE, params::PARAM_CONST_VALUE);
+        assert_eq!(PARAM_NESTED_STRUCT, params::PARAM_NESTED_STRUCT);
+
+        // Visibility bytes.
+        assert_eq!(VIS_ALWAYS, Visibility::Always as u8);
+        assert_eq!(VIS_NEVER, Visibility::Never as u8);
+        assert_eq!(VIS_OPTIONAL, Visibility::Optional as u8);
+        assert_eq!(VIS_IF_NOT_IN, Visibility::IfNotIn as u8);
+        assert_eq!(VIS_MUST_MATCH, Visibility::MustMatch as u8);
+    }
+
     // ── VULN-erc7730-rule1-inert-field-nonaddr-action-hide (Rule 1) ──────
 
     #[test]
