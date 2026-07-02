@@ -35,7 +35,10 @@ bold "[1/8] Lean kernel type-check (lake build)"
 ok "lake build passed — every theorem closed, zero sorries"
 
 bold "[2/8] Axiom dependency audit"
-(cd "${VERIFICATION_DIR}" && make verify-audit) 2>&1 | grep -E "depends on axioms|does not depend" | head -20
+# NB: `awk 'NR<=20'` not `head -20` — head closes the pipe after 20 lines, and under
+# `set -o pipefail` that SIGPIPEs the upstream `make`/`grep` (exit 141). The dump now
+# has >20 closure lines, so head deterministically killed the script here (fixed 2026-07-02).
+(cd "${VERIFICATION_DIR}" && make verify-audit) 2>&1 | grep -E "depends on axioms|does not depend" | awk 'NR<=20'
 ok "axiom dependency closure printed"
 
 bold "[3/8] Lint axioms (no new True-typed)"

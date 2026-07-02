@@ -54,7 +54,7 @@ TAM_DIR = REPO_ROOT / "contracts" / "verification" / "tamarin"
 
 # (file, expect_true, expect_false) — per .pv. `cannot be proved` must be 0.
 PROVERIF = [
-    ("dual_se_unlock.pv", 5, 1),
+    ("dual_se_unlock.pv", 5, 3),  # +2 false = the ReleasedHalfO/E reachability witnesses (PM-2, 2026-07-02): a reachable event query reports `is false`; both MUST stay false (reachable) or the honest legs went dead + the secrecy verdicts turned vacuous.
     ("scp03_handshake.pv", 3, 1),
     ("optiga_shield_handshake.pv", 3, 1),
     ("scp03_replay.pv", 1, 0),

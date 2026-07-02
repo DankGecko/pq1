@@ -43,6 +43,12 @@ event HostAccepted(bitstring, bitstring).
 event HostSent(bitstring, bitstring).
 event OptAccepted(bitstring, bitstring).
 
+(* SCOPE (added 2026-07-02, finding PM-3): NO `!` replication in this model — the
+   optiga/host legs run a BOUNDED number of times, so the results hold for a SINGLE
+   session, not across unbounded concurrent/replayed Shielded Connections. The
+   Shielded-Connection sequence counter + the PBS-bound key derivation bound
+   cross-session replay on-device; a `!`-replicated variant is the tracked
+   follow-up. Not an unbounded-session guarantee. *)
 (* OPTIGA: derive session key from PBS + nonces, authenticate the host, then
    release half_O over the channel (the F1D0/E120 gate is the host's auth). *)
 let optiga(pbs: key, halfO: bitstring) =

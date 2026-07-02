@@ -142,6 +142,18 @@ let scenarioPositiveControl =
 query h: bitstring, p: bitstring; event(ReleasedHalfO(h, p)) ==> event(PresentedPinO(p)).
 query h: bitstring, p: bitstring; event(ReleasedHalfE(h, p)) ==> event(PresentedPinE(p)).
 
+(* REACHABILITY WITNESSES (anti-vacuity, added 2026-07-02 — finding PM-2). The two
+   correspondence queries above and the three secrecy queries are VACUOUSLY true if the
+   honest optiga/se050 legs never actually release a half — nothing above attests they RUN
+   (the positive control only exercises `reconstruct` derivability, not the protocol). These
+   witnesses assert each release event IS reachable; ProVerif reports a reachable event query
+   as `is false` because a trace exists. Expected: BOTH `is false`. If either flips to
+   `is true`, the corresponding honest leg went dead and the secrecy/authentication verdicts
+   became vacuous — a hard regression. Mirrors the `event(Install(m))` witness in
+   fw_update_authenticity.pv. *)
+query h: bitstring, p: bitstring; event(ReleasedHalfO(h, p)).
+query h: bitstring, p: bitstring; event(ReleasedHalfE(h, p)).
+
 process
     ( scenarioBaseline
     | scenarioClaim1

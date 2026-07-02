@@ -32,6 +32,12 @@ on:
       - 'contracts/verification/docs/**'
       - 'contracts/verification/Makefile'
       - '.github/workflows/lean-fv.yml'
+      # Extracted §33 tree: verify-fv-lints' escape-hatch/opaque-guard grep scans
+      # extracted/Extracted/ too (lint_fv_invariants.sh:77,151), but this workflow
+      # never TRIGGERED on extracted-only edits — so a native_decide/@[extern]/new-axiom
+      # in an extracted rank merged unscanned (extracted-F2, V10, 2026-07-02). The build
+      # leg stays lean/-only; the lints scan the extracted sources as files.
+      - 'contracts/verification/extracted/Extracted/**'
   pull_request:
     paths:
       - 'contracts/verification/lean/**'
@@ -40,6 +46,8 @@ on:
       - 'contracts/verification/docs/**'
       - 'contracts/verification/Makefile'
       - '.github/workflows/lean-fv.yml'
+      # Extracted §33 escape-hatch scan (extracted-F2) — see the push trigger above.
+      - 'contracts/verification/extracted/Extracted/**'
 
 permissions:
   contents: read

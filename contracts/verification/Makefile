@@ -307,7 +307,7 @@ verify-extracted: ## S33 Aeneas-extracted build + axiom-discipline
 	@cd $(EXTRACTED_DIR) && $(LAKE) build 2>&1 | tee /tmp/pq_extracted_build.out
 	@if grep -E "Extracted/[^ ]*\.lean:.*declaration uses" /tmp/pq_extracted_build.out; then \
 	  echo "FAIL: an Extracted/ declaration uses 'sorry' (incomplete proof)"; exit 1; fi
-	@echo "=== Axiom closure of the §33 theorems (expect propext, Classical.choice, Quot.sound + the disclosed keccak256_pure / sha256_pure content axioms) ==="
+	@echo "=== Axiom closure of the §33 theorems (expect propext, Classical.choice, Quot.sound + the three disclosed hash-boundary postulates: keccak256_pure, sha256_pure_bytes, hmac_sha512_pure_bytes — NB sha256_pure is a kernel THEOREM, not an axiom) ==="
 	@cd $(EXTRACTED_DIR) && $(LAKE) env lean Extracted/AxiomCheck.lean 2>&1 | tee /tmp/pq_axiomcheck.out
 	@if grep -q sorryAx /tmp/pq_axiomcheck.out; then \
 	  echo "FAIL: a §33 theorem axiom closure contains sorryAx — a proof is incomplete"; exit 1; \

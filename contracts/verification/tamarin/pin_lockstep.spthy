@@ -17,6 +17,28 @@ begin
    can RESET one counter (OPTIGA via the S-1 glitch / SE050 delete-recreate /
    a TZ-bypass MCU-erase) to try to win back attempts.
 
+   !! MODEL <-> CODE FIDELITY CAVEAT (2026-07-02, finding PM-1) !!
+   This model wipes on ANY disagreement (a SYMMETRIC reconcile). The DEPLOYED
+   reconcile_pin_attempts (secure/src/nsc/mod.rs) is DIRECTIONAL:
+   `tamper = (se_count > mcu) || se_split` (se_count = max(optiga, se050);
+   se_split = optiga != se050 when both readable). It catches STRICTLY LESS than
+   this model proves:
+     - a coordinated reset of BOTH SE silicon counters (optiga=se050=0) yields
+       se_count=0, se_split=false, 0 > mcu = false  =>  NO WIPE, whereas this
+       model proves that trace wipes. So the "partial reset never survives"
+       lemma below is an IDEALIZED-SPEC result, NOT a faithful statement about
+       the deployed directional code.
+     - in the shipping config the SE050 counter read returns None (policy
+       denial), so se_split is dead and even a single OPTIGA reset is undetected
+       by reconcile (though still bounded by the primary controls).
+   These reconcile gaps are a DEFENSE-IN-DEPTH cross-check only: the primary
+   controls (per-SE silicon lockout + the FI-hardened MCU page-124 pre-commit in
+   nsc::gated_unlock) still bound the attacker to <= MAX_ATTEMPTS, so there is no
+   fund-drain — the harm is that this model + the README below OVERSTATE what the
+   deployed reconcile catches. Re-modeling the directional predicate over ordered
+   counters (so the both-SE reset appears as a NEW residual) is the tracked
+   follow-up (docs/work-todo.md).
+
    PROVEN (see lemmas): a surviving boot is reachable ONLY when either NO
    counter was reset, or ALL THREE were. Equivalently, a PARTIAL reset (one or
    two of the three) can NEVER survive a boot — the un-reset counter(s) desync

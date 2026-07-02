@@ -46,6 +46,15 @@ event HostSent(bitstring, bitstring).     (* host ran a handshake with (hchal, c
 event CardAccepted(bitstring, bitstring). (* card accepted the host's cryptogram *)
 
 (* ---------------------------------------------------------------------------
+   SCOPE (added 2026-07-02, finding PM-3): the process below runs the card/host
+   legs a BOUNDED number of times — there is NO `!` replication in this model — so
+   the mutual-auth (injective-agreement) and PIN-secrecy results are proven for a
+   SINGLE session, NOT across unbounded concurrent/replayed sessions. The SCP03
+   monotonic counter + the pinned session-key derivation are what bound cross-
+   session replay on-device; a `!`-replicated variant (to prove cross-session
+   authentication) is the tracked follow-up. Do not read these verdicts as
+   unbounded-session guarantees.
+   ---------------------------------------------------------------------------
    Parameterised protocol legs (reused by both scenarios).
    --------------------------------------------------------------------------- *)
 let card(static: key, thePin: bitstring) =

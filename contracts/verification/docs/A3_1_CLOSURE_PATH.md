@@ -346,8 +346,13 @@ with the climb lemmas as the loop-refinement engine.
     computable `Spec.Sha256Impl` oracle (no new axiom).
   * `InterpMain.lean` + `make verify-interp` (`lake exe verify-interp`) — replays
     the KAT + bulk corpus THROUGH `execC10Asm`. **RESULT: `execC10Asm` reproduces
-    `Spec.Signature.verify` AND the deployed-bytecode `expectValid` verdict on
+    `Spec.Signature.verify` AND the Rust-oracle `expectValid` verdict on
     ALL 12 KAT (4 valid + 6 negatives + NM1/NM2 near-miss) + 384 bulk = 396/396
+    (NB corrected 2026-07-02: the `expectValid` field is the RUST-signer verdict,
+    so this leg is interpreter-vs-Rust-oracle — NOT interpreter-vs-deployed-bytecode;
+    and the `==Spec.verify` leg is now a consistency corollary of the proven
+    `execC10Asm_eq` on the N-masked corpus. The bytecode ground-truth for A3.1 is
+    `verify-test-vectors` (forge KAT) + the ~250-mutant screen, not this runner)
     on BOTH checks.** HARD CHECK (non-zero exit on any mismatch). This empirically
     pins (i) AST-transcription faithfulness and (ii) `execStmt`↔EVM semantics
     against ground truth, and is the empirical interpreter↔bytecode bridge that

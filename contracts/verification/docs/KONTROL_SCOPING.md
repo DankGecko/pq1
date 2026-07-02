@@ -5,8 +5,13 @@ KEVM proofs; only A3.1 (verifier ∀-signature) remains, and is intractable unde
 symbolic SHA-256 (out of scope).** The four control-flow bridge axioms are now
 proven directly on the deployed PQSmartWallet/Factory bytecode by an engine
 independent of Halmos with no hand-written `LeanModel.sol` mirror — so the
-hand-transcription TCB element of A3.2/A3.3/A3.4 is retired (Halmos stays the
-fast CI gate). Breakdown: A3.4 owner-table = 12/12; A3.2-exec = 8/8; A3.3 factory
+hand-transcription TCB element of A3.3/A3.4/A3.2-exec-single is retired (Halmos stays the
+fast LOCAL/manual gate — NOT CI-run; the per-PR bytecode tripwire is the codehash-freeze
+test). NOTE (2026-07-02): A3.2-**validate** and A3.2-exec-**batch** use a CONCRETE
+well-formed wrapper in Kontrol, so the wrapper-decode / selector-role-split / full-frame
+transcription of `LeanValidateUserOpModel.sol` is NOT independently re-established for them —
+that transcription stays a Halmos-only, eye-auditable TCB element (see the A3.2 status_detail
+in AXIOM_STATUS.json). Breakdown: A3.4 owner-table = 12/12; A3.2-exec = 8/8; A3.3 factory
 = 6/6; A3.2-validate (the non-bypass I-1: validate succeeds ⟺ cap-gate ∧
 verifier-accepts, ∀ verdict + counters, slot + bootstrap roles; + unset-owner +
 EntryPoint rejects) = 4/4 in `kontrol/test/KontrolValidateUserOp.t.sol`.

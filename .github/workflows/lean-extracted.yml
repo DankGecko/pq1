@@ -18,18 +18,30 @@ name: Lean FV (extracted §33 Aeneas)
 # published cache), so the job builds only the aeneas backend lib + the
 # Extracted ranks, not mathlib from source.
 
+# The `paths:` MUST include the Rust SOURCE crates the extraction MIRRORS — not just
+# extracted/** — else a change to (e.g.) domain/src/lib.rs that the extracted Lean
+# proves-about merges without ever re-triggering this gate, and the theorems keep
+# proving the OLD function (extracted-F1, 2026-07-02). The extract-* regen-diff sweep
+# (make extract-*) + the executed differential catch the resulting drift.
 on:
   push:
     branches: [master]
-    paths:
+    paths: &extracted_paths
       - 'contracts/verification/extracted/**'
       - 'contracts/verification/Makefile'
       - '.github/workflows/lean-extracted.yml'
+      - 'sphincs-c10/src/**'
+      - 'aa/src/**'
+      - 'tx-core/src/**'
+      - 'domain/src/**'
+      - 'fw-manifest/src/**'
+      - 'bip39/src/**'
   pull_request:
-    paths:
-      - 'contracts/verification/extracted/**'
-      - 'contracts/verification/Makefile'
-      - '.github/workflows/lean-extracted.yml'
+    paths: *extracted_paths
+  schedule:
+    # nightly — runs the executed differential + vendored-fidelity legs even when no
+    # path changed, so a drift that slipped a path filter is still caught within 24h.
+    - cron: '30 4 * * *'
   workflow_dispatch: {}
 
 permissions:
@@ -71,3 +83,11 @@ jobs:
       # Build the Extracted ranks + run the no-sorry / no-sorryAx axiom gate.
       - name: verify-extracted (lake build + axiom-discipline gate)
         run: make -C contracts/verification verify-extracted
+      # Vendored-spec fidelity: the extracted ADRS spec must match the SphincsCVerify
+      # v4.22 source it vendors (python diff — lightweight, no toolchain).
+      - name: verify-spec-vendored-fidelity
+        run: make -C contracts/verification verify-spec-vendored-fidelity
+      # The ONLY layer that catches a consistently-wrong Charon/Aeneas translation:
+      # execute the extracted Lean vs the executed-Rust oracle (signed_preimage + vectors).
+      - name: verify-extract-differential
+        run: make -C contracts/verification verify-extract-differential

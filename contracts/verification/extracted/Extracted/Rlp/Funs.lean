@@ -20,7 +20,7 @@ noncomputable section
 namespace pqsigner_tx_core
 
 /-- [pqsigner_tx_core::rlp::bytes_to_u64]: loop body 0:
-    Source: 'tx-core/src/rlp.rs', lines 171:4-173:5
+    Source: 'tx-core/src/rlp.rs', lines 241:4-243:5
     Visibility: public -/
 @[rust_loop_body]
 def rlp.bytes_to_u64_loop0.body
@@ -37,7 +37,7 @@ def rlp.bytes_to_u64_loop0.body
     ok (cont (iter1, acc1))
 
 /-- [pqsigner_tx_core::rlp::bytes_to_u64]: loop 0:
-    Source: 'tx-core/src/rlp.rs', lines 171:4-173:5
+    Source: 'tx-core/src/rlp.rs', lines 241:4-243:5
     Visibility: public -/
 @[rust_loop]
 def rlp.bytes_to_u64_loop0
@@ -47,7 +47,7 @@ def rlp.bytes_to_u64_loop0
     (iter, acc)
 
 /-- [pqsigner_tx_core::rlp::bytes_to_u64]: loop body 1:
-    Source: 'tx-core/src/rlp.rs', lines 171:4-173:5
+    Source: 'tx-core/src/rlp.rs', lines 241:4-243:5
     Visibility: public -/
 @[rust_loop_body]
 def rlp.bytes_to_u64_loop1.body
@@ -64,7 +64,7 @@ def rlp.bytes_to_u64_loop1.body
     ok (cont (iter1, acc1))
 
 /-- [pqsigner_tx_core::rlp::bytes_to_u64]: loop 1:
-    Source: 'tx-core/src/rlp.rs', lines 171:4-173:5
+    Source: 'tx-core/src/rlp.rs', lines 241:4-243:5
     Visibility: public -/
 @[rust_loop]
 def rlp.bytes_to_u64_loop1
@@ -74,7 +74,7 @@ def rlp.bytes_to_u64_loop1
     (iter, acc)
 
 /-- [pqsigner_tx_core::rlp::bytes_to_u64]:
-    Source: 'tx-core/src/rlp.rs', lines 163:0-175:1
+    Source: 'tx-core/src/rlp.rs', lines 233:0-245:1
     Visibility: public -/
 def rlp.bytes_to_u64
   (bytes : Slice Std.U8) :
@@ -104,7 +104,7 @@ def rlp.bytes_to_u64
         ok (core.result.Result.Ok acc)
 
 /-- [pqsigner_tx_core::rlp::bytes_to_u256]:
-    Source: 'tx-core/src/rlp.rs', lines 179:0-190:1
+    Source: 'tx-core/src/rlp.rs', lines 249:0-260:1
     Visibility: public -/
 def rlp.bytes_to_u256
   (bytes : Slice Std.U8) :

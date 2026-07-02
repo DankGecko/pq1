@@ -5,3 +5,13 @@ resolver = "2"
 [profile.release]
 debug = true
 panic = "abort"
+# Match the SHIPPED firmware profile's optimisation axes that can reintroduce a
+# secret-dependent branch (root Cargo.toml: opt-level="s", overflow-checks=true) so
+# the CT proof exercises the codegen the device actually ships — NOT the cargo
+# template default opt-level=3/overflow-checks=false (CT-1, 2026-07-02). LTO +
+# codegen-units=1 are cross-crate/link-time; the checkct driver is a single crate
+# (`#[path]`-including secure/src/cmac.rs), so cross-crate LTO does not apply here and
+# binsec's relational analysis runs on the pre-link object — the residual LTO axis is
+# documented in tools/sca/DONJON-RUST-TOOLING.md, not claimed closed.
+opt-level = "s"
+overflow-checks = true

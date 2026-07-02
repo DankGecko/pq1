@@ -1,0 +1,10 @@
+# The bulk fuzz corpus (hash-named entries from local `cargo fuzz run` sessions) is
+# NOT committed — it is large and machine-generated. Only the hand-authored, valid
+# `seed_*` files are tracked, so ClusterFuzzLite CI clones start from a real seed that
+# reaches the decoder body (fuzz F1, 2026-07-02: the selector-gated targets
+# multisend_decode / tx_erc20_parse_calldata never pass their 4-byte selector gate
+# seedless, so their coverage-guided fuzzing was near-vacuous in CI).
+*
+!.gitignore
+!*/
+!*/seed_*

@@ -269,3 +269,19 @@ import SphincsCVerify
 -- (H_adrs/H_sib_dischargeable + execute_step_satisfiable above are the rest.)
 #print axioms SphincsCVerify.Wallet.Invariants.combinedCapInvariant_empty
 #print axioms SphincsCVerify.Wallet.Invariants.combinedCapInvariant_initialised
+
+-- (2026-07-02, finding exec-lean-F3) `cannot_remove_bootstrap` is a Claim-2 headline
+-- corollary listed in AXIOM_STATUS.json claim_corollaries but was the ONLY one absent
+-- from this dump + the closures block — so verify-audit/verify-ledger-consistency could
+-- not see it. Enrolled here + in `closures` so a rewrite onto an existing documented
+-- axiom (which the by-name closure diff would otherwise miss) reddens.
+#print axioms SphincsCVerify.Wallet.Invariants.cannot_remove_bootstrap
+
+-- (2026-07-02, finding exec-lean-F4) the EUF-CMA KeyHistory consistency FENCE. These two
+-- guard lemmas keep the empty-transcript valid-KAT detonator unformable (so BreaksHash is
+-- not constructively provable). They were pinned by NO gate — a two-part edit (drop the
+-- `signed_recorded` field + delete both guards) would slip through. Enrolling them here means
+-- DELETING either guard breaks this dump build (a hard CI redden), and `closures` pins their
+-- kernel-only closure so a weakening that pulled in a project axiom also reddens.
+#print axioms SphincsCVerify.Crypto.keyHistory_empty_signs_nothing
+#print axioms SphincsCVerify.Crypto.honest_sig_not_forgery

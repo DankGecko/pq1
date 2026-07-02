@@ -13,9 +13,10 @@
     {
       "id": "verify-fv-lints",
       "make": "make -C contracts/verification verify-fv-lints",
-      "polices_paths": ["contracts/verification/lean/**"],
+      "polices_paths": ["contracts/verification/lean/**", "contracts/verification/extracted/Extracted/**"],
       "runs_in": "lean-fv.yml",
-      "enforcement": "per_pr_blocking"
+      "enforcement": "per_pr_blocking",
+      "note": "the escape-hatch/opaque-guard lints scan BOTH lean/ and extracted/Extracted/ (lint_fv_invariants.sh:77,151); extracted/Extracted/** added to lean-fv.yml paths 2026-07-02 (extracted-F2) so an extracted-only edit triggers the scan."
     },
     {
       "id": "verify-audit",
@@ -84,6 +85,59 @@
       "runs_in": "nightly.yml",
       "enforcement": "local_documented",
       "why": "the `checkct` job is workflow_dispatch-only + continue-on-error (WIP): the opam-released binsec can't build the ARM decoder + checkct plugin together; needs a from-source binsec in a clean CI switch. Validated gate is LOCAL `make checkct`. Tracked in nightly.yml comment + tools/sca/DONJON-RUST-TOOLING.md."
+    },
+    {
+      "id": "verify-transcription",
+      "make": "make -C contracts/verification verify-transcription",
+      "polices_paths": [
+        "contracts/smart-wallet/src/verifiers/SPHINCsC10Asm.sol",
+        "contracts/verification/lean/SphincsCVerify/Interpreter/C10Program.lean"
+      ],
+      "runs_in": "a31-transcription.yml",
+      "enforcement": "per_pr_blocking",
+      "note": "the A3.1 c10Program<->Yul positional lint; the ONLY CI-enforced piece of the A3.1 track. Dedicated workflow with a POSITIVE paths filter (ci.yml paths-ignores all of contracts/verification/**). Enrolled 2026-07-02 (was absent — G1META-1)."
+    },
+    {
+      "id": "verify-extracted",
+      "make": "make -C contracts/verification verify-extracted",
+      "polices_paths": ["contracts/verification/extracted/**"],
+      "runs_in": "lean-extracted.yml",
+      "enforcement": "per_pr_blocking",
+      "note": "§33 Aeneas-extracted no-sorry/no-sorryAx gate. per-PR on extracted/**; the Rust SOURCE crates the extraction mirrors are covered by the extract-* regen-diff sweep (nightly, below). Enrolled 2026-07-02 (was absent — extracted-F1)."
+    },
+    {
+      "id": "verify-extract-differential",
+      "make": "make -C contracts/verification verify-extract-differential",
+      "polices_paths": ["contracts/verification/extracted/**", "fw-manifest/src/**"],
+      "runs_in": "lean-extracted.yml",
+      "enforcement": "nightly",
+      "note": "executes extracted-Lean vs executed-Rust (signed_preimage, 6 vectors) — the only layer catching a consistently-wrong translation. Wired into lean-extracted.yml nightly 2026-07-02 (was in NO workflow — extracted-F1)."
+    },
+    {
+      "id": "verify-spec-vendored-fidelity",
+      "make": "make -C contracts/verification verify-spec-vendored-fidelity",
+      "polices_paths": ["contracts/verification/extracted/Extracted/SpecVendored.lean", "contracts/verification/lean/SphincsCVerify/Spec/Bytes.lean"],
+      "runs_in": "lean-extracted.yml",
+      "enforcement": "nightly",
+      "note": "vendored-spec fidelity (the ADRS version bridge). Wired into lean-extracted.yml nightly 2026-07-02 (was in NO workflow — extracted-F1)."
+    },
+    {
+      "id": "verify-bytecode",
+      "make": "make -C contracts/verification verify-bytecode",
+      "polices_paths": ["contracts/smart-wallet/src/**"],
+      "runs_in": "ci.yml",
+      "enforcement": "local_documented",
+      "why": "the Halmos+z3 symbolic discharge of A3.2/A3.3/A3.4 needs the patched halmos toolchain + is slow (kept local/manual per ci.yml:20-23). Per-PR protection against wallet-bytecode drift is the codehash-freeze test/PinnedCodehashes.t.sol in the `contracts` job (forces a conscious re-pin); nothing auto-re-runs Halmos after a re-pin. Kontrol/KEVM is the independent transcription-free cross-check, also local. Corrected 2026-07-02: was advertised as 'the fast CI gate' but runs in NO workflow (HALMOS-FAST-CI-GATE-FALSE)."
+    },
+    {
+      "id": "verify-three-claims",
+      "make": "make -C contracts/verification verify-three-claims",
+      "polices_paths": ["contracts/verification/**", "contracts/smart-wallet/src/**"],
+      "enforcement": "local_documented",
+      "why": "a LOCAL end-to-end convenience bundle (kernel + audit + lints + forge + Halmos/Certora advisory), NOT a single CI job. Its dead nested workflow (contracts/.github/... — GitHub never ran it) was removed 2026-07-02 (F1). Its constituent gates ARE per-PR: verify-build/audit/fv-lints/ledger-consistency/storage-mutators (lean-fv.yml), verify-transcription (a31-transcription.yml), forge test + codehash-freeze (ci.yml); the Halmos/Kontrol legs are verify-bytecode (also local_documented)."
     }
-  ]
+  ],
+  "_completeness_waived": {
+    "verify-gate-enforcement": "the G1 lint itself (this checker); it runs in ci.yml and does not police a proof surface — it polices the manifest. Waiving avoids self-reference."
+  }
 }

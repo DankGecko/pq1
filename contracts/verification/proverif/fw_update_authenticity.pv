@@ -35,8 +35,14 @@
    NOT modelled here (stateful — Tamarin's job, like the PIN-lockstep): the OTP
    ANTI-ROLLBACK floor (`verify_rollback`: fw_version > floor, monotonic OTP).
    ProVerif's strength is the trace/secrecy authenticity above; the monotonic-
-   counter rollback property needs mutable global state and is tracked
-   separately (a near-mirror of tamarin/pin_lockstep.spthy's counter shape).
+   counter rollback property needs mutable global state and is an OPEN modelling
+   item — NO standalone Tamarin/ProVerif anti-rollback model exists yet (corrected
+   2026-07-02, finding PM-4: the earlier "tracked separately (a near-mirror of
+   pin_lockstep.spthy)" wording implied a model that was never built). It is
+   enforced today by the OTP hardware floor + `fwmeasure`/`fw-manifest` verify chain
+   + the extracted-Lean `signed_preimage` domain-separation lemmas (ASSURANCE_CASE
+   G10), NOT by a symbolic rollback model. Building a `pin_lockstep`-shaped Tamarin
+   model of the OTP monotonic floor is the tracked follow-up.
 
    ABSTRACTION: SPHINCS+C10 is a generic EUF-CMA signature (`sign`/`verifyget`);
    SHA-256 is the injective `preimage` constructor (collision-resistance is the

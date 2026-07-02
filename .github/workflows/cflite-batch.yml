@@ -3,8 +3,15 @@ name: ClusterFuzzLite (batch)
 # Scheduled deeper fuzzing sweep over all 11 harnesses (SOTA 2026-06 §6).
 # `batch` mode runs every fuzzer for a fixed budget; pair with a corpus
 # storage repo to carry coverage across runs (see ClusterFuzzLite docs —
-# set `storage-repo` once a private corpus repo + deploy key exist; until
-# then each run starts from the committed fuzz/corpus/ seeds).
+# set `storage-repo` once a private corpus repo + deploy key exist).
+# CORPUS (fuzz F1, 2026-07-02): the large hash-named local corpus is git-IGNORED
+# (fuzz/corpus/.gitignore) and does NOT reach CI clones; only the hand-authored,
+# valid `seed_*` files are committed. Those seeds matter for the 4-byte-SELECTOR-gated
+# targets (multisend_decode selector 0x8d80ff0a, tx_erc20_parse_calldata transfer/
+# transferFrom): seedless, the fuzzer cannot assemble a valid selector, so the decoder
+# body is never entered and coverage-guided fuzzing is near-vacuous. The committed seeds
+# push each past its selector gate into the record walk / field decode. The
+# non-selector-gated targets (rlp/eip1559/apdu/hid/erc7730) reach coverage seedless.
 
 on:
   schedule:

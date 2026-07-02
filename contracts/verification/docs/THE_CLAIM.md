@@ -53,7 +53,13 @@ Specifically and defensibly:
 1. **Kernel proof (REINSTATED 2026-06-14 after the EUF-CMA fix).** `theft_free`
    and its claim corollaries are `sorry`-free and kernel-checked, with the
    11-axiom closure now **consistent** (the restated `EUF_CMA_SPHINCSplusC`
-   concludes the opaque `BreaksHash` reduction, not `False`). What `theft_free`
+   concludes the opaque `BreaksHash` reduction, not `False`). The 11-axiom base
+   is reported by `#print axioms`, which is known to **under-report** in the
+   pinned Lean v4.22.0; the completeness backstop is `make verify-lean4checker`
+   (external-kernel re-check) — run to completion 2026-07-02: **kernel re-check
+   ACCEPTED every declaration across all 55 modules**, so the closure is not a
+   `#print`-only artifact (previously this backstop was manual-only and unrun —
+   the caveat now carries its discharge). What `theft_free`
    actually says: it is a **conjunction** — conjunct 1 (the safety guarantee:
    no wallet balance decrease without the deployed verifier accepting an
    installed-owner C10 signature over the op's `sphincsDigest`) is **EUF-CMA-free**,
@@ -69,8 +75,10 @@ Specifically and defensibly:
    `theft_free_with_calldata_binding` now closes over the consistent
    `sha256_collision_resistance` and concludes the honest `preimage eq ∨
    BreaksHash` form — the false `sha256_injective` axiom is gone.)
-2. **Control-flow bytecode discharge.** 38 Halmos rules pass on **both** the
-   `default` (runs=200) and `deploy` (runs=999999) profiles' deployed
+2. **Control-flow bytecode discharge.** 42 Halmos rules (38 at the 2026-06-11
+   snapshot; +3 `HalmosIsValidSignature` for the EIP-1271 surface + Equiv rules
+   since, 2026-06-29 — count re-tallied from the tree 2026-07-02) pass on **both**
+   the `default` (runs=200) and `deploy` (runs=999999) profiles' deployed
    bytecode, against pinned codehashes — validate (pointwise + per-property;
    the wrapper ownerIndex is covered by enumerating the installed set
    `{0,1,2}` + concrete reps for the unset partition + a symbolic sweep over
@@ -88,7 +96,9 @@ Specifically and defensibly:
    harnesses (`contracts/verification/kontrol/`): A3.4 = 12/12, A3.2-exec = 8/8,
    A3.3 = 6/6, A3.2-validate (the non-bypass I-1) = 4/4. This **retires the
    `LeanModel.sol` hand-transcription element from the TCB** for all four
-   control-flow axioms (Halmos stays as the fast CI gate; the two engines agree).
+   control-flow axioms (Halmos stays as the fast **local/manual** gate — NOT CI-run;
+   the per-PR bytecode-drift tripwire is the codehash-freeze `PinnedCodehashes.t.sol`,
+   after which a Halmos re-run is manual; the two engines agree).
    Reproduced 2026-06-15 (`make verify-kontrol`; needs a Nix-installed K backend).
    The verifier's ∀-signature equivalence (A3.1) is **not** a Kontrol target —
    it is intractable under symbolic SHA-256 in both engines (KEVM models the
@@ -126,7 +136,8 @@ Specifically and defensibly:
 The honest trust base for (1)–(2): the Lean kernel; and that the bytecode
 discharge is a sound symbolic-execution session. For the four control-flow
 bridge axioms (A3.2/A3.2-exec/A3.3/A3.4) that discharge now exists in **two
-forms**: (a) a Halmos+z3 session — the fast CI gate — whose harness↔property
+forms**: (a) a Halmos+z3 session — the fast **local/manual** gate (NOT CI-run; per-PR
+bytecode drift is caught by the codehash-freeze test, which forces a re-pin) — whose harness↔property
 correspondence AND the `LeanModel.sol`↔Lean-file **transcription** are in the
 TCB; and (b) a transcription-free **Kontrol/KEVM** session that proves the
 property directly against the bytecode with **no `LeanModel.sol` mirror**, so the
@@ -149,12 +160,21 @@ confirms the verification is **faithful within its declared scope** (8/9
 injected real defects were caught, most at compile time), but the scope is the
 **on-chain contract + the SPHINCS+C10 spec only**:
 
-- **5 of the 9 CLAUDE.md non-negotiable invariants are NOT formally proven.**
-  #1 dual-chip XOR seed split, #2 hardware PIN three-way lockstep, #3 E2E SE
-  tunnels, #4 TrustZone secret isolation, and the trusted-display clear-signing
-  pipeline are firmware/secure-world/hardware properties with **zero Lean
-  coverage** — they rest on silicon E2E tests + the security-review docs. Do not
-  let "theft_free proven" be read as a device-wide guarantee.
+- **Most of the 9 CLAUDE.md non-negotiable invariants are NOT formally proven
+  on-chain.** #2 hardware PIN three-way lockstep, #3 E2E SE tunnels, #4
+  TrustZone secret isolation, and the trusted-display clear-signing pipeline are
+  firmware/secure-world/hardware properties with **zero Lean coverage in this
+  tree** — they rest on silicon E2E tests, the protocol models (ProVerif/Tamarin,
+  for #2/#3), and the security-review docs. **Update 2026-07-02 (narrowed since
+  the 2026-06-14 audit this bullet cited): invariant #1 (dual-chip XOR seed
+  split) is now PARTIALLY proven** — `Crypto/SplitSecrecy.lean` (ASSURANCE_CASE
+  G9) kernel-proves the information-theoretic 2-of-2 one-time-pad core (mask
+  uniformity is a hardware-TRNG assumption; `master_secret` co-residence is a
+  scoped computational residual), and the FW-update signed-preimage
+  domain-separation is kernel-proven over the extracted spec (G10). So the honest
+  statement is **#1 partially proven (IT core, scoped); #2/#3 model-level +
+  silicon-E2E; #4 + display pipeline silicon-E2E only.** Do not let "theft_free
+  proven" be read as a device-wide guarantee.
 - **The P1 bootstrap-cap proof-coverage hole is now CLOSED (2026-06-14).**
   `capOk_bootstrap_implies_strict` + `validateSignature_bootstrap_cap_strict`
   give the bootstrap few-time cap (`bootstrapUses < MAX_BOOTSTRAP_USES`,
@@ -178,10 +198,15 @@ injected real defects were caught, most at compile time), but the scope is the
   discharge — see the A2 precision under "NOT claimable".) A4's content-bearing *type*
   is the real gain; the earlier "load-bearing in theft_free" wording was an
   over-claim. The `lint_axioms` gate now reports zero `: True`-typed axioms.
-  `keccak256_pure`
-  (extracted) remains an uninterpreted total-function postulate — benign and
-  standard for Aeneas hash boundaries, carrying the keccak binding by external
-  citation (Rust KATs + EVM conformance), not in-Lean content.
+  The §33 Aeneas-extracted tree carries **three** uninterpreted total-function
+  hash postulates (corrected 2026-07-02, extracted-F4 — earlier text named only
+  `keccak256_pure`): `keccak256_pure` (`UserOp/FunsExternal.lean:14`),
+  `sha256_pure_bytes` (`SlotKdf/FunsExternal.lean:27`), and `hmac_sha512_pure_bytes`
+  (`SlotKdf/FunsExternal.lean:41`) — the SlotKdf/UserOp byte-hash boundaries. All
+  three are benign and standard for Aeneas hash boundaries, carrying the hash
+  binding by external citation (Rust KATs + EVM conformance), not in-Lean content.
+  (NB the in-tree `sha256_pure` is a kernel-proven *theorem*, not an axiom — do not
+  conflate it with these byte-level postulates.)
 
 ## ❌ NOT claimable (the named gaps)
 
@@ -213,7 +238,13 @@ see Claimable #4), not just the digest/index sub-layers.
 ### The remaining ceiling (no longer a *defect*)
 
 `solidityVerifier_compiles_correctly` (A3.1) asserts the deployed verifier
-equals the Lean `verifyYulModel` for all inputs. As of **2026-06-13 this
+equals the Lean `execC10Asm` for all inputs (synced 2026-07-02 — the bare
+`= verifyYulModel` form the earlier wording used is **FALSE as a ∀** off
+N-masked keys, since the bytecode runs two `and(key, N_MASK)==key` guards that
+`verifyYulModel` omits; `execC10Asm` unfolds via the `execC10Asm_eq` kernel
+lemma to `verifyYulModel` *on N-masked keys*, and `theft_free`'s verifier leg
+consumes the `= execC10Asm` form — see `Bridge/Refinement.lean`). As of
+**2026-06-13 this
 axiom is no longer contradicted by any tested vector**: the two Lean-spec
 reconstruction bugs (`chainHash` ADRS field; `loadWord32` tail zero-padding)
 are fixed, `Spec.Signature.verify` accepts/rejects all 10 KAT vectors

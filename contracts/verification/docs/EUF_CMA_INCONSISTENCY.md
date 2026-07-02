@@ -136,7 +136,9 @@ under active design + adversarial testing (workflow `eufcma-reconcile`).
   i.e. NOT the crypto axioms): the wallet-model invariants
   (`combinedCap_inductive`, `bootstrap_unremovable`, `eip1271_forbids_bootstrap`,
   `factory_requires_bootstrap_sig`, `create2_*`, `validateSignature_only_via_verify`,
-  …), the §33 Aeneas-extracted functional proofs (only `keccak256_pure`), the
+  …), the §33 Aeneas-extracted functional proofs (`keccak256_pure` +
+  `sha256_pure_bytes` + `hmac_sha512_pure_bytes` — the three extracted hash-boundary
+  postulates; corrected 2026-07-02, was "only keccak256_pure"), the
   Halmos bytecode-equivalence discharges (A3.*), and the A3.1 verifier KAT.
 - **Secondary / latent:** `sha256_injective_on_fixed_length` (Assumptions.lean:158)
   is mathematically false (pigeonhole at length > 32 B) but currently

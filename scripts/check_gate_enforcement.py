@@ -14,16 +14,24 @@ ran on `AXIOM_STATUS.json`-only edits until an adversarial pass found it by hand
 For each gate in scripts/gate_enforcement.json it parses the live CI workflows and
 asserts the wiring matches the declared enforcement:
   * per_pr_blocking — the declared `runs_in` workflow invokes `make <target>`, has a
-    push/pull_request trigger, the invoking job is NOT `continue-on-error`, and the
+    push/pull_request trigger, the invoking job/step is NOT `continue-on-error`, and the
     trigger `paths:` COVER every `polices_paths` entry (or there is no paths filter).
-    A polices path NOT covered by the filter = the F1 class = FAIL.
+    A polices path NOT covered by an allowlist `paths:` filter — OR one EXCLUDED by a
+    `paths-ignore:` filter — = the F1 class = FAIL.
   * nightly — the `runs_in` workflow invokes it AND has a `schedule` trigger.
   * local_documented — deliberately not CI-gated; a NOTE, never a FAIL (must carry a
     `why`). Surfaced so the non-enforcement is VISIBLE, not silent.
 
 Robustness (mirrors the sibling gates): a gate whose target no workflow invokes is a
-HARD FAIL (unwired); ships a `--self-test` negative control (inject a broken
-expectation, expect RED). Read-only — never mutates.
+HARD FAIL (unwired); the invocation check inspects STEP-level `if:`/`continue-on-error`
+(not just job-level), so a workflow_dispatch-gated or non-blocking STEP is caught; a
+final COMPLETENESS pass asserts that every soundness `make verify-*` target invoked by
+any workflow is enrolled in this manifest (so a CI-wired gate cannot silently escape
+the manifest — the G1META-1 class). Ships a `--self-test` negative control (inject a
+broken expectation, expect RED). Read-only — never mutates.
+KNOWN OUT-OF-SCOPE evasions (fail-closed / documented, not modelled): a gate invoked via
+`uses:` a reusable workflow (no inline `run` text) reads as UNWIRED (a false FAIL, safe
+direction); matrix-`exclude` on the invoking job is not modelled.
 
 Exit: 0 = every gate enforced as declared; 1 = an enforcement gap (unwired /
 path-uncovered / non-blocking); 2 = harness/manifest error (missing file, YAML parse).
@@ -60,11 +68,20 @@ def _covers(filter_globs: list[str], policed: str) -> bool:
     p = _norm_prefix(policed)
     for f in filter_globs:
         fp = _norm_prefix(f)
-        if fp == "" or p == fp or p.startswith(fp + "/") or p.startswith(fp):
-            # ancestor or equal (fp=="" means a bare '**' catch-all)
-            if fp == "" or p == fp or p.startswith(fp + "/"):
-                return True
+        # ancestor or equal (fp=="" means a bare '**' catch-all)
+        if fp == "" or p == fp or p.startswith(fp + "/"):
+            return True
     return False
+
+
+def _ignored(paths_ignore: list[str], policed: str) -> bool:
+    """Does a `paths-ignore:` filter EXCLUDE the policed surface? A push/PR that
+    edits ONLY files under the policed prefix is skipped when a directory-prefix
+    ignore glob is the policed path or an ancestor of it — the gate then never fires
+    on that surface (the F1 class, via denylist). Extension-only ignore globs
+    (`**/*.md`) do not normalise to a directory ancestor, so they don't false-flag a
+    directory-policed path — reused from `_covers`'s ancestor logic."""
+    return _covers(paths_ignore, policed)
 
 
 def _get_on(wf: dict) -> dict:
@@ -81,36 +98,49 @@ def load_workflow(wf_path: Path) -> dict | None:
         raise SystemExit(f"HARNESS ERROR: {wf_path} is not valid YAML: {e}")
 
 
+def _dispatch_only(cond: str) -> bool:
+    """An `if:` that pins execution to workflow_dispatch (never push/PR/schedule)."""
+    return "workflow_dispatch" in cond and "schedule" not in cond
+
+
 def invokes_target(wf: dict, target: str) -> tuple[bool, bool, bool]:
     """Scan every job's steps for a `make [-C dir] <target>` invocation. Returns
-    (invoked, in_continue_on_error_job, job_is_event_gated)."""
+    (invoked, non_blocking, dispatch_only) where the two flags OR together the JOB-
+    level and the matching STEP-level `continue-on-error` / `if:` (a non-blocking or
+    workflow_dispatch-gated STEP defeats a per-PR gate just as a job-level one does)."""
     pat = re.compile(r"\bmake\b[^\n]*\b" + re.escape(target) + r"\b")
     for job in (wf.get("jobs") or {}).values():
         if not isinstance(job, dict):
             continue
-        steps = job.get("steps") or []
-        run_text = "\n".join(str(s.get("run", "")) for s in steps if isinstance(s, dict))
-        if pat.search(run_text):
-            coe = bool(job.get("continue-on-error"))
-            # a job gated to only run on workflow_dispatch (never push/PR/schedule)
-            job_if = str(job.get("if", ""))
-            dispatch_only = "workflow_dispatch" in job_if and "schedule" not in job_if
-            return True, coe, dispatch_only
+        job_coe = bool(job.get("continue-on-error"))
+        job_dispatch_only = _dispatch_only(str(job.get("if", "")))
+        for s in job.get("steps") or []:
+            if not isinstance(s, dict):
+                continue
+            if pat.search(str(s.get("run", ""))):
+                coe = job_coe or bool(s.get("continue-on-error"))
+                dispatch_only = job_dispatch_only or _dispatch_only(str(s.get("if", "")))
+                return True, coe, dispatch_only
     return False, False, False
 
 
 def triggers(wf: dict) -> dict:
+    """Per-trigger shape. push/pull_request map to None (trigger absent) or a dict
+    {"paths": <allowlist|None>, "paths_ignore": <denylist|None>}; a present trigger
+    with neither filter has both None (= covers everything)."""
     on = _get_on(wf)
     out = {"push": None, "pull_request": None, "schedule": False, "workflow_dispatch": False}
     if isinstance(on, list):
         for k in on:
-            if k in out:
+            if k in ("push", "pull_request"):
+                out[k] = {"paths": None, "paths_ignore": None}
+            elif k in ("schedule", "workflow_dispatch"):
                 out[k] = True
         return out
     for k in ("push", "pull_request"):
         if k in on:
-            node = on[k] or {}
-            out[k] = (node.get("paths") if isinstance(node, dict) else None) or []  # [] = trigger, no path filter
+            node = on[k] if isinstance(on[k], dict) else {}
+            out[k] = {"paths": node.get("paths"), "paths_ignore": node.get("paths-ignore")}
     out["schedule"] = "schedule" in on
     out["workflow_dispatch"] = "workflow_dispatch" in on
     return out
@@ -144,32 +174,82 @@ def check_gate(g: dict) -> list[str]:
         return fails
 
     tg = triggers(wf)
+    has_ignore_filter = False
     if enforcement == "per_pr_blocking":
         if tg["push"] is None and tg["pull_request"] is None:
             fails.append(f"{target}: per_pr_blocking but {runs_in} has no push/pull_request trigger.")
         if coe:
-            fails.append(f"{target}: per_pr_blocking but its job is `continue-on-error: true` (non-blocking).")
+            fails.append(f"{target}: per_pr_blocking but its job/step is `continue-on-error: true` (non-blocking).")
         if dispatch_only:
-            fails.append(f"{target}: per_pr_blocking but its job is workflow_dispatch-gated (never fires on PRs).")
-        # F1 check: the trigger paths must COVER every policed path
+            fails.append(f"{target}: per_pr_blocking but its job/step is workflow_dispatch-gated (never fires on PRs).")
+        # F1 check: an allowlist `paths:` must COVER every policed path, and a
+        # `paths-ignore:` denylist must NOT EXCLUDE any policed path.
         for trig in ("push", "pull_request"):
-            filt = tg[trig]
-            if filt is None:
+            node = tg[trig]
+            if node is None:
                 continue  # this trigger absent
-            if filt == []:
-                continue  # trigger present with NO paths filter => covers everything
+            allow, deny = node["paths"], node["paths_ignore"]
             for policed in g.get("polices_paths", []):
-                if not _covers(filt, policed):
+                if allow is not None and not _covers(allow, policed):
                     fails.append(f"{target}: {runs_in} `{trig}.paths` does NOT cover policed `{policed}` "
                                  f"(the F1 class — gate can't fire on edits to that surface).")
+                if deny and _ignored(deny, policed):
+                    has_ignore_filter = True
+                    fails.append(f"{target}: {runs_in} `{trig}.paths-ignore` EXCLUDES policed `{policed}` "
+                                 f"(the F1 class — a push touching only that surface is skipped).")
+            if deny:
+                has_ignore_filter = True
     elif enforcement == "nightly":
         if not tg["schedule"]:
             fails.append(f"{target}: enforcement=nightly but {runs_in} has no `schedule` trigger.")
 
     if not fails:
-        cov = "no-path-filter" if any(tg[t] == [] for t in ("push", "pull_request")) else "paths cover policed surface"
+        def _present_no_filter(t):
+            return isinstance(tg[t], dict) and tg[t]["paths"] is None and tg[t]["paths_ignore"] is None
+        if any(_present_no_filter(t) for t in ("push", "pull_request")):
+            cov = "no-path-filter"
+        elif has_ignore_filter:
+            cov = "paths-ignore filter (policed surface not excluded)"
+        else:
+            cov = "paths cover policed surface"
         lvl = "per-PR blocking" if enforcement == "per_pr_blocking" else "nightly"
         print(f"    [ok]   {target:26s} {lvl}, {cov}")
+    return fails
+
+
+SOUNDNESS_TARGET = re.compile(r"\bmake\b[^\n]*?\b(verify-[a-z0-9-]+|kani|miri)\b")
+
+
+def invoked_soundness_targets() -> dict:
+    """target -> set(workflow filenames) for every soundness `make` target actually
+    invoked in a `run:` step (comments/`env` outside run blocks are NOT matched)."""
+    found: dict = {}
+    for p in sorted((REPO_ROOT / ".github/workflows").glob("*.yml")):
+        wf = load_workflow(p) or {}
+        for job in (wf.get("jobs") or {}).values():
+            if not isinstance(job, dict):
+                continue
+            for s in job.get("steps") or []:
+                if not isinstance(s, dict):
+                    continue
+                for m in SOUNDNESS_TARGET.finditer(str(s.get("run", ""))):
+                    found.setdefault(m.group(1), set()).add(p.name)
+    return found
+
+
+def completeness(manifest: dict) -> list[str]:
+    """G1META-1: every soundness `make verify-*`/`kani`/`miri` target a workflow
+    actually runs must be a manifest gate id (or explicitly `_completeness_waived`
+    with a reason) — else a CI-wired gate silently escapes the manifest, exactly the
+    self-limiting-manifest gap the 2026-07-02 round found."""
+    fails = []
+    ids = {g["id"] for g in manifest["gates"]}
+    waived = manifest.get("_completeness_waived", {})  # {target: reason}
+    for target, wfs in sorted(invoked_soundness_targets().items()):
+        if target in ids or target in waived:
+            continue
+        fails.append(f"COMPLETENESS: `{target}` is invoked in {sorted(wfs)} but is NOT a manifest gate "
+                     f"(nor in _completeness_waived) — a CI-wired soundness gate escaping the manifest (G1META-1).")
     return fails
 
 
@@ -183,17 +263,23 @@ def main() -> int:
     gates = manifest["gates"]
 
     if self_test:
-        # Negative control: a gate that claims per_pr_blocking but polices a path no
-        # real workflow filter covers MUST be caught. If it is not, the harness is void.
-        print("=== --self-test (negative control) ===")
-        broken = {"id": "verify-ledger-consistency", "make": "x", "enforcement": "per_pr_blocking",
-                  "runs_in": "lean-fv.yml", "polices_paths": ["totally/unpoliced/surface/**"]}
-        f = check_gate(broken)
-        if not f:
-            print("  SELF-TEST FAILED: the broken gate (polices an uncovered path) was NOT caught — "
-                  "harness is void.", file=sys.stderr)
+        # Two negative controls; both MUST be caught or the harness is void.
+        print("=== --self-test (negative controls) ===")
+        broken_allow = {"id": "verify-ledger-consistency", "make": "x", "enforcement": "per_pr_blocking",
+                        "runs_in": "lean-fv.yml", "polices_paths": ["totally/unpoliced/surface/**"]}
+        # A gate whose policed path is EXCLUDED by a real paths-ignore filter (ci.yml
+        # ignores contracts/verification/**) must be caught by the denylist F1 check.
+        broken_ignore = {"id": "miri", "make": "x", "enforcement": "per_pr_blocking",
+                         "runs_in": "ci.yml", "polices_paths": ["contracts/verification/lean/**"]}
+        fa = check_gate(broken_allow)
+        fi = check_gate(broken_ignore)
+        if not fa:
+            print("  SELF-TEST FAILED: uncovered-allowlist gate NOT caught — harness void.", file=sys.stderr)
             return 2
-        print(f"  self-test OK: broken gate caught ({len(f)} violation(s)).")
+        if not any("paths-ignore" in m for m in fi):
+            print("  SELF-TEST FAILED: paths-ignore-excluded gate NOT caught — harness void.", file=sys.stderr)
+            return 2
+        print(f"  self-test OK: allowlist gap caught ({len(fa)}), paths-ignore gap caught ({len(fi)}).")
         return 0
 
     print(f"=== verify-gate-enforcement ({len(gates)} gates) ===")
@@ -201,6 +287,7 @@ def main() -> int:
     all_fails = []
     for g in gates:
         all_fails += check_gate(g)
+    all_fails += completeness(manifest)
 
     print()
     if all_fails:

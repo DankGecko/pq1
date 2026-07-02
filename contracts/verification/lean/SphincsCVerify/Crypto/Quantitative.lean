@@ -230,21 +230,30 @@ section quantifies the generic feasibility at PQSigner's shipped params + cap. -
 /-- FORS+C subset-resilience work, in bits (upstream `SECURITY-ANALYSIS.md §2.3`). -/
 def forsCBits (a k : Nat) : Nat := (k - 1) * a + a
 
-/-- Birthday / `ht_idx` collision floor, in bits, after `2^qBits` signatures. -/
-def birthdayBits (n qBits : Nat) : Nat := n - qBits
+-- NAMING FIX 2026-07-02 (finding birthdayBits-naming-inverted): the two terms below
+-- were named the WRONG way round vs convention — `birthdayBits` held the LINEAR `n − qBits`
+-- and `multiTargetBits` held the QUADRATIC `n − 2·qBits`. A birthday bound is quadratic in q
+-- (q² collisions ⇒ floor `n − 2·qBits`), so the names are now: `queryBits` = the linear
+-- EUF-CMA query term, `birthdayBits` = the quadratic birthday / multi-target term. Bodies
+-- unchanged (only the names moved); `securityFloorBits`'s `Nat.min` is symmetric so the 96-bit
+-- floor is unaffected — this is a labeling fix, zero soundness effect.
 
-/-- Generic multi-target `(q+q²)·2⁻ⁿ` floor, in bits, after `2^qBits` signatures. -/
-def multiTargetBits (n qBits : Nat) : Nat := n - 2 * qBits
+/-- Linear EUF-CMA query term `q·2⁻ⁿ`, in bits, after `2^qBits` signatures (`n − qBits`). -/
+def queryBits (n qBits : Nat) : Nat := n - qBits
+
+/-- Birthday / multi-target term `q²·2⁻ⁿ` (`ht_idx` collision), in bits, after `2^qBits`
+    signatures (`n − 2·qBits`) — quadratic in q, hence the usual binding modality. -/
+def birthdayBits (n qBits : Nat) : Nat := n - 2 * qBits
 
 /-- Overall EUF-CMA bit-security floor: the weakest of the three modalities. -/
 def securityFloorBits (n qBits a k : Nat) : Nat :=
-  Nat.min (forsCBits a k) (Nat.min (birthdayBits n qBits) (multiTargetBits n qBits))
+  Nat.min (forsCBits a k) (Nat.min (queryBits n qBits) (birthdayBits n qBits))
 
 /-- The production per-slot cap is `2^16`. -/
 theorem maxSlotUses_eq_two_pow_16 : MaxSlotUses = 2 ^ 16 := by decide
 
 /-- **C10 at the per-slot cap (`q = 2^16`) holds a 96-bit EUF-CMA floor.**
-    `min(143, 112, 96) = 96` — the generic multi-target term is the binding one. -/
+    `min(143, 112, 96) = 96` — the quadratic birthday term (`n − 2·qBits`) is the binding one. -/
 theorem c10_security_floor_at_slot_cap :
     securityFloorBits SecurityBits 16 Spec.A Spec.K = 96 := by decide
 
@@ -252,8 +261,8 @@ theorem c10_security_floor_at_slot_cap :
     `min` is ≥ 96), spelled out term-by-term for auditability. -/
 theorem c10_modalities_ge_96_at_cap :
     96 ≤ forsCBits Spec.A Spec.K
-    ∧ 96 ≤ birthdayBits SecurityBits 16
-    ∧ 96 ≤ multiTargetBits SecurityBits 16 := by decide
+    ∧ 96 ≤ queryBits SecurityBits 16
+    ∧ 96 ≤ birthdayBits SecurityBits 16 := by decide
 
 /-- **The 2^16 cap is load-bearing.** At C10's native `2^18` leaf space the floor
     would fall to 92 bits; the shipped `2^16` cap holds it at 96 (a +4-bit margin
@@ -267,7 +276,7 @@ theorem c10_cap_is_load_bearing :
     floor for every reachable usage, not just at the boundary. -/
 theorem securityFloor_antitone_in_qBits {n a k q1 q2 : Nat} (h : q1 ≤ q2) :
     securityFloorBits n q2 a k ≤ securityFloorBits n q1 a k := by
-  unfold securityFloorBits birthdayBits multiTargetBits
+  unfold securityFloorBits queryBits birthdayBits
   exact Nat.le_min.mpr
     ⟨Nat.min_le_left _ _,
      Nat.le_min.mpr

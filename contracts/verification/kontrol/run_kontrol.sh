@@ -76,6 +76,15 @@ cd "$SW"
 # contract as "non-compatible JSON" (→ "Test identifiers not found" at prove).
 for h in "$DEST_DIR"/*.t.sol; do rm -rf "out/$(basename "$h")"; done
 
+# NOTE (2026-07-02, finding kontrol-gate-not-codehash-anchored): unlike run_halmos.sh
+# — which runs PinnedCodehashes / PinnedBytecodeImmutableLemma / DeployedBytecodeReproCheck
+# BEFORE its symbolic pass — this gate proves against whatever `kontrol build` emits from
+# the current tree, with NO in-flow codehash certification. "Directly on the deployed
+# bytecode" (THE_CLAIM / KONTROL_SCOPING) is anchored EXTERNALLY: the `contracts` CI job's
+# codehash-freeze (test/PinnedCodehashes.t.sol) fails on any drift from the pinned/on-chain
+# codehash, so on an undrifted tree the built bytecode matches the pins. A source drift would
+# be proven against the drifted bytecode here without THIS gate flagging it — the freeze test
+# is the tripwire, not run_kontrol.sh.
 echo "=== kontrol build ==="
 kontrol build --verbose
 

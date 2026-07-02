@@ -18,7 +18,11 @@ CHECKS = [
     ([ROOT/"lean/SphincsCVerify/Spec/Bytes.lean",
       ROOT/"lean/SphincsCVerify/Spec/Adrs.lean"],
      ROOT/"extracted/Extracted/SpecVendored.lean",
-     ["def ofU32BE", "def ofU64BE", "def make\n", "def setChainIndex"]),
+     # + ByteVec / cast / append / Adrs (2026-07-02, F5): the ADRS version bridge
+     # `specMakeAdrs_eq_vendored` simp-unfolds ByteVec.cast + .append, so a drift in
+     # them silently invalidates the bridge; they were vendored but UNCHECKED.
+     ["structure ByteVec", "def cast", "def append", "def Adrs",
+      "def ofU32BE", "def ofU64BE", "def make\n", "def setChainIndex"]),
     ([ROOT/"lean/SphincsCVerify/Spec/Sha256Impl.lean"],
      ROOT/"extracted/Extracted/Sha256Vendored.lean",
      ["abbrev Word", "def Rounds", "def DigestWords", "def BlockWords",

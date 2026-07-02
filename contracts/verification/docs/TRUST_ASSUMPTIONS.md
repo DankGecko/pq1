@@ -87,7 +87,9 @@ per-claim corollaries unprovable.
 > **CURRENT (2026-06-13).** `AXIOM_STATUS.json` + `PINNED_CODEHASHES.md` are
 > the AUTHORITATIVE source for codehashes and discharge artifacts; the
 > entries below are kept in sync with them. The A3.* axioms are
-> `discharged-bytecode`: the full Halmos suite (38 rules) passes on BOTH the
+> `discharged-bytecode`: the full Halmos suite (42 rules as of 2026-06-29 — 38 at
+> the 2026-06-11 snapshot + 3 HalmosIsValidSignature + Equiv rules; re-tallied
+> 2026-07-02) passes on BOTH the
 > `default` (runs=200) and `deploy` (runs=999999) profiles' bytecode, and the
 > deploy-profile build reproduces the live Base Mainnet contracts exactly
 > (`test/DeployedBytecodeReproCheck.t.sol`). Codehashes are shown as
@@ -98,7 +100,7 @@ per-claim corollaries unprovable.
 
 ### A3.1. `solidityVerifier_compiles_correctly`
 
-* **Lean.** `DeployedBytecode.SPHINCsC10Asm_verify = verifyYulModel`
+* **Lean.** `DeployedBytecode.SPHINCsC10Asm_verify = execC10Asm` (synced 2026-07-02; the bare `= verifyYulModel` form is **FALSE as a ∀** off N-masked keys — the bytecode runs two `and(key, N_MASK)==key` guards `verifyYulModel` omits. `execC10Asm` unfolds via `execC10Asm_eq` to `verifyYulModel` on N-masked keys, and is the form `theft_free`'s verifier leg consumes — `Bridge/Refinement.lean`)
 * **Pinned codehash.** `0xf1ef4ccee22e6b39446723232fe39761f089c7195941b2c12576956b38fcfef5` (default) / `0xeb1e3fcd38c7cd5f7b08352c298b34bd114d83f7dbd755b122c41eda2aab2cc5` (deploy — **byte-identical to on-chain Base Mainnet verifier `0xdDE4D290…`**)
 * **Discharge.** Halmos input-gate rules (`test/halmos/HalmosVerifier.t.sol`,
   length / N-mask) + **full-functional** executable Lean↔FIPS↔bytecode KAT
@@ -161,9 +163,17 @@ per-claim corollaries unprovable.
   shape axioms in `Crypto/Assumptions.lean` (`SM_DT_TCR_F`, `ITSR_F`,
   `hMsg_random_oracle`) and the collision-resistance reduction axiom
   `sha256_collision_resistance`.
-* **Scope.** For every PPT adversary `A` making at most `Q` signing
-  queries, `A`'s forgery probability is bounded by
-  `ε(A) + Q · 2^-128`.
+* **Scope.** The **qualitative** reduction (a forgery against an installed
+  key's honest history ⇒ `BreaksHash`) is what is cited/axiomatised; the
+  **quantitative** `Pr ≤ ε` bound is **NOT formalised** for the C10 parameter
+  set (corrected 2026-07-02 — the earlier concrete `ε(A) + Q · 2^-128` here
+  carried no citation deriving `2^-128` for C10 and contradicted the ledger:
+  `AXIOM_STATUS.json` records "the quantitative `Pr ≤ ε` bound is not
+  formalised … no public bit-security number for C10", and the project's own
+  kernel-checked generic-attack floor is **96 bits** at the shipped `2^16` cap
+  = `min(FORS+C 143, birthday 112, multi-target 96)`, `Crypto/Quantitative.lean`
+  — *not* 128). What is kernel-proven is the reduction's *consistency /
+  non-vacuity fence*, not a probability.
 * **Discharge.** Barbosa/Dupressoir/Hülsing/Meijers/Strub ASIACRYPT
   2024 (ePrint 2024/910) for SPHINCS+; Hülsing PQC2022 for the
   WOTS+C/FORS+C variant.

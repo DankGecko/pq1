@@ -263,9 +263,12 @@ re-pinned for it (`SPHINCsC10Asm.t.sol` codehash
 **Message randomizer `R` — DEVIATES (SPHINCS+C + C10).** FIPS 205 derives
 `R = PRF_msg(SK.prf, opt_rand, M) = Trunc_n(HMAC-SHA-256(SK.prf, opt_rand ‖
 M))` — a single keyed PRF. C10 derives `R` by the FORS+C **grind loop**:
-`R = SHA-256("R_grind" ‖ [opt_rand] ‖ nonce_be32)[0..16]`, iterated until the
-forced-zero FORS index holds (`fors.rs:88-108`). With `opt_rand = None` the
-path is deterministic (preserves byte-stable KAT vectors); with
+`R = SHA-256(SK.seed ‖ "R_grind" ‖ [opt_rand] ‖ M ‖ nonce_be32)[0..16]`, iterated
+until the forced-zero FORS index holds (`fors.rs:109-124`) — **secret-keyed
+(`SK.seed`) AND message-bound (`M`)** since the 2026-06-13 hardening
+(`b12d4969`; corrected here 2026-07-02 — this line previously recorded the
+pre-hardening `SHA-256("R_grind" ‖ [opt_rand] ‖ nonce)` preimage). With
+`opt_rand = None` the path is deterministic (preserves byte-stable KAT vectors); with
 `opt_rand = Some` per-call randomness enters, closing the msg-dependent
 iteration-count leak (`fors.rs:84-87`). Different mechanism, different
 preimage from FIPS `PRF_msg`.
@@ -306,7 +309,7 @@ SHA-2 / category-1 hash family with a **compressed 22-byte ADRSᶜ**, a
 |----------|-------------------------|---------|---------|
 | `H_msg` | `MGF1-SHA256(R ‖ PK.seed ‖ SHA256(R ‖ PK.seed ‖ PK.root ‖ M), m)` | `SHA256(pkSeed₃₂ ‖ pkRoot₃₂ ‖ R₃₂ ‖ msg₃₂ ‖ 0xFF×32)` → **full 32 B** | `hash.rs:291-305` |
 | `PRF` (sk derivation) | `Trunc₁₆(SHA256(PK.seed ‖ toByte(0,48) ‖ ADRSᶜ ‖ SK.seed))` | WOTS: `Trunc₁₆(SHA256(skSeed₃₂ ‖ "wots" ‖ layer₄ ‖ tree₃₂ ‖ kp₄ ‖ chain₄))`; FORS: `Trunc₁₆(SHA256(skSeed₃₂ ‖ "fors" ‖ htIdx₄ ‖ treeIdx₄ ‖ leaf₄))` | `hash.rs:376-417` |
-| `PRF_msg` | `Trunc₁₆(HMAC-SHA256(SK.prf, opt_rand ‖ M))` | `Trunc₁₆(SHA256("R_grind" ‖ [opt_rand] ‖ nonce₃₂))` in a grind loop | `fors.rs:88-108` |
+| `PRF_msg` | `Trunc₁₆(HMAC-SHA256(SK.prf, opt_rand ‖ M))` | `Trunc₁₆(SHA256(skSeed₃₂ ‖ "R_grind" ‖ [opt_rand] ‖ msg₃₂ ‖ nonce₃₂))` in a grind loop | `fors.rs:109-124` |
 | `F` (1-input tweak) | `Trunc₁₆(SHA256(PK.seed ‖ toByte(0,48) ‖ ADRSᶜ ‖ M₁))` | `th = Trunc₁₆(SHA256(pkSeed₃₂ ‖ adrs₃₂ ‖ val₃₂))` | `hash.rs:216-223` |
 | `H` (2-input tweak) | `Trunc₁₆(SHA256(PK.seed ‖ toByte(0,48) ‖ ADRSᶜ ‖ M₂))` | `th_pair = Trunc₁₆(SHA256(pkSeed₃₂ ‖ adrs₃₂ ‖ left₃₂ ‖ right₃₂))` | `hash.rs:230-243` |
 | `T_l` (l-input tweak) | `Trunc₁₆(SHA256(PK.seed ‖ toByte(0,48) ‖ ADRSᶜ ‖ M))` | `th_multi = Trunc₁₆(SHA256(pkSeed₃₂ ‖ adrs₃₂ ‖ pad16(v₀) ‖ …))` | `hash.rs:260-273` |
@@ -526,10 +529,12 @@ A full examination of the reference repo `github.com/nconsigny/SPHINCS-`
 - **Known divergence with a hardening implication:** upstream's current R
   derivation is `H(sk_seed ‖ "R_grind" ‖ message ‖ nonce)` — secret-keyed and
   message-bound — adopted to close a chosen-message FORS-saturation analysis
-  (their `docs/SECURITY-ANALYSIS.md` §2 "Avenue B"). PQSigner's R is
-  `H("R_grind" ‖ opt_rand ‖ nonce)`, safe **because production firmware
-  always supplies fresh TRNG `opt_rand`** (`secure/src/crypto.rs:118-123`,
-  errors on RNG failure). Since R derivation is signer-side only (the frozen
-  verifier merely reads R from the signature), adopting the secret-keyed
-  message-bound form is available as defense-in-depth — tracked in
-  `docs/work-todo.md`.
+  (their `docs/SECURITY-ANALYSIS.md` §2 "Avenue B"). **PQSigner ADOPTED that form
+  2026-06-13 (`b12d4969`; corrected here 2026-07-02 — this addendum previously
+  recorded the pre-hardening `H("R_grind" ‖ opt_rand ‖ nonce)`):** R is
+  `Trunc₁₆(SHA256(SK.seed ‖ "R_grind" ‖ [opt_rand] ‖ M ‖ nonce))` (`fors.rs:109-124`),
+  i.e. **secret-keyed (`SK.seed`) and message-bound (`M`)**. So Avenue-B safety
+  no longer rests on `opt_rand` freshness — the `sk_seed + message` binding holds
+  even on the deterministic `opt_rand = None` path (production still supplies fresh
+  TRNG `opt_rand`, `secure/src/crypto.rs:118-123`, as belt-and-braces). The Lean
+  model `Spec/Signer.lean:104-109` matches this current preimage.

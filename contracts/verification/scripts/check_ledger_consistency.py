@@ -434,6 +434,12 @@ def self_test() -> int:
         pin_ledger2, lambda r: "theorem theft_free (hInv : X) : True := by trivial")))
     # C8: sorryAx -> must fire
     cases.append(("C8", check_no_sorry("'x' depends on axioms: [sorryAx]")))
+    # C10: A3.1 bridge axiom RHS reverted to verifyYulModel -> must fire
+    def _reverted_reader(rel):
+        if "Refinement.lean" in rel:
+            return "axiom solidityVerifier_compiles_correctly :\n  ∀ x, foo x = verifyYulModel x\n\n/-- next -/"
+        return "def deployedVerifier (x : T) : Bool :=\n  verifyYulModel x\n\n/-! next -/"
+    cases.append(("C10 verifyYulModel-revert", check_bridge_axiom_rhs(_reverted_reader)))
     # C9: witness missing from the dump -> must fire
     wc_ledger = {"witness_coverage": [{"construct": "cap", "witness": "Foo.cap_witness"}]}
     cases.append(("C9 missing", check_witness_coverage(wc_ledger, {})))
@@ -457,6 +463,42 @@ def self_test() -> int:
         print("  ok: clean closure produced no failure (not always-firing)")
     print("=== self-test PASS ===" if ok else "=== self-test FAILED ===")
     return 0 if ok else 1
+
+
+def check_bridge_axiom_rhs(file_reader) -> list[str]:
+    """C10 (2026-07-02, finding a31/A3.1-RHS-unpinned): the A3.1 bridge axiom RHS and
+    the `deployedVerifier` def body MUST be `execC10Asm`, never the truncating
+    `verifyYulModel` (FALSE as a ∀ off N-masked keys — the bytecode's two
+    `and(key,N_MASK)==key` guards). A silent revert to `= verifyYulModel` keeps every
+    closure axiom NAME identical, so C1 (name-diff) cannot see it — this pins the RHS
+    SHAPE. The docstrings above both decls DISCUSS verifyYulModel, so we extract only the
+    declaration BODY (past the `:` / `:=`, up to the next blank line / decl)."""
+    fails = []
+    checks = [
+        ("lean/SphincsCVerify/Bridge/Refinement.lean",
+         r"\baxiom\s+solidityVerifier_compiles_correctly\b\s*:(.*?)(?=\n\n|\n/-|\n\s*axiom\b|\n\s*def\b|\n\s*theorem\b)",
+         "A3.1 axiom solidityVerifier_compiles_correctly RHS"),
+        ("lean/SphincsCVerify/Bridge/EntryPoint.lean",
+         r"\bdef\s+deployedVerifier\b.*?:=(.*?)(?=\n\n|\n/-|\n\s*def\b|\n\s*theorem\b)",
+         "deployedVerifier def body"),
+    ]
+    for rel, pat, label in checks:
+        text = file_reader(rel)
+        if text is None:
+            fails.append(f"C10 {label}: source file {rel} unreadable.")
+            continue
+        m = re.search(pat, text, re.DOTALL)
+        if not m:
+            fails.append(f"C10 {label}: declaration not found in {rel} (renamed/moved? reconcile the pin).")
+            continue
+        body = m.group(1)
+        if "execC10Asm" not in body:
+            fails.append(f"C10 {label}: must be `execC10Asm` but it is ABSENT "
+                         f"(reverted to the FALSE-as-∀ verifyYulModel form?).")
+        if "verifyYulModel" in body:
+            fails.append(f"C10 {label}: contains `verifyYulModel` — the truncating form is FALSE "
+                         f"as a ∀ off N-masked keys; the RHS must be `execC10Asm`.")
+    return fails
 
 
 # --------------------------------------------------------------------------- #
@@ -505,6 +547,7 @@ def main() -> int:
     fails += check_counts(ledger)
     fails += check_status_hygiene(ledger)
     fails += check_signature_pins(ledger, reader)
+    fails += check_bridge_axiom_rhs(reader)
     fails += check_no_sorry(live_text)
     fails += check_witness_coverage(ledger, live)
 

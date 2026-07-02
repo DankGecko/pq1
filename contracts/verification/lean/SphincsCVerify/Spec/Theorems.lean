@@ -598,31 +598,35 @@ theorem deployed_executeBatch_requires_prior_token
     (Bridge.solidityWalletExecuteBatch_compiles_correctly
       σ caller ownerIndex newOffchainCount targets values datas σ' hInv h)
 
-/-! ## 5. Claim 1 — strengthened: signature-to-execution binding.
+/-! ## 5. Claim 1 — the DIGEST FIELD-BINDING half of signature-to-execution binding.
 
-`theft_free` (above) establishes that a wallet-balance decrement
-implies some signature was verified over `sphincsDigest(op)`. This
-corollary adds the cryptographic **field-binding** result: the signed
-digest commits to the op's fields (sender, nonce, callData, gas
-params, chainId, entryPoint). Composes I-1 (non-bypass) +
-`Wallet.SphincsDigestSpec.sphincsDigest_field_binding`
-(sha256_collision_resistance) + the bridge axioms.
+`theft_free` (above) establishes that a wallet-balance decrement implies some
+signature was verified over `sphincsDigest(op)`. This corollary adds the
+cryptographic **field-binding** result it composes with: if two UserOps share
+a `sphincsDigest` then they share the full preimage — hence every positional
+field (sender, nonce, callData, gas params, chainId, entryPoint) — UNLESS
+SHA-256 collides. It discharges to exactly ONE axiom,
+`sha256_collision_resistance`, via `sphincsDigest_field_binding`.
 
-Consumed-by-claim: this is the headline statement for Claim 1
-("signature-to-execution binding"). Removing
-`sha256_collision_resistance` from the axiom set would leave a
-hole — equal digests would no longer imply equal preimages, so
-calldata could in principle differ between the signing and execution
-sides. -/
+SCOPE — HONEST (corrected 2026-07-02, finding exec-lean-F2/V4): this theorem
+proves **only the digest-collision half** ("equal digest ⇒ equal preimage ∨
+BreaksHash"). It is **link 1** of the 4-link signature-to-execution chain (see
+`ASSURANCE_CASE.md` EF-#15): link 2 (EntryPoint relays `op.callData` as the
+execute calldata) is the cited **A2** relay residual; link 3 (execute decodes
+calldata→args) is `HalmosExecuteEquiv`; link 4 (in-order dispatch) is
+`executeBatch_faithful`. Earlier revisions of this theorem carried four unused
+execution hypotheses (`σ'`, `effects`, `hExec`, `hDecrease`) and a docstring
+claiming it "composes I-1 + the bridge axioms" — BOTH FALSE: the proof consumed
+only `hSameDigest`, so those hypotheses were dead and no bridge axiom / I-1 was
+in the closure. The dead hypotheses are removed and the closure is now honestly
+`{propext, Quot.sound, sha256_collision_resistance}`; the theorem is not the
+whole "signature-to-execution binding" — it is its crypto field-binding link. -/
 
 open SphincsCVerify.Wallet.SphincsDigestSpec
 
 theorem theft_free_with_calldata_binding
     (op1 op2 : UserOperation)
-    (σ σ' : Bridge.EntryPoint.State)
-    (effects : Bridge.EntryPoint.Address → Nat → Nat)
-    (hExec : Bridge.EntryPoint.handleOp σ op1 effects = σ')
-    (hDecrease : σ'.balance σ.walletAddress < σ.balance σ.walletAddress)
+    (σ : Bridge.EntryPoint.State)
     -- Hypothesis: `op2` is some other UserOp whose digest happens to match
     -- (the only way an attacker could "substitute" calldata).
     (hSameDigest : sphincsDigest op1 σ.entryPointAddress σ.chainId

@@ -37,12 +37,24 @@ unzip maude.zip && cp maude ~/.local/bin/   # + the *.maude prelude files alongs
 | `zero_synced_means_all_reset` | all-traces | **verified** | a surviving "zero" boot ⟹ **all three** counters were reset before it |
 | `full_reset_bypass` | exists-trace | verified | the residual: resetting all three together survives a boot |
 
-The two all-traces lemmas **together** are the security property: a surviving
-boot is reachable *only* via **no reset** or **all-three reset**, so a **partial
-reset (one or two of the three counters) can never survive a boot** — the
-un-reset counter(s) desync the reset one and reconcile wipes. A single-side
-reset (the **S-1** OPTIGA glitch alone, an **SE050 delete** alone, or a TZ-bypass
-**MCU erase** alone) is therefore always caught.
+The two all-traces lemmas **together** are the security property **of this
+idealized SYMMETRIC model**: a surviving boot is reachable *only* via **no
+reset** or **all-three reset**, so a partial reset can never survive a boot *in
+the model*.
+
+> **⚠ MODEL ≠ DEPLOYED CODE (2026-07-02, finding PM-1).** The shipped
+> `reconcile_pin_attempts` (`secure/src/nsc/mod.rs`) is **DIRECTIONAL**
+> (`tamper = (se_count > mcu) || se_split`), not symmetric, and catches
+> **strictly less** than these lemmas assert: a coordinated reset of **both** SE
+> counters (optiga = se050 = 0) is **NOT** wiped by the deployed code (se_count=0,
+> se_split=false, 0 > mcu = false), and in the shipping config (SE050 counter
+> read = None) even a single OPTIGA reset is undetected by reconcile. So the
+> "a single-side reset is always caught" claim holds **only in the model**, not
+> for the deployed directional check. Reconcile is a defense-in-depth cross-check;
+> the attacker is still bounded by the primary per-SE silicon lockout + the MCU
+> page-124 pre-commit, so this is an overstated-model / false-README defect, not a
+> fund-drain. Re-modeling the directional predicate (the both-SE reset then
+> surfaces as a NEW residual) is the tracked follow-up.
 
 ### Maps to the threat model
 

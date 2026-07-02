@@ -141,14 +141,23 @@ Lean theorem.
 ### Claim 1
 
 **Lean** — `Spec/Theorems.lean::theft_free_with_calldata_binding`.
-Composes:
-- `Wallet/Invariants.lean::validateSignature_only_via_verify` (I-1)
-- `Wallet/SphincsDigestSpec.lean::sphincsDigest_field_binding` (uses
-  `Crypto/Assumptions.lean::sha256_injective_on_fixed_length`)
-- `Bridge/Refinement.lean::solidityVerifier_compiles_correctly` (A3.1)
-  + `solidityWallet_compiles_correctly` (A3.2)
+Discharges to exactly ONE axiom (corrected 2026-07-02, finding exec-lean-F2/V4 —
+this block previously claimed it "composes I-1 + A3.1 + A3.2" and closed over the
+deleted `sha256_injective_on_fixed_length`, BOTH false: the proof consumes only
+`sphincsDigest_field_binding`, and the false injective axiom was replaced by
+`sha256_collision_resistance` on 2026-06-14):
+- `Wallet/SphincsDigestSpec.lean::sphincsDigest_field_binding` (equal digest ⇒
+  equal preimage ∨ `BreaksHash`, via `Crypto.sha256_collision_resistance`).
 
-Closure: `propext, Quot.sound, sha256_injective_on_fixed_length`.
+This is the **digest field-binding LINK** of Claim 1, NOT the whole
+signature-to-execution binding: that the EntryPoint relays `op.callData` verbatim
+and the EVM delivers the CALL are the cited-TCB legs (A2 relay + A4 delivery — see
+the Claim-1 description above and `ASSURANCE_CASE.md` EF-#15's 4-link chain), NOT
+in-kernel. I-1 / A3.1 / A3.2 are consumed by `theft_free` / `theft_free_bytecode`,
+not by this corollary.
+
+Closure: `propext, Quot.sound, SphincsCVerify.Crypto.sha256_collision_resistance`
+(verified against the live `#print axioms` dump 2026-07-02).
 
 **Halmos** — `test/halmos/HalmosValidateUserOp.t.sol`:
 - `check_validateUserOp_success_implies_verifier_accepted`
@@ -355,9 +364,22 @@ This runs:
 
 ### In CI
 
-`contracts/.github/workflows/verify-three-claims.yml` runs the same
-pipeline on every PR. Halmos is `pip install halmos`; Certora needs a
-`CERTORAKEY` secret.
+**`make verify-three-claims` is a LOCAL/manual end-to-end convenience bundle — it
+is NOT a single CI job** (correction 2026-07-02: an earlier
+`contracts/.github/workflows/verify-three-claims.yml` was a *nested* `.github`
+path that GitHub Actions never executes — repo-level workflows only run from the
+root `.github/workflows/` — so "runs the same pipeline on every PR" was never
+true, and the bundle's Halmos/Certora legs need a patched toolchain / a
+`CERTORAKEY` secret unavailable in CI). What IS CI-enforced, per-PR, are the
+bundle's *constituent* gates, each in a root workflow:
+`verify-build`/`verify-audit`/`verify-fv-lints`/`verify-ledger-consistency`/
+`verify-storage-mutators` (`.github/workflows/lean-fv.yml`), `verify-transcription`
+(`a31-transcription.yml`), and the Foundry `forge test` + codehash-freeze
+(`ci.yml`). The Halmos/Kontrol symbolic discharge (steps 6–8) is a local/manual
+gate (see `verify-bytecode` in `scripts/gate_enforcement.json`, `enforcement:
+local_documented`). Run the whole bundle locally with `make verify-three-claims`
+(fixed 2026-07-02: it deterministically exited 141 mid-run — a `head`-under-
+`pipefail` SIGPIPE).
 
 ### Just the Lean kernel check (fastest, no Foundry/Halmos/Certora)
 
@@ -445,7 +467,7 @@ pin in `test/PinnedCodehashes.t.sol`. The CI gate fails until:
 | `contracts/verification/scripts/verify-three-claims.sh` | Local end-to-end runner |
 | `contracts/verification/scripts/lint_axioms.sh` | Fails on new True-typed axioms |
 | `contracts/verification/scripts/dump_axioms.lean` | Prints axiom closure per top-level theorem |
-| `contracts/.github/workflows/verify-three-claims.yml` | CI workflow |
+| `.github/workflows/{lean-fv,a31-transcription,ci}.yml` | The per-PR CI gates that enforce the bundle's constituent Lean/Foundry checks (the old nested `contracts/.github/workflows/verify-three-claims.yml` was dead — GitHub only runs root workflows — and was removed 2026-07-02) |
 | `contracts/smart-wallet/halmos.toml` | Halmos config |
 | `contracts/smart-wallet/stubs/halmos-cheatcodes/` | Local stub so Halmos tests compile with plain `forge build` |
 
