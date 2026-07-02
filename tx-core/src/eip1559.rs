@@ -470,6 +470,67 @@ fn validate_access_list(payload: &[u8]) -> Result<usize, TxError> {
 // nested re-slices `&self.rest[used..]` are in-bounds by that invariant.
 
 // ---------------------------------------------------------------------------
+// Kani harnesses (bounded model checking).
+// ---------------------------------------------------------------------------
+
+#[cfg(kani)]
+mod kani_harness {
+    use super::*;
+
+    /// Panic/OOB-freedom + well-formed output for `U256::format_decimal` — the
+    /// amount-rendering primitive where the trusted-display HIGHs lived (the CoW
+    /// 100-WETH-as-0.06 low-word read, the M-6 digit-aliasing, the F14#3
+    /// nonzero-collapse). It had ZERO Kani coverage. A panic or OOB write here is
+    /// a DoS on the trusted display; a byte that is not a digit or '.' would
+    /// render garbage the user is asked to sign against.
+    ///
+    /// Scope (honest): the VALUE is CONCRETE (a symbolic U256 — even a symbolic
+    /// selection among concrete values — makes CBMC unwind the byte-wise
+    /// long-division `div10_inplace` symbolically, which does not converge; four
+    /// bounds down to 2^16 each ran > 10 min. So the value is fixed and the
+    /// `decimals`/`frac`/`trim` inputs are FULLY SYMBOLIC — this proves
+    /// panic/OOB-freedom + well-formed output (every byte a digit or '.') over
+    /// EVERY format SHAPE, which is exactly the round-half-up-carry / trailing-
+    /// zero-trim / structural-zero (`frac > decimals`) branch space where the
+    /// M-6 digit-aliasing and F14#3 nonzero-collapse display HIGHs lived. The
+    /// value `666_667` is chosen because at `decimals > frac` its first dropped
+    /// digit is >= 5, exercising the carry that can ripple into and grow the
+    /// integer part. The full symbolic-VALUE ∀ (+ a value-injectivity / no-
+    /// collapse post-condition over the digit-extraction) is the heavier CBMC
+    /// follow-up the symbolic-division cost blocks in-session.
+    #[kani::proof]
+    #[kani::unwind(52)]
+    fn format_decimal_panic_free_over_format_shapes() {
+        // CONCRETE value (rounding-carry trigger): digit extraction is concrete.
+        let v = {
+            let mut b = [0u8; 32];
+            b[24..32].copy_from_slice(&666_667u64.to_be_bytes());
+            U256(b)
+        };
+
+        let decimals: u32 = kani::any();
+        kani::assume(decimals <= 18);
+        let frac: u32 = kani::any();
+        kani::assume(frac <= 18);
+        let trim: bool = kani::any();
+
+        // 10 int digits + '.' + 18 frac digits = 29 max; 64 leaves margin so the
+        // Some-path (not the too-small-buffer None early-return) is exercised.
+        let mut out = [0u8; 64];
+        if let Some(len) = v.format_decimal(decimals, frac, trim, &mut out) {
+            assert!(len <= out.len());
+            let mut i = 0usize;
+            while i < len {
+                let b = out[i];
+                // every emitted byte is an ASCII digit or the decimal point.
+                assert!(b == b'.' || (b'0'..=b'9').contains(&b));
+                i += 1;
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests (host-only).
 // ---------------------------------------------------------------------------
 
