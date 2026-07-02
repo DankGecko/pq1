@@ -130,6 +130,13 @@ pub fn c10_sign_verified_with_progress(
     let mut opt_rand_buf = [0u8; sphincs_c10::params::N];
     #[cfg(not(test))]
     if crate::rng_strong::fill(&mut opt_rand_buf).is_err() {
+        // `rng_strong::fill` may have written partial platform-TRNG bytes
+        // before the SE XOR-fold failed — scrub before bailing, matching
+        // every other Err/Ok path in this function (found by the sca-3
+        // adversarial review; the fill-failure early-return was the one
+        // path that skipped the wipe).
+        opt_rand_buf.zeroize();
+        crate::fi::zeroize_barrier();
         return Err(());
     }
     let opt_rand: Option<&[u8; sphincs_c10::params::N]> = Some(&opt_rand_buf);
