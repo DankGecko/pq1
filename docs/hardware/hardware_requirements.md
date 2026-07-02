@@ -68,13 +68,13 @@ Entropy of the seed phrase is split across two independent secure elements to el
 
 ## Display
 
-- **Longevity display** (OLED-class)
+- **Longevity display** (NV3007 TFT LCD — the shipping display; the SSD1306 OLED backend was removed 2026-06-30)
   - Must remain fully functional after extended periods of inactivity (e.g.
     stored for 10+ years between uses)
   - On its own bus (SPI or I²C), kept off any probe-accessible header — it
     renders the trusted-path PIN entry and transaction-confirm screens, so its
     bus is an S-world peripheral for layout purposes
-  - On a locked board (RDP ≥ 1, TZEN = 1, no OEM keys) the OLED is the **only**
+  - On a locked board (RDP ≥ 1, TZEN = 1, no OEM keys) the NV3007 LCD is the **only**
     working diagnostic — UART/SWD/PE13 are all silent (memory: per-die DHUK
     validation). Don't omit it or bury it under the can in a way that defeats
     bring-up.
@@ -216,7 +216,7 @@ Legend: ✅ done / works · 🟡 partial (firmware present, board step pending o
 | SE050 on a separate I²C peripheral | README §A | — (layout decision) | ⏳ open layout review item |
 | Independent reset per SE | README §A, this doc | — (layout); firmware reset sequencing | ⏳ board not started |
 | I²C pull-ups per SE bus | implicit | — (layout) | ⏳ board not started |
-| Longevity OLED on its own bus, off headers | this doc, README §A | `secure/src/ui/oled.rs` | 🟡 OLED driver works; final part TBD |
+| Longevity NV3007 LCD on its own bus, off headers | this doc, README §A | `secure/src/ui/lcd.rs` | 🟢 NV3007 LCD driver silicon-validated (SSD1306 OLED removed 2026-06-30) |
 | 2 buttons direct to GPIO, no controller IC | this doc, README §A | `secure/src/hw/buttons.rs`, `secure/src/ui/confirm.rs` | ✅ on dev-board headers |
 | Tamper mesh, all 4 layers, over U585 + both SEs | README §A, `docs/security/HARDENING.md` | `secure/src/hw/tamp.rs` (ext-pin cfg pending) | ❌ board not started; firmware ext-pin cfg open |
 | Case switch → `TAMP_INx`, hw pull + RC filter | README §A, `docs/security/HARDENING.md` | `secure/src/hw/tamp.rs` (`TAMP_FLTCR` set; pin enable pending) | ❌ board not started |

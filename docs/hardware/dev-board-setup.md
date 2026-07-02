@@ -224,9 +224,9 @@ What it switches:
 - **No interactive input via probe-rs.** The semihosting UI mock uses `SYS_READC` (operation `0x07`) for button input. probe-rs does not support this operation. `make e2e-hw` builds with `ui-semihosting,e2e-test` and boots fine — you'll see `[S] hash: HW SHA-256 self-test PASS`, provisioning complete, the NS-side test runner kick off — and then hang on the `Enter PIN` dialog because the NS driver calls `CMD_REQUEST_UNLOCK` even though the secure world pre-unlocked itself. You'll see a stream of `Target wanted to run semihosting operation 0x7 ... probe-rs does not support this operation yet. Continuing...` warnings.
   Workarounds (pick by what you're testing):
   - **Signing speed / correctness, fully automated:** `make test-key-speed` — DWT-timed bench, no semihosting reads, prints `=== PASS ===` on success. With `hw-sha256` active (implied by `stm32u585`) expect first-sign ≈ 2.77 s on 160 MHz. Any number much higher means the HASH peripheral isn't on.
-  - **Driving the wallet by hand on real hardware:** `make play-hw-display` — uses `tools/wallet_run_hw.py` to forward arrow keys through a probe-rs `print`-based handshake (not `SYS_READC`), drives the physical SSD1306 OLED.
+  - **Driving the wallet by hand on real hardware:** `make play-hw-display` — uses `tools/wallet_run_hw.py` to forward arrow keys through a probe-rs `print`-based handshake (not `SYS_READC`), drives the physical NV3007 LCD.
   - **Full semihosting console:** **GDB with OpenOCD** instead of probe-rs — `arm-none-eabi-gdb` + `openocd` handle `SYS_READC` correctly, so `make e2e-hw` will actually run to completion.
-  - **On-board buttons:** wire real GPIO buttons + OLED (`ui-oled,gpio-buttons`) and drive the device standalone with no debugger at all.
+  - **On-board buttons:** wire real GPIO buttons + NV3007 LCD (`ui-lcd,gpio-buttons`) and drive the device standalone with no debugger at all.
 
 - **HW SHA-256 self-test gates signing.** On `stm32u585` builds, `hw::hash::init_clock()` runs a `SHA-256("abc")` known-answer test at boot and halts the CPU in `loop { wfe() }` on mismatch. You'll always see exactly one of:
   ```
