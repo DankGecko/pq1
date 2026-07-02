@@ -1,0 +1,42 @@
+{
+  "$schema": "../../specs/erc7730-v2.schema.json",
+  "context": {
+    "$id": "SyntheticRefTokenAmount",
+    "contract": {
+      "deployments": [
+        { "chainId": 1, "address": "0x000000000000000000000000000000000000000D" }
+      ]
+    }
+  },
+  "metadata": {
+    "owner": "Synthetic Test Fixture",
+    "info": { "url": "https://example.invalid" },
+    "contractName": "SyntheticRefTokenAmount"
+  },
+  "display": {
+    "definitions": {
+      "sendAmount": { "label": "Amount to Send", "format": "tokenAmount" },
+      "receiveAmount": { "label": "Amount to Receive", "format": "tokenAmount" }
+    },
+    "formats": {
+      "swap(address srcToken, address dstToken, uint256 sendAmount, uint256 minReceive)": {
+        "intent": "Swap tokens",
+        "fields": [
+          {
+            "$ref": "$.display.definitions.sendAmount",
+            "path": "sendAmount",
+            "params": { "tokenPath": "srcToken" },
+            "visible": "always"
+          },
+          {
+            "$ref": "$.display.definitions.receiveAmount",
+            "path": "minReceive",
+            "label": "Min Received",
+            "params": { "tokenPath": "dstToken" },
+            "visible": "always"
+          }
+        ]
+      }
+    }
+  }
+}

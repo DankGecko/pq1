@@ -997,6 +997,81 @@ fn positive_lido_request_withdrawals_renders_every_element() {
     let _ = find_page_by_label(&pages, "Owner");
 }
 
+/// review finding 1.1 — field-level `$ref` into `$.display.definitions` must
+/// resolve, verified BY RENDER (not just "it compiled to a leaf", the exact
+/// failure mode that shipped the degraded 1inch/paraswap routers). The
+/// referenced `tokenAmount` FORMAT (from the definition) and the field-local
+/// `tokenPath` param (the reference's own params) must BOTH reach the IR, so
+/// the field renders a bound token amount rather than the blank-label 64-hex
+/// raw dump the pre-fix silent `$ref`-drop produced. Also pins the `label`
+/// merge in both directions: field 1 inherits the definition's "Amount to
+/// Send" (it carries no label); field 2 overrides it with "Min Received".
+#[test]
+fn positive_synthetic_ref_field_renders_bound_token_amount() {
+    let res = build_seed();
+    let entry = find_leaf(&res, "synthetic-ref-token-amount.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
+
+    // srcToken == the bound USDC metadata below; the send field's
+    // `tokenPath:"srcToken"` must resolve to it so "Amount to Send" binds.
+    let usdc: [u8; 20] = hex::decode("A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let dst = [0x77u8; 20];
+    let calldata = {
+        let mut d = Vec::with_capacity(4 + 4 * 32);
+        d.extend_from_slice(&keccak256(b"swap(address,address,uint256,uint256)")[..4]);
+        let mut w = [0u8; 32];
+        w[12..].copy_from_slice(&usdc);
+        d.extend_from_slice(&w); // srcToken
+        let mut w2 = [0u8; 32];
+        w2[12..].copy_from_slice(&dst);
+        d.extend_from_slice(&w2); // dstToken
+        d.extend_from_slice(&u256_from_u64(1_500_000).0); // sendAmount = 1.5 USDC (6 dp)
+        d.extend_from_slice(&u256_from_u64(900_000).0); // minReceive
+        d
+    };
+    assert_selector_matches(&verified.ir, &calldata, "swap(address,address,uint256,uint256)");
+
+    let tx = envelope(1, entry.contract);
+    let usdc_meta = Erc20Metadata {
+        chain_id: 1,
+        contract: usdc,
+        decimals: 6,
+        name: b"USD Coin",
+        symbol: b"USDC",
+    };
+    let resolver = NameResolver::new();
+    let pages = render_erc7730_pages(&tx, &calldata, &verified, Some(&usdc_meta), &resolver)
+        .expect("render");
+    assert_all_pages_printable(&pages);
+    let dump = dump_pages(&pages);
+
+    // Field 1: definition's label inherited (the field carries none).
+    let send_page = find_page_by_label(&pages, "Amount to Send");
+    // `$ref` resolved to `tokenAmount` (format from def) AND kept the field's
+    // `tokenPath:"srcToken"` (params merge) → a bound USDC amount, not a raw
+    // 64-hex dump. Both survivals are proven by the ticker + scaled value.
+    let send_rows = page_strs(&pages, send_page).join(" ");
+    assert!(
+        send_rows.contains("USDC"),
+        "send amount must bind the USDC ticker (proves format-from-def + tokenPath-from-field both survived $ref):\n{dump}"
+    );
+    assert!(
+        send_rows.contains(".5"),
+        "send amount 1.5 (fraction row) missing — field degraded to raw?:\n{dump}"
+    );
+
+    // Field 2: field-local label OVERRIDES the definition's "Amount to Receive".
+    let _ = find_page_by_label(&pages, "Min Received");
+    assert!(
+        !dump.contains("Amount to Receive"),
+        "field-local `label` must override the definition's label:\n{dump}"
+    );
+}
+
 /// The REAL registry Lido `requestWithdrawals` leaf — a `tokenAmount` `uint256[]`
 /// array (the synthetic fixture uses `format:amount`; EVERY registry `uint256[]`
 /// uses `tokenAmount`, so this is the shape the synthetic cannot exercise, and

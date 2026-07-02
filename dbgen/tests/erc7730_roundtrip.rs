@@ -583,6 +583,53 @@ fn vendored_uniswap_v3_router_curation_and_slices_all_compile() {
     );
 }
 
+/// review finding 1.1 regression guard, against the REAL vendored corpus.
+/// ParaSwap AugustusSwapper v5 renders its swap amounts as `tokenAmount` via
+/// field-level `$ref` into `$.display.definitions`. Before the resolver landed,
+/// the `$ref` key was silently dropped and all four fields degraded to
+/// unlabeled `raw` hex under a "Swap" banner (the shipped-in-the-pinned-root
+/// bug). This fails LOUD if $ref resolution regresses OR is lost on re-vendor:
+/// no field may be the raw+empty-label degradation signature, and the swap
+/// amounts must resolve to `tokenAmount`.
+#[test]
+fn vendored_paraswap_augustus_v5_ref_fields_render_token_amounts() {
+    let root = workspace_root();
+    let reg = root.join("secure/data/erc7730-registry");
+    let desc = reg.join("registry/paraswap/calldata-AugustusSwapper-v5.json");
+    let policy =
+        load_policy(&root.join("secure/data/erc7730/policy.toml")).expect("load policy");
+    let emitted = try_compile_one(&desc, &policy, Some(&reg)).expect(
+        "vendored ParaSwap Augustus v5 must compile — if this fails, field-level \
+         $ref resolution (finding 1.1) regressed or the definitions were dropped",
+    );
+    assert!(!emitted.is_empty(), "at least one Augustus v5 leaf");
+    let mut n_token_amount = 0usize;
+    let mut n_degraded = 0usize;
+    for e in &emitted {
+        let ir = Erc7730Ir::parse(&e.ir_bytes).expect("Augustus v5 IR parses");
+        for fmt in ir.format_iter() {
+            let fmt = fmt.expect("format parses");
+            for field in fmt.fields() {
+                let field = field.expect("field parses");
+                if field.format_op == 0x03 {
+                    n_token_amount += 1;
+                }
+                if field.format_op == 0x01 && field.label.is_empty() {
+                    n_degraded += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(
+        n_degraded, 0,
+        "no field may degrade to raw+empty-label — the $ref was dropped (finding 1.1)"
+    );
+    assert!(
+        n_token_amount >= 4,
+        "Augustus v5 swap amounts must resolve to tokenAmount via $ref (got {n_token_amount})"
+    );
+}
+
 // ── Nested-EIP-712 v0x03 anchor emission (Phase 5 v1) ──────────────────────
 
 fn hex_bytes(s: &str) -> Vec<u8> {

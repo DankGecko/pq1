@@ -10,7 +10,7 @@
 # against the source JSON and the upstream attestation chain.
 # The trailing `## skips` section lists every descriptor the
 # tolerant build dropped (compile failure or dedup), by reason.
-# Root: 0x7d6249522abcb3dcff92c88bd06f7ebe7d1bcd109d7b8253e89b2cbc7fe7f816
+# Root: 0x9f0885a289d89c900f59a5a88ce59344bcd3d35394d7b8f8057efea72bf58035
 # Policy: min_attesters=2 allow_unattested_dev_descriptors=true
 # Trusted attesters (3):
 #   - eip155:1:0x0000000000000000000000000000000000000001
@@ -204,7 +204,7 @@
          · [0xe50e3dbb] op=unit         label='Amount'
          · [0xe50e3dbb] op=addressName  label='Receiver'
          · [0xe50e3dbb] op=raw          label='Referrer Id'
-[0016] ctx=contract chain_id=1 contract=0x111111125421ca6dc452d289314280a0f8842a65 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x6626696469ffad9c74da99b76f5d5fb3b7bae72f9ca3d7e6f369a735c34b6630 erc8176_hash=0x81360493cd41b89f72494f4d6b17e921f4e976032fe2c2e56f1552a313293ffa ir_len=329 fields=4 degraded=0 source=calldata-AggregationRouterV6.json
+[0016] ctx=contract chain_id=1 contract=0x111111125421ca6dc452d289314280a0f8842a65 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x6626696469ffad9c74da99b76f5d5fb3b7bae72f9ca3d7e6f369a735c34b6630 erc8176_hash=0x81360493cd41b89f72494f4d6b17e921f4e976032fe2c2e56f1552a313293ffa ir_len=429 fields=4 degraded=0 source=calldata-AggregationRouterV6.json
          · [0xb68fb020] op=raw          label='Order'
          · [0xb68fb020] op=raw          label='Maker Traits'
          · [0x5816d723] op=calldata     label='Swap'
@@ -216,16 +216,16 @@
          · [0x3af21ec5] op=raw          label='To'
          · [0x3af21ec5] op=raw          label='Salt'
          · [0x3af21ec5] op=raw          label='Maker Traits'
-[0018] ctx=contract chain_id=1 contract=0x1111111254fb6c44bac0bed2854e76f90643097d primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0xa8191fbc813859ed827c6702f7fb7f798f4c95ce80cdefb112ede4e1ae3a74df erc8176_hash=0xe492e54fa2a22f2e9c5c98d343411e41bbe991c637395e8e4d0b927442062634 ir_len=281 fields=10 degraded=9 source=calldata-AggregationRouterV4-eth.json
-         · [0xb0431182] op=raw          label=''  <-- DEGRADED (raw, no label)
-         · [0xb0431182] op=raw          label=''  <-- DEGRADED (raw, no label)
-         · [0xb0431182] op=raw          label=''  <-- DEGRADED (raw, no label)
-         · [0x9994dd15] op=raw          label=''  <-- DEGRADED (raw, no label)
-         · [0x9994dd15] op=raw          label=''  <-- DEGRADED (raw, no label)
-         · [0x9994dd15] op=raw          label=''  <-- DEGRADED (raw, no label)
-         · [0xd6a92a5d] op=raw          label=''  <-- DEGRADED (raw, no label)
-         · [0xd6a92a5d] op=raw          label=''  <-- DEGRADED (raw, no label)
-         · [0xd6a92a5d] op=raw          label=''  <-- DEGRADED (raw, no label)
+[0018] ctx=contract chain_id=1 contract=0x1111111254fb6c44bac0bed2854e76f90643097d primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0xa8191fbc813859ed827c6702f7fb7f798f4c95ce80cdefb112ede4e1ae3a74df erc8176_hash=0xe492e54fa2a22f2e9c5c98d343411e41bbe991c637395e8e4d0b927442062634 ir_len=431 fields=10 degraded=0 source=calldata-AggregationRouterV4-eth.json
+         · [0xb0431182] op=tokenAmount  label='Amount to Send'
+         · [0xb0431182] op=tokenAmount  label='Minimum to Receive'
+         · [0xb0431182] op=addressName  label='Beneficiary'
+         · [0x9994dd15] op=tokenAmount  label='Amount to Send'
+         · [0x9994dd15] op=tokenAmount  label='Minimum to Receive'
+         · [0x9994dd15] op=addressName  label='Beneficiary'
+         · [0xd6a92a5d] op=tokenAmount  label='Amount to Send'
+         · [0xd6a92a5d] op=tokenAmount  label='Minimum to Receive'
+         · [0xd6a92a5d] op=addressName  label='Beneficiary'
          · [0xd6a92a5d] op=raw          label='Permit'
 [0019] ctx=eip712 chain_id=1 contract=0x119c71d3bbac22029622cbaec24854d3d32d2828 primary_type=0xb5da55eff5c27a8adb2f67a1c8c69165b0ddc78491ca437a82bd77e475228b2c descriptor_hash=0xb40eebb78a5c72de2598ecf45cd607adafbe03889efc57a364aab3d1bce9b28c erc8176_hash=0x801e64ee9156f99c7647c288c89c4937c904255d9db500ad42d222fa240d103b ir_len=379 fields=9 degraded=0 source=eip712-1inch-limit-order.json
          · [0xb5da55ef] op=raw          label='From'
@@ -2920,11 +2920,11 @@
          · [0xe4832905] op=raw          label='Delegatee'
          · [0xe4832905] op=raw          label='Nonce'
          · [0xe4832905] op=raw          label='Expiry'
-[0247] ctx=contract chain_id=1 contract=0xdef171fe48cf0115b1d80b88dc8eab59176fee57 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0xe0efa652bf41370b4c55d5384c687c9c6e34c68b103c0ef05ba2eca3059034a1 erc8176_hash=0x7f52775921826414acfeeab334e5bc8022dc228406a912493ed62e3d62d76e37 ir_len=195 fields=4 degraded=4 source=calldata-AugustusSwapper-v5.json
-         · [0x935fb84b] op=raw          label=''  <-- DEGRADED (raw, no label)
-         · [0x935fb84b] op=raw          label=''  <-- DEGRADED (raw, no label)
-         · [0x54840d1a] op=raw          label=''  <-- DEGRADED (raw, no label)
-         · [0x54840d1a] op=raw          label=''  <-- DEGRADED (raw, no label)
+[0247] ctx=contract chain_id=1 contract=0xdef171fe48cf0115b1d80b88dc8eab59176fee57 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0xe0efa652bf41370b4c55d5384c687c9c6e34c68b103c0ef05ba2eca3059034a1 erc8176_hash=0x7f52775921826414acfeeab334e5bc8022dc228406a912493ed62e3d62d76e37 ir_len=280 fields=4 degraded=0 source=calldata-AugustusSwapper-v5.json
+         · [0x935fb84b] op=tokenAmount  label='Maximum to Send'
+         · [0x935fb84b] op=tokenAmount  label='Amount to Receive'
+         · [0x54840d1a] op=tokenAmount  label='Amount to Send'
+         · [0x54840d1a] op=tokenAmount  label='Receive before fees'
 [0248] ctx=contract chain_id=1 contract=0xe042678e6c6871fa279e037c11e390f31334ba0b primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x742299a01869cb0495022286f47c169d26cf3cbc6dd860ed914599d18ddfec5f erc8176_hash=0x4bce13aaa2cf54ed934696a3645339bc56acc521d4bad9f5d127eaf3ad09b65b ir_len=573 fields=13 degraded=0 source=calldata-RedemptionVault.json
          · [0xd5f73f5c] op=unit         label='mToken Amount In'
          · [0x8b53f75e] op=addressName  label='Receive token'
@@ -3404,7 +3404,7 @@
          · [0xd099cc98] op=date         label='Valid after'
          · [0xd099cc98] op=date         label='Valid before'
          · [0xd099cc98] op=raw          label='Nonce'
-[0288] ctx=contract chain_id=10 contract=0x111111125421ca6dc452d289314280a0f8842a65 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x6626696469ffad9c74da99b76f5d5fb3b7bae72f9ca3d7e6f369a735c34b6630 erc8176_hash=0x81360493cd41b89f72494f4d6b17e921f4e976032fe2c2e56f1552a313293ffa ir_len=329 fields=4 degraded=0 source=calldata-AggregationRouterV6.json
+[0288] ctx=contract chain_id=10 contract=0x111111125421ca6dc452d289314280a0f8842a65 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x6626696469ffad9c74da99b76f5d5fb3b7bae72f9ca3d7e6f369a735c34b6630 erc8176_hash=0x81360493cd41b89f72494f4d6b17e921f4e976032fe2c2e56f1552a313293ffa ir_len=429 fields=4 degraded=0 source=calldata-AggregationRouterV6.json
          · [0xb68fb020] op=raw          label='Order'
          · [0xb68fb020] op=raw          label='Maker Traits'
          · [0x5816d723] op=calldata     label='Swap'
@@ -3820,7 +3820,7 @@
          · [0x6e71edae] op=date         label='Valid until'
          · [0x6e71edae] op=raw          label='Owner'
          · [0x6e71edae] op=raw          label='Nonce'
-[0333] ctx=contract chain_id=56 contract=0x111111125421ca6dc452d289314280a0f8842a65 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x6626696469ffad9c74da99b76f5d5fb3b7bae72f9ca3d7e6f369a735c34b6630 erc8176_hash=0x81360493cd41b89f72494f4d6b17e921f4e976032fe2c2e56f1552a313293ffa ir_len=329 fields=4 degraded=0 source=calldata-AggregationRouterV6.json
+[0333] ctx=contract chain_id=56 contract=0x111111125421ca6dc452d289314280a0f8842a65 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x6626696469ffad9c74da99b76f5d5fb3b7bae72f9ca3d7e6f369a735c34b6630 erc8176_hash=0x81360493cd41b89f72494f4d6b17e921f4e976032fe2c2e56f1552a313293ffa ir_len=429 fields=4 degraded=0 source=calldata-AggregationRouterV6.json
          · [0xb68fb020] op=raw          label='Order'
          · [0xb68fb020] op=raw          label='Maker Traits'
          · [0x5816d723] op=calldata     label='Swap'
@@ -4076,11 +4076,11 @@
          · [0xea0e2920] op=raw          label='Totp'
          · [0xdddd43cd] op=raw          label='Proposer address'
          · [0xdddd43cd] op=raw          label='Totp'
-[0360] ctx=contract chain_id=56 contract=0xdef171fe48cf0115b1d80b88dc8eab59176fee57 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0xe0efa652bf41370b4c55d5384c687c9c6e34c68b103c0ef05ba2eca3059034a1 erc8176_hash=0x7f52775921826414acfeeab334e5bc8022dc228406a912493ed62e3d62d76e37 ir_len=195 fields=4 degraded=4 source=calldata-AugustusSwapper-v5.json
-         · [0x935fb84b] op=raw          label=''  <-- DEGRADED (raw, no label)
-         · [0x935fb84b] op=raw          label=''  <-- DEGRADED (raw, no label)
-         · [0x54840d1a] op=raw          label=''  <-- DEGRADED (raw, no label)
-         · [0x54840d1a] op=raw          label=''  <-- DEGRADED (raw, no label)
+[0360] ctx=contract chain_id=56 contract=0xdef171fe48cf0115b1d80b88dc8eab59176fee57 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0xe0efa652bf41370b4c55d5384c687c9c6e34c68b103c0ef05ba2eca3059034a1 erc8176_hash=0x7f52775921826414acfeeab334e5bc8022dc228406a912493ed62e3d62d76e37 ir_len=280 fields=4 degraded=0 source=calldata-AugustusSwapper-v5.json
+         · [0x935fb84b] op=tokenAmount  label='Maximum to Send'
+         · [0x935fb84b] op=tokenAmount  label='Amount to Receive'
+         · [0x54840d1a] op=tokenAmount  label='Amount to Send'
+         · [0x54840d1a] op=tokenAmount  label='Receive before fees'
 [0361] ctx=contract chain_id=56 contract=0xe12e0f117d23a5ccc57f8935cd8c4e80cd91ff01 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x6ce65e0c3fe6fb163e0df3629f24e6161d87851bb8682bff50e4f57ae3f79364 erc8176_hash=0xa77e9c467d52f5495c1698bc8d711f2240ab8ad982c81224d7333fb3f81ed267 ir_len=428 fields=8 degraded=0 source=calldata-NativeOrderFactory.json
          · [0x8c72b608] op=amount       label='Amount to Send'
          · [0x8c72b608] op=tokenAmount  label='Receive amount'
@@ -4133,7 +4133,7 @@
          · [0xea0e2920] op=raw          label='Totp'
          · [0xdddd43cd] op=raw          label='Proposer address'
          · [0xdddd43cd] op=raw          label='Totp'
-[0366] ctx=contract chain_id=100 contract=0x111111125421ca6dc452d289314280a0f8842a65 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x6626696469ffad9c74da99b76f5d5fb3b7bae72f9ca3d7e6f369a735c34b6630 erc8176_hash=0x81360493cd41b89f72494f4d6b17e921f4e976032fe2c2e56f1552a313293ffa ir_len=329 fields=4 degraded=0 source=calldata-AggregationRouterV6.json
+[0366] ctx=contract chain_id=100 contract=0x111111125421ca6dc452d289314280a0f8842a65 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x6626696469ffad9c74da99b76f5d5fb3b7bae72f9ca3d7e6f369a735c34b6630 erc8176_hash=0x81360493cd41b89f72494f4d6b17e921f4e976032fe2c2e56f1552a313293ffa ir_len=429 fields=4 degraded=0 source=calldata-AggregationRouterV6.json
          · [0xb68fb020] op=raw          label='Order'
          · [0xb68fb020] op=raw          label='Maker Traits'
          · [0x5816d723] op=calldata     label='Swap'
@@ -4254,7 +4254,7 @@
          · [0xc15cdb66] op=raw          label='V'
          · [0xc15cdb66] op=raw          label='R'
          · [0xc15cdb66] op=raw          label='S'
-[0375] ctx=contract chain_id=137 contract=0x111111125421ca6dc452d289314280a0f8842a65 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x6626696469ffad9c74da99b76f5d5fb3b7bae72f9ca3d7e6f369a735c34b6630 erc8176_hash=0x81360493cd41b89f72494f4d6b17e921f4e976032fe2c2e56f1552a313293ffa ir_len=329 fields=4 degraded=0 source=calldata-AggregationRouterV6.json
+[0375] ctx=contract chain_id=137 contract=0x111111125421ca6dc452d289314280a0f8842a65 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x6626696469ffad9c74da99b76f5d5fb3b7bae72f9ca3d7e6f369a735c34b6630 erc8176_hash=0x81360493cd41b89f72494f4d6b17e921f4e976032fe2c2e56f1552a313293ffa ir_len=429 fields=4 degraded=0 source=calldata-AggregationRouterV6.json
          · [0xb68fb020] op=raw          label='Order'
          · [0xb68fb020] op=raw          label='Maker Traits'
          · [0x5816d723] op=calldata     label='Swap'
@@ -4620,11 +4620,11 @@
          · [0x29138802] op=raw          label='signatureDeadline'
          · [0x903d668d] op=raw          label='unfollowerProfileId'
          · [0x903d668d] op=raw          label='signatureDeadline'
-[0411] ctx=contract chain_id=137 contract=0xdef171fe48cf0115b1d80b88dc8eab59176fee57 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0xe0efa652bf41370b4c55d5384c687c9c6e34c68b103c0ef05ba2eca3059034a1 erc8176_hash=0x7f52775921826414acfeeab334e5bc8022dc228406a912493ed62e3d62d76e37 ir_len=195 fields=4 degraded=4 source=calldata-AugustusSwapper-v5.json
-         · [0x935fb84b] op=raw          label=''  <-- DEGRADED (raw, no label)
-         · [0x935fb84b] op=raw          label=''  <-- DEGRADED (raw, no label)
-         · [0x54840d1a] op=raw          label=''  <-- DEGRADED (raw, no label)
-         · [0x54840d1a] op=raw          label=''  <-- DEGRADED (raw, no label)
+[0411] ctx=contract chain_id=137 contract=0xdef171fe48cf0115b1d80b88dc8eab59176fee57 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0xe0efa652bf41370b4c55d5384c687c9c6e34c68b103c0ef05ba2eca3059034a1 erc8176_hash=0x7f52775921826414acfeeab334e5bc8022dc228406a912493ed62e3d62d76e37 ir_len=280 fields=4 degraded=0 source=calldata-AugustusSwapper-v5.json
+         · [0x935fb84b] op=tokenAmount  label='Maximum to Send'
+         · [0x935fb84b] op=tokenAmount  label='Amount to Receive'
+         · [0x54840d1a] op=tokenAmount  label='Amount to Send'
+         · [0x54840d1a] op=tokenAmount  label='Receive before fees'
 [0412] ctx=contract chain_id=137 contract=0xe12e0f117d23a5ccc57f8935cd8c4e80cd91ff01 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x6ce65e0c3fe6fb163e0df3629f24e6161d87851bb8682bff50e4f57ae3f79364 erc8176_hash=0xa77e9c467d52f5495c1698bc8d711f2240ab8ad982c81224d7333fb3f81ed267 ir_len=428 fields=8 degraded=0 source=calldata-NativeOrderFactory.json
          · [0x8c72b608] op=amount       label='Amount to Send'
          · [0x8c72b608] op=tokenAmount  label='Receive amount'
@@ -4751,7 +4751,7 @@
          · [0x97c3004f] op=raw          label='Position ID'
          · [0x97c3004f] op=raw          label='TP/SL group'
          · [0x97c3004f] op=date         label='Deadline'
-[0424] ctx=contract chain_id=146 contract=0x111111125421ca6dc452d289314280a0f8842a65 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x6626696469ffad9c74da99b76f5d5fb3b7bae72f9ca3d7e6f369a735c34b6630 erc8176_hash=0x81360493cd41b89f72494f4d6b17e921f4e976032fe2c2e56f1552a313293ffa ir_len=329 fields=4 degraded=0 source=calldata-AggregationRouterV6.json
+[0424] ctx=contract chain_id=146 contract=0x111111125421ca6dc452d289314280a0f8842a65 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x6626696469ffad9c74da99b76f5d5fb3b7bae72f9ca3d7e6f369a735c34b6630 erc8176_hash=0x81360493cd41b89f72494f4d6b17e921f4e976032fe2c2e56f1552a313293ffa ir_len=429 fields=4 degraded=0 source=calldata-AggregationRouterV6.json
          · [0xb68fb020] op=raw          label='Order'
          · [0xb68fb020] op=raw          label='Maker Traits'
          · [0x5816d723] op=calldata     label='Swap'
@@ -5013,7 +5013,7 @@
          · [0xe50e3dbb] op=unit         label='Amount'
          · [0xe50e3dbb] op=addressName  label='Receiver'
          · [0xe50e3dbb] op=raw          label='Referrer Id'
-[0450] ctx=contract chain_id=250 contract=0x111111125421ca6dc452d289314280a0f8842a65 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x6626696469ffad9c74da99b76f5d5fb3b7bae72f9ca3d7e6f369a735c34b6630 erc8176_hash=0x81360493cd41b89f72494f4d6b17e921f4e976032fe2c2e56f1552a313293ffa ir_len=329 fields=4 degraded=0 source=calldata-AggregationRouterV6.json
+[0450] ctx=contract chain_id=250 contract=0x111111125421ca6dc452d289314280a0f8842a65 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x6626696469ffad9c74da99b76f5d5fb3b7bae72f9ca3d7e6f369a735c34b6630 erc8176_hash=0x81360493cd41b89f72494f4d6b17e921f4e976032fe2c2e56f1552a313293ffa ir_len=429 fields=4 degraded=0 source=calldata-AggregationRouterV6.json
          · [0xb68fb020] op=raw          label='Order'
          · [0xb68fb020] op=raw          label='Maker Traits'
          · [0x5816d723] op=calldata     label='Swap'
@@ -5050,7 +5050,7 @@
          · [0xf2fde38b] op=addressName  label='Proposed new owner'
          · [0x86d11066] op=addressName  label='Existing solver'
          · [0x86d11066] op=addressName  label='Replacement solver'
-[0455] ctx=contract chain_id=324 contract=0x6fd4383cb451173d5f9304f041c7bcbf27d561ff primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x78e6cca5fe36e27e4832c3190cb705b4340b9b5bf9b78281e2ebf261ef61ca2b erc8176_hash=0xbffe5aeab32325417d2bab1a1ad8a60cb8c703192482ffb7c1563b0c2b6619fb ir_len=329 fields=4 degraded=0 source=calldata-AggregationRouterV6-zksync.json
+[0455] ctx=contract chain_id=324 contract=0x6fd4383cb451173d5f9304f041c7bcbf27d561ff primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x78e6cca5fe36e27e4832c3190cb705b4340b9b5bf9b78281e2ebf261ef61ca2b erc8176_hash=0xbffe5aeab32325417d2bab1a1ad8a60cb8c703192482ffb7c1563b0c2b6619fb ir_len=429 fields=4 degraded=0 source=calldata-AggregationRouterV6-zksync.json
          · [0xb68fb020] op=raw          label='Order'
          · [0xb68fb020] op=raw          label='Maker Traits'
          · [0x5816d723] op=calldata     label='Swap'
@@ -5505,7 +5505,7 @@
          · [0xf2fde38b] op=addressName  label='Proposed new owner'
          · [0x86d11066] op=addressName  label='Existing solver'
          · [0x86d11066] op=addressName  label='Replacement solver'
-[0486] ctx=contract chain_id=8217 contract=0x111111125421ca6dc452d289314280a0f8842a65 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x6626696469ffad9c74da99b76f5d5fb3b7bae72f9ca3d7e6f369a735c34b6630 erc8176_hash=0x81360493cd41b89f72494f4d6b17e921f4e976032fe2c2e56f1552a313293ffa ir_len=329 fields=4 degraded=0 source=calldata-AggregationRouterV6.json
+[0486] ctx=contract chain_id=8217 contract=0x111111125421ca6dc452d289314280a0f8842a65 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x6626696469ffad9c74da99b76f5d5fb3b7bae72f9ca3d7e6f369a735c34b6630 erc8176_hash=0x81360493cd41b89f72494f4d6b17e921f4e976032fe2c2e56f1552a313293ffa ir_len=429 fields=4 degraded=0 source=calldata-AggregationRouterV6.json
          · [0xb68fb020] op=raw          label='Order'
          · [0xb68fb020] op=raw          label='Maker Traits'
          · [0x5816d723] op=calldata     label='Swap'
@@ -5589,7 +5589,7 @@
          · [0xb460af94] op=tokenAmount  label='Withdraw exactly'
          · [0xb460af94] op=addressName  label='To'
          · [0xb460af94] op=addressName  label='Owner'
-[0494] ctx=contract chain_id=8453 contract=0x111111125421ca6dc452d289314280a0f8842a65 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x6626696469ffad9c74da99b76f5d5fb3b7bae72f9ca3d7e6f369a735c34b6630 erc8176_hash=0x81360493cd41b89f72494f4d6b17e921f4e976032fe2c2e56f1552a313293ffa ir_len=329 fields=4 degraded=0 source=calldata-AggregationRouterV6.json
+[0494] ctx=contract chain_id=8453 contract=0x111111125421ca6dc452d289314280a0f8842a65 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x6626696469ffad9c74da99b76f5d5fb3b7bae72f9ca3d7e6f369a735c34b6630 erc8176_hash=0x81360493cd41b89f72494f4d6b17e921f4e976032fe2c2e56f1552a313293ffa ir_len=429 fields=4 degraded=0 source=calldata-AggregationRouterV6.json
          · [0xb68fb020] op=raw          label='Order'
          · [0xb68fb020] op=raw          label='Maker Traits'
          · [0x5816d723] op=calldata     label='Swap'
@@ -7014,7 +7014,7 @@
          · [0xc15cdb66] op=raw          label='V'
          · [0xc15cdb66] op=raw          label='R'
          · [0xc15cdb66] op=raw          label='S'
-[0606] ctx=contract chain_id=42161 contract=0x111111125421ca6dc452d289314280a0f8842a65 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x6626696469ffad9c74da99b76f5d5fb3b7bae72f9ca3d7e6f369a735c34b6630 erc8176_hash=0x81360493cd41b89f72494f4d6b17e921f4e976032fe2c2e56f1552a313293ffa ir_len=329 fields=4 degraded=0 source=calldata-AggregationRouterV6.json
+[0606] ctx=contract chain_id=42161 contract=0x111111125421ca6dc452d289314280a0f8842a65 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x6626696469ffad9c74da99b76f5d5fb3b7bae72f9ca3d7e6f369a735c34b6630 erc8176_hash=0x81360493cd41b89f72494f4d6b17e921f4e976032fe2c2e56f1552a313293ffa ir_len=429 fields=4 degraded=0 source=calldata-AggregationRouterV6.json
          · [0xb68fb020] op=raw          label='Order'
          · [0xb68fb020] op=raw          label='Maker Traits'
          · [0x5816d723] op=calldata     label='Swap'
@@ -7675,7 +7675,7 @@
          · [0x939c21a4] op=raw          label='permitted'
          · [0x939c21a4] op=date         label='Deadline'
          · [0x939c21a4] op=raw          label='Nonce'
-[0665] ctx=contract chain_id=43114 contract=0x111111125421ca6dc452d289314280a0f8842a65 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x6626696469ffad9c74da99b76f5d5fb3b7bae72f9ca3d7e6f369a735c34b6630 erc8176_hash=0x81360493cd41b89f72494f4d6b17e921f4e976032fe2c2e56f1552a313293ffa ir_len=329 fields=4 degraded=0 source=calldata-AggregationRouterV6.json
+[0665] ctx=contract chain_id=43114 contract=0x111111125421ca6dc452d289314280a0f8842a65 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x6626696469ffad9c74da99b76f5d5fb3b7bae72f9ca3d7e6f369a735c34b6630 erc8176_hash=0x81360493cd41b89f72494f4d6b17e921f4e976032fe2c2e56f1552a313293ffa ir_len=429 fields=4 degraded=0 source=calldata-AggregationRouterV6.json
          · [0xb68fb020] op=raw          label='Order'
          · [0xb68fb020] op=raw          label='Maker Traits'
          · [0x5816d723] op=calldata     label='Swap'
@@ -8009,7 +8009,7 @@
          · [0xf2fde38b] op=addressName  label='Proposed new owner'
          · [0x86d11066] op=addressName  label='Existing solver'
          · [0x86d11066] op=addressName  label='Replacement solver'
-[0694] ctx=contract chain_id=59144 contract=0x111111125421ca6dc452d289314280a0f8842a65 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x6626696469ffad9c74da99b76f5d5fb3b7bae72f9ca3d7e6f369a735c34b6630 erc8176_hash=0x81360493cd41b89f72494f4d6b17e921f4e976032fe2c2e56f1552a313293ffa ir_len=329 fields=4 degraded=0 source=calldata-AggregationRouterV6.json
+[0694] ctx=contract chain_id=59144 contract=0x111111125421ca6dc452d289314280a0f8842a65 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x6626696469ffad9c74da99b76f5d5fb3b7bae72f9ca3d7e6f369a735c34b6630 erc8176_hash=0x81360493cd41b89f72494f4d6b17e921f4e976032fe2c2e56f1552a313293ffa ir_len=429 fields=4 degraded=0 source=calldata-AggregationRouterV6.json
          · [0xb68fb020] op=raw          label='Order'
          · [0xb68fb020] op=raw          label='Maker Traits'
          · [0x5816d723] op=calldata     label='Swap'
@@ -8980,7 +8980,7 @@
          · [0xf2fde38b] op=addressName  label='Proposed new owner'
          · [0x86d11066] op=addressName  label='Existing solver'
          · [0x86d11066] op=addressName  label='Replacement solver'
-[0782] ctx=contract chain_id=1313161554 contract=0x111111125421ca6dc452d289314280a0f8842a65 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x6626696469ffad9c74da99b76f5d5fb3b7bae72f9ca3d7e6f369a735c34b6630 erc8176_hash=0x81360493cd41b89f72494f4d6b17e921f4e976032fe2c2e56f1552a313293ffa ir_len=329 fields=4 degraded=0 source=calldata-AggregationRouterV6.json
+[0782] ctx=contract chain_id=1313161554 contract=0x111111125421ca6dc452d289314280a0f8842a65 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x6626696469ffad9c74da99b76f5d5fb3b7bae72f9ca3d7e6f369a735c34b6630 erc8176_hash=0x81360493cd41b89f72494f4d6b17e921f4e976032fe2c2e56f1552a313293ffa ir_len=429 fields=4 degraded=0 source=calldata-AggregationRouterV6.json
          · [0xb68fb020] op=raw          label='Order'
          · [0xb68fb020] op=raw          label='Maker Traits'
          · [0x5816d723] op=calldata     label='Swap'
@@ -9007,7 +9007,6 @@
          · [0x86d11066] op=addressName  label='Replacement solver'
 
 ## skips (35 total)
-## WARNING: 21 DEGRADED field(s) across accepted leaves (raw-op, no label — silently lost formatting; see finding 1.1)
 #
 # by category:
 #      1  duplicate leaf (deduped)

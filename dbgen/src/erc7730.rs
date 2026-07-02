@@ -276,6 +276,14 @@ struct Metadata {
 #[derive(Debug, Deserialize)]
 struct Display {
     formats: BTreeMap<String, Format>,
+    /// `$.display.definitions` — reusable field-format specs referenced by
+    /// `fields[].$ref`. A definition is a format spec (label/format/params),
+    /// never a path-bound field. Populated from the descriptor OR from an
+    /// `includes` common file (the include deep-merge runs at the JSON layer
+    /// before this deserializes, so both sources land here). See
+    /// [`resolve_display_refs`]. (review finding 1.1)
+    #[serde(default)]
+    definitions: Option<BTreeMap<String, FieldDef>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -305,6 +313,17 @@ struct FieldDef {
     params: Option<serde_json::Value>,
     #[serde(default)]
     visible: Option<String>,
+    /// `$ref` into `$.display.definitions.*` — a reference to a reusable
+    /// format spec. The reference object carries its own `path`/`value`,
+    /// and MAY override `label`/`visible`/`params` (params merge per-key,
+    /// field wins); `format` always comes from the definition. Resolved by
+    /// [`resolve_display_refs`] BEFORE flatten/compile so the completeness
+    /// lint + compiler see the referenced format/params. Was silently
+    /// dropped pre-fix → the field degraded to unlabeled raw hex (finding
+    /// 1.1). Distinct from the `params.$ref` enum namespace
+    /// (`$.metadata.enums.*`), which is resolved separately.
+    #[serde(rename = "$ref", default)]
+    ref_def: Option<String>,
     /// Nested field GROUP (ERC-7730 struct/tuple display). A field with a
     /// `fields` sub-array is a GROUP whose own `path` (e.g. `#.marketParams`)
     /// anchors its children's relative paths (e.g. `loanToken`); it carries no
@@ -1150,9 +1169,27 @@ fn compile_formats(
     // fields. A malformed group (no anchoring path / too deeply nested) drops
     // that one format in tolerant mode — exactly as a compile failure would —
     // and hard-errors in strict mode. See [`flatten_field_groups`].
+    // Per-format blockers, surfaced in the "no compilable formats" skip reason
+    // (review 1.4). Populated by BOTH the resolve/flatten pass here and the
+    // compile loop below.
+    let mut format_errs: Vec<String> = Vec::new();
     let mut flat: Vec<(&str, Format)> = Vec::with_capacity(n);
     for (sig, fmt) in display.formats.iter() {
-        match flatten_field_groups(&fmt.fields) {
+        let fn_name = sig.split('(').next().unwrap_or(sig);
+        // Resolve field-level `$.display.definitions` `$ref`s BEFORE flatten +
+        // compile, so the completeness lint and the field compiler both see the
+        // referenced format/params (finding 1.1). Resolution failure drops the
+        // one format to blind-sign in tolerant mode (recorded), hard-errors in
+        // strict mode.
+        let resolved = match resolve_display_refs(&fmt.fields, display.definitions.as_ref()) {
+            Ok(r) => r,
+            Err(e) if tolerant => {
+                format_errs.push(format!("{fn_name}: {e}"));
+                continue;
+            }
+            Err(e) => return Err(format!("format `{sig}`: {e}")),
+        };
+        match flatten_field_groups(&resolved) {
             Ok(fields) => flat.push((
                 sig.as_str(),
                 Format {
@@ -1161,7 +1198,8 @@ fn compile_formats(
                     fields,
                 },
             )),
-            Err(_) if tolerant => {} // malformed group → drop to blind-sign
+            // Was a silent drop; record it so the skip report shows why.
+            Err(e) if tolerant => format_errs.push(format!("{fn_name}: {e}")),
             Err(e) => return Err(format!("format `{sig}`: {e}")),
         }
     }
@@ -1210,11 +1248,6 @@ fn compile_formats(
     // exactly as if the descriptor were absent. Strict mode `?`-fails the
     // whole descriptor on the first bad format (a curation bug in our corpus).
     let mut survivors: Vec<Vec<u8>> = Vec::with_capacity(n);
-    // Capture per-format blockers so the "no compilable formats" skip carries
-    // *why* each function died, not just that the descriptor is dead (review
-    // finding 1.4 — the umbrella reason was un-actionable). Only used when
-    // every format fails; on partial success the survivors clear-sign.
-    let mut format_errs: Vec<String> = Vec::new();
     for &(sig, ref fmt) in flat.iter() {
         if tolerant && survivors.len() >= MAX_FORMATS {
             break; // bound the IR; remaining functions blind-sign
@@ -1257,6 +1290,90 @@ fn compile_formats(
 /// Bounding the recursion keeps a pathological (or hostile) descriptor from
 /// blowing the host stack during flattening.
 const MAX_FIELD_GROUP_DEPTH: usize = 4;
+
+/// Resolve field-level `$ref` references into `$.display.definitions.*`
+/// (ERC-7730 v2 `#/$display/reference`), recursively — including refs nested
+/// inside a struct-display field GROUP. Merge rule (per the v2 schema + spec
+/// prose, cross-checked against the 1inch / paraswap corpus):
+///   - `format`   — ALWAYS from the definition (a reference object cannot
+///                  carry `format`);
+///   - `label`/`visible` — field-local if present, else the definition's;
+///   - `params`   — per-key deep-merge with the reference winning
+///                  (`merge_descriptors(def, field)`): e.g. a `tokenAmount`
+///                  definition contributes `nativeCurrencyAddress` while the
+///                  field contributes `tokenPath` — both must survive;
+///   - `path`/`value` — from the reference object.
+/// One level only: the schema forbids a definition from itself carrying a
+/// display `$ref`, so a transitive ref hard-errors rather than recursing.
+///
+/// Unresolvable refs (missing definition) and non-`$.display.definitions`
+/// field-level refs hard-error — the pre-fix behaviour silently dropped the
+/// `$ref` key, defaulting the field to unlabeled `raw` and discarding its
+/// `tokenPath`, so a labeled DEX-swap leg rendered as a blank 64-hex dump
+/// under a trusted "Swap" banner (review finding 1.1). Fail loud instead.
+fn resolve_display_refs(
+    fields: &[FieldDef],
+    defs: Option<&BTreeMap<String, FieldDef>>,
+) -> Result<Vec<FieldDef>, String> {
+    const REF_PREFIX: &str = "$.display.definitions.";
+    let mut out = Vec::with_capacity(fields.len());
+    for field in fields {
+        // GROUP node (struct/tuple display): recurse into children, keep the
+        // group's own path/label. Schema makes group and reference mutually
+        // exclusive; guard anyway.
+        if let Some(children) = &field.fields {
+            if field.ref_def.is_some() {
+                return Err("field is both a `$ref` and a field group".to_string());
+            }
+            let resolved_children = resolve_display_refs(children, defs)?;
+            let mut g = field.clone();
+            g.fields = Some(resolved_children);
+            out.push(g);
+            continue;
+        }
+        let Some(refstr) = &field.ref_def else {
+            out.push(field.clone());
+            continue;
+        };
+        // A field-level `$ref` must target a display definition. (Enum refs
+        // live in `params.$ref` = `$.metadata.enums.*` and are resolved by the
+        // separate enum pre-intern pass; a field-level ref there is malformed.)
+        let name = refstr.strip_prefix(REF_PREFIX).ok_or_else(|| {
+            format!(
+                "field `$ref: \"{refstr}\"` is not a `$.display.definitions.*` reference \
+                 (only display-definition refs are supported at the field level)"
+            )
+        })?;
+        let def = defs.and_then(|d| d.get(name)).ok_or_else(|| {
+            format!("unresolved $ref `{refstr}` — no such display definition `{name}`")
+        })?;
+        if def.ref_def.is_some() {
+            return Err(format!(
+                "display definition `{name}` itself carries a `$ref` — transitive \
+                 display-definition references are not permitted"
+            ));
+        }
+        let params = match (def.params.clone(), field.params.clone()) {
+            (None, None) => None,
+            (Some(b), None) => Some(b),
+            (None, Some(o)) => Some(o),
+            (Some(b), Some(o)) => Some(merge_descriptors(b, o)),
+        };
+        out.push(FieldDef {
+            path: field.path.clone(),
+            value: field.value.clone(),
+            label: field.label.clone().or_else(|| def.label.clone()),
+            format: def.format.clone(),
+            params,
+            visible: field.visible.clone().or_else(|| def.visible.clone()),
+            ref_def: None,
+            // Definitions are leaf format specs; carry a group definition
+            // through if one ever appears (flatten then expands it).
+            fields: def.fields.clone(),
+        });
+    }
+    Ok(out)
+}
 
 /// Expand ERC-7730 nested field GROUPS into a flat field list with combined
 /// paths. A field that carries a non-empty `fields` sub-array is a GROUP: its
@@ -5944,6 +6061,96 @@ mod tests {
     fn fmt_from_fields(fields_json: &str) -> Format {
         serde_json::from_str(&format!(r#"{{"fields": {fields_json}}}"#))
             .expect("valid test Format JSON")
+    }
+
+    // ── review finding 1.1: field-level $ref → $.display.definitions ─────
+    // Direct unit tests of the resolver's merge rule + its fail-loud error
+    // paths (the render-level proof lives in the secure crate's render tests).
+
+    fn resolve_fmt_refs(display_json: &str, fmt_key: &str) -> Result<Vec<FieldDef>, String> {
+        let display: Display = serde_json::from_str(display_json).expect("valid display JSON");
+        let fmt = display.formats.get(fmt_key).expect("format present");
+        resolve_display_refs(&fmt.fields, display.definitions.as_ref())
+    }
+
+    #[test]
+    fn ref_resolution_merges_format_from_def_and_params_field_wins() {
+        let display = r#"{
+            "definitions": {
+                "sendAmount": { "label": "Amount to Send", "format": "tokenAmount",
+                                "params": { "nativeCurrencyAddress": ["0xeee"] } }
+            },
+            "formats": { "swap(uint256 a)": { "fields": [
+                { "$ref": "$.display.definitions.sendAmount", "path": "a",
+                  "params": { "tokenPath": "src" } }
+            ] } }
+        }"#;
+        let out = resolve_fmt_refs(display, "swap(uint256 a)").expect("resolves");
+        assert_eq!(out.len(), 1);
+        let f = &out[0];
+        assert_eq!(f.format.as_deref(), Some("tokenAmount"), "format ALWAYS from def");
+        assert_eq!(f.label.as_deref(), Some("Amount to Send"), "label inherited from def");
+        assert_eq!(f.path.as_deref(), Some("a"), "path from the reference");
+        let p = f.params.as_ref().expect("merged params");
+        assert!(p.get("nativeCurrencyAddress").is_some(), "def param survives merge");
+        assert_eq!(
+            p.get("tokenPath").and_then(|v| v.as_str()),
+            Some("src"),
+            "field param survives merge (per-key, field wins)"
+        );
+        assert!(f.ref_def.is_none(), "the $ref key is consumed");
+    }
+
+    #[test]
+    fn ref_resolution_field_label_overrides_definition() {
+        let display = r#"{
+            "definitions": { "amt": { "label": "Amount to Receive", "format": "tokenAmount" } },
+            "formats": { "f(uint256 a)": { "fields": [
+                { "$ref": "$.display.definitions.amt", "path": "a", "label": "Min Out" }
+            ] } }
+        }"#;
+        let out = resolve_fmt_refs(display, "f(uint256 a)").expect("resolves");
+        assert_eq!(out[0].label.as_deref(), Some("Min Out"), "field label overrides def");
+        assert_eq!(out[0].format.as_deref(), Some("tokenAmount"));
+    }
+
+    #[test]
+    fn ref_resolution_unresolvable_ref_hard_errors() {
+        // No such definition → fail LOUD (never silently degrade to raw).
+        let display = r#"{
+            "definitions": { "other": { "format": "tokenAmount" } },
+            "formats": { "f(uint256 a)": { "fields": [
+                { "$ref": "$.display.definitions.missing", "path": "a" }
+            ] } }
+        }"#;
+        let err = resolve_fmt_refs(display, "f(uint256 a)").unwrap_err();
+        assert!(err.contains("unresolved $ref"), "got: {err}");
+    }
+
+    #[test]
+    fn ref_resolution_non_display_definition_ref_hard_errors() {
+        // A field-level $ref must target $.display.definitions.* — an enum
+        // ($.metadata.enums.*) ref at the field level is malformed → error,
+        // not a silent drop.
+        let display = r#"{
+            "formats": { "f(uint256 a)": { "fields": [
+                { "$ref": "$.metadata.enums.mode", "path": "a" }
+            ] } }
+        }"#;
+        let err = resolve_fmt_refs(display, "f(uint256 a)").unwrap_err();
+        assert!(err.contains("not a `$.display.definitions"), "got: {err}");
+    }
+
+    #[test]
+    fn ref_resolution_no_ref_is_identity() {
+        let display = r#"{
+            "formats": { "f(uint256 a)": { "fields": [
+                { "path": "a", "label": "A", "format": "raw" }
+            ] } }
+        }"#;
+        let out = resolve_fmt_refs(display, "f(uint256 a)").expect("resolves");
+        assert_eq!(out[0].format.as_deref(), Some("raw"));
+        assert_eq!(out[0].label.as_deref(), Some("A"));
     }
 
     // ── VULN-erc7730-rule1-inert-field-nonaddr-action-hide (Rule 1) ──────
