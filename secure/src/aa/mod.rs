@@ -36,4 +36,5 @@
 
 pub use pqsigner_aa::eip1271;
 pub use pqsigner_aa::eip6492;
+pub use pqsigner_aa::offchain_gate;
 pub use pqsigner_aa::userop;

@@ -220,6 +220,39 @@
       "replace": "Some(e) => e,",
       "expect": "kani_fails",
       "note": "remove the HID-reassembly continuation bounds guard so `buf[rx_pos..end]` writes past the caller's reassembly buffer -> process_frame_continuation_no_oob (arbitrary assembler state incl. rx_pos over MAX_APDU_RX + a symbolic continuation frame) MUST hit an out-of-bounds slice write. Verified 2026-07-02 by hand: mutation -> VERIFICATION:- FAILED; unmutated -> SUCCESSFUL. Closes the S-USB-OVERFLOW row of contracts/verification/docs/THREAT_CLAIM_MAP.md (UNCLAIMED -> PARTIAL): the attacker-facing USB APDU reassembly (shared/src/apdu_framing.rs, the one layer between a malicious USB host and the firmware) had proptest fuzz coverage but no exhaustive Kani panic/OOB proof. NB: with buf sized exactly MAX_APDU_RX the two guard conjuncts (e <= buf.len(), e <= MAX_APDU_RX) are individually redundant so dropping ONE is not catchable; this removes the guard entirely (the load-bearing memory-safety check)."
+    },
+    {
+      "id": "offchain_gate_gap_bypass",
+      "tier": "quick",
+      "crate": "pqsigner-aa",
+      "harness": "offchain_gate_accept_is_sound",
+      "file": "aa/src/offchain_gate.rs",
+      "find": "if gap >= MAX_OFFCHAIN_GAP {",
+      "replace": "if false {",
+      "expect": "kani_fails",
+      "note": "[work-todo §12e: off-chain counter sequence/interleave harness] Disable the MAX_OFFCHAIN_GAP gate in check_offchain_gate -> an accept can now be granted with gap >= 100, so offchain_gate_accept_is_sound's post-state gap bound (new_count - last_userop <= MAX_OFFCHAIN_GAP, i.e. gap+1) MUST break. Verified 2026-07-03 by hand (verify_mutations.sh): mutation -> VERIFICATION:- FAILED; unmutated -> SUCCESSFUL. Guards the doc-baseline single-gate soundness proof (firmware-bounded-verification-sota-2026-06.md:81) against vacuity. `check_offchain_gate` is called in place by cmd_sign_offchain.rs so this is the shipped gate."
+    },
+    {
+      "id": "offchain_gate_cap_bypass",
+      "tier": "quick",
+      "crate": "pqsigner-aa",
+      "harness": "offchain_gate_accept_is_sound",
+      "file": "aa/src/offchain_gate.rs",
+      "find": "if userop_sigs.saturating_add(new_count) > MAX_SLOT_USES {",
+      "replace": "if false {",
+      "expect": "kani_fails",
+      "note": "[work-todo §12e] Disable the combined few-time-budget cap (userop_sigs + off-chain) in check_offchain_gate -> an accept can now push userop_sigs + new_count past MAX_SLOT_USES, so offchain_gate_accept_is_sound's combined-cap assertion MUST break. Verified 2026-07-03 by hand (verify_mutations.sh): mutation -> VERIFICATION:- FAILED; unmutated -> SUCCESSFUL. This is the MEDIUM-2 counter-replay cap (a withheld/reverted UserOp never bumps on-chain slotUses, so the device tallies its own Type-2 sigs); the harness now guards it non-vacuously."
+    },
+    {
+      "id": "offchain_distinct_slot_wedge",
+      "tier": "quick",
+      "crate": "pqsigner-aa",
+      "harness": "distinct_slot_policy_graceful",
+      "file": "aa/src/offchain_gate.rs",
+      "find": "already_present || distinct_live < MAX_DISTINCT_SLOTS",
+      "replace": "distinct_live < MAX_DISTINCT_SLOTS",
+      "expect": "kani_fails",
+      "note": "[work-todo §12e: page-123 exhaustion brick, the found HIGH] Drop the already_present short-circuit from may_create_distinct_slot -> an EXISTING slot is now refused once distinct_live reaches the cap, i.e. a spray of distinct keys could wedge a live slot. distinct_slot_policy_graceful (asserts may_create_distinct_slot(any, true) is ALWAYS true) MUST break. Verified 2026-07-03 by hand (verify_mutations.sh): mutation -> VERIFICATION:- FAILED; unmutated -> SUCCESSFUL. Pins the VULN-offchain-sync-page123-exhaustion-brick.md defence: at the cap, new-slot creation fails gracefully while existing slots keep signing."
     }
   ]
 }

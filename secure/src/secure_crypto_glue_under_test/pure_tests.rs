@@ -1855,3 +1855,157 @@ fn negative_crypto_glue_does_not_introduce_forbidden_admin_paths() {
         }
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+//  Differential binding — `aa::offchain_gate` model  ⇔  shipped mock backend
+// ─────────────────────────────────────────────────────────────────────
+//
+//  Anti-drift (work-todo §12e; the V9 "model ≠ artifact" defeater). The
+//  sequence/interleave Kani proofs run over `aa::offchain_gate`'s owned
+//  `SlotLedger`. This test pins that model to the counter policy the firmware
+//  actually runs by:
+//   (a) asserting the shared brick-defence constants + pure helpers are
+//       byte-identical to `offchain_state` (value-inflation ceiling + clamp,
+//       distinct-slot cap + admission policy);
+//   (b) driving an interleaved sync / off-chain-sign sequence — composed from
+//       the mock primitives EXACTLY as `cmd_sign_offchain` composes them
+//       (repair → gate → durable bump) — through BOTH the model and the
+//       static-mut mock, asserting the (offchain, last_userop, userop_sigs)
+//       triple never diverges.
+//
+//  Complements the in-place gate wiring (`cmd_sign_offchain` calls
+//  `check_offchain_gate` directly), which binds the GATE by construction; this
+//  binds the TRANSITIONS. A pass also confirms the kernel's *internal* repair
+//  (`max(offchain,last_userop)`) equals the gateway's *external* durable
+//  promote — the two reach the same `new_count`.
+#[test]
+fn positive_offchain_gate_model_matches_mock_backend() {
+    use crate::aa::offchain_gate::{self as gate, check_offchain_gate, GateOutcome, SlotLedger};
+
+    // (a) shared policy constants + pure helpers identical to the shipped backend.
+    assert_eq!(gate::OFFCHAIN_COUNT_CEILING, OFFCHAIN_COUNT_CEILING);
+    assert_eq!(gate::MAX_DISTINCT_SLOTS, MAX_DISTINCT_SLOTS);
+    assert_eq!(gate::OFFCHAIN_COUNT_CEILING, MAX_SLOT_USES - 1);
+    for c in [
+        0u64,
+        1,
+        42,
+        OFFCHAIN_COUNT_CEILING,
+        OFFCHAIN_COUNT_CEILING + 1,
+        u64::MAX,
+    ] {
+        assert_eq!(
+            gate::clamp_offchain_count(c),
+            clamp_offchain_count(c),
+            "clamp helper diverged at {c}"
+        );
+    }
+    for (live, present) in [
+        (0usize, false),
+        (MAX_DISTINCT_SLOTS - 1, false),
+        (MAX_DISTINCT_SLOTS, false),
+        (MAX_DISTINCT_SLOTS, true),
+    ] {
+        assert_eq!(
+            gate::may_create_distinct_slot(live, present),
+            may_create_distinct_slot(live, present),
+            "distinct-slot policy diverged at ({live},{present})"
+        );
+    }
+
+    // (b) executed differential on a test-unique key (a fresh static-mut slot).
+    let key = slot_key_compute(211, 0xA5A5_0000_0000_1234, 7);
+    let mut model = SlotLedger::default();
+
+    // Seed the Type-2 tally identically so the combined-cap axis is live.
+    unsafe {
+        super::offchain_state::userop_sigs_bump(&key, 3).expect("seed userop_sigs");
+    }
+    model.userop_sigs = 3;
+    model.registered = true;
+
+    let read_triple = |k: &[u8; 8]| -> (u64, u64, u64) {
+        unsafe {
+            (
+                offchain_count_read(k),
+                last_userop_count_read(k),
+                super::offchain_state::userop_sigs_read(k),
+            )
+        }
+    };
+    assert_eq!(
+        read_triple(&key),
+        (model.offchain, model.last_userop, model.userop_sigs),
+        "seed state diverged"
+    );
+
+    // One off-chain sign, composed from the mock primitives EXACTLY as
+    // cmd_sign_offchain does: repair (promote offchain up to last_userop) →
+    // gate → durable bump to new_count.
+    let mock_sign_offchain = |k: &[u8; 8]| unsafe {
+        let last = last_userop_count_read(k);
+        let mut off = offchain_count_read(k);
+        if last > off {
+            offchain_count_promote_to(k, last).expect("repair promote");
+            off = last;
+        }
+        let us = super::offchain_state::userop_sigs_read(k);
+        if let GateOutcome::Accept { new_count } = check_offchain_gate(off, last, us) {
+            offchain_count_bump(k, new_count).expect("durable bump");
+        }
+    };
+
+    // Interleaved sequence: sync-raises-floor, repair branch (offchain <
+    // last_userop), gap growth, tolerant no-op sync.
+    // 1) sync 50 → last_userop 50 (> offchain 0: repair territory).
+    unsafe {
+        last_userop_count_set(&key, 50).expect("sync");
+    }
+    model.apply_offchain_sync(50);
+    assert_eq!(
+        read_triple(&key),
+        (model.offchain, model.last_userop, model.userop_sigs),
+        "after sync(50)"
+    );
+
+    // 2) off-chain sign: repair to 50, new_count 51.
+    mock_sign_offchain(&key);
+    let _ = model.apply_sign_offchain();
+    assert_eq!(
+        read_triple(&key),
+        (model.offchain, model.last_userop, model.userop_sigs),
+        "after sign #1 (repair branch)"
+    );
+
+    // 3) off-chain sign: gap grows to 1, new_count 52.
+    mock_sign_offchain(&key);
+    let _ = model.apply_sign_offchain();
+    assert_eq!(
+        read_triple(&key),
+        (model.offchain, model.last_userop, model.userop_sigs),
+        "after sign #2"
+    );
+
+    // 4) stale sync (10 < 50): tolerant no-op on both.
+    unsafe {
+        last_userop_count_set(&key, 10).expect("stale sync noop");
+    }
+    model.apply_offchain_sync(10);
+    assert_eq!(
+        read_triple(&key),
+        (model.offchain, model.last_userop, model.userop_sigs),
+        "after stale sync(10)"
+    );
+
+    // 5) off-chain sign: gap 2, new_count 53.
+    mock_sign_offchain(&key);
+    let _ = model.apply_sign_offchain();
+    assert_eq!(
+        read_triple(&key),
+        (model.offchain, model.last_userop, model.userop_sigs),
+        "after sign #3"
+    );
+
+    // The model tracked the mock through 5 interleaved steps.
+    assert_eq!((model.offchain, model.last_userop, model.userop_sigs), (53, 50, 3));
+}

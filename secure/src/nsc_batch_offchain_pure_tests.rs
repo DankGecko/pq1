@@ -1038,12 +1038,24 @@ fn negative_sign_offchain_double_reads_counters_for_fi_hardening() {
 
 #[test]
 fn negative_sign_offchain_enforces_gap_and_cap_with_recheck() {
-    // CLAUDE.md invariant #9: refuse past MAX_OFFCHAIN_GAP unbacked
-    // sigs; invariant #7: refuse past MAX_SLOT_USES per slot. Both
-    // must be checked twice (the F-10 recheck pass).
-    assert!(CMD_SIGN_OFFCHAIN_SRC.contains("MAX_OFFCHAIN_GAP"));
-    assert!(CMD_SIGN_OFFCHAIN_SRC.contains("MAX_SLOT_USES"));
-    assert!(CMD_SIGN_OFFCHAIN_SRC.contains("gap_recheck"));
+    // CLAUDE.md invariant #9: refuse past MAX_OFFCHAIN_GAP unbacked sigs;
+    // invariant #7: refuse past MAX_SLOT_USES per slot. The gap + combined-cap
+    // ARITHMETIC now lives in the Kani-proven kernel
+    // `aa::offchain_gate::check_offchain_gate` (fail-closed / monotonic /
+    // overflow-free — `cargo kani -p pqsigner-aa`,
+    // `offchain_gate_accept_is_sound` + `_verdict_is_exact`; work-todo §12e).
+    // This source guard now pins the *wiring* — the handler routes through the
+    // proven kernel and re-evaluates it in the F-10 recheck window — while the
+    // proof + `aa` host tests pin the LOGIC (a strictly stronger split than the
+    // pre-2026-07 inline `gap_recheck` string-assert the refutation flagged).
+    assert!(CMD_SIGN_OFFCHAIN_SRC.contains("check_offchain_gate"));
+    // Called at BOTH the decision and the post-`wait_random` recheck window so
+    // a single glitch must land in both windows to reach the sign.
+    assert!(
+        CMD_SIGN_OFFCHAIN_SRC.matches("check_offchain_gate(").count() >= 2,
+        "the gap+cap gate must be re-evaluated in the F-10 recheck window"
+    );
+    assert!(CMD_SIGN_OFFCHAIN_SRC.contains("wait_random"));
     assert!(CMD_SIGN_OFFCHAIN_SRC.contains("OffchainGapExceeded"));
     assert!(CMD_SIGN_OFFCHAIN_SRC.contains("OffchainCapExceeded"));
 }
@@ -1088,9 +1100,13 @@ fn negative_combined_cap_counts_userop_sigs_on_every_sign_path() {
     // this, a malicious companion can withhold the publishing UserOps and
     // drive total slot-key usage to ~2x the cap.
     //
-    // Off-chain path: reads the tally and folds it into the cap.
+    // Off-chain path: reads the tally and folds it into the combined-cap gate.
+    // The cap arithmetic is the Kani-proven kernel `check_offchain_gate`; the
+    // handler feeds `userop_sigs` into it as the third argument, so the proof
+    // (userop_sigs + new_count <= MAX_SLOT_USES on accept) covers this path.
     assert!(CMD_SIGN_OFFCHAIN_SRC.contains("userop_sigs"));
-    assert!(CMD_SIGN_OFFCHAIN_SRC.contains("userop_sigs.saturating_add(new_count) > MAX_SLOT_USES"));
+    assert!(CMD_SIGN_OFFCHAIN_SRC
+        .contains("check_offchain_gate(local_offchain, last_userop, userop_sigs)"));
     // Single-tx UserOp path: combined-cap gate + per-sign durable bump.
     assert!(CMD_SIGN_USEROP_SRC.contains("userop_sigs_read"));
     assert!(CMD_SIGN_USEROP_SRC.contains("userop_sigs.saturating_add(local_offchain) >= MAX_SLOT_USES"));

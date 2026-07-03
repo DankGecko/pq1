@@ -52,7 +52,7 @@
 
 use sphincs_tz_shared::{
     EIP6492_BLOB_LEN, EIP6492_FACTORY_CALLDATA_LEN, MAX_ACCOUNT_INDEX,
-    MAX_OFFCHAIN_EIP712_TYPED_LEN, MAX_OFFCHAIN_EIP712_TYPED_V3_LEN, MAX_OFFCHAIN_GAP,
+    MAX_OFFCHAIN_EIP712_TYPED_LEN, MAX_OFFCHAIN_EIP712_TYPED_V3_LEN,
     MAX_OFFCHAIN_PERSONAL_SIGN_LEN, MAX_SLOT_USES, NscStatus, OFFCHAIN_FLAGS_MASK,
     OFFCHAIN_FLAG_ACCOUNT_DEPLOYED, OFFCHAIN_KIND_EIP712_TYPED, OFFCHAIN_KIND_EIP712_TYPED_V3,
     OFFCHAIN_KIND_PERSONAL_SIGN,
@@ -327,31 +327,39 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     }
     let userop_sigs = userop_sigs_a;
 
-    let gap = local_offchain.saturating_sub(last_userop);
-    if gap >= MAX_OFFCHAIN_GAP {
-        crate::ui::show_status("EIP-1271", "publish first");
-        return NscStatus::OffchainGapExceeded as u32;
-    }
-    let new_count = match local_offchain.checked_add(1) {
-        Some(v) => v,
-        None => return NscStatus::OffchainCapExceeded as u32,
+    // Gap + combined-cap gate — the pure policy kernel
+    // `aa::offchain_gate::check_offchain_gate`, Kani-proven fail-closed,
+    // monotonic, and overflow-free (`cargo kani -p pqsigner-aa`,
+    // `offchain_gate_accept_is_sound` / `_verdict_is_exact`). Only the
+    // arithmetic is the shared kernel; the FI counter double-reads above and
+    // the `wait_random` re-check below stay here in the gateway — the
+    // `decode_flags`-in-place precedent, so the proof speaks for THIS decision.
+    // `local_offchain` is already repaired (:303-311) so the kernel's internal
+    // `max(offchain,last_userop)` repair is idempotent: `new_count == local_offchain + 1`.
+    use crate::aa::offchain_gate::{check_offchain_gate, GateOutcome};
+    let new_count = match check_offchain_gate(local_offchain, last_userop, userop_sigs) {
+        GateOutcome::Accept { new_count } => new_count,
+        GateOutcome::RejectGap => {
+            crate::ui::show_status("EIP-1271", "publish first");
+            return NscStatus::OffchainGapExceeded as u32;
+        }
+        GateOutcome::RejectCap => {
+            crate::ui::show_status("EIP-1271", "slot exhausted");
+            return NscStatus::OffchainCapExceeded as u32;
+        }
     };
-    // Combined cap: this off-chain sig plus every Type-2 UserOp sig this
-    // firmware has produced for the slot must stay within the few-time
-    // budget. `saturating_add` keeps a glitched u64::MAX read fail-closed.
-    if userop_sigs.saturating_add(new_count) > MAX_SLOT_USES {
-        crate::ui::show_status("EIP-1271", "slot exhausted");
-        return NscStatus::OffchainCapExceeded as u32;
-    }
-    // F-10 belt-and-braces: re-derive the gate inputs and re-check.
-    // A second pass forces a glitch to land in *both* windows.
+    // F-10 belt-and-braces: re-run the SAME gate after a randomised delay so a
+    // single glitch on the branch/compare above must also land in this second
+    // window to reach the sign. Inputs are unchanged locals, so a fault-free
+    // pass always re-Accepts with the identical `new_count`; any divergence
+    // (skipped reject, flipped counter) fails closed.
     crate::fi::wait_random();
-    let gap_recheck = local_offchain.saturating_sub(last_userop);
-    if gap_recheck >= MAX_OFFCHAIN_GAP
-        || userop_sigs.saturating_add(new_count) > MAX_SLOT_USES
-    {
-        crate::ui::show_status("EIP-1271", "fi tampered");
-        return NscStatus::InternalError as u32;
+    match check_offchain_gate(local_offchain, last_userop, userop_sigs) {
+        GateOutcome::Accept { new_count: nc2 } if nc2 == new_count => {}
+        _ => {
+            crate::ui::show_status("EIP-1271", "fi tampered");
+            return NscStatus::InternalError as u32;
+        }
     }
 
     // ── 7. Reconstruct entropy + slot master per-account ────────────
