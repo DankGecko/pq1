@@ -350,12 +350,24 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     };
     // F-10 belt-and-braces: re-run the SAME gate after a randomised delay so a
     // single glitch on the branch/compare above must also land in this second
-    // window to reach the sign. Inputs are unchanged locals, so a fault-free
-    // pass always re-Accepts with the identical `new_count`; any divergence
-    // (skipped reject, flipped counter) fails closed.
+    // window to reach the sign. `check_offchain_gate` is a PURE function of
+    // unchanged locals, so without a barrier the optimiser CSE-folds this second
+    // evaluation into the first (`nc2 == new_count` → `true`, window deleted;
+    // `wait_random` is a side effect but does NOT block value-CSE of a pure
+    // call). Launder the operands + the compared `new_count` through
+    // `black_box` — the same F16 anti-CSE idiom used for the two-verdict gate
+    // lower in this file — so the recompute is a genuinely independent window.
+    // Empirically verified on the thumbv8m release binary: adding these barriers
+    // grows `nsc::dispatch` by 202 B (0x252a → 0x25f4), i.e. a full second u64
+    // gate-arithmetic block that the folded form omitted.
     crate::fi::wait_random();
-    match check_offchain_gate(local_offchain, last_userop, userop_sigs) {
-        GateOutcome::Accept { new_count: nc2 } if nc2 == new_count => {}
+    let rc = check_offchain_gate(
+        core::hint::black_box(local_offchain),
+        core::hint::black_box(last_userop),
+        core::hint::black_box(userop_sigs),
+    );
+    match rc {
+        GateOutcome::Accept { new_count: nc2 } if nc2 == core::hint::black_box(new_count) => {}
         _ => {
             crate::ui::show_status("EIP-1271", "fi tampered");
             return NscStatus::InternalError as u32;
