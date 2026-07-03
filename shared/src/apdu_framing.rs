@@ -970,8 +970,12 @@ mod kani_harnesses {
     /// `parse_apdu_header` is the first parse every USB byte hits. Prove it is
     /// panic-free ∀ and that a successful parse yields `data.len() == lc` with
     /// `lc` inside the input — the invariant `route_v2` + the chain machine
-    /// rely on. Loop-free; a 16-byte symbolic input exercises both the
-    /// `HeaderTooShort`, `LcOverrun`, and OK (`5 + lc <= len`) arms.
+    /// rely on. Loop-free; a 16-byte symbolic input exercises the
+    /// `HeaderTooShort`, `LcOverrun`, and OK (`5 + lc <= len`) arms. The OK arm
+    /// is reached for `lc <= 11` at `N = 16`; the header logic is uniform in
+    /// `lc` (`apdu[4] as usize` then `checked_add` + `end <= apdu.len()`, no
+    /// per-value special-casing), and the proptest above covers `lc` up to 255
+    /// over 0..8192-byte inputs — so this is representative, not `lc`-bounded.
     #[kani::proof]
     fn parse_apdu_header_sound() {
         let arr: [u8; 16] = kani::any();
