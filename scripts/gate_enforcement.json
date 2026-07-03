@@ -1,11 +1,14 @@
 {
-  "_comment": "verify-gate-enforcement manifest — closes catalog class G1 (gate-enforcement vacuity) from docs/verification/fv-adversarial-review-playbook.md Part A2. Each soundness/anti-vacuity gate declares WHAT source surface it polices, WHICH workflow must run it, and its ENFORCEMENT level. check_gate_enforcement.py asserts the live CI wiring matches — a gate that is green-when-run but never RUNS on the diff it polices (wrong `paths:` filter, `continue-on-error`, workflow_dispatch-only, or unwired) is exactly as dangerous as a hollow proof (the 2026-07-01 F1 finding: verify-ledger-consistency never fired on AXIOM_STATUS.json-only edits). enforcement: 'per_pr_blocking' = must run on push/pull_request, non-continue-on-error, and the trigger `paths:` must COVER polices_paths; 'nightly' = must be invoked by a scheduled workflow; 'local_documented' = deliberately not CI-gated (a NOTE, never a failure) — must carry a `why`. polices_paths are repo-relative prefixes/globs the gate is responsible for.",
+  "_comment": "verify-gate-enforcement manifest \u2014 closes catalog class G1 (gate-enforcement vacuity) from docs/verification/fv-adversarial-review-playbook.md Part A2. Each soundness/anti-vacuity gate declares WHAT source surface it polices, WHICH workflow must run it, and its ENFORCEMENT level. check_gate_enforcement.py asserts the live CI wiring matches \u2014 a gate that is green-when-run but never RUNS on the diff it polices (wrong `paths:` filter, `continue-on-error`, workflow_dispatch-only, or unwired) is exactly as dangerous as a hollow proof (the 2026-07-01 F1 finding: verify-ledger-consistency never fired on AXIOM_STATUS.json-only edits). enforcement: 'per_pr_blocking' = must run on push/pull_request, non-continue-on-error, and the trigger `paths:` must COVER polices_paths; 'nightly' = must be invoked by a scheduled workflow; 'local_documented' = deliberately not CI-gated (a NOTE, never a failure) \u2014 must carry a `why`. polices_paths are repo-relative prefixes/globs the gate is responsible for.",
   "workflows_dir": ".github/workflows",
   "gates": [
     {
       "id": "verify-ledger-consistency",
       "make": "make -C contracts/verification verify-ledger-consistency",
-      "polices_paths": ["contracts/verification/docs/**", "contracts/verification/lean/**"],
+      "polices_paths": [
+        "contracts/verification/docs/**",
+        "contracts/verification/lean/**"
+      ],
       "runs_in": "lean-fv.yml",
       "enforcement": "per_pr_blocking",
       "note": "F1 (2026-07-01): docs/** was ABSENT from lean-fv.yml paths, so ledger-only edits never triggered it. Fixed 5c623c5d."
@@ -13,7 +16,10 @@
     {
       "id": "verify-fv-lints",
       "make": "make -C contracts/verification verify-fv-lints",
-      "polices_paths": ["contracts/verification/lean/**", "contracts/verification/extracted/Extracted/**"],
+      "polices_paths": [
+        "contracts/verification/lean/**",
+        "contracts/verification/extracted/Extracted/**"
+      ],
       "runs_in": "lean-fv.yml",
       "enforcement": "per_pr_blocking",
       "note": "the escape-hatch/opaque-guard lints scan BOTH lean/ and extracted/Extracted/ (lint_fv_invariants.sh:77,151); extracted/Extracted/** added to lean-fv.yml paths 2026-07-02 (extracted-F2) so an extracted-only edit triggers the scan."
@@ -21,14 +27,18 @@
     {
       "id": "verify-audit",
       "make": "make -C contracts/verification verify-audit",
-      "polices_paths": ["contracts/verification/lean/**"],
+      "polices_paths": [
+        "contracts/verification/lean/**"
+      ],
       "runs_in": "lean-fv.yml",
       "enforcement": "per_pr_blocking"
     },
     {
       "id": "verify-storage-mutators",
       "make": "make -C contracts/verification verify-storage-mutators",
-      "polices_paths": ["contracts/verification/lean/SphincsCVerify/Wallet/Storage.lean"],
+      "polices_paths": [
+        "contracts/verification/lean/SphincsCVerify/Wallet/Storage.lean"
+      ],
       "runs_in": "lean-fv.yml",
       "enforcement": "per_pr_blocking",
       "note": "was UNWIRED before 2026-07-01 (grep .github/ = 0); wired into lean-fv.yml 5c623c5d."
@@ -36,7 +46,10 @@
     {
       "id": "verify-proof-mutation",
       "make": "make -C contracts/verification verify-proof-mutation",
-      "polices_paths": ["contracts/verification/lean/**", "contracts/verification/lean/scripts/proof_mutations.json"],
+      "polices_paths": [
+        "contracts/verification/lean/**",
+        "contracts/verification/lean/scripts/proof_mutations.json"
+      ],
       "runs_in": "nightly.yml",
       "enforcement": "nightly",
       "note": "slow (a full lake build per mutation) -> nightly, not per-PR (documented in nightly.yml)."
@@ -44,44 +57,71 @@
     {
       "id": "miri",
       "make": "make miri",
-      "polices_paths": ["secure/src/fi.rs", "secure/src/nsc/**", "tx-core/src/**"],
+      "polices_paths": [
+        "secure/src/fi.rs",
+        "secure/src/nsc/**",
+        "tx-core/src/**"
+      ],
       "runs_in": "ci.yml",
       "enforcement": "per_pr_blocking"
     },
     {
       "id": "kani",
       "make": "make kani",
-      "polices_paths": ["tx/src/**", "pqsigner-erc7730/src/**", "fw-manifest/src/**", "aa/src/**", "shared/src/**", "domain/src/**", "tx-core/src/**"],
+      "polices_paths": [
+        "tx/src/**",
+        "pqsigner-erc7730/src/**",
+        "fw-manifest/src/**",
+        "aa/src/**",
+        "shared/src/**",
+        "domain/src/**",
+        "tx-core/src/**"
+      ],
       "runs_in": "nightly.yml",
       "enforcement": "nightly",
-      "note": "93 #[kani::proof] harnesses across 17 files (2026-07-01 census); minutes -> nightly. polices_paths must list every crate `make kani` runs `cargo kani -p` on (Makefile: pqsigner-tx-core, pqsigner-domain, pqsigner-tx, pqsigner-erc7730, sphincs-tz-shared, pqsigner-aa, fw-manifest) — the 2026-07-01 kani review (ADVERSARIAL_REVIEW_KANI_2026-07-01.md, finding gate-enforcement-kani-polices-omits-domain-txcore) caught domain/src + tx-core/src missing here."
+      "note": "93 #[kani::proof] harnesses across 17 files (2026-07-01 census); minutes -> nightly. polices_paths must list every crate `make kani` runs `cargo kani -p` on (Makefile: pqsigner-tx-core, pqsigner-domain, pqsigner-tx, pqsigner-erc7730, sphincs-tz-shared, pqsigner-aa, fw-manifest) \u2014 the 2026-07-01 kani review (ADVERSARIAL_REVIEW_KANI_2026-07-01.md, finding gate-enforcement-kani-polices-omits-domain-txcore) caught domain/src + tx-core/src missing here."
     },
     {
       "id": "verify-kani-mutation",
       "make": "make verify-kani-mutation",
-      "polices_paths": ["tx/src/multisend.rs", "tx/src/cowswap_order.rs", "fw-manifest/src/lib.rs", "aa/src/userop.rs"],
+      "polices_paths": [
+        "tx/src/multisend.rs",
+        "tx/src/cowswap_order.rs",
+        "fw-manifest/src/lib.rs",
+        "aa/src/userop.rs"
+      ],
       "runs_in": "nightly.yml",
       "enforcement": "nightly",
-      "note": "CURATED per-slice anti-vacuity subset: 6 mutations across these 4 files ONLY. It does NOT screen the other 13 harness-bearing files (57 of 93 harnesses) for vacuity — do not read this as comprehensive Kani-vacuity coverage. See ADVERSARIAL_REVIEW_KANI_2026-07-01.md finding surfacemap-kani-mutation-gate-scope-leak."
+      "note": "CURATED per-slice anti-vacuity subset: 6 mutations across these 4 files ONLY. It does NOT screen the other 13 harness-bearing files (57 of 93 harnesses) for vacuity \u2014 do not read this as comprehensive Kani-vacuity coverage. See ADVERSARIAL_REVIEW_KANI_2026-07-01.md finding surfacemap-kani-mutation-gate-scope-leak."
     },
     {
       "id": "verify-protocol-models",
       "make": "make verify-protocol-models",
-      "polices_paths": ["contracts/verification/proverif/**", "contracts/verification/tamarin/**"],
+      "polices_paths": [
+        "contracts/verification/proverif/**",
+        "contracts/verification/tamarin/**"
+      ],
       "runs_in": "nightly.yml",
       "enforcement": "nightly"
     },
     {
       "id": "verify-repro",
       "make": "make verify-repro",
-      "polices_paths": ["secure/src/**", "nonsecure/src/**"],
+      "polices_paths": [
+        "secure/src/**",
+        "nonsecure/src/**"
+      ],
       "runs_in": "nightly.yml",
       "enforcement": "nightly"
     },
     {
       "id": "checkct",
       "make": "make checkct",
-      "polices_paths": ["tools/sca/checkct/**", "domain/src/kdf.rs", "sphincs-c10/src/**"],
+      "polices_paths": [
+        "tools/sca/checkct/**",
+        "domain/src/kdf.rs",
+        "sphincs-c10/src/**"
+      ],
       "runs_in": "nightly.yml",
       "enforcement": "local_documented",
       "why": "the `checkct` job is workflow_dispatch-only + continue-on-error (WIP): the opam-released binsec can't build the ARM decoder + checkct plugin together; needs a from-source binsec in a clean CI switch. Validated gate is LOCAL `make checkct`. Tracked in nightly.yml comment + tools/sca/DONJON-RUST-TOOLING.md."
@@ -95,36 +135,46 @@
       ],
       "runs_in": "a31-transcription.yml",
       "enforcement": "per_pr_blocking",
-      "note": "the A3.1 c10Program<->Yul positional lint; the ONLY CI-enforced piece of the A3.1 track. Dedicated workflow with a POSITIVE paths filter (ci.yml paths-ignores all of contracts/verification/**). Enrolled 2026-07-02 (was absent — G1META-1)."
+      "note": "the A3.1 c10Program<->Yul positional lint; the ONLY CI-enforced piece of the A3.1 track. Dedicated workflow with a POSITIVE paths filter (ci.yml paths-ignores all of contracts/verification/**). Enrolled 2026-07-02 (was absent \u2014 G1META-1)."
     },
     {
       "id": "verify-extracted",
       "make": "make -C contracts/verification verify-extracted",
-      "polices_paths": ["contracts/verification/extracted/**"],
+      "polices_paths": [
+        "contracts/verification/extracted/**"
+      ],
       "runs_in": "lean-extracted.yml",
       "enforcement": "per_pr_blocking",
-      "note": "§33 Aeneas-extracted no-sorry/no-sorryAx gate. per-PR on extracted/**; the Rust SOURCE crates the extraction mirrors are covered by the extract-* regen-diff sweep (nightly, below). Enrolled 2026-07-02 (was absent — extracted-F1)."
+      "note": "\u00a733 Aeneas-extracted no-sorry/no-sorryAx gate. per-PR on extracted/**; the Rust SOURCE crates the extraction mirrors are covered by the extract-* regen-diff sweep (nightly, below). Enrolled 2026-07-02 (was absent \u2014 extracted-F1)."
     },
     {
       "id": "verify-extract-differential",
       "make": "make -C contracts/verification verify-extract-differential",
-      "polices_paths": ["contracts/verification/extracted/**", "fw-manifest/src/**"],
+      "polices_paths": [
+        "contracts/verification/extracted/**",
+        "fw-manifest/src/**"
+      ],
       "runs_in": "lean-extracted.yml",
       "enforcement": "nightly",
-      "note": "executes extracted-Lean vs executed-Rust (signed_preimage, 6 vectors) — the only layer catching a consistently-wrong translation. Wired into lean-extracted.yml nightly 2026-07-02 (was in NO workflow — extracted-F1)."
+      "note": "executes extracted-Lean vs executed-Rust (signed_preimage, 6 vectors) \u2014 the only layer catching a consistently-wrong translation. Wired into lean-extracted.yml nightly 2026-07-02 (was in NO workflow \u2014 extracted-F1)."
     },
     {
       "id": "verify-spec-vendored-fidelity",
       "make": "make -C contracts/verification verify-spec-vendored-fidelity",
-      "polices_paths": ["contracts/verification/extracted/Extracted/SpecVendored.lean", "contracts/verification/lean/SphincsCVerify/Spec/Bytes.lean"],
+      "polices_paths": [
+        "contracts/verification/extracted/Extracted/SpecVendored.lean",
+        "contracts/verification/lean/SphincsCVerify/Spec/Bytes.lean"
+      ],
       "runs_in": "lean-extracted.yml",
       "enforcement": "nightly",
-      "note": "vendored-spec fidelity (the ADRS version bridge). Wired into lean-extracted.yml nightly 2026-07-02 (was in NO workflow — extracted-F1)."
+      "note": "vendored-spec fidelity (the ADRS version bridge). Wired into lean-extracted.yml nightly 2026-07-02 (was in NO workflow \u2014 extracted-F1)."
     },
     {
       "id": "verify-bytecode",
       "make": "make -C contracts/verification verify-bytecode",
-      "polices_paths": ["contracts/smart-wallet/src/**"],
+      "polices_paths": [
+        "contracts/smart-wallet/src/**"
+      ],
       "runs_in": "ci.yml",
       "enforcement": "local_documented",
       "why": "the Halmos+z3 symbolic discharge of A3.2/A3.3/A3.4 needs the patched halmos toolchain + is slow (kept local/manual per ci.yml:20-23). Per-PR protection against wallet-bytecode drift is the codehash-freeze test/PinnedCodehashes.t.sol in the `contracts` job (forces a conscious re-pin); nothing auto-re-runs Halmos after a re-pin. Kontrol/KEVM is the independent transcription-free cross-check, also local. Corrected 2026-07-02: was advertised as 'the fast CI gate' but runs in NO workflow (HALMOS-FAST-CI-GATE-FALSE)."
@@ -132,12 +182,27 @@
     {
       "id": "verify-three-claims",
       "make": "make -C contracts/verification verify-three-claims",
-      "polices_paths": ["contracts/verification/**", "contracts/smart-wallet/src/**"],
+      "polices_paths": [
+        "contracts/verification/**",
+        "contracts/smart-wallet/src/**"
+      ],
       "enforcement": "local_documented",
-      "why": "a LOCAL end-to-end convenience bundle (kernel + audit + lints + forge + Halmos/Certora advisory), NOT a single CI job. Its dead nested workflow (contracts/.github/... — GitHub never ran it) was removed 2026-07-02 (F1). Its constituent gates ARE per-PR: verify-build/audit/fv-lints/ledger-consistency/storage-mutators (lean-fv.yml), verify-transcription (a31-transcription.yml), forge test + codehash-freeze (ci.yml); the Halmos/Kontrol legs are verify-bytecode (also local_documented)."
+      "why": "a LOCAL end-to-end convenience bundle (kernel + audit + lints + forge + Halmos/Certora advisory), NOT a single CI job. Its dead nested workflow (contracts/.github/... \u2014 GitHub never ran it) was removed 2026-07-02 (F1). Its constituent gates ARE per-PR: verify-build/audit/fv-lints/ledger-consistency/storage-mutators (lean-fv.yml), verify-transcription (a31-transcription.yml), forge test + codehash-freeze (ci.yml); the Halmos/Kontrol legs are verify-bytecode (also local_documented)."
+    },
+    {
+      "id": "prod-check-ship",
+      "make": "make prod-check-ship",
+      "polices_paths": [
+        "secure/src/nsc/mod.rs",
+        "secure/Cargo.toml",
+        "Makefile"
+      ],
+      "runs_in": "ci.yml",
+      "enforcement": "per_pr_blocking",
+      "note": "silicon-lockdown SL3-meta / work-todo #12d (2026-07-02): the production feature-set + silicon-lockdown ENFORCEMENT (the nsc/mod.rs compile_error! fence wall + the PROD_SHIP_FEATURES allow/deny list resolved by prod-check-ship) is CI-enforced by the 'Production feature-set gate (MED-2)' job. Enrolled so verify-gate-enforcement catches it silently losing its run: step or gaining continue-on-error."
     }
   ],
   "_completeness_waived": {
-    "verify-gate-enforcement": "the G1 lint itself (this checker); it runs in ci.yml and does not police a proof surface — it polices the manifest. Waiving avoids self-reference."
+    "verify-gate-enforcement": "the G1 lint itself (this checker); it runs in ci.yml and does not police a proof surface \u2014 it polices the manifest. Waiving avoids self-reference."
   }
 }

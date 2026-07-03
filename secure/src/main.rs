@@ -902,6 +902,31 @@ fn main() -> ! {
         hw::hash::init_clock();
         #[cfg(feature = "boot-pulse")]
         hw::boot_pulse::pulse(3);
+
+        // Silicon-lockdown belt-and-braces (HARDENING §4.2 / silicon-lockdown
+        // SL7): a shipping image must run only on an RDP Level 2 device, where
+        // SWD/JTAG is disabled in silicon. This check is REDUNDANT with that
+        // silicon debug lockdown, so it WARN-and-continues by default — a hard
+        // halt would brick a device during factory rehearsal, where a
+        // `mode-production` image may legitimately run before the irreversible
+        // RDP2 burn (RDP2 is the LAST ceremony step, see docs/production-todo.md).
+        // The opt-in `rdp-enforce-halt` feature hard-refuses instead.
+        #[cfg(feature = "mode-production")]
+        {
+            let rdp = hw::flash::rdp_level();
+            if rdp != hw::flash::RdpLevel::L2 {
+                secure_log!(
+                    "[S][lockdown] WARNING: RDP != Level 2 (got {:?}) — a shipping \
+                     image must run only on an RDP2-locked device; SWD/JTAG is open \
+                     below RDP2. See docs/production-todo.md.",
+                    rdp
+                );
+                #[cfg(feature = "rdp-enforce-halt")]
+                loop {
+                    cortex_m::asm::wfe();
+                }
+            }
+        }
         // Early RDP1 boot diagnostic on the NV3007 LCD (non-se050 builds only;
         // se050 builds defer display init until after their i2c_hw setup). The
         // LCD is SPI and self-initializing via `ui::init()` → `lcd::init()`, so

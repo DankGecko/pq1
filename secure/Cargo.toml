@@ -145,6 +145,11 @@ ui-mode-capture     = ["ui-capture"]
 
 # 4. mode axis (development profile)
 mode-production = []                                    # no debug-log / no e2e-test / no mock-se
+# Opt-in: hard-refuse to run (halt) if the boot-time RDP check finds RDP != Level 2
+# under `mode-production`. OFF by default so a mode-production image can still run
+# during factory rehearsal before the irreversible RDP2 burn (default = WARN-and-
+# continue; RDP2 already disables SWD/JTAG in silicon). silicon-lockdown SL7.
+rdp-enforce-halt = []
 mode-bringup    = ["debug-log"]                         # debug-log allowed; production-fence sub-features prohibited
 mode-e2e        = ["debug-log", "e2e-test"]             # full e2e suite including skip-* sub-flags
 mode-bench      = ["debug-log", "e2e-test"]             # bench harness — e2e minus the skip-* flags
