@@ -78,3 +78,12 @@ import SphincsCVerify.Interpreter.C10Program
 import SphincsCVerify.Interpreter.Phases
 import SphincsCVerify.Interpreter.HypertreePhase
 import SphincsCVerify.Interpreter.C10Refine
+
+-- A3.1 R1a in-kernel parser leg (2026-07-04): a Lean Yul-subset parser
+-- (YulParse), the pinned byte-exact .sol assembly interior + faithful parse
+-- target (C10Source), and the kernel theorems `parse_c10` + elision bridge +
+-- `execC10Asm_eq_parsed_source` (C10Parse). Needs the lakefile's
+-- `--tstack=32768`. See docs/A3_1_CLOSURE_PATH.md §8.
+import SphincsCVerify.Interpreter.YulParse
+import SphincsCVerify.Interpreter.C10Source
+import SphincsCVerify.Interpreter.C10Parse
