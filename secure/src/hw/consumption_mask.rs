@@ -98,6 +98,13 @@ pub fn init() {
 #[cfg(feature = "consumption-mask")]
 static mut PRNG_STATE: u32 = 0;
 
+/// sca-1 (Trezor-port): re-seed period, in SysTick ticks (~1 s at 1 kHz).
+#[cfg(feature = "consumption-mask")]
+const RESEED_PERIOD_TICKS: u32 = 1024;
+/// Ticks since the last re-seed. Sole writer is `randomize()` (SysTick).
+#[cfg(feature = "consumption-mask")]
+static mut RESEED_TICKS: u32 = 0;
+
 /// Seed the PRNG from the multi-source strong TRNG. Called once
 /// from [`init`].
 ///
@@ -140,6 +147,30 @@ unsafe fn seed_prng_from_rng() -> Result<(), ()> {
 #[cfg(feature = "consumption-mask")]
 pub fn randomize() {
     use regs::*;
+    // sca-1 (Trezor-port): periodically re-seed the xorshift PRNG. Its output
+    // physically drives the observable PA5 PWM duty, so an xorshift32 whose
+    // state an SCA attacker recovers (linear, observable) can be modelled and
+    // subtracted from the trace; re-seeding every ~1024 ticks (~1 s) expires a
+    // recovered state. Seed from the PLATFORM TRNG only (`crate::rng::fill`, a
+    // register read) — NOT `rng_strong`: this runs in the SysTick ISR and
+    // `rng_strong` does SE I2C round-trips that would race a signing op on the
+    // shared bus. Fail-OPEN (unlike boot's fail-closed panic): a transient TRNG
+    // error must never kill signing mid-run — keep the current state and retry
+    // next window. All-zero result is skipped (xorshift must not seed to 0).
+    // SAFETY: single-writer (SysTick), same as PRNG_STATE below.
+    unsafe {
+        RESEED_TICKS = RESEED_TICKS.wrapping_add(1);
+        if RESEED_TICKS >= RESEED_PERIOD_TICKS {
+            RESEED_TICKS = 0;
+            let mut sb = [0u8; 4];
+            if crate::rng::fill(&mut sb).is_ok() {
+                let s = u32::from_be_bytes(sb);
+                if s != 0 {
+                    PRNG_STATE = s;
+                }
+            }
+        }
+    }
     // SAFETY: PRNG_STATE is touched only here and from `init`. SysTick
     // is the sole caller in normal operation; if a future user adds an
     // additional caller they must ensure mutual exclusion. A torn

@@ -115,6 +115,17 @@ const RLR_2S: u32 = 250;
 #[cfg(feature = "iwdg")]
 const NS_STALL_LIMIT_TICKS: u32 = 4000;
 
+// rr-2 (Trezor-port): max consecutive ticks a *busy handler* alone may feed
+// the watchdog. `handler_busy` legitimately holds across a bounded window (a
+// full CMD_SIGN_USEROP_BATCH: per-UserOp keygen + two FI-double-compute signs
+// each) — but a handler that spins forever with its `HandlerGuard` held would
+// otherwise feed the IWDG forever (the hole flagged in the module doc above)
+// AND suppress the 120 s idle-wipe (which shares the `handler_busy` gate). Set
+// generously (~30 s at 1 kHz SysTick) above the worst legit continuous-busy
+// window so a real batch never trips it, but a wedged handler does.
+#[cfg(feature = "iwdg")]
+const MAX_BUSY_TICKS: u32 = 30_000;
+
 // Heartbeat-watch state. Sole writer is the secure SysTick handler
 // (single-threaded, non-reentrant) plus the one-time boot registration.
 #[cfg(feature = "iwdg")]
@@ -123,6 +134,10 @@ static mut NS_HEARTBEAT_ADDR: u32 = 0; // 0 = NS hasn't registered yet
 static mut LAST_HEARTBEAT: u32 = 0;
 #[cfg(feature = "iwdg")]
 static mut STALL_TICKS: u32 = 0;
+// rr-2: consecutive ticks fed on `handler_busy` alone (no NS heartbeat
+// advance). Reset on real NS progress or when the handler goes idle.
+#[cfg(feature = "iwdg")]
+static mut BUSY_TICKS: u32 = 0;
 
 /// Start the IWDG with a ~2 s timeout. Once started it CANNOT be
 /// stopped (hardware property) — that's the point. Call from secure
@@ -209,12 +224,34 @@ pub fn systick_watch_and_kick(handler_busy: bool) {
         let hb = core::ptr::read_volatile(addr as *const u32);
         let last = core::ptr::read_volatile(core::ptr::addr_of!(LAST_HEARTBEAT));
 
-        if hb != last || handler_busy {
-            // Forward progress (NS looped, or a veneer is mid-flight).
+        if hb != last {
+            // Genuine NS forward progress (NS looped) — reset both timers.
             core::ptr::write_volatile(core::ptr::addr_of_mut!(LAST_HEARTBEAT), hb);
             core::ptr::write_volatile(core::ptr::addr_of_mut!(STALL_TICKS), 0);
+            core::ptr::write_volatile(core::ptr::addr_of_mut!(BUSY_TICKS), 0);
             kick();
+        } else if handler_busy {
+            // A secure veneer is mid-flight — NS is blocked in the gateway so
+            // its heartbeat can't advance. Legitimate for a BOUNDED window,
+            // but rr-2: cap it, or a wedged handler holding its `HandlerGuard`
+            // feeds the watchdog forever. `handler_busy` is NOT an NS stall,
+            // so reset STALL_TICKS; count busy ticks separately.
+            core::ptr::write_volatile(core::ptr::addr_of_mut!(STALL_TICKS), 0);
+            let b = core::ptr::read_volatile(core::ptr::addr_of!(BUSY_TICKS))
+                .saturating_add(1);
+            core::ptr::write_volatile(core::ptr::addr_of_mut!(BUSY_TICKS), b);
+            if b < MAX_BUSY_TICKS {
+                kick();
+            } else if b == MAX_BUSY_TICKS {
+                secure_log!(
+                    "[S][iwdg] BUSY LIMIT hit (b={}) — handler wedged busy, stopping kicks, IWDG will fire",
+                    b
+                );
+            }
+            // else: busy past the cap → stop feeding → IWDG fires.
         } else {
+            // No NS progress and no busy handler → NS-loop stall.
+            core::ptr::write_volatile(core::ptr::addr_of_mut!(BUSY_TICKS), 0);
             let s = core::ptr::read_volatile(core::ptr::addr_of!(STALL_TICKS))
                 .saturating_add(1);
             core::ptr::write_volatile(core::ptr::addr_of_mut!(STALL_TICKS), s);
@@ -224,8 +261,8 @@ pub fn systick_watch_and_kick(handler_busy: bool) {
             } else if s == NS_STALL_LIMIT_TICKS {
                 // DIAGNOSTIC: about to stop feeding — IWDG will reset
                 // in ~2 s. Logged once at the threshold crossing so we
-                // can tell a real stall from flaky USB. hb/last/busy
-                // captured for the post-mortem.
+                // can tell a real stall from flaky USB. hb/last captured
+                // for the post-mortem.
                 secure_log!(
                     "[S][iwdg] STALL LIMIT hit (s={}) hb=0x{:08x} last=0x{:08x} — stopping kicks, IWDG will fire",
                     s, hb, last
