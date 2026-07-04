@@ -393,3 +393,35 @@ Quick-win bundle (all S unless noted):
    dust, unlimited, decimal raw, EIP-55, chain table, envelope merge, compact retry).
 5. **Structural:** 5.1 render-crate extraction (with 5.2 dedup), 5.3 wire-vocab
    single-sourcing, 5.4 walker retirement, 5.5 dbgen split + differential oracle.
+
+---
+
+## Follow-up status (2026-07-04)
+
+Post-5.1-refactor pass over the "tractable remaining" set:
+
+- **3.6 message param — DONE.** `render_token_amount`'s unlimited path uses the
+  descriptor's `message` param (validated printable) instead of hardcoded
+  "unlimited"; render test on a synthetic `message="Max"` descriptor.
+- **5.4 legacy walker — DONE (retired).** `walker.rs` (588 lines) deleted; its
+  one live export `path_bytes` moved to `Erc7730Ir::path_bytes`; the
+  `erc7730_walker` fuzz target + Makefile/Cargo.toml entries removed. `abi.rs`
+  KEPT — contrary to the review's premise it is LIVE (`AbiValue` used by
+  visibility/array/resolve/formatters).
+- **3.7 metadata.token — DEFERRED.** Wiring `metadata.token.decimals` as a
+  binding source touches the M-4 "verified decimals" security boundary (only the
+  curated Merkle ERC-20 DB is trusted for scaling today) and rotates the root.
+  Attested-safe in principle but wants design-first/adversarial review, not a
+  rushed landing during active root-churn. (Broader coverage than the review's
+  "2 files": ethena/midas/ondo/aave/… declare it; USDT etc. already Merkle-covered.)
+- **5.5 dbgen split + alloy oracle — DEFERRED.** The split (7,361-line file →
+  modules) is conflict-guaranteed against the active swarm. The alloy
+  differential oracle needs a heavy new dependency (`alloy-json-abi`/`-dyn-abi`,
+  not in the workspace) + a Cargo.lock change — a deliberate dependency decision,
+  not an end-of-session add. Existing coverage (whole-registry roundtrip + render
+  tests + Kani) already exercises the type engine; the oracle would strengthen it.
+- **2.4 render-smoke manifest — DEFERRED.** Now feasible post-5.1 (render is
+  host-crate), but a proper harness needs cross-crate calldata synthesis (dbgen
+  holds the format signatures; pqsigner-erc7730 renders) to record the
+  per-leaf renders/declines classification — a real M-L build. The panic-freedom
+  half is already covered by the swarm's `erc7730_render_dispatch` fuzz target.
