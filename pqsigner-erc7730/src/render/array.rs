@@ -437,6 +437,49 @@ mod kani_harnesses {
         }
     }
 
+    /// VALUE-BINDING (2026-07-04): the panic-free harnesses above prove the
+    /// accepted `(elems_start, count)` span is in-bounds — but not that it is
+    /// the RIGHT span. This binds both halves to independent oracles ∀ bodies:
+    /// on accept, `count` equals EXACTLY the length word the hardened reader
+    /// sees at the tail (no count drift ⇒ no hidden/extra elements rendered),
+    /// and `elems_start` is EXACTLY head_end+32 (offset word == head_end, the
+    /// SoleWholeTail pin). Combined with the existing exact-tail equality this
+    /// pins the rendered element window byte-for-byte to the ABI's.
+    #[kani::proof]
+    #[kani::unwind(34)]
+    fn resolve_array_count_binds_to_length_word() {
+        const N: usize = 160;
+        let data: [u8; N] = kani::any();
+        let blen: usize = kani::any();
+        kani::assume(blen <= N);
+        let full_body = &data[..blen];
+        let pool = [0xFFu8, 5, 0x10, 0x20, 0x00, 0x00, 0x24];
+        let ir = mk_ir(&pool);
+        let field = FieldEntry { format_op: 0x02, label: b"a", path_off: 1, param_off: 0 };
+        if let Ok((elems_start, count)) = resolve_array(&field, &ir, full_body, 2) {
+            // head_end = static_head_words*32 = 64; offset word pinned to it.
+            assert!(read_offset_word(&full_body[0..32]) == Some(64));
+            assert!(elems_start == 96); // head_end + the length word
+            let oracle_count = read_length_word(&full_body[64..96])
+                .expect("accepted ⇒ the length word was valid") as usize;
+            assert!(count == oracle_count);
+        }
+    }
+
+    /// Non-vacuity witness: a canonical 2-element sole-tail body IS accepted
+    /// at exactly `(96, 2)` — the count-binding harness is not vacuous.
+    #[kani::proof]
+    #[kani::unwind(34)]
+    fn resolve_array_count_binding_accepts_concrete() {
+        let pool = [0xFFu8, 5, 0x10, 0x20, 0x00, 0x00, 0x24];
+        let ir = mk_ir(&pool);
+        let field = FieldEntry { format_op: 0x02, label: b"a", path_off: 1, param_off: 0 };
+        let mut b = [0u8; 160];
+        b[31] = 64; // array offset word = head_end
+        b[95] = 2; // length word = 2; elements at 96..160 (exact tail)
+        assert!(matches!(resolve_array(&field, &ir, &b, 2), Ok((96, 2))));
+    }
+
     /// Non-vacuity (finding §2 #2): the human/page-budget element cap
     /// (`count > MAX_ARRAY_RENDER` ⇒ Reject) is UNREACHABLE in the symbolic
     /// panic-free harnesses above — at N=160/224 a `SoleWholeTail` admits only
