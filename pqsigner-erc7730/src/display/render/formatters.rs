@@ -1381,9 +1381,21 @@ fn render_encrypted(
 
 pub(super) fn write_label_row(pages: &mut Pages, page: usize, label: &[u8]) {
     let row = pages.row_mut(page, 0);
-    // Reuse the same "ASCII bytes into 16-col row, space-padded"
-    // semantics that blind_sign uses for verified-name labels.
-    write_line_bytes(row, label);
+    // A field label lands on row 0; the value fills rows 1..3 and the footer.
+    // On the 4-row page there is no free row to wrap a long label onto (a true
+    // multi-row label would need its own page — see
+    // `docs/erc7730-renderer-fuzzability.md`), so a label longer than the row
+    // is truncated. ~18.8% of registry labels exceed 16 cols, and a SILENT cut
+    // ("Amount to withdraw" → "Amount to withdr") hides that the label is
+    // incomplete — reserve the last cell for a `~` truncation marker so the
+    // user can tell the label continues. Reuses blind_sign's ASCII-into-16-col
+    // semantics for the fitting case.
+    if label.len() > DISPLAY_COLS {
+        write_line_bytes(row, &label[..DISPLAY_COLS - 1]);
+        row[DISPLAY_COLS - 1] = b'~';
+    } else {
+        write_line_bytes(row, label);
+    }
 }
 
 pub(super) fn write_line_bytes(row: &mut [u8; DISPLAY_COLS], text: &[u8]) {
