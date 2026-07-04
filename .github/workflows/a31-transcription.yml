@@ -32,6 +32,8 @@ on:
       - 'contracts/verification/scripts/check_c10_transcription.py'
       - 'contracts/verification/scripts/check_c10_transcription_ast.py'
       - 'contracts/verification/scripts/test_c10_transcription_ast_negative.py'
+      - 'contracts/verification/scripts/check_c10_source_pin.py'
+      - 'contracts/verification/lean/SphincsCVerify/Interpreter/C10Source.lean'
       - 'contracts/verification/Makefile'
       - '.github/workflows/a31-transcription.yml'
   pull_request:
@@ -41,6 +43,8 @@ on:
       - 'contracts/verification/scripts/check_c10_transcription.py'
       - 'contracts/verification/scripts/check_c10_transcription_ast.py'
       - 'contracts/verification/scripts/test_c10_transcription_ast_negative.py'
+      - 'contracts/verification/scripts/check_c10_source_pin.py'
+      - 'contracts/verification/lean/SphincsCVerify/Interpreter/C10Source.lean'
       - 'contracts/verification/Makefile'
       - '.github/workflows/a31-transcription.yml'
 
