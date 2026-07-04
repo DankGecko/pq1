@@ -1382,11 +1382,11 @@ fn negative_max_pages_covers_personal_sign_worst_case() {
 
 #[test]
 fn negative_max_pages_matches_production_constant() {
-    // Pin the literal so a silent reduction would fail loudly. The
-    // canonical value lives in `tx/display/mod.rs:72`; this scaffold's
-    // copy and that source must stay in lockstep. Searches the
-    // production source text rather than the gated-out module.
-    let src = include_str!("../tx/display/mod.rs");
+    // Pin the literal so a silent reduction would fail loudly. `Pages`/
+    // `MAX_PAGES` moved to the host crate (`pqsigner_erc7730::display`) so the
+    // ERC-7730 render dispatch can be host-linked; this scaffold's copy and
+    // that source must stay in lockstep. Searches the production source text.
+    let src = include_str!("../../../pqsigner-erc7730/src/display/mod.rs");
     let needle = "pub const MAX_PAGES: usize = 28;";
     assert!(src.contains(needle),
         "production tx/display/mod.rs no longer defines `{}` — either \

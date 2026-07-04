@@ -54,154 +54,27 @@ pub use offchain_sync::build_offchain_sync_pages;
 pub use slot_rotation::build_slot_rotation_pages;
 pub use value_transfer::render_pages;
 
-use crate::ui::confirm::Page;
-use crate::ui::{DISPLAY_COLS, DISPLAY_ROWS};
+// `Page`/`DISPLAY_COLS`/`DISPLAY_ROWS` are no longer referenced here — `Pages`
+// (which used them) now lives in `pqsigner_erc7730::display`. The confirm loop
+// still gets `Page` from `crate::ui::confirm`.
 
-/// Maximum number of confirmation pages any renderer can produce.
-///
-/// Must be at least as large as the longest `render_*_pages` output:
-///
-///   * plain value transfer                 → 6 pages
-///   * erc20_known / erc20_unknown          → 8 pages
-///     (9 for `transferFrom`: + the "From (debited)" source-account page)
-///   * blind_sign (no selector bundle)      → 9 pages
-///   * blind_sign (with verified FUNCTION)  → 10 pages
-///   * contract_creation                    → 8 pages
-///   * cowswap EIP-712 render (see
-///     `crate::tx::eip712::cowswap_display`) → 10 pages, +2 gas-fee
-///     splice = 12
-///   * Safe-wrapped CoW presign (Safe surface with the v3 order as its
-///     inner pages) → 3 header + 3 refund + 1 inner-ETH + 1 context
-///     banner + 8 body (addr mode) + 1 confirm = 17, +1 native-value
-///     splice + 2 gas-fee splice + 2 ERC-8213 fingerprint pages = 22;
-///     +1 batch banner = 23; +1 safeTxGas page (when non-zero) = 24
-///   * Safe multiSend batch (per record: 1 divider + optional value
-///     page + the record's own pages; the CoW record costs 1 banner +
-///     6/8 body). NOT statically bounded — the handlers'
-///     `multisend_sign_gate` page-budget check refuses any composition
-///     whose exact total (same per-kind counts the renderer uses)
-///     would exceed `MAX_PAGES`; the Safe-UI approve+presign flow in
-///     addr mode with 3 refund pages + batch banner + the +2 gas-fee
-///     splice lands on 27 exactly.
-///   * typed_call (Phase 2 calldata decode) → up to 14 pages
-///     (banner + up to 6 typed args + To + Value + Chain + 2 fee
-///     pages + Nonce; declines past `MAX_TYPED_ARGS_RENDERED = 6`)
-///   * batch sign per-tx wrapper (see
-///     `crate::tx::display::batch::wrap_pages_with_batch_banner`) →
-///     same as the wrapped renderer + 1 banner page = up to 15
-///   * EIP-1271 PersonalSign render →
-///     5 fixed pages (banner / chain / account+slot / signer addr /
-///     final confirm) + `ceil(MAX_OFFCHAIN_PERSONAL_SIGN_LEN / 48)`
-///     message pages = up to 5 + ceil(700 / 48) = 5 + 15 = 20.
-///
-/// Two dispatcher-level page splices add to the per-renderer counts above
-/// for the flows that don't emit them inline (applied in
-/// [`pick_sign_pages`] after the chosen renderer returns):
-///
-///   * native-ETH value page (+1) when the outer UserOp `value != 0`
-///     (`value_page::enforce_native_value_page`).
-///   * gas/fee pages (+2: "Max fee" + "Worst-case") for the Safe / CoW /
-///     v1-ZK surfaces, which — unlike value_transfer / erc20 / typed_call
-///     / blind_sign / erc7730 — do not show gas inline
-///     (`value_page::enforce_gas_pages`; audit 2026-06-19).
-///
-/// Bumping this costs `4 × 16 = 64` extra stack bytes per page (×2
-/// transiently while the batch banner wrap holds two `Pages`), so grow
-/// it deliberately and not speculatively. 22 → 24 accompanied the
-/// multiSend clear-sign feature; 24 → 27 accompanied the Safe gas-refund
-/// magnitude page (+1 refund page: the worst-case
-/// (CEILING+baseGas)*gasPrice total) and the Safe/CoW gas/fee splice (+2)
-/// so the worst realistic flow — the Safe-UI approve+presign multiSend
-/// (AddrHex legs + 3 refund pages + record values + batch banner + gas +
-/// ERC-8213 fingerprints) — landed on 27. 27 → 28 accompanied the Safe
-/// `safeTxGas` page (+1, conditional on `safeTxGas != 0`; audit 2026-06-26),
-/// so that same worst-case flow carrying a non-zero `safeTxGas` lands on 28
-/// exactly without truncation. `multisend_sign_gate` counts the page too, so
-/// the budget still fails closed (refuse, never truncate).
-pub const MAX_PAGES: usize = 28;
-
-/// A buffer of up to [`MAX_PAGES`] pre-rendered confirmation pages.
-///
-/// Owned-by-value: every renderer returns a fresh `Pages` on the stack
-/// and the caller hands `pages.as_slice()` to
-/// [`crate::ui::confirm::confirm`] for the navigation loop. The buffer
-/// is always allocated for the full [`MAX_PAGES`] so that only `len`
-/// changes between renderers — callers must never index past `len`.
-pub struct Pages {
-    /// The full `MAX_PAGES`-sized page buffer. Visible only to sibling
-    /// submodules under `display::` so the per-`TxKind` renderers can
-    /// write directly into their own slots without going through
-    /// `row_mut`/`page_mut` for every line — external callers must use
-    /// [`Pages::as_slice`] instead.
-    pub(super) buf: [Page; MAX_PAGES],
-    pub(super) len: usize,
-}
-
-impl Pages {
-    /// View the visible pages (indices `0..len`) as a slice. This is
-    /// what `confirm()` consumes.
-    pub fn as_slice(&self) -> &[Page] {
-        &self.buf[..self.len]
-    }
-
-    /// Construct a page bundle with exactly `len` visible pages,
-    /// pre-filled with ASCII space. Used both internally by the
-    /// EIP-1559 renderers in this directory and externally by the
-    /// CowSwap EIP-712 renderer in
-    /// `crate::tx::eip712::cowswap_display`.
-    pub fn empty_with_len(len: usize) -> Self {
-        assert!(len <= MAX_PAGES, "Pages::empty_with_len: len > MAX_PAGES");
-        Pages {
-            buf: [[[b' '; DISPLAY_COLS]; DISPLAY_ROWS]; MAX_PAGES],
-            len,
-        }
-    }
-
-    /// Mutable access to a single row within a single page. Bounds-
-    /// checked; panics on out-of-range indices (which would indicate
-    /// a firmware bug since both come from compile-time constants).
-    pub fn row_mut(&mut self, page: usize, row: usize) -> &mut [u8; DISPLAY_COLS] {
-        assert!(page < self.len);
-        assert!(row < DISPLAY_ROWS);
-        &mut self.buf[page][row]
-    }
-
-    /// Mutable access to the full row array of one page. Used by
-    /// renderers that need to mutate two rows of the same page
-    /// simultaneously (via `split_at_mut`), which the row-at-a-time
-    /// `row_mut` helper above can't express without tripping the
-    /// borrow checker.
-    pub fn page_mut(&mut self, page: usize) -> &mut [[u8; DISPLAY_COLS]; DISPLAY_ROWS] {
-        assert!(page < self.len);
-        &mut self.buf[page]
-    }
-
-    /// Renderer-local shortcut for `empty_with_len`. Kept private so
-    /// the sibling submodules can `use super::Pages;` and call
-    /// `Pages::with_len(...)`.
-    pub(super) fn with_len(len: usize) -> Self {
-        Self::empty_with_len(len)
-    }
-
-    /// Bump `len` by one and return the index of the newly-visible page.
-    /// Returns `Err(())` when the buffer is already full; renderers map
-    /// that to `RenderErr::PageBudget` and fall through to a less rich
-    /// rendering ladder rung. The returned page is pre-cleared to ASCII
-    /// space (matches every other allocation path).
-    pub(super) fn push_blank(&mut self) -> Result<usize, ()> {
-        if self.len >= MAX_PAGES {
-            return Err(());
-        }
-        // The full MAX_PAGES buffer was zero-cleared at construction;
-        // older renderers that overran past `len` via `Pages::empty()`
-        // and then bumped it leave stale bytes behind. Re-clear the slot
-        // here so dynamic-push renderers don't inherit prior content.
-        self.buf[self.len] = [[b' '; DISPLAY_COLS]; DISPLAY_ROWS];
-        let idx = self.len;
-        self.len += 1;
-        Ok(idx)
-    }
-}
+// `Pages`/`MAX_PAGES` moved to `pqsigner_erc7730::display` so the ERC-7730
+// render dispatch can be host-linked and fuzzed (see
+// `docs/erc7730-renderer-fuzzability.md` and
+// `fuzz/fuzz_targets/erc7730_render_dispatch.rs`). Re-exported here so the
+// ~415 direct `.buf`/`.len` accessors and the
+// `Pages::{as_slice,empty_with_len,row_mut,page_mut,with_len,push_blank}`
+// call sites across this display tree resolve unchanged.
+//
+// MAX_PAGES = 28. It must cover the longest `render_*_pages` output; the
+// worst realistic flow is the Safe-UI approve+presign multiSend (AddrHex legs
+// + 3 refund pages + record values + batch banner + gas + ERC-8213
+// fingerprints + a non-zero `safeTxGas` page). `multisend_sign_gate` counts
+// pages against this cap so the budget fails closed (refuse, never truncate).
+// Grow it deliberately (4×16 = 64 stack bytes/page, ×2 transiently during the
+// batch-banner wrap) — the per-flow accounting lives in git history and the
+// bump rationale in the host `MAX_PAGES` doc.
+pub use pqsigner_erc7730::display::{Pages, MAX_PAGES};
 
 /// Pick the right renderer for a CMD_SIGN_USEROP trusted-UI confirm.
 ///

@@ -1,40 +1,147 @@
 //! Host-compilable render substrate for the ERC-7730 (and shared) display path.
 //!
-//! [`primitives`] holds the pure row-buffer byte-writers — amount/decimal
-//! scaling, address truncation, hex, chain/ticker naming — that the on-device
-//! renderers in `secure/src/tx/display/` call to fill a single
-//! `[u8; DISPLAY_COLS]` row. They were extracted out of the secure crate's
-//! `#[cfg(not(test))]`-gated `tx::display` tree (which is gated only because it
-//! imports the hardware-only `crate::ui`) so they can be **host-fuzzed** — see
-//! `fuzz/fuzz_targets/erc7730_display_primitives.rs`. `overflow-checks = true`
-//! in the firmware profile turns any arithmetic slip in the amount writers on
-//! an attacker-controlled `U256` (the value comes from calldata) into a panic =
-//! DoS, and the descriptor-side resolvers this crate already fuzzes never
-//! exercise that byte arithmetic — so this is the highest-panic-density code on
-//! the render path.
+//! This module owns the pure-logic pieces of the trusted-display renderer so
+//! they can be host-linked (and fuzzed) instead of being trapped behind the
+//! secure crate's `#[cfg(not(test))]`-gated `tx::display` tree — which is gated
+//! only because its parent `mod.rs` imports the hardware-only
+//! `crate::ui::confirm::Page`. It holds:
 //!
-//! The secure crate re-exports this module verbatim
-//! (`secure/src/tx/display/primitives.rs` → `pub use
-//! pqsigner_erc7730::display::primitives::*`), so the ~17 on-device call sites
-//! and the `display_under_test` host-test scaffold both resolve here unchanged.
+//! * [`Page`] / [`Pages`] / [`MAX_PAGES`] — the fixed-capacity page buffer every
+//!   renderer fills and hands to `crate::ui::confirm`. The secure crate
+//!   re-exports `Pages`/`MAX_PAGES` (`tx::display::mod.rs`), so its ~415 direct
+//!   `.buf`/`.len` accessors across the display tree keep compiling cross-crate.
+//! * [`primitives`] — the row-buffer byte-writers (amount/decimal scaling,
+//!   address truncation, hex, chain/ticker naming). `overflow-checks = true` in
+//!   the firmware profile turns any arithmetic slip in the amount writers on an
+//!   attacker-controlled `U256` (the value comes from calldata) into a panic =
+//!   DoS; `fuzz/fuzz_targets/erc7730_display_primitives.rs` hammers them.
+//! * [`ascii_str`] — the `no_std` ASCII-by-construction `&str` helper the
+//!   renderers use in place of `from_utf8_unchecked`.
 //!
-//! The heavier `Pages`/`MAX_PAGES` buffer + the per-`FormatOp` dispatch that
-//! emits into it stay in the secure crate for now: `Pages` is written directly
-//! (over 400 `.buf`/`.len` field accesses) by the whole `tx::display` renderer
-//! tree, so host-linking the full dispatch is a `pub(super)→pub` field widening
-//! plus moving `Pages` + the five ERC-7730 render files — a larger, separate
-//! follow-up (scoped in `docs/erc7730-renderer-fuzzability.md`), not a wall.
+//! The per-`FormatOp` ERC-7730 render (dispatch → field iteration → page
+//! emission) lives in [`crate::render`]'s sibling `render_pages` module and is
+//! fuzzed via `fuzz/fuzz_targets/erc7730_render_dispatch.rs`.
+//!
+//! `DISPLAY_COLS`/`DISPLAY_ROWS` are redeclared here (= the secure `crate::ui`
+//! constants). Since they are equal, `Page` = `[[u8; 16]; 4]` is the SAME
+//! concrete type on both sides, so the secure `ui::confirm::Page` and the row
+//! buffers callers pass need no re-export — only the named `Pages`/`MAX_PAGES`
+//! struct does.
 
 pub mod primitives;
 
-/// Logical display width in cells. MUST equal the secure crate's
-/// `crate::ui::DISPLAY_COLS`: the row buffers the on-device renderers pass to
-/// [`primitives`] are `[u8; ui::DISPLAY_COLS]`, and Rust arrays are matched by
-/// their concrete length — a mismatch would be a hard type error at the shim,
-/// not silent, but pin it here so the two constants can never drift unnoticed.
+/// Logical display dimensions (cells, not pixels). MUST equal the secure
+/// crate's `crate::ui::{DISPLAY_COLS, DISPLAY_ROWS}` — pinned by the asserts
+/// below and by `secure/src/ui_under_test`, so the two sides can never drift
+/// unnoticed (a mismatch is a hard type error at the re-export, not silent).
 pub const DISPLAY_COLS: usize = 16;
+/// See [`DISPLAY_COLS`].
+pub const DISPLAY_ROWS: usize = 4;
 
-// Compile-time tripwire mirroring `secure/src/ui_under_test`'s assert that the
-// secure-side constant is 16. If either side changes, one of the two asserts
-// fires and forces a coordinated update.
 const _: () = assert!(DISPLAY_COLS == 16);
+const _: () = assert!(DISPLAY_ROWS == 4);
+
+/// A single confirm-dialog page: [`DISPLAY_ROWS`] rows of [`DISPLAY_COLS`]
+/// ASCII cells. Structurally identical to the secure `crate::ui::confirm::Page`
+/// (`[[u8; 16]; 4]`), so the two are the same concrete type.
+pub type Page = [[u8; DISPLAY_COLS]; DISPLAY_ROWS];
+
+/// Hard cap on the number of pages any renderer may emit. Bumped only
+/// deliberately: 22 → 24 with multiSend clear-sign; 24 → 27 with the Safe
+/// gas-refund magnitude page + the Safe/CoW gas/fee splice; 27 → 28 with the
+/// Safe `safeTxGas` page (conditional on `safeTxGas != 0`; audit 2026-06-26).
+/// The Safe multisend sign-gate counts the page too, so the budget still fails
+/// closed (refuse, never truncate).
+pub const MAX_PAGES: usize = 28;
+
+/// A buffer of up to [`MAX_PAGES`] pre-rendered confirmation pages.
+///
+/// Owned-by-value: every renderer returns a fresh `Pages` on the stack and the
+/// caller hands `pages.as_slice()` to `crate::ui::confirm::confirm` for the
+/// navigation loop. The buffer is always allocated for the full [`MAX_PAGES`]
+/// so that only `len` changes between renderers — callers must never index past
+/// `len`.
+///
+/// The fields are `pub` (not `pub(super)`) so the on-device renderers that stay
+/// in the secure crate can keep writing them directly cross-crate. This is a
+/// code-hygiene surface, not a security boundary: `Pages` is internal firmware
+/// plumbing with no attacker-reachable constructor, and the sanctioned builders
+/// remain [`Pages::empty_with_len`] / [`Pages::with_len`] / [`Pages::push_blank`]
+/// (the last two enforce the `MAX_PAGES` cap).
+pub struct Pages {
+    /// The full `MAX_PAGES`-sized page buffer. Renderers write directly into
+    /// their own slots; external callers must use [`Pages::as_slice`].
+    pub buf: [Page; MAX_PAGES],
+    /// Number of currently-visible pages (`0..=MAX_PAGES`).
+    pub len: usize,
+}
+
+impl Pages {
+    /// View the visible pages (indices `0..len`) as a slice. This is what
+    /// `confirm()` consumes.
+    #[must_use]
+    pub fn as_slice(&self) -> &[Page] {
+        &self.buf[..self.len]
+    }
+
+    /// Construct a page bundle with exactly `len` visible pages, pre-filled with
+    /// ASCII space.
+    #[must_use]
+    pub fn empty_with_len(len: usize) -> Self {
+        assert!(len <= MAX_PAGES, "Pages::empty_with_len: len > MAX_PAGES");
+        Pages {
+            buf: [[[b' '; DISPLAY_COLS]; DISPLAY_ROWS]; MAX_PAGES],
+            len,
+        }
+    }
+
+    /// Mutable access to a single row within a single page. Bounds-checked;
+    /// panics on out-of-range indices (a firmware bug — both indices come from
+    /// compile-time constants).
+    pub fn row_mut(&mut self, page: usize, row: usize) -> &mut [u8; DISPLAY_COLS] {
+        assert!(page < self.len);
+        assert!(row < DISPLAY_ROWS);
+        &mut self.buf[page][row]
+    }
+
+    /// Mutable access to the full row array of one page. Used by renderers that
+    /// mutate two rows of the same page simultaneously (via `split_at_mut`).
+    pub fn page_mut(&mut self, page: usize) -> &mut [[u8; DISPLAY_COLS]; DISPLAY_ROWS] {
+        assert!(page < self.len);
+        &mut self.buf[page]
+    }
+
+    /// Shortcut for [`Pages::empty_with_len`].
+    #[must_use]
+    pub fn with_len(len: usize) -> Self {
+        Self::empty_with_len(len)
+    }
+
+    /// Bump `len` by one and return the index of the newly-visible page. Returns
+    /// `Err(())` when the buffer is already full; renderers map that to
+    /// `RenderErr::PageBudget` and fall through to a less rich rendering ladder
+    /// rung. The returned page is pre-cleared to ASCII space.
+    pub fn push_blank(&mut self) -> Result<usize, ()> {
+        if self.len >= MAX_PAGES {
+            return Err(());
+        }
+        // Re-clear the slot so dynamic-push renderers don't inherit prior
+        // content (older renderers overran past `len` and bumped it).
+        self.buf[self.len] = [[b' '; DISPLAY_COLS]; DISPLAY_ROWS];
+        let idx = self.len;
+        self.len += 1;
+        Ok(idx)
+    }
+}
+
+/// Convert an ASCII-by-construction byte buffer into a `&str` without `unsafe`.
+///
+/// All call sites build their buffers from printable ASCII (digits, hex, BIP-39
+/// words, fixed labels). The `from_utf8` validator is O(n) over a ≤64-byte
+/// buffer — negligible. The `"?"` fallback is structurally unreachable; it
+/// exists only so this helper is safe (no `from_utf8_unchecked`).
+#[inline]
+#[must_use]
+pub fn ascii_str(buf: &[u8]) -> &str {
+    core::str::from_utf8(buf).unwrap_or("?")
+}
