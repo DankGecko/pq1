@@ -297,6 +297,28 @@
       "replace": ".checked_add(u16::from_be_bytes([a[0], a[1]]) as usize + 1)",
       "expect": "kani_fails",
       "note": "FieldIdx slot accumulation drifts by +1 per op (the walker-slot-confusion class). Resolved leaf lands one word off; `Word(32*(s1+s2))` MUST redden. Verified 2026-07-04 by hand: mutation -> VERIFICATION:- FAILED; unmutated -> SUCCESSFUL."
+    },
+    {
+      "id": "token_amount_threshold_boundary_off_by_one",
+      "tier": "default",
+      "crate": "pqsigner-erc7730",
+      "harness": "fmt_p0_token_amount_threshold_boundary_concrete",
+      "file": "pqsigner-erc7730/src/display/render/formatters.rs",
+      "find": "value.0 >= *t",
+      "replace": "value.0 > *t",
+      "expect": "kani_fails",
+      "note": "unlimited-threshold gate off-by-one: value == threshold no longer paints the loud threshold row (the single most dangerous approval renders as a normal amount). The boundary witness pins value == T exactly, so it MUST redden. Verified 2026-07-04 by hand: mutation -> VERIFICATION:- FAILED; reverted -> file restored (grep-confirmed)."
+    },
+    {
+      "id": "raw_word_hex_row_slice_drift",
+      "tier": "default",
+      "crate": "pqsigner-erc7730",
+      "harness": "fmt_p0_raw_word_hex_exactness",
+      "file": "pqsigner-erc7730/src/display/render/formatters.rs",
+      "find": "write_hex_word(r2, &word[8..16]);",
+      "replace": "write_hex_word(r2, &word[9..17]);",
+      "expect": "kani_fails",
+      "note": "raw-word hex row 2 drifts one byte (bytes 8..16 -> 9..17): a signed byte vanishes from the trusted display (the magnitude-hiding class). The forall exactness harness binds every row byte to an independent nibble table, so it MUST redden. Verified 2026-07-04 by hand: mutation -> VERIFICATION:- FAILED; reverted -> file restored (grep-confirmed)."
     }
   ]
 }

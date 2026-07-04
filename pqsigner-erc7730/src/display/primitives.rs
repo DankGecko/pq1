@@ -964,3 +964,85 @@ mod eip55_tests {
         }
     }
 }
+
+#[cfg(kani)]
+mod kani_harness {
+    //! Tier-P0 ∀ proof of the full-address hex skeleton (FV frontier Track 2
+    //! M3, 2026-07-04).
+
+    use super::*;
+
+    /// Independent hex oracle: a lookup TABLE, not the code's arithmetic
+    /// `hex_nibble`.
+    const HEX_LOWER_TAB: &[u8; 16] = b"0123456789abcdef";
+
+    /// ∀ 20-byte addresses: `write_addr_full` (the unresolved-name arm's
+    /// painter) shows `0x` + ALL 40 nibbles of the address across rows 1-3
+    /// in order, each nibble VALUE bound to the independent table. EIP-55
+    /// (landed 2026-07-04, commit 89c9e4c3) picks per-letter CASE from
+    /// `keccak256(lowercase_hex)` — the case bits are deliberately left
+    /// unbound (binding them would put the hash preimage in the proof
+    /// obligation): a letter cell may only be the correct hex letter in
+    /// either case, and a digit cell is exactly the digit (digits are never
+    /// cased). So no address can render with a wrong / reordered / dropped
+    /// nibble regardless of what the case rule computes — the value
+    /// skeleton is exact ∀; the casing itself is pinned by the concrete
+    /// EIP-55 reference-vector witness below and `eip55_tests`.
+    #[kani::proof]
+    #[kani::unwind(210)]
+    fn addr_full_nibble_values_bind() {
+        let addr: [u8; 20] = kani::any();
+        let mut r1 = [0u8; DISPLAY_COLS];
+        let mut r2 = [0u8; DISPLAY_COLS];
+        let mut r3 = [0u8; DISPLAY_COLS];
+        write_addr_full(&mut r1, &mut r2, &mut r3, &addr);
+        assert!(r1[0] == b'0' && r1[1] == b'x');
+        let mut i = 0usize;
+        while i < 40 {
+            let nib = if i % 2 == 0 {
+                addr[i / 2] >> 4
+            } else {
+                addr[i / 2] & 0x0f
+            };
+            let lower = HEX_LOWER_TAB[nib as usize];
+            let got = if i < 14 {
+                r1[2 + i]
+            } else if i < 30 {
+                r2[i - 14]
+            } else {
+                r3[i - 30]
+            };
+            if lower.is_ascii_digit() {
+                assert!(got == lower); // digits are never cased
+            } else {
+                assert!(got == lower || got == lower - 32); // exact letter, either case
+            }
+            i += 1;
+        }
+        // Row-3 tail is space padding — no stray content after the address.
+        let mut c = 10usize;
+        while c < DISPLAY_COLS {
+            assert!(r3[c] == b' ');
+            c += 1;
+        }
+    }
+
+    /// Non-vacuity + exact-case witness: EIP-55 reference vector 1
+    /// (`0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed`) lands across the three
+    /// rows with the reference casing.
+    #[kani::proof]
+    #[kani::unwind(210)]
+    fn addr_full_eip55_reference_vector_concrete() {
+        let addr: [u8; 20] = [
+            0x5a, 0xae, 0xb6, 0x05, 0x3f, 0x3e, 0x94, 0xc9, 0xb9, 0xa0, 0x9f, 0x33, 0x66, 0x94,
+            0x35, 0xe7, 0xef, 0x1b, 0xea, 0xed,
+        ];
+        let mut r1 = [0u8; DISPLAY_COLS];
+        let mut r2 = [0u8; DISPLAY_COLS];
+        let mut r3 = [0u8; DISPLAY_COLS];
+        write_addr_full(&mut r1, &mut r2, &mut r3, &addr);
+        assert!(r1 == *b"0x5aAeb6053F3E94");
+        assert!(r2 == *b"C9b9A09f33669435");
+        assert!(r3 == *b"E7Ef1BeAed      ");
+    }
+}

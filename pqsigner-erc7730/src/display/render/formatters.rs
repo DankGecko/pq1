@@ -2469,3 +2469,656 @@ mod encrypted_formatter_declines {
         assert_eq!(pages.len, 0, "no page may be emitted for an encrypted field");
     }
 }
+
+#[cfg(kani)]
+mod kani_harness {
+    //! Tier-P0 formatter ∀ proofs (FV frontier Track 2 M3, 2026-07-04).
+    //!
+    //! Division-free WYSIWYS properties of the per-`FormatOp` renderers,
+    //! proven for ALL inputs (bounded only where stated). Style follows
+    //! `render/resolve.rs`: every ∀ harness has a concrete non-vacuity
+    //! witness, and the load-bearing ones are pinned by
+    //! `scripts/kani_mutations.json` entries (mutation → hand-verified
+    //! `VERIFICATION:- FAILED`).
+    //!
+    //! The `Pages` buffer is CONCRETE (`Pages::with_len(0)`) in the value
+    //! harnesses — a fully-symbolic `Pages` is 1.8 KB of free bits that
+    //! only bloats CBMC, and the property under proof is about the VALUE
+    //! bytes. The always-reject pair instead takes a symbolic `Pages`
+    //! because "pages untouched" IS the property there.
+
+    use super::*;
+    use crate::display::{DISPLAY_ROWS, MAX_PAGES};
+    use crate::ir::{ContextKind, Erc7730Ir};
+    use pqsigner_tx::names::NameResolver;
+
+    /// Independent hex oracle: a LOOKUP TABLE, deliberately not the code's
+    /// arithmetic `hex_nibble`.
+    const HEX_LOWER: &[u8; 16] = b"0123456789abcdef";
+
+    /// Pool: offset-0 filler, then a compiled `RootStructured + FieldIdx(0)`
+    /// program (len byte + 4 program bytes) at `path_off = 1` — the resolved
+    /// word is exactly `body[0..32]`.
+    const SLOT0_POOL: [u8; 6] = [
+        0x00,
+        4,
+        PathOp::RootStructured as u8,
+        PathOp::FieldIdx as u8,
+        0x00,
+        0x00,
+    ];
+
+    fn mk_ir(pool: &[u8]) -> Erc7730Ir<'_> {
+        Erc7730Ir {
+            schema_ver: crate::ir::SCHEMA_VER,
+            context_kind: ContextKind::Contract,
+            chain_id: 1,
+            contract: [0u8; 20],
+            descriptor_hash: [0u8; 32],
+            domain_separator: [0u8; 32],
+            owner: &[],
+            contract_name: &[],
+            pool,
+            formats: &[],
+            raw: &[],
+        }
+    }
+
+    fn envelope() -> Eip1559Tx {
+        Eip1559Tx {
+            chain_id: 1,
+            nonce: 0,
+            max_priority_fee_per_gas: U256::zero(),
+            max_fee_per_gas: U256::zero(),
+            gas_limit: 0,
+            to: Some([0u8; 20]),
+            value: U256::zero(),
+            data_len: 0,
+            access_list_count: 0,
+            signing_hash: [0u8; 32],
+        }
+    }
+
+    fn mk_field(op: u8, path_off: u16) -> FieldEntry<'static> {
+        FieldEntry {
+            format_op: op,
+            label: b"Field",
+            path_off,
+            param_off: 0,
+        }
+    }
+
+    /// Numeric big-endian `a >= b` — the independent order oracle (an
+    /// explicit most-significant-byte-first scan, NOT the code's array
+    /// `PartialOrd`).
+    fn be_ge(a: &[u8; 32], b: &[u8; 32]) -> bool {
+        let mut i = 0usize;
+        while i < 32 {
+            if a[i] > b[i] {
+                return true;
+            }
+            if a[i] < b[i] {
+                return false;
+            }
+            i += 1;
+        }
+        true
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // 1. Always-Reject pair: `encrypted` + nested `calldata`
+    // ─────────────────────────────────────────────────────────────────
+
+    /// ∀ field / params / pages-state: `render_encrypted` REJECTS with the
+    /// pinned reason and leaves the `Pages` bundle untouched (`len` + a
+    /// symbolic probe cell). The encrypted formatter's signed-but-not-shown
+    /// history (audit 2026-06-29) makes "never paints, never succeeds" the
+    /// load-bearing anti-regression property — a formatter that `Ok(())`s
+    /// without painting the operand is a hidden-operand clear-sign page.
+    #[kani::proof]
+    #[kani::unwind(34)]
+    fn fmt_p0_encrypted_always_rejects_pages_untouched() {
+        let label: [u8; 4] = kani::any();
+        let f = FieldEntry {
+            format_op: kani::any(),
+            label: &label,
+            path_off: kani::any(),
+            param_off: kani::any(),
+        };
+        let fallback: [u8; 4] = kani::any();
+        let mut params = ParamSet::default();
+        if kani::any() {
+            params.fallback_label = Some(&fallback);
+        }
+        let mut pages = Pages {
+            buf: kani::any(),
+            len: kani::any(),
+        };
+        kani::assume(pages.len <= MAX_PAGES);
+        let (pi, ri, ci): (usize, usize, usize) = kani::any();
+        kani::assume(pi < MAX_PAGES && ri < DISPLAY_ROWS && ci < DISPLAY_COLS);
+        let before_len = pages.len;
+        let before_cell = pages.buf[pi][ri][ci];
+        let r = render_encrypted(&f, &mut pages, &params);
+        assert!(matches!(r, Err(RenderErr::Reject("7730 encrypted field"))));
+        assert!(pages.len == before_len);
+        assert!(pages.buf[pi][ri][ci] == before_cell);
+    }
+
+    /// Non-vacuity witness for the encrypted Reject (concrete inputs).
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn fmt_p0_encrypted_rejects_concrete() {
+        let f = mk_field(FormatOp::Encrypted as u8, 0);
+        let params = ParamSet::default();
+        let mut pages = Pages::with_len(0);
+        assert!(render_encrypted(&f, &mut pages, &params).is_err());
+        assert!(pages.len == 0);
+    }
+
+    /// ∀ field / params / pages-state: the nested-`calldata` formatter
+    /// (Phase 4 decline, deferral re-confirmed 2026-07-02) REJECTS and
+    /// leaves `Pages` untouched — an embedded inner call is never silently
+    /// "rendered" as a benign page.
+    #[kani::proof]
+    #[kani::unwind(34)]
+    fn fmt_p0_calldata_nested_always_rejects_pages_untouched() {
+        let label: [u8; 4] = kani::any();
+        let f = FieldEntry {
+            format_op: kani::any(),
+            label: &label,
+            path_off: kani::any(),
+            param_off: kani::any(),
+        };
+        let fallback: [u8; 4] = kani::any();
+        let mut params = ParamSet::default();
+        if kani::any() {
+            params.fallback_label = Some(&fallback);
+        }
+        let mut pages = Pages {
+            buf: kani::any(),
+            len: kani::any(),
+        };
+        kani::assume(pages.len <= MAX_PAGES);
+        let (pi, ri, ci): (usize, usize, usize) = kani::any();
+        kani::assume(pi < MAX_PAGES && ri < DISPLAY_ROWS && ci < DISPLAY_COLS);
+        let before_len = pages.len;
+        let before_cell = pages.buf[pi][ri][ci];
+        let r = super::super::calldata_nested::render(&f, &mut pages, &params);
+        assert!(matches!(
+            r,
+            Err(RenderErr::Reject("7730 nested calldata p5"))
+        ));
+        assert!(pages.len == before_len);
+        assert!(pages.buf[pi][ri][ci] == before_cell);
+    }
+
+    /// Non-vacuity witness for the nested-calldata Reject.
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn fmt_p0_calldata_nested_rejects_concrete() {
+        let f = mk_field(FormatOp::Calldata as u8, 0);
+        let params = ParamSet::default();
+        let mut pages = Pages::with_len(0);
+        assert!(super::super::calldata_nested::render(&f, &mut pages, &params).is_err());
+        assert!(pages.len == 0);
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // 2. FLAGSHIP: `render_raw` hex-exactness
+    // ─────────────────────────────────────────────────────────────────
+
+    /// FLAGSHIP ∀: for EVERY resolved 32-byte word, the Raw formatter
+    /// (routed through `dispatch`) paints the word as four 16-hex-char rows
+    /// across two pages — `hex(word[0..8])`, `hex(word[8..16])`,
+    /// `hex(word[16..24])`, `hex(word[24..32])` — with every nibble bound
+    /// to an independent lookup TABLE. Every signed byte is shown, so the
+    /// WYSIWYS magnitude-hiding class (finding 1.2 / audit 2026-06-26: a
+    /// dropped low half made any value < 2^64 render all-zeros) is closed
+    /// ∀, not just at the fixed regression vectors.
+    #[kani::proof]
+    #[kani::unwind(34)]
+    fn fmt_p0_raw_word_hex_exactness() {
+        let ir = mk_ir(&SLOT0_POOL);
+        let word: [u8; 32] = kani::any();
+        let tx = envelope();
+        let resolver = NameResolver::new();
+        let params = ParamSet::default();
+        let f = mk_field(FormatOp::Raw as u8, 1);
+        let mut pages = Pages::with_len(0);
+        let r = dispatch(&f, &mut pages, &ir, &word, &tx, None, &resolver, &params);
+        assert!(r.is_ok());
+        assert!(pages.len == 2);
+        let mut k = 0usize;
+        while k < 32 {
+            let (page, row) = [(0usize, 1usize), (0, 2), (1, 1), (1, 2)][k / 8];
+            let col = (k % 8) * 2;
+            assert!(pages.buf[page][row][col] == HEX_LOWER[(word[k] >> 4) as usize]);
+            assert!(pages.buf[page][row][col + 1] == HEX_LOWER[(word[k] & 0x0f) as usize]);
+            k += 1;
+        }
+        // Honest page-progress footers on both pages.
+        assert!(pages.buf[0][3][..10] == *b"1/2 > next");
+        assert!(pages.buf[1][3][..10] == *b"2/2 > next");
+    }
+
+    /// Non-vacuity witness: the byte pattern `01 23 45 67 89 ab cd ef` ×4
+    /// renders each of the four hex rows as EXACTLY "0123456789abcdef".
+    #[kani::proof]
+    #[kani::unwind(34)]
+    fn fmt_p0_raw_word_hex_concrete() {
+        let ir = mk_ir(&SLOT0_POOL);
+        let pat = [0x01u8, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef];
+        let mut word = [0u8; 32];
+        let mut i = 0usize;
+        while i < 32 {
+            word[i] = pat[i % 8];
+            i += 1;
+        }
+        let tx = envelope();
+        let resolver = NameResolver::new();
+        let params = ParamSet::default();
+        let f = mk_field(FormatOp::Raw as u8, 1);
+        let mut pages = Pages::with_len(0);
+        let r = dispatch(&f, &mut pages, &ir, &word, &tx, None, &resolver, &params);
+        assert!(r.is_ok());
+        assert!(pages.len == 2);
+        assert!(pages.buf[0][1] == *b"0123456789abcdef");
+        assert!(pages.buf[0][2] == *b"0123456789abcdef");
+        assert!(pages.buf[1][1] == *b"0123456789abcdef");
+        assert!(pages.buf[1][2] == *b"0123456789abcdef");
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // 3. `render_token_amount` unlimited-approval gate
+    // ─────────────────────────────────────────────────────────────────
+
+    /// Descriptor-pinned native-currency sentinel used to make the bound
+    /// token arm reachable without ERC-20 Merkle plumbing (the gate itself
+    /// is hoisted ABOVE the bound match, so this choice only fixes which
+    /// unlimited row-shape is painted).
+    const NATIVE_SENTINEL: [u8; 20] = [0xEE; 20];
+
+    fn unlimited_params(threshold: &[u8; 32]) -> ParamSet<'_> {
+        let mut p = ParamSet::default();
+        p.threshold = Some(threshold);
+        p.token = Some(&NATIVE_SENTINEL);
+        p.native_currency = Some(&NATIVE_SENTINEL);
+        p
+    }
+
+
+
+    // HONEST DROP (2026-07-04): the two token-amount forall harnesses
+    // (value >= T paints the threshold row; value < T never does) and the
+    // below-threshold CONCRETE witness all hit CBMC out-of-memory: kani::assume
+    // prunes at SAT time but CBMC unwinds BOTH branches first, and the
+    // below-threshold branch contains the full format_decimal path (the
+    // documented div10 bit-blast swamp) at this harness's unwind. Per the
+    // repo's convergence lesson (one honest attempt), the gate-decision forall
+    // belongs to the M4 amount-DECISION factoring (a pure no-division fn —
+    // work-todo, formatter-forall track); the painting halves are covered by
+    // the boundary Kani witness below (>= short-circuits formatting, so it
+    // converges), the `token_amount_below_threshold_renders_amount` HOST test
+    // (same asserts, no CBMC), and the Lean format_decimal track (deductive,
+    // div10 + extract_digits forall already kernel-proven).
+
+    /// Boundary witness: `value == threshold` IS unlimited (the `>=` edge —
+    /// the exact off-by-one a `>` regression would flip).
+    #[kani::proof]
+    #[kani::unwind(34)]
+    fn fmt_p0_token_amount_threshold_boundary_concrete() {
+        let ir = mk_ir(&SLOT0_POOL);
+        let mut t = [0u8; 32];
+        t[31] = 42;
+        let value = t;
+        let tx = envelope();
+        let resolver = NameResolver::new();
+        let params = unlimited_params(&t);
+        let f = mk_field(FormatOp::TokenAmount as u8, 1);
+        let mut pages = Pages::with_len(0);
+        let r = render_token_amount(&f, &mut pages, &ir, &value, &tx, None, &resolver, &params);
+        assert!(r.is_ok());
+        assert!(pages.buf[0][1] == *b"unlimited ETH   ");
+    }
+
+
+    // ─────────────────────────────────────────────────────────────────
+    // 4. Loud-marker guards: date / duration / chain-id
+    // ─────────────────────────────────────────────────────────────────
+
+    /// ∀ words whose high 24 bytes are not all-zero (`read_u64_be_tail`
+    /// returns `None`): the `date` formatter paints the LOUD `! TIME >2^64`
+    /// marker — never a silently-truncated low-64-bit timestamp (audit
+    /// 2026-06-23 class, now closed ∀).
+    #[kani::proof]
+    #[kani::unwind(34)]
+    fn fmt_p0_date_high_bytes_loud_marker() {
+        let ir = mk_ir(&SLOT0_POOL);
+        let word: [u8; 32] = kani::any();
+        let mut any_high = false;
+        let mut i = 0usize;
+        while i < 24 {
+            if word[i] != 0 {
+                any_high = true;
+            }
+            i += 1;
+        }
+        kani::assume(any_high);
+        let tx = envelope();
+        let params = ParamSet::default();
+        let f = mk_field(FormatOp::Date as u8, 1);
+        let mut pages = Pages::with_len(0);
+        let r = render_date(&f, &mut pages, &ir, &word, &tx, &params);
+        assert!(r.is_ok());
+        assert!(pages.len == 1);
+        assert!(pages.buf[0][1][..12] == *b"! TIME >2^64");
+        assert!(pages.buf[0][2][..10] == *b"(overflow)");
+    }
+
+    /// Converse witness: an in-range timestamp paints the real date, not
+    /// the marker (2024-01-01T00:00:00Z).
+    #[kani::proof]
+    #[kani::unwind(34)]
+    fn fmt_p0_date_normal_timestamp_concrete() {
+        let ir = mk_ir(&SLOT0_POOL);
+        let mut word = [0u8; 32];
+        word[24..32].copy_from_slice(&1_704_067_200u64.to_be_bytes());
+        let tx = envelope();
+        let params = ParamSet::default();
+        let f = mk_field(FormatOp::Date as u8, 1);
+        let mut pages = Pages::with_len(0);
+        let r = render_date(&f, &mut pages, &ir, &word, &tx, &params);
+        assert!(r.is_ok());
+        assert!(pages.buf[0][1][..10] == *b"2024-01-01");
+        assert!(pages.buf[0][2][..12] == *b"00:00:00 UTC");
+    }
+
+    /// ∀ words with a non-zero high byte: the `duration` formatter paints
+    /// the LOUD `! DUR >2^64` marker (sibling of the date guard).
+    #[kani::proof]
+    #[kani::unwind(34)]
+    fn fmt_p0_duration_high_bytes_loud_marker() {
+        let ir = mk_ir(&SLOT0_POOL);
+        let word: [u8; 32] = kani::any();
+        let mut any_high = false;
+        let mut i = 0usize;
+        while i < 24 {
+            if word[i] != 0 {
+                any_high = true;
+            }
+            i += 1;
+        }
+        kani::assume(any_high);
+        let tx = envelope();
+        let f = mk_field(FormatOp::Duration as u8, 1);
+        let mut pages = Pages::with_len(0);
+        let r = render_duration(&f, &mut pages, &ir, &word, &tx);
+        assert!(r.is_ok());
+        assert!(pages.len == 1);
+        assert!(pages.buf[0][1][..11] == *b"! DUR >2^64");
+        assert!(pages.buf[0][3][..6] == *b"> next");
+    }
+
+    /// Converse witness: 90061 s renders "1d 1h 1m 1s", no marker.
+    #[kani::proof]
+    #[kani::unwind(34)]
+    fn fmt_p0_duration_concrete() {
+        let ir = mk_ir(&SLOT0_POOL);
+        let mut word = [0u8; 32];
+        word[24..32].copy_from_slice(&90_061u64.to_be_bytes());
+        let tx = envelope();
+        let f = mk_field(FormatOp::Duration as u8, 1);
+        let mut pages = Pages::with_len(0);
+        let r = render_duration(&f, &mut pages, &ir, &word, &tx);
+        assert!(r.is_ok());
+        assert!(pages.buf[0][1][..11] == *b"1d 1h 1m 1s");
+    }
+
+
+    // HONEST DROP (2026-07-04): the chain-id forall harness TIMED OUT twice
+    // (1500 s, 2400 s) — the chain-NAME lookup layered on the guard is past
+    // CBMC's budget. Its load-bearing half — the `read_u64_be_tail` high-bytes
+    // guard NEVER silently truncating — is forall-proven TWICE over the SAME
+    // shared helper by `fmt_p0_date_high_bytes_loud_marker` and
+    // `fmt_p0_duration_high_bytes_loud_marker` (render_chain_id calls the
+    // identical guard at its top). The concrete witness below pins the
+    // chain-id integration of that guard.
+
+    /// Witness: chain id 8453 renders "8453" + "(Base)" (from the existing
+    /// faithless-formatter regression vector).
+    #[kani::proof]
+    #[kani::unwind(34)]
+    fn fmt_p0_chain_id_concrete() {
+        let ir = mk_ir(&SLOT0_POOL);
+        let mut word = [0u8; 32];
+        word[24..32].copy_from_slice(&8453u64.to_be_bytes());
+        let tx = envelope();
+        let f = mk_field(FormatOp::ChainId as u8, 1);
+        let mut pages = Pages::with_len(0);
+        let r = render_chain_id(&f, &mut pages, &ir, &word, &tx);
+        assert!(r.is_ok());
+        assert!(pages.buf[0][1][..4] == *b"8453");
+        assert!(pages.buf[0][2][..6] == *b"(Base)");
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // 6. const / enum-label chunking
+    // ─────────────────────────────────────────────────────────────────
+
+    /// Build the enum-harness pool: path blob at offset 1, a one-entry enum
+    /// table at offset 6 (key = 0), label length + bytes symbolic. Returns
+    /// nothing — fills `pool[..16]` in place.
+    fn fill_enum_pool_header(pool: &mut [u8]) {
+        pool[1] = 4;
+        pool[2] = PathOp::RootStructured as u8;
+        pool[3] = PathOp::FieldIdx as u8;
+        // pool[4..6] = FieldIdx(0); pool[7..15] = key 0 (already zero)
+        pool[6] = 1; // entry count
+    }
+
+
+
+    // HONEST DROP (2026-07-04): the two enum-label forall harnesses (chunk
+    // binding; >3-rows reject) TIMED OUT — composing the symbolic pool LOOKUP
+    // with the chunk loop is past CBMC's budget. Their content is already
+    // covered COMPOSITIONALLY: the lookup half is forall-proven in
+    // render/enums.rs (`enum_two_entry_value_sound` + the
+    // `enum_label_key_match` mutation pin), and the chunk-to-3-rows half is
+    // forall-proven by `fmt_p0_const_value_chunks_bind_rows` over
+    // BYTE-IDENTICAL code (render_enum and render_const share the same
+    // `chunks(DISPLAY_COLS)` + `write_line_bytes` loop and the same
+    // `> 3*DISPLAY_COLS` reject — see render_enum L~1157 / render_const
+    // L~603). The concrete witness below pins the integration of the two.
+
+    /// Witness: an 18-char label chunks as row1 = first 16, row2 = last 2 +
+    /// padding, row3 blank.
+    #[kani::proof]
+    #[kani::unwind(52)]
+    fn fmt_p0_enum_label_chunks_concrete() {
+        const LMAX: usize = 48;
+        let mut pool = [0u8; 16 + LMAX];
+        fill_enum_pool_header(&mut pool);
+        let text = b"ABCDEFGHIJKLMNOPQR"; // 18 chars
+        pool[15] = text.len() as u8;
+        pool[16..16 + text.len()].copy_from_slice(text);
+        let ir = mk_ir(&pool);
+        let tx = envelope();
+        let mut params = ParamSet::default();
+        params.enum_ref = Some(6);
+        let f = mk_field(FormatOp::Enum as u8, 1);
+        let body = [0u8; 32];
+        let mut pages = Pages::with_len(0);
+        let r = render_enum(&f, &mut pages, &ir, &body, &tx, &params);
+        assert!(r.is_ok());
+        assert!(pages.buf[0][1] == *b"ABCDEFGHIJKLMNOP");
+        assert!(pages.buf[0][2] == *b"QR              ");
+        assert!(pages.buf[0][3] == [b' '; DISPLAY_COLS]);
+    }
+
+    /// ∀ const-annotation values (len ≤ 48) and ∀ `format_op` bytes:
+    /// `dispatch` routes to the literal renderer (const precedence beats
+    /// the format op — even an invalid opcode) and rows 1-3 show the
+    /// attested string chunked at 16 cols, byte-exact + space-padded.
+    ///
+    /// HONEST RESIDUAL (not proven — deliberately): `render_const` has no
+    /// `len > 48` Reject; a longer pinned const silently DROPS its tail
+    /// (unlike `render_enum`'s refuse). Two live celo descriptors carry
+    /// 66/78-char const values, so adding the guard is a corpus-visible
+    /// behaviour change — reported as a follow-up instead of enshrining
+    /// the truncation here as a theorem.
+    #[kani::proof]
+    #[kani::unwind(52)]
+    fn fmt_p0_const_value_chunks_bind_rows() {
+        const CMAX: usize = 48;
+        let backing: [u8; CMAX] = kani::any();
+        let clen: usize = kani::any();
+        kani::assume(clen <= CMAX);
+        let ir = mk_ir(&SLOT0_POOL);
+        let tx = envelope();
+        let resolver = NameResolver::new();
+        let mut params = ParamSet::default();
+        params.const_value = Some(&backing[..clen]);
+        let f = mk_field(kani::any(), 0);
+        let mut pages = Pages::with_len(0);
+        let r = dispatch(&f, &mut pages, &ir, &[], &tx, None, &resolver, &params);
+        assert!(r.is_ok());
+        assert!(pages.len == 1);
+        let mut k = 0usize;
+        while k < CMAX {
+            let expected = if k < clen { backing[k] } else { b' ' };
+            assert!(pages.buf[0][1 + k / DISPLAY_COLS][k % DISPLAY_COLS] == expected);
+            k += 1;
+        }
+    }
+
+    /// Witness: a 20-char const value chunks across rows 1-2.
+    #[kani::proof]
+    #[kani::unwind(52)]
+    fn fmt_p0_const_value_chunks_concrete() {
+        let ir = mk_ir(&SLOT0_POOL);
+        let tx = envelope();
+        let resolver = NameResolver::new();
+        let mut params = ParamSet::default();
+        params.const_value = Some(b"Vault share (ERC4626");
+        let f = mk_field(FormatOp::Raw as u8, 0);
+        let mut pages = Pages::with_len(0);
+        let r = dispatch(&f, &mut pages, &ir, &[], &tx, None, &resolver, &params);
+        assert!(r.is_ok());
+        assert!(pages.buf[0][1] == *b"Vault share (ERC");
+        assert!(pages.buf[0][2] == *b"4626            ");
+        assert!(pages.buf[0][3] == [b' '; DISPLAY_COLS]);
+    }
+}
+
+#[cfg(test)]
+mod token_amount_threshold_host_tests {
+    //! HOST replacements for the token-amount Kani harnesses that hit CBMC
+    //! out-of-memory (see the HONEST DROP note in `kani_harness`): the
+    //! below-threshold arm formats the amount (the documented div10
+    //! bit-blast swamp), so its witnesses run here — same asserts, no CBMC.
+    //! The ∀ gate-decision proof belongs to the M4 amount-decision factoring
+    //! (work-todo, formatter-∀ track).
+    use super::*;
+    use crate::ir::{ContextKind, Erc7730Ir};
+    use pqsigner_tx::names::NameResolver;
+
+    const SLOT0_POOL: [u8; 6] = [
+        0x00,
+        4,
+        PathOp::RootStructured as u8,
+        PathOp::FieldIdx as u8,
+        0x00,
+        0x00,
+    ];
+    const NATIVE_SENTINEL: [u8; 20] = [0xEE; 20];
+
+    fn mk_ir(pool: &[u8]) -> Erc7730Ir<'_> {
+        Erc7730Ir {
+            schema_ver: crate::ir::SCHEMA_VER,
+            context_kind: ContextKind::Contract,
+            chain_id: 1,
+            contract: [0u8; 20],
+            descriptor_hash: [0u8; 32],
+            domain_separator: [0u8; 32],
+            owner: &[],
+            contract_name: &[],
+            pool,
+            formats: &[],
+            raw: &[],
+        }
+    }
+
+    fn envelope() -> Eip1559Tx {
+        Eip1559Tx {
+            chain_id: 1,
+            nonce: 0,
+            max_priority_fee_per_gas: U256::zero(),
+            max_fee_per_gas: U256::zero(),
+            gas_limit: 0,
+            to: Some([0u8; 20]),
+            value: U256::zero(),
+            data_len: 0,
+            access_list_count: 0,
+            signing_hash: [0u8; 32],
+        }
+    }
+
+    fn unlimited_params(threshold: &[u8; 32]) -> ParamSet<'_> {
+        let mut p = ParamSet::default();
+        p.threshold = Some(threshold);
+        p.token = Some(&NATIVE_SENTINEL);
+        p.native_currency = Some(&NATIVE_SENTINEL);
+        p
+    }
+
+    fn field() -> FieldEntry<'static> {
+        FieldEntry { format_op: FormatOp::TokenAmount as u8, label: b"Field", path_off: 1, param_off: 0 }
+    }
+
+    /// value < threshold ⇒ the AMOUNT renders (never the threshold row).
+    #[test]
+    fn token_amount_below_threshold_renders_amount() {
+        let ir = mk_ir(&SLOT0_POOL);
+        let mut value = [0u8; 32];
+        value[24..32].copy_from_slice(&1_000_000_000_000_000_000u64.to_be_bytes());
+        let mut threshold = [0u8; 32];
+        threshold[24..32].copy_from_slice(&2_000_000_000_000_000_000u64.to_be_bytes());
+        let tx = envelope();
+        let resolver = NameResolver::new();
+        let params = unlimited_params(&threshold);
+        let f = field();
+        let mut pages = Pages::with_len(0);
+        let r = render_token_amount(&f, &mut pages, &ir, &value, &tx, None, &resolver, &params);
+        assert!(r.is_ok());
+        assert_eq!(pages.len, 1);
+        assert_eq!(&pages.buf[0][1][..5], b"1 ETH");
+        assert_eq!(&pages.buf[0][3][..6], b"> next");
+        assert_ne!(&pages.buf[0][1][..10], b"unlimited ");
+    }
+
+    /// One ulp below the boundary stays an amount; AT the boundary the
+    /// threshold row paints (the Kani boundary witness proves the == case;
+    /// this pins the < side one step away from it).
+    #[test]
+    fn token_amount_one_below_boundary_still_amount() {
+        let ir = mk_ir(&SLOT0_POOL);
+        let mut threshold = [0u8; 32];
+        threshold[0] = 0x80;
+        let mut value = threshold;
+        value[31] = value[31].wrapping_sub(1);
+        value[0] = 0x7F; // 2^255 - 1: strictly below
+        for b in &mut value[1..31] {
+            *b = 0xFF;
+        }
+        value[31] = 0xFF;
+        let tx = envelope();
+        let resolver = NameResolver::new();
+        let params = unlimited_params(&threshold);
+        let f = field();
+        let mut pages = Pages::with_len(0);
+        let r = render_token_amount(&f, &mut pages, &ir, &value, &tx, None, &resolver, &params);
+        assert!(r.is_ok());
+        assert_ne!(&pages.buf[0][1][..10], b"unlimited ");
+    }
+}
