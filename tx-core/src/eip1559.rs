@@ -138,140 +138,190 @@ impl U256 {
         trim_trailing_zeros: bool,
         out: &mut [u8],
     ) -> Option<usize> {
-        // --- 1. Digit extraction. Max 78 decimal digits for 2^256-1. -------
+        // The four phases live in free helper fns (`fmt_*` below) so the
+        // Aeneas §33 extraction can model each loop separately — the fused
+        // single-body form hits an `Unimplemented` in aeneas' symbolic
+        // interpreter. Behavior-identical to the pre-split body; the host
+        // tests + Kani shape harness + the extraction regen-diff bind it.
         let mut digits = [0u8; 80];
-        let mut n_digits = 0usize;
-        let mut v = self.0;
-        if self.is_zero() {
-            digits[0] = 0;
-            n_digits = 1;
-        } else {
-            while !is_zero(&v) {
-                let r = div10_inplace(&mut v);
-                digits[n_digits] = r;
-                n_digits += 1;
-            }
-        }
-        // `digits[i]` holds the i-th least-significant decimal digit
-        // as a raw 0..=9 value; we ASCII-encode on write.
+        let n_digits = fmt_extract_digits(&self.0, &mut digits);
 
         let total_decimals = decimals as usize;
         let frac = frac_digits as usize;
 
-        // --- 1b. Round half-up at the `frac` fractional boundary ----------
-        //
-        // We only ever DISPLAY `frac` fractional digits. Truncating the
-        // rest understates the magnitude (a WYSIWYS hazard — a sell of
-        // 0.6666666 would read 0.666666, less than reality). Round to
-        // nearest instead: if the first DROPPED fractional digit is >= 5,
-        // add one ulp at the last kept position and propagate the carry up
-        // through the integer part. The carry can grow `n_digits` (e.g.
-        // 0.9999996 -> 1.000000, or 9.9999996 -> 10.000000), so this runs
-        // BEFORE the integer-width is computed in step 3.
-        //
-        // When `frac >= total_decimals` every dropped position is a
-        // structural zero (the value has no digits that fine), so there is
-        // nothing to round and `round_idx` would underflow — guard on it.
-        if total_decimals > frac {
-            let round_idx = total_decimals - frac; // index of first KEPT digit
-            let drop_digit = if round_idx - 1 < n_digits {
-                digits[round_idx - 1]
-            } else {
-                0
-            };
-            if drop_digit >= 5 {
-                let mut carry = 1u8;
-                let mut i = round_idx;
-                // `digits` is [0u8; 80]; a 78-digit (2^256-1) value rounds
-                // up to at most 79 digits, so the carry stays in bounds.
-                while carry > 0 && i < digits.len() {
-                    let sum = digits[i] + carry;
-                    digits[i] = sum % 10;
-                    carry = sum / 10;
-                    if i >= n_digits && digits[i] != 0 {
-                        n_digits = i + 1;
-                    }
-                    i += 1;
+        let n_digits = fmt_round_half_up(&mut digits, n_digits, total_decimals, frac);
+
+        // When trim_trailing_zeros, recompute `frac_emit` from the last
+        // non-zero fractional digit backwards; else emit exactly `frac`
+        // digits so the visual width is stable (frac > total_decimals
+        // positions are structural zeros: value 5 at decimals=0, frac=3
+        // → "5.000").
+        let frac_emit = if trim_trailing_zeros {
+            fmt_trim_frac(&digits, n_digits, total_decimals, frac)
+        } else {
+            frac
+        };
+
+        fmt_emit(&digits, n_digits, total_decimals, frac_emit, out)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// format_decimal phases — free fns so the Aeneas §33 extraction can model
+// each loop separately (see the note inside `format_decimal`). Private;
+// reachable for extraction via `--start-from u256_format_decimal`.
+// ---------------------------------------------------------------------------
+
+/// Phase 1 — digit extraction. Max 78 decimal digits for 2^256-1. On return,
+/// `digits[i]` holds the i-th least-significant decimal digit as a raw 0..=9
+/// value (ASCII-encoded on write in `fmt_emit`); the count is returned.
+fn fmt_extract_digits(value: &[u8; 32], digits: &mut [u8; 80]) -> usize {
+    let mut v = *value;
+    if is_zero(&v) {
+        digits[0] = 0;
+        return 1;
+    }
+    let mut n_digits = 0usize;
+    while !is_zero(&v) {
+        let r = div10_inplace(&mut v);
+        digits[n_digits] = r;
+        n_digits += 1;
+    }
+    n_digits
+}
+
+/// Phase 1b — round half-up at the `frac` fractional boundary; returns the
+/// (possibly grown) digit count.
+///
+/// We only ever DISPLAY `frac` fractional digits. Truncating the rest
+/// understates the magnitude (a WYSIWYS hazard — a sell of 0.6666666 would
+/// read 0.666666, less than reality). Round to nearest instead: if the first
+/// DROPPED fractional digit is >= 5, add one ulp at the last kept position
+/// and propagate the carry up through the integer part. The carry can grow
+/// the digit count (e.g. 0.9999996 -> 1.000000, or 9.9999996 -> 10.000000),
+/// so this runs BEFORE the integer-width is computed in `fmt_emit`.
+///
+/// When `frac >= total_decimals` every dropped position is a structural zero
+/// (the value has no digits that fine), so there is nothing to round and
+/// `round_idx` would underflow — guard on it.
+fn fmt_round_half_up(
+    digits: &mut [u8; 80],
+    n_digits: usize,
+    total_decimals: usize,
+    frac: usize,
+) -> usize {
+    let mut n = n_digits;
+    if total_decimals > frac {
+        let round_idx = total_decimals - frac; // index of first KEPT digit
+        let drop_digit = if round_idx - 1 < n { digits[round_idx - 1] } else { 0 };
+        if drop_digit >= 5 {
+            let mut carry = 1u8;
+            let mut i = round_idx;
+            // `digits` is [0u8; 80]; a 78-digit (2^256-1) value rounds
+            // up to at most 79 digits, so the carry stays in bounds.
+            while carry > 0 && i < digits.len() {
+                let sum = digits[i] + carry;
+                digits[i] = sum % 10;
+                carry = sum / 10;
+                if i >= n && digits[i] != 0 {
+                    n = i + 1;
                 }
+                i += 1;
             }
         }
+    }
+    n
+}
 
-        // --- 2. Decide how many fractional digits to actually emit ---------
-        //
-        // When frac_digits > total_decimals, the extra positions are
-        // structural zeros (e.g. format_decimal(decimals=0, frac=3)
-        // of value 5 → "5.000"). We emit exactly `frac` digits so the
-        // visual width is stable.
-        //
-        // When trim_trailing_zeros, we recompute `frac_emit` from the
-        // last non-zero fractional digit backwards.
-        let mut frac_emit = frac;
-        if trim_trailing_zeros && frac_emit > 0 {
-            while frac_emit > 0 {
-                // Digit index inside `digits` for the i-th fractional
-                // position counted from the decimal point (1..=frac):
-                let pos = frac_emit; // positions 1..=frac
-                let digit_idx = total_decimals.saturating_sub(pos);
-                let d = if total_decimals >= pos && digit_idx < n_digits {
-                    digits[digit_idx]
-                } else {
-                    0
-                };
-                if d != 0 {
-                    break;
-                }
-                frac_emit -= 1;
-            }
-        }
-
-        // --- 3. Compute integer-part width --------------------------------
-        let int_digits = if n_digits > total_decimals {
-            n_digits - total_decimals
+/// Phase 2 (trim) — recompute the emitted-fraction count from the last
+/// non-zero fractional digit backwards (positions `1..=frac` from the
+/// decimal point; a position past the value's digits is a structural zero).
+fn fmt_trim_frac(
+    digits: &[u8; 80],
+    n_digits: usize,
+    total_decimals: usize,
+    frac: usize,
+) -> usize {
+    let mut frac_emit = frac;
+    while frac_emit > 0 {
+        let pos = frac_emit; // positions 1..=frac
+        let digit_idx = total_decimals.saturating_sub(pos);
+        let d = if total_decimals >= pos && digit_idx < n_digits {
+            digits[digit_idx]
         } else {
             0
         };
-        let int_emit = core::cmp::max(int_digits, 1); // always at least "0"
-
-        // --- 4. Required output width -------------------------------------
-        let mut need = int_emit;
-        let emit_point = frac_emit > 0;
-        if emit_point {
-            need += 1 + frac_emit;
+        if d != 0 {
+            break;
         }
-        if need > out.len() {
-            return None;
-        }
-
-        // --- 5. Write -----------------------------------------------------
-        let mut w = 0usize;
-        if int_digits == 0 {
-            out[w] = b'0';
-            w += 1;
-        } else {
-            for i in (0..int_digits).rev() {
-                let d = digits[total_decimals + i];
-                out[w] = b'0' + d;
-                w += 1;
-            }
-        }
-        if emit_point {
-            out[w] = b'.';
-            w += 1;
-            // Emit fractional positions 1..=frac_emit (most-significant first).
-            for pos in 1..=frac_emit {
-                let digit_idx = total_decimals.saturating_sub(pos);
-                let d = if total_decimals >= pos && digit_idx < n_digits {
-                    digits[digit_idx]
-                } else {
-                    0
-                };
-                out[w] = b'0' + d;
-                w += 1;
-            }
-        }
-        debug_assert_eq!(w, need);
-        Some(w)
+        frac_emit -= 1;
     }
+    frac_emit
+}
+
+/// Phases 3–5 — integer width, required output width (`None` = would not
+/// fit, nothing written), then the ASCII write. Returns the byte count.
+fn fmt_emit(
+    digits: &[u8; 80],
+    n_digits: usize,
+    total_decimals: usize,
+    frac_emit: usize,
+    out: &mut [u8],
+) -> Option<usize> {
+    // --- 3. Compute integer-part width --------------------------------
+    let int_digits = if n_digits > total_decimals {
+        n_digits - total_decimals
+    } else {
+        0
+    };
+    // always at least "0" (if-form of core::cmp::max for the extraction)
+    let int_emit = if int_digits == 0 { 1 } else { int_digits };
+
+    // --- 4. Required output width -------------------------------------
+    let mut need = int_emit;
+    let emit_point = frac_emit > 0;
+    if emit_point {
+        need += 1 + frac_emit;
+    }
+    if need > out.len() {
+        return None;
+    }
+
+    // --- 5. Write -----------------------------------------------------
+    let mut w = 0usize;
+    if int_digits == 0 {
+        out[w] = b'0';
+        w += 1;
+    } else {
+        // MS-first: indexed form (i = int_digits-1-j) instead of
+        // `(0..int_digits).rev()` so the Aeneas model is a plain Range
+        // loop (§33 rank-10 pattern). Identical sequence.
+        for j in 0..int_digits {
+            let i = int_digits - 1 - j;
+            let d = digits[total_decimals + i];
+            out[w] = b'0' + d;
+            w += 1;
+        }
+    }
+    if emit_point {
+        out[w] = b'.';
+        w += 1;
+        // Emit fractional positions 1..=frac_emit (most-significant
+        // first); indexed form pos = p+1 (plain Range loop for Aeneas).
+        for p in 0..frac_emit {
+            let pos = p + 1;
+            let digit_idx = total_decimals.saturating_sub(pos);
+            let d = if total_decimals >= pos && digit_idx < n_digits {
+                digits[digit_idx]
+            } else {
+                0
+            };
+            out[w] = b'0' + d;
+            w += 1;
+        }
+    }
+    debug_assert_eq!(w, need);
+    Some(w)
 }
 
 /// Free-function wrapper for the Aeneas extraction (`--start-from` cannot
@@ -283,19 +333,47 @@ pub fn u256_saturating_mul_u64(v: &U256, rhs: u64) -> (U256, bool) {
     v.saturating_mul_u64(rhs)
 }
 
+/// Free-function wrapper for the Aeneas extraction of `format_decimal`
+/// (same `--start-from` constraint as `u256_saturating_mul_u64`).
+/// Semantically identical to `v.format_decimal(...)`.
+#[doc(hidden)]
+#[must_use]
+pub fn u256_format_decimal(
+    v: &U256,
+    decimals: u32,
+    frac_digits: u32,
+    trim_trailing_zeros: bool,
+    out: &mut [u8],
+) -> Option<usize> {
+    v.format_decimal(decimals, frac_digits, trim_trailing_zeros, out)
+}
+
 /// Divide a 32-byte big-endian U256 by 10 in place; returns remainder.
+/// Indexed form instead of `iter_mut` so the Aeneas model is a plain Range
+/// loop (§33 rank-10 pattern, same as `saturating_mul_u64`). Its functional
+/// correctness for ALL 2^256 values (quotient + remainder) is Lean-proven —
+/// see `contracts/verification/extracted` `FormatDecimal`/`Div10Spec`.
 fn div10_inplace(v: &mut [u8; 32]) -> u8 {
     let mut rem: u16 = 0;
-    for byte in v.iter_mut() {
-        let acc = (rem << 8) | (*byte as u16);
-        *byte = (acc / 10) as u8;
+    for i in 0..32 {
+        let acc = (rem << 8) | (v[i] as u16);
+        v[i] = (acc / 10) as u8;
         rem = acc % 10;
     }
     rem as u8
 }
 
+/// Indexed form of `iter().all(..)` — extractable by Aeneas (a closure-based
+/// `all` becomes an opaque axiom in the Lean model).
 fn is_zero(v: &[u8; 32]) -> bool {
-    v.iter().all(|&b| b == 0)
+    let mut i = 0usize;
+    while i < 32 {
+        if v[i] != 0 {
+            return false;
+        }
+        i += 1;
+    }
+    true
 }
 
 // ---------------------------------------------------------------------------
