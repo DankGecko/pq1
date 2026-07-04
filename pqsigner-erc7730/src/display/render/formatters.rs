@@ -348,10 +348,23 @@ fn render_token_amount(
     // full-width u256, so a direct `>=` over the raw bytes is correct.
     let is_unlimited = params.threshold.is_some_and(|t| value.0 >= *t);
     if is_unlimited {
+        // review 3.6: the descriptor's `message` param overrides the default
+        // "unlimited" wording (spec: "message to display above threshold,
+        // defaults to Unlimited"). Validate printable ASCII + row-fitting
+        // (anti-homoglyph on the trusted display) before trusting it; else the
+        // fixed fallback.
+        let msg: &[u8] = params
+            .message
+            .filter(|m| {
+                !m.is_empty()
+                    && m.len() <= DISPLAY_COLS
+                    && m.iter().all(|&b| (0x20..0x7f).contains(&b))
+            })
+            .unwrap_or(&b"unlimited"[..]);
         match bound {
-            Some((_, ticker)) => write_unlimited_row(r1, ticker),
+            Some((_, ticker)) => write_unlimited_row(r1, msg, ticker),
             None => {
-                write_line(r1, "unlimited");
+                write_line_bytes(r1, msg);
                 write_line(r2, "(unverified)");
             }
         }
@@ -415,14 +428,19 @@ fn render_token_amount(
 /// Render `"unlimited <ticker>"` into a single 16-col display row. Used
 /// by `render_token_amount` when the descriptor's `threshold` param
 /// classifies the on-chain value as the approve-all sentinel.
-fn write_unlimited_row(row: &mut [u8; DISPLAY_COLS], ticker: &[u8]) {
+/// Render `"<message> <ticker>"` into a single row. `message` is the threshold
+/// wording — the descriptor's `message` param, default `"unlimited"` (review
+/// 3.6). The caller has already validated `message` as printable + row-fitting.
+fn write_unlimited_row(row: &mut [u8; DISPLAY_COLS], message: &[u8], ticker: &[u8]) {
     let mut buf = [b' '; DISPLAY_COLS];
-    let prefix = b"unlimited ";
-    let n = core::cmp::min(prefix.len(), buf.len());
-    buf[..n].copy_from_slice(&prefix[..n]);
-    let room = buf.len() - n;
-    let take = core::cmp::min(ticker.len(), room);
-    buf[n..n + take].copy_from_slice(&ticker[..take]);
+    let n = core::cmp::min(message.len(), buf.len());
+    buf[..n].copy_from_slice(&message[..n]);
+    // " <ticker>" after the message (buf[n] stays the separating space).
+    if n + 1 < buf.len() && !ticker.is_empty() {
+        let room = buf.len() - (n + 1);
+        let take = core::cmp::min(ticker.len(), room);
+        buf[n + 1..n + 1 + take].copy_from_slice(&ticker[..take]);
+    }
     *row = buf;
 }
 

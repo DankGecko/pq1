@@ -504,6 +504,32 @@ fn positive_usdt_approve_unlimited_renders_approve_intent() {
 }
 
 #[test]
+fn positive_unlimited_uses_descriptor_message_param() {
+    // review 3.6: the descriptor's `message` param overrides the default
+    // "unlimited" wording (spec: "message above threshold, defaults to
+    // Unlimited"). Synthetic approve with message="Max"; rendered unbound so
+    // the amount page reads "Max" / "(unverified)".
+    let res = build_seed();
+    let entry = find_leaf(&res, "synthetic-approve-message.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
+
+    let calldata = calldata_approve([0x44u8; 20], u256_max());
+    assert_selector_matches(&verified.ir, &calldata, "approve(address,uint256)");
+    let tx = envelope(1, entry.contract);
+    let resolver = NameResolver::new();
+    let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver).expect("render");
+
+    let amount_page = find_page_by_label(&pages, "Amount");
+    let blob = page_strs(&pages, amount_page).join("\n");
+    assert!(blob.contains("Max"), "descriptor message 'Max' must render:\n{blob}");
+    assert!(
+        !blob.to_lowercase().contains("unlimited"),
+        "the message param must OVERRIDE the default 'unlimited':\n{blob}"
+    );
+}
+
+#[test]
 fn positive_usdt_approve_unlimited_unbound_renders_unlimited_not_overflow() {
     // review 4.5: an unlimited approval of an UNKNOWN (unbound) token used to
     // render "!AMOUNT OVERFLOW" — the raw 2^256-1 overflows the amount

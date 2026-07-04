@@ -1,0 +1,36 @@
+{
+  "$schema": "../../specs/erc7730-v2.schema.json",
+  "context": {
+    "$id": "SyntheticApproveMessage",
+    "contract": {
+      "deployments": [
+        { "chainId": 1, "address": "0x0000000000000000000000000000000000000013" }
+      ]
+    }
+  },
+  "metadata": {
+    "owner": "Synthetic Test Fixture",
+    "info": { "url": "https://example.invalid" },
+    "contractName": "SyntheticApproveMessage"
+  },
+  "display": {
+    "formats": {
+      "approve(address spender, uint256 amount)": {
+        "intent": "Approve",
+        "fields": [
+          { "path": "spender", "format": "addressName", "label": "Spender", "visible": "always" },
+          {
+            "path": "amount",
+            "format": "tokenAmount",
+            "label": "Amount",
+            "params": {
+              "threshold": "0x8000000000000000000000000000000000000000000000000000000000000000",
+              "message": "Max"
+            },
+            "visible": "always"
+          }
+        ]
+      }
+    }
+  }
+}
