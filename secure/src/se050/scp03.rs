@@ -253,11 +253,29 @@ unsafe fn establish_with_keys(
     session.s_mac = kdf(static_mac, &dd_mac);
     session.s_rmac = kdf(static_mac, &dd_rmac);
 
-    // --- Verify card cryptogram ---
+    // --- Verify card cryptogram (CT + FI hardened) ---
+    // This is the SE050 authenticating ITSELF to the MCU during SCP03
+    // establishment — the twin of the R-MAC verify in `unwrap_response`
+    // below, and it must be hardened identically. A plain
+    // `if a[..8] != b { Err }` is BOTH variable-time (a byte-wise forgery
+    // oracle for a bus-SCA / counterfeit-SE adversary — the exact desolder /
+    // I2C-tamper threat the SCP03 tunnel exists to close) AND single-fault-
+    // skippable (one `[skip]` glitch lets an UNauthenticated SE complete
+    // SCP03, so the MCU then trusts an attacker-controlled channel). The
+    // `make scp03-fi` sweep found this `[skip]` class on the sibling R-MAC.
+    // Mirror that gate exactly: recompute the cryptogram INSIDE the double-
+    // evaluated closure (a fault that corrupts one computation makes the two
+    // disagree → fail closed), constant-time compare via `ct_eq_8`, verdict
+    // is the Hamming-distant `OK_SENTINEL` (a branch skip can't synthesise
+    // it), `black_box` stops LLVM CSE-collapsing the re-check, `wait_random`
+    // defeats clock-aligned bursts timed to the fixed-shape control flow.
     let dd_card = build_derivation_data(DD_CARD_CRYPTOGRAM, 0x0040, &host_challenge, &card_challenge);
-    let card_crypto_computed = kdf(&session.s_mac, &dd_card);
-
-    if card_crypto_computed[..8] != card_cryptogram[..] {
+    crate::fi::wait_random();
+    let card_ok = crate::fi::check_true_into_sentinel(|| {
+        let mac = kdf(&session.s_mac, &dd_card);
+        core::hint::black_box(ct_eq_8(&mac[..8], &card_cryptogram[..]))
+    });
+    if card_ok != crate::fi::OK_SENTINEL {
         #[cfg(feature = "debug-log")]
         secure_log!("[SCP03] Card cryptogram MISMATCH");
         return Err(Se050Error::Scp03);

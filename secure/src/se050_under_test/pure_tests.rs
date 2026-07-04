@@ -1279,8 +1279,8 @@ fn negative_scp03_card_cryptogram_verified_before_session_active() {
         .nth(1)
         .expect("establish_with_keys defined");
     let crypt_check = establish_body
-        .find("if card_crypto_computed[..8] != card_cryptogram[..]")
-        .expect("card cryptogram check present");
+        .find("if card_ok != crate::fi::OK_SENTINEL")
+        .expect("hardened card cryptogram check present");
     let active_set = establish_body
         .find("session.active = true;")
         .expect("session.active set");
@@ -1288,6 +1288,26 @@ fn negative_scp03_card_cryptogram_verified_before_session_active() {
         crypt_check < active_set,
         "card cryptogram MUST be verified before session.active is set; \
          otherwise a malicious chip can fast-path itself into a session"
+    );
+    // The card-cryptogram verify is the twin of the R-MAC verify and must be
+    // hardened identically (it authenticates the SE to the MCU on a tunnel a
+    // desolder/bus-tamper adversary can attack). Pin CT + FI: recompute in a
+    // double-evaluated `check_true_into_sentinel` closure, constant-time
+    // `ct_eq_8`, `black_box` against CSE. (A plain `!=` here is both a timing
+    // forgery oracle and single-fault-skippable — the class `make scp03-fi`
+    // found on the R-MAC.)
+    let region = &establish_body[..crypt_check];
+    assert!(
+        region.contains("check_true_into_sentinel"),
+        "card cryptogram verify must be FI-doubled via check_true_into_sentinel"
+    );
+    assert!(
+        region.contains("ct_eq_8(&mac[..8], &card_cryptogram[..])"),
+        "card cryptogram verify must be constant-time via ct_eq_8"
+    );
+    assert!(
+        region.contains("black_box"),
+        "card cryptogram verify must use black_box to stop LLVM CSE-collapse"
     );
 }
 
