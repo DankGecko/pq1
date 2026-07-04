@@ -3135,9 +3135,6 @@ fuzz-erc7730-verify-bundle:
 fuzz-erc7730-ir-parse:
 	cd fuzz && cargo +nightly fuzz run erc7730_ir_parse $(FUZZ_LIBFUZZER_ARGS)
 
-fuzz-erc7730-walker:
-	cd fuzz && cargo +nightly fuzz run erc7730_walker $(FUZZ_LIBFUZZER_ARGS)
-
 fuzz-erc7730-render-dispatch:
 	cd fuzz && cargo +nightly fuzz run erc7730_render_dispatch $(FUZZ_LIBFUZZER_ARGS)
 

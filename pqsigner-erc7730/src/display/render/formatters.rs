@@ -7,10 +7,11 @@
 //!
 //! ## Path resolution
 //!
-//! Phase 4 ships a minimal direct path walker rather than going through
-//! `crate::walker::resolve_path`. The reason: Phase 3's
-//! walker requires an [`AbiView`] tree describing the runtime ABI
-//! shape, and the on-device IR does not carry ABI type information
+//! The render path walks compiled path programs directly (rather than through
+//! the retired Phase-3 `AbiView`-based interpreter — removed 2026-07, review
+//! 5.4). The reason it was never on the live path: that interpreter required
+//! an `AbiView` tree describing the runtime ABI shape, and the on-device IR
+//! does not carry ABI type information
 //! (the host-side `dbgen` knows the format-key signature but does not
 //! emit it on-wire). Phase 4 sidesteps the gap by walking the path
 //! program manually, accumulating a slot offset, and reading the

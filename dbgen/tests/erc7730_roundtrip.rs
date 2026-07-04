@@ -33,7 +33,6 @@ use pqsigner_erc7730::abi::container_field;
 use pqsigner_erc7730::binding::{cross_check_contract, cross_check_eip712};
 use pqsigner_erc7730::bundle::{verify_erc7730_bundle, MAX_ERC7730_BUNDLE_LEN};
 use pqsigner_erc7730::ir::{ContextKind, Erc7730Ir, PathOp, CTX_CONTRACT, CTX_EIP712};
-use pqsigner_erc7730::walker::path_bytes;
 use pqsigner_tx_core::hash::keccak256;
 
 fn workspace_root() -> PathBuf {
@@ -352,7 +351,7 @@ fn seed_corpus_path_programs_parse() {
                 if field.path_off == 0 {
                     continue;
                 }
-                let prog = path_bytes(&ir, field.path_off).unwrap_or_else(|e| {
+                let prog = ir.path_bytes(field.path_off).unwrap_or_else(|e| {
                     panic!(
                         "path_bytes failed for {:?} field {:?}: {:?}",
                         ir.contract, field.label, e

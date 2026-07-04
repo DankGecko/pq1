@@ -414,6 +414,26 @@ impl<'a> Erc7730Ir<'a> {
         }
     }
 
+    /// Fetch the bytes of a path program at `path_off` inside the metadata
+    /// pool. The first pool byte at `path_off` is the program length; the
+    /// returned slice covers the opcodes that follow. `path_off == 0` is the
+    /// "no path" sentinel and returns an empty slice (the caller decides
+    /// whether that is acceptable for its formatter context).
+    ///
+    /// Lives here (not the legacy `walker`) because the live render path reads
+    /// path programs directly — this is the one accessor it shares with the
+    /// legacy interpreter (review 5.4).
+    pub fn path_bytes(&self, path_off: u16) -> Result<&'a [u8], IrError> {
+        if path_off == 0 {
+            return Ok(&[]);
+        }
+        let off = path_off as usize;
+        let len = *self.pool.get(off).ok_or(IrError::BadField)? as usize;
+        self.pool
+            .get(off + 1..off + 1 + len)
+            .ok_or(IrError::BadField)
+    }
+
     /// Locate the format whose 4-byte selector / typehash-prefix
     /// matches `selector`. Returns `Ok(None)` if no format matches —
     /// the secure-side caller renders that as "no clear-signing
@@ -735,6 +755,43 @@ mod tests {
         buf[128..130].copy_from_slice(&formats_off.to_be_bytes());
         buf[132..134].copy_from_slice(&formats_len.to_be_bytes());
         buf
+    }
+
+    fn build_ir_with_pool(pool: std::vec::Vec<u8>) -> std::vec::Vec<u8> {
+        let pool_len = pool.len();
+        let mut buf = std::vec![0u8; HEADER_LEN];
+        buf[0] = SCHEMA_VER;
+        buf[1] = CTX_CONTRACT;
+        buf[2..10].copy_from_slice(&1u64.to_be_bytes());
+        let metadata_off = HEADER_LEN as u16;
+        let formats_off = (HEADER_LEN + pool_len) as u16;
+        buf[126..128].copy_from_slice(&metadata_off.to_be_bytes());
+        buf[128..130].copy_from_slice(&formats_off.to_be_bytes());
+        buf[130..132].copy_from_slice(&(pool_len as u16).to_be_bytes());
+        buf[132..134].copy_from_slice(&1u16.to_be_bytes());
+        buf.extend_from_slice(&pool);
+        buf.push(0u8); // format count
+        buf
+    }
+
+    // `path_bytes` (review 5.4 — moved here from the retired legacy walker).
+    #[test]
+    fn path_bytes_zero_off_is_empty() {
+        let ir_bytes = build_ir_with_pool(std::vec![]);
+        let ir = Erc7730Ir::parse(&ir_bytes).unwrap();
+        assert_eq!(ir.path_bytes(0).unwrap(), &[] as &[u8]);
+    }
+
+    #[test]
+    fn path_bytes_reads_prefix() {
+        // Pool: a 1-byte filler at offset 0 (so `path_off == 0` stays the
+        // "no path" sentinel) and a 3-opcode program at offset 1:
+        // `[len=3 | 0x10 0x20 0x00]` for `#.field0` — length byte at offset 1,
+        // opcodes at 2..5.
+        let pool = std::vec![0xFFu8, 3, 0x10, 0x20, 0x00];
+        let ir_bytes = build_ir_with_pool(pool);
+        let ir = Erc7730Ir::parse(&ir_bytes).unwrap();
+        assert_eq!(ir.path_bytes(1).unwrap(), &[0x10u8, 0x20, 0x00]);
     }
 
     #[test]

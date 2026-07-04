@@ -23,13 +23,12 @@ pub use pqsigner_erc7730::ir::{
     FormatOp, IrError, PathOp, Visibility, HEADER_LEN, MAX_FIELDS_PER_FORMAT,
     MAX_FORMATS, MAX_IR_LEN, MAX_NESTING, MAX_POOL_ENTRY_LEN, SCHEMA_VER,
 };
-// NOTE: the Phase-3 `walker::{resolve_program, resolve_path, path_bytes, WalkerCtx}`
-// is deliberately NOT re-exported. The live render path walks paths via the local
-// `display::erc7730::formatters` resolvers + `render::resolve`, and the walker's
-// extraction-op wire encoding (`ArrayIdx = u32`, `ArraySlice = u32+u32`) is
-// INCOMPATIBLE with the live Tier B tokenPath encoding (`ArrayIdx = u16`,
-// `ArraySlice = u16+u16+from_end`). Re-exporting it onto the firmware surface would
-// invite a confirm-vs-execute desync — see `pqsigner-erc7730/src/walker.rs` header.
+// NOTE: the live render path walks path programs via the local
+// `display::erc7730::formatters` resolvers + `render::resolve`; the retired
+// Phase-3 `AbiView` interpreter (whose extraction-op encoding was INCOMPATIBLE
+// with the live Tier-B tokenPath encoding) was removed 2026-07 (review 5.4) so
+// it can no longer be wired onto the firmware surface and invite a
+// confirm-vs-execute desync. `Erc7730Ir::path_bytes` is the one shared accessor.
 pub use pqsigner_erc7730::abi::{
     container_field, AbiField, AbiNode, AbiValue, AbiView, ContainerView,
 };

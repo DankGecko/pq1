@@ -121,12 +121,6 @@ test = false
 doc = false
 bench = false
 
-[[bin]]
-name = "erc7730_walker"
-path = "fuzz_targets/erc7730_walker.rs"
-test = false
-doc = false
-bench = false
 
 # FULL ERC-7730 render dispatch — IR parse → find_format_by_selector →
 # per-FormatOp field render → `Pages` emission (the on-device confirm

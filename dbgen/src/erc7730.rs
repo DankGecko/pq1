@@ -1211,8 +1211,8 @@ struct Pool {
 impl Pool {
     fn new() -> Self {
         // Reserve offset 0 with a 1-byte filler so it can never be the
-        // address of a real interned entry. The on-device walker
-        // (`pqsigner_erc7730::walker::path_bytes`) and renderer
+        // address of a real interned entry. The on-device path reader
+        // (`pqsigner_erc7730::ir::Erc7730Ir::path_bytes`) and renderer
         // (`secure/src/tx/display/erc7730/formatters::resolve_path` +
         // `secure/src/tx/erc7730_render/params::parse_params`) all treat
         // `path_off == 0` / `param_off == 0` as "no path" / "default

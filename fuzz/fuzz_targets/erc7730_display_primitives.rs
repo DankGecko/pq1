@@ -13,10 +13,9 @@
 //! column-budget arithmetic on an attacker-controlled `U256`** — the value
 //! comes straight from calldata. An arithmetic slip there is a panic = DoS on
 //! the trusted-display path, exactly where the wallet must never abort. The
-//! descriptor-side path this crate already fuzzes
-//! (`erc7730_render_dispatch` / `erc7730_walker`) never exercises this byte
-//! arithmetic, so this harness covers the highest-panic-density code on the
-//! render path.
+//! descriptor-side path this crate already fuzzes (`erc7730_render_dispatch`)
+//! never exercises this byte arithmetic, so this harness covers the
+//! highest-panic-density code on the render path.
 //!
 //! Non-vacuity: the fuzzer controls `value × decimals × frac_digits × unit-len`
 //! independently (32 value bytes, raw `decimals`/`frac` bytes reaching the

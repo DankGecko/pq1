@@ -38,7 +38,6 @@
 use core::convert::TryFrom;
 
 use crate::ir::{Erc7730Ir, FieldEntry, FieldIter, PathOp, MAX_NESTED_MEMBERS};
-use crate::walker::path_bytes;
 
 use super::RenderErr;
 
@@ -258,7 +257,7 @@ pub fn validate_nested_structure(
 
         // Render path → a static local word strictly inside the nested struct.
         // Bounds-checked for EVERY sub-field (E4-2), credited only if shown.
-        let prog = path_bytes(ir, sf.path_off).map_err(|_| RenderErr::Reject("7730 nested path"))?;
+        let prog = ir.path_bytes(sf.path_off).map_err(|_| RenderErr::Reject("7730 nested path"))?;
         let w = static_word_index(prog).ok_or(RenderErr::Reject("7730 nested dyn subfield"))?;
         if w >= mc {
             return Err(RenderErr::Reject("7730 nested ord oob"));
