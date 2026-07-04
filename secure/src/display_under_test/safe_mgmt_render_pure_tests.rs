@@ -105,7 +105,7 @@ fn add_owner_with_threshold_pages_no_risk() {
     let p1r1 = row_str(&pages.buf[1][1]);
     // `write_addr_full` row1 = "0x" + first 7 bytes of address = 16 cols
     // exact (2 + 14 hex chars).
-    assert_eq!(p1r1, "0xa0b86991c6218b");
+    assert_eq!(p1r1.to_lowercase(), "0xa0b86991c6218b");
 }
 
 #[test]
@@ -245,7 +245,7 @@ fn swap_owner_pages_show_old_and_new() {
     // routed to the new-owner page, not the old-owner page.
     let r1 = row_str(&pages.buf[2][1]);
     assert!(
-        r1.starts_with("0xfeedfaceba"),
+        r1.to_lowercase().starts_with("0xfeedfaceba"),
         "new-owner page must render ADDR_C, not ADDR_A: got {r1:?}"
     );
 }
@@ -306,7 +306,7 @@ fn enable_module_always_loud_banner() {
     assert_eq!(row_str(&pages.buf[1][0]), "Module addr:");
     let r1 = row_str(&pages.buf[1][1]);
     assert!(
-        r1.starts_with("0xa0b86991"),
+        r1.to_lowercase().starts_with("0xa0b86991"),
         "enableModule must show full module address: got {r1:?}"
     );
 }
@@ -343,7 +343,7 @@ fn set_guard_install_loud_banner_plus_full_address() {
     assert_eq!(row_str(&pages.buf[1][0]), "Guard addr:");
     let r1 = row_str(&pages.buf[1][1]);
     assert!(
-        r1.starts_with("0xfeedfaceba"),
+        r1.to_lowercase().starts_with("0xfeedfaceba"),
         "guard address page must render ADDR_C: got {r1:?}"
     );
 }
@@ -375,7 +375,7 @@ fn set_fallback_handler_install_loud_banner() {
     assert_eq!(row_str(&pages.buf[0][1]), "Runs unkn calls");
     assert_eq!(row_str(&pages.buf[1][0]), "Handler addr:");
     let r1 = row_str(&pages.buf[1][1]);
-    assert!(r1.starts_with("0xfeedfaceba"));
+    assert!(r1.to_lowercase().starts_with("0xfeedfaceba"));
 }
 
 #[test]

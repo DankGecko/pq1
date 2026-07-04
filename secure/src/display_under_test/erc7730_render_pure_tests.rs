@@ -567,9 +567,10 @@ fn positive_erc7730_golden_grid_hash() {
     );
     assert_ne!(h, h2, "golden hash must bind rendered content (spender change did not move it)");
 
+    // Re-blessed for EIP-55 checksummed address rendering (item 4).
     const GOLDEN: [u8; 32] = [
-        77, 248, 30, 45, 138, 234, 105, 255, 20, 91, 87, 227, 23, 72, 186, 236, 153, 199, 132,
-        131, 180, 224, 139, 84, 166, 179, 89, 244, 146, 181, 170, 176,
+        73, 247, 74, 161, 54, 254, 127, 10, 0, 240, 126, 180, 131, 128, 238, 200, 182, 17, 248,
+        86, 23, 162, 214, 124, 205, 22, 197, 93, 133, 135, 243, 88,
     ];
     assert_eq!(h, GOLDEN, "ERC-7730 render golden changed — re-bless if intentional. got={h:?}");
 }

@@ -156,9 +156,10 @@ fn positive_safe_golden_grid_hash() {
         super::golden_grid_hash(&render_safe_v1_pages(&v2, None, Some(&meta), &resolver).expect("render"));
     assert_ne!(h, h2, "golden hash must bind rendered content (amount change did not move it)");
 
+    // Re-blessed for EIP-55 checksummed address rendering (item 4).
     const GOLDEN: [u8; 32] = [
-        164, 215, 245, 20, 203, 214, 152, 231, 107, 230, 63, 80, 106, 79, 146, 71, 56, 161, 72,
-        99, 45, 196, 201, 250, 246, 124, 168, 70, 35, 203, 23, 76,
+        235, 181, 169, 11, 120, 180, 129, 217, 161, 167, 245, 127, 146, 251, 110, 190, 189, 229,
+        30, 82, 242, 124, 242, 3, 100, 93, 61, 179, 76, 1, 59, 191,
     ];
     assert_eq!(h, GOLDEN, "Safe render golden changed — re-bless if intentional. got={h:?}");
 }
