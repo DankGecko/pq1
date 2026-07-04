@@ -52,6 +52,11 @@ sphincs-tz-shared = { path = "../shared" }
 # dev-deps not compiled into any `cargo fuzz` libFuzzer target).
 revm             = "41"
 hex              = "0.4"
+# Seed generator for `erc7730_render_dispatch` (`tests/gen_render_seeds.rs`,
+# `#[ignore]`d): compiles the real ERC-7730 registry into IR leaves so the
+# render fuzzer starts from valid descriptors instead of exploring parse-fail.
+# dbgen → pqsigner-erc7730 (already a dep here); no cycle.
+dbgen            = { path = "../dbgen" }
 
 [[bin]]
 name = "aa_userop_parse_header"
@@ -123,16 +128,16 @@ test = false
 doc = false
 bench = false
 
-# Phase 5 item 9 — render-dispatch harness. Drives the renderer's
-# descriptor-side path (IR parse → find_format_by_selector → field
-# iteration) against arbitrary bytes. The full per-formatter Pages
-# emission is a separate, larger follow-up: `Pages` is written directly
-# (~415 `.buf`/`.len` field accesses) by the whole `tx::display` tree, so
-# host-linking the dispatch is a `pub(super)→pub` field widening + moving
-# `Pages` and the five ERC-7730 render files — scoped in
-# `docs/erc7730-renderer-fuzzability.md`, NOT a wall. The highest-
-# panic-density slice (the amount/decimal byte-writers) is already
-# host-fuzzed by `erc7730_display_primitives` below.
+# FULL ERC-7730 render dispatch — IR parse → find_format_by_selector →
+# per-FormatOp field render → `Pages` emission (the on-device confirm
+# screen). The renderer moved to `pqsigner_erc7730::display::render`
+# (docs/erc7730-renderer-fuzzability.md), so this harness host-links and
+# drives `render_erc7730_pages` itself. Seed its corpus first with
+# `make fuzz-seed-erc7730-render` (897 real-registry IR leaves) — the
+# field formatters are only reached once a descriptor parses, which
+# random bytes do ~never (cov 130 empty → 1877 seeded). The
+# Pages-independent byte-writers are ALSO fuzzed in isolation by
+# `erc7730_display_primitives` below.
 [[bin]]
 name = "erc7730_render_dispatch"
 path = "fuzz_targets/erc7730_render_dispatch.rs"
