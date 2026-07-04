@@ -3141,6 +3141,13 @@ fuzz-erc7730-walker:
 fuzz-erc7730-render-dispatch:
 	cd fuzz && cargo +nightly fuzz run erc7730_render_dispatch $(FUZZ_LIBFUZZER_ARGS)
 
+# Populate the render-dispatch corpus from the real ERC-7730 registry (897 IR
+# leaves) so the fuzzer starts from valid descriptors — without this the field
+# formatters are ~unreachable (cov 130 empty vs 1877 seeded). Run once before
+# `make fuzz-erc7730-render-dispatch`.
+fuzz-seed-erc7730-render:
+	cd fuzz && cargo test --test gen_render_seeds -- --ignored --nocapture
+
 fuzz-erc7730-display-primitives:
 	cd fuzz && cargo +nightly fuzz run erc7730_display_primitives $(FUZZ_LIBFUZZER_ARGS)
 

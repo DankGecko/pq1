@@ -8,7 +8,7 @@
 //! ## Path resolution
 //!
 //! Phase 4 ships a minimal direct path walker rather than going through
-//! `pqsigner_erc7730::walker::resolve_path`. The reason: Phase 3's
+//! `crate::walker::resolve_path`. The reason: Phase 3's
 //! walker requires an [`AbiView`] tree describing the runtime ABI
 //! shape, and the on-device IR does not carry ABI type information
 //! (the host-side `dbgen` knows the format-key signature but does not
@@ -28,24 +28,25 @@
 //! the `Calldata` formatter routes through `calldata_nested` (which
 //! itself rejects in Phase 4 and falls through to blind-sign).
 
-use crate::erc20::bundle::Erc20Metadata;
-use crate::names::NameResolver;
+use pqsigner_tx::erc20::bundle::Erc20Metadata;
+use pqsigner_tx::names::NameResolver;
 use super::super::primitives::{
     chain_name, native_ticker, write_addr_full, write_addr_full_or_name,
     write_amount_single_or_two_rows, write_amount_two_rows, write_line, AmountFit,
 };
-use crate::tx::eip1559::{Eip1559Tx, U256};
-use crate::tx::erc7730::{container_field, Erc7730Ir, FieldEntry, FormatOp, PathOp};
+use pqsigner_tx_core::eip1559::{Eip1559Tx, U256};
+use crate::abi::container_field;
+use crate::ir::{Erc7730Ir, FieldEntry, FormatOp, PathOp};
 // `resolve_array` (the load-bearing dynamic-array tail resolver, which reuses
 // `walk`'s Kani-proven readers) lives in the host crate so it is itself
 // Kani-verifiable; `render_array` is a thin renderer over its result, and the
 // tests reach it as `formatters::resolve_array`.
-pub(crate) use crate::tx::erc7730_render::array::resolve_array;
-use crate::tx::erc7730_render::params::{
+pub use crate::render::array::resolve_array;
+use crate::render::params::{
     ParamSet, DATE_ENC_BLOCKHEIGHT, DATE_ENC_TIMESTAMP,
 };
-use crate::tx::erc7730_render::RenderErr;
-use crate::ui::{ascii_str, DISPLAY_COLS};
+use crate::render::RenderErr;
+use crate::display::{ascii_str, DISPLAY_COLS};
 
 use super::Pages;
 
@@ -88,7 +89,7 @@ pub(super) fn resolve_path<'a>(
     }
 
     let root = PathOp::try_from(prog[0]).map_err(|_| RenderErr::Reject("7730 bad root"))?;
-    let mut p = 1usize;
+    let p = 1usize;
 
     match root {
         PathOp::RootStructured => {
@@ -98,8 +99,8 @@ pub(super) fn resolve_path<'a>(
             // slot-confusion tests pin this); `FollowOffset` adds tuple / dynamic
             // tail-follow (C1/C2). `body` is head-bounded for static fields and
             // the full body for `FollowOffset` fields (routed in `render_fields`).
-            match crate::tx::erc7730_render::resolve::resolve_structured(&prog[p..], body)? {
-                crate::tx::erc7730_render::resolve::Leaf::Word(off) => {
+            match crate::render::resolve::resolve_structured(&prog[p..], body)? {
+                crate::render::resolve::Leaf::Word(off) => {
                     let word = body
                         .get(off..off + 32)
                         .ok_or(RenderErr::Reject("7730 short body"))?;
@@ -107,7 +108,7 @@ pub(super) fn resolve_path<'a>(
                 }
                 // A dynamic (`bytes`/`string`) leaf is not a scalar word: the
                 // dynamic-leaf renderer handles it via `resolve_dynamic`.
-                crate::tx::erc7730_render::resolve::Leaf::Dynamic(_) => {
+                crate::render::resolve::Leaf::Dynamic(_) => {
                     Err(RenderErr::Reject("7730 dyn leaf not scalar"))
                 }
             }
@@ -626,7 +627,7 @@ fn render_const(
 /// (`PathOp::ArrayAll`) must NOT misroute to `render_array` (it would still
 /// decline-to-blind there, but it would needlessly blind-sign an otherwise
 /// clear-signable scalar field).
-pub(crate) fn path_ends_with_array_all(
+pub fn path_ends_with_array_all(
     ir: &Erc7730Ir<'_>,
     path_off: u16,
 ) -> Result<bool, RenderErr> {
@@ -778,7 +779,7 @@ fn resolve_dynamic<'a>(
     path_off: u16,
     body: &'a [u8],
 ) -> Result<&'a [u8], RenderErr> {
-    use crate::tx::erc7730_render::resolve::{read_dynamic, resolve_structured, Leaf};
+    use crate::render::resolve::{read_dynamic, resolve_structured, Leaf};
     if path_off == 0 {
         return Err(RenderErr::Reject("7730 dyn no path"));
     }
@@ -902,7 +903,7 @@ pub(super) fn render_array(
     // still reads the array at its signature-fixed offset (WYSIWYS) but allows
     // other dynamic args to own the rest of the tail.
     let (elems_start, count) = if array_all_is_multi(ir, field.path_off)? {
-        crate::tx::erc7730_render::array::resolve_array_multi(
+        crate::render::array::resolve_array_multi(
             field,
             ir,
             full_body,
@@ -1135,7 +1136,7 @@ fn render_enum(
     // (the user sees the real value, not a substituted gloss) and strictly more
     // informative than blind-signing everything.
     let Some(label) =
-        crate::tx::erc7730_render::enums::lookup_enum_label(ir.pool, enum_off, &value)?
+        crate::render::enums::lookup_enum_label(ir.pool, enum_off, &value)?
     else {
         let _ = tx;
         let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
@@ -1678,7 +1679,7 @@ fn resolve_token_address(
         let root = PathOp::try_from(tp[0]).map_err(|_| RenderErr::Reject("7730 bad tokpath root"))?;
         return match root {
             PathOp::RootStructured => {
-                crate::tx::erc7730_render::resolve::resolve_token_address(&tp[1..], body)
+                crate::render::resolve::resolve_token_address(&tp[1..], body)
             }
             _ => resolve_path_bytes(tp, body, tx).map(|w| {
                 let mut a = [0u8; 20];
@@ -1777,7 +1778,7 @@ mod walker_slot_confusion_fixed {
     //! past the format's static head. See
     //! `docs/security/vulns/VULN-erc7730-walker-slot-confusion.md`.
     use super::*;
-    use crate::tx::erc7730::{ContextKind, Erc7730Ir};
+    use crate::ir::{ContextKind, Erc7730Ir};
 
     /// Build a throwaway `Erc7730Ir` whose `pool` holds a single compiled
     /// path program at offset 1. Only `pool` matters for `resolve_path`.
@@ -1788,7 +1789,7 @@ mod walker_slot_confusion_fixed {
         pool.extend_from_slice(prog);
         let pool: &'static [u8] = std::boxed::Box::leak(pool.into_boxed_slice());
         Erc7730Ir {
-            schema_ver: crate::tx::erc7730::SCHEMA_VER,
+            schema_ver: crate::ir::SCHEMA_VER,
             context_kind: ContextKind::Contract,
             chain_id: 1,
             contract: [0u8; 20],
@@ -2010,7 +2011,8 @@ mod faithless_formatter_fixed {
     //! and render THAT word; `tokenTicker` additionally shows the token
     //! identity (full address) when no Merkle-verified ticker is bound.
     use super::*;
-    use crate::tx::erc7730::{container_field, ContextKind, Erc7730Ir};
+    use crate::abi::container_field;
+    use crate::ir::{ContextKind, Erc7730Ir};
 
     /// Build a throwaway `Erc7730Ir` whose `pool` holds a single compiled path
     /// program at offset 1 (mirrors `walker_slot_confusion_fixed::ir_with_path`).
@@ -2021,7 +2023,7 @@ mod faithless_formatter_fixed {
         pool.extend_from_slice(prog);
         let pool: &'static [u8] = std::boxed::Box::leak(pool.into_boxed_slice());
         Erc7730Ir {
-            schema_ver: crate::tx::erc7730::SCHEMA_VER,
+            schema_ver: crate::ir::SCHEMA_VER,
             context_kind: ContextKind::Contract,
             chain_id: 1,
             contract: [0u8; 20],
@@ -2219,7 +2221,7 @@ mod block_height_magnitude_fixed {
     //! FULL magnitude (inline while it fits, else label + full number on r2)
     //! and fails loud only for absurd >16-digit values.
     use super::*;
-    use crate::tx::erc7730::{ContextKind, Erc7730Ir};
+    use crate::ir::{ContextKind, Erc7730Ir};
 
     /// Throwaway IR whose `pool` holds one compiled path program at offset 1
     /// (mirrors `faithless_formatter_fixed::ir_with_path`).
@@ -2230,7 +2232,7 @@ mod block_height_magnitude_fixed {
         pool.extend_from_slice(prog);
         let pool: &'static [u8] = std::boxed::Box::leak(pool.into_boxed_slice());
         Erc7730Ir {
-            schema_ver: crate::tx::erc7730::SCHEMA_VER,
+            schema_ver: crate::ir::SCHEMA_VER,
             context_kind: ContextKind::Contract,
             chain_id: 1,
             contract: [0u8; 20],
@@ -2353,11 +2355,11 @@ mod encrypted_formatter_declines {
     //! path) / refuses (off-chain typed path). `dbgen::parse_format_name` also
     //! refuses `format:"encrypted"` at build time.
     use super::*;
-    use crate::tx::erc7730::{ContextKind, Erc7730Ir};
+    use crate::ir::{ContextKind, Erc7730Ir};
 
     fn empty_ir() -> Erc7730Ir<'static> {
         Erc7730Ir {
-            schema_ver: crate::tx::erc7730::SCHEMA_VER,
+            schema_ver: crate::ir::SCHEMA_VER,
             context_kind: ContextKind::Contract,
             chain_id: 1,
             contract: [0u8; 20],
@@ -2418,7 +2420,7 @@ mod encrypted_formatter_declines {
         let ir = empty_ir();
         let tx = envelope();
         let body = [0u8; 32];
-        let resolver = crate::names::NameResolver::new();
+        let resolver = pqsigner_tx::names::NameResolver::new();
         let params = ParamSet::default();
         let field = FieldEntry {
             format_op: FormatOp::Encrypted as u8,

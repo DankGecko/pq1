@@ -18,11 +18,11 @@
 //! That's intentionally ugly so a user-facing review notices.
 
 use super::super::primitives::write_line;
-use crate::tx::erc7730::{Erc7730Ir, FormatHeader};
+use crate::ir::{Erc7730Ir, FormatHeader};
 
 use super::formatters::write_line_bytes;
 use super::Pages;
-use crate::tx::erc7730_render::RenderErr;
+use crate::render::RenderErr;
 
 /// Number of pages [`render_intent_banner`] writes. Always allocates
 /// at least the intent page; the `erc7730-dev-unattested` Cargo

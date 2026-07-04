@@ -1196,6 +1196,8 @@ dependencies = [
  "pqsigner-tx",
  "pqsigner-tx-core",
  "sha2",
+ "sha3 0.10.8",
+ "subtle",
 ]
 
 [[package]]

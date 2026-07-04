@@ -1,9 +1,17 @@
 # ERC-7730 renderer fuzzability — extraction status + follow-up
 
-**Status: v1 LANDED (2026-07-02).** The pure row-buffer byte-writers
-(`primitives`) are extracted into the host crate and directly fuzzed. The
-heavier per-`FormatOp` `Pages` emission remains in the secure crate; host-linking
-it is a bounded follow-up (below), **not** a wall.
+**Status: v1 + v2 LANDED (2026-07-02 / 2026-07-04).** v1 extracted the pure
+row-buffer byte-writers (`primitives`). **v2 moved the ENTIRE renderer**
+(`Pages`/`MAX_PAGES` substrate + the five ERC-7730 render files) into
+`pqsigner_erc7730::display`, so the full per-`FormatOp` dispatch now host-links
+and `fuzz/fuzz_targets/erc7730_render_dispatch.rs` drives `render_erc7730_pages`
+directly. Seeded from the real registry (`make fuzz-seed-erc7730-render`, 897 IR
+leaves) it reaches deep into the field formatters — **cov 130 (empty) → 1877
+(seeded), 0 crashes over millions of mutated-descriptor runs.** The secure crate
+keeps thin re-export shims (`tx::display::erc7730` + `tx::display::{Pages,
+MAX_PAGES}`); the `display_under_test` scaffold + secure renderers now share the
+one host `Pages` type. The follow-up section below is the ORIGINAL v1 plan,
+preserved for the record — it is now DONE.
 
 ## Motivation
 

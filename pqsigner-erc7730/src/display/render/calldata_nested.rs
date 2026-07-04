@@ -49,9 +49,9 @@
 //! a TRUSTED name, the page MUST carry an unmistakable "inner call NOT decoded"
 //! marker, and it MUST add value beyond what the native Safe path already gives.
 
-use crate::tx::erc7730::FieldEntry;
-use crate::tx::erc7730_render::params::ParamSet;
-use crate::tx::erc7730_render::RenderErr;
+use crate::ir::FieldEntry;
+use crate::render::params::ParamSet;
+use crate::render::RenderErr;
 
 use super::Pages;
 

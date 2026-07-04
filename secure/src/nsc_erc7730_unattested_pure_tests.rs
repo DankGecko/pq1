@@ -24,12 +24,15 @@
 
 const CARGO_TOML: &str = include_str!("../Cargo.toml");
 const NSC_MOD_RS: &str = include_str!("nsc/mod.rs");
-const INTENT_RS: &str = include_str!("tx/display/erc7730/intent.rs");
+const INTENT_RS: &str = include_str!("../../pqsigner-erc7730/src/display/render/intent.rs");
 
 #[test]
 fn cargo_toml_declares_erc7730_dev_unattested_feature() {
+    // The feature now propagates to the host crate that owns the intent
+    // renderer (`erc7730-dev-unattested = ["pqsigner-erc7730/..."]`), so match
+    // the declaration prefix rather than the empty-list literal.
     assert!(
-        CARGO_TOML.contains("erc7730-dev-unattested = []"),
+        CARGO_TOML.contains("erc7730-dev-unattested = ["),
         "secure/Cargo.toml must declare the `erc7730-dev-unattested` feature \
          (Phase 5 item 3 of `docs/archive/handoff-erc7730-phase5.md`)."
     );

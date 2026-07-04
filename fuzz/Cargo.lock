@@ -920,6 +920,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "dbgen"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "pqsigner-erc7730",
+ "pqsigner-tx-core",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sphincs-tz-shared",
+ "toml",
+]
+
+[[package]]
 name = "der"
 version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1825,6 +1839,8 @@ dependencies = [
  "pqsigner-tx",
  "pqsigner-tx-core",
  "sha2",
+ "sha3 0.10.9",
+ "subtle",
 ]
 
 [[package]]
@@ -1839,6 +1855,7 @@ dependencies = [
 name = "pqsigner-fuzz"
 version = "0.0.0"
 dependencies = [
+ "dbgen",
  "hex",
  "libfuzzer-sys",
  "pqsigner-aa",
