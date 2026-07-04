@@ -41,38 +41,31 @@ const FLASH: u32 = 0x5002_2000;
 // the bank-2 erase failure during the fwup-transport-e2e bring-up.
 const FLASH_NS: u32 = 0x4002_2000;
 
-/// `FLASH_OPTR` offset (RM0456 §7.11) — the option-byte register mirror.
-/// `RDP[7:0]` (readout protection level) lives in the low byte.
+/// `FLASH_OPTR` offset (RM0456 §7.11) — RDP[7:0] in the low byte. And
+/// `FLASH_SECBOOTADD0R` offset (secure boot-address option register), confirmed
+/// by `tools/ob-configurator/src/main.rs:32` (`FLASH_S+0x4C`).
 #[allow(dead_code)]
 const FLASH_OPTR_OFF: u32 = 0x40;
-
-/// STM32U585 readout-protection (RDP) level, decoded from `FLASH_OPTR.RDP[7:0]`
-/// per RM0456: `0xAA` = Level 0, `0xCC` = Level 2, `0x55` = Level 0.5 (valid
-/// only with `TZEN=1`), and **any other value** = Level 1. A shipping image
-/// should only ever run at Level 2 (SWD/JTAG disabled in silicon).
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
-#[allow(dead_code)] // used by the mode-production RDP boot check + host tests
-pub enum RdpLevel {
-    L0,
-    L0_5,
-    L1,
-    L2,
-}
-
-/// Pure decode of the `FLASH_OPTR.RDP` byte — host-testable, no MMIO.
-/// (silicon-lockdown SL7 / HARDENING §4.2.)
 #[allow(dead_code)]
-#[must_use]
-pub const fn rdp_level_from_byte(rdp: u8) -> RdpLevel {
-    match rdp {
-        0xAA => RdpLevel::L0,
-        0x55 => RdpLevel::L0_5,
-        0xCC => RdpLevel::L2,
-        _ => RdpLevel::L1,
-    }
-}
+const FLASH_SECBOOTADD0R_OFF: u32 = 0x4C;
+
+/// STM32U585 FSBL base (secure bank-1 page 0) — the shipping secure-boot entry.
+#[allow(dead_code)]
+pub const FSBL_BASE_ADDR: u32 = 0x0C00_0000;
+
+// The pure RDP/SECBOOTADD0 decode + its host unit tests live in the
+// host-compiled `sphincs_tz_shared::lockdown` (this whole `hw` module is
+// `#[cfg(not(test))]`, so an in-module test never runs). Re-export the level
+// enum so `hw::flash::RdpLevel` keeps working for callers.
+pub use sphincs_tz_shared::lockdown::RdpLevel;
 
 /// Read the live RDP level from `FLASH_OPTR` (secure alias, read-only).
+///
+/// NOTE (BOOT_LOCK/HDP1 follow-up): we check the RDP level and the boot
+/// *address* (`secboot_selects_fsbl`) — the reliable, code-confirmed signals.
+/// The `BOOT_LOCK` bit and `HDP1` polarity are doc-ambiguous
+/// (production-todo's `0x0C00_007C` vs the ob-configurator's `0x0018_0000`), so
+/// asserting them is a bench-confirmation follow-up (work-todo), not done here.
 #[cfg(feature = "stm32u585")]
 #[allow(dead_code)]
 #[must_use]
@@ -81,7 +74,17 @@ pub fn rdp_level() -> RdpLevel {
     // secure FLASH-controller block (unlike NSCR, OPTR is readable via the
     // secure alias). The secure world is single-threaded; this is a pure read.
     let optr = unsafe { crate::hw::mmio::RoReg32::new(FLASH + FLASH_OPTR_OFF) }.read();
-    rdp_level_from_byte((optr & 0xFF) as u8)
+    sphincs_tz_shared::lockdown::rdp_level_from_byte((optr & 0xFF) as u8)
+}
+
+/// Read the live `SECBOOTADD0R` (secure alias, read-only).
+#[cfg(feature = "stm32u585")]
+#[allow(dead_code)]
+#[must_use]
+pub fn secboot_add0_reg() -> u32 {
+    // SAFETY: a real, 4-byte-aligned secure option register (same class as
+    // `FLASH_OPTR`); single-threaded secure world; pure read.
+    unsafe { crate::hw::mmio::RoReg32::new(FLASH + FLASH_SECBOOTADD0R_OFF) }.read()
 }
 
 /// Selects which bank the flash controller targets. Only meaningful for
@@ -2193,32 +2196,4 @@ pub unsafe fn userop_sigs_bump(slot_key: &[u8; 8], new_count: u64) -> Result<(),
         return Err(());
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod rdp_tests {
-    use super::{rdp_level_from_byte, RdpLevel};
-
-    #[test]
-    fn rdp_byte_decode_matches_rm0456_and_only_cc_is_level2() {
-        // RM0456: 0xAA = L0, 0xCC = L2, 0x55 = L0.5, any other byte = L1.
-        assert_eq!(rdp_level_from_byte(0xAA), RdpLevel::L0);
-        assert_eq!(rdp_level_from_byte(0xCC), RdpLevel::L2);
-        assert_eq!(rdp_level_from_byte(0x55), RdpLevel::L0_5);
-        assert_eq!(rdp_level_from_byte(0x00), RdpLevel::L1);
-        assert_eq!(rdp_level_from_byte(0xFF), RdpLevel::L1);
-        assert_eq!(rdp_level_from_byte(0xBB), RdpLevel::L1);
-
-        // Security-critical (silicon-lockdown SL1 — reversible-state-mistaken-
-        // for-locked): ONLY 0xCC may decode as Level 2. No erased/garbage byte
-        // may be read as RDP2, or the boot check would pass on an unlocked part.
-        for b in 0u16..=255 {
-            let b = b as u8;
-            assert_eq!(
-                rdp_level_from_byte(b) == RdpLevel::L2,
-                b == 0xCC,
-                "only 0xCC may decode as RDP2 (byte {b:#04x})"
-            );
-        }
-    }
 }

@@ -926,6 +926,24 @@ fn main() -> ! {
                     cortex_m::asm::wfe();
                 }
             }
+            // Secure boot must enter the immutable WRP1A-locked FSBL (silicon-
+            // lockdown SL2/SL3): a redirected SECBOOTADD0 = a boot bypass. This
+            // checks the boot ADDRESS only (not the BOOT_LOCK bit — its position
+            // is doc-ambiguous; tracked as a bench-confirmation follow-up), and
+            // WARN-and-continues (a mis-provisioned address is a factory error,
+            // not something a shipped device can fix at boot).
+            let secboot = hw::flash::secboot_add0_reg();
+            if !sphincs_tz_shared::lockdown::secboot_selects(
+                secboot,
+                hw::flash::FSBL_BASE_ADDR,
+            ) {
+                secure_log!(
+                    "[S][lockdown] WARNING: SECBOOTADD0R=0x{:08x} does NOT select the \
+                     FSBL base (expected boot addr 0x0C00_0000) — secure boot may be \
+                     redirected. See docs/production-todo.md.",
+                    secboot
+                );
+            }
         }
         // Early RDP1 boot diagnostic on the NV3007 LCD (non-se050 builds only;
         // se050 builds defer display init until after their i2c_hw setup). The

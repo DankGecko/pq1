@@ -27,6 +27,9 @@ pub mod db_format;
 // extracted host-verifiable from `secure/src/nsc/{ptr_validate,ns_ptr}.rs`
 // for Kani (soundness) + Miri (tree-borrows) — see module docs.
 pub mod ns_ptr_validate;
+// Pure silicon-lockdown option-byte decode (RDP level / SECBOOTADD0 boot
+// address) — host-testable; the MMIO reads live in `secure/src/hw/flash.rs`.
+pub mod lockdown;
 
 // Re-export every protocol constant + enum + wire-format size from the
 // new authoritative crate. Glob-import so adding constants to
