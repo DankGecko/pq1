@@ -27,6 +27,7 @@ import Extracted.ForsLoop
 import Extracted.PinState.PinStateSpec
 import Extracted.SlotKdf.SlotKdfSpec
 import Extracted.FormatDecimal.Div10Spec
+import Extracted.FormatDecimal.ExtractDigitsSpec
 
 -- FV-#2 sequel: slot_entropy byte-layout (invariant #8). Closure = kernel triple
 -- + the disclosed `sha256_pure_bytes` hash axiom (the FV-#2 single-shot SHA-256
@@ -44,6 +45,13 @@ import Extracted.FormatDecimal.Div10Spec
 -- (the symbolic-VALUE the CBMC bit-blaster could not converge on). PURE —
 -- kernel-only closure [propext, Classical.choice, Quot.sound], no hash axiom.
 #print axioms Div10Spec.div10_inplace_spec
+-- format_decimal Track-1 milestone M4: fmt_extract_digits full functional
+-- spec ∀ 2^256 values × ∀ digit buffers (value/count/digit-range/
+-- normalization/frame — see the ExtractDigitsSpec.lean header). PURE —
+-- kernel-only closure, no hash axiom, no bv_decide native axiom.
+#print axioms ExtractDigitsSpec.extract_digits_spec
+#print axioms ExtractDigitsSpec.extract_digits_loop_spec
+#print axioms ExtractDigitsSpec.is_zero_spec
 #print axioms Extracted.Equiv.deserialize_pin_state_rejects_bad_len
 #print axioms Extracted.Equiv.make_adrs_spec
 #print axioms Extracted.Equiv.set_chain_index_spec
