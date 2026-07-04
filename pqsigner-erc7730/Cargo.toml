@@ -23,6 +23,15 @@ edition.workspace = true
 pqsigner-tx       = { workspace = true }
 pqsigner-tx-core  = { workspace = true }
 sha2 = { version = "0.10", default-features = false }
+sha3 = { version = "0.10", default-features = false }
+subtle = { version = "2.6", default-features = false }
+
+[features]
+# Bring-up-only: renders a preceding "DEV UNATTESTED" warning page before the
+# intent banner (see `display::render::intent`). The secure crate propagates its
+# own `erc7730-dev-unattested` feature to this one; mutually exclusive with
+# `mode-production` (a `compile_error!` in the secure `nsc/mod.rs`).
+erc7730-dev-unattested = []
 
 [dev-dependencies]
 hex = { workspace = true }

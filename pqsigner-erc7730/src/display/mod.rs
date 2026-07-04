@@ -29,6 +29,7 @@
 //! struct does.
 
 pub mod primitives;
+pub mod render;
 
 /// Logical display dimensions (cells, not pixels). MUST equal the secure
 /// crate's `crate::ui::{DISPLAY_COLS, DISPLAY_ROWS}` — pinned by the asserts

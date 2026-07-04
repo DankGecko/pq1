@@ -774,7 +774,7 @@ button-test = ["stm32u585", "mock-se", "gpio-buttons"]  # Flash + run GPIO butto
 # NEVER ship — registered in the production-build `compile_error!`
 # fence in `secure/src/nsc/mod.rs` alongside `debug-log` / `e2e-test`
 # / `mock-se` / `otp-hardcoded-master-key` / `ui-capture`.
-erc7730-dev-unattested = []
+erc7730-dev-unattested = ["pqsigner-erc7730/erc7730-dev-unattested"]
 
 [build-dependencies]
 # Decodes the vendored `assets/font_5x8.png` (embedded-graphics' FONT_5X8

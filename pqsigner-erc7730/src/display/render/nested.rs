@@ -1,7 +1,7 @@
 //! Device-side glue for the nested-EIP-712 struct renderer (Phase 5).
 //!
 //! The PURE, keccak-free, Kani-proven half of the descent lives in
-//! `pqsigner_erc7730::render::nested` (payload parse, DFS cursor, address
+//! `crate::render::nested` (payload parse, DFS cursor, address
 //! coverage, local-ordinal bounds). This module owns the two things that
 //! cannot: the keccak binding primitive and — in Commit D — the recursion
 //! driver that ties the parser + binding + sub-field rendering together and

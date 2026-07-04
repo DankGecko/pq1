@@ -29,71 +29,16 @@
 //! builds, so it is documented in the report's "Coverage gaps" section
 //! and exercised by the firmware-side e2e harness instead.
 
-use crate::ui::confirm::Page;
-use crate::ui::{DISPLAY_COLS, DISPLAY_ROWS};
+// `Page`/`DISPLAY_COLS`/`DISPLAY_ROWS` are no longer used here — the mirrored
+// `Pages` was replaced by a re-export of the host `pqsigner_erc7730::display`
+// type, and the mounted renderers pull the constants from `crate::ui` directly.
 
-/// Mirrors the production `tx::display::MAX_PAGES`. Pinned by the
-/// `negative_max_pages_matches_production_constant` test. (22 → 24 with the
-/// multiSend clear-sign feature; 24 → 27 with the Safe gas-refund
-/// worst-case magnitude page + the Safe/CoW gas-fee splice; 27 → 28 with the
-/// Safe `safeTxGas` page — see the production doc comment.)
-pub const MAX_PAGES: usize = 28;
-
-/// Mirrors the production `tx::display::Pages`. Fields and methods kept
-/// `pub` so the included submodules can construct and mutate them via
-/// `super::Pages`; the production type uses `pub(super)` because the
-/// production parent scope (`crate::tx::display`) re-exports through
-/// the dispatcher.
-pub struct Pages {
-    pub buf: [Page; MAX_PAGES],
-    pub len: usize,
-}
-
-impl Pages {
-    pub fn as_slice(&self) -> &[Page] {
-        &self.buf[..self.len]
-    }
-
-    pub fn empty_with_len(len: usize) -> Self {
-        assert!(len <= MAX_PAGES, "Pages::empty_with_len: len > MAX_PAGES");
-        Pages {
-            buf: [[[b' '; DISPLAY_COLS]; DISPLAY_ROWS]; MAX_PAGES],
-            len,
-        }
-    }
-
-    pub fn row_mut(&mut self, page: usize, row: usize) -> &mut [u8; DISPLAY_COLS] {
-        assert!(page < self.len);
-        assert!(row < DISPLAY_ROWS);
-        &mut self.buf[page][row]
-    }
-
-    pub fn with_len(len: usize) -> Self {
-        Self::empty_with_len(len)
-    }
-
-    /// Mirrors the production `Pages::push_blank` (see
-    /// `tx/display/mod.rs:144`). Required for the test-mounted
-    /// `erc7730/` renderer which grows its page buffer dynamically.
-    pub fn push_blank(&mut self) -> Result<usize, ()> {
-        if self.len >= MAX_PAGES {
-            return Err(());
-        }
-        self.buf[self.len] = [[b' '; DISPLAY_COLS]; DISPLAY_ROWS];
-        let idx = self.len;
-        self.len += 1;
-        Ok(idx)
-    }
-
-    /// Mirrors the production `Pages::page_mut` (see
-    /// `tx/display/mod.rs:127`). Required for renderers that need to
-    /// access two rows of the same page simultaneously via
-    /// `split_at_mut`.
-    pub fn page_mut(&mut self, page: usize) -> &mut [[u8; DISPLAY_COLS]; DISPLAY_ROWS] {
-        assert!(page < self.len);
-        &mut self.buf[page]
-    }
-}
+// `Pages`/`MAX_PAGES` moved to the host crate (`pqsigner_erc7730::display`) so
+// the ERC-7730 render dispatch is host-linked; re-export them here (instead of
+// mirroring) so this scaffold, the still-mounted secure renderers, and the host
+// render all share ONE `Pages` type. The `negative_max_pages_matches_production_
+// constant` test pins the literal against the host source.
+pub use pqsigner_erc7730::display::{Pages, MAX_PAGES};
 
 /// **te-2 (Trezor-port) — canonical golden hash over a rendered `Pages`
 /// grid.**
@@ -165,8 +110,11 @@ pub mod typed_call;
 // `render_erc7730_pages` / `render_erc7730_eip712_pages` pipelines and
 // assert the resulting OLED rows byte-for-byte against the strings a
 // user would actually see on the device.
-#[path = "../tx/display/erc7730/mod.rs"]
-pub mod erc7730;
+// The ERC-7730 render moved to the host crate; re-export it (instead of
+// `#[path]`-mounting) so `erc7730_render_pure_tests.rs`'s
+// `super::erc7730::render_erc7730_pages` drives the same code the device runs,
+// over the shared host `Pages`.
+pub use pqsigner_erc7730::display::render as erc7730;
 
 #[path = "../tx/display/erc8213.rs"]
 pub mod erc8213;
