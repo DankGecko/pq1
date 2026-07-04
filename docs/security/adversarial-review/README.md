@@ -35,6 +35,10 @@ Two playbooks are **cross-cutting lenses** rather than single subsystems, and bo
 - **Part C — the master prompt.** A copy-paste brief that tasks a fresh agent to walk every catalog mode against a scoped surface, demands a **falsifiable PoC per finding** (no PoC ⇒ "suspicion, unverified"), and requires a **mandatory honest residual** (what survived, what wasn't looked at, and whether the pass *executed* the checkers or only read source).
 - **Part D — cadence + honest boundary.** When to run each layer, the one-line gut check, and an explicit statement of what the playbook *cannot* tell you (the boundary — stated on purpose, because an unstated boundary is itself a coverage gap).
 
+## Where findings go — [`findings/`](./findings/README.md)
+
+**Every pass files its findings as a dated report in [`findings/`](./findings/README.md)** (from [`findings/TEMPLATE.md`](./findings/TEMPLATE.md)), so they are all in one catalogued place. Each report has a frontmatter `status:` and **each finding carries its own `Status:`** (`🔲 OPEN` → `✅ FIXED` / `☑️ ACCEPTED` / `🚫 INVALID` / `⏸ DEFERRED`), so working through a list is unmistakable at a glance — `grep -rn 'Status: 🔲 OPEN' findings/` lists everything still open. The [`findings/README.md`](./findings/README.md) holds the catalogue table + the status lifecycle; `docs/work-todo.md` stays the *action list*, `findings/` is the *review record* — cross-link them. Every playbook's Part-C master prompt instructs the agent to write here.
+
 ## Running a pass
 
 The framework-agnostic kit at [`contracts/verification/adversarial-review/`](../../../contracts/verification/adversarial-review/README.md) drives the swarm fan-out backend-agnostically (`run_review.py --backend {claude,codex,generic}`, `--reviewers N --quorum M`). It was built for the FV surface; add a per-surface angle to its `protocol.json` mirroring the existing `kani-decoder-vacuity` angle — the persona (`PROMPT.md`) and cross-vote machinery are shared; only the catalog + target files change per surface.

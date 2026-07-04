@@ -86,6 +86,17 @@ RULES:
   - For each finding: TZ-mode, file:line, PoC, disposition, severity, proposed fix
     (flag if it would regress a Kani proof, break the typestate, or weaken a sentinel).
 
+OUTPUT — file findings so they can be catalogued + worked through (see
+docs/security/adversarial-review/findings/README.md):
+  Write a dated report to docs/security/adversarial-review/findings/<surface>-<YYYY-MM-DD>.md
+  from findings/TEMPLATE.md — everything below (findings + the honest residual) goes IN it.
+  Report frontmatter `status: open`; EACH finding gets its own `Status:` line (start 🔲 OPEN)
+  + a falsifiable PoC. Add one row to the Catalogue table in findings/README.md. As findings
+  are worked through, whoever handles each flips its `Status:` (✅ FIXED / ☑️ ACCEPTED /
+  🚫 INVALID / ⏸ DEFERRED) + a Resolution (commit+date or why), and sets the report
+  `status: resolved` once none remain OPEN. work-todo.md stays the action list; findings/ is
+  the review record — cross-link them.
+
 MANDATORY HONEST RESIDUAL (the run is INVALID without it):
   1. "What I tried to break and COULDN'T" — per entry point.
   2. "What I did NOT look at" — handlers/veneers not walked, TZ-modes not exhausted,

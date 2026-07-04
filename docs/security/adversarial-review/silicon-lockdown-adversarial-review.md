@@ -101,6 +101,17 @@ RULES:
     severity, proposed fix — flagging if a "fix" would make an irreversible burn fire in a
     dev/test build (a brick risk).
 
+OUTPUT — file findings so they can be catalogued + worked through (see
+docs/security/adversarial-review/findings/README.md):
+  Write a dated report to docs/security/adversarial-review/findings/<surface>-<YYYY-MM-DD>.md
+  from findings/TEMPLATE.md — everything below (findings + the honest residual) goes IN it.
+  Report frontmatter `status: open`; EACH finding gets its own `Status:` line (start 🔲 OPEN)
+  + a falsifiable PoC. Add one row to the Catalogue table in findings/README.md. As findings
+  are worked through, whoever handles each flips its `Status:` (✅ FIXED / ☑️ ACCEPTED /
+  🚫 INVALID / ⏸ DEFERRED) + a Resolution (commit+date or why), and sets the report
+  `status: resolved` once none remain OPEN. work-todo.md stays the action list; findings/ is
+  the review record — cross-link them.
+
 MANDATORY HONEST RESIDUAL (the run is INVALID without it):
   1. "What I tried to break and COULDN'T" — the layers whose enforcement/ordering held.
   2. "What I did NOT look at" — layers not walked, the on-silicon burn state (bench-only).
