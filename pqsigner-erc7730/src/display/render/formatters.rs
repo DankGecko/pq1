@@ -2166,9 +2166,11 @@ mod faithless_formatter_fixed {
         )
         .expect("renders");
         // Full address shown: write_addr_full_or_name paints "0x" + hex on r1.
+        // (Case-insensitive: the hex is EIP-55 checksummed — its casing is
+        // verified by `eip55_tests`; here we only assert the operand is shown.)
         assert_eq!(&pages.buf[0][1][..2], b"0x");
-        assert_eq!(pages.buf[0][1][2], b'a', "first nibble of 0xAB");
-        assert_eq!(pages.buf[0][1][3], b'b');
+        assert_eq!(pages.buf[0][1][2].to_ascii_lowercase(), b'a', "first nibble of 0xAB");
+        assert_eq!(pages.buf[0][1][3].to_ascii_lowercase(), b'b');
         // The pre-fix hid the operand behind this literal.
         assert_ne!(&pages.buf[0][1][..15], b"(unknown token)");
     }

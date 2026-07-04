@@ -18,6 +18,7 @@
 use pqsigner_tx::erc20::bundle::Erc20Metadata;
 use pqsigner_tx::erc20::calldata::Erc20Call;
 use pqsigner_tx_core::eip1559::U256;
+use pqsigner_tx_core::hash::keccak256;
 use super::DISPLAY_COLS;
 
 // ---------------------------------------------------------------------------
@@ -305,6 +306,32 @@ pub fn write_amount_single_or_two_rows(
 /// Showing the full address eliminates the old collision window the
 /// truncated 7+8 hex layout exposed (an attacker could brute-force a
 /// 5-byte middle to make a hostile address look identical on screen).
+/// EIP-55 mixed-case hex of a 20-byte address — 40 ASCII chars, no `0x`.
+///
+/// This is the canonical display form everywhere else (Etherscan, wallets,
+/// dapps), so the device address is directly comparable char-for-char, and the
+/// casing carries EIP-55's own single-character transposition check. The bytes
+/// are unchanged — casing only — so there is NO WYSIWYS change, just a more
+/// verifiable rendering. Uppercases hex letter `i` iff nibble `i` of
+/// `keccak256(lowercase_ascii_hex)` is ≥ 8 (digits are never cased).
+fn eip55_hex(addr: &[u8; 20]) -> [u8; 40] {
+    let mut hex = [0u8; 40];
+    for (i, &b) in addr.iter().enumerate() {
+        hex[i * 2] = hex_nibble(b >> 4);
+        hex[i * 2 + 1] = hex_nibble(b & 0x0f);
+    }
+    let hash = keccak256(&hex);
+    for i in 0..40 {
+        if hex[i].is_ascii_alphabetic() {
+            let nibble = if i % 2 == 0 { hash[i / 2] >> 4 } else { hash[i / 2] & 0x0f };
+            if nibble >= 8 {
+                hex[i] = hex[i].to_ascii_uppercase();
+            }
+        }
+    }
+    hex
+}
+
 pub fn write_addr_full(
     row1: &mut [u8; DISPLAY_COLS],
     row2: &mut [u8; DISPLAY_COLS],
@@ -315,25 +342,15 @@ pub fn write_addr_full(
     *row2 = [b' '; DISPLAY_COLS];
     *row3 = [b' '; DISPLAY_COLS];
 
-    // Row 1: "0x" + bytes 0..7
+    let hex = eip55_hex(addr);
+    // Row 1: "0x" + bytes 0..7  (2 + 14 = 16 cols)
     row1[0] = b'0';
     row1[1] = b'x';
-    for i in 0..7 {
-        row1[2 + i * 2] = hex_nibble(addr[i] >> 4);
-        row1[2 + i * 2 + 1] = hex_nibble(addr[i] & 0x0f);
-    }
-    // Row 2: bytes 7..15
-    for i in 0..8 {
-        let b = addr[7 + i];
-        row2[i * 2] = hex_nibble(b >> 4);
-        row2[i * 2 + 1] = hex_nibble(b & 0x0f);
-    }
+    row1[2..16].copy_from_slice(&hex[0..14]);
+    // Row 2: bytes 7..15  (16 cols)
+    row2[..16].copy_from_slice(&hex[14..30]);
     // Row 3: bytes 15..20 — 5 bytes = 10 hex chars, padded to 16
-    for i in 0..5 {
-        let b = addr[15 + i];
-        row3[i * 2] = hex_nibble(b >> 4);
-        row3[i * 2 + 1] = hex_nibble(b & 0x0f);
-    }
+    row3[..10].copy_from_slice(&hex[30..40]);
 }
 
 /// Like [`write_addr_full`] but first consults the merkle-verified
@@ -380,19 +397,15 @@ pub fn write_addr_full_or_name(
         // Row 3: truncated hex for disambiguation — first 3 bytes, a TWO-dot
         // ellipsis, last 3 bytes: "0x112233..AABBCC" = 2+6+2+6 = 16 cols (fits
         // exactly). A single dot read like a typo inside the hex (review 4.13).
+        // EIP-55 casing is computed over the FULL address (never the truncated
+        // string), then the shown slices (chars 0..6 and 34..40) are copied out.
+        let hex = eip55_hex(addr);
         row3[0] = b'0';
         row3[1] = b'x';
-        for i in 0..3 {
-            row3[2 + i * 2] = hex_nibble(addr[i] >> 4);
-            row3[2 + i * 2 + 1] = hex_nibble(addr[i] & 0x0f);
-        }
+        row3[2..8].copy_from_slice(&hex[0..6]);
         row3[8] = b'.';
         row3[9] = b'.';
-        for i in 0..3 {
-            let b = addr[17 + i];
-            row3[10 + i * 2] = hex_nibble(b >> 4);
-            row3[10 + i * 2 + 1] = hex_nibble(b & 0x0f);
-        }
+        row3[10..16].copy_from_slice(&hex[34..40]);
     } else {
         write_addr_full(row1, row2, row3, addr);
     }
@@ -904,6 +917,50 @@ fn write_amount_two_rows_bytes(
             } else {
                 AmountFit::Overflow
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod eip55_tests {
+    use super::eip55_hex;
+
+    /// The four canonical EIP-55 reference vectors (from the EIP text).
+    #[test]
+    fn eip55_matches_reference_vectors() {
+        let cases: &[([u8; 20], &[u8; 40])] = &[
+            (
+                [
+                    0x5a, 0xae, 0xb6, 0x05, 0x3f, 0x3e, 0x94, 0xc9, 0xb9, 0xa0, 0x9f, 0x33, 0x66,
+                    0x94, 0x35, 0xe7, 0xef, 0x1b, 0xea, 0xed,
+                ],
+                b"5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
+            ),
+            (
+                [
+                    0xfb, 0x69, 0x16, 0x09, 0x5c, 0xa1, 0xdf, 0x60, 0xbb, 0x79, 0xce, 0x92, 0xce,
+                    0x3e, 0xa7, 0x4c, 0x37, 0xc5, 0xd3, 0x59,
+                ],
+                b"fB6916095ca1df60bB79Ce92cE3Ea74c37c5d359",
+            ),
+            (
+                [
+                    0xdb, 0xf0, 0x3b, 0x40, 0x7c, 0x01, 0xe7, 0xcd, 0x3c, 0xbe, 0xa9, 0x95, 0x09,
+                    0xd9, 0x3f, 0x8d, 0xdd, 0xc8, 0xc6, 0xfb,
+                ],
+                b"dbF03B407c01E7cD3CBea99509d93f8DDDC8C6FB",
+            ),
+            (
+                [
+                    0xd1, 0x22, 0x0a, 0x0c, 0xf4, 0x7c, 0x7b, 0x9b, 0xe7, 0xa2, 0xe6, 0xba, 0x89,
+                    0xf4, 0x29, 0x76, 0x2e, 0x7b, 0x9a, 0xdb,
+                ],
+                b"D1220A0cf47c7B9Be7A2E6BA89F429762e7b9aDb",
+            ),
+        ];
+        for (addr, want) in cases {
+            let got = eip55_hex(addr);
+            assert_eq!(&got, *want, "EIP-55 mismatch for {want:?}");
         }
     }
 }
