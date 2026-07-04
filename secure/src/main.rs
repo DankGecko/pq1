@@ -3766,8 +3766,11 @@ fn SysTick() {
 
     // Re-randomise the consumption-mask PWM duty so the mask-pin power
     // signature stays uncorrelated with crypto work happening elsewhere
-    // on the die. Cost: 2 RNG byte reads + 1 modulo + 1 MMIO write per
-    // tick. Compiles to a no-op without the `consumption-mask` feature.
+    // on the die. Cost per tick: 1 xorshift step + 1 modulo + 1 MMIO write
+    // (NO per-tick RNG read). Every ~1024 ticks it additionally draws a
+    // 4-byte platform-TRNG reseed (sca-1) to expire a recovered PRNG state
+    // — fail-open, register-only (no SE I2C from the ISR). Compiles to a
+    // no-op without the `consumption-mask` feature.
     #[cfg(all(feature = "stm32u585", feature = "consumption-mask"))]
     hw::consumption_mask::randomize();
 
