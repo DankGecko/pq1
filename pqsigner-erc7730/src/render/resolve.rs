@@ -802,4 +802,204 @@ mod kani_harness {
         let addr = resolve_token_address(&prog, &body).expect("well-formed ⇒ accepted");
         assert!(addr == [0xABu8; 20]);
     }
+
+    // ----------------------------------------------------------------------
+    // DYNAMIC-EXTRACTION VALUE-SOUNDNESS (2026-07-04). The tok_* panic-free
+    // harnesses above prove the slice/index extraction paths never crash on a
+    // hostile body — but not that an ACCEPTED extraction returns the RIGHT
+    // bytes. These upgrade the remaining tokenPath shapes (packed-`bytes`
+    // slice `[s:s+20]` / `[-20:]`, `address[]` element `.[i]` / `.[-1]`) plus
+    // the two resolve_structured arithmetic laws (slot accumulation; region-
+    // chained double descent) from panic-free to ∀ byte-binding, using the
+    // same independent oracles (`read_offset_word`/`read_length_word` — the
+    // hardened readers `walk` uses) re-deriving every position from scratch.
+
+    /// ∀ body, ∀ start: if `params.path.[s:s+20]` (slot-1 dynamic `bytes`,
+    /// slice-from-start) accepts, the address is EXACTLY
+    /// `body[off+32+s .. off+32+s+20]` where `off` is the oracle-read offset
+    /// word at slot 1, AND the slice lies inside the oracle-read declared
+    /// length. A start/base drift or a length-gate bypass violates this.
+    #[kani::proof]
+    #[kani::unwind(34)]
+    fn tok_slice_start_byte_binds() {
+        let s: u16 = kani::any();
+        let prog = [FI, 0, 1, FO, SL, (s >> 8) as u8, s as u8, 0x00, 0x14, 0];
+        let body: [u8; KBODY] = kani::any();
+        if let Ok(addr) = resolve_token_address(&prog, &body) {
+            let off = read_offset_word(&body[32..64])
+                .expect("accepted ⇒ the slot-1 offset word was valid");
+            // The dynamic leaf: length word at body[off..off+32], data at off+32.
+            let len = read_length_word(&body[off..off + 32])
+                .expect("accepted ⇒ the leaf length word was valid") as usize;
+            let st = s as usize;
+            assert!(st + ADDR_LEN <= len); // inside the declared data
+            assert!(addr[..] == body[off + 32 + st..off + 32 + st + ADDR_LEN]);
+        }
+    }
+
+    /// ∀ body: if `params.path.[-20:]` (slice-from-end) accepts, the declared
+    /// length is ≥ 20 and the address is EXACTLY the LAST 20 data bytes
+    /// `body[off+32+len-20 .. off+32+len]`. A tail-anchor drift violates this.
+    #[kani::proof]
+    #[kani::unwind(34)]
+    fn tok_slice_from_end_byte_binds() {
+        let prog = [FI, 0, 1, FO, SL, 0, 0, 0x00, 0x14, 1];
+        let body: [u8; KBODY] = kani::any();
+        if let Ok(addr) = resolve_token_address(&prog, &body) {
+            let off = read_offset_word(&body[32..64])
+                .expect("accepted ⇒ the slot-1 offset word was valid");
+            // The dynamic leaf: length word at body[off..off+32], data at off+32.
+            let len = read_length_word(&body[off..off + 32])
+                .expect("accepted ⇒ the leaf length word was valid") as usize;
+            assert!(len >= ADDR_LEN);
+            assert!(addr[..] == body[off + 32 + len - ADDR_LEN..off + 32 + len]);
+        }
+    }
+
+    /// Non-vacuity witness for BOTH slice directions: one concrete body where
+    /// `[4:24]` and `[-20:]` select the same distinctively-placed 20 bytes.
+    #[kani::proof]
+    #[kani::unwind(34)]
+    fn tok_slice_accepts_concrete() {
+        let mut body = [0u8; KBODY];
+        body[63] = 64; // slot-1 offset word -> dynamic leaf at 64
+        body[95] = 24; // length word = 24; data = body[96..120]
+        let mut i = 100usize; // data[4..24] = body[100..120]
+        while i < 120 {
+            body[i] = 0xCD;
+            i += 1;
+        }
+        let start = [FI, 0, 1, FO, SL, 0, 4, 0x00, 0x14, 0];
+        let addr = resolve_token_address(&start, &body).expect("well-formed ⇒ accepted");
+        assert!(addr == [0xCDu8; 20]);
+        let tail = [FI, 0, 1, FO, SL, 0, 0, 0x00, 0x14, 1]; // len-20 = 4 -> same bytes
+        let addr2 = resolve_token_address(&tail, &body).expect("well-formed ⇒ accepted");
+        assert!(addr2 == [0xCDu8; 20]);
+    }
+
+    /// ∀ body, ∀ i: if `path.[i]` (slot-1 dynamic `address[]` element) accepts,
+    /// then `i` is strictly inside the oracle-read count AND the address is
+    /// EXACTLY the low 20 bytes of element word `i`:
+    /// `body[off+32+32i+12 .. off+32+32(i+1)]`. An index off-by-one or a
+    /// stride/base drift violates this.
+    #[kani::proof]
+    #[kani::unwind(34)]
+    fn tok_array_index_byte_binds() {
+        let i: u16 = kani::any();
+        let prog = [FI, 0, 1, FO, IX, (i >> 8) as u8, i as u8];
+        let body: [u8; KBODY] = kani::any();
+        if let Ok(addr) = resolve_token_address(&prog, &body) {
+            let off = read_offset_word(&body[32..64])
+                .expect("accepted ⇒ the slot-1 offset word was valid");
+            let count = read_length_word(&body[off..off + 32])
+                .expect("accepted ⇒ the count word was valid") as usize;
+            let idx = i as usize;
+            assert!(idx < count); // companion-claimed count actually gates
+            let lo = off + 32 + 32 * idx + 12;
+            assert!(addr[..] == body[lo..lo + ADDR_LEN]);
+        }
+    }
+
+    /// ∀ body: if `path.[-1]` accepts, the array is non-empty and the address
+    /// is EXACTLY the low 20 bytes of element `count-1`.
+    #[kani::proof]
+    #[kani::unwind(34)]
+    fn tok_array_last_byte_binds() {
+        let prog = [FI, 0, 1, FO, LA];
+        let body: [u8; KBODY] = kani::any();
+        if let Ok(addr) = resolve_token_address(&prog, &body) {
+            let off = read_offset_word(&body[32..64])
+                .expect("accepted ⇒ the slot-1 offset word was valid");
+            let count = read_length_word(&body[off..off + 32])
+                .expect("accepted ⇒ the count word was valid") as usize;
+            assert!(count >= 1);
+            let lo = off + 32 + 32 * (count - 1) + 12;
+            assert!(addr[..] == body[lo..lo + ADDR_LEN]);
+        }
+    }
+
+    /// Non-vacuity witness for BOTH element selectors: a concrete 1-element
+    /// array where `.[0]` and `.[-1]` both bind to the placed address.
+    #[kani::proof]
+    #[kani::unwind(34)]
+    fn tok_array_elem_accepts_concrete() {
+        let mut body = [0u8; KBODY];
+        body[63] = 64; // slot-1 offset word -> array region at 64
+        body[95] = 1; // count word = 1; element 0 at body[96..128]
+        let mut i = 108usize; // low-20 of element 0 = body[108..128]
+        while i < 128 {
+            body[i] = 0xEF;
+            i += 1;
+        }
+        let at0 = [FI, 0, 1, FO, IX, 0, 0];
+        let addr = resolve_token_address(&at0, &body).expect("well-formed ⇒ accepted");
+        assert!(addr == [0xEFu8; 20]);
+        let last = [FI, 0, 1, FO, LA];
+        let addr2 = resolve_token_address(&last, &body).expect("well-formed ⇒ accepted");
+        assert!(addr2 == [0xEFu8; 20]);
+    }
+
+    // RESOLVER ARITHMETIC LAWS ∀ — the two remaining value-unproven
+    // resolve_structured behaviours: slot ACCUMULATION (the walker-slot-
+    // confusion class, host-tested only until now) and region-CHAINED double
+    // descent (C2/C3 dynamic-tuple-member — offsets are relative to the
+    // ENCLOSING region, and a descent must reset the slot).
+
+    /// ∀ body, ∀ s1 s2: an accepted `[FieldIdx(s1), FieldIdx(s2)]` static leaf
+    /// is EXACTLY `Word(32*(s1+s2))` — slot accumulation is exact addition,
+    /// with no drift, no reset, no double-count, for EVERY slot pair (not just
+    /// the concretely-tested ones).
+    #[kani::proof]
+    #[kani::unwind(34)]
+    fn resolve_structured_slot_sum_binds() {
+        const BODY_LEN: usize = 160; // 5 words -> accepts s1+s2 <= 4
+        let s1: u16 = kani::any();
+        let s2: u16 = kani::any();
+        let prog = [FI, (s1 >> 8) as u8, s1 as u8, FI, (s2 >> 8) as u8, s2 as u8];
+        let body: [u8; BODY_LEN] = kani::any();
+        if let Ok(leaf) = resolve_structured(&prog, &body) {
+            // A FieldIdx-terminated program can only yield a static Word.
+            assert!(leaf == Leaf::Word(32 * (s1 as usize + s2 as usize)));
+        }
+    }
+
+    /// ∀ body: an accepted two-hop descent `[FieldIdx(0), FollowOffset,
+    /// FieldIdx(1), FollowOffset]` (dynamic tuple at slot 0, dynamic member at
+    /// tuple-slot 1 — the C2/C3 shape) lands at EXACTLY `off1 + off2`, where
+    /// `off1` is the oracle-read offset word at `body[0..32]` and `off2` the
+    /// one at `body[off1+32 .. off1+64]` — i.e. the inner offset is applied
+    /// relative to the ENCLOSING region base (off1), not absolutely, not
+    /// relative to the word it was read from, and the slot reset on descent.
+    #[kani::proof]
+    #[kani::unwind(34)]
+    fn resolve_structured_two_hop_region_chain_binds() {
+        const BODY_LEN: usize = 160;
+        let prog = [FI, 0, 0, FO, FI, 0, 1, FO];
+        let body: [u8; BODY_LEN] = kani::any();
+        if let Ok(Leaf::Dynamic(pos)) = resolve_structured(&prog, &body) {
+            let off1 = read_offset_word(&body[0..32])
+                .expect("accepted ⇒ the outer offset word was valid");
+            let off2 = read_offset_word(&body[off1 + 32..off1 + 64])
+                .expect("accepted ⇒ the inner offset word was valid");
+            assert!(pos == off1 + off2);
+            assert!(pos + 32 <= body.len());
+        }
+    }
+
+    /// Non-vacuity witness for the two arithmetic laws: concrete bodies where
+    /// the slot-sum and the chained descent are accepted at the expected spots.
+    #[kani::proof]
+    #[kani::unwind(34)]
+    fn resolve_structured_arithmetic_accepts_concrete() {
+        // slot sum: [FieldIdx(1), FieldIdx(2)] -> Word(96).
+        let sum_prog = [FI, 0, 1, FI, 0, 2];
+        let body = [0u8; 160];
+        assert!(resolve_structured(&sum_prog, &body) == Ok(Leaf::Word(96)));
+        // two-hop: off1 = 32 (word 0), off2 = 64 (word at 64..96) -> pos 96.
+        let hop_prog = [FI, 0, 0, FO, FI, 0, 1, FO];
+        let mut body2 = [0u8; 160];
+        body2[31] = 32; // outer offset word
+        body2[95] = 64; // inner offset word at off1+32 = 64
+        assert!(resolve_structured(&hop_prog, &body2) == Ok(Leaf::Dynamic(96)));
+    }
 }

@@ -253,6 +253,50 @@
       "replace": "distinct_live < MAX_DISTINCT_SLOTS",
       "expect": "kani_fails",
       "note": "[work-todo §12e: page-123 exhaustion brick, the found HIGH] Drop the already_present short-circuit from may_create_distinct_slot -> an EXISTING slot is now refused once distinct_live reaches the cap, i.e. a spray of distinct keys could wedge a live slot. distinct_slot_policy_graceful (asserts may_create_distinct_slot(any, true) is ALWAYS true) MUST break. Verified 2026-07-03 by hand (verify_mutations.sh): mutation -> VERIFICATION:- FAILED; unmutated -> SUCCESSFUL. Pins the VULN-offchain-sync-page123-exhaustion-brick.md defence: at the cap, new-slot creation fails gracefully while existing slots keep signing."
+    },
+    {
+      "id": "tok_array_idx_off_by_one",
+      "tier": "default",
+      "crate": "pqsigner-erc7730",
+      "harness": "tok_array_index_byte_binds",
+      "file": "pqsigner-erc7730/src/render/resolve.rs",
+      "find": "if idx >= count {",
+      "replace": "if idx > count {",
+      "expect": "kani_fails",
+      "note": "array_elem_address off-by-one lets idx == count through (reads one word past the last element). The panic-free harness stays green (the read is still bounds-checked); the VALUE harness's `idx < count` oracle assertion MUST redden. Verified 2026-07-04 by hand: mutation -> VERIFICATION:- FAILED; unmutated -> SUCCESSFUL."
+    },
+    {
+      "id": "array_count_underreport",
+      "tier": "default",
+      "crate": "pqsigner-erc7730",
+      "harness": "resolve_array_count_binds_to_length_word",
+      "file": "pqsigner-erc7730/src/render/array.rs",
+      "find": "Ok((len_end, count))",
+      "replace": "Ok((len_end, count.saturating_sub(1)))",
+      "expect": "kani_fails",
+      "note": "under-report the element count by one (the renderer would silently HIDE the last element from review). The count == read_length_word oracle binding MUST redden. Verified 2026-07-04 by hand: mutation -> VERIFICATION:- FAILED; unmutated -> SUCCESSFUL."
+    },
+    {
+      "id": "tok_slice_tail_anchor_drift",
+      "tier": "full",
+      "crate": "pqsigner-erc7730",
+      "harness": "tok_slice_from_end_byte_binds",
+      "file": "pqsigner-erc7730/src/render/resolve.rs",
+      "find": "dl.checked_sub(ADDR_LEN)",
+      "replace": "dl.checked_sub(ADDR_LEN + 1)",
+      "expect": "kani_fails",
+      "note": "[-20:] tail anchor drifts one byte early (data[len-21..len-1]) -- still in-bounds, so panic-free stays green; the byte-binding `addr == data[len-20..len]` MUST redden. Verified 2026-07-04 by hand: mutation -> VERIFICATION:- FAILED; unmutated -> SUCCESSFUL."
+    },
+    {
+      "id": "resolve_slot_accum_drift",
+      "tier": "full",
+      "crate": "pqsigner-erc7730",
+      "harness": "resolve_structured_slot_sum_binds",
+      "file": "pqsigner-erc7730/src/render/resolve.rs",
+      "find": ".checked_add(u16::from_be_bytes([a[0], a[1]]) as usize)",
+      "replace": ".checked_add(u16::from_be_bytes([a[0], a[1]]) as usize + 1)",
+      "expect": "kani_fails",
+      "note": "FieldIdx slot accumulation drifts by +1 per op (the walker-slot-confusion class). Resolved leaf lands one word off; `Word(32*(s1+s2))` MUST redden. Verified 2026-07-04 by hand: mutation -> VERIFICATION:- FAILED; unmutated -> SUCCESSFUL."
     }
   ]
 }
