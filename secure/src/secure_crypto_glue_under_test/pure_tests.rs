@@ -1217,6 +1217,38 @@ fn positive_crypto_zeroizes_opt_rand_on_every_return() {
 }
 
 #[test]
+fn positive_crypto_relocks_on_confirmed_fault_only() {
+    // fi-2 (Trezor-port): the THREE confirmed-fault branches (ct_eq mismatch,
+    // verify-before-release mismatch, CFI-counter mismatch) must escalate past
+    // "reject this sign" to a full RELOCK (`zeroize_sensitive_state` wipes
+    // master + slot secrets and clears `pin_verified`). A glitch during signing
+    // is an active attack; wiping forces a fresh PIN before the next sign.
+    let relocks = CRYPTO_SRC
+        .matches("crate::nsc::zeroize_sensitive_state();")
+        .count();
+    assert_eq!(
+        relocks, 3,
+        "fi-2: exactly 3 confirmed-fault relocks (ct_eq, verify-gate, CFI); found {relocks}",
+    );
+    // Each is firmware-only (the host test scaffold must not couple to nsc).
+    assert!(
+        CRYPTO_SRC.contains("#[cfg(not(test))]\n        crate::nsc::zeroize_sensitive_state();"),
+        "fi-2: the confirmed-fault relock must be #[cfg(not(test))]-gated",
+    );
+    // DoS-EXCLUSION invariant: the relock must NEVER appear in the pre-sign
+    // rng-fail / rate-limit reject paths (relocking on a transient RNG error or
+    // a rate-limit would be a self-inflicted denial of service). Assert no
+    // relock exists before the first `sign_with_shuffle` call.
+    let first_sign = CRYPTO_SRC
+        .find("let sig_a = sk.sign_with_shuffle")
+        .expect("sig_a computed");
+    assert!(
+        !CRYPTO_SRC[..first_sign].contains("zeroize_sensitive_state"),
+        "fi-2: relock must NOT be in the pre-sign rng-fail/rate-limit rejects (DoS)",
+    );
+}
+
+#[test]
 fn positive_crypto_cfi_counter_has_seven_distinct_steps() {
     // F-18: 7-step CFI counter with distinct 32-bit magics. A
     // glitch that skips any one bump leaves the counter short by

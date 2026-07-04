@@ -216,6 +216,19 @@ pub fn c10_sign_verified_with_progress(
     // **2-gate chain**; do not remove the verify on the assumption
     // double-compute makes it redundant.
     if !bool::from(sig_a[..].ct_eq(&sig_b[..])) {
+        // fi-2 (Trezor-port): a ct_eq mismatch between the two double-compute
+        // passes is a CONFIRMED fault — identical inputs + byte-invariant
+        // shuffles mean the two sigs MUST be equal, so a divergence is a glitch
+        // corrupting one pass (the Genêt grafting class). Escalate past "reject
+        // this one sign" to a full RELOCK: wipe the in-SRAM master + slot
+        // secrets and clear `pin_verified` (`zeroize_sensitive_state`), so a
+        // glitching attacker can't immediately retry against a still-live key —
+        // the next sign requires a fresh PIN. RELOCK, not halt (recoverable).
+        // CONFIRMED-fault sites ONLY (this ct_eq, the verify gate, the CFI
+        // check) — NEVER the rng-fail / rate-limit / parse rejects above, which
+        // would be a self-inflicted DoS.
+        #[cfg(not(test))]
+        crate::nsc::zeroize_sensitive_state();
         opt_rand_buf.zeroize();
         crate::fi::zeroize_barrier();
         return Err(());
@@ -239,6 +252,10 @@ pub fn c10_sign_verified_with_progress(
     crate::fi::wait_random();
     let v = sphincs_c10::verify(sk.pk_seed(), sk.pk_root(), msg_hash, &sig_a);
     if crate::fi::check_true_into_sentinel(|| core::hint::black_box(v)) != crate::fi::OK_SENTINEL {
+        // fi-2: a released sig that fails verify-before-release is a confirmed
+        // fault → relock (see the ct_eq site above).
+        #[cfg(not(test))]
+        crate::nsc::zeroize_sensitive_state();
         opt_rand_buf.zeroize();
         crate::fi::zeroize_barrier();
         return Err(());
@@ -254,6 +271,10 @@ pub fn c10_sign_verified_with_progress(
     // distant sentinel idiom so a skip of the verify call itself
     // doesn't bypass.
     if cfi.check_into_sentinel(CFI_EXPECTED) != crate::fi::OK_SENTINEL {
+        // fi-2: a short CFI counter means a critical step was skipped by a
+        // glitch → confirmed fault → relock (see the ct_eq site above).
+        #[cfg(not(test))]
+        crate::nsc::zeroize_sensitive_state();
         opt_rand_buf.zeroize();
         crate::fi::zeroize_barrier();
         return Err(());
