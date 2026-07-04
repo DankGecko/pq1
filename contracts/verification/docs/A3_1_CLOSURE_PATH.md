@@ -390,6 +390,60 @@ with the climb lemmas as the loop-refinement engine.
     deliberate cited-TCB of the kind every verified contract carries.
   Read the log below as HISTORY, not current status.
 
+- **UPDATE 2026-07-04 — R1a's source↔AST leg is now KERNEL-CHECKED (the in-kernel
+  Yul parser landed).** The item the 2026-07-02 entry below called "the multi-week
+  in-kernel `parseYul = c10Program` proof" is done — sooner than estimated, because a
+  timing spike showed a fuel-based structural `List Char` parser kernel-`rfl`s over
+  the full 9,256-byte source in seconds (no `decide`, no `native_decide`, so nothing
+  new enters the axiom closure). Three new leaf modules in
+  `lean/SphincsCVerify/Interpreter/` (all imported by the root, so `verify-build`
+  covers them):
+  * **`YulParse.lean`** — a total, computable, fuel-based tokenizer + recursive-descent
+    parser over the Yul subset, targeting the EXISTING `Interpreter.Yul` AST. Same
+    mapping rules as the Python structural checker (`0x02`/out-len-32 pins on the
+    sha256 precompile shape, `0x20` pin on `return`, canonical-counting-`for` only,
+    `revert` args dropped, left-aligned 32-byte string-literal words), each with
+    fail-closed `#guard` negative controls. All recursion equation-compiler
+    STRUCTURAL (kernel-reducible; `WellFounded.fix` would hang the `rfl`).
+  * **`C10Source.lean`** — `c10Source` = the BYTE-EXACT `SPHINCsC10Asm.sol` L37-230
+    assembly interior (raw-string literal, generated from the file), plus
+    `c10ProgramFull` = the faithful parse target: `c10Program` with exactly the two
+    documented normalizations undone (N1 error-string `mstore`s restored, N2
+    `valid := …` as `.setv`), built from `take`/`drop` slices of `c10Program` pinned
+    by the kernel `rfl` `c10Program_decomp` so it cannot drift. An `#eval` diff
+    confirmed the parse differs from `c10Program` at EXACTLY top-level stmts 2 and
+    29 — **no third divergence** (the N1/N2 rules were and are the complete list).
+  * **`C10Parse.lean`** — the theorems: **`parse_c10 : parseYul c10Source = some
+    c10ProgramFull`** (kernel `rfl`, ~2.7 s under the lakefile's new
+    `--tstack=32768`, closure **NONE** — no axioms at all); the **elision bridge**
+    `execFrom_c10ProgramFull_eq` (`c10ProgramFull` verdict-equal to `c10Program` for
+    EVERY oracle/sig/env/mem — N1 via "a `.revert`-terminated gate body halt-reverts
+    regardless of the preceding `mstore`s", N2 via the `.letv`/`.setv` same-arm
+    identity; `execStmt`/`execList` are WF-compiled so the proof runs on equation
+    lemmas + `execList_append`, never `rfl`-on-`execList`); and the corollary
+    **`execC10Asm_eq_parsed_source`** — ANY successful parse of the pinned source
+    yields a program whose run equals `execC10Asm` on every input, chaining into
+    `execC10Asm_eq = Spec.verify`. Bridge + corollary closures exactly
+    `[propext, Classical.choice, Quot.sound]`.
+  **What this moves:** the R1a source↔AST leg is no longer "trust the Python parser +
+  its two normalization rules" — it is a kernel-checked theorem; the chain
+  `.sol source text → c10ProgramFull → execC10Asm → Spec.verify` is machine-checked
+  end to end. **The reviewed TCB element is now the Lean parser itself**
+  (`YulParse.lean`, ~200 lines of total functions) plus the byte-pin below. **R1b
+  (solc source → deployed bytecode) is UNTOUCHED** and remains the sole irreducible
+  R1 leg. **Wiring:** `make verify-parse-transcription` (byte-pin + lake build of
+  the three modules); the literal↔file identity is the pure-Python
+  `scripts/check_c10_source_pin.py` byte-pin (embedded `c10Source` == `sed -n
+  '37,230p'` of the `.sol`, fail-safe anchors on the `assembly {`/`}` lines,
+  `--write` regeneration) wired into `verify-transcription` → it runs in the
+  `a31-transcription.yml` CI job; **the LAKE proof itself stays a LOCAL gate** (CI
+  has no Lean toolchain — same standing as every other `verify-*` Lean gate). Note
+  the CI workflow's `paths:` filter was not extended (kept out of this change's
+  scope), so an edit touching ONLY `C10Source.lean` relies on the local gates /
+  `verify` bundle; any `.sol` edit still triggers the CI byte-pin. The Python
+  structural checker (2026-07-02 entry below) is KEPT as the CI mirror of the
+  AST-fidelity check — the two now cross-validate each other.
+
 - **UPDATE 2026-07-02 — R1a hand-transcription upgraded STATISTICAL → STRUCTURAL
   (the time-boxed "Yul-parser" bet).** `check_c10_transcription_ast.py` +
   `test_c10_transcription_ast_negative.py` (wired into `make verify-transcription` +

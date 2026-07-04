@@ -99,3 +99,28 @@ The cohesion note: `primitives`/`Pages` are *general* display substrate, not
 ERC-7730-specific; they live in `pqsigner-erc7730` to avoid a new workspace
 crate. If the display substrate grows, extracting a dedicated `pqsigner-display`
 crate (with `pqsigner-erc7730` depending on it) is the clean end state.
+
+**UPDATE 2026-07-04 — the move is DONE (M2 of the formatter-∀ track).** Steps
+1–4 landed as `d932d9ab` (`Pages`/`MAX_PAGES`/`ascii_str` →
+`pqsigner_erc7730::display`, fields widened `pub`) + `695c1e8b` (the five render
+files → `pqsigner_erc7730::display::render`; `secure/src/tx/display/erc7730/`
+is now a 3-entry re-export shim, `pick_sign_pages` stays secure-side and calls
+the host entry; `display_under_test` re-exports the host `Pages`/`render`
+instead of `#[path]`-mounting, so `erc7730_render_pure_tests` drives the exact
+code the device links), with the dispatch fuzz target repointed at the host
+`render_erc7730_pages` in `5533bb25`. Gates re-verified on `e510768e`
+(post-EIP-55 + label-truncation): all 3 golden-grid hashes byte-identical
+(erc7730/cowswap/safe), 59 erc7730 render tests + full secure host suite
+2065/0/1-ignored green, `pqsigner-erc7730` 133/0 green, device
+`cargo check --target thumbv8m` (ui-noop,mock-se) clean, `cargo kani
+-p pqsigner-erc7730 --only-codegen` clean. Two deliberate deviations from the
+step-4 wording: the `main.rs` `#[cfg(test)] mod ui` stub STAYS (its
+`DISPLAY_COLS`/`DISPLAY_ROWS`/`show_status` still feed the other mounted
+renderers + `nsc/trailer.rs`; only the now-dead `confirm::Page` alias and the
+PANICKING `ascii_str` mirror were deleted — the host crate carries the
+production `unwrap_or("?")` semantics), and `nested.rs` keeps a direct `sha3`
+dep (already in the workspace via `tx-core`) because `hash_struct_array`'s
+streaming keccak fold has no buffer to hand the one-shot
+`tx_core::hash::keccak256`. Next milestones: M3 Tier-P0 formatter ∀, M4
+amount-decision factoring (see `docs/work-todo.md`, the "ERC-7730 formatter-∀
+faithfulness" item).

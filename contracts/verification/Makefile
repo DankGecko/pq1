@@ -37,12 +37,17 @@ LAKE     ?= $(shell command -v lake 2>/dev/null || echo $$HOME/.elan/bin/lake)
 help: ## Show the runnable FV targets (those with a description)
 	@grep -hE '^[a-zA-Z0-9_.-]+:.*## ' $(MAKEFILE_LIST) | sort | awk -F':.*## ' '!seen[$$1]++ {printf "  \033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
-.PHONY: verify verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk verify-interp verify-transcription verify-independent-signer verify-storage-mutators verify-lean-proto-domain verify-fv-lints verify-lean4checker verify-kontrol verify-halmos verify-ledger-consistency verify-proof-mutation
+.PHONY: verify verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk verify-interp verify-transcription verify-parse-transcription verify-independent-signer verify-storage-mutators verify-lean-proto-domain verify-fv-lints verify-lean4checker verify-kontrol verify-halmos verify-ledger-consistency verify-proof-mutation
 
+# NOTE: verify-build (the `lake build` this bundle depends on) now also
+# kernel-checks the A3.1 in-kernel parse theorem + elision bridge (the root
+# module imports Interpreter/{YulParse,C10Source,C10Parse}); the byte-pin
+# below keeps the embedded c10Source literal honest against the .sol.
 verify: verify-build ## Default FV bundle: build + transcription + KAT + mutant-corpus
 	@python3 scripts/check_c10_transcription.py
 	@python3 scripts/check_c10_transcription_ast.py
 	@python3 scripts/test_c10_transcription_ast_negative.py
+	@python3 scripts/check_c10_source_pin.py
 	@python3 scripts/check_lean_proto_domain.py
 	@cd $(LEAN_DIR) && $(LAKE) exe verify-test-vectors
 	@cd $(LEAN_DIR) && $(LAKE) exe verify-mutant-corpus
@@ -191,10 +196,34 @@ verify-interp: ## A3.1 interpreter<->bytecode KAT+bulk replay
 # solc source->deployed-bytecode leg is untouched, and the parser + its 2 normalization rules
 # (error-string mstore elision; return-var init) are themselves the TCB. See
 # docs/A3_1_ADVERSARIAL_REVIEW_2026-06-18.md + docs/A3_1_CLOSURE_PATH.md §8.
-verify-transcription: ## A3.1 c10Program <-> .sol transcription checks (positional + structural)
+verify-transcription: ## A3.1 c10Program <-> .sol transcription checks (positional + structural + source byte-pin)
 	@python3 scripts/check_c10_transcription.py
 	@python3 scripts/check_c10_transcription_ast.py
 	@python3 scripts/test_c10_transcription_ast_negative.py
+	@python3 scripts/check_c10_source_pin.py
+
+# A3.1 R1a IN-KERNEL parser leg (2026-07-04). Lake-builds the Lean Yul-subset
+# parser (Interpreter/YulParse.lean), the pinned byte-exact source + faithful
+# parse target (Interpreter/C10Source.lean), and the kernel theorems
+# (Interpreter/C10Parse.lean):
+#   parse_c10                  : parseYul c10Source = some c10ProgramFull  (rfl, NO axioms)
+#   execFrom_c10ProgramFull_eq : the N1/N2 elision bridge (verdict-equal to c10Program
+#                                for every oracle/sig/env/mem)
+#   execC10Asm_eq_parsed_source: ANY successful parse of the pinned source runs as
+#                                execC10Asm — chaining into execC10Asm_eq = Spec.verify
+# The ~9K-char kernel reduction needs --tstack=32768, wired via the lakefile's
+# moreLeanArgs (so a plain `lake build` — and hence `verify-build` and the
+# `verify` bundle, whose verify-build dependency compiles these modules via the
+# root import — gets it automatically). The byte-pin (check_c10_source_pin.py,
+# pure Python) asserting the embedded c10Source literal == .sol L37-230 runs in
+# CI via verify-transcription / a31-transcription.yml; the LAKE proof itself is
+# a LOCAL gate (CI has no Lean toolchain).
+verify-parse-transcription: ## A3.1 in-kernel Yul parse: parseYul c10Source = some c10ProgramFull (kernel rfl) + elision bridge
+	@python3 scripts/check_c10_source_pin.py
+	@cd $(LEAN_DIR) && $(LAKE) build SphincsCVerify.Interpreter.YulParse SphincsCVerify.Interpreter.C10Source SphincsCVerify.Interpreter.C10Parse
+	@echo "PASS: parse_c10 + elision bridge + execC10Asm_eq_parsed_source kernel-checked"
+	@echo "      (SphincsCVerify/Interpreter/C10Parse.lean; axiom closure: parse_c10 NONE,"
+	@echo "       bridge/corollary [propext, Classical.choice, Quot.sound] — see verify-audit)"
 
 # A3.1 INDEPENDENT-SOURCE KAT leg (work-todo #7). A clean-room SHA-256 C10 signer
 # (scripts/independent_c10_signer.py) written from the deployed SPHINCsC10Asm.sol +

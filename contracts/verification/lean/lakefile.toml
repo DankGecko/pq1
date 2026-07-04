@@ -34,6 +34,15 @@ name = "SphincsCVerify"
 defaultTargets = ["SphincsCVerify"]
 precompileModules = false
 
+# --tstack=32768: the A3.1 R1a in-kernel Yul-parse theorem
+# (Interpreter/C10Parse.lean `parse_c10`, a kernel `rfl` over the full
+# 9,256-char SPHINCsC10Asm.sol assembly interior) needs a ~9K-deep
+# elaborator/kernel reduction; the default thread stack overflows. Harmless
+# for every other module (it only raises the per-thread stack reservation).
+# Applied to the server too so editing C10Parse.lean interactively works.
+moreLeanArgs = ["--tstack=32768"]
+moreServerArgs = ["--tstack=32768"]
+
 [[lean_lib]]
 name = "SphincsCVerify"
 roots = ["SphincsCVerify"]

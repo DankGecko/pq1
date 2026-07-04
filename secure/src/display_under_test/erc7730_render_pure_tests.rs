@@ -593,10 +593,11 @@ fn positive_erc7730_golden_grid_hash() {
     );
     assert_ne!(h, h2, "golden hash must bind rendered content (spender change did not move it)");
 
-    // Re-blessed for EIP-55 checksummed address rendering (item 4).
+    // Re-blessed for EIP-55 checksummed addresses + the `~` label-truncation
+    // marker (item 4) — the "Token (UNVERIFIED)" page label exceeds 16 cols.
     const GOLDEN: [u8; 32] = [
-        73, 247, 74, 161, 54, 254, 127, 10, 0, 240, 126, 180, 131, 128, 238, 200, 182, 17, 248,
-        86, 23, 162, 214, 124, 205, 22, 197, 93, 133, 135, 243, 88,
+        222, 184, 167, 124, 220, 84, 162, 244, 227, 232, 202, 129, 132, 12, 181, 204, 83, 104,
+        79, 143, 13, 52, 137, 95, 151, 19, 136, 64, 34, 206, 89, 156,
     ];
     assert_eq!(h, GOLDEN, "ERC-7730 render golden changed — re-bless if intentional. got={h:?}");
 }
@@ -1022,8 +1023,8 @@ fn positive_aave_borrow_renders_enum_label() {
     // The enum page must show the RESOLVED label "variable", not the bare
     // index "2" (audit M-7). The registry's field label is "Interest Rate
     // mode" (18 chars); row 0 is truncated to DISPLAY_COLS (16), so the page
-    // header reads "Interest Rate mo".
-    let enum_page = find_page_by_label(&pages, "Interest Rate mo");
+    // header reads "Interest Rate m~".
+    let enum_page = find_page_by_label(&pages, "Interest Rate m~");
     let rows = page_strs(&pages, enum_page);
     assert!(
         rows[1].contains("variable"),
@@ -1063,7 +1064,7 @@ fn positive_aave_borrow_unknown_enum_value_renders_raw_index_loudly() {
     // Locate the enum field page by its (truncated) label and assert BOTH the
     // raw index and the loud unknown marker appear ON THAT PAGE (not elsewhere
     // — the envelope nonce is also 7).
-    let enum_page = find_page_by_label(&pages, "Interest Rate mo");
+    let enum_page = find_page_by_label(&pages, "Interest Rate m~");
     let rows = page_strs(&pages, enum_page).join(" ");
     assert!(rows.contains('7'), "raw enum index 7 must render:\n{rows}");
     assert!(
@@ -1474,7 +1475,7 @@ fn positive_registry_lido_tokenamount_array_bound_renders_steth() {
     let unverified = pages
         .as_slice()
         .iter()
-        .filter(|p| row_str(&p[0]).contains("UNVERIFIE"))
+        .filter(|p| row_str(&p[0]).contains("UNVERIF"))
         .count();
     assert_eq!(unverified, 0, "bound token must not show UNVERIFIED:\n{dump}");
     let _ = find_page_by_label(&pages, "Beneficiary");
@@ -1515,7 +1516,7 @@ fn positive_registry_lido_tokenamount_array_unbound_raw_and_one_token_page() {
     let token_pages = pages
         .as_slice()
         .iter()
-        .filter(|p| row_str(&p[0]).contains("UNVERIFIE"))
+        .filter(|p| row_str(&p[0]).contains("UNVERIF"))
         .count();
     assert_eq!(token_pages, 1, "unbound token must be named exactly once:\n{dump}");
 }
@@ -2781,7 +2782,7 @@ fn uniswap_exact_input_binds_input_token_from_head_slice() {
         "amountIn magnitude must resolve through the dynamic tuple: {rows:?}"
     );
     // Per-leg: the OUTPUT leg (token1 != TKA metadata) must NOT show TKA.
-    let po = find_page_by_label(&pages, "Minimum to Recei");
+    let po = find_page_by_label(&pages, "Minimum to Rece~");
     let ro = page_strs(&pages, po);
     assert!(
         !ro.iter().any(|r| r.contains("TKA")),
@@ -2802,7 +2803,7 @@ fn uniswap_exact_input_binds_output_token_from_tail_slice() {
     );
     let m = meta(TOKEN_OUT, 18, b"TKB");
     let pages = render_uni(&calldata, Some(&m));
-    let p = find_page_by_label(&pages, "Minimum to Recei");
+    let p = find_page_by_label(&pages, "Minimum to Rece~");
     let rows = page_strs(&pages, p);
     assert!(
         rows.iter().any(|r| r.contains("TKB")),
@@ -2846,7 +2847,7 @@ fn uniswap_v2_swap_binds_first_and_last_array_element() {
     );
     let mb = meta(TOKEN_OUT, 18, b"TKB");
     let pages2 = render_uni(&cd_out, Some(&mb));
-    let p2 = find_page_by_label(&pages2, "Amount to Receiv");
+    let p2 = find_page_by_label(&pages2, "Amount to Recei~");
     let rows2 = page_strs(&pages2, p2);
     assert!(
         rows2.iter().any(|r| r.contains("TKB")),

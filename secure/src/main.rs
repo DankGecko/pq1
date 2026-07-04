@@ -195,18 +195,12 @@ mod ui {
     // `crate::display_under_test`).
     pub const DISPLAY_COLS: usize = 16;
     pub const DISPLAY_ROWS: usize = 4;
-    pub mod confirm {
-        pub type Page = [[u8; super::DISPLAY_COLS]; super::DISPLAY_ROWS];
-    }
 
-    /// Mirrors the production `crate::ui::ascii_str`. Required by the
-    /// ERC-7730 formatter when mounted under `display_under_test`.
-    /// Tests enforce ASCII-by-construction via `assert_all_pages_printable`,
-    /// so non-UTF-8 here would surface as a panic — matching the
-    /// production contract.
-    pub(crate) fn ascii_str(buf: &[u8]) -> &str {
-        core::str::from_utf8(buf).expect("ascii_str: non-ASCII bytes in render buffer")
-    }
+    // The `confirm::Page` alias + panicking `ascii_str` mirror that used to
+    // live here went dead when the ERC-7730 renderer moved to
+    // `pqsigner_erc7730::display` (which carries the production
+    // `unwrap_or("?")` `ascii_str` — see that crate); removed so the
+    // divergent-semantics footgun can't be re-imported by a mounted file.
 }
 
 #[cfg(test)]
