@@ -297,7 +297,7 @@ EXTRACTED_DIR := extracted
 PQLEAN        := $(HOME)/.local/share/pqsigner-lean
 REPO_ROOT     := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
 
-.PHONY: verify-extracted verify-extract-differential extract-sphincs-adrs extract-aa-userop extract-fors-index
+.PHONY: verify-extracted verify-extract-differential extract-sphincs-adrs extract-aa-userop extract-fors-index extract-format-decimal
 
 # roadmap T1.3 (ii) — extracted-Lean vs shipped-Rust DIFFERENTIAL gate.
 # The `extract-*` regen-diff targets catch a Rust change that was not re-extracted;
@@ -462,6 +462,30 @@ extract-u256-mul:
 	@sed 's/import U256mul\./import Extracted.U256Mul./' /tmp/pqsigner-extract/mout/Funs.lean > /tmp/pqsigner-extract/mout/Funs.fixed.lean
 	@diff -u $(EXTRACTED_DIR)/Extracted/U256Mul/Funs.lean /tmp/pqsigner-extract/mout/Funs.fixed.lean \
 	  && echo "OK: committed u256-mul extraction matches the current Rust" \
+	  || { echo "DRIFT: tx-core/src/eip1559.rs changed — re-extract, re-prove, re-commit"; exit 1; }
+
+# §33 — U256::format_decimal (via the u256_format_decimal wrapper; the four
+# fmt_* phase helpers exist BECAUSE the fused body hits an aeneas
+# `Unimplemented` — see the note inside format_decimal). The Types.lean dedup:
+# this extraction re-defines eip1559.U256, whose canonical home is
+# Extracted/U256Mul/Types.lean, so only Funs.lean is committed and its Types
+# import is rewritten to the canonical module (a duplicate def fails the lake
+# build LOUDLY — 'environment already contains ...' — so the dedup cannot
+# silently drift).
+.PHONY: extract-format-decimal
+extract-format-decimal:
+	@mkdir -p /tmp/pqsigner-extract
+	@cd $(REPO_ROOT)/tx-core && RUSTFLAGS="--cfg lean_extract" \
+	  $(PQLEAN)/charon cargo --preset=aeneas --opaque sha2 --opaque sha3 \
+	  --start-from 'pqsigner_tx_core::eip1559::u256_format_decimal' \
+	  --dest-file /tmp/pqsigner-extract/fmtdec.llbc 2>&1 | tail -1
+	@rm -rf /tmp/pqsigner-extract/fdout && mkdir -p /tmp/pqsigner-extract/fdout
+	@$(PQLEAN)/aeneas -backend lean -dest /tmp/pqsigner-extract/fdout -split-files /tmp/pqsigner-extract/fmtdec.llbc
+	@sed -e 's/^import Fmtdec.Types$$/import Extracted.U256Mul.Types -- canonical eip1559.U256 home (dedup: both extractions define it)/' \
+	     -e 's/import Fmtdec\./import Extracted.FormatDecimal./' \
+	     /tmp/pqsigner-extract/fdout/Funs.lean > /tmp/pqsigner-extract/fdout/Funs.fixed.lean
+	@diff -u $(EXTRACTED_DIR)/Extracted/FormatDecimal/Funs.lean /tmp/pqsigner-extract/fdout/Funs.fixed.lean \
+	  && echo "OK: committed format-decimal extraction matches the current Rust" \
 	  || { echo "DRIFT: tx-core/src/eip1559.rs changed — re-extract, re-prove, re-commit"; exit 1; }
 
 # §33 rank 6 — merkle::verify_auth_path (XMSS auth-path walk; th_pair opaque →

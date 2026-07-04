@@ -26,6 +26,7 @@ import Extracted.SpecBridge
 import Extracted.ForsLoop
 import Extracted.PinState.PinStateSpec
 import Extracted.SlotKdf.SlotKdfSpec
+import Extracted.FormatDecimal.Div10Spec
 
 -- FV-#2 sequel: slot_entropy byte-layout (invariant #8). Closure = kernel triple
 -- + the disclosed `sha256_pure_bytes` hash axiom (the FV-#2 single-shot SHA-256
@@ -39,6 +40,10 @@ import Extracted.SlotKdf.SlotKdfSpec
 #print axioms Extracted.Equiv.slotEntropyPreimage_chain_inj
 #print axioms Extracted.Equiv.slotEntropyPreimage_slot_inj
 #print axioms Extracted.Equiv.slot_entropy_crosschain_reduction
+-- format_decimal Track-1 milestone 0: div10 floor-division ∀ 2^256 values
+-- (the symbolic-VALUE the CBMC bit-blaster could not converge on). PURE —
+-- kernel-only closure [propext, Classical.choice, Quot.sound], no hash axiom.
+#print axioms Div10Spec.div10_inplace_spec
 #print axioms Extracted.Equiv.deserialize_pin_state_rejects_bad_len
 #print axioms Extracted.Equiv.make_adrs_spec
 #print axioms Extracted.Equiv.set_chain_index_spec
