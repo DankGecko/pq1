@@ -29,6 +29,7 @@ import Extracted.SlotKdf.SlotKdfSpec
 import Extracted.FormatDecimal.Div10Spec
 import Extracted.FormatDecimal.ExtractDigitsSpec
 import Extracted.FormatDecimal.RoundCarrySpec
+import Extracted.FormatDecimal.TrimFracSpec
 
 -- FV-#2 sequel: slot_entropy byte-layout (invariant #8). Closure = kernel triple
 -- + the disclosed `sha256_pure_bytes` hash axiom (the FV-#2 single-shot SHA-256
@@ -60,6 +61,12 @@ import Extracted.FormatDecimal.RoundCarrySpec
 #print axioms RoundCarrySpec.round_carry_spec
 #print axioms RoundCarrySpec.round_carry_loop_spec
 #print axioms RoundCarrySpec.decValue_set
+-- format_decimal Track-1 milestone M6: fmt_trim_frac — returns the largest
+-- fractional position ≤ frac whose DISPLAYED digit is nonzero (0 if none);
+-- every trimmed position displays a structural zero (see the
+-- TrimFracSpec.lean header). PURE — kernel-only closure.
+#print axioms TrimFracSpec.trim_frac_spec
+#print axioms TrimFracSpec.trim_frac_loop_spec
 #print axioms Extracted.Equiv.deserialize_pin_state_rejects_bad_len
 #print axioms Extracted.Equiv.make_adrs_spec
 #print axioms Extracted.Equiv.set_chain_index_spec

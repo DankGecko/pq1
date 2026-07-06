@@ -28,6 +28,7 @@ import Extracted.SlotKdf.SlotKdfSpec
 import Extracted.FormatDecimal.Div10Spec
 import Extracted.FormatDecimal.ExtractDigitsSpec
 import Extracted.FormatDecimal.RoundCarrySpec
+import Extracted.FormatDecimal.TrimFracSpec
 
 -- Rust-generated differential vectors (consumed by Extracted/ExtractDiffCheck.lean)
 import Extracted.ExtractDiffVectors
