@@ -31,8 +31,11 @@
 
 use pqsigner_tx::erc20::bundle::Erc20Metadata;
 use pqsigner_tx::names::NameResolver;
+use super::amount_decision::{
+    amount_decision, token_amount_decision, unit_decision, TokenAmountArm,
+};
 use super::super::primitives::{
-    chain_name, native_ticker, write_addr_full, write_addr_full_or_name,
+    chain_name, write_addr_full, write_addr_full_or_name,
     write_amount_single_or_two_rows, write_amount_two_rows, write_line, AmountFit,
 };
 use pqsigner_tx_core::eip1559::{Eip1559Tx, U256};
@@ -267,14 +270,15 @@ fn render_amount(
         Resolved::Container(idx) => container_u256(tx, idx)?,
     };
     let value = U256(raw);
-    let decimals = u32::from(params.decimals.unwrap_or(18));
-    // The `amount` format is the chain's NATIVE currency; default the ticker
-    // per chain (POL/BNB/AVAX/…) instead of always "ETH" (review 3.5). A
-    // descriptor-supplied `params.base` still overrides.
-    let unit_bytes = params.base.unwrap_or_else(|| native_ticker(tx.chain_id));
+    // WHICH decimals/ticker paint — the pure, ∀-proven decision half (M4
+    // factoring): the `amount` format is the chain's NATIVE currency, so
+    // decimals default 18 and the ticker defaults per chain (POL/BNB/AVAX/…
+    // instead of always "ETH", review 3.5); a descriptor-supplied
+    // `params.base` still overrides. See `amount_decision::amount_decision`.
+    let d = amount_decision(tx.chain_id, params);
     let [_, r1, r2, foot] = pages.page_mut(p);
     let fit =
-        write_amount_single_or_two_rows(r1, r2, &value, decimals, 6, true, true, ascii_str(unit_bytes));
+        write_amount_single_or_two_rows(r1, r2, &value, d.decimals, 6, true, true, ascii_str(d.unit));
     write_line(
         foot,
         match fit {
@@ -307,121 +311,75 @@ fn render_token_amount(
     // symbol to display.
     let token_addr = resolve_token_address(ir, body, tx, params).ok();
 
-    // Native-currency sentinel (`nativeCurrencyAddress`): a resolved token equal
-    // to the descriptor's sentinel (`0xEeee…`/`0x0`) IS the chain native currency,
-    // so render 18 decimals + `native_ticker(chain_id)` ("1.5 ETH") rather than an
-    // ERC-20 lookup. Takes precedence over the `erc20` bundle: the sentinel is not
-    // a real ERC-20 contract, and this is a Merkle-pinned descriptor decision (the
-    // sentinel is baked into the IR), so it needs no companion metadata and emits
-    // no "Token (UNVERIFIED)" page.
-    let is_native = matches!(
-        (token_addr, params.native_currency),
-        (Some(addr), Some(native)) if &addr == native
-    );
-
-    // Match against the supplied `erc20` bundle only when the addresses
-    // agree. A `None` here means the token could NOT be bound to a
-    // Merkle-verified metadata entry — we do not know its decimals.
-    let bound: Option<(u32, &[u8])> = if is_native {
-        Some((18, native_ticker(tx.chain_id)))
-    } else {
-        match (token_addr, erc20) {
-            (Some(addr), Some(meta)) if addr == meta.contract => {
-                Some((u32::from(meta.decimals), meta.symbol))
-            }
-            _ => None,
-        }
-    };
+    // WHICH arm paints — the pure, ∀-proven decision half (M4 factoring;
+    // Kani closes it without ever seeing the format_decimal paint path).
+    // The full ladder rationale lives on
+    // `amount_decision::token_amount_decision`: native-sentinel precedence
+    // over the erc20 bundle, Merkle-bound-only decimals/symbol, the
+    // threshold gate HOISTED ABOVE the bound match (review 4.5), the
+    // validated `message` override (review 3.6), the M-4 raw fallback and
+    // the MEDIUM-1 identity-page rule.
+    let decision = token_amount_decision(&raw, token_addr, erc20, tx.chain_id, params);
 
     let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
     write_label_row(pages, p, field.label);
     let [_, r1, r2, foot] = pages.page_mut(p);
 
-    // Threshold / approve-all sentinel check, HOISTED ABOVE the bound match
-    // (review 4.5). When the descriptor supplies a `threshold` and the value is
-    // ≥ it, this is an "unlimited" approval — the single most dangerous action.
-    // For a BOUND token it renders "unlimited <ticker>". For an UNKNOWN
-    // (unbound) token the raw 2^256-1 used to fall through and render
-    // "!AMOUNT OVERFLOW" (an alarming banner, no value) — exactly when trust is
-    // LOWEST. Render "unlimited" clearly instead, marked "(unverified)" so the
-    // missing token identity stays loud (the identity page below still shows
-    // the address). BE byte arrays compare lexicographically == numeric on a
-    // full-width u256, so a direct `>=` over the raw bytes is correct.
-    let is_unlimited = params.threshold.is_some_and(|t| value.0 >= *t);
-    if is_unlimited {
-        // review 3.6: the descriptor's `message` param overrides the default
-        // "unlimited" wording (spec: "message to display above threshold,
-        // defaults to Unlimited"). Validate printable ASCII + row-fitting
-        // (anti-homoglyph on the trusted display) before trusting it; else the
-        // fixed fallback.
-        let msg: &[u8] = params
-            .message
-            .filter(|m| {
-                !m.is_empty()
-                    && m.len() <= DISPLAY_COLS
-                    && m.iter().all(|&b| (0x20..0x7f).contains(&b))
-            })
-            .unwrap_or(&b"unlimited"[..]);
-        match bound {
-            Some((_, ticker)) => write_unlimited_row(r1, msg, ticker),
-            None => {
-                write_line_bytes(r1, msg);
-                write_line(r2, "(unverified)");
-            }
+    match decision.arm {
+        // "unlimited <ticker>" — the approve-all sentinel on a bound token.
+        TokenAmountArm::Unlimited { message, ticker } => {
+            write_unlimited_row(r1, message, ticker);
+            write_line(foot, "> next");
         }
-        write_line(foot, "> next");
-    } else {
-        match bound {
-            Some((decimals, ticker)) => {
-                let fit = write_amount_single_or_two_rows(
-                    r1, r2, &value, decimals, 6, true, true, ascii_str(ticker),
-                );
-                write_line(
-                    foot,
-                    match fit {
-                        AmountFit::Full => "> next",
-                        AmountFit::Overflow => "!AMOUNT OVERFLOW",
-                    },
-                );
-            }
-            None => {
-                // Audit M-4: never present a scaled decimal with an assumed
-                // scale. Without verified `decimals` a 6-decimal token would
-                // render 10^12× off while *looking* authoritative. Show the
-                // RAW integer (no scaling) and label the unknown scale loudly
-                // so the user knows the magnitude is uninterpreted.
-                let fit = write_amount_two_rows(r1, r2, &value, 0, 0, false, true, "");
-                write_line(
-                    foot,
-                    match fit {
-                        AmountFit::Full => "! raw, dec=?",
-                        AmountFit::Overflow => "!AMOUNT OVERFLOW",
-                    },
-                );
-            }
+        // Unlimited on an UNKNOWN token: still the loud message (an unbound
+        // 2^256-1 used to fall through to "!AMOUNT OVERFLOW" — an alarming
+        // banner, no value — exactly when trust is LOWEST), marked
+        // "(unverified)" so the missing token identity stays loud (the
+        // identity page below still shows the address).
+        TokenAmountArm::UnlimitedUnverified { message } => {
+            write_line_bytes(r1, message);
+            write_line(r2, "(unverified)");
+            write_line(foot, "> next");
+        }
+        TokenAmountArm::Bound { decimals, ticker } => {
+            let fit = write_amount_single_or_two_rows(
+                r1, r2, &value, decimals, 6, true, true, ascii_str(ticker),
+            );
+            write_line(
+                foot,
+                match fit {
+                    AmountFit::Full => "> next",
+                    AmountFit::Overflow => "!AMOUNT OVERFLOW",
+                },
+            );
+        }
+        // Audit M-4: never present a scaled decimal with an assumed scale.
+        // Show the RAW integer (no scaling) and label the unknown scale
+        // loudly so the user knows the magnitude is uninterpreted.
+        TokenAmountArm::UnverifiedRaw => {
+            let fit = write_amount_two_rows(r1, r2, &value, 0, 0, false, true, "");
+            write_line(
+                foot,
+                match fit {
+                    AmountFit::Full => "! raw, dec=?",
+                    AmountFit::Overflow => "!AMOUNT OVERFLOW",
+                },
+            );
         }
     }
 
     // Audit 2026-06-25 MEDIUM-1: with no Merkle-verified metadata we cannot
     // show decimals/symbol — but the token *identity* is still a signed
-    // operand. A descriptor that covers the token only via a `tokenPath`
-    // (Aave `withdraw` `asset`, Uniswap `tokenIn`/`tokenOut`) has no address
-    // field of its own, so a companion that withholds the optional ERC-20
-    // metadata trailer would otherwise have the user approve a
-    // transfer/withdraw/swap of an UNNAMED token. Render the resolved
-    // address on its own page (resolver-aware) so the contract identity is
-    // never omitted from the trusted display. We only emit the extra page in
-    // the unbound case — when `bound` is `Some` the symbol already names the
-    // token. If the address could not be resolved at all there is nothing to
-    // bind; the amount page already carries the loud `! raw, dec=?` footer,
-    // and the page-budget gate fails closed to blind-sign on overflow.
-    if bound.is_none() {
-        if let Some(addr) = token_addr {
-            let ap = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
-            write_label_row(pages, ap, b"Token (UNVERIFIED)");
-            let [_, ar1, ar2, ar3] = pages.page_mut(ap);
-            write_addr_full_or_name(ar1, ar2, ar3, &addr, tx.chain_id, resolver);
-        }
+    // operand, so the decision carries the resolved address whenever it
+    // could not be bound (see `TokenAmountDecision::identity_page` for the
+    // full rule). Render it on its own page (resolver-aware) so the
+    // contract identity is never omitted from the trusted display; the
+    // page-budget gate fails closed to blind-sign on overflow.
+    if let Some(addr) = decision.identity_page {
+        let ap = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
+        write_label_row(pages, ap, b"Token (UNVERIFIED)");
+        let [_, ar1, ar2, ar3] = pages.page_mut(ap);
+        write_addr_full_or_name(ar1, ar2, ar3, &addr, tx.chain_id, resolver);
     }
     Ok(())
 }
@@ -431,7 +389,8 @@ fn render_token_amount(
 /// classifies the on-chain value as the approve-all sentinel.
 /// Render `"<message> <ticker>"` into a single row. `message` is the threshold
 /// wording — the descriptor's `message` param, default `"unlimited"` (review
-/// 3.6). The caller has already validated `message` as printable + row-fitting.
+/// 3.6), already validated as printable + row-fitting by
+/// `amount_decision::token_amount_decision`.
 fn write_unlimited_row(row: &mut [u8; DISPLAY_COLS], message: &[u8], ticker: &[u8]) {
     let mut buf = [b' '; DISPLAY_COLS];
     let n = core::cmp::min(message.len(), buf.len());
@@ -1206,11 +1165,13 @@ fn render_unit(
         Resolved::Container(idx) => container_u256(tx, idx)?,
     };
     let value = U256(bytes);
-    let decimals = u32::from(params.decimals.unwrap_or(0));
-    let unit_bytes = params.base.unwrap_or(b"");
+    // Decision half factored to `amount_decision::unit_decision` (M4):
+    // decimals default 0 (a bare count), unit defaults empty — the 18-vs-0
+    // asymmetry with `render_amount` is ∀-pinned there.
+    let d = unit_decision(params);
     let [_, r1, r2, foot] = pages.page_mut(p);
     let fit =
-        write_amount_single_or_two_rows(r1, r2, &value, decimals, 6, true, true, ascii_str(unit_bytes));
+        write_amount_single_or_two_rows(r1, r2, &value, d.decimals, 6, true, true, ascii_str(d.unit));
     write_line(
         foot,
         match fit {
@@ -2762,6 +2723,18 @@ mod kani_harness {
     // converges), the `token_amount_below_threshold_renders_amount` HOST test
     // (same asserts, no CBMC), and the Lean format_decimal track (deductive,
     // div10 + extract_digits forall already kernel-proven).
+    //
+    // UPDATE 2026-07-06: the M4 factoring LANDED — the decision ladder now
+    // lives in `super::amount_decision::token_amount_decision` (the exact fn
+    // `render_token_amount` consumes) and the dropped foralls are CLOSED over
+    // it in `amount_decision::kani_harness`: the doubly-symbolic gate
+    // biconditional `amt_dec_unlimited_iff_ge_threshold` (value >= T ⟺ an
+    // Unlimited* arm, vs an independent MSB-first oracle), the message-param
+    // validation forall `amt_dec_message_param_binding`, the token-identity
+    // forall `amt_dec_token_identity_binding` (MEDIUM-1 + M-4 classes) and
+    // the native-sentinel precedence forall
+    // `amt_dec_native_sentinel_precedence`. The PAINT halves (this file)
+    // stay covered exactly as described above.
 
     /// Boundary witness: `value == threshold` IS unlimited (the `>=` edge —
     /// the exact off-by-one a `>` regression would flip).
@@ -3017,8 +2990,9 @@ mod token_amount_threshold_host_tests {
     //! out-of-memory (see the HONEST DROP note in `kani_harness`): the
     //! below-threshold arm formats the amount (the documented div10
     //! bit-blast swamp), so its witnesses run here — same asserts, no CBMC.
-    //! The ∀ gate-decision proof belongs to the M4 amount-decision factoring
-    //! (work-todo, formatter-∀ track).
+    //! The ∀ gate-decision proof landed with the M4 amount-decision
+    //! factoring (2026-07-06) — see `super::amount_decision::kani_harness`;
+    //! these tests keep pinning the PAINT integration of the decision.
     use super::*;
     use crate::ir::{ContextKind, Erc7730Ir};
     use pqsigner_tx::names::NameResolver;

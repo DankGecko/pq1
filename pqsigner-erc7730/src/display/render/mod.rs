@@ -23,6 +23,7 @@
 //! rung." See the per-variant docs on
 //! [`crate::render::RenderErr`].
 
+pub mod amount_decision;
 mod calldata_nested;
 pub mod formatters;
 pub mod intent;
