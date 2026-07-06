@@ -27,6 +27,7 @@ import Extracted.PinState.PinStateSpec
 import Extracted.SlotKdf.SlotKdfSpec
 import Extracted.FormatDecimal.Div10Spec
 import Extracted.FormatDecimal.ExtractDigitsSpec
+import Extracted.FormatDecimal.RoundCarrySpec
 
 -- Rust-generated differential vectors (consumed by Extracted/ExtractDiffCheck.lean)
 import Extracted.ExtractDiffVectors

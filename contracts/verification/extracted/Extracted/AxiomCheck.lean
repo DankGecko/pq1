@@ -28,6 +28,7 @@ import Extracted.PinState.PinStateSpec
 import Extracted.SlotKdf.SlotKdfSpec
 import Extracted.FormatDecimal.Div10Spec
 import Extracted.FormatDecimal.ExtractDigitsSpec
+import Extracted.FormatDecimal.RoundCarrySpec
 
 -- FV-#2 sequel: slot_entropy byte-layout (invariant #8). Closure = kernel triple
 -- + the disclosed `sha256_pure_bytes` hash axiom (the FV-#2 single-shot SHA-256
@@ -52,6 +53,13 @@ import Extracted.FormatDecimal.ExtractDigitsSpec
 #print axioms ExtractDigitsSpec.extract_digits_spec
 #print axioms ExtractDigitsSpec.extract_digits_loop_spec
 #print axioms ExtractDigitsSpec.is_zero_spec
+-- format_decimal Track-1 milestone M5: fmt_round_half_up full functional
+-- spec (value-exact +1 ulp carry propagation, prefix frame, digit-range,
+-- count growth, no-round identity — see the RoundCarrySpec.lean header).
+-- PURE — kernel-only closure, no hash axiom, no bv_decide native axiom.
+#print axioms RoundCarrySpec.round_carry_spec
+#print axioms RoundCarrySpec.round_carry_loop_spec
+#print axioms RoundCarrySpec.decValue_set
 #print axioms Extracted.Equiv.deserialize_pin_state_rejects_bad_len
 #print axioms Extracted.Equiv.make_adrs_spec
 #print axioms Extracted.Equiv.set_chain_index_spec
