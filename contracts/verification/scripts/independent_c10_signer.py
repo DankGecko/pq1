@@ -398,6 +398,64 @@ def _emit_fields(msg_hex: str):
     print(f"0x{_PK_SEED.hex()} 0x{pk_root.hex()} 0x{msg.hex()} 0x{sig.hex()}")
 
 
+def _check_primitives(path: str) -> int:
+    """Independence guard (ETHFALCON-port R1): recompute every per-primitive golden
+    vector in `path` with THIS clean-room signer's primitives and assert byte-equal.
+
+    This is the Python leg of the Rust <-> Python <-> Yul cross-check. A per-primitive
+    divergence (e.g. an ADRS-field or preimage-layout drift in one implementation)
+    fails here even though the two whole-signature signers might still agree elsewhere.
+    """
+    import json
+    with open(path) as fh:
+        d = json.load(fh)
+
+    def b(h):
+        return bytes.fromhex(h[2:] if h.startswith("0x") else h)
+
+    fails = 0
+    total = 0
+
+    def chk(name, label, got, exp_hex):
+        nonlocal fails, total
+        total += 1
+        exp = b(exp_hex)
+        if got != exp:
+            print(f"FAIL {name} [{label}]: got {got.hex()} expected {exp.hex()}")
+            fails += 1
+
+    for v in d["th"]:
+        chk("th", v["label"], th(b(v["seed"]), b(v["adrs"]), b(v["val"])), v["out"])
+    for v in d["th_pair"]:
+        chk("th_pair", v["label"], th_pair(b(v["seed"]), b(v["adrs"]), b(v["left"]), b(v["right"])), v["out"])
+    for v in d["th_multi"]:
+        chk("th_multi", v["label"], th_multi(b(v["seed"]), b(v["adrs"]), [b(x) for x in v["vals"]]), v["out"])
+    for v in d["h_msg"]:
+        chk("h_msg", v["label"], h_msg(b(v["seed"]), b(v["root"]), b(v["r"]), b(v["msg"])), v["out"])
+    for v in d["chain_hash"]:
+        chk("chain_hash", v["label"],
+            chain_hash(b(v["seed"]), b(v["adrs_base"]), b(v["val"]), v["start"], v["steps"]), v["out"])
+    for v in d["wots_digest"]:
+        chk("wots_digest", v["label"],
+            wots_digest(b(v["seed"]), b(v["wots_adrs"]), b(v["msg"]), v["count"]), v["out"])
+    for v in d["wots_secret"]:
+        chk("wots_secret", v["label"],
+            wots_secret(b(v["sk_seed"]), v["layer"], v["tree"], v["kp"], v["chain_idx"]), v["out"])
+    for v in d["fors_secret"]:
+        chk("fors_secret", v["label"],
+            fors_secret(b(v["sk_seed"]), v["ht_idx"], v["tree_idx"], v["leaf_idx"]), v["out"])
+
+    if fails:
+        print(f"FAIL: {fails}/{total} per-primitive vectors DIVERGE between the independent "
+              f"Python signer and the committed golden")
+        return 1
+    print(f"OK: independent Python signer reproduces ALL {total} C10 per-primitive golden vectors "
+          f"byte-for-byte")
+    print("    (th / th_pair / th_multi / h_msg / chain_hash / wots_digest / wots_secret / fors_secret) "
+          "— two independent implementations agree.")
+    return 0
+
+
 if __name__ == "__main__":
     import sys
     if len(sys.argv) == 4 and sys.argv[1] == "--emit":
@@ -406,4 +464,6 @@ if __name__ == "__main__":
     if len(sys.argv) == 3 and sys.argv[1] == "--emit-fields":
         _emit_fields(sys.argv[2])
         sys.exit(0)
+    if len(sys.argv) == 3 and sys.argv[1] == "--check-primitives":
+        sys.exit(_check_primitives(sys.argv[2]))
     sys.exit(self_test())

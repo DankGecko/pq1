@@ -472,6 +472,14 @@ tracked as **A3.1** (`contracts/verification/docs/A3_1_VERIFIER_GAP.md`,
 3. **Keep this ledger current.** If any C10 parameter, ADRS field, preimage,
    or bit-extraction changes, re-run the two extraction agents and update §§2-8
    — a drift here is exactly the A3.1 class.
+4. **External KAT provenance & per-primitive component KATs** (new 2026-07-06,
+   from the ETHFALCON-port assessment). Because C10 shares *only* raw SHA-256
+   with any standard (§5/§6), no official SPHINCS+/SLH-DSA KAT can anchor it and
+   the sole external cross-check is our own independent re-implementation. The
+   assessment recommends adding per-tweakable-hash intermediate-value KATs
+   (localize an A3.1-class divergence to the exact primitive) + a portable
+   `.rsp`-style artifact. See
+   [`external-kat-provenance-and-ethfalcon-port-2026-07.md`](./external-kat-provenance-and-ethfalcon-port-2026-07.md).
 
 ---
 

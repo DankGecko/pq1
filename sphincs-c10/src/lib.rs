@@ -78,7 +78,9 @@ pub mod sim_internals {
     pub use crate::fors::{
         compute_fors_pk, compute_fors_root, extract_fors_indices, extract_ht_index, sign_fors_tree,
     };
-    pub use crate::hash::{fors_secret, h_msg, pad16, th, th_multi, th_pair};
+    pub use crate::hash::{
+        chain_hash, fors_secret, h_msg, pad16, th, th_multi, th_pair, wots_digest, wots_secret,
+    };
 }
 
 use zeroize::{Zeroize, ZeroizeOnDrop};

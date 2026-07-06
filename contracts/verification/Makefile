@@ -37,7 +37,7 @@ LAKE     ?= $(shell command -v lake 2>/dev/null || echo $$HOME/.elan/bin/lake)
 help: ## Show the runnable FV targets (those with a description)
 	@grep -hE '^[a-zA-Z0-9_.-]+:.*## ' $(MAKEFILE_LIST) | sort | awk -F':.*## ' '!seen[$$1]++ {printf "  \033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
-.PHONY: verify verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk verify-interp verify-transcription verify-parse-transcription verify-independent-signer verify-storage-mutators verify-lean-proto-domain verify-fv-lints verify-lean4checker verify-kontrol verify-halmos verify-ledger-consistency verify-proof-mutation
+.PHONY: verify verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk verify-interp verify-transcription verify-parse-transcription verify-independent-signer verify-primitive-kat verify-storage-mutators verify-lean-proto-domain verify-fv-lints verify-lean4checker verify-kontrol verify-halmos verify-ledger-consistency verify-proof-mutation
 
 # NOTE: verify-build (the `lake build` this bundle depends on) now also
 # kernel-checks the A3.1 in-kernel parse theorem + elision bridge (the root
@@ -238,6 +238,23 @@ verify-parse-transcription: ## A3.1 in-kernel Yul parse: parseYul c10Source = so
 verify-independent-signer: ## Clean-room C10 signer cross-check
 	@python3 scripts/independent_c10_signer.py
 	@cd $(REPO_ROOT) && cargo test -p sphincs-c10 --test independent_signer_xcheck --release -- --nocapture
+
+# Per-primitive component KAT (ETHFALCON-port R1). Golden intermediate-value
+# vectors for each C10 tweakable-hash primitive (th/th_pair/th_multi/h_msg/
+# chain_hash/wots_digest + the wots_secret/fors_secret PRFs), cross-checked across
+# THREE independent implementations: Rust `sphincs-c10` (recompute regression pin),
+# the clean-room Python signer (independence guard), and the on-chain Yul verifier's
+# SHA-256 preimage layout via the precompile (Foundry, the 6 verify-side primitives).
+# Localizes an A3.1-class per-primitive divergence to the exact boundary. Golden is
+# self-generated + N-way cross-checked; NOT externally conformant — C10 shares only
+# raw SHA-256 with any standard (that layer is anchored to NIST CAVP). Regenerate
+# with `C10_KAT_REGEN=1 cargo test -p sphincs-c10 --features sim-internals \
+# --test primitive_kat --release`. Needs python3 + forge on PATH.
+# See docs/verification/external-kat-provenance-and-ethfalcon-port-2026-07.md.
+verify-primitive-kat: ## Per-primitive tweakable-hash KAT (Rust<->Python<->Yul)
+	@cd $(REPO_ROOT) && cargo test -p sphincs-c10 --features sim-internals --test primitive_kat --release
+	@python3 scripts/independent_c10_signer.py --check-primitives $(REPO_ROOT)/contracts/smart-wallet/test/c10_primitive_kat_vectors.json
+	@cd $(REPO_ROOT)/contracts/smart-wallet && forge test --match-contract C10PrimitiveKat
 
 # NIST CAVP SHA-256 conformance: regenerate the embedded vector module from
 # the official byte-oriented .rsp suite (cavp/ — idempotent) and replay ALL
