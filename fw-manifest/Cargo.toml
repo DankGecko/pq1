@@ -32,6 +32,12 @@ std = []
 # terminate without panic for arbitrary 8 KB byte input. Host-only;
 # never compiled into FSBL or device firmware.
 proptest = "1"
+# Extraction-differential generator (`tests/gen_extract_vectors.rs`): the
+# format_decimal vectors execute the SHIPPED
+# `pqsigner_tx_core::eip1559::u256_format_decimal` as ground truth for
+# `contracts/verification/extracted` (`make verify-extract-differential GEN=1`).
+# Dev-only; fw-manifest proper never links tx-core.
+pqsigner-tx-core = { workspace = true }
 
 # `#[cfg(kani)]` proof harnesses in lib.rs; the workspace check-cfg
 # registers `kani`/`lean_extract` so non-Kani builds don't warn.

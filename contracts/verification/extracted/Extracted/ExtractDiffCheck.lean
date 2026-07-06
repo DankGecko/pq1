@@ -38,13 +38,18 @@ fails. Checked before the positives are trusted.
 **Construct coverage (no silent caps).** The risk is per-Rust-construct (slice
 indexing, `to_be_bytes`, struct layout, bounds checks). Covered so far:
 `signed_preimage` — slices + `copy_from_slice` + `U32::to_be_bytes` + fixed-array
-layout. NOT yet covered: control-flow/bounds parsers (`decode_item`),
-hash-structural derivations. Logged here so the gap is explicit; extend
-`positiveVectors` + the Rust generator to grow coverage.
+layout; `u256_format_decimal` (Track-1 M8, `FormatDecimalDiffVectors.lean`) —
+Range loops over indexed arrays, `while`-loop digit extraction/carry, integer
+div/mod, `saturating_sub`, early-`return None` bounds check, slice writes.
+NOT yet covered: control-flow/bounds parsers (`decode_item`), hash-structural
+derivations. Logged here so the gap is explicit; extend the vector lists + the
+Rust generator to grow coverage.
 -/
 
 import Extracted.FwManifest.Funs
+import Extracted.FormatDecimal.Funs
 import Extracted.ExtractDiffVectors
+import Extracted.FormatDecimalDiffVectors
 
 open Aeneas Aeneas.Std Result
 
@@ -109,6 +114,91 @@ def firstPositiveMismatch : Option Nat := Id.run do
     | none => return some i
   return none
 
+/-! ## format_decimal (Track-1 M8) — extracted `u256_format_decimal` vs Rust -/
+
+/-- The out-buffer fill byte. Matches `SENTINEL` in the Rust generator: the
+    generator asserts the SHIPPED Rust leaves bytes past the returned count
+    untouched, and `runFormatDecimal` checks the same of the EXTRACTED Lean —
+    a divergent stray write is a mismatch even when the prefix agrees. -/
+def fdSentinel : UInt8 := 0xAA
+
+/-- Build a sentinel-filled `Slice Std.U8` of length `len`. -/
+def mkSliceFill (len : Nat) : Option (Slice Std.U8) :=
+  let l : List Std.U8 := List.replicate len (byteToU8 fdSentinel)
+  if h : l.length ≤ Usize.max then some ⟨l, h⟩ else none
+
+/-- Run the EXTRACTED `eip1559.u256_format_decimal` on a sentinel-filled
+    `out` of length `outLen`. Returns `some (some prefix)` on a successful
+    write, `some none` on the would-not-fit path, and `none` on any runner
+    failure (Aeneas panic, count out of bounds, stray write past the count,
+    write on the `none` path — none of which the shipped Rust ever does). -/
+def runFormatDecimal (value : Array UInt8) (decimals fracDigits : UInt32)
+    (trim : Bool) (outLen : Nat) : Option (Option (Array UInt8)) := do
+  let v ← mkArr32 value
+  let out ← mkSliceFill outLen
+  match pqsigner_tx_core.eip1559.u256_format_decimal v
+      ⟨BitVec.ofNat 32 decimals.toNat⟩ ⟨BitVec.ofNat 32 fracDigits.toNat⟩
+      trim out with
+  | .ok (some n, outS) =>
+    let nn := (Aeneas.Std.UScalar.bv n).toNat
+    let bytes := outS.val.map u8ToByte
+    if decide (nn ≤ outLen) && (bytes.drop nn).all (· == fdSentinel) then
+      some (some (bytes.take nn).toArray)
+    else none
+  | .ok (none, outS) =>
+    -- Rust writes nothing on overflow; the extracted Lean must match.
+    if (outS.val.map u8ToByte).all (· == fdSentinel) then some none else none
+  | _ => none
+
+/-- format_decimal negative control (teeth for the `Option`-shaped compare:
+    wrong bytes, `some`/`none` confusion in both directions). -/
+structure FdNegCase where
+  value : Array UInt8
+  decimals : UInt32
+  frac : UInt32
+  trim : Bool
+  outLen : Nat
+  wrongExpected : Option (Array UInt8)
+
+/-- ASCII helper for the hand-written wrong expectations. -/
+def asciiBytes (s : String) : Array UInt8 := s.toUTF8.data
+
+/-- The integer 42 as a 32-byte BE U256. -/
+def fdVal42 : Array UInt8 := (Array.replicate 32 0).set! 31 42
+
+/-- Deliberately-wrong expectations `u256_format_decimal` provably never
+    produces on these inputs (it renders `42` at decimals=0, and returns
+    `none` for a 1-byte buffer), so a correct gate flags every one. -/
+def fdNegCases : List FdNegCase :=
+  [ -- right shape, wrong digits:
+    { value := fdVal42, decimals := 0, frac := 0, trim := false, outLen := 16,
+      wrongExpected := some (asciiBytes "43") },
+    -- fits, but expectation claims it did not (some/none confusion):
+    { value := fdVal42, decimals := 0, frac := 0, trim := false, outLen := 16,
+      wrongExpected := none },
+    -- does NOT fit (need=2 > 1), but expectation claims a truncated write:
+    { value := fdVal42, decimals := 0, frac := 0, trim := false, outLen := 1,
+      wrongExpected := some (asciiBytes "4") } ]
+
+/-- The format_decimal negative control has teeth iff EVERY wrong vector
+    mismatches. -/
+def fdNegativeControlPasses : Bool :=
+  fdNegCases.all fun c =>
+    match runFormatDecimal c.value c.decimals c.frac c.trim c.outLen with
+    | some got => got ≠ c.wrongExpected     -- must MISMATCH the wrong expected
+    | none => false                         -- runner failure is also a failure
+
+/-- Index of the first format_decimal vector where the EXTRACTED Lean output
+    differs from the Rust-executed expected (or `none` if all agree).
+    `fdVectors` is Rust-generated (`FormatDecimalDiffVectors.lean`). -/
+def firstFdMismatch : Option Nat := Id.run do
+  for i in [0:fdVectors.length] do
+    let (value, decimals, frac, trim, outLen, expected) := fdVectors[i]!
+    match runFormatDecimal value decimals frac trim outLen with
+    | some got => if got ≠ expected then return some i
+    | none => return some i
+  return none
+
 end ExtractDiff
 
 open ExtractDiff in
@@ -126,9 +216,23 @@ def driver : IO Unit := do
   match firstPositiveMismatch with
   | none =>
     IO.println s!"  [OK] signed_preimage: extracted Lean == Rust on all {positiveVectors.length} vectors"
-    IO.println "  (CORPUS evidence — shrinks the Charon/Aeneas TCB on tested inputs; not a ∀)"
   | some i =>
     IO.eprintln s!"  [FAIL] signed_preimage: extracted Lean ≠ Rust on vector {i} — \
+                   a Charon/Aeneas mistranslation (or stale vectors: regen with GEN=1)"
+    IO.Process.exit 1
+  -- 3. format_decimal negative control (teeth for the Option-shaped compare).
+  if fdNegativeControlPasses then
+    IO.println s!"  [OK] negative control: all {fdNegCases.length} deliberately-wrong format_decimal vectors flagged"
+  else
+    IO.eprintln "  [FAIL] negative control: a wrong format_decimal vector was NOT flagged — gate is toothless"
+    IO.Process.exit 1
+  -- 4. format_decimal positive differential (Track-1 M8).
+  match firstFdMismatch with
+  | none =>
+    IO.println s!"  [OK] u256_format_decimal: extracted Lean == Rust on all {fdVectors.length} vectors"
+    IO.println "  (CORPUS evidence — shrinks the Charon/Aeneas TCB on tested inputs; not a ∀)"
+  | some i =>
+    IO.eprintln s!"  [FAIL] u256_format_decimal: extracted Lean ≠ Rust on vector {i} — \
                    a Charon/Aeneas mistranslation (or stale vectors: regen with GEN=1)"
     IO.Process.exit 1
 

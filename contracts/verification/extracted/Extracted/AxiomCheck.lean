@@ -31,6 +31,10 @@ import Extracted.FormatDecimal.ExtractDigitsSpec
 import Extracted.FormatDecimal.RoundCarrySpec
 import Extracted.FormatDecimal.TrimFracSpec
 import Extracted.FormatDecimal.EmitSpec
+-- Rust-generated differential vectors (data only, no theorems; enrolled so the
+-- axiom gate elaborates them — the replay lives in Extracted/ExtractDiffCheck.lean)
+import Extracted.ExtractDiffVectors
+import Extracted.FormatDecimalDiffVectors
 
 -- FV-#2 sequel: slot_entropy byte-layout (invariant #8). Closure = kernel triple
 -- + the disclosed `sha256_pure_bytes` hash axiom (the FV-#2 single-shot SHA-256

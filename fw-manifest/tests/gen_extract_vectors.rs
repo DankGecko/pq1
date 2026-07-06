@@ -15,6 +15,7 @@
 //! (or `make verify-extract-differential GEN=1`).
 
 use fw_manifest::signed_preimage;
+use pqsigner_tx_core::eip1559::{u256_format_decimal, U256};
 use std::fs;
 
 fn lean_bytes(bytes: &[u8]) -> String {
@@ -80,4 +81,185 @@ fn gen_extract_vectors() {
     );
     fs::write(path, lean).expect("write ExtractDiffVectors.lean");
     eprintln!("gen_extract_vectors: wrote {} vectors", versions.len());
+}
+
+// ---------------------------------------------------------------------------
+// format_decimal differential vectors (Track-1 milestone M8)
+// ---------------------------------------------------------------------------
+
+/// How the per-vector `out` buffer length is chosen.
+enum OutLen {
+    /// Fixed byte length (96 = "comfortably big"; 0 = the degenerate buffer).
+    Fixed(usize),
+    /// Exactly the byte count the shipped Rust needs (probed with a big buffer).
+    Exact,
+    /// One byte short of the need — the shipped Rust must return `None`.
+    ExactMinus1,
+}
+use OutLen::{Exact, ExactMinus1, Fixed};
+
+fn u256_from_u128(x: u128) -> U256 {
+    let mut b = [0u8; 32];
+    b[16..32].copy_from_slice(&x.to_be_bytes());
+    U256(b)
+}
+
+#[test]
+fn gen_format_decimal_vectors() {
+    let max = U256([0xff; 32]);
+    // Deterministic full-width (256-bit) byte pattern — construct-diverse
+    // digit extraction over all 32 bytes.
+    let mut pat_bytes = [0u8; 32];
+    for (i, b) in pat_bytes.iter_mut().enumerate() {
+        *b = (i as u8).wrapping_mul(17).wrapping_add(3);
+    }
+    let pat = U256(pat_bytes);
+    let eth_1_5 = u256_from_u128(1_500_000_000_000_000_000);
+
+    // (value, decimals, frac_digits, trim, out_len, corpus note).
+    // The NOTE documents the boundary the vector pins; the EXPECTED output is
+    // always the executed shipped Rust below, never hand-written.
+    #[rustfmt::skip]
+    let cases: Vec<(U256, u32, u32, bool, OutLen, &str)> = vec![
+        // --- doc-comment examples (tx-core/src/eip1559.rs lines 128-132) ---
+        (u256_from_u128(0), 18, 6, false, Fixed(96), "doc: 0 -> 0.000000"),
+        (u256_from_u128(0), 18, 6, true,  Fixed(96), "doc: 0 trim -> 0"),
+        (eth_1_5,           18, 6, false, Fixed(96), "doc: 1.5 ETH -> 1.500000"),
+        (eth_1_5,           18, 6, true,  Fixed(96), "partial trim -> 1.5"),
+        (u256_from_u128(1), 18, 18, false, Fixed(96), "doc: 1 wei full frac"),
+        (u256_from_u128(1), 18, 18, true,  Fixed(96), "trim keeps nonzero last digit"),
+        (max,               18, 0, false, Fixed(96), "MAX at 18 dec, frac 0 (rounded 60-digit int)"),
+        (max,                0, 0, false, Fixed(96), "MAX, decimals=0, frac=0 -> 78-digit int"),
+        // --- round-half-up boundaries at frac=6 (micro-units, decimals=7) ---
+        (u256_from_u128(6_666_665),  7, 6, false, Fixed(96), "0.6666665: drop=5 rounds up"),
+        (u256_from_u128(6_666_666),  7, 6, false, Fixed(96), "0.6666666: drop=6 rounds up"),
+        (u256_from_u128(6_666_664),  7, 6, false, Fixed(96), "0.6666664: drop=4 no round"),
+        (u256_from_u128(9_999_996),  7, 6, false, Fixed(96), "0.9999996 -> 1.000000 carry into int"),
+        (u256_from_u128(99_999_996), 7, 6, false, Fixed(96), "9.9999996 -> 10.000000 carry GROWS count"),
+        (u256_from_u128(9_999_995),  7, 6, false, Fixed(96), "0.9999995: drop exactly 5 rounds up"),
+        (u256_from_u128(9_999_994),  7, 6, false, Fixed(96), "0.9999994: no round"),
+        (u256_from_u128(9_999_996),  7, 6, true,  Fixed(96), "carry then all-zero frac trims to int"),
+        (u256_from_u128(99_999_996), 7, 6, true,  Fixed(96), "carry-growth then trim"),
+        (u256_from_u128(666_666_650_000_000_000), 18, 6, false, Fixed(96), "18-dec round boundary"),
+        (u256_from_u128(1_000_000_000_000_000_001), 18, 6, true, Fixed(96), "sub-frac dust rounds away, trims to int"),
+        // --- trim + frac > decimals structural zeros ---
+        (u256_from_u128(5_000_000_000_000_000_000), 18, 6, true,  Fixed(96), "all-zero frac -> bare int"),
+        (u256_from_u128(5_000_000_000_000_000_000), 18, 6, false, Fixed(96), "same, no trim -> x.000000"),
+        (u256_from_u128(5),   0, 3, false, Fixed(96), "frac>decimals structural zeros: 5.000"),
+        (u256_from_u128(5),   0, 3, true,  Fixed(96), "structural zeros trim -> 5"),
+        (u256_from_u128(123), 2, 5, false, Fixed(96), "frac>decimals with real frac: 1.23000"),
+        (u256_from_u128(123), 2, 5, true,  Fixed(96), "partial trim of structural zeros: 1.23"),
+        (u256_from_u128(1),  18, 40, false, Fixed(96), "frac 40 > decimals 18: 22 structural zeros"),
+        (u256_from_u128(1),  18, 40, true,  Fixed(96), "same, trimmed back to last real digit"),
+        // --- decimals = 0 ---
+        (u256_from_u128(123_456), 0, 0, false, Fixed(96), "plain integer"),
+        (u256_from_u128(123_456), 0, 2, false, Fixed(96), "integer with structural .00"),
+        (u256_from_u128(0),       0, 0, false, Fixed(96), "zero, decimals=0"),
+        (u256_from_u128(0),       0, 0, true,  Fixed(96), "zero, decimals=0, trim"),
+        // --- deep-decimals edges ---
+        (max, 1, 0, false, Fixed(96), "MAX/10 rounds up (last digit 5): 77-digit carry ripple"),
+        (u256_from_u128(42), 18, 6, false, Fixed(96), "drop idx beyond n_digits -> structural-0 drop"),
+        (u256_from_u128(42), 18, 6, true,  Fixed(96), "same, trim -> 0"),
+        (max, 100, 2, false, Fixed(96), "decimals 100 > 78 digits: value vanishes to 0.00"),
+        (max,  79, 2, false, Fixed(96), "decimals 79, 78-digit value: leading frac zeros"),
+        // --- out_len boundaries: exactly need / need-1 (None) / 0 (None) ---
+        (eth_1_5, 18, 6, false, Exact,       "fits exactly (need=8)"),
+        (eth_1_5, 18, 6, false, ExactMinus1, "one byte short -> None, nothing written"),
+        (eth_1_5, 18, 6, false, Fixed(0),    "empty out -> None"),
+        (u256_from_u128(0), 18, 6, true, Exact,    "single-byte 0 fits exactly"),
+        (u256_from_u128(0), 18, 6, true, Fixed(0), "single-byte 0, empty out -> None"),
+        (max, 0, 0, false, Exact,       "78 digits exactly"),
+        (max, 0, 0, false, ExactMinus1, "77 bytes for 78 digits -> None"),
+        (u256_from_u128(5), 0, 3, false, Exact,       "5.000 exactly (need=5)"),
+        (u256_from_u128(5), 0, 3, false, ExactMinus1, "4 bytes for 5.000 -> None"),
+        (u256_from_u128(1), 18, 18, false, Exact,       "0.000000000000000001 exactly (need=20)"),
+        (u256_from_u128(1), 18, 18, false, ExactMinus1, "19 bytes for need=20 -> None"),
+        // --- random-ish mid-size values ---
+        (u256_from_u128(0x0123_4567_89ab_cdef_fedc_ba98_7654_3210), 18, 6, false, Fixed(96), "mid u128 pattern"),
+        (u256_from_u128(0x0123_4567_89ab_cdef_fedc_ba98_7654_3210), 18, 6, true,  Fixed(96), "mid u128 pattern, trim"),
+        (u256_from_u128(987_654_321_012_345_678_901_234_567), 12, 4, false, Fixed(96), "27-digit, decimals=12"),
+        (u256_from_u128(987_654_321_012_345_678_901_234_567), 12, 4, true,  Fixed(96), "27-digit, trim"),
+        (u256_from_u128(u128::MAX), 6, 6, false, Fixed(96), "u128::MAX at USDC decimals"),
+        (u256_from_u128(u128::MAX), 6, 6, true,  Fixed(96), "u128::MAX at USDC decimals, trim"),
+        (pat, 18, 8, false, Fixed(96), "full-width 256-bit byte pattern"),
+        (pat, 18, 8, true,  Fixed(96), "full-width 256-bit byte pattern, trim"),
+    ];
+
+    const SENTINEL: u8 = 0xAA;
+    let mut rows = String::new();
+    for (value, decimals, frac, trim, out_len, note) in &cases {
+        // Resolve Exact/ExactMinus1 by probing the SHIPPED Rust with a big
+        // buffer — still executed ground truth, no hand-computed widths.
+        let out_len: usize = match out_len {
+            Fixed(n) => *n,
+            Exact | ExactMinus1 => {
+                let mut probe = [SENTINEL; 128];
+                let need = u256_format_decimal(value, *decimals, *frac, *trim, &mut probe)
+                    .expect("corpus bug: Exact/ExactMinus1 case must fit in 128 bytes");
+                match out_len {
+                    Exact => need,
+                    _ => need - 1,
+                }
+            }
+        };
+        let mut out = vec![SENTINEL; out_len];
+        let ret = u256_format_decimal(value, *decimals, *frac, *trim, &mut out); // EXECUTED RUST
+        // The shipped contract: on None nothing is written; on Some(n) nothing
+        // past n is written. Assert it so the Lean side may check the same.
+        let written = ret.unwrap_or(0);
+        assert!(written <= out_len, "corpus bug: n > out_len");
+        assert!(
+            out[written..].iter().all(|&b| b == SENTINEL),
+            "shipped Rust wrote past its returned count"
+        );
+        let expected = match ret {
+            Some(n) => format!("some {}", lean_bytes(&out[..n])),
+            None => "none".to_string(),
+        };
+        rows.push_str(&format!(
+            "    -- {}\n    ({}, {}, {}, {}, {}, {}),\n",
+            note,
+            lean_bytes(&value.0),
+            decimals,
+            frac,
+            trim,
+            out_len,
+            expected
+        ));
+    }
+
+    let lean = format!(
+        "-- AUTO-GENERATED by fw-manifest/tests/gen_extract_vectors.rs — DO NOT EDIT BY HAND.\n\
+         -- Regenerate: make verify-extract-differential GEN=1\n\
+         --\n\
+         -- Each row is (value[32 BE], decimals, frac_digits, trim, out_len, EXPECTED).\n\
+         -- EXPECTED is `some (bytes written)` / `none` (= would-not-fit, nothing\n\
+         -- written) from EXECUTING the shipped Rust\n\
+         -- `pqsigner_tx_core::eip1559::u256_format_decimal` — the differential\n\
+         -- ground truth, NEVER the Lean #eval. `Extracted/ExtractDiffCheck.lean`\n\
+         -- runs the EXTRACTED Lean `eip1559.u256_format_decimal` on the same\n\
+         -- inputs and asserts equality (including that the sentinel-filled tail\n\
+         -- past the written count is untouched, which the generator asserts of\n\
+         -- the shipped Rust), catching a consistently-wrong Charon/Aeneas\n\
+         -- translation (which the extract-format-decimal regen-diff cannot).\n\
+         namespace ExtractDiff\n\
+         \n\
+         /-- (value, decimals, frac_digits, trim, out_len, EXPECTED) — Rust-executed. -/\n\
+         def fdVectors :\n\
+             List (Array UInt8 × UInt32 × UInt32 × Bool × Nat × Option (Array UInt8)) :=\n\
+         [\n{}]\n\
+         \n\
+         end ExtractDiff\n",
+        rows
+    );
+
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../contracts/verification/extracted/Extracted/FormatDecimalDiffVectors.lean"
+    );
+    fs::write(path, lean).expect("write FormatDecimalDiffVectors.lean");
+    eprintln!(
+        "gen_extract_vectors: wrote {} format_decimal vectors",
+        cases.len()
+    );
 }

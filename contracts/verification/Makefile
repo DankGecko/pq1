@@ -352,6 +352,8 @@ REPO_ROOT     := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
 # produced by running the SHIPPED Rust (`fw-manifest/tests/gen_extract_vectors.rs`)
 # and fails on any divergence. Includes a permanent negative control. CORPUS
 # evidence (tier C) — shrinks the Charon faithfulness TCB on tested inputs, not a ∀.
+# Covered: fw_manifest::signed_preimage (ExtractDiffVectors) +
+# pqsigner_tx_core::eip1559::u256_format_decimal (FormatDecimalDiffVectors, M8).
 #   make verify-extract-differential          replay committed (Rust-generated) vectors
 #   make verify-extract-differential GEN=1    re-execute the Rust to regenerate them
 verify-extract-differential: ## Extracted-Lean vs shipped-Rust differential
@@ -360,7 +362,8 @@ ifeq ($(GEN),1)
 	@cd $(REPO_ROOT) && cargo test -p fw-manifest --test gen_extract_vectors --release -- --nocapture 2>&1 \
 	  | grep -E 'gen_extract_vectors:|test result'
 endif
-	@cd $(EXTRACTED_DIR) && $(LAKE) build Extracted.ExtractDiffVectors 2>&1 | tail -1
+	@cd $(EXTRACTED_DIR) && $(LAKE) build Extracted.ExtractDiffVectors Extracted.FormatDecimalDiffVectors \
+	  Extracted.FwManifest.Funs Extracted.FormatDecimal.Funs 2>&1 | tail -1
 	@cd $(EXTRACTED_DIR) && $(LAKE) env lean Extracted/ExtractDiffCheck.lean
 
 verify-extracted: ## S33 Aeneas-extracted build + axiom-discipline
