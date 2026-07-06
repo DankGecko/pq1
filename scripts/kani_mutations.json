@@ -302,12 +302,34 @@
       "id": "token_amount_threshold_boundary_off_by_one",
       "tier": "default",
       "crate": "pqsigner-erc7730",
-      "harness": "fmt_p0_token_amount_threshold_boundary_concrete",
-      "file": "pqsigner-erc7730/src/display/render/formatters.rs",
-      "find": "value.0 >= *t",
-      "replace": "value.0 > *t",
+      "harness": "amt_dec_unlimited_iff_ge_threshold",
+      "file": "pqsigner-erc7730/src/display/render/amount_decision.rs",
+      "find": "*value >= *t",
+      "replace": "*value > *t",
       "expect": "kani_fails",
-      "note": "unlimited-threshold gate off-by-one: value == threshold no longer paints the loud threshold row (the single most dangerous approval renders as a normal amount). The boundary witness pins value == T exactly, so it MUST redden. Verified 2026-07-04 by hand: mutation -> VERIFICATION:- FAILED; reverted -> file restored (grep-confirmed)."
+      "note": "unlimited-threshold gate off-by-one: value == threshold no longer selects the Unlimited arm (the single most dangerous approval renders as a normal amount). REPOINTED 2026-07-06 (M4 amount-decision factoring): the gate moved from formatters.rs into the pure token_amount_decision, and the catcher upgraded from the M3 concrete boundary witness to the doubly-symbolic forall biconditional (which pins BOTH directions of the gate; the concrete witness fmt_p0_token_amount_threshold_boundary_concrete still exists in formatters.rs as the paint-integration pin). Re-verified 2026-07-06 by hand on the new location: mutation -> VERIFICATION:- FAILED (assertion is_unlimited_arm == expect_unlimited); reverted -> file restored (grep-confirmed)."
+    },
+    {
+      "id": "token_amount_native_precedence_dropped",
+      "tier": "default",
+      "crate": "pqsigner-erc7730",
+      "harness": "amt_dec_native_sentinel_precedence",
+      "file": "pqsigner-erc7730/src/display/render/amount_decision.rs",
+      "find": "if is_native {",
+      "replace": "if is_native && false {",
+      "expect": "kani_fails",
+      "note": "disable the native-currency sentinel arm: a resolved token equal to the descriptor's Merkle-pinned nativeCurrencyAddress falls through to the erc20 ladder (UnverifiedRaw when no trailer matches) instead of Bound(18, native_ticker) -- ETH amounts on a nativeCurrencyAddress descriptor would render as raw wei with a dec=? banner, and a companion-supplied trailer could take over the sentinel's identity. The precedence forall MUST redden. Verified 2026-07-06 by hand: mutation -> VERIFICATION:- FAILED (dd == 18, ticker binding + arm asserts); reverted -> file restored (grep-confirmed)."
+    },
+    {
+      "id": "token_amount_identity_page_dropped",
+      "tier": "default",
+      "crate": "pqsigner-erc7730",
+      "harness": "amt_dec_token_identity_binding",
+      "file": "pqsigner-erc7730/src/display/render/amount_decision.rs",
+      "find": "let identity_page = if bound.is_none() { token_addr } else { None };",
+      "replace": "let identity_page = None;",
+      "expect": "kani_fails",
+      "note": "drop the MEDIUM-1 identity-page rule: an unbound token's resolved address is never emitted, so the user approves a transfer/withdraw/swap of an UNNAMED token (the identity-hiding class). The token-identity forall binds identity_page == Some(resolved addr) on every miss, so it MUST redden. Verified 2026-07-06 by hand: mutation -> VERIFICATION:- FAILED (d.identity_page == Some(addr)); reverted -> harness re-run SUCCESSFUL on the restored tree."
     },
     {
       "id": "raw_word_hex_row_slice_drift",
