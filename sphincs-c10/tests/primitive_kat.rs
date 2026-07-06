@@ -78,10 +78,30 @@ struct Counts {
     fors_secret: usize,
 }
 
+/// Self-documenting preimage spec (ETHFALCON-port R2). Lets an isolated auditor
+/// or review-swarm agent reimplement + check the C10 hash layer from THIS FILE
+/// ALONE — no repo access, no toolchain. Every string is the exact SHA-256
+/// preimage the corresponding primitive assembles (see `sphincs-c10/src/hash.rs`).
+#[derive(Serialize, Deserialize)]
+struct Specs {
+    conventions: String,
+    adrs_layout: String,
+    th: String,
+    th_pair: String,
+    th_multi: String,
+    h_msg: String,
+    chain_hash: String,
+    wots_digest: String,
+    wots_secret: String,
+    fors_secret: String,
+    provenance: String,
+}
+
 #[derive(Serialize, Deserialize)]
 struct Kat {
     #[serde(rename = "_comment")]
     comment: String,
+    specs: Specs,
     counts: Counts,
     th: Vec<ThV>,
     th_pair: Vec<PairV>,
@@ -308,7 +328,48 @@ fn build() -> Kat {
         fors_secret: fors_secret.len(),
     };
 
+    let specs = Specs {
+        conventions:
+            "n=16 (N). Byte fields are 0x-hex. 32-byte words: `seed`/`val`/`left`/`right`/`root`/`R` \
+             are N-masked (16 value bytes in [0..16), zero in [16..32)); `adrs` is a full packed \
+             32-byte address (see adrs_layout); `msg` is a raw 32-byte digest. trunc16(x)=x[0..16]. \
+             pad16(v16)=v16 || 0^16. u32_be/u256_be = big-endian. Outputs are 16 bytes except \
+             h_msg/wots_digest (full 32). All sha256 = FIPS 180-4 (NIST CAVP-anchored)."
+                .into(),
+        adrs_layout:
+            "32-byte big-endian ADRS: [0..4)=layer(u32) [4..12)=tree(u64) [12..16)=type(u32: \
+             WOTS=0,WOTS_PK=1,TREE=2,FORS_TREE=3,FORS_ROOTS=4) [16..20)=keypair [20..24)=chain_index \
+             [24..28)=chain_pos/tree_height [28..32)=hash_addr."
+                .into(),
+        th: "trunc16(sha256(seed || adrs || val))".into(),
+        th_pair: "trunc16(sha256(seed || adrs || left || right))".into(),
+        th_multi: "trunc16(sha256(seed || adrs || pad16(vals[0]) || pad16(vals[1]) || ...))".into(),
+        h_msg: "sha256(seed || root || R || msg || 0xFF^32)  // FULL 32-byte output".into(),
+        chain_hash:
+            "cur=pad16(val); for step in 0..steps { adrs[24..28)=u32_be(start+step); \
+             cur=pad16(trunc16(sha256(seed || adrs || cur))) }; return trunc16(cur)  // steps=0 => identity"
+                .into(),
+        wots_digest:
+            "sha256(seed || wots_adrs || msg || u256_be(count))  // count in low 4 bytes; FULL 32-byte output"
+                .into(),
+        wots_secret:
+            "trunc16(sha256(sk_seed || 'wots' || u32_be(layer) || u256_be(tree) || u32_be(kp) || u32_be(chain_idx)))"
+                .into(),
+        fors_secret:
+            "trunc16(sha256(sk_seed || 'fors' || u32_be(ht_idx) || u32_be(tree_idx) || u32_be(leaf_idx)))"
+                .into(),
+        provenance:
+            "SELF-GENERATED + N-way cross-checked (Rust primitive_kat.rs <-> \
+             independent_c10_signer.py --check-primitives <-> Yul C10PrimitiveKat.t.sol). NOT \
+             externally conformant: C10 shares ONLY raw SHA-256 with any standard; every layer \
+             above (tweakable hash, ADRS, PRF) is a bespoke EVM re-encoding, so NO official \
+             SPHINCS+/SLH-DSA KAT applies. Reimplement from `specs` above and check against the \
+             vectors below. See docs/verification/external-kat-provenance-and-ethfalcon-port-2026-07.md."
+                .into(),
+    };
+
     Kat {
+        specs,
         counts,
         comment: "C10 per-primitive tweakable-hash golden KAT (n=16, sig=4008). \
                   SELF-GENERATED + N-way cross-checked (Rust primitive_kat.rs \u{2194} \

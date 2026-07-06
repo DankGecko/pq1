@@ -169,13 +169,19 @@ Pure additive test rigor — no new dependency, no production change. Honest sco
 (no official per-primitive KAT exists — §1). Add
 `sphincs-c10/tests/primitive_kat.rs` + the per-primitive Yul asserts.
 
-**R2 — [Medium] Portable `.rsp`-style vector artifact + standalone parser.**
-Emit the C10 golden vectors (whole-sig + R1 primitives) into a documented,
-self-describing text artifact decoupled from the JSON/Lean/Solidity harnesses,
-with a ~30-line standalone parser (à la `test_nist_kat_files.py::parse_kat_rsp`).
-An external auditor can then consume/regenerate vectors without our toolchain.
-Modest effort; improves auditability of the "self-generated because no standard
-exists" story.
+**R2 — [Low] Portable, self-documenting vector artifact. ✅ REFRAMED + LANDED
+2026-07-06.** The literal NIST-`.rsp` reformat was deliberately **not** done —
+JSON is already more portable and machine-readable than `.rsp`, and
+`independent_c10_signer.py` is a standalone, spec-derived reference an auditor can
+read/run/fork. Instead the golden `c10_primitive_kat_vectors.json` now carries a
+top-level **`specs`** block: the exact SHA-256 preimage formula for each of the 8
+primitives + the ADRS field layout + byte conventions + a provenance/honest-scope
+line. An isolated auditor or review-swarm agent can now reimplement and check the
+entire C10 hash layer **from that one file alone** — no repo access, no toolchain
+— which is the actual portability value the `.rsp` idea was reaching for. See the
+adversarial-review entry point below. (Original `.rsp` spec, superseded: emit the
+vectors into a documented `.rsp` + a ~30-line standalone parser à la
+`test_nist_kat_files.py::parse_kat_rsp`.)
 
 **R3 — [Low] Provenance statement.** This doc + delta-audit §5/§6 already state
 it; ensure any external/marketing claim says **"SPHINCS+C variant, parameter set
@@ -194,6 +200,35 @@ AES-CTR-DRBG harness (wrong seeding model for us); a 4th runtime re-implementati
 (the Go leg) — our Lean model is the higher-value 4th artifact.
 
 ---
+
+## 6. Adversarial-review entry point (agent swarms)
+
+For a review swarm tasked with finding a **spec↔implementation divergence in the
+C10 hash layer**, this is the self-contained substrate — no official KAT exists to
+diff against (§2), so the review target is *agreement across the N independent
+artifacts*, and R1/R2 make that agreement byte-checkable and localizable:
+
+- **Self-documenting golden — reimplement from one file.**
+  `contracts/smart-wallet/test/c10_primitive_kat_vectors.json` carries a `specs`
+  block (exact preimage per primitive + ADRS layout + conventions) alongside 26
+  input→output vectors. An agent can code each primitive from `specs` alone and
+  diff against the vectors — zero repo access needed.
+- **Standalone spec-derived reference — read / run / fork.**
+  `contracts/verification/scripts/independent_c10_signer.py` (clean-room, written
+  from the Yul spec, ~470 lines) implements all 8 primitives + a whole signer;
+  `--check-primitives <json>` self-checks. Fork it to test a divergence hypothesis.
+- **Byte-level spec of record.** `c10-fips205-delta-audit.md` §5 (hash
+  instantiation) / §6 (ADRS) — the line-grounded map to `hash.rs` + the Yul.
+- **One-command triangulation.** `make -C contracts/verification
+  verify-primitive-kat` runs Rust ↔ Python ↔ Yul over the golden (the 6
+  verify-side primitives on-chain via precompile 0x02; the 2 PRFs Rust↔Python).
+- **Divergence-localization property to exploit.** Flip any byte of a `hash.rs`
+  primitive (or a golden `out`) → all relevant legs redden **with the exact
+  primitive label** (mutation-verified). So a swarm agent can bisect a whole-sig
+  KAT failure to the exact tweakable-hash call instead of a 4008-byte haystack.
+- **Do not** burn cycles hunting for a downloadable SPHINCS+/SLH-DSA KAT to
+  anchor C10 — none exists above raw SHA-256 (§1/§2); that layer is already
+  CAVP-anchored.
 
 ## Appendix — verified sources & method
 
