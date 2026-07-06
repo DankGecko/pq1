@@ -23,11 +23,12 @@
 //!   * Lives entirely under `#[cfg(test)]` in `main.rs`, so production
 //!     builds are unaffected.
 //!
-//! Coverage caveat: `pick_sign_pages` (the dispatcher in
-//! `tx/display/mod.rs`) depends on `crate::zk` / `crate::tx::eip712::
-//! cowswap_display`, both of which are themselves gated to firmware
-//! builds, so it is documented in the report's "Coverage gaps" section
-//! and exercised by the firmware-side e2e harness instead.
+//! `pick_sign_pages` (the dispatcher, now in `tx/display/dispatch.rs`)
+//! IS mounted here since 2026-07-06 — its historic blockers are gone
+//! (`crate::zk` was retired 2026-06-30; `cowswap_display` is test-mounted
+//! in `eip712/mod.rs`). The WYSIWYS glue harness in
+//! `wysiwys_dispatch_differential_tests.rs` drives the real dispatcher
+//! body against the same request bytes the sign handler hashes.
 
 // `Page`/`DISPLAY_COLS`/`DISPLAY_ROWS` are no longer used here — the mirrored
 // `Pages` was replaced by a re-export of the host `pqsigner_erc7730::display`
@@ -137,6 +138,15 @@ pub mod safe_display;
 #[path = "../tx/display/safe_mgmt.rs"]
 pub mod safe_mgmt;
 
+// The REAL `pick_sign_pages` dispatcher body (priority ladder + the
+// dispatcher-level value/gas splice gates). Mounted so the WYSIWYS glue
+// harness can bind "the pages the user confirms" to "the bytes the sign
+// handler hashes" on the host. Inside `dispatch.rs` every sibling
+// renderer is `super::`-qualified, so under this mount it calls exactly
+// the renderer bodies mounted above.
+#[path = "../tx/display/dispatch.rs"]
+pub mod dispatch;
+
 #[cfg(test)]
 mod pure_tests;
 
@@ -151,3 +161,6 @@ mod cowswap_render_pure_tests;
 
 #[cfg(test)]
 mod safe_display_render_pure_tests;
+
+#[cfg(test)]
+mod wysiwys_dispatch_differential_tests;
