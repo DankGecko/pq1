@@ -1,3 +1,9 @@
+---
+status: resolved   # historical FV review round, filed under the findings convention 2026-07-06
+catalogue: ../REVIEW_PROVENANCE.md  # authoritative per-round verdict + handled-state
+note: confirmed findings tracked in AXIOM_STATUS.json / STATUS.md / docs/work-todo.md
+---
+
 # Firmware-Kani Adversarial Review — Synthesis Report
 
 **Date:** 2026-07-01

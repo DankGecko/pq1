@@ -2,6 +2,8 @@
 
 This folder is the **single home for every finding report** produced by an adversarial-review pass (per the playbooks in the parent directory + the [FV playbook](../../../verification/fv-adversarial-review-playbook.md)). Putting all reports here — one file per pass, with a consistent header and a per-finding status — makes them easy to find, easy to catalogue, and, most importantly, makes it obvious **which findings have been worked through and which are still open**.
 
+> **Sibling — confirmed-vuln writeups.** Individual *confirmed-and-fixed* vulnerability reports live in [`../../vulns/`](../../vulns/) (their own established folder, each with a fix). Those are a distinct flavor from adversarial-review *pass* reports; this folder catalogues the passes. (Consolidating `vulns/` into here is a possible future cleanup — it is heavily cross-referenced, so left separate for now.)
+
 ## How a pass files its findings
 
 1. Copy [`TEMPLATE.md`](./TEMPLATE.md) to `docs/security/adversarial-review/findings/<surface>-<YYYY-MM-DD>[-<run>].md` (e.g. `clear-signing-2026-08-01.md`, or `-r2` for a second run that day).
@@ -42,3 +44,4 @@ Newest first. Add a row when you file a report; update the Status/Findings cells
 | Report | Surface | Date | Report status | Findings (open / handled) |
 |---|---|---|---|---|
 | [2026-07-adversarial-review-engagement](./2026-07-adversarial-review-engagement.md) | multi (playbook family build-out) | 2026-07-02..04 | `resolved` | 0 open / 11 handled (7 fixed, 1 accepted, 3 deferred) |
+| [clear-signing-2026-07-02](./clear-signing-2026-07-02.md) | clear-signing (ERC-7730 + render ladder) | 2026-07-02 | `resolved` | historical pass — live bugs fixed, tracked in the clear-signing playbook + work-todo |

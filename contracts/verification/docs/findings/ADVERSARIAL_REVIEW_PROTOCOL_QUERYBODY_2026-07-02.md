@@ -1,3 +1,9 @@
+---
+status: resolved   # historical FV review round, filed under the findings convention 2026-07-06
+catalogue: ../REVIEW_PROVENANCE.md  # authoritative per-round verdict + handled-state
+note: confirmed findings tracked in AXIOM_STATUS.json / STATUS.md / docs/work-todo.md
+---
+
 # Protocol-Model Query-Body Deep-Dive — Adversarial FV-Soundness Review — 2026-07-02
 
 <!-- EXECUTING round. Scope: the §4 residual of ADVERSARIAL_REVIEW_2026-07-02.md — protocol-model

@@ -7,7 +7,7 @@ Cross-checks the hand transcription `c10Program`
 SOURCE (smart-wallet/src/verifiers/SPHINCsC10Asm.sol) — the single residual the
 Lean kernel proof `execC10Asm_eq` CANNOT see (it relates c10Program <-> spec,
 never c10Program <-> .sol). This converts the one-time human diff (see
-docs/A3_1_ADVERSARIAL_REVIEW_2026-06-18.md) into a re-runnable CI regression gate.
+docs/findings/A3_1_ADVERSARIAL_REVIEW_2026-06-18.md) into a re-runnable CI regression gate.
 
 FOUR checks:
   (A) POSITIONAL constant cross-check — using c10Program's `-- L<n>` anchors, every

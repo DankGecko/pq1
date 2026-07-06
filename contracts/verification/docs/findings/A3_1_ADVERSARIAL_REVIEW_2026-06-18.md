@@ -1,3 +1,9 @@
+---
+status: resolved   # historical FV review round, filed under the findings convention 2026-07-06
+catalogue: ../REVIEW_PROVENANCE.md  # authoritative per-round verdict + handled-state
+note: confirmed findings tracked in AXIOM_STATUS.json / STATUS.md / docs/work-todo.md
+---
+
 # A3.1 interpreter-refinement — adversarial faithfulness review (2026-06-18)
 
 Heavy adversarial double-check of the A3.1 claim that the deployed on-chain

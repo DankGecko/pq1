@@ -1,3 +1,9 @@
+---
+status: resolved   # historical FV review round, filed under the findings convention 2026-07-06
+catalogue: ../REVIEW_PROVENANCE.md  # authoritative per-round verdict + handled-state
+note: confirmed findings tracked in AXIOM_STATUS.json / STATUS.md / docs/work-todo.md
+---
+
 <!-- Adversarial FV-SOUNDNESS review — run per docs/verification/fv-adversarial-review-playbook.md Part C.
 Method: an EXECUTING round (the residual the 2026-07-01 source-read rounds named) — the full verify-* gate
 battery + lean4checker completeness backstop RUN, plus the first adversarial pass on the 5 never-reviewed

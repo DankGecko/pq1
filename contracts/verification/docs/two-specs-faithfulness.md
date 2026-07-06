@@ -113,6 +113,6 @@ usability check.
 - Axiom tracking: `lean/scripts/dump_axioms.lean` (`honest_consistent` entry,
   closure `[propext, Classical.choice, Quot.sound]` — no new axiom).
 - Verifier anchor (bridge (a)): `A3_1_CLOSURE_PATH.md`,
-  `A3_1_ADVERSARIAL_REVIEW_2026-06-18.md`, `THE_CLAIM.md`.
+  `findings/A3_1_ADVERSARIAL_REVIEW_2026-06-18.md`, `THE_CLAIM.md`.
 - Follow-up task: `docs/work-todo.md` → "FV-frontier follow-ups" →
   "Anchor `Spec.Signer.sign`".

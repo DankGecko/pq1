@@ -1,3 +1,9 @@
+---
+status: resolved   # historical FV review round, filed under the findings convention 2026-07-06
+catalogue: ../REVIEW_PROVENANCE.md  # authoritative per-round verdict + handled-state
+note: confirmed findings tracked in AXIOM_STATUS.json / STATUS.md / docs/work-todo.md
+---
+
 <!-- Adversarial FV-soundness review — run per docs/verification/fv-adversarial-review-playbook.md Part C.
 Method: 5 angle-scoped adversarial reviewers (mixed opus/sonnet) walking the V1–V11 catalog against the
 claims inventory (ASSURANCE_CASE / THE_CLAIM / AXIOM_STATUS.json / PROOF_MAP / OPEN_PROOF_OBLIGATIONS +

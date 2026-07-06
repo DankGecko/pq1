@@ -1,3 +1,11 @@
+---
+surface: clear-signing
+run_date: 2026-07-02
+reviewer: historical pass (pre-findings-convention; filed here 2026-07-06)
+scope: ERC-7730 IR/walker/render ladder + EIP-712 decoders
+status: resolved   # historical review pass; its live bugs were fixed + are tracked in the clear-signing playbook + work-todo
+---
+
 # Clear-signing adversarial review - ERC-7730 and render ladder (2026-07-02)
 
 ## Scope

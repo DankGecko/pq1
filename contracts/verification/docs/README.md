@@ -31,7 +31,7 @@ stay here next to the proofs.
   itself" calibration — defers to `THE_CLAIM.md`).
 - **A3.1 verifier equivalence:** [`A3_1_CLOSURE_PATH.md`](./A3_1_CLOSURE_PATH.md),
   [`A3_1_VERIFIER_GAP.md`](./A3_1_VERIFIER_GAP.md),
-  [`A3_1_ADVERSARIAL_REVIEW_2026-06-18.md`](./A3_1_ADVERSARIAL_REVIEW_2026-06-18.md).
+  [`findings/A3_1_ADVERSARIAL_REVIEW_2026-06-18.md`](./findings/A3_1_ADVERSARIAL_REVIEW_2026-06-18.md).
 - **Bytecode discharge:** [`PINNED_CODEHASHES.md`](./PINNED_CODEHASHES.md),
   [`DEPLOYED_BYTECODE_PIN_CAVEAT.md`](./DEPLOYED_BYTECODE_PIN_CAVEAT.md),
   [`MISSING_FOR_FULL_BYTECODE_PROOF.md`](./MISSING_FOR_FULL_BYTECODE_PROOF.md),

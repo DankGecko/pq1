@@ -8,7 +8,7 @@ gate can see, because a subsystem with *no* review has no red row to notice.
 
 **The honest headline: two 2026-07-01 adversarial rounds covered ~3 of the 8 FV
 surfaces below — the Lean on-chain tree (round 1) and the firmware Kani surface
-(round 2, source-read; `ADVERSARIAL_REVIEW_KANI_2026-07-01.md`, verdict: 13 low + 7 info,
+(round 2, source-read; `findings/ADVERSARIAL_REVIEW_KANI_2026-07-01.md`, verdict: 13 low + 7 info,
 0 medium+, no hollow load-bearing proof, no live vuln).** The rest of the stack (Miri, the protocol
 models, CT/SCA, the Aeneas §33 extraction, the differential/fuzz corpus) has **never been
 adversarially reviewed.** Each is *gated* (green when run), but "green" is not
@@ -23,7 +23,7 @@ the whole thing.
 | 1 | **Lean on-chain — `theft_free`** | no unauthorized fund movement given a correct signed digest (the headline theorem + safety closure) | `verify-{build,fv-lints,audit,ledger-consistency,proof-mutation,storage-mutators}`; `verify-lean4checker` (local backstop) | per-PR (`lean-fv.yml`) + nightly (`proof-mutation`) | ✅ **2026-07-01 (source-read-only)** — the playbook's *only* target |
 | 2 | **Lean on-chain — bytecode bridge / A3.1** | deployed `SPHINCsC10Asm.verify = execC10Asm` (∀ carried by KAT + executable differential + ~250-mutant screen; symbolic ∀ in progress) | `verify-{bytecode,transcription,interp,bulk,cavp}`; `kontrol`/`halmos` | per-PR: `transcription` in `a31-transcription.yml`. **`bytecode`/`interp`/`bulk`/`cavp`/`kontrol`/`halmos` are LOCAL/manual** (corrected 2026-07-02: an earlier row claimed per-PR `bytecode` in `ci.yml` — false; ci.yml *paths-ignores* `contracts/verification/**`, and `verify-bytecode` is `local_documented` in `gate_enforcement.json`. Per-PR bytecode-drift protection = the codehash-freeze test in the `contracts` job) | ◑ partial (a31 angle, 2026-07-01 + 2026-07-02) — **user's active front** |
 | 3 | **Aeneas §33 extracted** | firmware pure-logic (KDF byte-layout / invariant #5·#8 functional) = the Rust, ∀ | `verify-{extracted,extract-differential,spec-vendored-fidelity}` | `lean-extracted.yml` (nightly) | ❌ **never** |
-| 4 | **Firmware Kani** (93 harnesses / 17 files) | decoder/gate DECISIONS panic/OOB-free + canonical-acceptance (multiSend / CoW / typed-call / SafeTx / ERC-7730 / Safe-mgmt / NS-ptr / fw-manifest / AA-calldata) | `make kani` + `verify-kani-mutation` (**curated: 6 mutations / 4 files — the other 57 harnesses have no vacuity screen**) | nightly (`nightly.yml`) | ✅ **2026-07-01 (source-read)** — `kani-decoder-vacuity` angle, 13 low + 7 info, 0 medium+; `ADVERSARIAL_REVIEW_KANI_2026-07-01.md` |
+| 4 | **Firmware Kani** (93 harnesses / 17 files) | decoder/gate DECISIONS panic/OOB-free + canonical-acceptance (multiSend / CoW / typed-call / SafeTx / ERC-7730 / Safe-mgmt / NS-ptr / fw-manifest / AA-calldata) | `make kani` + `verify-kani-mutation` (**curated: 6 mutations / 4 files — the other 57 harnesses have no vacuity screen**) | nightly (`nightly.yml`) | ✅ **2026-07-01 (source-read)** — `kani-decoder-vacuity` angle, 13 low + 7 info, 0 medium+; `findings/ADVERSARIAL_REVIEW_KANI_2026-07-01.md` |
 | 5 | **Firmware Miri** | 0-UB on the host-reachable `unsafe` (FI volatile helpers, NS-ptr deref, tree-borrows) | `make miri` | per-PR (`ci.yml`) | ❌ **never** |
 | 6 | **Protocol models** (5 ProVerif + 3 Tamarin + 1 CryptoVerif) | dual-SE seed-split secrecy · 3-way PIN-lockstep reconcile · SCP03 + OPTIGA-shield tunnels · FW-update authenticity (symbolic + computational) | `proverif`/`tamarin`/`cryptoverif` + `verify-protocol-models` | nightly (`nightly.yml`: `proverif` + `verify-protocol-models`); `tamarin`/`cryptoverif` **local** | ❌ **never** |
 | 7 | **CT / SCA** | 5 crypto drivers (kdf/fors/th/saes/**ct_eq**) constant-time on `thumbv8m` (binsec relational; ct_eq guards the `subtle` compares — added 2026-07-02) | `make checkct` | **local only** — the `checkct` job is `workflow_dispatch`-only + `continue-on-error` (WIP; a G1) | ❌ **never** |
@@ -47,5 +47,5 @@ the whole thing.
   review) still has no red row. That needs a threat-model → claim map + the periodic
   external red-team (playbook Layer 3), not a gate.
 
-See `ADVERSARIAL_REVIEW_2026-07-01.md` (the run this scopes) and
+See `findings/ADVERSARIAL_REVIEW_2026-07-01.md` (the run this scopes) and
 `../../docs/verification/fv-adversarial-review-playbook.md` (the method + the G1–G5 catalog).
