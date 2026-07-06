@@ -30,6 +30,7 @@ import Extracted.FormatDecimal.Div10Spec
 import Extracted.FormatDecimal.ExtractDigitsSpec
 import Extracted.FormatDecimal.RoundCarrySpec
 import Extracted.FormatDecimal.TrimFracSpec
+import Extracted.FormatDecimal.EmitSpec
 
 -- FV-#2 sequel: slot_entropy byte-layout (invariant #8). Closure = kernel triple
 -- + the disclosed `sha256_pure_bytes` hash axiom (the FV-#2 single-shot SHA-256
@@ -67,6 +68,21 @@ import Extracted.FormatDecimal.TrimFracSpec
 -- TrimFracSpec.lean header). PURE — kernel-only closure.
 #print axioms TrimFracSpec.trim_frac_spec
 #print axioms TrimFracSpec.trim_frac_loop_spec
+-- format_decimal Track-1 milestone M6b: fmt_emit — renders exactly
+-- emitBytes (int part ++ optional '.' ++ guarded frac digits) touching ONLY
+-- out[0, need); the None path returns with out LITERALLY unchanged (see the
+-- EmitSpec.lean header). Plus the M7-facing emitBytes well-formedness
+-- corollaries (length/ASCII alphabet/single-dot/leading-zero). PURE —
+-- kernel-only closure, no hash axiom, no bv_decide native axiom.
+#print axioms EmitSpec.emit_spec
+#print axioms EmitSpec.emit_int_loop_spec
+#print axioms EmitSpec.emit_frac_loop_spec
+#print axioms EmitSpec.fmt_emit_loop0_eq_loop2
+#print axioms EmitSpec.emitBytes_length
+#print axioms EmitSpec.emitBytes_ascii
+#print axioms EmitSpec.emitBytes_dot_iff
+#print axioms EmitSpec.emitBytes_head_digit
+#print axioms EmitSpec.emitBytes_no_leading_zero
 #print axioms Extracted.Equiv.deserialize_pin_state_rejects_bad_len
 #print axioms Extracted.Equiv.make_adrs_spec
 #print axioms Extracted.Equiv.set_chain_index_spec
