@@ -30,6 +30,7 @@ import Extracted.FormatDecimal.Div10Spec
 import Extracted.FormatDecimal.ExtractDigitsSpec
 import Extracted.FormatDecimal.RoundCarrySpec
 import Extracted.FormatDecimal.TrimFracSpec
+import Extracted.FormatDecimal.FormatDecimalSpec
 import Extracted.FormatDecimal.EmitSpec
 -- Rust-generated differential vectors (data only, no theorems; enrolled so the
 -- axiom gate elaborates them — the replay lives in Extracted/ExtractDiffCheck.lean)
@@ -72,6 +73,9 @@ import Extracted.FormatDecimalDiffVectors
 -- TrimFracSpec.lean header). PURE — kernel-only closure.
 #print axioms TrimFracSpec.trim_frac_spec
 #print axioms TrimFracSpec.trim_frac_loop_spec
+-- format_decimal Track-1 M7 — THE END-TO-END WYSIWYS COMPOSITION (see above).
+#print axioms FormatDecimalSpec.format_decimal_spec
+#print axioms FormatDecimalSpec.u256_format_decimal_spec
 -- format_decimal Track-1 milestone M6b: fmt_emit — renders exactly
 -- emitBytes (int part ++ optional '.' ++ guarded frac digits) touching ONLY
 -- out[0, need); the None path returns with out LITERALLY unchanged (see the
