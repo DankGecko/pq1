@@ -146,13 +146,28 @@ damages the delicate tightness argument.
   than terrifying, but the swap does land on historically-delicate machinery.
 - The HK22 repair rests on a nontrivial hash-property stack (quantum query
   lower bounds, undetectability, PRF), which a WOTS+C proof inherits. [conf 3-0]
-- **UNVERIFIED but decisive** (verification votes were truncated by a session
-  limit, not refuted): a claim that in the dev, *"WOTS-TW security is parametric
-  over an abstract message encoding, and the checksum encoding is a separate
-  instantiation module."* If TRUE, WOTS+C is nearly a drop-in (swap the encoding
-  instantiation) and pushes hard toward the best case. **This is the single
-  highest-value fact to confirm** — a ~30-minute direct read of `WOTS_TW.ec` in
-  the repo settles it.
+- **RESOLVED 2026-07-07 by direct repo recon — and it INVERTS the best case
+  below.** The parametricity claim is TRUE: `WOTS_TW_ES.ec:569`
+  `op encode_msgWOTS : msgWOTS -> emsgWOTS` is a fully abstract operator (never
+  defined; its only structural assumption is `axiom two_encodings`,
+  `WOTS_TW_ES.ec:572`), and the base repo's `FV-XMSS-EC/proofs/WOTS_TW_Checksum.ec`
+  is exactly a separate `clone import WOTS_TW with op encode_msgWOTS <- …` that
+  `realize`s `two_encodings` — the clean encoding-swap the checksum uses. **BUT
+  WOTS+C CANNOT use that seam** (two structural reasons, both grep-checkable):
+  (1) `encode_msgWOTS` is a pure, deterministic, *post-hash* function of the
+  message alone, whereas WOTS+C's compression is `base_w(Th+C(P,T,m,count))` —
+  it needs the public seed `P`, the address `T`, and the grinded `count`, which
+  live *upstream* of the encode seam and are inexpressible as an `encode_msgWOTS`
+  instantiation; (2) `two_encodings` is an unconditional `axiom`, and the
+  constant-sum-via-hash map breaks it whenever two messages collide under
+  `Th+C` — that gap *is* `S-TCR(+C)`, a computational property, which cannot
+  discharge an axiom. So parametricity buys **black-box reuse of the 6314-line
+  WOTS-TW theorem** (never reopened; its stated bound `MEUFGCMA_WOTSTWESNPRF`,
+  `WOTS_TW_ES.ec:6269`, is what Thm 5.2's added term sits beside) — but NOT an
+  encoding drop-in. WOTS+C needs a **new scheme fragment + a new game
+  (`S-TCR_C`) + the App-D reduction**. (Evidence: the recon workspace
+  `~/repos/c10-eufcma-port/` — `PLAN.md` + typechecking drafts `STCR_C.ec`,
+  `WOTS_C_Encoding.ec`.)
 
 ## 6. Part (C) — calibrated estimate
 
@@ -165,8 +180,16 @@ damages the delicate tightness argument.
 **Honest figure: ~6–18 person-months, one qualified EasyCrypt+SPHINCS+ person.**
 
 - Plural **"person-years" is NOT defensible** on this evidence.
-- Best case (~6 mo): an MM45 author reusing their own S-TCR(+C) material, and
-  WOTS-TW turns out parametric over the encoding (§5 UNVERIFIED).
+- **CORRECTED 2026-07-07 (repo recon):** the ~6-month best case is NOT
+  supported — it rested on the "encoding drop-in," now shown structurally
+  impossible (§5 RESOLVED). WOTS+C requires a *new scheme* + a *new game*
+  (`STCR_C.ec`) + the App-D reduction, not a `clone … with op encode_msgWOTS`.
+  **Land the honest figure MID-BAND of the 6–18-month band**, with the App-D
+  pRHL obligations (grinding-oracle losslessness; the Algorithm-10 case-split)
+  as the named schedule risk, and FORS+C the smaller second increment on the
+  same rejection-sampling scaffolding.
+- (superseded) Best case (~6 mo): an MM45 author reusing their own S-TCR(+C)
+  material, and WOTS-TW turns out parametric over the encoding (§5 UNVERIFIED).
 - Worst case (~18 mo ≈ a person-year): a newcomer ramping on a 193-commit dev,
   the Appendix-D sketch has real gaps, and the FORS+C ITSR modification is
   fiddly. Even the worst case is *single*-person-year, not multi.
@@ -221,3 +244,39 @@ assumption — now with an honest, sourced cost for closing it.
 *In-repo: `contracts/verification/lean/SphincsCVerify/Crypto/{EUFCMA,Quantitative}.lean`,
 `docs/verification/c10-fips205-delta-audit.md`,
 `contracts/verification/docs/EUF_CMA_INCONSISTENCY.md`.*
+
+## 9. Progress — 2026-07-07 (recon + toolchain + first typechecking drafts)
+
+EasyCrypt was installed on the dev box (git-`dev` + Alt-Ergo 2.6.0, opam
+`checkct` switch) and the §7 first increment was STARTED. Work product lives in
+a separate repo `~/repos/c10-eufcma-port/` (not pushed; PQSigner untouched):
+
+- **Module-structure map (`PLAN.md`).** `EUFCMA_SPHINCS_PLUS`
+  (`SPHINCS_PLUS.ec:4338-4370`) has 12 summands mapping term-for-term onto Thm
+  5.2. `S-TCR(+C)` slots in as a sibling of the WOTS-layer terms
+  `(w-2)·SM_DT_UD_C` / `SM_DT_TCR_C` / `SM_DT_PRE_C` (`:4360/4364/4366`);
+  FORS+C changes term #3 `MCO_ITSR.ITSR` (`:4347`); the substitution seam is
+  `clone import FL_SL_XMSS_MT_ES` (`:546`). Game templates:
+  `TweakableHashFunctions.eca` `SMDTTCRC` (`:542-581`, closest sibling).
+- **Typechecking drafts.** `STCR_C.ec` (the `S-TCR(Prop)` game + `O^{+C}`
+  grinding oracle, paper Def C.1) elaborates standalone; `WOTS_C_Encoding.ec`
+  (the WOTS+C scheme fragment + `Th+C` + the D.1 reduction skeleton, cloning
+  `STCRC`) elaborates and its `realize` was mutation-tested (non-vacuous). Both
+  under EC-dev + Alt-Ergo, exit 0. Rest on 3 explicit assumptions; **`grindCP`
+  (grinding-oracle losslessness) = App-D gap #1, parked as an axiom — its
+  discharge is the concrete first rigor step.**
+- **App-D assessment.** Thm D.1 + a ~15-line sketch; names the hardest step
+  (deferred public seed, which maps onto the dev's existing `Oracle_THFC`).
+  Three under-justified pieces mechanization must fill: grinding losslessness
+  (the pRHL obligation above), the Algorithm-10 case-split, multi-target
+  counting to `q6`. First two are the schedule risk; none conceptually novel.
+- **Toolchain caveat.** EC-`dev` surface syntax is compatible (all scheme
+  *declarations* elaborate) but the repo's proof SCRIPTS carry r2026.02→dev
+  tactic drift (a probe failed inside a proof at `WOTS_TW_ES.ec:1433`). Run the
+  full port under the repo's pinned r2026.02, or budget proof-script upkeep;
+  add Z3 4.13.4 for proof discharge (Alt-Ergo suffices for the definition layer).
+
+Net: the "months, not years" verdict is REINFORCED by the real repo (modular
+clone seams; a stated reusable WOTS-TW bound; a genuinely singular added term),
+while the ~6-month best case is RETRACTED (§5/§6). The mechanization has a
+concrete, typechecking starting point and a named first rigor obligation.
