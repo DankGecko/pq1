@@ -305,6 +305,15 @@ term is instantiated on the real SPHINCS+ types. Artifacts in
     WOTS types** (`pseed`/`adrs`/`dgstblock`/`msgWOTS`), reusing the real
     `dpseed`; the added Thm-5.2 term is now a concrete game, and grinding is
     proved over the real types. Compiles under the real `WOTS_TW_ES.eco`.
+- **DEFINED (real modules, zero admits) — `WOTS_C_Scheme.ec`:** the WOTS+C
+  scheme `WOTS_C_ES` (keygen reused; `sign` grinds the counter + encodes via
+  `Th+C` + chain-walks with `cf`/`set_chidx` verbatim, returns `sigWOTS*cntr`;
+  `verify` recomputes the encoding from `(m,counter)`, rebuilds the pk, and gates
+  on BOTH pk-match AND `predC` on the recomputed digest) + the d-EU-naCMA game
+  `M_EUF_GCMA_WOTSC_NPRF` (mirrors `M_EUF_GCMA_WOTSTWESNPRF`; collection oracle =
+  real `FC.Oracle_THFC`). **Consequence: every term of Thm D.1 is now a concrete,
+  nameable game** — LHS `M_EUF_GCMA_WOTSC_NPRF`, the added `STCRC_WC.S_TCR_C`, the
+  reused `M_EUF_GCMA_WOTSTWESNPRF`.
 - **ASSUMED (modelling axioms, NOT cryptographic gaps):** counter type finite
   (`CntrFT.enum_spec` — the C10 counter is a 32-bit word); `Th+C`/`predC`
   abstract ops (the C10-specific hash/predicate). `dpseed` losslessness and
@@ -313,13 +322,12 @@ term is instantiated on the real SPHINCS+ types. Artifacts in
   operational-loop↔pure-op bridge. NOT a security axiom and NOT part of the gap-#1
   discharge (every game/reduction uses the proved op directly); provable, left
   admitted after the EC `wp`/`while` goal-shape resisted a one-session close.
-- **REMAINING (the person-months core, not attempted):** the WOTS+C SCHEME
-  (chain-walk sign/verify + counter), the game `M_EUF_GCMA_WOTSC_NPRF`, the two
-  reductions `R_STCRC_WOTSC` (Alg 9) / `R_WOTSTW_WOTSC` (Alg 10) and the Thm C.2 /
-  Thm D.1 proofs (the App-D pRHL fill), FORS+C, and composition into
-  `EUFCMA_SPHINCS_PLUS`. The Thm D.1 statement is written as a precise roadmap:
-  every RHS term is now nameable and real (the instantiated `S-TCR(+C)` + the
-  reused `M_EUF_GCMA_WOTSTWESNPRF` black box).
+- **REMAINING (the person-months core, not attempted):** the two reduction
+  BODIES `R_STCRC_WOTSC` (Alg 9) / `R_WOTSTW_WOTSC` (Alg 10) — the deferred-public-
+  seed simulation via `Th_lambda` + the Algorithm-10 case split — then the Thm C.2 /
+  Thm D.1 reduction PROOFS (the App-D pRHL fill), FORS+C, and composition into
+  `EUFCMA_SPHINCS_PLUS`. With the scheme + game now real, Thm D.1 becomes a
+  compilable lemma the moment the reduction bodies exist (its proof is the fill).
 
 **Toolchain resolved.** The r2026.02 drift caveat above is closed: EasyCrypt
 r2026.02 is installed in opam switch `ec-r2026`; the whole repo (incl.
