@@ -74,6 +74,9 @@ import Extracted.FormatDecimalDiffVectors
 #print axioms TrimFracSpec.trim_frac_spec
 #print axioms TrimFracSpec.trim_frac_loop_spec
 -- format_decimal Track-1 M7 — THE END-TO-END WYSIWYS COMPOSITION (see above).
+-- `round_post_facts` is the PURE round/no-round case analysis lifted out of
+-- the `format_decimal_spec` monolith (elaboration-RAM fix, 2026-07-06).
+#print axioms FormatDecimalSpec.round_post_facts
 #print axioms FormatDecimalSpec.format_decimal_spec
 #print axioms FormatDecimalSpec.u256_format_decimal_spec
 -- format_decimal Track-1 milestone M6b: fmt_emit — renders exactly

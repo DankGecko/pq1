@@ -81,8 +81,26 @@ jobs:
       - name: fetch prebuilt mathlib cache
         run: cd contracts/verification/extracted && lake exe cache get || true
       # Build the Extracted ranks + run the no-sorry / no-sorryAx axiom gate.
+      #
+      # ⚠ MEMORY (known residual, fully diagnosed 2026-07-07, tracked in
+      # docs/work-todo.md): the module `Extracted/FormatDecimal/FormatDecimalSpec.lean`
+      # (the end-to-end WYSIWYS composition) peaks at ~40 GB RSS to build — far over
+      # the 16 GB `ubuntu-latest` runner. ROOT CAUSE is the KERNEL TYPECHECK of the
+      # WP-monad composition proof TERM, not elaboration: with `debug.skipKernelTC`
+      # the whole proof elaborates in ~4.5 s / 2.5 GB, but kernel-checking the
+      # produced term (the accumulating `Eq.mpr` motives across the `let*` binds) is
+      # the ~40 GB / ~17 min. A `sorry`-bisection confirmed NO single fixable hotspot
+      # (the extract→round WP-bind chain alone already peaks ≥23 GB; the trim branches
+      # add ~0), and lemma-lifting is EXHAUSTED (`round_post_facts` is already lifted;
+      # a further `trim_true_facts` lift RAISED the peak and was reverted). So this is
+      # an infra residual, not proof surgery: (1) the `.lake` cache above — a HIT (the
+      # common case; this module rarely changes) restores its olean and skips the
+      # build, which is why this job normally passes; (2) a ≥48 GB larger runner for a
+      # genuine cache-miss; (3) a documented local-only carve-out. The proof + axiom
+      # closures are CORRECT — only the runner size is the issue. Do NOT read a green
+      # run here as "16 GB-safe" on a cold cache.
       - name: verify-extracted (lake build + axiom-discipline gate)
-        run: make -C contracts/verification verify-extracted
+        run: make -C contracts/verification verify-extracted LAKEFLAGS=-j1
       # Vendored-spec fidelity: the extracted ADRS spec must match the SphincsCVerify
       # v4.22 source it vendors (python diff — lightweight, no toolchain).
       - name: verify-spec-vendored-fidelity

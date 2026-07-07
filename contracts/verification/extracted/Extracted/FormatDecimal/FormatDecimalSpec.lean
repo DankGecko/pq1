@@ -823,6 +823,140 @@ theorem cast_u32_usize_spec (x : Std.U32) :
   simp only [lift, WP.spec_ok]
   exact Std.U32.cast_Usize_val_eq x
 
+/-- **Post-round facts** (PURE — lifted out of `format_decimal_spec` so the
+    108-line round/no-round case analysis elaborates in its own small
+    context instead of inside the WP-monad continuation; this extraction
+    took the monolith's elaboration peak from ~31 GB RSS to CI-viable).
+    Under the M4 extract post on the pre-round buffer `ds1`
+    (`hzn1`/`htop1`/`hzero1`/`hdig80`/`hV`/`hVlt`, with `V` the abstract
+    256-bit value) and the M5 `round_carry_spec` post relating `(n2, ds2)`
+    to `(n, ds1)` (`hcarry` when rounding fires, `hid` otherwise), the
+    post-round buffer satisfies the digit-range / zero-tail / count-bound /
+    normalization facts and its scaled value IS `roundedScaled`. -/
+theorem round_post_facts (V : Nat)
+    (ds1 ds2 : Std.Array Std.U8 80#usize) (n n2 td frac : Std.Usize)
+    (hn1 : 1 ≤ n.val) (hn78 : n.val ≤ 78)
+    (hzn1 : V = 0 → n.val = 1)
+    (htop1 : V ≠ 0 → (ds1.val[n.val - 1]!).val ≠ 0)
+    (hzero1 : ∀ i, n.val ≤ i → i < 80 → ds1.val[i]! = 0#u8)
+    (hlds1 : ds1.val.length = 80)
+    (hdig80 : ∀ i, i < 80 → (ds1.val[i]!).val ≤ 9)
+    (hV : decValue ds1.val = V)
+    (hVlt : decValue ds1.val < 10 ^ n.val)
+    (hcarry : frac.val < td.val ∧
+        5 ≤ dropDigitVal ds1.val n.val (td.val - frac.val) →
+        carryPost ds1.val n.val (td.val - frac.val) n2 ds2)
+    (hid : ¬(frac.val < td.val ∧
+        5 ≤ dropDigitVal ds1.val n.val (td.val - frac.val)) →
+        n2 = n ∧ ds2 = ds1) :
+    (∀ i, i < 80 → (ds2.val[i]!).val ≤ 9) ∧
+    (∀ i, n2.val ≤ i → i < 80 → ds2.val[i]! = 0#u8) ∧
+    1 ≤ n2.val ∧ n2.val ≤ 79 ∧
+    (decValue ds2.val = 0 → n2.val = 1) ∧
+    (decValue ds2.val ≠ 0 → (ds2.val[n2.val - 1]!).val ≠ 0) ∧
+    ((if frac.val ≤ td.val
+      then decValue ds2.val / 10 ^ (td.val - frac.val)
+      else decValue ds2.val * 10 ^ (frac.val - td.val))
+     = roundedScaled V td.val frac.val) := by
+  by_cases hcond : frac.val < td.val ∧
+      5 ≤ dropDigitVal ds1.val n.val (td.val - frac.val)
+  · -- rounding fired: carryPost
+    obtain ⟨hW2, hpre2, hdig2, hn2lo, hn2hi, hzero2, hdisj⟩ :=
+      hcarry hcond
+    have hVne : V ≠ 0 := by
+      intro hV0
+      have hn1' := hzn1 hV0
+      have h00 := le_decValue_of_getElem! ds1.val 0 (by omega)
+      rw [pow_zero, Nat.mul_one, hV, hV0] at h00
+      have hdd0 : dropDigitVal ds1.val n.val (td.val - frac.val) = 0 := by
+        unfold dropDigitVal
+        split
+        · rename_i hlt
+          have hi0 : td.val - frac.val - 1 = 0 := by omega
+          rw [hi0]
+          omega
+        · rfl
+      omega
+    have hge1 : 10 ^ (n.val - 1) ≤ V := by
+      have h1 : 1 ≤ (ds1.val[n.val - 1]!).val := by
+        have := htop1 hVne; omega
+      calc 10 ^ (n.val - 1) = 1 * 10 ^ (n.val - 1) := by ring
+        _ ≤ (ds1.val[n.val - 1]!).val * 10 ^ (n.val - 1) :=
+            Nat.mul_le_mul_right _ h1
+        _ ≤ decValue ds1.val :=
+            le_decValue_of_getElem! ds1.val (n.val - 1) (by omega)
+        _ = V := hV
+    have hW : decValue ds2.val
+        = V + 10 ^ (td.val - frac.val) := by
+      rw [hW2, hV]
+    refine ⟨hdig2, hzero2, by omega, by omega, ?_, ?_, ?_⟩
+    · intro h0
+      rw [hW] at h0
+      have := ten_pow_pos (td.val - frac.val)
+      omega
+    · intro hWne
+      rcases hdisj with hnn | hne
+      · apply top_digit_nonzero ds2.val n2.val (by simp) (by omega)
+          (by omega) hdig2 hzero2
+        rw [hW, hnn]
+        -- 10^(n-1) ≤ V ≤ V + 10^(td-frac): omega mis-atomizes the two
+        -- pow terms here; close by explicit transitivity instead.
+        exact Nat.le_trans hge1 (Nat.le_add_right _ _)
+      · exact hne
+    · rw [if_pos (show frac.val ≤ td.val from by omega), hW,
+          Nat.add_div_right _ (ten_pow_pos _)]
+      simp only [roundedScaled, if_pos hcond.1]
+      rw [round_half_up_div V (td.val - frac.val)
+            (by omega)]
+      have hdd : dropDigitVal ds1.val n.val (td.val - frac.val)
+          = (V / 10 ^ (td.val - frac.val - 1)) % 10 := by
+        rw [← hV]
+        exact dropDigitVal_arith ds1.val n.val (td.val - frac.val) hlds1
+          (by omega) hdig80 hVlt
+      rw [if_pos (by rw [← hdd]; exact hcond.2)]
+  · -- no rounding: bit-for-bit identity
+    obtain ⟨hn2eq, hds2eq⟩ := hid hcond
+    have hn2n : n2.val = n.val := by rw [hn2eq]
+    have hWV : decValue ds2.val = V := by
+      rw [hds2eq, hV]
+    refine ⟨?_, ?_, by omega, by omega, ?_, ?_, ?_⟩
+    · intro i hi
+      rw [hds2eq]
+      exact hdig80 i hi
+    · intro i h1 h2
+      rw [hds2eq]
+      exact hzero1 i (by omega) h2
+    · intro h0
+      rw [hWV] at h0
+      rw [hn2n]
+      exact hzn1 h0
+    · intro hWne
+      rw [hWV] at hWne
+      rw [hds2eq, hn2n]
+      exact htop1 hWne
+    · rw [hWV]
+      by_cases hFD : frac.val < td.val
+      · have hdlt : dropDigitVal ds1.val n.val (td.val - frac.val) < 5 := by
+          by_contra h5
+          exact hcond ⟨hFD, by omega⟩
+        have hdd : dropDigitVal ds1.val n.val (td.val - frac.val)
+            = (V / 10 ^ (td.val - frac.val - 1)) % 10 := by
+          rw [← hV]
+          exact dropDigitVal_arith ds1.val n.val (td.val - frac.val)
+            hlds1 (by omega) hdig80 hVlt
+        rw [if_pos (show frac.val ≤ td.val from by omega)]
+        simp only [roundedScaled, if_pos hFD]
+        rw [round_half_up_div V (td.val - frac.val)
+              (by omega),
+            if_neg (by rw [← hdd]; omega)]
+        omega
+      · have hFD' : td.val ≤ frac.val := by omega
+        simp only [roundedScaled, if_neg hFD]
+        rcases Nat.eq_or_lt_of_le hFD' with heq | hlt
+        · rw [if_pos (by omega), ← heq, Nat.sub_self, pow_zero,
+              Nat.div_one, Nat.mul_one]
+        · rw [if_neg (by omega)]
+
 set_option maxHeartbeats 8000000 in
 /-- **END-TO-END WYSIWYS**: `U256::format_decimal` renders exactly the
     round-half-up value of `beValue v / 10^decimals` at `frac_digits`
@@ -866,116 +1000,12 @@ theorem format_decimal_spec (v : eip1559.U256)
       (fun i h1 h2 => hzero1 i h1 (hlds1 ▸ h2))
   let* ⟨n2, ds2, hcarry, hid⟩ ← round_carry_spec ds1 n td frac hn1 hn78
     hdig1 hzero1
-  -- unified post-round facts (round/no-round dichotomy resolved here)
-  have hfacts :
-      (∀ i, i < 80 → (ds2.val[i]!).val ≤ 9) ∧
-      (∀ i, n2.val ≤ i → i < 80 → ds2.val[i]! = 0#u8) ∧
-      1 ≤ n2.val ∧ n2.val ≤ 79 ∧
-      (decValue ds2.val = 0 → n2.val = 1) ∧
-      (decValue ds2.val ≠ 0 → (ds2.val[n2.val - 1]!).val ≠ 0) ∧
-      ((if frac.val ≤ td.val
-        then decValue ds2.val / 10 ^ (td.val - frac.val)
-        else decValue ds2.val * 10 ^ (frac.val - td.val))
-       = roundedScaled (beValue v.val) td.val frac.val) := by
-    by_cases hcond : frac.val < td.val ∧
-        5 ≤ dropDigitVal ds1.val n.val (td.val - frac.val)
-    · -- rounding fired: carryPost
-      obtain ⟨hW2, hpre2, hdig2, hn2lo, hn2hi, hzero2, hdisj⟩ :=
-        hcarry hcond
-      have hVne : beValue v.val ≠ 0 := by
-        intro hV0
-        have hn1' := hzn1 hV0
-        have h00 := le_decValue_of_getElem! ds1.val 0 (by omega)
-        rw [pow_zero, Nat.mul_one, hV, hV0] at h00
-        have hdd0 : dropDigitVal ds1.val n.val (td.val - frac.val) = 0 := by
-          unfold dropDigitVal
-          split
-          · rename_i hlt
-            have hi0 : td.val - frac.val - 1 = 0 := by omega
-            rw [hi0]
-            omega
-          · rfl
-        omega
-      have hge1 : 10 ^ (n.val - 1) ≤ beValue v.val := by
-        have h1 : 1 ≤ (ds1.val[n.val - 1]!).val := by
-          have := htop1 hVne; omega
-        calc 10 ^ (n.val - 1) = 1 * 10 ^ (n.val - 1) := by ring
-          _ ≤ (ds1.val[n.val - 1]!).val * 10 ^ (n.val - 1) :=
-              Nat.mul_le_mul_right _ h1
-          _ ≤ decValue ds1.val :=
-              le_decValue_of_getElem! ds1.val (n.val - 1) (by omega)
-          _ = beValue v.val := hV
-      have hW : decValue ds2.val
-          = beValue v.val + 10 ^ (td.val - frac.val) := by
-        rw [hW2, hV]
-      refine ⟨hdig2, hzero2, by omega, by omega, ?_, ?_, ?_⟩
-      · intro h0
-        rw [hW] at h0
-        have := ten_pow_pos (td.val - frac.val)
-        omega
-      · intro hWne
-        rcases hdisj with hnn | hne
-        · apply top_digit_nonzero ds2.val n2.val (by simp) (by omega)
-            (by omega) hdig2 hzero2
-          rw [hW, hnn]
-          -- 10^(n-1) ≤ V ≤ V + 10^(td-frac): omega mis-atomizes the two
-          -- pow terms here; close by explicit transitivity instead.
-          exact Nat.le_trans hge1 (Nat.le_add_right _ _)
-        · exact hne
-      · rw [if_pos (show frac.val ≤ td.val from by omega), hW,
-            Nat.add_div_right _ (ten_pow_pos _)]
-        simp only [roundedScaled, if_pos hcond.1]
-        rw [round_half_up_div (beValue v.val) (td.val - frac.val)
-              (by omega)]
-        have hdd : dropDigitVal ds1.val n.val (td.val - frac.val)
-            = (beValue v.val / 10 ^ (td.val - frac.val - 1)) % 10 := by
-          rw [← hV]
-          exact dropDigitVal_arith ds1.val n.val (td.val - frac.val) hlds1
-            (by omega) hdig80 hVlt
-        rw [if_pos (by rw [← hdd]; exact hcond.2)]
-    · -- no rounding: bit-for-bit identity
-      obtain ⟨hn2eq, hds2eq⟩ := hid hcond
-      have hn2n : n2.val = n.val := by rw [hn2eq]
-      have hWV : decValue ds2.val = beValue v.val := by
-        rw [hds2eq, hV]
-      refine ⟨?_, ?_, by omega, by omega, ?_, ?_, ?_⟩
-      · intro i hi
-        rw [hds2eq]
-        exact hdig80 i hi
-      · intro i h1 h2
-        rw [hds2eq]
-        exact hzero1 i (by omega) h2
-      · intro h0
-        rw [hWV] at h0
-        rw [hn2n]
-        exact hzn1 h0
-      · intro hWne
-        rw [hWV] at hWne
-        rw [hds2eq, hn2n]
-        exact htop1 hWne
-      · rw [hWV]
-        by_cases hFD : frac.val < td.val
-        · have hdlt : dropDigitVal ds1.val n.val (td.val - frac.val) < 5 := by
-            by_contra h5
-            exact hcond ⟨hFD, by omega⟩
-          have hdd : dropDigitVal ds1.val n.val (td.val - frac.val)
-              = (beValue v.val / 10 ^ (td.val - frac.val - 1)) % 10 := by
-            rw [← hV]
-            exact dropDigitVal_arith ds1.val n.val (td.val - frac.val)
-              hlds1 (by omega) hdig80 hVlt
-          rw [if_pos (show frac.val ≤ td.val from by omega)]
-          simp only [roundedScaled, if_pos hFD]
-          rw [round_half_up_div (beValue v.val) (td.val - frac.val)
-                (by omega),
-              if_neg (by rw [← hdd]; omega)]
-          omega
-        · have hFD' : td.val ≤ frac.val := by omega
-          simp only [roundedScaled, if_neg hFD]
-          rcases Nat.eq_or_lt_of_le hFD' with heq | hlt
-          · rw [if_pos (by omega), ← heq, Nat.sub_self, pow_zero,
-                Nat.div_one, Nat.mul_one]
-          · rw [if_neg (by omega)]
-  obtain ⟨hdig2, hzero2, hn21, hn279, h0n2, htopne2, hR⟩ := hfacts
+  -- unified post-round facts (round/no-round dichotomy resolved in the
+  -- lifted PURE lemma `round_post_facts` — kept OUT of this WP proof so
+  -- its case analysis never elaborates inside the monadic continuation)
+  obtain ⟨hdig2, hzero2, hn21, hn279, h0n2, htopne2, hR⟩ :=
+    round_post_facts (beValue v.val) ds1 ds2 n n2 td frac hn1 hn78 hzn1
+      htop1 hzero1 hlds1 hdig80 hV hVlt hcarry hid
   have hlds2 : ds2.val.length = 80 := by simp
   have hW2lt : decValue ds2.val < 10 ^ n2.val :=
     decValue_lt_pow_of_zero_tail ds2.val n2.val (by omega)
