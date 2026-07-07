@@ -29,7 +29,12 @@ import Extracted.FormatDecimal.Div10Spec
 import Extracted.FormatDecimal.ExtractDigitsSpec
 import Extracted.FormatDecimal.RoundCarrySpec
 import Extracted.FormatDecimal.TrimFracSpec
-import Extracted.FormatDecimal.FormatDecimalSpec
+-- NB: Extracted.FormatDecimal.FormatDecimalSpec (the end-to-end WYSIWYS
+-- composition) is CARVED OUT of the default target — kernel-typechecking its
+-- one WP-monad `format_decimal_spec` declaration peaks at ~42 GB RSS (measured
+-- 2026-07-07, > the 16 GB CI runner). It is a real `qed`, built + axiom-gated
+-- via the non-default `ExtractedFormatDecimalHeavy` lib / `make
+-- verify-extracted-heavy` on adequate RAM. See lakefile.lean + AxiomCheck.lean.
 import Extracted.FormatDecimal.EmitSpec
 
 -- Rust-generated differential vectors (consumed by Extracted/ExtractDiffCheck.lean)

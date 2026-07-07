@@ -30,7 +30,8 @@ import Extracted.FormatDecimal.Div10Spec
 import Extracted.FormatDecimal.ExtractDigitsSpec
 import Extracted.FormatDecimal.RoundCarrySpec
 import Extracted.FormatDecimal.TrimFracSpec
-import Extracted.FormatDecimal.FormatDecimalSpec
+-- FormatDecimalSpec CARVED OUT (its M7 #print-axioms moved to
+-- Extracted/AxiomCheckFormatDecimal.lean) — see the M7 note below.
 import Extracted.FormatDecimal.EmitSpec
 -- Rust-generated differential vectors (data only, no theorems; enrolled so the
 -- axiom gate elaborates them — the replay lives in Extracted/ExtractDiffCheck.lean)
@@ -73,12 +74,11 @@ import Extracted.FormatDecimalDiffVectors
 -- TrimFracSpec.lean header). PURE — kernel-only closure.
 #print axioms TrimFracSpec.trim_frac_spec
 #print axioms TrimFracSpec.trim_frac_loop_spec
--- format_decimal Track-1 M7 — THE END-TO-END WYSIWYS COMPOSITION (see above).
--- `round_post_facts` is the PURE round/no-round case analysis lifted out of
--- the `format_decimal_spec` monolith (elaboration-RAM fix, 2026-07-06).
-#print axioms FormatDecimalSpec.round_post_facts
-#print axioms FormatDecimalSpec.format_decimal_spec
-#print axioms FormatDecimalSpec.u256_format_decimal_spec
+-- format_decimal Track-1 M7 — THE END-TO-END WYSIWYS COMPOSITION — is
+-- axiom-gated in Extracted/AxiomCheckFormatDecimal.lean instead, because
+-- kernel-typechecking `format_decimal_spec` peaks at ~42 GB RSS (single-decl
+-- WP-monad composition; measured 2026-07-07) and is carved out of this default
+-- 16 GB-runner gate. Run `make verify-extracted-heavy` to check its closure.
 -- format_decimal Track-1 milestone M6b: fmt_emit — renders exactly
 -- emitBytes (int part ++ optional '.' ++ guarded frac digits) touching ONLY
 -- out[0, need); the None path returns with out LITERALLY unchanged (see the

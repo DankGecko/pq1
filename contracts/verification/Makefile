@@ -375,6 +375,29 @@ verify-extracted: ## S33 Aeneas-extracted build + axiom-discipline
 	@if grep -q sorryAx /tmp/pq_axiomcheck.out; then \
 	  echo "FAIL: a §33 theorem axiom closure contains sorryAx — a proof is incomplete"; exit 1; \
 	else echo "OK: extracted/ axiom-discipline gate passed — no sorryAx in any §33 theorem closure"; fi
+	@echo "NB: FormatDecimalSpec (M7 WYSIWYS, ~42 GB kernel-TC) is CARVED OUT of this"
+	@echo "    16 GB-safe gate — verify it with 'make verify-extracted-heavy' on ≥48 GB RAM."
+
+# ⚠ HIGH-MEMORY carve-out. Kernel-typechecking the single
+# `FormatDecimalSpec.format_decimal_spec` declaration (the end-to-end WYSIWYS
+# `U256::format_decimal` WP-monad composition) peaks at ~42 GB RSS / ~1470 s
+# (measured 2026-07-07 with `/usr/bin/time -v`; profiler confirms it is the ONLY
+# `[Kernel]` decl over threshold, i.e. a genuine single-declaration cost, not
+# accumulation — a per-bind peel was attempted and reverted as ineffective). It
+# is a REAL `qed` (no sorry/admit; closure [propext, Classical.choice,
+# Quot.sound]) — only its build SCHEDULING is carved out of the default gate so
+# CI stays green on a 16 GB runner. Run this on a machine with ≥48 GB RAM (local
+# dev, or a high-memory CI job); the default `verify-extracted` never builds it.
+verify-extracted-heavy: ## S33 FormatDecimalSpec M7 (~42 GB kernel-TC) — carved out of the default gate; run on ≥48 GB RAM
+	@echo "=== ⚠ HIGH-MEMORY: format_decimal_spec kernel-TC peaks ~42 GB RSS (2026-07-07). Needs ≥48 GB RAM. ==="
+	@cd $(EXTRACTED_DIR) && $(LAKE) build ExtractedFormatDecimalHeavy 2>&1 | tee /tmp/pq_extracted_heavy_build.out
+	@if grep -E "Extracted/[^ ]*\.lean:.*declaration uses" /tmp/pq_extracted_heavy_build.out; then \
+	  echo "FAIL: FormatDecimalSpec declaration uses 'sorry' (incomplete proof)"; exit 1; fi
+	@echo "=== Axiom closure of the M7 WYSIWYS theorems (expect propext, Classical.choice, Quot.sound) ==="
+	@cd $(EXTRACTED_DIR) && $(LAKE) env lean Extracted/AxiomCheckFormatDecimal.lean 2>&1 | tee /tmp/pq_axiomcheck_fd.out
+	@if grep -q sorryAx /tmp/pq_axiomcheck_fd.out; then \
+	  echo "FAIL: a format_decimal M7 theorem axiom closure contains sorryAx — a proof is incomplete"; exit 1; \
+	else echo "OK: format_decimal M7 axiom-discipline gate passed — no sorryAx in the WYSIWYS closure"; fi
 
 extract-sphincs-adrs:
 	@mkdir -p /tmp/pqsigner-extract

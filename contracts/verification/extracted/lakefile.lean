@@ -16,3 +16,18 @@ require aeneas from git
 package «extracted» {}
 
 @[default_target] lean_lib «Extracted» {}
+
+/- Heavy carve-out (NON-default): `Extracted.FormatDecimal.FormatDecimalSpec`
+   (the end-to-end WYSIWYS `format_decimal_spec`) kernel-typechecks at ~42 GB
+   RSS — over the 16 GB CI runner (measured 2026-07-07; a per-bind peel was
+   tried + reverted as ineffective). It is a real `qed` (closure
+   [propext, Classical.choice, Quot.sound]); only its build SCHEDULING is
+   carved out. It is NOT reachable from the default `Extracted` root, so a bare
+   `lake build` (and hence `make verify-extracted`) never builds it and stays
+   under 16 GB. Build + axiom-gate it on adequate RAM with
+   `make verify-extracted-heavy` (→ `lake build ExtractedFormatDecimalHeavy`).
+   Its transitive imports (Div10/Extract/Round/Trim/Emit specs, Funs) live in
+   the default `Extracted` lib and are shared. -/
+lean_lib «ExtractedFormatDecimalHeavy» where
+  globs := #[Glob.one `Extracted.FormatDecimal.FormatDecimalSpec,
+             Glob.one `Extracted.AxiomCheckFormatDecimal]
