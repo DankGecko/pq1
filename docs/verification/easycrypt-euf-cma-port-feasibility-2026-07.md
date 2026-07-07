@@ -280,3 +280,48 @@ Net: the "months, not years" verdict is REINFORCED by the real repo (modular
 clone seams; a stated reusable WOTS-TW bound; a genuinely singular added term),
 while the ~6-month best case is RETRACTED (§5/§6). The mechanization has a
 concrete, typechecking starting point and a named first rigor obligation.
+
+### UPDATE 2026-07-07b — gap #1 DISCHARGED, S-TCR(+C) instantiated on REAL types
+
+The named first rigor obligation (App-D gap #1) is now discharged, the game is
+reconciled to the real repo, the r2026.02 toolchain is stood up, and the added
+term is instantiated on the real SPHINCS+ types. Artifacts in
+`~/repos/c10-eufcma-port/drafts/` (commits `1f3c9ce`, `3be8dd6`, `f7184bb`).
+
+**Honest ledger (proved / assumed / admitted / remaining):**
+
+- **PROVED (real EasyCrypt, `qed`, no `admit`):**
+  - `Grind.ec` — gap #1 discharge. The unconditional `axiom grindP` is GONE,
+    replaced by: `grind` a TOTAL deterministic search over the finite counter
+    type; `grind_correct` (∃ good counter ⇒ prop holds) PROVED; `grind_fails_iff`
+    (the p_ν failure event) PROVED; **`GrindSearch_search_ll` — losslessness /
+    termination of the bounded search PROVED** (the obligation App D elides);
+    `grind_fails` exposed as a first-class carried event.
+  - `STCR_C.ec` — the `S-TCR(Prop)` game reconciled to the REAL
+    `TweakableHashFunctions.eca` (instantiated `in_t := msg×cntr`, `f := Th+C`),
+    so its collection oracle IS the repo's `Th_lambda`; grinding via the proved
+    total op (no `grindP`); `query_targets_predC` + `O_STCRC_query_good` PROVED.
+  - `WOTS_C_Real.ec` — **`InSec^{S-TCR(+C)}(Th+C; q6)` instantiated on the REAL
+    WOTS types** (`pseed`/`adrs`/`dgstblock`/`msgWOTS`), reusing the real
+    `dpseed`; the added Thm-5.2 term is now a concrete game, and grinding is
+    proved over the real types. Compiles under the real `WOTS_TW_ES.eco`.
+- **ASSUMED (modelling axioms, NOT cryptographic gaps):** counter type finite
+  (`CntrFT.enum_spec` — the C10 counter is a 32-bit word); `Th+C`/`predC`
+  abstract ops (the C10-specific hash/predicate). `dpseed` losslessness and
+  `p ≥ 0` are discharged (real lemma / trivial).
+- **ADMITTED (labelled, orthogonal):** `GrindSearch_run_computes_grind` — the
+  operational-loop↔pure-op bridge. NOT a security axiom and NOT part of the gap-#1
+  discharge (every game/reduction uses the proved op directly); provable, left
+  admitted after the EC `wp`/`while` goal-shape resisted a one-session close.
+- **REMAINING (the person-months core, not attempted):** the WOTS+C SCHEME
+  (chain-walk sign/verify + counter), the game `M_EUF_GCMA_WOTSC_NPRF`, the two
+  reductions `R_STCRC_WOTSC` (Alg 9) / `R_WOTSTW_WOTSC` (Alg 10) and the Thm C.2 /
+  Thm D.1 proofs (the App-D pRHL fill), FORS+C, and composition into
+  `EUFCMA_SPHINCS_PLUS`. The Thm D.1 statement is written as a precise roadmap:
+  every RHS term is now nameable and real (the instantiated `S-TCR(+C)` + the
+  reused `M_EUF_GCMA_WOTSTWESNPRF` black box).
+
+**Toolchain resolved.** The r2026.02 drift caveat above is closed: EasyCrypt
+r2026.02 is installed in opam switch `ec-r2026`; the whole repo (incl.
+`WOTS_TW_ES.ec`) builds clean, and all three drafts compile under it. Run recipe:
+`bash ~/repos/c10-eufcma-port/ec-r2026.sh compile -I FV-SPHINCSPLUS-EC/proofs -I drafts <f.ec>`.
