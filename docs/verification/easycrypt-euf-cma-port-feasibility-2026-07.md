@@ -24,6 +24,42 @@ Evidence base: a 2026-07 adversarial deep-research pass (15 claims confirmed at
 
 ---
 
+## UPDATE 2026-07-07 — the port is UNDERWAY, and WOTS+C single-instance is MACHINE-CHECKED
+
+This stopped being hypothetical. A live EasyCrypt port exists at `~/repos/c10-eufcma-port`
+(local, no remote; MM45 `FV-SPHINCSPLUS-EC` + `FV-XMSS-EC` cloned in-tree; checked under
+the `ec-r2026` opam switch with Alt-Ergo 2.6.0). Milestone reached:
+
+- **Single-instance WOTS+C EU-naCMA (`EUFNACMA_WOTSC_C2`) is FULLY machine-checked, ZERO admit**
+  (independently re-verified: clean rebuild EXIT 0, zero admit tactics in `Grind.ec` +
+  `WOTS_C_Reduction.ec`). The proven bound is EXACTLY the paper's Thm 5.2 shape —
+  `Pr[EUF_NACMA_WOTSC(A)] <= Pr[S_TCR_C(R_STCRC_WOTSC(A))] + Pr[EUF_NACMA_WOTSTW(R_WOTSTW_WOTSC(A))]`
+  — under three explicit, paper-faithful hypotheses: `1 <= p_tgts`, address-separation
+  (A never queries the collection oracle at the challenge tweak), and `encode_bridge`
+  (`encode_msgWOTS_C p a x c = encode_msgWOTS (ThC p a x c)` — the DEFINITION of the +C encoding).
+- Built from: the Algorithm-9 reduction `R_STCRC_WOTSC` (hop1, S-TCR(+C)) + the Algorithm-10
+  reduction `R_WOTSTW_WOTSC` (hop2, WOTS-TW) + the new `S-TCR(Prop)` game + grinding oracle on
+  the REAL `TweakableHashFunctions.eca` types, composed via `EUFNACMA_WOTSC_C2`. `Grind.ec` is
+  zero-admit (the operational grind-search `= grind` op is proven).
+- **The `p_ν` (grind-failure) worry was RESOLVED as a reduction ARTIFACT, not inherent.** The
+  first-pass reduction sent a sentinel `d = witness` on grind-failure, which diverged from the
+  honest signer and appeared to force a `+Pr[grind_fails]` term. Because `grind` is TOTAL and the
+  sign-correspondence holds for ANY counter, embedding the digest UNIFORMLY as `ThC(m, grind(m))`
+  removes the divergence entirely — so WOTS+C EU-naCMA carries **no** p_ν term (consistent with
+  p_ν living, if anywhere, at the top-level SPHINCS+ bound / the FORS+C R-grind, not the WOTS+C hop).
+
+**Calibration against §6:** the WOTS+C leg — the load-bearing "+C novelty" — went from a cited
+axiom to a machine-checked reduction in a handful of focused sessions, matching the paper's
+modular prediction and the S-TCR(+C) single-added-term structure. This is empirical support that
+the estimate's **best case is the right regime for the WOTS+C leg**, not the worst. It does NOT
+retire the estimate: the remaining legs (D.1 multi-instance WOTS+C → FORS+C → composition into
+`EUFCMA_SPHINCS_PLUS`) are the bulk, and FORS+C's R-grind is where a genuine top-level abort/p_ν
+term may actually live. Progress log + the exact reduction structure: `~/repos/c10-eufcma-port/PROVENANCE.md`.
+
+---
+
+---
+
 ## 1. What C10 actually is (the delta that must be mechanized)
 
 C10 = SPHINCS+ with **two** structural deviations from FIPS 205, both from the
