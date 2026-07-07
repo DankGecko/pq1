@@ -35,10 +35,25 @@ into the dependency closure as the honest "a forgery would break SHA-256".
 
 ## Why this is an axiom rather than a theorem
 
-To convert it into a `theorem` we would replay the
-Barbosa/Dupressoir/Hülsing/Meijers/Strub ASIACRYPT 2024 EasyCrypt SPHINCS+
-proof (~50k lines, multi-person-year) and extend it to WOTS+C/FORS+C — out of
-scope. The axiom records the assumption explicitly so it appears in
+Converting it into a `theorem` in EasyCrypt is a bounded, de-riskable port —
+NOT the multi-person-year effort a from-scratch reading suggests (a prior
+version of this note said so; corrected 2026-07 with a sourced analysis, see
+`docs/verification/easycrypt-euf-cma-port-feasibility-2026-07.md`). The tight
+SPHINCS+ EUF-CMA proof of Barbosa/Dupressoir/Hülsing/Meijers/Strub is ALREADY a
+complete, public, sorry-free, actively-maintained EasyCrypt artifact
+(github.com/MM45/FV-SPHINCSPLUS-EC, `lemma EUFCMA_SPHINCS_PLUS`), so the replay
+cost is ZERO. The real delta is our two `+C` deviations, and the dev is modular
+by construction (component theory-clones at the WOTS-TW / FORS-TW interfaces):
+WOTS+C is a designed drop-in for WOTS-TW (SPHINCS+C paper Thm 5.2 — substituting
+it adds exactly one `S-TCR(+C)` term), with a full reduction in that paper's
+App. B and a d-EU-naCMA sketch in App. D that mechanization would fill; the
+count-grind needs one new game object (`S-TCR(Prop)` + a grinding oracle). The
+security *debit* (sec_18=118.3) is the orthogonal few-time leaf-collision term
+already bounded by `Quantitative.lean` + the 2^16 usage cap, NOT a WOTS+C
+weakness. Honest estimate: ~6–18 person-months, single person. Kept as an
+axiom here because that port is genuinely out of THIS repo's scope (EasyCrypt,
+not Lean) and not required for any current claim (`theft_free` safety is
+EUF-CMA-free); the axiom records the assumption explicitly so it appears in
 docs/AXIOMS.md and any auditor sees the cryptographic-security theorem is
 *cited*, not *proved* in Lean. The three SHA-256 hardness preconditions are
 threaded so all crypto axioms appear in the dep closure of any consumer.
