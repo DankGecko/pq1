@@ -320,7 +320,7 @@ term is instantiated on the real SPHINCS+ types. Artifacts in
     losslessness chain `pkfs_ll` / `keygenR_ll` / `WOTS_C_ES_keygen_ll` /
     `WOTS_C_ES_sign_ll` / `O_MEUFGCMA_WOTSC_query_ll` (the scheme procs +
     signing oracle terminate) — exactly the facts the Alg-9/Alg-10 reduction
-    proofs consume. **16 `qed`-proved lemmas total across the four drafts, 1
+    proofs consume. **18 `qed`-proved lemmas total across the four drafts, 1
     labelled admit (the orthogonal Grind bridge).**
 - **ASSUMED (modelling axioms, NOT cryptographic gaps):** counter type finite
   (`CntrFT.enum_spec` — the C10 counter is a 32-bit word); `Th+C`/`predC`
