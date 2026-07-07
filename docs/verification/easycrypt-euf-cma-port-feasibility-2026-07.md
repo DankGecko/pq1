@@ -320,7 +320,7 @@ term is instantiated on the real SPHINCS+ types. Artifacts in
     losslessness chain `pkfs_ll` / `keygenR_ll` / `WOTS_C_ES_keygen_ll` /
     `WOTS_C_ES_sign_ll` / `O_MEUFGCMA_WOTSC_query_ll` (the scheme procs +
     signing oracle terminate) — exactly the facts the Alg-9/Alg-10 reduction
-    proofs consume. **18 `qed`-proved lemmas total across the four drafts, 1
+    proofs consume. **21 `qed`-closed lemmas total across the five drafts (incl. Thm C.2 proved), 3
     labelled admit (the orthogonal Grind bridge).**
 - **ASSUMED (modelling axioms, NOT cryptographic gaps):** counter type finite
   (`CntrFT.enum_spec` — the C10 counter is a 32-bit word); `Th+C`/`predC`
@@ -330,12 +330,24 @@ term is instantiated on the real SPHINCS+ types. Artifacts in
   operational-loop↔pure-op bridge. NOT a security axiom and NOT part of the gap-#1
   discharge (every game/reduction uses the proved op directly); provable, left
   admitted after the EC `wp`/`while` goal-shape resisted a one-session close.
-- **REMAINING (the person-months core, not attempted):** the two reduction
-  BODIES `R_STCRC_WOTSC` (Alg 9) / `R_WOTSTW_WOTSC` (Alg 10) — the deferred-public-
-  seed simulation via `Th_lambda` + the Algorithm-10 case split — then the Thm C.2 /
-  Thm D.1 reduction PROOFS (the App-D pRHL fill), FORS+C, and composition into
-  `EUFCMA_SPHINCS_PLUS`. With the scheme + game now real, Thm D.1 becomes a
-  compilable lemma the moment the reduction bodies exist (its proof is the fill).
+- **Thm C.2 (single-instance WOTS+C EU-naCMA) — PROVED modulo 2 game-hops
+  (`WOTS_C_Reduction.ec`, commit `bb…` / 2026-07-07b).** Both reduction BODIES are
+  now real, zero-admit modules faithful to the paper pseudocode: `R_STCRC_WOTSC`
+  (Alg 9) and `R_WOTSTW_WOTSC` (Alg 10 — grinds the +C seed via `Th_lambda` in
+  `choose()` and defers signing to the revealed `pp`; the naCMA structure
+  dissolves the "public-seed availability" worry). Single-instance games
+  `EUF_NACMA_WOTSC` / `EUF_NACMA_WOTSTW` / `GAME1_WOTSC` are defined;
+  `EUFNACMA_WOTSC_C2` (Thm C.2) is **PROVED** by composing the two game-hops
+  (`smt` over the `Pr` terms — genuinely chains them, not vacuous). The only open
+  obligations are the two hop lemmas `WOTSC_C2_hop1` / `WOTSC_C2_hop2` — the
+  paper's two reduction-correctness pRHL arguments — admitted and clearly
+  labelled. **3 admits total across the port** (this pair + the orthogonal Grind
+  bridge); **21 `qed`-closed lemmas.**
+- **REMAINING:** discharge the two Thm-C.2 hop admits (the pRHL fill); the
+  collection unification (`STCRC_WC.Col` ≡ the repo `FC`, one `Th_lambda`) + the
+  len-vs-len1 encoding truncation; then the multi-instance lift (Thm D.1 / Alg-10
+  deferred-seed + `d*≠d` case split + `q6` counting), FORS+C, and composition into
+  `EUFCMA_SPHINCS_PLUS`.
 
 **Toolchain resolved.** The r2026.02 drift caveat above is closed: EasyCrypt
 r2026.02 is installed in opam switch `ec-r2026`; the whole repo (incl.
