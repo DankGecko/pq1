@@ -314,6 +314,14 @@ term is instantiated on the real SPHINCS+ types. Artifacts in
   real `FC.Oracle_THFC`). **Consequence: every term of Thm D.1 is now a concrete,
   nameable game** — LHS `M_EUF_GCMA_WOTSC_NPRF`, the added `STCRC_WC.S_TCR_C`, the
   reused `M_EUF_GCMA_WOTSTWESNPRF`.
+  - **PROVED prerequisite properties of the scheme (zero admits):**
+    `sign_counter_predC` — every honest WOTS+C signature carries a `+C`-valid
+    counter (threads the discharged grinding through `sign`); and the full
+    losslessness chain `pkfs_ll` / `keygenR_ll` / `WOTS_C_ES_keygen_ll` /
+    `WOTS_C_ES_sign_ll` / `O_MEUFGCMA_WOTSC_query_ll` (the scheme procs +
+    signing oracle terminate) — exactly the facts the Alg-9/Alg-10 reduction
+    proofs consume. **16 `qed`-proved lemmas total across the four drafts, 1
+    labelled admit (the orthogonal Grind bridge).**
 - **ASSUMED (modelling axioms, NOT cryptographic gaps):** counter type finite
   (`CntrFT.enum_spec` — the C10 counter is a 32-bit word); `Th+C`/`predC`
   abstract ops (the C10-specific hash/predicate). `dpseed` losslessness and
