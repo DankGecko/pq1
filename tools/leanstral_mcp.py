@@ -41,8 +41,29 @@ SYSTEM = (
     "Prefer library lemmas over `sorry`; never emit `sorry` or `admit`."
 )
 
+INSTRUCTIONS = """\
+Leanstral (mistralai/Leanstral-1.5) is a specialized Lean 4 / Mathlib proof model, exposed as
+one tool: `leanstral_prove`. It DRAFTS proofs only — it never compiles or edits files, and its
+output is a *candidate* you must verify.
+
+Operating pattern (draft -> verify -> refine):
+1. Capture the goal state (e.g. lean-lsp `lean_goal` at the `sorry`), then call `leanstral_prove`
+   with `target` + that `goal_state`. Pass `file_path` (repo-relative) for context, NEVER the
+   file contents — the server reads the file so it stays out of your context window.
+2. Verify EVERY candidate against the real compiler with lean-lsp (`lean_run_code` for a
+   self-contained snippet, or Edit it in + `lean_diagnostic_messages`). Never trust a draft unseen.
+3. On failure, pass the exact compiler error back as `goal_state` and retry (a few rounds).
+4. A goal is closed only when lean-lsp is clean AND `lean_verify` shows no `sorry`/`sorryAx` and
+   only intended axioms — `#print axioms` is the gate; a green editor alone is not.
+
+Notes: use `reasoning_effort="high"` for hard goals. If the environment is plain Lean 4 core
+(no Mathlib), say so in `goal_state` so Leanstral uses Nat-namespaced lemmas / `omega`. An
+`ERROR ...` return means the endpoint isn't serving Leanstral — see
+docs/verification/leanstral-local-serving.md (local Ollama+Vulkan, or the free Mistral API).
+For sustained proving, the `lean-prover` subagent wraps this entire loop."""
+
 client = OpenAI(base_url=BASE_URL, api_key=API_KEY)
-mcp = FastMCP("leanstral")
+mcp = FastMCP("leanstral", instructions=INSTRUCTIONS)
 
 
 def _complete(user: str, reasoning_effort: str) -> str:
