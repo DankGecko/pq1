@@ -460,3 +460,132 @@ The one soundness-critical obligation of the reconciliation — that the message
 Honest status: the *design* is resolved and its critical check passes; it becomes a *machine-checked* result only once the reconciled game + stitching reduction + re-proved hop compile clean (mechanization underway, with a mandatory non-vacuity gate). The upshot is the good one: the composition tail's central obstruction dissolves into faithful engineering (a planned collection reconciliation) rather than a reworked assumption — the outcome the "resolve it faithfully" instruction was aiming at.
 
 **Separately (Lean side):** the `FormatDecimalSpec` CI-OOM was resolved as an infra carve-out (see the firmware-bounded-verification track) — the ~42 GB single-declaration kernel-typecheck is irreducible (a per-bind peel was measured ineffective a 4th time), so the proof is carved to a ≥48 GB heavy CI lib that still axiom-gates all three M7 theorems, keeping the default 16 GB job green; the proof itself is unchanged (real `qed`, kernel-triple closure).
+
+---
+
+## UPDATE 2026-07-09 — ADVERSARIAL REVIEW: three corrections, one of them a soundness bug
+
+A 105-agent adversarial review (32 findings, 30 surviving 3-vote refutation) plus
+mechanical proof-of-concepts and a re-read of the **published** paper corrected three
+things in this document. Two of them invalidate claims made above; the third reverses a
+framing. **Everything the review cleared is listed at the end — the WOTS+C leg holds up.**
+
+### Correction 1 (methodology) — "COMPILES EXIT=0" certifies far less than assumed
+
+**EasyCrypt's `require` does not re-verify a dependency's proofs.** It imports the lemma
+*statements* and trusts them. Reproduced mechanically:
+
+```
+# Broken2.ec -> compiles standalone EXIT=1 (correctly rejected)
+lemma brk2 : forall (b : bool), b.  proof. trivial. qed.
+# Uses2.ec   -> compiles EXIT=0, deriving `false`
+require import Broken2.
+lemma e2 : false. proof. by have := brk2 false. qed.
+```
+
+Also: **`admit` compiles EXIT 0 with zero output** (no warning). And a cold-cache compile
+of the capstone `SPHINCS_C.ec` takes 1.3 s writing only its own `.eco`, while
+`WOTS_TW_ES.ec` alone needs 81 s as a target — the chain was never re-verified.
+
+Therefore every *"clean-from-scratch rebuild EXIT 0"* / *"independently re-verified"* claim
+above is **scoped to the single file named on the command line**. The `-check-all` flag does
+force real checking (it correctly rejects `Uses2.ec`) but currently dies re-checking the
+stdlib. The sound gate is: **compile every file as a target + a comment-stripped admit/axiom
+sweep of each** (naive `grep '^\s*admit'` counts prose). This does not, by itself, mean any
+particular lemma above is wrong — it means the *evidence offered for them* was weaker than
+stated, and had to be re-established file-by-file. It has been.
+
+### Correction 2 (soundness) — the FORS tree admits were FALSE, not deferred
+
+`tree_*` (`FORS_C.ec`) and `mtree_*` (`FORS_C_Multi.ec`) were free abstract ops
+`{real | 0%r <= _}` inside the **abstract** theories `FORSC` / `MFORSC`, with the tree bound
+closed by `admit`. A legal clone may instantiate all three to `0%r` (sole realization
+obligation `0 <= 0`), under which the admitted step reads `Pr[… /\ !covered] <= 0%r` —
+**false**. Cloning `MFORSC` with `mtree_* <- 0%r` compiles EXIT 0 and yields
+`Pr[FORS+C multi EUF-CMA] <= Pr[ITSR(+C)]` with **no tree terms at all**. Dually,
+`<- 1%r` makes the bound trivially true, so the theorem constrained nothing.
+
+This is the same bug class as the already-caught `D1_hop2` (false conjunct → RHS ≡ 0) and
+`R_trco` (spurious 0). Crucially, **a constant cannot bound a `forall A` probability**, so
+"finish the tree-layer port" would *never* have discharged these admits — the statement had
+to change. This corrects the claim above that the tree terms were an "honest parametric
+placeholder" on a smooth path to the port.
+
+**Fixed** (`c10-eufcma-port` commit `7ba51d4`): the six reals are now universally-quantified
+lemma parameters and the tree bound is an **explicit premise** of `EUFCMA_FORSC` /
+`EUFCMA_MFORSC`, threaded through `SPHINCS_C.ec`. The theorems are true conditionals, the
+admits are gone, and the obligation is visible in the statement. Verified per-file:
+`FORS_C.ec`, `FORS_C_Multi.ec`, `SPHINCS_C.ec` each EXIT 0 with **0 admits**; both
+false-instantiation PoCs now fail; deleting the premise makes the capstone fail (load-bearing).
+
+**This corrects the formalization of the tree terms, not FORS+C cryptography.**
+
+### Correction 3 (fidelity) — the paper never proves FORS+C
+
+Checked against the **final IEEE S&P 2023 version** (DOI 10.1109/SP46215.2023.10179381).
+The paper contains exactly **two** theorems:
+
+- **Thm C.2** — WOTS+C single-instance EU-naCMA. Our `EUFNACMA_WOTSC_C2` matches it exactly.
+- **Thm 5.2** — the SPHINCS+C bound. Its preamble: *"By obtaining a d−EU-naCMA security proof
+  for **WOTS+C** one can just substitute WOTS-TW with our modification. This results in adding
+  a S-TCR(+C) term."* Its message-hash term is the **plain** `InSec^itsr(Hmsg)`.
+
+FORS+C's security is a one-paragraph informal argument: §IV *"The security analysis is the same
+as the security analysis of FORS… we can use the previous ITSR analysis to bound the security
+of FORS+C"*; §V *"The usage of FORS+C is straightforward."* It is a combinatorial
+`DarkSide_γ` bound — **no reduction, no theorem.**
+
+⇒ Our bespoke `ITSR(+C)` game is **original work filling an informal gap in a published paper**,
+not a port. That is real credit *and* real risk: no paper to check it against, and nothing
+reduces `ITSRC` to plain `itsr`. **The repeated claim above that the residual is
+"MM45-machinery structural porting with no new +C mathematics to discover" is wrong for the
+FORS side.** (It remains right for the WOTS side.)
+
+### What `EUFCMA_SPHINCS_PLUS_C` actually establishes
+
+`p_sphincs_c` is an **abstract free real**, never equated to any `Pr[EUF_CMA_…]`; no SPHINCS+C
+scheme module and no SPHINCS+C EUF-CMA game exist in the repo. The proof body is
+`move=> …; have hF; have hW; smt()` — a linear-arithmetic transitivity. `hfx` (which *is*
+MM45's proven `EUFCMA_SPHINCS_PLUS_FX`, ported) and `hbridge` are **assumed premises**; deleting
+`hfx` makes the file fail, i.e. they carry the composition. Of the paper's ~12 `InSec` terms,
+exactly **three** are real games (`ITSR(+C)`, `S-TCR(+C)`, MM45's WOTS-TW GCMA); the rest —
+`skg_adv`, `mkg_adv`, `mtree_*`, `xmssmt_trees` — are unconstrained slack.
+
+The fair statement is therefore: **"IF the assumed composition holds, the SPHINCS+C advantage is
+bounded by the three +C game advantages plus unconstrained slack."** It is *partially*, not
+wholly, vacuous — the three game terms are genuine. Contrast MM45's real top lemma
+(`SPHINCS_PLUS.ec:4338`), whose LHS is `Pr[EUF_CMA(SPHINCS_PLUS, A, O_CMA_Default).main() @ &m : res]`
+over a concrete scheme, with every RHS term a game probability.
+
+### Corrected ledger
+
+- **Real admits across `drafts/*.ec`: 3** (was 5), **all in files nothing requires**:
+  `FORS_C_TreePort.ec`, `FORS_C_TreePort_skel.ec` (untracked scratch), `WOTS_C_Interactive.ec`.
+  The capstone's chain is admit-free.
+- **Real axiom declarations: 1** — `axiom dpp_ll : is_lossless dpp`. (`WOTS_C_Encoding.ec`,
+  which held the unconditional `axiom grindCP` and did not even compile, was deleted.)
+- **Orphaned** (contribute zero to the capstone today): `FORS_C_TreePort` — and note it targets
+  `FORS_C`'s single-instance obligation while the capstone routes through `FORS_C_Multi`'s
+  independent one; `FORS_C_Tree`; `WOTS_C_Interactive`; `SPHINCS_C_Skeleton`'s proven
+  `FX_skeleton_C`; and `WOTS_C_Flag2Discharge` (its FLAG-2 proof is over a *defined* `emb_tw` in
+  namespace `FSSLXMTWES.WTWES`, whereas the capstone premise is over the *abstract* `emb_tw`).
+- **MM45 reference:** 0 admit tactics anywhere. `WOTS_TW_ES.ec` (what our WOTS+C leg depends on)
+  verifies as a target, 81 s, EXIT 0. `SPHINCS_PLUS.ec` fails an `smt()` at `:1932` *on our box
+  only* — our switch lacks the `Z3@4.13.4` that `FV-XMSS-EC/easycrypt.project` declares. Not a
+  timeout, and **not evidence against MM45**.
+
+### Cleared by the review (these hold up)
+
+- **The p_ν adjudication is correct and faithful to the paper**, which states outright: *"we
+  assume that it is always possible to find a good counter and the adversary can not depend its
+  behavior on the existence of a fitting counter."* No additive p_ν term in Thm 5.2 either.
+- **The WOTS+C leg is the genuine deliverable.** `D1_MEUFNACMA_WOTSC_MM45_embthfc` bounds a
+  **real game** by **real games** (`S_TCR_C` + MM45's actual `M_EUF_GCMA_WOTSTWESNPRF`) with no
+  free reals and zero admits, and Thm C.2 matches the paper's Thm C.2 exactly.
+- **`disj_lists` is the paper's own restriction** on the Thλ collection oracle — *"queries to Thλ
+  should use different tweaks from the ones that are used for challenge queries"* — justified
+  only by an informal random-function argument. That informal justification, not the restriction,
+  is the real residual. (It lives in `WOTS_C_Interactive.ec`, which is orphaned; the capstone
+  routes through the batch D.1.)
+- **No prior formal verification of SPHINCS+C exists** in EasyCrypt or any other prover, so the
+  +C legs are novel work. MM45 = ePrint 2024/910, ASIACRYPT 2024.
