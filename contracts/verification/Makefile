@@ -37,7 +37,7 @@ LAKE     ?= $(shell command -v lake 2>/dev/null || echo $$HOME/.elan/bin/lake)
 help: ## Show the runnable FV targets (those with a description)
 	@grep -hE '^[a-zA-Z0-9_.-]+:.*## ' $(MAKEFILE_LIST) | sort | awk -F':.*## ' '!seen[$$1]++ {printf "  \033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
-.PHONY: verify verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk verify-interp verify-transcription verify-parse-transcription verify-independent-signer verify-primitive-kat verify-storage-mutators verify-lean-proto-domain verify-fv-lints verify-lean4checker verify-kontrol verify-halmos verify-ledger-consistency verify-proof-mutation
+.PHONY: verify verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk verify-interp verify-transcription verify-parse-transcription verify-independent-signer verify-primitive-kat verify-storage-mutators verify-lean-proto-domain verify-fv-lints verify-lean4checker verify-kontrol verify-halmos verify-ledger-consistency verify-proof-mutation verify-forsc-margin
 
 # NOTE: verify-build (the `lake build` this bundle depends on) now also
 # kernel-checks the A3.1 in-kernel parse theorem + elision bridge (the root
@@ -106,6 +106,16 @@ verify-fv-lints: verify-build ## FV anti-vacuity sub-lints (escape-hatch/closure
 verify-ledger-consistency: verify-build ## AXIOM_STATUS.json falsifiable vs live dump (closures/pins/witnesses)
 	@python3 scripts/check_ledger_consistency.py --self-test
 	@python3 scripts/check_ledger_consistency.py
+
+# FORS+C GRINDING MARGIN (bounds the blast radius of the A5-ITSR literature gap:
+# the published SPHINCS+C paper has NO FORS+C security theorem). Pins that FORS+C
+# is never weaker than plain FORS at C10's params, and FAILS if the removed
+# forced-zero tree is ever shrunk (t_last < t), which would invert the inequality.
+# No Lean build needed — pure arithmetic over params.rs constants.
+.PHONY: verify-forsc-margin
+verify-forsc-margin: ## FORS+C never weaker than plain FORS at C10 params (guardrails t_last>=t, ratio<=1)
+	@python3 scripts/forsc_grinding_margin.py --self-test
+	@python3 scripts/forsc_grinding_margin.py
 
 # PROOF-MUTATION gate (anti-vacuity class V4: "dead conjunct / vacuous lemma").
 # The proof-side analogue of cargo-mutants: for each entry in
