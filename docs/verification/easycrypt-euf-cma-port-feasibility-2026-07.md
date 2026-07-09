@@ -589,3 +589,72 @@ over a concrete scheme, with every RHS term a game probability.
   routes through the batch D.1.)
 - **No prior formal verification of SPHINCS+C exists** in EasyCrypt or any other prover, so the
   +C legs are novel work. MM45 = ePrint 2024/910, ASIACRYPT 2024.
+
+---
+
+## UPDATE 2026-07-09b — the FORS+C leg: model mismatch, and a black-box dead end
+
+Continuing after the review, two results that **change the plan** for the FORS+C leg.
+
+### 1. Our EasyCrypt FORS+C models the PAPER's scheme, not the one we ship
+
+| | key `R` / `mk` | counter | in the signature |
+|---|---|---|---|
+| **`drafts/FORS_C.ec`** (paper) | sampled uniformly (`mk <$ dmkey`) | **ground** (`c <- gc mk m`) | the counter |
+| **C10** (`sphincs-c10/`) | **ground** (`fors.rs::grind_r`) | none | `R` only |
+
+`params.rs`: `SIG_FORS_TOTAL = SIG_R + SIG_FORS_SECRETS + SIG_FORS_AUTH` — there is **no
+counter field** in the FORS section (the 4-byte count in `SIG_HT_LAYER` is the *WOTS+C*
+counter). So `ITSRC`, `mco : mkey -> msg -> cntr -> out`, `good_counter_exists` and the
+whole free-counter apparatus describe the paper's FORS+C. **Results proven there do not
+transfer to C10 without a re-base.** This is the fourth model-vs-implementation mismatch
+found today, and it is the same class as the rest.
+
+### 2. A black-box reduction to plain ITSR exists for C10 — and is quantitatively useless
+
+The paper's hand-wave (*"we can use the previous ITSR analysis"*) is the claim that
+`ITSR(+C)` reduces to plain `ITSR`. We checked both models:
+
+- **C10's model (grind the key).** The reduction **exists and is sound**: simulate the +C
+  oracle, whose `R` is *conditioned* on `predC`, by **rejection sampling** on plain ITSR's
+  uniform-key oracle. *Coverage* transfers (the reduction's target list is a superset, and
+  coverage is monotone in it); *freshness* transfers (every rejected target carries
+  `¬predC`, the forgery carries `predC`, so they can never collide).
+- **The paper's model (grind the counter).** The reduction **does not exist**: folding
+  `(m,c)` into the ITSR input is circular, because `c = gc(mk,m)` depends on the key the
+  oracle has not yet returned. This is the "key-before-grind circularity" `FORS_C.ec`'s own
+  comments cite as the reason for a bespoke free-counter game.
+
+  *(Irony worth stating: the scheme we ship is easier to justify than the one in the paper,
+  and the model our port has been building is the one that cannot be reduced.)*
+
+**But the C10 reduction loses 88 bits.** Rejection sampling registers `~t = 2^11` targets
+per real query, so at the `2^16` per-chain cap the reduction's game has `2^27` targets over
+`2^18` FORS instances — a max per-instance load of `~625` rather than `~5`:
+
+| | max load γ | ITSR term |
+|---|---|---|
+| direct (paper's DarkSide) argument | ≈ 4.9 | **≈ 113 bits** |
+| generic black-box reduction | ≈ 625 | **≈ 25 bits** |
+
+⇒ **`A5-ITSR` cannot be discharged by a black-box reduction to Barbosa et al.'s plain ITSR.**
+Closing it requires mechanizing the **direct, tight, non-black-box DarkSide argument**
+against a **C10-faithful** model. We did *not* mechanize the reduction: it would have been a
+week of EasyCrypt (unbounded-`while` sampler, losslessness, conditioned-distribution
+coupling) to obtain a valid theorem too weak to cite. Recomputed by
+`contracts/verification/scripts/forsc_grinding_margin.py::itsr_report`, so it cannot rot.
+
+### 3. New guardrail — the usage cap is load-bearing for FORS security
+
+The ITSR term is ≈113 bits **only because** of `MAX_SLOT_USES = 2^16` (which keeps the max
+per-instance FORS load at γ≈5). `make -C contracts/verification verify-forsc-margin`
+guardrail 4 now **fails** if the cap is raised enough to push the ITSR term below the
+96-bit floor (`--self-test` trips it at `qs = 2^26`). Nobody had written this dependency down.
+
+### 4. Systemic residual — the signing-side model↔implementation bridge is unverified
+
+Four mismatches in one day all share a root: **nothing checks that the EasyCrypt/Lean
+*scheme model* equals the Rust/Solidity *implementation* on the signing side.** A3.1 covers
+the on-chain verifier; the signer's grind/encode path has no such bridge. Until it does,
+"the port proves something about C10" is an assumption, not a fact. Tracked here rather than
+chased now.

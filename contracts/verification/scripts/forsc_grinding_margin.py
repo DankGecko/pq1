@@ -45,11 +45,34 @@ boundary. Shrink the removed tree (`t_last < t`, which the paper explicitly floa
 as a size/security trade-off) and FORS+C becomes STRICTLY WEAKER than plain FORS.
 That is the guardrail this script pins.
 
+WHY A BLACK-BOX REDUCTION TO PLAIN ITSR IS A DEAD END (computed 2026-07-09)
+--------------------------------------------------------------------------
+The obvious way to justify A5-ITSR's citation would be to reduce ITSR(+C) to MM45's
+plain ITSR. For C10 (which grinds the KEY `R`, not a counter) such a reduction EXISTS
+and is sound: simulate the +C oracle — whose `R` is conditioned on `predC` — by
+REJECTION SAMPLING on plain ITSR's uniform-key oracle. Coverage transfers (the
+reduction's target list is a superset, and coverage is monotone in it); freshness
+transfers (rejected targets have `¬predC`, the forgery has `predC`, so they can never
+collide).
+
+But it is quantitatively useless. Rejection sampling registers ~`t = 2^11` targets per
+real query, so the reduction's game has `qs*t = 2^27` targets over `2^18` FORS
+instances — a max per-instance load of ~625 instead of ~5. The resulting bound is
+**~25 bits**, versus **~113 bits** from the paper's direct DarkSide argument:
+**88 bits lost**. So the axiom cannot be discharged black-box; it needs the DIRECT
+(tight, non-black-box) combinatorial argument mechanized. `itsr_report()` recomputes
+this, so the conclusion cannot rot.
+
 STATUS: this is a COMPUTED MARGIN, not a kernel theorem and not a reduction. It does
 not discharge A5-ITSR. It bounds the blast radius of the literature gap for OUR
 parameters.
 
-Exit 0 iff every guardrail holds. Wire into CI to keep A/K/t_last honest.
+GUARDRAILS (exit 0 iff all hold; `--self-test` proves each can fire):
+  1. t_last >= t             — else FORS+C is strictly weaker than plain FORS
+  2. ratio <= 1 for all gamma
+  3. DS_gamma >= 1/t          — the engine of (2)
+  4. ITSR term at qs = 2^16 >= 96-bit floor — RAISING MAX_SLOT_USES DEGRADES FORS
+                                 few-time security (this is what the cap buys us)
 """
 from __future__ import annotations
 
@@ -66,6 +89,11 @@ A = 11   # log2(leaves per FORS tree)
 T = 2 ** A          # leaves per FORS tree
 T_LAST = 2 ** A     # size of the REMOVED (forced-zero) tree. C10: same as T.
 
+# Per-chain signature cap (MAX_SLOT_USES / MAX_BOOTSTRAP_USES, see CLAUDE.md).
+QS_CAP = 2 ** 16
+# Project security floor (Crypto/Quantitative.lean's multi-term floor).
+FLOOR_BITS = 96
+
 
 def darkside(gamma: int, t: int = T) -> float:
     """Pr[a given FORS index is already revealed] after `gamma` signatures."""
@@ -78,6 +106,62 @@ def p_plain_fors(gamma: int) -> float:
 
 def p_forsc(gamma: int) -> float:
     return darkside(gamma) ** (K - 1) / T_LAST
+
+
+def maxload(q: int, bins: int) -> float:
+    """High-probability max balls-in-bins load (the adversary grinds to pick the
+    heaviest FORS instance, so `gamma` is a MAX, not an average)."""
+    m = q / bins
+    if m >= 1.0:
+        return m + math.sqrt(2.0 * m * math.log(bins))
+    lb = math.log(bins)
+    return max(1.0, lb / math.log(lb))
+
+
+def itsr_bits(gamma: float) -> float:
+    """Security bits of the ITSR term: work ~ 1/(DS_gamma ** K)."""
+    return -math.log2(darkside_f(gamma) ** K)
+
+
+def darkside_f(gamma: float) -> float:
+    return 1.0 - (1.0 - 1.0 / T) ** gamma
+
+
+def itsr_report(qs: int, floor_bits: int) -> tuple[float, float, list[str]]:
+    """ITSR-term security at the usage cap, and the loss a GENERIC black-box
+    reduction to plain ITSR would incur. Returns (real_bits, reduction_bits, failures)."""
+    failures: list[str] = []
+    bins = 2 ** H  # one FORS instance per hypertree leaf
+
+    g_real = maxload(qs, bins)
+    real_bits = itsr_bits(g_real)
+
+    # A reduction that simulates the +C oracle (whose key R is CONDITIONED on
+    # predC) using plain ITSR's UNIFORM-key oracle must rejection-sample: it
+    # registers ~T targets per real query. Those extra targets raise the
+    # per-instance load, and coverage is monotone in the target list.
+    q_red = qs * T
+    g_red = maxload(q_red, bins)
+    red_bits = itsr_bits(g_red)
+
+    print(f"\n=== ITSR term at the usage cap (qs = 2^{int(math.log2(qs))}, "
+          f"{bins} FORS instances) ===")
+    print(f"  direct (paper's DarkSide) argument : gamma_max ~ {g_real:.2f}"
+          f"  ->  {real_bits:6.1f} bits")
+    print(f"  generic reduction to plain ITSR    : gamma_max ~ {g_red:.1f}"
+          f"  ->  {red_bits:6.1f} bits   (registers qs*t = 2^{math.log2(q_red):.0f} targets)")
+    print(f"  cost of going black-box            : {real_bits - red_bits:.1f} bits LOST")
+
+    # ---- Guardrail 4: the usage cap must keep the ITSR term above the project floor.
+    if real_bits < floor_bits:
+        failures.append(
+            f"ITSR term at qs=2^{int(math.log2(qs))} is {real_bits:.1f} bits "
+            f"< the {floor_bits}-bit floor. Raising MAX_SLOT_USES degrades FORS "
+            f"few-time security."
+        )
+    print(f"[guardrail 4] ITSR bits ({real_bits:.1f}) >= {floor_bits}-bit floor : "
+          f"{'OK' if real_bits >= floor_bits else 'FAIL'}")
+    return real_bits, red_bits, failures
 
 
 def self_test() -> int:
@@ -101,10 +185,21 @@ def self_test() -> int:
                   "-> the gate is vacuous")
             return 1
         print("  ok: shrinking the removed tree is caught (ratio > 1, t_last < t)")
-        print("=== self-test PASS ===")
-        return 0
     finally:
         T_LAST = saved
+
+    # negative control #2: blow up the usage cap -> ITSR floor guardrail must fire
+    import io, contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        _, _, fails = itsr_report(2 ** 26, FLOOR_BITS)
+    if not fails:
+        print("  self-test FAIL: raising the usage cap to 2^26 did NOT trip the "
+              "ITSR floor guardrail -> the gate is vacuous")
+        return 1
+    print("  ok: raising MAX_SLOT_USES to 2^26 is caught (ITSR term < 96-bit floor)")
+    print("=== self-test PASS ===")
+    return 0
 
 
 def main() -> int:
@@ -166,6 +261,10 @@ def main() -> int:
 
     if abs(bits1 - A * K) > 0.5:
         failures.append(f"per-query bits {bits1:.1f} != A*K = {A*K}")
+
+    # ---- ITSR term at the cap + the cost of a generic black-box reduction.
+    real_bits, red_bits, itsr_fail = itsr_report(QS_CAP, FLOOR_BITS)
+    failures.extend(itsr_fail)
 
     print("\n" + "=" * 68)
     if failures:
