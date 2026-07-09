@@ -1,0 +1,12 @@
+# Ollama Modelfile for the local Leanstral 1.5 (Lean 4 prover) serving.
+# Build:  ollama pull hf.co/GZGavinZhao/Leanstral-1.5-119B-A6B-GGUF:Q4_K_M
+#         ollama create leanstral -f tools/leanstral.Modelfile
+# The `leanstral` name matches LEANSTRAL_MODEL in .mcp.json.
+# NOTE: Ollama does NOT support trailing inline comments on PARAMETER lines.
+FROM hf.co/GZGavinZhao/Leanstral-1.5-119B-A6B-GGUF:Q4_K_M
+# num_gpu 99 = offload all layers to the 890M iGPU (GTT-backed)
+PARAMETER num_gpu 99
+# num_ctx 32768 = start at 32k; MLA keeps the KV cache small
+PARAMETER num_ctx 32768
+# temperature 1.0 = Mistral's stated default for Leanstral
+PARAMETER temperature 1.0
