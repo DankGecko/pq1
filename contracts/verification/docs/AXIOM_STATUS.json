@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "last_updated": "2026-06-29",
+  "last_updated": "2026-07-09",
   "critical_alert": "✅ EUF-CMA inconsistency RESOLVED 2026-06-14: A5-EUFCMA restated to a consistent reduction (conclusion opaque BreaksHash, never False/never-assumed-false; isForgery now key-bound via KeyHistory so the empty-transcript witness is unformable; two compiled guard lemmas fence it; old detonator no longer type-checks). theft_free / theft_free_bytecode are SOUND again (kernel-checked, 11 cited axioms, no sorryAx). theft_free is a conjunction: conjunct 1 (safety: no balance decrease without the deployed verifier accepting an installed-owner C10 sig over the op digest) is EUF-CMA-FREE (rests on A2/A3.1; A1 SHA256_precompile and A4 evmDeliversCall are NAMED NON-CONSUMED cited-TCB markers in theft_free's closure, not semantic premises of conjunct 1 — deleting their `have` bindings leaves theft_free proven); conjunct 2 (forgery ⇒ hash-break) is the cited Barbosa-et-al. reduction. ALSO FIXED 2026-06-14: (a) the false sha256_injective_on_fixed_length axiom was replaced by sha256_collision_resistance (consistent disjunctive reduction: equal-preimages OR BreaksHash — a same-length collision is the cited hardness break, not a false universal); theft_free_with_calldata_binding now closes over it consistently. (b) the three A5 hardness shapes (SM_DT_TCR_F_Shape / ITSR_F_Shape / hMsg_RO_Shape) were upgraded from forall_,True placeholders to opaque Props. BreaksHash now lives in Assumptions.lean (shared by the EUF-CMA + collision reductions). entrypoint_no_replay was DELETED (dangling + latent-false). Trust base is now sound-modulo-honest-citations with NO false / vacuous / inconsistent axioms. NOT an on-chain vulnerability.",
   "headline_theorem": "SphincsCVerify.Spec.Theorems.theft_free",
   "claim_corollaries": [
@@ -16,7 +16,9 @@
   "closures_doc": "MACHINE-READABLE, AUTHORITATIVE expected axiom closures, keyed by fully-qualified theorem name. Each value is the EXACT set of axioms the theorem's `#print axioms` must report (kernel triple included explicitly — exact-set, not subset; a count is hit by coincidence when one axiom drops and another sneaks in). `make verify-ledger-consistency` diffs each entry against the LIVE `dump_axioms.lean` output and FAILS on any drift (missing OR extra), and cross-checks the `theft_free` entry against the hard-coded `THEFT_EXPECTED`+`THEFT_KERNEL` pin in scripts/lint_fv_invariants.sh (so this block and that lint cannot silently diverge — single authoritative source). SCOPE/CAVEAT: the live source is `#print axioms`, which UNDER-REPORTS in Lean v4.22.0 (pre-#8842 collectAxioms window); `make verify-lean4checker` recomputes the TRUE closure and is the backstop for completeness — this block guards advertised-vs-#print-axioms CONSISTENCY, it does not itself close the under-report gap. Seeded from the live dump 2026-06-29 (pin-current/fail-on-drift, same convention as check_storage_mutators.sh).",
   "closures": {
     "SphincsCVerify.Spec.Theorems.theft_free": [
-      "Classical.choice", "Quot.sound", "propext",
+      "Classical.choice",
+      "Quot.sound",
+      "propext",
       "SphincsCVerify.Bridge.EntryPoint.entrypoint_honest",
       "SphincsCVerify.Bridge.evm_bytecode_executes_correctly",
       "SphincsCVerify.Bridge.precompile_0x02_is_FIPS_180_4",
@@ -27,7 +29,9 @@
       "SphincsCVerify.Crypto.hMsg_random_oracle"
     ],
     "SphincsCVerify.Spec.Theorems.theft_free_bytecode": [
-      "Classical.choice", "Quot.sound", "propext",
+      "Classical.choice",
+      "Quot.sound",
+      "propext",
       "SphincsCVerify.Bridge.EntryPoint.entrypoint_honest",
       "SphincsCVerify.Bridge.evm_bytecode_executes_correctly",
       "SphincsCVerify.Bridge.precompile_0x02_is_FIPS_180_4",
@@ -39,7 +43,9 @@
       "SphincsCVerify.Crypto.hMsg_random_oracle"
     ],
     "SphincsCVerify.Spec.Theorems.theft_free_bytecode_reachable": [
-      "Classical.choice", "Quot.sound", "propext",
+      "Classical.choice",
+      "Quot.sound",
+      "propext",
       "SphincsCVerify.Bridge.EntryPoint.entrypoint_honest",
       "SphincsCVerify.Bridge.evm_bytecode_executes_correctly",
       "SphincsCVerify.Bridge.precompile_0x02_is_FIPS_180_4",
@@ -51,53 +57,71 @@
       "SphincsCVerify.Crypto.hMsg_random_oracle"
     ],
     "SphincsCVerify.Spec.Theorems.factory_squat_defence_bytecode": [
-      "Quot.sound", "propext",
+      "Quot.sound",
+      "propext",
       "SphincsCVerify.Bridge.solidityFactory_compiles_correctly"
     ],
     "SphincsCVerify.Spec.Theorems.theft_free_with_calldata_binding": [
-      "Quot.sound", "propext",
+      "Quot.sound",
+      "propext",
       "SphincsCVerify.Crypto.sha256_collision_resistance"
     ],
     "SphincsCVerify.Wallet.Invariants.cannot_remove_bootstrap": [
-      "Quot.sound", "propext"
+      "Quot.sound",
+      "propext"
     ],
     "SphincsCVerify.Crypto.keyHistory_empty_signs_nothing": [
-      "Quot.sound", "propext"
+      "Quot.sound",
+      "propext"
     ],
     "SphincsCVerify.Crypto.honest_sig_not_forgery": [
-      "Quot.sound", "propext"
+      "Quot.sound",
+      "propext"
     ],
     "SphincsCVerify.Spec.Theorems.executeBatch_faithful": [
-      "Classical.choice", "Quot.sound", "propext"
+      "Classical.choice",
+      "Quot.sound",
+      "propext"
     ],
     "SphincsCVerify.Spec.Theorems.deployed_execute_requires_prior_token": [
-      "Classical.choice", "Quot.sound", "propext",
+      "Classical.choice",
+      "Quot.sound",
+      "propext",
       "SphincsCVerify.Bridge.solidityWalletExecute_compiles_correctly"
     ],
     "SphincsCVerify.Spec.Theorems.deployed_executeBatch_requires_prior_token": [
-      "Classical.choice", "Quot.sound", "propext",
+      "Classical.choice",
+      "Quot.sound",
+      "propext",
       "SphincsCVerify.Bridge.solidityWalletExecuteBatch_compiles_correctly"
     ],
     "SphincsCVerify.Wallet.Invariants.reachable_implies_combinedCap": [
-      "Quot.sound", "propext"
+      "Quot.sound",
+      "propext"
     ],
     "SphincsCVerify.Wallet.Invariants.create2_address_chain_independent": [
-      "Quot.sound", "propext"
+      "Quot.sound",
+      "propext"
     ],
     "SphincsCVerify.Wallet.Invariants.eip1271_forbids_bootstrap": [
-      "Quot.sound", "propext"
+      "Quot.sound",
+      "propext"
     ],
     "SphincsCVerify.Wallet.Invariants.factory_requires_bootstrap_sig": [
-      "Quot.sound", "propext"
+      "Quot.sound",
+      "propext"
     ],
     "SphincsCVerify.Wallet.Invariants.initialize_called_exactly_once": [
-      "Quot.sound", "propext"
+      "Quot.sound",
+      "propext"
     ],
     "SphincsCVerify.Wallet.Invariants.owner_set_nonempty_after_init": [
-      "Quot.sound", "propext"
+      "Quot.sound",
+      "propext"
     ],
     "SphincsCVerify.Wallet.OffchainBinding.offchain_nested_disjoint_from_userop_digest": [
-      "Quot.sound", "propext",
+      "Quot.sound",
+      "propext",
       "SphincsCVerify.Wallet.OffchainBinding.keccak_sha256_cross_separation"
     ]
   },
@@ -106,7 +130,10 @@
     "SphincsCVerify.Spec.Theorems.theft_free": {
       "file": "lean/SphincsCVerify/Spec/Theorems.lean",
       "sha256": "b07dc36739609022e139f847f5b7586fe42d62ec980a522573bbe1d54500a899",
-      "must_not_contain": ["hInv", "hReach"],
+      "must_not_contain": [
+        "hInv",
+        "hReach"
+      ],
       "note": "Lean MODEL headline: hypotheses are op/σ/σ'/effects/hExec/hDecrease — NO cap hypothesis (handleOp runs the Lean validateSignature model)."
     },
     "SphincsCVerify.Spec.Theorems.theft_free_bytecode": {
@@ -117,7 +144,9 @@
     "SphincsCVerify.Spec.Theorems.theft_free_bytecode_reachable": {
       "file": "lean/SphincsCVerify/Spec/Theorems.lean",
       "sha256": "bd4d24c8d46da422657461e5a729f65e20d3f2c97ad6d683dc38a4948248e047",
-      "must_contain": ["Reachable"],
+      "must_contain": [
+        "Reachable"
+      ],
       "note": "P1 DISCHARGE headline: takes `hReach : Reachable σ.walletStorage` (NOT a bald hInv) and derives the cap via reachable_implies_combinedCap. Reverting to a bald-hInv conditional changes this hash → gate trips."
     },
     "SphincsCVerify.Spec.Theorems.factory_squat_defence_bytecode": {
@@ -421,14 +450,18 @@
       "lean_type": "SM_DT_TCR_F_Shape → ITSR_F_Shape → hMsg_RO_Shape → ∀ (sk : SigningKey) transcript msg* sig*, isForgery sk transcript msg* sig* → BreaksHash (opaque; INVARIANT never assume ¬BreaksHash; isForgery key-bound via KeyHistory sk transcript). The prior `→ False` shape was the 2026-06-14 inconsistency, RETIRED — ledger field synced to the live EUFCMA.lean axiom 2026-07-01 (FV review; was self-contradicting the lean_type_note below).",
       "status": "cited-tcb",
       "lean_type_note": "Reduction form (2026-06-14): SM_DT_TCR_F_Shape → ITSR_F_Shape → hMsg_RO_Shape → ∀ (sk : SigningKey) transcript msg* sig*, isForgery sk transcript msg* sig* → BreaksHash, where isForgery carries KeyHistory sk transcript and BreaksHash is opaque.",
-      "status_detail": "✅ RESOLVED 2026-06-14 (was BROKEN-INCONSISTENT; see docs/EUF_CMA_INCONSISTENCY.md). Restated to a consistent reduction: conclusion is the opaque BreaksHash (never False; INVARIANT: never assume ¬BreaksHash), and isForgery is key-bound via KeyHistory sk transcript so KeyHistory sk [] forces sk to sign nothing — making the empty-transcript valid-KAT detonator UNFORMABLE. Two compiled guard lemmas (keyHistory_empty_signs_nothing, honest_sig_not_forgery; closure {propext, Quot.sound}) are the structural regression fence. Verified: the old `example : False := cannot_forge_without_breaking_SHA256 …` now fails with a type mismatch (BreaksHash ≠ False); theft_free closure is the 11 cited axioms with no sorryAx and is consistent. This is the qualitative shadow of the Barbosa et al. ASIACRYPT 2024 game (key-bound oracle log + reduction to a hardness break); the quantitative Pr ≤ ε bound is not formalised (cited, mathlib-free, out of scope). theft_free's substantive safety guarantee (conjunct 1) is EUF-CMA-FREE; this axiom only threads the cited crypto into conjunct 2. P9 (operational scope) — DOCUMENTED + PROVEN-IRREDUCIBLE 2026-06-29: the EUF-CMA conjunct of theft_free (conjunct 2) is NON-OPERATIONAL — `isForgery` is UNSATISFIABLE for any message the honest signer can sign (the project's own `honest_sig_not_forgery` lemma). This is now (a) INSTANTIATED at the transition's own values by `Wallet.Invariants.unauthorized_userop_breaks_hash` (EUF-CMA applied at msgStar = sphincsDigest(op), sigStar = innerSig, the accepting owner's key — answering the 'detached ∀-rider, never instantiated' finding; additive, closure = the A5 axioms + kernel, NO new axiom), and (b) PROVEN IRREDUCIBLE (not a wiring gap): dropping `KeyHistory.signed_recorded` so the `¬transcriptHasMsg` premise holds automatically would let an HONEST signature satisfy `isForgery` (empty transcript + `honest_consistent`-verifying sig + nothing recorded), making `BreaksHash` a PROVABLE theorem and collapsing every `_ ∨ BreaksHash` reduction — a WORSE vacuity in the axiom-set that was inconsistent once before. The 'satisfiable-by-real-forgeries, unsatisfiable-by-honest-sigs' separation IS the PPT adversary, inexpressible in this qualitative shadow; closing it needs the probability backbone (EasyCrypt/SSProve), out of scope. Construction written into `EUFCMA.lean`'s `EUF_CMA_SPHINCSplusC` docstring. SIGNER-COMPLETENESS now CLOSED (this entry's prior 'all-zero placeholder stub' claim is STALE): `Spec.Signer.sign` is the full reference signer and `Verifier.HonestConsistent.honest_consistent : WellFormed sk → consistent sk` discharges `verify_signs`'s round-trip predicate (kernel-clean {propext, Classical.choice, Quot.sound}); the only residual is bridge-(b) signer↔firmware faithfulness (`Spec.Signer.sign` is noncomputable / verifier-derived, cross-checked against the Rust KAT, not a kernel proof). `verify_signs` is NOT in theft_free's dependency closure. NOT an on-chain vulnerability.",
+      "status_detail": "✅ RESOLVED 2026-06-14 (was BROKEN-INCONSISTENT; see docs/EUF_CMA_INCONSISTENCY.md). Restated to a consistent reduction: conclusion is the opaque BreaksHash (never False; INVARIANT: never assume ¬BreaksHash), and isForgery is key-bound via KeyHistory sk transcript so KeyHistory sk [] forces sk to sign nothing — making the empty-transcript valid-KAT detonator UNFORMABLE. Two compiled guard lemmas (keyHistory_empty_signs_nothing, honest_sig_not_forgery; closure {propext, Quot.sound}) are the structural regression fence. Verified: the old `example : False := cannot_forge_without_breaking_SHA256 …` now fails with a type mismatch (BreaksHash ≠ False); theft_free closure is the 11 cited axioms with no sorryAx and is consistent. This is the qualitative shadow of the Barbosa et al. ASIACRYPT 2024 game (key-bound oracle log + reduction to a hardness break); the quantitative Pr ≤ ε bound is not formalised (cited, mathlib-free, out of scope). theft_free's substantive safety guarantee (conjunct 1) is EUF-CMA-FREE; this axiom only threads the cited crypto into conjunct 2. P9 (operational scope) — DOCUMENTED + PROVEN-IRREDUCIBLE 2026-06-29: the EUF-CMA conjunct of theft_free (conjunct 2) is NON-OPERATIONAL — `isForgery` is UNSATISFIABLE for any message the honest signer can sign (the project's own `honest_sig_not_forgery` lemma). This is now (a) INSTANTIATED at the transition's own values by `Wallet.Invariants.unauthorized_userop_breaks_hash` (EUF-CMA applied at msgStar = sphincsDigest(op), sigStar = innerSig, the accepting owner's key — answering the 'detached ∀-rider, never instantiated' finding; additive, closure = the A5 axioms + kernel, NO new axiom), and (b) PROVEN IRREDUCIBLE (not a wiring gap): dropping `KeyHistory.signed_recorded` so the `¬transcriptHasMsg` premise holds automatically would let an HONEST signature satisfy `isForgery` (empty transcript + `honest_consistent`-verifying sig + nothing recorded), making `BreaksHash` a PROVABLE theorem and collapsing every `_ ∨ BreaksHash` reduction — a WORSE vacuity in the axiom-set that was inconsistent once before. The 'satisfiable-by-real-forgeries, unsatisfiable-by-honest-sigs' separation IS the PPT adversary, inexpressible in this qualitative shadow; closing it needs the probability backbone (EasyCrypt/SSProve), out of scope. Construction written into `EUFCMA.lean`'s `EUF_CMA_SPHINCSplusC` docstring. SIGNER-COMPLETENESS now CLOSED (this entry's prior 'all-zero placeholder stub' claim is STALE): `Spec.Signer.sign` is the full reference signer and `Verifier.HonestConsistent.honest_consistent : WellFormed sk → consistent sk` discharges `verify_signs`'s round-trip predicate (kernel-clean {propext, Classical.choice, Quot.sound}); the only residual is bridge-(b) signer↔firmware faithfulness (`Spec.Signer.sign` is noncomputable / verifier-derived, cross-checked against the Rust KAT, not a kernel proof). `verify_signs` is NOT in theft_free's dependency closure. NOT an on-chain vulnerability. ⚠️ SCOPE GAP (adversarial review 2026-07-09): this citation is to a proof of STANDARD SPHINCS+, not of SPHINCS+C10 (the scheme we ship, which uses WOTS+C AND FORS+C). The +C delta is covered as follows: (a) WOTS+C — the SPHINCS+C paper proves it (Thm C.2, adding one S-TCR(+C) term) and we have now MACHINE-CHECKED that leg in EasyCrypt (real games, 0 admit, matches the paper); (b) FORS+C — NOT PROVED ANYWHERE. The published SPHINCS+C paper (IEEE S&P 2023, DOI 10.1109/SP46215.2023.10179381) disposes of FORS+C security in one informal paragraph (§IV: \"we can use the previous ITSR analysis to bound the security of FORS+C\"; §V: \"straightforward\") with NO reduction and NO theorem, and its Thm 5.2 retains the PLAIN InSec^itsr(Hmsg) term. Our EasyCrypt port found a naive reuse of plain ITSR is UNSOUND against the paper's permissive verifier (which accepts ANY counter satisfying predC), forcing a bespoke free-counter ITSR(+C) game. See docs/verification/easycrypt-euf-cma-port-feasibility-2026-07.md §UPDATE 2026-07-09.",
       "discharge_artifacts": [
         {
           "type": "citation",
           "evidence": "Barbosa, Dupressoir, Hülsing, Meijers, Strub. 'A Tight Security Proof for SPHINCS+, Formally Verified.' IACR ePrint 2024/910, ASIACRYPT 2024."
+        },
+        {
+          "type": "partial-mechanization",
+          "evidence": "WOTS+C leg machine-checked in EasyCrypt: c10-eufcma-port drafts/WOTS_C_EmbDischarge.ec `D1_MEUFNACMA_WOTSC_MM45_embthfc` bounds Pr[M_EUF_NACMA_WOTSC_L] by Pr[S_TCR_C] + Pr[M_EUF_GCMA_WOTSTWESNPRF] (MM45's real WOTS-TW theorem); 0 admit, no free reals. FORS+C leg and the SPHINCS+C composition remain OPEN (composition is an assumed premise `hfx`)."
         }
       ],
-      "citation": "Barbosa et al. ASIACRYPT 2024 + Hülsing PQC2022 (+C variant)"
+      "citation": "Barbosa et al. ASIACRYPT 2024 (ePrint 2024/910) = STANDARD SPHINCS+ only. SPHINCS+C delta: Hülsing/Kudinov/Ronen/Yogev, IEEE S&P 2023 — proves WOTS+C (Thm C.2) but NOT FORS+C (informal argument only)."
     },
     {
       "id": "A5-SMTCR",
@@ -443,12 +476,12 @@
     {
       "id": "A5-ITSR",
       "name": "SphincsCVerify.Crypto.ITSR_F",
-      "description": "Interleaved Target Subset Resilience on the FORS-roots compression hash.",
+      "description": "Interleaved Target Subset Resilience of the message-hash / FORS index derivation. NOTE: for FORS+C the required notion is ITSR(+C) (free adversary-chosen counter), NOT the plain ITSR cited here.",
       "lean_type": "ITSR_F_Shape (opaque Prop, witnessed by the axiom)",
       "status": "cited-tcb",
-      "status_detail": "Shape axiom (upgraded 2026-06-14 from a vacuous ∀_,True def to an opaque Prop, so it carries real abstract content rather than asserting nothing); discharge is Barbosa et al. 2024 § 6.",
+      "status_detail": "Shape axiom (upgraded 2026-06-14 from a vacuous ∀_,True def to an opaque Prop, so it carries real abstract content rather than asserting nothing); discharge is Barbosa et al. 2024 § 6. ⚠️ SCOPE GAP (adversarial review 2026-07-09): this citation is to a proof of STANDARD SPHINCS+, not of SPHINCS+C10 (the scheme we ship, which uses WOTS+C AND FORS+C). The +C delta is covered as follows: (a) WOTS+C — the SPHINCS+C paper proves it (Thm C.2, adding one S-TCR(+C) term) and we have now MACHINE-CHECKED that leg in EasyCrypt (real games, 0 admit, matches the paper); (b) FORS+C — NOT PROVED ANYWHERE. The published SPHINCS+C paper (IEEE S&P 2023, DOI 10.1109/SP46215.2023.10179381) disposes of FORS+C security in one informal paragraph (§IV: \"we can use the previous ITSR analysis to bound the security of FORS+C\"; §V: \"straightforward\") with NO reduction and NO theorem, and its Thm 5.2 retains the PLAIN InSec^itsr(Hmsg) term. Our EasyCrypt port found a naive reuse of plain ITSR is UNSOUND against the paper's permissive verifier (which accepts ANY counter satisfying predC), forcing a bespoke free-counter ITSR(+C) game. See docs/verification/easycrypt-euf-cma-port-feasibility-2026-07.md §UPDATE 2026-07-09. CONSEQUENCE FOR THIS AXIOM SPECIFICALLY: FORS+C grinds a counter into H_msg to force the last FORS tree's leaf to 0, and the verifier accepts any predC-valid counter. That hands the adversary a grinding oracle over the message hash (many counters -> many index tuples per target message), which is strictly MORE power than plain ITSR contemplates. Whether the paper's DarkSide_γ bound absorbs it is UNPROVEN. Tracked follow-up: quantify this against C10 params (k=13, a=11, t=2048) and the 2^16 per-chain usage cap.",
       "discharge_artifacts": [],
-      "citation": "Barbosa et al. 2024 § 6, Theorem 2"
+      "citation": "Barbosa et al. 2024 § 6, Theorem 2 — PLAIN ITSR, for STANDARD SPHINCS+. Does NOT cover FORS+C's counter-carrying message hash."
     },
     {
       "id": "A5-RO",
