@@ -64,7 +64,7 @@ use sha3::{Digest as _, Keccak256};
 
 use super::dispatch::pick_sign_pages;
 use super::erc8213;
-use super::value_page::enforce_paymaster_page;
+use super::value_page::{enforce_from_page, enforce_paymaster_page, from_page_proof};
 use super::Pages;
 use crate::aa::userop::{
     compute_sphincs_digest_v06, reconstruct_execute_calldata, sha256_bytes,
@@ -86,6 +86,7 @@ use sphincs_tz_shared::{EXEC_TRANSACTION_SELECTOR, SIGN_USEROP_HEADER_LEN};
 #[derive(Clone)]
 struct WireSignRequest {
     chain_id: u64,
+    account_index: u32,
     slot_index: u32,
     sender: [u8; 20],
     entry_point: [u8; 20],
@@ -112,6 +113,7 @@ impl WireSignRequest {
     fn base() -> Self {
         WireSignRequest {
             chain_id: 8453, // Base
+            account_index: 0,
             slot_index: 0,
             sender: [0x51; 20],
             entry_point: [0x5F; 20],
@@ -133,9 +135,8 @@ impl WireSignRequest {
     fn encode(&self) -> Vec<u8> {
         let mut buf = vec![0u8; SIGN_USEROP_HEADER_LEN + self.data.len()];
         buf[0..8].copy_from_slice(&self.chain_id.to_be_bytes());
-        // flags: no INCLUDE_INIT_CODE / REGISTER_SLOT, account_index 0,
-        // slot_index in bits 21..0.
-        let flags: u32 = self.slot_index & 0x003F_FFFF;
+        let flags: u32 = ((self.account_index & 0xFF) << 22)
+            | (self.slot_index & 0x003F_FFFF);
         buf[8..12].copy_from_slice(&flags.to_be_bytes());
         buf[12..32].copy_from_slice(&self.sender);
         buf[32..52].copy_from_slice(&self.entry_point);
@@ -160,6 +161,7 @@ impl WireSignRequest {
 /// offsets are pinned by `nsc_sign_userop_pure_tests`).
 struct MirrorParsed {
     chain_id: u64,
+    account_index: u32,
     slot_index: u32,
     sender: [u8; 20],
     entry_point: [u8; 20],
@@ -185,6 +187,7 @@ fn mirror_parse(buf: &[u8]) -> MirrorParsed {
     );
     MirrorParsed {
         chain_id: u64::from_be_bytes(buf[0..8].try_into().unwrap()),
+        account_index: (flags >> 22) & 0xFF,
         slot_index: flags & 0x003F_FFFF,
         sender: arr20(12),
         entry_point: arr20(32),
@@ -290,6 +293,14 @@ fn drive_glue(p: &MirrorParsed, ctx: &Contexts<'_>) -> GlueOutcome {
     .expect("corpus renders must not refuse");
     enforce_paymaster_page(&mut pages, &p.paymaster_and_data_hash)
         .expect("paymaster page must fit");
+    let signer_pages_before = pages.len;
+    enforce_from_page(&mut pages, p.account_index, &p.sender)
+        .expect("signer page must fit");
+    crate::fi::scrub_sentinel_register();
+    assert_eq!(
+        from_page_proof(&pages, signer_pages_before, p.account_index, &p.sender),
+        crate::fi::OK_SENTINEL
+    );
     let calldata_fingerprint = pqsigner_tx_core::erc8213::calldata_digest(&p.inner);
     erc8213::append_fingerprint_page(
         &mut pages,
@@ -510,6 +521,18 @@ fn assert_addr_shown(pages: &Pages, addr: &[u8; 20], what: &str) {
     );
 }
 
+fn assert_signer_page_shown(pages: &Pages, account_index: u32, sender: &[u8; 20]) {
+    let label = format!("Signer acct #{account_index}");
+    let want = oracle_addr_rows(sender);
+    let found = pages.as_slice().iter().any(|page| {
+        row_str(&page[0]) == label
+            && row_str(&page[1]) == want[0]
+            && row_str(&page[2]) == want[1]
+            && row_str(&page[3]) == want[2]
+    });
+    assert!(found, "signer page {label} + {want:?} not found");
+}
+
 /// Assert the final two pages are the ERC-8213 banner + the exact hash
 /// rows of `digest` (lowercase hex, 8 bytes per row).
 fn assert_fingerprint_pages(pages: &Pages, digest: &[u8; 32]) {
@@ -564,7 +587,10 @@ fn assert_core_bindings(p: &MirrorParsed, out: &GlueOutcome) -> OracleExec {
     //     BYTES (recomputed test-locally from the oracle-decoded data).
     assert_fingerprint_pages(&out.pages, &oracle_erc8213_digest(&oracle.data));
 
-    // (5) The signed target is painted in full EIP-55 on some page.
+    // (5) The selected mnemonic account and signer are painted together.
+    assert_signer_page_shown(&out.pages, p.account_index, &p.sender);
+
+    // (6) The signed target is painted in full EIP-55 on some page.
     assert_addr_shown(&out.pages, &oracle.target, "signed exec target");
 
     oracle
@@ -817,6 +843,20 @@ fn divergence_probe_inner_data_byte_flip_moves_digest_and_fingerprint() {
 }
 
 #[test]
+fn divergence_probe_account_flip_moves_mandatory_signer_page() {
+    let req = WireSignRequest::base();
+    let p = mirror_parse(&req.encode());
+    let out = drive_glue(&p, &Contexts::default());
+    let mut req2 = req.clone();
+    req2.account_index = 1;
+    let p2 = mirror_parse(&req2.encode());
+    let out2 = drive_glue(&p2, &Contexts::default());
+    assert_signer_page_shown(&out.pages, 0, &p.sender);
+    assert_signer_page_shown(&out2.pages, 1, &p2.sender);
+    assert_ne!(out.pages.as_slice(), out2.pages.as_slice());
+}
+
+#[test]
 fn divergence_probe_recipient_flip_moves_both_pages_and_digest() {
     let mut req = WireSignRequest::base();
     req.value = be_u256_from_u64(1_000_000_000_000_000_000);
@@ -902,6 +942,15 @@ fn pin_handler_render_and_digest_glue_matches_replication() {
         (
             "if crate::tx::display::enforce_paymaster_page(&mut pages, &paymaster_and_data_hash).is_err()",
             "handler §8 paymaster splice drifted",
+        ),
+        (
+            "if crate::tx::display::enforce_from_page(&mut pages, account_index, &sender).is_err()",
+            "handler §8 mandatory signer-page splice drifted",
+        ),
+        (
+            "if crate::tx::display::from_page_proof( &pages, signer_pages_before,
+             account_index, &sender, ) != crate::fi::OK_SENTINEL",
+            "handler §8 mandatory signer-page proof drifted",
         ),
         (
             "let calldata_fingerprint = pqsigner_tx_core::erc8213::calldata_digest(inner_data);",

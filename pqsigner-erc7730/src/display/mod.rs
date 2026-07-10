@@ -50,10 +50,11 @@ pub type Page = [[u8; DISPLAY_COLS]; DISPLAY_ROWS];
 /// Hard cap on the number of pages any renderer may emit. Bumped only
 /// deliberately: 22 → 24 with multiSend clear-sign; 24 → 27 with the Safe
 /// gas-refund magnitude page + the Safe/CoW gas/fee splice; 27 → 28 with the
-/// Safe `safeTxGas` page (conditional on `safeTxGas != 0`; audit 2026-06-26).
-/// The Safe multisend sign-gate counts the page too, so the budget still fails
-/// closed (refuse, never truncate).
-pub const MAX_PAGES: usize = 28;
+/// Safe `safeTxGas` page (conditional on `safeTxGas != 0`; audit 2026-06-26);
+/// 28 → 29 for the mandatory full UserOp signer account/address page
+/// (audit 2026-07-10). The Safe multisend sign-gate reserves the signer page,
+/// so the budget still fails closed (refuse, never truncate).
+pub const MAX_PAGES: usize = 29;
 
 /// A buffer of up to [`MAX_PAGES`] pre-rendered confirmation pages.
 ///

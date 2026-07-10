@@ -1122,12 +1122,14 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // dispatcher's native-value page when the outer UserOp carries
     // ETH, plus the two ERC-8213 fingerprint pages appended below.
     {
-        // native-value page (when outer value != 0) + 2 ERC-8213
-        // fingerprint pages + 2 gas/fee pages (the dispatcher splices the
+        // Native-value page (when outer value != 0) + mandatory full signer
+        // identity page + 2 ERC-8213 fingerprint pages + 2 gas/fee pages (the
+        // dispatcher splices the
         // gas pages for the Safe surface — audit 2026-06-19) + the paymaster
         // page when paymasterAndData is non-empty (audit 2026-06-27).
         let reserved = usize::from(value.iter().any(|&b| b != 0))
             + usize::from(paymaster_and_data_hash != SHA256_EMPTY)
+            + crate::tx::display::SIGNER_IDENTITY_PAGES
             + 2
             + 2;
         match crate::tx::display::multisend_sign_gate(
@@ -1186,7 +1188,29 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // the on-chain monotonic cap regardless; this gate just makes the
     // cost visible to the user.
     if register_slot {
-        let rotate_pages = crate::tx::display::build_slot_rotation_pages(slot_index);
+        let mut rotate_pages = crate::tx::display::build_slot_rotation_pages(slot_index);
+        let signer_pages_before = rotate_pages.len;
+        if crate::tx::display::enforce_from_page(
+            &mut rotate_pages,
+            account_index,
+            &sender,
+        )
+        .is_err()
+        {
+            ui::show_status("Sign refused", "signer unshown");
+            return NscStatus::InternalError as u32;
+        }
+        crate::fi::scrub_sentinel_register();
+        if crate::tx::display::from_page_proof(
+            &rotate_pages,
+            signer_pages_before,
+            account_index,
+            &sender,
+        ) != crate::fi::OK_SENTINEL
+        {
+            ui::show_status("Sign refused", "signer unshown");
+            return NscStatus::InternalError as u32;
+        }
         let (cr, cr_verdict) = confirm_checked(rotate_pages.as_slice());
         match cr {
             ConfirmResult::Confirmed => {}
@@ -1242,14 +1266,32 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         ui::show_status("Sign refused", "paymaster unshown");
         return NscStatus::InternalError as u32;
     }
+    // Account/signer identity is mandatory on every UserOp confirmation.
+    // `sender` is the mnemonic-derived, independently cross-checked address,
+    // never the companion field.
+    let signer_pages_before = pages.len;
+    if crate::tx::display::enforce_from_page(&mut pages, account_index, &sender).is_err() {
+        ui::show_status("Sign refused", "signer unshown");
+        return NscStatus::InternalError as u32;
+    }
+    crate::fi::scrub_sentinel_register();
+    if crate::tx::display::from_page_proof(
+        &pages,
+        signer_pages_before,
+        account_index,
+        &sender,
+    ) != crate::fi::OK_SENTINEL
+    {
+        ui::show_status("Sign refused", "signer unshown");
+        return NscStatus::InternalError as u32;
+    }
     // ERC-8213 fingerprint — show the calldata digest as the last
     // page so a user can cross-check against `cast` / `viem`. Cap is
-    // `MAX_PAGES` = 27; the worst single-tx Safe-multiSend flow lands on
-    // 26 = render 22 + 2 gas splice + 2 fingerprint, so the two fingerprint
-    // pages fit, and `multisend_sign_gate` reserves these pages. If the buffer
-    // is nonetheless full we fail closed (F5): the fingerprint binds the
-    // displayed intent to the signed calldata, so dropping it silently and
-    // signing anyway breaks that binding.
+    // `MAX_PAGES` = 29; `multisend_sign_gate` reserves the full signer page
+    // plus these two fingerprint pages. If the buffer is nonetheless full we
+    // fail closed (F5): the fingerprint binds the displayed intent to the
+    // signed calldata, so dropping it silently and signing anyway breaks that
+    // binding.
     let calldata_fingerprint =
         pqsigner_tx_core::erc8213::calldata_digest(inner_data);
     if crate::tx::display::erc8213::append_fingerprint_page(

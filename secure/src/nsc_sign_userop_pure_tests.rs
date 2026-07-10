@@ -882,6 +882,7 @@ fn negative_u128_sat_msb_high_byte_saturates_not_truncates() {
 const CMD_SIGN_USEROP_SRC: &str =
     include_str!("nsc/cmd_sign_userop.rs");
 const WALLET_ADDRESS_SRC: &str = include_str!("nsc/cmd_get_wallet_address.rs");
+const VALUE_PAGE_SRC: &str = include_str!("tx/display/value_page.rs");
 const SIG_WRAPPER_SRC: &str = include_str!("nsc/sig_wrapper.rs");
 const TRAILER_SRC: &str = include_str!("nsc/trailer.rs");
 
@@ -1107,6 +1108,35 @@ fn negative_slice_binds_sender_before_confirm_sign_or_counter_write() {
     assert!(CMD_SIGN_USEROP_SRC[gate..].contains("SENDER_BIND_CFI_EXPECTED"));
     assert!(CMD_SIGN_USEROP_SRC[gate..].contains("let sender_check = unsafe"));
     assert!(CMD_SIGN_USEROP_SRC[gate..].contains("sender_reads_agree"));
+}
+
+#[test]
+fn negative_slice_every_userop_confirm_gets_bound_signer_page() {
+    assert_eq!(CMD_SIGN_USEROP_SRC.matches("enforce_from_page(").count(), 2);
+    assert!(CMD_SIGN_USEROP_SRC.contains("&mut rotate_pages"));
+    assert!(CMD_SIGN_USEROP_SRC.contains(
+        "enforce_from_page(&mut pages, account_index, &sender)"
+    ));
+    assert!(CMD_SIGN_USEROP_SRC.contains("signer unshown"));
+    assert_eq!(CMD_SIGN_USEROP_SRC.matches("from_page_proof(").count(), 2);
+}
+
+#[test]
+fn negative_slice_shows_and_fi_proves_full_derived_signer_identity() {
+    assert!(CMD_SIGN_USEROP_SRC.contains("SIGNER_IDENTITY_PAGES"));
+    assert!(!CMD_SIGN_USEROP_SRC.contains("account_index, &companion_sender"));
+    let main_page = CMD_SIGN_USEROP_SRC
+        .find("enforce_from_page(&mut pages, account_index, &sender)")
+        .unwrap();
+    let fingerprint = main_page + CMD_SIGN_USEROP_SRC[main_page..]
+        .find("append_fingerprint_page(").unwrap();
+    let confirm = fingerprint + CMD_SIGN_USEROP_SRC[fingerprint..]
+        .find("confirm_checked(pages.as_slice())").unwrap();
+    assert!(main_page < fingerprint && fingerprint < confirm);
+    assert!(VALUE_PAGE_SRC.contains("b\"Signer acct #\""));
+    assert!(VALUE_PAGE_SRC.contains("primitives::write_addr_full(a, b, c, sender)"));
+    assert!(VALUE_PAGE_SRC.contains("#[inline(never)]\npub(crate) fn enforce_from_page"));
+    assert!(VALUE_PAGE_SRC.contains("#[inline(never)]\npub(crate) fn from_page_proof"));
 }
 
 #[test]

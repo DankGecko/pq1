@@ -13,8 +13,10 @@ the atomic multi-call **batch sign** flow.
   — the only on-chain difference is the resulting UserOp's `callData`,
   which is `executeBatchWithOffchainCount(...)` instead of
   `executeWithOffchainCount(...)`.
-* The user reviews **each inner tx independently** on the OLED (clear-
-  signing preserved per member) and then a final "Sign N txs?" gate.
+* The user reviews **each inner tx independently** on the trusted LCD
+  (clear-signing preserved per member), including the exact account index and
+  full secure-world-derived signer address, and then a final "Sign N txs?"
+  gate that repeats that signer identity.
 * Hard caps: `MAX_BATCH_TXS = 4` inner calls per UserOp, each call's
   `data` ≤ `MAX_TX_LEN = 4096` bytes.
 * Same flag layout as single-tx — `FLAG_INCLUDE_INIT_CODE`,
@@ -246,13 +248,15 @@ it carried.
 For an N-tx batch, the device renders, in order:
 
 1. Banner: `BATCH SIGN` / `Tx 1 of N`
-2. The same pages a single-tx sign would render for inner tx 1
+2. `Signer acct #N` plus the full mnemonic-derived EIP-55 signer address.
+3. The same pages a single-tx sign would render for inner tx 1
    (value / ERC-20-shape / blind-sign).
-3. Long-right (or cancel via long-left).
-4. Banner: `Tx 2 of N` + tx 2 pages.
-5. … repeat for each member …
-6. Final summary page: `Sign N txs?` / `Long-right` / `to confirm`.
-7. Long-right confirms; signing begins.
+4. Long-right (or cancel via long-left).
+5. Banner: `Tx 2 of N` + signer identity + tx 2 pages.
+6. … repeat for each member …
+7. Final summary pages: `Sign N txs?`, the same signer identity, then
+   `Long-right` / `to confirm`.
+8. Long-right confirms; signing begins.
 
 Cancel at **any** of the per-tx confirms or the final summary aborts
 the entire signing operation — no inner tx is signed individually.

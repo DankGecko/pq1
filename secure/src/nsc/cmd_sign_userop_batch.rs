@@ -694,7 +694,29 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // applies to the whole batch (one Type 1 per sign call), so we
     // gate it once before any inner-tx render.
     if register_slot {
-        let rotate_pages = crate::tx::display::build_slot_rotation_pages(slot_index);
+        let mut rotate_pages = crate::tx::display::build_slot_rotation_pages(slot_index);
+        let signer_pages_before = rotate_pages.len;
+        if crate::tx::display::enforce_from_page(
+            &mut rotate_pages,
+            account_index,
+            &sender,
+        )
+        .is_err()
+        {
+            ui::show_status("Batch sign", "signer unshown");
+            return NscStatus::InternalError as u32;
+        }
+        crate::fi::scrub_sentinel_register();
+        if crate::tx::display::from_page_proof(
+            &rotate_pages,
+            signer_pages_before,
+            account_index,
+            &sender,
+        ) != crate::fi::OK_SENTINEL
+        {
+            ui::show_status("Batch sign", "signer unshown");
+            return NscStatus::InternalError as u32;
+        }
         let (cr, cr_verdict) = confirm_checked(rotate_pages.as_slice());
         match cr {
             ConfirmResult::Confirmed => {}
@@ -836,10 +858,15 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         // display page budget, else refuse the whole batch. Reserved
         // pages here: the dispatcher's native-value page when this
         // member carries ETH, the two ERC-8213 fingerprint pages, the
-        // batch banner page, and the two gas/fee pages the dispatcher
+        // batch banner page, mandatory full signer page, and the two gas/fee
+        // pages the dispatcher
         // splices for the Safe surface (audit 2026-06-19).
         {
-            let reserved = usize::from(ptx.value.iter().any(|&b| b != 0)) + 2 + 1 + 2;
+            let reserved = usize::from(ptx.value.iter().any(|&b| b != 0))
+                + 2
+                + 1
+                + crate::tx::display::SIGNER_IDENTITY_PAGES
+                + 2;
             match crate::tx::display::multisend_sign_gate(
                 routed[i].as_ref().and_then(|r| r.safe_v1.as_ref()),
                 safe_exec_verified.as_ref(),
@@ -925,6 +952,23 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             }
         };
 
+        let signer_pages_before = pages.len;
+        if crate::tx::display::enforce_from_page(&mut pages, account_index, &sender).is_err() {
+            ui::show_status("Batch sign", "signer unshown");
+            return NscStatus::InternalError as u32;
+        }
+        crate::fi::scrub_sentinel_register();
+        if crate::tx::display::from_page_proof(
+            &pages,
+            signer_pages_before,
+            account_index,
+            &sender,
+        ) != crate::fi::OK_SENTINEL
+        {
+            ui::show_status("Batch sign", "signer unshown");
+            return NscStatus::InternalError as u32;
+        }
+
         // Per-tx ERC-8213 fingerprint. The user sees one fingerprint
         // per inner call; a separate batch-final fingerprint binds
         // the whole bundle below.
@@ -992,6 +1036,28 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         .is_err()
         {
             ui::show_status("Batch sign", "paymaster unshown");
+            return NscStatus::InternalError as u32;
+        }
+        let signer_pages_before = final_pages.len;
+        if crate::tx::display::enforce_from_page(
+            &mut final_pages,
+            account_index,
+            &sender,
+        )
+        .is_err()
+        {
+            ui::show_status("Batch sign", "signer unshown");
+            return NscStatus::InternalError as u32;
+        }
+        crate::fi::scrub_sentinel_register();
+        if crate::tx::display::from_page_proof(
+            &final_pages,
+            signer_pages_before,
+            account_index,
+            &sender,
+        ) != crate::fi::OK_SENTINEL
+        {
+            ui::show_status("Batch sign", "signer unshown");
             return NscStatus::InternalError as u32;
         }
         // Fail closed if the batch-final fingerprint can't be appended (F5):

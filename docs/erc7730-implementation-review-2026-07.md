@@ -260,7 +260,8 @@ keys unsupported (names are load-bearing since `abi` is ignored).
 
 ## Tier 4 — Rendering UX fidelity (what the user actually sees)
 
-Display model: 16 cols × 4 rows, `MAX_PAGES = 28`; a simple USDT transfer is 8 pages.
+Display model: 16 cols × 4 rows, `MAX_PAGES = 29`; the mandatory outer-signer
+identity page makes a simple USDT transfer 9 pages in the final confirmation set.
 Quick-win bundle (all S unless noted):
 
 - **4.1 Intent banner truncates at 10 chars, no marker** (intent.rs:61-67): **330 of 561**

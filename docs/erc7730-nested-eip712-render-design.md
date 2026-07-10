@@ -386,7 +386,8 @@ the v1 typeHashes.
 ### 11.4 Caps + fail-closed
 
 `MAX_NESTED_ARRAY = 6` (review fix — 8 was against the budget: banner + spender + 8×(amount + expiration
-+ divider ≈ 3) + chain + confirm ≈ 27 vs `MAX_PAGES = 28`; 6 leaves headroom). Page-budget overflow
++ divider ≈ 3) + chain + confirm ≈ 27 renderer pages, plus the mandatory signer page, vs
+`MAX_PAGES = 29`; 6 leaves headroom). Page-budget overflow
 (`pages.push_blank()` → `Err`) MUST decline, NEVER truncate — a truncated array tail is the array-hiding
 WYSIWYS break one level down. `elem_count == 0`, `elem_count > MAX_NESTED_ARRAY`, any `elem_ed_i.len() !=
 member_count*32`, concat-hash mismatch, page-budget overflow, or an uncovered address → single hard `Err`
@@ -613,8 +614,9 @@ no hidden address reaches this path.
 ### 12.8 Caps + fail-closed (page budget is the practical output cap)
 
 `MAX_STRUCT_DEPTH = 8` (dbgen) bounds nesting; `MAX_NESTED_ARRAY = 6` bounds `outputs`. In practice the
-`MAX_PAGES = 28` budget is the binding constraint: a curated ExclusiveDutchOrder with 1 output renders ~20
-pages; each extra output adds ~3, so ~3 outputs is the realistic ceiling before `push_blank → Err →
+`MAX_PAGES = 29` budget is the binding constraint: a curated ExclusiveDutchOrder with 1 output renders ~20
+semantic pages plus one mandatory signer page; each extra output adds ~3, so ~3 outputs is the realistic
+ceiling before `push_blank → Err →
 decline`. That is **safe** (declines, never truncates a tail — the array-hiding WYSIWYS break) and rare
 (most UniswapX orders have 1–2 outputs). Every v3 decline trigger — depth overflow, uncovered address at any
 level, page budget, any binding/length/count mismatch, reconciliation shortfall — is a single hard `Err`
@@ -634,4 +636,3 @@ as pure curation on this (now-reviewed) machinery — ZERO code delta (only the 
 tests + DB regen), so the ceremony was proportionately reduced to advisor-level + compile (the build gate proves
 every address is shown, else the format would be skipped) + render/flip tests + the corpus panic-safety smoke
 test. All six UniswapX order descriptors now clear-sign; none remain skipped.
-

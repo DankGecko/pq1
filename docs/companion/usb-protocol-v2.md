@@ -121,6 +121,13 @@ offset  size  field
 330     N    data
 ```
 
+Before any signature is released, every confirmation set includes a mandatory
+`Signer acct #N` page followed by the full EIP-55 address independently derived
+for `account_index` in secure world. The wire `sender` must match that address,
+but is not trusted as the source of the displayed identity. Batch signing shows
+the same identity for each member confirmation and again at the final batch
+authorization gate.
+
 **Response (post-2026-04-29 layout):**
 
 ```

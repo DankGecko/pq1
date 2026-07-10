@@ -47,7 +47,9 @@ mod value_page;
 // renderer directly; private otherwise.
 pub(crate) mod value_transfer;
 
-pub(crate) use value_page::enforce_paymaster_page;
+pub(crate) use value_page::{
+    enforce_from_page, enforce_paymaster_page, from_page_proof, SIGNER_IDENTITY_PAGES,
+};
 pub use blind_sign::render_blind_sign_pages;
 pub use eip1271::{render_eip1271_personal_sign_pages, render_eip1271_raw32_pages};
 pub use erc20_known::render_erc20_known_pages;
@@ -72,11 +74,12 @@ pub use value_transfer::render_pages;
 // `Pages::{as_slice,empty_with_len,row_mut,page_mut,with_len,push_blank}`
 // call sites across this display tree resolve unchanged.
 //
-// MAX_PAGES = 28. It must cover the longest `render_*_pages` output; the
-// worst realistic flow is the Safe-UI approve+presign multiSend (AddrHex legs
-// + 3 refund pages + record values + batch banner + gas + ERC-8213
-// fingerprints + a non-zero `safeTxGas` page). `multisend_sign_gate` counts
-// pages against this cap so the budget fails closed (refuse, never truncate).
+// MAX_PAGES = 29. It must cover the longest `render_*_pages` output plus the
+// mandatory full outer-signer account/address page; the worst realistic flow
+// is the Safe-UI approve+presign multiSend (AddrHex legs + 3 refund pages +
+// record values + batch banner + gas + ERC-8213 fingerprints + a non-zero
+// `safeTxGas` page). `multisend_sign_gate` counts pages against this cap so the
+// budget fails closed (refuse, never truncate).
 // Grow it deliberately (4×16 = 64 stack bytes/page, ×2 transiently during the
 // batch-banner wrap) — the per-flow accounting lives in git history and the
 // bump rationale in the host `MAX_PAGES` doc.

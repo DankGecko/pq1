@@ -44,7 +44,7 @@ mirrors what that tool does; when in doubt, read its source.
                                                   | NSC gateway
                                            +------v----------+
                                            | SECURE WORLD    |
-                                           | PIN entry (OLED)|
+                                           | PIN entry (LCD) |
                                            | Tx display      |
                                            | SPHINCS+C10 sign|
                                            | ZK verify       |
@@ -58,8 +58,8 @@ mirrors what that tool does; when in doubt, read its source.
 
 **Trust boundary.** The companion app is untrusted. The device independently:
 
-- Prompts for PIN on its own trusted OLED — the PIN never crosses USB.
-- Displays transaction details on its trusted OLED.
+- Prompts for PIN on its own trusted LCD — the PIN never crosses USB.
+- Displays transaction details on its trusted LCD.
 - Waits for physical button confirmation.
 - Computes the SPHINCS+C10 signing digest natively.
 - Verifies ZK proofs before displaying decoded actions.
@@ -798,7 +798,8 @@ GET_WALLET_ADDRESS(account_index=0) → <1 s first time, then wallet address
 
 6. Send chained APDU. Device displays:
      a. "First deploy on chain N?"
-     b. Inner tx preview
+     b. `Signer acct #N` plus the full mnemonic-derived EIP-55 wallet address
+     c. Inner tx preview
      Request signing after button confirm.
 
 7. Parse response:
@@ -1154,9 +1155,12 @@ issue.
 1. **PIN never crosses USB.** `UNLOCK` triggers on-device PIN entry. The
    companion has no way to send a PIN and must never prompt for one in
    its own UI.
-2. **The device displays transaction details independently.** The OLED
+2. **The device displays transaction details independently.** The LCD
    is driven entirely from the payload the device parsed — a compromised
-   companion cannot fake a confirmation screen.
+   companion cannot fake a confirmation screen. Every UserOp confirmation
+   also shows the exact zero-based `account_index` and the full EIP-55 signer
+   address derived in secure world; the companion-supplied `sender` is never
+   used as display authority.
 3. **Slot selection is the companion's responsibility.** Firmware is
    stateless with respect to `(chain_id, slot_index)`. Always read
    on-chain `nextOwnerIndex` / `slotUses[i]` before choosing a slot to
@@ -1168,7 +1172,7 @@ issue.
 5. **Counters are one-way.** Neither `bootstrapUses` nor `slotUses[i]`
    can be reset. Prompt the user well before exhaustion.
 6. **Address verification requires device confirmation.** Always direct
-   users to re-verify receive addresses on the device's OLED via
+   users to re-verify receive addresses on the device's LCD via
    `GET_WALLET_ADDRESS`, not just in the companion UI.
 7. **ZK proofs are generated off-device.** The companion runs snarkjs (or
    equivalent) to produce Groth16 proofs for clear-signed actions. The

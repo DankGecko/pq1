@@ -33,6 +33,106 @@ const SHA256_OF_EMPTY: [u8; 32] = [
     0xb8, 0x55,
 ];
 
+/// One mandatory full signer-identity page per confirmation set.
+pub(crate) const SIGNER_IDENTITY_PAGES: usize = 1;
+
+type SignerIdentityPage = [[u8; DISPLAY_COLS]; DISPLAY_ROWS];
+
+/// Splice the mandatory UserOp signer page immediately after the leading
+/// banner.
+///
+/// `account_index` selects a distinct mnemonic-derived wallet, while `sender`
+/// is the CREATE2 address independently derived and companion-bound in the
+/// secure handler. Both are signed-context facts: omitting them lets a hostile
+/// companion reuse otherwise identical intent pages while signing from a
+/// different account. "Signer" is deliberate: a Safe or `transferFrom` call
+/// may debit an address other than this outer PQ wallet, so labelling it
+/// "From" would create a second trusted-display ambiguity. The address is
+/// rendered in full EIP-55 form across all three remaining rows; no name
+/// substitution or truncated fingerprint is permitted.
+///
+/// The page is unconditional and fails closed. A full page buffer or an
+/// out-of-range account index returns `Err(())`, and every UserOp caller maps
+/// that to a refusal before confirmation/signing.
+#[inline(never)]
+pub(crate) fn enforce_from_page(
+    pages: &mut Pages,
+    account_index: u32,
+    sender: &[u8; 20],
+) -> Result<(), ()> {
+    let page = build_signer_identity_page(account_index, sender).ok_or(())?;
+    let at = if pages.len >= 1 { 1 } else { 0 };
+    let idx = insert_blank(pages, at)?;
+    pages.buf[idx] = page;
+    Ok(())
+}
+
+/// Exact all-64-byte readback predicate for the handler's FI completion gate.
+pub(crate) fn from_page_matches(
+    pages: &Pages,
+    page_index: usize,
+    account_index: u32,
+    sender: &[u8; 20],
+) -> bool {
+    let Some(expected) = build_signer_identity_page(account_index, sender) else {
+        return false;
+    };
+    let Some(actual) = pages.as_slice().get(page_index) else {
+        return false;
+    };
+    let mut diff = 0u8;
+    for row in 0..DISPLAY_ROWS {
+        for col in 0..DISPLAY_COLS {
+            diff |= actual[row][col] ^ expected[row][col];
+        }
+    }
+    diff == 0
+}
+
+/// FI-hardened completion proof for [`enforce_from_page`].
+///
+/// The caller records `prior_len`, invokes the non-inlined inserter, scrubs the
+/// ABI sentinel register, then requires this function to return
+/// [`crate::fi::OK_SENTINEL`]. Skipping the insert leaves the length/page check
+/// false; skipping this proof after the scrub leaves a non-OK return register.
+#[inline(never)]
+pub(crate) fn from_page_proof(
+    pages: &Pages,
+    prior_len: usize,
+    account_index: u32,
+    sender: &[u8; 20],
+) -> u32 {
+    let page_index = usize::from(prior_len >= 1);
+    let Some(expected_len) = prior_len.checked_add(SIGNER_IDENTITY_PAGES) else {
+        return crate::fi::FAIL_SENTINEL;
+    };
+    crate::fi::check_true_into_sentinel(|| {
+        core::hint::black_box(pages.len == expected_len)
+            && from_page_matches(pages, page_index, account_index, sender)
+    })
+}
+
+fn build_signer_identity_page(
+    account_index: u32,
+    sender: &[u8; 20],
+) -> Option<SignerIdentityPage> {
+    if account_index > 255 {
+        return None;
+    }
+    const PREFIX: &[u8] = b"Signer acct #";
+    let mut page = [[b' '; DISPLAY_COLS]; DISPLAY_ROWS];
+    let mut digits = [0u8; 3];
+    let n = primitives::format_u64(u64::from(account_index), &mut digits)?;
+    if PREFIX.len() + n > DISPLAY_COLS {
+        return None;
+    }
+    page[0][..PREFIX.len()].copy_from_slice(PREFIX);
+    page[0][PREFIX.len()..PREFIX.len() + n].copy_from_slice(&digits[..n]);
+    let [_label, a, b, c] = &mut page;
+    primitives::write_addr_full(a, b, c, sender);
+    Some(page)
+}
+
 /// Splice a loud native-ETH `value` page into an already-rendered page set
 /// when `value != 0`, reporting whether the WYSIWYS invariant holds.
 ///
@@ -296,6 +396,72 @@ mod tests {
             access_list_count: 0,
             signing_hash: [0u8; 32],
         }
+    }
+
+    #[test]
+    fn from_page_shows_account_and_full_derived_address() {
+        let sender = [0xabu8; 20];
+        let mut pages = Pages::with_len(2);
+        primitives::write_line(pages.row_mut(0, 0), "Sign transfer?");
+        primitives::write_line(pages.row_mut(1, 3), "R=Confirm");
+        assert!(enforce_from_page(&mut pages, 255, &sender).is_ok());
+        assert_eq!(pages.len, 3);
+        assert_eq!(&pages.buf[1][0], b"Signer acct #255");
+        let mut expected = [[b' '; DISPLAY_COLS]; 3];
+        let [a, b, c] = &mut expected;
+        primitives::write_addr_full(a, b, c, &sender);
+        assert_eq!(&pages.buf[1][1..4], &expected);
+        assert_eq!(&pages.buf[0][0][..14], b"Sign transfer?");
+        assert_eq!(&pages.buf[2][3][..9], b"R=Confirm");
+    }
+
+    #[test]
+    fn account_flip_changes_confirmed_from_page() {
+        let sender = [0x42u8; 20];
+        let mut account_zero = Pages::with_len(1);
+        let mut account_one = Pages::with_len(1);
+        assert!(enforce_from_page(&mut account_zero, 0, &sender).is_ok());
+        assert!(enforce_from_page(&mut account_one, 1, &sender).is_ok());
+        assert_ne!(account_zero.buf[1], account_one.buf[1]);
+        assert_eq!(&account_zero.buf[1][0][..14], b"Signer acct #0");
+        assert_eq!(&account_one.buf[1][0][..14], b"Signer acct #1");
+        assert!(from_page_matches(&account_zero, 1, 0, &sender));
+        assert!(!from_page_matches(&account_zero, 1, 1, &sender));
+    }
+
+    #[test]
+    fn every_sender_byte_is_bound_into_the_signer_page() {
+        let sender = [0x42u8; 20];
+        let mut pages = Pages::with_len(1);
+        enforce_from_page(&mut pages, 7, &sender).unwrap();
+        assert!(from_page_matches(&pages, 1, 7, &sender));
+        for i in 0..sender.len() {
+            let mut changed = sender;
+            changed[i] ^= 1;
+            assert!(!from_page_matches(&pages, 1, 7, &changed));
+        }
+    }
+
+    #[test]
+    fn signer_page_completion_proof_fails_before_or_after_corruption() {
+        let sender = [0x24u8; 20];
+        let mut pages = Pages::with_len(1);
+        assert_ne!(from_page_proof(&pages, 1, 3, &sender), crate::fi::OK_SENTINEL);
+        enforce_from_page(&mut pages, 3, &sender).unwrap();
+        assert_eq!(from_page_proof(&pages, 1, 3, &sender), crate::fi::OK_SENTINEL);
+        pages.buf[1][2][7] ^= 1;
+        assert_ne!(from_page_proof(&pages, 1, 3, &sender), crate::fi::OK_SENTINEL);
+    }
+
+    #[test]
+    fn from_page_full_buffer_and_bad_account_fail_closed() {
+        let sender = [0x11u8; 20];
+        let mut full = Pages::with_len(super::super::MAX_PAGES);
+        assert!(enforce_from_page(&mut full, 0, &sender).is_err());
+        assert_eq!(full.len, super::super::MAX_PAGES);
+        let mut bad_account = Pages::with_len(1);
+        assert!(enforce_from_page(&mut bad_account, 256, &sender).is_err());
+        assert_eq!(bad_account.len, 1);
     }
 
     /// Audit C-1 regression. The invariant is applied uniformly to the
