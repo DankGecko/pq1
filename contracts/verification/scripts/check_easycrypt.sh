@@ -32,11 +32,15 @@
 # target with Alt-Ergo 2.6.0 ALONE. The MM45-CHAIN drafts (WOTS_C_*, SPHINCS_C,
 # XMSSMT_C_*) `require import SPHINCS_PLUS`, and building SPHINCS_PLUS.eco fresh
 # needs **z3 4.13.x** -- SPHINCS_PLUS.ec:1932 fails `cannot prove goal (strict)`
-# under both Alt-Ergo 2.6.0 and z3 4.16.0. So on a box with only Alt-Ergo this
-# script can compile the FORS+C chain but SKIPS/FAILS the MM45-chain files unless
-# a prebuilt SPHINCS_PLUS.eco is present. Because `require` does NOT re-verify (see
-# below), a stale SPHINCS_PLUS.eco silently satisfies the MM45-chain compiles; a
-# clean box without z3 4.13.x is NOT a full reproduction of the MM45-chain leg.
+# under both Alt-Ergo 2.6.0 and z3 4.16.0. So when SPHINCS_PLUS.eco is ABSENT (and
+# not FORCE_MM45=1) this script SKIPS the MM45-chain drafts LOUDLY -- listing each
+# skipped file + a summary + still exiting OK -- and gates only the stdlib-only
+# chain (all the +C leaf / FORS math, reproducible with Alt-Ergo alone). A skip is
+# NOT a pass: those files are simply NOT verified on such a box. Because `require`
+# does NOT re-verify (see below), a stale SPHINCS_PLUS.eco silently satisfies the
+# MM45-chain compiles; a clean box without z3 4.13.x is NOT a full reproduction of
+# the MM45-chain leg. Full MM45-chain verification needs z3 4.13.x (or a trusted
+# prebuilt SPHINCS_PLUS.eco); FORCE_MM45=1 compiles them anyway (fail-closed).
 #
 # The MM45 reference proofs are NOT vendored (they are large and third-party).
 # Fetch them once:
@@ -124,11 +128,57 @@ EC_SH="${EC_SH:-$EC_DIR/ec-r2026.sh}"
 
 # include order matters: XMSS BEFORE SPHINCSPLUS, else `unknown type diff_t`
 INC=(-I "$FV_X" -I "$FV_S" -I "$DRAFTS")
+
+# The MM45-chain drafts `require import SPHINCS_PLUS`; building SPHINCS_PLUS.eco
+# fresh needs z3 4.13.x (SPHINCS_PLUS.ec:1932; see the header caveat). If that
+# .eco is ABSENT and cannot be built, compiling those drafts fails-CLOSED for a
+# TOOLCHAIN reason, not a proof defect -- which reads as "this gate is broken."
+# So: when SPHINCS_PLUS.eco is absent, SKIP the (transitively) SP-dependent
+# drafts LOUDLY and gate only the stdlib-only chain (the +C leaf/FORS math,
+# reproducible with Alt-Ergo alone). Set FORCE_MM45=1 to compile them anyway
+# (fail-closed) even without the .eco. The SP-dependent set is computed
+# dynamically from the require graph, so it self-maintains as files are added.
+SP_DEP="$(python3 - "$DRAFTS" <<'PY'
+import os,re,sys,glob
+d=sys.argv[1]; drafts={os.path.basename(p)[:-3]:p for p in glob.glob(os.path.join(d,"*.ec"))}
+def reqs(f):
+    s=set()
+    for line in open(f):
+        if re.match(r'\s*(?:require|clone)\b',line):
+            for t in re.findall(r'\b[A-Z][A-Za-z0-9_]+\b',line):
+                if t in drafts or t=="SPHINCS_PLUS": s.add(t)
+    return s
+dep=set(); changed=True
+while changed:
+    changed=False
+    for n,p in drafts.items():
+        if n in dep: continue
+        r=reqs(p)
+        if "SPHINCS_PLUS" in r or (r & dep): dep.add(n); changed=True
+print(" ".join(sorted(dep)))
+PY
+)"
+skip_sp=0
+if [ ! -f "$FV_S/SPHINCS_PLUS.eco" ] && [ "${FORCE_MM45:-0}" != 1 ]; then
+  skip_sp=1
+  echo
+  echo "WARN: $FV_S/SPHINCS_PLUS.eco absent (needs z3 4.13.x -- see header)."
+  echo "      SKIPPING the MM45-chain drafts (not a proof defect); gating the"
+  echo "      stdlib-only +C/FORS chain. Set FORCE_MM45=1 to compile them anyway."
+fi
+
 echo
 echo "[compile] every .ec as a TARGET (require does NOT re-verify)"
 find "$DRAFTS" -name '*.eco' -delete 2>/dev/null
+skipped=0
 for f in "$DRAFTS"/*.ec; do
   b="$(basename "$f")"
+  bn="${b%.ec}"
+  if [ "$skip_sp" = 1 ] && printf ' %s ' "$SP_DEP" | grep -q " $bn "; then
+    printf '  SKIP (MM45-chain, no SPHINCS_PLUS.eco): %s\n' "$b"
+    skipped=$(( skipped + 1 ))
+    continue
+  fi
   if [ -n "${EC_SH:-}" ]; then
     timeout 1800 bash "$EC_SH" compile "${INC[@]}" "$f" >/dev/null 2>&1
   else
@@ -138,7 +188,11 @@ for f in "$DRAFTS"/*.ec; do
   if [ "$rc" != 0 ]; then bad "$b does not compile (exit $rc)"; else note "ok  $b"; fi
 done
 find "$DRAFTS" -name '*.eco' -delete 2>/dev/null
+[ "$skipped" != 0 ] && note "SKIPPED $skipped MM45-chain file(s) -- need z3 4.13.x / prebuilt SPHINCS_PLUS.eco (see header); NOT verified here"
 
 echo
-if [ "$fail" = 0 ]; then echo "=== verify-easycrypt OK ==="; else echo "=== verify-easycrypt FAIL ==="; fi
+if [ "$fail" = 0 ]; then
+  if [ "$skipped" != 0 ]; then echo "=== verify-easycrypt OK (stdlib chain; $skipped MM45-chain SKIPPED) ==="
+  else echo "=== verify-easycrypt OK ==="; fi
+else echo "=== verify-easycrypt FAIL ==="; fi
 exit "$fail"
