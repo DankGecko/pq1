@@ -82,6 +82,12 @@ RUSTFLAGS_NONSECURE_HW = -C linker=arm-none-eabi-ld -C link-arg=-Tlink.x $(REPRO
 SECURE_ELF   = target/secure/$(TARGET)/release/sphincs-tz-secure
 NONSECURE_ELF = target/nonsecure/$(TARGET)/release/sphincs-tz-nonsecure
 FSBL_ELF      = target/fsbl/$(TARGET)/release/pqsigner-fsbl
+RELEASE_FSBL_ELF = target/release-fsbl/$(TARGET)/release/pqsigner-fsbl
+PRODUCTION_VENDOR_KEY_POLICY = $(CURDIR)/config/production-firmware-vendor-key.sha256
+DEVELOPMENT_VENDOR_KEY_POLICY = $(CURDIR)/config/development-firmware-vendor-pubkey.hex
+RELEASE_VENDOR_KEY_SNAPSHOT = $(CURDIR)/target/release-input/vendor-pubkey.bin
+RELEASE_ARTIFACT_DIR = $(CURDIR)/target/pqsigner-release
+RELEASE_ARTIFACT_TMP = $(CURDIR)/target/pqsigner-release.tmp
 
 # Default: mock secure element + semihosting UI mock (no real hardware needed)
 # debug-log enables semihosting output from the secure world.
@@ -89,8 +95,9 @@ FSBL_ELF      = target/fsbl/$(TARGET)/release/pqsigner-fsbl
 FEATURES ?= mock-se,debug-log,ui-semihosting
 
 # Extract features relevant to the nonsecure crate (it doesn't know about
-# mock-se, debug-log, ui-semihosting, etc. — only e2e-test and stm32u585).
-NS_FEATURES_LIST := $(strip $(foreach f,stm32u585 e2e-test usb,$(if $(findstring $(f),$(FEATURES)),$(f))))
+# mock-se, debug-log, ui-semihosting, etc. — only the shared platform,
+# transport, test, and watchdog features below).
+NS_FEATURES_LIST := $(strip $(foreach f,stm32u585 e2e-test usb iwdg,$(if $(findstring $(f),$(FEATURES)),$(f))))
 comma := ,
 empty :=
 space := $(empty) $(empty)
@@ -1950,13 +1957,84 @@ fsbl-lcd-test-hw:
 # Production-only: refuse to build the FSBL without FSBL_VENDOR_PUBKEY.
 # Use this in the release pipeline.
 .PHONY: fsbl-release
-fsbl-release: ## Build the release FSBL (release pipeline)
+fsbl-release: release-key-snapshot ## Build the release FSBL (release pipeline)
+	@echo "==> Building isolated production FSBL"
+	@rm -rf target/release-fsbl
+	@FSBL_VENDOR_PUBKEY="$(RELEASE_VENDOR_KEY_SNAPSHOT)" \
+		$(RUSTFLAGS_VAR)="-C linker=arm-none-eabi-ld -C link-arg=-Tlink.x $(REPRO_FLAGS)" \
+		cargo build --locked --release --target $(TARGET) --target-dir target/release-fsbl \
+			-p pqsigner-fsbl --features mode-production
+	@arm-none-eabi-size -B $(RELEASE_FSBL_ELF) | awk -v cap=32768 'NR==2 { \
+		used=$$1+$$2; printf "==> Release FSBL: %d B of %d B, %d B free\n", used, cap, cap-used; \
+		if (used>cap) { print "ERROR: release FSBL exceeds immutable 32 KB region"; exit 1 } }'
+
+# One key path must feed both secure/build.rs and fsbl/build.rs.  This gate is
+# deliberately a release dependency (not just an FSBL convenience check): an
+# otherwise valid production secure image built with the old all-zero fallback
+# can never accept a field update after RDP-2/WRP lockdown.
+.PHONY: release-pubkey-check
+release-pubkey-check:
 	@if [ -z "$${FSBL_VENDOR_PUBKEY}" ]; then \
-		echo "ERROR: fsbl-release requires FSBL_VENDOR_PUBKEY=path/to/pubkey.bin"; \
-		echo "       Use 'make fsbl' for dev builds with the built-in fixture."; \
+		echo "ERROR: production release requires FSBL_VENDOR_PUBKEY=path/to/pubkey.bin"; \
 		exit 1; \
 	fi
-	@$(MAKE) fsbl
+	@if [ ! -f "$${FSBL_VENDOR_PUBKEY}" ]; then \
+		echo "ERROR: FSBL_VENDOR_PUBKEY is not a regular file: $${FSBL_VENDOR_PUBKEY}"; \
+		exit 1; \
+	fi
+	@size=$$(wc -c < "$${FSBL_VENDOR_PUBKEY}" | tr -d '[:space:]'); \
+	if [ "$$size" != "32" ]; then \
+		echo "ERROR: FSBL_VENDOR_PUBKEY must be exactly 32 bytes (got $$size)"; \
+		exit 1; \
+	fi
+	@key_hex=$$(od -An -v -tx1 "$${FSBL_VENDOR_PUBKEY}" | tr -d '[:space:]'); \
+	if [ "$$key_hex" = "0000000000000000000000000000000000000000000000000000000000000000" ]; then \
+		echo "ERROR: FSBL_VENDOR_PUBKEY must not be the all-zero disabled-update placeholder"; \
+		exit 1; \
+	fi
+	@actual=$$(sha256sum "$${FSBL_VENDOR_PUBKEY}" | awk '{print $$1}'); \
+	key_hex=$$(od -An -v -tx1 "$${FSBL_VENDOR_PUBKEY}" | tr -d '[:space:]'); \
+	dev_hex=$$(tr -d '[:space:]' < "$(DEVELOPMENT_VENDOR_KEY_POLICY)"); \
+	if ! printf '%s\n' "$$dev_hex" | grep -Eq '^[0-9a-f]{64}$$'; then \
+		echo "ERROR: malformed development firmware-key policy"; \
+		exit 1; \
+	fi; \
+	if [ "$$key_hex" = "$$dev_hex" ]; then \
+		echo "ERROR: the public in-tree development firmware key must never ship"; \
+		exit 1; \
+	fi; \
+	expected=$$(tr -d '[:space:]' < "$(PRODUCTION_VENDOR_KEY_POLICY)"); \
+	if ! printf '%s\n' "$$expected" | grep -Eq '^[0-9a-f]{64}$$'; then \
+		echo "ERROR: production firmware key policy is UNPROVISIONED or malformed:"; \
+		echo "       $(PRODUCTION_VENDOR_KEY_POLICY)"; \
+		echo "       Complete the HSM ceremony and commit the reviewed public-key SHA-256."; \
+		exit 1; \
+	fi; \
+	if [ "$$actual" != "$$expected" ]; then \
+		echo "ERROR: firmware public key does not match reviewed production policy"; \
+		echo "       expected $$expected"; \
+		echo "       got      $$actual"; \
+		exit 1; \
+	fi
+
+# Copy the reviewed public key exactly once. Both firmware builds receive this
+# absolute, read-only snapshot; the source pathname is never consulted again.
+# A second hash check after the copy closes source-file replacement during the
+# first gate. The final-ELF section comparison below closes build/cache drift.
+.PHONY: release-key-snapshot
+release-key-snapshot: release-pubkey-check
+	@rm -rf $(CURDIR)/target/release-input
+	@install -d -m 0700 $(CURDIR)/target/release-input
+	@src=$$(realpath "$${FSBL_VENDOR_PUBKEY}"); \
+		install -m 0444 "$$src" "$(RELEASE_VENDOR_KEY_SNAPSHOT).tmp"; \
+		expected=$$(tr -d '[:space:]' < "$(PRODUCTION_VENDOR_KEY_POLICY)"); \
+		actual=$$(sha256sum "$(RELEASE_VENDOR_KEY_SNAPSHOT).tmp" | awk '{print $$1}'); \
+		if [ "$$actual" != "$$expected" ]; then \
+			rm -f "$(RELEASE_VENDOR_KEY_SNAPSHOT).tmp"; \
+			echo "ERROR: firmware key changed while creating the release snapshot"; \
+			exit 1; \
+		fi; \
+		mv "$(RELEASE_VENDOR_KEY_SNAPSHOT).tmp" "$(RELEASE_VENDOR_KEY_SNAPSHOT)"
 
 # Verify byte-for-byte reproducibility of the secure + nonsecure ELFs.
 #
@@ -2021,7 +2099,8 @@ _repro_one:
 
 # Release build: reproducibility-verified secure + nonsecure ELFs plus
 # their measurement words. This is what the vendor's release-signing
-# pipeline consumes as input. Writes artifacts to target/release/.
+# pipeline consumes as input. Atomically publishes artifacts to
+# target/pqsigner-release/ (separate from Cargo's target/release cache).
 #
 # Note: --features are taken from $(RELEASE_FEATURES); the default is
 # the production feature set (no debug-log, no e2e-test, no mock-se).
@@ -2036,7 +2115,7 @@ _repro_one:
 # `bhk` (Tier-2 SE050 split) is deliberately NOT added — enabling it without
 # the phase-2B silicon provisioning yields zero-keyed derivations (see
 # secure/Cargo.toml); it remains a tracked follow-up.
-RELEASE_FEATURES ?= stm32u585,se050,optiga-trust-m,dual-se,ui-lcd,saes-dhuk,se050-derived-scp03
+RELEASE_FEATURES ?= stm32u585,se050,optiga-trust-m,dual-se,ui-lcd,usb,iwdg,saes-dhuk,se050-derived-scp03,mode-production,optiga-lock-operational,optiga-hw-counter,consumption-mask,tamp,tamp-wipe,tzic-wipe
 
 # MED-2 ship gate (audits/tz-tamper-debug-20260611). Resolve the ACTUAL feature
 # set cargo would compile for the shipping image and fail if any never-ship
@@ -2063,7 +2142,7 @@ PROD_FORBIDDEN = e2e-test dev-testkey mock-se debug-log otp-hardcoded-master-key
 # set. (Dev/bench hardware uses the `flash-hw-*` / `*-e2e` targets, NOT
 # `make release` / `prod-check`, so it is unaffected.)
 PROD_REQUIRED = mode-production optiga-lock-operational optiga-hw-counter \
-                consumption-mask tamp tamp-wipe tzic-wipe \
+                consumption-mask tamp tamp-wipe tzic-wipe iwdg \
                 saes-dhuk se050-derived-scp03
 
 # Canonical production shipping feature set (the full hardened image). This is
@@ -2074,7 +2153,7 @@ PROD_REQUIRED = mode-production optiga-lock-operational optiga-hw-counter \
 # PROVISION time — only flash this onto a unit you intend to ship, after the
 # OTP-master burn (the `is_device_master_burned()` runtime guard refuses the
 # bump otherwise). See secure/Cargo.toml:553 + docs/production-todo.md.
-PROD_SHIP_FEATURES = stm32u585,se050,optiga-trust-m,dual-se,ui-lcd,usb,saes-dhuk,se050-derived-scp03,mode-production,optiga-lock-operational,optiga-hw-counter,consumption-mask,tamp,tamp-wipe,tzic-wipe
+PROD_SHIP_FEATURES = stm32u585,se050,optiga-trust-m,dual-se,ui-lcd,usb,iwdg,saes-dhuk,se050-derived-scp03,mode-production,optiga-lock-operational,optiga-hw-counter,consumption-mask,tamp,tamp-wipe,tzic-wipe
 
 .PHONY: prod-check
 prod-check: ## Production-readiness gate (no debug/e2e/mock-se; ship-blockers)
@@ -2128,45 +2207,68 @@ NS_STACK_MIN := 2048
 .PHONY: size-report
 size-report: ## Report secure/NS/FSBL image sizes against their flash/SRAM budgets
 	@echo "==> Image size report"
-	@if [ -f target/release/secure.elf ]; then \
-	  arm-none-eabi-size -B target/release/secure.elf | awk -v cap=$(SECURE_SLOT_CAP) 'NR==2 { \
+	@if [ -f $(RELEASE_ARTIFACT_DIR)/secure.elf ]; then \
+	  arm-none-eabi-size -B $(RELEASE_ARTIFACT_DIR)/secure.elf | awk -v cap=$(SECURE_SLOT_CAP) 'NR==2 { \
 	    used=$$1+$$2; pct=used*100.0/cap; \
 	    printf "    secure : %d B of %d B slot (%.1f%%), %d B free\n", used, cap, pct, cap-used; \
 	    if (used>cap) { print "    secure : FAIL — image exceeds the 464 KB A/B slot"; exit 1 } \
 	    if (pct>=85) { printf "    secure : WARN — over 85%% of the slot\n" } }'; \
-	else echo "    secure : (no target/release/secure.elf — run make release)"; fi
-	@if [ -f target/release/nonsecure.elf ]; then \
-	  arm-none-eabi-size -B target/release/nonsecure.elf | awk -v cap=$(NS_SRAM_CAP) -v warn=$(NS_STACK_WARN) -v min=$(NS_STACK_MIN) 'NR==2 { \
+	else echo "    secure : (no $(RELEASE_ARTIFACT_DIR)/secure.elf — run make release)"; fi
+	@if [ -f $(RELEASE_ARTIFACT_DIR)/nonsecure.elf ]; then \
+	  arm-none-eabi-size -B $(RELEASE_ARTIFACT_DIR)/nonsecure.elf | awk -v cap=$(NS_SRAM_CAP) -v warn=$(NS_STACK_WARN) -v min=$(NS_STACK_MIN) 'NR==2 { \
 	    stat=$$2+$$3; free=cap-stat; \
 	    printf "    ns     : %d B static (.data+.bss) of %d B SRAM2, %d B left for stack\n", stat, cap, free; \
 	    if (free<min) { printf "    ns     : FAIL — under %d B stack reserve\n", min; exit 1 } \
 	    if (free<warn) { printf "    ns     : WARN — under %d B stack headroom (NS SRAM2 is tight)\n", warn } }'; \
-	else echo "    ns     : (no target/release/nonsecure.elf — run make release)"; fi
-	@if [ -f $(FSBL_ELF) ]; then \
+	else echo "    ns     : (no $(RELEASE_ARTIFACT_DIR)/nonsecure.elf — run make release)"; fi
+	@if [ -f $(RELEASE_ARTIFACT_DIR)/fsbl.elf ]; then \
+	  arm-none-eabi-size -B $(RELEASE_ARTIFACT_DIR)/fsbl.elf | awk 'NR==2 { u=$$1+$$2; printf "    fsbl   : %d B of 32768 B (%.1f%%), %d B free\n", u, u*100.0/32768, 32768-u }'; \
+	elif [ -f $(FSBL_ELF) ]; then \
 	  arm-none-eabi-size -B $(FSBL_ELF) | awk 'NR==2 { u=$$1+$$2; printf "    fsbl   : %d B of 32768 B (%.1f%%), %d B free\n", u, u*100.0/32768, 32768-u }'; \
 	fi
 
-.PHONY: release
-release: prod-check ## Build the signed release package (runs prod-check first)
+.PHONY: release _release
+release: ## Build and atomically publish the signed release package
+	@rm -rf "$(RELEASE_ARTIFACT_DIR)" "$(RELEASE_ARTIFACT_TMP)"
+	@rm -f target/release/secure.elf target/release/nonsecure.elf \
+		target/release/fsbl.elf target/release/vendor-pubkey.bin \
+		target/release/vendor-key.sha256 target/release/SHA256SUMS
+	@$(MAKE) _release || { rm -rf "$(RELEASE_ARTIFACT_TMP)"; exit 1; }
+
+_release: prod-check fsbl-release
 	@echo "==> Release build (features: $(RELEASE_FEATURES))"
 	@echo "==> SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH)"
-	@$(MAKE) verify-repro FEATURES=$(RELEASE_FEATURES)
-	@mkdir -p target/release
+	@FSBL_VENDOR_PUBKEY="$(RELEASE_VENDOR_KEY_SNAPSHOT)" \
+		$(MAKE) verify-repro FEATURES=$(RELEASE_FEATURES)
+	@rm -rf "$(RELEASE_ARTIFACT_TMP)"
+	@mkdir -p "$(RELEASE_ARTIFACT_TMP)"
 	@cp target/repro-a/secure/$(TARGET)/release/sphincs-tz-secure \
-	    target/release/secure.elf
+	    "$(RELEASE_ARTIFACT_TMP)/secure.elf"
 	@cp target/repro-a/nonsecure/$(TARGET)/release/sphincs-tz-nonsecure \
-	    target/release/nonsecure.elf
+	    "$(RELEASE_ARTIFACT_TMP)/nonsecure.elf"
+	@cp $(RELEASE_FSBL_ELF) "$(RELEASE_ARTIFACT_TMP)/fsbl.elf"
+	@cp $(RELEASE_VENDOR_KEY_SNAPSHOT) "$(RELEASE_ARTIFACT_TMP)/vendor-pubkey.bin"
+	@cp $(PRODUCTION_VENDOR_KEY_POLICY) "$(RELEASE_ARTIFACT_TMP)/vendor-key.sha256"
+	@cargo run --locked -q -p fwsign -- verify-artifact-keys \
+		--fsbl "$(RELEASE_ARTIFACT_TMP)/fsbl.elf" \
+		--secure "$(RELEASE_ARTIFACT_TMP)/secure.elf" \
+		--trusted-fingerprint "$(RELEASE_ARTIFACT_TMP)/vendor-key.sha256"
 	@echo ""
-	@$(MAKE) size-report
+	@$(MAKE) size-report RELEASE_ARTIFACT_DIR="$(RELEASE_ARTIFACT_TMP)"
 	@echo ""
 	@echo "==> Secure measurement:"
-	@cargo run --locked -q -p fwmeasure -- target/release/secure.elf 2>/dev/null | sed 's/^/    /'
+	@cargo run --locked -q -p fwmeasure -- "$(RELEASE_ARTIFACT_TMP)/secure.elf" 2>/dev/null | sed 's/^/    /'
 	@echo ""
 	@echo "==> Nonsecure measurement:"
-	@cargo run --locked -q -p fwmeasure -- target/release/nonsecure.elf 2>/dev/null | sed 's/^/    /'
+	@cargo run --locked -q -p fwmeasure -- "$(RELEASE_ARTIFACT_TMP)/nonsecure.elf" 2>/dev/null | sed 's/^/    /'
+	@cd "$(RELEASE_ARTIFACT_TMP)" && \
+		sha256sum fsbl.elf secure.elf nonsecure.elf vendor-pubkey.bin vendor-key.sha256 > SHA256SUMS
+	@cd "$(RELEASE_ARTIFACT_TMP)" && sha256sum -c SHA256SUMS
+	@mv "$(RELEASE_ARTIFACT_TMP)" "$(RELEASE_ARTIFACT_DIR)"
 	@echo ""
-	@echo "==> Release artifacts in target/release/"
-	@echo "    Next: fwsign sign --key vendor-key.enc --version N ..."
+	@echo "==> Release artifacts in target/pqsigner-release/"
+	@echo "    Next: fwsign sign --key vendor-key.enc --fsbl target/pqsigner-release/fsbl.elf \
+		--trusted-fingerprint target/pqsigner-release/vendor-key.sha256 --version N ..."
 
 # Hardware bring-up test for the OTP-derived OPTIGA Shielded Connection
 # path landed in work-todo #24.
@@ -3529,12 +3631,12 @@ fw-rollback-hw: dev-pubkey-fixture
 	fi
 
 # DEV vendor pubkey fixture (32 bytes = pk_seed[16] || pk_root[16]) derived
-# from the built-in dev seed via `fwsign dev-pubkey`. The secure crate has no
+# from the built-in dev seed via `fwsign dev-pubkey` and checked against the
+# single committed public value under `config/`. The secure crate has no
 # sphincs-c10 build-dep (feature unification would leak host features into
 # the firmware target), so `secure/build.rs` cannot compute this itself — it
-# reads `FSBL_VENDOR_PUBKEY` instead. This target writes the dev pubkey to a
-# stable path the test/dev builds can point at. Byte-identical to the key
-# `fsbl/build.rs` falls back to when `FSBL_VENDOR_PUBKEY` is unset.
+# reads `FSBL_VENDOR_PUBKEY` instead. This target writes that checked dev
+# pubkey to a stable path the test/dev builds can point at.
 DEV_VENDOR_PUBKEY := $(CURDIR)/target/dev_vendor_pubkey.bin
 
 dev-pubkey-fixture: $(DEV_VENDOR_PUBKEY)
@@ -3652,9 +3754,13 @@ fwup-transport-hw: dev-pubkey-fixture fwup-transport-fixture
 #   * does NOT false-fire during normal idle (the device stays
 #     enumerated through the 12 s window — NS heartbeat keeps the IWDG
 #     fed), and
-#   * does NOT false-fire during the multi-second BEGIN erase or the
-#     wipe-halt (handler_is_busy() keeps it fed) — the full
-#     BEGIN+CHUNK+COMMIT+failpath+wipe-trigger sequence stays green.
+#   * does NOT false-fire during the multi-second BEGIN erase
+#     (handler_is_busy() keeps it fed) — the full BEGIN+CHUNK+COMMIT,
+#     fail-path, and repeated-invalid non-destruction sequence stays green.
+# The e2e feature auto-confirms trusted UI, so this target covers the
+# noninteractive busy bound. Host source/unit tests separately pin the
+# idle-bounded TrustedUiWaitGuard wiring; a manual 120 s button-wait soak is
+# still required when validating a new physical input backend.
 # (Deliberately reuses fwup-transport-e2e on the secure side so the
 #  device auto-provisions + enumerates; iwdg is added on TOP of it
 #  purely for this validation — production ships iwdg WITHOUT e2e.)
@@ -3761,8 +3867,8 @@ sbom-firmware:
 	@test -f $(SECURE_ELF) || { echo "ERROR: $(SECURE_ELF) not built — run 'make e2e' / 'make release' first"; exit 1; }
 	cargo build -p fwmeasure --release
 	cargo cyclonedx --format json --manifest-path secure/Cargo.toml
-	@mkdir -p target/release
-	python3 tools/sbom_firmware.py $(SECURE_ELF) secure/sphincs-tz-secure.cdx.json target/release/secure-firmware.cdx.json
+	@mkdir -p $(RELEASE_ARTIFACT_DIR)
+	python3 tools/sbom_firmware.py $(SECURE_ELF) secure/sphincs-tz-secure.cdx.json $(RELEASE_ARTIFACT_DIR)/secure-firmware.cdx.json
 
 # ---------------------------------------------------------------------------
 # Host Rust formal verification (SOTA 2026-06 §1 adopt-now; work-todo §34).

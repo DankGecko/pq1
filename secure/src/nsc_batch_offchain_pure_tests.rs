@@ -620,6 +620,7 @@ fn negative_batch_nonce_increment_range_matches_gate_check_range() {
 
 const CMD_OFFCHAIN_STATUS_SRC: &str = include_str!("nsc/cmd_offchain_status.rs");
 const CMD_OFFCHAIN_SYNC_SRC: &str = include_str!("nsc/cmd_offchain_sync.rs");
+const OFFCHAIN_SYNC_DISPLAY_SRC: &str = include_str!("tx/display/offchain_sync.rs");
 const CMD_SIGN_OFFCHAIN_SRC: &str = include_str!("nsc/cmd_sign_offchain.rs");
 const CMD_SIGN_USEROP_BATCH_SRC: &str = include_str!("nsc/cmd_sign_userop_batch.rs");
 // Not part of the four-file "slice" array below — pinned only for the
@@ -844,7 +845,7 @@ fn negative_offchain_sync_confirms_value_inflation_on_registered_slot() {
         "SYNC must read the stored floor to detect a value-inflating sync",
     );
     assert!(
-        CMD_OFFCHAIN_SYNC_SRC.contains("target_count > crate::offchain_state::last_userop_count_read"),
+        CMD_OFFCHAIN_SYNC_SRC.contains("let raises_floor = target_count > current_count"),
         "the confirm gate must fire on a floor-RAISING sync, not just a new slot",
     );
     // The raise detection must precede (feed) the confirm gate.
@@ -858,6 +859,30 @@ fn negative_offchain_sync_confirms_value_inflation_on_registered_slot() {
         raise < gate,
         "the value-inflation raise check must feed the confirm gate",
     );
+}
+
+#[test]
+fn negative_offchain_sync_display_binds_current_and_target_values() {
+    // A generic "SYNC COUNTER?" prompt is not informed consent: the hostile
+    // companion controls target_count and can ask for a near-cap floor. Pin
+    // both the data flow into the renderer and the literal trusted rows.
+    assert!(CMD_OFFCHAIN_SYNC_SRC.contains("current_count,"));
+    assert!(CMD_OFFCHAIN_SYNC_SRC.contains("target_count_for_display,"));
+    assert!(OFFCHAIN_SYNC_DISPLAY_SRC.contains("b\"Current: \""));
+    assert!(OFFCHAIN_SYNC_DISPLAY_SRC.contains("b\"Target: \""));
+    assert!(
+        CMD_OFFCHAIN_SYNC_SRC.contains("target_count_for_display")
+            && CMD_OFFCHAIN_SYNC_SRC.contains("check_true_into_sentinel"),
+        "the displayed target must be FI-bound to the durable write value",
+    );
+
+    let render = CMD_OFFCHAIN_SYNC_SRC
+        .find("build_offchain_sync_pages(")
+        .expect("sync renderer call");
+    let write = CMD_OFFCHAIN_SYNC_SRC
+        .find("last_userop_count_set(")
+        .expect("sync durable write");
+    assert!(render < write, "current/target values must be shown before commit");
 }
 
 // ── 8f. Account-index range check (CLAUDE.md "8b account_index (0..=255)")
@@ -1107,13 +1132,16 @@ fn negative_combined_cap_counts_userop_sigs_on_every_sign_path() {
     assert!(CMD_SIGN_OFFCHAIN_SRC.contains("userop_sigs"));
     assert!(CMD_SIGN_OFFCHAIN_SRC
         .contains("check_offchain_gate(local_offchain, last_userop, userop_sigs)"));
-    // Single-tx UserOp path: combined-cap gate + per-sign durable bump.
+    // Single-tx UserOp path: the cap MUST fold in a higher synced floor before
+    // signing, then durably bump the Type-2 tally.
     assert!(CMD_SIGN_USEROP_SRC.contains("userop_sigs_read"));
-    assert!(CMD_SIGN_USEROP_SRC.contains("userop_sigs.saturating_add(local_offchain) >= MAX_SLOT_USES"));
+    assert!(CMD_SIGN_USEROP_SRC.contains("effective_offchain_count"));
+    assert!(CMD_SIGN_USEROP_SRC.contains("userop_cap_ok(effective_offchain, userop_sigs)"));
     assert!(CMD_SIGN_USEROP_SRC.contains("userop_sigs_bump"));
-    // Batch path: same gate + bump (one Type-2 sig per batch).
+    // Batch path: same effective-floor gate + bump (one Type-2 sig per batch).
     assert!(CMD_SIGN_USEROP_BATCH_SRC.contains("userop_sigs_read"));
-    assert!(CMD_SIGN_USEROP_BATCH_SRC.contains("userop_sigs.saturating_add(local_offchain) >= MAX_SLOT_USES"));
+    assert!(CMD_SIGN_USEROP_BATCH_SRC.contains("effective_offchain_count"));
+    assert!(CMD_SIGN_USEROP_BATCH_SRC.contains("userop_cap_ok(effective_offchain, userop_sigs)"));
     assert!(CMD_SIGN_USEROP_BATCH_SRC.contains("userop_sigs_bump"));
 }
 
@@ -1125,10 +1153,11 @@ fn combined_cap_boundary_arithmetic() {
     // glitched (u64::MAX) counter read. Keep in lockstep with the handler
     // expressions pinned above; if either drifts, this fires.
 
-    // UserOp path: refuse iff `userop_sigs + local_offchain >= cap`
+    // UserOp path: refuse iff `userop_sigs + max(local,last_userop) >= cap`
     // (after the +1 bump the post-state combined is <= cap).
-    let userop_refuse = |userop_sigs: u64, local_offchain: u64| -> bool {
-        userop_sigs.saturating_add(local_offchain) >= MAX_SLOT_USES
+    let userop_refuse = |userop_sigs: u64, local_offchain: u64, last_userop: u64| -> bool {
+        let effective = core::cmp::max(local_offchain, last_userop);
+        userop_sigs.saturating_add(effective) >= MAX_SLOT_USES
     };
     // Off-chain path: refuse iff `userop_sigs + (local_offchain + 1) > cap`.
     let offchain_refuse = |userop_sigs: u64, local_offchain: u64| -> bool {
@@ -1137,10 +1166,14 @@ fn combined_cap_boundary_arithmetic() {
     };
 
     // The sig that reaches exactly the cap is allowed; the next is refused.
-    assert!(!userop_refuse(MAX_SLOT_USES - 1, 0)); // 65535 userops -> 1 more ok
-    assert!(userop_refuse(MAX_SLOT_USES, 0)); // 65536 produced -> refuse
-    assert!(!userop_refuse(MAX_SLOT_USES / 2, MAX_SLOT_USES / 2 - 1)); // 32768+32767 ok
-    assert!(userop_refuse(MAX_SLOT_USES / 2, MAX_SLOT_USES / 2)); // 32768+32768 refuse
+    assert!(!userop_refuse(MAX_SLOT_USES - 1, 0, 0)); // 65535 userops -> 1 more ok
+    assert!(userop_refuse(MAX_SLOT_USES, 0, 0)); // 65536 produced -> refuse
+    assert!(!userop_refuse(MAX_SLOT_USES / 2, MAX_SLOT_USES / 2 - 1, 0)); // 32768+32767 ok
+    assert!(userop_refuse(MAX_SLOT_USES / 2, MAX_SLOT_USES / 2, 0)); // 32768+32768 refuse
+
+    // Regression: a synced floor ahead of local state is part of the same cap.
+    assert!(userop_refuse(1, 0, MAX_SLOT_USES - 1));
+    assert!(!userop_refuse(1, 0, MAX_SLOT_USES - 2));
 
     assert!(!offchain_refuse(0, MAX_SLOT_USES - 1)); // 65536th off-chain ok
     assert!(offchain_refuse(0, MAX_SLOT_USES)); // would be 65537 -> refuse
@@ -1150,7 +1183,7 @@ fn combined_cap_boundary_arithmetic() {
     assert!(offchain_refuse(MAX_SLOT_USES - 1, 1)); // 65535 + 2 = 65537 refuse
 
     // Fail-closed: a glitched counter read (u64::MAX) saturates and refuses.
-    assert!(userop_refuse(u64::MAX, 0));
+    assert!(userop_refuse(u64::MAX, 0, 0));
     assert!(offchain_refuse(u64::MAX, 0));
 }
 

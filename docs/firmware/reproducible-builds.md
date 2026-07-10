@@ -223,7 +223,7 @@ and diffs the resulting ELFs byte-for-byte. The default feature set
 (`FEATURES?=mock-se,debug-log,ui-semihosting`) is used; override via
 
 ```
-make verify-repro FEATURES=stm32u585,se050,optiga-trust-m,dual-se,ui-oled
+make verify-repro FEATURES=stm32u585,se050,optiga-trust-m,dual-se,ui-lcd
 ```
 
 to check the production feature matrix.
@@ -236,11 +236,11 @@ firmware and should be rejected).
 ## Release pipeline
 
 ```
-make release RELEASE_FEATURES=stm32u585,se050,optiga-trust-m,dual-se,ui-oled
+FSBL_VENDOR_PUBKEY=/absolute/path/to/vendor-pubkey.bin make release
 ```
 
 `make release` runs `verify-repro` first, then copies the verified ELFs to
-`target/release/` and prints the secure + nonsecure measurement words.
+`target/pqsigner-release/` and prints the secure + nonsecure measurement words.
 These words feed directly into `fwsign sign` as the expected-measurement
 payload committed inside the signed manifest.
 
@@ -279,8 +279,8 @@ the same hermetic environment is available via:
 
 ```
 ./measure.sh --shell           # drops into nix develop
-make release RELEASE_FEATURES=stm32u585,se050,optiga-trust-m,dual-se,ui-oled
-fwsign verify-release path/to/release.pqfw target/release/
+FSBL_VENDOR_PUBKEY=/absolute/path/to/vendor-pubkey.bin make release
+fwsign verify-release path/to/release.pqfw target/pqsigner-release/
 ```
 
 A mismatch at any step means the bundle does not correspond to the source

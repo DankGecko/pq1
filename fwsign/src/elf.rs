@@ -49,6 +49,12 @@ impl FlatImage {
 pub fn flatten_elf(elf_path: &std::path::Path) -> Result<FlatImage> {
     let elf_data = std::fs::read(elf_path)
         .with_context(|| format!("reading ELF {}", elf_path.display()))?;
+    flatten_elf_bytes(elf_path, &elf_data)
+}
+
+/// Byte-slice variant used by the release signer so the trust-root check and
+/// manifest image hash consume one immutable in-memory snapshot of the ELF.
+pub fn flatten_elf_bytes(elf_path: &std::path::Path, elf_data: &[u8]) -> Result<FlatImage> {
     let elf = ElfFile32::<LittleEndian>::parse(&*elf_data)
         .map_err(|e| anyhow!("parsing ELF {}: {e}", elf_path.display()))?;
 

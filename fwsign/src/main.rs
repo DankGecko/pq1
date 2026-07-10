@@ -28,6 +28,7 @@
 
 use clap::{Parser, Subcommand};
 
+mod artifact_key;
 mod bundle;
 mod elf;
 mod keystore;
@@ -110,6 +111,15 @@ enum Cmd {
         #[arg(long)]
         key: std::path::PathBuf,
 
+        /// Final immutable FSBL ELF. Its allocated runtime vendor key must
+        /// match the secure ELF, reviewed policy, and signing key.
+        #[arg(long)]
+        fsbl: std::path::PathBuf,
+
+        /// Reviewed 64-hex SHA-256 fingerprint of the production public key.
+        #[arg(long)]
+        trusted_fingerprint: std::path::PathBuf,
+
         /// Firmware version (encoded in the signed manifest). Should be
         /// strictly greater than the current OTP rollback floor on every
         /// device that will receive this release — THAT is the real,
@@ -164,6 +174,20 @@ enum Cmd {
         /// Vendor public key (32 bytes, produced by `fwsign pubkey`).
         #[arg(long)]
         pubkey: std::path::PathBuf,
+    },
+
+    /// Prove from final linked artifacts that FSBL and secure world use the
+    /// same reviewed, non-development firmware-update key.
+    VerifyArtifactKeys {
+        /// Final immutable FSBL ELF.
+        #[arg(long)]
+        fsbl: std::path::PathBuf,
+        /// Final secure-world ELF.
+        #[arg(long)]
+        secure: std::path::PathBuf,
+        /// Reviewed 64-hex SHA-256 fingerprint file.
+        #[arg(long)]
+        trusted_fingerprint: std::path::PathBuf,
     },
 
     /// **Verify from source only.** Takes a version number and a pair
@@ -278,6 +302,8 @@ fn main() -> anyhow::Result<()> {
         } => subcommands::gen_test_fixture::run(version, secure_len, nonsecure_len, &out_dir),
         Cmd::Sign {
             key,
+            fsbl,
+            trusted_fingerprint,
             version,
             secure,
             nonsecure,
@@ -287,6 +313,8 @@ fn main() -> anyhow::Result<()> {
             out,
         } => subcommands::sign::run(subcommands::sign::Args {
             key_path: key,
+            fsbl_elf: fsbl,
+            trusted_fingerprint,
             version,
             secure_elf: secure,
             nonsecure_elf: nonsecure,
@@ -296,6 +324,11 @@ fn main() -> anyhow::Result<()> {
             out_path: out,
         }),
         Cmd::Verify { bundle, pubkey } => subcommands::verify::run(&bundle, &pubkey),
+        Cmd::VerifyArtifactKeys {
+            fsbl,
+            secure,
+            trusted_fingerprint,
+        } => subcommands::verify_artifact_keys::run(&fsbl, &secure, &trusted_fingerprint),
         Cmd::VerifyRelease {
             version,
             secure,

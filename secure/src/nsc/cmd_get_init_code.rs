@@ -20,19 +20,21 @@
 //!          || slot0PkRoot(32))
 //! ```
 //!
-//! Because SPHINCS+C10 is stateless and the message depends only on
-//! `(chain_id, slot0_keys)`, the produced `factorySig` is safely
-//! reusable — cache-friendly for the companion, and identical byte-for-
-//! byte to what the eventual real sign will emit. That means the
-//! estimation pass and the real submission both ship the same
-//! `initCode`, which keeps the bundler's gas numbers tight.
+//! The factory authorization is semantically reusable, but signatures are
+//! intentionally randomized with fresh hardware `opt_rand`: repeated calls
+//! over the same message are NOT byte-identical. The companion must cache and
+//! reuse the returned `initCode` for estimation/submission instead of asking
+//! the immutable bootstrap key to sign the same authorization repeatedly.
 //!
 //! Security policy:
 //!   * Requires `pin_verified` (reads SE-resident entropy).
-//!   * No OLED confirmation. The user will confirm the actual
-//!     transaction later, in `CMD_SIGN_USEROP`. What this command
-//!     produces is a deterministic factory authorisation that
-//!     carries no value transfer.
+//!   * No OLED confirmation. The user will confirm the actual transaction
+//!     later, in `CMD_SIGN_USEROP`. Each call nevertheless releases a fresh
+//!     randomized bootstrap-key signature and is therefore part of the global
+//!     cryptographic usage budget even if it never reaches a chain. The
+//!     current on-chain `bootstrapUses` counter cannot reconstruct such
+//!     released/withheld signatures; this is a documented pre-production
+//!     design residual, not a reason to call this path free or deterministic.
 //!   * Per-slot keygen hits the same cache (`SLOT_CACHE`) as
 //!     `CMD_SIGN_USEROP`, so a later sign on the same
 //!     `(account_index, chain_id)` skips the <1 s keygen.

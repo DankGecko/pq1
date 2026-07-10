@@ -20,11 +20,10 @@ MEMORY
      * persistent secure data:
      *   page 127 (0x0C0FE000) = reserved (legacy Tropic01 pairing key;
      *                            free for reuse after full Tropic01 removal)
-     *   page 126 (0x0C0FC000) = OPTIGA Trust M PBS (dual-SE only)
+     *   page 126 (0x0C0FC000) = wrapped SE050 BHK (`bhk` only; otherwise reserved)
      *   page 125 (0x0C0FA000) = SE050 admin-wipe state (PIN at QW0, flag at QW1)
-     *   pages 123-124        = reserved (formerly per-slot persistent
-     *                            state; freed by the all-C10 stateless-
-     *                            firmware cutover)
+     *   page 124 (0x0C0F8000) = MCU PIN-attempt counter
+     *   page 123 (0x0C0F6000) = per-slot off-chain/UserOp signature journal
      * See hw/flash.rs. */
     FLASH : ORIGIN = 0x0C000000, LENGTH = 984K
 

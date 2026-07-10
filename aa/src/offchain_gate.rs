@@ -166,6 +166,30 @@ pub fn userop_cap_ok(offchain: u64, userop_sigs: u64) -> bool {
     userop_sigs.saturating_add(offchain) < MAX_SLOT_USES
 }
 
+/// Effective off-chain high-water mark used by every Type-2 UserOp gate.
+///
+/// `CMD_OFFCHAIN_SYNC` can raise `last_userop` above the locally materialised
+/// `offchain` counter.  The sign handlers promote `offchain` to this floor
+/// before release, so the cap decision MUST use the same repaired value.  A
+/// gate over bare `offchain` would admit one signature and only then discover
+/// that `userop_sigs + max(offchain, last_userop)` was already exhausted.
+#[inline]
+#[must_use]
+pub const fn effective_offchain_count(offchain: u64, last_userop: u64) -> u64 {
+    if last_userop > offchain {
+        last_userop
+    } else {
+        offchain
+    }
+}
+
+/// Type-2 UserOp / batch cap gate after folding in a synced high-water floor.
+#[inline]
+#[must_use]
+pub fn userop_cap_ok_with_floor(offchain: u64, last_userop: u64, userop_sigs: u64) -> bool {
+    userop_cap_ok(effective_offchain_count(offchain, last_userop), userop_sigs)
+}
+
 /// One slot's durable counters — a pure mirror of the
 /// `offchain_state` backend's per-entry state (`offchain`, `last_userop`,
 /// `userop_sigs`, existence==`registered`). The `apply_*` methods reproduce
@@ -213,19 +237,20 @@ impl SlotLedger {
     }
 
     /// Apply one **Type-2 UserOp / batch sign**: cap-gated by
-    /// [`userop_cap_ok`]; on accept bump `userop_sigs` and advance
-    /// `last_userop` to the current `offchain` (the on-chain sig backs the
-    /// outstanding off-chain gap). Returns whether the sign proceeded.
+    /// [`userop_cap_ok_with_floor`]; on accept first repair `offchain` to the
+    /// synced `last_userop` floor, then bump `userop_sigs` and advance
+    /// `last_userop` to that effective count. Returns whether the sign
+    /// proceeded.
     pub fn apply_sign_userop(&mut self) -> bool {
-        if !userop_cap_ok(self.offchain, self.userop_sigs) {
+        let effective = effective_offchain_count(self.offchain, self.last_userop);
+        if !userop_cap_ok(effective, self.userop_sigs) {
             return false;
         }
+        self.offchain = effective;
         // Monotonic: userop_sigs strictly increases; guarded against u64
         // overflow (unreachable under the cap, but fail-closed anyway).
         self.userop_sigs = self.userop_sigs.saturating_add(1);
-        if self.offchain > self.last_userop {
-            self.last_userop = self.offchain;
-        }
+        self.last_userop = effective;
         self.registered = true;
         true
     }
@@ -234,7 +259,7 @@ impl SlotLedger {
     /// within the combined few-time budget)? Used by the no-brick harnesses.
     #[must_use]
     pub fn is_exhausted(&self) -> bool {
-        !userop_cap_ok(self.offchain, self.userop_sigs)
+        !userop_cap_ok_with_floor(self.offchain, self.last_userop, self.userop_sigs)
     }
 }
 
@@ -453,6 +478,48 @@ mod tests {
     }
 
     #[test]
+    fn synced_floor_is_included_in_userop_cap() {
+        // Regression: the old Type-2 gate checked `userop_sigs + offchain`
+        // before promoting `offchain` to a higher synced floor.  With one
+        // prior Type-2 signature and a floor at MAX-1, that admitted another
+        // signature and left the durable combined tally at MAX+1.
+        let mut s = SlotLedger {
+            offchain: 0,
+            last_userop: 0,
+            userop_sigs: 1,
+            registered: true,
+        };
+        s.apply_offchain_sync(MAX_SLOT_USES - 1);
+
+        assert!(
+            !s.apply_sign_userop(),
+            "effective combined cap is exhausted"
+        );
+        assert_eq!(s.offchain, 0, "a rejected sign must not promote state");
+        assert_eq!(s.userop_sigs, 1, "a rejected sign must not consume a sig");
+        assert!(s.is_exhausted());
+    }
+
+    #[test]
+    fn synced_floor_boundary_allows_exactly_cap() {
+        let mut s = SlotLedger {
+            offchain: 0,
+            last_userop: MAX_SLOT_USES - 2,
+            userop_sigs: 1,
+            registered: true,
+        };
+
+        assert!(s.apply_sign_userop());
+        assert_eq!(s.offchain, MAX_SLOT_USES - 2);
+        assert_eq!(s.last_userop, MAX_SLOT_USES - 2);
+        assert_eq!(s.userop_sigs.saturating_add(s.offchain), MAX_SLOT_USES);
+        assert!(
+            s.is_exhausted(),
+            "the exact-cap post-state must refuse next"
+        );
+    }
+
+    #[test]
     fn ledger_slot_isolation() {
         let mut l: OffchainLedger<4> = OffchainLedger::default();
         let _ = l.sign_offchain(0xAAAA).unwrap();
@@ -632,6 +699,33 @@ mod verification {
         }
         if let GateOutcome::Accept { .. } = s.apply_sign_offchain() {
             assert!(s.offchain.saturating_sub(s.last_userop) <= MAX_OFFCHAIN_GAP);
+        }
+    }
+
+    /// **SYNC → Type-2 cap ordering.** For an arbitrary prior Type-2 tally and
+    /// companion sync target, an accepted UserOp first folds in the synced
+    /// floor and its post-state never exceeds the combined signature budget.
+    /// This is the interleave the old bare-`offchain` gate missed.
+    #[kani::proof]
+    fn sync_then_userop_uses_effective_floor() {
+        let offchain: u64 = kani::any();
+        let last_userop: u64 = kani::any();
+        let userop_sigs: u64 = kani::any();
+        let target: u64 = kani::any();
+        kani::assume(offchain <= MAX_SLOT_USES);
+        kani::assume(last_userop <= OFFCHAIN_COUNT_CEILING);
+        kani::assume(userop_sigs <= MAX_SLOT_USES);
+
+        let mut s = SlotLedger {
+            offchain,
+            last_userop,
+            userop_sigs,
+            registered: true,
+        };
+        s.apply_offchain_sync(target);
+        if s.apply_sign_userop() {
+            assert!(s.offchain >= s.last_userop);
+            assert!(s.userop_sigs.saturating_add(s.offchain) <= MAX_SLOT_USES);
         }
     }
 

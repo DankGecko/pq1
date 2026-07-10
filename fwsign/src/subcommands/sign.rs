@@ -27,6 +27,8 @@ use crate::keystore::{self, VendorKey};
 
 pub struct Args {
     pub key_path: PathBuf,
+    pub fsbl_elf: PathBuf,
+    pub trusted_fingerprint: PathBuf,
     pub version: u32,
     pub secure_elf: PathBuf,
     pub nonsecure_elf: PathBuf,
@@ -44,7 +46,24 @@ pub fn run(args: Args) -> Result<()> {
     let vendor_fpr = fw_manifest::vendor_pubkey_fingerprint(key.pk_seed(), key.pk_root());
     eprintln!("==> Vendor fingerprint: {}", hex::encode(vendor_fpr));
 
-    let secure = flatten_logged("secure", &args.secure_elf)?;
+    // Refuse to sign for artifacts rooted in a different key. This is checked
+    // from retained sections in the final linked ELFs, not from mutable build
+    // inputs or generated source. It also forbids the public in-tree dev key.
+    let fsbl_elf = std::fs::read(&args.fsbl_elf)
+        .with_context(|| format!("reading {}", args.fsbl_elf.display()))?;
+    let secure_elf = std::fs::read(&args.secure_elf)
+        .with_context(|| format!("reading {}", args.secure_elf.display()))?;
+    let verified_keys = crate::artifact_key::verify_artifact_bytes(
+        &args.fsbl_elf,
+        &fsbl_elf,
+        &args.secure_elf,
+        &secure_elf,
+        &args.trusted_fingerprint,
+        Some(&vendor_fpr),
+    )?;
+
+    let secure = flatten_logged_bytes("secure", &args.secure_elf, &secure_elf)?;
+    verified_keys.verify_secure_flat_image(&secure)?;
     let nonsecure = flatten_logged("nonsecure", &args.nonsecure_elf)?;
 
     let (manifest_bytes, digest) = build_signed_manifest(
@@ -127,8 +146,8 @@ fn resolve_boot_counter_snap(version: u32, override_value: Option<u32>) -> Resul
 }
 
 fn load_vendor_key(key_path: &Path) -> Result<VendorKey> {
-    let blob = std::fs::read(key_path)
-        .with_context(|| format!("reading {}", key_path.display()))?;
+    let blob =
+        std::fs::read(key_path).with_context(|| format!("reading {}", key_path.display()))?;
     let passphrase = keystore::prompt_passphrase("Vendor key passphrase")?;
     VendorKey::open(&blob, &passphrase)
 }
@@ -136,6 +155,18 @@ fn load_vendor_key(key_path: &Path) -> Result<VendorKey> {
 fn flatten_logged(label: &str, path: &Path) -> Result<FlatImage> {
     eprintln!("==> Flattening {label} ELF    {}", path.display());
     let img = elf::flatten_elf(path)?;
+    eprintln!(
+        "    base {:#010x}, {} bytes, hash {}",
+        img.base,
+        img.bytes.len(),
+        hex::encode(img.hash)
+    );
+    Ok(img)
+}
+
+fn flatten_logged_bytes(label: &str, path: &Path, bytes: &[u8]) -> Result<FlatImage> {
+    eprintln!("==> Flattening {label} ELF    {}", path.display());
+    let img = elf::flatten_elf_bytes(path, bytes)?;
     eprintln!(
         "    base {:#010x}, {} bytes, hash {}",
         img.base,
@@ -337,8 +368,10 @@ mod tests {
     #[test]
     fn negative_parse_build_id_non_hex_rejected() {
         assert!(parse_build_id("Z".repeat(64).as_str()).is_err());
-        assert!(parse_build_id("00112233445566778899aabbccddeeff00112233445566778899aabbccddeefg")
-            .is_err());
+        assert!(
+            parse_build_id("00112233445566778899aabbccddeeff00112233445566778899aabbccddeefg")
+                .is_err()
+        );
     }
 
     #[test]
@@ -382,7 +415,9 @@ mod tests {
         // floor at the current version, making future updates require
         // a snap >= version (which the manifest forbids elsewhere) —
         // a foot-gun the CLI catches up-front.
-        let err = resolve_boot_counter_snap(5, Some(5)).unwrap_err().to_string();
+        let err = resolve_boot_counter_snap(5, Some(5))
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("must be <"), "got: {err}");
     }
 
@@ -413,6 +448,8 @@ mod tests {
     fn positive_release_json_embeds_all_input_fields() {
         let args = Args {
             key_path: PathBuf::from("/dev/null"),
+            fsbl_elf: PathBuf::from("fsbl.elf"),
+            trusted_fingerprint: PathBuf::from("vendor-key.sha256"),
             version: 42,
             secure_elf: PathBuf::from("s.elf"),
             nonsecure_elf: PathBuf::from("n.elf"),

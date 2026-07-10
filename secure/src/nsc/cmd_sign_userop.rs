@@ -50,7 +50,7 @@
 use sphincs_tz_shared::{
     NscStatus, C10_SIG_LEN, ERC7730_MAX_TRAILER_LEN,
     EXEC_TRANSACTION_MIN_CALLDATA_LEN, EXEC_TRANSACTION_SELECTOR, FLAG_INCLUDE_INIT_CODE,
-    FLAG_REGISTER_SLOT, GPV2_SETTLEMENT_ADDRESS, MAX_SIGN_RESPONSE_LEN, MAX_SLOT_USES, MAX_TX_LEN,
+    FLAG_REGISTER_SLOT, GPV2_SETTLEMENT_ADDRESS, MAX_SIGN_RESPONSE_LEN, MAX_TX_LEN,
     PQ_ADD_OWNER_BYTES_SELECTOR, PQ_CREATE_ACCOUNT_SELECTOR, PQ_INIT_CODE_LEN,
     PQ_SMART_WALLET_FACTORY, SAFE_V1_PAYLOAD_MAX, SET_PRE_SIGNATURE_SELECTOR,
     SIGN_USEROP_HEADER_LEN, SIG_WRAPPER_LEN, COW_ORDER_TRAILER_MAX_LEN,
@@ -1317,15 +1317,36 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         return NscStatus::InternalError as u32;
     }
     let userop_sigs = userop_sigs_a;
-    if userop_sigs.saturating_add(local_offchain) >= MAX_SLOT_USES {
+
+    // The synced `last_userop` floor can be ahead of the materialised local
+    // counter after recovery / CMD_OFFCHAIN_SYNC.  The promotion below becomes
+    // durable before this signature is released, so the cap decision must use
+    // that same effective value.  Checking bare `local_offchain` here used to
+    // admit one Type-2 signature after a high sync even when
+    // `userop_sigs + max(local,last)` was already exhausted.
+    let effective_offchain = crate::aa::offchain_gate::effective_offchain_count(
+        local_offchain,
+        last_userop_snapshot,
+    );
+    if !crate::aa::offchain_gate::userop_cap_ok(effective_offchain, userop_sigs) {
         ui::show_status("Slot exhausted", "rotate slot");
         return NscStatus::OffchainCapExceeded as u32;
     }
-    // F-10 belt-and-braces: re-evaluate the cap after a `wait_random` so a
-    // single glitch on the comparison / branch above must ALSO land in
-    // this second window to reach the sign.
+    // F-10 belt-and-braces: independently recompute BOTH the floor-fold and
+    // cap after a randomised delay. `black_box` prevents LLVM from CSE-folding
+    // this into the first decision, so a single glitch cannot substitute the
+    // stale-low local count in both windows.
     crate::fi::wait_random();
-    if userop_sigs.saturating_add(local_offchain) >= MAX_SLOT_USES {
+    let effective_offchain_recheck = crate::aa::offchain_gate::effective_offchain_count(
+        core::hint::black_box(local_offchain),
+        core::hint::black_box(last_userop_snapshot),
+    );
+    if effective_offchain_recheck != core::hint::black_box(effective_offchain)
+        || !crate::aa::offchain_gate::userop_cap_ok(
+            effective_offchain_recheck,
+            core::hint::black_box(userop_sigs),
+        )
+    {
         ui::show_status("Slot sign", "fi tampered");
         return NscStatus::InternalError as u32;
     }
@@ -1333,7 +1354,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         "[S][sign] slot_key={:02x?} local_offchain={} last_userop={} userop_sigs={}",
         slot_flash_key, local_offchain, last_userop_snapshot, userop_sigs
     );
-    let new_offchain_count = local_offchain.max(last_userop_snapshot);
+    let new_offchain_count = effective_offchain;
     if new_offchain_count > local_offchain {
         // Best-effort repair. Even if this write fails (e.g. flash
         // exhausted), we continue: `last_userop_count_set` below is

@@ -13,19 +13,18 @@ Test phases:
   2. Happy path — BEGIN + CHUNKs + COMMIT all green.
   3. Failure paths — bad magic / bad CRC / bad signature / bad vendor
      fingerprint each rejected by the device with a non-OK SW, no link
-     hang. A successful BEGIN between each failure resets the in-RAM
-     verify-failure counter so phase 3 doesn't pre-trip phase 4.
-  4. Wipe-on-repeated-failure trigger — 5 consecutive bad manifests.
-     After the 5th, the device arms the admin-wipe flag and sys_resets
-     (Finding B from docs/security/usb-fw-update-hardening.md). The test waits
-     for the USB device to disappear from lsusb and re-enumerate, then
-     verifies it's responsive again and runs one valid BEGIN to clear
-     the flash-backed counter so the next run starts clean.
+     hang.
+  4. Repeated-invalid non-destruction — 21 consecutive bad manifests
+     (crossing both historical wipe thresholds, 5 RAM / 20 flash). Every
+     request is rejected, the device stays enumerated and responsive, and a
+     subsequent valid BEGIN still succeeds. In production each verifier call
+     additionally requires a fresh trusted-UI confirmation; the e2e feature
+     auto-confirms so the transport test can exercise the full chain.
 
 PASS criteria: every expected-SW_OK gets SW_OK, every expected-failure
 gets a non-OK SW (clamped to SW_CONDITIONS_NOT_SATISFIED per Finding C),
-the wipe-trigger run causes a real USB disconnect + re-enumerate, and
-the post-wipe device is responsive.
+repeated malformed manifests never disconnect/reset/wipe the device, and the
+valid update endpoint remains available afterwards.
 
 Run directly with:
     tools/fwup-transport-test.py --fixture-dir target/fwup-test
@@ -102,10 +101,9 @@ OFF_VENDOR_FPR = 84
 OFF_SIGNATURE = 180
 OFF_CRC32 = 8192 - 4
 
-# Verify-failure threshold (in-RAM, see secure/src/nsc/cmd_fw_begin.rs
-# `FW_VERIFY_FAIL_THRESHOLD_RAM`). Hitting this count in a single
-# power-cycle arms the admin wipe + sys_resets.
-FW_VERIFY_FAIL_THRESHOLD_RAM = 5
+# Cross both historical destructive thresholds (5 in RAM / 20 in flash) and
+# prove malformed transport input remains non-destructive.
+REPEATED_INVALID_COUNT = 21
 
 
 # ---------------------------------------------------------------------------
@@ -403,15 +401,6 @@ def expect_bad_manifest(hid: HidRaw, manifest: bytes, label: str) -> None:
     print(f"==> [failpath/{label}] rejected as expected (SW=0x{sw:04X})")
 
 
-def reset_fail_counter(hid: HidRaw, manifest: bytes) -> None:
-    """Send a valid FW_BEGIN to trigger `record_verify_success()`, which
-    zeroes both the in-RAM and the flash-backed verify-failure tallies.
-    Used between failure tests so they don't pre-trip the wipe threshold."""
-    sw, _ = send_apdu_chained(hid, INS_V2_FW_BEGIN, manifest)
-    if sw != SW_OK:
-        raise RuntimeError(f"reset BEGIN failed: SW=0x{sw:04X}")
-
-
 # ---------------------------------------------------------------------------
 # Test orchestration
 # ---------------------------------------------------------------------------
@@ -446,13 +435,7 @@ def phase_sanity(hid: HidRaw) -> None:
 
 
 def phase_failure_paths(hid: HidRaw, manifest: bytes) -> None:
-    """Exercise each branch of the verify chain.
-
-    Between mutations a successful BEGIN resets both the in-RAM and the
-    flash-backed verify-failure counters via `record_verify_success`,
-    so this phase contributes at most one outstanding RAM-counter bump
-    when it returns to the caller.
-    """
+    """Exercise each branch of the verify chain."""
     cases = [
         ("bad_magic", mutate_bad_magic),
         ("bad_crc", mutate_bad_crc),
@@ -463,146 +446,43 @@ def phase_failure_paths(hid: HidRaw, manifest: bytes) -> None:
         mutated = mutate(manifest)
         assert len(mutated) == 8192
         expect_bad_manifest(hid, mutated, label)
-        # Successful BEGIN clears the failure tally — keeps phase 4
-        # independent of how many mutations we run here.
-        reset_fail_counter(hid, manifest)
-        print(f"==> [failpath/{label}] counter reset via valid BEGIN")
 
 
-def detach_probe_rs() -> None:
-    """Kill any `probe-rs run` holding the SWD link and wait for the
-    ST-LINK to actually release.
-
-    Why: a firmware-initiated `sys_reset` while probe-rs is attached
-    trips vector-catch — the core halts at the reset vector and USB
-    never re-enumerates (memory `probe-rs-reset-halts-core`). For the
-    wipe-trigger phase we need the device to actually re-boot itself,
-    so we let probe-rs go. The Makefile target re-`pkill`s at the end
-    of the test as a safety net.
-    """
-    print("==> [wipe] detaching probe-rs so sys_reset can boot cleanly")
-    # Kill probe-rs AND the timeout(1) wrapper the Makefile uses.
-    subprocess.run(["pkill", "-f", "probe-rs run"], check=False)
-    subprocess.run(["pkill", "-f", "timeout 120 probe-rs"], check=False)
-
-    # Wait until no `probe-rs` process is left. ST-LINK takes a moment
-    # to release the SWD link once the host disconnects; 2 s is
-    # empirically sufficient.
-    deadline = time.monotonic() + 5.0
-    while time.monotonic() < deadline:
-        rc = subprocess.run(
-            ["pgrep", "-f", "probe-rs run"],
-            capture_output=True,
-            check=False,
-        )
-        if rc.returncode != 0:
-            break
-        time.sleep(0.2)
-    time.sleep(2.0)
-
-
-def phase_wipe_trigger(hid: HidRaw, manifest: bytes) -> HidRaw:
-    """Drive `FW_VERIFY_FAIL_THRESHOLD_RAM` consecutive bad-manifest BEGINs.
-
-    The 5th one tips the in-RAM counter to the threshold; the device
-    arms the admin-wipe flag and `sys_reset`s. We then wait for USB
-    disconnect, USB re-enumerate, and re-open hidraw. A final valid
-    BEGIN clears the flash-backed counter so subsequent test runs
-    start clean.
-
-    Returns the re-opened HidRaw (the caller closes it).
-    """
+def phase_repeated_invalid_is_nondestructive(hid: HidRaw, manifest: bytes) -> None:
+    """Cross the old RAM/flash wipe thresholds without any state destruction."""
     bad = mutate_bad_signature(manifest)
-
-    # First (threshold - 1) bad BEGINs must each return a non-OK SW
-    # *and* the device must remain on the bus.
-    for i in range(1, FW_VERIFY_FAIL_THRESHOLD_RAM):
+    for i in range(1, REPEATED_INVALID_COUNT + 1):
         sw, _ = send_apdu_chained(hid, INS_V2_FW_BEGIN, bad)
         if sw == SW_OK:
             raise RuntimeError(
-                f"[wipe] bad BEGIN #{i} returned SW_OK — verify_signature "
-                f"didn't reject"
+                f"[non-destructive] bad BEGIN #{i} returned SW_OK"
             )
+        if not lsusb_has_device():
+            raise RuntimeError(
+                f"[non-destructive] device disconnected after bad BEGIN #{i}; "
+                "malformed input must never reset or wipe the wallet"
+            )
+        if i in (5, 20, REPEATED_INVALID_COUNT):
+            probe_sw, _ = send_single_apdu(
+                hid, INS_V2_GET_DEVICE_INFO, P1_LAST, b""
+            )
+            if probe_sw != SW_OK:
+                raise RuntimeError(
+                    f"[non-destructive] device unresponsive after bad BEGIN #{i}: "
+                    f"SW=0x{probe_sw:04X}"
+                )
         print(
-            f"==> [wipe] bad BEGIN #{i}/{FW_VERIFY_FAIL_THRESHOLD_RAM} "
-            f"rejected (SW=0x{sw:04X})"
+            f"==> [non-destructive] bad BEGIN #{i}/{REPEATED_INVALID_COUNT} "
+            f"rejected, device responsive (SW=0x{sw:04X})"
         )
 
-    # Drop the SWD attachment before the wipe trigger fires (otherwise
-    # vector-catch holds the core halted post-reset and USB never
-    # comes back).
-    detach_probe_rs()
-
-    # The threshold-th BEGIN should arm the wipe and sys_reset. The
-    # device may or may not get a response frame out before the reset
-    # fires, so we tolerate timeout/IOError here and pivot to checking
-    # USB-bus state instead.
-    print(
-        f"==> [wipe] sending bad BEGIN #{FW_VERIFY_FAIL_THRESHOLD_RAM} "
-        f"— expect device sys_reset"
-    )
-    hid.read_timeout_s = 8.0
-    try:
-        sw, _ = send_apdu_chained(hid, INS_V2_FW_BEGIN, bad)
-        print(
-            f"==> [wipe] device responded with SW=0x{sw:04X} before reset "
-            f"(may still reset after)"
-        )
-    except (TimeoutError, IOError, OSError) as e:
-        print(f"==> [wipe] expected error mid-reset: {type(e).__name__}: {e}")
-
-    hid.close()
-
-    print("==> [wipe] waiting for USB disconnect (required — proves "
-          "sys_reset fired)...")
-    if not wait_for_disconnect(timeout_s=10.0):
-        raise RuntimeError(
-            "[wipe] device did NOT disconnect within 10s — sys_reset did "
-            "not fire after the 5th bad BEGIN"
-        )
-    print("==> [wipe] USB disconnect observed — wipe trigger fired ✓")
-
-    # Firmware-driven re-enumeration (task #26): `cc_open_then_reset`
-    # holds the USB-C CC lines open long enough for the host's typec
-    # port controller to register a real detach, then sys_resets — so
-    # the post-reset dead-battery Rd looks like a fresh attach and the
-    # device re-enumerates with NO physical replug. End-to-end latency
-    # is dominated by device boot (~15-25 s in this e2e build, which
-    # re-provisions on every boot) + the host's typec/VBUS cycle.
-    print("==> [wipe] waiting for firmware-driven USB re-enumerate "
-          "(cc_open_then_reset, up to 90s)...")
-    if not wait_for_enumerate(timeout_s=90.0):
-        raise RuntimeError(
-            "[wipe] device did NOT re-enumerate within 90s — the "
-            "cc_open_then_reset re-attach path regressed (it has worked "
-            "before: device comes back ~20-25s after the disconnect). "
-            "Check VBUS/CC wiring + that the host typec subsystem is healthy."
-        )
-    print("==> [wipe] USB re-enumerated automatically (no replug) ✓")
-    hid2 = open_hid_or_die()
-    sw, _ = send_single_apdu(hid2, INS_V2_GET_DEVICE_INFO, P1_LAST, b"")
+    sw, _ = send_apdu_chained(hid, INS_V2_FW_BEGIN, manifest)
     if sw != SW_OK:
         raise RuntimeError(
-            f"[wipe] post-reset GET_DEVICE_INFO failed: SW=0x{sw:04X}"
+            f"[non-destructive] valid BEGIN unavailable after malformed traffic: "
+            f"SW=0x{sw:04X}"
         )
-    print("==> [wipe] post-reset device responsive (GET_DEVICE_INFO: SW_OK) ✓")
-
-    # Best-effort flash-counter reset for the NEXT run's hygiene. This
-    # is a heavy chained BEGIN (~33 APDUs) over a freshly-re-enumerated
-    # link, which is the most transport-fragile op in the whole test —
-    # if it hangs we don't fail the run (the re-enumeration itself is
-    # the thing under test, and it already passed above). A stale flash
-    # counter at worst trips the lifetime wipe a few runs sooner.
-    try:
-        reset_fail_counter(hid2, manifest)
-        print("==> [wipe] flash-backed counter reset via post-recovery BEGIN ✓")
-    except (TimeoutError, IOError, OSError) as e:
-        print(
-            f"==> [wipe] post-recovery counter-reset BEGIN did not complete "
-            f"({type(e).__name__}) — non-fatal, re-enumeration already "
-            f"validated. Flash counter may carry over to the next run."
-        )
-    return hid2
+    print("==> [non-destructive] valid BEGIN still succeeds ✓")
 
 
 def run_e2e(fixture_dir: str) -> int:
@@ -623,12 +503,12 @@ def run_e2e(fixture_dir: str) -> int:
         phase_sanity(hid)
         happy_path(hid, manifest, secure, nonsecure)
         phase_failure_paths(hid, manifest)
-        hid = phase_wipe_trigger(hid, manifest)
+        phase_repeated_invalid_is_nondestructive(hid, manifest)
 
         print()
         print(
             "=== PASS — FW-update transport e2e: sanity + happy + 4 fail-paths "
-            "+ wipe-trigger + recovery all green ==="
+            "+ repeated-invalid non-destruction all green ==="
         )
         return 0
     finally:

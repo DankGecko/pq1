@@ -9,4 +9,5 @@ pub mod keygen;
 pub mod pubkey;
 pub mod sign;
 pub mod verify;
+pub mod verify_artifact_keys;
 pub mod verify_release;

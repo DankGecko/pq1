@@ -222,6 +222,22 @@ compile_error!(
      production` and drop the feature."
 );
 
+// Production liveness fence. The secure-owned IWDG bounds a wedged NS USB
+// loop, noninteractive gateway work, and disabled-interrupt deadlocks. Trusted
+// physical-input waits receive only the independently idle-bounded exception
+// in `hw::iwdg`; omitting the feature silently removes that fail-safe.
+#[cfg(all(
+    feature = "mode-production",
+    feature = "stm32u585",
+    not(feature = "iwdg"),
+))]
+compile_error!(
+    "stm32u585 + mode-production requires `iwdg`. The production watchdog \
+     bounds NS/secure hangs; trusted-UI waits remain limited by the 120 s \
+     secure inactivity timer. Build both worlds through `make release`, which \
+     enables the matching NS heartbeat feature."
+);
+
 // Dedicated guard: `otp-hardcoded-master-key` + `optiga-lock-operational` is
 // a specifically catastrophic combination. The lock-operational feature
 // commits the E140 LcsO=Operational bump, which is hardware-irreversible;
@@ -1135,6 +1151,10 @@ where
 /// the inactivity wipe, and the cancel/idle-wipe branches of every
 /// interactive dialog.
 pub fn zeroize_sensitive_state() {
+    // Panic/tamper paths do not unwind RAII guards. Revoke the watchdog's
+    // trusted-UI wait exception before wiping secrets so a fault inside an
+    // input backend cannot keep the watchdog fed until the 120 s idle limit.
+    crate::timeout::clear_trusted_ui_wait();
     state::with_state(|s| s.zeroize_sensitive());
     // SAFETY: category 5 — exclusive mutable borrow of the
     // `static mut crate::SE` driver. Single-threaded secure world,
@@ -1707,4 +1727,3 @@ pub extern "cmse-nonsecure-entry" fn nsc_offchain_sync(in_ptr: u32, in_len: u32)
     let args = GatewayArgs { arg0: in_ptr, arg1: 0, arg2: in_len };
     unsafe { cmd_offchain_sync::run(&args) }
 }
-

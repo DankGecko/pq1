@@ -105,6 +105,8 @@ const RNG_SRC: &str = include_str!("rng.rs");
 const RNG_STRONG_SRC: &str = include_str!("rng_strong.rs");
 const PIN_DIAG_SRC: &str = include_str!("pin_diag.rs");
 const TIMEOUT_SRC: &str = include_str!("timeout.rs");
+const CONFIRM_SRC: &str = include_str!("ui/confirm.rs");
+const NSC_MOD_SRC: &str = include_str!("nsc/mod.rs");
 
 // ═════════════════════════════════════════════════════════════════════
 // 1. Re-mount `timeout.rs` under a host-test scaffold.
@@ -1498,10 +1500,47 @@ mod timeout_tests {
             "ticks_ptr must yield a 4-byte-aligned address"
         );
     }
+
+    #[test]
+    fn positive_trusted_ui_wait_guard_is_nested_raii() {
+        assert!(
+            !t::trusted_ui_is_waiting(),
+            "trusted-UI wait state must start clear"
+        );
+        let outer = t::TrustedUiWaitGuard::enter();
+        assert!(t::trusted_ui_is_waiting());
+        {
+            let _inner = t::TrustedUiWaitGuard::enter();
+            assert!(t::trusted_ui_is_waiting());
+        }
+        assert!(
+            t::trusted_ui_is_waiting(),
+            "dropping an inner guard must not clear the outer wait"
+        );
+        drop(outer);
+        assert!(
+            !t::trusted_ui_is_waiting(),
+            "dropping the final guard must clear trusted-UI wait state"
+        );
+
+        let outer = t::TrustedUiWaitGuard::enter();
+        let inner = t::TrustedUiWaitGuard::enter();
+        t::clear_trusted_ui_wait();
+        assert!(
+            !t::trusted_ui_is_waiting(),
+            "panic/tamper-style emergency clear must revoke all nested waits"
+        );
+        drop(inner);
+        drop(outer);
+        assert!(
+            !t::trusted_ui_is_waiting(),
+            "post-clear guard drops must saturate at zero rather than underflow"
+        );
+    }
 }
 
 mod timeout_source_text {
-    use super::TIMEOUT_SRC;
+    use super::{CONFIRM_SRC, NSC_MOD_SRC, TIMEOUT_SRC};
 
     /// `TIMEOUT_TICKS = 2 * 60 * 1000` (= 120 000) is the documented
     /// 2-minute inactivity window. CLAUDE.md "Lifecycle" cites this
@@ -1560,6 +1599,67 @@ mod timeout_source_text {
              multiple mutators risk an NS-reachable code path slipping in \
              and resetting the inactivity timer, violating the CLAUDE.md \
              contract 'NS pings do NOT reset it'."
+        );
+    }
+
+    /// The watchdog exception is valid only while the trusted confirm loop is
+    /// actually blocked on secure physical input. Expanding its scope over
+    /// rendering / parsing / crypto would let those operations evade the
+    /// ordinary 30 s busy-handler bound.
+    #[test]
+    fn negative_confirm_scopes_trusted_ui_guard_to_wait_button() {
+        let block_start = CONFIRM_SRC
+            .find("let event = match {")
+            .expect("confirm must use an explicit expression scope for the input wait");
+        let block_end = CONFIRM_SRC[block_start..]
+            .find("} {")
+            .map(|n| block_start + n)
+            .expect("trusted-UI input scope must close before result matching");
+        let block = &CONFIRM_SRC[block_start..block_end];
+        assert!(block.contains("timeout::TrustedUiWaitGuard::enter()"));
+        assert!(block.contains("input().wait_button(&mut idle)"));
+        assert!(
+            !block.contains("timeout::reset_activity()"),
+            "entering a trusted-UI wait must never refresh inactivity; only a real button event may do so"
+        );
+    }
+
+    /// A forgotten guard must not feed the watchdog forever. The watchdog's
+    /// trusted-UI branch is separately gated on `!is_idle()`; pin the timeout
+    /// module's side of that contract here.
+    #[test]
+    fn negative_trusted_ui_guard_does_not_mutate_last_activity() {
+        let guard_impl = TIMEOUT_SRC
+            .find("impl TrustedUiWaitGuard")
+            .expect("TrustedUiWaitGuard impl missing");
+        let observer = TIMEOUT_SRC
+            .find("pub fn trusted_ui_is_waiting()")
+            .expect("trusted UI observer missing");
+        let body = &TIMEOUT_SRC[guard_impl..observer];
+        assert!(
+            !body.contains("LAST_ACTIVITY.store("),
+            "trusted UI wait bookkeeping must not extend the unlock timeout"
+        );
+    }
+
+    /// panic=abort does not run the guard's Drop implementation. Every global
+    /// sensitive-state wipe must therefore revoke the watchdog exception
+    /// explicitly before it can enter a halt/reset path.
+    #[test]
+    fn negative_zeroize_revokes_trusted_ui_wait_marker() {
+        let start = NSC_MOD_SRC
+            .find("pub fn zeroize_sensitive_state()")
+            .expect("zeroize_sensitive_state missing");
+        let body = &NSC_MOD_SRC[start..(start + 700).min(NSC_MOD_SRC.len())];
+        let clear = body
+            .find("crate::timeout::clear_trusted_ui_wait();")
+            .expect("zeroize must revoke trusted UI watchdog state");
+        let state_wipe = body
+            .find("state::with_state(|s| s.zeroize_sensitive());")
+            .expect("global state wipe missing");
+        assert!(
+            clear < state_wipe,
+            "trusted UI watchdog state must be revoked before secret-state zeroization"
         );
     }
 }

@@ -85,6 +85,11 @@ pub mod blind_sign;
 #[path = "../tx/display/eip1271.rs"]
 pub mod eip1271;
 
+// Counter-sync is a trusted-display authorization surface: mount the real
+// renderer so its current/target pixel-binding tests execute on the host.
+#[path = "../tx/display/offchain_sync.rs"]
+pub mod offchain_sync;
+
 #[path = "../tx/display/erc20_known.rs"]
 pub mod erc20_known;
 

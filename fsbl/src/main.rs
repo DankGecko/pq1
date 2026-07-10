@@ -150,12 +150,16 @@ fn filter_valid<'a>(m: &'a ManifestRef<'a>, floor: u32) -> Option<&'a ManifestRe
     if fi::check_true_into_sentinel(|| m.verify_digest().is_ok()) != fi::OK_SENTINEL {
         return None;
     }
-    m.verify_vendor_fpr(&vendor_pubkey::VENDOR_PK_SEED, &vendor_pubkey::VENDOR_PK_ROOT)
-        .ok()?;
+    let (vendor_pk_seed, vendor_pk_root) = vendor_pubkey::key_parts();
+    let fpr_verdict = fi::check_true_into_sentinel(|| {
+        m.verify_vendor_fpr(vendor_pk_seed, vendor_pk_root).is_ok()
+    });
+    if fpr_verdict != fi::OK_SENTINEL {
+        return None;
+    }
     fi::scrub_sentinel_register();
     let sig_verdict = fi::check_true_into_sentinel(|| {
-        m.verify_signature(&vendor_pubkey::VENDOR_PK_SEED, &vendor_pubkey::VENDOR_PK_ROOT)
-            .is_ok()
+        m.verify_signature(vendor_pk_seed, vendor_pk_root).is_ok()
     });
     if sig_verdict != fi::OK_SENTINEL {
         return None;
@@ -177,10 +181,7 @@ fn filter_valid<'a>(m: &'a ManifestRef<'a>, floor: u32) -> Option<&'a ManifestRe
 /// slot didn't pass `verify_images`). The pick logic operates on the
 /// manifest; the digest tags along untouched until we return.
 type Candidate<'a> = (&'a ManifestRef<'a>, [u8; 32]);
-fn pick_slot(
-    a: Option<Candidate>,
-    b: Option<Candidate>,
-) -> Option<(Slot, [u8; 32])> {
+fn pick_slot(a: Option<Candidate>, b: Option<Candidate>) -> Option<(Slot, [u8; 32])> {
     // Quick single-candidate cases.
     let (Some(a), Some(b)) = (a, b) else {
         return match (a, b) {

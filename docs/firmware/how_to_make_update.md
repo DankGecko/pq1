@@ -97,7 +97,7 @@ for 85 years.
 
 ```bash
 git checkout $release_commit
-make release RELEASE_FEATURES=stm32u585,se050,optiga-trust-m,dual-se,ui-oled
+FSBL_VENDOR_PUBKEY=/absolute/path/to/vendor-pubkey.bin make release
 ```
 
 `make release` runs `verify-repro` first (two clean builds, diff),
@@ -106,8 +106,8 @@ stop — something is leaking build-host state into the firmware and
 users won't be able to reproduce your hashes. See
 `docs/firmware/reproducible-builds.md` for debugging tips.
 
-On success, `target/release/secure.elf` and
-`target/release/nonsecure.elf` are what goes into the signature.
+On success, `target/pqsigner-release/secure.elf` and
+`target/pqsigner-release/nonsecure.elf` are what goes into the signature.
 The target also prints the 8 BIP-39 measurement words — save these
 for the release notes.
 
@@ -116,9 +116,11 @@ for the release notes.
 ```bash
 cargo run --release -p fwsign -- sign \
     --key vendor-key.enc \
+    --fsbl target/pqsigner-release/fsbl.elf \
+    --trusted-fingerprint target/pqsigner-release/vendor-key.sha256 \
     --version 2 \
-    --secure target/release/secure.elf \
-    --nonsecure target/release/nonsecure.elf \
+    --secure target/pqsigner-release/secure.elf \
+    --nonsecure target/pqsigner-release/nonsecure.elf \
     --slot A \
     --build-id $(git rev-parse HEAD | sha256sum | head -c 64) \
     --out release-v2.pqfw
@@ -173,7 +175,7 @@ looks like.
 # 1. Rebuild from source.
 git clone ...
 cd sphincs_rust && git checkout <commit-from-release-notes>
-make release RELEASE_FEATURES=stm32u585,se050,optiga-trust-m,dual-se,ui-oled
+FSBL_VENDOR_PUBKEY=/absolute/path/to/vendor-pubkey.bin make release
 
 # 2. Pull the signature out of the .pqfw.
 cargo run --release -p fwsign -- extract-sig \
@@ -183,8 +185,8 @@ cargo run --release -p fwsign -- extract-sig \
 #    version.
 cargo run --release -p fwsign -- verify-release \
     --version 2 \
-    --secure target/release/secure.elf \
-    --nonsecure target/release/nonsecure.elf \
+    --secure target/pqsigner-release/secure.elf \
+    --nonsecure target/pqsigner-release/nonsecure.elf \
     --signature release-v2.sig \
     --pubkey vendor-pubkey.bin
 ```
@@ -209,8 +211,8 @@ cargo run --release -p fwsign -- verify \
 #    an independent auditor does).
 cargo run --release -p fwsign -- verify-release \
     --version 2 \
-    --secure target/release/secure.elf \
-    --nonsecure target/release/nonsecure.elf \
+    --secure target/pqsigner-release/secure.elf \
+    --nonsecure target/pqsigner-release/nonsecure.elf \
     --signature <(cargo run --release -p fwsign -- extract-sig --bundle release-v2.pqfw --out /dev/stdout) \
     --pubkey vendor-pubkey.bin
 # → "verify-release: PASS"
@@ -268,7 +270,7 @@ Copy this, fill in the blanks, paste into GitHub Releases:
 
 **Firmware version:** 2
 **Git commit:** abc123...
-**Build features:** stm32u585,se050,optiga-trust-m,dual-se,ui-oled
+**Build features:** use the hardened `RELEASE_FEATURES` default from the root Makefile (`ui-lcd`; no retired OLED backend).
 
 ## Measurement words (verify on-device after update)
 

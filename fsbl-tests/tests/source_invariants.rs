@@ -87,12 +87,10 @@ fn negative_verify_images_returns_digest_option() {
 fn negative_main_renders_fingerprint_before_branching() {
     let src = read_workspace_file("fsbl/src/main.rs");
 
-    let render_idx = src
-        .find("render::render_fingerprint(")
-        .expect(
-            "fsbl/src/main.rs must call render::render_fingerprint(...) on the success path \
+    let render_idx = src.find("render::render_fingerprint(").expect(
+        "fsbl/src/main.rs must call render::render_fingerprint(...) on the success path \
              — that's the trust-root display the slot can't forge",
-        );
+    );
     let branch_idx = src
         .find("branch::into_slot(slot)")
         .expect("fsbl/src/main.rs must call branch::into_slot(slot) on the success path");
@@ -190,4 +188,59 @@ fn positive_workspace_layout_sanity() {
     let _ = PathBuf::from("fsbl/src/main.rs");
     let _ = PathBuf::from("fsbl/src/nv3007.rs");
     let _ = PathBuf::from("secure/src/measured_boot.rs");
+}
+
+// ---------------------------------------------------------------------------
+// 6. Production firmware-update key agreement is artifact-proven
+// ---------------------------------------------------------------------------
+
+#[test]
+fn negative_production_fsbl_cannot_use_missing_zero_relative_or_dev_key() {
+    let build = read_workspace_file("fsbl/build.rs");
+    let cargo = read_workspace_file("fsbl/Cargo.toml");
+    for landmark in [
+        "CARGO_FEATURE_MODE_PRODUCTION",
+        "FSBL_VENDOR_PUBKEY is required",
+        "all-zero FSBL_VENDOR_PUBKEY",
+        "absolute, immutable snapshot path",
+        "DEVELOPMENT_VENDOR_KEY",
+        "production-firmware-vendor-key.sha256",
+    ] {
+        assert!(
+            build.contains(landmark),
+            "FSBL release gate lost `{landmark}`"
+        );
+    }
+    assert!(cargo.contains("mode-production = []"));
+}
+
+#[test]
+fn negative_final_artifacts_must_agree_on_reviewed_vendor_key() {
+    let vendor = read_workspace_file("fsbl/src/vendor_pubkey.rs");
+    let makefile = read_workspace_file("Makefile");
+    let verifier = read_workspace_file("fwsign/src/artifact_key.rs");
+    assert!(vendor.contains(".pqsigner.vendor_pubkey"));
+    assert!(vendor.contains("PQSIGNER_FSBL_VENDOR_PUBKEY"));
+    assert!(vendor.contains("pub fn key_parts()"));
+    for landmark in [
+        "RELEASE_VENDOR_KEY_SNAPSHOT",
+        "target/release-fsbl",
+        "verify-artifact-keys",
+        "PRODUCTION_VENDOR_KEY_POLICY",
+        "RELEASE_ARTIFACT_TMP",
+        "target/pqsigner-release",
+        "sha256sum -c SHA256SUMS",
+    ] {
+        assert!(
+            makefile.contains(landmark),
+            "release pipeline lost `{landmark}`"
+        );
+    }
+    assert!(verifier.contains("FSBL == secure == reviewed policy"));
+    assert!(verifier.contains("VENDOR_KEY_SECTION"));
+    assert!(verifier.contains(".pqsigner.vendor_pubkey"));
+    assert!(verifier.contains("expected a little-endian ARM ELF32 executable"));
+    assert!(verifier.contains("read-only PT_LOAD"));
+    assert!(verifier.contains("verify_secure_flat_image"));
+    assert!(verifier.contains("signing key does not match firmware artifacts/policy"));
 }

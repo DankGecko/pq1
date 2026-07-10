@@ -33,7 +33,7 @@ use crate::fw_update::{vendor_pubkey, verify_manifest};
 
 /// Dev vendor signing seed — MUST stay byte-identical to the dev path in
 /// `fsbl/build.rs` (mirrored by `secure/build.rs`) so the signatures we
-/// produce here verify against the build's embedded `VENDOR_PK_SEED/ROOT`.
+/// produce here verify against the build's embedded runtime vendor pubkey.
 const DEV_SK: [u8; 32] = [
     0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00,
     0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
@@ -62,6 +62,8 @@ fn build_signed(version: u32, sk: &SigningKey, corrupt_sig: bool) -> [u8; MANIFE
     let dummy_nonsecure = [0xBBu8; 32];
     let build_id = [0xCDu8; 32];
 
+    let (vendor_pk_seed, vendor_pk_root) = vendor_pubkey::key_parts();
+    let vendor_fpr = fw_manifest::vendor_pubkey_fingerprint(vendor_pk_seed, vendor_pk_root);
     let mut b = ManifestBuilder::new();
     b.init(0) // slot A — informational only
         .fw_version(version)
@@ -69,7 +71,7 @@ fn build_signed(version: u32, sk: &SigningKey, corrupt_sig: bool) -> [u8; MANIFE
         .nonsecure_image(&dummy_nonsecure, 1024)
         // Use the byte-for-byte fingerprint the build embedded, so it equals
         // what `verify_vendor_fpr` recomputes and compares against.
-        .vendor_pubkey_fpr(&vendor_pubkey::VENDOR_PK_FPR)
+        .vendor_pubkey_fpr(&vendor_fpr)
         .build_id(&build_id)
         .boot_counter_snap(0)
         .try_once(TRY_ONCE_COMMITTED);

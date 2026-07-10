@@ -186,21 +186,30 @@ Covered in `fsbl/src/main.rs`. Summary:
 # One-time, on an offline signing machine.
 fwsign keygen --out vendor-key.enc
 fwsign pubkey --key vendor-key.enc --out vendor-pubkey.bin
+# Review SHA-256(vendor-pubkey.bin), then commit it as the sole line in:
+# config/production-firmware-vendor-key.sha256
 
 # Per release.
 git checkout $RELEASE_COMMIT
-make release RELEASE_FEATURES=stm32u585,se050,optiga-trust-m,dual-se,ui-oled
-make fsbl FSBL_VENDOR_PUBKEY=/path/to/vendor-pubkey.bin
+FSBL_VENDOR_PUBKEY=/absolute/path/to/vendor-pubkey.bin make release
 
 fwsign sign \
   --key vendor-key.enc \
+  --fsbl target/pqsigner-release/fsbl.elf \
+  --trusted-fingerprint target/pqsigner-release/vendor-key.sha256 \
   --version $VERSION_U32 \
-  --secure target/release/secure.elf \
-  --nonsecure target/release/nonsecure.elf \
+  --secure target/pqsigner-release/secure.elf \
+  --nonsecure target/pqsigner-release/nonsecure.elf \
   --slot A \
   --build-id $(git rev-parse HEAD | sha256sum | head -c 64) \
   --out release-v${VERSION_U32}.pqfw
 ```
+
+`make release` snapshots the public key once, builds the FSBL in an isolated
+target, builds the secure world twice, and hashes the allocated raw runtime key
+consumed from both final ELFs. Packaging stops unless
+`FSBL == secure == reviewed policy`; `fwsign sign` repeats that check and also
+requires the decrypted signing key to match.
 
 **One `.pqfw` per release.** The v0x02 signed preimage doesn't cover
 the slot identifier, so one signed release installs identically into
@@ -229,19 +238,19 @@ cd sphincs_rust
 git checkout <release-commit>
 
 # Build with the same feature set the vendor used.
-make release RELEASE_FEATURES=stm32u585,se050,optiga-trust-m,dual-se,ui-oled
+FSBL_VENDOR_PUBKEY=/absolute/path/to/vendor-pubkey.bin make release
 ```
 
 `make release` runs `verify-repro` first (two clean builds, diff).
-If that passes, `target/release/secure.elf` and
-`target/release/nonsecure.elf` are byte-for-byte identical to what
+If that passes, `target/pqsigner-release/secure.elf` and
+`target/pqsigner-release/nonsecure.elf` are byte-for-byte identical to what
 the vendor built from the same commit.
 
 ### 2. Compute the image hashes (optional — `fwsign` will do this internally)
 
 ```bash
-cargo run -p fwmeasure -- target/release/secure.elf
-cargo run -p fwmeasure -- target/release/nonsecure.elf
+cargo run -p fwmeasure -- target/pqsigner-release/secure.elf
+cargo run -p fwmeasure -- target/pqsigner-release/nonsecure.elf
 ```
 
 These print the 8 BIP-39 words and the raw SHA-256 — the same
@@ -260,8 +269,8 @@ cargo run -p fwsign -- extract-sig \
 # Then run the signature check.
 cargo run -p fwsign -- verify-release \
     --version   42 \
-    --secure    target/release/secure.elf \
-    --nonsecure target/release/nonsecure.elf \
+    --secure    target/pqsigner-release/secure.elf \
+    --nonsecure target/pqsigner-release/nonsecure.elf \
     --signature release-v42.sig \
     --pubkey    vendor-pubkey.bin
 ```

@@ -46,7 +46,7 @@
 use sphincs_tz_shared::{
     NscStatus, ACCOUNT_INDEX_MASK, ACCOUNT_INDEX_SHIFT, C10_SIG_LEN, FLAG_INCLUDE_INIT_CODE,
     FLAG_REGISTER_SLOT,
-    GPV2_SETTLEMENT_ADDRESS, MAX_BATCH_TXS, MAX_SIGN_RESPONSE_LEN, MAX_SLOT_USES, MAX_TX_LEN,
+    GPV2_SETTLEMENT_ADDRESS, MAX_BATCH_TXS, MAX_SIGN_RESPONSE_LEN, MAX_TX_LEN,
     PQ_ADD_OWNER_BYTES_SELECTOR, PQ_CREATE_ACCOUNT_SELECTOR, PQ_INIT_CODE_LEN,
     PQ_SMART_WALLET_FACTORY, SET_PRE_SIGNATURE_SELECTOR, SIGN_USEROP_BATCH_HEADER_LEN,
     SIGN_USEROP_BATCH_MAX_PAYLOAD_LEN, SIGN_USEROP_BATCH_TX_PREFIX_LEN,
@@ -1032,19 +1032,36 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         return NscStatus::InternalError as u32;
     }
     let userop_sigs = userop_sigs_a;
-    if userop_sigs.saturating_add(local_offchain) >= MAX_SLOT_USES {
+
+    // A recovery sync may put `last_userop_snapshot` ahead of the local
+    // counter. The promotion below is part of the state this signature will
+    // commit, so cap-gate the repaired/effective count rather than the stale
+    // local value (sync→batch sibling of the single-Type-2 regression).
+    let effective_offchain = crate::aa::offchain_gate::effective_offchain_count(
+        local_offchain,
+        last_userop_snapshot,
+    );
+    if !crate::aa::offchain_gate::userop_cap_ok(effective_offchain, userop_sigs) {
         ui::show_status("Slot exhausted", "rotate slot");
         return NscStatus::OffchainCapExceeded as u32;
     }
-    // F-10 belt-and-braces: re-evaluate the cap after a `wait_random` so a
-    // single glitch on the comparison / branch above must also land in
-    // this second window to reach the sign.
+    // F-10 belt-and-braces: independently recompute the floor-fold and cap;
+    // black_box keeps LLVM from collapsing the second FI window into the first.
     crate::fi::wait_random();
-    if userop_sigs.saturating_add(local_offchain) >= MAX_SLOT_USES {
+    let effective_offchain_recheck = crate::aa::offchain_gate::effective_offchain_count(
+        core::hint::black_box(local_offchain),
+        core::hint::black_box(last_userop_snapshot),
+    );
+    if effective_offchain_recheck != core::hint::black_box(effective_offchain)
+        || !crate::aa::offchain_gate::userop_cap_ok(
+            effective_offchain_recheck,
+            core::hint::black_box(userop_sigs),
+        )
+    {
         ui::show_status("Batch sign", "fi tampered");
         return NscStatus::InternalError as u32;
     }
-    let new_offchain_count = local_offchain.max(last_userop_snapshot);
+    let new_offchain_count = effective_offchain;
     if new_offchain_count > local_offchain {
         if unsafe {
             crate::offchain_state::offchain_count_promote_to(&slot_flash_key, new_offchain_count)

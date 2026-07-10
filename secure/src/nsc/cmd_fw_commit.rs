@@ -59,16 +59,14 @@ pub(super) unsafe fn run(_args: &GatewayArgs) -> u32 {
         // attempt — until a fault landed and an unsigned image committed.
         // With the context dropped, a retry requires a fresh CMD_FW_BEGIN,
         // which re-runs the F-7 manifest-signature verify AND the
-        // trusted-display install confirm (a physical button press) before
-        // re-streaming every chunk. Each glitch attempt is now a full,
+        // trusted-display verifier authorization + detailed install confirm
+        // before re-streaming every chunk. Each glitch attempt is now a full,
         // user-gated re-BEGIN + re-stream — not a tight in-place loop.
         //
-        // We deliberately do NOT arm the admin-wipe here (unlike BEGIN's
-        // bad-signature path): a verify_images mismatch has a *benign*
-        // cause — flash corruption on a flaky USB transfer / brown-out —
-        // so wiping the user's wallet on a COMMIT mismatch would brick it
-        // on bad luck. The context drop is the bound; it carries no
-        // destructive false-positive.
+        // We deliberately never arm the admin wipe from update failures.
+        // A mismatch has benign causes (flash corruption, flaky transfer,
+        // brown-out), and untrusted companion input must not be able to
+        // destroy wallet state. The context drop is the non-destructive bound.
         //
         // SAFETY: category 5 — exclusive write to `static mut FW_UPDATE`
         // under the non-reentrant dispatcher + `HandlerGuard`. The dropped
@@ -186,10 +184,8 @@ pub(super) unsafe fn run(_args: &GatewayArgs) -> u32 {
         // `ctx.inactive`, which is the slot BEGIN erased. Each call
         // here advances `qw * 16` within that erased page span, so we
         // are programming only pre-erased flash.
-        if unsafe {
-            flash::write_quadword_verified((manifest_addr + (qw * 16) as u32), &buf)
-        }
-        .is_err()
+        if unsafe { flash::write_quadword_verified((manifest_addr + (qw * 16) as u32), &buf) }
+            .is_err()
         {
             return NscStatus::FwUpdateFlashError as u32;
         }
@@ -279,15 +275,6 @@ pub(super) unsafe fn run(_args: &GatewayArgs) -> u32 {
             _ => NscStatus::FwUpdateFlashError as u32,
         };
     }
-
-    // F10: the install is now fully committed (OTP bumped, manifest written,
-    // boot-state points at the new slot). This is the ONLY place the
-    // manifest-verify-failure wipe budget is cleared — a completed, user-
-    // confirmed update earns honest users a fresh budget, while a BEGIN→cancel
-    // loop (which never reaches here) can no longer reset it. Non-fatal if the
-    // flash erase inside fails (worst case: a few stale failures carry over,
-    // still bounded by the threshold).
-    super::cmd_fw_begin::reset_verify_failure_tally();
 
     // 5. Drop the context (zeroize manifest bytes + running hashes).
     // SAFETY: category 5 — exclusive write to `static mut FW_UPDATE`

@@ -11,11 +11,31 @@
 //! bump in `cmd_fw_commit` running on unverified bytes (C-1 in the
 //! security review).
 //!
-//! Dev / e2e builds: when `FSBL_VENDOR_PUBKEY` is unset, build.rs
-//! falls back to a fixed-seed development pubkey. This is the same
-//! one `fsbl/build.rs` uses by default, so dev FSBLs and dev-signed
-//! .pqfw bundles match end-to-end. The build emits a `cargo:warning`
-//! so CI can fail closed on accidental production builds without
-//! the env var set.
+//! Bench builds may intentionally embed the all-zero reject-all placeholder;
+//! production builds require an absolute immutable key snapshot whose hash
+//! matches `config/production-firmware-vendor-key.sha256`.
 
-include!(concat!(env!("OUT_DIR"), "/vendor_pubkey_bytes.rs"));
+mod bytes {
+    include!(concat!(env!("OUT_DIR"), "/vendor_pubkey_bytes.rs"));
+}
+
+/// The exact update root used at BEGIN.
+///
+/// This is deliberately the sole runtime copy of the raw key. `key_parts`
+/// returns references into this allocation, while the release gate extracts
+/// the same allocated/loadable section from the final ELF and hashes it against
+/// the FSBL key and reviewed production policy.
+#[used]
+#[no_mangle]
+#[link_section = ".pqsigner.vendor_pubkey"]
+pub static PQSIGNER_SECURE_VENDOR_PUBKEY: [u8; 32] = bytes::VENDOR_PUBKEY;
+
+/// Split the allocated runtime key without maintaining duplicate seed/root
+/// constants that could drift from the final-artifact statement.
+#[inline(never)]
+pub fn key_parts() -> (&'static [u8; 16], &'static [u8; 16]) {
+    let raw = core::hint::black_box(&PQSIGNER_SECURE_VENDOR_PUBKEY);
+    let seed = raw[..16].try_into().expect("fixed 16-byte pk_seed");
+    let root = raw[16..].try_into().expect("fixed 16-byte pk_root");
+    (seed, root)
+}

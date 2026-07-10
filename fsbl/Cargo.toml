@@ -9,6 +9,10 @@ name = "pqsigner-fsbl"
 path = "src/main.rs"
 
 [features]
+# Release-only hardening profile. Requires an absolute vendor-key snapshot
+# whose fingerprint exactly matches the reviewed workspace release policy.
+# `make fsbl-release` is the supported entry point.
+mode-production = []
 # Bench-only: short-circuit FSBL boot into the NV3007 LCD self-test
 # (`nv3007::lcd_test_loop`) so the display port can be validated on real
 # silicon WITHOUT a signed slot. Never ships. Build/run via
@@ -60,8 +64,7 @@ panic-halt   = "1"
 
 [build-dependencies]
 # build.rs pre-computes the vendor-pubkey fingerprint (so the runtime
-# check is a memcmp) and derives the dev-fixture pubkey from a fixed
-# seed when FSBL_VENDOR_PUBKEY isn't set (so dev builds don't depend
-# on a committed binary file). Host-only; not in the final binary.
+# check can publish it in build diagnostics). Host-only; not in the final
+# binary. The public development pubkey is centralized as reviewed hex under
+# `config/`, so build.rs does not carry a second copy of its signing seed.
 sha2        = "0.10"
-sphincs-c10 = { workspace = true }

@@ -11,22 +11,37 @@
 //! 2. Embeds the vendor SPHINCS+C10 public key from the path in the
 //!    `FSBL_VENDOR_PUBKEY` environment variable into a generated
 //!    `vendor_pubkey_bytes.rs` source file. Release builds MUST set
-//!    this env var; if it's unset we fall back to a committed
-//!    development pubkey at `fixtures/dev_pubkey.bin` (non-secret; the
-//!    matching vendor SK is the one used by integration tests). The
-//!    FSBL at boot time rejects a release signed by a different key
-//!    than its compiled-in pubkey, so dev FSBLs cannot run
-//!    production-signed firmware and vice versa — which is the
-//!    intended safety property.
+//!    this env var. Bench builds may explicitly opt into the public in-tree
+//!    development key. Production additionally requires an absolute key
+//!    snapshot, an exact match to the reviewed fingerprint policy, and a
+//!    final-artifact FSBL↔secure comparison in the release pipeline.
 
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+const PRODUCTION_KEY_POLICY: &str = "../config/production-firmware-vendor-key.sha256";
+const DEVELOPMENT_VENDOR_KEY: &str = "../config/development-firmware-vendor-pubkey.hex";
 
 fn main() {
     let target = env::var("TARGET").unwrap_or_default();
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let is_thumbv = target.contains("thumbv");
+    let mode_production = env::var_os("CARGO_FEATURE_MODE_PRODUCTION").is_some();
+    let lcd_test = env::var_os("CARGO_FEATURE_LCD_TEST").is_some();
+
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_MODE_PRODUCTION");
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_LCD_TEST");
+    println!("cargo:rerun-if-env-changed=FSBL_ALLOW_DEV_KEY");
+    if mode_production && lcd_test {
+        panic!("FSBL `mode-production` and bench-only `lcd-test` are mutually exclusive");
+    }
+    if mode_production && env::var_os("FSBL_ALLOW_DEV_KEY").is_some() {
+        panic!(
+            "FSBL_ALLOW_DEV_KEY must be absent in `mode-production`; use the isolated \
+             `make fsbl-release` path"
+        );
+    }
 
     // --- Linker script (thumbv only) ----------------------------------------
     // Host builds (e.g. `cargo test` for the FSBL integration tests in
@@ -48,64 +63,88 @@ fn main() {
     // production FSBL image; changing it changes the set of releases the
     // device will accept.
     //
-    // Dev: if FSBL_VENDOR_PUBKEY is unset, we regenerate a fixed-seed
-    // development pubkey on the fly using sphincs-c10. The seed below is
-    // the same one used by fwsign's integration tests (sign_verify_roundtrip),
-    // so dev FSBLs and dev-signed .pqfw bundles verify against each other.
+    // Dev: if FSBL_VENDOR_PUBKEY is unset with the explicit bench opt-in,
+    // read the single public development key under `config/`. `fwsign`
+    // independently derives its fixture key and tests equality with that file,
+    // so dev FSBLs and dev-signed .pqfw bundles cannot silently drift.
     println!("cargo:rerun-if-env-changed=FSBL_VENDOR_PUBKEY");
 
-    let (pk_seed, pk_root, source_desc): ([u8; 16], [u8; 16], String) =
-        if let Ok(path) = env::var("FSBL_VENDOR_PUBKEY") {
-            println!("cargo:rerun-if-changed={path}");
-            let bytes = fs::read(&path).unwrap_or_else(|e| panic!("reading {path}: {e}"));
-            if bytes.len() != 32 {
-                panic!(
-                    "{path}: expected 32 bytes (pk_seed[16] || pk_root[16]), got {}",
-                    bytes.len()
-                );
-            }
-            let mut s = [0u8; 16];
-            let mut r = [0u8; 16];
-            s.copy_from_slice(&bytes[..16]);
-            r.copy_from_slice(&bytes[16..]);
-            (s, r, format!("FSBL_VENDOR_PUBKEY={path}"))
-        } else {
-            // SECURITY (finding F2): the dev fallback below derives a FIXED,
-            // committed SPHINCS+C10 vendor key (matching seed in
-            // `fwsign/src/subcommands/dev_pubkey.rs`). Anyone with the source
-            // tree can sign manifests that verify under it, so an FSBL built
-            // with this key must NEVER leave the bench. Previously this path
-            // only emitted a `cargo:warning` and built anyway — a
-            // release-profile FSBL with `FSBL_VENDOR_PUBKEY` unset silently
-            // embedded the public dev key. Now the dev fallback is an explicit
-            // opt-in: a build with neither the real pubkey nor `FSBL_ALLOW_DEV_KEY`
-            // is a hard error. `make fsbl` sets the opt-in for dev convenience;
-            // `make fsbl-release` sets neither and provides the real pubkey.
-            println!("cargo:rerun-if-env-changed=FSBL_ALLOW_DEV_KEY");
-            if env::var("FSBL_ALLOW_DEV_KEY").is_err() {
-                panic!(
-                    "FSBL_VENDOR_PUBKEY is unset and FSBL_ALLOW_DEV_KEY is not set. \
+    let (pk_seed, pk_root, source_desc): ([u8; 16], [u8; 16], String) = if let Ok(path) =
+        env::var("FSBL_VENDOR_PUBKEY")
+    {
+        if mode_production && !Path::new(&path).is_absolute() {
+            panic!(
+                "production FSBL_VENDOR_PUBKEY must be an absolute, immutable snapshot path; \
+                 got {path:?}. Use `make fsbl-release`."
+            );
+        }
+        println!("cargo:rerun-if-changed={path}");
+        let bytes = fs::read(&path).unwrap_or_else(|e| panic!("reading {path}: {e}"));
+        if bytes.len() != 32 {
+            panic!(
+                "{path}: expected 32 bytes (pk_seed[16] || pk_root[16]), got {}",
+                bytes.len()
+            );
+        }
+        let mut raw = [0u8; 32];
+        raw.copy_from_slice(&bytes);
+        if raw.iter().all(|&byte| byte == 0) {
+            panic!(
+                "{path}: all-zero FSBL_VENDOR_PUBKEY is the disabled-update \
+                     placeholder; refusing an explicitly zero-keyed FSBL"
+            );
+        }
+        if mode_production {
+            validate_production_key(&raw, &path);
+        }
+        let mut s = [0u8; 16];
+        let mut r = [0u8; 16];
+        s.copy_from_slice(&bytes[..16]);
+        r.copy_from_slice(&bytes[16..]);
+        (s, r, format!("FSBL_VENDOR_PUBKEY={path}"))
+    } else {
+        // SECURITY (finding F2): the dev fallback below derives a FIXED,
+        // committed SPHINCS+C10 vendor key (the public value is centralized
+        // under `config/`). Anyone with the source
+        // tree can sign manifests that verify under it, so an FSBL built
+        // with this key must NEVER leave the bench. Previously this path
+        // only emitted a `cargo:warning` and built anyway — a
+        // release-profile FSBL with `FSBL_VENDOR_PUBKEY` unset silently
+        // embedded the public dev key. Now the dev fallback is an explicit
+        // opt-in: a build with neither the real pubkey nor `FSBL_ALLOW_DEV_KEY`
+        // is a hard error. `make fsbl` sets the opt-in for dev convenience;
+        // `make fsbl-release` sets neither and provides the real pubkey.
+        if mode_production {
+            panic!("FSBL_VENDOR_PUBKEY is required for an FSBL `mode-production` build");
+        }
+        if env::var("FSBL_ALLOW_DEV_KEY").is_err() {
+            panic!(
+                "FSBL_VENDOR_PUBKEY is unset and FSBL_ALLOW_DEV_KEY is not set. \
                      Refusing to embed the committed development vendor key: an FSBL \
                      built with it accepts firmware signed by anyone holding the \
                      (public, in-tree) dev seed. Provide a real key via \
                      `FSBL_VENDOR_PUBKEY=<32-byte pubkey>` (production, e.g. \
                      `make fsbl-release`), or explicitly opt into the dev key with \
                      `FSBL_ALLOW_DEV_KEY=1` (bench/dev only, e.g. `make fsbl`)."
-                );
-            }
-            println!("cargo:warning=FSBL_VENDOR_PUBKEY unset — using built-in dev fixture key (FSBL_ALLOW_DEV_KEY opt-in). DO NOT USE FOR PRODUCTION.");
-            let dev_sk: [u8; 32] = [
-                0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee,
-                0xff, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c,
-                0x0d, 0x0e, 0x0f, 0x10,
-            ];
-            let dev_ps: [u8; 16] = [
-                0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xab, 0xac, 0xad,
-                0xae, 0xaf,
-            ];
-            let sk = sphincs_c10::SigningKey::keygen(dev_sk, dev_ps);
-            (*sk.pk_seed(), *sk.pk_root(), "built-in dev fixture".to_string())
-        };
+            );
+        }
+        println!("cargo:warning=FSBL_VENDOR_PUBKEY unset — using built-in dev fixture key (FSBL_ALLOW_DEV_KEY opt-in). DO NOT USE FOR PRODUCTION.");
+        let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+        let dev_path = manifest_dir.join(DEVELOPMENT_VENDOR_KEY);
+        println!("cargo:rerun-if-changed={}", dev_path.display());
+        let dev_text = fs::read_to_string(&dev_path).unwrap_or_else(|e| {
+            panic!(
+                "reading development firmware key {}: {e}",
+                dev_path.display()
+            )
+        });
+        let dev = parse_hex_32(&dev_text, &dev_path.display().to_string());
+        (
+            dev[..16].try_into().expect("fixed 16-byte pk_seed"),
+            dev[16..].try_into().expect("fixed 16-byte pk_root"),
+            format!("public development fixture {}", dev_path.display()),
+        )
+    };
 
     let mut bytes = [0u8; 32];
     bytes[..16].copy_from_slice(&pk_seed);
@@ -123,18 +162,10 @@ fn main() {
         "//\n// Source: {source_desc}\n// SHA-256(pubkey): {}\n\n",
         fpr.iter().map(|b| format!("{b:02x}")).collect::<String>()
     ));
-    src.push_str("/// Vendor pk_seed (first 16 bytes of the 32-byte pubkey).\n");
-    src.push_str(&format!("pub const VENDOR_PK_SEED: [u8; 16] = {:?};\n", &bytes[..16]));
-    src.push_str("/// Vendor pk_root (last 16 bytes of the 32-byte pubkey).\n");
-    src.push_str(&format!("pub const VENDOR_PK_ROOT: [u8; 16] = {:?};\n", &bytes[16..]));
-    src.push_str(
-        "/// SHA-256(pk_seed || pk_root). Pre-computed at build time so\n\
-        /// the runtime vendor-fpr check is a memcmp.\n",
-    );
-    src.push_str(&format!("pub const VENDOR_PK_FPR: [u8; 32] = {:?};\n", fpr));
+    src.push_str("/// Raw vendor public key: pk_seed[16] || pk_root[16].\n");
+    src.push_str(&format!("pub const VENDOR_PUBKEY: [u8; 32] = {bytes:?};\n"));
 
-    fs::write(out_dir.join("vendor_pubkey_bytes.rs"), src)
-        .expect("writing vendor_pubkey_bytes.rs");
+    fs::write(out_dir.join("vendor_pubkey_bytes.rs"), src).expect("writing vendor_pubkey_bytes.rs");
 
     // --- Font table for the OLED fingerprint renderer ----------------------
     //
@@ -145,6 +176,83 @@ fn main() {
     // FSBL row and the secure-world `measured_boot` row are visually
     // identical. ~480 bytes of rodata.
     generate_font_flat(&out_dir);
+}
+
+fn validate_production_key(bytes: &[u8; 32], source_path: &str) {
+    if !Path::new(source_path).is_absolute() {
+        panic!(
+            "production FSBL_VENDOR_PUBKEY must be an absolute, immutable snapshot path; \
+             got {source_path:?}. Use `make fsbl-release`."
+        );
+    }
+
+    use sha2::{Digest, Sha256};
+    let actual: [u8; 32] = Sha256::digest(bytes).into();
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    let dev_path = manifest_dir.join(DEVELOPMENT_VENDOR_KEY);
+    println!("cargo:rerun-if-changed={}", dev_path.display());
+    let dev_text = fs::read_to_string(&dev_path).unwrap_or_else(|e| {
+        panic!(
+            "reading development firmware key {}: {e}",
+            dev_path.display()
+        )
+    });
+    let dev = parse_hex_32(&dev_text, &dev_path.display().to_string());
+    if bytes == &dev {
+        panic!("refusing the public in-tree development firmware key in a production FSBL");
+    }
+
+    let policy_path = manifest_dir.join(PRODUCTION_KEY_POLICY);
+    println!("cargo:rerun-if-changed={}", policy_path.display());
+    let policy = fs::read_to_string(&policy_path).unwrap_or_else(|e| {
+        panic!(
+            "reading production firmware-key policy {}: {e}",
+            policy_path.display()
+        )
+    });
+    let expected = parse_hex_32(&policy, &policy_path.display().to_string());
+    if actual != expected {
+        panic!(
+            "FSBL_VENDOR_PUBKEY fingerprint does not match reviewed production policy {}: \
+             expected {}, got {}",
+            policy_path.display(),
+            hex_fingerprint(&expected),
+            hex_fingerprint(&actual)
+        );
+    }
+}
+
+fn parse_hex_32(text: &str, source: &str) -> [u8; 32] {
+    let hex = text.trim();
+    if hex.len() != 64
+        || !hex
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    {
+        panic!(
+            "{source}: expected exactly one lowercase 64-character 32-byte hex value; \
+             key policy is not provisioned"
+        );
+    }
+    let mut out = [0u8; 32];
+    for (i, dst) in out.iter_mut().enumerate() {
+        let hi = hex_nibble(hex.as_bytes()[2 * i]);
+        let lo = hex_nibble(hex.as_bytes()[2 * i + 1]);
+        *dst = (hi << 4) | lo;
+    }
+    out
+}
+
+fn hex_nibble(b: u8) -> u8 {
+    match b {
+        b'0'..=b'9' => b - b'0',
+        b'a'..=b'f' => b - b'a' + 10,
+        _ => unreachable!("validated lowercase hex"),
+    }
+}
+
+fn hex_fingerprint(bytes: &[u8; 32]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Generate `glyphs_5x8.rs` in OUT_DIR from `../secure/assets/font_5x8.raw`.
@@ -159,9 +267,8 @@ fn generate_font_flat(out_dir: &PathBuf) {
     let raw_path = "../secure/assets/font_5x8.raw";
     println!("cargo:rerun-if-changed={raw_path}");
 
-    let raw = fs::read(raw_path).unwrap_or_else(|e| {
-        panic!("vendored {raw_path} missing or unreadable: {e}")
-    });
+    let raw = fs::read(raw_path)
+        .unwrap_or_else(|e| panic!("vendored {raw_path} missing or unreadable: {e}"));
 
     const BITMAP_W: usize = 80;
     const BITMAP_H: usize = 48;
@@ -194,14 +301,16 @@ fn generate_font_flat(out_dir: &PathBuf) {
          // MIT-licensed, vendored from embedded-graphics v0.8.2.\n\
          // See secure/assets/font_5x8.LICENSE for attribution.\n\n",
     );
-    out.push_str(&format!("pub const FONT_FIRST_CHAR: u8 = 0x{FIRST_CHAR:02x};\n"));
-    out.push_str(&format!("pub const FONT_LAST_CHAR: u8  = 0x{LAST_CHAR:02x};\n"));
+    out.push_str(&format!(
+        "pub const FONT_FIRST_CHAR: u8 = 0x{FIRST_CHAR:02x};\n"
+    ));
+    out.push_str(&format!(
+        "pub const FONT_LAST_CHAR: u8  = 0x{LAST_CHAR:02x};\n"
+    ));
     out.push_str(&format!("pub const FONT_GLYPH_W: usize = {GLYPH_W};\n"));
     out.push_str(&format!("pub const FONT_GLYPH_H: usize = {GLYPH_H};\n"));
     out.push_str(&format!("pub const FONT_N_GLYPHS: usize = {N_GLYPHS};\n\n"));
-    out.push_str(
-        "pub static FONT_FLAT_5X8: [[u8; FONT_GLYPH_W]; FONT_N_GLYPHS] = [\n",
-    );
+    out.push_str("pub static FONT_FLAT_5X8: [[u8; FONT_GLYPH_W]; FONT_N_GLYPHS] = [\n");
 
     for ch in FIRST_CHAR..=LAST_CHAR {
         let glyph_idx = (ch - FIRST_CHAR) as usize;

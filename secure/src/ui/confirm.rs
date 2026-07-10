@@ -99,7 +99,16 @@ pub fn confirm_checked(pages: &[Page]) -> (ConfirmResult, u32) {
             }
 
             let mut idle = || timeout::is_idle();
-            let event = match input().wait_button(&mut idle) {
+            // Tell the watchdog exactly when this live handler is waiting on
+            // trusted physical input. The guard is deliberately scoped to
+            // `wait_button`: display rendering and all work after the event
+            // retain the ordinary noninteractive busy-handler deadline. This
+            // marker does NOT reset the inactivity timer, so an unattended
+            // companion-triggered prompt still returns IdleWipe after 120 s.
+            let event = match {
+                let _trusted_ui_wait = timeout::TrustedUiWaitGuard::enter();
+                input().wait_button(&mut idle)
+            } {
                 Some(ev) => ev,
                 None => return (ConfirmResult::IdleWipe, crate::fi::FAIL_SENTINEL),
             };

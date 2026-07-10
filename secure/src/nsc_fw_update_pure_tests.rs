@@ -67,8 +67,7 @@ use sphincs_tz_shared::{
     NscStatus, CMD_FW_ABORT, CMD_FW_BEGIN, CMD_FW_CHUNK, CMD_FW_COMMIT, CMD_FW_STATUS,
     FW_CHUNK_HEADER_LEN, FW_IMAGE_KIND_NONSECURE, FW_IMAGE_KIND_SECURE, FW_MAX_CHUNK,
     FW_STATE_IDLE, FW_STATE_RECEIVING, FW_STATE_STAGED, FW_STATUS_RECV_NS_OFFSET,
-    FW_STATUS_RECV_S_OFFSET, FW_STATUS_RESPONSE_LEN, FW_STATUS_SLOT_OFFSET,
-    FW_STATUS_STATE_OFFSET,
+    FW_STATUS_RECV_S_OFFSET, FW_STATUS_RESPONSE_LEN, FW_STATUS_SLOT_OFFSET, FW_STATUS_STATE_OFFSET,
 };
 
 // ─────────────────────────────────────────────────────────────────────
@@ -631,8 +630,12 @@ fn negative_chunk_rejects_total_len_above_header_plus_max() {
     // A payload larger than HEADER + FW_MAX_CHUNK would overflow the
     // secure-stack `[u8; FW_MAX_CHUNK]` data buffer. Refused at
     // line 45 *before* any deref of the NS pointer.
-    assert!(!chunk_total_len_accepted(FW_CHUNK_HEADER_LEN + FW_MAX_CHUNK + 1));
-    assert!(!chunk_total_len_accepted(FW_CHUNK_HEADER_LEN + FW_MAX_CHUNK * 2));
+    assert!(!chunk_total_len_accepted(
+        FW_CHUNK_HEADER_LEN + FW_MAX_CHUNK + 1
+    ));
+    assert!(!chunk_total_len_accepted(
+        FW_CHUNK_HEADER_LEN + FW_MAX_CHUNK * 2
+    ));
 }
 
 #[test]
@@ -985,13 +988,13 @@ fn negative_begin_resets_activity_timer_after_seed() {
 
 #[test]
 fn positive_begin_runs_verify_manifest_before_confirm_install_before_erase() {
-    // Finding A moved the user confirm from COMMIT to BEGIN: BEGIN must
-    // pass the full `verify_manifest` chain BEFORE asking the user (so
-    // the user is only ever prompted on a vendor-authentic bundle), and
-    // the confirm must run BEFORE `erase_slot` (so a user-cancel costs
-    // zero flash work and leaves the inactive slot untouched). Pin the
-    // ordering — a refactor that reordered any of these would silently
-    // break the property.
+    // Each expensive/FI-sensitive manifest verification needs a one-shot
+    // trusted-UI authorization. The static request prompt runs before the
+    // verifier; the detailed release prompt runs only after authenticity is
+    // established; both precede the inactive-slot erase.
+    let request_pos = BEGIN_SRC
+        .find("fw_update::confirm_verify_request()")
+        .expect("BEGIN must require one trusted-UI authorization per verifier invocation");
     let verify_pos = BEGIN_SRC
         .find("fw_update::verify_manifest(&m, floor)")
         .expect("BEGIN must call verify_manifest");
@@ -1002,8 +1005,12 @@ fn positive_begin_runs_verify_manifest_before_confirm_install_before_erase() {
         .find("flash::erase_slot(inactive)")
         .expect("BEGIN must erase the inactive slot");
     assert!(
+        request_pos < verify_pos,
+        "the static physical update-mode authorization MUST precede verify_manifest"
+    );
+    assert!(
         verify_pos < confirm_pos,
-        "verify_manifest MUST precede confirm_install — the user is only ever asked to confirm an already-vendor-authenticated bundle"
+        "verify_manifest MUST precede the detailed release confirmation"
     );
     assert!(
         confirm_pos < erase_pos,
@@ -1013,30 +1020,86 @@ fn positive_begin_runs_verify_manifest_before_confirm_install_before_erase() {
 
 #[test]
 fn negative_begin_user_cancel_short_circuits_before_erase() {
-    // Finding A: when `confirm_install` returns false the handler must
-    // return `UserRejected` WITHOUT erasing the inactive slot. Pin the
-    // shape: the `if !fw_update::confirm_install(&m)` branch returns
-    // `NscStatus::UserRejected` AND that branch sits before any
-    // `flash::erase_slot` call in the source.
-    let cancel_block_start = BEGIN_SRC
-        .find("if !fw_update::confirm_install(&m) {")
-        .expect("BEGIN must have a cancel branch on confirm_install returning false");
-    let return_pos = BEGIN_SRC[cancel_block_start..]
-        .find("NscStatus::UserRejected")
-        .expect("Cancel branch must return UserRejected");
+    // Both physical gates preserve Cancelled versus IdleWipe. A cancellation
+    // returns without verification/erase; an idle timeout immediately wipes
+    // the unlocked session and returns the distinct IdleWipe status.
+    let request_start = BEGIN_SRC
+        .find("let (verify_confirm, verify_confirm_sentinel)")
+        .expect("missing verifier-authorization result");
+    let verify_pos = BEGIN_SRC
+        .find("fw_update::verify_manifest(&m, floor)")
+        .expect("missing verifier call");
+    let request_block = &BEGIN_SRC[request_start..verify_pos];
+    for landmark in [
+        "ConfirmResult::Cancelled => return NscStatus::UserRejected",
+        "ConfirmResult::IdleWipe",
+        "super::zeroize_sensitive_state()",
+        "return NscStatus::IdleWipe",
+        "verify_confirm_sentinel != crate::fi::OK_SENTINEL",
+    ] {
+        assert!(
+            request_block.contains(landmark),
+            "verifier authorization lost fail-closed landmark `{landmark}`"
+        );
+    }
+
+    let install_start = BEGIN_SRC
+        .find("let (install_confirm, install_confirm_sentinel)")
+        .expect("missing detailed install-confirm result");
     let erase_pos = BEGIN_SRC
         .find("flash::erase_slot(inactive)")
         .expect("BEGIN must erase the inactive slot somewhere");
     assert!(
-        cancel_block_start < erase_pos,
-        "Cancel handling MUST precede flash::erase_slot — the whole point of finding A"
+        install_start < erase_pos,
+        "detailed cancel/idle handling MUST precede flash::erase_slot"
     );
-    // Belt-and-braces: the return is part of the cancel branch, not a
-    // later fall-through.
+    let install_block = &BEGIN_SRC[install_start..erase_pos];
+    assert!(install_block.contains("ConfirmResult::Cancelled"));
+    assert!(install_block.contains("ConfirmResult::IdleWipe"));
+    assert!(install_block.contains("install_confirm_sentinel != crate::fi::OK_SENTINEL"));
+}
+
+#[test]
+fn negative_invalid_manifest_can_never_wipe_or_write_persistent_state() {
+    // Malformed companion bytes are not a tamper signal. No amount of invalid
+    // FW_BEGIN traffic may arm the administrative wipe, reset the wallet, or
+    // write/erase a persistent failure counter.
+    for forbidden in [
+        "arm_wipe_flag",
+        "arm_wipe_and_reset",
+        "sys_reset",
+        "fw_fail_",
+        "FW_VERIFY_FAIL",
+        "factory_reset_admin",
+    ] {
+        assert!(
+            !BEGIN_SRC.contains(forbidden),
+            "CMD_FW_BEGIN must not contain destructive failure path `{forbidden}`"
+        );
+    }
     assert!(
-        return_pos < (erase_pos - cancel_block_start),
-        "UserRejected return must be inside the cancel branch, not later in the function"
+        !COMMIT_SRC.contains("reset_verify_failure_tally") && !COMMIT_SRC.contains("fw_fail_reset"),
+        "COMMIT must not erase a manifest-failure counter page"
     );
+}
+
+#[test]
+fn positive_verifier_authorization_is_static_and_jittered() {
+    let prompt_pos = BEGIN_SRC.find("confirm_verify_request()").unwrap();
+    let jitter_pos = BEGIN_SRC.find("crate::fi::wait_random()").unwrap();
+    let verify_pos = BEGIN_SRC.find("verify_manifest(&m, floor)").unwrap();
+    assert!(prompt_pos < jitter_pos && jitter_pos < verify_pos);
+    for text in [
+        "FW UPDATE MODE",
+        "Verify vendor-",
+        "signed package?",
+        "Hold R = enter",
+    ] {
+        assert!(
+            FW_UPDATE_MOD_SRC.contains(text),
+            "static pre-verification prompt lost `{text}`"
+        );
+    }
 }
 
 #[test]
@@ -1084,7 +1147,8 @@ fn negative_commit_bumps_otp_last_after_manifest_and_boot_state() {
         "COMMIT must set the OTP floor to fw_version - 1 (anti-brick + anti-downgrade)"
     );
     assert!(
-        body.contains("otp::bump_to(new_rollback_floor)") && !body.contains("otp::bump_to(new_version)"),
+        body.contains("otp::bump_to(new_rollback_floor)")
+            && !body.contains("otp::bump_to(new_version)"),
         "COMMIT must bump to new_rollback_floor (fw_version - 1), never to fw_version itself"
     );
 }
@@ -1410,9 +1474,7 @@ fn negative_all_fw_modules_are_stm32u585_gated_in_nsc_mod() {
         // Each declaration line is preceded (with one cfg attribute)
         // by `#[cfg(feature = "stm32u585")]`. Search for the
         // attribute followed (across a newline) by the mod decl.
-        let pattern_a = format!(
-            "#[cfg(feature = \"stm32u585\")]\n{m}"
-        );
+        let pattern_a = format!("#[cfg(feature = \"stm32u585\")]\n{m}");
         assert!(
             NSC_MOD_SRC.contains(&pattern_a),
             "nsc/mod.rs must gate `{m}` with #[cfg(feature = \"stm32u585\")] \
@@ -1432,9 +1494,7 @@ fn negative_all_fw_veneers_are_stm32u585_gated_in_nsc_mod() {
     ];
     for v in veneers {
         assert!(
-            NSC_MOD_SRC.contains(&format!(
-                "#[cfg(feature = \"stm32u585\")]"
-            )),
+            NSC_MOD_SRC.contains(&format!("#[cfg(feature = \"stm32u585\")]")),
             "nsc/mod.rs must contain at least one stm32u585 cfg attribute"
         );
         assert!(

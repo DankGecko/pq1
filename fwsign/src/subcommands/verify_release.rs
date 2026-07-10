@@ -12,8 +12,8 @@
 //! # 2. Verify the vendor's signature against YOUR build.
 //! fwsign verify-release \
 //!     --version 42 \
-//!     --secure target/release/secure.elf \
-//!     --nonsecure target/release/nonsecure.elf \
+//!     --secure target/pqsigner-release/secure.elf \
+//!     --nonsecure target/pqsigner-release/nonsecure.elf \
 //!     --signature release-v42.sig \
 //!     --pubkey vendor-pubkey.bin
 //! ```

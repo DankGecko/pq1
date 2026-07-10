@@ -14,7 +14,7 @@
 //! The IWDG is **owned + kicked by the secure world** — `init` runs in
 //! secure boot, and the secure SysTick handler (1 ms cadence) calls
 //! [`systick_watch_and_kick`] every tick. It keeps the watchdog fed
-//! while EITHER of two progress signals holds:
+//! while any of three progress signals holds:
 //!
 //!   1. **NS heartbeat advanced** — NS bumps a counter (a `static mut`
 //!      in NS SRAM, registered with us once at boot via
@@ -26,18 +26,25 @@
 //!      ~2 s FW-slot erase) during which NS is blocked in the veneer
 //!      and therefore NOT bumping its heartbeat. Without this signal
 //!      a long legit sign would look like a hang.
+//!   3. **Trusted UI is waiting for a physical button** — the narrow
+//!      `timeout::TrustedUiWaitGuard` is live and the 120 s inactivity
+//!      timer has not expired. This prevents the 30 s compute deadline
+//!      from resetting the device in the middle of a legitimate confirm
+//!      dialog. The timeout condition is load-bearing: a wedged input
+//!      backend stops receiving this exception once idle, then falls back
+//!      to the ordinary bounded watchdog path.
 //!
-//! Only when BOTH signals are absent for `NS_STALL_LIMIT_TICKS`
+//! Only when all progress signals are absent for `NS_STALL_LIMIT_TICKS`
 //! consecutive ticks does SysTick stop kicking, after which the IWDG
 //! hardware timeout (~2 s) resets the chip. Total NS-loop-hang
 //! detection ≈ `NS_STALL_LIMIT_TICKS` (4 s) + IWDG (~2 s) ≈ 6 s.
 //!
 //! A secure-world deadlock with interrupts disabled stops SysTick
 //! entirely → no kicks → IWDG fires directly (~2 s), independent of
-//! the heartbeat logic. The one case NOT covered is a secure handler
-//! that spins forever with interrupts enabled AND its `HandlerGuard`
-//! held — that keeps `handler_is_busy()` true and feeds the watchdog;
-//! catching it needs a separate max-handler-duration check (follow-up).
+//! the heartbeat logic. A secure handler that spins with interrupts enabled
+//! is capped by `MAX_BUSY_TICKS`. Trusted UI temporarily suspends that compute
+//! deadline only while it is actually waiting for secure physical input and
+//! the independent inactivity timer remains live.
 //!
 //! # Register access alias
 //!
@@ -204,10 +211,12 @@ pub fn register_ns_heartbeat(addr: u32) -> bool {
 /// Called from the secure SysTick handler every ~1 ms. Feeds the IWDG
 /// while the system is making progress; stops feeding after
 /// `NS_STALL_LIMIT_TICKS` ticks of no progress so the watchdog resets a
-/// hung device. `handler_busy` is `nsc::handler_is_busy()` — pass it in
-/// rather than calling across modules from inside the ISR.
+/// hung device. The secure-state booleans are passed in rather than reaching
+/// across modules from inside the ISR. `trusted_ui_waiting` is accepted as
+/// progress only while `idle_timed_out == false`; it therefore cannot turn a
+/// leaked UI guard into an unbounded watchdog feed.
 #[cfg(feature = "iwdg")]
-pub fn systick_watch_and_kick(handler_busy: bool) {
+pub fn systick_watch_and_kick(handler_busy: bool, trusted_ui_waiting: bool, idle_timed_out: bool) {
     // SAFETY: SysTick is the sole runtime writer of these statics and
     // does not re-enter itself; the boot registration of
     // `NS_HEARTBEAT_ADDR` has completed by the time NS is running.
@@ -227,6 +236,17 @@ pub fn systick_watch_and_kick(handler_busy: bool) {
         if hb != last {
             // Genuine NS forward progress (NS looped) — reset both timers.
             core::ptr::write_volatile(core::ptr::addr_of_mut!(LAST_HEARTBEAT), hb);
+            core::ptr::write_volatile(core::ptr::addr_of_mut!(STALL_TICKS), 0);
+            core::ptr::write_volatile(core::ptr::addr_of_mut!(BUSY_TICKS), 0);
+            kick();
+        } else if trusted_ui_waiting && !idle_timed_out {
+            // A secure confirmation dialog is making intentional progress by
+            // waiting for a human. Reset both machine-stall counters so the
+            // 30 s compute deadline cannot false-fire during the documented
+            // 120 s UI window. Only real secure UI code can hold the guard,
+            // and it does not reset LAST_ACTIVITY; once the inactivity timer
+            // expires this branch becomes unreachable and a wedged input
+            // backend is reset by the normal handler/NS bound below.
             core::ptr::write_volatile(core::ptr::addr_of_mut!(STALL_TICKS), 0);
             core::ptr::write_volatile(core::ptr::addr_of_mut!(BUSY_TICKS), 0);
             kick();
@@ -289,4 +309,9 @@ pub fn register_ns_heartbeat(_addr: u32) -> bool {
     false
 }
 #[cfg(not(feature = "iwdg"))]
-pub fn systick_watch_and_kick(_handler_busy: bool) {}
+pub fn systick_watch_and_kick(
+    _handler_busy: bool,
+    _trusted_ui_waiting: bool,
+    _idle_timed_out: bool,
+) {
+}

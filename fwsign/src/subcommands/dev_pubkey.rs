@@ -1,8 +1,9 @@
 //! `fwsign dev-pubkey` — emit the built-in DEV vendor public key (32 bytes,
 //! `pk_seed[16] || pk_root[16]`) derived from the fixed dev seed.
 //!
-//! Output is byte-identical to what `fsbl/build.rs` embeds when
-//! `FSBL_VENDOR_PUBKEY` is unset — the "dev fixture" key used by every dev /
+//! Output is checked byte-for-byte against the single public key committed in
+//! `config/development-firmware-vendor-pubkey.hex`, which is what
+//! `fsbl/build.rs` embeds when `FSBL_VENDOR_PUBKEY` is unset — the fixture used by every dev /
 //! e2e build of the FSBL. The `make dev-pubkey-fixture` target points
 //! `FSBL_VENDOR_PUBKEY` at this file so the *secure* world (which has no
 //! `sphincs-c10` build-dep and so can't compute the dev key in `build.rs`)
@@ -12,16 +13,13 @@
 //! Never use this key for a production release. There is no passphrase, no
 //! keystore — anyone with the source tree has the corresponding signing key.
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use std::path::Path;
 
 use sphincs_c10::SigningKey;
 
-/// Dev signing seed — MUST stay byte-identical to:
-///   * `fsbl/build.rs` (the FSBL dev-fallback path)
-///   * `fwsign/tests/sign_verify_roundtrip.rs`
-///   * `secure/src/fw_rollback_e2e.rs`
-/// Drift between any of these breaks the dev signature chain.
+/// Public fixed-seed test signer. `run` and its unit test prove its derived
+/// public key matches the single committed development-key source of truth.
 const DEV_SK: [u8; 32] = [
     0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00,
     0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
@@ -30,12 +28,36 @@ const DEV_PS: [u8; 16] = [
     0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xab, 0xac, 0xad, 0xae, 0xaf,
 ];
 
+pub(crate) fn signing_key() -> SigningKey {
+    SigningKey::keygen(DEV_SK, DEV_PS)
+}
+
+fn committed_public_key() -> Result<[u8; 32]> {
+    let text = include_str!("../../../config/development-firmware-vendor-pubkey.hex").trim();
+    if text.len() != 64
+        || !text
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    {
+        bail!("committed development firmware public key is malformed");
+    }
+    let decoded = hex::decode(text).context("decoding committed development public key")?;
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&decoded);
+    Ok(out)
+}
+
 pub fn run(out_path: &Path) -> Result<()> {
-    let sk = SigningKey::keygen(DEV_SK, DEV_PS);
+    let sk = signing_key();
 
     let mut out = [0u8; fw_manifest::VERIFYING_KEY_LEN];
     out[..sphincs_c10::params::N].copy_from_slice(sk.pk_seed());
     out[sphincs_c10::params::N..].copy_from_slice(sk.pk_root());
+    if out != committed_public_key()? {
+        bail!(
+            "development signing seed does not match config/development-firmware-vendor-pubkey.hex"
+        );
+    }
 
     std::fs::write(out_path, out)
         .with_context(|| format!("writing {}", out_path.display()))?;
@@ -48,4 +70,18 @@ pub fn run(out_path: &Path) -> Result<()> {
     eprintln!("    Pass this to dev FSBL / secure / fw-rollback-hw builds:");
     eprintln!("      FSBL_VENDOR_PUBKEY={} cargo build ...", out_path.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn development_seed_matches_single_committed_public_key() {
+        let sk = signing_key();
+        let mut actual = [0u8; 32];
+        actual[..sphincs_c10::params::N].copy_from_slice(sk.pk_seed());
+        actual[sphincs_c10::params::N..].copy_from_slice(sk.pk_root());
+        assert_eq!(actual, committed_public_key().unwrap());
+    }
 }

@@ -3737,12 +3737,17 @@ fn main() -> ! {
 #[cortex_m_rt::exception]
 fn SysTick() {
     // USB-path hang watchdog. Feeds the IWDG while the NS heartbeat is
-    // advancing OR a gateway handler is busy; stops feeding after a
-    // sustained stall so the IWDG resets a hung device. No-op without
-    // the `iwdg` feature. Kept first in the handler so the watchdog
-    // bookkeeping runs even if a later line in this ISR is what hangs.
+    // advancing, a gateway handler is within its bounded compute window, or
+    // trusted UI is physically waiting before the independent idle timeout.
+    // Stops feeding after a sustained stall so the IWDG resets a hung device.
+    // No-op without `iwdg`. Kept first so its bookkeeping still runs if a
+    // later line in this ISR is what hangs.
     #[cfg(feature = "stm32u585")]
-    hw::iwdg::systick_watch_and_kick(nsc::handler_is_busy());
+    hw::iwdg::systick_watch_and_kick(
+        nsc::handler_is_busy(),
+        timeout::trusted_ui_is_waiting(),
+        timeout::is_idle(),
+    );
 
     timeout::tick();
 

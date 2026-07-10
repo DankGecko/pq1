@@ -16,10 +16,9 @@
 //!   * `secure/src/fw_update/verify.rs`        — COMMIT-time defence in
 //!     depth: re-read the inactive slot from flash and compare against
 //!     both (a) the running hash and (b) the manifest-signed hashes.
-//!   * `secure/src/fw_update/vendor_pubkey.rs` — `include!`s the
-//!     `VENDOR_PK_SEED` / `VENDOR_PK_ROOT` constants emitted by
-//!     `secure/build.rs` so both this slice and the FSBL share an
-//!     identical vendor-pubkey image.
+//!   * `secure/src/fw_update/vendor_pubkey.rs` — `include!`s the sole
+//!     allocated runtime vendor pubkey emitted by `secure/build.rs` so
+//!     both this slice and the FSBL share an identical key image.
 //!   * `secure/src/measured_boot.rs`           — boot-time SHA-256 of the
 //!     secure firmware flash region, displayed to the user as
 //!     8 BIP-39 fingerprint words ("OS Fingerprint").
@@ -160,7 +159,9 @@ fn positive_session_counter_is_monotonic_atomic() {
         "session counter must start at 0"
     );
     assert!(
-        FW_MOD_SRC.contains("SESSION_COUNTER.fetch_add(1, Ordering::Relaxed).wrapping_add(1)"),
+        FW_MOD_SRC.contains("SESSION_COUNTER")
+            && FW_MOD_SRC.contains(".fetch_add(1, Ordering::Relaxed)")
+            && FW_MOD_SRC.contains(".wrapping_add(1)"),
         "bump_session must atomically fetch_add(1) and return prev+1"
     );
 }
@@ -189,7 +190,9 @@ struct MirrorIncSha256 {
 
 impl MirrorIncSha256 {
     fn new() -> Self {
-        Self { inner: Sha256::new() }
+        Self {
+            inner: Sha256::new(),
+        }
     }
     fn update(&mut self, data: &[u8]) {
         self.inner.update(data);
@@ -367,12 +370,15 @@ fn negative_verify_manifest_runs_full_chain_in_documented_order() {
         "F15: verify_digest must be sentinel-hardened (not a bare `?` reject)"
     );
     assert!(
-        FW_MOD_SRC.contains("check_true_into_sentinel(|| m.verify_rollback(rollback_floor).is_ok())"),
+        FW_MOD_SRC
+            .contains("check_true_into_sentinel(|| m.verify_rollback(rollback_floor).is_ok())"),
         "F15: verify_rollback must be sentinel-hardened (not a bare `?` reject)"
     );
     // `verify_rollback` after `verify_signature` (OTP-floor oracle defence).
     assert!(
-        FW_MOD_SRC.find("let sig_verdict = crate::fi::check_true_into_sentinel(").unwrap()
+        FW_MOD_SRC
+            .find("let sig_verdict = crate::fi::check_true_into_sentinel(")
+            .unwrap()
             < FW_MOD_SRC.find("let rollback_verdict =").unwrap(),
         "verify_rollback must run after verify_signature"
     );
@@ -380,29 +386,21 @@ fn negative_verify_manifest_runs_full_chain_in_documented_order() {
 
 #[test]
 fn negative_verify_manifest_uses_baked_in_vendor_pubkey() {
-    // Both verify_vendor_fpr and verify_signature must pull pk_seed /
-    // pk_root from the build-time-baked constants — never from caller
-    // input. An attacker who could supply the pubkey would forge
-    // a manifest trivially.
-    // Both names must appear; finding C's timing-normalization refactor
-    // split the args across multiple lines, so we check the names
-    // independently rather than as one literal substring.
+    // Both verify_vendor_fpr and verify_signature must pull pk_seed/pk_root
+    // from the sole allocated runtime key — never from caller input or a
+    // parallel decorative fingerprint constant. An attacker who could supply
+    // the pubkey would forge a manifest trivially.
     assert!(
-        FW_MOD_SRC.contains("vendor_pubkey::VENDOR_PK_SEED")
-            && FW_MOD_SRC.contains("vendor_pubkey::VENDOR_PK_ROOT"),
+        FW_MOD_SRC.contains("vendor_pubkey::key_parts()")
+            && VENDOR_SRC.contains("PQSIGNER_SECURE_VENDOR_PUBKEY")
+            && VENDOR_SRC.contains("core::hint::black_box"),
         "verify_manifest must pin the vendor pubkey from the build-time include — \
          no caller-supplied pubkey path may exist"
     );
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// A5. Negative: `confirm_commit` fail-closed semantics.
-//
-// The OLED confirm UI for FW updates was ported mid-refactor; the
-// current stub returns `false` (= user cancel) so an accidentally-
-// deployed half-ported UI cannot slip a malicious commit through.
-// The only exception is the `e2e-test` build, which returns `true`
-// unconditionally so the automated suite can exercise the COMMIT path.
+// A5. Firmware-update trusted UI gates.
 // ─────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -412,7 +410,7 @@ fn positive_confirm_install_calls_trusted_ui_outside_e2e_test() {
     // the fw fingerprint from the SIGNED `manifest.secure_hash()` (the
     // chunks haven't been streamed yet at BEGIN). Otherwise §31b wiring
     // is identical: non-e2e-test builds must route through
-    // `ui::confirm::confirm(&pages)` with the four trust-anchor pages.
+    // `confirm_checked(&pages)` with the four trust-anchor pages.
     let body = FW_MOD_SRC
         .find("pub fn confirm_install(")
         .expect("confirm_install must exist as a pub fn (finding A renamed from confirm_commit)");
@@ -425,11 +423,13 @@ fn positive_confirm_install_calls_trusted_ui_outside_e2e_test() {
         .find("#[cfg(not(feature = \"e2e-test\"))]")
         .expect("confirm_install must gate its non-e2e branch on cfg(not(feature = \"e2e-test\"))");
 
-    // The e2e short-circuit returns `true` for test automation.
+    // The e2e short-circuit returns an affirmative result + FI sentinel.
     let e2e_block = &body[e2e_pos..non_e2e_pos.max(e2e_pos + 1)];
     assert!(
-        e2e_block.contains("return true;"),
-        "confirm_install under e2e-test must short-circuit to true so the e2e suite \
+        e2e_block.contains("ConfirmResult::Confirmed")
+            && e2e_block.contains("crate::fi::OK_SENTINEL"),
+        "confirm_install under e2e-test must short-circuit to an FI-authenticated \
+         confirmation so the e2e suite \
          can exercise the install path"
     );
 
@@ -441,11 +441,8 @@ fn positive_confirm_install_calls_trusted_ui_outside_e2e_test() {
         "build_version_page(",
         "build_fingerprint_page(",
         "build_confirm_prompt_page(",
-        "ui::confirm::{confirm_checked, ConfirmResult, Page}",
-        // FI-hardened accept (UI1 / work-todo #12c): require BOTH the Confirmed
-        // verdict AND the affirmative sentinel — dropping the sentinel conjunct
-        // would silently un-harden the FW-update confirm.
-        "matches!(cr, ConfirmResult::Confirmed) && cr_verdict == crate::fi::OK_SENTINEL",
+        "ui::confirm::{confirm_checked, Page}",
+        "confirm_checked(&pages)",
     ] {
         assert!(
             non_e2e_block.contains(landmark),
@@ -467,6 +464,23 @@ fn positive_confirm_install_calls_trusted_ui_outside_e2e_test() {
         non_e2e_block.contains("hash_to_word_indices(manifest.secure_hash())"),
         "confirm_install must derive fw_words from the signed manifest.secure_hash() — finding A"
     );
+}
+
+#[test]
+fn positive_manifest_verifier_has_a_static_one_shot_prompt() {
+    let body = FW_MOD_SRC
+        .find("pub fn confirm_verify_request()")
+        .expect("firmware verifier must expose a one-shot trusted-UI authorization");
+    let body = &FW_MOD_SRC[body..];
+    for landmark in [
+        "FW UPDATE MODE",
+        "Verify vendor-",
+        "signed package?",
+        "Hold R = enter",
+        "confirm_checked(core::slice::from_ref(&page))",
+    ] {
+        assert!(body.contains(landmark), "verifier prompt lost `{landmark}`");
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1082,7 +1096,10 @@ fn negative_hash_to_word_indices_returns_eight_in_range_indices() {
     let idx = hash_to_word_indices(&hash);
     assert_eq!(idx.len(), 8, "exactly 8 fingerprint words");
     for i in idx.iter() {
-        assert!((*i as usize) < WORDLIST.len(), "word index out of wordlist range");
+        assert!(
+            (*i as usize) < WORDLIST.len(),
+            "word index out of wordlist range"
+        );
     }
 }
 
@@ -1115,15 +1132,15 @@ fn positive_measurement_words_use_first_88_bits_of_hash() {
 
 #[test]
 fn positive_vendor_pubkey_is_build_script_include() {
-    // The whole file is `include!(concat!(env!("OUT_DIR"), "...")).
-    // Keeping the body to that single line ensures the pubkey bytes
-    // never get checked into git (they come from build.rs reading
-    // FSBL_VENDOR_PUBKEY at compile time).
+    // Key bytes still come exclusively from build.rs. The module exports the
+    // sole runtime raw key in an allocated section for final-artifact comparison.
     assert!(
         VENDOR_SRC.contains("include!(concat!(env!(\"OUT_DIR\"), \"/vendor_pubkey_bytes.rs\"));"),
-        "vendor_pubkey.rs must remain a single include! line — pubkey bytes must come from \
-         build.rs, never from a checked-in literal"
+        "vendor pubkey bytes must come from build.rs, never a checked-in literal"
     );
+    assert!(VENDOR_SRC.contains(".pqsigner.vendor_pubkey"));
+    assert!(VENDOR_SRC.contains("PQSIGNER_SECURE_VENDOR_PUBKEY"));
+    assert!(VENDOR_SRC.contains("pub fn key_parts()"));
 }
 
 #[test]
@@ -1661,7 +1678,10 @@ fn negative_manifest_bad_magic_rejected_by_structural_check() {
     // what the slice's BEGIN handler maps to FwUpdateBadManifest.
     bytes[fw_manifest::OFF_MAGIC] ^= 0xFF;
     let m = fw_manifest::ManifestRef::new(&bytes);
-    assert_eq!(m.verify_structural(), Err(fw_manifest::VerifyError::BadMagic));
+    assert_eq!(
+        m.verify_structural(),
+        Err(fw_manifest::VerifyError::BadMagic)
+    );
 }
 
 #[test]
@@ -1775,9 +1795,7 @@ fn negative_no_production_caller_of_leaky_word_word_bytes_api() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let src_path = format!("{}/src", manifest_dir);
     let out = Command::new("grep")
-        .args(["-rnE", r"\.word\(|\.words\(\)",
-               "--include=*.rs",
-               &src_path])
+        .args(["-rnE", r"\.word\(|\.words\(\)", "--include=*.rs", &src_path])
         .output()
         .expect("running grep");
     let text = String::from_utf8_lossy(&out.stdout);
@@ -1794,9 +1812,7 @@ fn negative_no_production_caller_of_leaky_word_word_bytes_api() {
         // two `:`-fields to get the source line body.
         if let Some(post_colon) = line.splitn(3, ':').nth(2) {
             let trimmed = post_colon.trim_start();
-            if trimmed.starts_with("//") || trimmed.starts_with("/*")
-                || trimmed.starts_with("*")
-            {
+            if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with("*") {
                 continue;
             }
         }

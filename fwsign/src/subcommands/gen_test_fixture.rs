@@ -20,22 +20,9 @@
 
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
-use sphincs_c10::SigningKey;
 use std::path::Path;
 
 use fw_manifest::{ManifestBuilder, SLOT_A, TRY_ONCE_COMMITTED};
-
-/// Dev signing seed — MUST stay byte-identical to the other copies
-/// (`fsbl/build.rs`, `fwsign/src/subcommands/dev_pubkey.rs`,
-/// `fwsign/tests/sign_verify_roundtrip.rs`,
-/// `secure/src/fw_rollback_e2e.rs`).
-const DEV_SK: [u8; 32] = [
-    0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00,
-    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
-];
-const DEV_PS: [u8; 16] = [
-    0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xab, 0xac, 0xad, 0xae, 0xaf,
-];
 
 pub fn run(version: u32, secure_len: u32, nonsecure_len: u32, out_dir: &Path) -> Result<()> {
     if secure_len & 0xF != 0 || nonsecure_len & 0xF != 0 {
@@ -58,7 +45,7 @@ pub fn run(version: u32, secure_len: u32, nonsecure_len: u32, out_dir: &Path) ->
     // value the device's `verify_vendor_fpr` will recompute from the
     // build-baked VENDOR_PK_{SEED,ROOT} and compare; if our seeds match
     // (which they do, by construction), the fingerprint matches.
-    let sk = SigningKey::keygen(DEV_SK, DEV_PS);
+    let sk = super::dev_pubkey::signing_key();
     let vendor_fpr = fw_manifest::vendor_pubkey_fingerprint(sk.pk_seed(), sk.pk_root());
 
     // Build manifest. The fields we care about for verify_images are

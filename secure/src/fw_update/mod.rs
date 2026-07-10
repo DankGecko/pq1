@@ -37,13 +37,41 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 use crate::hw::flash::{self, Slot};
 use sphincs_tz_shared::{FW_IMAGE_KIND_NONSECURE, FW_IMAGE_KIND_SECURE};
 
+use crate::ui::confirm::ConfirmResult;
+
 pub mod staging;
 pub mod vendor_pubkey;
 pub mod verify;
 
-/// Render the new-firmware measurement on the OLED and wait for the
-/// user's long-right confirm (or long-left cancel). Returns true on
-/// confirm, false otherwise.
+/// Require one trusted physical authorization to enter the manifest verifier.
+///
+/// This prompt intentionally contains no manifest-derived fields: those bytes
+/// are still unverified. Every call consumes exactly one confirmation and the
+/// caller runs the verifier at most once after it returns `Confirmed` with the
+/// affirmative FI sentinel. A malformed manifest therefore cannot be used by
+/// the untrusted companion as a silent fault-injection oracle.
+pub fn confirm_verify_request() -> (ConfirmResult, u32) {
+    use crate::ui::confirm::{confirm_checked, Page};
+    use crate::ui::{DISPLAY_COLS, DISPLAY_ROWS};
+
+    let mut page: Page = [[b' '; DISPLAY_COLS]; DISPLAY_ROWS];
+    for (row, text) in [
+        b"FW UPDATE MODE" as &[u8],
+        b"Verify vendor-",
+        b"signed package?",
+        b"Hold R = enter",
+    ]
+    .iter()
+    .enumerate()
+    {
+        page[row][..text.len()].copy_from_slice(text);
+    }
+
+    confirm_checked(core::slice::from_ref(&page))
+}
+
+/// Render the new-firmware measurement on the LCD and wait for the
+/// user's long-right confirm (or long-left cancel).
 ///
 /// The confirm dialog has four pages (navigated by short L/R taps):
 ///   1. Version: "to vA.B.C.D" + UPGRADE / SAME VERSION / DOWNGRADE
@@ -67,9 +95,9 @@ pub mod verify;
 /// and length bounds, and BEFORE any destructive flash op (erase / OTP /
 /// boot-state). Renders four OLED pages — version+floor, firmware
 /// fingerprint, vendor-key fingerprint, confirm prompt — and waits for
-/// the user's physical button press. A user-cancel (or the
-/// inactivity-timeout's `IdleWipe`) returns `false`, the BEGIN handler
-/// then aborts without erasing.
+/// the user's physical button press. The full [`ConfirmResult`] and FI
+/// sentinel are returned so the BEGIN handler can distinguish cancellation
+/// from an inactivity wipe and zeroize the unlocked session immediately.
 ///
 /// The firmware fingerprint shown here is derived from the **signed**
 /// `secure_hash` field of the manifest — the same value `verify_images`
@@ -82,15 +110,15 @@ pub mod verify;
 /// `docs/security/usb-fw-update-hardening.md` — moves the confirm forward from
 /// COMMIT to BEGIN so a user-cancel costs zero flash work + zero
 /// inactive-slot churn (matches Trezor's wf_firmware_update.c pattern).
-pub fn confirm_install(manifest: &ManifestRef) -> bool {
+pub fn confirm_install(manifest: &ManifestRef) -> (ConfirmResult, u32) {
     #[cfg(feature = "e2e-test")]
     {
         let _ = manifest;
-        return true;
+        return (ConfirmResult::Confirmed, crate::fi::OK_SENTINEL);
     }
     #[cfg(not(feature = "e2e-test"))]
     {
-        use crate::ui::confirm::{confirm_checked, ConfirmResult, Page};
+        use crate::ui::confirm::{confirm_checked, Page};
         use sphincs_tz_bip39::hash_to_word_indices;
 
         let new_version = manifest.fw_version();
@@ -103,10 +131,12 @@ pub fn confirm_install(manifest: &ManifestRef) -> bool {
         // ever reaching another user prompt.
         let fw_words = hash_to_word_indices(manifest.secure_hash());
 
-        // The signing key fingerprint is the SHA-256 of the vendor
-        // pubkey (`pk_seed || pk_root`), precomputed at build time so
-        // the runtime cost is just a memcpy of the 32 bytes.
-        let key_fpr: [u8; 32] = vendor_pubkey::VENDOR_PK_FPR;
+        // Derive the signing-key fingerprint from the exact allocated public
+        // key consumed by the runtime verifier. The final-artifact release gate
+        // hashes this same ELF section, so the display, verifier, and policy
+        // cannot drift through parallel generated constants.
+        let (vendor_pk_seed, vendor_pk_root) = vendor_pubkey::key_parts();
+        let key_fpr = fw_manifest::vendor_pubkey_fingerprint(vendor_pk_seed, vendor_pk_root);
         let key_words = hash_to_word_indices(&key_fpr);
 
         let pages: [Page; 4] = [
@@ -116,12 +146,7 @@ pub fn confirm_install(manifest: &ManifestRef) -> bool {
             build_confirm_prompt_page(),
         ];
 
-        let (cr, cr_verdict) = confirm_checked(&pages);
-        // FI belt (UI1 / work-todo #12c): require BOTH the Confirmed verdict AND
-        // the affirmative sentinel born at confirm's accept branch — a skipped or
-        // forged accept fails closed to `false`, so COMMIT aborts and the image
-        // is not installed.
-        matches!(cr, ConfirmResult::Confirmed) && cr_verdict == crate::fi::OK_SENTINEL
+        confirm_checked(&pages)
     }
 }
 
@@ -189,10 +214,7 @@ fn build_version_page(new_version: u32, floor: u32) -> crate::ui::confirm::Page 
 /// BIP-39 English wordlist has unique 4-letter prefixes by spec, so
 /// 5-char truncation always disambiguates.
 #[cfg(not(feature = "e2e-test"))]
-fn build_fingerprint_page(
-    words: &[u16; 8],
-    discriminator: u8,
-) -> crate::ui::confirm::Page {
+fn build_fingerprint_page(words: &[u16; 8], discriminator: u8) -> crate::ui::confirm::Page {
     use crate::ui::{DISPLAY_COLS, DISPLAY_ROWS};
     use sphincs_tz_bip39::word_bytes_at;
     let mut p: crate::ui::confirm::Page = [[b' '; DISPLAY_COLS]; DISPLAY_ROWS];
@@ -360,7 +382,9 @@ impl IncrementalSha256 {
 static SESSION_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 pub fn bump_session() -> u32 {
-    SESSION_COUNTER.fetch_add(1, Ordering::Relaxed).wrapping_add(1)
+    SESSION_COUNTER
+        .fetch_add(1, Ordering::Relaxed)
+        .wrapping_add(1)
 }
 
 // ---------------------------------------------------------------------------
@@ -420,10 +444,7 @@ pub fn running_slot() -> Slot {
 /// returning the VerifyError at the first failing step. Used at both
 /// BEGIN (as an early reject) and COMMIT (as a defence-in-depth
 /// re-check after the images have been written).
-pub fn verify_manifest(
-    m: &ManifestRef,
-    rollback_floor: u32,
-) -> Result<(), VerifyError> {
+pub fn verify_manifest(m: &ManifestRef, rollback_floor: u32) -> Result<(), VerifyError> {
     // C-1 fix: the secure firmware now embeds the vendor SPHINCS+C10
     // public key (mirrored from `fsbl/build.rs`). We verify the
     // manifest's signature here, BEFORE the destructive ops in COMMIT
@@ -455,8 +476,9 @@ pub fn verify_manifest(
     // tripped on. Running every step on every input collapses the timing
     // to a single bucket (≈ structural + crc + digest + fpr + sig + rollback,
     // dominated by sig). The total work runs even on a 4-byte structural
-    // miss; that's the point. Cost is bounded by the wipe-on-repeated-
-    // failure trigger (see B in cmd_fw_begin), so a flood is capped.
+    // miss; that's the point. Each invocation is bounded by the one-shot
+    // trusted-UI authorization in CMD_FW_BEGIN, so an untrusted companion
+    // cannot silently turn this path into a high-rate verifier/FI oracle.
     //
     // F-7 hardening (FW-update bypass under single fault): verify_signature
     // is called through `fi::check_true_into_sentinel`, which double-
@@ -469,16 +491,10 @@ pub fn verify_manifest(
     // evidence this defends against.
     let s_err = m.verify_structural();
     let c_err = m.verify_crc();
-    let f_err = m.verify_vendor_fpr(
-        &vendor_pubkey::VENDOR_PK_SEED,
-        &vendor_pubkey::VENDOR_PK_ROOT,
-    );
+    let (vendor_pk_seed, vendor_pk_root) = vendor_pubkey::key_parts();
+    let f_err = m.verify_vendor_fpr(vendor_pk_seed, vendor_pk_root);
     let sig_verdict = crate::fi::check_true_into_sentinel(|| {
-        m.verify_signature(
-            &vendor_pubkey::VENDOR_PK_SEED,
-            &vendor_pubkey::VENDOR_PK_ROOT,
-        )
-        .is_ok()
+        m.verify_signature(vendor_pk_seed, vendor_pk_root).is_ok()
     });
     // F15 hardening: give the digest-binding and anti-rollback verdicts the
     // SAME double-evaluation sentinel discipline as `verify_signature` above.

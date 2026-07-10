@@ -879,6 +879,40 @@ fn negative_offchain_mock_sync_inflation_cannot_brick_slot() {
 }
 
 #[test]
+fn negative_sync_high_floor_with_prior_userop_refuses_before_promotion() {
+    use crate::aa::offchain_gate::{userop_cap_ok_with_floor, SlotLedger};
+
+    // Regression for the sync→Type-2 ordering bug: a high synced floor plus
+    // one already-produced Type-2 signature is exhausted even when the local
+    // off-chain record has not yet been promoted. The shipped handler now uses
+    // this effective-floor policy before it mutates flash or signs.
+    let key = slot_key_compute(202, 0xA5A5_5A5A_0000_0001, 204);
+    unsafe {
+        super::offchain_state::userop_sigs_bump(&key, 1).expect("seed Type-2 tally");
+        last_userop_count_set(&key, MAX_SLOT_USES - 1).expect("sync high floor");
+    }
+
+    let local = unsafe { offchain_count_read(&key) };
+    let floor = unsafe { last_userop_count_read(&key) };
+    let userops = unsafe { super::offchain_state::userop_sigs_read(&key) };
+    assert_eq!((local, floor, userops), (0, MAX_SLOT_USES - 1, 1));
+    assert!(
+        !userop_cap_ok_with_floor(local, floor, userops),
+        "Type-2 must refuse against max(local,floor), not stale local",
+    );
+
+    let mut model = SlotLedger {
+        offchain: local,
+        last_userop: floor,
+        userop_sigs: userops,
+        registered: true,
+    };
+    assert!(!model.apply_sign_userop());
+    assert_eq!(model.offchain, 0, "rejection must precede promotion");
+    assert_eq!(model.userop_sigs, 1, "rejection must precede release");
+}
+
+#[test]
 fn negative_offchain_mock_promote_to_over_cap_is_clamped() {
     // Direct guard on the sign-path promote chokepoint: even a promote target of
     // u64::MAX (a glitched/hostile last_userop snapshot) must clamp, never store

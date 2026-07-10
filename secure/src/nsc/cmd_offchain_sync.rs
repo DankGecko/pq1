@@ -19,10 +19,11 @@
 //!       [13..21) target_count  (u64 BE)
 //!   * Output: no body, SW only.
 //!
-//! Security note: the *value* set here is harmless — the host already drives
-//! slot use (it picks `account_index` / `slot_index`, signs what it likes), and
-//! the on-chain combined-cap check (`slotUses + offchainSigCount <= cap`) still
-//! enforces the per-slot budget regardless of what the firmware emits.
+//! Security note: the value set here is part of the firmware's few-time-key
+//! budget and is therefore shown exactly on the trusted display whenever it
+//! raises the floor. The on-chain combined-cap check remains authoritative for
+//! accepted operations, while the firmware cap additionally covers signatures
+//! released but never submitted.
 //!
 //! What the value-only reasoning missed (page-123 exhaustion → permanent-brick;
 //! `docs/security/vulns/VULN-offchain-sync-page123-exhaustion-brick.md`): the durable *write*
@@ -30,12 +31,11 @@
 //! `slot_key`. With no consent gate a hostile companion can spray distinct
 //! `(account,chain,slot)` tuples to fill the page and wedge compaction into a
 //! permanent, seed-survivable signing brick. Two defences now apply:
-//!   1. **Consent (here):** creating a slot the firmware has NOT seen before
-//!      requires an explicit trusted-display `confirm()` — a spray would need
-//!      one physical confirm per distinct tuple. Re-syncs of an already-
-//!      registered slot are idempotent floor bumps and stay confirm-free. This
-//!      mirrors the `cmd_sign_offchain` MEDIUM-3 "defer the durable write until
-//!      after confirm" discipline.
+//!   1. **Consent (here):** creating a slot the firmware has NOT seen before,
+//!      or raising an existing slot's floor, requires an explicit trusted-
+//!      display `confirm()` bound to the current + target counts. A spray would
+//!      need one physical confirm per distinct tuple. Idempotent no-op syncs
+//!      stay confirm-free.
 //!   2. **Structural cap:** `offchain_state::MAX_DISTINCT_SLOTS` (enforced at the
 //!      flash `write_entry` chokepoint and the host mock) refuses a new distinct
 //!      slot past a budget chosen so compaction can never fail — the page is
@@ -104,9 +104,26 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // durable flash setters clamp again (see `crate::offchain_state`), so a single
     // skipped site cannot re-open the hole.
     let target_count = crate::offchain_state::clamp_offchain_count(target_count);
+    let target_count_for_display = target_count;
 
     let slot_key =
         crate::offchain_state::slot_key_compute(account_index as u8, chain_id, slot_index);
+
+    // Bind the trusted display to a stable, FI-checked snapshot of the current
+    // floor. The flash reader already performs forward/reverse scans; repeat
+    // the complete read with jitter and fail closed on disagreement or an
+    // impossible above-ceiling value. No writer can race this handler under
+    // HandlerGuard, so a mismatch is corruption/fault, not normal concurrency.
+    let current_count_a = crate::offchain_state::last_userop_count_read(&slot_key);
+    crate::fi::wait_random();
+    let current_count_b = crate::offchain_state::last_userop_count_read(&slot_key);
+    if current_count_a != current_count_b
+        || current_count_a > crate::offchain_state::OFFCHAIN_COUNT_CEILING
+    {
+        crate::ui::show_status("Counter sync", "state invalid");
+        return NscStatus::InternalError as u32;
+    }
+    let current_count = current_count_a;
 
     // Consent gate — two brick classes, one confirm.
     //
@@ -134,13 +151,15 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // An idempotent re-sync (`target <= stored`) is a no-op and stays confirm-
     // free. Bare unsafe facade calls match this file's existing convention.
     let is_new_slot = !crate::offchain_state::offchain_count_is_registered(&slot_key);
-    let raises_floor = target_count > crate::offchain_state::last_userop_count_read(&slot_key);
+    let raises_floor = target_count > current_count;
     if is_new_slot || raises_floor {
         use crate::ui::confirm::{confirm_checked, ConfirmResult};
         let pages = crate::tx::display::build_offchain_sync_pages(
             account_index as u8,
             chain_id,
             slot_index,
+            current_count,
+            target_count_for_display,
         );
         let (cr, cr_verdict) = confirm_checked(pages.as_slice());
         match cr {
@@ -156,6 +175,20 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         }
         // FI belt (UI1 / work-todo #12c): affirmative-sentinel gate; fail closed.
         if cr_verdict != crate::fi::OK_SENTINEL {
+            super::zeroize_sensitive_state();
+            return NscStatus::UserRejected as u32;
+        }
+
+        // The exact target rendered above must be the exact target committed
+        // below. Evaluate the binding twice through the FI sentinel; black_box
+        // prevents the optimiser from folding two immutable locals into a
+        // compile-time `true` and deleting the check.
+        if crate::fi::check_true_into_sentinel(|| {
+            core::hint::black_box(target_count) == core::hint::black_box(target_count_for_display)
+                && core::hint::black_box(target_count)
+                    <= crate::offchain_state::OFFCHAIN_COUNT_CEILING
+        }) != crate::fi::OK_SENTINEL
+        {
             super::zeroize_sensitive_state();
             return NscStatus::UserRejected as u32;
         }

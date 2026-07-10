@@ -3,12 +3,14 @@
 //! NS supplies the 8 KB manifest as the payload. We:
 //!   1. Require PIN-verified.
 //!   2. Validate the NS pointer, TOCTOU-snapshot the manifest.
-//!   3. Run the full verify chain (structural, CRC, digest, vendor
+//!   3. Require a one-shot trusted-UI authorization to invoke the
+//!      manifest verifier.
+//!   4. Run the full verify chain (structural, CRC, digest, vendor
 //!      fpr match, rollback floor).
-//!   4. Determine inactive slot.
-//!   5. Erase inactive slot + target manifest page.
-//!   6. Seed a fresh `FwUpdateCtx`, drop any stale one.
-//!   7. Reset the idle activity timer (BEGIN counts as user consent).
+//!   5. Show the verified release details and require install consent.
+//!   6. Determine and erase the inactive slot + target manifest page.
+//!   7. Seed a fresh `FwUpdateCtx`, drop any stale one.
+//!   8. Reset the idle activity timer (BEGIN counts as user consent).
 //!
 //! Runtime: dominated by the slot erase (~1 s for 58 + 64 pages on
 //! STM32U585). Fine inside the unlock-session idle budget.
@@ -19,183 +21,9 @@ use sphincs_tz_shared::NscStatus;
 use super::ptr_validate::validate_ns_read_ptr;
 use super::state::{peek_state, FW_UPDATE};
 use super::GatewayArgs;
-use crate::fw_update::{
-    self, FwUpdateCtx, IncrementalSha256, SlotTag,
-};
+use crate::fw_update::{self, FwUpdateCtx, IncrementalSha256, SlotTag};
 use crate::hw::{flash, otp};
 use crate::timeout;
-
-/// Verify-failure counter for the glitch-resistance defense (finding B
-/// in `docs/security/usb-fw-update-hardening.md` — modelled on Trezor's repeated-
-/// FW-failure → wipe pattern). Incremented on every BEGIN whose manifest
-/// is rejected (bad sig / bad version / bad length / etc.); reset to
-/// zero on every BEGIN that passes the full verify chain.
-///
-/// **Layered defense (in-RAM + flash):**
-///   * In-RAM `FW_VERIFY_FAIL_COUNT_RAM` (threshold `..._RAM`) catches a
-///     high-rate attack within a single power-cycle (a glitch rig that
-///     can iterate dozens of times per second).
-///   * Flash-backed tally on page 126 (threshold `..._FLASH`) catches a
-///     slow-burn attack across many power-cycles (an attacker who
-///     power-cycles between attempts to dodge an in-RAM counter).
-///
-/// On reaching EITHER threshold, we arm the standard admin-wipe flag
-/// and `sys_reset` — the boot-time wipe-resume path in `main.rs:1334`
-/// completes the SE/storage wipe, matching the response to a 10-wrong-
-/// PIN lockout or a TZIC violation. The PIN-verified gate on BEGIN
-/// means only an unlocked user session can hit the threshold — a
-/// casual buggy host can't trip it without the user's PIN.
-static mut FW_VERIFY_FAIL_COUNT_RAM: u32 = 0;
-
-/// In-RAM threshold: bounds the *burst* attack rate within one power
-/// cycle. Resets at every reboot.
-const FW_VERIFY_FAIL_THRESHOLD_RAM: u32 = 5;
-
-/// Flash threshold: bounds the *lifetime* attack budget across power
-/// cycles. Higher than the RAM threshold because legit dev/testing
-/// retries accumulate over time, but well below the 512-QW page
-/// capacity so a glitch attacker can't fill the page faster than the
-/// wipe trigger fires.
-const FW_VERIFY_FAIL_THRESHOLD_FLASH: u32 = 20;
-
-/// Arm the admin wipe + show the user-facing "replug USB" prompt +
-/// halt. Doesn't return.
-///
-/// Why halt instead of `sys_reset`: a firmware-initiated reset over
-/// USB-C on a stock B-U585I-IOT02A does NOT get the host to re-
-/// enumerate the device (VBUS stays asserted, host's typec keeps the
-/// port bound — see memory `reference_usb_c_warm_reset_edge`). The
-/// user has to physically replug to recover. Telling them on the
-/// OLED is the cleanest UX, and halting means the prompt stays up
-/// indefinitely until they take that action. The page-125 wipe flag
-/// is already armed in flash before this call, so the next cold boot
-/// (after the user replugs) sees `is_wipe_armed() == true` and the
-/// `se050`/`dual-se` path in `main.rs` runs `factory_reset_admin` to
-/// scrub the SEs before re-entering the seed wizard.
-#[inline(never)]
-fn arm_wipe_and_reset() -> ! {
-    // SAFETY: dedicated single-QW idempotent flash write to the
-    // wipe-flag slot on page 125. Established pattern (also called
-    // from TZIC violation, OPTIGA tamper, SE050 errors).
-    #[cfg(feature = "stm32u585")]
-    let _ = unsafe { flash::arm_wipe_flag() };
-
-    // Soft-disconnect USB so companion / dmesg watchers see a clean
-    // `USB disconnect` event before the human-facing OLED prompt. Only
-    // when the USB command channel is actually compiled in (`usb`): a
-    // semihosting / probe-rs / display-only bench image builds
-    // `stm32u585` WITHOUT `usb` (e.g. `make e2e-hw-dual-se`,
-    // `make flash-hw-se050-lcd`), where `hw::usb_hw` does not exist and
-    // there is no USB peripheral to disconnect.
-    #[cfg(all(feature = "stm32u585", feature = "usb"))]
-    unsafe {
-        crate::hw::usb_hw::soft_disconnect();
-    }
-
-    crate::ui::show_status("Tamper detected", "wiping...");
-
-    // Reboot with automatic USB re-enumeration (task #26). The wipe
-    // flag is armed above; the post-reset boot runs the wipe-resume
-    // path (se050/dual-se: `factory_reset_admin` → "WALLET WIPED /
-    // restore from seed"). `cc_open_then_reset` holds the USB-C CC
-    // lines open long enough for the host's typec layer to register a
-    // real detach, then resets — so the device re-enumerates as the
-    // wiped device with NO physical replug, and the companion can
-    // auto-detect the wiped state. This is the HW-proven cc_open path
-    // (the dmesg re-enumeration evidence came from the wipe-trigger
-    // e2e). ~20-25 s latency (mostly boot).
-    //
-    // Only the USB image (`stm32u585` + `usb`) has `hw::usb_hw`. A
-    // display-only / semihosting / probe-rs bench image (`stm32u585`
-    // without `usb`, e.g. `make e2e-hw-dual-se`) and the QEMU build both
-    // take the plain `sys_reset` below: there is no USB host port to keep
-    // alive across the reboot, and the page-125 wipe flag armed above
-    // still drives the post-reset scrub. Both arms diverge (`-> !`), so
-    // exactly one runs and the function never returns.
-    #[cfg(all(feature = "stm32u585", feature = "usb"))]
-    unsafe {
-        crate::hw::usb_hw::cc_open_then_reset();
-    }
-    #[cfg(not(all(feature = "stm32u585", feature = "usb")))]
-    cortex_m::peripheral::SCB::sys_reset();
-}
-
-/// Record a manifest-verify failure. Bumps both the in-RAM and the
-/// flash-backed counters; if either hits its threshold, arms the wipe
-/// flag and resets — does not return.
-#[inline(never)]
-fn record_verify_failure_and_maybe_wipe() {
-    // ---- In-RAM counter ----
-    // SAFETY: single-threaded, non-reentrant gateway path; this is the
-    // only writer of `FW_VERIFY_FAIL_COUNT_RAM`. `addr_of_mut!` is used
-    // (rather than `&mut`) to side-step the `static_mut_refs` lint.
-    let ram_count = unsafe {
-        let p = core::ptr::addr_of_mut!(FW_VERIFY_FAIL_COUNT_RAM);
-        let cur = core::ptr::read_volatile(p);
-        let n = cur.saturating_add(1);
-        core::ptr::write_volatile(p, n);
-        n
-    };
-
-    // ---- Flash-backed counter ----
-    // SAFETY: single-QW program on a dedicated page. Stays cheap even
-    // on the failure path (~ms; the verify chain itself was already
-    // ~1s of SPHINCS+C10 work).
-    #[cfg(feature = "stm32u585")]
-    let _ = unsafe { flash::fw_fail_bump() };
-    #[cfg(feature = "stm32u585")]
-    let flash_count = flash::fw_fail_count();
-    #[cfg(not(feature = "stm32u585"))]
-    let flash_count: u32 = 0;
-
-    secure_log!(
-        "[S][fwup] verify failure: ram {}/{} flash {}/{}",
-        ram_count,
-        FW_VERIFY_FAIL_THRESHOLD_RAM,
-        flash_count,
-        FW_VERIFY_FAIL_THRESHOLD_FLASH
-    );
-
-    if ram_count >= FW_VERIFY_FAIL_THRESHOLD_RAM
-        || flash_count >= FW_VERIFY_FAIL_THRESHOLD_FLASH
-    {
-        secure_log!(
-            "[S][fwup] verify-failure threshold reached (ram>={} OR flash>={}) — arming wipe + reset",
-            FW_VERIFY_FAIL_THRESHOLD_RAM,
-            FW_VERIFY_FAIL_THRESHOLD_FLASH
-        );
-        arm_wipe_and_reset();
-    }
-}
-
-/// Reset both the in-RAM and the flash-backed failure tallies.
-///
-/// **F10:** this is called from `cmd_fw_commit` ONLY on a fully-completed,
-/// user-confirmed install (after `verify_images` + `boot_state::write`
-/// succeed), NOT from BEGIN. Pre-F10 it fired in BEGIN the moment a manifest
-/// passed verify — so an attacker holding a valid (public) manifest could
-/// BEGIN → reset the wipe budget → cancel before the destructive erase →
-/// repeat, defeating the §7.8 bound on repeated manifest-verify fault attempts
-/// (the budget must monotonically bound those attempts, only clearing on a real
-/// install). Anchoring the reset on COMMIT-success forces every budget clear
-/// through a full re-BEGIN + re-stream + physical confirm + bit-perfect COMMIT.
-#[inline(never)]
-pub(super) fn reset_verify_failure_tally() {
-    // SAFETY: single-threaded, non-reentrant gateway path; sole writer.
-    unsafe {
-        core::ptr::write_volatile(
-            core::ptr::addr_of_mut!(FW_VERIFY_FAIL_COUNT_RAM),
-            0,
-        );
-    }
-    // SAFETY: page-erase of the dedicated FW-fail counter page. No
-    // other state lives on this page (work-todo #24 freed it from the
-    // OPTIGA PBS seal). Failure to erase here is non-fatal — the worst
-    // case is one extra latent failure carrying over to the next
-    // update attempt, which is still bounded by the threshold.
-    #[cfg(feature = "stm32u585")]
-    let _ = unsafe { flash::fw_fail_reset() };
-}
 
 /// # Safety
 /// CMSE non-secure-entry handler — invoked by the gateway dispatcher
@@ -209,10 +37,6 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // idle-wipe could fire mid-BEGIN, and (b) the `iwdg` watchdog would
     // see no NS heartbeat + no busy handler and approach its stall
     // limit. Holding the guard marks BEGIN as live progress for both.
-    // On the wipe path (`arm_wipe_and_reset` → WFI halt) the guard is
-    // never dropped, which is intentional: it keeps `handler_is_busy()`
-    // true so the IWDG keeps feeding and the "Tamper detected / Replug
-    // USB" prompt persists rather than being cut short by a reset.
     let _busy = super::HandlerGuard::enter();
 
     // Gate: PIN must be verified — updates aren't available on a
@@ -230,9 +54,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // HIGH-1 (audit fault-injection 20260611): sentinel-gate the NS read
     // pointer (bare `if !validate` is single-fault FAIL-OUT → unvalidated
     // snapshot read of secure memory into the manifest buffer).
-    let read_ptr_ok = crate::fi::check_true_into_sentinel(|| {
-        validate_ns_read_ptr(payload_ptr, total_len)
-    });
+    let read_ptr_ok =
+        crate::fi::check_true_into_sentinel(|| validate_ns_read_ptr(payload_ptr, total_len));
     if read_ptr_ok != crate::fi::OK_SENTINEL {
         return NscStatus::InvalidPointer as u32;
     }
@@ -255,20 +78,44 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         }
     }
 
+    // A manifest verification is an expensive, fault-injection-sensitive
+    // security operation. Bind EACH invocation to a fresh physical action on
+    // the trusted display before touching the attacker-controlled bytes with
+    // the verifier. The prompt is deliberately static: no unverified host
+    // field is rendered as if it were authenticated release metadata.
+    //
+    // This is the attempt boundary. Invalid transport input must never arm a
+    // seed wipe, reset the device, write a persistent failure counter, or wear
+    // flash. A retry requires another affirmative physical action.
+    use crate::ui::confirm::ConfirmResult;
+    let (verify_confirm, verify_confirm_sentinel) = fw_update::confirm_verify_request();
+    match verify_confirm {
+        ConfirmResult::Confirmed => {}
+        ConfirmResult::Cancelled => return NscStatus::UserRejected as u32,
+        ConfirmResult::IdleWipe => {
+            super::zeroize_sensitive_state();
+            return NscStatus::IdleWipe as u32;
+        }
+    }
+    if verify_confirm_sentinel != crate::fi::OK_SENTINEL {
+        super::zeroize_sensitive_state();
+        return NscStatus::UserRejected as u32;
+    }
+
+    // Jitter the entry into the verifier after consent. This is defense in
+    // depth against a physical timing/glitch rig; the trusted-UI one-shot gate
+    // above is the authorization boundary.
+    crate::fi::wait_random();
+
     // Run the verify chain. Rollback floor comes from OTP.
     let m = ManifestRef::new(&snap);
     let floor = otp::rollback_floor();
     match fw_update::verify_manifest(&m, floor) {
         Ok(()) => {}
         Err(fw_manifest::VerifyError::BelowRollback) => {
-            // Glitch-resistance: count consecutive verify failures so an
-            // attacker can't iterate freely on signature/version glitches.
-            // See `docs/security/usb-fw-update-hardening.md` finding B.
-            record_verify_failure_and_maybe_wipe();
             return NscStatus::FwUpdateBadVersion as u32;
         }
         Err(_) => {
-            record_verify_failure_and_maybe_wipe();
             return NscStatus::FwUpdateBadManifest as u32;
         }
     }
@@ -283,21 +130,9 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // slot / FSBL pages / etc. in the meantime. (Trezor enforces the
     // analogous bound against `FIRMWARE_MAXSIZE`.) See
     // `docs/security/usb-fw-update-hardening.md` finding #1.
-    if m.secure_len() > flash::SLOT_SECURE_CAPACITY
-        || m.nonsecure_len() > flash::SLOT_NS_CAPACITY
-    {
-        // Treat as a verify failure — a manifest with absurd lengths is
-        // a glitch / forgery candidate just like a bad signature.
-        record_verify_failure_and_maybe_wipe();
+    if m.secure_len() > flash::SLOT_SECURE_CAPACITY || m.nonsecure_len() > flash::SLOT_NS_CAPACITY {
         return NscStatus::FwUpdateBadManifest as u32;
     }
-
-    // F10: do NOT reset the glitch-defense counter here. A manifest passing
-    // the verify chain at BEGIN is necessary but not sufficient — the budget
-    // must bound repeated verify-fault attempts until an install actually
-    // COMPLETES, otherwise a valid-manifest BEGIN→cancel loop clears it for
-    // free. The reset now lives on the COMMIT-success path
-    // (`reset_verify_failure_tally`, called from `cmd_fw_commit`).
 
     // Trusted-display install confirm BEFORE any destructive flash op
     // (Trezor pattern, finding A in docs/security/usb-fw-update-hardening.md). A
@@ -306,7 +141,17 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // `manifest.secure_hash()`; COMMIT's `verify_images` re-hashes the
     // actually-streamed bytes against the same field and auto-aborts on
     // mismatch (no further user prompt — they've already given consent).
-    if !fw_update::confirm_install(&m) {
+    let (install_confirm, install_confirm_sentinel) = fw_update::confirm_install(&m);
+    match install_confirm {
+        ConfirmResult::Confirmed => {}
+        ConfirmResult::Cancelled => return NscStatus::UserRejected as u32,
+        ConfirmResult::IdleWipe => {
+            super::zeroize_sensitive_state();
+            return NscStatus::IdleWipe as u32;
+        }
+    }
+    if install_confirm_sentinel != crate::fi::OK_SENTINEL {
+        super::zeroize_sensitive_state();
         return NscStatus::UserRejected as u32;
     }
 

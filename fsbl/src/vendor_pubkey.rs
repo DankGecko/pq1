@@ -6,15 +6,28 @@
 //! equivalent to provisioning a new vendor identity — the device will
 //! no longer accept any previously-signed releases.
 
-// Pre-computed fingerprint is an audit log: a human reading the
-// generated source file can confirm which pubkey this FSBL will
-// accept. The `_FPR` constant isn't referenced at runtime
-// (`ManifestRef::verify_vendor_fpr` recomputes SHA-256 from the seed +
-// root), but it's kept emitted so `size` + `objdump` on the FSBL
-// binary shows the fingerprint directly.
 #[allow(dead_code)]
 mod bytes {
     include!(concat!(env!("OUT_DIR"), "/vendor_pubkey_bytes.rs"));
 }
 
-pub use bytes::{VENDOR_PK_ROOT, VENDOR_PK_SEED};
+/// The exact update root used by the FSBL verifier.
+///
+/// This is deliberately the sole runtime copy of the raw key. `key_parts`
+/// returns references into this allocation, while the release gate extracts
+/// the same allocated/loadable section from the final ELF and hashes it against
+/// the secure-world key and reviewed production policy.
+#[used]
+#[no_mangle]
+#[link_section = ".pqsigner.vendor_pubkey"]
+pub static PQSIGNER_FSBL_VENDOR_PUBKEY: [u8; 32] = bytes::VENDOR_PUBKEY;
+
+/// Split the allocated runtime key without maintaining duplicate seed/root
+/// constants that could drift from the final-artifact statement.
+#[inline(never)]
+pub fn key_parts() -> (&'static [u8; 16], &'static [u8; 16]) {
+    let raw = core::hint::black_box(&PQSIGNER_FSBL_VENDOR_PUBKEY);
+    let seed = raw[..16].try_into().expect("fixed 16-byte pk_seed");
+    let root = raw[16..].try_into().expect("fixed 16-byte pk_root");
+    (seed, root)
+}

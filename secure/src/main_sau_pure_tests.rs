@@ -58,6 +58,7 @@
 const MAIN_SRC: &str = include_str!("main.rs");
 const SAU_SRC: &str = include_str!("sau.rs");
 const RESET_CAUSE_SRC: &str = include_str!("reset_cause.rs");
+const IWDG_SRC: &str = include_str!("hw/iwdg.rs");
 
 // ═════════════════════════════════════════════════════════════════════
 // 1. reset_cause.rs — local mirror + pure-logic tests
@@ -1086,6 +1087,61 @@ fn negative_systick_idle_wipe_skips_when_handler_is_busy() {
     assert!(
         body.contains("if timeout::is_idle() && nsc::is_unlocked() && !nsc::handler_is_busy()"),
         "SysTick idle-wipe must keep the `!nsc::handler_is_busy()` guard (HIGH-7 fix)"
+    );
+}
+
+#[test]
+fn negative_systick_passes_idle_bounded_trusted_ui_state_to_iwdg() {
+    let systick_start = MAIN_SRC.find("fn SysTick()").expect("SysTick must exist");
+    let systick = &MAIN_SRC[systick_start..];
+    let systick_end = systick
+        .find("\n/// Catch-all device-IRQ handler.")
+        .expect("SysTick must close before DefaultHandler doc");
+    let body = &systick[..systick_end];
+    for landmark in [
+        "hw::iwdg::systick_watch_and_kick(",
+        "nsc::handler_is_busy()",
+        "timeout::trusted_ui_is_waiting()",
+        "timeout::is_idle()",
+    ] {
+        assert!(
+            body.contains(landmark),
+            "SysTick lost watchdog input `{landmark}`"
+        );
+    }
+}
+
+#[test]
+fn negative_iwdg_ui_wait_never_disables_the_noninteractive_busy_bound() {
+    let fn_start = IWDG_SRC
+        .find("pub fn systick_watch_and_kick(")
+        .expect("IWDG progress function missing");
+    let fn_body = &IWDG_SRC[fn_start..];
+    let ui_pos = fn_body
+        .find("trusted_ui_waiting && !idle_timed_out")
+        .expect("trusted UI progress must be bounded by the inactivity timeout");
+    let busy_pos = fn_body
+        .find("} else if handler_busy {")
+        .expect("ordinary handler busy branch missing");
+    assert!(
+        ui_pos < busy_pos,
+        "trusted UI progress must be classified before ordinary busy-handler accounting"
+    );
+    let ui_branch = &fn_body[ui_pos..busy_pos];
+    for landmark in [
+        "addr_of_mut!(STALL_TICKS), 0",
+        "addr_of_mut!(BUSY_TICKS), 0",
+        "kick();",
+    ] {
+        assert!(
+            ui_branch.contains(landmark),
+            "trusted UI progress branch lost `{landmark}`"
+        );
+    }
+    assert!(
+        fn_body.contains("if b < MAX_BUSY_TICKS")
+            && fn_body.contains("else if b == MAX_BUSY_TICKS"),
+        "noninteractive handlers must retain the 30 s MAX_BUSY_TICKS bound"
     );
 }
 
