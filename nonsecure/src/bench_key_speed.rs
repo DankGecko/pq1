@@ -64,8 +64,14 @@ const SHA256_EMPTY: [u8; 32] = [
     0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c, 0xa4, 0x95, 0x99, 0x1b, 0x78, 0x52, 0xb8, 0x55,
 ];
 
-fn build_payload(buf: &mut [u8], chain_id: u64, slot_index: u32, register_slot: bool, nonce_seq: u64) -> usize {
-    let sender: [u8; 20] = [0x42; 20];
+fn build_payload(
+    buf: &mut [u8],
+    sender: &[u8; 20],
+    chain_id: u64,
+    slot_index: u32,
+    register_slot: bool,
+    nonce_seq: u64,
+) -> usize {
     let to: [u8; 20] = [0xab; 20];
     let mut nonce = [0u8; 32];
     nonce[24..32].copy_from_slice(&nonce_seq.to_be_bytes());
@@ -91,7 +97,7 @@ fn build_payload(buf: &mut [u8], chain_id: u64, slot_index: u32, register_slot: 
     let flags = slot_index | if register_slot { FLAG_REGISTER_SLOT } else { 0 };
     buf[off..off + 4].copy_from_slice(&flags.to_be_bytes());
     off += 4;
-    buf[off..off + 20].copy_from_slice(&sender);
+    buf[off..off + 20].copy_from_slice(sender);
     off += 20;
     buf[off..off + 20].copy_from_slice(&ENTRY_POINT_V06);
     off += 20;
@@ -127,9 +133,22 @@ struct SignTiming {
     status: u32,
 }
 
-fn time_one_sign(chain_id: u64, slot_index: u32, register_slot: bool, nonce_seq: u64) -> SignTiming {
+fn time_one_sign(
+    sender: &[u8; 20],
+    chain_id: u64,
+    slot_index: u32,
+    register_slot: bool,
+    nonce_seq: u64,
+) -> SignTiming {
     unsafe {
-        let len = build_payload(&mut PAYLOAD_BUF, chain_id, slot_index, register_slot, nonce_seq);
+        let len = build_payload(
+            &mut PAYLOAD_BUF,
+            sender,
+            chain_id,
+            slot_index,
+            register_slot,
+            nonce_seq,
+        );
         let t0 = cycles_now();
         let status = nsc_api::sign_userop(&PAYLOAD_BUF[..len], &mut SIG_BUF);
         let t1 = cycles_now();
@@ -157,6 +176,20 @@ fn main() -> ! {
     }
     hprintln!("[NS][bench] gateway pre-unlocked: OK");
 
+    // Resolve the production-valid sender outside the timed region. A real
+    // companion already knows/caches this address; SIGN still includes its
+    // own mandatory mnemonic-bound sender check.
+    let mut wallet_sender = [0u8; 20];
+    let address_status = nsc_api::get_wallet_address(&mut wallet_sender, 0);
+    if address_status != NscStatus::Ok as u32 {
+        hprintln!(
+            "[NS][bench] FAIL: GET_WALLET_ADDRESS(0) = status {}",
+            address_status
+        );
+        debug::exit(debug::EXIT_FAILURE);
+        loop {}
+    }
+
     // ---- A. first-sign on chain 1: Type 1 + slot keygen + Type 2 ----
     //
     // Companion-driven slot registration. Cold slot cache + master C10
@@ -166,7 +199,7 @@ fn main() -> ! {
     // per the Coinbase Smart Wallet port (handler rejects slot 0 + register
     // with "register needs slot>=1"). The only slot-0 path is the deploy
     // flow (FLAG_INCLUDE_INIT_CODE), which isn't what this bench measures.
-    let a = time_one_sign(1, 1, true, 1);
+    let a = time_one_sign(&wallet_sender, 1, 1, true, 1);
     if a.status != NscStatus::Ok as u32 {
         hprintln!("[NS][bench] FAIL: first-sign on chain 1 = status {}", a.status);
         debug::exit(debug::EXIT_FAILURE);
@@ -183,7 +216,7 @@ fn main() -> ! {
     for i in 0..N {
         // slot_index matches the register-slot step above so the cached
         // slot key is the one we just keygened in step A.
-        let b = time_one_sign(1, 1, false, 2 + i as u64);
+        let b = time_one_sign(&wallet_sender, 1, 1, false, 2 + i as u64);
         if b.status != NscStatus::Ok as u32 {
             hprintln!(
                 "[NS][bench] FAIL: type2 #{} on chain 1 = status {}",
@@ -208,11 +241,11 @@ fn main() -> ! {
         N, avg_b_cycles, avg_b_ms
     );
 
-    // ---- C. first-sign on chain 2, same slot_index: Type 1 + master
-    // keygen + Type 2. The slot SigningKey is cached from A (slot
-    // derivation is chain-agnostic) so only the bootstrap C10 keygen
-    // runs — this is the "new chain, same slot" steady state.
-    let c = time_one_sign(2, 1, true, 1);
+    // ---- C. first-sign on chain 2, same slot_index: Type 1 + fresh
+    // chain-bound slot keygen + Type 2. The bootstrap address is
+    // chain-independent, but slot keys intentionally bind chain_id, so this
+    // measures the full "new chain, same numeric slot" cost.
+    let c = time_one_sign(&wallet_sender, 2, 1, true, 1);
     if c.status != NscStatus::Ok as u32 {
         hprintln!("[NS][bench] FAIL: first-sign on chain 2 = status {}", c.status);
         debug::exit(debug::EXIT_FAILURE);

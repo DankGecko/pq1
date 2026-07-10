@@ -1306,7 +1306,7 @@ pub const SLOT_INDEX_MASK: u32 =
 /// |-----|------|-------|
 /// |  0  |  8  | chain_id (u64 BE) |
 /// |  8  |  4  | flags (u32 BE: bit 31 = include initCode, bit 30 = register slot, bits 29..22 = account_index, bits 21..0 = slot_index) |
-/// | 12  | 20  | sender (PQSmartWallet address — firmware does not recompute) |
+/// | 12  | 20  | sender (must equal `GET_WALLET_ADDRESS(account_index)`; firmware recomputes and hard-rejects mismatches) |
 /// | 32  | 20  | entry_point (EntryPoint v0.6 address) |
 /// | 52  | 32  | nonce (u256 BE; base nonce for Type 1 if registration needed, else Type 2) |
 /// | 84  | 32  | call_gas_limit (u256 BE) |

@@ -370,7 +370,7 @@ Drain the next chunk of a large response.
 |-------:|-----:|---------------------------|--------------------------------------------------|
 |      0 |    8 | `chain_id`                | u64 BE                                           |
 |      8 |    4 | `flags`                   | u32 BE — see below                               |
-|     12 |   20 | `sender`                  | PQSmartWallet address                            |
+|     12 |   20 | `sender`                  | Must equal `GET_WALLET_ADDRESS(accountIndex)`; firmware recomputes and rejects mismatches |
 |     32 |   20 | `entry_point`             | EntryPoint v0.6 address                          |
 |     52 |   32 | `nonce`                   | u256 BE — base nonce of the first UserOp         |
 |     84 |   32 | `call_gas_limit`          | u256 BE                                          |
@@ -786,6 +786,8 @@ GET_WALLET_ADDRESS(account_index=0) → <1 s first time, then wallet address
 ```
 1. accountIndex ← user's choice (default 0)
 2. sender ← GET_WALLET_ADDRESS(accountIndex)
+   The device hard-binds this field to the mnemonic-derived CREATE2 address;
+   a stale, cross-account, or substituted sender is rejected before signing.
 3. Confirm off-chain: eth_getCode(sender) == "0x"
 4. nonce = 0  (first UserOp for this sender)
 5. Build SIGN_USEROP payload:
@@ -824,6 +826,8 @@ maxFeePerGas         = 1   gwei
 
 ```
 1. sender  ← GET_WALLET_ADDRESS(accountIndex)  (cache it)
+   The cached address must correspond to the same `accountIndex` encoded in
+   `flags`; the device recomputes and hard-rejects any mismatch.
 2. slotIdx ← whichever slot ownerIndex ≥ 1 is active and has budget
 3. nonce   ← entryPoint.getNonce(sender, 0)
 4. flags   = (accountIndex << 22) | slotIdx    // no flag bits set

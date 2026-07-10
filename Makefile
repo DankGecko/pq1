@@ -357,6 +357,9 @@ e2e: ## Automated unified-sign E2E (QEMU)
 	echo "===================================="; \
 	fail=0; \
 	for line in \
+		"\\[NS\\]\\[e2e\\] Scenario 0a: mismatched single sender is refused" \
+		"\\[NS\\]\\[e2e\\] Scenario 0b: mismatched batch sender is refused" \
+		"\\[NS\\]\\[e2e\\] Scenario 0c: cross-account sender is refused" \
 		"\\[NS\\]\\[e2e\\] Scenario 1: register slot 1 on chain A" \
 		"\\[NS\\]\\[e2e\\] Scenario 2: repeat sign on chain A slot 1" \
 		"\\[NS\\]\\[e2e\\] Scenario 3: rotate to slot 2 on chain A" \

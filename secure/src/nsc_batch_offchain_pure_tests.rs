@@ -626,6 +626,7 @@ const CMD_SIGN_USEROP_BATCH_SRC: &str = include_str!("nsc/cmd_sign_userop_batch.
 // Not part of the four-file "slice" array below — pinned only for the
 // MEDIUM-2 combined-cap guard, which lives in the single-tx handler too.
 const CMD_SIGN_USEROP_SRC: &str = include_str!("nsc/cmd_sign_userop.rs");
+const WALLET_ADDRESS_SRC: &str = include_str!("nsc/cmd_get_wallet_address.rs");
 
 const ALL_SLICE_SRCS: [(&str, &str); 4] = [
     ("cmd_offchain_status.rs", CMD_OFFCHAIN_STATUS_SRC),
@@ -1288,6 +1289,97 @@ fn negative_batch_nonce_overflow_gate_present() {
     // field; the gate refuses that before the helper runs.
     assert!(CMD_SIGN_USEROP_BATCH_SRC.contains("register_slot && nonce[24..32] == [0xFFu8; 8]"));
     assert!(CMD_SIGN_USEROP_BATCH_SRC.contains("Nonce seq"));
+}
+
+#[test]
+fn negative_batch_binds_sender_before_verify_confirm_sign_or_state_write() {
+    assert!(
+        CMD_SIGN_USEROP_BATCH_SRC.contains("account_index_r != account_index"),
+        "account_index selects the trusted sender and must be included in the F-11 recheck"
+    );
+
+    let parsed = CMD_SIGN_USEROP_BATCH_SRC
+        .find("let parsed_trailers = match parse_batch_trailers")
+        .expect("batch trailer parser");
+    let gate = CMD_SIGN_USEROP_BATCH_SRC
+        .find("super::cmd_get_wallet_address::bind_userop_sender(")
+        .expect("batch sender binding must remain present");
+    let verify = CMD_SIGN_USEROP_BATCH_SRC
+        .find("// ── 5c. Verify + route trailers")
+        .expect("batch verifier section");
+    assert!(
+        parsed < gate && gate < verify,
+        "bind after structural parsing but before sender-dependent verification"
+    );
+
+    let trusted_shadow = CMD_SIGN_USEROP_BATCH_SRC[gate..]
+        .find("let sender = unsafe {")
+        .map(|p| gate + p)
+        .expect("batch path must replace the companion sender");
+    let before_gate = &CMD_SIGN_USEROP_BATCH_SRC[..gate];
+    for (label, needle) in [
+        ("trusted-display confirm", "let (cr, cr_verdict) = confirm_checked"),
+        ("C10 signing", "match crate::crypto::c10_sign_verified_with_progress"),
+        ("offchain promotion", "crate::offchain_state::offchain_count_promote_to("),
+        ("last-userop write", "crate::offchain_state::last_userop_count_set("),
+        ("userop counter bump", "crate::offchain_state::userop_sigs_bump("),
+    ] {
+        assert!(
+            !before_gate.contains(needle),
+            "{label} must not occur before sender binding"
+        );
+    }
+    for (label, needle) in [
+        ("trusted-display confirm", "confirm_checked("),
+        ("C10 signing", "c10_sign_verified_with_progress"),
+        ("offchain promotion", "offchain_count_promote_to"),
+        ("last-userop write", "last_userop_count_set"),
+        ("userop counter bump", "userop_sigs_bump"),
+    ] {
+        let pos = CMD_SIGN_USEROP_BATCH_SRC[gate..]
+            .find(needle)
+            .map(|p| gate + p)
+            .unwrap_or_else(|| panic!("missing {label} marker: {needle}"));
+        assert!(
+            trusted_shadow < pos,
+            "sender must be bound and shadowed before {label}"
+        );
+    }
+
+    let downstream = &CMD_SIGN_USEROP_BATCH_SRC[verify..];
+    assert!(
+        !downstream.contains("companion_sender"),
+        "the untrusted sender must never reach batch verifiers or signed hashes"
+    );
+    let helper_start = WALLET_ADDRESS_SRC
+        .find("pub(super) unsafe fn bind_userop_sender")
+        .expect("sender helper");
+    let helper_end = WALLET_ADDRESS_SRC[helper_start..]
+        .find("pub(super) unsafe fn run")
+        .map(|p| helper_start + p)
+        .expect("GET_WALLET_ADDRESS handler");
+    let helper = &WALLET_ADDRESS_SRC[helper_start..helper_end];
+    assert!(helper.contains("ct_eq"));
+    assert!(helper.contains("Ok(expected_a)"));
+    assert!(helper.contains("Ok(expected_b)"));
+    assert!(helper.contains("derivations_agree"));
+    assert!(helper.contains("check_true_into_sentinel"));
+    assert!(helper.contains("SenderBinding"));
+    assert!(WALLET_ADDRESS_SRC.contains(
+        "#[inline(never)]\npub(super) unsafe fn bind_userop_sender"
+    ));
+    assert!(helper.contains("addr_of_mut!(output.sender)"));
+    assert!(helper.contains("sender_readback_a"));
+    assert!(helper.contains("sender_readback_b"));
+    assert!(helper.contains("addr_of_mut!(output.verdict)"));
+    assert!(helper.contains("cfi.bump(CFI_STEP_SENDER_BIND_DONE)"));
+    assert!(WALLET_ADDRESS_SRC.contains("verdict: crate::fi::FAIL_SENTINEL"));
+    let before_call = &CMD_SIGN_USEROP_BATCH_SRC[..gate];
+    assert!(before_call.contains("SenderBinding::fail_closed()"));
+    assert!(before_call.contains("core::ptr::write_volatile("));
+    assert!(CMD_SIGN_USEROP_BATCH_SRC[gate..].contains("SENDER_BIND_CFI_EXPECTED"));
+    assert!(CMD_SIGN_USEROP_BATCH_SRC[gate..].contains("let sender_check = unsafe"));
+    assert!(CMD_SIGN_USEROP_BATCH_SRC[gate..].contains("sender_reads_agree"));
 }
 
 #[test]

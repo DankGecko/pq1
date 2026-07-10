@@ -881,6 +881,7 @@ fn negative_u128_sat_msb_high_byte_saturates_not_truncates() {
 
 const CMD_SIGN_USEROP_SRC: &str =
     include_str!("nsc/cmd_sign_userop.rs");
+const WALLET_ADDRESS_SRC: &str = include_str!("nsc/cmd_get_wallet_address.rs");
 const SIG_WRAPPER_SRC: &str = include_str!("nsc/sig_wrapper.rs");
 const TRAILER_SRC: &str = include_str!("nsc/trailer.rs");
 
@@ -1020,6 +1021,92 @@ fn negative_slice_uses_fi_double_check_on_flag_parse() {
         CMD_SIGN_USEROP_SRC.contains("flags_recheck"),
         "the F-11 belt-and-braces recheck after gate evaluation must remain in place"
     );
+    assert!(
+        CMD_SIGN_USEROP_SRC.contains("account_index_r != account_index"),
+        "account_index selects the trusted sender and must be included in the F-11 recheck"
+    );
+}
+
+#[test]
+fn negative_slice_binds_sender_before_confirm_sign_or_counter_write() {
+    let gate = CMD_SIGN_USEROP_SRC
+        .find("super::cmd_get_wallet_address::bind_userop_sender(")
+        .expect("single-sign sender binding must remain present");
+    let trusted_shadow = CMD_SIGN_USEROP_SRC[gate..]
+        .find("let sender = unsafe {")
+        .map(|p| gate + p)
+        .expect("single-sign path must replace the companion sender");
+
+    let before_gate = &CMD_SIGN_USEROP_SRC[..gate];
+    for (label, needle) in [
+        ("trusted-display confirm", "let (cr, cr_verdict) = confirm_checked"),
+        ("C10 signing", "match crate::crypto::c10_sign_verified_with_progress"),
+        ("offchain promotion", "crate::offchain_state::offchain_count_promote_to("),
+        ("last-userop write", "crate::offchain_state::last_userop_count_set("),
+        ("userop counter bump", "crate::offchain_state::userop_sigs_bump("),
+    ] {
+        assert!(
+            !before_gate.contains(needle),
+            "{label} must not occur before sender binding"
+        );
+    }
+
+    for (label, needle) in [
+        ("trusted-display confirm", "confirm_checked("),
+        ("C10 signing", "c10_sign_verified_with_progress"),
+        ("offchain promotion", "offchain_count_promote_to"),
+        ("last-userop write", "last_userop_count_set"),
+        ("userop counter bump", "userop_sigs_bump"),
+    ] {
+        let pos = CMD_SIGN_USEROP_SRC[gate..]
+            .find(needle)
+            .map(|p| gate + p)
+            .unwrap_or_else(|| panic!("missing {label} marker: {needle}"));
+        assert!(
+            trusted_shadow < pos,
+            "sender must be bound and shadowed before {label}"
+        );
+    }
+
+    let downstream = CMD_SIGN_USEROP_SRC
+        .find("// ── 6. Build display-time")
+        .map(|p| &CMD_SIGN_USEROP_SRC[p..])
+        .expect("section 6 marker");
+    assert!(
+        !downstream.contains("companion_sender"),
+        "the untrusted sender must never reach display bindings or signed hashes"
+    );
+
+    let helper_start = WALLET_ADDRESS_SRC
+        .find("pub(super) unsafe fn bind_userop_sender")
+        .expect("sender helper");
+    let helper_end = WALLET_ADDRESS_SRC[helper_start..]
+        .find("pub(super) unsafe fn run")
+        .map(|p| helper_start + p)
+        .expect("GET_WALLET_ADDRESS handler");
+    let helper = &WALLET_ADDRESS_SRC[helper_start..helper_end];
+    assert!(helper.contains("ct_eq"));
+    assert!(helper.contains("Ok(expected_a)"));
+    assert!(helper.contains("Ok(expected_b)"));
+    assert!(helper.contains("derivations_agree"));
+    assert!(helper.contains("check_true_into_sentinel"));
+    assert!(helper.contains("SenderBinding"));
+    assert!(WALLET_ADDRESS_SRC.contains(
+        "#[inline(never)]\npub(super) unsafe fn bind_userop_sender"
+    ));
+    assert!(helper.contains("addr_of_mut!(output.sender)"));
+    assert!(helper.contains("sender_readback_a"));
+    assert!(helper.contains("sender_readback_b"));
+    assert!(helper.contains("addr_of_mut!(output.verdict)"));
+    assert!(helper.contains("cfi.bump(CFI_STEP_SENDER_BIND_DONE)"));
+    assert!(WALLET_ADDRESS_SRC.contains("verdict: crate::fi::FAIL_SENTINEL"));
+    assert!(helper.contains("NscStatus::InvalidPointer"));
+    let before_call = &CMD_SIGN_USEROP_SRC[..gate];
+    assert!(before_call.contains("SenderBinding::fail_closed()"));
+    assert!(before_call.contains("core::ptr::write_volatile("));
+    assert!(CMD_SIGN_USEROP_SRC[gate..].contains("SENDER_BIND_CFI_EXPECTED"));
+    assert!(CMD_SIGN_USEROP_SRC[gate..].contains("let sender_check = unsafe"));
+    assert!(CMD_SIGN_USEROP_SRC[gate..].contains("sender_reads_agree"));
 }
 
 #[test]

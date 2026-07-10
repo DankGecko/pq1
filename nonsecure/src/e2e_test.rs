@@ -54,6 +54,7 @@ const SHA256_EMPTY: [u8; 32] = [
 
 fn build_sign_payload(
     buf: &mut [u8],
+    sender: &[u8; 20],
     chain_id: u64,
     slot_index: u32,
     register_slot: bool,
@@ -62,7 +63,6 @@ fn build_sign_payload(
     value_wei: u128,
     inner_data: &[u8],
 ) -> usize {
-    let sender: [u8; 20] = [0x42; 20];
     let mut nonce = [0u8; 32];
     nonce[24..32].copy_from_slice(&nonce_seq.to_be_bytes());
 
@@ -87,7 +87,7 @@ fn build_sign_payload(
     let flags: u32 = slot_index | if register_slot { FLAG_REGISTER_SLOT } else { 0 };
     buf[off..off + 4].copy_from_slice(&flags.to_be_bytes());
     off += 4;
-    buf[off..off + 20].copy_from_slice(&sender);
+    buf[off..off + 20].copy_from_slice(sender);
     off += 20;
     buf[off..off + 20].copy_from_slice(&ENTRY_POINT_V06);
     off += 20;
@@ -650,6 +650,7 @@ struct E2eBatchTx<'a> {
 /// `secure/src/nsc/cmd_sign_userop_batch.rs` byte-for-byte.
 fn build_batch_payload(
     buf: &mut [u8],
+    sender: &[u8; 20],
     chain_id: u64,
     slot_index: u32,
     register_slot: bool,
@@ -659,7 +660,6 @@ fn build_batch_payload(
     assert!(inner.len() <= MAX_BATCH_TXS);
     assert!(!inner.is_empty());
 
-    let sender: [u8; 20] = [0x42; 20];
     let mut nonce = [0u8; 32];
     nonce[24..32].copy_from_slice(&nonce_seq.to_be_bytes());
 
@@ -682,7 +682,7 @@ fn build_batch_payload(
     off += 8;
     buf[off..off + 4].copy_from_slice(&flags.to_be_bytes());
     off += 4;
-    buf[off..off + 20].copy_from_slice(&sender);
+    buf[off..off + 20].copy_from_slice(sender);
     off += 20;
     buf[off..off + 20].copy_from_slice(&ENTRY_POINT_V06);
     off += 20;
@@ -781,10 +781,103 @@ fn main() -> ! {
     }
     hprintln!("[NS][e2e] gateway pre-unlocked: OK");
 
+    // Use the same mnemonic/account-derived sender the production companion
+    // obtains. Never bypass the secure-world sender gate under `e2e-test`:
+    // these scenarios are its positive regression coverage.
+    let mut wallet_sender = [0u8; 20];
+    let address_status = nsc_api::get_wallet_address(&mut wallet_sender, 0);
+    assert_eq!(
+        address_status,
+        NscStatus::Ok as u32,
+        "e2e GET_WALLET_ADDRESS(0) must succeed"
+    );
+    hprintln!("[NS][e2e] account-0 sender derived: OK");
+
     let to_alice: [u8; 20] = [
         0xab, 0xcd, 0xef, 0x12, 0x34, 0x56, 0x78, 0x90, 0xab, 0xcd, 0xef, 0x12, 0x34, 0x56, 0x78,
         0x90, 0xab, 0xcd, 0xef, 0x12,
     ];
+
+    // Scenario 0a: a one-bit companion sender substitution is rejected before
+    // confirmation, key derivation for the slot, or signature release.
+    hprintln!("[NS][e2e] Scenario 0a: mismatched single sender is refused");
+    unsafe {
+        let len = build_sign_payload(
+            &mut PAYLOAD_BUF,
+            &wallet_sender,
+            11_155_111,
+            1,
+            false,
+            0,
+            &to_alice,
+            1,
+            &[],
+        );
+        PAYLOAD_BUF[12] ^= 0x01;
+        let status = nsc_api::sign_userop(&PAYLOAD_BUF[..len], &mut SIG_BUF);
+        assert_eq!(
+            status,
+            NscStatus::InvalidPointer as u32,
+            "single UserOp with the wrong deterministic sender must be refused"
+        );
+    }
+
+    // Scenario 0b: the atomic batch gateway enforces the same binding.
+    hprintln!("[NS][e2e] Scenario 0b: mismatched batch sender is refused");
+    unsafe {
+        let inner = [E2eBatchTx {
+            to: to_alice,
+            value_wei: 1,
+            data: &[],
+        }];
+        let len = build_batch_payload(
+            &mut PAYLOAD_BUF,
+            &wallet_sender,
+            11_155_111,
+            1,
+            false,
+            0,
+            &inner,
+        );
+        PAYLOAD_BUF[12] ^= 0x01;
+        let status = nsc_api::sign_userop_batch(&PAYLOAD_BUF[..len], &mut SIG_BUF);
+        assert_eq!(
+            status,
+            NscStatus::InvalidPointer as u32,
+            "batch UserOp with the wrong deterministic sender must be refused"
+        );
+    }
+
+    // Scenario 0c: the account-index bits are part of the sender binding. A
+    // valid account-0 address must not be accepted when flags select account 1.
+    hprintln!("[NS][e2e] Scenario 0c: cross-account sender is refused");
+    unsafe {
+        let len = build_sign_payload(
+            &mut PAYLOAD_BUF,
+            &wallet_sender,
+            11_155_111,
+            1,
+            false,
+            0,
+            &to_alice,
+            1,
+            &[],
+        );
+        let mut flags = u32::from_be_bytes([
+            PAYLOAD_BUF[8],
+            PAYLOAD_BUF[9],
+            PAYLOAD_BUF[10],
+            PAYLOAD_BUF[11],
+        ]);
+        flags |= 1u32 << sphincs_tz_shared::ACCOUNT_INDEX_SHIFT;
+        PAYLOAD_BUF[8..12].copy_from_slice(&flags.to_be_bytes());
+        let status = nsc_api::sign_userop(&PAYLOAD_BUF[..len], &mut SIG_BUF);
+        assert_eq!(
+            status,
+            NscStatus::InvalidPointer as u32,
+            "account-0 sender must not pass an account-1 binding"
+        );
+    }
 
     // Scenario 1: rotation to slot 1 on chain A — expect Type 1 + Type 2.
     // (Post-Coinbase-port: REGISTER_SLOT requires slot_index >= 1 —
@@ -793,6 +886,7 @@ fn main() -> ! {
     unsafe {
         let len = build_sign_payload(
             &mut PAYLOAD_BUF,
+            &wallet_sender,
             11_155_111, // Sepolia
             1,          // slot_index
             true,       // register_slot
@@ -813,6 +907,7 @@ fn main() -> ! {
     unsafe {
         let len = build_sign_payload(
             &mut PAYLOAD_BUF,
+            &wallet_sender,
             11_155_111,
             1,
             false, // slot already registered
@@ -834,6 +929,7 @@ fn main() -> ! {
     unsafe {
         let len = build_sign_payload(
             &mut PAYLOAD_BUF,
+            &wallet_sender,
             11_155_111,
             2, // new slot
             true,
@@ -856,6 +952,7 @@ fn main() -> ! {
     unsafe {
         let len = build_sign_payload(
             &mut PAYLOAD_BUF,
+            &wallet_sender,
             84_532, // Base Sepolia
             1,
             true,
@@ -917,6 +1014,7 @@ fn main() -> ! {
         // `data = approveHash(safeTxHash)`.
         let mut len = build_sign_payload(
             &mut PAYLOAD_BUF,
+            &wallet_sender,
             chain_id,
             1,     // already-registered slot 1 (after Scenario 1's rotation)
             false, // no slot rotation; already registered on Sepolia from Scenario 1
@@ -982,6 +1080,7 @@ fn main() -> ! {
         let chain_id: u64 = 11_155_111; // Sepolia (slot 1 already registered)
         let mut len = build_sign_payload(
             &mut PAYLOAD_BUF,
+            &wallet_sender,
             chain_id,
             1,     // already-registered slot 1
             false, // no slot rotation
@@ -1042,6 +1141,7 @@ fn main() -> ! {
 
         let mut len = build_sign_payload(
             &mut PAYLOAD_BUF,
+            &wallet_sender,
             chain_id,
             5,    // fresh slot
             true, // register (Type 1 + Type 2)
@@ -1083,6 +1183,7 @@ fn main() -> ! {
         // Plain value transfer to the named contract (no inner calldata).
         let mut len = build_sign_payload(
             &mut PAYLOAD_BUF,
+            &wallet_sender,
             chain_id,
             6,    // fresh slot
             true, // register
@@ -1129,6 +1230,7 @@ fn main() -> ! {
 
         let mut len = build_sign_payload(
             &mut PAYLOAD_BUF,
+            &wallet_sender,
             chain_id,
             1,
             false,
@@ -1190,6 +1292,7 @@ fn main() -> ! {
 
         let mut len = build_sign_payload(
             &mut PAYLOAD_BUF,
+            &wallet_sender,
             chain_id,
             1,
             false,
@@ -1254,6 +1357,7 @@ fn main() -> ! {
 
         let mut len = build_sign_payload(
             &mut PAYLOAD_BUF,
+            &wallet_sender,
             chain_id,
             1,
             false,
@@ -1309,6 +1413,7 @@ fn main() -> ! {
 
         let mut len = build_sign_payload(
             &mut PAYLOAD_BUF,
+            &wallet_sender,
             chain_id,
             1,
             false,
@@ -1366,6 +1471,7 @@ fn main() -> ! {
 
         let mut len = build_sign_payload(
             &mut PAYLOAD_BUF,
+            &wallet_sender,
             chain_id,
             1,
             false,
@@ -1445,6 +1551,7 @@ fn main() -> ! {
 
         let len = build_batch_payload(
             &mut PAYLOAD_BUF,
+            &wallet_sender,
             11_155_111, // Sepolia (slot 1 already registered in Scenario 1)
             1,          // slot_index
             false,      // no rotation; slot already on-chain
@@ -1477,6 +1584,7 @@ fn main() -> ! {
         }];
         let len = build_batch_payload(
             &mut PAYLOAD_BUF,
+            &wallet_sender,
             11_155_111,
             1,
             false,
@@ -1511,6 +1619,7 @@ fn main() -> ! {
         });
         let len = build_batch_payload(
             &mut PAYLOAD_BUF,
+            &wallet_sender,
             11_155_111,
             1,
             false,
@@ -1541,7 +1650,7 @@ fn main() -> ! {
         PAYLOAD_BUF[off..off + 4].copy_from_slice(&0u32.to_be_bytes());
         off += 4;
         // sender
-        PAYLOAD_BUF[off..off + 20].fill(0x42);
+        PAYLOAD_BUF[off..off + 20].copy_from_slice(&wallet_sender);
         off += 20;
         PAYLOAD_BUF[off..off + 20].copy_from_slice(&ENTRY_POINT_V06);
         off += 20;
@@ -1550,8 +1659,9 @@ fn main() -> ! {
             PAYLOAD_BUF[off] = 0;
             off += 1;
         }
-        // batch_count = 0
-        PAYLOAD_BUF[off] = 0;
+        PAYLOAD_BUF[off] = sphincs_tz_shared::SIGN_USEROP_BATCH_WIRE_VERSION;
+        off += 1;
+        PAYLOAD_BUF[off] = 0; // batch_count = 0
         off += 1;
         debug_assert_eq!(off, SIGN_USEROP_BATCH_HEADER_LEN);
         let status = nsc_api::sign_userop_batch(&PAYLOAD_BUF[..off], &mut SIG_BUF);
@@ -1576,7 +1686,7 @@ fn main() -> ! {
         off += 8;
         PAYLOAD_BUF[off..off + 4].copy_from_slice(&1u32.to_be_bytes()); // slot 1
         off += 4;
-        PAYLOAD_BUF[off..off + 20].fill(0x42);
+        PAYLOAD_BUF[off..off + 20].copy_from_slice(&wallet_sender);
         off += 20;
         PAYLOAD_BUF[off..off + 20].copy_from_slice(&ENTRY_POINT_V06);
         off += 20;
@@ -1584,13 +1694,16 @@ fn main() -> ! {
             PAYLOAD_BUF[off] = 0;
             off += 1;
         }
-        // batch_count = 1.
-        PAYLOAD_BUF[off] = 1;
+        PAYLOAD_BUF[off] = sphincs_tz_shared::SIGN_USEROP_BATCH_WIRE_VERSION;
+        off += 1;
+        PAYLOAD_BUF[off] = 1; // batch_count
+        off += 1;
+        debug_assert_eq!(off, SIGN_USEROP_BATCH_HEADER_LEN);
         // Write a full per-tx prefix with `data_len = 1000` and zero
         // trailing data bytes, so the parser hits the
         // `data_len > MAX_TX_LEN || cursor + data_len > total_len`
         // branch and rejects the truncated inner-tx block.
-        let mut off2 = SIGN_USEROP_BATCH_HEADER_LEN;
+        let mut off2 = off;
         PAYLOAD_BUF[off2..off2 + 20].fill(0xaa);
         off2 += 20;
         // value
@@ -1637,6 +1750,7 @@ fn main() -> ! {
         ];
         let header_len = build_sign_payload(
             &mut PAYLOAD_BUF,
+            &wallet_sender,
             11_155_111,
             1,
             false,
@@ -1801,6 +1915,7 @@ fn main() -> ! {
         let other: [u8; 20] = [0xDE; 20];
         let header_len = build_sign_payload(
             &mut PAYLOAD_BUF,
+            &wallet_sender,
             11_155_111,
             1,
             false,
@@ -1881,6 +1996,7 @@ fn main() -> ! {
 
         let mut len = build_sign_payload(
             &mut PAYLOAD_BUF,
+            &wallet_sender,
             chain_id,
             1,     // already-registered slot 1
             false, // no rotation
@@ -1943,6 +2059,7 @@ fn main() -> ! {
 
         let mut len = build_sign_payload(
             &mut PAYLOAD_BUF,
+            &wallet_sender,
             chain_id,
             1,
             false,
@@ -2019,6 +2136,7 @@ fn main() -> ! {
 
         let mut len = build_sign_payload(
             &mut PAYLOAD_BUF,
+            &wallet_sender,
             chain_id,
             1,
             false,
@@ -2092,6 +2210,7 @@ fn main() -> ! {
 
         let mut len = build_sign_payload(
             &mut PAYLOAD_BUF,
+            &wallet_sender,
             chain_id,
             1,
             false,
@@ -2159,6 +2278,7 @@ fn main() -> ! {
 
         let mut len = build_sign_payload(
             &mut PAYLOAD_BUF,
+            &wallet_sender,
             chain_id,
             1,
             false,

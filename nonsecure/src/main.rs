@@ -259,12 +259,23 @@ fn main() -> ! {
     unsafe {
         let payload = &mut *core::ptr::addr_of_mut!(PAYLOAD_BUF);
         let sig = &mut *core::ptr::addr_of_mut!(SIG_BUF);
-        let payload_len = build_value_transfer_payload(payload);
+        let mut sender = [0u8; 20];
+        let address_status = nsc_api::get_wallet_address(&mut sender, 0);
+        assert_eq!(address_status, NscStatus::Ok as u32);
+        let payload_len = build_value_transfer_payload(payload, &sender);
         let status = nsc_api::sign_userop(&payload[..payload_len], sig);
         hprintln!("[NS] sign_userop: {:?}", NscStatus::from(status));
         if status == NscStatus::Ok as u32 {
-            let ic_len = u32::from_be_bytes([sig[0], sig[1], sig[2], sig[3]]);
-            let t1_off = 4 + ic_len as usize;
+            // Unified-sign response starts with the durable 8-byte off-chain
+            // count, followed by the three length-prefixed blobs.
+            let header = 8usize;
+            let ic_len = u32::from_be_bytes([
+                sig[header],
+                sig[header + 1],
+                sig[header + 2],
+                sig[header + 3],
+            ]);
+            let t1_off = header + 4 + ic_len as usize;
             let t1_len = u32::from_be_bytes([
                 sig[t1_off],
                 sig[t1_off + 1],
@@ -293,38 +304,33 @@ fn main() -> ! {
 /// Build a unified-sign payload for a value-transfer tx.
 /// Output layout matches `sphincs_tz_shared::SIGN_USEROP_HEADER_LEN`.
 #[cfg(all(not(feature = "e2e-test"), not(feature = "usb"), not(feature = "bench-key-speed"), not(feature = "fwup-hw-test"), not(feature = "gtzc-test"), not(feature = "tzic-wipe-test")))]
-fn build_value_transfer_payload(buf: &mut [u8]) -> usize {
-    // Sepolia chain_id, slot 0 with FLAG_REGISTER_SLOT so the demo first-
-    // sign emits the expected Type 1 + Type 2 bundle. (The stateless
-    // firmware has no way to know on its own whether this slot has been
-    // registered on-chain yet.)
-    use sphincs_tz_shared::FLAG_REGISTER_SLOT;
+fn build_value_transfer_payload(buf: &mut [u8], sender: &[u8; 20]) -> usize {
+    // Sepolia chain_id, account 0, slot 0 with INCLUDE_INIT_CODE: the factory
+    // atomically deploys the deterministic wallet and seeds slot 0, while the
+    // Type-2 signature authorizes this first transfer.
+    use sphincs_tz_shared::FLAG_INCLUDE_INIT_CODE;
     let chain_id: u64 = 11_155_111;
-    let sender: [u8; 20] = [0x42; 20];
     let entry_point: [u8; 20] = [
-        0x43, 0x37, 0x09, 0x00, 0x9B, 0x83, 0x30, 0xFD, 0xa3, 0x23, 0x11, 0xDF, 0x1C, 0x2A, 0xFA,
-        0x40, 0x2e, 0xD8, 0xD0, 0x09,
+        0x5F, 0xF1, 0x37, 0xD4, 0xb0, 0xFD, 0xCD, 0x49, 0xDc, 0xA3, 0x0c, 0x7C, 0xF5, 0x7E, 0x57,
+        0x8a, 0x02, 0x6d, 0x27, 0x89,
     ];
-    let mut nonce = [0u8; 32];
-    nonce[31] = 1;
+    let nonce = [0u8; 32];
 
-    // accountGasLimits = (300_000 << 128) | 50_000
-    let mut agl = [0u8; 32];
-    agl[0..16].copy_from_slice(&300_000u128.to_be_bytes());
-    agl[16..32].copy_from_slice(&50_000u128.to_be_bytes());
+    fn u128_be_slot(v: u128) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        out[16..].copy_from_slice(&v.to_be_bytes());
+        out
+    }
 
-    let mut pre_gas = [0u8; 32];
-    pre_gas[28..32].copy_from_slice(&100_000u32.to_be_bytes());
-
-    // gasFees = (2 gwei << 128) | 10 gwei
-    let mut gf = [0u8; 32];
-    gf[0..16].copy_from_slice(&2_000_000_000u128.to_be_bytes());
-    gf[16..32].copy_from_slice(&10_000_000_000u128.to_be_bytes());
-
-    const KECCAK_EMPTY: [u8; 32] = [
-        0xc5, 0xd2, 0x46, 0x01, 0x86, 0xf7, 0x23, 0x3c, 0x92, 0x7e, 0x7d, 0xb2, 0xdc, 0xc7, 0x03,
-        0xc0, 0xe5, 0x00, 0xb6, 0x53, 0xca, 0x82, 0x27, 0x3b, 0x7b, 0xfa, 0xd8, 0x04, 0x5d, 0x85,
-        0xa4, 0x70,
+    let call_gas = u128_be_slot(50_000);
+    let verification_gas = u128_be_slot(800_000);
+    let pre_verification_gas = u128_be_slot(150_000);
+    let max_fee = u128_be_slot(1_000_000_000);
+    let max_priority_fee = u128_be_slot(100_000_000);
+    const SHA256_EMPTY: [u8; 32] = [
+        0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14, 0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f, 0xb9,
+        0x24, 0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c, 0xa4, 0x95, 0x99, 0x1b, 0x78, 0x52,
+        0xb8, 0x55,
     ];
 
     let to_address: [u8; 20] = [
@@ -339,22 +345,26 @@ fn build_value_transfer_payload(buf: &mut [u8]) -> usize {
     let mut off = 0usize;
     buf[off..off + 8].copy_from_slice(&chain_id.to_be_bytes());
     off += 8;
-    // flags: slot_index=0 | FLAG_REGISTER_SLOT
-    buf[off..off + 4].copy_from_slice(&FLAG_REGISTER_SLOT.to_be_bytes());
+    // flags: account_index=0, slot_index=0, deploy through initCode.
+    buf[off..off + 4].copy_from_slice(&FLAG_INCLUDE_INIT_CODE.to_be_bytes());
     off += 4;
-    buf[off..off + 20].copy_from_slice(&sender);
+    buf[off..off + 20].copy_from_slice(sender);
     off += 20;
     buf[off..off + 20].copy_from_slice(&entry_point);
     off += 20;
     buf[off..off + 32].copy_from_slice(&nonce);
     off += 32;
-    buf[off..off + 32].copy_from_slice(&agl);
+    buf[off..off + 32].copy_from_slice(&call_gas);
     off += 32;
-    buf[off..off + 32].copy_from_slice(&pre_gas);
+    buf[off..off + 32].copy_from_slice(&verification_gas);
     off += 32;
-    buf[off..off + 32].copy_from_slice(&gf);
+    buf[off..off + 32].copy_from_slice(&pre_verification_gas);
     off += 32;
-    buf[off..off + 32].copy_from_slice(&KECCAK_EMPTY);
+    buf[off..off + 32].copy_from_slice(&max_fee);
+    off += 32;
+    buf[off..off + 32].copy_from_slice(&max_priority_fee);
+    off += 32;
+    buf[off..off + 32].copy_from_slice(&SHA256_EMPTY);
     off += 32;
     buf[off..off + 20].copy_from_slice(&to_address);
     off += 20;

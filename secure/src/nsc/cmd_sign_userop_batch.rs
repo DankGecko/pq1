@@ -54,6 +54,7 @@ use sphincs_tz_shared::{
     TRAILER_KIND_ERC7730, TRAILER_KIND_NAME, TRAILER_KIND_SAFE_V1, TRAILER_KIND_SEL_CURATED,
     TRAILER_KIND_SEL_SELFATTEST, TRAILER_KIND_ZK_V1, TRAILER_KIND_ZK_V3,
 };
+use subtle::ConstantTimeEq;
 use zeroize::{Zeroize, Zeroizing};
 
 /// Domain tag the firmware signs when authorising slot-0 on a new chain.
@@ -222,8 +223,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     let account_index = (flags & ACCOUNT_INDEX_MASK) >> ACCOUNT_INDEX_SHIFT;
     let slot_index = flags & SLOT_INDEX_MASK;
 
-    let mut sender = [0u8; 20];
-    sender.copy_from_slice(&snap[12..32]);
+    let mut companion_sender = [0u8; 20];
+    companion_sender.copy_from_slice(&snap[12..32]);
     let mut entry_point = [0u8; 20];
     entry_point.copy_from_slice(&snap[32..52]);
     let mut nonce = [0u8; 32];
@@ -268,9 +269,11 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     }
     let include_init_code_r = (flags_recheck & FLAG_INCLUDE_INIT_CODE) != 0;
     let register_slot_r = (flags_recheck & FLAG_REGISTER_SLOT) != 0;
+    let account_index_r = (flags_recheck & ACCOUNT_INDEX_MASK) >> ACCOUNT_INDEX_SHIFT;
     let slot_index_r = flags_recheck & SLOT_INDEX_MASK;
     if include_init_code_r != include_init_code
         || register_slot_r != register_slot
+        || account_index_r != account_index
         || slot_index_r != slot_index
     {
         ui::show_status("Batch sign", "fi tampered");
@@ -335,6 +338,71 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         Ok(p) => p,
         Err(s) => return s,
     };
+
+    // Bind the untrusted wire sender to this mnemonic/account's deterministic
+    // CREATE2 address before any trailer verifier or trusted-display page can
+    // consume it. Only the derived address is used below, so a fault that
+    // skips the rejection cannot make the device sign for another wallet.
+    let mut sender_binding_slot =
+        super::cmd_get_wallet_address::SenderBinding::fail_closed();
+    let mut sender_binding_cfi = crate::fi::CfiCounter::new();
+    // Materialize the fail-closed slot even under LTO. If the following `bl`
+    // is instruction-skipped, only the materialized fail-closed slot remains.
+    // SAFETY: unique local slot; volatile store is deliberately observable.
+    unsafe {
+        core::ptr::write_volatile(
+            core::ptr::addr_of_mut!(sender_binding_slot),
+            super::cmd_get_wallet_address::SenderBinding::fail_closed(),
+        );
+        super::cmd_get_wallet_address::bind_userop_sender(
+            account_index,
+            &companion_sender,
+            &mut sender_binding_slot,
+            &mut sender_binding_cfi,
+        );
+    }
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    // Read the derived sender twice. A skipped/corrupted aggregate word-load
+    // must be detected before the local copy can reach any verifier or hash.
+    // SAFETY: the slot is initialized before the call and remains live here.
+    let sender = unsafe {
+        core::ptr::read_volatile(core::ptr::addr_of!(sender_binding_slot.sender))
+    };
+    crate::fi::wait_random();
+    // SAFETY: same as the first sender read.
+    let sender_check = unsafe {
+        core::ptr::read_volatile(core::ptr::addr_of!(sender_binding_slot.sender))
+    };
+    let sender_reads_agree = sender.ct_eq(&sender_check).unwrap_u8();
+    // SAFETY: the scalar fields were initialized before the call and the
+    // helper publishes them with volatile stores.
+    let binding_verdict = unsafe {
+        core::ptr::read_volatile(core::ptr::addr_of!(sender_binding_slot.verdict))
+    };
+    // SAFETY: same initialized caller-owned slot.
+    let binding_error = unsafe {
+        core::ptr::read_volatile(core::ptr::addr_of!(sender_binding_slot.error))
+    };
+    if sender_binding_cfi.check_into_sentinel(
+        super::cmd_get_wallet_address::SENDER_BIND_CFI_EXPECTED,
+    ) != crate::fi::OK_SENTINEL
+    {
+        ui::show_status("Sign refused", "fi tampered");
+        return NscStatus::InternalError as u32;
+    }
+    crate::fi::scrub_sentinel_register();
+    if crate::fi::check_true_into_sentinel(|| {
+        core::hint::black_box(sender_reads_agree) == 1
+    }) != crate::fi::OK_SENTINEL
+    {
+        ui::show_status("Sign refused", "fi tampered");
+        return NscStatus::InternalError as u32;
+    }
+    crate::fi::scrub_sentinel_register();
+    if binding_verdict != crate::fi::OK_SENTINEL {
+        ui::show_status("Sign refused", "wrong wallet");
+        return binding_error as u32;
+    }
 
     // ── 5c. Verify + route trailers per inner-tx ──────────────────
     //

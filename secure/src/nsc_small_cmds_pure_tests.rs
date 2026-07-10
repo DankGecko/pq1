@@ -59,8 +59,8 @@
 #![cfg(test)]
 
 use sphincs_tz_shared::{
-    C10_SIG_LEN, EIP6492_FACTORY_CALLDATA_LEN, FACTORY_ADD_SLOT_DOMAIN, MAX_ACCOUNT_INDEX,
-    MAX_ATTEMPTS, NS_FLASH_BASE, NS_FLASH_END, NS_SRAM_BASE, NS_SRAM_END, NscStatus,
+    NscStatus, C10_SIG_LEN, EIP6492_FACTORY_CALLDATA_LEN, FACTORY_ADD_SLOT_DOMAIN,
+    MAX_ACCOUNT_INDEX, MAX_ATTEMPTS, NS_FLASH_BASE, NS_FLASH_END, NS_SRAM_BASE, NS_SRAM_END,
     PQ_CREATE_ACCOUNT_SELECTOR, PQ_INIT_CODE_LEN, PQ_SMART_WALLET_FACTORY, PROXY_INIT_CODE_HASH,
     SHARED_MAILBOX_BASE, SHARED_MAILBOX_END,
 };
@@ -75,6 +75,7 @@ use sphincs_tz_shared::{
 
 const REQUEST_UNLOCK_SRC: &str = include_str!("nsc/cmd_request_unlock.rs");
 const GET_WALLET_ADDRESS_SRC: &str = include_str!("nsc/cmd_get_wallet_address.rs");
+const AA_EIP1271_SRC: &str = include_str!("../../aa/src/eip1271.rs");
 const GET_INIT_CODE_SRC: &str = include_str!("nsc/cmd_get_init_code.rs");
 const GET_REMAINING_SRC: &str = include_str!("nsc/cmd_get_remaining.rs");
 const IS_UNLOCKED_SRC: &str = include_str!("nsc/cmd_is_unlocked.rs");
@@ -201,7 +202,8 @@ fn positive_create2_preimage_first_byte_is_0xff() {
     // 0xff. Asserting at the handler call site is moot (the byte is
     // hard-coded), so we pin the mirror's behaviour and the source-
     // text shape together.
-    assert!(GET_WALLET_ADDRESS_SRC.contains("pre[0] = 0xff"));
+    assert!(GET_WALLET_ADDRESS_SRC.contains("crate::aa::eip1271::proxy_address"));
+    assert!(AA_EIP1271_SRC.contains("pre[0] = 0xff"));
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -223,10 +225,11 @@ fn negative_create2_salt_is_sha256_not_keccak256() {
     // (because everything else on the chain side uses keccak) would
     // silently change every on-chain address.
     assert!(
-        GET_WALLET_ADDRESS_SRC.contains("Sha256::new()"),
+        GET_WALLET_ADDRESS_SRC.contains("crate::aa::eip1271::proxy_address")
+            && AA_EIP1271_SRC.contains("Sha256::new()"),
         "salt must use SHA-256 — keccak256 would change the wallet address"
     );
-    assert!(GET_WALLET_ADDRESS_SRC.contains("salt = sha256"));
+    assert!(AA_EIP1271_SRC.contains("h.update(salt_in)"));
 }
 
 #[test]
@@ -234,7 +237,8 @@ fn negative_create2_preimage_uses_keccak256_not_sha256() {
     // EIP-1014: address = keccak256(0xff || ...). Switching to
     // sha256 here would break interop with every EVM verifier.
     assert!(
-        GET_WALLET_ADDRESS_SRC.contains("Keccak256::new()"),
+        GET_WALLET_ADDRESS_SRC.contains("crate::aa::eip1271::proxy_address")
+            && AA_EIP1271_SRC.contains("Keccak256::new()"),
         "CREATE2 preimage hash must be keccak256 (EVM-mandated)"
     );
 }
@@ -481,7 +485,10 @@ fn negative_factory_calldata_length_field_high_bytes_zero() {
         assert_eq!(buf[i], 0, "length byte {i} must be zero");
     }
     // And the low 2 bytes encode 4008.
-    assert_eq!(u16::from_be_bytes([buf[226], buf[227]]) as usize, C10_SIG_LEN);
+    assert_eq!(
+        u16::from_be_bytes([buf[226], buf[227]]) as usize,
+        C10_SIG_LEN
+    );
 }
 
 #[test]
@@ -493,13 +500,7 @@ fn negative_factory_calldata_pk_seed_and_root_layout_order() {
     let master_root = [0x02u8; 32];
     let slot_seed = [0x03u8; 32];
     let slot_root = [0x04u8; 32];
-    let buf = mirror_build_calldata_abi_only(
-        1,
-        &master_seed,
-        &master_root,
-        &slot_seed,
-        &slot_root,
-    );
+    let buf = mirror_build_calldata_abi_only(1, &master_seed, &master_root, &slot_seed, &slot_root);
     assert_eq!(&buf[4..36], &master_seed);
     assert_eq!(&buf[36..68], &master_root);
     assert_eq!(&buf[68..100], &slot_seed);
@@ -944,7 +945,10 @@ fn negative_get_init_code_validates_both_ns_pointers_before_deref() {
     let read_volatile = GET_INIT_CODE_SRC.find("read_volatile(in_ptr").unwrap();
     let write_volatile = GET_INIT_CODE_SRC.find("write_volatile(out_ptr").unwrap();
     assert!(val_read < read_volatile, "validate read ptr before deref");
-    assert!(val_write < write_volatile, "validate write ptr before deref");
+    assert!(
+        val_write < write_volatile,
+        "validate write ptr before deref"
+    );
 }
 
 #[test]
@@ -1261,7 +1265,13 @@ fn negative_factory_calldata_returns_crypto_error_on_sign_failure() {
 #[test]
 fn negative_factory_calldata_no_classical_signers() {
     let forbidden = [
-        "secp256k1", "ECDSA", "ed25519", "Ed25519", "p256", "P256", "RSA",
+        "secp256k1",
+        "ECDSA",
+        "ed25519",
+        "Ed25519",
+        "p256",
+        "P256",
+        "RSA",
     ];
     for f in &forbidden {
         assert!(
@@ -1408,7 +1418,14 @@ fn negative_no_slice_file_exposes_reset_or_rotate_paths() {
 fn negative_no_slice_file_targets_entrypoint_v07_or_v08() {
     // CLAUDE.md §"What NOT to do": v0.6 is the frozen target. Any
     // mention of v0.7 / v0.8 is a footgun.
-    let forbidden = ["v0.7", "v0_7", "v0.8", "v0_8", "EntryPointV07", "EntryPointV08"];
+    let forbidden = [
+        "v0.7",
+        "v0_7",
+        "v0.8",
+        "v0_8",
+        "EntryPointV07",
+        "EntryPointV08",
+    ];
     for (name, src) in ALL_SLICE_FILES {
         for f in &forbidden {
             assert!(
@@ -1520,9 +1537,11 @@ fn negative_ns_sram_and_ns_flash_are_disjoint_regions() {
     // The validate_ns_read_ptr helper accepts the union of NS_SRAM
     // and NS_FLASH; the regions must be disjoint so the union maths
     // doesn't accidentally accept a stretch of secure memory.
-    let sram_overlaps_flash =
-        NS_SRAM_BASE < NS_FLASH_END && NS_FLASH_BASE < NS_SRAM_END;
-    assert!(!sram_overlaps_flash, "NS SRAM and NS Flash must be disjoint");
+    let sram_overlaps_flash = NS_SRAM_BASE < NS_FLASH_END && NS_FLASH_BASE < NS_SRAM_END;
+    assert!(
+        !sram_overlaps_flash,
+        "NS SRAM and NS Flash must be disjoint"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────

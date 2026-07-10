@@ -45,7 +45,8 @@ is smaller than `executeBatchWithOffchainCount` for `N=1`).
                                         bit 30 = FLAG_REGISTER_SLOT
                                         bits 29..22 = account_index (8 bits)
                                         bits 21..0  = slot_index   (22 bits)
-[12..32)  sender              20 B    — PQSmartWallet proxy address
+[12..32)  sender              20 B    — MUST equal GET_WALLET_ADDRESS(account_index);
+                                         firmware recomputes and refuses mismatches
 [32..52)  entry_point         20 B
 [52..84)  nonce               u256 BE — base nonce; if FLAG_REGISTER_SLOT
                                         is set the addOwner UserOp uses

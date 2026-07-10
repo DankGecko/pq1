@@ -55,6 +55,7 @@ use sphincs_tz_shared::{
     PQ_SMART_WALLET_FACTORY, SAFE_V1_PAYLOAD_MAX, SET_PRE_SIGNATURE_SELECTOR,
     SIGN_USEROP_HEADER_LEN, SIG_WRAPPER_LEN, COW_ORDER_TRAILER_MAX_LEN,
 };
+use subtle::ConstantTimeEq;
 use zeroize::{Zeroize, Zeroizing};
 
 /// Domain tag the firmware signs when authorising slot-0 on a new chain.
@@ -201,7 +202,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     {
         static mut E2E_CALL_NO: u8 = 0;
         // SAFETY: category 5 — `E2E_CALL_NO` is a `static mut` debug-
-        // only counter compiled in only under `e2e-test` + `ui-oled`.
+        // only counter compiled in only under `e2e-test` + `ui-lcd`.
         // Single-threaded non-reentrant dispatcher serialises access;
         // not present in production builds.
         let n = unsafe {
@@ -224,8 +225,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         };
         ui::show_status(title, kind);
     }
-    let mut sender = [0u8; 20];
-    sender.copy_from_slice(&snap[12..32]);
+    let mut companion_sender = [0u8; 20];
+    companion_sender.copy_from_slice(&snap[12..32]);
     let mut entry_point = [0u8; 20];
     entry_point.copy_from_slice(&snap[32..52]);
     let mut nonce = [0u8; 32];
@@ -292,12 +293,14 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         ui::show_status("Sign", "fi tampered");
         return NscStatus::InternalError as u32;
     }
-    // Same kernel as the first decode (the redundant read + this recheck ARE
-    // the F-11 countermeasure; account_index is not rechecked, as before).
-    let (include_init_code_r, register_slot_r, _account_index_r, slot_index_r) =
+    // Same kernel as the first decode (the redundant read + this full-field
+    // recheck ARE the F-11 countermeasure). Account index is load-bearing: it
+    // selects the mnemonic-derived sender checked below.
+    let (include_init_code_r, register_slot_r, account_index_r, slot_index_r) =
         crate::aa::userop::decode_flags(flags_recheck);
     if include_init_code_r != include_init_code
         || register_slot_r != register_slot
+        || account_index_r != account_index
         || slot_index_r != slot_index
     {
         ui::show_status("Sign", "fi tampered");
@@ -654,6 +657,72 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     if cursor != total_len {
         ui::show_status("Sign", "trailing bytes");
         return NscStatus::InvalidPointer as u32;
+    }
+
+    // Bind the untrusted wire sender to the deterministic CREATE2 address for
+    // this mnemonic + account index before any sender-dependent verifier or
+    // trusted-display confirmation. Downstream code intentionally uses ONLY
+    // the published address, never `companion_sender`; even a skipped reject
+    // branch therefore cannot produce a signature for an arbitrary wallet.
+    let mut sender_binding_slot =
+        super::cmd_get_wallet_address::SenderBinding::fail_closed();
+    let mut sender_binding_cfi = crate::fi::CfiCounter::new();
+    // Materialize the fail-closed slot even under LTO. If the following `bl`
+    // is instruction-skipped, only the materialized fail-closed slot remains.
+    // SAFETY: unique local slot; volatile store is deliberately observable.
+    unsafe {
+        core::ptr::write_volatile(
+            core::ptr::addr_of_mut!(sender_binding_slot),
+            super::cmd_get_wallet_address::SenderBinding::fail_closed(),
+        );
+        super::cmd_get_wallet_address::bind_userop_sender(
+            account_index,
+            &companion_sender,
+            &mut sender_binding_slot,
+            &mut sender_binding_cfi,
+        );
+    }
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    // Read the derived sender twice. A skipped/corrupted aggregate word-load
+    // must be detected before the local copy can reach any verifier or hash.
+    // SAFETY: the slot is initialized before the call and remains live here.
+    let sender = unsafe {
+        core::ptr::read_volatile(core::ptr::addr_of!(sender_binding_slot.sender))
+    };
+    crate::fi::wait_random();
+    // SAFETY: same as the first sender read.
+    let sender_check = unsafe {
+        core::ptr::read_volatile(core::ptr::addr_of!(sender_binding_slot.sender))
+    };
+    let sender_reads_agree = sender.ct_eq(&sender_check).unwrap_u8();
+    // SAFETY: the scalar fields were initialized before the call and the
+    // helper publishes them with volatile stores.
+    let binding_verdict = unsafe {
+        core::ptr::read_volatile(core::ptr::addr_of!(sender_binding_slot.verdict))
+    };
+    // SAFETY: same initialized caller-owned slot.
+    let binding_error = unsafe {
+        core::ptr::read_volatile(core::ptr::addr_of!(sender_binding_slot.error))
+    };
+    if sender_binding_cfi.check_into_sentinel(
+        super::cmd_get_wallet_address::SENDER_BIND_CFI_EXPECTED,
+    ) != crate::fi::OK_SENTINEL
+    {
+        ui::show_status("Sign refused", "fi tampered");
+        return NscStatus::InternalError as u32;
+    }
+    crate::fi::scrub_sentinel_register();
+    if crate::fi::check_true_into_sentinel(|| {
+        core::hint::black_box(sender_reads_agree) == 1
+    }) != crate::fi::OK_SENTINEL
+    {
+        ui::show_status("Sign refused", "fi tampered");
+        return NscStatus::InternalError as u32;
+    }
+    crate::fi::scrub_sentinel_register();
+    if binding_verdict != crate::fi::OK_SENTINEL {
+        ui::show_status("Sign refused", "wrong wallet");
+        return binding_error as u32;
     }
 
     // ── 6. Build display-time Eip1559Tx shim ───────────────────────

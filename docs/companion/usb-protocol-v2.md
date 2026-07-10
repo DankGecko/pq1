@@ -106,7 +106,7 @@ offset  size  field
 ---------------------------------------------------------
   0     8    chain_id (u64 BE)
   8     4    flags (u32 BE — see shared/src/lib.rs)
- 12    20    sender (PQSmartWallet address)
+ 12    20    sender (MUST equal GET_WALLET_ADDRESS(account_index); mismatch is refused)
  32    20    entry_point (EntryPoint v0.6 address)
  52    32    nonce (u256 BE, base nonce for Type 1 if needed else Type 2)
  84    32    call_gas_limit (u256 BE)
