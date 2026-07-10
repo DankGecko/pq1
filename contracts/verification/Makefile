@@ -37,7 +37,7 @@ LAKE     ?= $(shell command -v lake 2>/dev/null || echo $$HOME/.elan/bin/lake)
 help: ## Show the runnable FV targets (those with a description)
 	@grep -hE '^[a-zA-Z0-9_.-]+:.*## ' $(MAKEFILE_LIST) | sort | awk -F':.*## ' '!seen[$$1]++ {printf "  \033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
-.PHONY: verify verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk verify-interp verify-transcription verify-parse-transcription verify-independent-signer verify-primitive-kat verify-storage-mutators verify-lean-proto-domain verify-fv-lints verify-lean4checker verify-kontrol verify-halmos verify-ledger-consistency verify-proof-mutation verify-forsc-margin
+.PHONY: verify verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk verify-interp verify-transcription verify-parse-transcription verify-independent-signer verify-primitive-kat verify-storage-mutators verify-lean-proto-domain verify-fv-lints verify-lean4checker verify-kontrol verify-halmos verify-ledger-consistency verify-proof-mutation verify-forsc-margin verify-easycrypt verify-easycrypt-pins
 
 # NOTE: verify-build (the `lake build` this bundle depends on) now also
 # kernel-checks the A3.1 in-kernel parse theorem + elision bridge (the root
@@ -106,6 +106,22 @@ verify-fv-lints: verify-build ## FV anti-vacuity sub-lints (escape-hatch/closure
 verify-ledger-consistency: verify-build ## AXIOM_STATUS.json falsifiable vs live dump (closures/pins/witnesses)
 	@python3 scripts/check_ledger_consistency.py --self-test
 	@python3 scripts/check_ledger_consistency.py
+
+# EASYCRYPT PORT gate. Two axioms in theft_free's closure (A5-EUFCMA, A5-ITSR)
+# cite this development as evidence; until 2026-07-10 it lived in a remote-less
+# local repo, so nobody but its author could check it. Compiles EVERY .ec AS A
+# TARGET -- mandatory, because EasyCrypt's `require` does NOT re-verify a
+# dependency's proofs (a file can require a broken theory and still exit 0), and
+# `admit` compiles exit 0 silently. Also asserts the pinned admit/axiom ledger
+# with a NESTING-AWARE sweeper (scripts/ec_sweep.py).
+# NOT CI-gated: needs an opam switch with EasyCrypt r2026.02 + Alt-Ergo 2.6.0.
+# `make verify-easycrypt-pins` checks the ledger with no toolchain at all.
+.PHONY: verify-easycrypt verify-easycrypt-pins
+verify-easycrypt: ## Compile the SPHINCS+C EasyCrypt port (every file as a target) + assert its ledger
+	@bash scripts/check_easycrypt.sh
+
+verify-easycrypt-pins: ## EasyCrypt admit/axiom ledger only (no toolchain needed)
+	@bash scripts/check_easycrypt.sh --dry-run
 
 # FORS+C GRINDING MARGIN (bounds the blast radius of the A5-ITSR literature gap:
 # the published SPHINCS+C paper has NO FORS+C security theorem). Pins that FORS+C

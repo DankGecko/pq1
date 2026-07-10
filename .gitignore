@@ -29,3 +29,6 @@ tools/erc20_rpc.json
 tools/optiga_reset/out/
 # Serena MCP plugin project cache (per-checkout, machine-local)
 .serena/
+
+# EasyCrypt build artifacts
+contracts/verification/easycrypt/**/*.eco
