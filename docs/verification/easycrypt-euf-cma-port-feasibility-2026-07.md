@@ -895,3 +895,37 @@ the (kernel-independent but auditable) numeric script rather than force a loose 
 to `Pr[ITSRC10(A,O)]` for an arbitrary adversary + ROM is the assumption-level gap that neither MM45
 nor the paper closes (it is *why* ITSR is assumed), so these lemmas advance the paper-level
 justification of `ITSRC10`, they do not turn it into a game-level theorem.
+
+### UPDATE 2026-07-10 (later, cont. 2) — z3 4.13.4 obtained, but `SPHINCS_PLUS.ec:1932` is an IRREDUCIBLE platform wall here; 2b-wire PREPARED but UNGATEABLE
+
+Attempted to unblock the MM45-chain items (the scheme module 1a, and the capstone rewire 2b-wire
+onto the new C10 FORS leg) by getting z3 4.13.4 — the version `FV-XMSS-EC/easycrypt.project`
+declares. Findings, exhaustive:
+
+- **z3 4.13.x will NOT build from source here** (gcc 15 rejects z3 4.13.0's `m_low_bound` template).
+  Got the **official prebuilt z3 4.13.4 Linux binary** instead (`~/.local/opt/z3-4.13.4/z3`, runs on
+  glibc 2.39), registered in `why3-ec-r2026.conf` via `why3 config detect` (recognized version, OK,
+  correct driver). EC-r2026 lists `Z3@4.13.4` in its known provers.
+- **`SPHINCS_PLUS.ec:1932` STILL fails** `cannot prove goal (strict)` — the goal is
+  `sp 2 2; conseq (: _ ==> ={pkFORS}) => />; 1: smt().` Tried, all failing: bare `compile`
+  (default), z3 4.16, **z3 4.13.4**, MM45's EXACT `runtest` project config (Alt-Ergo@2.6.0,
+  `timeout=3`; note SPHINCSPLUS's project uses Alt-Ergo ONLY — `:1932` is an Alt-Ergo goal), and
+  Alt-Ergo at **`-timeout 60`** (so it is NOT a timeout). MM45's CI passes this goal, so it is a
+  **platform/prover-BUILD difference, not a proof defect** — the Alt-Ergo 2.6.0 in the `ec-r2026`
+  opam switch behaves differently on this goal than MM45's CI Alt-Ergo. No `docker` on this box to
+  run MM45's exact-toolchain image (`make docker-check`).
+- ⇒ **`SPHINCS_PLUS.eco` cannot be freshly built on this box by any means available**, so the whole
+  MM45-chain (WOTS_C_*, SPHINCS_C, XMSSMT_C_*) is un-compile-gateable here. This is a HARDER wall
+  than "need z3 4.13.4": we HAVE z3 4.13.4 and it still fails. Needs MM45's exact CI toolchain (their
+  Docker image or an equivalently-built Alt-Ergo), not just the right prover version.
+
+**2b-wire is PREPARED, correct-by-construction, and NOT promoted.** The rewired capstone (FORS leg
+routed through `FORS_C10_Multi.MFORSC10`: the FORS clone, module renames, and — critically —
+**dropping the `good_counter_exists` premise** since C10 has no counter, the good-key existence being
+the inherited `good_pos` axiom) is saved at `~/repos/c10-eufcma-port/pending-2b-wire/`
+(`SPHINCS_C.c10-fors.ec.UNGATED` + a README with the 8-edit recipe and the honesty controls to run).
+Because it cannot be compiled here, it is **NOT verified and NOT committed** — the discipline is
+absolute (never promote a proof you cannot gate). A future session on a working MM45 toolchain
+applies the recipe, gates it (delete tree premise → fail; zero ITSRC10 term → fail), then vendors.
+The `FORS_C10_Multi` leg it routes through IS verified (stdlib-gateable, landed this session); only
+the capstone *composition* over it is blocked, and purely by the `SPHINCS_PLUS.eco` toolchain wall.

@@ -30,17 +30,20 @@
 # TOOLCHAIN CAVEAT (verified 2026-07-10). The STDLIB-ONLY FORS+C chain (DarkSide,
 # FORS_C, FORS_C_Multi, FORS_C10, FORS_C10_Multi, Grind, STCR_C) compiles as a
 # target with Alt-Ergo 2.6.0 ALONE. The MM45-CHAIN drafts (WOTS_C_*, SPHINCS_C,
-# XMSSMT_C_*) `require import SPHINCS_PLUS`, and building SPHINCS_PLUS.eco fresh
-# needs **z3 4.13.x** -- SPHINCS_PLUS.ec:1932 fails `cannot prove goal (strict)`
-# under both Alt-Ergo 2.6.0 and z3 4.16.0. So when SPHINCS_PLUS.eco is ABSENT (and
-# not FORCE_MM45=1) this script SKIPS the MM45-chain drafts LOUDLY -- listing each
-# skipped file + a summary + still exiting OK -- and gates only the stdlib-only
-# chain (all the +C leaf / FORS math, reproducible with Alt-Ergo alone). A skip is
-# NOT a pass: those files are simply NOT verified on such a box. Because `require`
-# does NOT re-verify (see below), a stale SPHINCS_PLUS.eco silently satisfies the
-# MM45-chain compiles; a clean box without z3 4.13.x is NOT a full reproduction of
-# the MM45-chain leg. Full MM45-chain verification needs z3 4.13.x (or a trusted
-# prebuilt SPHINCS_PLUS.eco); FORCE_MM45=1 compiles them anyway (fail-closed).
+# XMSSMT_C_*) `require import SPHINCS_PLUS`, and SPHINCS_PLUS.eco CANNOT be built
+# fresh on this box AT ALL: SPHINCS_PLUS.ec:1932 fails `cannot prove goal (strict)`
+# under Alt-Ergo 2.6.0, z3 4.16.0, AND z3 4.13.4 (official prebuilt binary, the
+# version FV-XMSS-EC/easycrypt.project declares) -- at timeouts up to 60s and via
+# MM45's exact runtest config (Alt-Ergo@2.6.0, timeout=3). MM45 CI passes it, so it
+# is a platform/prover-BUILD difference, not a proof defect; a full MM45-chain build
+# needs MM45's docker image / CI toolchain (no docker on this box). So when
+# SPHINCS_PLUS.eco is ABSENT (and not FORCE_MM45=1) this script SKIPS the MM45-chain
+# drafts LOUDLY -- listing each skipped file + a summary + still exiting OK -- and
+# gates only the stdlib-only chain (all the +C leaf / FORS math, reproducible with
+# Alt-Ergo alone). A skip is NOT a pass: those files are simply NOT verified on such
+# a box. Because `require` does NOT re-verify (see below), a stale SPHINCS_PLUS.eco
+# silently satisfies the MM45-chain compiles; without it this box is NOT a full
+# reproduction of the MM45-chain leg. FORCE_MM45=1 compiles them anyway (fail-closed).
 #
 # The MM45 reference proofs are NOT vendored (they are large and third-party).
 # Fetch them once:
