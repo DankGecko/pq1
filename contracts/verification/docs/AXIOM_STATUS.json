@@ -458,7 +458,7 @@
         },
         {
           "type": "partial-mechanization",
-          "evidence": "WOTS+C leg machine-checked in EasyCrypt: c10-eufcma-port drafts/WOTS_C_EmbDischarge.ec `D1_MEUFNACMA_WOTSC_MM45_embthfc` bounds Pr[M_EUF_NACMA_WOTSC_L] by Pr[S_TCR_C] + Pr[M_EUF_GCMA_WOTSTWESNPRF] (MM45's real WOTS-TW theorem); 0 admit, no free reals. FORS+C leg and the SPHINCS+C composition remain OPEN (composition is an assumed premise `hfx`)."
+          "evidence": "WOTS+C leg machine-checked in EasyCrypt and, as of 2026-07-09 (c10-eufcma-port c5fa41a), UNCONDITIONAL: `D1_MEUFNACMA_WOTSC_MM45_embthfc` bounds Pr[M_EUF_NACMA_WOTSC_L] by Pr[S_TCR_C] + Pr[M_EUF_GCMA_WOTSTWESNPRF] (MM45's real WOTS-TW theorem); 0 admit, no free reals, and the FLAG-2 embedding hypothesis is now DISCHARGED (stack re-based onto the concrete FSSLXMTWES.WTWES instance; emb_disj_wgpidxs_holds proved from emb_disj_concrete). Only residual side-conditions: `c <= p_tgts` (parameter) + the definitional encode-compat identity. The FORS+C leg and the SPHINCS+C composition (assumed premise `hfx`) remain OPEN, and no SPHINCS+C scheme module exists, so the capstone LHS is still an abstract real."
         }
       ],
       "citation": "Barbosa et al. ASIACRYPT 2024 (ePrint 2024/910) = STANDARD SPHINCS+ only. SPHINCS+C delta: Hülsing/Kudinov/Ronen/Yogev, IEEE S&P 2023 — proves WOTS+C (Thm C.2) but NOT FORS+C (informal argument only)."

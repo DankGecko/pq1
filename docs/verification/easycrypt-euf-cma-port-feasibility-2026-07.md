@@ -658,3 +658,52 @@ Four mismatches in one day all share a root: **nothing checks that the EasyCrypt
 the on-chain verifier; the signer's grind/encode path has no such bridge. Until it does,
 "the port proves something about C10" is an assumption, not a fact. Tracked here rather than
 chased now.
+
+---
+
+## UPDATE 2026-07-09c — FLAG-2 discharged: the WOTS+C leg is now UNCONDITIONAL
+
+The last real hypothesis on the WOTS+C leg is gone. `emb_disj_wgpidxs` (FLAG-2) was
+undischargeable for a *namespace* reason, not a mathematical one: the proof
+(`emb_disj_concrete`) lived in `WOTS_C_Flag2Discharge.ec` over the **concrete**
+`FSSLXMTWES.WTWES` instance, while the premise was stated over the **abstract**
+`WOTS_TW_ES` — two different `adrs` types.
+
+**Fix (c10-eufcma-port `c5fa41a`): re-base the WOTS+C stack onto the concrete instance
+and *define* `emb_tw`.** It turned out to be a header swap plus one re-exposed constant:
+
+- `require import SPHINCS_PLUS.` + `import FSSLXMTWES.WTWES.` in place of the abstract theory.
+- `emb_tw ad = insubd (put (put (put (val ad) 0 0) 1 0) 3 pkcotype)` — the pkcotype flip.
+- The clone substitutes `op c <- bigi predT (fun d' => nr_nodes_ht d' 0) 0 d` **away**, so `c`
+  is re-exposed with the identical definition (statements stay byte-identical). Of the
+  substituted names only `n`/`w`/`len`/`c` were referenced.
+- The FLAG-2 proof chain moves into `WOTS_C_Real.ec`; `WOTS_C_Bridge.ec` proves
+  `emb_disj_wgpidxs_holds : emb_disj_wgpidxs`.
+
+**Result**
+
+| lemma | premises before | after | conclusion |
+|---|---|---|---|
+| `D1_MEUFNACMA_WOTSC_MM45_embthfc` | 3 | **2** | byte-identical (md5-checked) |
+| `EUFCMA_SPHINCS_PLUS_C` | 7 | **6** | byte-identical (md5-checked) |
+
+So **WOTS+C multi-instance EU-naCMA is bounded by `S-TCR(+C)` + MM45's *real* WOTS-TW GCMA
+game with no embedding hypothesis** — unconditional apart from the parameter side-condition
+`c <= p_tgts` and the definitional encode-compat identity. Removing a hypothesis strengthens;
+nothing was weakened.
+
+**Anti-vacuity (a rebase is exactly where games go degenerate — so this was checked, not assumed):**
+- Replacing the corollary's RHS with `0%r` **fails to compile** ⇒ the LHS is not identically 0.
+- `nonvac_guard` — a valid WOTS signing address exists, so the guard premise is live.
+- `emb_off_range` — no `emb_tw` image is itself a valid WOTS chain address, so FLAG-2 is not
+  vacuously true via an `a := emb_tw b` self-collision.
+- `thfc`, `emb_in`, `predC` stay **abstract** ⇒ the S-TCR(+C) term is still the genuine
+  SM-DT-TCR-C assumption, not trivialised by moving to the concrete instance.
+
+Verified clean-from-scratch with **every file compiled as a target** (`require` does not
+re-verify): 18/18 EXIT 0, **3 real admits — all in orphaned files**, **1 real axiom** (`dpp_ll`).
+
+**What this does NOT change.** `A5-EUFCMA` stays `cited-tcb`. The capstone LHS `p_sphincs_c`
+is still an abstract real (no SPHINCS+C scheme module exists), and `hfx`, `hbridge`, the FORS
+tree layer and the FORS+C leg are still open. This closes one of seven premises — the one that
+was bounded, already proven, and blocking a clean citable claim about WOTS+C.
