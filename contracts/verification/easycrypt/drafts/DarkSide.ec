@@ -180,4 +180,46 @@ qed.
    `1/t < DS gam` and `DS gam ^ (k-1) > 0`), but it is not needed by anything and
    is not asserted here. *)
 
+(* ==========================================================================
+   THE K-FOLD PRODUCT OVER INDEPENDENT TREES.
+
+   The first "NOT proven here" milestone from the header, now DISCHARGED.
+
+   FORS uses `nt` INDEPENDENT trees.  Each tree independently reveals `gam`
+   uniformly-drawn leaves, so the whole reveal is one draw from
+   `dlist (dlist dleaf gam) nt` (a length-`nt` list of trees, each a length-`gam`
+   list of uniform leaves).  A fixed candidate names ONE valid leaf per tree:
+   `cs`, a length-`nt` leaf-vector with every entry in [0,t).  The candidate is
+   "covered" when, in EVERY tree i, its i-th named leaf `nth 0 cs i` appears
+   among that tree's revealed leaves `nth [] trees i`.
+
+   The joint all-covered probability is the genuine INDEPENDENCE PRODUCT
+   `DS gam ^ nt` -- an EQUALITY, not a bound, and it carries the full
+   independence content: `dlistE` factors the joint `mu` over the outer
+   `dlist ... nt` into the product, over trees, of each tree's per-tree coverage
+   `mu`, and each factor is exactly `cover_pr = DS gam`.  For `nt = k` (or the
+   `k-1` productive trees plus the forced last one) this is the `DS^(k-1)*(1/t)`
+   vs `DS^k` arithmetic of `forsc_le_fors`, now resting on a proven joint law
+   rather than an assumed one. *)
+lemma cover_all_pr (cs : int list) (gam nt : int) :
+  0 <= gam => 0 <= nt => size cs = nt =>
+  all (fun (c : int) => 0 <= c /\ c < t) cs =>
+  mu (dlist (dlist dleaf gam) nt)
+     (fun (trees : int list list) =>
+        forall i, 0 <= i && i < nt => (nth 0 cs i) \in (nth [] trees i))
+  = DS gam ^ nt.
+proof.
+move=> hg hnt hsz hall.
+have hbound : forall i, 0 <= i < nt => 0 <= nth 0 cs i < t.
++ move=> i hi; move: hall => /allP hall'.
+  have hm : nth 0 cs i \in cs by apply mem_nth; smt().
+  have := hall' _ hm; smt().
+rewrite (dlistE [] (dlist dleaf gam)
+          (fun (i : int) (tree : int list) => (nth 0 cs i) \in tree) nt) /=.
+rewrite (eq_big_seq _ (fun (_ : int) => DS gam)).
++ move=> i /mem_range hi /=.
+  by apply cover_pr; [ apply hbound | exact hg ].
+by rewrite mulr_const size_range; smt().
+qed.
+
 end DarkSide.

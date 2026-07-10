@@ -784,3 +784,91 @@ nonstandard hardness assumption* — standard ITSR plus the conditioning of the 
 State it at exactly the level MM45 states plain ITSR; justify its concrete security on paper
 (this script); and cite the ~102-bit black-box loss as evidence that the nonstandard assumption
 is **necessary, not lazy**.
+
+---
+
+## UPDATE 2026-07-10 (later) — FORS-side C10 rebase + k-fold product landed; a toolchain-reproducibility finding
+
+A four-way parallel push on the remaining FORS-side items. **Every "landed" below survived the
+coordinator's OWN negative controls re-run against the canonical tree — not the sub-agent's
+self-report** (this campaign's whole bug history is EXIT-0-but-unsound, so a verify-agent is the
+same epistemic object as the bug it checks; the gate has to be a control you run and read the exit
+code of).
+
+**LANDED (compile-as-target EXIT 0 + comment-stripped admit/axiom sweep + negative controls that FIRE):**
+
+- **`DarkSide.ec` k-fold product (`cover_all_pr`).** The joint all-covered probability over `nt`
+  INDEPENDENT trees `mu (dlist (dlist dleaf gam) nt) [all-covered] = DS gam ^ nt` — the genuine
+  independence product (EQUALITY, not a bound; `dlistE` factors the joint `mu` into the per-tree
+  product, each factor `= cover_pr = DS gam`). This is the first "NOT proven here" milestone from
+  the file's own header, past the per-tree `forsc_le_fors`. Controls (coordinator-run): RHS→`0%r`
+  fails, RHS→`1%r` fails, deleting the `0<=c<t` range hypothesis fails; all three dependent FORS
+  files still compile. It still does NOT close the tight bound — the binomial **mixture** over
+  instance load + the `(q_h+1)` union bound need a concentration inequality EasyCrypt's stdlib
+  lacks (unchanged wall).
+
+- **`FORS_C10_Multi.ec` (NEW) — the multi-instance C10-FAITHFUL FORS+C leg.** The "(c) C10 rebase"
+  that `XMSSMT_C_Scheme.ec`'s note said must precede a scheme module. `EUFCMA_MFORSC10` mirrors the
+  paper model's `EUFCMA_MFORSC` over the C10 CONDITIONED, NON-memoized oracle
+  (`mk <$ dcond dmkey (good m)` per signature, pool-routed by `idx_of`):
+  `Pr[EUF_CMA_MFORSC10(A,O)] <= Pr[ITSRC10(R_ITSRC10_MFORSC10(A), O_ITSRC10_Default)] + mtree_*`.
+  The `ITSRC10` term is carried as the UNREDUCED named assumption (never bounded — the ~102-bit
+  black-box dead end and the missing concentration inequality both still apply); the three tree
+  terms are an EXPLICIT premise. The REAL content — the multi→single reduction
+  `R_ITSRC10_MFORSC10` + its hop `ITSRC10_hop_M` (the C10 analogue of `ITSRC_hop_M`) + the
+  covered/!covered `mu_split` — is PROVEN, 0 admit. Controls (coordinator-run): deleting the tree
+  premise fails; zeroing the ITSRC10 term in the *main* theorem (hop occurrence preserved) fails.
+  Introduces two benign sugar-assumptions (`op [lossless] dpseed` → `dpseed_ll`; `const d {1<=d} as
+  ge1_d`) that mirror `FORS_C.ec` exactly and that `ec_sweep` does not count as `axiom`-keyword —
+  the ledger stays 8. Existence of a good key is carried by the inherited **load-bearing** axiom
+  `good_pos` (= p_ν), a ledger-visible modeling choice rather than the paper's per-theorem
+  `good_counter_exists` premise.
+
+- **Model↔implementation signing bridge** (`sphincs-c10/tests/fors_model_bridge.rs` +
+  `docs/verification/fors-model-impl-bridge-2026-07.md`). Grounds the EC model's `predC_fors`
+  against the SHIPPED Rust: the +C predicate reads bit-offset **`(K-1)·A = 132`, width 11**, and
+  real `grind_r` outputs have that window zero on every sampled digest; localized to *exactly* 132
+  (adjacent bit 131 is not universally zero). Cross-checked against `SPHINCsC10Asm.sol` (`shr(132)`
+  / `shr(143)` htIdx). Control (coordinator-run): `C10_BRIDGE_PREDC_OFFSET=131` makes the grounding
+  assertion FAIL. **Honestly scoped:** this grounds the index/predicate LAYER and its bit layout —
+  the five structural axioms are true-by-construction (empirical discriminating power nil), and the
+  random-oracle idealisation of `H(sk‖…)`, `dmkey_ll`/`good_pos`, non-memoization, and the tight
+  `ITSRC10` bound are explicitly NOT grounded. This is the first artifact converting "the port is
+  about C10" from assumption toward fact on the signing side (A3.1 covers only the on-chain verifier).
+
+**WALL — characterized, not forced (no false close):**
+
+- **`extract_op`** (the last of the three FORS tree admits; `FORS_C_TreePort.ec`) does NOT close.
+  The narrowed residual R-KEY needs `pk = fkeygen(ps,adz).\`1 = pk_of_leaves ps adz ys` for the
+  SAMPLED `ys` of the challenge oracle — unprovable because `fkeygen` is an OPAQUE DETERMINISTIC op
+  (`FORS_C.ec:324`), so the internal leaf-secret sampling that FORS_ES's real OpenPRE reduction
+  couples to `O.pick` is SEALED and cannot be re-sampled. (The "key-free ⇒ simpler" framing was
+  wrong: key-free is exactly why `R_op` cannot sidestep R-KEY the way the key-KNOWING `trh`/`trco`
+  hops did.) Closing it requires refining `fkeygen` from an op into a sampling procedure — a
+  `FORS_C.ec` modeling refactor (the "multi-week +C-variant tree port" §UPDATE 2026-07-08
+  predicted), not a one-session close. Stays admitted (orphaned; the capstone routes through
+  `FORS_C_Multi`'s independent obligation).
+
+**TOOLCHAIN-REPRODUCIBILITY FINDING (new, and load-bearing for the gate's honesty).** The
+`verify-easycrypt` full-compile gate is **not reproducible on a box without z3 4.13.x**.
+`SPHINCS_PLUS.ec:1932` needs z3 4.13.4 (both Alt-Ergo 2.6.0 and z3 4.16.0 fail it with
+`cannot prove goal (strict)`), and z3 4.13.x is not installable here without a root/system package.
+Because `require` does NOT re-verify, the past "20/20 compiled" run silently relied on a **stale
+`SPHINCS_PLUS.eco`** that no longer exists on this box. Consequence:
+- The **stdlib-only FORS+C chain** (`DarkSide`, `FORS_C`, `FORS_C_Multi`, `FORS_C10`,
+  `FORS_C10_Multi`, `Grind`, `STCR_C`) IS freshly compile-gateable with Alt-Ergo alone — that is
+  where all three landed units live, so their gate is fully reproducible.
+- The **MM45-chain drafts** (`WOTS_C_*`, `SPHINCS_C`, `XMSSMT_C_*`) require the prebuilt
+  `SPHINCS_PLUS.eco` / z3 4.13.4. So the MM45-chain-dependent items — the concrete SPHINCS+C
+  **scheme module (1a)**, the **capstone rewire (2b-wire)** onto this new C10 FORS leg, and the
+  **interactive D.1 (1c)** — could not be compile-gated this session and were therefore **NOT**
+  attempted-into-the-tree (promoting an ungated proof would violate the whole discipline). 1c is
+  independently a "person-weeks" operational byequiv; `hfx` (the capstone skeleton) is independently
+  multi-month. `verify-easycrypt`'s header now states the z3 4.13.4 dependency.
+
+**Net FORS-side position.** The FORS leg now has, all machine-checked and stdlib-reproducible: the
+C10-faithful single-instance model (`FORS_C10.ec`), its multi-instance d-EU-CMA leg
+(`FORS_C10_Multi.ec`), the k-fold combinatorial core (`DarkSide.ec`), and an empirical model↔impl
+bridge for the index layer. The honest closure of the FORS+C security gap remains the named
+`ITSRC10` assumption. The remaining path to a *concrete* SPHINCS+C theorem is gated only by the z3
+4.13.4 toolchain (for 1a/2b-wire) and the multi-month `hfx` skeleton port — **no new +C mathematics**.

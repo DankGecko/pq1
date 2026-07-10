@@ -27,6 +27,17 @@
 # (see ../easycrypt/PROVENANCE.md). Treat it like `verify-kontrol`: a local /
 # nightly gate. `--dry-run` checks the pins without a toolchain.
 #
+# TOOLCHAIN CAVEAT (verified 2026-07-10). The STDLIB-ONLY FORS+C chain (DarkSide,
+# FORS_C, FORS_C_Multi, FORS_C10, FORS_C10_Multi, Grind, STCR_C) compiles as a
+# target with Alt-Ergo 2.6.0 ALONE. The MM45-CHAIN drafts (WOTS_C_*, SPHINCS_C,
+# XMSSMT_C_*) `require import SPHINCS_PLUS`, and building SPHINCS_PLUS.eco fresh
+# needs **z3 4.13.x** -- SPHINCS_PLUS.ec:1932 fails `cannot prove goal (strict)`
+# under both Alt-Ergo 2.6.0 and z3 4.16.0. So on a box with only Alt-Ergo this
+# script can compile the FORS+C chain but SKIPS/FAILS the MM45-chain files unless
+# a prebuilt SPHINCS_PLUS.eco is present. Because `require` does NOT re-verify (see
+# below), a stale SPHINCS_PLUS.eco silently satisfies the MM45-chain compiles; a
+# clean box without z3 4.13.x is NOT a full reproduction of the MM45-chain leg.
+#
 # The MM45 reference proofs are NOT vendored (they are large and third-party).
 # Fetch them once:
 #     git clone --depth 1 https://github.com/MM45/FV-SPHINCSPLUS-EC
