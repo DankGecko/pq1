@@ -275,4 +275,26 @@ move=> hg hnt; elim: cands => [| c cs ih] hvalid.
   rewrite hsz mulrDl mul1r; smt().
 qed.
 
+(* --------------------------------------------------------------------------
+   LINEARISATION `DS gam <= gam/t` (Bernoulli).  The paper's DarkSide analysis
+   uses `DS_gamma ~ gamma/t` for small gamma; this is the rigorous one-sided
+   bound `DS gam <= gam * (1/t)`, the handle that makes the binomial mixture over
+   instance load `E_{G~dbin(1/N, qs)}[DS(G)^(k-1)]` tractable (the remaining, and
+   last, milestone).  Proof: induction on gam with the per-step Bernoulli step
+   `(1-p)^(n+1) = (1-p)^n - (1-p)^n * p >= (1 - n*p) - p`. *)
+lemma ds_le_linear (gam : int) : 0 <= gam => DS gam <= gam%r / t%r.
+proof.
+elim: gam => [|n hn ih]; first by rewrite /DS expr0; smt(ge1_t).
+rewrite /DS exprSr 1:/#.
+have ha0 : 0%r <= (1%r - 1%r/t%r) ^ n by smt(expr_ge0 ge1_t).
+have ha1 : (1%r - 1%r/t%r) ^ n <= 1%r by smt(exprn_ile1 ge1_t).
+have hap : (1%r - 1%r/t%r) ^ n * (1%r / t%r) <= 1%r / t%r.
++ by rewrite -{2}(mul1r (1%r/t%r)); apply ler_wpmul2r; [ smt(ge1_t) | exact ha1 ].
+have hexp : (1%r - 1%r/t%r) ^ n * (1%r - 1%r/t%r)
+          = (1%r - 1%r/t%r) ^ n - (1%r - 1%r/t%r) ^ n * (1%r / t%r) by ring.
+move: ih; rewrite /DS => ih.
+rewrite hexp fromintD.
+smt().
+qed.
+
 end DarkSide.
