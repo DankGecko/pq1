@@ -707,3 +707,80 @@ re-verify): 18/18 EXIT 0, **3 real admits — all in orphaned files**, **1 real 
 is still an abstract real (no SPHINCS+C scheme module exists), and `hfx`, `hbridge`, the FORS
 tree layer and the FORS+C leg are still open. This closes one of seven premises — the one that
 was bounded, already proven, and blocking a clean citable claim about WOTS+C.
+
+---
+
+## UPDATE 2026-07-10 — the margin script's METHOD was wrong (external review); corrected figures
+
+A second frontier model (`gpt-5.6-sol`, run via `codex exec` read-only) was asked to
+adversarially review `drafts/FORS_C10.ec` and propose an EasyCrypt strategy. It found
+real defects, all since verified against the code. The most consequential is a
+**correction to our own arithmetic**, and it supersedes the numbers in *UPDATE 2026-07-09b*
+above.
+
+### The error
+
+`forsc_grinding_margin.py` evaluated `DS` at a **high-probability maximum per-instance load**
+("typical max ≈ 5") and reported **≈113 bits**. That is **not a cryptographic bound**:
+
+- the tail event that *some* one of the `2^18` bins is heavier is not negligible; and
+- a maximum is the wrong object anyway — **the adversary cannot choose which FORS instance
+  its candidate lands in**, because the digest decides it.
+
+### The correct object
+
+A *fresh* candidate's instance load is `G ~ Bin(qs, 1/N)`, and the adversary's `q_h` hash
+queries contribute a union-bound factor:
+
+```
+Pr[win]  ≤  (q_h + 1) · (1/t_last) · E_G[ DS_G^(k−1) ],    G ~ Bin(qs, 1/N)
+```
+
+### Corrected figures (at `qs = 2^16`, `N = 2^18`, `t = t_last = 2^11`, `k = 13`)
+
+| quantity | old (max-load, **wrong method**) | corrected (binomial mixture) |
+|---|---|---|
+| FORS+C ITSR term | ≈113 bits | **130.6 bits** |
+| plain FORS, same method | — | **128.5 bits** |
+| generic black-box reduction | ≈25 bits | **28.1 bits** |
+| **bits lost going black-box** | ≈88 | **≈102** |
+| 96-bit floor first crossed at | `qs = 2^26` | **`qs = 2^22`** |
+
+Two things change substantively. **FORS+C is not merely "never weaker" than plain FORS — it
+is the *stronger* of the two by 2.1 bits** at our parameters. And the usage-cap guardrail is
+**tighter than advertised**: the 96-bit floor is crossed at `2^22`, not `2^26`, so the
+headroom above `MAX_SLOT_USES = 2^16` is 6 doublings, not 10.
+
+The old method under-stated security by ~15 bits, so the *direction* was safe — but the
+method was wrong, and the number was published in `AXIOM_STATUS.json` and enforced by a CI
+gate. `scripts/forsc_grinding_margin.py` now computes the mixture directly (with `lgamma`
+so the `2^27`-target case is tractable), and its `--self-test` trips at `qs = 2^22`.
+
+### Other findings from the same review (verified, being addressed)
+
+- **`FORS_C10.ec`'s header claims a hypothesis the file never states** (`0%r < mu dmkey (good m)`).
+  Claim-vs-code drift, ours.
+- **`g` is unconstrained**, so a legal clone can set `g y = []`, making coverage vacuously true.
+  MM45 constrains its `g` with three axioms (`size_g`, `eqiks_g`, `neqisvs_g`). This is the same
+  abstract-theory-instantiation attack we used to kill the FORS tree admits.
+- **No memoization**: MM45's FORS signing oracle carries `mmap : (msg, mkey) fmap`; ours resamples
+  `R` per query, so it models neither C10 (`opt_rand = None` ⇒ deterministic per message) nor MM45.
+- **Freshness**: our game uses *pair* freshness, which admits `(R', m)` for an already-signed `m` —
+  not an EUF-CMA forgery. This is **not unsound** (message-fresh ⇒ pair-fresh, so ours is a larger
+  event and a valid upper bound), and MM45's generic ITSR is pair-fresh too. But the game is
+  non-EUF and must be named accordingly.
+- The `q_h`-unboundedness it flags applies **equally to MM45's plain ITSR** (`mco` is a pure op
+  there too). That is precisely why ITSR is *assumed* rather than bounded — see below.
+
+### The reframing that makes this tractable
+
+Independently established while the review ran: **MM45 never bounds ITSR — it assumes it.**
+`EUFCMA_SPHINCS_PLUS`'s RHS carries `Pr[MCO_ITSR.ITSR(...)]` as an *unreduced term*, and no
+lemma anywhere in MM45 bounds it. Nor does EasyCrypt's stdlib have any concentration
+inequality (no Chernoff/Hoeffding/Chebyshev/Markov; only `mu_le`/`mu_mem`/`mu_split`/`mu_sub`).
+
+So the honest closure of the FORS+C gap is **not a reduction**. `ITSRC10` is a *new,
+nonstandard hardness assumption* — standard ITSR plus the conditioning of the message key.
+State it at exactly the level MM45 states plain ITSR; justify its concrete security on paper
+(this script); and cite the ~102-bit black-box loss as evidence that the nonstandard assumption
+is **necessary, not lazy**.

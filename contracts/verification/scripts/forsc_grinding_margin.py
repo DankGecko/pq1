@@ -57,11 +57,27 @@ collide).
 
 But it is quantitatively useless. Rejection sampling registers ~`t = 2^11` targets per
 real query, so the reduction's game has `qs*t = 2^27` targets over `2^18` FORS
-instances — a max per-instance load of ~625 instead of ~5. The resulting bound is
-**~25 bits**, versus **~113 bits** from the paper's direct DarkSide argument:
-**88 bits lost**. So the axiom cannot be discharged black-box; it needs the DIRECT
-(tight, non-black-box) combinatorial argument mechanized. `itsr_report()` recomputes
-this, so the conclusion cannot rot.
+instances. The resulting bound is **~28.1 bits**, versus **~130.6 bits** for FORS+C
+by the direct argument: **~102 bits lost**. So the axiom cannot be discharged
+black-box; it needs the DIRECT (tight, non-black-box) combinatorial argument.
+`itsr_report()` recomputes all of this, so the conclusion cannot rot.
+
+METHOD CORRECTION (2026-07-10, after an external adversarial review by a second
+frontier model). The first version of this script evaluated `DS` at a
+high-probability MAXIMUM per-instance load ("typical max ~5") and reported ~113
+bits. That is **not a cryptographic bound**: the tail that *some* one of 2^18 bins
+is heavier is not negligible, and a maximum is the wrong object anyway — the
+adversary cannot choose which instance its candidate lands in, since the digest
+decides. The correct object is the **binomial mixture** over a fresh candidate's own
+instance load, `G ~ Bin(qs, 1/N)`, with a `(q_h + 1)` union bound over the
+adversary's hash queries:
+
+    Pr[win] <= (q_h + 1) * (1/t_last) * E_G[ DS_G^(k-1) ]
+
+The old method UNDER-stated security by ~15 bits (safe direction, wrong method).
+Corrected figures at `qs = 2^16`: FORS+C **130.6 bits**, plain FORS **128.5 bits**
+(so FORS+C is genuinely the stronger of the two, by 2.1 bits, not merely "never
+weaker"). The 96-bit floor is first crossed at `qs = 2^22`, not `2^26`.
 
 STATUS: this is a COMPUTED MARGIN, not a kernel theorem and not a reduction. It does
 not discharge A5-ITSR. It bounds the blast radius of the literature gap for OUR
@@ -89,6 +105,8 @@ A = 11   # log2(leaves per FORS tree)
 T = 2 ** A          # leaves per FORS tree
 T_LAST = 2 ** A     # size of the REMOVED (forced-zero) tree. C10: same as T.
 
+N_INST = 2 ** H     # one FORS instance per hypertree leaf
+
 # Per-chain signature cap (MAX_SLOT_USES / MAX_BOOTSTRAP_USES, see CLAUDE.md).
 QS_CAP = 2 ** 16
 # Project security floor (Crypto/Quantitative.lean's multi-term floor).
@@ -108,51 +126,80 @@ def p_forsc(gamma: int) -> float:
     return darkside(gamma) ** (K - 1) / T_LAST
 
 
-def maxload(q: int, bins: int) -> float:
-    """High-probability max balls-in-bins load (the adversary grinds to pick the
-    heaviest FORS instance, so `gamma` is a MAX, not an average)."""
-    m = q / bins
-    if m >= 1.0:
-        return m + math.sqrt(2.0 * m * math.log(bins))
-    lb = math.log(bins)
-    return max(1.0, lb / math.log(lb))
-
-
-def itsr_bits(gamma: float) -> float:
-    """Security bits of the ITSR term: work ~ 1/(DS_gamma ** K)."""
-    return -math.log2(darkside_f(gamma) ** K)
+def _lbinom(n: int, g: int, p: float) -> float:
+    """log of the Binomial(n, p) pmf at g, via lgamma (n can be huge)."""
+    return (math.lgamma(n + 1) - math.lgamma(g + 1) - math.lgamma(n - g + 1)
+            + g * math.log(p) + (n - g) * math.log1p(-p))
 
 
 def darkside_f(gamma: float) -> float:
     return 1.0 - (1.0 - 1.0 / T) ** gamma
 
 
+def _mixture(qs: int, exponent: int, prefactor: float) -> float:
+    """prefactor * E_G[ DS_G ** exponent ],  G ~ Bin(qs, 1/N_INST).
+
+    A FRESH candidate's FORS instance is uniform over the 2^H instances (its
+    index is read off the digest), so the number of signatures already made on
+    THAT instance is Binomial(qs, 1/N) -- NOT a worst-case maximum load.
+    """
+    s, mean = 0.0, qs / N_INST
+    hi = int(mean + 10.0 * math.sqrt(mean + 1.0)) + 40
+    for g in range(0, min(hi, qs) + 1):
+        d = darkside_f(g)
+        if d <= 0.0:            # g = 0: nothing revealed on that instance
+            continue
+        s += math.exp(_lbinom(qs, g, 1.0 / N_INST) + exponent * math.log(d))
+    return prefactor * s
+
+
+def b_forsc(qs: int) -> float:
+    """FORS+C per-candidate coverage: (1/t_last) * E[DS_G^(k-1)].
+    The last tree's leaf 0 is revealed by every signature, but the digest must
+    still HIT it -- costing the 1/t_last factor."""
+    return _mixture(qs, K - 1, 1.0 / T_LAST)
+
+
+def b_plain(qs: int) -> float:
+    """plain FORS per-candidate coverage: E[DS_G^k]."""
+    return _mixture(qs, K, 1.0)
+
+
 def itsr_report(qs: int, floor_bits: int) -> tuple[float, float, list[str]]:
-    """ITSR-term security at the usage cap, and the loss a GENERIC black-box
-    reduction to plain ITSR would incur. Returns (real_bits, reduction_bits, failures)."""
+    """ITSR-term security at the usage cap, and the cost of a black-box reduction.
+
+    METHOD NOTE (corrected 2026-07-10 after an external adversarial review).  An
+    earlier version used a high-probability MAX per-instance load ("typical max
+    ~5") and evaluated DS at that fixed gamma.  That is NOT a cryptographic
+    bound -- the tail that some one of 2^18 bins is heavier is not negligible,
+    and a maximum is the wrong object anyway: the adversary cannot choose which
+    instance its candidate lands in (the digest decides).  The correct object is
+    the BINOMIAL MIXTURE over a fresh candidate's own instance load, with a
+    (q_h + 1) union bound over its hash queries:
+
+        Pr[win] <= (q_h + 1) * (1/t_last) * E_G[ DS_G^(k-1) ],  G ~ Bin(qs, 1/N)
+
+    The old method UNDER-stated security by ~15 bits (safe direction, wrong method).
+    """
     failures: list[str] = []
-    bins = 2 ** H  # one FORS instance per hypertree leaf
 
-    g_real = maxload(qs, bins)
-    real_bits = itsr_bits(g_real)
+    bd, bp = b_forsc(qs), b_plain(qs)
+    real_bits, plain_bits = -math.log2(bd), -math.log2(bp)
 
-    # A reduction that simulates the +C oracle (whose key R is CONDITIONED on
-    # predC) using plain ITSR's UNIFORM-key oracle must rejection-sample: it
-    # registers ~T targets per real query. Those extra targets raise the
-    # per-instance load, and coverage is monotone in the target list.
+    # A reduction simulating the +C oracle (conditioned key) on plain ITSR's
+    # UNIFORM-key oracle must rejection-sample: ~T targets per real query.
     q_red = qs * T
-    g_red = maxload(q_red, bins)
-    red_bits = itsr_bits(g_red)
+    red_bits = -math.log2(b_plain(q_red))
 
     print(f"\n=== ITSR term at the usage cap (qs = 2^{int(math.log2(qs))}, "
-          f"{bins} FORS instances) ===")
-    print(f"  direct (paper's DarkSide) argument : gamma_max ~ {g_real:.2f}"
-          f"  ->  {real_bits:6.1f} bits")
-    print(f"  generic reduction to plain ITSR    : gamma_max ~ {g_red:.1f}"
-          f"  ->  {red_bits:6.1f} bits   (registers qs*t = 2^{math.log2(q_red):.0f} targets)")
+          f"{N_INST} FORS instances) ===")
+    print(f"  FORS+C, binomial mixture           : {real_bits:6.1f} bits")
+    print(f"  plain FORS, same method            : {plain_bits:6.1f} bits"
+          f"   (FORS+C stronger by {real_bits - plain_bits:.1f})")
+    print(f"  generic reduction to plain ITSR    : {red_bits:6.1f} bits"
+          f"   (registers qs*t = 2^{math.log2(q_red):.0f} targets)")
     print(f"  cost of going black-box            : {real_bits - red_bits:.1f} bits LOST")
 
-    # ---- Guardrail 4: the usage cap must keep the ITSR term above the project floor.
     if real_bits < floor_bits:
         failures.append(
             f"ITSR term at qs=2^{int(math.log2(qs))} is {real_bits:.1f} bits "
@@ -192,12 +239,12 @@ def self_test() -> int:
     import io, contextlib
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
-        _, _, fails = itsr_report(2 ** 26, FLOOR_BITS)
+        _, _, fails = itsr_report(2 ** 22, FLOOR_BITS)
     if not fails:
-        print("  self-test FAIL: raising the usage cap to 2^26 did NOT trip the "
+        print("  self-test FAIL: raising the usage cap to 2^22 did NOT trip the "
               "ITSR floor guardrail -> the gate is vacuous")
         return 1
-    print("  ok: raising MAX_SLOT_USES to 2^26 is caught (ITSR term < 96-bit floor)")
+    print("  ok: raising MAX_SLOT_USES to 2^22 is caught (ITSR term < 96-bit floor)")
     print("=== self-test PASS ===")
     return 0
 
