@@ -872,3 +872,26 @@ C10-faithful single-instance model (`FORS_C10.ec`), its multi-instance d-EU-CMA 
 bridge for the index layer. The honest closure of the FORS+C security gap remains the named
 `ITSRC10` assumption. The remaining path to a *concrete* SPHINCS+C theorem is gated only by the z3
 4.13.4 toolchain (for 1a/2b-wire) and the multi-month `hfx` skeleton port — **no new +C mathematics**.
+
+### UPDATE 2026-07-10 (later, cont.) — two more DarkSide milestones; the mixture is a NUMERIC wall
+
+Continuing the DarkSide combinatorial argument (all coordinator-gated, additive, 0 admit/axiom,
+each with a firing negative control; port + vendored in sync):
+
+- **`cover_some_le` — the `(q_h+1)` union bound.** `Pr[some of |cands| candidate leaf-vectors is
+  covered in all nt trees] <= |cands| * DS gam ^ nt`, by finite subadditivity over the proven
+  `cover_all_pr`. Controls: RHS→`0%r` fails; dropping the `|cands|` factor fails. (Port `e2bb4f4`.)
+- **`ds_le_linear` — the Bernoulli linearisation `DS gam <= gam/t`.** The rigorous one-sided form
+  of the paper's `DS_gamma ~ gamma/t`, by induction. Control: RHS→`0%r` fails. (Port `2d892c6`.)
+
+So **2 of the 3 remaining DarkSide milestones are now mechanized** (union bound + linearisation);
+only the **binomial mixture** `E_{G~dbin(1/N,qs)}[DS(G)^(k-1)]` remains. EasyCrypt DOES have `dbin`
+(`Distr.ec:2795`), so it is not blocked on a missing distribution — but a *symbolic* bound on that
+high binomial moment has **no clean closed form**, which is exactly why the margin script
+(`forsc_grinding_margin.py`) evaluates it NUMERICALLY (`lgamma`). Mechanizing it symbolically is the
+"concentration inequality" territory; the honest position is to keep the concrete-security number in
+the (kernel-independent but auditable) numeric script rather than force a loose symbolic bound.
+**Caveat unchanged:** even a fully-mechanized DarkSide bound stays PURE PROBABILITY — connecting it
+to `Pr[ITSRC10(A,O)]` for an arbitrary adversary + ROM is the assumption-level gap that neither MM45
+nor the paper closes (it is *why* ITSR is assumed), so these lemmas advance the paper-level
+justification of `ITSRC10`, they do not turn it into a game-level theorem.
