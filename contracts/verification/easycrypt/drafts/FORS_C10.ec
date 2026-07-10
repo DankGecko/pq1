@@ -42,29 +42,35 @@
    ---------------------------------------------------------------------------
    THE MODELLING DECISION, STATED PLAINLY
 
-   C10's `R` is DETERMINISTIC in `(sk_seed, m)`: it is the first nonce whose
-   digest satisfies the predicate.  We model it as `R` drawn from `dmkey`
-   CONDITIONED on `predC_fors (mco R m)`, realised OPERATIONALLY as a rejection
-   sampler (below) rather than with a `dcond` combinator.  Two consequences,
-   both deliberate:
+   C10's `R` is RANDOMIZED per signing call: `secure/src/crypto.rs:130-142` draws a
+   fresh `opt_rand` (`rng_strong::fill`) on EVERY signature and passes `Some(..)`,
+   and `grind_r` folds it into R.  Signing the same message twice therefore yields a
+   DIFFERENT R (regression: `positive_opt_rand_changes_sig_bytes`).  We model R as a
+   fresh draw from `dmkey` CONDITIONED on `predC_fors (mco R m)`, realised with the
+   `dcond` combinator.  Three consequences, all deliberate:
 
      * This is a random-oracle idealisation of the keyed derivation `H(sk||...)`.
        It is the same idealisation MM45 makes for `mco`'s key (its ITSR oracle
        samples `k <$ dkey`), so the +C delta is isolated to the CONDITIONING.
-     * The rejection sampler is well-defined iff a good key has POSITIVE
+     * `dcond dmkey (good m)` is well-defined iff a good key has POSITIVE
        PROBABILITY.  That is exactly the paper's p_nu assumption, and here it
        appears WHERE IT BELONGS -- as the quantitative axiom
-       `good_pos (m) : 0%r < mu dmkey (good m)`, not an existential hand-wave.
-       (Until 2026-07-10 this header CLAIMED that hypothesis while the file never
-       stated it -- our own claim-vs-code drift, caught by external review.  It is
-       now stated, and made load-bearing by `good_exists`.)  Compare the paper:
-       "we assume that it is always possible to find a good counter and the
-       adversary can not depend its behavior on the existence of a fitting counter."
+       `good_pos (m) : 0%r < mu dmkey (good m)`.  It is LOAD-BEARING: `query_ll`
+       (oracle losslessness) is proven from it via `dcond_ll`, so DELETING
+       `good_pos` BREAKS THE BUILD.  (Two prior drafts of this header were wrong
+       about this: the first CLAIMED the hypothesis while the file never stated it;
+       the second stated it but consumed it only in `good_exists`, which nothing
+       consumed -- so deleting both left every result green.  Both were caught by
+       external adversarial review, 2026-07-10.)  Compare the paper: "we assume that
+       it is always possible to find a good counter and the adversary can not depend
+       its behavior on the existence of a fitting counter."
 
-     * The oracle MEMOIZES the per-message key.  C10's R is deterministic in
-       (sk, m) when opt_rand = None, and MM45's FORS signing oracle likewise
-       carries `mmap : (msg, mkey) fmap`.  An earlier version resampled on every
-       query and so modelled NEITHER.
+     * The oracle does NOT memoize.  A memoized oracle would reveal FEWER targets
+       than production (one R per message instead of one per signature), which is an
+       ADVERSARY RESTRICTION -- a bound proven against it would not transfer.  MM45's
+       `mmap : (msg, mkey) fmap` (FORS_ES.ec:2043) models DETERMINISTIC signing,
+       which is not what C10 does.  A memoizing version of this file existed for one
+       day (2026-07-10) and was a REGRESSION.
 
    ---------------------------------------------------------------------------
    WHAT IS OPEN (and why the obvious route is a DEAD END -- do not retry it)
@@ -113,12 +119,15 @@
        carries `Pr[MCO_ITSR.ITSR(...)]` as an UNREDUCED term, and no lemma anywhere
        in MM45 bounds it.  The concrete bound lives on paper, as it does for us.
 
-   STATUS: model + game + 5 proven structural lemmas.  NO admit.  Axioms: the benign
-   `dmkey_ll`, the structural `size_g`/`eqiks_g`/`neqisvs_g`/`rng_g` on the index
-   extractor (mirroring MM45's), and `good_pos` (= p_nu).  The tight bound is OPEN.
+   STATUS: model + game + 7 proven lemmas.  NO admit.  Axioms: the benign `dmkey_ll`;
+   the structural `size_g`/`eqiks_g`/`neqisvs_g`/`rng_g`/`uniq_g` on the index
+   extractor (the first four mirror MM45's; `uniq_g` is STRICTLY STRONGER and was
+   added 2026-07-10b because MM45's own set admits `g y = nseq k z`, i.e. k copies of
+   ONE tuple, under which `neqisvs_g` is vacuous); and `good_pos` (= p_nu, now
+   load-bearing via `query_ll`).  The tight bound is OPEN.
    ========================================================================== *)
 
-require import AllCore List Distr FMap.
+require import AllCore List Distr.
 
 abstract theory FORSC10.
 
@@ -165,6 +174,23 @@ axiom neqisvs_g (x x' : int * int * int) (y : out_t) :
 axiom rng_g (y : out_t) (x : int * int * int) :
   x \in g y => 0 <= x.`3 < t.
 
+(* F1 FIX (2026-07-10b).  The k tuples name k DISTINCT trees.
+
+   WITHOUT this, `neqisvs_g` is VACUOUS on a list of k copies of one tuple (its
+   premise `x <> x'` is never satisfiable there), so the legal clone
+
+       g y = nseq k (0, 0, 0)
+
+   realizes size_g, eqiks_g, neqisvs_g and rng_g while representing exactly ONE
+   tree.  Coverage and `predC_fors` then collapse onto a single leaf.  Verified by
+   an actual clone (EXIT 0) during adversarial review, 2026-07-10; that clone is
+   now a NEGATIVE CONTROL and must fail to realize.
+
+   Note `uniq_g` is strictly stronger than `neqisvs_g` (distinct positions =>
+   distinct trees => distinct tuples).  `neqisvs_g` is kept for parity with MM45
+   (KeyedHashFunctions.eca:1454-1467), whose own axioms have the same weakness. *)
+axiom uniq_g (y : out_t) : uniq (map (fun (x : int * int * int) => x.`2) (g y)).
+
 (* The +C predicate: the LAST FORS tree opens leaf 0.
    C10: `read_bits_le(digest, (K-1)*A, A) == 0` (fors.rs:126), enforced by BOTH
    verifiers -- hypertree.rs:374 and SPHINCsC10Asm.sol:86. *)
@@ -196,32 +222,41 @@ module type Oracle_ITSRC10 = {
 }.
 
 module O_ITSRC10_Default : Oracle_ITSRC10 = {
-  var ts   : (mkey * msg) list
-  var mmap : (msg, mkey) fmap
+  var ts : (mkey * msg) list
 
   proc init() : unit = {
-    ts   <- [];
-    mmap <- empty;
+    ts <- [];
   }
 
-  (* MEMOIZED (2026-07-10).  Signing the same message twice must return the SAME
-     key: C10 derives R = H(sk||"R_grind"||m||nonce), deterministic in (sk,m) when
-     opt_rand = None.  MM45's FORS signing oracle likewise carries
-     `mmap : (msg, mkey) fmap` (FORS_ES.ec:2043-2046).  The previous version
-     resampled on every query and so modelled NEITHER. *)
+  (* F5 FIX (2026-07-10b).  A FRESH conditioned key per query -- NOT memoized.
+     Production draws a fresh `opt_rand` on EVERY signing call
+     (`secure/src/crypto.rs:130-142`: `rng_strong::fill(&mut opt_rand_buf)`, then
+     `Some(&opt_rand_buf)`), and `grind_r` folds it into R
+     (`sphincs-c10/src/fors.rs`).  So signing the same message twice yields a
+     DIFFERENT R, a different digest, and different revealed FORS leaves.
+     Regression test: `positive_opt_rand_changes_sig_bytes`
+     (sphincs-c10/tests/signing_suite.rs:131).
+
+     An earlier version of this file MEMOIZED the key per message.  That was a
+     REGRESSION, introduced on 2026-07-10 in response to a review that observed
+     "C10's R is deterministic in (sk,m) when opt_rand = None" -- true, but the
+     firmware passes `Some`.  A memoized oracle reveals FEWER targets than
+     production, which is an ADVERSARY RESTRICTION: a bound proven against it does
+     NOT transfer.  MM45's `mmap : (msg, mkey) fmap` (FORS_ES.ec:2043) models
+     DETERMINISTIC signing, which is not what C10 does.
+
+     F2 FIX: the draw is a single sample from the CONDITIONED distribution rather
+     than an operational rejection loop.  `dcond dmkey (good m)` is exactly "R
+     uniform on dmkey, conditioned on predC", and `dcond_ll` turns `good_pos`
+     (= the paper's p_nu) into a LOAD-BEARING hypothesis: without it the oracle is
+     not lossless.  Proven below as `query_ll`. *)
   proc query(m : msg) : mkey = {
     var mk : mkey;
 
-    if (m \notin mmap) {
-      mk <$ dmkey;
-      while (! good m mk) {
-        mk <$ dmkey;
-      }
-      mmap.[m] <- mk;
-      ts <- rcons ts (mk, m);
-    }
+    mk <$ dcond dmkey (good m);
+    ts <- rcons ts (mk, m);
 
-    return oget mmap.[m];
+    return mk;
   }
 
   proc get_targets() : (mkey * msg) list = {
@@ -299,14 +334,16 @@ lemma query_targets_good :
           ==>
           all (fun (km : mkey * msg) => good km.`2 km.`1) O_ITSRC10_Default.ts].
 proof.
-proc.
-if.
-+ wp.
-  while (all (fun (km : mkey * msg) => good km.`2 km.`1) O_ITSRC10_Default.ts).
-  + by auto.
-  by auto => />; smt(allP mem_rcons).
-by auto.
+proc; auto => />; smt(dcond_supp allP mem_rcons).
 qed.
+
+(* GATE 0c (F2 FIX).  `good_pos` is now LOAD-BEARING: the oracle is lossless ONLY
+   because a good key has positive mass.  Deleting `good_pos` breaks this lemma.
+   (Before 2026-07-10b, `good_pos` was consumed only by `good_exists`, which
+   nothing consumed -- so deleting both left every result green.  That mutation is
+   now a build failure.) *)
+lemma query_ll : islossless O_ITSRC10_Default.query.
+proof. proc; auto; smt(dcond_ll good_pos). qed.
 
 (* GATE 0a.  `good_pos` is LOAD-BEARING, not decorative: it is exactly what makes
    the rejection sampler well-defined (a good key exists at all).  Proving the
@@ -323,6 +360,11 @@ proof. by rewrite /hC size_g. qed.
 
 lemma hC_nonempty (mk : mkey) (m : msg) : hC mk m <> [].
 proof. by have := hC_size mk m; smt(ge1_k size_eq0). qed.
+
+(* the coverage list really names k DISTINCT trees -- not k copies of one *)
+lemma hC_trees_uniq (mk : mkey) (m : msg) :
+  uniq (map (fun (x : int * int * int) => x.`2) (hC mk m)).
+proof. by rewrite /hC uniq_g. qed.
 
 (* GATE 2.  The +C conjunct only SHRINKS the win set: an ITSRC10 winner is a
    winner of the plain-ITSR-shaped game over the same oracle.  So FORS+C is

@@ -47,7 +47,7 @@ declare -A EXPECTED_ADMITS=(
   [FORS_C_TreePort.ec]=1      # F-EXTRACT-OP; orphaned
   [WOTS_C_Interactive.ec]=1   # interactive S-TCR(+C) sim; orphaned
 )
-EXPECTED_TOTAL_AXIOMS=7       # dpp_ll, dmkey_ll, good_pos, size_g, eqiks_g, neqisvs_g, rng_g
+EXPECTED_TOTAL_AXIOMS=8       # dpp_ll, dmkey_ll, good_pos, size_g, eqiks_g, neqisvs_g, rng_g, uniq_g
 
 # NESTING-AWARE sweep. A naive `perl -0777 -pe 's/\(\*.*?\*\)//gs'` closes at the
 # FIRST `*)`, so prose like "zero-admit" leaks out of nested comments; and a

@@ -87,8 +87,26 @@ GUARDRAILS (exit 0 iff all hold; `--self-test` proves each can fire):
   1. t_last >= t             — else FORS+C is strictly weaker than plain FORS
   2. ratio <= 1 for all gamma
   3. DS_gamma >= 1/t          — the engine of (2)
-  4. ITSR term at qs = 2^16 >= 96-bit floor — RAISING MAX_SLOT_USES DEGRADES FORS
-                                 few-time security (this is what the cap buys us)
+  4. ITSR WORK FACTOR at qs = 2^16 >= 96 bits of hash queries — RAISING
+                                 MAX_SLOT_USES DEGRADES FORS few-time security
+                                 (this is what the cap buys us)
+  5. `_mixture` really is an UPPER bound (self-test widens the window and checks
+                                 the exact partial sum does not exceed it)
+
+TWO CORRECTIONS, 2026-07-10b (adversarial review, findings F3 + F4)
+-------------------------------------------------------------------
+F3. `-log2(B)` is a WORK FACTOR (hash queries needed), NOT an advantage. The old
+    guardrail compared it to a floor named after `Crypto/Quantitative.lean`, whose
+    convention puts the query count INSIDE the term
+    (`queryTerm_le_of_le : q * 2^t <= 2^SecurityBits`). Two different objects. The
+    docstring stated `Pr[win] <= (q_h+1)*B` while the code never applied the
+    multiplier. Now the floor is explicitly a QUERY-WORK floor and the report
+    PRINTS the advantage at representative q_h. There is no operational cap on
+    offline hashing, so no `Q_H_CAP` is asserted. Read the printed advantage line
+    before quoting "130.6 bits" as a security level.
+F4. `_mixture` truncated the binomial support and so UNDER-estimated the
+    expectation, making `-log2` OVERSTATE security. It now adds a rigorous
+    geometric tail bound (see its docstring).
 """
 from __future__ import annotations
 
@@ -109,9 +127,20 @@ N_INST = 2 ** H     # one FORS instance per hypertree leaf
 
 # Per-chain signature cap (MAX_SLOT_USES / MAX_BOOTSTRAP_USES, see CLAUDE.md).
 QS_CAP = 2 ** 16
-# Project security floor (Crypto/Quantitative.lean's multi-term floor).
-FLOOR_BITS = 96
-
+# QUERY-WORK floor, in bits of adversary HASH QUERIES.
+#
+# F3 FIX (2026-07-10b, adversarial review). This is NOT `Crypto/Quantitative.lean`'s
+# floor. That one bounds an ADVANTAGE and has the query count INSIDE the term
+# (`queryTerm_le_of_le : q * 2^t <= 2^SecurityBits`). This script's `-log2(B)` is a
+# per-candidate probability, i.e. a WORK FACTOR: the number of hash queries an
+# adversary needs. Comparing a work factor to an advantage floor conflates two
+# different objects -- the previous version did exactly that while its own docstring
+# stated `Pr[win] <= (q_h+1)*B`, a formula the code never applied.
+#
+# So: guardrail 4 now asserts a WORK floor (>= 2^96 hash queries), and the report
+# prints the ADVANTAGE `(q_h+1)*B` at representative q_h so nobody has to infer it.
+# There is no operational cap on offline hashing, so no `Q_H_CAP` is asserted.
+WORK_FLOOR_BITS = 96
 
 def darkside(gamma: int, t: int = T) -> float:
     """Pr[a given FORS index is already revealed] after `gamma` signatures."""
@@ -137,20 +166,44 @@ def darkside_f(gamma: float) -> float:
 
 
 def _mixture(qs: int, exponent: int, prefactor: float) -> float:
-    """prefactor * E_G[ DS_G ** exponent ],  G ~ Bin(qs, 1/N_INST).
+    """UPPER BOUND on prefactor * E_G[ DS_G ** exponent ],  G ~ Bin(qs, 1/N_INST).
 
     A FRESH candidate's FORS instance is uniform over the 2^H instances (its
     index is read off the digest), so the number of signatures already made on
     THAT instance is Binomial(qs, 1/N) -- NOT a worst-case maximum load.
+
+    F4 FIX (2026-07-10b, adversarial review). The previous version summed only to
+    `mean + 10*sqrt(mean+1) + 40` and silently DROPPED the rest of the support.
+    Every dropped term is non-negative, so it returned a LOWER approximation to
+    the expectation -- and `-log2` of it therefore OVERSTATED security. Wrong
+    direction for something presented as a cryptographic bound (at qs = 2^16 the
+    loop stopped at g = 51 while the support runs to 65536).
+
+    Now: an exact partial sum, PLUS a rigorous upper bound on the omitted tail.
+    Since `P[G=g+1]/P[G=g] = ((n-g)/(g+1)) * p/(1-p) <= mu' / (g+1)` with
+    `mu' = n*p/(1-p)`, choosing `hi >= 4*mu'` gives ratio <= 1/4 beyond `hi`, so
+        sum_{g>hi} P[G=g] * DS_g^e  <=  sum_{g>hi} P[G=g]  <=  P[G=hi+1]/(1-r)
+    using `DS_g^e <= 1`. The result is a genuine upper bound.
     """
-    s, mean = 0.0, qs / N_INST
-    hi = int(mean + 10.0 * math.sqrt(mean + 1.0)) + 40
-    for g in range(0, min(hi, qs) + 1):
+    mean = qs / N_INST
+    mu_p = mean / (1.0 - 1.0 / N_INST)          # n*p/(1-p)
+    hi = max(int(4.0 * mu_p) + 1, int(mean + 10.0 * math.sqrt(mean + 1.0)) + 40)
+    hi = min(hi, qs)
+
+    acc = 0.0
+    for g in range(0, hi + 1):
         d = darkside_f(g)
         if d <= 0.0:            # g = 0: nothing revealed on that instance
             continue
-        s += math.exp(_lbinom(qs, g, 1.0 / N_INST) + exponent * math.log(d))
-    return prefactor * s
+        acc += math.exp(_lbinom(qs, g, 1.0 / N_INST) + exponent * math.log(d))
+
+    tail = 0.0
+    if hi < qs:
+        r = mu_p / (hi + 2.0)
+        assert r < 1.0, "geometric tail bound requires ratio < 1"
+        tail = math.exp(_lbinom(qs, hi + 1, 1.0 / N_INST)) / (1.0 - r)
+
+    return prefactor * (acc + tail)
 
 
 def b_forsc(qs: int) -> float:
@@ -165,7 +218,7 @@ def b_plain(qs: int) -> float:
     return _mixture(qs, K, 1.0)
 
 
-def itsr_report(qs: int, floor_bits: int) -> tuple[float, float, list[str]]:
+def itsr_report(qs: int, work_floor_bits: int) -> tuple[float, float, list[str]]:
     """ITSR-term security at the usage cap, and the cost of a black-box reduction.
 
     METHOD NOTE (corrected 2026-07-10 after an external adversarial review).  An
@@ -193,21 +246,29 @@ def itsr_report(qs: int, floor_bits: int) -> tuple[float, float, list[str]]:
 
     print(f"\n=== ITSR term at the usage cap (qs = 2^{int(math.log2(qs))}, "
           f"{N_INST} FORS instances) ===")
-    print(f"  FORS+C, binomial mixture           : {real_bits:6.1f} bits")
+    print(f"  FORS+C work factor (binom. mixture): {real_bits:6.1f} bits")
     print(f"  plain FORS, same method            : {plain_bits:6.1f} bits"
           f"   (FORS+C stronger by {real_bits - plain_bits:.1f})")
     print(f"  generic reduction to plain ITSR    : {red_bits:6.1f} bits"
           f"   (registers qs*t = 2^{math.log2(q_red):.0f} targets)")
     print(f"  cost of going black-box            : {real_bits - red_bits:.1f} bits LOST")
 
-    if real_bits < floor_bits:
+    # ---- F3: make the (q_h + 1) union bound VISIBLE. `real_bits` is a WORK
+    # factor (queries needed), not an advantage. Print the advantage explicitly.
+    print("  advantage Pr[win] <= (q_h + 1) * B, at representative q_h:")
+    for qh_bits in (64, 96, 128):
+        adv = min(1.0, (2.0 ** qh_bits + 1.0) * bd)
+        print(f"      q_h = 2^{qh_bits:<3d} ->  Pr[win] <= 2^{math.log2(adv):.1f}")
+
+    if real_bits < work_floor_bits:
         failures.append(
-            f"ITSR term at qs=2^{int(math.log2(qs))} is {real_bits:.1f} bits "
-            f"< the {floor_bits}-bit floor. Raising MAX_SLOT_USES degrades FORS "
-            f"few-time security."
+            f"ITSR WORK factor at qs=2^{int(math.log2(qs))} is {real_bits:.1f} bits "
+            f"< the {work_floor_bits}-bit query-work floor. Raising MAX_SLOT_USES "
+            f"degrades FORS few-time security."
         )
-    print(f"[guardrail 4] ITSR bits ({real_bits:.1f}) >= {floor_bits}-bit floor : "
-          f"{'OK' if real_bits >= floor_bits else 'FAIL'}")
+    print(f"[guardrail 4] ITSR work factor ({real_bits:.1f} bits of hash queries) "
+          f">= {work_floor_bits}-bit floor : "
+          f"{'OK' if real_bits >= work_floor_bits else 'FAIL'}")
     return real_bits, red_bits, failures
 
 
@@ -239,12 +300,30 @@ def self_test() -> int:
     import io, contextlib
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
-        _, _, fails = itsr_report(2 ** 22, FLOOR_BITS)
+        _, _, fails = itsr_report(2 ** 22, WORK_FLOOR_BITS)
     if not fails:
         print("  self-test FAIL: raising the usage cap to 2^22 did NOT trip the "
               "ITSR floor guardrail -> the gate is vacuous")
         return 1
     print("  ok: raising MAX_SLOT_USES to 2^22 is caught (ITSR term < 96-bit floor)")
+
+    # negative control #3 (F4): the mixture must be an UPPER bound. Widen the
+    # summation window and check the exact partial sum never exceeds what we return.
+    qs = QS_CAP
+    reported = b_forsc(qs)
+    exact_partial = 0.0
+    for g in range(0, 4000):
+        d = darkside_f(g)
+        if d <= 0.0:
+            continue
+        exact_partial += math.exp(_lbinom(qs, g, 1.0 / N_INST) + (K - 1) * math.log(d))
+    exact_partial /= T_LAST
+    if exact_partial > reported * (1.0 + 1e-12):
+        print(f"  self-test FAIL: mixture {reported:.6e} is BELOW a wider exact "
+              f"partial sum {exact_partial:.6e} -- not an upper bound")
+        return 1
+    print(f"  ok: mixture is an upper bound (wide partial {exact_partial:.4e} "
+          f"<= reported {reported:.4e})")
     print("=== self-test PASS ===")
     return 0
 
@@ -310,7 +389,7 @@ def main() -> int:
         failures.append(f"per-query bits {bits1:.1f} != A*K = {A*K}")
 
     # ---- ITSR term at the cap + the cost of a generic black-box reduction.
-    real_bits, red_bits, itsr_fail = itsr_report(QS_CAP, FLOOR_BITS)
+    real_bits, red_bits, itsr_fail = itsr_report(QS_CAP, WORK_FLOOR_BITS)
     failures.extend(itsr_fail)
 
     print("\n" + "=" * 68)
