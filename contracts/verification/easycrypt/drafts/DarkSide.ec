@@ -222,4 +222,57 @@ rewrite (eq_big_seq _ (fun (_ : int) => DS gam)).
 by rewrite mulr_const size_range; smt().
 qed.
 
+(* ==========================================================================
+   THE (q_h+1) UNION BOUND (pure-probability form) -- the 2nd "NOT proven here"
+   milestone from the header, built on `cover_all_pr`.
+
+   Charges the winning probability to a UNION over the adversary's candidate
+   leaf-vectors: if ANY candidate in `cands` is covered in ALL nt trees, the
+   union bound charges each at the per-candidate coverage `DS gam ^ nt`.  So
+   Pr[some candidate covered] <= |cands| * DS gam ^ nt.  Pure finite subadditivity
+   over the proven `cover_all_pr` -- no concentration inequality needed here (the
+   binomial mixture over instance load is the remaining, harder piece; this is the
+   (q_h+1)-style union factor). *)
+lemma cover_some_le (cands : int list list) (gam nt : int) :
+  0 <= gam => 0 <= nt =>
+  (forall c, c \in cands => size c = nt /\ all (fun (x : int) => 0 <= x /\ x < t) c) =>
+  mu (dlist (dlist dleaf gam) nt)
+     (fun (trees : int list list) =>
+        has (fun (c : int list) =>
+               forall i, 0 <= i && i < nt => (nth 0 c i) \in (nth [] trees i)) cands)
+  <= (size cands)%r * DS gam ^ nt.
+proof.
+move=> hg hnt; elim: cands => [| c cs ih] hvalid.
++ have -> : (fun (trees : int list list) =>
+              has (fun (c0 : int list) =>
+                     forall i, 0 <= i && i < nt => nth 0 c0 i \in nth [] trees i) [])
+           = pred0 by apply/fun_ext => trees.
+  rewrite mu0 /=; smt(expr_ge0 ds_bnd).
++ have [hcsz hcall] : size c = nt /\ all (fun (x : int) => 0 <= x /\ x < t) c
+    by apply hvalid; rewrite mem_head.
+  have hcs : forall c0, c0 \in cs =>
+               size c0 = nt /\ all (fun (x : int) => 0 <= x /\ x < t) c0
+    by move=> c0 hc0; apply hvalid; rewrite in_cons hc0.
+  pose PA := fun (trees : int list list) =>
+               forall i, 0 <= i && i < nt => nth 0 c i \in nth [] trees i.
+  pose PB := fun (trees : int list list) =>
+               has (fun (c0 : int list) =>
+                      forall i, 0 <= i && i < nt => nth 0 c0 i \in nth [] trees i) cs.
+  have -> : (fun (trees : int list list) =>
+              has (fun (c0 : int list) =>
+                     forall i, 0 <= i && i < nt => nth 0 c0 i \in nth [] trees i) (c :: cs))
+          = predU PA PB by apply/fun_ext => trees.
+  apply (ler_trans (mu (dlist (dlist dleaf gam) nt) PA
+                  + mu (dlist (dlist dleaf gam) nt) PB)).
+  + rewrite mu_or; smt(ge0_mu).
+  have -> : mu (dlist (dlist dleaf gam) nt) PA = DS gam ^ nt
+    by rewrite /PA; exact (cover_all_pr c gam nt hg hnt hcsz hcall).
+  have hih : mu (dlist (dlist dleaf gam) nt) PB <= (size cs)%r * DS gam ^ nt
+    by rewrite /PB; exact (ih hcs).
+  have hsz : (size (c :: cs))%r = (size cs)%r + 1%r by smt().
+  apply (ler_trans (DS gam ^ nt + (size cs)%r * DS gam ^ nt)).
+  + by rewrite ler_add2l; exact hih.
+  rewrite hsz mulrDl mul1r; smt().
+qed.
+
 end DarkSide.
