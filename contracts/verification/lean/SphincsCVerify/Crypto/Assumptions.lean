@@ -122,16 +122,50 @@ opaque hMsg_RO_Shape : Prop
     (IACR ePrint 2024/910) §§ 4-5, Theorem 1. -/
 axiom SM_DT_TCR_F : SM_DT_TCR_F_Shape
 
-/-- **ITSR (Interleaved Target Subset Resilience) on the FORS-roots
-    compression hash.**
+/-- **ITSR(+C) — Interleaved Target Subset Resilience of the message hash,
+    in the FORS+C (conditioned-key) form C10 actually uses.**
 
-    Central to the tight SPHINCS+ bound. Given access to a polynomial
-    number of FORS public keys, no PPT adversary can construct a
-    message `m*` whose `H_msg`-derived FORS leaf indices have been
-    collectively covered by prior queries — except with negligible
+    Given access to a polynomial number of FORS public keys, no PPT adversary
+    can construct a message `m*` whose `H_msg`-derived FORS leaf indices have
+    been collectively covered by prior queries — except with negligible
     probability.
 
-    Cited from Barbosa et al. ASIACRYPT 2024 § 6, Theorem 2. -/
+    ## This is a NONSTANDARD assumption, and NOT Barbosa et al.'s ITSR
+
+    Corrected 2026-07-10. This axiom used to be cited to *Barbosa et al.
+    ASIACRYPT 2024 § 6, Theorem 2*. That is **plain ITSR, for standard
+    SPHINCS+** — a different scheme. C10 ships **FORS+C**, which grinds the
+    randomiser `R` until the last FORS tree opens leaf 0, so the ITSR message
+    key is drawn **conditioned** on that predicate. The published SPHINCS+C
+    paper (IEEE S&P 2023) contains **no FORS+C security theorem** — only the
+    informal *"we can use the previous ITSR analysis"* (§IV) and *"the usage of
+    FORS+C is straightforward"* (§V).
+
+    So the honest position is not a reduction but a **named nonstandard
+    assumption**, stated at exactly the level MM45 states plain ITSR. Note MM45
+    never *bounds* ITSR either: its final theorem carries
+    `Pr[MCO_ITSR.ITSR(...)]` as an **unreduced term**, and no lemma anywhere in
+    that development bounds it. The concrete bound lives on paper, for them and
+    for us.
+
+    ## What backs it (more than the paper or MM45 offer)
+
+    * The assumption is **mechanized as an EasyCrypt game** — `ITSRC10` in
+      `FORS_C10.ec`: C10-faithful (`R` is the ground object, no FORS counter),
+      the oracle memoizes per message, degenerate models are excluded, and the
+      p_ν hypothesis is stated as `good_pos : 0%r < mu dmkey (good m)`.
+    * Its **combinatorial core is machine-checked** — `DarkSide.ec` (0 admit):
+      `cover_pr` proves `DS_γ` *is* the coverage probability, and
+      `forsc_le_fors : DS^(k-1)·(1/t) ≤ DS^k` mechanizes the paper's central
+      FORS+C claim, which the paper asserts with no reduction and no theorem.
+    * **Concrete security** at C10's parameters: 130.6 bits (FORS+C) vs 128.5
+      (plain FORS), gated by `make verify-forsc-margin`.
+    * A **black-box reduction to the standard assumption exists and is sound,
+      but costs ~102 bits** — so the nonstandard form is necessary, not lazy.
+
+    See `docs/verification/easycrypt-euf-cma-port-feasibility-2026-07.md` and
+    `AXIOM_STATUS.json` (A5-ITSR). The axiom NAME is unchanged on purpose:
+    renaming it would alter `theft_free`'s axiom closure. -/
 axiom ITSR_F : ITSR_F_Shape
 
 /-- **Random-oracle behaviour of `H_msg`.**
