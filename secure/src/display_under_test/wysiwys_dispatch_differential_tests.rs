@@ -15,7 +15,7 @@
 //!
 //!   * the display path — the REAL `pick_sign_pages` body (mounted at
 //!     `super::dispatch`), followed by the handler's real splice gates in
-//!     handler order (`enforce_paymaster_page`, mandatory From page,
+//!     handler order (paymaster, signer identity, target identity, nonce lane,
 //!     ERC-8213 fingerprint);
 //!   * the signature path — the REAL `reconstruct_execute_calldata` +
 //!     `compute_sphincs_digest_v06` (pqsigner-aa, the exact functions the
@@ -49,10 +49,10 @@
 //!     additionally pinned by `nsc_sign_userop_pure_tests`.
 //!   * Deploy / rotation extras (initCode, Type-1 `addOwnerBytes` digest)
 //!     and the batch handler's per-tx nonce/digest loop.
-//!   * Lossy display conversions, permanent residuals by design:
-//!     `display_nonce` shows only `nonce[24..32]` (the 64-bit seq; the
-//!     192-bit key is not rendered) and `display_gas_limit` is a saturated
-//!     sum. The digest commits the full values.
+//!   * Lossy display conversion retained by design: `display_gas_limit` is a
+//!     saturated sum. The ordinary nonce row shows `nonce[24..32]` (the
+//!     64-bit sequence), while the mandatory conditional nonce-lane gate
+//!     renders the high 192-bit key in full whenever it is non-zero.
 //!   * CoW v3 / Safe v1 (approveHash) / ERC-7730 ladder rungs (need heavier
 //!     fixtures; their verify+bind layers carry their own host suites).
 //!   * pages → pixels (`confirm_checked`, LCD) — te-2 golden-grid + the
@@ -69,6 +69,7 @@ use super::value_page::{
     enforce_from_page, enforce_paymaster_page, enforce_target_page, from_page_proof,
     target_page_proof,
 };
+use super::nonce_lane::{enforce_nonce_lane_page, nonce_lane_page_proof};
 use super::Pages;
 use crate::aa::userop::{
     compute_sphincs_digest_v06, reconstruct_execute_calldata, sha256_bytes,
@@ -319,6 +320,13 @@ fn drive_glue(p: &MirrorParsed, ctx: &Contexts<'_>) -> GlueOutcome {
         target_page_proof(&pages, target_pages_before, &p.to),
         crate::fi::OK_SENTINEL,
         "mandatory target page must match parsed target"
+    );
+    let nonce_lane_pages_before = pages.len;
+    enforce_nonce_lane_page(&mut pages, &p.nonce).expect("nonce lane page must fit");
+    crate::fi::scrub_sentinel_register();
+    assert_eq!(
+        nonce_lane_page_proof(&pages, nonce_lane_pages_before, &p.nonce),
+        crate::fi::OK_SENTINEL
     );
     let calldata_fingerprint = pqsigner_tx_core::erc8213::calldata_digest(&p.inner);
     erc8213::append_fingerprint_page(
@@ -951,6 +959,63 @@ fn divergence_probe_inner_data_byte_flip_moves_digest_and_fingerprint() {
 }
 
 #[test]
+fn divergence_probe_account_flip_moves_mandatory_signer_page() {
+    let req = WireSignRequest::base();
+    let p = mirror_parse(&req.encode());
+    let out = drive_glue(&p, &Contexts::default());
+    let mut req2 = req.clone();
+    req2.account_index = 1;
+    let p2 = mirror_parse(&req2.encode());
+    let out2 = drive_glue(&p2, &Contexts::default());
+    assert_signer_page_shown(&out.pages, 0, &p.sender);
+    assert_signer_page_shown(&out2.pages, 1, &p2.sender);
+    assert_ne!(out.pages.as_slice(), out2.pages.as_slice());
+}
+
+#[test]
+fn divergence_probe_nonce_lane_flip_cannot_hide_behind_same_sequence() {
+    let mut req = WireSignRequest::base();
+    req.nonce[0] = 1; // lane key 0x01 || 23 zero bytes; sequence remains 7
+    let p = mirror_parse(&req.encode());
+    let out = drive_glue(&p, &Contexts::default());
+
+    let mut req2 = req.clone();
+    req2.nonce[0] = 2; // independently executable lane, same sequence
+    let p2 = mirror_parse(&req2.encode());
+    let out2 = drive_glue(&p2, &Contexts::default());
+
+    let lane1 = out
+        .pages
+        .as_slice()
+        .iter()
+        .find(|page| row_str(&page[0]) == "Nonce lane key:")
+        .expect("non-zero lane must have an exact key page");
+    let lane2 = out2
+        .pages
+        .as_slice()
+        .iter()
+        .find(|page| row_str(&page[0]) == "Nonce lane key:")
+        .expect("second non-zero lane must have an exact key page");
+    assert_eq!(row_str(&lane1[1]), "0100000000000000");
+    assert_eq!(row_str(&lane1[2]), "0000000000000000");
+    assert_eq!(row_str(&lane1[3]), "0000000000000000");
+    assert_eq!(row_str(&lane2[1]), "0200000000000000");
+    assert_ne!(lane1, lane2, "lane-distinct confirmations must not be identical");
+
+    let rows1 = all_rows(&out.pages);
+    let rows2 = all_rows(&out2.pages);
+    assert!(rows_contain(&rows1, "Nonce: 7"));
+    assert!(rows_contain(&rows2, "Nonce: 7"));
+    assert_ne!(out.digest, out2.digest, "full signed nonce must move the digest");
+
+    let zero = drive_glue(&mirror_parse(&WireSignRequest::base().encode()), &Contexts::default());
+    assert!(
+        !all_rows(&zero.pages).iter().any(|row| row == "Nonce lane key:"),
+        "lane zero must retain the compact confirmation path"
+    );
+}
+
+#[test]
 fn divergence_probe_recipient_flip_moves_both_pages_and_digest() {
     let mut req = WireSignRequest::base();
     req.value = be_u256_from_u64(1_000_000_000_000_000_000);
@@ -1082,6 +1147,15 @@ fn pin_handler_render_and_digest_glue_matches_replication() {
             "if crate::tx::display::target_page_proof(&pages, target_pages_before, &to_address)
              != crate::fi::OK_SENTINEL",
             "handler §8 target-page FI proof drifted",
+        ),
+        (
+            "if crate::tx::display::enforce_nonce_lane_page(&mut pages, &type2_nonce).is_err()",
+            "handler §8 conditional nonce-lane splice drifted",
+        ),
+        (
+            "if crate::tx::display::nonce_lane_page_proof( &pages,
+             nonce_lane_pages_before, &type2_nonce, ) != crate::fi::OK_SENTINEL",
+            "handler §8 nonce-lane completion/skip proof drifted",
         ),
         (
             "let calldata_fingerprint = pqsigner_tx_core::erc8213::calldata_digest(inner_data);",

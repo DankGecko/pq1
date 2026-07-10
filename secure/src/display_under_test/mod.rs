@@ -102,6 +102,10 @@ pub mod erc20_unknown;
 #[path = "../tx/display/value_page.rs"]
 pub mod value_page;
 
+// Conditional exact display of EntryPoint v0.6's high-192 nonce key.
+#[path = "../tx/display/nonce_lane.rs"]
+pub mod nonce_lane;
+
 #[path = "../tx/display/slot_rotation.rs"]
 pub mod slot_rotation;
 

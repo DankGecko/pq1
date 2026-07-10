@@ -58,7 +58,9 @@ is smaller than `executeBatchWithOffchainCount` for `N=1`).
 [52..84)  nonce               u256 BE — base nonce; if FLAG_REGISTER_SLOT
                                         is set the addOwner UserOp uses
                                         this nonce, the batch UserOp
-                                        uses base+1
+                                        uses base+1. High 192 bits are the
+                                        EntryPoint v0.6 lane key; non-zero
+                                        keys are displayed in full.
 [84..116) call_gas_limit      u256 BE
 [116..148) verification_gas   u256 BE
 [148..180) pre_verification   u256 BE
@@ -78,6 +80,12 @@ is smaller than `executeBatchWithOffchainCount` for `N=1`).
 The `wire_version` byte was introduced when the TLV-tagged trailer list
 landed (v1 → v2 cutover); the firmware refuses any payload with
 `wire_version != 2` so a stale companion never silently mis-parses.
+
+When `FLAG_REGISTER_SLOT` is set, the separate rotation signature uses the
+Type-1 base nonce and its confirmation shows the shared high-192 lane. Every
+member page and the final batch authorization use the exact Type-2 `base+1`
+sequence; the lane is unchanged, and a low-64 overflow is refused before
+confirmation.
 
 ### TLV-tagged trailer list
 
@@ -265,14 +273,17 @@ For an N-tx batch, the device renders, in order:
 
 1. Banner: `BATCH SIGN` / `Tx 1 of N`
 2. `Signer acct #N` plus the full mnemonic-derived EIP-55 signer address.
-3. The same pages a single-tx sign would render for inner tx 1
+3. When the high-192 EntryPoint nonce key is non-zero, `Nonce lane key:`
+   followed by all 48 lowercase hexadecimal characters. Lane zero omits it.
+4. The same pages a single-tx sign would render for inner tx 1
    (value / ERC-20-shape / blind-sign).
-4. Long-right (or cancel via long-left).
-5. Banner: `Tx 2 of N` + signer identity + tx 2 pages.
-6. … repeat for each member …
-7. Final summary pages: `Sign N txs?`, the same signer identity, then
+5. Long-right (or cancel via long-left).
+6. Banner: `Tx 2 of N` + signer identity + conditional nonce-lane page + tx 2 pages.
+7. … repeat for each member …
+8. Final summary pages: `Sign N txs?`, the same signer identity, the same
+   conditional nonce-lane page, then
    `Long-right` / `to confirm`.
-8. Long-right confirms; signing begins.
+9. Long-right confirms; signing begins.
 
 Cancel at **any** of the per-tx confirms or the final summary aborts
 the entire signing operation — no inner tx is signed individually.

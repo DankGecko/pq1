@@ -193,7 +193,7 @@ and later.
 ## On-device rendering
 
 Once the bind passes, the firmware lays out the SafeTx on a 16-col × 4-row
-NV3007 LCD. Page count is variable and capped at `MAX_PAGES = 30`; any
+NV3007 LCD. Page count is variable and capped at `MAX_PAGES = 31`; any
 overflow refuses the signature rather than truncating the display.
 
 ### Header (always 3 pages)
@@ -217,7 +217,7 @@ The renderer classifies the inner call and dispatches:
 | `parse_erc20_calldata` succeeds, no metadata match | ERC-20 unknown    | 4          |
 | `canonical.to == canonical.safe_address` + recognised selector | **Safe-mgmt** (per-op) | 1–3 |
 | verified CoW presign, direct or in pinned MultiSendCallOnly | Native CoW order | context + 8-body pages |
-| verified pinned MultiSendCallOnly DELEGATECALL | Strict per-record ladder | bounded by 30-page cap |
+| verified pinned MultiSendCallOnly DELEGATECALL | Strict per-record ladder | bounded by 31-page cap |
 | `canonical.to == canonical.safe_address` + unrecognised selector proven absent from ERC-7730 filter | **Unknown Safe op** (loud blind) | 3 |
 | other opaque tuple proven absent from ERC-7730 filter | Blind sign       | 3          |
 | opaque tuple known/Bloom-positive in ERC-7730 filter | **Refuse**       | —          |

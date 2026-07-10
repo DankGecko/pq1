@@ -41,7 +41,7 @@ Current security contract:
   selector derivation cover that boundary.
 - Known/verified render errors—including no matching format, non-canonical ABI
   framing, unsupported dynamics, or page-budget exhaustion—hard-refuse.
-  `MAX_PAGES` is currently 30; code constants, not old prose, are authoritative.
+  `MAX_PAGES` is currently 31; code constants, not old prose, are authoritative.
 - Contract selector preflight is independent of renderer field-name policy. It
   canonicalizes Solidity ABI aliases (`uint`, `int`, `byte`, `fixed`,
   `ufixed`), accepts legal `$` identifiers, whitespace, and nested tuple-array

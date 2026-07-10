@@ -66,7 +66,7 @@ ERC-20 approval record followed by the presign record. Metadata is usable only
 for the verified Safe direct target or for a target found inside this already
 verified, pinned MultiSend context.
 
-The complete confirmation is capped at 30 pages. Malformed framing, a record
+The complete confirmation is capped at 31 pages. Malformed framing, a record
 delegatecall, a non-allowlisted outer delegatecall, a mismatched order, a
 known/Bloom-positive opaque record without authenticated semantics, or page
 overflow refuses the whole sign. An `operation=0` CALL to a MultiSend address

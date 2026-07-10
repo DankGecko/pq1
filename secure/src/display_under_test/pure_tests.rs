@@ -1431,7 +1431,7 @@ fn negative_pages_row_mut_panics_on_row_out_of_range() {
 fn negative_max_pages_covers_personal_sign_worst_case() {
     // EIP-1271 PersonalSign render = 5 fixed + ceil(MAX/48) message
     // pages. CLAUDE.md fixes the message cap so the worst case fits in
-    // MAX_PAGES (currently 30). This test asserts the budget envelope —
+    // MAX_PAGES (currently 31). This test asserts the budget envelope —
     // if anyone bumps MAX_OFFCHAIN_PERSONAL_SIGN_LEN past what the
     // page bucket can accommodate, MAX_PAGES must grow to match.
     let max_message_pages = MAX_PAGES - 5;
@@ -1449,7 +1449,7 @@ fn negative_max_pages_matches_production_constant() {
     // ERC-7730 render dispatch can be host-linked; this scaffold's copy and
     // that source must stay in lockstep. Searches the production source text.
     let src = include_str!("../../../pqsigner-erc7730/src/display/mod.rs");
-    let needle = "pub const MAX_PAGES: usize = 30;";
+    let needle = "pub const MAX_PAGES: usize = 31;";
     assert!(src.contains(needle),
         "production tx/display/mod.rs no longer defines `{}` — either \
          bump MAX_PAGES here and update this test, OR fix the source.",

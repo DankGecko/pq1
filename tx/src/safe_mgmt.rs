@@ -505,7 +505,7 @@ mod tests {
     #[test]
     fn page_counts_within_envelope() {
         // Caller adds SAFE_HEADER_PAGES (3) + page_count + 1 (confirm).
-        // Max should land at 3 + 3 + 1 = 7, well inside MAX_PAGES=30.
+        // Max should land at 3 + 3 + 1 = 7, well inside MAX_PAGES=31.
         for op in [
             SafeMgmtOp::ChangeThreshold {
                 new_threshold: ThresholdValue::Fits(2),

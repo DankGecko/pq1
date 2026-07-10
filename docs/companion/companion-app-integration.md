@@ -803,7 +803,9 @@ GET_WALLET_ADDRESS(account_index=0) → <1 s first time, then wallet address
 6. Send chained APDU. Device displays:
      a. "First deploy on chain N?"
      b. `Signer acct #N` plus the full mnemonic-derived EIP-55 wallet address
-     c. Inner tx preview
+     c. For a non-zero EntryPoint nonce key, `Nonce lane key:` plus all 48
+        hexadecimal key characters (lane zero omits this page)
+     d. Inner tx preview
      Request signing after button confirm.
 
 7. Parse response:
@@ -836,7 +838,10 @@ maxFeePerGas         = 1   gwei
    The cached address must correspond to the same `accountIndex` encoded in
    `flags`; the device recomputes and hard-rejects any mismatch.
 2. slotIdx ← whichever slot ownerIndex ≥ 1 is active and has budget
-3. nonce   ← entryPoint.getNonce(sender, 0)
+3. nonceKey ← chosen uint192 parallel lane (default 0)
+   nonce    ← entryPoint.getNonce(sender, nonceKey)
+   For nonceKey != 0 the device shows the full 192-bit key; the ordinary
+   `Nonce:` row continues to show the low-64 sequence.
 4. flags   = (accountIndex << 22) | slotIdx    // no flag bits set
 
 5. SIGN_USEROP(…) → initCode=null, type1=null, type2 (4128 B)
@@ -854,6 +859,13 @@ secret. Keep `FLAG_REGISTER_SLOT` clear, reject any nonzero Type-1 response, and
 do not retry it. Rotation becomes executable only after the reviewed,
 versioned protocol extension returns the exact public key or complete bound
 Type-1 calldata.
+
+The firmware nevertheless binds the future reviewed rotation flow correctly:
+the Type-1 rotation confirmation/signature uses `base`, while the Type-2
+transaction confirmation/signature uses `base+1`. Both display the same exact
+high-192 nonce lane when nonzero, and sequence overflow is refused before it
+can change lanes. This does not make wire v2 executable; companions must keep
+`FLAG_REGISTER_SLOT` clear until the versioned response extension is reviewed.
 
 ### 11.5 Receive Address Verification
 
@@ -1100,7 +1112,10 @@ issue.
    companion cannot fake a confirmation screen. Every UserOp confirmation
    also shows the exact zero-based `account_index` and the full EIP-55 signer
    address derived in secure world; the companion-supplied `sender` is never
-   used as display authority.
+   used as display authority. EntryPoint v0.6 nonce lane zero stays compact;
+   every non-zero high-192 nonce key is rendered in full on a dedicated
+   `Nonce lane key:` page, so two parallel-lane operations with the same
+   low-64 sequence cannot produce identical trusted-display confirmations.
 3. **Slot selection is the companion's responsibility.** Firmware is
    stateless with respect to `(chain_id, slot_index)`. Always read
    on-chain `nextOwnerIndex` / `slotUses[i]` before choosing an existing slot

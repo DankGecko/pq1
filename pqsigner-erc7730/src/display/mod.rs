@@ -53,10 +53,11 @@ pub type Page = [[u8; DISPLAY_COLS]; DISPLAY_ROWS];
 /// Safe `safeTxGas` page (conditional on `safeTxGas != 0`; audit 2026-06-26);
 /// 28 → 29 for the mandatory full UserOp signer account/address page
 /// (audit 2026-07-10); 29 → 30 for the mandatory full outer target-contract
-/// page on every single transaction / batch member. The signer and target
-/// pages are reserved by the Safe multiSend gate, so the budget still fails
-/// closed (refuse, never truncate).
-pub const MAX_PAGES: usize = 30;
+/// page on every single transaction / batch member; 30 → 31 for the
+/// conditional full 192-bit EntryPoint nonce-lane page (audit finding #3,
+/// 2026-07-10). The Safe multiSend sign-gate reserves all handler pages, so
+/// the budget still fails closed (refuse, never truncate).
+pub const MAX_PAGES: usize = 31;
 
 /// A buffer of up to [`MAX_PAGES`] pre-rendered confirmation pages.
 ///

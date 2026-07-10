@@ -583,6 +583,17 @@ fn negative_batch_nonce_increment_does_not_touch_key_field() {
 }
 
 #[test]
+fn positive_batch_rotation_display_sequence_is_base_plus_one_same_lane() {
+    let mut base = [0xa5u8; 32];
+    base[24..32].copy_from_slice(&255u64.to_be_bytes());
+    let mut type2 = base;
+    mirror_add_one_to_be_u256(&mut type2);
+    assert_eq!(u64::from_be_bytes(base[24..32].try_into().unwrap()), 255);
+    assert_eq!(u64::from_be_bytes(type2[24..32].try_into().unwrap()), 256);
+    assert_eq!(&type2[..24], &base[..24], "batch rotation changed nonce lane");
+}
+
+#[test]
 #[should_panic(expected = "nonce seq overflow")]
 fn negative_batch_nonce_increment_seq_overflow_panics() {
     // cmd_sign_userop_batch.rs:172 — `nonce[24..32] == [0xFFu8; 8]`
@@ -628,6 +639,7 @@ const CMD_SIGN_USEROP_BATCH_SRC: &str = include_str!("nsc/cmd_sign_userop_batch.
 const CMD_SIGN_USEROP_SRC: &str = include_str!("nsc/cmd_sign_userop.rs");
 const WALLET_ADDRESS_SRC: &str = include_str!("nsc/cmd_get_wallet_address.rs");
 const VALUE_PAGE_SRC: &str = include_str!("tx/display/value_page.rs");
+const NONCE_LANE_SRC: &str = include_str!("tx/display/nonce_lane.rs");
 
 const ALL_SLICE_SRCS: [(&str, &str); 4] = [
     ("cmd_offchain_status.rs", CMD_OFFCHAIN_STATUS_SRC),
@@ -1465,6 +1477,98 @@ fn negative_batch_shows_and_fi_proves_full_derived_signer_identity() {
 
     assert!(VALUE_PAGE_SRC.contains("b\"Signer acct #\""));
     assert!(VALUE_PAGE_SRC.contains("primitives::write_addr_full(a, b, c, sender)"));
+}
+
+#[test]
+fn negative_batch_shows_and_fi_proves_nonce_lane_on_every_confirmation() {
+    assert_eq!(
+        CMD_SIGN_USEROP_BATCH_SRC
+            .matches("enforce_nonce_lane_page(")
+            .count(),
+        3
+    );
+    assert_eq!(
+        CMD_SIGN_USEROP_BATCH_SRC
+            .matches("nonce_lane_page_proof(")
+            .count(),
+        3
+    );
+    assert!(CMD_SIGN_USEROP_BATCH_SRC.contains("&mut rotate_pages, &nonce"));
+    assert!(CMD_SIGN_USEROP_BATCH_SRC.contains("&mut pages, &type2_nonce"));
+    assert!(CMD_SIGN_USEROP_BATCH_SRC.contains("&mut final_pages, &type2_nonce"));
+    assert!(CMD_SIGN_USEROP_BATCH_SRC.contains("NONZERO_NONCE_LANE_PAGES"));
+    assert!(CMD_SIGN_USEROP_BATCH_SRC.contains("lane unshown"));
+
+    let member = CMD_SIGN_USEROP_BATCH_SRC
+        .find("enforce_nonce_lane_page(&mut pages, &type2_nonce)")
+        .unwrap();
+    let member_proof = member
+        + CMD_SIGN_USEROP_BATCH_SRC[member..]
+            .find("nonce_lane_page_proof(")
+            .unwrap();
+    let member_fp = member_proof
+        + CMD_SIGN_USEROP_BATCH_SRC[member_proof..]
+            .find("append_fingerprint_page(")
+            .unwrap();
+    assert!(member < member_proof && member_proof < member_fp);
+
+    let final_lane = CMD_SIGN_USEROP_BATCH_SRC
+        .find("enforce_nonce_lane_page(&mut final_pages, &type2_nonce)")
+        .unwrap();
+    let final_proof = final_lane
+        + CMD_SIGN_USEROP_BATCH_SRC[final_lane..]
+            .find("nonce_lane_page_proof(")
+            .unwrap();
+    let final_confirm = final_proof
+        + CMD_SIGN_USEROP_BATCH_SRC[final_proof..]
+            .find("confirm_checked(final_pages.as_slice())")
+            .unwrap();
+    assert!(final_lane < final_proof && final_proof < final_confirm);
+
+    assert!(NONCE_LANE_SRC.contains("nonce[..24]"));
+    assert!(NONCE_LANE_SRC.contains("pages.len == prior_len"));
+    assert!(NONCE_LANE_SRC.contains("nonce_lane_page_matches"));
+}
+
+#[test]
+fn negative_batch_type2_display_uses_incremented_rotation_nonce() {
+    let overflow_guard = CMD_SIGN_USEROP_BATCH_SRC
+        .find("register_slot && nonce[24..32] == [0xFFu8; 8]")
+        .unwrap();
+    let derive = CMD_SIGN_USEROP_BATCH_SRC
+        .find("let mut type2_nonce = nonce;")
+        .unwrap();
+    let display = CMD_SIGN_USEROP_BATCH_SRC
+        .find("let display_nonce = u64::from_be_bytes([")
+        .unwrap();
+    let member_lane = CMD_SIGN_USEROP_BATCH_SRC
+        .find("enforce_nonce_lane_page(&mut pages, &type2_nonce)")
+        .unwrap();
+    let final_lane = CMD_SIGN_USEROP_BATCH_SRC
+        .find("enforce_nonce_lane_page(&mut final_pages, &type2_nonce)")
+        .unwrap();
+    let signed = CMD_SIGN_USEROP_BATCH_SRC
+        .rfind("nonce: U256(type2_nonce)")
+        .unwrap();
+    assert!(
+        overflow_guard < derive
+            && derive < display
+            && display < member_lane
+            && member_lane < final_lane
+            && final_lane < signed
+    );
+    assert_eq!(
+        CMD_SIGN_USEROP_BATCH_SRC
+            .matches("let mut type2_nonce = nonce;")
+            .count(),
+        1
+    );
+    assert!(CMD_SIGN_USEROP_BATCH_SRC[derive..display]
+        .contains("add_one_to_be_u256(&mut type2_nonce)"));
+    assert!(CMD_SIGN_USEROP_BATCH_SRC[display..].contains("type2_nonce[24]"));
+    assert!(CMD_SIGN_USEROP_BATCH_SRC.contains(
+        "enforce_nonce_lane_page(&mut rotate_pages, &nonce)"
+    ));
 }
 
 #[test]

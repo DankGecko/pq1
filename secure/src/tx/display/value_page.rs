@@ -402,7 +402,7 @@ pub(crate) fn enforce_paymaster_page(
 /// Insert a blank page at index `at`, shifting the pages currently at
 /// `at..len` one slot toward the back. Returns the index of the new
 /// (cleared) page, or `Err(())` when the buffer is already full.
-fn insert_blank(pages: &mut Pages, at: usize) -> Result<usize, ()> {
+pub(super) fn insert_blank(pages: &mut Pages, at: usize) -> Result<usize, ()> {
     if pages.len >= super::MAX_PAGES {
         return Err(());
     }

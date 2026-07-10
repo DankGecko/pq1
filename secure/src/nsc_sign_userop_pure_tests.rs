@@ -783,6 +783,17 @@ fn positive_nonce_increment_only_touches_seq_portion() {
 }
 
 #[test]
+fn positive_rotation_type2_display_sequence_is_base_plus_one_same_lane() {
+    let mut base = [0x5au8; 32];
+    base[24..32].copy_from_slice(&41u64.to_be_bytes());
+    let mut type2 = base;
+    mirror_add_one_to_be_u256(&mut type2);
+    assert_eq!(u64::from_be_bytes(base[24..32].try_into().unwrap()), 41);
+    assert_eq!(u64::from_be_bytes(type2[24..32].try_into().unwrap()), 42);
+    assert_eq!(&type2[..24], &base[..24], "rotation changed nonce lane");
+}
+
+#[test]
 #[should_panic(expected = "nonce seq overflow")]
 fn negative_nonce_increment_at_seq_overflow_panics_in_debug() {
     // CLAUDE.md §"Sign dispatch" and cmd_sign_userop.rs:288 — the
@@ -883,6 +894,7 @@ const CMD_SIGN_USEROP_SRC: &str =
     include_str!("nsc/cmd_sign_userop.rs");
 const WALLET_ADDRESS_SRC: &str = include_str!("nsc/cmd_get_wallet_address.rs");
 const VALUE_PAGE_SRC: &str = include_str!("tx/display/value_page.rs");
+const NONCE_LANE_SRC: &str = include_str!("tx/display/nonce_lane.rs");
 const SIG_WRAPPER_SRC: &str = include_str!("nsc/sig_wrapper.rs");
 const TRAILER_SRC: &str = include_str!("nsc/trailer.rs");
 
@@ -1183,6 +1195,73 @@ fn negative_slice_shows_and_fi_proves_full_derived_signer_identity() {
     assert!(VALUE_PAGE_SRC.contains("#[inline(never)]\npub(crate) fn from_page_proof"));
     assert!(VALUE_PAGE_SRC.contains("from_page_matches(pages, page_index"));
     assert!(!VALUE_PAGE_SRC.contains("b\"From account:"));
+}
+
+#[test]
+fn negative_slice_shows_and_fi_proves_every_nonzero_nonce_lane() {
+    assert_eq!(CMD_SIGN_USEROP_SRC.matches("enforce_nonce_lane_page(").count(), 2);
+    assert_eq!(CMD_SIGN_USEROP_SRC.matches("nonce_lane_page_proof(").count(), 2);
+    assert!(CMD_SIGN_USEROP_SRC.contains("&mut rotate_pages, &nonce"));
+    assert!(CMD_SIGN_USEROP_SRC.contains("&mut pages, &type2_nonce"));
+    assert!(CMD_SIGN_USEROP_SRC.contains("NONZERO_NONCE_LANE_PAGES"));
+    assert!(CMD_SIGN_USEROP_SRC.contains("lane unshown"));
+
+    let main_lane = CMD_SIGN_USEROP_SRC
+        .find("enforce_nonce_lane_page(&mut pages, &type2_nonce)")
+        .unwrap();
+    let proof = main_lane
+        + CMD_SIGN_USEROP_SRC[main_lane..]
+            .find("nonce_lane_page_proof(")
+            .unwrap();
+    let fingerprint = proof
+        + CMD_SIGN_USEROP_SRC[proof..]
+            .find("append_fingerprint_page(")
+            .unwrap();
+    let confirm = fingerprint
+        + CMD_SIGN_USEROP_SRC[fingerprint..]
+            .find("confirm_checked(pages.as_slice())")
+            .unwrap();
+    assert!(main_lane < proof && proof < fingerprint && fingerprint < confirm);
+
+    assert!(NONCE_LANE_SRC.contains(
+        "primitives::write_line(&mut page[0], \"Nonce lane key:\")"
+    ));
+    assert!(NONCE_LANE_SRC.contains("nonce[..24]"));
+    assert!(NONCE_LANE_SRC.contains("NONZERO_NONCE_LANE_PAGES: usize = 1"));
+    assert!(NONCE_LANE_SRC.contains(
+        "#[inline(never)]\npub(crate) fn enforce_nonce_lane_page"
+    ));
+    assert!(NONCE_LANE_SRC.contains(
+        "#[inline(never)]\npub(crate) fn nonce_lane_page_proof"
+    ));
+}
+
+#[test]
+fn negative_slice_type2_display_uses_incremented_rotation_nonce() {
+    let overflow_guard = CMD_SIGN_USEROP_SRC
+        .find("register_slot && nonce[24..32] == [0xFFu8; 8]")
+        .unwrap();
+    let derive = CMD_SIGN_USEROP_SRC
+        .find("let mut type2_nonce = nonce;")
+        .unwrap();
+    let display = CMD_SIGN_USEROP_SRC
+        .find("let display_nonce = u64::from_be_bytes([")
+        .unwrap();
+    let main_lane = CMD_SIGN_USEROP_SRC
+        .find("enforce_nonce_lane_page(&mut pages, &type2_nonce)")
+        .unwrap();
+    let signed = CMD_SIGN_USEROP_SRC
+        .rfind("nonce: U256(type2_nonce)")
+        .unwrap();
+    assert!(overflow_guard < derive && derive < display && display < main_lane && main_lane < signed);
+    assert_eq!(CMD_SIGN_USEROP_SRC.matches("let mut type2_nonce = nonce;").count(), 1);
+    assert!(CMD_SIGN_USEROP_SRC[derive..display].contains("add_one_to_be_u256(&mut type2_nonce)"));
+    assert!(CMD_SIGN_USEROP_SRC[display..].contains("type2_nonce[24]"));
+    // The separate Type-1 rotation lane page remains bound to the base
+    // high-192 key; CRIT-17 proves base+1 cannot change that lane.
+    assert!(CMD_SIGN_USEROP_SRC.contains(
+        "enforce_nonce_lane_page(&mut rotate_pages, &nonce)"
+    ));
 }
 
 #[test]

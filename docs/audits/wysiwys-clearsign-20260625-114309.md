@@ -325,10 +325,13 @@ here (not as numbered findings) to keep the enumeration honest.
   *sponsors* gas, or — for a token paymaster — charges a token the wallet has
   *already approved*, bounded by the worst-case gas cost that the gas pages already
   show in ETH terms. No new drain primitive; not displayable meaningfully.
-* **UserOp `nonce` high 192 bits** — only the low 64 bits (the v0.6 sequence) are
-  shown (`cmd_sign_userop.rs:647-650`); the 192-bit nonce *key* is signed. The key
-  selects a parallel-nonce lane; it changes neither what the tx does nor where
-  funds go.
+* **UserOp `nonce` high 192 bits — resolved 2026-07-10.** The low 64-bit v0.6
+  sequence remains on the ordinary `Nonce:` row. A non-zero 192-bit nonce key
+  now adds one exact `Nonce lane key:` page containing all 48 hex characters on
+  every single/batch authorization surface, with an independent FI
+  completion/skip proof. Lane zero omits the page. This closes the later-found
+  safe-retry/double-execution ambiguity that this snapshot had classified as
+  informational.
 * **`sender` / `entryPoint`** — signed domain-separator fields, not displayed. A
   wrong value self-invalidates: the real EntryPoint recomputes the hash with its own
   address, and a slot sig is only valid against the wallet that lists that slot key
@@ -342,7 +345,7 @@ here (not as numbered findings) to keep the enumeration honest.
 |---|---|---|---|
 | 1 | `sender` | no | discharged — domain sep, self-invalidating (informational) |
 | 2 | `nonce` (low 64) | yes — `write_nonce_row` | clean |
-| 2b| `nonce` (high 192 key) | no | discharged — parallel-nonce lane, no semantics (info) |
+| 2b| `nonce` (high 192 key) | conditional exact 48-hex page | fixed 2026-07-10 — non-zero parallel lanes cannot hide behind identical sequence screens |
 | 3 | `init_code_digest` | firmware-computed (`cmd_sign_userop.rs:1501`), not raw-shown | clean — CREATE2-constrained to `sender`; deploy path |
 | 4 | `call_data_digest` = `executeWithOffchainCount(ownerIndex,count,to,value,data)` | `to`,`value`,`data` shown; `data` also via ERC-8213 256-bit fp | clean |
 | 5 | `call_gas_limit` | yes (summed into worst-case) | clean |

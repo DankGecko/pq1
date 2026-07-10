@@ -298,6 +298,13 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         ui::show_status("Nonce seq", "overflow");
         return NscStatus::InvalidPointer as u32;
     }
+    // Derive the exact batch UserOp nonce before any transaction/final
+    // confirmation. REGISTER_SLOT consumes the supplied base nonce with the
+    // Type-1 rotation, so the signed Type-2 batch is base+1 in the same lane.
+    let mut type2_nonce = nonce;
+    if register_slot {
+        add_one_to_be_u256(&mut type2_nonce);
+    }
 
     // ── 5. Parse N inner-tx blocks ──────────────────────────────────
     let mut parsed: [Option<ParsedTx>; MAX_BATCH_TXS] = [const { None }; MAX_BATCH_TXS];
@@ -725,6 +732,21 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             ui::show_status("Batch sign", "signer unshown");
             return NscStatus::InternalError as u32;
         }
+        let nonce_lane_pages_before = rotate_pages.len;
+        if crate::tx::display::enforce_nonce_lane_page(&mut rotate_pages, &nonce).is_err() {
+            ui::show_status("Batch sign", "lane unshown");
+            return NscStatus::InternalError as u32;
+        }
+        crate::fi::scrub_sentinel_register();
+        if crate::tx::display::nonce_lane_page_proof(
+            &rotate_pages,
+            nonce_lane_pages_before,
+            &nonce,
+        ) != crate::fi::OK_SENTINEL
+        {
+            ui::show_status("Batch sign", "lane unshown");
+            return NscStatus::InternalError as u32;
+        }
         let (cr, cr_verdict) = confirm_checked(rotate_pages.as_slice());
         match cr {
             ConfirmResult::Confirmed => {}
@@ -755,7 +777,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // Display-time fields (gas, nonce) come from the outer UserOp; per
     // member we vary only `(to, value, data_len, signing_hash)`.
     let display_nonce = u64::from_be_bytes([
-        nonce[24], nonce[25], nonce[26], nonce[27], nonce[28], nonce[29], nonce[30], nonce[31],
+        type2_nonce[24], type2_nonce[25], type2_nonce[26], type2_nonce[27],
+        type2_nonce[28], type2_nonce[29], type2_nonce[30], type2_nonce[31],
     ]);
     let display_max_fee = U256(max_fee_per_gas);
     let display_max_prio = U256(max_priority_fee_per_gas);
@@ -882,15 +905,17 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         // DELEGATECALL must pass every hard rule and fit the trusted-
         // display page budget, else refuse the whole batch. Reserved
         // pages here: the dispatcher's native-value page when this
-        // member carries ETH, the two ERC-8213 fingerprint pages, the
-        // batch banner, mandatory full signer + target pages, and two gas/fee
-        // pages the dispatcher splices for the Safe surface.
+        // member carries ETH, the two ERC-8213 fingerprint pages, the batch
+        // banner page, mandatory full signer + target pages, worst-case
+        // non-zero nonce-lane page, and the two gas/fee pages the dispatcher
+        // splices for the Safe surface (audit 2026-06-19).
         {
             let reserved = usize::from(ptx.value.iter().any(|&b| b != 0))
                 + 2
                 + 1
                 + crate::tx::display::SIGNER_IDENTITY_PAGES
                 + crate::tx::display::TARGET_IDENTITY_PAGES
+                + crate::tx::display::NONZERO_NONCE_LANE_PAGES
                 + 2;
             match crate::tx::display::multisend_sign_gate(
                 routed[i].as_ref().and_then(|r| r.safe_v1.as_ref()),
@@ -1010,6 +1035,22 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             return NscStatus::InternalError as u32;
         }
 
+        let nonce_lane_pages_before = pages.len;
+        if crate::tx::display::enforce_nonce_lane_page(&mut pages, &type2_nonce).is_err() {
+            ui::show_status("Batch sign", "lane unshown");
+            return NscStatus::InternalError as u32;
+        }
+        crate::fi::scrub_sentinel_register();
+        if crate::tx::display::nonce_lane_page_proof(
+            &pages,
+            nonce_lane_pages_before,
+            &type2_nonce,
+        ) != crate::fi::OK_SENTINEL
+        {
+            ui::show_status("Batch sign", "lane unshown");
+            return NscStatus::InternalError as u32;
+        }
+
         // Per-tx ERC-8213 fingerprint. The user sees one fingerprint
         // per inner call; a separate batch-final fingerprint binds
         // the whole bundle below.
@@ -1102,6 +1143,21 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         ) != crate::fi::OK_SENTINEL
         {
             ui::show_status("Batch sign", "signer unshown");
+            return NscStatus::InternalError as u32;
+        }
+        let nonce_lane_pages_before = final_pages.len;
+        if crate::tx::display::enforce_nonce_lane_page(&mut final_pages, &type2_nonce).is_err() {
+            ui::show_status("Batch sign", "lane unshown");
+            return NscStatus::InternalError as u32;
+        }
+        crate::fi::scrub_sentinel_register();
+        if crate::tx::display::nonce_lane_page_proof(
+            &final_pages,
+            nonce_lane_pages_before,
+            &type2_nonce,
+        ) != crate::fi::OK_SENTINEL
+        {
+            ui::show_status("Batch sign", "lane unshown");
             return NscStatus::InternalError as u32;
         }
         // Fail closed if the batch-final fingerprint can't be appended (F5):
@@ -1289,10 +1345,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     }
 
     // ── 9. Type 2 nonce ─────────────────────────────────────────────
-    let mut type2_nonce = nonce;
-    if register_slot {
-        add_one_to_be_u256(&mut type2_nonce);
-    }
+    // `type2_nonce` was derived before trusted-display rendering so every
+    // member/final confirmation is bound to this exact signed batch nonce.
 
     // ── 10. Slot C10 keygen (cached) ────────────────────────────────
     let need_keygen = super::state::peek_state(|_| {

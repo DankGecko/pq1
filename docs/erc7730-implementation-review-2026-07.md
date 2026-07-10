@@ -260,7 +260,10 @@ keys unsupported (names are load-bearing since `abi` is ignored).
 
 ## Tier 4 — Rendering UX fidelity (what the user actually sees)
 
-Display model: 16 cols × 4 rows, `MAX_PAGES = 30`; a simple USDT transfer is 8 pages.
+Display model: 16 cols × 4 rows, `MAX_PAGES = 31`. Every UserOp confirmation
+includes the mandatory outer-signer and exact target-contract pages; a nonzero
+EntryPoint nonce lane adds one exact high-192-bit lane page. Golden fixtures,
+not historical page-count prose, are authoritative for individual flows.
 Quick-win bundle (all S unless noted):
 
 - **4.1 Intent banner truncates at 10 chars, no marker** (intent.rs:61-67): **330 of 561**

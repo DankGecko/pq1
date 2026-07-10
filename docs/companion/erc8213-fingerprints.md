@@ -89,7 +89,7 @@ companion fed the firmware.
   `write_calldata_hash_rows` which truncates to 14 hex chars (kept
   for non-8213 paths like blind-sign + selectors).
 - Page budget: the two fingerprint pages are explicitly reserved within
-  `MAX_PAGES = 30`. If the complete trusted display does not fit, firmware
+  `MAX_PAGES = 31`. If the complete trusted display does not fit, firmware
   refuses the request; it never truncates pages to force a fit.
 - Test vectors: every helper in `pqsigner-tx-core::erc8213` has
   pinned test vectors in `pqsigner-tx-core/src/erc8213.rs` —
