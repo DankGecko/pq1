@@ -1253,11 +1253,10 @@ fn negative_measured_boot_title_distinguishes_fingerprint_from_seed_phrase() {
 
 #[test]
 fn negative_measured_boot_words_derive_from_firmware_hash_not_entropy() {
-    // The function calls hash_to_word_indices(&hash) where `hash` is
-    // `firmware_hash()` — never the bip39 entropy. A regression that
-    // accidentally fed the entropy bytes through this same renderer
-    // would leak the seed words to a "boot screen" the user has been
-    // trained to ignore.
+    // The function passes the result of `firmware_hash()` directly to the
+    // shared FSBL renderer — never BIP-39 entropy. A regression that fed
+    // entropy through this renderer would leak seed-derived words on a boot
+    // screen the user has been trained to ignore.
     let body_pos = MEASURED_BOOT_SRC
         .find("pub fn run() {")
         .expect("measured_boot must have a `pub fn run`");
@@ -1265,12 +1264,12 @@ fn negative_measured_boot_words_derive_from_firmware_hash_not_entropy() {
     let hash_pos = body
         .find("let hash = firmware_hash();")
         .expect("measured_boot::run must compute hash via firmware_hash()");
-    let map_pos = body
-        .find("let indices = hash_to_word_indices(&hash);")
-        .expect("measured_boot::run must derive indices via hash_to_word_indices(&hash)");
+    let render_pos = body
+        .find("render_all_words(&hash);")
+        .expect("measured_boot::run must render the exact firmware hash");
     assert!(
-        hash_pos < map_pos,
-        "indices must be computed from the firmware hash, never from any other source"
+        hash_pos < render_pos,
+        "the shared fingerprint renderer must consume the firmware hash"
     );
     // And explicitly: no `bip39::Mnemonic` / `to_seed` mentions.
     assert!(
@@ -1289,21 +1288,21 @@ fn negative_measured_boot_words_derive_from_firmware_hash_not_entropy() {
 }
 
 #[test]
-fn negative_measured_boot_render_uses_wordlist_indexed_by_bip39_indices() {
-    // Indices feeding the wordlist lookup must come from
-    // `hash_to_word_indices`. Pin the textual access pattern.
-    // Post-F-27 hygiene: route through `word_bytes_at(indices[li/ri])`
-    // (constant-time scan) so the leaky `WORDLIST[idx]` pattern doesn't
-    // exist in the codebase for a future caller to inherit. The
-    // displayed words are public (firmware_hash-derived) — the CT
-    // routing is hygiene, not a security fix at this call site.
+fn negative_measured_boot_render_uses_shared_fingerprint_grid() {
+    // Both FSBL and secure world must consume the same pure layout helper;
+    // duplicating the word lookup or column layout here previously allowed
+    // the secure screen to render six characters while FSBL rendered five.
     assert!(
-        MEASURED_BOOT_SRC.contains("word_bytes_at(indices[li])"),
-        "render_all_words must look up the left-column word via word_bytes_at(indices[li])"
+        MEASURED_BOOT_SRC.contains("use sphincs_tz_bip39::firmware_fingerprint_lines;"),
+        "measured_boot must import the shared FSBL fingerprint renderer"
     );
     assert!(
-        MEASURED_BOOT_SRC.contains("word_bytes_at(indices[ri])"),
-        "render_all_words must look up the right-column word via word_bytes_at(indices[ri])"
+        MEASURED_BOOT_SRC.contains("let rows = firmware_fingerprint_lines(hash);"),
+        "render_all_words must derive its exact rows from the shared helper"
+    );
+    assert!(
+        MEASURED_BOOT_SRC.contains("d.draw_line(row_idx, ascii_str(row));"),
+        "measured_boot must draw each shared row verbatim"
     );
     // Belt-and-braces: the leaky pattern must NOT survive in this file.
     assert!(
@@ -1314,14 +1313,12 @@ fn negative_measured_boot_render_uses_wordlist_indexed_by_bip39_indices() {
 
 #[test]
 fn negative_measured_boot_layout_matches_8x4_two_column_grid() {
-    // Two columns of 4 rows; left column at cols 0–7, right at 8–15.
-    // A regression that put the right column at col 7 (no gap) would
-    // collide the two halves at the screen mid-line.
-    assert!(MEASURED_BOOT_SRC.contains("for row in 0..4 {"));
-    assert!(MEASURED_BOOT_SRC.contains("buf[0] = b'1' + row as u8;"));
-    assert!(MEASURED_BOOT_SRC.contains("buf[8] = b'5' + row as u8;"));
-    assert!(MEASURED_BOOT_SRC.contains("let lmax = core::cmp::min(llen as usize, 6);"));
-    assert!(MEASURED_BOOT_SRC.contains("let rmax = core::cmp::min(rlen as usize, 6);"));
+    // The shared helper owns the 4x16, two-column layout. This module may
+    // iterate the returned rows, but must not reconstruct column offsets.
+    assert!(MEASURED_BOOT_SRC.contains("for (row_idx, row) in rows.iter().enumerate() {"));
+    assert!(MEASURED_BOOT_SRC.contains("d.draw_line(row_idx, ascii_str(row));"));
+    assert!(!MEASURED_BOOT_SRC.contains("let lmax ="));
+    assert!(!MEASURED_BOOT_SRC.contains("let rmax ="));
 }
 
 #[test]

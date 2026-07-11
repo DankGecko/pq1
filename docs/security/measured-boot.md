@@ -93,19 +93,21 @@ identical bytes for any honest slot.
 The full BIP-39 wordlist (`WORDLIST_FLAT: [[u8; 8]; 2048]`) plus its
 length table costs ~18 KB of rodata. The FSBL's flash ceiling is 32 KB
 and the rest of the bootloader uses ~18 KB by itself — the full
-wordlist would not fit. The FSBL therefore ships a `WORDLIST_PREFIX5:
-[[u8; 5]; 2048]` (~10 KB), generated at build time from the same
-canonical `bip39/src/wordlist.rs` source the secure-world uses.
+wordlist would not fit. The FSBL therefore ships a
+`WORDLIST_PREFIX5_PACKED: [[u8; 3]; 2048]` base-27 table (~6 KB), generated
+at build time from the same canonical `bip39/src/wordlist.rs` source the
+secure world uses. `word_prefix_at` decodes the selected entry back to the
+exact five zero-padded bytes before rendering.
 
 This is safe because:
 
 * BIP-39's English wordlist guarantees the first **4 chars** are unique
   per word, so a 5-char prefix unambiguously identifies any wordlist
   entry. The 5th byte serves as a visual sanity buffer for the user.
-* The pre-existing `secure/src/measured_boot.rs::render_all_words`
-  already truncates words to ≤ 6 visible chars on the 16-column OLED.
-  A 5-char prefix is visually indistinguishable from what the
-  secure-world's screen has been displaying.
+* Both the immutable FSBL and advisory secure-world screen draw the exact
+  4×16 byte grid returned by `firmware_fingerprint_lines`. They therefore
+  use the same five-character truncation, spacing, and short-word padding;
+  any honest-image display divergence is a real defect or tamper signal.
 
 The `bip39/tests/prefix5_roundtrip.rs` test pins these invariants
 (prefix = first 5 bytes of `WORDLIST[i]`; all 2048 prefixes unique).

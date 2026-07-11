@@ -103,7 +103,7 @@ fn positive_fsbl_prefixes_match_fwmeasure_word_prefixes() {
             .chain(std::iter::repeat(b' '))
             .take(5)
             .collect();
-        // Trailing zero-pad from WORDLIST_PREFIX5 is rendered as ASCII
+        // Trailing zero-pad from the decoded packed prefix is rendered as ASCII
         // space by firmware_fingerprint_lines. fwmeasure's full word
         // is followed by no trailing chars (we just took the first 5),
         // so a < 5 char word like "act" yields "act  " (with 2 spaces).

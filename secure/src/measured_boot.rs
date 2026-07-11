@@ -1,16 +1,18 @@
 //! Firmware measurement display.
 //!
 //! Computes SHA-256 of the secure firmware flash region and displays
-//! the first 88 bits as 8 BIP-39 words on the OLED / console. A companion
+//! the first 88 bits as 8 BIP-39 words on the LCD / console. A companion
 //! host tool (`fwmeasure`) can independently compute the same words from
 //! the firmware ELF so the user can visually compare — no secrets, no
 //! trust assumptions, just an open-source reproducible build.
 
 use sha2::{Digest, Sha256};
+use sphincs_tz_bip39::firmware_fingerprint_lines;
+#[cfg(feature = "debug-log")]
 use sphincs_tz_bip39::{hash_to_word_indices, word_bytes_at};
 
 use crate::timeout;
-use crate::ui::{display, input, show_status, DISPLAY_COLS};
+use crate::ui::{ascii_str, display, input, show_status};
 
 // ---------------------------------------------------------------------------
 // Flash region boundaries
@@ -148,38 +150,17 @@ const WORDS_MS: u32 = 4_000;
 /// 3 own    7 sail
 /// 4 deputy 8 simple
 /// ```
-fn render_all_words(indices: &[u16; 8]) {
+fn render_all_words(hash: &[u8; 32]) {
     let d = display();
     d.clear();
 
-    for row in 0..4 {
-        let mut buf = [b' '; DISPLAY_COLS];
-
-        // Left column: words 1-4 (cols 0-7).
-        // The displayed words derive from `firmware_hash` (public — the
-        // user is supposed to read and compare them against `fwmeasure`),
-        // so no secret rides on these wordlist accesses. We still route
-        // through `word_bytes_at` (constant-time scan) instead of
-        // `WORDLIST[idx].as_bytes()` so the leaky address-keyed-load
-        // pattern doesn't exist in the codebase for a future caller to
-        // inherit accidentally. Cost: ~16 KB stack reads × 8 = 128 KB
-        // at boot, well under 10 ms on Cortex-M33.
-        let li = row;
-        buf[0] = b'1' + row as u8;
-        buf[1] = b' ';
-        let (lw, llen) = word_bytes_at(indices[li]);
-        let lmax = core::cmp::min(llen as usize, 6);
-        buf[2..2 + lmax].copy_from_slice(&lw[..lmax]);
-
-        // Right column: words 5-8 (cols 8-15)
-        let ri = row + 4;
-        buf[8] = b'5' + row as u8;
-        buf[9] = b' ';
-        let (rw, rlen) = word_bytes_at(indices[ri]);
-        let rmax = core::cmp::min(rlen as usize, 6);
-        buf[10..10 + rmax].copy_from_slice(&rw[..rmax]);
-
-        d.draw_line(row, crate::ui::ascii_str(&buf));
+    // Consume the exact same pure 4x16 byte grid as the immutable FSBL.
+    // Keeping layout and prefix truncation in one shared helper makes an
+    // honest FSBL/secure-world mismatch a meaningful tamper signal instead
+    // of a renderer-width artifact.
+    let rows = firmware_fingerprint_lines(hash);
+    for (row_idx, row) in rows.iter().enumerate() {
+        d.draw_line(row_idx, ascii_str(row));
     }
 
     d.flush();
@@ -197,10 +178,16 @@ fn render_all_words(indices: &[u16; 8]) {
 /// 2. Shows all 8 words on a single screen for 4 s (any button skips).
 pub fn run() {
     let hash = firmware_hash();
+    #[cfg(feature = "debug-log")]
     let indices = hash_to_word_indices(&hash);
 
-    secure_log!("[S] FW measurement: {:02x}{:02x}{:02x}{:02x}...",
-        hash[0], hash[1], hash[2], hash[3]);
+    secure_log!(
+        "[S] FW measurement: {:02x}{:02x}{:02x}{:02x}...",
+        hash[0],
+        hash[1],
+        hash[2],
+        hash[3]
+    );
 
     // Log words for semihosting comparison. Public data — words derive
     // from firmware_hash — but route through the CT lookup so the leaky
@@ -238,7 +225,7 @@ pub fn run() {
     }
 
     // Phase 2: show all 8 words, auto-dismiss after 4 s or any button.
-    render_all_words(&indices);
+    render_all_words(&hash);
 
     let start = timeout::now();
     let mut auto_boot = || timeout::now().wrapping_sub(start) >= WORDS_MS;

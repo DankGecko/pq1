@@ -153,9 +153,16 @@ fn negative_secure_measured_boot_still_self_attests() {
          against the FSBL display. Removing it would lose the divergence-tamper signal."
     );
     assert!(
-        src.contains("hash_to_word_indices(&hash)"),
-        "measured_boot::run must derive its display indices from `hash_to_word_indices(&hash)` \
-         so they remain comparable byte-for-byte to FSBL's prefix5 render"
+        src.contains("use sphincs_tz_bip39::firmware_fingerprint_lines;"),
+        "secure measured_boot must import the same pure renderer as FSBL"
+    );
+    assert!(
+        src.contains("let rows = firmware_fingerprint_lines(hash);"),
+        "secure measured_boot must use the shared renderer for its display rows"
+    );
+    assert!(
+        src.contains("render_all_words(&hash);"),
+        "measured_boot::run must pass its self-measured firmware hash directly to the shared renderer"
     );
 }
 
