@@ -170,6 +170,15 @@
       "note": "vendored-spec fidelity (the ADRS version bridge). Wired into lean-extracted.yml nightly 2026-07-02 (was in NO workflow \u2014 extracted-F1)."
     },
     {
+      "id": "verify-extracted-heavy",
+      "make": "make -C contracts/verification verify-extracted-heavy",
+      "polices_paths": [
+        "contracts/verification/extracted/Extracted/FormatDecimalSpec.lean"
+      ],
+      "enforcement": "local_documented",
+      "why": "FormatDecimalSpec kernel type-checking needs about 42 GB RSS. The 16 GB workflow invocation is deliberately continue-on-error and useful only on a cache hit; authoritative cold validation runs locally or on a >=48 GB runner. The mandatory extracted suite remains blocking."
+    },
+    {
       "id": "verify-bytecode",
       "make": "make -C contracts/verification verify-bytecode",
       "polices_paths": [
@@ -195,11 +204,17 @@
       "polices_paths": [
         "secure/src/nsc/mod.rs",
         "secure/Cargo.toml",
+        "secure/build.rs",
+        "fsbl/Cargo.toml",
+        "fsbl/build.rs",
+        "fsbl/src/main.rs",
+        "fsbl-tests/tests/rollback_ship_fences.rs",
+        "tools/factory-provisioning-verify.sh",
         "Makefile"
       ],
       "runs_in": "ci.yml",
       "enforcement": "per_pr_blocking",
-      "note": "silicon-lockdown SL3-meta / work-todo #12d (2026-07-02): the production feature-set + silicon-lockdown ENFORCEMENT (the nsc/mod.rs compile_error! fence wall + the PROD_SHIP_FEATURES allow/deny list resolved by prod-check-ship) is CI-enforced by the 'Production feature-set gate (MED-2)' job. Enrolled so verify-gate-enforcement catches it silently losing its run: step or gaining continue-on-error."
+      "note": "During the Draft-0.9 quarantine, CI first resolves the canonical required/forbidden production feature set, then requires prod-check-ship to fail for the exact open rollback-backend reason and executes the secure/FSBL/factory negative-compilation/process suite. Enrolled so the meta-gate catches the quarantine step being removed or made non-blocking."
     }
   ],
   "_completeness_waived": {
