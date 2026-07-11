@@ -8,7 +8,10 @@
 
 > **Corrected facts (carry these, not folklore).** The research prompts that seeded this playbook carried three errors the source corrected — the playbook uses the corrections: **(a)** the master secret is OID **`0xF1D2`** (`OID_MASTER_SECRET`); `0xF1D4` is the **bootstrap VK**, not the master. **(b)** The OPTIGA PBS is **DHUK-derived at boot** (`hw::secret_keys::derive_into("pqsigner/optiga-pbs-v1")`), **not** flash-page-126-sealed — so a fw-update wiping page 126 does *not* brick OPTIGA and flash extraction does *not* yield the PBS. Page 126 was repurposed as the fw-update verify-failure counter, and bank-1 page 126 (`0x0C0F_C000`) now holds the wrapped **SE050 BHK** — *that* is where the brick/extraction concern actually lives (SE7). **(c)** The reconcile tamper condition is `se_count > mcu` (**not** `!=`) — MCU-leads is benign (power-cut window). **(d)** The "three-way lockstep" is **two-way (MCU ↔ OPTIGA-E120) in production**: SE050's counter reads `SW=0x6986` on a user-PIN-gated UserID, so its leg is silently skipped (already tracked, work-todo).
 
-> **Honesty note + ship-blocker framing.** The `Status` column separates **defended**, **claim-vs-code tension** (advertised ≠ actual), and **deferred-by-design**. The OPTIGA lockdown ship-blockers **S-1/S-2/S-3** are *known, planned, and deferred deliberately* — real chips cost money and the LcsO=Op ratchet is irreversible, so the reversible code/FV hardening is done first and the factory ceremony runs once at design-lock. **Do not frame S-1/S-2/S-3 as gotchas** — cite them as tracked (STATUS.md §A, production-todo.md). The live code-review targets are the claim-vs-code tensions (SE3/SE4) and the plaintext-downgrade fences (SE1/SE8).
+> **Honesty note + ship-blocker framing.** Known S-1/S-2/S-3 items need not be
+> duplicate-filed as new discoveries, but their absence remains a ship blocker.
+> Reviewers must report any false closure/authority claim or bypass of the
+> current quarantine, and cross-link the owning STATUS/production TODO.
 
 ---
 
@@ -23,10 +26,11 @@
 | SE5 | **Shielded / SCP03 downgrade & replay** | a forced re-handshake drops to plaintext, or a captured transcript replays | **DEFENDED.** OPTIGA: seq-replay refused (`shield.rs:300-307`), nonce-wrap renegotiate at `enc_seq>=0xFFFF_FFF0` (`:220`), record-type in AAD rejects alert/handshake frames (`:288-294`). SCP03: monotonic 16-byte counter (`scp03.rs:299`), level 0x33 mandatory unwrap (`apdu.rs:230-240`). **Attack surface**: a MITM wedging PRL state forces fresh handshakes (self-heal `mod.rs:249-254`) — confirm no plaintext fallback fires on the second failure; confirm `zeroize_session` (`scp03.rs:138`) is invoked on lock/idle so a transcript can't replay a live session | Rainbow `fault_sweep_scp03.py`; audit the re-handshake / self-heal path for a plaintext fallback | ⚠ partial (FI sweep + review) |
 | SE6 | **OID read without auth** | a secret OID readable with `require_shielded=false` | **DEFENDED.** Secret OIDs F1D1/F1D2/F1D3/F1D4 have Read = `Auto(0xF1D0) AND Conf(0xE140)` (`apdu.rs:909,923`) — reading half_O/master requires **both** PIN auth and the shielded connection. Counter OIDs E120/F1D5 are `Read = Always` (non-secret, but the attacker's *oracle* for the reconcile counters) | Grep for any read of F1D1/F1D2 with `require_shielded=false`; confirm the AND (not OR) on the Read AC builder | ✅ host AC-builder tests / grep |
 | SE7 | **Brick / extraction on fw-update** | a fw-update writes the page holding a re-derivation root and bricks the wallet or exposes a secret | **DEFENDED (redirected).** OPTIGA PBS is DHUK-derived, **not** page-126-sealed (see corrected facts) — fw-update wiping page 126 does not brick OPTIGA. **The real class lives on the SE050 axis**: the wrapped BHK is on bank-1 page 126 (`hw/bhk.rs:72`), and `hw/bhk.rs:40` mandates "the firmware-update path MUST NOT touch page 126" | Audit the fw-update staging/erase range against the BHK page + the fw-fail-counter page (`hw/flash.rs:154-248`); the postmortem is `docs/secure-elements/optiga-brick-postmortem.md` | ⚠ partial (range audit) |
-| SE8 | **Ship-blocker fence gap** | a shipping config that ships a blocker open | **DEFERRED-BY-DESIGN (do not flag as a gotcha).** The compile-time half is landed: S-1 `optiga-lock-operational` required (`nsc/mod.rs:368-382`), S-2 `optiga-reset-oids` forbidden (`:329-343`), S-3 `optiga-hw-counter` required (`:305-322`). **Disclosed residual (G1-shaped)**: the S-1 fence keys on `mode-production` **alone** — a release `stm32u585` image omitting the profile ships S-1-open (convention, not enforced, `:353-363`); the claimed `build_metadata_counter` production gate does **not** exist yet (S-3 code-doable residual, STATUS.md:98) | The irreversible LcsO ratchet + sacrificial-part validation + PQ1-factory-HSM cert are factory work (production-todo.md); the `build_metadata_counter` fence is the one code-doable open | ⚠ known/tracked (not a finding) |
+| SE8 | **Ship-blocker fence gap** | a shipping config that ships a blocker open | The irreversible SE closures remain OPEN. During the rollback quarantine, all production/factory STM32 shapes are rejected; bench builds require the explicit production-forbidden `legacy-fw-rollback-unsafe` feature. The missing `build_metadata_counter` production gate remains separately tracked. | Negative production/factory compilation tests plus the future reviewed SE ceremony | 🚫 shipping blocked |
 | SE9 | **A half crosses chips** | a provisioning/debug path ships one chip's half to the other | **NOT OBSERVED.** Each half is read/decrypted independently (`dual_se.rs:388-425`) and only XORed locally in MCU SRAM | Confirm no debug/prov path (`factory_provisioning.rs`, the `dual-se-*-e2e` harnesses) transmits a half to the opposite chip | ❌ adversary (grep + review) |
 
-**Read this catalog as the answer to "does a single-chip compromise, a bus tap, or a PIN-brute stay bounded?"** SE1/SE5/SE6 defend invariant #3 by construction; SE2/SE9 defend invariant #1; SE3 defends invariant #2 with a *disclosed* bound. **SE4 is the sharpest code-review target** — the "three-way" claim is really two-way in production, tracked but worth re-attacking whenever the invariant text is quoted. **SE7 and SE8 are the deferred/redirected classes**: SE7's brick concern moved from OPTIGA-PBS to the SE050 BHK page, and SE8's blockers are deferred-by-design factory work, not review findings.
+**Read this catalog as a review map, not a shipping verdict.** SE8 and the
+factory half remain open blockers even when already tracked.
 
 ---
 
@@ -62,8 +66,8 @@ TARGET (read first, in this order):
   - secure/src/optiga/{mod,shield,apdu}.rs — Shielded Connection, AC metadata builders, OIDs.
   - secure/src/se050/{mod,scp03,apdu}.rs — SCP03 level, UserID PIN, admin path.
   - Cross-check: docs/STATUS.md §A (ship-gate + evidence) + docs/security/threat-model.md
-    §5 (the falsifiable claims). Ship-blockers S-1/S-2/S-3 are DEFERRED-BY-DESIGN — cite as
-    tracked, do NOT report as findings.
+    §5 (the falsifiable claims). Cross-link known S-1/S-2/S-3 ownership rather
+    than duplicate-filing, but report any false closure, authority, or bypass.
 SCOPE THIS RUN: {{e.g. "the reconcile predicate + the None-leg divergence path" | "every
   plaintext-downgrade fence vs the shipping feature matrix" | "the unlock reconstruction
   window" | "the shielded/SCP03 re-handshake fallback"}}.
@@ -71,8 +75,8 @@ SCOPE THIS RUN: {{e.g. "the reconcile predicate + the None-leg divergence path" 
 ATTACK PROTOCOL — walk EVERY SE1–SE9 mode against each surface in scope:
   SE1 plaintext-on-I2C · SE2 full-entropy concentration · SE3 PIN-counter desync ·
   SE4 advertised≠actual lockstep · SE5 shielded/SCP03 downgrade+replay · SE6 OID read
-  without auth · SE7 brick/extraction on fw-update · SE8 ship-blocker fence gap (tracked,
-  not a finding) · SE9 a half crosses chips.
+  without auth · SE7 brick/extraction on fw-update · SE8 ship-blocker fence gap ·
+  SE9 a half crosses chips.
 
 For each candidate finding you MUST produce a FALSIFIABLE PoC, one of:
   - a shipping feature-combo that trips a plaintext path without hitting a compile_error!;
@@ -86,8 +90,8 @@ For each candidate finding you MUST produce a FALSIFIABLE PoC, one of:
 RULES:
   - Verify against the CURRENT tree; distinguish a silicon-validated claim from a host-only
     one (bus-capture / desolder are red-teaming.md bench items — cite, don't re-run).
-  - S-1/S-2/S-3 are deferred-by-design factory work — report only NEW code-doable gaps
-    (e.g. the missing build_metadata_counter fence), not the known blockers.
+  - Known S-1/S-2/S-3 blockers remain blockers. Avoid duplicate catalogue
+    entries, but report false closure/authority and every new bypass.
   - For each finding: SE-mode, file:line, PoC, disposition, severity, proposed fix (flag
     if it would break a fence, regress an e2e, or weaken an AC).
 

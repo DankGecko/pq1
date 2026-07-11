@@ -1,11 +1,19 @@
 # PQ1 Hardware Wallet — Hardened Secure-Configuration & Provisioning Reference (STM32U585 + OPTIGA Trust M V3 + NXP SE050)
 
+> **QUARANTINE OVERRIDE (2026-07-11).** This is research input, not an
+> executable ceremony. The repository's legacy factory receipt is invalid for
+> STM32U585 write-once OTP QWs; all factory build/flash targets and RDP2
+> authority are blocked. Hardware encoding facts below do not make the ordering
+> or receipt safe. Do not run any OTP, option-byte, lifecycle, or RDP command
+> from this document until a replacement ceremony is independently approved.
+
 > **Provenance & repo notes (2026-05-29).** Output of a deep-research run against
 > `docs/archive/provisioning-research-brief.md`. It is a research *synthesis*, not
 > vendor-authoritative: treat specific constants (OPTIGA TLV codes, the "~600k
 > monotonic-counter updates" cap, the PSA cert number) as **TO-VERIFY against the
 > primary vendor doc + a sacrificial read-back**, per its own Phase 0/4 gates.
-> `RDP=0xCC` and SE050 `P1=0x33` are confirmed safe.
+> The encodings `RDP=0xCC` and SE050 `P1=0x33` were cross-checked; using them in
+> this project's ceremony is **not** currently authorized or declared safe.
 >
 > **Two findings reconciled against our own code/silicon — act on these:**
 > 1. **S-2 trust anchor is mis-targeted and our current mitigation is a silent
@@ -26,7 +34,10 @@
 ## TL;DR
 - **STM32U585:** Burn `RDP=0xCC` (Level 2), `WRP1A UNLOCK=0` over the ~18 KB FSBL pages, `HDP1EN=1` + `HDP1_ACCDIS` at boot-exit, `BOOT_LOCK=1` with `SECBOOTADD0` inside the secure/WRP/HDP region, `TZEN=1`, and provisioned/finalized OEM1/OEM2 debug-authentication keys so JTAG/SWD is permanently closed in the field. WRP+RDP2+HDP+BOOT_LOCK gets a *flash* FSBL functionally ROM-equivalent against rewrite/readout; the only residual gap is a *successful* fault-injection RDP2→RDP1 downgrade (the wallet.fail/Kraken class), mitigated by the U5's glitch-aware silicon, FSBL self-checking its own option bytes every boot, and the fact that a flash read-out reveals neither the SPHINCS+ key (TrustZone SRAM only) nor the seed (XOR-split across two SEs).
 - **OPTIGA Trust M V3 & SE050 (dual, independently hardened to the same bar):** OPTIGA — write a chip-unique 64-byte Platform Binding Secret to `0xE140`, ratchet every used secret/anchor/counter object to `LcsO=operational (0x07)`, set AuthRef `0xF1D0` to `Change=Conf(0xE140)&&Auto(0xF1D0)`/`Read=NEV`, enable monotonic counter `0xE120`, and neutralize the `0xE0E0` Infineon sample certificate + close all empty anchor slots. SE050 — **rotate the AN12436-published default Platform SCP03 keys** (the #1 ship-blocker), negotiate **full security level `P1=0x33` (C-MAC+C-DEC+R-MAC+R-ENC)**, set per-object policies to the minimum (no ALLOW_WRITE/DELETE except one provisioning-admin object), set UserID PIN `max_attempts`, bind UserID delete to the admin AuthID only, and disable unused AppletConfig features. OPTIGA PBS is rooted on STM32 **DHUK**; SE050 SCP03 on STM32 **BHK** — so a single-vendor break or single-key extraction yields only one XOR half, never the seed.
-- **Ceremony shape (non-negotiable):** Stage all secrets/config reversibly → run a full read-back verification gate (on a sacrificial unit first, then every production unit) → execute the one-way burns **last, in dependency order** (MCU lifecycle transition to finalize per-die DHUK/BHK first; then SE secret injection that depends on those keys; then SE050 SCP03 rotation; then OPTIGA `LcsO→operational`; then MCU OTP-lock → WRP-lock → DA-key finalize → **RDP2 last of all**). Any pre-burn failure must leave a recoverable unit, never a brick. Firmware is open source and confidentiality is out of scope — the entire budget is spent on access-control lockdown and key uniqueness.
+- **Future ceremony constraint, not an instruction:** any replacement must stage
+  and verify reversible state first, then order one-way transitions last. Exact
+  steps, receipt semantics, and authorization remain OPEN; this research does
+  not define an executable RDP2 sequence.
 
 > **Two corrections to the brief, established from Infineon's own published V3 object dump and Configuration Guide:** (1) On a *standard* OPTIGA Trust M V3, AuthRef slot **0xF1D0 ships with `Change=LcsO<operational`, `Read=ALW`, untyped** — *not* `Change=ALW`; it only becomes the typed AUTOREF secret (`Change=Conf(0xE140)&&Auto(0xF1D0)`, `Read=NEV`) in Express/MTR configs. S-1 is therefore "F1D0 left at default `Change=LcsO<op` and un-ratcheted" — at LcsO=creation a desoldered chip can still rewrite it; fix (ratchet to operational + `Change=Conf&&Auto`) is unchanged. (2) Only **0xE0E0** ships with an Infineon ECC P-256 *sample* end-device cert (issuer "Infineon OPTIGA(TM) Trust M CA 300") + chip-unique key in **0xE0F0**; slots **0xE0E1/E0E2/E0E3/E0E8/E0E9/E0EF** ship *empty* at `LcsO=creation, Change=LcsO<op`. S-2 is therefore "don't trust the 0xE0E0 sample cert as an anchor, and fill-and-lock or ratchet-closed the empty anchor slots so no attacker can install their own anchor."
 

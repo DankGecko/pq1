@@ -1,5 +1,13 @@
 # Firmware Security Review — Pre-Meeting Intake
 
+> **ROLLBACK/FACTORY CORRECTION (2026-07-11).** The V1 75-byte manifest,
+> try-once selector, unary OTP tally, and legacy factory receipt are bench-only
+> and production-fenced. Draft 0.9 freezes manifest-v4 and typed journal/floor
+> software interfaces only; their backend/resource gates and all silicon work
+> remain OPEN. This intake grants no firmware-release, OTP, option-byte,
+> factory, or RDP2 authority. `make fw-rollback-hw` tests only reversible legacy
+> comparison logic and is not anti-rollback evidence.
+
 > Scope: **device firmware only.** The on-chain contracts (`contracts/`) are a
 > **separate engagement** (see `contracts/smart-wallet/TOB_INTAKE.md`) and are
 > **out of scope here.** This doc is the device-side counterpart.
@@ -97,7 +105,12 @@ Ordered roughly by blast radius.
 5. **Dual-SE XOR split + three-way PIN lockstep** (invariants #1/#2). No code path may store full entropy on one chip, transmit a half across, or compare the PIN in MCU software. The MCU/OPTIGA/SE050 counters must stay in lockstep so 10 wrong attempts deterministically wipes both SEs + page 124 — look for desync or a glitch that defeats the pre-commit (`nsc::gated_unlock`).
 6. **Trusted-display clear-signing integrity.** The human-readable intent shown on the NV3007 LCD and the hash actually signed must derive from the **same S-stack copy** — the companion never gets to substitute a digest. Covers the native ERC-20 / Safe `SafeTx` / CowSwap `GPv2Order` / ERC-7730 decoders. A decode-vs-sign mismatch = user confirms X, signs Y. The outer UserOp sender is hard-bound to `GET_WALLET_ADDRESS(account_index)` and only the derived address reaches verifiers/hashes. Every UserOp confirmation now renders the exact zero-based account index plus the full derived EIP-55 signer address under an FI completion/readback gate, closing cross-account source substitution behind otherwise-identical pages.
 7. **SE tunnels + factory provisioning.** No plaintext secret may touch I2C; channel keys come from a Tier-1 SAES-CMAC(DHUK) KDF (`hw/secret_keys.rs`). Note the published SE050 default SCP03 keys (§6.2) — confirm the rotation gate and that the shielded-connection/SCP03 state machines fail closed on MAC/desync.
-8. **Firmware-update / boot integrity.** FSBL verifies a C10 sig over an **intentionally minimal 75-byte preimage** (`"PQFW_V1" ‖ version_be ‖ secure_hash ‖ nonsecure_hash`); A/B-slot selection + an OPTIGA monotonic counter block downgrade; COMMIT verify is FI-guarded. Audit `fsbl/`, `secure/src/fw_update/`, and host `fwsign/` for any preimage expansion, downgrade bypass, or a chunk written before its hash is checked. `CMD_FW_BEGIN` now has two trusted-display gates before any destructive flash op: a static one-shot authorization before each manifest-verifier invocation, then the detailed signed release confirmation after verification. Malformed manifests never write counters, reset, or wipe wallet state. The path also has timing-normalized `verify_manifest`, bounded image lengths, and an anti-rollback HW test (`make fw-rollback-hw`); see `docs/security/usb-fw-update-hardening.md`.
+8. **Firmware-update / boot integrity (production-blocked).** Audit the exact
+Draft-0.9 manifest-v4/typed marker/selector/floor interfaces and the quarantine
+that prevents legacy V1, factory, signer, or release paths from acquiring ship
+authority. The physical journal/ECC/OTP backend and final FSBL FLASH/RAM fit are
+open; no OPTIGA firmware-version counter exists. Reversible legacy comparison
+tests are not silicon anti-rollback evidence.
 9. **Untrusted-input parsers (memory safety, `no_std`).** USB APDU reassembly (`nonsecure/src/usb/`), EIP-712 typed-data, the ERC-7730 binary-IR walker, the ABI typed-call parser, RLP/calldata decode. All bounded-buffer/no-heap; the worry is OOB / length-confusion / integer-truncation on attacker-shaped input. A cargo-fuzz scaffold now covers the FW-update manifest verify chain (`fw-manifest/fuzz/`, `make fuzz-manifest`); **harnesses against `parse_cmd_sign_userop_input` and the USB APDU reassembler remain a gap** — fuzzing-corpus generation is welcome.
 10. **Off-chain counter + cap monotonicity** (invariants #7/#9). The flash-backed (page 123) per-slot `local_offchain_count` / `last_userop_count` store must be monotonic and unresettable: `MAX_OFFCHAIN_GAP = 100`, combined cap < 65,536, post-restore an unregistered slot must be refused. Audit the log-structured store + compaction (`offchain_state.rs`, `hw/flash.rs`) for a rollback/replay that mints free signatures, and the page-124 attempt counter for the same. **Open review residuals:** contract counters cover accepted operations, not every signature released by hardware; `CMD_OFFCHAIN_SYNC` imports a companion assertion rather than authenticated chain state; and the page-123 journal key currently binds only `(account, chain, slot)`, not wallet identity, so a fresh device loses the old release tally while a different mnemonic restored on the same device can inherit it. Do not describe this as complete on-chain reconciliation until those distinctions are closed.
 
@@ -119,7 +132,7 @@ make saes-self-test-hw   # SAES SW + DHUK round-trip
 make gtzc-enforcement-hw # NS-access RAZ-fault check (invariant #4)
 make pin-gate-hw-counter-e2e   # full three-way PIN lockstep
 make pin-gate-wipe-e2e         # 10 wrong PINs → factory reset
-make fw-rollback-hw            # FW anti-rollback on real silicon (reversible)
+# make fw-rollback-hw          # legacy comparison harness; NOT rollback evidence
 
 # Host-side logic + tooling
 cargo test -p sphincs-tz-secure --tests --release

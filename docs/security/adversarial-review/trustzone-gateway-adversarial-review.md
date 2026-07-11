@@ -36,7 +36,12 @@
 4. **Source-text platform-config pins.** `main_sau_pure_tests.rs` pins register addresses, SAU region calls, SECCFGR3 bit positions, the OTG-stays-NS contract (with a negative assert that `SECCFGR3_OTG_BIT` must *not* exist as secure), I2C bits, and `TZSC_BASE==0x5003_2400` with a regression guard against the TZIC address (TZ6).
 5. **Silicon bench (red-teaming.md territory, cross-linked not duplicated).** `make gtzc-enforcement-hw` (7/7 secure peripherals RAZ-fault on NS access, USB still enumerates); `nonsecure/src/{gtzc_test,tzic_wipe_test}.rs`. Real `TT`/SAU semantics validated on silicon — the host `TT` stub is a deliberate `true` no-op (`ptr_validate.rs:124-140`), so on host the guarantee reduces to the constant-window check + the compile-time subset assert.
 
-**Cross-linked surface (owned elsewhere).** The **firmware-update gateway** (`cmd_fw_{begin,chunk,commit,status,abort}`) is a TrustZone entry surface but its threat model — the 75-byte signed preimage, OTP rollback floor, PIN-on-every-call — is owned by [`red-teaming.md`](../red-teaming.md) §8.3 and [`threat-model.md`](../threat-model.md) Claim 8. Review those; here, only confirm the FW veneers route NS pointers through the central validator and carry a `HandlerGuard` (they do — `mod.rs:1567-1607`).
+**Cross-linked surface (owned elsewhere).** The **firmware-update gateway**
+(`cmd_fw_{begin,chunk,commit,status,abort}`) is a TrustZone entry surface. Its
+legacy V1/OTP backend is production-fenced; review Draft 0.9 and the corrected
+[`red-teaming.md`](../red-teaming.md) §8.3 / [`threat-model.md`](../threat-model.md)
+Claim 8. Here, only confirm the veneers use the central validator and a
+`HandlerGuard`.
 
 ---
 

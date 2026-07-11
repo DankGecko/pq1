@@ -1,5 +1,13 @@
 # Reproducible builds
 
+> **Current release status (2026-07-11): production packaging is
+> quarantined.** `make release`, `_release`, and `fsbl-release` fail at
+> make-evaluation time, including under `make -i`. `fwsign sign` emits only
+> the legacy unsigned-slot `PQFW_V1` format and requires the explicit
+> `--legacy-bench-unsafe` acknowledgement. Nothing in this document grants
+> release, factory, OTP, option-byte, or RDP2 authority. Reproducible build and
+> measurement mechanics remain valid independently of that quarantine.
+
 ## Why
 
 Every shipped PQSigner firmware image carries an 8-BIP-39-word **measurement**
@@ -18,14 +26,14 @@ claim.
    the published release commit. This is what reproducible builds
    provide; everything below in this document is about getting it.
 2. **An on-device ground truth the running firmware can't forge** —
-   the WRP1A-locked FSBL renders the measurement words on the OLED
+   the WRP1A-locked FSBL renders the measurement words on the NV3007 LCD
    *before* branching into the slot, so any firmware update (even
    vendor-signed) cannot lie about what bytes ended up on the device.
    See [`measured-boot.md`](../security/measured-boot.md) for the threat model
    and the trust chain.
 
 The user closes the loop by comparing two values **they each derived
-independently**: the FSBL OLED words (on-device ground truth) and
+independently**: the FSBL LCD words (on-device ground truth) and
 the `./measure.sh` output (independent rebuild). Without the FSBL-
 rooted display this loop was unclosed (the device's claim was
 unverifiable in software); with it, the user has cryptographic
@@ -235,14 +243,11 @@ firmware and should be rejected).
 
 ## Release pipeline
 
-```
-FSBL_VENDOR_PUBKEY=/absolute/path/to/vendor-pubkey.bin make release
-```
-
-`make release` runs `verify-repro` first, then copies the verified ELFs to
-`target/pqsigner-release/` and prints the secure + nonsecure measurement words.
-These words feed directly into `fwsign sign` as the expected-measurement
-payload committed inside the signed manifest.
+There is no active release pipeline. The historical command
+`FSBL_VENDOR_PUBKEY=… make release` now fails closed and does not remove,
+replace, or publish any artifact. Restore this section only after manifest-v4,
+the rollback backend, combined FLASH/RAM gates, and the reviewed production
+ceremony are implemented and approved.
 
 ## Independent verification workflow
 
@@ -269,18 +274,18 @@ cd sphincs_rust && git checkout <commit-from-release>
   PowerShell). `measure.bat` at the repo root dispatches into WSL
   automatically.
 
-The 8 BIP-39 words it prints must match what the device's OLED shows
+The 8 BIP-39 words it prints must match what the device's NV3007 LCD shows
 at boot. They must also match `measurement.txt` inside the released
 `.pqfw` bundle.
 
-For deeper auditing — comparing both `secure.elf` and `nonsecure.elf`
-byte-for-byte against the bundle, not just their measurement words —
-the same hermetic environment is available via:
+For deeper auditing of a historical legacy bundle, the same hermetic
+environment is available via `./measure.sh --shell` and read-only verification
+commands. The following former production workflow is intentionally blocked:
 
 ```
 ./measure.sh --shell           # drops into nix develop
-FSBL_VENDOR_PUBKEY=/absolute/path/to/vendor-pubkey.bin make release
-fwsign verify-release path/to/release.pqfw target/pqsigner-release/
+# make release                 # REFUSED while rollback is quarantined
+# fwsign verify-release ...    # legacy V1 verification only
 ```
 
 A mismatch at any step means the bundle does not correspond to the source

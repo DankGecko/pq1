@@ -1,7 +1,14 @@
 # A/B rollback FSBL resource map and simplification receipt
 
-Date: 2026-07-11  
+Date: 2026-07-11
 Scope: Draft-0.8 software-only warning work; no production or hardware authority
+
+This receipt remains the frozen provenance for the isolated warning proxy.
+Draft 0.9 does not retroactively turn it into a combined implementation build;
+the approved interface contract and exact boundary are in
+[`a-b-firmware-rollback-architecture.md`](a-b-firmware-rollback-architecture.md)
+at SHA-256
+`f38b90307f15b87a65e9dc9d69583a74775fe4f77385e8b3a84978c34a947336`.
 
 ## Outcome
 

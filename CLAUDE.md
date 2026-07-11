@@ -284,13 +284,13 @@ Pure-logic primitives live in standalone workspace crates so host signers / benc
 | `secure/src/hw/saes.rs` | SAES driver (AES-256-ECB) under `KEYSEL ∈ {Software, DHUK, BHK, DHUK^BHK}`. |
 | `secure/src/hw/saes_cmac.rs` | `cmac_dhuk(msg) -> tag` thin SAES adaptor. |
 | `secure/src/hw/secret_keys.rs` | Per-purpose subkey API: `optiga_pairing_secret() -> [u8;64]`, `se050_scp03_{enc,mac}_key() -> [u8;16]`, `se050_admin_pin() -> [u8;16]`, `tropic01_pairing_key() -> [u8;32]`. Production: `SAES-CMAC(DHUK, label‖counter)`. Dev: `HKDF(OTP_master, label)`. |
-| `secure/src/hw/otp.rs` | OTP rollback counter (1024 bits, RDP-regression-resistant) + dev OTP-master region. |
+| `secure/src/hw/otp.rs` | Rejected legacy unary rollback tally (bench-only, production-fenced) + device-master/factory legacy OTP regions. Draft 0.9 freezes a replacement typed floor API; its physical codec/ECC/interruption backend remains open. |
 | `secure/src/hw/huk.rs` | `derive_device_key(label) = HKDF(UID‖OTP_master, label)`. |
 | `secure/src/hw/flash.rs` | Bank-2 writes, ICACHE invalidate, `pin_attempts_{read,bump,reset}` on page 124, admin-page (125) wipe-flag. |
 | `secure/src/hw/tamp.rs` | TAMP (Trezor-port). Log-only by default; under `tamp-wipe` (production) escalates to `tzic::trigger_intrusion_wipe`. |
 | `secure/src/hw/consumption_mask.rs` | TIM2 CH1 PWM on PA5, randomised duty cycle. |
 | `secure/src/hw/uart.rs` | USART1 VCP (GPIOA AF7), used by SAES RDP1 self-test + dev logging. |
-| `secure/src/hw/boot_state.rs` | Boot-state page for try-once slot tracking (FW update). |
+| `secure/src/hw/boot_state.rs` | Legacy try-once page (nonfunctional for the promised rollback contract and production-fenced). Draft 0.9 freezes the replacement marker/journal interface. |
 | `secure/src/hw/{rcc,rng,usb_hw,buttons,spi,spi_hw,i2c,i2c_hw,i2c2_probe}.rs` | Bare-metal peripheral drivers. |
 
 ### Non-secure world / host tools
@@ -301,9 +301,9 @@ Pure-logic primitives live in standalone workspace crates so host signers / benc
 | `nonsecure/src/usb/{commands,hid,transport}.rs` | APDU v2 router + USB HID. |
 | `nonsecure/src/e2e_test.rs` | Non-interactive end-to-end test runner. |
 | `fwmeasure/` | Host firmware measurement tool. |
-| `fw-manifest/` | no_std FW-update manifest format + verify chain. |
-| `fwsign/` | Host release-signing: `keygen`/`pubkey`/`sign`/`verify`/`verify-release`/`extract-sig`/`inspect`. |
-| `fsbl/` | Immutable first-stage bootloader (~32 KB — ~99% of its frozen 32 KB WRP1A budget). |
+| `fw-manifest/` | Legacy v0x02/PQFW_V1 manifest + verify chain (bench only). Draft-0.9 V4 replacement not implemented. |
+| `fwsign/` | Legacy bench release-signing CLI; production packaging is quarantined pending V4/backend closure. |
+| `fsbl/` | Legacy immutable bootloader (bench build only). Draft-0.9 targets a 40-KiB envelope; final combined FLASH+RAM fit remains OPEN. |
 | `dbgen/` | Merkle-DB builder (ERC-20 / names / selectors / ERC-7730 descriptor roots). |
 | `xtask/` | Host workspace tooling — codegen, doc-checks, release packaging. |
 | `tools/webhid_test.html`, `tools/wallet_run_hw.py` | Browser companion + probe-rs arrow-key forwarder. |
@@ -332,8 +332,8 @@ Pure-logic primitives live in standalone workspace crates so host signers / benc
 - **No EntryPoint v0.7 / v0.8 migration.** v0.6 is the frozen target. Its address and ABI are baked into `initCode`, the userOpHash preimage, and the factory; bumping the version would change the CREATE2 init-code hash and break invariant #6 (cross-chain address stability). If v0.6 bundlers are ever sunset, fall back to direct EOA-bundled execution against the same wallet — do not redeploy.
 - **No new per-signature flash state** beyond the page-123 EIP-1271 counter.
 - **NS does not control the inactivity timer** — only S-world button presses on confirm dialogs reset it.
-- **No `debug-log` / `e2e-test` / `mock-se` / `otp-hardcoded-master-key` / `ui-capture`** in production builds. CI must gate.
-- **Do not expand the signed FW-update preimage.** It is intentionally 75 B `"PQFW_V1" || fw_version_be || secure_hash || nonsecure_hash` so any auditor can reconstruct from `(version, secure.elf, nonsecure.elf)` alone.
+- **No `debug-log` / `e2e-test` / `mock-se` / `otp-hardcoded-master-key` / `ui-capture` / `legacy-fw-rollback-unsafe`** in production builds. CI must gate.
+- **Do not change the frozen Draft-0.9 FW-update bytes casually.** The target is the exact 80-byte slot-bound `PQFW_V4 || physical_slot || release_version || security_epoch || secure_hash || nonsecure_hash` preimage. Any byte change requires a new schema/domain, a re-frozen digest, and both independent reviewers. The legacy 75-byte V1 format is not authoritative.
 - **No "reset rollback floor" path.** OTP is one-way by design.
 - **No writes to FSBL flash pages** from runtime firmware. Pages 0–3 are WRP1A-locked; attempts silently `WRPERR`.
 

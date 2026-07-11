@@ -42,13 +42,27 @@ There are three different things a SE secret can be rooted in, picked at compile
 
 Two distinct things both called "OTP":
 
-- **STM32U585 OTP fuse region** — used in production for the **firmware rollback counter** (`hw/otp.rs` `ROLLBACK_WORDS = 32`, 1024 bits, one cleared per accepted firmware update; never reset; exhausted parts are update-EOL). Always used. *Not* a key.
+- **STM32U585 user OTP region** — 512 bytes / 32 one-program 128-bit ECC
+  quad-words. The current `hw/otp.rs` 1,024-bit unary rollback tally is a
+  rejected prototype. Production and factory images are blocked in both
+  build scripts and Rust source; other STM32U585 bench images must carry the
+  explicit `legacy-fw-rollback-unsafe` marker. Draft 0.9
+  uses zero OTP writes for ordinary same-epoch releases and reserves complete
+  fresh QWs for rare security-epoch revocations; its physical codec remains
+  open. *Not* a bit-addressable fuse bank.
 - **OTP "master key" region** (32 bytes in OTP, burned once by `hw::otp::ensure_device_master()`) — the **legacy** derivation root. On a `saes-dhuk` shipping build `ensure_device_master()` is **never called** (verified in the Phase-2C pre-flight) → this region **stays blank for the device's life**. The roots are the silicon DHUK + BHK, not an OTP-burned master. The old "burn an OTP master in production" plan is superseded.
 - **`otp-hardcoded-master-key` Cargo feature** — a *dev-only compile-time constant* standing in for that OTP master so re-flashed bench boards keep stable derivations. **Never ships** (in the `compile_error!` fence in `nsc/mod.rs`).
 
 ---
 
 ## 4. The production-build fence (`secure/src/nsc/mod.rs`)
+
+The firmware-rollback quarantine is stricter than the general fence below:
+every STM32U585 production image and every factory/rehearsal image fails, while
+bench builds require `legacy-fw-rollback-unsafe`. The marker changes no runtime
+behavior and is in `PROD_FORBIDDEN`. FSBL has the same pair of production and
+explicit-bench gates. `make prod-check-ship` intentionally fails until the
+replacement backend/resource gates close.
 
 A `compile_error!` rejects any `feature = "stm32u585" + !debug_assertions + !e2e-test + !dev-testkey` build that also enables any of:
 

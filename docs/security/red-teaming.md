@@ -417,17 +417,27 @@ could brick units during legitimate validation. Characterise the threshold on th
 
 ### 6.4 OTP rollback floor / anti-brick (one-way)
 
-**Property.** One-way OTP tally; floor only increases; firmware downgrade rejected. Floor =
-`fw_version - 1` (anti-brick, commit `2d5733a1`). Device-master burned once, readback-verified.
-`secure/src/hw/otp.rs`.
+> **NO-GO until separately authorized.** The legacy unary tally and idempotent
+> re-burn assumptions below are invalid for STM32U585 OTP quad-words. Production
+> is compile-blocked. Draft 0.9 freezes the replacement interface but leaves
+> the physical codec and this sacrificial-silicon section open. Nothing in this
+> document authorizes an OTP write; follow the named-board/exact-QW gate in
+> `docs/security/a-b-firmware-rollback-architecture.md` Section 13.
+
+**Target property.** The typed security-epoch floor never decreases; ordinary
+same-epoch releases issue zero OTP writes; an epoch bump uses only fresh,
+complete 128-bit QWs through the approved replicated/interruption-safe codec.
 
 **Tests.**
 - Install vN (floor → N-1); replay an older signed manifest → must reject at `FW_BEGIN`.
 - Reinstall vN (floor stays N-1) then v(N+1) (floor → N) — confirm each boots (no brick).
-- **Brownout during OTP write** (sacrificial): glitch power mid-QW-write; confirm readback-mismatch
-  detection and the idempotent re-burn path on next boot (or the designed brick state — confirm which).
+- **Brownout during OTP write** (sacrificial, separately authorized): classify
+  the consumed QW through fresh ECC/status evidence. Never assume an
+  idempotent re-burn; a QW whose write may have launched is not retried.
 
-**Pass.** No downgrade; no off-by-one brick; partial writes detected.
+**Pass.** Defined only by Draft 0.9 after `OPEN-ECC`/`OPEN-OTP-1..3` close; no
+downgrade, no fallback retirement before the health contract, and no uncertain
+QW reuse.
 
 ### 6.5 SAES / DHUK key derivation (Tier-1 KDF)
 
@@ -568,16 +578,25 @@ the device doesn't fall into host mode or re-open the SOF side-channel.
 
 ### 8.3 Firmware update replay / rollback
 
-**Property.** 75-byte signed preimage `"PQFW_V1"‖version‖secure_hash‖nonsecure_hash`, SPHINCS+C10
-vendor sig, FI-sentinel-wrapped verify, OTP rollback floor, PIN required on every FW command
-(STATUS/ABORT now gated too, LOW-1 fix). `secure/src/fw_update/`, `fw-manifest/`, `fwsign/`, `fsbl/`.
+> **Software review only; no silicon authority.** The V1/75-byte path and its
+> OTP tally are legacy bench code and production-fenced. The target property is
+> Draft-0.9's slot-bound manifest-v4 plus typed marker/selector/floor state.
 
-**Tests.** Replay an old signed manifest (reject at BEGIN); downgrade (reject); single-fault glitch
-the verify (sentinel double-eval requires two faults); abort mid-stream + idle-wipe and confirm the
-boot-state TRIED/COMMITTING flags pick a safe slot; corrupt a staged chunk and confirm COMMIT's
-re-hash rejects it.
+**Property under review.** A vendor-authenticated manifest-v4 tuple cannot
+retire the confirmed fallback before the health contract; ordinary same-epoch
+releases perform zero floor writes; PIN is required on every FW command.
+`secure/src/fw_update/`, `fw-manifest/`, `fwsign/`, `fsbl/`.
 
-**Pass.** No replay/downgrade/single-fault-bypass installs unsigned or old firmware.
+**Tests.** Replay an old signed manifest; reject a retired epoch; single-fault
+glitch the verify; cut power at every PENDING/ATTEMPTED/CONFIRMED marker and
+floor-establishment transition in the frozen state machine; confirm no
+pre-CONFIRMED transition retires the fallback. Corrupt staged bytes and require
+the image re-hash to reject. These are software/model tests until the later
+silicon gate is separately authorized.
+
+**Pass.** Not currently claimable for production. Software tests must reject
+replay/downgrade/single-fault bypass; physical floor/ECC/interruption properties
+remain gated to the later named sacrificial-silicon phase.
 
 ### 8.4 Off-chain counters / combined cap (Invariants #7, #9)
 

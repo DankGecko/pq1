@@ -395,19 +395,16 @@ blockers above stand; these refine accuracy + add residuals.
 
 #### Production items
 
-- [ ] **STM32 OTP master-key burn.** 32 TRNG bytes into
+- [x] **Do not require the legacy STM32 OTP master-key burn for shipping.**
+      The `saes-dhuk` production profile now derives SE tunnel roots from
+      SAES-CMAC(DHUK); the legacy 32-byte region at
       `0x0BFA_0080..0x0BFA_00A0` on first secure-world boot of a blank
-      MCU. Gated today by the absence of the `otp-hardcoded-master-key`
-      feature; `ensure_device_master` burns on demand once, locks the
-      region, reads back thereafter. Per-MCU, one-way, not rewriteable.
-      **Once work-todo #7 Tier 1 (DHUK) lands**, the master-key region
-      demotes to salt duty and may be repurposed — at which point burning
-      it stops being required for SE-pairing, and the irreversibility
-      concern narrows to "whatever salt consumers we later add." Until
-      then, this burn stays mandatory.
+      MCU is a dev/legacy fallback and should remain blank unless a separately
+      reviewed future consumer assigns it. `otp-hardcoded-master-key` remains
+      never-ship. The text below records historical bring-up evidence; it is
+      not a production burn ceremony.
 
-      **Pre-production validation — verify OTP actually programs on the
-      target chip before shipping.** Not every STM32U585 with clean
+      **Historical bring-up receipt (not a current shipping step).** Not every STM32U585 with clean
       option bytes accepts user-OTP writes. On one B-U585I-IOT02A
       (`Rev W`) dev board we hit `SECSR=0x90` (`WRPERR|PGSERR`) on every
       quad-word in `0x0BFA_0080..0x0BFA_00A0`, with:
@@ -425,12 +422,11 @@ blockers above stand; these refine accuracy + add residuals.
       device" on U5, so there's no host-side command to introspect or
       regress the state once it's latched.
 
-      Production gate: for each chip, **flash a minimal test image that
-      calls `otp::ensure_device_master` and confirms the burn + readback
-      succeeds** before committing the unit to fulfillment. A chip that
-      can't program user OTP cannot run the shipping firmware
-      (no real PBS → no Shielded Connection → no dual-SE pairing) and
-      must be rejected, not patched with `otp-hardcoded-master-key`.
+      Historical test proposal (superseded for the device-master region): do
+      not flash an image that calls `otp::ensure_device_master` as a shipping
+      gate. The later owner-authorized rollback characterization uses named
+      sacrificial QWs and parts under Draft 0.9 Section 13; this software-only
+      work stops before that authority.
       The dev-only `optiga-factory-reset-hw` /
       `optiga-preprovision-hw` /
       `flash-hw-optiga-oled-standalone-testkey` targets sidestep this
@@ -439,10 +435,15 @@ blockers above stand; these refine accuracy + add residuals.
       `make prod-check` CI gate is what catches this;
       `otp-hardcoded-master-key` in a non-`e2e-test` release build is
       already a `compile_error!` in `secure/src/nsc/mod.rs`.
-- [ ] **OTP rollback-counter tally** (`ROLLBACK_WORDS = 32`, 1024
-      commits). Each accepted firmware-update CHUNK+COMMIT clears one
-      bit; never reset. Exhausted parts are update-dead — treat that as
-      the device's end-of-life.
+- [ ] **Replace the invalid OTP rollback tally before production.** STM32U585
+      user OTP is 32 one-program 128-bit ECC quad-words, not 1,024 individually
+      writable bits. The current `ROLLBACK_WORDS`/`bump_to` path and cumulative
+      factory-sentinel transitions are production-fenced. Implement only the
+      reviewed Draft-0.9 typed journal/floor interface after
+      `OPEN-JRN-HW/DUR`, `OPEN-ECC`, `OPEN-OTP-1..3`, and combined FLASH/RAM
+      gates close. Ordinary releases stay within an epoch and consume zero OTP;
+      only a security-epoch revocation consumes the final codec's full-QW
+      commitment budget.
 - [ ] **BHK page first-write** (work-todo #7 Tier 2 Phase 2B). 32 TRNG
       bytes DHUK-ECB-wrapped and written to the dedicated BHK secret-
       flash page on first-boot provisioning. The wrapped bytes
@@ -720,8 +721,10 @@ signer, BLS verify is over public data) · add the MCU's own cert line to Matrix
 
 #### Confirms — resolved / corroborated against the DS
 
-- **OTP = 512 bytes**, one-way, survives mass-erase. Budget: 32 B master +
-  ~128 B rollback ≈ 160/512 — state the ceiling, tally future consumers.
+- **OTP = 512 bytes**, one-way, survives mass-erase. The device-master region
+  is unassigned in the `saes-dhuk` shipping design, and rollback allocation is
+  OPEN-OTP-1..3; do not reserve or advertise a byte count until the reviewed
+  physical codec is selected.
 - **UID (96-bit) @0x0BFA_0590 is the read-only system-memory area**, SEPARATE from
   the writable user-OTP at 0x0BFA_0080 — different sub-blocks, NOT an overlap.
   (Both addresses are RM0456, not the DS.)

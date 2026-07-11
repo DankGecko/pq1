@@ -6,6 +6,13 @@
 > punch list. The companion `cargo fuzz` harness is in
 > `fw-manifest/fuzz/`.
 
+> **Superseded rollback conclusion (2026-07-11).** The reversible
+> `fw-rollback-hw` test exercised comparison logic; it did not validate OTP
+> programming physics, interrupted writes, or A/B availability. The legacy
+> unary floor is production-fenced. Draft 0.9 freezes replacement software
+> interfaces, while the physical journal/ECC/OTP backend and silicon evidence
+> remain OPEN. Transport/parser findings below retain their narrow value.
+
 ## 0 — What this document is (and isn't)
 
 **Is:** the security-relevant **map** of every byte the host can influence
@@ -16,11 +23,9 @@ file:line), and a **prioritized list** of hardening opportunities.
 recommended change; the actual hardening commits come next, one at a
 time, with the fuzz harness re-run after each.
 
-The anti-rollback decision itself is already silicon-validated by
-`make fw-rollback-hw` (real `verify_manifest` chain, dev-key signatures,
-six assertions including downgrade-rejection — see commit `49c9308`).
-The work here covers the **transport + parser + state machine** around
-that decision.
+The legacy comparison logic was exercised by `make fw-rollback-hw`, but no
+production anti-rollback decision is silicon-validated. This document covers
+the **transport + parser + state machine** around that now-open backend.
 
 ---
 
@@ -29,11 +34,13 @@ that decision.
 A host that can send arbitrary USB HID frames to the device. Specifically
 it **cannot**:
 
-- Press the OLED confirm button (the final COMMIT 4-page dialog requires
+- Press the NV3007 LCD confirm buttons (the trusted dialog requires
   a physical user press; `e2e-test` short-circuits this, but `e2e-test`
   is fenced out of `mode-production`).
 - Read or compute the vendor's offline SPHINCS+C10 signing key.
-- Bypass the OTP rollback floor (one-way, even with arbitrary USB).
+- Forge a vendor C10 signature. Whether arbitrary USB can induce a rollback
+  availability failure through the legacy state machine is precisely an open
+  ship-blocking question, not an assumed defense.
 
 It **can** (this audit's scope):
 - Send malformed APDU/HID frames at any rate.
@@ -133,16 +140,12 @@ though the signature needs ~2. Closed across both verify paths:
 - **OTP rollback-floor read** — `rollback_floor()` is a voted `max(a,b)` of two
   independent passes in both `fsbl/src/otp.rs` and `secure/src/hw/otp.rs`.
 
-**Accepted residual — `try_once_flag`.** The try-once boot-state byte sits
-*outside* the signed 75-byte preimage (`"PQFW_V1" || fw_version || secure_hash
-|| nonsecure_hash`), integrity-protected only by CRC. A flash-write attacker
-can flip it, but doing so merely *selects between two slots that are each
-signature-verified and above the rollback floor* — it cannot admit unsigned
-code, only a bounded revert to a previously-installed signed image. Signing it
-would require expanding the frozen preimage, which CLAUDE.md explicitly forbids
-("Do not expand the signed FW-update preimage" — auditors must be able to
-reconstruct it from `(version, secure.elf, nonsecure.elf)` alone). Left as a
-documented, bounded residual rather than a format change.
+**Superseded conclusion — `try_once_flag`.** The earlier claim that this
+unsigned V1 byte was a bounded-safe residual is false: the old COMMIT/floor
+ordering made A/B rollback nonfunctional. It is not accepted for production.
+Draft 0.9 replaces this surface with a slot-bound manifest-v4 tuple and frozen
+typed marker/selector interfaces; their storage backend and power-loss
+semantics remain OPEN and ship-blocking.
 
 ---
 
@@ -153,7 +156,7 @@ For each: what the attacker tries, where it's caught.
 | # | Scenario | Caught at | Status |
 |---|---|---|---|
 | 1 | Forge manifest, sign with wrong key | step 4 `verify_vendor_fpr` (or 5) | ✓ defended |
-| 2 | Sign correctly but bump version below floor | step 6 `verify_rollback` (silicon-validated by `fw-rollback-hw`) | ✓ defended |
+| 2 | Sign correctly but use a retired version/epoch | Legacy `verify_rollback` comparison was exercised, but its physical OTP backend and A/B contract are invalid | 🚫 production-blocked |
 | 3 | CHUNK without preceding BEGIN | `FW_UPDATE.is_none()` → reject | ✓ |
 | 4 | COMMIT without BEGIN | same | ✓ |
 | 5 | BEGIN twice → second one re-erases the slot, drops the first ctx (zeroized) | by design — see `fw_update/mod.rs` comment "earlier BEGIN without COMMIT/ABORT drops here and zeroises" | ✓ |
@@ -165,7 +168,7 @@ For each: what the attacker tries, where it's caught.
 | 11 | **Sign a manifest declaring `secure_len = 0xFFFF_FFFF`** | `check_chunk` only validates `end > expected_len` (the declared one), NOT against actual slot capacity → would let chunks past the slot if `checked_add` survived. **Finding #1** | **Gap** |
 | 12 | Race CHUNK against SysTick idle-wipe | `HandlerGuard::enter()` blocks the wipe for chunk duration | ✓ |
 | 13 | Lock the device mid-stream, then continue CHUNKs from a different host | PIN sentinel rechecked every CHUNK | ✓ |
-| 14 | After PIN unlock, run an FW-update without the user noticing | `confirm_commit` requires physical button press on a 4-page dialog before any OTP/flash | ✓ |
+| 14 | After PIN unlock, run an FW-update without the user noticing | Legacy `confirm_commit` occurs after inactive-slot erase/chunk writes but before manifest/floor activation | Legacy narrow defense; not production approval |
 | 15 | Timing-leak the vendor pubkey via the fpr compare | Slice `==` is short-circuiting; **the value compared is the build-baked public fpr** — leaking it tells the attacker nothing they don't already have. **Finding #2** (LOW, hygiene) | Hygiene gap |
 | 16 | Tamper bytes inside the signature region | CRC covers `[0..OFF_CRC32)` (incl. sig region) → CRC mismatch *before* sig check. To isolate sig-only failures, the test corrupts the sig pre-finalize (CRC recomputed). | ✓ — by design |
 | 17 | OOM the device by sending many partial APDU streams | CHAIN_BUF is fixed-size; partial streams can't grow it | ✓ |
@@ -174,7 +177,7 @@ For each: what the attacker tries, where it's caught.
 | 20 | Reserved bytes in the manifest used as a covert channel | `verify_structural` may not enforce reserved bytes are zero (open question) | Open Q |
 | 21 | Call `write_chunk` directly without `check_chunk` (future code path) | `write_chunk` has `base_addr + chunk_offset` and `expected - received` arithmetic with NO defense-in-depth checks — assumes caller validated. **Finding #3** | Internal coupling |
 | 22 | Send `image_kind = 0xFF` | `staging::write_chunk` returns `BadKind`; `check_chunk` also validates → reject | ✓ |
-| 23 | Brick the active slot during update | BEGIN computes `inactive = !active`, erases only that. The active slot's running image is on the alternate bank. | ✓ (A/B slot design) |
+| 23 | Brick the active slot during staging | BEGIN erases only the inactive slot, so pre-COMMIT staging preserves the running bytes | Narrowly true; post-COMMIT fallback was broken |
 
 ---
 
@@ -189,9 +192,9 @@ contrasts and shared patterns:
 | Host-declared length bound | `FirmwareErase.length` is **bounded against `FIRMWARE_MAXSIZE`** (1664 KB per model) | `expected_secure_len` / `expected_nonsecure_len` from the manifest are **not bounded against slot capacity** — only against themselves at CHUNK time | **Adopt.** See finding #1. |
 | Per-chunk size | `IMAGE_CHUNK_SIZE = 128 KB` (Trezor) | `FW_MAX_CHUNK` (smaller; HID-friendly) | Both bound per-chunk; our smaller size means more APDUs, but USB HID throughput is the bottleneck either way. |
 | Signature scheme | Ed25519 (multi-sig vendor in some models) | SPHINCS+C10 (PQ) | Different threat model; our PQ choice is invariant #5. |
-| Anti-rollback | `FIRMWARE_MONOTONIC_VERSION` — bootloader rejects below current | `verify_rollback` with OTP floor — strict `fw_version > floor` | Same model. Silicon-validated this session. |
-| User confirm before destructive op | User enters bootloader = consent; firmware erase proceeds | `confirm_commit` 4-page OLED dialog before *any* OTP/flash write | We're stricter — the user actively confirms each commit, not just the upgrade session. |
-| A/B slot recovery after bad update | Bricks until reflash on most models (single-slot) | **A/B slots** — bad update means FSBL falls back to the still-good active slot | We're better here. |
+| Anti-rollback | `FIRMWARE_MONOTONIC_VERSION` — bootloader rejects below current | Draft-0.9 security-epoch floor interface; physical backend OPEN | No production comparison claim yet. |
+| User confirm before destructive op | User enters bootloader = consent; firmware erase proceeds | Legacy confirm is after staging erase/writes and before activation; target health finalization is frozen separately | Different boundaries; no “stricter” claim. |
+| A/B slot recovery after bad update | Bricks until reflash on most models (single-slot) | Legacy recovery is nonfunctional; Draft-0.9 state machine is interface-frozen but unimplemented | Production-blocked pending backend/tests. |
 | Fuzzing | Has a `tests/` directory with mostly happy-path unit tests; no formal fuzz harness in the public tree | Adding one now (this session). | |
 
 **Trezor's `FirmwareErase.length` bound is the cleanest pattern to copy.**

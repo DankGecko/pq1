@@ -51,7 +51,7 @@ A **post-quantum ERC-4337 hardware wallet** (the **PQ1**) where every primitive 
 Each item below is implemented today (QEMU and/or real STM32U585), partial, or planned. See [Implementation Status](#implementation-status) for the per-item state.
 
 - **Post-quantum signatures, one primitive everywhere** — SPHINCS+C10 for both Type 1 (bootstrap slot registration) and Type 2 (per-slot user tx). The on-chain contract has a single `c10Verifier` immutable wired to both dispatch paths. Per-chain caps `MAX_BOOTSTRAP_USES = MAX_SLOT_USES = 65,536` are immutable; combined ≈ 2³² user txns/chain before that chain is permanently frozen — well inside the C10 birthday margin. *(Implemented; `forge test` covers both paths.)*
-- **Post-quantum firmware signing, end-to-end** — vendor signs a 75-byte preimage `"PQFW_V1"‖fw_version_be‖secure_hash‖nonsecure_hash` with a SPHINCS+C10 vendor key; the immutable FSBL verifies the same preimage and picks the higher-version valid A/B slot. Auditors rebuild + re-verify any release from `(version, secure.elf, nonsecure.elf)` alone (`fwsign verify-release`). *(Implemented: `fsbl/`, `fwsign/`, `fw-manifest/`.)*
+- **Post-quantum firmware signing (pre-production)** — the existing V1/75-byte signer and FSBL verify SPHINCS+C10 artifacts on the bench, but their rollback/try-once backend is rejected and compile-blocked from production. The reviewed Draft-0.9 target freezes slot-bound manifest v4 and its exact 80-byte `PQFW_V4` preimage over `(physical_slot, release_version, security_epoch, secure_hash, nonsecure_hash)`. Its journal/ECC/OTP backend and final FSBL resource fit remain open; this is an interface freeze, not implementation approval.
 - **PQ confidentiality of all SE traffic (planned)** — both entropy halves will be ML-KEM-1024-encapsulated + AES-256-GCM-sealed before touching I²C, so the classical OPTIGA Shielded Connection and SE050 SCP03 layers carry only opaque PQ ciphertext. *(Inner wrap not yet implemented. Today the SE channels carry plaintext halves under their classical AE layer.)*
 - **TrustZone isolation** — signing key, PIN state, key derivation, and crypto confined to the secure world. The NSC gateway (sign / batch-sign / off-chain sign / unlock / lock / status / wallet-address / init-code / firmware-update) is the only crossing point, with NS pointer validation and TOCTOU defense (NS buffers copied to S-stack before parse). On silicon the gateway runs through real ARMv8-M CMSE veneers (`make e2e-hw`); QEMU uses a shared-memory mailbox (workaround for a QEMU 8.2.2 MPC S-alias bug).
 - **Dual secure elements (split entropy)** — BIP-39 entropy is XOR-split: `half_O` on OPTIGA, `half_E` on SE050. Either chip alone reveals zero bits. `E = HKDF(half_O ⊕ half_E)` happens only in S-SRAM during unlock, then zeroized. *(Validated on silicon; both on I2C1 at 0x30 / 0x48.)*
@@ -80,10 +80,11 @@ make measure            # print the 8 BIP-39 measurement words for this build
 | `←`+`→` | Confirm (press both together) |
 | `Esc` / `Ctrl-C` | Cancel / quit |
 
-Build a dual-SE production-target firmware:
+Build a dual-SE **nonshipping bench** firmware (the explicit feature makes the
+legacy rollback backend visible and is forbidden in production):
 
 ```bash
-make FEATURES="dual-se,stm32u585,ui-lcd,saes-dhuk,usb" all
+make FEATURES="dual-se,stm32u585,ui-lcd,saes-dhuk,usb,legacy-fw-rollback-unsafe" all
 ```
 
 Expected real-hardware key-speed (`hw-sha256`, auto under `stm32u585`): first-sign ≤ 3 s (master keygen + slot keygen + 2× sign); Type-2 cached slot ≈ 1.1 s; second-chain first-sign ≈ 2.5 s. Substantially higher means the HASH peripheral isn't being used.
@@ -138,7 +139,7 @@ Every primitive that touches a secret, with PQ status. **Classical** entries are
 | Where | Primitive | Size | PQ | Notes |
 |---|---|---|---|---|
 | **Tx signing (Type 1 + 2)** | SPHINCS+C10 (W+C_F+C, h=18 d=2 a=11 k=13 w=8 l=43 target_sum=205) | sig 4008 B, pk 32 B | ✅ | One primitive for bootstrap *and* per-slot. Verifier `SPHINCsC10Asm.sol` runs in-EVM via the SHA-256 precompile. The on-chain `SignatureWrapper(ownerIndex, sig)` is 4128 B (4008 padded to 4032 + 3×32 header) |
-| **Firmware signing** | SPHINCS+C10 (same params) | sig 4008 B | ✅ | Vendor signs the 75-byte preimage; FSBL verifies against a compiled-in pubkey. No classical fallback |
+| **Firmware signing** | SPHINCS+C10 (same params) | sig 4008 B | ⚠️ | Legacy V1 bench path exists; production is blocked until Draft-0.9 manifest-v4 + rollback backend/resource gates are implemented. No classical fallback |
 | **Inner PQ wrap (planned)** | ML-KEM-1024 (FIPS 203) + AES-256-GCM | ct 1568 B, key 32 B | ✅ | Encapsulates a 32-byte AEAD key per stored half. PQ sk lives HUK-SAES-wrapped in secure flash. *Not yet implemented* |
 | **OPTIGA wire (outer)** | Shielded Connection: TLS-PRF + AES-128-CCM-8, root = PBS in secure flash | tag 8 B | ⚠️ | Symmetric cipher is PQ-safe; KDF is HMAC-SHA-256. Carries opaque PQ ciphertext once the inner wrap lands |
 | **OPTIGA PIN gate** | AuthRef (`0xF1D0`) + E120 LUC (silicon-monotonic) | — | ✅ | Trezor-parity; immune to PBS extraction. Hardware-cleared by `Change=Auto(F1D0)` over transient auth on success |
@@ -152,7 +153,7 @@ Every primitive that touches a secret, with PQ status. **Classical** entries are
 | **Tier 3 root** | OTP-master 32-byte TRNG burn at first boot | 32 B | ✅ | Today: dev KDF fallback. Post-Tier-2: PBKDF2 salt for any MCU-side PIN-gated wrap |
 | **BIP-39 → C10 master** | PBKDF2-HMAC-SHA512 (2048) → `HMAC-SHA512("sphincs-c6-v1", seed)` (acct 0) / `…("sphincs-c6-v1-acct", seed‖acct_be4)` (accts 1..=255) | 64 B | ✅ | `"c6"` tag is historical (carried through the C10 cutover). Acct 0 reproduces the legacy derivation byte-for-byte |
 | **Slot derivation** | `slot_entropy = sha256(slot_master‖"slot_entropy"‖chain_id_be8‖slot_index_be4)`; `slot_sk_seed = sha256("slot_c10_sk_seed"‖slot_entropy)`; `slot_pk_seed = sha256("slot_c10_pk_seed"‖slot_entropy) & N_MASK` | 32 B sk, 16 B pk | ✅ | **Chain-bound** (post-Coinbase port): slot keys differ per chain. Stateless within the 2¹⁸ tree; cached in SRAM for the unlock session only |
-| **Anti-rollback counter** | OTP fuses (1024 increments, RDP-regression-resistant) | — | ✅ | One-way by design, no reset path |
+| **Anti-rollback floor** | Draft-0.9 typed OTP interface | — | ⚠️ | Ordinary releases within one security epoch consume no OTP; the physical codec/capacity, interruption recovery, ECC handling, and silicon evidence remain OPEN. The legacy 1,024-bit tally is invalid on STM32U585 and production-fenced |
 | **TRNG mixing** | STM32 TRNG today; planned ⊕ OPTIGA ⊕ SE050 TRNG | 32 B | ✅ | Quantum offers nothing against true randomness |
 | **Clear-sign decoders** | Native on-device decode (Safe / CoW / ERC-7730 / ERC-20 / typed-call) | — | ❌ | Display-only — gates *what is shown before signing*, never reaches the seed. (Groth16 ZK verifier retired 2026-06-30, see `docs/archive/zk-clear-sign-retirement.md`) |
 | **Clear-sign DB auth** | SHA-256 Merkle tree over pinned leaves; 32-byte root in secure flash | root 32 B | ✅ | Anchored to the firmware-signing key; fully offline (no on-chain governance lookups) |
@@ -315,8 +316,9 @@ Any claim of "verified" in docs or marketing must carry the assumption list.
 | EIP-712 Safe + CoW Swap verifiers; ERC-7730 renderer | 🟢 QEMU |
 | Automated e2e (`make e2e` QEMU; `make e2e-hw` silicon) | 🟢 |
 | ERC-1967 proxy contracts (PQSmartWallet + Factory + PQMultiOwnable), Foundry suite | 🟢 |
-| Hash-signature firmware update (FSBL + `fwsign` + `fw-manifest` + streaming `fw_update/`) | 🟢 implemented, 🔵 HW integration in progress |
-| Firmware measurement at boot (SHA-256 → 8 BIP-39 words); OTP rollback counter | 🟢 |
+| Hash-signature firmware update (FSBL + `fwsign` + `fw-manifest` + streaming `fw_update/`) | ⚠️ legacy bench implementation; Draft-0.9 interfaces frozen; production backend blocked |
+| Firmware measurement at boot (SHA-256 → 8 BIP-39 words) | 🟢; bit-packed shared rendering verified |
+| Firmware rollback journal + typed OTP floor | 🚫 production-blocked pending software backend, resource gates, and later owner-authorized silicon evidence |
 | TAMP driver (log-only); consumption-mask hook | 🟢 implemented |
 | ML-KEM-1024 inner wrap; Tier 2 BHK; boot-time attestation; device-identity cert | ⏳ not started |
 | Mixed-RNG (STM32 ⊕ OPTIGA ⊕ SE050 TRNG); PIN-entry digit scrambling | 🔵 partial / ⏳ |
@@ -327,20 +329,17 @@ Any claim of "verified" in docs or marketing must carry the assumption list.
 A **hash-signature** model combining open-source reproducible builds with manufacturer approval — end-to-end SPHINCS+C10 + SHA-256, no classical fallback.
 
 ```
-Manufacturer:  CI builds → SHA-256(secure.elf), SHA-256(nonsecure.elf) → preimage
-               "PQFW_V1"‖fw_version_be‖secure_hash‖nonsecure_hash → sign with vendor C10 key →
-               publish .pqfw (manifest + body + 4008-byte sig)
-User:          build from source (reproducible) → `fwsign verify-release` rebuilds the preimage
-               from (version, secure.elf, nonsecure.elf) and checks the sig → stream over USB HID
-FSBL (boot):   walk A/B slots, pick higher-version valid → reconstruct preimage → verify C10 sig vs
-               compiled-in vendor pubkey + version > OTP floor → any failure halts, else jump in
-Device (run):  BEGIN → CHUNK* → COMMIT writes bank 2; on COMMIT re-hash, show measurement words,
-               wait for confirm, bump OTP rollback floor, reset
+Target:        CI hashes both images → manifest-v4 signs the exact 80-byte `PQFW_V4` preimage
+               binding physical slot + release_version + security_epoch + both image hashes.
+FSBL (boot):   verify both slots, decode typed marker/floor state, select under the frozen state
+               machine, and establish a security-epoch floor only after CONFIRMED.
+Device (run):  stream and verify a candidate, enter restricted probation, complete the reviewed
+               health protocol, then seal CONFIRMED. Runtime never writes the OTP floor.
 ```
 
 - **One PQ algorithm in the verification path** — the FSBL has one pubkey and one algorithm; a "just in case" classical fallback would defeat the PQ property, so there is none.
-- **Signing the preimage IS signing the firmware** — SHA-256 collision resistance ties the 75-byte preimage to the exact approved binary.
-- **Anti-rollback via OTP fuses** (1024 increments, survives RDP regression); no reset path.
+- **Signing the preimage IS signing the firmware** — SHA-256 collision resistance ties the frozen 80-byte, slot-bound V4 preimage to the exact approved binaries and rollback tuple.
+- **Epoch split** — ordinary releases only advance `release_version`; OTP is consumed only when `security_epoch` revokes older vulnerable releases. The physical OTP design is still open and production-blocked.
 - **PIN unlock required on every `CMD_FW_*`** (the seed is never accessed, but this blocks silent re-flash of a stolen device). The at-rest vendor SK is Argon2id + XChaCha20-Poly1305 wrapped — only on the signing machine, never on the device.
 
 See [docs/firmware/firmware-update.md](docs/firmware/firmware-update.md) and [docs/firmware/reproducible-builds.md](docs/firmware/reproducible-builds.md).
@@ -372,7 +371,10 @@ Each phase has a hard exit criterion before the next starts. Full backlog: `docs
 - **Phase 1 — close the bring-up regressions (in progress).** Restore the GTZC `TZSC_SECCFGR` allowlist (incl. GTZC2 USB-OTG); strip `debug-log`/`e2e-test`/`mock-se` from production builds + restore the `compile_error!` fences; remove dev log/register dumps; wire TAMP IRQ → `trigger_lockout_wipe()`; move BOR/inactivity to the Secure-only TIM; land Tier 2 (BHK); step a board to RDP1 and re-validate per-die DHUK uniqueness.
 - **Phase 2 — PQ inner wrap + boot-time attestation (still on the devkit).** Add the ML-KEM-1024 inner wrap (HUK-SAES-wrapped sk; `ct‖aead` on each SE); migrate the OPTIGA/SE050 reads onto it; pin a SPHINCS+C10 device-identity cert; implement mixed-RNG and PIN digit scrambling. Exit: the seed never appears in plaintext on either bus (trace-verified).
 - **Phase 3 — custom PCB, HUK-SAES, GTZC, production peripheral set.** Design/review the PCB (U585 + both SEs + NV3007 LCD + buttons + tamper mesh + EMI can); HUK-SAES wrap the at-rest secrets; GTZC-mark every Secure-only peripheral; MPU boundaries; block DMA into S-SRAM; wire case switch / tamper mesh / temp sensor / BOR to the wipe ISR (measure bulk-cap holdup on real HW).
-- **Phase 4 — secure boot, provisioning, lockdown.** Finalise the immutable FSBL (WRP1A-locked); build the HSM-backed provisioning pipeline (air-gapped C10 vendor key, two-person rule); run the full 13-step bring-up sequence on a sacrificial unit incl. the irreversible RDP-2 burn; verify the locked unit refuses unsigned firmware and SWD/JTAG.
+- **Phase 4 — secure boot, provisioning, lockdown (blocked).** Implement and
+  approve manifest-v4, the rollback backend/resource gates, and a replacement
+  factory receipt before defining any irreversible ceremony. Sacrificial-unit
+  and RDP2 work is explicitly outside the current software-only milestone.
 - **Phase 5 — pre-launch validation.** External audit, FI + SCA lab time on the locked PCB, public bug bounty before any sale, gradual rollout with a long observation window.
 
 ## Pre-Production Shipping Checklist
@@ -457,10 +459,10 @@ The STM32U585 boot ROM + OEMiROT enforce "this chip only runs firmware signed by
 
 ```
 HDPL0  System Bootloader (immutable) — dispatches to the FSBL per option bytes
-HDPL1  Our FSBL (~32 KB, WRP1A-locked, near its 32 KB cap) — holds the 32-byte C10 vendor key, the per-device
-       C10 device-identity cert, and the 1024-bit OTP rollback floor. For each A/B slot in
-       version order: reconstruct the 75-byte preimage, verify the C10 sig + version > floor,
-       jump on success / try the other slot / else halt
+HDPL1  Our FSBL (WRP1A-locked) — holds the 32-byte C10 vendor key and verifies/measures A/B slots.
+       The reviewed Draft-0.9 target uses a release-version + security-epoch tuple and a typed
+       OTP floor; the physical journal/ECC/OTP backend and final FSBL resource fit remain OPEN.
+       The legacy 1024-bit/75-byte-preimage path is production-fenced and must not ship.
 HDPL2  Secure-world firmware — configures SAU/MPC/GTZC, opens SE buses, holds the (planned)
        HUK-SAES-wrapped ML-KEM sk + OPTIGA PBS + SE050 SCP03 keys (derived via hw::secret_keys)
 HDPL3  Non-secure firmware — UI shell, USB; no access to S-flash, SE buses, or any HDPL1/2 secret
@@ -468,7 +470,11 @@ HDPL3  Non-secure firmware — UI shell, USB; no access to S-flash, SE buses, or
 
 Each HDPL transition irrevocably hides the previous level's option bytes and OBKEYs.
 
-**Bring-up sequence (sacrificial dev board first — RDP-2 is irreversible):** (1) generate the vendor C10 keypair in an air-gapped HSM, export only the 32-byte verifying key; (2) build the FSBL with the pinned key + slot addresses + OTP-floor location; (3) `fwsign sign` the secure + non-secure images; (4) flash the FSBL over SWD on a non-RDP unit; (5) burn option bytes (`TZEN=1`, `SECWM1/2`, `SECBOOTADD0`, `nBOOT0=0`/`nSWBOOT0=1`/`nBOOT_SEL=1`/`nBOOT_LOCK=0xC3`, `BOR_LEV≥4`, `WRP1A` on pages 0–3, `HDP1EN`/`HDP2EN`, debug off); (6) flash the signed images; (7) on-device factory mode generates + HUK-SAES-wraps the ML-KEM keypair (planned; bring-up skips); (8) HSM signs + pins the device-identity cert; (9) derive + pin per-device SE secrets via `hw::secret_keys`; (10) run the signed post-provisioning self-test (attest, provision, sign, brick, confirm both SEs + page-124 wipe); (11) **burn `RDP=0xCC`** — the last, irreversible write; (12) final acceptance test on the locked device.
+**No bring-up/burn sequence is currently authorized.** `fwsign sign` is a
+legacy bench-only command requiring an explicit unsafe acknowledgement; release,
+factory, and RDP2 targets fail non-ignorably. The future ceremony will be
+written only after the Draft-0.9 open software decisions close and the owner
+separately authorizes named sacrificial hardware.
 
 **What this gives you:** only firmware signed by the vendor C10 key runs (a SHA-256 class-break is the only way past); PQ confidentiality of stored secrets (post inner-wrap); no debug access, no bootloader fallback, no option-byte rollback, no flash patching of the FSBL; HDPL hides keys from later stages.
 

@@ -1,7 +1,13 @@
 # VULN — FW-COMMIT raises anti-rollback floor before the new image is committable (permanent-brick / HIGH availability)
 
 - **Severity:** HIGH (availability / permanent unrecoverable device-DoS). MEDIUM on confidentiality/integrity.
-- **Status:** **FIXED 2026-06-30** (working tree). Found 2026-06-29.
+- **Status:** **PARTIAL FIX ONLY.** The 2026-06-30 reorder closes the narrow
+  pre-manifest power-loss window, but not the A/B probation failure: raising
+  the floor before the new slot proves health excludes the old slot and makes
+  try-once rollback nonfunctional. The underlying bitwise OTP tally is also
+  invalid on STM32U585 ECC quad-words. Production is compile-blocked; see the
+  reviewed Draft-0.9 replacement in
+  [`../a-b-firmware-rollback-architecture.md`](../a-b-firmware-rollback-architecture.md).
 - **Component:** firmware-update commit + FSBL boot selection.
 - **Root cause:** `secure/src/nsc/cmd_fw_commit.rs` — `otp::bump_to(new_version-1)` ran *before* the new manifest/boot-state were written.
 - **Not:** a fund-theft / signature-forgery / auth-bypass issue. Funds are seed-recoverable; not remotely attacker-triggerable.
@@ -19,30 +25,31 @@ write, and gated it behind a from-flash candidacy re-verification. New order in 
    is the keystone — it proves the floor about to be written cannot reject the very slot being committed.
    Any failure aborts **without** bumping OTP (old slot stays bootable) and drops the streaming context.
 4. `otp::bump_to(new_rollback_floor)` — **last** irreversible op, only after the new slot is proven a
-   valid FSBL candidate. On error: drop context, surface `FwUpdateOtpExhausted`/`FwUpdateFlashError`; the
-   old slot remains bootable (FSBL try-once revert) — no brick.
+   valid FSBL candidate. This closes the earlier torn-commit window, but the
+   claim that the old slot remains available for try-once revert is false once
+   the raised floor makes it ineligible.
 5. Drop ctx, `sys_reset`.
 
-**Why this is brick-safe at every torn window:** the OTP floor is raised only after both the new manifest
-and the boot-state are durable and re-verified. A power-loss *before* the bump leaves both slots valid, so
-FSBL boots/falls back to the old (last-known-good) slot — at worst a lost-and-retried update, never a brick.
+**Narrow effect only:** this ordering prevents the floor from retiring the old
+slot before any new candidate exists. It is not brick-safe at every torn
+window. A launched OTP program can be interrupted/ambiguous, and after a
+successful floor bump the old slot is ineligible before the new slot proves
+health; the legacy single-candidate selector cannot provide the advertised
+try-once fallback.
 
-**Residual downgrade window (accepted):** between the boot-state write and the OTP bump the floor is still
-old. This is immaterial — a torn commit reverts to the *same* old firmware (not an older signed release),
-and forcing an actual downgrade would require a validly-signed older image + PIN + physical confirm + precise
-power timing, a far higher bar than "cause a power blip" and strictly less bad than an unrecoverable brick.
-
-**No FSBL change required.** The fix is contained to the secure-world COMMIT handler; the WRP1A-locked FSBL
-trust root is untouched.
+**Draft-0.9 correction:** a complete repair does require coordinated FSBL,
+manifest/journal, health, and floor-ownership changes. The earlier
+"No FSBL change required" conclusion applied only to the narrow power-loss
+sibling and must not be used as the A/B rollback disposition.
 
 **Tests:** the source-order regression test that previously *pinned the vulnerable ordering*
 (`negative_commit_bumps_otp_before_writing_new_manifest`) is replaced by
-`negative_commit_bumps_otp_last_after_manifest_and_boot_state` (asserts manifest-write < OTP and boot-state <
-OTP) plus `negative_commit_reverifies_new_slot_from_flash_before_otp_bump` (asserts the from-flash
+`legacy_commit_bumps_otp_after_manifest_and_boot_state` (asserts manifest-write < OTP and boot-state <
+OTP) plus `legacy_commit_reverifies_new_slot_from_flash_before_otp_bump` (asserts the from-flash
 `verify_rollback` gate precedes the bump). Full secure host suite: 2145 passed. Secure firmware target builds
 clean with `debug-log` both ON and OFF.
 
-## Summary
+## Original finding summary (historical, before the 2026-06-30 reorder)
 
 `CMD_FW_COMMIT` bumps the OTP anti-rollback floor to `new_version - 1` as **step 1**, *before* it
 writes the new slot's manifest (step 2, `:175-192`) and updates the boot-state pointer (step 3, `:204`).
@@ -50,7 +57,7 @@ A power interruption in the window between the OTP bump and the completion of th
 the device with **no bootable slot**, and the FSBL response to "no valid slot" is `halt()`. With WRP1A-locked
 FSBL and production RDP-2, this is an **unrecoverable brick**.
 
-## Mechanism (traced)
+## Original mechanism (historical)
 
 Commit order in `cmd_fw_commit.rs::run`:
 
@@ -71,9 +78,9 @@ milliseconds to tens of ms, on *every* update):
 - `pick_slot(None, None)` → `None` → `halt()` (`fsbl/src/main.rs:94-96`). No DFU / recovery path;
   FSBL is immutable (WRP1A). Under RDP-2 the slots cannot be re-flashed via SWD → **permanent brick.**
 
-Power loss *after* step 2 (manifest fully written) is safe: the new slot is a valid candidate and
-`pick_slot` selects it on the next boot even though boot-state still points at the old slot (it picks the
-highest valid `fw_version`, and the TRIED + stale-boot-state case does not trigger the revert).
+The last statement in the original analysis—"power loss after step 2 is
+safe"—was too broad. It only established candidate selectability, not health,
+fallback preservation, or OTP-interruption durability.
 
 ## Why HIGH (availability)
 
@@ -90,7 +97,7 @@ highest valid `fw_version`, and the TRIED + stale-boot-state case does not trigg
   cannot forge it) + PIN + a physical install confirm. An attacker can only induce the brick with
   physical power control during the user's own update, and gains nothing but DoS.
 
-## The current ordering is deliberate — fix needs a conscious change
+## Historical ordering rationale
 
 The code comment at `:143-153` justifies bumping OTP first: "a reset between OTP and flash leaves the
 rollback floor raised — the partially-staged slot fails verification on next boot but the rollback gate
@@ -98,20 +105,26 @@ still rejects older signed releases." The comment is correct that this preserves
 **understates the consequence**: it omits that the *old* (last-known-good) slot is ALSO rejected by the
 raised floor, which is the actual brick.
 
-## Recommended fix
+## Superseded narrow recommendation
 
-Raise the floor only once the new slot is fully written and selectable:
+The first repair proposed raising the floor only once the new slot was fully
+written and selectable:
 
 1. Write the new manifest (`try_once = TRIED`) + boot-state pointer first.
 2. `otp::bump_to(new_version - 1)` last (still before `sys_reset`).
 
-A momentary post-commit downgrade window on power-loss is strictly less bad than an unrecoverable brick,
-and exploiting it would require physical access **plus** a validly-signed older image (a far higher bar
-than "cause a power blip"). Alternatively, exempt the last-known-good committed slot from the rollback
-floor (treat it as a permanent fallback) until the newly-installed slot self-confirms alive.
+That change closed one sibling window but is not the complete fix. The current
+normative target is Draft 0.9's PENDING → ATTEMPTED → health → CONFIRMED flow,
+with the immutable FSBL establishing the security-epoch floor afterward. Its
+durable journal/ECC/OTP backend remains open and production-blocked.
 
-## Regression test idea
+## Replacement regression matrix
 
-Simulate the torn-commit states in the FW-update e2e (QEMU): (a) OTP bumped, manifest absent → assert the
-old slot still boots (post-fix), and (b) manifest written, boot-state absent → assert the new slot boots.
-Pre-fix, case (a) must reproduce the both-slots-invalid → halt brick.
+Exercise every cut across the frozen PENDING → ATTEMPTED → health → CONFIRMED
+state machine. Every pre-CONFIRMED cut must preserve and select the already
+confirmed fallback; no runtime path may establish the floor. Only a subsequent
+immutable-FSBL step may establish `security_epoch - 1` for a CONFIRMED slot.
+Torn/ambiguous journal or floor state must decode to the frozen typed recovery
+or fail-closed outcome, never silently expose an older floor. Physical
+interruption claims remain blocked until the separately authorized silicon
+phase.

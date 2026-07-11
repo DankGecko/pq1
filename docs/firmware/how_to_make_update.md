@@ -1,8 +1,21 @@
 # How to ship a firmware update
 
+> **Do not use this legacy v0x02 procedure for production.** It documents the
+> current bring-up tooling, including an invalid bitwise OTP-capacity model.
+> Production is compile-blocked. The reviewed target is Draft 0.9 in
+> [`a-b-firmware-rollback-architecture.md`](../security/a-b-firmware-rollback-architecture.md):
+> ordinary releases are free within a security epoch, while only a security-
+> epoch revocation consumes complete fresh OTP quad-words through a codec that
+> remains hardware-gated and unimplemented.
+
 A practical recipe for the firmware maintainer. For the *why* + threat
 model see `docs/firmware/firmware-update.md`; this doc is the
 copy-paste-and-go checklist.
+
+There is currently **no production copy-paste procedure**. `make release`,
+`make fsbl-release`, factory provisioning/rehearsal, and RDP2 authority fail
+closed until the reviewed backend and resource gates close. Commands retained
+below are useful only for inspecting the legacy bench format.
 
 ---
 
@@ -39,19 +52,18 @@ is public — commit it to the repo, publish it on your website, pin
 it in a tweet, whatever. **Users need this file to verify releases
 independently.**
 
-### 3. Bake the pubkey into the FSBL
+### 3. Legacy bench FSBL key injection (not a production burn recipe)
 
-The FSBL is immutable on production devices (WRP1A-locked before
-RDP-2 burn). Whatever pubkey ships on a device determines which
-vendor's releases that device accepts. Burn this in at factory
-provisioning time:
+The final FSBL will be immutable on production devices. Do not burn or lock the
+current legacy FSBL. The following command builds the quarantined bench image
+with an explicit unsafe-backend opt-in supplied by the Make target:
 
 ```bash
 make fsbl FSBL_VENDOR_PUBKEY=/secure/path/to/vendor-pubkey.bin
 ```
 
 The resulting `target/fsbl/thumbv8m.main-none-eabi/release/pqsigner-fsbl`
-is what you flash to pages 0–3 of bank 1 during factory provisioning.
+is a bench artifact only; it is not factory-provisioning authority.
 Confirm the fingerprint matches (build.rs prints it):
 
 ```
@@ -87,11 +99,13 @@ fw_version: u32, monotonic, strictly greater than the previously
             current OTP rollback floor.
 ```
 
-A device ships at version `1`, so the first update you sign must be
-version `2` or higher. Skipping versions (e.g. v2 → v5) burns 3 OTP
-bits at install time instead of 1, but is otherwise fine. There are
-1024 bits of OTP budget per device — enough for one update per month
-for 85 years.
+A device ships at version `1`, so the first legacy-format update would use a
+higher release version. In the reviewed design, skipping release versions does
+not itself consume multiple OTP records: `release_version` selects the newest
+artifact, while a separate monotonic `security_epoch` advances only when older
+signed releases must be revoked. Final epoch capacity depends on the still-open
+replicated record codec; do not infer 1,024 updates or burn anything from this
+document.
 
 ### 2. Build the release reproducibly
 
@@ -100,10 +114,9 @@ git checkout $release_commit
 FSBL_VENDOR_PUBKEY=/absolute/path/to/vendor-pubkey.bin make release
 ```
 
-`make release` runs `verify-repro` first (two clean builds, diff),
-and fails loudly if the output isn't byte-identical. If this fails,
-stop — something is leaking build-host state into the firmware and
-users won't be able to reproduce your hashes. See
+`make release` currently fails at the rollback quarantine before deleting or
+publishing artifacts. After the replacement is implemented it will run
+`verify-repro` first (two clean builds, diff). See
 `docs/firmware/reproducible-builds.md` for debugging tips.
 
 On success, `target/pqsigner-release/secure.elf` and
@@ -115,6 +128,7 @@ for the release notes.
 
 ```bash
 cargo run --release -p fwsign -- sign \
+    --legacy-bench-unsafe \
     --key vendor-key.enc \
     --fsbl target/pqsigner-release/fsbl.elf \
     --trusted-fingerprint target/pqsigner-release/vendor-key.sha256 \
@@ -128,16 +142,18 @@ cargo run --release -p fwsign -- sign \
 
 You'll be prompted for the vendor passphrase. The output is a single
 `release-v2.pqfw` file (~1.1 MB) containing the manifest + both image
-halves + metadata. **One `.pqfw` per release** — the same file installs
-into slot A or slot B; the device picks whichever is inactive.
+halves + metadata. **Legacy only:** one `.pqfw` installs into either slot
+because V1 does not sign the slot. Frozen manifest v4 binds `physical_slot`,
+so the production tool will emit separately signed A/B artifacts.
 
 `--slot` stamps the unsigned `slot` metadata byte for traceability;
 it has no cryptographic effect. Pick A by convention.
 
-### 4. Publish
+### 4. Do not publish
 
-Upload `release-v2.pqfw` wherever you distribute releases (GitHub
-Releases, your CDN, etc.). Include in the release notes:
+The V1 output is a quarantined bench artifact. Do not upload it as a release or
+install it on any device carrying funds. The former release-note fields below
+are retained only as historical provenance guidance:
 
 - The git commit hash.
 - The fw_version number.
@@ -162,12 +178,15 @@ looks like.
 2. App fetches `release-v2.pqfw` from your published URL.
 3. User plugs in their device, unlocks with PIN.
 4. Companion streams the `.pqfw` over USB HID (~2 s).
-5. Device shows new measurement words on the OLED.
+5. Device shows new measurement words on the NV3007 LCD.
 6. User compares against your published words, long-presses right to
    confirm.
-7. Device bumps OTP floor, writes manifest, resets.
-8. FSBL boots the new slot; if it fails to confirm alive, FSBL
-   reverts to the previous release.
+7. Target design writes PENDING and resets; immutable FSBL arms ATTEMPTED.
+8. Restricted probation completes the reviewed health flow and physical
+   finalization before CONFIRMED; a later FSBL boot establishes `E - 1`.
+
+This flow is not implemented yet. The legacy runtime-floor/try-once path does
+not reliably revert and must not be presented to users.
 
 ### Auditor / paranoid user
 
@@ -231,14 +250,14 @@ make verify-repro RELEASE_FEATURES=...
 
 ## Common gotchas
 
-- **Forgot to bump the version.** `fwsign sign` does NOT refuse a
+- **Forgot to bump the version.** The legacy `fwsign sign` does NOT refuse a
   non-increasing `--version` (F11): the `~/.local/share/fwsign/ledger.jsonl`
   is a record-only audit trail, not a monotonicity guard — enforcing a refusal
   here would break reproducible re-signing of an already-recorded version. The
-  real, silicon-enforced anti-rollback is the on-device OTP rollback floor
-  (`verify_rollback` rejects any `fw_version <= floor` at BEGIN and at FSBL
-  boot). Still bump the version per release; the device — not `fwsign` — is
-  what blocks a downgrade.
+  production release policy is still OPEN-REL-1. Do not rely on the legacy
+  unary OTP floor: it is invalid on STM32U585 and compile-blocked. The target
+  signer must enforce monotonic `release_version` plus security-relevant epoch
+  bumps against the reviewed release ledger.
 - **Different build host → different ELFs.** Reproducibility depends
   on the pinned toolchain + the `--remap-path-prefix` flags. If
   you're signing from a laptop that isn't on `nightly-2026-04-06`,

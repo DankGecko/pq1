@@ -27,6 +27,7 @@ in four places). The rule: **owners hold the fact; everything else links.**
 | EVT bench-attack pass/fail bars | **`docs/security/red-teaming.md`** | the on-copper test matrix |
 | Empirical on-silicon SE050 status | **`docs/secure-elements/se050-silicon-findings.md`** | |
 | Provisioning ceremony (untrusted-CM) | **`docs/provisioning/provisioning-reference.md`** | |
+| A/B rollback architecture, frozen software interfaces, and physical/resource gates | **`docs/security/a-b-firmware-rollback-architecture.md`** | Draft-0.9 review receipt: `docs/security/a-b-firmware-rollback-review-receipt-2026-07.md` |
 | Companion integration · clear-signing | `docs/companion/companion-app-integration.md` + the `companion-*` deltas | firmware side: `docs/companion/erc7730-integration.md` |
 | FV strategy / what full proof requires | **`docs/verification/how_to_math_proof_secureness.md`** | live proof state: `contracts/verification/` (`THE_CLAIM.md`) |
 | FV target ranking · security-tooling adoption | `docs/verification/verification-targets-2026-06.md` · `docs/verification/security-tooling-sota-2026-06.md` (= §34) | |
@@ -55,9 +56,12 @@ re-drifting.
 
 ## AT A GLANCE
 
-- **The real ship gate is NOT a tooling track** — it's **OPTIGA silicon (S-1/S-3 LcsO ratchet) + the S-2
-  factory trust-anchor cert**, plus the **SCP03 per-unit PUT-KEY ceremony (HIGH-1, code-fenced)** and the
-  **S-5 bus capture**. All factory/bench. Everything else is assurance depth, not a blocker.
+- **The real ship gate is NOT a tooling track** — it includes **firmware
+  rollback Foundation A** (legacy OTP/A-B path is production-fenced; Draft 0.9
+  implementation, combined FLASH/RAM fit, and physical journal/ECC/OTP receipts
+  remain open), **OPTIGA silicon (S-1/S-3 LcsO ratchet) + the S-2 factory
+  trust-anchor cert**, the **SCP03 per-unit PUT-KEY ceremony (HIGH-1,
+  code-fenced)**, and the **S-5 bus capture**.
 - **Keyboard-doable security work right now (`blocked-on: code`):** the S-3 soft-counter compile-fence, the
   `make checkct` CI gate + SAES-CMAC driver, hevm-equiv, the independent-source KAT oracle leg, a
   ClusterFuzzLite job, the `claude-code-security-review` Action, the prod-config CI gate (MED-2), and the ToB
@@ -75,7 +79,8 @@ re-drifting.
 
 | ID | Item | Status | Blocked-on | Evidence (spot-check) | What remains |
 |----|------|--------|-----------|------------------------|--------------|
-| **S-1** | F1D0 `Change=ALW` → desolder PIN brute-force | partial | **bench** | the `optiga-lock-operational` fence in `nsc/mod.rs` (commit `832a369d`); the `Auto(F1D0)` AuthRef builder in `optiga/apdu.rs`; `optiga::verify_and_lock` (grep the fence STRING, not a line — `nsc/mod.rs` churns) | Irreversible **LcsO=Op ratchet** + sacrificial-part validation on fresh silicon. ⚠ fence keyed to `mode-production` ALONE — a release `stm32u585` image that omits it ships S-1-open (convention, not enforced). |
+| **FW-RB** | A/B rollback + anti-rollback root | software interfaces frozen; implementation **NO-GO** | **code + bench** | Draft 0.9 SHA `f38b9030…a947336`; dual-Opus approval receipt; build.rs + Rust compile gates cover production secure/FSBL, factory/rehearsal, and explicit bench opt-in; `prod-check-ship` is an expected-failure CI gate | Implement the frozen manifest/journal/typed-floor contract, prove combined ≤38,912-B FSBL + RAM envelope, close `OPEN-JRN-HW/DUR`, `OPEN-ECC`, `OPEN-OTP-1..3`, then obtain separately authorized Section-13 silicon receipts. Legacy 1,024-bit tally and current try-once claims are rejected. |
+| **S-1** | F1D0 `Change=ALW` → desolder PIN brute-force | partial | **bench** | the `optiga-lock-operational` fence in `nsc/mod.rs` (commit `832a369d`); the `Auto(F1D0)` AuthRef builder in `optiga/apdu.rs`; `optiga::verify_and_lock` | Irreversible **LcsO=Op ratchet** + sacrificial-part validation on fresh silicon. During the rollback quarantine, a non-production STM32 image can compile only with explicit `legacy-fw-rollback-unsafe`, while production and factory shapes are blocked; this is bench capability, not a shippable escape. |
 | **S-2** | Public Infineon **sample** trust-anchor at `0xE0E3` → SetObjectProtected bypass | partial | **factory** | sample cert `optiga/reset.rs:33-38`; reset-oids fence `nsc/mod.rs:229-243`; `lockdown_ta_pool` `optiga/mod.rs:1772` | Production **PQ1-factory-HSM** trust-anchor cert (key-custody). NOTE: repo's own correction — `0xE0E3` is a non-writable device-cert slot; `docs/provisioning/provisioning-reference.md` says only `0xE0E0` ships a sample anchor. Weakens the specific path, doesn't close S-2. |
 | **S-3** | Default build has no silicon-enforced PIN lockout | partial | **bench** + code | the `optiga-hw-counter`-required fence in `nsc/mod.rs` (grep the fence STRING, not a line); LUC `Execute=LUC(E120)` in `optiga/apdu.rs`; `make optiga-hw-counter-e2e` PASSED 2026-04-22 | ⚠ **CORRECTION:** the claimed `build_metadata_counter` production gate **does NOT exist** (grep-confirmed) — fencing the weak soft-counter path is still **code-doable** work. Plus the LcsO=Op ratchet (bench). |
 | **S-5** | SCP03 response unprotected (`half_E` plaintext on I²C) | **done** (code+func-silicon) | bench | `P1=0x33` `se050/scp03.rs:269`; `unwrap_response` `:518`; round-trip on B-U585I `work-todo:2397`; tests `scp03_logic.rs` | Only the dedicated **logic-analyzer bus capture** confirming no plaintext on the wire (`red-teaming §5.1`). |

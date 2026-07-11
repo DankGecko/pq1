@@ -1,6 +1,18 @@
 # Firmware update
 
-End-to-end flow:
+> **Pre-production legacy implementation — not a shipping design.** The active
+> code below still contains the rejected bitwise OTP tally and nonfunctional
+> try-once rollback path. STM32U585 user OTP is 512 bytes / 32 one-program
+> 128-bit ECC quad-words; it does not provide 1,024 per-bit increments.
+> `stm32u585 + mode-production` is compile-blocked. The reviewed target and
+> exact frozen interfaces are
+> [`a-b-firmware-rollback-architecture.md`](../security/a-b-firmware-rollback-architecture.md).
+> Ordinary releases are unlimited within a security epoch; only a security-
+> epoch revocation consumes the still-open replicated OTP record codec.
+> Sections describing v0x02/`PQFW_V1`, the legacy layout, and current commands
+> remain bring-up documentation only.
+
+Legacy bench flow (not production-authorized):
 
 ```
 vendor laptop             user laptop                 device (STM32U585)
@@ -29,32 +41,35 @@ vendor laptop             user laptop                 device (STM32U585)
    accessed during an update, but unlock is required as defence in
    depth — a stolen locked device cannot be silently flashed even to a
    not-yet-revoked vendor release.
-3. **Anti-rollback is enforced via STM32U585 OTP.** 32 × 32-bit OTP
-   words = 1024 increments. Each commit clears one bit. Neither RDP
-   regression nor physical fuse attack can reset the floor.
+3. **Target anti-rollback is an epoch floor rooted in STM32U585 OTP.** A
+   same-epoch ordinary release performs zero OTP writes. An epoch advance uses
+   complete fresh quad-words through the reviewed typed/replicated codec. The
+   physical codec, interruption recovery, and silicon receipts remain open;
+   the legacy per-bit implementation is not valid or production-eligible.
 4. **The FSBL is immutable after provisioning.** Pages 0–3 of bank 1
    are WRP1A-locked before RDP-2. Any FSBL bug is a device
    replacement.
-5. **Power-fail safe.** The inactive slot is fully erased, written,
-   and re-hashed before any pointer change. The final commit is two
-   atomic page writes (manifest + boot state); a torn write is
-   detected by FSBL at boot.
-6. **User-consent gated.** Every commit shows the new firmware's 8
-   BIP-39 measurement words on the OLED; the user holds long-right
+5. **Target power-loss contract.** Draft 0.9 preserves the last confirmed
+   fallback through PENDING and ATTEMPTED, seals CONFIRMED only after the
+   reviewed health/finalization flow, and lets the immutable FSBL establish
+   the epoch floor. Its durable journal/OTP construction remains open; the
+   legacy two-page commit is not power-fail-safe.
+6. **User-consent gated.** The target flow shows the new firmware's 8
+   BIP-39 measurement words on the NV3007 LCD; the user holds long-right
    to confirm. Matching the words against the vendor's published
    release is the anchor that prevents a MitM companion app from
    slipping a (vendor-signed but user-unauthorised) release in.
 7. **FSBL-rooted post-install verification.** After COMMIT writes the
    new slot and the device reboots, the WRP1A-locked FSBL re-hashes
    the now-active slot and renders ITS view of the 8 words on the
-   OLED before branching into the new firmware. The user MUST see
+   NV3007 LCD before branching into the new firmware. The user MUST see
    the same 8 words FSBL shows that they confirmed at install time
    (the "Nf" page) — if the two diverge, the bytes that landed in
    flash are not the bytes whose hash was signed. Do not enter the
    PIN in that state. See [`measured-boot.md`](../security/measured-boot.md) for
    the threat model and the trust chain.
 
-## Storage layout
+## Legacy storage layout (not the frozen Draft-0.9 layout)
 
 ```
 Bank 1 — secure (1 MB, SECWM1: all 128 pages secure):
@@ -71,13 +86,13 @@ Bank 2 — non-secure (1 MB, SECWM2: all 128 pages NS):
   pages 64–127    Slot B NS         512 KB
 
 OTP user area (starts 0x0BFA_0000):
-  words 0–31      Rollback counter (1024 bits, one per commit)
+  32 × 16-B QWs   Physical allocation OPEN; legacy bit tally rejected
 ```
 
 Current footprint for comparison: secure ≈ 354 KB / 464 KB capacity,
 nonsecure ≈ 90 KB / 512 KB capacity. Plenty of headroom.
 
-## What gets signed (v0x02)
+## Legacy implementation: what gets signed (v0x02)
 
 Only three inputs feed the SPHINCS+C10 signature:
 
@@ -113,9 +128,10 @@ Concretely, what's signed vs. unsigned:
 | `try_once_flag`     | no      | Device state written post-sign                                           |
 | `crc32`             | no      | Torn-write detection; integrity only                                     |
 
-**One signature works for either slot.** The vendor emits one
+**Legacy behavior: one signature works for either slot.** The vendor emits one
 `.pqfw` per release, not two — the same signed bytes install
-identically into slot A or slot B.
+identically into slot A or slot B. Draft 0.9 replaces this with slot-bound V4
+artifacts and separate A/B signatures.
 
 ## Manifest format (8 KB flash page)
 
@@ -144,7 +160,7 @@ offset  size  field                   signed?
  8188      4  CRC-32 (IEEE)              no  (integrity only)
 ```
 
-## Command flow on the device
+## Legacy command flow on the device (production-blocked)
 
 1. `CMD_FW_BEGIN` (8 KB manifest payload)
    - Verify unlock; run full crypto verify chain on the manifest.
@@ -158,15 +174,13 @@ offset  size  field                   signed?
    - Update running SHA-256.
 3. `CMD_FW_COMMIT`
    - Re-hash written images, compare against manifest's signed hashes.
-   - Compute 8 BIP-39 words; render confirm dialog.
-   - On user confirm:
-     - `otp::bump_to(fw_version)`.
-     - Write manifest page (with `try_once = TRIED` + fresh CRC).
-     - Write boot-state page pointing at new slot.
-     - `SCB::sys_reset()`.
+   - The current code writes the legacy manifest + boot-state, attempts
+     `otp::bump_to(fw_version - 1)`, then resets. Confirmation was moved to
+     BEGIN. This sequence is retained for bench diagnosis only: the unary OTP
+     operation is invalid and the floor can retire the fallback before health.
 4. `CMD_FW_STATUS` / `CMD_FW_ABORT` — progress + cancel at any time.
 
-## FSBL boot sequence
+## Legacy FSBL boot sequence (production-blocked)
 
 Covered in `fsbl/src/main.rs`. Summary:
 
@@ -174,13 +188,21 @@ Covered in `fsbl/src/main.rs`. Summary:
 - Run the same verify chain (structural, CRC, digest, vendor fpr,
   C10 signature, rollback floor) on each.
 - Re-hash each candidate's secure + NS images from flash.
-- Pick the highest-version fully-valid slot, honouring try-once:
-  - `TRIED + boot_state.active_slot == candidate` → revert.
+- Pick the highest-version fully-valid slot. The two-candidate path consults
+  try-once metadata, but the single-candidate fast path cannot revert after
+  the floor excludes the old slot:
+  - `TRIED + boot_state.active_slot == candidate` → legacy runner-up only if
+    that runner-up is still floor-admissible.
   - `COMMITTING` → torn, fall back.
   - `COMMITTED` → safe to boot.
 - Set VTOR + jump to the slot's reset handler.
 
 ## Vendor release pipeline
+
+> **Currently blocked.** `make release`, `make fsbl-release`, and
+> `make prod-check-ship` intentionally fail until the reviewed rollback
+> backend and resource gates close. The commands below document the legacy
+> bench tooling; they are not a production release procedure.
 
 ```
 # One-time, on an offline signing machine.
@@ -191,9 +213,10 @@ fwsign pubkey --key vendor-key.enc --out vendor-pubkey.bin
 
 # Per release.
 git checkout $RELEASE_COMMIT
-FSBL_VENDOR_PUBKEY=/absolute/path/to/vendor-pubkey.bin make release
+# make release  # REFUSED while the rollback backend is quarantined
 
 fwsign sign \
+  --legacy-bench-unsafe \
   --key vendor-key.enc \
   --fsbl target/pqsigner-release/fsbl.elf \
   --trusted-fingerprint target/pqsigner-release/vendor-key.sha256 \
@@ -205,13 +228,11 @@ fwsign sign \
   --out release-v${VERSION_U32}.pqfw
 ```
 
-`make release` snapshots the public key once, builds the FSBL in an isolated
-target, builds the secure world twice, and hashes the allocated raw runtime key
-consumed from both final ELFs. Packaging stops unless
-`FSBL == secure == reviewed policy`; `fwsign sign` repeats that check and also
-requires the decrypted signing key to match.
+The former `make release` pipeline is disabled and performs no packaging.
+`fwsign sign --legacy-bench-unsafe` retains artifact/key consistency checks for
+bench research, but emits unsigned-slot V1 and grants no production authority.
 
-**One `.pqfw` per release.** The v0x02 signed preimage doesn't cover
+**Legacy: one `.pqfw` per release.** The v0x02 signed preimage doesn't cover
 the slot identifier, so one signed release installs identically into
 A or B. The companion updater picks the inactive slot on the device;
 the signature verifies either way. (`--slot` stamps the unsigned
@@ -300,9 +321,10 @@ If that passes, you have cryptographic proof that:
 * The vendor's intent. A signed release is authentic, not
   necessarily benign. Review the source before trusting what you're
   about to install.
-* Device-specific acceptance. Your particular chip may have a
-  higher OTP rollback floor than this release — only the device can
-  answer that, and it does so at `CMD_FW_COMMIT` time.
+* Production eligibility or device-specific acceptance. No production backend
+  is currently authorized. In the target design, the FSBL admits a signed
+  `security_epoch > rejected_through_epoch`; runtime COMMIT does not own the
+  floor.
 
 ## Cryptographic primitives (complete inventory)
 
@@ -347,7 +369,9 @@ Status word mapping:
 - `0x6982` — PIN not verified (device locked).
 - `0x6985` — bad state / chunk / flash error (retriable).
 - `0x6A80` — bad manifest / version / image (fetch different release).
-- `0x6501` — OTP exhausted (device end-of-life for updates).
+- `0x6501` — legacy OTP-exhausted status. In the target design, exhausted epoch
+  capacity blocks a further security-epoch revocation, not ordinary same-epoch
+  releases.
 - `0x6984` — idle wipe (re-unlock, restart BEGIN).
 
 ## Current implementation status
@@ -360,9 +384,9 @@ Status word mapping:
 | `fwsign` CLI                 | ✔ landed, tests pass     |
 | `fwsign` deterministic sign  | ✔ verified               |
 | secure `hw::flash` bank 2    | ✔ landed                 |
-| secure `hw::otp`             | ✔ landed                 |
-| secure `hw::boot_state`      | ✔ landed                 |
-| `fsbl/` crate                | ✔ builds, 18 KB / 32 KB  |
+| secure `hw::otp`             | ✘ legacy unary codec; production-fenced |
+| secure `hw::boot_state`      | ✘ legacy try-once state; replacement interface frozen only |
+| `fsbl/` crate                | ✔ bench build; production release blocked |
 | `shared` CMD_FW_* / INS codes | ✔ landed                |
 | secure `fw_update/` module   | ✔ landed                 |
 | secure `cmd_fw_*` handlers   | ✔ landed                 |
@@ -372,7 +396,8 @@ Status word mapping:
 | Trusted-UI confirm dialog    | ⚠ stubbed (returns false; must be filled in after the ongoing `secure/src/ui/` refactor lands so it can reuse the same multi-page `confirm()` flow the sign path uses) |
 | A/B slot linker scripts      | ⚠ not reshaped (current firmware still boots at 0x0C00_0000; Phase 4 will split the secure/NS memory.x into `--slot A|B` variants) |
 | Companion updater tool       | ⚠ out of scope (see `tools/fwupdate.py` as the intended next-session artifact) |
-| Hardware bring-up            | ⚠ out of scope — requires real board + probe-rs |
+| Draft-0.9 backend/resource fit | ⚠ OPEN — no implementation approval |
+| Hardware bring-up            | ⛔ intentionally stopped before sacrificial-silicon tests |
 | WRP1A in `ob-configurator`   | ⚠ out of scope — Phase 7 |
 | `make flash-hw-production`   | ⚠ out of scope — Phase 7 |
 

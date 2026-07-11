@@ -53,9 +53,9 @@ A boundary is *non-trivial* when its two sides are governed by different keys, d
 | **B-OPT** S ↔ OPTIGA Trust M V3 | OPTIGA Shielded Connection (TLS-PRF + AES-128-CCM-8); PBS provisioned at factory under Tier-1 DHUK-derived wrap | S trusts OPTIGA only for the `half_O` bits it returns under successful E120/F1D0 silicon-gated read | `secure/src/optiga/{shield,apdu,ifx_i2c}.rs` |
 | **B-SE0** S ↔ SE050 | SCP03 (AES-CMAC + AES-CBC); admin UserID derived from OTP master via `secret_keys`; user UserID is the PIN-derived bytes | S trusts SE050 only for `half_E` bits returned under successful user-UserID read | `secure/src/se050/{scp03,apdu,t1oi2c}.rs` |
 | **B-OTP** S firmware ↔ STM32 OTP | One-way SAES-CMAC(DHUK, label‖ctr) key derivation; OTP master in OTP block, vendor-pubkey hash planned | OTP is silicon-immutable post-burn | `secure/src/hw/{otp,huk,secret_keys}.rs` |
-| **B-FW** Vendor HSM ↔ device | SPHINCS+C10 signature over 75-byte preimage `"PQFW_V1"‖version_be‖secure_hash‖nonsecure_hash`; vendor public key compiled into FSBL | Device trusts only payloads whose C10 sig verifies under the pinned vendor key | `fsbl/`, `fwsign/`, `fw-manifest/` |
+| **B-FW** Vendor HSM ↔ device | Target: SPHINCS+C10 signature over Draft-0.9's exact 80-byte, slot-bound `PQFW_V4` preimage; vendor public key compiled into FSBL | Production is compile-blocked until manifest-v4 plus the reviewed journal/ECC/OTP backend and resource gates are implemented | `docs/security/a-b-firmware-rollback-architecture.md`, `fsbl/`, `fwsign/`, `fw-manifest/` |
 | **B-CHAIN** Device ↔ on-chain wallet contract | C10 signature wrapped in `SignatureWrapper(uint256 ownerIndex, bytes c10Sig)`; per-chain `slot_entropy = sha256(slot_master‖"slot_entropy"‖chain_id_be8‖slot_index_be4)` so the slot keypair is chain-bound | Contract verifies the C10 sig stateless against the wrapper's `ownerIndex` lookup; trust crosses only via the wallet's own storage | `contracts/smart-wallet/src/{PQSmartWallet,PQSmartWalletFactory,verifiers/SPHINCsC10Asm}.sol` |
-| **B-FAB** Factory ↔ device (provisioning) | One-shot: SE050 PUT KEY rotation, OPTIGA PBS install + E140 `LcsO=Operational` lock, STM32 OTP master burn, RDP0 → RDP1 → RDP2 sequence | Trust is anchored once; subsequent boot-time attestation (§7.11) re-verifies | Two-stage RDP flow in `docs/security/production-security.md §2.2` |
+| **B-FAB** Factory ↔ device (provisioning) | Future reviewed ceremony; current legacy receipt is quarantined | No factory trust anchor or RDP2 authority exists until the replacement receipt/ordering and silicon evidence are approved | `docs/provisioning/factory-provisioning.md`, Draft 0.9 §13 |
 | **B-TZ-S** S code ↔ S code (privilege tiers) | **PLANNED** — Trezor-style MPU banking + secure-privileged/secure-non-privileged SAES key tiers. Currently absent: a bug in any S-world code can call `secret_keys::derive_into{,_bhk}` directly | Within S, one privilege level today | `docs/architecture/trezor-comparison.md §3.2` — tracked, not yet landed |
 
 Every boundary either has a cryptographic authenticator on each side, a hardware-enforced permission, or both. Boundaries with neither (e.g. B-UI button press) are sized to be self-evident to the user (you physically pressed a button — there is no impersonation surface inside the S-only TIM-driven timer).
@@ -162,11 +162,13 @@ Mechanism: every primitive in the trust path is post-quantum.
 Until the ML-KEM-1024 inner wrap lands, the residual is "a CRQC adversary who captured the OPTIGA Shielded Connection TLS-PRF/CCM-8 handshake or SE050 SCP03 handshake from this device's lifetime traffic can in principle decrypt the bus and read the relevant entropy half." This is the residual Claim 7 acknowledges.
 
 **Claim 8 — Firmware-update path admits only payloads signed by the pinned vendor key.**
-> A FW-update commit only succeeds if the C10 signature over `"PQFW_V1"‖version_be‖secure_hash‖nonsecure_hash` verifies under the FSBL-pinned vendor public key. Downgrade is rejected by a monotonic counter.
+> **Target claim, not a current shipping claim:** a manifest-v4 update is
+> admitted only when its C10 signature verifies under the FSBL-pinned vendor
+> key and the typed selector/floor state admits its `(release, epoch)` tuple.
 
-Mechanism: `fsbl/` immutable bootloader, `fw-manifest/` verify chain, OPTIGA monotonic counter (E1E0) cross-checked at COMMIT. FSBL pages are WRP1A-locked. Falsifiable by attempting a flashing of an unsigned or downgraded blob.
+Target mechanism: immutable FSBL + manifest-v4 verification + Draft-0.9's typed marker/selector/floor interfaces. The runtime may seal a candidate CONFIRMED only after the reviewed health flow; only the FSBL may establish `security_epoch - 1`. FSBL pages are WRP1A-locked.
 
-> **CORRECTION (2026-07-02, verified against source).** The "OPTIGA monotonic counter (E1E0) cross-checked at COMMIT" mechanism above is **not implemented**: `secure/src/nsc/cmd_fw_commit.rs` performs **no** OPTIGA counter read — anti-rollback rests **entirely on the STM32 OTP rollback floor** (`hw/otp.rs`; `verify_rollback` requires `fw_version > floor` strict, enforced at BEGIN and at FSBL boot; the OTP `bump_to(new_version-1)` is the last irreversible write). This is a sound single-layer anti-rollback — the drift is that the doc advertised a second (OPTIGA) layer that does not exist. Either read this claim as "STM32-OTP-only anti-rollback," or implement the OPTIGA-counter layer if defense-in-depth is wanted (tracked: work-todo #12c, adversarial-review FW10). E1E0/F1E1 counters are currently used only for PIN/duress attempts, not FW versioning.
+> **SHIP BLOCKER (2026-07-11, verified against RM0456 and source).** The implemented V1 path is not a sound production anti-rollback backend. `cmd_fw_commit.rs` raises the floor before candidate health, defeating try-once recovery, and `hw/otp.rs` attempts to reprogram ECC-protected STM32U585 OTP quad-words as a bit tally. There is no OPTIGA firmware-version counter. Draft 0.9 freezes replacement software interfaces only; journal hardware/durability, ECC, OTP codec/capacity, final resource fit, and silicon evidence remain open. Production, FSBL-release, factory receipts, and RDP2 authority are compile/process blocked meanwhile.
 
 **Claim 9 — Trusted UI faithfully renders signed semantics.**
 > Whatever the NV3007 LCD shows in a confirm screen is exactly what the signed `userOpHash` preimage commits to; the user pressing both buttons binds their consent to the displayed bytes.
@@ -262,23 +264,27 @@ The single biggest attack class against hardware wallets historically: the devic
 
 | Attack | Tier | Mitigation | Residual |
 |---|---|---|---|
-| Reflash NS or S image with a malicious one | T2 | FSBL verifies SPHINCS+C10 sig over the 75-byte preimage against the pinned vendor key; only highest-version valid A/B slot is selected | Pending: `FLASH_OTP_BLOCK_VENDOR_PK_HASH` (Trezor §1.2 pattern) to bind FSBL to a specific vendor key under RDP-2 regression |
+| Reflash NS or S image with a malicious one | T2 | Target FSBL verifies SPHINCS+C10 over the exact slot-bound manifest-v4 preimage; current V1 path is bench-only and production-fenced | Manifest-v4 implementation, final FSBL resource gate, and production-key ceremony remain open |
 | Substitute the FSBL itself | T2 | FSBL pages 0–3 are WRP1A-locked; runtime firmware cannot write them | Pre-RDP-2 access can replace FSBL — this is exactly the supply-chain class (§7.11) |
-| Downgrade to a vulnerable older firmware | T2 | OPTIGA monotonic counter (E1E0, Conf(0xE140)-protected) rejects `fw_version < counter`; STM32 OTP rollback fuses as the silicon-anchored layer | None below the OTP fuse budget |
+| Downgrade to a vulnerable older firmware | T2 | Draft-0.9 target admits only `security_epoch > rejected_through_epoch`; ordinary same-epoch releases do not consume OTP | Physical floor codec, crash-safe establishment, capacity, and silicon evidence are OPEN; production is blocked |
 | Boot a substituted image with valid old vendor sig | T2 | The vendor key is one and only one; rotating would require a vendor-key migration design we have not built | Vendor-key compromise = full break (§10.5) |
 | Run a debug image with `debug-log`/`e2e-test` on a production unit | T2 | `compile_error!` fences in `nsc/mod.rs` and the `saes-self-test` runner; CI gates production on these flags OFF; user-visible measured-boot 8-BIP-39 words diverge for any feature-flag flip | Pending: vendor-pk-hash OTP lock as a second wall against feature-flag-confusion-by-reflash |
 
 ### 7.8 Firmware update channel
 
-Each update arrives as a streaming `BEGIN → CHUNK* → COMMIT` over `CMD_FW_*`. PIN unlock is required on every command. The preimage is intentionally minimal — `"PQFW_V1" || fw_version_be || secure_hash || nonsecure_hash` — so any auditor can reconstruct it from `(version, secure.elf, nonsecure.elf)` alone. There is no manifest parser in the signed preimage.
+The legacy bench transport streams `BEGIN → CHUNK* → COMMIT` over `CMD_FW_*`
+with PIN unlock required on every command. Its `PQFW_V1` preimage and rollback
+backend are production-fenced. The frozen target is Draft-0.9's exact 80-byte,
+slot-bound `PQFW_V4` preimage plus the typed marker/selector/floor interfaces;
+the physical backend remains OPEN.
 
 | Attack | Tier | Mitigation | Residual |
 |---|---|---|---|
 | Inject a chunk mid-stream | T0 | Chunks accumulate into staging area; COMMIT verifies SHA-256 of staged image against the signed hashes before any write to active flash | None |
 | MITM the update bytes | T0 | Sig binds to `secure_hash` and `nonsecure_hash` — bit-flip of any byte fails verify | None |
-| Replay an old signed update | T0 | OPTIGA monotonic counter (E1E0) rejects | None below decap-of-OPTIGA |
+| Replay an old signed update | T0 | Target selector/floor rejects retired security epochs and orders releases within an epoch | Replacement backend not yet implemented; legacy path must not ship |
 | Glitch the COMMIT verify | T3 | FI sentinels on the verify pass; double-checked verify; ITAMP9 (planned) catches crypto-peripheral fault | Untested at production hardness |
-| Brick by mid-update power loss | T2 (accidental) | A/B slot model: COMMIT only ever activates a slot whose verify passed; the other slot is unchanged | Brownout hardening Stage 2 closes the BOR + IWDG + ECC + PVD + TAMP defaults gap |
+| Brick by mid-update power loss | T2 (accidental) | Target contract preserves the confirmed fallback through PENDING/ATTEMPTED and establishes the floor only after CONFIRMED | Unimplemented journal/ECC/OTP recovery is production-blocking; legacy floor ordering can retire the unchanged fallback |
 
 ### 7.9 Fault injection (FI)
 
@@ -579,6 +585,6 @@ Cross-references:
 
 ## 14. One-line Summary
 
-**To extract funds from a shipping PQSigner OS device, an adversary must simultaneously break (a) the OPTIGA silicon PIN gate, (b) the SE050 silicon PIN gate, and (c) either the STM32U585 firmware integrity chain or its silicon-side OTP — each of which has its own monotonic 10-attempt destructive wipe — and must do all of this before any of the three counters strike out *or* the device's 120-second inactivity timer wipes S-SRAM, and must do it without leaving a measured-boot fingerprint that the user can see on the trusted NV3007 LCD.**
+**No shipping claim is currently made: firmware rollback, OPTIGA shipping-state closure, and the named production gates remain open. Once those are closed, the intended composition requires an adversary to defeat both silicon PIN gates plus the immutable firmware-integrity chain before the three PIN-attempt mechanisms or the 120-second inactivity timeout erase the usable secret state, without triggering a visible measured-boot mismatch on the trusted NV3007 LCD.**
 
 If any one of those three barriers holds, funds stay.
