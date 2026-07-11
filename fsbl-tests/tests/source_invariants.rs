@@ -222,26 +222,44 @@ fn negative_production_fsbl_cannot_use_missing_zero_relative_or_dev_key() {
 }
 
 #[test]
-fn negative_final_artifacts_must_agree_on_reviewed_vendor_key() {
+fn negative_release_is_quarantined_or_final_artifacts_agree_on_vendor_key() {
     let vendor = read_workspace_file("fsbl/src/vendor_pubkey.rs");
     let makefile = read_workspace_file("Makefile");
     let verifier = read_workspace_file("fwsign/src/artifact_key.rs");
     assert!(vendor.contains(".pqsigner.vendor_pubkey"));
     assert!(vendor.contains("PQSIGNER_FSBL_VENDOR_PUBKEY"));
     assert!(vendor.contains("pub fn key_parts()"));
-    for landmark in [
-        "RELEASE_VENDOR_KEY_SNAPSHOT",
-        "target/release-fsbl",
-        "verify-artifact-keys",
-        "PRODUCTION_VENDOR_KEY_POLICY",
-        "RELEASE_ARTIFACT_TMP",
-        "target/pqsigner-release",
-        "sha256sum -c SHA256SUMS",
-    ] {
-        assert!(
-            makefile.contains(landmark),
-            "release pipeline lost `{landmark}`"
-        );
+    if makefile.contains("release: FAIL — production firmware rollback backend is not implemented")
+    {
+        // While rollback is an explicit NO-GO, no release/package recipe may
+        // delete or publish artifacts after `make -i` ignores a failing line.
+        let quarantine = makefile
+            .split(".PHONY: release _release")
+            .nth(1)
+            .and_then(|tail| tail.split("# Hardware bring-up test").next())
+            .expect("release quarantine block");
+        for forbidden in ["rm -", "cp ", "mv ", "verify-repro", "verify-artifact-keys"] {
+            assert!(
+                !quarantine.contains(forbidden),
+                "quarantined release block must not retain executable `{forbidden}`"
+            );
+        }
+        assert!(quarantine.contains("_release: REFUSED"));
+    } else {
+        for landmark in [
+            "RELEASE_VENDOR_KEY_SNAPSHOT",
+            "target/release-fsbl",
+            "verify-artifact-keys",
+            "PRODUCTION_VENDOR_KEY_POLICY",
+            "RELEASE_ARTIFACT_TMP",
+            "target/pqsigner-release",
+            "sha256sum -c SHA256SUMS",
+        ] {
+            assert!(
+                makefile.contains(landmark),
+                "release pipeline lost `{landmark}`"
+            );
+        }
     }
     assert!(verifier.contains("FSBL == secure == reviewed policy"));
     assert!(verifier.contains("VENDOR_KEY_SECTION"));

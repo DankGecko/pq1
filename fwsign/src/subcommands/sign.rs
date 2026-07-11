@@ -1,5 +1,8 @@
 //! `fwsign sign` — produce a `.pqfw` release bundle.
 //!
+//! Legacy bench command: emits manifest v0x02 / `PQFW_V1`, not Draft-0.9 V4.
+//! Production packaging is deliberately blocked at the root Makefile.
+//!
 //! Flow:
 //! 1. Load + decrypt the vendor key.
 //! 2. Flatten both ELFs to the same measurement regions `fwmeasure`
@@ -26,6 +29,7 @@ use crate::elf::{self, FlatImage};
 use crate::keystore::{self, VendorKey};
 
 pub struct Args {
+    pub legacy_bench_unsafe: bool,
     pub key_path: PathBuf,
     pub fsbl_elf: PathBuf,
     pub trusted_fingerprint: PathBuf,
@@ -39,6 +43,15 @@ pub struct Args {
 }
 
 pub fn run(args: Args) -> Result<()> {
+    if !args.legacy_bench_unsafe {
+        bail!(
+            "LEGACY_FW_SIGNING_BLOCKED: `fwsign sign` emits unsigned-slot PQFW_V1 and has no production authority; pass --legacy-bench-unsafe only for reviewed bench fixtures"
+        );
+    }
+    eprintln!(
+        "WARNING: legacy PQFW_V1 bench signing consumes this C10 key's global signature budget; never use a production-intended key"
+    );
+
     let build_id = parse_build_id(&args.build_id_hex)?;
     let boot_counter_snap = resolve_boot_counter_snap(args.version, args.boot_counter_snap)?;
 
@@ -447,6 +460,7 @@ mod tests {
     #[test]
     fn positive_release_json_embeds_all_input_fields() {
         let args = Args {
+            legacy_bench_unsafe: true,
             key_path: PathBuf::from("/dev/null"),
             fsbl_elf: PathBuf::from("fsbl.elf"),
             trusted_fingerprint: PathBuf::from("vendor-key.sha256"),
@@ -480,6 +494,26 @@ mod tests {
         assert!(json.contains(&"03".repeat(32)));
         assert!(json.contains(&"04".repeat(32)));
         assert!(json.contains("\"boot_counter_snap\": 41"));
+    }
+
+    #[test]
+    fn negative_sign_refuses_legacy_format_before_reading_any_input() {
+        let args = Args {
+            legacy_bench_unsafe: false,
+            key_path: PathBuf::from("must-not-be-read.key"),
+            fsbl_elf: PathBuf::from("must-not-be-read-fsbl.elf"),
+            trusted_fingerprint: PathBuf::from("must-not-be-read.sha256"),
+            version: 1,
+            secure_elf: PathBuf::from("must-not-be-read-secure.elf"),
+            nonsecure_elf: PathBuf::from("must-not-be-read-nonsecure.elf"),
+            slot: fw_manifest::SLOT_A,
+            build_id_hex: "00".repeat(32),
+            boot_counter_snap: Some(0),
+            out_path: PathBuf::from("must-not-be-written.pqfw"),
+        };
+
+        let error = run(args).expect_err("legacy signing must require acknowledgement");
+        assert!(error.to_string().contains("LEGACY_FW_SIGNING_BLOCKED"));
     }
 }
 

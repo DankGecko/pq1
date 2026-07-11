@@ -9,29 +9,28 @@
 #   0xFFFFFFFF  — chip never started the ceremony
 #   0xFFFFFFFE  — started, halted at failure panel (operator should
 #                 read the OLED for the step + error code)
-#   0xFFFFFFFC  — started + rehearsal completed (NOT RDP2-eligible)
-#   0xFFFFFFFA  — started + production completed (RDP2-eligible)
-#   0xFFFFFFF8  — started + both modes completed (RDP2-eligible)
+#   0xFFFFFFFC  — legacy rehearsal bits (quarantined receipt)
+#   0xFFFFFFFA  — legacy production bits (quarantined receipt)
+#   0xFFFFFFF8  — legacy combined bits (quarantined receipt)
 #
 # Usage:
 #   tools/factory-provisioning-verify.sh                # report only
-#   tools/factory-provisioning-verify.sh --bump-rdp2    # also bump
-#                                                       # RDP=Level-2
-#                                                       # if the
-#                                                       # sentinel is
-#                                                       # production-
-#                                                       # complete.
-#                                                       # IRREVERSIBLE.
+#   tools/factory-provisioning-verify.sh --bump-rdp2    # REFUSED while
+#                                                       # factory receipt is
+#                                                       # quarantined
+#   tools/factory-provisioning-verify.sh \
+#       --decode-legacy-sentinel 0xFFFFFFFA              # host-only test
 #
 # Exit codes:
-#   0  — sentinel reads RDP2-eligible (production or both modes)
-#   1  — sentinel reads not-yet-complete or rehearsal-only
+#   0  — reserved; no legacy receipt grants RDP2 authority
+#   1  — any known legacy sentinel state (all non-authoritative)
 #   2  — probe-rs read failed (chip not attached, RDP1+, etc.)
 #   3  — unexpected sentinel value (high bits cleared — corrupted OTP)
-#   4  — --bump-rdp2 was requested but sentinel is not RDP2-eligible
+#   4  — --bump-rdp2 was requested (always refused)
 #
-# This script does NOT flash any firmware. Use `make
-# flash-hw-factory-provisioning` to flash, then this script to verify.
+# This script does NOT flash any firmware. The historical factory flash target
+# is refusal-only. Report mode is read-only and every legacy value is
+# non-authoritative.
 
 set -euo pipefail
 
@@ -39,11 +38,6 @@ CHIP="${CHIP:-STM32U585AIIx}"
 OTP_SENTINEL_ADDR="${OTP_SENTINEL_ADDR:-0x0BFA00A0}"
 POLL_TIMEOUT_SECS="${POLL_TIMEOUT_SECS:-60}"
 POLL_INTERVAL_SECS="${POLL_INTERVAL_SECS:-2}"
-
-BUMP_RDP2=0
-if [[ "${1:-}" == "--bump-rdp2" ]]; then
-    BUMP_RDP2=1
-fi
 
 read_sentinel() {
     # `probe-rs read 32 ADDR --num-words 1` returns:
@@ -64,31 +58,49 @@ decode_sentinel() {
     local v="$1"
     case "${v}" in
         0xffffffff)
-            echo "DID_NOT_START — chip never reached the ceremony entry point"
+            echo "DID_NOT_START — chip never reached the legacy ceremony entry point; NOT RDP2 AUTHORITY"
             return 1
             ;;
         0xfffffffe)
-            echo "STARTED_FAILED — ceremony entered, halted at failure. Read OLED."
+            echo "STARTED_FAILED — legacy ceremony entered, halted at failure. Read LCD. NOT RDP2 AUTHORITY."
             return 1
             ;;
         0xfffffffc)
-            echo "REHEARSAL_ONLY — rehearsal completed, NOT RDP2-eligible"
+            echo "LEGACY_REHEARSAL_BITS — quarantined receipt; NOT RDP2 AUTHORITY"
             return 1
             ;;
         0xfffffffa)
-            echo "PRODUCTION_OK — production completed (RDP2-eligible)"
-            return 0
+            echo "LEGACY_PRODUCTION_BITS — quarantined receipt; NOT RDP2 AUTHORITY"
+            return 1
             ;;
         0xfffffff8)
-            echo "BOTH_OK — rehearsal + production both completed (RDP2-eligible)"
-            return 0
+            echo "LEGACY_COMBINED_BITS — quarantined receipt; NOT RDP2 AUTHORITY"
+            return 1
             ;;
         *)
-            echo "CORRUPT — unexpected high bits cleared (raw=${v})"
+            echo "CORRUPT — unexpected high bits cleared (raw=${v}); NOT RDP2 AUTHORITY"
             return 3
             ;;
     esac
 }
+
+if [[ "${1:-}" == "--bump-rdp2" ]]; then
+    echo "REFUSED: --bump-rdp2 is disabled while the factory OTP receipt is quarantined." >&2
+    echo "Draft 0.9 freezes rollback software interfaces only; it grants no irreversible authority." >&2
+    exit 4
+fi
+
+if [[ "${1:-}" == "--decode-legacy-sentinel" ]]; then
+    if [[ $# -ne 2 ]]; then
+        echo "usage: $0 --decode-legacy-sentinel 0xNNNNNNNN" >&2
+        exit 4
+    fi
+    set +e
+    decode_sentinel "${2,,}"
+    decode_exit=$?
+    set -e
+    exit "${decode_exit}"
+fi
 
 echo "==> Polling OTP sentinel at ${OTP_SENTINEL_ADDR} on ${CHIP}"
 echo "    Timeout: ${POLL_TIMEOUT_SECS}s, interval: ${POLL_INTERVAL_SECS}s"
@@ -142,29 +154,5 @@ decode_exit=$?
 set -e
 
 echo "==> Final state: ${decoded}"
-
-if [[ ${BUMP_RDP2} -eq 1 ]]; then
-    if [[ ${decode_exit} -ne 0 ]]; then
-        echo ""
-        echo "REFUSING --bump-rdp2: sentinel is not RDP2-eligible."
-        echo "Re-run the factory firmware (or inspect the failure on the OLED)"
-        echo "and try again. The RDP2 bump is IRREVERSIBLE so we fail-closed here."
-        exit 4
-    fi
-    echo ""
-    echo "==> IRREVERSIBLE: bumping STM32 RDP option byte to Level 2..."
-    echo "    After this completes, the chip will be PERMANENTLY"
-    echo "    locked: no SWD, no semihosting, no probe-rs read/write."
-    echo "    Only the OLED + USB enumeration will be observable."
-    echo ""
-    read -p "Type 'BUMP RDP2' to confirm: " confirmation
-    if [[ "${confirmation}" != "BUMP RDP2" ]]; then
-        echo "Aborted by user."
-        exit 4
-    fi
-    STM32_Programmer_CLI --connect port=SWD \
-        --optionbytes RDP=0xCC
-    echo "==> RDP=Level 2 set. Power-cycle the device. Pack and ship."
-fi
 
 exit ${decode_exit}

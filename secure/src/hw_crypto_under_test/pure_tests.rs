@@ -269,8 +269,9 @@ fn positive_hkdf_distinct_labels_diverge() {
 }
 
 #[test]
-fn positive_otp_rollback_bit_walk_lsb_first() {
-    // The bit-walk is "lowest set bit first" — reproduce one round.
+fn legacy_otp_rollback_logical_bit_walk_is_lsb_first() {
+    // Pins the quarantined software model only. STM32U585 OTP cannot perform
+    // these repeated per-bit transitions inside one ECC quad-word.
     let mut w: u32 = 0xFFFF_FFFF;
     let bit = w.trailing_zeros();
     w &= !(1u32 << bit);
@@ -281,8 +282,8 @@ fn positive_otp_rollback_bit_walk_lsb_first() {
 }
 
 #[test]
-fn positive_otp_rollback_word_capacity_is_1024() {
-    // 32 words × 32 bits.
+fn legacy_otp_rollback_model_has_1024_logical_bits() {
+    // Arithmetic shape of the quarantined model, not physical update capacity.
     assert_eq!(32u32 * 32, 1024);
 }
 
@@ -412,10 +413,11 @@ fn negative_saes_keysel_bhk_is_2_not_3() {
 }
 
 #[test]
-fn negative_otp_max_fw_version_capacity_unchanged_at_1024() {
+fn negative_legacy_otp_layout_shape_does_not_drift_silently() {
     assert!(OTP_SRC.contains("pub const MAX_FW_VERSION: u32 = ROLLBACK_WORDS * 32;"));
-    // ROLLBACK_WORDS = 32 → 1024. Halving the capacity (e.g. ROLLBACK_WORDS
-    // = 16) would silently halve the device lifetime ceiling.
+    // This pins the legacy layout so bench fixtures do not drift while the
+    // path is quarantined. It makes no lifetime/capacity claim: each physical
+    // OTP QW is one-program-only and Draft 0.9's replacement codec is OPEN.
     assert!(OTP_SRC.contains("pub const ROLLBACK_WORDS: u32 = 32;"));
 }
 
@@ -708,9 +710,9 @@ fn negative_hkdf_expand_truncated_output_takes_tag_prefix() {
 }
 
 #[test]
-fn negative_otp_bump_to_idempotent_when_target_le_current() {
-    // Idempotency is part of the documented contract; without it,
-    // commit-then-crash-then-replay would burn extra OTP bits.
+fn negative_legacy_otp_bump_skips_program_when_target_is_already_reached() {
+    // Pins only the quarantined software early return. It says nothing about a
+    // launched/torn QW, which must never be retried under STM32U585 OTP rules.
     assert!(OTP_SRC.contains("if current >= target"));
     assert!(OTP_SRC.contains("return Ok(());"));
 }

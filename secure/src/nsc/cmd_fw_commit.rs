@@ -1,4 +1,10 @@
-//! CMD_FW_COMMIT — finalize a staged update.
+//! CMD_FW_COMMIT — legacy V1 staged-update finalizer (bench only).
+//!
+//! **Production-blocked:** this handler predates Draft 0.9. It advances the
+//! rejected unary OTP floor before candidate health and therefore does not
+//! provide the promised A/B rollback contract. The source is retained for
+//! pre-production diagnosis; `stm32u585 + mode-production` and all factory
+//! images fail compilation until the reviewed replacement is implemented.
 //!
 //! Runs the heavyweight checks that BEGIN could only partially do:
 //!
@@ -7,12 +13,13 @@
 //!   3. Re-hash the written images from flash and compare against the
 //!      manifest's signed hashes. Any mismatch → abort.
 //!   4. Display the new measurement (8 BIP-39 words) + "Confirm
-//!      update?" prompt on the OLED. Wait for long-right.
+//!      update?" prompt on the NV3007 LCD. Wait for long-right.
 //!   5. On confirm: write the target manifest page (`try_once = TRIED`),
 //!      point the boot-state page at the new slot, re-verify from flash
-//!      that the new slot is a valid FSBL candidate, THEN bump the OTP
-//!      rollback floor LAST (irreversible — kept last so a torn commit
-//!      reverts to the old slot instead of bricking), and reset.
+//!      that the new slot is a legacy FSBL candidate, then attempt the
+//!      unsupported unary OTP bump and reset. This ordering narrows one old
+//!      pre-manifest brick window; it does not preserve a fallback through
+//!      probation and is not crash-safe for interrupted OTP programming.
 //!   6. On cancel: drop the context; the inactive slot stays erased.
 
 use fw_manifest::{ManifestRef, MANIFEST_SIZE, TRY_ONCE_TRIED};
@@ -140,32 +147,20 @@ pub(super) unsafe fn run(_args: &GatewayArgs) -> u32 {
     // `fw_version <= floor`, and `floor >= 0`).
     let new_rollback_floor = new_version.saturating_sub(1);
 
-    // ANTI-BRICK ORDERING (docs/security/vulns/VULN-fwcommit-otp-before-commit-brick.md).
-    // The irreversible OTP rollback-floor bump is the LAST flash write in
-    // this handler, performed only AFTER the new slot's manifest + the
-    // boot-state pointer are durably written and re-verified from the
-    // committed state (steps 1-3 below). The previous ordering bumped OTP
-    // FIRST; a power-loss between that bump and the manifest write floored
-    // out the OLD (last-known-good) slot while the NEW slot was not yet a
-    // valid candidate, leaving FSBL with NO bootable slot -> `halt()` ->
-    // permanent brick (production RDP-2 + WRP1A-locked FSBL = no in-field
-    // recovery). With the bump LAST, any power-loss before it lands leaves
-    // the old slot bootable: FSBL keeps booting it (or reverts to it via
-    // the try-once + boot-state path), so a torn commit is at worst a
-    // lost-and-retried update, never a brick. The narrow downgrade window
-    // this opens (floor stays old until the final write) is immaterial: a
-    // torn commit reverts to the SAME old firmware (not an older signed
-    // release), and forcing a real downgrade would need a validly-signed
-    // older image + PIN + physical confirm + precise power timing — a far
-    // higher bar than "cause a power blip", and strictly less bad than an
-    // unrecoverable brick.
+    // LEGACY ORDERING ONLY. Moving the floor write after the manifest closed
+    // the older "floor advanced before any new candidate exists" window. It
+    // did NOT make the transaction brick-safe: the candidate is selected as
+    // the sole floor-admissible slot before health, the legacy try-once
+    // fallback is nonfunctional in that state, and an interrupted OTP QW is
+    // ambiguous/lost. Draft 0.9 replaces this sequence with
+    // PENDING -> ATTEMPTED -> health -> CONFIRMED -> FSBL-owned establishment.
 
     // 1. Write the target manifest page. The try_once_flag in the
     //    signed manifest should have been COMMITTED; we re-write it
     //    as TRIED here because the slot has not yet confirmed it
     //    boots cleanly. FSBL on the next reset sees TRIED + our
-    //    matching boot-state entry and can revert if the slot fails
-    //    to set "committed".
+    //    matching boot-state entry. The current single-candidate selector does
+    //    not provide a reliable revert after the floor excludes the old slot.
     let mut manifest_copy = ctx.manifest_bytes;
     manifest_copy[fw_manifest::OFF_TRY_ONCE] = TRY_ONCE_TRIED;
     // Recompute CRC since we mutated a byte.
@@ -194,8 +189,8 @@ pub(super) unsafe fn run(_args: &GatewayArgs) -> u32 {
     // 2. Point the boot-state page at the new (tried) slot. Written only
     //    after the manifest is fully programmed (above), so the on-disk
     //    pointer can never reference a half-written manifest. Still BEFORE
-    //    the OTP bump (step 4): both slots stay valid through this write,
-    //    so a power-loss here lets FSBL revert to the old slot.
+    //    the OTP bump (step 4). This preserves the old slot only until the
+    //    later floor write; it is not the reviewed probation contract.
     let new_boot_state = boot_state::BootState {
         active_slot: inactive,
         last_good_version: new_version,
@@ -219,8 +214,9 @@ pub(super) unsafe fn run(_args: &GatewayArgs) -> u32 {
     //    `fw_version > floor` still holds for the just-committed slot, so the
     //    floor we write next cannot reject the very slot we are committing.
     //    We also confirm the boot-state pointer resolves to the new slot.
-    //    Any failure aborts WITHOUT bumping OTP — the old slot stays
-    //    bootable, so even the abort path is brick-safe.
+    //    Any failure aborts without launching the legacy OTP bump. This
+    //    protects the pre-bump case only; it is not a global brick-safety
+    //    claim for the handler.
     {
         // SAFETY: `manifest_addr` is the 8 KB memory-mapped manifest page of
         // the inactive slot, fully programmed just above and not mutated
@@ -254,18 +250,18 @@ pub(super) unsafe fn run(_args: &GatewayArgs) -> u32 {
         }
     }
 
-    // 4. Raise the anti-rollback floor — the FINAL, irreversible flash op
-    //    before reset (see the ANTI-BRICK ORDERING note above). Doing this
-    //    LAST is what makes a torn commit recoverable rather than bricking.
+    // 4. Attempt the rejected legacy unary floor update. Production never
+    //    reaches this code: STM32U585 OTP QWs are one-program-only, and a
+    //    reset/power loss during a launched program is not retry-safe.
     // SAFETY: `otp::bump_to` is `unsafe fn` because it programs OTP one-way
     // (irreversible). Precondition: the new slot's manifest + boot-state are
     // durably written and were just re-verified from flash as a valid FSBL
     // candidate under `new_rollback_floor`.
     if let Err(e) = unsafe { otp::bump_to(new_rollback_floor) } {
         // The new slot is fully written and boot-state points at it, but the
-        // floor could not be raised. Both slots remain valid, so FSBL reverts
-        // to the old slot (try-once) — no brick. Surface the error and drop
-        // the context.
+        // legacy floor could not be raised. Surface the error and drop the
+        // context; do not claim recoverability if a QW program may have
+        // launched, because its post-reset state can be ambiguous.
         // SAFETY: category 5 — exclusive write to `static mut FW_UPDATE`.
         unsafe {
             *core::ptr::addr_of_mut!(FW_UPDATE) = None;
@@ -296,7 +292,7 @@ pub(super) unsafe fn run(_args: &GatewayArgs) -> u32 {
     // dead-battery Rd reads as a fresh attach and the device
     // re-enumerates with NO physical replug (task #26; the bare
     // `sys_reset` left the host port stuck because VBUS stays asserted).
-    // Re-enumeration latency is ~20-25 s (mostly device boot); the OLED
+    // Re-enumeration latency is ~20-25 s (mostly device boot); the NV3007 LCD
     // shows "reconnecting" across it. The companion app simply waits for
     // the device to come back.
     ui::show_status("Update OK", "reconnecting...");

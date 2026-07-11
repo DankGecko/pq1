@@ -1,9 +1,12 @@
 //! OTP rollback-floor read for the FSBL.
 //!
-//! Mirror of `secure/src/hw/otp.rs::rollback_floor` — FSBL only needs
-//! the read path, not the bump path (bumping is done by the secure
-//! firmware's `CMD_FW_COMMIT` handler). Same tally encoding: count of
-//! zero bits across 32 × 32-bit OTP words = current floor.
+//! Legacy mirror of `secure/src/hw/otp.rs::rollback_floor`.
+//!
+//! This unary bit-tally is not a valid STM32U585 OTP backend: one
+//! ECC-protected 128-bit quad-word cannot be reprogrammed bit by bit. Shipping
+//! builds are compile-blocked until the reviewed Draft-0.9 typed floor/journal
+//! interface and physical codec replace this module. Do not extend this reader
+//! or treat `ROLLBACK_WORDS * 32` as physical update capacity.
 
 use core::ptr::read_volatile;
 

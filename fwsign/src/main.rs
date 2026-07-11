@@ -1,5 +1,11 @@
 //! PQSigner firmware release-signing tool.
 //!
+//! **Production quarantine:** the current subcommands emit and verify legacy
+//! manifest v0x02 / `PQFW_V1` artifacts. They remain useful for bench tests,
+//! but are not the frozen Draft-0.9 V4 interface and must not produce a
+//! shipping release. The root `make release` gate fails until V4 and the
+//! reviewed rollback backend/resource gates are implemented.
+//!
 //! This is the host-side companion to the on-device FSBL. It produces
 //! signed `.pqfw` release bundles that the companion updater app streams
 //! to the wallet over USB HID. The tool lives outside the firmware
@@ -104,9 +110,17 @@ enum Cmd {
         out_dir: std::path::PathBuf,
     },
 
-    /// Sign a pair of secure + nonsecure ELFs into a `.pqfw` release
-    /// bundle.
+    /// LEGACY BENCH ONLY: sign a manifest-v0x02 / PQFW_V1 bundle.
+    ///
+    /// This format does not bind the slot byte and does not implement the
+    /// reviewed rollback backend. It has no production or release authority.
     Sign {
+        /// Explicitly acknowledge the quarantined legacy V1 bench format.
+        /// Never use a provisioned/production-intended key: every invocation
+        /// consumes that physical C10 key's still-unfrozen global budget.
+        #[arg(long)]
+        legacy_bench_unsafe: bool,
+
         /// Encrypted vendor-key blob.
         #[arg(long)]
         key: std::path::PathBuf,
@@ -116,15 +130,14 @@ enum Cmd {
         #[arg(long)]
         fsbl: std::path::PathBuf,
 
-        /// Reviewed 64-hex SHA-256 fingerprint of the production public key.
+        /// Reviewed 64-hex SHA-256 fingerprint of the key used by these bench
+        /// artifacts. This does not grant the legacy format production status.
         #[arg(long)]
         trusted_fingerprint: std::path::PathBuf,
 
-        /// Firmware version (encoded in the signed manifest). Should be
-        /// strictly greater than the current OTP rollback floor on every
-        /// device that will receive this release — THAT is the real,
-        /// silicon-enforced anti-rollback gate (`verify_rollback` against the
-        /// OTP floor). The `$XDG_DATA_HOME/fwsign/ledger` is RECORD-ONLY
+        /// Legacy firmware version encoded in PQFW_V1. The implemented OTP
+        /// rollback path is quarantined and must not be treated as a production
+        /// security control. The `$XDG_DATA_HOME/fwsign/ledger` is RECORD-ONLY
         /// provenance: `sign` appends to it but does NOT read it back to refuse
         /// a non-increasing version (F11) — enforcing that here would break the
         /// documented reproducible re-sign workflow (re-signing an already-
@@ -141,9 +154,8 @@ enum Cmd {
         #[arg(long)]
         nonsecure: std::path::PathBuf,
 
-        /// Target slot. One release bundle signs exactly one slot side;
-        /// a device applying the update chooses its inactive slot at
-        /// staging time and rejects bundles for the wrong slot.
+        /// Legacy target-slot metadata. PQFW_V1 does NOT sign this byte; this is
+        /// one reason the command is bench-only.
         #[arg(long, value_parser = parse_slot)]
         slot: u8,
 
@@ -153,9 +165,8 @@ enum Cmd {
         #[arg(long)]
         build_id: String,
 
-        /// Optional: override the OTP rollback floor the manifest
-        /// claims. Default is `version - 1`. Only set this if you
-        /// intend to compress the rollback floor.
+        /// Legacy V1 metadata override. It has no approved physical OTP
+        /// semantics and must not be interpreted as rollback authority.
         #[arg(long)]
         boot_counter_snap: Option<u32>,
 
@@ -301,6 +312,7 @@ fn main() -> anyhow::Result<()> {
             out_dir,
         } => subcommands::gen_test_fixture::run(version, secure_len, nonsecure_len, &out_dir),
         Cmd::Sign {
+            legacy_bench_unsafe,
             key,
             fsbl,
             trusted_fingerprint,
@@ -312,6 +324,7 @@ fn main() -> anyhow::Result<()> {
             boot_counter_snap,
             out,
         } => subcommands::sign::run(subcommands::sign::Args {
+            legacy_bench_unsafe,
             key_path: key,
             fsbl_elf: fsbl,
             trusted_fingerprint,

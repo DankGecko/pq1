@@ -823,8 +823,8 @@ pub unsafe fn pin_attempts_reset() -> Result<(), ()> {
 //     Slot A NS        pages   0..63   0x0810_0000  (512 KB)
 //     Slot B NS        pages  64..127  0x0818_0000  (512 KB)
 
-/// A/B slot identifier. FSBL chooses one at boot based on manifest
-/// validity + rollback floor + try-once semantics.
+/// A/B slot identifier. The current V1 selector is legacy bench code; the
+/// production target is Draft 0.9's frozen typed selector interface.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Slot {
     A,

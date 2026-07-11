@@ -170,7 +170,40 @@ fn into_fixed<const N: usize>(bytes: &[u8], name: &str) -> Result<[u8; N]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
+    use std::sync::{Mutex, MutexGuard};
     use tempfile::tempdir;
+
+    static SOURCE_DATE_EPOCH_LOCK: Mutex<()> = Mutex::new(());
+
+    struct SourceDateEpochGuard {
+        original: Option<OsString>,
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    impl SourceDateEpochGuard {
+        fn set(value: &str) -> Self {
+            let lock = SOURCE_DATE_EPOCH_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let original = std::env::var_os("SOURCE_DATE_EPOCH");
+            std::env::set_var("SOURCE_DATE_EPOCH", value);
+            Self {
+                original,
+                _lock: lock,
+            }
+        }
+    }
+
+    impl Drop for SourceDateEpochGuard {
+        fn drop(&mut self) {
+            if let Some(value) = &self.original {
+                std::env::set_var("SOURCE_DATE_EPOCH", value);
+            } else {
+                std::env::remove_var("SOURCE_DATE_EPOCH");
+            }
+        }
+    }
 
     fn fixture_inputs() -> BundleInputs {
         BundleInputs {
@@ -207,9 +240,9 @@ mod tests {
     fn positive_source_date_epoch_yields_deterministic_bundle() {
         // Two packs of identical inputs under the same SOURCE_DATE_EPOCH
         // must be byte-identical.  Reproducible builds depend on this.
-        // We isolate to a single-threaded test path via the `epoch_*`
-        // env-var swap.
-        std::env::set_var("SOURCE_DATE_EPOCH", "1700000000");
+        // Process-global environment mutation is serialized and restored even
+        // if this test panics.
+        let _epoch = SourceDateEpochGuard::set("1700000000");
         let dir = tempdir().unwrap();
         let a = dir.path().join("a.pqfw");
         let b = dir.path().join("b.pqfw");
@@ -217,8 +250,10 @@ mod tests {
         pack(&fixture_inputs(), &b).unwrap();
         let a_bytes = std::fs::read(&a).unwrap();
         let b_bytes = std::fs::read(&b).unwrap();
-        std::env::remove_var("SOURCE_DATE_EPOCH");
-        assert_eq!(a_bytes, b_bytes, "pack must be deterministic with SOURCE_DATE_EPOCH");
+        assert_eq!(
+            a_bytes, b_bytes,
+            "pack must be deterministic with SOURCE_DATE_EPOCH"
+        );
     }
 
     #[test]
@@ -390,11 +425,10 @@ mod tests {
         // Assumption attacked: a garbage env var breaks the pack flow.
         // The code parses-or-falls-back, so a junk value must not
         // panic. Determinism is the goal — falling back to 0 is fine.
-        std::env::set_var("SOURCE_DATE_EPOCH", "not-a-number");
+        let _epoch = SourceDateEpochGuard::set("not-a-number");
         let dir = tempdir().unwrap();
         let out = dir.path().join("a.pqfw");
         let r = pack(&fixture_inputs(), &out);
-        std::env::remove_var("SOURCE_DATE_EPOCH");
         assert!(r.is_ok());
         assert!(unpack(&out).is_ok());
     }

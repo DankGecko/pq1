@@ -1,8 +1,9 @@
 //! Factory provisioning state machine.
 //!
-//! Single-purpose firmware that the factory operator flashes to a
-//! fresh device. Runs once at boot, halts on either "FACTORY OK" or
-//! "FACTORY FAIL @ STEP X" with a numeric error code.
+//! **QUARANTINED LEGACY DESIGN.** Entry and completion attempt to program the
+//! same one-write STM32U585 OTP QW. Every factory build is compile-blocked, no
+//! receipt value grants RDP2 authority, and this module is retained only for
+//! review/tests until a replacement ceremony is approved.
 //!
 //! The factory operator does NOT need to understand the failure —
 //! they read the step + error code off the OLED and report it back.
@@ -130,11 +131,9 @@ pub enum FactoryStep {
     /// gone (`is_provisioned() == false`), no admin-residue
     /// inconsistency.
     PostWipeValidation = 6,
-    /// Record the ceremony completion in OTP (one-way) so the
-    /// host-side factory fixture can verify "chip is ready for
-    /// RDP2" via a probe-rs read before bumping the option byte.
-    /// Production mode clears `BIT_RAN | BIT_PRODUCTION`;
-    /// rehearsal mode clears `BIT_RAN | BIT_REHEARSAL`.
+    /// Legacy receipt write. The design is quarantined because entry and
+    /// completion reprogram the same one-write QW; no resulting value grants
+    /// RDP2 authority. Production/factory builds are blocked.
     WriteOtpSentinel = 7,
 }
 
@@ -216,10 +215,9 @@ pub enum FactoryErrorCode {
     /// OTP sentinel write failed. Causes: flash controller error,
     /// OTP region locked, prior bit-cleared state inconsistency.
     SentinelWriteFailed = 0x0701,
-    /// OTP sentinel says the chip already has `BIT_PRODUCTION`
-    /// cleared — i.e., a previous run already completed the
-    /// production ceremony. Refuse to re-run (same fail-closed
-    /// posture as `AlreadyUserProvisioned`).
+    /// Legacy receipt has `BIT_PRODUCTION` cleared. This is only a reason to
+    /// refuse the legacy flow; it is not proof of a completed ceremony and
+    /// grants no irreversible authority.
     SentinelAlreadyProduction = 0x0702,
 }
 
@@ -246,7 +244,7 @@ impl FactoryErrorCode {
             Self::AdminUnreachableAfterWipe => "chip damaged",
             Self::AttemptsCounterDirty => "flash error",
             Self::SentinelWriteFailed => "OTP error",
-            Self::SentinelAlreadyProduction => "RDP2 ready",
+            Self::SentinelAlreadyProduction => "quarantined",
         }
     }
 }
@@ -316,53 +314,17 @@ fn halt_with_failure(step: FactoryStep, code: FactoryErrorCode) -> ! {
     }
 }
 
-/// Show the success panel and halt forever in WFI. Rehearsal mode
-/// renders a deliberately-different panel so the operator (and the
-/// host fixture if it falls back to OLED-photo verification) cannot
-/// confuse "rehearsal" with "production".
+/// Fail closed if this quarantined path is ever reached despite its build
+/// fences. No display from this module may grant factory/ship authority.
 fn halt_with_success() -> ! {
-    secure_log!("[FACTORY] OK — all {} steps passed", FactoryStep::total());
+    secure_log!("[FACTORY] LEGACY PATH BLOCKED");
 
     let d = display();
     d.clear();
-
-    #[cfg(feature = "factory-provisioning-rehearsal")]
-    {
-        // Rehearsal — SE state unchanged. Host fixture sees
-        // BIT_REHEARSAL cleared in OTP but NOT BIT_PRODUCTION, so it
-        // refuses to bump RDP2.
-        d.draw_line(0, " REHEARSAL OK  ");
-
-        let mut row1 = [b' '; DISPLAY_COLS];
-        let n = FactoryStep::total();
-        let prefix = b"  ";
-        row1[..prefix.len()].copy_from_slice(prefix);
-        row1[2] = b'0' + n;
-        row1[3] = b'/';
-        row1[4] = b'0' + n;
-        row1[5..].copy_from_slice(b"  panels ok");
-        d.draw_line(1, ascii_str(&row1));
-
-        d.draw_line(2, "SE NOT changed ");
-        d.draw_line(3, "NOT for ship!  ");
-    }
-    #[cfg(not(feature = "factory-provisioning-rehearsal"))]
-    {
-        d.draw_line(0, "  FACTORY OK   ");
-
-        let mut row1 = [b' '; DISPLAY_COLS];
-        let n = FactoryStep::total();
-        let prefix = b"  ";
-        row1[..prefix.len()].copy_from_slice(prefix);
-        row1[2] = b'0' + n;
-        row1[3] = b'/';
-        row1[4] = b'0' + n;
-        row1[5..].copy_from_slice(b"  passed   ");
-        d.draw_line(1, ascii_str(&row1));
-
-        d.draw_line(2, " POWER  OFF   ");
-        d.draw_line(3, "READY TO SHIP ");
-    }
+    d.draw_line(0, " LEGACY BLOCKED ");
+    d.draw_line(1, "RECEIPT INVALID ");
+    d.draw_line(2, " NO AUTHORITY   ");
+    d.draw_line(3, " NOT FOR SHIP   ");
 
     d.flush();
 
@@ -434,8 +396,8 @@ pub fn run_and_halt(se: &mut dyn WalletStore) -> ! {
     //   0xFFFFFFFF  → didn't start
     //   0xFFFFFFFE  → started, halted at failure panel
     //   0xFFFFFFFC  → started + rehearsal completed
-    //   0xFFFFFFFA  → started + production completed (RDP2-eligible)
-    //   0xFFFFFFF8  → started + both completed (RDP2-eligible)
+    //   0xFFFFFFFA  → legacy production bits (quarantined; no RDP2 authority)
+    //   0xFFFFFFF8  → legacy combined bits (quarantined; no RDP2 authority)
     let _ = unsafe {
         crate::hw::otp::factory_sentinel_record(
             crate::hw::otp::FACTORY_SENTINEL_BIT_RAN,

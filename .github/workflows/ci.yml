@@ -103,7 +103,7 @@ jobs:
         run: cargo vet --locked
 
   prod-config-gate:
-    name: Production feature-set gate (MED-2)
+    name: Production quarantine gate (rollback backend OPEN)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -112,18 +112,24 @@ jobs:
           toolchain: stable
           targets: thumbv8m.main-none-eabi
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-      # Resolve the CANONICAL shipping feature set (PROD_SHIP_FEATURES) and
-      # hard-fail if any never-ship feature (e2e-test/dev-testkey/mock-se/
-      # debug-log/… ) is active OR any required hardening feature
-      # (mode-production/optiga-lock-operational/optiga-hw-counter/consumption-mask/
-      # tamp*/tzic-wipe/Tier-1 SE keys) is MISSING — including transitively.
-      # `prod-check-ship` pins the production feature string so the gate
-      # exercises the real hardened image, not the dev default. Belt-and-braces
-      # with the compile fences in nsc/mod.rs. Fast (cargo tree only).
-      # HIGH-1 (audit pin-unlock 20260625): the required-feature allowlist is
-      # what closes the "silent unhardened ship" gap.
-      - name: make prod-check-ship
-        run: make prod-check-ship
+      # Production is intentionally unavailable until the reviewed rollback
+      # backend, resource gates, and later owner-authorized silicon receipts
+      # close. CI is green only when the canonical ship gate fails for this
+      # exact reason; an unexpected PASS or unrelated failure is a CI failure.
+      - name: prove prod-check-ship is quarantined
+        shell: bash
+        run: |
+          set -euo pipefail
+          if output="$(make prod-check-ship 2>&1)"; then
+            printf '%s\n' "$output"
+            echo "ERROR: production gate unexpectedly passed"
+            exit 1
+          fi
+          printf '%s\n' "$output"
+          grep -Fq "prod-feature-check: PASS" <<<"$output"
+          grep -Fq "reviewed production rollback backend is not implemented" <<<"$output"
+      - name: execute rollback quarantine negative tests
+        run: cargo test --locked -p pqsigner-fsbl-tests --test rollback_ship_fences
 
   host-tests:
     name: Host unit tests (pure-logic crates)
@@ -150,7 +156,8 @@ jobs:
             -p pqsigner-domain -p pqsigner-tx -p pqsigner-erc7730 \
             -p sphincs-c10 -p pqsigner-fi \
             -p sphincs-tz-bip39 -p fw-manifest -p sphincs-tz-shared \
-            -p pqsigner-hal -p pqsigner-pq-seal -p masked-sha2 -p pqsigner-xtask
+            -p pqsigner-hal -p pqsigner-pq-seal -p masked-sha2 -p pqsigner-xtask \
+            -p fwsign
       # ERC-7730 descriptor catalog gate: (1) the firmware-pinned
       # `ERC7730_DESCRIPTORS_ROOT` in secure/src/db_roots.rs must match a
       # fresh dbgen build — catches a forgotten `cargo run -p dbgen` after a

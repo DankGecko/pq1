@@ -2,7 +2,7 @@
 name = "fwsign"
 version = "0.1.0"
 edition.workspace = true
-description = "PQSigner firmware release-signing tool — signs update bundles with the vendor SPHINCS+C10 root key and emits .pqfw artifacts."
+description = "PQSigner firmware tooling; legacy PQFW_V1 signing is quarantined and requires an explicit bench-only acknowledgement."
 
 # Host-only tool. Never cross-compiled to the device.
 [[bin]]

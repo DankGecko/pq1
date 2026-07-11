@@ -1,10 +1,17 @@
 //! PQSigner firmware-update manifest format.
 //!
+//! **Legacy bench format; production-blocked.** This crate currently encodes
+//! manifest v0x02 / `PQFW_V1`. Its unsigned slot field and mutable try-once
+//! metadata are not the reviewed production interface. Draft 0.9 freezes a
+//! flag-day manifest v4 with an exact 80-byte, slot-bound `PQFW_V4` preimage
+//! over `(physical_slot, release_version, security_epoch, secure_hash,
+//! nonsecure_hash)`. Keep these constants for legacy tests only; do not infer
+//! production approval from their existence.
+//!
 //! One 8 KB flash page per manifest. The FSBL reads two copies of this
 //! structure (manifest A at `0x0C00_8000`, manifest B at `0x0C00_A000`)
-//! at every boot, picks the highest-fw-version structurally-valid +
-//! signature-valid one (honouring try-once semantics), and branches into
-//! the matching slot image.
+//! at every boot and applies the legacy selector rules. Those rules do not
+//! implement the advertised single-candidate rollback; production is fenced.
 //!
 //! ## What gets signed
 //!
@@ -45,8 +52,8 @@
 //! the device *after* signing. They can't be part of the vendor
 //! signature without making every state transition require the
 //! vendor's offline key. They are integrity-protected only by the
-//! trailing CRC-32; a torn flash write is caught by FSBL at boot and
-//! falls back to the other slot.
+//! trailing CRC-32. A malformed/torn legacy marker is rejected, but this does
+//! not guarantee a usable fallback after the unary floor excluded it.
 //!
 //! ## Wire layout
 //!
@@ -72,10 +79,10 @@
 //!  8188     4   crc32 (IEEE)            no  (integrity only)
 //! ```
 //!
-//! Total: 8192 bytes = one STM32U585 flash page. Every device
-//! page-erases a manifest slot before writing a new manifest, so
-//! partial writes always appear as 0xFF and get rejected by the magic
-//! check.
+//! Total: 8192 bytes = one STM32U585 flash page. A page is erased before a
+//! new manifest is written, but an interrupted quad-word program is not
+//! guaranteed to read as `0xFF`; structural, CRC, and signature checks must
+//! reject every malformed outcome without treating it as a retry guarantee.
 
 #![no_std]
 #![deny(unsafe_op_in_unsafe_fn)]

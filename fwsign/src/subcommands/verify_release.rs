@@ -1,13 +1,16 @@
 //! `fwsign verify-release` — independent signature verification from
 //! just the source-built firmware.
 //!
+//! This verifies the legacy v0x02 / `PQFW_V1` format only. It does not prove
+//! Draft-0.9 V4 compatibility or production rollback eligibility.
+//!
 //! This is the subcommand an auditor uses after rebuilding the
 //! firmware from source:
 //!
 //! ```bash
 //! # 1. Rebuild reproducibly (matches what the vendor published).
 //! git checkout $RELEASE_COMMIT
-//! make release RELEASE_FEATURES=stm32u585,se050,optiga-trust-m,dual-se,ui-oled
+//! # Production release is currently quarantined; use only reviewed bench artifacts.
 //!
 //! # 2. Verify the vendor's signature against YOUR build.
 //! fwsign verify-release \

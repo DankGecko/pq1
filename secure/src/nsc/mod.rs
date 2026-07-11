@@ -266,6 +266,41 @@ compile_error!(
      circuits boot into a firmware anti-rollback test — never a shipping image."
 );
 
+// Firmware-rollback backend quarantine. The current hardware implementation
+// treats one ECC-protected OTP quad-word as a reusable per-bit tally, but
+// STM32U585 user OTP permits only one program operation per 128-bit QW.
+// Draft 0.9 freezes replacement interfaces while deliberately leaving the
+// physical journal/ECC/OTP backend open.
+//
+// Shipping builds are blocked unconditionally. Bench images must carry a
+// conspicuous no-behaviour-change opt-in (normally inherited from debug-log,
+// mock-se, e2e-test, or otp-hardcoded-master-key). Factory provisioning is
+// blocked separately because its entry and completion receipts reprogram the
+// same OTP QW and therefore cannot complete on this MCU.
+#[cfg(all(feature = "mode-production", feature = "stm32u585"))]
+compile_error!(
+    "FW_ROLLBACK_PRODUCTION_BLOCKED: the legacy firmware rollback path \
+     reprograms ECC-protected OTP quad-words. Replace it with the reviewed \
+     Draft-0.9 backend and close OPEN-JRN-HW/DUR, OPEN-ECC, OPEN-OTP, and \
+     combined FLASH/RAM gates before removing this fence."
+);
+#[cfg(all(
+    feature = "stm32u585",
+    not(feature = "mode-production"),
+    not(feature = "legacy-fw-rollback-unsafe")
+))]
+compile_error!(
+    "FW_ROLLBACK_UNSAFE_OPT_IN_REQUIRED: non-shipping STM32U585 builds that \
+     still contain the legacy firmware rollback backend must explicitly \
+     enable `legacy-fw-rollback-unsafe`."
+);
+#[cfg(all(feature = "stm32u585", feature = "factory-provisioning"))]
+compile_error!(
+    "FW_ROLLBACK_FACTORY_BLOCKED: factory provisioning and rehearsal are \
+     disabled until the factory receipt stops reprogramming one write-once \
+     STM32U585 OTP quad-word."
+);
+
 // Dedicated guard: `mode-production` + `ui-noop` (trusted-UI finding UI2,
 // work-todo #12c). `ui-noop` is the silent headless Display/Input backend used
 // only by dev/test targets (all of which also carry `e2e-test`/`mock-se`).

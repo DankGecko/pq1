@@ -42,8 +42,8 @@
 //!      slice files + `nsc/mod.rs` veneers that the load-bearing
 //!      gates remain in place: pin-verified check, NS pointer
 //!      validation, TOCTOU `read_volatile` snapshot, FI-hardened
-//!      signature verify, OTP-bump-LAST ordering (anti-brick: floor
-//!      raised only after manifest + boot-state are written & re-verified),
+//!      signature verify, legacy OTP-bump-LAST ordering (closes only the
+//!      pre-candidate window; not a functioning rollback/anti-brick proof),
 //!      `TRY_ONCE_TRIED` write + CRC recompute, write-quadword-verified
 //!      use, `HandlerGuard::enter()` before any `static mut`
 //!      `FW_UPDATE` deref, no classical signers anywhere in the
@@ -982,8 +982,8 @@ fn negative_begin_resets_activity_timer_after_seed() {
 //
 // `cmd_fw_commit.rs`: the order of `verify_images` → manifest write →
 // boot-state write → from-flash re-verify → `otp::bump_to` → reset is
-// security-critical. Each step's ordering pin defends a specific
-// failure mode — the OTP bump is LAST (anti-brick).
+// security-relevant inside the quarantined V1 path. The OTP-last pin closes
+// only the pre-candidate window; it does not preserve the fallback afterward.
 // ─────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -1103,17 +1103,11 @@ fn positive_verifier_authorization_is_static_and_jittered() {
 }
 
 #[test]
-fn negative_commit_bumps_otp_last_after_manifest_and_boot_state() {
-    // ANTI-BRICK (docs/security/vulns/VULN-fwcommit-otp-before-commit-brick.md). The
-    // irreversible OTP rollback-floor bump must be the LAST flash write —
-    // AFTER the new manifest AND the boot-state pointer are written and
-    // re-verified. The previous ordering bumped OTP FIRST; a power-loss
-    // between the bump and the manifest write floored out the OLD
-    // (last-known-good) slot while the NEW slot was not yet a valid
-    // candidate → FSBL finds no bootable slot → `halt()` → permanent
-    // brick. With the bump LAST, any torn commit leaves the old slot
-    // bootable (FSBL reverts to it) — a lost-and-retried update, never a
-    // brick.
+fn legacy_commit_bumps_otp_after_manifest_and_boot_state() {
+    // Pins the quarantined V1 ordering. Moving the bump last closes only the
+    // pre-candidate brick window: it does NOT preserve the old fallback after
+    // the floor advances, and the legacy FSBL has no functioning health writer.
+    // The handler is production-fenced; this is not an anti-brick proof.
     let body = COMMIT_SRC;
     let otp_pos = body
         .find("otp::bump_to(new_rollback_floor)")
@@ -1127,24 +1121,19 @@ fn negative_commit_bumps_otp_last_after_manifest_and_boot_state() {
     assert!(
         manifest_write_pos < otp_pos,
         "new manifest write must PRECEDE the OTP bump — the new slot must be a valid \
-         candidate before the old slot is floored out (anti-brick)"
+         candidate before the old slot is floored out (legacy ordering pin)"
     );
     assert!(
         boot_state_pos < otp_pos,
         "boot-state write must PRECEDE the OTP bump — both slots stay valid until the \
-         floor is raised last (anti-brick)"
+         floor is raised last (legacy ordering pin)"
     );
 
-    // Anti-brick + anti-downgrade (fw-update audit 20260611): the floor
-    // target is the SIGNED version minus one, so the just-installed
-    // version still satisfies FSBL's strict `fw_version > floor` on the
-    // next boot, while every older release stays rejected. Deriving the
-    // floor from `new_version` itself bricks the device (`V > V` false);
-    // deriving it from the unsigned `boot_counter_snap` would let a
-    // hostile companion lower the floor and re-open a downgrade window.
+    // Legacy arithmetic pin only: V-1 keeps V internally admissible. It does
+    // not prove fallback availability or the physical OTP implementation.
     assert!(
         body.contains("new_rollback_floor = new_version.saturating_sub(1)"),
-        "COMMIT must set the OTP floor to fw_version - 1 (anti-brick + anti-downgrade)"
+        "legacy COMMIT arithmetic must remain fw_version - 1 while quarantined"
     );
     assert!(
         body.contains("otp::bump_to(new_rollback_floor)")
@@ -1154,14 +1143,10 @@ fn negative_commit_bumps_otp_last_after_manifest_and_boot_state() {
 }
 
 #[test]
-fn negative_commit_reverifies_new_slot_from_flash_before_otp_bump() {
-    // Hardening (anti-brick gate): before the irreversible OTP bump, COMMIT
-    // must re-verify FROM FLASH that the new slot is a valid FSBL candidate
-    // under the floor it is about to write — in particular the strict
-    // `verify_rollback(new_rollback_floor)` keystone, which proves the new
-    // floor cannot reject the very slot being committed. If this gate ever
-    // moved after the OTP bump (or were deleted) the bump would no longer be
-    // guarded by a from-flash candidacy proof.
+fn legacy_commit_reverifies_new_slot_from_flash_before_otp_bump() {
+    // Defense within quarantined V1: prove the candidate itself remains
+    // admissible before advancing its legacy floor. This does not prove A/B
+    // rollback or candidate health and grants no production authority.
     let body = COMMIT_SRC;
     let otp_pos = body
         .find("otp::bump_to(new_rollback_floor)")
@@ -1229,12 +1214,10 @@ fn negative_commit_drops_context_on_verify_images_failure() {
 }
 
 #[test]
-fn negative_commit_sets_try_once_tried_and_recomputes_crc() {
-    // The signed manifest carries try_once = COMMITTED; the device
-    // re-writes it as TRIED so FSBL can revert if the new slot
-    // doesn't confirm "alive". After mutating the byte, the
-    // trailing CRC must be recomputed or FSBL will reject the
-    // re-flashed page as `BadCrc`.
+fn legacy_commit_sets_try_once_tried_and_recomputes_crc() {
+    // Pins legacy byte/CRC mechanics only. There is no complete health-confirm
+    // writer and the old floor ordering can eliminate the fallback, so this is
+    // not evidence of a functioning try-once rollback contract.
     assert!(
         COMMIT_SRC.contains("manifest_copy[fw_manifest::OFF_TRY_ONCE] = TRY_ONCE_TRIED"),
         "COMMIT must rewrite the try_once byte to TRY_ONCE_TRIED"
@@ -1256,14 +1239,14 @@ fn negative_commit_sets_try_once_tried_and_recomputes_crc() {
 }
 
 #[test]
-fn negative_commit_writes_boot_state_last_before_reset() {
+fn legacy_commit_order_keeps_boot_state_after_manifest_before_reset() {
     // boot_state::write is the single atomic "now boot from the new
     // slot" commit point. Writing it before the manifest is fully
     // programmed would have FSBL try to boot a torn slot. Writing
     // it after sys_reset is impossible. The fixed order is
     // manifest → boot_state → from-flash re-verify → OTP → sys_reset
-    // (OTP LAST is the anti-brick property — see
-    // negative_commit_bumps_otp_last_after_manifest_and_boot_state).
+    // This is a legacy ordering pin, not an anti-brick proof; see
+    // `legacy_commit_bumps_otp_after_manifest_and_boot_state`.
     let manifest_pos = COMMIT_SRC
         .find("flash::write_quadword_verified")
         .expect("COMMIT must program the manifest");

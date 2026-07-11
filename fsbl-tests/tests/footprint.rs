@@ -60,7 +60,10 @@ fn fsbl_release_flash_sections_fit_in_32kb() {
 
     let status = Command::new("cargo")
         .current_dir(&workspace)
-        .env("RUSTFLAGS", "-C linker=arm-none-eabi-ld -C link-arg=-Tlink.x")
+        .env(
+            "RUSTFLAGS",
+            "-C linker=arm-none-eabi-ld -C link-arg=-Tlink.x",
+        )
         // F2: a release FSBL build hard-fails unless a real vendor pubkey
         // (FSBL_VENDOR_PUBKEY) or the explicit dev opt-in (FSBL_ALLOW_DEV_KEY)
         // is set. This is a SIZE test — the key content is irrelevant to the
@@ -77,7 +80,12 @@ fn fsbl_release_flash_sections_fit_in_32kb() {
             "--target-dir",
         ])
         .arg(&target_dir)
-        .args(["-p", "pqsigner-fsbl"])
+        .args([
+            "-p",
+            "pqsigner-fsbl",
+            "--features",
+            "legacy-fw-rollback-unsafe",
+        ])
         .status()
         .expect("spawn cargo build");
     assert!(status.success(), "fsbl release build must succeed");
@@ -95,13 +103,7 @@ fn fsbl_release_flash_sections_fit_in_32kb() {
 
     // Sum the sections that consume on-device flash. Mirrors the
     // Makefile's `make fsbl` size printout.
-    let flash_sections = [
-        ".vector_table",
-        ".text",
-        ".rodata",
-        ".data",
-        ".gnu.sgstubs",
-    ];
+    let flash_sections = [".vector_table", ".text", ".rodata", ".data", ".gnu.sgstubs"];
     let mut total: u64 = 0;
     let mut per_section: Vec<(String, u64)> = Vec::new();
     for line in text.lines() {

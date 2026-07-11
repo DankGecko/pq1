@@ -7,6 +7,38 @@ const DEVELOPMENT_VENDOR_KEY: &str = "../config/development-firmware-vendor-pubk
 
 fn main() {
     let target = env::var("TARGET").unwrap_or_default();
+    let is_thumbv = target.contains("thumbv");
+    let stm32u585 = env::var_os("CARGO_FEATURE_STM32U585").is_some();
+    let mode_production = env::var_os("CARGO_FEATURE_MODE_PRODUCTION").is_some();
+    let factory_provisioning = env::var_os("CARGO_FEATURE_FACTORY_PROVISIONING").is_some();
+    let legacy_rollback_unsafe = env::var_os("CARGO_FEATURE_LEGACY_FW_ROLLBACK_UNSAFE").is_some();
+
+    // Firmware-rollback ship quarantine.  Keep this in the build script as
+    // well as the crate source: it fails before linker/key-policy work can
+    // obscure the load-bearing error, and the negative-compilation tests can
+    // assert the exact failure reason.  The current backend attempts multiple
+    // programs of one ECC-protected OTP quad-word, which STM32U585 forbids.
+    if is_thumbv && stm32u585 && mode_production {
+        panic!(
+            "FW_ROLLBACK_PRODUCTION_BLOCKED: the reviewed Draft-0.9 rollback backend is not implemented"
+        );
+    }
+    if is_thumbv && stm32u585 && factory_provisioning {
+        panic!(
+            "FW_ROLLBACK_FACTORY_BLOCKED: the factory OTP receipt reprograms one write-once quad-word"
+        );
+    }
+    if is_thumbv && stm32u585 && !legacy_rollback_unsafe {
+        panic!(
+            "FW_ROLLBACK_UNSAFE_OPT_IN_REQUIRED: non-shipping STM32U585 builds must enable legacy-fw-rollback-unsafe"
+        );
+    }
+    if is_thumbv && stm32u585 && legacy_rollback_unsafe {
+        println!(
+            "cargo:warning=LEGACY ROLLBACK BACKEND — NONSHIPPING secure firmware; Draft 0.9 interfaces are not implemented"
+        );
+    }
+
     let out_dir_for_font = PathBuf::from(env::var("OUT_DIR").unwrap());
 
     // Always generate the FONT_5X8 flat table, regardless of target. The
@@ -40,8 +72,6 @@ fn main() {
     }
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
-    let stm32u585 = env::var_os("CARGO_FEATURE_STM32U585").is_some();
-
     // Copy the appropriate memory.x for QEMU or real STM32U585
     let mem_x = if stm32u585 {
         "memory-stm32u585.x"
@@ -89,7 +119,6 @@ fn main() {
     // pubkey constants are only consumed under stm32u585. We still
     // emit a placeholder file in OUT_DIR so `include!` doesn't break
     // when fw_update is compiled out.
-    let mode_production = env::var_os("CARGO_FEATURE_MODE_PRODUCTION").is_some();
     generate_vendor_pubkey(&out_dir, stm32u585, mode_production);
 }
 

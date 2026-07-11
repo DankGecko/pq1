@@ -165,8 +165,18 @@ accel-saes-dhuk        = ["saes-dhuk"]
 # has been flipped.
 # ---------------------------------------------------------------------------
 
-debug-log = []
-mock-se = []
+# Temporary, explicit acknowledgement that a non-shipping STM32U585 image
+# still contains the rejected unary OTP rollback backend.  The flag changes
+# no runtime behaviour; it only clears the build-time quarantine for bench
+# firmware.  Production and factory-provisioning builds reject it (and reject
+# the legacy backend unconditionally) in build.rs + nsc/mod.rs.
+#
+# Remove this feature when the reviewed Draft-0.9 backend replaces the legacy
+# implementation.  NEVER ship.
+legacy-fw-rollback-unsafe = []
+
+debug-log = ["legacy-fw-rollback-unsafe"]
+mock-se = ["legacy-fw-rollback-unsafe"]
 tropic01-se = ["dep:tropic01", "dep:x25519-dalek", "dep:embedded-hal"]
 ui-semihosting = []
 ui-noop = []  # Silent no-op UI for standalone USB operation (no debugger)
@@ -184,7 +194,7 @@ hw-sha256 = ["sphincs-c10/hw-sha256"]
 # every confirm() / enter_pin() dialog so no stdin input is needed.
 # Logs the chosen TxKind variant on every cmd_sign for assertions.
 # NEVER ship in production: it disables every meaningful trust gate.
-e2e-test = []
+e2e-test = ["legacy-fw-rollback-unsafe"]
 # Reversible firmware anti-rollback test: drives the real fw_update::
 # verify_manifest chain with dev-key-signed v1/v2/v3 manifests against
 # literal test floors (no OTP burn, no flash, no reboot). Runs early in
@@ -461,9 +471,10 @@ lcd-test = ["ui-lcd"]
 # `gpio-buttons`) and `micromath` (fast f32 sin/cos/sqrt/powf for the
 # animations). Build + flash via `make splash-test-hw`.
 splash-test = ["ui-lcd", "dep:micromath"]
-# Factory provisioning firmware — single-purpose build that the
-# factory flashes to a fresh chip. Short-circuits `main()` into a
-# state machine that:
+# Quarantined legacy factory-provisioning feature. The retained state machine
+# documents the rejected provision-then-wipe design, but every STM32U585 build
+# with this feature fails `FW_ROLLBACK_FACTORY_BLOCKED` before compilation.
+# No factory, flash, OTP, or RDP action is authorized. Historically it:
 #
 #   1. validates hardware (SAES self-test, BHK lifecycle, OTP master);
 #   2. provisions OPTIGA + SE050 infrastructure (PBS, SCP03, admin
@@ -476,39 +487,24 @@ splash-test = ["ui-lcd", "dep:micromath"]
 #      (admin functional, no user residue);
 #   5. halts on a "FACTORY OK — POWER OFF" panel.
 #
-# On any failure, the OLED shows a numbered step + error code that
+# On any failure, the LCD would show a numbered step + error code that
 # the factory operator can read off the screen and report back. See
 # `docs/provisioning/factory-provisioning.md` for the operator manual + error
 # code table.
 #
 # Implies: `dual-se` (both SEs required), `stm32u585` (real
-# silicon — no QEMU path), `ui-oled` (operator needs visual status).
+# silicon — no QEMU path), `ui-lcd` (operator needs visual status).
 # Mutually exclusive with `e2e-test` (which bypasses real
 # provisioning) at the production-fence level.
 factory-provisioning = ["dual-se", "stm32u585", "ui-lcd"]
-# Rehearsal mode for `factory-provisioning`. Renders all 6 panels in
-# sequence on the OLED so the operator (or developer) can validate
-# the panel layout, but SKIPS the destructive `provision()` +
-# `factory_reset_admin()` calls in steps 4-6. The OTP sentinel is
-# still written, but with `BIT_REHEARSAL` instead of `BIT_PRODUCTION`
-# — so the host-side fixture refuses to bump RDP2 on a rehearsal-only
-# chip.
-#
-# Use this for dev iteration where you don't want to burn the chip's
-# SE-side state on every reflash. Implies `factory-provisioning`.
+# Legacy rehearsal mode for `factory-provisioning`. It rendered all panels on
+# the LCD while skipping the destructive SE calls, but still consumed the
+# broken receipt QW. The host treats every value as non-authoritative, and all
+# factory profiles are now build-blocked.
+# Retained only so historical source/tests remain parseable.
 factory-provisioning-rehearsal = ["factory-provisioning"]
-# Explicit opt-in for the irreversible production features.
-# `factory-provisioning` by itself REFUSES to build with any of
-# `optiga-lock-operational`, `bhk`, or a production OTP-master path
-# (i.e., neither `dev-testkey` nor `otp-hardcoded-master-key`).
-# To build the actual production factory image, the user must set
-# this feature AS WELL to acknowledge the chip-state changes are
-# permanent.
-#
-# This is a foot-gun guard, not a real cryptographic gate — anyone
-# who can set this feature can also remove it. The point is to
-# prevent the "I forgot dev-testkey in the Makefile" class of
-# accidental burns.
+# Historical foot-gun acknowledgement. It no longer overrides the rollback
+# quarantine: `factory-provisioning` is rejected for every STM32U585 build.
 factory-production-irreversible-im-sure = []
 # Factory production-line test firmware. Replaces the wizard / unlock
 # path with a USB-command server the factory fixture drives to verify
@@ -575,7 +571,7 @@ optiga-lock-operational = []  # Production: bump LcsO to Operational on BOTH E14
 # shares its pairing secret with every other device built with this feature,
 # which would let a logic-analyzer snoop decrypt the Shielded Connection
 # across every unit.
-otp-hardcoded-master-key = []
+otp-hardcoded-master-key = ["legacy-fw-rollback-unsafe"]
 # Tier-2 phase 2A dev fallback: replace the silicon BHK with a compile-
 # time fixed 32-byte ASCII test constant ("PQSIGNER-TEST-BHK-DHUK-WRAP-
 # v1!!"). Lets us exercise the `secret_keys::derive_into_bhk` path +

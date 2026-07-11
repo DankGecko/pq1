@@ -1,5 +1,12 @@
 //! PQSigner first-stage bootloader.
 //!
+//! **Production status:** this is the legacy V1 selector retained for bench
+//! diagnosis. Its unary OTP floor and single-candidate try-once behavior do
+//! not satisfy the reviewed rollback contract, so production builds fail in
+//! both `build.rs` and this crate. Draft 0.9 freezes replacement
+//! manifest-v4/typed-marker/typed-floor interfaces; it does not approve a
+//! physical backend or this selector.
+//!
 //! Runs at power-on from `0x0C00_0000`. Selects one of two A/B
 //! firmware slots based on the manifests FSBL finds at `0x0C00_8000`
 //! (slot A) and `0x0C00_A000` (slot B), verifies both the manifest
@@ -8,7 +15,7 @@
 //!
 //! Never returns except via the branch; panics on catastrophic failure
 //! (no valid slot) and halts. The intended fail-safe in that case is
-//! that the user sees no OLED output and contacts the vendor for a
+//! that the user sees no NV3007 LCD output and contacts the vendor for a
 //! device replacement. Production RDP-2 prevents SWD recovery.
 //!
 //! ## Slot selection algorithm
@@ -21,10 +28,9 @@
 //!    was torn mid-stream (the manifest hash never matches a partial
 //!    write) and the candidate is rejected.
 //! 3. Among surviving candidates, pick the highest `fw_version`.
-//! 4. If the winner's `try_once_flag` is `TRIED` *and* the boot-state
-//!    page says we already tried this same slot, **revert**: pick the
-//!    highest-version other candidate. This catches watchdog-fired
-//!    reboots mid-boot of a just-installed bad release.
+//! 4. The legacy two-valid-candidate path consults `try_once_flag` and the
+//!    boot-state page. This does **not** recover once the floor has excluded
+//!    the old slot: the single-candidate fast path skips the check.
 //! 5. Branch.
 //!
 //! ## Non-goals for this first cut
@@ -32,19 +38,27 @@
 //! * **HASH peripheral acceleration.** We use `sha2::Sha256` in
 //!   software. At 16 MHz this is ~200 ms per 512 KB image, ~400 ms
 //!   total, which is an acceptable boot delay.
-//! * **OLED error screen.** On catastrophic failure FSBL halts
-//!   silently. A future addition can initialize I2C and render an
-//!   error code to the OLED.
-//! * **IWDG-backed try-once enforcement.** The `TRIED` → revert logic
-//!   relies on the secure-world firmware to re-enter FSBL after a
-//!   watchdog reset (which it will, since reset always branches to
-//!   `SECBOOTADD0`). This first cut doesn't arm IWDG from FSBL; the
-//!   slot must arm it itself. A later version will arm IWDG in FSBL
-//!   so a crashed slot gets reverted even if it never reaches IWDG
-//!   init.
+//! * **LCD error screen.** On catastrophic failure FSBL halts silently.
+//! * **Reviewed probation/rollback.** The legacy `TRIED` logic is not a
+//!   production safety net. Draft 0.9 replaces it with typed
+//!   PENDING/ATTEMPTED/CONFIRMED transitions and FSBL-owned floor
+//!   establishment after health finalization.
 
 #![no_std]
 #![no_main]
+
+// Production quarantine for the rejected unary OTP rollback reader.  The
+// build-script mirrors these gates so the intended error appears before key
+// and linker policy; keeping a Rust-side fence prevents a custom build-script
+// bypass from silently producing a shipping image.
+#[cfg(feature = "mode-production")]
+compile_error!(
+    "FW_ROLLBACK_FSBL_PRODUCTION_BLOCKED: the reviewed Draft-0.9 rollback backend is not implemented"
+);
+#[cfg(not(any(feature = "mode-production", feature = "legacy-fw-rollback-unsafe")))]
+compile_error!(
+    "FW_ROLLBACK_FSBL_UNSAFE_OPT_IN_REQUIRED: bench FSBL builds must enable legacy-fw-rollback-unsafe"
+);
 
 use panic_halt as _;
 
@@ -171,10 +185,10 @@ fn filter_valid<'a>(m: &'a ManifestRef<'a>, floor: u32) -> Option<&'a ManifestRe
     Some(m)
 }
 
-/// Pick the highest-version valid slot, honouring try-once semantics.
+/// Pick a slot using the legacy V1 selection rules.
 /// Returns `None` if neither slot is valid. On success returns the
 /// chosen slot AND the secure-image SHA-256 that `verify_images`
-/// already computed for that slot — so the caller can drive the OLED
+/// already computed for that slot — so the caller can drive the LCD
 /// fingerprint render from the same trusted bytes without re-hashing.
 ///
 /// `a` / `b` carry `(manifest, secure_digest)` pairs (None if that
@@ -200,10 +214,9 @@ fn pick_slot(a: Option<Candidate>, b: Option<Candidate>) -> Option<(Slot, [u8; 3
 
     let winner_flag = winner.0.try_once_flag();
 
-    // Try-once guard. If the winner is in TRIED state and the boot-
-    // state page says we already attempted this slot, revert to the
-    // runner-up — this catches watchdog-reset loops after a committed
-    // update that doesn't confirm alive.
+    // Legacy two-candidate try-once guard. It cannot run when the old slot is
+    // floor-ineligible and only the new candidate survives `filter_valid`;
+    // therefore this is not the reviewed A/B rollback contract.
     //
     // Treat the TRIED + no-boot-state case as "go ahead and try" —
     // either it's the first attempt or the boot-state page is
@@ -229,7 +242,7 @@ fn pick_slot(a: Option<Candidate>, b: Option<Candidate>) -> Option<(Slot, [u8; 3
 }
 
 /// No valid slot to boot — halt the CPU. A future iteration will
-/// light an LED or render an error code to the OLED; for now we
+/// light an LED or render an error code to the LCD; for now we
 /// simply loop.
 fn halt() -> ! {
     loop {

@@ -281,7 +281,7 @@ run-tropic01: setup-serial
 # This target only BUILDS — flashing is done with probe-rs / openocd / etc.
 # It will not link until the ui-lcd backend is fully wired up.
 run-hw: ## Run on real hardware via probe-rs
-	$(MAKE) FEATURES=tropic01-se,ui-lcd,consumption-mask,stm32u585 all
+	$(MAKE) FEATURES=tropic01-se,ui-lcd,consumption-mask,stm32u585,legacy-fw-rollback-unsafe all
 
 # Real STM32U585 hardware build (semihosting): mock SE + semihosting UI.
 # Uses probe-rs semihosting for I/O — same interactive model as QEMU
@@ -470,9 +470,10 @@ test-key-speed: ## DWT-timed signing bench on HW
 # WHAT THIS DOES NOT DO (on purpose — both are irreversible / destructive
 # to the currently-running firmware on the pre-A/B-split branch):
 #
-#   * Never calls CMD_FW_COMMIT → no OTP rollback bit is burned.
-#     (1024 bits of OTP budget per device.  Each COMMIT burns at least
-#      one bit, permanently.  This test burns zero.)
+#   * Never calls CMD_FW_COMMIT → no OTP program command is launched.
+#     The legacy per-bit tally is invalid on STM32U585 ECC quad-words and is
+#     production-fenced; this test neither exercises nor consumes the still-
+#     open Draft-0.9 epoch-floor backend.
 #   * Never lets CMD_FW_BEGIN reach `flash::erase_slot(inactive)`.  On
 #     the current linker layout the inactive slot's manifest page (page
 #     5 @ 0x0C00_A000) still sits inside the running secure firmware's
@@ -1255,7 +1256,7 @@ build-hw-se050-oled:
 build-hw-se050-oled-standalone:
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 	cargo build --locked --release --target $(TARGET) --target-dir target/secure \
-		-p sphincs-tz-secure --no-default-features --features se050,gpio-buttons,ui-lcd,stm32u585,usb
+		-p sphincs-tz-secure --no-default-features --features se050,gpio-buttons,ui-lcd,stm32u585,usb,legacy-fw-rollback-unsafe
 	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
 	cargo build --locked --release --target $(TARGET) --target-dir target/nonsecure \
@@ -1456,7 +1457,7 @@ flash-hw-dual-se-oled-standalone-debug: build-hw-dual-se-oled-standalone-debug
 build-hw-optiga-oled-standalone:
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 	cargo build --locked --release --target $(TARGET) --target-dir target/secure \
-		-p sphincs-tz-secure --no-default-features --features optiga-trust-m,gpio-buttons,ui-lcd,stm32u585,usb
+		-p sphincs-tz-secure --no-default-features --features optiga-trust-m,gpio-buttons,ui-lcd,stm32u585,usb,legacy-fw-rollback-unsafe
 	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
 	cargo build --locked --release --target $(TARGET) --target-dir target/nonsecure \
@@ -1922,7 +1923,8 @@ fsbl: ## Build the immutable first-stage bootloader (must fit 32 KB WRP1A)
 	@# build instead of silently embedding the public dev key; `fsbl-release`
 	@# sets neither and supplies a real pubkey via FSBL_VENDOR_PUBKEY.
 	@FSBL_ALLOW_DEV_KEY=1 $(RUSTFLAGS_VAR)="-C linker=arm-none-eabi-ld -C link-arg=-Tlink.x $(REPRO_FLAGS)" \
-		cargo build --locked --release --target $(TARGET) --target-dir target/fsbl -p pqsigner-fsbl
+		cargo build --locked --release --target $(TARGET) --target-dir target/fsbl \
+			-p pqsigner-fsbl --features legacy-fw-rollback-unsafe
 	@echo "==> FSBL built: $(FSBL_ELF)"
 	@# Headroom gate: the FSBL is physically capped at 32 KB (WRP1A-locked
 	@# pages 0-3, fsbl/memory-stm32u585.x). It is currently ~99% full — a
@@ -1951,7 +1953,8 @@ fsbl: ## Build the immutable first-stage bootloader (must fit 32 KB WRP1A)
 fsbl-lcd-test-hw:
 	@echo "==> Building FSBL NV3007 LCD bring-up test (lcd-test short-circuit)..."
 	@FSBL_ALLOW_DEV_KEY=1 $(RUSTFLAGS_VAR)="-C linker=arm-none-eabi-ld -C link-arg=-Tlink.x $(REPRO_FLAGS)" \
-		cargo build --locked --release --target $(TARGET) --target-dir target/fsbl -p pqsigner-fsbl --features lcd-test
+		cargo build --locked --release --target $(TARGET) --target-dir target/fsbl \
+			-p pqsigner-fsbl --features lcd-test,legacy-fw-rollback-unsafe
 	@size $(FSBL_ELF) 2>/dev/null || arm-none-eabi-size $(FSBL_ELF)
 	@echo "==> Flashing FSBL to the boot base + running. Watch the LCD:"
 	@echo "    green -> red -> blue, then 8 words, repeating. Ctrl-C to detach."
@@ -1960,16 +1963,8 @@ fsbl-lcd-test-hw:
 # Production-only: refuse to build the FSBL without FSBL_VENDOR_PUBKEY.
 # Use this in the release pipeline.
 .PHONY: fsbl-release
-fsbl-release: release-key-snapshot ## Build the release FSBL (release pipeline)
-	@echo "==> Building isolated production FSBL"
-	@rm -rf target/release-fsbl
-	@FSBL_VENDOR_PUBKEY="$(RELEASE_VENDOR_KEY_SNAPSHOT)" \
-		$(RUSTFLAGS_VAR)="-C linker=arm-none-eabi-ld -C link-arg=-Tlink.x $(REPRO_FLAGS)" \
-		cargo build --locked --release --target $(TARGET) --target-dir target/release-fsbl \
-			-p pqsigner-fsbl --features mode-production
-	@arm-none-eabi-size -B $(RELEASE_FSBL_ELF) | awk -v cap=32768 'NR==2 { \
-		used=$$1+$$2; printf "==> Release FSBL: %d B of %d B, %d B free\n", used, cap, cap-used; \
-		if (used>cap) { print "ERROR: release FSBL exceeds immutable 32 KB region"; exit 1 } }'
+fsbl-release: ## Build the release FSBL (blocked until rollback backend closure)
+	@$(error fsbl-release: FAIL — production firmware rollback backend is not implemented; Draft 0.9 grants no release authority)
 
 # One key path must feed both secure/build.rs and fsbl/build.rs.  This gate is
 # deliberately a release dependency (not just an FSBL convenience check): an
@@ -2131,7 +2126,8 @@ RELEASE_FEATURES ?= stm32u585,se050,optiga-trust-m,dual-se,ui-lcd,usb,iwdg,saes-
 PROD_FORBIDDEN = e2e-test dev-testkey mock-se debug-log otp-hardcoded-master-key \
                  ui-capture bhk-hardcoded-master-key uart-console \
                  boot-pulse sca-trigger erc7730-dev-unattested optiga-reset-oids \
-                 fw-rollback-e2e fwup-transport-e2e se050-scp03-allow-factory-fallback
+                 fw-rollback-e2e fwup-transport-e2e se050-scp03-allow-factory-fallback \
+                 legacy-fw-rollback-unsafe
 
 # HIGH-1 ship gate (audit pin-unlock 20260625): the denylist above stops
 # never-ship features, but a denylist CANNOT express "a required hardening
@@ -2158,9 +2154,9 @@ PROD_REQUIRED = mode-production optiga-lock-operational optiga-hw-counter \
 # bump otherwise). See secure/Cargo.toml:553 + docs/production-todo.md.
 PROD_SHIP_FEATURES = stm32u585,se050,optiga-trust-m,dual-se,ui-lcd,usb,iwdg,saes-dhuk,se050-derived-scp03,mode-production,optiga-lock-operational,optiga-hw-counter,consumption-mask,tamp,tamp-wipe,tzic-wipe
 
-.PHONY: prod-check
-prod-check: ## Production-readiness gate (no debug/e2e/mock-se; ship-blockers)
-	@echo "==> prod-check (MED-2 / HIGH-1): resolving shipping feature set"
+.PHONY: prod-feature-check prod-check
+prod-feature-check: ## Resolve and validate the production hardening feature set
+	@echo "==> prod-feature-check (MED-2 / HIGH-1): resolving shipping feature set"
 	@echo "    RELEASE_FEATURES = $(RELEASE_FEATURES)"
 	@feats=$$(cargo tree -p sphincs-tz-secure --no-default-features \
 		--features "$(RELEASE_FEATURES)" --target $(TARGET) \
@@ -2187,13 +2183,19 @@ prod-check: ## Production-readiness gate (no debug/e2e/mock-se; ship-blockers)
 		echo "    or run the shipping gate directly: make prod-check-ship"; \
 		exit 1; \
 	fi; \
-	echo "==> prod-check: PASS — no never-ship feature, all required hardening present"
+	echo "==> prod-feature-check: PASS — required/forbidden feature policy is intact"
+
+# Keep checking feature-policy drift throughout the rollback quarantine, then
+# fail with a make-time error that `make -i` cannot ignore.
+prod-check: prod-feature-check ## Production-readiness gate (blocked after feature validation)
+	@$(error prod-check: FAIL — reviewed production rollback backend is not implemented; Draft 0.9 grants no ship authority)
 
 # Shipping-config gate: validate the canonical PROD_SHIP_FEATURES. This is what
 # CI runs (so the gate exercises the REAL hardened image, not the dev default).
 .PHONY: prod-check-ship
-prod-check-ship: ## Strict ship gate — prod-check against the hardened image
-	@$(MAKE) prod-check RELEASE_FEATURES="$(PROD_SHIP_FEATURES)"
+prod-check-ship: RELEASE_FEATURES := $(PROD_SHIP_FEATURES)
+prod-check-ship: prod-feature-check ## Strict ship gate — feature-check, then rollback refusal
+	@$(error prod-check-ship: FAIL — reviewed production rollback backend is not implemented; Draft 0.9 grants no ship authority)
 
 # Image size / budget report. The secure image must fit its 464 KB A/B slot
 # (SLOT_SECURE_CAPACITY = 58*8*1024, secure/src/hw/flash.rs) — enforced only
@@ -2231,47 +2233,15 @@ size-report: ## Report secure/NS/FSBL image sizes against their flash/SRAM budge
 	fi
 
 .PHONY: release _release
-release: ## Build and atomically publish the signed release package
-	@rm -rf "$(RELEASE_ARTIFACT_DIR)" "$(RELEASE_ARTIFACT_TMP)"
-	@rm -f target/release/secure.elf target/release/nonsecure.elf \
-		target/release/fsbl.elf target/release/vendor-pubkey.bin \
-		target/release/vendor-key.sha256 target/release/SHA256SUMS
-	@$(MAKE) _release || { rm -rf "$(RELEASE_ARTIFACT_TMP)"; exit 1; }
+# Refusal-only while the rollback implementation is quarantined. Keeping the
+# old cleanup/package recipe here would let `make -i` ignore a prerequisite
+# failure and publish stale artifacts. Restore the reviewed pipeline only with
+# the replacement backend and its production approval.
+release: ## Build and atomically publish the signed release package (blocked)
+	@$(error release: FAIL — production firmware rollback backend is not implemented; Existing release artifacts were not removed or modified)
 
-_release: prod-check fsbl-release
-	@echo "==> Release build (features: $(RELEASE_FEATURES))"
-	@echo "==> SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH)"
-	@FSBL_VENDOR_PUBKEY="$(RELEASE_VENDOR_KEY_SNAPSHOT)" \
-		$(MAKE) verify-repro FEATURES=$(RELEASE_FEATURES)
-	@rm -rf "$(RELEASE_ARTIFACT_TMP)"
-	@mkdir -p "$(RELEASE_ARTIFACT_TMP)"
-	@cp target/repro-a/secure/$(TARGET)/release/sphincs-tz-secure \
-	    "$(RELEASE_ARTIFACT_TMP)/secure.elf"
-	@cp target/repro-a/nonsecure/$(TARGET)/release/sphincs-tz-nonsecure \
-	    "$(RELEASE_ARTIFACT_TMP)/nonsecure.elf"
-	@cp $(RELEASE_FSBL_ELF) "$(RELEASE_ARTIFACT_TMP)/fsbl.elf"
-	@cp $(RELEASE_VENDOR_KEY_SNAPSHOT) "$(RELEASE_ARTIFACT_TMP)/vendor-pubkey.bin"
-	@cp $(PRODUCTION_VENDOR_KEY_POLICY) "$(RELEASE_ARTIFACT_TMP)/vendor-key.sha256"
-	@cargo run --locked -q -p fwsign -- verify-artifact-keys \
-		--fsbl "$(RELEASE_ARTIFACT_TMP)/fsbl.elf" \
-		--secure "$(RELEASE_ARTIFACT_TMP)/secure.elf" \
-		--trusted-fingerprint "$(RELEASE_ARTIFACT_TMP)/vendor-key.sha256"
-	@echo ""
-	@$(MAKE) size-report RELEASE_ARTIFACT_DIR="$(RELEASE_ARTIFACT_TMP)"
-	@echo ""
-	@echo "==> Secure measurement:"
-	@cargo run --locked -q -p fwmeasure -- "$(RELEASE_ARTIFACT_TMP)/secure.elf" 2>/dev/null | sed 's/^/    /'
-	@echo ""
-	@echo "==> Nonsecure measurement:"
-	@cargo run --locked -q -p fwmeasure -- "$(RELEASE_ARTIFACT_TMP)/nonsecure.elf" 2>/dev/null | sed 's/^/    /'
-	@cd "$(RELEASE_ARTIFACT_TMP)" && \
-		sha256sum fsbl.elf secure.elf nonsecure.elf vendor-pubkey.bin vendor-key.sha256 > SHA256SUMS
-	@cd "$(RELEASE_ARTIFACT_TMP)" && sha256sum -c SHA256SUMS
-	@mv "$(RELEASE_ARTIFACT_TMP)" "$(RELEASE_ARTIFACT_DIR)"
-	@echo ""
-	@echo "==> Release artifacts in target/pqsigner-release/"
-	@echo "    Next: fwsign sign --key vendor-key.enc --fsbl target/pqsigner-release/fsbl.elf \
-		--trusted-fingerprint target/pqsigner-release/vendor-key.sha256 --version N ..."
+_release:
+	@$(error _release: REFUSED — internal production packaging is quarantined)
 
 # Hardware bring-up test for the OTP-derived OPTIGA Shielded Connection
 # path landed in work-todo #24.
@@ -3354,7 +3324,11 @@ build-hw-prodtest:
 	@echo "==> Prodtest build ready."
 	@echo "    Host fixture runner at tools/factory-prodtest-runner.py"
 
-# Factory provisioning firmware. Single-purpose build the factory
+# Factory provisioning firmware (QUARANTINED). The historical design below
+# is retained for review context; the target is refusal-only because the
+# receipt QW is programmed at entry and then illegally reprogrammed at
+# completion. Direct Cargo builds are compile-blocked too.
+# Single-purpose build the factory
 # operator flashes to a fresh device. Runs the
 # `factory_provisioning::run_and_halt` state machine — validates
 # hardware, provisions OPTIGA + SE050 infrastructure, wipes the
@@ -3379,26 +3353,13 @@ build-hw-prodtest:
 # Error code lookup table + operator manual:
 #   docs/provisioning/factory-provisioning.md
 #
-# Currently TARGETED but NOT YET VALIDATED on real silicon — this
-# builds a buildable factory image; bench-validation is a follow-up.
+# No factory image is currently buildable or authorized.
+.PHONY: build-hw-factory-provisioning flash-hw-factory-provisioning \
+	build-hw-factory-provisioning-rehearsal \
+	flash-hw-factory-provisioning-rehearsal bump-rdp2-after-factory \
+	factory-status-hw
 build-hw-factory-provisioning:
-	@echo "==> Building factory provisioning firmware..."
-	@echo "    Output: $(SECURE_ELF)"
-	@echo "    The factory operator flashes this + power-cycles."
-	@echo "    OLED shows step progress + halts on OK/FAIL."
-	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
-	cargo build --locked --release --target $(TARGET) --target-dir target/secure \
-		-p sphincs-tz-secure --no-default-features \
-		--features factory-provisioning,dev-testkey
-	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
-	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
-	cargo build --locked --release --target $(TARGET) --target-dir target/nonsecure \
-		-p sphincs-tz-nonsecure --features stm32u585
-	@echo "==> Factory provisioning build ready."
-	@echo "    To flash + run the ceremony:"
-	@echo "        make flash-hw-factory-provisioning"
-	@echo "    To check the result + optionally bump RDP2:"
-	@echo "        tools/factory-provisioning-verify.sh [--bump-rdp2]"
+	@$(error FAIL — factory provisioning is quarantined: its OTP receipt reprograms one write-once QW; no build or hardware action was run)
 
 # Flash the production factory-provisioning firmware + configure
 # TZ option bytes + reset + verify the OTP sentinel via probe-rs.
@@ -3406,95 +3367,42 @@ build-hw-factory-provisioning:
 # (or the factory's automated fixture) inspects the verifier
 # output, then runs the bump target only when confident.
 #
-# This is the "happy path" target the factory's fixture script will
-# call after probe-rs download of any per-device data. Untested on
-# real silicon — Phase A is the "ready to send" milestone, Phase B
-# is the actual silicon trial.
-flash-hw-factory-provisioning: build-hw-factory-provisioning
-	@echo "==> Downloading factory firmware to STM32..."
-	@probe-rs download --chip STM32U585AIIx $(NONSECURE_ELF)
-	@probe-rs download --chip STM32U585AIIx $(SECURE_ELF)
-	@echo "==> Configuring TrustZone option bytes (NOT RDP)..."
-	@STM32_Programmer_CLI --connect port=SWD \
-		--optionbytes TZEN=1 SECWM1_PSTRT=0x0 SECWM1_PEND=0x7F \
-		SECWM2_PSTRT=0x7F SECWM2_PEND=0x0 SECBOOTADD0=0x180000
-	@echo "==> Resetting target — chip runs the ceremony autonomously..."
-	@probe-rs reset --chip STM32U585AIIx
-	@echo "==> Polling OTP sentinel for ceremony completion..."
-	@tools/factory-provisioning-verify.sh
+# Historical intended flow only. The target is refusal-only and contains no
+# probe, option-byte, reset, or verifier command.
+flash-hw-factory-provisioning:
+	@$(error REFUSED — factory provisioning flash path is quarantined; no probe, option-byte, reset, or OTP command was run)
 
-# Same as flash-hw-factory-provisioning but uses the rehearsal build.
+# Historical rehearsal flow. This target is also refusal-only: rehearsal
+# consumes the same broken receipt QW and is not safe to run.
 # Steps 4-6 SKIP their destructive calls; OTP sentinel records
 # BIT_REHEARSAL (not BIT_PRODUCTION). Useful for OLED panel layout
 # iteration without burning SE-side state on dev chips.
-flash-hw-factory-provisioning-rehearsal: build-hw-factory-provisioning-rehearsal
-	@echo "==> Downloading REHEARSAL firmware to STM32..."
-	@probe-rs download --chip STM32U585AIIx $(NONSECURE_ELF)
-	@probe-rs download --chip STM32U585AIIx $(SECURE_ELF)
-	@echo "==> Configuring TrustZone option bytes (NOT RDP)..."
-	@STM32_Programmer_CLI --connect port=SWD \
-		--optionbytes TZEN=1 SECWM1_PSTRT=0x0 SECWM1_PEND=0x7F \
-		SECWM2_PSTRT=0x7F SECWM2_PEND=0x0 SECBOOTADD0=0x180000
-	@echo "==> Resetting target — chip runs the REHEARSAL ceremony..."
-	@probe-rs reset --chip STM32U585AIIx
-	@echo "==> Polling OTP sentinel for ceremony completion..."
-	@tools/factory-provisioning-verify.sh
+flash-hw-factory-provisioning-rehearsal:
+	@$(error REFUSED — factory rehearsal flash path is quarantined; no probe, option-byte, reset, or OTP command was run)
 
-# IRREVERSIBLE: bumps STM32 RDP option byte to Level 2 after
-# verifying the OTP factory sentinel says the chip is production-
-# ready. Refuses if the sentinel is not RDP2-eligible. Requires the
-# operator to type "BUMP RDP2" at the interactive prompt as a final
-# confirmation.
-#
-# After this target completes:
-#   - SWD / JTAG is permanently denied
-#   - probe-rs read/write no longer works
-#   - semihosting/UART are dead
-#   - the only post-RDP2 diagnostic surface is OLED + USB behavior
-#   - the only "recovery" is mass-erase via STM32_Programmer_CLI
-#     --regression, which wipes every secret on the chip
-#
-# Run ONLY after `make flash-hw-factory-provisioning` has reported
-# PRODUCTION_OK or BOTH_OK.
+# Historical irreversible target name retained for discoverability. The
+# legacy receipt grants no eligibility, and make-time `$(error ...)` prevents
+# this target from running even under `make -i`.
 bump-rdp2-after-factory:
-	@echo "==> RDP2 bump — IRREVERSIBLE."
-	@echo "    Verifying OTP sentinel before proceeding..."
-	@tools/factory-provisioning-verify.sh --bump-rdp2
+	@$(error REFUSED — factory OTP receipt is quarantined; RDP2 authority is disabled; no irreversible command was run)
 
-# Read-only inspection target: report the OTP factory sentinel
-# state without flashing anything. Useful to check a chip's
-# current factory state mid-iteration.
+# Read-only inspection target: report the legacy OTP factory sentinel without
+# flashing. Every decoded state is explicitly non-authoritative and exits
+# nonzero.
 factory-status-hw:
 	@tools/factory-provisioning-verify.sh
 
-# Factory provisioning REHEARSAL build. Identical state machine to
-# the production target above, except steps 4 (DualSeProvision), 5
-# (WipeUserState), and 6 (PostWipeValidation) SKIP their destructive
-# calls. The OLED still cycles through all 7 panels; the OTP
-# sentinel still gets written, but with BIT_REHEARSAL set instead of
-# BIT_PRODUCTION, so the host fixture refuses to bump RDP2 on a
-# rehearsal-only chip.
+# Quarantined legacy rehearsal target. Historically it skipped SE calls but
+# still consumed the broken receipt QW. Every legacy receipt state is now
+# non-authoritative; the make-time refusal runs before any build or hardware
+# action.
 #
-# Use this for OLED panel layout iteration without burning chip-side
-# state. Safe to run repeatedly on your dev chips.
+# Do not use this for display iteration; the current target refuses before any
+# build or hardware action.
 #
-# After running, the OLED reads "REHEARSAL OK" / "SE NOT changed" /
-# "NOT for ship!" — distinct from production's "FACTORY OK" /
-# "READY TO SHIP".
+# Historical panel text is retained in the source for review only.
 build-hw-factory-provisioning-rehearsal:
-	@echo "==> Building factory provisioning REHEARSAL firmware..."
-	@echo "    Steps 4-6 SKIP their destructive calls."
-	@echo "    OLED shows 'REHEARSAL OK' on success."
-	@echo "    OTP sentinel records BIT_REHEARSAL (not BIT_PRODUCTION)."
-	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
-	cargo build --locked --release --target $(TARGET) --target-dir target/secure \
-		-p sphincs-tz-secure --no-default-features \
-		--features factory-provisioning,factory-provisioning-rehearsal,dev-testkey
-	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
-	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
-	cargo build --locked --release --target $(TARGET) --target-dir target/nonsecure \
-		-p sphincs-tz-nonsecure --features stm32u585
-	@echo "==> Rehearsal build ready (safe to flash on dev chips)."
+	@$(error FAIL — factory rehearsal is quarantined: it also consumes/reprograms the receipt QW; no build or hardware action was run)
 
 # LCD bring-up — Phase A check. Compiles the secure-world firmware
 # with the `ui-lcd` feature enabled so the NV3007 SPI LCD driver

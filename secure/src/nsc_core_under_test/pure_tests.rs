@@ -644,6 +644,27 @@ fn positive_otp_hardcoded_and_optiga_lock_operational_mutually_exclusive() {
 }
 
 #[test]
+fn positive_legacy_otp_rollback_backend_blocks_production() {
+    // STM32U585 OTP is programmed as complete 128-bit ECC quad-words. The
+    // legacy rollback tally attempts to reprogram those QWs one bit at a time,
+    // so the interface-freeze phase must remain fail-loud for shipping builds.
+    assert!(
+        NSC_MOD_SRC.contains("legacy firmware rollback")
+            && NSC_MOD_SRC.contains("reprograms ECC-protected OTP quad-words")
+            && NSC_MOD_SRC.contains("OPEN-JRN-HW/DUR")
+            && NSC_MOD_SRC.contains("OPEN-ECC")
+            && NSC_MOD_SRC.contains("OPEN-OTP"),
+        "mode-production must stay blocked until the reviewed rollback backend replaces the invalid bitwise OTP tally"
+    );
+    assert!(
+        NSC_MOD_SRC.contains(
+            "#[cfg(all(feature = \"mode-production\", feature = \"stm32u585\"))]"
+        ),
+        "the rollback ship blocker must cover every STM32U585 production build"
+    );
+}
+
+#[test]
 fn positive_ui_backend_mutually_exclusive_fences_present() {
     // Three pairwise compile_error! fences (semihosting × oled,
     // semihosting × noop, oled × noop). Count them.

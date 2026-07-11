@@ -28,11 +28,25 @@ fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let is_thumbv = target.contains("thumbv");
     let mode_production = env::var_os("CARGO_FEATURE_MODE_PRODUCTION").is_some();
+    let legacy_rollback_unsafe = env::var_os("CARGO_FEATURE_LEGACY_FW_ROLLBACK_UNSAFE").is_some();
     let lcd_test = env::var_os("CARGO_FEATURE_LCD_TEST").is_some();
 
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_MODE_PRODUCTION");
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_LCD_TEST");
     println!("cargo:rerun-if-env-changed=FSBL_ALLOW_DEV_KEY");
+    if mode_production {
+        panic!(
+            "FW_ROLLBACK_FSBL_PRODUCTION_BLOCKED: the reviewed Draft-0.9 rollback backend is not implemented"
+        );
+    }
+    if !legacy_rollback_unsafe {
+        panic!(
+            "FW_ROLLBACK_FSBL_UNSAFE_OPT_IN_REQUIRED: bench FSBL builds must enable legacy-fw-rollback-unsafe"
+        );
+    }
+    println!(
+        "cargo:warning=LEGACY ROLLBACK BACKEND — NONSHIPPING FSBL; Draft 0.9 interfaces are not implemented"
+    );
     if mode_production && lcd_test {
         panic!("FSBL `mode-production` and bench-only `lcd-test` are mutually exclusive");
     }

@@ -1,37 +1,43 @@
 //! STM32U585 OTP (one-time-programmable) access.
 //!
-//! STM32U585's user OTP area sits at `0x0BFA_0000` and is 512 × 64-bit
-//! words (4 KB). Programming granularity is the flash controller's
-//! standard quad-word (128 bits, 4 × 32-bit). Once a bit is flipped
-//! from 1 to 0 it cannot be reset — not by erase, not by RDP
-//! regression, nothing. This is the ideal home for per-device secrets
-//! that must survive firmware updates and factory-reset.
+//! STM32U585's user OTP area sits at `0x0BFA_0000` and is **512 bytes**:
+//! 32 independent 128-bit ECC quad-words. Programming granularity is one
+//! complete quad-word. An OTP quad-word may be programmed only once; it is
+//! not a reusable bank of individually programmable fuse bits.
+//!
+//! ## Production status — legacy implementation, blocked from shipping
+//!
+//! The rollback functions below predate the hardware re-review and model the
+//! first 128 bytes as a 1,024-bit unary tally. That model is invalid on
+//! STM32U585: after the first program of a quad-word, a later bit-clear or
+//! full-zero program raises `PROGERR`. The factory sentinel's proposed
+//! rehearsal-then-production update has the same defect. The secure build
+//! script and `nsc/mod.rs` reject every production/factory image; other
+//! STM32U585 bench images require the explicit
+//! `legacy-fw-rollback-unsafe` marker until this module is replaced by the
+//! reviewed Draft-0.9 typed journal/ECC/OTP backend.
+//!
+//! This warning does not approve the remaining one-shot secret provisioning
+//! paths. Their exact factory map, interruption handling, and final protection
+//! still require the corresponding production receipts.
 //!
 //! ## Region map
 //!
 //! | Offset       | Size  | Purpose                                  |
 //! |--------------|-------|------------------------------------------|
-//! | 0..128       | 128 B | Firmware-update rollback tally (32 words)|
+//! | 0..128       | 128 B | Legacy rollback tally (**unsupported**)  |
 //! | 128..160     | 32 B  | Device master key (two quad-words)       |
-//! | 160..512     | 352 B | Reserved for future use                  |
+//! | 160..176     | 16 B  | Legacy factory sentinel (**unsupported**) |
+//! | 176..512     | 336 B | Unallocated                              |
 //!
 //! ## Rollback counter encoding
 //!
-//! First 128 bytes of OTP (32 × 32-bit words, `0x0BFA_0000..0x0BFA_0080`)
-//! as a unary "tally" counter. Each bit represents one irreversible
-//! increment:
-//!
-//! - Initially, every bit is 1 (erased OTP reads 0xFF...FF).
-//! - Each firmware-update commit clears the *next* bit from 1 to 0.
-//!   Encoding order: LSB-first within a 32-bit word, word 0 first.
-//!   So the progression is bit 0 of word 0 → bit 1 of word 0 → ... →
-//!   bit 31 of word 0 → bit 0 of word 1 → ...
-//! - The rollback floor is the total count of zero bits.
-//! - Maximum floor: 32 words × 32 bits = 1024 commits. At one update
-//!   per month that's ~85 years — well past any reasonable device
-//!   lifetime. A pathological-update rate (one per day) exhausts it
-//!   in 2.8 years, so we surface a "OTP budget low" warning when the
-//!   floor crosses 900.
+//! `rollback_floor` and `bump_to` implement the rejected unary design and are
+//! retained only so pre-production images and tests remain diagnosable while
+//! the replacement is developed. They are not a capacity claim. In the
+//! reviewed architecture, ordinary releases do not consume OTP; a security-
+//! epoch advance consumes complete, fresh quad-words according to the still-
+//! open replicated record codec.
 //!
 //! ## Device master key
 //!
@@ -49,33 +55,20 @@
 //!
 //! - OTP uses the standard FLASH controller (`SECCR` on the secure
 //!   alias), same as bank 1. There's no separate OTP controller.
-//! - Writes are quad-word aligned. To clear a single bit we read the
-//!   current QW content, compute new bits (AND the clear mask in —
-//!   never OR), and program the whole QW. NOR flash's "1 → 0 only"
-//!   constraint means un-changed bits stay 1, and the new bits go to
-//!   0. **We must never try to set a 0 bit back to 1** — the flash
-//!   controller would latch PROGERR.
-//! - Programming an OTP QW with data identical to its current content
-//!   is a no-op. We use that in `verify_and_bump` to idempotently
-//!   recover from a reset that happens mid-commit.
+//! - Writes are 16-byte aligned and program all 128 data bits plus hardware
+//!   ECC as one operation.
+//! - A target quad-word must be virgin. Reprogramming a partially programmed
+//!   OTP quad-word—including an additional bit-clear or full-zero write—raises
+//!   `PROGERR`; writing identical content is not an idempotent retry.
 //!
 //! ## Failure modes
 //!
-//! - **Brown-out during OTP write**: leaves the QW in an unknown state
-//!   (some bits may have flipped, others not). The next boot re-reads
-//!   the partial state and computes a floor that may be off by a few
-//!   bits. This is safe: the recomputed floor is always consistent
-//!   with the zero-bits-in-OTP invariant, and the worst case is a
-//!   rollback floor that's been bumped by fewer bits than intended —
-//!   which is not a security regression, only a missed-opportunity to
-//!   reject an older version. For the master key, a brown-out mid-
-//!   burn can leave a partially-programmed region that fails readback
-//!   verification; `ensure_device_master` will refuse to proceed and
-//!   the device bricks safely (OTP is one-way, so there is no "retry"
-//!   path — ship-worthy boards must complete the first-boot burn).
+//! - **Brown-out during OTP write**: contents are not guaranteed and the
+//!   quad-word is lost; it must not be retried or interpreted as a bit count.
+//!   Exact-looking/ECC-corrected outcomes and cross-power-loss intent remain
+//!   explicit open gates in the Draft-0.9 architecture.
 //! - **PROGERR on write** (WRPERR, PROGERR, SIZERR, etc.): Reported
-//!   to the caller; the staged manifest is discarded and the active
-//!   slot stays unchanged.
+//!   to the caller. No production path may infer that the target is reusable.
 
 use crate::hw::mmio::{Reg32, RoReg32};
 
@@ -130,8 +123,8 @@ const ERR_MASK: u32 = 0xFA;
 
 /// Number of 32-bit words reserved for the rollback counter.
 pub const ROLLBACK_WORDS: u32 = 32;
-/// Total bits = 32 words × 32 bits = 1024. This is the maximum
-/// firmware version the OTP can enforce as a rollback floor.
+/// Legacy unary model's logical bit count. This is **not** usable STM32U585
+/// update capacity; the production fence forbids this codec from shipping.
 pub const MAX_FW_VERSION: u32 = ROLLBACK_WORDS * 32;
 
 /// Byte offset of the device master key within OTP (immediately after
@@ -146,34 +139,33 @@ const MASTER_KEY_WORDS: usize = MASTER_KEY_SIZE / 4;
 
 /// Byte offset of the factory-ceremony sentinel within OTP. Lives
 /// directly after the device master key (offset 160..176, one
-/// 128-bit quad-word). Used by the host-side factory fixture to
-/// verify the on-chip ceremony completed before the irreversible
-/// `STM32_Programmer_CLI --optionbytes RDP=0xCC` (RDP2 bump).
+/// 128-bit quad-word). This is a quarantined legacy receipt: the host may
+/// report it read-only, but no value authorizes an irreversible operation.
 ///
 /// Encoding: 32-bit word at byte offset 0 of the QW.
 ///
 ///   bit 0: factory ceremony ran at least once
 ///   bit 1: rehearsal mode completed
-///   bit 2: production mode completed (READY FOR RDP2)
+///   bit 2: legacy production-completion bit (quarantined; no RDP2 authority)
 ///   bits 3..31: reserved (must remain 1)
 ///
-/// All bits are 1 (`0xFFFFFFFF`) on a fresh chip. Each completion
-/// clears the corresponding bits. Because OTP is one-way, the
-/// sentinel can only accumulate state — a chip that has run both
-/// rehearsal AND production reads as bits 0+1+2 cleared (raw value
-/// `0xFFFFFFF8`). The host fixture interprets:
+/// The table below documents the legacy intended encoding, not supported
+/// transition semantics. Only one virgin-to-programmed transition is valid for
+/// this QW. In particular, rehearsal followed by production would require a
+/// forbidden second QW program and must not be used as a factory workflow.
+/// The legacy host fixture interprets:
 ///
-/// | Raw value     | Meaning                                | RDP2 OK?  |
-/// |---------------|----------------------------------------|-----------|
+/// | Raw value     | Meaning                                | RDP2 authority? |
+/// |---------------|----------------------------------------|-----------------|
 /// | `0xFFFFFFFF`  | never ran                              | NO        |
 /// | `0xFFFFFFFE`  | ran but didn't complete (interrupted)  | NO        |
 /// | `0xFFFFFFFC`  | rehearsal only                         | NO        |
-/// | `0xFFFFFFFA`  | production only                        | YES       |
-/// | `0xFFFFFFF8`  | both modes have completed              | YES       |
+/// | `0xFFFFFFFA`  | legacy production bits                 | NO        |
+/// | `0xFFFFFFF8`  | legacy combined bits                   | NO        |
 ///
-/// Rehearsal-then-production is the expected dev iteration path. The
-/// production-only and both-modes states are both "READY FOR RDP2"
-/// because the production run does the actual SE provisioning.
+/// No value in this table is production authority while the ship fence is
+/// active. The replacement factory receipt must use a one-shot or otherwise
+/// hardware-valid encoding.
 pub const FACTORY_SENTINEL_OFFSET: u32 = MASTER_KEY_OFFSET + MASTER_KEY_SIZE as u32;
 /// Absolute address of the factory sentinel's 32-bit value.
 pub const FACTORY_SENTINEL_ADDR: u32 = OTP_BASE + FACTORY_SENTINEL_OFFSET;
@@ -200,18 +192,16 @@ const MASTER_KEY_W0: RoReg32 = unsafe { RoReg32::new(MASTER_KEY_ADDR) };
 /// Error types returned by OTP operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OtpError {
-    /// The requested floor would exceed `MAX_FW_VERSION` — OTP is
-    /// exhausted. Devices that reach this state can no longer accept
-    /// updates; the companion should surface a clear "OTP end of life"
-    /// message.
+    /// The rejected legacy tally's logical limit was exceeded. This is not a
+    /// valid estimate of physical OTP capacity.
     OutOfBudget,
     /// The requested floor is less than or equal to the current floor
-    /// — nothing to do. This is a programmer error; `verify_and_bump`
-    /// normalizes to `Ok(())` for idempotency (no bits to clear).
+    /// — nothing to do under the legacy model. It is not permission to
+    /// reprogram a physical QW idempotently.
     BelowCurrent,
     /// The flash controller flagged a programming error during the QW
-    /// write. The OTP may be partially written; caller should read
-    /// back and recompute the floor.
+    /// write. The OTP may be partially written; a production design must mark
+    /// the QW consumed/ambiguous and must not retry or recompute a bit tally.
     ProgramError,
     /// The device master key region is still blank. Caller must run
     /// `burn_device_master` (or `ensure_device_master`) before expecting
@@ -266,8 +256,12 @@ fn rollback_floor_once() -> u32 {
     count
 }
 
-/// Bump the OTP floor to at least `target`. Idempotent when the
-/// current floor is already `>= target` (returns Ok immediately).
+/// Rejected legacy helper that tries to bump a unary floor to `target`.
+///
+/// Only the `current >= target` early return is a software no-op. Any path
+/// that launches a QW write is not idempotent and is not a valid STM32U585
+/// production operation after that QW's first program. Shipping builds are
+/// compile-blocked while this diagnostic implementation remains.
 ///
 /// If `target > MAX_FW_VERSION` returns `OtpError::OutOfBudget`.
 pub unsafe fn bump_to(target: u32) -> Result<(), OtpError> {
@@ -330,10 +324,11 @@ pub unsafe fn bump_to(target: u32) -> Result<(), OtpError> {
         }
 
         if bumps_this_word > 0 {
-            // Program the QW that contains word_idx. The other 3
-            // words in the QW stay at their current values (we read
-            // them back and re-write them identically — OTP accepts
-            // that because no bit is flipped up).
+            // Legacy-invalid operation: program the QW that contains
+            // word_idx while copying the other words unchanged. STM32U585
+            // OTP does NOT accept this as an identity rewrite once the QW has
+            // been programmed; it raises PROGERR. Retained only so the old
+            // path remains diagnosable behind the nonshipping compile fence.
             let qw_base = OTP_BASE + (word_idx & !0x03) * 4;
             let in_qw = (word_idx & 0x03) as usize;
 
@@ -378,14 +373,14 @@ pub unsafe fn bump_to(target: u32) -> Result<(), OtpError> {
     Ok(())
 }
 
-/// Low-level OTP quad-word program. `addr` must be 16-byte aligned and
-/// within the reserved OTP region (rollback tally + master key). The 16
-/// bytes at `addr` must have been AND-compatible with `data` (each bit in
-/// `data` must be 0 or match the current bit — never upgrade 0 → 1).
+/// Low-level OTP quad-word program. `addr` must be 16-byte aligned, within the
+/// reserved OTP region, and point to a proven-virgin quad-word. AND-compatible
+/// data is insufficient: STM32U585 OTP rejects every second program of a
+/// partially programmed QW, even when only clearing more bits or writing zero.
 ///
 /// # Safety
-/// Commits one quad-word to OTP. The flips are **one-way**: once a bit
-/// transitions 1 → 0 there is no recovery path (not even RDP regression).
+/// Commits one complete quad-word to OTP. There is no recovery or second
+/// supported program operation (not even after RDP regression).
 /// Every call site MUST have a `// SAFETY:` comment naming the irreversible
 /// effect. Callers must also ensure no other flash op is in flight on this
 /// core; the secure world is single-threaded, but DMA / pre-fetch must be
@@ -519,9 +514,9 @@ pub fn is_device_master_burned() -> bool {
 
 /// Read the 32-byte device master key out of OTP.
 ///
-/// Returns `OtpError::NotBurned` if the region is still blank — callers
-/// should run `ensure_device_master` (the idempotent burn-if-needed
-/// wrapper) rather than calling `read_device_master` directly.
+/// Returns `OtpError::NotBurned` if the region is still blank. Callers may use
+/// `ensure_device_master`, but its initial two-QW burn is not crash-retry-safe;
+/// only a previously completed and verified burn makes later calls pure reads.
 ///
 /// Under `otp-hardcoded-master-key` returns the fixed test pattern.
 pub fn read_device_master() -> Result<[u8; MASTER_KEY_SIZE], OtpError> {
@@ -634,11 +629,15 @@ pub unsafe fn burn_device_master() -> Result<(), OtpError> {
     }
 }
 
-/// Idempotent: if the master-key region is blank, run `burn_device_
-/// master`; then read and return the key.
+/// If the master-key region is blank, run `burn_device_master`; then read and
+/// return the key. After a successful verified burn, later calls are pure
+/// reads. This is not an idempotence claim for the initial burn: power loss
+/// between its two QWs can leave a partial nonblank region that must fail
+/// closed and cannot be retried in place.
 ///
-/// Safe to call on every boot — the first-boot-of-a-blank-MCU call
-/// does the one-time burn, every subsequent call is a pure read.
+/// Safe to call on every boot only after factory evidence establishes that the
+/// first burn completed and read back correctly. The production ceremony for
+/// that evidence remains open.
 /// Higher-level code (`secret_keys::*`) is expected to invoke this
 /// rather than the split `burn`/`read` pair.
 ///
@@ -671,11 +670,10 @@ pub fn factory_sentinel_read() -> u32 {
     unsafe { core::ptr::read_volatile(FACTORY_SENTINEL_ADDR as *const u32) }
 }
 
-/// Record a factory-ceremony completion event in OTP. Bits are
-/// CUMULATIVE — calling this multiple times accumulates state (e.g.
-/// rehearsal then production yields `0xFFFFFFF8` with bits 0+1+2
-/// cleared). Calling with `bits_to_clear` that include bits already
-/// cleared is a no-op and returns `Ok(())`.
+/// Record the rejected legacy factory-sentinel value. This helper is retained
+/// for pre-production diagnosis only. Calling it more than once for the QW is
+/// unsupported on STM32U585 and will normally raise `PROGERR`; the early
+/// equality return is a software no-op, not a hardware retry primitive.
 ///
 /// `bits_to_clear` is `OR`'d into the cleared-bits set. Pass any
 /// combination of `FACTORY_SENTINEL_BIT_*` constants. The production
@@ -684,27 +682,22 @@ pub fn factory_sentinel_read() -> u32 {
 ///
 /// # Safety
 ///
-/// Commits one quad-word to OTP. The flips are **one-way**: once a
-/// bit transitions 1 → 0 there is no recovery path. This means a
-/// chip on which rehearsal has been completed cannot have its
-/// "rehearsal completed" bit un-set; the chip can still be put
-/// through production successfully (which clears bit 2 in addition),
-/// but a fixture seeing bit 1 cleared on a chip-supposed-to-be-fresh
-/// knows that chip went through rehearsal at some point.
+/// Commits one complete quad-word to OTP. A chip whose sentinel QW was written
+/// by rehearsal cannot later update that same QW for production. The shipping
+/// compile fence must remain until a hardware-valid factory receipt replaces
+/// this helper.
 ///
 /// Caller MUST coordinate exclusive access to the flash controller
 /// (no other op in flight). The secure world is single-threaded; we
 /// fence interrupts inside `program_otp_qw` to guard against any
 /// pending IRQ shifting the controller state.
 pub unsafe fn factory_sentinel_record(bits_to_clear: u32) -> Result<(), OtpError> {
-    // Compute the target value: AND-mask off the requested bits from
-    // the current sentinel. OTP only supports 1→0 transitions, so the
-    // AND is exactly the right operation — writing a value with bits
-    // already 0 keeps them 0, writing a bit at 1 leaves it 1.
+    // Legacy target computation. This is valid only for the QW's first program;
+    // a later AND-compatible write is still rejected by STM32U585 OTP.
     let current = factory_sentinel_read();
     let target = current & !bits_to_clear;
     if target == current {
-        // Idempotent: requested bits already cleared.
+        // Software no-op only; no hardware program command is issued.
         return Ok(());
     }
 

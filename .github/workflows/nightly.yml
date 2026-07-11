@@ -174,7 +174,7 @@ jobs:
         run: |
           cargo check --locked -p sphincs-tz-secure --target thumbv8m.main-none-eabi \
             --no-default-features \
-            --features dual-se,optiga-hw-counter,saes-dhuk,ui-lcd,stm32u585,usb
+            --features dual-se,optiga-hw-counter,saes-dhuk,ui-lcd,stm32u585,usb,legacy-fw-rollback-unsafe
       - name: cargo check — non-secure world (USB)
         run: |
           cargo check --locked -p sphincs-tz-nonsecure --target thumbv8m.main-none-eabi \
