@@ -1,30 +1,30 @@
-//! Round-trip + uniqueness invariants for the FSBL-facing `WORDLIST_PREFIX5`.
+//! Round-trip + uniqueness invariants for the FSBL-facing prefix table.
 //!
-//! The FSBL embeds only the prefix-5 table to stay inside its 32 KB
-//! flash ceiling. The 8 BIP-39 measurement words it renders on the OLED
-//! are looked up via [`word_prefix_at`]. For the user-side comparison
-//! workflow to be sound, three properties must hold:
+//! The FSBL embeds only the base-27-packed prefix table
+//! (`WORDLIST_PREFIX5_PACKED`, 3 bytes/entry) to stay inside its flash
+//! ceiling. The 8 BIP-39 measurement words it renders on the LCD are looked
+//! up via [`word_prefix_at`], which scans the packed table constant-time and
+//! decodes the selected 3-byte code back to the 5-byte prefix. For the
+//! user-side comparison workflow to be sound, these properties must hold:
 //!
-//! 1. Each prefix is the byte-exact first 5 bytes of the full word from
-//!    `WORDLIST` (zero-padded if the word is shorter than 5 chars). If
-//!    the build-script-generated table drifts from the canonical
-//!    `wordlist.rs` source, the FSBL would display different bytes than
-//!    `fwmeasure` / `./measure.sh` derives — silently breaking the
-//!    "the device shows what you'd expect" property.
+//! 1. **Lossless round-trip.** For every index, `word_prefix_at(idx)` decodes
+//!    to the byte-exact first 5 bytes of the full word from `WORDLIST`
+//!    (zero-padded if shorter than 5 chars). If the packing/decode drifts
+//!    from the canonical `wordlist.rs` source, the FSBL would display
+//!    different bytes than `fwmeasure` / `./measure.sh` derives — silently
+//!    breaking the "the device shows what you'd expect" property.
 //!
-//! 2. All 2048 prefix-5 entries are unique. BIP-39 already guarantees
-//!    4-char uniqueness (`bip39/tests/wordlist_invariants.rs:negative_
-//!    wordlist_has_unique_4_letter_prefix`); the 5th byte stays a sanity
-//!    buffer. Asserting uniqueness here regression-locks that property
-//!    at the level the FSBL actually uses.
+//! 2. **Uniqueness.** All 2048 decoded prefixes are unique. BIP-39 already
+//!    guarantees 4-char uniqueness; the packing is a lossless bijection on
+//!    `{0, a..=z}^5`, so it can't reduce that.
 //!
-//! 3. The constant-time scan in [`word_prefix_at`] returns the same
-//!    bytes as the direct index `WORDLIST_PREFIX5[idx]`. Locks in the
-//!    correctness of the CT-mask-OR implementation.
+//! 3. **Constant-time scan correctness.** `word_prefix_at(idx)` returns the
+//!    same bytes as directly decoding `WORDLIST_PREFIX5_PACKED[idx]`, and an
+//!    out-of-range index yields a blank (all-zero) prefix.
 
 use sphincs_tz_bip39::{
     firmware_fingerprint_lines, hash_to_word_indices, word_prefix_at, FINGERPRINT_COLS,
-    FINGERPRINT_ROWS, WORDLIST, WORDLIST_PREFIX5,
+    FINGERPRINT_ROWS, WORDLIST, WORDLIST_PREFIX5_PACKED,
 };
 
 /// Compute the canonical prefix-5 for a word: first 5 bytes, zero-padded.
@@ -39,54 +39,74 @@ fn expected_prefix(word: &str) -> [u8; 5] {
     p
 }
 
+/// Reference decode of a packed 3-byte base-27 code back to the 5-byte
+/// prefix — an independent mirror of the decode inside `word_prefix_at`, so
+/// the constant-time scan is checked against a straight index + decode.
+fn unpack(code_bytes: [u8; 3]) -> [u8; 5] {
+    let mut code = (u32::from(code_bytes[0]) << 16)
+        | (u32::from(code_bytes[1]) << 8)
+        | u32::from(code_bytes[2]);
+    let mut out = [0u8; 5];
+    let mut i = 5;
+    while i > 0 {
+        i -= 1;
+        let sym = (code % 27) as u8;
+        code /= 27;
+        out[i] = if sym == 0 { 0 } else { b'a' + sym - 1 };
+    }
+    out
+}
+
 #[test]
-fn positive_prefix5_matches_first_five_bytes_of_every_word() {
+fn positive_word_prefix_at_round_trips_every_word() {
+    // pack (build.rs) → store → scan → decode (word_prefix_at) must equal the
+    // canonical first-5-bytes prefix for all 2048 entries.
     for (idx, w) in WORDLIST.iter().enumerate() {
         let expected = expected_prefix(w);
-        let actual = WORDLIST_PREFIX5[idx];
+        let actual = word_prefix_at(idx as u16);
         assert_eq!(
             actual, expected,
-            "WORDLIST_PREFIX5[{}] = {:?} but WORDLIST[{}] = {:?} (expected prefix {:?})",
+            "word_prefix_at({}) = {:?} but WORDLIST[{}] = {:?} (expected prefix {:?})",
             idx, actual, idx, w, expected,
         );
     }
 }
 
 #[test]
-fn positive_prefix5_table_has_exactly_2048_entries() {
+fn positive_packed_table_has_exactly_2048_entries() {
     assert_eq!(
-        WORDLIST_PREFIX5.len(),
+        WORDLIST_PREFIX5_PACKED.len(),
         2048,
         "FSBL render assumes a 2048-entry prefix table",
     );
 }
 
 #[test]
-fn negative_all_prefix5_entries_are_unique() {
-    // BIP-39 guarantees 4-char uniqueness; the 5-byte prefix must remain
-    // unique too (it can't be LESS unique than the 4-char prefix).
-    let mut sorted: Vec<[u8; 5]> = WORDLIST_PREFIX5.to_vec();
+fn negative_all_decoded_prefixes_are_unique() {
+    // BIP-39 guarantees 4-char uniqueness; the decoded 5-byte prefixes must
+    // remain unique (the packing is a bijection, so it cannot collide them).
+    let mut sorted: Vec<[u8; 5]> = (0u16..2048).map(word_prefix_at).collect();
     sorted.sort();
     for w in sorted.windows(2) {
         assert_ne!(
             w[0], w[1],
-            "prefix-5 collision found: {:?} appears at least twice",
+            "prefix collision found: {:?} appears at least twice",
             w[0]
         );
     }
 }
 
 #[test]
-fn positive_constant_time_lookup_matches_direct_index() {
-    // The CT scan in word_prefix_at must be byte-identical to the direct
-    // table index. This locks in the mask-OR implementation against any
-    // future refactor that breaks the scan accumulator.
+fn positive_constant_time_scan_matches_direct_index_decode() {
+    // The CT scan in word_prefix_at must be byte-identical to directly
+    // indexing the packed table and decoding it. This locks in the mask-OR
+    // accumulator + the base-27 decode against any future refactor.
     for idx in 0u16..2048 {
-        let direct = WORDLIST_PREFIX5[idx as usize];
+        let direct = unpack(WORDLIST_PREFIX5_PACKED[idx as usize]);
         let scanned = word_prefix_at(idx);
         assert_eq!(
             scanned, direct,
-            "word_prefix_at({}) = {:?} but WORDLIST_PREFIX5[{}] = {:?}",
+            "word_prefix_at({}) = {:?} but decode(WORDLIST_PREFIX5_PACKED[{}]) = {:?}",
             idx, scanned, idx, direct,
         );
     }
@@ -94,29 +114,32 @@ fn positive_constant_time_lookup_matches_direct_index() {
 
 #[test]
 fn negative_word_prefix_at_out_of_range_returns_zero() {
-    // For idx >= 2048 the CT scan never matches, so every byte stays 0.
-    // This guarantees an out-of-spec caller doesn't accidentally render
-    // some "random" wordlist entry's prefix — they get a blank instead,
-    // which is a recognisable error in the OLED display.
+    // For idx >= 2048 the CT scan never matches, so the code stays zero and
+    // every symbol decodes to padding. This guarantees an out-of-spec caller
+    // doesn't accidentally render some "random" wordlist entry's prefix —
+    // they get a blank instead, a recognisable error in the LCD display.
     assert_eq!(word_prefix_at(2048), [0u8; 5]);
     assert_eq!(word_prefix_at(0xFFFF), [0u8; 5]);
 }
 
 #[test]
 fn positive_first_and_last_entries_are_canonical() {
-    // Sanity-pin the canonical first ("abandon") and last ("zoo") entries
-    // so a build.rs drift that re-orders the wordlist would trip this
-    // test before any user-facing fingerprint diverges.
+    // Sanity-pin the canonical first ("abandon") and last ("zoo") entries so
+    // a build.rs drift that re-orders the wordlist would trip this test
+    // before any user-facing fingerprint diverges. Also covers the two
+    // extremes for the packing: a full-length prefix and a short (padded)
+    // word.
     assert_eq!(WORDLIST[0], "abandon");
-    assert_eq!(WORDLIST_PREFIX5[0], *b"aband");
+    assert_eq!(word_prefix_at(0), *b"aband");
     assert_eq!(WORDLIST[2047], "zoo");
-    assert_eq!(WORDLIST_PREFIX5[2047], [b'z', b'o', b'o', 0, 0]);
+    assert_eq!(word_prefix_at(2047), [b'z', b'o', b'o', 0, 0]);
 }
 
 // ---------------------------------------------------------------------------
 // firmware_fingerprint_lines — exact-byte-grid pin (FSBL ↔ measured_boot
-// must produce byte-identical OLED rows for the same digest, otherwise
-// the user-facing comparison workflow breaks)
+// must produce byte-identical LCD rows for the same digest, otherwise the
+// user-facing comparison workflow breaks). Unchanged by the packing: the
+// decoded output feeds the same renderer.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -144,10 +167,10 @@ fn positive_fingerprint_lines_match_word_prefix_at_for_zero_digest() {
 
 #[test]
 fn positive_fingerprint_lines_zero_bytes_become_spaces() {
-    // Find an index whose word is < 5 chars (e.g. "zoo" at idx 2047,
-    // "act" at idx 19). The WORDLIST_PREFIX5 zero-pads short words;
-    // firmware_fingerprint_lines must translate those zeros to ASCII
-    // spaces so the OLED blits blanks instead of NUL glyphs.
+    // Find an index whose word is < 5 chars (e.g. "zoo" at idx 2047).
+    // The decode zero-pads short words; firmware_fingerprint_lines must
+    // translate those zeros to ASCII spaces so the LCD blits blanks
+    // instead of NUL glyphs.
     let prefix = word_prefix_at(2047);
     assert_eq!(prefix, [b'z', b'o', b'o', 0, 0]);
 

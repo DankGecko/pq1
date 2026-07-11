@@ -1,25 +1,45 @@
-//! Generates `WORDLIST_PREFIX5` at compile time from `src/wordlist.rs`.
+//! Generates `WORDLIST_PREFIX5_PACKED` at compile time from `src/wordlist.rs`.
 //!
 //! The full BIP-39 English wordlist (`WORDLIST`) costs ~18 KB of rodata
 //! once expanded into the fixed-stride `WORDLIST_FLAT` + `WORDLIST_LENS`
-//! tables that the constant-time scans need. The FSBL's 32 KB flash
-//! ceiling can't afford that — but it still needs to render the 8 BIP-39
-//! measurement words on the OLED before branching into the slot. The
-//! compact 5-byte prefix table here (~10 KB) is the FSBL's whole wordlist.
+//! tables that the constant-time scans need. The FSBL's flash ceiling can't
+//! afford that — but it still needs to render the 8 BIP-39 measurement words
+//! on the LCD before branching into the slot. The base-27-packed 5-char
+//! prefix table here (6 KB, 3 bytes/entry) is the FSBL's whole wordlist.
 //!
-//! BIP-39 guarantees every English word has a unique 4-character prefix,
-//! so 5 bytes round-trip back to a full word deterministically. The
-//! existing `secure/src/measured_boot.rs` already truncates words to ≤ 6
-//! visible chars on the 16-column OLED, so a 5-char prefix is visually
-//! identical to today's display.
+//! BIP-39 guarantees every English word has a unique 4-character prefix, so
+//! a 5-char prefix round-trips back to a full word deterministically. Each
+//! prefix (padding = 0, `a`..=`z` = 1..=26) is stored as a base-27 integer
+//! (max `27^5 - 1 = 14_348_906 < 2^24`) in 3 bytes; `word_prefix_at` decodes
+//! it losslessly, so the rendered display is byte-identical to the former
+//! `[[u8; 5]; 2048]` table at ~40% less rodata.
 //!
 //! See the prefix5-roundtrip integration test in `bip39/tests/` for the
-//! invariant this generator must uphold.
+//! round-trip / uniqueness / bounds invariants this generator must uphold.
 
 use std::env;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
+
+/// Pack a 5-byte zero-padded lowercase prefix into 3 bytes via base-27
+/// (padding = 0, `a`..=`z` = 1..=26; big-endian). This is the exact inverse
+/// of the decode in `sphincs_tz_bip39::word_prefix_at`. It is a bijection on
+/// `{0, b'a'..=b'z'}^5` (max code `27^5 - 1 = 14_348_906 < 2^24`), so it is
+/// byte-lossless for every BIP-39 prefix — the rendered fingerprint is
+/// identical to the former `[[u8; 5]; 2048]` table, at 6 KB instead of 10 KB.
+fn pack_prefix5(p: [u8; 5]) -> [u8; 3] {
+    let mut code: u32 = 0;
+    for &byte in &p {
+        let sym = if byte == 0 {
+            0
+        } else {
+            u32::from(byte - b'a' + 1)
+        };
+        code = code * 27 + sym;
+    }
+    [(code >> 16) as u8, (code >> 8) as u8, code as u8]
+}
 
 fn main() {
     let src = fs::read_to_string("src/wordlist.rs").expect("read src/wordlist.rs");
@@ -56,25 +76,41 @@ fn main() {
     .unwrap();
     writeln!(
         f,
-        "/// Compact 5-byte zero-padded prefix for every BIP-39 English wordlist entry."
+        "/// Base-27-packed 5-char zero-padded prefix for every BIP-39 English word."
     )
     .unwrap();
     writeln!(f, "///").unwrap();
     writeln!(
         f,
-        "/// BIP-39 guarantees the first 4 chars are unique; the 5th is a sanity buffer"
+        "/// Each entry packs a 5-character prefix (padding = 0, `a`..=`z` = 1..=26) as a"
     )
     .unwrap();
     writeln!(
         f,
-        "/// for the firmware-measurement OLED display in the FSBL."
+        "/// base-27 integer (max `27^5 - 1 = 14_348_906 < 2^24`) into 3 big-endian bytes."
     )
     .unwrap();
     writeln!(
         f,
-        "pub static WORDLIST_PREFIX5: [[u8; 5]; 2048] = ["
+        "/// `sphincs_tz_bip39::word_prefix_at` decodes it back to the exact 5 bytes, so the"
     )
     .unwrap();
+    writeln!(
+        f,
+        "/// rendered fingerprint is byte-identical to the former `[[u8; 5]; 2048]` table at"
+    )
+    .unwrap();
+    writeln!(
+        f,
+        "/// 6 KB instead of 10 KB. The packing is a lossless bijection on `{{0, a..=z}}^5`,"
+    )
+    .unwrap();
+    writeln!(
+        f,
+        "/// so BIP-39's unique-4-char-prefix guarantee is preserved."
+    )
+    .unwrap();
+    writeln!(f, "pub static WORDLIST_PREFIX5_PACKED: [[u8; 3]; 2048] = [").unwrap();
     for w in &words {
         let b = w.as_bytes();
         let p: [u8; 5] = [
@@ -84,10 +120,11 @@ fn main() {
             b.get(3).copied().unwrap_or(0),
             b.get(4).copied().unwrap_or(0),
         ];
+        let packed = pack_prefix5(p);
         writeln!(
             f,
-            "    [{}, {}, {}, {}, {}], // {}",
-            p[0], p[1], p[2], p[3], p[4], w
+            "    [{}, {}, {}], // {}",
+            packed[0], packed[1], packed[2], w
         )
         .unwrap();
     }

@@ -7,7 +7,7 @@
 //! + `WORDLIST_LENS`). The secure-world firmware turns the feature on
 //! by default and uses these APIs for the seed-phrase wizard, the
 //! recovery candidate gate, and the PBKDF2 seed derivation. FSBL only
-//! needs the `WORDLIST_PREFIX5` + `word_prefix_at` + `hash_to_word_indices`
+//! needs the `WORDLIST_PREFIX5_PACKED` + `word_prefix_at` + `hash_to_word_indices`
 //! surface that lives in `crate`'s always-available layer.
 
 use core::fmt;
