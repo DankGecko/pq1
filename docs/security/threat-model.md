@@ -1,6 +1,6 @@
 # PQSigner OS — Threat Model
 
-**Status:** living document. Updated 2026-05-12.
+**Status:** living document. Updated 2026-05-12; 2026-07-07 (ML-KEM inner wrap descoped — §9.1 residual ACCEPTED by owner; Claim 7 + T7 table reworded accordingly).
 **Scope:** the full firmware + hardware product. STM32U585 (Cortex-M33, TrustZone) host MCU, Infineon OPTIGA Trust M V3 + NXP EdgeLock SE050 secure elements, on-chain ERC-4337 v0.6 smart wallet (`PQSmartWallet`).
 **Companion documents:** `docs/security/HARDENING.md` (hardening requirements — *what* we do), `docs/security/production-security.md` (research synthesis — *which mitigations* we landed and why), `CLAUDE.md` invariants (the non-negotiable contracts), this doc (*who* attacks *what*, with *what capability*, and how each attack is stopped or accepted).
 
@@ -153,13 +153,13 @@ Mechanism: `PQMultiOwnable` (ERC-7201 storage) + no admin path in `PQSmartWallet
 **Claim 7 — Quantum harvester cannot recover the seed.**
 > A CRQC adversary who recorded every byte of USB traffic, every byte of I²C traffic, every byte of on-chain calldata and every block since launch recovers **zero** seed bits.
 
-Mechanism: every primitive in the trust path is post-quantum.
+Mechanism: no primitive in the trust path gives a quantum adversary better than Grover.
 - Signing: SPHINCS+C10 (hash-based, no number-theoretic assumption, no quantum speedup beyond Grover-on-hash).
-- Inner channel wraps (planned): ML-KEM-1024-encapsulated + AES-256-GCM-sealed before SE channel; today the SE channels carry plaintext halves under classical AEAD, which is a PRE-PROD-CAVEAT (§9.1).
+- SE channels: symmetric-rooted key agreement only (OPTIGA PBS = per-device DHUK-derived pre-shared secret → TLS-PRF; SE050 SCP03 = per-device static AES keys → CMAC KDF). **No public-key handshake crosses the bus**, so recorded traffic contains nothing Shor-breakable; the only attack on a capture is Grover key search on the AES-128 session key.
 - Symmetric: AES-256, SHA-256/512, HMAC-SHA256, HKDF-SHA256, PBKDF2-HMAC-SHA512 — all with key sizes sized so Grover leaves ≥ 128-bit effective security.
 - Address derivation, EVM hashing: SHA-256 and Keccak-256 — both quantum-resistant under Grover-only.
 
-Until the ML-KEM-1024 inner wrap lands, the residual is "a CRQC adversary who captured the OPTIGA Shielded Connection TLS-PRF/CCM-8 handshake or SE050 SCP03 handshake from this device's lifetime traffic can in principle decrypt the bus and read the relevant entropy half." This is the residual Claim 7 acknowledges.
+**Accepted residual (owner decision 2026-07-07, was PRE-PROD-CAVEAT §9.1):** the entropy halves cross I²C under AES-128 session encryption (Shielded Connection CCM-8 / SCP03), so an adversary who physically tapped the bus during a live unlock holds ciphertext attackable at ~2⁶⁴ serial Grover operations per session — NIST Category 1, the same floor as C10's n=16 signatures — and must break both tunnels independently (XOR split, Claim 1). Two conditions keep this acceptance sound: (a) per-device SCP03/PBS rotation (§9.2 ceremony) — session keys derive deterministically from the statics with **no forward secrecy**, so fleet-shared statics would degrade a tapped session to a classical decrypt (the ProVerif `scp03_handshake.pv` static-leak residual); (b) the payload exposure stays unlock-time-only (no half ever crosses outside an authenticated session). The formerly-planned ML-KEM-1024 inner wrap that would have lifted this above the Cat-1 floor is descoped; the prototype is retained feature-gated (`docs/security/ml-kem-inner-wrap.md`).
 
 **Claim 8 — Firmware-update path admits only payloads signed by the pinned vendor key.**
 > **Target claim, not a current shipping claim:** a manifest-v4 update is
@@ -209,7 +209,7 @@ These three patterns mean: every named attacker tier must beat *both* a silicon 
 
 | Attack | Tier | Mitigation | Residual |
 |---|---|---|---|
-| I²C bus snoop (logic analyzer on traces) | T2 | OPTIGA Shielded Connection (TLS-PRF + AES-128-CCM-8, PBS-keyed); SE050 SCP03 (AES-CMAC + AES-CBC, ENC/MAC/DEK rotated per-device at factory) | Classical-AEAD-only today; planned ML-KEM-1024 inner wrap will leave only PQ-ciphertext on the bus (§7.14) |
+| I²C bus snoop (logic analyzer on traces) | T2 | OPTIGA Shielded Connection (TLS-PRF + AES-128-CCM-8, PBS-keyed); SE050 SCP03 (AES-CMAC + AES-CBC, ENC/MAC/DEK rotated per-device at factory) | Symmetric-rooted AEAD; a capture is attackable only via Grover-2⁶⁴ on the session key — ACCEPTED residual (§7.14, §9.1; owner 2026-07-07). Per-device key rotation is load-bearing (no forward secrecy in either KDF) |
 | MITM with replayed handshake | T2 | SCP03 mutual auth + Shielded Connection's PBS-anchored TLS-PRF; freshness nonce on each session | None known once factory-default keys are rotated (PRE-PROD-CAVEAT until factory provisioning lands — §9.2) |
 | Bus desync / glitch the SE response | T3 | Channel MAC fails ⇒ APDU rejected; tamper response invokes lockout | Untested at production hardness |
 | Channel key extraction from MCU OTP | T4 | DHUK only accessible via SAES (peripheral, not memory); BHK uplift (Stage 2) further hardens to "key must be *used* on this specific device" | A decap-class extraction of DHUK is the entry to the residual of Claim 2 — bricks possible, funds not extractable |
@@ -361,7 +361,7 @@ USB is the only external interface and the primary T0 attack vector. The host is
 | Attack | Tier | Mitigation | Residual |
 |---|---|---|---|
 | Shor against classical signature in the trust path | T7 | None exist. All signatures are SPHINCS+C10. | None |
-| Shor against SE classical channel keys captured from historical traffic | T7 | Today: SE channels (CCM-8 / SCP03) are classical AEAD with classical key agreement (TLS-PRF). A CRQC can break the channel key agreement and decrypt historical bus traffic, recovering whatever entropy half was transmitted. Planned: ML-KEM-1024 inner wrap — `half_O` and `half_E` are encapsulated + AES-256-GCM-sealed *before* the SE channel; the SE channel then carries opaque PQ ciphertext. | PRE-PROD-CAVEAT §9.1 |
+| Shor against SE classical channel keys captured from historical traffic | T7 | Not applicable — both SE channels key from *pre-shared symmetric* roots (per-device PBS / SCP03 statics); no key agreement crosses the bus, so a capture contains no Shor target. The correct quantum attack is Grover key search on the AES-128 session key: ~2⁶⁴ serial ops per captured session (Cat 1), physical tap required, both tunnels needed (XOR split). | ACCEPTED §9.1 (owner, 2026-07-07); conditional on per-device key rotation (§9.2) — no forward secrecy in either KDF |
 | Grover against 128-bit symmetric primitives | T7 | All symmetric primitives sized so Grover leaves ≥ 128-bit effective. AES-256, SHA-256, HMAC-SHA256 all qualify | None |
 | Grover-on-hash against the SPHINCS+C10 preimage | T7 | C10 is sized as SHA-256-based at the post-Grover effective level | None |
 | Quantum key search against the device's per-slot `slot_entropy` | T7 | `slot_entropy` is a 256-bit SHA-256 output — quantum search effective bit-strength = 128 bits | None |
@@ -445,8 +445,8 @@ The hardening regressions that knowingly violate one or more of these are listed
 
 Each item here is a regression we accept *only* on the bring-up branch. CI gates production builds against them.
 
-### 9.1 ML-KEM-1024 inner wrap is not yet implemented
-*Affects Claim 7 only on captured bus traffic.* Today, `half_O` and `half_E` cross I²C protected only by the classical SE channels. A future CRQC adversary who recorded the bus traffic of a device's lifetime can break the channel key agreement and read the halves. Plan: ML-KEM-1024-encapsulate + AES-256-GCM-seal each half *before* the SE channel; channel then carries opaque PQ ciphertext. Tracked in `docs/work-todo.md`.
+### 9.1 ML-KEM-1024 inner wrap — DESCOPED; residual ACCEPTED (owner decision 2026-07-07)
+*Affects Claim 7 only on captured bus traffic.* No longer a pre-prod caveat to close: the owner accepted the bus-capture residual permanently. `half_O` and `half_E` cross I²C under the SE channels' AES-128 session encryption; since both channels are symmetric-rooted (no handshake on the wire), the strongest quantum attack on a capture is Grover-2⁶⁴ per session with a physical tap during a live unlock, twice over (XOR split) — Category 1, the system's uniform floor. The earlier wording here ("break the channel key agreement") overstated the exposure; with per-device statics there is no key agreement to break. **Load-bearing condition:** per-device SCP03/PBS rotation (§9.2) — neither KDF has forward secrecy, so leaked/fleet-default statics make a tapped session classically decryptable (one half only; contained by Claim 1). The prototype implementation (hybrid ML-KEM-1024 + HMAC(HUK) + AES-256-GCM, QEMU-validated) is retained behind off-by-default features with production fences — see `docs/security/ml-kem-inner-wrap.md` and work-todo #9 for the decision record.
 
 ### 9.2 Factory provisioning (per-device SCP03 + PBS) is not yet automated
 *Affects Claim 2 against any device that has not been hand-rotated.* Until the two-stage RDP factory flow lands (`docs/security/production-security.md §2.2`), un-rotated bench boards use the NXP factory-default SCP03 keys (published in AN12436) for SE050 SCP03 and a development OPTIGA PBS. **Pre-production only.** No shipping device passes QA without the rotation ceremony.
@@ -547,10 +547,10 @@ In approximate phasing — the source of truth is `docs/work-todo.md`, this is t
 4. **Phase 3 — USB hardening (work-todo #19).** FI-resistant min + bounded reassembly + DWC2 errata workarounds. Closes §7.13.
 5. **Phase 4 — Factory provisioning (work-todo #20).** Two-stage RDP flow + SCP03 rotation + PBS install + binding record. Closes §7.11 + §9.2.
 6. **Phase 5 — Supply-chain attestation (work-todo #22).** SLH-DSA binding manifest + boot-time triple-UID + transparency log + WebUSB ceremony. Closes §9.4 + tightens §7.11.
-7. **Phase 6 — ML-KEM-1024 inner wrap.** Closes §9.1; makes Claim 7 unconditional rather than conditional on no-CRQC-during-device-lifetime.
+7. **Phase 6 — ML-KEM-1024 inner wrap. DESCOPED 2026-07-07** (owner decision): §9.1 residual ACCEPTED instead of closed — Claim 7 stays conditional on the Grover-2⁶⁴/physical-tap bound and on per-device key rotation (Phase 4). Prototype retained feature-gated.
 8. **Phase 7 — MPU privilege banking + vendor-pk-hash OTP lock + ITAMP9 → wipe + fuzz corpus.** Closes §9.5, §9.8, §9.9 and the listed empirical-test gaps.
 
-Production-ship is gated on Phases 0–6. Phase 7 is a hardening pass that does not block first shipment but is required before public bug-bounty announcement.
+Production-ship is gated on Phases 0–5 (Phase 6 descoped 2026-07-07; its acceptance leans on Phase 4's rotation ceremony). Phase 7 is a hardening pass that does not block first shipment but is required before public bug-bounty announcement.
 
 ---
 

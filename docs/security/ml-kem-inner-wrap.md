@@ -1,5 +1,21 @@
 # ML-KEM-1024 inner wrap — design + status
 
+> **UPDATE 2026-07-07 — DESCOPED (owner decision; do not re-raise).** The
+> owner accepted the SE-bus HNDL residual instead of closing it: both tunnels
+> are symmetric-rooted (no Shor-breakable handshake on the bus), so a capture
+> is only attackable via Grover-2⁶⁴ key search on AES-128 session keys (NIST
+> Cat 1 — the same floor as C10's n=16 signatures), requires a physical tap
+> during a live unlock, and must be done twice (XOR split). Caveat recorded
+> with the acceptance: neither KDF has forward secrecy, so **per-device
+> SCP03/PBS rotation (work-todo #11 / threat-model §9.2) is load-bearing** —
+> fleet-default statics would make a tapped session classically decryptable.
+> The remaining work below (piece 2b-d: persistent flash ct-store + on-silicon
+> e2e) is **cancelled**. All landed pieces (1 → 2b-2c) stay in-tree behind the
+> off-by-default `mlkem-inner-wrap`/`mlkem-self-test` features with production
+> `compile_error!` fences, so the decision is cheaply reversible. This doc is
+> preserved as the design record. Decision trail: work-todo #9 + Completion
+> Log 2026-07-07; threat-model §9.1 / Claim 7 reworded the same day.
+
 **Invariant #3 (PQ confidentiality of SE traffic). Closes the documented
 Harvest-Now-Decrypt-Later (HNDL) residual.**
 

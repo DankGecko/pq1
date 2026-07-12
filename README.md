@@ -1,6 +1,6 @@
 # PQSigner OS
 
-A **post-quantum ERC-4337 hardware wallet** (the **PQ1**) where every primitive that protects the seed — at rest, in transit between chips, in firmware updates, in transaction signing — is a NIST PQC standard or a Grover-resistant symmetric primitive. The classical secure-channel layers of the secure elements (which we cannot replace) wrap only opaque ciphertext; a planned ML-KEM-1024 inner wrap will add a PQ confidentiality layer so that even a CRQC break of those channels reveals only PQ ciphertext.
+A **post-quantum ERC-4337 hardware wallet** (the **PQ1**) where every primitive that protects the seed — at rest, in transit between chips, in firmware updates, in transaction signing — is a NIST PQC standard or a Grover-resistant symmetric primitive. The secure elements' channel layers (which we cannot replace) are symmetric-rooted — no public-key handshake ever crosses a bus — so even against a future CRQC the strongest attack on recorded traffic is depth-limited Grover key search (NIST Category 1, the same floor as the SPHINCS+C10 signatures themselves).
 
 **Target hardware:** STM32U585 (Cortex-M33, TrustZone) + Infineon OPTIGA Trust M V3 + NXP EdgeLock SE050. No single die, no single vendor, and no future cryptographically-relevant quantum computer (CRQC) should recover the seed from harvested traffic or extracted ciphertext.
 
@@ -52,7 +52,7 @@ Each item below is implemented today (QEMU and/or real STM32U585), partial, or p
 
 - **Post-quantum signatures, one primitive everywhere** — SPHINCS+C10 for both Type 1 (bootstrap slot registration) and Type 2 (per-slot user tx). The on-chain contract has a single `c10Verifier` immutable wired to both dispatch paths. Per-chain caps `MAX_BOOTSTRAP_USES = MAX_SLOT_USES = 65,536` are immutable; combined ≈ 2³² user txns/chain before that chain is permanently frozen — well inside the C10 birthday margin. *(Implemented; `forge test` covers both paths.)*
 - **Post-quantum firmware signing (pre-production)** — the existing V1/75-byte signer and FSBL verify SPHINCS+C10 artifacts on the bench, but their rollback/try-once backend is rejected and compile-blocked from production. The reviewed Draft-0.9 target freezes slot-bound manifest v4 and its exact 80-byte `PQFW_V4` preimage over `(physical_slot, release_version, security_epoch, secure_hash, nonsecure_hash)`. Its journal/ECC/OTP backend and final FSBL resource fit remain open; this is an interface freeze, not implementation approval.
-- **PQ confidentiality of all SE traffic (planned)** — both entropy halves will be ML-KEM-1024-encapsulated + AES-256-GCM-sealed before touching I²C, so the classical OPTIGA Shielded Connection and SE050 SCP03 layers carry only opaque PQ ciphertext. *(Inner wrap not yet implemented. Today the SE channels carry plaintext halves under their classical AE layer.)*
+- **Symmetric-only SE tunnels (no harvestable handshake)** — both SE channels key from pre-shared symmetric roots (OPTIGA PBS DHUK-derived, SE050 SCP03 statics rotated per-device at provisioning), so no public-key exchange ever crosses I²C and a recorded bus yields nothing Shor can open. Accepted residual: Grover key search on AES-128 session keys (~2⁶⁴ serial, NIST Category 1 — the same floor as SPHINCS+C10 itself), per recorded session, requiring a physical tap during a live unlock, twice over thanks to the XOR split. *(A ML-KEM-1024 inner wrap was prototyped and descoped 2026-07-07 — owner decision; see `docs/security/ml-kem-inner-wrap.md`.)*
 - **TrustZone isolation** — signing key, PIN state, key derivation, and crypto confined to the secure world. The NSC gateway (sign / batch-sign / off-chain sign / unlock / lock / status / wallet-address / init-code / firmware-update) is the only crossing point, with NS pointer validation and TOCTOU defense (NS buffers copied to S-stack before parse). On silicon the gateway runs through real ARMv8-M CMSE veneers (`make e2e-hw`); QEMU uses a shared-memory mailbox (workaround for a QEMU 8.2.2 MPC S-alias bug).
 - **Dual secure elements (split entropy)** — BIP-39 entropy is XOR-split: `half_O` on OPTIGA, `half_E` on SE050. Either chip alone reveals zero bits. `E = HKDF(half_O ⊕ half_E)` happens only in S-SRAM during unlock, then zeroized. *(Validated on silicon; both on I2C1 at 0x30 / 0x48.)*
 - **Three-way PIN counter sync** — silicon-monotonic counters on MCU page 124 (FI-hardened pre-commit), OPTIGA E120 LUC bound to F1D0 Execute (immune to PBS extraction), and SE050 silicon UserID. `MAX_ATTEMPTS = 10` on any one dispatches `factory_reset_admin` + page-124 erase; `CMD_GET_REMAINING` returns the min. *(Validated: `make pin-gate-hw-counter-e2e`, `make pin-gate-wipe-e2e`.)*
@@ -140,10 +140,9 @@ Every primitive that touches a secret, with PQ status. **Classical** entries are
 |---|---|---|---|---|
 | **Tx signing (Type 1 + 2)** | SPHINCS+C10 (W+C_F+C, h=18 d=2 a=11 k=13 w=8 l=43 target_sum=205) | sig 4008 B, pk 32 B | ✅ | One primitive for bootstrap *and* per-slot. Verifier `SPHINCsC10Asm.sol` runs in-EVM via the SHA-256 precompile. The on-chain `SignatureWrapper(ownerIndex, sig)` is 4128 B (4008 padded to 4032 + 3×32 header) |
 | **Firmware signing** | SPHINCS+C10 (same params) | sig 4008 B | ⚠️ | Legacy V1 bench path exists; production is blocked until Draft-0.9 manifest-v4 + rollback backend/resource gates are implemented. No classical fallback |
-| **Inner PQ wrap (planned)** | ML-KEM-1024 (FIPS 203) + AES-256-GCM | ct 1568 B, key 32 B | ✅ | Encapsulates a 32-byte AEAD key per stored half. PQ sk lives HUK-SAES-wrapped in secure flash. *Not yet implemented* |
-| **OPTIGA wire (outer)** | Shielded Connection: TLS-PRF + AES-128-CCM-8, root = PBS in secure flash | tag 8 B | ⚠️ | Symmetric cipher is PQ-safe; KDF is HMAC-SHA-256. Carries opaque PQ ciphertext once the inner wrap lands |
+| **OPTIGA wire** | Shielded Connection: TLS-PRF + AES-128-CCM-8, root = PBS (DHUK-derived, per-device) | tag 8 B | ⚠️ | Symmetric-rooted (no Shor surface); KDF is HMAC-SHA-256. Residual = Grover-2⁶⁴ on a physically-tapped session (Cat-1, accepted 2026-07-07) |
 | **OPTIGA PIN gate** | AuthRef (`0xF1D0`) + E120 LUC (silicon-monotonic) | — | ✅ | Trezor-parity; immune to PBS extraction. Hardware-cleared by `Change=Auto(F1D0)` over transient auth on success |
-| **SE050 wire (outer)** | SCP03 (AES-CMAC + AES-CBC) | k 16/32 B | ⚠️ | PQ-safe symmetric; carries opaque PQ ciphertext once the inner wrap lands |
+| **SE050 wire** | SCP03 (AES-CMAC + AES-CBC), statics rotated per-device | k 16/32 B | ⚠️ | Symmetric-rooted (no Shor surface). Session keys derive from statics + challenges (no forward secrecy) — per-device rotation (work-todo #11) is load-bearing; residual = Grover-2⁶⁴ on a tapped session (accepted 2026-07-07) |
 | **SE050 PIN gate** | UserID auth (constant-time, max 10) | — | ✅ | Hardware retry counter; surfaces only via `SW=0x63Cx` |
 | **SE050 admin PIN** | `HKDF(OTP_master,…)` (dev) → `SAES-CMAC(DHUK,…)` (prod) | 16 B | ✅ | Replaces a flash-stored random PIN; survives flash erase so cross-test contamination can't brick a chip |
 | **MCU PIN counter** | Page-124 quad-word programs | 10-attempt cap | ✅ | FI-hardened pre-commit in `nsc::gated_unlock`: bump *before* touching the SE driver, with post-bump readback (`+1` or `InternalError`) |
@@ -172,13 +171,13 @@ Every primitive that touches a secret, with PQ status. **Classical** entries are
 
 **The dominant threat is Harvest Now, Decrypt Later (HNDL):** an adversary records all I²C traffic today and decrypts it once a CRQC exists. For a wallet holding long-term funds this matters because the adversary need not be present at decryption time.
 
-**How the design defeats HNDL (once the planned ML-KEM inner wrap lands):** the Shielded Connection / SCP03 layer carries only ML-KEM-1024-encapsulated AES-256-GCM ciphertext. Breaking the outer key derivation yields an opaque ML-KEM ciphertext; decapsulating needs the ML-KEM sk, which lives only HUK-SAES-wrapped in U585 secure flash — requiring physical extraction of the *specific* die, a working RDP-2 attack, and HUK extraction. Even then the attacker has one half; the other is on the other SE under a different ciphertext, gated by that SE's retry counter. **Until the inner wrap lands, the SE channels carry plaintext halves under the classical SE-vendor AE layers.**
+**How the design defeats HNDL:** there is nothing Shor-breakable to harvest. Every signature is hash-based, and both SE tunnels key from *pre-shared symmetric* roots (OPTIGA PBS derived per-device from the DHUK at boot; SE050 SCP03 statics rotated per-device at provisioning) — no ECDH, no RSA, no KEM handshake ever crosses I²C or USB. A recorded bus trace can only be attacked by Grover key search on an AES-128 session key: ~2⁶⁴ *serial* quantum operations (NIST Category 1 — the identical floor SPHINCS+C10's n=16 parameters sit at), per session, and the sensitive payloads (PIN, entropy halves) only cross during a live unlock, so harvesting requires a physical interposer on a powered device. The XOR split then demands two independent such breaks on two different buses under two different keys. **Accepted residual (owner decision 2026-07-07):** this Grover-2⁶⁴-with-physical-tap bound is the design's floor for bus confidentiality; a prototyped ML-KEM-1024 inner wrap that would have lifted stored-half confidentiality above it was descoped (retained feature-gated in-tree — `docs/security/ml-kem-inner-wrap.md`). Because session keys derive deterministically from the statics (no forward secrecy), this acceptance depends on the per-device key-rotation ceremony — fleet-shared statics would degrade a tapped session to a classical decrypt.
 
-**Residual classical surface we accept:** OPTIGA Shielded Connection KDF (symmetric-only; worst case Grover-accelerated PBS brute force, still > 128-bit PQ); SE050 secure-channel auth (MITM needs real-time physical bus tampering on a powered device; the planned inner wrap means MITM still can't read the half); SE factory attestation (ECDSA — proof-of-presence only); OPTIGA/SE050 internal firmware (single-chip compromise leaks zero seed bits); U585 RDP-2 + HUK-SAES (the irreducible "extract the specific die" attack).
+**Residual classical surface we accept:** OPTIGA Shielded Connection KDF (symmetric-only; worst case Grover-accelerated PBS brute force, still > 128-bit PQ); SE050 secure-channel auth (MITM needs real-time physical bus tampering on a powered device; a MITM'd half is still only one XOR share); SE factory attestation (ECDSA — proof-of-presence only); OPTIGA/SE050 internal firmware (single-chip compromise leaks zero seed bits); U585 RDP-2 + HUK-SAES (the irreducible "extract the specific die" attack).
 
-**We explicitly do *not* defend against:** coerced unlock; an active CRQC adversary with sustained physical access to a powered, unlocked device; a fundamental break of SPHINCS+ / SHA-256 (civilization-scale; recovery is a firmware update to a SHA-3/SHAKE-based scheme); a break of ML-KEM (only used for confidentiality of stored halves — the signing key never depends on lattices); side-channel / fault attacks on U585 silicon (orthogonal to PQ; mitigated by TAMP / consumption-mask / verify-before-release / FI-hardened `gated_unlock` + `docs/security/HARDENING.md`).
+**We explicitly do *not* defend against:** coerced unlock; an active CRQC adversary with sustained physical access to a powered, unlocked device; a fundamental break of SPHINCS+ / SHA-256 (civilization-scale; recovery is a firmware update to a SHA-3/SHAKE-based scheme); side-channel / fault attacks on U585 silicon (orthogonal to PQ; mitigated by TAMP / consumption-mask / verify-before-release / FI-hardened `gated_unlock` + `docs/security/HARDENING.md`).
 
-**Why hash-based signatures for the actual money:** lattice schemes rely on LWE hardness with a far younger cryptanalytic track record than hash functions. For the signing key and firmware signing we use SPHINCS+C10, whose only assumption is SHA-256. If lattices fall, only the planned ML-KEM inner-wrap layer migrates; signatures and firmware verification are unaffected.
+**Why hash-based signatures for the actual money:** lattice schemes rely on LWE hardness with a far younger cryptanalytic track record than hash functions. For the signing key and firmware signing we use SPHINCS+C10, whose only assumption is SHA-256 — with the inner-wrap descope, no lattice assumption appears anywhere in the shipping trust path.
 
 ### Why two secure elements?
 
@@ -320,7 +319,8 @@ Any claim of "verified" in docs or marketing must carry the assumption list.
 | Firmware measurement at boot (SHA-256 → 8 BIP-39 words) | 🟢; bit-packed shared rendering verified |
 | Firmware rollback journal + typed OTP floor | 🚫 production-blocked pending software backend, resource gates, and later owner-authorized silicon evidence |
 | TAMP driver (log-only); consumption-mask hook | 🟢 implemented |
-| ML-KEM-1024 inner wrap; Tier 2 BHK; boot-time attestation; device-identity cert | ⏳ not started |
+| Tier 2 BHK; boot-time attestation; device-identity cert | ⏳ not started |
+| ML-KEM-1024 inner wrap | 🚫 descoped 2026-07-07 (owner decision — accepted Grover-only bus residual; prototype retained feature-gated) |
 | Mixed-RNG (STM32 ⊕ OPTIGA ⊕ SE050 TRNG); PIN-entry digit scrambling | 🔵 partial / ⏳ |
 | Custom PCB; HUK-SAES at-rest wrap; production TAMP wipe; RDP-2 burn; FI/SCA lab | 🚫 blocked on HW |
 
@@ -369,7 +369,7 @@ Each phase has a hard exit criterion before the next starts. Full backlog: `docs
 
 - **Phase 0 — bring-up complete (today).** All-C10 firmware boots on the B-U585I-IOT02A; dual-SE split, three-way PIN sync, Tier-1 DHUK KDF, OPTIGA Shielded-Connection unlock, SE050 admin-wipe, and the FSBL firmware-update path all run end-to-end. The branch carries known production-invariant regressions (see `CLAUDE.md`).
 - **Phase 1 — close the bring-up regressions (in progress).** Restore the GTZC `TZSC_SECCFGR` allowlist (incl. GTZC2 USB-OTG); strip `debug-log`/`e2e-test`/`mock-se` from production builds + restore the `compile_error!` fences; remove dev log/register dumps; wire TAMP IRQ → `trigger_lockout_wipe()`; move BOR/inactivity to the Secure-only TIM; land Tier 2 (BHK); step a board to RDP1 and re-validate per-die DHUK uniqueness.
-- **Phase 2 — PQ inner wrap + boot-time attestation (still on the devkit).** Add the ML-KEM-1024 inner wrap (HUK-SAES-wrapped sk; `ct‖aead` on each SE); migrate the OPTIGA/SE050 reads onto it; pin a SPHINCS+C10 device-identity cert; implement mixed-RNG and PIN digit scrambling. Exit: the seed never appears in plaintext on either bus (trace-verified).
+- **Phase 2 — boot-time attestation (still on the devkit).** Pin a SPHINCS+C10 device-identity cert; implement mixed-RNG and PIN digit scrambling. (The ML-KEM-1024 inner wrap formerly in this phase was descoped 2026-07-07 — owner decision; bus confidentiality rests on the symmetric-rooted tunnels + per-device key rotation.) Exit: attestation verified at boot; halves cross the bus only under per-device-keyed AEAD (trace-verified).
 - **Phase 3 — custom PCB, HUK-SAES, GTZC, production peripheral set.** Design/review the PCB (U585 + both SEs + NV3007 LCD + buttons + tamper mesh + EMI can); HUK-SAES wrap the at-rest secrets; GTZC-mark every Secure-only peripheral; MPU boundaries; block DMA into S-SRAM; wire case switch / tamper mesh / temp sensor / BOR to the wipe ISR (measure bulk-cap holdup on real HW).
 - **Phase 4 — secure boot, provisioning, lockdown (blocked).** Implement and
   approve manifest-v4, the rollback backend/resource gates, and a replacement
@@ -429,12 +429,11 @@ Nothing here is optional. Run through the entire list **per device class**, not 
 
 **F2. Post-quantum cryptography**
 - [ ] **Recovery contract committed at launch**: C10 params, BIP-39 → C10 tag, CREATE2 salt, slot tags — after first ship, any change is a user-visible hard fork
-- [ ] NIST PQC vectors pass for ML-KEM-1024 (planned) on-target; constant-time inspection of the ML-KEM inner loops; FI lab targets the Decaps path
-- [ ] Verify-before-release on every Type 1/2 sig (double-evaluated with a sentinel); ML-KEM sk only ever HUK-SAES-wrapped (flash-dump test)
-- [ ] PQ wrap end-to-end (SE objects only ever hold `ct‖aead`; I²C-trace scan for test entropy); mixed TRNG reachable + un-bypassable
+- [ ] Verify-before-release on every Type 1/2 sig (double-evaluated with a sentinel)
+- [ ] Per-device SCP03 + PBS rotation verified on every shipped unit (I²C-trace scan confirms no fleet-default statics; load-bearing since the ML-KEM inner-wrap descope 2026-07-07); mixed TRNG reachable + un-bypassable
 - [ ] No classical-fallback verifier anywhere in the FSBL (CI confirms no ECDSA/Ed25519/RSA under any feature flag)
-- [ ] External audit of the `sphincs-c10` crate (address encoding, WOTS chains, zeroization, SHA-256 SCA) and the chosen ML-KEM crate
-- [ ] Documented + drilled PQ migration path if SHA-256 or ML-KEM is broken; recovery test that the same 24 words survive a migration
+- [ ] External audit of the `sphincs-c10` crate (address encoding, WOTS chains, zeroization, SHA-256 SCA)
+- [ ] Documented + drilled PQ migration path if SHA-256 is broken; recovery test that the same 24 words survive a migration
 
 **G. Update mechanism**
 - [ ] Updates signed by an HSM key separate from provisioning; verified before any new code runs; verification key under RDP-2
@@ -463,8 +462,8 @@ HDPL1  Our FSBL (WRP1A-locked) — holds the 32-byte C10 vendor key and verifies
        The reviewed Draft-0.9 target uses a release-version + security-epoch tuple and a typed
        OTP floor; the physical journal/ECC/OTP backend and final FSBL resource fit remain OPEN.
        The legacy 1024-bit/75-byte-preimage path is production-fenced and must not ship.
-HDPL2  Secure-world firmware — configures SAU/MPC/GTZC, opens SE buses, holds the (planned)
-       HUK-SAES-wrapped ML-KEM sk + OPTIGA PBS + SE050 SCP03 keys (derived via hw::secret_keys)
+HDPL2  Secure-world firmware — configures SAU/MPC/GTZC, opens SE buses, holds the
+       OPTIGA PBS + SE050 SCP03 keys (derived via hw::secret_keys)
 HDPL3  Non-secure firmware — UI shell, USB; no access to S-flash, SE buses, or any HDPL1/2 secret
 ```
 

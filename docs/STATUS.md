@@ -148,7 +148,7 @@ re-drifting.
 | Lean FV | `deserialize_pin_state` as a proven Aeneas rank | open | source `domain/src/lib.rs:739`; not extracted (Kani already proves panic-freedom) | handoff-pinstate |
 | Lean FV | Extend Aeneas into `domain` derivation (`slot_entropy`/`derive_c10_slot_seeds`) | open | needs `sha256_bytes` refactor first | FV-frontier |
 | Firmware FV | LeanLoop roadmap (goal-splitting / prover ensembling / lean-lsp MCP tier) | open | separate repo | sota §3 |
-| Crypto | ML-KEM-1024 inner wrap (Claim 7 / CRQC bus-capture residual) | open | closes SCP03/Shield static-leak residual | threat-model §9.1 |
+| Crypto | ML-KEM-1024 inner wrap (Claim 7 / CRQC bus-capture residual) | descoped — residual ACCEPTED (owner, 2026-07-07) | Grover-2⁶⁴/Cat-1 bound accepted; per-device SCP03/PBS rotation (work-todo #11 / §9.2) now load-bearing for the static-leak residual; prototype retained feature-gated | threat-model §9.1, work-todo #9 |
 | Platform | Boot-time SE attestation; MPU privilege-banking | open | HARDENING §3.4 / threat-model §9.4, §9.9 | — |
 
 ---
@@ -191,7 +191,7 @@ says what it authoritatively owns (don't duplicate it — link it).
 |-----|--------|------------------------------|----------------------|
 | `docs/verification/security-tooling-sota-2026-06.md` | 2026-06 3-pass SOTA sweep (~250 systems) | Owns **§34**; spawned the whole adopt-now shortlist + FI/SCA/protocol items | The adopt/pilot/skip decision matrix; "FI countermeasure already closed"; Binsec/Rel NO-GO |
 | `docs/verification/verification-targets-2026-06.md` | 12 ranked pure-logic FV targets (R1–R12) | Feeds `goals.leanloop.toml` one at a time (the FV frontier) | The FV-target ranking + KAT-anchor map driving §33/A3.1 |
-| `docs/security/threat-model.md` | STRIDE; T0–T7 tiers; S0–S7 assets; Claims 1–7; §9 live caveats | §9.1 ML-KEM, §9.2 provisioning, §9.4 boot-attest, §9.9 MPU; **Claim 3 provisional until S-1** | Adversary taxonomy + falsifiable security-claim contract |
+| `docs/security/threat-model.md` | STRIDE; T0–T7 tiers; S0–S7 assets; Claims 1–7; §9 live caveats | §9.1 ML-KEM (ACCEPTED residual 2026-07-07, no longer open), §9.2 provisioning, §9.4 boot-attest, §9.9 MPU; **Claim 3 provisional until S-1** | Adversary taxonomy + falsifiable security-claim contract |
 | `docs/security/security-review-2026-05.md` | 2026-05 firmware code-review | **Originated S-1..S-7** (`C-4→S-1`, `C-5→S-2`, … `C-9→S-7`) + H-5/H-6/M-2/M-3 carry-overs | The `C-n → S-n` ship-blocker derivation |
 | `production-todo.md` | Factory irreversible-burn TODO | The **bench/factory closure of S-1/S-2/S-3** + E140/F1D1-4/global-LcsO ratchets | **OPTIGA LcsO bench spec + factory burn ceremony** (the metadata bytes) |
 | `docs/provisioning/provisioning-reference.md` | Hardened provisioning ceremony (untrusted-CM) | Corrects S-1/S-2 defaults: F1D0 ships `LcsO<op` not ALW; only `0xE0E0` ships a sample anchor | Provisioning ceremony shape + corrected OPTIGA default-state |
