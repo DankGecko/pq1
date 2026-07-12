@@ -43,5 +43,6 @@ Newest first. Add a row when you file a report; update the Status/Findings cells
 
 | Report | Surface | Date | Report status | Findings (open / handled) |
 |---|---|---|---|---|
+| [clear-signing-2026-07-10](./clear-signing-2026-07-10.md) | clear-signing (ERC-7730 compiler, renderer, dispatch + FI) | 2026-07-10 | `resolved` | 0 open / 12 handled (10 fixed, 1 accepted, 1 deferred) |
 | [2026-07-adversarial-review-engagement](./2026-07-adversarial-review-engagement.md) | multi (playbook family build-out) | 2026-07-02..04 | `resolved` | 0 open / 11 handled (7 fixed, 1 accepted, 3 deferred) |
 | [clear-signing-2026-07-02](./clear-signing-2026-07-02.md) | clear-signing (ERC-7730 + render ladder) | 2026-07-02 | `resolved` | historical pass — live bugs fixed, tracked in the clear-signing playbook + work-todo |

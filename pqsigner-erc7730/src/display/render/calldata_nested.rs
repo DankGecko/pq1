@@ -7,8 +7,7 @@
 //! renderer can fan out into a child decoding without the host having
 //! to ship a second descriptor.
 //!
-//! Phase 4 v1 declines this and falls through to blind-sign for the
-//! outer transaction. Reasons:
+//! Phase 4 v1 rejects this; a verified/known outer call hard-refuses. Reasons:
 //!
 //! 1. The seed corpus does NOT exercise nested calldata — only Safe v1
 //!    uses it, and Safe rendering already lives in
@@ -32,8 +31,8 @@
 //!
 //! The 2026-07 review proposed a "hash of the embedded calldata + resolved
 //! callee" fallback (instead of declining) to keep the outer tx's sibling
-//! fields clear. Reviewed and DEFERRED — declining stays. Rationale:
-//!  1. Declining is fail-safe (blind-sign the whole tx); a hash page is NOT —
+//! fields clear. Reviewed and DEFERRED — rejection stays. Rationale:
+//!  1. Refusal is fail-safe; a hash page is NOT —
 //!     an opaque inner-call digest under a "clear-signed" banner is a
 //!     false-confidence hazard (the user can't verify what the inner call
 //!     does from a hash, yet the flow looks decoded).

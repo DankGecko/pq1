@@ -38,7 +38,10 @@ pub fn verify_proof(
     proof_depth: usize,
     expected_root: &[u8; 32],
 ) -> bool {
-    if proof_bytes.len() != proof_depth * 32 {
+    let Some(proof_len) = proof_depth.checked_mul(32) else {
+        return false;
+    };
+    if proof_bytes.len() != proof_len {
         return false;
     }
 
@@ -62,10 +65,11 @@ pub fn verify_proof(
         idx >>= 1;
     }
 
-    // 3. After `proof_depth` steps the path must collapse exactly
-    //    to the root. We do not check `idx == 0` because both 0 and
-    //    1 are legal root indices in a tree padded to power-of-2.
-    &h == expected_root
+    // 3. After `proof_depth` steps the path must collapse exactly to the
+    //    single root node. Any remaining high index bit describes a leaf
+    //    outside the `2^proof_depth`-wide tree. Ignoring it would make each
+    //    valid proof accept infinitely many non-canonical index aliases.
+    idx == 0 && &h == expected_root
 }
 
 #[inline]
@@ -89,4 +93,28 @@ fn node_hash(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
     let mut arr = [0u8; 32];
     arr.copy_from_slice(&out);
     arr
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_leaf_index_bits_above_proof_depth() {
+        let left = leaf_hash(b"left");
+        let right = leaf_hash(b"right");
+        let root = node_hash(&left, &right);
+
+        assert!(verify_proof(b"left", 0, &right, 1, &root));
+        assert!(verify_proof(b"right", 1, &left, 1, &root));
+        assert!(!verify_proof(b"left", 2, &right, 1, &root));
+        assert!(!verify_proof(b"right", 3, &left, 1, &root));
+    }
+
+    #[test]
+    fn depth_zero_accepts_only_index_zero() {
+        let root = leaf_hash(b"only");
+        assert!(verify_proof(b"only", 0, &[], 0, &root));
+        assert!(!verify_proof(b"only", 1, &[], 0, &root));
+    }
 }

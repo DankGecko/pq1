@@ -380,6 +380,18 @@ fn is_zero(v: &[u8; 32]) -> bool {
 // Eip1559Tx + strict envelope parser
 // ---------------------------------------------------------------------------
 
+/// Original ERC-4337 gas/nonce words carried alongside the legacy
+/// [`Eip1559Tx`] display envelope. UserOperations sign three independent gas
+/// limits and a full 256-bit nonce; collapsing them into one `u64` aggregate
+/// creates display collisions. Native EIP-1559 transactions leave this `None`.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct UserOpDisplayFields {
+    pub nonce: U256,
+    pub call_gas_limit: U256,
+    pub verification_gas_limit: U256,
+    pub pre_verification_gas: U256,
+}
+
 #[derive(Default, Debug)]
 pub struct Eip1559Tx {
     pub chain_id: u64,
@@ -393,6 +405,9 @@ pub struct Eip1559Tx {
     pub access_list_count: usize,
     /// keccak256 of the unsigned envelope. Set by `parse()`.
     pub signing_hash: [u8; 32],
+    /// Full signed UserOperation fields when this value is a display shim for
+    /// EntryPoint v0.6 rather than a native EIP-1559 transaction.
+    pub userop_fields: Option<UserOpDisplayFields>,
 }
 
 /// Output of [`parse`]. Borrows from the input envelope so the calldata
@@ -494,6 +509,7 @@ pub fn parse(envelope: &[u8]) -> Result<ParsedTx<'_>, TxError> {
             data_len: data.len(),
             access_list_count,
             signing_hash,
+            userop_fields: None,
         },
         data,
         envelope,

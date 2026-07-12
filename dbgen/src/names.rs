@@ -110,6 +110,17 @@ pub fn build_db(json_path: &Path) -> Result<NamesBuildResult, String> {
         }
     }
 
+    // 3b. The trusted UI normally shows a verified name plus an abbreviated
+    // EIP-55 address (first/last three bytes). That representation must still
+    // identify one address within any chain scope where two records can both
+    // resolve. Reject catalogue pairs whose ACTUAL painted name/fingerprint
+    // collide; otherwise a future curation update could make two distinct
+    // signed recipients produce identical semantic pages. Wildcard chain 0
+    // overlaps every concrete chain. The display transformation is imported
+    // from the renderer rather than mirrored here, including its explicit
+    // long-name `~` marker.
+    reject_named_display_collisions(&prepared)?;
+
     // 4. Build interned string pool.
     let mut pool: Vec<u8> = Vec::new();
     let mut intern: HashMap<String, u32> = HashMap::new();
@@ -133,7 +144,13 @@ pub fn build_db(json_path: &Path) -> Result<NamesBuildResult, String> {
     //    addr, name), not just short_key).
     let leaf_hashes: Vec<[u8; 32]> = prepared
         .iter()
-        .map(|r| leaf_hash(&canonical_names_leaf(r.chain_id, &r.address, r.name.as_bytes())))
+        .map(|r| {
+            leaf_hash(&canonical_names_leaf(
+                r.chain_id,
+                &r.address,
+                r.name.as_bytes(),
+            ))
+        })
         .collect();
     let tree = MerkleTree::build(leaf_hashes);
     let root = tree.root();
@@ -259,6 +276,85 @@ struct PreparedRow {
     name: String,
 }
 
+fn chain_scopes_overlap(a: u64, b: u64) -> bool {
+    const WILD: u64 = sphincs_tz_shared::db_format::NAMES_WILDCARD_CHAIN_ID;
+    a == b || a == WILD || b == WILD
+}
+
+fn reject_named_display_collisions(rows: &[PreparedRow]) -> Result<(), String> {
+    use pqsigner_erc7730::display::primitives::{
+        verified_name_address_fingerprint, verified_name_display_bytes, VERIFIED_NAME_DISPLAY_LEN,
+    };
+
+    for i in 0..rows.len() {
+        let a = &rows[i];
+        let mut a_name = [0u8; VERIFIED_NAME_DISPLAY_LEN];
+        let a_name_len = verified_name_display_bytes(a.name.as_bytes(), &mut a_name);
+        a_name[a_name_len..].fill(b' ');
+        a_name.make_ascii_lowercase();
+        let mut a_addr = verified_name_address_fingerprint(&a.address);
+        // Case is a checksum/legibility aid, not enough visual entropy to make
+        // otherwise-identical names and 48-bit fingerprints safe. Compare the
+        // entire painted name area after space padding and ASCII case-folding:
+        // e.g. `"Vault"`, `"Vault "`, and `"VAULT"` must not distinguish two
+        // signed recipients.
+        a_addr.make_ascii_lowercase();
+
+        for b in &rows[i + 1..] {
+            if !chain_scopes_overlap(a.chain_id, b.chain_id) {
+                continue;
+            }
+            let mut b_name = [0u8; VERIFIED_NAME_DISPLAY_LEN];
+            let b_name_len = verified_name_display_bytes(b.name.as_bytes(), &mut b_name);
+            b_name[b_name_len..].fill(b' ');
+            b_name.make_ascii_lowercase();
+
+            // The companion controls which valid bundles are attached. If an
+            // exact-chain and wildcard entry for the SAME address paint
+            // different names, omitting the exact proof makes the wildcard
+            // label win. Do not give an untrusted proof subset a choice of
+            // trusted semantics for one signed address.
+            if a.address == b.address {
+                if a_name != b_name {
+                    return Err(format!(
+                        "named-address display ambiguity across overlapping chain scopes: \
+                         ({}, 0x{}, {:?}) and ({}, 0x{}, {:?}) bind the same address to \
+                         competing case-insensitive padded names",
+                        a.chain_id,
+                        hex::encode(a.address),
+                        a.name,
+                        b.chain_id,
+                        hex::encode(b.address),
+                        b.name,
+                    ));
+                }
+                continue;
+            }
+
+            if a_name != b_name {
+                continue;
+            }
+            let mut b_addr = verified_name_address_fingerprint(&b.address);
+            b_addr.make_ascii_lowercase();
+            if a_addr != b_addr {
+                continue;
+            }
+            return Err(format!(
+                "named-address display collision across overlapping chain scopes: \
+                 ({}, 0x{}, {:?}) and ({}, 0x{}, {:?}) paint the same \
+                 case-insensitive padded name + first/last-three-byte address fingerprint",
+                a.chain_id,
+                hex::encode(a.address),
+                a.name,
+                b.chain_id,
+                hex::encode(b.address),
+                b.name,
+            ));
+        }
+    }
+    Ok(())
+}
+
 // === Host-side parser mirror ================================================
 
 struct HostNamesDb<'a> {
@@ -370,6 +466,14 @@ mod tests {
 
     fn fixture_addr(suffix: u8) -> String {
         format!("0x{}{:02x}", "0".repeat(38), suffix)
+    }
+
+    fn named_fingerprint_collision_addr(middle: u8) -> String {
+        let mut address = [0u8; 20];
+        address[..3].copy_from_slice(&[0x11, 0x22, 0x33]);
+        address[3] = middle;
+        address[17..].copy_from_slice(&[0xaa, 0xbb, 0xcc]);
+        format!("0x{}", hex::encode(address))
     }
 
     // === Positive ============================================================
@@ -539,6 +643,124 @@ mod tests {
         assert!(err.contains("duplicate"), "got: {err}");
     }
 
+    #[test]
+    fn negative_named_display_collision_after_name_truncation_rejected() {
+        // Both 32-byte names paint the same first 28 bytes + `~`; both
+        // addresses paint the same first/last-three-byte fingerprint. The
+        // signed recipients differ, so accepting both would make their named
+        // semantic pages identical on chain 1.
+        let prefix = "N".repeat(28);
+        let json = format!(
+            r#"[
+                {{"chain_id": 1, "address": "{}", "name": "{}AAAA"}},
+                {{"chain_id": 1, "address": "{}", "name": "{}BBBB"}}
+            ]"#,
+            named_fingerprint_collision_addr(0x01),
+            prefix,
+            named_fingerprint_collision_addr(0x02),
+            prefix,
+        );
+        let f = write_json(&json);
+        let err = build_db(f.path())
+            .err()
+            .expect("identical named display for distinct addresses must fail");
+        assert!(err.contains("display collision"), "got: {err}");
+    }
+
+    #[test]
+    fn negative_named_display_collision_wildcard_overlaps_concrete_chain() {
+        let json = format!(
+            r#"[
+                {{"address": "{}", "name": "Same Name"}},
+                {{"chain_id": 1, "address": "{}", "name": "Same Name"}}
+            ]"#,
+            named_fingerprint_collision_addr(0x01),
+            named_fingerprint_collision_addr(0x02),
+        );
+        let f = write_json(&json);
+        let err = build_db(f.path())
+            .err()
+            .expect("wildcard and chain-specific records can both resolve on chain 1");
+        assert!(err.contains("display collision"), "got: {err}");
+    }
+
+    #[test]
+    fn negative_named_display_collision_ignores_ascii_case() {
+        let json = format!(
+            r#"[
+                {{"chain_id": 1, "address": "{}", "name": "Same Vault"}},
+                {{"chain_id": 1, "address": "{}", "name": "same vault"}}
+            ]"#,
+            named_fingerprint_collision_addr(0x01),
+            named_fingerprint_collision_addr(0x02),
+        );
+        let f = write_json(&json);
+        let err = build_db(f.path())
+            .err()
+            .expect("case alone must not distinguish two trusted recipients");
+        assert!(err.contains("display collision"), "got: {err}");
+    }
+
+    #[test]
+    fn negative_named_display_collision_accounts_for_lcd_space_padding() {
+        let json = format!(
+            r#"[
+                {{"chain_id": 1, "address": "{}", "name": "Same Vault"}},
+                {{"chain_id": 1, "address": "{}", "name": "Same Vault "}}
+            ]"#,
+            named_fingerprint_collision_addr(0x01),
+            named_fingerprint_collision_addr(0x02),
+        );
+        let f = write_json(&json);
+        let err = build_db(f.path())
+            .err()
+            .expect("trailing painted spaces must not distinguish two recipients");
+        assert!(err.contains("display collision"), "got: {err}");
+    }
+
+    #[test]
+    fn negative_same_address_wildcard_cannot_compete_with_exact_name() {
+        let address = named_fingerprint_collision_addr(0x01);
+        let json = format!(
+            r#"[
+                {{"address": "{address}", "name": "Generic Router"}},
+                {{"chain_id": 1, "address": "{address}", "name": "Mainnet Router"}}
+            ]"#,
+        );
+        let f = write_json(&json);
+        let err = build_db(f.path())
+            .err()
+            .expect("proof omission must not select a competing trusted name");
+        assert!(err.contains("display ambiguity"), "got: {err}");
+    }
+
+    #[test]
+    fn positive_same_address_wildcard_and_exact_may_share_one_display_name() {
+        let address = named_fingerprint_collision_addr(0x01);
+        let json = format!(
+            r#"[
+                {{"address": "{address}", "name": "Same Router"}},
+                {{"chain_id": 1, "address": "{address}", "name": "same router "}}
+            ]"#,
+        );
+        let f = write_json(&json);
+        build_db(f.path()).expect("both proofs paint the same normalized trusted name");
+    }
+
+    #[test]
+    fn positive_same_named_fingerprint_on_disjoint_chains_is_distinguished_by_chain_page() {
+        let json = format!(
+            r#"[
+                {{"chain_id": 1, "address": "{}", "name": "Same Name"}},
+                {{"chain_id": 137, "address": "{}", "name": "Same Name"}}
+            ]"#,
+            named_fingerprint_collision_addr(0x01),
+            named_fingerprint_collision_addr(0x02),
+        );
+        let f = write_json(&json);
+        build_db(f.path()).expect("exact disjoint chains have distinct network pages");
+    }
+
     /// names_short_key uses chain_id in BIG endian — a regression to
     /// LE would silently re-key every wallet's name DB. Pin BE.
     #[test]
@@ -603,7 +825,8 @@ mod tests {
         // Flip a byte in the FIRST entry's short_key.
         tampered[NAMES_DB_HEADER_LEN] ^= 0x01;
         let err = round_trip_check(&tampered, f.path(), &res.root)
-            .err().expect("tampered short_key must fail");
+            .err()
+            .expect("tampered short_key must fail");
         // Either the entry won't be found OR the proof won't verify;
         // both are acceptable rejection paths.
         assert!(

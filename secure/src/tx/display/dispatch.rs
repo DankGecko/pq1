@@ -98,7 +98,7 @@ pub fn pick_sign_pages(
     // signature over ETH the user never saw. The helper lives in
     // `value_page.rs` so the host-test scaffold can mount and exercise the
     // real body (this dispatcher is `cfg(not(test))`).
-    super::value_page::enforce_native_value_page(&mut pages, &tx.value)?;
+    super::value_page::enforce_native_value_page(&mut pages, &tx.value, tx.chain_id)?;
 
     // Dispatcher-level WYSIWYS invariant (audit 2026-06-19 — gas/fee pages).
     //
@@ -188,21 +188,169 @@ fn pick_sign_pages_inner(
             Err(crate::tx::erc7730_render::RenderErr::Reject(msg)) => {
                 // `msg` is a developer trace tag (e.g. "7730 nested blob
                 // trailing") — not user-facing text, and several exceed the
-                // 16-col row. Show the user ONE clear line and keep the tag in
-                // the debug log (review 4.12). Fall through to the next ladder
-                // rung so they still see the tx in a less-rich form (typed-call
-                // selector / blind-sign / ERC-20).
+                // 16-col row. Keep the tag in the debug log and refuse: once a
+                // descriptor has verified and bound to this transaction, a
+                // renderer failure is an integrity failure, not permission to
+                // downgrade to a weaker typed/blind-sign interpretation.
                 // Bare invocation — `secure_log!` is a `macro_rules!` in
                 // main.rs without `#[macro_export]`, textually scoped: the
                 // `crate::secure_log!` path form fails E0433 under
                 // `debug-log` (only the cfg'd-out no-op arm is suggested).
-                secure_log!("erc7730 clear-sign declined: {}", msg);
+                secure_log!("erc7730 clear-sign refused: {}", msg);
                 let _ = msg;
-                crate::ui::show_status("Can't clear-sign", "review raw sign");
+                crate::ui::show_status("Sign refused", "clear-sign failed");
+                return Err(());
             }
-            Err(_) => {
-                // NoFormat / PageBudget — fall through silently.
+            Err(crate::tx::erc7730_render::RenderErr::NoFormat) => {
+                secure_log!("erc7730 clear-sign refused: no format");
+                crate::ui::show_status("Sign refused", "clear-sign format");
+                return Err(());
             }
+            Err(crate::tx::erc7730_render::RenderErr::PageBudget) => {
+                secure_log!("erc7730 clear-sign refused: page budget");
+                crate::ui::show_status("Sign refused", "clear-sign pages");
+                return Err(());
+            }
+        }
+    }
+    // A Merkle root authenticates a supplied descriptor but cannot, by itself,
+    // reveal that a hostile companion omitted one. The firmware-pinned known-
+    // call filter supplies that missing non-optional membership signal. Once a
+    // registry-declared `(chain, target, selector)` is known, absence/malformed binding
+    // is a hard refusal rather than permission to downgrade to ERC-20, typed-
+    // call, or blind-sign pages. Higher-priority native Safe/CoW decoders have
+    // already returned above and remain valid without an ERC-7730 trailer.
+    {
+        // Route the proof unconditionally. The old outer `if let` was itself a
+        // one-instruction permission branch: skipping it bypassed every A/B
+        // gate below. A missing target and short calldata are represented
+        // canonically and proven just like any other tuple; Bloom false
+        // positives only refuse, which is safe.
+        let mut target = [0u8; 20];
+        let mut target_present = 0u32;
+        // SAFETY: unique local. Start from a materialized FAIL state so a
+        // skipped `Some` route cannot inherit a permissive stack value.
+        unsafe {
+            core::ptr::write_volatile(
+                &mut target_present,
+                crate::fi::FAIL_SENTINEL,
+            );
+        }
+        if let Some(actual) = tx.to.as_ref() {
+            target.copy_from_slice(actual);
+            // SAFETY: unique live local; volatile publication makes a skipped
+            // target-copy route observable in both final permission gates.
+            unsafe {
+                core::ptr::write_volatile(
+                    &mut target_present,
+                    crate::fi::OK_SENTINEL,
+                );
+            }
+        }
+        let mut selector = [0u8; 4];
+        let selector_len = core::cmp::min(inner_data.len(), selector.len());
+        selector[..selector_len].copy_from_slice(&inner_data[..selector_len]);
+        // Permission to fall through is the security-sensitive direction.
+        // The verdict slot starts FAIL and the CFI counter belongs to this
+        // caller but is bumped inside the non-inlined proof. Skipping the whole
+        // call therefore cannot turn attacker-controlled argument registers
+        // into an accidental OK return value.
+        let mut unknown_verdict_slot = 0u32;
+        // SAFETY: unique local. The volatile FAIL materialization is
+        // load-bearing: an ordinary initialization is dead on the normal path
+        // (the callee overwrites it) and LTO could erase it, leaving stale
+        // stack data if a fault skips the call.
+        unsafe {
+            core::ptr::write_volatile(
+                &mut unknown_verdict_slot,
+                crate::fi::FAIL_SENTINEL,
+            );
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let mut unknown_cfi = crate::fi::CfiCounter::new();
+        crate::tx::erc7730::prove_unknown_contract_call(
+            tx.chain_id,
+            &target,
+            &selector,
+            &mut unknown_verdict_slot,
+            &mut unknown_cfi,
+        );
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        // Gate A independently materializes both permission proofs. Gate B
+        // repeats the volatile read and caller-CFI check after a randomized
+        // gap, so a skipped reject branch still lands at another reject.
+        // SAFETY: local was initialized above and remains live; the proof's
+        // unique mutable borrow ended before this independent readback.
+        let unknown_verdict_a = unsafe {
+            core::ptr::read_volatile(&unknown_verdict_slot)
+        };
+        let unknown_cfi_verdict_a =
+            unknown_cfi.check_into_sentinel(crate::tx::erc7730::CFI_KNOWN_EXPECTED);
+        let route_a = match tx.to.as_ref() {
+            Some(actual) => {
+                // SAFETY: initialized above and independently materialized at
+                // the gate that consumes it.
+                let present = unsafe { core::ptr::read_volatile(&target_present) };
+                present == crate::fi::OK_SENTINEL
+                    && actual == &target
+                    && selector[..selector_len] == inner_data[..selector_len]
+            }
+            None => {
+                // Contract creation has no catalogue target. It still queries
+                // the all-zero sentinel tuple so a Bloom collision refuses.
+                target == [0u8; 20]
+                    && selector[..selector_len] == inner_data[..selector_len]
+            }
+        };
+        let unknown_gate_a = crate::fi::check_true_into_sentinel(|| {
+            core::hint::black_box(unknown_verdict_a) == crate::fi::OK_SENTINEL
+                && core::hint::black_box(unknown_cfi_verdict_a)
+                    == crate::fi::OK_SENTINEL
+                && core::hint::black_box(route_a)
+        });
+        crate::fi::scrub_sentinel_register();
+        if unknown_gate_a != crate::fi::OK_SENTINEL {
+            secure_log!(
+                "erc7730 clear-sign refused: known call omitted descriptor"
+            );
+            crate::ui::show_status("Sign refused", "7730 proof needed");
+            return Err(());
+        }
+        crate::fi::wait_random();
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        // SAFETY: same live local, independently re-read after the randomized
+        // gap instead of reusing gate A's cached evidence.
+        let unknown_verdict_b = unsafe {
+            core::ptr::read_volatile(&unknown_verdict_slot)
+        };
+        let unknown_cfi_verdict_b =
+            unknown_cfi.check_into_sentinel(crate::tx::erc7730::CFI_KNOWN_EXPECTED);
+        let route_b = match tx.to.as_ref() {
+            Some(actual) => {
+                // SAFETY: same initialized local, re-read after the gap.
+                let present = unsafe { core::ptr::read_volatile(&target_present) };
+                present == crate::fi::OK_SENTINEL
+                    && actual == &target
+                    && selector[..selector_len] == inner_data[..selector_len]
+            }
+            None => {
+                target == [0u8; 20]
+                    && selector[..selector_len] == inner_data[..selector_len]
+            }
+        };
+        let unknown_gate_b = crate::fi::check_true_into_sentinel(|| {
+            core::hint::black_box(unknown_verdict_b) == crate::fi::OK_SENTINEL
+                && core::hint::black_box(unknown_cfi_verdict_b)
+                    == crate::fi::OK_SENTINEL
+                && core::hint::black_box(route_b)
+        });
+        crate::fi::scrub_sentinel_register();
+        if unknown_gate_b != crate::fi::OK_SENTINEL {
+            secure_log!(
+                "erc7730 clear-sign refused: known call omitted descriptor"
+            );
+            crate::ui::show_status("Sign refused", "7730 proof needed");
+            return Err(());
         }
     }
     if inner_data.is_empty() {

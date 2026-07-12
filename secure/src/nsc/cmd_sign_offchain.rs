@@ -459,28 +459,70 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                 return NscStatus::InvalidPointer as u32;
             }
         };
-        // FI-hardened binding cross-check (Phase 5 item 6).
-        // Compute the verdict once, then double-evaluate via
-        // `check_true_into_sentinel` with `wait_random` between
-        // so a single-fault glitch that flips the `.is_err()`
-        // ALSO has to defeat a Hamming-distant sentinel compare.
-        // Mirrors the verify-before-release pattern in
-        // `crypto::c10_sign_verified_with_progress`.
         // `domain_separator` is the companion-supplied domain the
         // signature commits to (folded into `final_eip712` below); the
-        // descriptor's pinned `ir.domain_separator` cryptographically
-        // binds the verifying contract through it, so there is no separate
-        // contract argument to compare (audit L-11).
-        let eip712_bind_ok = crate::tx::erc7730::cross_check_eip712(
+        // descriptor's pinned `ir.domain_separator` was host-generated with
+        // the deployment chain/address forced into its domain shape. Exact
+        // equality therefore binds that deployment; opaque precomputed
+        // separators are rejected by dbgen (audit L-11).
+        let mut bind_verdict_slot = 0u32;
+        // SAFETY: unique local; volatile FAIL state survives LTO if the
+        // non-inlined binding proof call is fault-skipped.
+        unsafe {
+            core::ptr::write_volatile(
+                &mut bind_verdict_slot,
+                crate::fi::FAIL_SENTINEL,
+            );
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let mut bind_cfi = crate::fi::CfiCounter::new();
+        crate::tx::erc7730::prove_eip712_binding(
             &v.ir,
+            trailer,
+            &crate::db_roots::ERC7730_DESCRIPTORS_ROOT,
             chain_id,
             &domain_separator,
-        )
-        .is_ok();
+            &mut bind_verdict_slot,
+            &mut bind_cfi,
+        );
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        // Gate A independently materializes the verdict and caller CFI.
+        // Gate B repeats both checks after a randomized gap, so one skipped
+        // final reject branch cannot admit a failed descriptor binding.
+        // SAFETY: local remains live and the callee borrow ended.
+        let bind_verdict_a = unsafe {
+            core::ptr::read_volatile(&bind_verdict_slot)
+        };
+        let bind_cfi_verdict_a = bind_cfi.check_into_sentinel(
+            crate::tx::erc7730::CFI_EIP712_BIND_EXPECTED,
+        );
+        let bind_gate_a = crate::fi::check_true_into_sentinel(|| {
+            core::hint::black_box(bind_verdict_a) == crate::fi::OK_SENTINEL
+                && core::hint::black_box(bind_cfi_verdict_a)
+                    == crate::fi::OK_SENTINEL
+        });
+        crate::fi::scrub_sentinel_register();
+        if bind_gate_a != crate::fi::OK_SENTINEL {
+            crate::ui::show_status("EIP-1271", "7730 binding fail");
+            return NscStatus::InvalidPointer as u32;
+        }
         crate::fi::wait_random();
-        if crate::fi::check_true_into_sentinel(|| core::hint::black_box(eip712_bind_ok))
-            != crate::fi::OK_SENTINEL
-        {
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        // SAFETY: same live local, independently re-read after the randomized
+        // gap rather than relying on gate A's cached evidence.
+        let bind_verdict_b = unsafe {
+            core::ptr::read_volatile(&bind_verdict_slot)
+        };
+        let bind_cfi_verdict_b = bind_cfi.check_into_sentinel(
+            crate::tx::erc7730::CFI_EIP712_BIND_EXPECTED,
+        );
+        let bind_gate_b = crate::fi::check_true_into_sentinel(|| {
+            core::hint::black_box(bind_verdict_b) == crate::fi::OK_SENTINEL
+                && core::hint::black_box(bind_cfi_verdict_b)
+                    == crate::fi::OK_SENTINEL
+        });
+        crate::fi::scrub_sentinel_register();
+        if bind_gate_b != crate::fi::OK_SENTINEL {
             crate::ui::show_status("EIP-1271", "7730 binding fail");
             return NscStatus::InvalidPointer as u32;
         }

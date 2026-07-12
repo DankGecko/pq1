@@ -19,7 +19,7 @@
 //! values would let a hostile companion turn a plausible "sync" prompt into an
 //! undisclosed near-exhaustion request.
 
-use super::primitives::{chain_name, write_chain};
+use super::primitives::write_chain;
 use super::Pages;
 use crate::ui::DISPLAY_COLS;
 
@@ -53,11 +53,13 @@ pub fn build_offchain_sync_pages(
     write_centered(out.row_mut(0, 1), b"SYNC COUNTER?");
     write_centered(out.row_mut(0, 2), b"Off-chain floor");
 
-    // Page 1 — the exact parameters being authorised. `write_chain` formats the
-    // full u64 chain id (or "!OVF" — it never silently truncates); `chain_name`
-    // labels known networks and renders "(UNVERIFIED)" otherwise.
-    write_chain(out.row_mut(1, 0), chain_id);
-    write_centered(out.row_mut(1, 1), chain_name(chain_id).as_bytes());
+    // Page 1 — the exact parameters being authorised. `write_chain` uses both
+    // rows so every 10–20 digit u64 remains lossless; short ids use row 1 for
+    // the advisory chain name.
+    {
+        let [id, continuation_or_name, _account, _slot] = out.page_mut(1);
+        write_chain(id, continuation_or_name, chain_id);
+    }
     write_label_dec(out.row_mut(1, 2), b"Account: ", u64::from(account_index));
     write_label_dec(out.row_mut(1, 3), b"Slot: ", u64::from(slot_index));
 

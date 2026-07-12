@@ -22,7 +22,7 @@
 //! The table bytes are part of the Merkle-pinned IR, so they are trusted
 //! content. The strict bounds / ASCII checks here are defence-in-depth:
 //! a malformed table (truncation, non-printable label byte) makes the
-//! whole field decline-to-blind rather than render garbage on the trusted
+//! whole descriptor reject rather than render garbage on the trusted
 //! display — the same posture as every other on-device parser. A value
 //! the descriptor author did not enumerate is NOT an error: it returns
 //! `Ok(None)` and the caller (`render_enum`) declines-to-blind, because

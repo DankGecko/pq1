@@ -15,7 +15,8 @@
 //!
 //!   * the display path — the REAL `pick_sign_pages` body (mounted at
 //!     `super::dispatch`), followed by the handler's real splice gates in
-//!     handler order (`enforce_paymaster_page`, ERC-8213 fingerprint);
+//!     handler order (`enforce_paymaster_page`, mandatory From page,
+//!     ERC-8213 fingerprint);
 //!   * the signature path — the REAL `reconstruct_execute_calldata` +
 //!     `compute_sphincs_digest_v06` (pqsigner-aa, the exact functions the
 //!     handler calls at §10/§14).
@@ -64,7 +65,10 @@ use sha3::{Digest as _, Keccak256};
 
 use super::dispatch::pick_sign_pages;
 use super::erc8213;
-use super::value_page::{enforce_from_page, enforce_paymaster_page, from_page_proof};
+use super::value_page::{
+    enforce_from_page, enforce_paymaster_page, enforce_target_page, from_page_proof,
+    target_page_proof,
+};
 use super::Pages;
 use crate::aa::userop::{
     compute_sphincs_digest_v06, reconstruct_execute_calldata, sha256_bytes,
@@ -72,7 +76,7 @@ use crate::aa::userop::{
 };
 use crate::erc20::bundle::Erc20Metadata;
 use crate::names::NameResolver;
-use crate::tx::eip1559::{Eip1559Tx, U256};
+use crate::tx::eip1559::{Eip1559Tx, U256, UserOpDisplayFields};
 use crate::ui::DISPLAY_COLS;
 use sphincs_tz_shared::{EXEC_TRANSACTION_SELECTOR, SIGN_USEROP_HEADER_LEN};
 
@@ -135,7 +139,9 @@ impl WireSignRequest {
     fn encode(&self) -> Vec<u8> {
         let mut buf = vec![0u8; SIGN_USEROP_HEADER_LEN + self.data.len()];
         buf[0..8].copy_from_slice(&self.chain_id.to_be_bytes());
-        let flags: u32 = ((self.account_index & 0xFF) << 22)
+        // flags: no INCLUDE_INIT_CODE / REGISTER_SLOT; account index in bits
+        // 29..22, slot index in bits 21..0.
+        let flags: u32 = ((self.account_index & 0xff) << 22)
             | (self.slot_index & 0x003F_FFFF);
         buf[8..12].copy_from_slice(&flags.to_be_bytes());
         buf[12..32].copy_from_slice(&self.sender);
@@ -187,7 +193,7 @@ fn mirror_parse(buf: &[u8]) -> MirrorParsed {
     );
     MirrorParsed {
         chain_id: u64::from_be_bytes(buf[0..8].try_into().unwrap()),
-        account_index: (flags >> 22) & 0xFF,
+        account_index: (flags >> 22) & 0xff,
         slot_index: flags & 0x003F_FFFF,
         sender: arr20(12),
         entry_point: arr20(32),
@@ -241,6 +247,12 @@ fn tx_for_display(p: &MirrorParsed) -> Eip1559Tx {
         data_len: p.inner.len(),
         access_list_count: 0,
         signing_hash: [0u8; 32],
+        userop_fields: Some(UserOpDisplayFields {
+            nonce: U256(p.nonce),
+            call_gas_limit: U256(p.gas[0]),
+            verification_gas_limit: U256(p.gas[1]),
+            pre_verification_gas: U256(p.gas[2]),
+        }),
     }
 }
 
@@ -295,11 +307,18 @@ fn drive_glue(p: &MirrorParsed, ctx: &Contexts<'_>) -> GlueOutcome {
         .expect("paymaster page must fit");
     let signer_pages_before = pages.len;
     enforce_from_page(&mut pages, p.account_index, &p.sender)
-        .expect("signer page must fit");
-    crate::fi::scrub_sentinel_register();
+        .expect("mandatory signer page must fit");
     assert_eq!(
         from_page_proof(&pages, signer_pages_before, p.account_index, &p.sender),
-        crate::fi::OK_SENTINEL
+        crate::fi::OK_SENTINEL,
+        "mandatory signer page must match parsed account/address"
+    );
+    let target_pages_before = pages.len;
+    enforce_target_page(&mut pages, &p.to).expect("mandatory target page must fit");
+    assert_eq!(
+        target_page_proof(&pages, target_pages_before, &p.to),
+        crate::fi::OK_SENTINEL,
+        "mandatory target page must match parsed target"
     );
     let calldata_fingerprint = pqsigner_tx_core::erc8213::calldata_digest(&p.inner);
     erc8213::append_fingerprint_page(
@@ -530,7 +549,26 @@ fn assert_signer_page_shown(pages: &Pages, account_index: u32, sender: &[u8; 20]
             && row_str(&page[2]) == want[1]
             && row_str(&page[3]) == want[2]
     });
-    assert!(found, "signer page {label} + {want:?} not found");
+    assert!(
+        found,
+        "signer page {label} + {want:?} not found:\n{:#?}",
+        all_rows(pages)
+    );
+}
+
+fn assert_target_page_shown(pages: &Pages, target: &[u8; 20]) {
+    let want = oracle_addr_rows(target);
+    let found = pages.as_slice().iter().any(|page| {
+        row_str(&page[0]) == "Target contract:"
+            && row_str(&page[1]) == want[0]
+            && row_str(&page[2]) == want[1]
+            && row_str(&page[3]) == want[2]
+    });
+    assert!(
+        found,
+        "mandatory target page {want:?} not found:\n{:#?}",
+        all_rows(pages)
+    );
 }
 
 /// Assert the final two pages are the ERC-8213 banner + the exact hash
@@ -587,11 +625,13 @@ fn assert_core_bindings(p: &MirrorParsed, out: &GlueOutcome) -> OracleExec {
     //     BYTES (recomputed test-locally from the oracle-decoded data).
     assert_fingerprint_pages(&out.pages, &oracle_erc8213_digest(&oracle.data));
 
-    // (5) The selected mnemonic account and signer are painted together.
-    assert_signer_page_shown(&out.pages, p.account_index, &p.sender);
-
-    // (6) The signed target is painted in full EIP-55 on some page.
+    // (5) The signed target is painted in full EIP-55 on some page.
     assert_addr_shown(&out.pages, &oracle.target, "signed exec target");
+
+    // (6) The account selector and mnemonic-derived/bound sender are painted
+    //     together on their mandatory full-address identity page.
+    assert_signer_page_shown(&out.pages, p.account_index, &p.sender);
+    assert_target_page_shown(&out.pages, &oracle.target);
 
     oracle
 }
@@ -735,6 +775,42 @@ fn wysiwys_blind_sign_shows_signed_selector_and_fingerprint() {
     assert!(rows_contain(&rows, "0.250000 ETH"), "signed 0.25 ETH shown");
 }
 
+/// Runtime regression for the firmware-pinned known-call membership gate.
+///
+/// WETH `deposit()` is present in the compiled ERC-7730 catalogue. A hostile
+/// companion that strips (or supplies a malformed proof for) that descriptor
+/// leaves `erc7730 == None` at dispatch. The request must hard-refuse instead
+/// of downgrading the known call to a reassuring value/typed/blind page set.
+#[test]
+fn wysiwys_known_weth_deposit_without_descriptor_hard_refuses() {
+    let mut req = WireSignRequest::base();
+    req.chain_id = 1;
+    req.to = [
+        0xc0, 0x2a, 0xaa, 0x39, 0xb2, 0x23, 0xfe, 0x8d, 0x0a, 0x0e,
+        0x5c, 0x4f, 0x27, 0xea, 0xd9, 0x08, 0x3c, 0x75, 0x6c, 0xc2,
+    ];
+    req.data = vec![0xd0, 0xe3, 0x0d, 0xb0]; // deposit()
+    let parsed = mirror_parse(&req.encode());
+    let tx = tx_for_display(&parsed);
+    let resolver = NameResolver::new();
+
+    let outcome = pick_sign_pages(
+        &tx,
+        &parsed.inner,
+        None,
+        None,
+        None,
+        None, // companion omitted / failed to verify the descriptor
+        None,
+        None,
+        &resolver,
+    );
+    assert!(
+        outcome.is_err(),
+        "known WETH deposit without its Merkle proof must never reach blind-sign"
+    );
+}
+
 #[test]
 fn wysiwys_safe_exec_renders_safe_surface_with_spliced_gas_pages() {
     let safe_addr = [0x5A; 20];
@@ -843,20 +919,6 @@ fn divergence_probe_inner_data_byte_flip_moves_digest_and_fingerprint() {
 }
 
 #[test]
-fn divergence_probe_account_flip_moves_mandatory_signer_page() {
-    let req = WireSignRequest::base();
-    let p = mirror_parse(&req.encode());
-    let out = drive_glue(&p, &Contexts::default());
-    let mut req2 = req.clone();
-    req2.account_index = 1;
-    let p2 = mirror_parse(&req2.encode());
-    let out2 = drive_glue(&p2, &Contexts::default());
-    assert_signer_page_shown(&out.pages, 0, &p.sender);
-    assert_signer_page_shown(&out2.pages, 1, &p2.sender);
-    assert_ne!(out.pages.as_slice(), out2.pages.as_slice());
-}
-
-#[test]
 fn divergence_probe_recipient_flip_moves_both_pages_and_digest() {
     let mut req = WireSignRequest::base();
     req.value = be_u256_from_u64(1_000_000_000_000_000_000);
@@ -875,6 +937,8 @@ fn divergence_probe_recipient_flip_moves_both_pages_and_digest() {
     // to catch.
     assert_addr_shown(&out.pages, &p.to, "original target");
     assert_addr_shown(&out2.pages, &p2.to, "flipped target");
+    assert_target_page_shown(&out.pages, &p.to);
+    assert_target_page_shown(&out2.pages, &p2.to);
     assert_ne!(
         oracle_addr_rows(&p.to),
         oracle_addr_rows(&p2.to),
@@ -901,6 +965,26 @@ fn divergence_probe_value_flip_moves_value_page_and_digest() {
     assert!(rows_contain(&rows2, "2.000000 ETH") && !rows_contain(&rows2, "1.000000 ETH"));
 }
 
+#[test]
+fn divergence_probe_account_flip_moves_mandatory_from_page() {
+    let req = WireSignRequest::base();
+    let p = mirror_parse(&req.encode());
+    let out = drive_glue(&p, &Contexts::default());
+
+    let mut req2 = req.clone();
+    req2.account_index = 1;
+    let p2 = mirror_parse(&req2.encode());
+    let out2 = drive_glue(&p2, &Contexts::default());
+
+    assert_signer_page_shown(&out.pages, 0, &p.sender);
+    assert_signer_page_shown(&out2.pages, 1, &p2.sender);
+    assert_ne!(
+        out.pages.as_slice(),
+        out2.pages.as_slice(),
+        "changing only account_index must change confirmed display bytes"
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Handler-source pins — hold the replicated glue honest. If
 // `cmd_sign_userop.rs` changes how it builds `tx_for_display`, routes
@@ -922,7 +1006,11 @@ fn pin_handler_display_shim_construction_matches_replication() {
             "let tx_for_display = Eip1559Tx { chain_id, nonce: display_nonce,
              max_priority_fee_per_gas: display_max_prio, max_fee_per_gas: display_max_fee,
              gas_limit: display_gas_limit, to: Some(to_address), value: U256(value),
-             data_len, access_list_count: 0, signing_hash: [0u8; 32], };"
+             data_len, access_list_count: 0, signing_hash: [0u8; 32],
+             userop_fields: Some(UserOpDisplayFields { nonce: U256(nonce),
+             call_gas_limit: U256(call_gas_limit),
+             verification_gas_limit: U256(verification_gas_limit),
+             pre_verification_gas: U256(pre_verification_gas), }), };"
         )),
         "handler §6 tx_for_display construction drifted — re-audit tx_for_display() here"
     );
@@ -950,7 +1038,16 @@ fn pin_handler_render_and_digest_glue_matches_replication() {
         (
             "if crate::tx::display::from_page_proof( &pages, signer_pages_before,
              account_index, &sender, ) != crate::fi::OK_SENTINEL",
-            "handler §8 mandatory signer-page proof drifted",
+            "handler §8 signer-page FI proof drifted",
+        ),
+        (
+            "if crate::tx::display::enforce_target_page(&mut pages, &to_address).is_err()",
+            "handler §8 mandatory target-page splice drifted",
+        ),
+        (
+            "if crate::tx::display::target_page_proof(&pages, target_pages_before, &to_address)
+             != crate::fi::OK_SENTINEL",
+            "handler §8 target-page FI proof drifted",
         ),
         (
             "let calldata_fingerprint = pqsigner_tx_core::erc8213::calldata_digest(inner_data);",

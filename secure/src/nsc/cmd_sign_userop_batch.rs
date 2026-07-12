@@ -74,7 +74,7 @@ use crate::names::{verify_name_bundle, NameResolver};
 use crate::selectors::{parse_self_attest_bundle, verify_selector_bundle, SelectorMeta};
 use crate::tx::display::batch::{build_final_summary_pages, wrap_pages_with_batch_banner};
 use crate::tx::display::pick_sign_pages;
-use crate::tx::eip1559::{Eip1559Tx, U256};
+use crate::tx::eip1559::{Eip1559Tx, U256, UserOpDisplayFields};
 use crate::tx::eip712::cowswap::VerifiedCowswapV3;
 use crate::tx::eip712::safe::VerifiedSafeV1;
 use crate::tx::erc7730::VerifiedDescriptor;
@@ -97,8 +97,9 @@ struct ParsedTx {
 
 /// Per-inner-tx routed trailer slots. Each field carries the result of
 /// a successful verifier on a trailer whose wire `tx_idx` matched this
-/// inner tx's index. Empty fields fall through `pick_sign_pages` to the
-/// lower-priority renderers (value transfer / ERC-20 shape / blind-sign).
+/// inner tx's index. Empty fields reach `pick_sign_pages`; genuinely unknown
+/// tuples may use lower-priority value/ERC-20/typed/blind renderers, while a
+/// firmware-known ERC-7730 tuple with no verified descriptor hard-refuses.
 ///
 /// Lifetime `'a` ties to the secure-side TOCTOU snapshot — every
 /// borrowed verifier output (ERC-20 metadata, Safe canonical, ERC-7730
@@ -410,10 +411,11 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // the same FI-hardened envelope the single-tx path uses
     // (`let ok = verify(...).is_some(); wait_random(); sentinel`).
     // Successful verifications land in `routed[tx_idx].<field>`;
-    // verifier failures drop silently (parity with single-tx — clear-
-    // signing is an enhancement layer that degrades gracefully). The
-    // CoW v3 and Safe v1 downgrade-mitigation gates are enforced
-    // later in the per-tx render loop, before `pick_sign_pages` runs.
+    // verifier failures leave the routed slot empty. For generic metadata
+    // that can still degrade safely; ERC-7730 is different: the independently
+    // pinned known-call filter inside `pick_sign_pages` hard-refuses a registry-declared
+    // tuple whose descriptor slot is empty. CoW v3 and Safe v1 have their own
+    // explicit downgrade-mitigation gates later in this loop.
     //
     // Mutual exclusion (curated XOR self-attest per tx_idx) was already
     // enforced at parse time inside `parse_batch_trailers`.
@@ -500,9 +502,10 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                 // Retired: the Groth16 ZK clear-sign path was removed
                 // (Aave clear-signing moved to the native ERC-7730
                 // verifier). A record carrying this legacy kind is
-                // ignored — the inner tx falls through to the native
-                // ERC-7730 / value / blind-sign renderers. No proof is
-                // ever verified.
+                // ignored — the retired proof is never verified. The inner tx
+                // may use native ERC-7730 or generic renderers, subject to the
+                // known-call filter (a registry-declared ERC-7730 tuple cannot fall
+                // through without its own kind-7 proof).
                 continue;
             }
             TRAILER_KIND_ZK_V3 => {
@@ -585,22 +588,71 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                     continue;
                 }
                 let v = v_res.unwrap();
-                // FI-hardened binding cross-check, mirroring single-tx
-                // (`cmd_sign_userop.rs:533-548`). Companion-supplied
-                // tx_idx is verified to actually match the IR's
-                // contract — a glitch flipping the `.is_ok()` lands on
-                // a sentinel mismatch.
                 let ptx = parsed[rec.tx_idx as usize].as_ref().unwrap();
-                let bind_ok = crate::tx::erc7730::cross_check_contract(
+                let mut bind_verdict_slot = 0u32;
+                // SAFETY: unique local; volatile FAIL state survives LTO if
+                // the non-inlined proof call is fault-skipped.
+                unsafe {
+                    core::ptr::write_volatile(
+                        &mut bind_verdict_slot,
+                        crate::fi::FAIL_SENTINEL,
+                    );
+                }
+                core::sync::atomic::compiler_fence(
+                    core::sync::atomic::Ordering::SeqCst,
+                );
+                let mut bind_cfi = crate::fi::CfiCounter::new();
+                crate::tx::erc7730::prove_contract_binding(
                     &v.ir,
+                    bytes,
+                    &crate::db_roots::ERC7730_DESCRIPTORS_ROOT,
                     chain_id,
                     &ptx.to,
-                )
-                .is_ok();
+                    &mut bind_verdict_slot,
+                    &mut bind_cfi,
+                );
+                core::sync::atomic::compiler_fence(
+                    core::sync::atomic::Ordering::SeqCst,
+                );
+                // Gate A materializes both proofs independently. Gate B below
+                // repeats the volatile read and CFI check after a randomized
+                // gap, so skipping either reject branch remains fail-closed.
+                // SAFETY: local remains live and the callee borrow ended.
+                let bind_verdict_a = unsafe {
+                    core::ptr::read_volatile(&bind_verdict_slot)
+                };
+                let bind_cfi_verdict_a = bind_cfi.check_into_sentinel(
+                    crate::tx::erc7730::CFI_CONTRACT_BIND_EXPECTED,
+                );
+                let bind_gate_a = crate::fi::check_true_into_sentinel(|| {
+                    core::hint::black_box(bind_verdict_a) == crate::fi::OK_SENTINEL
+                        && core::hint::black_box(bind_cfi_verdict_a)
+                            == crate::fi::OK_SENTINEL
+                });
+                crate::fi::scrub_sentinel_register();
+                if bind_gate_a != crate::fi::OK_SENTINEL {
+                    ui::show_status("Batch sign", "7730 binding fail");
+                    continue;
+                }
                 crate::fi::wait_random();
-                if crate::fi::check_true_into_sentinel(|| core::hint::black_box(bind_ok))
-                    != crate::fi::OK_SENTINEL
-                {
+                core::sync::atomic::compiler_fence(
+                    core::sync::atomic::Ordering::SeqCst,
+                );
+                // SAFETY: same live local, independently re-read after the
+                // randomized gap instead of reusing gate A's cached verdict.
+                let bind_verdict_b = unsafe {
+                    core::ptr::read_volatile(&bind_verdict_slot)
+                };
+                let bind_cfi_verdict_b = bind_cfi.check_into_sentinel(
+                    crate::tx::erc7730::CFI_CONTRACT_BIND_EXPECTED,
+                );
+                let bind_gate_b = crate::fi::check_true_into_sentinel(|| {
+                    core::hint::black_box(bind_verdict_b) == crate::fi::OK_SENTINEL
+                        && core::hint::black_box(bind_cfi_verdict_b)
+                            == crate::fi::OK_SENTINEL
+                });
+                crate::fi::scrub_sentinel_register();
+                if bind_gate_b != crate::fi::OK_SENTINEL {
                     ui::show_status("Batch sign", "7730 binding fail");
                     continue;
                 }
@@ -736,8 +788,10 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         }
     }
 
-    // For each member: render the same pages the single-tx path would
-    // render (no trailers — basic value/erc20-shape/blind-sign ladder),
+    // For each member: render the same pages the single-tx path would render
+    // from its routed trailers. A genuinely unknown tuple may use the basic
+    // value/ERC-20/typed/blind ladder; a firmware-known ERC-7730 tuple without
+    // its verified routed proof is refused inside `pick_sign_pages`.
     // wrap with a "BATCH SIGN | Tx i of N" banner, and require an
     // affirmative long-right confirm. Cancel anywhere → abort the
     // entire signing operation; idle wipe → zero secrets.
@@ -784,6 +838,12 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             data_len: ptx.data_len,
             access_list_count: 0,
             signing_hash: [0u8; 32],
+            userop_fields: Some(UserOpDisplayFields {
+                nonce: U256(nonce),
+                call_gas_limit: U256(call_gas_limit),
+                verification_gas_limit: U256(verification_gas_limit),
+                pre_verification_gas: U256(pre_verification_gas),
+            }),
         };
 
         // ── Per-tx downgrade-mitigation gates ──────────────────────
@@ -822,9 +882,10 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         }
 
         // Routed-trailer pass-through: every per-tx slot the single-tx
-        // handler passes is mirrored here from `routed[i]`. Empty
-        // slots fall through `pick_sign_pages` to the lower-priority
-        // renderers (value-transfer / ERC-20 shape / blind-sign).
+        // handler passes is mirrored here from `routed[i]`. Empty slots for
+        // genuinely unknown tuples may reach lower-priority renderers; an
+        // empty ERC-7730 slot for a firmware-known tuple is refused by the
+        // dispatcher's membership gate.
         let r = routed[i].as_ref();
         // Safe `execTransaction` decode is purely a function of
         // `inner_data` (no trailer needed), so we run it per inner-tx
@@ -858,14 +919,14 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         // display page budget, else refuse the whole batch. Reserved
         // pages here: the dispatcher's native-value page when this
         // member carries ETH, the two ERC-8213 fingerprint pages, the
-        // batch banner page, mandatory full signer page, and the two gas/fee
-        // pages the dispatcher
-        // splices for the Safe surface (audit 2026-06-19).
+        // batch banner, mandatory full signer + target pages, and two gas/fee
+        // pages the dispatcher splices for the Safe surface.
         {
             let reserved = usize::from(ptx.value.iter().any(|&b| b != 0))
                 + 2
                 + 1
                 + crate::tx::display::SIGNER_IDENTITY_PAGES
+                + crate::tx::display::TARGET_IDENTITY_PAGES
                 + 2;
             match crate::tx::display::multisend_sign_gate(
                 routed[i].as_ref().and_then(|r| r.safe_v1.as_ref()),
@@ -931,13 +992,12 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             &resolver,
         ) {
             Ok(p) => p,
-            // Fail-closed (audit 2026-06-18 — native-value WYSIWYS gate):
-            // this member's renderer filled MAX_PAGES so its native-ETH
-            // value page could not be spliced. Refuse the whole atomic
-            // batch rather than sign a member whose value the user never
-            // saw on the trusted display.
+            // Fail closed for any mandatory render failure: native-value/gas
+            // budget, Safe accounting, a verified ERC-7730 descriptor that
+            // cannot render exactly, or a firmware-known call whose proof was
+            // omitted / malformed / mis-bound. Never downgrade these cases.
             Err(()) => {
-                ui::show_status("Batch sign", "value unshown");
+                ui::show_status("Batch sign", "render refused");
                 return NscStatus::InternalError as u32;
             }
         };
@@ -951,7 +1011,9 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                 return NscStatus::InternalError as u32;
             }
         };
-
+        // The batch banner anchors the member position; the next page must
+        // identify the mnemonic account/address that will sign. This is the
+        // already-bound derived sender, never the companion wire field.
         let signer_pages_before = pages.len;
         if crate::tx::display::enforce_from_page(&mut pages, account_index, &sender).is_err() {
             ui::show_status("Batch sign", "signer unshown");
@@ -966,6 +1028,21 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         ) != crate::fi::OK_SENTINEL
         {
             ui::show_status("Batch sign", "signer unshown");
+            return NscStatus::InternalError as u32;
+        }
+        // Each member gets its own exact outer target page. A final batch
+        // summary does not repeat targets because every member was already
+        // individually confirmed above.
+        let target_pages_before = pages.len;
+        if crate::tx::display::enforce_target_page(&mut pages, &ptx.to).is_err() {
+            ui::show_status("Batch sign", "target unshown");
+            return NscStatus::InternalError as u32;
+        }
+        crate::fi::scrub_sentinel_register();
+        if crate::tx::display::target_page_proof(&pages, target_pages_before, &ptx.to)
+            != crate::fi::OK_SENTINEL
+        {
+            ui::show_status("Batch sign", "target unshown");
             return NscStatus::InternalError as u32;
         }
 
@@ -1038,6 +1115,9 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             ui::show_status("Batch sign", "paymaster unshown");
             return NscStatus::InternalError as u32;
         }
+        // Repeat signer identity on the final whole-batch authorization, so
+        // no confirmation screen is account-ambiguous even if the user jumps
+        // directly to the last gate after reviewing the members.
         let signer_pages_before = final_pages.len;
         if crate::tx::display::enforce_from_page(
             &mut final_pages,

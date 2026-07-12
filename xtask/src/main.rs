@@ -171,19 +171,35 @@ fn render_solidity_library() -> String {
     );
 
     section_header(&mut s, "Per-chain usage caps");
-    sol_uint256(&mut s, "MAX_BOOTSTRAP_USES", u128::from(proto::MAX_BOOTSTRAP_USES));
+    sol_uint256(
+        &mut s,
+        "MAX_BOOTSTRAP_USES",
+        u128::from(proto::MAX_BOOTSTRAP_USES),
+    );
     sol_uint256(&mut s, "MAX_SLOT_USES", u128::from(proto::MAX_SLOT_USES));
-    sol_uint256(&mut s, "MAX_OFFCHAIN_GAP", u128::from(proto::MAX_OFFCHAIN_GAP));
+    sol_uint256(
+        &mut s,
+        "MAX_OFFCHAIN_GAP",
+        u128::from(proto::MAX_OFFCHAIN_GAP),
+    );
 
     section_header(&mut s, "Wallet storage layout");
     sol_uint256(&mut s, "OWNER_BYTES_LEN", proto::OWNER_BYTES_LEN as u128);
 
     section_header(&mut s, "Selectors");
     sol_bytes4(&mut s, "EXECUTE_SELECTOR", &proto::EXECUTE_SELECTOR);
-    sol_bytes4(&mut s, "EXECUTE_BATCH_SELECTOR", &proto::EXECUTE_BATCH_SELECTOR);
+    sol_bytes4(
+        &mut s,
+        "EXECUTE_BATCH_SELECTOR",
+        &proto::EXECUTE_BATCH_SELECTOR,
+    );
 
     section_header(&mut s, "Domain tags");
-    sol_bytes(&mut s, "FACTORY_ADD_SLOT_DOMAIN", proto::FACTORY_ADD_SLOT_DOMAIN);
+    sol_bytes(
+        &mut s,
+        "FACTORY_ADD_SLOT_DOMAIN",
+        proto::FACTORY_ADD_SLOT_DOMAIN,
+    );
 
     s.push_str("}\n");
     s
@@ -244,7 +260,6 @@ fn is_solidity_string_safe(bytes: &[u8]) -> bool {
         .all(|b| (0x20..=0x7E).contains(b) && *b != b'"' && *b != b'\\')
 }
 
-
 // ─────────────────────────────────────────────────────────────────────
 // gen-erc7730-descriptors
 // ─────────────────────────────────────────────────────────────────────
@@ -257,6 +272,8 @@ const ERC7730_DEFAULT_E2E_INPUT: &str = "secure/data/erc7730-e2e";
 const ERC7730_DEFAULT_OUT: &str = "tools/companion-stub/erc7730_db.bin";
 const ERC7730_DEFAULT_E2E_OUT: &str = "tools/companion-stub/erc7730_db_e2e.bin";
 const ERC7730_DEFAULT_REVIEW: &str = "secure/data/erc7730.review.txt";
+const ERC7730_DEFAULT_KNOWN_CALLS: &str = "secure/data/erc7730-known-calls.bloom";
+const ERC7730_DEFAULT_KNOWN_CALLS_E2E: &str = "secure/data/erc7730-known-calls-e2e.bloom";
 
 #[derive(Default)]
 struct Erc7730Args {
@@ -350,19 +367,21 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
     let e2e_out_binary = parsed
         .e2e_out_binary
         .unwrap_or_else(|| workspace_root.join(ERC7730_DEFAULT_E2E_OUT));
+    let known_calls_out = workspace_root.join(ERC7730_DEFAULT_KNOWN_CALLS);
+    let known_calls_e2e_out = workspace_root.join(ERC7730_DEFAULT_KNOWN_CALLS_E2E);
 
     // Build both prod + e2e catalogs. PROD is the tolerant registry build
     // (the corpus switch) — `input_dir` is `<registry>/registry`, so its parent
     // is the registry root used to resolve `includes`. E2E stays strict.
     let registry_root = input_dir.parent().map(|p| p.to_path_buf());
-    let prod = match dbgen::erc7730::build_db_tolerant(&input_dir, &policy, registry_root.as_deref())
-    {
-        Ok((r, _skips)) => r,
-        Err(e) => {
-            eprintln!("error: prod build failed: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
+    let prod =
+        match dbgen::erc7730::build_db_tolerant(&input_dir, &policy, registry_root.as_deref()) {
+            Ok((r, _skips)) => r,
+            Err(e) => {
+                eprintln!("error: prod build failed: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
     if let Err(e) = dbgen::erc7730::round_trip_check(&prod) {
         eprintln!("error: prod round-trip failed: {e}");
         return ExitCode::FAILURE;
@@ -394,11 +413,33 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
             eprintln!("DRIFT: {e}");
             drift = true;
         }
+        if let Err(e) = diff_bytes(
+            "erc7730-known-calls.bloom",
+            &known_calls_out,
+            &prod.known_calls_bloom,
+        ) {
+            eprintln!("DRIFT: {e}");
+            drift = true;
+        }
+        if let Err(e) = diff_bytes(
+            "erc7730-known-calls-e2e.bloom",
+            &known_calls_e2e_out,
+            &e2e.known_calls_bloom,
+        ) {
+            eprintln!("DRIFT: {e}");
+            drift = true;
+        }
         // db_roots.rs is owned by `cargo run -p dbgen` (it bakes 5
         // other roots besides ours); only assert that the ERC-7730
         // root line in it matches.
         let roots_path = workspace_root.join("secure/src/db_roots.rs");
-        if let Err(e) = diff_root_in_db_roots(&roots_path, &prod.root, &e2e.root) {
+        if let Err(e) = diff_root_in_db_roots(
+            &roots_path,
+            &prod.root,
+            &e2e.root,
+            prod.provenance,
+            e2e.provenance,
+        ) {
             eprintln!("DRIFT: {e}");
             drift = true;
         }
@@ -433,6 +474,14 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
         eprintln!("error: write {}: {e}", out_review.display());
         return ExitCode::FAILURE;
     }
+    if let Err(e) = fs::write(&known_calls_out, prod.known_calls_bloom) {
+        eprintln!("error: write {}: {e}", known_calls_out.display());
+        return ExitCode::FAILURE;
+    }
+    if let Err(e) = fs::write(&known_calls_e2e_out, e2e.known_calls_bloom) {
+        eprintln!("error: write {}: {e}", known_calls_e2e_out.display());
+        return ExitCode::FAILURE;
+    }
     eprintln!(
         "wrote {} ({} bytes, {} leaves, root = {})",
         out_binary.display(),
@@ -447,6 +496,16 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
         e2e.leaf_count,
         hex::encode(e2e.root),
     );
+    eprintln!(
+        "wrote {} ({} known calls)",
+        known_calls_out.display(),
+        prod.known_call_count,
+    );
+    eprintln!(
+        "wrote {} ({} known calls)",
+        known_calls_e2e_out.display(),
+        e2e.known_call_count,
+    );
     eprintln!("wrote {}", out_review.display());
     eprintln!(
         "note: secure/src/db_roots.rs is owned by `cargo run -p dbgen` — \
@@ -456,8 +515,8 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
 }
 
 fn diff_bytes(label: &str, path: &PathBuf, fresh: &[u8]) -> Result<(), String> {
-    let existing = fs::read(path)
-        .map_err(|e| format!("read {label} at {}: {e}", path.display()))?;
+    let existing =
+        fs::read(path).map_err(|e| format!("read {label} at {}: {e}", path.display()))?;
     if existing == fresh {
         return Ok(());
     }
@@ -470,66 +529,295 @@ fn diff_bytes(label: &str, path: &PathBuf, fresh: &[u8]) -> Result<(), String> {
 }
 
 fn diff_text(label: &str, path: &PathBuf, fresh: &str) -> Result<(), String> {
-    let existing = fs::read_to_string(path)
-        .map_err(|e| format!("read {label} at {}: {e}", path.display()))?;
+    let existing =
+        fs::read_to_string(path).map_err(|e| format!("read {label} at {}: {e}", path.display()))?;
     if existing == fresh {
         return Ok(());
     }
-    Err(format!("{label} at {} differs from fresh build", path.display()))
+    Err(format!(
+        "{label} at {} differs from fresh build",
+        path.display()
+    ))
 }
+
+/// `str::contains` would accept a generated security fence copied into a Rust
+/// comment or raw string, even though rustc would not enforce it. Scan just
+/// enough Rust lexical structure to require the marker's first token to occur
+/// in active code. (The marker itself is exact, so an inserted comment inside
+/// it already fails the byte comparison.)
+fn contains_active_rust_marker(text: &str, marker: &str) -> bool {
+    #[derive(Clone, Copy)]
+    enum State {
+        Code,
+        LineComment,
+        BlockComment(usize),
+        String,
+        Char,
+        RawString(usize),
+    }
+
+    fn raw_prefix(bytes: &[u8], i: usize) -> Option<(usize, usize)> {
+        let mut p = i;
+        if bytes.get(p) == Some(&b'b') {
+            p += 1;
+        }
+        if bytes.get(p) != Some(&b'r') {
+            return None;
+        }
+        p += 1;
+        let mut hashes = 0usize;
+        while bytes.get(p) == Some(&b'#') {
+            hashes += 1;
+            p += 1;
+        }
+        (bytes.get(p) == Some(&b'"')).then_some((p + 1, hashes))
+    }
+
+    fn looks_like_char(bytes: &[u8], i: usize) -> bool {
+        let end = (i + 12).min(bytes.len());
+        bytes
+            .get(i + 1..end)
+            .is_some_and(|tail| tail.iter().position(|&b| b == b'\'').is_some())
+    }
+
+    let bytes = text.as_bytes();
+    let needle = marker.as_bytes();
+    let mut state = State::Code;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match state {
+            State::Code => {
+                if bytes[i..].starts_with(needle) {
+                    return true;
+                }
+                if bytes.get(i..i + 2) == Some(b"//") {
+                    state = State::LineComment;
+                    i += 2;
+                } else if bytes.get(i..i + 2) == Some(b"/*") {
+                    state = State::BlockComment(1);
+                    i += 2;
+                } else if let Some((next, hashes)) = raw_prefix(bytes, i) {
+                    state = State::RawString(hashes);
+                    i = next;
+                } else if bytes[i] == b'"' {
+                    state = State::String;
+                    i += 1;
+                } else if bytes[i] == b'\'' && looks_like_char(bytes, i) {
+                    state = State::Char;
+                    i += 1;
+                } else {
+                    i += 1;
+                }
+            }
+            State::LineComment => {
+                if bytes[i] == b'\n' {
+                    state = State::Code;
+                }
+                i += 1;
+            }
+            State::BlockComment(depth) => {
+                if bytes.get(i..i + 2) == Some(b"/*") {
+                    state = State::BlockComment(depth + 1);
+                    i += 2;
+                } else if bytes.get(i..i + 2) == Some(b"*/") {
+                    state = if depth == 1 {
+                        State::Code
+                    } else {
+                        State::BlockComment(depth - 1)
+                    };
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            State::String | State::Char => {
+                if bytes[i] == b'\\' {
+                    i = (i + 2).min(bytes.len());
+                } else {
+                    let terminator = if matches!(state, State::String) {
+                        b'"'
+                    } else {
+                        b'\''
+                    };
+                    if bytes[i] == terminator {
+                        state = State::Code;
+                    }
+                    i += 1;
+                }
+            }
+            State::RawString(hashes) => {
+                if bytes[i] == b'"'
+                    && bytes
+                        .get(i + 1..i + 1 + hashes)
+                        .is_some_and(|tail| tail.iter().all(|&b| b == b'#'))
+                {
+                    state = State::Code;
+                    i += 1 + hashes;
+                } else {
+                    i += 1;
+                }
+            }
+        }
+    }
+    false
+}
+
+const ERC7730_PROD_FILTER_MARKER: &str = "#[cfg(not(feature = \"e2e-test\"))]\n\
+pub static ERC7730_KNOWN_CALLS_BLOOM: &[u8; pqsigner_erc7730::known_calls::BLOOM_BYTES] =\n\
+include_bytes!(\"../data/erc7730-known-calls.bloom\");";
+const ERC7730_E2E_FILTER_MARKER: &str = "#[cfg(feature = \"e2e-test\")]\n\
+pub static ERC7730_KNOWN_CALLS_BLOOM: &[u8; pqsigner_erc7730::known_calls::BLOOM_BYTES] =\n\
+include_bytes!(\"../data/erc7730-known-calls-e2e.bloom\");";
 
 fn diff_root_in_db_roots(
     path: &PathBuf,
     prod_root: &[u8; 32],
     e2e_root: &[u8; 32],
+    prod_provenance: dbgen::erc7730::CatalogueProvenance,
+    e2e_provenance: dbgen::erc7730::CatalogueProvenance,
 ) -> Result<(), String> {
     let text = fs::read_to_string(path)
         .map_err(|e| format!("read db_roots.rs at {}: {e}", path.display()))?;
-    let prod_hex = hex::encode(prod_root);
-    let e2e_hex = hex::encode(e2e_root);
-    let prod_present = root_const_matches(&text, "ERC7730_DESCRIPTORS_ROOT", &prod_hex);
-    let e2e_present = root_const_matches(&text, "ERC7730_DESCRIPTORS_ROOT", &e2e_hex);
-    if prod_present && e2e_present {
+    let (prod_present, e2e_present, prod_filter_present, e2e_filter_present) =
+        erc7730_root_filter_cfg_matches(&text, prod_root, e2e_root);
+    let (
+        prod_provenance_present,
+        e2e_provenance_present,
+        prod_provenance_fences_present,
+        e2e_provenance_fences_present,
+    ) = erc7730_provenance_cfg_matches(&text, prod_provenance, e2e_provenance);
+    if prod_present
+        && e2e_present
+        && prod_filter_present
+        && e2e_filter_present
+        && prod_provenance_present
+        && e2e_provenance_present
+        && prod_provenance_fences_present
+        && e2e_provenance_fences_present
+    {
         return Ok(());
     }
+    let prod_hex = hex::encode(prod_root);
+    let e2e_hex = hex::encode(e2e_root);
     Err(format!(
-        "ERC7730_DESCRIPTORS_ROOT in {} doesn't match fresh build (prod {prod_hex} present={prod_present}, e2e {e2e_hex} present={e2e_present})",
-        path.display()
+        "ERC-7730 root/filter/provenance in {} doesn't match fresh build (prod root {prod_hex} under prod cfg={prod_present}, e2e root {e2e_hex} under e2e cfg={e2e_present}, prod filter path/cfg={prod_filter_present}, e2e filter path/cfg={e2e_filter_present}, prod provenance {} present={prod_provenance_present} fences={prod_provenance_fences_present}, e2e provenance {} present={e2e_provenance_present} fences={e2e_provenance_fences_present})",
+        path.display(),
+        prod_provenance.as_str(),
+        e2e_provenance.as_str(),
     ))
 }
 
-fn root_const_matches(text: &str, name: &str, expected_hex: &str) -> bool {
-    // Find every `pub static <name>: [u8; 32] = [...];` block and
-    // compare its bytes (hex-encoded) against `expected_hex`.
-    let mut search_from = 0;
-    while let Some(pos) = text[search_from..].find(&format!("pub static {name}")) {
-        let abs = search_from + pos;
-        // Skip past the `[u8; 32] =` type annotation: find `= [`.
-        let assign = match text[abs..].find("= [") {
-            Some(p) => abs + p,
-            None => break,
-        };
-        let bracket = assign + 2; // position of the array-literal `[`
-        let close = match text[bracket..].find("];") {
-            Some(p) => bracket + p,
-            None => break,
-        };
-        let body = &text[bracket + 1..close];
-        let mut hex_out = String::with_capacity(64);
-        for tok in body.split(',') {
-            let tok = tok.trim();
-            if tok.is_empty() {
-                continue;
-            }
-            let tok = tok.strip_prefix("0x").unwrap_or(tok);
-            hex_out.push_str(tok);
+fn erc7730_provenance_cfg_matches(
+    text: &str,
+    prod: dbgen::erc7730::CatalogueProvenance,
+    e2e: dbgen::erc7730::CatalogueProvenance,
+) -> (bool, bool, bool, bool) {
+    let prod_marker = erc7730_provenance_marker(prod, false);
+    let e2e_marker = erc7730_provenance_marker(e2e, true);
+    let prod_fences = erc7730_provenance_fence_markers(prod, false);
+    let e2e_fences = erc7730_provenance_fence_markers(e2e, true);
+    (
+        contains_active_rust_marker(text, &prod_marker),
+        contains_active_rust_marker(text, &e2e_marker),
+        prod_fences
+            .iter()
+            .all(|marker| contains_active_rust_marker(text, marker)),
+        e2e_fences
+            .iter()
+            .all(|marker| contains_active_rust_marker(text, marker)),
+    )
+}
+
+fn erc7730_provenance_marker(provenance: dbgen::erc7730::CatalogueProvenance, e2e: bool) -> String {
+    let selected = if e2e {
+        "feature = \"e2e-test\""
+    } else {
+        "not(feature = \"e2e-test\")"
+    };
+    format!(
+        "#[cfg({selected})]\npub const ERC7730_CATALOGUE_PROVENANCE: &str = {:?};",
+        provenance.as_str()
+    )
+}
+
+/// Exact cfg-associated compile fences emitted by dbgen for the selected
+/// catalogue provenance. These are part of the generated security policy, not
+/// commentary: losing one must drift-fail just like losing the root itself.
+fn erc7730_provenance_fence_markers(
+    provenance: dbgen::erc7730::CatalogueProvenance,
+    e2e: bool,
+) -> Vec<String> {
+    use dbgen::erc7730::CatalogueProvenance;
+
+    match (provenance, e2e) {
+        (CatalogueProvenance::DevUnattested, false) => vec![
+            "#[cfg(all(not(feature = \"e2e-test\"), feature = \"mode-production\"))]\n\
+compile_error!(\"mode-production cannot embed the dev-unattested ERC-7730 catalogue. Implement and run real ERC-8176 EAS verification, regenerate db_roots.rs, and only then build production firmware.\");"
+                .to_string(),
+            "#[cfg(all(not(feature = \"e2e-test\"), not(feature = \"mode-production\"), not(feature = \"erc7730-dev-unattested\"), not(test)))]\n\
+compile_error!(\"the pinned ERC-7730 catalogue is dev-unattested; enable erc7730-dev-unattested so the trusted display shows the provenance warning, or regenerate from a genuinely ERC-8176-verified corpus\");"
+                .to_string(),
+        ],
+        (CatalogueProvenance::DevUnattested, true) => vec![
+            "#[cfg(all(feature = \"e2e-test\", not(feature = \"erc7730-dev-unattested\"), not(test)))]\n\
+compile_error!(\"the e2e ERC-7730 fixture catalogue is dev-unattested; e2e builds must enable erc7730-dev-unattested so the display warning matches its provenance\");"
+                .to_string(),
+        ],
+        (CatalogueProvenance::Erc8176Verified, e2e) => {
+            let selected = if e2e {
+                "feature = \"e2e-test\""
+            } else {
+                "not(feature = \"e2e-test\")"
+            };
+            vec![format!(
+                "#[cfg(all({selected}, feature = \"erc7730-dev-unattested\"))]\n\
+compile_error!(\"erc7730-dev-unattested is enabled but the selected catalogue is ERC-8176-verified; disable the feature so the trusted display does not show false provenance\");"
+            )]
         }
-        if hex_out.eq_ignore_ascii_case(expected_hex) {
-            return true;
-        }
-        search_from = close + 2;
     }
-    false
+}
+
+fn erc7730_root_filter_cfg_matches(
+    text: &str,
+    prod_root: &[u8; 32],
+    e2e_root: &[u8; 32],
+) -> (bool, bool, bool, bool) {
+    let prod_root_marker = cfg_root_marker(
+        "not(feature = \"e2e-test\")",
+        "ERC7730_DESCRIPTORS_ROOT",
+        prod_root,
+    );
+    let e2e_root_marker = cfg_root_marker(
+        "feature = \"e2e-test\"",
+        "ERC7730_DESCRIPTORS_ROOT",
+        e2e_root,
+    );
+    let prod_present = contains_active_rust_marker(text, &prod_root_marker);
+    let e2e_present = contains_active_rust_marker(text, &e2e_root_marker);
+    let prod_filter_present = contains_active_rust_marker(text, ERC7730_PROD_FILTER_MARKER);
+    let e2e_filter_present = contains_active_rust_marker(text, ERC7730_E2E_FILTER_MARKER);
+    (
+        prod_present,
+        e2e_present,
+        prod_filter_present,
+        e2e_filter_present,
+    )
+}
+
+fn cfg_root_marker(cfg: &str, name: &str, root: &[u8; 32]) -> String {
+    use std::fmt::Write;
+
+    let mut out = format!("#[cfg({cfg})]\npub static {name}: [u8; 32] = [");
+    for (i, byte) in root.iter().enumerate() {
+        if i % 8 == 0 {
+            out.push_str("\n    ");
+        } else {
+            out.push(' ');
+        }
+        write!(out, "0x{byte:02x},").unwrap();
+    }
+    out.push_str("\n];");
+    out
 }
 
 #[cfg(test)]
@@ -588,6 +876,140 @@ mod tests {
         let mut s = String::new();
         sol_uint256(&mut s, "N", 65_536);
         assert_eq!(s, "    uint256 internal constant N = 65536;\n");
+    }
+
+    #[test]
+    fn erc7730_codegen_check_binds_roots_and_filters_to_their_cfgs() {
+        let prod = [0x11u8; 32];
+        let e2e = [0x22u8; 32];
+        let prod_root = cfg_root_marker(
+            "not(feature = \"e2e-test\")",
+            "ERC7730_DESCRIPTORS_ROOT",
+            &prod,
+        );
+        let e2e_root = cfg_root_marker("feature = \"e2e-test\"", "ERC7730_DESCRIPTORS_ROOT", &e2e);
+        let correct = format!(
+            "{prod_root}\n{e2e_root}\n{ERC7730_PROD_FILTER_MARKER}\n{ERC7730_E2E_FILTER_MARKER}"
+        );
+        assert_eq!(
+            erc7730_root_filter_cfg_matches(&correct, &prod, &e2e),
+            (true, true, true, true)
+        );
+
+        let swapped_roots = format!(
+            "{}\n{}\n{ERC7730_PROD_FILTER_MARKER}\n{ERC7730_E2E_FILTER_MARKER}",
+            cfg_root_marker(
+                "not(feature = \"e2e-test\")",
+                "ERC7730_DESCRIPTORS_ROOT",
+                &e2e,
+            ),
+            cfg_root_marker("feature = \"e2e-test\"", "ERC7730_DESCRIPTORS_ROOT", &prod,),
+        );
+        assert_eq!(
+            erc7730_root_filter_cfg_matches(&swapped_roots, &prod, &e2e),
+            (false, false, true, true),
+            "swapping prod/e2e roots must be detected"
+        );
+
+        let swapped_filters = correct
+            .replace("erc7730-known-calls-e2e.bloom", "TEMP_FILTER")
+            .replace("erc7730-known-calls.bloom", "erc7730-known-calls-e2e.bloom")
+            .replace("TEMP_FILTER", "erc7730-known-calls.bloom");
+        assert_eq!(
+            erc7730_root_filter_cfg_matches(&swapped_filters, &prod, &e2e),
+            (true, true, false, false),
+            "swapping prod/e2e omission filters must be detected"
+        );
+    }
+
+    fn provenance_fixture(
+        prod: dbgen::erc7730::CatalogueProvenance,
+        e2e: dbgen::erc7730::CatalogueProvenance,
+    ) -> String {
+        let mut blocks = vec![
+            erc7730_provenance_marker(prod, false),
+            erc7730_provenance_marker(e2e, true),
+        ];
+        blocks.extend(erc7730_provenance_fence_markers(prod, false));
+        blocks.extend(erc7730_provenance_fence_markers(e2e, true));
+        blocks.join("\n\n")
+    }
+
+    #[test]
+    fn erc7730_codegen_check_requires_dev_provenance_fences() {
+        use dbgen::erc7730::CatalogueProvenance::DevUnattested;
+
+        let correct = provenance_fixture(DevUnattested, DevUnattested);
+        assert_eq!(
+            erc7730_provenance_cfg_matches(&correct, DevUnattested, DevUnattested),
+            (true, true, true, true)
+        );
+
+        let prod_fence = erc7730_provenance_fence_markers(DevUnattested, false)
+            .into_iter()
+            .next()
+            .unwrap();
+        let deleted = correct.replacen(&prod_fence, "", 1);
+        assert_eq!(
+            erc7730_provenance_cfg_matches(&deleted, DevUnattested, DevUnattested),
+            (true, true, false, true),
+            "deleting the production dev-root fence must drift-fail"
+        );
+
+        let e2e_fence = erc7730_provenance_fence_markers(DevUnattested, true)
+            .into_iter()
+            .next()
+            .unwrap();
+        let wrong_cfg = e2e_fence.replace(
+            "all(feature = \"e2e-test\"",
+            "all(not(feature = \"e2e-test\")",
+        );
+        let mutated = correct.replacen(&e2e_fence, &wrong_cfg, 1);
+        assert_eq!(
+            erc7730_provenance_cfg_matches(&mutated, DevUnattested, DevUnattested),
+            (true, true, true, false),
+            "moving the e2e fence under the production cfg must drift-fail"
+        );
+
+        let block_commented = format!("/*\n{correct}\n*/");
+        assert_eq!(
+            erc7730_provenance_cfg_matches(&block_commented, DevUnattested, DevUnattested,),
+            (false, false, false, false),
+            "security markers preserved only inside a block comment are inactive"
+        );
+
+        let raw_string = format!("const _: &str = r###\"{correct}\"###;");
+        assert_eq!(
+            erc7730_provenance_cfg_matches(&raw_string, DevUnattested, DevUnattested),
+            (false, false, false, false),
+            "security markers copied into a raw string are inactive"
+        );
+    }
+
+    #[test]
+    fn erc7730_codegen_check_requires_verified_provenance_fences() {
+        use dbgen::erc7730::CatalogueProvenance::Erc8176Verified;
+
+        let correct = provenance_fixture(Erc8176Verified, Erc8176Verified);
+        assert_eq!(
+            erc7730_provenance_cfg_matches(&correct, Erc8176Verified, Erc8176Verified,),
+            (true, true, true, true)
+        );
+
+        let prod_fence = erc7730_provenance_fence_markers(Erc8176Verified, false)
+            .into_iter()
+            .next()
+            .unwrap();
+        let altered = prod_fence.replace(
+            "feature = \"erc7730-dev-unattested\"",
+            "not(feature = \"erc7730-dev-unattested\")",
+        );
+        let mutated = correct.replacen(&prod_fence, &altered, 1);
+        assert_eq!(
+            erc7730_provenance_cfg_matches(&mutated, Erc8176Verified, Erc8176Verified,),
+            (true, true, false, true),
+            "mutating the verified-root warning-feature fence must drift-fail"
+        );
     }
 
     /// Guard against accidental drift in the rendered output. The rendered
@@ -905,7 +1327,8 @@ mod tests {
     fn negative_rendered_output_keeps_do_not_edit_warning() {
         let rendered = render_solidity_library();
         assert!(rendered.contains("AUTO-GENERATED — DO NOT EDIT."));
-        assert!(rendered.contains("Regenerate: `cargo run -p pqsigner-xtask -- gen-solidity-constants`."));
+        assert!(rendered
+            .contains("Regenerate: `cargo run -p pqsigner-xtask -- gen-solidity-constants`."));
     }
 
     /// The factory domain tag is printable ASCII; the generator MUST
@@ -937,7 +1360,8 @@ mod tests {
         // the xtask/ directory; if `workspace_root()` resolves to "."
         // or stays inside xtask/, we've regressed.
         assert!(
-            root.join("contracts/smart-wallet/src/generated/PqsignerProto.sol").is_file(),
+            root.join("contracts/smart-wallet/src/generated/PqsignerProto.sol")
+                .is_file(),
             "workspace_root() must resolve to the actual workspace root, got {}",
             root.display(),
         );
@@ -974,13 +1398,17 @@ mod tests {
             // Match lines like "    uint256 internal constant FOO = …;"
             // or "    bytes4  internal constant FOO = …;" etc.
             let trimmed = line.trim_start();
-            let Some(rest) = trimmed.strip_prefix("uint256 internal constant ")
+            let Some(rest) = trimmed
+                .strip_prefix("uint256 internal constant ")
                 .or_else(|| trimmed.strip_prefix("bytes4 internal constant "))
                 .or_else(|| trimmed.strip_prefix("bytes internal constant "))
             else {
                 continue;
             };
-            let name: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
             assert!(
                 approved.contains(&name.as_str()),
                 "rendered library exposes unapproved constant `{name}` — \
@@ -1069,7 +1497,10 @@ fn cmd_scan_registry(args: &[String]) -> ExitCode {
     collect_json_recursive(&input, &mut files);
     files.sort();
     if files.is_empty() {
-        eprintln!("scan-registry: no .json descriptors under {}", input.display());
+        eprintln!(
+            "scan-registry: no .json descriptors under {}",
+            input.display()
+        );
         return ExitCode::FAILURE;
     }
 
@@ -1110,7 +1541,12 @@ fn cmd_scan_registry(args: &[String]) -> ExitCode {
     let mut out = String::new();
     let _ = writeln!(out, "# ERC-7730 registry render-coverage scan\n");
     let _ = writeln!(out, "input:    {}", input.display());
-    let _ = writeln!(out, "policy:   {} (allow_unattested_dev_descriptors = {})", policy_path.display(), policy.allow_unattested_dev_descriptors);
+    let _ = writeln!(
+        out,
+        "policy:   {} (allow_unattested_dev_descriptors = {})",
+        policy_path.display(),
+        policy.allow_unattested_dev_descriptors
+    );
     let _ = writeln!(out, "\n## Summary");
     let _ = writeln!(out, "descriptors scanned:        {total}");
     let pct = (ok_files * 100).checked_div(total).unwrap_or(0);
@@ -1126,7 +1562,14 @@ fn cmd_scan_registry(args: &[String]) -> ExitCode {
     }
     let _ = writeln!(out, "\n## Covered projects ({})", covered_projects.len());
     let cps: Vec<&String> = covered_projects.iter().collect();
-    let _ = writeln!(out, "    {}", cps.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "));
+    let _ = writeln!(
+        out,
+        "    {}",
+        cps.iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
 
     print!("{out}");
     if let Some(rp) = report_path {
@@ -1209,13 +1652,25 @@ fn cmd_build_registry(args: &[String]) -> ExitCode {
 
     if let Some(rp) = report_path {
         let mut out = String::new();
-        let _ = writeln!(out, "# tolerant registry build — {} leaves, {} skipped\n", result.leaf_count, skips.len());
+        let _ = writeln!(
+            out,
+            "# tolerant registry build — {} leaves, {} skipped\n",
+            result.leaf_count,
+            skips.len()
+        );
         let _ = writeln!(out, "root: {}\n", hex_lower(&result.root));
         // Sorted leaf keys (chain:contract:typehash) for cross-build diffing.
         let mut keys: Vec<String> = result
             .entries
             .iter()
-            .map(|e| format!("{}:{}:{}", e.chain_id, hex_lower(&e.contract), hex_lower(&e.primary_type_hash)))
+            .map(|e| {
+                format!(
+                    "{}:{}:{}",
+                    e.chain_id,
+                    hex_lower(&e.contract),
+                    hex_lower(&e.primary_type_hash)
+                )
+            })
             .collect();
         keys.sort();
         let _ = writeln!(out, "## leaf keys ({})", keys.len());
@@ -1363,7 +1818,10 @@ fn cmd_vendor_registry(args: &[String]) -> ExitCode {
 
     println!("vendored {copied} files ({descriptor_count} leaf-bearing descriptors + {support_count} sibling/template files)");
     println!("out:   {}", out.display());
-    println!("root:  {} (reproduced from the vendored tree ✓)", hex_lower(&orig_root));
+    println!(
+        "root:  {} (reproduced from the vendored tree ✓)",
+        hex_lower(&orig_root)
+    );
     println!("leaves: {}", vresult.leaf_count);
     ExitCode::SUCCESS
 }
@@ -1443,7 +1901,8 @@ fn skip_category(msg: &str) -> &'static str {
     let m = msg;
     if m.contains("array index") || m.contains("array slice") || m.contains("ArrayIdx") {
         "array-path (needs dynamic-array walker)"
-    } else if m.contains("dynamic tuple") || m.contains("is dynamic") || m.contains("calldata tail") {
+    } else if m.contains("dynamic tuple") || m.contains("is dynamic") || m.contains("calldata tail")
+    {
         "dynamic-ABI-type (needs dynamic-array walker)"
     } else if m.contains("spanning") && m.contains("words") {
         "multi-word static field (>32B)"
@@ -1455,15 +1914,32 @@ fn skip_category(msg: &str) -> &'static str {
         "unsupported formatter (nft)"
     } else if m.contains("enum") {
         "enum issue"
-    } else if m.contains("completeness") || m.contains("not covered") || m.contains("must cover") || m.contains("uncovered") {
+    } else if m.contains("completeness")
+        || m.contains("not covered")
+        || m.contains("must cover")
+        || m.contains("uncovered")
+    {
         "completeness lint (un-displayed field)"
-    } else if m.contains("MAX_IR_LEN") || m.contains("exceeds") || m.contains("too large") || m.contains("too long") {
+    } else if m.contains("MAX_IR_LEN")
+        || m.contains("exceeds")
+        || m.contains("too large")
+        || m.contains("too long")
+    {
         "IR too large (>4KiB)"
     } else if m.contains("policy") || m.contains("attest") {
         "attestation policy"
-    } else if m.starts_with("schema") || m.starts_with("parse") || m.contains("schema:") || m.contains("missing field") || m.contains("unknown field") {
+    } else if m.starts_with("schema")
+        || m.starts_with("parse")
+        || m.contains("schema:")
+        || m.contains("missing field")
+        || m.contains("unknown field")
+    {
         "schema / parse"
-    } else if m.contains("selector") || m.contains("signature") || m.contains("encodeType") || m.contains("primary") {
+    } else if m.contains("selector")
+        || m.contains("signature")
+        || m.contains("encodeType")
+        || m.contains("primary")
+    {
         "selector / type-signature"
     } else {
         "other"

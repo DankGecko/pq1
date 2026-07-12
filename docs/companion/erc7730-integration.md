@@ -32,6 +32,11 @@ A hostile companion that controls descriptor delivery could:
 3. **Smuggle untrusted display strings.** Defence: every text field
    on-device (intent / owner / contractName / format strings) is
    ASCII-clean + length-bounded at host emission time.
+4. **Strip or corrupt a descriptor to force blind-sign.** Defence: `dbgen`
+   emits a firmware-pinned Bloom filter over every parsable registry-declared
+   `(chain_id, contract, selector)`. A known tuple with no verified, bound,
+   successfully rendered descriptor hard-refuses; Bloom false positives only
+   refuse an unknown call, the safe direction.
 
 What we do NOT defend against on-device:
 
@@ -43,14 +48,16 @@ What we do NOT defend against on-device:
   Merkle root. The firmware trusts the root.
 - **Pre-attestation drift.** A new descriptor that hasn't yet been
   Merkle-rooted in a firmware release cannot be rendered with
-  clear-signing pages — it falls through to blind-sign. Firmware
-  upgrades bring new descriptors.
+  clear-signing pages. If its exact tuple is genuinely absent from that
+  firmware's known-call filter, it may use the generic display ladder;
+  firmware upgrades bring new descriptors.
 
 ## On-device IR
 
 Pure-logic primitives live in the workspace crate
-`pqsigner-erc7730/src/{ir,walker,bundle,binding,abi}.rs`. The firmware
-re-exports them via `secure/src/tx/erc7730.rs`.
+`pqsigner-erc7730/src/{ir,bundle,binding,abi,render}/`. The firmware
+re-exports the selected live APIs via `secure/src/tx/erc7730.rs`; the
+legacy walker was deleted rather than kept as a second decoder.
 
 ### Header
 
@@ -73,15 +80,14 @@ All `*_off` fields are offsets into the IR's flat byte array.
 programs.
 
 **Reserved offset 0**: `pool[0]` is a 1-byte `0xFF` filler produced by
-`dbgen::erc7730::Pool::new`. The on-device walker
-(`pqsigner_erc7730::walker::path_bytes`) and the renderer's param
-parser (`secure/src/tx/erc7730_render::params::parse`) both treat
+`dbgen::erc7730::Pool::new`. `Erc7730Ir::path_bytes` and the renderer's
+param parser (`secure/src/tx/erc7730_render::params::parse`) both treat
 `path_off == 0` and `param_off == 0` as "no path" / "default params"
 sentinels and short-circuit before reading the pool. Companions that
 build their own IR (instead of consuming the `dbgen`-emitted blob)
-MUST keep this convention — without it the first interned program
-collides with the sentinel and every field on that descriptor falls
-through to blind-sign with a `"7730 missing path"` status banner.
+MUST keep this convention — without it the first interned program collides with
+the sentinel and the verified descriptor rejects with a `"7730 missing path"`
+status. Firmware-known calls then hard-refuse; they do not downgrade.
 
 ### Formats
 
@@ -174,24 +180,37 @@ Phase 5 didn't add new formatters; it added:
   Cargo feature so a bring-up developer cannot miss that the host-side
   attestation policy was relaxed.
 
+The UserOp envelope is exact-or-refuse: max fee, priority fee and worst-case
+total do not round to a shared display; call/verification/pre-verification gas
+remain separate; and the nonce page shows all 256 signed bits. Unknown-chain
+native values/fees use unscaled base units because the firmware has no pinned
+decimal metadata to justify an 18-decimal interpretation.
+
 ### Path resolution
 
-Phase 4 ships a direct path walker rather than going through
-`pqsigner_erc7730::walker::resolve_path`. The reason: Phase 3's walker
-requires an `AbiView` tree describing the runtime ABI shape, and the
-on-device IR does not carry ABI type information. Static types (uint*,
-int*, address, bytes32, bool, static tuples) work via the direct
-walker; dynamic types (bytes, string, dynamic arrays, dynamic tuples)
-are out of scope until a shape-descriptor byte lands in the IR header
-(Phase 5+ wire-format extension — Cf. the handoff item 5).
+The live renderer uses `pqsigner_erc7730::render::resolve`; the former
+legacy walker has been removed. Contract calldata is
+accepted only with exact canonical framing: either an all-static body
+whose length exactly equals its head, or one sole top-level C1 dynamic
+tail (`string`/`bytes`, a supported primitive array, or a dynamic
+`tokenPath`) placed immediately after the head and consuming the whole
+body. Placement, declared length/count, and exact EOF are checked before
+visibility is evaluated, including for hidden fields and token paths.
+`bytes`/`string` right-padding must be zero; dynamic address-array
+`tokenPath`s additionally validate every address word, selected or not.
+
+C2 dynamic-tuple descent, C3/multiple dynamic tails, aliasing, gaps, and
+trailing bytes are intentionally unsupported and rejected by `dbgen` and
+again by the runtime preflight. A verified/known call that cannot satisfy
+this policy hard-refuses; it never downgrades to a less complete display.
 
 ### Nested calldata
 
-`secure/src/tx/display/erc7730/calldata_nested.rs` currently stubs to
-`Reject("nested calldata p5")` and falls through to blind-sign. The
-recursion is depth-capped at 4 in the renderer + 8 in the walker
-proper (see `pqsigner_erc7730::walker::MAX_NESTING`). Phase 5+ wires
-the bounded recursion once the shape-descriptor extension lands.
+`pqsigner-erc7730/src/display/render/calldata_nested.rs` currently stubs
+to `Reject("nested calldata p5")`. A verified/known generic call therefore
+hard-refuses. There is no nested-call recursion on the live path today;
+`ir::MAX_NESTING` caps path-program depth and must not be read as nested
+calldata support.
 
 ## What is verified on-device
 

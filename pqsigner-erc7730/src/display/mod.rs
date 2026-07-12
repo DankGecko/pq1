@@ -52,9 +52,11 @@ pub type Page = [[u8; DISPLAY_COLS]; DISPLAY_ROWS];
 /// gas-refund magnitude page + the Safe/CoW gas/fee splice; 27 → 28 with the
 /// Safe `safeTxGas` page (conditional on `safeTxGas != 0`; audit 2026-06-26);
 /// 28 → 29 for the mandatory full UserOp signer account/address page
-/// (audit 2026-07-10). The Safe multisend sign-gate reserves the signer page,
-/// so the budget still fails closed (refuse, never truncate).
-pub const MAX_PAGES: usize = 29;
+/// (audit 2026-07-10); 29 → 30 for the mandatory full outer target-contract
+/// page on every single transaction / batch member. The signer and target
+/// pages are reserved by the Safe multiSend gate, so the budget still fails
+/// closed (refuse, never truncate).
+pub const MAX_PAGES: usize = 30;
 
 /// A buffer of up to [`MAX_PAGES`] pre-rendered confirmation pages.
 ///
@@ -121,8 +123,9 @@ impl Pages {
 
     /// Bump `len` by one and return the index of the newly-visible page. Returns
     /// `Err(())` when the buffer is already full; renderers map that to
-    /// `RenderErr::PageBudget` and fall through to a less rich rendering ladder
-    /// rung. The returned page is pre-cleared to ASCII space.
+    /// `RenderErr::PageBudget`, which hard-refuses an authenticated known call
+    /// rather than falling through to a less complete rendering. The returned
+    /// page is pre-cleared to ASCII space.
     pub fn push_blank(&mut self) -> Result<usize, ()> {
         if self.len >= MAX_PAGES {
             return Err(());

@@ -1,5 +1,11 @@
 # VULN — ERC-7730 WYSIWYS gate: rule-1 "effect-bearing field" accepted INERT fields → a clear-sign banner over a fully-hidden action
 
+> **2026-07-10 follow-up:** this report preserves the narrower 2026-07-01
+> remediation history. Its decision to defer Rule 3 is superseded: dbgen now
+> rejects every hidden non-address operand and all semantic signature/path
+> exemptions. See
+> [`clear-signing-2026-07-10.md`](../adversarial-review/findings/clear-signing-2026-07-10.md#f8--hidden-material-and-semantic-exemptions-could-conceal-signed-action-bytes).
+
 - **Severity:** HIGH (integrity / trusted-display boundary). **Latent** (the one live shipping witness is impotent against a PQ1 EIP-1271 wallet by an *external* contract property — Rarible verifies `from` via `ecrecover`, not by any PQ1 control), rated HIGH on the same basis the sibling `VULN-erc7730-visible-never-noparam-clearsign` used: the control was simply absent and the auto-vendored corpus can grow the affected set unchecked.
 - **Class:** WYSIWYS / clear-sign supply-chain gate hole. Sibling of the FIXED `visible:"never"` (address-recipient) and `eip712-nested-struct` (address-in-struct) findings.
 - **Status:** **FIXED (2026-07-01)** — build-time **Rule 1** now requires a genuinely effect-bearing shown field. Corpus regenerated (**784 → 783 leaves**; new `ERC7730_DESCRIPTORS_ROOT` `0xaa64b785…`). The Rule-3 half (gating hidden *non-address values*) was **deliberately NOT taken** — see **§Scope: why Rule 1 only**. Found by exhaustive adversarial hunt (2 multi-agent workflows + manual verification).

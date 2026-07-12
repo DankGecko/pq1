@@ -21,9 +21,11 @@ pub mod visibility;
 /// Why the ERC-7730 renderer refused to take responsibility for this
 /// transaction.
 ///
-/// The priority-ladder caller in `secure::tx::display::pick_sign_pages`
-/// inspects the variant and either surfaces a status banner (`Reject`)
-/// or silently falls through (`NoFormat` / `PageBudget`).
+/// The secure-world dispatcher treats every variant from a verified,
+/// transaction-bound descriptor as a hard refusal. Independently, its pinned
+/// known-call filter refuses a registry-declared `(chain, contract, selector)` when the
+/// companion omitted or failed to verify the descriptor. These variants are
+/// therefore diagnostic categories, not downgrade permission.
 #[derive(Debug, PartialEq, Eq)]
 pub enum RenderErr {
     /// Descriptor is structurally fine but disagrees with the inbound
@@ -31,14 +33,13 @@ pub enum RenderErr {
     /// `MustMatch` value failed, a TLV blob is malformed, the walker
     /// returned an error, the inbound calldata won't decode against
     /// the format's positional schema, etc. Caller surfaces the
-    /// `&'static str` reason on a `ui::show_status` banner and falls
-    /// through to the next ladder rung.
+    /// `&'static str` reason on a `ui::show_status` banner and refuses.
     Reject(&'static str),
     /// No matching format header for the inbound `(selector |
-    /// primary-type-hash[..4])`. The renderer has nothing to draw —
-    /// fall through silently.
+    /// primary-type-hash[..4])`. A verified descriptor has nothing honest to
+    /// draw, so the secure dispatcher refuses.
     NoFormat,
-    /// Output overflowed the 22-page `Pages` budget. Fall through
-    /// silently and let blind-sign cover it.
+    /// Output overflowed the fixed `Pages` budget. The secure dispatcher
+    /// refuses rather than hiding descriptor fields behind blind-sign.
     PageBudget,
 }

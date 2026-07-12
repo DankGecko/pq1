@@ -1,5 +1,13 @@
 # ERC-7730 tokenPath byte-slice / array-index resolver — WYSIWYS safety model (Tier B, 2026-07-01)
 
+> **2026-07-10 tightening:** this document records the original Tier-B
+> rationale. Current production accepts a tokenPath extraction only inside the
+> single exact canonical C1 whole tail proven by the format-wide calldata
+> preflight; C2/multi-tail layouts are excluded. Resolution/framing failure for
+> a verified or registry-declared known call hard-refuses signing — it does not
+> degrade to raw amount or blind-sign. The compiler still forbids extraction
+> ops in rendered value paths.
+
 ## The asymmetry that makes this safe (read this first)
 
 A `tokenAmount` renders `value × 10^-decimals  symbol`, where `decimals`/`symbol`

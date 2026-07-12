@@ -140,6 +140,36 @@ fn mirror_predict_wallet_address(pk_seed: &[u8; 32], pk_root: &[u8; 32]) -> [u8;
     out
 }
 
+/// Structurally independent mirror of the sender-binding cross-check path:
+/// split SHA updates, reverse preimage fill, and chunked Keccak updates.
+fn mirror_predict_wallet_address_cross_check(
+    pk_seed: &[u8; 32],
+    pk_root: &[u8; 32],
+) -> [u8; 20] {
+    use sha2::{Digest, Sha256};
+    use sha3::Keccak256;
+
+    let salt: [u8; 32] = {
+        let mut h = Sha256::new();
+        h.update(pk_seed);
+        h.update(pk_root);
+        h.finalize().into()
+    };
+    let mut pre = [0u8; 85];
+    pre[53..85].copy_from_slice(&PROXY_INIT_CODE_HASH);
+    pre[21..53].copy_from_slice(&salt);
+    pre[1..21].copy_from_slice(&PQ_SMART_WALLET_FACTORY);
+    pre[0] = 0xff;
+    let digest: [u8; 32] = {
+        let mut h = Keccak256::new();
+        h.update(&pre[..21]);
+        h.update(&pre[21..53]);
+        h.update(&pre[53..]);
+        h.finalize().into()
+    };
+    digest[12..].try_into().unwrap()
+}
+
 #[test]
 fn positive_create2_deterministic_for_fixed_input() {
     // Same inputs → same address, every time. The whole multi-chain
@@ -149,6 +179,22 @@ fn positive_create2_deterministic_for_fixed_input() {
     let a = mirror_predict_wallet_address(&pk_seed, &pk_root);
     let b = mirror_predict_wallet_address(&pk_seed, &pk_root);
     assert_eq!(a, b, "CREATE2 derivation must be deterministic");
+}
+
+#[test]
+fn positive_independent_sender_binding_create2_path_matches_canonical() {
+    for (seed, root) in [
+        ([0u8; 32], [0u8; 32]),
+        ([0x11u8; 32], [0x22u8; 32]),
+        ([0xffu8; 32], [0x5au8; 32]),
+    ] {
+        assert_eq!(
+            mirror_predict_wallet_address_cross_check(&seed, &root),
+            mirror_predict_wallet_address(&seed, &root)
+        );
+    }
+    assert!(GET_WALLET_ADDRESS_SRC.contains("fn proxy_address_cross_check("));
+    assert!(GET_WALLET_ADDRESS_SRC.contains("wallet_address_for_account_cross_check("));
 }
 
 #[test]

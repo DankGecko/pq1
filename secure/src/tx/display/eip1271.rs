@@ -17,9 +17,7 @@
 //! per-slot off-chain budget summary (`local + 1 / cap`, gap to next
 //! UserOp).
 
-use super::primitives::{
-    chain_name, hex_nibble, write_addr_full, write_chain, write_line,
-};
+use super::primitives::{hex_nibble, write_addr_full, write_chain, write_line};
 use super::Pages;
 use crate::ui::DISPLAY_COLS;
 
@@ -80,8 +78,10 @@ pub fn render_eip1271_personal_sign_pages(
 
     // ── Page 1: chain ──────────────────────────────────────────────
     write_line(&mut pages.buf[1][0], "Chain:");
-    write_chain(&mut pages.buf[1][1], chain_id);
-    write_line(&mut pages.buf[1][2], chain_name(chain_id));
+    {
+        let [_label, id, continuation_or_name, _foot] = &mut pages.buf[1];
+        write_chain(id, continuation_or_name, chain_id);
+    }
     write_line(&mut pages.buf[1][3], "> next");
 
     // ── Page 2: account + slot ─────────────────────────────────────
@@ -164,8 +164,10 @@ pub fn render_eip1271_raw32_pages(
     write_line(&mut pages.buf[0][3], "> next");
 
     write_line(&mut pages.buf[1][0], "Chain:");
-    write_chain(&mut pages.buf[1][1], chain_id);
-    write_line(&mut pages.buf[1][2], chain_name(chain_id));
+    {
+        let [_label, id, continuation_or_name, _foot] = &mut pages.buf[1];
+        write_chain(id, continuation_or_name, chain_id);
+    }
     write_line(&mut pages.buf[1][3], "> next");
 
     write_acct_row(&mut pages.buf[2][0], account_index);

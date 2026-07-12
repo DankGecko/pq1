@@ -14,12 +14,13 @@
 //! visible row text (truncation, intent label, decimal alignment, ticker
 //! lookup) would not have been caught by any unit test.
 //!
-//! Inputs are NOT hand-rolled IR fixtures — they come straight from the
-//! seed-corpus JSON via `dbgen::erc7730::build_db`, the same pipeline
-//! that produces the firmware-pinned `ERC7730_DESCRIPTORS_ROOT`. So
-//! these tests would also catch a host-side compiler regression that
-//! ships subtly broken IR into the catalog without anyone noticing,
-//! since "broken IR" surfaces as a wrong rendered string.
+//! Inputs are NOT hand-rolled IR fixtures. Shipping cases come from the real
+//! registry through `dbgen`; nested renderer-only cases use process-private
+//! copies compiled by the same dbgen after changing every explicit
+//! `visible:"never"` to `visible:"always"`. The real unsafe sources are
+//! separately asserted absent. UniswapX cannot be made into an equivalent safe
+//! positive fixture (dynamic bytes expose only a hash, and showing all fields
+//! exceeds the page budget), so those historical vectors are exclusion tests.
 
 use std::path::PathBuf;
 
@@ -32,6 +33,7 @@ use crate::names::NameResolver;
 use crate::tx::eip1559::{Eip1559Tx, U256};
 use crate::ui::DISPLAY_COLS;
 
+use super::dispatch::pick_sign_pages;
 use super::erc7730::render_erc7730_pages;
 use super::erc8213::{append_fingerprint_page, Kind as Erc8213Kind};
 use super::Pages;
@@ -64,8 +66,8 @@ fn build_seed() -> dbgen::erc7730::Erc7730BuildResult {
 /// render test that exercises a REAL protocol descriptor (Aave/Tether/WETH/
 /// wstETH/…) must drive it from THIS root, not a hand-authored duplicate.
 ///
-/// The 776-leaf registry build is several hundred ms, and ~16 tests use it,
-/// so memoize it in a `OnceLock` — built once per test binary, not per test.
+/// The registry build is several hundred ms and many tests use it, so memoize
+/// it in a `OnceLock` — built once per test binary, not per test.
 /// Returns a `&'static`, so callers pass it straight to `find_leaf(res, …)`
 /// (NOT `&res`) and read `res.blob` / `res.root` directly.
 fn build_registry() -> &'static dbgen::erc7730::Erc7730BuildResult {
@@ -75,14 +77,121 @@ fn build_registry() -> &'static dbgen::erc7730::Erc7730BuildResult {
         let root = workspace_root();
         let reg = root.join("secure/data/erc7730-registry");
         let policy = root.join("secure/data/erc7730/policy.toml");
-        let (res, _skips) = dbgen::erc7730::build_db_tolerant(
-            &reg.join("registry"),
-            &policy,
-            Some(&reg),
-        )
-        .expect("build registry corpus");
+        let (res, _skips) =
+            dbgen::erc7730::build_db_tolerant(&reg.join("registry"), &policy, Some(&reg))
+                .expect("build registry corpus");
         res
     })
+}
+
+/// Real descriptors whose nested renderer shapes are valuable test vectors but
+/// which the shipping catalogue now correctly excludes because they contain
+/// explicit `visible:"never"` non-address material. For renderer tests only,
+/// compile copies in a process-private temporary registry after promoting every
+/// such field to `visible:"always"`. This preserves the original ABI/type tree
+/// and runs through the real dbgen compiler, while making the emitted fixture
+/// satisfy the same strict hidden-material policy as production.
+const SAFE_VISIBLE_NESTED_FIXTURES: &[(&str, &str)] = &[
+    (
+        "eip712-uniswap-permit2.json",
+        "registry/uniswap/eip712-uniswap-permit2.json",
+    ),
+    (
+        "eip712-SessionManager-FT.json",
+        "registry/flyingtulip/eip712-SessionManager-FT.json",
+    ),
+];
+
+fn build_safe_visible_nested_fixtures(
+) -> &'static std::collections::BTreeMap<String, Vec<dbgen::erc7730::Emitted>> {
+    static FIXTURES: std::sync::OnceLock<
+        std::collections::BTreeMap<String, Vec<dbgen::erc7730::Emitted>>,
+    > = std::sync::OnceLock::new();
+    FIXTURES.get_or_init(|| {
+        let source_root = workspace_root().join("secure/data/erc7730-registry");
+        let temp_root = std::env::temp_dir().join(format!(
+            "pqsigner-erc7730-safe-visible-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&temp_root);
+        std::fs::create_dir_all(temp_root.join("registry/uniswap"))
+            .expect("create synthetic Uniswap fixture dir");
+        std::fs::create_dir_all(temp_root.join("registry/flyingtulip"))
+            .expect("create synthetic SessionManager fixture dir");
+
+        // Every Uniswap fixture includes this context-only template.
+        std::fs::copy(
+            source_root.join("registry/uniswap/uniswap-common-eip712.json"),
+            temp_root.join("registry/uniswap/uniswap-common-eip712.json"),
+        )
+        .expect("copy synthetic fixture include");
+
+        let policy = dbgen::erc7730::Policy::default();
+        let mut emitted_by_source = std::collections::BTreeMap::new();
+        for &(source_name, relative) in SAFE_VISIBLE_NESTED_FIXTURES {
+            let source = source_root.join(relative);
+            let destination = temp_root.join(relative);
+            let text = std::fs::read_to_string(&source).expect("read nested fixture source");
+            assert!(
+                text.contains("\"visible\": \"never\""),
+                "fixture {source_name} must exercise the hidden-material gate"
+            );
+            let safe_text = text.replace("\"visible\": \"never\"", "\"visible\": \"always\"");
+            assert!(!safe_text.contains("\"visible\": \"never\""));
+            std::fs::write(&destination, safe_text).expect("write safe nested fixture");
+            let emitted = dbgen::erc7730::try_compile_one(&destination, &policy, Some(&temp_root))
+                .unwrap_or_else(|e| panic!("safe visible fixture {source_name} must compile: {e}"));
+            emitted_by_source.insert(source_name.to_string(), emitted);
+        }
+        let _ = std::fs::remove_dir_all(&temp_root);
+        emitted_by_source
+    })
+}
+
+fn safe_visible_nested_leaf(source_name: &str, chain_id: u64) -> &'static dbgen::erc7730::Emitted {
+    build_safe_visible_nested_fixtures()
+        .get(source_name)
+        .and_then(|entries| entries.iter().find(|entry| entry.chain_id == chain_id))
+        .unwrap_or_else(|| panic!("no safe visible nested fixture for {source_name} on {chain_id}"))
+}
+
+fn assert_registry_source_excluded(source_name: &str) {
+    assert!(
+        !build_registry().entries.iter().any(|entry| {
+            entry.source.file_name().and_then(|name| name.to_str()) == Some(source_name)
+        }),
+        "unsafe hidden-material descriptor {source_name} must remain absent from the catalogue"
+    );
+}
+
+#[test]
+fn eip712_hash_only_values_have_no_verified_runtime_leaf() {
+    let registry = build_registry();
+    for source_name in ["eip712-withdraw.json", "eip712-SpotOrderCancel.json"] {
+        assert!(
+            !registry.entries.iter().any(|entry| {
+                entry.source.file_name().and_then(|n| n.to_str()) == Some(source_name)
+            }),
+            "{source_name} contains visible EIP-712 dynamic strings whose encodeData words are \
+             hashes, not values; catalogue absence is required so no verified descriptor can \
+             reach the secure renderer"
+        );
+    }
+}
+
+#[test]
+fn explicit_hidden_material_descriptors_have_no_verified_runtime_leaf() {
+    for source_name in [
+        "eip712-permit-ethereum-link.json",
+        "eip712-uniswap-permit2.json",
+        "eip712-UniswapX-ExclusiveDutchOrder.json",
+        "eip712-UniswapX-DutchOrder.json",
+        "eip712-UniswapX-LimitOrder.json",
+        "eip712-uniswap-V2DutchOrder.json",
+        "eip712-SessionManager-FT.json",
+    ] {
+        assert_registry_source_excluded(source_name);
+    }
 }
 
 /// Locate a leaf by `(source filename, chain_id)` so a multi-chain
@@ -117,14 +226,11 @@ fn find_leaf<'a>(
 /// (kept inline here so this module doesn't depend on the dbgen test
 /// helpers).
 fn synth_bundle(blob: &[u8], ir_bytes: &[u8], leaf_index: usize) -> Vec<u8> {
-    let proof_depth =
-        u32::from_le_bytes(blob[24..28].try_into().unwrap()) as usize;
-    let proofs_off =
-        u32::from_le_bytes(blob[28..32].try_into().unwrap()) as usize;
+    let proof_depth = u32::from_le_bytes(blob[24..28].try_into().unwrap()) as usize;
+    let proofs_off = u32::from_le_bytes(blob[28..32].try_into().unwrap()) as usize;
     let proof_base = proofs_off + leaf_index * proof_depth * 32;
 
-    let mut buf =
-        Vec::with_capacity(2 + ir_bytes.len() + 4 + 4 + proof_depth * 32);
+    let mut buf = Vec::with_capacity(2 + ir_bytes.len() + 4 + 4 + proof_depth * 32);
     buf.extend_from_slice(&(ir_bytes.len() as u16).to_be_bytes());
     buf.extend_from_slice(ir_bytes);
     buf.extend_from_slice(&(leaf_index as u32).to_be_bytes());
@@ -223,6 +329,29 @@ fn calldata_borrow(
     data
 }
 
+/// Aave V3 `repay(address asset,uint256 amount,uint256 interestRateMode,
+/// address onBehalfOf)` — a safe all-visible format that retains real emitted
+/// enum-table coverage after `borrow` was excluded for hiding `referralCode`.
+fn calldata_repay(
+    asset: [u8; 20],
+    amount: U256,
+    interest_rate_mode: U256,
+    on_behalf_of: [u8; 20],
+) -> Vec<u8> {
+    let mut data = Vec::with_capacity(4 + 4 * 32);
+    let sel = keccak256(b"repay(address,uint256,uint256,address)");
+    data.extend_from_slice(&sel[..4]);
+    let mut asset_w = [0u8; 32];
+    asset_w[12..].copy_from_slice(&asset);
+    data.extend_from_slice(&asset_w);
+    data.extend_from_slice(&amount.0);
+    data.extend_from_slice(&interest_rate_mode.0);
+    let mut obo_w = [0u8; 32];
+    obo_w[12..].copy_from_slice(&on_behalf_of);
+    data.extend_from_slice(&obo_w);
+    data
+}
+
 /// Re-confirm the function selector we synthesised actually keccaks to
 /// what the descriptor expects. Catches a "we mis-built the calldata"
 /// bug before the renderer ever sees it. Mirrors the firmware's own
@@ -246,13 +375,17 @@ fn assert_selector_matches(ir: &Erc7730Ir<'_>, calldata: &[u8], text_sig: &str) 
 
 fn row_str(row: &[u8; DISPLAY_COLS]) -> String {
     let end = row.iter().rposition(|&b| b != b' ').map_or(0, |i| i + 1);
-    String::from_utf8(row[..end].to_vec())
-        .expect("rendered rows must be printable ASCII")
+    String::from_utf8(row[..end].to_vec()).expect("rendered rows must be printable ASCII")
 }
 
 fn page_strs(pages: &Pages, page: usize) -> [String; 4] {
     let p = &pages.buf[page];
-    [row_str(&p[0]), row_str(&p[1]), row_str(&p[2]), row_str(&p[3])]
+    [
+        row_str(&p[0]),
+        row_str(&p[1]),
+        row_str(&p[2]),
+        row_str(&p[3]),
+    ]
 }
 
 fn dump_pages(pages: &Pages) -> String {
@@ -320,8 +453,7 @@ fn positive_seed_corpus_compiles() {
 fn diagnostic_dump_seed_corpus_path_offsets() {
     let res = build_seed();
     for entry in &res.entries {
-        let ir =
-            Erc7730Ir::parse(&entry.ir_bytes).expect("seed IR parses");
+        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("seed IR parses");
         eprintln!(
             "== {} chain={} ctx={:?}",
             entry.source.display(),
@@ -370,21 +502,13 @@ fn positive_usdt_transfer_mainnet_renders_send_intent() {
     let res = build_registry();
     let entry = find_leaf(res, "calldata-usdt.json", 1);
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
-    let verified =
-        verify_erc7730_bundle(&bundle, &res.root).expect("verify");
-    assert!(matches!(
-        verified.ir.context_kind,
-        ContextKind::Contract
-    ));
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
+    assert!(matches!(verified.ir.context_kind, ContextKind::Contract));
 
     let amount = u256_from_u64(100_000_000); // 100.00 USDT (6 decimals)
     let recipient = [0x33u8; 20];
     let calldata = calldata_transfer(recipient, amount);
-    assert_selector_matches(
-        &verified.ir,
-        &calldata,
-        "transfer(address,uint256)",
-    );
+    assert_selector_matches(&verified.ir, &calldata, "transfer(address,uint256)");
 
     let tx = envelope(1, entry.contract);
     let usdt_meta = Erc20Metadata {
@@ -395,14 +519,8 @@ fn positive_usdt_transfer_mainnet_renders_send_intent() {
         symbol: b"USDT",
     };
     let resolver = NameResolver::new();
-    let pages = render_erc7730_pages(
-        &tx,
-        &calldata,
-        &verified,
-        Some(&usdt_meta),
-        &resolver,
-    )
-    .expect("render");
+    let pages = render_erc7730_pages(&tx, &calldata, &verified, Some(&usdt_meta), &resolver)
+        .expect("render");
 
     assert_all_pages_printable(&pages);
 
@@ -441,18 +559,13 @@ fn positive_usdt_approve_unlimited_renders_approve_intent() {
     let res = build_registry();
     let entry = find_leaf(res, "calldata-usdt.json", 1);
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
-    let verified =
-        verify_erc7730_bundle(&bundle, &res.root).expect("verify");
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
 
     // U256::MAX is the canonical "approve unlimited" sentinel; the
     // descriptor sets `threshold` to 0x8000...0000 (top bit) — any
     // value above renders as "unlimited" via tokenAmount.
     let calldata = calldata_approve([0x44u8; 20], u256_max());
-    assert_selector_matches(
-        &verified.ir,
-        &calldata,
-        "approve(address,uint256)",
-    );
+    assert_selector_matches(&verified.ir, &calldata, "approve(address,uint256)");
 
     let tx = envelope(1, entry.contract);
     let usdt_meta = Erc20Metadata {
@@ -463,14 +576,8 @@ fn positive_usdt_approve_unlimited_renders_approve_intent() {
         symbol: b"USDT",
     };
     let resolver = NameResolver::new();
-    let pages = render_erc7730_pages(
-        &tx,
-        &calldata,
-        &verified,
-        Some(&usdt_meta),
-        &resolver,
-    )
-    .expect("render");
+    let pages = render_erc7730_pages(&tx, &calldata, &verified, Some(&usdt_meta), &resolver)
+        .expect("render");
 
     assert_all_pages_printable(&pages);
 
@@ -522,7 +629,10 @@ fn positive_unlimited_uses_descriptor_message_param() {
 
     let amount_page = find_page_by_label(&pages, "Amount");
     let blob = page_strs(&pages, amount_page).join("\n");
-    assert!(blob.contains("Max"), "descriptor message 'Max' must render:\n{blob}");
+    assert!(
+        blob.contains("Max"),
+        "descriptor message 'Max' must render:\n{blob}"
+    );
     assert!(
         !blob.to_lowercase().contains("unlimited"),
         "the message param must OVERRIDE the default 'unlimited':\n{blob}"
@@ -591,15 +701,24 @@ fn positive_erc7730_golden_grid_hash() {
     let h2 = super::golden_grid_hash(
         &render_erc7730_pages(&tx, &calldata2, &verified, None, &resolver).expect("render"),
     );
-    assert_ne!(h, h2, "golden hash must bind rendered content (spender change did not move it)");
+    assert_ne!(
+        h, h2,
+        "golden hash must bind rendered content (spender change did not move it)"
+    );
 
-    // Re-blessed for EIP-55 checksummed addresses + the `~` label-truncation
-    // marker (item 4) — the "Token (UNVERIFIED)" page label exceeds 16 cols.
+    // Re-blessed after inspecting the full grid: the intentional envelope
+    // hardening adds a lossless EIP-1559 nonce page (`Nonce: 7`) between the
+    // exact fee budget and confirmation. All descriptor intent/field pages are
+    // otherwise unchanged.
     const GOLDEN: [u8; 32] = [
-        222, 184, 167, 124, 220, 84, 162, 244, 227, 232, 202, 129, 132, 12, 181, 204, 83, 104,
-        79, 143, 13, 52, 137, 95, 151, 19, 136, 64, 34, 206, 89, 156,
+        0x4b, 0xa2, 0x70, 0x68, 0xd8, 0x81, 0xed, 0xb6, 0xe9, 0x51, 0x08, 0x02, 0x30, 0x02, 0xf1,
+        0xc8, 0xad, 0xae, 0xfb, 0x8c, 0x36, 0x30, 0x63, 0xde, 0x00, 0xab, 0xa6, 0x07, 0x55, 0xa4,
+        0x4c, 0x61,
     ];
-    assert_eq!(h, GOLDEN, "ERC-7730 render golden changed — re-bless if intentional. got={h:?}");
+    assert_eq!(
+        h, GOLDEN,
+        "ERC-7730 render golden changed — re-bless if intentional. got={h:?}"
+    );
 }
 
 #[test]
@@ -636,22 +755,35 @@ fn positive_aave_withdraw_eth_renders_native_currency() {
     let mut to_w = [0u8; 32];
     to_w[12..].copy_from_slice(&to);
     calldata.extend_from_slice(&to_w);
-    assert_selector_matches(&verified.ir, &calldata, "withdrawETH(address,uint256,address)");
+    assert_selector_matches(
+        &verified.ir,
+        &calldata,
+        "withdrawETH(address,uint256,address)",
+    );
 
     let tx = envelope(1, entry.contract);
     let resolver = NameResolver::new();
     // erc20 = None: native rendering must NOT depend on any companion metadata.
-    let pages =
-        render_erc7730_pages(&tx, &calldata, &verified, None, &resolver).expect("render");
+    let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver).expect("render");
     assert_all_pages_printable(&pages);
     let dump = dump_pages(&pages);
 
     // Intent banner.
-    assert_eq!(page_strs(&pages, 0)[0], "Withdraw", "intent banner:\n{dump}");
+    assert_eq!(
+        page_strs(&pages, 0)[0],
+        "Withdraw",
+        "intent banner:\n{dump}"
+    );
 
     // (a) Native amount: 18-dec fractional "1.5" + chain native ticker "ETH".
-    assert!(dump.contains("1.5"), "native amount should render 1.5:\n{dump}");
-    assert!(dump.contains("ETH"), "native amount must carry ticker ETH:\n{dump}");
+    assert!(
+        dump.contains("1.5"),
+        "native amount should render 1.5:\n{dump}"
+    );
+    assert!(
+        dump.contains("ETH"),
+        "native amount must carry ticker ETH:\n{dump}"
+    );
 
     // (b) NO unbound-token artefacts — the sentinel is native, not an unverified
     // ERC-20. These strings appear ONLY when `is_native` is false.
@@ -685,8 +817,7 @@ fn positive_usdt_transfer_polygon_chain_pinning() {
     let entry = find_leaf(res, "calldata-usdt.json", 137);
     // The chain-137 leaf is the bridged Polygon USDT, a different address
     // from Mainnet's 0xdAC17… — proves we picked the right deployment.
-    let polygon_usdt =
-        hex::decode("c2132D05D31c914a87C6611C10748AEb04B58e8F").unwrap();
+    let polygon_usdt = hex::decode("c2132D05D31c914a87C6611C10748AEb04B58e8F").unwrap();
     assert_eq!(
         &entry.contract[..],
         &polygon_usdt[..],
@@ -696,7 +827,11 @@ fn positive_usdt_transfer_polygon_chain_pinning() {
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
     let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
     assert_eq!(verified.ir.chain_id, 137, "verified leaf is chain 137");
-    assert_eq!(&verified.ir.contract, &polygon_usdt[..], "verified leaf contract");
+    assert_eq!(
+        &verified.ir.contract,
+        &polygon_usdt[..],
+        "verified leaf contract"
+    );
 
     let calldata = calldata_transfer([0x33u8; 20], u256_from_u64(100_000_000));
     assert_selector_matches(&verified.ir, &calldata, "transfer(address,uint256)");
@@ -724,8 +859,7 @@ fn positive_weth_deposit_pulls_value_from_envelope() {
     let res = build_registry();
     let entry = find_leaf(res, "calldata-weth.json", 1);
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
-    let verified =
-        verify_erc7730_bundle(&bundle, &res.root).expect("verify");
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
 
     // deposit() is the zero-arg selector — the "Amount" field is
     // sourced from `@.value` (container), not the calldata.
@@ -736,8 +870,7 @@ fn positive_weth_deposit_pulls_value_from_envelope() {
     tx.value = u256_from_u64(500_000_000_000_000_000); // 0.5 ETH
 
     let resolver = NameResolver::new();
-    let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver)
-        .expect("render");
+    let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver).expect("render");
 
     assert_all_pages_printable(&pages);
 
@@ -775,8 +908,14 @@ fn positive_native_amount_uses_chain_ticker_not_eth_on_polygon() {
 
     let amount_page = find_page_by_label(&pages, "Amount");
     let rows = page_strs(&pages, amount_page).join(" ");
-    assert!(rows.contains("POL"), "Polygon native amount must render POL:\n{rows}");
-    assert!(!rows.contains("ETH"), "must NOT render ETH on Polygon:\n{rows}");
+    assert!(
+        rows.contains("POL"),
+        "Polygon native amount must render POL:\n{rows}"
+    );
+    assert!(
+        !rows.contains("ETH"),
+        "must NOT render ETH on Polygon:\n{rows}"
+    );
 }
 
 // NOTE: The corresponding EIP-712 path (`render_erc7730_eip712_pages`)
@@ -799,14 +938,13 @@ fn positive_native_amount_uses_chain_ticker_not_eth_on_polygon() {
 #[test]
 fn negative_unknown_selector_returns_no_format() {
     // The renderer must NOT try to fall through to a "best-guess"
-    // format — an unknown selector means "blind sign should handle
-    // this", which the dispatcher achieves by getting `RenderErr::
-    // NoFormat` back from us and proceeding down the ladder.
+    // format. The raw renderer reports `NoFormat`; because this descriptor
+    // has already verified and bound, the dispatcher must refuse rather than
+    // downgrade the same request to a weaker blind-sign interpretation.
     let res = build_registry();
     let entry = find_leaf(res, "calldata-weth.json", 1);
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
-    let verified =
-        verify_erc7730_bundle(&bundle, &res.root).expect("verify");
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
 
     // 0xdeadbeef — selector not in the registry WETH descriptor (deposit only).
     let calldata = vec![0xde, 0xad, 0xbe, 0xef];
@@ -814,22 +952,46 @@ fn negative_unknown_selector_returns_no_format() {
     let resolver = NameResolver::new();
     match render_erc7730_pages(&tx, &calldata, &verified, None, &resolver) {
         Err(crate::tx::erc7730_render::RenderErr::NoFormat) => {}
-        Err(other) => panic!(
-            "expected RenderErr::NoFormat for unknown selector, got {other:?}"
-        ),
+        Err(other) => panic!("expected RenderErr::NoFormat for unknown selector, got {other:?}"),
         Ok(_) => panic!("unknown selector must not render"),
     }
 }
 
 #[test]
-fn negative_short_calldata_rejects() {
-    // Less than 4 bytes — can't even extract a selector. The renderer
-    // must reject cleanly so the caller falls through to blind-sign.
+fn negative_verified_descriptor_no_format_refuses_dispatch() {
     let res = build_registry();
     let entry = find_leaf(res, "calldata-weth.json", 1);
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
-    let verified =
-        verify_erc7730_bundle(&bundle, &res.root).expect("verify");
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
+    let calldata = vec![0xde, 0xad, 0xbe, 0xef];
+    let tx = envelope(1, entry.contract);
+    let resolver = NameResolver::new();
+
+    let outcome = pick_sign_pages(
+        &tx,
+        &calldata,
+        None,
+        None,
+        None,
+        Some(&verified),
+        None,
+        None,
+        &resolver,
+    );
+    assert!(
+        outcome.is_err(),
+        "a bound verified descriptor that cannot render must not fall through"
+    );
+}
+
+#[test]
+fn negative_short_calldata_rejects() {
+    // Less than 4 bytes — can't even extract a selector. The renderer
+    // must reject cleanly so a verified-descriptor caller can fail closed.
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-weth.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
 
     let calldata: Vec<u8> = vec![0xab, 0xcd]; // 2 bytes
     let tx = envelope(1, entry.contract);
@@ -850,10 +1012,9 @@ fn positive_intent_truncation_is_safe() {
     // (≤ 254 B) and that every rendered row stays within DISPLAY_COLS = 16.
     let res = build_seed();
     for entry in &res.entries {
-        let bundle =
-            synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
-        let verified = verify_erc7730_bundle(&bundle, &res.root)
-            .expect("seed corpus entries verify");
+        let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+        let verified =
+            verify_erc7730_bundle(&bundle, &res.root).expect("seed corpus entries verify");
         if !matches!(verified.ir.context_kind, ContextKind::Contract) {
             continue;
         }
@@ -893,12 +1054,18 @@ fn positive_long_intent_wraps_and_marks_truncation() {
 
     // "Withdraw Collateral from the Morpho Market" (42 chars) → rows 0-1.
     let [r0, r1, ..] = page_strs(&pages, 0);
-    assert_eq!(r0, "Withdraw Collate", "row 0 = first 16 chars, no `Sign:` prefix");
+    assert_eq!(
+        r0, "Withdraw Collate",
+        "row 0 = first 16 chars, no `Sign:` prefix"
+    );
     assert!(
         r1.starts_with("ral from the"),
         "row 1 = intent continuation, got {r1:?}"
     );
-    assert!(r1.ends_with('~'), "row 1 must mark truncation with `~`, got {r1:?}");
+    assert!(
+        r1.ends_with('~'),
+        "row 1 must mark truncation with `~`, got {r1:?}"
+    );
 }
 
 #[test]
@@ -929,10 +1096,9 @@ fn positive_erc8213_fingerprint_renders_full_hash() {
     let mut pages = Pages::empty_with_len(0);
 
     let hash: [u8; 32] = [
-        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-        0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
-        0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
-        0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20,
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e,
+        0x1f, 0x20,
     ];
     append_fingerprint_page(&mut pages, Erc8213Kind::CalldataDigest(hash))
         .expect("fingerprint fits");
@@ -952,8 +1118,7 @@ fn positive_erc8213_fingerprint_renders_full_hash() {
         .map(|r| row_str(r))
         .collect::<Vec<_>>()
         .join("");
-    let expected_hex: String =
-        hash.iter().map(|b| format!("{b:02x}")).collect();
+    let expected_hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
     assert_eq!(
         rendered, expected_hex,
         "fingerprint rows must spell out the full 32-byte hash bytewise"
@@ -983,33 +1148,42 @@ fn positive_erc8213_labels_cover_every_kind() {
 }
 
 // ───────────────────────────────────────────────────────────────────────
-// Enum formatter (FormatOp 0x08) — Aave V3 `borrow`. This is the FIRST and
-// only descriptor that emits an enum table, so these two tests are the
-// sole end-to-end coverage of the host `encode_enum_table` → on-device
-// `enums::lookup_enum_label` → `render_enum` round trip. The dbgen
-// round-trip / Kani suites NEVER render a page, so without these a broken
-// `render_enum` would ship green.
+// Enum formatter (FormatOp 0x08) — Aave V3. The real `borrow` format is now
+// excluded because it explicitly hides `referralCode`; the all-visible `repay`
+// format carries the same emitted enum table and preserves the end-to-end host
+// `encode_enum_table` → device `lookup_enum_label` → `render_enum` coverage.
 // ───────────────────────────────────────────────────────────────────────
 
 #[test]
-fn positive_aave_borrow_renders_enum_label() {
+fn positive_aave_repay_renders_enum_label_and_borrow_is_excluded() {
     let res = build_registry();
     let entry = find_leaf(res, "calldata-lpv3.json", 1);
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
     let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
 
+    let excluded_borrow =
+        calldata_borrow([0u8; 20], u256_from_u64(0), u256_from_u64(2), 0, [0u8; 20]);
+    let borrow_selector: [u8; 4] = excluded_borrow[..4].try_into().unwrap();
+    assert!(
+        verified
+            .ir
+            .find_format_by_selector(&borrow_selector)
+            .expect("format table")
+            .is_none(),
+        "Aave borrow hides referralCode and must not survive strict compilation"
+    );
+
     // interestRateMode = 2 → "variable" in the descriptor's enum.
-    let calldata = calldata_borrow(
+    let calldata = calldata_repay(
         [0x11u8; 20],
         u256_from_u64(500),
         u256_from_u64(2),
-        0,
         [0x44u8; 20],
     );
     assert_selector_matches(
         &verified.ir,
         &calldata,
-        "borrow(address,uint256,uint256,uint16,address)",
+        "repay(address,uint256,uint256,address)",
     );
 
     let tx = envelope(1, entry.contract);
@@ -1018,13 +1192,13 @@ fn positive_aave_borrow_renders_enum_label() {
     assert_all_pages_printable(&pages);
 
     let [r0, ..] = page_strs(&pages, 0);
-    assert_eq!(r0, "Borrow");
+    assert_eq!(r0, "Repay loan");
 
     // The enum page must show the RESOLVED label "variable", not the bare
     // index "2" (audit M-7). The registry's field label is "Interest Rate
     // mode" (18 chars); row 0 is truncated to DISPLAY_COLS (16), so the page
-    // header reads "Interest Rate m~".
-    let enum_page = find_page_by_label(&pages, "Interest Rate m~");
+    // header reads "Interest rate m~".
+    let enum_page = find_page_by_label(&pages, "Interest rate m~");
     let rows = page_strs(&pages, enum_page);
     assert!(
         rows[1].contains("variable"),
@@ -1037,7 +1211,7 @@ fn positive_aave_borrow_renders_enum_label() {
 }
 
 #[test]
-fn positive_aave_borrow_unknown_enum_value_renders_raw_index_loudly() {
+fn positive_aave_repay_unknown_enum_value_renders_raw_index_loudly() {
     // review 3.3: interestRateMode = 7 is outside the declared set {0,1,2}. The
     // OLD behaviour declined the WHOLE tx to blind-sign; the spec says render
     // the raw value. Now the enum field renders the exact index (7) with a loud
@@ -1048,11 +1222,10 @@ fn positive_aave_borrow_unknown_enum_value_renders_raw_index_loudly() {
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
     let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
 
-    let calldata = calldata_borrow(
+    let calldata = calldata_repay(
         [0x11u8; 20],
         u256_from_u64(500),
         u256_from_u64(7),
-        0,
         [0x44u8; 20],
     );
     let tx = envelope(1, entry.contract);
@@ -1064,7 +1237,7 @@ fn positive_aave_borrow_unknown_enum_value_renders_raw_index_loudly() {
     // Locate the enum field page by its (truncated) label and assert BOTH the
     // raw index and the loud unknown marker appear ON THAT PAGE (not elsewhere
     // — the envelope nonce is also 7).
-    let enum_page = find_page_by_label(&pages, "Interest Rate m~");
+    let enum_page = find_page_by_label(&pages, "Interest rate m~");
     let rows = page_strs(&pages, enum_page).join(" ");
     assert!(rows.contains('7'), "raw enum index 7 must render:\n{rows}");
     assert!(
@@ -1074,59 +1247,33 @@ fn positive_aave_borrow_unknown_enum_value_renders_raw_index_loudly() {
 }
 
 #[test]
-fn positive_nftname_renders_small_token_id_as_decimal_real_leaf() {
-    // review 3.2: nftName no longer declines the whole tx. The spec fallback is
-    // "a raw int token ID"; with no NFT-name DB we render it plainly. Real leaf:
-    // flyingtulip PftNft `approve(address to, uint256 tokenId)` where tokenId is
-    // the nftName "Position". A small id renders as a decimal + a loud no-name
-    // marker (verified BY RENDER on a real registry descriptor).
+fn nftname_with_unimplemented_collection_binding_refuses_small_id() {
+    // The real PftNft descriptor requests nftName collection semantics. Until
+    // the IR binds and the renderer displays that collection identity, strict
+    // param compilation drops this format rather than silently degrading a
+    // trusted NFT-name field to a bare integer.
     let res = build_registry();
-    let entry = find_leaf(res, "calldata-PftNft.json", 1);
-    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
-    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
-
-    let calldata = calldata_approve([0x11u8; 20], u256_from_u64(1036));
-    assert_selector_matches(&verified.ir, &calldata, "approve(address,uint256)");
-    let tx = envelope(1, entry.contract);
-    let resolver = NameResolver::new();
-    let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver)
-        .expect("nftName must now render, not decline the tx");
-    assert_all_pages_printable(&pages);
-
-    let dump = dump_pages(&pages);
-    assert!(dump.contains("1036"), "raw token id 1036 must render:\n{dump}");
-    assert!(dump.contains("raw nft id"), "loud raw-id marker must render:\n{dump}");
+    assert!(
+        !res.entries.iter().any(|e| {
+            e.chain_id == 1
+                && e.source.file_name().and_then(|n| n.to_str()) == Some("calldata-PftNft.json")
+        }),
+        "descriptor with unimplemented nftName collection semantics must not enter the catalogue"
+    );
 }
 
 #[test]
-fn positive_nftname_large_id_shows_all_bytes_never_overflow_real_leaf() {
-    // THE load-bearing case (advisor): a large / structured token id (ERC-1155
-    // style) must show EVERY byte, NEVER a magnitude-hiding "!OVERFLOW" that
-    // clear-signs while hiding WHICH nft — the false-confidence class. A token
-    // id is an identifier, not an amount, so it must not route through the
-    // amount path.
+fn nftname_with_unimplemented_collection_binding_refuses_large_id() {
+    // Same fail-closed policy for a full-width identifier: no overflow marker,
+    // lossy decimal, or bare raw-id page is accepted under nftName semantics.
     let res = build_registry();
-    let entry = find_leaf(res, "calldata-PftNft.json", 1);
-    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
-    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
-
-    // Full-width id with a nonzero HIGH byte → forces the faithful raw path.
-    let mut id = [0u8; 32];
-    id[0] = 0xAB;
-    id[31] = 0xCD;
-    let calldata = calldata_approve([0x11u8; 20], U256(id));
-    let tx = envelope(1, entry.contract);
-    let resolver = NameResolver::new();
-    let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver).expect("render");
-    assert_all_pages_printable(&pages);
-
-    let dump = dump_pages(&pages);
     assert!(
-        !dump.contains("OVERFLOW"),
-        "a large token id must NOT overflow-hide (would clear-sign hiding the nft):\n{dump}"
+        !res.entries.iter().any(|e| {
+            e.chain_id == 1
+                && e.source.file_name().and_then(|n| n.to_str()) == Some("calldata-PftNft.json")
+        }),
+        "large ids get no lossy fallback because the unsafe descriptor is excluded"
     );
-    assert!(dump.contains("ab"), "high byte 0xAB must render:\n{dump}");
-    assert!(dump.contains("cd"), "low byte 0xCD must render:\n{dump}");
 }
 
 /// Pack-expansion sanity: the registry Lido `wstETH.wrap(uint256)`
@@ -1160,9 +1307,8 @@ fn positive_wsteth_wrap_renders_intent_and_amount_label() {
         symbol: b"stETH",
     };
     let resolver = NameResolver::new();
-    let pages =
-        render_erc7730_pages(&tx, &calldata, &verified, Some(&steth_meta), &resolver)
-            .expect("render");
+    let pages = render_erc7730_pages(&tx, &calldata, &verified, Some(&steth_meta), &resolver)
+        .expect("render");
     assert_all_pages_printable(&pages);
 
     let [r0, ..] = page_strs(&pages, 0);
@@ -1239,9 +1385,7 @@ fn rw_calldata(amounts: &[U256], owner: [u8; 20]) -> Vec<u8> {
 
 /// The Lido `_amounts.[]` array field + the format's `static_head_words`,
 /// from the trusted/pinned descriptor.
-fn lido_array_field<'a>(
-    ir: &'a Erc7730Ir<'a>,
-) -> (crate::tx::erc7730::FieldEntry<'a>, u16) {
+fn lido_array_field<'a>(ir: &'a Erc7730Ir<'a>) -> (crate::tx::erc7730::FieldEntry<'a>, u16) {
     let sel = keccak256(b"requestWithdrawals(uint256[],address)");
     let s4: [u8; 4] = sel[..4].try_into().unwrap();
     let format = ir.find_format_by_selector(&s4).unwrap().unwrap();
@@ -1268,7 +1412,11 @@ fn positive_lido_request_withdrawals_renders_every_element() {
     ];
     let owner = [0x55u8; 20];
     let calldata = rw_calldata(&amounts, owner);
-    assert_selector_matches(&verified.ir, &calldata, "requestWithdrawals(uint256[],address)");
+    assert_selector_matches(
+        &verified.ir,
+        &calldata,
+        "requestWithdrawals(uint256[],address)",
+    );
 
     let tx = envelope(1, entry.contract);
     let resolver = NameResolver::new();
@@ -1279,8 +1427,14 @@ fn positive_lido_request_withdrawals_renders_every_element() {
     // Header makes the count explicit. `write_amount_two_rows` splits an
     // amount across an integer row + a fraction row, so 2.5 → "2" / ".5".
     assert!(dump.contains("3 items"), "count header missing:\n{dump}");
-    assert!(dump.contains(".5"), "amount 2.5 (fraction) missing:\n{dump}");
-    assert!(dump.contains(".3"), "amount 0.3 (fraction) missing:\n{dump}");
+    assert!(
+        dump.contains(".5"),
+        "amount 2.5 (fraction) missing:\n{dump}"
+    );
+    assert!(
+        dump.contains(".3"),
+        "amount 0.3 (fraction) missing:\n{dump}"
+    );
     // ARRAY-TAIL-HIDING CLOSED, asserted concretely: one header page + EXACTLY
     // one page per element (3) all labelled "Amount" — never fewer.
     let amount_pages = pages
@@ -1380,7 +1534,11 @@ fn positive_synthetic_ref_field_renders_bound_token_amount() {
         d.extend_from_slice(&u256_from_u64(900_000).0); // minReceive
         d
     };
-    assert_selector_matches(&verified.ir, &calldata, "swap(address,address,uint256,uint256)");
+    assert_selector_matches(
+        &verified.ir,
+        &calldata,
+        "swap(address,address,uint256,uint256)",
+    );
 
     let tx = envelope(1, entry.contract);
     let usdc_meta = Erc20Metadata {
@@ -1439,7 +1597,11 @@ fn positive_registry_lido_tokenamount_array_bound_renders_steth() {
         u256_from_u64(300_000_000_000_000_000),
     ];
     let calldata = rw_calldata(&amounts, [0x55u8; 20]);
-    assert_selector_matches(&verified.ir, &calldata, "requestWithdrawals(uint256[],address)");
+    assert_selector_matches(
+        &verified.ir,
+        &calldata,
+        "requestWithdrawals(uint256[],address)",
+    );
 
     // Registry `token` is the stETH constant (0xae7ab9…); supply its metadata.
     let steth: [u8; 20] = hex::decode("ae7ab96520DE3A18E5e111B5EaAb095312D7fE84")
@@ -1470,14 +1632,20 @@ fn positive_registry_lido_tokenamount_array_bound_renders_steth() {
         .iter()
         .filter(|p| row_str(&p[0]) == "Amount" && (1..=2).any(|r| row_str(&p[r]).contains("stETH")))
         .count();
-    assert_eq!(steth_element_pages, 3, "every element must render as stETH:\n{dump}");
+    assert_eq!(
+        steth_element_pages, 3,
+        "every element must render as stETH:\n{dump}"
+    );
     // Bound → no UNVERIFIED token page.
     let unverified = pages
         .as_slice()
         .iter()
         .filter(|p| row_str(&p[0]).contains("UNVERIF"))
         .count();
-    assert_eq!(unverified, 0, "bound token must not show UNVERIFIED:\n{dump}");
+    assert_eq!(
+        unverified, 0,
+        "bound token must not show UNVERIFIED:\n{dump}"
+    );
     let _ = find_page_by_label(&pages, "Beneficiary");
 }
 
@@ -1510,7 +1678,10 @@ fn positive_registry_lido_tokenamount_array_unbound_raw_and_one_token_page() {
         .iter()
         .filter(|p| row_str(&p[3]).contains("raw, dec=?"))
         .count();
-    assert_eq!(raw_footers, 2, "both unbound elements must render loud raw:\n{dump}");
+    assert_eq!(
+        raw_footers, 2,
+        "both unbound elements must render loud raw:\n{dump}"
+    );
     // M-1: the token is named EXACTLY ONCE (a per-element page would be noise
     // and could push the array past the page budget).
     let token_pages = pages
@@ -1518,7 +1689,10 @@ fn positive_registry_lido_tokenamount_array_unbound_raw_and_one_token_page() {
         .iter()
         .filter(|p| row_str(&p[0]).contains("UNVERIF"))
         .count();
-    assert_eq!(token_pages, 1, "unbound token must be named exactly once:\n{dump}");
+    assert_eq!(
+        token_pages, 1,
+        "unbound token must be named exactly once:\n{dump}"
+    );
 }
 
 /// COMPLETENESS + FAITHFULNESS over the WHOLE prod registry: enumerates every
@@ -1528,8 +1702,9 @@ fn positive_registry_lido_tokenamount_array_unbound_raw_and_one_token_page() {
 /// 1. **Coverage guard** — every compiled array's element `format_op` has a
 ///    `render_array_element` arm (`Raw`/`Amount`/`TokenAmount`/`AddressName`).
 ///    If a `unit`/`calldata`/nested array ever slips the dbgen gate into the
-///    corpus, it would silently decline-to-blind on a real user tx; this fails
-///    loudly instead. (This is the durable regression guard.)
+///    corpus, a verified known call would hard-refuse on a real user tx; this
+///    fails loudly during generation/testing instead. (This is the durable
+///    regression guard.)
 /// 2. **End-to-end render** — the sole-dynamic arrays whose siblings my generic
 ///    calldata satisfies actually RENDER every element (array-tail-hiding
 ///    closed). `visible:never` arrays (e.g. `setAllowedTargets`, Raw+hidden)
@@ -1574,7 +1749,11 @@ fn all_compiled_registry_array_leaves_render() {
         for (selector, shw, label, fmt_op) in arrays {
             let key = format!(
                 "{}  sel={}  elem_fmt={}",
-                entry.source.file_name().and_then(|n| n.to_str()).unwrap_or("?"),
+                entry
+                    .source
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("?"),
                 hex::encode(selector),
                 fmt_op,
             );
@@ -1602,7 +1781,11 @@ fn all_compiled_registry_array_leaves_render() {
             // A render must never CRASH on a corpus leaf; a decline (Err) or a
             // hidden/unsatisfied field (0 label pages) is acceptable here.
             if let Ok(pages) = render_erc7730_pages(&tx, &cd, &verified, None, &resolver) {
-                let label_pages = pages.as_slice().iter().filter(|p| row_str(&p[0]) == want).count();
+                let label_pages = pages
+                    .as_slice()
+                    .iter()
+                    .filter(|p| row_str(&p[0]) == want)
+                    .count();
                 if label_pages >= 4 {
                     // header + 3 element pages: every element shown.
                     rendered.push((key, fmt_op));
@@ -1612,12 +1795,14 @@ fn all_compiled_registry_array_leaves_render() {
     }
 
     // (1) Coverage guard — the durable regression check.
-    let unhandled: Vec<&(String, u8)> =
-        all_arrays.iter().filter(|(_, f)| !HANDLED.contains(f)).collect();
+    let unhandled: Vec<&(String, u8)> = all_arrays
+        .iter()
+        .filter(|(_, f)| !HANDLED.contains(f))
+        .collect();
     assert!(
         unhandled.is_empty(),
         "compiled ArrayAll field(s) whose element format has NO render_array_element arm \
-         (would silently decline-to-blind if visible — add the arm or tighten the dbgen \
+         (would hard-refuse if visible — add the arm or tighten the dbgen \
          gate):\n{unhandled:#?}",
     );
 
@@ -1658,11 +1843,11 @@ fn calldata_sole_bytes(sig: &[u8], data: &[u8]) -> Vec<u8> {
     cd
 }
 
-/// WYSIWYS value-equality: a printable `bytes` payload renders as the exact
-/// ASCII text — differential over several payloads (celo `addStorageRoot(bytes
-/// url)`, chain 42220, the real registry leaf).
+/// A dynamic ABI `bytes` value stays opaque even when its attacker-controlled
+/// bytes happen to be printable. Payload printability is not authenticated type
+/// information and must never turn arbitrary bytes into a trusted string.
 #[test]
-fn c1_dynamic_bytes_renders_exact_text() {
+fn c1_dynamic_bytes_declines_even_when_printable() {
     let res = build_registry();
     let entry = find_leaf(res, "calldata-celo_accounts.json", 42220);
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
@@ -1673,22 +1858,18 @@ fn c1_dynamic_bytes_renders_exact_text() {
     for url in [&b"a"[..], b"https://ex.io/s", b"ipfs://Qm12345"] {
         let calldata = calldata_sole_bytes(b"addStorageRoot(bytes)", url);
         assert_selector_matches(&verified.ir, &calldata, "addStorageRoot(bytes)");
-        let pages =
-            render_erc7730_pages(&tx, &calldata, &verified, None, &resolver).expect("render");
-        assert_all_pages_printable(&pages);
-        let dump = dump_pages(&pages);
         assert!(
-            dump.contains(core::str::from_utf8(url).unwrap()),
-            "C1 must render the exact payload {url:?} (value-equality):\n{dump}"
+            render_erc7730_pages(&tx, &calldata, &verified, None, &resolver).is_err(),
+            "dynamic bytes must decline even when printable: {url:?}"
         );
-        let _ = find_page_by_label(&pages, "Storage Root URL");
     }
 }
 
-/// The opaque-bytes rule: non-printable / oversized `bytes` render as their
-/// LENGTH + a loud marker — never a misleading full-hex wall.
+/// Non-printable/oversized bytes also decline. A length and short preview are
+/// not injective: equal-length blobs sharing the prefix would show identical
+/// clear-sign pages while signing different calldata.
 #[test]
-fn c1_opaque_bytes_renders_length_and_loud_marker() {
+fn c1_opaque_bytes_decline_without_lossy_preview() {
     let res = build_registry();
     let entry = find_leaf(res, "calldata-celo_accounts.json", 42220);
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
@@ -1698,97 +1879,34 @@ fn c1_opaque_bytes_renders_length_and_loud_marker() {
 
     let payload = [0xFFu8; 40]; // binary, 40 bytes → opaque
     let calldata = calldata_sole_bytes(b"addStorageRoot(bytes)", &payload);
-    let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver).expect("render");
-    assert_all_pages_printable(&pages);
-    let dump = dump_pages(&pages);
-    assert!(dump.contains("40 bytes"), "opaque bytes must show length:\n{dump}");
-    assert!(dump.contains("opaque"), "opaque bytes must be loudly marked:\n{dump}");
+    assert!(
+        render_erc7730_pages(&tx, &calldata, &verified, None, &resolver).is_err(),
+        "opaque bytes must decline instead of rendering a lossy preview"
+    );
 }
 
-/// C2 — dynamic-tuple member navigation (FieldIdx → FollowOffset → FieldIdx).
-/// WYSIWYS value-equality: the device follows the tuple's offset into the tail
-/// and reads each member at the SAME position the contract decodes. Synthetic
-/// `setConfig((uint256 amount, address target, bytes note) cfg)` (dynamic tuple
-/// via the `bytes note` member) at a non-registry address — full value control.
+/// C2 dynamic-tuple descent is absent from the authenticated catalogue. The
+/// current IR carries the selected member slot but not the tuple's complete
+/// head width/tail topology, so exact canonical placement cannot be proven.
+/// Runtime has an independent preflight refusal; catalogue absence ensures no
+/// companion can obtain a verified descriptor that reaches that path.
 #[test]
-fn c2_dynamic_tuple_members_render_exact_values() {
+fn c2_dynamic_tuple_fixture_is_excluded_from_catalogue() {
     let res = build_seed();
-    let entry = find_leaf(&res, "synthetic-dynamic-tuple.json", 1);
-    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
-    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
-
-    // calldata: selector + [offset=32] + tuple[amount, target, note_off=96]
-    //           + [note_len][note].
-    let target = [0x77u8; 20];
-    let mut cd = keccak256(b"setConfig((uint256,address,bytes))")[..4].to_vec();
-    cd.extend_from_slice(&u256_from_u64(32).0); // offset → cfg tuple region
-    cd.extend_from_slice(&u256_from_u64(0xABCDE).0); // cfg.amount (tuple slot 0)
-    let mut t = [0u8; 32];
-    t[12..].copy_from_slice(&target);
-    cd.extend_from_slice(&t); // cfg.target (tuple slot 1)
-    cd.extend_from_slice(&u256_from_u64(96).0); // cfg.note offset (rel. to tuple)
-    cd.extend_from_slice(&u256_from_u64(2).0); // note len
-    cd.extend_from_slice(&{
-        let mut n = [0u8; 32];
-        n[..2].copy_from_slice(b"hi");
-        n
-    });
-    assert_selector_matches(&verified.ir, &cd, "setConfig((uint256,address,bytes))");
-
-    let tx = envelope(1, entry.contract);
-    let resolver = NameResolver::new();
-    let pages = render_erc7730_pages(&tx, &cd, &verified, None, &resolver).expect("render");
-    assert_all_pages_printable(&pages);
-    let dump = dump_pages(&pages).to_lowercase();
-    // cfg.amount = 0xABCDE (raw hex word) — proves the tuple member was read.
-    assert!(dump.contains("abcde"), "cfg.amount not read from the tuple:\n{dump}");
-    // cfg.target = 0x7777…77 (addressName, unresolved → raw address).
-    assert!(dump.contains("7777"), "cfg.target not read from the tuple:\n{dump}");
-    let _ = find_page_by_label(&pages, "Amount");
-    let _ = find_page_by_label(&pages, "Target");
+    assert!(res.entries.iter().all(|entry| {
+        entry.source.file_name().and_then(|n| n.to_str()) != Some("synthetic-dynamic-tuple.json")
+    }));
 }
 
-/// C3 — MULTI-dynamic array (relaxed `MultiInTail` placement). Two `<arg>.[]`
-/// arrays in one function: the exact-placement "whole tail" pin no longer holds,
-/// so each array follows its signature-fixed offset into the tail. WYSIWYS
-/// value-equality: every element of BOTH arrays renders from the exact decoded
-/// position. Synthetic `batchTransfer(uint256[] amounts, address[] recipients)`
-/// at a non-registry address.
+/// The retired relaxed multi-array/C3 shape is likewise excluded. Only a sole
+/// dynamic array whose offset equals head-end and whose elements consume the
+/// complete calldata body remains clear-signable.
 #[test]
-fn c3_multi_dynamic_arrays_render_exact_elements() {
+fn c3_multi_dynamic_array_fixture_is_excluded_from_catalogue() {
     let res = build_seed();
-    let entry = find_leaf(&res, "synthetic-multi-array.json", 1);
-    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
-    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
-
-    // head [off_amounts=64][off_recipients=160]
-    // tail amounts:[2][7][9]  recipients:[1][0xAA…AA]
-    let mut cd = keccak256(b"batchTransfer(uint256[],address[])")[..4].to_vec();
-    cd.extend_from_slice(&u256_from_u64(64).0); // offset → amounts
-    cd.extend_from_slice(&u256_from_u64(160).0); // offset → recipients
-    cd.extend_from_slice(&u256_from_u64(2).0); // amounts.len = 2
-    cd.extend_from_slice(&u256_from_u64(7).0); // amounts[0]
-    cd.extend_from_slice(&u256_from_u64(9).0); // amounts[1]
-    cd.extend_from_slice(&u256_from_u64(1).0); // recipients.len = 1
-    let mut rec = [0u8; 32];
-    rec[12..].copy_from_slice(&[0xAAu8; 20]);
-    cd.extend_from_slice(&rec); // recipients[0]
-    assert_selector_matches(&verified.ir, &cd, "batchTransfer(uint256[],address[])");
-
-    let tx = envelope(1, entry.contract);
-    let resolver = NameResolver::new();
-    let pages = render_erc7730_pages(&tx, &cd, &verified, None, &resolver).expect("render");
-    assert_all_pages_printable(&pages);
-    let dump = dump_pages(&pages);
-    // Both element counts (array-tail-hiding closed) + the exact element values.
-    assert!(dump.contains("2 items"), "amounts count missing:\n{dump}");
-    assert!(dump.contains("1 items"), "recipients count missing:\n{dump}");
-    // amounts 7 and 9 render (amount format, 18 decimals → tiny fractions, but
-    // the integer digits 7 and 9 appear); recipients 0xAA… renders.
-    assert!(dump.contains('7') && dump.contains('9'), "amount elements missing:\n{dump}");
-    assert!(dump.to_lowercase().contains("aaaa"), "recipient element missing:\n{dump}");
-    let _ = find_page_by_label(&pages, "Amounts");
-    let _ = find_page_by_label(&pages, "Recipients");
+    assert!(res.entries.iter().all(|entry| {
+        entry.source.file_name().and_then(|n| n.to_str()) != Some("synthetic-multi-array.json")
+    }));
 }
 
 /// Morpho Blue `borrow` — the nested static-tuple GROUP (`marketParams`)
@@ -1831,7 +1949,7 @@ fn morpho_borrow_nested_tuple_group_renders_exact_values() {
     cd.extend_from_slice(&u256_from_u64(0).0); // slot 6: shares
     cd.extend_from_slice(&addr_word(on_behalf)); // slot 7: onBehalf
     cd.extend_from_slice(&addr_word(receiver)); // slot 8: receiver
-    // Confirms the selector matches AND `borrow` actually compiled into the IR.
+                                                // Confirms the selector matches AND `borrow` actually compiled into the IR.
     assert_selector_matches(&verified.ir, &cd, types_sig);
 
     let tx = envelope(1, entry.contract);
@@ -1842,18 +1960,39 @@ fn morpho_borrow_nested_tuple_group_renders_exact_values() {
 
     // Tuple members read from their exact slots (addresses not in ERC20_DB/ENS
     // render as the raw calldata address — still faithful to the signed word).
-    assert!(dump.contains("1111"), "loanToken (tuple slot 0) not read:\n{dump}");
-    assert!(dump.contains("2222"), "collateralToken (tuple slot 1) not read:\n{dump}");
-    assert!(dump.contains("3333"), "oracle (tuple slot 2) not read:\n{dump}");
-    assert!(dump.contains("4444"), "irm (tuple slot 3) not read:\n{dump}");
-    assert!(dump.contains("beef"), "lltv (tuple slot 4) not read:\n{dump}");
+    assert!(
+        dump.contains("1111"),
+        "loanToken (tuple slot 0) not read:\n{dump}"
+    );
+    assert!(
+        dump.contains("2222"),
+        "collateralToken (tuple slot 1) not read:\n{dump}"
+    );
+    assert!(
+        dump.contains("3333"),
+        "oracle (tuple slot 2) not read:\n{dump}"
+    );
+    assert!(
+        dump.contains("4444"),
+        "irm (tuple slot 3) not read:\n{dump}"
+    );
+    assert!(
+        dump.contains("beef"),
+        "lltv (tuple slot 4) not read:\n{dump}"
+    );
     // Post-tuple args at their WIDTH-AWARE head slots (not logical ordinals).
     assert!(
         dump.contains("a55e5"),
         "assets (head slot 5, AFTER the 5-word tuple) not read:\n{dump}"
     );
-    assert!(dump.contains("6666"), "onBehalf (head slot 7) not read:\n{dump}");
-    assert!(dump.contains("7777"), "receiver (head slot 8) not read:\n{dump}");
+    assert!(
+        dump.contains("6666"),
+        "onBehalf (head slot 7) not read:\n{dump}"
+    );
+    assert!(
+        dump.contains("7777"),
+        "receiver (head slot 8) not read:\n{dump}"
+    );
     // Labels the descriptor declares are present.
     let _ = find_page_by_label(&pages, "Loan Token");
     let _ = find_page_by_label(&pages, "Assets");
@@ -1885,7 +2024,10 @@ fn array_resolve_matches_walk_differential() {
         let (elems_start, count) =
             super::erc7730::formatters::resolve_array(&field, &verified.ir, &body, shw)
                 .expect("resolver accepts the same canonical body");
-        assert_eq!(count, amounts_arg.count as usize, "count disagrees with walk");
+        assert_eq!(
+            count, amounts_arg.count as usize,
+            "count disagrees with walk"
+        );
         assert_eq!(
             elems_start,
             amounts_arg.body_off + 32,
@@ -1953,8 +2095,7 @@ fn adversarial_array_resolve_declines_hostile_bodies() {
     let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
     let (field, shw) = lido_array_field(&verified.ir);
     let ir = &verified.ir;
-    let resolve =
-        |body: &[u8]| super::erc7730::formatters::resolve_array(&field, ir, body, shw);
+    let resolve = |body: &[u8]| super::erc7730::formatters::resolve_array(&field, ir, body, shw);
 
     // Baseline: a canonical 2-element body resolves to (elems_start=96, count=2).
     let canon = rw_body(&[u256_from_u64(1), u256_from_u64(2)], [0x11u8; 20]);
@@ -2007,7 +2148,11 @@ fn adversarial_array_resolve_declines_hostile_bodies() {
 
     // (8) count == 0 → VALID (renders an empty page, no panic); resolver Ok(_, 0).
     let empty = rw_body(&[], [0x11u8; 20]);
-    assert_eq!(resolve(&empty).unwrap().1, 0, "empty array is valid, count 0");
+    assert_eq!(
+        resolve(&empty).unwrap().1,
+        0,
+        "empty array is valid, count 0"
+    );
 
     // (9) count large-but-in-bounds (9 > MAX_ARRAY_RENDER=8) → decline, not 9 pages.
     let nine: Vec<U256> = (0..9).map(|i| u256_from_u64(i)).collect();
@@ -2075,7 +2220,11 @@ fn belt_rejects_all_hidden_contract_format() {
     let hits: Vec<usize> = (HEADER_LEN..ir_bytes.len().saturating_sub(2))
         .filter(|&i| ir_bytes[i..i + 3] == pat)
         .collect();
-    assert_eq!(hits.len(), 1, "exactly one visibility TLV to flip, found {hits:?}");
+    assert_eq!(
+        hits.len(),
+        1,
+        "exactly one visibility TLV to flip, found {hits:?}"
+    );
     ir_bytes[hits[0] + 2] = 0x01; // VIS_NEVER
 
     // 3. Render the patched IR directly (bypass Merkle verify — we test only
@@ -2092,7 +2241,10 @@ fn belt_rejects_all_hidden_contract_format() {
 
     match render_erc7730_pages(&tx, &calldata, &verified, None, &resolver) {
         Err(crate::tx::erc7730_render::RenderErr::Reject(msg)) => {
-            assert!(msg.contains("no visible fields"), "belt reject message: {msg}");
+            assert!(
+                msg.contains("no visible fields"),
+                "belt reject message: {msg}"
+            );
         }
         Err(other) => panic!("expected belt Reject, got a different RenderErr: {other:?}"),
         Ok(_) => panic!(
@@ -2107,10 +2259,9 @@ fn belt_rejects_all_hidden_contract_format() {
 // A pinned EIP-712 descriptor whose primary type has a nested struct member
 // (a single opaque `hashStruct` word this renderer cannot expand) MUST be
 // declined to blind-sign, not partially clear-signed or mis-resolved. Driven
-// by the REAL Uniswap Permit2 descriptor from the vendored registry (its
-// `PermitSingle` / `PermitTransferFrom` nest a `PermitDetails` /
-// `TokenPermissions` struct), so the test also proves dbgen emitted the
-// `PARAM_NESTED_STRUCT` marker into the firmware-pinned catalog.
+// by a safe-visible, dbgen-emitted copy of the real Uniswap Permit2 descriptor
+// (its `PermitSingle` / `PermitTransferFrom` nest a `PermitDetails` /
+// `TokenPermissions` struct). Production absence is asserted separately.
 // ───────────────────────────────────────────────────────────────────────
 #[test]
 fn v2_kind_declines_nested_permit2() {
@@ -2119,8 +2270,7 @@ fn v2_kind_declines_nested_permit2() {
     // descent finds no DFS record to bind the `PermitDetails` hashStruct word,
     // so the whole render Rejects. A companion must use the V3 entry. This keeps
     // the "old kind never clear-signs a nested format" guarantee.
-    let res = build_registry();
-    let leaf = find_leaf(res, "eip712-uniswap-permit2.json", 1);
+    let leaf = safe_visible_nested_leaf("eip712-uniswap-permit2.json", 1);
     let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("permit2 IR parses");
     assert!(matches!(ir.context_kind, ContextKind::Eip712));
 
@@ -2145,16 +2295,17 @@ fn v2_kind_declines_nested_permit2() {
     ) {
         Err(crate::tx::erc7730_render::RenderErr::Reject(_)) => {}
         Err(other) => panic!("expected a nested Reject, got {other:?}"),
-        Ok(_) => panic!("nested Permit2 format must NOT clear-sign via the V2 (no-nested-blob) path"),
+        Ok(_) => {
+            panic!("nested Permit2 format must NOT clear-sign via the V2 (no-nested-blob) path")
+        }
     }
 }
 
 // ───────────────────────────────────────────────────────────────────────
-// THE DECISIVE nested-EIP-712 test (design §3 rule 6): a REAL Permit2
-// PermitSingle typed message drives the V3 render path. (a) proves the nested
-// members render (amount + expiration date + spender shown; nonce + sigDeadline
-// hidden); (b) proves the binding is NON-VACUOUS — flipping ANY nested word
-// (shown OR hidden) OR the committed top-level `details` word flips to DECLINE.
+// THE DECISIVE nested-EIP-712 test (design §3 rule 6): a safe-visible copy of
+// the real Permit2 PermitSingle type drives the V3 render path. Every explicit
+// descriptor field is visible in this fixture. The binding test proves that
+// flipping ANY nested word or the committed top-level `details` word declines.
 // (a) alone would pass even if the keccak binding were never checked; (b) is
 // what proves shown ⟺ signed.
 // ───────────────────────────────────────────────────────────────────────
@@ -2202,21 +2353,30 @@ fn permit_single_vectors(
 
 #[test]
 fn v3_permit_single_renders_nested_members() {
-    let res = build_registry();
-    let leaf = find_leaf(res, "eip712-uniswap-permit2.json", 1);
+    let leaf = safe_visible_nested_leaf("eip712-uniswap-permit2.json", 1);
     let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("permit2 IR parses");
-    // PermitSingle primary-type hash (the only surviving Permit2 format).
+    // PermitSingle primary-type hash in the safe-visible Permit2 fixture.
     let pth: [u8; 32] = [
         0xf3, 0x84, 0x1c, 0xd1, 0xff, 0x00, 0x85, 0x02, 0x6a, 0x63, 0x27, 0xb6, 0x20, 0xb6, 0x79,
         0x97, 0xce, 0x40, 0xf2, 0x82, 0xc8, 0x8a, 0x8e, 0x90, 0x5a, 0x7a, 0x56, 0x26, 0xe3, 0x10,
         0xf3, 0xd0,
     ];
-    let token = [0xA0u8, 0xb8, 0x69, 0x91, 0xc6, 0x21, 0x8b, 0x36, 0xc1, 0xd1, 0x9D, 0x4a, 0x2e,
-        0x9E, 0xb0, 0xcE, 0x36, 0x06, 0xeB, 0x48]; // USDC
-    let spender = [0x3fu8, 0xC9, 0x1A, 0x3a, 0xfd, 0x70, 0x39, 0x5C, 0xd4, 0x96, 0xC6, 0x47, 0xd5,
-        0xa6, 0xcC, 0x9D, 0x4B, 0x2b, 0x7F, 0xAD]; // Universal Router
-    let (top_ed, nested_blob) =
-        permit_single_vectors(token, 1_000_000_000, 1_735_689_600, 0, spender, 1_735_689_600);
+    let token = [
+        0xA0u8, 0xb8, 0x69, 0x91, 0xc6, 0x21, 0x8b, 0x36, 0xc1, 0xd1, 0x9D, 0x4a, 0x2e, 0x9E, 0xb0,
+        0xcE, 0x36, 0x06, 0xeB, 0x48,
+    ]; // USDC
+    let spender = [
+        0x3fu8, 0xC9, 0x1A, 0x3a, 0xfd, 0x70, 0x39, 0x5C, 0xd4, 0x96, 0xC6, 0x47, 0xd5, 0xa6, 0xcC,
+        0x9D, 0x4B, 0x2b, 0x7F, 0xAD,
+    ]; // Universal Router
+    let (top_ed, nested_blob) = permit_single_vectors(
+        token,
+        1_000_000_000,
+        1_735_689_600,
+        0,
+        spender,
+        1_735_689_600,
+    );
 
     let verified = VerifiedDescriptor { ir };
     let resolver = NameResolver::new();
@@ -2237,26 +2397,41 @@ fn v3_permit_single_renders_nested_members() {
     assert!(dump.contains("3fc9"), "spender must be shown:\n{dump}");
     // nested amount = 1_000_000_000 → without token metadata it renders raw
     // (`! raw, dec=?`); the digits must appear.
-    assert!(dump.contains("1000000000"), "nested amount must render:\n{dump}");
+    assert!(
+        dump.contains("1000000000"),
+        "nested amount must render:\n{dump}"
+    );
     // nested expiration is a timestamp date → a 2025 date renders.
-    assert!(dump.contains("2025"), "nested expiration date must render:\n{dump}");
+    assert!(
+        dump.contains("2025"),
+        "nested expiration date must render:\n{dump}"
+    );
 }
 
 #[test]
 fn v3_permit_single_binding_is_non_vacuous() {
-    let res = build_registry();
-    let leaf = find_leaf(res, "eip712-uniswap-permit2.json", 1);
+    let leaf = safe_visible_nested_leaf("eip712-uniswap-permit2.json", 1);
     let pth: [u8; 32] = [
         0xf3, 0x84, 0x1c, 0xd1, 0xff, 0x00, 0x85, 0x02, 0x6a, 0x63, 0x27, 0xb6, 0x20, 0xb6, 0x79,
         0x97, 0xce, 0x40, 0xf2, 0x82, 0xc8, 0x8a, 0x8e, 0x90, 0x5a, 0x7a, 0x56, 0x26, 0xe3, 0x10,
         0xf3, 0xd0,
     ];
-    let token = [0xA0u8, 0xb8, 0x69, 0x91, 0xc6, 0x21, 0x8b, 0x36, 0xc1, 0xd1, 0x9D, 0x4a, 0x2e,
-        0x9E, 0xb0, 0xcE, 0x36, 0x06, 0xeB, 0x48];
-    let spender = [0x3fu8, 0xC9, 0x1A, 0x3a, 0xfd, 0x70, 0x39, 0x5C, 0xd4, 0x96, 0xC6, 0x47, 0xd5,
-        0xa6, 0xcC, 0x9D, 0x4B, 0x2b, 0x7F, 0xAD];
-    let (top_ed, nested_blob) =
-        permit_single_vectors(token, 1_000_000_000, 1_735_689_600, 0, spender, 1_735_689_600);
+    let token = [
+        0xA0u8, 0xb8, 0x69, 0x91, 0xc6, 0x21, 0x8b, 0x36, 0xc1, 0xd1, 0x9D, 0x4a, 0x2e, 0x9E, 0xb0,
+        0xcE, 0x36, 0x06, 0xeB, 0x48,
+    ];
+    let spender = [
+        0x3fu8, 0xC9, 0x1A, 0x3a, 0xfd, 0x70, 0x39, 0x5C, 0xd4, 0x96, 0xC6, 0x47, 0xd5, 0xa6, 0xcC,
+        0x9D, 0x4B, 0x2b, 0x7F, 0xAD,
+    ];
+    let (top_ed, nested_blob) = permit_single_vectors(
+        token,
+        1_000_000_000,
+        1_735_689_600,
+        0,
+        spender,
+        1_735_689_600,
+    );
 
     let render = |ed: &[u8], blob: &[u8]| {
         let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("permit2 IR parses");
@@ -2268,12 +2443,13 @@ fn v3_permit_single_binding_is_non_vacuous() {
     };
 
     // Baseline: renders.
-    assert!(render(&top_ed, &nested_blob).is_ok(), "baseline must render");
+    assert!(
+        render(&top_ed, &nested_blob).is_ok(),
+        "baseline must render"
+    );
 
-    // (b1) Flip EVERY byte of EVERY nested word (shown token/amount/expiration
-    // AND hidden nonce) — each flip breaks keccak(type_hash‖nested_ed) ==
-    // committed → DECLINE. Proves the binding covers the COMPLETE member, not
-    // just the shown subset.
+    // (b1) Flip EVERY byte of EVERY nested word. Each flip breaks
+    // keccak(type_hash‖nested_ed) == committed → DECLINE.
     for word in 0..4usize {
         for byte in 0..32usize {
             let mut blob = nested_blob.clone();
@@ -2304,11 +2480,22 @@ const PERMIT_SINGLE_TYPEHASH: [u8; 32] = [
 ];
 
 fn permit_single_valid_vectors() -> (std::vec::Vec<u8>, std::vec::Vec<u8>) {
-    let token = [0xA0u8, 0xb8, 0x69, 0x91, 0xc6, 0x21, 0x8b, 0x36, 0xc1, 0xd1, 0x9D, 0x4a, 0x2e,
-        0x9E, 0xb0, 0xcE, 0x36, 0x06, 0xeB, 0x48];
-    let spender = [0x3fu8, 0xC9, 0x1A, 0x3a, 0xfd, 0x70, 0x39, 0x5C, 0xd4, 0x96, 0xC6, 0x47, 0xd5,
-        0xa6, 0xcC, 0x9D, 0x4B, 0x2b, 0x7F, 0xAD];
-    permit_single_vectors(token, 1_000_000_000, 1_735_689_600, 0, spender, 1_735_689_600)
+    let token = [
+        0xA0u8, 0xb8, 0x69, 0x91, 0xc6, 0x21, 0x8b, 0x36, 0xc1, 0xd1, 0x9D, 0x4a, 0x2e, 0x9E, 0xb0,
+        0xcE, 0x36, 0x06, 0xeB, 0x48,
+    ];
+    let spender = [
+        0x3fu8, 0xC9, 0x1A, 0x3a, 0xfd, 0x70, 0x39, 0x5C, 0xd4, 0x96, 0xC6, 0x47, 0xd5, 0xa6, 0xcC,
+        0x9D, 0x4B, 0x2b, 0x7F, 0xAD,
+    ];
+    permit_single_vectors(
+        token,
+        1_000_000_000,
+        1_735_689_600,
+        0,
+        spender,
+        1_735_689_600,
+    )
 }
 
 /// Walk an EIP-712 IR's formats section and return the byte offset of the
@@ -2352,8 +2539,7 @@ fn eip712_format_ndc_offset(ir_bytes: &[u8], target: &[u8; 32]) -> Option<usize>
 /// logic catches a (future) dbgen regression that emits the wrong count.
 #[test]
 fn v3_reconciliation_rejects_wrong_pinned_descent_count() {
-    let res = build_registry();
-    let leaf = find_leaf(res, "eip712-uniswap-permit2.json", 1);
+    let leaf = safe_visible_nested_leaf("eip712-uniswap-permit2.json", 1);
     let (top_ed, nested_blob) = permit_single_valid_vectors();
 
     // Locate PermitSingle's format header nested_descent_count byte. The permit2
@@ -2367,13 +2553,23 @@ fn v3_reconciliation_rejects_wrong_pinned_descent_count() {
 
     let render_patched = |ndc: u8| {
         let mut ir_bytes = leaf.ir_bytes.clone();
-        assert_eq!(ir_bytes[ndc_off], 1, "PermitSingle pins exactly one descent point");
+        assert_eq!(
+            ir_bytes[ndc_off], 1,
+            "PermitSingle pins exactly one descent point"
+        );
         ir_bytes[ndc_off] = ndc;
         let ir = Erc7730Ir::parse(&ir_bytes).expect("patched IR still parses");
         let verified = VerifiedDescriptor { ir };
         let resolver = NameResolver::new();
         super::erc7730::render_erc7730_eip712_pages_v3(
-            1, &[0u8; 20], &PERMIT_SINGLE_TYPEHASH, &top_ed, &nested_blob, &verified, None, &resolver,
+            1,
+            &[0u8; 20],
+            &PERMIT_SINGLE_TYPEHASH,
+            &top_ed,
+            &nested_blob,
+            &verified,
+            None,
+            &resolver,
         )
     };
 
@@ -2395,8 +2591,7 @@ fn v3_reconciliation_rejects_wrong_pinned_descent_count() {
 /// live exploit — but the cursor check must fire.)
 #[test]
 fn v3_reconciliation_rejects_trailing_nested_blob() {
-    let res = build_registry();
-    let leaf = find_leaf(res, "eip712-uniswap-permit2.json", 1);
+    let leaf = safe_visible_nested_leaf("eip712-uniswap-permit2.json", 1);
     let (top_ed, mut nested_blob) = permit_single_valid_vectors();
     nested_blob.push(0xEE); // one unconsumed trailing byte
 
@@ -2405,7 +2600,14 @@ fn v3_reconciliation_rejects_trailing_nested_blob() {
     let resolver = NameResolver::new();
     assert!(
         super::erc7730::render_erc7730_eip712_pages_v3(
-            1, &[0u8; 20], &PERMIT_SINGLE_TYPEHASH, &top_ed, &nested_blob, &verified, None, &resolver,
+            1,
+            &[0u8; 20],
+            &PERMIT_SINGLE_TYPEHASH,
+            &top_ed,
+            &nested_blob,
+            &verified,
+            None,
+            &resolver,
         )
         .is_err(),
         "cursor != nested_blob.len() (trailing byte) must decline"
@@ -2426,17 +2628,19 @@ const PERMIT_TRANSFER_FROM_TYPEHASH: [u8; 32] = [
 /// The MINIMAL nested binding: Permit2 `PermitTransferFrom` (`TokenPermissions`,
 /// 2 members) — unlocked by the `nonce` curation. Proves the v0x03 machinery
 /// handles a smaller struct than PermitSingle end-to-end: the nested amount +
-/// token render, top-level spender + deadline show, `nonce` (top word 2) hides,
-/// AND flipping the committed `permitted` word declines (binding is live for the
-/// 2-member shape too).
+/// token render, top-level spender + deadline + nonce show, AND flipping the
+/// committed `permitted` word declines (binding is live for the 2-member shape).
 #[test]
 fn v3_permit_transfer_from_renders_and_flip_declines() {
-    let res = build_registry();
-    let leaf = find_leaf(res, "eip712-uniswap-permit2.json", 1);
-    let token = [0xA0u8, 0xb8, 0x69, 0x91, 0xc6, 0x21, 0x8b, 0x36, 0xc1, 0xd1, 0x9D, 0x4a, 0x2e,
-        0x9E, 0xb0, 0xcE, 0x36, 0x06, 0xeB, 0x48]; // USDC
-    let spender = [0x3fu8, 0xC9, 0x1A, 0x3a, 0xfd, 0x70, 0x39, 0x5C, 0xd4, 0x96, 0xC6, 0x47, 0xd5,
-        0xa6, 0xcC, 0x9D, 0x4B, 0x2b, 0x7F, 0xAD];
+    let leaf = safe_visible_nested_leaf("eip712-uniswap-permit2.json", 1);
+    let token = [
+        0xA0u8, 0xb8, 0x69, 0x91, 0xc6, 0x21, 0x8b, 0x36, 0xc1, 0xd1, 0x9D, 0x4a, 0x2e, 0x9E, 0xb0,
+        0xcE, 0x36, 0x06, 0xeB, 0x48,
+    ]; // USDC
+    let spender = [
+        0x3fu8, 0xC9, 0x1A, 0x3a, 0xfd, 0x70, 0x39, 0x5C, 0xd4, 0x96, 0xC6, 0x47, 0xd5, 0xa6, 0xcC,
+        0x9D, 0x4B, 0x2b, 0x7F, 0xAD,
+    ];
 
     // nested_ed (TokenPermissions) = token | amount (2 words).
     let mut nested_ed = std::vec![0u8; 64];
@@ -2448,7 +2652,7 @@ fn v3_permit_transfer_from_renders_and_flip_declines() {
     let mut top_ed = std::vec![0u8; 128];
     top_ed[0..32].copy_from_slice(&permitted_hs);
     top_ed[32 + 12..64].copy_from_slice(&spender);
-    top_ed[64 + 24..96].copy_from_slice(&42u64.to_be_bytes()); // nonce (HIDDEN)
+    top_ed[64 + 24..96].copy_from_slice(&42u64.to_be_bytes()); // nonce (VISIBLE fixture)
     top_ed[96 + 24..128].copy_from_slice(&1_735_689_600u64.to_be_bytes()); // deadline (SHOWN)
 
     let mut nested_blob = std::vec![0u8; 2];
@@ -2460,7 +2664,14 @@ fn v3_permit_transfer_from_renders_and_flip_declines() {
         let verified = VerifiedDescriptor { ir };
         let resolver = NameResolver::new();
         super::erc7730::render_erc7730_eip712_pages_v3(
-            1, &[0u8; 20], &PERMIT_TRANSFER_FROM_TYPEHASH, ed, blob, &verified, None, &resolver,
+            1,
+            &[0u8; 20],
+            &PERMIT_TRANSFER_FROM_TYPEHASH,
+            ed,
+            blob,
+            &verified,
+            None,
+            &resolver,
         )
     };
 
@@ -2468,7 +2679,10 @@ fn v3_permit_transfer_from_renders_and_flip_declines() {
     assert_all_pages_printable(&pages);
     let dump = dump_pages(&pages).to_lowercase();
     assert!(dump.contains("3fc9"), "spender must be shown:\n{dump}");
-    assert!(dump.contains("500000000"), "nested amount must render:\n{dump}");
+    assert!(
+        dump.contains("500000000"),
+        "nested amount must render:\n{dump}"
+    );
     assert!(dump.contains("2025"), "deadline date must render:\n{dump}");
     assert!(!dump.contains("hidden"), "sanity");
 
@@ -2484,7 +2698,10 @@ fn v3_permit_transfer_from_renders_and_flip_declines() {
     // Flip a nested word → decline.
     let mut blob = nested_blob.clone();
     blob[2 + 40] ^= 0x01; // inside the amount word
-    assert!(render(&top_ed, &blob).is_err(), "flipping nested amount must decline");
+    assert!(
+        render(&top_ed, &blob).is_err(),
+        "flipping nested amount must decline"
+    );
 }
 
 // PermitBatch primary-type hash (foundry).
@@ -2500,12 +2717,18 @@ const PERMIT_BATCH_TYPEHASH: [u8; 32] = [
 /// the device recomputes from the IR-pinned type_hash + the blob; a flip in
 /// either breaks the equality). Returns `(top_ed[96], nested_blob)`.
 fn permit_batch_vectors() -> (std::vec::Vec<u8>, std::vec::Vec<u8>) {
-    let usdc = [0xA0u8, 0xb8, 0x69, 0x91, 0xc6, 0x21, 0x8b, 0x36, 0xc1, 0xd1, 0x9D, 0x4a, 0x2e,
-        0x9E, 0xb0, 0xcE, 0x36, 0x06, 0xeB, 0x48];
-    let weth = [0xC0u8, 0x2a, 0xaA, 0x39, 0xb2, 0x23, 0xFE, 0x8D, 0x0A, 0x0e, 0x5C, 0x4F, 0x27,
-        0xeA, 0xD9, 0x08, 0x3C, 0x75, 0x6C, 0xc2];
-    let spender = [0x3fu8, 0xC9, 0x1A, 0x3a, 0xfd, 0x70, 0x39, 0x5C, 0xd4, 0x96, 0xC6, 0x47, 0xd5,
-        0xa6, 0xcC, 0x9D, 0x4B, 0x2b, 0x7F, 0xAD];
+    let usdc = [
+        0xA0u8, 0xb8, 0x69, 0x91, 0xc6, 0x21, 0x8b, 0x36, 0xc1, 0xd1, 0x9D, 0x4a, 0x2e, 0x9E, 0xb0,
+        0xcE, 0x36, 0x06, 0xeB, 0x48,
+    ];
+    let weth = [
+        0xC0u8, 0x2a, 0xaA, 0x39, 0xb2, 0x23, 0xFE, 0x8D, 0x0A, 0x0e, 0x5C, 0x4F, 0x27, 0xeA, 0xD9,
+        0x08, 0x3C, 0x75, 0x6C, 0xc2,
+    ];
+    let spender = [
+        0x3fu8, 0xC9, 0x1A, 0x3a, 0xfd, 0x70, 0x39, 0x5C, 0xd4, 0x96, 0xC6, 0x47, 0xd5, 0xa6, 0xcC,
+        0x9D, 0x4B, 0x2b, 0x7F, 0xAD,
+    ];
 
     let mut el0 = std::vec![0u8; 128];
     el0[12..32].copy_from_slice(&usdc);
@@ -2535,24 +2758,39 @@ fn permit_batch_vectors() -> (std::vec::Vec<u8>, std::vec::Vec<u8>) {
 
 #[test]
 fn v3_permit_batch_array_renders_both_elements() {
-    let res = build_registry();
-    let leaf = find_leaf(res, "eip712-uniswap-permit2.json", 1);
+    let leaf = safe_visible_nested_leaf("eip712-uniswap-permit2.json", 1);
     let (top_ed, blob) = permit_batch_vectors();
     let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("permit2 IR parses");
     let verified = VerifiedDescriptor { ir };
     let resolver = NameResolver::new();
     let pages = super::erc7730::render_erc7730_eip712_pages_v3(
-        1, &[0u8; 20], &PERMIT_BATCH_TYPEHASH, &top_ed, &blob, &verified, None, &resolver,
+        1,
+        &[0u8; 20],
+        &PERMIT_BATCH_TYPEHASH,
+        &top_ed,
+        &blob,
+        &verified,
+        None,
+        &resolver,
     )
     .expect("valid 2-element PermitBatch clear-signs");
     assert_all_pages_printable(&pages);
     let dump = dump_pages(&pages).to_lowercase();
     // Both element amounts render (raw, no token metadata → `! raw, dec=?`; a
     // 19-digit value splits across two display rows, so match the leading run).
-    assert!(dump.contains("1000000000"), "element 0 (USDC 1e9) amount:\n{dump}");
-    assert!(dump.contains("5000000000000000"), "element 1 (WETH 5e18) amount:\n{dump}");
+    assert!(
+        dump.contains("1000000000"),
+        "element 0 (USDC 1e9) amount:\n{dump}"
+    );
+    assert!(
+        dump.contains("5000000000000000"),
+        "element 1 (WETH 5e18) amount:\n{dump}"
+    );
     // Distinct token addresses (unverified pages) prove per-element resolution.
-    assert!(dump.contains("a0b86991c6218b"), "element 0 token (USDC):\n{dump}");
+    assert!(
+        dump.contains("a0b86991c6218b"),
+        "element 0 token (USDC):\n{dump}"
+    );
     assert!(dump.contains("c02aaa39"), "element 1 token (WETH):\n{dump}");
     // The "Item 1 of 2" / "Item 2 of 2" dividers.
     assert!(dump.contains("item 1 of 2"), "element 0 divider:\n{dump}");
@@ -2564,8 +2802,7 @@ fn v3_permit_batch_array_renders_both_elements() {
 
 #[test]
 fn v3_permit_batch_array_binding_is_non_vacuous() {
-    let res = build_registry();
-    let leaf = find_leaf(res, "eip712-uniswap-permit2.json", 1);
+    let leaf = safe_visible_nested_leaf("eip712-uniswap-permit2.json", 1);
     let (top_ed, blob) = permit_batch_vectors();
 
     let render = |ed: &[u8], b: &[u8]| {
@@ -2573,13 +2810,20 @@ fn v3_permit_batch_array_binding_is_non_vacuous() {
         let verified = VerifiedDescriptor { ir };
         let resolver = NameResolver::new();
         super::erc7730::render_erc7730_eip712_pages_v3(
-            1, &[0u8; 20], &PERMIT_BATCH_TYPEHASH, ed, b, &verified, None, &resolver,
+            1,
+            &[0u8; 20],
+            &PERMIT_BATCH_TYPEHASH,
+            ed,
+            b,
+            &verified,
+            None,
+            &resolver,
         )
     };
     assert!(render(&top_ed, &blob).is_ok(), "baseline renders");
 
-    // (a) Flip ONE bit inside EACH element word (both elements, shown + hidden
-    // words) → the concat hashStruct no longer matches `committed` → DECLINE.
+    // (a) Flip ONE bit inside EACH element word (both elements, every word) →
+    // the concat hashStruct no longer matches `committed` → DECLINE.
     // `blob` layout: elem_count(2) then [len(2) el0(128)] [len(2) el1(128)];
     // element bytes start at offset 4 (el0) and 4+128+2=134 (el1).
     for (base, label) in [(4usize, "el0"), (134usize, "el1")] {
@@ -2596,70 +2840,51 @@ fn v3_permit_batch_array_binding_is_non_vacuous() {
     for byte in [0usize, 31] {
         let mut ed = top_ed.clone();
         ed[byte] ^= 0x01;
-        assert!(render(&ed, &blob).is_err(), "flipping committed array word byte {byte} declines");
+        assert!(
+            render(&ed, &blob).is_err(),
+            "flipping committed array word byte {byte} declines"
+        );
     }
     // (c) Lie about elem_count (claim 1) — the concat over 1 element != committed
     // (which bound 2) → DECLINE (element-count is implicitly bound by the hash).
     let mut b = blob.clone();
     b[0] = 0;
     b[1] = 1;
-    assert!(render(&top_ed, &b).is_err(), "lying elem_count=1 must decline");
+    assert!(
+        render(&top_ed, &b).is_err(),
+        "lying elem_count=1 must decline"
+    );
     // (d) elem_count = 0 → explicit decline (the empty-batch attack).
     let mut b0 = blob.clone();
     b0[0] = 0;
     b0[1] = 0;
-    assert!(render(&top_ed, &b0).is_err(), "elem_count=0 must decline (empty batch)");
-}
-
-/// EIP-2612 Permit `owner` allowlist (`hidden_address_allow`): the canonical
-/// Ledger permit template hides `owner` (== the signer) + `nonce` and shows
-/// `spender` / `value` / `deadline`. Without the allowlist entry rule 2 refuses
-/// it and all 74 token permits blind-sign; with it, they clear-sign. This drives
-/// a REAL restored permit (LINK) through the EIP-712 render path and proves the
-/// effect-bearing `spender` renders while `owner` stays hidden — the exact
-/// WYSIWYS content of the allowlist decision.
-#[test]
-fn erc2612_permit_renders_spender_hides_owner() {
-    let res = build_registry();
-    let leaf = find_leaf(res, "eip712-permit-ethereum-link.json", 1);
-    let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("permit IR parses");
-    assert!(matches!(ir.context_kind, ContextKind::Eip712));
-    let fmt = ir.format_iter().next().expect("≥1 format").expect("valid header");
-    let pth = fmt.type_hash;
-
-    // encoded_data = owner | spender | value | nonce | deadline (5 head words).
-    let mut ed = std::vec![0u8; 5 * 32];
-    ed[12..32].copy_from_slice(&[0x11u8; 20]); // owner   (HIDDEN, == signer)
-    ed[44..64].copy_from_slice(&[0x22u8; 20]); // spender (SHOWN)
-    ed[64 + 29..96].copy_from_slice(&[0x0A, 0xBC, 0xDE]); // value = 0x0abcde (SHOWN)
-    ed[96 + 24..128].copy_from_slice(&0x6767_6767u64.to_be_bytes()); // deadline ts (SHOWN)
-
-    let verified = VerifiedDescriptor { ir };
-    let resolver = NameResolver::new();
-    let pages = super::erc7730::render_erc7730_eip712_pages(
-        1, &[0u8; 20], &pth, &ed, &verified, None, &resolver,
-    )
-    .expect("permit clear-signs (owner allowlisted)");
-    assert_all_pages_printable(&pages);
-    let dump = dump_pages(&pages).to_lowercase();
-    assert!(dump.contains("2222"), "spender must be shown:\n{dump}");
     assert!(
-        !dump.contains("1111"),
-        "owner is allowlist-hidden and must NOT appear:\n{dump}"
+        render(&top_ed, &b0).is_err(),
+        "elem_count=0 must decline (empty batch)"
     );
 }
 
+/// The canonical EIP-2612 template hides `owner` and `nonce`. The strict
+/// compiler no longer carries global semantic allowlists: a hidden signed
+/// scalar cannot enter the authenticated catalogue, even when a convention
+/// suggests it will equal the signer. Assert exclusion instead of exercising
+/// an unreachable trusted-render path.
+#[test]
+fn erc2612_permit_with_hidden_owner_is_excluded() {
+    assert_registry_source_excluded("eip712-permit-ethereum-link.json");
+}
+
 // ───────────────────────────────────────────────────────────────────────
-// Tier B: tokenPath byte-slice / array-index resolver — Uniswap swaps.
+// Tier B: canonical dynamic tokenPath framing — Uniswap swaps.
 //
-// The token IDENTITY for a swap amount lives packed inside a dynamic leg:
-// `exactInput` `params.path.[0:20]` (input token) / `[-20:]` (output token),
-// and V2 `swapExactTokensForTokens` `path.[0]` / `[-1]`. These tests drive REAL
-// ABI-encoded multi-hop calldata and assert the resolved token — proving the
-// slice extracts the correct 20 bytes end-to-end: the ERC-20 symbol renders on a
-// leg's amount page ONLY when the slice matches that leg's real token (a wrong
-// extraction would miss the metadata and fall to raw). The magnitude is asserted
-// too (the amount itself resolves through the dynamic tuple / static head).
+// V3 `exactInput` puts its packed path behind C2 dynamic-tuple descent, which the
+// trusted IR cannot frame exactly; the tests below assert that selector is absent
+// rather than partially rendered. V2 `swapExactTokensForTokens` instead has one
+// top-level `address[] path` whole tail, so `path.[0]` / `[-1]` is an accepted C1
+// shape. Its test drives real ABI-encoded multi-hop calldata and asserts the
+// resolved token: the ERC-20 symbol renders only when extraction matches the
+// signed array element, while the amount resolves independently from the static
+// head.
 // ───────────────────────────────────────────────────────────────────────
 const UNI_V3: [u8; 20] = [
     0x68, 0xb3, 0x46, 0x58, 0x33, 0xfb, 0x72, 0xa7, 0x0e, 0xcd, 0xf4, 0x85, 0xe0, 0xe4, 0xc7, 0xbd,
@@ -2700,7 +2925,7 @@ fn calldata_exact_input(
     let mut d = Vec::new();
     d.extend_from_slice(&[0xb8, 0x58, 0x18, 0x3f]); // exactInput selector
     d.extend_from_slice(&u256_from_u64(0x20).0); // offset to params tuple
-    // params tuple head (4 words): path-offset, recipient, amountIn, amountOutMin.
+                                                 // params tuple head (4 words): path-offset, recipient, amountIn, amountOutMin.
     d.extend_from_slice(&u256_from_u64(128).0); // path offset (relative to tuple start)
     let mut rec = [0u8; 32];
     rec[12..].copy_from_slice(&recipient);
@@ -2744,19 +2969,28 @@ fn calldata_v2_swap(
     d
 }
 
-fn render_uni(calldata: &[u8], token: Option<&Erc20Metadata<'_>>) -> Pages {
+fn render_uni_result(
+    calldata: &[u8],
+    token: Option<&Erc20Metadata<'_>>,
+) -> Result<Pages, crate::tx::erc7730_render::RenderErr> {
     let res = build_registry();
     let entry = find_leaf(res, "calldata-UniswapV3Router02.json", 1);
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
     let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
     let tx = envelope(1, UNI_V3);
     let resolver = NameResolver::new();
-    render_erc7730_pages(&tx, calldata, &verified, token, &resolver).expect("render")
+    render_erc7730_pages(&tx, calldata, &verified, token, &resolver)
+}
+
+fn render_uni(calldata: &[u8], token: Option<&Erc20Metadata<'_>>) -> Pages {
+    render_uni_result(calldata, token).expect("render")
 }
 
 #[test]
-fn uniswap_exact_input_binds_input_token_from_head_slice() {
-    // `[0:20]` = input token. amountIn 1.5 TKA (6 decimals).
+fn uniswap_exact_input_c2_input_slice_is_excluded() {
+    // `exactInput` requires C2 dynamic-tuple descent before its packed path
+    // slice. Current IR cannot prove the tuple's full canonical layout, so the
+    // selector must be absent rather than falling back to a partial render.
     let calldata = calldata_exact_input(
         TOKEN_IN,
         3000,
@@ -2766,33 +3000,14 @@ fn uniswap_exact_input_binds_input_token_from_head_slice() {
         u256_from_u64(4_000_000_000_000_000_000),
     );
     let m = meta(TOKEN_IN, 6, b"TKA");
-    let pages = render_uni(&calldata, Some(&m));
-    assert_all_pages_printable(&pages);
-
-    let p = find_page_by_label(&pages, "Amount to Send");
-    let rows = page_strs(&pages, p);
-    assert!(
-        rows.iter().any(|r| r.contains("TKA")),
-        "input token id from params.path.[0:20] must bind → TKA: {rows:?}"
-    );
-    // The amount wraps across the two value rows on the 16-col display.
-    let val = format!("{}{}", rows[1], rows[2]);
-    assert!(
-        val.contains("1.5"),
-        "amountIn magnitude must resolve through the dynamic tuple: {rows:?}"
-    );
-    // Per-leg: the OUTPUT leg (token1 != TKA metadata) must NOT show TKA.
-    let po = find_page_by_label(&pages, "Minimum to Rece~");
-    let ro = page_strs(&pages, po);
-    assert!(
-        !ro.iter().any(|r| r.contains("TKA")),
-        "output leg must not inherit the input token's symbol: {ro:?}"
-    );
+    assert!(matches!(
+        render_uni_result(&calldata, Some(&m)),
+        Err(crate::tx::erc7730_render::RenderErr::NoFormat)
+    ));
 }
 
 #[test]
-fn uniswap_exact_input_binds_output_token_from_tail_slice() {
-    // `[-20:]` = output token. amountOutMinimum 4 TKB (18 decimals).
+fn uniswap_exact_input_c2_output_slice_is_excluded() {
     let calldata = calldata_exact_input(
         TOKEN_IN,
         3000,
@@ -2802,17 +3017,10 @@ fn uniswap_exact_input_binds_output_token_from_tail_slice() {
         u256_from_u64(4_000_000_000_000_000_000),
     );
     let m = meta(TOKEN_OUT, 18, b"TKB");
-    let pages = render_uni(&calldata, Some(&m));
-    let p = find_page_by_label(&pages, "Minimum to Rece~");
-    let rows = page_strs(&pages, p);
-    assert!(
-        rows.iter().any(|r| r.contains("TKB")),
-        "output token id from params.path.[-20:] must bind → TKB: {rows:?}"
-    );
-    assert!(
-        rows.iter().any(|r| r.contains('4')),
-        "amountOutMinimum magnitude must resolve: {rows:?}"
-    );
+    assert!(matches!(
+        render_uni_result(&calldata, Some(&m)),
+        Err(crate::tx::erc7730_render::RenderErr::NoFormat)
+    ));
 }
 
 #[test]
@@ -2836,8 +3044,12 @@ fn uniswap_v2_swap_binds_first_and_last_array_element() {
         "path.[0] must bind the first element → TKA: {rows:?}"
     );
 
-    // `swapTokensForExactTokens`: amountOut tokenPath = path.[-1] (last element).
-    // amountOut = 4 TKB (18 decimals); amountInMax's path.[0] leg stays unbound.
+    // The upstream `swapTokensForExactTokens` format also requests the
+    // `senderAddress` sentinel for its recipient. The device cannot bind that
+    // sentinel to msg.sender, so dbgen intentionally drops this one format
+    // instead of silently ignoring the constraint. `[-1]` extraction remains
+    // covered by the pure compiler/resolver tests; the production catalogue
+    // must have no clear-sign format for this selector.
     let cd_out = calldata_v2_swap(
         [0x42, 0x71, 0x2a, 0x67],
         u256_from_u64(4_000_000_000_000_000_000),
@@ -2845,26 +3057,22 @@ fn uniswap_v2_swap_binds_first_and_last_array_element() {
         &path,
         [0x33; 20],
     );
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-UniswapV3Router02.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
+    let tx = envelope(1, UNI_V3);
+    let resolver = NameResolver::new();
     let mb = meta(TOKEN_OUT, 18, b"TKB");
-    let pages2 = render_uni(&cd_out, Some(&mb));
-    let p2 = find_page_by_label(&pages2, "Amount to Recei~");
-    let rows2 = page_strs(&pages2, p2);
-    assert!(
-        rows2.iter().any(|r| r.contains("TKB")),
-        "path.[-1] must bind the LAST element (3-hop) → TKB: {rows2:?}"
-    );
-    // Non-vacuity: the last element is TOKEN_OUT, not TOKEN_MID.
-    assert!(
-        !rows2.iter().any(|r| r.contains("TKM")),
-        "path.[-1] must not pick the middle element: {rows2:?}"
-    );
+    match render_erc7730_pages(&tx, &cd_out, &verified, Some(&mb), &resolver) {
+        Err(crate::tx::erc7730_render::RenderErr::NoFormat) => {}
+        Err(other) => panic!("expected senderAddress format exclusion, got {other:?}"),
+        Ok(_) => panic!("unsafe senderAddress format must not clear-sign"),
+    }
 }
 
 #[test]
-fn uniswap_slice_binding_is_non_vacuous_decoy_token() {
-    // A decoy token NOT in the path must NOT bind — proves the symbol renders
-    // only when the extracted slice equals the metadata contract (a wrong slice
-    // would silently fall to the raw-amount fallback, never a wrong symbol).
+fn uniswap_exact_input_c2_decoy_path_cannot_reach_renderer() {
     let calldata = calldata_exact_input(
         TOKEN_IN,
         3000,
@@ -2874,31 +3082,14 @@ fn uniswap_slice_binding_is_non_vacuous_decoy_token() {
         u256_from_u64(4_000_000_000_000_000_000),
     );
     let decoy = meta([0x99; 20], 6, b"DEC");
-    let pages = render_uni(&calldata, Some(&decoy));
-    let dump = dump_pages(&pages);
-    assert!(
-        !dump.contains("DEC"),
-        "decoy token (not in path) must never bind:\n{dump}"
-    );
+    assert!(matches!(
+        render_uni_result(&calldata, Some(&decoy)),
+        Err(crate::tx::erc7730_render::RenderErr::NoFormat)
+    ));
 }
 
-// ───────────────────────────────────────────────────────────────────────
-// v3 DEEP NESTING + NESTED-ARRAY-IN-STRUCT — UniswapX ExclusiveDutchOrder.
-//
-// Signed struct: PermitWitnessTransferFrom(TokenPermissions permitted, address
-// spender, uint256 nonce, uint256 deadline, ExclusiveDutchOrder witness). The
-// `witness` is a depth-1 nested struct that ITSELF contains a nested struct
-// `info` (OrderInfo, depth 2 — curated to SHOW reactor/swapper/validationContract)
-// and a nested array-of-struct `outputs` (DutchOutput[], depth 2). The binding
-// chains keccak(typeHash ‖ ed) top-down to the signed digest at EVERY level:
-//   top_ed[0]=hashStruct(permitted), top_ed[4]=hashStruct(witness);
-//   witness_ed[0]=hashStruct(info), witness_ed[8]=hashStructArray(outputs).
-// DFS blob order = device descent order = permitted | witness | info |
-// {elem_count=2, out0, out1} (info before outputs = the curated field order).
-// ───────────────────────────────────────────────────────────────────────
-
-/// Parse a 64-char hex string into a `[u8; 32]` (test-local; the foundry-pinned
-/// typeHashes are easier to read as hex than as byte arrays).
+/// Parse a 64-char hex string into a `[u8; 32]` for the remaining synthetic
+/// nested fixture vectors.
 fn hx32(s: &str) -> [u8; 32] {
     let mut o = [0u8; 32];
     for (i, b) in o.iter_mut().enumerate() {
@@ -2907,402 +3098,21 @@ fn hx32(s: &str) -> [u8; 32] {
     o
 }
 
-// PermitWitnessTransferFrom(...ExclusiveDutchOrder witness) primary type hash
-// (the value dbgen emits into the format header; see erc7730.review.txt).
-const EXCLUSIVE_DUTCH_PRIMARY: &str =
-    "2846b6ca8e0ecdbc9ca7696f16bdf77b3baf48504ac14d6a541484ec197e91eb";
-
-/// Build a valid 2-output UniswapX `ExclusiveDutchOrder`: `(top_ed[160],
-/// nested_blob)`. Every committed word is the REAL chained `hashStruct`
-/// (recomputed via the device primitive — NOT circular: the device rebuilds each
-/// from the IR-pinned typeHash + the companion blob; a flip in either breaks the
-/// equality). `nested_blob` is the device's DFS descent order.
-fn exclusive_dutch_vectors() -> (std::vec::Vec<u8>, std::vec::Vec<u8>) {
-    use super::erc7730::nested::{hash_struct, hash_struct_array};
-    let order_info_th = hx32("7daca11202c64729871927c37d75933f1852e430627cd4b8f4844087e312e94b");
-    let dutch_output_th = hx32("45058f030836a1ec7cb9636dad15d25676157364aaf76d8dad81a6b2c267610f");
-    let edo_th = hx32("24d8514d0b2bd650779acf204b79c73859aaafd6fd011c00669d143a7b891419");
-    let token_permissions_th =
-        hx32("618358ac3db8dc274f0cd8829da7e234bd48cd73c4a740aede1adec9846d06a1");
-
-    let word_addr = |a: [u8; 20]| {
-        let mut w = [0u8; 32];
-        w[12..].copy_from_slice(&a);
-        w
-    };
-    let word_u = |n: u64| {
-        let mut w = [0u8; 32];
-        w[24..].copy_from_slice(&n.to_be_bytes());
-        w
-    };
-    let usdc = [0xA0u8, 0xb8, 0x69, 0x91, 0xc6, 0x21, 0x8b, 0x36, 0xc1, 0xd1, 0x9D, 0x4a, 0x2e,
-        0x9E, 0xb0, 0xcE, 0x36, 0x06, 0xeB, 0x48];
-    let weth = [0xC0u8, 0x2a, 0xaA, 0x39, 0xb2, 0x23, 0xFE, 0x8D, 0x0A, 0x0e, 0x5C, 0x4F, 0x27,
-        0xeA, 0xD9, 0x08, 0x3C, 0x75, 0x6C, 0xc2];
-    let dai = [0x6Bu8, 0x17, 0x54, 0x74, 0xE8, 0x90, 0x94, 0xC4, 0x4D, 0xa9, 0x8b, 0x95, 0x4E,
-        0xed, 0xeA, 0xC4, 0x95, 0x27, 0x1d, 0x0F];
-
-    // permitted_ed (TokenPermissions: token, amount).
-    let mut permitted_ed = std::vec![0u8; 64];
-    permitted_ed[0..32].copy_from_slice(&word_addr(usdc));
-    permitted_ed[32..64].copy_from_slice(&word_u(5_000_005)); // approve amount
-    let permitted_word = hash_struct(&token_permissions_th, &permitted_ed);
-
-    // info_ed (OrderInfo: reactor, swapper, nonce, deadline, validationContract, validationData).
-    let mut info_ed = std::vec![0u8; 192];
-    info_ed[0..32].copy_from_slice(&word_addr([0x22; 20])); // reactor (SHOWN)
-    info_ed[32..64].copy_from_slice(&word_addr([0x33; 20])); // swapper (SHOWN)
-    info_ed[64..96].copy_from_slice(&word_u(42)); // nonce (hidden)
-    info_ed[96..128].copy_from_slice(&word_u(1_700_000_000)); // deadline (hidden)
-    info_ed[128..160].copy_from_slice(&word_addr([0x44; 20])); // additionalValidationContract (SHOWN)
-    info_ed[160..192].copy_from_slice(&[0xAB; 32]); // additionalValidationData word (hidden bytes hash)
-    let info_word = hash_struct(&order_info_th, &info_ed);
-
-    // out_i_ed (DutchOutput: token, startAmount, endAmount, recipient).
-    let mk_out = |token: [u8; 20], end: u64, recip: [u8; 20]| {
-        let mut o = std::vec![0u8; 128];
-        o[0..32].copy_from_slice(&word_addr(token));
-        o[32..64].copy_from_slice(&word_u(1)); // startAmount (hidden)
-        o[64..96].copy_from_slice(&word_u(end)); // endAmount (SHOWN)
-        o[96..128].copy_from_slice(&word_addr(recip)); // recipient (SHOWN)
-        o
-    };
-    let out0 = mk_out(dai, 2_000_002, [0x66; 20]);
-    let out1 = mk_out(usdc, 3_000_003, [0x66; 20]);
-    let outputs_word = hash_struct_array(&dutch_output_th, &[&out0[..], &out1[..]]);
-
-    // witness_ed (ExclusiveDutchOrder, 9 words).
-    let mut witness_ed = std::vec![0u8; 288];
-    witness_ed[0..32].copy_from_slice(&info_word); // info (depth-2 struct)
-    witness_ed[32..64].copy_from_slice(&word_u(1_699_000_000)); // decayStartTime (hidden)
-    witness_ed[64..96].copy_from_slice(&word_u(1_699_500_000)); // decayEndTime (hidden)
-    witness_ed[96..128].copy_from_slice(&word_addr([0x55; 20])); // exclusiveFiller (SHOWN)
-    witness_ed[128..160].copy_from_slice(&word_u(0)); // exclusivityOverrideBps (hidden)
-    witness_ed[160..192].copy_from_slice(&word_addr(weth)); // inputToken (covered via tokenPath)
-    witness_ed[192..224].copy_from_slice(&word_u(1_000_001)); // inputStartAmount (SHOWN)
-    witness_ed[224..256].copy_from_slice(&word_u(900_000)); // inputEndAmount (hidden)
-    witness_ed[256..288].copy_from_slice(&outputs_word); // outputs (depth-2 array)
-    let witness_word = hash_struct(&edo_th, &witness_ed);
-
-    // top_ed (PermitWitnessTransferFrom, 5 words).
-    let mut top_ed = std::vec![0u8; 160];
-    top_ed[0..32].copy_from_slice(&permitted_word); // permitted
-    top_ed[32..64].copy_from_slice(&word_addr([0x11; 20])); // spender (SHOWN)
-    top_ed[64..96].copy_from_slice(&word_u(7)); // nonce (hidden)
-    top_ed[96..128].copy_from_slice(&word_u(1_735_689_600)); // deadline 2025-01-01 (SHOWN date)
-    top_ed[128..160].copy_from_slice(&witness_word); // witness
-
-    // nested_blob DFS: permitted | witness | info | {elem_count=2, out0, out1}.
-    let mut blob = std::vec::Vec::new();
-    let push_rec = |blob: &mut std::vec::Vec<u8>, ed: &[u8]| {
-        blob.extend_from_slice(&(ed.len() as u16).to_be_bytes());
-        blob.extend_from_slice(ed);
-    };
-    push_rec(&mut blob, &permitted_ed);
-    push_rec(&mut blob, &witness_ed);
-    push_rec(&mut blob, &info_ed);
-    blob.extend_from_slice(&2u16.to_be_bytes()); // outputs elem_count
-    push_rec(&mut blob, &out0);
-    push_rec(&mut blob, &out1);
-
-    (top_ed, blob)
-}
-
-/// (a) The decisive DEPTH-2 render: a real 2-output ExclusiveDutchOrder clear-signs
-/// through the recursive descent — top spender, the depth-2 `info` addresses
-/// (reactor/swapper/validationContract, curated SHOW), the depth-1 exclusiveFiller,
-/// the nested `outputs[]` array (per-element endAmount + recipient with dividers),
-/// the tokenAmounts, and the deadline date. A decline here means the DFS order /
-/// recursion / chained binding is wrong (the render `.expect()`s success).
-#[test]
-fn v3_exclusive_dutch_order_renders_deep_nested() {
-    let res = build_registry();
-    let leaf = find_leaf(res, "eip712-UniswapX-ExclusiveDutchOrder.json", 1);
-    let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("ExclusiveDutchOrder IR parses");
-    let pth = hx32(EXCLUSIVE_DUTCH_PRIMARY);
-    let (top_ed, blob) = exclusive_dutch_vectors();
-    let verified = VerifiedDescriptor { ir };
-    let resolver = NameResolver::new();
-    let pages = super::erc7730::render_erc7730_eip712_pages_v3(
-        1, &[0u8; 20], &pth, &top_ed, &blob, &verified, None, &resolver,
-    )
-    .expect("valid ExclusiveDutchOrder clear-signs via V3 (depth-2 recursion)");
-    assert_all_pages_printable(&pages);
-    let dump = dump_pages(&pages).to_lowercase();
-    // top-level spender (0x11..).
-    assert!(dump.contains("1111111111111111"), "spender must be shown:\n{dump}");
-    // depth-2 OrderInfo addresses (the curated SHOW — reactor/swapper/validation).
-    assert!(dump.contains("2222222222222222"), "info.reactor must render (depth 2):\n{dump}");
-    assert!(dump.contains("3333333333333333"), "info.swapper must render (depth 2):\n{dump}");
-    assert!(dump.contains("4444444444444444"), "info.validationContract must render (depth 2):\n{dump}");
-    // depth-1 exclusiveFiller (curated SHOW).
-    assert!(dump.contains("5555555555555555"), "exclusiveFiller must render:\n{dump}");
-    // depth-2 nested-array outputs: recipients + per-element endAmounts + dividers.
-    assert!(dump.contains("6666666666666666"), "output recipient must render:\n{dump}");
-    assert!(dump.contains("2000002"), "out0 endAmount must render:\n{dump}");
-    assert!(dump.contains("3000003"), "out1 endAmount must render:\n{dump}");
-    assert!(dump.contains("item 1 of 2"), "output element 0 divider:\n{dump}");
-    assert!(dump.contains("item 2 of 2"), "output element 1 divider:\n{dump}");
-    // witness.inputStartAmount ("Spend max") + permitted amount + deadline date.
-    assert!(dump.contains("1000001"), "inputStartAmount must render:\n{dump}");
-    assert!(dump.contains("5000005"), "permitted amount must render:\n{dump}");
-    assert!(dump.contains("2025"), "deadline date must render:\n{dump}");
-}
-
-/// (b) THE decisive DEPTH-2 non-vacuity proof: the chained binding must be live
-/// at EVERY depth. Flipping ANY single bit of the `nested_blob` (any word of
-/// permitted / witness / info / either output element — shown OR hidden — or any
-/// record length / elem_count) OR either top-level committed word (permitted @0,
-/// witness @4) flips the render to DECLINE. If any flip still rendered, that byte
-/// would be signed-bound but unchecked — the WYSIWYS break this test exists to
-/// catch. (a) alone passes even if the deep binding is never verified; (b) proves
-/// shown ⟺ signed through the whole tree.
-#[test]
-fn v3_exclusive_dutch_binding_is_non_vacuous() {
-    let res = build_registry();
-    let leaf = find_leaf(res, "eip712-UniswapX-ExclusiveDutchOrder.json", 1);
-    let pth = hx32(EXCLUSIVE_DUTCH_PRIMARY);
-    let (top_ed, blob) = exclusive_dutch_vectors();
-
-    let render = |ed: &[u8], b: &[u8]| {
-        let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("EDO IR parses");
-        let verified = VerifiedDescriptor { ir };
-        let resolver = NameResolver::new();
-        super::erc7730::render_erc7730_eip712_pages_v3(
-            1, &[0u8; 20], &pth, ed, b, &verified, None, &resolver,
-        )
-    };
-
-    assert!(render(&top_ed, &blob).is_ok(), "baseline must render");
-
-    // (b1) Flip EVERY byte of the WHOLE nested_blob (every ed word at depths 1
-    // AND 2 — shown and hidden — plus every record-length header and the
-    // elem_count). Each is bound: an ed flip breaks a chained hashStruct; a
-    // length/count flip mis-parses a record → length mismatch / OOB. All DECLINE.
-    for i in 0..blob.len() {
-        let mut b = blob.clone();
-        b[i] ^= 0x01;
-        assert!(
-            render(&top_ed, &b).is_err(),
-            "flipping nested_blob byte {i} must decline (binding live at all depths)"
-        );
-    }
-
-    // (b2) Flip every byte of the two TOP-LEVEL committed words (permitted @word0,
-    // witness @word4) — the roots of the two binding chains. DECLINE.
-    for byte in (0..32).chain(128..160) {
-        let mut ed = top_ed.clone();
-        ed[byte] ^= 0x01;
-        assert!(
-            render(&ed, &blob).is_err(),
-            "flipping top committed byte {byte} must decline"
-        );
-    }
-}
-
-/// (c) The E1 reconciliation FIRES at depth 2: the ExclusiveDutchOrder pins
-/// `nested_descent_count = 4` (permitted + witness + info + outputs — counted
-/// RECURSIVELY). Patch that byte to a wrong value → the after-render
-/// `records_consumed(4) != nested_descent_count` check declines. This is the ONLY
-/// exerciser of the reconciliation reject path at depth 2 (every blob-flip in (b)
-/// rejects at a BINDING first). Proves dbgen counts sub-anchors recursively AND
-/// the device compares the pinned count.
-#[test]
-fn v3_exclusive_dutch_reconciliation_rejects_wrong_pinned_descent_count() {
-    let res = build_registry();
-    let leaf = find_leaf(res, "eip712-UniswapX-ExclusiveDutchOrder.json", 1);
-    let pth = hx32(EXCLUSIVE_DUTCH_PRIMARY);
-    let (top_ed, blob) = exclusive_dutch_vectors();
-    let ndc_off = eip712_format_ndc_offset(&leaf.ir_bytes, &pth)
-        .expect("ExclusiveDutchOrder format present in the shipped DB");
-
-    let render_patched = |ndc: u8| {
-        let mut ir_bytes = leaf.ir_bytes.clone();
-        assert_eq!(
-            ir_bytes[ndc_off], 4,
-            "ExclusiveDutchOrder pins FOUR descent points (permitted+witness+info+outputs, recursive)"
-        );
-        ir_bytes[ndc_off] = ndc;
-        let ir = Erc7730Ir::parse(&ir_bytes).expect("patched IR still parses");
-        let verified = VerifiedDescriptor { ir };
-        let resolver = NameResolver::new();
-        super::erc7730::render_erc7730_eip712_pages_v3(
-            1, &[0u8; 20], &pth, &top_ed, &blob, &verified, None, &resolver,
-        )
-    };
-    // Under-count (3, e.g. a regression that failed to count the depth-2 `info`
-    // sub-anchor) and over-count (5) both mismatch records_consumed(4) → decline.
-    assert!(render_patched(3).is_err(), "records_consumed(4) != pinned 3 must decline");
-    assert!(render_patched(5).is_err(), "records_consumed(4) != pinned 5 must decline");
-}
-
-/// (d) Cross-struct DFS slot-confusion at depth 2 (E4-2, one level deeper than v1):
-/// reordering the interior DFS records — feeding the `outputs` section where the
-/// device expects the `info` record — must DECLINE. The device reads the next
-/// record's `[u16 len]` (here the outputs `elem_count` = 2) as `info`'s length,
-/// which ≠ OrderInfo's `member_count × 32` (192) → decline. A companion cannot
-/// swap sub-trees behind a passing outer binding.
-#[test]
-fn v3_exclusive_dutch_reordered_records_decline() {
-    let res = build_registry();
-    let leaf = find_leaf(res, "eip712-UniswapX-ExclusiveDutchOrder.json", 1);
-    let pth = hx32(EXCLUSIVE_DUTCH_PRIMARY);
-    let (top_ed, blob) = exclusive_dutch_vectors();
-    // Blob layout: permitted[0..66] | witness[66..356] | info[356..550] | outputs[550..].
-    // Swap the info record and the outputs section.
-    let mut reordered = std::vec::Vec::new();
-    reordered.extend_from_slice(&blob[0..356]); // permitted + witness (unchanged)
-    reordered.extend_from_slice(&blob[550..]); // outputs section, now where info was
-    reordered.extend_from_slice(&blob[356..550]); // info record, now last
-    assert_eq!(reordered.len(), blob.len(), "reorder preserves total length");
-
-    let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("EDO IR parses");
-    let verified = VerifiedDescriptor { ir };
-    let resolver = NameResolver::new();
-    assert!(
-        super::erc7730::render_erc7730_eip712_pages_v3(
-            1, &[0u8; 20], &pth, &top_ed, &reordered, &verified, None, &resolver,
-        )
-        .is_err(),
-        "reordered interior DFS records (outputs where info expected) must decline"
-    );
-}
-
-/// v3 second shipped descriptor: UniswapX plain `DutchOrder` (no exclusiveFiller /
-/// exclusivityOverrideBps — a 7-member witness, otherwise identical machinery to
-/// ExclusiveDutchOrder). Proves the recursion + curation are not EDO-specific: the
-/// depth-2 `info` addresses + nested `outputs[]` array + tokenAmounts render, and a
-/// flip of a depth-2 word (info) OR the top witness commitment declines.
-#[test]
-fn v3_dutch_order_renders_deep_nested_and_flip_declines() {
-    use super::erc7730::nested::{hash_struct, hash_struct_array};
-    let res = build_registry();
-    let leaf = find_leaf(res, "eip712-UniswapX-DutchOrder.json", 1);
-    // PermitWitnessTransferFrom(...DutchOrder witness) primary type hash.
-    let pth = hx32("f69aa722d3ed4edcfb9d5a29bf72a4d1fd0a2b90c570c4791dcde3f5dcd89c0b");
-    let order_info_th = hx32("7daca11202c64729871927c37d75933f1852e430627cd4b8f4844087e312e94b");
-    let dutch_output_th = hx32("45058f030836a1ec7cb9636dad15d25676157364aaf76d8dad81a6b2c267610f");
-    let dutch_order_th = hx32("701a429bb9f0181256c459ce5000b7e7677ccc459ebb6229e1bd778e024a5973");
-    let token_permissions_th =
-        hx32("618358ac3db8dc274f0cd8829da7e234bd48cd73c4a740aede1adec9846d06a1");
-
-    let wa = |a: [u8; 20]| {
-        let mut w = [0u8; 32];
-        w[12..].copy_from_slice(&a);
-        w
-    };
-    let wu = |n: u64| {
-        let mut w = [0u8; 32];
-        w[24..].copy_from_slice(&n.to_be_bytes());
-        w
-    };
-    let weth = [0xC0u8, 0x2a, 0xaA, 0x39, 0xb2, 0x23, 0xFE, 0x8D, 0x0A, 0x0e, 0x5C, 0x4F, 0x27,
-        0xeA, 0xD9, 0x08, 0x3C, 0x75, 0x6C, 0xc2];
-    let dai = [0x6Bu8, 0x17, 0x54, 0x74, 0xE8, 0x90, 0x94, 0xC4, 0x4D, 0xa9, 0x8b, 0x95, 0x4E,
-        0xed, 0xeA, 0xC4, 0x95, 0x27, 0x1d, 0x0F];
-
-    // permitted (TokenPermissions: token, amount).
-    let mut permitted_ed = std::vec![0u8; 64];
-    permitted_ed[0..32].copy_from_slice(&wa(weth));
-    permitted_ed[32..64].copy_from_slice(&wu(7_000_007));
-    let permitted_word = hash_struct(&token_permissions_th, &permitted_ed);
-
-    // info (OrderInfo, 6 words) — reactor/swapper/validationContract SHOWN.
-    let mut info_ed = std::vec![0u8; 192];
-    info_ed[0..32].copy_from_slice(&wa([0x2Au8; 20])); // reactor
-    info_ed[32..64].copy_from_slice(&wa([0x3Au8; 20])); // swapper
-    info_ed[64..96].copy_from_slice(&wu(9)); // nonce (hidden)
-    info_ed[96..128].copy_from_slice(&wu(1_700_000_000)); // deadline (hidden)
-    info_ed[128..160].copy_from_slice(&wa([0x4Au8; 20])); // validationContract
-    info_ed[160..192].copy_from_slice(&[0xCD; 32]); // validationData word (hidden)
-    let info_word = hash_struct(&order_info_th, &info_ed);
-
-    // one output (DutchOutput: token, startAmount, endAmount, recipient).
-    let mut out0 = std::vec![0u8; 128];
-    out0[0..32].copy_from_slice(&wa(dai));
-    out0[32..64].copy_from_slice(&wu(1));
-    out0[64..96].copy_from_slice(&wu(4_000_004)); // endAmount SHOWN
-    out0[96..128].copy_from_slice(&wa([0x6Au8; 20])); // recipient SHOWN
-    let outputs_word = hash_struct_array(&dutch_output_th, &[&out0[..]]);
-
-    // witness (DutchOrder, 7 words): info(0), decayStart(1), decayEnd(2),
-    // inputToken(3), inputStartAmount(4), inputEnd(5), outputs(6).
-    let mut witness_ed = std::vec![0u8; 224];
-    witness_ed[0..32].copy_from_slice(&info_word);
-    witness_ed[32..64].copy_from_slice(&wu(1_699_000_000));
-    witness_ed[64..96].copy_from_slice(&wu(1_699_500_000));
-    witness_ed[96..128].copy_from_slice(&wa(weth)); // inputToken (via tokenPath)
-    witness_ed[128..160].copy_from_slice(&wu(8_000_008)); // inputStartAmount SHOWN
-    witness_ed[160..192].copy_from_slice(&wu(7_000_000));
-    witness_ed[192..224].copy_from_slice(&outputs_word);
-    let witness_word = hash_struct(&dutch_order_th, &witness_ed);
-
-    // top (PermitWitnessTransferFrom, 5 words).
-    let mut top_ed = std::vec![0u8; 160];
-    top_ed[0..32].copy_from_slice(&permitted_word);
-    top_ed[32..64].copy_from_slice(&wa([0x1Au8; 20])); // spender SHOWN
-    top_ed[64..96].copy_from_slice(&wu(11)); // nonce hidden
-    top_ed[96..128].copy_from_slice(&wu(1_735_689_600)); // deadline 2025 SHOWN
-    top_ed[128..160].copy_from_slice(&witness_word);
-
-    // DFS blob: permitted | witness | info | {elem_count=1, out0}.
-    let mut blob = std::vec::Vec::new();
-    let push_rec = |b: &mut std::vec::Vec<u8>, ed: &[u8]| {
-        b.extend_from_slice(&(ed.len() as u16).to_be_bytes());
-        b.extend_from_slice(ed);
-    };
-    push_rec(&mut blob, &permitted_ed);
-    push_rec(&mut blob, &witness_ed);
-    push_rec(&mut blob, &info_ed);
-    blob.extend_from_slice(&1u16.to_be_bytes()); // elem_count = 1
-    push_rec(&mut blob, &out0);
-
-    let render = |ed: &[u8], b: &[u8]| {
-        let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("DutchOrder IR parses");
-        let verified = VerifiedDescriptor { ir };
-        let resolver = NameResolver::new();
-        super::erc7730::render_erc7730_eip712_pages_v3(
-            1, &[0u8; 20], &pth, ed, b, &verified, None, &resolver,
-        )
-    };
-
-    let pages = render(&top_ed, &blob).expect("valid DutchOrder clear-signs (depth-2)");
-    assert_all_pages_printable(&pages);
-    let dump = dump_pages(&pages).to_lowercase();
-    assert!(dump.contains("2a2a2a2a2a2a"), "info.reactor (depth 2):\n{dump}");
-    assert!(dump.contains("3a3a3a3a3a3a"), "info.swapper (depth 2):\n{dump}");
-    assert!(dump.contains("4a4a4a4a4a4a"), "info.validationContract (depth 2):\n{dump}");
-    assert!(dump.contains("6a6a6a6a6a6a"), "output recipient (depth 2):\n{dump}");
-    assert!(dump.contains("4000004"), "out0 endAmount:\n{dump}");
-    assert!(dump.contains("8000008"), "inputStartAmount:\n{dump}");
-    assert!(dump.contains("item 1 of 1"), "single-output divider:\n{dump}");
-
-    // Flip a depth-2 info word → info binding breaks → decline. Blob layout:
-    // permitted[2..66] | witness[68..292] | info[294..486] | ...
-    let mut b = blob.clone();
-    b[300] ^= 0x01; // inside info_ed (reactor word)
-    assert!(render(&top_ed, &b).is_err(), "flip depth-2 info word declines");
-    // Flip the top witness commitment → decline.
-    let mut ed = top_ed.clone();
-    ed[140] ^= 0x01; // inside witness_word (top word 4)
-    assert!(render(&ed, &blob).is_err(), "flip top witness commitment declines");
-}
-
-/// v3 corpus-wide safety: the recursive descent is a GENERAL capability, so it
-/// also recompiled other pre-existing nested EIP-712 descriptors (e.g. Rarible
-/// ExchangeV2 `makeAsset`/`takeAsset`) from flat records into v0x03 anchors. This
-/// asserts the whole corpus's nested-EIP-712 leaves are PANIC-SAFE and fail-closed:
-/// every format carrying a nested anchor, fed a benign-but-wrong `nested_blob`
-/// (empty / zeros / all-0xFF adversarial lengths), must return a `Result`
-/// (Ok or a decline) WITHOUT panicking / OOB — the recursion + `read_next_nested_ed`
-/// bounds-checks hold for every shipped descriptor, not just the UniswapX targets.
+/// v3 fixture-wide safety: recursive descent remains a GENERAL renderer
+/// capability even though the real descriptors that hid signed members are no
+/// longer authenticated. Exercise every format in the safe-visible dbgen-emitted
+/// fixture set with hostile nested blobs and require panic/OOB freedom.
 #[test]
 fn v3_all_nested_eip712_leaves_are_panic_safe_and_fail_closed() {
-    let res = build_registry();
     let resolver = NameResolver::new();
     let mut nested_leaf_formats = 0usize;
-    for entry in res.entries.iter() {
-        let Ok(ir) = Erc7730Ir::parse(&entry.ir_bytes) else { continue };
+    for entry in build_safe_visible_nested_fixtures()
+        .values()
+        .flat_map(|entries| entries.iter())
+    {
+        let Ok(ir) = Erc7730Ir::parse(&entry.ir_bytes) else {
+            continue;
+        };
         if !matches!(ir.context_kind, ContextKind::Eip712) {
             continue;
         }
@@ -3324,234 +3134,29 @@ fn v3_all_nested_eip712_leaves_are_panic_safe_and_fail_closed() {
                 let verified = VerifiedDescriptor {
                     ir: Erc7730Ir::parse(&entry.ir_bytes).unwrap(),
                 };
-                // A wrong blob must decline (Err), never render a mis-bound page and
-                // never panic. We assert only "does not panic + returns Result";
-                // the render function's own bounds-checks do the rest.
-                let _ = super::erc7730::render_erc7730_eip712_pages_v3(
-                    chain, &contract, &pth, &ed, &blob, &verified, None, &resolver,
+                // A wrong blob must decline (Err), never render a mis-bound
+                // page and never panic. Asserting only "returns Result" would
+                // make this fail-closed regression vacuous if a hostile blob
+                // ever started producing pages.
+                assert!(
+                    super::erc7730::render_erc7730_eip712_pages_v3(
+                        chain, &contract, &pth, &ed, &blob, &verified, None, &resolver,
+                    )
+                    .is_err(),
+                    "hostile nested blob unexpectedly rendered: source={} selector=0x{} blob_len={}",
+                    entry.source.display(),
+                    hex::encode(fmt.selector),
+                    blob.len(),
                 );
             }
         }
     }
-    // permit2 (Single/Batch/TransferFrom) + UniswapX Dutch/ExclusiveDutch + Rarible
-    // ExchangeV2/wrapper/erc-721/erc-1155 × many chains → dozens of nested formats.
+    // Permit2 (Single/Batch/TransferFrom) and SessionManager provide four
+    // distinct safe nested formats (single struct + arrays-of-struct).
     assert!(
-        nested_leaf_formats >= 8,
+        nested_leaf_formats >= 4,
         "expected many nested EIP-712 leaf-formats across the corpus, got {nested_leaf_formats}"
     );
-}
-
-/// v3 third shipped order: UniswapX `LimitOrder`. Element struct is
-/// `OutputToken(token, amount, recipient)` — 3 members (no decay/startAmount);
-/// witness `LimitOrder(info, inputToken, inputAmount, outputs)` — 4 members.
-/// Same depth-2 recursion + curation as the Dutch orders; proves the machinery
-/// handles a different element/witness shape.
-#[test]
-fn v3_limit_order_renders_deep_nested_and_flip_declines() {
-    use super::erc7730::nested::{hash_struct, hash_struct_array};
-    let res = build_registry();
-    let leaf = find_leaf(res, "eip712-UniswapX-LimitOrder.json", 1);
-    let pth = hx32("e35e6a28e8d076114130d5989df14ccf68b92dc3ed629938e43f54ab543d79bb");
-    let order_info_th = hx32("7daca11202c64729871927c37d75933f1852e430627cd4b8f4844087e312e94b");
-    let output_token_th = hx32("46cd70b1b585091773aef9064bdcdd0dbe1268072af330b4abfccf1bdf7b4d7b");
-    let limit_order_th = hx32("a7d1cc35867af6b68aad3c7171d2f51fc824592dd93d17c26bb4c65da6cec678");
-    let token_permissions_th =
-        hx32("618358ac3db8dc274f0cd8829da7e234bd48cd73c4a740aede1adec9846d06a1");
-    let wa = |a: [u8; 20]| {
-        let mut w = [0u8; 32];
-        w[12..].copy_from_slice(&a);
-        w
-    };
-    let wu = |n: u64| {
-        let mut w = [0u8; 32];
-        w[24..].copy_from_slice(&n.to_be_bytes());
-        w
-    };
-    let weth = [0xC0u8, 0x2a, 0xaA, 0x39, 0xb2, 0x23, 0xFE, 0x8D, 0x0A, 0x0e, 0x5C, 0x4F, 0x27,
-        0xeA, 0xD9, 0x08, 0x3C, 0x75, 0x6C, 0xc2];
-    let dai = [0x6Bu8, 0x17, 0x54, 0x74, 0xE8, 0x90, 0x94, 0xC4, 0x4D, 0xa9, 0x8b, 0x95, 0x4E,
-        0xed, 0xeA, 0xC4, 0x95, 0x27, 0x1d, 0x0F];
-
-    let mut permitted_ed = std::vec![0u8; 64];
-    permitted_ed[0..32].copy_from_slice(&wa(weth));
-    permitted_ed[32..64].copy_from_slice(&wu(6_000_006));
-    let permitted_word = hash_struct(&token_permissions_th, &permitted_ed);
-
-    let mut info_ed = std::vec![0u8; 192];
-    info_ed[0..32].copy_from_slice(&wa([0x2b; 20])); // reactor
-    info_ed[32..64].copy_from_slice(&wa([0x3b; 20])); // swapper
-    info_ed[64..96].copy_from_slice(&wu(5));
-    info_ed[96..128].copy_from_slice(&wu(1_700_000_000));
-    info_ed[128..160].copy_from_slice(&wa([0x4b; 20])); // validationContract
-    info_ed[160..192].copy_from_slice(&[0xEE; 32]);
-    let info_word = hash_struct(&order_info_th, &info_ed);
-
-    // OutputToken: token, amount, recipient (3 words).
-    let mut out0 = std::vec![0u8; 96];
-    out0[0..32].copy_from_slice(&wa(dai));
-    out0[32..64].copy_from_slice(&wu(5_000_005)); // amount SHOWN
-    out0[64..96].copy_from_slice(&wa([0x6b; 20])); // recipient SHOWN
-    let outputs_word = hash_struct_array(&output_token_th, &[&out0[..]]);
-
-    // LimitOrder: info, inputToken, inputAmount, outputs (4 words).
-    let mut witness_ed = std::vec![0u8; 128];
-    witness_ed[0..32].copy_from_slice(&info_word);
-    witness_ed[32..64].copy_from_slice(&wa(weth)); // inputToken (tokenPath)
-    witness_ed[64..96].copy_from_slice(&wu(9_000_009)); // inputAmount SHOWN
-    witness_ed[96..128].copy_from_slice(&outputs_word);
-    let witness_word = hash_struct(&limit_order_th, &witness_ed);
-
-    let mut top_ed = std::vec![0u8; 160];
-    top_ed[0..32].copy_from_slice(&permitted_word);
-    top_ed[32..64].copy_from_slice(&wa([0x1b; 20])); // spender SHOWN
-    top_ed[64..96].copy_from_slice(&wu(13));
-    top_ed[96..128].copy_from_slice(&wu(1_735_689_600)); // deadline SHOWN
-    top_ed[128..160].copy_from_slice(&witness_word);
-
-    let mut blob = std::vec::Vec::new();
-    let push_rec = |b: &mut std::vec::Vec<u8>, ed: &[u8]| {
-        b.extend_from_slice(&(ed.len() as u16).to_be_bytes());
-        b.extend_from_slice(ed);
-    };
-    push_rec(&mut blob, &permitted_ed);
-    push_rec(&mut blob, &witness_ed);
-    push_rec(&mut blob, &info_ed);
-    blob.extend_from_slice(&1u16.to_be_bytes());
-    push_rec(&mut blob, &out0);
-
-    let render = |ed: &[u8], b: &[u8]| {
-        let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("LimitOrder IR parses");
-        let verified = VerifiedDescriptor { ir };
-        let resolver = NameResolver::new();
-        super::erc7730::render_erc7730_eip712_pages_v3(
-            1, &[0u8; 20], &pth, ed, b, &verified, None, &resolver,
-        )
-    };
-    let pages = render(&top_ed, &blob).expect("valid LimitOrder clear-signs (depth-2)");
-    assert_all_pages_printable(&pages);
-    let dump = dump_pages(&pages).to_lowercase();
-    assert!(dump.contains("2b2b2b2b2b2b"), "info.reactor:\n{dump}");
-    assert!(dump.contains("3b3b3b3b3b3b"), "info.swapper:\n{dump}");
-    assert!(dump.contains("4b4b4b4b4b4b"), "info.validationContract:\n{dump}");
-    assert!(dump.contains("6b6b6b6b6b6b"), "output recipient:\n{dump}");
-    assert!(dump.contains("5000005"), "OutputToken.amount:\n{dump}");
-    assert!(dump.contains("9000009"), "inputAmount:\n{dump}");
-    assert!(dump.contains("item 1 of 1"), "single-output divider:\n{dump}");
-    // Blob: permitted[2..66] | witness[68..196] | info[198..390] | ...
-    let mut b = blob.clone();
-    b[200] ^= 0x01; // inside info_ed (reactor word)
-    assert!(render(&top_ed, &b).is_err(), "flip depth-2 info word declines");
-    let mut ed = top_ed.clone();
-    ed[140] ^= 0x01; // inside witness_word (top word 4)
-    assert!(render(&ed, &blob).is_err(), "flip top witness commitment declines");
-}
-
-/// v3 fourth shipped order: UniswapX `V2DutchOrder`. Adds a `cosigner` address
-/// (curated SHOW, like exclusiveFiller) and `baseInput*`/`baseOutputs` naming;
-/// element struct is `DutchOutput` (4 words). Same depth-2 recursion + curation.
-#[test]
-fn v3_v2_dutch_order_renders_deep_nested_and_flip_declines() {
-    use super::erc7730::nested::{hash_struct, hash_struct_array};
-    let res = build_registry();
-    let leaf = find_leaf(res, "eip712-uniswap-V2DutchOrder.json", 1);
-    let pth = hx32("a8cc1ce2c3d1c6f1ff0072b7a47d6e2876fef4f7f92648cd166fdd6dec0a7465");
-    let order_info_th = hx32("7daca11202c64729871927c37d75933f1852e430627cd4b8f4844087e312e94b");
-    let dutch_output_th = hx32("45058f030836a1ec7cb9636dad15d25676157364aaf76d8dad81a6b2c267610f");
-    let v2_dutch_th = hx32("329eaec63622cb5aa75f27611d76543f9d296718b239698143334aac9a0ea378");
-    let token_permissions_th =
-        hx32("618358ac3db8dc274f0cd8829da7e234bd48cd73c4a740aede1adec9846d06a1");
-    let wa = |a: [u8; 20]| {
-        let mut w = [0u8; 32];
-        w[12..].copy_from_slice(&a);
-        w
-    };
-    let wu = |n: u64| {
-        let mut w = [0u8; 32];
-        w[24..].copy_from_slice(&n.to_be_bytes());
-        w
-    };
-    let weth = [0xC0u8, 0x2a, 0xaA, 0x39, 0xb2, 0x23, 0xFE, 0x8D, 0x0A, 0x0e, 0x5C, 0x4F, 0x27,
-        0xeA, 0xD9, 0x08, 0x3C, 0x75, 0x6C, 0xc2];
-    let dai = [0x6Bu8, 0x17, 0x54, 0x74, 0xE8, 0x90, 0x94, 0xC4, 0x4D, 0xa9, 0x8b, 0x95, 0x4E,
-        0xed, 0xeA, 0xC4, 0x95, 0x27, 0x1d, 0x0F];
-
-    let mut permitted_ed = std::vec![0u8; 64];
-    permitted_ed[0..32].copy_from_slice(&wa(weth));
-    permitted_ed[32..64].copy_from_slice(&wu(6_000_006));
-    let permitted_word = hash_struct(&token_permissions_th, &permitted_ed);
-
-    let mut info_ed = std::vec![0u8; 192];
-    info_ed[0..32].copy_from_slice(&wa([0x2c; 20]));
-    info_ed[32..64].copy_from_slice(&wa([0x3c; 20]));
-    info_ed[64..96].copy_from_slice(&wu(5));
-    info_ed[96..128].copy_from_slice(&wu(1_700_000_000));
-    info_ed[128..160].copy_from_slice(&wa([0x4c; 20]));
-    info_ed[160..192].copy_from_slice(&[0xEE; 32]);
-    let info_word = hash_struct(&order_info_th, &info_ed);
-
-    // DutchOutput: token, startAmount(hidden), endAmount, recipient (4 words).
-    let mut out0 = std::vec![0u8; 128];
-    out0[0..32].copy_from_slice(&wa(dai));
-    out0[32..64].copy_from_slice(&wu(1));
-    out0[64..96].copy_from_slice(&wu(4_000_004)); // endAmount SHOWN
-    out0[96..128].copy_from_slice(&wa([0x6c; 20])); // recipient SHOWN
-    let outputs_word = hash_struct_array(&dutch_output_th, &[&out0[..]]);
-
-    // V2DutchOrder: info, cosigner, baseInputToken, baseInputStartAmount,
-    // baseInputEndAmount, baseOutputs (6 words).
-    let mut witness_ed = std::vec![0u8; 192];
-    witness_ed[0..32].copy_from_slice(&info_word);
-    witness_ed[32..64].copy_from_slice(&wa([0x5c; 20])); // cosigner SHOWN
-    witness_ed[64..96].copy_from_slice(&wa(weth)); // baseInputToken (tokenPath)
-    witness_ed[96..128].copy_from_slice(&wu(8_000_008)); // baseInputStartAmount SHOWN
-    witness_ed[128..160].copy_from_slice(&wu(7_000_000)); // baseInputEndAmount (hidden)
-    witness_ed[160..192].copy_from_slice(&outputs_word);
-    let witness_word = hash_struct(&v2_dutch_th, &witness_ed);
-
-    let mut top_ed = std::vec![0u8; 160];
-    top_ed[0..32].copy_from_slice(&permitted_word);
-    top_ed[32..64].copy_from_slice(&wa([0x1c; 20])); // spender SHOWN
-    top_ed[64..96].copy_from_slice(&wu(13));
-    top_ed[96..128].copy_from_slice(&wu(1_735_689_600));
-    top_ed[128..160].copy_from_slice(&witness_word);
-
-    let mut blob = std::vec::Vec::new();
-    let push_rec = |b: &mut std::vec::Vec<u8>, ed: &[u8]| {
-        b.extend_from_slice(&(ed.len() as u16).to_be_bytes());
-        b.extend_from_slice(ed);
-    };
-    push_rec(&mut blob, &permitted_ed);
-    push_rec(&mut blob, &witness_ed);
-    push_rec(&mut blob, &info_ed);
-    blob.extend_from_slice(&1u16.to_be_bytes());
-    push_rec(&mut blob, &out0);
-
-    let render = |ed: &[u8], b: &[u8]| {
-        let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("V2DutchOrder IR parses");
-        let verified = VerifiedDescriptor { ir };
-        let resolver = NameResolver::new();
-        super::erc7730::render_erc7730_eip712_pages_v3(
-            1, &[0u8; 20], &pth, ed, b, &verified, None, &resolver,
-        )
-    };
-    let pages = render(&top_ed, &blob).expect("valid V2DutchOrder clear-signs (depth-2)");
-    assert_all_pages_printable(&pages);
-    let dump = dump_pages(&pages).to_lowercase();
-    assert!(dump.contains("2c2c2c2c2c2c"), "info.reactor:\n{dump}");
-    assert!(dump.contains("3c3c3c3c3c3c"), "info.swapper:\n{dump}");
-    assert!(dump.contains("4c4c4c4c4c4c"), "info.validationContract:\n{dump}");
-    assert!(dump.contains("5c5c5c5c5c5c"), "cosigner (curated SHOW):\n{dump}");
-    assert!(dump.contains("6c6c6c6c6c6c"), "output recipient:\n{dump}");
-    assert!(dump.contains("4000004"), "baseOutputs endAmount:\n{dump}");
-    assert!(dump.contains("8000008"), "baseInputStartAmount:\n{dump}");
-    assert!(dump.contains("item 1 of 1"), "single-output divider:\n{dump}");
-    // Blob: permitted[2..66] | witness[68..260] | info[262..454] | ...
-    let mut b = blob.clone();
-    b[264] ^= 0x01; // inside info_ed
-    assert!(render(&top_ed, &b).is_err(), "flip depth-2 info word declines");
-    let mut ed = top_ed.clone();
-    ed[140] ^= 0x01; // inside witness_word
-    assert!(render(&ed, &blob).is_err(), "flip top witness commitment declines");
 }
 
 /// Nested `tokenAmount` FULL vocabulary (threshold + message) in a top-level
@@ -3565,8 +3170,7 @@ fn v3_v2_dutch_order_renders_deep_nested_and_flip_declines() {
 #[test]
 fn v3_session_manager_nested_tokenamount_threshold_renders_unlimited() {
     use super::erc7730::nested::{hash_struct, hash_struct_array};
-    let res = build_registry();
-    let leaf = find_leaf(res, "eip712-SessionManager-FT.json", 1);
+    let leaf = safe_visible_nested_leaf("eip712-SessionManager-FT.json", 1);
     let pth = hx32("10e2e916a5d944a9c9fa82748951934e444783850c4cb366694967607dbd2fc5");
     let asset_limit_th = hx32("269888c0029efe9424c548a264e5ee66803094ad203b068ca44e278b02db9d6f");
     let wa = |a: [u8; 20]| {
@@ -3579,10 +3183,14 @@ fn v3_session_manager_nested_tokenamount_threshold_renders_unlimited() {
         w[24..].copy_from_slice(&n.to_be_bytes());
         w
     };
-    let usdc = [0xA0u8, 0xb8, 0x69, 0x91, 0xc6, 0x21, 0x8b, 0x36, 0xc1, 0xd1, 0x9D, 0x4a, 0x2e,
-        0x9E, 0xb0, 0xcE, 0x36, 0x06, 0xeB, 0x48];
-    let weth = [0xC0u8, 0x2a, 0xaA, 0x39, 0xb2, 0x23, 0xFE, 0x8D, 0x0A, 0x0e, 0x5C, 0x4F, 0x27,
-        0xeA, 0xD9, 0x08, 0x3C, 0x75, 0x6C, 0xc2];
+    let usdc = [
+        0xA0u8, 0xb8, 0x69, 0x91, 0xc6, 0x21, 0x8b, 0x36, 0xc1, 0xd1, 0x9D, 0x4a, 0x2e, 0x9E, 0xb0,
+        0xcE, 0x36, 0x06, 0xeB, 0x48,
+    ];
+    let weth = [
+        0xC0u8, 0x2a, 0xaA, 0x39, 0xb2, 0x23, 0xFE, 0x8D, 0x0A, 0x0e, 0x5C, 0x4F, 0x27, 0xeA, 0xD9,
+        0x08, 0x3C, 0x75, 0x6C, 0xc2,
+    ];
 
     // AssetLimit: token, limit (2 words). el0 normal, el1 = max-uint → "Unlimited".
     let mut el0 = std::vec![0u8; 64];
@@ -3604,7 +3212,7 @@ fn v3_session_manager_nested_tokenamount_threshold_renders_unlimited() {
     top_ed[128..160].copy_from_slice(&wu(50)); // maxCalls
     top_ed[160..192].copy_from_slice(&wu(30)); // maxFeeBps
     top_ed[192..224].copy_from_slice(&limits_word); // limits (array)
-    top_ed[224..256].copy_from_slice(&[0xAB; 32]); // salt (hidden)
+    top_ed[224..256].copy_from_slice(&[0xAB; 32]); // salt (VISIBLE fixture)
 
     // nested_blob: the single `limits` array descent — [elem_count=2][el0][el1].
     let mut blob = std::vec::Vec::new();
@@ -3627,10 +3235,26 @@ fn v3_session_manager_nested_tokenamount_threshold_renders_unlimited() {
     let dump = dump_pages(&pages).to_lowercase();
     assert!(dump.contains("7171717171"), "owner shown:\n{dump}");
     assert!(dump.contains("7272727272"), "delegate shown:\n{dump}");
-    assert!(dump.contains("2025") && dump.contains("2026"), "validAfter/Until dates:\n{dump}");
-    assert!(dump.contains("1000001"), "element 0 finite limit renders the number:\n{dump}");
-    assert!(dump.contains("unlimited"), "element 1 (max-uint) renders the threshold message 'Unlimited':\n{dump}");
-    assert!(dump.contains("item 1 of 2") && dump.contains("item 2 of 2"), "per-element dividers:\n{dump}");
+    assert!(
+        dump.contains("2025") && dump.contains("2026"),
+        "validAfter/Until dates:\n{dump}"
+    );
+    assert!(
+        dump.contains("1000001"),
+        "element 0 finite limit renders the number:\n{dump}"
+    );
+    assert!(
+        dump.contains("unlimited"),
+        "element 1 (max-uint) renders the threshold message 'Unlimited':\n{dump}"
+    );
+    assert!(
+        dump.contains("item 1 of 2") && dump.contains("item 2 of 2"),
+        "per-element dividers:\n{dump}"
+    );
+    assert!(
+        dump.contains("abababab"),
+        "formerly-hidden salt must be visible in the safe fixture:\n{dump}"
+    );
     // Flip a nested word (element 1's limit) → array binding breaks → decline.
     let mut b = blob.clone();
     b[2 + 2 + 64 + 2 + 40] ^= 0x01; // inside el1's limit word

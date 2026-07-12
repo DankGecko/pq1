@@ -4,18 +4,17 @@
 # does NOT verify ERC-8176 attestations on-device — secp256k1 / ERC-1271
 # verification would violate the firmware-wide "no classical signer
 # anywhere" invariant (#5 in CLAUDE.md). Instead, every descriptor that
-# enters the firmware-pinned `ERC7730_DESCRIPTORS_ROOT` MUST satisfy the
-# policy below at *host build time*. The firmware then trusts the root.
+# enters a shipping `ERC7730_DESCRIPTORS_ROOT` MUST be verified at *host build
+# time*. The firmware then trusts the root and its generated provenance fence.
 #
 # Production behaviour (`allow_unattested_dev_descriptors = false`):
-#   * Every descriptor needs ≥ `min_attesters` distinct attestations.
-#   * Every attestation MUST come from a CAIP-2 identity in
-#     `trusted_attesters` (case-insensitive comparison on the EVM
-#     address portion).
-#   * Attestation signatures themselves are still verified host-side
-#     by the upstream Cyfrin `clearsig` tooling before they reach this
-#     pipeline. The host pipeline trusts that pre-verification; future
-#     work can move that into `dbgen::erc7730` directly.
+#   * Currently FAILS CLOSED: real ERC-8176 EAS record fetching and
+#     signature/identity verification are not implemented in dbgen.
+#   * An obsolete descriptor-embedded `attestations` array is never accepted
+#     as production evidence.
+#   * Future production support must verify ≥ `min_attesters` distinct EAS
+#     records from `trusted_attesters`, bind each to the exact `erc8176_hash`,
+#     and only then emit `Provenance: erc8176-verified`.
 #
 # Pre-production behaviour (`allow_unattested_dev_descriptors = true`):
 #   * `min_attesters` is effectively ignored.
@@ -27,13 +26,10 @@
 #     as `e2e-test` / `otp-hardcoded-master-key`. The xtask `--check`
 #     mode + `make prod-check` enforce this.
 #
-# Today the seed corpus under `secure/data/erc7730/*.json` is hand-
-# authored from the ERC-7730 v2 spec, not pulled from the upstream
-# registry, so it carries no real Ledger / Fireblocks / Sourcify
-# attestations. We stay in dev mode until the host pipeline is wired
-# to the upstream `clear-signing-erc7730-registry` (the `--registry-
-# mirror` flag on `xtask gen-erc7730-descriptors` exists for exactly
-# that).
+# Today's production-shaped catalogue is compiled from the vendored upstream
+# registry, but it carries no verified Ledger / Fireblocks / Sourcify EAS
+# records. We therefore stay explicitly dev-unattested until the verifier and
+# attestation ecosystem exist.
 
 min_attesters = 2
 
@@ -46,132 +42,7 @@ trusted_attesters = [
     "eip155:1:0x0000000000000000000000000000000000000003",  # placeholder for Sourcify
 ]
 
-# Phase 2 ships with hand-authored seed descriptors; the upstream
-# attestation chain is not yet wired. Flip to `false` before
-# production. CI gates production builds on this being `false`.
+# The attestation chain is not wired. Do not merely flip this to `false`: dbgen
+# will reject that configuration until real ERC-8176 verification is
+# implemented. Release gates require generated provenance `erc8176-verified`.
 allow_unattested_dev_descriptors = true
-
-# ─────────────────────────────────────────────────────────────────────
-# WYSIWYS hidden-address allowlist (VULN-erc7730-visible-never-noparam-
-# clearsign). Each entry re-permits ONE `visible:"never"` ADDRESS argument
-# on ONE function, after human review. Without a matching entry, a hidden
-# fund-routing address drops the whole format to loud blind-sign. The
-# `rationale` is REQUIRED — an empty rationale is ignored (fails safe →
-# blind-sign). `signature` matches the descriptor's format key verbatim;
-# `path` matches the hidden argument (leading `#.` optional). See
-# `dbgen::erc7730::check_field_visibility`.
-# ─────────────────────────────────────────────────────────────────────
-
-[[hidden_address_allow]]
-signature = "submit(address _referral)"
-path = "_referral"
-rationale = "Lido stETH staking referral tag — routes no funds. The effect is the staked msg.value, shown loud on the native-value page ('Amount to stake'); the referral only credits a marketing partner and cannot redirect the stake or its stETH."
-
-# EIP-2612 Permit `owner` — the canonical Ledger permit template
-# (`ercs/eip712-erc2612-permit.json`, included by 74 token descriptors). This
-# loosens rule 2 via its intended allowlist for a genuinely-benign hidden
-# address. Safe because `owner` is DEFINITIONALLY the signer: an EIP-2612
-# `permit()` reverts unless `ecrecover(sig) == owner`, so any permit this device
-# produces that is on-chain-usable has `owner == our own account` — hiding it
-# cannot authorize a third party's funds. The risk-bearing fields ARE shown:
-# `spender` (who gets the allowance, raw), `value` (how much, tokenAmount),
-# `deadline` (until when, date). CONSCIOUS trade-off: in the 256-account wallet,
-# `owner` is the only field that would disambiguate WHICH sub-account signs —
-# hiding it means the permit screen doesn't show that (still not a WYSIWYS break:
-# funds only ever move from the signing account). `nonce` is a non-address
-# replay counter (rule 2 doesn't gate it).
-[[hidden_address_allow]]
-signature = "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"
-path = "owner"
-rationale = "EIP-2612 Permit owner == the signer (permit() reverts unless ecrecover(sig)==owner), so a device-produced usable permit always has owner==our own account; it routes no third-party funds. The effect-bearing spender/value/deadline are shown. Canonical Ledger erc2612 template, included by 74 token descriptors."
-
-# Celo sorted-linked-list POSITION HINTS (`lesser`/`greater`). Celo's Election
-# and Governance keep validator groups / proposals in a doubly-linked list
-# sorted by votes; a vote/revoke supplies the addresses ADJACENT to the caller's
-# new position so the contract splices in O(1) without re-sorting. These are
-# hints derived from current on-chain list state (the SDK computes them) — they
-# route no funds, and a wrong hint only makes the tx revert. The effect-bearing
-# fields (`group` + `value`) are shown; `index` is a non-address uint hint (rule
-# 2 doesn't gate it). One entry per (signature, address-hint) pair.
-[[hidden_address_allow]]
-signature = "vote(address group, uint256 value, address lesser, address greater)"
-path = "lesser"
-rationale = "Celo Election sorted-list position hint — routes no funds; the vote's group + value are shown. A wrong hint only reverts."
-[[hidden_address_allow]]
-signature = "vote(address group, uint256 value, address lesser, address greater)"
-path = "greater"
-rationale = "Celo Election sorted-list position hint — routes no funds; the vote's group + value are shown. A wrong hint only reverts."
-[[hidden_address_allow]]
-signature = "revokeActive(address group, uint256 value, address lesser, address greater, uint256 index)"
-path = "lesser"
-rationale = "Celo Election sorted-list position hint — routes no funds; the revoke's group + value are shown. A wrong hint only reverts."
-[[hidden_address_allow]]
-signature = "revokeActive(address group, uint256 value, address lesser, address greater, uint256 index)"
-path = "greater"
-rationale = "Celo Election sorted-list position hint — routes no funds; the revoke's group + value are shown. A wrong hint only reverts."
-[[hidden_address_allow]]
-signature = "revokePending(address group, uint256 value, address lesser, address greater, uint256 index)"
-path = "lesser"
-rationale = "Celo Election sorted-list position hint — routes no funds; the revoke's group + value are shown. A wrong hint only reverts."
-[[hidden_address_allow]]
-signature = "revokePending(address group, uint256 value, address lesser, address greater, uint256 index)"
-path = "greater"
-rationale = "Celo Election sorted-list position hint — routes no funds; the revoke's group + value are shown. A wrong hint only reverts."
-[[hidden_address_allow]]
-signature = "revokeAllActive(address group, address lesser, address greater, uint256 index)"
-path = "lesser"
-rationale = "Celo Election sorted-list position hint — routes no funds; the revoke's group is shown. A wrong hint only reverts."
-[[hidden_address_allow]]
-signature = "revokeAllActive(address group, address lesser, address greater, uint256 index)"
-path = "greater"
-rationale = "Celo Election sorted-list position hint — routes no funds; the revoke's group is shown. A wrong hint only reverts."
-[[hidden_address_allow]]
-signature = "addFirstMember(address validator, address lesser, address greater)"
-path = "lesser"
-rationale = "Celo Validators sorted-list position hint — routes no funds; the validator being added is shown. A wrong hint only reverts."
-[[hidden_address_allow]]
-signature = "addFirstMember(address validator, address lesser, address greater)"
-path = "greater"
-rationale = "Celo Validators sorted-list position hint — routes no funds; the validator being added is shown. A wrong hint only reverts."
-
-# wstETH staking referral tag (mirrors the allowlisted Lido `submit(_referral)`).
-[[hidden_address_allow]]
-signature = "stakeETH(address _referral)"
-path = "_referral"
-rationale = "wstETH staking referral tag — routes no funds; the effect is the staked @.value (shown). The referral only credits a marketing partner and cannot redirect the stake."
-
-# ── 1inch AggregationRouter `swap` — executor/srcReceiver bounded by min-return ──
-# Adversarial-review-gated belt relaxation (4-lens security review, 0 surviving
-# findings; see the commit + `docs/erc7730-implementation-review-2026-07.md` §3.0
-# item 3). The `swap` entrypoint's ONLY debit from the signer is exactly
-# `desc.amount` of `desc.srcToken` (shown as the "Send" amount) — the router does
-# NOT relay the signer's approvals to the executor, so a hidden/malicious executor
-# cannot pull more than the shown amount or reach the signer's other tokens. The
-# router then reverts unless `returnAmount` of `desc.dstToken` reaches
-# `desc.dstReceiver` (both shown) meeting `desc.minReturnAmount` (shown). So
-# `caller`/`executor` (the aggregation-executor contract) and `desc.srcReceiver`
-# (where the input is routed for the swap) are execution intermediaries that can
-# only make the swap REVERT — never redirect funds or cause a loss beyond the
-# shown input. Reviewed & judged NON-blocking: (a) `desc.flags & _PARTIAL_FILL`
-# relaxes the check to a fair RATE bound with unspent srcToken refunded (a smaller
-# swap at the shown rate, no loss — and a *hidden-flags* property that showing
-# these addresses would not change); (b) `_REQUIRES_EXTRA_ETH` forwards msg.value
-# to the executor, but the firmware's mandatory native-value page surfaces any ETH
-# outflow. V3 == V4 signature. The pools-slice swap variants (unoswap/uniswapV3Swap)
-# stay correctly DECLINED (rendered-value array slice = the array-tail-hiding HIGH).
-[[hidden_address_allow]]
-signature = "swap(address caller, (address srcToken, address dstToken, address srcReceiver, address dstReceiver, uint256 amount, uint256 minReturnAmount, uint256 flags, bytes permit) desc, bytes data)"
-path = "caller"
-rationale = "1inch AggregationRouter V3/V4 swap executor — the router's only signer debit is desc.amount of desc.srcToken (shown) and it does not relay approvals to the executor, so caller cannot pull more than the shown amount; the swap reverts unless >= desc.minReturnAmount of desc.dstToken (shown) reaches desc.dstReceiver (shown). A malicious caller can only make the swap revert."
-[[hidden_address_allow]]
-signature = "swap(address caller, (address srcToken, address dstToken, address srcReceiver, address dstReceiver, uint256 amount, uint256 minReturnAmount, uint256 flags, bytes permit) desc, bytes data)"
-path = "desc.srcReceiver"
-rationale = "1inch AggregationRouter V3/V4 swap input intermediary — where desc.amount of desc.srcToken (shown, the only signer debit) is routed for execution. The swap reverts unless >= desc.minReturnAmount of desc.dstToken (shown) reaches desc.dstReceiver (shown), so srcReceiver cannot keep the input without reverting; a malicious srcReceiver can only make the swap revert."
-[[hidden_address_allow]]
-signature = "swap(address executor, (address srcToken, address dstToken, address srcReceiver, address dstReceiver, uint256 amount, uint256 minReturnAmount, uint256 flags) desc, bytes permit, bytes data)"
-path = "executor"
-rationale = "1inch AggregationRouter V5 swap executor — the router's only signer debit is desc.amount of desc.srcToken (shown) and it does not relay approvals to the executor, so executor cannot pull more than the shown amount; the swap reverts unless >= desc.minReturnAmount of desc.dstToken (shown) reaches desc.dstReceiver (shown). A malicious executor can only make the swap revert."
-[[hidden_address_allow]]
-signature = "swap(address executor, (address srcToken, address dstToken, address srcReceiver, address dstReceiver, uint256 amount, uint256 minReturnAmount, uint256 flags) desc, bytes permit, bytes data)"
-path = "desc.srcReceiver"
-rationale = "1inch AggregationRouter V5 swap input intermediary — where desc.amount of desc.srcToken (shown, the only signer debit) is routed for execution. The swap reverts unless >= desc.minReturnAmount of desc.dstToken (shown) reaches desc.dstReceiver (shown), so srcReceiver cannot keep the input without reverting; a malicious srcReceiver can only make the swap revert."

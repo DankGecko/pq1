@@ -1,5 +1,19 @@
 # ERC-7730 coverage: honest blocker analysis + build recommendation (2026-07)
 
+> **Historical analysis — superseded 2026-07-10.** The counts and rollout
+> recommendations below describe the pre-adversarial-review implementation;
+> they are not current security or coverage claims. The shipping-path policy
+> now accepts only exact all-static calldata or one sole canonical C1 whole
+> tail. C2 dynamic-tuple and C3/multi-tail support were retired because the IR
+> did not authenticate enough topology to prove canonical signed-byte framing.
+> Every hidden non-address operand is rejected (including nonces, deadlines,
+> packed payloads, and `sqrtPriceLimitX96`), and registry-declared calls that do
+> not compile are retained in the pinned omission filter and **hard-refuse** if
+> their proof is absent; they do not downgrade to blind-sign. The current
+> generated runtime catalogue has 431 leaves and 3,620 registry-declared contract-call
+> tuples. See [the current implementation review](./erc7730-implementation-review-2026-07.md)
+> and [the 2026-07-10 findings](./security/adversarial-review/findings/clear-signing-2026-07-10.md).
+
 **Question:** is the on-device ERC-7730 renderer a subpar architecture, and what should we
 build to "support as many protocols as possible per the Ethereum clear-signing registry"?
 
@@ -85,11 +99,13 @@ V4/5/6 are HARD-slice.
 **Caveats:** these tiers are a static path-shape read; a C0 function can still be blocked at render
 by ERC20_DB_ROOT (tokenAmount) / ENS (addressName) / MAX_FORMATS / page-budget — orthogonal gaps.
 
-## Landed since this analysis (2026-07-01)
+## Historical landings since this analysis (2026-07-01; subsequently tightened/retired)
 
-- **C1** (dynamic `bytes`/`string`, FollowOffset resolver), **C2** (flat dynamic-tuple members), **C3**
-  (multi-dynamic args + relaxed multi-array). Corpus 776→806, then mhaas's `visible:"never"` WYSIWYS
-  gate trimmed hidden-address descriptors (→706).
+- **At that snapshot:** C1 (dynamic `bytes`/`string`), C2 (flat dynamic-tuple
+  members), and C3 (multi-dynamic args + relaxed multi-array) landed. C2/C3
+  were retired on 2026-07-10; C1 is now limited to one exact canonical whole
+  tail. The historical corpus counts below must not be compared to the current
+  431-leaf strict-material catalogue.
 - **Nested field-GROUP flattening** (`feat(erc7730): flatten nested field-GROUPS`, 7325e9f0). Morpho
   Blue's `marketParams` nested-group descriptor now clear-signs — the C2 "tuple-nav" leverage the table
   above scored for Morpho. Pure dbgen parser feature; the combined member paths ride the existing
@@ -106,12 +122,11 @@ HARD-slice, deferred" dismissal, which reasoned from the stale summary table rat
 - **Single-hop `exactInputSingle` / `exactOutputSingle` (the flagship V3 swaps) need NO slice.** `params`
   is a **static tuple**; `tokenPath` is `params.tokenIn` / `params.tokenOut` (static members). They were
   blocked *only* by the H-3 tuple-member-completeness lint on ONE unaccounted member — `sqrtPriceLimitX96`.
-  **Tier A fix (landed):** the vendored descriptor now hides that member (`visible:"never"`) with rationale
-  — it is a price bound already dominated by the shown `amountOutMinimum` slippage floor, routes no funds,
-  cannot change token/amount/recipient, so hiding it is WYSIWYS-safe (same class as a hidden `nonce`/`index`).
-  Zero resolver code; +1 leaf (corpus 783→784). **⚠ Curation caveat:** this edit lives in the *vendored*
-  `secure/data/erc7730-registry/...json`; `xtask vendor-registry` re-copies from source and would drop it —
-  re-apply the two `{ "path": "params.sqrtPriceLimitX96", ... "visible": "never" }` fields after any re-vendor.
+  **Historical Tier A fix (retired):** the vendored descriptor hid that
+  member with `visible:"never"`. The 2026-07-10 material-field policy removed
+  this semantic exemption: a signed scalar cannot be classified as harmless
+  from its name, and the format is excluded unless every operand is shown
+  faithfully. Do **not** reapply the old curation after a re-vendor.
 
 - **The slices that DO remain are `tokenPath`-only across the DEX majors** — a token *identification* key for
   the amount's symbol/decimals, never a rendered value. `[0:20]` = input token, `[-20:]` = output token,
@@ -165,24 +180,29 @@ descriptors (2026-07-01) rather than trusting the table — the lesson from the 
   **EIP-712 nested-struct belt** (`render_erc7730_eip712_pages` rejects `PARAM_NESTED_STRUCT`) — a *deliberate*
   WYSIWYS control (`docs/security/vulns/VULN-erc7730-eip712-nested-struct-address-hide.md`), NOT a missing feature —
   **plus** array-of-struct rendering (`DutchOutput[]`).
-- **Permit2 (`eip712-uniswap-permit2`): already 15 leaves** (the non-nested formats clear-sign; the nested
-  `TokenPermissions` witness format is belt-rejected). **1inch AggregationRouterV6: already 27 leaves** (3 of
-  its descriptors compile); the residual is rendered-value slices + include-resolution.
+- **Historical snapshot:** Permit2 and some 1inch formats compiled then. The
+  current hidden-material and exact-framing gates exclude every format that
+  leaves a signed operand unseen; consult the generated review artifact rather
+  than these old leaf counts.
 
 **Recommendation: do NOT build EIP-712 order render inline.** Unlike the calldata tokenPath slice (a
 by-addition capability with a clean tokenPath-only firewall), UniswapX render requires *relaxing* the
 nested-struct belt AND adding EIP-712 array-of-struct — both security-sensitive. If pursued it is a
 **firewalled, design-doc-first, adversarial-review-gated campaign** (the dynamic-array-walker discipline),
-scoped to the nested-struct-address-hide threat model. The cheap, clean clear-signing wins (Permit +74,
-C1/C2/C3, Morpho, DEX calldata swaps) are banked; what remains is HARD/security-sensitive, upstream-content,
-or the orthogonal ERC-8176 attestation flip (blocked on ecosystem).
+scoped to the nested-struct-address-hide threat model. The original statement
+that C1/C2/C3 and hidden-field curations were “banked” is no longer true; the
+2026-07-10 compiler intentionally traded that coverage for signed-byte/display
+injectivity. ERC-8176 remains blocked on both real trusted attestations and a
+production snapshot verifier.
 
 ## Decision: the HARD-slice engine (the 53-function DEX hot path) — DEFER, with a specified safe subset
 
 **Decision (2026-07-01): do NOT build a general byte-slice engine now.** It is the highest-risk
 capability in the whole coverage frontier and its high-value cases are structurally the *most*
-dangerous. The 53 functions stay declined-to-loud-blind-sign (the honest raw target/selector ladder),
-which is a safe, non-misleading UX — not a silent gap.
+dangerous. At this historical snapshot the 53 functions declined to the loud
+blind-sign ladder. Current firmware retains every parsable registry-declared
+tuple in the omission filter, so an unsupported known call refuses signing
+instead.
 
 **What the registry actually slices** (every slice path in the vendored corpus, by shape):
 

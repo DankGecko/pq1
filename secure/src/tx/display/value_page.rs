@@ -35,8 +35,11 @@ const SHA256_OF_EMPTY: [u8; 32] = [
 
 /// One mandatory full signer-identity page per confirmation set.
 pub(crate) const SIGNER_IDENTITY_PAGES: usize = 1;
+/// One mandatory full target-contract page per transaction confirmation.
+pub(crate) const TARGET_IDENTITY_PAGES: usize = 1;
 
 type SignerIdentityPage = [[u8; DISPLAY_COLS]; DISPLAY_ROWS];
+type TargetIdentityPage = [[u8; DISPLAY_COLS]; DISPLAY_ROWS];
 
 /// Splice the mandatory UserOp signer page immediately after the leading
 /// banner.
@@ -116,6 +119,8 @@ fn build_signer_identity_page(
     account_index: u32,
     sender: &[u8; 20],
 ) -> Option<SignerIdentityPage> {
+    // The wire field is exactly eight bits. Recheck at the display boundary so
+    // a faulted flag decode cannot paint a truncated/aliased account number.
     if account_index > 255 {
         return None;
     }
@@ -131,6 +136,77 @@ fn build_signer_identity_page(
     let [_label, a, b, c] = &mut page;
     primitives::write_addr_full(a, b, c, sender);
     Some(page)
+}
+
+/// Insert the mandatory full target-contract page immediately after the
+/// signer identity page.
+///
+/// ERC-7730 intent pages can otherwise consume the whole semantic surface
+/// without showing the outer call target. A descriptor is bound to the target
+/// in secure world, but that cryptographic binding does not tell the user which
+/// contract will receive the signed call. The raw EIP-55 address is therefore
+/// always shown for each single transaction / batch member, independent of the
+/// selected semantic renderer or name database.
+#[inline(never)]
+pub(crate) fn enforce_target_page(
+    pages: &mut Pages,
+    target: &[u8; 20],
+) -> Result<(), ()> {
+    let page = build_target_identity_page(target);
+    // Callers insert the signer page first, so index 2 establishes the fixed
+    // banner → signer → target ordering. Clamp only for the pure helper's
+    // empty/synthetic test use; the FI proof below requires the exact index.
+    let at = core::cmp::min(2, pages.len);
+    let idx = insert_blank(pages, at)?;
+    pages.buf[idx] = page;
+    Ok(())
+}
+
+/// Exact all-64-byte readback predicate for the mandatory target page.
+pub(crate) fn target_page_matches(
+    pages: &Pages,
+    page_index: usize,
+    target: &[u8; 20],
+) -> bool {
+    let expected = build_target_identity_page(target);
+    let Some(actual) = pages.as_slice().get(page_index) else {
+        return false;
+    };
+    let mut diff = 0u8;
+    for row in 0..DISPLAY_ROWS {
+        for col in 0..DISPLAY_COLS {
+            diff |= actual[row][col] ^ expected[row][col];
+        }
+    }
+    diff == 0
+}
+
+/// FI-hardened completion proof for [`enforce_target_page`].
+///
+/// Callers record `prior_len` after the signer proof, invoke the non-inlined
+/// inserter, scrub the sentinel register, then require this independent
+/// length/full-page recomputation to return `OK_SENTINEL`.
+#[inline(never)]
+pub(crate) fn target_page_proof(
+    pages: &Pages,
+    prior_len: usize,
+    target: &[u8; 20],
+) -> u32 {
+    let Some(expected_len) = prior_len.checked_add(TARGET_IDENTITY_PAGES) else {
+        return crate::fi::FAIL_SENTINEL;
+    };
+    crate::fi::check_true_into_sentinel(|| {
+        core::hint::black_box(pages.len == expected_len)
+            && target_page_matches(pages, 2, target)
+    })
+}
+
+fn build_target_identity_page(target: &[u8; 20]) -> TargetIdentityPage {
+    let mut page = [[b' '; DISPLAY_COLS]; DISPLAY_ROWS];
+    page[0].copy_from_slice(b"Target contract:");
+    let [_label, a, b, c] = &mut page;
+    primitives::write_addr_full(a, b, c, target);
+    page
 }
 
 /// Splice a loud native-ETH `value` page into an already-rendered page set
@@ -170,7 +246,11 @@ fn build_signer_identity_page(
 /// not be spliced — the caller must map that to a refuse-to-sign. The
 /// `Result` is `#[must_use]` by construction, so `pick_sign_pages`'s `?`
 /// can never silently drop the refusal.
-pub(super) fn enforce_native_value_page(pages: &mut Pages, value: &U256) -> Result<(), ()> {
+pub(super) fn enforce_native_value_page(
+    pages: &mut Pages,
+    value: &U256,
+    chain_id: u64,
+) -> Result<(), ()> {
     // Skip ONLY on a sentinel-robust proof that `value == 0`. `black_box`
     // keeps the two internal evaluations of the predicate from collapsing
     // into one (F-1). Any other outcome — value non-zero, or a glitched
@@ -185,9 +265,9 @@ pub(super) fn enforce_native_value_page(pages: &mut Pages, value: &U256) -> Resu
     // the caller refuses to sign instead of hiding the ETH.
     let at = if pages.len >= 1 { 1 } else { 0 };
     let idx = insert_blank(pages, at)?;
-    primitives::write_line(pages.row_mut(idx, 0), "! NATIVE ETH");
+    primitives::write_native_currency_row(pages.row_mut(idx, 0), b"! NATIVE ", chain_id, b"");
     let [_lbl, r1, r2, foot] = pages.page_mut(idx);
-    let fit = primitives::write_eth_two_rows(r1, r2, value);
+    let fit = primitives::write_native_amount_two_rows(r1, r2, value, chain_id);
     primitives::write_line(
         foot,
         match fit {
@@ -234,7 +314,12 @@ pub(super) fn enforce_gas_pages(pages: &mut Pages, tx: &Eip1559Tx) -> Result<(),
     // Page B: "Worst-case:" + max_fee_per_gas * gas_limit (ETH) + gas limit.
     let b = insert_blank(pages, a + 1)?;
     primitives::write_line(pages.row_mut(b, 0), "Worst-case:");
-    primitives::write_fee_budget_row(pages.row_mut(b, 1), &tx.max_fee_per_gas, tx.gas_limit);
+    primitives::write_native_fee_budget_row(
+        pages.row_mut(b, 1),
+        &tx.max_fee_per_gas,
+        tx.gas_limit,
+        tx.chain_id,
+    );
     primitives::write_gas(pages.row_mut(b, 2), tx.gas_limit);
     primitives::write_line(pages.row_mut(b, 3), "> next");
     Ok(())
@@ -395,6 +480,7 @@ mod tests {
             data_len: 0,
             access_list_count: 0,
             signing_hash: [0u8; 32],
+            userop_fields: None,
         }
     }
 
@@ -404,13 +490,19 @@ mod tests {
         let mut pages = Pages::with_len(2);
         primitives::write_line(pages.row_mut(0, 0), "Sign transfer?");
         primitives::write_line(pages.row_mut(1, 3), "R=Confirm");
+
         assert!(enforce_from_page(&mut pages, 255, &sender).is_ok());
         assert_eq!(pages.len, 3);
         assert_eq!(&pages.buf[1][0], b"Signer acct #255");
+
+        // The identity page uses the exact full-address primitive: 0x + all
+        // 40 EIP-55 nibbles across rows 1..=3, never a short address/name.
         let mut expected = [[b' '; DISPLAY_COLS]; 3];
         let [a, b, c] = &mut expected;
         primitives::write_addr_full(a, b, c, &sender);
         assert_eq!(&pages.buf[1][1..4], &expected);
+
+        // Existing banner/confirm content is shifted, not overwritten.
         assert_eq!(&pages.buf[0][0][..14], b"Sign transfer?");
         assert_eq!(&pages.buf[2][3][..9], b"R=Confirm");
     }
@@ -422,7 +514,10 @@ mod tests {
         let mut account_one = Pages::with_len(1);
         assert!(enforce_from_page(&mut account_zero, 0, &sender).is_ok());
         assert!(enforce_from_page(&mut account_one, 1, &sender).is_ok());
-        assert_ne!(account_zero.buf[1], account_one.buf[1]);
+        assert_ne!(
+            account_zero.buf[1], account_one.buf[1],
+            "changing only account_index must change trusted-display bytes"
+        );
         assert_eq!(&account_zero.buf[1][0][..14], b"Signer acct #0");
         assert_eq!(&account_one.buf[1][0][..14], b"Signer acct #1");
         assert!(from_page_matches(&account_zero, 1, 0, &sender));
@@ -454,14 +549,72 @@ mod tests {
     }
 
     #[test]
+    fn target_page_follows_signer_and_shows_full_address() {
+        let sender = [0x11u8; 20];
+        let target = [0xabu8; 20];
+        let mut pages = Pages::with_len(1);
+        enforce_from_page(&mut pages, 4, &sender).unwrap();
+        enforce_target_page(&mut pages, &target).unwrap();
+
+        assert_eq!(pages.len, 3);
+        assert_eq!(&pages.buf[1][0][..14], b"Signer acct #4");
+        assert_eq!(&pages.buf[2][0], b"Target contract:");
+        let mut expected = [[b' '; DISPLAY_COLS]; 3];
+        let [a, b, c] = &mut expected;
+        primitives::write_addr_full(a, b, c, &target);
+        assert_eq!(&pages.buf[2][1..4], &expected);
+        assert!(target_page_matches(&pages, 2, &target));
+    }
+
+    #[test]
+    fn target_flip_changes_page_and_completion_proof_is_fail_closed() {
+        let sender = [0x22u8; 20];
+        let target = [0x44u8; 20];
+        let mut pages = Pages::with_len(1);
+        enforce_from_page(&mut pages, 0, &sender).unwrap();
+        let before = pages.len;
+        assert_ne!(
+            target_page_proof(&pages, before, &target),
+            crate::fi::OK_SENTINEL
+        );
+        enforce_target_page(&mut pages, &target).unwrap();
+        assert_eq!(
+            target_page_proof(&pages, before, &target),
+            crate::fi::OK_SENTINEL
+        );
+        for i in 0..target.len() {
+            let mut changed = target;
+            changed[i] ^= 1;
+            assert!(!target_page_matches(&pages, 2, &changed));
+            assert_ne!(
+                target_page_proof(&pages, before, &changed),
+                crate::fi::OK_SENTINEL
+            );
+        }
+        pages.buf[2][3][9] ^= 1;
+        assert_ne!(
+            target_page_proof(&pages, before, &target),
+            crate::fi::OK_SENTINEL
+        );
+    }
+
+    #[test]
+    fn target_page_full_buffer_fails_closed() {
+        let mut pages = Pages::with_len(super::super::MAX_PAGES);
+        assert!(enforce_target_page(&mut pages, &[0x55u8; 20]).is_err());
+        assert_eq!(pages.len, super::super::MAX_PAGES);
+    }
+
+    #[test]
     fn from_page_full_buffer_and_bad_account_fail_closed() {
         let sender = [0x11u8; 20];
         let mut full = Pages::with_len(super::super::MAX_PAGES);
         assert!(enforce_from_page(&mut full, 0, &sender).is_err());
         assert_eq!(full.len, super::super::MAX_PAGES);
+
         let mut bad_account = Pages::with_len(1);
         assert!(enforce_from_page(&mut bad_account, 256, &sender).is_err());
-        assert_eq!(bad_account.len, 1);
+        assert_eq!(bad_account.len, 1, "invalid account must not add a page");
     }
 
     /// Audit C-1 regression. The invariant is applied uniformly to the
@@ -474,13 +627,22 @@ mod tests {
         let mut pages = Pages::with_len(3);
         primitives::write_line(pages.row_mut(0, 0), "! Unknown token");
         primitives::write_line(pages.row_mut(2, 2), "L=Cancel");
-        assert!(enforce_native_value_page(&mut pages, &one_wei()).is_ok());
+        assert!(enforce_native_value_page(&mut pages, &one_wei(), 1).is_ok());
         assert_eq!(pages.len, 4, "a value page must be inserted");
         // Banner stays first; the loud value page is now second.
         assert_eq!(&pages.buf[0][0][..15], b"! Unknown token");
         assert_eq!(&pages.buf[1][0][..12], b"! NATIVE ETH");
         // The original body shifted back by one — nothing clobbered.
         assert_eq!(&pages.buf[3][2][..8], b"L=Cancel");
+    }
+
+    #[test]
+    fn nonzero_value_page_uses_chain_native_ticker() {
+        let mut pages = Pages::with_len(2);
+        assert!(enforce_native_value_page(&mut pages, &one_wei(), 56).is_ok());
+        assert_eq!(&pages.buf[1][0][..12], b"! NATIVE BNB");
+        let rows = &pages.buf[1];
+        assert!(rows.iter().all(|row| !row.windows(3).any(|w| w == b"ETH")));
     }
 
     /// Audit 2026-06-28 regression — `v1_ms` metadata mis-attribution.
@@ -532,7 +694,7 @@ mod tests {
     #[test]
     fn zero_value_adds_no_page() {
         let mut pages = Pages::with_len(3);
-        assert!(enforce_native_value_page(&mut pages, &U256::zero()).is_ok());
+        assert!(enforce_native_value_page(&mut pages, &U256::zero(), 1).is_ok());
         assert_eq!(pages.len, 3);
     }
 
@@ -554,7 +716,7 @@ mod tests {
         let mut pages = Pages::with_len(super::super::MAX_PAGES);
         let before = pages.len;
         assert!(
-            enforce_native_value_page(&mut pages, &one_wei()).is_err(),
+            enforce_native_value_page(&mut pages, &one_wei(), 1).is_err(),
             "non-zero value on a full buffer must fail closed"
         );
         assert_eq!(pages.len, before, "no page may be spliced or dropped");
@@ -566,7 +728,7 @@ mod tests {
     #[test]
     fn nonzero_value_with_room_splices_and_reports_ok() {
         let mut pages = Pages::with_len(super::super::MAX_PAGES - 1);
-        assert!(enforce_native_value_page(&mut pages, &one_wei()).is_ok());
+        assert!(enforce_native_value_page(&mut pages, &one_wei(), 1).is_ok());
         assert_eq!(pages.len, super::super::MAX_PAGES);
         assert_eq!(&pages.buf[1][0][..12], b"! NATIVE ETH");
     }

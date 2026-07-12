@@ -42,56 +42,16 @@ use super::RenderErr;
 /// reviewable on a 16-col screen, and it bounds the page budget.
 pub const MAX_ARRAY_RENDER: usize = 8;
 
-/// Where the array's dynamic tail is allowed to sit — the difference between a
-/// SOLE dynamic argument (the tail is nothing BUT the array) and a MULTI-dynamic
-/// function (the array is one of several tail objects).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum TailPlacement {
-    /// The array is the function's SOLE dynamic arg → its data is the ENTIRE
-    /// tail: `offset == head_end` AND `offset+32+count*32 == body.len()`. The
-    /// original, maximally-pinned encoding (Kani-proven).
-    SoleWholeTail,
-    /// The array is one of ≥2 dynamic args → its data is SOMEWHERE in the tail:
-    /// `offset >= head_end` (past the head, not aliasing a static arg) AND
-    /// `offset+32+count*32 <= body.len()` (fits; other args own the rest). Still
-    /// WYSIWYS: the offset word lives at the array's signature-fixed head slot,
-    /// so following it reads the SAME array the contract decodes.
-    MultiInTail,
-}
-
 /// Resolve a sole-dynamic-array (`<arg>.[]`) field against the FULL calldata
-/// body. Thin wrapper — the maximally-pinned `SoleWholeTail` placement (this
-/// signature + behaviour are byte-identical to the original; the Kani proof and
-/// slot-confusion tests bind it).
+/// body. The Kani proof and slot-confusion tests bind its exact whole-tail
+/// placement. Multi-dynamic arrays have no production resolver: current IR
+/// cannot prove their complete tail topology, so dbgen and the renderer reject
+/// them.
 pub fn resolve_array(
     field: &FieldEntry<'_>,
     ir: &Erc7730Ir<'_>,
     full_body: &[u8],
     static_head_words: u16,
-) -> Result<(usize, usize), RenderErr> {
-    resolve_array_placed(field, ir, full_body, static_head_words, TailPlacement::SoleWholeTail)
-}
-
-/// Resolve a multi-dynamic array (`<arg>.[]` where the array is NOT the sole
-/// dynamic arg) — the relaxed `MultiInTail` placement (C3).
-pub fn resolve_array_multi(
-    field: &FieldEntry<'_>,
-    ir: &Erc7730Ir<'_>,
-    full_body: &[u8],
-    static_head_words: u16,
-) -> Result<(usize, usize), RenderErr> {
-    resolve_array_placed(field, ir, full_body, static_head_words, TailPlacement::MultiInTail)
-}
-
-/// Shared core. `placement` selects the exact-vs-relaxed tail bounds; everything
-/// else (path parse, head-slot bound, hardened offset/length reads, element cap)
-/// is identical for both — so the sole path stays exactly as proven.
-fn resolve_array_placed(
-    field: &FieldEntry<'_>,
-    ir: &Erc7730Ir<'_>,
-    full_body: &[u8],
-    static_head_words: u16,
-    placement: TailPlacement,
 ) -> Result<(usize, usize), RenderErr> {
     // 1. Parse the path: [RootStructured][FieldIdx]*[ArrayAll]. Sum the
     //    FieldIdx slots → the array arg's offset-word slot.
@@ -122,15 +82,6 @@ fn resolve_array_placed(
                     .checked_add(u16::from_be_bytes([a[0], a[1]]) as usize)
                     .ok_or(RenderErr::Reject("7730 arr slot ovf"))?;
                 p += 3;
-            }
-            // Multi-dynamic marker: `FieldIdx* FollowOffset ArrayAll`. Only the
-            // relaxed `MultiInTail` placement emits/accepts it; the sole path
-            // stays strict (a FollowOffset falls to the reject arm below).
-            Some(&op)
-                if op == PathOp::FollowOffset as u8
-                    && placement == TailPlacement::MultiInTail =>
-            {
-                p += 1;
             }
             Some(&op) if op == PathOp::ArrayAll as u8 => {
                 p += 1;
@@ -165,22 +116,9 @@ fn resolve_array_placed(
         .ok_or(RenderErr::Reject("7730 arr off word"))?;
     let offset = read_offset_word(off_word).ok_or(RenderErr::Reject("7730 arr bad offset"))?;
 
-    // 4. Placement of the array's data relative to the static head.
-    match placement {
-        // Sole dynamic arg → the tail begins EXACTLY at head-end.
-        TailPlacement::SoleWholeTail => {
-            if offset != head_end {
-                return Err(RenderErr::Reject("7730 arr offset != head end"));
-            }
-        }
-        // Multi-dynamic → the array sits somewhere in the tail, but never
-        // aliasing into the static head (`offset >= head_end`). The length word
-        // presence is checked in step 5.
-        TailPlacement::MultiInTail => {
-            if offset < head_end {
-                return Err(RenderErr::Reject("7730 arr offset in head"));
-            }
-        }
+    // 4. Sole dynamic arg → the tail begins EXACTLY at head-end.
+    if offset != head_end {
+        return Err(RenderErr::Reject("7730 arr offset != head end"));
     }
     // 5. Length word readable + read via walk's hardened reader + cap.
     let len_end = offset
@@ -198,25 +136,15 @@ fn resolve_array_placed(
     }
     let count = count as usize;
 
-    // 6. The array's elements must be present: the ENTIRE tail (sole) or fit
-    //    WITHIN the body (multi — other dynamic args own the remaining bytes).
+    // 6. The array's elements must consume the ENTIRE tail.
     let elems_bytes = count
         .checked_mul(32)
         .ok_or(RenderErr::Reject("7730 arr ovf"))?;
     let total = len_end
         .checked_add(elems_bytes)
         .ok_or(RenderErr::Reject("7730 arr ovf"))?;
-    match placement {
-        TailPlacement::SoleWholeTail => {
-            if total != full_body.len() {
-                return Err(RenderErr::Reject("7730 arr not whole tail"));
-            }
-        }
-        TailPlacement::MultiInTail => {
-            if total > full_body.len() {
-                return Err(RenderErr::Reject("7730 arr elems oob"));
-            }
-        }
+    if total != full_body.len() {
+        return Err(RenderErr::Reject("7730 arr not whole tail"));
     }
 
     // 7. Human / page-budget cap.
@@ -285,45 +213,6 @@ mod tests {
         assert_eq!(resolve_array(&field(), &ir, &body(3), 2).unwrap(), (96, 3));
         // empty array is valid.
         assert_eq!(resolve_array(&field(), &ir, &body(0), 2).unwrap(), (96, 0));
-    }
-
-    /// IR with the multi-dynamic marker: `Root FieldIdx(0) FollowOffset ArrayAll`.
-    fn array_ir_multi() -> std::vec::Vec<u8> {
-        let pool = [0xFFu8, 6, 0x10, 0x20, 0x00, 0x00, 0x25, 0x24];
-        let pool_len = pool.len() as u16;
-        let mut buf = std::vec![0u8; HEADER_LEN];
-        buf[0] = SCHEMA_VER;
-        buf[1] = 0x01;
-        buf[126..128].copy_from_slice(&(HEADER_LEN as u16).to_be_bytes());
-        buf[128..130].copy_from_slice(&((HEADER_LEN as u16) + pool_len).to_be_bytes());
-        buf[130..132].copy_from_slice(&pool_len.to_be_bytes());
-        buf[132..134].copy_from_slice(&1u16.to_be_bytes());
-        buf.extend_from_slice(&pool);
-        buf.push(0u8);
-        buf
-    }
-
-    #[test]
-    fn multi_relaxed_placement() {
-        let ir_bytes = array_ir_multi();
-        let ir = Erc7730Ir::parse(&ir_bytes).unwrap();
-        let f = field();
-        // The array (2 elems at head_end) is followed by MORE tail data (a 2nd
-        // dynamic arg). SOLE would reject "not whole tail"; MULTI accepts, and
-        // the element span (96, 2) is unchanged.
-        let mut b = body(2);
-        b.extend_from_slice(&[0xEEu8; 32]);
-        assert_eq!(resolve_array_multi(&f, &ir, &b, 2).unwrap(), (96, 2));
-        // The SAME body on the sole path declines (no regression to the pin).
-        assert!(resolve_array(&field(), &Erc7730Ir::parse(&array_ir()).unwrap(), &b, 2).is_err());
-        // Hostile: offset points INTO the head (aliasing the owner word) → decline.
-        let mut alias = b.clone();
-        alias[31] = 32; // offset 32 < head_end 64
-        assert!(resolve_array_multi(&f, &ir, &alias, 2).is_err());
-        // Length word claims more elements than the body holds → decline (OOB).
-        let mut oob = body(2);
-        oob[95] = 8; // len = 8, but only 2 elements present
-        assert!(resolve_array_multi(&f, &ir, &oob, 2).is_err());
     }
 
     #[test]
@@ -405,33 +294,6 @@ mod kani_harnesses {
                 // count > 8 reject is structurally unreachable). The cap is
                 // exercised by the concrete `resolve_array_rejects_over_cap`
                 // control below instead (finding §2 #2).
-            }
-            Err(_) => {}
-        }
-    }
-
-    /// Same panic/OOB/overflow-freedom for the RELAXED multi-dynamic placement.
-    /// The array need not be the whole tail (so `end <= len`, not `==`), but the
-    /// element span it reads is still fully in-bounds and count-capped.
-    #[kani::proof]
-    #[kani::unwind(34)]
-    fn resolve_array_multi_panic_free_and_in_bounds() {
-        const N: usize = 224; // head(64) + two dynamic tails
-        let data: [u8; N] = kani::any();
-        let blen: usize = kani::any();
-        kani::assume(blen <= N);
-        let full_body = &data[..blen];
-        // Root + FieldIdx(0) + FollowOffset + ArrayAll (the multi marker).
-        let pool = [0xFFu8, 6, 0x10, 0x20, 0x00, 0x00, 0x25, 0x24];
-        let ir = mk_ir(&pool);
-        let field = FieldEntry { format_op: 0x02, label: b"a", path_off: 1, param_off: 0 };
-        match resolve_array_multi(&field, &ir, full_body, 2) {
-            Ok((elems_start, count)) => {
-                let span = count.checked_mul(32).unwrap();
-                let end = elems_start.checked_add(span).unwrap();
-                assert!(end <= full_body.len());
-                // Vacuous cap assert removed: at N=224 a MultiInTail admits only
-                // count ≤ 4 here — see resolve_array_rejects_over_cap (finding §2 #2).
             }
             Err(_) => {}
         }

@@ -129,7 +129,10 @@ pub fn verify_proof(
         }
         index >>= 1;
     }
-    &h == expected_root
+    // A depth-d proof addresses exactly 2^d leaves. Reject unused high bits
+    // so the host mirror stays lock-step with the secure-world verifier and a
+    // proof has one canonical leaf index.
+    index == 0 && &h == expected_root
 }
 
 #[cfg(test)]
@@ -194,6 +197,21 @@ mod tests {
         assert_eq!(t.root(), leaf);
         assert!(t.proof(0).is_empty());
         assert!(verify_proof(b"only", 0, &[], &leaf));
+        assert!(!verify_proof(b"only", 1, &[], &leaf));
+    }
+
+    #[test]
+    fn negative_index_high_bits_cannot_alias_a_valid_path() {
+        let l0 = leaf_hash(b"a");
+        let l1 = leaf_hash(b"b");
+        let t = MerkleTree::build(vec![l0, l1]);
+        let p0 = t.proof(0);
+        let p1 = t.proof(1);
+
+        assert!(verify_proof(b"a", 0, &p0, &t.root()));
+        assert!(verify_proof(b"b", 1, &p1, &t.root()));
+        assert!(!verify_proof(b"a", 2, &p0, &t.root()));
+        assert!(!verify_proof(b"b", 3, &p1, &t.root()));
     }
 
     #[test]

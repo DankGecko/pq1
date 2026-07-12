@@ -298,13 +298,15 @@ firmware therefore pins everything:
 | **Per-record operation == 0** | Mirrors MultiSendCallOnly's on-chain revert; no nested DELEGATECALL. |
 | **Record count** | 1 ..= 6 (`MULTISEND_MAX_RECORDS`). |
 | **At most one `setPreSignature` record** | One `zk_v3` trailer binds one record. Two+ presign records refuse. |
-| **Page budget** | The trusted display refuses (never truncates) a batch whose exact page total exceeds the 24-page budget. The standard approve+presign flow fits comfortably (≈ 16–21 pages depending on proof/AddrOnly + refund pages); if you hit `msend too long`, split the batch. |
+| **Page budget** | The trusted display refuses (never truncates) a batch whose exact page total exceeds the 30-page budget. If you hit `msend too long`, split the batch. |
+| **Opaque known-call gate** | Every opaque record must pass the FI-hardened ERC-7730 non-membership proof for `(chain_id, record.to, selector)`. A known/Bloom-positive record refuses the whole MultiSend instead of blind-signing. |
 
 Records the firmware can decode render rich (ERC-20 transfer /
-approve / transferFrom, plain ETH, Safe-mgmt self-calls, the CoW
-order). Records it cannot decode render as **loud per-record blind
-pages** (selector + length + keccak) — same trust level as the existing
-single-call blind inner; the user sees exactly which record is opaque.
+approve / transferFrom, plain chain-native transfers, Safe-mgmt self-calls, the CoW
+order). Records it cannot decode render as **loud per-record blind pages**
+(selector + length + keccak) only when the tuple is proven absent from the
+firmware ERC-7730 filter. A known/Bloom-positive opaque record refuses the
+whole Safe batch; it cannot use the wrapper to bypass descriptor enforcement.
 
 ### Wire layout (approveHash flavour)
 

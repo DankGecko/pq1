@@ -37,6 +37,7 @@ fn tx(chain_id: u64, to: Option<[u8; 20]>, value: U256, nonce: u64, data_len: us
         data_len,
         access_list_count: 0,
         signing_hash: [0u8; 32],
+        userop_fields: None,
     }
 }
 

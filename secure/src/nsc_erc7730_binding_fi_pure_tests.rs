@@ -1,184 +1,207 @@
-//! Host-side regression tests for the FI-hardened ERC-7730 binding
-//! cross-check gates (Phase 5 item 6).
+//! Host-side structural regressions for ERC-7730 FI binding gates.
 //!
-//! All three sign dispatchers — `cmd_sign_userop`, `cmd_sign_userop_batch`,
-//! `cmd_sign_offchain` — invoke `tx::erc7730::cross_check_contract` or
-//! `cross_check_eip712` to bind a verified descriptor to the actual
-//! `(chain_id, to_address)` / `(chain_id, contract, domain_separator)`
-//! tuple. Before Phase 5 item 6 these were single-instruction boolean
-//! checks (`if cross_check_*(...).is_err() { reject }`), which a
-//! glitched skip on the `cmp` / branch could bypass.
-//!
-//! Phase 5 item 6 wraps each call site in the double-evaluation
-//! `fi::check_true_into_sentinel` idiom — same structure used by
-//! `crypto::c10_sign_verified_with_progress` for the verify-before-
-//! release gate. The verdict is computed once, then re-checked with a
-//! `wait_random()` between the two evaluations, and the result is
-//! sentinel-encoded (Hamming-distant OK / FAIL constants) so a
-//! garbage register value almost certainly takes the error path.
-//!
-//! Direct fault-injection tests would require hardware (a
-//! ChipWhisperer rig); instead the tests below enforce the call-site
-//! STRUCTURE via source-text inspection. A future regression that
-//! removes the `wait_random()` or the `check_true_into_sentinel`
-//! wrapper trips one of these tests.
+//! A descriptor is useful only after its exact bytes are proven under the
+//! firmware root and bound to the exact transaction context. The non-inlined
+//! proof helpers independently re-verify the bundle/root + full cross-check
+//! twice, require both parsed views to equal the caller's IR, publish into a
+//! caller-owned volatile FAIL slot, and bump a caller-owned CFI transcript.
+//! That composition covers a faulted initial Merkle reject, either independent
+//! membership/binding decision, and a skipped whole proof call.
 
 const CMD_SIGN_USEROP: &str = include_str!("nsc/cmd_sign_userop.rs");
 const CMD_SIGN_USEROP_BATCH: &str = include_str!("nsc/cmd_sign_userop_batch.rs");
 const CMD_SIGN_OFFCHAIN: &str = include_str!("nsc/cmd_sign_offchain.rs");
+const ERC7730_GLUE: &str = include_str!("tx/erc7730.rs");
+const DISPLAY_DISPATCH: &str = include_str!("tx/display/dispatch.rs");
+const SAFE_DISPLAY: &str = include_str!("tx/display/safe_display.rs");
 
-/// The three call sites all use the same idiom: compute `bind_ok`
-/// (or `eip712_bind_ok` / `candidate_ok`) once, follow with
-/// `wait_random()` then a `check_true_into_sentinel(|| black_box(...))`
-/// compared against `OK_SENTINEL`. Source-text count helpers.
-
-fn count_substr(hay: &str, needle: &str) -> usize {
-    let mut n = 0;
-    let mut s = hay;
-    while let Some(i) = s.find(needle) {
-        n += 1;
-        s = &s[i + needle.len()..];
-    }
-    n
+fn count_substr(haystack: &str, needle: &str) -> usize {
+    haystack.match_indices(needle).count()
 }
 
-#[test]
-fn cmd_sign_userop_uses_fi_hardened_binding_check() {
-    // Pattern: `cross_check_contract` is called exactly once and the
-    // result feeds an `fi::check_true_into_sentinel` gate.
+fn assert_ordered(source: &str, first: &str, second: &str, third: &str, fourth: &str) {
+    let a = source.find(first).unwrap_or_else(|| panic!("missing {first}"));
+    let b = source[a..]
+        .find(second)
+        .map(|p| a + p)
+        .unwrap_or_else(|| panic!("missing {second} after {first}"));
+    let c = source[b..]
+        .find(third)
+        .map(|p| b + p)
+        .unwrap_or_else(|| panic!("missing {third} after {second}"));
+    let d = source[c..]
+        .find(fourth)
+        .map(|p| c + p)
+        .unwrap_or_else(|| panic!("missing {fourth} after {third}"));
+    assert!(a < b && b < c && c < d);
+}
+
+fn assert_dual_reject_gates(
+    source: &str,
+    volatile_read: &str,
+    cfi_check: &str,
+    gate_a: &str,
+    gate_b: &str,
+) {
     assert_eq!(
-        count_substr(CMD_SIGN_USEROP, "cross_check_contract"),
+        count_substr(source, volatile_read),
         2,
-        "cmd_sign_userop.rs must call cross_check_contract exactly \
-         once (one call site + one doc reference). Adjust this count \
-         if the dispatcher grows new binding cross-checks; do NOT \
-         drop the FI hardening."
+        "permission evidence must be volatile-read independently for both gates",
     );
-    assert!(
-        CMD_SIGN_USEROP.contains("let bind_ok = crate::tx::erc7730::cross_check_contract("),
-        "cmd_sign_userop.rs binding check must compute verdict once into \
-         `bind_ok` so the subsequent `check_true_into_sentinel` can \
-         double-evaluate without re-running the cross-check."
+    assert_eq!(
+        count_substr(source, cfi_check),
+        2,
+        "caller-owned CFI must be independently checked by both gates",
     );
-    assert!(
-        CMD_SIGN_USEROP
-            .contains("crate::fi::check_true_into_sentinel(|| core::hint::black_box(bind_ok))"),
-        "cmd_sign_userop.rs binding check must wrap `bind_ok` in \
-         `check_true_into_sentinel(|| black_box(...))` — black_box \
-         prevents LLVM from CSEing the double-evaluation back into a \
-         single load (F-1 in tools/sca/README.md)."
-    );
-    // The `wait_random()` between the verdict computation and the
-    // sentinel check is load-bearing: it defeats clock-aligned glitch
-    // bursts that time their fault to the fixed-shape control flow of
-    // the sentinel compare.
-    let pos_check = CMD_SIGN_USEROP
-        .find("check_true_into_sentinel(|| core::hint::black_box(bind_ok))")
-        .expect("must contain the FI-hardened sentinel compare");
-    let pre = &CMD_SIGN_USEROP[..pos_check];
-    let pos_wait = pre
-        .rfind("crate::fi::wait_random();")
-        .expect("must precede sentinel compare with `wait_random()`");
-    let pos_assign = pre
-        .rfind("let bind_ok = ")
-        .expect("must compute verdict into bind_ok before wait_random");
-    assert!(
-        pos_assign < pos_wait && pos_wait < pos_check,
-        "Ordering must be: compute bind_ok → wait_random → sentinel \
-         compare. Re-ordering defeats the clock-aligned-glitch defence."
+    assert_eq!(count_substr(source, gate_a), 1, "missing first reject gate");
+    assert_eq!(count_substr(source, gate_b), 1, "missing second reject gate");
+    assert_ordered(
+        source,
+        gate_a,
+        "crate::fi::wait_random();",
+        cfi_check,
+        gate_b,
     );
 }
 
 #[test]
-fn cmd_sign_offchain_uses_fi_hardened_binding_check() {
-    assert!(
-        CMD_SIGN_OFFCHAIN.contains("cross_check_eip712"),
-        "cmd_sign_offchain.rs must call cross_check_eip712 for EIP-712 \
-         typed-sign binding."
-    );
-    assert!(
-        CMD_SIGN_OFFCHAIN
-            .contains("let eip712_bind_ok = crate::tx::erc7730::cross_check_eip712("),
-        "cmd_sign_offchain.rs binding check must compute verdict once \
-         into `eip712_bind_ok` (Phase 5 item 6)."
-    );
-    assert!(
-        CMD_SIGN_OFFCHAIN.contains(
-            "crate::fi::check_true_into_sentinel(|| core::hint::black_box(eip712_bind_ok))"
+fn proof_helpers_recompute_membership_and_binding_twice() {
+    let contract_start = ERC7730_GLUE
+        .find("pub fn prove_contract_binding(")
+        .expect("missing contract proof helper");
+    let eip712_start = ERC7730_GLUE
+        .find("pub fn prove_eip712_binding(")
+        .expect("missing EIP-712 proof helper");
+    let known_start = ERC7730_GLUE[eip712_start..]
+        .find("const CFI_KNOWN_QUERY_A")
+        .map(|offset| eip712_start + offset)
+        .expect("missing end anchor for EIP-712 proof helper");
+    let contract = &ERC7730_GLUE[contract_start..eip712_start];
+    let eip712 = &ERC7730_GLUE[eip712_start..known_start];
+
+    for (proof, cross_check) in [
+        (contract, "cross_check_contract("),
+        (eip712, "cross_check_eip712("),
+    ] {
+        assert_eq!(
+            count_substr(proof, "verify_erc7730_bundle("),
+            2,
+            "each proof helper must independently verify membership twice",
+        );
+        assert_eq!(
+            count_substr(proof, "verified.ir == *"),
+            2,
+            "each parse must equal the caller's exact IR view",
+        );
+        assert_eq!(
+            count_substr(proof, cross_check),
+            2,
+            "each independently verified IR must also pass its context check",
+        );
+        assert_ordered(
+            proof,
+            "let ok_a = verify_erc7730_bundle(",
+            cross_check,
+            "crate::fi::wait_random();",
+            "let ok_b = verify_erc7730_bundle(",
+        );
+        assert_ordered(
+            proof,
+            "let ok_b = verify_erc7730_bundle(",
+            cross_check,
+            "core::hint::black_box(ok_a) && core::hint::black_box(ok_b)",
+            "core::ptr::write_volatile(verdict_out, verdict)",
+        );
+    }
+
+    assert_eq!(count_substr(ERC7730_GLUE, "verify_erc7730_bundle("), 4);
+    assert_eq!(count_substr(ERC7730_GLUE, "verified.ir == *"), 4);
+    assert_eq!(count_substr(ERC7730_GLUE, "cross_check_contract("), 2);
+    assert_eq!(count_substr(ERC7730_GLUE, "cross_check_eip712("), 2);
+    assert!(ERC7730_GLUE.contains("core::ptr::write_volatile(verdict_out, verdict)"));
+}
+
+#[test]
+fn every_signing_surface_requires_volatile_verdict_and_caller_cfi() {
+    for (source, proof, expected) in [
+        (
+            CMD_SIGN_USEROP,
+            "prove_contract_binding(",
+            "CFI_CONTRACT_BIND_EXPECTED",
         ),
-        "cmd_sign_offchain.rs binding check must use \
-         `check_true_into_sentinel(|| black_box(eip712_bind_ok))` against \
-         OK_SENTINEL."
-    );
-    let pos_check = CMD_SIGN_OFFCHAIN
-        .find("check_true_into_sentinel(|| core::hint::black_box(eip712_bind_ok))")
-        .unwrap();
-    let pre = &CMD_SIGN_OFFCHAIN[..pos_check];
-    let pos_wait = pre.rfind("crate::fi::wait_random();").unwrap();
-    let pos_assign = pre.rfind("let eip712_bind_ok = ").unwrap();
-    assert!(pos_assign < pos_wait && pos_wait < pos_check);
+        (
+            CMD_SIGN_USEROP_BATCH,
+            "prove_contract_binding(",
+            "CFI_CONTRACT_BIND_EXPECTED",
+        ),
+        (
+            CMD_SIGN_OFFCHAIN,
+            "prove_eip712_binding(",
+            "CFI_EIP712_BIND_EXPECTED",
+        ),
+    ] {
+        assert_eq!(count_substr(source, proof), 1, "missing unique {proof}");
+        assert!(source.contains("ERC7730_DESCRIPTORS_ROOT"));
+        assert!(source.contains("core::ptr::write_volatile("));
+        assert!(source.contains("crate::fi::FAIL_SENTINEL"));
+        assert_eq!(
+            count_substr(
+                source,
+                "core::ptr::read_volatile(&bind_verdict_slot)",
+            ),
+            2,
+        );
+        assert!(source.contains(expected));
+        assert!(source.contains("crate::fi::scrub_sentinel_register();"));
+        assert!(source.contains("bind_cfi_verdict_a"));
+        assert!(source.contains("bind_cfi_verdict_b"));
+    }
 }
 
 #[test]
-fn cmd_sign_userop_batch_uses_fi_hardened_per_candidate_check() {
-    // Wire v2 (TLV-tagged trailer list): the companion declares which
-    // inner tx an ERC-7730 trailer binds to via `tx_idx`, so the
-    // firmware does a single per-`tx_idx` binding check instead of
-    // searching for the matching inner tx. The cross_check_contract
-    // verdict is computed once into `bind_ok` so the
-    // `check_true_into_sentinel` can double-evaluate without re-running
-    // the keccak comparison.
-    assert!(
-        CMD_SIGN_USEROP_BATCH.contains("cross_check_contract"),
-        "cmd_sign_userop_batch.rs must call cross_check_contract for \
-         every routed ERC-7730 trailer."
+fn every_permission_surface_has_two_independent_final_reject_gates() {
+    for source in [CMD_SIGN_USEROP, CMD_SIGN_USEROP_BATCH, CMD_SIGN_OFFCHAIN] {
+        assert_dual_reject_gates(
+            source,
+            "core::ptr::read_volatile(&bind_verdict_slot)",
+            "bind_cfi.check_into_sentinel(",
+            "if bind_gate_a != crate::fi::OK_SENTINEL",
+            "if bind_gate_b != crate::fi::OK_SENTINEL",
+        );
+        assert_eq!(
+            count_substr(source, "7730 binding fail"),
+            2,
+            "each independent binding reject must terminate visibly",
+        );
+    }
+
+    assert_dual_reject_gates(
+        DISPLAY_DISPATCH,
+        "core::ptr::read_volatile(&unknown_verdict_slot)",
+        "unknown_cfi.check_into_sentinel(",
+        "if unknown_gate_a != crate::fi::OK_SENTINEL",
+        "if unknown_gate_b != crate::fi::OK_SENTINEL",
     );
-    assert!(
-        CMD_SIGN_USEROP_BATCH
-            .contains("let bind_ok = crate::tx::erc7730::cross_check_contract("),
-        "batch dispatcher must compute the ERC-7730 binding verdict \
-         once into `bind_ok` so the sentinel re-check is cheap."
+    assert_eq!(
+        count_substr(DISPLAY_DISPATCH, "7730 proof needed"),
+        2,
+        "both direct-dispatch reject gates must refuse signing",
     );
-    assert!(
-        CMD_SIGN_USEROP_BATCH
-            .contains("check_true_into_sentinel(|| core::hint::black_box(bind_ok))"),
-        "batch dispatcher must check `bind_ok` via the sentinel idiom \
-         (parity with `cmd_sign_userop.rs:533-548`)."
+
+    assert_dual_reject_gates(
+        SAFE_DISPLAY,
+        "core::ptr::read_volatile(&unknown_verdict_slot)",
+        "unknown_cfi.check_into_sentinel(",
+        "if unknown_gate_a != crate::fi::OK_SENTINEL",
+        "if unknown_gate_b != crate::fi::OK_SENTINEL",
     );
 }
 
 #[test]
-fn all_binding_sites_call_wait_random_before_sentinel() {
-    // Every binding cross-check site must wrap its verdict in
-    // `wait_random` + `check_true_into_sentinel(|| black_box(bind_ok))`.
-    // Three files emit such sites today:
-    //   * cmd_sign_userop.rs        — single-tx ERC-7730 binding
-    //   * cmd_sign_offchain.rs      — EIP-712 typed-data binding
-    //   * cmd_sign_userop_batch.rs  — per-tx ERC-7730 binding (wire v2)
-    let userop = count_substr(
-        CMD_SIGN_USEROP,
-        "check_true_into_sentinel(|| core::hint::black_box(bind_ok))",
-    );
-    let offchain = count_substr(
-        CMD_SIGN_OFFCHAIN,
-        "check_true_into_sentinel(|| core::hint::black_box(eip712_bind_ok))",
-    );
-    let batch = count_substr(
-        CMD_SIGN_USEROP_BATCH,
-        "check_true_into_sentinel(|| core::hint::black_box(bind_ok))",
-    );
-    assert!(
-        userop >= 1,
-        "cmd_sign_userop.rs must keep its sentinel-wrapped binding check."
-    );
-    assert!(
-        offchain >= 1,
-        "cmd_sign_offchain.rs must keep its sentinel-wrapped binding check."
-    );
-    assert!(
-        batch >= 1,
-        "cmd_sign_userop_batch.rs must wrap the ERC-7730 binding check \
-         in `check_true_into_sentinel(|| black_box(bind_ok))`. Got {}.",
-        batch
-    );
+fn no_binding_site_claims_one_cached_verdict_is_recomputation() {
+    for source in [CMD_SIGN_USEROP, CMD_SIGN_USEROP_BATCH, CMD_SIGN_OFFCHAIN] {
+        assert!(!source.contains("Compute the verdict once"));
+        assert!(!source.contains("computed once into `bind_ok`"));
+        assert!(!source.contains("double-evaluate without re-running"));
+    }
 }

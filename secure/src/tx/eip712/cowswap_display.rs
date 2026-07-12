@@ -99,8 +99,8 @@ pub fn render_cowswap_pages(canonical: &[u8; 204], sell: &CowLeg, buy: &CowLeg) 
 
     // ── Page 0: Header / chain / chain-name / kind ────────────────────
     write_line(&mut pages.row_mut(0, 0), "Sign CowSwap?");
-    write_chain_row(&mut pages.row_mut(0, 1), chain_id);
-    write_line(&mut pages.row_mut(0, 2), chain_name_str(chain_id));
+    let [_, chain_row, chain_continuation, _] = pages.page_mut(0);
+    write_chain_rows(chain_row, chain_continuation, chain_id);
     write_line(&mut pages.row_mut(0, 3), order_kind_label(canonical));
 
     // ── Order body (shared with the Safe-wrapped flow) ───────────────
@@ -406,15 +406,30 @@ fn write_line(row: &mut [u8; DISPLAY_COLS], text: &str) {
     row[..n].copy_from_slice(&bytes[..n]);
 }
 
-fn write_chain_row(row: &mut [u8; DISPLAY_COLS], chain_id: u64) {
+fn write_chain_rows(
+    row: &mut [u8; DISPLAY_COLS],
+    continuation: &mut [u8; DISPLAY_COLS],
+    chain_id: u64,
+) {
     *row = [b' '; DISPLAY_COLS];
+    *continuation = [b' '; DISPLAY_COLS];
     let prefix = b"chain ";
     row[..prefix.len()].copy_from_slice(prefix);
-    let mut tmp = [0u8; 16];
+    let mut tmp = [0u8; 20];
     let n = format_u64_decimal(chain_id, &mut tmp);
-    let off = prefix.len();
-    let copy = core::cmp::min(n, DISPLAY_COLS - off);
-    row[off..off + copy].copy_from_slice(&tmp[..copy]);
+    if prefix.len() + n <= DISPLAY_COLS {
+        row[prefix.len()..prefix.len() + n].copy_from_slice(&tmp[..n]);
+        write_line(continuation, chain_name_str(chain_id));
+        return;
+    }
+
+    // Six-byte prefix + nine digits + `>` exactly fills row one. A u64 has
+    // at most 20 digits, so the remaining eleven always fit on row two.
+    const FIRST_DIGITS: usize = 9;
+    row[prefix.len()..prefix.len() + FIRST_DIGITS]
+        .copy_from_slice(&tmp[..FIRST_DIGITS]);
+    row[DISPLAY_COLS - 1] = b'>';
+    continuation[..n - FIRST_DIGITS].copy_from_slice(&tmp[FIRST_DIGITS..n]);
 }
 
 fn chain_name_str(chain_id: u64) -> &'static str {

@@ -61,12 +61,12 @@ order they will bite you.
 
 ## 1. Mental model
 
-The firmware can sign any transaction the user approves on its own
-OLED. By default that approval is "blind sign" — a hex calldata
-fingerprint and a button press. **Clear signing replaces the hex with
-a human-readable rendering** ("Send 100 USDT to alice.eth") whose
-correctness is provable because the rendering rules came from a
-Merkle-verified ERC-7730 descriptor pinned at firmware-build time.
+The firmware can blind-sign genuinely unknown calls that the user approves on
+its own LCD. A firmware-known ERC-7730 call is different: its
+`(chain_id, contract, selector)` is also committed into a pinned Bloom filter,
+so the companion must supply the matching Merkle proof. **Clear signing
+replaces raw calldata review with a human-readable rendering** ("Send 100 USDT
+to alice.eth") whose correctness is anchored in the firmware-built catalogue.
 
 There is exactly one trust transfer in this design: **the firmware
 trusts the Merkle root**. Everything else flows from that:
@@ -76,17 +76,19 @@ trusts the Merkle root**. Everything else flows from that:
 - The companion ships the same descriptor set as a `*.bin` blob
   whose first 32 bytes are the same root.
 - For each sign request, the companion picks the matching descriptor,
-  produces a Merkle proof against the root, and ships it as an
-  optional "trailer" on the sign command.
+  produces a Merkle proof against the root, and ships it in the trailer slot.
+  The slot is optional in the wire grammar, but the proof is mandatory when
+  the firmware-known-call filter contains the exact contract-call tuple.
 - The firmware re-verifies the proof, binds the descriptor to the tx
   via `(chain_id, to_address)` or `(chain_id, verifyingContract,
   domain_separator)`, and renders.
 
-If the companion ships no trailer, the firmware silently falls back
-to blind-sign. If it ships a wrong / malformed / mis-bound trailer,
-the firmware refuses the descriptor and falls back to blind-sign
-with a brief status-line banner. **Clear signing is never required —
-it is an enhancement layer the companion is free to skip per-tx.**
+If the companion omits a proof, or supplies a malformed / mis-bound one, a
+firmware-known call **hard-refuses** with `"7730 proof needed"`; it never
+downgrades that tuple to typed or blind signing. Only a tuple absent from the
+pinned membership filter may use the generic display ladder. Bloom false
+positives can refuse an otherwise-unknown call, which is the safe failure
+direction.
 
 ## 2. What the companion must ship
 
@@ -168,9 +170,10 @@ Sanity-check at companion startup:
   (query via `GET_DEVICE_INFO` once the firmware exposes it, or just
   hard-code it per firmware release for now).
 
-If any of these fail: refuse to ship trailers. Every sign request
-will simply blind-sign — the user keeps signing, just without
-clear-sign pages.
+If any of these fail, treat the catalogue/firmware pair as incompatible and
+stop known-call signing until the companion data is repaired or updated.
+Disabling trailers is not a compatibility fallback: firmware-known calls will
+refuse by design. Genuinely unknown calls may still use the generic ladder.
 
 ## 4. Lookup algorithm
 
@@ -217,8 +220,10 @@ Notes:
   `primary_type_hash` field carries the **first** format's hash for
   human-readable lookup but is not load-bearing for the wire
   protocol.
-- On a miss: return `None`. Ship the sign request without a trailer.
-  The firmware blind-signs.
+- On a miss: omit the trailer only if the tuple is also absent from the
+  catalogue paired with this exact firmware root. That genuinely unknown call
+  may blind-sign. A miss caused by companion/firmware catalogue skew is an
+  error: a tuple known to the firmware will refuse without its proof.
 
 ## 5. Trailer assembly
 
@@ -318,7 +323,7 @@ sign_userop_payload =
  || u16_be(safe_v1_bundle_len)       || safe_v1_bundle   // optional
  || u16_be(selector_bundle_len)      || selector_bundle  // optional
  || u16_be(self_attest_bundle_len)   || self_attest      // optional
- || **u16_be(erc7730_bundle_len)     || erc7730_bundle** // OPTIONAL ERC-7730 trailer ⟵
+ || **u16_be(erc7730_bundle_len)     || erc7730_bundle** // wire-optional; mandatory for a known call
  || names_section                                        // 1-B count + bundles
 ```
 
@@ -334,6 +339,10 @@ sign_userop_payload = base_header[330] || data[data_len] || names_section
 
 (every `u16_be(...)` slot becomes `[0x00, 0x00]`)
 
+That zero-trailer form is signable only for tuples absent from the
+firmware-paired known-call filter. It is not a way to opt out of clear-signing
+for a compiled descriptor.
+
 **Important:** the firmware also expects a `names_section` after the
 last trailer. It's `[u8 count][bundle_0 ... bundle_{count-1}]`,
 `count ≤ 4`, each bundle `[u16 BE len][payload]`. If you don't have
@@ -342,37 +351,29 @@ parser reads it unconditionally.
 
 ### 6.2 CMD_SIGN_USEROP_BATCH (0x32)
 
-The atomic multi-UserOp sign command. The firmware accepts **one
-per-batch ERC-7730 trailer at the end of the payload**, after the
-last inner-tx record. Per-tx trailers are deferred (would require a
-wire-format extension); for now the rules are:
+The atomic multi-UserOp sign command uses the wire-v2 TLV trailer list described
+in [`companion-batch-sign-integration.md`](companion-batch-sign-integration.md).
+Attach one kind-7 `TRAILER_KIND_ERC7730` record per matching member, with that
+member's `tx_idx`. Every firmware-known member needs its own verified proof;
+omitting any one aborts the whole atomic batch. When no member has a descriptor,
+emit a zero `trailer_count` byte.
 
-- If the batch contains exactly one tx whose `to` matches an
-  ERC-7730 descriptor: attach the trailer, the firmware renders that
-  one tx with clear-sign pages and blind-signs the others.
-- If the batch contains multiple txs with descriptors: attach the
-  trailer for the **first** matching tx. The others blind-sign.
-- If no tx in the batch has a descriptor: send no trailer
-  (`[u16 BE 0]` at the end).
-
-Wire layout (the batch-header + per-tx records are documented in
-`docs/companion/companion-batch-sign-integration.md`; the trailer slot is
-appended at the very end):
+Wire tail (the full batch header and record layout is in the linked guide):
 
 ```
-batch_payload =
-    batch_header
- || per_tx_record_0
- || per_tx_record_1
- || ...
- || per_tx_record_{n-1}
- || u16_be(erc7730_bundle_len) || erc7730_bundle    // optional
+[u8 trailer_count]
+[trailer_count × {
+    u8 kind        // 7 = TRAILER_KIND_ERC7730
+    u8 tx_idx
+    u16_be(len)
+    u8[len] payload
+}]
 ```
 
-The firmware cross-checks the descriptor against AT LEAST ONE inner
-tx's `(chain_id, to)`; if zero match, the entire batch is rejected
-with `"7730 binding fail"`. Make sure your lookup matches at least
-one inner tx before attaching.
+The firmware cross-checks each kind-7 descriptor against the specifically
+routed member's `(chain_id, to)`. A mismatched proof leaves that member without
+a verified descriptor; if its exact selector tuple is firmware-known, dispatch
+then refuses the whole batch.
 
 ### 6.3 CMD_SIGN_OFFCHAIN (0x62) — kind=2 EIP-712 typed
 
@@ -562,11 +563,19 @@ Companion-side flow:
    Page 0: "Sign: Send" / "Tether Limited" / "Tether USD" / "> next"
    Page 1: "Amount" / "100" / "USDT" / "> next"
    Page 2: "To" / "0x333333…" / "..." / "> next"
-   Page 3: chain / fee / nonce envelope pages...
+   Page 3+: network; exact max-fee/tip/maximum-total; call,
+            verification, and pre-verification gas separately; full
+            256-bit UserOp nonce (hex)...
    Page N: "8213 Fingerprint" / "CalldataDigest" / "> verify off-dev"
    Page N+1: <full 32-byte hex hash>
    Page N+2: "Cancel / Confirm"
    ```
+
+   The envelope is intentionally not a lossy EIP-1559 summary. On known
+   18-decimal chains fee operands render exactly in gwei/native units; unknown
+   chains use exact raw base units. Values that do not fit the exact sinks
+   refuse. The three EntryPoint v0.6 gas words and all 32 nonce bytes remain
+   independently visible, so equal sums or equal low 64 bits cannot alias.
 
 5. **Receive** the response, ABI-encode the type2 wrapper, wrap into
    a v0.6 `PackedUserOperation` with `callData =
@@ -853,20 +862,21 @@ companion-side.
 | Scenario                                          | Expected outcome                                                                                                                                                |
 |---------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Descriptor matches, well-formed bundle            | Clear-sign pages + fingerprint + confirm.                                                                                                                       |
-| Descriptor matches, tampered proof                | Status: `"7730 bundle fail"`. Blind-sign pages instead.                                                                                                         |
-| Descriptor matches, wrong chain_id in trailer     | Status: `"7730 binding fail"`. Blind-sign pages.                                                                                                                |
-| Descriptor matches, wrong contract in trailer     | Status: `"7730 binding fail"`. Blind-sign pages.                                                                                                                |
+| Firmware-known call, tampered proof               | Status: `"7730 bundle fail"`, then hard refusal (`"7730 proof needed"`). No signature.                                                                         |
+| Firmware-known call, wrong chain_id in trailer    | Status: `"7730 binding fail"`, then hard refusal.                                                                                                               |
+| Firmware-known call, wrong contract in trailer    | Status: `"7730 binding fail"`, then hard refusal.                                                                                                               |
 | EIP-712 sign with mismatched domain_separator     | Status: `"7730 binding fail"`. NO blind-sign fallback for kind=2 — error returned to dapp.                                                                      |
-| Companion ships no trailer                        | Silently blind-signs. No status banner.                                                                                                                         |
+| No trailer for firmware-known contract call       | Hard refusal: `"7730 proof needed"`.                                                                                                                           |
+| No trailer for genuinely unknown contract call    | Generic value/ERC-20/typed/blind ladder remains available (Bloom false positives may conservatively refuse).                                                    |
 | Bundle > 5130 bytes                               | Firmware rejects the entire sign with `"erc7730 too big"`. Fix the companion's lookup.                                                                          |
-| Selector in calldata not in descriptor's formats  | `RenderErr::NoFormat` → blind-sign fallback. NOT an error. Send anyway and let it fall through, OR don't ship the trailer in the first place to save bandwidth. |
+| Verified descriptor lacks the calldata selector   | `RenderErr::NoFormat` → hard refusal. This is a companion/catalog mismatch, never downgrade permission.                                                         |
 | Root in `*_db.bin` ≠ firmware's pinned root       | EVERY trailer fails `"7730 bundle fail"`. Companion-side root parity check at startup catches this.                                                             |
-| EIP-712 (kind=2) trailer sent for a **contract-context** descriptor | The descriptor's `primary_type_hash` is all-zero for contract-context entries, so the kind=2 selector lookup mismatches and falls through to blind-sign. Use kind=2 ONLY when the descriptor has an `eip712` section whose deployment matches the message's `verifyingContract`. |
+| EIP-712 (kind=2) trailer sent for a **contract-context** descriptor | The descriptor cannot render that typed message and the sign refuses. Use kind=2 ONLY for a matching `eip712` descriptor/deployment.                              |
 | Off-chain header `flags` byte set wrong            | `flags = 1` = `OFFCHAIN_FLAG_ACCOUNT_DEPLOYED`; `flags = 0` = counterfactual ERC-6492. Bit 0 wrong returns either `"6492 needs slot 0"` (slot ≠ 0 + counterfactual) or a wrong output-buffer size. |
 
-Test the failure modes too. A companion that does not gracefully
-fall back when the firmware rejects the trailer is a companion that
-will brick its users on the day the firmware ships a new root.
+Test the failure modes too. A companion must surface a clear catalogue/proof
+error and stop retrying; silently resubmitting without the trailer is
+intentionally ineffective for firmware-known calls.
 
 ## 10. Versioning and root rotation
 
@@ -895,9 +905,9 @@ Source of truth: `secure/src/db_roots.rs` (regenerated by
    (or a future dedicated `GET_ERC7730_ROOT` endpoint), compares to
    the blob's root, and:
    - **Match:** use clear-sign normally.
-   - **Mismatch:** disable clear-sign trailers globally; every sign
-     blind-signs. Surface a banner in the companion UI: "Update
-     companion to re-enable clear-signing on this firmware."
+   - **Mismatch:** block affected signing and require a compatible companion /
+     catalogue update. Do not disable trailers and retry: tuples in the
+     firmware's known-call filter hard-refuse without their proof.
 
 The companion MUST NOT ship trailers that won't verify — every
 mis-rooted trailer is a wasted USB chunk + a status banner the user
@@ -923,11 +933,12 @@ Companion-side pre-release:
 - [ ] Wire ordering matches §6 for all three commands (test against
       QEMU firmware: `make e2e` Scenarios 5m/5n/5p exercise this).
 - [ ] Trailer assembly produces ≤ 5130 B for every catalog entry.
-- [ ] Graceful fallback when the firmware returns
-      `"7730 bundle fail"` or `"7730 binding fail"` (status banner,
-      blind-sign proceeds, user can still confirm).
-- [ ] No trailer attached when the lookup misses (don't ship a
-      "default" trailer — that triggers binding-fail on every sign).
+- [ ] Treat `"7730 bundle fail"`, `"7730 binding fail"`, or
+      `"7730 proof needed"` as a hard catalogue/proof error; never retry a
+      firmware-known call without the trailer.
+- [ ] Omit the trailer on lookup miss only after root parity establishes that
+      the tuple is genuinely absent from the firmware-paired catalogue (don't
+      ship a "default" trailer — that triggers binding failure).
 - [ ] Names section count byte present even when empty (`0x00`).
 - [ ] EIP-712 kind=2 path passes `encoded_data` as struct body
       ONLY (no type-hash prefix) — viem
@@ -958,7 +969,7 @@ report them.
 **Status**: fixed on master in commit `eef09386` (PR #2). Companion
 apps consuming the catalog blob need to refresh `erc7730_db.bin` and
 re-pin the new root. Companions that ship trailers against the OLD
-root will hit `"7730 bundle fail"` and fall through to blind-sign.
+root will hit `"7730 bundle fail"`; firmware-known tuples then hard-refuse.
 
 What changed:
 
@@ -988,8 +999,8 @@ What changed:
 3. Re-run companion integration tests against firmware built from
    master.
 
-Previously-affected descriptors now render full clear-sign pages
-instead of falling through to blind-sign:
+Previously-affected descriptors now render full clear-sign pages instead of
+refusing at the verified-descriptor render gate:
 
 - `weth.json` / `deposit()` — Amount field renders.
 - `tether-usdt.json` / `transfer` and `approve` — To / Spender +
@@ -1018,10 +1029,10 @@ rendering.
 ### 12.3 Nested calldata stubs out
 
 `Calldata` formatter (0x0A) rejects with `Reject("7730 nested
-calldata p5")` and falls through. Safe v1's `execTransaction` uses
+calldata p5")`; a verified/known generic call therefore refuses. Safe v1's `execTransaction` uses
 this in the registry but is handled by a dedicated `safe_display`
-renderer; generic descriptors that use `nestedSelector` will degrade
-to blind-sign.
+renderer; generic descriptors that use `nestedSelector` will not sign until a
+complete native rendering path exists.
 
 ### 12.4 NFT collection names not resolved
 
@@ -1029,21 +1040,23 @@ to blind-sign.
 "(NFT token id)" hint. Collection-name lookup needs an on-device
 NFT-name DB which is not yet wired. Phase 5+ scope.
 
-### 12.5 Dynamic ABI types out of scope
+### 12.5 Dynamic ABI framing is deliberately narrow
 
-`render_erc7730_pages` walks paths assuming **static types**
-(uint256, address, bool, bytes32, static tuples). Dynamic types
-(`bytes`, `string`, dynamic arrays, dynamic tuples) read the slot
-as a BE offset rather than the value — formatters that try to
-render them will surface garbage. The seed corpus avoids these
-except for OpenSea Wyvern's `calldata`, which routes through the
-nested-calldata stub (§12.3) and falls back to blind-sign.
+`render_erc7730_pages` accepts exact all-static calldata and one narrow
+dynamic shape: a **sole top-level C1 tail** containing a `string`/`bytes`,
+a supported primitive array, or a dynamic `tokenPath`. The dynamic offset
+must equal the static-head length; its declared data, zero ABI
+right-padding, and padded end must consume the entire calldata body.
+This format-level preflight runs before visibility, so hiding a dynamic
+field does not bypass its framing checks.
 
-Phase 5+ wire-format extension (shape-descriptor byte in the IR
-header) closes the gap. The on-device walker proper
-(`pqsigner_erc7730::walker::resolve_path`) already supports
-dynamic types via an `AbiView` tree — the gap is just in plumbing
-type info through the IR.
+C2 dynamic-tuple descent, C3/multiple dynamic tails, aliased offsets,
+gaps, non-zero padding, and trailing bytes are not trusted shapes.
+`dbgen` omits those formats and the runtime rejects them independently.
+For a firmware-known/verified call, any such render failure is a hard
+refusal, never a typed- or blind-sign fallback. The legacy walker was
+removed and therefore cannot expand this policy through a second runtime
+decoder.
 
 ## See also
 

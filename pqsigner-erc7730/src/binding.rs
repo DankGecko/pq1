@@ -73,10 +73,11 @@ pub fn cross_check_contract(
 /// folds into the signed `final_eip712` hash — i.e. the companion-supplied
 /// domain the signature actually commits to — NOT a value re-derived from
 /// the descriptor. It is checked against the descriptor's pinned
-/// `ir.domain_separator`, and because the EIP-712 domain separator is
-/// `keccak256(EIP712Domain‖name‖version‖chainId‖verifyingContract)`, that
-/// single comparison cryptographically binds the verifying contract (and
-/// name/version) too.
+/// `ir.domain_separator`. Dbgen refuses opaque precomputed separators and
+/// constructs this value itself after forcing the deployment `chainId` and
+/// `verifyingContract` into the declared EIP-712 domain shape; consequently
+/// equality also binds the deployment address and every other declared domain
+/// field.
 ///
 /// There is therefore deliberately **no** `verifying_contract` parameter:
 /// on this path the firmware never receives the verifying contract as an

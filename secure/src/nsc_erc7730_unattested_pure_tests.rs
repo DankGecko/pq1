@@ -10,7 +10,9 @@
 //!   1. `secure/Cargo.toml` declares the feature.
 //!   2. `secure/src/nsc/mod.rs` carries the `mode-production` +
 //!      `erc7730-dev-unattested` mutual-exclusion `compile_error!`.
-//!   3. `secure/src/tx/display/erc7730/intent.rs` exports an
+//!   3. generated `secure/src/db_roots.rs` ties a dev-unattested root to the
+//!      warning feature even for non-production direct-Cargo builds.
+//!   4. `secure/src/tx/display/erc7730/intent.rs` exports an
 //!      `INTENT_BANNER_PAGES` const whose value tracks the feature
 //!      gate (1 default, 2 under the feature).
 //!
@@ -24,6 +26,7 @@
 
 const CARGO_TOML: &str = include_str!("../Cargo.toml");
 const NSC_MOD_RS: &str = include_str!("nsc/mod.rs");
+const DB_ROOTS_RS: &str = include_str!("db_roots.rs");
 const INTENT_RS: &str = include_str!("../../pqsigner-erc7730/src/display/render/intent.rs");
 
 #[test]
@@ -60,15 +63,26 @@ fn nsc_mod_has_mode_production_mutual_exclusion_fence() {
 }
 
 #[test]
-fn nsc_mod_lists_dev_unattested_in_hw_release_fence() {
-    // The umbrella hardware-release fence (stm32u585 + !debug_assertions +
-    // !e2e-test + !dev-testkey + any(known-dev-features)) also lists
-    // erc7730-dev-unattested so a bench build that accidentally enables
-    // it without flipping e2e-test still trips the broader fence.
+fn generated_root_requires_warning_feature_for_dev_provenance() {
+    // Unlike secret-leaking debug/test features, the provenance-warning
+    // feature is valid on an explicitly non-production hardware build. The
+    // generated root file is the stronger gate: it requires the warning for
+    // the exact dev-unattested root and independently rejects that root under
+    // mode-production.
     assert!(
-        NSC_MOD_RS.contains("feature = \"erc7730-dev-unattested\","),
-        "Hardware-release umbrella fence in nsc/mod.rs must include \
-         `feature = \"erc7730-dev-unattested\",` in the `any(...)` list."
+        DB_ROOTS_RS.contains(
+            "the pinned ERC-7730 catalogue is dev-unattested; enable \
+             erc7730-dev-unattested"
+        ),
+        "generated db_roots.rs must require the trusted-display warning for \
+         a dev-unattested production-shaped catalogue"
+    );
+    assert!(
+        DB_ROOTS_RS.contains(
+            "mode-production cannot embed the dev-unattested ERC-7730 catalogue"
+        ),
+        "generated db_roots.rs must fail closed when mode-production selects \
+         a dev-unattested catalogue"
     );
 }
 

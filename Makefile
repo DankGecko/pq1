@@ -94,6 +94,21 @@ RELEASE_ARTIFACT_TMP = $(CURDIR)/target/pqsigner-release.tmp
 # Remove it for production builds to eliminate all debug strings.
 FEATURES ?= mock-se,debug-log,ui-semihosting
 
+# The generated review file is the host-readable provenance companion to the
+# root/fences in secure/src/db_roots.rs. When the selected root is explicitly
+# dev-unattested, canonical Make-driven dev builds automatically enable the
+# matching trusted-display warning. A production feature set never gets that
+# feature: prod-check and the generated Rust fence reject the root instead.
+ERC7730_REVIEW := secure/data/erc7730.review.txt
+ERC7730_CATALOGUE_PROVENANCE := $(strip $(shell awk '/^\# Provenance: / { print $$3; exit }' $(ERC7730_REVIEW) 2>/dev/null))
+ifeq ($(ERC7730_CATALOGUE_PROVENANCE),dev-unattested)
+ifeq (,$(findstring mode-production,$(FEATURES)))
+ifeq (,$(findstring erc7730-dev-unattested,$(FEATURES)))
+override FEATURES := $(FEATURES),erc7730-dev-unattested
+endif
+endif
+endif
+
 # Extract features relevant to the nonsecure crate (it doesn't know about
 # mock-se, debug-log, ui-semihosting, etc. — only the shared platform,
 # transport, test, and watchdog features below).
@@ -2153,6 +2168,22 @@ PROD_REQUIRED = mode-production optiga-lock-operational optiga-hw-counter \
 # OTP-master burn (the `is_device_master_burned()` runtime guard refuses the
 # bump otherwise). See secure/Cargo.toml:553 + docs/production-todo.md.
 PROD_SHIP_FEATURES = stm32u585,se050,optiga-trust-m,dual-se,ui-lcd,usb,iwdg,saes-dhuk,se050-derived-scp03,mode-production,optiga-lock-operational,optiga-hw-counter,consumption-mask,tamp,tamp-wipe,tzic-wipe
+
+# Exact machine-readable provenance string emitted by dbgen only after a real
+# ERC-8176 EAS verification implementation has authenticated every leaf.
+PROD_ERC7730_PROVENANCE = erc8176-verified
+
+.PHONY: prod-erc7730-provenance-check
+prod-erc7730-provenance-check: check-erc7730-descriptors ## Validate production ERC-7730 catalogue provenance
+	@if [ "$(ERC7730_CATALOGUE_PROVENANCE)" != "$(PROD_ERC7730_PROVENANCE)" ]; then \
+		echo "==> prod-erc7730-provenance-check: FAIL — ERC-7730 catalogue provenance is '$(ERC7730_CATALOGUE_PROVENANCE)'"; \
+		echo "    required: $(PROD_ERC7730_PROVENANCE)"; \
+		echo "    Current dbgen has no production ERC-8176 verifier; an obsolete embedded"; \
+		echo "    attestations array is not accepted. Keep ERC-7730 dev-only until real EAS"; \
+		echo "    records are signature/identity-verified and the catalogue is regenerated."; \
+		exit 1; \
+	fi
+	@echo "==> prod-erc7730-provenance-check: PASS — production catalogue provenance verified"
 
 .PHONY: prod-feature-check prod-check
 prod-feature-check: ## Resolve and validate the production hardening feature set

@@ -127,6 +127,15 @@ fn positive_sell_amount_and_symbol_bind_to_canonical_bytes() {
 }
 
 #[test]
+fn cowswap_chain_id_is_lossless_for_full_u64() {
+    let mut c = sell_canonical([0x33; 20], 1_500_000_000);
+    c[..8].copy_from_slice(&u64::MAX.to_be_bytes());
+    let pages = render_cowswap_pages(&c, &leg(b"USDC", 6), &leg(b"WETH", 18));
+    assert_eq!(row_str(&pages.buf[0][1]), "chain 184467440>");
+    assert_eq!(row_str(&pages.buf[0][2]), "73709551615");
+}
+
+#[test]
 fn negative_sell_amount_nonvacuous() {
     // Same render path, different canonical amount bytes → different digits.
     // Proves the test tracks the SIGNED bytes, not the CowLeg struct.

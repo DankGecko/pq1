@@ -993,6 +993,7 @@ mod tests {
             data_len: 0,
             access_list_count: 0,
             signing_hash: [0u8; 32],
+            userop_fields: None,
         }
     }
 

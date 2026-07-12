@@ -35,16 +35,15 @@ user wants rides a full FW release.
    the firmware image that embeds the root, so a root change is authenticated by
    the same release key and reproducible-build chain — no new trust surface.
 
-3. **Companion ↔ firmware root-compatibility policy.** The companion may hold a
-   NEWER catalogue than the device's pinned root (it re-vendors more often). A
-   proof cut from a newer root simply fails verification on an older device →
-   that descriptor **declines to blind-sign** (fail-safe, never a wrong
-   clear-sign). The companion detects the mismatch by comparing its build's root
-   against `CMD`-reported firmware root (or by a failed proof) and falls back to
-   blind-sign with a "descriptor newer than firmware — update to clear-sign"
-   hint. Downgrade (older companion, newer firmware) likewise just declines the
-   descriptors the companion lacks. **No version negotiation; mismatch = decline,
-   never mis-render.**
+3. **Companion ↔ firmware root-compatibility policy.** The descriptor root and
+   generated known-call filter form one versioned catalogue. A proof cut from a
+   newer root fails on an older device; if that tuple is already in the older
+   filter, the device then hard-refuses instead of blind-signing. Conversely, an
+   older companion that omits a tuple in the newer firmware filter is refused.
+   Only a tuple genuinely unknown to the installed firmware may use the generic
+   ladder. The companion must therefore compare its root to the `CMD`-reported
+   firmware root and require a compatible update on mismatch. **No version
+   negotiation; mismatch = refuse affected known calls, never mis-render.**
 
 4. **Resync cadence (post-ship): batched, not per-descriptor.** Roll the
    vendored corpus + root on the normal FW-release train (see the resync
@@ -68,7 +67,7 @@ chain and stored in flash:
   trust anchor under the release key. Costs: a new flash page + rollback
   counter, a monotonicity gate, and its own adversarial-review + Kani landing
   (a new signed-artifact parser is attack surface). **Deferred** until the
-  release-cadence pain is real; the fail-safe decline (decision #3) makes the
+  release-cadence pain is real; the fail-closed refusal (decision #3) makes the
   compiled-in-only design correct-but-inconvenient, never unsafe.
 
 ## Resync ceremony (the recurring operation)

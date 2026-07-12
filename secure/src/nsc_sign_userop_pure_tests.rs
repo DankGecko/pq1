@@ -1090,6 +1090,14 @@ fn negative_slice_binds_sender_before_confirm_sign_or_counter_write() {
     assert!(helper.contains("Ok(expected_a)"));
     assert!(helper.contains("Ok(expected_b)"));
     assert!(helper.contains("derivations_agree"));
+    assert!(helper.contains("wallet_address_for_account_cross_check("));
+    assert!(WALLET_ADDRESS_SRC.contains("fn proxy_address_cross_check("));
+    assert!(WALLET_ADDRESS_SRC.contains("h.update(core::hint::black_box(&pk_seed[..]))"));
+    assert!(WALLET_ADDRESS_SRC.contains("h.update(core::hint::black_box(&pk_root[..]))"));
+    assert!(WALLET_ADDRESS_SRC.contains("h.update(core::hint::black_box(&preimage[..21]))"));
+    assert!(WALLET_ADDRESS_SRC.contains(
+        "crate::aa::eip1271::proxy_address(&pk_seed, &pk_root)"
+    ));
     assert!(helper.contains("check_true_into_sentinel"));
     assert!(helper.contains("SenderBinding"));
     assert!(WALLET_ADDRESS_SRC.contains(
@@ -1111,9 +1119,15 @@ fn negative_slice_binds_sender_before_confirm_sign_or_counter_write() {
 }
 
 #[test]
-fn negative_slice_every_userop_confirm_gets_bound_signer_page() {
-    assert_eq!(CMD_SIGN_USEROP_SRC.matches("enforce_from_page(").count(), 2);
-    assert!(CMD_SIGN_USEROP_SRC.contains("&mut rotate_pages"));
+fn negative_slice_every_userop_confirm_gets_bound_from_page() {
+    assert_eq!(
+        CMD_SIGN_USEROP_SRC.matches("enforce_from_page(").count(),
+        2,
+        "slot-rotation and transaction confirms must each show source identity"
+    );
+    assert!(CMD_SIGN_USEROP_SRC.contains(
+        "enforce_from_page(\n            &mut rotate_pages,\n            account_index,\n            &sender,"
+    ));
     assert!(CMD_SIGN_USEROP_SRC.contains(
         "enforce_from_page(&mut pages, account_index, &sender)"
     ));
@@ -1122,21 +1136,51 @@ fn negative_slice_every_userop_confirm_gets_bound_signer_page() {
 }
 
 #[test]
+fn negative_slice_transaction_confirm_gets_full_target_page() {
+    assert_eq!(CMD_SIGN_USEROP_SRC.matches("enforce_target_page(").count(), 1);
+    assert_eq!(CMD_SIGN_USEROP_SRC.matches("target_page_proof(").count(), 1);
+    assert!(CMD_SIGN_USEROP_SRC.contains(
+        "enforce_target_page(&mut pages, &to_address)"
+    ));
+    assert!(CMD_SIGN_USEROP_SRC.contains("TARGET_IDENTITY_PAGES"));
+    assert!(CMD_SIGN_USEROP_SRC.contains("target unshown"));
+}
+
+#[test]
 fn negative_slice_shows_and_fi_proves_full_derived_signer_identity() {
+    assert_eq!(
+        CMD_SIGN_USEROP_SRC.matches("enforce_from_page(").count(),
+        2,
+        "rotation and transaction confirmation must both show signer identity"
+    );
+    assert_eq!(
+        CMD_SIGN_USEROP_SRC.matches("from_page_proof(").count(),
+        2,
+        "every signer-page append needs an independent FI completion proof"
+    );
     assert!(CMD_SIGN_USEROP_SRC.contains("SIGNER_IDENTITY_PAGES"));
+    assert!(CMD_SIGN_USEROP_SRC.contains("account_index, &sender"));
     assert!(!CMD_SIGN_USEROP_SRC.contains("account_index, &companion_sender"));
+
     let main_page = CMD_SIGN_USEROP_SRC
         .find("enforce_from_page(&mut pages, account_index, &sender)")
-        .unwrap();
-    let fingerprint = main_page + CMD_SIGN_USEROP_SRC[main_page..]
-        .find("append_fingerprint_page(").unwrap();
-    let confirm = fingerprint + CMD_SIGN_USEROP_SRC[fingerprint..]
-        .find("confirm_checked(pages.as_slice())").unwrap();
+        .expect("main UserOp signer page");
+    let fingerprint = CMD_SIGN_USEROP_SRC[main_page..]
+        .find("append_fingerprint_page(")
+        .map(|p| main_page + p)
+        .expect("ERC-8213 append after signer page");
+    let confirm = CMD_SIGN_USEROP_SRC[fingerprint..]
+        .find("confirm_checked(pages.as_slice())")
+        .map(|p| fingerprint + p)
+        .expect("confirmation after mandatory pages");
     assert!(main_page < fingerprint && fingerprint < confirm);
+
     assert!(VALUE_PAGE_SRC.contains("b\"Signer acct #\""));
     assert!(VALUE_PAGE_SRC.contains("primitives::write_addr_full(a, b, c, sender)"));
     assert!(VALUE_PAGE_SRC.contains("#[inline(never)]\npub(crate) fn enforce_from_page"));
     assert!(VALUE_PAGE_SRC.contains("#[inline(never)]\npub(crate) fn from_page_proof"));
+    assert!(VALUE_PAGE_SRC.contains("from_page_matches(pages, page_index"));
+    assert!(!VALUE_PAGE_SRC.contains("b\"From account:"));
 }
 
 #[test]

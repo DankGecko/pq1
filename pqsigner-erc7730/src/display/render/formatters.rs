@@ -19,38 +19,38 @@
 //! selector. Each formatter then re-interprets those 32 bytes per the
 //! type its `FormatOp` implies (uint256, address, bool, …).
 //!
-//! For STATIC types (uint*, int*, address, bytes32, bool, static
-//! tuples) this is correct. DYNAMIC types (bytes, string, dynamic
-//! arrays, dynamic tuples) are out of scope for Phase 4 — the slot
-//! would carry a 32-byte BE offset rather than the value, and a
-//! formatter that tried to render it as Uint would surface the offset
-//! instead of the value. The seed corpus is all static types except
-//! `OpenSea` ([`bytes`] for `calldata`/`replacementPattern`), which
-//! the `Calldata` formatter routes through `calldata_nested` (which
-//! itself rejects in Phase 4 and falls through to blind-sign).
+//! Static types (uint*, int*, address, bytes32, bool, and static tuples) are
+//! read from the exact authenticated head. Dynamic support is deliberately
+//! narrower: one top-level C1 `bytes`/`string` leaf, or one supported primitive
+//! dynamic array, may occupy the sole canonical tail. A format-level preflight
+//! validates the offset, length, zero right-padding, and exact end-of-calldata
+//! framing before visibility is evaluated. C2 dynamic-tuple descent, multiple
+//! dynamic tails, aliasing, gaps, and trailing bytes hard-refuse the known call;
+//! they never fall through to a less complete rendering.
 
-use pqsigner_tx::erc20::bundle::Erc20Metadata;
-use pqsigner_tx::names::NameResolver;
+use super::super::primitives::{
+    chain_name, format_u64, write_addr_full, write_addr_full_or_name,
+    write_amount_single_or_two_rows, write_amount_two_rows, write_line, AmountFit,
+};
 use super::amount_decision::{
     amount_decision, token_amount_decision, unit_decision, TokenAmountArm,
 };
-use super::super::primitives::{
-    chain_name, write_addr_full, write_addr_full_or_name,
-    write_amount_single_or_two_rows, write_amount_two_rows, write_line, AmountFit,
-};
-use pqsigner_tx_core::eip1559::{Eip1559Tx, U256};
 use crate::abi::container_field;
-use crate::ir::{Erc7730Ir, FieldEntry, FormatOp, PathOp};
+use crate::ir::{Erc7730Ir, FieldEntry, FormatHeader, FormatOp, PathOp};
+use pqsigner_tx::erc20::bundle::Erc20Metadata;
+use pqsigner_tx::names::NameResolver;
+use pqsigner_tx_core::eip1559::{Eip1559Tx, U256};
 // `resolve_array` (the load-bearing dynamic-array tail resolver, which reuses
 // `walk`'s Kani-proven readers) lives in the host crate so it is itself
 // Kani-verifiable; `render_array` is a thin renderer over its result, and the
 // tests reach it as `formatters::resolve_array`.
+use crate::display::{ascii_str, DISPLAY_COLS};
 pub use crate::render::array::resolve_array;
 use crate::render::params::{
-    ParamSet, DATE_ENC_BLOCKHEIGHT, DATE_ENC_TIMESTAMP,
+    parse as parse_params, ParamSet, DATE_ENC_BLOCKHEIGHT, DATE_ENC_TIMESTAMP, DYNAMIC_KIND_BYTES,
+    DYNAMIC_KIND_STRING,
 };
 use crate::render::RenderErr;
-use crate::display::{ascii_str, DISPLAY_COLS};
 
 use super::Pages;
 
@@ -193,14 +193,22 @@ pub(super) fn dispatch(
     resolver: &NameResolver<'_>,
     params: &ParamSet<'_>,
 ) -> Result<(), RenderErr> {
+    let op =
+        FormatOp::try_from(field.format_op).map_err(|_| RenderErr::Reject("7730 bad format op"))?;
     // A constant-annotation field carries no path; render its literal
     // (attested, Merkle-pinned) string directly, bypassing the format-op
-    // path resolution (which would reject on the absent path).
+    // path resolution (which would reject on the absent path). Its shape is
+    // deliberately canonical: an authenticated-but-malformed IR must not use
+    // const precedence to ignore a real signed field or an unknown formatter.
     if let Some(cv) = params.const_value {
+        if op != FormatOp::Raw || field.path_off != 0 || !const_params_are_canonical(params) {
+            return Err(RenderErr::Reject("7730 bad const shape"));
+        }
         return render_const(field, pages, cv);
     }
-    let op = FormatOp::try_from(field.format_op)
-        .map_err(|_| RenderErr::Reject("7730 bad format op"))?;
+    if field.path_off == 0 {
+        return Err(RenderErr::Reject("7730 missing field path"));
+    }
     match op {
         FormatOp::Raw => render_raw(field, pages, ir, body, tx, params),
         FormatOp::Amount => render_amount(field, pages, ir, body, tx, params),
@@ -210,9 +218,17 @@ pub(super) fn dispatch(
         FormatOp::NftName => render_nft_name(field, pages, ir, body, tx, resolver, params),
         FormatOp::Date => render_date(field, pages, ir, body, tx, params),
         FormatOp::Duration => render_duration(field, pages, ir, body, tx),
-        FormatOp::AddressName => render_address_name(field, pages, ir, body, tx, resolver),
+        FormatOp::AddressName => render_address_name(field, pages, ir, body, tx, resolver, params),
         FormatOp::Enum => render_enum(field, pages, ir, body, tx, params),
-        FormatOp::Unit => render_unit(field, pages, ir, body, tx, params),
+        FormatOp::Unit => {
+            // The current painter supports the standard suffix placement only.
+            // Do not silently ignore a descriptor requesting a prefix or an
+            // additional suffix: that changes the human meaning of the number.
+            if params.prefix.is_some_and(|v| v != 0) || params.suffix.is_some() {
+                return Err(RenderErr::Reject("7730 unit affix unsupported"));
+            }
+            render_unit(field, pages, ir, body, tx, params)
+        }
         FormatOp::Calldata => super::calldata_nested::render(field, pages, params),
         FormatOp::ChainId => render_chain_id(field, pages, ir, body, tx),
         FormatOp::TokenTicker => {
@@ -223,6 +239,57 @@ pub(super) fn dispatch(
         }
         FormatOp::Encrypted => render_encrypted(field, pages, params),
     }
+}
+
+/// Constant annotations may carry visibility, but no formatter-specific
+/// parameter. This closes the precedence gadget where a `const_value` made the
+/// dispatcher silently ignore token paths, scaling, nested-call metadata, etc.
+fn const_params_are_canonical(params: &ParamSet<'_>) -> bool {
+    params.token_path.is_none()
+        && params.token.is_none()
+        && params.threshold.is_none()
+        && params.message.is_none()
+        && params.addr_types.is_none()
+        && params.addr_sources.is_none()
+        && params.date_encoding.is_none()
+        && params.enum_ref.is_none()
+        && params.decimals.is_none()
+        && params.base.is_none()
+        && params.prefix.is_none()
+        && params.suffix.is_none()
+        && params.nested_selector.is_none()
+        && params.nested_callee.is_none()
+        && params.fallback_label.is_none()
+        && params.visibility_values.is_none()
+        && params.nested_struct.is_none()
+        && params.native_currency.is_none()
+        && params.dynamic_kind.is_none()
+}
+
+/// A dynamic ABI string is a special case of `raw`: the exact authenticated
+/// bytes are painted as text plus an explicit length. No semantic formatter
+/// parameter may survive this routing shortcut, otherwise an IR could request
+/// `amount`/`addressName`/`unit` semantics and have them silently ignored.
+fn dynamic_string_params_are_canonical(params: &ParamSet<'_>) -> bool {
+    params.token_path.is_none()
+        && params.token.is_none()
+        && params.threshold.is_none()
+        && params.message.is_none()
+        && params.addr_types.is_none()
+        && params.addr_sources.is_none()
+        && params.date_encoding.is_none()
+        && params.enum_ref.is_none()
+        && params.decimals.is_none()
+        && params.base.is_none()
+        && params.prefix.is_none()
+        && params.suffix.is_none()
+        && params.nested_selector.is_none()
+        && params.nested_callee.is_none()
+        && params.fallback_label.is_none()
+        && params.const_value.is_none()
+        && params.nested_struct.is_none()
+        && params.native_currency.is_none()
+        && params.dynamic_kind == Some(DYNAMIC_KIND_STRING)
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -271,21 +338,45 @@ fn render_amount(
     };
     let value = U256(raw);
     // WHICH decimals/ticker paint — the pure, ∀-proven decision half (M4
-    // factoring): the `amount` format is the chain's NATIVE currency, so
-    // decimals default 18 and the ticker defaults per chain (POL/BNB/AVAX/…
-    // instead of always "ETH", review 3.5); a descriptor-supplied
-    // `params.base` still overrides. See `amount_decision::amount_decision`.
-    let d = amount_decision(tx.chain_id, params);
-    let [_, r1, r2, foot] = pages.page_mut(p);
-    let fit =
-        write_amount_single_or_two_rows(r1, r2, &value, d.decimals, 6, true, true, ascii_str(d.unit));
-    write_line(
-        foot,
-        match fit {
-            AmountFit::Full => "> next",
-            AmountFit::Overflow => "!AMOUNT OVERFLOW",
-        },
-    );
+    // factoring). Descriptor-pinned decimals are authoritative. Without them,
+    // only a chain in the firmware's audited native table may inherit 18;
+    // unknown chains render the exact raw integer instead of an assumed scale.
+    // See `amount_decision::amount_decision`.
+    let Some(d) = amount_decision(tx.chain_id, params) else {
+        let fit = {
+            let [_, r1, r2, foot] = pages.page_mut(p);
+            let fit = write_amount_two_rows(r1, r2, &value, 0, 0, false, true, "");
+            if fit == AmountFit::Full {
+                write_line(foot, "! raw, dec=?");
+            }
+            fit
+        };
+        return if fit == AmountFit::Full {
+            Ok(())
+        } else {
+            write_raw_word_two_pages(pages, p, field.label, &raw)
+        };
+    };
+    let fit = {
+        let [_, r1, r2, foot] = pages.page_mut(p);
+        let fit = write_amount_single_or_two_rows(
+            r1,
+            r2,
+            &value,
+            d.decimals,
+            6,
+            true,
+            true,
+            ascii_str(d.unit),
+        );
+        if fit == AmountFit::Full {
+            write_line(foot, "> next");
+        }
+        fit
+    };
+    if fit == AmountFit::Overflow {
+        return write_raw_word_two_pages(pages, p, field.label, &raw);
+    }
     Ok(())
 }
 
@@ -309,13 +400,18 @@ fn render_token_amount(
     // Resolve token contract address (params.tokenPath wins; falls
     // back to params.token literal). Used to decide which decimals /
     // symbol to display.
-    let token_addr = resolve_token_address(ir, body, tx, params).ok();
+    let token_addr = if params.token_path.is_some() || params.token.is_some() {
+        Some(resolve_token_address(ir, body, tx, params)?)
+    } else {
+        None
+    };
 
     // WHICH arm paints — the pure, ∀-proven decision half (M4 factoring;
     // Kani closes it without ever seeing the format_decimal paint path).
     // The full ladder rationale lives on
     // `amount_decision::token_amount_decision`: native-sentinel precedence
-    // over the erc20 bundle, Merkle-bound-only decimals/symbol, the
+    // over the erc20 bundle, descriptor/known-chain-only native decimals,
+    // Merkle-bound-only ERC-20 decimals/symbol, the
     // threshold gate HOISTED ABOVE the bound match (review 4.5), the
     // validated `message` override (review 3.6), the M-4 raw fallback and
     // the MEDIUM-1 identity-page rule.
@@ -323,49 +419,75 @@ fn render_token_amount(
 
     let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
     write_label_row(pages, p, field.label);
-    let [_, r1, r2, foot] = pages.page_mut(p);
+    let mut raw_fallback = false;
+    // A bound token normally carries its identity in the fully-rendered
+    // ticker. If painting the amount/ticker overflows, or an unlimited label
+    // cannot show the ticker byte-exactly, the raw/message page alone would be
+    // identical for different token contracts. Remember the authenticated
+    // ticker so an exact token-identity page can be appended below.
+    let mut bound_identity_ticker: Option<&[u8]> = None;
 
-    match decision.arm {
-        // "unlimited <ticker>" — the approve-all sentinel on a bound token.
-        TokenAmountArm::Unlimited { message, ticker } => {
-            write_unlimited_row(r1, message, ticker);
-            write_line(foot, "> next");
+    {
+        let [_, r1, r2, foot] = pages.page_mut(p);
+        match decision.arm {
+            // "unlimited <ticker>" — the approve-all sentinel on a bound token.
+            // Never silently truncate the ticker. If message+ticker do not fit on
+            // one row, use the second value row; an overlong ticker falls back to
+            // an exact token-identity page instead.
+            TokenAmountArm::Unlimited { message, ticker } => {
+                if !write_unlimited_rows(r1, r2, message, ticker) {
+                    bound_identity_ticker = Some(ticker);
+                }
+                write_line(foot, "> next");
+            }
+            // Unlimited on an UNKNOWN token: still the loud message (an unbound
+            // 2^256-1 used to fall through to "!AMOUNT OVERFLOW" — an alarming
+            // banner, no value — exactly when trust is LOWEST), marked
+            // "(unverified)" so the missing token identity stays loud (the
+            // identity page below still shows the address).
+            TokenAmountArm::UnlimitedUnverified { message } => {
+                write_line_bytes(r1, message);
+                write_line(r2, "(unverified)");
+                write_line(foot, "> next");
+            }
+            TokenAmountArm::Bound { decimals, ticker } => {
+                let fit = write_amount_single_or_two_rows(
+                    r1,
+                    r2,
+                    &value,
+                    decimals,
+                    6,
+                    true,
+                    true,
+                    ascii_str(ticker),
+                );
+                if fit == AmountFit::Full {
+                    write_line(foot, "> next");
+                } else {
+                    raw_fallback = true;
+                    bound_identity_ticker = Some(ticker);
+                }
+            }
+            // Audit M-4: never present a scaled decimal with an assumed scale.
+            // Show the RAW integer (no scaling) and label the unknown scale
+            // loudly so the user knows the magnitude is uninterpreted.
+            TokenAmountArm::UnverifiedRaw => {
+                let fit = write_amount_two_rows(r1, r2, &value, 0, 0, false, true, "");
+                if fit == AmountFit::Full {
+                    write_line(foot, "! raw, dec=?");
+                } else {
+                    raw_fallback = true;
+                }
+            }
         }
-        // Unlimited on an UNKNOWN token: still the loud message (an unbound
-        // 2^256-1 used to fall through to "!AMOUNT OVERFLOW" — an alarming
-        // banner, no value — exactly when trust is LOWEST), marked
-        // "(unverified)" so the missing token identity stays loud (the
-        // identity page below still shows the address).
-        TokenAmountArm::UnlimitedUnverified { message } => {
-            write_line_bytes(r1, message);
-            write_line(r2, "(unverified)");
-            write_line(foot, "> next");
-        }
-        TokenAmountArm::Bound { decimals, ticker } => {
-            let fit = write_amount_single_or_two_rows(
-                r1, r2, &value, decimals, 6, true, true, ascii_str(ticker),
-            );
-            write_line(
-                foot,
-                match fit {
-                    AmountFit::Full => "> next",
-                    AmountFit::Overflow => "!AMOUNT OVERFLOW",
-                },
-            );
-        }
-        // Audit M-4: never present a scaled decimal with an assumed scale.
-        // Show the RAW integer (no scaling) and label the unknown scale
-        // loudly so the user knows the magnitude is uninterpreted.
-        TokenAmountArm::UnverifiedRaw => {
-            let fit = write_amount_two_rows(r1, r2, &value, 0, 0, false, true, "");
-            write_line(
-                foot,
-                match fit {
-                    AmountFit::Full => "! raw, dec=?",
-                    AmountFit::Overflow => "!AMOUNT OVERFLOW",
-                },
-            );
-        }
+    }
+
+    if raw_fallback {
+        write_raw_word_two_pages(pages, p, field.label, &raw)?;
+    }
+
+    if let Some(ticker) = bound_identity_ticker {
+        append_bound_token_identity(pages, token_addr, params, ticker)?;
     }
 
     // Audit 2026-06-25 MEDIUM-1: with no Merkle-verified metadata we cannot
@@ -374,7 +496,7 @@ fn render_token_amount(
     // could not be bound (see `TokenAmountDecision::identity_page` for the
     // full rule). Render it on its own page (resolver-aware) so the
     // contract identity is never omitted from the trusted display; the
-    // page-budget gate fails closed to blind-sign on overflow.
+    // page-budget gate hard-refuses the verified/known call on overflow.
     if let Some(addr) = decision.identity_page {
         let ap = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
         write_label_row(pages, ap, b"Token (UNVERIFIED)");
@@ -384,24 +506,70 @@ fn render_token_amount(
     Ok(())
 }
 
-/// Render `"unlimited <ticker>"` into a single 16-col display row. Used
+/// Render `"unlimited <ticker>"` without truncating either component. Used
 /// by `render_token_amount` when the descriptor's `threshold` param
 /// classifies the on-chain value as the approve-all sentinel.
-/// Render `"<message> <ticker>"` into a single row. `message` is the threshold
-/// wording — the descriptor's `message` param, default `"unlimited"` (review
-/// 3.6), already validated as printable + row-fitting by
-/// `amount_decision::token_amount_decision`.
-fn write_unlimited_row(row: &mut [u8; DISPLAY_COLS], message: &[u8], ticker: &[u8]) {
-    let mut buf = [b' '; DISPLAY_COLS];
-    let n = core::cmp::min(message.len(), buf.len());
-    buf[..n].copy_from_slice(&message[..n]);
-    // " <ticker>" after the message (buf[n] stays the separating space).
-    if n + 1 < buf.len() && !ticker.is_empty() {
-        let room = buf.len() - (n + 1);
-        let take = core::cmp::min(ticker.len(), room);
-        buf[n + 1..n + 1 + take].copy_from_slice(&ticker[..take]);
+/// `message` is the descriptor's threshold wording (default `"unlimited"`),
+/// already validated as printable and at most one row. Returns `true` only
+/// when the complete ticker is on screen. A ticker longer than one row is not
+/// partially painted: row 2 points to the exact identity page the caller must
+/// append, closing the old prefix-collision (`LONGTOKEN-A`/`LONGTOKEN-B` both
+/// displayed as `"unlimited LONGTO"`).
+fn write_unlimited_rows(
+    row1: &mut [u8; DISPLAY_COLS],
+    row2: &mut [u8; DISPLAY_COLS],
+    message: &[u8],
+    ticker: &[u8],
+) -> bool {
+    *row1 = [b' '; DISPLAY_COLS];
+    *row2 = [b' '; DISPLAY_COLS];
+
+    let combined = message
+        .len()
+        .checked_add(1)
+        .and_then(|n| n.checked_add(ticker.len()));
+    if !ticker.is_empty() && combined.is_some_and(|n| n <= DISPLAY_COLS) {
+        row1[..message.len()].copy_from_slice(message);
+        row1[message.len()] = b' ';
+        row1[message.len() + 1..message.len() + 1 + ticker.len()].copy_from_slice(ticker);
+        return true;
     }
-    *row = buf;
+
+    write_line_bytes(row1, message);
+    if !ticker.is_empty() && ticker.len() <= DISPLAY_COLS {
+        write_line_bytes(row2, ticker);
+        true
+    } else {
+        write_line(row2, "(see token)");
+        false
+    }
+}
+
+/// Append an injective identity sink after a BOUND token's normal ticker could
+/// not be painted. ERC-20s use the full EIP-55 contract address, never the
+/// resolver's abbreviated name form. Native sentinels have no contract, so
+/// their short firmware-pinned ticker is shown byte-exactly instead.
+fn append_bound_token_identity(
+    pages: &mut Pages,
+    token_addr: Option<[u8; 20]>,
+    params: &ParamSet<'_>,
+    ticker: &[u8],
+) -> Result<(), RenderErr> {
+    let addr = token_addr.ok_or(RenderErr::Reject("7730 bound token missing"))?;
+    let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
+    if params.native_currency.is_some_and(|native| *native == addr) {
+        if ticker.is_empty() || ticker.len() > DISPLAY_COLS {
+            return Err(RenderErr::Reject("7730 native ticker too long"));
+        }
+        write_label_row(pages, p, b"Native token");
+        let [_, r1, _r2, _r3] = pages.page_mut(p);
+        write_line_bytes(r1, ticker);
+    } else {
+        write_label_row(pages, p, b"Token contract");
+        let [_, r1, r2, r3] = pages.page_mut(p);
+        write_addr_full(r1, r2, r3, &addr);
+    }
+    Ok(())
 }
 
 fn render_nft_name(
@@ -462,16 +630,7 @@ fn render_date(
     };
     let secs = match read_u64_be_tail(&bytes) {
         Some(s) => s,
-        None => {
-            // Signed uint256 exceeds u64: its low 64 bits as a date/block
-            // would be unrelated to what is signed. Fail loud, never a
-            // misleading small value (audit 2026-06-23).
-            let [_, r1, r2, foot] = pages.page_mut(p);
-            write_line(r1, "! TIME >2^64");
-            write_line(r2, "(overflow)");
-            write_line(foot, "> next");
-            return Ok(());
-        }
+        None => return write_raw_word_two_pages(pages, p, field.label, &bytes),
     };
     let enc = params.date_encoding.unwrap_or(DATE_ENC_TIMESTAMP);
     let [_, r1, r2, foot] = pages.page_mut(p);
@@ -508,11 +667,12 @@ fn render_date(
             write_decimal_into(&mut row, 0, secs);
             *r2 = row;
         } else {
-            write_line(r1, "Block height:");
-            write_line(r2, "! >1e16 (ovf)");
+            return write_raw_word_two_pages(pages, p, field.label, &bytes);
         }
     } else {
-        format_iso8601_utc(secs, r1, r2);
+        if !format_iso8601_utc(secs, r1, r2) {
+            return write_raw_word_two_pages(pages, p, field.label, &bytes);
+        }
     }
     write_line(foot, "> next");
     Ok(())
@@ -533,17 +693,12 @@ fn render_duration(
     };
     let secs = match read_u64_be_tail(&bytes) {
         Some(s) => s,
-        None => {
-            // Signed uint256 exceeds u64: fail loud rather than render a
-            // truncated duration (audit 2026-06-23).
-            let [_, r1, _r2, foot] = pages.page_mut(p);
-            write_line(r1, "! DUR >2^64");
-            write_line(foot, "> next");
-            return Ok(());
-        }
+        None => return write_raw_word_two_pages(pages, p, field.label, &bytes),
     };
     let [_, r1, _r2, foot] = pages.page_mut(p);
-    format_duration(secs, r1);
+    if !format_duration(secs, r1) {
+        return write_raw_word_two_pages(pages, p, field.label, &bytes);
+    }
     write_line(foot, "> next");
     Ok(())
 }
@@ -555,20 +710,24 @@ fn render_address_name(
     body: &[u8],
     tx: &Eip1559Tx,
     resolver: &NameResolver<'_>,
+    params: &ParamSet<'_>,
 ) -> Result<(), RenderErr> {
     let addr = match resolve_path(ir, field.path_off, body)? {
-        Resolved::Slot32(b) => {
-            // address is right-aligned in a 32-byte slot.
-            let mut a = [0u8; 20];
-            a.copy_from_slice(&b[12..]);
-            a
-        }
+        Resolved::Slot32(b) => canonical_address_word(b)?,
         Resolved::Container(idx) => container_addr(tx, idx)?,
     };
     let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
     write_label_row(pages, p, field.label);
     let [_, r1, r2, r3] = pages.page_mut(p);
-    write_addr_full_or_name(r1, r2, r3, &addr, tx.chain_id, resolver);
+    // The authenticated name DB currently carries no source provenance or
+    // entity type. When a descriptor declares either restriction we cannot
+    // prove a resolved label satisfies it, so retain WYSIWYS by showing the
+    // complete address instead of substituting a possibly-disallowed name.
+    if params.addr_types.is_some() || params.addr_sources.is_some() {
+        write_addr_full(r1, r2, r3, &addr);
+    } else {
+        write_addr_full_or_name(r1, r2, r3, &addr, tx.chain_id, resolver);
+    }
     Ok(())
 }
 
@@ -578,20 +737,29 @@ fn render_address_name(
 /// every transaction (e.g. the ERC-4626 vault share/asset tickers). The
 /// string is Merkle-pinned, so it is no more trusted than the field label
 /// or intent banner.
-fn render_const(
-    field: &FieldEntry<'_>,
-    pages: &mut Pages,
-    value: &[u8],
-) -> Result<(), RenderErr> {
-    let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
-    write_label_row(pages, p, field.label);
-    let [_, r1, r2, r3] = pages.page_mut(p);
-    let rows: [&mut [u8; DISPLAY_COLS]; 3] = [r1, r2, r3];
-    let mut chunks = value.chunks(DISPLAY_COLS);
-    for row in rows {
-        match chunks.next() {
-            Some(c) => write_line_bytes(row, c),
-            None => write_line_bytes(row, b""),
+fn render_const(field: &FieldEntry<'_>, pages: &mut Pages, value: &[u8]) -> Result<(), RenderErr> {
+    // A trailing space is indistinguishable from display padding unless a
+    // length marker is shown. Constants are descriptor annotations rather than
+    // signed payload, so keep their encoding canonical and reject that
+    // ambiguity. Long values span as many complete pages as needed; never drop
+    // bytes after the old three-row/48-byte boundary.
+    if value.is_empty()
+        || value.last() == Some(&b' ')
+        || !value.iter().all(|&b| (0x20..0x7f).contains(&b))
+    {
+        return Err(RenderErr::Reject("7730 bad const value"));
+    }
+    for page_chunk in value.chunks(3 * DISPLAY_COLS) {
+        let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
+        write_label_row(pages, p, field.label);
+        let [_, r1, r2, r3] = pages.page_mut(p);
+        let rows: [&mut [u8; DISPLAY_COLS]; 3] = [r1, r2, r3];
+        let mut chunks = page_chunk.chunks(DISPLAY_COLS);
+        for row in rows {
+            match chunks.next() {
+                Some(c) => write_line_bytes(row, c),
+                None => write_line_bytes(row, b""),
+            }
         }
     }
     Ok(())
@@ -603,12 +771,9 @@ fn render_const(
 /// Validates the opcode STRUCTURE, not just `prog.last() == 0x24` — a scalar
 /// field's terminal `FieldIdx` whose 2-byte arg's low byte is `0x24`
 /// (`PathOp::ArrayAll`) must NOT misroute to `render_array` (it would still
-/// decline-to-blind there, but it would needlessly blind-sign an otherwise
-/// clear-signable scalar field).
-pub fn path_ends_with_array_all(
-    ir: &Erc7730Ir<'_>,
-    path_off: u16,
-) -> Result<bool, RenderErr> {
+/// reject there, but it would needlessly refuse an otherwise clear-signable
+/// scalar field).
+pub fn path_ends_with_array_all(ir: &Erc7730Ir<'_>, path_off: u16) -> Result<bool, RenderErr> {
     if path_off == 0 {
         return Ok(false);
     }
@@ -643,8 +808,9 @@ pub fn path_ends_with_array_all(
     Ok(false)
 }
 
-/// A `<arg>.[]` array path is MULTI-dynamic (relaxed `MultiInTail` placement)
-/// iff it carries a `FollowOffset` marker before the terminal `ArrayAll`.
+/// Detect the retired multi-dynamic array marker (`FollowOffset` before the
+/// terminal `ArrayAll`). It is parsed structurally so the format preflight and
+/// renderer can hard-refuse it; no relaxed production resolver remains.
 fn array_all_is_multi(ir: &Erc7730Ir<'_>, path_off: u16) -> Result<bool, RenderErr> {
     if path_off == 0 {
         return Ok(false);
@@ -658,7 +824,42 @@ fn array_all_is_multi(ir: &Erc7730Ir<'_>, path_off: u16) -> Result<bool, RenderE
         .pool
         .get(off + 1..off + 1 + len)
         .ok_or(RenderErr::Reject("7730 truncated path"))?;
-    Ok(prog.contains(&(PathOp::FollowOffset as u8)))
+    if prog.first() != Some(&(PathOp::RootStructured as u8)) {
+        return Ok(false);
+    }
+
+    // Decode opcodes at their structural boundaries. A raw byte search is
+    // unsafe here because the two-byte operand of FieldIdx is attacker-chosen
+    // authenticated IR and may itself contain 0x25 (FollowOffset), which would
+    // otherwise route a sole-array path through the relaxed multi-tail checks.
+    let mut p = 1usize;
+    let mut saw_follow = false;
+    while let Some(&raw) = prog.get(p) {
+        let op = PathOp::try_from(raw).map_err(|_| RenderErr::Reject("7730 bad array path op"))?;
+        match op {
+            PathOp::FieldIdx => {
+                if p + 3 > prog.len() {
+                    return Err(RenderErr::Reject("7730 truncated array field"));
+                }
+                p += 3;
+            }
+            PathOp::FollowOffset => {
+                if saw_follow {
+                    return Err(RenderErr::Reject("7730 duplicate array follow"));
+                }
+                saw_follow = true;
+                p += 1;
+            }
+            PathOp::ArrayAll => {
+                if p + 1 != prog.len() {
+                    return Err(RenderErr::Reject("7730 trailing array path"));
+                }
+                return Ok(saw_follow);
+            }
+            _ => return Err(RenderErr::Reject("7730 bad array path shape")),
+        }
+    }
+    Err(RenderErr::Reject("7730 missing array-all"))
 }
 
 /// Scan a compiled structured path's opcodes → `(needs_full_body, is_dynamic_leaf)`.
@@ -751,13 +952,225 @@ pub(crate) fn token_path_needs_full_body(params: &ParamSet<'_>) -> bool {
     false
 }
 
+/// Enforce that a structured path's first ABI offset/static word comes from the
+/// format-declared top-level head. Dynamic renderers need the full calldata body
+/// after following that word; without this independent clamp a malicious IR
+/// could put its first `FieldIdx` in the tail and reinterpret attacker-chosen
+/// bytes there as an offset.
+fn validate_root_program_static_head(prog: &[u8], static_head_words: u16) -> Result<(), RenderErr> {
+    if prog.first() != Some(&(PathOp::RootStructured as u8)) {
+        return Ok(());
+    }
+    let mut p = 1usize;
+    let mut slot = 0usize;
+    let mut saw_field = false;
+    while p < prog.len() {
+        let op = PathOp::try_from(prog[p]).map_err(|_| RenderErr::Reject("7730 bad path op"))?;
+        match op {
+            PathOp::FieldIdx => {
+                let arg = prog
+                    .get(p + 1..p + 3)
+                    .ok_or(RenderErr::Reject("7730 truncated field idx"))?;
+                slot = slot
+                    .checked_add(u16::from_be_bytes([arg[0], arg[1]]) as usize)
+                    .ok_or(RenderErr::Reject("7730 root slot overflow"))?;
+                saw_field = true;
+                p += 3;
+            }
+            // Once an offset is followed, later indices are relative to the
+            // nested region and need a different bound. This guard is solely
+            // for the top-level, signature-fixed offset word.
+            PathOp::FollowOffset => break,
+            PathOp::ArrayAll | PathOp::ArrayIdx | PathOp::ArrayLast | PathOp::ArraySlice => break,
+            _ => return Err(RenderErr::Reject("7730 bad structured root")),
+        }
+    }
+    if !saw_field || slot >= static_head_words as usize {
+        return Err(RenderErr::Reject("7730 root outside static head"));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_path_static_head(
+    ir: &Erc7730Ir<'_>,
+    path_off: u16,
+    static_head_words: u16,
+) -> Result<(), RenderErr> {
+    if path_off == 0 {
+        return Ok(()); // canonical const validation owns the no-path case
+    }
+    let prog = ir
+        .path_bytes(path_off)
+        .map_err(|_| RenderErr::Reject("7730 bad path"))?;
+    validate_root_program_static_head(prog, static_head_words)
+}
+
+pub(crate) fn validate_token_path_static_head(
+    params: &ParamSet<'_>,
+    static_head_words: u16,
+) -> Result<(), RenderErr> {
+    match params.token_path {
+        Some(prog) => validate_root_program_static_head(prog, static_head_words),
+        None => Ok(()),
+    }
+}
+
+/// Bind every exact dynamic-tail reference in one format to a single
+/// top-level offset-word slot.
+fn bind_sole_dynamic_slot(seen: &mut Option<usize>, slot: usize) -> Result<(), RenderErr> {
+    match *seen {
+        Some(previous) if previous != slot => Err(RenderErr::Reject("7730 multiple dynamic args")),
+        Some(_) => Ok(()),
+        None => {
+            *seen = Some(slot);
+            Ok(())
+        }
+    }
+}
+
+/// Parse the exact sole-array program emitted by dbgen:
+/// `RootStructured FieldIdx(slot) ArrayAll`.
+fn sole_array_slot(ir: &Erc7730Ir<'_>, path_off: u16) -> Result<usize, RenderErr> {
+    let prog = ir
+        .path_bytes(path_off)
+        .map_err(|_| RenderErr::Reject("7730 bad array path"))?;
+    if prog.len() != 5
+        || prog[0] != PathOp::RootStructured as u8
+        || prog[1] != PathOp::FieldIdx as u8
+        || prog[4] != PathOp::ArrayAll as u8
+    {
+        return Err(RenderErr::Reject("7730 noncanonical array path"));
+    }
+    Ok(u16::from_be_bytes([prog[2], prog[3]]) as usize)
+}
+
+/// Validate a top-level C1 `bytes`/`string` leaf as the sole exact tail.
+fn validate_c1_dynamic_leaf<'a>(
+    ir: &Erc7730Ir<'_>,
+    field: &FieldEntry<'_>,
+    params: &ParamSet<'_>,
+    full_body: &'a [u8],
+    static_head_words: u16,
+) -> Result<(usize, &'a [u8]), RenderErr> {
+    if !matches!(
+        params.dynamic_kind,
+        Some(DYNAMIC_KIND_STRING) | Some(DYNAMIC_KIND_BYTES)
+    ) {
+        return Err(RenderErr::Reject("7730 dynamic type unbound"));
+    }
+    let prog = ir
+        .path_bytes(field.path_off)
+        .map_err(|_| RenderErr::Reject("7730 bad dynamic path"))?;
+    if prog.first() != Some(&(PathOp::RootStructured as u8)) {
+        return Err(RenderErr::Reject("7730 dyn bad root"));
+    }
+    let slot = crate::render::resolve::c1_dynamic_slot(&prog[1..])?;
+    if slot >= static_head_words as usize {
+        return Err(RenderErr::Reject("7730 dynamic slot out of head"));
+    }
+    let head_end = (static_head_words as usize)
+        .checked_mul(32)
+        .ok_or(RenderErr::Reject("7730 dynamic head ovf"))?;
+    let leaf = crate::render::resolve::resolve_structured(&prog[1..], full_body)?;
+    let off = match leaf {
+        crate::render::resolve::Leaf::Dynamic(off) => off,
+        crate::render::resolve::Leaf::Word(_) => {
+            return Err(RenderErr::Reject("7730 dyn leaf is word"))
+        }
+    };
+    let data = crate::render::resolve::read_dynamic_whole_tail(full_body, off, head_end)?;
+    Ok((slot, data))
+}
+
+/// Format-level canonical ABI preflight for contract calldata.
+///
+/// This runs before visibility and before any pages are painted, so hidden
+/// fields cannot bypass framing validation. Today's IR can prove exact layout
+/// only for all-static calls and sole top-level dynamic tails (C1 string/bytes,
+/// a sole primitive array, or a sole tokenPath bytes/address[] container):
+///
+/// * all-static: calldata body length equals the authenticated head length;
+/// * sole dynamic: offset equals head end and the padded object consumes the
+///   complete body;
+/// * every dynamic reference names the same head slot;
+/// * C2 dynamic-tuple descent and the retired relaxed multi-array marker reject.
+///
+/// Dbgen enforces the corresponding signature-level restrictions. This belt
+/// independently covers hidden paths and authenticated-but-malformed IR.
+pub(crate) fn validate_contract_calldata_framing(
+    ir: &Erc7730Ir<'_>,
+    format: &FormatHeader<'_>,
+    full_body: &[u8],
+) -> Result<(), RenderErr> {
+    let head_end = (format.static_head_words as usize)
+        .checked_mul(32)
+        .ok_or(RenderErr::Reject("7730 head overflow"))?;
+    if full_body.len() < head_end {
+        return Err(RenderErr::Reject("7730 short head"));
+    }
+
+    let mut dynamic_slot: Option<usize> = None;
+    for field_result in format.fields() {
+        let field = field_result.map_err(|_| RenderErr::Reject("7730 bad field"))?;
+        let params = parse_params(ir, field.param_off)?;
+        validate_path_static_head(ir, field.path_off, format.static_head_words)?;
+        validate_token_path_static_head(&params, format.static_head_words)?;
+
+        if path_ends_with_array_all(ir, field.path_off)? {
+            if array_all_is_multi(ir, field.path_off)? {
+                return Err(RenderErr::Reject("7730 multi-array framing"));
+            }
+            let slot = sole_array_slot(ir, field.path_off)?;
+            bind_sole_dynamic_slot(&mut dynamic_slot, slot)?;
+            // Exact offset/head/end checks run even for `visible:never`.
+            let _ = resolve_array(&field, ir, full_body, format.static_head_words)?;
+        } else {
+            let (has_follow, ends_on_follow) = scan_path_ops(ir, field.path_off)?;
+            if has_follow {
+                if !ends_on_follow {
+                    return Err(RenderErr::Reject("7730 C2 framing unsupported"));
+                }
+                let (slot, _data) = validate_c1_dynamic_leaf(
+                    ir,
+                    &field,
+                    &params,
+                    full_body,
+                    format.static_head_words,
+                )?;
+                bind_sole_dynamic_slot(&mut dynamic_slot, slot)?;
+            }
+        }
+
+        if token_path_needs_full_body(&params) {
+            let token_path = params
+                .token_path
+                .ok_or(RenderErr::Reject("7730 missing token path"))?;
+            if token_path.first() != Some(&(PathOp::RootStructured as u8)) {
+                return Err(RenderErr::Reject("7730 bad token path root"));
+            }
+            let slot = crate::render::resolve::validate_canonical_token_tail(
+                &token_path[1..],
+                full_body,
+                format.static_head_words,
+            )?;
+            bind_sole_dynamic_slot(&mut dynamic_slot, slot)?;
+        }
+    }
+
+    if dynamic_slot.is_none() && full_body.len() != head_end {
+        return Err(RenderErr::Reject("7730 static calldata trailing"));
+    }
+    Ok(())
+}
+
 /// Resolve a dynamic (`bytes`/`string`) leaf to its data slice (full body).
 fn resolve_dynamic<'a>(
     ir: &Erc7730Ir<'_>,
     path_off: u16,
     body: &'a [u8],
+    static_head_words: u16,
 ) -> Result<&'a [u8], RenderErr> {
-    use crate::render::resolve::{read_dynamic, resolve_structured, Leaf};
+    use crate::render::resolve::{resolve_structured, Leaf};
     if path_off == 0 {
         return Err(RenderErr::Reject("7730 dyn no path"));
     }
@@ -773,51 +1186,66 @@ fn resolve_dynamic<'a>(
     if prog.first() != Some(&(PathOp::RootStructured as u8)) {
         return Err(RenderErr::Reject("7730 dyn bad root"));
     }
+    let slot = crate::render::resolve::c1_dynamic_slot(&prog[1..])?;
+    if slot >= static_head_words as usize {
+        return Err(RenderErr::Reject("7730 dynamic slot out of head"));
+    }
+    let head_end = (static_head_words as usize)
+        .checked_mul(32)
+        .ok_or(RenderErr::Reject("7730 dynamic head ovf"))?;
     match resolve_structured(&prog[1..], body)? {
-        Leaf::Dynamic(o) => read_dynamic(body, o),
+        Leaf::Dynamic(o) => crate::render::resolve::read_dynamic_whole_tail(body, o, head_end),
         Leaf::Word(_) => Err(RenderErr::Reject("7730 dyn leaf is word")),
     }
 }
 
-/// C1: render a dynamic `bytes`/`string` field. A string-shaped payload (all
-/// printable ASCII, within a small page budget) renders as TEXT — genuine
-/// clear-signing (`send("alice")` shows `alice`). An opaque or oversized `bytes`
-/// renders as its LENGTH + a short hex preview + a LOUD marker — never a
-/// misleading full-hex wall (a 500-byte hex dump on a 16-col screen is decoding,
-/// not clear-signing; keep it an honest "opaque blob, N bytes").
-const DYN_TEXT_MAX: usize = 3 * DISPLAY_COLS;
+/// C1: render a dynamic ABI `string` field only when dbgen authenticated its
+/// type and every byte can be shown injectively. Arbitrary `bytes` are semantic
+/// blobs, not text; accepting a length + prefix let an attacker change every
+/// byte after the preview without changing the clear-sign pages, so they now
+/// decline. The final row carries the exact byte length, making trailing spaces
+/// distinguishable from display padding (`"alice"` != `"alice "`).
+const DYN_TEXT_MAX: usize = 2 * DISPLAY_COLS;
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_dynamic_bytes(
     field: &FieldEntry<'_>,
     pages: &mut Pages,
     ir: &Erc7730Ir<'_>,
     full_body: &[u8],
+    static_head_words: u16,
     _tx: &Eip1559Tx,
     _erc20: Option<&Erc20Metadata<'_>>,
     _resolver: &NameResolver<'_>,
-    _params: &ParamSet<'_>,
+    params: &ParamSet<'_>,
 ) -> Result<(), RenderErr> {
-    let data = resolve_dynamic(ir, field.path_off, full_body)?;
-    let printable = !data.is_empty() && data.iter().all(|&b| (0x20..0x7f).contains(&b));
+    if field.format_op != FormatOp::Raw as u8 {
+        return Err(RenderErr::Reject("7730 dynamic formatter mismatch"));
+    }
+    match params.dynamic_kind {
+        Some(DYNAMIC_KIND_STRING) => {}
+        Some(DYNAMIC_KIND_BYTES) => return Err(RenderErr::Reject("7730 opaque bytes")),
+        _ => return Err(RenderErr::Reject("7730 dynamic type unbound")),
+    }
+    if !dynamic_string_params_are_canonical(params) {
+        return Err(RenderErr::Reject("7730 dynamic formatter mismatch"));
+    }
+    let data = resolve_dynamic(ir, field.path_off, full_body, static_head_words)?;
+    if data.len() > DYN_TEXT_MAX || !data.iter().all(|&b| (0x20..0x7f).contains(&b)) {
+        return Err(RenderErr::Reject("7730 string not displayable"));
+    }
     let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
     write_label_row(pages, p, field.label);
-    if printable && data.len() <= DYN_TEXT_MAX {
-        let [_, r1, r2, r3] = pages.page_mut(p);
-        let rows: [&mut [u8; DISPLAY_COLS]; 3] = [r1, r2, r3];
-        for (i, row) in rows.into_iter().enumerate() {
-            let start = i * DISPLAY_COLS;
-            if start >= data.len() {
-                break;
-            }
-            let end = (start + DISPLAY_COLS).min(data.len());
-            write_line_bytes(row, &data[start..end]);
+    let [_, r1, r2, foot] = pages.page_mut(p);
+    let rows: [&mut [u8; DISPLAY_COLS]; 2] = [r1, r2];
+    for (i, row) in rows.into_iter().enumerate() {
+        let start = i * DISPLAY_COLS;
+        if start >= data.len() {
+            break;
         }
-    } else {
-        let [_, r1, r2, foot] = pages.page_mut(p);
-        write_bytes_len_row(r1, data.len());
-        write_hex_word(r2, data); // first ≤8 bytes as a preview
-        write_line_bytes(foot, b"! opaque bytes");
+        let end = (start + DISPLAY_COLS).min(data.len());
+        write_line_bytes(row, &data[start..end]);
     }
+    write_bytes_len_row(foot, data.len());
     Ok(())
 }
 
@@ -876,20 +1304,13 @@ pub(super) fn render_array(
     resolver: &NameResolver<'_>,
     params: &ParamSet<'_>,
 ) -> Result<(), RenderErr> {
-    // Sole-dynamic array → the Kani-proven exact-placement resolver; a
-    // multi-dynamic array (FollowOffset marker) → the relaxed sibling, which
-    // still reads the array at its signature-fixed offset (WYSIWYS) but allows
-    // other dynamic args to own the rest of the tail.
-    let (elems_start, count) = if array_all_is_multi(ir, field.path_off)? {
-        crate::render::array::resolve_array_multi(
-            field,
-            ir,
-            full_body,
-            static_head_words,
-        )?
-    } else {
-        resolve_array(field, ir, full_body, static_head_words)?
-    };
+    // Only the Kani-proven sole whole-tail layout is accepted. The retired
+    // FollowOffset marker selected a relaxed multi-dynamic resolver that could
+    // not exclude aliasing, gaps, or signed trailing objects from current IR.
+    if array_all_is_multi(ir, field.path_off)? {
+        return Err(RenderErr::Reject("7730 multi-array framing"));
+    }
+    let (elems_start, count) = resolve_array(field, ir, full_body, static_head_words)?;
 
     // 8. Header page: "<label>" + "<count> items" (makes the total explicit;
     //    also the count==0 page).
@@ -912,14 +1333,18 @@ pub(super) fn render_array(
     // offset == static_head_words*32, so the head is exactly this prefix) —
     // never the array-data tail. A token that cannot be Merkle-bound is named
     // ONCE (audit M-1) and its elements fall back to loud raw (audit M-4).
-    let bound_token: Option<(u32, &[u8])> = if fmt == FormatOp::TokenAmount {
+    let bound_token: Option<(u32, &[u8], [u8; 20])> = if fmt == FormatOp::TokenAmount {
         let head_end = (static_head_words as usize)
             .saturating_mul(32)
             .min(full_body.len());
         let head = &full_body[..head_end];
-        let token_addr = resolve_token_address(ir, head, tx, params).ok();
+        let token_addr = if params.token_path.is_some() || params.token.is_some() {
+            Some(resolve_token_address(ir, head, tx, params)?)
+        } else {
+            None
+        };
         let b = match (token_addr, erc20) {
-            (Some(a), Some(m)) if a == m.contract => Some((u32::from(m.decimals), m.symbol)),
+            (Some(a), Some(m)) if a == m.contract => Some((u32::from(m.decimals), m.symbol, a)),
             _ => None,
         };
         if b.is_none() {
@@ -942,7 +1367,9 @@ pub(super) fn render_array(
         let word = full_body
             .get(elem_start..elem_start + 32)
             .ok_or(RenderErr::Reject("7730 arr elem oob"))?;
-        let word32: &[u8; 32] = word.try_into().map_err(|_| RenderErr::Reject("7730 arr elem"))?;
+        let word32: &[u8; 32] = word
+            .try_into()
+            .map_err(|_| RenderErr::Reject("7730 arr elem"))?;
         render_array_element(field, fmt, word32, pages, tx, bound_token, resolver, params)?;
     }
     Ok(())
@@ -981,9 +1408,11 @@ fn write_count_row(row: &mut [u8; DISPLAY_COLS], count: usize) {
 
 /// Render one array element (a 32-byte word) as one page. v1 supports the
 /// element formats that make sense for a list: amount, tokenAmount,
-/// addressName, raw. `bound_token` is the `(decimals, symbol)` of the array's
-/// shared token, Merkle-bound ONCE by [`render_array`] (`None` = not bound /
-/// not a tokenAmount array) — never re-resolved per element.
+/// addressName, raw. `bound_token` is the `(decimals, symbol, contract)` of the
+/// array's shared token, Merkle-bound ONCE by [`render_array`] (`None` = not
+/// bound / not a tokenAmount array) — never re-resolved per element. Keeping
+/// the exact contract here lets a raw overflow append an injective identity
+/// page instead of dropping the token identity along with the scaled ticker.
 #[allow(clippy::too_many_arguments)]
 fn render_array_element(
     field: &FieldEntry<'_>,
@@ -991,7 +1420,7 @@ fn render_array_element(
     word: &[u8; 32],
     pages: &mut Pages,
     tx: &Eip1559Tx,
-    bound_token: Option<(u32, &[u8])>,
+    bound_token: Option<(u32, &[u8], [u8; 20])>,
     resolver: &NameResolver<'_>,
     params: &ParamSet<'_>,
 ) -> Result<(), RenderErr> {
@@ -1000,37 +1429,49 @@ fn render_array_element(
     match fmt {
         FormatOp::Amount => {
             let value = U256(*word);
-            let decimals = u32::from(params.decimals.unwrap_or(18));
+            let Some(amount) = amount_decision(tx.chain_id, params) else {
+                let [_, r1, r2, foot] = pages.page_mut(p);
+                let fit = write_amount_two_rows(r1, r2, &value, 0, 0, false, true, "");
+                if fit == AmountFit::Full {
+                    write_line(foot, "! raw, dec=?");
+                    return Ok(());
+                }
+                return write_raw_word_two_pages(pages, p, field.label, word);
+            };
+            let decimals = amount.decimals;
+            // Preserve the existing array display contract: unlike scalar
+            // native `amount`, an array carries a unit only when the descriptor
+            // explicitly supplies `base`. The known-chain lookup above is used
+            // solely to authenticate the otherwise-default 18-decimal scale.
             let unit = params.base.unwrap_or(b"");
             let [_, r1, r2, foot] = pages.page_mut(p);
             let fit =
                 write_amount_two_rows(r1, r2, &value, decimals, 6, true, true, ascii_str(unit));
-            write_line(
-                foot,
-                match fit {
-                    AmountFit::Full => "> next",
-                    AmountFit::Overflow => "!AMOUNT OVERFLOW",
-                },
-            );
-            Ok(())
+            if fit == AmountFit::Full {
+                write_line(foot, "> next");
+                Ok(())
+            } else {
+                write_raw_word_two_pages(pages, p, field.label, word)
+            }
         }
         FormatOp::Unit => {
             // A value with a unit suffix (e.g. a percentage list) — same shape
             // as the scalar `render_unit` (decimals default 0 + the unit string).
+            if params.prefix.is_some_and(|v| v != 0) || params.suffix.is_some() {
+                return Err(RenderErr::Reject("7730 unit affix unsupported"));
+            }
             let value = U256(*word);
             let decimals = u32::from(params.decimals.unwrap_or(0));
             let unit = params.base.unwrap_or(b"");
             let [_, r1, r2, foot] = pages.page_mut(p);
             let fit =
                 write_amount_two_rows(r1, r2, &value, decimals, 6, true, true, ascii_str(unit));
-            write_line(
-                foot,
-                match fit {
-                    AmountFit::Full => "> next",
-                    AmountFit::Overflow => "!UNIT OVERFLOW",
-                },
-            );
-            Ok(())
+            if fit == AmountFit::Full {
+                write_line(foot, "> next");
+                Ok(())
+            } else {
+                write_raw_word_two_pages(pages, p, field.label, word)
+            }
         }
         FormatOp::TokenAmount => {
             // Amount of the array's shared token. `bound_token` was resolved +
@@ -1041,36 +1482,46 @@ fn render_array_element(
             let value = U256(*word);
             let [_, r1, r2, foot] = pages.page_mut(p);
             match bound_token {
-                Some((decimals, ticker)) => {
+                Some((decimals, ticker, token_contract)) => {
                     let fit = write_amount_two_rows(
-                        r1, r2, &value, decimals, 6, true, true, ascii_str(ticker),
+                        r1,
+                        r2,
+                        &value,
+                        decimals,
+                        6,
+                        true,
+                        true,
+                        ascii_str(ticker),
                     );
-                    write_line(
-                        foot,
-                        match fit {
-                            AmountFit::Full => "> next",
-                            AmountFit::Overflow => "!AMOUNT OVERFLOW",
-                        },
-                    );
+                    if fit == AmountFit::Full {
+                        write_line(foot, "> next");
+                    } else {
+                        write_raw_word_two_pages(pages, p, field.label, word)?;
+                        let ip = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
+                        write_label_row(pages, ip, b"Token contract");
+                        let [_, ar1, ar2, ar3] = pages.page_mut(ip);
+                        write_addr_full(ar1, ar2, ar3, &token_contract);
+                    }
                 }
                 None => {
                     let fit = write_amount_two_rows(r1, r2, &value, 0, 0, false, true, "");
-                    write_line(
-                        foot,
-                        match fit {
-                            AmountFit::Full => "! raw, dec=?",
-                            AmountFit::Overflow => "!AMOUNT OVERFLOW",
-                        },
-                    );
+                    if fit == AmountFit::Full {
+                        write_line(foot, "! raw, dec=?");
+                    } else {
+                        return write_raw_word_two_pages(pages, p, field.label, word);
+                    }
                 }
             }
             Ok(())
         }
         FormatOp::AddressName => {
-            let mut a = [0u8; 20];
-            a.copy_from_slice(&word[12..]);
+            let a = canonical_address_word(word)?;
             let [_, r1, r2, r3] = pages.page_mut(p);
-            write_addr_full_or_name(r1, r2, r3, &a, tx.chain_id, resolver);
+            if params.addr_types.is_some() || params.addr_sources.is_some() {
+                write_addr_full(r1, r2, r3, &a);
+            } else {
+                write_addr_full_or_name(r1, r2, r3, &a, tx.chain_id, resolver);
+            }
             Ok(())
         }
         FormatOp::Raw => {
@@ -1086,6 +1537,18 @@ fn render_array_element(
     }
 }
 
+/// Decode a canonical ABI/EIP-712 address word. Dirty high padding changes the
+/// signed hash while leaving the low 20 displayed bytes unchanged, so it must
+/// decline rather than be visually laundered as the same address.
+fn canonical_address_word(word: &[u8; 32]) -> Result<[u8; 20], RenderErr> {
+    if word[..12].iter().any(|&b| b != 0) {
+        return Err(RenderErr::Reject("7730 noncanonical address"));
+    }
+    let mut addr = [0u8; 20];
+    addr.copy_from_slice(&word[12..]);
+    Ok(addr)
+}
+
 fn render_enum(
     field: &FieldEntry<'_>,
     pages: &mut Pages,
@@ -1096,7 +1559,7 @@ fn render_enum(
 ) -> Result<(), RenderErr> {
     // Resolve the field's value (a single static-head word). `@`-container
     // enums are not a shape any descriptor uses, so a container resolution
-    // is refused (decline-to-blind) rather than guessed.
+    // is refused rather than guessed.
     let value: [u8; 32] = match resolve_path(ir, field.path_off, body)? {
         Resolved::Slot32(b) => *b,
         Resolved::Container(_) => return Err(RenderErr::Reject("7730 enum on container")),
@@ -1113,22 +1576,23 @@ fn render_enum(
     // exact signed integer + a loud `! enum: unknown` marker is WYSIWYS-honest
     // (the user sees the real value, not a substituted gloss) and strictly more
     // informative than blind-signing everything.
-    let Some(label) =
-        crate::render::enums::lookup_enum_label(ir.pool, enum_off, &value)?
-    else {
+    let Some(label) = crate::render::enums::lookup_enum_label(ir.pool, enum_off, &value)? else {
         let _ = tx;
         let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
         write_label_row(pages, p, field.label);
-        let [_, r1, r2, foot] = pages.page_mut(p);
-        let fit = write_amount_two_rows(r1, r2, &U256(value), 0, 6, true, true, "");
-        write_line(
-            foot,
-            match fit {
-                AmountFit::Full => "! enum: unknown",
-                AmountFit::Overflow => "!ENUM OVERFLOW",
-            },
-        );
-        return Ok(());
+        let fit = {
+            let [_, r1, r2, foot] = pages.page_mut(p);
+            let fit = write_amount_two_rows(r1, r2, &U256(value), 0, 6, true, true, "");
+            if fit == AmountFit::Full {
+                write_line(foot, "! enum: unknown");
+            }
+            fit
+        };
+        return if fit == AmountFit::Full {
+            Ok(())
+        } else {
+            write_raw_word_two_pages(pages, p, field.label, &value)
+        };
     };
     // A label longer than the three value rows would have to be truncated
     // on the trusted display — refuse rather than show a partial gloss.
@@ -1169,16 +1633,26 @@ fn render_unit(
     // decimals default 0 (a bare count), unit defaults empty — the 18-vs-0
     // asymmetry with `render_amount` is ∀-pinned there.
     let d = unit_decision(params);
-    let [_, r1, r2, foot] = pages.page_mut(p);
-    let fit =
-        write_amount_single_or_two_rows(r1, r2, &value, d.decimals, 6, true, true, ascii_str(d.unit));
-    write_line(
-        foot,
-        match fit {
-            AmountFit::Full => "> next",
-            AmountFit::Overflow => "!UNIT OVERFLOW",
-        },
-    );
+    let fit = {
+        let [_, r1, r2, foot] = pages.page_mut(p);
+        let fit = write_amount_single_or_two_rows(
+            r1,
+            r2,
+            &value,
+            d.decimals,
+            6,
+            true,
+            true,
+            ascii_str(d.unit),
+        );
+        if fit == AmountFit::Full {
+            write_line(foot, "> next");
+        }
+        fit
+    };
+    if fit == AmountFit::Overflow {
+        return write_raw_word_two_pages(pages, p, field.label, &bytes);
+    }
     Ok(())
 }
 
@@ -1218,17 +1692,11 @@ fn render_chain_id(
         // `write_decimal_into` silently drop the low digits (which would paint
         // a different, smaller chain number than the one signed) — same policy
         // as the >u64 arm below.
-        Some(_) => {
-            write_line(r1, "! CHAIN >1e16");
-            write_line(r2, "(too large)");
-        }
+        Some(_) => return write_raw_word_two_pages(pages, p, field.label, &bytes),
         // A chain id wider than u64 cannot name a real EVM chain; fail loud
         // rather than render a truncated low-64-bit value (same policy as the
         // date / duration `>2^64` guard).
-        None => {
-            write_line(r1, "! CHAIN >2^64");
-            write_line(r2, "(overflow)");
-        }
+        None => return write_raw_word_two_pages(pages, p, field.label, &bytes),
     }
     write_line(foot, "> next");
     Ok(())
@@ -1254,12 +1722,7 @@ fn render_token_ticker(
     // unbound, hid the token IDENTITY outright — yet the completeness lint
     // credits `field.path` as covered, so the signed token operand went unshown.
     let addr = match resolve_path(ir, field.path_off, body)? {
-        Resolved::Slot32(b) => {
-            // address is right-aligned in a 32-byte slot.
-            let mut a = [0u8; 20];
-            a.copy_from_slice(&b[12..]);
-            a
-        }
+        Resolved::Slot32(b) => canonical_address_word(b)?,
         Resolved::Container(idx) => container_addr(tx, idx)?,
     };
     match erc20 {
@@ -1292,30 +1755,31 @@ fn render_interop_address_name(
     // name registry is out of scope (would require a separate name DB
     // on-device); long form is unambiguous and self-describing.
     let addr = match resolve_path(ir, field.path_off, body)? {
-        Resolved::Slot32(b) => {
-            let mut a = [0u8; 20];
-            a.copy_from_slice(&b[12..]);
-            a
-        }
+        Resolved::Slot32(b) => canonical_address_word(b)?,
         Resolved::Container(idx) => container_addr(tx, idx)?,
     };
     let p1 = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
     write_label_row(pages, p1, field.label);
-    let [_, r1, _r2, foot1] = pages.page_mut(p1);
-    let mut row = [b' '; DISPLAY_COLS];
-    let mut pos = 0;
-    for &b in b"eip155:" {
-        if pos < row.len() {
-            row[pos] = b;
-            pos += 1;
-        }
+    let [_, scheme, id_head, id_tail] = pages.page_mut(p1);
+    write_line(scheme, "eip155:");
+    let mut digits = [0u8; 20];
+    let n = format_u64(tx.chain_id, &mut digits)
+        .ok_or(RenderErr::Reject("7730 interop chain overflow"))?;
+    if n + 1 <= DISPLAY_COLS {
+        id_head[..n].copy_from_slice(&digits[..n]);
+        id_head[n] = b':';
+        write_line(id_tail, "> next");
+    } else {
+        // A u64 has at most 20 digits. Fifteen digits plus a visible
+        // continuation marker fill row 2; the remaining five plus ':' fit
+        // row 3. Every signed chain-id digit reaches the display.
+        const FIRST: usize = DISPLAY_COLS - 1;
+        id_head[..FIRST].copy_from_slice(&digits[..FIRST]);
+        id_head[FIRST] = b'>';
+        let rest = n - FIRST;
+        id_tail[..rest].copy_from_slice(&digits[FIRST..n]);
+        id_tail[rest] = b':';
     }
-    pos = write_decimal_into(&mut row, pos, tx.chain_id);
-    if pos < row.len() {
-        row[pos] = b':';
-    }
-    *r1 = row;
-    write_line(foot1, "> next");
 
     let p2 = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
     write_line(pages.row_mut(p2, 0), "Address:");
@@ -1337,17 +1801,15 @@ fn render_encrypted(
     // an amount, a spender) was committed to the digest but NEVER shown, on a
     // page that looks like a normal clear-sign confirmation. It was the only
     // formatter that "succeeds" while hiding a signed value; every sibling
-    // (`render_enum`, `render_nft_name`, …) declines-to-blind when it cannot
-    // faithfully display, which routes the whole tx to a loud blind-sign page.
+    // (`render_enum`, `render_nft_name`, …) rejects when it cannot faithfully
+    // display, which hard-refuses a verified/known call.
     // Because the field is a normal *visible* field (not `visible:"never"`),
     // the dbgen H-3 coverage lint credited it as shown — there was no build-
     // time or on-device signal that an operand was hidden.
     //
     // There is no honest way to clear-sign a value the format says to hide, so
-    // REJECT (decline-to-blind) exactly like `render_enum`: the dispatcher
-    // falls through to the blind-sign ladder (loud warning + raw calldata
-    // fingerprint) on the UserOp path, and refuses on the off-chain typed
-    // path. `dbgen::parse_format_name` additionally refuses `format:
+    // REJECT exactly like `render_enum`: the dispatcher refuses both UserOp
+    // and off-chain typed paths. `dbgen::parse_format_name` additionally refuses `format:
     // "encrypted"` at build time, so the pinned corpus can never emit this
     // opcode — this arm is the runtime safety net if a hand-built TLV ever
     // sets 0x0E.
@@ -1482,11 +1944,7 @@ pub(super) fn decimal_digits(n: u64) -> usize {
 /// prefix). Callers rendering a security-critical magnitude must gate on
 /// [`decimal_digits`] first — see `render_date` (blockHeight) and
 /// `render_chain_id` — so a magnitude is never silently understated.
-pub(super) fn write_decimal_into(
-    out: &mut [u8; DISPLAY_COLS],
-    pos: usize,
-    mut n: u64,
-) -> usize {
+pub(super) fn write_decimal_into(out: &mut [u8; DISPLAY_COLS], pos: usize, mut n: u64) -> usize {
     let mut buf = [0u8; 20];
     let mut i = 0usize;
     if n == 0 {
@@ -1514,11 +1972,7 @@ pub(super) fn write_decimal_into(
 
 /// Render unix-seconds `secs` into rows `r1` + `r2` as `YYYY-MM-DD` /
 /// `HH:MM:SS UTC`. Always-fits since the format is < 16 chars per row.
-fn format_iso8601_utc(
-    secs: u64,
-    r1: &mut [u8; DISPLAY_COLS],
-    r2: &mut [u8; DISPLAY_COLS],
-) {
+fn format_iso8601_utc(secs: u64, r1: &mut [u8; DISPLAY_COLS], r2: &mut [u8; DISPLAY_COLS]) -> bool {
     let (year, mon, day, hour, min, sec) = unix_to_ymdhms(secs);
 
     // WYSIWYS (audit 2026-06-26 — date year truncation). The 4-digit
@@ -1531,9 +1985,7 @@ fn format_iso8601_utc(
     // sibling `! TIME >2^64` guard, so a far-future expiry can never read
     // as a near one (display != signed).
     if !(0..=9999).contains(&year) {
-        write_line(r1, "! YEAR >9999");
-        write_line(r2, "(far-future)");
-        return;
+        return false;
     }
     let year = year as u16; // safe: 0..=9999 after the guard above
 
@@ -1561,6 +2013,7 @@ fn format_iso8601_utc(
     r2[9] = b'U';
     r2[10] = b'T';
     r2[11] = b'C';
+    true
 }
 
 fn write_2digit(out: &mut [u8], n: u8) {
@@ -1579,7 +2032,11 @@ fn unix_to_ymdhms(secs: u64) -> (i64, u8, u8, u8, u8, u8) {
 
     // Civil-from-days: offset by 719_468 so 1970-01-01 → 0.
     let z = days + 719_468;
-    let era = if z >= 0 { z / 146_097 } else { (z - 146_096) / 146_097 };
+    let era = if z >= 0 {
+        z / 146_097
+    } else {
+        (z - 146_096) / 146_097
+    };
     let doe = (z - era * 146_097) as u32;
     let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
     let y = (yoe as i64) + era * 400;
@@ -1599,7 +2056,7 @@ fn unix_to_ymdhms(secs: u64) -> (i64, u8, u8, u8, u8, u8) {
 
 /// "Xd Yh Zm Ws" duration into a single row. Omits leading zero
 /// components.
-fn format_duration(mut secs: u64, row: &mut [u8; DISPLAY_COLS]) {
+fn format_duration(mut secs: u64, row: &mut [u8; DISPLAY_COLS]) -> bool {
     for cell in row.iter_mut() {
         *cell = b' ';
     }
@@ -1609,6 +2066,26 @@ fn format_duration(mut secs: u64, row: &mut [u8; DISPLAY_COLS]) {
     secs %= 3600;
     let m = secs / 60;
     let s = secs % 60;
+    // Preflight the complete textual representation. `write_decimal_into`
+    // intentionally clamps to the row, so without this check a huge day count
+    // would silently drop the later components and collide with other signed
+    // durations.
+    let needed = (if d > 0 { decimal_digits(d) + 2 } else { 0 })
+        + (if h > 0 || d > 0 {
+            decimal_digits(h) + 2
+        } else {
+            0
+        })
+        + (if m > 0 || h > 0 || d > 0 {
+            decimal_digits(m) + 2
+        } else {
+            0
+        })
+        + decimal_digits(s)
+        + 1;
+    if needed > DISPLAY_COLS {
+        return false;
+    }
     let mut pos = 0usize;
     if d > 0 {
         pos = write_decimal_into(row, pos, d);
@@ -1647,6 +2124,7 @@ fn format_duration(mut secs: u64, row: &mut [u8; DISPLAY_COLS]) {
     if pos < row.len() {
         row[pos] = b's';
     }
+    true
 }
 
 /// Resolve the token contract address from a `tokenAmount` /
@@ -1668,16 +2146,11 @@ fn resolve_token_address(
         if tp.is_empty() {
             return Err(RenderErr::Reject("7730 empty tokpath"));
         }
-        let root = PathOp::try_from(tp[0]).map_err(|_| RenderErr::Reject("7730 bad tokpath root"))?;
+        let root =
+            PathOp::try_from(tp[0]).map_err(|_| RenderErr::Reject("7730 bad tokpath root"))?;
         return match root {
-            PathOp::RootStructured => {
-                crate::render::resolve::resolve_token_address(&tp[1..], body)
-            }
-            _ => resolve_path_bytes(tp, body, tx).map(|w| {
-                let mut a = [0u8; 20];
-                a.copy_from_slice(&w[12..]);
-                a
-            }),
+            PathOp::RootStructured => crate::render::resolve::resolve_token_address(&tp[1..], body),
+            _ => canonical_address_word(&resolve_path_bytes(tp, body, tx)?),
         };
     }
     if let Some(t) = params.token {
@@ -1702,8 +2175,7 @@ fn resolve_path_bytes(prog: &[u8], body: &[u8], tx: &Eip1559Tx) -> Result<[u8; 3
         PathOp::RootStructured => {
             let mut slot = 0usize;
             while p < prog.len() {
-                let op = PathOp::try_from(prog[p])
-                    .map_err(|_| RenderErr::Reject("7730 bad op"))?;
+                let op = PathOp::try_from(prog[p]).map_err(|_| RenderErr::Reject("7730 bad op"))?;
                 p += 1;
                 match op {
                     PathOp::FieldIdx => {
@@ -1750,7 +2222,6 @@ fn resolve_path_bytes(prog: &[u8], body: &[u8], tx: &Eip1559Tx) -> Result<[u8; 3
         _ => Err(RenderErr::Reject("7730 path no root")),
     }
 }
-
 
 #[cfg(test)]
 mod walker_slot_confusion_fixed {
@@ -1878,8 +2349,7 @@ mod walker_slot_confusion_fixed {
         ];
         let ir = ir_with_path(&prog);
         let full_body = [0u8; 128]; // 4 words on the wire
-        let bounded =
-            super::super::head_bounded_body(&full_body, 2).expect("2-word head present");
+        let bounded = super::super::head_bounded_body(&full_body, 2).expect("2-word head present");
         assert_eq!(bounded.len(), 64, "body clamped to the 2-word static head");
         assert!(
             resolve_path(&ir, 1, bounded).is_err(),
@@ -1937,8 +2407,8 @@ mod date_year_truncation_fixed {
     //! rendered the benign "2034" while the signature committed to an
     //! effectively-perpetual validity window — a display != signed gap and
     //! the unfixed residual of the 2026-06-23 `>2^64` fix. The renderer now
-    //! returns the full i64 year and fails loud (`! YEAR >9999`) outside
-    //! 0..=9999.
+    //! returns the full i64 year and reports that the compact representation is
+    //! unavailable outside 0..=9999; the caller then renders the full raw word.
     use super::{format_iso8601_utc, unix_to_ymdhms, DISPLAY_COLS};
 
     #[test]
@@ -1952,14 +2422,13 @@ mod date_year_truncation_fixed {
     }
 
     #[test]
-    fn far_future_timestamp_within_u64_fails_loud() {
+    fn far_future_timestamp_within_u64_requests_raw_fallback() {
         // The concrete exploit vector: a perpetual `validBefore` that the
         // reader passes (<= u64::MAX) must NEVER render as a plausible near
-        // year. It paints the loud marker instead.
+        // year. It must refuse the compact date representation.
         let mut r1 = [b' '; DISPLAY_COLS];
         let mut r2 = [b' '; DISPLAY_COLS];
-        format_iso8601_utc(2_100_000_000_000, &mut r1, &mut r2);
-        assert_eq!(&r1[..12], b"! YEAR >9999");
+        assert!(!format_iso8601_utc(2_100_000_000_000, &mut r1, &mut r2));
         // And crucially must not read as any benign near year.
         assert_ne!(&r1[..4], b"2979");
         assert_ne!(&r1[..4], b"2034");
@@ -1970,13 +2439,12 @@ mod date_year_truncation_fixed {
         // 9999-12-31T23:59:59Z is the last honestly-renderable second.
         let mut r1 = [b' '; DISPLAY_COLS];
         let mut r2 = [b' '; DISPLAY_COLS];
-        format_iso8601_utc(253_402_300_799, &mut r1, &mut r2);
+        assert!(format_iso8601_utc(253_402_300_799, &mut r1, &mut r2));
         assert_eq!(&r1[..4], b"9999");
         // 10000-01-01T00:00:00Z is the first that cannot.
         let mut r1b = [b' '; DISPLAY_COLS];
         let mut r2b = [b' '; DISPLAY_COLS];
-        format_iso8601_utc(253_402_300_800, &mut r1b, &mut r2b);
-        assert_eq!(&r1b[..12], b"! YEAR >9999");
+        assert!(!format_iso8601_utc(253_402_300_800, &mut r1b, &mut r2b));
     }
 
     #[test]
@@ -1984,7 +2452,7 @@ mod date_year_truncation_fixed {
         let mut r1 = [b' '; DISPLAY_COLS];
         let mut r2 = [b' '; DISPLAY_COLS];
         // 2024-01-01T00:00:00Z.
-        format_iso8601_utc(1_704_067_200, &mut r1, &mut r2);
+        assert!(format_iso8601_utc(1_704_067_200, &mut r1, &mut r2));
         assert_eq!(&r1[..10], b"2024-01-01");
         assert_eq!(&r2[..9], b"00:00:00 ");
     }
@@ -2005,6 +2473,7 @@ mod faithless_formatter_fixed {
     use super::*;
     use crate::abi::container_field;
     use crate::ir::{ContextKind, Erc7730Ir};
+    use std::format;
 
     /// Build a throwaway `Erc7730Ir` whose `pool` holds a single compiled path
     /// program at offset 1 (mirrors `walker_slot_confusion_fixed::ir_with_path`).
@@ -2051,6 +2520,7 @@ mod faithless_formatter_fixed {
             data_len: 0,
             access_list_count: 0,
             signing_hash: [0u8; 32],
+            userop_fields: None,
         }
     }
 
@@ -2072,9 +2542,12 @@ mod faithless_formatter_fixed {
         body[24..32].copy_from_slice(&8453u64.to_be_bytes());
         let tx = envelope_chain(1);
         let mut pages = Pages::with_len(0);
-        render_chain_id(&field(FormatOp::ChainId), &mut pages, &ir, &body, &tx)
-            .expect("renders");
-        assert_eq!(&pages.buf[0][1][..4], b"8453", "shows the field's signed chain id");
+        render_chain_id(&field(FormatOp::ChainId), &mut pages, &ir, &body, &tx).expect("renders");
+        assert_eq!(
+            &pages.buf[0][1][..4],
+            b"8453",
+            "shows the field's signed chain id"
+        );
         assert_eq!(
             &pages.buf[0][2][..6],
             b"(Base)",
@@ -2096,27 +2569,27 @@ mod faithless_formatter_fixed {
         let ir = ir_with_path(&prog);
         let tx = envelope_chain(10); // Optimism
         let mut pages = Pages::with_len(0);
-        render_chain_id(&field(FormatOp::ChainId), &mut pages, &ir, &[], &tx)
-            .expect("renders");
+        render_chain_id(&field(FormatOp::ChainId), &mut pages, &ir, &[], &tx).expect("renders");
         assert_eq!(&pages.buf[0][1][..2], b"10");
         assert_eq!(&pages.buf[0][2][..10], b"(Optimism)");
     }
 
     #[test]
-    fn chain_id_above_u64_fails_loud() {
+    fn chain_id_above_u64_falls_back_to_full_raw_word() {
         // A >u64 word can't name a real chain; never render a truncated value.
         let ir = ir_with_path(&slot_prog(0));
         let mut body = [0u8; 32];
         body[0] = 1; // high byte set -> > u64
         let tx = envelope_chain(1);
         let mut pages = Pages::with_len(0);
-        render_chain_id(&field(FormatOp::ChainId), &mut pages, &ir, &body, &tx)
-            .expect("renders");
-        assert_eq!(&pages.buf[0][1][..13], b"! CHAIN >2^64");
+        render_chain_id(&field(FormatOp::ChainId), &mut pages, &ir, &body, &tx).expect("renders");
+        assert_eq!(pages.as_slice().len(), 2);
+        assert_eq!(&pages.buf[0][1], b"0100000000000000");
+        assert_eq!(&pages.buf[1][2], b"0000000000000000");
     }
 
     #[test]
-    fn chain_id_seventeen_digits_within_u64_fails_loud() {
+    fn chain_id_seventeen_digits_within_u64_falls_back_to_full_raw_word() {
         // A 17-digit chain id is <= u64 but cannot fit a 16-col row in full;
         // `write_decimal_into` would silently drop its low digit, painting a
         // different (smaller) chain number than the one signed. Fail loud.
@@ -2126,11 +2599,10 @@ mod faithless_formatter_fixed {
         body[24..32].copy_from_slice(&12_345_678_901_234_567u64.to_be_bytes());
         let tx = envelope_chain(1);
         let mut pages = Pages::with_len(0);
-        render_chain_id(&field(FormatOp::ChainId), &mut pages, &ir, &body, &tx)
-            .expect("renders");
-        assert_eq!(&pages.buf[0][1][..13], b"! CHAIN >1e16");
-        // Never the silently-truncated top-16-digit value.
-        assert_ne!(&pages.buf[0][1][..4], b"1234");
+        render_chain_id(&field(FormatOp::ChainId), &mut pages, &ir, &body, &tx).expect("renders");
+        assert_eq!(pages.as_slice().len(), 2);
+        let expected = format!("{:016x}", 12_345_678_901_234_567u64);
+        assert_eq!(&pages.buf[1][2], expected.as_bytes());
     }
 
     #[test]
@@ -2161,7 +2633,11 @@ mod faithless_formatter_fixed {
         // (Case-insensitive: the hex is EIP-55 checksummed — its casing is
         // verified by `eip55_tests`; here we only assert the operand is shown.)
         assert_eq!(&pages.buf[0][1][..2], b"0x");
-        assert_eq!(pages.buf[0][1][2].to_ascii_lowercase(), b'a', "first nibble of 0xAB");
+        assert_eq!(
+            pages.buf[0][1][2].to_ascii_lowercase(),
+            b'a',
+            "first nibble of 0xAB"
+        );
         assert_eq!(pages.buf[0][1][3].to_ascii_lowercase(), b'b');
         // The pre-fix hid the operand behind this literal.
         assert_ne!(&pages.buf[0][1][..15], b"(unknown token)");
@@ -2216,6 +2692,7 @@ mod block_height_magnitude_fixed {
     //! and fails loud only for absurd >16-digit values.
     use super::*;
     use crate::ir::{ContextKind, Erc7730Ir};
+    use std::format;
 
     /// Throwaway IR whose `pool` holds one compiled path program at offset 1
     /// (mirrors `faithless_formatter_fixed::ir_with_path`).
@@ -2241,12 +2718,7 @@ mod block_height_magnitude_fixed {
     }
 
     fn slot0_prog() -> [u8; 4] {
-        [
-            PathOp::RootStructured as u8,
-            PathOp::FieldIdx as u8,
-            0,
-            0,
-        ]
+        [PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 0]
     }
 
     fn envelope() -> Eip1559Tx {
@@ -2261,6 +2733,7 @@ mod block_height_magnitude_fixed {
             data_len: 0,
             access_list_count: 0,
             signing_hash: [0u8; 32],
+            userop_fields: None,
         }
     }
 
@@ -2322,14 +2795,13 @@ mod block_height_magnitude_fixed {
     }
 
     #[test]
-    fn absurd_block_height_fails_loud_never_truncates() {
+    fn absurd_block_height_falls_back_to_full_raw_word() {
         // >16 digits (>= 1e16 — not a real block height on any chain). Must
         // fail loud, never paint a silently-truncated value.
         let pages = render_block(12_345_678_901_234_567); // 17 digits
-        assert_eq!(&pages.buf[0][1][..13], b"Block height:");
-        assert_eq!(&pages.buf[0][2][..13], b"! >1e16 (ovf)");
-        // No truncated digit string anywhere on the value rows.
-        assert_ne!(&pages.buf[0][2][..4], b"1234");
+        assert_eq!(pages.as_slice().len(), 2);
+        let expected = format!("{:016x}", 12_345_678_901_234_567u64);
+        assert_eq!(&pages.buf[1][2], expected.as_bytes());
     }
 }
 
@@ -2344,10 +2816,9 @@ mod encrypted_formatter_declines {
     //! looks like a normal clear-sign confirmation. It was the only formatter
     //! that "succeeds" while hiding a signed value, and because the field is a
     //! normal *visible* field the dbgen H-3 coverage lint credited it as
-    //! shown. It now declines-to-blind (`RenderErr::Reject`) like `render_enum`,
-    //! so the dispatcher falls through to the loud blind-sign ladder (UserOp
-    //! path) / refuses (off-chain typed path). `dbgen::parse_format_name` also
-    //! refuses `format:"encrypted"` at build time.
+    //! shown. It now returns `RenderErr::Reject` like `render_enum`, so the
+    //! dispatcher hard-refuses UserOp and off-chain typed paths.
+    //! `dbgen::parse_format_name` also refuses `format:"encrypted"` at build time.
     use super::*;
     use crate::ir::{ContextKind, Erc7730Ir};
 
@@ -2379,6 +2850,7 @@ mod encrypted_formatter_declines {
             data_len: 0,
             access_list_count: 0,
             signing_hash: [0u8; 32],
+            userop_fields: None,
         }
     }
 
@@ -2386,7 +2858,7 @@ mod encrypted_formatter_declines {
     /// when a `fallback_label` is present (the worst case: the descriptor
     /// supplies a plausible benign label the old code would have shown).
     #[test]
-    fn render_encrypted_declines_to_blind_even_with_fallback_label() {
+    fn render_encrypted_refuses_even_with_fallback_label() {
         let mut params = ParamSet::default();
         params.fallback_label = Some(b"Recipient address");
         let field = FieldEntry {
@@ -2399,7 +2871,7 @@ mod encrypted_formatter_declines {
         let r = render_encrypted(&field, &mut pages, &params);
         assert!(
             matches!(r, Err(RenderErr::Reject("7730 encrypted field"))),
-            "encrypted formatter must decline-to-blind, got {r:?}"
+            "encrypted formatter must refuse, got {r:?}"
         );
         // No page may be produced — a confirmable "[ENCRYPTED]" page is exactly
         // the signed-but-not-shown surface this fix removes.
@@ -2407,8 +2879,8 @@ mod encrypted_formatter_declines {
     }
 
     /// Routed through `dispatch`, a `FormatOp::Encrypted` field aborts the
-    /// whole descriptor render (Err) so the tx falls to the blind-sign ladder
-    /// — it can never produce a benign clear-sign page that hides the operand.
+    /// whole descriptor render and signing request — it can never produce a
+    /// benign clear-sign page or downgrade that hides the operand.
     #[test]
     fn dispatch_encrypted_aborts_render() {
         let ir = empty_ir();
@@ -2426,8 +2898,14 @@ mod encrypted_formatter_declines {
         let r = dispatch(
             &field, &mut pages, &ir, &body, &tx, None, &resolver, &params,
         );
-        assert!(r.is_err(), "encrypted field must abort the descriptor render");
-        assert_eq!(pages.len, 0, "no page may be emitted for an encrypted field");
+        assert!(
+            r.is_err(),
+            "encrypted field must abort the descriptor render"
+        );
+        assert_eq!(
+            pages.len, 0,
+            "no page may be emitted for an encrypted field"
+        );
     }
 }
 
@@ -2497,6 +2975,7 @@ mod kani_harness {
             data_len: 0,
             access_list_count: 0,
             signing_hash: [0u8; 32],
+            userop_fields: None,
         }
     }
 
@@ -2708,8 +3187,6 @@ mod kani_harness {
         p
     }
 
-
-
     // HONEST DROP (2026-07-04): the two token-amount forall harnesses
     // (value >= T paints the threshold row; value < T never does) and the
     // below-threshold CONCRETE witness all hit CBMC out-of-memory: kani::assume
@@ -2754,7 +3231,6 @@ mod kani_harness {
         assert!(r.is_ok());
         assert!(pages.buf[0][1] == *b"unlimited ETH   ");
     }
-
 
     // ─────────────────────────────────────────────────────────────────
     // 4. Loud-marker guards: date / duration / chain-id
@@ -2848,7 +3324,6 @@ mod kani_harness {
         assert!(pages.buf[0][1][..11] == *b"1d 1h 1m 1s");
     }
 
-
     // HONEST DROP (2026-07-04): the chain-id forall harness TIMED OUT twice
     // (1500 s, 2400 s) — the chain-NAME lookup layered on the guard is past
     // CBMC's budget. Its load-bearing half — the `read_u64_be_tail` high-bytes
@@ -2890,8 +3365,6 @@ mod kani_harness {
         pool[6] = 1; // entry count
     }
 
-
-
     // HONEST DROP (2026-07-04): the two enum-label forall harnesses (chunk
     // binding; >3-rows reject) TIMED OUT — composing the symbolic pool LOOKUP
     // with the chunk loop is past CBMC's budget. Their content is already
@@ -2929,30 +3402,30 @@ mod kani_harness {
         assert!(pages.buf[0][3] == [b' '; DISPLAY_COLS]);
     }
 
-    /// ∀ const-annotation values (len ≤ 48) and ∀ `format_op` bytes:
-    /// `dispatch` routes to the literal renderer (const precedence beats
-    /// the format op — even an invalid opcode) and rows 1-3 show the
-    /// attested string chunked at 16 cols, byte-exact + space-padded.
-    ///
-    /// HONEST RESIDUAL (not proven — deliberately): `render_const` has no
-    /// `len > 48` Reject; a longer pinned const silently DROPS its tail
-    /// (unlike `render_enum`'s refuse). Two live celo descriptors carry
-    /// 66/78-char const values, so adding the guard is a corpus-visible
-    /// behaviour change — reported as a follow-up instead of enshrining
-    /// the truncation here as a theorem.
+    /// ∀ canonical const-annotation values (1..=48 printable bytes, no trailing
+    /// display-padding space): `dispatch` accepts only the canonical Raw/no-path
+    /// shape and rows 1-3 show the attested string byte-exact + space-padded.
     #[kani::proof]
     #[kani::unwind(52)]
     fn fmt_p0_const_value_chunks_bind_rows() {
         const CMAX: usize = 48;
         let backing: [u8; CMAX] = kani::any();
         let clen: usize = kani::any();
-        kani::assume(clen <= CMAX);
+        kani::assume(clen > 0 && clen <= CMAX);
+        let mut i = 0usize;
+        while i < CMAX {
+            if i < clen {
+                kani::assume((0x20..0x7f).contains(&backing[i]));
+            }
+            i += 1;
+        }
+        kani::assume(backing[clen - 1] != b' ');
         let ir = mk_ir(&SLOT0_POOL);
         let tx = envelope();
         let resolver = NameResolver::new();
         let mut params = ParamSet::default();
         params.const_value = Some(&backing[..clen]);
-        let f = mk_field(kani::any(), 0);
+        let f = mk_field(FormatOp::Raw as u8, 0);
         let mut pages = Pages::with_len(0);
         let r = dispatch(&f, &mut pages, &ir, &[], &tx, None, &resolver, &params);
         assert!(r.is_ok());
@@ -3035,6 +3508,7 @@ mod token_amount_threshold_host_tests {
             data_len: 0,
             access_list_count: 0,
             signing_hash: [0u8; 32],
+            userop_fields: None,
         }
     }
 
@@ -3047,7 +3521,12 @@ mod token_amount_threshold_host_tests {
     }
 
     fn field() -> FieldEntry<'static> {
-        FieldEntry { format_op: FormatOp::TokenAmount as u8, label: b"Field", path_off: 1, param_off: 0 }
+        FieldEntry {
+            format_op: FormatOp::TokenAmount as u8,
+            label: b"Field",
+            path_off: 1,
+            param_off: 0,
+        }
     }
 
     /// value < threshold ⇒ the AMOUNT renders (never the threshold row).
@@ -3094,5 +3573,828 @@ mod token_amount_threshold_host_tests {
         let r = render_token_amount(&f, &mut pages, &ir, &value, &tx, None, &resolver, &params);
         assert!(r.is_ok());
         assert_ne!(&pages.buf[0][1][..10], b"unlimited ");
+    }
+}
+
+#[cfg(test)]
+mod adversarial_renderer_regressions {
+    use super::*;
+    use crate::ir::{ContextKind, Erc7730Ir};
+    use crate::render::params::{DYNAMIC_KIND_BYTES, DYNAMIC_KIND_STRING};
+
+    const DYNAMIC_POOL: [u8; 7] = [
+        0,
+        5,
+        PathOp::RootStructured as u8,
+        PathOp::FieldIdx as u8,
+        0,
+        0,
+        PathOp::FollowOffset as u8,
+    ];
+    const SLOT_POOL: [u8; 6] = [
+        0,
+        4,
+        PathOp::RootStructured as u8,
+        PathOp::FieldIdx as u8,
+        0,
+        0,
+    ];
+    // RootStructured + FieldIdx(0x0025) + ArrayAll. The 0x25 is an OPERAND,
+    // not a FollowOffset opcode; byte-search-based multi detection gets this
+    // wrong and weakens the array tail-placement gate.
+    const ARRAY_OPERAND_25_POOL: [u8; 7] = [
+        0,
+        5,
+        PathOp::RootStructured as u8,
+        PathOp::FieldIdx as u8,
+        0,
+        PathOp::FollowOffset as u8,
+        PathOp::ArrayAll as u8,
+    ];
+    const ARRAY_MULTI_POOL: [u8; 8] = [
+        0,
+        6,
+        PathOp::RootStructured as u8,
+        PathOp::FieldIdx as u8,
+        0,
+        0,
+        PathOp::FollowOffset as u8,
+        PathOp::ArrayAll as u8,
+    ];
+    const SOLE_ARRAY_POOL: [u8; 7] = [
+        0,
+        5,
+        PathOp::RootStructured as u8,
+        PathOp::FieldIdx as u8,
+        0,
+        0,
+        PathOp::ArrayAll as u8,
+    ];
+    const SIGNED_TOKEN_PATH: [u8; 4] = [PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 1];
+
+    fn ir(pool: &[u8]) -> Erc7730Ir<'_> {
+        Erc7730Ir {
+            schema_ver: crate::ir::SCHEMA_VER,
+            context_kind: ContextKind::Contract,
+            chain_id: 1,
+            contract: [0; 20],
+            descriptor_hash: [0; 32],
+            domain_separator: [0; 32],
+            owner: &[],
+            contract_name: &[],
+            pool,
+            formats: &[],
+            raw: &[],
+        }
+    }
+
+    fn tx() -> Eip1559Tx {
+        Eip1559Tx {
+            chain_id: 1,
+            nonce: 0,
+            max_priority_fee_per_gas: U256::zero(),
+            max_fee_per_gas: U256::zero(),
+            gas_limit: 0,
+            to: Some([0; 20]),
+            value: U256::zero(),
+            data_len: 0,
+            access_list_count: 0,
+            signing_hash: [0; 32],
+            userop_fields: None,
+        }
+    }
+
+    #[test]
+    fn array_multi_detection_parses_opcodes_not_operands() {
+        let sole = ir(&ARRAY_OPERAND_25_POOL);
+        assert!(path_ends_with_array_all(&sole, 1).unwrap());
+        assert!(!array_all_is_multi(&sole, 1).unwrap());
+
+        let multi = ir(&ARRAY_MULTI_POOL);
+        assert!(path_ends_with_array_all(&multi, 1).unwrap());
+        assert!(array_all_is_multi(&multi, 1).unwrap());
+    }
+
+    fn dynamic_body(data: &[u8]) -> std::vec::Vec<u8> {
+        let padded = data.len().div_ceil(32) * 32;
+        let mut body = std::vec![0u8; 64 + padded];
+        body[31] = 32; // head slot 0 -> tail at byte 32
+        body[56..64].copy_from_slice(&(data.len() as u64).to_be_bytes());
+        body[64..64 + data.len()].copy_from_slice(data);
+        body
+    }
+
+    fn field(op: u8, path_off: u16) -> FieldEntry<'static> {
+        FieldEntry {
+            format_op: op,
+            label: b"Field",
+            path_off,
+            param_off: 0,
+        }
+    }
+
+    fn format<'a>(fields_buf: &'a [u8], field_count: u8, head_words: u16) -> FormatHeader<'a> {
+        FormatHeader {
+            selector: [0u8; 4],
+            field_count,
+            static_head_words: head_words,
+            nested_descent_count: 0,
+            intent: b"Test",
+            type_hash: [0u8; 32],
+            fields_buf,
+        }
+    }
+
+    fn one_field_bytes(op: u8, path_off: u16, param_off: u16) -> std::vec::Vec<u8> {
+        let mut out = std::vec![op, 1, b'F'];
+        out.extend_from_slice(&path_off.to_be_bytes());
+        out.extend_from_slice(&param_off.to_be_bytes());
+        out
+    }
+
+    fn one_billion_word() -> [u8; 32] {
+        let mut word = [0u8; 32];
+        word[24..].copy_from_slice(&1_000_000_000u64.to_be_bytes());
+        word
+    }
+
+    fn metadata<'a>(contract: [u8; 20], symbol: &'a [u8]) -> Erc20Metadata<'a> {
+        Erc20Metadata {
+            chain_id: 1,
+            contract,
+            decimals: 18,
+            name: b"Test token",
+            symbol,
+        }
+    }
+
+    fn assert_full_contract_page(page: &[[u8; DISPLAY_COLS]; 4], contract: &[u8; 20]) {
+        assert_eq!(&page[0][..14], b"Token contract");
+        let mut r1 = [b' '; DISPLAY_COLS];
+        let mut r2 = [b' '; DISPLAY_COLS];
+        let mut r3 = [b' '; DISPLAY_COLS];
+        write_addr_full(&mut r1, &mut r2, &mut r3, contract);
+        assert_eq!(page[1], r1);
+        assert_eq!(page[2], r2);
+        assert_eq!(page[3], r3);
+    }
+
+    #[test]
+    fn bound_token_amount_raw_fallback_keeps_exact_contract_identity() {
+        let contract_a = [0x11; 20];
+        let contract_b = [0x22; 20];
+        let meta_a = metadata(contract_a, b"TOK");
+        let meta_b = metadata(contract_b, b"TOK");
+        let envelope = tx();
+        let resolver = NameResolver::new();
+        let mut body_a = [0u8; 64];
+        body_a[..32].fill(0xff); // amount at signed head word 0
+        body_a[44..].copy_from_slice(&contract_a); // token at signed head word 1
+        let mut body_b = body_a;
+        body_b[44..].copy_from_slice(&contract_b);
+
+        let mut params_a = ParamSet::default();
+        params_a.token_path = Some(&SIGNED_TOKEN_PATH);
+        let mut pages_a = Pages::with_len(0);
+        render_token_amount(
+            &field(FormatOp::TokenAmount as u8, 1),
+            &mut pages_a,
+            &ir(&SLOT_POOL),
+            &body_a,
+            &envelope,
+            Some(&meta_a),
+            &resolver,
+            &params_a,
+        )
+        .unwrap();
+
+        let mut params_b = ParamSet::default();
+        params_b.token_path = Some(&SIGNED_TOKEN_PATH);
+        let mut pages_b = Pages::with_len(0);
+        render_token_amount(
+            &field(FormatOp::TokenAmount as u8, 1),
+            &mut pages_b,
+            &ir(&SLOT_POOL),
+            &body_b,
+            &envelope,
+            Some(&meta_b),
+            &resolver,
+            &params_b,
+        )
+        .unwrap();
+
+        // The signed amount word is identical while the signed token word
+        // flips. The exact raw amount pages intentionally match; the appended
+        // full contract page is what makes those two payloads distinct.
+        assert_eq!(pages_a.len, 3);
+        assert_eq!(pages_b.len, 3);
+        assert_eq!(&pages_a.as_slice()[..2], &pages_b.as_slice()[..2]);
+        assert_ne!(pages_a.as_slice()[2], pages_b.as_slice()[2]);
+        assert_full_contract_page(&pages_a.as_slice()[2], &contract_a);
+        assert_full_contract_page(&pages_b.as_slice()[2], &contract_b);
+    }
+
+    #[test]
+    fn dirty_static_token_path_padding_rejects_instead_of_becoming_unnamed_raw() {
+        let mut body = [0u8; 64];
+        body[31] = 1; // amount at signed head word 0
+        body[32] = 1; // dirty high padding in signed token word 1
+        body[44..].copy_from_slice(&[0x77; 20]);
+        let envelope = tx();
+        let mut params = ParamSet::default();
+        params.token_path = Some(&SIGNED_TOKEN_PATH);
+        let mut pages = Pages::with_len(0);
+
+        assert_eq!(
+            render_token_amount(
+                &field(FormatOp::TokenAmount as u8, 1),
+                &mut pages,
+                &ir(&SLOT_POOL),
+                &body,
+                &envelope,
+                None,
+                &NameResolver::new(),
+                &params,
+            ),
+            Err(RenderErr::Reject("7730 tok dirty address"))
+        );
+        // Resolution happens before any trusted-display page is committed;
+        // malformed token identity can never degrade to an unnamed raw amount.
+        assert_eq!(pages.len, 0);
+    }
+
+    #[test]
+    fn unlimited_ticker_suffix_is_never_truncated() {
+        let value = [0xff; 32];
+        let threshold = [0u8; 32];
+        let contract_a = [0x31; 20];
+        let contract_b = [0x32; 20];
+        let meta_a = metadata(contract_a, b"LONGTOKENA");
+        let meta_b = metadata(contract_b, b"LONGTOKENB");
+        let envelope = tx();
+        let resolver = NameResolver::new();
+
+        let render = |contract, meta: &Erc20Metadata<'_>| {
+            let mut params = ParamSet::default();
+            params.token = Some(contract);
+            params.threshold = Some(&threshold);
+            let mut pages = Pages::with_len(0);
+            render_token_amount(
+                &field(FormatOp::TokenAmount as u8, 1),
+                &mut pages,
+                &ir(&SLOT_POOL),
+                &value,
+                &envelope,
+                Some(meta),
+                &resolver,
+                &params,
+            )
+            .unwrap();
+            pages
+        };
+
+        let pages_a = render(&contract_a, &meta_a);
+        let pages_b = render(&contract_b, &meta_b);
+        assert_eq!(pages_a.len, 1);
+        assert_eq!(pages_b.len, 1);
+        assert_eq!(pages_a.buf[0][1], *b"unlimited       ");
+        assert_eq!(pages_a.buf[0][2], *b"LONGTOKENA      ");
+        assert_eq!(pages_b.buf[0][2], *b"LONGTOKENB      ");
+        assert_ne!(pages_a.buf[0], pages_b.buf[0]);
+    }
+
+    #[test]
+    fn oversize_unlimited_ticker_uses_exact_contract_identity() {
+        let value = [0xff; 32];
+        let threshold = [0u8; 32];
+        let contract = [0x44; 20];
+        let meta = metadata(contract, b"ABCDEFGHIJKLMNOPQ");
+        let envelope = tx();
+        let mut params = ParamSet::default();
+        params.token = Some(&contract);
+        params.threshold = Some(&threshold);
+        let mut pages = Pages::with_len(0);
+        render_token_amount(
+            &field(FormatOp::TokenAmount as u8, 1),
+            &mut pages,
+            &ir(&SLOT_POOL),
+            &value,
+            &envelope,
+            Some(&meta),
+            &NameResolver::new(),
+            &params,
+        )
+        .unwrap();
+
+        assert_eq!(pages.len, 2);
+        assert_eq!(pages.buf[0][1], *b"unlimited       ");
+        assert_eq!(pages.buf[0][2], *b"(see token)     ");
+        assert_full_contract_page(&pages.buf[1], &contract);
+    }
+
+    #[test]
+    fn bound_token_amount_array_raw_fallback_keeps_exact_contract_identity() {
+        let contract_a = [0x51; 20];
+        let contract_b = [0x52; 20];
+        let meta_a = metadata(contract_a, b"TOK");
+        let meta_b = metadata(contract_b, b"TOK");
+        let envelope = tx();
+        let resolver = NameResolver::new();
+        let mut body = [0u8; 96];
+        body[31] = 32; // sole dynamic tail starts after the one-word head
+        body[63] = 1; // one element
+        body[64..].fill(0xff); // scaled decimal paint overflows
+
+        let render = |contract, meta: &Erc20Metadata<'_>| {
+            let mut params = ParamSet::default();
+            params.token = Some(contract);
+            let mut pages = Pages::with_len(0);
+            render_array(
+                &field(FormatOp::TokenAmount as u8, 1),
+                &mut pages,
+                &ir(&SOLE_ARRAY_POOL),
+                &body,
+                1,
+                &envelope,
+                Some(meta),
+                &resolver,
+                &params,
+            )
+            .unwrap();
+            pages
+        };
+
+        let pages_a = render(&contract_a, &meta_a);
+        let pages_b = render(&contract_b, &meta_b);
+        assert_eq!(pages_a.len, 4);
+        assert_eq!(pages_b.len, 4);
+        assert_eq!(&pages_a.as_slice()[..3], &pages_b.as_slice()[..3]);
+        assert_ne!(pages_a.as_slice()[3], pages_b.as_slice()[3]);
+        assert_full_contract_page(&pages_a.as_slice()[3], &contract_a);
+        assert_full_contract_page(&pages_b.as_slice()[3], &contract_b);
+    }
+
+    #[test]
+    fn format_preflight_rejects_static_calldata_suffix() {
+        let fields = one_field_bytes(FormatOp::Raw as u8, 1, 0);
+        let fmt = format(&fields, 1, 1);
+        let descriptor = ir(&SLOT_POOL);
+        assert_eq!(
+            validate_contract_calldata_framing(&descriptor, &fmt, &[0u8; 32]),
+            Ok(())
+        );
+        assert_eq!(
+            validate_contract_calldata_framing(&descriptor, &fmt, &[0u8; 64]),
+            Err(RenderErr::Reject("7730 static calldata trailing"))
+        );
+    }
+
+    #[test]
+    fn format_preflight_validates_hidden_dynamic_leaf_before_visibility() {
+        use crate::render::params::{PARAM_DYNAMIC_KIND, PARAM_VISIBILITY};
+
+        let mut pool = DYNAMIC_POOL.to_vec();
+        let param_off = pool.len() as u16;
+        // dynamic_kind=string + visibility=never. The framing validator must
+        // still consume the path and exact tail before the render loop skips it.
+        pool.extend_from_slice(&[
+            6,
+            PARAM_DYNAMIC_KIND,
+            1,
+            DYNAMIC_KIND_STRING,
+            PARAM_VISIBILITY,
+            1,
+            crate::ir::Visibility::Never as u8,
+        ]);
+        let fields = one_field_bytes(FormatOp::Raw as u8, 1, param_off);
+        let fmt = format(&fields, 1, 1);
+        let descriptor = Erc7730Ir {
+            pool: &pool,
+            ..ir(&[])
+        };
+        let canonical = dynamic_body(b"hidden");
+        assert_eq!(
+            validate_contract_calldata_framing(&descriptor, &fmt, &canonical),
+            Ok(())
+        );
+
+        let mut dirty = canonical.clone();
+        *dirty.last_mut().unwrap() = 1;
+        assert_eq!(
+            validate_contract_calldata_framing(&descriptor, &fmt, &dirty),
+            Err(RenderErr::Reject("7730 res dirty pad"))
+        );
+        let mut trailing = canonical;
+        trailing.extend_from_slice(&[0u8; 32]);
+        assert_eq!(
+            validate_contract_calldata_framing(&descriptor, &fmt, &trailing),
+            Err(RenderErr::Reject("7730 res not whole tail"))
+        );
+    }
+
+    #[test]
+    fn format_preflight_rejects_c2_and_relaxed_multi_array_paths() {
+        // C2 static member: Root FieldIdx(0) FollowOffset FieldIdx(0).
+        let c2_pool = [
+            0,
+            8,
+            PathOp::RootStructured as u8,
+            PathOp::FieldIdx as u8,
+            0,
+            0,
+            PathOp::FollowOffset as u8,
+            PathOp::FieldIdx as u8,
+            0,
+            0,
+        ];
+        let fields = one_field_bytes(FormatOp::Raw as u8, 1, 0);
+        let fmt = format(&fields, 1, 1);
+        let c2_ir = ir(&c2_pool);
+        let mut c2_body = [0u8; 64];
+        c2_body[31] = 32;
+        assert_eq!(
+            validate_contract_calldata_framing(&c2_ir, &fmt, &c2_body),
+            Err(RenderErr::Reject("7730 C2 framing unsupported"))
+        );
+
+        let multi_ir = ir(&ARRAY_MULTI_POOL);
+        let mut multi_body = [0u8; 64];
+        multi_body[31] = 32;
+        assert_eq!(
+            validate_contract_calldata_framing(&multi_ir, &fmt, &multi_body),
+            Err(RenderErr::Reject("7730 multi-array framing"))
+        );
+    }
+
+    #[test]
+    fn format_preflight_exactly_validates_hidden_dynamic_token_path() {
+        use crate::render::params::{PARAM_TOKEN_PATH, PARAM_VISIBILITY};
+
+        let mut pool = SLOT_POOL.to_vec();
+        let param_off = pool.len() as u16;
+        let token_path = [
+            PathOp::RootStructured as u8,
+            PathOp::FieldIdx as u8,
+            0,
+            1,
+            PathOp::FollowOffset as u8,
+            PathOp::ArraySlice as u8,
+            0,
+            0,
+            0,
+            20,
+            0,
+        ];
+        let param_len = 2 + token_path.len() + 3;
+        pool.push(param_len as u8);
+        pool.push(PARAM_TOKEN_PATH);
+        pool.push(token_path.len() as u8);
+        pool.extend_from_slice(&token_path);
+        pool.extend_from_slice(&[PARAM_VISIBILITY, 1, crate::ir::Visibility::Never as u8]);
+
+        let fields = one_field_bytes(FormatOp::TokenAmount as u8, 1, param_off);
+        let fmt = format(&fields, 1, 2);
+        let descriptor = Erc7730Ir {
+            pool: &pool,
+            ..ir(&[])
+        };
+        let mut body = std::vec![0u8; 160];
+        body[63] = 64; // slot 1 offset == two-word head end
+        body[88..96].copy_from_slice(&43u64.to_be_bytes());
+        body[96..116].copy_from_slice(&[0x11; 20]);
+        body[116..119].copy_from_slice(&[0, 0x0b, 0xb8]);
+        body[119..139].copy_from_slice(&[0x22; 20]);
+        assert_eq!(
+            validate_contract_calldata_framing(&descriptor, &fmt, &body),
+            Ok(())
+        );
+
+        let mut dirty = body.clone();
+        *dirty.last_mut().unwrap() = 1;
+        assert_eq!(
+            validate_contract_calldata_framing(&descriptor, &fmt, &dirty),
+            Err(RenderErr::Reject("7730 res dirty pad"))
+        );
+        body.extend_from_slice(&[0u8; 32]);
+        assert_eq!(
+            validate_contract_calldata_framing(&descriptor, &fmt, &body),
+            Err(RenderErr::Reject("7730 res not whole tail"))
+        );
+    }
+
+    #[test]
+    fn unknown_chain_amount_without_decimals_paints_exact_raw_integer() {
+        let mut envelope = tx();
+        envelope.chain_id = 149;
+        let mut pages = Pages::with_len(0);
+        render_amount(
+            &field(FormatOp::Amount as u8, 1),
+            &mut pages,
+            &ir(&SLOT_POOL),
+            &one_billion_word(),
+            &envelope,
+            &ParamSet::default(),
+        )
+        .unwrap();
+        assert_eq!(pages.as_slice().len(), 1);
+        assert_eq!(&pages.buf[0][1][..10], b"1000000000");
+        assert_eq!(&pages.buf[0][3][..12], b"! raw, dec=?");
+    }
+
+    #[test]
+    fn unknown_chain_native_sentinel_without_decimals_paints_raw() {
+        const SENTINEL: [u8; 20] = [0xEE; 20];
+        let mut envelope = tx();
+        envelope.chain_id = 149;
+        let mut params = ParamSet::default();
+        params.token = Some(&SENTINEL);
+        params.native_currency = Some(&SENTINEL);
+        let mut pages = Pages::with_len(0);
+        render_token_amount(
+            &field(FormatOp::TokenAmount as u8, 1),
+            &mut pages,
+            &ir(&SLOT_POOL),
+            &one_billion_word(),
+            &envelope,
+            None,
+            &NameResolver::new(),
+            &params,
+        )
+        .unwrap();
+        assert_eq!(pages.as_slice().len(), 1);
+        assert_eq!(&pages.buf[0][1][..10], b"1000000000");
+        assert_eq!(&pages.buf[0][3][..12], b"! raw, dec=?");
+    }
+
+    #[test]
+    fn unknown_chain_array_amount_without_decimals_paints_raw() {
+        let mut envelope = tx();
+        envelope.chain_id = 149;
+        let mut pages = Pages::with_len(0);
+        render_array_element(
+            &field(FormatOp::Amount as u8, 1),
+            FormatOp::Amount,
+            &one_billion_word(),
+            &mut pages,
+            &envelope,
+            None,
+            &NameResolver::new(),
+            &ParamSet::default(),
+        )
+        .unwrap();
+        assert_eq!(pages.as_slice().len(), 1);
+        assert_eq!(&pages.buf[0][1][..10], b"1000000000");
+        assert_eq!(&pages.buf[0][3][..12], b"! raw, dec=?");
+    }
+
+    #[test]
+    fn explicit_decimals_keep_unknown_chain_amount_scaled() {
+        let mut envelope = tx();
+        envelope.chain_id = 149;
+        let mut params = ParamSet::default();
+        params.decimals = Some(9);
+        let mut pages = Pages::with_len(0);
+        render_amount(
+            &field(FormatOp::Amount as u8, 1),
+            &mut pages,
+            &ir(&SLOT_POOL),
+            &one_billion_word(),
+            &envelope,
+            &params,
+        )
+        .unwrap();
+        assert_eq!(&pages.buf[0][1][..8], b"1 NATIVE");
+        assert_eq!(&pages.buf[0][3][..6], b"> next");
+    }
+
+    #[test]
+    fn dynamic_bytes_decline_even_when_printable() {
+        let mut params = ParamSet::default();
+        params.dynamic_kind = Some(DYNAMIC_KIND_BYTES);
+        let mut pages = Pages::with_len(0);
+        let result = render_dynamic_bytes(
+            &field(FormatOp::Raw as u8, 1),
+            &mut pages,
+            &ir(&DYNAMIC_POOL),
+            &dynamic_body(b"same prefix, attacker-controlled suffix"),
+            1,
+            &tx(),
+            None,
+            &NameResolver::new(),
+            &params,
+        );
+        assert_eq!(result, Err(RenderErr::Reject("7730 opaque bytes")));
+        assert_eq!(pages.as_slice().len(), 0);
+    }
+
+    #[test]
+    fn dynamic_string_cannot_bypass_declared_formatter_or_params() {
+        let mut params = ParamSet::default();
+        params.dynamic_kind = Some(DYNAMIC_KIND_STRING);
+        let body = dynamic_body(b"1000000000000000000");
+        let resolver = NameResolver::new();
+
+        let mut amount_pages = Pages::with_len(0);
+        assert_eq!(
+            render_dynamic_bytes(
+                &field(FormatOp::Amount as u8, 1),
+                &mut amount_pages,
+                &ir(&DYNAMIC_POOL),
+                &body,
+                1,
+                &tx(),
+                None,
+                &resolver,
+                &params,
+            ),
+            Err(RenderErr::Reject("7730 dynamic formatter mismatch"))
+        );
+
+        params.base = Some(b"ETH");
+        let mut param_pages = Pages::with_len(0);
+        assert_eq!(
+            render_dynamic_bytes(
+                &field(FormatOp::Raw as u8, 1),
+                &mut param_pages,
+                &ir(&DYNAMIC_POOL),
+                &body,
+                1,
+                &tx(),
+                None,
+                &resolver,
+                &params,
+            ),
+            Err(RenderErr::Reject("7730 dynamic formatter mismatch"))
+        );
+    }
+
+    #[test]
+    fn dynamic_string_trailing_space_changes_length_row() {
+        let mut params = ParamSet::default();
+        params.dynamic_kind = Some(DYNAMIC_KIND_STRING);
+        let render = |data: &[u8]| {
+            let mut pages = Pages::with_len(0);
+            render_dynamic_bytes(
+                &field(FormatOp::Raw as u8, 1),
+                &mut pages,
+                &ir(&DYNAMIC_POOL),
+                &dynamic_body(data),
+                1,
+                &tx(),
+                None,
+                &NameResolver::new(),
+                &params,
+            )
+            .unwrap();
+            pages
+        };
+        let plain = render(b"alice");
+        let spaced = render(b"alice ");
+        assert_ne!(plain.as_slice(), spaced.as_slice());
+        assert_eq!(&plain.buf[0][3][..7], b"5 bytes");
+        assert_eq!(&spaced.buf[0][3][..7], b"6 bytes");
+    }
+
+    #[test]
+    fn dynamic_root_offset_must_be_inside_declared_head() {
+        let malicious = [
+            PathOp::RootStructured as u8,
+            PathOp::FieldIdx as u8,
+            0,
+            3,
+            PathOp::FollowOffset as u8,
+        ];
+        assert_eq!(
+            validate_root_program_static_head(&malicious, 2),
+            Err(RenderErr::Reject("7730 root outside static head"))
+        );
+    }
+
+    #[test]
+    fn dirty_address_padding_is_rejected() {
+        let mut word = [0u8; 32];
+        word[0] = 1;
+        word[12..].copy_from_slice(&[0xAA; 20]);
+        assert_eq!(
+            canonical_address_word(&word),
+            Err(RenderErr::Reject("7730 noncanonical address"))
+        );
+    }
+
+    #[test]
+    fn every_address_formatter_rejects_dirty_high_padding() {
+        let mut body = [0u8; 32];
+        body[0] = 1;
+        body[12..].copy_from_slice(&[0xAA; 20]);
+        let ir = ir(&SLOT_POOL);
+        let tx = tx();
+        let resolver = NameResolver::new();
+
+        let mut ticker_pages = Pages::with_len(0);
+        assert_eq!(
+            render_token_ticker(
+                &field(FormatOp::TokenTicker as u8, 1),
+                &mut ticker_pages,
+                &ir,
+                &body,
+                &tx,
+                None,
+                &resolver,
+                &ParamSet::default(),
+            ),
+            Err(RenderErr::Reject("7730 noncanonical address"))
+        );
+
+        let mut interop_pages = Pages::with_len(0);
+        assert_eq!(
+            render_interop_address_name(
+                &field(FormatOp::InteroperableAddressName as u8, 1),
+                &mut interop_pages,
+                &ir,
+                &body,
+                &tx,
+                &resolver,
+            ),
+            Err(RenderErr::Reject("7730 noncanonical address"))
+        );
+    }
+
+    #[test]
+    fn interoperable_address_renders_u64_chain_id_losslessly() {
+        let mut body = [0u8; 32];
+        body[12..].copy_from_slice(&[0x11; 20]);
+        let mut tx = tx();
+        tx.chain_id = u64::MAX;
+        let mut pages = Pages::with_len(0);
+        render_interop_address_name(
+            &field(FormatOp::InteroperableAddressName as u8, 1),
+            &mut pages,
+            &ir(&SLOT_POOL),
+            &body,
+            &tx,
+            &NameResolver::new(),
+        )
+        .unwrap();
+        assert_eq!(&pages.buf[0][1][..7], b"eip155:");
+        assert_eq!(&pages.buf[0][2], b"184467440737095>");
+        assert_eq!(&pages.buf[0][3][..6], b"51615:");
+    }
+
+    #[test]
+    fn const_cannot_override_a_real_path_or_unknown_format() {
+        let mut params = ParamSet::default();
+        params.const_value = Some(b"benign");
+        let resolver = NameResolver::new();
+        let mut pages = Pages::with_len(0);
+        assert_eq!(
+            dispatch(
+                &field(FormatOp::Raw as u8, 1),
+                &mut pages,
+                &ir(&SLOT_POOL),
+                &[0u8; 32],
+                &tx(),
+                None,
+                &resolver,
+                &params,
+            ),
+            Err(RenderErr::Reject("7730 bad const shape"))
+        );
+        assert_eq!(
+            dispatch(
+                &field(0xFF, 0),
+                &mut pages,
+                &ir(&SLOT_POOL),
+                &[],
+                &tx(),
+                None,
+                &resolver,
+                &params,
+            ),
+            Err(RenderErr::Reject("7730 bad format op"))
+        );
+    }
+
+    #[test]
+    fn amount_overflow_renders_all_32_raw_bytes() {
+        let word = [0xFF; 32];
+        let mut pages = Pages::with_len(0);
+        render_amount(
+            &field(FormatOp::Amount as u8, 1),
+            &mut pages,
+            &ir(&SLOT_POOL),
+            &word,
+            &tx(),
+            &ParamSet::default(),
+        )
+        .unwrap();
+        assert_eq!(pages.as_slice().len(), 2);
+        for row in [
+            &pages.buf[0][1],
+            &pages.buf[0][2],
+            &pages.buf[1][1],
+            &pages.buf[1][2],
+        ] {
+            assert_eq!(row, b"ffffffffffffffff");
+        }
     }
 }

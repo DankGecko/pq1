@@ -211,12 +211,13 @@ The renderer classifies the inner call and dispatches:
 | Trigger                                          | Renderer            | Page count |
 |--------------------------------------------------|---------------------|------------|
 | empty `raw_data`, `value == 0`                   | empty call          | 1          |
-| empty `raw_data`, `value > 0`                    | plain ETH transfer  | 2          |
+| empty `raw_data`, `value > 0`                    | plain chain-native transfer | 2   |
 | `parse_erc20_calldata` succeeds, ERC-20 bundle present + address-matches | ERC-20 known   | 4          |
 | `parse_erc20_calldata` succeeds, no metadata match | ERC-20 unknown    | 4          |
 | `canonical.to == canonical.safe_address` + recognised selector | **Safe-mgmt** (per-op) | 1–3 |
-| `canonical.to == canonical.safe_address` + unrecognised selector | **Unknown Safe op** (loud blind) | 3 |
-| anything else                                    | Blind sign          | 3          |
+| `canonical.to == canonical.safe_address` + unrecognised selector proven absent from ERC-7730 filter | **Unknown Safe op** (loud blind) | 3 |
+| other opaque tuple proven absent from ERC-7730 filter | Blind sign       | 3          |
+| opaque tuple known/Bloom-positive in ERC-7730 filter | **Refuse**       | —          |
 
 Final page: long-press confirm prompt.
 

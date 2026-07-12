@@ -1,5 +1,13 @@
 # VULN — ERC-7730 `visible:"never"` lets a shipping descriptor clear-sign with **no parameters shown** (WYSIWYS break)
 
+> **2026-07-10 follow-up:** the original address/all-hidden fix below was
+> tightened. Every hidden non-address operand is now excluded too, semantic
+> hidden-address allowlists were deleted, and a verified/registry-declared call
+> that cannot render hard-refuses rather than falling through to blind-sign.
+> The historical “non-address residual accepted” and fallback wording below no
+> longer describes current behavior. See
+> [`clear-signing-2026-07-10.md`](../adversarial-review/findings/clear-signing-2026-07-10.md#f8--hidden-material-and-semantic-exemptions-could-conceal-signed-action-bytes).
+
 **Severity:** HIGH (WYSIWYS / trusted-display integrity — software-triggerable by an untrusted companion against a correctly-provisioned, unlocked device; breaks the product's core "you see exactly what you sign" guarantee for *known shapes*).
 **Status:** **FIXED 2026-07-01** (found 2026-06-30). Closed with BOTH recommended layers — a build-time visibility gate that refuses to compile an offending descriptor (fixes 1) + an on-device WYSIWYS belt that refuses to clear-sign a parameter-less known shape (fix 2). See [§ Fix applied](#fix-applied). Firmware *logic* was clean; this was a firmware-**image** defect — the offending descriptors were compiled into the firmware-pinned `ERC7730_DESCRIPTORS_ROOT`.
 **Class:** Display↔intent mismatch ("show nothing / sign arbitrary params"). Not memory-safety, not key-theft. Whether a given hidden-param descriptor is a direct fund drain is protocol-dependent; the *guarantee* that a clear-signed known shape surfaces its effect-bearing parameters is broken regardless.

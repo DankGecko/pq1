@@ -20,8 +20,8 @@
 //! the Phase 1 BLIND SIGN flow with the FUNCTION page intact.
 
 use super::primitives::{
-    chain_name, hex_nibble, write_addr_full_or_name, write_chain, write_eth_two_rows,
-    write_fee_budget_row, write_gas, write_gwei, write_line, write_nonce_row, write_tip_row,
+    hex_nibble, write_addr_full_or_name, write_chain, write_gas, write_gwei, write_line,
+    write_native_amount_two_rows, write_native_fee_budget_row, write_nonce_row, write_tip_row,
     AmountFit,
 };
 use super::Pages;
@@ -141,7 +141,7 @@ pub(super) fn try_render_typed_call(
     if value_page == 1 {
         write_line(&mut pages.buf[page_idx][0], "! VALUE:");
         let [_lbl, r1, r2, foot] = &mut pages.buf[page_idx];
-        let fit = write_eth_two_rows(r1, r2, &tx.value);
+        let fit = write_native_amount_two_rows(r1, r2, &tx.value, tx.chain_id);
         write_line(
             foot,
             match fit {
@@ -154,8 +154,10 @@ pub(super) fn try_render_typed_call(
 
     // ── Page (next): Chain ──────────────────────────────────────────
     write_line(&mut pages.buf[page_idx][0], "Chain:");
-    write_chain(&mut pages.buf[page_idx][1], tx.chain_id);
-    write_line(&mut pages.buf[page_idx][2], chain_name(tx.chain_id));
+    {
+        let [_label, id, continuation_or_name, _foot] = &mut pages.buf[page_idx];
+        write_chain(id, continuation_or_name, tx.chain_id);
+    }
     write_line(&mut pages.buf[page_idx][3], "> next");
     page_idx += 1;
 
@@ -168,7 +170,12 @@ pub(super) fn try_render_typed_call(
 
     // ── Page (next): Worst-case fee budget + gas ────────────────────
     write_line(&mut pages.buf[page_idx][0], "Worst-case:");
-    write_fee_budget_row(&mut pages.buf[page_idx][1], &tx.max_fee_per_gas, tx.gas_limit);
+    write_native_fee_budget_row(
+        &mut pages.buf[page_idx][1],
+        &tx.max_fee_per_gas,
+        tx.gas_limit,
+        tx.chain_id,
+    );
     write_gas(&mut pages.buf[page_idx][2], tx.gas_limit);
     write_line(&mut pages.buf[page_idx][3], "> next");
     page_idx += 1;

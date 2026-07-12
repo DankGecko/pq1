@@ -23,7 +23,11 @@
 //! 0 reproduces the legacy single-account derivation byte-for-byte so
 //! pre-multi-account seeds keep their existing on-chain address.
 
-use sphincs_tz_shared::{NscStatus, MAX_ACCOUNT_INDEX};
+use sha2::{Digest, Sha256};
+use sha3::Keccak256;
+use sphincs_tz_shared::{
+    NscStatus, MAX_ACCOUNT_INDEX, PQ_SMART_WALLET_FACTORY, PROXY_INIT_CODE_HASH,
+};
 use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;
 
@@ -39,26 +43,22 @@ const CFI_STEP_SENDER_BIND_DONE: u32 = 0x6B_4D_A2_17;
 pub(super) const SENDER_BIND_CFI_EXPECTED: u32 =
     crate::cfi_expected!(CFI_STEP_SENDER_BIND_DONE);
 
-/// Derive the mnemonic-bound CREATE2 wallet address for `account_index`.
-///
-/// Signing gateways call this before confirmation so the untrusted companion
-/// cannot pair an account-derived signing key with an arbitrary `sender`.
-/// Centralising it here also keeps `CMD_GET_WALLET_ADDRESS` and every signer on
-/// exactly the same address formula.
+/// Return the bootstrap public-key halves for an account, deriving and caching
+/// them on a miss.
 ///
 /// # Safety
 /// On a cache miss this accesses the process-wide secure-element singleton.
 /// Callers must hold the non-reentrant NSC handler guard.
-pub(super) unsafe fn wallet_address_for_account(
+unsafe fn bootstrap_public_key_for_account(
     account_index: u32,
     progress_title: &'static str,
-) -> Result<[u8; ADDR_LEN], NscStatus> {
+) -> Result<([u8; 32], [u8; 32]), NscStatus> {
     if account_index > MAX_ACCOUNT_INDEX {
         return Err(NscStatus::InvalidPointer);
     }
 
     let cached = super::state::with_state(|s| s.bootstrap_cache_lookup(account_index));
-    let (pk_seed, pk_root) = match cached {
+    Ok(match cached {
         Some(pair) => pair,
         None => {
             let master_secret: Zeroizing<[u8; 32]> =
@@ -93,9 +93,87 @@ pub(super) unsafe fn wallet_address_for_account(
             });
             (pk_seed_32, pk_root_32)
         }
+    })
+}
+
+/// Derive the mnemonic-bound CREATE2 wallet address for `account_index`.
+///
+/// Signing gateways call this before confirmation so the untrusted companion
+/// cannot pair an account-derived signing key with an arbitrary `sender`.
+/// This is the canonical address computation shared with the AA crate and
+/// `CMD_GET_WALLET_ADDRESS`; sender binding additionally recomputes it through
+/// the structurally independent implementation below.
+///
+/// # Safety
+/// On a cache miss this accesses the process-wide secure-element singleton.
+/// Callers must hold the non-reentrant NSC handler guard.
+pub(super) unsafe fn wallet_address_for_account(
+    account_index: u32,
+    progress_title: &'static str,
+) -> Result<[u8; ADDR_LEN], NscStatus> {
+    // SAFETY: forwarded from this function's contract.
+    let (pk_seed, pk_root) = unsafe {
+        bootstrap_public_key_for_account(account_index, progress_title)?
     };
 
     Ok(crate::aa::eip1271::proxy_address(&pk_seed, &pk_root))
+}
+
+/// Independent CREATE2 computation used only as the FI cross-check.
+///
+/// The canonical implementation in `pqsigner-aa` concatenates the two public
+/// key halves into one 64-byte SHA input and feeds the complete 85-byte
+/// CREATE2 preimage to Keccak in one update. This implementation deliberately
+/// uses separate SHA updates, fills the CREATE2 preimage in a different order,
+/// and feeds Keccak in three chunks. Keeping it non-inlined and separated by a
+/// randomized gap prevents the sender-binding check from degenerating into two
+/// calls to one shared computation (or two reads of one cached address).
+#[inline(never)]
+fn proxy_address_cross_check(
+    pk_seed: &[u8; 32],
+    pk_root: &[u8; 32],
+) -> [u8; ADDR_LEN] {
+    let salt: [u8; 32] = {
+        let mut h = Sha256::new();
+        h.update(core::hint::black_box(&pk_seed[..]));
+        h.update(core::hint::black_box(&pk_root[..]));
+        h.finalize().into()
+    };
+
+    let mut preimage = [0u8; 85];
+    // Reverse write order relative to the canonical helper.
+    preimage[53..85].copy_from_slice(&PROXY_INIT_CODE_HASH);
+    preimage[21..53].copy_from_slice(&salt);
+    preimage[1..21].copy_from_slice(&PQ_SMART_WALLET_FACTORY);
+    preimage[0] = 0xff;
+
+    let digest: [u8; 32] = {
+        let mut h = Keccak256::new();
+        h.update(core::hint::black_box(&preimage[..21]));
+        h.update(core::hint::black_box(&preimage[21..53]));
+        h.update(core::hint::black_box(&preimage[53..]));
+        h.finalize().into()
+    };
+    let mut address = [0u8; ADDR_LEN];
+    address.copy_from_slice(&digest[12..]);
+    address
+}
+
+/// Re-read the account-bound public key and compute its address via the
+/// independent CREATE2 implementation above.
+///
+/// # Safety
+/// Same as [`wallet_address_for_account`].
+#[inline(never)]
+unsafe fn wallet_address_for_account_cross_check(
+    account_index: u32,
+    progress_title: &'static str,
+) -> Result<[u8; ADDR_LEN], NscStatus> {
+    // SAFETY: forwarded from this function's contract.
+    let (pk_seed, pk_root) = unsafe {
+        bootstrap_public_key_for_account(account_index, progress_title)?
+    };
+    Ok(proxy_address_cross_check(&pk_seed, &pk_root))
 }
 
 /// Result of binding a companion-supplied UserOp sender to a deterministic
@@ -130,9 +208,10 @@ impl SenderBinding {
 /// Bind a companion-supplied UserOp sender to this seed's deterministic
 /// wallet for `account_index`.
 ///
-/// The address is derived twice with a randomized gap and both results are
-/// compared to the companion field under the FI sentinel gate. On success the
-/// trusted, derived address is published into the caller-owned `output` slot.
+/// The address is derived through two structurally independent CREATE2
+/// computations with a randomized gap and both results are compared to the
+/// companion field under the FI sentinel gate. On success the trusted, derived
+/// address is published into the caller-owned `output` slot.
 /// Signing handlers must discard the companion field and use only that slot
 /// for display bindings and UserOp hashes. Consequently, even a fault that
 /// skips the caller's reject branch cannot turn the device into a signer for
@@ -162,12 +241,13 @@ pub(super) unsafe fn bind_userop_sender(
             binding.sender = expected_a;
             let match_a = expected_a.ct_eq(companion_sender).unwrap_u8();
 
-            // Recompute the CREATE2 address rather than merely rereading
-            // `expected_a`. The cached public key avoids a second C10 keygen.
+            // Recompute through the independently structured CREATE2 path
+            // rather than calling the canonical helper twice. The cached
+            // public key avoids a second C10 keygen.
             crate::fi::wait_random();
             // SAFETY: forwarded from this function's contract.
             match unsafe {
-                wallet_address_for_account(account_index, "Wallet check")
+                wallet_address_for_account_cross_check(account_index, "Wallet check")
             } {
                 Err(error) => binding.error = error,
                 Ok(expected_b) => {

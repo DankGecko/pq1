@@ -16,8 +16,9 @@
 //! VISIBILITY TLV payload; sub-TLV for value lists is a Phase 5 wire
 //! extension. Until that lands, `MustMatch` carries the descriptor's
 //! *intent* without the mechanism to enforce it. Rather than silently
-//! pretend a rule is satisfied, we reject — the priority-ladder caller
-//! falls through to blind-sign and surfaces a status banner.
+//! pretend a rule is satisfied, we reject. The secure dispatcher surfaces a
+//! status banner and hard-refuses a verified/known call; it does not downgrade
+//! that tuple to blind-sign.
 //!
 //! Once the value-list extension ships, `IfNotIn` / `MustMatch` will
 //! consult `params.visibility_values` (a `[u8 count][u8 elem_len][bytes
@@ -36,7 +37,7 @@ pub enum Action {
     /// Skip this field — don't walk, don't format.
     Skip,
     /// Descriptor disagrees with the inbound tx — the caller surfaces
-    /// `RenderErr::Reject(reason)` and falls through to blind-sign.
+    /// `RenderErr::Reject(reason)` and refuses the verified/known call.
     Reject(&'static str),
 }
 

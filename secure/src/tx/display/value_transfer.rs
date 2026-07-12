@@ -19,8 +19,9 @@
 //! fit, the renderer paints `!OVERFLOW` so the user can abort.
 
 use super::primitives::{
-    chain_name, write_addr_full_or_name, write_chain, write_data_len_row, write_eth_two_rows,
-    write_fee_budget_row, write_gas, write_gwei, write_line, write_nonce_row, write_tip_row,
+    write_addr_full_or_name, write_chain, write_data_len_row, write_gas, write_gwei, write_line,
+    write_native_amount_two_rows,
+    write_native_currency_row, write_native_fee_budget_row, write_nonce_row, write_tip_row,
     AmountFit,
 };
 use super::Pages;
@@ -34,10 +35,12 @@ pub fn render_pages(tx: &Eip1559Tx, resolver: &NameResolver<'_>) -> Pages {
     if tx.value.is_zero() {
         write_line(&mut pages.buf[0][0], "Contract call?");
     } else {
-        write_line(&mut pages.buf[0][0], "Send ETH?");
+        write_native_currency_row(&mut pages.buf[0][0], b"Send ", tx.chain_id, b"?");
     }
-    write_chain(&mut pages.buf[0][1], tx.chain_id);
-    write_line(&mut pages.buf[0][2], chain_name(tx.chain_id));
+    {
+        let [_banner, id, continuation_or_name, _foot] = &mut pages.buf[0];
+        write_chain(id, continuation_or_name, tx.chain_id);
+    }
     write_line(&mut pages.buf[0][3], "> next");
 
     // ── Page 1: To: (3 rows of full 40-hex address) ─────────────────
@@ -53,7 +56,7 @@ pub fn render_pages(tx: &Eip1559Tx, resolver: &NameResolver<'_>) -> Pages {
     write_line(&mut pages.buf[2][0], "Value:");
     {
         let [_lbl, r1, r2, foot] = &mut pages.buf[2];
-        let fit = write_eth_two_rows(r1, r2, &tx.value);
+        let fit = write_native_amount_two_rows(r1, r2, &tx.value, tx.chain_id);
         write_line(
             foot,
             match fit {
@@ -71,7 +74,12 @@ pub fn render_pages(tx: &Eip1559Tx, resolver: &NameResolver<'_>) -> Pages {
 
     // ── Page 4: Worst-case fee budget + gas limit ───────────────────
     write_line(&mut pages.buf[4][0], "Worst-case:");
-    write_fee_budget_row(&mut pages.buf[4][1], &tx.max_fee_per_gas, tx.gas_limit);
+    write_native_fee_budget_row(
+        &mut pages.buf[4][1],
+        &tx.max_fee_per_gas,
+        tx.gas_limit,
+        tx.chain_id,
+    );
     write_gas(&mut pages.buf[4][2], tx.gas_limit);
     write_line(&mut pages.buf[4][3], "> next");
 

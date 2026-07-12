@@ -21,6 +21,7 @@ fn parsed_with(to: Option<[u8; 20]>, data: &[u8]) -> ParsedTx<'_> {
             data_len: data.len(),
             access_list_count: 0,
             signing_hash: [0u8; 32],
+            userop_fields: None,
         },
         data,
         envelope: &[],

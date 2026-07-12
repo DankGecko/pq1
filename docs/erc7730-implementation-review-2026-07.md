@@ -11,8 +11,10 @@ Items marked **[verified]** were re-checked by hand against the code; others car
 reviewer's file:line evidence.
 
 Companion docs (do not duplicate): `docs/erc7730-coverage-blocker-analysis-2026-07.md`
-(resolver-capability histogram; C1/C2/C3 have since landed), `docs/erc7730-registry-coverage-2026-06.md`
-(stale counts), the three `VULN-erc7730-*.md` postmortems.
+(historical resolver-capability histogram; the current policy accepts only an exact, sole
+C1 dynamic tail and retired C2/C3 on 2026-07-10),
+`docs/erc7730-registry-coverage-2026-06.md` (stale counts), the three
+`VULN-erc7730-*.md` postmortems.
 
 ---
 
@@ -92,18 +94,13 @@ dbgen/src/main.rs:304.
 
 ## Tier 2 — Pipeline sustainability (the resync ceremony)
 
-### 2.1 Curations are in-place edits to the vendored registry — re-vendor clobbers them by construction
+### 2.1 Curations were in-place edits to the vendored registry — hidden-field edits retired
 `xtask vendor-registry` does `remove_dir_all` + re-copy (xtask/src/main.rs:1297-1318); the
-Tier-A curations (Uniswap `sqrtPriceLimitX96` hide, Permit2 `nonce`) are unmarked edits to
-vendored JSON (exactly 2 files diff vs upstream today). Guard tests fail loudly on reversion,
-but recovery is git archaeology, guards are keyed to *outcome* (format still compiles) not
-*content* (upstream can edit a curated descriptor without tripping them), and the curation
-count will grow.
-**Fix:** curation overlay dir (`secure/data/erc7730-curations/`, JSON-merge patches, each
-pinned to the **sha256 of the upstream base file** + required `rationale`, same shape as
-`HiddenAddressAllow` in policy.toml). `vendor-registry` applies overlays after copy;
-base-hash mismatch fails loud ("upstream edited a curated descriptor — re-review"). Vendored
-tree returns to byte-identical-to-upstream, so the faithfulness check becomes exact. Effort M.
+old Tier-A curations hid Uniswap `sqrtPriceLimitX96` and Permit2 `nonce`. The 2026-07-10
+adversarial pass removed that policy entirely: every hidden non-address operand is now
+rejected, and the vendored formats are omitted instead of receiving semantic exceptions.
+Any future curation overlay must make a field faithfully renderable (not hidden), bind the
+patch to the exact upstream content hash, and pass the strict visibility/corpus gates.
 
 ### 2.2 Duplicate-leaf precedence is alphabetical-filename (registry-squatting surface)
 Dedup on `(chain, contract, primary_type_hash, ctx)` keeps the lexicographically-first source
@@ -166,9 +163,9 @@ unlocks by formats gained:
    rendered-or-`visible:"never"`; Ledger's tooling is laxer. Blocks paraswap 25, **safe 24
    (all six Safe eip712 `SafeTx` descriptors are 100% dead today**, plus execTransaction/
    setup/createProxy), quickswap 6, threshold 5, aave/lifi/uniswap 3 each. Mechanism exists
-   (vendored-copy patching, the Permit2-nonce precedent) but each hidden param needs review —
-   some (price-affecting ones) should be *rendered*, not hidden. Effort S/descriptor, M for
-   the review across 82. Strong amplifier for the 2.1 curation-overlay mechanism.
+   but the former Permit2-nonce hidden-field precedent is retired: parameters must be
+   faithfully rendered or the format stays omitted. Effort S/descriptor, M for the review
+   across 82. A future overlay mechanism may improve rendering, never suppress operands.
 2. **Array index/slice on rendered-value paths — ~53 formats, 49 of them 1inch** (`pools.[-1]`).
    **CORRECTED 2026-07-02 (design pass): this is NOT a clean unlock.** A rendered-value
    single-index (`arr.[-1]`) is the array-tail-hiding HIGH (see
@@ -246,8 +243,11 @@ leverage order:
   renders because the value-list sub-TLV was never wire-encoded (visibility.rs:92-111).
   Land the value list or document as reserved. Effort M.
 - **3.11 Remaining resolver levers:** see the measured ranking in 3.0 (supersedes the
-  earlier histogram in `erc7730-coverage-blocker-analysis-2026-07.md` for current state —
-  C1/C2/C3 landed since). The **attestation flip** (dev-mode `allow_unattested` → enforced
+  earlier histogram in `erc7730-coverage-blocker-analysis-2026-07.md` for current state).
+  **Current policy (2026-07-10):** exact all-static framing or one sole C1 dynamic
+  string/bytes/primitive-array/tokenPath whole tail; C2 dynamic-tuple descent and C3
+  multiple-tail layouts are intentionally excluded. The **attestation flip** (dev-mode
+  `allow_unattested` → enforced
   ERC-8176) remains the orthogonal lever, blocked on the EAS ecosystem (~0 real
   attestations, `docs/erc8176-attestation-status.md`), not code.
 
@@ -260,8 +260,7 @@ keys unsupported (names are load-bearing since `abi` is ignored).
 
 ## Tier 4 — Rendering UX fidelity (what the user actually sees)
 
-Display model: 16 cols × 4 rows, `MAX_PAGES = 29`; the mandatory outer-signer
-identity page makes a simple USDT transfer 9 pages in the final confirmation set.
+Display model: 16 cols × 4 rows, `MAX_PAGES = 30`; a simple USDT transfer is 8 pages.
 Quick-win bundle (all S unless noted):
 
 - **4.1 Intent banner truncates at 10 chars, no marker** (intent.rs:61-67): **330 of 561**
@@ -286,8 +285,8 @@ Quick-win bundle (all S unless noted):
 - **4.6 `raw` small ints as decimal** (1 page) when high 24 bytes are zero, keep 2-page hex
   otherwise (formatters.rs:227-268) — kills the wall-of-zeros pages and buys page budget.
   **DEFERRED (2026-07-02):** attempted, reverted. `raw` is the opaque catch-all format;
-  "raw == hex" is an invariant other code + tests rely on (the C2/Morpho tuple-render tests
-  probe a raw member's *hex*), and a decimal could read as a meaningful count for a genuinely
+  "raw == hex" is an invariant other code + tests rely on (the Morpho/static-tuple render
+  tests probe a raw member's *hex*), and a decimal could read as a meaningful count for a genuinely
   opaque word. Revisit only with a descriptor-level signal that the word is numeric — a
   readability nicety, not worth breaking the invariant + churning tests I don't own.
 - **4.7 EIP-55 checksum casing** in `write_addr_full` (primitives.rs:265-294) — every wallet
@@ -296,12 +295,16 @@ Quick-win bundle (all S unless noted):
 - **4.8 Chain-name table covers 9 chains; registry ships ~15+** (Avalanche 38 descriptors,
   Sonic 34, Linea 27, Scroll 10, …) — all render `(UNVERIFIED)`, diluting that word's alarm
   value. Extend table; change fallback to `(unknown chain)` so UNVERIFIED keeps one meaning.
-- **4.9 Envelope is 4 pages on every tx** (mod.rs:689-717) — merge to 2 (chain+nonce /
-  fee+tip+worst-case). Page fatigue is a security cost. Effort S-M (pinned-test churn).
-- **4.10 PageBudget overflow → straight to blind-sign**: `COMPACT_MODE` is `const false`
-  (mod.rs:56). On `RenderErr::PageBudget`, retry once with compact mode (spec-sanctioned:
-  optional fields may hide) before declining — unlocks the largest batch/array descriptors.
-  Effort M.
+- **4.9 Envelope compression — SUPERSEDED by WYSIWYS hardening (2026-07-10).** UserOp-backed
+  ERC-7730 renders now show exact fee operands, all three gas limits independently, and the
+  full 256-bit nonce. They deliberately spend extra pages rather than merge distinct signed
+  fields into a lossy aggregate. Revisit layout only with an injective render proof.
+- **4.10 PageBudget overflow — CLOSED (2026-07-10):** every render failure for a
+  firmware-known/verified call, including `RenderErr::PageBudget`, is fatal and refuses the
+  signature; it cannot fall through to typed or blind signing. The dormant compact-mode idea
+  must not skip `Optional` signed operands: under the strict material-field policy every
+  accepted operand is display-relevant, so compact rendering needs a new authenticated
+  materiality model before it can be enabled.
 - **4.11 Two visual languages for the same ERC-20 transfer** (ERC-7730 rung: trimmed `100`
   vs erc20_known: fixed `100.000000 USDT`, different page order/headers) — pick one amount
   policy (trimming is injective post-round; M-6 only forbade progressive width shrink).
@@ -367,10 +370,11 @@ Quick-win bundle (all S unless noted):
 ## What's already strong (don't churn)
 
 - Fail-loud WYSIWYS discipline on-device: every magnitude-hiding path from the 2026-06 audits
-  is closed and pinned by named regression tests; round-half-up display; full 40-hex
-  addresses; loud unbound-token pages; the no-visible-fields belt.
-- The decline-to-blind ladder decision lives in exactly one place with a documented contract
-  on `RenderErr` — the policy is centralized even though the Reject strings need polish.
+  is closed and pinned by named regression tests; round-half-up display; full 40-hex raw
+  addresses (with Merkle-verified named identities separately collision-gated); loud
+  unbound-token pages; the no-visible-fields belt.
+- The verified/known-call refusal decision lives in exactly one place with a documented
+  contract on `RenderErr`; renderer failure cannot downgrade to a typed or blind-sign rung.
 - Committed vendored corpus + faithfulness proof + CI drift gate = genuine root
   reproducibility from the repo alone; whole-registry *parse* round-trip in CI is real.
 - Strict `schema_ver` equality + co-shipped root makes lockstep versioning deliberate and

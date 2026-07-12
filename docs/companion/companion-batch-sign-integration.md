@@ -92,13 +92,12 @@ count-prefixed list of TLV records:
 ```
 
 Each per-tx kind binds via `tx_idx` to one inner transaction. The
-firmware verifies the bundle, FI-cross-checks the binding, and feeds
-the result into `pick_sign_pages` for that tx. Failed verifications
-drop silently (parity with single-tx — clear-signing is an enhancement
-layer that degrades gracefully) **except** for the two downgrade-
-mitigation gates below, which abort the whole batch with
-`InvalidPointer`. Kind 8 trailers accumulate batch-wide into a single
-`NameResolver` shared across renders.
+firmware verifies the bundle, FI-cross-checks the binding, and feeds the result
+into `pick_sign_pages` for that tx. A failed ERC-7730 proof leaves its slot
+empty, but the firmware-pinned known-call filter then hard-refuses any registry-declared
+`(chain, target, selector)` instead of downgrading it. CoW and Safe also have
+the explicit downgrade gates below. Kind 8 trailers accumulate batch-wide into
+one `NameResolver` shared across renders.
 
 | `kind` | symbol | max bytes | verifier | applies to |
 |-------:|--------|----------:|----------|------------|
@@ -127,10 +126,9 @@ The firmware refuses at parse time:
 
 ### Downgrade-mitigation gates (per inner tx)
 
-Mirroring the single-tx path: before `pick_sign_pages` runs for inner
-tx `i`, the firmware refuses to sign with `InvalidPointer` if either
-gate fires. Companions MUST emit the corresponding routed trailer in
-these cases.
+Mirroring the single-tx path, the firmware refuses the whole batch when any
+member triggers one of these gates. Companions MUST emit the corresponding
+routed trailer.
 
 * **CoW v3**: if `inner.data[0..4] == 0xec6cb13f` (setPreSignature) AND
   `inner.to == GPV2_SETTLEMENT (0x9008…ab41)`, a kind 3 trailer with
@@ -138,6 +136,10 @@ these cases.
 * **Safe v1**: if `inner.data[0..4] == 0xd4d9bdcd` (approveHash) AND
   `inner.data.length == 36`, a kind 4 trailer with `tx_idx = i` is
   mandatory.
+* **ERC-7730 known call**: if the firmware-pinned membership filter contains
+  `(chain_id, inner.to, inner.data[0..4])`, a verified kind 7 trailer routed to
+  `tx_idx = i` is mandatory. Omission, malformed proof, binding failure, or
+  render failure aborts the whole batch; Bloom false positives refuse safely.
 
 ### Migration from v1
 

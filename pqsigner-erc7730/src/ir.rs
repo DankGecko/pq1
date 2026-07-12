@@ -18,8 +18,8 @@
 //!    2    8   chain_id (u64 BE)  (for EIP-712: domain.chainId)
 //!   10   20   contract           (for EIP-712: domain.verifyingContract)
 //!   30   32   descriptor_hash    (sha256 of JCS-canonicalised source
-//!                                 JSON — same as the ERC-8176 hash,
-//!                                 included for cross-device sanity)
+//!                                 JSON; the host-only ERC-8176 identifier is
+//!                                 a distinct keccak256 value)
 //!   62   32   domain_separator   (EIP-712 only; zero for contract ctx)
 //!   94   16   owner              (NUL-padded ASCII, ≤15 + NUL)
 //!  110   16   contract_name      (NUL-padded ASCII, ≤15 + NUL)
@@ -283,10 +283,8 @@ impl TryFrom<u8> for Visibility {
 }
 
 impl<'a> Erc7730Ir<'a> {
-    /// Parse the fixed header + locate the pool and formats sections
-    /// without doing deep validation of either. Deep validation runs
-    /// lazily in the walker as each format is rendered, so that the
-    /// per-format cost is paid only when the format is actually picked.
+    /// Parse the fixed header, locate the pool/formats sections, and deeply
+    /// validate the complete authenticated format table before returning.
     ///
     /// Reject blobs that:
     /// * are shorter than `HEADER_LEN`
@@ -357,7 +355,7 @@ impl<'a> Erc7730Ir<'a> {
         let pool = &bytes[metadata_off..metadata_off + pool_len];
         let formats = &bytes[formats_off..formats_off + formats_len];
 
-        Ok(Erc7730Ir {
+        let ir = Erc7730Ir {
             schema_ver,
             context_kind,
             chain_id,
@@ -369,7 +367,13 @@ impl<'a> Erc7730Ir<'a> {
             pool,
             formats,
             raw: bytes,
-        })
+        };
+        // Verification authenticates the entire leaf, so validation must also
+        // cover the entire leaf. A first-match selector must not make a
+        // malformed/duplicate suffix unreachable, and the advertised caps must
+        // be enforced before any renderer consumes the IR.
+        ir.validate_formats()?;
+        Ok(ir)
     }
 
     /// Number of formats declared in the formats section. Reads the
@@ -454,6 +458,107 @@ impl<'a> Erc7730Ir<'a> {
         }
         Ok(None)
     }
+
+    /// Deep structural validation of the complete format table. Kept stack-only
+    /// and allocation-free for secure-world use.
+    fn validate_formats(&self) -> Result<(), IrError> {
+        let declared = self.format_count()? as usize;
+        let mut iter = self.format_iter();
+        let mut seen = 0usize;
+        while let Some(entry) = iter.next() {
+            let header = entry?;
+            seen += 1;
+            if matches!(self.context_kind, ContextKind::Eip712)
+                && header.selector != header.type_hash[..4]
+            {
+                return Err(IrError::BadFormat);
+            }
+            let mut fields = header.fields();
+            while let Some(field) = fields.next() {
+                let field = field?;
+                FormatOp::try_from(field.format_op)?;
+                if field.path_off != 0 {
+                    let path = self.path_bytes(field.path_off)?;
+                    validate_path_program(path)?;
+                }
+                if field.param_off != 0 {
+                    validate_pool_entry(self.pool, field.param_off)?;
+                    crate::render::params::parse(self, field.param_off)
+                        .map_err(|_| IrError::BadPoolEntry)?;
+                }
+            }
+            if fields.cursor() != header.fields_buf.len() {
+                return Err(IrError::BadFormat);
+            }
+        }
+        if seen != declared || iter.remaining != 0 || iter.cursor != self.formats.len() {
+            return Err(IrError::BadFormat);
+        }
+
+        // Selectors are canonical and unique. O(MAX_FORMATS²) is bounded at
+        // 32×32 and avoids heap storage in the secure parser.
+        let mut outer = self.format_iter();
+        let mut outer_idx = 0usize;
+        while let Some(entry) = outer.next() {
+            let lhs = entry?;
+            let mut inner = self.format_iter();
+            let mut inner_idx = 0usize;
+            while let Some(other) = inner.next() {
+                let rhs = other?;
+                if inner_idx > outer_idx && lhs.selector == rhs.selector {
+                    return Err(IrError::BadFormat);
+                }
+                inner_idx += 1;
+            }
+            outer_idx += 1;
+        }
+        Ok(())
+    }
+}
+
+fn validate_pool_entry(pool: &[u8], off: u16) -> Result<(), IrError> {
+    let off = off as usize;
+    let len = *pool.get(off).ok_or(IrError::BadPoolEntry)? as usize;
+    if len + 1 > MAX_POOL_ENTRY_LEN {
+        return Err(IrError::OverCap);
+    }
+    pool.get(off + 1..off + 1 + len)
+        .ok_or(IrError::BadPoolEntry)?;
+    Ok(())
+}
+
+fn validate_path_program(prog: &[u8]) -> Result<(), IrError> {
+    let Some(&root) = prog.first() else {
+        return Err(IrError::BadField);
+    };
+    if !matches!(
+        PathOp::try_from(root)?,
+        PathOp::RootStructured | PathOp::RootContainer | PathOp::RootMetadata
+    ) {
+        return Err(IrError::BadField);
+    }
+    let mut p = 1usize;
+    let mut steps = 0usize;
+    while p < prog.len() {
+        steps += 1;
+        if steps > MAX_NESTING {
+            return Err(IrError::OverCap);
+        }
+        let op = PathOp::try_from(prog[p])?;
+        let width = match op {
+            PathOp::FieldIdx | PathOp::ArrayIdx => 3,
+            PathOp::ArraySlice => 6,
+            PathOp::ArrayLast | PathOp::ArrayAll | PathOp::FollowOffset => 1,
+            PathOp::RootStructured | PathOp::RootContainer | PathOp::RootMetadata => {
+                return Err(IrError::BadField)
+            }
+        };
+        p = p.checked_add(width).ok_or(IrError::BadField)?;
+        if p > prog.len() {
+            return Err(IrError::BadField);
+        }
+    }
+    Ok(())
 }
 
 /// Parsed view of one format-table entry. Borrows from the IR's
@@ -528,8 +633,8 @@ impl<'a> FormatHeader<'a> {
 }
 
 /// One field of a format. The path / param offsets index into
-/// `Erc7730Ir::pool`; the walker reads the program bytes via
-/// `walker::path_bytes`.
+/// `Erc7730Ir::pool`; live renderers read the program bytes via
+/// [`Erc7730Ir::path_bytes`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FieldEntry<'a> {
     /// Formatter opcode — feed to `FormatOp::try_from`.
@@ -711,13 +816,20 @@ impl<'a> Iterator for FieldIter<'a> {
     }
 }
 
-/// Trim trailing NUL padding and verify the surviving bytes are clean
-/// printable ASCII. Used for `owner` and `contract_name`.
+/// Trim canonical trailing NUL padding and verify the surviving bytes are
+/// clean printable ASCII. Used for `owner` and `contract_name`.
 fn trim_nul(buf: &[u8]) -> Result<&[u8], IrError> {
     let end = buf
         .iter()
         .position(|&b| b == 0)
-        .unwrap_or(buf.len());
+        .ok_or(IrError::BadAscii)?;
+    // These are fixed-width, NUL-terminated fields. Accepting non-zero bytes
+    // after the first terminator would authenticate multiple wire encodings
+    // for the same displayed string and hide attacker-controlled bytes from
+    // the UI. Require one canonical zero-filled suffix, including the NUL.
+    if buf[end..].iter().any(|&b| b != 0) {
+        return Err(IrError::BadAscii);
+    }
     let body = &buf[..end];
     if !is_clean_ascii(body) {
         return Err(IrError::BadAscii);
@@ -772,6 +884,68 @@ mod tests {
         buf.extend_from_slice(&pool);
         buf.push(0u8); // format count
         buf
+    }
+
+    fn build_ir(pool: &[u8], formats: &[u8]) -> std::vec::Vec<u8> {
+        let mut buf = std::vec![0u8; HEADER_LEN];
+        buf[0] = SCHEMA_VER;
+        buf[1] = CTX_CONTRACT;
+        buf[2..10].copy_from_slice(&1u64.to_be_bytes());
+        buf[126..128].copy_from_slice(&(HEADER_LEN as u16).to_be_bytes());
+        buf[128..130]
+            .copy_from_slice(&((HEADER_LEN + pool.len()) as u16).to_be_bytes());
+        buf[130..132].copy_from_slice(&(pool.len() as u16).to_be_bytes());
+        buf[132..134].copy_from_slice(&(formats.len() as u16).to_be_bytes());
+        buf.extend_from_slice(pool);
+        buf.extend_from_slice(formats);
+        buf
+    }
+
+    fn one_field_format(selector: [u8; 4], format_op: u8) -> std::vec::Vec<u8> {
+        let mut out = std::vec::Vec::new();
+        out.extend_from_slice(&selector);
+        out.push(1); // field count
+        out.push(0); // intent len
+        out.extend_from_slice(&1u16.to_be_bytes()); // static head words
+        out.push(0); // nested descent count
+        out.push(format_op);
+        out.push(1); // label len
+        out.push(b'X');
+        out.extend_from_slice(&1u16.to_be_bytes()); // path offset
+        out.extend_from_slice(&0u16.to_be_bytes()); // no params
+        out
+    }
+
+    #[test]
+    fn deep_validation_rejects_format_count_over_cap() {
+        let bytes = build_ir(&[], &[(MAX_FORMATS as u8) + 1]);
+        assert_eq!(Erc7730Ir::parse(&bytes), Err(IrError::OverCap));
+    }
+
+    #[test]
+    fn deep_validation_rejects_trailing_format_bytes() {
+        let bytes = build_ir(&[], &[0, 0xAA]);
+        assert_eq!(Erc7730Ir::parse(&bytes), Err(IrError::BadFormat));
+    }
+
+    #[test]
+    fn deep_validation_rejects_duplicate_selectors() {
+        let pool = [0, 4, PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 0];
+        let mut formats = std::vec![2];
+        formats.extend_from_slice(&one_field_format([1, 2, 3, 4], FormatOp::Raw as u8));
+        formats.extend_from_slice(&one_field_format([1, 2, 3, 4], FormatOp::Raw as u8));
+        let bytes = build_ir(&pool, &formats);
+        assert_eq!(Erc7730Ir::parse(&bytes), Err(IrError::BadFormat));
+    }
+
+    #[test]
+    fn deep_validation_checks_unselected_format_suffix() {
+        let pool = [0, 4, PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 0];
+        let mut formats = std::vec![2];
+        formats.extend_from_slice(&one_field_format([1, 2, 3, 4], FormatOp::Raw as u8));
+        formats.extend_from_slice(&one_field_format([5, 6, 7, 8], 0xFF));
+        let bytes = build_ir(&pool, &formats);
+        assert_eq!(Erc7730Ir::parse(&bytes), Err(IrError::BadField));
     }
 
     // `path_bytes` (review 5.4 — moved here from the retired legacy walker).
@@ -861,6 +1035,21 @@ mod tests {
         bytes[94..94 + label.len()].copy_from_slice(label);
         let ir = Erc7730Ir::parse(&bytes).unwrap();
         assert_eq!(ir.owner, label);
+    }
+
+    #[test]
+    fn reject_nonzero_bytes_after_ascii_terminator() {
+        let mut buf = minimal_header();
+        buf[94..99].copy_from_slice(b"owner");
+        buf[100] = b'X';
+        assert_eq!(Erc7730Ir::parse(&buf), Err(IrError::BadAscii));
+    }
+
+    #[test]
+    fn reject_unterminated_fixed_ascii_field() {
+        let mut buf = minimal_header();
+        buf[94..94 + OWNER_FIELD_LEN].fill(b'A');
+        assert_eq!(Erc7730Ir::parse(&buf), Err(IrError::BadAscii));
     }
 
     #[test]

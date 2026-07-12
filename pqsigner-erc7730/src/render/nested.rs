@@ -33,7 +33,7 @@
 //! sub-fields, word positions) is TRUSTED — dbgen-built, Merkle-pinned. The
 //! `nested_blob` (record lengths, the `nested_ed` bytes) is fully ADVERSARIAL —
 //! the companion's. These functions never panic / read OOB / overflow on ANY
-//! `nested_blob`; a hostile one can only force a `Reject` (decline-to-blind).
+//! `nested_blob`; a hostile one can only force a `Reject`.
 
 use core::convert::TryFrom;
 

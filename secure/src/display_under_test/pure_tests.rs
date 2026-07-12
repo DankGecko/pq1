@@ -20,9 +20,9 @@ use super::primitives::{
     chain_name, format_u64, hex_nibble, native_ticker, write_addr_full, write_addr_full_or_name,
     write_calldata_hash_rows, write_chain, write_data_len_row, write_eth_two_rows,
     write_fee_budget_row, write_gas, write_gwei, write_line, write_nonce_row,
-    write_selector_row, write_tip_row, write_token_amount_two_rows,
-    write_erc20_header, write_token_name, try_write_amount_single_row,
-    write_amount_two_rows, AmountFit,
+    write_native_amount_two_rows, write_native_currency_row, write_native_fee_budget_row,
+    write_selector_row, write_tip_row, write_token_amount_two_rows, write_erc20_header,
+    write_token_name, try_write_amount_single_row, write_amount_two_rows, AmountFit,
 };
 
 use super::blind_sign::render_blind_sign_pages;
@@ -214,18 +214,42 @@ fn positive_native_ticker_per_chain() {
     assert_eq!(native_ticker(56), b"BNB");
     assert_eq!(native_ticker(43114), b"AVAX");
     assert_eq!(native_ticker(42220), b"CELO");
-    // Mainnet + ETH-gas L2s + unknown chains keep the ETH default.
+    assert_eq!(native_ticker(5_000), b"MNT");
+    assert_eq!(native_ticker(80_094), b"BERA");
+    // Mainnet + explicitly-listed ETH-gas L2s keep ETH. Unknown chains are
+    // deliberately neutral: guessing ETH can confidently mislabel value.
     assert_eq!(native_ticker(1), b"ETH");
     assert_eq!(native_ticker(8453), b"ETH");
-    assert_eq!(native_ticker(999_999), b"ETH");
+    assert_eq!(native_ticker(999_999), b"NATIVE");
 }
 
 #[test]
 fn positive_write_chain_renders_decimal_and_label() {
-    let mut row = [b' '; DISPLAY_COLS];
-    write_chain(&mut row, 137);
-    let s = row_str(&row);
+    let mut row1 = [b' '; DISPLAY_COLS];
+    let mut row2 = [b' '; DISPLAY_COLS];
+    write_chain(&mut row1, &mut row2, 137);
+    let s = row_str(&row1);
     assert_eq!(s, "Chain: 137");
+    assert_eq!(row_str(&row2), "(Polygon)");
+}
+
+#[test]
+fn positive_write_chain_losslessly_splits_large_u64_ids() {
+    for chain_id in [1_380_012_617u64, u64::MAX] {
+        let mut row1 = [b' '; DISPLAY_COLS];
+        let mut row2 = [b' '; DISPLAY_COLS];
+        write_chain(&mut row1, &mut row2, chain_id);
+        let first = row_str(&row1);
+        assert!(first.starts_with("Chain: ") && first.ends_with('>'));
+        let reconstructed = format!(
+            "{}{}",
+            first.trim_start_matches("Chain: ").trim_end_matches('>'),
+            row_str(&row2)
+        );
+        assert_eq!(reconstructed, chain_id.to_string());
+        assert!(!first.contains("OVF"));
+        assert!(!row_str(&row2).contains("OVF"));
+    }
 }
 
 #[test]
@@ -248,6 +272,25 @@ fn positive_write_eth_two_rows_one_eth() {
     // values can't alias by the renderer silently dropping the digits
     // that distinguish them.
     assert_eq!(row_str(&r1), "1.000000 ETH");
+}
+
+#[test]
+fn positive_native_amount_and_label_follow_signed_chain() {
+    let mut label = [b' '; DISPLAY_COLS];
+    write_native_currency_row(&mut label, b"Send ", 56, b"?");
+    assert_eq!(row_str(&label), "Send BNB?");
+
+    let mut r1 = [b' '; DISPLAY_COLS];
+    let mut r2 = [b' '; DISPLAY_COLS];
+    let one_native = u256_from_u64(1_000_000_000_000_000_000);
+    assert_eq!(
+        write_native_amount_two_rows(&mut r1, &mut r2, &one_native, 56),
+        AmountFit::Full
+    );
+    assert_eq!(row_str(&r1), "1.000000 BNB");
+
+    write_native_currency_row(&mut label, b"Send ", 999_999, b"?");
+    assert_eq!(row_str(&label), "Send NATIVE?");
 }
 
 #[test]
@@ -435,6 +478,25 @@ fn positive_value_transfer_send_eth_banner_for_nonzero_value() {
     assert_eq!(row_str(&pages.buf[0][0]), "Send ETH?");
     assert_eq!(row_str(&pages.buf[0][1]), "Chain: 1");
     assert_eq!(row_str(&pages.buf[0][2]), "(Mainnet)");
+}
+
+#[test]
+fn positive_value_transfer_non_eth_chain_never_uses_eth_labels() {
+    let mut tx = sample_tx();
+    tx.chain_id = 56;
+    let resolver = NameResolver::new();
+    let pages = render_pages(&tx, &resolver);
+    let rows: Vec<String> = pages
+        .as_slice()
+        .iter()
+        .flat_map(|page| page.iter().map(row_str))
+        .collect();
+    assert!(rows.iter().any(|r| r == "Send BNB?"));
+    assert!(rows.iter().any(|r| r.contains("BNB")));
+    assert!(
+        rows.iter().all(|r| !r.contains("ETH")),
+        "BSC native value/fee pages must not be mislabelled ETH: {rows:?}"
+    );
 }
 
 #[test]
@@ -1369,7 +1431,7 @@ fn negative_pages_row_mut_panics_on_row_out_of_range() {
 fn negative_max_pages_covers_personal_sign_worst_case() {
     // EIP-1271 PersonalSign render = 5 fixed + ceil(MAX/48) message
     // pages. CLAUDE.md fixes the message cap so the worst case fits in
-    // MAX_PAGES (currently 29). This test asserts the budget envelope —
+    // MAX_PAGES (currently 30). This test asserts the budget envelope —
     // if anyone bumps MAX_OFFCHAIN_PERSONAL_SIGN_LEN past what the
     // page bucket can accommodate, MAX_PAGES must grow to match.
     let max_message_pages = MAX_PAGES - 5;
@@ -1387,7 +1449,7 @@ fn negative_max_pages_matches_production_constant() {
     // ERC-7730 render dispatch can be host-linked; this scaffold's copy and
     // that source must stay in lockstep. Searches the production source text.
     let src = include_str!("../../../pqsigner-erc7730/src/display/mod.rs");
-    let needle = "pub const MAX_PAGES: usize = 29;";
+    let needle = "pub const MAX_PAGES: usize = 30;";
     assert!(src.contains(needle),
         "production tx/display/mod.rs no longer defines `{}` — either \
          bump MAX_PAGES here and update this test, OR fix the source.",
@@ -1507,6 +1569,16 @@ fn positive_write_tip_and_fee_budget_render() {
     let s = row_str(&fee_row);
     assert!(s.starts_with("Max:"), "expected Max: prefix, got {:?}", s);
     assert!(s.contains("ETH"), "expected ETH unit, got {:?}", s);
+
+    write_native_fee_budget_row(
+        &mut fee_row,
+        &u256_from_u64(30_000_000_000),
+        21_000,
+        56,
+    );
+    let s = row_str(&fee_row);
+    assert!(s.contains("BNB"), "expected BNB unit, got {s:?}");
+    assert!(!s.contains("ETH"), "BSC fee must not be labelled ETH: {s:?}");
 }
 
 #[test]

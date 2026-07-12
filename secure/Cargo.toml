@@ -748,28 +748,19 @@ stsafe-probe = ["stm32u585", "mock-se"]  # I2C2 bus scan to detect on-board STSA
 gpio-buttons = ["stm32u585"]  # GPIO button driver: PI2 (LEFT) + PA15 (RIGHT) on CN14
 button-test = ["stm32u585", "mock-se", "gpio-buttons"]  # Flash + run GPIO button test
 
-# ERC-7730 dev mode: relax the host-side attestation policy on-device.
-# When ON, descriptors whose IR shape is verified against the firmware-
-# pinned `ERC7730_DESCRIPTORS_ROOT` but whose pre-image at host-build
-# time was tagged `allow_unattested_dev_descriptors = true` (i.e. the
-# `--policy dev` corpus, not the `--policy production` corpus) render
-# with a "DEV: unattested descriptor" banner row inserted on the
-# intent banner page instead of forcing a fall-through to BLIND SIGN.
+# ERC-7730 dev provenance warning. This does NOT relax an on-device
+# attestation verifier: there is no classical/ERC-8176 verifier in firmware.
+# Dbgen records the exact root's provenance in generated `db_roots.rs`; its
+# generated compile fences require this feature for a dev-unattested root and
+# forbid that root under `mode-production`. When enabled, the trusted display
+# adds the "DEV: unattested descriptor" warning page. Canonical Make-driven dev
+# builds derive the feature from `secure/data/erc7730.review.txt`; direct Cargo
+# builds must select it explicitly when the generated root requires it.
 #
-# Why a runtime knob and not a pure host-side gate: the firmware-pinned
-# Merkle root is the SAME bytes regardless of which corpus was used to
-# generate it (the bundle format embeds no attestation metadata; the
-# policy gate runs at `dbgen` time and rejects or accepts the leaf set
-# before the root is computed). The runtime feature only changes the
-# rendering: production-mode firmware should never see an "unattested"
-# descriptor because the production policy rejected it at build time,
-# but a bring-up developer building with `--policy dev` against a
-# vendored corpus wants to confirm the renderer wiring without
-# falling back to blind-sign every time.
-#
-# NEVER ship — registered in the production-build `compile_error!`
-# fence in `secure/src/nsc/mod.rs` alongside `debug-log` / `e2e-test`
-# / `mock-se` / `otp-hardcoded-master-key` / `ui-capture`.
+# NEVER ship — the dedicated `mode-production` fence in `nsc/mod.rs`, the
+# generated root-provenance fence, and `make prod-check` all reject it. Unlike
+# secret-leaking debug features, it remains valid on explicitly dev/bring-up
+# hardware because that is where the warning is required.
 erc7730-dev-unattested = ["pqsigner-erc7730/erc7730-dev-unattested"]
 
 [build-dependencies]

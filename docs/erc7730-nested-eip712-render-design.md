@@ -1,5 +1,19 @@
 # ERC-7730 nested-EIP-712 struct rendering — design (Phase 5 "deep types"), 2026-07-01
 
+> **Security-policy supersession (2026-07-10).** The recursive binding engine
+> remains implemented and host-tested, but the catalogue policy described in
+> this historical design is no longer allowed to hide bound scalar/dynamic
+> members. Every explicit `visible:"never"` non-address operand now excludes
+> the format; semantic nonce/deadline/signature exemptions and
+> `hidden_address_allow` were removed. Consequently the real Permit2,
+> UniswapX, and SessionManager descriptors discussed below are absent from the
+> authenticated runtime catalogue. Renderer-mechanics tests use process-private
+> copies with every formerly-hidden member made visible. Treat all “ships”,
+> “curate hidden”, and “stays hidden” statements below as historical; the
+> current policy and evidence live in
+> [the implementation review](./erc7730-implementation-review-2026-07.md) and
+> [the 2026-07-10 findings](./security/adversarial-review/findings/clear-signing-2026-07-10.md).
+
 **Status: IMPLEMENTED (v1, 2026-07-01).** Commits A `8bc675e8` (SCHEMA_VER 0x03 + dbgen v0x03
 recursive-IR emission) → B `cf3cff72` (pure `pqsigner-erc7730/src/render/nested.rs` parser/cursor/
 coverage + Kani) → C `7ea2c5f5` (`OFFCHAIN_KIND_EIP712_TYPED_V3` wire kind + `hash_struct` binding
@@ -386,8 +400,8 @@ the v1 typeHashes.
 ### 11.4 Caps + fail-closed
 
 `MAX_NESTED_ARRAY = 6` (review fix — 8 was against the budget: banner + spender + 8×(amount + expiration
-+ divider ≈ 3) + chain + confirm ≈ 27 renderer pages, plus the mandatory signer page, vs
-`MAX_PAGES = 29`; 6 leaves headroom). Page-budget overflow
++ divider ≈ 3) + chain + confirm ≈ 27 renderer pages, plus the mandatory signer and exact-target pages,
+vs `MAX_PAGES = 30`; 6 leaves headroom). Page-budget overflow
 (`pages.push_blank()` → `Err`) MUST decline, NEVER truncate — a truncated array tail is the array-hiding
 WYSIWYS break one level down. `elem_count == 0`, `elem_count > MAX_NESTED_ARRAY`, any `elem_ed_i.len() !=
 member_count*32`, concat-hash mismatch, page-budget overflow, or an uncovered address → single hard `Err`
@@ -614,9 +628,9 @@ no hidden address reaches this path.
 ### 12.8 Caps + fail-closed (page budget is the practical output cap)
 
 `MAX_STRUCT_DEPTH = 8` (dbgen) bounds nesting; `MAX_NESTED_ARRAY = 6` bounds `outputs`. In practice the
-`MAX_PAGES = 29` budget is the binding constraint: a curated ExclusiveDutchOrder with 1 output renders ~20
-semantic pages plus one mandatory signer page; each extra output adds ~3, so ~3 outputs is the realistic
-ceiling before `push_blank → Err →
+`MAX_PAGES = 30` budget is the binding constraint: a curated ExclusiveDutchOrder with 1 output renders ~20
+semantic pages plus the mandatory signer and exact-target pages; each extra output adds ~3, so ~3 outputs is
+the realistic ceiling before `push_blank → Err →
 decline`. That is **safe** (declines, never truncates a tail — the array-hiding WYSIWYS break) and rare
 (most UniswapX orders have 1–2 outputs). Every v3 decline trigger — depth overflow, uncovered address at any
 level, page budget, any binding/length/count mismatch, reconciliation shortfall — is a single hard `Err`

@@ -67,4 +67,5 @@ pub mod binding;
 pub mod bundle;
 pub mod display;
 pub mod ir;
+pub mod known_calls;
 pub mod render;

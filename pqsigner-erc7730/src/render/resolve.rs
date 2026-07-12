@@ -1,6 +1,5 @@
-//! General ABI path resolver — the shared engine for the C1/C2/C3 coverage
-//! increments (dynamic `bytes`/`string`, tuple-member navigation, and fields
-//! that sit after other dynamic arguments).
+//! Bounds-checked ABI path primitives for static fields and canonical C1
+//! dynamic tails.
 //!
 //! # What it does
 //!
@@ -11,28 +10,26 @@
 //!   (the ABI head-word offset dbgen computed for this field among its
 //!   siblings). This is exactly the existing scalar resolver's behaviour.
 //! * [`PathOp::FollowOffset`] — the word at the current position is an ABI
-//!   *offset* (a dynamic arg / dynamic tuple / dynamic leaf). Read it through
+//!   *offset*. Read it through
 //!   `walk`'s hardened [`read_offset_word`], move the current REGION start
 //!   forward by that offset (offsets are relative to the enclosing region's
-//!   start — args-body for the top level, the tuple's data start once we have
-//!   descended into a dynamic tuple), and reset the word index.
+//!   start), and reset the word index.
 //!
 //! # Why it is WYSIWYS-safe
 //!
-//! arg N's head position is fixed by the *types* of args `0..N` (its signature),
-//! which dbgen resolves at compile time (the width-aware slot fix behind
-//! `VULN-erc7730-walker-slot-confusion`). So reading the offset word at that
-//! signature-fixed slot and following it lands on the SAME calldata position the
-//! contract's own ABI decoder reads from — the device shows exactly what
-//! executes. Unlike [`super::array::resolve_array`] this needs no "sole dynamic
-//! arg / whole-tail" pinning: correct per-arg head slots make the follow correct
-//! for multi-dynamic layouts too. Every attacker-controlled read is a
-//! bounds-checked `.get()` (`None → Reject`) and every offset is
-//! `read_offset_word`-gated (top-28-bytes-zero) then `checked_*`, so no crafted
-//! body panics, slices out of bounds, or overflows.
+//! The low-level [`resolve_structured`] primitive remains capable of walking a
+//! chained offset program so its arithmetic can be tested and bounded-verified.
+//! That is NOT sufficient evidence of canonical ABI framing: current IR does
+//! not encode a dynamic tuple's complete head width or a multi-object tail's
+//! topology. The production format preflight therefore accepts only a single
+//! top-level C1 follow and requires exact whole-tail placement via
+//! [`read_dynamic_whole_tail`]. C2 chained descent and multi-dynamic layouts
+//! hard-refuse; dbgen does not emit them.
 //!
-//! The guarantee is *value-equality with an independent ABI decoder*, not merely
-//! panic-freedom — see the differential tests in the secure crate.
+//! Every attacker-controlled read here is bounds-checked, every offset/length
+//! uses the hardened word readers, dynamic right-padding must be zero, and all
+//! arithmetic is checked. Crafted bodies therefore decline rather than panic or
+//! read out of bounds.
 
 use pqsigner_tx::typed_call::abi::{read_length_word, read_offset_word, MAX_DYNAMIC_LEN};
 
@@ -58,7 +55,7 @@ pub enum Leaf {
 
 /// Execute a RootStructured path program's navigation ops (the caller has
 /// already consumed the `RootStructured` byte — `prog` is the ops that follow).
-/// Returns the leaf position, or `Err` (decline-to-blind) on any malformed /
+/// Returns the leaf position, or `Err` (reject rendering) on any malformed /
 /// hostile body.
 ///
 /// Leaf kind is structural: a program ending in `FollowOffset` resolves a
@@ -140,11 +137,22 @@ pub fn resolve_structured(prog: &[u8], body: &[u8]) -> Result<Leaf, RenderErr> {
     }
 }
 
-/// Extract a [`Leaf::Dynamic`] blob (`[u32-ish length][data]`) with full bounds
-/// checks. Returns the data slice (`&body[off+32 .. off+32+len]`). The length is
-/// read via `walk`'s hardened [`read_length_word`] (top-28-bytes-zero +
-/// `MAX_DYNAMIC_LEN`).
-pub fn read_dynamic(body: &[u8], off: usize) -> Result<&[u8], RenderErr> {
+/// Bounds of a canonical ABI dynamic blob.
+struct DynamicBounds {
+    data_start: usize,
+    data_end: usize,
+    padded_end: usize,
+}
+
+/// Validate the length/data/right-padding framing of one ABI dynamic blob.
+///
+/// Solidity's canonical ABI encoding right-pads `bytes`/`string` data to a
+/// 32-byte boundary with zeroes. Those padding bytes are part of the signed
+/// calldata even though they are not part of the decoded value. Accepting
+/// arbitrary padding would therefore let two byte-distinct authorizations
+/// paint identical trusted-display pages. Keep the check in this shared reader
+/// so rendered strings and tokenPath byte slices cannot diverge.
+fn dynamic_bounds(body: &[u8], off: usize) -> Result<DynamicBounds, RenderErr> {
     let len_word = body
         .get(off..off.checked_add(32).ok_or(RenderErr::Reject("7730 res ovf"))?)
         .ok_or(RenderErr::Reject("7730 res no len"))?;
@@ -158,7 +166,60 @@ pub fn read_dynamic(body: &[u8], off: usize) -> Result<&[u8], RenderErr> {
     let data_end = data_start
         .checked_add(len as usize)
         .ok_or(RenderErr::Reject("7730 res ovf"))?;
+    let padded_len = (len as usize)
+        .checked_add(31)
+        .ok_or(RenderErr::Reject("7730 res ovf"))?
+        / 32
+        * 32;
+    let padded_end = data_start
+        .checked_add(padded_len)
+        .ok_or(RenderErr::Reject("7730 res ovf"))?;
     body.get(data_start..data_end)
+        .ok_or(RenderErr::Reject("7730 res data oob"))?;
+    let padding = body
+        .get(data_end..padded_end)
+        .ok_or(RenderErr::Reject("7730 res pad oob"))?;
+    if padding.iter().any(|&b| b != 0) {
+        return Err(RenderErr::Reject("7730 res dirty pad"));
+    }
+    Ok(DynamicBounds {
+        data_start,
+        data_end,
+        padded_end,
+    })
+}
+
+/// Extract a [`Leaf::Dynamic`] blob (`[u32-ish length][data][zero padding]`)
+/// with full bounds and canonical-padding checks. Returns the declared data
+/// slice (`&body[off+32 .. off+32+len]`). Other canonical dynamic objects may
+/// follow this one; callers that own the sole tail must use
+/// [`read_dynamic_whole_tail`].
+pub fn read_dynamic(body: &[u8], off: usize) -> Result<&[u8], RenderErr> {
+    let bounds = dynamic_bounds(body, off)?;
+    body.get(bounds.data_start..bounds.data_end)
+        .ok_or(RenderErr::Reject("7730 res data oob"))
+}
+
+/// Extract a dynamic blob only when it is the sole, exact ABI tail.
+///
+/// `expected_off` is independently derived from the format's authenticated
+/// `static_head_words`. Requiring both `off == expected_off` and the padded
+/// object end to equal `body.len()` excludes head aliasing, gaps, overlapping
+/// objects, and signed trailing calldata. This is sound only for dbgen's
+/// sole-dynamic C1 shapes; C2 dynamic-tuple descent is rejected separately.
+pub fn read_dynamic_whole_tail(
+    body: &[u8],
+    off: usize,
+    expected_off: usize,
+) -> Result<&[u8], RenderErr> {
+    if off != expected_off {
+        return Err(RenderErr::Reject("7730 res offset != head end"));
+    }
+    let bounds = dynamic_bounds(body, off)?;
+    if bounds.padded_end != body.len() {
+        return Err(RenderErr::Reject("7730 res not whole tail"));
+    }
+    body.get(bounds.data_start..bounds.data_end)
         .ok_or(RenderErr::Reject("7730 res data oob"))
 }
 
@@ -282,15 +343,127 @@ fn split_extraction(prog: &[u8]) -> Result<(&[u8], Option<Extract>), RenderErr> 
     Ok((prog, None))
 }
 
-/// Low 20 bytes of a right-aligned ABI address word at `body[off..off+32]`.
+/// Parse the only dynamic-leaf navigation shape whose canonical placement can
+/// be proven from today's IR: one top-level head slot followed directly to a
+/// C1 tail object.
+///
+/// `prog` excludes `RootStructured`. Any further `FieldIdx` after the follow is
+/// C2 dynamic-tuple descent. The IR does not encode that tuple's complete head
+/// width or tail topology, so accepting it would make exact placement
+/// unprovable; reject rather than infer.
+pub fn c1_dynamic_slot(prog: &[u8]) -> Result<usize, RenderErr> {
+    if prog.len() != 4
+        || prog[0] != PathOp::FieldIdx as u8
+        || prog[3] != PathOp::FollowOffset as u8
+    {
+        return Err(RenderErr::Reject("7730 noncanonical C2 path"));
+    }
+    Ok(u16::from_be_bytes([prog[1], prog[2]]) as usize)
+}
+
+/// Validate a sole top-level dynamic `address[]` as an exact whole tail.
+fn validate_address_array_whole_tail(
+    body: &[u8],
+    off: usize,
+    expected_off: usize,
+) -> Result<(), RenderErr> {
+    if off != expected_off {
+        return Err(RenderErr::Reject("7730 tok offset != head end"));
+    }
+    let count_end = off
+        .checked_add(32)
+        .ok_or(RenderErr::Reject("7730 tok ovf"))?;
+    let count_word = body
+        .get(off..count_end)
+        .ok_or(RenderErr::Reject("7730 tok no count"))?;
+    let count = read_length_word(count_word)
+        .ok_or(RenderErr::Reject("7730 tok bad count"))? as usize;
+    if count > MAX_DYNAMIC_LEN as usize {
+        return Err(RenderErr::Reject("7730 tok count cap"));
+    }
+    let elems_len = count
+        .checked_mul(32)
+        .ok_or(RenderErr::Reject("7730 tok ovf"))?;
+    let end = count_end
+        .checked_add(elems_len)
+        .ok_or(RenderErr::Reject("7730 tok ovf"))?;
+    if end != body.len() {
+        return Err(RenderErr::Reject("7730 tok array not whole tail"));
+    }
+    let elems = body
+        .get(count_end..end)
+        .ok_or(RenderErr::Reject("7730 tok elems oob"))?;
+    for word in elems.chunks_exact(32) {
+        if word[..12].iter().any(|&b| b != 0) {
+            return Err(RenderErr::Reject("7730 tok dirty address"));
+        }
+    }
+    Ok(())
+}
+
+/// Validate the exact canonical tail framing of a dynamic tokenPath.
+///
+/// The accepted program is C1 only: `FieldIdx(slot) FollowOffset` followed by
+/// one terminal token extraction. Dbgen separately guarantees this is the
+/// signature's sole dynamic top-level argument. Runtime independently proves
+/// the offset equals the authenticated head end, the padded blob/array consumes
+/// the entire body, and the selected address itself resolves canonically.
+/// Returns the dynamic offset-word slot so the format preflight can require all
+/// dynamic references to identify the same sole argument.
+pub fn validate_canonical_token_tail(
+    prog: &[u8],
+    body: &[u8],
+    static_head_words: u16,
+) -> Result<usize, RenderErr> {
+    let (nav, extraction) = split_extraction(prog)?;
+    let slot = c1_dynamic_slot(nav)?;
+    let shw = static_head_words as usize;
+    if slot >= shw {
+        return Err(RenderErr::Reject("7730 tok slot out of head"));
+    }
+    let head_end = shw
+        .checked_mul(32)
+        .ok_or(RenderErr::Reject("7730 tok head ovf"))?;
+    if body.len() < head_end {
+        return Err(RenderErr::Reject("7730 tok short head"));
+    }
+    let word_start = slot
+        .checked_mul(32)
+        .ok_or(RenderErr::Reject("7730 tok slot ovf"))?;
+    let word_end = word_start
+        .checked_add(32)
+        .ok_or(RenderErr::Reject("7730 tok slot ovf"))?;
+    let word = body
+        .get(word_start..word_end)
+        .ok_or(RenderErr::Reject("7730 tok off word"))?;
+    let offset = read_offset_word(word).ok_or(RenderErr::Reject("7730 tok bad offset"))?;
+    match extraction {
+        Some(Extract::Slice { .. }) => {
+            let _ = read_dynamic_whole_tail(body, offset, head_end)?;
+        }
+        Some(Extract::Index(_)) | Some(Extract::Last) => {
+            validate_address_array_whole_tail(body, offset, head_end)?;
+        }
+        None => return Err(RenderErr::Reject("7730 tok dynamic no extraction")),
+    }
+    // Bind the extraction itself (slice bounds / selected array index / empty
+    // last-element) now. The paint path resolves again, but must never turn a
+    // malformed dynamic tokenPath into the old raw-amount fallback.
+    let _ = resolve_token_address(prog, body)?;
+    Ok(slot)
+}
+
+/// Canonical right-aligned ABI address word at `body[off..off+32]`.
 fn low20_of_word(body: &[u8], off: usize) -> Result<[u8; ADDR_LEN], RenderErr> {
-    let lo = off.checked_add(12).ok_or(RenderErr::Reject("7730 tok ovf"))?;
     let hi = off.checked_add(32).ok_or(RenderErr::Reject("7730 tok ovf"))?;
-    let w = body
-        .get(lo..hi)
+    let word = body
+        .get(off..hi)
         .ok_or(RenderErr::Reject("7730 tok word oob"))?;
+    if word[..12].iter().any(|&b| b != 0) {
+        return Err(RenderErr::Reject("7730 tok dirty address"));
+    }
     let mut a = [0u8; ADDR_LEN];
-    a.copy_from_slice(w);
+    a.copy_from_slice(&word[12..]);
     Ok(a)
 }
 
@@ -439,6 +612,65 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_reader_rejects_dirty_or_missing_right_padding() {
+        let mut body = Vec::new();
+        body.extend_from_slice(&w(3));
+        let mut padded = [0u8; 32];
+        padded[..3].copy_from_slice(b"abc");
+        body.extend_from_slice(&padded);
+        assert_eq!(read_dynamic(&body, 0).unwrap(), b"abc");
+
+        let mut dirty = body.clone();
+        dirty[35] = 1;
+        assert_eq!(
+            read_dynamic(&dirty, 0),
+            Err(RenderErr::Reject("7730 res dirty pad"))
+        );
+        assert_eq!(
+            read_dynamic(&body[..35], 0),
+            Err(RenderErr::Reject("7730 res pad oob"))
+        );
+    }
+
+    #[test]
+    fn whole_tail_reader_rejects_alias_and_trailing_bytes() {
+        let mut body = Vec::new();
+        body.extend_from_slice(&w(32));
+        body.extend_from_slice(&w(3));
+        let mut padded = [0u8; 32];
+        padded[..3].copy_from_slice(b"abc");
+        body.extend_from_slice(&padded);
+        assert_eq!(read_dynamic_whole_tail(&body, 32, 32).unwrap(), b"abc");
+        assert_eq!(
+            read_dynamic_whole_tail(&body, 32, 64),
+            Err(RenderErr::Reject("7730 res offset != head end"))
+        );
+        body.extend_from_slice(&[0u8; 32]);
+        assert_eq!(
+            read_dynamic_whole_tail(&body, 32, 32),
+            Err(RenderErr::Reject("7730 res not whole tail"))
+        );
+        // The generic reader stays composable for independently validated
+        // multi-object encodings; only the sole-tail reader owns EOF.
+        assert_eq!(read_dynamic(&body, 32).unwrap(), b"abc");
+    }
+
+    #[test]
+    fn exact_c1_shape_rejects_dynamic_tuple_descent() {
+        let mut c1 = field(0).to_vec();
+        c1.push(FOLLOW);
+        assert_eq!(c1_dynamic_slot(&c1), Ok(0));
+
+        let mut c2 = c1;
+        c2.extend_from_slice(&field(1));
+        c2.push(FOLLOW);
+        assert_eq!(
+            c1_dynamic_slot(&c2),
+            Err(RenderErr::Reject("7730 noncanonical C2 path"))
+        );
+    }
+
+    #[test]
     fn c2_dynamic_tuple_member() {
         // `swap((uint256 amount, uint256 min) desc)` where desc is a DYNAMIC
         // tuple (pretend it has a dynamic member so it's offset-placed): head =
@@ -543,6 +775,45 @@ mod tests {
         assert_eq!(resolve_token_address(&prog, &body).unwrap(), a1);
     }
 
+    #[test]
+    fn canonical_token_bytes_tail_is_exact_and_c2_refuses() {
+        let (_a0, _a1, data) = packed_path(0x11, 0x22);
+        let canonical = body_sole_bytes(&data);
+        let mut prog = field(0).to_vec();
+        prog.push(FOLLOW);
+        prog.extend_from_slice(&slice_op(0, 20, false));
+        assert_eq!(validate_canonical_token_tail(&prog, &canonical, 1), Ok(0));
+
+        let mut dirty_pad = canonical.clone();
+        *dirty_pad.last_mut().unwrap() = 1;
+        assert_eq!(
+            validate_canonical_token_tail(&prog, &dirty_pad, 1),
+            Err(RenderErr::Reject("7730 res dirty pad"))
+        );
+        let mut trailing = canonical.clone();
+        trailing.extend_from_slice(&[0u8; 32]);
+        assert_eq!(
+            validate_canonical_token_tail(&prog, &trailing, 1),
+            Err(RenderErr::Reject("7730 res not whole tail"))
+        );
+        let mut alias = canonical.clone();
+        alias[31] = 0;
+        assert_eq!(
+            validate_canonical_token_tail(&prog, &alias, 1),
+            Err(RenderErr::Reject("7730 res offset != head end"))
+        );
+
+        let mut c2 = field(0).to_vec();
+        c2.push(FOLLOW);
+        c2.extend_from_slice(&field(0));
+        c2.push(FOLLOW);
+        c2.extend_from_slice(&slice_op(0, 20, false));
+        assert_eq!(
+            validate_canonical_token_tail(&c2, &canonical, 1),
+            Err(RenderErr::Reject("7730 noncanonical C2 path"))
+        );
+    }
+
     /// `f(address[] toks)` body with two element addresses.
     fn body_address_array(elems: &[u8]) -> Vec<u8> {
         let mut body = Vec::new();
@@ -569,6 +840,29 @@ mod tests {
         pl.push(FOLLOW);
         pl.push(ARR_LAST);
         assert_eq!(resolve_token_address(&pl, &body).unwrap(), [0xCD; 20]);
+    }
+
+    #[test]
+    fn canonical_token_address_array_rejects_dirty_unselected_word_and_suffix() {
+        let body = body_address_array(&[0x11, 0x22]);
+        let mut prog = field(0).to_vec();
+        prog.push(FOLLOW);
+        prog.extend_from_slice(&idx_op(0));
+        assert_eq!(validate_canonical_token_tail(&prog, &body, 1), Ok(0));
+
+        let mut dirty = body.clone();
+        // Dirty high padding in element 1, even though tokenPath selects 0.
+        dirty[96] = 1;
+        assert_eq!(
+            validate_canonical_token_tail(&prog, &dirty, 1),
+            Err(RenderErr::Reject("7730 tok dirty address"))
+        );
+        let mut trailing = body;
+        trailing.extend_from_slice(&[0u8; 32]);
+        assert_eq!(
+            validate_canonical_token_tail(&prog, &trailing, 1),
+            Err(RenderErr::Reject("7730 tok array not whole tail"))
+        );
     }
 
     #[test]
@@ -627,8 +921,8 @@ mod kani_harness {
     #[kani::proof]
     // Covers BOTH loops the harness reaches: the ≤7-step program loop AND the
     // 28-byte top-zero scan inside `read_offset_word`/`read_length_word` (the
-    // same reader the sibling `resolve_array_multi` harness unwinds at 34). A
-    // lower bound (was 6) fails the unwinding assertion on the reader loop.
+    // same hardened reader used by the exact sole-array resolver). A lower
+    // bound (was 6) fails the unwinding assertion on the reader loop.
     #[kani::unwind(34)]
     fn resolve_structured_panic_free_and_in_bounds() {
         const PROG_LEN: usize = 7; // up to 2 FieldIdx + FollowOffset shapes
@@ -939,11 +1233,10 @@ mod kani_harness {
         assert!(addr2 == [0xEFu8; 20]);
     }
 
-    // RESOLVER ARITHMETIC LAWS ∀ — the two remaining value-unproven
-    // resolve_structured behaviours: slot ACCUMULATION (the walker-slot-
-    // confusion class, host-tested only until now) and region-CHAINED double
-    // descent (C2/C3 dynamic-tuple-member — offsets are relative to the
-    // ENCLOSING region, and a descent must reset the slot).
+    // RESOLVER ARITHMETIC LAWS ∀ — low-level slot accumulation and chained
+    // region descent. Production contract rendering accepts only exact C1;
+    // the chained case stays proved here so the generic primitive cannot drift
+    // if a future IR version explicitly binds the missing tuple topology.
 
     /// ∀ body, ∀ s1 s2: an accepted `[FieldIdx(s1), FieldIdx(s2)]` static leaf
     /// is EXACTLY `Word(32*(s1+s2))` — slot accumulation is exact addition,
@@ -965,7 +1258,8 @@ mod kani_harness {
 
     /// ∀ body: an accepted two-hop descent `[FieldIdx(0), FollowOffset,
     /// FieldIdx(1), FollowOffset]` (dynamic tuple at slot 0, dynamic member at
-    /// tuple-slot 1 — the C2/C3 shape) lands at EXACTLY `off1 + off2`, where
+    /// tuple-slot 1 — a currently production-rejected C2 shape) lands at
+    /// EXACTLY `off1 + off2`, where
     /// `off1` is the oracle-read offset word at `body[0..32]` and `off2` the
     /// one at `body[off1+32 .. off1+64]` — i.e. the inner offset is applied
     /// relative to the ENCLOSING region base (off1), not absolutely, not

@@ -18,18 +18,18 @@
 //! Lean `format_decimal` track (div10 / extract_digits ∀ already
 //! kernel-proven).
 //!
-//! ## Behavior-identical contract
+//! ## Paint/decision contract
 //!
-//! These functions compute EXACTLY what the pre-M4 in-line ladders in
-//! [`super::formatters`] computed — same arms, same precedence, same
-//! defaults, same reject paths. Any change here is a display-semantics
-//! change and must re-run the golden-grid gates
+//! These functions are the single source of truth for what the amount paint
+//! halves may claim. In particular, an unknown chain does not authenticate an
+//! 18-decimal native scale merely because its neutral label is `NATIVE`. Any
+//! change here is a display-semantics change and must re-run the golden-grid gates
 //! (`cargo test -p pqsigner-erc7730 --release` +
 //! `cargo test -p sphincs-tz-secure --tests --release`).
 
 use pqsigner_tx::erc20::bundle::Erc20Metadata;
 
-use super::super::primitives::native_ticker;
+use super::super::primitives::{known_native_ticker, native_ticker};
 use crate::display::DISPLAY_COLS;
 use crate::render::params::ParamSet;
 
@@ -43,11 +43,11 @@ pub const DEFAULT_THRESHOLD_MESSAGE: &[u8] = b"unlimited";
 #[derive(Debug, PartialEq, Eq)]
 pub enum TokenAmountArm<'a> {
     /// `value >= threshold` and the token is bound (native sentinel or
-    /// Merkle-verified ERC-20): one loud `"<message> <ticker>"` row.
-    Unlimited {
-        message: &'a [u8],
-        ticker: &'a [u8],
-    },
+    /// Merkle-verified ERC-20): loud `"<message> <ticker>"` rows. The paint
+    /// half uses one row when the complete pair fits, two rows when the
+    /// complete ticker fits separately, and an exact token-identity page when
+    /// it does not; it never truncates the ticker.
+    Unlimited { message: &'a [u8], ticker: &'a [u8] },
     /// `value >= threshold` but the token could NOT be bound: the loud
     /// message row + `"(unverified)"` (review 4.5 — an unbound 2^256-1
     /// must not fall through to `!AMOUNT OVERFLOW`, exactly when trust
@@ -76,11 +76,15 @@ pub struct TokenAmountDecision<'a> {
     /// `tokenPath` has no address field of its own, so a companion that
     /// withholds the optional ERC-20 metadata trailer must not have the
     /// user approve a transfer/withdraw/swap of an UNNAMED token).
-    /// `Some` exactly when the token address resolved but could not be
-    /// bound (native counts as bound); `None` when bound (the ticker
-    /// already names the token) or when no address resolved at all
-    /// (nothing to bind — the raw arm's `! raw, dec=?` footer stays
-    /// loud, and the page-budget gate fails closed on overflow).
+    /// `Some` exactly when a non-native token address resolved but could not
+    /// be bound. `None` when bound (the normal paint path's complete ticker
+    /// names the token), when the descriptor-pinned native sentinel is known
+    /// but its decimal scale is not (the raw arm's `! raw, dec=?` footer is the
+    /// warning), or when no address resolved at all. If a *bound* amount/ticker
+    /// cannot be painted in full, the paint half separately appends an exact
+    /// contract/native identity page; that value-dependent overflow cannot be
+    /// represented in this division-free decision layer. The page-budget gate
+    /// fails closed on either identity path.
     pub identity_page: Option<[u8; 20]>,
 }
 
@@ -99,11 +103,12 @@ pub struct TokenAmountDecision<'a> {
 ///
 /// 1. **Native-currency sentinel** (`nativeCurrencyAddress`): a resolved
 ///    token equal to the descriptor's sentinel (`0xEeee…`/`0x0`) IS the
-///    chain native currency → 18 decimals + `native_ticker(chain_id)`.
-///    Takes precedence over the `erc20` bundle: the sentinel is not a
-///    real ERC-20 contract, and this is a Merkle-pinned descriptor
-///    decision (baked into the IR), so it needs no companion metadata
-///    and emits no identity page.
+///    chain native currency. An authenticated `params.decimals` wins; absent
+///    that, 18 decimals are used only for a chain in
+///    [`known_native_ticker`]. An unknown chain takes the exact raw-integer
+///    arm instead of assuming a scale. The sentinel takes precedence over the
+///    `erc20` bundle: it is not a real ERC-20 contract, and emits no token-
+///    identity page even when its decimal scale is unknown.
 /// 2. **ERC-20 binding**: the `erc20` bundle counts only when the
 ///    addresses agree. `None` = the token could NOT be bound to a
 ///    Merkle-verified metadata entry — its decimals are unknown.
@@ -130,7 +135,10 @@ pub fn token_amount_decision<'a>(
     );
 
     let bound: Option<(u32, &'a [u8])> = if is_native {
-        Some((18, native_ticker(chain_id)))
+        match params.decimals {
+            Some(decimals) => Some((u32::from(decimals), native_ticker(chain_id))),
+            None => known_native_ticker(chain_id).map(|ticker| (18, ticker)),
+        }
     } else {
         match (token_addr, erc20) {
             (Some(addr), Some(meta)) if addr == meta.contract => {
@@ -142,7 +150,12 @@ pub fn token_amount_decision<'a>(
 
     let is_unlimited = params.threshold.is_some_and(|t| *value >= *t);
 
-    let arm = if is_unlimited {
+    // A threshold label is semantic, but it does not establish the native
+    // currency's decimal scale. On an unknown chain with no descriptor-pinned
+    // decimals, show the exact raw integer even at/above the threshold.
+    let arm = if is_native && bound.is_none() {
+        TokenAmountArm::UnverifiedRaw
+    } else if is_unlimited {
         let message: &'a [u8] = params
             .message
             .filter(|m| {
@@ -164,7 +177,11 @@ pub fn token_amount_decision<'a>(
 
     // MEDIUM-1: the identity page fires exactly when a RESOLVED token
     // could not be bound — in the unlimited AND the raw arms alike.
-    let identity_page = if bound.is_none() { token_addr } else { None };
+    let identity_page = if bound.is_none() && !is_native {
+        token_addr
+    } else {
+        None
+    };
 
     TokenAmountDecision { arm, identity_page }
 }
@@ -177,14 +194,28 @@ pub struct ScalarAmountDecision<'a> {
     pub unit: &'a [u8],
 }
 
-/// `amount` formatter decision: the chain's NATIVE currency — decimals
-/// default 18; the ticker defaults per chain (POL/BNB/AVAX/… — review
-/// 3.5) instead of always "ETH"; a descriptor-supplied `base` overrides.
-pub fn amount_decision<'a>(chain_id: u64, params: &ParamSet<'a>) -> ScalarAmountDecision<'a> {
-    ScalarAmountDecision {
-        decimals: u32::from(params.decimals.unwrap_or(18)),
+/// `amount` formatter decision for the chain's native currency.
+///
+/// `Some` means the scale is authenticated by `params.decimals` or comes from
+/// the firmware's audited known-native table (all current entries use 18
+/// decimals). `None` means the caller must render the exact raw integer with an
+/// unknown-decimals warning. A descriptor `base` changes only the unit label;
+/// it cannot establish a decimal scale by itself.
+pub fn amount_decision<'a>(
+    chain_id: u64,
+    params: &ParamSet<'a>,
+) -> Option<ScalarAmountDecision<'a>> {
+    let decimals = match params.decimals {
+        Some(decimals) => u32::from(decimals),
+        None => {
+            known_native_ticker(chain_id)?;
+            18
+        }
+    };
+    Some(ScalarAmountDecision {
+        decimals,
         unit: params.base.unwrap_or_else(|| native_ticker(chain_id)),
-    }
+    })
 }
 
 /// `unit` formatter decision: decimals default 0 (a bare count), unit
@@ -228,7 +259,10 @@ mod tests {
         assert_eq!(
             d,
             TokenAmountDecision {
-                arm: TokenAmountArm::Unlimited { message: b"unlimited", ticker: b"ETH" },
+                arm: TokenAmountArm::Unlimited {
+                    message: b"unlimited",
+                    ticker: b"ETH"
+                },
                 identity_page: None,
             }
         );
@@ -244,7 +278,13 @@ mod tests {
         params.threshold = Some(&t);
         params.native_currency = Some(&SENTINEL);
         let d = token_amount_decision(&v, Some(SENTINEL), None, 1, &params);
-        assert_eq!(d.arm, TokenAmountArm::Bound { decimals: 18, ticker: b"ETH" });
+        assert_eq!(
+            d.arm,
+            TokenAmountArm::Bound {
+                decimals: 18,
+                ticker: b"ETH"
+            }
+        );
         assert_eq!(d.identity_page, None);
     }
 
@@ -254,7 +294,13 @@ mod tests {
         let v = [0u8; 32];
         let params = ParamSet::default();
         let d = token_amount_decision(&v, Some([0xAA; 20]), Some(&meta), 1, &params);
-        assert_eq!(d.arm, TokenAmountArm::Bound { decimals: 6, ticker: b"USDC" });
+        assert_eq!(
+            d.arm,
+            TokenAmountArm::Bound {
+                decimals: 6,
+                ticker: b"USDC"
+            }
+        );
         assert_eq!(d.identity_page, None);
     }
 
@@ -274,7 +320,12 @@ mod tests {
         let mut params = ParamSet::default();
         params.threshold = Some(&t);
         let d = token_amount_decision(&t, Some([0xBB; 20]), None, 1, &params);
-        assert_eq!(d.arm, TokenAmountArm::UnlimitedUnverified { message: b"unlimited" });
+        assert_eq!(
+            d.arm,
+            TokenAmountArm::UnlimitedUnverified {
+                message: b"unlimited"
+            }
+        );
         assert_eq!(d.identity_page, Some([0xBB; 20]));
     }
 
@@ -285,7 +336,12 @@ mod tests {
         params.threshold = Some(&t);
         params.message = Some(b"bad\x01msg"); // non-printable -> rejected
         let d = token_amount_decision(&t, None, None, 1, &params);
-        assert_eq!(d.arm, TokenAmountArm::UnlimitedUnverified { message: b"unlimited" });
+        assert_eq!(
+            d.arm,
+            TokenAmountArm::UnlimitedUnverified {
+                message: b"unlimited"
+            }
+        );
     }
 
     #[test]
@@ -297,17 +353,61 @@ mod tests {
         let d = token_amount_decision(&t, None, None, 1, &params);
         assert_eq!(
             d.arm,
-            TokenAmountArm::UnlimitedUnverified { message: b"All your USDC" }
+            TokenAmountArm::UnlimitedUnverified {
+                message: b"All your USDC"
+            }
         );
     }
 
     #[test]
     fn scalar_defaults_asymmetry() {
         let params = ParamSet::default();
-        let a = amount_decision(137, &params);
+        let a = amount_decision(137, &params).expect("Polygon is in the known-native table");
         assert_eq!((a.decimals, a.unit), (18, &b"POL"[..]));
         let u = unit_decision(&params);
         assert_eq!((u.decimals, u.unit), (0, &b""[..]));
+    }
+
+    #[test]
+    fn unknown_chain_without_descriptor_decimals_is_raw() {
+        let params = ParamSet::default();
+        assert_eq!(amount_decision(149, &params), None);
+
+        let mut native = ParamSet::default();
+        native.native_currency = Some(&SENTINEL);
+        let d = token_amount_decision(&[0u8; 32], Some(SENTINEL), None, 149, &native);
+        assert_eq!(d.arm, TokenAmountArm::UnverifiedRaw);
+        assert_eq!(d.identity_page, None);
+    }
+
+    #[test]
+    fn explicit_descriptor_decimals_bind_unknown_chain_scale() {
+        let mut params = ParamSet::default();
+        params.decimals = Some(9);
+        let a = amount_decision(149, &params).expect("descriptor pins the scale");
+        assert_eq!((a.decimals, a.unit), (9, &b"NATIVE"[..]));
+
+        params.native_currency = Some(&SENTINEL);
+        let d = token_amount_decision(&[0u8; 32], Some(SENTINEL), None, 149, &params);
+        assert_eq!(
+            d.arm,
+            TokenAmountArm::Bound {
+                decimals: 9,
+                ticker: b"NATIVE"
+            }
+        );
+        assert_eq!(d.identity_page, None);
+    }
+
+    #[test]
+    fn unknown_native_scale_beats_threshold_gloss() {
+        let threshold = [0u8; 32];
+        let mut params = ParamSet::default();
+        params.threshold = Some(&threshold);
+        params.native_currency = Some(&SENTINEL);
+        let d = token_amount_decision(&threshold, Some(SENTINEL), None, 149, &params);
+        assert_eq!(d.arm, TokenAmountArm::UnverifiedRaw);
+        assert_eq!(d.identity_page, None);
     }
 }
 
@@ -353,10 +453,12 @@ mod kani_harness {
     /// present/absent, erc20 hit/miss with symbolic contract/decimals/
     /// symbol, native sentinel present/absent), ∀ chain id — an
     /// Unlimited* arm is selected ⟺ a threshold param is present AND
-    /// numeric_BE(value) >= numeric_BE(threshold) per the independent
-    /// oracle. Both directions of MEDIUM-severity failure are pinned: a
-    /// missed gate renders the most dangerous approval as a normal
-    /// amount; a spurious gate hides the real amount behind "unlimited".
+    /// numeric_BE(value) >= numeric_BE(threshold) per the independent oracle,
+    /// except that an unknown-chain native sentinel with no descriptor-pinned
+    /// decimals must take the exact raw arm. Both directions of MEDIUM-severity
+    /// failure are pinned: a missed gate renders the most dangerous approval
+    /// as a normal amount; a spurious gate hides the real amount behind
+    /// "unlimited".
     #[kani::proof]
     #[kani::unwind(34)]
     fn amt_dec_unlimited_iff_ge_threshold() {
@@ -386,14 +488,17 @@ mod kani_harness {
             params.native_currency = Some(&native);
         }
         let token_addr = if has_token { Some(token) } else { None };
+        let chain_id: u64 = kani::any();
         let d = token_amount_decision(
             &value,
             token_addr,
             if has_meta { Some(&meta) } else { None },
-            kani::any(),
+            chain_id,
             &params,
         );
-        let expect_unlimited = has_threshold && be_ge(&value, &threshold);
+        let native_unscaled =
+            has_token && has_native && token == native && known_native_ticker(chain_id).is_none();
+        let expect_unlimited = has_threshold && be_ge(&value, &threshold) && !native_unscaled;
         assert!(is_unlimited_arm(&d.arm) == expect_unlimited);
         // With no message param, the wording is pinned to the default.
         match d.arm {
@@ -483,7 +588,10 @@ mod kani_harness {
         );
         if has_token && has_meta && addr == contract {
             match d.arm {
-                TokenAmountArm::Bound { decimals: dd, ticker } => {
+                TokenAmountArm::Bound {
+                    decimals: dd,
+                    ticker,
+                } => {
                     assert!(dd == u32::from(decimals));
                     assert!(ticker.len() == 4);
                     let mut k = 0usize;
@@ -506,12 +614,12 @@ mod kani_harness {
     }
 
     /// (c) Native-sentinel precedence ∀: a resolved token equal to the
-    /// descriptor's Merkle-pinned `nativeCurrencyAddress` IS the chain
-    /// native currency — `Bound(18, native_ticker(chain_id))`, no
-    /// identity page — and takes precedence over the companion-supplied
-    /// erc20 trailer EVEN when that trailer also matches the same
-    /// address. A non-native miss still gets the identity page with the
-    /// sentinel param present.
+    /// descriptor's Merkle-pinned `nativeCurrencyAddress` IS the chain native
+    /// currency and takes precedence over the companion-supplied erc20 trailer
+    /// EVEN when that trailer also matches the same address. A known chain is
+    /// `Bound(18, ticker)`; an unknown chain is exact `UnverifiedRaw`; neither
+    /// emits a token-identity page. A non-native miss still gets the identity
+    /// page with the sentinel param present.
     #[kani::proof]
     #[kani::unwind(34)]
     fn amt_dec_native_sentinel_precedence() {
@@ -540,18 +648,23 @@ mod kani_harness {
             &params,
         );
         if addr == native {
-            match d.arm {
-                TokenAmountArm::Bound { decimals: dd, ticker } => {
-                    assert!(dd == 18);
-                    let expect = native_ticker(chain_id);
-                    assert!(ticker.len() == expect.len());
-                    let mut k = 0usize;
-                    while k < ticker.len() {
-                        assert!(ticker[k] == expect[k]);
-                        k += 1;
+            match known_native_ticker(chain_id) {
+                Some(expect) => match d.arm {
+                    TokenAmountArm::Bound {
+                        decimals: dd,
+                        ticker,
+                    } => {
+                        assert!(dd == 18);
+                        assert!(ticker.len() == expect.len());
+                        let mut k = 0usize;
+                        while k < ticker.len() {
+                            assert!(ticker[k] == expect[k]);
+                            k += 1;
+                        }
                     }
-                }
-                _ => assert!(false),
+                    _ => assert!(false),
+                },
+                None => assert!(matches!(d.arm, TokenAmountArm::UnverifiedRaw)),
             }
             assert!(d.identity_page.is_none());
         } else if !(has_meta && addr == contract) {
@@ -560,10 +673,10 @@ mod kani_harness {
         }
     }
 
-    /// (d) Scalar decisions ∀: `amount` defaults decimals=18 + the
-    /// per-chain native ticker (descriptor `base` overrides both
-    /// formatters' unit); `unit` defaults decimals=0 + empty unit. The
-    /// 18-vs-0 asymmetry is load-bearing (a swap mis-scales by 10^18).
+    /// (d) Scalar decisions ∀: explicit amount decimals always bind;
+    /// otherwise a known chain defaults to 18 + its ticker and an unknown chain
+    /// returns `None` (exact raw paint). Descriptor `base` overrides the unit,
+    /// never the scale. `unit` defaults decimals=0 + empty unit.
     #[kani::proof]
     #[kani::unwind(34)]
     fn amt_dec_scalar_defaults() {
@@ -582,27 +695,37 @@ mod kani_harness {
         let a = amount_decision(chain_id, &params);
         let u = unit_decision(&params);
         if has_dec {
+            let a = a.as_ref().unwrap();
             assert!(a.decimals == u32::from(dec));
             assert!(u.decimals == u32::from(dec));
+        } else if known_native_ticker(chain_id).is_some() {
+            assert!(a.as_ref().unwrap().decimals == 18);
+            assert!(u.decimals == 0);
         } else {
-            assert!(a.decimals == 18);
+            assert!(a.is_none());
             assert!(u.decimals == 0);
         }
-        if has_base {
-            assert!(a.unit.len() == 4 && u.unit.len() == 4);
-            let mut k = 0usize;
-            while k < 4 {
-                assert!(a.unit[k] == base[k] && u.unit[k] == base[k]);
-                k += 1;
+        if let Some(a) = a {
+            if has_base {
+                assert!(a.unit.len() == 4 && u.unit.len() == 4);
+                let mut k = 0usize;
+                while k < 4 {
+                    assert!(a.unit[k] == base[k] && u.unit[k] == base[k]);
+                    k += 1;
+                }
+            } else {
+                let expect = native_ticker(chain_id);
+                assert!(a.unit.len() == expect.len());
+                let mut k = 0usize;
+                while k < a.unit.len() {
+                    assert!(a.unit[k] == expect[k]);
+                    k += 1;
+                }
+                assert!(u.unit.is_empty());
             }
+        } else if has_base {
+            assert!(u.unit.len() == 4);
         } else {
-            let expect = native_ticker(chain_id);
-            assert!(a.unit.len() == expect.len());
-            let mut k = 0usize;
-            while k < a.unit.len() {
-                assert!(a.unit[k] == expect[k]);
-                k += 1;
-            }
             assert!(u.unit.is_empty());
         }
     }

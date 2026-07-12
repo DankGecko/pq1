@@ -1364,6 +1364,14 @@ fn negative_batch_binds_sender_before_verify_confirm_sign_or_state_write() {
     assert!(helper.contains("Ok(expected_a)"));
     assert!(helper.contains("Ok(expected_b)"));
     assert!(helper.contains("derivations_agree"));
+    assert!(helper.contains("wallet_address_for_account_cross_check("));
+    assert!(WALLET_ADDRESS_SRC.contains("fn proxy_address_cross_check("));
+    assert!(WALLET_ADDRESS_SRC.contains("h.update(core::hint::black_box(&pk_seed[..]))"));
+    assert!(WALLET_ADDRESS_SRC.contains("h.update(core::hint::black_box(&pk_root[..]))"));
+    assert!(WALLET_ADDRESS_SRC.contains("h.update(core::hint::black_box(&preimage[..21]))"));
+    assert!(WALLET_ADDRESS_SRC.contains(
+        "crate::aa::eip1271::proxy_address(&pk_seed, &pk_root)"
+    ));
     assert!(helper.contains("check_true_into_sentinel"));
     assert!(helper.contains("SenderBinding"));
     assert!(WALLET_ADDRESS_SRC.contains(
@@ -1384,8 +1392,12 @@ fn negative_batch_binds_sender_before_verify_confirm_sign_or_state_write() {
 }
 
 #[test]
-fn negative_batch_every_confirmation_gets_bound_signer_page() {
-    assert_eq!(CMD_SIGN_USEROP_BATCH_SRC.matches("enforce_from_page(").count(), 3);
+fn negative_batch_every_confirmation_gets_bound_from_page() {
+    assert_eq!(
+        CMD_SIGN_USEROP_BATCH_SRC.matches("enforce_from_page(").count(),
+        3,
+        "rotation, each member, and final batch authorization need source identity"
+    );
     assert!(CMD_SIGN_USEROP_BATCH_SRC.contains("&mut rotate_pages"));
     assert!(CMD_SIGN_USEROP_BATCH_SRC.contains(
         "enforce_from_page(&mut pages, account_index, &sender)"
@@ -1396,25 +1408,61 @@ fn negative_batch_every_confirmation_gets_bound_signer_page() {
 }
 
 #[test]
+fn negative_batch_each_member_gets_full_target_page() {
+    assert_eq!(CMD_SIGN_USEROP_BATCH_SRC.matches("enforce_target_page(").count(), 1);
+    assert_eq!(CMD_SIGN_USEROP_BATCH_SRC.matches("target_page_proof(").count(), 1);
+    assert!(CMD_SIGN_USEROP_BATCH_SRC.contains(
+        "enforce_target_page(&mut pages, &ptx.to)"
+    ));
+    assert!(CMD_SIGN_USEROP_BATCH_SRC.contains("TARGET_IDENTITY_PAGES"));
+    assert!(CMD_SIGN_USEROP_BATCH_SRC.contains("target unshown"));
+}
+
+#[test]
 fn negative_batch_shows_and_fi_proves_full_derived_signer_identity() {
+    assert_eq!(
+        CMD_SIGN_USEROP_BATCH_SRC.matches("enforce_from_page(").count(),
+        3,
+        "rotation, each member, and final batch gate must identify the signer"
+    );
+    assert_eq!(
+        CMD_SIGN_USEROP_BATCH_SRC.matches("from_page_proof(").count(),
+        3,
+        "every batch signer page needs an independent FI completion proof"
+    );
     assert!(CMD_SIGN_USEROP_BATCH_SRC.contains("SIGNER_IDENTITY_PAGES"));
     assert!(!CMD_SIGN_USEROP_BATCH_SRC.contains("account_index, &companion_sender"));
+
     let wrap = CMD_SIGN_USEROP_BATCH_SRC
-        .find("wrap_pages_with_batch_banner(inner_pages").unwrap();
-    let member_page = wrap + CMD_SIGN_USEROP_BATCH_SRC[wrap..]
-        .find("enforce_from_page(&mut pages, account_index, &sender)").unwrap();
-    let member_fp = member_page + CMD_SIGN_USEROP_BATCH_SRC[member_page..]
-        .find("append_fingerprint_page(").unwrap();
+        .find("wrap_pages_with_batch_banner(inner_pages")
+        .expect("per-member banner");
+    let member_page = CMD_SIGN_USEROP_BATCH_SRC[wrap..]
+        .find("enforce_from_page(&mut pages, account_index, &sender)")
+        .map(|p| wrap + p)
+        .expect("per-member signer page");
+    let member_fp = CMD_SIGN_USEROP_BATCH_SRC[member_page..]
+        .find("append_fingerprint_page(")
+        .map(|p| member_page + p)
+        .expect("per-member fingerprint");
     assert!(wrap < member_page && member_page < member_fp);
+
     let final_summary = CMD_SIGN_USEROP_BATCH_SRC
-        .find("let mut final_pages = build_final_summary_pages").unwrap();
-    let final_page = final_summary + CMD_SIGN_USEROP_BATCH_SRC[final_summary..]
-        .find("enforce_from_page(").unwrap();
-    let final_fp = final_page + CMD_SIGN_USEROP_BATCH_SRC[final_page..]
-        .find("append_fingerprint_page(").unwrap();
-    let final_confirm = final_fp + CMD_SIGN_USEROP_BATCH_SRC[final_fp..]
-        .find("confirm_checked(final_pages.as_slice())").unwrap();
-    assert!(final_page < final_fp && final_fp < final_confirm);
+        .find("let mut final_pages = build_final_summary_pages")
+        .expect("batch final summary");
+    let final_page = CMD_SIGN_USEROP_BATCH_SRC[final_summary..]
+        .find("enforce_from_page(")
+        .map(|p| final_summary + p)
+        .expect("batch-final signer page");
+    let final_fp = CMD_SIGN_USEROP_BATCH_SRC[final_page..]
+        .find("append_fingerprint_page(")
+        .map(|p| final_page + p)
+        .expect("batch-final fingerprint");
+    let final_confirm = CMD_SIGN_USEROP_BATCH_SRC[final_fp..]
+        .find("confirm_checked(final_pages.as_slice())")
+        .map(|p| final_fp + p)
+        .expect("batch-final confirmation");
+    assert!(final_summary < final_page && final_page < final_fp && final_fp < final_confirm);
+
     assert!(VALUE_PAGE_SRC.contains("b\"Signer acct #\""));
     assert!(VALUE_PAGE_SRC.contains("primitives::write_addr_full(a, b, c, sender)"));
 }

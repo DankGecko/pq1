@@ -76,7 +76,7 @@ use crate::selectors::{
     MAX_SELF_ATTEST_BUNDLE_LEN,
 };
 use crate::tx::display::pick_sign_pages;
-use crate::tx::eip1559::{Eip1559Tx, U256};
+use crate::tx::eip1559::{Eip1559Tx, U256, UserOpDisplayFields};
 use crate::ui;
 
 /// Reserve enough room to TOCTOU-snapshot the largest valid input the
@@ -547,17 +547,13 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     };
     cursor = erc7730_trailer.next_cursor;
 
-    // ERC-7730 is an enhancement layer: a wrong / malformed / mis-bound
-    // trailer MUST degrade gracefully to blind-sign instead of aborting
-    // the userop, per `docs/companion/companion-erc7730-implementation-guide.md`
-    // §1: "If it ships a wrong / malformed / mis-bound trailer, the
-    // firmware refuses the descriptor and falls back to blind-sign with
-    // a brief status-line banner. Clear signing is never required — it
-    // is an enhancement layer the companion is free to skip per-tx."
-    //
-    // The banner is shown via `ui::show_status` so the user can see why
-    // clear-signing didn't engage; the subsequent confirmation pages
-    // then render the blind-sign ladder normally.
+    // A wrong / malformed / mis-bound trailer is represented as `None` after
+    // the status banner, but that is NOT unconditional permission to blind-
+    // sign. `pick_sign_pages` consults the independently generated firmware-
+    // pinned known-call filter: if `(chain_id, to, selector)` is a registry-declared
+    // ERC-7730 tuple, missing verification hard-refuses. Only tuples absent
+    // from that filter may continue through the generic typed/blind ladder
+    // (Bloom false positives refuse an unknown call, the safe direction).
     let erc7730_verified: Option<crate::tx::erc7730::VerifiedDescriptor<'_>> =
         if erc7730_trailer.len > 0 {
             let bytes = &snap[erc7730_trailer.start
@@ -567,38 +563,95 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                 &crate::db_roots::ERC7730_DESCRIPTORS_ROOT,
             ) {
                 Ok(v) => {
-                    // FI-hardened binding cross-check (Phase 5 item 6).
-                    // Compute the verdict once, then double-evaluate via
-                    // `check_true_into_sentinel` with `wait_random` between.
-                    // A single-fault glitch that skips the gate also has to
-                    // race a Hamming-distant sentinel compare. Mirrors the
-                    // verify-before-release pattern in
-                    // `crypto::c10_sign_verified_with_progress`.
-                    let bind_ok = crate::tx::erc7730::cross_check_contract(
+                    // Caller-owned FI transcript: the non-inlined proof
+                    // independently re-verifies this exact bundle/root and
+                    // its binding twice, requires both parses to reproduce
+                    // `v.ir`, volatile-publishes into a FAIL-initialized slot,
+                    // and bumps this caller's CFI counter internally. Skipping
+                    // either the first Merkle reject or this whole call cannot
+                    // admit an unrooted/mis-bound descriptor.
+                    let mut bind_verdict_slot = 0u32;
+                    // SAFETY: unique initialized local; volatile so LTO cannot
+                    // erase the fail state as dead before the callee overwrite.
+                    unsafe {
+                        core::ptr::write_volatile(
+                            &mut bind_verdict_slot,
+                            crate::fi::FAIL_SENTINEL,
+                        );
+                    }
+                    core::sync::atomic::compiler_fence(
+                        core::sync::atomic::Ordering::SeqCst,
+                    );
+                    let mut bind_cfi = crate::fi::CfiCounter::new();
+                    crate::tx::erc7730::prove_contract_binding(
                         &v.ir,
+                        bytes,
+                        &crate::db_roots::ERC7730_DESCRIPTORS_ROOT,
                         chain_id,
                         &to_address,
-                    )
-                    .is_ok();
-                    crate::fi::wait_random();
-                    if crate::fi::check_true_into_sentinel(|| core::hint::black_box(bind_ok))
-                        != crate::fi::OK_SENTINEL
-                    {
+                        &mut bind_verdict_slot,
+                        &mut bind_cfi,
+                    );
+                    core::sync::atomic::compiler_fence(
+                        core::sync::atomic::Ordering::SeqCst,
+                    );
+                    // Gate A independently materializes both pieces of proof.
+                    // A skipped final reject branch therefore still reaches
+                    // gate B below, which re-reads and re-checks everything.
+                    // SAFETY: local remains live and the callee borrow ended.
+                    let bind_verdict_a = unsafe {
+                        core::ptr::read_volatile(&bind_verdict_slot)
+                    };
+                    let bind_cfi_verdict_a = bind_cfi.check_into_sentinel(
+                        crate::tx::erc7730::CFI_CONTRACT_BIND_EXPECTED,
+                    );
+                    let bind_gate_a = crate::fi::check_true_into_sentinel(|| {
+                        core::hint::black_box(bind_verdict_a) == crate::fi::OK_SENTINEL
+                            && core::hint::black_box(bind_cfi_verdict_a)
+                                == crate::fi::OK_SENTINEL
+                    });
+                    crate::fi::scrub_sentinel_register();
+                    if bind_gate_a != crate::fi::OK_SENTINEL {
                         ui::show_status("Sign", "7730 binding fail");
                         None
                     } else {
-                        #[cfg(feature = "debug-log")]
-                        {
-                            let c = &v.ir.contract;
-                            secure_log!(
-                                "[ERC-7730] matched: chain={} contract=0x{:02x}{:02x}{:02x}{:02x}..{:02x}{:02x}{:02x}{:02x} ir_len={}",
-                                v.ir.chain_id,
-                                c[0], c[1], c[2], c[3],
-                                c[16], c[17], c[18], c[19],
-                                v.ir.raw.len(),
-                            );
+                        crate::fi::wait_random();
+                        core::sync::atomic::compiler_fence(
+                            core::sync::atomic::Ordering::SeqCst,
+                        );
+                        // SAFETY: same live local, independently re-read after
+                        // the randomized gap rather than trusting gate A's
+                        // cached evidence.
+                        let bind_verdict_b = unsafe {
+                            core::ptr::read_volatile(&bind_verdict_slot)
+                        };
+                        let bind_cfi_verdict_b = bind_cfi.check_into_sentinel(
+                            crate::tx::erc7730::CFI_CONTRACT_BIND_EXPECTED,
+                        );
+                        let bind_gate_b = crate::fi::check_true_into_sentinel(|| {
+                            core::hint::black_box(bind_verdict_b)
+                                == crate::fi::OK_SENTINEL
+                                && core::hint::black_box(bind_cfi_verdict_b)
+                                    == crate::fi::OK_SENTINEL
+                        });
+                        crate::fi::scrub_sentinel_register();
+                        if bind_gate_b != crate::fi::OK_SENTINEL {
+                            ui::show_status("Sign", "7730 binding fail");
+                            None
+                        } else {
+                            #[cfg(feature = "debug-log")]
+                            {
+                                let c = &v.ir.contract;
+                                secure_log!(
+                                    "[ERC-7730] matched: chain={} contract=0x{:02x}{:02x}{:02x}{:02x}..{:02x}{:02x}{:02x}{:02x} ir_len={}",
+                                    v.ir.chain_id,
+                                    c[0], c[1], c[2], c[3],
+                                    c[16], c[17], c[18], c[19],
+                                    v.ir.raw.len(),
+                                );
+                            }
+                            Some(v)
                         }
-                        Some(v)
                     }
                 }
                 Err(_e) => {
@@ -751,6 +804,12 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         data_len,
         access_list_count: 0,
         signing_hash: [0u8; 32],
+        userop_fields: Some(UserOpDisplayFields {
+            nonce: U256(nonce),
+            call_gas_limit: U256(call_gas_limit),
+            verification_gas_limit: U256(verification_gas_limit),
+            pre_verification_gas: U256(pre_verification_gas),
+        }),
     };
 
     // ── 7. Verify optional trailers ────────────────────────────────
@@ -1122,14 +1181,13 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // dispatcher's native-value page when the outer UserOp carries
     // ETH, plus the two ERC-8213 fingerprint pages appended below.
     {
-        // Native-value page (when outer value != 0) + mandatory full signer
-        // identity page + 2 ERC-8213 fingerprint pages + 2 gas/fee pages (the
-        // dispatcher splices the
-        // gas pages for the Safe surface — audit 2026-06-19) + the paymaster
-        // page when paymasterAndData is non-empty (audit 2026-06-27).
+        // native-value page (when outer value != 0) + mandatory full signer
+        // and target pages + 2 ERC-8213 fingerprint pages + 2 gas/fee pages
+        // (the dispatcher splices gas for Safe) + optional paymaster page.
         let reserved = usize::from(value.iter().any(|&b| b != 0))
             + usize::from(paymaster_and_data_hash != SHA256_EMPTY)
             + crate::tx::display::SIGNER_IDENTITY_PAGES
+            + crate::tx::display::TARGET_IDENTITY_PAGES
             + 2
             + 2;
         match crate::tx::display::multisend_sign_gate(
@@ -1243,12 +1301,12 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         &resolver,
     ) {
         Ok(p) => p,
-        // Fail-closed (audit 2026-06-18 — native-value WYSIWYS gate): the
-        // chosen renderer filled MAX_PAGES, so the mandatory native-ETH
-        // value page could not be spliced. Refuse rather than release a
-        // signature over ETH the user never saw on the trusted display.
+        // Fail closed for any mandatory render failure: native-value/gas page
+        // budget, Safe accounting, a verified ERC-7730 descriptor that cannot
+        // render exactly, or a firmware-known call whose proof was omitted /
+        // malformed / mis-bound. None may downgrade to a weaker confirmation.
         Err(()) => {
-            ui::show_status("Sign refused", "value unshown");
+            ui::show_status("Sign refused", "render refused");
             return NscStatus::InternalError as u32;
         }
     };
@@ -1268,7 +1326,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     }
     // Account/signer identity is mandatory on every UserOp confirmation.
     // `sender` is the mnemonic-derived, independently cross-checked address,
-    // never the companion field.
+    // never the companion field. Splicing after the paymaster gate keeps this
+    // page immediately after the banner; later mandatory pages shift behind it.
     let signer_pages_before = pages.len;
     if crate::tx::display::enforce_from_page(&mut pages, account_index, &sender).is_err() {
         ui::show_status("Sign refused", "signer unshown");
@@ -1285,10 +1344,25 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         ui::show_status("Sign refused", "signer unshown");
         return NscStatus::InternalError as u32;
     }
+    // The exact outer contract target is mandatory even when the semantic
+    // renderer (notably ERC-7730) does not show it itself. Insert after the
+    // proven signer page and independently prove the full page materialized.
+    let target_pages_before = pages.len;
+    if crate::tx::display::enforce_target_page(&mut pages, &to_address).is_err() {
+        ui::show_status("Sign refused", "target unshown");
+        return NscStatus::InternalError as u32;
+    }
+    crate::fi::scrub_sentinel_register();
+    if crate::tx::display::target_page_proof(&pages, target_pages_before, &to_address)
+        != crate::fi::OK_SENTINEL
+    {
+        ui::show_status("Sign refused", "target unshown");
+        return NscStatus::InternalError as u32;
+    }
     // ERC-8213 fingerprint — show the calldata digest as the last
     // page so a user can cross-check against `cast` / `viem`. Cap is
-    // `MAX_PAGES` = 29; `multisend_sign_gate` reserves the full signer page
-    // plus these two fingerprint pages. If the buffer is nonetheless full we
+    // `MAX_PAGES` = 30; `multisend_sign_gate` reserves the full signer and
+    // target pages plus these two fingerprint pages. If the buffer is full we
     // fail closed (F5): the fingerprint binds the displayed intent to the
     // signed calldata, so dropping it silently and signing anyway breaks that
     // binding.

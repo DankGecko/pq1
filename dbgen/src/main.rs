@@ -166,6 +166,9 @@ fn main() {
     let erc7730_out = root.join("tools/companion-stub/erc7730_db.bin");
     let erc7730_e2e_out = root.join("tools/companion-stub/erc7730_db_e2e.bin");
     let erc7730_review_out = root.join("secure/data/erc7730.review.txt");
+    let erc7730_known_calls_out = root.join("secure/data/erc7730-known-calls.bloom");
+    let erc7730_known_calls_e2e_out =
+        root.join("secure/data/erc7730-known-calls-e2e.bloom");
     let roots_out = root.join("secure/src/db_roots.rs");
 
     // ----- ERC20 metadata DB -----
@@ -295,10 +298,11 @@ fn main() {
     // trailer slot (Phase 3 wires that path).
     // Tolerant build over the vendored registry. Attestation enforcement
     // (`--policy production`) does NOT yet apply to the SHIPPING registry corpus
-    // — the ERC-8176 attestation gate is a separate production step (flip
-    // `allow_unattested_dev_descriptors` + populate `trusted_attesters`), and
-    // near-zero real EAS attestations exist yet. The corpus is therefore built
-    // in DEV policy regardless of the flag. Rather than let `--policy
+    // — the real ERC-8176 EAS record fetch + signature/identity verifier is a
+    // separate production step, and near-zero real EAS attestations exist yet.
+    // Merely flipping the policy boolean is explicitly insufficient. The
+    // corpus is therefore built in DEV policy regardless of the flag. Rather
+    // than let `--policy
     // production` build the shipping catalogue unattested WHILE APPEARING to
     // enforce attestation (an operator could ship believing it was attested),
     // refuse it explicitly here (review 2.3). Remove this fence when the
@@ -335,6 +339,11 @@ fn main() {
         fs::create_dir_all(parent).expect("create tools/companion-stub");
     }
     fs::write(&erc7730_out, &erc7730_res.blob).expect("write erc7730_db.bin");
+    fs::write(
+        &erc7730_known_calls_out,
+        erc7730_res.known_calls_bloom,
+    )
+    .expect("write erc7730-known-calls.bloom");
     fs::write(&erc7730_review_out, &erc7730_res.review_text)
         .expect("write erc7730.review.txt");
     println!(
@@ -345,6 +354,11 @@ fn main() {
         hex::encode(erc7730_res.root),
     );
     println!("dbgen: wrote {}", erc7730_review_out.display());
+    println!(
+        "dbgen: wrote {} ({} known calls)",
+        erc7730_known_calls_out.display(),
+        erc7730_res.known_call_count,
+    );
 
     // ----- ERC-7730 descriptor catalog (e2e fixture) -----
     //
@@ -368,12 +382,22 @@ fn main() {
         .expect("erc7730 e2e round-trip failed");
     fs::write(&erc7730_e2e_out, &erc7730_e2e_res.blob)
         .expect("write erc7730_db_e2e.bin");
+    fs::write(
+        &erc7730_known_calls_e2e_out,
+        erc7730_e2e_res.known_calls_bloom,
+    )
+    .expect("write erc7730-known-calls-e2e.bloom");
     println!(
         "dbgen: wrote {} ({} bytes, {} leaves, e2e root = {})",
         erc7730_e2e_out.display(),
         erc7730_e2e_res.blob.len(),
         erc7730_e2e_res.leaf_count,
         hex::encode(erc7730_e2e_res.root),
+    );
+    println!(
+        "dbgen: wrote {} ({} known calls)",
+        erc7730_known_calls_e2e_out.display(),
+        erc7730_e2e_res.known_call_count,
     );
 
     // ----- secure/src/db_roots.rs -----
@@ -391,7 +415,9 @@ fn main() {
         &selectors_res.root,
         &selectors_e2e_res.root,
         &erc7730_res.root,
+        erc7730_res.provenance,
         &erc7730_e2e_res.root,
+        erc7730_e2e_res.provenance,
     );
     fs::write(&roots_out, &roots_rs).expect("write db_roots.rs");
     println!("dbgen: wrote {}", roots_out.display());
@@ -437,10 +463,12 @@ const DB_ROOTS_HEADER: &str = "\
 //! the blob lives host-side under `tools/companion-stub/`, and
 //! every bundle crossing the gateway is Merkle-verified against
 //! this root by `pqsigner_erc7730::bundle::verify_erc7730_bundle`.
-//! The catalog filters through the ERC-8176 policy at
-//! `secure/data/erc7730/policy.toml` so attestations are
-//! enforced at host build time (preserving invariant #5 — no
-//! classical signer on-device).
+//! The generated `ERC7730_CATALOGUE_PROVENANCE` constant records whether the
+//! exact root was produced by real ERC-8176 verification or by the explicitly
+//! dev-only unattested path. Generated compile fences prevent a dev-unattested
+//! root from being used without its warning feature and always reject it under
+//! `mode-production`. ERC-8176 verification remains host-side (preserving
+//! invariant #5 — no classical signer on-device).
 
 ";
 
@@ -452,7 +480,9 @@ fn render_db_roots(
     selectors_root: &[u8; 32],
     selectors_e2e_root: &[u8; 32],
     erc7730_root: &[u8; 32],
+    erc7730_provenance: erc7730::CatalogueProvenance,
     erc7730_e2e_root: &[u8; 32],
+    erc7730_e2e_provenance: erc7730::CatalogueProvenance,
 ) -> String {
     use std::fmt::Write;
 
@@ -480,7 +510,68 @@ fn render_db_roots(
     emit_root(&mut s, "ERC7730_DESCRIPTORS_ROOT", erc7730_root);
     s.push_str("#[cfg(feature = \"e2e-test\")]\n");
     emit_root(&mut s, "ERC7730_DESCRIPTORS_ROOT", erc7730_e2e_root);
+    s.push_str(
+        "#[cfg(not(feature = \"e2e-test\"))]\n\
+         pub static ERC7730_KNOWN_CALLS_BLOOM: &[u8; pqsigner_erc7730::known_calls::BLOOM_BYTES] =\n\
+             include_bytes!(\"../data/erc7730-known-calls.bloom\");\n\n\
+         #[cfg(feature = \"e2e-test\")]\n\
+         pub static ERC7730_KNOWN_CALLS_BLOOM: &[u8; pqsigner_erc7730::known_calls::BLOOM_BYTES] =\n\
+             include_bytes!(\"../data/erc7730-known-calls-e2e.bloom\");\n\n",
+    );
+    emit_erc7730_provenance(&mut s, erc7730_provenance, false);
+    emit_erc7730_provenance(&mut s, erc7730_e2e_provenance, true);
     s
+}
+
+fn emit_erc7730_provenance(
+    s: &mut String,
+    provenance: erc7730::CatalogueProvenance,
+    e2e: bool,
+) {
+    use std::fmt::Write;
+
+    let selected = if e2e {
+        "feature = \"e2e-test\""
+    } else {
+        "not(feature = \"e2e-test\")"
+    };
+    writeln!(s, "#[cfg({selected})]").unwrap();
+    writeln!(
+        s,
+        "pub const ERC7730_CATALOGUE_PROVENANCE: &str = {:?};\n",
+        provenance.as_str()
+    )
+    .unwrap();
+
+    match provenance {
+        erc7730::CatalogueProvenance::DevUnattested => {
+            if !e2e {
+                s.push_str(
+                    "#[cfg(all(not(feature = \"e2e-test\"), feature = \"mode-production\"))]\n\
+                     compile_error!(\"mode-production cannot embed the dev-unattested ERC-7730 catalogue. Implement and run real ERC-8176 EAS verification, regenerate db_roots.rs, and only then build production firmware.\");\n\n",
+                );
+                s.push_str(
+                    "#[cfg(all(not(feature = \"e2e-test\"), not(feature = \"mode-production\"), not(feature = \"erc7730-dev-unattested\"), not(test)))]\n\
+                     compile_error!(\"the pinned ERC-7730 catalogue is dev-unattested; enable erc7730-dev-unattested so the trusted display shows the provenance warning, or regenerate from a genuinely ERC-8176-verified corpus\");\n\n",
+                );
+            } else {
+                s.push_str(
+                    "#[cfg(all(feature = \"e2e-test\", not(feature = \"erc7730-dev-unattested\"), not(test)))]\n\
+                     compile_error!(\"the e2e ERC-7730 fixture catalogue is dev-unattested; e2e builds must enable erc7730-dev-unattested so the display warning matches its provenance\");\n\n",
+                );
+            }
+        }
+        erc7730::CatalogueProvenance::Erc8176Verified => {
+            writeln!(
+                s,
+                "#[cfg(all({selected}, feature = \"erc7730-dev-unattested\"))]"
+            )
+            .unwrap();
+            s.push_str(
+                "compile_error!(\"erc7730-dev-unattested is enabled but the selected catalogue is ERC-8176-verified; disable the feature so the trusted display does not show false provenance\");\n\n",
+            );
+        }
+    }
 }
 
 fn emit_root(s: &mut String, name: &str, bytes: &[u8; 32]) {
@@ -489,8 +580,10 @@ fn emit_root(s: &mut String, name: &str, bytes: &[u8; 32]) {
     for (i, b) in bytes.iter().enumerate() {
         if i % 8 == 0 {
             s.push_str("\n    ");
+        } else {
+            s.push(' ');
         }
-        write!(s, "0x{b:02x}, ").unwrap();
+        write!(s, "0x{b:02x},").unwrap();
     }
     s.push_str("\n];\n\n");
 }

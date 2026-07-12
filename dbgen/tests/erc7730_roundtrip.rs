@@ -26,13 +26,13 @@
 use std::path::PathBuf;
 
 use dbgen::erc7730::{
-    build_db, build_db_tolerant, load_policy, round_trip_check, try_compile_one,
-    Erc7730BuildResult,
+    build_db, build_db_tolerant, load_policy, round_trip_check, try_compile_one, Erc7730BuildResult,
 };
 use pqsigner_erc7730::abi::container_field;
 use pqsigner_erc7730::binding::{cross_check_contract, cross_check_eip712};
 use pqsigner_erc7730::bundle::{verify_erc7730_bundle, MAX_ERC7730_BUNDLE_LEN};
 use pqsigner_erc7730::ir::{ContextKind, Erc7730Ir, PathOp, CTX_CONTRACT, CTX_EIP712};
+use pqsigner_erc7730::known_calls::may_contain as known_call_may_contain;
 use pqsigner_tx_core::hash::keccak256;
 
 fn workspace_root() -> PathBuf {
@@ -57,9 +57,75 @@ fn build_registry() -> Erc7730BuildResult {
     let root = workspace_root();
     let reg = root.join("secure/data/erc7730-registry");
     let policy = root.join("secure/data/erc7730/policy.toml");
-    let (res, _skips) =
-        build_db_tolerant(&reg.join("registry"), &policy, Some(&reg)).expect("build registry corpus");
+    let (res, _skips) = build_db_tolerant(&reg.join("registry"), &policy, Some(&reg))
+        .expect("build registry corpus");
     res
+}
+
+#[test]
+fn eip712_hash_only_value_sources_are_not_emitted_to_runtime_catalogue() {
+    let root = workspace_root();
+    let reg = root.join("secure/data/erc7730-registry");
+    let policy = root.join("secure/data/erc7730/policy.toml");
+    let (catalogue, skips) = build_db_tolerant(&reg.join("registry"), &policy, Some(&reg))
+        .expect("build registry corpus");
+
+    // Concrete exploit: all three human-meaningful Hyperliquid Withdraw
+    // values are dynamic strings. EIP-712 encodeData contains only their
+    // keccak words, so no verified bundle for this source may exist.
+    for source_name in ["eip712-withdraw.json", "eip712-SpotOrderCancel.json"] {
+        assert!(
+            !catalogue.entries.iter().any(|entry| {
+                entry.source.file_name().and_then(|n| n.to_str()) == Some(source_name)
+            }),
+            "{source_name} must not reach the runtime catalogue"
+        );
+        let skip = skips
+            .iter()
+            .find(|skip| skip.source.file_name().and_then(|n| n.to_str()) == Some(source_name))
+            .unwrap_or_else(|| panic!("missing visible skip record for {source_name}"));
+        assert!(
+            (skip
+                .reason
+                .contains("visible EIP-712 terminal type `string`")
+                && skip.reason.contains("opaque hash word"))
+                || (skip.reason.contains("visible:\"never\"")
+                    && skip
+                        .reason
+                        .contains("every signed non-address operand must be shown")),
+            "unexpected {source_name} skip reason: {}",
+            skip.reason
+        );
+    }
+}
+
+#[test]
+fn registry_declared_but_uncompiled_call_is_still_known() {
+    let catalogue = build_registry();
+    // 1inch AggregationRouterV5's swap is intentionally not emitted by the
+    // strict renderer policy, but it is still a vendored registry-declared
+    // shape. It must refuse rather than regain a blind-sign path.
+    let raw = hex::decode("1111111254eeb25477b68fb85ed929f73a960582").unwrap();
+    let mut contract = [0u8; 20];
+    contract.copy_from_slice(&raw);
+    let selector = [0x12, 0xaa, 0x3c, 0xaf];
+    assert!(known_call_may_contain(
+        &catalogue.known_calls_bloom,
+        1,
+        &contract,
+        &selector,
+    ));
+
+    let emitted = catalogue.entries.iter().any(|entry| {
+        entry.chain_id == 1
+            && entry.contract == contract
+            && Erc7730Ir::parse(&entry.ir_bytes).is_ok_and(|ir| {
+                ir.format_iter().any(|format| {
+                    format.is_ok_and(|format| format.selector == selector)
+                })
+            })
+    });
+    assert!(!emitted, "control: this exact format should remain uncompiled");
 }
 
 /// ANTI-RECURRENCE GUARD. The vendored upstream registry
@@ -76,8 +142,11 @@ fn fixtures_do_not_duplicate_the_registry() {
     use std::collections::BTreeSet;
     let fixtures = build_seed();
     let registry = build_registry();
-    let reg: BTreeSet<(u64, [u8; 20])> =
-        registry.entries.iter().map(|e| (e.chain_id, e.contract)).collect();
+    let reg: BTreeSet<(u64, [u8; 20])> = registry
+        .entries
+        .iter()
+        .map(|e| (e.chain_id, e.contract))
+        .collect();
     let mut dups: Vec<String> = fixtures
         .entries
         .iter()
@@ -195,18 +264,14 @@ fn seed_corpus_bundles_verify_against_on_device_parser() {
             );
         } else if entry.context_kind == CTX_EIP712 {
             assert!(matches!(verified.ir.context_kind, ContextKind::Eip712));
-            cross_check_eip712(
-                &verified.ir,
-                entry.chain_id,
-                &verified.ir.domain_separator,
-            )
-            .unwrap_or_else(|e| {
-                panic!(
-                    "cross_check_eip712 failed for leaf {} ({}): {e:?}",
-                    i,
-                    entry.source.display()
-                )
-            });
+            cross_check_eip712(&verified.ir, entry.chain_id, &verified.ir.domain_separator)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "cross_check_eip712 failed for leaf {} ({}): {e:?}",
+                        i,
+                        entry.source.display()
+                    )
+                });
         } else {
             panic!(
                 "unknown context_kind 0x{:02x} on leaf {}",
@@ -235,7 +300,10 @@ fn binding_mismatch_is_rejected() {
     let wrong_chain = entry.chain_id.wrapping_add(1);
     let err = cross_check_contract(&v.ir, wrong_chain, &entry.contract).unwrap_err();
     assert!(
-        matches!(err, pqsigner_erc7730::binding::BindingError::ChainIdMismatch),
+        matches!(
+            err,
+            pqsigner_erc7730::binding::BindingError::ChainIdMismatch
+        ),
         "expected ChainIdMismatch, got {err:?}"
     );
 
@@ -243,7 +311,10 @@ fn binding_mismatch_is_rejected() {
     wrong_contract[0] ^= 0x01;
     let err = cross_check_contract(&v.ir, entry.chain_id, &wrong_contract).unwrap_err();
     assert!(
-        matches!(err, pqsigner_erc7730::binding::BindingError::ContractMismatch),
+        matches!(
+            err,
+            pqsigner_erc7730::binding::BindingError::ContractMismatch
+        ),
         "expected ContractMismatch, got {err:?}"
     );
 }
@@ -312,8 +383,7 @@ fn companion_stub_trailer_verifies_against_on_device() {
     let v = verify_erc7730_bundle(&trailer, &result.root)
         .expect("trailer verifies against pinned root");
     assert_eq!(v.ir.chain_id, 1, "chain_id from IR");
-    let want_addr =
-        hex::decode("dAC17F958D2ee523a2206206994597C13D831ec7").unwrap();
+    let want_addr = hex::decode("dAC17F958D2ee523a2206206994597C13D831ec7").unwrap();
     assert_eq!(&v.ir.contract, &want_addr[..], "contract from IR");
     assert!(
         matches!(v.ir.context_kind, ContextKind::Contract),
@@ -374,9 +444,7 @@ fn seed_corpus_path_programs_parse() {
                 assert!(
                     matches!(
                         root,
-                        PathOp::RootStructured
-                            | PathOp::RootContainer
-                            | PathOp::RootMetadata
+                        PathOp::RootStructured | PathOp::RootContainer | PathOp::RootMetadata
                     ),
                     "first opcode must be a root, got {:?}",
                     root,
@@ -393,12 +461,12 @@ fn seed_corpus_path_programs_parse() {
                     });
                     p += 1;
                     p += match op {
-                        PathOp::RootStructured
-                        | PathOp::RootContainer
-                        | PathOp::RootMetadata => panic!(
-                            "Root opcode {:?} mid-descent in field {:?}",
-                            op, field.label,
-                        ),
+                        PathOp::RootStructured | PathOp::RootContainer | PathOp::RootMetadata => {
+                            panic!(
+                                "Root opcode {:?} mid-descent in field {:?}",
+                                op, field.label,
+                            )
+                        }
                         PathOp::FieldIdx => 2,
                         PathOp::ArrayIdx => 4,
                         PathOp::ArraySlice => 8,
@@ -473,10 +541,10 @@ fn seed_corpus_param_tlv_blobs_are_well_formed() {
                         ir.contract,
                         field.label
                     );
-                    // Tag must be in the documented space (0x30..=0x40;
-                    // 0x40 = PARAM_CONST_VALUE for path-less constant fields).
+                    // Tag must be in the documented contiguous space through
+                    // 0x43 (`PARAM_DYNAMIC_KIND`).
                     assert!(
-                        (0x30u8..=0x40).contains(&tag),
+                        (0x30u8..=0x43).contains(&tag),
                         "unknown TLV tag 0x{:02X} in {:?} field {:?}",
                         tag,
                         ir.contract,
@@ -484,42 +552,33 @@ fn seed_corpus_param_tlv_blobs_are_well_formed() {
                     );
                     // Per-tag width invariants.
                     match tag {
-                        0x31 => assert_eq!(
-                            len, 20,
-                            "PARAM_TOKEN must be 20 B in {:?}",
-                            field.label
-                        ),
-                        0x32 => assert_eq!(
-                            len, 32,
-                            "PARAM_THRESHOLD must be 32 B in {:?}",
-                            field.label
-                        ),
-                        0x34 | 0x35 | 0x36 | 0x38 | 0x3A => assert_eq!(
+                        0x31 => {
+                            assert_eq!(len, 20, "PARAM_TOKEN must be 20 B in {:?}", field.label)
+                        }
+                        0x32 => {
+                            assert_eq!(len, 32, "PARAM_THRESHOLD must be 32 B in {:?}", field.label)
+                        }
+                        0x34 | 0x35 | 0x36 | 0x38 | 0x3A | 0x43 => assert_eq!(
                             len, 1,
                             "fixed-1-byte tag 0x{:02X} in {:?}",
                             tag, field.label
                         ),
-                        0x37 => assert_eq!(
-                            len, 2,
-                            "PARAM_ENUM_REF must be 2 B in {:?}",
-                            field.label
-                        ),
+                        0x37 => {
+                            assert_eq!(len, 2, "PARAM_ENUM_REF must be 2 B in {:?}", field.label)
+                        }
                         0x3C => assert_eq!(
                             len, 4,
                             "PARAM_NESTED_SELECTOR must be 4 B in {:?}",
                             field.label
                         ),
-                        0x3D => assert_eq!(
-                            len, 20,
-                            "PARAM_NESTED_CALLEE must be 20 B in {:?}",
-                            field.label
-                        ),
+                        0x3D => assert!(len > 0, "PARAM_NESTED_CALLEE path must be non-empty"),
                         0x3F => assert!(
                             (1..=255).contains(&len),
                             "PARAM_VISIBILITY must be ≥1 B in {:?}",
                             field.label
                         ),
-                        _ => {} // variable-width tags: 0x30, 0x33, 0x39, 0x3B, 0x3E
+                        0x42 => assert_eq!(len, 20, "PARAM_NATIVE_CURRENCY must be 20 B"),
+                        _ => {} // variable-width tags: 0x30, 0x33, 0x39, 0x3B, 0x3E, 0x40, 0x41
                     }
                     cursor += len;
                 }
@@ -552,33 +611,41 @@ fn wrong_root_is_rejected() {
 
 /// CURATION GUARD (re-vendor durability). The single-hop Uniswap V3 swaps
 /// (`exactInputSingle` / `exactOutputSingle`) clear-sign ONLY because the vendored
-/// descriptor hides the redundant `sqrtPriceLimitX96` price bound
-/// (`visible:"never"`) to satisfy the H-3 tuple-member-completeness lint — a
-/// curation that `xtask vendor-registry` would DROP when it re-copies from
-/// upstream (which omits it). A STRICT compile of the vendored descriptor
-/// succeeds only if EVERY format compiles: the curated single-hop pair AND the
-/// Tier B slice/array tokenPaths (`exactInput`/`exactOutput` `params.path.[0:20]`/
-/// `[-20:]`, V2 `swap*ForTokens` `path.[0]`/`[-1]`). So this fails LOUD if either
-/// the curation is dropped on re-vendor or a Tier B slice regression lands —
-/// exactly the two silent-regression paths the single-hop render tests don't cover.
+/// descriptor used to hide `sqrtPriceLimitX96` to satisfy H-3. The fail-closed
+/// hidden-operand gate now drops both single-hop formats instead of assigning
+/// semantic harmlessness to an unseen price bound. One independently
+/// renderable sole-array format remains.
+/// The two `exact{Input,Output}` dynamic-tuple forms are refused because compact
+/// IR cannot prove C2 tuple-local tail topology.
+/// `swapTokensForExactTokens` is intentionally refused because its
+/// `senderAddress=0x1` sentinel means “substitute msg.sender”, while the renderer
+/// has no sender bound in this field context. Strict compile must reject that
+/// descriptor; tolerant catalogue compilation retains only the one shape with
+/// no signed-but-unseen operands.
 #[test]
-fn vendored_uniswap_v3_router_curation_and_slices_all_compile() {
+fn vendored_uniswap_v3_router_keeps_only_bounded_formats() {
     let root = workspace_root();
     let reg = root.join("secure/data/erc7730-registry");
     let desc = reg.join("registry/uniswap/calldata-UniswapV3Router02.json");
-    let policy =
-        load_policy(&root.join("secure/data/erc7730/policy.toml")).expect("load policy");
-    let emitted = try_compile_one(&desc, &policy, Some(&reg)).expect(
-        "vendored Uniswap V3 Router must compile strictly — if this fails, the \
-         sqrtPriceLimitX96 curation was dropped (re-vendor) or a Tier B slice regressed",
+    let policy = load_policy(&root.join("secure/data/erc7730/policy.toml")).expect("load policy");
+    let err = try_compile_one(&desc, &policy, Some(&reg))
+        .expect_err("strict compile must refuse the first unsafe C2 format");
+    assert!(
+        err.contains("dynamic tuple") && err.contains("C2 tail topology"),
+        "unexpected strict error: {err}"
     );
-    assert_eq!(emitted.len(), 1, "one Uniswap leaf (mainnet chain 1)");
-    let ir = Erc7730Ir::parse(&emitted[0].ir_bytes).expect("Uniswap IR parses");
+
+    let registry = build_registry();
+    let emitted = registry
+        .entries
+        .iter()
+        .find(|e| e.source == desc)
+        .expect("tolerant catalogue keeps the independently safe Uniswap formats");
+    let ir = Erc7730Ir::parse(&emitted.ir_bytes).expect("Uniswap IR parses");
     let n = ir.format_iter().filter(|f| f.is_ok()).count();
     assert_eq!(
-        n, 6,
-        "all 6 Uniswap formats must compile (exactInputSingle, exactOutputSingle, \
-         exactInput, exactOutput, swapExactTokensForTokens, swapTokensForExactTokens)"
+        n, 1,
+        "only the sole-array exact-input shape has no hidden operand; tuple singles, C2, and msg.sender-sentinel formats stay refused"
     );
 }
 
@@ -646,104 +713,13 @@ fn hex_bytes(s: &str) -> Vec<u8> {
         .collect()
 }
 
-/// A length-prefixed pool entry (`[u8 len][bytes]`) at `off`; `off == 0` → empty.
-fn pool_entry<'a>(ir: &Erc7730Ir<'a>, off: u16) -> &'a [u8] {
-    if off == 0 {
-        return &[];
-    }
-    let o = off as usize;
-    let len = ir.pool[o] as usize;
-    &ir.pool[o + 1..o + 1 + len]
-}
-
-/// First TLV payload with `tag` in a param blob (`[tag][len][payload]`*).
-fn find_tlv(blob: &[u8], tag: u8) -> Option<&[u8]> {
-    let mut c = 0usize;
-    while c + 2 <= blob.len() {
-        let t = blob[c];
-        let l = blob[c + 1] as usize;
-        let pl = &blob[c + 2..c + 2 + l];
-        if t == tag {
-            return Some(pl);
-        }
-        c += 2 + l;
-    }
-    None
-}
-
-struct SubField {
-    format_op: u8,
-    path_off: u16,
-    param_off: u16,
-}
-
-/// Read one `{format_op, label_len, label, path_off, param_off}` sub-field
-/// record from `payload` at `p`; returns the record + the next cursor.
-fn read_subfield(payload: &[u8], p: usize) -> (SubField, usize) {
-    let format_op = payload[p];
-    let label_len = payload[p + 1] as usize;
-    let q = p + 2 + label_len;
-    let path_off = u16::from_be_bytes([payload[q], payload[q + 1]]);
-    let param_off = u16::from_be_bytes([payload[q + 2], payload[q + 3]]);
-    (
-        SubField {
-            format_op,
-            path_off,
-            param_off,
-        },
-        q + 4,
-    )
-}
-
-/// The nested-struct anchor payload of `fmt` (the `PARAM_NESTED_STRUCT` = 0x41
-/// TLV), or `None` if the format has no v0x03 anchor.
-fn nested_anchor_payload(ir: &Erc7730Ir<'_>, type_hash: &[u8]) -> Option<Vec<u8>> {
-    let fmt = ir
-        .format_iter()
-        .map(|f| f.expect("format parses"))
-        .find(|f| f.type_hash[..] == type_hash[..])?;
-    let payload = fmt
-        .fields()
-        .map(|f| f.expect("field parses"))
-        .find_map(|fe| find_tlv(pool_entry(ir, fe.param_off), 0x41).map(<[u8]>::to_vec));
-    payload.map(|pl| {
-        // Also cross-check the E1 pin as a side effect of every lookup.
-        assert_eq!(fmt.nested_descent_count, 1, "one nested descent point");
-        pl
-    })
-}
-
-fn keccak_hex(s: &str) -> String {
-    let h = keccak256(s.as_bytes());
-    h.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// Byte-level proof of the nested-EIP-712 v0x03 anchor emission (Phase 5 v1),
-/// against the REAL shipped DB (the tolerant registry build — the one the pinned
-/// Merkle root is cut from, so this is exactly what the device parses).
-///
-///  * `PermitSingle` → anchor: version 0x03, word_pos 0 (details is the FIRST
-///    *member* — proves member order, not field order), foundry-pinned
-///    `typeHash(PermitDetails)`, member_count 4, flags 0, addr_word_bmp 0x01
-///    (only local word 0 = token is an address), two LOCAL sub-fields:
-///      amount → tokenAmount, render FieldIdx(1), tokenPath FieldIdx(0)=token;
-///      expiration → date(timestamp), render FieldIdx(2).
-///    `nonce` (local word 3) + top-level `sigDeadline` stay hidden — the hash
-///    still covers them (member_count pins the blob length; E5 + rule 3).
-///  * `PermitTransferFrom` → the minimal binding (`TokenPermissions`, 2 members),
-///    unlocked by the hand-curated `nonce` `visible:"never"` completeness field
-///    (upstream omits it; guarded by
-///    `vendored_permit2_transfer_from_curation_compiles`).
-///  * `PermitBatch` (`PermitDetails[]`, array-of-struct) → DROPPED by the
-///    pre-existing visibility gate (v1 scope boundary), so its format is ABSENT.
-/// The shipped-registry IR of the entry at `contract` whose format set carries
-/// `type_hash`. Multiple descriptors can share a contract address: the Permit2
-/// contract (`0x…22D473`) hosts BOTH the permit2.json forms (PermitSingle /
-/// PermitBatch / PermitTransferFrom) AND the UniswapX `PermitWitnessTransferFrom`
-/// Dutch orders (which are Permit2 witness transfers, signed against Permit2). So
-/// pick the entry that actually carries the wanted format, not merely the first
-/// at that address (which is now an ambiguous, order-dependent match).
-fn leaf_ir_carrying(registry: &Erc7730BuildResult, contract: &[u8], type_hash: &[u8]) -> Option<Vec<u8>> {
+/// Return the shipped IR carrying an exact contract + full EIP-712 type hash.
+/// Contract-only lookup is ambiguous because Permit2 hosts multiple schemas.
+fn leaf_ir_carrying(
+    registry: &Erc7730BuildResult,
+    contract: &[u8],
+    type_hash: &[u8],
+) -> Option<Vec<u8>> {
     registry
         .entries
         .iter()
@@ -758,227 +734,48 @@ fn leaf_ir_carrying(registry: &Erc7730BuildResult, contract: &[u8], type_hash: &
 }
 
 #[test]
-fn permit2_nested_anchor_emission_is_byte_exact() {
+fn permit2_formats_with_hidden_members_are_not_emitted() {
     let registry = build_registry();
     let permit2 = hex_bytes("000000000022d473030f116ddee9f6b43ac78ba3");
-    // The permit2.json descriptor's leaf — the one carrying PermitSingle
-    // (`f3841cd1…`); all three permit2 forms live in this single leaf.
-    let single = hex_bytes("f3841cd1ff0085026a6327b620b67997ce40f282c88a8e905a7a5626e310f3d0");
-    let ir_bytes = leaf_ir_carrying(&registry, &permit2, &single)
-        .expect("permit2.json leaf carrying PermitSingle present in the shipped DB");
-    let ir = Erc7730Ir::parse(&ir_bytes).expect("permit2 IR parses");
-
-    // ── PermitSingle ──
-    let payload = nested_anchor_payload(&ir, &single).expect("PermitSingle anchor present");
-    assert_eq!(payload[0], 0x03, "structured v0x03 block (not the bare 0x01 belt)");
-    assert_eq!(
-        u16::from_be_bytes([payload[1], payload[2]]),
-        0,
-        "word_pos 0 — details is member 0 (member order, not field order)"
-    );
-    assert_eq!(
-        &payload[3..35],
-        &hex_bytes("65626cad6cb96493bf6f5ebea28756c966f023ab9e8a83a7101849d5573b3678")[..],
-        "pinned typeHash(PermitDetails) matches foundry"
-    );
-    assert_eq!(
-        u16::from_be_bytes([payload[35], payload[36]]),
-        4,
-        "member_count 4 (PermitDetails' OWN word count — pins the blob length)"
-    );
-    assert_eq!(payload[37], 0, "flags: non-array");
-    assert_eq!(payload[38], 0x01, "addr_word_bmp: only local word 0 (token) is address");
-    assert_eq!(payload[39], 2, "two visible sub-fields (amount + expiration)");
-    let (sf0, next) = read_subfield(&payload, 40);
-    assert_eq!(sf0.format_op, 0x03, "sub-field 0 is tokenAmount");
-    assert_eq!(
-        pool_entry(&ir, sf0.path_off),
-        [0x10, 0x20, 0x00, 0x01],
-        "amount render path = RootStructured+FieldIdx(1) (local word 1)"
-    );
-    assert_eq!(
-        find_tlv(pool_entry(&ir, sf0.param_off), 0x30).expect("tokenPath TLV"),
-        [0x10, 0x20, 0x00, 0x00],
-        "tokenPath = RootStructured+FieldIdx(0) (local word 0 = token)"
-    );
-    let (sf1, _) = read_subfield(&payload, next);
-    assert_eq!(sf1.format_op, 0x05, "sub-field 1 is date");
-    assert_eq!(
-        pool_entry(&ir, sf1.path_off),
-        [0x10, 0x20, 0x00, 0x02],
-        "expiration render path = RootStructured+FieldIdx(2) (local word 2)"
-    );
-    assert_eq!(
-        find_tlv(pool_entry(&ir, sf1.param_off), 0x36).expect("date-encoding TLV"),
-        [0x00],
-        "date encoding = timestamp"
-    );
-
-    // ── PermitTransferFrom (minimal binding — TokenPermissions, 2 members) ──
-    // Unlocked by the hand-curated `nonce` `visible:"never"` field. word_pos 0
-    // (permitted is member 0), pinned typeHash(TokenPermissions), member_count 2,
-    // addr_word_bmp 0x01 (token), one sub-field (amount, tokenPath word 0).
-    let ptf = hex_bytes("939c21a48a8dbe3a9a2404a1d46691e4d39f6583d6ec6b35714604c986d80106");
-    let payload = nested_anchor_payload(&ir, &ptf).expect("PermitTransferFrom anchor present");
-    assert_eq!(payload[0], 0x03);
-    assert_eq!(u16::from_be_bytes([payload[1], payload[2]]), 0, "permitted is member 0");
-    assert_eq!(
-        &payload[3..35],
-        &hex_bytes("618358ac3db8dc274f0cd8829da7e234bd48cd73c4a740aede1adec9846d06a1")[..],
-        "pinned typeHash(TokenPermissions)"
-    );
-    assert_eq!(u16::from_be_bytes([payload[35], payload[36]]), 2, "TokenPermissions has 2 members");
-    assert_eq!(payload[37], 0, "non-array");
-    assert_eq!(payload[38], 0x01, "token is address");
-    assert_eq!(payload[39], 1, "one visible sub-field (amount)");
-    let (ptf_sf0, _) = read_subfield(&payload, 40);
-    assert_eq!(ptf_sf0.format_op, 0x03, "tokenAmount");
-    assert_eq!(pool_entry(&ir, ptf_sf0.path_off), [0x10, 0x20, 0x00, 0x01], "amount = local word 1");
-    assert_eq!(
-        find_tlv(pool_entry(&ir, ptf_sf0.param_off), 0x30).expect("tokenPath TLV"),
-        [0x10, 0x20, 0x00, 0x00],
-        "tokenPath = local word 0 (token)"
-    );
-
-    // ── PermitBatch (array-of-struct, v2) — now emits an is_array anchor. ──
-    // Identical to PermitSingle's anchor (same PermitDetails struct + sub-fields)
-    // EXCEPT flags bit0 = 1 (is_array). The DEVICE still declines it (the array
-    // render is the gated commit); dbgen emits it so the wire is ready.
-    let batch = hex_bytes(&keccak_hex(
-        "PermitBatch(PermitDetails[] details,address spender,uint256 sigDeadline)\
-         PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)",
-    ));
-    let payload = nested_anchor_payload(&ir, &batch).expect("PermitBatch anchor present (v2)");
-    assert_eq!(payload[0], 0x03);
-    assert_eq!(u16::from_be_bytes([payload[1], payload[2]]), 0, "details is member 0");
-    assert_eq!(
-        &payload[3..35],
-        &hex_bytes("65626cad6cb96493bf6f5ebea28756c966f023ab9e8a83a7101849d5573b3678")[..],
-        "pinned typeHash(PermitDetails) — same struct as PermitSingle"
-    );
-    assert_eq!(u16::from_be_bytes([payload[35], payload[36]]), 4, "PermitDetails has 4 members");
-    assert_eq!(payload[37], 0x01, "flags bit0 = is_array (v2)");
-    assert_eq!(payload[38], 0x01, "addr_word_bmp: token is address");
-    assert_eq!(payload[39], 2, "amount + expiration shown per element");
-    let (b_sf0, b_next) = read_subfield(&payload, 40);
-    assert_eq!(b_sf0.format_op, 0x03, "tokenAmount");
-    assert_eq!(pool_entry(&ir, b_sf0.path_off), [0x10, 0x20, 0x00, 0x01], "amount local word 1");
-    assert_eq!(
-        find_tlv(pool_entry(&ir, b_sf0.param_off), 0x30).expect("tokenPath TLV"),
-        [0x10, 0x20, 0x00, 0x00],
-        "tokenPath = local word 0 (token) — `.[]` stripped for local resolution"
-    );
-    let (b_sf1, _) = read_subfield(&payload, b_next);
-    assert_eq!(b_sf1.format_op, 0x05, "date");
-    assert_eq!(pool_entry(&ir, b_sf1.path_off), [0x10, 0x20, 0x00, 0x02], "expiration local word 2");
+    for type_hash in [
+        "f3841cd1ff0085026a6327b620b67997ce40f282c88a8e905a7a5626e310f3d0",
+        "939c21a48a8dbe3a9a2404a1d46691e4d39f6583d6ec6b35714604c986d80106",
+    ] {
+        let type_hash = hex_bytes(type_hash);
+        assert!(
+            leaf_ir_carrying(&registry, &permit2, &type_hash).is_none(),
+            "Permit2 format with explicit signed-but-unseen members must stay absent"
+        );
+    }
 }
 
-/// RE-VENDOR GUARD (Tier A curation discipline — mirrors
-/// `vendored_uniswap_v3_router_curation_and_slices_all_compile`). Upstream's
-/// Permit2 `PermitTransferFrom` OMITS its `nonce` member, so the EIP-712
-/// completeness lint DROPS the whole format. We hand-curate a `nonce`
-/// `visible:"never"` field into the vendored descriptor
-/// (`secure/data/erc7730-registry/registry/uniswap/eip712-uniswap-permit2.json`)
-/// to unlock it. `xtask vendor-registry` re-copying from upstream would SILENTLY
-/// drop that curation; this fails LOUD if `PermitTransferFrom`
-/// (typeHash `0x939c21a4…`) is no longer clear-signable in the shipped DB.
+/// Fail-closed corpus guard: the vendored Permit2 descriptor explicitly hides
+/// `nonce`. Completeness therefore succeeds, but the independent visibility
+/// gate must keep `PermitTransferFrom` out of the shipped DB until the nonce is
+/// rendered. An upstream or local edit must not silently re-enable the format.
 #[test]
-fn vendored_permit2_transfer_from_curation_compiles() {
+fn vendored_permit2_transfer_from_hidden_nonce_is_not_emitted() {
     let registry = build_registry();
     let permit2 = hex_bytes("000000000022d473030f116ddee9f6b43ac78ba3");
     let ptf = hex_bytes("939c21a48a8dbe3a9a2404a1d46691e4d39f6583d6ec6b35714604c986d80106");
-    // No permit2-contract entry carrying PermitTransferFrom == the curation was
-    // lost. (The Permit2 contract also hosts the UniswapX Dutch orders, so a plain
-    // first-match on the contract address would be ambiguous.)
+    // The Permit2 contract also hosts UniswapX witness orders, so select by the
+    // full type hash rather than a contract-only first match.
     assert!(
-        leaf_ir_carrying(&registry, &permit2, &ptf).is_some(),
-        "PermitTransferFrom dropped — the `nonce` visible:never curation was lost \
-         (re-vendored from upstream?). Re-apply it to \
-         secure/data/erc7730-registry/registry/uniswap/eip712-uniswap-permit2.json"
+        leaf_ir_carrying(&registry, &permit2, &ptf).is_none(),
+        "PermitTransferFrom with a signed-but-unseen nonce must not reach the runtime catalogue"
     );
 }
 
-/// Recursively collect every `PARAM_NESTED_STRUCT` (0x41) anchor reachable from a
-/// v0x03 payload as `(type_hash, is_array)` — this anchor plus every nested
-/// sub-anchor (depth 2+). Payload layout: `0x03 | word_pos:2 | type_hash:32 |
-/// member_count:2 | flags:1 | addr_bmp:ceil(mc/8) | sub_field_cnt:1 | sub_fields`.
-fn collect_nested_anchors(ir: &Erc7730Ir<'_>, payload: &[u8], out: &mut Vec<([u8; 32], bool)>) {
-    assert_eq!(payload[0], 0x03, "structured v0x03 anchor");
-    let mut th = [0u8; 32];
-    th.copy_from_slice(&payload[3..35]);
-    let member_count = u16::from_be_bytes([payload[35], payload[36]]) as usize;
-    let is_array = payload[37] & 0x01 != 0;
-    out.push((th, is_array));
-    let bmp_len = member_count.div_ceil(8);
-    let sfc_off = 38 + bmp_len;
-    let sub_field_cnt = payload[sfc_off] as usize;
-    let mut p = sfc_off + 1;
-    for _ in 0..sub_field_cnt {
-        let (sf, next) = read_subfield(payload, p);
-        p = next;
-        // A sub-field that is itself a nested anchor points (via param_off) at a
-        // PARAM_NESTED_STRUCT TLV in the pool — recurse into it.
-        if let Some(child) = find_tlv(pool_entry(ir, sf.param_off), 0x41) {
-            collect_nested_anchors(ir, child, out);
-        }
-    }
-}
-
-/// DEPTH-2 dbgen emission (v3): the UniswapX `ExclusiveDutchOrder`
-/// `PermitWitnessTransferFrom` compiles to a RECURSIVE anchor tree — top-level
-/// `permitted` (TokenPermissions) + `witness` (ExclusiveDutchOrder), and inside
-/// `witness` the depth-2 `info` (OrderInfo, nested struct) + `outputs` (DutchOutput[],
-/// nested ARRAY). All four typeHashes are the foundry-pinned canonical encodeType
-/// hashes, `outputs` carries the `is_array` flag, and `nested_descent_count == 4`
-/// (counted RECURSIVELY — the depth-2 sub-anchors, not just the two top anchors).
+/// UniswapX witness-order descriptors hide nonces, deadlines, validation
+/// payloads, and price/decay terms. Authenticated nesting binds those words but
+/// does not show them, so the full type must remain outside the runtime DB.
 #[test]
-fn uniswapx_exclusive_dutch_recursive_anchor_emission() {
+fn uniswapx_exclusive_dutch_hidden_members_are_not_emitted() {
     let registry = build_registry();
     let permit2 = hex_bytes("000000000022d473030f116ddee9f6b43ac78ba3");
-    // The ExclusiveDutchOrder order is a Permit2 witness transfer, so it lives at
-    // the Permit2 contract; disambiguate by its primary type hash.
-    let edo_primary =
-        hex_bytes("2846b6ca8e0ecdbc9ca7696f16bdf77b3baf48504ac14d6a541484ec197e91eb");
-    let ir_bytes = leaf_ir_carrying(&registry, &permit2, &edo_primary)
-        .expect("ExclusiveDutchOrder leaf present in the shipped DB");
-    let ir = Erc7730Ir::parse(&ir_bytes).expect("EDO IR parses");
-    let fmt = ir
-        .format_iter()
-        .map(|f| f.expect("format parses"))
-        .find(|f| f.type_hash[..] == edo_primary[..])
-        .expect("EDO PermitWitnessTransferFrom format");
-
-    // E1 pin: FOUR descent points (permitted + witness + info + outputs).
-    assert_eq!(
-        fmt.nested_descent_count, 4,
-        "nested_descent_count must count sub-anchors RECURSIVELY (permitted+witness+info+outputs)"
+    let type_hash = hex_bytes("2846b6ca8e0ecdbc9ca7696f16bdf77b3baf48504ac14d6a541484ec197e91eb");
+    assert!(
+        leaf_ir_carrying(&registry, &permit2, &type_hash).is_none(),
+        "ExclusiveDutchOrder with signed-but-unseen members must stay absent"
     );
-
-    // Walk every anchor in the format (top-level fields → recurse).
-    let mut anchors: Vec<([u8; 32], bool)> = Vec::new();
-    for fe in fmt.fields().map(|f| f.expect("field parses")) {
-        if let Some(payload) = find_tlv(pool_entry(&ir, fe.param_off), 0x41) {
-            collect_nested_anchors(&ir, payload, &mut anchors);
-        }
-    }
-    assert_eq!(anchors.len(), 4, "exactly four anchors in the tree");
-
-    let has = |hexth: &str, want_array: bool| {
-        let th = hex_bytes(hexth);
-        anchors
-            .iter()
-            .any(|(a, arr)| a[..] == th[..] && *arr == want_array)
-    };
-    // permitted → TokenPermissions (single). typeHash(TokenPermissions).
-    assert!(has("618358ac3db8dc274f0cd8829da7e234bd48cd73c4a740aede1adec9846d06a1", false),
-        "permitted anchor: TokenPermissions (single)");
-    // witness → ExclusiveDutchOrder (single). foundry encodeType hash.
-    assert!(has("24d8514d0b2bd650779acf204b79c73859aaafd6fd011c00669d143a7b891419", false),
-        "witness anchor: ExclusiveDutchOrder (single, depth 1)");
-    // info → OrderInfo (single, depth 2).
-    assert!(has("7daca11202c64729871927c37d75933f1852e430627cd4b8f4844087e312e94b", false),
-        "info sub-anchor: OrderInfo (single, depth 2)");
-    // outputs → DutchOutput[] (ARRAY, depth 2).
-    assert!(has("45058f030836a1ec7cb9636dad15d25676157364aaf76d8dad81a6b2c267610f", true),
-        "outputs sub-anchor: DutchOutput (ARRAY, depth 2)");
 }

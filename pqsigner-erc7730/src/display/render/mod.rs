@@ -17,10 +17,11 @@
 //! verifier and produce a [`Pages`] object the existing
 //! [`crate::ui::confirm::confirm`] loop drives.
 //!
-//! Returning [`RenderErr`] from the entry points is how the renderer
-//! tells [`super::pick_sign_pages`] "I don't have a clean rendering
-//! for this transaction — please fall through to the next ladder
-//! rung." See the per-variant docs on
+//! Returning [`RenderErr`] from the entry points is how the renderer tells the
+//! secure dispatcher "I don't have a clean rendering for this transaction."
+//! A verified descriptor error is a hard refusal, and the independently pinned
+//! known-call filter also refuses omission/malformed-proof downgrade attempts.
+//! See the per-variant docs on
 //! [`crate::render::RenderErr`].
 
 pub mod amount_decision;
@@ -32,10 +33,10 @@ pub mod nested;
 use pqsigner_tx::erc20::bundle::Erc20Metadata;
 use pqsigner_tx::names::NameResolver;
 use super::primitives::{
-    chain_name, write_array_item_row, write_chain, write_fee_budget_row, write_gas, write_gwei,
-    write_line, write_nonce_row, write_tip_row,
+    format_u64, hex_nibble, known_native_ticker, write_array_item_row, write_chain, write_line,
+    write_native_amount_two_rows, write_native_currency_row, AmountFit,
 };
-use pqsigner_tx_core::eip1559::Eip1559Tx;
+use pqsigner_tx_core::eip1559::{Eip1559Tx, U256};
 use crate::bundle::VerifiedDescriptor;
 use crate::render::params::parse as parse_params;
 use crate::render::visibility::{should_render_with_mode, Action};
@@ -135,11 +136,18 @@ fn render_erc7730_pages_inner<'ir>(
     // construction, so this never rejects a well-formed descriptor. See
     // `docs/security/vulns/VULN-erc7730-walker-slot-confusion.md`.
     let body = head_bounded_body(&inner_data[4..], format.static_head_words)?;
-    // The FULL (untruncated) body is handed ONLY to the dynamic-array
-    // renderer, which follows a sole-dynamic-array tail with its own exact-
-    // placement bounds checks. Scalar fields keep using the head-bounded
-    // `body` above — their slot-confusion defense is unchanged.
+    // The FULL (untruncated) body is handed only to canonical dynamic-tail
+    // validation/rendering (sole string/bytes, primitive array, or tokenPath
+    // container). Static scalar fields keep using the head-bounded `body`.
     let full_body = &inner_data[4..];
+
+    // Canonical ABI framing is a format-wide property, not a visible-field
+    // property. Run the preflight before painting any pages and before
+    // visibility can skip a field: all-static calls must consume exactly the
+    // authenticated head, while every supported dynamic shape must be one
+    // exact whole tail. C2 dynamic tuples and relaxed multi-array tails are
+    // unprovable from the current IR and hard-refuse.
+    formatters::validate_contract_calldata_framing(&descriptor.ir, &format, full_body)?;
 
     // 2. Allocate the page buffer (grows via push_blank).
     let mut pages = Pages::with_len(0);
@@ -168,8 +176,8 @@ fn render_erc7730_pages_inner<'ir>(
     // them — every field `visible:"never"` — would otherwise present a
     // trusted clear-sign (banner + envelope + confirm) with none of the
     // call's parameters shown: a blind-sign wearing a reassuring clear-sign
-    // banner, worse than an honest loud blind-sign. Refuse and fall through
-    // to the blind-sign ladder (raw target / selector). The build-time
+    // banner, worse than an honest loud blind-sign. Reject the render; the
+    // secure dispatcher hard-refuses this verified/known tuple. The build-time
     // visibility gate (`dbgen::erc7730::check_field_visibility`) already
     // prevents such descriptors entering the Merkle-pinned root; this is the
     // on-device structural backstop that holds even if one ever slips in.
@@ -328,6 +336,7 @@ fn render_erc7730_eip712_pages_inner<'ir>(
         data_len: 0,
         access_list_count: 0,
         signing_hash: [0u8; 32],
+        userop_fields: None,
     };
 
     // Head-bound guard — see `render_erc7730_pages_inner`. For EIP-712
@@ -341,8 +350,8 @@ fn render_erc7730_eip712_pages_inner<'ir>(
     // display. Without this, a blessed descriptor that under-declares
     // `static_head_words` would let those trailing words be
     // signed-but-not-shown (audit defense-in-depth 2026-06-11). On a
-    // mismatch the caller falls back to the raw32 page, which honestly
-    // shows the EIP-712 final digest as an opaque hash.
+    // mismatch the typed-data signing request refuses; it cannot silently
+    // downgrade to a raw32 authorization.
     let head_len = (format.static_head_words as usize)
         .checked_mul(32)
         .ok_or(RenderErr::Reject("7730 ed head overflow"))?;
@@ -388,9 +397,8 @@ fn render_erc7730_eip712_pages_inner<'ir>(
     // WYSIWYS belt (VULN-erc7730-visible-never-noparam-clearsign), typed-data
     // sibling of the calldata guard above. A typed-data format that declares
     // members but renders none (all `visible:"never"`) would sign an
-    // off-chain approval showing nothing; refuse so the caller falls back to
-    // the honest raw-digest page. No native-value rescue exists for EIP-712,
-    // so the guard is unconditional.
+    // off-chain approval showing nothing; refuse the typed-data request. No
+    // native-value rescue exists for EIP-712, so the guard is unconditional.
     if format.field_count > 0 && pages.as_slice().len() == field_pages_before {
         return Err(RenderErr::Reject("7730 no visible members"));
     }
@@ -451,7 +459,7 @@ fn render_fields(
             if payload.first() == Some(&0x01) {
                 // Bare belt marker: dbgen could not build a v0x03 block for this
                 // nested member (array / depth>1 / uncovered address / …) →
-                // decline the WHOLE format to blind-sign.
+                // reject the WHOLE typed-data request.
                 return Err(RenderErr::Reject("7730 eip712 nested unsupported"));
             }
             render_nested_struct(pages, ir, payload, body, nested, 1, tx, erc20, resolver)?;
@@ -492,6 +500,12 @@ fn render_one_field(
 ) -> Result<(), RenderErr> {
     match should_render_with_mode(params, None, COMPACT_MODE) {
         Action::Render => {
+            // Full-body dynamic resolution is safe only after the first
+            // signature-fixed word has been proven to lie in the declared ABI
+            // head. Keep this runtime belt independent of dbgen's slot
+            // compiler; malformed authenticated IR must still fail closed.
+            formatters::validate_path_static_head(ir, field.path_off, static_head_words)?;
+            formatters::validate_token_path_static_head(params, static_head_words)?;
             // A field whose path ends in `[]` (ArrayAll) renders every
             // element of a sole dynamic array — it needs the FULL body and
             // its own exact-placement tail walk. Every other field stays on
@@ -514,16 +528,27 @@ fn render_one_field(
                 // C1: a dynamic `bytes`/`string` leaf — its value is in the
                 // calldata tail (needs the FULL body).
                 formatters::render_dynamic_bytes(
-                    field, pages, ir, full_body, tx, erc20, resolver, params,
+                    field,
+                    pages,
+                    ir,
+                    full_body,
+                    static_head_words,
+                    tx,
+                    erc20,
+                    resolver,
+                    params,
                 )?;
-            } else if formatters::path_needs_full_body(ir, field.path_off)?
-                || formatters::token_path_needs_full_body(params)
-            {
-                // C2 / Tier B: a scalar field reached by descending a dynamic
-                // offset (dynamic-tuple member) — OR a `tokenAmount` whose
-                // `tokenPath` extracts a token id from a dynamic swap leg
-                // (packed `bytes path`, `address[]`), even if the amount field
-                // itself is static-head. Same scalar renderers, FULL body.
+            } else if formatters::path_needs_full_body(ir, field.path_off)? {
+                // C2 dynamic-tuple placement cannot be reconstructed exactly
+                // from today's IR (the nested head width/tail topology is not
+                // encoded). The format-wide preflight already rejects it,
+                // and this local belt prevents a future call-site bypass.
+                return Err(RenderErr::Reject("7730 C2 framing unsupported"));
+            } else if formatters::token_path_needs_full_body(params) {
+                // A Tier-B tokenPath is accepted only after the format-wide
+                // preflight proved a sole C1 bytes/address[] whole tail. Paint
+                // against the same full body; malformed extraction cannot
+                // degrade to raw because preflight resolves it first.
                 formatters::dispatch(field, pages, ir, full_body, tx, erc20, resolver, params)?;
             } else {
                 // Static-head scalar — head-bounded body (byte-identical).
@@ -731,41 +756,340 @@ fn render_nested_subfields(
 }
 
 fn append_envelope_pages(pages: &mut Pages, tx: &Eip1559Tx) -> Result<(), RenderErr> {
+    let exact_gas_limit = match tx.userop_fields.as_ref() {
+        Some(fields) => userop_gas_total(fields)?,
+        None => tx.gas_limit,
+    };
+
+    if known_native_ticker(tx.chain_id).is_none() && !tx.value.is_zero() {
+        // The dispatcher splices one mandatory native-value page around this
+        // ERC-7730 render. Prove here that its two value rows can paint the
+        // unknown-chain integer exactly; its loud overflow marker is not an
+        // acceptable substitute for binding a signed value to the screen.
+        let mut raw_hi = [b' '; super::DISPLAY_COLS];
+        let mut raw_lo = [b' '; super::DISPLAY_COLS];
+        if write_native_amount_two_rows(
+            &mut raw_hi,
+            &mut raw_lo,
+            &tx.value,
+            tx.chain_id,
+        ) != AmountFit::Full
+        {
+            return Err(RenderErr::Reject("7730 raw native value too wide"));
+        }
+    }
+
     // Chain.
     let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
-    write_line(pages.row_mut(p, 0), "Chain:");
-    write_chain(pages.row_mut(p, 1), tx.chain_id);
-    write_line(pages.row_mut(p, 2), chain_name(tx.chain_id));
-    write_line(pages.row_mut(p, 3), "> next");
+    write_line(pages.row_mut(p, 0), "Network:");
+    let [_, r1, r2, foot] = pages.page_mut(p);
+    write_chain(r1, r2, tx.chain_id);
+    write_line(foot, "> next");
 
-    // Fees.
+    if known_native_ticker(tx.chain_id).is_some() {
+        // The chain table authenticates an 18-decimal native unit. Keep the
+        // friendly gwei/native scale, but paint every base-unit digit exactly:
+        // the older 3-decimal helper made 1 wei and 2 wei both read
+        // `0.000 gwei`, while overflow markers collapsed arbitrary fee bombs.
+        append_known_chain_fee_pages(pages, tx, exact_gas_limit)?;
+    } else {
+        // Unknown chain: neither "gwei" nor an 18-decimal native amount is
+        // authenticated. Preserve the same two-page budget, but paint every
+        // fee operand as its exact raw base-unit integer. If an adversarially
+        // large number cannot fit losslessly, reject the verified call rather
+        // than round, truncate, or silently assume a decimal scale.
+        append_unknown_chain_fee_pages(pages, tx, exact_gas_limit)?;
+    }
+
+    if let Some(fields) = tx.userop_fields.as_ref() {
+        append_userop_gas_page(pages, fields, exact_gas_limit)?;
+        append_userop_nonce_pages(pages, &fields.nonce)?;
+    } else {
+        // Native EIP-1559 nonce. Its u64 decimal can exceed the old one-row
+        // `Nonce: N` sink; use the otherwise-empty value rows losslessly.
+        let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
+        write_line(pages.row_mut(p, 0), "Nonce:");
+        let [_, nonce_hi, nonce_lo, foot] = pages.page_mut(p);
+        write_u64_decimal_two_rows_exact(nonce_hi, nonce_lo, tx.nonce)?;
+        write_line(foot, "> next");
+    }
+
+    Ok(())
+}
+
+/// Exact known-chain fee pages using the same two-page budget as the legacy
+/// rounded renderer. Gas-price operands use all nine gwei fractional digits;
+/// the maximum total uses all 18 native-asset fractional digits. Trimming only
+/// removes trailing zeroes, so the representation remains injective.
+fn append_known_chain_fee_pages(
+    pages: &mut Pages,
+    tx: &Eip1559Tx,
+    gas_limit: u64,
+) -> Result<(), RenderErr> {
     let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
-    write_line(pages.row_mut(p, 0), "Max fee:");
-    let _ = write_gwei(pages.row_mut(p, 1), &tx.max_fee_per_gas);
-    write_tip_row(pages.row_mut(p, 2), &tx.max_priority_fee_per_gas);
-    write_line(pages.row_mut(p, 3), "> next");
+    write_line(pages.row_mut(p, 0), "Max fee/gwei:");
+    write_u256_scaled_exact(pages.row_mut(p, 1), &tx.max_fee_per_gas, 9)?;
+    write_line(pages.row_mut(p, 2), "Tip/gwei:");
+    write_u256_scaled_exact(pages.row_mut(p, 3), &tx.max_priority_fee_per_gas, 9)?;
 
-    // Worst-case fee budget + gas.
+    let (budget, overflow) = tx.max_fee_per_gas.saturating_mul_u64(gas_limit);
+    if overflow {
+        return Err(RenderErr::Reject("7730 fee multiplication overflow"));
+    }
     let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
-    write_line(pages.row_mut(p, 0), "Worst-case:");
-    write_fee_budget_row(pages.row_mut(p, 1), &tx.max_fee_per_gas, tx.gas_limit);
-    write_gas(pages.row_mut(p, 2), tx.gas_limit);
-    write_line(pages.row_mut(p, 3), "> next");
+    write_native_currency_row(pages.row_mut(p, 0), b"Max total/", tx.chain_id, b":");
+    let [_, total_hi, total_lo, gas] = pages.page_mut(p);
+    write_u256_scaled_two_rows_exact(total_hi, total_lo, &budget, 18)?;
+    write_u64_decimal_with_prefix(gas, b"Gas:", gas_limit)?;
+    Ok(())
+}
 
-    // Nonce.
+fn write_u256_scaled_exact(
+    row: &mut [u8; super::DISPLAY_COLS],
+    value: &U256,
+    decimals: u32,
+) -> Result<(), RenderErr> {
+    *row = [b' '; super::DISPLAY_COLS];
+    let mut digits = [0u8; 96];
+    let n = value
+        .format_decimal(decimals, decimals, true, &mut digits)
+        .filter(|&n| n <= super::DISPLAY_COLS)
+        .ok_or(RenderErr::Reject("7730 exact scaled fee too wide"))?;
+    row[..n].copy_from_slice(&digits[..n]);
+    Ok(())
+}
+
+fn write_u256_scaled_two_rows_exact(
+    row1: &mut [u8; super::DISPLAY_COLS],
+    row2: &mut [u8; super::DISPLAY_COLS],
+    value: &U256,
+    decimals: u32,
+) -> Result<(), RenderErr> {
+    *row1 = [b' '; super::DISPLAY_COLS];
+    *row2 = [b' '; super::DISPLAY_COLS];
+    let mut digits = [0u8; 96];
+    let n = value
+        .format_decimal(decimals, decimals, true, &mut digits)
+        .filter(|&n| n <= 2 * super::DISPLAY_COLS - 1)
+        .ok_or(RenderErr::Reject("7730 exact native fee too wide"))?;
+    if n <= super::DISPLAY_COLS {
+        row1[..n].copy_from_slice(&digits[..n]);
+        return Ok(());
+    }
+    let first = super::DISPLAY_COLS - 1;
+    row1[..first].copy_from_slice(&digits[..first]);
+    row1[first] = b'>';
+    row2[..n - first].copy_from_slice(&digits[first..n]);
+    Ok(())
+}
+
+fn userop_gas_total(
+    fields: &pqsigner_tx_core::eip1559::UserOpDisplayFields,
+) -> Result<u64, RenderErr> {
+    let call = u256_to_u64_exact(&fields.call_gas_limit)
+        .ok_or(RenderErr::Reject("7730 call gas exceeds u64"))?;
+    let verification = u256_to_u64_exact(&fields.verification_gas_limit)
+        .ok_or(RenderErr::Reject("7730 verify gas exceeds u64"))?;
+    let pre = u256_to_u64_exact(&fields.pre_verification_gas)
+        .ok_or(RenderErr::Reject("7730 prever gas exceeds u64"))?;
+    call.checked_add(verification)
+        .and_then(|v| v.checked_add(pre))
+        .ok_or(RenderErr::Reject("7730 userop gas sum overflow"))
+}
+
+fn u256_to_u64_exact(value: &U256) -> Option<u64> {
+    if value.0[..24].iter().any(|&b| b != 0) {
+        return None;
+    }
+    Some(u64::from_be_bytes(value.0[24..].try_into().ok()?))
+}
+
+/// Show the three independently signed EntryPoint v0.6 gas limits. The old
+/// display shim collapsed them into one saturated sum, so a companion could
+/// permute call/verification/pre-verification gas without changing a page.
+fn append_userop_gas_page(
+    pages: &mut Pages,
+    fields: &pqsigner_tx_core::eip1559::UserOpDisplayFields,
+    total: u64,
+) -> Result<(), RenderErr> {
     let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
-    write_nonce_row(pages.row_mut(p, 0), tx.nonce);
-    write_line(pages.row_mut(p, 3), "> next");
+    write_u256_decimal_with_prefix(
+        pages.row_mut(p, 0),
+        b"Call:",
+        &fields.call_gas_limit,
+    )?;
+    write_u256_decimal_with_prefix(
+        pages.row_mut(p, 1),
+        b"Verify:",
+        &fields.verification_gas_limit,
+    )?;
+    write_u256_decimal_with_prefix(
+        pages.row_mut(p, 2),
+        b"PreVer:",
+        &fields.pre_verification_gas,
+    )?;
+    write_u64_decimal_with_prefix(pages.row_mut(p, 3), b"Total:", total)?;
+    Ok(())
+}
 
+fn write_u256_decimal_with_prefix(
+    row: &mut [u8; super::DISPLAY_COLS],
+    prefix: &[u8],
+    value: &U256,
+) -> Result<(), RenderErr> {
+    *row = [b' '; super::DISPLAY_COLS];
+    let mut digits = [0u8; 80];
+    let n = value
+        .format_decimal(0, 0, false, &mut digits)
+        .ok_or(RenderErr::Reject("7730 raw gas"))?;
+    if prefix.len().saturating_add(n) > super::DISPLAY_COLS {
+        return Err(RenderErr::Reject("7730 userop gas too wide"));
+    }
+    row[..prefix.len()].copy_from_slice(prefix);
+    row[prefix.len()..prefix.len() + n].copy_from_slice(&digits[..n]);
+    Ok(())
+}
+
+/// Full 256-bit UserOperation nonce, four 16-hex-digit rows. EntryPoint v0.6
+/// uses the high 192 bits as a nonce key, so displaying only the low u64 is not
+/// faithful even when the sequence component is small.
+fn append_userop_nonce_pages(pages: &mut Pages, nonce: &U256) -> Result<(), RenderErr> {
+    let first = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
+    write_line(pages.row_mut(first, 0), "Nonce (hex):");
+    write_hex_word_row(pages.row_mut(first, 1), &nonce.0[0..8]);
+    write_hex_word_row(pages.row_mut(first, 2), &nonce.0[8..16]);
+    write_hex_word_row(pages.row_mut(first, 3), &nonce.0[16..24]);
+
+    let second = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
+    write_hex_word_row(pages.row_mut(second, 0), &nonce.0[24..32]);
+    write_line(pages.row_mut(second, 3), "> next");
+    Ok(())
+}
+
+fn write_hex_word_row(row: &mut [u8; super::DISPLAY_COLS], bytes: &[u8]) {
+    *row = [b' '; super::DISPLAY_COLS];
+    debug_assert_eq!(bytes.len(), 8);
+    for (i, &byte) in bytes.iter().enumerate() {
+        row[2 * i] = hex_nibble(byte >> 4);
+        row[2 * i + 1] = hex_nibble(byte & 0x0f);
+    }
+}
+
+/// Render unknown-chain fee operands without assuming a native-asset decimal
+/// scale. The compact bounds are deliberately fail-closed: realistic gas
+/// prices fit one 16-cell row and realistic gas limits fit after `Gas:`, while
+/// larger attacker-controlled values reject instead of aliasing on screen.
+fn append_unknown_chain_fee_pages(
+    pages: &mut Pages,
+    tx: &Eip1559Tx,
+    gas_limit: u64,
+) -> Result<(), RenderErr> {
+    let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
+    write_line(pages.row_mut(p, 0), "Max fee/base:");
+    write_u256_decimal_exact(pages.row_mut(p, 1), &tx.max_fee_per_gas)?;
+    write_line(pages.row_mut(p, 2), "Tip/base:");
+    write_u256_decimal_exact(pages.row_mut(p, 3), &tx.max_priority_fee_per_gas)?;
+
+    let (budget, overflow) = tx.max_fee_per_gas.saturating_mul_u64(gas_limit);
+    if overflow {
+        return Err(RenderErr::Reject("7730 raw fee overflow"));
+    }
+
+    let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
+    write_u64_decimal_with_prefix(pages.row_mut(p, 0), b"Gas:", gas_limit)?;
+    write_line(pages.row_mut(p, 1), "Max total/base:");
+    let [_, _, total_hi, total_lo] = pages.page_mut(p);
+    write_u256_decimal_two_rows_exact(total_hi, total_lo, &budget)?;
+    Ok(())
+}
+
+fn write_u256_decimal_exact(
+    row: &mut [u8; super::DISPLAY_COLS],
+    value: &U256,
+) -> Result<(), RenderErr> {
+    *row = [b' '; super::DISPLAY_COLS];
+    let mut digits = [0u8; 80];
+    let n = value
+        .format_decimal(0, 0, false, &mut digits)
+        .filter(|&n| n <= super::DISPLAY_COLS)
+        .ok_or(RenderErr::Reject("7730 raw fee too wide"))?;
+    row[..n].copy_from_slice(&digits[..n]);
+    Ok(())
+}
+
+fn write_u256_decimal_two_rows_exact(
+    row1: &mut [u8; super::DISPLAY_COLS],
+    row2: &mut [u8; super::DISPLAY_COLS],
+    value: &U256,
+) -> Result<(), RenderErr> {
+    *row1 = [b' '; super::DISPLAY_COLS];
+    *row2 = [b' '; super::DISPLAY_COLS];
+    let mut digits = [0u8; 80];
+    let n = value
+        .format_decimal(0, 0, false, &mut digits)
+        .filter(|&n| n <= 2 * super::DISPLAY_COLS - 1)
+        .ok_or(RenderErr::Reject("7730 raw total too wide"))?;
+    if n <= super::DISPLAY_COLS {
+        row1[..n].copy_from_slice(&digits[..n]);
+        return Ok(());
+    }
+
+    // Reserve the last cell of row 1 for an explicit continuation marker.
+    // The canonical decimal digits read left-to-right across the two rows;
+    // none is replaced by the marker.
+    let first = super::DISPLAY_COLS - 1;
+    row1[..first].copy_from_slice(&digits[..first]);
+    row1[first] = b'>';
+    let rest = n - first;
+    row2[..rest].copy_from_slice(&digits[first..n]);
+    Ok(())
+}
+
+fn write_u64_decimal_two_rows_exact(
+    row1: &mut [u8; super::DISPLAY_COLS],
+    row2: &mut [u8; super::DISPLAY_COLS],
+    value: u64,
+) -> Result<(), RenderErr> {
+    *row1 = [b' '; super::DISPLAY_COLS];
+    *row2 = [b' '; super::DISPLAY_COLS];
+    let mut digits = [0u8; 20];
+    let n = format_u64(value, &mut digits).ok_or(RenderErr::Reject("7730 raw nonce"))?;
+    if n <= super::DISPLAY_COLS {
+        row1[..n].copy_from_slice(&digits[..n]);
+        return Ok(());
+    }
+
+    // A u64 has at most 20 digits. Reserve one continuation marker without
+    // replacing a digit, leaving at most five digits for the second row.
+    let first = super::DISPLAY_COLS - 1;
+    row1[..first].copy_from_slice(&digits[..first]);
+    row1[first] = b'>';
+    row2[..n - first].copy_from_slice(&digits[first..n]);
+    Ok(())
+}
+
+fn write_u64_decimal_with_prefix(
+    row: &mut [u8; super::DISPLAY_COLS],
+    prefix: &[u8],
+    value: u64,
+) -> Result<(), RenderErr> {
+    *row = [b' '; super::DISPLAY_COLS];
+    let mut digits = [0u8; 20];
+    let n = format_u64(value, &mut digits).ok_or(RenderErr::Reject("7730 raw gas"))?;
+    if prefix.len().saturating_add(n) > super::DISPLAY_COLS {
+        return Err(RenderErr::Reject("7730 raw gas too wide"));
+    }
+    row[..prefix.len()].copy_from_slice(prefix);
+    row[prefix.len()..prefix.len() + n].copy_from_slice(&digits[..n]);
     Ok(())
 }
 
 fn append_eip712_chain_page(pages: &mut Pages, chain_id: u64) -> Result<(), RenderErr> {
     let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
-    write_line(pages.row_mut(p, 0), "Chain:");
-    write_chain(pages.row_mut(p, 1), chain_id);
-    write_line(pages.row_mut(p, 2), chain_name(chain_id));
-    write_line(pages.row_mut(p, 3), "> next");
+    write_line(pages.row_mut(p, 0), "Network:");
+    let [_, r1, r2, foot] = pages.page_mut(p);
+    write_chain(r1, r2, chain_id);
+    write_line(foot, "> next");
     Ok(())
 }
 
@@ -774,4 +1098,217 @@ fn append_confirm_page(pages: &mut Pages) -> Result<(), RenderErr> {
     write_line(pages.row_mut(p, 2), "L=Cancel");
     write_line(pages.row_mut(p, 3), "R=Confirm");
     Ok(())
+}
+
+#[cfg(test)]
+mod unknown_chain_fee_tests {
+    use super::*;
+    use pqsigner_tx_core::eip1559::UserOpDisplayFields;
+
+    fn u256_from_u128(value: u128) -> U256 {
+        let mut bytes = [0u8; 32];
+        bytes[16..].copy_from_slice(&value.to_be_bytes());
+        U256(bytes)
+    }
+
+    fn unknown_fee_tx(max_fee: u128, tip: u128, gas_limit: u64) -> Eip1559Tx {
+        Eip1559Tx {
+            chain_id: 4_242_424_242,
+            nonce: 7,
+            max_priority_fee_per_gas: u256_from_u128(tip),
+            max_fee_per_gas: u256_from_u128(max_fee),
+            gas_limit,
+            ..Eip1559Tx::default()
+        }
+    }
+
+    fn trimmed(row: &[u8; super::super::DISPLAY_COLS]) -> &[u8] {
+        let end = row
+            .iter()
+            .rposition(|&b| b != b' ')
+            .map_or(0, |idx| idx + 1);
+        &row[..end]
+    }
+
+    #[test]
+    fn unknown_chain_fee_envelope_is_exact_raw_base_units() {
+        let tx = unknown_fee_tx(30_000_000_001, 1_234_567_890, 30_000_000);
+        let mut pages = Pages::with_len(0);
+        append_envelope_pages(&mut pages, &tx).expect("realistic raw fees fit");
+
+        assert_eq!(pages.len, 4, "the envelope page budget must not grow");
+        assert_eq!(trimmed(&pages.buf[1][0]), b"Max fee/base:");
+        assert_eq!(trimmed(&pages.buf[1][1]), b"30000000001");
+        assert_eq!(trimmed(&pages.buf[1][2]), b"Tip/base:");
+        assert_eq!(trimmed(&pages.buf[1][3]), b"1234567890");
+        assert_eq!(trimmed(&pages.buf[2][0]), b"Gas:30000000");
+        assert_eq!(trimmed(&pages.buf[2][1]), b"Max total/base:");
+
+        let mut total = [0u8; 32];
+        let mut total_len = 0usize;
+        for &cell in pages.buf[2][2].iter().chain(pages.buf[2][3].iter()) {
+            if cell.is_ascii_digit() {
+                total[total_len] = cell;
+                total_len += 1;
+            }
+        }
+        assert_eq!(&total[..total_len], b"900000000030000000");
+        assert_eq!(pages.buf[2][2][super::super::DISPLAY_COLS - 1], b'>');
+
+        assert!(pages.as_slice().iter().flatten().all(|row| {
+            !row.windows(4).any(|w| w == b"gwei")
+                && !row.windows(3).any(|w| w == b"ETH")
+        }));
+    }
+
+    #[test]
+    fn distinct_unknown_chain_fee_words_do_not_round_to_same_page() {
+        let mut one = Pages::with_len(0);
+        let mut two = Pages::with_len(0);
+        append_envelope_pages(&mut one, &unknown_fee_tx(1, 0, 21_000)).unwrap();
+        append_envelope_pages(&mut two, &unknown_fee_tx(2, 0, 21_000)).unwrap();
+
+        // The old gwei renderer rounded both one and two raw base units to the
+        // same displayed zero. Exact raw rendering binds the changed signed
+        // word to a changed cell.
+        assert_eq!(trimmed(&one.buf[1][1]), b"1");
+        assert_eq!(trimmed(&two.buf[1][1]), b"2");
+        assert_ne!(one.buf[1], two.buf[1]);
+    }
+
+    #[test]
+    fn unknown_chain_fee_that_cannot_fit_exactly_rejects() {
+        // Seventeen decimal digits do not fit the one-row exact max-fee sink.
+        // The renderer must refuse; it may never scale/truncate this word.
+        let tx = unknown_fee_tx(10_000_000_000_000_000, 0, 21_000);
+        let mut pages = Pages::with_len(0);
+        assert!(matches!(
+            append_envelope_pages(&mut pages, &tx),
+            Err(RenderErr::Reject("7730 raw fee too wide"))
+        ));
+    }
+
+    #[test]
+    fn unknown_chain_native_value_that_cannot_fit_exactly_rejects() {
+        let mut tx = unknown_fee_tx(1, 0, 21_000);
+        tx.value = U256([0xff; 32]);
+        let mut pages = Pages::with_len(0);
+        assert!(matches!(
+            append_envelope_pages(&mut pages, &tx),
+            Err(RenderErr::Reject("7730 raw native value too wide"))
+        ));
+        assert_eq!(pages.len, 0, "value preflight must run before page writes");
+    }
+
+    #[test]
+    fn known_chain_keeps_exact_gwei_and_native_unit_path() {
+        let mut tx = unknown_fee_tx(1, 2, 21_000);
+        tx.chain_id = 1;
+        let mut pages = Pages::with_len(0);
+        append_envelope_pages(&mut pages, &tx).unwrap();
+        assert_eq!(trimmed(&pages.buf[1][0]), b"Max fee/gwei:");
+        assert_eq!(trimmed(&pages.buf[1][1]), b"0.000000001");
+        assert_eq!(trimmed(&pages.buf[1][2]), b"Tip/gwei:");
+        assert_eq!(trimmed(&pages.buf[1][3]), b"0.000000002");
+        assert_eq!(trimmed(&pages.buf[2][0]), b"Max total/ETH:");
+    }
+
+    #[test]
+    fn distinct_known_chain_fee_words_do_not_round_to_same_page() {
+        let mut one_tx = unknown_fee_tx(1, 0, 21_000);
+        one_tx.chain_id = 1;
+        let mut two_tx = unknown_fee_tx(2, 0, 21_000);
+        two_tx.chain_id = 1;
+        let mut one = Pages::with_len(0);
+        let mut two = Pages::with_len(0);
+        append_envelope_pages(&mut one, &one_tx).unwrap();
+        append_envelope_pages(&mut two, &two_tx).unwrap();
+        assert_eq!(trimmed(&one.buf[1][1]), b"0.000000001");
+        assert_eq!(trimmed(&two.buf[1][1]), b"0.000000002");
+        assert_ne!(one.buf[1], two.buf[1]);
+    }
+
+    #[test]
+    fn known_chain_fee_that_cannot_render_exactly_rejects() {
+        let mut tx = unknown_fee_tx(0, 0, 21_000);
+        tx.chain_id = 1;
+        tx.max_fee_per_gas = U256([0xff; 32]);
+        let mut pages = Pages::with_len(0);
+        assert!(matches!(
+            append_envelope_pages(&mut pages, &tx),
+            Err(RenderErr::Reject("7730 exact scaled fee too wide"))
+        ));
+    }
+
+    #[test]
+    fn full_u64_nonce_is_lossless_across_two_rows() {
+        let mut tx = unknown_fee_tx(1, 0, 21_000);
+        tx.nonce = u64::MAX;
+        let mut pages = Pages::with_len(0);
+        append_envelope_pages(&mut pages, &tx).unwrap();
+        assert_eq!(trimmed(&pages.buf[3][0]), b"Nonce:");
+        assert_eq!(trimmed(&pages.buf[3][1]), b"184467440737095>");
+        assert_eq!(trimmed(&pages.buf[3][2]), b"51615");
+    }
+
+    #[test]
+    fn userop_gas_components_cannot_be_permuted_behind_same_total() {
+        let mut a = unknown_fee_tx(1, 0, 0);
+        a.userop_fields = Some(UserOpDisplayFields {
+            nonce: u256_from_u128(7),
+            call_gas_limit: u256_from_u128(21_000),
+            verification_gas_limit: u256_from_u128(100_000),
+            pre_verification_gas: u256_from_u128(50_000),
+        });
+        let mut b = unknown_fee_tx(1, 0, 0);
+        b.userop_fields = Some(UserOpDisplayFields {
+            nonce: u256_from_u128(7),
+            call_gas_limit: u256_from_u128(100_000),
+            verification_gas_limit: u256_from_u128(21_000),
+            pre_verification_gas: u256_from_u128(50_000),
+        });
+        let mut pa = Pages::with_len(0);
+        let mut pb = Pages::with_len(0);
+        append_envelope_pages(&mut pa, &a).unwrap();
+        append_envelope_pages(&mut pb, &b).unwrap();
+        assert_eq!(trimmed(&pa.buf[3][3]), b"Total:171000");
+        assert_eq!(trimmed(&pb.buf[3][3]), b"Total:171000");
+        assert_ne!(pa.buf[3], pb.buf[3]);
+    }
+
+    #[test]
+    fn userop_nonce_high_bits_are_rendered_in_full() {
+        let mut tx = unknown_fee_tx(1, 0, 0);
+        let mut nonce = [0u8; 32];
+        nonce[0] = 0xab;
+        nonce[31] = 0xcd;
+        tx.userop_fields = Some(UserOpDisplayFields {
+            nonce: U256(nonce),
+            call_gas_limit: u256_from_u128(21_000),
+            verification_gas_limit: u256_from_u128(100_000),
+            pre_verification_gas: u256_from_u128(50_000),
+        });
+        let mut pages = Pages::with_len(0);
+        append_envelope_pages(&mut pages, &tx).unwrap();
+        assert_eq!(trimmed(&pages.buf[4][0]), b"Nonce (hex):");
+        assert_eq!(trimmed(&pages.buf[4][1]), b"ab00000000000000");
+        assert_eq!(trimmed(&pages.buf[5][0]), b"00000000000000cd");
+    }
+
+    #[test]
+    fn oversized_userop_gas_component_rejects_instead_of_saturating() {
+        let mut tx = unknown_fee_tx(1, 0, 0);
+        tx.userop_fields = Some(UserOpDisplayFields {
+            nonce: U256::zero(),
+            call_gas_limit: U256([0xff; 32]),
+            verification_gas_limit: u256_from_u128(1),
+            pre_verification_gas: u256_from_u128(1),
+        });
+        let mut pages = Pages::with_len(0);
+        assert!(matches!(
+            append_envelope_pages(&mut pages, &tx),
+            Err(RenderErr::Reject("7730 call gas exceeds u64"))
+        ));
+        assert_eq!(pages.len, 0);
+    }
 }

@@ -15,11 +15,11 @@
 //!   `&mut [u8; DISPLAY_COLS]` and writes exactly one row's worth of
 //!   ASCII. Rows are pre-cleared to `b' '` before any data is written.
 
+use super::DISPLAY_COLS;
 use pqsigner_tx::erc20::bundle::Erc20Metadata;
 use pqsigner_tx::erc20::calldata::Erc20Call;
 use pqsigner_tx_core::eip1559::U256;
 use pqsigner_tx_core::hash::keccak256;
-use super::DISPLAY_COLS;
 
 // ---------------------------------------------------------------------------
 // Low-level row primitives
@@ -214,8 +214,7 @@ pub fn write_amount_two_rows(
             }
             row2[..tail.len()].copy_from_slice(tail);
             row2[tail.len()] = b' ';
-            row2[tail.len() + 1..tail.len() + 1 + unit_bytes.len()]
-                .copy_from_slice(unit_bytes);
+            row2[tail.len() + 1..tail.len() + 1 + unit_bytes.len()].copy_from_slice(unit_bytes);
             AmountFit::Full
         }
         None => {
@@ -237,8 +236,7 @@ pub fn write_amount_two_rows(
                 }
                 row2[..rest.len()].copy_from_slice(rest);
                 row2[rest.len()] = b' ';
-                row2[rest.len() + 1..rest.len() + 1 + unit_bytes.len()]
-                    .copy_from_slice(unit_bytes);
+                row2[rest.len() + 1..rest.len() + 1 + unit_bytes.len()].copy_from_slice(unit_bytes);
                 AmountFit::Full
             } else {
                 AmountFit::Overflow
@@ -323,13 +321,57 @@ fn eip55_hex(addr: &[u8; 20]) -> [u8; 40] {
     let hash = keccak256(&hex);
     for i in 0..40 {
         if hex[i].is_ascii_alphabetic() {
-            let nibble = if i % 2 == 0 { hash[i / 2] >> 4 } else { hash[i / 2] & 0x0f };
+            let nibble = if i % 2 == 0 {
+                hash[i / 2] >> 4
+            } else {
+                hash[i / 2] & 0x0f
+            };
             if nibble >= 8 {
                 hex[i] = hex[i].to_ascii_uppercase();
             }
         }
     }
     hex
+}
+
+/// Maximum number of verified-name bytes the three-row named-address layout
+/// can show. Row 1 has 14 cells after `"+ "`; row 2 has 15 cells after its
+/// alignment space. Longer Merkle-verified names are rendered as the first 28
+/// bytes plus `~`, never silently clipped.
+pub const VERIFIED_NAME_DISPLAY_LEN: usize = 29;
+const VERIFIED_NAME_TRUNCATED_PREFIX_LEN: usize = VERIFIED_NAME_DISPLAY_LEN - 1;
+
+/// Canonical bytes painted by the verified-name branch.
+///
+/// Public so dbgen can reject two trusted name records that would paint the
+/// same name. Keeping this transformation single-sourced prevents the
+/// catalogue collision gate from drifting away from the secure display.
+pub fn verified_name_display_bytes(
+    name: &[u8],
+    out: &mut [u8; VERIFIED_NAME_DISPLAY_LEN],
+) -> usize {
+    *out = [0u8; VERIFIED_NAME_DISPLAY_LEN];
+    if name.len() <= VERIFIED_NAME_DISPLAY_LEN {
+        out[..name.len()].copy_from_slice(name);
+        return name.len();
+    }
+    out[..VERIFIED_NAME_TRUNCATED_PREFIX_LEN]
+        .copy_from_slice(&name[..VERIFIED_NAME_TRUNCATED_PREFIX_LEN]);
+    out[VERIFIED_NAME_TRUNCATED_PREFIX_LEN] = b'~';
+    VERIFIED_NAME_DISPLAY_LEN
+}
+
+/// Exact 12 ASCII hex characters painted around the named-address ellipsis:
+/// first three and last three address bytes, with EIP-55 casing derived from
+/// the complete address. Dbgen uses this together with
+/// [`verified_name_display_bytes`] to make the accepted name catalogue
+/// injective over the actual trusted-display tuple.
+pub fn verified_name_address_fingerprint(addr: &[u8; 20]) -> [u8; 12] {
+    let hex = eip55_hex(addr);
+    let mut out = [0u8; 12];
+    out[..6].copy_from_slice(&hex[..6]);
+    out[6..].copy_from_slice(&hex[34..40]);
+    out
 }
 
 pub fn write_addr_full(
@@ -360,8 +402,12 @@ pub fn write_addr_full(
 /// ```text
 ///   row1: "+ <name row 1 ...>"     (up to 14 chars after the sentinel)
 ///   row2: " <name row 2 ...>"      (up to 15 chars; blank if name fits row1)
-///   row3: "0xAABBCCDD…EEFFAABB"    (first 4 + last 4 bytes, disambiguation)
+///   row3: "0xAABBCC..DDEEFF"       (first 3 + last 3 bytes, disambiguation)
 /// ```
+///
+/// Names longer than the 29 available name cells paint their first 28 bytes
+/// plus `~`; dbgen rejects case-insensitive collisions in this exact displayed
+/// name/address fingerprint across overlapping chain scopes.
 ///
 /// The leading `+` sentinel is user-visible proof that the secure world
 /// matched the address against a signed DB entry — raw-hex fallback
@@ -382,13 +428,16 @@ pub fn write_addr_full_or_name(
         // Rows 0..=1: sentinel + name, split across two rows if needed.
         row1[0] = b'+';
         row1[1] = b' ';
+        let mut displayed_name = [0u8; VERIFIED_NAME_DISPLAY_LEN];
+        let displayed_len = verified_name_display_bytes(name, &mut displayed_name);
+        let displayed_name = &displayed_name[..displayed_len];
         let name_room_r1 = DISPLAY_COLS - 2; // after "+ "
-        let n1 = core::cmp::min(name.len(), name_room_r1);
-        row1[2..2 + n1].copy_from_slice(&name[..n1]);
-        if name.len() > name_room_r1 {
+        let n1 = core::cmp::min(displayed_name.len(), name_room_r1);
+        row1[2..2 + n1].copy_from_slice(&displayed_name[..n1]);
+        if displayed_name.len() > name_room_r1 {
             // Leave col 0 blank, start at col 1 to align visually under
             // the name's first char.
-            let rest = &name[name_room_r1..];
+            let rest = &displayed_name[name_room_r1..];
             let room_r2 = DISPLAY_COLS - 1;
             let n2 = core::cmp::min(rest.len(), room_r2);
             row2[1..1 + n2].copy_from_slice(&rest[..n2]);
@@ -399,13 +448,13 @@ pub fn write_addr_full_or_name(
         // exactly). A single dot read like a typo inside the hex (review 4.13).
         // EIP-55 casing is computed over the FULL address (never the truncated
         // string), then the shown slices (chars 0..6 and 34..40) are copied out.
-        let hex = eip55_hex(addr);
+        let fingerprint = verified_name_address_fingerprint(addr);
         row3[0] = b'0';
         row3[1] = b'x';
-        row3[2..8].copy_from_slice(&hex[0..6]);
+        row3[2..8].copy_from_slice(&fingerprint[..6]);
         row3[8] = b'.';
         row3[9] = b'.';
-        row3[10..16].copy_from_slice(&hex[34..40]);
+        row3[10..16].copy_from_slice(&fingerprint[6..]);
     } else {
         write_addr_full(row1, row2, row3, addr);
     }
@@ -451,48 +500,88 @@ pub fn chain_name(chain_id: u64) -> &'static str {
     }
 }
 
-/// Native-currency ticker for a chain — the default unit for the ERC-7730
-/// `amount` format when the descriptor doesn't pin `params.base`. Previously
-/// hardcoded "ETH", so a Polygon/BSC/Avalanche native amount rendered with the
-/// WRONG ticker (review 3.5). Only the chains whose native symbol is certain
-/// are mapped; unknown chains keep the "ETH" default (most unmapped EVM chains
-/// are ETH-gas L2s, and a descriptor-supplied `base` always overrides). ETH-gas
-/// L2s (Optimism/Base/Arbitrum/Linea/Scroll/zkSync/Sepolia) also resolve to ETH
-/// via the fallback, so they need no explicit arm.
-pub fn native_ticker(chain_id: u64) -> &'static [u8] {
+/// Audited native-currency ticker for a chain whose EVM base unit is known to
+/// use 18 decimals.
+///
+/// `None` is security-significant: it means the firmware has no pinned decimal
+/// metadata for this chain. ERC-7730 amount renderers must not turn that into an
+/// assumed 18-decimal value. Keep this lookup distinct from [`native_ticker`],
+/// whose neutral `NATIVE` fallback is suitable for labels but proves nothing
+/// about magnitude.
+pub fn known_native_ticker(chain_id: u64) -> Option<&'static [u8]> {
     match chain_id {
-        56 => b"BNB",
-        137 => b"POL",
-        146 => b"S",
-        250 => b"FTM",
-        100 => b"xDAI",
-        42220 => b"CELO",
-        43114 => b"AVAX",
-        14 => b"FLR",
-        30 => b"RBTC",
-        999 => b"HYPE",
-        1329 => b"SEI",
-        8217 => b"KAIA",
-        _ => b"ETH",
+        1 | 10 | 324 | 8453 | 42161 | 59144 | 534352 | 11_155_111 | 84_532 => Some(b"ETH"),
+        5_000 => Some(b"MNT"),
+        56 => Some(b"BNB"),
+        137 => Some(b"POL"),
+        146 => Some(b"S"),
+        250 => Some(b"FTM"),
+        100 => Some(b"xDAI"),
+        42220 => Some(b"CELO"),
+        43114 => Some(b"AVAX"),
+        14 => Some(b"FLR"),
+        30 => Some(b"RBTC"),
+        999 => Some(b"HYPE"),
+        1329 => Some(b"SEI"),
+        8217 => Some(b"KAIA"),
+        80_094 => Some(b"BERA"),
+        _ => None,
     }
 }
 
-pub fn write_chain(row: &mut [u8; DISPLAY_COLS], chain_id: u64) {
+/// Native-currency label for a chain. Unknown chains deliberately use the
+/// neutral `NATIVE` label; callers that need decimal metadata must consult
+/// [`known_native_ticker`] instead of treating this fallback as evidence for an
+/// 18-decimal scale.
+pub fn native_ticker(chain_id: u64) -> &'static [u8] {
+    known_native_ticker(chain_id).unwrap_or(b"NATIVE")
+}
+
+/// Paint `prefix || native_ticker(chain_id) || suffix` on one row.
+///
+/// Callers use short, fixed ASCII prefixes/suffixes (for example `"Send "`
+/// and `"?"`). Keeping this composition in the shared primitive prevents
+/// secure renderers from drifting back to hard-coded `ETH` labels while the
+/// amount suffix correctly shows another chain's asset.
+pub fn write_native_currency_row(
+    row: &mut [u8; DISPLAY_COLS],
+    prefix: &[u8],
+    chain_id: u64,
+    suffix: &[u8],
+) {
     *row = [b' '; DISPLAY_COLS];
-    let prefix = b"Chain: ";
     let mut pos = append(row, 0, prefix);
+    pos = append(row, pos, native_ticker(chain_id));
+    let _ = append(row, pos, suffix);
+}
+
+/// Render a numeric chain id losslessly across two rows.
+///
+/// IDs up to nine decimal digits keep the familiar `Chain: N` first row and
+/// use the second row for the advisory chain name. Ten-to-twenty-digit `u64`
+/// IDs cannot coexist with the prefix on a 16-column display, so their first
+/// eight digits are followed by `>` and the remaining (at most twelve) digits
+/// continue on row two. No numeric digit is dropped or replaced by `!OVF`.
+pub fn write_chain(row1: &mut [u8; DISPLAY_COLS], row2: &mut [u8; DISPLAY_COLS], chain_id: u64) {
+    *row1 = [b' '; DISPLAY_COLS];
+    *row2 = [b' '; DISPLAY_COLS];
+    let prefix = b"Chain: ";
     let mut tmp = [0u8; 20];
-    match format_u64(chain_id, &mut tmp) {
-        Some(n) if pos + n <= DISPLAY_COLS => {
-            row[pos..pos + n].copy_from_slice(&tmp[..n]);
-            pos += n;
-        }
-        _ => {
-            // Chain id doesn't even fit as decimal — put a marker.
-            pos = append(row, pos, b"!OVF");
-        }
+    let n = format_u64(chain_id, &mut tmp).expect("20-byte buffer fits every u64");
+    if prefix.len() + n <= DISPLAY_COLS {
+        let pos = append(row1, 0, prefix);
+        row1[pos..pos + n].copy_from_slice(&tmp[..n]);
+        write_line(row2, chain_name(chain_id));
+        return;
     }
-    let _ = pos;
+
+    // 7-byte prefix + 8 digits + '>' exactly fills row 1. A u64 has at most
+    // 20 decimal digits, so row 2 receives at most 12 and always fits.
+    const FIRST_DIGITS: usize = 8;
+    let pos = append(row1, 0, prefix);
+    row1[pos..pos + FIRST_DIGITS].copy_from_slice(&tmp[..FIRST_DIGITS]);
+    row1[DISPLAY_COLS - 1] = b'>';
+    row2[..n - FIRST_DIGITS].copy_from_slice(&tmp[FIRST_DIGITS..n]);
 }
 
 // ---------------------------------------------------------------------------
@@ -534,6 +623,28 @@ pub fn write_eth_two_rows(
     }
     // Otherwise spill the SAME fixed-width form across two rows.
     write_amount_two_rows(row1, row2, value, 18, ETH_FRAC_DIGITS, false, true, "ETH")
+}
+
+/// Paint a chain's native-currency amount across up to two rows.
+///
+/// A chain in [`known_native_ticker`] has firmware-pinned 18-decimal metadata
+/// and uses its audited ticker. An unknown chain is rendered as the exact,
+/// unscaled integer followed by `raw`; the neutral `NATIVE` label alone is not
+/// evidence that an 18-decimal interpretation is valid.
+pub fn write_native_amount_two_rows(
+    row1: &mut [u8; DISPLAY_COLS],
+    row2: &mut [u8; DISPLAY_COLS],
+    value: &U256,
+    chain_id: u64,
+) -> AmountFit {
+    let Some(unit) = known_native_ticker(chain_id) else {
+        return write_amount_two_rows(row1, row2, value, 0, 0, false, true, "raw");
+    };
+    if single_row_amount_fixed(row1, value, 18, ETH_FRAC_DIGITS, unit) {
+        *row2 = [b' '; DISPLAY_COLS];
+        return AmountFit::Full;
+    }
+    write_amount_two_rows_bytes(row1, row2, value, 18, ETH_FRAC_DIGITS, false, unit)
 }
 
 /// Paint a gas-price value in gwei on a single row. Uses 3 fractional
@@ -609,10 +720,27 @@ pub fn write_tip_row(row: &mut [u8; DISPLAY_COLS], tip: &U256) {
 /// `max_fee_per_gas * gas_limit`. Silently clamps to U256::MAX on
 /// multiplication overflow; the caller sees a suspiciously huge value
 /// rather than a wrong-by-modulus one.
-pub fn write_fee_budget_row(
+pub fn write_fee_budget_row(row: &mut [u8; DISPLAY_COLS], max_fee_per_gas: &U256, gas_limit: u64) {
+    write_fee_budget_row_with_unit(row, max_fee_per_gas, gas_limit, b"ETH");
+}
+
+/// Chain-aware variant of [`write_fee_budget_row`]. The fee budget is paid in
+/// the chain's native asset, so the suffix must be selected from the signed
+/// chain id. Unknown chains are labelled `NATIVE` rather than ETH.
+pub fn write_native_fee_budget_row(
     row: &mut [u8; DISPLAY_COLS],
     max_fee_per_gas: &U256,
     gas_limit: u64,
+    chain_id: u64,
+) {
+    write_fee_budget_row_with_unit(row, max_fee_per_gas, gas_limit, native_ticker(chain_id));
+}
+
+fn write_fee_budget_row_with_unit(
+    row: &mut [u8; DISPLAY_COLS],
+    max_fee_per_gas: &U256,
+    gas_limit: u64,
+    unit: &[u8],
 ) {
     *row = [b' '; DISPLAY_COLS];
     let mut pos = append(row, 0, b"Max: ");
@@ -621,10 +749,11 @@ pub fn write_fee_budget_row(
     let mut wrote = false;
     for &frac in &[4u32, 3, 2, 1, 0] {
         if let Some(n) = budget.format_decimal(18, frac, true, &mut tmp) {
-            if pos + n + 4 <= DISPLAY_COLS {
+            if pos + n + 1 + unit.len() <= DISPLAY_COLS {
                 row[pos..pos + n].copy_from_slice(&tmp[..n]);
                 pos += n;
-                pos = append(row, pos, b" ETH");
+                pos = append(row, pos, b" ");
+                pos = append(row, pos, unit);
                 let _ = pos;
                 wrote = true;
                 break;
@@ -923,7 +1052,10 @@ fn write_amount_two_rows_bytes(
 
 #[cfg(test)]
 mod eip55_tests {
-    use super::eip55_hex;
+    use super::{
+        eip55_hex, verified_name_address_fingerprint, verified_name_display_bytes,
+        VERIFIED_NAME_DISPLAY_LEN,
+    };
 
     /// The four canonical EIP-55 reference vectors (from the EIP text).
     #[test]
@@ -962,6 +1094,75 @@ mod eip55_tests {
             let got = eip55_hex(addr);
             assert_eq!(&got, *want, "EIP-55 mismatch for {want:?}");
         }
+    }
+
+    #[test]
+    fn verified_name_truncation_is_explicit_and_canonical() {
+        let mut out = [0u8; VERIFIED_NAME_DISPLAY_LEN];
+        let exact = b"12345678901234567890123456789";
+        assert_eq!(exact.len(), VERIFIED_NAME_DISPLAY_LEN);
+        assert_eq!(verified_name_display_bytes(exact, &mut out), exact.len());
+        assert_eq!(&out, exact);
+
+        let long = b"12345678901234567890123456789XYZ";
+        assert_eq!(verified_name_display_bytes(long, &mut out), 29);
+        assert_eq!(&out[..28], &long[..28]);
+        assert_eq!(out[28], b'~');
+    }
+
+    #[test]
+    fn verified_name_fingerprint_matches_the_painted_eip55_ends() {
+        let addr = [
+            0x5a, 0xae, 0xb6, 0x05, 0x3f, 0x3e, 0x94, 0xc9, 0xb9, 0xa0, 0x9f, 0x33, 0x66, 0x94,
+            0x35, 0xe7, 0xef, 0x1b, 0xea, 0xed,
+        ];
+        assert_eq!(&verified_name_address_fingerprint(&addr), b"5aAeb61BeAed");
+    }
+}
+
+#[cfg(test)]
+mod native_amount_tests {
+    use super::{write_native_amount_two_rows, AmountFit, DISPLAY_COLS};
+    use pqsigner_tx_core::eip1559::U256;
+
+    fn u256_from_u128(value: u128) -> U256 {
+        let mut bytes = [0u8; 32];
+        bytes[16..].copy_from_slice(&value.to_be_bytes());
+        U256(bytes)
+    }
+
+    fn trimmed(row: &[u8; DISPLAY_COLS]) -> &[u8] {
+        let end = row
+            .iter()
+            .rposition(|&b| b != b' ')
+            .map_or(0, |idx| idx + 1);
+        &row[..end]
+    }
+
+    #[test]
+    fn unknown_chain_native_value_is_unscaled_raw_integer() {
+        let mut row1 = [b' '; DISPLAY_COLS];
+        let mut row2 = [b' '; DISPLAY_COLS];
+        let value = u256_from_u128(1_000_000_000_000_000_000);
+        assert_eq!(
+            write_native_amount_two_rows(&mut row1, &mut row2, &value, 4_242_424_242),
+            AmountFit::Full
+        );
+        assert_eq!(trimmed(&row1), b"1000000000000000");
+        assert_eq!(trimmed(&row2), b"000 raw");
+    }
+
+    #[test]
+    fn known_chain_native_value_keeps_pinned_scale_and_ticker() {
+        let mut row1 = [b' '; DISPLAY_COLS];
+        let mut row2 = [b' '; DISPLAY_COLS];
+        let value = u256_from_u128(1_000_000_000_000_000_000);
+        assert_eq!(
+            write_native_amount_two_rows(&mut row1, &mut row2, &value, 1),
+            AmountFit::Full
+        );
+        assert_eq!(trimmed(&row1), b"1.000000 ETH");
+        assert!(trimmed(&row2).is_empty());
     }
 }
 

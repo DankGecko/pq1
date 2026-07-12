@@ -108,7 +108,7 @@ call they're about to inspect:
 | Inner kind | Hint line |
 |---|---|
 | `EmptyCall` (no calldata, no value) | `(empty call)` |
-| `PlainEth` (no calldata, value > 0) | `Inner: ETH xfer` |
+| `PlainEth` (no calldata, value > 0) | `Inner: <native ticker>` (for example `Inner: BNB`) |
 | `Erc20Known` (recognised ERC-20 + matching metadata bundle) | `Inner: ERC-20` |
 | `Erc20Unknown` (recognised ERC-20 but no metadata) | `Inner: ERC-20?` |
 | `CowswapPresign` (inner call is `setPreSignature` on GPv2Settlement, CoW v3 trailer verified) | `Inner: CoW order` |
@@ -125,7 +125,7 @@ spoofed onto the inner display.
 
 ```
 ┌────────────────┐    ┌────────────────┐
-│Inner to:       │    │Send ETH:       │
+│Inner to:       │    │Send <ticker>:  │
 │0xabababababab… │    │1.500000        │
 │ababababababab… │    │ETH             │
 │ababababab      │    │> next          │
@@ -161,7 +161,7 @@ unlimited approval past the user.
 The amount renders as a hex tail (first 7 + last 6 bytes) so the user
 can compare it byte-for-byte against what the dapp shows.
 
-#### Blind sign (3 pages — unknown inner calldata)
+#### Blind sign (3 pages — genuinely unknown inner calldata)
 
 ```
 ┌────────────────┐    ┌────────────────┐    ┌────────────────┐
@@ -175,6 +175,11 @@ can compare it byte-for-byte against what the dapp shows.
 The data-hash page on blind-sign uses `canonical.data_hash` (which the
 firmware proved equals `keccak256(raw_data)` in step 7), so the user
 can compare it against what the dapp claims.
+
+Before these pages are allowed, firmware runs the same FI-hardened ERC-7730
+non-membership proof on `(chain_id, inner.to, selector)`. If that opaque tuple
+is present (or Bloom-positive) in the firmware catalogue, the whole Safe
+request refuses instead of using this blind path.
 
 #### CoW order pre-sign (1 context banner + 6/8 order body pages)
 
@@ -320,7 +325,7 @@ the firmware cannot know — but the **token** and the **recipient** are
 the WYSIWYS-critical facts (the user can recognise "that's my USDC going
 to an address I don't know"). The SafeTx inner `value` (ETH the Safe
 forwards to `to` on execution) is likewise surfaced on its own page for
-every inner kind, not just plain ETH transfers.
+every inner kind, not just plain native-currency transfers.
 
 ## DelegateCall
 

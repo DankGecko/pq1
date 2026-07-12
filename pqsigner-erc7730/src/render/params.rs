@@ -27,10 +27,11 @@
 //! | 0x3A | `prefix`             | 1 B u8                                     |
 //! | 0x3B | `suffix`             | ASCII (≤254 B)                             |
 //! | 0x3C | `nested_selector`    | 4 B function selector                      |
-//! | 0x3D | `nested_callee`      | 20 B address                               |
+//! | 0x3D | `nested_callee`      | raw compiled `calleePath` program           |
 //! | 0x3E | `fallback_label`     | ASCII (≤254 B)                             |
 //! | 0x3F | `visibility`         | 1 B (Visibility byte value), optionally    |
 //! |      |                      | followed by a Phase 5 value-list sub-TLV.  |
+//! | 0x43 | `dynamic_kind`       | 1 B (`1=string`, `2=bytes`)                |
 //!
 //! Wire-stable.
 //!
@@ -67,9 +68,10 @@ pub const PARAM_CONST_VALUE: u8 = 0x40;
 /// Format-level flag (emitted by `dbgen` on an EIP-712 format's first field)
 /// marking that the primary type carries a nested struct member — a single
 /// opaque `hashStruct` word the renderer cannot expand. When set, the
-/// renderer declines the WHOLE format to blind-sign, so a nested member (and
-/// any `address` inside it) is never partially clear-signed or painted as a
-/// garbage word (`VULN-erc7730-eip712-nested-struct-address-hide`, on-device
+/// renderer rejects the WHOLE format, so a nested member (and any `address`
+/// inside it) is never partially clear-signed or painted as a garbage word.
+/// The secure dispatcher hard-refuses that verified/known tuple rather than
+/// downgrading it (`VULN-erc7730-eip712-nested-struct-address-hide`, on-device
 /// belt behind the build-time visibility gate).
 pub const PARAM_NESTED_STRUCT: u8 = 0x41;
 /// A `tokenAmount`'s `nativeCurrencyAddress` sentinel (20 B). When the field's
@@ -78,6 +80,12 @@ pub const PARAM_NESTED_STRUCT: u8 = 0x41;
 /// an ERC-20 lookup — so an ETH leg (`0xEeee…`/`0x0`) shows "1.5 ETH" rather than
 /// a raw `! raw, dec=?` integer (ERC-7730 `nativeCurrencyAddress`).
 pub const PARAM_NATIVE_CURRENCY: u8 = 0x42;
+/// Compiler-authenticated ABI kind for a dynamic leaf. The path bytecode only
+/// says "follow this offset"; without this tag the device cannot distinguish a
+/// human string from arbitrary bytes. Missing/unknown kinds therefore decline.
+pub const PARAM_DYNAMIC_KIND: u8 = 0x43;
+pub const DYNAMIC_KIND_STRING: u8 = 0x01;
+pub const DYNAMIC_KIND_BYTES: u8 = 0x02;
 
 /// `dbgen::erc7730::DATE_ENC_TIMESTAMP` — unix-seconds u64.
 pub const DATE_ENC_TIMESTAMP: u8 = 0x00;
@@ -114,7 +122,7 @@ pub struct ParamSet<'a> {
     pub prefix: Option<u8>,
     pub suffix: Option<&'a [u8]>,
     pub nested_selector: Option<&'a [u8; 4]>,
-    pub nested_callee: Option<&'a [u8; 20]>,
+    pub nested_callee: Option<&'a [u8]>,
     pub fallback_label: Option<&'a [u8]>,
     /// Constant annotation string for a path-less field. When `Some`, the
     /// renderer shows this literal text instead of resolving a path.
@@ -140,6 +148,9 @@ pub struct ParamSet<'a> {
     /// 20 B). `Some` when the descriptor declares `nativeCurrencyAddress`; the
     /// renderer treats a resolved token equal to it as the chain native currency.
     pub native_currency: Option<&'a [u8; 20]>,
+    /// ABI type of a dynamic `FollowOffset` leaf. This is emitted by dbgen from
+    /// the canonical function signature, never inferred from payload bytes.
+    pub dynamic_kind: Option<u8>,
 }
 
 impl<'a> Default for ParamSet<'a> {
@@ -165,6 +176,7 @@ impl<'a> Default for ParamSet<'a> {
             visibility_values: None,
             nested_struct: None,
             native_currency: None,
+            dynamic_kind: None,
         }
     }
 }
@@ -194,6 +206,10 @@ pub fn parse<'a>(
         .ok_or(RenderErr::Reject("7730 bad param blob"))?;
 
     let mut cursor = 0usize;
+    // Tags 0x30..=0x43 fit in this bitmap. Singleton parameter TLVs are
+    // canonical: accepting duplicates would make meaning order-dependent and
+    // previously let a short visibility duplicate retain the first tag's tail.
+    let mut seen_tags = 0u32;
     while cursor < body.len() {
         if cursor + 2 > body.len() {
             return Err(RenderErr::Reject("7730 truncated tlv"));
@@ -206,6 +222,15 @@ pub fn parse<'a>(
         }
         let payload = &body[cursor..cursor + len];
         cursor += len;
+
+        if !(PARAM_TOKEN_PATH..=PARAM_DYNAMIC_KIND).contains(&tag) {
+            return Err(RenderErr::Reject("7730 unknown tlv tag"));
+        }
+        let bit = 1u32 << (tag - PARAM_TOKEN_PATH);
+        if seen_tags & bit != 0 {
+            return Err(RenderErr::Reject("7730 duplicate tlv tag"));
+        }
+        seen_tags |= bit;
 
         match tag {
             PARAM_TOKEN_PATH => p.token_path = Some(payload),
@@ -222,6 +247,14 @@ pub fn parse<'a>(
                         .try_into()
                         .map_err(|_| RenderErr::Reject("7730 bad native ccy"))?,
                 );
+            }
+            PARAM_DYNAMIC_KIND => {
+                if payload.len() != 1
+                    || !matches!(payload[0], DYNAMIC_KIND_STRING | DYNAMIC_KIND_BYTES)
+                {
+                    return Err(RenderErr::Reject("7730 bad dynamic kind"));
+                }
+                p.dynamic_kind = Some(payload[0]);
             }
             PARAM_THRESHOLD => {
                 p.threshold = Some(
@@ -277,11 +310,10 @@ pub fn parse<'a>(
                 );
             }
             PARAM_NESTED_CALLEE => {
-                p.nested_callee = Some(
-                    payload
-                        .try_into()
-                        .map_err(|_| RenderErr::Reject("7730 bad nested callee"))?,
-                );
+                if payload.is_empty() {
+                    return Err(RenderErr::Reject("7730 bad nested callee"));
+                }
+                p.nested_callee = Some(payload);
             }
             PARAM_FALLBACK_LABEL => p.fallback_label = Some(payload),
             PARAM_CONST_VALUE => p.const_value = Some(payload),
@@ -548,7 +580,7 @@ mod tests {
         let ir = Erc7730Ir::parse(&bytes).unwrap();
         let p = parse(&ir, 1).unwrap();
         assert_eq!(p.nested_selector, Some(&[0xa9, 0x05, 0x9c, 0xbb]));
-        assert_eq!(p.nested_callee, Some(&[0xDD; 20]));
+        assert_eq!(p.nested_callee, Some(&[0xDD; 20][..]));
     }
 
     #[test]
@@ -584,6 +616,37 @@ mod tests {
         let p = parse(&ir, 1).unwrap();
         assert_eq!(p.const_value, Some(&label[..]));
         assert!(p.token_path.is_none());
+    }
+
+    #[test]
+    fn parses_authenticated_dynamic_kind() {
+        let body = [PARAM_DYNAMIC_KIND, 1, DYNAMIC_KIND_STRING];
+        let mut pool = std::vec![0xFF, body.len() as u8];
+        pool.extend_from_slice(&body);
+        let bytes = ir_with_pool(&pool);
+        let ir = Erc7730Ir::parse(&bytes).unwrap();
+        assert_eq!(parse(&ir, 1).unwrap().dynamic_kind, Some(DYNAMIC_KIND_STRING));
+    }
+
+    #[test]
+    fn rejects_invalid_or_duplicate_dynamic_kind() {
+        for body in [
+            std::vec![PARAM_DYNAMIC_KIND, 1, 0xFF],
+            std::vec![
+                PARAM_DYNAMIC_KIND,
+                1,
+                DYNAMIC_KIND_STRING,
+                PARAM_DYNAMIC_KIND,
+                1,
+                DYNAMIC_KIND_BYTES,
+            ],
+        ] {
+            let mut pool = std::vec![0xFF, body.len() as u8];
+            pool.extend_from_slice(&body);
+            let bytes = ir_with_pool(&pool);
+            let ir = Erc7730Ir::parse(&bytes).unwrap();
+            assert!(parse(&ir, 1).is_err());
+        }
     }
 }
 
@@ -796,25 +859,29 @@ mod kani_harnesses {
         assert_eq!(p.visibility_values, None);
     }
 
-    /// On-point negative: a tag outside the 16 known tags (`< 0x30 ||
-    /// > 0x3F`) is REJECTED regardless of its symbolic payload — a hostile
+    /// On-point negative: a tag outside the contiguous known tag range is
+    /// REJECTED regardless of its symbolic payload — a hostile
     /// descriptor cannot smuggle an unknown TLV past the renderer.
     #[kani::proof]
     #[kani::unwind(4)]
     fn params_rejects_unknown_tag() {
-        const N: usize = 8;
+        // Large enough to encode the widest adjacent known tag (the 20-byte
+        // native-currency address), so the property cannot pass merely because
+        // every high-tag payload is structurally truncated.
+        const N: usize = 24;
         let pool: [u8; N] = kani::any();
         let l = pool[3] as usize;
         kani::assume((pool[1] as usize) == 2 + l);
         kani::assume(4 + l <= N);
         let tag = pool[2];
-        // "Unknown" = outside the CONTIGUOUS known-tag range `[0x30, PARAM_NESTED_STRUCT]`.
+        // "Unknown" = outside the CONTIGUOUS known-tag range
+        // `[0x30, PARAM_DYNAMIC_KIND]`.
         // NB: the top bound is the HIGHEST known tag, not 0x3F — new tags were added
         // above the original 0x30..=0x3F block (`PARAM_CONST_VALUE` 0x40 in b37a052f,
         // `PARAM_NESTED_STRUCT` 0x41 in 2f4cc810), so a stale bound wrongly classifies
         // a known tag as unknown and the harness fails on a tag the parser correctly
         // accepts. Keep this in sync with the highest `PARAM_*` constant.
-        kani::assume(tag < 0x30 || tag > PARAM_NESTED_STRUCT);
+        kani::assume(tag < PARAM_TOKEN_PATH || tag > PARAM_DYNAMIC_KIND);
         let ir = mk_ir(&pool);
         assert!(parse(&ir, 1).is_err());
     }
