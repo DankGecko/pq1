@@ -7,7 +7,7 @@ name: A3.1 transcription lint
 # (the transcription side — the likelier drift) would skip ci.yml entirely. This
 # workflow uses a POSITIVE `paths:` filter so the lint fires exactly when transcription
 # drift is possible. Pure Python (no Lean/Foundry toolchain). See
-# contracts/verification/docs/A3_1_ADVERSARIAL_REVIEW_2026-06-18.md.
+# contracts/verification/docs/findings/A3_1_ADVERSARIAL_REVIEW_2026-06-18.md.
 #
 # `verify-transcription` runs THREE pure-Python checks: (1) the POSITIONAL statistical
 # lint (constant-sets / kind-histogram / gate-vars); (2) the STRUCTURAL AST check

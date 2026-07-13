@@ -41,7 +41,7 @@ use crate::nsc_api;
 /// Maximum accumulated command data across chained APDUs. Size reflects
 /// the worst-case unified sign payload: `SIGN_USEROP_HEADER_LEN`-byte
 /// header + max inner-tx calldata (`MAX_TX_LEN`) + optional 2-byte prefix
-/// + max ERC-20 bundle + the (retired) 2-byte ZK clear-sign reserved slot.
+/// + max ERC-20 bundle + the 2-byte reserved compatibility slot.
 ///
 /// Also accommodates `INS_V2_FW_BEGIN`'s 8 KB manifest — the max
 /// function below resolves to whichever of the two use cases is
@@ -51,7 +51,7 @@ const CHAIN_BUF_LEN_SIGN: usize = SIGN_USEROP_HEADER_LEN
     + MAX_TX_LEN
     + 2
     + 1120
-    + 2 // reserved: retired ZK clear-sign slot (length field only, must be 0)
+    + 2 // reserved compatibility slot (length field only, must be 0)
     // CoW order trailer: 2-byte length + canonical + two ERC-20 bundles.
     + 2
     + COW_ORDER_TRAILER_MAX_LEN
@@ -481,6 +481,7 @@ impl CommandRouter {
     /// response into `SIG_BUF`:
     ///
     /// ```text
+    ///   [new_offchain_count u64 BE]
     ///   [init_code_len u32 BE] [init_code_bytes...]
     ///   [type1_len     u32 BE] [type1_bytes...]
     ///   [type2_len     u32 BE] [type2_bytes...]
@@ -495,7 +496,7 @@ impl CommandRouter {
             return self.sw_response(SW_WRONG_LENGTH);
         }
 
-        // All metadata trailers (ERC-20 / VK / names / selector /
+        // All metadata trailers (ERC-20 / native CoW / names / selector /
         // ERC-7730 / …) are built by the companion and arrive inside the
         // request — the DBs live host-side, the device holds only the
         // pinned Merkle roots and verifies every byte in S-world. NS no
@@ -529,10 +530,10 @@ impl CommandRouter {
     /// `executeBatchWithOffchainCount(...)` instead of the
     /// single-call `executeWithOffchainCount(...)`).
     ///
-    /// No NS-side trailer injection: batch-tx clear-signing renders
-    /// through the basic value/erc20-shape/blind-sign ladder. ZK,
-    /// Safe, and ERC-20 metadata trailers are single-tx-only by
-    /// construction.
+    /// No NS-side trailer injection: the companion supplies the wire-v2
+    /// routed TLV list. ERC-20 metadata, native CoW (frozen wire kind 3),
+    /// Safe, selector, ERC-7730, and name trailers all have batch routes;
+    /// reserved wire kind 2 has a zero-byte cap.
     unsafe fn cmd_sign_userop_batch(&self, data_len: usize) -> Response {
         if data_len < SIGN_USEROP_BATCH_HEADER_LEN + SIGN_USEROP_BATCH_TX_PREFIX_LEN {
             return self.sw_response(SW_WRONG_LENGTH);
@@ -654,7 +655,7 @@ impl CommandRouter {
         self.nsc_status_to_response(status)
     }
 
-    /// Ensure the `[erc20][v1_zk][v3_zk][safe_v1][selector][self_attest][erc7730]`
+    /// Ensure the `[erc20][reserved_v1][cow_order][safe_v1][selector][self_attest][erc7730]`
     /// u16-prefixed trailer skeleton is fully present before `received_len`,
     /// padding any missing prefix with `[0x00, 0x00]`.
     ///
@@ -662,7 +663,7 @@ impl CommandRouter {
     /// positionally in that exact order and then reads the `names`
     /// trailer at whatever cursor lands after them. If the companion
     /// sent a payload that stops earlier in the chain (e.g. only
-    /// `erc20+v1_zk+v3_zk`, or a bare `header+data` with no trailers at
+    /// `erc20+reserved_v1+cow_order`, or a bare `header+data` with no trailers at
     /// all), the secure parser would consume the `[count][bundle_len][...]`
     /// framing of the names trailer as `safe_v1`'s u16 length and the
     /// next pair as `selector`'s — bytes that are almost always > the
@@ -691,7 +692,7 @@ impl CommandRouter {
         let mut pos = after_data;
         let mut new_len = received_len;
         // Seven empty u16 prefixes to ensure, in secure-parser order:
-        // erc20, v1_zk, v3_zk, safe_v1, selector, self_attest, erc7730.
+        // erc20, reserved_v1, cow_order, safe_v1, selector, self_attest, erc7730.
         // Must match the parse sequence in
         // `secure/src/nsc/cmd_sign_userop.rs::run` exactly — any
         // divergence causes the names trailer to misalign with the

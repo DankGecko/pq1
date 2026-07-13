@@ -12,11 +12,7 @@ use common::{minimal_elf, run_fwmeasure, ElfBuilder, Segment};
 use std::io::Write;
 
 fn write_tmp(name: &str, bytes: &[u8]) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "fwmeasure-neg-{}-{}",
-        std::process::id(),
-        name
-    ));
+    let dir = std::env::temp_dir().join(format!("fwmeasure-neg-{}-{}", std::process::id(), name));
     std::fs::create_dir_all(&dir).expect("mkdir tmp");
     let path = dir.join(format!("{name}.bin"));
     let mut f = std::fs::File::create(&path).expect("create tmp file");
@@ -200,6 +196,7 @@ fn negative_elf_missing_required_symbols_rejected() {
     // Missing all three symbols.
     let elf = ElfBuilder::new()
         .add_segment(Segment::load(base, vec![0; 16]))
+        .add_symbol("__vector_table", base)
         .build();
     let path = write_tmp("missing_syms", &elf);
     let out = run_fwmeasure([path.as_os_str()]);
@@ -212,12 +209,28 @@ fn negative_elf_missing_required_symbols_rejected() {
 }
 
 #[test]
+fn negative_missing_vector_table_rejected() {
+    let base: u32 = 0x0C00_0000;
+    let elf = ElfBuilder::new()
+        .add_segment(Segment::load(base, vec![0x11; 0x20]))
+        .add_symbol("__sidata", base)
+        .add_symbol("__sdata", 0)
+        .add_symbol("__edata", 0x20)
+        .build();
+    let path = write_tmp("missing_vector_table", &elf);
+    let out = run_fwmeasure([path.as_os_str()]);
+    assert_failure_no_word_lines(&out, "missing runtime image base must fail");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("__vector_table"));
+}
+
+#[test]
 fn negative_elf_missing_edata_alone_rejected() {
     // Only __edata missing — confirms the per-symbol check fires for
     // each, not just the first one.
     let base: u32 = 0x0800_0000;
     let elf = ElfBuilder::new()
         .add_segment(Segment::load(base, vec![0; 16]))
+        .add_symbol("__vector_table", base)
         .add_symbol("__sidata", base)
         .add_symbol("__sdata", 0)
         // __edata deliberately omitted
@@ -225,6 +238,67 @@ fn negative_elf_missing_edata_alone_rejected() {
     let path = write_tmp("missing_edata", &elf);
     let out = run_fwmeasure([path.as_os_str()]);
     assert_failure_no_word_lines(&out, "missing __edata must be rejected");
+}
+
+#[test]
+fn negative_nonempty_load_starting_at_measurement_end_rejected() {
+    let base: u32 = 0x0800_0000;
+    let end = base + 0x40;
+    let elf = ElfBuilder::new()
+        .add_segment(Segment::load(base, vec![0x11; 0x20]))
+        .add_segment(Segment::load(end, vec![0x22; 0x10]))
+        .add_default_symbols(base, 0, end - base)
+        .build();
+    let path = write_tmp("load_at_end", &elf);
+    let out = run_fwmeasure([path.as_os_str()]);
+    assert_failure_no_word_lines(&out, "load at the exclusive end must fail");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("outside measurement envelope"));
+}
+
+#[test]
+fn negative_nonempty_load_before_vector_table_rejected() {
+    let vector_base: u32 = 0x0C00_0000;
+    let end = vector_base + 0x80;
+    let elf = ElfBuilder::new()
+        .add_segment(Segment::load(vector_base - 0x1000, vec![0xA5; 0x20]))
+        .add_segment(Segment::load(vector_base, vec![0x5A; 0x40]))
+        .add_default_symbols(vector_base, 0, end - vector_base)
+        .build();
+    let path = write_tmp("load_before_vector", &elf);
+    let out = run_fwmeasure([
+        path.as_os_str(),
+        std::ffi::OsStr::new("--require-secure-slot"),
+    ]);
+    assert_failure_no_word_lines(&out, "load before vector table must fail");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("outside measurement envelope"), "{stderr}");
+}
+
+#[test]
+fn negative_base_override_cannot_discard_existing_load() {
+    let base: u32 = 0x0800_0000;
+    let elf = minimal_elf(base, &[0x33; 0x40], base + 0x80);
+    let path = write_tmp("base_override_crop", &elf);
+    let out = run_fwmeasure([
+        path.as_os_str(),
+        std::ffi::OsStr::new("--flash-base=0x08000008"),
+    ]);
+    assert_failure_no_word_lines(&out, "base override must not crop a load");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("outside measurement envelope"));
+}
+
+#[test]
+fn negative_secure_slot_capacity_plus_one_rejected() {
+    let base: u32 = 0x0C00_0000;
+    let len = fw_manifest::SLOT_SECURE_CAPACITY + 1;
+    let elf = minimal_elf(base, &vec![0xA5; len as usize], base + len);
+    let path = write_tmp("secure_cap_plus_one", &elf);
+    let out = run_fwmeasure([
+        path.as_os_str(),
+        std::ffi::OsStr::new("--require-secure-slot"),
+    ]);
+    assert_failure_no_word_lines(&out, "secure capacity + 1 must fail");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("above the fixed 475136-byte"));
 }
 
 // ---------------------------------------------------------------------------
@@ -333,9 +407,7 @@ fn negative_words_not_emitted_to_stdout_on_failure() {
             let mut iter = line.splitn(2, ' ');
             if let Some(first) = iter.next() {
                 if first.parse::<u32>().is_ok() {
-                    panic!(
-                        "{name}: failure path leaked a word-line to stdout: {line:?}"
-                    );
+                    panic!("{name}: failure path leaked a word-line to stdout: {line:?}");
                 }
             }
         }

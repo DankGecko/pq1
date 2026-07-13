@@ -13,7 +13,7 @@
 # assignment mod r). After the fix, only the benign one does.
 #
 # Prereqs: circom 2.x on PATH, `npm ci --prefix circuits` done, python3.
-# Run from anywhere:  bash docs/security/cowswap-zk-poc/run_overflow_negative_test.sh
+# Historical invocation path: docs/archive/cowswap-zk-poc/run_overflow_negative_test.sh
 
 set -euo pipefail
 

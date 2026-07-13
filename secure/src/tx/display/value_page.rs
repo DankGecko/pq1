@@ -282,7 +282,7 @@ pub(super) fn enforce_native_value_page(
 /// pages 3-4) immediately before the renderer's trailing page (the confirm
 /// prompt on the Safe and CoW surfaces).
 ///
-/// Called by [`super::pick_sign_pages`] for the Safe / CoW / v1-ZK
+/// Called by [`super::pick_sign_pages`] for the Safe / CoW / ERC-7730
 /// surfaces, which — unlike every other renderer — do not emit gas pages
 /// of their own. The five EntryPoint v0.6 fee fields are committed to by
 /// the UserOp signature and the wallet pays the EntryPoint prefund out of
@@ -428,20 +428,17 @@ fn insert_blank(pages: &mut Pages, at: usize) -> Result<usize, ()> {
 /// legitimate metadata attribution there is therefore `meta.contract ==
 /// tx.to`.
 ///
-/// The handler-side acceptance gate (`verified_meta`) is deliberately more
-/// permissive: it also admits a bundle whose token sits inside a Safe-flow
-/// multiSend record (the `exec_ms` / `v1_ms` / `safe_exec_inner_*`
-/// disjuncts), because the Safe surfaces re-match the label per record. On
-/// the direct path those disjuncts are NOT valid — a `transfer` to token Y
-/// must never render with token T's name / symbol / decimals just because
-/// some (unrelated, possibly non-verifying) Safe trailer referenced T.
+/// The handler supplies only Merkle+chain-verified metadata. The dispatcher
+/// then grants it independently per selected surface: verified Safe execution
+/// facts for Safe, signed tokenPath resolution for ERC-7730, and this exact
+/// outer-target equality for direct ERC-20. A `transfer` to token Y must never
+/// render with token T's name/symbol/decimals merely because another surface
+/// could legitimately use T.
 ///
 /// Returns `true` only when the bundle's contract equals the call target,
 /// so the caller can fall back to the raw `erc20_unknown` render on any
 /// mismatch (including the no-target contract-creation shape). This is the
-/// per-flow gate the handler trailer-acceptance comments rely on; it pairs
-/// with the source-side disjunct gating in `cmd_sign_userop.rs` so a single
-/// fault at either layer cannot mis-attribute.
+/// direct-path gate is deliberately local to the branch that consumes it.
 #[must_use]
 pub(crate) fn direct_erc20_meta_matches(
     meta_contract: &[u8; 20],

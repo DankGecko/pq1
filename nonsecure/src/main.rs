@@ -63,7 +63,7 @@ mod gtzc_test;
 // GTZC1 illegal-access → wipe escalation demo. Hardware-only.
 #[cfg(feature = "tzic-wipe-test")]
 mod tzic_wipe_test;
-// The ERC20 / Names / VK DB blobs live on the HOST (companion app)
+// The ERC20 / Names / Selectors / ERC-7730 DB blobs live on the HOST (companion app)
 // under `tools/companion-stub/`, never in the firmware image — the
 // production device only holds the 32-byte Merkle roots and verifies
 // companion-supplied bundles against them. These modules are the

@@ -14,10 +14,10 @@ edition.workspace = true
 # `secure/src/tx/erc7730.rs` and consumed by `cmd_sign_userop`,
 # `cmd_sign_userop_batch`, and `cmd_sign_offchain`.
 #
-# The actual display rendering (page formatting on the OLED grid) lives
-# in `secure/src/tx/display/erc7730/` and depends on this crate plus
-# UI primitives. Pull this out so a host-side reference signer can run
-# the verifier + walker without UI deps.
+# The full display renderer and its page substrate now live in
+# `pqsigner-erc7730/src/display/`; secure world calls the same host-linkable,
+# fuzzable implementation through a thin re-export. Hardware UI backends stay
+# in the secure crate.
 
 [dependencies]
 pqsigner-tx       = { workspace = true }

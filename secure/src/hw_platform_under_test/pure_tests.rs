@@ -9,7 +9,6 @@
 //!   - `secure/src/hw/sca_trigger.rs`      (SCA-rig sync GPIO; dev-only)
 //!   - `secure/src/hw/rcc.rs`              (SYSCLK PLL config @ 160 MHz)
 //!   - `secure/src/hw/rng.rs`              (HW TRNG)
-//!   - `secure/src/hw/pka.rs`              (PKA accelerator for BLS12-381 Fp)
 //!   - `secure/src/hw/boot_pulse.rs`       (dev-only RDP1 boot bisection)
 //!   - `secure/src/hw/boot_state.rs`       (FSBL slot-pick page on flash 6)
 //!
@@ -111,7 +110,9 @@ fn positive_flash_slot_layout_bank1_secure() {
     assert!(FLASH_SRC.contains("pub const SLOT_B_SECURE_ADDR: u32 = 0x0C08_2000;"));
     assert!(FLASH_SRC.contains("pub const SLOT_B_SECURE_FIRST_PAGE: u32 = 65;"));
     assert!(FLASH_SRC.contains("pub const SLOT_B_SECURE_LAST_PAGE: u32 = 122;"));
-    assert!(FLASH_SRC.contains("pub const SLOT_SECURE_CAPACITY: u32 = 58 * 8 * 1024;"));
+    assert!(FLASH_SRC.contains(
+        "pub use fw_manifest::{SLOT_NS_CAPACITY, SLOT_SECURE_CAPACITY};"
+    ));
 }
 
 #[test]
@@ -122,7 +123,9 @@ fn positive_flash_slot_layout_bank2_ns() {
     assert!(FLASH_SRC.contains("pub const SLOT_B_NS_ADDR: u32 = 0x0818_0000;"));
     assert!(FLASH_SRC.contains("pub const SLOT_B_NS_FIRST_PAGE: u32 = 64;"));
     assert!(FLASH_SRC.contains("pub const SLOT_B_NS_LAST_PAGE: u32 = 127;"));
-    assert!(FLASH_SRC.contains("pub const SLOT_NS_CAPACITY: u32 = 64 * 8 * 1024;"));
+    assert!(FLASH_SRC.contains(
+        "pub use fw_manifest::{SLOT_NS_CAPACITY, SLOT_SECURE_CAPACITY};"
+    ));
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -171,7 +174,7 @@ fn positive_flash_icache_secure_alias() {
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// 3. POSITIVE — RCC / RNG / PKA / TAMP register layout
+// 3. POSITIVE — RCC / RNG / TAMP register layout
 // ═════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -231,10 +234,6 @@ fn positive_rng_condrst_bit_30() {
     // fails, leaving RNG in an unseeded state).
     assert!(RNG_SRC.contains("const CONDRST: u32 = 1 << 30;"));
 }
-
-// (PKA peripheral source-introspection tests removed — the PKA driver
-// was deleted with the Groth16 ZK clear-sign retirement; BLS12-381 field
-// arithmetic was its only consumer.)
 
 #[test]
 fn positive_tamp_secure_alias_and_irqn_2() {
@@ -1332,9 +1331,6 @@ fn negative_tamp_init_skips_external_pins() {
     assert!(!body.contains("ITAMP4E"));
     assert!(!body.contains("ITAMP10E"));
 }
-
-// (Section 17 — PKA driver assumption tests — removed with the Groth16
-// ZK clear-sign retirement; BLS12-381 was the PKA driver's only consumer.)
 
 // ═════════════════════════════════════════════════════════════════════
 // 18. NEGATIVE — RCC must keep HSI16-baseline-before-PLL fallback

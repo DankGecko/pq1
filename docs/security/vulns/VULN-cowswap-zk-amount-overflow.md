@@ -1,14 +1,21 @@
 # VULN — CowSwap ZK clear-signing: field-overflow amount forgery
 
+> **HISTORICAL — RETIRED SUBSYSTEM.** The Groth16/BLS12-381 verifier,
+> circuits, VK database, proof payloads, and commands discussed below were
+> removed on 2026-06-30. Paths and commands in this record may no longer exist
+> and MUST NOT be executed or treated as current remediation guidance. Current
+> CoW and Aave semantics are decoded natively on-device; see
+> `docs/archive/zk-clear-sign-retirement.md`.
+
 **Severity:** Critical (breaks WYSIWYS for CoW Swap orders)
 **Component:** `circuits/lib/format.circom :: FormatTrimmedAmount`
 (used by `circuits/cowswap/eip712_order/circuit.circom`)
 **Found:** 2026-06-10 (ZK clear-signing soundness audit)
 **Status:** **RESOLVED 2026-06-10** (both cowswap AND aave fully closed — circuit bound + native guard + regenerated VKs on both paths)
-**PoC:** `docs/security/cowswap-zk-poc/forge_amount_witness.py`
-**Negative test:** `docs/security/cowswap-zk-poc/run_overflow_negative_test.sh`
+**Historical PoC:** `docs/archive/cowswap-zk-poc/forge_amount_witness.py`
+**Historical negative test:** `docs/archive/cowswap-zk-poc/run_overflow_negative_test.sh`
 
-## Resolution (2026-06-10)
+## Historical resolution before retirement (2026-06-10)
 
 Closed from **both** sides — in-circuit and in-firmware — so a field-overflow
 amount forgery can no longer pass:
@@ -203,7 +210,7 @@ needs only the sell side oversized with an honest-small buy `limit` and
 * Attacker = the untrusted companion / NS world — squarely the threat
   model clear-signing exists to defend against.
 
-## Fix
+## Historical fix (superseded by subsystem removal)
 
 Bound the **inputs** so the product cannot wrap `r`. Range-checking
 `scaled` does **not** work (the attacker's residue is small by
@@ -222,11 +229,10 @@ safer still. Reinstating `remainder === 0` in normal mode is *not* a
 sufficient fix on its own (low-decimal tokens can still wrap), but is a
 reasonable belt-and-braces addition.
 
-Any fix changes the circuit → new R1CS → **new trusted setup + new VK**.
-Re-run `tools/build_vks.sh`, regenerate `ERC7730`/VK roots, and add a
-negative test (the PoC witness must fail `snarkjs wtns check` /
-`groth16 verify`). There is currently **no negative/overflow test** on
-this circuit.
+At the time, any fix changed the circuit → new R1CS → **new trusted setup +
+new VK**. The retired workflow rebuilt the VKs and added a negative witness
+test. Those commands are historical and must not be revived in the current
+native-decoder architecture.
 
 ## Related
 

@@ -27,7 +27,7 @@ the whole thing.
 | 5 | **Firmware Miri** | 0-UB on the host-reachable `unsafe` (FI volatile helpers, NS-ptr deref, tree-borrows) | `make miri` | per-PR (`ci.yml`) | ❌ **never** |
 | 6 | **Protocol models** (5 ProVerif + 3 Tamarin + 1 CryptoVerif) | dual-SE seed-split secrecy · 3-way PIN-lockstep reconcile · SCP03 + OPTIGA-shield tunnels · FW-update authenticity (symbolic + computational) | `proverif`/`tamarin`/`cryptoverif` + `verify-protocol-models` | nightly (`nightly.yml`: `proverif` + `verify-protocol-models`); `tamarin`/`cryptoverif` **local** | ❌ **never** |
 | 7 | **CT / SCA** | 5 crypto drivers (kdf/fors/th/saes/**ct_eq**) constant-time on `thumbv8m` (binsec relational; ct_eq guards the `subtle` compares — added 2026-07-02) | `make checkct` | **local only** — the `checkct` job is `workflow_dispatch`-only + `continue-on-error` (WIP; a G1) | ❌ **never** |
-| 8 | **Differential / fuzz** | decoder ↔ deployed-`MultiSendCallOnly` bytecode agreement (revm) · panic-freedom over unbounded input (11 libFuzzer targets) | `fuzz-all` + the revm differential (dev-only) | ClusterFuzzLite (`cflite-*`); `fuzz-all` **local** | ❌ **never** |
+| 8 | **Differential / fuzz** | decoder ↔ deployed-`MultiSendCallOnly` bytecode agreement (revm) · panic-freedom over unbounded input (12 libFuzzer targets) | `fuzz-all` + the revm differential (dev-only) | ClusterFuzzLite (`cflite-*`); `fuzz-all` **local** | ❌ **never** |
 
 *(Enforcement per row is asserted mechanically by `make verify-gate-enforcement` — the G1 lint — against `scripts/gate_enforcement.json`.)*
 

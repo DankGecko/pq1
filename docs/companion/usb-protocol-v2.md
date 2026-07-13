@@ -11,7 +11,7 @@ Companion app integration guide for the PQSigner post-quantum hardware wallet.
 | Report size | 64 bytes (interrupt EP1 IN/OUT) |
 | Framing | Ledger-compatible APDU-over-HID |
 | CLA byte | **0xF0** (v2 native) |
-| Max APDU reassembly | 8192 bytes |
+| Max APDU reassembly | 4096 bytes (`shared::apdu_framing::MAX_APDU_RX`) |
 
 ### HID Frame Format
 
@@ -45,12 +45,14 @@ multiple APDUs with the same INS:
 - **P1 = 0x00**: last or only block
 - **P1 = 0x80**: more blocks follow
 
-The device accumulates data until it receives a block with `Lc < 255`
-(the short-last-chunk sentinel), then executes the command.
+The device accumulates data while P1 bit 7 is set and executes only when it
+receives a block with **P1 = 0x00**. `Lc` does not terminate a chain: a short
+intermediate block is legal with P1=0x80, and an exact-multiple-of-255 payload
+still needs its final data block marked P1=0x00.
 
 ### Response Chaining (GET_RESPONSE)
 
-Signing responses are up to 8086 bytes. The device returns the first 253
+Signing responses are up to `MAX_SIGN_RESPONSE_LEN = 12,556` bytes. The device returns the first 253
 bytes with `SW = 0x61FF` (more data). The companion drains the rest by
 repeatedly sending `INS 0xC0` (GET_RESPONSE) until `SW = 0x9000`.
 
@@ -93,10 +95,11 @@ After the all-C10 cutover, the v2 protocol exposes the following commands:
 
 ### 0x30 SIGN_USEROP — unified sign
 
-**This is the only signing command in the post-cutover wallet.** The
-firmware's state machine decides whether the response also needs a Type 1
-slot-registration UserOp; the companion just parses the two-chunk
-bundle and submits to the bundler in order.
+**This is the only single-UserOp signing command in the post-cutover wallet.**
+The companion's flags request initCode or Type 1 output; firmware does not infer
+registration state. Current production companions may request the slot-0
+factory-deploy path or Type 2 only. They must not request/submit Type 1 until
+the reviewed wire bump described below supplies its missing binding material.
 
 **Input payload (`SIGN_USEROP_HEADER_LEN = 330` bytes of header + inner
 calldata):**
@@ -140,11 +143,14 @@ authorization gate.
 [type2_wrapper        type2_len bytes]      (always 4128 B)
 ```
 
-- `type1_len == 0` means the slot is already registered on this chain
-  and the companion should submit only the Type 2 UserOp.
-- `type1_len == 4128` means a fresh slot must be registered on-chain
-  first. Submit Type 1 at `nonce`, wait for confirmation, then submit
-  Type 2 at `nonce + 1`.
+- `type1_len == 0` means only that no Type 1 was requested/emitted. Except for
+  slot 0 installed atomically by the factory path, the companion must verify
+  the selected slot is already registered on-chain before requesting Type 2.
+- `type1_len == 4128` means firmware signed a rotation to slot N≥1. Wire v2
+  does not return the 64-byte new slot public key required to reconstruct the
+  signed `addOwnerBytes(bytes)` calldata. Seedless production companions MUST
+  reject this response and MUST NOT retry it until a reviewed protocol bump
+  supplies the public key or complete Type-1 calldata.
 
 **Type 1 / Type 2 wrapper (each exactly 4128 bytes):**
 
@@ -160,12 +166,15 @@ in `validateUserOp`:
   via `executeWithOffchainCount(...)` which atomically updates
   `offchainSigCount[i]` to `new_offchain_count`.
 
-The companion wraps each in a `PackedUserOperation` with the appropriate
+The companion wraps an available wrapper in an EntryPoint v0.6 `UserOperation`
+(`UserOperation06`) with the appropriate
 `callData`:
 
-- **Type 1 UserOp**: `callData = execute(sender, 0, "")` (a no-op call
-  to self; its only purpose is to attach the Type 1 sig whose validation
-  side-effect registers the slot on chain).
+- **Type 1 UserOp (rotation, currently companion-blocked):** the signed calldata
+  is exactly `addOwnerBytes(newSlotPk)`. A no-op `execute(sender,0,"")` has a
+  different hash and fails the contract's Type-1 selector gate. Do not submit
+  it. First deployment is not Type 1: set `FLAG_INCLUDE_INIT_CODE`, use slot 0,
+  and keep `FLAG_REGISTER_SLOT` clear; the factory installs slot 0.
 - **Type 2 UserOp**: `callData = executeWithOffchainCount(ownerIndex,
   new_offchain_count, to, value, data)` — the wallet bumps the EIP-1271
   off-chain counter and dispatches the user's call atomically.
@@ -188,11 +197,14 @@ Returns:
 ### 0x01 GET_DEVICE_INFO
 
 Returns a versioning + capability header. Reports `ep_version = 0x0006`
-(EntryPoint v0.6) and `sig_param_set = 10` (SPHINCS+C10, `C10_SIG_LEN = 4008`).
+(EntryPoint v0.6) and `sig_param_set = 2` (SPHINCS+C10,
+`C10_SIG_LEN = 4008`).
 
 ### 0x60 GET_WALLET_ADDRESS
 
-Input: `[chain_id u64 BE] [account_index u8]`.
+Input: empty for legacy `account_index = 0`, or `[account_index u32 BE]` for
+accounts `0..=255`. No chain id is accepted; wallet addresses are chain-
+independent by design.
 Output: 20-byte CREATE2-predicted ERC-1967 proxy address.
 First call after unlock takes <1 s (master keygen); cached afterwards.
 
@@ -204,13 +216,25 @@ round-tripping through `0x30 SIGN_USEROP`.
 
 ### 0x62 SIGN_OFFCHAIN
 
-EIP-1271 sig over a 32-B hash, returned as
-`[new_local_offchain_count u64 BE][C10 sig (4008 B)]` (4016 bytes total).
-Companion wraps as `abi.encode(uint256 ownerIndex, bytes c10Sig)` and the
-dapp calls `wallet.isValidSignature(rawHash, wrappedSig)`. Refuses if the
-slot is unregistered, the gap exceeds `MAX_OFFCHAIN_GAP = 100`, or the
-combined cap is exhausted. Bootstrap key (`ownerIndex == 0`) is
-**forbidden** for EIP-1271.
+EIP-1271 signature response with two layouts selected by the input `flags`
+byte:
+
+- `OFFCHAIN_FLAG_ACCOUNT_DEPLOYED = 1`:
+  `[new_local_offchain_count u64 BE][C10 sig (4008 B)]` (4016 bytes total).
+  Wrap the raw signature as `abi.encode(uint256 ownerIndex, bytes c10Sig)` and
+  call `wallet.isValidSignature(rawHash, wrappedSig)`.
+- `OFFCHAIN_FLAG_ACCOUNT_DEPLOYED = 0`:
+  `[new_local_offchain_count u64 BE][ERC-6492 blob (8608 B)]` (8616 bytes
+  total). The payload is already the complete ERC-6492 wrapper; pass it through
+  unchanged to an ERC-6492-aware verifier and do not ABI-wrap it again. This
+  counterfactual path is restricted to slot 0.
+
+The deployed-wallet path refuses an unregistered slot. The undeployed
+counterfactual path has one narrow exception: a never-used slot 0 is
+auto-registered locally so its ERC-6492 deploy-then-verify blob can be produced.
+Both paths refuse when the gap exceeds `MAX_OFFCHAIN_GAP = 100` or the combined
+cap is exhausted. Bootstrap key (`ownerIndex == 0`) is **forbidden** for
+EIP-1271.
 
 The input header is 17 B (`account(1) | chain(8) | slot(4) | kind(1) |
 payload_len(2) | flags(1)`). The `kind` byte selects the payload
@@ -218,9 +242,17 @@ format:
 
 | `kind`                          | Value | Payload                                                                                       |
 |---------------------------------|-------|-----------------------------------------------------------------------------------------------|
-| `OFFCHAIN_KIND_RAW32`           | 0     | 32 raw bytes — already the user's chosen hash; firmware wraps via Solady nested EIP-712.       |
+| `OFFCHAIN_KIND_RAW32`           | 0     | 32 companion-supplied opaque bytes; firmware wraps via Solady nested EIP-712 and displays `! BLIND RAW32`. Never translate a typed-data request into this kind. |
 | `OFFCHAIN_KIND_PERSONAL_SIGN`   | 1     | UTF-8 message ≤ `MAX_OFFCHAIN_PERSONAL_SIGN_LEN`; firmware applies EIP-191 prefix + wraps.    |
 | `OFFCHAIN_KIND_EIP712_TYPED`    | 2     | EIP-712 typed-data (see below) — Phase 4 of the ERC-7730 rollout.                              |
+| `OFFCHAIN_KIND_EIP712_TYPED_V3` | 3     | EIP-712 typed-data plus nested encodeData records; see the canonical companion guide §6.5.   |
+
+`RAW32` is a deliberately loud blind-sign tier, not evidence that the device
+understands a user's intent. A hostile companion can submit the final hash of
+otherwise structured typed data through this kind and suppress its semantic
+pages. Production companions MUST NOT downgrade structured requests to
+`RAW32`; production firmware should disable the kind unless the product owner
+explicitly accepts this residual.
 
 #### `kind = OFFCHAIN_KIND_EIP712_TYPED` (2) wire format
 
@@ -229,38 +261,45 @@ Payload layout (immediately after the 17-byte header):
 ```
 [u16 BE = 1]                  // domain_sep_present (must be 1)
 [u8; 32] domain_separator     // EIP-712 EIP712Domain final hash
-[u8; 32] primary_type_hash    // keccak256(typeString) of the typed message
+[u8; 32] primary_type_hash    // keccak256(encodeType(primaryType, types))
 [u16 BE] encoded_data_len     // ≤ MAX_OFFCHAIN_EIP712_ENCODED_DATA_LEN
 [u8; encoded_data_len] encoded_data
-                              // ABI-encoded struct body (NOT including
-                              // the type hash) — what
-                              // viem::encodeAbiParameters() produces.
+                              // canonical EIP-712 encodeData body (NOT
+                              // including the type hash). Plain ABI encoding
+                              // matches only flat static scalar members;
+                              // dynamic/composite members use hash words.
 [u16 BE] trailer_len          // ERC-7730 descriptor trailer length
 [u8; trailer_len] trailer     // ERC-7730 bundle (see docs/companion/erc7730-integration.md)
 ```
 
 The minimum payload length is `2 + 32 + 32 + 2 + 2 = 70` bytes (empty
-`encoded_data` + zero-length trailer is allowed for round-trip
-validation but the firmware rejects empty trailers with `7730 bundle
-fail`). The maximum payload length is
+`encoded_data` + zero-length trailer reaches the strict framing parser but is
+rejected with `empty trailer`). The maximum payload length is
 `MAX_OFFCHAIN_EIP712_TYPED_LEN`.
 
 Secure-side processing:
+
 1. Verify the trailer bundle against `ERC7730_DESCRIPTORS_ROOT`.
-2. `cross_check_eip712(descriptor.ir, chain_id, contract,
-   domain_separator)` — FI-hardened binding gate (Phase 5 item 6).
-3. Compute `struct_hash = keccak256(primary_type_hash || encoded_data)`.
-4. Compute the EIP-712 final hash:
+2. `cross_check_eip712(descriptor.ir, chain_id, domain_separator)` — exact,
+   FI-hardened binding. The descriptor compiler forced the deployment
+   `verifyingContract` into this domain separator; firmware does not receive a
+   second independent contract argument on this path.
+3. Constant-time select the authenticated descriptor format using the complete
+   32-byte `primary_type_hash`; a four-byte prefix or catalogue hint is never
+   sufficient.
+4. Compute `struct_hash = keccak256(primary_type_hash || encoded_data)`.
+5. Compute the EIP-712 final hash:
    `final = keccak256(0x1901 || domain_separator || struct_hash)`.
-5. Render the descriptor's matching format via
+6. Render the descriptor's matching format via
    `display::erc7730::render_erc7730_eip712_pages`; render the
    ERC-8213 fingerprint with the `final` hash as the displayed value.
-6. Wrap `final` through Solady's nested PersonalSign envelope (no new
+7. Wrap `final` through Solady's nested PersonalSign envelope (no new
    typehash, no on-chain change).
-7. Sign with the slot key + bump the per-slot off-chain counter.
+8. Sign with the slot key + bump the per-slot off-chain counter.
 
-Output format matches the kind=0 / kind=1 paths exactly:
-`[new_local_offchain_count u64 BE][C10 sig (4008 B)]`.
+Output format is selected by the same deployed/counterfactual flag as kinds 0
+and 1: 4016-byte count+C10 for deployed wallets, or 8616-byte
+count+ERC-6492 blob for counterfactual slot 0.
 
 ### 0x63 OFFCHAIN_STATUS
 

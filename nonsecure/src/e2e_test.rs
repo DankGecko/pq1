@@ -17,25 +17,24 @@ use crate::nsc_api;
 use cortex_m_semihosting::{debug, hprintln};
 use sha3::{Digest, Keccak256};
 use sphincs_tz_shared::{
-    APPROVE_HASH_CALLDATA_LEN, APPROVE_HASH_SELECTOR, FLAG_REGISTER_SLOT,
+    NscStatus, APPROVE_HASH_CALLDATA_LEN, APPROVE_HASH_SELECTOR, FLAG_REGISTER_SLOT,
     GPV2_SETTLEMENT_ADDRESS, GPV2_VAULT_RELAYER_ADDRESS, MAX_BATCH_TXS, MAX_SIGN_RESPONSE_LEN,
-    MULTISEND_CALL_ONLY_ADDRESSES, MULTI_SEND_SELECTOR, NscStatus, SAFE_DOMAIN_TYPEHASH,
-    SAFE_OFF_CHAIN_ID, SAFE_OFF_DATA_HASH, SAFE_OFF_NONCE, SAFE_OFF_OPERATION,
-    SAFE_OFF_SAFE_ADDRESS, SAFE_OFF_TO, SAFE_TX_TYPEHASH, SAFE_V1_CANONICAL_LEN,
-    SIGN_USEROP_BATCH_HEADER_LEN, SIGN_USEROP_HEADER_LEN, SIG_TYPE1_LEN, SIG_TYPE2_LEN,
+    MULTISEND_CALL_ONLY_ADDRESSES, MULTI_SEND_SELECTOR, SAFE_DOMAIN_TYPEHASH, SAFE_OFF_CHAIN_ID,
+    SAFE_OFF_DATA_HASH, SAFE_OFF_NONCE, SAFE_OFF_OPERATION, SAFE_OFF_SAFE_ADDRESS, SAFE_OFF_TO,
+    SAFE_TX_TYPEHASH, SAFE_V1_CANONICAL_LEN, SIGN_USEROP_BATCH_HEADER_LEN, SIGN_USEROP_HEADER_LEN,
+    SIG_TYPE1_LEN, SIG_TYPE2_LEN, TRAILER_KIND_ERC20, TRAILER_KIND_ERC7730, TRAILER_KIND_SAFE_V1,
 };
 
 // === Scratch buffers =======================================================
 
 static mut SIG_BUF: [u8; MAX_SIGN_RESPONSE_LEN] = [0u8; MAX_SIGN_RESPONSE_LEN];
 // Sized for the largest scenario: the multiSend safe-wrapped CoW presign
-// (5s) carries a zk_v3 AddrOnly trailer (2+204) plus a safe_v1 trailer
+// carries a native 204-byte order trailer plus a safe_v1 trailer
 // whose raw_data is the ~484-byte multiSend calldata (2 + 281 + 2 + 484)
 // on top of the 36 B `approveHash` inner_data — ~1.1 KB of trailers. We
 // don't need the firmware's 16 KB SNAP_LEN budget because every e2e
 // scenario uses small inner_data.
-static mut PAYLOAD_BUF: [u8; SIGN_USEROP_HEADER_LEN + 2048] =
-    [0u8; SIGN_USEROP_HEADER_LEN + 2048];
+static mut PAYLOAD_BUF: [u8; SIGN_USEROP_HEADER_LEN + 4096] = [0u8; SIGN_USEROP_HEADER_LEN + 4096];
 
 // === Helpers ===============================================================
 
@@ -162,8 +161,7 @@ fn compute_safe_tx_hash(canonical: &[u8; SAFE_V1_CANONICAL_LEN]) -> [u8; 32] {
     let mut dom_buf = [0u8; 96];
     dom_buf[0..32].copy_from_slice(&SAFE_DOMAIN_TYPEHASH);
     // chainId as uint256 (left-padded)
-    dom_buf[32 + 24..32 + 32]
-        .copy_from_slice(&canonical[SAFE_OFF_CHAIN_ID..SAFE_OFF_CHAIN_ID + 8]);
+    dom_buf[32 + 24..32 + 32].copy_from_slice(&canonical[SAFE_OFF_CHAIN_ID..SAFE_OFF_CHAIN_ID + 8]);
     // verifyingContract as address (left-padded to 32)
     dom_buf[64 + 12..64 + 32]
         .copy_from_slice(&canonical[SAFE_OFF_SAFE_ADDRESS..SAFE_OFF_SAFE_ADDRESS + 20]);
@@ -229,7 +227,7 @@ fn append_safe_v1_trailer(
 }
 
 /// Append the three zero-length trailers that come *before* `safe_v1`
-/// in the payload framing — ERC-20 bundle, ZK v1, ZK v3 — followed by
+/// in the payload framing — ERC-20 bundle, reserved slot, native CoW order — followed by
 /// the supplied `safe_v1` payload, then a zero-count names section.
 /// Returns the new offset.
 fn append_safe_only_trailers(
@@ -240,9 +238,9 @@ fn append_safe_only_trailers(
 ) -> usize {
     // erc20 bundle absent
     buf[off..off + 2].copy_from_slice(&0u16.to_be_bytes());
-    // zk v1 absent
+    // reserved compatibility slot absent
     buf[off + 2..off + 4].copy_from_slice(&0u16.to_be_bytes());
-    // zk v3 absent
+    // native CoW order absent
     buf[off + 4..off + 6].copy_from_slice(&0u16.to_be_bytes());
     let mut o = off + 6;
     o = append_safe_v1_trailer(buf, o, canonical, raw_data);
@@ -254,7 +252,7 @@ fn append_safe_only_trailers(
     o
 }
 
-// === CoW GPv2Order (zk_v3 AddrOnly) helpers ================================
+// === CoW GPv2Order native canonical helpers ================================
 
 /// CoW GPv2Order EIP-712 digest, mirroring
 /// `secure/src/tx/eip712/cowswap::compute_digest` byte-for-byte (same
@@ -345,13 +343,7 @@ fn build_erc20_approve_calldata(spender: &[u8; 20], amount_low: u64) -> [u8; 68]
 /// Pack one multiSend record at `off`:
 /// `op(1) || to(20) || value(32, zero) || dataLen(32) || data`.
 /// Returns the new offset.
-fn pack_multisend_record(
-    out: &mut [u8],
-    off: usize,
-    op: u8,
-    to: &[u8; 20],
-    data: &[u8],
-) -> usize {
+fn pack_multisend_record(out: &mut [u8], off: usize, op: u8, to: &[u8; 20], data: &[u8]) -> usize {
     out[off] = op;
     out[off + 1..off + 21].copy_from_slice(to);
     out[off + 21..off + 53].fill(0); // value = 0
@@ -359,6 +351,46 @@ fn pack_multisend_record(
     out[off + 81..off + 85].copy_from_slice(&(data.len() as u32).to_be_bytes());
     out[off + 85..off + 85 + data.len()].copy_from_slice(data);
     off + 85 + data.len()
+}
+
+fn build_flyingtulip_deposit(asset: &[u8; 20], amount: u64) -> [u8; 68] {
+    let mut calldata = [0u8; 68];
+    calldata[..4].copy_from_slice(&[0x47, 0xe7, 0xef, 0x24]);
+    calldata[16..36].copy_from_slice(asset);
+    calldata[60..68].copy_from_slice(&amount.to_be_bytes());
+    calldata
+}
+
+/// Canonical one-record `multiSend(bytes)` whose record merely targets a
+/// token. It is deliberately carried inside an invalid Safe trailer by the
+/// RT-ERC20 regression: these raw bytes must never grant metadata authority.
+fn build_one_record_multisend(out: &mut [u8; 256], target: &[u8; 20]) -> usize {
+    let records_start = 68;
+    let mut end = pack_multisend_record(out, records_start, 0, target, &[]);
+    let packed_len = end - records_start;
+    out[..4].copy_from_slice(&MULTI_SEND_SELECTOR);
+    out[4..36].fill(0);
+    out[35] = 0x20;
+    out[36..68].fill(0);
+    out[64..68].copy_from_slice(&(packed_len as u32).to_be_bytes());
+    let pad = (32 - packed_len % 32) % 32;
+    out[end..end + pad].fill(0);
+    end += pad;
+    end
+}
+
+/// Encode only the Safe-v1 TLV payload (no legacy single-wire u16 prefix).
+fn build_safe_v1_payload(
+    out: &mut [u8],
+    canonical: &[u8; SAFE_V1_CANONICAL_LEN],
+    raw_data: &[u8],
+) -> usize {
+    let total = SAFE_V1_CANONICAL_LEN + 2 + raw_data.len();
+    out[..SAFE_V1_CANONICAL_LEN].copy_from_slice(canonical);
+    out[SAFE_V1_CANONICAL_LEN..SAFE_V1_CANONICAL_LEN + 2]
+        .copy_from_slice(&(raw_data.len() as u16).to_be_bytes());
+    out[SAFE_V1_CANONICAL_LEN + 2..total].copy_from_slice(raw_data);
+    total
 }
 
 /// Build canonical `multiSend(bytes)` calldata for the Safe-UI CoW
@@ -392,11 +424,11 @@ fn build_cow_multisend_calldata(
     p + pad
 }
 
-/// Append a `zk_v3` AddrOnly trailer (bare 204-byte GPv2Order
-/// canonical — no proof, no readable, no VK bundle) AND a `safe_v1`
-/// trailer, preceded by the zero-length erc20/zk_v1 sections. This is
+/// Append a native kind-3 trailer (bare 204-byte GPv2Order canonical)
+/// AND a `safe_v1`
+/// trailer, preceded by zero-length ERC-20 and reserved sections. This is
 /// the Safe-wrapped CoW presign wire shape. Returns the new offset.
-fn append_zkv3_addr_only_and_safe_trailers(
+fn append_cow_canonical_and_safe_trailers(
     buf: &mut [u8],
     off: usize,
     order_canonical: &[u8; 204],
@@ -405,9 +437,9 @@ fn append_zkv3_addr_only_and_safe_trailers(
 ) -> usize {
     // erc20 bundle absent
     buf[off..off + 2].copy_from_slice(&0u16.to_be_bytes());
-    // zk v1 absent
+    // reserved compatibility slot absent
     buf[off + 2..off + 4].copy_from_slice(&0u16.to_be_bytes());
-    // zk v3 = bare AddrOnly canonical
+    // Frozen kind-3 slot = bare native canonical.
     buf[off + 4..off + 6].copy_from_slice(&204u16.to_be_bytes());
     let mut o = off + 6;
     buf[o..o + 204].copy_from_slice(order_canonical);
@@ -419,26 +451,22 @@ fn append_zkv3_addr_only_and_safe_trailers(
 }
 
 /// Append the four trailers that come BEFORE the selector trailer
-/// (erc20=0, zkv1=0, zkv3=0, safe_v1=0) followed by a selector
+/// (erc20=0, reserved_v1=0, cow_order=0, safe_v1=0) followed by a selector
 /// bundle built by the host-stub `selectors_db::build_bundle` for
 /// `selector`. Returns the new offset. Caller is responsible for
 /// keeping `buf` large enough.
 ///
 /// Wire shape after this function:
 ///   off..off+2  : erc20_len = 0
-///   off+2..+4   : zk_v1_len = 0
-///   off+4..+6   : zk_v3_len = 0
+///   off+2..+4   : reserved_v1_len = 0
+///   off+4..+6   : cow_order_len = 0
 ///   off+6..+8   : safe_v1_len = 0
 ///   off+8..+10  : selector_len (u16 BE)
 ///   off+10..    : selector bundle bytes
 ///
 /// No trailing names section — `cursor == total_len` after the
 /// selector bundle is treated as zero name bundles.
-fn append_selector_only_trailers(
-    buf: &mut [u8],
-    off: usize,
-    selector: &[u8; 4],
-) -> Option<usize> {
+fn append_selector_only_trailers(buf: &mut [u8], off: usize, selector: &[u8; 4]) -> Option<usize> {
     buf[off..off + 2].copy_from_slice(&0u16.to_be_bytes());
     buf[off + 2..off + 4].copy_from_slice(&0u16.to_be_bytes());
     buf[off + 4..off + 6].copy_from_slice(&0u16.to_be_bytes());
@@ -458,11 +486,7 @@ fn append_selector_only_trailers(
 /// for ensuring `keccak256(text_sig)[..4] == selector`; this builder
 /// does NOT recompute keccak so callers can also exercise mismatch
 /// scenarios.
-fn build_self_attest_bundle(
-    out: &mut [u8],
-    selector: &[u8; 4],
-    text_sig: &[u8],
-) -> Option<usize> {
+fn build_self_attest_bundle(out: &mut [u8], selector: &[u8; 4], text_sig: &[u8]) -> Option<usize> {
     if text_sig.is_empty() || text_sig.len() > 63 {
         return None;
     }
@@ -476,15 +500,15 @@ fn build_self_attest_bundle(
     Some(needed)
 }
 
-/// Append five zero-length trailers (erc20=0, zk_v1=0, zk_v3=0,
+/// Append five zero-length trailers (erc20=0, reserved1=0, cow_order=0,
 /// safe_v1=0, selector=0) followed by a self-attest trailer carrying
 /// `(selector, text_sig)`. Returns the new offset. Caller is
 /// responsible for keeping `buf` large enough.
 ///
 /// Wire shape after this function:
 ///   off..off+2   : erc20_len   = 0
-///   off+2..+4    : zk_v1_len   = 0
-///   off+4..+6    : zk_v3_len   = 0
+///   off+2..+4    : reserved1_len = 0
+///   off+4..+6    : cow_order_len   = 0
 ///   off+6..+8    : safe_v1_len = 0
 ///   off+8..+10   : selector_len = 0
 ///   off+10..+12  : self_attest_len (u16 BE)
@@ -518,16 +542,33 @@ fn append_self_attest_only_trailers(
 const ERC7730_TRAILER_WETH_SEPOLIA: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/erc7730_e2e_weth_sepolia.bin"));
 
+/// Mainnet WETH bundle used only as a cryptographically-valid but deliberately
+/// mis-bound trailer in the known-call refusal differential.
+#[cfg(feature = "e2e-test")]
+const ERC7730_TRAILER_WETH_MAINNET: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/erc7730_e2e_weth_mainnet.bin"));
+
+#[cfg(feature = "e2e-test")]
+const ERC7730_TRAILER_FLYINGTULIP_MAINNET: &[u8] = include_bytes!(concat!(
+    env!("OUT_DIR"),
+    "/erc7730_e2e_flyingtulip_positions_mainnet.bin"
+));
+
+/// Generated typed-data fixture:
+/// `[domain_separator(32) | primary_type_hash(32) | ERC-7730 trailer]`.
+/// All binding values come from the checked-in E2E catalogue at build time.
+#[cfg(feature = "e2e-test")]
+const ERC7730_EIP712_DELEGATION_SEPOLIA: &[u8] = include_bytes!(concat!(
+    env!("OUT_DIR"),
+    "/erc7730_e2e_delegation_sepolia.bin"
+));
+
 /// Append zero-length placeholders for every prior trailer slot and
 /// then the supplied ERC-7730 bundle. Sign-input wire ordering is
-/// `erc20 → zk_v1 → zk_v3 → safe_v1 → selector → self_attest →
+/// `erc20 → reserved1 → cow_order → safe_v1 → selector → self_attest →
 /// erc7730 → names`; we want only the ERC-7730 slot populated so the
 /// six prior slots get `[u16 = 0]` empties.
-fn append_erc7730_only_trailers(
-    buf: &mut [u8],
-    off: usize,
-    bundle: &[u8],
-) -> Option<usize> {
+fn append_erc7730_only_trailers(buf: &mut [u8], off: usize, bundle: &[u8]) -> Option<usize> {
     // 6 prior trailers × 2 bytes of zero-length prefix.
     for i in 0..6 {
         buf[off + i * 2..off + i * 2 + 2].copy_from_slice(&0u16.to_be_bytes());
@@ -551,7 +592,7 @@ fn append_both_selector_trailers(
     self_attest_selector: &[u8; 4],
     self_attest_text: &[u8],
 ) -> Option<usize> {
-    // erc20 / zk_v1 / zk_v3 / safe_v1 absent
+    // erc20 / reserved1 / cow_order / safe_v1 absent
     for i in 0..4 {
         buf[off + i * 2..off + i * 2 + 2].copy_from_slice(&0u16.to_be_bytes());
     }
@@ -624,7 +665,7 @@ fn append_names_only_trailer(
         return None;
     }
     // Seven empty u16 prefixes, secure-parser order:
-    // erc20, zk_v1, zk_v3, safe_v1, selector, self_attest, erc7730.
+    // erc20, reserved1, cow_order, safe_v1, selector, self_attest, erc7730.
     let mut o = off;
     for _ in 0..7 {
         buf[o..o + 2].copy_from_slice(&0u16.to_be_bytes());
@@ -731,6 +772,45 @@ fn build_batch_payload(
     off += 1;
 
     off
+}
+
+/// Replace the empty batch-trailer terminator emitted by
+/// [`build_batch_payload`] with one per-transaction TLV record.
+fn append_one_batch_trailer(
+    buf: &mut [u8],
+    payload_len: usize,
+    kind: u8,
+    tx_idx: u8,
+    trailer: &[u8],
+) -> Option<usize> {
+    append_batch_trailers(buf, payload_len, &[(kind, tx_idx, trailer)])
+}
+
+fn append_batch_trailers(
+    buf: &mut [u8],
+    payload_len: usize,
+    trailers: &[(u8, u8, &[u8])],
+) -> Option<usize> {
+    let count_off = payload_len.checked_sub(1)?;
+    if buf[count_off] != 0 || trailers.len() > u8::MAX as usize {
+        return None;
+    }
+    buf[count_off] = trailers.len() as u8;
+    let mut off = payload_len;
+    for &(kind, tx_idx, trailer) in trailers {
+        let len = u16::try_from(trailer.len()).ok()?;
+    let end = off.checked_add(4)?.checked_add(trailer.len())?;
+    if end > buf.len() {
+        return None;
+    }
+    buf[off] = kind;
+    buf[off + 1] = tx_idx;
+        buf[off + 2..off + 4].copy_from_slice(&len.to_be_bytes());
+    off += 4;
+    buf[off..end].copy_from_slice(trailer);
+        off = end;
+    }
+    Some(off)
 }
 
 /// Parse a `[count(8)][ic_len|ic][type1_len|t1][type2_len|t2]` bundle and
@@ -1026,7 +1106,8 @@ fn main() -> ! {
 
         // Strip the 0-length trailers `build_sign_payload` doesn't write
         // — it stops at the inner_data end. Append the four trailer
-        // sections (erc20=0, zkv1=0, zkv3=0, safe_v1=payload, names=0).
+        // sections (erc20=0, reserved_v1=0, cow_order=0,
+        // safe_v1=payload, names=0).
         len = append_safe_only_trailers(&mut PAYLOAD_BUF, len, &canonical, &raw_data);
 
         let status = nsc_api::sign_userop(&PAYLOAD_BUF[..len], &mut SIG_BUF);
@@ -1037,7 +1118,10 @@ fn main() -> ! {
             status
         );
         let (t1_present, t2_len) = parse_response(&SIG_BUF);
-        assert!(!t1_present, "scenario 5 must NOT emit Type 1 (slot already registered)");
+        assert!(
+            !t1_present,
+            "scenario 5 must NOT emit Type 1 (slot already registered)"
+        );
         hprintln!("[NS][e2e]   → safe_v1 verified, t2_len={}", t2_len);
     }
 
@@ -1091,11 +1175,8 @@ fn main() -> ! {
         );
 
         // Append the four zero-length trailers + selector bundle.
-        let new_len = append_selector_only_trailers(
-            &mut PAYLOAD_BUF,
-            len,
-            &[0x70, 0xa0, 0x82, 0x31],
-        )
+        let new_len =
+            append_selector_only_trailers(&mut PAYLOAD_BUF, len, &[0x70, 0xa0, 0x82, 0x31])
         .expect("selector bundle build failed");
         len = new_len;
 
@@ -1108,10 +1189,7 @@ fn main() -> ! {
         );
         let (t1_present, t2_len) = parse_response(&SIG_BUF);
         assert!(!t1_present, "scenario 5b must NOT emit Type 1");
-        hprintln!(
-            "[NS][e2e]   → selector bundle verified, t2_len={}",
-            t2_len
-        );
+        hprintln!("[NS][e2e]   → selector bundle verified, t2_len={}", t2_len);
     }
 
     // Scenario 5v: companion-supplied ERC-20 metadata trailer.
@@ -1161,7 +1239,10 @@ fn main() -> ! {
             status
         );
         let (t1_present, t2_len) = parse_response(&SIG_BUF);
-        assert!(t1_present, "scenario 5v registers a fresh slot ⇒ Type 1 present");
+        assert!(
+            t1_present,
+            "scenario 5v registers a fresh slot ⇒ Type 1 present"
+        );
         hprintln!("[NS][e2e]   → ERC-20 bundle verified, t2_len={}", t2_len);
     }
 
@@ -1203,7 +1284,10 @@ fn main() -> ! {
             status
         );
         let (t1_present, _t2_len) = parse_response(&SIG_BUF);
-        assert!(t1_present, "scenario 5w registers a fresh slot ⇒ Type 1 present");
+        assert!(
+            t1_present,
+            "scenario 5w registers a fresh slot ⇒ Type 1 present"
+        );
         hprintln!("[NS][e2e]   → names bundle verified");
     }
 
@@ -1301,11 +1385,8 @@ fn main() -> ! {
             0u128,
             &calldata,
         );
-        let new_len = append_selector_only_trailers(
-            &mut PAYLOAD_BUF,
-            len,
-            &[0xa9, 0x05, 0x9c, 0xbb],
-        )
+        let new_len =
+            append_selector_only_trailers(&mut PAYLOAD_BUF, len, &[0xa9, 0x05, 0x9c, 0xbb])
         .expect("selector bundle build failed");
         len = new_len;
 
@@ -1366,12 +1447,7 @@ fn main() -> ! {
             0u128,
             &calldata,
         );
-        let new_len = append_self_attest_only_trailers(
-            &mut PAYLOAD_BUF,
-            len,
-            &selector,
-            text,
-        )
+        let new_len = append_self_attest_only_trailers(&mut PAYLOAD_BUF, len, &selector, text)
         .expect("self-attest bundle build failed");
         len = new_len;
 
@@ -1422,12 +1498,7 @@ fn main() -> ! {
             0u128,
             &calldata,
         );
-        let new_len = append_self_attest_only_trailers(
-            &mut PAYLOAD_BUF,
-            len,
-            &selector,
-            bad_text,
-        )
+        let new_len = append_self_attest_only_trailers(&mut PAYLOAD_BUF, len, &selector, bad_text)
         .expect("self-attest bundle build failed");
         len = new_len;
 
@@ -1571,6 +1642,178 @@ fn main() -> ! {
         hprintln!("[NS][e2e]   → batch sign OK, t2_len={}", t2_len);
     }
 
+    // Scenario 5e-7730: the TLV-tagged batch wire must route a kind-7
+    // descriptor to the selected inner transaction, bind it to that exact
+    // chain/target/selector, render it, and sign. This is deliberately separate
+    // from 5m (single UserOp) and 5p (off-chain typed data).
+    hprintln!("[NS][e2e] Scenario 5e-7730: batch ERC-7730 trailer matches + signs");
+    #[cfg(feature = "e2e-test")]
+    unsafe {
+        let weth_sepolia: [u8; 20] = [
+            0xff, 0xf9, 0x97, 0x67, 0x82, 0xd4, 0x6c, 0xc0, 0x56, 0x30, 0xd1, 0xf6, 0xeb, 0xab,
+            0x18, 0xb2, 0x32, 0x4d, 0x6b, 0x14,
+        ];
+        const WETH_DEPOSIT_CALL: [u8; 4] = [0xd0, 0xe3, 0x0d, 0xb0];
+        let inner = [E2eBatchTx {
+            to: weth_sepolia,
+            value_wei: 10_000_000_000_000_000u128,
+            data: &WETH_DEPOSIT_CALL,
+        }];
+        let base_len = build_batch_payload(
+            &mut PAYLOAD_BUF,
+            &wallet_sender,
+            11_155_111,
+            1,
+            false,
+            81,
+            &inner,
+        );
+        let len = append_one_batch_trailer(
+            &mut PAYLOAD_BUF,
+            base_len,
+            TRAILER_KIND_ERC7730,
+            0,
+            ERC7730_TRAILER_WETH_SEPOLIA,
+        )
+        .expect("batch ERC-7730 trailer fits");
+        let status = nsc_api::sign_userop_batch(&PAYLOAD_BUF[..len], &mut SIG_BUF);
+        assert_eq!(
+            status,
+            NscStatus::Ok as u32,
+            "batch ERC-7730 descriptor must verify and sign"
+        );
+        let (t1_present, t2_len) = parse_response(&SIG_BUF);
+        assert!(!t1_present);
+        assert_eq!(t2_len, SIG_TYPE2_LEN);
+        hprintln!("[NS][e2e]   → batch ERC-7730 trailer accepted");
+    }
+
+    // Regression for RT-ERC20-01: raw bytes in an INVALID Safe trailer must
+    // not decide whether a direct ERC-7730 member may consume authenticated
+    // ERC-20 metadata. Both FlyingTulip deposits carry valid descriptor and
+    // token proofs; the same invalid Safe raw MultiSend names only asset A.
+    // The fixed dispatcher binds each metadata object to the signed tokenPath,
+    // so both deposits render and their full token-contract pages differ.
+    hprintln!("[NS][e2e] Scenario 5e-rt-erc20: invalid Safe cannot gate ERC-7730 token metadata");
+    #[cfg(feature = "e2e-test")]
+    unsafe {
+        let positions_manager: [u8; 20] = [
+            0xbe, 0x40, 0x50, 0xa7, 0x3a, 0x7f, 0xb3, 0x84, 0xc6, 0x5e, 0x88, 0x5a, 0x15, 0xc3,
+            0x34, 0x61, 0xa4, 0xb2, 0x00, 0x55,
+        ];
+        let asset_a: [u8; 20] = [
+            0x1c, 0xdd, 0x2e, 0xab, 0x61, 0x11, 0x26, 0x97, 0x62, 0x6f, 0x7b, 0x4b, 0xb0, 0xe2,
+            0x3d, 0xa4, 0xfe, 0xbf, 0x7b, 0x7c,
+        ];
+        let asset_b: [u8; 20] = [
+            0xda, 0xc1, 0x7f, 0x95, 0x8d, 0x2e, 0xe5, 0x23, 0xa2, 0x20, 0x62, 0x06, 0x99, 0x45,
+            0x97, 0xc1, 0x3d, 0x83, 0x1e, 0xc7,
+        ];
+        let deposit_a = build_flyingtulip_deposit(&asset_a, 100_000_000);
+        let deposit_b = build_flyingtulip_deposit(&asset_b, 100_000_000);
+        let inner = [
+            E2eBatchTx {
+                to: positions_manager,
+                value_wei: 0,
+                data: &deposit_a,
+            },
+            E2eBatchTx {
+                to: positions_manager,
+                value_wei: 0,
+                data: &deposit_b,
+            },
+        ];
+
+        let mut meta_a = [0u8; 1120];
+        let meta_a_len = crate::erc20_db::build_bundle(1, &asset_a, &mut meta_a)
+            .expect("asset A exists in E2E ERC-20 DB");
+        let mut meta_b = [0u8; 1120];
+        let meta_b_len = crate::erc20_db::build_bundle(1, &asset_b, &mut meta_b)
+            .expect("asset B exists in E2E ERC-20 DB");
+
+        let mut raw_multisend = [0u8; 256];
+        let raw_len = build_one_record_multisend(&mut raw_multisend, &asset_a);
+        let fake_safe = [0x55; 20];
+        let safe_canonical = build_safe_canonical(
+            1,
+            &fake_safe,
+            &MULTISEND_CALL_ONLY_ADDRESSES[0],
+            &raw_multisend[..raw_len],
+            1,
+            1,
+        );
+        let mut safe_payload = [0u8; 768];
+        let safe_len = build_safe_v1_payload(
+            &mut safe_payload,
+            &safe_canonical,
+            &raw_multisend[..raw_len],
+        );
+
+        let base_len =
+            build_batch_payload(&mut PAYLOAD_BUF, &wallet_sender, 1, 0, false, 83, &inner);
+        let len = append_batch_trailers(
+            &mut PAYLOAD_BUF,
+            base_len,
+            &[
+                (TRAILER_KIND_ERC20, 0, &meta_a[..meta_a_len]),
+                (TRAILER_KIND_SAFE_V1, 0, &safe_payload[..safe_len]),
+                (TRAILER_KIND_ERC7730, 0, ERC7730_TRAILER_FLYINGTULIP_MAINNET),
+                (TRAILER_KIND_ERC7730, 1, ERC7730_TRAILER_FLYINGTULIP_MAINNET),
+                (TRAILER_KIND_SAFE_V1, 1, &safe_payload[..safe_len]),
+                (TRAILER_KIND_ERC20, 1, &meta_b[..meta_b_len]),
+            ],
+        )
+        .expect("RT-ERC20 regression trailers fit");
+        let status = nsc_api::sign_userop_batch(&PAYLOAD_BUF[..len], &mut SIG_BUF);
+        assert_eq!(status, NscStatus::Ok as u32);
+        let (t1_present, t2_len) = parse_response(&SIG_BUF);
+        assert!(!t1_present);
+        assert_eq!(t2_len, SIG_TYPE2_LEN);
+        hprintln!("[NS][e2e]   → RT-ERC20 trusted pages complete");
+    }
+
+    // Same valid proof, wrong deployment. The tuple is firmware-known, so
+    // dropping the failed descriptor must hard-refuse rather than falling back
+    // to a generic batch page.
+    hprintln!("[NS][e2e] Scenario 5e-7730-mismatch: batch mis-bound descriptor is refused");
+    #[cfg(feature = "e2e-test")]
+    unsafe {
+        let weth_sepolia: [u8; 20] = [
+            0xff, 0xf9, 0x97, 0x67, 0x82, 0xd4, 0x6c, 0xc0, 0x56, 0x30, 0xd1, 0xf6, 0xeb, 0xab,
+            0x18, 0xb2, 0x32, 0x4d, 0x6b, 0x14,
+        ];
+        const WETH_DEPOSIT_CALL: [u8; 4] = [0xd0, 0xe3, 0x0d, 0xb0];
+        let inner = [E2eBatchTx {
+            to: weth_sepolia,
+            value_wei: 10_000_000_000_000_000u128,
+            data: &WETH_DEPOSIT_CALL,
+        }];
+        let base_len = build_batch_payload(
+            &mut PAYLOAD_BUF,
+            &wallet_sender,
+            11_155_111,
+            1,
+            false,
+            82,
+            &inner,
+        );
+        let len = append_one_batch_trailer(
+            &mut PAYLOAD_BUF,
+            base_len,
+            TRAILER_KIND_ERC7730,
+            0,
+            ERC7730_TRAILER_WETH_MAINNET,
+        )
+        .expect("batch mis-bound ERC-7730 trailer fits");
+        let status = nsc_api::sign_userop_batch(&PAYLOAD_BUF[..len], &mut SIG_BUF);
+        assert_eq!(
+            status,
+            NscStatus::InternalError as u32,
+            "known batch call with a proof for another deployment must refuse"
+        );
+        hprintln!("[NS][e2e]   → batch binding mismatch refused");
+    }
+
     // Scenario 5f: 1-tx batch — degenerate case the on-chain
     // `executeBatchWithOffchainCount` accepts. Confirms the firmware
     // path doesn't refuse `batch_count == 1`.
@@ -1610,12 +1853,10 @@ fn main() -> ! {
         for i in 0..MAX_BATCH_TXS {
             tos[i] = [0xc0 + i as u8; 20];
         }
-        let inner_buf: [E2eBatchTx<'_>; MAX_BATCH_TXS] = core::array::from_fn(|i| {
-            E2eBatchTx {
+        let inner_buf: [E2eBatchTx<'_>; MAX_BATCH_TXS] = core::array::from_fn(|i| E2eBatchTx {
                 to: tos[i],
                 value_wei: (i as u128) * 1_000_000_000_000u128,
                 data: &[],
-            }
         });
         let len = build_batch_payload(
             &mut PAYLOAD_BUF,
@@ -1633,10 +1874,7 @@ fn main() -> ! {
             "max-batch sign must succeed (got {})",
             status
         );
-        hprintln!(
-            "[NS][e2e]   → max batch (N={}) OK",
-            MAX_BATCH_TXS
-        );
+        hprintln!("[NS][e2e]   → max batch (N={}) OK", MAX_BATCH_TXS);
     }
 
     // Scenario 5h: empty batch (count=0) — refused.
@@ -1732,15 +1970,11 @@ fn main() -> ! {
     // gate rejects the correct attempt. Destructive — leaves MCU
     // Scenario 5m: ERC-7730 clear-signing trailer (Phase 3).
     //
-    // Build a value-transfer to WETH on Sepolia + attach the
-    // pre-computed ERC-7730 trailer (`deposit()` descriptor). Phase 3
-    // contract: secure-world parses the trailer, verifies it against
-    // the e2e-feature-gated `ERC7730_DESCRIPTORS_ROOT`, cross-checks
-    // the binding against `(chain_id, to_address)`, logs the match,
-    // and signs as a normal value transfer (no renderer yet — Phase
-    // 4 swaps the log for descriptor pages). Success = the sign
-    // completes with both T1 absence (slot already registered) and a
-    // valid T2.
+    // Build a WETH `deposit()` call on Sepolia + attach the pre-computed
+    // ERC-7730 trailer. The live renderer selects a format from the first
+    // four calldata bytes, so an empty-data ETH transfer is deliberately not
+    // equivalent to `deposit()` even when sent to WETH. Success proves the
+    // trailer, binding, exact selector, trusted-display render, and sign path.
     hprintln!("[NS][e2e] Scenario 5m: ERC-7730 trailer matches + signs");
     #[cfg(feature = "e2e-test")]
     unsafe {
@@ -1748,6 +1982,8 @@ fn main() -> ! {
             0xff, 0xf9, 0x97, 0x67, 0x82, 0xd4, 0x6c, 0xc0, 0x56, 0x30, 0xd1, 0xf6, 0xeb, 0xab,
             0x18, 0xb2, 0x32, 0x4d, 0x6b, 0x14,
         ];
+        // keccak256("deposit()")[..4]
+        const WETH_DEPOSIT_CALL: [u8; 4] = [0xd0, 0xe3, 0x0d, 0xb0];
         let header_len = build_sign_payload(
             &mut PAYLOAD_BUF,
             &wallet_sender,
@@ -1757,7 +1993,7 @@ fn main() -> ! {
             42,
             &weth_sepolia,
             10_000_000_000_000_000u128, // 0.01 ETH
-            &[],
+            &WETH_DEPOSIT_CALL,
         );
         let new_len = append_erc7730_only_trailers(
             &mut PAYLOAD_BUF,
@@ -1774,93 +2010,53 @@ fn main() -> ! {
         );
         let (t1_present, t2_len) = parse_response(&SIG_BUF);
         assert!(!t1_present, "scenario 5m: slot pre-registered, no Type 1");
-        hprintln!(
-            "[NS][e2e]   → ERC-7730 trailer accepted, t2_len={}",
-            t2_len
-        );
+        hprintln!("[NS][e2e]   → ERC-7730 trailer accepted, t2_len={}", t2_len);
     }
 
-    // Scenario 5p: EIP-712 typed sign through CMD_SIGN_OFFCHAIN with
-    // the kind=2 (OFFCHAIN_KIND_EIP712_TYPED) wire format (Phase 5
-    // item 4). This drives the secure-world path:
-    //
-    //   parse offchain header → branch on kind=2 → parse
-    //   (domain_separator, primary_type_hash, encoded_data, trailer)
-    //   → verify trailer bundle → cross_check_eip712(chain_id,
-    //   contract, domain_separator) → render via
-    //   `display::erc7730::render_erc7730_eip712_pages` → ERC-8213
-    //   fingerprint page → confirm → sign.
-    //
-    // Phase 5 v1 doesn't ship an EIP-712 descriptor in the seed
-    // corpus (corpus is all contract-context today). The WETH
-    // Sepolia bundle re-used here is a contract-context descriptor;
-    // the cross_check_eip712 binding gate inside the secure world
-    // will reject with `InvalidPointer` because the descriptor's
-    // primary-type-hash selector won't match `keccak256("EIP712Domain...")
-    // [..4]` of the EIP-712 message. That's the expected reject
-    // path: we're verifying the WIRE FORMAT and the dispatcher
-    // reaches kind=2 successfully — full happy-path coverage waits
-    // for the Phase 5 EIP-712 descriptor mirror (handoff item 2).
-    //
-    // The pre-computed final EIP-712 hash invariant
-    // (`keccak256(0x1901 || ds || keccak256(typehash || data))`)
-    // is asserted at compile time via `eip712_final_hash` from
-    // `pqsigner-tx-core::erc8213` so a future descriptor that DOES
-    // match can flip the assertion from "expected reject" to
-    // "expected Ok + fingerprint match" with no wire-format change.
-    hprintln!("[NS][e2e] Scenario 5p: EIP-712 typed sign (kind=2) wire format");
+    // Scenario 5p: positive EIP-712 typed sign through CMD_SIGN_OFFCHAIN.
+    // The build script selects a real EIP-712 leaf from the checked-in E2E
+    // catalogue and emits its canonical domain separator, primary type hash,
+    // and Merkle trailer as one receipt. This therefore exercises the full
+    // parser → bundle → domain/deployment binding → renderer → confirmation →
+    // C10 signature path, not merely an early rejection branch.
+    hprintln!("[NS][e2e] Scenario 5p: EIP-712 typed sign + binding differential");
     #[cfg(feature = "e2e-test")]
-    unsafe {
-        // OFFCHAIN_KIND_EIP712_TYPED = 2 (proto/src/lib.rs:849).
+    {
         const OFFCHAIN_KIND_EIP712_TYPED: u8 = 2;
-        // SIGN_OFFCHAIN header layout (proto/src/lib.rs:787-793):
-        //   account_index(1) || chain_id(8 BE) || slot_index(4 BE) ||
-        //   kind(1) || payload_len(2 BE) || flags(1) || payload(N)
-        let mut offchain_input = [0u8; 1024];
+        let fixture = ERC7730_EIP712_DELEGATION_SEPOLIA;
+        assert!(fixture.len() > 64, "typed fixture must carry a trailer");
+        let domain_separator = &fixture[..32];
+        let primary_type_hash = &fixture[32..64];
+        let trailer = &fixture[64..];
+
+        // SIGN_OFFCHAIN header: account(1), chain(8), slot(4), kind(1),
+        // payload_len(2), flags(1), payload(N). Slot 1 was registered on
+        // Sepolia in Scenario 1, so an unregistered-slot result is never an
+        // acceptable substitute for reaching the typed renderer.
+        let mut offchain_input = [0u8; 2048];
         offchain_input[0] = 0; // account 0
         offchain_input[1..9].copy_from_slice(&11_155_111u64.to_be_bytes());
         offchain_input[9..13].copy_from_slice(&1u32.to_be_bytes());
         offchain_input[13] = OFFCHAIN_KIND_EIP712_TYPED;
-        // flags = 1 (ACCOUNT_DEPLOYED) — slot 1 doesn't exist on
-        // a never-deployed wallet, so this avoids the ERC-6492 slot-0
-        // constraint while still exercising kind=2 parsing.
-        offchain_input[16] = 1;
+        offchain_input[16] = 1; // ACCOUNT_DEPLOYED
 
-        // Payload: domain_sep_present(2) || domain_sep(32) ||
-        // primary_type_hash(32) || encoded_data_len(2) ||
-        // encoded_data(N) || trailer_len(2) || trailer(M).
+        // Payload: ds_present || ds || primary_type_hash || encoded_data_len
+        // || ABI encodeData(Delegation) || trailer_len || trailer.
         let payload_start = 17;
         let mut p = payload_start;
-        offchain_input[p..p + 2].copy_from_slice(&1u16.to_be_bytes()); // ds present
+        offchain_input[p..p + 2].copy_from_slice(&1u16.to_be_bytes());
         p += 2;
-        // Domain separator — WETH-Sepolia (computed offline against
-        // EIP-712 EIP712Domain{name="Wrapped Ether",version="1",chainId=11155111,
-        // verifyingContract=0xfff9...6b14}). Hardcoded for build-time stability;
-        // the secure-side binding gate compares this byte-for-byte against
-        // `descriptor.eip712.deployments[i].domain_separator` so a stale
-        // value just trips the cross_check reject path (which is what
-        // Phase 5 v1 expects — see scenario rationale above).
-        let weth_sepolia_ds: [u8; 32] = [
-            0x11; 32 // placeholder; real DS computed by host build tool when
-                    // EIP-712 descriptor lands in corpus.
-        ];
-        offchain_input[p..p + 32].copy_from_slice(&weth_sepolia_ds);
+        offchain_input[p..p + 32].copy_from_slice(domain_separator);
         p += 32;
-        // Primary type hash placeholder.
-        let primary_type_hash: [u8; 32] = [0x22; 32];
-        offchain_input[p..p + 32].copy_from_slice(&primary_type_hash);
+        offchain_input[p..p + 32].copy_from_slice(primary_type_hash);
         p += 32;
-        // encoded_data: empty.
-        offchain_input[p..p + 2].copy_from_slice(&0u16.to_be_bytes());
+        offchain_input[p..p + 2].copy_from_slice(&96u16.to_be_bytes());
         p += 2;
-        // trailer: WETH-Sepolia ERC-7730 bundle (re-used from
-        // Scenario 5m). The secure side parses + verifies it
-        // against ERC7730_DESCRIPTORS_ROOT, then rejects at the
-        // cross_check_eip712 binding gate because (a) the WETH
-        // descriptor is contract-context, not EIP-712, and (b)
-        // even if it were EIP-712, the placeholder DS above won't
-        // match the descriptor's deployment record.
-        let trailer = ERC7730_TRAILER_WETH_SEPOLIA;
+        let delegatee = [0x42u8; 20];
+        offchain_input[p + 12..p + 32].copy_from_slice(&delegatee);
+        offchain_input[p + 56..p + 64].copy_from_slice(&7u64.to_be_bytes());
+        offchain_input[p + 88..p + 96].copy_from_slice(&2_000_000_000u64.to_be_bytes());
+        p += 96;
         offchain_input[p..p + 2].copy_from_slice(&(trailer.len() as u16).to_be_bytes());
         p += 2;
         offchain_input[p..p + trailer.len()].copy_from_slice(trailer);
@@ -1868,51 +2064,42 @@ fn main() -> ! {
         let payload_len = p - payload_start;
         offchain_input[14..16].copy_from_slice(&(payload_len as u16).to_be_bytes());
 
-        // 4016 B = deployed-path output length (8 B counter + 4008 B sig).
         let mut offchain_out = [0u8; 4016];
         let status = nsc_api::sign_offchain(&offchain_input[..p], &mut offchain_out);
-        // Expected reject path — see scenario rationale comment above.
-        // We tolerate either NscStatus::InvalidPointer (binding gate
-        // refuses) or OffchainSlotUnregistered (slot 1 not yet
-        // registered for the test wallet). Anything else means the
-        // wire-format dispatcher silently miscounted or the parser
-        // accepted malformed bytes — that's a real bug.
-        // NscStatus::InvalidPointer == 4 (proto/src/lib.rs — CryptoError is
-        // 3, InvalidPointer is 4). The binding gate refuses a kind=2 typed
-        // sign whose 7730 trailer doesn't bind, returning InvalidPointer.
-        const NSC_STATUS_INVALID_POINTER: u32 = 4;
-        const NSC_STATUS_OFFCHAIN_SLOT_UNREGISTERED: u32 = 17;
-        assert!(
-            status == NSC_STATUS_INVALID_POINTER
-                || status == NSC_STATUS_OFFCHAIN_SLOT_UNREGISTERED,
-            "scenario 5p: kind=2 wire dispatch reached the parser but \
-             returned unexpected status {} (expected InvalidPointer={} \
-             or OffchainSlotUnregistered={}); silent miscount would \
-             have returned Ok or a CryptoError",
+        assert_eq!(
             status,
-            NSC_STATUS_INVALID_POINTER,
-            NSC_STATUS_OFFCHAIN_SLOT_UNREGISTERED
+            NscStatus::Ok as u32,
+            "scenario 5p: valid typed descriptor must render and sign"
         );
-        hprintln!(
-            "[NS][e2e]   → kind=2 wire dispatch reached parser, returned status={} (expected reject)",
-            status
+        let new_count = u64::from_be_bytes(offchain_out[..8].try_into().unwrap());
+        assert_eq!(new_count, 1, "first off-chain signature must advance to 1");
+
+        // One-bit domain differential. Everything else—including a valid
+        // Merkle proof and registered slot—remains identical, so only the
+        // secure-world domain/deployment binding can explain the refusal.
+        offchain_input[payload_start + 2] ^= 0x01;
+        let bad_status = nsc_api::sign_offchain(&offchain_input[..p], &mut offchain_out);
+        assert_eq!(
+            bad_status,
+            NscStatus::InvalidPointer as u32,
+            "scenario 5p: one-bit domain mismatch must fail binding"
         );
+        hprintln!("[NS][e2e]   → typed render signed; one-bit domain mismatch refused");
     }
 
-    // Scenario 5n: ERC-7730 trailer with mismatched contract — firmware
-    // must DROP the descriptor (binding fail banner) and fall through
-    // to blind-sign. Per docs/companion/companion-erc7730-implementation-guide.md
-    // §1: "If it ships a wrong / malformed / mis-bound trailer, the
-    // firmware refuses the descriptor and falls back to blind-sign with
-    // a brief status-line banner. Clear signing is never required."
-    hprintln!("[NS][e2e] Scenario 5n: ERC-7730 binding-mismatch falls through to blind-sign");
+    // Scenario 5n: a cryptographically-valid trailer for the wrong deployment
+    // must not restore blind signing for a firmware-known call. The UserOp is
+    // WETH Sepolia deposit(), while the attached proof is WETH mainnet. Bundle
+    // verification succeeds, deployment binding fails, and the pinned
+    // known-call filter makes rendering mandatory → hard refusal.
+    hprintln!("[NS][e2e] Scenario 5n: known-call mis-bound descriptor is refused");
     #[cfg(feature = "e2e-test")]
     unsafe {
-        // Same trailer (WETH descriptor) but `to` points at a different
-        // contract → cross_check_contract fails. The userop must still
-        // sign because clear-signing is an enhancement layer, not a
-        // precondition.
-        let other: [u8; 20] = [0xDE; 20];
+        let weth_sepolia: [u8; 20] = [
+            0xff, 0xf9, 0x97, 0x67, 0x82, 0xd4, 0x6c, 0xc0, 0x56, 0x30, 0xd1, 0xf6, 0xeb, 0xab,
+            0x18, 0xb2, 0x32, 0x4d, 0x6b, 0x14,
+        ];
+        const WETH_DEPOSIT_CALL: [u8; 4] = [0xd0, 0xe3, 0x0d, 0xb0];
         let header_len = build_sign_payload(
             &mut PAYLOAD_BUF,
             &wallet_sender,
@@ -1920,26 +2107,23 @@ fn main() -> ! {
             1,
             false,
             43,
-            &other,
+            &weth_sepolia,
             10_000_000_000_000_000u128,
-            &[],
+            &WETH_DEPOSIT_CALL,
         );
         let new_len = append_erc7730_only_trailers(
             &mut PAYLOAD_BUF,
             header_len,
-            ERC7730_TRAILER_WETH_SEPOLIA,
+            ERC7730_TRAILER_WETH_MAINNET,
         )
         .expect("erc7730 trailer fits PAYLOAD_BUF");
         let status = nsc_api::sign_userop(&PAYLOAD_BUF[..new_len], &mut SIG_BUF);
         assert_eq!(
             status,
-            NscStatus::Ok as u32,
-            "scenario 5n: binding mismatch must fall through to blind-sign \
-             (got status {}); InvalidPointer would mean the firmware \
-             aborted the userop instead of dropping the descriptor",
-            status
+            NscStatus::InternalError as u32,
+            "scenario 5n: known WETH deposit with a mainnet proof must refuse"
         );
-        hprintln!("[NS][e2e]   → ERC-7730 binding mismatch dropped, blind-sign proceeded");
+        hprintln!("[NS][e2e]   → known-call binding mismatch refused");
     }
 
     // Scenario 5q: Safe-wrapped CoW presign clear-sign.
@@ -1948,8 +2132,8 @@ fn main() -> ! {
     // true)` with `uid.owner = the Safe` (GPv2 requires owner ==
     // msg.sender, and the Safe is the caller at execution). The
     // companion attaches BOTH a `safe_v1` trailer (SafeTx canonical +
-    // presign raw_data) and a `zk_v3` AddrOnly trailer (bare 204-byte
-    // GPv2Order canonical — pure-keccak path, QEMU-friendly). The
+    // presign raw_data) and a native kind-3 trailer (bare 204-byte
+    // GPv2Order canonical). The
     // secure world must: verify the safe trailer, resolve the CoW
     // binding to (presign raw_data, safe address), recompute the
     // orderDigest from the order canonical, byte-compare it against
@@ -2005,7 +2189,7 @@ fn main() -> ! {
             0u128,
             &inner_data,
         );
-        len = append_zkv3_addr_only_and_safe_trailers(
+        len = append_cow_canonical_and_safe_trailers(
             &mut PAYLOAD_BUF,
             len,
             &order,
@@ -2028,13 +2212,13 @@ fn main() -> ! {
         );
     }
 
-    // Scenario 5r: Safe-wrapped CoW presign WITHOUT the zk_v3 trailer
+    // Scenario 5r: Safe-wrapped CoW presign WITHOUT the cow_order trailer
     // must be REFUSED (downgrade-mitigation gate). Stripping the
     // trailer is exactly what a hostile companion would do to push the
     // user onto a blind-sign page for an order they never saw — the
     // gate refuses to sign instead, mirroring the direct-path
     // "v3 required" behaviour.
-    hprintln!("[NS][e2e] Scenario 5r: safe-wrapped presign without zk_v3 is refused");
+    hprintln!("[NS][e2e] Scenario 5r: safe-wrapped presign without cow_order is refused");
     unsafe {
         let safe_address: [u8; 20] = [
             0x5a, 0xfe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -2044,7 +2228,7 @@ fn main() -> ! {
 
         // Same wire as 5q but with a placeholder uid (digest content is
         // irrelevant — the gate fires before any digest work) and NO
-        // zk_v3 trailer.
+        // cow_order trailer.
         let presign_cd = build_presign_calldata(&[0xCD; 32], &safe_address, &[0x68, 0, 0, 0]);
         let canonical = build_safe_canonical(
             chain_id,
@@ -2074,7 +2258,7 @@ fn main() -> ! {
         assert_eq!(
             status,
             NscStatus::InvalidPointer as u32,
-            "scenario 5r: safe-wrapped presign without zk_v3 must refuse \
+            "scenario 5r: safe-wrapped presign without cow_order must refuse \
              with InvalidPointer (got {}); Ok would mean the downgrade \
              gate is not firing for the Safe-wrapped path",
             status
@@ -2088,7 +2272,7 @@ fn main() -> ! {
     // vault relayer) on sellToken, setPreSignature(uid, true)])`. The
     // secure world must: open the operation gate for the allowlisted
     // target, strictly decode the packed records (op==0, exact
-    // framing), bind the zk_v3 order to the presign RECORD's bytes
+    // framing), bind the cow_order order to the presign RECORD's bytes
     // with uid.owner == the Safe, pass the page-budget gate, and
     // render divider + approve + order pages. A successful sign proves
     // the whole multiSend pipeline.
@@ -2145,7 +2329,7 @@ fn main() -> ! {
             0u128,
             &inner_data,
         );
-        len = append_zkv3_addr_only_and_safe_trailers(
+        len = append_cow_canonical_and_safe_trailers(
             &mut PAYLOAD_BUF,
             len,
             &order,
@@ -2193,8 +2377,11 @@ fn main() -> ! {
 
         let mut ms_buf = [0u8; 512];
         let ms_len = build_cow_multisend_calldata(
-            &mut ms_buf, 1, // approve record op = DELEGATECALL → refuse
-            &usdc, &approve_cd, &presign_cd,
+            &mut ms_buf,
+            1, // approve record op = DELEGATECALL → refuse
+            &usdc,
+            &approve_cd,
+            &presign_cd,
         );
 
         let canonical = build_safe_canonical(
@@ -2219,7 +2406,7 @@ fn main() -> ! {
             0u128,
             &inner_data,
         );
-        len = append_zkv3_addr_only_and_safe_trailers(
+        len = append_cow_canonical_and_safe_trailers(
             &mut PAYLOAD_BUF,
             len,
             &[0u8; 204], // order content irrelevant — gate fires first
@@ -2239,14 +2426,14 @@ fn main() -> ! {
         hprintln!("[NS][e2e]   → refused as expected (msend rec op!=0)");
     }
 
-    // Scenario 5u: multiSend presign WITHOUT the zk_v3 trailer must be
+    // Scenario 5u: multiSend presign WITHOUT the cow_order trailer must be
     // REFUSED — the downgrade-mitigation gate extends through the
     // multiSend wrapper. Stripping the trailer is what a hostile
     // companion would do to push the user onto blind pages for an
     // order they never saw; `resolve_cow_binding` claims the unique
     // presign record (via_safe = true) and the missing v3 refuses the
     // sign, mirroring scenario 5r's single-call behaviour.
-    hprintln!("[NS][e2e] Scenario 5u: multiSend presign without zk_v3 is refused");
+    hprintln!("[NS][e2e] Scenario 5u: multiSend presign without cow_order is refused");
     unsafe {
         let safe_address: [u8; 20] = [
             0x5a, 0xfe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -2262,8 +2449,7 @@ fn main() -> ! {
         let approve_cd = build_erc20_approve_calldata(&GPV2_VAULT_RELAYER_ADDRESS, 1);
 
         let mut ms_buf = [0u8; 512];
-        let ms_len =
-            build_cow_multisend_calldata(&mut ms_buf, 0, &usdc, &approve_cd, &presign_cd);
+        let ms_len = build_cow_multisend_calldata(&mut ms_buf, 0, &usdc, &approve_cd, &presign_cd);
 
         let canonical = build_safe_canonical(
             chain_id,
@@ -2293,7 +2479,7 @@ fn main() -> ! {
         assert_eq!(
             status,
             NscStatus::InvalidPointer as u32,
-            "scenario 5u: multiSend presign without zk_v3 must refuse \
+            "scenario 5u: multiSend presign without cow_order must refuse \
              with InvalidPointer (got {}); Ok would mean the downgrade \
              gate does not extend through the multiSend wrapper",
             status
@@ -2307,7 +2493,8 @@ fn main() -> ! {
     hprintln!("[NS][e2e] Scenario 6: brute-force protection (10 wrong PINs + 1 correct)");
     let lockout_status = nsc_api::test_pin_lockout();
     assert_eq!(
-        lockout_status, NscStatus::Ok as u32,
+        lockout_status,
+        NscStatus::Ok as u32,
         "scenario 6 must report brute-force blocked (got status {})",
         lockout_status
     );

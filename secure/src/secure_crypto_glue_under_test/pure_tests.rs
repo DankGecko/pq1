@@ -616,7 +616,7 @@ fn positive_selectors_shim_exposes_compat_alias_bundle_module() {
 //  PART F — `offchain_state.rs` (per-slot counter facade).
 //
 //  Runtime-exercise the host-side SRAM-mock backend that's selected
-//  whenever `stm32u585` / `pka-accel` aren't enabled. Each test picks
+//  whenever `stm32u585` isn't enabled. Each test picks
 //  a unique slot-key so it doesn't collide with siblings in the same
 //  `static mut TABLE`.
 // =====================================================================

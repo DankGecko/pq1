@@ -206,8 +206,7 @@ fn safe_owner_binding_passes_and_sender_binding_fails() {
 
 #[test]
 fn safe_wrapped_host_pipeline_composes() {
-    // Everything the firmware chains for a Safe-wrapped presign except
-    // the Groth16 step (cfg(not(test))-gated): build a SafeTx whose
+    // Everything the firmware chains for a Safe-wrapped presign: build a SafeTx whose
     // inner call is the presign with uid.owner = the Safe, verify the
     // safe_v1 trailer against the approveHash calldata, resolve the
     // CoW binding off the verified Safe, and run the v3 cross-check
@@ -266,7 +265,7 @@ fn safe_wrapped_host_pipeline_composes() {
 
 #[test]
 fn multisend_wrapped_host_pipeline_composes() {
-    // The Safe-UI shape end-to-end minus Groth16: the SafeTx
+    // The native Safe-UI shape end-to-end: the SafeTx
     // DELEGATECALLs MultiSendCallOnly with `multiSend([approve(vault
     // relayer) on sellToken, setPreSignature])`; the safe_v1 trailer
     // verifies (operation gate opens for the allowlisted target), the

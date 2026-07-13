@@ -323,7 +323,7 @@ pub enum MsRecordKind {
     UnknownSafeSelf,
     /// Claims `setPreSignature` on GPv2Settlement. Renders as the full
     /// CoW order (banner + shared body) for the unique bound record;
-    /// the gates guarantee a verified zk_v3 exists by render time.
+    /// the gates guarantee a verified cow_order exists by render time.
     CowPresignClaim,
     /// Anything else — loud per-record blind-sign (selector + length +
     /// data hash), same trust level as today's single blind inner.
@@ -364,7 +364,7 @@ pub fn classify_record_kind(
 
 /// Content pages for one classified record (excluding its divider page
 /// and any spliced value page). `cow_body_pages` = 1 banner + the
-/// shared order body (6 proof-mode / 8 AddrOnly).
+/// shared native eight-page order body.
 #[must_use]
 pub fn record_content_pages(kind: &MsRecordKind, cow_body_pages: usize) -> usize {
     match kind {

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """verify-ledger-consistency — anti-vacuity gate defending failure-class V5
-("undischarged-but-advertised") from docs/fv-adversarial-review-playbook.md.
+("undischarged-but-advertised") from docs/verification/fv-adversarial-review-playbook.md.
 
 The EF swarm's recurring proof finding (P1 / I-5) was *the ledger said one
 thing and the kernel said another*: `theft_free_bytecode` carried a raw `hInv`

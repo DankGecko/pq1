@@ -235,7 +235,7 @@ reimplementation-and-validation** of the WOTS+C and hypertree ADRS layer
 subtree Merkle ordering), each cross-checked against Rust/Yul intermediates.
 That is a multi-day effort with compounding-bug risk, not a localized fix —
 exactly the work the verified-compilation path
-(`PATH_TO_VERIFIED_BYTECODE.md`, Verity) or an interpreted-hash symbolic
+(`A3_1_CLOSURE_PATH.md`, Verity) or an interpreted-hash symbolic
 discharge (Kontrol/KEVM) is meant to absorb.
 
 ## Closure criteria (when this doc can be deleted)

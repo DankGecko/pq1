@@ -1,5 +1,10 @@
 # Firmware Security Audit — Secure-World Signing & Trusted-Display Path
 
+> **Historical snapshot.** This report describes the 2026-06-09 tree. Its
+> Groth16/BLS12-381 paths were removed on 2026-06-30; they are not current
+> implementation guidance. CoW and supported Aave operations now use native
+> on-device decoders. See `docs/archive/zk-clear-sign-retirement.md`.
+
 **Date:** 2026-06-09
 **Auditor:** Claude (Fable 5), max-effort pass
 **Commit context:** `master` @ `5fb4c2b7` (Phase D LCD branch)

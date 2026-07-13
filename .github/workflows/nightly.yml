@@ -60,7 +60,7 @@ jobs:
       - name: make verify-kani-mutation (anti-vacuity — break a decoder, expect a harness to redden)
         # Kani-side mirror of the Lean verify-proof-mutation gate: each mutation
         # recompiles a crate + runs one harness (~1-4 min), all reverted. See
-        # scripts/kani_mutations.json + docs/fv-adversarial-review-playbook.md.
+        # scripts/kani_mutations.json + docs/verification/fv-adversarial-review-playbook.md.
         run: make verify-kani-mutation
 
   verify-repro:
@@ -174,7 +174,7 @@ jobs:
         run: |
           cargo check --locked -p sphincs-tz-secure --target thumbv8m.main-none-eabi \
             --no-default-features \
-            --features dual-se,optiga-hw-counter,saes-dhuk,ui-lcd,stm32u585,usb,legacy-fw-rollback-unsafe
+            --features dual-se,optiga-hw-counter,saes-dhuk,ui-lcd,stm32u585,usb,legacy-fw-rollback-unsafe,erc7730-dev-unattested
       - name: cargo check — non-secure world (USB)
         run: |
           cargo check --locked -p sphincs-tz-nonsecure --target thumbv8m.main-none-eabi \
@@ -200,7 +200,7 @@ jobs:
     runs-on: ubuntu-latest
     # Too slow for per-PR (default tier = 8 mutations, each a full
     # `lake build SphincsCVerify`); the fast sibling verify-ledger-consistency
-    # runs per-PR in lean-fv.yml. See docs/fv-adversarial-review-playbook.md §B.
+    # runs per-PR in lean-fv.yml. See docs/verification/fv-adversarial-review-playbook.md §B.
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4

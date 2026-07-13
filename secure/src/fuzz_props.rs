@@ -166,9 +166,6 @@ proptest! {
             let _ = crate::erc20::bundle::verify_erc20_bundle(tail);
             let _ = crate::names::verify_name_bundle(tail);
             let _ = crate::selectors::bundle::verify_selector_bundle(tail);
-            // ZK VK bundle verifier is gated behind the `zk` module
-            // (BLS12-381 pairing crate is heavy + ARM-only); see the
-            // "Coverage NOT exercised here" note at the bottom.
         }
     }
 
@@ -209,7 +206,7 @@ proptest! {
     //
     // CoW Protocol GPv2 order: 204 bytes of canonical
     // `(sellToken, buyToken, sellAmount, buyAmount, ...)`. Fixed
-    // length, parsed once per ZK clear-sign v3, must never panic
+    // length, parsed once per native CoW v3 trailer, must never panic
     // on fuzz input.
     // ─────────────────────────────────────────────────────────────
     #[test]
@@ -314,16 +311,14 @@ proptest! {
 // =============================================================================
 //  Coverage NOT exercised here
 //
-//  These parsers also consume bytes that originate outside the secure
-//  world but are gated out of the host test build (their owning modules
-//  pull in hardware-only crates):
+//  This parser also consumes bytes that originate outside the secure
+//  world but is gated out of the host test build because its owning module
+//  pulls in hardware-only crates:
 //
-//      * `zk::vk_bundle::verify_vk_bundle`   — ZK clear-sign VK verifier
 //      * `fw_update::check_chunk`            — FW_CHUNK bounds checker
 //
 //  When the gating is loosened (or these parsers are extracted into a
 //  pure-function submodule that compiles on host), add the proptest
 //  blocks here. Until then, hardware integration tests in
-//  `make pin-gate-hw-counter-e2e` / `make test-update-hw` exercise
-//  them on real silicon.
+//  `make test-update-hw` exercises it on real silicon.
 // =============================================================================

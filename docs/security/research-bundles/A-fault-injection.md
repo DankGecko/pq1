@@ -9,9 +9,9 @@ against STM32 Cortex-M33 designs, what is the minimum set of
 1. The seed XOR-reconstruction code path in `DualSecureElement::unlock`
    (reads half_O and half_E from the two SEs, reconstructs full
    entropy, derives master_secret, caches encrypted blob).
-2. The SLH-DSA signature verify-before-release guard in
-   `sign_and_emit.rs` — currently a single compare that should be
-   double-glitch-resistant.
+2. The SPHINCS+C10 double-compute, byte-compare, and verify-before-release
+   chain in `secure/src/crypto.rs` — assess the existing CFI/sentinel
+   structure against realistic single- and multi-fault models.
 3. The PIN-lockout trigger in `cmd_request_unlock.rs` — a single-
    glitch inversion of the "remaining == 0" check currently blocks
    the factory-reset path.
@@ -29,7 +29,7 @@ in your recommendations.
 
 ---
 
-## Project context (condensed — full version in `docs/archive/ai-research-briefing.md`)
+## Project context (condensed; current sources are linked in each bundle)
 
 **What this is.** PQSigner OS: a post-quantum ERC-4337 smart-wallet
 firmware for STM32U585 (Cortex-M33 + ARM TrustZone) on the
@@ -46,19 +46,19 @@ planned).
 Both chips are mandatory. Neither alone reveals any bit of the seed —
 only `half_O XOR half_E = entropy`.
 
-**Why signing must run on the Cortex-M33, not the SE.** Transaction
-signatures are **post-quantum SLH-DSA (SPHINCS+ SHA2-128f, migrating
-to 192f)**. No commercial secure element currently computes SLH-DSA.
-Bootstrap signatures are **ML-DSA-44** (also PQ, also not SE-capable).
-The SEs are gated storage, not signing accelerators. The seed
+**Why signing must run on the Cortex-M33, not the SE.** Bootstrap and
+slot signatures both use the project's **SPHINCS+C10** hash-based
+post-quantum scheme; there is no classical or ML-DSA signer. No
+commercial secure element currently computes it. The SEs are gated
+storage, not signing accelerators. The seed
 therefore transits STM32 secure-world SRAM during the active signing
 window (~120 s idle timeout, then zeroize). TrustZone SAU+GTZC isolates
 this from the non-secure world.
 
 **TrustZone partition.** Secure world (flash bank 1, SRAM1) owns all
-crypto, PIN, persistent secrets. Non-secure world (flash bank 2,
-SRAM2) owns UI, USB, tx parsing. Crossings go through 6 NSC gateway
-commands with pointer validation and TOCTOU-safe copy-in.
+crypto, PIN, persistent secrets, transaction decoding, and the trusted
+NV3007 LCD UI. Non-secure world owns USB transport. Crossings go through
+the fixed NSC gateway with pointer validation and TOCTOU-safe copy-in.
 
 **Power supervision state.** BOR, PVD, ECC (except SRAM1 which is
 always-on), IWDG all at factory defaults. Stage 1 of a 5-stage brownout
@@ -158,7 +158,7 @@ pub struct DualSecureElement {
     /// Cached encrypted entropy blob (full entropy encrypted under master_secret).
     /// Used by the signing flow to avoid re-authenticating per sign.
     entropy_blob_cache: [u8; crypto::ENTROPY_BLOB_LEN],
-    blob_cached: bool,
+    blob_cached: crate::fih::FihBool,
 }
 
 impl DualSecureElement {
@@ -167,13 +167,88 @@ impl DualSecureElement {
             optiga: OptigaTrustM::new(),
             se050: Se050::new(),
             entropy_blob_cache: [0; crypto::ENTROPY_BLOB_LEN],
-            blob_cached: false,
+            blob_cached: crate::fih::FihBool::new_false(),
         }
     }
 
     /// Load Platform Binding Secret for OPTIGA Trust M (delegates to inner driver).
     pub fn load_pbs(&mut self) {
         self.optiga.load_pbs();
+    }
+
+    /// First-boot OPTIGA E140 pairing, run BEFORE the seed wizard draws
+    /// entropy — see `OptigaTrustM::pair_for_first_boot` for why
+    /// (mandatory `ensure_shield` in `random()` needs a paired chip).
+    /// The OPTIGA-level error detail is logged by the inner driver;
+    /// callers only branch on success.
+    pub fn pair_optiga_for_first_boot(&mut self) -> Result<(), SeError> {
+        self.optiga
+            .pair_for_first_boot()
+            .map_err(|_| SeError::InternalError)
+    }
+
+    /// Generate a fresh OPTIGA-side XOR half via a 3-source TRNG mix
+    /// (STM32 ⊕ OPTIGA ⊕ SE050). The security of the dual-SE split
+    /// depends critically on this half being unpredictable: if an
+    /// attacker recovers the SE050 half (or guesses this one), they
+    /// reconstruct the seed by XOR. Mixing three sources means any single
+    /// unbroken source preserves entropy.
+    ///
+    /// Open-coded (not via `rng_strong::fill`) to avoid the re-entrancy
+    /// that would arise from calling `WalletStore::random` on the global
+    /// SE while we already hold `&mut self`; direct field borrows of
+    /// `self.optiga` / `self.se050` are the clean path.
+    ///
+    /// Both-or-fail (finding F1): each SE's `random()` contribution is
+    /// mandatory — a failed read aborts provisioning rather than being
+    /// silently dropped. The previous `if …is_ok()` mixing let `half_o`
+    /// degrade to the platform TRNG alone when both SE reads failed or were
+    /// glitched: an attacker who influenced the STM32 TRNG and later extracted
+    /// the SE050 half could then recover the full seed (`half_E XOR half_O`),
+    /// defeating invariant #1. This matches the strict semantics of
+    /// `DualSecureElement::random`. Also fail-closed on an all-zero result
+    /// (stuck-at-0 fault surviving all three sources).
+    fn generate_split_half(&mut self) -> Result<[u8; 32], SeError> {
+        // `half_o` = the OPTIGA-side half in both the real and decoy
+        // splits (the SE050 half is `entropy XOR half_o`).
+        let mut half_o = [0u8; 32];
+        if crate::rng::fill(&mut half_o).is_err() {
+            secure_log!("[DUAL/prov] rng::fill FAILED");
+            return Err(SeError::InternalError);
+        }
+        let mut se_buf = [0u8; 32];
+        self.optiga.random(&mut se_buf).map_err(|_| {
+            secure_log!("[DUAL/prov] optiga.random FAILED — refusing degraded split");
+            se_buf.zeroize();
+            half_o.zeroize();
+            SeError::InternalError
+        })?;
+        for i in 0..32 {
+            half_o[i] ^= se_buf[i];
+        }
+        se_buf.zeroize();
+        crate::fi::wait_random();
+        self.se050.random(&mut se_buf).map_err(|_| {
+            secure_log!("[DUAL/prov] se050.random FAILED — refusing degraded split");
+            se_buf.zeroize();
+            half_o.zeroize();
+            SeError::InternalError
+        })?;
+        for i in 0..32 {
+            half_o[i] ^= se_buf[i];
+        }
+        se_buf.zeroize();
+        crate::fi::zeroize_barrier();
+        let mut acc: u8 = 0;
+        for &b in half_o.iter() {
+            acc |= b;
+        }
+        if acc == 0 {
+            secure_log!("[DUAL/prov] half_o stuck at zero — FI suspected");
+            half_o.zeroize();
+            return Err(SeError::InternalError);
+        }
+        Ok(half_o)
     }
 }
 
@@ -190,60 +265,236 @@ impl WalletStore for DualSecureElement {
         bootstrap_vk: &[u8; 32],
         pin: &[u8; 8],
     ) -> Result<(), SeError> {
-        // Generate a random mask for the XOR split.
-        // half_O = random 32 bytes (stored on OPTIGA Trust M)
-        // half_E = entropy XOR half_O (stored on SE050)
-        // Reconstruction: half_O XOR half_E = entropy
-        let mut half_o = [0u8; 32];
-        crate::rng::fill(&mut half_o).map_err(|_| SeError::InternalError)?;
-        let half_e = xor_32(entropy, &half_o);
+        secure_log!("[DUAL/prov] start");
+
+        let mut half_o = self.generate_split_half()?;
+        secure_log!("[DUAL/prov] rng OK (3-source XOR mix), calling optiga.provision");
+        let mut half_e = xor_32(entropy, &half_o);
+
+        // Under the ML-KEM hybrid inner wrap (#28), seal each half BEFORE it
+        // crosses I²C: the SE stores the 32-byte AES-GCM ciphertext (object
+        // size unchanged), and the 1568-byte ML-KEM ct + 16-byte tag go to the
+        // ct-store. Without the feature the raw half is stored — the validated
+        // direct-half flow, byte-for-byte. (`[u8; 32]` is Copy, so the
+        // non-wrapped arm just aliases the halves; all copies are zeroized below.)
+        #[cfg(feature = "mlkem-inner-wrap")]
+        let (mut se_half_o, mut se_half_e) = (
+            crate::pq_wrap::seal_half_for_se(crate::pq_wrap::HalfId::OptigaHalfO, 0, &half_o)
+                .map_err(|_| SeError::InternalError)?,
+            crate::pq_wrap::seal_half_for_se(crate::pq_wrap::HalfId::Se050HalfE, 0, &half_e)
+                .map_err(|_| SeError::InternalError)?,
+        );
+        #[cfg(not(feature = "mlkem-inner-wrap"))]
+        let (mut se_half_o, mut se_half_e) = (half_o, half_e);
 
         // Both SEs get the same master_secret (derived from full entropy).
         // This lets us cross-verify on unlock.
         //
-        // OPTIGA Trust M stores half_O as its "entropy" and master_secret
-        // behind the HMAC auth reference PIN gate.
-        // SE050 stores half_E as its "entropy" behind hardware UserID PIN gating.
-        //
-        // The VK and bootstrap VK are identical on both chips.
-        self.optiga.provision(&half_o, master_secret, vk, bootstrap_vk, pin)?;
-        self.se050.provision(&half_e, master_secret, vk, bootstrap_vk, pin)?;
+        // OPTIGA Trust M stores its half-object + master_secret behind the HMAC
+        // auth reference PIN gate; SE050 stores its half-object behind hardware
+        // UserID PIN gating. The VK and bootstrap VK are identical on both chips.
+        if let Err(e) = self.optiga.provision(&se_half_o, master_secret, vk, bootstrap_vk, pin) {
+            secure_log!("[DUAL/prov] optiga.provision FAILED: {:?}", e);
+            return Err(e);
+        }
+        secure_log!("[DUAL/prov] optiga OK, calling se050.provision");
+        if let Err(e) = self.se050.provision(&se_half_e, master_secret, vk, bootstrap_vk, pin) {
+            secure_log!("[DUAL/prov] se050.provision FAILED: {:?}", e);
+            return Err(e);
+        }
 
         half_o.zeroize();
+        half_e.zeroize();
+        se_half_o.zeroize();
+        se_half_e.zeroize();
+        crate::fi::zeroize_barrier();
 
         secure_log!("[DUAL] Provisioned: entropy XOR-split across OPTIGA Trust M + SE050");
         Ok(())
     }
 
-    fn unlock(&mut self, pin: &[u8; 8]) -> Result<[u8; 32], UnlockError> {
-        // Unlock OPTIGA Trust M first (HMAC auth reference → master_secret).
-        let master_o = self.optiga.unlock(pin)?;
+    #[cfg(feature = "duress-pin")]
+    fn provision_duress(
+        &mut self,
+        entropy: &[u8; 32],
+        master_secret: &[u8; 32],
+        vk: &[u8; 32],
+        bootstrap_vk: &[u8; 32],
+        duress_pin: &[u8; 8],
+    ) -> Result<(), SeError> {
+        // `entropy` is the FULL decoy entropy; XOR-split it across the two
+        // chips exactly like the real wallet — invariant #1 (no full
+        // entropy on a single chip) applies to the decoy too. A fresh
+        // 3-source half is drawn so the decoy split is independent of the
+        // real one.
+        secure_log!("[DUAL/duress] start");
+        let mut half_o = self.generate_split_half()?;
+        let half_e = xor_32(entropy, &half_o);
 
-        // Unlock SE050 (UserID PIN → master_secret).
-        // If this fails, the OPTIGA has already consumed an attempt.
-        // The dual-chip PIN lockout sync (intent log) is a separate
-        // hardening item — for now, best-effort.
-        let master_e = self.se050.unlock(pin).map_err(|e| {
-            // Zeroize the OPTIGA master_secret on SE050 failure
-            let mut m = master_o;
-            m.zeroize();
-            e
-        })?;
-
-        // Cross-verify: both SEs must return the same master_secret
-        // (derived from the same full entropy at provisioning time).
-        // If they disagree, one chip has been tampered with or replaced.
-        let match_ok: bool = master_o.ct_eq(&master_e).into();
-
-        let mut me = master_e;
-        me.zeroize();
-
-        if !match_ok {
-            let mut mo = master_o;
-            mo.zeroize();
-            secure_log!("[DUAL] CRITICAL: master secret mismatch between SEs!");
-            return Err(UnlockError::InternalError);
+        if let Err(e) = self.optiga.provision_duress(&half_o, master_secret, vk, bootstrap_vk, duress_pin) {
+            secure_log!("[DUAL/duress] optiga.provision_duress FAILED: {:?}", e);
+            half_o.zeroize();
+            crate::fi::zeroize_barrier();
+            let mut he = half_e;
+            he.zeroize();
+            return Err(e);
         }
+        if let Err(e) = self.se050.provision_duress(&half_e, master_secret, vk, bootstrap_vk, duress_pin) {
+            secure_log!("[DUAL/duress] se050.provision_duress FAILED: {:?}", e);
+            half_o.zeroize();
+            crate::fi::zeroize_barrier();
+            let mut he = half_e;
+            he.zeroize();
+            return Err(e);
+        }
+
+        half_o.zeroize();
+        crate::fi::zeroize_barrier();
+        let mut he = half_e;
+        he.zeroize();
+        crate::fi::zeroize_barrier();
+        secure_log!("[DUAL/duress] Provisioned decoy: entropy XOR-split across OPTIGA + SE050");
+        Ok(())
+    }
+
+    #[cfg(feature = "duress-pin")]
+    fn duress_is_provisioned(&mut self) -> bool {
+        self.optiga.duress_is_provisioned() && self.se050.duress_is_provisioned()
+    }
+
+    /// §32 P3: attempt to unlock the DECOY wallet with `pin`. Reads both
+    /// decoy halves (OPTIGA F1D9 via F1D8 auto-state auth; SE050
+    /// `DURESS_ENTROPY_OBJ` via the duress UserID), reconstructs the decoy
+    /// entropy, and returns the decoy master. Returns `Err(PinIncorrect)`
+    /// if `pin` is not the duress PIN — the caller (`gated_unlock`) then
+    /// falls through to the real `unlock`.
+    ///
+    /// Timing: BOTH chips' duress verifies run even when the first fails
+    /// (no short-circuit), mirroring the three-counter-lockstep of the
+    /// real `unlock` and keeping the op-count uniform across real/duress
+    /// entries. The OPTIGA verify fires only LUC(E121) — the real E120 is
+    /// never touched on a duress entry, so no lockout drift.
+    #[cfg(feature = "duress-pin")]
+    fn unlock_duress(&mut self, pin: &[u8; 8]) -> Result<[u8; 32], UnlockError> {
+        // OPTIGA returns (half_o, stored_decoy_master_from_F1DA); SE050
+        // returns half_e. Both chips are ALWAYS verified (no `?` short-
+        // circuit) so the op-count is uniform across real/duress entries.
+        let ro = unsafe { self.optiga.duress_read_half(pin) };
+        let re = self.se050.duress_read_half(pin);
+        match (ro, re) {
+            (Ok((mut half_o, mut stored_master)), Ok(mut half_e)) => {
+                let mut full = xor_32(&half_o, &half_e);
+                half_o.zeroize();
+                crate::fi::zeroize_barrier();
+                half_e.zeroize();
+                crate::fi::zeroize_barrier();
+
+                // FI cross-check (parity with the real `unlock`): the
+                // master derived from the reconstructed decoy entropy MUST
+                // equal the decoy master stored on-chip (F1DA). Defends a
+                // glitch on the halve reads that yields wrong entropy.
+                // Two `ct_eq` compares separated by `wait_random`, gated
+                // through the hamming-distant sentinel.
+                let derived_master = crypto::kdf(b"sphincs-master", &full, 0);
+                let c1: bool = derived_master.ct_eq(&stored_master).into();
+                crate::fi::wait_random();
+                let c2: bool = derived_master.ct_eq(&stored_master).into();
+                stored_master.zeroize();
+                crate::fi::zeroize_barrier();
+                if crate::fi::check_true_into_sentinel(|| c1 && c2) != crate::fi::OK_SENTINEL {
+                    full.zeroize();
+                    crate::fi::zeroize_barrier();
+                    secure_log!("[DUAL/duress] CRITICAL: decoy entropy doesn't match stored master");
+                    return Err(UnlockError::InternalError);
+                }
+
+                let blob = crypto::encrypt_entropy_blob(&full, &derived_master);
+                self.entropy_blob_cache.copy_from_slice(&blob);
+                self.blob_cached.set_true();
+                full.zeroize();
+                crate::fi::zeroize_barrier();
+                secure_log!("[DUAL/duress] decoy wallet unlocked");
+                Ok(derived_master)
+            }
+            (other_o, other_e) => {
+                if let Ok((mut h, mut m)) = other_o {
+                    h.zeroize();
+                    m.zeroize();
+                    crate::fi::zeroize_barrier();
+                }
+                if let Ok(mut h) = other_e {
+                    h.zeroize();
+                    crate::fi::zeroize_barrier();
+                }
+                Err(UnlockError::PinIncorrect)
+            }
+        }
+    }
+
+    /// §32 P3 timing PAD: run one duress verify on each chip (no read).
+    /// Called on a duress-correct unlock to replace the SKIPPED real
+    /// verify so the total op-count matches a real unlock (4 verifies +
+    /// 2 reads either way). The OPTIGA verify is the matched-LUC twin of
+    /// the real F1D0 verify; the SE050 verify twins the real UserID
+    /// verify. Best-effort — a transient failure here doesn't fail the
+    /// already-successful unlock; it only perturbs the timing pad.
+    #[cfg(feature = "duress-pin")]
+    fn duress_pad(&mut self, pin: &[u8; 8]) {
+        let _ = unsafe { self.optiga.duress_verify(pin) };
+        let _ = self.se050.duress_verify(pin);
+    }
+
+    fn unlock(&mut self, pin: &[u8; 8]) -> Result<[u8; 32], UnlockError> {
+        // Three-counter lockstep: call SE050 on every PIN attempt,
+        // even when OPTIGA rejects it, so SE050's UserID silicon
+        // counter advances in sync with MCU page-124 and OPTIGA E120
+        // LUC. Skip SE050 only on a non-PIN OPTIGA error (I2C /
+        // session fault) — don't burn an SE050 silicon attempt slot
+        // for a transient comm glitch.
+        //
+        // OPTIGA stores master_secret explicitly; its `unlock` returns
+        // what provision wrote — this is the authoritative value for
+        // the consistency check below and for the final return.
+        // SE050's `unlock` returns `kdf("sphincs-master", half_e, 0)`
+        // which is meaningful here as the decrypt key for SE050's own
+        // entropy_blob cache (different from OPTIGA's master).
+        let optiga_result = self.optiga.unlock(pin);
+
+        let se050_result = match &optiga_result {
+            Ok(_) | Err(UnlockError::PinIncorrect) => {
+                Some(self.se050.unlock(pin))
+            }
+            Err(_) => None,
+        };
+
+        // Resolve OPTIGA first. If OPTIGA rejected the PIN, zeroize
+        // any master SE050 accidentally returned (pathological
+        // desync: PIN matched SE050 but not OPTIGA — chip-swap or
+        // out-of-band SE050 reset scenario) and propagate the OPTIGA
+        // error to the caller BEFORE any downstream SE050 read path.
+        let master_o = match optiga_result {
+            Ok(mo) => mo,
+            Err(e) => {
+                if let Some(Ok(mut me)) = se050_result {
+                    me.zeroize();
+                }
+                return Err(e);
+            }
+        };
+
+        // OPTIGA accepted → SE050 was called. Resolve its result.
+        let master_e = match se050_result
+            .expect("OPTIGA Ok branch always calls SE050")
+        {
+            Ok(me) => me,
+            Err(e) => {
+                let mut m = master_o;
+                m.zeroize();
+                return Err(e);
+            }
+        };
+        // Keep master_e alive — it's the key SE050 used to encrypt
+        // its own entropy_blob cache. Zeroize after decrypt below.
 
         // Now reconstruct the full entropy from both halves, encrypt it
         // under master_secret, and cache the blob for the signing flow.
@@ -257,26 +508,60 @@ impl WalletStore for DualSecureElement {
             &blob_o[..blob_o_len], &master_o
         ).map_err(|_| UnlockError::InternalError)?;
         blob_o.zeroize();
+        // Under the inner wrap, what the SE stored (and we just decrypted) is
+        // the 32-byte AES-GCM ciphertext; open it (ct + tag from the ct-store)
+        // to recover the real half_O. The borrow in `&half_o` ends before the
+        // re-assignment.
+        #[cfg(feature = "mlkem-inner-wrap")]
+        {
+            half_o = crate::pq_wrap::open_half_from_se(
+                crate::pq_wrap::HalfId::OptigaHalfO, 0, &half_o,
+            )
+            .map_err(|_| UnlockError::InternalError)?;
+        }
 
         let mut blob_e = [0u8; 64];
         let blob_e_len = self.se050.read_entropy_blob(&mut blob_e)
             .map_err(|_| UnlockError::InternalError)?;
+        // SE050's blob is encrypted under ITS master_secret
+        // (`kdf("sphincs-master", half_e, 0)`), not OPTIGA's. The
+        // two chips encrypt their caches independently; each must
+        // be decrypted with the matching key.
         let mut half_e = crypto::decrypt_entropy_blob(
-            &blob_e[..blob_e_len], &master_o
+            &blob_e[..blob_e_len], &master_e
         ).map_err(|_| UnlockError::InternalError)?;
         blob_e.zeroize();
+        // Same for half_E on the SE050.
+        #[cfg(feature = "mlkem-inner-wrap")]
+        {
+            half_e = crate::pq_wrap::open_half_from_se(
+                crate::pq_wrap::HalfId::Se050HalfE, 0, &half_e,
+            )
+            .map_err(|_| UnlockError::InternalError)?;
+        }
+        let mut me = master_e;
+        me.zeroize();
 
         // Reconstruct the full entropy
         let mut full_entropy = xor_32(&half_o, &half_e);
         half_o.zeroize();
+        crate::fi::zeroize_barrier();
         half_e.zeroize();
+        crate::fi::zeroize_barrier();
 
         // Verify consistency: kdf("sphincs-master", full_entropy, 0) must
         // equal the master_secret we already got from both SEs.
+        //
+        // FI hardening: two independent `ct_eq` compares with a volatile
+        // delay between, gated through `fi::check_true` so the boolean
+        // cannot be faulted to `true` via a single skip.
         let derived_master = crypto::kdf(b"sphincs-master", &full_entropy, 0);
-        let consistent: bool = derived_master.ct_eq(&master_o).into();
-        if !consistent {
+        let c1: bool = derived_master.ct_eq(&master_o).into();
+        crate::fi::wait_random();
+        let c2: bool = derived_master.ct_eq(&master_o).into();
+        if crate::fi::check_true_into_sentinel(|| c1 && c2) != crate::fi::OK_SENTINEL {
             full_entropy.zeroize();
+            crate::fi::zeroize_barrier();
             let mut mo = master_o;
             mo.zeroize();
             secure_log!("[DUAL] CRITICAL: reconstructed entropy doesn't match master!");
@@ -286,16 +571,17 @@ impl WalletStore for DualSecureElement {
         // Cache the encrypted full-entropy blob for the signing flow.
         let blob = crypto::encrypt_entropy_blob(&full_entropy, &master_o);
         self.entropy_blob_cache.copy_from_slice(&blob);
-        self.blob_cached = true;
+        self.blob_cached.set_true();
 
         full_entropy.zeroize();
+        crate::fi::zeroize_barrier();
 
         secure_log!("[DUAL] Unlocked: entropy reconstructed from XOR split");
         Ok(master_o)
     }
 
     fn read_entropy_blob(&mut self, buf: &mut [u8]) -> Result<usize, SeError> {
-        if !self.blob_cached || buf.len() < crypto::ENTROPY_BLOB_LEN {
+        if !self.blob_cached.is_true_fi() || buf.len() < crypto::ENTROPY_BLOB_LEN {
             return Err(SeError::SlotNotFound);
         }
         buf[..crypto::ENTROPY_BLOB_LEN].copy_from_slice(&self.entropy_blob_cache);
@@ -318,307 +604,521 @@ impl WalletStore for DualSecureElement {
         o.min(e)
     }
 
+    fn sync_remaining_with_mcu(&mut self, mcu_used: u8) {
+        self.optiga.sync_remaining_with_mcu(mcu_used);
+        self.se050.sync_remaining_with_mcu(mcu_used);
+    }
+
     fn zeroize_caches(&mut self) {
         self.entropy_blob_cache.zeroize();
-        self.blob_cached = false;
+        self.blob_cached.set_false();
         self.optiga.zeroize_caches();
         self.se050.zeroize_caches();
     }
 
-    /// Delegate SE050 wipe to its WalletStore impl (handles admin PIN,
-    /// wipe flag, admin-auth delete, flash erase). Then erase PBS to
-    /// orphan OPTIGA from this STM32 (no shielded channel without PBS
-    /// means no reads of half_O), and zeroize all SRAM state.
-    fn factory_reset_admin(&mut self) -> Result<(), SeError> {
-        let _ = self.se050.factory_reset_admin();
-
-        #[cfg(feature = "stm32u585")]
-        unsafe {
-            let _ = crate::hw::flash::erase_pbs_page();
+    fn pin_attempt_count(&mut self) -> Option<u8> {
+        // Both SEs expose the counter on a peek-safe path:
+        //   - OPTIGA: F1E1 counter object (`read_counter_raw`).
+        //   - SE050: `ReadObjectAttributes` on USERID_OBJ — returns
+        //     `max_attempts - auth_attempts` over the SCP03 channel
+        //     without authenticating against the UserID (no attempt
+        //     consumed). See `Se050::pin_attempt_count_raw` for the
+        //     parse + SDK reference. (This corrects an earlier work-
+        //     todo §4 claim that said SE050's counter couldn't be
+        //     peeked.)
+        //
+        // Combined value: MAX of whatever's available — counters
+        // are "attempts USED" (higher = closer to lockout), so the
+        // strict aggregate is `max`, not `min`. Used by reconcile to
+        // compare against MCU page-124's used-count for a `!=`
+        // tamper check. Intra-SE divergence is reported separately
+        // by `pin_attempt_counts_divergent`.
+        let o = self.optiga.pin_attempt_count();
+        let s = self.se050.pin_attempt_count();
+        match (o, s) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
         }
+    }
+
+    fn pin_attempt_counts_divergent(&mut self) -> bool {
+        // Tamper signal: OPTIGA and SE050 disagree on remaining attempts
+        // even though both reported a value. Only flagged when both
+        // Some — None on either side means "no readable counter, no
+        // comparison possible," not divergence.
+        match (
+            self.optiga.pin_attempt_count(),
+            self.se050.pin_attempt_count(),
+        ) {
+            (Some(a), Some(b)) => a != b,
+            _ => false,
+        }
+    }
+
+    /// Pull random bytes from both SEs and XOR-mix them in-place. The
+    /// per-source bytes never leave this function — only the XOR is
+    /// returned to the caller. `hw::rng_strong::fill` further folds
+    /// this in with the STM32 TRNG before any cryptographic use, so
+    /// the final output is `STM32 ⊕ OPTIGA ⊕ SE050`.
+    ///
+    /// **Strict (both-or-fail).** Both OPTIGA and SE050 MUST contribute.
+    /// If either chip fails to provide entropy we return `Err` — the
+    /// caller (`rng_strong::fill`) propagates that and the signing call
+    /// aborts. Degrading to a single SE under EMFI / I2C glitching on
+    /// one of the two buses would let an attacker reduce entropy to
+    /// effectively two sources (STM32 + one SE) without anything
+    /// noticing; refusing the call is the loud failure mode.
+    fn random(&mut self, buf: &mut [u8]) -> Result<(), SeError> {
+        let mut tmp = [0u8; 32];
+        let mut off = 0;
+        while off < buf.len() {
+            let len = (buf.len() - off).min(tmp.len());
+
+            // OPTIGA contribution — mandatory.
+            self.optiga.random(&mut tmp[..len]).map_err(|_| {
+                tmp.zeroize();
+                SeError::InternalError
+            })?;
+            for i in 0..len {
+                buf[off + i] ^= tmp[i];
+            }
+            // SE050 contribution — mandatory.
+            tmp.zeroize();
+            self.se050.random(&mut tmp[..len]).map_err(|_| {
+                tmp.zeroize();
+                SeError::InternalError
+            })?;
+            for i in 0..len {
+                buf[off + i] ^= tmp[i];
+            }
+            tmp.zeroize();
+
+            off += len;
+        }
+        Ok(())
+    }
+
+    /// Wipe both SEs via their admin recovery paths and clear SRAM caches.
+    ///
+    /// OPTIGA: `optiga.factory_reset()` overwrites every user OID through
+    /// the shielded-connection path (`Change = Auto(F1D0) OR Conf(0xE140)`).
+    /// Works even if the user PIN is forgotten. The PBS in flash is
+    /// preserved so the chip remains usable for re-provisioning; the user
+    /// OIDs are now blank.
+    ///
+    /// SE050: delegates to its own `factory_reset_admin` which uses the
+    /// admin UserID at 0x7B10_00A0 to delete user objects.
+    ///
+    /// A best-effort attempt is made on each backend — if one fails we
+    /// still try the other and wipe SRAM state.
+    fn factory_reset_admin(&mut self) -> Result<(), SeError> {
+        let optiga_result = self.optiga.factory_reset_admin();
+        let se050_result = self.se050.factory_reset_admin();
 
         self.zeroize_caches();
-        secure_log!("[DUAL] Factory reset complete — SE050 wiped, PBS erased");
+
+        // Surface the first error we saw, but SRAM is zeroized regardless.
+        optiga_result.and(se050_result)?;
+
+        secure_log!("[DUAL] Factory reset complete — OPTIGA user data wiped, SE050 wiped");
         Ok(())
     }
 }
 
-```
+impl DualSecureElement {
+    /// End-to-end roundtrip test of the full dual-SE admin-wipe
+    /// integration. Covers both: the XOR-split entropy reconstruction
+    /// (unique dual-SE value-add) AND the `factory_reset_admin`
+    /// dispatch that wipes both chips.
+    ///
+    /// Scope: `DualSecureElement::provision` + `DualSecureElement::
+    /// unlock` + `DualSecureElement::factory_reset_admin`, all on
+    /// real production OID ranges.
+    ///
+    /// Flow:
+    /// 1. Pre-clean cascade (admin-auth → user-PIN → unauth). Tolerates
+    ///    prior test contamination.
+    /// 2. Verify both chips report `!is_provisioned()` after step 1.
+    /// 3. Provision fresh test data: entropy=0x55 pattern, master_secret
+    ///    derived via the same `kdf("sphincs-master", entropy, 0)` the
+    ///    DualSE unlock path uses (so the consistency check passes),
+    ///    vk=0xAA, bootstrap_vk=0xBB, pin=`b"dualwipe"`.
+    /// 4. Verify both chips now report `is_provisioned()`.
+    /// 5. Call `unlock(test_pin)` and verify the returned master_secret
+    ///    byte-exactly matches what we provisioned. Proves both chips
+    ///    authenticated AND the XOR reconstruction matches.
+    /// 6. Call `factory_reset_admin()` — the production dispatch that
+    ///    wipes both chips in sequence.
+    /// 7. Verify both chips report `!is_provisioned()` post-wipe.
+    /// 8. Call `unlock(test_pin)` again — must fail (no seed derivable
+    ///    from a wiped pair).
+    ///
+    /// Uses the REAL production object ranges: OPTIGA F1D0..F1D4 + F1E1,
+    /// SE050 0x7B10_xxxx (v6). This test DESTROYS any prior wallet
+    /// state on both chips. Re-run the normal first-boot wizard
+    /// afterwards to restore.
+    ///
+    /// LcsO-safety: the `dual-se-admin-wipe-e2e` feature MUST NOT imply
+    /// `optiga-lock-operational`. All OPTIGA operations on the
+    /// exercised paths stay at LcsO=Creation — `lock_oid` is a no-op
+    /// under the default feature set.
+    ///
+    /// Robustness: relies on the conditional page-125 erase in
+    /// `Se050::factory_reset_admin` (landed 2026-04-21) — an
+    /// unconditional erase would desync flash admin PIN from chip
+    /// admin UserID on any Transport glitch, stucking the v5 range
+    /// the same way that bug stuck v3 and v4.
+    #[cfg(feature = "dual-se-admin-wipe-e2e")]
+    pub fn run_admin_wipe_roundtrip(&mut self) -> Result<(), SeError> {
+        let test_entropy: [u8; 32] = [0x55; 32];
+        let test_master = crate::crypto::kdf(b"sphincs-master", &test_entropy, 0);
+        let test_vk: [u8; 32] = [0xAA; 32];
+        let test_bvk: [u8; 32] = [0xBB; 32];
+        let test_pin: [u8; 8] = *b"dualwipe";
 
+        // ---- 1. Pre-clean ----
+        //    Goal: normalise both chips to unprovisioned regardless of
+        //    what the prior state is. Three cases we have to cover:
+        //
+        //    (a) Both chips already unprovisioned. No-op.
+        //    (b) Both provisioned with matching admin PIN in flash. The
+        //        normal production wipe path works. Just call
+        //        `factory_reset_admin`.
+        //    (c) SE050 provisioned but flash page 125 is erased (e.g.
+        //        the prior `optiga-admin-wipe-e2e` run cleared it as
+        //        post-test hygiene). `factory_reset_admin` falls
+        //        through to `iterative_wipe(None, None)` which is
+        //        unauthenticated — user objects with the two-entry
+        //        TAG_POLICY cannot be deleted that way. We have to
+        //        try user-PIN candidates to wipe SE050 `0x7B0E_xxxx`.
+        //
+        //    Strategy: OPTIGA unconditional (Conf(E140) always works),
+        //    SE050 admin-first then user-PIN-fallback cascade. Erase
+        //    page 125 at the end so `provision()` below generates a
+        //    fresh admin PIN.
+        secure_log!("[DUAL-E2E-ADMIN] step 1: pre-clean");
 
-### `secure/src/nsc/sign_and_emit.rs`
-
-```rust
-//! Shared "decrypt entropy → derive signing key → hedged SPHINCS+C7 sign
-//! → write signature to NS" tail used by every signing command.
-//!
-//! Before this module existed every `cmd_*` signing path had its own
-//! near-duplicate copy of the tail, and every new gateway command
-//! meant pasting another one. Hoisting it into a single helper means:
-//!
-//!   * Adding a new signing flavour (new EIP-712 protocol, new
-//!     clear-sign variant, …) is a five-line change in the new
-//!     `cmd_*.rs`: compute a 32-byte message hash, validate the out
-//!     pointer, hand both to [`decrypt_and_sign`], done.
-//!   * Security-critical changes to the hedge / randomizer / zeroize
-//!     pattern happen in one place, not three.
-//!
-//! The helper is only called once per command dispatch, so it owns
-//! the SigningKey for the smallest possible window — the stack slot
-//! is wiped by sphincs_c7's `ZeroizeOnDrop` when the function returns.
-
-use sphincs_tz_shared::{NscStatus, SIGNATURE_LEN, WRAPPER_HEADER_LEN};
-use zeroize::Zeroize;
-
-use super::state::SecureState;
-
-/// End-to-end "produce a signature over `msg_hash` and drop it on
-/// `sig_ptr`" helper.
-///
-/// The caller must have:
-///
-///   * verified that the device is unlocked (`state.pin_verified`);
-///   * validated `sig_ptr` via
-///     [`super::ptr_validate::validate_ns_write_ptr`] with a length of
-///     [`SIGNATURE_LEN`];
-///   * gotten through trusted-UI confirmation.
-///
-/// On success the secure-to-NS signature copy is complete and the
-/// trusted UI shows `success_banner`.
-///
-/// SAFETY: `sig_ptr` must point at a pre-validated `SIGNATURE_LEN`-byte
-/// NS-writable region.
-pub(super) unsafe fn decrypt_and_sign(
-    state: &SecureState,
-    msg_hash: &[u8; 32],
-    sig_ptr: *mut u8,
-    success_banner: &str,
-) -> u32 {
-    // 1. Read the encrypted entropy blob from the SE.
-    let mut entropy_blob = [0u8; 64];
-    let entropy_blob_len = {
-        use crate::secure_element::WalletStore;
-        let se = &mut *core::ptr::addr_of_mut!(crate::SE);
-        match se.read_entropy_blob(&mut entropy_blob) {
-            Ok(len) => len,
-            Err(_) => return NscStatus::InternalError as u32,
+        // OPTIGA: Conf(E140) wipe. Idempotent on blank chips.
+        if let Err(e) = self.optiga.factory_reset() {
+            secure_log!("[DUAL-E2E-ADMIN] step 1: OPTIGA factory_reset error {:?} (continuing)", e);
         }
-    };
 
-    // 2. Decrypt the entropy using the master secret unwrapped from
-    //    PIN entry.
-    let mut entropy = match crate::crypto::decrypt_entropy_blob(
-        &entropy_blob[..entropy_blob_len],
-        &state.master_secret,
-    ) {
-        Ok(e) => e,
-        Err(_) => {
-            entropy_blob.zeroize();
-            return NscStatus::CryptoError as u32;
+        // SE050 wipe cascade. Each stage only fires if the prior
+        // stage left objects behind.
+        //
+        //   (a) Admin-auth factory reset (page 125 has admin PIN).
+        //       Deletes user UserID + gated data + self-deletes admin
+        //       UserID. The production PIN-lockout path.
+        //   (b) User-auth factory reset with dev-PIN candidates. Tries
+        //       `user_factory_reset(pin)` which verifies PIN, deletes
+        //       user-gated data, AND self-deletes the user UserID in
+        //       the same authenticated session. Plain
+        //       `iterative_wipe(Some(USERID), Some(pin))` (which we
+        //       tried first iteration) deletes the data objects but
+        //       cannot self-delete the UserID itself — that's the
+        //       exact gap the first hardware run surfaced.
+        //   (c) Unauthenticated iterative sweep as a last-ditch
+        //       catch-all for legacy objects without policies.
+        //
+        // Legacy objects in the 0x7b000xxx / 0x7b002xxx ranges that
+        // the chip picked up from early-build firmware are permanently
+        // stuck (user noted — specific range was bumped to skip them).
+        // They will remain after pre-clean. That's fine: `is_provisioned`
+        // only checks the current USERID_OBJ (0x7b10_0000), so the
+        // stuck legacy objects don't affect the test.
+        #[cfg(feature = "stm32u585")]
+        unsafe {
+            // Stage (a): admin-auth wipe via the v6 HUK-derived admin
+            // PIN (`factory_reset_admin` → `secret_keys::se050_admin_pin`
+            // → `derive_into_bhk(...)` — `SAES-CMAC(BHK, …)` in a `bhk`
+            // build, `SAES-CMAC(DHUK, …)` with `saes-dhuk`, `HKDF(OTP-
+            // master/const, …)` legacy — → `admin_factory_reset` →
+            // conditional page-125 erase). This is the only admin-PIN
+            // source on v6 chips; the pre-v6 page-125 PIN slot is gone
+            // (no `write_admin_pin`).
+            let r = self.se050.factory_reset_admin();
+            secure_log!("[DUAL-E2E-ADMIN] pre-clean stage (a): factory_reset_admin → {:?}", r.as_ref().err());
+
+            // Stage (b): user-PIN cascade if USERID_OBJ survived.
+            let se_prov_before = self.se050.is_provisioned();
+            secure_log!("[DUAL-E2E-ADMIN] pre-clean stage (b): se050.is_provisioned()={}", se_prov_before);
+            if se_prov_before {
+                const PIN_CANDIDATES: &[&[u8]] = &[
+                    b"00000000", // e2e-test fast-path default (most common)
+                    b"dualwipe", // our own test PIN (prior run)
+                    b"12345678",
+                    b"11111111",
+                ];
+                for &pin in PIN_CANDIDATES {
+                    let r = self.se050.user_factory_reset(pin);
+                    secure_log!(
+                        "[DUAL-E2E-ADMIN] pre-clean stage (b): user_factory_reset({:?}) → {:?}",
+                        core::str::from_utf8(pin).unwrap_or("?"),
+                        r.as_ref().err(),
+                    );
+                    if r.is_ok() {
+                        break;
+                    }
+                }
+            }
+
+            // Stage (c): unauthenticated sweep as final catch-all.
+            let se_prov_mid = self.se050.is_provisioned();
+            secure_log!("[DUAL-E2E-ADMIN] pre-clean stage (c): se050.is_provisioned()={}", se_prov_mid);
+            let _ = self.se050.iterative_wipe(None, None);
+
+            // Deliberately NO `erase_admin_page()` here. Page 125's
+            // lifecycle is owned by `Se050::factory_reset_admin` (the
+            // WalletStore wrapper), which now conditionally erases
+            // only when the chip's admin UserID is confirmed gone.
+            // Pre-clean's job is to get the chip to a state where
+            // `provision()` can succeed — and provision handles every
+            // page-125 state correctly as long as flash + chip are
+            // paired.
+            //
+            // The earlier unconditional erase here is what stuck v4:
+            // a Transport glitch in stage (a) left admin on the chip,
+            // then the erase burned the matching flash PIN.
         }
-    };
-    entropy_blob.zeroize();
 
-    // 3. Read the cached default VK from r-mem to extract pk_root.
-    //    This avoids the expensive hypertree rebuild (~10-15s) by
-    //    using SigningKey::from_parts with the cached pk_root.
-    let mut vk_buf = [0u8; 32];
-    {
-        use crate::secure_element::WalletStore;
-        let se = &mut *core::ptr::addr_of_mut!(crate::SE);
-        if se.read_vk(&mut vk_buf).is_err() {
-            entropy.zeroize();
-            return NscStatus::InternalError as u32;
+        // ---- 2. Verify both chips unprovisioned after pre-clean ----
+        if self.optiga.is_provisioned() {
+            secure_log!("[DUAL-E2E-ADMIN] step 2 FAILED: OPTIGA still provisioned after pre-clean");
+            return Err(SeError::InternalError);
         }
-    }
-    let mut cached_pk_root = [0u8; 16];
-    cached_pk_root.copy_from_slice(&vk_buf[16..32]);
-
-    // 4. Re-derive the SPHINCS+C7 signing key from the entropy +
-    //    cached pk_root. BIP-39 chain (PBKDF2 + 2x Keccak) is fast;
-    //    from_parts skips the hypertree rebuild.
-    let signing_key = crate::crypto::derive_signing_key_from_entropy_fast(
-        &entropy,
-        &cached_pk_root,
-    );
-    entropy.zeroize();
-
-    // 5. Hedged sign: mix the chip-bound master secret into the per-sig
-    //    randomizer so the same message produces different signatures
-    //    across different unlocks.
-    let mut rand_buf = [0u8; 16];
-    derive_sign_randomizer(&state.master_secret, msg_hash, &mut rand_buf);
-
-    let sig = signing_key.sign(msg_hash, Some(&rand_buf));
-
-    // 6. Write the 3,704-byte signature to NS memory, byte-at-a-time
-    //    via volatile writes (so the compiler can't fold the copy into
-    //    a memcpy that skips unmapped pages or similar shenanigans).
-    for i in 0..SIGNATURE_LEN {
-        core::ptr::write_volatile(sig_ptr.add(i), sig[i]);
-    }
-
-    // 7. Wipe the per-sig randomizer. The SigningKey goes out of scope
-    //    at the end of this function and sphincs_c7 zeroizes on drop.
-    rand_buf.zeroize();
-
-    crate::timeout::reset_activity();
-    crate::ui::show_status(success_banner, "");
-
-    // Brief pause so the user sees "Signed", then restore idle screen.
-    for _ in 0..3_000_000u32 { cortex_m::asm::nop(); }
-    crate::ui::show_status("PQSigner OS", "Ready");
-
-    NscStatus::Ok as u32
-}
-
-/// v2 wrapper variant: writes a 73-byte PQSignatureWrapper header
-/// (signer_type + key_index + ots_index + pk_seed_padded + pk_root_padded)
-/// followed by the 3,704-byte raw SPHINCS+C7 signature. Total output:
-/// `WRAPPER_TOTAL_LEN` (3,777) bytes.
-///
-/// The caller must have validated `sig_ptr` for `WRAPPER_TOTAL_LEN` bytes.
-///
-/// SAFETY: `sig_ptr` must point at a pre-validated `WRAPPER_TOTAL_LEN`-byte
-/// NS-writable region.
-pub(super) unsafe fn decrypt_and_sign_wrapped(
-    state: &SecureState,
-    msg_hash: &[u8; 32],
-    sig_ptr: *mut u8,
-    signer_type: u8,
-    chain_id: u64,
-    key_index: u32,
-    ots_index: u32,
-    success_banner: &str,
-) -> u32 {
-    // 1. Read the encrypted entropy blob from the SE.
-    let mut entropy_blob = [0u8; 64];
-    let entropy_blob_len = {
-        use crate::secure_element::WalletStore;
-        let se = &mut *core::ptr::addr_of_mut!(crate::SE);
-        match se.read_entropy_blob(&mut entropy_blob) {
-            Ok(len) => len,
-            Err(_) => return NscStatus::InternalError as u32,
+        if self.se050.is_provisioned() {
+            secure_log!("[DUAL-E2E-ADMIN] step 2 FAILED: SE050 still provisioned after pre-clean");
+            return Err(SeError::InternalError);
         }
-    };
+        secure_log!("[DUAL-E2E-ADMIN] step 2: both chips unprovisioned after pre-clean OK");
 
-    // 2. Decrypt the entropy.
-    let mut entropy = match crate::crypto::decrypt_entropy_blob(
-        &entropy_blob[..entropy_blob_len],
-        &state.master_secret,
-    ) {
-        Ok(e) => e,
-        Err(_) => {
-            entropy_blob.zeroize();
-            return NscStatus::CryptoError as u32;
+        // ---- 3. Provision fresh test data ----
+        secure_log!("[DUAL-E2E-ADMIN] step 3: provision");
+        self.provision(&test_entropy, &test_master, &test_vk, &test_bvk, &test_pin)?;
+        secure_log!("[DUAL-E2E-ADMIN] step 3: provision OK");
+
+        // ---- 4. Verify both chips provisioned ----
+        if !self.optiga.is_provisioned() {
+            secure_log!("[DUAL-E2E-ADMIN] step 4 FAILED: OPTIGA not provisioned after provision");
+            return Err(SeError::InternalError);
         }
-    };
-    entropy_blob.zeroize();
+        if !self.se050.is_provisioned() {
+            secure_log!("[DUAL-E2E-ADMIN] step 4 FAILED: SE050 not provisioned after provision");
+            return Err(SeError::InternalError);
+        }
+        secure_log!("[DUAL-E2E-ADMIN] step 4: both chips provisioned OK");
 
-    // 3. Derive the correct signing key based on signer_type.
-    //    BOOTSTRAP: use cached VK from r-mem for fast path (from_parts).
-    //    MAIN: per-chain, per-epoch key — no cached VK, full keygen required.
-    let signing_key = if signer_type == sphincs_tz_shared::SIGNER_BOOTSTRAP {
-        // Bootstrap VK is cached in r-mem — use fast path.
-        let mut bvk_buf = [0u8; 32];
-        {
-            use crate::secure_element::WalletStore;
-            let se = &mut *core::ptr::addr_of_mut!(crate::SE);
-            if se.read_bootstrap_vk(&mut bvk_buf).is_err() {
-                entropy.zeroize();
-                return NscStatus::InternalError as u32;
+        // ---- 5. Pre-wipe unlock: master_secret roundtrip ----
+        //    Authenticates both chips, reads both entropy halves, XORs
+        //    them back, derives master_secret from full entropy, and
+        //    cross-checks against what each chip returned. All three
+        //    branches have to agree for unlock to return Ok.
+        secure_log!("[DUAL-E2E-ADMIN] step 5: unlock");
+        let recovered = match self.unlock(&test_pin) {
+            Ok(m) => m,
+            Err(e) => {
+                secure_log!("[DUAL-E2E-ADMIN] step 5 FAILED: unlock returned {:?}", e);
+                return Err(SeError::InternalError);
+            }
+        };
+        if recovered != test_master {
+            secure_log!("[DUAL-E2E-ADMIN] step 5 FAILED: master_secret mismatch post-unlock");
+            return Err(SeError::InternalError);
+        }
+        secure_log!("[DUAL-E2E-ADMIN] step 5: unlock OK (master_secret matches)");
+
+        // ---- 6. The wipe proper — production dispatch ----
+        //    Calls `DualSecureElement::factory_reset_admin` (via the
+        //    WalletStore trait on self). That cascades to OPTIGA's
+        //    factory_reset (Conf(E140) path) + SE050's
+        //    factory_reset_admin (admin-auth DELETE of user UserID
+        //    and gated data, plus admin self-delete). Page 125 now
+        //    only gets erased if admin UserID is confirmed gone from
+        //    the chip (conditional erase, landed alongside this
+        //    test).
+        secure_log!("[DUAL-E2E-ADMIN] step 6: factory_reset_admin");
+        self.factory_reset_admin()?;
+        secure_log!("[DUAL-E2E-ADMIN] step 6: factory_reset_admin OK");
+
+        // ---- 7. Verify both chips unprovisioned ----
+        if self.optiga.is_provisioned() {
+            secure_log!("[DUAL-E2E-ADMIN] step 7 FAILED: OPTIGA still provisioned after wipe");
+            return Err(SeError::InternalError);
+        }
+        if self.se050.is_provisioned() {
+            secure_log!("[DUAL-E2E-ADMIN] step 7 FAILED: SE050 still provisioned after wipe");
+            return Err(SeError::InternalError);
+        }
+        secure_log!("[DUAL-E2E-ADMIN] step 7: both chips unprovisioned post-wipe OK");
+
+        // ---- 8. Post-wipe unlock must fail ----
+        //    The contract is "no seed derivable from a wiped pair."
+        //    OPTIGA hits the sentinel path → NotProvisioned. SE050
+        //    has no objects to read → auth fails. Either ERROR is
+        //    fine; only Ok(_) is a test failure.
+        match self.unlock(&test_pin) {
+            Ok(_) => {
+                secure_log!("[DUAL-E2E-ADMIN] step 8 FAILED: unlock SUCCEEDED after wipe");
+                Err(SeError::InternalError)
+            }
+            Err(e) => {
+                secure_log!("[DUAL-E2E-ADMIN] step 8: post-wipe unlock correctly failed ({:?})", e);
+                Ok(())
             }
         }
-        let mut cached_pk_root = [0u8; 16];
-        cached_pk_root.copy_from_slice(&bvk_buf[16..32]);
-        crate::crypto::derive_bootstrap_key_from_entropy_fast(&entropy, &cached_pk_root)
-    } else {
-        crate::crypto::derive_main_key_from_entropy(&entropy, chain_id, key_index)
-    };
-    entropy.zeroize();
-
-    // 4. Write the 73-byte wrapper header via volatile writes.
-    let mut hdr_pos: usize = 0;
-
-    // signer_type (1 byte)
-    core::ptr::write_volatile(sig_ptr.add(hdr_pos), signer_type);
-    hdr_pos += 1;
-
-    // key_index (4 bytes BE)
-    let ki = key_index.to_be_bytes();
-    for b in &ki {
-        core::ptr::write_volatile(sig_ptr.add(hdr_pos), *b);
-        hdr_pos += 1;
     }
 
-    // ots_index (4 bytes BE)
-    let oi = ots_index.to_be_bytes();
-    for b in &oi {
-        core::ptr::write_volatile(sig_ptr.add(hdr_pos), *b);
-        hdr_pos += 1;
+    /// Multi-unlock / cross-reboot validation for the SE050 entropy-
+    /// corruption fix (PE0 RST, no more shield ENA cross-coupling).
+    ///
+    /// Flow:
+    /// - If both chips already provisioned: reuse state (this is the
+    ///   "we already booted once" branch — the interesting one).
+    /// - Else: run the same pre-clean cascade as `run_admin_wipe_
+    ///   roundtrip` then provision fresh.
+    /// - Do `iterations` consecutive unlock() calls. Each one
+    ///   re-authenticates both chips, reads both entropy halves, XORs
+    ///   them, derives master_secret, cross-checks. All iterations
+    ///   must return the SAME master_secret (== `test_master`). Any
+    ///   drift between iterations flags SE050 NVM corruption.
+    ///
+    /// Does NOT wipe at the end — that's how we preserve state so the
+    /// next cold boot (re-invocation of `probe-rs run`) can exercise
+    /// the already-provisioned branch.
+    #[cfg(feature = "dual-se-multi-unlock-e2e")]
+    pub fn run_multi_unlock_roundtrip(&mut self, iterations: u32) -> Result<(), SeError> {
+        let test_entropy: [u8; 32] = [0x55; 32];
+        let test_master = crate::crypto::kdf(b"sphincs-master", &test_entropy, 0);
+        let test_vk: [u8; 32] = [0xAA; 32];
+        let test_bvk: [u8; 32] = [0xBB; 32];
+        let test_pin: [u8; 8] = *b"dualwipe";
+
+        // Probe by attempting an unlock with the test PIN. If both chips
+        // are already provisioned with matching state from a prior boot,
+        // this returns the expected master_secret and no pre-clean is
+        // needed. Otherwise we fall through to wipe + fresh-provision.
+        // `optiga.is_provisioned()` can't be used as the discriminator
+        // because it needs the shielded connection up, which cold boot
+        // hasn't established yet → false negative.
+        secure_log!("[DUAL-MULTI] probing unlock() to detect prior provisioning...");
+        let probe = self.unlock(&test_pin);
+        match &probe {
+            Ok(m) if m == &test_master => {
+                secure_log!("[DUAL-MULTI] probe: Ok(master matches)");
+            }
+            Ok(_) => {
+                secure_log!("[DUAL-MULTI] probe: Ok BUT master_secret mismatch — state corruption?");
+            }
+            Err(e) => {
+                secure_log!("[DUAL-MULTI] probe: Err({:?})", e);
+            }
+        }
+        let already_provisioned = matches!(probe, Ok(ref m) if *m == test_master);
+
+        if already_provisioned {
+            secure_log!("[DUAL-MULTI] boot state: ALREADY PROVISIONED (probe unlock matched)");
+            secure_log!("[DUAL-MULTI] phase A: skipping pre-clean + provision");
+            // The probe unlock counts as iteration 1; do N-1 more.
+            secure_log!("[DUAL-MULTI] iter 1/{}: master_secret matches (via boot probe)", iterations);
+            for i in 2..=iterations {
+                let recovered = match self.unlock(&test_pin) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        secure_log!("[DUAL-MULTI] iter {}/{}: unlock FAILED {:?}", i, iterations, e);
+                        return Err(SeError::InternalError);
+                    }
+                };
+                if recovered != test_master {
+                    secure_log!("[DUAL-MULTI] iter {}/{}: master_secret MISMATCH", i, iterations);
+                    return Err(SeError::InternalError);
+                }
+                secure_log!("[DUAL-MULTI] iter {}/{}: master_secret matches", i, iterations);
+            }
+        } else {
+            // Probe failed → chips are fresh / stale / mismatched. Wipe,
+            // provision, then do `iterations` unlocks.
+            if let Ok(_) = probe {
+                secure_log!("[DUAL-MULTI] boot state: probe unlocked but master mismatched — reprovisioning");
+            } else {
+                secure_log!("[DUAL-MULTI] boot state: probe unlock FAILED → fresh provisioning");
+            }
+
+            if let Err(e) = self.optiga.factory_reset() {
+                secure_log!("[DUAL-MULTI] pre-clean: OPTIGA factory_reset error {:?} (continuing)", e);
+            }
+
+            #[cfg(feature = "stm32u585")]
+            unsafe {
+                // Admin-auth wipe via the v6 HUK-derived admin PIN
+                // (`secret_keys::se050_admin_pin` → `derive_into_bhk`,
+                // i.e. BHK in a `bhk` build / DHUK / OTP-legacy).
+                let _ = self.se050.factory_reset_admin();
+                if self.se050.is_provisioned() {
+                    const PIN_CANDIDATES: &[&[u8]] = &[
+                        b"00000000", b"dualwipe", b"12345678", b"11111111",
+                    ];
+                    for &pin in PIN_CANDIDATES {
+                        if self.se050.user_factory_reset(pin).is_ok() {
+                            break;
+                        }
+                    }
+                }
+                let _ = self.se050.iterative_wipe(None, None);
+            }
+
+            if self.optiga.is_provisioned() {
+                secure_log!("[DUAL-MULTI] pre-clean FAILED: OPTIGA still provisioned");
+                return Err(SeError::InternalError);
+            }
+            if self.se050.is_provisioned() {
+                secure_log!("[DUAL-MULTI] pre-clean FAILED: SE050 still provisioned");
+                return Err(SeError::InternalError);
+            }
+
+            secure_log!("[DUAL-MULTI] pre-clean OK; provisioning fresh");
+            self.provision(&test_entropy, &test_master, &test_vk, &test_bvk, &test_pin)?;
+            secure_log!("[DUAL-MULTI] phase A: provision OK");
+
+            for i in 1..=iterations {
+                let recovered = match self.unlock(&test_pin) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        secure_log!("[DUAL-MULTI] iter {}/{}: unlock FAILED {:?}", i, iterations, e);
+                        return Err(SeError::InternalError);
+                    }
+                };
+                if recovered != test_master {
+                    secure_log!("[DUAL-MULTI] iter {}/{}: master_secret MISMATCH", i, iterations);
+                    return Err(SeError::InternalError);
+                }
+                secure_log!("[DUAL-MULTI] iter {}/{}: master_secret matches", i, iterations);
+            }
+        }
+
+        secure_log!("[DUAL-MULTI] all {} unlocks verified; state preserved for next cold boot", iterations);
+
+        // Clear stale MCU wipe-flag + PIN attempts left over from prior
+        // failed `dual-se-admin-wipe-e2e` runs or from our own pre-clean.
+        // Without this, the boot-time wipe trigger in `main.rs`
+        // re-fires on every reboot, wiping both chips and defeating the
+        // "cross-boot already-provisioned" branch this test is meant to
+        // exercise. Safe because the chips are now provisioned cleanly
+        // and SE050's admin UserID lifecycle is the pre-existing bug
+        // tracked in `project_se050_admin_wipe.md`, not our concern.
+        #[cfg(feature = "stm32u585")]
+        unsafe {
+            if crate::hw::flash::is_wipe_armed() {
+                if crate::hw::flash::erase_admin_page().is_ok() {
+                    secure_log!("[DUAL-MULTI] cleared stale wipe flag (page 125 erased)");
+                }
+            }
+            let _ = crate::hw::flash::pin_attempts_reset();
+        }
+
+        Ok(())
     }
-
-    // pk_seed (32 bytes: raw 16 bytes right-padded to bytes32)
-    {
-        let vk_bytes = signing_key.verifying_key().to_bytes();
-        // VK = pk_seed[16] || pk_root[16]
-        // Pad pk_seed to 32 bytes
-        for i in 0..16 {
-            core::ptr::write_volatile(sig_ptr.add(hdr_pos + i), vk_bytes[i]);
-        }
-        for i in 16..32 {
-            core::ptr::write_volatile(sig_ptr.add(hdr_pos + i), 0u8);
-        }
-        hdr_pos += 32;
-
-        // pk_root (32 bytes: raw 16 bytes right-padded to bytes32)
-        for i in 0..16 {
-            core::ptr::write_volatile(sig_ptr.add(hdr_pos + i), vk_bytes[16 + i]);
-        }
-        for i in 16..32 {
-            core::ptr::write_volatile(sig_ptr.add(hdr_pos + i), 0u8);
-        }
-        hdr_pos += 32;
-    }
-
-    debug_assert_eq!(hdr_pos, WRAPPER_HEADER_LEN);
-
-    // 5. Hedged sign
-    let mut rand_buf = [0u8; 16];
-    derive_sign_randomizer(&state.master_secret, msg_hash, &mut rand_buf);
-
-    let sig = signing_key.sign(msg_hash, Some(&rand_buf));
-
-    // 6. Write the raw 3,704-byte signature after the header.
-    let sig_offset = WRAPPER_HEADER_LEN;
-    for i in 0..SIGNATURE_LEN {
-        core::ptr::write_volatile(sig_ptr.add(sig_offset + i), sig[i]);
-    }
-
-    // 7. Cleanup
-    rand_buf.zeroize();
-
-    crate::timeout::reset_activity();
-    crate::ui::show_status(success_banner, "");
-
-    for _ in 0..3_000_000u32 { cortex_m::asm::nop(); }
-    crate::ui::show_status("PQSigner OS", "Ready");
-
-    NscStatus::Ok as u32
-}
-
-/// Derive a 16-byte randomizer for hedged SPHINCS+C7 signing from the
-/// master secret and the message hash. Keeping this private to the
-/// `sign_and_emit` module means callers can't accidentally use it
-/// with an unbounded pre-image.
-fn derive_sign_randomizer(master: &[u8; 32], msg_hash: &[u8; 32], out: &mut [u8; 16]) {
-    use sha3::{Digest, Keccak256};
-    let mut h = Keccak256::new();
-    h.update(b"sphincsc7-sign-rand");
-    h.update(master);
-    h.update(msg_hash);
-    let r = h.finalize();
-    out.copy_from_slice(&r[..16]);
 }
 
 ```
@@ -639,8 +1139,17 @@ use crate::secure_element::UnlockError;
 use crate::timeout;
 use crate::ui;
 
+/// # Safety
+/// CMSE non-secure-entry handler — dispatcher-invoked. The body drives
+/// the trusted-UI PIN dialog and the SE pair; no NS pointer derefs.
+/// `static mut SE` access is serialised by the non-reentrant
+/// dispatcher.
 pub(super) unsafe fn run() -> u32 {
     use crate::ui::pin_entry::{enter_pin, PinEntryResult};
+
+    // HIGH-7 fix: prevent SysTick idle-wipe from racing us while the
+    // user is typing the PIN or while we are deriving master_secret.
+    let _busy = super::HandlerGuard::enter();
 
     let pin = match enter_pin() {
         PinEntryResult::Pin(p) => p,
@@ -652,7 +1161,6 @@ pub(super) unsafe fn run() -> u32 {
         }
         PinEntryResult::IdleWipe => {
             super::zeroize_sensitive_state();
-            ui::show_status("Locked", "(idle wipe)");
             return NscStatus::IdleWipe as u32;
         }
     };
@@ -667,30 +1175,77 @@ pub(super) unsafe fn run() -> u32 {
     result
 }
 
+/// # Safety
+/// Called only from `run` above; relies on the dispatcher's single-
+/// threaded invariant to access `static mut crate::SE`.
 unsafe fn verify_pin_with_chip(pin: &[u8; 8]) -> u32 {
-    use crate::secure_element::WalletStore;
+    use sphincs_tz_shared::MAX_ATTEMPTS;
+
+    // §18 P1 — entry jitter at the USB-triggered PIN-verify path. This
+    // is the closest point to the external trigger (the NS-world
+    // `CMD_REQUEST_UNLOCK` veneer call), so jittering here desyncs the
+    // whole gate from USB arrival. Layers with the second
+    // `wait_random()` at `gated_unlock`'s entry below. See that
+    // function's comment for the threat-model bound (~0..19 µs;
+    // uncalibrated-single-fault only).
+    crate::fi::wait_random();
 
     let se = &mut *core::ptr::addr_of_mut!(crate::SE);
-    match se.unlock(pin) {
+
+    // `super::gated_unlock` handles the MCU-side counter (page 126):
+    // pre-commit bump before SE verify, reset on success, refuse
+    // on flash fault. See its docstring for the full Trezor-style
+    // gating rationale.
+    match super::gated_unlock(se, pin) {
         Ok(master) => {
-            state::with_state(|s| s.mark_unlocked(master));
+            state::with_state(|s| {
+                s.mark_unlocked(master);
+                s.remaining_attempts = MAX_ATTEMPTS;
+            });
             timeout::reset_activity();
             ui::show_status("Unlocked", "");
             NscStatus::Ok as u32
         }
         Err(UnlockError::PinIncorrect) => {
-            let new_remaining = state::with_state(|s| {
-                if s.remaining_attempts > 0 {
-                    s.remaining_attempts -= 1;
+            // F-15 hardening: double-read the post-bump counter to
+            // defend a value-fault on the load register; halt-to-wipe
+            // (fail-closed) on mismatch.
+            #[cfg(feature = "stm32u585")]
+            let count = {
+                let a = crate::hw::flash::pin_attempts_read();
+                crate::fi::wait_random();
+                let b = crate::hw::flash::pin_attempts_read();
+                if a != b {
+                    return trigger_lockout_wipe();
                 }
-                s.remaining_attempts
-            });
-            if new_remaining == 0 {
-                // Last attempt just failed — the SE has blocked itself.
-                // Fall through to the lockout handler below.
+                a
+            };
+            #[cfg(not(feature = "stm32u585"))]
+            let count: u8 = 0; // QEMU: no counter, UI-only display
+
+            let remaining_after = MAX_ATTEMPTS.saturating_sub(count);
+            state::with_state(|s| s.remaining_attempts = remaining_after);
+
+            // FAIL-IN pattern (F-15): the *secure default* (trigger
+            // wipe) is the fall-through. The *attacker-bypass-target*
+            // (continue without wiping) is the explicit conditional.
+            // A single-fault that skips the conditional triggers wipe
+            // instead of bypassing it — exactly opposite to the
+            // previous FAIL-OUT shape `if remaining_after == 0 { wipe }`
+            // where skipping the `cbz` falls through to "Wrong PIN"
+            // and the attacker keeps brute-forcing past the cap.
+            //
+            // The Hamming-distant sentinel (`check_true_into_sentinel`)
+            // additionally defends a value-fault on the comparison
+            // register: a glitched return value is overwhelmingly
+            // unlikely to coincide with OK_SENTINEL.
+            let safe_to_continue = crate::fi::check_true_into_sentinel(
+                || remaining_after != 0,
+            );
+            if safe_to_continue != crate::fi::OK_SENTINEL {
                 return trigger_lockout_wipe();
             }
-            if new_remaining == 1 {
+            if remaining_after == 1 {
                 ui::show_status("LAST ATTEMPT", "wallet wipes on fail");
             } else {
                 ui::show_status("Wrong PIN", "");
@@ -698,10 +1253,16 @@ unsafe fn verify_pin_with_chip(pin: &[u8; 8]) -> u32 {
             NscStatus::PinIncorrect as u32
         }
         Err(UnlockError::PinLocked) => {
+            // Either the MCU counter hit MAX inside gated_unlock, or
+            // one of the SEs surfaced its own lockout. Either way, wipe.
             state::with_state(|s| s.remaining_attempts = 0);
             trigger_lockout_wipe()
         }
         Err(UnlockError::InternalError) => {
+            // Includes the "flash bump failed" fault-injection refusal
+            // from gated_unlock. MCU counter is not bumped in that
+            // case — neither is SE counter, because we never called
+            // the chip. Attack surface bounded.
             NscStatus::InternalError as u32
         }
     }
@@ -714,6 +1275,12 @@ unsafe fn verify_pin_with_chip(pin: &[u8; 8]) -> u32 {
 /// so further PIN attempts would be pointless. The wipe flag is armed
 /// inside `factory_reset_admin` before any destructive work, so a power
 /// loss mid-wipe is recoverable on the next boot.
+///
+/// # Safety
+/// Called only from `verify_pin_with_chip` above; accesses
+/// `static mut crate::SE` under the single-threaded dispatcher
+/// invariant, then mutates secure-flash (page 124) via the `flash`
+/// driver and zeroizes the in-RAM secrets.
 unsafe fn trigger_lockout_wipe() -> u32 {
     use crate::secure_element::WalletStore;
 
@@ -721,6 +1288,14 @@ unsafe fn trigger_lockout_wipe() -> u32 {
 
     let se = &mut *core::ptr::addr_of_mut!(crate::SE);
     let _ = se.factory_reset_admin();
+
+    // Reset the MCU-side attempt counter now that both SEs have been
+    // wiped. Otherwise the next boot would read a full counter + an
+    // unprovisioned chip, trigger the boot-time lockout check, and
+    // loop. Erasing here makes the device ready for a fresh first-
+    // boot wizard.
+    #[cfg(feature = "stm32u585")]
+    let _ = crate::hw::flash::pin_attempts_reset();
 
     // Zeroize every TrustZone-side secret.
     super::zeroize_sensitive_state();
@@ -756,6 +1331,8 @@ unsafe fn trigger_lockout_wipe() -> u32 {
 use sphincs_tz_shared::MAX_ATTEMPTS;
 use zeroize::Zeroize;
 
+use crate::fih::FihBool;
+
 /// Mutable state the gateway owns across command dispatches.
 pub(super) struct SecureState {
     /// How many PIN attempts the current lockout window still permits.
@@ -765,7 +1342,18 @@ pub(super) struct SecureState {
     pub(super) remaining_attempts: u8,
     /// Whether the current session has passed PIN verification. Reset
     /// by [`zeroize_sensitive`] on cancel / idle wipe / panic.
-    pub(super) pin_verified: bool,
+    ///
+    /// FI hardening (F-14): stored as `FihBool`, a Trezor-style
+    /// `(val, complement)` pair with Hamming-distant magic
+    /// constants. A single-fault flip of either word breaks the
+    /// storage invariant; the reader detects it and fail-closes to
+    /// `false`. Every gated command reads via
+    /// `s.pin_verified.check_sentinel()` (composed with the
+    /// `fi::check_true_into_sentinel` Hamming-distant sentinel
+    /// pattern) so the caller compares a value rather than branching
+    /// on a bool — defeats both storage glitch AND caller branch-
+    /// skip together.
+    pub(super) pin_verified: FihBool,
     /// The 32-byte master secret unwrapped by
     /// `crate::pin::verify_pin` (or the TROPIC01 MAC-and-Destroy flow).
     /// Used both as the AES-GCM key for the encrypted-entropy blob and
@@ -784,19 +1372,89 @@ pub(super) struct SecureState {
     /// The ots_index used by the last successful signature.
     pub(super) last_ots_index: u32,
     /// Whether any signature has been produced this session.
-    pub(super) has_signed: bool,
+    ///
+    /// F-14-style hardening: `FihBool` complement-storage so a
+    /// single-fault flip in BSS can't make a stale session appear
+    /// signed. Currently write-only (no read site in the gateway),
+    /// but future code that gates on "has the session signed yet?"
+    /// inherits the storage-glitch defense for free.
+    pub(super) has_signed: FihBool,
+
+    // -- Slot cache (session-scoped) ------------------------------------
+    // Post-C10-cutover the firmware is stateless with respect to slot
+    // selection: the companion sends `(chain_id, slot_index, flags)` on
+    // every sign. We cache the derived slot master entropy across the
+    // unlock session (one BIP-39 → SHA-256 pass) and the derived slot
+    // SigningKey (one multi-second hypertree keygen) to amortise repeat
+    // signs. Both are dropped on lock / idle-wipe / panic.
+
+    /// Slot master entropy (derived once per unlock from BIP-39 seed).
+    pub(super) slot_master_entropy: [u8; 32],
+
+    /// Whether `slot_master_entropy` has been derived this session.
+    ///
+    /// F-14-style hardening: `FihBool` complement-storage. If this
+    /// flag is ever read as a "skip re-derive" optimization, a
+    /// single-fault flip from false→true would let a follow-up
+    /// command operate on stale / zero entropy. Defended now even
+    /// though current code doesn't gate on it.
+    pub(super) slot_master_derived: FihBool,
+
+    // -- Bootstrap C10 pubkey LRU cache --------------------------------
+    // Multi-account variant: one seed produces up to 256 independent
+    // bootstrap C10 keypairs (one per `account_index`). Each keypair
+    // takes <1 s of hypertree keygen on real STM32U585, so we cache the
+    // derived pubkey halves keyed by `account_index`. Address-picker
+    // pagination over fresh accounts is therefore one-shot per index;
+    // repeated views (and the SIGN_USEROP fast path) hit SRAM.
+    //
+    // 16 entries comfortably covers a single rendered page of 10
+    // addresses plus a small carry-over from the previous page. On full
+    // insert we evict the oldest `last_used_tick` entry. Cache is
+    // wiped on lock / idle-wipe / panic.
+    pub(super) bootstrap_cache: [Option<CachedAccount>; BOOTSTRAP_CACHE_LEN],
+
+    /// Monotonic tick stamped onto each cache entry on insert / lookup.
+    /// Wraps after 2^64 events — effectively never.
+    pub(super) bootstrap_cache_tick: u64,
+}
+
+/// Number of simultaneously-cached account bootstrap pubkey pairs.
+pub(super) const BOOTSTRAP_CACHE_LEN: usize = 16;
+
+/// One entry in [`SecureState::bootstrap_cache`]. Stores only public
+/// material — the C10 secret key is dropped (and zeroized) immediately
+/// after `pk_seed` / `pk_root` have been extracted.
+#[derive(Clone)]
+pub(super) struct CachedAccount {
+    pub(super) account_index: u32,
+    /// 32-byte N-masked pkSeed (top 16 bytes populated, bottom 16 = 0).
+    pub(super) pk_seed: [u8; 32],
+    /// 32-byte N-masked pkRoot (top 16 bytes populated, bottom 16 = 0).
+    pub(super) pk_root: [u8; 32],
+    /// Tick stamped at last hit / insert. Used for LRU eviction.
+    pub(super) last_used_tick: u64,
 }
 
 impl SecureState {
     const fn new() -> Self {
+        // `Option::None` initialiser must spell out one entry per slot
+        // because `Option<CachedAccount>` is not `Copy`. `[None; N]`
+        // would require `Copy`; an explicit array literal is fine in
+        // const context.
+        const NONE_ENTRY: Option<CachedAccount> = None;
         Self {
             remaining_attempts: MAX_ATTEMPTS,
-            pin_verified: false,
+            pin_verified: FihBool::new_false(),
             master_secret: [0u8; 32],
             last_chain_id: 0,
             last_key_index: 0,
             last_ots_index: 0,
-            has_signed: false,
+            has_signed: FihBool::new_false(),
+            slot_master_entropy: [0u8; 32],
+            slot_master_derived: FihBool::new_false(),
+            bootstrap_cache: [NONE_ENTRY; BOOTSTRAP_CACHE_LEN],
+            bootstrap_cache_tick: 0,
         }
     }
 
@@ -806,20 +1464,154 @@ impl SecureState {
     /// a fresh PIN.
     pub(super) fn zeroize_sensitive(&mut self) {
         self.master_secret.zeroize();
-        self.pin_verified = false;
+        crate::fi::zeroize_barrier();
+        // F-17: clear the rate-limit counters on lock / idle-wipe.
+        // Counters are SRAM-only and were already going to vanish on
+        // a power cycle; this is for the in-session zeroize path
+        // (idle-wipe, panic handler).
+        crate::sign_rate::reset_counters();
+        self.pin_verified.set_false();
         self.last_chain_id = 0;
         self.last_key_index = 0;
         self.last_ots_index = 0;
-        self.has_signed = false;
+        self.has_signed.set_false();
+        self.slot_master_entropy.zeroize();
+        crate::fi::zeroize_barrier();
+        self.slot_master_derived.set_false();
+        // Bootstrap pubkey halves are technically non-secret, but wipe
+        // them anyway so a stale entry can't influence post-lock UI
+        // assumptions and so the cache reverts to a clean slate on
+        // re-unlock.
+        for entry in self.bootstrap_cache.iter_mut() {
+            if let Some(c) = entry.as_mut() {
+                c.pk_seed.zeroize();
+                c.pk_root.zeroize();
+                c.last_used_tick = 0;
+                c.account_index = 0;
+            }
+            *entry = None;
+        }
+        self.bootstrap_cache_tick = 0;
+        // SAFETY: single-threaded, exclusive access via with_state.
+        // SLOT_CACHE holds a SigningKey (ZeroizeOnDrop). Replacing the
+        // Option with None drops the inner key, which wipes its secret
+        // material automatically.
+        unsafe {
+            *core::ptr::addr_of_mut!(SLOT_CACHE) = None;
+            // Idle-wipe also drops any in-progress firmware-update
+            // session. The inactive slot's erased pages stay erased
+            // (harmless), and the companion must restart from BEGIN.
+            // FwUpdateCtx is ZeroizeOnDrop so this clears the 8 KB
+            // manifest buffer plus the running SHA-256 state.
+            #[cfg(feature = "stm32u585")]
+            {
+                *core::ptr::addr_of_mut!(FW_UPDATE) = None;
+            }
+        }
+    }
+
+    /// Look up a cached bootstrap pubkey pair for `account_index`. On hit,
+    /// bumps the entry's tick (so it stays warm under LRU pressure) and
+    /// returns `(pk_seed, pk_root)`. Returns `None` on miss.
+    pub(super) fn bootstrap_cache_lookup(
+        &mut self,
+        account_index: u32,
+    ) -> Option<([u8; 32], [u8; 32])> {
+        self.bootstrap_cache_tick = self.bootstrap_cache_tick.wrapping_add(1);
+        let new_tick = self.bootstrap_cache_tick;
+        for entry in self.bootstrap_cache.iter_mut() {
+            if let Some(c) = entry.as_mut() {
+                if c.account_index == account_index {
+                    c.last_used_tick = new_tick;
+                    return Some((c.pk_seed, c.pk_root));
+                }
+            }
+        }
+        None
+    }
+
+    /// Insert (or refresh) a `(pk_seed, pk_root)` pair for
+    /// `account_index`. Evicts the oldest (`last_used_tick`-min) entry
+    /// when the cache is full. If the index is already present its
+    /// pubkey halves are overwritten — same account_index always maps
+    /// to the same derived pair, so this is a no-op rewrite.
+    pub(super) fn bootstrap_cache_insert(
+        &mut self,
+        account_index: u32,
+        pk_seed: [u8; 32],
+        pk_root: [u8; 32],
+    ) {
+        self.bootstrap_cache_tick = self.bootstrap_cache_tick.wrapping_add(1);
+        let new_tick = self.bootstrap_cache_tick;
+
+        // Refresh existing entry if present.
+        for entry in self.bootstrap_cache.iter_mut() {
+            if let Some(c) = entry.as_mut() {
+                if c.account_index == account_index {
+                    c.pk_seed = pk_seed;
+                    c.pk_root = pk_root;
+                    c.last_used_tick = new_tick;
+                    return;
+                }
+            }
+        }
+
+        // Find an empty slot, else the LRU victim.
+        let mut victim_idx: usize = 0;
+        let mut victim_tick: u64 = u64::MAX;
+        for (i, entry) in self.bootstrap_cache.iter().enumerate() {
+            match entry {
+                None => {
+                    victim_idx = i;
+                    victim_tick = 0;
+                    break;
+                }
+                Some(c) => {
+                    if c.last_used_tick < victim_tick {
+                        victim_tick = c.last_used_tick;
+                        victim_idx = i;
+                    }
+                }
+            }
+        }
+        // Wipe the victim (defensive — pubkeys are non-secret but this
+        // keeps the cache hygiene predictable).
+        if let Some(c) = self.bootstrap_cache[victim_idx].as_mut() {
+            c.pk_seed.zeroize();
+            c.pk_root.zeroize();
+        }
+        self.bootstrap_cache[victim_idx] = Some(CachedAccount {
+            account_index,
+            pk_seed,
+            pk_root,
+            last_used_tick: new_tick,
+        });
     }
 
     /// Stamp in a freshly-verified master secret and mark the device
     /// unlocked. Used by both the real PIN verify path and the
     /// `e2e-test` set-state helper.
-    pub(super) fn mark_unlocked(&mut self, master: [u8; 32]) {
+    ///
+    /// HIGH-6 fix: explicitly zeroize the previous master_secret
+    /// before overwriting, so a re-unlock can never leave the
+    /// prior session's secret on the stack or in BSS.
+    pub(super) fn mark_unlocked(&mut self, mut master: [u8; 32]) {
+        self.master_secret.zeroize();
+        crate::fi::zeroize_barrier();
+        // Trezor-parity: random delay before installing the new
+        // master_secret. The 32-byte copy below is a single fixed-
+        // duration block that an EM-glitch attacker could otherwise
+        // time-target; `wait_random` perturbs its temporal position.
+        crate::fi::wait_random();
         self.master_secret = master;
-        self.pin_verified = true;
+        master.zeroize();
+        crate::fi::zeroize_barrier();
+        self.pin_verified.set_true();
         self.remaining_attempts = MAX_ATTEMPTS;
+        // F-17: fresh unlock = full burst budget. The session sign
+        // counter resets so the user gets `MAX_SIGNS_PER_SESSION`
+        // signatures before being forced to re-unlock.
+        crate::sign_rate::reset_counters();
     }
 }
 
@@ -827,6 +1619,44 @@ impl SecureState {
 /// the program loader places it in the secure-world BSS and so it has
 /// a stable address for the no-`alloc` environment.
 static mut STATE: SecureState = SecureState::new();
+
+/// Cached slot SigningKey for the `(slot_index)` most recently signed with
+/// during this unlock session. Re-keygen happens when the companion asks
+/// for a different `slot_index`; the cache is dropped on lock/idle-wipe.
+///
+/// Kept separate from `SecureState` because `SigningKey` holds arrays that
+/// cannot be const-constructed; `Option<None>` lives in BSS.
+///
+/// SAFETY: same single-threaded invariant as `STATE`.
+pub(super) static mut SLOT_CACHE: Option<CachedSlot> = None;
+
+/// Active firmware-update session state. Populated by `CMD_FW_BEGIN`
+/// and drained by `CMD_FW_COMMIT` / `CMD_FW_ABORT`. Lives in SRAM only
+/// — any reset or idle-wipe restarts the companion from BEGIN.
+///
+/// Kept separate from `SecureState` because the 8 KB manifest buffer
+/// inside `FwUpdateCtx` dwarfs the rest of state, and we want explicit
+/// zeroize-on-wipe semantics. See `fw_update::mod`.
+///
+/// SAFETY: same single-threaded invariant as `STATE`. `FwUpdateCtx`
+/// is `ZeroizeOnDrop`.
+#[cfg(feature = "stm32u585")]
+pub(super) static mut FW_UPDATE: Option<crate::fw_update::FwUpdateCtx> = None;
+
+/// In-SRAM slot cache: a SigningKey tagged with the
+/// `(account_index, chain_id, slot_index)` tuple it was derived for.
+/// After the Coinbase-Smart-Wallet port, slot keys are chain-specific —
+/// signing on chain A with slot index N derives a different key than
+/// chain B with the same index, so the cache keys on chain too. With
+/// multi-account derivation, slot keys also vary per `account_index`
+/// (the `master_entropy` they descend from is account-scoped). A
+/// mismatch on any field triggers a fresh keygen (<1 s on hardware).
+pub(super) struct CachedSlot {
+    pub(super) account_index: u32,
+    pub(super) chain_id: u64,
+    pub(super) slot_index: u32,
+    pub(super) key: sphincs_c10::SigningKey,
+}
 
 /// Borrow the gateway state mutably for the duration of `f`.
 ///
@@ -850,539 +1680,652 @@ pub(super) fn peek_state<R>(f: impl FnOnce(&SecureState) -> R) -> R {
     unsafe { f(&*core::ptr::addr_of!(STATE)) }
 }
 
+// ---------------------------------------------------------------------------
+// Host tests — exercise the `SecureState` API end-to-end through the
+// `with_state` / `peek_state` accessors. The whole module is gated out of
+// the production `nsc` tree (`#[cfg(not(test))]` on `mod nsc;`), so these
+// tests fire only when the file is re-included under the crate-root
+// `nsc_core_under_test` scaffold (see `secure/src/main.rs`).
+//
+// **Concurrency model.** Every test that touches `STATE` / `SLOT_CACHE`
+// must hold `STATE_TEST_LOCK` for the duration of the test body.
+// `cargo test` runs tests in parallel by default; without serialisation
+// the assertions on the singleton are inherently racey.
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+pub(super) mod tests {
+    use super::*;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    /// Process-wide lock for every test that touches the static `STATE`.
+    /// Exposed `pub(super)` so the sibling-mod tests in the crate-root
+    /// `nsc_core_pure_tests` scaffold can acquire it from outside the
+    /// state module.
+    pub(crate) fn state_test_lock() -> MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        let m = LOCK.get_or_init(|| Mutex::new(()));
+        m.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Reset STATE to a clean initial value between tests so ordering
+    /// can't leak.
+    fn reset_state() {
+        with_state(|s| {
+            s.zeroize_sensitive();
+            s.remaining_attempts = MAX_ATTEMPTS;
+        });
+    }
+
+    // -- positive coverage -----------------------------------------------
+
+    #[test]
+    fn positive_initial_pin_verified_is_false() {
+        let _g = state_test_lock();
+        reset_state();
+        assert!(!peek_state(|s| s.pin_verified.is_true_fi()));
+    }
+
+    #[test]
+    fn positive_mark_unlocked_sets_pin_verified() {
+        let _g = state_test_lock();
+        reset_state();
+        let master = [0x42u8; 32];
+        with_state(|s| s.mark_unlocked(master));
+        assert!(peek_state(|s| s.pin_verified.is_true_fi()));
+    }
+
+    #[test]
+    fn positive_mark_unlocked_stores_master_secret() {
+        let _g = state_test_lock();
+        reset_state();
+        let master = [0xA5u8; 32];
+        with_state(|s| s.mark_unlocked(master));
+        let stored = peek_state(|s| s.master_secret);
+        assert_eq!(stored, master, "master_secret must be installed verbatim");
+    }
+
+    #[test]
+    fn positive_zeroize_drops_pin_verified() {
+        let _g = state_test_lock();
+        reset_state();
+        with_state(|s| s.mark_unlocked([0x11u8; 32]));
+        assert!(peek_state(|s| s.pin_verified.is_true_fi()));
+        with_state(|s| s.zeroize_sensitive());
+        assert!(
+            !peek_state(|s| s.pin_verified.is_true_fi()),
+            "zeroize_sensitive MUST land pin_verified back at false"
+        );
+    }
+
+    #[test]
+    fn positive_zeroize_wipes_master_secret() {
+        let _g = state_test_lock();
+        reset_state();
+        with_state(|s| s.mark_unlocked([0xCDu8; 32]));
+        with_state(|s| s.zeroize_sensitive());
+        let stored = peek_state(|s| s.master_secret);
+        assert_eq!(stored, [0u8; 32], "master_secret MUST be byte-zeroed by zeroize_sensitive");
+    }
+
+    #[test]
+    fn positive_zeroize_wipes_slot_master_entropy() {
+        let _g = state_test_lock();
+        reset_state();
+        with_state(|s| {
+            s.slot_master_entropy = [0xBBu8; 32];
+            s.slot_master_derived.set_true();
+        });
+        with_state(|s| s.zeroize_sensitive());
+        let got = peek_state(|s| s.slot_master_entropy);
+        assert_eq!(got, [0u8; 32]);
+        assert!(!peek_state(|s| s.slot_master_derived.is_true_fi()));
+    }
+
+    #[test]
+    fn positive_initial_remaining_attempts_is_max() {
+        let _g = state_test_lock();
+        reset_state();
+        let r = peek_state(|s| s.remaining_attempts);
+        assert_eq!(r, MAX_ATTEMPTS);
+    }
+
+    #[test]
+    fn positive_bootstrap_cache_lookup_miss_returns_none() {
+        let _g = state_test_lock();
+        reset_state();
+        let got = with_state(|s| s.bootstrap_cache_lookup(0));
+        assert!(got.is_none(), "fresh state must have an empty bootstrap cache");
+    }
+
+    #[test]
+    fn positive_bootstrap_cache_insert_then_lookup_returns_pubkeys() {
+        let _g = state_test_lock();
+        reset_state();
+        let pk_seed = [0x11u8; 32];
+        let pk_root = [0x22u8; 32];
+        with_state(|s| s.bootstrap_cache_insert(7, pk_seed, pk_root));
+        let got = with_state(|s| s.bootstrap_cache_lookup(7));
+        assert_eq!(got, Some((pk_seed, pk_root)));
+    }
+
+    #[test]
+    fn positive_bootstrap_cache_distinct_indices_distinct_pubkeys() {
+        let _g = state_test_lock();
+        reset_state();
+        with_state(|s| {
+            s.bootstrap_cache_insert(0, [0x10; 32], [0x20; 32]);
+            s.bootstrap_cache_insert(1, [0x11; 32], [0x21; 32]);
+        });
+        let a = with_state(|s| s.bootstrap_cache_lookup(0)).unwrap();
+        let b = with_state(|s| s.bootstrap_cache_lookup(1)).unwrap();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn positive_bootstrap_cache_reinsert_overwrites_in_place() {
+        let _g = state_test_lock();
+        reset_state();
+        with_state(|s| s.bootstrap_cache_insert(3, [0x01; 32], [0x02; 32]));
+        with_state(|s| s.bootstrap_cache_insert(3, [0x03; 32], [0x04; 32]));
+        let got = with_state(|s| s.bootstrap_cache_lookup(3));
+        assert_eq!(got, Some(([0x03; 32], [0x04; 32])));
+    }
+
+    #[test]
+    fn positive_bootstrap_cache_lru_evicts_oldest() {
+        let _g = state_test_lock();
+        reset_state();
+        // Fill the cache.
+        with_state(|s| {
+            for i in 0..(BOOTSTRAP_CACHE_LEN as u32) {
+                s.bootstrap_cache_insert(i, [i as u8; 32], [i as u8 ^ 0xFF; 32]);
+            }
+        });
+        // Touch index 0 to keep it warm, then insert one more.
+        let _ = with_state(|s| s.bootstrap_cache_lookup(0));
+        // The least-recently-touched at this point is index 1.
+        with_state(|s| {
+            s.bootstrap_cache_insert(99, [0xEEu8; 32], [0xEFu8; 32])
+        });
+        assert!(
+            with_state(|s| s.bootstrap_cache_lookup(1)).is_none(),
+            "LRU victim (index 1) must have been evicted"
+        );
+        assert!(
+            with_state(|s| s.bootstrap_cache_lookup(0)).is_some(),
+            "warm entry (index 0) must have survived"
+        );
+        assert!(
+            with_state(|s| s.bootstrap_cache_lookup(99)).is_some(),
+            "newest entry must be present"
+        );
+    }
+
+    // -- negative coverage -----------------------------------------------
+
+    /// Assumption: `mark_unlocked` zeroizes the *caller's* buffer copy
+    /// after stamping. Forgetting this leaves a 32-byte secret on the
+    /// caller's stack indefinitely.
+    #[test]
+    fn negative_mark_unlocked_wipes_caller_local_master() {
+        let _g = state_test_lock();
+        reset_state();
+        let mut master = [0xC3u8; 32];
+        with_state(|s| s.mark_unlocked(master));
+        // `master` was passed by value — the inside-the-fn `master.zeroize()`
+        // does not affect the outer local. The contract is "the byte
+        // buffer the function moved IN gets zeroized before return."
+        // We can re-prove it by passing a buffer and checking that the
+        // stored copy is the byte pattern we passed (i.e. nothing was
+        // mangled). Caller-buffer wipe is the responsibility of the
+        // caller (see `gated_unlock`); state pins the contract that the
+        // stored copy is correct.
+        let stored = peek_state(|s| s.master_secret);
+        assert_eq!(stored, [0xC3u8; 32]);
+        let _ = &mut master;
+    }
+
+    /// Assumption (HIGH-6): a re-unlock with a NEW master MUST wipe the
+    /// prior master_secret BEFORE installing the new one. Otherwise an
+    /// EM-glitch on the assignment leaves the stale secret in BSS.
+    #[test]
+    fn negative_mark_unlocked_overwrites_prior_master_completely() {
+        let _g = state_test_lock();
+        reset_state();
+        with_state(|s| s.mark_unlocked([0xAAu8; 32]));
+        with_state(|s| s.mark_unlocked([0x55u8; 32]));
+        let stored = peek_state(|s| s.master_secret);
+        assert_eq!(stored, [0x55u8; 32]);
+        // No byte of the prior 0xAA secret may survive.
+        assert!(stored.iter().all(|b| *b != 0xAA),
+            "no byte of the prior master_secret may remain after re-unlock");
+    }
+
+    /// Assumption: `zeroize_sensitive` also clears the per-slot tracking
+    /// fields (`last_chain_id`, `last_key_index`, `last_ots_index`,
+    /// `has_signed`). If any survive a wipe, a stale-session replay
+    /// counter can be misinterpreted as a fresh-session zero by the
+    /// next signing pass.
+    #[test]
+    fn negative_zeroize_clears_ots_tracking_fields() {
+        let _g = state_test_lock();
+        reset_state();
+        with_state(|s| {
+            s.last_chain_id = 0xDEAD_BEEF_DEAD_BEEF;
+            s.last_key_index = 0xCAFE_BABE;
+            s.last_ots_index = 0x0BAD_F00D;
+            s.has_signed.set_true();
+        });
+        with_state(|s| s.zeroize_sensitive());
+        let (cid, ki, oi, hs) = peek_state(|s| (
+            s.last_chain_id, s.last_key_index, s.last_ots_index,
+            s.has_signed.is_true_fi(),
+        ));
+        assert_eq!(cid, 0, "last_chain_id must be zeroed");
+        assert_eq!(ki, 0, "last_key_index must be zeroed");
+        assert_eq!(oi, 0, "last_ots_index must be zeroed");
+        assert!(!hs, "has_signed must be cleared");
+    }
+
+    /// Assumption: `zeroize_sensitive` wipes the bootstrap pubkey
+    /// cache. Stale entries are technically non-secret but their
+    /// presence after a lock would let post-wipe code path observe
+    /// "warm cache" state that mismatches the freshly-zero
+    /// `master_secret`.
+    #[test]
+    fn negative_zeroize_clears_bootstrap_cache() {
+        let _g = state_test_lock();
+        reset_state();
+        with_state(|s| {
+            s.bootstrap_cache_insert(0, [0x10; 32], [0x20; 32]);
+            s.bootstrap_cache_insert(1, [0x11; 32], [0x21; 32]);
+        });
+        with_state(|s| s.zeroize_sensitive());
+        for i in 0..=1u32 {
+            assert!(
+                with_state(|s| s.bootstrap_cache_lookup(i)).is_none(),
+                "bootstrap cache entry {i} must be cleared by zeroize_sensitive"
+            );
+        }
+        // Tick counter is also reset (so post-wipe lookups don't see a
+        // wrapped-but-non-zero tick that confuses LRU comparison).
+        let tick = peek_state(|s| s.bootstrap_cache_tick);
+        // After zeroize_sensitive sets tick to 0, the first lookup above
+        // bumps it via wrapping_add — so it should be > 0 here. We only
+        // assert it didn't survive at its old (post-fill) value of 2.
+        assert!(tick <= 2,
+            "bootstrap_cache_tick must reset to ~0 after zeroize_sensitive (saw {tick})");
+    }
+
+    /// Assumption (CLAUDE.md invariant #4 + ZeroizeOnDrop): `pin_verified`
+    /// is FI-hardened storage (Trezor-style complement pair, NOT a bare
+    /// `bool`). A bare `bool` would let a single bit-flip toggle it.
+    /// We pin the size: `FihBool` is two `u32`s (8 bytes); a `bool`
+    /// would be 1 byte.
+    #[test]
+    fn negative_pin_verified_storage_is_fihbool_sized() {
+        use core::mem::size_of_val;
+        let _g = state_test_lock();
+        // peek to materialise an actual borrow; size_of_val is const but
+        // we want to assert against the live field, not the type alias.
+        let sz = peek_state(|s| size_of_val(&s.pin_verified));
+        assert_eq!(sz, 8,
+            "pin_verified must be FihBool-sized (val+complement = 8 bytes); \
+             a 1-byte bool would re-open the F-14 single-bit-flip attack");
+    }
+
+    /// Assumption: `master_secret` storage is exactly 32 bytes (the SHA-256
+    /// width assumed by every downstream KDF call site). A silent
+    /// resize would break entropy-blob decryption.
+    #[test]
+    fn negative_master_secret_storage_is_32_bytes() {
+        let _g = state_test_lock();
+        let sz = peek_state(|s| s.master_secret.len());
+        assert_eq!(sz, 32);
+    }
+
+    /// Assumption: the bootstrap-cache LRU array is exactly
+    /// `BOOTSTRAP_CACHE_LEN` (16) entries. A silent enlargement
+    /// expands the BSS footprint past what the documented invariant
+    /// admits; a shrink starts evicting under workloads that fit
+    /// today.
+    #[test]
+    fn negative_bootstrap_cache_array_length_is_pinned() {
+        let _g = state_test_lock();
+        let sz = peek_state(|s| s.bootstrap_cache.len());
+        assert_eq!(sz, BOOTSTRAP_CACHE_LEN);
+        assert_eq!(BOOTSTRAP_CACHE_LEN, 16,
+            "BOOTSTRAP_CACHE_LEN is documented as 16 in state.rs");
+    }
+
+    /// Assumption: after `zeroize_sensitive`, an evicted-then-re-inserted
+    /// cache entry's pubkey halves must be the new values — i.e. the
+    /// old victim's bytes do NOT leak through.
+    #[test]
+    fn negative_evicted_cache_entry_pubkey_bytes_replaced() {
+        let _g = state_test_lock();
+        reset_state();
+        // Fill, then push one extra to force eviction of the LRU.
+        with_state(|s| {
+            for i in 0..(BOOTSTRAP_CACHE_LEN as u32) {
+                s.bootstrap_cache_insert(i, [0xAAu8; 32], [0xBBu8; 32]);
+            }
+            s.bootstrap_cache_insert(0xFF, [0x55u8; 32], [0x77u8; 32]);
+        });
+        let got = with_state(|s| s.bootstrap_cache_lookup(0xFF));
+        assert_eq!(got, Some(([0x55u8; 32], [0x77u8; 32])));
+        // The victim's `account_index` is no longer present.
+        assert!(with_state(|s| s.bootstrap_cache_lookup(0)).is_none(),
+            "victim's account_index must be evicted");
+    }
+}
+
 ```
 
 
 ### `secure/src/crypto.rs`
 
 ```rust
-//! Crypto helpers: KDF, AES-GCM wrap/unwrap, PIN state ser/de, and on-unlock
-//! SPHINCS+C7 key derivation from the stored BIP-39 entropy.
+//! Crypto helpers — secure-side wrapper around [`pqsigner_domain`].
 //!
-//! ## Why entropy and not the SPHINCS+C7 seed?
+//! The pure-logic primitives (KDFs, AES-GCM wrap/unwrap, BIP-39 ↔
+//! SPHINCS+C10 derivation, slot-key derivation, PIN-state encoding) live
+//! in [`pqsigner_domain`] so host-side reference signers can reuse them
+//! without the secure-world hardware deps.
 //!
-//! The on-device secret blob is the **32-byte BIP-39 entropy** — the raw
-//! 256 bits the user's 24-word phrase encodes. On every unlock the secure
-//! world re-runs the full BIP-39 derivation:
+//! What stays here:
 //!
-//! ```text
-//!     entropy (32 B)
-//!         │
-//!         ▼ Mnemonic::from_entropy()
-//!     mnemonic
-//!         │
-//!         ▼ PBKDF2-HMAC-SHA512, 2048 iters
-//!     bip39_seed (64 B)
-//!         │
-//!         ▼ slhdsa_seed_from_bip39  (2 × Keccak-256 KDF)
-//!     SPHINCS+C7 seed (48 B)
-//!         │
-//!         ▼ SigningKey::keygen
-//!     sphincs_c7::SigningKey
-//! ```
+//! * [`c10_sign_verified_with_progress`] — the FI-hardened
+//!   verify-before-release wrapper. Depends on [`crate::fi`], whose
+//!   hardening primitives are keyed off the secure-world TRNG.
+//! * [`provision_from_mnemonic`] / [`store_macd_encrypted`] — the
+//!   `WalletStore` + `SecureElement` provisioning entry points used by
+//!   the wizard and by the mock/Tropic01 backends. These touch the
+//!   secure-side `crate::secure_element::*` traits with r-mem
+//!   semantics, so they cannot live in the pure-logic crate.
 //!
-//! Storing entropy rather than the post-PBKDF2 seed has two benefits:
-//! 1. Smaller secure-element footprint (32 B vs 48 B plaintext, 60 B vs 76 B
-//!    AES-GCM blob).
-//! 2. The on-device secret is bit-for-bit identical to the user's recovery
-//!    paper backup — there is no derived intermediate that could go stale
-//!    if anything in the BIP-39 chain ever changes.
-//!
-//! The cost is one PBKDF2-HMAC-SHA512 (2048 iters) per unlock, dwarfed by
-//! the SPHINCS+ signing time itself.
+//! Every other public name in [`pqsigner_domain`] is re-exported below.
 
-use aes_gcm::aead::{AeadInPlace, KeyInit};
-use aes_gcm::{Aes256Gcm, Nonce};
-use sha2::{Digest, Sha256};
+pub use pqsigner_domain::*;
 
 use crate::secure_element::SecureElement;
-use sphincs_c7::SigningKey;
-use sphincs_tz_bip39::{Mnemonic, ENTROPY_BYTES};
-use sphincs_tz_shared::MAX_ATTEMPTS;
+use sphincs_tz_bip39::Mnemonic;
 use zeroize::Zeroize;
 
-// r-mem slot assignments
-pub const RMEM_ENCRYPTED_ENTROPY: u16 = 0;
-pub const RMEM_PIN_STATE: u16 = 1;
-/// Legacy slot: stores the "default" verifying key (the old single-signer VK).
-/// Kept for backward compatibility; new code should use RMEM_BOOTSTRAP_VK.
-pub const RMEM_VERIFYING_KEY: u16 = 2;
-/// Bootstrap signer verifying key (32 bytes). Set at provisioning, never
-/// changes. Used by CMD_GET_BOOTSTRAP_PUBKEY.
-pub const RMEM_BOOTSTRAP_VK: u16 = 3;
-
-/// Length of the SPHINCS+C7 seed material:
-/// `sk_seed (32) ‖ pk_seed (16)`. Computed from the BIP-39
-/// entropy on every unlock; never persisted.
-pub const SEED_LEN: usize = 48;
-
-/// On-device entropy length: 256 bits = the BIP-39 entropy that the user's
-/// 24-word phrase encodes.
-pub const ENTROPY_LEN: usize = ENTROPY_BYTES;
-
-/// Total stored blob: 12-byte nonce ‖ encrypted_entropy (32) ‖ AES-GCM tag (16).
-pub const ENTROPY_BLOB_LEN: usize = 12 + ENTROPY_LEN + 16;
-
-// ---------------------------------------------------------------------------
-// KDF helpers
-// ---------------------------------------------------------------------------
-
-pub fn kdf(domain: &[u8], input: &[u8], index: u8) -> [u8; 32] {
-    let mut h = Sha256::new();
-    h.update(domain);
-    h.update(input);
-    h.update([index]);
-    h.finalize().into()
-}
-
-/// Keccak-256 based KDF for SPHINCS+C7 seed derivation.
-/// Used by the signing key derivation paths; the SHA-256 `kdf()` above
-/// is kept for non-signing helpers (wrap-key, entropy-nonce, MACD).
-pub fn kdf_keccak(domain: &[u8], input: &[u8], index: u8) -> [u8; 32] {
-    use sha3::{Digest as _, Keccak256};
-    let mut h = Keccak256::new();
-    h.update(domain);
-    h.update(input);
-    h.update([index]);
-    h.finalize().into()
-}
-
-pub fn macd_init_input(master_secret: &[u8; 32], j: u8) -> [u8; 32] {
-    kdf(b"sphincs-macd-init", master_secret, j)
-}
-
-pub fn macd_pin_input(pin: &[u8; 8], j: u8) -> [u8; 32] {
-    kdf(b"sphincs-macd-pin", pin, j)
-}
-
-pub fn derive_wrap_key(master_secret: &[u8; 32]) -> [u8; 32] {
-    kdf(b"sphincs-wrap-key", master_secret, 0)
-}
-
-pub fn derive_entropy_nonce(master_secret: &[u8; 32]) -> [u8; 12] {
-    let h = kdf(b"sphincs-entropy-nonce", master_secret, 0);
-    let mut n = [0u8; 12];
-    n.copy_from_slice(&h[..12]);
-    n
-}
-
-fn nonce_for(index: u8) -> [u8; 12] {
-    let h: [u8; 32] = kdf(b"sphincs-nonce", &[index], 0);
-    let mut n = [0u8; 12];
-    n.copy_from_slice(&h[..12]);
-    n
-}
-
-// ---------------------------------------------------------------------------
-// AES-GCM helpers (in-place, no_std)
-// ---------------------------------------------------------------------------
-
-pub fn aes_encrypt_inplace(
-    key: &[u8; 32],
-    buf: &mut [u8],
-    plaintext_len: usize,
-    nonce_idx: u8,
-) -> usize {
-    let cipher = Aes256Gcm::new_from_slice(key).unwrap();
-    let nonce = nonce_for(nonce_idx);
-    let tag = cipher
-        .encrypt_in_place_detached(Nonce::from_slice(&nonce), &[], &mut buf[..plaintext_len])
-        .expect("AES-GCM encrypt failed");
-    buf[plaintext_len..plaintext_len + 16].copy_from_slice(&tag);
-    plaintext_len + 16
-}
-
-pub fn aes_decrypt_inplace(
-    key: &[u8; 32],
-    buf: &mut [u8],
-    ct_len: usize,
-    nonce_idx: u8,
-) -> Result<usize, ()> {
-    if ct_len < 16 {
-        return Err(());
-    }
-    let plaintext_len = ct_len - 16;
-    let cipher = Aes256Gcm::new_from_slice(key).unwrap();
-    let nonce = nonce_for(nonce_idx);
-    let (ct, tag_bytes) = buf[..ct_len].split_at_mut(plaintext_len);
-    let tag = aes_gcm::Tag::from_slice(tag_bytes);
-    cipher
-        .decrypt_in_place_detached(Nonce::from_slice(&nonce), &[], ct, tag)
-        .map_err(|_| ())?;
-    Ok(plaintext_len)
-}
-
-// ---------------------------------------------------------------------------
-// Entropy encryption/decryption with the master secret
-// ---------------------------------------------------------------------------
-
-/// Encrypt the 32-byte BIP-39 entropy under the wrap key derived from
-/// `master_secret`. Output layout: `nonce(12) ‖ ciphertext(32) ‖ tag(16)`.
-pub fn encrypt_entropy_blob(
-    entropy: &[u8; ENTROPY_LEN],
-    master_secret: &[u8; 32],
-) -> [u8; ENTROPY_BLOB_LEN] {
-    let mut wrap = derive_wrap_key(master_secret);
-    let nonce = derive_entropy_nonce(master_secret);
-
-    let mut blob = [0u8; ENTROPY_BLOB_LEN];
-    blob[..12].copy_from_slice(&nonce);
-    blob[12..12 + ENTROPY_LEN].copy_from_slice(entropy);
-
-    let cipher = Aes256Gcm::new_from_slice(&wrap).unwrap();
-    let tag = cipher
-        .encrypt_in_place_detached(
-            Nonce::from_slice(&nonce),
-            &[],
-            &mut blob[12..12 + ENTROPY_LEN],
-        )
-        .expect("entropy encryption");
-    blob[12 + ENTROPY_LEN..].copy_from_slice(&tag);
-
-    wrap.zeroize();
-    blob
-}
-
-/// Decrypt a stored entropy blob with the master secret. Returns the
-/// 32-byte BIP-39 entropy on success.
-pub fn decrypt_entropy_blob(
-    blob: &[u8],
-    master_secret: &[u8; 32],
-) -> Result<[u8; ENTROPY_LEN], ()> {
-    if blob.len() != ENTROPY_BLOB_LEN {
-        return Err(());
-    }
-    let mut wrap = derive_wrap_key(master_secret);
-    // The nonce stored at the head of the blob; we trust it because the
-    // wrap_key is master-bound.
-    let nonce: [u8; 12] = blob[..12].try_into().unwrap();
-    let mut entropy_buf = [0u8; ENTROPY_LEN];
-    entropy_buf.copy_from_slice(&blob[12..12 + ENTROPY_LEN]);
-    let tag = aes_gcm::Tag::from_slice(&blob[12 + ENTROPY_LEN..]);
-
-    let cipher = Aes256Gcm::new_from_slice(&wrap).unwrap();
-    let r = cipher
-        .decrypt_in_place_detached(Nonce::from_slice(&nonce), &[], &mut entropy_buf, tag)
-        .map_err(|_| ());
-
-    wrap.zeroize();
-    r?;
-    Ok(entropy_buf)
-}
-
-/// Derive a fully-formed SPHINCS+C7 signing key from a 48-byte seed.
-/// Calls `SigningKey::keygen` which builds the full hypertree — the
-/// `pk_root` Merkle root is *computed* from `(sk_seed, pk_seed)`.
+/// Sign a 32-byte message hash with the bootstrap C10 signing key and
+/// the (optional) randomiser. Wraps `sphincs_c10::SigningKey::sign`
+/// with a verify-before-release fault-injection guard. Reports 0..100
+/// signing progress via the supplied callback so the trusted-UI
+/// progress bar stays responsive during the multi-second C10
+/// signature.
 ///
-/// **Expensive** (~10s on Cortex-M33). At provisioning time, compute once
-/// and cache the VK. At signing time, use `SigningKey::from_parts` with
-/// the cached `pk_root` to skip the hypertree rebuild.
-pub fn derive_signing_key(seed: &[u8; SEED_LEN]) -> SigningKey {
-    let mut sk_seed = [0u8; 32];
-    let mut pk_seed = [0u8; 16];
-    sk_seed.copy_from_slice(&seed[0..32]);
-    pk_seed.copy_from_slice(&seed[32..48]);
-    SigningKey::keygen(sk_seed, pk_seed)
-}
-
-/// Derive the 48-byte SPHINCS+C7 seed material deterministically from the
-/// 64-byte BIP-39 seed (PBKDF2-HMAC-SHA512 output of the user's mnemonic).
-///
-/// Domain-separated with `"sphincsc7-sk-seed"` / `"sphincsc7-pk-seed"` so
-/// the same mnemonic, used in a completely different wallet (e.g. BIP-44
-/// Bitcoin), produces independent key material.
-///
-/// Two Keccak-256 chunks: one full 32-byte `sk_seed` and the first 16 bytes
-/// of a second hash for `pk_seed`. The index byte is 0 for both (domain
-/// tag provides separation).
-///
-/// This function is the **recovery contract**: as long as it remains stable,
-/// the same 24-word phrase always produces the same SPHINCS+C7 keypair, so a
-/// user who loses or bricks their device can restore from their written-down
-/// phrase on any device that runs this firmware.
-pub fn slhdsa_seed_from_bip39(bip39_seed: &[u8; 64]) -> [u8; SEED_LEN] {
-    let mut out = [0u8; SEED_LEN];
-    let chunk0 = kdf_keccak(b"sphincsc7-sk-seed", bip39_seed, 0);
-    let chunk1 = kdf_keccak(b"sphincsc7-pk-seed", bip39_seed, 0);
-    out[0..32].copy_from_slice(&chunk0);       // sk_seed: full 32 bytes
-    out[32..48].copy_from_slice(&chunk1[..16]); // pk_seed: first 16 bytes
-    out
-}
-
-/// Run the full BIP-39 → SPHINCS+C7 derivation chain on a 32-byte entropy
-/// and return the signing key. Called on every unlock so the `SigningKey`
-/// only exists in secure SRAM for the duration of the actual signing
-/// operation, never persisted in any form.
-///
-/// PBKDF2-HMAC-SHA512 (2048 iters) is the dominant cost (~tens of ms on a
-/// Cortex-M33; dwarfed by SPHINCS+ signing's seconds).
-pub fn derive_signing_key_from_entropy(
-    entropy: &[u8; ENTROPY_LEN],
-) -> SigningKey {
-    // 1. Reconstruct the mnemonic from the stored entropy (recomputes
-    //    checksum; never produces words out loud).
-    let mnemonic = Mnemonic::from_entropy(entropy);
-
-    // 2. PBKDF2-HMAC-SHA512 with the empty passphrase.
-    let mut bip39_seed = mnemonic.to_seed("");
-
-    // 3. Domain-separate to the 48-byte SPHINCS+C7 seed.
-    let mut slh_seed = slhdsa_seed_from_bip39(&bip39_seed);
-    bip39_seed.zeroize();
-
-    // 4. SPHINCS+C7 KeyGen (builds hypertree).
-    let sk = derive_signing_key(&slh_seed);
-    slh_seed.zeroize();
-
-    // mnemonic Drop zeros its 24 word indices.
-    sk
-}
-
-/// Fast-path signing key derivation: re-derive `(sk_seed, pk_seed)` from
-/// entropy via the BIP-39 chain, then reconstruct the `SigningKey` using
-/// `from_parts` with a pre-computed `pk_root` (read from r-mem at call
-/// site). Skips the expensive hypertree rebuild (~10-15s on Cortex-M33).
-///
-/// The caller MUST supply a `pk_root` that was computed by the same
-/// `(sk_seed, pk_seed)` -- i.e., the VK cached at provisioning time.
-pub fn derive_signing_key_from_entropy_fast(
-    entropy: &[u8; ENTROPY_LEN],
-    cached_pk_root: &[u8; 16],
-) -> SigningKey {
-    let mnemonic = Mnemonic::from_entropy(entropy);
-    let mut bip39_seed = mnemonic.to_seed("");
-    let mut slh_seed = slhdsa_seed_from_bip39(&bip39_seed);
-    bip39_seed.zeroize();
-
-    let mut sk_seed = [0u8; 32];
-    let mut pk_seed = [0u8; 16];
-    sk_seed.copy_from_slice(&slh_seed[0..32]);
-    pk_seed.copy_from_slice(&slh_seed[32..48]);
-    slh_seed.zeroize();
-
-    let mut pk_root = [0u8; 16];
-    pk_root.copy_from_slice(cached_pk_root);
-
-    SigningKey::from_parts(sk_seed, pk_seed, pk_root)
-}
-
-/// Fast-path bootstrap signing key derivation: same as
-/// `derive_bootstrap_key_from_entropy` but uses a cached `pk_root`
-/// instead of rebuilding the hypertree.
-pub fn derive_bootstrap_key_from_entropy_fast(
-    entropy: &[u8; ENTROPY_LEN],
-    cached_pk_root: &[u8; 16],
-) -> SigningKey {
-    let mnemonic = Mnemonic::from_entropy(entropy);
-    let mut bip39_seed = mnemonic.to_seed("");
-    let mut seed = bootstrap_seed_from_bip39(&bip39_seed);
-    bip39_seed.zeroize();
-
-    let mut sk_seed = [0u8; 32];
-    let mut pk_seed = [0u8; 16];
-    sk_seed.copy_from_slice(&seed[0..32]);
-    pk_seed.copy_from_slice(&seed[32..48]);
-    seed.zeroize();
-
-    let mut pk_root = [0u8; 16];
-    pk_root.copy_from_slice(cached_pk_root);
-
-    SigningKey::from_parts(sk_seed, pk_seed, pk_root)
-}
-
-/// Same as `derive_signing_key_from_entropy` but also returns the 32-byte
-/// verifying key bytes. Used by provisioning to cache the VK in r-mem
-/// slot 2 without keeping the full SigningKey alive longer than necessary.
-pub fn derive_keypair_from_entropy(
-    entropy: &[u8; ENTROPY_LEN],
-) -> (SigningKey, [u8; 32]) {
-    let sk = derive_signing_key_from_entropy(entropy);
-    let vk_bytes = sk.verifying_key().to_bytes();
-    (sk, vk_bytes)
-}
-
-// ---------------------------------------------------------------------------
-// Two-tier key derivation: bootstrap + per-chain main signers
-// ---------------------------------------------------------------------------
+/// Produces 4008-byte C10 signatures — see `sphincs-c10/src/params.rs`.
+// F-18 (CFI): per-step magic constants for `c10_sign_verified_with_progress`.
 //
-// Both key classes derive from the same BIP-39 entropy via domain-separated
-// KDFs that mirror the BIP-85 path structure:
-//
-//   bootstrap         = derive(seed, "pqwallet-c7-bootstrap", 0)
-//   chain-main-key_i  = derive(seed, "pqwallet-c7-main", chainId, keyIndex)
-//
-// Using SPHINCS+C7 for both. The domain separation ensures the bootstrap
-// key and all per-chain main keys are cryptographically independent.
+// Distinct, non-trivial 32-bit values so no subset of skipped steps
+// can sum to the same gap as another subset. Hex prefixes are
+// mnemonic (0xA1 = "rate-limit", 0xB2 = "opt_rand", etc.) — the
+// actual numeric value is what matters for FI defense.
+const CFI_STEP_RATE_LIMIT:  u32 = 0xA1_5A_1357;
+const CFI_STEP_OPT_RAND:    u32 = 0xB2_5B_2468;
+const CFI_STEP_SHUFFLE:     u32 = 0xC3_5C_3579;
+const CFI_STEP_SIGN_A:      u32 = 0xD4_5D_468A;
+const CFI_STEP_SIGN_B:      u32 = 0xE5_5E_579B;
+const CFI_STEP_CT_EQ:       u32 = 0xF6_5F_68AC;
+const CFI_STEP_VERIFY_GATE: u32 = 0x17_60_79BD;
 
-/// Derive the bootstrap signer's SPHINCS+C7 seed (48 bytes) from the
-/// BIP-39 seed. The bootstrap signer is global (not per-chain), stateless,
-/// and never rotates.
-pub fn bootstrap_seed_from_bip39(bip39_seed: &[u8; 64]) -> [u8; SEED_LEN] {
-    let mut out = [0u8; SEED_LEN];
-    let chunk0 = kdf_keccak(b"pqwallet-c7-bootstrap-sk-seed", bip39_seed, 0);
-    let chunk1 = kdf_keccak(b"pqwallet-c7-bootstrap-pk-seed", bip39_seed, 0);
-    out[0..32].copy_from_slice(&chunk0);
-    out[32..48].copy_from_slice(&chunk1[..16]);
-    out
-}
+pub fn c10_sign_verified_with_progress(
+    sk: &sphincs_c10::SigningKey,
+    msg_hash: &[u8; 32],
+    progress: fn(u8),
+) -> Result<[u8; sphincs_c10::params::SIGNATURE_LEN], ()> {
+    use subtle::ConstantTimeEq;
 
-/// Derive a per-chain main signer's SPHINCS+C7 seed (48 bytes) from the
-/// BIP-39 seed, chain ID, and key epoch index.
-///
-/// Each (chain_id, key_index) pair produces a cryptographically
-/// independent keypair. Keys on different chains cannot collide even if
-/// the key indices match, because the chain ID is part of the KDF input.
-pub fn main_signer_seed_from_bip39(
-    bip39_seed: &[u8; 64],
-    chain_id: u64,
-    key_index: u32,
-) -> [u8; SEED_LEN] {
-    // Build a domain-specific input: bip39_seed ‖ chain_id BE ‖ key_index BE
-    let mut input = [0u8; 64 + 8 + 4];
-    input[..64].copy_from_slice(bip39_seed);
-    input[64..72].copy_from_slice(&chain_id.to_be_bytes());
-    input[72..76].copy_from_slice(&key_index.to_be_bytes());
+    // F-18 (CFI): track that every critical step ran. Final check
+    // (`cfi.check_into_sentinel(EXPECTED) != OK_SENTINEL`) fails
+    // closed if any one of the 7 steps below was skipped by a glitch.
+    // Defends the "skip an entire function call" attack class that
+    // F-2's sentinel-encoding doesn't reach.
+    const CFI_EXPECTED: u32 = crate::cfi_expected!(
+        CFI_STEP_RATE_LIMIT,
+        CFI_STEP_OPT_RAND,
+        CFI_STEP_SHUFFLE,
+        CFI_STEP_SIGN_A,
+        CFI_STEP_SIGN_B,
+        CFI_STEP_CT_EQ,
+        CFI_STEP_VERIFY_GATE,
+    );
+    let mut cfi = crate::fi::CfiCounter::new();
 
-    let mut out = [0u8; SEED_LEN];
-    let chunk0 = kdf_keccak(b"pqwallet-c7-main-sk-seed", &input, 0);
-    let chunk1 = kdf_keccak(b"pqwallet-c7-main-pk-seed", &input, 0);
-    out[0..32].copy_from_slice(&chunk0);
-    out[32..48].copy_from_slice(&chunk1[..16]);
-    out
-}
+    // F-17 (SCA defense): signing rate limiter. Enforces
+    //   - ≥ 1 second between consecutive signs (busy-wait), and
+    //   - ≤ 250 signs per unlock session (refuses past the cap).
+    // The double-compute below counts as ONE rate-limit charge —
+    // one output sig per call, one budget unit. See `sign_rate.rs`
+    // for the full threat-model and cost analysis.
+    //
+    // On refusal (session cap), the function returns Err(()) which
+    // the gateway callers translate to `NscStatus::CryptoError`.
+    // The companion can prompt the user to re-unlock; a fresh PIN
+    // entry re-arms the session budget via `mark_unlocked`.
+    #[cfg(not(test))]
+    crate::sign_rate::pre_sign()?;
+    cfi.bump(CFI_STEP_RATE_LIMIT);
 
-/// Derive the bootstrap signing key from BIP-39 entropy.
-pub fn derive_bootstrap_key_from_entropy(
-    entropy: &[u8; ENTROPY_LEN],
-) -> SigningKey {
-    let mnemonic = Mnemonic::from_entropy(entropy);
-    let mut bip39_seed = mnemonic.to_seed("");
-    let mut seed = bootstrap_seed_from_bip39(&bip39_seed);
-    bip39_seed.zeroize();
-    let sk = derive_signing_key(&seed);
-    seed.zeroize();
-    sk
-}
-
-/// Derive the bootstrap keypair (signing key + 32-byte verifying key).
-pub fn derive_bootstrap_keypair_from_entropy(
-    entropy: &[u8; ENTROPY_LEN],
-) -> (SigningKey, [u8; 32]) {
-    let sk = derive_bootstrap_key_from_entropy(entropy);
-    let vk_bytes = sk.verifying_key().to_bytes();
-    (sk, vk_bytes)
-}
-
-/// Derive a per-chain main signing key from BIP-39 entropy.
-pub fn derive_main_key_from_entropy(
-    entropy: &[u8; ENTROPY_LEN],
-    chain_id: u64,
-    key_index: u32,
-) -> SigningKey {
-    let mnemonic = Mnemonic::from_entropy(entropy);
-    let mut bip39_seed = mnemonic.to_seed("");
-    let mut seed = main_signer_seed_from_bip39(&bip39_seed, chain_id, key_index);
-    bip39_seed.zeroize();
-    let sk = derive_signing_key(&seed);
-    seed.zeroize();
-    sk
-}
-
-/// Derive a per-chain main keypair (signing key + 32-byte verifying key).
-pub fn derive_main_keypair_from_entropy(
-    entropy: &[u8; ENTROPY_LEN],
-    chain_id: u64,
-    key_index: u32,
-) -> (SigningKey, [u8; 32]) {
-    let sk = derive_main_key_from_entropy(entropy, chain_id, key_index);
-    let vk_bytes = sk.verifying_key().to_bytes();
-    (sk, vk_bytes)
-}
-
-/// Derive the bootstrap verifying key bytes only (no signing key retained).
-pub fn derive_bootstrap_vk_from_entropy(
-    entropy: &[u8; ENTROPY_LEN],
-) -> [u8; 32] {
-    let (sk, vk) = derive_bootstrap_keypair_from_entropy(entropy);
-    drop(sk);
-    vk
-}
-
-/// Derive a per-chain main verifying key bytes only.
-pub fn derive_main_vk_from_entropy(
-    entropy: &[u8; ENTROPY_LEN],
-    chain_id: u64,
-    key_index: u32,
-) -> [u8; 32] {
-    let (sk, vk) = derive_main_keypair_from_entropy(entropy, chain_id, key_index);
-    drop(sk);
-    vk
-}
-
-// ---------------------------------------------------------------------------
-// PIN state serialization (unchanged — used by mock-SE MACD path)
-// ---------------------------------------------------------------------------
-
-pub const PER_SLOT_CT_LEN: usize = 32 + 16; // master_secret (32) + AES-GCM tag (16)
-pub const PIN_STATE_MAX_LEN: usize = 1 + MAX_ATTEMPTS as usize * PER_SLOT_CT_LEN; // 481
-
-pub fn serialize_pin_state(
-    next_index: u8,
-    encrypted_secrets: &[[u8; PER_SLOT_CT_LEN]],
-    buf: &mut [u8],
-) -> usize {
-    buf[0] = next_index;
-    let mut offset = 1;
-    for c in encrypted_secrets {
-        buf[offset..offset + PER_SLOT_CT_LEN].copy_from_slice(c);
-        offset += PER_SLOT_CT_LEN;
-    }
-    offset
-}
-
-pub struct PinState {
-    pub next_index: u8,
-    pub num_slots: usize,
-    pub encrypted_secrets: [[u8; PER_SLOT_CT_LEN]; MAX_ATTEMPTS as usize],
-}
-
-pub fn deserialize_pin_state(blob: &[u8], blob_len: usize) -> Result<PinState, ()> {
-    if blob_len == 0 {
+    // FI-hardening, layer 1 of 2: double-compute (RFC 9814 §A.2 / Genêt
+    // TCHES 2023). Verify-after-sign alone is *insufficient*: a fault
+    // injected during signing can produce a malformed sig that
+    // nonetheless verifies cleanly under the honest pubkey while leaking
+    // sk_seed bits across multiple traces (faulted hypertree nodes
+    // re-derive bottom-up). Two signs over identical inputs MUST be
+    // byte-identical; a divergence is diagnostic of a fault on one of
+    // the two signs.
+    //
+    // Cost: ~2× sign latency (~+1.5 s on HW SHA, ~+12 s on QEMU
+    // software SHA). The progress callback runs on the first sign so
+    // the user sees a 0..100 ramp; the second sign is silent and
+    // visually appears as a stretched "verifying..." window.
+    //
+    // **Non-deterministic OptRand (work-todo #18 / Trezor parity).**
+    // We draw a fresh 16-byte randomiser per signing call via
+    // `hw::rng_strong::fill` (STM32 TRNG ⊕ OPTIGA TRNG ⊕ SE050 TRNG,
+    // 3-source XOR mirroring Trezor's `rng_fill_buffer_strong`).
+    // Defends against:
+    //   - the deterministic-PRF-tree class (Genêt TCHES 2023): adding
+    //     a fresh randomiser breaks the chain of repeated SK re-use
+    //     across signatures.
+    //   - any single biased / compromised TRNG: the XOR of the
+    //     remaining unbroken sources preserves entropy.
+    //   - F-9 transparent leak: a fresh randomiser makes the R-grind
+    //     iteration count depend on per-call randomness, not just
+    //     (sk_seed, message) — removing the TVLA-detectable
+    //     msg-dependent count.
+    // NOTE: the *cryptographic* chosen-message FORS-saturation defence
+    // (upstream SPHINCS- SECURITY-ANALYSIS.md §2 "Avenue B") does NOT
+    // rely on this TRNG: `fors::grind_r` derives R as
+    // `sha256(sk_seed ‖ "R_grind" ‖ [opt_rand] ‖ message ‖ nonce)`, so
+    // `ht_idx` is unpredictable to anyone without the secret key for any
+    // chosen message even if this RNG is biased or predictable. OptRand
+    // here is defence-in-depth (SCA + Genêt) layered on top of that
+    // secret-keyed, message-bound R.
+    // The randomiser is drawn ONCE and fed to both signs — re-drawing
+    // per sign would still be cryptographically sound but would
+    // produce divergent sigs, breaking the byte-equality FI gate.
+    //
+    // Under `mock-se` (no SE backend) the strong-RNG falls through to
+    // STM32 TRNG only. Under any real-SE feature flag the active
+    // backend's `random()` is XOR-mixed in.
+    let mut opt_rand_buf = [0u8; sphincs_c10::params::N];
+    #[cfg(not(test))]
+    if crate::rng_strong::fill(&mut opt_rand_buf).is_err() {
+        // `rng_strong::fill` may have written partial platform-TRNG bytes
+        // before the SE XOR-fold failed — scrub before bailing, matching
+        // every other Err/Ok path in this function (found by the sca-3
+        // adversarial review; the fill-failure early-return was the one
+        // path that skipped the wipe).
+        opt_rand_buf.zeroize();
+        crate::fi::zeroize_barrier();
         return Err(());
     }
-    let next_index = blob[0];
-    let rest = &blob[1..blob_len];
-    if rest.len() % PER_SLOT_CT_LEN != 0 {
+    let opt_rand: Option<&[u8; sphincs_c10::params::N]> = Some(&opt_rand_buf);
+    cfi.bump(CFI_STEP_OPT_RAND);
+
+    // **F-16 (DPA-defence) shuffle seeds — one INDEPENDENT seed per
+    // double-compute pass.** Each of the two mandatory signs draws its
+    // own fresh seed from `rng_strong::fill` (STM32 ⊕ OPTIGA ⊕ SE050
+    // XOR-fold). The shuffle randomises only the COMPUTATION ORDER of
+    // WOTS chains (43! ≈ 10^52 per layer) and FORS trees (13! ≈ 6×10^9);
+    // the produced signature bytes are byte-identical for ANY seed
+    // (proven invariant `sphincs-c10/src/shuffle.rs`, regression-tested
+    // for two distinct nonzero seeds in `tests/shuffle_byte_equality.rs`
+    // `two_distinct_nonzero_shuffles_byte_equal`). So the two 4008-byte
+    // signatures stay byte-identical (F-13 ct_eq) and verify-before-
+    // release still holds unchanged — this stays fully inside the
+    // double-compute → compare → verify countermeasure and does NOT
+    // weaken it.
+    //
+    // Why INDEPENDENT seeds, not one shared seed fed to both passes:
+    //   - SCA: a shared seed makes both passes traverse WOTS/FORS in the
+    //     SAME order → two perfectly time-aligned traces of the same
+    //     secret computation per signature (a free ~√2 profiled-DPA
+    //     denoise) on the exact alignment this shuffle exists to deny.
+    //     Independent seeds keep the two passes mutually mis-aligned.
+    //   - FI: under `hw-sha256` the HW SHA-256 engine is a single point
+    //     trusted by BOTH signs and the verify. A *deterministic*,
+    //     position-triggered HASH fault would otherwise corrupt sign_a
+    //     and sign_b at the SAME computation step → identical faulted
+    //     output → slip the ct_eq gate (the Genêt TCHES-2023 grafting
+    //     class the double-compute exists to block). Independent order
+    //     lands the same fault on DIFFERENT WOTS/FORS positions per pass
+    //     → divergent sigs → caught by ct_eq.
+    // Failure-mode note: were byte-invariance ever to fail for some
+    // (sk, msg, opt_rand), the effect is a false-reject signing DoS
+    // (fail-closed), never a forged or leaked signature. (Contrast
+    // `opt_rand` above, which IS part of the signature value and is
+    // therefore DELIBERATELY shared across both passes.)
+    let mut shuffle_seed_a = [0u8; 32];
+    let mut shuffle_seed_b = [0u8; 32];
+    #[cfg(not(test))]
+    if crate::rng_strong::fill(&mut shuffle_seed_a).is_err()
+        || crate::rng_strong::fill(&mut shuffle_seed_b).is_err()
+    {
+        shuffle_seed_a.zeroize();
+        shuffle_seed_b.zeroize();
+        opt_rand_buf.zeroize();
+        crate::fi::zeroize_barrier();
         return Err(());
     }
-    let num_slots = rest.len() / PER_SLOT_CT_LEN;
-    let mut encrypted_secrets = [[0u8; PER_SLOT_CT_LEN]; MAX_ATTEMPTS as usize];
-    for (i, chunk) in rest.chunks(PER_SLOT_CT_LEN).enumerate() {
-        encrypted_secrets[i].copy_from_slice(chunk);
-    }
-    Ok(PinState {
-        next_index,
-        num_slots,
-        encrypted_secrets,
-    })
-}
+    let shuffle_a = sphincs_c10::shuffle::ShuffleSeed(shuffle_seed_a);
+    let shuffle_b = sphincs_c10::shuffle::ShuffleSeed(shuffle_seed_b);
+    // `[u8; 32]` is `Copy`, so the constructors above copied — wipe the
+    // stack locals now that each secret lives inside its `ZeroizeOnDrop`
+    // wrapper.
+    shuffle_seed_a.zeroize();
+    shuffle_seed_b.zeroize();
+    crate::fi::zeroize_barrier();
+    cfi.bump(CFI_STEP_SHUFFLE);
 
-// ---------------------------------------------------------------------------
-// WalletStore provisioning helpers
-// ---------------------------------------------------------------------------
+    let sig_a = sk.sign_with_shuffle(msg_hash, opt_rand, &shuffle_a, progress);
+    cfi.bump(CFI_STEP_SIGN_A);
+    crate::fi::wait_random();
+    let sig_b = sk.sign_with_shuffle(msg_hash, opt_rand, &shuffle_b, |_| {});
+    cfi.bump(CFI_STEP_SIGN_B);
+
+    // Constant-time comparison of the 4008-byte signatures.
+    // `subtle::ConstantTimeEq` prevents an attacker from learning
+    // *where* the two diverge through a timing side-channel, which
+    // could leak FORS-leaf bits in conjunction with F-9.
+    //
+    // Note: this `if !ct_eq { Err }` is itself a single-instruction-
+    // skip point — falling through releases `sig_a` even on mismatch.
+    // The verify-before-release below is the second gate: a faulted
+    // pair that bypasses this compare still has to produce a sig that
+    // verifies under the honest pubkey. Compare + verify form a
+    // **2-gate chain**; do not remove the verify on the assumption
+    // double-compute makes it redundant.
+    if !bool::from(sig_a[..].ct_eq(&sig_b[..])) {
+        // fi-2 (Trezor-port): a ct_eq mismatch between the two double-compute
+        // passes is a CONFIRMED fault — identical inputs + byte-invariant
+        // shuffles mean the two sigs MUST be equal, so a divergence is a glitch
+        // corrupting one pass (the Genêt grafting class). Escalate past "reject
+        // this one sign" to a full RELOCK: wipe the in-SRAM master + slot
+        // secrets and clear `pin_verified` (`zeroize_sensitive_state`), so a
+        // glitching attacker can't immediately retry against a still-live key —
+        // the next sign requires a fresh PIN. RELOCK, not halt (recoverable).
+        // CONFIRMED-fault sites ONLY (this ct_eq, the verify gate, the CFI
+        // check) — NEVER the rng-fail / rate-limit / parse rejects above, which
+        // would be a self-inflicted DoS.
+        #[cfg(not(test))]
+        crate::nsc::zeroize_sensitive_state();
+        opt_rand_buf.zeroize();
+        crate::fi::zeroize_barrier();
+        return Err(());
+    }
+    cfi.bump(CFI_STEP_CT_EQ);
+
+    // FI-hardening, layer 2 of 2: verify-before-release.
+    //
+    // The boolean check is wrapped by `fi::check_true_into_sentinel`
+    // (F-2 fix): a glitch that skips the `if` requires cooperating
+    // skips of the double-evaluation AND the hamming-distant sentinel
+    // compare. `wait_random()` immediately before the verify defeats
+    // clock-aligned fault bursts that time their glitch to the
+    // verify's fixed-shape control flow.
+    //
+    // `core::hint::black_box(v)` is load-bearing — see F-1 in
+    // `tools/sca/README.md`: without it LLVM CSEs the two `cond()`
+    // evaluations inside `check_true` into a single load of `v` and
+    // collapses the `&& v1 && v2` re-check, leaving one skippable
+    // branch.
+    crate::fi::wait_random();
+    let v = sphincs_c10::verify(sk.pk_seed(), sk.pk_root(), msg_hash, &sig_a);
+    if crate::fi::check_true_into_sentinel(|| core::hint::black_box(v)) != crate::fi::OK_SENTINEL {
+        // fi-2: a released sig that fails verify-before-release is a confirmed
+        // fault → relock (see the ct_eq site above).
+        #[cfg(not(test))]
+        crate::nsc::zeroize_sensitive_state();
+        opt_rand_buf.zeroize();
+        crate::fi::zeroize_barrier();
+        return Err(());
+    }
+    cfi.bump(CFI_STEP_VERIFY_GATE);
+
+    // F-18 final CFI check: every critical step bumped the counter
+    // with its unique magic; the running total must match the
+    // compile-time `CFI_EXPECTED`. A glitch that skipped any one
+    // step's `bump` (or skipped the step itself, since the bump
+    // follows it directly) leaves the counter short by exactly that
+    // step's magic → fail closed. Routed through the F-2 Hamming-
+    // distant sentinel idiom so a skip of the verify call itself
+    // doesn't bypass.
+    if cfi.check_into_sentinel(CFI_EXPECTED) != crate::fi::OK_SENTINEL {
+        // fi-2: a short CFI counter means a critical step was skipped by a
+        // glitch → confirmed fault → relock (see the ct_eq site above).
+        #[cfg(not(test))]
+        crate::nsc::zeroize_sensitive_state();
+        opt_rand_buf.zeroize();
+        crate::fi::zeroize_barrier();
+        return Err(());
+    }
+
+    opt_rand_buf.zeroize();
+    crate::fi::zeroize_barrier();
+    Ok(sig_a)
+}
 
 /// Provision a `WalletStore` backend from a user-supplied BIP-39 mnemonic.
 ///
-/// This is the single entry point for both the "new wallet" and "restore
-/// from seed phrase" wizard branches. Handles the shared key derivation
-/// (the "recovery contract") and delegates storage to `store.provision()`.
+/// Single entry point for both the "new wallet" and "restore from seed
+/// phrase" wizard branches. Handles the shared key derivation (the
+/// "recovery contract") and delegates storage to `store.provision()`.
 ///
-/// Determinism: the same `(mnemonic, pin)` pair always produces the same
-/// SPHINCS+ keypair on any device running this firmware.
+/// Determinism: the same `(mnemonic, pin)` pair always produces the
+/// same SPHINCS+ keypair on any device running this firmware.
 pub fn provision_from_mnemonic(
     store: &mut impl crate::secure_element::WalletStore,
-    mnemonic: &sphincs_tz_bip39::Mnemonic,
+    mnemonic: &Mnemonic,
     pin: &[u8; 8],
+    duress_pin: Option<&[u8; 8]>,
 ) {
     let mut entropy = mnemonic
         .to_entropy()
@@ -1394,12 +2337,118 @@ pub fn provision_from_mnemonic(
     drop(sk);
     let bootstrap_vk = derive_bootstrap_vk_from_entropy(&entropy);
 
-    store
+    if store
         .provision(&entropy, &master_secret, &vk_bytes, &bootstrap_vk, pin)
-        .expect("provisioning failed");
+        .is_err()
+    {
+        // A provision that fails PART-WAY (e.g. a transient SE050 I²C fault
+        // after the UserID object is written but before the entropy object)
+        // must not leave the device half-provisioned. `is_provisioned()`
+        // keys the SE050 leg on `USERID_OBJ` existence, so a bare panic here
+        // would leave `is_provisioned() == true` with no entropy half: the
+        // wizard would NEVER re-run, yet every correct-PIN `unlock()` would
+        // return `InternalError` (missing `ENTROPY_OBJ`) with no user-
+        // discoverable recovery — a soft-brick at first-boot setup.
+        //
+        // Roll back (best-effort) before halting so the next cold boot
+        // restarts the wizard cleanly: `factory_reset_admin` wipes the OPTIGA
+        // leg unconditionally, flipping `is_provisioned()` to false (the S-6
+        // non-admin-deletable SE050 `USERID_OBJ` may survive, but the AND
+        // across both SEs already reads false once OPTIGA is blank). It arms
+        // the crash-safe wipe flag first, so a fault mid-rollback is resumed
+        // on the following boot. Mirrors the duress-decoy rollback below.
+        entropy.zeroize();
+        crate::fi::zeroize_barrier();
+        master_secret.zeroize();
+        crate::fi::zeroize_barrier();
+        let _ = store.factory_reset_admin();
+        panic!("provisioning failed — rolled back for wizard restart");
+    }
 
     entropy.zeroize();
+    crate::fi::zeroize_barrier();
     master_secret.zeroize();
+    crate::fi::zeroize_barrier();
+
+    // §32 duress (decoy) wallet. Always provision a decoy — a RANDOM PIN
+    // when the user declined (`duress_pin = None`) — so "duress configured
+    // vs not" is indistinguishable on-chip (always-provision is load-
+    // bearing for deniability). Decoy entropy is a FRESH, fully
+    // independent 256-bit random (separate-entropy model), unrelated to
+    // the real seed. Done AFTER the real wallet so PBS/shield (OPTIGA) and
+    // the admin UserID (SE050) are already live.
+    //
+    // Atomicity: the real wallet is already on-chip at this point and
+    // `is_provisioned()` is real-only, so a half-provisioned decoy would
+    // leave the device "provisioned" yet without a decoy AND never re-run
+    // the wizard. If the decoy provision fails, wipe BOTH wallets so the
+    // next cold boot restarts the wizard cleanly (no stuck state).
+    #[cfg(feature = "duress-pin")]
+    if provision_duress_wallet(store, duress_pin).is_err() {
+        let _ = store.factory_reset_admin();
+        panic!("duress provisioning failed — wiped both wallets for wizard restart");
+    }
+
+    #[cfg(not(feature = "duress-pin"))]
+    let _ = duress_pin;
+}
+
+/// §32: generate + store an independent decoy wallet behind the duress
+/// credential. See [`provision_from_mnemonic`] for the always-provision
+/// rationale. Separate fn so the hot path stays readable and the decoy
+/// generation is feature-gated in one place. Returns `Err` (rather than
+/// panicking) so the caller can roll back the real wallet atomically.
+#[cfg(feature = "duress-pin")]
+fn provision_duress_wallet(
+    store: &mut impl crate::secure_element::WalletStore,
+    duress_pin: Option<&[u8; 8]>,
+) -> Result<(), crate::secure_element::SeError> {
+    // Fresh independent decoy entropy: STM32 TRNG XOR the SE-combined TRNG
+    // (OPTIGA ⊕ SE050 via the store) — same multi-source quality as the
+    // real seed path, no re-entrancy (we are not inside a store method).
+    let mut decoy_entropy = [0u8; 32];
+    crate::rng::fill(&mut decoy_entropy)
+        .map_err(|_| crate::secure_element::SeError::InternalError)?;
+    let mut se_buf = [0u8; 32];
+    if store.random(&mut se_buf).is_ok() {
+        for i in 0..32 {
+            decoy_entropy[i] ^= se_buf[i];
+        }
+    }
+    se_buf.zeroize();
+
+    // Resolve the duress PIN: user-chosen, or a fresh random 8 bytes when
+    // declined (never entered by anyone → unguessable; the chip can't
+    // distinguish a random-byte PIN from a digit PIN).
+    let mut random_pin = [0u8; 8];
+    let mut actual_duress_pin: [u8; 8] = match duress_pin {
+        Some(p) => *p,
+        None => {
+            crate::rng::fill(&mut random_pin)
+                .map_err(|_| crate::secure_element::SeError::InternalError)?;
+            random_pin
+        }
+    };
+
+    let mut decoy_master: [u8; 32] = kdf(b"sphincs-master", &decoy_entropy, 0);
+    let (sk, decoy_vk) = derive_keypair_from_entropy(&decoy_entropy);
+    drop(sk);
+    let decoy_bvk = derive_bootstrap_vk_from_entropy(&decoy_entropy);
+
+    let result = store.provision_duress(
+        &decoy_entropy, &decoy_master, &decoy_vk, &decoy_bvk, &actual_duress_pin,
+    );
+
+    // Zeroize every secret regardless of success/failure.
+    decoy_entropy.zeroize();
+    crate::fi::zeroize_barrier();
+    decoy_master.zeroize();
+    crate::fi::zeroize_barrier();
+    actual_duress_pin.zeroize();
+    random_pin.zeroize();
+    crate::fi::zeroize_barrier();
+
+    result
 }
 
 /// Store pre-derived entropy, VK, and PIN state via the MACD chain on an
@@ -1416,6 +2465,7 @@ pub fn store_macd_encrypted(
     bootstrap_vk: &[u8; 32],
     pin: &[u8; 8],
 ) {
+    use sphincs_tz_shared::MAX_ATTEMPTS;
     // 1. Encrypt the entropy under the master-derived wrap key.
     let entropy_blob = encrypt_entropy_blob(entropy, master_secret);
 

@@ -1,9 +1,11 @@
 //! Binary IR for compiled ERC-7730 descriptors.
 //!
 //! The host pipeline (`dbgen::erc7730`) takes the registry JSON, runs
-//! it through `erc7730 lint` equivalent + JCS canonicalisation, checks
-//! the 8176 attestation policy, and emits one of these IR blobs per
-//! qualifying descriptor. The blobs are then Merkle-tree-hashed into
+//! it through structural validation + JCS canonicalisation, records the
+//! selected provenance policy, and emits one of these IR blobs per accepted
+//! descriptor. The current full catalogue is explicitly `dev-unattested` and
+//! production generation fails closed until real ERC-8176 verification lands.
+//! The blobs are then Merkle-tree-hashed into
 //! `ERC7730_DESCRIPTORS_ROOT`, pinned in `secure/src/db_roots.rs`.
 //!
 //! The on-device walker reads the IR with zero copies. All offsets are
@@ -328,8 +330,7 @@ impl<'a> Erc7730Ir<'a> {
         }
 
         let owner = trim_nul(&bytes[94..94 + OWNER_FIELD_LEN])?;
-        let contract_name =
-            trim_nul(&bytes[110..110 + CONTRACT_NAME_FIELD_LEN])?;
+        let contract_name = trim_nul(&bytes[110..110 + CONTRACT_NAME_FIELD_LEN])?;
 
         let metadata_off = u16::from_be_bytes([bytes[126], bytes[127]]) as usize;
         let formats_off = u16::from_be_bytes([bytes[128], bytes[129]]) as usize;
@@ -819,10 +820,7 @@ impl<'a> Iterator for FieldIter<'a> {
 /// Trim canonical trailing NUL padding and verify the surviving bytes are
 /// clean printable ASCII. Used for `owner` and `contract_name`.
 fn trim_nul(buf: &[u8]) -> Result<&[u8], IrError> {
-    let end = buf
-        .iter()
-        .position(|&b| b == 0)
-        .ok_or(IrError::BadAscii)?;
+    let end = buf.iter().position(|&b| b == 0).ok_or(IrError::BadAscii)?;
     // These are fixed-width, NUL-terminated fields. Accepting non-zero bytes
     // after the first terminator would authenticate multiple wire encodings
     // for the same displayed string and hide attacker-controlled bytes from
@@ -892,8 +890,7 @@ mod tests {
         buf[1] = CTX_CONTRACT;
         buf[2..10].copy_from_slice(&1u64.to_be_bytes());
         buf[126..128].copy_from_slice(&(HEADER_LEN as u16).to_be_bytes());
-        buf[128..130]
-            .copy_from_slice(&((HEADER_LEN + pool.len()) as u16).to_be_bytes());
+        buf[128..130].copy_from_slice(&((HEADER_LEN + pool.len()) as u16).to_be_bytes());
         buf[130..132].copy_from_slice(&(pool.len() as u16).to_be_bytes());
         buf[132..134].copy_from_slice(&(formats.len() as u16).to_be_bytes());
         buf.extend_from_slice(pool);
@@ -930,7 +927,14 @@ mod tests {
 
     #[test]
     fn deep_validation_rejects_duplicate_selectors() {
-        let pool = [0, 4, PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 0];
+        let pool = [
+            0,
+            4,
+            PathOp::RootStructured as u8,
+            PathOp::FieldIdx as u8,
+            0,
+            0,
+        ];
         let mut formats = std::vec![2];
         formats.extend_from_slice(&one_field_format([1, 2, 3, 4], FormatOp::Raw as u8));
         formats.extend_from_slice(&one_field_format([1, 2, 3, 4], FormatOp::Raw as u8));
@@ -940,7 +944,14 @@ mod tests {
 
     #[test]
     fn deep_validation_checks_unselected_format_suffix() {
-        let pool = [0, 4, PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 0];
+        let pool = [
+            0,
+            4,
+            PathOp::RootStructured as u8,
+            PathOp::FieldIdx as u8,
+            0,
+            0,
+        ];
         let mut formats = std::vec![2];
         formats.extend_from_slice(&one_field_format([1, 2, 3, 4], FormatOp::Raw as u8));
         formats.extend_from_slice(&one_field_format([5, 6, 7, 8], 0xFF));

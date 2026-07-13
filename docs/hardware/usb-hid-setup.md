@@ -145,7 +145,7 @@ Host PC (WebHID / node-hid / hidapi)
     |
 [NSC Gateway]                   ← Shared-memory mailbox
     |
-[Secure World]                  ← SPHINCS+C10 signing, PIN, ZK verify
+[Secure World]                  ← signing, PIN, native trusted-display decode
 ```
 
 USB runs entirely in the **non-secure TrustZone world**. The secure

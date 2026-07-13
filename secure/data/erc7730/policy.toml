@@ -24,7 +24,8 @@
 #     headers, etc.).
 #   * CI MUST reject shipping firmware with this flag on — same pattern
 #     as `e2e-test` / `otp-hardcoded-master-key`. The xtask `--check`
-#     mode + `make prod-check` enforce this.
+#     mode + `make prod-erc7730-provenance-check` enforce this independently
+#     of the firmware-rollback quarantine.
 #
 # Today's production-shaped catalogue is compiled from the vendored upstream
 # registry, but it carries no verified Ledger / Fireblocks / Sourcify EAS

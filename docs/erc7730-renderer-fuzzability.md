@@ -3,15 +3,48 @@
 **Status: v1 + v2 LANDED (2026-07-02 / 2026-07-04).** v1 extracted the pure
 row-buffer byte-writers (`primitives`). **v2 moved the ENTIRE renderer**
 (`Pages`/`MAX_PAGES` substrate + the five ERC-7730 render files) into
-`pqsigner_erc7730::display`, so the full per-`FormatOp` dispatch now host-links
-and `fuzz/fuzz_targets/erc7730_render_dispatch.rs` drives `render_erc7730_pages`
-directly. Seeded from the real registry (`make fuzz-seed-erc7730-render`, 897 IR
-leaves) it reaches deep into the field formatters — **cov 130 (empty) → 1877
-(seeded), 0 crashes over millions of mutated-descriptor runs.** The secure crate
+`pqsigner_erc7730::display`, so the full per-`FormatOp` dispatch now host-links.
+`fuzz/fuzz_targets/erc7730_render_dispatch.rs` drives the contract renderer plus
+both EIP-712 typed-data entry points directly. The repaired harness keeps
+authenticated IR and attacker-controlled payload mutations in separate input
+regions, dispatches with selectors/type hashes that occur in the IR, and
+synthesizes exact all-static and canonical sole-tail frames so the ABI preflight
+does not make the campaign vacuous.
+
+`make fuzz-seed-erc7730-render` deterministically regenerates a **disposable**
+seed corpus from the pinned catalogue. The hundreds of `seed_leaf_*` files and
+coverage-evolved corpus are intentionally not committed; regenerate them for
+each root.
+
+Two current-root receipts are deliberately separate. The
+`FUZZ_TIME=30 make fuzz-all` merge gate used the existing local per-target
+corpora, completed all **12 fuzz targets**, and the renderer reached
+**21,470,422 executions** with `cov: 108` / `ft: 167`; the fail-closed sweep
+found **zero files of any kind** under every artifact directory. A separate
+catalogue-seeded supplemental renderer run reached **473,192 executions** with
+`cov: 2321` / `ft: 9471`. The supplemental numbers demonstrate deeper
+semantic reach but do not describe or substantiate the ordinary merge gate.
+On the pre-transplant 2026-07-12 source tree, the repaired seeded harness
+also completed **5,989,862 executions in 120 seconds with no artifacts**
+(coverage 2,389 after corpus initialization, 2,594 final); that remains dated
+source-tree evidence only. Optimized ClusterFuzz builds now explicitly keep
+`overflow-checks = true`, matching the secure firmware's arithmetic-panic
+semantics. The successful current-root run kept network isolation enabled and used
+`/usr/bin/llvm-symbolizer-17` because this host's `llvm-symbolizer-18` cannot
+load its missing `libLLVM-18.so.18.1`; that is an environment repair, not a
+change to the target or corpus. The secure crate
 keeps thin re-export shims (`tx::display::erc7730` + `tx::display::{Pages,
 MAX_PAGES}`); the `display_under_test` scaffold + secure renderers now share the
 one host `Pages` type. The follow-up section below is the ORIGINAL v1 plan,
 preserved for the record — it is now DONE.
+
+Fuzzing's claim is deliberately narrow: under exercised inputs and sanitizers,
+the host renderer returned `Ok`/`Err` without a panic, overflow, OOB access, or
+memory artifact. It does **not** prove Merkle/binding authority, display
+faithfulness, semantic completeness, constant-time behavior, or absence of a
+rare unexecuted panic. Those properties remain with bundle/binding tests,
+differential render tests, Kani harnesses, source review, and physical LCD/FI
+validation.
 
 ## Motivation
 
@@ -27,9 +60,10 @@ The render path is worth fuzzing: the firmware release profile sets
 `overflow-checks = true`, and the amount writers scale an **attacker-controlled
 `U256`** (the value comes straight from calldata) through decimal formatting and
 `checked_sub` column-budget arithmetic. A slip there is a panic = DoS on the
-trusted-display path — exactly where the wallet must never abort. The
-descriptor-side harnesses (`erc7730_ir_parse`, `erc7730_walker`,
-`erc7730_render_dispatch`) never exercise this byte arithmetic.
+trusted-display path — exactly where the wallet must never abort. The older
+descriptor-side parser/walker harnesses never exercised this byte arithmetic;
+the full dispatch harness now does, while the primitive writers retain their
+separate focused target.
 
 ## v1 — what landed
 

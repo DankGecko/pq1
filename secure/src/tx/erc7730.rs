@@ -15,14 +15,28 @@ pub use pqsigner_erc7730::binding::{
     cross_check_contract, cross_check_eip712, BindingError,
 };
 pub use pqsigner_erc7730::bundle::{
-    leaf_hash, verify_erc7730_bundle, BundleError, VerifiedDescriptor,
-    MAX_ERC7730_BUNDLE_LEN, MAX_PROOF_DEPTH,
+    leaf_hash, BundleError, VerifiedDescriptor, MAX_ERC7730_BUNDLE_LEN,
+    MAX_PROOF_DEPTH,
 };
 pub use pqsigner_erc7730::ir::{
     ContextKind, Erc7730Ir, FieldEntry, FieldIter, FormatHeader, FormatIter,
     FormatOp, IrError, PathOp, Visibility, HEADER_LEN, MAX_FIELDS_PER_FORMAT,
     MAX_FORMATS, MAX_IR_LEN, MAX_NESTING, MAX_POOL_ENTRY_LEN, SCHEMA_VER,
 };
+
+/// Firmware verifier with canonical-index enforcement tied to the generated
+/// root's real leaf count. The generic host verifier intentionally remains
+/// available in `pqsigner-erc7730`; signing code must pass through this shim.
+pub fn verify_erc7730_bundle<'a>(
+    bundle: &'a [u8],
+    root: &[u8; 32],
+) -> Result<VerifiedDescriptor<'a>, BundleError> {
+    pqsigner_erc7730::bundle::verify_erc7730_bundle_with_leaf_count(
+        bundle,
+        root,
+        crate::db_roots::ERC7730_DESCRIPTOR_COUNT,
+    )
+}
 
 const CFI_CONTRACT_BIND_A: u32 = 0x43A9_17D2;
 const CFI_CONTRACT_BIND_B: u32 = 0xB65C_E821;

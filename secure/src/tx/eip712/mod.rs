@@ -105,10 +105,9 @@ pub fn final_digest(domain_separator: &[u8; 32], struct_hash: &[u8; 32]) -> [u8;
 pub enum Eip712Error {
     /// One of the byte-encoded enum fields was outside its valid range.
     EnumOutOfRange,
-    /// The `chain_id` bound inside the canonical buffer does not
-    /// match the `chain_id` from the verified VK bundle. Prevents NS
-    /// from pairing a legitimate cross-chain proof with a mismatched
-    /// domain-separator bundle.
+    /// The `chain_id` bound inside the canonical order does not match
+    /// the chain selected by the signed transaction. Prevents NS from
+    /// pairing a valid order with a mismatched domain or metadata bundle.
     ChainIdMismatch,
     /// Calldata is shorter than the minimum required by the function's
     /// fixed-head ABI encoding.

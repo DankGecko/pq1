@@ -16,6 +16,14 @@ description = "libFuzzer harnesses for PQSigner's pure-logic parsers."
 #       belong in the main workspace's build graph.
 [workspace]
 
+# Keep ClusterFuzzLite's optimized (`cargo fuzz build -O`) binaries aligned
+# with the shipping firmware's arithmetic semantics. Without this explicit
+# standalone-workspace profile, `-O` disables overflow checks and makes the
+# continuous campaign blind to secure-world panic/DoS paths that production
+# would take.
+[profile.release]
+overflow-checks = true
+
 [package.metadata]
 cargo-fuzz = true
 
@@ -127,9 +135,10 @@ bench = false
 # screen). The renderer moved to `pqsigner_erc7730::display::render`
 # (docs/erc7730-renderer-fuzzability.md), so this harness host-links and
 # drives `render_erc7730_pages` itself. Seed its corpus first with
-# `make fuzz-seed-erc7730-render` (897 real-registry IR leaves) — the
+# `make fuzz-seed-erc7730-render` (420 current pinned IR leaves). The
 # field formatters are only reached once a descriptor parses, which
-# random bytes do ~never (cov 130 empty → 1877 seeded). The
+# random bytes do almost never. Coverage is root/source-tree specific; the
+# current-root campaign status lives in docs/erc7730-renderer-fuzzability.md. The
 # Pages-independent byte-writers are ALSO fuzzed in isolation by
 # `erc7730_display_primitives` below.
 [[bin]]

@@ -76,8 +76,18 @@ pub fn run(args: Args) -> Result<()> {
     )?;
 
     let secure = flatten_logged_bytes("secure", &args.secure_elf, &secure_elf)?;
+    elf::ensure_image_capacity(
+        "secure",
+        secure.bytes.len(),
+        fw_manifest::SLOT_SECURE_CAPACITY,
+    )?;
     verified_keys.verify_secure_flat_image(&secure)?;
     let nonsecure = flatten_logged("nonsecure", &args.nonsecure_elf)?;
+    elf::ensure_image_capacity(
+        "nonsecure",
+        nonsecure.bytes.len(),
+        fw_manifest::SLOT_NS_CAPACITY,
+    )?;
 
     let (manifest_bytes, digest) = build_signed_manifest(
         &key,

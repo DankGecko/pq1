@@ -63,7 +63,7 @@ pub const PARAM_NESTED_CALLEE: u8 = 0x3D;
 pub const PARAM_FALLBACK_LABEL: u8 = 0x3E;
 pub const PARAM_VISIBILITY: u8 = 0x3F;
 /// Constant annotation string for a path-less field (`{value,label,format}`
-/// with no path). The renderer shows the literal (attested) string.
+/// with no path). The renderer shows the literal descriptor-pinned string.
 pub const PARAM_CONST_VALUE: u8 = 0x40;
 /// Format-level flag (emitted by `dbgen` on an EIP-712 format's first field)
 /// marking that the primary type carries a nested struct member — a single
@@ -184,10 +184,7 @@ impl<'a> Default for ParamSet<'a> {
 /// Parse a TLV parameter blob located at `param_off` inside the IR's
 /// metadata pool. Returns the default [`ParamSet`] (everything `None`,
 /// visibility `Always`) when `param_off == 0`.
-pub fn parse<'a>(
-    ir: &Erc7730Ir<'a>,
-    param_off: u16,
-) -> Result<ParamSet<'a>, RenderErr> {
+pub fn parse<'a>(ir: &Erc7730Ir<'a>, param_off: u16) -> Result<ParamSet<'a>, RenderErr> {
     let mut p = ParamSet::default();
     p.visibility = Visibility::Always;
 
@@ -625,7 +622,10 @@ mod tests {
         pool.extend_from_slice(&body);
         let bytes = ir_with_pool(&pool);
         let ir = Erc7730Ir::parse(&bytes).unwrap();
-        assert_eq!(parse(&ir, 1).unwrap().dynamic_kind, Some(DYNAMIC_KIND_STRING));
+        assert_eq!(
+            parse(&ir, 1).unwrap().dynamic_kind,
+            Some(DYNAMIC_KIND_STRING)
+        );
     }
 
     #[test]
@@ -768,24 +768,28 @@ mod kani_harnesses {
     /// `token` (0x31): accept ⟺ exactly 20 payload bytes, and the stored
     /// `&[u8; 20]` is the verbatim 20-byte window at the fixed offset.
     ///
-    /// Unwind 24: the only loop with > a couple of iterations is the
-    /// builtin `memcmp` for the 20-byte `&[u8; 20]` value comparison
-    /// (needs ≥ 21); the single-TLV walk is one iteration.
+    /// The structural bytes are assigned directly and a single symbolic byte
+    /// index proves all 20 payload positions. This is equivalent to whole-slice
+    /// equality without bit-blasting a symbolic 20-byte `memcmp`.
     #[kani::proof]
-    #[kani::unwind(24)]
+    #[kani::unwind(6)]
     fn params_token_width_and_value_sound() {
         const N: usize = 24;
-        let pool: [u8; N] = kani::any();
-        let l = pool[3] as usize;
-        kani::assume((pool[1] as usize) == 2 + l);
-        kani::assume(4 + l <= N);
-        kani::assume(pool[2] == PARAM_TOKEN);
+        let mut pool: [u8; N] = kani::any();
+        let l: usize = kani::any();
+        kani::assume(l <= 20);
+        pool[0] = 0xFF;
+        pool[1] = (2 + l) as u8;
+        pool[2] = PARAM_TOKEN;
+        pool[3] = l as u8;
         let ir = mk_ir(&pool);
         match parse(&ir, 1) {
             Ok(p) => {
                 assert!(l == 20);
-                let want: &[u8; 20] = (&pool[4..24]).try_into().unwrap();
-                assert_eq!(p.token, Some(want));
+                let k: usize = kani::any();
+                kani::assume(k < 20);
+                assert!(p.token.is_some());
+                assert!(p.token.unwrap()[k] == pool[4 + k]);
             }
             Err(_) => assert!(l != 20),
         }

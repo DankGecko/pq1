@@ -1,8 +1,9 @@
 //! Optional length-prefixed trailer parsing for CMD_SIGN_USEROP.
 //!
 //! The unified sign payload ends in a sequence of independently optional
-//! trailers (ERC-20 bundle, ZK v1 bundle, v3 CoW EIP-712 bundle, …). Each
-//! one is introduced by a 2-byte big-endian length field followed by that
+//! trailers (ERC-20 bundle, the zero-length reserved compatibility slot,
+//! native CoW EIP-712 order, …). Each is introduced by a 2-byte big-endian
+//! length field followed by that
 //! many bytes of content. Absence collapses to a zero-length header or
 //! an outright missing header at `cursor == total_len`.
 //!

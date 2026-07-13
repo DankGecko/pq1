@@ -20,8 +20,6 @@
 //!   * Production fences: `boot-pulse`, `sca-trigger`, `consumption-
 //!     mask` are dev-only — their feature gates + module docstring
 //!     warnings stay locked.
-//!   * BLS12-381 base-field prime + PKA operand layout — a single
-//!     limb-order swap would silently produce garbage Fp results.
 //!   * FI hardening / verify-before-release / monotonicity gates on
 //!     the off-chain journal and PIN attempt counter.
 //!

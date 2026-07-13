@@ -8,3 +8,9 @@
 !.gitignore
 !*/
 !*/seed_*
+
+# Generated deterministically by `make fuzz-seed-erc7730-render` from the
+# pinned registry. There are hundreds of these and they drift with every root;
+# regenerate before a renderer campaign instead of committing binary corpus
+# churn. Hand-authored `seed_*` files for the other targets remain tracked.
+erc7730_render_dispatch/seed_leaf_*

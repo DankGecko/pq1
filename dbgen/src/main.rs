@@ -6,7 +6,9 @@
 //!   secure/data/names.json
 //!   secure/data/selectors.json
 //!   secure/data/selectors-e2e.json
-//!   secure/data/erc7730/*.json
+//!   secure/data/erc7730-registry/registry/**/*.json
+//!   secure/data/erc7730-registry/ercs/**/*.json
+//!   secure/data/erc7730-e2e/*.json
 //!   secure/data/erc7730/policy.toml
 //!
 //! Writes (checked into the repo):
@@ -67,9 +69,7 @@ fn main() {
                     "dev" => force_production = false,
                     "production" => force_production = true,
                     other => {
-                        eprintln!(
-                            "dbgen: --policy must be `dev` or `production` (got `{other}`)"
-                        );
+                        eprintln!("dbgen: --policy must be `dev` or `production` (got `{other}`)");
                         std::process::exit(2);
                     }
                 }
@@ -167,8 +167,7 @@ fn main() {
     let erc7730_e2e_out = root.join("tools/companion-stub/erc7730_db_e2e.bin");
     let erc7730_review_out = root.join("secure/data/erc7730.review.txt");
     let erc7730_known_calls_out = root.join("secure/data/erc7730-known-calls.bloom");
-    let erc7730_known_calls_e2e_out =
-        root.join("secure/data/erc7730-known-calls-e2e.bloom");
+    let erc7730_known_calls_e2e_out = root.join("secure/data/erc7730-known-calls-e2e.bloom");
     let roots_out = root.join("secure/src/db_roots.rs");
 
     // ----- ERC20 metadata DB -----
@@ -198,8 +197,7 @@ fn main() {
     // in db_roots.rs is selected by the same gate, so the production
     // multi-MB blob never has to ship in the 256 KB NS flash. Same shape as
     // the selectors / ERC-7730 e2e splits below.
-    let erc20_e2e_res =
-        erc20::build_db(&erc20_e2e_json).expect("erc20 e2e db build failed");
+    let erc20_e2e_res = erc20::build_db(&erc20_e2e_json).expect("erc20 e2e db build failed");
     erc20::round_trip_check(&erc20_e2e_res.blob, &erc20_e2e_json, &erc20_e2e_res.root)
         .expect("erc20 e2e round-trip failed");
     fs::write(&erc20_e2e_out, &erc20_e2e_res.blob).expect("write erc20_db_e2e.bin");
@@ -279,8 +277,7 @@ fn main() {
         &selectors_e2e_res.root,
     )
     .expect("selectors e2e round-trip failed");
-    fs::write(&selectors_e2e_out, &selectors_e2e_res.blob)
-        .expect("write selectors_db_e2e.bin");
+    fs::write(&selectors_e2e_out, &selectors_e2e_res.blob).expect("write selectors_db_e2e.bin");
     println!(
         "dbgen: wrote {} ({} bytes, e2e root = {})",
         selectors_e2e_out.display(),
@@ -316,12 +313,15 @@ fn main() {
         );
         std::process::exit(1);
     }
-    let (erc7730_res, skips) =
-        erc7730::build_db_tolerant(&erc7730_registry_input, &erc7730_policy, Some(&erc7730_registry))
-            .unwrap_or_else(|e| {
-                eprintln!("dbgen: erc7730 registry db build failed: {e}");
-                std::process::exit(1);
-            });
+    let (erc7730_res, skips) = erc7730::build_db_tolerant(
+        &erc7730_registry_input,
+        &erc7730_policy,
+        Some(&erc7730_registry),
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("dbgen: erc7730 registry db build failed: {e}");
+        std::process::exit(1);
+    });
     // The full per-skip detail + category roll-up is embedded in the
     // committed, drift-gated `erc7730.review.txt` (see `render_review`); echo
     // just the count here so an operator running dbgen sees at a glance that
@@ -329,7 +329,7 @@ fn main() {
     // (review finding 1.4).
     if !skips.is_empty() {
         eprintln!(
-            "dbgen: erc7730 tolerant build skipped {} descriptor(s) — see the \
+            "dbgen: erc7730 tolerant build recorded {} descriptor/format omission(s) — see the \
              `## skips` section of secure/data/erc7730.review.txt for reasons",
             skips.len(),
         );
@@ -339,13 +339,9 @@ fn main() {
         fs::create_dir_all(parent).expect("create tools/companion-stub");
     }
     fs::write(&erc7730_out, &erc7730_res.blob).expect("write erc7730_db.bin");
-    fs::write(
-        &erc7730_known_calls_out,
-        erc7730_res.known_calls_bloom,
-    )
-    .expect("write erc7730-known-calls.bloom");
-    fs::write(&erc7730_review_out, &erc7730_res.review_text)
-        .expect("write erc7730.review.txt");
+    fs::write(&erc7730_known_calls_out, erc7730_res.known_calls_bloom)
+        .expect("write erc7730-known-calls.bloom");
+    fs::write(&erc7730_review_out, &erc7730_res.review_text).expect("write erc7730.review.txt");
     println!(
         "dbgen: wrote {} ({} bytes, {} leaves, root = {})",
         erc7730_out.display(),
@@ -378,10 +374,8 @@ fn main() {
         eprintln!("dbgen: erc7730 e2e db build failed: {e}");
         std::process::exit(1);
     });
-    erc7730::round_trip_check(&erc7730_e2e_res)
-        .expect("erc7730 e2e round-trip failed");
-    fs::write(&erc7730_e2e_out, &erc7730_e2e_res.blob)
-        .expect("write erc7730_db_e2e.bin");
+    erc7730::round_trip_check(&erc7730_e2e_res).expect("erc7730 e2e round-trip failed");
+    fs::write(&erc7730_e2e_out, &erc7730_e2e_res.blob).expect("write erc7730_db_e2e.bin");
     fs::write(
         &erc7730_known_calls_e2e_out,
         erc7730_e2e_res.known_calls_bloom,
@@ -415,8 +409,10 @@ fn main() {
         &selectors_res.root,
         &selectors_e2e_res.root,
         &erc7730_res.root,
+        erc7730_res.leaf_count,
         erc7730_res.provenance,
         &erc7730_e2e_res.root,
+        erc7730_e2e_res.leaf_count,
         erc7730_e2e_res.provenance,
     );
     fs::write(&roots_out, &roots_rs).expect("write db_roots.rs");
@@ -429,20 +425,28 @@ const DB_ROOTS_HEADER: &str = "\
 //! Merkle roots of the (host-side) ERC20 + Names + Selectors + ERC-7730 databases.
 //!
 //! Generated by `cargo run -p dbgen` from secure/data/erc20.json,
-//! secure/data/names.json,
-//! secure/data/selectors.json, and secure/data/erc7730/*.json.
+//! secure/data/names.json, secure/data/selectors.json,
+//! secure/data/erc7730-registry/registry/**/*.json,
+//! secure/data/erc7730-registry/ercs/**/*.json,
+//! secure/data/erc7730-e2e/*.json, and secure/data/erc7730/policy.toml.
 //! DO NOT EDIT BY HAND.
 //!
 //! NONE of the DB blobs ship in the firmware image. The ERC20 /
 //! Names / Selectors / ERC-7730 blobs all live on the host (companion
 //! app) under `tools/companion-stub/` and are forwarded over USB as
 //! per-tx `(entry, merkle_proof, leaf_index)` bundles. The secure
-//! world only holds these 32-byte roots; everything received from NS
-//! or the host is verified against them via
-//! `crate::erc20::merkle::verify_proof`. A malicious companion cannot
-//! forge an entry (that needs a SHA-256 second-preimage); withholding
-//! a bundle only degrades to a fail-safe render (unknown token / raw
-//! hex / blind-sign), never a forged display.
+//! world holds the 32-byte roots plus the generated real ERC-7730 leaf
+//! count; everything received from NS or the host is verified against
+//! those firmware-pinned values. A malicious companion cannot
+//! forge an entry (that needs a SHA-256 second-preimage). Withholding
+//! ERC20 / Names / Selectors metadata degrades to the corresponding
+//! fail-safe render. A registry-known call requires independently
+//! authenticated semantics: normally an exactly bound ERC-7730 descriptor;
+//! the explicitly enumerated Safe exception is strict native ERC-20 decoding
+//! with exact chain/contract-bound Merkle metadata, re-attributed per direct
+//! call or MultiSend record. Without either capability, signing refuses. Only
+//! calls absent from the authenticated known-call set may use the generic or
+//! blind-sign fallback.
 //!
 //! `NAMES_DB_ROOT` anchors the address-name DB. Every trusted-UI
 //! address render consults this root before a human-readable
@@ -461,8 +465,9 @@ const DB_ROOTS_HEADER: &str = "\
 //! `ERC7730_DESCRIPTORS_ROOT` anchors the ERC-7730 clear-signing
 //! descriptor catalogue. Same trust model as the Selectors DB —
 //! the blob lives host-side under `tools/companion-stub/`, and
-//! every bundle crossing the gateway is Merkle-verified against
-//! this root by `pqsigner_erc7730::bundle::verify_erc7730_bundle`.
+//! every bundle crossing the gateway is Merkle-verified against this
+//! root and constrained to the generated catalogue count by the secure
+//! `crate::tx::erc7730::verify_erc7730_bundle` wrapper.
 //! The generated `ERC7730_CATALOGUE_PROVENANCE` constant records whether the
 //! exact root was produced by real ERC-8176 verification or by the explicitly
 //! dev-only unattested path. Generated compile fences prevent a dev-unattested
@@ -480,8 +485,10 @@ fn render_db_roots(
     selectors_root: &[u8; 32],
     selectors_e2e_root: &[u8; 32],
     erc7730_root: &[u8; 32],
+    erc7730_count: usize,
     erc7730_provenance: erc7730::CatalogueProvenance,
     erc7730_e2e_root: &[u8; 32],
+    erc7730_e2e_count: usize,
     erc7730_e2e_provenance: erc7730::CatalogueProvenance,
 ) -> String {
     use std::fmt::Write;
@@ -506,72 +513,15 @@ fn render_db_roots(
     emit_root(&mut s, "SELECTOR_DB_ROOT", selectors_root);
     writeln!(s, "#[cfg(feature = \"e2e-test\")]").unwrap();
     emit_root(&mut s, "SELECTOR_DB_ROOT", selectors_e2e_root);
-    s.push_str("#[cfg(not(feature = \"e2e-test\"))]\n");
-    emit_root(&mut s, "ERC7730_DESCRIPTORS_ROOT", erc7730_root);
-    s.push_str("#[cfg(feature = \"e2e-test\")]\n");
-    emit_root(&mut s, "ERC7730_DESCRIPTORS_ROOT", erc7730_e2e_root);
-    s.push_str(
-        "#[cfg(not(feature = \"e2e-test\"))]\n\
-         pub static ERC7730_KNOWN_CALLS_BLOOM: &[u8; pqsigner_erc7730::known_calls::BLOOM_BYTES] =\n\
-             include_bytes!(\"../data/erc7730-known-calls.bloom\");\n\n\
-         #[cfg(feature = \"e2e-test\")]\n\
-         pub static ERC7730_KNOWN_CALLS_BLOOM: &[u8; pqsigner_erc7730::known_calls::BLOOM_BYTES] =\n\
-             include_bytes!(\"../data/erc7730-known-calls-e2e.bloom\");\n\n",
-    );
-    emit_erc7730_provenance(&mut s, erc7730_provenance, false);
-    emit_erc7730_provenance(&mut s, erc7730_e2e_provenance, true);
+    s.push_str(&dbgen::render_erc7730_security_tail(
+        erc7730_root,
+        erc7730_count,
+        erc7730_provenance,
+        erc7730_e2e_root,
+        erc7730_e2e_count,
+        erc7730_e2e_provenance,
+    ));
     s
-}
-
-fn emit_erc7730_provenance(
-    s: &mut String,
-    provenance: erc7730::CatalogueProvenance,
-    e2e: bool,
-) {
-    use std::fmt::Write;
-
-    let selected = if e2e {
-        "feature = \"e2e-test\""
-    } else {
-        "not(feature = \"e2e-test\")"
-    };
-    writeln!(s, "#[cfg({selected})]").unwrap();
-    writeln!(
-        s,
-        "pub const ERC7730_CATALOGUE_PROVENANCE: &str = {:?};\n",
-        provenance.as_str()
-    )
-    .unwrap();
-
-    match provenance {
-        erc7730::CatalogueProvenance::DevUnattested => {
-            if !e2e {
-                s.push_str(
-                    "#[cfg(all(not(feature = \"e2e-test\"), feature = \"mode-production\"))]\n\
-                     compile_error!(\"mode-production cannot embed the dev-unattested ERC-7730 catalogue. Implement and run real ERC-8176 EAS verification, regenerate db_roots.rs, and only then build production firmware.\");\n\n",
-                );
-                s.push_str(
-                    "#[cfg(all(not(feature = \"e2e-test\"), not(feature = \"mode-production\"), not(feature = \"erc7730-dev-unattested\"), not(test)))]\n\
-                     compile_error!(\"the pinned ERC-7730 catalogue is dev-unattested; enable erc7730-dev-unattested so the trusted display shows the provenance warning, or regenerate from a genuinely ERC-8176-verified corpus\");\n\n",
-                );
-            } else {
-                s.push_str(
-                    "#[cfg(all(feature = \"e2e-test\", not(feature = \"erc7730-dev-unattested\"), not(test)))]\n\
-                     compile_error!(\"the e2e ERC-7730 fixture catalogue is dev-unattested; e2e builds must enable erc7730-dev-unattested so the display warning matches its provenance\");\n\n",
-                );
-            }
-        }
-        erc7730::CatalogueProvenance::Erc8176Verified => {
-            writeln!(
-                s,
-                "#[cfg(all({selected}, feature = \"erc7730-dev-unattested\"))]"
-            )
-            .unwrap();
-            s.push_str(
-                "compile_error!(\"erc7730-dev-unattested is enabled but the selected catalogue is ERC-8176-verified; disable the feature so the trusted display does not show false provenance\");\n\n",
-            );
-        }
-    }
 }
 
 fn emit_root(s: &mut String, name: &str, bytes: &[u8; 32]) {

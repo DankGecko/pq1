@@ -144,6 +144,21 @@ fn positive_standalone_workspace_block_present() {
 }
 
 #[test]
+fn positive_optimized_fuzzing_keeps_firmware_overflow_checks() {
+    let t = read_cargo_toml();
+    let enabled = t
+        .get("profile")
+        .and_then(|p| p.get("release"))
+        .and_then(|r| r.get("overflow-checks"))
+        .and_then(|v| v.as_bool());
+    assert_eq!(
+        enabled,
+        Some(true),
+        "cargo fuzz build -O must retain the shipping firmware's overflow-check panic semantics",
+    );
+}
+
+#[test]
 fn positive_cargo_fuzz_metadata_present() {
     let t = read_cargo_toml();
     let v = t

@@ -4,7 +4,11 @@ use std::path::PathBuf;
 fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let stm32u585 = env::var_os("CARGO_FEATURE_STM32U585").is_some();
-    let mem_x = if stm32u585 { "memory-stm32u585.x" } else { "memory.x" };
+    let mem_x = if stm32u585 {
+        "memory-stm32u585.x"
+    } else {
+        "memory.x"
+    };
     std::fs::copy(mem_x, out_dir.join("memory.x")).unwrap();
     println!("cargo:rustc-link-search={}", out_dir.display());
     println!("cargo:rerun-if-changed=memory.x");
@@ -28,42 +32,96 @@ fn main() {
         check_db_magic("../tools/companion-stub/names_db_e2e.bin", b"NAMS");
     }
 
-    // ERC-7730 e2e trailer for Phase 3 smoke-test. Pre-computed at
-    // build time from the e2e catalog blob (matching the firmware-
-    // pinned `ERC7730_DESCRIPTORS_ROOT` under `feature = "e2e-test"`).
-    // include_bytes!('d via `env!("OUT_DIR") + "/erc7730_e2e_weth_sepolia.bin"` in
-    // `e2e_test.rs`.
+    // ERC-7730 E2E receipts. Build them from the exact checked-in E2E
+    // catalogue that matches the firmware-pinned test root; do not duplicate
+    // a leaf index, domain separator, or primary type hash in test code.
     if env::var_os("CARGO_FEATURE_E2E_TEST").is_some() {
         let db = "../tools/companion-stub/erc7730_db_e2e.bin";
         println!("cargo:rerun-if-changed={db}");
         let blob = std::fs::read(db).unwrap_or_else(|e| {
             panic!("ERC-7730 e2e catalog {db} not found: {e} — run `cargo run -p dbgen`")
         });
-        // WETH on Sepolia. The seed corpus is sorted by (chain_id,
-        // contract); chain 11155111 + 0xfff9...c0d is leaf 3.
+        let weth_mainnet: [u8; 20] = [
+            0xc0, 0x2a, 0xaa, 0x39, 0xb2, 0x23, 0xfe, 0x8d, 0x0a, 0x0e, 0x5c, 0x4f, 0x27, 0xea,
+            0xd9, 0x08, 0x3c, 0x75, 0x6c, 0xc2,
+        ];
         let weth_sepolia: [u8; 20] = [
             0xff, 0xf9, 0x97, 0x67, 0x82, 0xd4, 0x6c, 0xc0, 0x56, 0x30, 0xd1, 0xf6, 0xeb, 0xab,
             0x18, 0xb2, 0x32, 0x4d, 0x6b, 0x14,
         ];
-        let trailer = build_erc7730_trailer(&blob, 11_155_111u64, &weth_sepolia)
-            .expect("build erc7730 e2e trailer");
-        std::fs::write(out_dir.join("erc7730_e2e_weth_sepolia.bin"), trailer)
-            .expect("write erc7730 e2e trailer");
+        let delegation_sepolia: [u8; 20] = [
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x77, 0x30,
+        ];
+        let flyingtulip_positions_mainnet: [u8; 20] = [
+            0xbe, 0x40, 0x50, 0xa7, 0x3a, 0x7f, 0xb3, 0x84, 0xc6, 0x5e, 0x88, 0x5a, 0x15, 0xc3,
+            0x34, 0x61, 0xa4, 0xb2, 0x00, 0x55,
+        ];
+
+        let weth_mainnet_entry = build_erc7730_entry(&blob, 1, &weth_mainnet)
+            .expect("build mainnet WETH ERC-7730 E2E entry");
+        assert_eq!(weth_mainnet_entry.context_kind, 0x01);
+        std::fs::write(
+            out_dir.join("erc7730_e2e_weth_mainnet.bin"),
+            &weth_mainnet_entry.trailer,
+        )
+        .expect("write mainnet WETH ERC-7730 E2E trailer");
+
+        let weth_sepolia_entry = build_erc7730_entry(&blob, 11_155_111, &weth_sepolia)
+            .expect("build Sepolia WETH ERC-7730 E2E entry");
+        assert_eq!(weth_sepolia_entry.context_kind, 0x01);
+        std::fs::write(
+            out_dir.join("erc7730_e2e_weth_sepolia.bin"),
+            &weth_sepolia_entry.trailer,
+        )
+        .expect("write Sepolia WETH ERC-7730 E2E trailer");
+
+        let delegation = build_erc7730_entry(&blob, 11_155_111, &delegation_sepolia)
+            .expect("build typed Delegation ERC-7730 E2E entry");
+        assert_eq!(delegation.context_kind, 0x02);
+        assert_ne!(delegation.domain_separator, [0u8; 32]);
+        assert_ne!(delegation.primary_type_hash, [0u8; 32]);
+        let mut typed_fixture = Vec::with_capacity(64 + delegation.trailer.len());
+        typed_fixture.extend_from_slice(&delegation.domain_separator);
+        typed_fixture.extend_from_slice(&delegation.primary_type_hash);
+        typed_fixture.extend_from_slice(&delegation.trailer);
+        std::fs::write(
+            out_dir.join("erc7730_e2e_delegation_sepolia.bin"),
+            typed_fixture,
+        )
+        .expect("write typed Delegation ERC-7730 E2E fixture");
+
+        let flyingtulip = build_erc7730_entry(&blob, 1, &flyingtulip_positions_mainnet)
+            .expect("build mainnet FlyingTulip PositionsManager ERC-7730 E2E entry");
+        assert_eq!(flyingtulip.context_kind, 0x01);
+        std::fs::write(
+            out_dir.join("erc7730_e2e_flyingtulip_positions_mainnet.bin"),
+            &flyingtulip.trailer,
+        )
+        .expect("write mainnet FlyingTulip PositionsManager ERC-7730 E2E trailer");
     }
 }
 
-/// Catalog blob → sign-input trailer payload. Mirrors
-/// `tools/companion-stub/erc7730_trailer.py` byte-for-byte; the dbgen
-/// test `companion_stub_trailer_verifies_against_on_device` validates
-/// the Python output, which in turn validates this function's output
-/// (the two implementations stay locked through that round-trip).
-fn build_erc7730_trailer(
+struct Erc7730CatalogEntry {
+    trailer: Vec<u8>,
+    context_kind: u8,
+    domain_separator: [u8; 32],
+    primary_type_hash: [u8; 32],
+}
+
+/// Catalog blob → sign-input trailer payload used by the QEMU fixtures.
+/// The separate dbgen test `companion_stub_trailer_verifies_against_on_device`
+/// proves that the Python helper's output is accepted by the on-device
+/// verifier; it does not byte-compare this build-script implementation against
+/// Python. The QEMU scenarios exercise the receipts produced here.
+fn build_erc7730_entry(
     blob: &[u8],
     chain_id: u64,
     contract: &[u8; 20],
-) -> Result<Vec<u8>, String> {
+) -> Result<Erc7730CatalogEntry, String> {
     const HEADER_LEN: usize = 32;
     const ENTRY_LEN: usize = 72;
+    const IR_HEADER_LEN: usize = 134;
     if blob.len() < HEADER_LEN {
         return Err("catalog too short".into());
     }
@@ -75,6 +133,18 @@ fn build_erc7730_trailer(
     let proof_depth = u32::from_le_bytes(blob[24..28].try_into().unwrap()) as usize;
     let proofs_off = u32::from_le_bytes(blob[28..32].try_into().unwrap()) as usize;
 
+    let entries_end = HEADER_LEN
+        .checked_add(
+            entry_cnt
+                .checked_mul(ENTRY_LEN)
+                .ok_or("entry table overflow")?,
+        )
+        .ok_or("entry table overflow")?;
+    if entries_end > blob.len() || ir_pool_off < entries_end || proofs_off < ir_pool_off {
+        return Err("catalog offsets are inconsistent".into());
+    }
+
+    let mut matched = None;
     for i in 0..entry_cnt {
         let base = HEADER_LEN + i * ENTRY_LEN;
         let e_chain = u64::from_le_bytes(blob[base..base + 8].try_into().unwrap());
@@ -82,11 +152,38 @@ fn build_erc7730_trailer(
         if e_chain != chain_id || e_contract != contract {
             continue;
         }
+        if matched.is_some() {
+            return Err(format!(
+                "ambiguous catalogue entries for chain={chain_id} contract=0x{}",
+                contract
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>()
+            ));
+        }
         let ir_off = u32::from_le_bytes(blob[base + 64..base + 68].try_into().unwrap()) as usize;
         let ir_len = u32::from_le_bytes(blob[base + 68..base + 72].try_into().unwrap()) as usize;
-        let ir = &blob[ir_pool_off + ir_off..ir_pool_off + ir_off + ir_len];
-        let proof_base = proofs_off + i * proof_depth * 32;
-        let proof = &blob[proof_base..proof_base + proof_depth * 32];
+        let ir_start = ir_pool_off
+            .checked_add(ir_off)
+            .ok_or("IR offset overflow")?;
+        let ir_end = ir_start.checked_add(ir_len).ok_or("IR length overflow")?;
+        if ir_len < IR_HEADER_LEN || ir_end > proofs_off || ir_end > blob.len() {
+            return Err("catalogue IR is truncated or overlaps proofs".into());
+        }
+        let ir = &blob[ir_start..ir_end];
+        if ir[2..10] != chain_id.to_be_bytes() || ir[10..30] != contract[..] {
+            return Err("catalogue entry and IR binding disagree".into());
+        }
+        let proof_stride = proof_depth.checked_mul(32).ok_or("proof length overflow")?;
+        let proof_base = proofs_off
+            .checked_add(i.checked_mul(proof_stride).ok_or("proof offset overflow")?)
+            .ok_or("proof offset overflow")?;
+        let proof_end = proof_base
+            .checked_add(proof_stride)
+            .ok_or("proof length overflow")?;
+        let proof = blob
+            .get(proof_base..proof_end)
+            .ok_or("catalogue proof is truncated")?;
 
         let mut out = Vec::with_capacity(2 + ir.len() + 4 + 4 + proof.len());
         out.extend_from_slice(&(ir.len() as u16).to_be_bytes());
@@ -94,12 +191,30 @@ fn build_erc7730_trailer(
         out.extend_from_slice(&(i as u32).to_be_bytes());
         out.extend_from_slice(&(proof_depth as u32).to_be_bytes());
         out.extend_from_slice(proof);
-        return Ok(out);
+        let context_kind = blob[base + 60];
+        if ir[1] != context_kind {
+            return Err("catalogue entry and IR context kind disagree".into());
+        }
+        let mut domain_separator = [0u8; 32];
+        domain_separator.copy_from_slice(&ir[62..94]);
+        let mut primary_type_hash = [0u8; 32];
+        primary_type_hash.copy_from_slice(&blob[base + 28..base + 60]);
+        matched = Some(Erc7730CatalogEntry {
+            trailer: out,
+            context_kind,
+            domain_separator,
+            primary_type_hash,
+        });
     }
-    Err(format!(
-        "no entry for chain={chain_id} contract=0x{}",
-        contract.iter().map(|b| format!("{b:02x}")).collect::<String>()
-    ))
+    matched.ok_or_else(|| {
+        format!(
+            "no entry for chain={chain_id} contract=0x{}",
+            contract
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        )
+    })
 }
 
 fn check_db_magic(path: &str, expected: &[u8; 4]) {

@@ -88,6 +88,11 @@ pub fn run(
 
     eprintln!("==> Flattening {}", secure_elf.display());
     let secure = elf::flatten_elf(secure_elf)?;
+    elf::ensure_image_capacity(
+        "secure",
+        secure.bytes.len(),
+        fw_manifest::SLOT_SECURE_CAPACITY,
+    )?;
     eprintln!(
         "    secure    : {} bytes, SHA-256 {}",
         secure.bytes.len(),
@@ -96,6 +101,11 @@ pub fn run(
 
     eprintln!("==> Flattening {}", nonsecure_elf.display());
     let nonsecure = elf::flatten_elf(nonsecure_elf)?;
+    elf::ensure_image_capacity(
+        "nonsecure",
+        nonsecure.bytes.len(),
+        fw_manifest::SLOT_NS_CAPACITY,
+    )?;
     eprintln!(
         "    nonsecure : {} bytes, SHA-256 {}",
         nonsecure.bytes.len(),

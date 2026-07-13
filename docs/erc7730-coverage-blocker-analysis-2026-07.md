@@ -10,7 +10,7 @@
 > packed payloads, and `sqrtPriceLimitX96`), and registry-declared calls that do
 > not compile are retained in the pinned omission filter and **hard-refuse** if
 > their proof is absent; they do not downgrade to blind-sign. The current
-> generated runtime catalogue has 431 leaves and 3,620 registry-declared contract-call
+> generated runtime catalogue has 420 leaves and 4,542 registry-declared contract-call
 > tuples. See [the current implementation review](./erc7730-implementation-review-2026-07.md)
 > and [the 2026-07-10 findings](./security/adversarial-review/findings/clear-signing-2026-07-10.md).
 
@@ -105,7 +105,7 @@ by ERC20_DB_ROOT (tokenAmount) / ENS (addressName) / MAX_FORMATS / page-budget â
   members), and C3 (multi-dynamic args + relaxed multi-array) landed. C2/C3
   were retired on 2026-07-10; C1 is now limited to one exact canonical whole
   tail. The historical corpus counts below must not be compared to the current
-  431-leaf strict-material catalogue.
+  420-leaf strict-material catalogue.
 - **Nested field-GROUP flattening** (`feat(erc7730): flatten nested field-GROUPS`, 7325e9f0). Morpho
   Blue's `marketParams` nested-group descriptor now clear-signs â€” the C2 "tuple-nav" leverage the table
   above scored for Morpho. Pure dbgen parser feature; the combined member paths ride the existing

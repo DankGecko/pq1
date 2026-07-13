@@ -67,8 +67,8 @@ pub fn is_allowlisted_multisend(to: &[u8; 20]) -> bool {
 /// `msg.sender` for every record, so none of the record semantics the
 /// trusted UI would render (CoW `uid.owner == the Safe` above all)
 /// hold. An op-0 call to a MultiSend address therefore stays on
-/// today's path (opaque calldata → loud blind-sign, honest
-/// `Op: Call`).
+/// the generic call path, where the pinned known-call filter still decides
+/// whether an opaque display is allowed or must refuse.
 ///
 /// Like [`safe_inner_is_cow_presign`], this deliberately does NOT
 /// shape-check the payload — the claim must also fire for a malformed
@@ -104,7 +104,7 @@ pub fn is_multisend_claim(operation: u8, to: &[u8; 20], data: &[u8]) -> bool {
 // verbatim.
 
 /// The data slice of the unique presign-claiming record, when there is
-/// exactly one. The CoW-binding resolver binds the zk_v3 trailer to
+/// exactly one. The CoW-binding resolver binds the cow_order trailer to
 /// these bytes.
 #[must_use]
 pub fn presign_record_data(data: &[u8]) -> Option<&[u8]> {
@@ -652,10 +652,10 @@ mod tests {
     #[test]
     fn pages_total_cow_flow() {
         let cd = cow_flow_calldata();
-        // approve: 1 divider + 4 content; presign (AddrOnly, body 1+8=9):
+        // approve: 1 divider + 4 content; presign (native body 1+8=9):
         // 1 divider + 9 content → 15.
         assert_eq!(records_pages_total(&cd, &SAFE_ADDR, 9), Some(15));
-        // proof mode (body 1+6=7) → 13.
+        // With a seven-page native body: approve(5) + presign(8) = 13.
         assert_eq!(records_pages_total(&cd, &SAFE_ADDR, 7), Some(13));
     }
 

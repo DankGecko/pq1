@@ -23,8 +23,9 @@ What is new here is the `safe_v1` trailer that converts an opaque
 > is `GPv2Settlement.setPreSignature`, the device additionally renders
 > the full CoW order intent (bound to the Safe) — see
 > [`companion-safe-cowswap-presign.md`](companion-safe-cowswap-presign.md).
-> A verified CoW `zk_v3` trailer is then **mandatory** alongside
-> `safe_v1`, or the sign refuses with `CoW sign / v3 required`.
+> A verified native CoW kind-3 trailer is then **mandatory** alongside
+> `safe_v1`, or the sign refuses with `CoW sign / v3 required`. The `cow_order`
+> symbol/status text is a frozen wire label only; no proof is involved.
 
 ## Why this flow exists
 
@@ -192,8 +193,8 @@ and later.
 ## On-device rendering
 
 Once the bind passes, the firmware lays out the SafeTx on a 16-col × 4-row
-OLED. Page count is variable and capped at `MAX_PAGES = 22` (well above
-anything Safe rendering needs).
+NV3007 LCD. Page count is variable and capped at `MAX_PAGES = 30`; any
+overflow refuses the signature rather than truncating the display.
 
 ### Header (always 3 pages)
 
@@ -215,6 +216,8 @@ The renderer classifies the inner call and dispatches:
 | `parse_erc20_calldata` succeeds, ERC-20 bundle present + address-matches | ERC-20 known   | 4          |
 | `parse_erc20_calldata` succeeds, no metadata match | ERC-20 unknown    | 4          |
 | `canonical.to == canonical.safe_address` + recognised selector | **Safe-mgmt** (per-op) | 1–3 |
+| verified CoW presign, direct or in pinned MultiSendCallOnly | Native CoW order | context + 8-body pages |
+| verified pinned MultiSendCallOnly DELEGATECALL | Strict per-record ladder | bounded by 30-page cap |
 | `canonical.to == canonical.safe_address` + unrecognised selector proven absent from ERC-7730 filter | **Unknown Safe op** (loud blind) | 3 |
 | other opaque tuple proven absent from ERC-7730 filter | Blind sign       | 3          |
 | opaque tuple known/Bloom-positive in ERC-7730 filter | **Refuse**       | —          |
@@ -323,7 +326,7 @@ companion is most likely to encounter:
 |----------------------------------------|----------------------------------------------------------------------|----------|
 | `Safe sign: safe_v1 required`          | Inner calldata is `approveHash(bytes32)` but no `safe_v1` trailer.   | Add the trailer; do not call `approveHash` without it. |
 | (trailer silently dropped) → blind-sign refused | Any of the eight verifier rules failed — bad framing, wrong chain, wrong safe address, `operation == 1` outside an allowlisted MultiSend, data_hash mismatch, safeTxHash mismatch. | Re-derive `safeTxHash` from your canonical fields and confirm it matches `inner_data[4..36]`. |
-| (rendered as `! Inner: opaque`)        | `to != safe_address`; inner calldata did not decode as ERC-20 or recognised Safe-mgmt op. | Expected for arbitrary contract calls; user must verify off-device. Consider supplying an ERC-7730 descriptor (`TRAILER_KIND_ERC7730 = 7`). |
+| (rendered as `! Inner: opaque`)        | `to != safe_address`; inner calldata did not decode and the exact tuple was proven absent from the pinned known-call filter. | User must verify off-device. A known/Bloom-positive tuple, malformed/prohibited batch, or page overflow refuses instead. Consider supplying an ERC-7730 descriptor (`TRAILER_KIND_ERC7730 = 7`). |
 | (rendered as `! Unkn self-call`)       | `to == safe_address` but selector is not one of the eight recognised Safe-mgmt ops. | If this is a new Safe singleton method, file a firmware ticket — the supported set is pinned at compile time. |
 
 (The "trailer silently dropped" path is intentional: a single

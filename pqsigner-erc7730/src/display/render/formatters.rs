@@ -196,7 +196,7 @@ pub(super) fn dispatch(
     let op =
         FormatOp::try_from(field.format_op).map_err(|_| RenderErr::Reject("7730 bad format op"))?;
     // A constant-annotation field carries no path; render its literal
-    // (attested, Merkle-pinned) string directly, bypassing the format-op
+    // descriptor-pinned string directly, bypassing the format-op
     // path resolution (which would reject on the absent path). Its shape is
     // deliberately canonical: an authenticated-but-malformed IR must not use
     // const precedence to ignore a real signed field or an unknown formatter.
@@ -420,12 +420,14 @@ fn render_token_amount(
     let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
     write_label_row(pages, p, field.label);
     let mut raw_fallback = false;
-    // A bound token normally carries its identity in the fully-rendered
-    // ticker. If painting the amount/ticker overflows, or an unlimited label
-    // cannot show the ticker byte-exactly, the raw/message page alone would be
-    // identical for different token contracts. Remember the authenticated
-    // ticker so an exact token-identity page can be appended below.
+    // A ticker is not an injective token identity: the authenticated catalogue
+    // can contain distinct contracts with identical symbol/decimals. Every
+    // bound non-native token therefore gets a full contract-address page even
+    // when its amount and ticker fit. Native sentinels remain exempt; for them
+    // a pinned ticker is the identity. Overflow also forces the identity page.
     let mut bound_identity_ticker: Option<&[u8]> = None;
+    let bound_non_native = token_addr
+        .is_some_and(|addr| !params.native_currency.is_some_and(|native| *native == addr));
 
     {
         let [_, r1, r2, foot] = pages.page_mut(p);
@@ -435,7 +437,8 @@ fn render_token_amount(
             // one row, use the second value row; an overlong ticker falls back to
             // an exact token-identity page instead.
             TokenAmountArm::Unlimited { message, ticker } => {
-                if !write_unlimited_rows(r1, r2, message, ticker) {
+                let ticker_painted = write_unlimited_rows(r1, r2, message, ticker);
+                if bound_non_native || !ticker_painted {
                     bound_identity_ticker = Some(ticker);
                 }
                 write_line(foot, "> next");
@@ -465,6 +468,8 @@ fn render_token_amount(
                     write_line(foot, "> next");
                 } else {
                     raw_fallback = true;
+                }
+                if bound_non_native || fit != AmountFit::Full {
                     bound_identity_ticker = Some(ticker);
                 }
             }
@@ -732,7 +737,7 @@ fn render_address_name(
 }
 
 /// Render a constant-annotation field — a path-less `{value,label}` whose
-/// `value` is a fixed (attested) string carried in the IR pool. Not bound
+/// `value` is a fixed descriptor-pinned string carried in the IR pool. Not bound
 /// to calldata, so there is no path to resolve: it shows the same text for
 /// every transaction (e.g. the ERC-4626 vault share/asset tickers). The
 /// string is Merkle-pinned, so it is no more trusted than the field label
@@ -1331,8 +1336,9 @@ pub(super) fn render_array(
     // decimals/symbol. SLOT-CONFUSION DISCIPLINE: the token sub-resolution
     // reads the STATIC HEAD only (`resolve_array` already proved the array
     // offset == static_head_words*32, so the head is exactly this prefix) —
-    // never the array-data tail. A token that cannot be Merkle-bound is named
-    // ONCE (audit M-1) and its elements fall back to loud raw (audit M-4).
+    // never the array-data tail. The exact token contract is named ONCE for
+    // both bound and unbound arrays: a symbol is not injective across the
+    // authenticated catalogue. Unbound elements fall back to loud raw.
     let bound_token: Option<(u32, &[u8], [u8; 20])> = if fmt == FormatOp::TokenAmount {
         let head_end = (static_head_words as usize)
             .saturating_mul(32)
@@ -1347,14 +1353,17 @@ pub(super) fn render_array(
             (Some(a), Some(m)) if a == m.contract => Some((u32::from(m.decimals), m.symbol, a)),
             _ => None,
         };
-        if b.is_none() {
-            if let Some(addr) = token_addr {
+        if let Some((_, _, addr)) = b {
+            let ap = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
+            write_label_row(pages, ap, b"Token contract");
+            let [_, ar1, ar2, ar3] = pages.page_mut(ap);
+            write_addr_full(ar1, ar2, ar3, &addr);
+        } else if let Some(addr) = token_addr {
                 let ap = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
                 write_label_row(pages, ap, b"Token (UNVERIFIED)");
                 let [_, ar1, ar2, ar3] = pages.page_mut(ap);
                 write_addr_full_or_name(ar1, ar2, ar3, &addr, tx.chain_id, resolver);
             }
-        }
         b
     } else {
         None
@@ -1411,8 +1420,8 @@ fn write_count_row(row: &mut [u8; DISPLAY_COLS], count: usize) {
 /// addressName, raw. `bound_token` is the `(decimals, symbol, contract)` of the
 /// array's shared token, Merkle-bound ONCE by [`render_array`] (`None` = not
 /// bound / not a tokenAmount array) — never re-resolved per element. Keeping
-/// the exact contract here lets a raw overflow append an injective identity
-/// page instead of dropping the token identity along with the scaled ticker.
+/// The caller emits the shared token's exact identity once before the elements,
+/// so raw-overflow pages do not repeat it per item.
 #[allow(clippy::too_many_arguments)]
 fn render_array_element(
     field: &FieldEntry<'_>,
@@ -1482,7 +1491,7 @@ fn render_array_element(
             let value = U256(*word);
             let [_, r1, r2, foot] = pages.page_mut(p);
             match bound_token {
-                Some((decimals, ticker, token_contract)) => {
+                Some((decimals, ticker, _token_contract)) => {
                     let fit = write_amount_two_rows(
                         r1,
                         r2,
@@ -1497,10 +1506,6 @@ fn render_array_element(
                         write_line(foot, "> next");
                     } else {
                         write_raw_word_two_pages(pages, p, field.label, word)?;
-                        let ip = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
-                        write_label_row(pages, ip, b"Token contract");
-                        let [_, ar1, ar2, ar3] = pages.page_mut(ip);
-                        write_addr_full(ar1, ar2, ar3, &token_contract);
                     }
                 }
                 None => {
@@ -1730,6 +1735,13 @@ fn render_token_ticker(
             let [_, r1, _r2, foot] = pages.page_mut(p);
             write_line_bytes(r1, meta.symbol);
             write_line(foot, "> next");
+            // Symbols are not unique, even inside the authenticated token
+            // catalogue. Always follow the friendly ticker with the exact
+            // contract so two signed token operands cannot paint identically.
+            let ap = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
+            write_label_row(pages, ap, b"Token contract");
+            let [_, ar1, ar2, ar3] = pages.page_mut(ap);
+            write_addr_full(ar1, ar2, ar3, &addr);
         }
         // No Merkle-verified ticker for this address — NEVER hide the token
         // identity. Show the full 40-hex address (resolver-aware) across rows
@@ -1907,8 +1919,8 @@ pub(super) fn hex_nibble(n: u8) -> u8 {
 
 /// Read the low 8 bytes of a 32-byte BE word as a u64, requiring the
 /// high 24 bytes to be zero. Returns `None` when the signed value exceeds
-/// `u64` — the caller MUST then paint a loud overflow marker rather than a
-/// silently-truncated date/duration. A companion controls these
+/// `u64` — the caller MUST then render the complete raw value (or reject)
+/// rather than paint a silently-truncated date/duration. A companion controls these
 /// `uint256` words, so the pre-2026-06-23 silent truncation let a benign
 /// low-64-bit timestamp display while an unbounded validity window was
 /// signed (audit 2026-06-23 — date/duration high-byte truncation).
@@ -2373,7 +2385,7 @@ mod date_overflow_fixed {
     //! with non-zero high bytes displayed a benign low-64-bit timestamp
     //! while an unbounded validity window was signed. The reader now
     //! rejects any value above `u64::MAX`; the date/duration renderers
-    //! paint a loud `! TIME >2^64` / `! DUR >2^64` marker on `None`.
+    //! route `None` to the complete two-page raw-value fallback.
     use super::read_u64_be_tail;
 
     #[test]
@@ -2671,7 +2683,79 @@ mod faithless_formatter_fixed {
             &params,
         )
         .expect("renders");
+        assert_eq!(pages.len, 2);
         assert_eq!(&pages.buf[0][1][..4], b"USDC");
+        assert_eq!(&pages.buf[1][0][..14], b"Token contract");
+        assert_eq!(&pages.buf[1][1][..2], b"0x");
+    }
+
+    #[test]
+    fn token_ticker_same_symbol_differs_by_full_contract_page() {
+        let ir = ir_with_path(&slot_prog(0));
+        let tx = envelope_chain(1);
+        let resolver = NameResolver::new();
+        let params = ParamSet::default();
+
+        let render = |token: [u8; 20]| {
+            let mut body = [0u8; 32];
+            body[12..32].copy_from_slice(&token);
+            let meta = Erc20Metadata {
+                chain_id: 1,
+                contract: token,
+                decimals: 6,
+                name: b"Same ticker",
+                symbol: b"USDT",
+            };
+            let mut pages = Pages::with_len(0);
+            render_token_ticker(
+                &field(FormatOp::TokenTicker),
+                &mut pages,
+                &ir,
+                &body,
+                &tx,
+                Some(&meta),
+                &resolver,
+                &params,
+            )
+            .expect("renders");
+            pages
+        };
+
+        let pages_a = render([0x11; 20]);
+        let pages_b = render([0x22; 20]);
+        assert_eq!(pages_a.len, 2);
+        assert_eq!(pages_b.len, 2);
+        assert_eq!(pages_a.as_slice()[0], pages_b.as_slice()[0]);
+        assert_ne!(pages_a.as_slice()[1], pages_b.as_slice()[1]);
+    }
+
+    #[test]
+    fn bound_token_ticker_identity_page_exhaustion_refuses() {
+        let ir = ir_with_path(&slot_prog(0));
+        let token = [0xCDu8; 20];
+        let mut body = [0u8; 32];
+        body[12..32].copy_from_slice(&token);
+        let meta = Erc20Metadata {
+            chain_id: 1,
+            contract: token,
+            decimals: 6,
+            name: b"Tether",
+            symbol: b"USDT",
+        };
+        let mut pages = Pages::with_len(crate::display::MAX_PAGES - 1);
+        assert_eq!(
+            render_token_ticker(
+                &field(FormatOp::TokenTicker),
+                &mut pages,
+                &ir,
+                &body,
+                &envelope_chain(1),
+                Some(&meta),
+                &NameResolver::new(),
+                &ParamSet::default(),
+            ),
+            Err(RenderErr::PageBudget)
+        );
     }
 }
 
@@ -3233,16 +3317,16 @@ mod kani_harness {
     }
 
     // ─────────────────────────────────────────────────────────────────
-    // 4. Loud-marker guards: date / duration / chain-id
+    // 4. Exact overflow fallbacks: date / duration / chain-id
     // ─────────────────────────────────────────────────────────────────
 
     /// ∀ words whose high 24 bytes are not all-zero (`read_u64_be_tail`
-    /// returns `None`): the `date` formatter paints the LOUD `! TIME >2^64`
-    /// marker — never a silently-truncated low-64-bit timestamp (audit
-    /// 2026-06-23 class, now closed ∀).
+    /// returns `None`): the `date` formatter paints every byte across the
+    /// shared two-page raw fallback — never a silently-truncated low-64-bit
+    /// timestamp or a value-free overflow marker.
     #[kani::proof]
     #[kani::unwind(34)]
-    fn fmt_p0_date_high_bytes_loud_marker() {
+    fn fmt_p0_date_high_bytes_raw_exact() {
         let ir = mk_ir(&SLOT0_POOL);
         let word: [u8; 32] = kani::any();
         let mut any_high = false;
@@ -3260,13 +3344,19 @@ mod kani_harness {
         let mut pages = Pages::with_len(0);
         let r = render_date(&f, &mut pages, &ir, &word, &tx, &params);
         assert!(r.is_ok());
-        assert!(pages.len == 1);
-        assert!(pages.buf[0][1][..12] == *b"! TIME >2^64");
-        assert!(pages.buf[0][2][..10] == *b"(overflow)");
+        assert!(pages.len == 2);
+        let k: usize = kani::any();
+        kani::assume(k < 32);
+        let (page, row) = [(0usize, 1usize), (0, 2), (1, 1), (1, 2)][k / 8];
+        let col = (k % 8) * 2;
+        assert!(pages.buf[page][row][col] == HEX_LOWER[(word[k] >> 4) as usize]);
+        assert!(pages.buf[page][row][col + 1] == HEX_LOWER[(word[k] & 0x0f) as usize]);
+        assert!(pages.buf[0][3][..10] == *b"1/2 > next");
+        assert!(pages.buf[1][3][..10] == *b"2/2 > next");
     }
 
     /// Converse witness: an in-range timestamp paints the real date, not
-    /// the marker (2024-01-01T00:00:00Z).
+    /// the raw fallback (2024-01-01T00:00:00Z).
     #[kani::proof]
     #[kani::unwind(34)]
     fn fmt_p0_date_normal_timestamp_concrete() {
@@ -3284,10 +3374,11 @@ mod kani_harness {
     }
 
     /// ∀ words with a non-zero high byte: the `duration` formatter paints
-    /// the LOUD `! DUR >2^64` marker (sibling of the date guard).
+    /// every byte across the shared two-page raw fallback, never a truncated
+    /// duration or value-free marker.
     #[kani::proof]
     #[kani::unwind(34)]
-    fn fmt_p0_duration_high_bytes_loud_marker() {
+    fn fmt_p0_duration_high_bytes_raw_exact() {
         let ir = mk_ir(&SLOT0_POOL);
         let word: [u8; 32] = kani::any();
         let mut any_high = false;
@@ -3304,12 +3395,18 @@ mod kani_harness {
         let mut pages = Pages::with_len(0);
         let r = render_duration(&f, &mut pages, &ir, &word, &tx);
         assert!(r.is_ok());
-        assert!(pages.len == 1);
-        assert!(pages.buf[0][1][..11] == *b"! DUR >2^64");
-        assert!(pages.buf[0][3][..6] == *b"> next");
+        assert!(pages.len == 2);
+        let k: usize = kani::any();
+        kani::assume(k < 32);
+        let (page, row) = [(0usize, 1usize), (0, 2), (1, 1), (1, 2)][k / 8];
+        let col = (k % 8) * 2;
+        assert!(pages.buf[page][row][col] == HEX_LOWER[(word[k] >> 4) as usize]);
+        assert!(pages.buf[page][row][col + 1] == HEX_LOWER[(word[k] & 0x0f) as usize]);
+        assert!(pages.buf[0][3][..10] == *b"1/2 > next");
+        assert!(pages.buf[1][3][..10] == *b"2/2 > next");
     }
 
-    /// Converse witness: 90061 s renders "1d 1h 1m 1s", no marker.
+    /// Converse witness: 90061 s renders "1d 1h 1m 1s", not the raw fallback.
     #[kani::proof]
     #[kani::unwind(34)]
     fn fmt_p0_duration_concrete() {
@@ -3328,8 +3425,8 @@ mod kani_harness {
     // (1500 s, 2400 s) — the chain-NAME lookup layered on the guard is past
     // CBMC's budget. Its load-bearing half — the `read_u64_be_tail` high-bytes
     // guard NEVER silently truncating — is forall-proven TWICE over the SAME
-    // shared helper by `fmt_p0_date_high_bytes_loud_marker` and
-    // `fmt_p0_duration_high_bytes_loud_marker` (render_chain_id calls the
+    // shared helper by `fmt_p0_date_high_bytes_raw_exact` and
+    // `fmt_p0_duration_high_bytes_raw_exact` (render_chain_id calls the
     // identical guard at its top). The concrete witness below pins the
     // chain-id integration of that guard.
 
@@ -3365,17 +3462,12 @@ mod kani_harness {
         pool[6] = 1; // entry count
     }
 
-    // HONEST DROP (2026-07-04): the two enum-label forall harnesses (chunk
-    // binding; >3-rows reject) TIMED OUT — composing the symbolic pool LOOKUP
-    // with the chunk loop is past CBMC's budget. Their content is already
-    // covered COMPOSITIONALLY: the lookup half is forall-proven in
-    // render/enums.rs (`enum_two_entry_value_sound` + the
-    // `enum_label_key_match` mutation pin), and the chunk-to-3-rows half is
-    // forall-proven by `fmt_p0_const_value_chunks_bind_rows` over
-    // BYTE-IDENTICAL code (render_enum and render_const share the same
-    // `chunks(DISPLAY_COLS)` + `write_line_bytes` loop and the same
-    // `> 3*DISPLAY_COLS` reject — see render_enum L~1157 / render_const
-    // L~603). The concrete witness below pins the integration of the two.
+    // HONEST DROP (2026-07-04): the enum-label forall harnesses (lookup plus
+    // chunk binding / >3-row rejection) timed out. The lookup primitive has
+    // its own proofs in render/enums.rs; the concrete 18-byte witness below
+    // pins integration, and a host regression test separately pins the
+    // formatter's 49-byte rejection. `render_const` is not equivalent: it now
+    // paginates long values instead of sharing the enum's 48-byte ceiling.
 
     /// Witness: an 18-char label chunks as row1 = first 16, row2 = last 2 +
     /// padding, row3 blank.
@@ -3404,7 +3496,14 @@ mod kani_harness {
 
     /// ∀ canonical const-annotation values (1..=48 printable bytes, no trailing
     /// display-padding space): `dispatch` accepts only the canonical Raw/no-path
-    /// shape and rows 1-3 show the attested string byte-exact + space-padded.
+    /// shape and rows 1-3 show the descriptor-pinned string byte-exact and
+    /// space-padded.
+    ///
+    /// Every backing byte is constrained printable, including the suffix past
+    /// `clen`. Every canonical prefix has such an extension; a single symbolic
+    /// display index then proves all 48 positions without a second symbolic
+    /// 48-iteration assertion loop. The bounded campaign remains an explicit
+    /// no-verdict timeout until it converges.
     #[kani::proof]
     #[kani::unwind(52)]
     fn fmt_p0_const_value_chunks_bind_rows() {
@@ -3414,9 +3513,7 @@ mod kani_harness {
         kani::assume(clen > 0 && clen <= CMAX);
         let mut i = 0usize;
         while i < CMAX {
-            if i < clen {
-                kani::assume((0x20..0x7f).contains(&backing[i]));
-            }
+            kani::assume((0x20..0x7f).contains(&backing[i]));
             i += 1;
         }
         kani::assume(backing[clen - 1] != b' ');
@@ -3430,12 +3527,10 @@ mod kani_harness {
         let r = dispatch(&f, &mut pages, &ir, &[], &tx, None, &resolver, &params);
         assert!(r.is_ok());
         assert!(pages.len == 1);
-        let mut k = 0usize;
-        while k < CMAX {
-            let expected = if k < clen { backing[k] } else { b' ' };
-            assert!(pages.buf[0][1 + k / DISPLAY_COLS][k % DISPLAY_COLS] == expected);
-            k += 1;
-        }
+        let k: usize = kani::any();
+        kani::assume(k < CMAX);
+        let expected = if k < clen { backing[k] } else { b' ' };
+        assert!(pages.buf[0][1 + k / DISPLAY_COLS][k % DISPLAY_COLS] == expected);
     }
 
     /// Witness: a 20-char const value chunks across rows 1-2.
@@ -3675,6 +3770,38 @@ mod adversarial_renderer_regressions {
         assert!(array_all_is_multi(&multi, 1).unwrap());
     }
 
+    #[test]
+    fn enum_label_over_three_rows_is_rejected_not_truncated() {
+        const LABEL_LEN: usize = 3 * DISPLAY_COLS + 1;
+        let mut pool = [0u8; 16 + LABEL_LEN];
+        pool[1] = 4;
+        pool[2] = PathOp::RootStructured as u8;
+        pool[3] = PathOp::FieldIdx as u8;
+        pool[4] = 0;
+        pool[5] = 0;
+        pool[6] = 1; // one enum entry; key bytes 7..15 remain zero
+        pool[15] = LABEL_LEN as u8;
+        pool[16..].fill(b'A');
+
+        let ir = ir(&pool);
+        let mut params = ParamSet::default();
+        params.enum_ref = Some(6);
+        let mut pages = Pages::with_len(0);
+        let result = render_enum(
+            &field(FormatOp::Enum as u8, 1),
+            &mut pages,
+            &ir,
+            &[0u8; 32],
+            &tx(),
+            &params,
+        );
+        assert!(matches!(
+            result,
+            Err(RenderErr::Reject("7730 enum label too long"))
+        ));
+        assert_eq!(pages.len, 0, "rejection must occur before any partial page");
+    }
+
     fn dynamic_body(data: &[u8]) -> std::vec::Vec<u8> {
         let padded = data.len().div_ceil(32) * 32;
         let mut body = std::vec![0u8; 64 + padded];
@@ -3795,6 +3922,66 @@ mod adversarial_renderer_regressions {
     }
 
     #[test]
+    fn bound_token_amount_same_ticker_always_keeps_exact_contract_identity() {
+        let contract_a = [0x21; 20];
+        let contract_b = [0x22; 20];
+        let meta_a = metadata(contract_a, b"USDT");
+        let meta_b = metadata(contract_b, b"USDT");
+        let envelope = tx();
+        let mut value = [0u8; 32];
+        value[24..].copy_from_slice(&1_000_000_000_000_000_000u64.to_be_bytes());
+
+        let render = |contract, meta: &Erc20Metadata<'_>| {
+            let mut params = ParamSet::default();
+            params.token = Some(contract);
+            let mut pages = Pages::with_len(0);
+            render_token_amount(
+                &field(FormatOp::TokenAmount as u8, 1),
+                &mut pages,
+                &ir(&SLOT_POOL),
+                &value,
+                &envelope,
+                Some(meta),
+                &NameResolver::new(),
+                &params,
+            )
+            .unwrap();
+            pages
+        };
+
+        let pages_a = render(&contract_a, &meta_a);
+        let pages_b = render(&contract_b, &meta_b);
+        assert_eq!(pages_a.len, 2);
+        assert_eq!(pages_b.len, 2);
+        assert_eq!(pages_a.as_slice()[0], pages_b.as_slice()[0]);
+        assert_ne!(pages_a.as_slice()[1], pages_b.as_slice()[1]);
+        assert_full_contract_page(&pages_a.as_slice()[1], &contract_a);
+        assert_full_contract_page(&pages_b.as_slice()[1], &contract_b);
+    }
+
+    #[test]
+    fn bound_token_identity_page_exhaustion_refuses() {
+        let contract = [0x23; 20];
+        let meta = metadata(contract, b"USDT");
+        let mut params = ParamSet::default();
+        params.token = Some(&contract);
+        let mut pages = Pages::with_len(crate::display::MAX_PAGES - 1);
+        assert_eq!(
+            render_token_amount(
+                &field(FormatOp::TokenAmount as u8, 1),
+                &mut pages,
+                &ir(&SLOT_POOL),
+                &one_billion_word(),
+                &tx(),
+                Some(&meta),
+                &NameResolver::new(),
+                &params,
+            ),
+            Err(RenderErr::PageBudget)
+        );
+    }
+
+    #[test]
     fn dirty_static_token_path_padding_rejects_instead_of_becoming_unnamed_raw() {
         let mut body = [0u8; 64];
         body[31] = 1; // amount at signed head word 0
@@ -3855,12 +4042,14 @@ mod adversarial_renderer_regressions {
 
         let pages_a = render(&contract_a, &meta_a);
         let pages_b = render(&contract_b, &meta_b);
-        assert_eq!(pages_a.len, 1);
-        assert_eq!(pages_b.len, 1);
+        assert_eq!(pages_a.len, 2);
+        assert_eq!(pages_b.len, 2);
         assert_eq!(pages_a.buf[0][1], *b"unlimited       ");
         assert_eq!(pages_a.buf[0][2], *b"LONGTOKENA      ");
         assert_eq!(pages_b.buf[0][2], *b"LONGTOKENB      ");
         assert_ne!(pages_a.buf[0], pages_b.buf[0]);
+        assert_full_contract_page(&pages_a.buf[1], &contract_a);
+        assert_full_contract_page(&pages_b.buf[1], &contract_b);
     }
 
     #[test]
@@ -3928,10 +4117,80 @@ mod adversarial_renderer_regressions {
         let pages_b = render(&contract_b, &meta_b);
         assert_eq!(pages_a.len, 4);
         assert_eq!(pages_b.len, 4);
-        assert_eq!(&pages_a.as_slice()[..3], &pages_b.as_slice()[..3]);
-        assert_ne!(pages_a.as_slice()[3], pages_b.as_slice()[3]);
-        assert_full_contract_page(&pages_a.as_slice()[3], &contract_a);
-        assert_full_contract_page(&pages_b.as_slice()[3], &contract_b);
+        assert_eq!(pages_a.as_slice()[0], pages_b.as_slice()[0]);
+        assert_ne!(pages_a.as_slice()[1], pages_b.as_slice()[1]);
+        assert_eq!(&pages_a.as_slice()[2..], &pages_b.as_slice()[2..]);
+        assert_full_contract_page(&pages_a.as_slice()[1], &contract_a);
+        assert_full_contract_page(&pages_b.as_slice()[1], &contract_b);
+    }
+
+    #[test]
+    fn bound_token_amount_array_same_ticker_keeps_exact_contract_identity() {
+        let contract_a = [0x61; 20];
+        let contract_b = [0x62; 20];
+        let meta_a = metadata(contract_a, b"USDT");
+        let meta_b = metadata(contract_b, b"USDT");
+        let envelope = tx();
+        let mut body = [0u8; 96];
+        body[31] = 32;
+        body[63] = 1;
+        body[88..96].copy_from_slice(&1_000_000_000_000_000_000u64.to_be_bytes());
+
+        let render = |contract, meta: &Erc20Metadata<'_>| {
+            let mut params = ParamSet::default();
+            params.token = Some(contract);
+            let mut pages = Pages::with_len(0);
+            render_array(
+                &field(FormatOp::TokenAmount as u8, 1),
+                &mut pages,
+                &ir(&SOLE_ARRAY_POOL),
+                &body,
+                1,
+                &envelope,
+                Some(meta),
+                &NameResolver::new(),
+                &params,
+            )
+            .unwrap();
+            pages
+        };
+
+        let pages_a = render(&contract_a, &meta_a);
+        let pages_b = render(&contract_b, &meta_b);
+        assert_eq!(pages_a.len, 3);
+        assert_eq!(pages_b.len, 3);
+        assert_eq!(pages_a.as_slice()[0], pages_b.as_slice()[0]);
+        assert_ne!(pages_a.as_slice()[1], pages_b.as_slice()[1]);
+        assert_eq!(pages_a.as_slice()[2], pages_b.as_slice()[2]);
+        assert_full_contract_page(&pages_a.as_slice()[1], &contract_a);
+        assert_full_contract_page(&pages_b.as_slice()[1], &contract_b);
+    }
+
+    #[test]
+    fn bound_token_amount_array_identity_page_exhaustion_refuses() {
+        let contract = [0x63; 20];
+        let meta = metadata(contract, b"USDT");
+        let mut body = [0u8; 96];
+        body[31] = 32;
+        body[63] = 1;
+        body[95] = 1;
+        let mut params = ParamSet::default();
+        params.token = Some(&contract);
+        let mut pages = Pages::with_len(crate::display::MAX_PAGES - 1);
+        assert_eq!(
+            render_array(
+                &field(FormatOp::TokenAmount as u8, 1),
+                &mut pages,
+                &ir(&SOLE_ARRAY_POOL),
+                &body,
+                1,
+                &tx(),
+                Some(&meta),
+                &NameResolver::new(),
+                &params,
+            ),
+            Err(RenderErr::PageBudget)
+        );
     }
 
     #[test]

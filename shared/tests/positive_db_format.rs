@@ -1,7 +1,7 @@
 //! Positive: `db_format` constants and little-endian readers.
 //!
-//! `db_format.rs` defines the on-disk layout of the four firmware-signed
-//! lookup DBs (ERC20, VK, Names, Selectors). The constants are consumed
+//! `db_format.rs` defines the on-disk layout of the three firmware-signed
+//! lookup DBs (ERC20, Names, Selectors). The constants are consumed
 //! by both `dbgen` (host writer) and the secure-world Merkle verifier
 //! — drift between writer and reader is an attack vector, so the
 //! constants must match the doc comment exactly.
@@ -41,45 +41,6 @@ fn positive_erc20_entry_offsets_and_size() {
     assert_eq!(ERC20_DB_ENTRY_LEN, 40);
 }
 
-// ─── VK ───────────────────────────────────────────────────────────────────
-
-#[test]
-fn positive_vk_magic_and_version() {
-    assert_eq!(VK_DB_MAGIC, *b"VKDB");
-    assert_eq!(VK_DB_VERSION, 1);
-}
-
-#[test]
-fn positive_vk_header_offsets() {
-    assert_eq!(VK_HDR_OFF_MAGIC, 0);
-    assert_eq!(VK_HDR_OFF_VERSION, 4);
-    assert_eq!(VK_HDR_OFF_FLAGS, 8);
-    assert_eq!(VK_HDR_OFF_ENTRY_CNT, 12);
-    assert_eq!(VK_HDR_OFF_VK_COUNT, 16);
-    assert_eq!(VK_HDR_OFF_VK_POOL_OFF, 20);
-    assert_eq!(VK_HDR_OFF_PROOF_DEPTH, 24);
-    assert_eq!(VK_HDR_OFF_PROOFS_OFF, 28);
-    assert_eq!(VK_DB_HEADER_LEN, 32);
-}
-
-#[test]
-fn positive_vk_entry_offsets_and_size() {
-    assert_eq!(VK_ENTRY_OFF_CHAIN_ID, 0);
-    assert_eq!(VK_ENTRY_OFF_CONTRACT, 8);
-    assert_eq!(VK_ENTRY_OFF_VK_ID, 28);
-    assert_eq!(VK_ENTRY_OFF_SHA_PFX, 29);
-    assert_eq!(VK_DB_ENTRY_LEN, 32);
-}
-
-#[test]
-fn positive_vk_blob_len_ordering() {
-    // Documented in the module comment: 2-pub VK fits inside a 3-pub slot
-    // and the fixed-stride slot is the 3-pub size.
-    assert_eq!(VK_BLOB_LEN_2PUB, 960);
-    assert_eq!(VK_BLOB_LEN_3PUB, 1056);
-    assert_eq!(VK_BLOB_LEN, VK_BLOB_LEN_3PUB);
-    assert!(VK_BLOB_LEN_2PUB < VK_BLOB_LEN_3PUB);
-}
 
 // ─── Names ────────────────────────────────────────────────────────────────
 

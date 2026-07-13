@@ -69,7 +69,7 @@ use sphincs_tz_shared::{
     SIGN_USEROP_BATCH_TX_PREFIX_LEN, SIGN_USEROP_BATCH_WIRE_VERSION, SIG_WRAPPER_LEN,
     SLOT_INDEX_MASK, TRAILERS_TOTAL_MAX_LEN, TRAILER_KIND_ERC20, TRAILER_KIND_ERC7730,
     TRAILER_KIND_NAME, TRAILER_KIND_SAFE_V1, TRAILER_KIND_SEL_CURATED,
-    TRAILER_KIND_SEL_SELFATTEST, TRAILER_KIND_ZK_V1, TRAILER_KIND_ZK_V3,
+    TRAILER_KIND_RESERVED_V1, TRAILER_KIND_SEL_SELFATTEST, TRAILER_KIND_COW_ORDER,
     TRAILER_TX_IDX_BATCH_WIDE, MAX_TRAILERS_PER_BATCH,
 };
 
@@ -1314,7 +1314,7 @@ fn negative_batch_binds_sender_before_verify_confirm_sign_or_state_write() {
     );
 
     let trusted_shadow = CMD_SIGN_USEROP_BATCH_SRC[gate..]
-        .find("let sender = unsafe {")
+        .find("let sender =")
         .map(|p| gate + p)
         .expect("batch path must replace the companion sender");
     let before_gate = &CMD_SIGN_USEROP_BATCH_SRC[..gate];
@@ -1387,7 +1387,7 @@ fn negative_batch_binds_sender_before_verify_confirm_sign_or_state_write() {
     assert!(before_call.contains("SenderBinding::fail_closed()"));
     assert!(before_call.contains("core::ptr::write_volatile("));
     assert!(CMD_SIGN_USEROP_BATCH_SRC[gate..].contains("SENDER_BIND_CFI_EXPECTED"));
-    assert!(CMD_SIGN_USEROP_BATCH_SRC[gate..].contains("let sender_check = unsafe"));
+    assert!(CMD_SIGN_USEROP_BATCH_SRC[gate..].contains("let sender_check ="));
     assert!(CMD_SIGN_USEROP_BATCH_SRC[gate..].contains("sender_reads_agree"));
 }
 
@@ -1504,6 +1504,22 @@ fn negative_batch_rejects_trailing_bytes_after_last_inner_tx() {
         BATCH_TRAILERS_SRC.contains("walk != total_len"),
         "batch_trailers::parse_all must enforce cursor-exhaustion"
     );
+}
+
+#[test]
+fn negative_batch_erc20_metadata_never_scans_unverified_safe_trailers() {
+    let erc20_arm = CMD_SIGN_USEROP_BATCH_SRC
+        .split("TRAILER_KIND_ERC20 =>")
+        .nth(1)
+        .and_then(|tail| tail.split("TRAILER_KIND_RESERVED_V1 =>").next())
+        .expect("ERC-20 trailer arm");
+    assert!(
+        !erc20_arm.contains("parsed_trailers.records"),
+        "raw Safe trailer inventory must not grant ERC-20 metadata authority"
+    );
+    assert!(erc20_arm.contains("Store only the Merkle- and chain-verified metadata"));
+    assert!(CMD_SIGN_USEROP_BATCH_SRC.contains("let chain_verified_erc20"));
+    assert!(CMD_SIGN_USEROP_BATCH_SRC.contains("selected surface"));
 }
 
 #[test]
@@ -1843,8 +1859,8 @@ fn negative_proto_constants_used_by_handlers_resolve_to_pinned_values() {
     assert_eq!(TRAILERS_TOTAL_MAX_LEN, 24 * 1024);
     assert_eq!(SIGN_USEROP_BATCH_TRAILER_HEADER_LEN, 4);
     assert_eq!(TRAILER_KIND_ERC20, 1);
-    assert_eq!(TRAILER_KIND_ZK_V1, 2);
-    assert_eq!(TRAILER_KIND_ZK_V3, 3);
+    assert_eq!(TRAILER_KIND_RESERVED_V1, 2);
+    assert_eq!(TRAILER_KIND_COW_ORDER, 3);
     assert_eq!(TRAILER_KIND_SAFE_V1, 4);
     assert_eq!(TRAILER_KIND_SEL_CURATED, 5);
     assert_eq!(TRAILER_KIND_SEL_SELFATTEST, 6);

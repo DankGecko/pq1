@@ -108,4 +108,41 @@ mod tests {
         assert!(!may_contain(&bloom, 1, &other_contract, &selector));
         assert!(!may_contain(&bloom, 1, &contract, &other_selector));
     }
+
+    #[test]
+    fn raw_bloom_encoding_matches_independent_golden_vector() {
+        // Independently generated from the literal preimage
+        //   DOMAIN || u64_be(1) || contract || selector
+        // with Python hashlib.sha256, then h1/h2 interpreted as BE u64 and
+        // Kirsch-Mitzenmacher double hashing over 131_072 bits. This freezes
+        // the domain, field order, integer endianness, bit numbering, and raw
+        // serialized bytes rather than merely round-tripping this module's own
+        // encoder and decoder.
+        let contract = [
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+            0xee, 0xff, 0x00, 0x11, 0x22, 0x33,
+        ];
+        let selector = [0xa9, 0x05, 0x9c, 0xbb];
+        let expected_positions = [35_565, 43_372, 51_179, 58_986, 66_793, 74_600, 82_407];
+        assert!(positions(1, &contract, &selector).eq(expected_positions));
+
+        let mut bloom = [0u8; BLOOM_BYTES];
+        insert(&mut bloom, 1, &contract, &selector);
+        let expected_nonzero = [
+            (4_445, 0x20),
+            (5_421, 0x10),
+            (6_397, 0x08),
+            (7_373, 0x04),
+            (8_349, 0x02),
+            (9_325, 0x01),
+            (10_300, 0x80),
+        ];
+        for (index, actual) in bloom.iter().copied().enumerate() {
+            let expected = expected_nonzero
+                .iter()
+                .find_map(|(golden_index, byte)| (*golden_index == index).then_some(*byte))
+                .unwrap_or(0);
+            assert_eq!(actual, expected, "raw Bloom byte {index}");
+        }
+    }
 }

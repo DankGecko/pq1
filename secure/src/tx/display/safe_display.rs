@@ -1012,9 +1012,9 @@ pub enum MultisendGate {
 /// two ERC-8213 fingerprint pages, and the batch banner (batch handler only).
 ///
 /// The budget arithmetic mirrors `render_safe_pages_inner` exactly:
-/// fixed header(3) + refund(0|2) + SafeTx-value page(0|1) + the
-/// per-record total from `multi_send::records_pages_total` (the SAME
-/// classification + per-kind counts the renderer uses) + confirm(1).
+/// [`safe_fixed_overhead_pages`] (header + refund + SafeTx-gas + confirm),
+/// the optional SafeTx-value page, the per-record total from
+/// `multi_send::records_pages_total`, and `reserved_pages`.
 pub fn multisend_sign_gate(
     safe_v1: Option<&VerifiedSafeV1<'_>>,
     safe_exec: Option<&VerifiedSafeExec<'_>>,

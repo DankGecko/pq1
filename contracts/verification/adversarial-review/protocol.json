@@ -1,7 +1,7 @@
 {
   "name": "pqsigner-fv-adversarial-review",
   "version": 1,
-  "doc": "Machine-readable protocol for the PQSigner FV adversarial review. Framework-AGNOSTIC: run_review.py drives ANY backend (Claude Code, Codex, a raw LLM, a future agent) that can read a prompt and emit JSON. The reviewer persona + the green-but-hollow catalog live in PROMPT.md; this file defines WHAT to review (angles + targets), HOW MANY independent passes (reviewers) and the agreement rule (quorum), and the STRICT output schema every backend must satisfy. See docs/fv-adversarial-review-playbook.md for the full method and README.md to run it.",
+  "doc": "Machine-readable protocol for the PQSigner FV adversarial review. Framework-AGNOSTIC: run_review.py drives ANY backend (Claude Code, Codex, a raw LLM, a future agent) that can read a prompt and emit JSON. The reviewer persona + the green-but-hollow catalog live in PROMPT.md; this file defines WHAT to review (angles + targets), HOW MANY independent passes (reviewers) and the agreement rule (quorum), and the STRICT output schema every backend must satisfy. See docs/verification/fv-adversarial-review-playbook.md for the full method and README.md to run it.",
 
   "defaults": {
     "reviewers": 2,

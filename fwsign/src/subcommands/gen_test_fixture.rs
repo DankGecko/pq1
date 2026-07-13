@@ -25,6 +25,16 @@ use std::path::Path;
 use fw_manifest::{ManifestBuilder, SLOT_A, TRY_ONCE_COMMITTED};
 
 pub fn run(version: u32, secure_len: u32, nonsecure_len: u32, out_dir: &Path) -> Result<()> {
+    crate::elf::ensure_image_capacity(
+        "secure",
+        secure_len as usize,
+        fw_manifest::SLOT_SECURE_CAPACITY,
+    )?;
+    crate::elf::ensure_image_capacity(
+        "nonsecure",
+        nonsecure_len as usize,
+        fw_manifest::SLOT_NS_CAPACITY,
+    )?;
     if secure_len & 0xF != 0 || nonsecure_len & 0xF != 0 {
         anyhow::bail!(
             "image lengths must be QW-aligned (multiple of 16); got secure={secure_len} nonsecure={nonsecure_len}"
@@ -109,4 +119,37 @@ pub fn run(version: u32, secure_len: u32, nonsecure_len: u32, out_dir: &Path) ->
     eprintln!("      version: {version}");
     eprintln!("      vendor_fpr: {}", hex::encode(vendor_fpr));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn absent_output(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "pqsigner-fwsign-{name}-{}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn over_capacity_secure_fixture_is_rejected_before_output_creation() {
+        let out = absent_output("secure-over-cap");
+        let result = run(
+            1,
+            fw_manifest::SLOT_SECURE_CAPACITY + 16,
+            16,
+            &out,
+        );
+        assert!(result.is_err());
+        assert!(!out.exists());
+    }
+
+    #[test]
+    fn over_capacity_nonsecure_fixture_is_rejected_before_output_creation() {
+        let out = absent_output("nonsecure-over-cap");
+        let result = run(1, 16, fw_manifest::SLOT_NS_CAPACITY + 16, &out);
+        assert!(result.is_err());
+        assert!(!out.exists());
+    }
 }

@@ -1,13 +1,21 @@
 # PQSigner Companion App Integration Guide
 
-Self-contained reference for building a companion app (desktop, mobile, or
-browser extension) that drives the PQSigner post-quantum hardware wallet.
+> **STOP: legacy architecture reference, not an implementation specification.**
+> Nothing below overrides the two normative documents linked here. Historical
+> byte layouts and workflows are context only and must not be copied into a
+> companion. Implement transport and response parsing from
+> [`usb-protocol-v2.md`](usb-protocol-v2.md), and ERC-7730 lookup/framing from
+> [`companion-erc7730-implementation-guide.md`](companion-erc7730-implementation-guide.md).
+> In particular, seedless slot rotation is not executable on wire v2: keep
+> `FLAG_REGISTER_SLOT` clear, reject a nonzero Type-1 response, and do not retry
+> until the reviewed public-key/calldata protocol bump in `docs/work-todo.md`
+> lands.
 
-The canonical reference implementation is
-[`tools/webhid_test.html`](../../tools/webhid_test.html) — a single-file WebHID
-browser tool that exercises the full transport, sign flow, multi-account
-picker, and publish-ready UserOp construction. Everything in this document
-mirrors what that tool does; when in doubt, read its source.
+This is retained as historical architecture context for companion apps. It is
+not self-contained, and its detailed byte layouts and worked workflows have not
+all been reconciled with the current firmware. The WebHID tool is a bring-up
+utility, not a production protocol authority. Use the two normative documents
+linked in the warning above and the constants in `pqsigner-proto`.
 
 ---
 
@@ -24,7 +32,7 @@ mirrors what that tool does; when in doubt, read its source.
 9. [On-Chain Counters & Caps](#9-on-chain-counters--caps)
 10. [Multi-Account Derivation](#10-multi-account-derivation)
 11. [Companion App Workflows](#11-companion-app-workflows)
-12. [ERC-20 & ZK Clear-Sign Trailers](#12-erc-20--zk-clear-sign-trailers)
+12. [Current clear-sign trailers (normative redirect)](#12-current-clear-sign-trailers-normative-redirect)
 13. [Error Handling](#13-error-handling)
 14. [Security Invariants](#14-security-invariants)
 15. [Constants Reference](#15-constants-reference)
@@ -47,7 +55,7 @@ mirrors what that tool does; when in doubt, read its source.
                                            | PIN entry (LCD) |
                                            | Tx display      |
                                            | SPHINCS+C10 sign|
-                                           | ZK verify       |
+                                           | Native decode   |
                                            +------+----------+
                                                   |
                                      +------------+------------+
@@ -62,14 +70,15 @@ mirrors what that tool does; when in doubt, read its source.
 - Displays transaction details on its trusted LCD.
 - Waits for physical button confirmation.
 - Computes the SPHINCS+C10 signing digest natively.
-- Verifies ZK proofs before displaying decoded actions.
+- Verifies authenticated metadata/descriptors and natively binds decoded bytes
+  before displaying actions.
 
 The companion never sees the PIN, seed, or signing key. It sends opaque
 commands and receives public data + signatures.
 
 **One signing command.** After the all-C10 / multi-owner cutover, there is
 exactly one signing instruction (`INS 0x30 SIGN_USEROP`). Every flow —
-first deploy, normal transaction, slot rotation, ERC-20 transfer, ZK
+first deploy, normal transaction, slot rotation, ERC-20 transfer, native
 clear-signed action — is expressed as flags + optional trailers on the
 same payload.
 
@@ -187,7 +196,7 @@ Device → Host:  [remaining bytes] SW=0x9000
 | `0x6982` | Security not satisfied (wrong PIN, user rejected on device)  |
 | `0x6984` | Idle timeout — device auto-locked mid-operation              |
 | `0x6985` | Conditions not satisfied (device locked, not provisioned)    |
-| `0x6A80` | Wrong data (malformed payload, invalid ZK proof, bad trailer)|
+| `0x6A80` | Wrong data (malformed payload, invalid metadata/descriptor binding or trailer) |
 | `0x6D00` | `INS` not supported                                          |
 | `0x6E00` | `CLA` not supported                                          |
 | `0x6F00` | Internal error                                               |
@@ -235,8 +244,8 @@ Capability discovery. **Always call first.**
 | 21     | 4    | capabilities      | u32 BE bitmap (see below)              |
 | 25     | 1    | sig_param_set     | `2` = SPHINCS+C10 (128-bit)            |
 | 26     | 2    | sig_size          | u16 BE = `SIG_TYPE2_LEN` (4128)     |
-| 28     | 4    | erc20_db_version  | u32 BE, zero if unset                  |
-| 32     | 4    | vk_db_version     | u32 BE, zero if unset                  |
+| 28     | 4    | legacy_reserved_0 | u32 BE, always zero                    |
+| 32     | 4    | legacy_reserved_1 | u32 BE, always zero                    |
 | 36     | 2    | ep_version        | u16 BE = `0x0006` (EntryPoint v0.6)    |
 | 38     | 2    | wrapper_overhead  | u16 BE = `SIG_TYPE2_HEADER_LEN`     |
 
@@ -334,14 +343,16 @@ Sub-flows selected by flag bits:
 |------------------------------------------|------------------------------------|
 | none (normal signing)                    | Type 2 wrapper only                |
 | `FLAG_INCLUDE_INIT_CODE` + slot_index=0  | initCode + Type 2 (first deploy)   |
-| `FLAG_REGISTER_SLOT` + slot_index ≥ 1    | Type 1 (bootstrap) + Type 2 (slot) |
+| `FLAG_REGISTER_SLOT` + slot_index ≥ 1    | Type 1 + Type 2 wire output; current companions MUST reject it |
 
 `FLAG_INCLUDE_INIT_CODE` and `FLAG_REGISTER_SLOT` are **mutually
 exclusive**. Firmware rejects both set.
 
-**Response: 3-chunk bundle**, drained via `GET_RESPONSE`:
+**Response: one count plus three length-framed chunks**, drained via
+`GET_RESPONSE`:
 
 ```
+[new_offchain_count (8 BE)]
 [init_code_len (4 BE)][init_code    (0 or 4280 B)]
 [type1_len     (4 BE)][type1_wrapper(0 or 4128 B)]   — abi.encode(uint256,bytes)
 [type2_len     (4 BE)][type2_wrapper(4128 B)]        — abi.encode(uint256,bytes)
@@ -391,23 +402,14 @@ Drain the next chunk of a large response.
 > `0xe3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`
 > (`sha256("")`).
 
-### Optional trailers (after calldata)
+### Trailer layout (normative redirect)
 
-Send **neither** or **both** length prefixes. If either is present, both
-must be present (even if one length is zero).
-
-```
-[erc20_bundle_len (2 BE)][erc20_bundle …]
-[zk_bundle_len    (2 BE)][zk_bundle    …]
-```
-
-See [§12](#12-erc-20--zk-clear-sign-trailers) for trailer contents. The
-non-secure USB handler will **opportunistically inject** an ERC-20
-bundle when the companion omits all trailers and `(chain_id, to)` matches
-the NS-side token DB, and likewise a VK bundle when the companion supplied
-only the fixed ZK block without one. That mechanism is transparent to
-the companion — if you need deterministic behaviour (e.g. for tests),
-construct the bundles yourself.
+The former two-trailer recipe was retired and has been removed from this legacy
+guide. Current `SIGN_USEROP` uses seven positional `u16` slots (including a
+zero-only reserved compatibility slot), followed by the special names framing;
+batch uses routed TLVs. The non-secure USB handler performs no database lookup
+or metadata injection. Implement the exact current grammar from
+[`companion-erc7730-implementation-guide.md` §6](companion-erc7730-implementation-guide.md#6-where-the-trailer-goes-in-each-command).
 
 ### Flags field (u32 BE)
 
@@ -444,6 +446,7 @@ Parsing (mirrors `parseSignResponse` in the WebHID tool):
 
 ```typescript
 let off = 0;
+const newOffchainCount = readU64BE(resp, off); off += 8;
 const icLen = readU32BE(resp, off); off += 4;
 const initCode = icLen > 0 ? resp.slice(off, off + icLen) : null; off += icLen;
 
@@ -704,8 +707,10 @@ uint256 constant MAX_SLOT_USES      = 65_536;   // Type 2 cap per owner
 - Always read on-chain state before choosing which slot to sign with.
   The firmware will happily keygen any requested slot; it is the
   companion's job to avoid a slot index whose `slotUses` is already at cap.
-- When `slotUses[currentSlot]` approaches `MAX_SLOT_USES`, register the
-  next slot (`FLAG_REGISTER_SLOT`, `slot_index + 1`) ahead of time.
+- When `slotUses[currentSlot]` approaches `MAX_SLOT_USES`, warn that seedless
+  rotation is currently blocked. Keep `FLAG_REGISTER_SLOT` clear and reject a
+  nonzero Type-1 response until the reviewed wire-v2 extension returns the exact
+  public key or complete bound calldata.
 - When `bootstrapUses` approaches `MAX_BOOTSTRAP_USES`, warn the user:
   once all currently-registered slots are also exhausted, the chain is
   permanently frozen for that wallet. There is no reset path by design.
@@ -741,19 +746,18 @@ For each account_index ∈ [0, 255]:
   address = LibClone.predictDeterministicAddressERC1967(impl, salt, factory)
 ```
 
-Per-slot derivation from `slot_master` + `slot_index`:
+Per-slot derivation from `slot_master`, `chain_id`, and `slot_index`:
 ```
-slot_entropy = sha256(slot_master || "slot_entropy" || slot_index_BE4)
-slot_r       = sha256(slot_master || "slot_r"    || slot_index_BE4)
+slot_entropy = sha256(slot_master || "slot_entropy" || chain_id_BE8 || slot_index_BE4)
+slot_r       = sha256(slot_master || "slot_r"       || chain_id_BE8 || slot_index_BE4)
 slot_sk_seed = sha256("slot_c10_sk_seed" || slot_entropy)
 slot_pk_seed = sha256("slot_c10_pk_seed" || slot_entropy) & N_MASK
 slot_sk      = sphincs_c10::SigningKey::keygen(slot_sk_seed, slot_pk_seed)
 ```
 
-**Recovery contract.** The domain tags above are load-bearing and
-frozen. Any companion that re-derives keys locally (for proofs,
-attestation, etc.) must use the exact same tags, and must use the
-`-acct` variants **only** when `account_index > 0`.
+**Recovery contract.** The domain tags above are load-bearing and frozen. This
+formula is retained only as firmware/test-tool compatibility context;
+companions do not receive the seed or slot secrets and must not re-derive keys.
 
 ### Companion UI pattern (from the WebHID tool)
 
@@ -803,15 +807,17 @@ GET_WALLET_ADDRESS(account_index=0) → <1 s first time, then wallet address
      Request signing after button confirm.
 
 7. Parse response:
-     initCode (4280 B), type1=null, type2 (4128 B)
+     newOffchainCount, initCode (4280 B), type1=null, type2 (4128 B)
 8. Build UserOperation06:
-     sender, nonce=0, initCode, callData = execute(to,value,data),
+     sender, nonce=0, initCode,
+     callData = executeWithOffchainCount(1,newOffchainCount,to,value,data),
      callGasLimit, verificationGasLimit, preVerificationGas,
      maxFeePerGas, maxPriorityFeePerGas,
      paymasterAndData = "0x",
      signature = type2
 9. Submit via eth_sendUserOperation
-   → EntryPoint.createSender → factory.createAccount → wallet execute(...)
+   → EntryPoint.createSender → factory.createAccount
+   → wallet.executeWithOffchainCount(...)
 ```
 
 Gas defaults that worked on Base Sepolia in the reference tool:
@@ -840,33 +846,14 @@ maxFeePerGas         = 1   gwei
 
 ### 11.4 Slot Rotation (current slot nearing cap)
 
-Triggered when `wallet.slotUses(currentOwnerIndex)` approaches 65_536,
-or as a defensive re-roll after suspected key exposure.
-
-```
-1. slotIdx ← current slot index
-2. newSlotIdx ← slotIdx + 1
-3. flags = FLAG_REGISTER_SLOT | (accountIndex << 22) | newSlotIdx
-4. SIGN_USEROP(…)
-   → initCode=null
-   → type1 (4128 B, ownerIndex=0 — bootstrap signs addOwnerBytes)
-   → type2 (4128 B, ownerIndex=N+1 — new slot signs the intended user tx)
-
-5. Submit TWO UserOps to the bundler, in order:
-   a. UserOp #1 (type1):  sender, nonce=base,   callData = addOwnerBytes(newOwnerBytes)
-   b. UserOp #2 (type2):  sender, nonce=base+1, callData = execute(to,value,data)
-
-```
-
-> ⚠️ **Open item.** The 64-byte `newOwnerBytes = pkSeed‖pkRoot` needed to
-> build UserOp #1's calldata is **not** currently emitted in the
-> `SIGN_USEROP` response. The WebHID reference tool logs a TODO and
-> skips Type 1 submission. Until the firmware wire format is extended
-> to include the new slot's public key, production companions should
-> either (a) re-derive the slot keypair locally from the seed (requires
-> holding the seed in the companion — generally unacceptable) or
-> (b) add a dedicated companion-visible getter and bump the protocol
-> version.
+**Blocked on wire v2.** The response omits the exact 64-byte
+`newOwnerBytes = pkSeed‖pkRoot` that the bootstrap signature commits to in
+`addOwnerBytes(newOwnerBytes)`. A companion cannot reconstruct that UserOp from
+the response and must not substitute a no-op, guessed key, or locally derived
+secret. Keep `FLAG_REGISTER_SLOT` clear, reject any nonzero Type-1 response, and
+do not retry it. Rotation becomes executable only after the reviewed,
+versioned protocol extension returns the exact public key or complete bound
+Type-1 calldata.
 
 ### 11.5 Receive Address Verification
 
@@ -886,26 +873,22 @@ Companion compares `addr` against any cached value and surfaces a warning on mis
    All addresses match their originals (deterministic from seed).
 4. For each (chain, account) pair, read on-chain state:
      nextOwner = wallet.nextOwnerIndex()
-     for each ownerIndex in [0, nextOwner):
-         owner = wallet.ownerAtIndex(ownerIndex)
-         // Compare against the companion's slot-derivation to find
-         // which slot_index this ownerIndex corresponds to.
-5. Pick a fresh slot index (> any currently-registered one) and
-   rotate into it on first sign — the safest recovery posture.
+     recover the active slot_index from persisted companion state or historical
+     registration records; the companion must not derive wallet secrets.
+5. If the active slot mapping cannot be recovered, stop. Wire v2 cannot rotate
+   into a fresh slot because it omits the exact Type-1 public-key calldata.
 ```
 
 ### 11.7 Contract Interactions (DeFi, ERC-20, etc.)
 
-Same as §11.3. The companion builds the inner `(to, value, data)` triple;
-the device shows a human-friendly confirmation page when:
-
-- `data` matches `transfer(address,uint256)` on a token from the ERC-20
-  DB (NS-side opportunistic inject, or companion-supplied).
-- The `zk_bundle` trailer validates a Groth16 clear-sign attestation for
-  the target protocol.
-
-Otherwise the device shows raw `(to, value, calldata hex)` so the user
-can still reason about the call. See [§12](#12-erc-20--zk-clear-sign-trailers).
+Same as §11.3. The companion builds the inner `(to, value, data)` triple and
+supplies every metadata/descriptor proof explicitly; the non-secure handler
+does not inject database entries. ERC-7730, ERC-20, Safe, and CoW routes decode
+and render only after their current authenticated trailers verify. A tuple in
+the firmware-pinned known-call filter refuses when its required descriptor is
+missing or invalid; genuinely unknown calls may use the loud generic ladder.
+Follow the normative ERC-7730 guide rather than the retired trailer section
+that used to live here.
 
 ### 11.8 Off-chain Signing (EIP-1271 / ERC-6492)
 
@@ -919,7 +902,8 @@ Header (17 bytes):
   [ 0..  1)  account_index    (u8)
   [ 1..  9)  chain_id         (u64 BE)
   [ 9.. 13)  slot_index       (u32 BE)
-  [13.. 14)  kind             (u8: 0 = RAW32, 1 = PERSONAL_SIGN, 2 = EIP712_TYPED)
+  [13.. 14)  kind             (u8: 0 = RAW32, 1 = PERSONAL_SIGN,
+                                    2 = EIP712_TYPED, 3 = EIP712_TYPED_V3)
   [14.. 16)  payload_len      (u16 BE)
   [16.. 17)  flags            (u8 — bit 0 = OFFCHAIN_FLAG_ACCOUNT_DEPLOYED)
   [17..   )  payload          (32 B for RAW32, raw message bytes ≤700 for PERSONAL_SIGN)
@@ -933,6 +917,14 @@ NOT pre-nest. (This is a security requirement: the on-chain UserOp path
 verifies a bare SHA-256 `sphincsDigest`, so a firmware that signed a
 companion-chosen 32-byte value verbatim would be a UserOp-forgery oracle.
 Fixed 2026-06-11.)
+
+**RAW32 is a loud blind tier, not a typed-data fallback.** Replay-safe nesting
+prevents a UserOp-forgery oracle, but the firmware cannot determine whether the
+companion obtained `rawHash` by hashing otherwise-supported EIP-712 data. A
+hostile companion can suppress those semantic pages by submitting the final
+hash as RAW32; the device warns `! BLIND RAW32` and shows the complete hash.
+Preserve the dapp-requested signing method. Production should disable RAW32
+unless an explicit compatibility decision accepts this residual.
 
 **Companion responsibility — set the `account_deployed` bit:** before
 each call, the companion checks `eth_getCode(predicted_address)` on
@@ -981,8 +973,8 @@ deployed account — all in one round trip, no on-chain state change.
   `local_offchain = last_userop = 0` before bumping. Subsequent calls
   follow the normal gap (≤ `MAX_OFFCHAIN_GAP`) and combined-cap
   (≤ `MAX_SLOT_USES`) logic.
-- The off-chain counter still bumps. Once the wallet is eventually
-  deployed by a Type 1 UserOp, the existing
+- The off-chain counter still bumps. Once the wallet is eventually deployed by
+  the slot-0 Type-2 UserOp carrying the factory `initCode`, the existing
   `executeWithOffchainCount(...)` publish path overwrites the
   on-chain `offchainSigCount[1]` to reflect any 6492-signed off-chain
   history.
@@ -1039,71 +1031,19 @@ authenticated the factory call, so the threat is purely client-side.
 
 ---
 
-## 12. ERC-20 & ZK Clear-Sign Trailers
+## 12. Current clear-sign trailers (normative redirect)
 
-The SIGN_USEROP payload supports two optional trailers that replace the
-pre-cutover `SIGN_CLEAR_USEROP` / `SIGN_MESSAGE` / EIP-712 instructions.
+The historical proof/VK recipe is retired. CoW, Aave, and ERC-7730 shapes are
+decoded natively on-device. The companion must explicitly supply current
+Merkle-authenticated metadata/descriptor bundles; the non-secure USB layer does
+no database or display-text injection.
 
-### Layout recap
+Implement only the layouts in:
 
-```
-<header 330 B>
-<data data_len>
-[erc20_bundle_len (2 BE)][erc20_bundle]
-[zk_bundle_len    (2 BE)][zk_bundle]
-```
-
-- Either both length prefixes are present, or neither.
-- An empty section is encoded as `[0x00 0x00]` (length prefix, no body).
-- Maximum combined trailer length bounded by `CHAIN_BUF_LEN` (≈ 8 KB).
-
-### ERC-20 metadata bundle
-
-Merkle-verified record that lets the device render
-"Send 1 USDC to 0x…" instead of "Call 0x… with 36-byte calldata":
-
-```
-sha256(0x00 || chain_id[8 LE] || contract[20] || decimals[1] ||
-       name_len[1] || name_bytes || symbol_len[1] || symbol_bytes)
-```
-
-Internal Merkle nodes: `sha256(0x01 || left[32] || right[32])`.
-
-The secure world holds a 32-byte Merkle root; the bundle is the leaf
-record plus the sibling path. The NS-side companion ships a matching
-copy of this DB and looks up entries by `(chain_id, contract_addr)`.
-
-If the companion omits the trailer entirely, the NS-side handler will
-look the token up in its own NS flash DB and inject the bundle on the
-companion's behalf — the secure world re-verifies every byte regardless.
-
-### ZK clear-sign bundle
-
-Used for protocol actions that don't map to an ERC-20 transfer:
-
-```
-zk_bundle = proof(384) || calldata_attested(164) || readable(64) [|| vk_bundle]
-```
-
-- `proof` — Groth16 proof over BLS12-381, generated off-device with
-  snarkjs or equivalent.
-- `calldata_attested` — the full inner calldata the circuit committed to,
-  zero-padded to 164 bytes. The first 132 bytes (selector + 4×32 args)
-  must match the `data` field in the header; bytes 132..164 are the
-  circuit's zero-padding.
-- `readable` — the human-readable string the proof attests to, null-padded
-  to 64 bytes.
-- `vk_bundle` (optional) — the protocol VK plus its Merkle authentication
-  path against the on-device VK DB root. If omitted, the NS-side handler
-  looks up `(chain_id, to)` in the NS VK DB and injects the bundle.
-
-The device Merkle-verifies the VK, runs the Groth16 verifier, displays
-the readable string on the OLED, and only then proceeds to the PIN-gated
-signing step.
-
-The reference WebHID tool exposes this via the "Test: ZK clear-sign
-(Aave V3 supply)" button — see the `AAVE_*` constants and
-`$('testZkAaveBtn')` handler for a complete worked example.
+- [`companion-erc7730-implementation-guide.md` §6](companion-erc7730-implementation-guide.md#6-where-the-trailer-goes-in-each-command) for the seven positional single-UserOp slots, names framing, batch kind-7 routing, and off-chain typed-data trailers;
+- [`companion-batch-sign-integration.md`](companion-batch-sign-integration.md) for all batch TLV kinds and their current caps;
+- [`companion-safe-cowswap-presign.md`](companion-safe-cowswap-presign.md) for the native CoW canonical and Safe/MultiSend binding;
+- [`usb-protocol-v2.md`](usb-protocol-v2.md) for transport and response framing.
 
 ---
 
@@ -1125,7 +1065,7 @@ UNLOCKED      --[LOCK or 120s inactivity]--> LOCKED (auto-zeroise)
 | Wrong PIN on device           | `0x6982` | Show `pin_remaining` from `GET_STATUS`         |
 | User rejected on device       | `0x6982` | Surface "Transaction rejected on device"       |
 | Idle timeout mid-sign         | `0x6984` | Re-`UNLOCK`, re-send sign command              |
-| Malformed ZK proof            | `0x6A80` | Bug in circuit / prover                        |
+| Missing/malformed required clear-sign bundle | `0x6A80` | Hard catalogue/proof error; never retry without the proof |
 | `data_len` out of range       | `0x6700` | Cap inner `data` at 4096 bytes                 |
 | Both flag bits set            | `0x6A80` | Internal bug — INIT_CODE and REG_SLOT exclusive|
 | `slot_index ≠ 0` with INIT    | `0x6A80` | INIT_CODE requires `slot_index = 0`            |
@@ -1163,8 +1103,8 @@ issue.
    used as display authority.
 3. **Slot selection is the companion's responsibility.** Firmware is
    stateless with respect to `(chain_id, slot_index)`. Always read
-   on-chain `nextOwnerIndex` / `slotUses[i]` before choosing a slot to
-   sign with or to rotate to.
+   on-chain `nextOwnerIndex` / `slotUses[i]` before choosing an existing slot
+   to sign with. Seedless rotation is blocked on wire v2.
 4. **Bootstrap key never signs user transactions.** The contract dispatch
    rules reject any `ownerIndex = 0` signature on selectors other than
    `addOwnerBytes`. This is enforced on-chain, not by the companion — but
@@ -1174,12 +1114,12 @@ issue.
 6. **Address verification requires device confirmation.** Always direct
    users to re-verify receive addresses on the device's LCD via
    `GET_WALLET_ADDRESS`, not just in the companion UI.
-7. **ZK proofs are generated off-device.** The companion runs snarkjs (or
-   equivalent) to produce Groth16 proofs for clear-signed actions. The
-   device only verifies.
-8. **VK and ERC-20 databases must match the device.** Version mismatch
-   causes Merkle verification failure on the device (`SW = 0x6A80`).
-   Check versions via `GET_DEVICE_INFO`.
+7. **Clear-sign data must match the pinned roots.** The companion supplies
+   ERC-7730, ERC-20, names, Safe, and CoW bundles explicitly. A root/version
+   mismatch fails closed; there is no NS-side lookup or Groth16 fallback.
+8. **A compiled-catalogue miss is not an unknown-call proof.** Calls present in
+   the firmware-pinned known-call filter still require their verified
+   descriptor and refuse if it is absent.
 
 ---
 
@@ -1194,9 +1134,6 @@ issue.
 | initCode (first deploy)          | 4,280  |
 | SIGN_USEROP request header       | 330    |
 | Max inner tx `data`              | 4,096  |
-| Groth16 proof                    | 384    |
-| ZK attested calldata             | 164    |
-| ZK readable (EIP-1559)           | 64     |
 | SHA-256 digest                   | 32     |
 | Owner bytes (pkSeed ‖ pkRoot)    | 64     |
 | pk_seed (raw)                    | 16     |
@@ -1385,7 +1322,7 @@ function buildSignPayload(p: {
   maxPriorityFeePerGas: bigint, maxFeePerGas: bigint,
   paymasterAndDataHash?: Uint8Array,
   to: string, value: bigint, data?: Uint8Array,
-  erc20Bundle?: Uint8Array, zkBundle?: Uint8Array,
+  erc20Bundle?: Uint8Array,
 }): Uint8Array {
   if (p.registerSlot && p.includeInitCode) throw new Error('mutually exclusive flags');
   if (p.includeInitCode && p.slotIndex !== 0) throw new Error('INIT_CODE requires slotIndex=0');
@@ -1410,10 +1347,10 @@ function buildSignPayload(p: {
   ]);
 
   const erc20 = p.erc20Bundle ?? new Uint8Array(0);
-  const zk    = p.zkBundle    ?? new Uint8Array(0);
-  if (erc20.length === 0 && zk.length === 0) return head;
+  if (erc20.length === 0) return head;
 
-  return concatBytes([head, u16be(erc20.length), erc20, u16be(zk.length), zk]);
+  // Frozen reserved slot after ERC-20 metadata; firmware requires length 0.
+  return concatBytes([head, u16be(erc20.length), erc20, u16be(0)]);
 }
 ```
 

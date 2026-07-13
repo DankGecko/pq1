@@ -36,16 +36,13 @@ on-device. The firmware re-derives the `safeTxHash` natively, byte-
 compares it against the calldata's `bytes32`, and only then renders a
 clear-signed view. No Groth16, no proof — the bind is just keccak.
 
-## Why no Groth16 (the difference from CowSwap)
+## Native binding in both Safe and CoW
 
-CowSwap setPreSignature carries a 56-byte opaque `orderUid` in the
-calldata. The order's actual fields (sell/buy token, amounts, validTo)
-are nowhere on chain — they live in CoW's off-chain orderbook. To
-display them on the OLED with cryptographic guarantee, the firmware
-needs them brought on-device *and* a proof that they really do hash to
-the orderUid the chain will see. That's what the v3 Groth16 proof
-buys: it binds a companion-supplied "readable" string to a packed
-canonical, in-circuit, via Poseidon.
+CoW `setPreSignature` carries a 56-byte opaque `orderUid`; the companion
+therefore supplies the 204-byte canonical GPv2Order. Secure world recomputes
+its EIP-712 digest and renders the fields natively. Safe likewise recomputes
+the SafeTx digest from its canonical fields. Neither path uses Groth16,
+companion-supplied readable text, or a VK database.
 
 Safe is structurally different. The on-chain `approveHash(bytes32)`
 calldata carries the EIP-712 digest itself. So:
@@ -53,9 +50,9 @@ calldata carries the EIP-712 digest itself. So:
 | | CowSwap v3 | Safe `safe_v1` |
 |---|---|---|
 | What's in calldata | 56-byte opaque `orderUid` | 32-byte `safeTxHash` |
-| Can firmware re-derive natively? | Yes (keccak chain), but the *readable* still needs binding | Yes (keccak chain), and the firmware *itself* renders from trusted bytes |
-| Need a proof? | Yes — to bind the human-readable string to the canonical (keeps decimal-formatting out of the secure world) | **No** — the firmware reuses its existing `(to, value, data)` decoder once the canonical is bound |
-| Trailer overhead | ~2 KB (proof + canonical + readable + VK bundle) | ~283 B (canonical + 2-byte raw_data length) + raw_data |
+| Can firmware re-derive natively? | Yes; canonical GPv2Order → EIP-712 digest | Yes; canonical SafeTx → EIP-712 digest |
+| Need a proof? | No | No |
+| Trailer overhead | 204..=2448 B (canonical + optional ERC-20 bundles) | ~283 B (canonical + 2-byte raw_data length) + raw_data |
 
 So Safe gets clear-signing at a fraction of the implementation +
 runtime cost — and reuses every existing display primitive the
@@ -181,7 +178,7 @@ non-membership proof on `(chain_id, inner.to, selector)`. If that opaque tuple
 is present (or Bloom-positive) in the firmware catalogue, the whole Safe
 request refuses instead of using this blind path.
 
-#### CoW order pre-sign (1 context banner + 6/8 order body pages)
+#### CoW order pre-sign (1 context banner + 8 order-body pages)
 
 When the SafeTx's inner call is CowSwap
 `GPv2Settlement.setPreSignature(orderUid, true)` and the companion
@@ -200,9 +197,8 @@ on.
 │0x5afe00..000002│    │                │    │                │  …order body…
 │> next          │    │                │    │                │
 └────────────────┘    └────────────────┘    └────────────────┘
-   context banner          proof-mode readable pages (or addr-mode
-                           token+amount pages when a token is absent
-                           from the firmware registry)
+   context banner          native decoded order pages; each non-native
+                           token also shows its full contract address
 ```
 
 The context banner is the load-bearing linkage page: it names the Safe

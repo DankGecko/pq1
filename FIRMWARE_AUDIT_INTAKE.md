@@ -18,13 +18,13 @@ Firmware for **PQ1**, a $149 post-quantum self-custody hardware wallet. Target i
 
 The one and only signature primitive is **SPHINCS+C10** (hash-based, SLH-DSA-style; `h=18, d=2, a=11, k=13, w=8, l=43, target_sum=205` → 4008-byte sig). No classical signer (secp256k1/P-256/Ed25519) exists anywhere in the firmware, FSBL, or update path. SHA-256 is the only hash inside the PQ stack; Keccak-256 appears only for EVM-mandated hashes.
 
-Runtime flow: BIP-39 entropy is **XOR-split across the two secure elements** (neither chip alone holds a seed bit); PIN is compared **in SE silicon, never in MCU code**, with a three-way lockstep counter (MCU flash page 124 + OPTIGA E120 LUC + SE050 UserID); on unlock the seed is reconstructed in TrustZone-secure SRAM only, used to derive per-`(account, chain, slot)` C10 keys, and zeroized on lock/tamper/timeout. A companion app (USB-HID) builds the UserOp and supplies non-secret routing metadata; **the device trusts the companion for nothing secret** and decodes/clear-signs every artifact on its own trusted OLED before the user confirms.
+Runtime flow: BIP-39 entropy is **XOR-split across the two secure elements** (neither chip alone holds a seed bit); PIN is compared **in SE silicon, never in MCU code**, with a three-way lockstep counter (MCU flash page 124 + OPTIGA E120 LUC + SE050 UserID); on unlock the seed is reconstructed in TrustZone-secure SRAM only, used to derive per-`(account, chain, slot)` C10 keys, and zeroized on lock/tamper/timeout. A companion app (USB-HID) builds the UserOp and supplies non-secret routing metadata; **the device trusts the companion for nothing secret** and decodes/clear-signs every artifact on its own trusted NV3007 LCD before the user confirms.
 
 Pre-production: no devices shipped, no funds on-chain. Boots on real **B-U585I-IOT02A** and **QEMU mps2-an505**.
 
 ## 2. Scope boundary
 
-**In scope (this engagement):** everything in the repo that runs on the device or feeds its supply chain — secure world, NSC gateway, SE drivers, HW drivers, the SPHINCS+C10 core, all pure-logic crates, the nonsecure/USB world, FSBL + FW-update, the ZK clear-sign verifier, and the host-side trust-DB / release-signing tools. Full-stack: **both software correctness and hardware/physical** (SCA, fault injection, TrustZone/GTZC, SE provisioning, OTP/DHUK).
+**In scope (this engagement):** everything in the repo that runs on the device or feeds its supply chain — secure world, NSC gateway, SE drivers, HW drivers, the SPHINCS+C10 core, all pure-logic crates, the nonsecure/USB world, FSBL + FW-update, the native ERC-20 / Safe / CoW / ERC-7730 clear-sign decoders, and the host-side trust-DB / release-signing tools. Full-stack: **both software correctness and hardware/physical** (SCA, fault injection, TrustZone/GTZC, SE provisioning, OTP/DHUK).
 
 **Out of scope:**
 - **On-chain contracts** (`contracts/`) — separate engagement.
@@ -33,7 +33,7 @@ Pre-production: no devices shipped, no funds on-chain. Boots on real **B-U585I-I
 
 ## 3. SLOC (in scope, full-stack)
 
-Code SLOC = non-blank, non-comment-only lines. **Rust unit tests are inline (`#[cfg(test)]`) and counted here** (~7,200 test fns workspace-wide), and large data tables (BIP-39 wordlist, C10 KATs, BLS test vectors) inflate the figure — true production logic is materially smaller. A precise tests-excluded count (tokei) is available on request.
+Code SLOC = non-blank, non-comment-only lines. **Rust unit tests are inline (`#[cfg(test)]`) and counted here**, and large data tables (BIP-39 wordlist and C10 KATs) inflate the figure — true production logic is materially smaller. The table below is the last pre-retirement snapshot; rerun the repository SLOC tooling before using totals contractually. Groth16/BLS12-381 rows have been removed because that implementation was retired on 2026-06-30.
 
 ### On-device (runs on the STM32U585)
 
@@ -44,14 +44,12 @@ Code SLOC = non-blank, non-comment-only lines. **Rust unit tests are inline (`#[
 | · tx decode + trusted display + EIP-712 | `secure/src/tx` | 8,867 |
 | · SE drivers (OPTIGA + SE050) | `secure/src/{optiga,se050}` | 6,132 |
 | · HW drivers (SAES/HASH/flash/OTP/TAMP/RNG/PKA/USB) | `secure/src/hw` | 4,622 |
-| · ZK clear-sign verifier (Groth16/Poseidon) | `secure/src/zk` | 2,728 |
-| · remainder (main, sau/GTZC, crypto, state, offchain, fw_update, dual_se, ui, …) | `secure/src/*` | ~25,033 |
+| · remainder (main, sau/GTZC, crypto, state, offchain, fw_update, dual_se, ui, …) | `secure/src/*` | remeasure |
 | SPHINCS+C10 crypto core (written from scratch) | `sphincs-c10` | 1,168 |
 | Pure-logic crates ¹ | proto, tx-core, aa, domain, tx, erc7730, bip39 ², hal, shared, fi | 8,428 |
 | Nonsecure world — USB-HID / APDU v2 router | `nonsecure` | 3,551 |
 | Immutable bootloader + FW-update manifest | `fsbl` + `fw-manifest` | 810 |
-| BLS12-381 pairing (ZK path only; mostly-vendored fork) | `bls12_381_pka` | 11,949 |
-| **On-device subtotal** | | **~79,200** |
+| **On-device subtotal** | | **remeasure before engagement** |
 
 ¹ all `no_std`, no-heap, host-testable; the secure world re-exports them through thin shims.
 ² 2,048 of bip39's 2,466 lines are the BIP-39 English wordlist (data, not logic).
@@ -62,15 +60,14 @@ Code SLOC = non-blank, non-comment-only lines. **Rust unit tests are inline (`#[
 |---|---|---:|
 | Release signer (vendor C10 key handling) | `fwsign` | 1,621 |
 | Trust-DB / Merkle-root builder (ERC-20, ERC-7730, selectors) | `dbgen` | 4,924 |
-| Groth16 host harness | `zk-test` | 768 |
-| **Host subtotal** | | **7,313** |
+| **Host subtotal** | | **remeasure before engagement** |
 
-**Total in scope ≈ 86,500 code SLOC** (inline tests + data tables included).
+**Total in scope:** remeasure from the final audit commit (inline tests + data tables included).
 
 ## 4. Third-party deps / forks
 
 - **RustCrypto, vetted, relied-upon (not re-audited):** `sha2`, `sha3`, `aes`, `aes-gcm`, `cmac`, `hmac`, `subtle` (constant-time compares), `zeroize` / `zerocopy`. All `default-features = false`, `no_std`.
-- **`bls12_381_pka`** — in-repo **fork of zkcrypto/bls12_381** adding a `pka` feature for STM32U585 PKA hardware acceleration. Vendored (path dep, ~12k SLOC, mostly upstream pairing math); the firmware-relevant delta is the PKA backend + the Groth16 usage. Linked only when the ZK clear-sign path is enabled.
+- **Retired dependency note:** the former in-repo BLS12-381/Groth16 fork and host harness are not part of the current build or audit scope. Historical findings and reproduction material live only under `docs/archive/` and `docs/security/vulns/`.
 - **`tropic01`** — the **only git-pinned external dependency** (`tropicsquare/libtropic-rs`, `rev = 0cacb5e…`), feature-gated (`tropic01-se`) and **not used in the shipping dual-SE config**. A `compile_error!` fence enforces the 40-char-hex pin.
 - **Written from scratch (no upstream exists for this parameter set):** `sphincs-c10` (C10 SLH-DSA-style signer), `bip39` (`no_std` wordlist + derivation), plus the `proto / tx-core / aa / domain / tx / erc7730 / hal / fi` logic crates.
 - **Ported / derived (provenance flag):** `secure/src/hw/tamp.rs` is a **port of Trezor** `core/embed/sec/tamper/stm32u5/tamper.c` (currently log-only — see §6); other hardening patterns (brownout, FI random-delay) are Trezor-informed. Per-slot key derivation parallels the Coinbase-Smart-Wallet port shared with the contracts. **Trezor-derived code may carry copyleft implications** — flag before open-sourcing.

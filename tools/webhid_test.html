@@ -198,7 +198,7 @@
   <div class="card">
     <h2>Quick Tests</h2>
     <div style="font-size: 12px; color: #6b7280; line-height: 1.5; margin-bottom: 12px;">
-      Pre-baked signing scenarios that exercise the token-aware ERC-20 display and the ZK clear-sign trailer. The firmware injects the Merkle-verified metadata bundle from its on-device DB; only the raw call bytes come from the companion.
+      Pre-baked signing scenarios that exercise token-aware ERC-20 and native trusted-display decoding. The companion supplies Merkle proofs for metadata; secure firmware verifies every bundle against its compiled-in root before rendering.
     </div>
     <div class="actions">
       <button id="testUsdcBtn" class="secondary" disabled>Test: USDC transfer (Base)</button>
@@ -918,10 +918,10 @@ const DeviceAPI = {
 // Optional trailer sections (after inner-tx calldata), in order:
 //   * `erc20Bundle`     — Merkle-verified ERC-20 metadata (token name /
 //                         symbol / decimals).
-//   * (zk v1 reserved)  — the Groth16 clear-sign slot was retired; it
+//   * reserved slot 1   — the former proof slot was retired; it
 //                         is always written zero-length so the framing
 //                         stays positional (firmware rejects non-zero).
-//   * (zk_v3 + safe_v1) — written as zero-length when not provided;
+//   * (cow_order + safe_v1) — written as zero-length when not provided;
 //                         present here so the framing stays positional.
 //   * `selectorBundle`  — curated `(selector, text_sig)` Merkle bundle
 //                         from `selectors_db.bin`. When present, the
@@ -948,8 +948,8 @@ function buildSignPayload(p) {
   if (data.length > 0xFFFF) throw new Error('inner data too long');
 
   const erc20Bundle = p.erc20Bundle || new Uint8Array(0);
-  // Retired ZK (Groth16) clear-sign slot — always empty; kept positional.
-  const zkReserved = new Uint8Array(0);
+  // Reserved compatibility slot — always empty and kept positional.
+  const reservedV1 = new Uint8Array(0);
   const selectorBundle = p.selectorBundle || new Uint8Array(0);
   const selfAttestBundle = p.selfAttestBundle || new Uint8Array(0);
   if (selectorBundle.length > 0 && selfAttestBundle.length > 0) {
@@ -1015,8 +1015,8 @@ function buildSignPayload(p) {
   // treated by the firmware as "zero name bundles".
   //
   //   slot 0: erc20 bundle
-  //   slot 1: (retired) zk v1 clear-sign trailer — always empty
-  //   slot 2: zk v3 (CowSwap EIP-712) trailer
+  //   slot 1: reserved compatibility trailer — always empty
+  //   slot 2: native CowSwap EIP-712 order trailer
   //   slot 3: safe_v1 multisig trailer
   //   slot 4: curated selector bundle
   //   slot 5: self-attest selector bundle
@@ -1027,8 +1027,8 @@ function buildSignPayload(p) {
   // firmware's positional parser stays aligned.
   const slots = [
     erc20Bundle,
-    zkReserved,
-    p.zkV3Bundle || new Uint8Array(0),
+    reservedV1,
+    p.cowOrderBundle || new Uint8Array(0),
     p.safeV1Bundle || new Uint8Array(0),
     selectorBundle,
     selfAttestBundle,

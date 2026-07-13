@@ -1,7 +1,8 @@
 //! Integration test for the ERC-7730 descriptor pipeline.
 //!
 //! Runs end-to-end against the checked-in seed corpus:
-//!   1. Compile every `secure/data/erc7730/*.json` descriptor.
+//!   1. Compile the pinned `secure/data/erc7730-registry/{registry,ercs}`
+//!      catalogue under `secure/data/erc7730/policy.toml`.
 //!   2. Build the Merkle tree.
 //!   3. For each leaf:
 //!        - Reconstruct the synthetic trailer the companion would
@@ -15,7 +16,7 @@
 //!
 //! Also exercises the host-side compiler against a synthetic in-memory
 //! corpus (one contract + one EIP-712 descriptor) so this test does
-//! not depend on the real `secure/data/erc7730/` corpus for its smoke
+//! not depend on the real `secure/data/erc7730-registry/` corpus for its smoke
 //! coverage — the seed corpus is exercised separately via the embedded
 //! `build_db_seed_corpus` unit test inside `dbgen::erc7730`.
 //!
@@ -23,7 +24,8 @@
 //! test is what that recipe's step 2 (`cargo test -p dbgen --test
 //! erc7730_roundtrip`) refers to.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Output;
 
 use dbgen::erc7730::{
     build_db, build_db_tolerant, load_policy, round_trip_check, try_compile_one, Erc7730BuildResult,
@@ -31,8 +33,9 @@ use dbgen::erc7730::{
 use pqsigner_erc7730::abi::container_field;
 use pqsigner_erc7730::binding::{cross_check_contract, cross_check_eip712};
 use pqsigner_erc7730::bundle::{verify_erc7730_bundle, MAX_ERC7730_BUNDLE_LEN};
-use pqsigner_erc7730::ir::{ContextKind, Erc7730Ir, PathOp, CTX_CONTRACT, CTX_EIP712};
+use pqsigner_erc7730::ir::{ContextKind, Erc7730Ir, FormatOp, PathOp, CTX_CONTRACT, CTX_EIP712};
 use pqsigner_erc7730::known_calls::may_contain as known_call_may_contain;
+use pqsigner_erc7730::render::params::{parse as parse_params, DYNAMIC_KIND_BYTES};
 use pqsigner_tx_core::hash::keccak256;
 
 fn workspace_root() -> PathBuf {
@@ -60,6 +63,13 @@ fn build_registry() -> Erc7730BuildResult {
     let (res, _skips) = build_db_tolerant(&reg.join("registry"), &policy, Some(&reg))
         .expect("build registry corpus");
     res
+}
+
+fn build_e2e() -> Erc7730BuildResult {
+    let root = workspace_root();
+    let dir = root.join("secure/data/erc7730-e2e");
+    let policy = root.join("secure/data/erc7730/policy.toml");
+    build_db(&dir, &policy).expect("build E2E corpus")
 }
 
 #[test]
@@ -120,12 +130,108 @@ fn registry_declared_but_uncompiled_call_is_still_known() {
         entry.chain_id == 1
             && entry.contract == contract
             && Erc7730Ir::parse(&entry.ir_bytes).is_ok_and(|ir| {
-                ir.format_iter().any(|format| {
-                    format.is_ok_and(|format| format.selector == selector)
-                })
+                ir.format_iter()
+                    .any(|format| format.is_ok_and(|format| format.selector == selector))
             })
     });
-    assert!(!emitted, "control: this exact format should remain uncompiled");
+    assert!(
+        !emitted,
+        "control: this exact format should remain uncompiled"
+    );
+}
+
+#[test]
+fn registry_endpoint_only_route_is_omitted_but_stays_known() {
+    let catalogue = build_registry();
+    let raw = hex::decode("a5e0829caced8ffdd4de3c43696c57f7d7a678ff").unwrap();
+    let mut contract = [0u8; 20];
+    contract.copy_from_slice(&raw);
+    let digest = keccak256(b"swapExactTokensForTokens(uint256,uint256,address[],address,uint256)");
+    let selector = [digest[0], digest[1], digest[2], digest[3]];
+
+    assert!(known_call_may_contain(
+        &catalogue.known_calls_bloom,
+        137,
+        &contract,
+        &selector,
+    ));
+    assert!(!catalogue.entries.iter().any(|entry| {
+        entry.chain_id == 137
+            && entry.contract == contract
+            && Erc7730Ir::parse(&entry.ir_bytes).is_ok_and(|ir| {
+                ir.format_iter()
+                    .any(|format| format.is_ok_and(|format| format.selector == selector))
+            })
+    }));
+}
+
+#[test]
+fn registry_dropped_tuple_array_call_is_still_known() {
+    let catalogue = build_registry();
+    let raw = hex::decode("2cc8475177918e8c4d840150b68815a4b6f0f5f3").unwrap();
+    let mut contract = [0u8; 20];
+    contract.copy_from_slice(&raw);
+    let digest = keccak256(b"batchExecute((address,uint256,bytes)[])");
+    let selector = [digest[0], digest[1], digest[2], digest[3]];
+    assert_eq!(selector, [0x1a, 0x83, 0x3e, 0xe3]);
+    assert!(known_call_may_contain(
+        &catalogue.known_calls_bloom,
+        1,
+        &contract,
+        &selector,
+    ));
+    assert!(!catalogue.entries.iter().any(|entry| {
+        entry.chain_id == 1
+            && entry.contract == contract
+            && Erc7730Ir::parse(&entry.ir_bytes).is_ok_and(|ir| {
+                ir.format_iter()
+                    .any(|format| format.is_ok_and(|format| format.selector == selector))
+            })
+    }));
+}
+
+#[test]
+fn registry_runtime_dead_opaque_bytes_are_omitted_but_stay_known() {
+    let root = workspace_root();
+    let reg = root.join("secure/data/erc7730-registry");
+    let policy = root.join("secure/data/erc7730/policy.toml");
+    let (catalogue, skips) = build_db_tolerant(&reg.join("registry"), &policy, Some(&reg)).unwrap();
+
+    for entry in &catalogue.entries {
+        let ir = Erc7730Ir::parse(&entry.ir_bytes).unwrap();
+        for format in ir.format_iter() {
+            for field in format.unwrap().fields() {
+                let field = field.unwrap();
+                let params = parse_params(&ir, field.param_off).unwrap();
+                assert_ne!(
+                    params.dynamic_kind,
+                    Some(DYNAMIC_KIND_BYTES),
+                    "{} emitted an always-rejected opaque-bytes field",
+                    entry.source.display(),
+                );
+            }
+        }
+    }
+
+    let tbtc_skip = skips
+        .iter()
+        .find(|skip| {
+            skip.source.file_name().and_then(|name| name.to_str()) == Some("calldata-TBTC.json")
+        })
+        .expect("TBTC opaque-bytes format has an audit-visible skip");
+    assert!(tbtc_skip.reason.contains("opaque dynamic `bytes`"));
+
+    let raw = hex::decode("18084fba666a33d37592fa2633fd49a74dd93a88").unwrap();
+    let mut contract = [0u8; 20];
+    contract.copy_from_slice(&raw);
+    let digest = keccak256(b"approveAndCall(address,uint256,bytes)");
+    let selector = [digest[0], digest[1], digest[2], digest[3]];
+    assert!(known_call_may_contain(
+        &catalogue.known_calls_bloom,
+        1,
+        &contract,
+        &selector,
+    ));
 }
 
 /// ANTI-RECURRENCE GUARD. The vendored upstream registry
@@ -217,6 +323,103 @@ fn seed_corpus_compiles_and_round_trips() {
         res.leaf_count
     );
     round_trip_check(&res).expect("round-trip");
+}
+
+/// Walk every accepted production leaf through the same zero-copy IR, path,
+/// and TLV parsers used by secure-world rendering. This is structural
+/// assurance only; it does not claim deployed-contract semantics or ERC-8176
+/// provenance.
+#[test]
+fn registry_all_display_material_is_runtime_parseable() {
+    let result = build_registry();
+    assert_eq!(result.leaf_count, result.entries.len());
+
+    let mut formats_seen = 0usize;
+    let mut fields_seen = 0usize;
+    let mut contract_leaves = 0usize;
+    let mut eip712_leaves = 0usize;
+
+    for entry in &result.entries {
+        let ir = Erc7730Ir::parse(&entry.ir_bytes)
+            .unwrap_or_else(|e| panic!("{}: production IR rejects: {e:?}", entry.source.display()));
+        match ir.context_kind {
+            ContextKind::Contract => {
+                contract_leaves += 1;
+                assert_eq!(entry.primary_type_hash, [0u8; 32]);
+            }
+            ContextKind::Eip712 => {
+                eip712_leaves += 1;
+                let first = ir
+                    .format_iter()
+                    .next()
+                    .expect("accepted EIP-712 leaf has a format")
+                    .unwrap();
+                assert_eq!(
+                    entry.primary_type_hash,
+                    first.type_hash,
+                    "{}: index must bind the first surviving emitted format",
+                    entry.source.display(),
+                );
+            }
+        }
+
+        for format in ir.format_iter() {
+            let format = format.unwrap();
+            formats_seen += 1;
+            assert!(!format.intent.is_empty());
+            match ir.context_kind {
+                ContextKind::Contract => {
+                    assert_eq!(format.type_hash, [0u8; 32]);
+                    assert_eq!(format.nested_descent_count, 0);
+                }
+                ContextKind::Eip712 => {
+                    assert_ne!(format.type_hash, [0u8; 32]);
+                    assert_eq!(format.selector, format.type_hash[..4]);
+                }
+            }
+
+            let mut format_fields = 0usize;
+            for field in format.fields() {
+                let field = field.unwrap();
+                format_fields += 1;
+                fields_seen += 1;
+                assert!(!field.label.is_empty());
+                FormatOp::try_from(field.format_op).unwrap();
+                let params = parse_params(&ir, field.param_off).unwrap();
+                if field.path_off == 0 {
+                    assert!(params.const_value.is_some());
+                } else {
+                    assert!(!ir.path_bytes(field.path_off).unwrap().is_empty());
+                }
+            }
+            assert_eq!(format_fields, format.field_count as usize);
+        }
+    }
+
+    assert_eq!(contract_leaves + eip712_leaves, result.leaf_count);
+    assert!(contract_leaves > 0 && eip712_leaves > 0);
+    assert!(formats_seen >= result.leaf_count);
+    assert!(fields_seen > formats_seen);
+}
+
+#[test]
+fn e2e_catalogue_contains_a_real_bound_eip712_leaf() {
+    let result = build_e2e();
+    let entry = result
+        .entries
+        .iter()
+        .find(|entry| entry.context_kind == CTX_EIP712)
+        .expect("E2E catalogue must keep a non-vacuous typed-data leaf");
+    assert_ne!(entry.primary_type_hash, [0u8; 32]);
+
+    let proof = extract_proof(&result.blob, entry.leaf_index, proof_depth(&result.blob));
+    let bundle = synth_bundle(&entry.ir_bytes, entry.leaf_index as u32, &proof);
+    let verified = verify_erc7730_bundle(&bundle, &result.root)
+        .expect("E2E typed-data proof must verify against the E2E root");
+    assert!(matches!(verified.ir.context_kind, ContextKind::Eip712));
+    assert_ne!(verified.ir.domain_separator, [0u8; 32]);
+    cross_check_eip712(&verified.ir, entry.chain_id, &verified.ir.domain_separator)
+        .expect("generated domain/deployment binding must round-trip");
 }
 
 #[test]
@@ -338,59 +541,341 @@ fn tampered_proof_is_rejected() {
     }
 }
 
+fn run_companion_stub(
+    stub: &Path,
+    db: &Path,
+    chain_id: u64,
+    contract: &str,
+    context: Option<&str>,
+    domain_separator: Option<&str>,
+    primary_type_hash: Option<&str>,
+) -> Output {
+    let mut command = std::process::Command::new("python3");
+    command
+        .arg("-B")
+        .arg(stub)
+        .arg("--db")
+        .arg(db)
+        .arg("--chain")
+        .arg(chain_id.to_string())
+        .arg("--contract")
+        .arg(contract);
+    if let Some(context) = context {
+        command.arg("--context").arg(context);
+    }
+    if let Some(domain_separator) = domain_separator {
+        command.arg("--domain-separator").arg(domain_separator);
+    }
+    if let Some(primary_type_hash) = primary_type_hash {
+        command.arg("--primary-type-hash").arg(primary_type_hash);
+    }
+    command.output().expect("run companion stub")
+}
+
+fn successful_stub_output(output: Output) -> Vec<u8> {
+    if !output.status.success() {
+        panic!(
+            "companion stub failed: stdout={:?} stderr={:?}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+    assert!(!output.stdout.is_empty(), "stub produced empty trailer");
+    output.stdout
+}
+
+/// The Python companion stub at `tools/companion-stub/erc7730_trailer.py`
+/// must produce byte-for-byte bundles that the on-device parser accepts. The
+/// current LBTC deployments each carry BOTH a Contract leaf and an EIP-712
+/// `NetworkFeeAuthorization` leaf, so a first `(chain, contract)` match is
+/// provably wrong. Exact context + full authenticated-IR type-hash lookup must
+/// select the typed leaf, while the no-flag default remains Contract-only.
+#[test]
+fn companion_stub_context_and_full_type_hash_lookup_verify_on_device() {
+    let root_dir = workspace_root();
+    let db_path = root_dir.join("tools/companion-stub/erc7730_db.bin");
+    let stub_path = root_dir.join("tools/companion-stub/erc7730_trailer.py");
+    assert!(db_path.is_file(), "tracked companion catalogue is missing");
+    assert!(
+        stub_path.is_file(),
+        "tracked companion reference is missing"
+    );
+    let result = build_registry();
+    let type_hash_hex = "40ac9f6aa27075e64c1ed1ea2e831b20b8c25efdeb6b79fd0cf683c9a9c50725";
+    let type_hash: [u8; 32] = hex::decode(type_hash_hex).unwrap().try_into().unwrap();
+    let deployments = [
+        (1u64, "8236a87084f8b84306f72007f36f2618a5634494"),
+        (11_155_111u64, "731efa688f3679688cf60a3993b8658138953ed6"),
+    ];
+
+    for (chain_id, address_hex) in deployments {
+        let address_vec = hex::decode(address_hex).unwrap();
+        let address: [u8; 20] = address_vec.try_into().unwrap();
+        let group: Vec<_> = result
+            .entries
+            .iter()
+            .filter(|entry| entry.chain_id == chain_id && entry.contract == address)
+            .collect();
+        assert_eq!(
+            group.len(),
+            2,
+            "LBTC deployment must retain the contract/EIP-712 ambiguity witness"
+        );
+        assert!(group.iter().any(|entry| entry.context_kind == CTX_CONTRACT));
+        assert!(group.iter().any(|entry| entry.context_kind == CTX_EIP712));
+        let domain_separator = group
+            .iter()
+            .find(|entry| entry.context_kind == CTX_EIP712)
+            .map(|entry| Erc7730Ir::parse(&entry.ir_bytes).unwrap().domain_separator)
+            .unwrap();
+
+        let address_arg = format!("0x{address_hex}");
+        let domain_separator_arg = format!("0x{}", hex::encode(domain_separator));
+        let type_hash_arg = format!("0x{type_hash_hex}");
+        let trailer = successful_stub_output(run_companion_stub(
+            &stub_path,
+            &db_path,
+            chain_id,
+            &address_arg,
+            Some("eip712"),
+            Some(&domain_separator_arg),
+            Some(&type_hash_arg),
+        ));
+        let verified = verify_erc7730_bundle(&trailer, &result.root)
+            .expect("typed companion trailer verifies against pinned root");
+        assert_eq!(verified.ir.context_kind, ContextKind::Eip712);
+        assert_eq!(verified.ir.chain_id, chain_id);
+        assert_eq!(verified.ir.contract, address);
+        assert!(
+            verified
+                .ir
+                .format_iter()
+                .any(|format| format.is_ok_and(|format| format.type_hash == type_hash)),
+            "selected authenticated IR must carry the complete requested type hash"
+        );
+    }
+
+    // Backward-compatible three-argument/default CLI lookup is deliberately
+    // Contract-only; it must not return the adjacent EIP-712 leaf.
+    let mainnet_address = "0x8236a87084f8b84306f72007f36f2618a5634494";
+    let contract_trailer = successful_stub_output(run_companion_stub(
+        &stub_path,
+        &db_path,
+        1,
+        mainnet_address,
+        None,
+        None,
+        None,
+    ));
+    let verified_contract = verify_erc7730_bundle(&contract_trailer, &result.root)
+        .expect("default contract companion trailer verifies");
+    let mainnet_address_bytes: [u8; 20] = hex::decode(&mainnet_address[2..])
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(verified_contract.ir.context_kind, ContextKind::Contract);
+    assert_eq!(verified_contract.ir.chain_id, 1);
+    assert_eq!(verified_contract.ir.contract, mainnet_address_bytes);
+    let mainnet_domain_separator = result
+        .entries
+        .iter()
+        .find(|entry| {
+            entry.chain_id == 1
+                && entry.contract == mainnet_address_bytes
+                && entry.context_kind == CTX_EIP712
+        })
+        .map(|entry| Erc7730Ir::parse(&entry.ir_bytes).unwrap().domain_separator)
+        .unwrap();
+    let mainnet_domain_arg = format!("0x{}", hex::encode(mainnet_domain_separator));
+
+    // The catalog entry's primary_type_hash is explicitly diagnostic: a
+    // multi-format IR may carry other complete hashes. Poison that unauthenticated
+    // index hint while leaving the Merkle-authenticated IR/proof untouched; exact
+    // lookup must still succeed by parsing the IR format table.
+    let mut poisoned_blob = std::fs::read(&db_path).expect("read checked-in companion DB");
+    let entry_count = u32::from_le_bytes(poisoned_blob[12..16].try_into().unwrap()) as usize;
+    let mut poisoned = false;
+    for index in 0..entry_count {
+        let base = 32 + index * 72;
+        let chain_id = u64::from_le_bytes(poisoned_blob[base..base + 8].try_into().unwrap());
+        if chain_id == 1
+            && poisoned_blob[base + 8..base + 28] == mainnet_address_bytes
+            && poisoned_blob[base + 60] == CTX_EIP712
+        {
+            assert_eq!(
+                &poisoned_blob[base + 28..base + 60],
+                &type_hash,
+                "control: generated diagnostic hash initially matches the first IR format"
+            );
+            poisoned_blob[base + 28..base + 60].fill(0xA5);
+            poisoned = true;
+        }
+    }
+    assert!(poisoned, "failed to locate the mainnet LBTC EIP-712 entry");
+    let temp_dir = tempfile::tempdir().expect("create companion lookup test directory");
+    let poisoned_path = temp_dir.path().join("erc7730-diagnostic-hash-poison.bin");
+    std::fs::write(&poisoned_path, &poisoned_blob).expect("write poisoned diagnostic DB");
+    let type_hash_arg = format!("0x{type_hash_hex}");
+    let poisoned_trailer = successful_stub_output(run_companion_stub(
+        &stub_path,
+        &poisoned_path,
+        1,
+        mainnet_address,
+        Some("eip712"),
+        Some(&mainnet_domain_arg),
+        Some(&type_hash_arg),
+    ));
+    let verified_poisoned = verify_erc7730_bundle(&poisoned_trailer, &result.root)
+        .expect("entry diagnostic hash is not part of the authenticated leaf/proof");
+    assert_eq!(verified_poisoned.ir.context_kind, ContextKind::Eip712);
+    assert!(verified_poisoned
+        .ir
+        .format_iter()
+        .any(|format| format.is_ok_and(|format| format.type_hash == type_hash)));
+
+    let wrong_hash = format!("0x{}", "55".repeat(32));
+    let rejected = run_companion_stub(
+        &stub_path,
+        &db_path,
+        1,
+        mainnet_address,
+        Some("eip712"),
+        Some(&mainnet_domain_arg),
+        Some(&wrong_hash),
+    );
+    assert!(
+        !rejected.status.success(),
+        "an absent full EIP-712 type hash must fail rather than select a first deployment"
+    );
+    assert!(
+        String::from_utf8_lossy(&rejected.stderr).contains("no EIP-712 descriptor"),
+        "wrong-hash failure must be an exact lookup miss: {}",
+        String::from_utf8_lossy(&rejected.stderr)
+    );
+
+    let wrong_domain = format!("0x{}", "aa".repeat(32));
+    let rejected_domain = run_companion_stub(
+        &stub_path,
+        &db_path,
+        1,
+        mainnet_address,
+        Some("eip712"),
+        Some(&wrong_domain),
+        Some(&type_hash_arg),
+    );
+    assert!(!rejected_domain.status.success());
+    assert!(
+        String::from_utf8_lossy(&rejected_domain.stderr).contains("no EIP-712 descriptor"),
+        "wrong-domain failure must be an exact lookup miss: {}",
+        String::from_utf8_lossy(&rejected_domain.stderr)
+    );
+
+    let missing_domain = run_companion_stub(
+        &stub_path,
+        &db_path,
+        1,
+        mainnet_address,
+        Some("eip712"),
+        None,
+        Some(&type_hash_arg),
+    );
+    assert!(!missing_domain.status.success());
+    assert!(
+        String::from_utf8_lossy(&missing_domain.stderr).contains("--domain-separator is required"),
+        "missing-domain failure must be explicit: {}",
+        String::from_utf8_lossy(&missing_domain.stderr)
+    );
+
+    let missing_hash = run_companion_stub(
+        &stub_path,
+        &db_path,
+        1,
+        mainnet_address,
+        Some("eip712"),
+        Some(&mainnet_domain_arg),
+        None,
+    );
+    assert!(!missing_hash.status.success());
+    assert!(
+        String::from_utf8_lossy(&missing_hash.stderr).contains("--primary-type-hash is required"),
+        "missing-hash failure must be explicit: {}",
+        String::from_utf8_lossy(&missing_hash.stderr)
+    );
+
+    // The reference must validate every traversed entry before trusting its
+    // lookup accelerators. Poison the first entry's reserved padding while
+    // leaving the overall catalogue framing intact; lookup must fail closed.
+    let mut malformed_blob = std::fs::read(&db_path).unwrap();
+    malformed_blob[32 + 61] = 1;
+    let malformed_path = temp_dir.path().join("erc7730-malformed-entry.bin");
+    std::fs::write(&malformed_path, malformed_blob).unwrap();
+    let malformed = run_companion_stub(
+        &stub_path,
+        &malformed_path,
+        1,
+        mainnet_address,
+        None,
+        None,
+        None,
+    );
+    assert!(!malformed.status.success());
+    assert!(
+        String::from_utf8_lossy(&malformed.stderr).contains("non-zero reserved padding"),
+        "malformed-entry failure must name the structural error: {}",
+        String::from_utf8_lossy(&malformed.stderr)
+    );
+}
+
+#[test]
+fn companion_stub_finds_secondary_eip712_type_inside_leaf() {
+    let root_dir = workspace_root();
+    let db_path = root_dir.join("tools/companion-stub/erc7730_db.bin");
+    let stub_path = root_dir.join("tools/companion-stub/erc7730_trailer.py");
+    let catalogue = build_registry();
+    let (chain_id, contract, domain_separator, secondary_type_hash) = catalogue
+        .entries
+        .iter()
+        .find_map(|entry| {
+            let ir = Erc7730Ir::parse(&entry.ir_bytes).ok()?;
+            if !matches!(ir.context_kind, ContextKind::Eip712) {
+                return None;
+            }
+            let formats: Vec<_> = ir.format_iter().collect::<Result<_, _>>().ok()?;
+            Some((
+                ir.chain_id,
+                ir.contract,
+                ir.domain_separator,
+                formats.get(1)?.type_hash,
+            ))
+        })
+        .expect("production catalogue has a multi-format EIP-712 leaf");
+
+    let domain_arg = format!("0x{}", hex::encode(domain_separator));
+    let type_arg = format!("0x{}", hex::encode(secondary_type_hash));
+    let contract_arg = format!("0x{}", hex::encode(contract));
+    let out = run_companion_stub(
+        &stub_path,
+        &db_path,
+        chain_id,
+        &contract_arg,
+        Some("eip712"),
+        Some(&domain_arg),
+        Some(&type_arg),
+    );
+    let trailer = successful_stub_output(out);
+    let verified = verify_erc7730_bundle(&trailer, &catalogue.root)
+        .expect("secondary-type trailer verifies against pinned root");
+    assert_eq!(verified.ir.domain_separator, domain_separator);
+    assert!(verified
+        .ir
+        .format_iter()
+        .any(|format| { format.is_ok_and(|format| format.type_hash == secondary_type_hash) }));
+}
+
 /// Lock the container-field index constants in `pqsigner_erc7730::abi`
 /// to the host emitter's keccak-prefix convention. The on-device
 /// walker indexes `@.value` / `@.to` / etc. by exactly these `u16`
 /// values; any drift breaks every existing `erc7730_db.bin`.
-/// The Python companion stub at `tools/companion-stub/erc7730_trailer.py`
-/// must produce a byte-for-byte trailer that the on-device parser
-/// accepts. Phase 3 e2e relies on this — if the stub drifts from the
-/// catalog blob layout, every QEMU smoke test fails opaquely.
-#[test]
-fn companion_stub_trailer_verifies_against_on_device() {
-    let root_dir = workspace_root();
-    let db_path = root_dir.join("tools/companion-stub/erc7730_db.bin");
-    let stub_path = root_dir.join("tools/companion-stub/erc7730_trailer.py");
-    if !db_path.exists() || !stub_path.exists() {
-        eprintln!("(skipped) companion stub or db missing");
-        return;
-    }
-    // USDT mainnet — a Contract-context descriptor in the seed corpus.
-    let usdt = "0xdAC17F958D2ee523a2206206994597C13D831ec7";
-    let out = std::process::Command::new("python3")
-        .arg(&stub_path)
-        .arg("--db")
-        .arg(&db_path)
-        .arg("--chain")
-        .arg("1")
-        .arg("--contract")
-        .arg(usdt)
-        .output()
-        .expect("run companion stub");
-    if !out.status.success() {
-        panic!(
-            "companion stub failed: stdout={:?} stderr={:?}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr),
-        );
-    }
-    let trailer = out.stdout;
-    assert!(!trailer.is_empty(), "stub produced empty trailer");
-    // The companion blob IS the registry (prod) catalog, so the trailer must
-    // verify against the registry root (== the pinned `ERC7730_DESCRIPTORS_ROOT`),
-    // NOT the hand-authored render-test fixtures' root.
-    let result = build_registry();
-    let v = verify_erc7730_bundle(&trailer, &result.root)
-        .expect("trailer verifies against pinned root");
-    assert_eq!(v.ir.chain_id, 1, "chain_id from IR");
-    let want_addr = hex::decode("dAC17F958D2ee523a2206206994597C13D831ec7").unwrap();
-    assert_eq!(&v.ir.contract, &want_addr[..], "contract from IR");
-    assert!(
-        matches!(v.ir.context_kind, ContextKind::Contract),
-        "Contract context"
-    );
-}
-
 #[test]
 fn container_field_constants_match_keccak_prefix() {
     fn prefix(name: &str) -> u16 {
@@ -609,21 +1094,11 @@ fn wrong_root_is_rejected() {
     );
 }
 
-/// CURATION GUARD (re-vendor durability). The single-hop Uniswap V3 swaps
-/// (`exactInputSingle` / `exactOutputSingle`) clear-sign ONLY because the vendored
-/// descriptor used to hide `sqrtPriceLimitX96` to satisfy H-3. The fail-closed
-/// hidden-operand gate now drops both single-hop formats instead of assigning
-/// semantic harmlessness to an unseen price bound. One independently
-/// renderable sole-array format remains.
-/// The two `exact{Input,Output}` dynamic-tuple forms are refused because compact
-/// IR cannot prove C2 tuple-local tail topology.
-/// `swapTokensForExactTokens` is intentionally refused because its
-/// `senderAddress=0x1` sentinel means “substitute msg.sender”, while the renderer
-/// has no sender bound in this field context. Strict compile must reject that
-/// descriptor; tolerant catalogue compilation retains only the one shape with
-/// no signed-but-unseen operands.
+/// Every Router02 format is unsafe under the current exact-operand policy:
+/// tuple dynamic routes lack C2 topology, single-hop shapes hide a price bound,
+/// and the V2-compatible `address[]` shape identifies only route endpoints.
 #[test]
-fn vendored_uniswap_v3_router_keeps_only_bounded_formats() {
+fn vendored_uniswap_v3_router_endpoint_only_routes_are_omitted() {
     let root = workspace_root();
     let reg = root.join("secure/data/erc7730-registry");
     let desc = reg.join("registry/uniswap/calldata-UniswapV3Router02.json");
@@ -631,76 +1106,39 @@ fn vendored_uniswap_v3_router_keeps_only_bounded_formats() {
     let err = try_compile_one(&desc, &policy, Some(&reg))
         .expect_err("strict compile must refuse the first unsafe C2 format");
     assert!(
-        err.contains("dynamic tuple") && err.contains("C2 tail topology"),
+        err.contains("params.path") && err.contains("neither rendered"),
         "unexpected strict error: {err}"
     );
 
     let registry = build_registry();
-    let emitted = registry
-        .entries
-        .iter()
-        .find(|e| e.source == desc)
-        .expect("tolerant catalogue keeps the independently safe Uniswap formats");
-    let ir = Erc7730Ir::parse(&emitted.ir_bytes).expect("Uniswap IR parses");
-    let n = ir.format_iter().filter(|f| f.is_ok()).count();
-    assert_eq!(
-        n, 1,
-        "only the sole-array exact-input shape has no hidden operand; tuple singles, C2, and msg.sender-sentinel formats stay refused"
+    assert!(
+        !registry.entries.iter().any(|entry| entry.source == desc),
+        "no Router02 format fully displays every signed operand"
     );
 }
 
-/// review finding 1.1 regression guard, against the REAL vendored corpus.
-/// ParaSwap AugustusSwapper v5 renders its swap amounts as `tokenAmount` via
-/// field-level `$ref` into `$.display.definitions`. Before the resolver landed,
-/// the `$ref` key was silently dropped and all four fields degraded to
-/// unlabeled `raw` hex under a "Swap" banner (the shipped-in-the-pinned-root
-/// bug). This fails LOUD if $ref resolution regresses OR is lost on re-vendor:
-/// no field may be the raw+empty-label degradation signature, and the swap
-/// amounts must resolve to `tokenAmount`.
+/// Correct `$ref` resolution must not make endpoint token metadata count as
+/// coverage of a complete signed route.
 #[test]
-fn vendored_paraswap_augustus_v5_ref_fields_render_token_amounts() {
-    // Augustus v5 has deep-nested tokenPath legs that only tolerantly skip, so
-    // it is NOT strictly compilable as a whole — inspect the leaf from the
-    // tolerant prod build (the one the pinned root is cut from). The surviving
-    // formats' swap-amount fields must resolve to tokenAmount via $ref, never
-    // the degraded raw+empty-label.
-    let registry = build_registry();
-    let leaves: Vec<&_> = registry
-        .entries
-        .iter()
-        .filter(|e| {
-            e.source.file_name().and_then(|n| n.to_str())
+fn vendored_paraswap_augustus_v5_endpoint_only_routes_are_omitted() {
+    let root = workspace_root();
+    let reg = root.join("secure/data/erc7730-registry");
+    let policy = root.join("secure/data/erc7730/policy.toml");
+    let (registry, skips) = build_db_tolerant(&reg.join("registry"), &policy, Some(&reg)).unwrap();
+    assert!(
+        !registry.entries.iter().any(|entry| {
+            entry.source.file_name().and_then(|name| name.to_str())
                 == Some("calldata-AugustusSwapper-v5.json")
-        })
-        .collect();
-    assert!(
-        !leaves.is_empty(),
-        "Augustus v5 must contribute ≥1 leaf — if gone, $ref resolution (finding 1.1) regressed"
-    );
-    let mut n_token_amount = 0usize;
-    let mut n_degraded = 0usize;
-    for e in leaves {
-        let ir = Erc7730Ir::parse(&e.ir_bytes).expect("Augustus v5 IR parses");
-        for fmt in ir.format_iter() {
-            let fmt = fmt.expect("format parses");
-            for field in fmt.fields() {
-                let field = field.expect("field parses");
-                if field.format_op == 0x03 {
-                    n_token_amount += 1;
-                }
-                if field.format_op == 0x01 && field.label.is_empty() {
-                    n_degraded += 1;
-                }
-            }
-        }
-    }
-    assert_eq!(
-        n_degraded, 0,
-        "no field may degrade to raw+empty-label — the $ref was dropped (finding 1.1)"
+        }),
+        "endpoint-only ParaSwap routes must not reach trusted rendering"
     );
     assert!(
-        n_token_amount >= 4,
-        "Augustus v5 swap amounts must resolve to tokenAmount via $ref (got {n_token_amount})"
+        skips.iter().any(|skip| {
+            skip.source.file_name().and_then(|name| name.to_str())
+                == Some("calldata-AugustusSwapper-v5.json")
+                && skip.reason.contains("indexed/sliced tokenPath")
+        }),
+        "the review must explain that endpoint extraction does not cover the route"
     );
 }
 

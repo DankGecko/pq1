@@ -57,6 +57,6 @@ compressions per call (a FORS opening + 22 layers of XMSS opening +
 WOTS+ chains in each layer). At 60 gas per `sha256` precompile call
 plus calldata costs the verification fits comfortably in a single L2
 block on Base, but is too expensive for L1 mainnet as a hot path.
-Production deployments that need L1 verification can plug in a Groth16
-verifier that proves an off-chain `slh_verify` invocation — the
-`ISLHDSAVerifier` interface is the swap point.
+The project does not provide or endorse a proof-wrapped verifier as a fallback.
+Deployments must use the reviewed C10 verifier selected by the wallet build;
+changing that verifier is a separate protocol and security review.

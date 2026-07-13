@@ -18,12 +18,7 @@ fn negative_magic_bytes_are_distinct() {
     // blob could be presented to the wrong parser and the wrong Merkle
     // root used to "verify" it. Pin every magic to a distinct 4-byte
     // string.
-    let magics = [
-        ERC20_DB_MAGIC,
-        VK_DB_MAGIC,
-        NAMES_DB_MAGIC,
-        SELECTOR_DB_MAGIC,
-    ];
+    let magics = [ERC20_DB_MAGIC, NAMES_DB_MAGIC, SELECTOR_DB_MAGIC];
     for (i, a) in magics.iter().enumerate() {
         for (j, b) in magics.iter().enumerate() {
             if i != j {
@@ -42,7 +37,6 @@ fn negative_magic_byte_exact_values() {
     // blobs commit to these magic bytes verbatim. A "harmless" rename
     // (e.g. "ERC2" → "Erc2") would silently invalidate everything.
     assert_eq!(&ERC20_DB_MAGIC[..], b"ERC2");
-    assert_eq!(&VK_DB_MAGIC[..], b"VKDB");
     assert_eq!(&NAMES_DB_MAGIC[..], b"NAMS");
     assert_eq!(&SELECTOR_DB_MAGIC[..], b"SEL4");
 }
@@ -52,7 +46,6 @@ fn negative_versions_all_one_currently() {
     // Frozen: incrementing to v2 must be a deliberate format break, not
     // a drift caused by some helper that "auto-bumps" on rebuild.
     assert_eq!(ERC20_DB_VERSION, 1);
-    assert_eq!(VK_DB_VERSION, 1);
     assert_eq!(NAMES_DB_VERSION, 1);
     assert_eq!(SELECTOR_DB_VERSION, 1);
 }
@@ -61,11 +54,10 @@ fn negative_versions_all_one_currently() {
 
 #[test]
 fn negative_all_headers_are_32_bytes() {
-    // The four DBs share the same 32-byte header shape so the secure-side
+    // The three DBs share the same 32-byte header shape so the secure-side
     // verifier can dispatch by magic without learning each DB's header
     // length separately.
     assert_eq!(ERC20_DB_HEADER_LEN, 32);
-    assert_eq!(VK_DB_HEADER_LEN, 32);
     assert_eq!(NAMES_DB_HEADER_LEN, 32);
     assert_eq!(SELECTOR_DB_HEADER_LEN, 32);
 }
@@ -94,24 +86,6 @@ fn negative_header_offsets_strictly_monotonic_erc20() {
     }
     // Last offset + 4 must fill exactly the 32-byte header.
     assert_eq!(ERC20_HDR_OFF_PROOFS_OFF + 4, ERC20_DB_HEADER_LEN);
-}
-
-#[test]
-fn negative_header_offsets_strictly_monotonic_vk() {
-    let offs = [
-        VK_HDR_OFF_MAGIC,
-        VK_HDR_OFF_VERSION,
-        VK_HDR_OFF_FLAGS,
-        VK_HDR_OFF_ENTRY_CNT,
-        VK_HDR_OFF_VK_COUNT,
-        VK_HDR_OFF_VK_POOL_OFF,
-        VK_HDR_OFF_PROOF_DEPTH,
-        VK_HDR_OFF_PROOFS_OFF,
-    ];
-    for w in offs.windows(2) {
-        assert_eq!(w[1] - w[0], 4);
-    }
-    assert_eq!(VK_HDR_OFF_PROOFS_OFF + 4, VK_DB_HEADER_LEN);
 }
 
 #[test]
@@ -164,16 +138,6 @@ fn negative_erc20_entry_fields_dont_overlap_and_fit_in_40b() {
     assert_eq!(ERC20_ENTRY_OFF_FLAGS, ERC20_ENTRY_OFF_DECIMALS + 1);
     // 2 bytes of trailing pad to reach the documented 40-byte stride.
     assert!(ERC20_ENTRY_OFF_FLAGS + 1 + 2 == ERC20_DB_ENTRY_LEN);
-}
-
-#[test]
-fn negative_vk_entry_fields_dont_overlap_and_fit_in_32b() {
-    // chain_id(8) + contract(20) + vk_id(1) + sha_pfx(3) = 32.
-    assert_eq!(VK_ENTRY_OFF_CHAIN_ID, 0);
-    assert_eq!(VK_ENTRY_OFF_CONTRACT, VK_ENTRY_OFF_CHAIN_ID + 8);
-    assert_eq!(VK_ENTRY_OFF_VK_ID, VK_ENTRY_OFF_CONTRACT + 20);
-    assert_eq!(VK_ENTRY_OFF_SHA_PFX, VK_ENTRY_OFF_VK_ID + 1);
-    assert_eq!(VK_ENTRY_OFF_SHA_PFX + 3, VK_DB_ENTRY_LEN);
 }
 
 #[test]

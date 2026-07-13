@@ -316,27 +316,22 @@ fn append_leg(
             p + 2
         }
         CowLeg::AddrHex => {
-            // Page A: token addr + amount-page hint.
+            // Page A: the FULL token contract plus an amount-page hint in
+            // the label. The fallback is used precisely when no verified
+            // metadata is available, so the address is the only injective
+            // token identity the trusted display can provide.
             let label: &str = match side {
-                Side::Sell => "Sell token:",
-                Side::Buy => "Buy  token:",
+                Side::Sell => "Sell addr;amtHex",
+                Side::Buy => "Buy addr;amtHex",
             };
             write_line(&mut pages.row_mut(p, 0), label);
             let token: [u8; 20] = canonical[token_off..token_off + 20]
                 .try_into()
                 .expect("20-byte slice");
             {
-                let page = pages.page_mut(p);
-                let (head, tail) = page.split_at_mut(2);
-                write_addr_two_rows(&mut head[1], &mut tail[0], &token);
+                let [_label, a, b, c] = pages.page_mut(p);
+                write_addr_full_three_rows(a, b, c, &token);
             }
-            write_line(
-                &mut pages.row_mut(p, 3),
-                match side {
-                    Side::Sell => "sellAmt(hex) >",
-                    Side::Buy => "buyAmt(hex)  >",
-                },
-            );
             // Page B: full 32-byte uint256 amount as hex.
             write_uint256_hex_page(pages, p + 1, &canonical[amount_off..amount_off + 32]);
             p + 2
@@ -443,35 +438,6 @@ fn chain_name_str(chain_id: u64) -> &'static str {
         42161 => "(Arbitrum)",
         11155111 => "(Sepolia)",
         _ => "",
-    }
-}
-
-/// Render a 20-byte address across two rows:
-///
-///   row1: "0x" + first 7 bytes hex (14 chars) → 16 chars
-///   row2: "..." + last 6 bytes hex (12 chars + 3 dots + 1 pad) → 16 chars
-fn write_addr_two_rows(
-    row1: &mut [u8; DISPLAY_COLS],
-    row2: &mut [u8; DISPLAY_COLS],
-    addr: &[u8; 20],
-) {
-    *row1 = [b' '; DISPLAY_COLS];
-    *row2 = [b' '; DISPLAY_COLS];
-    row1[0] = b'0';
-    row1[1] = b'x';
-    for i in 0..7 {
-        row1[2 + i * 2] = hex_nibble(addr[i] >> 4);
-        row1[2 + i * 2 + 1] = hex_nibble(addr[i] & 0x0f);
-    }
-    row2[0] = b'.';
-    row2[1] = b'.';
-    row2[2] = b'.';
-    row2[3] = b' ';
-    // Last 6 bytes of the address = 12 hex chars at cols 4..16.
-    for i in 0..6 {
-        let b = addr[14 + i];
-        row2[4 + i * 2] = hex_nibble(b >> 4);
-        row2[4 + i * 2 + 1] = hex_nibble(b & 0x0f);
     }
 }
 

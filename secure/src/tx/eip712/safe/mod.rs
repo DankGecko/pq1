@@ -13,16 +13,14 @@
 //!   * **CowSwap setPreSignature**: the calldata carries an opaque
 //!     `orderUid` (a 32-byte EIP-712 digest + 20-byte owner + 4-byte
 //!     validTo). The order's actual *fields* are nowhere in the
-//!     calldata, so the firmware needs a Groth16 proof to bring them
-//!     on-device with cryptographic guarantee, then it cross-checks
-//!     by re-deriving the orderUid from the proven canonical.
+//!     calldata, so the native CoW trailer carries the canonical order;
+//!     firmware re-hashes it on-device and cross-checks the orderUid.
 //!   * **Safe approveHash**: the calldata carries the EIP-712
 //!     `safeTxHash` *itself*. The trailer brings the canonical SafeTx
 //!     fields plus the raw inner-call data. The firmware natively
 //!     keccaks (raw_data → data_hash, then canonical → safeTxHash)
-//!     and byte-compares the result against `inner_data[4..36]`. No
-//!     Groth16 needed because the bind is just keccak chains and
-//!     keccak is already a native primitive.
+//!     and byte-compares the result against `inner_data[4..36]` using the
+//!     firmware's native keccak primitive.
 //!
 //! This module exposes:
 //!
@@ -38,10 +36,8 @@ use sphincs_tz_shared::{
     APPROVE_HASH_SELECTOR, SAFE_DOMAIN_TYPEHASH, SAFE_TX_TYPEHASH, SAFE_V1_CANONICAL_LEN,
 };
 
-// Unlike the CoW v3 path (which calls into `crate::zk` and so is
-// `#[cfg(not(test))]`-gated), the Safe verifier only depends on
-// keccak and our own decode + digest helpers — all available on host
-// — so it compiles for both firmware and unit tests.
+// Like the native CoW path, the Safe verifier depends only on keccak and
+// our own decode + digest helpers, all available on host.
 pub mod verify;
 pub use verify::{verify_and_bind_trailer, VerifiedSafeV1};
 
@@ -72,6 +68,94 @@ pub use cow_binding::{
 // shared by both Safe verifiers, the CoW-binding resolver and the
 // renderer. Consumers path through `multi_send::` directly.
 pub mod multi_send;
+
+/// Does metadata name the direct target, or a record inside an actual pinned
+/// `MultiSendCallOnly` delegatecall?
+///
+/// Callers must supply facts decoded from a verified Safe context. Keeping the
+/// execution-shape predicate here prevents a merely MultiSend-shaped ordinary
+/// call from becoming nested metadata authority, and gives the handler and
+/// display dispatcher one rule instead of two security-sensitive copies.
+#[must_use]
+pub(crate) fn erc20_metadata_matches_verified_safe_call(
+    operation: u8,
+    inner_to: &[u8; 20],
+    data: &[u8],
+    token_contract: &[u8; 20],
+) -> bool {
+    inner_to == token_contract
+        || (multi_send::is_multisend_claim(operation, inner_to, data)
+            && multi_send::any_record_to_matches(data, token_contract))
+}
+
+#[cfg(test)]
+mod erc20_metadata_context_tests {
+    use super::*;
+
+    fn exec_with_data<'a>(to: [u8; 20], operation: u8, data: &'a [u8]) -> VerifiedSafeExec<'a> {
+        VerifiedSafeExec {
+            chain_id: 1,
+            safe_address: [0x55; 20],
+            decoded: DecodedExec {
+                to,
+                value: [0u8; 32],
+                operation,
+                safe_tx_gas: [0u8; 32],
+                base_gas: [0u8; 32],
+                gas_price: [0u8; 32],
+                gas_token: [0u8; 20],
+                refund_receiver: [0u8; 20],
+                data,
+                signatures: &[],
+            },
+        }
+    }
+
+    #[test]
+    fn verified_safe_direct_target_is_accepted() {
+        let token = [0x22; 20];
+        let exec = exec_with_data(token, 0, &[]);
+        assert!(erc20_metadata_matches_verified_safe_call(
+            exec.decoded.operation,
+            &exec.decoded.to,
+            exec.decoded.data,
+            &token,
+        ));
+    }
+
+    #[test]
+    fn ordinary_verified_exec_cannot_borrow_from_multisend_shaped_data() {
+        use super::multi_send::test_util::{encode_multisend, pack_record};
+
+        let token = [0x22; 20];
+        let packed = pack_record(0, &token, &[0u8; 32], &[]);
+        let data = encode_multisend(&packed);
+        assert!(multi_send::any_record_to_matches(&data, &token));
+
+        // A CALL to an arbitrary contract is a valid Safe execution, but it
+        // is not a pinned MultiSendCallOnly DELEGATECALL. Its calldata must
+        // not be interpreted as a nested metadata-capability list.
+        let ordinary = exec_with_data([0x33; 20], 0, &data);
+        assert!(!erc20_metadata_matches_verified_safe_call(
+            ordinary.decoded.operation,
+            &ordinary.decoded.to,
+            ordinary.decoded.data,
+            &token,
+        ));
+
+        let multisend = exec_with_data(
+            sphincs_tz_shared::MULTISEND_CALL_ONLY_ADDRESSES[0],
+            1,
+            &data,
+        );
+        assert!(erc20_metadata_matches_verified_safe_call(
+            multisend.decoded.operation,
+            &multisend.decoded.to,
+            multisend.decoded.data,
+            &token,
+        ));
+    }
+}
 
 #[cfg(test)]
 mod test_vectors;
@@ -331,7 +415,10 @@ mod typehash_tests {
         // Canonical, clear-signable shape: selector + 32-byte hash = 36 B.
         let mut exact = [0u8; 36];
         exact[..4].copy_from_slice(&sel);
-        assert!(is_approve_hash_claim(&exact), "exact-36 approveHash claimed");
+        assert!(
+            is_approve_hash_claim(&exact),
+            "exact-36 approveHash claimed"
+        );
 
         // THE BYPASS: selector + hash + one trailing padding byte = 37 B.
         // Must STILL be claimed (old `== 36` test missed this and let it
@@ -350,7 +437,10 @@ mod typehash_tests {
 
         // Selector-only (no hash word yet): still claimed (the Safe would
         // zero-pad the arg; refusing is the only safe outcome).
-        assert!(is_approve_hash_claim(&sel), "selector-only approveHash claimed");
+        assert!(
+            is_approve_hash_claim(&sel),
+            "selector-only approveHash claimed"
+        );
 
         // A non-approveHash selector is NOT claimed (must not over-gate
         // legitimate ordinary calls into refusal).
@@ -359,7 +449,10 @@ mod typehash_tests {
         assert!(!is_approve_hash_claim(&other), "erc20 transfer not claimed");
 
         // Calldata shorter than a selector cannot be an approveHash claim.
-        assert!(!is_approve_hash_claim(&[0xd4, 0xd9, 0xbd]), "sub-selector not claimed");
+        assert!(
+            !is_approve_hash_claim(&[0xd4, 0xd9, 0xbd]),
+            "sub-selector not claimed"
+        );
         assert!(!is_approve_hash_claim(&[]), "empty not claimed");
     }
 }

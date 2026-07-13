@@ -320,7 +320,7 @@ In dependency order:
    possible under uninterpreted SHA-256 (the digit branches fork on
    unconstrained symbolic values). Needs an **interpreted-hash reachability**
    engine or **verified compilation** (Verity,
-   [`PATH_TO_VERIFIED_BYTECODE.md`](PATH_TO_VERIFIED_BYTECODE.md)). **NOTE:
+   [`A3_1_CLOSURE_PATH.md`](A3_1_CLOSURE_PATH.md)). **NOTE:
    Kontrol/KEVM does NOT qualify** — despite now being installed and used for the
    control-flow axioms, KEVM's `0x02` precompile is SMT-uninterpreted on symbolic
    input (`Sha256raw`), so it hits the same wall as Halmos (confirmed

@@ -28,7 +28,7 @@ other hardware wallets are useful.
 
 ---
 
-## Project context (condensed — full version in `docs/archive/ai-research-briefing.md`)
+## Project context (condensed; current sources are linked in each bundle)
 
 **What this is.** PQSigner OS: a post-quantum ERC-4337 smart-wallet
 firmware for STM32U585 (Cortex-M33 + ARM TrustZone) on the
@@ -45,19 +45,19 @@ planned).
 Both chips are mandatory. Neither alone reveals any bit of the seed —
 only `half_O XOR half_E = entropy`.
 
-**Why signing must run on the Cortex-M33, not the SE.** Transaction
-signatures are **post-quantum SLH-DSA (SPHINCS+ SHA2-128f, migrating
-to 192f)**. No commercial secure element currently computes SLH-DSA.
-Bootstrap signatures are **ML-DSA-44** (also PQ, also not SE-capable).
-The SEs are gated storage, not signing accelerators. The seed
+**Why signing must run on the Cortex-M33, not the SE.** Bootstrap and
+slot signatures both use the project's **SPHINCS+C10** hash-based
+post-quantum scheme; there is no classical or ML-DSA signer. No
+commercial secure element currently computes it. The SEs are gated
+storage, not signing accelerators. The seed
 therefore transits STM32 secure-world SRAM during the active signing
 window (~120 s idle timeout, then zeroize). TrustZone SAU+GTZC isolates
 this from the non-secure world.
 
 **TrustZone partition.** Secure world (flash bank 1, SRAM1) owns all
-crypto, PIN, persistent secrets. Non-secure world (flash bank 2,
-SRAM2) owns UI, USB, tx parsing. Crossings go through 6 NSC gateway
-commands with pointer validation and TOCTOU-safe copy-in.
+crypto, PIN, persistent secrets, transaction decoding, and the trusted
+NV3007 LCD UI. Non-secure world owns USB transport. Crossings go through
+the fixed NSC gateway with pointer validation and TOCTOU-safe copy-in.
 
 **Power supervision state.** BOR, PVD, ECC (except SRAM1 which is
 always-on), IWDG all at factory defaults. Stage 1 of a 5-stage brownout
@@ -116,40 +116,89 @@ keys + HUK-SAES wrapping is a production-readiness item (work-todo #7).
 //! SCP03 (Secure Channel Protocol 03) for SE050.
 //!
 //! Establishes an authenticated, encrypted channel with the SE050 using
-//! GlobalPlatform SCP03.  After session establishment every APDU is
-//! MAC'd (C-MAC) and its data encrypted (C-DEC).
+//! GlobalPlatform SCP03. After session establishment every command is
+//! MAC'd (C-MAC) and encrypted (C-DEC), AND every response is MAC'd
+//! (R-MAC) and encrypted (R-ENC). This is GP SCP03 security level
+//! 0x33 — the "all four" mode.
 //!
-//! HW lesson #6: SE050E requires P1=0x03 (C-MAC + C-DEC) in EXTERNAL
-//! AUTHENTICATE.  This module always uses that security level.
+//! **Why 0x33, not 0x03 (the pre-S-5 value).** S-5 (`docs/security-review-
+//! 2026-05.md` §C-7) — at level 0x03 the SE050 returns responses in
+//! cleartext on the I²C bus, leaking `half_E` every unlock. NXP's own
+//! reference (`fsl_sss_se05x_scp03.c`) ships at 0x33; SE050 conforms
+//! to GP SCP03 per AN12413 §4.5.3.2, which defers to GP Amendment D
+//! Table 7-6 (every P1 in {0x00, 0x01, 0x03, 0x11, 0x13, 0x33} is
+//! valid).
 
-use aes::Aes128;
-use aes::cipher::{BlockDecrypt, BlockEncrypt, KeyInit, generic_array::GenericArray};
-use cmac::Cmac;
-use cmac::Mac as CmacMac;
+// Pure-logic primitives live in `crate::scp03_logic` so the NIST
+// AES-128 / CMAC vectors + the GP `PUT KEY` layout tests run under
+// `cargo test -p sphincs-tz-secure` (this module is `feature = "se050"`
+// + `not(test)`-gated in `main.rs`, so its own `#[cfg(test)]` blocks
+// would never compile). Re-export the surface so existing call sites
+// (and `Se050::rotate_scp03_keys`) keep working unchanged.
+pub use crate::scp03_logic::{
+    aes128_cbc_decrypt, aes128_cbc_encrypt, aes128_ecb_encrypt, build_put_key_apdu, cmac_aes128,
+    keys_are_factory_default, KEY_VERSION, PLATFORM_DEK, PLATFORM_ENC, PLATFORM_MAC,
+};
+use crate::scp03_logic::{
+    build_derivation_data, kdf, DD_CARD_CRYPTOGRAM, DD_HOST_CRYPTOGRAM, DD_S_ENC, DD_S_MAC,
+    DD_S_RMAC,
+};
 
 use super::apdu::Se050Error;
 
-// ---------------------------------------------------------------------------
-// SE050E platform keys (OEF 0xA921)
-// ---------------------------------------------------------------------------
+// The factory-key fallback only makes sense when the build *prefers*
+// derived keys (otherwise the preferred set already IS the factory keys
+// and there is nothing to fall back from). Catch the nonsensical combo
+// at compile time rather than shipping a no-op flag. (Defense-in-depth:
+// dead today because Cargo.toml declares the feature edge
+// `se050-scp03-allow-factory-fallback = ["se050-derived-scp03"]`; this
+// fires only if that edge is ever removed.)
+#[cfg(all(
+    feature = "se050-scp03-allow-factory-fallback",
+    not(feature = "se050-derived-scp03")
+))]
+compile_error!(
+    "se050-scp03-allow-factory-fallback requires se050-derived-scp03 \
+     (without derived keys the preferred set already is the factory keys)"
+);
 
-const PLATFORM_ENC: [u8; 16] = [
-    0xD2, 0xDB, 0x63, 0xE7, 0xA0, 0xA5, 0xAE, 0xD7,
-    0x2A, 0x64, 0x60, 0xC4, 0xDF, 0xDC, 0xAF, 0x64,
-];
-const PLATFORM_MAC: [u8; 16] = [
-    0x73, 0x8D, 0x5B, 0x79, 0x8E, 0xD2, 0x41, 0xB0,
-    0xB2, 0x47, 0x68, 0x51, 0x4B, 0xFB, 0xA9, 0x5B,
-];
+// Constants `PLATFORM_ENC/MAC/DEK`, `KEY_VERSION`, the SCP03 KDF
+// derivation-data constants, and the pure crypto helpers all live in
+// `crate::scp03_logic` now (see the `use` block at the top of this
+// file) — kept un-gated so the host test build can run the NIST KATs
+// + the GP `PUT KEY` layout assertions.
 
-const KEY_VERSION: u8 = 0x0B;
-
-// SCP03 derivation data constants
-const DD_CARD_CRYPTOGRAM: u8 = 0x00;
-const DD_HOST_CRYPTOGRAM: u8 = 0x01;
-const DD_S_ENC: u8 = 0x04;
-const DD_S_MAC: u8 = 0x06;
-const DD_S_RMAC: u8 = 0x07;
+/// Resolve the SCP03 static keys this build should *prefer* — `(S-ENC,
+/// S-MAC, DEK)`.
+///
+/// - Without `se050-derived-scp03` (the default): the published factory
+///   constants from `scp03_logic::PLATFORM_*`.
+/// - With `se050-derived-scp03`: the per-device keys from
+///   `hw::secret_keys::se050_scp03_{enc,mac,dek}_key()` (BHK-rooted in a
+///   `bhk`-on build; DHUK / OTP per build otherwise). A device whose chip
+///   has been `PUT KEY`-rotated holds exactly these; one that hasn't still
+///   holds the factory keys — `establish()` probes the preferred set first
+///   and falls back to `PLATFORM_*` on a card-cryptogram mismatch, so one
+///   firmware copes with both. `KEY_VERSION` stays `0x0B` either way (the
+///   rotation replaces keyset `0x0B` in place, it does not add a new KVN).
+///
+/// Lives here (not in `scp03_logic`) because the derived-key path imports
+/// `hw::secret_keys`, and the `hw` module is `not(test)`-gated — keeping
+/// this stub in the gated `se050` module keeps `scp03_logic` host-clean.
+pub fn load_platform_keys() -> Result<([u8; 16], [u8; 16], [u8; 16]), Se050Error> {
+    #[cfg(not(feature = "se050-derived-scp03"))]
+    {
+        Ok((PLATFORM_ENC, PLATFORM_MAC, PLATFORM_DEK))
+    }
+    #[cfg(feature = "se050-derived-scp03")]
+    {
+        use crate::hw::secret_keys;
+        let enc = secret_keys::se050_scp03_enc_key().map_err(|_| Se050Error::Scp03)?;
+        let mac = secret_keys::se050_scp03_mac_key().map_err(|_| Se050Error::Scp03)?;
+        let dek = secret_keys::se050_scp03_dek_key().map_err(|_| Se050Error::Scp03)?;
+        Ok((enc, mac, dek))
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Session state
@@ -188,91 +237,37 @@ impl Scp03Session {
             }
         }
     }
-}
 
-// ---------------------------------------------------------------------------
-// Crypto helpers
-// ---------------------------------------------------------------------------
-
-/// CMAC-AES-128 over the concatenation of all input slices.
-fn cmac_aes128(key: &[u8; 16], inputs: &[&[u8]]) -> [u8; 16] {
-    let mut mac = <Cmac<Aes128> as CmacMac>::new_from_slice(key).unwrap();
-    for input in inputs {
-        CmacMac::update(&mut mac, input);
-    }
-    let result = mac.finalize();
-    let mut out = [0u8; 16];
-    out.copy_from_slice(&result.into_bytes());
-    out
-}
-
-/// AES-128 ECB encrypt a single block.
-fn aes128_ecb_encrypt(key: &[u8; 16], block: &[u8; 16]) -> [u8; 16] {
-    let cipher = Aes128::new(GenericArray::from_slice(key));
-    let mut out = GenericArray::clone_from_slice(block);
-    cipher.encrypt_block(&mut out);
-    let mut result = [0u8; 16];
-    result.copy_from_slice(&out);
-    result
-}
-
-/// AES-128-CBC encrypt in-place.
-pub fn aes128_cbc_encrypt(key: &[u8; 16], iv: &[u8; 16], data: &mut [u8]) {
-    let cipher = Aes128::new(GenericArray::from_slice(key));
-    let mut prev = *iv;
-    for chunk in data.chunks_mut(16) {
-        for (b, p) in chunk.iter_mut().zip(prev.iter()) {
-            *b ^= p;
-        }
-        let mut block = GenericArray::clone_from_slice(chunk);
-        cipher.encrypt_block(&mut block);
-        chunk.copy_from_slice(&block);
-        prev.copy_from_slice(chunk);
+    /// Zeroize the live SCP03 session keys and force re-establishment.
+    ///
+    /// Reached from `Se050`'s `zeroize_caches`, which the lock / idle-wipe /
+    /// panic path drives via `nsc::zeroize_sensitive_state`. The `Se050`
+    /// driver is a `static mut` singleton, so it is never `Drop`ped in
+    /// production — without this, the AES-128 session keys
+    /// (`s_enc`/`s_mac`/`s_rmac`) that wrap `half_E` on the SE050 I2C bus
+    /// would persist in secure SRAM through the entire locked state, where
+    /// they could combine with a captured bus transcript to recover the
+    /// half. Re-establishment is the caller's job: `Se050::zeroize_caches`
+    /// pairs this with `ready = false` so the next SE access re-runs the
+    /// full `init()` handshake. There is deliberately NO lazy establish
+    /// inside `send_apdu` — it fails CLOSED (`Se050Error::Scp03`) on an
+    /// inactive session instead of downgrading to cleartext. (audit
+    /// secret-lifecycle 20260611, MEDIUM-1; idle-relock fix 2026-07-02)
+    pub fn zeroize_session(&mut self) {
+        use zeroize::Zeroize;
+        self.s_enc.zeroize();
+        self.s_mac.zeroize();
+        self.s_rmac.zeroize();
+        self.mcv.zeroize();
+        self.counter.zeroize();
+        crate::fi::zeroize_barrier();
+        self.active = false;
     }
 }
 
-/// AES-128-CBC decrypt in-place.
-pub fn aes128_cbc_decrypt(key: &[u8; 16], iv: &[u8; 16], data: &mut [u8]) {
-    let cipher = Aes128::new(GenericArray::from_slice(key));
-    let mut prev = *iv;
-    for chunk in data.chunks_mut(16) {
-        let mut ct = [0u8; 16];
-        ct.copy_from_slice(chunk);
-        let mut block = GenericArray::clone_from_slice(chunk);
-        cipher.decrypt_block(&mut block);
-        chunk.copy_from_slice(&block);
-        for (b, p) in chunk.iter_mut().zip(prev.iter()) {
-            *b ^= p;
-        }
-        prev = ct;
-    }
-}
-
-// ---------------------------------------------------------------------------
-// SCP03 KDF (NIST SP 800-108 Counter Mode with CMAC-AES)
-// ---------------------------------------------------------------------------
-
-fn build_derivation_data(
-    dd_constant: u8,
-    l_bits: u16,
-    host_challenge: &[u8; 8],
-    card_challenge: &[u8; 8],
-) -> [u8; 32] {
-    let mut dd = [0u8; 32];
-    // Bytes 0-10: zero
-    dd[11] = dd_constant;
-    dd[12] = 0x00; // separation indicator
-    dd[13] = (l_bits >> 8) as u8;
-    dd[14] = (l_bits & 0xFF) as u8;
-    dd[15] = 0x01; // counter (always 1 for 128-bit output)
-    dd[16..24].copy_from_slice(host_challenge);
-    dd[24..32].copy_from_slice(card_challenge);
-    dd
-}
-
-fn kdf(static_key: &[u8; 16], dd: &[u8; 32]) -> [u8; 16] {
-    cmac_aes128(static_key, &[dd])
-}
+// AES-128 ECB/CBC + CMAC primitives and the SP 800-108 derivation-data
+// builder + `kdf` block-emitter all live in `crate::scp03_logic` now
+// (imported at the top of this file).
 
 // ---------------------------------------------------------------------------
 // Session establishment
@@ -280,12 +275,58 @@ fn kdf(static_key: &[u8; 16], dd: &[u8; 32]) -> [u8; 16] {
 
 /// Establish an SCP03 session with the SE050.
 ///
-/// Sends INITIALIZE UPDATE and EXTERNAL AUTHENTICATE, derives session
-/// keys, and verifies the card cryptogram. After this succeeds, all
-/// APDUs wrapped via `wrap_apdu` will be MAC'd and encrypted.
+/// Probe-on-boot: tries the keys this build *prefers* (the derived
+/// per-device keys when `se050-derived-scp03` is on; the published
+/// factory constants otherwise — see `load_platform_keys`). If that
+/// fails the card-cryptogram check (the signal that the chip holds a
+/// different key set), it retries once with the factory constants —
+/// but ONLY in a build that sets `se050-scp03-allow-factory-fallback`
+/// (the provisioning/rotation tool, §29, which must open a factory-key
+/// session to send GP PUT KEY). A runtime-signing SHIP build omits that
+/// flag and therefore **fails closed** on a derived-key mismatch rather
+/// than silently downgrading to the attacker-known published keys.
+/// `KEY_VERSION` is `0x0B` either way.
 pub unsafe fn establish(
     session: &mut Scp03Session,
     t1: &mut super::t1oi2c::T1State,
+) -> Result<(), Se050Error> {
+    let (enc, mac, _dek) = load_platform_keys()?;
+
+    match establish_with_keys(session, t1, &enc, &mac) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            // The published-factory-key fallback is GATED to the
+            // provisioning/rotation tool (`se050-scp03-allow-factory-
+            // fallback`). In a runtime-signing build this whole arm is
+            // compiled out, so a derived-key mismatch returns `Err(e)`
+            // and the SE050 stays locked — fail CLOSED, never fall back
+            // to the AN12436 keys an attacker also holds. When the flag
+            // IS set, retry once on a key-related failure (card-cryptogram
+            // mismatch `Scp03` or a status word like `0x6A88`); never
+            // retry a pure transport glitch.
+            #[cfg(all(
+                feature = "se050-derived-scp03",
+                feature = "se050-scp03-allow-factory-fallback"
+            ))]
+            if matches!(e, Se050Error::Scp03 | Se050Error::Status(_)) {
+                #[cfg(feature = "debug-log")]
+                secure_log!("[SCP03] derived-key establish failed ({:?}); falling back to factory keys", e);
+                return establish_with_keys(session, t1, &PLATFORM_ENC, &PLATFORM_MAC);
+            }
+            Err(e)
+        }
+    }
+}
+
+/// One INITIALIZE-UPDATE + EXTERNAL-AUTHENTICATE handshake using the
+/// given static `(S-ENC, S-MAC)` keys. Returns `Se050Error::Scp03` on a
+/// card-cryptogram mismatch (the "wrong keys" signal the caller uses to
+/// decide whether to retry with a different set).
+unsafe fn establish_with_keys(
+    session: &mut Scp03Session,
+    t1: &mut super::t1oi2c::T1State,
+    static_enc: &[u8; 16],
+    static_mac: &[u8; 16],
 ) -> Result<(), Se050Error> {
     // Generate 8-byte host challenge from hardware TRNG
     let mut host_challenge = [0u8; 8];
@@ -323,15 +364,33 @@ pub unsafe fn establish(
     let dd_mac = build_derivation_data(DD_S_MAC, 0x0080, &host_challenge, &card_challenge);
     let dd_rmac = build_derivation_data(DD_S_RMAC, 0x0080, &host_challenge, &card_challenge);
 
-    session.s_enc = kdf(&PLATFORM_ENC, &dd_enc);
-    session.s_mac = kdf(&PLATFORM_MAC, &dd_mac);
-    session.s_rmac = kdf(&PLATFORM_MAC, &dd_rmac);
+    session.s_enc = kdf(static_enc, &dd_enc);
+    session.s_mac = kdf(static_mac, &dd_mac);
+    session.s_rmac = kdf(static_mac, &dd_rmac);
 
-    // --- Verify card cryptogram ---
+    // --- Verify card cryptogram (CT + FI hardened) ---
+    // This is the SE050 authenticating ITSELF to the MCU during SCP03
+    // establishment — the twin of the R-MAC verify in `unwrap_response`
+    // below, and it must be hardened identically. A plain
+    // `if a[..8] != b { Err }` is BOTH variable-time (a byte-wise forgery
+    // oracle for a bus-SCA / counterfeit-SE adversary — the exact desolder /
+    // I2C-tamper threat the SCP03 tunnel exists to close) AND single-fault-
+    // skippable (one `[skip]` glitch lets an UNauthenticated SE complete
+    // SCP03, so the MCU then trusts an attacker-controlled channel). The
+    // `make scp03-fi` sweep found this `[skip]` class on the sibling R-MAC.
+    // Mirror that gate exactly: recompute the cryptogram INSIDE the double-
+    // evaluated closure (a fault that corrupts one computation makes the two
+    // disagree → fail closed), constant-time compare via `ct_eq_8`, verdict
+    // is the Hamming-distant `OK_SENTINEL` (a branch skip can't synthesise
+    // it), `black_box` stops LLVM CSE-collapsing the re-check, `wait_random`
+    // defeats clock-aligned bursts timed to the fixed-shape control flow.
     let dd_card = build_derivation_data(DD_CARD_CRYPTOGRAM, 0x0040, &host_challenge, &card_challenge);
-    let card_crypto_computed = kdf(&session.s_mac, &dd_card);
-
-    if card_crypto_computed[..8] != card_cryptogram[..] {
+    crate::fi::wait_random();
+    let card_ok = crate::fi::check_true_into_sentinel(|| {
+        let mac = kdf(&session.s_mac, &dd_card);
+        core::hint::black_box(ct_eq_8(&mac[..8], &card_cryptogram[..]))
+    });
+    if card_ok != crate::fi::OK_SENTINEL {
         #[cfg(feature = "debug-log")]
         secure_log!("[SCP03] Card cryptogram MISMATCH");
         return Err(Se050Error::Scp03);
@@ -343,8 +402,10 @@ pub unsafe fn establish(
     let host_cryptogram = &host_crypto_full[..8];
 
     // --- EXTERNAL AUTHENTICATE ---
-    // P1=0x03: C-MAC + C-DEC (HW lesson #6)
-    let header = [0x84u8, 0x82, 0x03, 0x00, 0x10];
+    // P1=0x33: C-DECRYPTION | R-ENCRYPTION | C-MAC | R-MAC.  S-5 fix —
+    // GP Amendment D Table 7-6 (page 35); NXP plug-and-trust
+    // `fsl_sss_se05x_scp03.c:186-198` (`SECLVL_CDEC_RENC_CMAC_RMAC`).
+    let header = [0x84u8, 0x82, 0x33, 0x00, 0x10];
     session.mcv = [0; 16];
     let mac_full = cmac_aes128(&session.s_mac, &[&session.mcv, &header, host_cryptogram]);
     session.mcv = mac_full;
@@ -352,7 +413,7 @@ pub unsafe fn establish(
     let mut ext_auth = [0u8; 21];
     ext_auth[0] = 0x84;
     ext_auth[1] = 0x82;
-    ext_auth[2] = 0x03;
+    ext_auth[2] = 0x33;
     ext_auth[3] = 0x00;
     ext_auth[4] = 0x10; // Lc = 16 (8 host crypto + 8 MAC)
     ext_auth[5..13].copy_from_slice(host_cryptogram);
@@ -386,13 +447,39 @@ pub unsafe fn establish(
 // ---------------------------------------------------------------------------
 
 /// Compute the command ICV (Initial Chaining Value) for AES-CBC encryption.
+///
+/// GP Amendment D §6.2.6: `ICV = AES-ECB-Enc(S-ENC, padded_counter)` where
+/// the counter is left-padded with zeroes to one block. (`session.counter`
+/// already lives in that left-padded representation — 15 high zero bytes
+/// then the counter value in the low byte(s).)
 fn command_icv(session: &Scp03Session) -> [u8; 16] {
     aes128_ecb_encrypt(&session.s_enc, &session.counter)
 }
 
+/// Compute the response ICV for AES-CBC decryption of an R-ENC response.
+///
+/// GP Amendment D §6.2.7 (page 30): the response uses the SAME padded
+/// counter block as the matching command, with one byte changed —
+/// "Before encryption, the most significant byte of this block shall be
+/// set to '80'." That separates response ICVs from command ICVs even
+/// though both share `S-ENC` and `counter`.
+///
+/// Mirrors `nxpSCP03_Get_ResponseICV` in NXP plug-and-trust
+/// (`hostlib/hostLib/libCommon/nxScp/nxScp03_Com.c:296-330`).
+fn response_icv(session: &Scp03Session) -> [u8; 16] {
+    let mut block = session.counter;
+    block[0] = 0x80;
+    aes128_ecb_encrypt(&session.s_enc, &block)
+}
+
 /// Wrap an APDU with SCP03 C-MAC and C-DEC (command encryption).
 ///
-/// Always applies both C-MAC and C-DEC (P1=0x03 security level).
+/// Always applies both C-MAC and C-DEC. The counter is left at the
+/// command's value — `unwrap_response()` increments it on success so the
+/// wrap/unwrap pair uses the same counter (GP Amd D §6.2.6 + §6.2.7), and
+/// a transport-level loss of the response keeps host/card counters in
+/// sync (the card also only advances after successfully sending the
+/// response).
 pub fn wrap_apdu(
     session: &mut Scp03Session,
     apdu: &[u8],
@@ -429,7 +516,6 @@ pub fn wrap_apdu(
         }
         let icv = command_icv(session);
         aes128_cbc_encrypt(&session.s_enc, &icv, &mut enc_buf[..padded_len]);
-        session.inc_counter();
         // Place encrypted data at offset 7 (extended Lc position)
         out[7..7 + padded_len].copy_from_slice(&enc_buf[..padded_len]);
         padded_len
@@ -480,6 +566,294 @@ pub fn wrap_apdu(
     mac_offset + 8
 }
 
+// ---------------------------------------------------------------------------
+// SCP03 response unwrap — R-MAC verify + R-ENC decrypt
+// ---------------------------------------------------------------------------
+
+/// Errors specific to `unwrap_response`. Surfaced via `Se050Error::Scp03`
+/// upstream — the variant exists for diagnostic logging.
+#[derive(Debug)]
+pub enum UnwrapError {
+    /// Response was shorter than 2 bytes (not even a SW).
+    Truncated,
+    /// SCP03 session is not active — caller should bypass unwrap.
+    Inactive,
+    /// Response length is in the "no man's land" between 2 (bare SW) and
+    /// 10 (minimum protected response = R-MAC + SW), with no valid
+    /// interpretation under GP Amendment D §6.2.5.
+    MalformedLength,
+    /// R-MAC verification failed in constant time.
+    RMacMismatch,
+    /// Encrypted body length was not a multiple of 16 (ISO 7816-4 padded
+    /// AES-CBC must be).
+    BadCiphertextLen,
+    /// ISO 7816-4 depad found no `0x80` sentinel.
+    BadPadding,
+    /// Output buffer too small for the plaintext.
+    Overflow,
+}
+
+impl From<UnwrapError> for super::apdu::Se050Error {
+    fn from(_: UnwrapError) -> Self {
+        super::apdu::Se050Error::Scp03
+    }
+}
+
+/// Constant-time equality on two 8-byte slices.
+///
+/// Uses `subtle::ConstantTimeEq` rather than a hand-rolled XOR-OR loop —
+/// the loop is correct in principle but rustc + future LLVM versions
+/// can introduce vectorised early-exit code that breaks the CT
+/// property.  `subtle` wraps the comparison in `core::hint::black_box`
+/// and volatile reads to defeat reordering.  Matches CLAUDE.md's
+/// "`subtle` for constant-time compares" convention used throughout
+/// the rest of the secure world.
+fn ct_eq_8(a: &[u8], b: &[u8]) -> bool {
+    use subtle::ConstantTimeEq;
+    debug_assert_eq!(a.len(), 8);
+    debug_assert_eq!(b.len(), 8);
+    a.ct_eq(b).into()
+}
+
+/// Unwrap an SCP03-protected response APDU (R-MAC verify, optionally
+/// R-ENC decrypt) and place `plaintext_body || SW1 SW2` into `out`.
+///
+/// Returns the number of bytes written to `out` (≥ 2). The last two
+/// are always the status word (`SW1 SW2`) — for downstream handlers that
+/// already expect the raw form `body || SW`.
+///
+/// Handles the three GP Amd D §6.2.5 cases:
+/// 1. **Bare error (length 2):** SW1 SW2 only, no R-MAC. Per §6.2.5
+///    first sentence — "no R-MAC shall be generated and no protection
+///    shall be applied to a response that includes an error status
+///    word". All SW ∉ {`9000`, `62xx`, `63xx`} → bare. Verified by
+///    matching `len == 2`; we *don't* re-classify by SW value because
+///    a SW=9000 response with R-ENC will be ≥ 10 bytes (R-MAC + SW
+///    minimum) and a SW=9000 with no data is also ≥ 10 bytes (still
+///    has R-MAC).
+/// 2. **No-body protected (length 10):** R-MAC(8) || SW(2). Empty
+///    response data field — R-MAC still computed over `MCV || SW`
+///    (§6.2.5 last paragraph + §6.2.7 "no encryption shall be applied
+///    to a response where there is no response data field: in this
+///    case the message shall be protected as defined in section
+///    6.2.5").
+/// 3. **Full protected (length ≥ 26):** ciphertext_body || R-MAC(8)
+///    || SW(2). Ciphertext is a multiple of 16. R-MAC over `MCV ||
+///    ciphertext_body || SW`. Decrypt with `response_icv()`, depad
+///    via ISO 7816-4 (scan from end for `0x80`).
+///
+/// Mirrors `nxpSCP03_Decrypt_ResponseAPDU` in NXP plug-and-trust
+/// (`hostlib/hostLib/libCommon/nxScp/nxScp03_Com.c:124-248`). The
+/// encryption counter advances on EVERY response — protected or bare
+/// error SW — because the card consumed the command's counter value the
+/// moment its SM layer processed the command (GP Amd D §6.2.6: per
+/// command sent, not per protected response). Only a verify/decrypt
+/// failure of a *protected* response (R-MAC mismatch — a forgery, not a
+/// card response) leaves the counter untouched.
+///
+/// **F8 (corrected):** that R-MAC-mismatch path returns `Err(RMacMismatch)`
+/// but does NOT itself clear `session.active` (an earlier comment claimed it
+/// "kills the session" — it does not). The channel still fails CLOSED: no
+/// plaintext is ever released on the mismatch (the early sentinel reject plus
+/// the F-28 infective release gate XOR-garble half_E unless a fresh,
+/// independent R-MAC recompute matches), and the seed half is only ever read,
+/// never sent, and always travels as R-ENC ciphertext on the bus. A desynced
+/// session is an availability concern, not a confidentiality/integrity one:
+/// the counter desync makes every SUBSEQUENT command error too, so the unlock
+/// fails closed, and the SE error paths re-`reinit()` (full SELECT + fresh
+/// `establish`) before the session is reused. Do NOT "fix" this by setting
+/// `session.active = false` here. Historically that flipped `send_apdu` into
+/// a pre-handshake cleartext branch — a fail-OPEN plaintext downgrade on I2C,
+/// the exact invariant-#3 break this guards against. Since the idle-relock
+/// fix (2026-07-02) `send_apdu` refuses outright on an inactive session, so
+/// the downgrade is structurally gone — but clearing the flag here is still
+/// wrong: it would swap the observable per-command SW errors the `reinit()`
+/// recovery paths key off for a blanket local refusal, hiding the desync
+/// without adding safety.
+pub fn unwrap_response(
+    session: &mut Scp03Session,
+    wrapped: &[u8],
+    out: &mut [u8],
+) -> Result<usize, UnwrapError> {
+    if !session.active {
+        return Err(UnwrapError::Inactive);
+    }
+    let n = wrapped.len();
+    if n < 2 {
+        return Err(UnwrapError::Truncated);
+    }
+
+    // Case 1 — bare error response: just SW1 SW2.  No R-MAC, no R-ENC.
+    // GP Amd D §6.2.5 first paragraph.
+    if n == 2 {
+        if out.len() < 2 {
+            return Err(UnwrapError::Overflow);
+        }
+        out[0] = wrapped[0];
+        out[1] = wrapped[1];
+        // Counter MUST advance here. The card's SM layer consumed this
+        // command's counter value when it C-DEC/C-MAC-processed the
+        // command; an applet-level error that returns a bare SW (object
+        // missing, wrong state) has still burned it — GP Amd D §6.2.6
+        // counts per command sent, not per protected response. Holding
+        // the host counter back desyncs the C-ENC ICV one command later:
+        // observed on silicon 2026-06-12 (wiped chip → reconcile's
+        // ReadObjectAttributes → bare 0x6985 → next command 0x6982
+        // (card-side SM failure, session terminated) → every later APDU
+        // 0x6985 → first-boot wizard rng_strong bricked). Transport
+        // failures (no response at all) never reach unwrap_response, so
+        // this arm only fires when the card actually processed a command.
+        session.inc_counter();
+        return Ok(2);
+    }
+
+    if n < 10 {
+        return Err(UnwrapError::MalformedLength);
+    }
+
+    // Case 2 + Case 3 share the R-MAC verify path.  Layout:
+    //   wrapped[..n-10]    = ciphertext body (may be empty in case 2)
+    //   wrapped[n-10..n-2] = 8-byte R-MAC
+    //   wrapped[n-2..n]    = SW1 SW2
+    let body_end = n - 10;
+    let body = &wrapped[..body_end];
+    let rmac_recv = &wrapped[body_end..body_end + 8];
+    let sw = &wrapped[n - 2..];
+
+    // GP Amd D §6.2.5 + Figure 6-3:
+    //   R-MAC = CMAC(S-RMAC, MCV || ciphered_body || SW)[..8]
+    // The MCV is the full 16-byte command CMAC produced by `wrap_apdu`
+    // (`session.mcv`); it is NOT updated by `unwrap_response`.
+    //
+    // FI-hardening (F-28, `tools/sca/README.md` §F-28). This R-MAC verify is
+    // the ONLY thing between a forged (attacker-supplied, wrong-R-MAC)
+    // response and the host releasing an attacker-chosen `half_E`. A plain
+    // `if !ct_eq_8(..) { return Err }` is single-fault-defeatable — the
+    // exhaustive `make scp03-fi` sweep found `[skip]` faults that release the
+    // plaintext (skip the reject branch, or a stuck-at that zeroes the
+    // computed MAC to match a forged all-zero R-MAC). Mirror `crypto.rs`'s C10
+    // verify-before-release gate (F-1/F-2):
+    //
+    //   * The CMAC is recomputed INSIDE the double-evaluated closure, so a
+    //     fault that corrupts one computation makes the two evaluations
+    //     disagree → `check_true_into_sentinel` fails closed. (Unlike the C10
+    //     gate, which computes `verify` once because `verify` is itself
+    //     fault-robust, the R-MAC equality is not — so we recompute it.)
+    //   * The verdict is the Hamming-distant `OK_SENTINEL`; a skip of the
+    //     reject branch can't synthesise that 32-bit magic.
+    //   * `core::hint::black_box` is load-bearing — without it LLVM CSEs the
+    //     two closure evaluations (and the two CMACs) into one, collapsing the
+    //     re-check back to a single skippable branch. See F-1.
+    //
+    // `wait_random()` immediately before defeats clock-aligned glitch bursts
+    // timed to the fixed-shape control flow.
+    crate::fi::wait_random();
+    let rmac_ok = crate::fi::check_true_into_sentinel(|| {
+        let mac = cmac_aes128(&session.s_rmac, &[&session.mcv, body, sw]);
+        core::hint::black_box(ct_eq_8(&mac[..8], rmac_recv))
+    });
+    if rmac_ok != crate::fi::OK_SENTINEL {
+        #[cfg(feature = "debug-log")]
+        secure_log!("[SCP03] R-MAC MISMATCH");
+        return Err(UnwrapError::RMacMismatch);
+    }
+
+    // Case 2 — empty body: just write the SW.
+    if body_end == 0 {
+        if out.len() < 2 {
+            return Err(UnwrapError::Overflow);
+        }
+        out[0] = sw[0];
+        out[1] = sw[1];
+        session.inc_counter();
+        return Ok(2);
+    }
+
+    // Case 3 — decrypt body, depad, append SW.
+    if body_end % 16 != 0 {
+        return Err(UnwrapError::BadCiphertextLen);
+    }
+
+    let mut plain = [0u8; 1024];
+    if body_end > plain.len() {
+        return Err(UnwrapError::Overflow);
+    }
+    plain[..body_end].copy_from_slice(body);
+
+    let icv = response_icv(session);
+    aes128_cbc_decrypt(&session.s_enc, &icv, &mut plain[..body_end]);
+
+    // ISO 7816-4 depad: scan back from end of last block for the `0x80`
+    // sentinel.  GP Amd D §6.2.7 + GP Card Spec §B.2.3.
+    let mut pad_pos = body_end;
+    while pad_pos > 0 {
+        pad_pos -= 1;
+        if plain[pad_pos] == 0x80 {
+            break;
+        }
+        if plain[pad_pos] != 0x00 {
+            return Err(UnwrapError::BadPadding);
+        }
+        if pad_pos + 16 <= body_end {
+            // Spec mandates padding lies in the last block only — scanning
+            // past one full block back means there was no `0x80` and
+            // every trailing byte was `0x00`.  Reject.
+            return Err(UnwrapError::BadPadding);
+        }
+    }
+    if plain[pad_pos] != 0x80 {
+        return Err(UnwrapError::BadPadding);
+    }
+    let plaintext_len = pad_pos;
+
+    if out.len() < plaintext_len + 2 {
+        return Err(UnwrapError::Overflow);
+    }
+
+    // F-28 infective release gate. The early sentinel gate above rejects a
+    // forged response in normal operation, but an exhaustive `make scp03-fi`
+    // sweep showed `check_true_into_sentinel`'s OWN verdict-selection branch is
+    // single-skip-defeatable (a skip flips its return to `OK_SENTINEL` for a
+    // false condition) — and that defeats ANY number of value-gates that read
+    // the now-corrupted verdict. So at the secret-release point we do NOT
+    // branch on the verdict: we fold a FRESH, INDEPENDENT R-MAC recompute
+    // branchlessly into the released bytes. The real plaintext is emitted only
+    // if this recompute matches; otherwise every byte is XOR-garbled. A forged
+    // response that reaches here (early gate FI-bypassed) therefore yields
+    // garbage, never the attacker's chosen `half_E`, and there is no clean
+    // branch a single skip can flip to "release". Reaching here at all costs
+    // the one fault, so this recompute + mask run unfaulted. (Folding `half_E`'s
+    // confidentiality into an arithmetic dependency is the standard "infective"
+    // FI countermeasure; it does not rely on the fragile sentinel branch.)
+    let mac_chk = cmac_aes128(&session.s_rmac, &[&session.mcv, body, sw]);
+    let mac_matches = ct_eq_8(&mac_chk[..8], rmac_recv);
+    // 0x00 when the R-MAC matches (release), 0xFF when it does not (garble) —
+    // branchless: `true as u8 = 1 → 0`, `false as u8 = 0 → 0xFF`.
+    let release_mask = (mac_matches as u8).wrapping_sub(1);
+    for (o, p) in out[..plaintext_len]
+        .iter_mut()
+        .zip(plain[..plaintext_len].iter())
+    {
+        *o = p ^ release_mask;
+    }
+    out[plaintext_len] = sw[0];
+    out[plaintext_len + 1] = sw[1];
+
+    session.inc_counter();
+
+    Ok(plaintext_len + 2)
+}
+
+// `aes128_cbc_decrypt` lives in `crate::scp03_logic` (re-exported via
+// the `pub use` block at the top of this file) so the round-trip KATs
+// in `scp03_logic::tests` exercise both directions on the host.
+
+// `build_put_key_apdu` lives in `crate::scp03_logic` now (re-exported via
+// `pub use` at the top of this file). Tests for the APDU layout + KCV +
+// AES/CMAC primitives also live there — and unlike the `#[cfg(test)]`
+// block that used to be here, they actually run under
+// `cargo test -p sphincs-tz-secure` because `scp03_logic` is un-gated.
+
 ```
 
 
@@ -525,7 +899,6 @@ const SC_OVERHEAD: usize = SC_HEADER_LEN + CCM_TAG_LEN;
 const SCTR_HANDSHAKE_HELLO: u8 = 0x00;
 const SCTR_HANDSHAKE_FINISHED: u8 = 0x08;
 const SCTR_RECORD_FULL: u8 = 0x23; // Record type + full protection
-const SCTR_ALERT: u8 = 0x40;
 
 /// Protocol version for pre-shared-secret mode.
 const PROTOCOL_VERSION: u8 = 0x01;
@@ -575,8 +948,11 @@ pub struct ShieldedConnection {
     dec_seq: u32,
     /// Whether the shielded connection is active.
     pub active: bool,
-    /// Platform Binding Secret (loaded from secure flash).
-    pbs: [u8; 32],
+    /// Platform Binding Secret. 64 bytes per OPTIGA Trust M SRM §
+    /// "Platform Binding Secret" ("It shall be 64 bytes …") — derived
+    /// on demand from the OTP master via `hw::secret_keys::optiga_
+    /// pairing_secret`.
+    pbs: [u8; 64],
     /// Whether PBS has been loaded.
     pub pbs_loaded: bool,
 }
@@ -591,34 +967,61 @@ impl ShieldedConnection {
             enc_seq: 0,
             dec_seq: 0,
             active: false,
-            pbs: [0; 32],
+            pbs: [0; 64],
             pbs_loaded: false,
         }
     }
 
     /// Load the Platform Binding Secret from caller-provided buffer.
-    pub fn load_pbs(&mut self, pbs: &[u8; 32]) {
+    pub fn load_pbs(&mut self, pbs: &[u8; 64]) {
         self.pbs.copy_from_slice(pbs);
         self.pbs_loaded = true;
     }
 
-    /// Derive session keys from the PBS and exchanged random values.
+    /// Zeroize the live Shielded-Connection session keys and force a fresh
+    /// handshake on next use.
+    ///
+    /// Reached from `OptigaTrustM`'s `zeroize_caches` on the lock / idle-wipe
+    /// / panic path (`nsc::zeroize_sensitive_state`). The `OptigaTrustM`
+    /// driver is a `static mut` singleton, so the `Drop` impl below never
+    /// runs in production — without this the AES-128-CCM session keys that
+    /// wrap `half_O` on the OPTIGA I2C bus would persist in secure SRAM
+    /// through the entire locked state, where they could combine with a
+    /// captured bus transcript to recover the half. Clearing `active` makes
+    /// `ensure_shield` re-handshake on the next OPTIGA APDU (the same
+    /// recovery the HIGH-9 renegotiation threshold relies on). The PBS is
+    /// intentionally retained: it is the long-lived pairing root (loaded
+    /// once at boot, re-derivable from the OTP/DHUK master) needed to
+    /// re-derive the session keys on the next handshake.
+    /// (audit secret-lifecycle 20260611, MEDIUM-1)
+    pub fn zeroize_session(&mut self) {
+        self.enc_key.zeroize();
+        self.dec_key.zeroize();
+        self.enc_nonce_base.zeroize();
+        self.dec_nonce_base.zeroize();
+        crate::fi::zeroize_barrier();
+        self.enc_seq = 0;
+        self.dec_seq = 0;
+        self.active = false;
+    }
+
+    /// Derive session keys from the PBS and the chip-provided `random_S`.
     ///
     /// Uses TLS 1.2 PRF (HMAC-SHA256) to expand:
-    ///   `PRF(pbs, "Platform Binding", random_m || random_s)` → 40 bytes
+    ///   `PRF(pbs, "Platform Binding", random_S)` → 40 bytes
     ///
-    /// Output layout:
+    /// Note: Infineon's PRL only uses `random_S` (single 32-byte buffer
+    /// `p_ctx->prl.random`); there is no `random_M` in the handshake —
+    /// see `ifx_i2c_presentation_layer.c:285-319,497-500`.
+    ///
+    /// Output layout (matches `PRL_MASTER_*_OFFSET` in the reference):
     ///   [0..16]  = Master Encryption Key (host→chip)
     ///   [16..32] = Master Decryption Key (chip→host)
     ///   [32..36] = Encryption nonce base
     ///   [36..40] = Decryption nonce base
-    fn derive_session_keys(&mut self, random_m: &[u8; 32], random_s: &[u8; 32]) {
-        let mut seed = [0u8; 64];
-        seed[..32].copy_from_slice(random_m);
-        seed[32..].copy_from_slice(random_s);
-
+    fn derive_session_keys(&mut self, random_s: &[u8; 32]) {
         let mut key_material = [0u8; SESSION_KEY_LEN];
-        tls_prf_sha256(&self.pbs, PRF_LABEL, &seed, &mut key_material);
+        tls_prf_sha256(&self.pbs, PRF_LABEL, random_s, &mut key_material);
 
         self.enc_key.copy_from_slice(&key_material[0..16]);
         self.dec_key.copy_from_slice(&key_material[16..32]);
@@ -628,7 +1031,6 @@ impl ShieldedConnection {
         self.dec_seq = 0;
 
         key_material.zeroize();
-        seed.zeroize();
     }
 
     /// Build the 8-byte CCM nonce from base + sequence counter.
@@ -676,6 +1078,16 @@ impl ShieldedConnection {
             return Err(ShieldError::NotActive);
         }
 
+        // HIGH-9 fix: Infineon specifies a renegotiation threshold
+        // at `enc_seq >= 0xFFFFFFF0`. Beyond that the AEAD nonce
+        // (nonce_base || seq) would wrap and repeat — CCM keystream
+        // would be recovered. Force the connection closed so the
+        // caller triggers a fresh handshake.
+        if self.enc_seq >= 0xFFFF_FFF0 {
+            self.active = false;
+            return Err(ShieldError::NotActive);
+        }
+
         let out_len = SC_HEADER_LEN + plaintext.len() + CCM_TAG_LEN;
         if out_len > out.len() {
             return Err(ShieldError::BufferOverflow);
@@ -694,6 +1106,15 @@ impl ShieldedConnection {
 
         // AES-128-CCM encrypt
         let mut ciphertext_and_tag = [0u8; 600];
+        // Guard the internal scratch too: the line-230 check validates the
+        // caller's `out`, but the CCM output (`plaintext.len()` + 8-byte tag)
+        // is staged here first, and a plaintext larger than this buffer would
+        // overrun it and panic. Only the dev-only protected-update path emits
+        // APDUs this large (all shipping shielded APDUs are small), but keep
+        // wrap_command total so it can never OOB-panic.
+        if plaintext.len() + CCM_TAG_LEN > ciphertext_and_tag.len() {
+            return Err(ShieldError::BufferOverflow);
+        }
         let ct_len = aes128_ccm_encrypt(
             &self.enc_key,
             &nonce,
@@ -725,11 +1146,32 @@ impl ShieldedConnection {
             return Err(ShieldError::DecryptFailed);
         }
 
-        let _sctr = input[0];
+        let sctr = input[0];
+        if sctr != SCTR_RECORD_FULL {
+            // HIGH-M16: the record type byte is part of the AAD, and
+            // we also want to refuse alert / handshake frames coming
+            // back at this stage — only full-protection record frames
+            // are valid responses to a wrapped command.
+            return Err(ShieldError::DecryptFailed);
+        }
         let seq = ((input[1] as u32) << 24)
             | ((input[2] as u32) << 16)
             | ((input[3] as u32) << 8)
             | input[4] as u32;
+
+        // HIGH-10 fix: refuse replays. A MITM that captures a valid
+        // response frame could otherwise inject it again at a later
+        // point and short-circuit a fresh command. We expect each
+        // response to bump dec_seq by exactly 1; anything with a
+        // lower-or-equal seq is either a replay or a bug.
+        if seq < self.dec_seq {
+            return Err(ShieldError::DecryptFailed);
+        }
+        // Threshold enforcement (symmetric with enc_seq).
+        if seq >= 0xFFFF_FFF0 {
+            self.active = false;
+            return Err(ShieldError::NotActive);
+        }
 
         let ct_and_tag = &input[SC_HEADER_LEN..];
         let plaintext_len = ct_and_tag.len() - CCM_TAG_LEN;
@@ -753,7 +1195,7 @@ impl ShieldedConnection {
             return Err(ShieldError::DecryptFailed);
         }
 
-        self.dec_seq = seq + 1;
+        self.dec_seq = seq.saturating_add(1);
         Ok(plaintext_len)
     }
 
@@ -776,38 +1218,69 @@ impl ShieldedConnection {
             return Err(ShieldError::NoPbs);
         }
 
-        // Generate master random from TRNG
-        let mut random_m = [0u8; RANDOM_LEN];
-        crate::rng::fill(&mut random_m).map_err(|_| ShieldError::HandshakeFailed)?;
+        secure_log!("[OPTIGA/shield] establish: start");
 
-        // Step 1: Send MasterHello
-        // Format: SCTR(0x00) | ProtocolVersion(0x01)
+        // Step 1: Send MasterHello via the presentation-layer path
+        // (PRESENCE_BIT set in PCTR). Format: SCTR(0x00) | ProtoVer(0x01).
+        // Note: Infineon PRL does NOT send a master random — the handshake
+        // uses only `random_S` from SlaveHello. See `ifx_i2c_presentation_
+        // layer.c:451-472`.
         let hello = [SCTR_HANDSHAKE_HELLO, PROTOCOL_VERSION];
         let mut resp = [0u8; 64];
-        let n = ifx.transceive(&hello, &mut resp)
-            .map_err(|_| ShieldError::HandshakeFailed)?;
+        secure_log!("[OPTIGA/shield] sending MasterHello");
+        let n = match ifx.transceive_prl(&hello, &mut resp) {
+            Ok(n) => n,
+            Err(e) => {
+                secure_log!("[OPTIGA/shield] MasterHello transceive FAILED: {:?}", e);
+                return Err(ShieldError::HandshakeFailed);
+            }
+        };
 
-        // Step 2: Parse SlaveHello
-        // Format: SCTR(0x00) | Random_S(32) | SeqNum_S(4)
-        if n < 1 + RANDOM_LEN + 4 {
+        // Step 2: Parse SlaveHello — 38 bytes total per Infineon
+        // `ifx_i2c_presentation_layer.c::PRL_SLAVE_HELLO_LENGTH = 0x26`:
+        //   byte 0      : SCTR (0x00)
+        //   byte 1      : ProtocolVersion (0x01)
+        //   bytes 2..34 : Random_S (32 bytes)
+        //   bytes 34..38: SeqNum_S (4 bytes, big-endian)
+        const SLAVE_HELLO_RANDOM_OFFSET: usize = 2;
+        const SLAVE_HELLO_SEQ_OFFSET: usize = 34;
+        const SLAVE_HELLO_LEN: usize = 38;
+
+        secure_log!("[OPTIGA/shield] MasterHello response n={}", n);
+        if n < SLAVE_HELLO_LEN {
+            secure_log!(
+                "[OPTIGA/shield] SlaveHello too short ({} < {}), bytes=[{:02x}{:02x}{:02x}{:02x}...]",
+                n, SLAVE_HELLO_LEN, resp[0], resp[1], resp[2], resp[3]
+            );
             return Err(ShieldError::HandshakeFailed);
         }
         let mut random_s = [0u8; RANDOM_LEN];
-        random_s.copy_from_slice(&resp[1..1 + RANDOM_LEN]);
-        let mut seq_s = [0u8; 4];
-        seq_s.copy_from_slice(&resp[1 + RANDOM_LEN..1 + RANDOM_LEN + 4]);
+        random_s.copy_from_slice(
+            &resp[SLAVE_HELLO_RANDOM_OFFSET..SLAVE_HELLO_RANDOM_OFFSET + RANDOM_LEN]
+        );
+        let slave_seq = u32::from_be_bytes([
+            resp[SLAVE_HELLO_SEQ_OFFSET],
+            resp[SLAVE_HELLO_SEQ_OFFSET + 1],
+            resp[SLAVE_HELLO_SEQ_OFFSET + 2],
+            resp[SLAVE_HELLO_SEQ_OFFSET + 3],
+        ]);
+        secure_log!("[OPTIGA/shield] slave_seq={:#010x}", slave_seq);
 
-        // Step 3: Derive session keys
-        self.derive_session_keys(&random_m, &random_s);
+        // Step 3: Derive session keys from PBS + random_S.
+        self.derive_session_keys(&random_s);
 
-        // Step 4: Send MasterFinished
-        // Encrypt: Random_M(32) + SeqNum_S(4) with derived enc_key
+        // Step 4: Send MasterFinished.
+        // Plaintext = random_S (32) || slave_seq_num (4 BE) = 36 bytes
+        //   — see `ifx_i2c_presentation_layer.c:512-521`.
+        // All three of {CCM nonce counter, AAD seq, header seq} are the
+        // slave_sequence_number (not zero). See `ifx_i2c_presentation_
+        // layer.c:523-542`.
         let mut finished_plain = [0u8; 36];
-        finished_plain[..32].copy_from_slice(&random_m);
-        finished_plain[32..36].copy_from_slice(&seq_s);
+        finished_plain[..32].copy_from_slice(&random_s);
+        finished_plain[32..36].copy_from_slice(&slave_seq.to_be_bytes());
 
-        let nonce = Self::build_nonce(&self.enc_nonce_base, 0);
-        let aad = Self::build_aad(SCTR_HANDSHAKE_FINISHED, 0, 36);
+        let nonce = Self::build_nonce(&self.enc_nonce_base, slave_seq);
+        let aad = Self::build_aad(SCTR_HANDSHAKE_FINISHED, slave_seq, 36);
 
         let mut finished_enc = [0u8; 64];
         let ct_len = aes128_ccm_encrypt(
@@ -817,28 +1290,64 @@ impl ShieldedConnection {
             &finished_plain,
             &mut finished_enc,
         );
+        // ct_len = 36 plaintext + 8 MAC = 44
 
-        // Build finished message: SCTR(0x08) | SeqNum(4) | ciphertext+tag
+        // Frame: SCTR(0x08) | SeqNum=slave_seq(4 BE) | ciphertext+tag(44)
+        // = 5 + 44 = 49 bytes (PRL_FINISHED_DATA_LENGTH + 1).
         let mut finished_msg = [0u8; 128];
         finished_msg[0] = SCTR_HANDSHAKE_FINISHED;
-        finished_msg[1..5].copy_from_slice(&[0, 0, 0, 0]); // seq = 0
+        finished_msg[1..5].copy_from_slice(&slave_seq.to_be_bytes());
         finished_msg[5..5 + ct_len].copy_from_slice(&finished_enc[..ct_len]);
         let msg_len = 5 + ct_len;
 
         let mut resp2 = [0u8; 128];
-        let n2 = ifx.transceive(&finished_msg[..msg_len], &mut resp2)
+        secure_log!("[OPTIGA/shield] sending MasterFinished ({}B)", msg_len);
+        let n2 = ifx.transceive_prl(&finished_msg[..msg_len], &mut resp2)
             .map_err(|_| ShieldError::HandshakeFailed)?;
+        secure_log!(
+            "[OPTIGA/shield] MasterFinished response n={}, SCTR={:02x}",
+            n2, resp2[0]
+        );
 
-        // Step 5: Verify SlaveFinished
+        // Step 5: Verify SlaveFinished.
+        // Format: SCTR(0x08) | master_seq(4 BE) | ct(36) | MAC(8) = 49 B.
+        // See `ifx_i2c_presentation_layer.c:559-607`.
         if n2 < SC_HEADER_LEN + CCM_TAG_LEN {
             return Err(ShieldError::HandshakeFailed);
         }
-        let dec_nonce = Self::build_nonce(&self.dec_nonce_base, 0);
+        if resp2[0] != SCTR_HANDSHAKE_FINISHED {
+            secure_log!("[OPTIGA/shield] SlaveFinished SCTR unexpected: {:02x}", resp2[0]);
+            return Err(ShieldError::HandshakeFailed);
+        }
+        let master_seq = u32::from_be_bytes([resp2[1], resp2[2], resp2[3], resp2[4]]);
+        secure_log!("[OPTIGA/shield] master_seq={:#010x}", master_seq);
+
+        let dec_nonce = Self::build_nonce(&self.dec_nonce_base, master_seq);
         let slave_ct = &resp2[SC_HEADER_LEN..n2];
         let slave_pt_len = slave_ct.len() - CCM_TAG_LEN;
-        let dec_aad = Self::build_aad(SCTR_HANDSHAKE_FINISHED, 0, slave_pt_len as u16);
 
+        // Upper-bound the plaintext against the fixed 64-byte `slave_plain`
+        // sink BEFORE decrypting. `n2` is bounded only by `resp2.len()`
+        // (128) inside `transceive_prl`, so a frame with `n2 > 77` yields
+        // `slave_pt_len > 64`; `aes128_ccm_decrypt` would then write past
+        // `slave_plain` and panic (bounds-check), aborting the unlock. The
+        // I2C bus is the explicitly-untrusted channel this shielded
+        // connection exists to protect (invariant #3), and a merely
+        // malfunctioning OPTIGA is plausible-malformed input — so this
+        // must fail closed, mirroring the `plaintext_len > out.len()` guard
+        // `unwrap_response` already carries on the steady-state path. (A
+        // conformant SlaveFinished is exactly 36 B of plaintext.)
         let mut slave_plain = [0u8; 64];
+        if slave_pt_len > slave_plain.len() {
+            secure_log!(
+                "[OPTIGA/shield] SlaveFinished plaintext too long ({}B > {}B)",
+                slave_pt_len,
+                slave_plain.len()
+            );
+            return Err(ShieldError::HandshakeFailed);
+        }
+        let dec_aad = Self::build_aad(SCTR_HANDSHAKE_FINISHED, master_seq, slave_pt_len as u16);
+
         let ok = aes128_ccm_decrypt(
             &self.dec_key,
             &dec_nonce,
@@ -847,17 +1356,46 @@ impl ShieldedConnection {
             &mut slave_plain,
         );
         if !ok {
+            secure_log!("[OPTIGA/shield] SlaveFinished decrypt FAILED");
             return Err(ShieldError::HandshakeFailed);
         }
 
-        // Session established — start sequence counters at 1
-        self.enc_seq = 1;
-        self.dec_seq = 1;
+        // Plaintext of SlaveFinished must be `random_S (32) || master_seq (4 BE)`.
+        if slave_pt_len < 36 {
+            return Err(ShieldError::HandshakeFailed);
+        }
+        let mut diff: u8 = 0;
+        for i in 0..RANDOM_LEN {
+            diff |= slave_plain[i] ^ random_s[i];
+        }
+        if diff != 0 {
+            secure_log!("[OPTIGA/shield] SlaveFinished random_S mismatch");
+            return Err(ShieldError::HandshakeFailed);
+        }
+        let echoed_master_seq = u32::from_be_bytes([
+            slave_plain[32], slave_plain[33], slave_plain[34], slave_plain[35],
+        ]);
+        if echoed_master_seq != master_seq {
+            secure_log!("[OPTIGA/shield] SlaveFinished master_seq mismatch");
+            return Err(ShieldError::HandshakeFailed);
+        }
+
+        // Session established. Subsequent protected records use the
+        // master_sequence_number counter (bumped before each send), and
+        // the slave's responses carry their own slave_sequence_number we
+        // extract on the fly in `unwrap_response`. We initialise enc_seq
+        // = master_seq + 1 so the first `wrap_command` sends that value
+        // (we use-then-increment). dec_seq=0 lets any seq ≥ 0 through;
+        // the chip's slave_sequence_number monotonicity is what we rely
+        // on for replay protection.
+        self.enc_seq = master_seq.saturating_add(1);
+        self.dec_seq = 0;
         self.active = true;
 
-        random_m.zeroize();
         finished_plain.zeroize();
+        slave_plain.zeroize();
 
+        secure_log!("[OPTIGA/shield] establish: DONE");
         Ok(())
     }
 }
@@ -1166,8 +1704,23 @@ fn set_counter(a: &mut [u8; AES_BLOCK], counter: u64) {
 //!
 //! The linker script (`memory-stm32u585.x`) must shrink FLASH LENGTH
 //! by 16 KB to prevent firmware code from being placed in these pages.
+//!
+//! ## Unsafe surface
+//!
+//! All MMIO register access is funnelled through `hw::mmio::{Reg32, RoReg32}`,
+//! which encapsulates `read_volatile` / `write_volatile` once per address.
+//! The remaining `unsafe fn` markers sit on the public flash-*mutating*
+//! APIs (erase / program / bump) for commit-visibility — callers must
+//! reason about *which* flash bytes they are about to change. Read-only
+//! helpers (`read_key`, `pin_attempts_read`, `offchain_count_read`,
+//! `last_userop_count_read`, `offchain_count_is_registered`,
+//! `is_key_blank`, `is_wipe_armed`) are safe `fn` because they cannot
+//! commit anything; raw pointer derefs of flash memory inside them stay
+//! in tight `unsafe { ... }` blocks with `// SAFETY:` comments.
 
 use core::ptr::{read_volatile, write_volatile};
+
+use crate::hw::mmio::{Reg32, RoReg32};
 
 // ---------------------------------------------------------------------------
 // Flash controller registers (secure alias)
@@ -1175,9 +1728,67 @@ use core::ptr::{read_volatile, write_volatile};
 
 const FLASH: u32 = 0x5002_2000;
 
-const FLASH_SECKEYR: *mut u32 = (FLASH + 0x0C) as *mut u32;
-const FLASH_SECSR: *mut u32 = (FLASH + 0x24) as *mut u32;
-const FLASH_SECCR: *mut u32 = (FLASH + 0x2C) as *mut u32;
+// Non-secure-controller registers MUST be reached via the NS alias of the
+// FLASH peripheral block (0x4002_2000), even when called from the secure
+// world. The secure alias of the SAME register set silently corrupts NSCR
+// writes — every NSCR-initiated program/erase returns PGSERR on STM32U585.
+// ST's HAL `FLASH_PageErase`/`FLASH_Program_QuadWord` confirm this: when
+// `IS_FLASH_SECURE_OPERATION()` is false (i.e. the caller is operating on
+// NS-classified pages) HAL uses `&(FLASH_NS->NSCR)` — the NS alias of the
+// same register block. Driving NSCR via the secure alias was the cause of
+// the bank-2 erase failure during the fwup-transport-e2e bring-up.
+const FLASH_NS: u32 = 0x4002_2000;
+
+/// `FLASH_OPTR` offset (RM0456 §7.11) — RDP[7:0] in the low byte. And
+/// `FLASH_SECBOOTADD0R` offset (secure boot-address option register), confirmed
+/// by `tools/ob-configurator/src/main.rs:32` (`FLASH_S+0x4C`).
+#[allow(dead_code)]
+const FLASH_OPTR_OFF: u32 = 0x40;
+#[allow(dead_code)]
+const FLASH_SECBOOTADD0R_OFF: u32 = 0x4C;
+
+/// STM32U585 FSBL base (secure bank-1 page 0) — the shipping secure-boot entry.
+#[allow(dead_code)]
+pub const FSBL_BASE_ADDR: u32 = 0x0C00_0000;
+
+// The pure RDP/SECBOOTADD0 decode + its host unit tests live in the
+// host-compiled `sphincs_tz_shared::lockdown` (this whole `hw` module is
+// `#[cfg(not(test))]`, so an in-module test never runs). Re-export the level
+// enum so `hw::flash::RdpLevel` keeps working for callers.
+pub use sphincs_tz_shared::lockdown::RdpLevel;
+
+/// Read the live RDP level from `FLASH_OPTR` (secure alias, read-only).
+///
+/// NOTE (BOOT_LOCK/HDP1 follow-up): we check the RDP level and the boot
+/// *address* (`secboot_selects_fsbl`) — the reliable, code-confirmed signals.
+/// The `BOOT_LOCK` bit and `HDP1` polarity are doc-ambiguous
+/// (production-todo's `0x0C00_007C` vs the ob-configurator's `0x0018_0000`), so
+/// asserting them is a bench-confirmation follow-up (work-todo), not done here.
+#[cfg(feature = "stm32u585")]
+#[allow(dead_code)]
+#[must_use]
+pub fn rdp_level() -> RdpLevel {
+    // SAFETY: `FLASH_OPTR` is a real, 4-byte-aligned MMIO register in the
+    // secure FLASH-controller block (unlike NSCR, OPTR is readable via the
+    // secure alias). The secure world is single-threaded; this is a pure read.
+    let optr = unsafe { crate::hw::mmio::RoReg32::new(FLASH + FLASH_OPTR_OFF) }.read();
+    sphincs_tz_shared::lockdown::rdp_level_from_byte((optr & 0xFF) as u8)
+}
+
+/// Read the live `SECBOOTADD0R` (secure alias, read-only).
+#[cfg(feature = "stm32u585")]
+#[allow(dead_code)]
+#[must_use]
+pub fn secboot_add0_reg() -> u32 {
+    // SAFETY: a real, 4-byte-aligned secure option register (same class as
+    // `FLASH_OPTR`); single-threaded secure world; pure read.
+    unsafe { crate::hw::mmio::RoReg32::new(FLASH + FLASH_SECBOOTADD0R_OFF) }.read()
+}
+
+/// Selects which bank the flash controller targets. Only meaningful for
+/// dual-bank operations; bank 1 is S-flash, bank 2 is NS-flash in our
+/// layout. NSCR.BKER bit.
+const BKER: u32 = 1 << 11;
 
 // Unlock key sequence (same as all STM32 families)
 const KEY1: u32 = 0x4567_0123;
@@ -1195,6 +1806,88 @@ const BSY: u32 = 1 << 16; // Busy
 const ERR_MASK: u32 = 0xFA; // PROGERR | WRPERR | PGAERR | SIZERR | PGSERR
 
 // ---------------------------------------------------------------------------
+// Instruction cache (ICACHE) — must be invalidated after every flash
+// erase or program, or subsequent reads return stale cached bytes.
+// ---------------------------------------------------------------------------
+//
+// STM32U5 has a transparent instruction/data cache in front of flash
+// (ICACHE at 0x4003_0400 NS / 0x5003_0400 S, enabled at boot by
+// default). Cache lines are NOT automatically invalidated when the
+// flash contents underneath change — software must issue a `CACHEINV`
+// after every flash mutation that touches a region the CPU may have
+// cached.
+//
+// Symptom when missing: `write_quadword_verified` writes fresh bytes,
+// the flash controller reports Ok (no SR error), but the immediately-
+// following readback returns the OLD pre-write bytes — because the
+// CPU is reading from the cache. `write_quadword_verified` then fails
+// the compare and returns Err, with the actual flash having the correct
+// content. The bug is trivially reproducible when a region is read
+// before the flash mutation (so it's cached), then erased/programmed,
+// then read again.
+//
+// Fix: after every successful erase or program (before returning Ok),
+// call `icache_invalidate()`. The call is a handful of cycles and
+// completely eliminates the "silent readback mismatch" failure mode.
+
+// ICACHE registers live at 0x4003_0400 (NS alias) / 0x5003_0400 (S alias).
+// We're secure-world code; use the S alias for symmetry with the FLASH
+// register block above. The wrong base (0x4003_0000 — off by 0x400) lands
+// in a reserved region on AHB1 and provokes unpredictable behaviour
+// (previously: u64_div_rem HardFault shortly after the first write).
+const ICACHE_BASE: u32 = 0x5003_0400;
+const ICACHE_CR_CACHEINV: u32 = 1 << 1;
+const ICACHE_SR_BUSYF: u32 = 1 << 0;
+
+/// All MMIO registers this driver owns, bundled so the one-time
+/// `unsafe { ... }` for `Reg32::new` happens once at module scope.
+struct FlashRegs {
+    seckeyr: Reg32,
+    secsr: Reg32,
+    seccr: Reg32,
+    nskeyr: Reg32,
+    nssr: Reg32,
+    nscr: Reg32,
+    icache_cr: Reg32,
+    icache_sr: RoReg32,
+}
+
+// SAFETY: each address below is a real, 4-byte-aligned MMIO register
+// exclusively owned by this driver (the FLASH and ICACHE controllers).
+// The secure world is single-threaded and non-preemptive — nothing else
+// races us. After this one-time construction every register touch is via
+// safe `.read()` / `.write()` / `.modify()`.
+const REG: FlashRegs = unsafe {
+    FlashRegs {
+        seckeyr: Reg32::new(FLASH + 0x0C),
+        secsr: Reg32::new(FLASH + 0x24),
+        seccr: Reg32::new(FLASH + 0x2C),
+        // NS-controller registers via the NS alias — see the comment on
+        // FLASH_NS above. The secure alias for NSCR fails with PGSERR.
+        nskeyr: Reg32::new(FLASH_NS + 0x08),
+        nssr: Reg32::new(FLASH_NS + 0x20),
+        nscr: Reg32::new(FLASH_NS + 0x28),
+        icache_cr: Reg32::new(ICACHE_BASE),
+        icache_sr: RoReg32::new(ICACHE_BASE + 0x04),
+    }
+};
+
+/// Invalidate the entire ICACHE so subsequent flash reads see fresh
+/// post-erase / post-program bytes rather than stale cached lines.
+/// Must be called inside the same interrupt-free block as the flash
+/// mutation that triggered it — interleaving isn't a correctness bug
+/// (invalidation is idempotent) but keeps the cache-coherency window
+/// tight.
+fn icache_invalidate() {
+    REG.icache_cr.set_bits(ICACHE_CR_CACHEINV);
+    while REG.icache_sr.read() & ICACHE_SR_BUSYF != 0 {
+        cortex_m::asm::nop();
+    }
+    cortex_m::asm::dsb();
+    cortex_m::asm::isb();
+}
+
+// ---------------------------------------------------------------------------
 // Key storage page — last 8 KB of secure flash bank 1 (page 127)
 // ---------------------------------------------------------------------------
 
@@ -1202,44 +1895,43 @@ const ERR_MASK: u32 = 0xFA; // PROGERR | WRPERR | PGAERR | SIZERR | PGSERR
 pub const KEY_PAGE_ADDR: u32 = 0x0C0F_E000;
 const KEY_PAGE_NUM: u32 = 127;
 
-// ---------------------------------------------------------------------------
-// PBS storage page — second-to-last 8 KB (page 126)
-// ---------------------------------------------------------------------------
-
-/// Base address of the OPTIGA Trust M PBS page (page 126).
-pub const PBS_PAGE_ADDR: u32 = 0x0C0F_C000;
-const PBS_PAGE_NUM: u32 = 126;
+// NOTE: flash page 126 (the former OPTIGA PBS seal page at
+// 0x0C0F_C000) was freed by work-todo #24 — the Platform Binding
+// Secret is now re-derived from the OTP master on every boot via
+// `hw::secret_keys::optiga_pairing_secret`. It is exclusively owned by
+// the wrapped SE050 BHK store when the `bhk` feature is enabled. Firmware
+// update verification intentionally has no persistent failure counter:
+// malformed companion input must never erase, reset, or write wallet state.
 
 // ---------------------------------------------------------------------------
 // Low-level helpers
 // ---------------------------------------------------------------------------
 
-/// Wait until the flash controller is not busy.
-unsafe fn wait_bsy() {
-    while read_volatile(FLASH_SECSR) & BSY != 0 {
+/// Wait until the secure flash controller is not busy.
+fn wait_bsy() {
+    while REG.secsr.read() & BSY != 0 {
         cortex_m::asm::nop();
     }
 }
 
 /// Clear any pending error flags in SECSR (write-1-to-clear).
-unsafe fn clear_errors() {
-    let sr = read_volatile(FLASH_SECSR);
+fn clear_errors() {
+    let sr = REG.secsr.read();
     if sr & ERR_MASK != 0 {
-        write_volatile(FLASH_SECSR, sr & ERR_MASK);
+        REG.secsr.write(sr & ERR_MASK);
     }
 }
 
 /// Unlock the secure flash controller for programming/erase.
-unsafe fn unlock() {
+fn unlock() {
     // If already unlocked, the key writes are ignored.
-    write_volatile(FLASH_SECKEYR, KEY1);
-    write_volatile(FLASH_SECKEYR, KEY2);
+    REG.seckeyr.write(KEY1);
+    REG.seckeyr.write(KEY2);
 }
 
 /// Lock the secure flash controller.
-unsafe fn lock() {
-    let cr = read_volatile(FLASH_SECCR);
-    write_volatile(FLASH_SECCR, cr | LOCK);
+fn lock() {
+    REG.seccr.set_bits(LOCK);
 }
 
 // ---------------------------------------------------------------------------
@@ -1249,29 +1941,37 @@ unsafe fn lock() {
 /// Erase the key storage page (page 127, 8 KB).
 ///
 /// After erase, all bytes in the page read as 0xFF.
+///
+/// # Safety
+/// Erases persistent flash. Caller must ensure no other code is relying
+/// on the current contents of page 127.
 pub unsafe fn erase_key_page() -> Result<(), ()> {
-    wait_bsy();
-    clear_errors();
-    unlock();
-
-    // Set PER + page number, then STRT
-    let cr = PER | (KEY_PAGE_NUM << PNB_SHIFT);
-    write_volatile(FLASH_SECCR, cr);
-    write_volatile(FLASH_SECCR, cr | STRT);
-
-    wait_bsy();
-
-    // Clear PER
-    write_volatile(FLASH_SECCR, 0);
-    let sr = read_volatile(FLASH_SECSR);
-    lock();
-
-    if sr & ERR_MASK != 0 {
+    // HIGH-12 fix: interrupt-free around the erase sequence.
+    cortex_m::interrupt::free(|_| {
+        wait_bsy();
         clear_errors();
-        Err(())
-    } else {
-        Ok(())
-    }
+        unlock();
+
+        let cr = PER | (KEY_PAGE_NUM << PNB_SHIFT);
+        REG.seccr.write(cr);
+        REG.seccr.write(cr | STRT);
+
+        wait_bsy();
+
+        REG.seccr.write(0);
+        let sr = REG.secsr.read();
+        lock();
+        cortex_m::asm::dsb();
+        cortex_m::asm::isb();
+        icache_invalidate();
+
+        if sr & ERR_MASK != 0 {
+            clear_errors();
+            Err(())
+        } else {
+            Ok(())
+        }
+    })
 }
 
 /// Program one quad-word (16 bytes / 128 bits) at the given flash address.
@@ -1285,40 +1985,59 @@ pub unsafe fn erase_key_page() -> Result<(), ()> {
 /// verify that the bytes actually landed correctly** — a torn write
 /// under brown-out can produce a half-programmed quad-word with no
 /// error flag set. For persistent data, use `write_quadword_verified`.
+///
+/// HIGH-12 fix: the whole unlock → program → lock sequence runs
+/// inside `cortex_m::interrupt::free` so an IRQ (especially SysTick
+/// or the OLED I2C callback) landing mid-sequence can't leave SECCR
+/// in an inconsistent state. On STM32U5 an interrupted program
+/// sequence can latch PGSERR; the `free` block keeps the sequence
+/// atomic.
+///
+/// # Safety
+/// Commits bytes to flash. Caller must guarantee `addr` is quad-word
+/// aligned, inside a writable secure-bank page, and currently erased.
 unsafe fn write_quadword(addr: u32, data: &[u8; 16]) -> Result<(), ()> {
-    wait_bsy();
-    clear_errors();
-    unlock();
-
-    // Set PG bit
-    write_volatile(FLASH_SECCR, PG);
-
-    // Write 4 × 32-bit words to the target address.
-    // The flash controller latches all four and programs them atomically.
-    let dst = addr as *mut u32;
-    for i in 0..4 {
-        let word = u32::from_le_bytes([
-            data[i * 4],
-            data[i * 4 + 1],
-            data[i * 4 + 2],
-            data[i * 4 + 3],
-        ]);
-        write_volatile(dst.add(i), word);
-    }
-
-    wait_bsy();
-
-    // Clear PG
-    write_volatile(FLASH_SECCR, 0);
-    let sr = read_volatile(FLASH_SECSR);
-    lock();
-
-    if sr & ERR_MASK != 0 {
+    cortex_m::interrupt::free(|_| {
+        wait_bsy();
         clear_errors();
-        Err(())
-    } else {
-        Ok(())
-    }
+        unlock();
+
+        // Set PG bit
+        REG.seccr.write(PG);
+
+        // Write 4 × 32-bit words to the target address.
+        let dst = addr as *mut u32;
+        for i in 0..4 {
+            let word = u32::from_le_bytes([
+                data[i * 4],
+                data[i * 4 + 1],
+                data[i * 4 + 2],
+                data[i * 4 + 3],
+            ]);
+            // SAFETY: caller asserts `addr..addr+16` is a valid, erased,
+            // quad-word-aligned flash region. Volatile prevents the
+            // compiler from reordering or coalescing the four word writes
+            // that the flash controller expects in sequence.
+            unsafe { write_volatile(dst.add(i), word) };
+        }
+
+        wait_bsy();
+
+        // Clear PG
+        REG.seccr.write(0);
+        let sr = REG.secsr.read();
+        lock();
+        cortex_m::asm::dsb();
+        cortex_m::asm::isb();
+        icache_invalidate();
+
+        if sr & ERR_MASK != 0 {
+            clear_errors();
+            Err(())
+        } else {
+            Ok(())
+        }
+    })
 }
 
 /// Program one quad-word **and read it back to confirm the bytes landed**.
@@ -1332,12 +2051,18 @@ unsafe fn write_quadword(addr: u32, data: &[u8; 16]) -> Result<(), ()> {
 /// Use this for anything that matters (admin PIN, PBS, pairing key,
 /// wipe flag). Internal helpers that don't care about durability can
 /// keep using `write_quadword`.
+///
+/// # Safety
+/// Same contract as [`write_quadword`].
 pub unsafe fn write_quadword_verified(addr: u32, data: &[u8; 16]) -> Result<(), ()> {
-    write_quadword(addr, data)?;
+    // SAFETY: forwarded contract from caller.
+    unsafe { write_quadword(addr, data)? };
 
     let src = addr as *const u8;
     for i in 0..16 {
-        if read_volatile(src.add(i)) != data[i] {
+        // SAFETY: caller's contract guarantees `addr..addr+16` is a
+        // valid 16-byte flash region; we only read.
+        if unsafe { read_volatile(src.add(i)) } != data[i] {
             return Err(());
         }
     }
@@ -1345,18 +2070,22 @@ pub unsafe fn write_quadword_verified(addr: u32, data: &[u8; 16]) -> Result<(), 
 }
 
 /// Read 32 bytes from the start of the key storage page.
-pub unsafe fn read_key(buf: &mut [u8; 32]) {
+pub fn read_key(buf: &mut [u8; 32]) {
     let src = KEY_PAGE_ADDR as *const u8;
     for i in 0..32 {
-        buf[i] = read_volatile(src.add(i));
+        // SAFETY: `KEY_PAGE_ADDR` is a fixed in-flash region of at least
+        // 8 KB; `src.add(0..32)` stays inside that page. Reads from
+        // memory-mapped flash are side-effect-free.
+        buf[i] = unsafe { read_volatile(src.add(i)) };
     }
 }
 
 /// Check whether the key storage page is blank (first 32 bytes = 0xFF).
-pub unsafe fn is_key_blank() -> bool {
+pub fn is_key_blank() -> bool {
     let src = KEY_PAGE_ADDR as *const u8;
     for i in 0..32 {
-        if read_volatile(src.add(i)) != 0xFF {
+        // SAFETY: same as `read_key`.
+        if unsafe { read_volatile(src.add(i)) } != 0xFF {
             return false;
         }
     }
@@ -1366,82 +2095,25 @@ pub unsafe fn is_key_blank() -> bool {
 /// Write a 32-byte key to the key storage page.
 ///
 /// Erases the page first, then programs two quad-words (2 × 16 bytes).
+///
+/// # Safety
+/// Overwrites persistent flash at `KEY_PAGE_ADDR`. Caller is responsible
+/// for any prior contents.
 pub unsafe fn write_key(key: &[u8; 32]) -> Result<(), ()> {
-    erase_key_page()?;
+    // SAFETY: caller's contract.
+    unsafe { erase_key_page()? };
 
     // First quad-word: bytes 0-15
     let mut qw0 = [0u8; 16];
     qw0.copy_from_slice(&key[..16]);
-    write_quadword_verified(KEY_PAGE_ADDR, &qw0)?;
+    // SAFETY: page was just erased to 0xFF; address is aligned and in-page.
+    unsafe { write_quadword_verified(KEY_PAGE_ADDR, &qw0)? };
 
     // Second quad-word: bytes 16-31
     let mut qw1 = [0u8; 16];
     qw1.copy_from_slice(&key[16..]);
-    write_quadword_verified(KEY_PAGE_ADDR + 16, &qw1)?;
-
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// OPTIGA Trust M PBS storage (page 126)
-// ---------------------------------------------------------------------------
-
-/// Erase the PBS storage page (page 126, 8 KB).
-pub unsafe fn erase_pbs_page() -> Result<(), ()> {
-    wait_bsy();
-    clear_errors();
-    unlock();
-
-    let cr = PER | (PBS_PAGE_NUM << PNB_SHIFT);
-    write_volatile(FLASH_SECCR, cr);
-    write_volatile(FLASH_SECCR, cr | STRT);
-
-    wait_bsy();
-
-    write_volatile(FLASH_SECCR, 0);
-    let sr = read_volatile(FLASH_SECSR);
-    lock();
-
-    if sr & ERR_MASK != 0 {
-        clear_errors();
-        Err(())
-    } else {
-        Ok(())
-    }
-}
-
-/// Read 32 bytes from the start of the PBS storage page.
-pub unsafe fn read_pbs(buf: &mut [u8; 32]) {
-    let src = PBS_PAGE_ADDR as *const u8;
-    for i in 0..32 {
-        buf[i] = read_volatile(src.add(i));
-    }
-}
-
-/// Check whether the PBS storage page is blank (first 32 bytes = 0xFF).
-pub unsafe fn is_pbs_blank() -> bool {
-    let src = PBS_PAGE_ADDR as *const u8;
-    for i in 0..32 {
-        if read_volatile(src.add(i)) != 0xFF {
-            return false;
-        }
-    }
-    true
-}
-
-/// Write a 32-byte PBS to the PBS storage page.
-///
-/// Erases the page first, then programs two quad-words (2 × 16 bytes).
-pub unsafe fn write_pbs(pbs: &[u8; 32]) -> Result<(), ()> {
-    erase_pbs_page()?;
-
-    let mut qw0 = [0u8; 16];
-    qw0.copy_from_slice(&pbs[..16]);
-    write_quadword_verified(PBS_PAGE_ADDR, &qw0)?;
-
-    let mut qw1 = [0u8; 16];
-    qw1.copy_from_slice(&pbs[16..]);
-    write_quadword_verified(PBS_PAGE_ADDR + 16, &qw1)?;
+    // SAFETY: see above.
+    unsafe { write_quadword_verified(KEY_PAGE_ADDR + 16, &qw1)? };
 
     Ok(())
 }
@@ -1476,66 +2148,53 @@ pub unsafe fn write_pbs(pbs: &[u8; 32]) -> Result<(), ()> {
 pub const ADMIN_PAGE_ADDR: u32 = 0x0C0F_A000;
 const ADMIN_PAGE_NUM: u32 = 125;
 
-const ADMIN_PIN_OFFSET: u32 = 0;
+// Page-125 layout: QW0 (offset 0) is unused on v6 chips (the former
+// admin-PIN slot; dead since the OTP-derived scheme); QW1 (offset 16)
+// holds the wipe-in-progress flag.
 const WIPE_FLAG_OFFSET: u32 = 16;
 const WIPE_FLAG_ARMED: u8 = 0x00;
 
 /// Erase page 125. Clears both the admin PIN and the wipe flag.
-pub unsafe fn erase_admin_page() -> Result<(), ()> {
-    wait_bsy();
-    clear_errors();
-    unlock();
-
-    let cr = PER | (ADMIN_PAGE_NUM << PNB_SHIFT);
-    write_volatile(FLASH_SECCR, cr);
-    write_volatile(FLASH_SECCR, cr | STRT);
-
-    wait_bsy();
-
-    write_volatile(FLASH_SECCR, 0);
-    let sr = read_volatile(FLASH_SECSR);
-    lock();
-
-    if sr & ERR_MASK != 0 {
-        clear_errors();
-        Err(())
-    } else {
-        Ok(())
-    }
-}
-
-/// Read the admin PIN from page 125 into `buf`. Caller checks
-/// `is_admin_pin_blank()` first to determine if the PIN is populated.
-pub unsafe fn read_admin_pin(buf: &mut [u8; 16]) {
-    let src = (ADMIN_PAGE_ADDR + ADMIN_PIN_OFFSET) as *const u8;
-    for i in 0..16 {
-        buf[i] = read_volatile(src.add(i));
-    }
-}
-
-/// Check whether the admin PIN slot is blank (first 16 bytes all 0xFF).
-pub unsafe fn is_admin_pin_blank() -> bool {
-    let src = (ADMIN_PAGE_ADDR + ADMIN_PIN_OFFSET) as *const u8;
-    for i in 0..16 {
-        if read_volatile(src.add(i)) != 0xFF {
-            return false;
-        }
-    }
-    true
-}
-
-/// Persist a 16-byte admin PIN into page 125.
 ///
-/// Erases the whole page first (so any stale wipe flag is cleared too),
-/// then programs QW 0 with the PIN. After this call `is_admin_pin_blank()`
-/// is false and `is_wipe_armed()` is false.
-pub unsafe fn write_admin_pin(pin: &[u8; 16]) -> Result<(), ()> {
-    erase_admin_page()?;
+/// # Safety
+/// Erases persistent flash at `ADMIN_PAGE_ADDR`.
+pub unsafe fn erase_admin_page() -> Result<(), ()> {
+    cortex_m::interrupt::free(|_| {
+        wait_bsy();
+        clear_errors();
+        unlock();
 
-    let mut qw = [0u8; 16];
-    qw.copy_from_slice(pin);
-    write_quadword_verified(ADMIN_PAGE_ADDR + ADMIN_PIN_OFFSET, &qw)
+        let cr = PER | (ADMIN_PAGE_NUM << PNB_SHIFT);
+        REG.seccr.write(cr);
+        REG.seccr.write(cr | STRT);
+
+        wait_bsy();
+
+        REG.seccr.write(0);
+        let sr = REG.secsr.read();
+        lock();
+        cortex_m::asm::dsb();
+        cortex_m::asm::isb();
+        icache_invalidate();
+
+        if sr & ERR_MASK != 0 {
+            clear_errors();
+            Err(())
+        } else {
+            Ok(())
+        }
+    })
 }
+
+// NOTE: `write_admin_pin` / `read_admin_pin` / `is_admin_pin_blank`
+// and `ADMIN_PIN_OFFSET` were all removed (2026-05-11). The SE050
+// admin PIN is never persisted to flash — it's re-derived on demand
+// from the OTP master via `hw::secret_keys::se050_admin_pin()` (the
+// v6 OTP-derived admin scheme; see `Se050::store_objects` /
+// `Se050::factory_reset_admin`). The e2e pre-clean cascades that used
+// to read a pre-v6 flash PIN now call `Se050::factory_reset_admin()`
+// (the v6 path) directly. Page 125 still holds the wipe-in-progress
+// flag at `WIPE_FLAG_OFFSET`, which is unrelated.
 
 /// Arm the wipe-in-progress marker. Call immediately before initiating
 /// a factory reset so boot-time resume can pick up an interrupted wipe.
@@ -1544,16 +2203,1601 @@ pub unsafe fn write_admin_pin(pin: &[u8; 16]) -> Result<(), ()> {
 /// NOR flash supports without pre-erase. The admin PIN at QW 0 is
 /// preserved so the wipe routine can still authenticate against
 /// ADMIN_WIPE_OBJ during resume.
+///
+/// # Safety
+/// Programs a flash quad-word at `ADMIN_PAGE_ADDR + WIPE_FLAG_OFFSET`.
 pub unsafe fn arm_wipe_flag() -> Result<(), ()> {
     let mut qw = [0xFFu8; 16];
     qw[0] = WIPE_FLAG_ARMED;
-    write_quadword_verified(ADMIN_PAGE_ADDR + WIPE_FLAG_OFFSET, &qw)
+    // SAFETY: forwarded contract; target QW is the dedicated wipe-flag slot.
+    unsafe { write_quadword_verified(ADMIN_PAGE_ADDR + WIPE_FLAG_OFFSET, &qw) }
 }
 
 /// Read the wipe-in-progress flag. Returns true iff armed.
-pub unsafe fn is_wipe_armed() -> bool {
+pub fn is_wipe_armed() -> bool {
     let src = (ADMIN_PAGE_ADDR + WIPE_FLAG_OFFSET) as *const u8;
-    read_volatile(src) == WIPE_FLAG_ARMED
+    // SAFETY: fixed in-flash address inside page 125; memory-mapped read.
+    unsafe { read_volatile(src) == WIPE_FLAG_ARMED }
+}
+
+// §32 P5 — duress action mode (page 125, QW2 @ offset 32).
+//   blank (0xFF) = DECOY  (default — `is_duress_wipe_mode()` is false)
+//   programmed (0x00) = WIPE on a duress-PIN unlock
+// Blank-as-decoy is the safe default: a power loss after `erase_admin_page`
+// but before the wizard sets the mode falls back to decoy (loses no funds),
+// matching the wipe-flag convention. Same QW lifecycle — `erase_admin_page`
+// (wipe finish) clears it back to decoy, and the next wizard re-collects.
+const DURESS_WIPE_MODE_OFFSET: u32 = 32;
+const DURESS_WIPE_MODE_SET: u8 = 0x00;
+
+/// Mark the device as WIPE-on-duress. 1→0 bit-clear on a blank QW (no page
+/// erase). MUST be called BEFORE provisioning the wallet: a crash between
+/// provisioning and this write would leave a duress PIN configured but
+/// mode = decoy (default), which silently downgrades the user's chosen
+/// protection — flush the mode first, then provision.
+///
+/// # Safety
+/// Programs a flash quad-word at `ADMIN_PAGE_ADDR + DURESS_WIPE_MODE_OFFSET`.
+#[cfg(feature = "duress-pin")]
+pub unsafe fn arm_duress_wipe_mode() -> Result<(), ()> {
+    let mut qw = [0xFFu8; 16];
+    qw[0] = DURESS_WIPE_MODE_SET;
+    // SAFETY: forwarded contract; dedicated duress-mode QW slot in page 125.
+    unsafe { write_quadword_verified(ADMIN_PAGE_ADDR + DURESS_WIPE_MODE_OFFSET, &qw) }
+}
+
+/// Returns true iff the device is configured to WIPE on a duress-PIN
+/// unlock (vs the default: open the decoy wallet). Read by
+/// `nsc::gated_unlock` in the duress-match branch.
+#[cfg(feature = "duress-pin")]
+pub fn is_duress_wipe_mode() -> bool {
+    let src = (ADMIN_PAGE_ADDR + DURESS_WIPE_MODE_OFFSET) as *const u8;
+    // SAFETY: fixed in-flash address inside page 125; memory-mapped read.
+    unsafe { read_volatile(src) == DURESS_WIPE_MODE_SET }
+}
+
+// ---------------------------------------------------------------------------
+// MCU-side PIN attempt counter — page 124
+// ---------------------------------------------------------------------------
+//
+// Authoritative PIN-attempt counter. Trezor-parity design (see
+// `storage/storage.c:1171-1311` in trezor-firmware): the MCU-side
+// counter is the source of truth, incremented BEFORE every SE verify
+// (pre-commit), reset only after a successful PIN match. SE-side
+// counters (OPTIGA F1E1, SE050 silicon retry on UserID) are
+// secondary redundant defenses — if they disagree with the MCU
+// counter at boot, the MCU counter wins.
+//
+// Why MCU-authoritative: OPTIGA's F1E1 counter is soft (writable via
+// `Conf(E140)`), so an attacker with PBS extraction can reset it.
+// Without an MCU counter, that collapses to "SE050 is the only real
+// lockout," burning only SE050's silicon budget. With MCU counter,
+// OPTIGA reset attacks cost nothing — the gate is still MCU flash.
+//
+// Layout of page 124 (0x0C0F_8000, 8 KB):
+//   QW 0..(MAX_ATTEMPTS-1): one programmed QW per attempt (any non-
+//                           blank pattern marks consumed).
+//   Remaining QWs: unused, 0xFF after erase (reserved headroom).
+//
+// Programmed sentinel: `[0x00; 16]`. Blank sentinel: `[0xFF; 16]`.
+//
+// Encoding rationale:
+//   - STM32U5 flash does NOT allow re-programming an already-
+//     programmed word (ECC locks the value). A counter implemented
+//     as "rewrite a single byte with the new count" would need a
+//     page erase every bump — catastrophic flash wear.
+//   - One-QW-per-attempt needs only a fresh blank QW per bump, no
+//     rewrite. Page erase only on successful unlock.
+//
+// Lifecycle:
+//   - First boot / successful unlock: page blank (all 0xFF).
+//     `pin_attempts_read()` returns 0.
+//   - Wrong PIN attempt N: `pin_attempts_bump()` programs QW N-1
+//     with `[0x00; 16]`. Post-bump read returns N.
+//   - Reach `MAX_ATTEMPTS`: wallet locks out. `trigger_lockout_wipe`
+//     wipes SEs + erases page 124 via `pin_attempts_reset()`.
+//
+// Page choice: 124 over 126. Page 126 (the former OPTIGA PBS seal
+// page, freed by work-todo #24) turned out to be in a "freed-but-
+// write-hostile" state on the current bench chip — erase returns
+// OK (no SR error) but subsequent programs of QW0 fail with
+// PROGERR|PGSERR. Page 124 is truly never-touched and accepts
+// writes without drama. If future chips exhibit the same issue
+// at page 124, we have page 123 still in reserve.
+
+const PIN_ATTEMPTS_PAGE_ADDR: u32 = 0x0C0F_8000;
+const PIN_ATTEMPTS_PAGE_NUM: u32 = 124;
+
+/// Maximum counter capacity supported by the current layout. Bigger
+/// than `sphincs_tz_shared::MAX_ATTEMPTS` so future relaxation of the
+/// PIN policy doesn't need a flash layout change.
+const PIN_ATTEMPTS_CAPACITY: u32 = 32;
+const PIN_ATTEMPTS_QW_SIZE: u32 = 16;
+
+/// Read the current PIN-attempt count (0..=`PIN_ATTEMPTS_CAPACITY`).
+/// Reads the per-QW sentinel bytes and counts how many have been
+/// programmed (any non-0xFF byte in QW N). A partially-programmed
+/// QW (brown-out mid-write) counts as programmed — conservative:
+/// the user gets at most one fewer attempt than the silicon actually
+/// recorded, never one more.
+///
+/// **F-15.r5 hardening (forward + reverse double scan).** Mirrors
+/// the F-12 fix to `offchain_count_read`: walk the page forward
+/// (early-exit on the first blank QW) and again from the end
+/// backward (early-exit on the first programmed QW), and require
+/// both passes to agree. A single fault that lands on one
+/// direction's early-exit cannot symmetrically affect the other —
+/// the two scans have asymmetric control flow by construction. On
+/// mismatch we fail-closed by returning `PIN_ATTEMPTS_CAPACITY`,
+/// which is strictly greater than `MAX_ATTEMPTS = 10`, so every
+/// downstream gate (`gated_unlock`'s `pre_count < MAX_ATTEMPTS`,
+/// `verify_pin_with_chip`'s `remaining_after != 0`, and
+/// `pin_attempts_bump`'s `pre >= PIN_ATTEMPTS_CAPACITY`) treats this
+/// as "lockout reached."
+pub unsafe fn pin_attempts_read() -> u8 {
+    let fwd = unsafe { pin_attempts_scan_forward() };
+    crate::fi::wait_random();
+    let rev = unsafe { pin_attempts_scan_reverse() };
+    if fwd != rev {
+        // Fail-closed sentinel. `PIN_ATTEMPTS_CAPACITY` = 32 >
+        // `MAX_ATTEMPTS` = 10, so every gate treats this as locked.
+        return PIN_ATTEMPTS_CAPACITY as u8;
+    }
+    fwd
+}
+
+#[inline(never)]
+unsafe fn pin_attempts_scan_forward() -> u8 {
+    let base = PIN_ATTEMPTS_PAGE_ADDR as *const u8;
+    let mut count: u8 = 0;
+    for qw_idx in 0..PIN_ATTEMPTS_CAPACITY {
+        // SAFETY: `qw_idx * 16 < 512` stays inside the 8 KB page.
+        let qw_base = unsafe { base.add((qw_idx * PIN_ATTEMPTS_QW_SIZE) as usize) };
+        // Any non-0xFF byte inside this QW marks it "programmed".
+        let mut programmed = false;
+        for byte_idx in 0..PIN_ATTEMPTS_QW_SIZE {
+            // SAFETY: `byte_idx < 16` keeps the offset inside the QW.
+            if unsafe { read_volatile(qw_base.add(byte_idx as usize)) } != 0xFF {
+                programmed = true;
+                break;
+            }
+        }
+        if programmed {
+            count = count.saturating_add(1);
+        } else {
+            // Once we hit a blank QW, all subsequent QWs are also
+            // blank (we program them in order). Early-exit.
+            break;
+        }
+    }
+    count
+}
+
+#[inline(never)]
+unsafe fn pin_attempts_scan_reverse() -> u8 {
+    // Asymmetric control flow vs `pin_attempts_scan_forward`: walk
+    // from CAPACITY-1 backward, early-return on the first programmed
+    // QW. Under the invariant "QWs are programmed in order from 0,
+    // contiguously," the first-programmed-from-end QW is at index
+    // `count - 1`, so we return `i + 1`. A fault that early-exits
+    // the forward scan (e.g. flipping the `programmed` flag false
+    // mid-scan) cannot identically affect the reverse pass, which
+    // starts from the opposite boundary and walks in the opposite
+    // direction with a different loop shape.
+    let base = PIN_ATTEMPTS_PAGE_ADDR as *const u8;
+    let mut i = PIN_ATTEMPTS_CAPACITY;
+    while i > 0 {
+        i -= 1;
+        let qw_base = base.add((i as usize) * (PIN_ATTEMPTS_QW_SIZE as usize));
+        let mut programmed = false;
+        for byte_idx in 0..PIN_ATTEMPTS_QW_SIZE {
+            if read_volatile(qw_base.add(byte_idx as usize)) != 0xFF {
+                programmed = true;
+                break;
+            }
+        }
+        if programmed {
+            // u8 holds 0..=PIN_ATTEMPTS_CAPACITY (32) — well below
+            // the u8 ceiling, so saturating_add is defensive only.
+            return (i as u8).saturating_add(1);
+        }
+    }
+    0
+}
+
+/// Bump the attempt counter by one. Programs the next blank QW
+/// (at index == pre-bump count) with `[0x00; 16]` and verifies
+/// the post-bump count is exactly one higher. Returns the new count.
+///
+/// Fault-injection note: a glitch that skips the program entirely
+/// would leave the count unchanged. The post-bump read-back rejects
+/// that with `Err(())` — caller must halt / refuse the attempt on
+/// failure. A glitch that writes a DIFFERENT QW would leave gaps
+/// (blank QWs between programmed ones); `pin_attempts_read` counts
+/// strictly in-order and stops at the first blank, so such a write
+/// is detected as "count unchanged" and similarly rejected.
+///
+/// # Safety
+/// Same contract as [`pin_attempts_read`].
+///
+/// `#[inline(never)]` (MEDIUM-2, audit pin-unlock 20260625): the caller
+/// (`nsc::gated_unlock`) FAIL-INs on a missing bump, which only works if the
+/// bump is a real `bl` at the call site — an inlined body would let a glitch
+/// skip the program without leaving a skippable branch for the sentinel to
+/// catch.
+#[inline(never)]
+pub unsafe fn pin_attempts_bump() -> Result<u8, ()> {
+    let pre = pin_attempts_read();
+    if (pre as u32) >= PIN_ATTEMPTS_CAPACITY {
+        return Err(());
+    }
+
+    let target_addr =
+        PIN_ATTEMPTS_PAGE_ADDR + (pre as u32) * PIN_ATTEMPTS_QW_SIZE;
+    let sentinel = [0u8; 16];
+    // SAFETY: target QW is inside page 124 and was confirmed blank above.
+    unsafe { write_quadword_verified(target_addr, &sentinel)? };
+
+    // FI hardening: volatile-delay between write and readback so a
+    // clock-aligned glitch that skipped the write cannot also suppress
+    // the readback of the old value on the same cycle.
+    crate::fi::wait_random();
+
+    let post = pin_attempts_read();
+    if post != pre + 1 {
+        return Err(());
+    }
+    // Re-read under a sentinel-gated check — a glitch that skips the
+    // `if post != pre + 1` bypass has to also defeat `fi::check_true`.
+    if crate::fi::check_true_into_sentinel(|| pin_attempts_read() == pre + 1)
+        != crate::fi::OK_SENTINEL
+    {
+        return Err(());
+    }
+    Ok(post)
+}
+
+/// Erase page 124 — clears every attempt marker back to blank.
+/// Called only after a successful PIN verify completes end-to-end
+/// on both SEs. After this, `pin_attempts_read()` returns 0.
+///
+/// # Safety
+/// Erases the PIN-attempt counter page. Must only be called after a
+/// successful PIN verify on both SEs; an out-of-order call would
+/// silently reset the lockout state.
+pub unsafe fn pin_attempts_reset() -> Result<(), ()> {
+    cortex_m::interrupt::free(|_| {
+        wait_bsy();
+        clear_errors();
+        unlock();
+
+        let cr = PER | (PIN_ATTEMPTS_PAGE_NUM << PNB_SHIFT);
+        REG.seccr.write(cr);
+        REG.seccr.write(cr | STRT);
+
+        wait_bsy();
+
+        REG.seccr.write(0);
+        let sr = REG.secsr.read();
+        lock();
+        cortex_m::asm::dsb();
+        cortex_m::asm::isb();
+        icache_invalidate();
+
+        if sr & ERR_MASK != 0 {
+            clear_errors();
+            Err(())
+        } else {
+            Ok(())
+        }
+    })
+}
+
+// ===========================================================================
+// Firmware-update plumbing: bank-2 (non-secure) flash + slot geometry
+// ===========================================================================
+//
+// The firmware-update subsystem writes new firmware images into the
+// inactive A/B slot. The secure world owns the entire update flow — NS
+// code never programs flash directly — so we provide bank-2 primitives
+// on the secure side, accessed through the FLASH_NS{KEYR,SR,CR} register
+// aliases. These registers are on the secure peripheral bus and are
+// reachable from secure-world code; the "NS" prefix refers to which
+// side's watermarks the controller honours (NSCR programs pages that
+// SECCR refuses because of the SECWMn watermark).
+//
+// Slot layout (see docs/firmware/firmware-update.md for the full picture):
+//
+//   Bank 1 (secure):
+//     FSBL             pages   0..3    0x0C00_0000  (32 KB, WRP-locked)
+//     Manifest A       page    4       0x0C00_8000  (8 KB)
+//     Manifest B       page    5       0x0C00_A000  (8 KB)
+//     Boot state       page    6       0x0C00_C000  (8 KB, redundant)
+//     Slot A secure    pages   7..64   0x0C00_E000  (464 KB)
+//     Slot B secure    pages  65..122  0x0C08_2000  (464 KB)
+//     (reserved)       pages 123..127  legacy + PBS + SE050 admin
+//
+//   Bank 2 (non-secure):
+//     Slot A NS        pages   0..63   0x0810_0000  (512 KB)
+//     Slot B NS        pages  64..127  0x0818_0000  (512 KB)
+
+/// A/B slot identifier. The current V1 selector is legacy bench code; the
+/// production target is Draft 0.9's frozen typed selector interface.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Slot {
+    A,
+    B,
+}
+
+// --- Manifest page addresses --------------------------------------------------
+
+pub const MANIFEST_A_ADDR: u32 = 0x0C00_8000;
+pub const MANIFEST_A_PAGE: u32 = 4;
+pub const MANIFEST_B_ADDR: u32 = 0x0C00_A000;
+pub const MANIFEST_B_PAGE: u32 = 5;
+
+pub fn manifest_addr(slot: Slot) -> u32 {
+    match slot {
+        Slot::A => MANIFEST_A_ADDR,
+        Slot::B => MANIFEST_B_ADDR,
+    }
+}
+
+pub fn manifest_page_num(slot: Slot) -> u32 {
+    match slot {
+        Slot::A => MANIFEST_A_PAGE,
+        Slot::B => MANIFEST_B_PAGE,
+    }
+}
+
+// --- Boot state page ----------------------------------------------------------
+
+pub const BOOT_STATE_ADDR: u32 = 0x0C00_C000;
+pub const BOOT_STATE_PAGE: u32 = 6;
+
+// --- Slot image addresses -----------------------------------------------------
+
+pub const SLOT_A_SECURE_ADDR: u32 = 0x0C00_E000;
+pub const SLOT_A_SECURE_FIRST_PAGE: u32 = 7;
+pub const SLOT_A_SECURE_LAST_PAGE: u32 = 64;
+
+pub const SLOT_B_SECURE_ADDR: u32 = 0x0C08_2000;
+pub const SLOT_B_SECURE_FIRST_PAGE: u32 = 65;
+pub const SLOT_B_SECURE_LAST_PAGE: u32 = 122;
+
+/// Slot capacities are a shared host/device release-policy constant.
+pub use fw_manifest::{SLOT_NS_CAPACITY, SLOT_SECURE_CAPACITY};
+
+pub const SLOT_A_NS_ADDR: u32 = 0x0810_0000;
+pub const SLOT_A_NS_FIRST_PAGE: u32 = 0;
+pub const SLOT_A_NS_LAST_PAGE: u32 = 63;
+
+pub const SLOT_B_NS_ADDR: u32 = 0x0818_0000;
+pub const SLOT_B_NS_FIRST_PAGE: u32 = 64;
+pub const SLOT_B_NS_LAST_PAGE: u32 = 127;
+
+pub fn slot_secure_addr(slot: Slot) -> u32 {
+    match slot {
+        Slot::A => SLOT_A_SECURE_ADDR,
+        Slot::B => SLOT_B_SECURE_ADDR,
+    }
+}
+
+pub fn slot_ns_addr(slot: Slot) -> u32 {
+    match slot {
+        Slot::A => SLOT_A_NS_ADDR,
+        Slot::B => SLOT_B_NS_ADDR,
+    }
+}
+
+pub fn slot_secure_pages(slot: Slot) -> (u32, u32) {
+    match slot {
+        Slot::A => (SLOT_A_SECURE_FIRST_PAGE, SLOT_A_SECURE_LAST_PAGE),
+        Slot::B => (SLOT_B_SECURE_FIRST_PAGE, SLOT_B_SECURE_LAST_PAGE),
+    }
+}
+
+pub fn slot_ns_pages(slot: Slot) -> (u32, u32) {
+    match slot {
+        Slot::A => (SLOT_A_NS_FIRST_PAGE, SLOT_A_NS_LAST_PAGE),
+        Slot::B => (SLOT_B_NS_FIRST_PAGE, SLOT_B_NS_LAST_PAGE),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Bank-2 (NS flash) program + erase primitives
+// ---------------------------------------------------------------------------
+
+/// Unlock the NS flash controller. Symmetric to [`unlock`] but uses the
+/// NSKEYR register, enabling programming of pages covered by the NS
+/// watermark (bank 2 in our layout). A failed unlock latches OPTLOCK;
+/// recovery requires a system reset.
+fn unlock_ns() {
+    REG.nskeyr.write(KEY1);
+    REG.nskeyr.write(KEY2);
+}
+
+/// Lock the NS flash controller after a program/erase sequence.
+fn lock_ns() {
+    REG.nscr.set_bits(LOCK);
+}
+
+fn wait_bsy_ns() {
+    while REG.nssr.read() & BSY != 0 {
+        cortex_m::asm::nop();
+    }
+}
+
+fn clear_errors_ns() {
+    let sr = REG.nssr.read();
+    if sr & ERR_MASK != 0 {
+        REG.nssr.write(sr & ERR_MASK);
+    }
+}
+
+/// Erase one page of bank 2. `page` is the in-bank index (0..=127);
+/// physical address is `0x0810_0000 + page * 8192`.
+///
+/// Returns `Err(())` on any error flag in NSSR (including WRPERR if
+/// the pages are write-protected, which would catch an accidental
+/// attempt to erase a slot that the FSBL has marked locked — though
+/// WRP in our design only covers the FSBL pages themselves, not the
+/// slots).
+///
+/// # Safety
+/// Erases a non-secure-bank page. Caller must ensure the page is part
+/// of the inactive A/B slot.
+pub unsafe fn erase_ns_page(page: u8) -> Result<(), ()> {
+    assert!(page <= 127, "ns-bank page out of range");
+    let page = page as u32;
+
+    // NSCR is reached via the NS alias of the FLASH register block
+    // (see `FLASH_NS` at top of file). The single-shot CR write matches
+    // ST HAL's `FLASH_PageErase` MODIFY_REG pattern.
+    cortex_m::interrupt::free(|_| {
+        wait_bsy_ns();
+        clear_errors_ns();
+        unlock_ns();
+
+        let cr = PER | BKER | (page << PNB_SHIFT) | STRT;
+        REG.nscr.write(cr);
+
+        wait_bsy_ns();
+
+        REG.nscr.write(0);
+        let sr = REG.nssr.read();
+        lock_ns();
+        cortex_m::asm::dsb();
+        cortex_m::asm::isb();
+        // Invalidate ICACHE after the bank-2 erase/program, matching the
+        // bank-1 helpers (see the file header comment: "after every
+        // successful erase or program, call icache_invalidate()"). Without
+        // this, a same-power-cycle re-flash whose target lines were cached
+        // by a prior read (e.g. COMMIT's verify_images hashing the slot)
+        // makes the verified read-back observe STALE bytes and fail the
+        // compare — a spurious FlashError that dogs the FW-update retry
+        // until a power cycle, even though the flash is correct.
+        icache_invalidate();
+
+        if sr & ERR_MASK != 0 {
+            clear_errors_ns();
+            Err(())
+        } else {
+            Ok(())
+        }
+    })
+}
+
+/// Program one quad-word to bank 2 at `addr`. Unlike
+/// `write_quadword`, this routes through NSCR so the NS watermark is
+/// honoured. `addr` must be inside bank-2 (`0x0810_0000..0x0820_0000`)
+/// and quad-word-aligned, and the 16 bytes at `addr` must already be
+/// erased (all 0xFF).
+///
+/// Same semantics as `write_quadword`: returns `Err(())` only on a
+/// flagged error. **Not** read-back verified — for persistence use
+/// [`write_ns_quadword_verified`] which adds the brown-out guard.
+///
+/// # Safety
+/// Same shape as [`write_quadword`] but targets bank 2.
+unsafe fn write_ns_quadword(addr: u32, data: &[u8; 16]) -> Result<(), ()> {
+    debug_assert!(addr >= 0x0810_0000 && addr < 0x0820_0000);
+    debug_assert_eq!(addr & 0xF, 0);
+
+    cortex_m::interrupt::free(|_| {
+        wait_bsy_ns();
+        clear_errors_ns();
+        unlock_ns();
+
+        // Clear any latent op bits, then arm PG.
+        REG.nscr.write(0);
+        REG.nscr.write(PG);
+
+        let dst = addr as *mut u32;
+        for i in 0..4 {
+            let word = u32::from_le_bytes([
+                data[i * 4],
+                data[i * 4 + 1],
+                data[i * 4 + 2],
+                data[i * 4 + 3],
+            ]);
+            // SAFETY: caller asserts `addr..addr+16` is a valid, erased,
+            // quad-word-aligned bank-2 flash region. Volatile guarantees the
+            // four word writes happen in order, as the flash controller
+            // expects.
+            unsafe { write_volatile(dst.add(i), word) };
+        }
+
+        wait_bsy_ns();
+
+        REG.nscr.write(0);
+        let sr = REG.nssr.read();
+        lock_ns();
+        cortex_m::asm::dsb();
+        cortex_m::asm::isb();
+        // Invalidate ICACHE after the bank-2 erase/program, matching the
+        // bank-1 helpers (see the file header comment: "after every
+        // successful erase or program, call icache_invalidate()"). Without
+        // this, a same-power-cycle re-flash whose target lines were cached
+        // by a prior read (e.g. COMMIT's verify_images hashing the slot)
+        // makes the verified read-back observe STALE bytes and fail the
+        // compare — a spurious FlashError that dogs the FW-update retry
+        // until a power cycle, even though the flash is correct.
+        icache_invalidate();
+
+        if sr & ERR_MASK != 0 {
+            clear_errors_ns();
+            Err(())
+        } else {
+            Ok(())
+        }
+    })
+}
+
+/// Program one bank-2 quad-word and verify the bytes landed. Defends
+/// against silent torn writes (brown-out mid-program leaving some bits
+/// committed) — same invariant as [`write_quadword_verified`] on bank 1.
+///
+/// # Safety
+/// Same contract as [`write_ns_quadword`].
+pub unsafe fn write_ns_quadword_verified(addr: u32, data: &[u8; 16]) -> Result<(), ()> {
+    // SAFETY: forwarded contract.
+    unsafe { write_ns_quadword(addr, data)? };
+
+    let src = addr as *const u8;
+    for i in 0..16 {
+        // SAFETY: `addr..addr+16` was just written; read-back stays in-region.
+        if unsafe { read_volatile(src.add(i)) } != data[i] {
+            return Err(());
+        }
+    }
+    Ok(())
+}
+
+/// Erase a page that's part of a slot (dispatches to SECCR for secure
+/// bank-1 pages and NSCR for NS bank-2 pages based on the absolute
+/// page index). Used by `CMD_FW_BEGIN` to prepare the inactive slot
+/// before streaming starts.
+///
+/// # Safety
+/// Erases a secure-bank page. Caller must ensure the page is part of
+/// the inactive A/B slot or is otherwise safe to clear.
+pub unsafe fn erase_secure_page(page: u32) -> Result<(), ()> {
+    assert!(page <= 127, "bank-1 page out of range");
+    cortex_m::interrupt::free(|_| {
+        wait_bsy();
+        clear_errors();
+        unlock();
+
+        let cr = PER | (page << PNB_SHIFT);
+        REG.seccr.write(cr);
+        REG.seccr.write(cr | STRT);
+
+        wait_bsy();
+
+        REG.seccr.write(0);
+        let sr = REG.secsr.read();
+        lock();
+        cortex_m::asm::dsb();
+        cortex_m::asm::isb();
+        // Invalidate ICACHE after the bank-1 slot-page erase, matching the
+        // other secure erase/program helpers (file header comment). A
+        // stale cached line here would make a subsequent verified re-flash
+        // read back the pre-erase bytes and spuriously fail (see the
+        // erase_ns_page / write_ns_quadword twins).
+        icache_invalidate();
+
+        if sr & ERR_MASK != 0 {
+            clear_errors();
+            Err(())
+        } else {
+            Ok(())
+        }
+    })
+}
+
+/// Erase the full set of pages owned by `slot` — both secure and
+/// non-secure halves. Used at `CMD_FW_BEGIN` after the host declares
+/// which inactive slot it's about to stream into. Order matters: we
+/// erase the manifest last so a power-fail midway leaves the old
+/// manifest still intact (and the now-partially-erased slot unusable,
+/// which matches the previous state exactly — the old manifest
+/// pointed at the *other* slot).
+///
+/// # Safety
+/// Erases all pages of `slot`. Caller must ensure `slot` is the
+/// inactive A/B slot.
+pub unsafe fn erase_slot(slot: Slot) -> Result<(), ()> {
+    let (first_s, last_s) = slot_secure_pages(slot);
+    let (first_ns, last_ns) = slot_ns_pages(slot);
+
+    for p in first_ns..=last_ns {
+        // SAFETY: forwarded contract.
+        unsafe { erase_ns_page(p as u8)? };
+    }
+    for p in first_s..=last_s {
+        // SAFETY: forwarded contract.
+        unsafe { erase_secure_page(p)? };
+    }
+    // Erase the target manifest last: this is what FSBL keys off to
+    // decide whether the slot is active. While the manifest is erased
+    // (all-0xFF), FSBL will reject it as BadMagic, so it cannot be
+    // booted — and the other slot's manifest is still whole.
+    // SAFETY: forwarded contract.
+    unsafe { erase_secure_page(manifest_page_num(slot))? };
+
+    Ok(())
+}
+
+/// Program a single quad-word anywhere inside a slot. Routes to the
+/// correct controller (SECCR for bank 1, NSCR for bank 2) based on
+/// the address. Returns `Err(())` on any flagged error or torn-write
+/// detection.
+///
+/// # Safety
+/// Commits 16 bytes to flash at `addr`. Caller must ensure the address
+/// is inside the inactive A/B slot and currently erased.
+pub unsafe fn write_slot_quadword_verified(addr: u32, data: &[u8; 16]) -> Result<(), ()> {
+    if (0x0810_0000..0x0820_0000).contains(&addr) {
+        // SAFETY: forwarded contract; bank-2 dispatch.
+        unsafe { write_ns_quadword_verified(addr, data) }
+    } else if (0x0C00_0000..0x0C10_0000).contains(&addr) {
+        // SAFETY: forwarded contract; bank-1 dispatch.
+        unsafe { write_quadword_verified(addr, data) }
+    } else {
+        Err(())
+    }
+}
+
+// ===========================================================================
+// Off-chain (EIP-1271) per-slot counter — page 123
+// ===========================================================================
+//
+// One-page log-structured store for two per-slot u64 counters:
+//   * `offchain_count[slot]`  — bumped on every CMD_SIGN_OFFCHAIN.
+//   * `last_userop_count[slot]` — set when CMD_SIGN_USEROP commits
+//     `local_offchain_count` into the signed inner tx.
+//
+// Each entry is one 16-byte quad-word:
+//
+//     [ 0..  8) slot_key  — sha256(account_index‖chain_id‖slot_index)[..8]
+//     [ 8..  9) type      — 0x01 = offchain count, 0x02 = last_userop count
+//     [ 9.. 16) count     — u64 BE big-endian, top byte is `type`
+//
+// Read = scan the page; for each non-blank QW with matching `slot_key`
+// and `type`, take `max(current, count)`. Write = program the next
+// blank QW. When the page fills, compaction reads the latest
+// (slot_key, type) values into SRAM, erases the page, and replays them.
+//
+// "Slot is registered" is defined as "this firmware has at least one
+// entry for this slot_key in flash". `register_slot` writes a
+// last_userop_count = 0 entry the first time the firmware signs Type 1
+// for the slot — that single QW is enough to flip the
+// `is_registered` predicate to true for all subsequent calls. Without
+// it, `cmd_sign_offchain` refuses, which is the recovery-correctness
+// gate after a seed-restore.
+//
+// Page choice: 123 is the highest free secure page (124..127 are
+// already allocated; 122 is the last secure-firmware page in the A/B
+// slot layout). 8 KB / 16 = 512 QWs per cycle; we expect realistic
+// usage < 50 active slots × 65,536 sigs ≈ 3.3 M total bumps over the
+// device lifetime, ÷ 512 per cycle = ~6500 erase cycles — within the
+// 10,000-cycle minimum endurance the STM32U585 datasheet specifies.
+
+const OFFCHAIN_PAGE_ADDR: u32 = 0x0C0F_6000;
+const OFFCHAIN_PAGE_NUM: u32 = 123;
+const OFFCHAIN_QW_SIZE: u32 = 16;
+const OFFCHAIN_CAPACITY: u32 = 512; // 8 KB / 16
+
+const OFFCHAIN_TYPE_COUNT: u8 = 0x01;
+const OFFCHAIN_TYPE_USEROP: u8 = 0x02;
+// MEDIUM-2 (audit counter-replay 20260611): durable per-slot count of
+// Type-2 (slot-key) UserOp signatures this firmware has *produced* for
+// the slot — including ones the companion never broadcast or that
+// reverted on-chain. On-chain `slotUses[i]` only counts UserOps that
+// *landed*, and EIP-1271 off-chain sigs are never counted on-chain at
+// all, so the device cannot enforce the combined SPHINCS+ budget
+// `slotUses + offchainSigCount <= MAX_SLOT_USES` from on-chain state
+// alone. This local tally lets the firmware bound the *total* slot-key
+// signatures it emits (off-chain + UserOp) to `MAX_SLOT_USES` per device
+// incarnation, closing the ~2x combined-cap evasion a malicious companion
+// could otherwise reach by withholding the publishing UserOps.
+const OFFCHAIN_TYPE_USEROP_SIGS: u8 = 0x03;
+
+/// Pack a journal entry into a 16-byte quad-word.
+fn entry_qw(slot_key: &[u8; 8], entry_type: u8, count: u64) -> [u8; 16] {
+    let mut qw = [0u8; 16];
+    qw[..8].copy_from_slice(slot_key);
+    qw[8] = entry_type;
+    let count_be = count.to_be_bytes();
+    qw[9..16].copy_from_slice(&count_be[1..8]); // 7-byte BE — supports up to 2^56
+    qw
+}
+
+/// Parse a journal entry. Three outcomes:
+///   * `None` — QW is truly blank (every byte is 0xFF). End of journal;
+///     readers can stop scanning here.
+///   * `Some((0, _, _))` — QW is non-blank but undecodable (stale bits
+///     inherited from pre-all-C10 cutover firmware where the type byte
+///     happens to be 0xFF but other bytes are not, OR an unknown type).
+///     Readers MUST treat this as "skip and keep scanning" — there may
+///     be valid entries past this hole.
+///   * `Some((COUNT|USEROP, slot_key, count))` — valid entry.
+///
+/// The all-16-byte blank check has to mirror `find_next_blank_idx` exactly.
+/// Without it, the writer's "skip stale QW, write to next truly-blank slot"
+/// path produces entries the reader cannot find: every read short-circuits
+/// at the first stale QW and `is_registered` returns false even though the
+/// write succeeded into a later QW. Symptom on a real device that
+/// upgraded across the cutover: `cmd_sign_offchain` refuses with
+/// `OffchainSlotUnregistered` after one or more successful UserOps that
+/// (silently) appended valid entries past a stale type-byte-0xFF QW.
+///
+fn parse_entry(qw_addr: u32) -> Option<(u8, [u8; 8], u64)> {
+    let base = qw_addr as *const u8;
+    // SAFETY: `base.add(8)` stays inside the QW.
+    let type_byte = unsafe { read_volatile(base.add(8)) };
+    if type_byte == 0xFF {
+        // Type byte is 0xFF — could be a truly-blank QW (end of journal)
+        // or a stale QW where only the type byte happens to read 0xFF.
+        // Disambiguate via the same all-16-byte check `find_next_blank_idx`
+        // uses; only an all-blank QW signals end-of-journal.
+        let mut all_blank = true;
+        for k in 0..(OFFCHAIN_QW_SIZE as usize) {
+            // SAFETY: `k < 16` stays inside the QW.
+            if unsafe { read_volatile(base.add(k)) } != 0xFF {
+                all_blank = false;
+                break;
+            }
+        }
+        if all_blank {
+            return None;
+        }
+        // Stale, undecodable, but the page may have valid entries past it.
+        return Some((0, [0u8; 8], 0));
+    }
+    if type_byte != OFFCHAIN_TYPE_COUNT
+        && type_byte != OFFCHAIN_TYPE_USEROP
+        && type_byte != OFFCHAIN_TYPE_USEROP_SIGS
+    {
+        // Unknown type — treat as corrupt, skip but don't stop the scan.
+        return Some((0, [0u8; 8], 0));
+    }
+    let mut slot_key = [0u8; 8];
+    for i in 0..8 {
+        // SAFETY: `i < 8` stays inside the QW.
+        slot_key[i] = unsafe { read_volatile(base.add(i)) };
+    }
+    let mut count_bytes = [0u8; 8];
+    for i in 0..7 {
+        // SAFETY: `9 + i < 16` stays inside the QW.
+        count_bytes[1 + i] = unsafe { read_volatile(base.add(9 + i)) };
+    }
+    let count = u64::from_be_bytes(count_bytes);
+    Some((type_byte, slot_key, count))
+}
+
+/// Find the first blank QW in the page. Returns the QW *index*, or
+/// `None` if the page is full and a compaction is required.
+///
+/// "Blank" means all 16 bytes of the QW are 0xFF. The cheap one-byte
+/// check on the type field is wrong on devices that were upgraded
+/// across the all-C10 cutover: pages 123–124 used to hold per-slot
+/// persistent state, the firmware update doesn't erase them, and
+/// stale bytes randomly leave QWs whose type byte is 0xFF but whose
+/// other 15 bytes still hold old programmed bits. Writing to such a
+/// QW with `write_quadword_verified` PROGERRs (NOR flash can only
+/// flip 1→0; it cannot re-program a bit that is already 0) and the
+/// caller surfaces it as "Sig commit FAIL".
+///
+fn find_next_blank_idx() -> Option<u32> {
+    let base = OFFCHAIN_PAGE_ADDR as *const u8;
+    for i in 0..OFFCHAIN_CAPACITY {
+        // SAFETY: `i * 16 < 8192` stays inside the page.
+        let qw_base = unsafe { base.add((i * OFFCHAIN_QW_SIZE) as usize) };
+        let mut all_blank = true;
+        for k in 0..(OFFCHAIN_QW_SIZE as usize) {
+            // SAFETY: `k < 16` stays inside the QW.
+            if unsafe { read_volatile(qw_base.add(k)) } != 0xFF {
+                all_blank = false;
+                break;
+            }
+        }
+        if all_blank {
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// Erase page 123 — wipes every off-chain counter back to "no record".
+/// On the next access, every slot will look unregistered. Use only as
+/// part of compaction (which immediately re-writes the latest values
+/// before any other code touches the page) or in a deliberate
+/// reset-to-factory flow.
+///
+/// # Safety
+/// Erases persistent flash at `OFFCHAIN_PAGE_ADDR`.
+unsafe fn erase_offchain_page() -> Result<(), ()> {
+    cortex_m::interrupt::free(|_| {
+        wait_bsy();
+        clear_errors();
+        unlock();
+
+        let cr = PER | (OFFCHAIN_PAGE_NUM << PNB_SHIFT);
+        REG.seccr.write(cr);
+        REG.seccr.write(cr | STRT);
+
+        wait_bsy();
+
+        REG.seccr.write(0);
+        let sr = REG.secsr.read();
+        lock();
+        cortex_m::asm::dsb();
+        cortex_m::asm::isb();
+        icache_invalidate();
+
+        if sr & ERR_MASK != 0 {
+            clear_errors();
+            Err(())
+        } else {
+            Ok(())
+        }
+    })
+}
+
+/// Maximum number of distinct active slots the SRAM compaction buffer
+/// supports. Realistic usage is far below this; well-behaved firmware
+/// rotates slots before they exhaust their 65,536-sig cap.
+const MAX_ACTIVE_SLOTS: usize = 256;
+
+/// SRAM scratch table for compaction.
+#[derive(Clone, Copy)]
+struct SlotEntry {
+    slot_key: [u8; 8],
+    offchain_count: u64,
+    last_userop_count: u64,
+    userop_sigs: u64,
+    has_offchain: bool,
+    has_userop: bool,
+    has_userop_sigs: bool,
+}
+
+/// Scan the page once and project the latest `(offchain, last_userop,
+/// userop_sigs)` triple for every observed `slot_key`. Used by both
+/// compaction and the (rarely-needed) "show me all active slots"
+/// introspection path. The table is allocated on the caller's stack via
+/// the in/out reference.
+///
+/// Returns the number of distinct slot_keys observed. **HIGH-1 (audit
+/// counter-replay 20260611):** if more than `MAX_ACTIVE_SLOTS` distinct
+/// slot_keys are present, `*overflow` is set to `true` and the surplus
+/// slots are NOT projected. The old code silently dropped them, which
+/// erased those slots' counters on the next compaction — a counter
+/// rollback. `compact_page` now refuses (fail-closed) when `overflow`
+/// is set rather than committing a lossy compaction.
+fn scan_page_into_table(
+    table: &mut [SlotEntry; MAX_ACTIVE_SLOTS],
+    overflow: &mut bool,
+) -> usize {
+    let mut n: usize = 0;
+    for i in 0..OFFCHAIN_CAPACITY {
+        let addr = OFFCHAIN_PAGE_ADDR + i * OFFCHAIN_QW_SIZE;
+        match parse_entry(addr) {
+            None => break, // first blank — done
+            Some((0, _, _)) => continue, // unknown type — skip
+            Some((t, sk, count)) => {
+                // Find existing entry for this slot_key, else allocate.
+                let mut found: Option<usize> = None;
+                for j in 0..n {
+                    if table[j].slot_key == sk {
+                        found = Some(j);
+                        break;
+                    }
+                }
+                let idx = match found {
+                    Some(j) => j,
+                    None => {
+                        if n >= MAX_ACTIVE_SLOTS {
+                            // HIGH-1 fail-closed: do NOT silently drop. Flag
+                            // the overflow so the caller refuses the
+                            // (lossy) compaction instead of rolling back
+                            // the surplus slots' counters to zero. The page
+                            // only holds 512 QWs, so 256 distinct live slots
+                            // is already pathological.
+                            *overflow = true;
+                            continue;
+                        }
+                        let j = n;
+                        n += 1;
+                        table[j] = SlotEntry {
+                            slot_key: sk,
+                            offchain_count: 0,
+                            last_userop_count: 0,
+                            userop_sigs: 0,
+                            has_offchain: false,
+                            has_userop: false,
+                            has_userop_sigs: false,
+                        };
+                        j
+                    }
+                };
+                if t == OFFCHAIN_TYPE_COUNT {
+                    if count > table[idx].offchain_count || !table[idx].has_offchain {
+                        table[idx].offchain_count = count;
+                    }
+                    table[idx].has_offchain = true;
+                } else if t == OFFCHAIN_TYPE_USEROP {
+                    if count > table[idx].last_userop_count || !table[idx].has_userop {
+                        table[idx].last_userop_count = count;
+                    }
+                    table[idx].has_userop = true;
+                } else if t == OFFCHAIN_TYPE_USEROP_SIGS {
+                    if count > table[idx].userop_sigs || !table[idx].has_userop_sigs {
+                        table[idx].userop_sigs = count;
+                    }
+                    table[idx].has_userop_sigs = true;
+                }
+            }
+        }
+    }
+    n
+}
+
+/// Compact the page: read the latest values per (slot_key, type) into
+/// SRAM, erase, then replay. Power-loss-tolerant: a torn compaction
+/// leaves the page (partially) erased, which loses counters for some
+/// slots — those slots then look unregistered, which forces a Type 1
+/// re-registration but does not break correctness.
+///
+/// # Safety
+/// Erases and rewrites page 123.
+unsafe fn compact_page() -> Result<(), ()> {
+    let mut table = [SlotEntry {
+        slot_key: [0u8; 8],
+        offchain_count: 0,
+        last_userop_count: 0,
+        userop_sigs: 0,
+        has_offchain: false,
+        has_userop: false,
+        has_userop_sigs: false,
+    }; MAX_ACTIVE_SLOTS];
+    let mut overflow = false;
+    let n = scan_page_into_table(&mut table, &mut overflow);
+
+    // HIGH-1 fail-closed: if the page holds more distinct slots than the
+    // SRAM projection table can hold, a compaction would drop the surplus
+    // and silently roll their counters back to zero. Refuse here —
+    // BEFORE erasing — so the page (and every slot's budget) stays
+    // intact. The caller surfaces this as a write failure and declines to
+    // sign, which is strictly safer than a counter rollback.
+    if overflow {
+        return Err(());
+    }
+
+    // SAFETY: about to replay from SRAM.
+    unsafe { erase_offchain_page()? };
+
+    // Replay: write surviving entries at the start of the page. Each
+    // present (slot, type) projection is written to the next blank QW;
+    // blanks only advance as we write, so no regression is possible.
+    //
+    // F3 crash-atomicity: `compact_page` is erase-then-replay on a SINGLE
+    // page with no two-phase staging, so a power-loss / reset BETWEEN the
+    // erase and the end of replay can tear it. Because "registered" ==
+    // "≥1 entry exists", the dangerous torn state is "slot registered but
+    // its counter rolled back to 0" — the F-12 forward/reverse double-scan
+    // cannot catch it (both scans agree on the durably-gone data). We make
+    // the SECURITY-critical instance of that state UNREACHABLE by replaying
+    // `USEROP_SIGS` FIRST for each slot:
+    //
+    //   * USEROP_SIGS is the unbounded, NO-on-chain-backstop few-time-key
+    //     sig tally (off-chain / withheld slot-key sigs eroding the C10
+    //     few-time margin). Writing it first means the instant a slot
+    //     becomes registered after a torn compaction, its tally is already
+    //     the true high-water mark. A tear BEFORE it leaves the slot
+    //     unregistered → invariant #9 forces a Type-1 re-registration (safe).
+    //   * COUNT (offchain) and USEROP (last on-chain userop count) are
+    //     written after. A tear that rolls THESE back is bounded: COUNT is
+    //     backstopped by the on-chain `_setOffchainSigCount` monotonicity +
+    //     the firmware gap ≤ MAX_OFFCHAIN_GAP, and USEROP reflects landed
+    //     userops the on-chain `slotUses` cap independently rejects.
+    //
+    // Residual (tracked): a torn COUNT/USEROP roll-back is still possible but
+    // bounded as above. Full crash-atomicity (two-page ping-pong / commit
+    // marker) is a larger flash-layout change; see docs/security/threat-model.md.
+    for j in 0..n {
+        let entry = table[j];
+        if entry.has_userop_sigs {
+            // F3 + MEDIUM-2: the durable few-time-sig tally is written FIRST so
+            // a torn compaction can never leave a registered slot with this
+            // (unbacked) counter rolled back to zero.
+            let qw = entry_qw(&entry.slot_key, OFFCHAIN_TYPE_USEROP_SIGS, entry.userop_sigs);
+            let blank = find_next_blank_idx().ok_or(())?;
+            // SAFETY: target QW is inside page 123 and was just erased.
+            unsafe {
+                write_quadword_verified(OFFCHAIN_PAGE_ADDR + blank * OFFCHAIN_QW_SIZE, &qw)?
+            };
+        }
+        if entry.has_userop {
+            let qw = entry_qw(&entry.slot_key, OFFCHAIN_TYPE_USEROP, entry.last_userop_count);
+            let blank = find_next_blank_idx().ok_or(())?;
+            // SAFETY: target QW is inside page 123 and was just erased.
+            unsafe {
+                write_quadword_verified(OFFCHAIN_PAGE_ADDR + blank * OFFCHAIN_QW_SIZE, &qw)?
+            };
+        }
+        if entry.has_offchain {
+            let qw = entry_qw(&entry.slot_key, OFFCHAIN_TYPE_COUNT, entry.offchain_count);
+            let blank = find_next_blank_idx().ok_or(())?;
+            // SAFETY: target QW is inside page 123 and was just erased.
+            unsafe {
+                write_quadword_verified(OFFCHAIN_PAGE_ADDR + blank * OFFCHAIN_QW_SIZE, &qw)?
+            };
+        }
+    }
+    Ok(())
+}
+
+/// Count distinct live slot keys currently in the page, saturating at
+/// `MAX_DISTINCT_SLOTS`. Lightweight companion to the `write_entry` Layer-2
+/// cap (see [`crate::offchain_state::MAX_DISTINCT_SLOTS`]): it dedups seen keys
+/// into a small fixed table (`MAX_DISTINCT_SLOTS` × 8 bytes ≈ 1 KB stack —
+/// deliberately NOT the ~10 KB `[SlotEntry; MAX_ACTIVE_SLOTS]` compaction
+/// table, given the documented secure-world stack pressure) and stops as soon
+/// as it has seen `MAX_DISTINCT_SLOTS` distinct keys, since the only caller
+/// compares `>= MAX_DISTINCT_SLOTS`. Stale / blank QWs are skipped exactly as
+/// `scan_page_into_table` / `is_registered_forward` skip them.
+fn distinct_slot_count_capped() -> usize {
+    const CAP: usize = crate::offchain_state::MAX_DISTINCT_SLOTS;
+    let mut seen = [[0u8; 8]; CAP];
+    let mut n = 0usize;
+    for i in 0..OFFCHAIN_CAPACITY {
+        let addr = OFFCHAIN_PAGE_ADDR + i * OFFCHAIN_QW_SIZE;
+        match parse_entry(addr) {
+            None => break,               // first truly-blank QW — end of journal
+            Some((0, _, _)) => continue, // stale / undecodable — skip, keep scanning
+            Some((_, sk, _)) => {
+                let mut found = false;
+                for s in seen[..n].iter() {
+                    if *s == sk {
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    seen[n] = sk;
+                    n += 1;
+                    if n >= CAP {
+                        // Already at the cap; the sole caller refuses a new
+                        // slot at this point and more distinct keys can only
+                        // keep n == CAP, so stop early (bounds-safe: the last
+                        // write was seen[CAP-1]).
+                        return n;
+                    }
+                }
+            }
+        }
+    }
+    n
+}
+
+/// Append a journal entry, compacting first if the page is full and
+/// self-healing the page if it inherited unwritable garbage from the
+/// pre-all-C10 per-slot state.
+///
+/// Three retry tiers:
+/// 1. Happy path: a truly-blank QW exists, write succeeds.
+/// 2. Page full: run a normal compaction (preserves valid entries).
+/// 3. Page is wedged in an unwritable shape — i.e. either compaction
+///    can't free space *or* the targeted "blank" QW won't accept the
+///    write because of stale 0-bits from the prior incarnation. Bulk-
+///    erase the whole page and retry once. Stale data here cannot be
+///    a valid current entry the wallet still cares about: pages
+///    123–124 were freed by the cutover and any leftover bits were
+///    written by long-since-removed firmware. Compaction would have
+///    surfaced that as `Some((0, _, _))` "unknown type" entries which
+///    are explicitly skipped, so the bulk erase loses nothing live.
+///
+/// # Safety
+/// Programs page 123.
+unsafe fn write_entry(qw: &[u8; 16]) -> Result<(), ()> {
+    // Layer-2 structural cap (page-123 exhaustion → permanent-brick fix; see
+    // docs/security/vulns/VULN-offchain-sync-page123-exhaustion-brick.md and
+    // crate::offchain_state::MAX_DISTINCT_SLOTS). Refuse to create a NEW
+    // distinct slot once the page already holds MAX_DISTINCT_SLOTS of them, so
+    // the page can never reach the un-compactable state that bricks every sign
+    // path. Updates to an already-present slot are always allowed — they can't
+    // grow the distinct-slot set. This sits ABOVE compact_page (which replays
+    // via write_quadword_verified and bypasses write_entry), so existing slots
+    // always re-compact; only brand-new slots beyond the cap are refused. The
+    // distinct scan runs ONLY on the new-slot branch, so steady-state
+    // existing-slot writes pay only the cheap presence check — negligible
+    // against the ~1 s C10 sign. This does NOT weaken HIGH-1/F3: nothing is
+    // evicted or erased, the few-time `userop_sigs` tally is untouched.
+    let mut sk = [0u8; 8];
+    sk.copy_from_slice(&qw[0..8]);
+    // SAFETY: page-123 journal read only (same contract as the other readers).
+    let already_present = unsafe { offchain_count_is_registered(&sk) };
+    let distinct = if already_present {
+        0 // ignored by may_create_distinct_slot when present; skips the scan
+    } else {
+        distinct_slot_count_capped()
+    };
+    if !crate::offchain_state::may_create_distinct_slot(distinct, already_present) {
+        return Err(());
+    }
+
+    if find_next_blank_idx().is_none() {
+        // SAFETY: caller asserts page 123 is writable; compaction is
+        // power-loss-tolerant per its doc comment.
+        unsafe { compact_page()? };
+    }
+
+    // First write attempt — at the QW chosen by find_next_blank_idx.
+    if let Some(blank) = find_next_blank_idx() {
+        // SAFETY: target QW is inside page 123 and was just observed blank.
+        if unsafe {
+            write_quadword_verified(OFFCHAIN_PAGE_ADDR + blank * OFFCHAIN_QW_SIZE, qw)
+        }
+        .is_ok()
+        {
+            return Ok(());
+        }
+    }
+
+    // HIGH-1 (audit counter-replay 20260611): the bulk-erase self-heal
+    // must NEVER destroy live counters. A failed / fault-injected write on
+    // a page full of live per-slot entries would otherwise erase every
+    // slot's offchain / last_userop / userop_sigs counter to zero — a
+    // single-fault rollback of the entire off-chain signing budget that
+    // the F-12 read double-scan cannot detect (after the erase both the
+    // forward and reverse scans agree on the empty page, so no mismatch
+    // fires). Only bulk-erase when the page holds NO decodable COUNT /
+    // USEROP / USEROP_SIGS entry — i.e. it is pure pre-all-C10 cutover
+    // garbage, the only case this self-heal was ever designed for. If live
+    // entries exist, fail closed: refuse the write (the caller surfaces
+    // "Sig commit FAIL" and declines to sign), which is strictly safer
+    // than rolling the budget back.
+    if offchain_page_has_live_entries() {
+        return Err(());
+    }
+
+    // Page is cutover-garbage only — safe to bulk-erase and retry once.
+    // After the erase the whole page is 0xFF, so find_next_blank_idx
+    // returns 0 and the write must succeed (or the flash itself is dead).
+    // SAFETY: see write_entry's # Safety contract.
+    unsafe { erase_offchain_page()? };
+    let blank = find_next_blank_idx().ok_or(())?;
+    // SAFETY: target QW is inside page 123 and was just erased.
+    unsafe { write_quadword_verified(OFFCHAIN_PAGE_ADDR + blank * OFFCHAIN_QW_SIZE, qw) }
+}
+
+/// True iff page 123 holds at least one decodable COUNT / USEROP /
+/// USEROP_SIGS entry — i.e. live per-slot counter state the wallet still
+/// cares about. Gates the `write_entry` self-heal bulk erase (HIGH-1) so
+/// a failed / glitched write can never roll back live counters. Pre-all-
+/// C10 cutover garbage (non-decodable QWs) reads as "no live entries", so
+/// the legitimate one-time self-heal of an inherited-garbage page is
+/// preserved. Scans the whole page (no early-exit) so a live entry that
+/// happens to sit past a blank QW is still detected — fail-closed.
+fn offchain_page_has_live_entries() -> bool {
+    for i in 0..OFFCHAIN_CAPACITY {
+        let addr = OFFCHAIN_PAGE_ADDR + i * OFFCHAIN_QW_SIZE;
+        if let Some((t, _, _)) = parse_entry(addr) {
+            if t == OFFCHAIN_TYPE_COUNT
+                || t == OFFCHAIN_TYPE_USEROP
+                || t == OFFCHAIN_TYPE_USEROP_SIGS
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Forward scan — the original log-structured implementation. Stops at the
+/// first all-blank QW (= end of journal). Used as the first leg of the
+/// F-12 fault-injection-hardened double-scan.
+#[inline(never)]
+unsafe fn scan_forward(slot_key: &[u8; 8], target_type: u8) -> u64 {
+    let mut latest: u64 = 0;
+    let mut found = false;
+    for i in 0..OFFCHAIN_CAPACITY {
+        let addr = OFFCHAIN_PAGE_ADDR + i * OFFCHAIN_QW_SIZE;
+        match parse_entry(addr) {
+            None => break,
+            Some((t, sk, count)) if t == target_type && sk == *slot_key => {
+                if count > latest || !found {
+                    latest = count;
+                    found = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    latest
+}
+
+/// Reverse scan — iterates QWs from CAPACITY-1 down to 0, skipping ALL
+/// blanks and undecodable entries (no early-break on None). Asymmetric
+/// control flow vs `scan_forward`: a fault that early-exits the forward
+/// loop doesn't symmetrically early-exit this one. F-12 fix: comparing
+/// the two scans' results catches any FI-induced underreporting.
+#[inline(never)]
+unsafe fn scan_reverse(slot_key: &[u8; 8], target_type: u8) -> u64 {
+    let mut latest: u64 = 0;
+    let mut i = OFFCHAIN_CAPACITY;
+    while i > 0 {
+        i -= 1;
+        let addr = OFFCHAIN_PAGE_ADDR + i * OFFCHAIN_QW_SIZE;
+        if let Some((t, sk, count)) = parse_entry(addr) {
+            if t == target_type && sk == *slot_key && count > latest {
+                latest = count;
+            }
+        }
+        // Note: no break-on-None — keep iterating across blank tail QWs.
+    }
+    latest
+}
+
+/// Read the latest off-chain sig count for `slot_key`. Returns 0 if no
+/// entry exists (caller distinguishes "0 sigs" from "unregistered" via
+/// `offchain_count_is_registered`).
+///
+/// **F-12 hardening (single-fault rollback resistance).** Scans the page
+/// forward AND reverse with `wait_random()` between, and halts the CPU on
+/// mismatch. A single fault that underreports one direction cannot affect
+/// both — the reverse pass iterates the page asymmetrically (no early-break
+/// on blank, walks from end), so a control-flow corruption at scan entry
+/// affects forward only. Pre-fix, `make flashctr` empirically found **770
+/// single-fault rollback cases** on this code (see tools/sca/README.md §F-12);
+/// post-fix the hardened mirror is down to ~10 (control-flow at scan entry
+/// that early-exits BOTH directions identically — the residual is bounded
+/// by additional layers a future hardening pass could add).
+pub unsafe fn offchain_count_read(slot_key: &[u8; 8]) -> u64 {
+    // F-12 hardening: slot_key input-register redundancy. Load the key
+    // twice via `read_volatile` with a randomised gap between, halt-on-
+    // mismatch. A stuck-at-0 fault on the slot_key argument register
+    // would otherwise survive into both forward and reverse scans
+    // (`make flashctr` empirically saw 10 such residuals before this
+    // belt-and-braces was added).
+    let sk_a: [u8; 8] = *slot_key;
+    crate::fi::wait_random();
+    let sk_b: [u8; 8] = *slot_key;
+    if sk_a != sk_b {
+        return u64::MAX;
+    }
+    let r1 = scan_forward(&sk_a, OFFCHAIN_TYPE_COUNT);
+    crate::fi::wait_random();
+    let r2 = scan_reverse(&sk_b, OFFCHAIN_TYPE_COUNT);
+    if r1 != r2 {
+        // FI glitch detected. The caller can't recover — return the
+        // safest value: u64::MAX. Downstream cap checks (`new_count >
+        // MAX_SLOT_USES`) will trip and refuse to sign. This is fail-
+        // closed: rather than risk a silent rollback we permanently
+        // refuse signing until the next power cycle resets the cap-check
+        // path on a fresh emulator instance.
+        return u64::MAX;
+    }
+    r1
+}
+
+/// Read the most recent UserOp-snapshot count (the value embedded in
+/// the inner tx of the last `CMD_SIGN_USEROP`). F-12-hardened: same
+/// forward+reverse double scan as `offchain_count_read`.
+pub unsafe fn last_userop_count_read(slot_key: &[u8; 8]) -> u64 {
+    let sk_a: [u8; 8] = *slot_key;
+    crate::fi::wait_random();
+    let sk_b: [u8; 8] = *slot_key;
+    if sk_a != sk_b {
+        return u64::MAX;
+    }
+    let r1 = scan_forward(&sk_a, OFFCHAIN_TYPE_USEROP);
+    crate::fi::wait_random();
+    let r2 = scan_reverse(&sk_b, OFFCHAIN_TYPE_USEROP);
+    if r1 != r2 {
+        return u64::MAX;
+    }
+    r1
+}
+
+/// True iff this firmware has at least one entry for `slot_key`.
+/// After a fresh-from-seed boot this is `false` for every slot, which
+/// is the recovery refusal gate.
+///
+/// F-12-hardened: forward + reverse double scan, halt-on-mismatch. The
+/// answer is a single bit so a fault on one direction's return could flip
+/// it; reverse cross-check catches that.
+///
+/// # Safety
+/// Same contract as the other `offchain_count_*` readers — reads from
+/// the page-123 journal.
+pub unsafe fn offchain_count_is_registered(slot_key: &[u8; 8]) -> bool {
+    let sk_a: [u8; 8] = *slot_key;
+    crate::fi::wait_random();
+    let sk_b: [u8; 8] = *slot_key;
+    if sk_a != sk_b {
+        return false;
+    }
+    let r1 = unsafe { is_registered_forward(&sk_a) };
+    crate::fi::wait_random();
+    let r2 = unsafe { is_registered_reverse(&sk_b) };
+    if r1 != r2 {
+        // Fail-closed: report unregistered → refuses the off-chain sign
+        // path until the next call.
+        return false;
+    }
+    r1
+}
+
+#[inline(never)]
+unsafe fn is_registered_forward(slot_key: &[u8; 8]) -> bool {
+    for i in 0..OFFCHAIN_CAPACITY {
+        let addr = OFFCHAIN_PAGE_ADDR + i * OFFCHAIN_QW_SIZE;
+        match parse_entry(addr) {
+            None => return false,
+            Some((0, _, _)) => continue,
+            Some((_, sk, _)) if sk == *slot_key => return true,
+            _ => continue,
+        }
+    }
+    false
+}
+
+#[inline(never)]
+unsafe fn is_registered_reverse(slot_key: &[u8; 8]) -> bool {
+    let mut i = OFFCHAIN_CAPACITY;
+    while i > 0 {
+        i -= 1;
+        let addr = OFFCHAIN_PAGE_ADDR + i * OFFCHAIN_QW_SIZE;
+        if let Some((t, sk, _)) = parse_entry(addr) {
+            if t != 0 && sk == *slot_key {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Write the "slot is registered" marker (a last_userop_count = 0
+/// entry). No-op if already registered. Called by `cmd_sign_userop`
+/// when it signs a Type 1 for a fresh slot.
+///
+/// # Safety
+/// Programs page 123.
+pub unsafe fn offchain_count_register_slot(slot_key: &[u8; 8]) -> Result<(), ()> {
+    if offchain_count_is_registered(slot_key) {
+        return Ok(());
+    }
+    let qw = entry_qw(slot_key, OFFCHAIN_TYPE_USEROP, 0);
+    // SAFETY: forwarded contract.
+    unsafe { write_entry(&qw) }
+}
+
+/// Bump the off-chain sig counter to `new_count`. Reverts via `Err(())`
+/// if `new_count <= current`; the caller (cmd_sign_offchain) computes
+/// `new_count = current + 1` so this only fails on flash trouble.
+///
+/// **F-12 hardening — slot_key input-redundancy.** A fault at function
+/// prologue can stuck-at the `slot_key` register before it's used by
+/// `offchain_count_read` / `entry_qw`. The function would then operate
+/// on the WRONG slot (read its max, write an entry for it), pass the
+/// FI triple-check (which also reads the wrong slot), and return Ok —
+/// while OUR slot's counter never advanced. Defense: dereference the
+/// caller's slot_key into TWO local copies with `wait_random()` between,
+/// compare; halt if they differ. Then use only the locally-verified copy.
+///
+/// # Safety
+/// Programs page 123.
+pub unsafe fn offchain_count_bump(slot_key: &[u8; 8], new_count: u64) -> Result<(), ()> {
+    // F-12: input redundancy on slot_key. Catches stuck-at on the
+    // slot_key pointer/register at function entry.
+    let sk_a: [u8; 8] = *slot_key;
+    crate::fi::wait_random();
+    let sk_b: [u8; 8] = *slot_key;
+    if sk_a != sk_b {
+        return Err(());
+    }
+    let slot_key = &sk_a;
+
+    let pre = offchain_count_read(slot_key);
+    if new_count <= pre {
+        return Err(());
+    }
+    let qw = entry_qw(slot_key, OFFCHAIN_TYPE_COUNT, new_count);
+    // SAFETY: forwarded contract.
+    unsafe { write_entry(&qw)? };
+    // FI hardening: read-back the post-bump value, refuse if it didn't
+    // land. Mirrors `pin_attempts_bump`.
+    let post = offchain_count_read(slot_key);
+    if post != new_count {
+        return Err(());
+    }
+    if crate::fi::check_true_into_sentinel(|| offchain_count_read(slot_key) == new_count)
+        != crate::fi::OK_SENTINEL
+    {
+        return Err(());
+    }
+    Ok(())
+}
+
+/// Promote the off-chain sig counter for `slot_key` to at least `target`.
+/// Idempotent if the stored value already meets or exceeds `target`.
+///
+/// Used by the sign path to repair a stale local view: if a flash event
+/// (compaction half-failure, partial torn write, etc.) lost a `COUNT`
+/// entry but kept its `USEROP` snapshot, `offchain_count_read` can dip
+/// below `last_userop_count_read`. Signing with the lower value would
+/// always revert on-chain because `_setOffchainSigCount` enforces
+/// monotonicity over `offchainSigCount[i]`. Re-asserting the high-water
+/// mark here keeps the firmware's view consistent with what was last
+/// committed to the chain so the next Type 2 sig commits a value the
+/// chain will accept.
+///
+/// # Safety
+/// Programs page 123.
+pub unsafe fn offchain_count_promote_to(slot_key: &[u8; 8], target: u64) -> Result<(), ()> {
+    // F-12: slot_key input-redundancy (see offchain_count_bump for rationale).
+    let sk_a: [u8; 8] = *slot_key;
+    crate::fi::wait_random();
+    let sk_b: [u8; 8] = *slot_key;
+    if sk_a != sk_b {
+        return Err(());
+    }
+    let slot_key = &sk_a;
+
+    // Value-inflation brick defence (see
+    // `docs/security/vulns/VULN-offchain-sync-value-inflation-slot-brick.md` and
+    // `crate::offchain_state::OFFCHAIN_COUNT_CEILING`): never promote the
+    // monotonic off-chain counter to a value at or above `MAX_SLOT_USES`. A
+    // companion-inflated `last_userop` reaches this promote via the sign-path
+    // repair branch; clamping here is the structural chokepoint that keeps every
+    // caller (sync + both sign paths) from durably tripping the combined-cap gate
+    // forever. The clamp never clips a legitimate value — a truthful on-chain
+    // `offchainSigCount` is always `< MAX_SLOT_USES`.
+    let target = crate::offchain_state::clamp_offchain_count(target);
+
+    let pre = offchain_count_read(slot_key);
+    if target <= pre {
+        return Ok(());
+    }
+    let qw = entry_qw(slot_key, OFFCHAIN_TYPE_COUNT, target);
+    // SAFETY: forwarded contract.
+    unsafe { write_entry(&qw) }
+}
+
+/// Update the last_userop_count snapshot for `slot_key`. Idempotent if
+/// `count == current`. Tolerant of `count < current`: rather than
+/// permanently failing the sign with an `Err` (which manifested as
+/// "Sig commit FAIL" on the OLED and bricked the slot for future
+/// signs), it returns `Ok` as a no-op. Real monotonicity is enforced
+/// at two stronger gates: (a) the sign path promotes
+/// `new_offchain_count` to `max(offchain_count_read,
+/// last_userop_count_read)` so this function is never reached with
+/// `count < pre` in correct execution, and (b) the on-chain
+/// `_setOffchainSigCount` reverts on non-monotonic input — that revert
+/// is the authoritative gate, not this firmware-side check.
+///
+/// # Safety
+/// Programs page 123.
+pub unsafe fn last_userop_count_set(slot_key: &[u8; 8], count: u64) -> Result<(), ()> {
+    // F-12: slot_key input-redundancy.
+    let sk_a: [u8; 8] = *slot_key;
+    crate::fi::wait_random();
+    let sk_b: [u8; 8] = *slot_key;
+    if sk_a != sk_b {
+        return Err(());
+    }
+    let slot_key = &sk_a;
+
+    // Value-inflation brick defence (see
+    // `docs/security/vulns/VULN-offchain-sync-value-inflation-slot-brick.md` and
+    // `crate::offchain_state::OFFCHAIN_COUNT_CEILING`): the `count` here is the
+    // untrusted companion's `CMD_OFFCHAIN_SYNC` target. Clamp it below
+    // `MAX_SLOT_USES` so a hostile floor bump cannot be promoted into the
+    // monotonic off-chain counter and permanently trip the combined-cap gate. A
+    // legitimate on-chain `offchainSigCount` is always `< MAX_SLOT_USES`, so the
+    // clamp is a no-op for every honest sync.
+    let count = crate::offchain_state::clamp_offchain_count(count);
+
+    let pre = last_userop_count_read(slot_key);
+    if count < pre {
+        // Defensive no-op. The flash already records a higher
+        // high-water mark; the caller is either replaying a stale
+        // value (harmless) or has a bug we cannot fix from here. Do
+        // not regress the stored value — the on-chain state would
+        // not accept a regression either.
+        return Ok(());
+    }
+    if count == pre && offchain_count_is_registered(slot_key) {
+        return Ok(());
+    }
+    let qw = entry_qw(slot_key, OFFCHAIN_TYPE_USEROP, count);
+    // SAFETY: forwarded contract.
+    unsafe { write_entry(&qw) }
+}
+
+/// Read the durable per-slot tally of Type-2 (slot-key) UserOp signatures
+/// this firmware has produced for `slot_key` (MEDIUM-2). Returns 0 when
+/// no entry exists. F-12-hardened: forward + reverse double scan with
+/// `wait_random()` between, returning `u64::MAX` on disagreement so the
+/// combined-cap check fails closed (refuses to sign).
+///
+/// # Safety
+/// Reads from the page-123 journal.
+pub unsafe fn userop_sigs_read(slot_key: &[u8; 8]) -> u64 {
+    let sk_a: [u8; 8] = *slot_key;
+    crate::fi::wait_random();
+    let sk_b: [u8; 8] = *slot_key;
+    if sk_a != sk_b {
+        return u64::MAX;
+    }
+    let r1 = scan_forward(&sk_a, OFFCHAIN_TYPE_USEROP_SIGS);
+    crate::fi::wait_random();
+    let r2 = scan_reverse(&sk_b, OFFCHAIN_TYPE_USEROP_SIGS);
+    if r1 != r2 {
+        return u64::MAX;
+    }
+    r1
+}
+
+/// Bump the durable UserOp-signature tally for `slot_key` to `new_count`
+/// (MEDIUM-2). Mirrors `offchain_count_bump`: monotonic (`Err(())` when
+/// `new_count <= current`), F-12 slot_key input-redundancy, and a
+/// read-back + sentinel-gated re-check so a glitched write that did not
+/// land is rejected. The caller (cmd_sign_userop / batch) computes
+/// `new_count = current + 1`, so a return of `Err` means flash trouble.
+///
+/// # Safety
+/// Programs page 123.
+pub unsafe fn userop_sigs_bump(slot_key: &[u8; 8], new_count: u64) -> Result<(), ()> {
+    // F-12: input redundancy on slot_key (see offchain_count_bump).
+    let sk_a: [u8; 8] = *slot_key;
+    crate::fi::wait_random();
+    let sk_b: [u8; 8] = *slot_key;
+    if sk_a != sk_b {
+        return Err(());
+    }
+    let slot_key = &sk_a;
+
+    let pre = userop_sigs_read(slot_key);
+    if new_count <= pre {
+        return Err(());
+    }
+    let qw = entry_qw(slot_key, OFFCHAIN_TYPE_USEROP_SIGS, new_count);
+    // SAFETY: forwarded contract.
+    unsafe { write_entry(&qw)? };
+    let post = userop_sigs_read(slot_key);
+    if post != new_count {
+        return Err(());
+    }
+    if crate::fi::check_true_into_sentinel(|| userop_sigs_read(slot_key) == new_count)
+        != crate::fi::OK_SENTINEL
+    {
+        return Err(());
+    }
+    Ok(())
 }
 
 ```
@@ -1562,6 +3806,34 @@ pub unsafe fn is_wipe_armed() -> bool {
 ### From `docs/secure-elements/se050-factory-reset.md`
 
 # SE050 Factory Reset — Design and Production Checklist
+
+> **OID range note (2026-04-30 audit).** The OID values shown throughout this doc
+> (`0x7B06_xxxx`) are from the **v3 era** and have since been retired. The shipping
+> range is **v6 = `0x7B10_xxxx`**:
+>
+> | Symbol             | This doc (v3)   | Shipping (v6)   |
+> |--------------------|-----------------|-----------------|
+> | `USERID_OBJ`       | `0x7B06_0000`   | `0x7B10_0000`   |
+> | `ENTROPY_OBJ`      | `0x7B06_0001`   | `0x7B10_0001`   |
+> | `VK_OBJ`           | `0x7B06_0002`   | `0x7B10_0002`   |
+> | `BOOTSTRAP_VK_OBJ` | `0x7B06_0003`   | `0x7B10_0003`   |
+> | `ADMIN_WIPE_OBJ`   | `0x7B06_00A0`   | `0x7B10_00A0`   |
+> | Canary objs        | `0x7B06_00B0…`  | `0x7B10_00B0…`  |
+>
+> Authoritative constants: `secure/src/se050/mod.rs:53,56,59,62,83`. Range
+> history (v1 → v2 → v3 `0x7B06_xxxx` → v4 `0x7B0C_xxxx` → v5 → v6) is
+> documented at `secure/src/se050/mod.rs:23-30`.
+>
+> **Admin PIN derivation has also evolved.** §2 below describes a TRNG-generated
+> admin PIN persisted to flash page 125. Since commit `1bfb572` (2026-04-27),
+> the admin PIN is **OTP-derived** via `secure/src/hw/secret_keys.rs::se050_admin_pin()`
+> (production: `SAES-CMAC(DHUK, label‖counter)`; dev: `HKDF(OTP_master, label)`).
+> Page 125 still hosts the wipe flag, but the admin PIN no longer needs flash
+> persistence — it's deterministic per device and re-derives on every boot.
+> §2a's "future optimisation — HUK-SAES derivation" has effectively landed.
+>
+> The two-entry TAG_POLICY design, the wipe flow, and the round-trip selftest
+> are still the shipping mechanism.
 
 ## Why this document exists
 

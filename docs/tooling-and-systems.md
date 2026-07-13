@@ -31,7 +31,7 @@
 |------|-----------|--------|-----------------|
 | **Kani** (bounded MC) | ✅ `~/.cargo/bin` | `make kani` | `Makefile:3545` |
 | **Miri** (UB) | ✅ `~/.cargo/bin` (via `cargo +nightly miri`) | `make miri` | `Makefile:3557` |
-| **cargo-fuzz** (16 targets) | ✅ `~/.cargo/bin` | `make fuzz-all` / `make fuzz-list` | `Makefile:2895+` |
+| **cargo-fuzz** (12 targets) | ✅ `~/.cargo/bin` | `make fuzz-all` / `make fuzz-list` | root `Makefile` fuzz targets |
 
 ### Proof (Lean)
 | Tool | Installed | Invoke | Source of truth |
@@ -87,7 +87,7 @@
 | **cargo-vet** | absent | dependency audit/attestation (complements cargo-deny + SBOM); supply-chain-defense brief in tree. |
 | **dudect** | absent | statistical timing-leak tester — the empirical complement to cargo-checkct's *symbolic* CT; catches variable-latency instructions checkct cannot. Needs the board. |
 | **ChipWhisperer / ChipSHOUTER** | absent (hardware) | on-silicon power/EM SCA + glitch — the LA1010 is digital-only and can't do this; emulated rainbow/Muscat can't rule out register-value leakage. |
-| **ClusterFuzzLite** | absent | continuous/CI fuzzing with corpus persistence over the 16 cargo-fuzz targets (currently ad-hoc only). |
+| **ClusterFuzzLite** | ✅ CI-wired | PR and scheduled campaigns over the 12 cargo-fuzz targets; `.github/workflows/cflite-{pr,batch}.yml` + `.clusterfuzzlite/build.sh`. Four selector-gate seeds are committed; generated/evolved corpora remain campaign-local. |
 | **standalone lean4checker binary** | build-on-demand | a pinned pre-built binary would harden the kernel-recheck gate (cold runs pay a Lean-build cost). |
 
 ### Discoverability gaps (installed but an agent won't find them)

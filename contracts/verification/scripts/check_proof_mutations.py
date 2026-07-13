@@ -29,7 +29,7 @@ ROBUSTNESS (non-negotiable, per the playbook):
 
 SCOPE: closes V4 + the load-bearingness claims. Does NOT close V7 (a latent-FALSE
 axiom still type-checks -> invisible to mutation while lean/ is mathlib-free) or
-V11 (wrong spec). See docs/fv-adversarial-review-playbook.md §A.
+V11 (wrong spec). See docs/verification/fv-adversarial-review-playbook.md §A.
 
 Usage:
     check_proof_mutations.py [--tier quick|default|full] [--list]

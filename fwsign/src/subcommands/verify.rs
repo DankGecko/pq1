@@ -26,6 +26,17 @@ use crate::bundle;
 pub fn run(bundle_path: &Path, pubkey_path: &Path) -> Result<()> {
     let unpacked = bundle::unpack(bundle_path)?;
 
+    crate::elf::ensure_image_capacity(
+        "secure",
+        unpacked.secure_bytes.len(),
+        fw_manifest::SLOT_SECURE_CAPACITY,
+    )?;
+    crate::elf::ensure_image_capacity(
+        "nonsecure",
+        unpacked.nonsecure_bytes.len(),
+        fw_manifest::SLOT_NS_CAPACITY,
+    )?;
+
     // Optional cross-check: the pubkey.bin inside the bundle should
     // match the vendor pubkey the auditor supplied (otherwise the
     // bundle is claiming a different vendor than the auditor is

@@ -35,7 +35,8 @@ use sphincs_tz_shared::{
 };
 
 use super::{
-    compute_safe_tx_hash, decode_canonical, domain_separator, struct_hash, verify_and_bind_trailer,
+    compute_safe_tx_hash, decode_canonical, domain_separator,
+    erc20_metadata_matches_verified_safe_call, struct_hash, verify_and_bind_trailer,
 };
 use crate::tx::eip712::keccak;
 
@@ -878,6 +879,72 @@ fn multisend_delegatecall_verify_accepts_allowlisted_target() {
     let v = verify_and_bind_trailer(&bundle, &cd, FIXTURE_CHAIN_ID, &FIXTURE_SAFE_ADDRESS)
         .expect("op=1 to an allowlisted MultiSendCallOnly must pass the operation gate");
     assert_eq!(v.raw_data, &ms[..]);
+}
+
+#[test]
+fn invalid_safe_multisend_cannot_grant_token_metadata_to_direct_call() {
+    // RT-ERC20-01 regression. The companion supplies a structurally valid
+    // Safe/MultiSend trailer whose raw records name `token`, but the signed
+    // transaction is an unrelated direct contract call rather than
+    // Safe.approveHash. The old batch router scanned `bundle` before this
+    // bind failed and treated the raw record as metadata authority.
+    let token = [0x70u8; 20];
+    let positions_manager = [0x91u8; 20];
+    let ms = cow_flow_calldata_with(&token, &presign_calldata_stub());
+    assert!(super::multi_send::any_record_to_matches(&ms, &token));
+
+    let (canonical, _approve_hash) = build_safe_tx_with(&MS_CALL_ONLY_130, 1, &ms);
+    let bundle = bundle_with_raw(&canonical, &ms);
+    let direct_deposit = [0x47, 0xe7, 0xef, 0x24]; // deposit(address,uint256)
+    let verified = verify_and_bind_trailer(
+        &bundle,
+        &direct_deposit,
+        FIXTURE_CHAIN_ID,
+        &positions_manager,
+    );
+    assert!(
+        verified.is_none(),
+        "a raw Safe trailer cannot verify against unrelated direct calldata"
+    );
+
+    // Even a cryptographically verified ordinary Safe CALL does not turn
+    // arbitrary MultiSend-shaped calldata into nested routing authority.
+    let ordinary_target = [0x92u8; 20];
+    let (ordinary_canonical, ordinary_approve_hash) = build_safe_tx_with(&ordinary_target, 0, &ms);
+    let ordinary_bundle = bundle_with_raw(&ordinary_canonical, &ms);
+    let ordinary_verified = verify_and_bind_trailer(
+        &ordinary_bundle,
+        &ordinary_approve_hash,
+        FIXTURE_CHAIN_ID,
+        &FIXTURE_SAFE_ADDRESS,
+    )
+    .expect("ordinary Safe call verifies");
+    let ordinary_tx = decode_canonical(&ordinary_verified.canonical).expect("decoded SafeTx");
+    assert!(!erc20_metadata_matches_verified_safe_call(
+        ordinary_tx.operation,
+        &ordinary_tx.to,
+        ordinary_verified.raw_data,
+        &token,
+    ));
+
+    // The intended capability remains: a verified, allowlisted
+    // MultiSendCallOnly DELEGATECALL may route metadata to its records.
+    let (ms_canonical, ms_approve_hash) = build_safe_tx_with(&MS_CALL_ONLY_130, 1, &ms);
+    let ms_bundle = bundle_with_raw(&ms_canonical, &ms);
+    let ms_verified = verify_and_bind_trailer(
+        &ms_bundle,
+        &ms_approve_hash,
+        FIXTURE_CHAIN_ID,
+        &FIXTURE_SAFE_ADDRESS,
+    )
+    .expect("pinned MultiSend Safe call verifies");
+    let ms_tx = decode_canonical(&ms_verified.canonical).expect("decoded MultiSend SafeTx");
+    assert!(erc20_metadata_matches_verified_safe_call(
+        ms_tx.operation,
+        &ms_tx.to,
+        ms_verified.raw_data,
+        &token,
+    ));
 }
 
 #[test]

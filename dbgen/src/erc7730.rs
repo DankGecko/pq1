@@ -52,7 +52,7 @@
 //! treated as production verification.
 
 use crate::merkle::{node_hash, verify_proof, MerkleTree};
-use pqsigner_erc7730::bundle::{leaf_hash, verify_erc7730_bundle};
+use pqsigner_erc7730::bundle::{leaf_hash, verify_erc7730_bundle_with_leaf_count};
 use pqsigner_erc7730::ir::{
     Erc7730Ir, CONTRACT_NAME_FIELD_LEN, CTX_CONTRACT, CTX_EIP712, HEADER_LEN,
     MAX_FIELDS_PER_FORMAT, MAX_FORMATS, MAX_IR_LEN, MAX_NESTED_MEMBERS, OWNER_FIELD_LEN,
@@ -161,7 +161,6 @@ const PARAM_NATIVE_CURRENCY: u8 = 0x42;
 /// printable.
 const PARAM_DYNAMIC_KIND: u8 = 0x43;
 const DYNAMIC_KIND_STRING: u8 = 0x01;
-const DYNAMIC_KIND_BYTES: u8 = 0x02;
 
 /// Maximum EIP-712 struct nesting the gate will walk before failing closed.
 /// Matches the on-device `ir::MAX_NESTING`; a type deeper than this (or a
@@ -479,6 +478,10 @@ pub struct Erc7730BuildResult {
     /// descriptor proof for a known `(chain, contract, selector)` tuple.
     pub known_calls_bloom: [u8; BLOOM_BYTES],
     pub known_call_count: usize,
+    /// Canonical digest of the exact sorted tuple set used to construct the
+    /// Bloom filter.  Bloom equality alone is not a faithfulness proof because
+    /// collisions can hide a dropped tuple during registry vendoring.
+    pub known_call_set_hash: [u8; 32],
 }
 
 /// Machine-readable trust provenance emitted alongside every catalogue root.
@@ -541,7 +544,7 @@ pub fn try_compile_one(
     registry_root: Option<&Path>,
 ) -> Result<Vec<Emitted>, String> {
     // The coverage scan reports whole-descriptor compilability (strict).
-    compile_descriptor(path, policy, registry_root, false)
+    compile_descriptor(path, policy, registry_root, false, &mut Vec::new())
 }
 
 /// A descriptor (or sub-tree) the tolerant build skipped, with why.
@@ -553,13 +556,16 @@ pub struct SkipReport {
 
 /// Tolerant variant of [`build_db`] for the registry import (the corpus
 /// switch). Recursively compiles every `calldata-*.json` / `eip712-*.json`
-/// descriptor under `input_dir`, SKIPPING (with a [`SkipReport`]) any
-/// descriptor that fails to compile or whose (chain,contract,type) leaf
-/// duplicates an earlier one, instead of hard-failing the whole build. The
-/// surviving leaves are Merkle-tree-hashed exactly as the strict build, so
-/// the resulting root is a faithful catalog of "everything the on-device
-/// renderer can clear-sign from this registry". `registry_root` resolves
-/// `includes` templates.
+/// descriptor under `input_dir`. The independent known-call omission scan is
+/// fail-closed: every selected or tripwired descriptor must be readable,
+/// parseable, and have all `includes` resolved before tolerant renderer
+/// compilation begins. After that preflight succeeds, renderer-policy failures
+/// and byte-identical duplicate leaves are SKIPPED with a [`SkipReport`] rather
+/// than hard-failing the whole build. The surviving leaves are
+/// Merkle-tree-hashed exactly as the strict build, so the resulting root is a
+/// faithful catalog of "everything the on-device renderer can clear-sign from
+/// this registry" without permitting a broken descriptor to disappear from
+/// omission protection. `registry_root` resolves `includes` templates.
 pub fn build_db_tolerant(
     input_dir: &Path,
     policy_path: &Path,
@@ -573,17 +579,28 @@ pub fn build_db_tolerant(
 
 /// Recursively collect standalone ERC-7730 descriptor files (the same
 /// `calldata-*` / `eip712-*` filter the scanner uses), skipping `tests/`
-/// fixture dirs and `common-*` / `*.tests.*` include-templates.
-fn collect_descriptors(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(rd) = fs::read_dir(dir) else { return };
-    for entry in rd.flatten() {
+/// fixture dirs and `*.tests.*` include-templates.
+fn collect_descriptors(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
+    let rd = fs::read_dir(dir).map_err(|e| format!("read_dir {}: {e}", dir.display()))?;
+    for entry in rd {
+        let entry = entry.map_err(|e| format!("read entry under {}: {e}", dir.display()))?;
         let p = entry.path();
-        if p.is_dir() {
+        let file_type = entry
+            .file_type()
+            .map_err(|e| format!("file type {}: {e}", p.display()))?;
+        if file_type.is_symlink() {
+            return Err(format!(
+                "symlink is not allowed in descriptor corpus: {}",
+                p.display()
+            ));
+        }
+        if file_type.is_dir() {
             if p.file_name().is_some_and(|n| n == "tests") {
                 continue;
             }
-            collect_descriptors(&p, out);
-        } else if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
+            collect_descriptors(&p, out)?;
+        } else if file_type.is_file() {
+            let name = utf8_regular_file_name(&p)?;
             if name.ends_with(".json")
                 && !name.contains(".tests.")
                 && (name.starts_with("calldata-") || name.starts_with("eip712-"))
@@ -592,37 +609,92 @@ fn collect_descriptors(dir: &Path, out: &mut Vec<PathBuf>) {
             }
         }
     }
+    Ok(())
 }
 
-/// Filename-convention tripwire (review 2.3). Collect `*.json` files under
-/// `dir` that were NOT scanned by [`collect_descriptors`] (they don't match the
-/// `calldata-*`/`eip712-*` prefix and aren't `tests/`/`common-*`/`*.tests.*`
-/// include-templates) yet carry a descriptor shape (top-level `"context"` +
-/// `"display"`). A cheap substring peek is sufficient for a tripwire — a false
-/// positive just adds a visible, reviewable skip line, never a wrong render.
-fn collect_unscanned_descriptor_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(rd) = fs::read_dir(dir) else { return };
-    for entry in rd.flatten() {
+/// Collect every canonical lowercase `*.json` file not selected by the
+/// `calldata-*` / `eip712-*` renderer naming convention. These are still
+/// omission-filter inputs: a misnamed child may declare deployments while an
+/// include supplies every format, so raw substring classification is unsafe.
+/// Concrete descriptor classification happens only after JSON parsing and
+/// include resolution in [`build_db_inner`].
+fn collect_unscanned_json_files(
+    dir: &Path,
+    out: &mut Vec<PathBuf>,
+    renderer_scope: bool,
+    under_tests_dir: bool,
+) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(dir)
+        .map_err(|e| format!("inspect descriptor directory {}: {e}", dir.display()))?;
+    if metadata.file_type().is_symlink() {
+        return Err(format!(
+            "symlink is not allowed as a descriptor corpus root: {}",
+            dir.display()
+        ));
+    }
+    if !metadata.is_dir() {
+        return Err(format!(
+            "descriptor corpus path is not a directory: {}",
+            dir.display()
+        ));
+    }
+    let rd = fs::read_dir(dir).map_err(|e| format!("read_dir {}: {e}", dir.display()))?;
+    for entry in rd {
+        let entry = entry.map_err(|e| format!("read entry under {}: {e}", dir.display()))?;
         let p = entry.path();
-        if p.is_dir() {
-            if p.file_name().is_some_and(|n| n == "tests") {
-                continue;
+        let file_type = entry
+            .file_type()
+            .map_err(|e| format!("file type {}: {e}", p.display()))?;
+        if file_type.is_symlink() {
+            return Err(format!(
+                "symlink is not allowed in descriptor corpus: {}",
+                p.display()
+            ));
+        }
+        if file_type.is_dir() {
+            // Test-fixture naming is not a security boundary. A descriptor
+            // moved beneath `tests/` must stop being render-authoritative, but
+            // its declared calls must remain in the omission filter.
+            let child_is_tests = p.file_name().is_some_and(|name| name == "tests");
+            collect_unscanned_json_files(
+                &p,
+                out,
+                renderer_scope,
+                under_tests_dir || child_is_tests,
+            )?;
+        } else if file_type.is_file() {
+            let name = utf8_regular_file_name(&p)?;
+            if name.to_ascii_lowercase().ends_with(".json") && !name.ends_with(".json") {
+                return Err(format!(
+                    "non-canonical JSON filename `{name}` — use lowercase `.json` so the security scanner cannot omit it"
+                ));
             }
-            collect_unscanned_descriptor_files(&p, out);
-        } else if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
-            let scanned = name.ends_with(".json")
+            let scanned = renderer_scope
+                && !under_tests_dir
+                && name.ends_with(".json")
                 && !name.contains(".tests.")
                 && (name.starts_with("calldata-") || name.starts_with("eip712-"));
-            let is_template = name.starts_with("common-") || name.contains(".tests.");
-            if name.ends_with(".json") && !scanned && !is_template {
-                if let Ok(text) = fs::read_to_string(&p) {
-                    if text.contains("\"context\"") && text.contains("\"display\"") {
-                        out.push(p);
-                    }
-                }
+            if name.ends_with(".json") && !scanned {
+                out.push(p);
             }
         }
     }
+    Ok(())
+}
+
+/// Return the UTF-8 spelling of a regular-file name or fail closed.
+///
+/// The registry naming convention is security-relevant: it selects which
+/// descriptors enter both the renderer catalogue and the independent known-call
+/// omission scan. Silently skipping a non-UTF-8 name would therefore create an
+/// unaudited coverage hole. Keep this diagnostic path-independent so committed
+/// receipts and tests do not disclose or depend on a checkout directory.
+fn utf8_regular_file_name(path: &Path) -> Result<&str, String> {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            "non-UTF-8 regular-file name in descriptor corpus — refusing to skip it".to_string()
+        })
 }
 
 fn build_db_inner(
@@ -645,37 +717,64 @@ fn build_db_inner(
     let mut unscanned_declared_sources: Vec<PathBuf> = Vec::new();
     let mut sources: Vec<PathBuf> = if tolerant {
         let mut v = Vec::new();
-        collect_descriptors(input_dir, &mut v);
-        // Filename-convention tripwire (review 2.3): flag any `*.json` that
-        // LOOKS like a descriptor (has a top-level `context` + `display`) but
-        // wasn't scanned because it doesn't match `calldata-*`/`eip712-*`. An
-        // upstream naming change would otherwise silently drop it from the
-        // catalogue; record each so it surfaces in the drift-gated skip report.
+        collect_descriptors(input_dir, &mut v)?;
+        // Filename-convention tripwire (review 2.3): every unselected JSON is
+        // still parsed, include-resolved, and omission-scanned below. A
+        // concrete resolved descriptor also receives a visible skip receipt.
         let mut unscanned = Vec::new();
-        collect_unscanned_descriptor_files(input_dir, &mut unscanned);
+        collect_unscanned_json_files(input_dir, &mut unscanned, true, false)?;
+        // `ercs/` is a sibling support corpus, not a renderer input. It is
+        // nevertheless security-relevant: a template can itself declare a
+        // deployment, or a child merge can replace that deployment. Scan every
+        // JSON conservatively so vendoring/receipting `ercs` cannot hide a call
+        // from the omission filter.
+        if let Some(root) = registry_root {
+            let ercs = root.join("ercs");
+            match fs::symlink_metadata(&ercs) {
+                Ok(_) if !ercs.starts_with(input_dir) => {
+                    collect_unscanned_json_files(&ercs, &mut unscanned, false, false)?;
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(format!(
+                        "inspect sibling ercs corpus {}: {error}",
+                        ercs.display()
+                    ));
+                }
+            }
+        }
         unscanned.sort();
+        unscanned.dedup();
         for p in unscanned {
-            skips.push(SkipReport {
-                source: p.clone(),
-                reason: "UNSCANNED: filename does not match calldata-*/eip712-* but the file \
-                         carries a descriptor `context`+`display` — an upstream naming change \
-                         would silently drop it. Rename it or extend the scanner (review 2.3)."
-                    .to_string(),
-            });
-            // A filename convention decides renderer coverage, not whether a
-            // registry-declared call is known. Keep this source in the
-            // omission scan even though it is deliberately absent from the
-            // authenticated render catalogue; otherwise an upstream rename
-            // would both drop clear-signing and silently restore blind-signing.
             unscanned_declared_sources.push(p);
         }
         v
     } else {
-        fs::read_dir(input_dir)
-            .map_err(|e| format!("read_dir {}: {e}", input_dir.display()))?
-            .filter_map(|entry| entry.ok().map(|e| e.path()))
-            .filter(|p| p.extension().is_some_and(|x| x == "json"))
-            .collect()
+        let mut strict_sources = Vec::new();
+        for entry in
+            fs::read_dir(input_dir).map_err(|e| format!("read_dir {}: {e}", input_dir.display()))?
+        {
+            let entry =
+                entry.map_err(|e| format!("read entry under {}: {e}", input_dir.display()))?;
+            let p = entry.path();
+            let file_type = entry
+                .file_type()
+                .map_err(|e| format!("file type {}: {e}", p.display()))?;
+            if file_type.is_symlink() {
+                return Err(format!(
+                    "symlink is not allowed in descriptor corpus: {}",
+                    p.display()
+                ));
+            }
+            if file_type.is_file() {
+                let name = utf8_regular_file_name(&p)?;
+                if name.ends_with(".json") {
+                    strict_sources.push(p);
+                }
+            }
+        }
+        strict_sources
     };
     sources.sort();
 
@@ -688,23 +787,60 @@ fn build_db_inner(
 
     let mut emitted: Vec<Emitted> = Vec::with_capacity(sources.len() * 2);
     // Omission policy is intentionally broader than renderer coverage. Every
-    // parsable contract tuple declared by the vendored registry is "known",
-    // even when its format is later rejected by strict WYSIWYS compilation.
-    // Otherwise an unsupported/high-risk registry shape would silently regain
-    // a blind-sign path merely because the safer compiler dropped it.
+    // selected descriptor must parse and resolve; then every parsable contract
+    // tuple declared by the vendored registry is "known", even when its format
+    // is later rejected by strict WYSIWYS compilation. Otherwise an
+    // unsupported/high-risk or broken registry shape could silently regain a
+    // blind-sign path merely because the safer compiler dropped it.
     let mut declared_known_calls = BTreeSet::<(u64, [u8; 20], [u8; 4])>::new();
     for src in &unscanned_declared_sources {
-        let _ = collect_declared_contract_calls(src, registry_root, &mut declared_known_calls);
+        let resolved =
+            collect_declared_contract_calls(src, registry_root, &mut declared_known_calls)
+                .map_err(|e| omission_scan_error(src, input_dir, registry_root, &e))?;
+        if has_concrete_descriptor_shape(&resolved) {
+            skips.push(SkipReport {
+                source: src.clone(),
+                reason: "UNSCANNED: filename does not match calldata-*/eip712-* but the \
+                         include-resolved file carries concrete deployments and formats — an \
+                         upstream naming change would silently drop trusted rendering. Rename \
+                         it or extend the scanner (review 2.3)."
+                    .to_string(),
+            });
+        }
     }
     for src in &sources {
-        let _ = collect_declared_contract_calls(src, registry_root, &mut declared_known_calls);
-        match compile_descriptor(src, policy, registry_root, tolerant) {
-            Ok(entries) => emitted.extend(entries),
+        let _resolved =
+            collect_declared_contract_calls(src, registry_root, &mut declared_known_calls)
+                .map_err(|e| omission_scan_error(src, input_dir, registry_root, &e))?;
+        let mut partial_format_drops = Vec::new();
+        match compile_descriptor(
+            src,
+            policy,
+            registry_root,
+            tolerant,
+            &mut partial_format_drops,
+        ) {
+            Ok(entries) => {
+                // A descriptor can retain safe formats while other source
+                // formats fail closed. Preserve every exact overloaded
+                // signature and reason in the committed review receipt.
+                for reason in partial_format_drops {
+                    skips.push(SkipReport {
+                        source: src.clone(),
+                        reason: format!("PARTIAL FORMAT DROP: {reason}"),
+                    });
+                }
+                emitted.extend(entries);
+            }
             Err(e) if tolerant => skips.push(SkipReport {
                 source: src.clone(),
                 reason: e,
             }),
-            Err(e) => return Err(format!("{}: {e}", src.display())),
+            Err(e) => {
+                let source = review_relative_path(src, input_dir);
+                let reason = review_stable_reason(&e, registry_root.unwrap_or(input_dir));
+                return Err(format!("{source}: {reason}"));
+            }
         }
     }
 
@@ -888,9 +1024,22 @@ fn build_db_inner(
     }
     assert_eq!(blob.len(), total_size);
 
-    let (known_calls_bloom, known_call_count) =
+    let (known_calls_bloom, known_call_count, known_call_set_hash, known_call_set_bits) =
         build_known_calls_bloom(&emitted, &declared_known_calls)?;
-    let review_text = render_review(&emitted, skips, policy, provenance, &root, known_call_count);
+    // Review artifacts are committed and compared across clean worktrees.
+    // Never let an absolute checkout prefix become part of their bytes.
+    let review_source_root = registry_root.unwrap_or(input_dir);
+    let review_text = render_review(
+        &emitted,
+        skips,
+        policy,
+        provenance,
+        &root,
+        known_call_count,
+        &known_call_set_hash,
+        known_call_set_bits,
+        review_source_root,
+    );
 
     Ok(Erc7730BuildResult {
         blob,
@@ -901,7 +1050,23 @@ fn build_db_inner(
         provenance,
         known_calls_bloom,
         known_call_count,
+        known_call_set_hash,
     })
+}
+
+/// Stabilize fail-closed omission-scan diagnostics for both strict and tolerant
+/// catalogue builds. The source is catalogue-relative and any registry-root
+/// prefix embedded by include resolution is replaced before it can reach a
+/// committed receipt or a path-sensitive test.
+fn omission_scan_error(
+    source: &Path,
+    input_dir: &Path,
+    registry_root: Option<&Path>,
+    reason: &str,
+) -> String {
+    let source = review_relative_path(source, input_dir);
+    let reason = review_stable_reason(reason, registry_root.unwrap_or(input_dir));
+    format!("{source}: known-call omission scan failed closed: {reason}")
 }
 
 /// Reject two distinct accepted leaves that can authenticate the same EIP-712
@@ -962,80 +1127,379 @@ fn collect_declared_contract_calls(
     path: &Path,
     registry_root: Option<&Path>,
     out: &mut BTreeSet<(u64, [u8; 20], [u8; 4])>,
-) -> Result<(), String> {
-    // Scan the raw descriptor first. Include resolution is deliberately NOT a
-    // prerequisite for omission protection: a missing/corrupt template may
-    // make the strict compiler skip this descriptor, but any deployment and
-    // format signature that remain parsable in the declaring file are still a
-    // registry-known call and must not regain a blind-sign path. The resolved
-    // scan below adds declarations inherited from a valid template. Unioning
-    // both views is conservative; surplus tuples are safe Bloom false
-    // positives, whereas dropping the raw view would be a false negative.
+) -> Result<serde_json::Value, String> {
+    // Scan the raw descriptor first so local declarations remain visible even
+    // when an include contributes a different half of the tuple. The resolved
+    // scan below is nevertheless mandatory: an include may supply additional
+    // deployments or every format, so any read/parse/resolution failure makes
+    // the complete known-call set unknowable and must abort the catalogue.
+    // Unioning both successful views is conservative; surplus tuples are safe
+    // Bloom false positives, whereas dropping either view could be a false
+    // negative.
     let raw = fs::read(path).map_err(|e| format!("read: {e}"))?;
     let raw_json: serde_json::Value =
         serde_json::from_slice(&raw).map_err(|e| format!("parse: {e}"))?;
-    collect_contract_calls_from_json(&raw_json, out);
+    collect_contract_calls_from_json(&raw_json, out)?;
 
     let json = load_resolved_descriptor_json(path, registry_root)?;
-    collect_contract_calls_from_json(&json, out);
-    Ok(())
+    collect_contract_calls_from_json(&json, out)?;
+    Ok(json)
 }
 
 fn collect_contract_calls_from_json(
     json: &serde_json::Value,
     out: &mut BTreeSet<(u64, [u8; 20], [u8; 4])>,
-) {
-    let Some(deployments) = json
-        .pointer("/context/contract/deployments")
-        .and_then(serde_json::Value::as_array)
-    else {
-        return; // EIP-712 descriptor, or malformed context handled later.
+) -> Result<(), String> {
+    let Some(deployments_value) = json.pointer("/context/contract/deployments") else {
+        return Ok(()); // EIP-712 descriptor or an include-only template.
     };
-    let Some(formats) = json
-        .pointer("/display/formats")
-        .and_then(serde_json::Value::as_object)
-    else {
-        return;
+    let deployments = deployments_value
+        .as_array()
+        .ok_or_else(|| "context.contract.deployments is not an array".to_string())?;
+    let Some(formats_value) = json.pointer("/display/formats") else {
+        return Ok(()); // A raw split descriptor may receive formats from an include.
     };
+    let formats = formats_value
+        .as_object()
+        .ok_or_else(|| "display.formats is not an object".to_string())?;
 
     let mut selectors = BTreeSet::<[u8; 4]>::new();
     for signature in formats.keys() {
-        // A malformed signature has no well-defined ABI selector; tolerant
-        // compilation will report/drop it. Every parsable signature is still
-        // inserted even if its visibility/dynamic/render policy later fails.
-        let Ok(parsed) = parse_format_key(signature) else {
-            continue;
-        };
-        let digest = keccak256(parsed.types_signature.as_bytes());
+        // Selector derivation is deliberately less permissive than blind
+        // omission but independent of WYSIWYS name validation. Duplicate
+        // parameter names make a format unrenderable while its ABI selector is
+        // still determined entirely by the types; it must remain known.
+        let canonical = contract_selector_signature(signature)?;
+        let digest = keccak256(canonical.as_bytes());
         selectors.insert([digest[0], digest[1], digest[2], digest[3]]);
     }
 
-    for deployment in deployments {
-        let Some(chain_id) = deployment
+    for (index, deployment) in deployments.iter().enumerate() {
+        let chain_id = deployment
             .get("chainId")
             .and_then(serde_json::Value::as_u64)
-        else {
-            continue;
-        };
-        let Some(address) = deployment
+            .ok_or_else(|| format!("contract deployment[{index}] has no u64 chainId"))?;
+        let address = deployment
             .get("address")
             .and_then(serde_json::Value::as_str)
-        else {
-            continue;
-        };
-        let Ok(contract) = parse_address(address) else {
-            continue;
-        };
+            .ok_or_else(|| format!("contract deployment[{index}] has no string address"))?;
+        let contract = parse_address(address)
+            .map_err(|e| format!("contract deployment[{index}] address: {e}"))?;
         for selector in &selectors {
             out.insert((chain_id, contract, *selector));
         }
     }
+    Ok(())
+}
+
+/// Whether an unselected, include-resolved JSON file is a concrete descriptor
+/// rather than an incomplete reusable template. This affects the visible skip
+/// receipt only; every unselected JSON is omission-scanned regardless.
+fn has_concrete_descriptor_shape(json: &serde_json::Value) -> bool {
+    let has_formats = json
+        .pointer("/display/formats")
+        .and_then(serde_json::Value::as_object)
+        .is_some_and(|formats| !formats.is_empty());
+    let has_deployments = [
+        "/context/contract/deployments",
+        "/context/eip712/deployments",
+    ]
+    .iter()
+    .any(|pointer| {
+        json.pointer(pointer)
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|deployments| !deployments.is_empty())
+    });
+    has_formats && has_deployments
+}
+
+/// Derive the canonical Solidity selector signature without relaxing the
+/// renderer's duplicate-name rejection. A duplicate parameter name is invalid
+/// trusted-display metadata but does not change the ABI type list or selector.
+fn contract_selector_signature(signature: &str) -> Result<String, String> {
+    let signature = signature.trim();
+    if signature.starts_with("0x") {
+        return Err(format!(
+            "contract format key `{signature}` is a selector-only hex key; the generator cannot authenticate its canonical ABI types, so omission protection fails closed"
+        ));
+    }
+    if !signature.is_ascii() {
+        return Err(format!(
+            "contract format `{signature}` contains non-ASCII Solidity syntax"
+        ));
+    }
+
+    let mut parser = SelectorSignatureParser::new(signature);
+    parser.skip_ws();
+    let function_name = parser.parse_identifier("function name")?;
+    parser.skip_ws();
+    let args = parser.parse_parameter_list()?;
+    parser.skip_ws();
+    if !parser.is_eof() {
+        return Err(format!(
+            "contract format `{signature}` has trailing syntax after its argument list"
+        ));
+    }
+    Ok(format!("{function_name}{args}"))
+}
+
+/// Selector-only parser kept independent of renderer name/path policy.
+///
+/// ERC-7730 format keys carry Solidity-like parameter declarations, whereas an
+/// EVM selector hashes the canonical ABI type list. This parser deliberately
+/// accepts renderer-dead but selector-valid shapes (unnamed/duplicate names,
+/// nested tuple arrays), while rejecting anything whose canonical type cannot
+/// be derived with confidence. That asymmetry is safe for the omission Bloom:
+/// surplus known tuples are refusals; a silently omitted tuple is a blind-sign
+/// escape.
+struct SelectorSignatureParser<'a> {
+    input: &'a str,
+    pos: usize,
+}
+
+impl<'a> SelectorSignatureParser<'a> {
+    const fn new(input: &'a str) -> Self {
+        Self { input, pos: 0 }
+    }
+
+    fn is_eof(&self) -> bool {
+        self.pos == self.input.len()
+    }
+
+    fn peek(&self) -> Option<u8> {
+        self.input.as_bytes().get(self.pos).copied()
+    }
+
+    fn skip_ws(&mut self) {
+        while self.peek().is_some_and(|byte| byte.is_ascii_whitespace()) {
+            self.pos += 1;
+        }
+    }
+
+    fn consume(&mut self, expected: u8) -> Result<(), String> {
+        if self.peek() != Some(expected) {
+            return Err(format!(
+                "expected `{}` at byte {} in contract format `{}`",
+                char::from(expected),
+                self.pos,
+                self.input
+            ));
+        }
+        self.pos += 1;
+        Ok(())
+    }
+
+    fn parse_identifier(&mut self, what: &str) -> Result<&'a str, String> {
+        let start = self.pos;
+        let Some(first) = self.peek() else {
+            return Err(format!(
+                "missing {what} in contract format `{}`",
+                self.input
+            ));
+        };
+        if !(first.is_ascii_alphabetic() || matches!(first, b'_' | b'$')) {
+            return Err(format!(
+                "invalid {what} at byte {} in contract format `{}`",
+                self.pos, self.input
+            ));
+        }
+        self.pos += 1;
+        while self
+            .peek()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'$'))
+        {
+            self.pos += 1;
+        }
+        Ok(&self.input[start..self.pos])
+    }
+
+    fn parse_parameter_list(&mut self) -> Result<String, String> {
+        self.consume(b'(')?;
+        self.skip_ws();
+        let mut canonical = String::from("(");
+        if self.peek() == Some(b')') {
+            self.pos += 1;
+            canonical.push(')');
+            return Ok(canonical);
+        }
+
+        let mut first = true;
+        loop {
+            if !first {
+                canonical.push(',');
+            }
+            canonical.push_str(&self.parse_parameter()?);
+            first = false;
+            self.skip_ws();
+            match self.peek() {
+                Some(b',') => {
+                    self.pos += 1;
+                    self.skip_ws();
+                    if matches!(self.peek(), Some(b',' | b')') | None) {
+                        return Err(format!(
+                            "empty parameter in contract format `{}`",
+                            self.input
+                        ));
+                    }
+                }
+                Some(b')') => {
+                    self.pos += 1;
+                    canonical.push(')');
+                    return Ok(canonical);
+                }
+                _ => {
+                    return Err(format!(
+                        "expected `,` or `)` at byte {} in contract format `{}`",
+                        self.pos, self.input
+                    ));
+                }
+            }
+        }
+    }
+
+    fn parse_parameter(&mut self) -> Result<String, String> {
+        self.skip_ws();
+        let canonical = self.parse_type()?;
+        self.skip_ws();
+
+        // Names and data-location/payability modifiers do not participate in
+        // selector hashing. Accept them only as complete Solidity identifiers;
+        // a second unrecognised identifier is ambiguous and fails closed.
+        let mut saw_name = false;
+        while !matches!(self.peek(), Some(b',' | b')') | None) {
+            let token = self.parse_identifier("parameter name or modifier")?;
+            if matches!(token, "memory" | "calldata" | "storage" | "payable") {
+                // Modifier placement/type legality is renderer/compiler policy;
+                // ignoring a syntactically clear modifier can only add a safe
+                // Bloom false positive.
+            } else if !saw_name {
+                saw_name = true;
+            } else {
+                return Err(format!(
+                    "ambiguous trailing parameter syntax in contract format `{}`",
+                    self.input
+                ));
+            }
+            self.skip_ws();
+        }
+        Ok(canonical)
+    }
+
+    fn parse_type(&mut self) -> Result<String, String> {
+        self.skip_ws();
+        let mut canonical = if self.peek() == Some(b'(') {
+            self.parse_parameter_list()?
+        } else {
+            let source_type = self.parse_identifier("ABI type")?;
+            if source_type == "tuple" {
+                self.skip_ws();
+                if self.peek() != Some(b'(') {
+                    return Err(format!(
+                        "bare `tuple` has no canonical ABI members in contract format `{}`",
+                        self.input
+                    ));
+                }
+                self.parse_parameter_list()?
+            } else {
+                canonical_contract_elementary_type(source_type, self.input)?.to_string()
+            }
+        };
+
+        loop {
+            self.skip_ws();
+            if self.peek() != Some(b'[') {
+                break;
+            }
+            self.pos += 1;
+            self.skip_ws();
+            let length_start = self.pos;
+            while self.peek().is_some_and(|byte| byte.is_ascii_digit()) {
+                self.pos += 1;
+            }
+            let length = &self.input[length_start..self.pos];
+            self.skip_ws();
+            self.consume(b']')?;
+            if !length.is_empty()
+                && ((length.len() > 1 && length.starts_with('0'))
+                    || length
+                        .parse::<u32>()
+                        .ok()
+                        .filter(|value| *value > 0)
+                        .is_none())
+            {
+                return Err(format!(
+                    "contract format `{}` has noncanonical fixed-array length `{length}`",
+                    self.input
+                ));
+            }
+            canonical.push('[');
+            canonical.push_str(length);
+            canonical.push(']');
+        }
+        Ok(canonical)
+    }
+}
+
+fn canonical_contract_elementary_type<'a>(ty: &'a str, original: &str) -> Result<&'a str, String> {
+    let canonical = match ty {
+        "uint" => "uint256",
+        "int" => "int256",
+        "byte" => "bytes1",
+        "fixed" => "fixed128x18",
+        "ufixed" => "ufixed128x18",
+        "address" | "bool" | "string" | "bytes" | "function" => ty,
+        _ if canonical_int_type(ty, "uint")
+            || canonical_int_type(ty, "int")
+            || canonical_bytes_type(ty)
+            || canonical_fixed_type(ty, "fixed")
+            || canonical_fixed_type(ty, "ufixed") =>
+        {
+            ty
+        }
+        _ => {
+            return Err(format!(
+                "contract format `{original}` has unsupported ABI type `{ty}`"
+            ));
+        }
+    };
+    Ok(canonical)
+}
+
+fn canonical_int_type(ty: &str, prefix: &str) -> bool {
+    let Some(width) = ty.strip_prefix(prefix) else {
+        return false;
+    };
+    !width.is_empty()
+        && !(width.len() > 1 && width.starts_with('0'))
+        && matches!(width.parse::<u16>(), Ok(bits) if (8..=256).contains(&bits) && bits % 8 == 0)
+}
+
+fn canonical_bytes_type(ty: &str) -> bool {
+    let Some(width) = ty.strip_prefix("bytes") else {
+        return false;
+    };
+    !width.is_empty()
+        && !(width.len() > 1 && width.starts_with('0'))
+        && matches!(width.parse::<u8>(), Ok(bytes) if (1..=32).contains(&bytes))
+}
+
+fn canonical_fixed_type(ty: &str, prefix: &str) -> bool {
+    let Some(rest) = ty.strip_prefix(prefix) else {
+        return false;
+    };
+    let Some((m, n)) = rest.split_once('x') else {
+        return false;
+    };
+    !(m.len() > 1 && m.starts_with('0'))
+        && !(n.len() > 1 && n.starts_with('0'))
+        && matches!(m.parse::<u16>(), Ok(bits) if (8..=256).contains(&bits) && bits % 8 == 0)
+        && matches!(n.parse::<u8>(), Ok(decimals) if (1..=80).contains(&decimals))
 }
 
 fn build_known_calls_bloom(
     entries: &[Emitted],
     declared: &BTreeSet<(u64, [u8; 20], [u8; 4])>,
-) -> Result<([u8; BLOOM_BYTES], usize), String> {
+) -> Result<([u8; BLOOM_BYTES], usize, [u8; 32], usize), String> {
     let mut tuples = declared.clone();
     for entry in entries {
         if entry.context_kind != CTX_CONTRACT {
@@ -1062,7 +1526,44 @@ fn build_known_calls_bloom(
     for (chain_id, contract, selector) in &tuples {
         insert_known_call(&mut bloom, *chain_id, contract, selector);
     }
-    Ok((bloom, tuples.len()))
+    let set_hash = known_call_set_hash(&tuples)?;
+    let set_bits = enforce_known_call_bloom_occupancy(&bloom)?;
+    Ok((bloom, tuples.len(), set_hash, set_bits))
+}
+
+/// Keep the omission filter's safe-refusal rate governed as the registry
+/// grows. With seven probes, a 25%-full filter has an estimated random false
+/// positive rate of `(1/4)^7 = 1/16384`, below the documented 1/10000 ceiling.
+fn enforce_known_call_bloom_occupancy(bloom: &[u8; BLOOM_BYTES]) -> Result<usize, String> {
+    const BLOOM_BITS: usize = BLOOM_BYTES * 8;
+    const MAX_SET_BITS: usize = BLOOM_BITS / 4;
+    let set_bits: usize = bloom.iter().map(|byte| byte.count_ones() as usize).sum();
+    if set_bits > MAX_SET_BITS {
+        return Err(format!(
+            "known-call Bloom filter is saturated ({set_bits}/{BLOOM_BITS} bits set, cap {MAX_SET_BITS}); increase or shard it before accepting registry growth so false-positive refusals remain below 1/10000"
+        ));
+    }
+    Ok(set_bits)
+}
+
+/// Hash the exact canonical known-call tuple set used to build the omission
+/// filter.  The fixed-width encoding is unambiguous and the `BTreeSet` order
+/// makes the receipt independent of registry traversal or host filesystem
+/// ordering.
+fn known_call_set_hash(tuples: &BTreeSet<(u64, [u8; 20], [u8; 4])>) -> Result<[u8; 32], String> {
+    let count = u64::try_from(tuples.len())
+        .map_err(|_| "known-call tuple count does not fit u64".to_string())?;
+    let mut h = Sha256::new();
+    h.update(b"pqsigner/erc7730-known-call-set-v1");
+    h.update(count.to_be_bytes());
+    for (chain_id, contract, selector) in tuples {
+        h.update(chain_id.to_be_bytes());
+        h.update(contract);
+        h.update(selector);
+    }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&h.finalize());
+    Ok(out)
 }
 
 /// Round-trip every emitted IR back through the on-device parser +
@@ -1116,7 +1617,7 @@ pub fn round_trip_check(result: &Erc7730BuildResult) -> Result<(), String> {
         // Also exercise the on-device bundle verifier with a synthetic
         // trailer.
         let bundle = synth_bundle(&e.ir_bytes, e.leaf_index as u32, &proof);
-        verify_erc7730_bundle(&bundle, &result.root).map_err(|err| {
+        verify_erc7730_bundle_with_leaf_count(&bundle, &result.root, result.leaf_count).map_err(|err| {
             format!(
                 "round-trip on-device bundle verify failed for {}: {err:?}",
                 e.source.display()
@@ -1221,11 +1722,18 @@ fn load_resolved_descriptor_json(
     // registry-known-call scan. Keeping one loader prevents a skipped format
     // from disappearing merely because its declarations came from a template.
     let mut depth = 0usize;
-    while let Some(inc) = json
-        .get("includes")
-        .and_then(|v| v.as_str())
-        .map(str::to_string)
-    {
+    // Each nested include is relative to the file that declared it, not the
+    // original leaf descriptor. Reusing `path` here silently selected a
+    // same-named template from the wrong directory when A -> sub/B -> C.
+    let mut including_path = path.to_path_buf();
+    loop {
+        let inc = match json.get("includes") {
+            None => break,
+            Some(value) => value
+                .as_str()
+                .ok_or_else(|| "`includes` must be a string".to_string())?
+                .to_string(),
+        };
         depth += 1;
         if depth > 8 {
             return Err("includes recursion depth > 8 — refusing".to_string());
@@ -1236,7 +1744,7 @@ fn load_resolved_descriptor_json(
                  See secure/data/erc7730/REGISTRY_MIRROR.md."
             )
         })?;
-        let inc_path = resolve_include_path(root, path, &inc)?;
+        let inc_path = resolve_include_path(root, &including_path, &inc)?;
         let inc_raw =
             fs::read(&inc_path).map_err(|e| format!("read include {}: {e}", inc_path.display()))?;
         let inc_json: serde_json::Value = serde_json::from_slice(&inc_raw)
@@ -1245,6 +1753,7 @@ fn load_resolved_descriptor_json(
             obj.remove("includes");
         }
         json = merge_descriptors(inc_json, json);
+        including_path = inc_path;
     }
     Ok(json)
 }
@@ -1254,6 +1763,7 @@ fn compile_descriptor(
     _policy: &Policy,
     registry_root: Option<&Path>,
     tolerant: bool,
+    partial_format_drops: &mut Vec<String>,
 ) -> Result<Vec<Emitted>, String> {
     let json = load_resolved_descriptor_json(path, registry_root)?;
 
@@ -1319,8 +1829,13 @@ fn compile_descriptor(
     let (context_kind, deployments) =
         resolve_deployments(&descriptor.context).map_err(|e| format!("deployments: {e}"))?;
 
-    let (formats_section, pool_initial) =
-        compile_formats(&descriptor.display, context_kind, &mut ctx, tolerant)?;
+    let (formats_section, pool_initial) = compile_formats_reporting(
+        &descriptor.display,
+        context_kind,
+        &mut ctx,
+        tolerant,
+        partial_format_drops,
+    )?;
 
     // For each deployment we emit a distinct IR (same body, different
     // header bytes). The pool/format bytes are byte-identical between
@@ -1328,8 +1843,8 @@ fn compile_descriptor(
     // 134-byte header.
     let mut out = Vec::with_capacity(deployments.len());
     for dep in deployments {
-        let (chain_id, contract_addr, domain_separator, primary_type_hash) =
-            resolve_per_deployment(context_kind, &descriptor.context, &descriptor.display, &dep)?;
+        let (chain_id, contract_addr, domain_separator) =
+            resolve_per_deployment(context_kind, &descriptor.context, &dep)?;
 
         let ir_bytes = build_ir(
             context_kind,
@@ -1349,6 +1864,23 @@ fn compile_descriptor(
                 MAX_IR_LEN
             ));
         }
+
+        // The catalogue discriminator must name an authenticated format that
+        // actually survived tolerant compilation. Indexing by the first source
+        // format can orphan an otherwise-valid leaf when that format is one of
+        // the fail-closed drops.
+        let primary_type_hash = if context_kind == CTX_EIP712 {
+            let ir = Erc7730Ir::parse(&ir_bytes).map_err(|e| {
+                format!("internal: newly emitted EIP-712 IR failed to parse: {e:?}")
+            })?;
+            ir.format_iter()
+                .next()
+                .ok_or_else(|| "internal: emitted EIP-712 IR has no formats".to_string())?
+                .map_err(|e| format!("internal: first emitted EIP-712 format is invalid: {e:?}"))?
+                .type_hash
+        } else {
+            [0u8; 32]
+        };
 
         out.push(Emitted {
             source: path.to_path_buf(),
@@ -1459,14 +1991,15 @@ fn reject_unsupported_context_semantics(ctx: &Context) -> Result<(), String> {
 fn resolve_per_deployment(
     context_kind: u8,
     ctx: &Context,
-    display: &Display,
     dep: &Deployment,
-) -> Result<(u64, [u8; 20], [u8; 32], [u8; 32]), String> {
+) -> Result<(u64, [u8; 20], [u8; 32]), String> {
     let contract = parse_address(&dep.address)?;
     if context_kind == CTX_CONTRACT {
-        return Ok((dep.chain_id, contract, [0u8; 32], [0u8; 32]));
+        return Ok((dep.chain_id, contract, [0u8; 32]));
     }
-    // EIP-712 path: compute domain_separator + primary_type_hash.
+    // EIP-712 path: compute the deployment-bound domain separator. The
+    // catalogue discriminator is derived later from emitted IR, after
+    // tolerant format filtering.
     let eip = ctx
         .eip712
         .as_ref()
@@ -1480,17 +2013,7 @@ fn resolve_per_deployment(
     domain.verifying_contract = Some(dep.address.clone());
     let domain_sep = compute_domain_separator(&domain)?;
 
-    // Use the *first* format's primary type as the catalog
-    // discriminator. The IR's formats table carries the full set so
-    // the walker can still dispatch on the actual signed typehash.
-    let primary_type_hash = display
-        .formats
-        .keys()
-        .next()
-        .map(|sig| keccak256(sig.as_bytes()))
-        .unwrap_or([0u8; 32]);
-
-    Ok((dep.chain_id, contract, domain_sep, primary_type_hash))
+    Ok((dep.chain_id, contract, domain_sep))
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1586,11 +2109,22 @@ fn first_unmodeled_field_key(fields: &[FieldDef]) -> Option<String> {
     None
 }
 
+#[cfg(test)]
 fn compile_formats(
     display: &Display,
     context_kind: u8,
     ctx: &mut CompileCtx,
     tolerant: bool,
+) -> Result<(Vec<u8>, Vec<u8>), String> {
+    compile_formats_reporting(display, context_kind, ctx, tolerant, &mut Vec::new())
+}
+
+fn compile_formats_reporting(
+    display: &Display,
+    context_kind: u8,
+    ctx: &mut CompileCtx,
+    tolerant: bool,
+    partial_format_drops: &mut Vec<String>,
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
     let n = display.formats.len();
     if n == 0 {
@@ -1614,7 +2148,6 @@ fn compile_formats(
     let mut format_errs: Vec<String> = Vec::new();
     let mut flat: Vec<(&str, Format)> = Vec::with_capacity(n);
     for (sig, fmt) in display.formats.iter() {
-        let fn_name = sig.split('(').next().unwrap_or(sig);
         // 1.3: an unmodelled top-level format/field key would be silently
         // dropped — exactly how `$ref` shipped degraded raw (finding 1.1).
         // Refuse the format instead of guessing. params SUB-keys are still
@@ -1627,14 +2160,14 @@ fn compile_formats(
             .or_else(|| first_unmodeled_field_key(&fmt.fields))
         {
             let msg = format!(
-                "{fn_name}: unmodeled descriptor key `{key}` — dbgen does not act on it and \
+                "format `{sig}`: unmodeled descriptor key `{key}` — dbgen does not act on it and \
                  would silently drop it; refusing (finding 1.3)"
             );
             if tolerant {
                 format_errs.push(msg);
                 continue;
             }
-            return Err(format!("format `{sig}`: {msg}"));
+            return Err(msg);
         }
         // Resolve field-level `$.display.definitions` `$ref`s BEFORE flatten +
         // compile, so the completeness lint and the field compiler both see the
@@ -1644,7 +2177,7 @@ fn compile_formats(
         let resolved = match resolve_display_refs(&fmt.fields, display.definitions.as_ref()) {
             Ok(r) => r,
             Err(e) if tolerant => {
-                format_errs.push(format!("{fn_name}: {e}"));
+                format_errs.push(format!("format `{sig}`: {e}"));
                 continue;
             }
             Err(e) => return Err(format!("format `{sig}`: {e}")),
@@ -1661,7 +2194,7 @@ fn compile_formats(
                 },
             )),
             // Was a silent drop; record it so the skip report shows why.
-            Err(e) if tolerant => format_errs.push(format!("{fn_name}: {e}")),
+            Err(e) if tolerant => format_errs.push(format!("format `{sig}`: {e}")),
             Err(e) => return Err(format!("format `{sig}`: {e}")),
         }
     }
@@ -1708,13 +2241,17 @@ fn compile_formats(
     // Compile each format. Tolerant mode keeps the compilable formats and
     // SKIPS the rest — a partially-supported descriptor (e.g. an aggregator
     // whose `approve` compiles but whose dynamic `swap` does not) still
-    // clear-signs its renderable functions; the dropped functions blind-sign
-    // exactly as if the descriptor were absent. Strict mode `?`-fails the
-    // whole descriptor on the first bad format (a curation bug in our corpus).
+    // clear-signs its renderable functions; every dropped contract selector
+    // remains in the independent known-call omission filter and therefore
+    // hard-refuses if the companion withholds a descriptor. Strict mode
+    // `?`-fails the whole descriptor on the first bad format.
     let mut survivors: Vec<Vec<u8>> = Vec::with_capacity(n);
     for &(sig, ref fmt) in flat.iter() {
         if tolerant && survivors.len() >= MAX_FORMATS {
-            break; // bound the IR; remaining functions blind-sign
+            format_errs.push(format!(
+                "format `{sig}`: omitted because the descriptor already emitted MAX_FORMATS ({MAX_FORMATS}) safe formats"
+            ));
+            continue;
         }
         let mut one: Vec<u8> = Vec::new();
         match compile_one_format(
@@ -1728,10 +2265,7 @@ fn compile_formats(
         ) {
             Ok(()) => survivors.push(one),
             Err(e) if tolerant => {
-                // Record `funcName: reason` (drop the arg list from the sig for
-                // readability; the reason is what matters for triage).
-                let fn_name = sig.split('(').next().unwrap_or(sig);
-                format_errs.push(format!("{fn_name}: {e}"));
+                format_errs.push(format!("format `{sig}`: {e}"));
             }
             Err(e) => return Err(e),
         }
@@ -1756,6 +2290,8 @@ fn compile_formats(
     for one in &survivors {
         formats_buf.extend_from_slice(one);
     }
+
+    partial_format_drops.extend(format_errs);
 
     Ok((formats_buf, pool.into_bytes()))
 }
@@ -1967,6 +2503,18 @@ fn compile_one_format(
     out: &mut Vec<u8>,
 ) -> Result<(), String> {
     let parsed = parse_format_key(sig).map_err(|e| format!("format `{sig}`: {e}"))?;
+    let canonical_contract_signature = if context_kind == CTX_CONTRACT {
+        let canonical = contract_selector_signature(sig)?;
+        if canonical != parsed.types_signature {
+            return Err(format!(
+                "format `{sig}` selector parser disagreement: canonical `{canonical}` vs renderer `{}`",
+                parsed.types_signature
+            ));
+        }
+        Some(canonical)
+    } else {
+        None
+    };
 
     // Runtime can canonically frame one dynamic top-level ABI object as the
     // sole whole tail (`offset == head_end`, padded end == body end). With two
@@ -2028,9 +2576,14 @@ fn compile_one_format(
         Some(keccak256(sig.as_bytes()))
     };
     let selector: [u8; 4] = if context_kind == CTX_CONTRACT {
-        // keccak256 of the types-only signature (the 4-byte function
-        // selector).
-        let h = keccak256(parsed.types_signature.as_bytes());
+        // Hash the independent canonical derivation after requiring it to
+        // agree exactly with the renderer parser. A grammar discrepancy must
+        // stay in the known-call refusal set without becoming an authenticated
+        // leaf under a bogus selector.
+        let canonical = canonical_contract_signature
+            .as_deref()
+            .expect("contract signature computed above");
+        let h = keccak256(canonical.as_bytes());
         [h[0], h[1], h[2], h[3]]
     } else {
         let h = eip712_type_hash.expect("eip712 type hash computed above");
@@ -2379,6 +2932,11 @@ fn compile_one_field(
                     "format `{sig}` field[{field_idx}] dynamic `string` must use raw format; opcode 0x{format_op:02x} semantics cannot be ignored"
                 ));
             }
+            Some("bytes") => {
+                return Err(format!(
+                    "format `{sig}` field[{field_idx}] has opaque dynamic `bytes`; the runtime intentionally has no injective renderer for arbitrary semantic bytes and would hard-refuse every payload, so this unusable format must not be advertised in the authenticated catalogue"
+                ));
+            }
             _ => {}
         }
     }
@@ -2403,10 +2961,6 @@ fn compile_one_field(
             Some("string") => {
                 push_tlv(&mut param_blob, PARAM_DYNAMIC_KIND, &[DYNAMIC_KIND_STRING])?
             }
-            // Opaque bytes remain represented so a verified/known descriptor
-            // hard-refuses at runtime instead of silently falling through to
-            // blind-sign. The renderer never paints a lossy preview.
-            Some("bytes") => push_tlv(&mut param_blob, PARAM_DYNAMIC_KIND, &[DYNAMIC_KIND_BYTES])?,
             _ => {}
         }
     }
@@ -3519,27 +4073,6 @@ fn check_contract_field_completeness(
         return Ok(()); // zero-argument function, e.g. `deposit()`.
     }
 
-    // Every descriptor path that surfaces a calldata word: each field's
-    // own path, plus any `tokenPath` param (which renders the word as the
-    // token whose symbol labels an amount). `visible:"never"` fields count
-    // only for completeness; the subsequent visibility gate rejects them
-    // unless an exact address is surfaced elsewhere by a visible field.
-    let mut paths: Vec<&str> = Vec::with_capacity(fmt.fields.len() * 2);
-    for field in &fmt.fields {
-        // Constant-annotation fields (no `path`) surface no calldata word.
-        if let Some(p) = field.path.as_deref() {
-            paths.push(p);
-        }
-        if let Some(tp) = field
-            .params
-            .as_ref()
-            .and_then(|p| p.get("tokenPath"))
-            .and_then(|v| v.as_str())
-        {
-            paths.push(tp);
-        }
-    }
-
     for (idx, top_name) in parsed.top_names.iter().enumerate() {
         // A *plain* static tuple — type `(...)` with no trailing `[]` array
         // suffix — has members the renderer addresses individually by ABI
@@ -3554,10 +4087,17 @@ fn check_contract_field_completeness(
         match plain_tuple_members {
             Some(members) => {
                 for member in members {
-                    if !paths
-                        .iter()
-                        .any(|p| path_covers_tuple_member(p, top_name, member))
-                    {
+                    let covered = fmt.fields.iter().any(|field| {
+                        field
+                            .path
+                            .as_deref()
+                            .is_some_and(|p| path_covers_tuple_member(p, top_name, member))
+                            || field_token_path(field).is_some_and(|tp| {
+                                token_path_surfaces_exact_scalar_address(tp, CTX_CONTRACT, parsed)
+                                    && path_covers_tuple_member(tp, top_name, member)
+                            })
+                    });
+                    if !covered {
                         return Err(format!(
                             "format `{sig}`: tuple member `{top_name}.{member}` is neither \
                              rendered, explicitly hidden (`visible:\"never\"`), nor used as a \
@@ -3570,15 +4110,24 @@ fn check_contract_field_completeness(
                 }
             }
             None => {
-                if !paths
-                    .iter()
-                    .any(|p| path_top_param_index(p, parsed) == Some(idx as u16))
-                {
+                let covered = fmt.fields.iter().any(|field| {
+                    field
+                        .path
+                        .as_deref()
+                        .is_some_and(|p| path_top_param_index(p, parsed) == Some(idx as u16))
+                        || field_token_path(field).is_some_and(|tp| {
+                            token_path_surfaces_exact_scalar_address(tp, CTX_CONTRACT, parsed)
+                                && path_top_param_index(tp, parsed) == Some(idx as u16)
+                        })
+                });
+                if !covered {
                     return Err(format!(
                         "format `{sig}`: parameter #{idx} (`{}`) is neither rendered, explicitly \
-                         hidden (`visible:\"never\"`), nor used as a `tokenPath` — every \
+                         hidden (`visible:\"never\"`), nor fully surfaced by a scalar-address \
+                         `tokenPath` — every \
                          contract-call argument must be accounted for so the trusted display \
-                         cannot omit an effect-bearing field (audit H-3)",
+                         cannot omit an effect-bearing field. An indexed/sliced tokenPath covers \
+                         only one endpoint, not an entire signed array/bytes route (audit H-3)",
                         parsed.top_names[idx]
                     ));
                 }
@@ -3626,30 +4175,18 @@ fn check_eip712_field_completeness(
         return Ok(()); // zero-member type (degenerate; nothing to sign).
     }
 
-    // Same coverage set as the contract path: each field's own path plus any
-    // `tokenPath` param. `visible:"never"` fields count only for completeness;
-    // the subsequent visibility gate rejects signed-but-unseen operands.
-    let mut paths: Vec<&str> = Vec::with_capacity(fmt.fields.len() * 2);
-    for field in &fmt.fields {
-        // Constant-annotation fields (no `path`) surface no calldata word.
-        if let Some(p) = field.path.as_deref() {
-            paths.push(p);
-        }
-        if let Some(tp) = field
-            .params
-            .as_ref()
-            .and_then(|p| p.get("tokenPath"))
-            .and_then(|v| v.as_str())
-        {
-            paths.push(tp);
-        }
-    }
-
     for (idx, top_name) in parsed.top_names.iter().enumerate() {
-        if !paths
-            .iter()
-            .any(|p| path_top_param_index(p, parsed) == Some(idx as u16))
-        {
+        let covered = fmt.fields.iter().any(|field| {
+            field
+                .path
+                .as_deref()
+                .is_some_and(|p| path_top_param_index(p, parsed) == Some(idx as u16))
+                || field_token_path(field).is_some_and(|tp| {
+                    token_path_surfaces_exact_scalar_address(tp, CTX_EIP712, parsed)
+                        && path_top_param_index(tp, parsed) == Some(idx as u16)
+                })
+        });
+        if !covered {
             return Err(format!(
                 "EIP-712 format `{sig}`: member #{idx} (`{top_name}`) is neither rendered, \
                  explicitly hidden (`visible:\"never\"`), nor used as a `tokenPath`. Every \
@@ -3746,6 +4283,22 @@ fn field_token_path(field: &FieldDef) -> Option<&str> {
         .as_ref()
         .and_then(|p| p.get("tokenPath"))
         .and_then(|v| v.as_str())
+}
+
+/// True only when a `tokenPath` identifies the complete signed operand as one
+/// elementary address. Endpoint extraction paths such as `path.[0]`,
+/// `path.[-1]`, and `path.[0:20]` may label amount rows, but they do not expose
+/// intermediate route elements/bytes and cannot satisfy whole-operand
+/// completeness or visibility.
+fn token_path_surfaces_exact_scalar_address(
+    path: &str,
+    context_kind: u8,
+    parsed: &ParsedFormatKey,
+) -> bool {
+    rendered_path_terminal_type(path, context_kind, parsed).is_ok_and(|terminal| {
+        terminal.as_deref() == Some("address")
+            && !(context_kind == CTX_EIP712 && type_is_struct("address", parsed))
+    })
 }
 
 /// A field path that surfaces the transaction's native value (`msg.value`)
@@ -3939,7 +4492,11 @@ fn check_field_visibility(
                                 .as_deref()
                                 .is_some_and(|p| path_covers_tuple_member(p, top_name, member))
                                 || field_token_path(f).is_some_and(|tp| {
-                                    path_covers_tuple_member(tp, top_name, member)
+                                    token_path_surfaces_exact_scalar_address(
+                                        tp,
+                                        context_kind,
+                                        parsed,
+                                    ) && path_covers_tuple_member(tp, top_name, member)
                                 }))
                     });
                     if !shown {
@@ -3958,7 +4515,8 @@ fn check_field_visibility(
                             && (f.path.as_deref().is_some_and(|p| {
                                 path_top_param_index(p, parsed) == Some(idx as u16)
                             }) || field_token_path(f).is_some_and(|tp| {
-                                path_top_param_index(tp, parsed) == Some(idx as u16)
+                                token_path_surfaces_exact_scalar_address(tp, context_kind, parsed)
+                                    && path_top_param_index(tp, parsed) == Some(idx as u16)
                             }))
                     });
                 if !shown {
@@ -4228,7 +4786,11 @@ fn parse_format_key(sig: &str) -> Result<ParsedFormatKey, String> {
                 .ok_or_else(|| format!("unbalanced tuple in `{arg}`"))?;
             let tuple_body = &arg[1..close];
             let after = arg[close + 1..].trim();
-            let outer_name = first_ident_or_empty(after);
+            // Canonical tuple-array syntax places the array suffix before the
+            // outer parameter name: `(address to,uint256 value)[] calls`.
+            // Skip every suffix before applying renderer name policy.
+            let array_suffix = collect_array_suffix(after);
+            let outer_name = first_ident_or_empty(&after[array_suffix.len()..]);
             if outer_name.is_empty() {
                 return Err(format!(
                     "top-level tuple arg has no name (need `(...types...) name`): `{arg}`"
@@ -5817,12 +6379,9 @@ fn resolve_include_path(
     descriptor_path: &Path,
     include_ref: &str,
 ) -> Result<PathBuf, String> {
-    let registry_root = registry_root.canonicalize().map_err(|e| {
-        format!(
-            "canonicalize registry-root {}: {e}",
-            registry_root.display()
-        )
-    })?;
+    let registry_root = registry_root
+        .canonicalize()
+        .map_err(|e| format!("canonicalize registry-root: {e}"))?;
 
     let candidate: PathBuf = if let Some(stripped) = include_ref.strip_prefix("https://github.com/")
     {
@@ -5850,12 +6409,10 @@ fn resolve_include_path(
 
     let canonical = candidate
         .canonicalize()
-        .map_err(|e| format!("canonicalize include {}: {e}", candidate.display()))?;
+        .map_err(|e| format!("canonicalize include `{include_ref}`: {e}"))?;
     if !canonical.starts_with(&registry_root) {
         return Err(format!(
-            "include `{include_ref}` resolves to {} which is outside registry-root {} — refusing",
-            canonical.display(),
-            registry_root.display()
+            "include `{include_ref}` resolves outside registry-root — refusing"
         ));
     }
     Ok(canonical)
@@ -6040,6 +6597,9 @@ fn render_review(
     provenance: CatalogueProvenance,
     root: &[u8; 32],
     known_call_count: usize,
+    known_call_set_hash: &[u8; 32],
+    known_call_set_bits: usize,
+    source_root: &Path,
 ) -> String {
     let mut s = String::with_capacity(2048);
     s.push_str("# ERC-7730 descriptor catalogue\n");
@@ -6052,20 +6612,26 @@ fn render_review(
     s.push_str("# flags raw-op fields with no label: author-intended formatting\n");
     s.push_str("# that was silently lost. Auditors should reconcile every row\n");
     s.push_str("# against the source JSON and the upstream attestation chain.\n");
-    s.push_str("# The trailing `## skips` section lists every descriptor the\n");
-    s.push_str("# tolerant build dropped (compile failure or dedup), by reason.\n");
+    s.push_str("# The trailing `## skips` section lists every descriptor or\n");
+    s.push_str("# individual source format the tolerant build dropped (compile\n");
+    s.push_str("# failure, safe-format cap, or dedup), by exact reason.\n");
     s.push_str(&format!("# Root: 0x{}\n", hex::encode(root)));
     s.push_str(&format!("# Provenance: {}\n", provenance.as_str()));
     s.push_str(&format!(
-        "# Known contract calls: {known_call_count} ({}-byte omission filter)\n",
+        "# Known contract calls: {known_call_count} ({}-byte omission filter; {known_call_set_bits}/{} bits set; hard cap 25%)\n",
         BLOOM_BYTES,
+        BLOOM_BYTES * 8,
+    ));
+    s.push_str(&format!(
+        "# Known-call tuple-set SHA-256: 0x{}\n",
+        hex::encode(known_call_set_hash),
     ));
     s.push_str(&format!(
         "# Policy: min_attesters={} allow_unattested_dev_descriptors={}\n",
         policy.min_attesters, policy.allow_unattested_dev_descriptors
     ));
     s.push_str(&format!(
-        "# Trusted attesters ({}):\n",
+        "# Configured attesters ({}):\n",
         policy.trusted_attesters.len()
     ));
     for t in &policy.trusted_attesters {
@@ -6135,14 +6701,40 @@ fn render_review(
         let mut sorted: Vec<&SkipReport> = skips.iter().collect();
         sorted.sort_by(|a, b| a.source.cmp(&b.source));
         for sk in sorted {
-            s.push_str(&format!(
-                "{} — {}\n",
-                sk.source.display(),
-                sk.reason.replace('\n', " "),
-            ));
+            let source = review_relative_path(&sk.source, source_root);
+            let reason = review_stable_reason(&sk.reason, source_root);
+            s.push_str(&format!("{} — {}\n", source, reason.replace('\n', " "),));
         }
     }
     s
+}
+
+/// Stable path spelling for the committed review artifact.
+///
+/// `SkipReport::source` is absolute when dbgen is invoked from an absolute
+/// workspace path. Emitting it directly makes `--check` depend on the checkout
+/// directory and leaks a developer's home path. Prefer the catalogue-relative
+/// path; an out-of-root source is reduced to its basename rather than exposing
+/// an arbitrary host path.
+fn review_relative_path(path: &Path, source_root: &Path) -> String {
+    let stable = path
+        .strip_prefix(source_root)
+        .ok()
+        .filter(|relative| !relative.as_os_str().is_empty())
+        .or_else(|| path.file_name().map(Path::new))
+        .unwrap_or_else(|| Path::new("<unknown-source>"));
+    stable.to_string_lossy().replace('\\', "/")
+}
+
+/// Remove the absolute catalogue-root prefix from diagnostics embedded in the
+/// review file. The underlying build error retains its detailed path in stderr;
+/// the committed receipt uses an explicit stable marker.
+fn review_stable_reason(reason: &str, source_root: &Path) -> String {
+    let root = source_root.to_string_lossy();
+    if root.is_empty() {
+        return reason.to_string();
+    }
+    reason.replace(root.as_ref(), "<catalog-root>")
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -6305,6 +6897,166 @@ fn _silence_unused() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selector_parser_canonicalizes_aliases_nested_arrays_whitespace_and_dollars() {
+        assert_eq!(
+            contract_selector_signature(
+                "  $batch ( ( uint amount , byte tag ) [ ] calls, fixed rate, ufixed quote, address payable recipient )  "
+            )
+            .unwrap(),
+            "$batch((uint256,bytes1)[],fixed128x18,ufixed128x18,address)"
+        );
+        assert_eq!(
+            contract_selector_signature("foo$bar(int value, uint[2] values)").unwrap(),
+            "foo$bar(int256,uint256[2])"
+        );
+        // Renderer name policy may reject duplicates/unnamed parameters, but
+        // both still have an unambiguous selector and must enter the omission
+        // set.
+        assert_eq!(
+            contract_selector_signature("f(address same,uint same)").unwrap(),
+            "f(address,uint256)"
+        );
+        assert_eq!(
+            contract_selector_signature("g((address,uint)[])").unwrap(),
+            "g((address,uint256)[])"
+        );
+    }
+
+    #[test]
+    fn selector_parser_fails_closed_when_canonical_types_are_unknown() {
+        for bad in [
+            "0x12345678",
+            "f(MyStruct value)",
+            "f(uint7 value)",
+            "f(uint256[00] value)",
+            "f((address value] tuple)",
+            "f(address value) trailing",
+        ] {
+            assert!(
+                contract_selector_signature(bad).is_err(),
+                "must not guess canonical selector for {bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn known_call_scanner_propagates_selector_derivation_failure() {
+        let json = serde_json::json!({
+            "context": {"contract": {"deployments": [{
+                "chainId": 1,
+                "address": "0x00000000000000000000000000000000000000d0"
+            }]}},
+            "display": {"formats": {
+                "f(MyStruct value)": {"intent": "Call", "fields": []}
+            }}
+        });
+        let err = collect_contract_calls_from_json(&json, &mut BTreeSet::new())
+            .expect_err("an unknown canonical type must abort omission scanning");
+        assert!(
+            err.contains("unsupported ABI type `MyStruct`"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn known_call_scanner_hashes_dollar_name_and_alias_canonically() {
+        let json = serde_json::json!({
+            "context": {"contract": {"deployments": [{
+                "chainId": 1,
+                "address": "0x00000000000000000000000000000000000000d0"
+            }]}},
+            "display": {"formats": {
+                "$foo(uint amount)": {"intent": "Call", "fields": []}
+            }}
+        });
+        let mut declared = BTreeSet::new();
+        collect_contract_calls_from_json(&json, &mut declared).unwrap();
+        assert_eq!(declared.len(), 1);
+        let (_, _, selector) = declared.iter().next().unwrap();
+        let digest = keccak256(b"$foo(uint256)");
+        assert_eq!(*selector, [digest[0], digest[1], digest[2], digest[3]]);
+    }
+
+    #[test]
+    fn known_call_bloom_occupancy_gate_prevents_liveness_saturation() {
+        let empty = [0u8; BLOOM_BYTES];
+        assert_eq!(enforce_known_call_bloom_occupancy(&empty).unwrap(), 0);
+
+        let saturated = [0xffu8; BLOOM_BYTES];
+        let err = enforce_known_call_bloom_occupancy(&saturated)
+            .expect_err("a saturated omission filter must fail generation");
+        assert!(err.contains("cap 32768"), "got: {err}");
+        assert!(err.contains("below 1/10000"), "got: {err}");
+    }
+
+    #[test]
+    fn review_paths_and_reasons_are_checkout_independent() {
+        let relative = Path::new("registry/project/calldata-token.json");
+        let root_a = Path::new("/home/alice/PQSigner_OS/secure/data/erc7730-registry");
+        let root_b = Path::new("/tmp/clean/PQSigner_OS/secure/data/erc7730-registry");
+        let source_a = root_a.join(relative);
+        let source_b = root_b.join(relative);
+
+        assert_eq!(
+            review_relative_path(&source_a, root_a),
+            review_relative_path(&source_b, root_b)
+        );
+        assert_eq!(
+            review_relative_path(&source_a, root_a),
+            "registry/project/calldata-token.json"
+        );
+
+        let reason_a = format!("duplicate of {}", source_a.display());
+        let reason_b = format!("duplicate of {}", source_b.display());
+        assert_eq!(
+            review_stable_reason(&reason_a, root_a),
+            review_stable_reason(&reason_b, root_b)
+        );
+        assert_eq!(
+            review_stable_reason(&reason_a, root_a),
+            "duplicate of <catalog-root>/registry/project/calldata-token.json"
+        );
+    }
+
+    #[test]
+    fn known_call_set_receipt_is_order_independent_and_tuple_sensitive() {
+        let tuple_a = (1u64, [0x11; 20], [0xa9, 0x05, 0x9c, 0xbb]);
+        let tuple_b = (11_155_111u64, [0x22; 20], [0xd0, 0xe3, 0x0d, 0xb0]);
+
+        let mut forward = BTreeSet::new();
+        forward.insert(tuple_a);
+        forward.insert(tuple_b);
+        let mut reverse = BTreeSet::new();
+        reverse.insert(tuple_b);
+        reverse.insert(tuple_a);
+        assert_eq!(
+            known_call_set_hash(&forward).unwrap(),
+            known_call_set_hash(&reverse).unwrap(),
+            "filesystem/traversal order must not affect the receipt"
+        );
+        assert_eq!(
+            hex::encode(known_call_set_hash(&forward).unwrap()),
+            "7a4f9ae17e1ef3abf20abec54ec2df431170c3778495d8edda19aea63a80084e",
+            "freeze domain tag, count width/endianness, and tuple encoding"
+        );
+
+        for changed in [
+            (2u64, tuple_a.1, tuple_a.2),
+            (tuple_a.0, [0x12; 20], tuple_a.2),
+            (tuple_a.0, tuple_a.1, [0x09, 0x05, 0x9c, 0xbb]),
+        ] {
+            let mut variant = forward.clone();
+            variant.remove(&tuple_a);
+            variant.insert(changed);
+            assert_ne!(
+                known_call_set_hash(&forward).unwrap(),
+                known_call_set_hash(&variant).unwrap(),
+                "chain, contract, and selector are all security-significant"
+            );
+        }
+    }
 
     #[test]
     fn strip_param_names_basic() {
@@ -6579,17 +7331,7 @@ mod tests {
             }
         }))
         .unwrap();
-        let display: Display = serde_json::from_value(serde_json::json!({
-            "formats": {
-                "Message(uint256 value)": {
-                    "fields": [{"path":"value","label":"Value","format":"raw"}]
-                }
-            }
-        }))
-        .unwrap();
-
-        let (_, contract, got, _) =
-            resolve_per_deployment(CTX_EIP712, &context, &display, &deployment).unwrap();
+        let (_, contract, got) = resolve_per_deployment(CTX_EIP712, &context, &deployment).unwrap();
         let expected = compute_domain_separator(&Eip712Domain {
             name: Some("Bound".to_string()),
             version: Some("1".to_string()),
@@ -6635,6 +7377,16 @@ mod tests {
         assert_eq!(inner.len(), 7);
         assert_eq!(inner[0], "tokenIn");
         assert_eq!(inner[4], "amountIn");
+    }
+
+    #[test]
+    fn parse_format_key_tuple_array_preserves_suffix_and_outer_name() {
+        let p = parse_format_key("batchExecute((address to,uint256 value,bytes data)[] calls)")
+            .unwrap();
+        assert_eq!(p.types_signature, "batchExecute((address,uint256,bytes)[])");
+        assert_eq!(p.top_names, vec!["calls".to_string()]);
+        assert_eq!(p.top_types, vec!["(address,uint256,bytes)[]".to_string()]);
+        assert_eq!(p.inner_names["calls"], ["to", "value", "data"]);
     }
 
     // ── Duplicate-member-name WYSIWYS guard (adversarial-review finding 2026-07-01) ──
@@ -7452,9 +8204,14 @@ mod tests {
         };
         // STRICT: the unrenderable `swap` fails the WHOLE descriptor.
         assert!(compile_formats(&display, CTX_CONTRACT, &mut ctx, false).is_err());
-        // TOLERANT: keep the renderable `transfer`, drop `swap` → 1 format.
-        let (buf, _pool) = compile_formats(&display, CTX_CONTRACT, &mut ctx, true).unwrap();
+        // TOLERANT: keep the renderable `transfer`, drop `swap` → 1 format,
+        // while preserving the exact overloaded signature in the receipt.
+        let mut drops = Vec::new();
+        let (buf, _pool) =
+            compile_formats_reporting(&display, CTX_CONTRACT, &mut ctx, true, &mut drops).unwrap();
         assert_eq!(buf[0], 1, "exactly one surviving format (transfer)");
+        assert_eq!(drops.len(), 1);
+        assert!(drops[0].contains("swap(uint256[] amounts)"), "{:?}", drops);
     }
 
     #[test]
@@ -7851,6 +8608,58 @@ mod tests {
             ]"#,
         );
         assert!(check_contract_field_completeness(sig, &fmt, &parsed).is_ok());
+    }
+
+    #[test]
+    fn indexed_token_endpoints_do_not_cover_signed_address_array_route() {
+        let sig = "swapExactTokensForTokens(uint256 amountIn,uint256 amountOutMin,address[] path,address to,uint256 deadline)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_from_fields(
+            r#"[
+              {"path":"amountIn","label":"Send","format":"tokenAmount","params":{"tokenPath":"path.[0]"}},
+              {"path":"amountOutMin","label":"Receive","format":"tokenAmount","params":{"tokenPath":"path.[-1]"}},
+              {"path":"to","label":"To","format":"addressName"},
+              {"path":"deadline","label":"Deadline","format":"date"}
+            ]"#,
+        );
+        let err = check_contract_field_completeness(sig, &fmt, &parsed)
+            .expect_err("endpoint-only route must be incomplete");
+        assert!(err.contains("indexed/sliced tokenPath"), "got: {err}");
+        assert!(
+            check_field_visibility(sig, &fmt, &parsed, CTX_CONTRACT).is_err(),
+            "two endpoint labels do not expose an entire address array"
+        );
+    }
+
+    #[test]
+    fn sliced_token_endpoints_do_not_cover_signed_packed_bytes_route() {
+        let sig =
+            "exactInput(bytes path,address recipient,uint256 amountIn,uint256 amountOutMinimum)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_from_fields(
+            r#"[
+              {"path":"amountIn","label":"Send","format":"tokenAmount","params":{"tokenPath":"path.[0:20]"}},
+              {"path":"amountOutMinimum","label":"Receive","format":"tokenAmount","params":{"tokenPath":"path.[-20:]"}},
+              {"path":"recipient","label":"To","format":"addressName"}
+            ]"#,
+        );
+        let err = check_contract_field_completeness(sig, &fmt, &parsed)
+            .expect_err("endpoint-only packed route must be incomplete");
+        assert!(err.contains("indexed/sliced tokenPath"), "got: {err}");
+    }
+
+    #[test]
+    fn render_all_array_path_accounts_for_every_route_element() {
+        let sig = "swap(uint256 amount,address[] path)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_from_fields(
+            r#"[
+              {"path":"amount","label":"Amount","format":"raw"},
+              {"path":"path.[]","label":"Route","format":"addressName"}
+            ]"#,
+        );
+        assert!(check_contract_field_completeness(sig, &fmt, &parsed).is_ok());
+        assert!(check_field_visibility(sig, &fmt, &parsed, CTX_CONTRACT).is_ok());
     }
 
     #[test]
@@ -8700,35 +9509,53 @@ mod tests {
     }
 
     #[test]
-    fn compiler_emits_authenticated_dynamic_kind() {
-        for (ty, expected) in [
-            ("string", DYNAMIC_KIND_STRING),
-            ("bytes", DYNAMIC_KIND_BYTES),
-        ] {
-            let sig = format!("f({ty} value)");
-            let parsed = parse_format_key(&sig).unwrap();
-            let field: FieldDef = serde_json::from_value(serde_json::json!({
-                "path": "value", "label": "Value", "format": "raw"
-            }))
-            .unwrap();
-            let mut pool = Pool::new();
-            let compiled = compile_one_field(
-                &sig,
-                0,
-                &field,
-                CTX_CONTRACT,
-                &parsed,
-                &mut test_ctx(),
-                &mut pool,
-                &BTreeMap::new(),
-                false,
-            )
-            .unwrap();
-            assert_eq!(
-                find_tlv(&pool, compiled.param_off, PARAM_DYNAMIC_KIND),
-                Some(&[expected][..])
-            );
-        }
+    fn compiler_emits_authenticated_dynamic_string_kind() {
+        let sig = "f(string value)";
+        let parsed = parse_format_key(sig).unwrap();
+        let field: FieldDef = serde_json::from_value(serde_json::json!({
+            "path": "value", "label": "Value", "format": "raw"
+        }))
+        .unwrap();
+        let mut pool = Pool::new();
+        let compiled = compile_one_field(
+            sig,
+            0,
+            &field,
+            CTX_CONTRACT,
+            &parsed,
+            &mut test_ctx(),
+            &mut pool,
+            &BTreeMap::new(),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            find_tlv(&pool, compiled.param_off, PARAM_DYNAMIC_KIND),
+            Some(&[DYNAMIC_KIND_STRING][..])
+        );
+    }
+
+    #[test]
+    fn compiler_omits_runtime_dead_opaque_bytes_format() {
+        let sig = "f(bytes value)";
+        let parsed = parse_format_key(sig).unwrap();
+        let field: FieldDef = serde_json::from_value(serde_json::json!({
+            "path": "value", "label": "Value", "format": "raw"
+        }))
+        .unwrap();
+        let err = compile_one_field(
+            sig,
+            0,
+            &field,
+            CTX_CONTRACT,
+            &parsed,
+            &mut test_ctx(),
+            &mut Pool::new(),
+            &BTreeMap::new(),
+            false,
+        )
+        .expect_err("opaque bytes have no injective runtime renderer");
+        assert!(err.contains("hard-refuse every payload"), "got: {err}");
     }
 
     #[test]

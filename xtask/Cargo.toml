@@ -32,3 +32,8 @@ pqsigner-proto = { workspace = true }
 # byte-for-byte aligned with what `cargo run -p dbgen` emits.
 dbgen = { path = "../dbgen" }
 hex = { workspace = true }
+sha2 = "0.10"
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"

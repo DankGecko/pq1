@@ -6,8 +6,8 @@
 //!   * `gen-erc7730-descriptors` — compile + Merkle-anchor the ERC-7730 catalog.
 //!   * `scan-registry` / `build-registry` — read-only upstream-registry coverage
 //!     probes (how much PQ1 can clear-sign; what the full corpus builds to).
-//!   * `vendor-registry` — vendor the leaf-contributing registry into the repo
-//!     and verify it rebuilds the identical Merkle root.
+//!   * `vendor-registry` — vendor the complete security-relevant registry JSON
+//!     corpus and verify both render leaves and refused-call coverage.
 //! The `gen-*` commands take `--check` (rebuild-in-memory + drift-diff) for CI.
 
 use std::env;
@@ -17,8 +17,12 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use pqsigner_proto as proto;
+use sha2::{Digest, Sha256};
 
 const SOLIDITY_OUT_PATH: &str = "contracts/smart-wallet/src/generated/PqsignerProto.sol";
+const ERC7730_VENDOR_MARKER: &str = ".pqsigner-erc7730-vendor";
+const ERC7730_VENDOR_MARKER_BYTES: &[u8] =
+    b"PQSigner ERC-7730 tool-managed registry/ and ercs/ directories.\n";
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -56,17 +60,19 @@ Subcommands:
                           [--input-dir PATH] [--policy PATH]
                           [--out-binary PATH] [--out-review PATH]
                           [--e2e-input-dir PATH] [--e2e-out-binary PATH]
-                          [--out-root PATH]
-      Compile the ERC-7730 descriptor catalog from
-      `secure/data/erc7730/*.json` against `policy.toml`, build the
-      Merkle tree, and emit:
+      Compile the production ERC-7730 catalogue from
+      `secure/data/erc7730-registry/registry` plus
+      `secure/data/erc7730-registry/ercs`, and the E2E catalogue from
+      `secure/data/erc7730-e2e`, against `secure/data/erc7730/policy.toml`.
+      Build their Merkle trees and emit:
         tools/companion-stub/erc7730_db.bin
         tools/companion-stub/erc7730_db_e2e.bin
         secure/data/erc7730.review.txt
-        secure/src/db_roots.rs   (ERC7730_DESCRIPTORS_ROOT)
+        secure/data/erc7730-known-calls.bloom
+        secure/data/erc7730-known-calls-e2e.bloom
       With --check: rebuild in-memory and compare against the checked-in
-      artifacts; exit non-zero on drift. CI uses this gate, mirroring
-      the gen-solidity-constants pattern.
+      artifacts; exit non-zero on drift. `secure/src/db_roots.rs` is
+      validation-only here and is regenerated with `cargo run -p dbgen`.
 
   scan-registry [--registry-root PATH] [--input PATH] [--policy PATH]
                 [--report PATH]
@@ -82,10 +88,13 @@ Subcommands:
       overwrite the firmware-pinned root.
 
   vendor-registry [--registry-root PATH] [--out PATH] [--policy PATH]
-      Vendor every leaf-contributing descriptor + include template into the
-      repo (default `secure/data/erc7730-registry/`), preserving the tree so
-      `includes` resolve, then VERIFY the vendored tree rebuilds the identical
-      Merkle root (reproducible-build faithfulness proof).
+      Scan every `registry/**/*.json` and `ercs/**/*.json` file. Vendor the
+      production corpus into `secure/data/erc7730-registry/` while excluding
+      upstream test fixtures after validating and receipting them. Then VERIFY
+      byte-identical compiled catalogue/review output plus the exact known-call
+      tuple-set receipt and Bloom filter. Merkle-root equality alone does not
+      prove that unsupported calls remained covered by the fail-closed omission
+      filter.
 
   help
       Print this message.
@@ -436,7 +445,9 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
         if let Err(e) = diff_root_in_db_roots(
             &roots_path,
             &prod.root,
+            prod.leaf_count,
             &e2e.root,
+            e2e.leaf_count,
             prod.provenance,
             e2e.provenance,
         ) {
@@ -540,284 +551,62 @@ fn diff_text(label: &str, path: &PathBuf, fresh: &str) -> Result<(), String> {
     ))
 }
 
-/// `str::contains` would accept a generated security fence copied into a Rust
-/// comment or raw string, even though rustc would not enforce it. Scan just
-/// enough Rust lexical structure to require the marker's first token to occur
-/// in active code. (The marker itself is exact, so an inserted comment inside
-/// it already fails the byte comparison.)
-fn contains_active_rust_marker(text: &str, marker: &str) -> bool {
-    #[derive(Clone, Copy)]
-    enum State {
-        Code,
-        LineComment,
-        BlockComment(usize),
-        String,
-        Char,
-        RawString(usize),
-    }
-
-    fn raw_prefix(bytes: &[u8], i: usize) -> Option<(usize, usize)> {
-        let mut p = i;
-        if bytes.get(p) == Some(&b'b') {
-            p += 1;
-        }
-        if bytes.get(p) != Some(&b'r') {
-            return None;
-        }
-        p += 1;
-        let mut hashes = 0usize;
-        while bytes.get(p) == Some(&b'#') {
-            hashes += 1;
-            p += 1;
-        }
-        (bytes.get(p) == Some(&b'"')).then_some((p + 1, hashes))
-    }
-
-    fn looks_like_char(bytes: &[u8], i: usize) -> bool {
-        let end = (i + 12).min(bytes.len());
-        bytes
-            .get(i + 1..end)
-            .is_some_and(|tail| tail.iter().position(|&b| b == b'\'').is_some())
-    }
-
-    let bytes = text.as_bytes();
-    let needle = marker.as_bytes();
-    let mut state = State::Code;
-    let mut i = 0usize;
-    while i < bytes.len() {
-        match state {
-            State::Code => {
-                if bytes[i..].starts_with(needle) {
-                    return true;
-                }
-                if bytes.get(i..i + 2) == Some(b"//") {
-                    state = State::LineComment;
-                    i += 2;
-                } else if bytes.get(i..i + 2) == Some(b"/*") {
-                    state = State::BlockComment(1);
-                    i += 2;
-                } else if let Some((next, hashes)) = raw_prefix(bytes, i) {
-                    state = State::RawString(hashes);
-                    i = next;
-                } else if bytes[i] == b'"' {
-                    state = State::String;
-                    i += 1;
-                } else if bytes[i] == b'\'' && looks_like_char(bytes, i) {
-                    state = State::Char;
-                    i += 1;
-                } else {
-                    i += 1;
-                }
-            }
-            State::LineComment => {
-                if bytes[i] == b'\n' {
-                    state = State::Code;
-                }
-                i += 1;
-            }
-            State::BlockComment(depth) => {
-                if bytes.get(i..i + 2) == Some(b"/*") {
-                    state = State::BlockComment(depth + 1);
-                    i += 2;
-                } else if bytes.get(i..i + 2) == Some(b"*/") {
-                    state = if depth == 1 {
-                        State::Code
-                    } else {
-                        State::BlockComment(depth - 1)
-                    };
-                    i += 2;
-                } else {
-                    i += 1;
-                }
-            }
-            State::String | State::Char => {
-                if bytes[i] == b'\\' {
-                    i = (i + 2).min(bytes.len());
-                } else {
-                    let terminator = if matches!(state, State::String) {
-                        b'"'
-                    } else {
-                        b'\''
-                    };
-                    if bytes[i] == terminator {
-                        state = State::Code;
-                    }
-                    i += 1;
-                }
-            }
-            State::RawString(hashes) => {
-                if bytes[i] == b'"'
-                    && bytes
-                        .get(i + 1..i + 1 + hashes)
-                        .is_some_and(|tail| tail.iter().all(|&b| b == b'#'))
-                {
-                    state = State::Code;
-                    i += 1 + hashes;
-                } else {
-                    i += 1;
-                }
-            }
-        }
-    }
-    false
-}
-
-const ERC7730_PROD_FILTER_MARKER: &str = "#[cfg(not(feature = \"e2e-test\"))]\n\
-pub static ERC7730_KNOWN_CALLS_BLOOM: &[u8; pqsigner_erc7730::known_calls::BLOOM_BYTES] =\n\
-include_bytes!(\"../data/erc7730-known-calls.bloom\");";
-const ERC7730_E2E_FILTER_MARKER: &str = "#[cfg(feature = \"e2e-test\")]\n\
-pub static ERC7730_KNOWN_CALLS_BLOOM: &[u8; pqsigner_erc7730::known_calls::BLOOM_BYTES] =\n\
-include_bytes!(\"../data/erc7730-known-calls-e2e.bloom\");";
-
 fn diff_root_in_db_roots(
     path: &PathBuf,
     prod_root: &[u8; 32],
+    prod_count: usize,
     e2e_root: &[u8; 32],
+    e2e_count: usize,
     prod_provenance: dbgen::erc7730::CatalogueProvenance,
     e2e_provenance: dbgen::erc7730::CatalogueProvenance,
 ) -> Result<(), String> {
     let text = fs::read_to_string(path)
         .map_err(|e| format!("read db_roots.rs at {}: {e}", path.display()))?;
-    let (prod_present, e2e_present, prod_filter_present, e2e_filter_present) =
-        erc7730_root_filter_cfg_matches(&text, prod_root, e2e_root);
-    let (
-        prod_provenance_present,
-        e2e_provenance_present,
-        prod_provenance_fences_present,
-        e2e_provenance_fences_present,
-    ) = erc7730_provenance_cfg_matches(&text, prod_provenance, e2e_provenance);
-    if prod_present
-        && e2e_present
-        && prod_filter_present
-        && e2e_filter_present
-        && prod_provenance_present
-        && e2e_provenance_present
-        && prod_provenance_fences_present
-        && e2e_provenance_fences_present
-    {
+    if erc7730_security_tail_matches(
+        &text,
+        prod_root,
+        prod_count,
+        e2e_root,
+        e2e_count,
+        prod_provenance,
+        e2e_provenance,
+    ) {
         return Ok(());
     }
-    let prod_hex = hex::encode(prod_root);
-    let e2e_hex = hex::encode(e2e_root);
+    let sentinel_count = text
+        .matches(dbgen::ERC7730_SECURITY_TAIL_SENTINEL)
+        .count();
     Err(format!(
-        "ERC-7730 root/filter/provenance in {} doesn't match fresh build (prod root {prod_hex} under prod cfg={prod_present}, e2e root {e2e_hex} under e2e cfg={e2e_present}, prod filter path/cfg={prod_filter_present}, e2e filter path/cfg={e2e_filter_present}, prod provenance {} present={prod_provenance_present} fences={prod_provenance_fences_present}, e2e provenance {} present={e2e_provenance_present} fences={e2e_provenance_fences_present})",
+        "ERC-7730 generated security tail in {} does not exactly match the fresh byte-for-byte suffix through EOF (sentinels={sentinel_count}, expected prod root {}, e2e root {}, prod provenance {}, e2e provenance {})",
         path.display(),
+        hex::encode(prod_root),
+        hex::encode(e2e_root),
         prod_provenance.as_str(),
         e2e_provenance.as_str(),
     ))
 }
 
-fn erc7730_provenance_cfg_matches(
+fn erc7730_security_tail_matches(
     text: &str,
-    prod: dbgen::erc7730::CatalogueProvenance,
-    e2e: dbgen::erc7730::CatalogueProvenance,
-) -> (bool, bool, bool, bool) {
-    let prod_marker = erc7730_provenance_marker(prod, false);
-    let e2e_marker = erc7730_provenance_marker(e2e, true);
-    let prod_fences = erc7730_provenance_fence_markers(prod, false);
-    let e2e_fences = erc7730_provenance_fence_markers(e2e, true);
-    (
-        contains_active_rust_marker(text, &prod_marker),
-        contains_active_rust_marker(text, &e2e_marker),
-        prod_fences
-            .iter()
-            .all(|marker| contains_active_rust_marker(text, marker)),
-        e2e_fences
-            .iter()
-            .all(|marker| contains_active_rust_marker(text, marker)),
-    )
-}
-
-fn erc7730_provenance_marker(provenance: dbgen::erc7730::CatalogueProvenance, e2e: bool) -> String {
-    let selected = if e2e {
-        "feature = \"e2e-test\""
-    } else {
-        "not(feature = \"e2e-test\")"
-    };
-    format!(
-        "#[cfg({selected})]\npub const ERC7730_CATALOGUE_PROVENANCE: &str = {:?};",
-        provenance.as_str()
-    )
-}
-
-/// Exact cfg-associated compile fences emitted by dbgen for the selected
-/// catalogue provenance. These are part of the generated security policy, not
-/// commentary: losing one must drift-fail just like losing the root itself.
-fn erc7730_provenance_fence_markers(
-    provenance: dbgen::erc7730::CatalogueProvenance,
-    e2e: bool,
-) -> Vec<String> {
-    use dbgen::erc7730::CatalogueProvenance;
-
-    match (provenance, e2e) {
-        (CatalogueProvenance::DevUnattested, false) => vec![
-            "#[cfg(all(not(feature = \"e2e-test\"), feature = \"mode-production\"))]\n\
-compile_error!(\"mode-production cannot embed the dev-unattested ERC-7730 catalogue. Implement and run real ERC-8176 EAS verification, regenerate db_roots.rs, and only then build production firmware.\");"
-                .to_string(),
-            "#[cfg(all(not(feature = \"e2e-test\"), not(feature = \"mode-production\"), not(feature = \"erc7730-dev-unattested\"), not(test)))]\n\
-compile_error!(\"the pinned ERC-7730 catalogue is dev-unattested; enable erc7730-dev-unattested so the trusted display shows the provenance warning, or regenerate from a genuinely ERC-8176-verified corpus\");"
-                .to_string(),
-        ],
-        (CatalogueProvenance::DevUnattested, true) => vec![
-            "#[cfg(all(feature = \"e2e-test\", not(feature = \"erc7730-dev-unattested\"), not(test)))]\n\
-compile_error!(\"the e2e ERC-7730 fixture catalogue is dev-unattested; e2e builds must enable erc7730-dev-unattested so the display warning matches its provenance\");"
-                .to_string(),
-        ],
-        (CatalogueProvenance::Erc8176Verified, e2e) => {
-            let selected = if e2e {
-                "feature = \"e2e-test\""
-            } else {
-                "not(feature = \"e2e-test\")"
-            };
-            vec![format!(
-                "#[cfg(all({selected}, feature = \"erc7730-dev-unattested\"))]\n\
-compile_error!(\"erc7730-dev-unattested is enabled but the selected catalogue is ERC-8176-verified; disable the feature so the trusted display does not show false provenance\");"
-            )]
-        }
-    }
-}
-
-fn erc7730_root_filter_cfg_matches(
-    text: &str,
-    prod_root: &[u8; 32],
-    e2e_root: &[u8; 32],
-) -> (bool, bool, bool, bool) {
-    let prod_root_marker = cfg_root_marker(
-        "not(feature = \"e2e-test\")",
-        "ERC7730_DESCRIPTORS_ROOT",
-        prod_root,
+    prod: &[u8; 32],
+    prod_count: usize,
+    e2e: &[u8; 32],
+    e2e_count: usize,
+    prod_provenance: dbgen::erc7730::CatalogueProvenance,
+    e2e_provenance: dbgen::erc7730::CatalogueProvenance,
+) -> bool {
+    let expected = dbgen::render_erc7730_security_tail(
+        prod,
+        prod_count,
+        prod_provenance,
+        e2e,
+        e2e_count,
+        e2e_provenance,
     );
-    let e2e_root_marker = cfg_root_marker(
-        "feature = \"e2e-test\"",
-        "ERC7730_DESCRIPTORS_ROOT",
-        e2e_root,
-    );
-    let prod_present = contains_active_rust_marker(text, &prod_root_marker);
-    let e2e_present = contains_active_rust_marker(text, &e2e_root_marker);
-    let prod_filter_present = contains_active_rust_marker(text, ERC7730_PROD_FILTER_MARKER);
-    let e2e_filter_present = contains_active_rust_marker(text, ERC7730_E2E_FILTER_MARKER);
-    (
-        prod_present,
-        e2e_present,
-        prod_filter_present,
-        e2e_filter_present,
-    )
-}
-
-fn cfg_root_marker(cfg: &str, name: &str, root: &[u8; 32]) -> String {
-    use std::fmt::Write;
-
-    let mut out = format!("#[cfg({cfg})]\npub static {name}: [u8; 32] = [");
-    for (i, byte) in root.iter().enumerate() {
-        if i % 8 == 0 {
-            out.push_str("\n    ");
-        } else {
-            out.push(' ');
-        }
-        write!(out, "0x{byte:02x},").unwrap();
-    }
-    out.push_str("\n];");
-    out
+    text.matches(dbgen::ERC7730_SECURITY_TAIL_SENTINEL)
+        .count()
+        == 1
+        && text.ends_with(&expected)
 }
 
 #[cfg(test)]
@@ -879,136 +668,286 @@ mod tests {
     }
 
     #[test]
-    fn erc7730_codegen_check_binds_roots_and_filters_to_their_cfgs() {
+    fn erc7730_codegen_requires_the_complete_exact_security_suffix() {
+        use dbgen::erc7730::CatalogueProvenance::DevUnattested;
+
         let prod = [0x11u8; 32];
         let e2e = [0x22u8; 32];
-        let prod_root = cfg_root_marker(
-            "not(feature = \"e2e-test\")",
-            "ERC7730_DESCRIPTORS_ROOT",
+        let prod_count = 17;
+        let e2e_count = 3;
+        let tail = dbgen::render_erc7730_security_tail(
             &prod,
-        );
-        let e2e_root = cfg_root_marker("feature = \"e2e-test\"", "ERC7730_DESCRIPTORS_ROOT", &e2e);
-        let correct = format!(
-            "{prod_root}\n{e2e_root}\n{ERC7730_PROD_FILTER_MARKER}\n{ERC7730_E2E_FILTER_MARKER}"
-        );
-        assert_eq!(
-            erc7730_root_filter_cfg_matches(&correct, &prod, &e2e),
-            (true, true, true, true)
-        );
-
-        let swapped_roots = format!(
-            "{}\n{}\n{ERC7730_PROD_FILTER_MARKER}\n{ERC7730_E2E_FILTER_MARKER}",
-            cfg_root_marker(
-                "not(feature = \"e2e-test\")",
-                "ERC7730_DESCRIPTORS_ROOT",
-                &e2e,
-            ),
-            cfg_root_marker("feature = \"e2e-test\"", "ERC7730_DESCRIPTORS_ROOT", &prod,),
+            prod_count,
+            DevUnattested,
+            &e2e,
+            e2e_count,
+            DevUnattested,
         );
         assert_eq!(
-            erc7730_root_filter_cfg_matches(&swapped_roots, &prod, &e2e),
-            (false, false, true, true),
-            "swapping prod/e2e roots must be detected"
+            tail.matches("extern crate core as __pqsigner_erc7730_core;")
+                .count(),
+            1
         );
+        assert_eq!(
+            tail.matches("self::__pqsigner_erc7730_core::include_bytes!")
+                .count(),
+            2
+        );
+        assert_eq!(
+            tail.matches("self::__pqsigner_erc7730_core::compile_error!")
+                .count(),
+            3
+        );
+        assert!(
+            !tail.lines().any(|line| line.starts_with("include_bytes!"))
+                && !tail.lines().any(|line| line.starts_with("compile_error!")),
+            "generated security macros must resolve through the collision-sensitive core alias"
+        );
+        let correct = format!("pub static SELECTOR_DB_ROOT: [u8; 32] = [0; 32];\n\n{tail}");
+        assert!(erc7730_security_tail_matches(
+            &correct,
+            &prod,
+            prod_count,
+            &e2e,
+            e2e_count,
+            DevUnattested,
+            DevUnattested,
+        ));
 
-        let swapped_filters = correct
+        let swapped_roots = dbgen::render_erc7730_security_tail(
+            &e2e,
+            e2e_count,
+            DevUnattested,
+            &prod,
+            prod_count,
+            DevUnattested,
+        );
+        assert!(!erc7730_security_tail_matches(
+            &swapped_roots,
+            &prod,
+            prod_count,
+            &e2e,
+            e2e_count,
+            DevUnattested,
+            DevUnattested,
+        ));
+
+        let swapped_filters = tail
             .replace("erc7730-known-calls-e2e.bloom", "TEMP_FILTER")
             .replace("erc7730-known-calls.bloom", "erc7730-known-calls-e2e.bloom")
             .replace("TEMP_FILTER", "erc7730-known-calls.bloom");
-        assert_eq!(
-            erc7730_root_filter_cfg_matches(&swapped_filters, &prod, &e2e),
-            (true, true, false, false),
-            "swapping prod/e2e omission filters must be detected"
-        );
-    }
+        assert!(!erc7730_security_tail_matches(
+            &swapped_filters,
+            &prod,
+            prod_count,
+            &e2e,
+            e2e_count,
+            DevUnattested,
+            DevUnattested,
+        ));
 
-    fn provenance_fixture(
-        prod: dbgen::erc7730::CatalogueProvenance,
-        e2e: dbgen::erc7730::CatalogueProvenance,
-    ) -> String {
-        let mut blocks = vec![
-            erc7730_provenance_marker(prod, false),
-            erc7730_provenance_marker(e2e, true),
-        ];
-        blocks.extend(erc7730_provenance_fence_markers(prod, false));
-        blocks.extend(erc7730_provenance_fence_markers(e2e, true));
-        blocks.join("\n\n")
-    }
-
-    #[test]
-    fn erc7730_codegen_check_requires_dev_provenance_fences() {
-        use dbgen::erc7730::CatalogueProvenance::DevUnattested;
-
-        let correct = provenance_fixture(DevUnattested, DevUnattested);
-        assert_eq!(
-            erc7730_provenance_cfg_matches(&correct, DevUnattested, DevUnattested),
-            (true, true, true, true)
+        let deleted_fence = tail.replacen(
+            "compile_error!(\"mode-production cannot embed the dev-unattested ERC-7730 catalogue.",
+            "compile_error!(\"disabled: mode-production cannot embed the dev-unattested ERC-7730 catalogue.",
+            1,
         );
+        assert!(!erc7730_security_tail_matches(
+            &deleted_fence,
+            &prod,
+            prod_count,
+            &e2e,
+            e2e_count,
+            DevUnattested,
+            DevUnattested,
+        ));
 
-        let prod_fence = erc7730_provenance_fence_markers(DevUnattested, false)
-            .into_iter()
-            .next()
-            .unwrap();
-        let deleted = correct.replacen(&prod_fence, "", 1);
-        assert_eq!(
-            erc7730_provenance_cfg_matches(&deleted, DevUnattested, DevUnattested),
-            (true, true, false, true),
-            "deleting the production dev-root fence must drift-fail"
+        // This is the concrete false-green that defeated the old lexical
+        // marker scan: the expected root bytes remained in Rust code but the
+        // effective cfg disabled them. Exact-tail comparison rejects any
+        // attribute inserted between the inert anchor and a protected item.
+        let cfg_disabled_root = tail.replacen(
+            "#[cfg(not(feature = \"e2e-test\"))]\npub static ERC7730_DESCRIPTORS_ROOT",
+            "#[cfg(any())]\n#[cfg(not(feature = \"e2e-test\"))]\npub static ERC7730_DESCRIPTORS_ROOT",
+            1,
         );
+        assert!(!erc7730_security_tail_matches(
+            &cfg_disabled_root,
+            &prod,
+            prod_count,
+            &e2e,
+            e2e_count,
+            DevUnattested,
+            DevUnattested,
+        ));
 
-        let e2e_fence = erc7730_provenance_fence_markers(DevUnattested, true)
-            .into_iter()
-            .next()
-            .unwrap();
-        let wrong_cfg = e2e_fence.replace(
-            "all(feature = \"e2e-test\"",
-            "all(not(feature = \"e2e-test\")",
-        );
-        let mutated = correct.replacen(&e2e_fence, &wrong_cfg, 1);
-        assert_eq!(
-            erc7730_provenance_cfg_matches(&mutated, DevUnattested, DevUnattested),
-            (true, true, true, false),
-            "moving the e2e fence under the production cfg must drift-fail"
-        );
-
-        let block_commented = format!("/*\n{correct}\n*/");
-        assert_eq!(
-            erc7730_provenance_cfg_matches(&block_commented, DevUnattested, DevUnattested,),
-            (false, false, false, false),
-            "security markers preserved only inside a block comment are inactive"
-        );
-
-        let raw_string = format!("const _: &str = r###\"{correct}\"###;");
-        assert_eq!(
-            erc7730_provenance_cfg_matches(&raw_string, DevUnattested, DevUnattested),
-            (false, false, false, false),
-            "security markers copied into a raw string are inactive"
-        );
+        let block_commented = format!("/*\n{tail}\n*/");
+        let raw_string = format!("const _: &str = r###\"{tail}\"###;");
+        let enclosed = format!("#[cfg(any())]\nmod disabled {{\n{tail}}}\n");
+        for forged in [&block_commented, &raw_string, &enclosed] {
+            assert!(!erc7730_security_tail_matches(
+                forged,
+                &prod,
+                prod_count,
+                &e2e,
+                e2e_count,
+                DevUnattested,
+                DevUnattested,
+            ));
+        }
     }
 
     #[test]
-    fn erc7730_codegen_check_requires_verified_provenance_fences() {
+    fn erc7730_generated_core_alias_defeats_extern_prelude_shadowing() {
+        use std::io::Write as _;
+        use std::process::{Command, Stdio};
+
+        // `::core::compile_error!` is NOT intrinsically unshadowable: a prefix
+        // can rebind `core` to this crate and re-export a no-op macro. The
+        // generated suffix instead imports the real crate under a unique local
+        // name. A hostile prefix cannot predeclare that name without a
+        // duplicate-item error, and cannot redirect this path.
+        let source = r#"
+extern crate self as core;
+macro_rules! compile_error { ($message:literal) => {} }
+pub(crate) use compile_error;
+
+mod generated_suffix {
+    pub const ERC7730_GENERATED_SECURITY_TAIL_ANCHOR: () = ();
+    extern crate core as __pqsigner_erc7730_core;
+    self::__pqsigner_erc7730_core::compile_error!("real generated fence fired");
+}
+"#;
+        let temp = tempfile::tempdir().expect("create rustc output directory");
+        let metadata = temp.path().join("core-alias-test.rmeta");
+        let mut child = Command::new("rustc")
+            .args(["--edition=2021", "--crate-type=lib", "--emit=metadata", "-"])
+            .arg("-o")
+            .arg(&metadata)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn rustc for generated-core-alias regression");
+        child
+            .stdin
+            .take()
+            .expect("rustc stdin")
+            .write_all(source.as_bytes())
+            .expect("write rustc source");
+        let output = child.wait_with_output().expect("wait for rustc");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "hostile prefix suppressed fence");
+        assert!(
+            stderr.contains("real generated fence fired"),
+            "failure did not come from the real core macro: {stderr}"
+        );
+    }
+
+    #[test]
+    fn erc7730_codegen_verified_provenance_is_also_exact() {
         use dbgen::erc7730::CatalogueProvenance::Erc8176Verified;
 
-        let correct = provenance_fixture(Erc8176Verified, Erc8176Verified);
-        assert_eq!(
-            erc7730_provenance_cfg_matches(&correct, Erc8176Verified, Erc8176Verified,),
-            (true, true, true, true)
+        let prod = [0x33u8; 32];
+        let e2e = [0x44u8; 32];
+        let prod_count = 23;
+        let e2e_count = 5;
+        let correct = dbgen::render_erc7730_security_tail(
+            &prod,
+            prod_count,
+            Erc8176Verified,
+            &e2e,
+            e2e_count,
+            Erc8176Verified,
         );
-
-        let prod_fence = erc7730_provenance_fence_markers(Erc8176Verified, false)
-            .into_iter()
-            .next()
-            .unwrap();
-        let altered = prod_fence.replace(
+        assert!(erc7730_security_tail_matches(
+            &correct,
+            &prod,
+            prod_count,
+            &e2e,
+            e2e_count,
+            Erc8176Verified,
+            Erc8176Verified,
+        ));
+        let altered = correct.replacen(
             "feature = \"erc7730-dev-unattested\"",
             "not(feature = \"erc7730-dev-unattested\")",
+            1,
         );
-        let mutated = correct.replacen(&prod_fence, &altered, 1);
+        assert!(!erc7730_security_tail_matches(
+            &altered,
+            &prod,
+            prod_count,
+            &e2e,
+            e2e_count,
+            Erc8176Verified,
+            Erc8176Verified,
+        ));
+    }
+
+    #[test]
+    fn vendor_install_second_move_failure_restores_both_prior_directories() {
+        let temp = tempfile::tempdir().expect("create vendor rollback test directory");
+        let root = temp.path();
+        let out = root.join("installed");
+        let staging = root.join("staging");
+        fs::create_dir_all(out.join("registry")).unwrap();
+        fs::create_dir_all(out.join("ercs")).unwrap();
+        fs::create_dir_all(staging.join("registry")).unwrap();
+        fs::write(out.join("registry/old.json"), b"old registry").unwrap();
+        fs::write(out.join("ercs/old.json"), b"old ercs").unwrap();
+        fs::write(staging.join("registry/new.json"), b"new registry").unwrap();
+        // Intentionally omit staging/ercs so the second new-directory rename
+        // fails after the first succeeded.
+
+        let error = install_vendored_subdirs(&staging, &out).unwrap_err();
+        assert!(
+            error.contains("checked rollback restored the prior corpus"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(fs::read(out.join("registry/old.json")).unwrap(), b"old registry");
+        assert_eq!(fs::read(out.join("ercs/old.json")).unwrap(), b"old ercs");
+        assert!(!out.join("registry/new.json").exists());
         assert_eq!(
-            erc7730_provenance_cfg_matches(&mutated, Erc8176Verified, Erc8176Verified,),
-            (true, true, false, true),
-            "mutating the verified-root warning-feature fence must drift-fail"
+            fs::read(staging.join("registry/new.json")).unwrap(),
+            b"new registry"
+        );
+        assert!(
+            fs::read_dir(&root)
+                .unwrap()
+                .filter_map(Result::ok)
+                .all(|entry| !entry
+                    .file_name()
+                    .to_string_lossy()
+                    .contains(".vendor-backup-")),
+            "successful rollback must not leave a backup"
+        );
+    }
+
+    #[test]
+    fn excluded_fixture_domain_only_eip712_binding_is_rejected() {
+        let temp = tempfile::tempdir().expect("create excluded-fixture test directory");
+        let root = temp.path();
+        let fixture = root.join("domain.tests.json");
+        fs::write(
+            &fixture,
+            br#"{
+  "context": {
+    "eip712": {
+      "deployments": [],
+      "domain": {
+        "chainId": 1,
+        "verifyingContract": "0x0000000000000000000000000000000000000001"
+      }
+    }
+  }
+}"#,
+        )
+        .unwrap();
+
+        let error = validate_excluded_vendor_fixture(&fixture).unwrap_err();
+        assert!(
+            error.contains("fully-specified EIP-712 domain binding"),
+            "unexpected error: {error}"
         );
     }
 
@@ -1694,13 +1633,12 @@ fn cmd_build_registry(args: &[String]) -> ExitCode {
 
 /// `vendor-registry --registry-root <dir> [--out <dir>] [--policy <path>]`
 ///
-/// Vendors the COMPILABLE SUBSET of the upstream registry into the repo (default
-/// `secure/data/erc7730-registry/`) so the firmware-pinned root can be rebuilt
-/// from in-repo sources (reproducible builds / CI). Copies every descriptor that
-/// contributes ≥ 1 leaf (via `build_db_tolerant`) PLUS every include template
-/// (`ercs/*.json`, `common-*.json`), preserving the registry-relative tree so
-/// `includes` still resolve, then VERIFIES the vendored tree rebuilds the
-/// identical Merkle root (the faithfulness proof).
+/// Vendors the complete security-relevant JSON corpus of the upstream registry
+/// into the repo (default `secure/data/erc7730-registry/`) so both accepted
+/// render leaves and intentionally-refused call declarations remain
+/// reproducible.  A dead-only project contributes no Merkle leaf but still has
+/// to remain in the known-call omission filter; therefore root equality alone
+/// is explicitly insufficient as a faithfulness proof.
 fn cmd_vendor_registry(args: &[String]) -> ExitCode {
     let mut registry_root: Option<PathBuf> = None;
     let mut out: Option<PathBuf> = None;
@@ -1738,111 +1676,596 @@ fn cmd_vendor_registry(args: &[String]) -> ExitCode {
     let out = out.unwrap_or_else(|| workspace_root.join("secure/data/erc7730-registry"));
     let policy_path =
         policy_path.unwrap_or_else(|| workspace_root.join("secure/data/erc7730/policy.toml"));
-    let input = registry_root.join("registry");
+    match vendor_registry(&registry_root, &out, &policy_path) {
+        Ok(receipt) => {
+            println!(
+                "vendored {} files ({} leaf-bearing sources + {} refused/support JSON files)",
+                receipt.copied, receipt.descriptor_count, receipt.support_count
+            );
+            println!("out:   {}", out.display());
+            println!(
+                "root:  {} (exact catalogue + known-call coverage reproduced ✓)",
+                hex_lower(&receipt.root)
+            );
+            println!("leaves: {}", receipt.leaf_count);
+            println!("known calls: {}", receipt.known_call_count);
+            println!(
+                "known-call tuple-set SHA-256: {}",
+                hex_lower(&receipt.known_call_set_hash)
+            );
+            println!("source-corpus SHA-256: {}", hex_lower(&receipt.corpus_hash));
+            println!(
+                "excluded fixture JSON: {} files, SHA-256 {}",
+                receipt.excluded_fixture_count,
+                hex_lower(&receipt.excluded_fixture_hash)
+            );
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("vendor-registry: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
 
-    // 1. Tolerant build over the registry → the survivor descriptor sources.
+struct VendorReceipt {
+    copied: usize,
+    descriptor_count: usize,
+    support_count: usize,
+    root: [u8; 32],
+    leaf_count: usize,
+    known_call_count: usize,
+    known_call_set_hash: [u8; 32],
+    corpus_hash: [u8; 32],
+    excluded_fixture_count: usize,
+    excluded_fixture_hash: [u8; 32],
+}
+
+fn vendor_registry(
+    registry_root: &std::path::Path,
+    out: &std::path::Path,
+    policy_path: &std::path::Path,
+) -> Result<VendorReceipt, String> {
+    let registry_root = fs::canonicalize(registry_root)
+        .map_err(|e| format!("canonicalize source {}: {e}", registry_root.display()))?;
+    if out.file_name().is_none() {
+        return Err(format!(
+            "unsafe --out {} (must be a distinct named directory)",
+            out.display()
+        ));
+    }
+    if out
+        .symlink_metadata()
+        .is_ok_and(|metadata| metadata.file_type().is_symlink())
+    {
+        return Err(format!("--out may not be a symlink: {}", out.display()));
+    }
+    let out_parent = out
+        .parent()
+        .ok_or_else(|| format!("--out has no parent: {}", out.display()))?;
+    fs::create_dir_all(out_parent)
+        .map_err(|e| format!("create output parent {}: {e}", out_parent.display()))?;
+    let canonical_parent = fs::canonicalize(out_parent)
+        .map_err(|e| format!("canonicalize output parent {}: {e}", out_parent.display()))?;
+    let canonical_out = canonical_parent.join(out.file_name().expect("checked named output"));
+    if canonical_out.starts_with(&registry_root) || registry_root.starts_with(&canonical_out) {
+        return Err(format!(
+            "source/output overlap is forbidden: source={} out={}",
+            registry_root.display(),
+            canonical_out.display()
+        ));
+    }
+
+    if canonical_out.exists() {
+        let mut entries = fs::read_dir(&canonical_out)
+            .map_err(|e| format!("read output {}: {e}", canonical_out.display()))?;
+        let nonempty = entries
+            .next()
+            .transpose()
+            .map_err(|e| format!("read output entry {}: {e}", canonical_out.display()))?
+            .is_some();
+        if nonempty && !canonical_out.join(ERC7730_VENDOR_MARKER).is_file() {
+            return Err(format!(
+                "refusing to replace unmarked nonempty output {}",
+                canonical_out.display()
+            ));
+        }
+    }
+
+    let input = registry_root.join("registry");
+    let ercs_input = registry_root.join("ercs");
+    validate_vendor_source_directory(&input, "registry")?;
+    validate_vendor_source_directory(&ercs_input, "ercs")?;
     let (result, _skips) =
-        match dbgen::erc7730::build_db_tolerant(&input, &policy_path, Some(&registry_root)) {
-            Ok(v) => v,
-            Err(e) => {
-                eprintln!("vendor-registry: registry build: {e}");
-                return ExitCode::FAILURE;
-            }
-        };
-    let orig_root = result.root;
+        dbgen::erc7730::build_db_tolerant(&input, policy_path, Some(&registry_root))
+            .map_err(|e| format!("registry build: {e}"))?;
     let descriptor_count = result
         .entries
         .iter()
-        .map(|e| &e.source)
+        .map(|entry| &entry.source)
         .collect::<std::collections::BTreeSet<_>>()
         .len();
 
-    // 2. Vendor every `*.json` in each survivor descriptor's PROJECT DIR (so its
-    //    sibling include templates — `common-*.json`, `<proj>-common-*.json`,
-    //    etc., whatever they're named — come along) plus all `ercs/*.json`.
-    //    Include resolution is sibling- or `../../ercs/`-relative, so this is
-    //    the complete closure; the faithfulness check below proves it.
-    let mut dirs: std::collections::BTreeSet<PathBuf> = result
-        .entries
-        .iter()
-        .filter_map(|e| e.source.parent().map(PathBuf::from))
-        .collect();
-    dirs.insert(registry_root.join("ercs"));
-    let mut files: std::collections::BTreeSet<PathBuf> = std::collections::BTreeSet::new();
-    for dir in &dirs {
-        collect_dir_jsons(dir, &mut files);
+    let mut source_files = std::collections::BTreeSet::<PathBuf>::new();
+    let mut excluded_fixtures = std::collections::BTreeSet::<PathBuf>::new();
+    for dir in [input, ercs_input] {
+        collect_vendor_jsons(&dir, &mut source_files, &mut excluded_fixtures, false)?;
     }
-    let support_count = files.len().saturating_sub(descriptor_count);
+    let source_corpus = vendor_corpus_receipt(&registry_root, &source_files)?;
+    let excluded_fixture_corpus =
+        vendor_excluded_fixture_receipt(&registry_root, &excluded_fixtures)?;
+    let support_count = source_files.len().saturating_sub(descriptor_count);
 
-    // 3. Clean the tool-managed subdirs, then copy preserving registry-relative paths.
-    for sub in ["registry", "ercs"] {
-        let _ = fs::remove_dir_all(out.join(sub));
+    let out_name = canonical_out
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "output directory name must be UTF-8".to_string())?;
+    let staging =
+        canonical_parent.join(format!(".{out_name}.vendor-staging-{}", std::process::id()));
+    if staging.exists() {
+        return Err(format!(
+            "staging path already exists: {}",
+            staging.display()
+        ));
     }
-    let mut copied = 0usize;
-    for src in &files {
-        let Ok(rel) = src.strip_prefix(&registry_root) else {
-            continue;
-        };
-        let dst = out.join(rel);
+    fs::create_dir(&staging)
+        .map_err(|e| format!("create staging directory {}: {e}", staging.display()))?;
+
+    for src in &source_files {
+        let rel = src
+            .strip_prefix(&registry_root)
+            .map_err(|_| format!("source escaped registry root: {}", src.display()))?;
+        let dst = staging.join(rel);
         if let Some(parent) = dst.parent() {
-            if let Err(e) = fs::create_dir_all(parent) {
-                eprintln!("vendor-registry: mkdir {}: {e}", parent.display());
-                return ExitCode::FAILURE;
-            }
+            fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
         }
-        if let Err(e) = fs::copy(src, &dst) {
-            eprintln!("vendor-registry: copy {}: {e}", src.display());
-            return ExitCode::FAILURE;
-        }
-        copied += 1;
+        fs::copy(src, &dst).map_err(|e| format!("copy {}: {e}", src.display()))?;
     }
 
-    // 4. Reproducibility proof: the vendored tree must rebuild the IDENTICAL root.
-    let (vresult, _) =
-        match dbgen::erc7730::build_db_tolerant(&out.join("registry"), &policy_path, Some(&out)) {
-            Ok(v) => v,
-            Err(e) => {
-                eprintln!("vendor-registry: rebuild from vendored tree: {e}");
-                return ExitCode::FAILURE;
-            }
-        };
-    if vresult.root != orig_root {
-        eprintln!(
-            "vendor-registry: FAITHFULNESS CHECK FAILED — vendored root {} != registry root {} \
-             (an include template is missing from the vendored subset)",
-            hex_lower(&vresult.root),
-            hex_lower(&orig_root)
-        );
-        return ExitCode::FAILURE;
+    let mut staged_files = std::collections::BTreeSet::<PathBuf>::new();
+    let mut staged_excluded_fixtures = std::collections::BTreeSet::<PathBuf>::new();
+    for dir in [staging.join("registry"), staging.join("ercs")] {
+        collect_vendor_jsons(
+            &dir,
+            &mut staged_files,
+            &mut staged_excluded_fixtures,
+            false,
+        )?;
+    }
+    if !staged_excluded_fixtures.is_empty() {
+        return Err("internal error: excluded fixture JSON was copied into staging".to_string());
+    }
+    let staged_corpus = vendor_corpus_receipt(&staging, &staged_files)?;
+    if staged_corpus != source_corpus {
+        return Err(format!(
+            "FAITHFULNESS CHECK FAILED — source corpus count/hash={}/{} staged={}/{}",
+            source_corpus.0,
+            hex_lower(&source_corpus.1),
+            staged_corpus.0,
+            hex_lower(&staged_corpus.1)
+        ));
     }
 
-    println!("vendored {copied} files ({descriptor_count} leaf-bearing descriptors + {support_count} sibling/template files)");
-    println!("out:   {}", out.display());
-    println!(
-        "root:  {} (reproduced from the vendored tree ✓)",
-        hex_lower(&orig_root)
-    );
-    println!("leaves: {}", vresult.leaf_count);
-    ExitCode::SUCCESS
+    let (vendored, _) =
+        dbgen::erc7730::build_db_tolerant(&staging.join("registry"), policy_path, Some(&staging))
+            .map_err(|e| format!("rebuild from staged tree: {e}"))?;
+    let faithful = vendored.root == result.root
+        && vendored.blob == result.blob
+        && vendored.leaf_count == result.leaf_count
+        && vendored.provenance == result.provenance
+        && vendored.known_call_count == result.known_call_count
+        && vendored.known_call_set_hash == result.known_call_set_hash
+        && vendored.known_calls_bloom == result.known_calls_bloom
+        && vendored.review_text == result.review_text;
+    if !faithful {
+        return Err(format!(
+            "FAITHFULNESS CHECK FAILED\n\
+             source:   root={} leaves={} provenance={} known_calls={} tuple_hash={}\n\
+             staged:   root={} leaves={} provenance={} known_calls={} tuple_hash={}\n\
+             exact checks: blob={} bloom={} review={}",
+            hex_lower(&result.root),
+            result.leaf_count,
+            result.provenance.as_str(),
+            result.known_call_count,
+            hex_lower(&result.known_call_set_hash),
+            hex_lower(&vendored.root),
+            vendored.leaf_count,
+            vendored.provenance.as_str(),
+            vendored.known_call_count,
+            hex_lower(&vendored.known_call_set_hash),
+            vendored.blob == result.blob,
+            vendored.known_calls_bloom == result.known_calls_bloom,
+            vendored.review_text == result.review_text,
+        ));
+    }
+
+    install_vendored_subdirs(&staging, &canonical_out)?;
+    Ok(VendorReceipt {
+        copied: source_files.len(),
+        descriptor_count,
+        support_count,
+        root: result.root,
+        leaf_count: result.leaf_count,
+        known_call_count: result.known_call_count,
+        known_call_set_hash: result.known_call_set_hash,
+        corpus_hash: source_corpus.1,
+        excluded_fixture_count: excluded_fixture_corpus.0,
+        excluded_fixture_hash: excluded_fixture_corpus.1,
+    })
 }
 
-/// Collect every `*.json` under `dir` (recursively, skipping `tests/` fixture
-/// dirs and `*.tests.json`) — both descriptors and their sibling include
-/// templates. Used to vendor a whole project dir so any `includes` resolves.
-fn collect_dir_jsons(dir: &std::path::Path, out: &mut std::collections::BTreeSet<PathBuf>) {
-    let Ok(rd) = fs::read_dir(dir) else { return };
-    for entry in rd.flatten() {
+fn validate_vendor_source_directory(path: &std::path::Path, label: &str) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|e| format!("inspect {label} source directory {}: {e}", path.display()))?;
+    if metadata.file_type().is_symlink() {
+        return Err(format!(
+            "{label} source directory may not be a symlink: {}",
+            path.display()
+        ));
+    }
+    if !metadata.is_dir() {
+        return Err(format!(
+            "{label} source path is not a directory: {}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+/// Collect every `*.json` under `dir`, including upstream test-fixture paths.
+/// Fixture naming may exclude a file from trusted rendering, but it is not a
+/// safe omission-filter boundary: moving a declaration under `tests/` or adding
+/// `.tests.` to its name must not restore a blind-sign path. Any traversal error
+/// or symlink is fatal.
+fn collect_vendor_jsons(
+    dir: &std::path::Path,
+    out: &mut std::collections::BTreeSet<PathBuf>,
+    excluded: &mut std::collections::BTreeSet<PathBuf>,
+    under_tests_dir: bool,
+) -> Result<(), String> {
+    validate_vendor_source_directory(dir, "recursive corpus")?;
+    let rd = fs::read_dir(dir).map_err(|e| format!("read_dir {}: {e}", dir.display()))?;
+    for entry in rd {
+        let entry = entry.map_err(|e| format!("read entry under {}: {e}", dir.display()))?;
         let p = entry.path();
-        if p.is_dir() {
-            if p.file_name().is_some_and(|n| n == "tests") {
-                continue;
+        let file_type = entry
+            .file_type()
+            .map_err(|e| format!("file type {}: {e}", p.display()))?;
+        if file_type.is_symlink() {
+            return Err(format!(
+                "symlink is not allowed in vendored corpus: {}",
+                p.display()
+            ));
+        }
+        if file_type.is_dir() {
+            let child_is_tests = p.file_name().is_some_and(|name| name == "tests");
+            collect_vendor_jsons(&p, out, excluded, under_tests_dir || child_is_tests)?;
+        } else if file_type.is_file() {
+            let name = p
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| {
+                    "vendored corpus contains a non-UTF-8 regular-file name".to_string()
+                })?;
+            if name.to_ascii_lowercase().ends_with(".json") && !name.ends_with(".json") {
+                return Err(format!(
+                    "non-canonical JSON filename `{name}` in vendored corpus — use lowercase `.json`"
+                ));
             }
-            collect_dir_jsons(&p, out);
-        } else if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
-            if name.ends_with(".json") && !name.contains(".tests.") {
-                out.insert(p);
+            if name.ends_with(".json") {
+                if under_tests_dir || name.contains(".tests.") {
+                    validate_excluded_vendor_fixture(&p)?;
+                    excluded.insert(p);
+                } else {
+                    out.insert(p);
+                }
+            }
+        } else {
+            return Err(format!(
+                "unsupported filesystem entry in vendored corpus: {}",
+                p.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Excluded upstream fixtures are not copied or trusted for rendering, but the
+/// exclusion cannot become a known-call escape hatch. Parse every fixture and
+/// refuse a nested include or any live binding: contract/EIP-712 deployment
+/// arrays and the EIP-712 domain-only `{chainId, verifyingContract}` form. The
+/// inventory is separately receipted for the root-rotation review.
+fn validate_excluded_vendor_fixture(path: &std::path::Path) -> Result<(), String> {
+    let bytes = fs::read(path)
+        .map_err(|e| format!("read excluded fixture {}: {e}", path.display()))?;
+    let json: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|e| format!("parse excluded fixture {}: {e}", path.display()))?;
+    if json.get("includes").is_some() {
+        return Err(format!(
+            "excluded fixture {} contains `includes`; it must be curated into the security corpus",
+            path.display()
+        ));
+    }
+    for pointer in [
+        "/context/contract/deployments",
+        "/context/eip712/deployments",
+    ] {
+        if let Some(value) = json.pointer(pointer) {
+            let deployments = value.as_array().ok_or_else(|| {
+                format!(
+                    "excluded fixture {} has non-array `{pointer}`",
+                    path.display()
+                )
+            })?;
+            if !deployments.is_empty() {
+                return Err(format!(
+                    "excluded fixture {} declares deployments at `{pointer}`; fixture naming cannot exclude a live binding",
+                    path.display()
+                ));
             }
         }
+    }
+    if let Some(domain) = json.pointer("/context/eip712/domain") {
+        let domain = domain.as_object().ok_or_else(|| {
+            format!(
+                "excluded fixture {} has non-object `/context/eip712/domain`",
+                path.display()
+            )
+        })?;
+        let has_chain = domain.get("chainId").is_some_and(|value| !value.is_null());
+        let has_contract = domain
+            .get("verifyingContract")
+            .is_some_and(|value| !value.is_null());
+        if has_chain && has_contract {
+            return Err(format!(
+                "excluded fixture {} declares a fully-specified EIP-712 domain binding; fixture naming cannot exclude a live binding",
+                path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Aggregate byte-level receipt for the complete copied corpus. Paths are
+/// registry-root-relative and sorted; each file contributes its own SHA-256 so
+/// semantically-unused templates remain part of the faithfulness proof.
+fn vendor_corpus_receipt(
+    root: &std::path::Path,
+    files: &std::collections::BTreeSet<PathBuf>,
+) -> Result<(usize, [u8; 32]), String> {
+    vendor_corpus_receipt_with_domain(root, files, b"pqsigner/erc7730-vendor-corpus-v1")
+}
+
+fn vendor_corpus_receipt_with_domain(
+    root: &std::path::Path,
+    files: &std::collections::BTreeSet<PathBuf>,
+    domain: &[u8],
+) -> Result<(usize, [u8; 32]), String> {
+    let count = u64::try_from(files.len())
+        .map_err(|_| "vendor corpus file count does not fit u64".to_string())?;
+    let mut aggregate = Sha256::new();
+    aggregate.update(domain);
+    aggregate.update(count.to_be_bytes());
+    for path in files {
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|_| format!("corpus source escaped root: {}", path.display()))?;
+        let relative = relative
+            .to_str()
+            .ok_or_else(|| format!("non-UTF-8 corpus path: {}", path.display()))?;
+        let path_len = u32::try_from(relative.len())
+            .map_err(|_| format!("corpus path is too long: {relative}"))?;
+        let bytes =
+            fs::read(path).map_err(|e| format!("read corpus file {}: {e}", path.display()))?;
+        let file_len = u64::try_from(bytes.len())
+            .map_err(|_| format!("corpus file is too large: {}", path.display()))?;
+        let file_hash = Sha256::digest(&bytes);
+        aggregate.update(path_len.to_be_bytes());
+        aggregate.update(relative.as_bytes());
+        aggregate.update(file_len.to_be_bytes());
+        aggregate.update(file_hash);
+    }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&aggregate.finalize());
+    Ok((files.len(), out))
+}
+
+fn vendor_excluded_fixture_receipt(
+    root: &std::path::Path,
+    files: &std::collections::BTreeSet<PathBuf>,
+) -> Result<(usize, [u8; 32]), String> {
+    vendor_corpus_receipt_with_domain(
+        root,
+        files,
+        b"pqsigner/erc7730-excluded-fixture-corpus-v1",
+    )
+}
+
+/// Install only the two tool-managed subdirectories after every source/staged
+/// receipt has passed. This is a checked two-directory transaction, not a
+/// filesystem-atomic pair swap: existing directories are moved to a retained
+/// sibling backup first, and every rollback operation is checked. Any uncertain
+/// rollback reports the backup path and never claims that the prior corpus was
+/// restored.
+fn install_vendored_subdirs(
+    staging: &std::path::Path,
+    out: &std::path::Path,
+) -> Result<(), String> {
+    fs::create_dir_all(out).map_err(|e| format!("create output {}: {e}", out.display()))?;
+    let marker = out.join(ERC7730_VENDOR_MARKER);
+    match fs::symlink_metadata(&marker) {
+        Ok(_) => validate_vendor_marker(&marker)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::write(&marker, ERC7730_VENDOR_MARKER_BYTES)
+                .map_err(|e| format!("write vendor marker {}: {e}", marker.display()))?;
+        }
+        Err(error) => {
+            return Err(format!(
+                "inspect vendor marker {}: {error}",
+                marker.display()
+            ));
+        }
+    }
+
+    let parent = out
+        .parent()
+        .ok_or_else(|| format!("output has no parent: {}", out.display()))?;
+    let name = out
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "output directory name must be UTF-8".to_string())?;
+    let backup = parent.join(format!(".{name}.vendor-backup-{}", std::process::id()));
+    if backup.exists() {
+        return Err(format!("backup path already exists: {}", backup.display()));
+    }
+    fs::create_dir(&backup)
+        .map_err(|e| format!("create backup directory {}: {e}", backup.display()))?;
+
+    let subdirs = ["registry", "ercs"];
+    let mut old_moved = [false; 2];
+    for (index, subdir) in subdirs.iter().enumerate() {
+        let old = out.join(subdir);
+        if old.exists() {
+            if let Err(error) = fs::rename(&old, backup.join(subdir)) {
+                let rollback = rollback_vendored_install(
+                    staging,
+                    out,
+                    &backup,
+                    &subdirs,
+                    &old_moved,
+                    &[false; 2],
+                );
+                return Err(install_failure_message(
+                    &format!("move existing {} into backup: {error}", old.display()),
+                    &backup,
+                    rollback,
+                ));
+            }
+            old_moved[index] = true;
+        }
+    }
+
+    let mut new_moved = [false; 2];
+    for (index, subdir) in subdirs.iter().enumerate() {
+        let staged = staging.join(subdir);
+        let destination = out.join(subdir);
+        if let Err(error) = fs::rename(&staged, &destination) {
+            let rollback = rollback_vendored_install(
+                staging,
+                out,
+                &backup,
+                &subdirs,
+                &old_moved,
+                &new_moved,
+            );
+            return Err(install_failure_message(
+                &format!("install staged directory {}: {error}", staged.display()),
+                &backup,
+                rollback,
+            ));
+        }
+        new_moved[index] = true;
+    }
+
+    fs::remove_dir(staging)
+        .map_err(|e| format!("installed corpus but could not remove empty staging dir: {e}"))?;
+    fs::remove_dir_all(&backup).map_err(|e| {
+        format!(
+            "installed corpus but could not remove tool-owned backup {}: {e}",
+            backup.display()
+        )
+    })?;
+    Ok(())
+}
+
+fn validate_vendor_marker(marker: &std::path::Path) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(marker)
+        .map_err(|e| format!("inspect vendor marker {}: {e}", marker.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        return Err(format!(
+            "vendor marker must be a regular non-symlink file: {}",
+            marker.display()
+        ));
+    }
+    let bytes =
+        fs::read(marker).map_err(|e| format!("read vendor marker {}: {e}", marker.display()))?;
+    if bytes != ERC7730_VENDOR_MARKER_BYTES {
+        return Err(format!(
+            "vendor marker content mismatch at {}; refusing to replace tool-managed directories",
+            marker.display()
+        ));
+    }
+    Ok(())
+}
+
+fn rollback_vendored_install(
+    staging: &std::path::Path,
+    out: &std::path::Path,
+    backup: &std::path::Path,
+    subdirs: &[&str; 2],
+    old_moved: &[bool; 2],
+    new_moved: &[bool; 2],
+) -> Result<(), Vec<String>> {
+    let mut errors = Vec::new();
+
+    // First remove every newly-installed directory from the destination so an
+    // old directory can be restored without a destination collision.
+    for index in (0..subdirs.len()).rev() {
+        if new_moved[index] {
+            let installed = out.join(subdirs[index]);
+            let staged = staging.join(subdirs[index]);
+            if let Err(error) = fs::rename(&installed, &staged) {
+                errors.push(format!(
+                    "move newly installed {} back to staging {}: {error}",
+                    installed.display(),
+                    staged.display()
+                ));
+            }
+        }
+    }
+
+    for index in (0..subdirs.len()).rev() {
+        if old_moved[index] {
+            let saved = backup.join(subdirs[index]);
+            let destination = out.join(subdirs[index]);
+            if let Err(error) = fs::rename(&saved, &destination) {
+                errors.push(format!(
+                    "restore prior {} from {}: {error}",
+                    destination.display(),
+                    saved.display()
+                ));
+            }
+        }
+    }
+
+    if errors.is_empty() {
+        if let Err(error) = fs::remove_dir(backup) {
+            errors.push(format!(
+                "remove empty rollback backup {}: {error}",
+                backup.display()
+            ));
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
+fn install_failure_message(
+    cause: &str,
+    backup: &std::path::Path,
+    rollback: Result<(), Vec<String>>,
+) -> String {
+    match rollback {
+        Ok(()) => format!("{cause}; checked rollback restored the prior corpus"),
+        Err(errors) => format!(
+            "{cause}; ROLLBACK INCOMPLETE — do not use the destination. Retained backup at {}. Rollback errors: {}",
+            backup.display(),
+            errors.join(" | ")
+        ),
     }
 }
 

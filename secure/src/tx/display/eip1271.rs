@@ -146,7 +146,7 @@ pub fn render_eip1271_raw32_pages(
     let mut pages = Pages::with_len(6);
 
     write_line(&mut pages.buf[0][0], "EIP-1271 Sign?");
-    write_line(&mut pages.buf[0][1], "! Raw 32-byte");
+    write_line(&mut pages.buf[0][1], "! BLIND RAW32");
     if account_deployed {
         write_line(&mut pages.buf[0][2], "Verify on dapp");
     } else {

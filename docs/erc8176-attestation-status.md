@@ -54,12 +54,12 @@ the on-device IR/leaf identifier baked into the firmware-pinned Merkle tree
   spec; it stays behind `allow_unattested_dev_descriptors`. It is not the real
   enforcement path — the checker + a future EAS snapshot are.
 
-## Current coverage (measured 2026-07)
+## Current coverage (420-leaf catalogue snapshot, measured 2026-07)
 
 `make erc8176-coverage`:
 
 ```
-our descriptors (unique descriptorHashes): 250   (→ 708 firmware leaves)
+our descriptors (unique descriptorHashes): 224   (→ 420 firmware leaves)
 total attestations under the EAS schema:   3
 OUR descriptors with ANY attestation:      0
 ```
@@ -88,7 +88,7 @@ per shipped descriptorHash, and un-attested descriptors drop to loud blind-sign
 (fail-safe) rather than shipping unattested.
 
 **Until then:** run `make erc8176-coverage` periodically (it's the tripwire); stay
-in dev mode. Flipping now would drop the entire 708-leaf corpus to blind-sign for
+in dev mode. Flipping now would drop the entire 420-leaf corpus to blind-sign for
 zero security gain, because there is nothing to verify against.
 
 ## Why this is the honest posture

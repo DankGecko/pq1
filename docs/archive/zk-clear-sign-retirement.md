@@ -3,9 +3,11 @@
 ## Summary
 
 The on-device **Groth16 (BLS12-381) ZK clear-signing verifier** has been removed
-from the firmware and from the host-side tooling. The only clear-signing path it
-still served — **Aave v3 Pool** `borrow`/`repay` — was ported to the native
-on-device **ERC-7730** decoder, so there is **no clear-signing regression**.
+from the firmware and from the host-side tooling. Its remaining Aave v3 coverage
+was moved to the native on-device **ERC-7730** decoder. The current curated
+catalogue is stricter than that retirement-time port: supported operations render
+natively, while incomplete descriptors are known-call refusals rather than blind
+signatures. See the coverage note below.
 
 ## Why
 
@@ -21,16 +23,18 @@ premise no longer held:
   (commit `05f9758a`).
 
 After that, the **only** live consumer of Groth16 in the firmware was Aave v3
-`borrow`/`repay`. (`supply`/`withdraw` were already covered by *both* the ZK path and
-the native `aave-v3-pool.json` descriptor; the ZK path only won on renderer-ladder
-priority.) Keeping a BLS12-381 pairing verifier + Poseidon hash + a trusted-setup VK +
+`borrow`/`repay`. A retirement-time local descriptor also covered other Pool
+operations. That descriptor was later replaced by the curated upstream catalogue,
+whose strict operand-completeness policy intentionally refuses some operations.
+Keeping a BLS12-381 pairing verifier + Poseidon hash + a trusted-setup VK +
 an off-device prover for that narrow slice was a poor trade — especially given the
 class of bugs this path had produced (range-check / byte-pack non-binding forgery,
 amount-overflow field wrap, the trusted-setup `_security_note` hazard).
 
 Net effect: **lower firmware attack surface** (no pairing crypto, no Poseidon, no
-trusted-setup VK, no off-device prover, no PKA hardware accelerator) with no loss of
-clear-signing coverage.
+trusted-setup VK, no off-device prover, no PKA hardware accelerator). Availability
+for an incomplete Aave descriptor is deliberately fail-closed until the descriptor
+renders every signed operand.
 
 ## What was removed
 
@@ -60,17 +64,20 @@ The 2-byte `zk_bundle` length field is **kept reserved** in the sign-input wire 
 so the downstream trailer offsets (`zk_v3` CoW, `safe_v1`, selector, ERC-7730, names)
 stay byte-stable. The firmware now requires that field to be **zero** and fails closed
 on any non-zero length — no proof bytes are ever parsed. In the batch wire format the
-`TRAILER_KIND_ZK_V1` per-kind cap is set to `0` (a non-empty record of that legacy kind
+`TRAILER_KIND_RESERVED_V1` per-kind cap is set to `0` (a non-empty record of that legacy kind
 is rejected at parse time; an empty one is ignored).
 
 ## Aave coverage after retirement
 
-`secure/data/erc7730/aave-v3-pool.json` now carries native descriptors for
-`supply` / `supplyWithPermit` / `withdraw` / **`borrow`** / **`repay`** (the
-`interestRateMode` enum is hidden — on-device enum rendering is unsupported — and
-`referralCode` stays hidden, matching the existing field style). `ERC7730_DESCRIPTORS_ROOT`
-was regenerated. Coverage is exercised by `cargo test -p pqsigner-erc7730` and the
-dbgen round-trip tests.
+The retirement-time Aave port has since been superseded by the curated upstream
+descriptor at
+`secure/data/erc7730-registry/registry/aave/calldata-lpv3.json`. Under the current
+strict completeness policy, plain `withdraw` and `repay` compile for native
+clear-signing. Formats such as `supply` and `borrow` are deliberately retained in
+the known-call refusal filter but not rendered because their source descriptor
+hides the signed `referralCode` operand. This is fail-closed and must not be
+described as complete Aave coverage until the descriptors expose every signed
+operand.
 
 ## See also
 

@@ -246,9 +246,11 @@ out of firmware builds the same way `fuzz_props.rs` is.
 - `docs/verification/security-tooling-sota-2026-06.md` — the broader 2026-06 tool survey
   (Kani/Miri/cargo-checkct adopt-now; Flux pilot). This doc narrows it to *firmware
   decoders* and a first slice.
-- `secure/src/fuzz_props.rs` + `fuzz/fuzz_targets/` (11 targets) — existing proptest /
-  cargo-fuzz panic-resistance on the pure crates. **Neither covers multiSend or the
-  off-chain entry** — slice 1 fills the named gap. `fuzz_props.rs`'s own comment flags
+- `secure/src/fuzz_props.rs` + `fuzz/fuzz_targets/` (12 targets) — existing proptest /
+  cargo-fuzz panic-resistance on the pure crates. The current target set includes the
+  extracted strict MultiSend decoder; the off-chain typed-frame parser remains
+  outside this direct libFuzzer surface but has bounded Kani harnesses in
+  `aa/src/offchain_header.rs`. `fuzz_props.rs`'s own comment flags
   the missing `[lib]` target on `sphincs-tz-secure`; the narrow extraction here dodges it.
 - `fw-manifest/tests/gen_extract_vectors.rs` + `contracts/verification/extracted/Extracted/ExtractDiffCheck.lean`
   — the in-tree non-circular Rust↔Lean extraction-differential (+ negative-control

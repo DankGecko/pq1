@@ -4,7 +4,7 @@ The Ethereum-Foundation LLM swarm found real gaps in proofs and firmware we
 *believed* were sound. This kit lets you re-run that adversarial pass **on
 demand, with any LLM framework** — Claude Code, Codex, or a raw API — so the
 review is not locked to one tool. It is the operational arm of
-[`docs/fv-adversarial-review-playbook.md`](../docs/fv-adversarial-review-playbook.md).
+[`docs/verification/fv-adversarial-review-playbook.md`](../../../docs/verification/fv-adversarial-review-playbook.md).
 
 It is the *judgement* layer. The *mechanical* anti-vacuity layer (which needs no
 LLM and runs in CI) is the two gates `make verify-ledger-consistency` and

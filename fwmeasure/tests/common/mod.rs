@@ -82,7 +82,8 @@ impl ElfBuilder {
     }
 
     pub fn add_default_symbols(self, sidata: u32, sdata: u32, edata: u32) -> Self {
-        self.add_symbol("__sidata", sidata)
+        self.add_symbol("__vector_table", sidata)
+            .add_symbol("__sidata", sidata)
             .add_symbol("__sdata", sdata)
             .add_symbol("__edata", edata)
     }
@@ -162,7 +163,7 @@ impl ElfBuilder {
         out[4] = 1; // ELFCLASS32
         out[5] = 1; // ELFDATA2LSB
         out[6] = 1; // EV_CURRENT
-        // 7..16 stay zero
+                    // 7..16 stay zero
         out[16..18].copy_from_slice(&ET_EXEC.to_le_bytes());
         out[18..20].copy_from_slice(&EM_ARM.to_le_bytes());
         out[20..24].copy_from_slice(&1u32.to_le_bytes()); // e_version
@@ -266,7 +267,7 @@ impl ElfBuilder {
 }
 
 /// Build a minimal "valid" ELF: one PT_LOAD at `base` containing
-/// `payload`, with the four canonical symbols positioned so the
+/// `payload`, with the canonical symbols positioned so the
 /// `__sidata + (edata - sdata)` fallback yields `flash_end`.
 pub fn minimal_elf(base: u32, payload: &[u8], flash_end: u32) -> Vec<u8> {
     // Pick (sidata, sdata, edata) so that sidata + (edata - sdata) == flash_end.

@@ -1,6 +1,7 @@
-//! Merkle tree construction for the ERC20 + VK databases.
+//! Merkle tree construction for the authenticated companion databases.
 //!
-//! Both DBs use the same scheme:
+//! ERC-20 metadata, address names, selectors, and ERC-7730 descriptors use
+//! the same scheme:
 //!
 //! - Leaves are sorted by `(chain_id, contract)` (the same order used
 //!   for the on-disk entry array).
@@ -382,7 +383,7 @@ mod tests {
     }
 
     /// Proof for an out-of-range index panics — guards against the
-    /// secure-world parser handing the verifier a bogus index without
+    /// firmware bundle wrapper handing the verifier a bogus index without
     /// triggering a silent wrap-around. (`MerkleTree::proof` indexes
     /// into level vectors via `idx ^ 1` so an out-of-range index
     /// panics in debug + release.)
@@ -398,7 +399,7 @@ mod tests {
     /// padding means the leaf at `n_real - 1` and the padded leaf at
     /// `n_real` produce the SAME hash chain, so `verify_proof` will
     /// accept either index. This is a documented property of the
-    /// scheme; the secure-world parser is responsible for never
+    /// scheme; the firmware bundle wrapper is responsible for never
     /// emitting a proof for a padded index (it gates on `entry_cnt`).
     /// This test pins the behaviour so a future "tighten the verifier
     /// to reject padded indices" change does not silently break the

@@ -29,17 +29,12 @@ pub const MAX_TX_LEN: usize = 4096;
 
 // ---------------------------------------------------------------------------
 // CoW Swap on-device decode — canonical inner-calldata length.
-// (Legacy `ZK_*` name kept for wire compatibility. The Groth16 ZK clear-sign
-// path was retired 2026-06-30 — see docs/archive/zk-clear-sign-retirement.md;
-// ZK_STRING_LEN / ZK_PROOF_LEN / ZK_CLEAR_SIGN_FIXED_LEN / ZK_VK_BUNDLE_MAX_LEN
-// were removed with it. This constant survives because the native CoW v3
-// EIP-712 verifier still length-checks the `setPreSignature` inner calldata.)
+// The native verifier length-checks the `setPreSignature` calldata directly.
 // ---------------------------------------------------------------------------
 
 /// Canonical `setPreSignature` inner-calldata length for the CoW v3 on-device
-/// decode (selector + ABI-encoded params), 164 bytes. Name retained for wire
-/// compatibility with the retired ZK path.
-pub const ZK_MAX_CALLDATA: usize = 164;
+/// decode (selector + ABI-encoded params), 164 bytes.
+pub const COW_PRESIGN_CALLDATA_LEN: usize = 164;
 
 // ---------------------------------------------------------------------------
 // Non-secure memory boundaries — used by secure world to validate NS pointers.
@@ -444,7 +439,7 @@ pub const CMD_SIGN_OFFCHAIN: u32 = 16;
 ///                 [len]             trailer bytes
 /// ```
 ///
-/// Each per-tx kind (ERC-20, ZK v1, ZK v3, Safe v1, selector curated,
+/// Each per-tx kind (ERC-20, reserved compatibility slot, native CoW order, Safe v1, selector curated,
 /// selector self-attest, ERC-7730) routes to the inner-tx specified by
 /// `tx_idx`; the firmware verifies, FI-cross-checks the binding, and
 /// passes the result into `pick_sign_pages` for that inner-tx. Name
@@ -1254,11 +1249,11 @@ pub const MAX_SIGN_RESPONSE_LEN: usize =
 
 /// Flags bit 31 — set by the companion when the wallet has not yet been
 /// deployed on this chain. Firmware synthesises `initCode` from its master
-/// pubkey pair, folds the hash into the Type 1 `userOpHash`, and emits the
-/// initCode bytes alongside the signature bundle so the companion can
-/// populate `UserOperation06.initCode` without ever seeing the master
-/// pubkey on its own. Requires `FLAG_REGISTER_SLOT` (init_code only rides
-/// on a Type 1 frame).
+/// and slot-0 public keys, folds its hash into the slot-0 Type 2 `userOpHash`,
+/// and emits the initCode so the companion can populate
+/// `UserOperation06.initCode`. This is the first-deploy path:
+/// `slot_index == 0` and `FLAG_REGISTER_SLOT` MUST be clear because the
+/// factory installs slot 0 atomically. The two flags are mutually exclusive.
 pub const FLAG_INCLUDE_INIT_CODE: u32 = 0x8000_0000;
 
 /// Flags bit 30 — set by the companion to ask the firmware to emit a Type 1
@@ -1266,12 +1261,20 @@ pub const FLAG_INCLUDE_INIT_CODE: u32 = 0x8000_0000;
 ///
 /// The firmware is stateless with respect to slot selection: it does not
 /// track whether `(chain_id, slot_index)` has been registered on-chain. The
-/// companion app keeps that bookkeeping and sets this flag on the first sign
-/// for a new `(chain_id, slot_index)` pair, or when rotating to the next
-/// slot after exhausting the on-chain `MAX_SLOT_USES` cap.
+/// companion app keeps that bookkeeping. After the reviewed wire-version bump
+/// described below, this flag is intended for the first sign with a new
+/// `(chain_id, slot_index)` pair or rotation after the current slot approaches
+/// the on-chain `MAX_SLOT_USES` cap.
 ///
-/// When clear, the firmware emits Type 2 only and the companion submits a
-/// single UserOp.
+/// Wire-v2 caveat: the response does not yet expose the 64-byte new slot public
+/// key required to reconstruct the signed `addOwnerBytes(bytes)` calldata.
+/// Seedless production companions must therefore refuse this flag until a
+/// reviewed protocol bump supplies that binding material; they must not submit
+/// a no-op Type-1 UserOp or repeatedly harvest fresh bootstrap signatures.
+///
+/// When clear, firmware emits Type 2 only. A companion may submit that UserOp
+/// only for slot 0 in the factory-deploy flow or a slot it has independently
+/// established is already registered on-chain.
 pub const FLAG_REGISTER_SLOT: u32 = 0x4000_0000;
 
 /// Bit mask + shift for the BIP-44-style account index encoded in flags.
@@ -1321,8 +1324,8 @@ pub const SLOT_INDEX_MASK: u32 =
 /// | 330 |  N  | data |
 /// | 330+N | 2 | erc20_bundle_len (u16 BE; 0 = no bundle) |
 /// | 332+N | B | erc20_bundle (Merkle-verified ERC-20 metadata, see `erc20::bundle`) |
-/// | 332+N+B | 2 | zk_bundle_len (u16 BE; RETIRED — kept reserved, MUST be 0) |
-/// | 334+N+B | 0 | zk_bundle slot (Groth16 ZK path retired 2026-06-30; no bytes parsed) |
+/// | 332+N+B | 2 | reserved_v1_len (u16 BE; MUST be 0) |
+/// | 334+N+B | 0 | reserved compatibility slot (no bytes parsed) |
 ///
 /// All three trailing sections are optional. When a section's length is
 /// zero the next section immediately follows.
@@ -1335,10 +1338,9 @@ pub const SIGN_USEROP_HEADER_LEN: usize =
 /// Compile-time sanity check: header ends exactly at `data_len`.
 const _: () = assert!(SIGN_USEROP_HEADER_LEN == 330);
 
-// The ZK v1 clear-sign bundle constants (ZK_CLEAR_SIGN_FIXED_LEN /
-// ZK_VK_BUNDLE_MAX_LEN, and the ZK_PROOF_LEN / ZK_STRING_LEN they summed) were
-// removed with the Groth16 retirement (2026-06-30). The wire slot is kept
-// reserved (length MUST be 0); see docs/archive/zk-clear-sign-retirement.md.
+// The former proof-bundle constants were removed with the retired verifier
+// (2026-06-30). Wire slot 1 is kept reserved (length MUST be 0); see
+// docs/archive/zk-clear-sign-retirement.md.
 
 // ═══════════════════════════════════════════════════════════════════════════
 //   CoW Protocol / GPv2Settlement — EIP-712 clear-sign (on-device decode)
@@ -1346,8 +1348,8 @@ const _: () = assert!(SIGN_USEROP_HEADER_LEN == 330);
 //
 // When the companion sends a CoW UserOp whose inner calldata is
 // `setPreSignature(orderUid, true)` on GPv2Settlement, it attaches a CoW
-// order trailer (kind `TRAILER_KIND_ZK_V3`, value 3 — name retained for
-// wire compatibility) after the legacy `zk_bundle` slot:
+// order trailer (kind `TRAILER_KIND_COW_ORDER`, value 3) after the retired
+// zero-length proof slot:
 //
 //   [cow_len u16 BE] [cow_trailer]
 //
@@ -1680,13 +1682,14 @@ pub const SIGN_USEROP_BATCH_TX_PREFIX_LEN: usize = 20 + 32 + 2; // 54
 
 /// ERC-20 token metadata bundle. Verifier: `erc20::bundle::verify_erc20_bundle`.
 pub const TRAILER_KIND_ERC20: u8 = 1;
-/// ZK v1 clear-sign bundle (Groth16 + (calldata, readable) attest).
-pub const TRAILER_KIND_ZK_V1: u8 = 2;
-/// CoW order trailer (kind value 3; name retained for wire compat):
+/// Reserved compatibility kind. Secure parsing gives this frozen wire value a
+/// zero-byte cap, so companions must not emit a record.
+pub const TRAILER_KIND_RESERVED_V1: u8 = 2;
+/// Native CoW order trailer (kind value 3):
 /// canonical GPv2Order + two optional ERC-20 bundles, decoded + rendered
 /// on-device. orderDigest is keccak-cross-checked against the
 /// setPreSignature calldata; no Groth16, no Poseidon registry.
-pub const TRAILER_KIND_ZK_V3: u8 = 3;
+pub const TRAILER_KIND_COW_ORDER: u8 = 3;
 /// Safe v1 `approveHash` clear-sign bundle (281-byte canonical SafeTx).
 pub const TRAILER_KIND_SAFE_V1: u8 = 4;
 /// Verified-selector bundle (curated Merkle DB of selector → text-sig).

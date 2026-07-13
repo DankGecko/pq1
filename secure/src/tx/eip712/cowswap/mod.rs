@@ -1,8 +1,7 @@
 //! CowSwap GPv2Order — EIP-712 typed-data clear-signing protocol.
 //!
-//! See `docs/companion/m4-cowswap-eip712-impl.md` for the rationale behind the
-//! 204-byte packed canonical encoding (which is shared with the
-//! Groth16 circuit at `circuits/cowswap/eip712_order/circuit.circom`).
+//! See `docs/companion/companion-safe-cowswap-presign.md` for the live native
+//! 204-byte canonical encoding and trailer contract.
 //!
 //! ## Canonical layout (204 bytes — v3)
 //!
@@ -22,12 +21,9 @@
 //!   [172.. 204)  appData            (bytes32)         ← NEW in v3
 //! ```
 //!
-//! `chain_id` is bound via Poseidon so a single proof can't be
-//! replayed across chains (the Merkle lookup in the circuit also
-//! cross-checks that the resolved token entry came from the same
-//! chain). `compute_digest` further verifies that `canonical.chain_id
-//! === verified.chain_id` from the VK bundle before deriving the
-//! EIP-712 digest, so NS can't supply a mismatched VK.
+//! `chain_id` is part of the canonical bytes and recomputed EIP-712 domain.
+//! `compute_digest` requires it to equal the signed UserOp chain before
+//! deriving the digest, preventing cross-chain replay or metadata misbinding.
 //!
 //! `appData` is now genuinely bound — v2 pinned it to `bytes32(0)`.
 //!
@@ -199,15 +195,9 @@ pub fn struct_hash(order: &GpV2Order) -> [u8; 32] {
 // ---------------------------------------------------------------------------
 
 /// Compute the EIP-712 digest the wallet signs for a CowSwap
-/// GPv2Order, given the 204-byte canonical bytes the Groth16 proof
-/// has already bound and the chain id from the verified VK bundle.
-///
-/// Cross-checks that `canonical.chain_id === verified_chain_id`: the
-/// Groth16 proof binds the chain_id inside the canonical buffer via
-/// Poseidon, and this check prevents NS from pairing a legitimate
-/// proof with a mismatched VK bundle (e.g. mainnet proof + Gnosis
-/// bundle — the digest would otherwise be signed against the wrong
-/// domain separator).
+/// GPv2Order, given the native 204-byte canonical and signed UserOp chain.
+/// Requiring `canonical.chain_id === chain_id` prevents pairing one chain's
+/// order bytes with another chain's domain separator.
 pub fn compute_digest(canonical: &[u8; 204], chain_id: u64) -> Result<[u8; 32], Eip712Error> {
     let order = decode_canonical(canonical)?;
     if order.chain_id != chain_id {
@@ -249,38 +239,6 @@ pub const SETPRESIG_OWNER_LEN: usize = 20;
 pub const SETPRESIG_VALID_TO_OFFSET: usize = SETPRESIG_OWNER_OFFSET + SETPRESIG_OWNER_LEN;
 pub const SETPRESIG_VALID_TO_LEN: usize = 4;
 
-// ---------------------------------------------------------------------------
-// Field-overflow defense-in-depth (see docs/security/vulns/VULN-cowswap-zk-amount-overflow.md)
-// ---------------------------------------------------------------------------
-
-/// Bit-width the CoW Groth16 circuit range-checks `raw_amount` to, so
-/// that `raw_amount * scale_factor` cannot wrap the BLS12-381 scalar
-/// field (r ≈ 2^254.86) — `2^190 · 10^18 < 2^249.8 < r` over ℤ. The
-/// firmware mirrors the same bound natively as belt-and-braces.
-pub const RAW_AMOUNT_FIELD_SAFE_BITS: u32 = 190;
-
-/// Returns `true` iff the 32-byte big-endian amount is `< 2^190`.
-///
-/// The CoW circuit formats `sellAmount`/`buyAmount` via
-/// `FormatTrimmedAmount`, whose recomposition multiplies `raw_amount` by
-/// `scale_factor` in the scalar field. A *legitimate* displayable amount
-/// is tiny — with `MAX_INT_DIGITS = 10` and 18 decimals,
-/// `raw_amount ≤ 10^10 · 10^18 = 10^28 ≈ 2^93.4`. Any amount `≥ 2^190`
-/// therefore could only have come from a field-overflow forgery: a proof
-/// where the device displays a benign amount while signing an
-/// astronomically large one. Rejecting `≥ 2^190` here closes that class
-/// from the firmware side, independent of (and redundant with) the
-/// circuit's own `Num2Bits(190)` guard.
-///
-/// `2^190` lands inside byte index 8 (which holds bits 184..191), so the
-/// value is `< 2^190` exactly when bytes[0..8] (bits 192..255) are all
-/// zero and the top two bits of byte 8 (bits 190, 191) are clear, i.e.
-/// `bytes[8] < 0x40`. Bytes 9..32 are unconstrained.
-#[must_use]
-pub fn amount_within_field_safe_bound(amount_be: &[u8; 32]) -> bool {
-    amount_be[..8].iter().all(|&b| b == 0) && amount_be[8] < 0x40
-}
-
 /// Failure modes for the v3 `setPreSignature` cross-check. Kept as a
 /// discriminated enum (rather than a `Result<(), ()>`) so the caller
 /// can surface a precise error to telemetry + trusted UI even when the
@@ -289,7 +247,7 @@ pub fn amount_within_field_safe_bound(amount_be: &[u8; 32]) -> bool {
 pub enum OrderUidMismatch {
     /// Canonical bytes failed to decode (malformed enum byte).
     CanonicalDecode,
-    /// `canonical.chain_id` did not equal the VK bundle's chain_id.
+    /// `canonical.chain_id` did not equal the signed UserOp chain.
     ChainIdMismatch,
     /// `canonical.valid_to` ≠ calldata's validTo.
     ValidToMismatch,

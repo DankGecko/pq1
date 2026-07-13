@@ -42,8 +42,8 @@
 
 // Re-include `offchain_state.rs` under host so its pure-logic
 // `slot_key_compute` + the SRAM-mock backend become reachable. The
-// stm32u585 / pka-accel branch (which calls `crate::hw::flash`) is
-// dormant under cargo test — no features → mock backend selected.
+// The stm32u585 branch (which calls `crate::hw::flash`) is dormant
+// under cargo test — no features means the mock backend is selected.
 #[path = "../offchain_state.rs"]
 pub mod offchain_state;
 

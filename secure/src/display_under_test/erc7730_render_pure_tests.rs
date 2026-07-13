@@ -25,6 +25,7 @@
 use std::path::PathBuf;
 
 use pqsigner_erc7730::bundle::{verify_erc7730_bundle, VerifiedDescriptor};
+use pqsigner_erc7730::display::primitives::write_addr_full;
 use pqsigner_erc7730::ir::{ContextKind, Erc7730Ir};
 use pqsigner_tx_core::hash::keccak256;
 
@@ -155,12 +156,76 @@ fn safe_visible_nested_leaf(source_name: &str, chain_id: u64) -> &'static dbgen:
         .unwrap_or_else(|| panic!("no safe visible nested fixture for {source_name} on {chain_id}"))
 }
 
+/// Build a compiler-authenticated C1 `string` descriptor, then change only its
+/// authenticated dynamic-kind TLV to `bytes`. Production dbgen refuses to emit
+/// arbitrary dynamic `bytes`; this process-private fixture retains an
+/// independent runtime refusal test without weakening the catalogue gate.
+fn opaque_bytes_runtime_fixture() -> &'static Vec<u8> {
+    static FIXTURE: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    FIXTURE.get_or_init(|| {
+        let temp_root = std::env::temp_dir().join(format!(
+            "pqsigner-erc7730-opaque-bytes-runtime-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&temp_root);
+        std::fs::create_dir_all(&temp_root).expect("create opaque-bytes fixture dir");
+        let source = temp_root.join("opaque-bytes-runtime.json");
+        std::fs::write(
+            &source,
+            r#"{
+              "context": { "contract": { "deployments": [
+                { "chainId": 1, "address": "0xbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbc" }
+              ] } },
+              "metadata": { "owner": "Test", "contractName": "Runtime Belt" },
+              "display": { "formats": {
+                "probe(string data)": {
+                  "intent": "Probe",
+                  "fields": [
+                    { "path": "data", "label": "Data", "format": "raw", "visible": "always" }
+                  ]
+                }
+              } }
+            }"#,
+        )
+        .expect("write opaque-bytes fixture");
+        let mut emitted = dbgen::erc7730::try_compile_one(
+            &source,
+            &dbgen::erc7730::Policy::default(),
+            Some(&temp_root),
+        )
+        .expect("safe string source compiles");
+        let mut ir_bytes = emitted
+            .pop()
+            .expect("one deployment emits one leaf")
+            .ir_bytes;
+        let tag = pqsigner_erc7730::render::params::PARAM_DYNAMIC_KIND;
+        let string_kind = pqsigner_erc7730::render::params::DYNAMIC_KIND_STRING;
+        let bytes_kind = pqsigner_erc7730::render::params::DYNAMIC_KIND_BYTES;
+        let pattern = [tag, 1, string_kind];
+        let hits: Vec<usize> = (pqsigner_erc7730::ir::HEADER_LEN..ir_bytes.len().saturating_sub(2))
+            .filter(|&i| ir_bytes[i..i + 3] == pattern)
+            .collect();
+        assert_eq!(hits.len(), 1, "fixture must have one dynamic-kind TLV");
+        ir_bytes[hits[0] + 2] = bytes_kind;
+        let _ = std::fs::remove_dir_all(&temp_root);
+        ir_bytes
+    })
+}
+
+fn render_opaque_bytes_runtime(data: &[u8]) -> Result<Pages, crate::tx::erc7730_render::RenderErr> {
+    let ir = Erc7730Ir::parse(opaque_bytes_runtime_fixture()).expect("patched runtime IR parses");
+    let verified = VerifiedDescriptor { ir };
+    let calldata = calldata_sole_bytes(b"probe(string)", data);
+    let tx = envelope(1, [0xBC; 20]);
+    render_erc7730_pages(&tx, &calldata, &verified, None, &NameResolver::new())
+}
+
 fn assert_registry_source_excluded(source_name: &str) {
     assert!(
         !build_registry().entries.iter().any(|entry| {
             entry.source.file_name().and_then(|name| name.to_str()) == Some(source_name)
         }),
-        "unsafe hidden-material descriptor {source_name} must remain absent from the catalogue"
+        "unsafe or incomplete descriptor {source_name} must remain absent from the catalogue"
     );
 }
 
@@ -388,6 +453,28 @@ fn page_strs(pages: &Pages, page: usize) -> [String; 4] {
     ]
 }
 
+/// Index of the semantic intent page in either catalogue-provenance mode.
+///
+/// Dev-unattested firmware prepends a mandatory warning page. Keep the same
+/// semantic assertions useful in both builds, while also proving that the
+/// warning has the exact trusted-display text whenever the feature is active.
+fn intent_page_index(pages: &Pages) -> usize {
+    let index = pqsigner_erc7730::display::render::intent::INTENT_BANNER_PAGES - 1;
+    #[cfg(feature = "erc7730-dev-unattested")]
+    {
+        assert_eq!(
+            page_strs(pages, 0),
+            [
+                "** DEV BUILD **".to_string(),
+                "Unattested".to_string(),
+                "descriptor".to_string(),
+                "> next".to_string(),
+            ]
+        );
+    }
+    index
+}
+
 fn dump_pages(pages: &Pages) -> String {
     let mut out = String::new();
     for (i, page) in pages.as_slice().iter().enumerate() {
@@ -426,6 +513,18 @@ fn find_page_by_label(pages: &Pages, label: &str) -> usize {
     panic!(
         "no page with row 0 == {label:?}; full dump:\n{}",
         dump_pages(pages)
+    );
+}
+
+fn assert_full_contract_identity_page(pages: &Pages, contract: &[u8; 20]) {
+    let page = find_page_by_label(pages, "Token contract");
+    let mut expected = [[b' '; DISPLAY_COLS]; 4];
+    expected[0][..14].copy_from_slice(b"Token contract");
+    let [_, r1, r2, r3] = &mut expected;
+    write_addr_full(r1, r2, r3, contract);
+    assert_eq!(
+        pages.buf[page], expected,
+        "trusted pages must carry the exact bound token contract"
     );
 }
 
@@ -491,9 +590,9 @@ fn diagnostic_dump_seed_corpus_path_offsets() {
 // interned path program lands at offset 1. The on-device walker and
 // renderer's `path_off == 0` / `param_off == 0` "no path" sentinels
 // stay intact, and the descriptors that previously fell through to
-// blind-sign (weth.deposit, tether-usdt.transfer/approve, every
-// aave-v3-pool.* and circle-usdc-*) now render their full clear-sign
-// page sequence.
+// blind-sign (weth.deposit, tether-usdt.transfer/approve, and the
+// accepted Aave/Circle formats) now render their full clear-sign page
+// sequence. Incomplete Aave formats remain known-call refusals.
 //
 // The three tests below assert the user-visible display text end-to-end.
 
@@ -525,7 +624,7 @@ fn positive_usdt_transfer_mainnet_renders_send_intent() {
     assert_all_pages_printable(&pages);
 
     // Page 0: intent banner.
-    let [r0, r1, r2, r3] = page_strs(&pages, 0);
+    let [r0, r1, r2, r3] = page_strs(&pages, intent_page_index(&pages));
     assert_eq!(r0, "Send");
     assert_eq!(r1, "Tether Limited");
     assert_eq!(r2, "Tether USD");
@@ -555,6 +654,55 @@ fn positive_usdt_transfer_mainnet_renders_send_intent() {
 }
 
 #[test]
+fn flyingtulip_same_ticker_assets_render_distinct_exact_token_identity() {
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-PositionsManager.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify FlyingTulip leaf");
+    let resolver = NameResolver::new();
+    let tx = envelope(1, entry.contract);
+    let amount = u256_from_u64(1_000_000); // 1 USDT at six decimals.
+    let assets = [
+        [
+            0x1c, 0xdd, 0x2e, 0xab, 0x61, 0x11, 0x26, 0x97, 0x62, 0x6f, 0x7b, 0x4b, 0xb0, 0xe2,
+            0x3d, 0xa4, 0xfe, 0xbf, 0x7b, 0x7c,
+        ],
+        [
+            0xda, 0xc1, 0x7f, 0x95, 0x8d, 0x2e, 0xe5, 0x23, 0xa2, 0x20, 0x62, 0x06, 0x99, 0x45,
+            0x97, 0xc1, 0x3d, 0x83, 0x1e, 0xc7,
+        ],
+    ];
+
+    let render = |asset: [u8; 20]| {
+        let mut calldata = Vec::with_capacity(68);
+        calldata.extend_from_slice(&keccak256(b"deposit(address,uint256)")[..4]);
+        let mut asset_word = [0u8; 32];
+        asset_word[12..].copy_from_slice(&asset);
+        calldata.extend_from_slice(&asset_word);
+        calldata.extend_from_slice(&amount.0);
+        let meta = Erc20Metadata {
+            chain_id: 1,
+            contract: asset,
+            decimals: 6,
+            name: b"USDT",
+            symbol: b"USDT",
+        };
+        render_erc7730_pages(&tx, &calldata, &verified, Some(&meta), &resolver)
+            .expect("FlyingTulip deposit renders")
+    };
+
+    let pages_a = render(assets[0]);
+    let pages_b = render(assets[1]);
+    assert_ne!(
+        pages_a.as_slice(),
+        pages_b.as_slice(),
+        "same ticker/decimals must not collapse distinct signed assets"
+    );
+    assert_full_contract_identity_page(&pages_a, &assets[0]);
+    assert_full_contract_identity_page(&pages_b, &assets[1]);
+}
+
+#[test]
 fn positive_usdt_approve_unlimited_renders_approve_intent() {
     let res = build_registry();
     let entry = find_leaf(res, "calldata-usdt.json", 1);
@@ -581,7 +729,7 @@ fn positive_usdt_approve_unlimited_renders_approve_intent() {
 
     assert_all_pages_printable(&pages);
 
-    let [intent_r0, _, _, _] = page_strs(&pages, 0);
+    let [intent_r0, _, _, _] = page_strs(&pages, intent_page_index(&pages));
     assert_eq!(intent_r0, "Approve");
 
     // Spender page must be present (labelled "Spender" per the
@@ -710,10 +858,18 @@ fn positive_erc7730_golden_grid_hash() {
     // hardening adds a lossless EIP-1559 nonce page (`Nonce: 7`) between the
     // exact fee budget and confirmation. All descriptor intent/field pages are
     // otherwise unchanged.
+    #[cfg(not(feature = "erc7730-dev-unattested"))]
     const GOLDEN: [u8; 32] = [
         0x4b, 0xa2, 0x70, 0x68, 0xd8, 0x81, 0xed, 0xb6, 0xe9, 0x51, 0x08, 0x02, 0x30, 0x02, 0xf1,
         0xc8, 0xad, 0xae, 0xfb, 0x8c, 0x36, 0x30, 0x63, 0xde, 0x00, 0xab, 0xa6, 0x07, 0x55, 0xa4,
         0x4c, 0x61,
+    ];
+    // Same reviewed grid with the mandatory dev-unattested warning prepended.
+    #[cfg(feature = "erc7730-dev-unattested")]
+    const GOLDEN: [u8; 32] = [
+        0xc1, 0x3d, 0x17, 0x94, 0x49, 0x46, 0x08, 0xf9, 0x2e, 0xf7, 0x55, 0xca, 0x09, 0x79, 0xf2,
+        0xcd, 0x08, 0x4f, 0x77, 0x21, 0x3f, 0x0d, 0x75, 0xd8, 0x6a, 0xad, 0x3b, 0xe7, 0x64, 0x4c,
+        0xbe, 0x7b,
     ];
     assert_eq!(
         h, GOLDEN,
@@ -770,7 +926,7 @@ fn positive_aave_withdraw_eth_renders_native_currency() {
 
     // Intent banner.
     assert_eq!(
-        page_strs(&pages, 0)[0],
+        page_strs(&pages, intent_page_index(&pages))[0],
         "Withdraw",
         "intent banner:\n{dump}"
     );
@@ -850,7 +1006,7 @@ fn positive_usdt_transfer_polygon_chain_pinning() {
     assert_all_pages_printable(&pages);
 
     // The Polygon leaf renders the same "Send" intent as Mainnet.
-    let [r0, ..] = page_strs(&pages, 0);
+    let [r0, ..] = page_strs(&pages, intent_page_index(&pages));
     assert_eq!(r0, "Send");
 }
 
@@ -874,7 +1030,7 @@ fn positive_weth_deposit_pulls_value_from_envelope() {
 
     assert_all_pages_printable(&pages);
 
-    let [intent_r0, owner_r, contract_r, _] = page_strs(&pages, 0);
+    let [intent_r0, owner_r, contract_r, _] = page_strs(&pages, intent_page_index(&pages));
     assert_eq!(intent_r0, "Wrap");
     assert_eq!(owner_r, "WETH");
     assert_eq!(contract_r, "WETH");
@@ -1053,7 +1209,7 @@ fn positive_long_intent_wraps_and_marks_truncation() {
     assert_all_pages_printable(&pages);
 
     // "Withdraw Collateral from the Morpho Market" (42 chars) → rows 0-1.
-    let [r0, r1, ..] = page_strs(&pages, 0);
+    let [r0, r1, ..] = page_strs(&pages, intent_page_index(&pages));
     assert_eq!(
         r0, "Withdraw Collate",
         "row 0 = first 16 chars, no `Sign:` prefix"
@@ -1082,7 +1238,7 @@ fn positive_medium_intent_wraps_two_rows_no_marker() {
     let resolver = NameResolver::new();
     let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver).expect("render");
 
-    let [r0, r1, ..] = page_strs(&pages, 0);
+    let [r0, r1, ..] = page_strs(&pages, intent_page_index(&pages));
     assert_eq!(r0, "Request stETH wi");
     assert_eq!(r1, "thdrawal");
     assert!(!r1.contains('~'), "24 chars fits two rows → no marker");
@@ -1191,7 +1347,7 @@ fn positive_aave_repay_renders_enum_label_and_borrow_is_excluded() {
     let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver).expect("render");
     assert_all_pages_printable(&pages);
 
-    let [r0, ..] = page_strs(&pages, 0);
+    let [r0, ..] = page_strs(&pages, intent_page_index(&pages));
     assert_eq!(r0, "Repay loan");
 
     // The enum page must show the RESOLVED label "variable", not the bare
@@ -1311,7 +1467,7 @@ fn positive_wsteth_wrap_renders_intent_and_amount_label() {
         .expect("render");
     assert_all_pages_printable(&pages);
 
-    let [r0, ..] = page_strs(&pages, 0);
+    let [r0, ..] = page_strs(&pages, intent_page_index(&pages));
     assert_eq!(r0, "Wrap stETH");
     // The amount field must render under its authored label (proves
     // `#._stETHAmount` resolved to the right static-head slot).
@@ -1843,25 +1999,32 @@ fn calldata_sole_bytes(sig: &[u8], data: &[u8]) -> Vec<u8> {
     cd
 }
 
-/// A dynamic ABI `bytes` value stays opaque even when its attacker-controlled
+/// Production does not advertise `addStorageRoot(bytes)`, and the independent
+/// runtime belt rejects the same opaque type even when its attacker-controlled
 /// bytes happen to be printable. Payload printability is not authenticated type
 /// information and must never turn arbitrary bytes into a trusted string.
 #[test]
 fn c1_dynamic_bytes_declines_even_when_printable() {
     let res = build_registry();
     let entry = find_leaf(res, "calldata-celo_accounts.json", 42220);
-    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
-    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
-    let tx = envelope(42220, entry.contract);
-    let resolver = NameResolver::new();
+    let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("Celo Accounts IR parses");
+    let selector: [u8; 4] = keccak256(b"addStorageRoot(bytes)")[..4].try_into().unwrap();
+    assert!(
+        ir.find_format_by_selector(&selector)
+            .expect("format table is well formed")
+            .is_none(),
+        "opaque dynamic bytes format must not be advertised in production"
+    );
 
     for url in [&b"a"[..], b"https://ex.io/s", b"ipfs://Qm12345"] {
-        let calldata = calldata_sole_bytes(b"addStorageRoot(bytes)", url);
-        assert_selector_matches(&verified.ir, &calldata, "addStorageRoot(bytes)");
-        assert!(
-            render_erc7730_pages(&tx, &calldata, &verified, None, &resolver).is_err(),
-            "dynamic bytes must decline even when printable: {url:?}"
-        );
+        match render_opaque_bytes_runtime(url) {
+            Err(crate::tx::erc7730_render::RenderErr::Reject(msg)) => assert_eq!(
+                msg, "7730 opaque bytes",
+                "runtime must reject for authenticated type, not payload printability"
+            ),
+            Err(other) => panic!("dynamic bytes rejected for wrong reason for {url:?}: {other:?}"),
+            Ok(_) => panic!("dynamic bytes must decline even when printable: {url:?}"),
+        }
     }
 }
 
@@ -1870,43 +2033,14 @@ fn c1_dynamic_bytes_declines_even_when_printable() {
 /// clear-sign pages while signing different calldata.
 #[test]
 fn c1_opaque_bytes_decline_without_lossy_preview() {
-    let res = build_registry();
-    let entry = find_leaf(res, "calldata-celo_accounts.json", 42220);
-    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
-    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
-    let tx = envelope(42220, entry.contract);
-    let resolver = NameResolver::new();
-
     let payload = [0xFFu8; 40]; // binary, 40 bytes → opaque
-    let calldata = calldata_sole_bytes(b"addStorageRoot(bytes)", &payload);
-    assert!(
-        render_erc7730_pages(&tx, &calldata, &verified, None, &resolver).is_err(),
-        "opaque bytes must decline instead of rendering a lossy preview"
-    );
-}
-
-/// C2 dynamic-tuple descent is absent from the authenticated catalogue. The
-/// current IR carries the selected member slot but not the tuple's complete
-/// head width/tail topology, so exact canonical placement cannot be proven.
-/// Runtime has an independent preflight refusal; catalogue absence ensures no
-/// companion can obtain a verified descriptor that reaches that path.
-#[test]
-fn c2_dynamic_tuple_fixture_is_excluded_from_catalogue() {
-    let res = build_seed();
-    assert!(res.entries.iter().all(|entry| {
-        entry.source.file_name().and_then(|n| n.to_str()) != Some("synthetic-dynamic-tuple.json")
-    }));
-}
-
-/// The retired relaxed multi-array/C3 shape is likewise excluded. Only a sole
-/// dynamic array whose offset equals head-end and whose elements consume the
-/// complete calldata body remains clear-signable.
-#[test]
-fn c3_multi_dynamic_array_fixture_is_excluded_from_catalogue() {
-    let res = build_seed();
-    assert!(res.entries.iter().all(|entry| {
-        entry.source.file_name().and_then(|n| n.to_str()) != Some("synthetic-multi-array.json")
-    }));
+    match render_opaque_bytes_runtime(&payload) {
+        Err(crate::tx::erc7730_render::RenderErr::Reject(msg)) => {
+            assert_eq!(msg, "7730 opaque bytes")
+        }
+        Err(other) => panic!("opaque bytes rejected for wrong reason: {other:?}"),
+        Ok(_) => panic!("opaque bytes must decline instead of rendering a lossy preview"),
+    }
 }
 
 /// Morpho Blue `borrow` — the nested static-tuple GROUP (`marketParams`)
@@ -2877,14 +3011,11 @@ fn erc2612_permit_with_hidden_owner_is_excluded() {
 // ───────────────────────────────────────────────────────────────────────
 // Tier B: canonical dynamic tokenPath framing — Uniswap swaps.
 //
-// V3 `exactInput` puts its packed path behind C2 dynamic-tuple descent, which the
-// trusted IR cannot frame exactly; the tests below assert that selector is absent
-// rather than partially rendered. V2 `swapExactTokensForTokens` instead has one
-// top-level `address[] path` whole tail, so `path.[0]` / `[-1]` is an accepted C1
-// shape. Its test drives real ABI-encoded multi-hop calldata and asserts the
-// resolved token: the ERC-20 symbol renders only when extraction matches the
-// signed array element, while the amount resolves independently from the static
-// head.
+// Endpoint tokenPaths identify amount metadata; they do not display a complete
+// signed packed route or address array. The upstream Router02 descriptor is now
+// excluded because it showed only those endpoints. A process-private safe
+// fixture adds `path.[]`, preserving the runtime extraction/framing backstop
+// while requiring all route addresses to reach the display.
 // ───────────────────────────────────────────────────────────────────────
 const UNI_V3: [u8; 20] = [
     0x68, 0xb3, 0x46, 0x58, 0x33, 0xfb, 0x72, 0xa7, 0x0e, 0xcd, 0xf4, 0x85, 0xe0, 0xe4, 0xc7, 0xbd,
@@ -2894,6 +3025,53 @@ const TOKEN_IN: [u8; 20] = [0x11; 20];
 const TOKEN_MID: [u8; 20] = [0xAB; 20];
 const TOKEN_OUT: [u8; 20] = [0x22; 20];
 
+fn safe_uniswap_route_fixture() -> &'static dbgen::erc7730::Emitted {
+    static FIXTURE: std::sync::OnceLock<dbgen::erc7730::Emitted> = std::sync::OnceLock::new();
+    FIXTURE.get_or_init(|| {
+        let temp_root = std::env::temp_dir().join(format!(
+            "pqsigner-erc7730-safe-uniswap-route-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&temp_root);
+        std::fs::create_dir_all(&temp_root).expect("create safe route fixture dir");
+        let source = temp_root.join("safe-uniswap-route.json");
+        std::fs::write(
+            &source,
+            r#"{
+              "context": { "contract": { "deployments": [
+                { "chainId": 1, "address": "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45" }
+              ] } },
+              "metadata": { "owner": "Test", "contractName": "Safe Route" },
+              "display": { "formats": {
+                "swapExactTokensForTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to)": {
+                  "intent": "Swap",
+                  "fields": [
+                    { "path": "amountIn", "label": "Amount to Send", "format": "tokenAmount",
+                      "params": { "tokenPath": "path.[0]" }, "visible": "always" },
+                    { "path": "amountOutMin", "label": "Minimum Receive", "format": "tokenAmount",
+                      "params": { "tokenPath": "path.[-1]" }, "visible": "always" },
+                    { "path": "path.[]", "label": "Route", "format": "addressName", "visible": "always" },
+                    { "path": "to", "label": "Beneficiary", "format": "addressName", "visible": "always" }
+                  ]
+                }
+              } }
+            }"#,
+        )
+        .expect("write safe route fixture");
+        let emitted = dbgen::erc7730::try_compile_one(
+            &source,
+            &dbgen::erc7730::Policy::default(),
+            Some(&temp_root),
+        )
+        .expect("whole-route fixture must compile")
+        .into_iter()
+        .find(|entry| entry.chain_id == 1)
+        .expect("safe route fixture emits mainnet leaf");
+        let _ = std::fs::remove_dir_all(&temp_root);
+        emitted
+    })
+}
+
 fn meta(contract: [u8; 20], decimals: u8, symbol: &'static [u8]) -> Erc20Metadata<'static> {
     Erc20Metadata {
         chain_id: 1,
@@ -2902,45 +3080,6 @@ fn meta(contract: [u8; 20], decimals: u8, symbol: &'static [u8]) -> Erc20Metadat
         name: symbol,
         symbol,
     }
-}
-
-/// Uniswap V3 packed path: `token0 ‖ fee(3B) ‖ token1`.
-fn packed_v3_path(token0: [u8; 20], fee: u32, token1: [u8; 20]) -> Vec<u8> {
-    let mut p = Vec::new();
-    p.extend_from_slice(&token0);
-    p.extend_from_slice(&fee.to_be_bytes()[1..4]); // 3-byte fee
-    p.extend_from_slice(&token1);
-    p
-}
-
-/// `exactInput((bytes path, address recipient, uint256 amountIn, uint256 amountOutMinimum))`.
-fn calldata_exact_input(
-    token0: [u8; 20],
-    fee: u32,
-    token1: [u8; 20],
-    recipient: [u8; 20],
-    amount_in: U256,
-    amount_out_min: U256,
-) -> Vec<u8> {
-    let mut d = Vec::new();
-    d.extend_from_slice(&[0xb8, 0x58, 0x18, 0x3f]); // exactInput selector
-    d.extend_from_slice(&u256_from_u64(0x20).0); // offset to params tuple
-                                                 // params tuple head (4 words): path-offset, recipient, amountIn, amountOutMin.
-    d.extend_from_slice(&u256_from_u64(128).0); // path offset (relative to tuple start)
-    let mut rec = [0u8; 32];
-    rec[12..].copy_from_slice(&recipient);
-    d.extend_from_slice(&rec);
-    d.extend_from_slice(&amount_in.0);
-    d.extend_from_slice(&amount_out_min.0);
-    // path blob: [len][packed, padded to 32].
-    let path = packed_v3_path(token0, fee, token1);
-    d.extend_from_slice(&u256_from_u64(path.len() as u64).0);
-    let mut padded = path;
-    while padded.len() % 32 != 0 {
-        padded.push(0);
-    }
-    d.extend_from_slice(&padded);
-    d
 }
 
 /// `swap*ForTokens(uint256 a0, uint256 a1, address[] path, address to)`
@@ -2969,65 +3108,38 @@ fn calldata_v2_swap(
     d
 }
 
-fn render_uni_result(
+fn render_safe_uni_result(
     calldata: &[u8],
     token: Option<&Erc20Metadata<'_>>,
 ) -> Result<Pages, crate::tx::erc7730_render::RenderErr> {
-    let res = build_registry();
-    let entry = find_leaf(res, "calldata-UniswapV3Router02.json", 1);
-    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
-    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
+    let entry = safe_uniswap_route_fixture();
+    let verified = VerifiedDescriptor {
+        ir: Erc7730Ir::parse(&entry.ir_bytes).expect("safe route IR parses"),
+    };
     let tx = envelope(1, UNI_V3);
     let resolver = NameResolver::new();
     render_erc7730_pages(&tx, calldata, &verified, token, &resolver)
 }
 
-fn render_uni(calldata: &[u8], token: Option<&Erc20Metadata<'_>>) -> Pages {
-    render_uni_result(calldata, token).expect("render")
+fn render_safe_uni(calldata: &[u8], token: Option<&Erc20Metadata<'_>>) -> Pages {
+    render_safe_uni_result(calldata, token).expect("render safe route")
 }
 
 #[test]
 fn uniswap_exact_input_c2_input_slice_is_excluded() {
-    // `exactInput` requires C2 dynamic-tuple descent before its packed path
-    // slice. Current IR cannot prove the tuple's full canonical layout, so the
-    // selector must be absent rather than falling back to a partial render.
-    let calldata = calldata_exact_input(
-        TOKEN_IN,
-        3000,
-        TOKEN_OUT,
-        [0x33; 20],
-        u256_from_u64(1_500_000),
-        u256_from_u64(4_000_000_000_000_000_000),
-    );
-    let m = meta(TOKEN_IN, 6, b"TKA");
-    assert!(matches!(
-        render_uni_result(&calldata, Some(&m)),
-        Err(crate::tx::erc7730_render::RenderErr::NoFormat)
-    ));
+    assert_registry_source_excluded("calldata-UniswapV3Router02.json");
 }
 
 #[test]
 fn uniswap_exact_input_c2_output_slice_is_excluded() {
-    let calldata = calldata_exact_input(
-        TOKEN_IN,
-        3000,
-        TOKEN_OUT,
-        [0x33; 20],
-        u256_from_u64(1_500_000),
-        u256_from_u64(4_000_000_000_000_000_000),
-    );
-    let m = meta(TOKEN_OUT, 18, b"TKB");
-    assert!(matches!(
-        render_uni_result(&calldata, Some(&m)),
-        Err(crate::tx::erc7730_render::RenderErr::NoFormat)
-    ));
+    assert_registry_source_excluded("calldata-UniswapV3Router02.json");
 }
 
 #[test]
 fn uniswap_v2_swap_binds_first_and_last_array_element() {
     // 3-hop path so `[-1]` genuinely selects the LAST element, not index 1.
+    // Unlike upstream, the synthetic descriptor also renders `path.[]`.
     let path = [TOKEN_IN, TOKEN_MID, TOKEN_OUT];
-    // `swapExactTokensForTokens`: amountIn tokenPath = path.[0].
     let cd_in = calldata_v2_swap(
         [0x47, 0x2b, 0x43, 0xf3],
         u256_from_u64(1_500_000),
@@ -3035,8 +3147,29 @@ fn uniswap_v2_swap_binds_first_and_last_array_element() {
         &path,
         [0x33; 20],
     );
+    let fixture_ir = Erc7730Ir::parse(&safe_uniswap_route_fixture().ir_bytes).unwrap();
+    let selector: [u8; 4] = cd_in[..4].try_into().unwrap();
+    let fmt = fixture_ir
+        .find_format_by_selector(&selector)
+        .unwrap()
+        .unwrap();
+    for field in fmt.fields() {
+        let field = field.unwrap();
+        let params = pqsigner_erc7730::render::params::parse(&fixture_ir, field.param_off).unwrap();
+        let Some(token_path) = params.token_path else {
+            continue;
+        };
+        let resolved =
+            pqsigner_erc7730::render::resolve::resolve_token_address(&token_path[1..], &cd_in[4..])
+                .unwrap();
+        if field.label == b"Amount to Send" {
+            assert_eq!(resolved, TOKEN_IN);
+        } else if field.label == b"Minimum Receive" {
+            assert_eq!(resolved, TOKEN_OUT);
+        }
+    }
     let ma = meta(TOKEN_IN, 6, b"TKA");
-    let pages = render_uni(&cd_in, Some(&ma));
+    let pages = render_safe_uni(&cd_in, Some(&ma));
     let p = find_page_by_label(&pages, "Amount to Send");
     let rows = page_strs(&pages, p);
     assert!(
@@ -3044,48 +3177,21 @@ fn uniswap_v2_swap_binds_first_and_last_array_element() {
         "path.[0] must bind the first element → TKA: {rows:?}"
     );
 
-    // The upstream `swapTokensForExactTokens` format also requests the
-    // `senderAddress` sentinel for its recipient. The device cannot bind that
-    // sentinel to msg.sender, so dbgen intentionally drops this one format
-    // instead of silently ignoring the constraint. `[-1]` extraction remains
-    // covered by the pure compiler/resolver tests; the production catalogue
-    // must have no clear-sign format for this selector.
-    let cd_out = calldata_v2_swap(
-        [0x42, 0x71, 0x2a, 0x67],
-        u256_from_u64(4_000_000_000_000_000_000),
-        u256_from_u64(1_500_000),
-        &path,
-        [0x33; 20],
+    let route_pages = pages
+        .as_slice()
+        .iter()
+        .filter(|page| row_str(&page[0]) == "Route")
+        .count();
+    assert_eq!(
+        route_pages, 4,
+        "whole-route display must include one count page plus all three elements"
     );
-    let res = build_registry();
-    let entry = find_leaf(res, "calldata-UniswapV3Router02.json", 1);
-    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
-    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
-    let tx = envelope(1, UNI_V3);
-    let resolver = NameResolver::new();
-    let mb = meta(TOKEN_OUT, 18, b"TKB");
-    match render_erc7730_pages(&tx, &cd_out, &verified, Some(&mb), &resolver) {
-        Err(crate::tx::erc7730_render::RenderErr::NoFormat) => {}
-        Err(other) => panic!("expected senderAddress format exclusion, got {other:?}"),
-        Ok(_) => panic!("unsafe senderAddress format must not clear-sign"),
-    }
+    assert_registry_source_excluded("calldata-UniswapV3Router02.json");
 }
 
 #[test]
 fn uniswap_exact_input_c2_decoy_path_cannot_reach_renderer() {
-    let calldata = calldata_exact_input(
-        TOKEN_IN,
-        3000,
-        TOKEN_OUT,
-        [0x33; 20],
-        u256_from_u64(1_500_000),
-        u256_from_u64(4_000_000_000_000_000_000),
-    );
-    let decoy = meta([0x99; 20], 6, b"DEC");
-    assert!(matches!(
-        render_uni_result(&calldata, Some(&decoy)),
-        Err(crate::tx::erc7730_render::RenderErr::NoFormat)
-    ));
+    assert_registry_source_excluded("calldata-UniswapV3Router02.json");
 }
 
 /// Parse a 64-char hex string into a `[u8; 32]` for the remaining synthetic

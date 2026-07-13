@@ -43,7 +43,5 @@ pub const fn slot_ns_addr(slot: Slot) -> usize {
     }
 }
 
-/// Secure-slot capacity — 58 pages × 8 KB.
-pub const SLOT_SECURE_CAPACITY: u32 = 58 * 8 * 1024;
-/// NS-slot capacity — 64 pages × 8 KB.
-pub const SLOT_NS_CAPACITY: u32 = 64 * 8 * 1024;
+/// Slot capacities are shared with the updater and host signing tools.
+pub use fw_manifest::{SLOT_NS_CAPACITY, SLOT_SECURE_CAPACITY};

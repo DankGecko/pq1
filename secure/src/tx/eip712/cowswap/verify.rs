@@ -17,10 +17,8 @@
 //! chain_id)` against the canonical leg token + chain. A leg with no
 //! bundle — or whose bundle fails any check — degrades to `AddrHex`
 //! (raw address + uint256 hex), never a rejection. Token-metadata trust
-//! is therefore anchored in a firmware-pinned Merkle root exactly as the
-//! retired Groth16 path anchored it in a pinned Poseidon root; the host
-//! cannot forge a symbol/decimals for an address outside the committed
-//! set.
+//! is therefore anchored in a firmware-pinned Merkle root; the host cannot
+//! forge symbol/decimals for an address outside the committed set.
 //!
 //! Pipeline (first failure that touches the *binding* wins → `None`;
 //! leg-decode failures only downgrade the leg):
@@ -36,7 +34,7 @@
 //! Returns an owned copy of `canonical` plus the two decoded legs so the
 //! handler can drop the snapshot buffer before rendering.
 
-use sphincs_tz_shared::{EIP712_CANONICAL_LEN, ZK_MAX_CALLDATA};
+use sphincs_tz_shared::{EIP712_CANONICAL_LEN, COW_PRESIGN_CALLDATA_LEN};
 
 use super::{
     check_setpresig_calldata_shape, cross_check_setpresig_calldata, decode_canonical,
@@ -172,10 +170,10 @@ pub fn verify_and_bind_trailer(
         cow_bundle[..EIP712_CANONICAL_LEN].try_into().ok()?;
 
     // ── 1. Calldata length ──────────────────────────────────────────
-    if inner_data.len() != ZK_MAX_CALLDATA {
+    if inner_data.len() != COW_PRESIGN_CALLDATA_LEN {
         return None;
     }
-    let calldata_array: &[u8; ZK_MAX_CALLDATA] = inner_data.try_into().ok()?;
+    let calldata_array: &[u8; COW_PRESIGN_CALLDATA_LEN] = inner_data.try_into().ok()?;
 
     // ── 2. Calldata shape ───────────────────────────────────────────
     check_setpresig_calldata_shape(calldata_array).ok()?;

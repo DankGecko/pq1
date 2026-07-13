@@ -194,8 +194,8 @@ allow-workspace = false
 # ban is belt-and-braces with the `.semgrep/pqsigner-invariants.yml` source rule
 # (`no-classical-signer-import`). None of these are in the tree today; the ban
 # is preventive — `cargo deny check bans` fails the build if one ever appears.
-# (bls12_381 / pairing / sha2 / keccak / hmac stay allowed — they are PQ/ZK/hash
-# primitives, not classical *signers*.)
+# Hash and protocol-support crates remain allowed; this rule bans classical
+# signing primitives rather than every transitive cryptographic dependency.
 deny = [
     { crate = "secp256k1",       reason = "invariant #5: no classical signer" },
     { crate = "libsecp256k1",    reason = "invariant #5: no classical signer" },

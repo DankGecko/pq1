@@ -202,3 +202,40 @@ fn negative_fee_high_bytes_never_collapse_to_small_number() {
     // Belt-and-braces: the fee value rows are not a bare "0".
     assert_ne!(row_str(&pages.buf[fee_page][1]), "0");
 }
+
+#[test]
+fn addrhex_fallback_renders_middle_token_bytes_in_full() {
+    // The retired two-row fallback showed bytes 0..7 and 14..20 only. Two
+    // contracts differing solely in the omitted middle therefore produced
+    // identical trusted pages. The no-metadata path must remain injective.
+    let mut token_a = [0x31u8; 20];
+    let mut token_b = token_a;
+    token_a[9] = 0x42;
+    token_b[9] = 0xa7;
+
+    let pages_a = render_cowswap_pages(
+        &sell_canonical(token_a, 1_000_000),
+        &CowLeg::AddrHex,
+        &CowLeg::AddrHex,
+    );
+    let pages_b = render_cowswap_pages(
+        &sell_canonical(token_b, 1_000_000),
+        &CowLeg::AddrHex,
+        &CowLeg::AddrHex,
+    );
+
+    let rendered = |pages: &super::Pages| {
+        (1..4)
+            .flat_map(|row| row_str(&pages.buf[1][row]).chars().collect::<Vec<_>>())
+            .filter(char::is_ascii_hexdigit)
+            .collect::<String>()
+            .to_lowercase()
+    };
+    let token_a_hex: String = token_a.iter().map(|b| format!("{b:02x}")).collect();
+    let token_b_hex: String = token_b.iter().map(|b| format!("{b:02x}")).collect();
+
+    assert_eq!(row_str(&pages_a.buf[1][0]), "Sell addr;amtHex");
+    assert!(rendered(&pages_a).contains(&token_a_hex));
+    assert!(rendered(&pages_b).contains(&token_b_hex));
+    assert_ne!(pages_a.buf[1], pages_b.buf[1]);
+}

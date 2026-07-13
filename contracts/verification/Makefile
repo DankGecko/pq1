@@ -102,7 +102,7 @@ verify-fv-lints: verify-build ## FV anti-vacuity sub-lints (escape-hatch/closure
 # corrupts each check's input and asserts it fires (proves the gate is not vacuous).
 # CAVEAT: the live source is `#print axioms`, which under-reports in lean v4.22.0;
 # verify-lean4checker is the completeness backstop. See the script header and
-# docs/fv-adversarial-review-playbook.md §B.
+# docs/verification/fv-adversarial-review-playbook.md §B.
 verify-ledger-consistency: verify-build ## AXIOM_STATUS.json falsifiable vs live dump (closures/pins/witnesses)
 	@python3 scripts/check_ledger_consistency.py --self-test
 	@python3 scripts/check_ledger_consistency.py
@@ -148,7 +148,7 @@ verify-forsc-margin: ## FORS+C never weaker than plain FORS at C10 params (guard
 #   (default)         make verify-proof-mutation   # curated 8
 #   MUTATIONS=full    make verify-proof-mutation   # + corollary bridge axioms (13)
 # Does NOT catch V7 (latent-FALSE axiom — still type-checks) or V11 (wrong spec).
-# See scripts/check_proof_mutations.py + docs/fv-adversarial-review-playbook.md §B.
+# See scripts/check_proof_mutations.py + docs/verification/fv-adversarial-review-playbook.md §B.
 verify-proof-mutation: verify-build ## Proof-side cargo-mutants: delete axiom/weaken lemma, expect break (SLOW)
 	@python3 scripts/check_proof_mutations.py
 
@@ -182,9 +182,9 @@ verify-halmos: ## Halmos symbolic discharge of A3.* bridge axioms (heavy)
 # Bulk executable-spec differential (A3.1 follow-up): regenerate the random
 # corpus from the Rust signer (slow; gated behind GEN=1), embed it, and run
 # Spec.Signature.verify over every vector, asserting it matches the Rust
-# oracle's verdict. Non-zero exit on any mismatch. The committed
-# bulk_vectors.json + BulkVectors.lean make the default run reproducible
-# without re-signing.
+# oracle's verdict. Non-zero exit on any mismatch. `bulk_vectors.json` is an
+# ignored `GEN=1` intermediate; the committed `BulkVectors.lean` artifact makes
+# the default run reproducible without re-signing.
 verify-bulk: ## Bulk executable-spec differential (Lean vs Rust oracle)
 ifeq ($(GEN),1)
 	@cd $(REPO_ROOT) && cargo test -p sphincs-c10 --test gen_bulk_vectors --release -- --nocapture
@@ -221,7 +221,7 @@ verify-interp: ## A3.1 interpreter<->bytecode KAT+bulk replay
 # upgrades the source<->AST leg from statistical to STRUCTURAL; it does NOT close R1 — the
 # solc source->deployed-bytecode leg is untouched, and the parser + its 2 normalization rules
 # (error-string mstore elision; return-var init) are themselves the TCB. See
-# docs/A3_1_ADVERSARIAL_REVIEW_2026-06-18.md + docs/A3_1_CLOSURE_PATH.md §8.
+# docs/findings/A3_1_ADVERSARIAL_REVIEW_2026-06-18.md + docs/A3_1_CLOSURE_PATH.md §8.
 verify-transcription: ## A3.1 c10Program <-> .sol transcription checks (positional + structural + source byte-pin)
 	@python3 scripts/check_c10_transcription.py
 	@python3 scripts/check_c10_transcription_ast.py

@@ -2,8 +2,8 @@
 
 This is the **canonical, single-source-of-truth implementation guide**
 for any companion that wants to make ERC-7730 clear signing work
-end-to-end against PQSigner OS firmware on the `clear-sign-rebased`
-branch.
+end-to-end against the current PQSigner OS `master` line. Production remains
+blocked by the independent firmware-rollback and ERC-7730 provenance gates.
 
 It is the doc to follow if you're building:
 
@@ -14,13 +14,15 @@ It is the doc to follow if you're building:
   the same.
 - An RPC bridge that batches sign requests for a server-side signer.
 
-The wire format is **frozen on this branch**; only the companion-side
-code is missing. Two other docs cover narrower slices and remain
-useful as references — this guide subsumes both for implementation
-purposes:
+Wire v2 is the frozen format for the flows that it currently supports. It
+intentionally cannot complete seedless slot rotation; that needs the reviewed,
+versioned response extension described in §7.5. Firmware provenance and rollback
+gates also remain, so this is not a claim that only companion-side code is
+missing. This guide is normative. The similarly named documents below are
+redirects or historical provenance, not additional implementation specs:
 
-- `docs/companion/erc7730-integration.md` — what the firmware does after it
-  receives the trailer.
+- `docs/companion/erc7730-integration.md` — short current-status redirect and
+  code-source map; it intentionally does not duplicate the wire format.
 - `docs/archive/companion-erc7730-integration.md` — earlier draft,
   narrower scope; **folded into this guide and archived** 2026-06-18
   (its two unique pitfalls — kind=2 for a contract-context descriptor,
@@ -38,7 +40,7 @@ order they will bite you.
 2. [What the companion must ship](#2-what-the-companion-must-ship)
 3. [Catalog file format (`erc7730_db.bin`)](#3-catalog-file-format-erc7730_dbbin)
 4. [Lookup algorithm](#4-lookup-algorithm)
-5. [Trailer assembly](#5-trailer-assembly)
+5. [Bundle assembly](#5-bundle-assembly)
 6. [Where the trailer goes in each command](#6-where-the-trailer-goes-in-each-command)
    - [6.1 CMD_SIGN_USEROP (0x30)](#61-cmd_sign_userop-0x30)
    - [6.2 CMD_SIGN_USEROP_BATCH (0x32)](#62-cmd_sign_userop_batch-0x32)
@@ -49,10 +51,10 @@ order they will bite you.
    - [7.1 USDT transfer on mainnet](#71-usdt-transfer-on-mainnet)
    - [7.2 USDT approve unlimited](#72-usdt-approve-unlimited)
    - [7.3 WETH deposit (zero-arg, value from envelope)](#73-weth-deposit-zero-arg-value-from-envelope)
-   - [7.4 USDC TransferWithAuthorization (EIP-712 typed)](#74-usdc-transferwithauthorization-eip-712-typed)
-   - [7.5 Atomic batch (Type 1 + Type 2 in one user confirm)](#75-atomic-batch-type-1--type-2-in-one-user-confirm)
-   - [7.6 UniswapX ExclusiveDutchOrder (kind=3, depth-2 nested)](#76-uniswapx-exclusivedutchorder-kind3-depth-2-nested)
-   - [7.7 1inch aggregation swap — what "Minimum receive" means (partial-fill caveat)](#77-1inch-aggregation-swap--what-minimum-receive-means-partial-fill-caveat)
+   - [7.4 USDC TransferWithAuthorization (currently refused)](#74-usdc-transferwithauthorization-currently-refused)
+   - [7.5 Batch signing and the current slot-rotation blocker](#75-batch-signing-and-the-current-slot-rotation-blocker)
+   - [7.6 UniswapX orders (currently refused)](#76-uniswapx-orders-currently-refused)
+   - [7.7 1inch aggregation calls (currently refused)](#77-1inch-aggregation-calls-currently-refused)
 8. [Firmware response handling](#8-firmware-response-handling)
 9. [Failure modes and how to test them](#9-failure-modes-and-how-to-test-them)
 10. [Versioning and root rotation](#10-versioning-and-root-rotation)
@@ -71,49 +73,90 @@ to alice.eth") whose correctness is anchored in the firmware-built catalogue.
 There is exactly one trust transfer in this design: **the firmware
 trusts the Merkle root**. Everything else flows from that:
 
-- The root commits to a set of ERC-7730 descriptors that passed the
-  host-side ERC-8176 attestation policy at firmware-build time.
-- The companion ships the same descriptor set as a `*.bin` blob
-  whose first 32 bytes are the same root.
+- The root commits to a set of ERC-7730 descriptors that passed the host-side
+  structural compiler policy. The current catalogue is explicitly
+  `dev-unattested`: it has no ERC-8176 semantic/provenance authority and cannot
+  enter a production build.
+- During pre-production bring-up, the companion ships the same descriptor set
+  as a `*.bin` blob and pins the expected root out of band to the exact
+  development firmware build (`secure/src/db_roots.rs`). There is no separately
+  authenticated release-metadata channel or root-reporting command today.
+  Signed release metadata is the intended post-quarantine mechanism (§10), not
+  a current security boundary.
 - For each sign request, the companion picks the matching descriptor,
   produces a Merkle proof against the root, and ships it in the trailer slot.
-  The slot is optional in the wire grammar, but the proof is mandatory when
-  the firmware-known-call filter contains the exact contract-call tuple.
-- The firmware re-verifies the proof, binds the descriptor to the tx
-  via `(chain_id, to_address)` or `(chain_id, verifyingContract,
-  domain_separator)`, and renders.
+  The slot is optional in the wire grammar. A firmware-known tuple requires
+  independently authenticated semantics: normally the exactly bound
+  descriptor; the narrow Safe exception is strict native ERC-20 decoding with
+  exact chain/contract-bound Merkle metadata, re-attributed to the direct call
+  or individual MultiSend record.
+- The firmware re-verifies the proof and binds a contract descriptor via exact
+  `(chain_id, to_address)`. For EIP-712 it binds exact
+  `(chain_id, domain_separator)`, then selects the authenticated format by the
+  complete 32-byte `primary_type_hash`. The descriptor compiler folded the
+  deployment `verifyingContract` into that exact domain separator; firmware does
+  not receive a second independent contract field on this path.
 
-If the companion omits a proof, or supplies a malformed / mis-bound one, a
-firmware-known call **hard-refuses** with `"7730 proof needed"`; it never
-downgrades that tuple to typed or blind signing. Only a tuple absent from the
-pinned membership filter may use the generic display ladder. Bloom false
-positives can refuse an otherwise-unknown call, which is the safe failure
-direction.
+If the companion supplies neither an exactly bound descriptor nor the narrow
+authenticated Safe ERC-20 capability, a firmware-known call **hard-refuses**
+with `"7730 proof needed"`; it never downgrades that tuple to typed or blind
+signing. Direct non-Safe known calls still require the descriptor. Only a tuple
+absent from the pinned membership filter may use the generic display ladder.
+Bloom false positives can refuse an otherwise-unknown call, which is the safe
+failure direction.
+
+ERC-20 metadata is a scoped capability, not a global fact. Handler verification
+establishes only Merkle membership plus chain binding; final use must also match
+the signed surface: the direct ERC-20 target, the exact ERC-7730 `tokenPath`, a
+verified Safe direct target, or a record inside a verified pinned
+`MultiSendCallOnly` batch. Raw or invalid Safe trailer bytes are never scanned
+for authority. A bound non-native scalar `tokenAmount`, token array, or
+`tokenTicker` always adds a full contract-address page even when symbol and
+decimals authenticate successfully. If that injective identity page does not
+fit, rendering refuses rather than omitting it.
 
 ## 2. What the companion must ship
 
 Three things in the companion bundle:
 
 1. **The catalog blob** at `tools/companion-stub/erc7730_db.bin`
-   produced by `cargo run -p dbgen` against the firmware's seed
-   corpus + policy.
+   produced by `cargo run -p dbgen` from the vendored registry corpus,
+   `secure/data/erc7730/policy.toml`, and the reviewed in-place curations
+   recorded by the registry rotation policy. It is not built from the small
+   hand-authored seed corpus used by older bring-up snapshots.
 
-   - Production blob: 10,919 B, 20 leaves (8 source JSONs expanded
-     across multi-chain deployments).
-   - E2E fixture: 1,444 B, 4 leaves (WETH + USDT only).
+   - Development catalogue: 334,827 B, 420 compiled leaves, 4,542
+     exact registry-declared known-call tuples, provenance `dev-unattested`.
+     The tuple-set SHA-256 receipt is
+     `96ea46d23d2f321a81030b77a61a243a003c1ceb6d0dca8df32ba838bcc0c88b`.
+   - E2E fixture: 2,000 B, 5 leaves (WETH + USDT plus one synthetic,
+     fully-bound EIP-712 Delegation leaf).
 
-   Both ship a 32-byte Merkle root in the first 32 bytes of the file
-   header — see §3.
+   The blob does **not** embed its Merkle root. Bytes 0..31 are the catalogue
+   header. For the current development line, pin the blob and expected root out
+   of band to the exact firmware build, or independently recompute the tree
+   root. Do not claim signed release-metadata authentication until the
+   post-quarantine release flow in §10 exists, and never interpret the header
+   as a root.
 
-2. **A descriptor lookup function** keyed on `(chain_id, contract,
-   ?primary_type_hash)`. See §4.
+2. **A descriptor lookup function** keyed on `(chain_id, contract)` for
+   contract calls, and on `(chain_id, verifying_contract,
+   domain_separator, full_primary_type_hash)` for EIP-712. See §4.
 
-3. **A trailer assembler** that produces the exact byte layout the
-   firmware's `verify_erc7730_bundle` consumes. See §5.
+3. **A bundle assembler** that produces the exact inner byte layout the
+   firmware's `verify_erc7730_bundle` consumes; the command encoder adds
+   exactly one length frame. See §5.
 
-You can copy the Python reference at
-`tools/companion-stub/erc7730_trailer.py` for a 200-line working
-implementation, or port it directly to TypeScript / Rust / Swift.
+You can copy the executable Python reference at
+`tools/companion-stub/erc7730_trailer.py`, or port its selection and assembly
+rules directly to TypeScript / Rust / Swift. Always pass the expected context:
+use `--context contract` for calldata/UserOp lookup. Typed-data lookup requires
+both `--context eip712 --domain-separator 0x<64 hex>` and
+`--primary-type-hash 0x<64 hex>`. The helper parses every candidate's
+authenticated IR and matches both complete 32-byte values. The catalogue
+entry's diagnostic hash may contain only the first surviving format in a
+multi-format IR; never filter by that hint or fall back to the first
+`(chain, contract)` match.
 
 ## 3. Catalog file format (`erc7730_db.bin`)
 
@@ -121,37 +164,32 @@ implementation, or port it directly to TypeScript / Rust / Swift.
 offset  size  field
 ---------------------------------------------------------
   0      4    magic                "P730"  (ASCII)
-  4      1    schema_ver           1
-  5      1    entry_cnt_lo         (entry_cnt as u32 LE)
-  6      1    entry_cnt_b1
-  7      1    entry_cnt_b2
-  8      1    entry_cnt_b3
-  9      1    ir_pool_off_lo       (u32 LE — offset of IR pool)
- 10..12       ir_pool_off_b{1,2,3}
- 13      1    ir_pool_size_lo      (u32 LE)
- 14..16       ir_pool_size_b{1,2,3}
- 17      1    reserved_b0          (must be 0)
- 18..23       reserved_b{1..6}
- 24      4    proof_depth          (u32 LE)
- 28      4    proofs_off           (u32 LE — offset of proof pool)
+  4      4    version              u32 LE (currently 1)
+  8      4    flags                u32 LE (currently 0)
+ 12      4    entry_cnt            u32 LE
+ 16      4    ir_pool_off          u32 LE
+ 20      4    ir_pool_size         u32 LE
+ 24      4    proof_depth          u32 LE
+ 28      4    proofs_off           u32 LE
 
- 32             root                 [u8; 32]  ← firmware-pinned
-
- 64    72×N    entries[N]           (one 72-byte record per leaf):
+ 32    72×N    entries[N]           (one 72-byte record per leaf):
                   chain_id           u64 LE
                   contract           [u8; 20]
-                  primary_type_hash  [u8; 32]  (zero for contract-context)
+                  primary_type_hash  [u8; 32]  (first-surviving-format hint;
+                                                zero for contract-context)
                   context_kind       u8        (1 = CTX_CONTRACT,
                                                 2 = CTX_EIP712)
+                  _pad               [u8; 3]   (all zero)
                   ir_off             u32 LE    (offset into IR pool)
-                  ir_len             u16 LE
-                  leaf_index         u32 LE    (position in Merkle tree)
-                  _pad               u8
+                  ir_len             u32 LE
 
  ir_pool_off    IR pool bytes        (concatenated IR records)
  proofs_off     proof pool bytes     (entry_cnt × proof_depth × 32 bytes,
                                       laid out in leaf-index order)
 ```
+
+`leaf_index` is the entry's array position; it is not stored in the entry.
+There is no root field anywhere in this blob.
 
 Endian note: this file is **little-endian** because it's produced by a
 host-side tool and consumed only by other host-side tools (the
@@ -162,13 +200,20 @@ on-device protocol field in PQSigner OS).
 Sanity-check at companion startup:
 
 - `magic == "P730"`
-- `schema_ver == 1`
+- `version == 1`
+- `flags == 0`
 - `entry_cnt ≥ 1`
 - `proof_depth ≤ 32` (firmware `ERC7730_PROOF_MAX_DEPTH`)
-- File size ≥ `proofs_off + entry_cnt * proof_depth * 32`
-- The blob's `root` field matches the firmware's compiled-in root
-  (query via `GET_DEVICE_INFO` once the firmware exposes it, or just
-  hard-code it per firmware release for now).
+- `ir_pool_off == 32 + entry_cnt * 72`
+- `ir_pool_off + ir_pool_size == proofs_off`
+- File size == `proofs_off + entry_cnt * proof_depth * 32` (trailing bytes are
+  non-canonical and rejected)
+- Every entry has a supported context kind, three zero reserved bytes, and a
+  non-empty in-bounds IR slice; validate the IR header and complete format table
+  before using its lookup fields
+- The separately supplied/recomputed expected root is pinned to the exact
+  firmware release. No current gateway command reports the root; such an API is
+  a roadmap item, not an available startup check.
 
 If any of these fail, treat the catalogue/firmware pair as incompatible and
 stop known-call signing until the companion data is repaired or updated.
@@ -195,46 +240,56 @@ message        = { from, to, value, ... }
 ```
 
 ```pseudo
-domain_separator = keccak256(EIP712Domain_typehash || encode(domain))
-primary_type_hash = keccak256(primaryType_string)
+domain_separator = keccak256(
+  encodeData("EIP712Domain", domain, present_domain_fields)
+)
+primary_type_hash = keccak256(encodeType(primaryType, types))
 
-entry = entries.find(e =>
+candidates = entries.filter(e =>
   e.context_kind == CTX_EIP712
   && e.chain_id == chainId
-  && e.contract == verifyingContract
-  && e.primary_type_hash[..4] == primary_type_hash[..4])
+  && e.contract == verifyingContract)
+
+entry = candidates.find(e => {
+  ir = parse_and_validate_complete_ir(e)
+  return ir.domain_separator == domain_separator
+    && ir.formats.any(f => f.full_type_hash == primary_type_hash)
+})
 ```
 
 Notes:
 
-- **The firmware compares the first 4 bytes of `primary_type_hash`
-  only** — that's the format selector key inside the IR. The catalog
-  stores the full 32-byte hash for companion-side disambiguation;
-  the firmware never reads past byte 3.
+- `encodeType` recursively appends referenced struct definitions in canonical
+  alphabetical order. `encodeData` hashes dynamic `string`/`bytes`, arrays,
+  and nested structs according to EIP-712 before placing their 32-byte words.
+  Use only domain fields actually present in the request, in the standard
+  EIP-712 field order, and require `chainId` plus `verifyingContract` to equal
+  the requested deployment. Do not accept a companion-supplied precomputed
+  separator without independently recomputing it from the typed-data domain.
+- The four-byte prefix can narrow runtime format candidates, but the firmware
+  constant-time compares the complete 32-byte `primary_type_hash` before
+  rendering. A prefix or entry-level-hint match grants no display authority.
 - A descriptor with two formats (e.g. tokens with both
   `Permit` and `TransferWithAuthorization`) appears as ONE catalog
   entry per `(chain_id, contract)` — the format-table-walk inside the
   on-device IR resolves which format applies. So for EIP-712, your
-  match key is `(chain_id, verifyingContract)` and the firmware does
-  the per-primaryType dispatch internally. The catalog's
-  `primary_type_hash` field carries the **first** format's hash for
-  human-readable lookup but is not load-bearing for the wire
-  protocol.
-- On a miss: omit the trailer only if the tuple is also absent from the
-  catalogue paired with this exact firmware root. That genuinely unknown call
-  may blind-sign. A miss caused by companion/firmware catalogue skew is an
-  error: a tuple known to the firmware will refuse without its proof.
+  match starts with `(chain_id, verifyingContract)` and the firmware does the
+  full-hash per-primaryType dispatch inside the authenticated IR. The catalog
+  entry's `primary_type_hash` carries the **first surviving** compiled format's hash for
+  sorting/diagnostics; it is not a sufficient security decision for a
+  multi-format descriptor.
+- On a compiled-catalogue miss, do not infer that the firmware considers the
+  call unknown. Its pinned known-call Bloom filter includes raw declarations
+  that were rejected or omitted from the compiled catalogue. Pair/version that
+  filter with the companion release, or surface the firmware's fail-closed
+  refusal; never retry a refused call without a proof as a downgrade.
 
-## 5. Trailer assembly
+## 5. Bundle assembly
 
-A "trailer" is an outer 2-byte length prefix wrapping an inner
-"bundle":
-
-```
-trailer = u16_be(len(bundle)) || bundle
-```
-
-The bundle is what `pqsigner_erc7730::bundle::verify_erc7730_bundle`
+Build the **inner ERC-7730 bundle** first. Each command then places that bundle
+in exactly one command-specific `[u16 BE len][payload]` slot. Do not prefix it
+here and then add another length at the command site. The bundle is what
+`pqsigner_erc7730::bundle::verify_erc7730_bundle`
 parses byte-for-byte:
 
 ```
@@ -250,8 +305,9 @@ Where:
 
 - `ir` is the IR bytes for the entry (extracted from
   `erc7730_db.bin[ir_pool_off + e.ir_off .. + e.ir_len]`).
-- `leaf_index` is the entry's position in the Merkle tree (header
-  field; same as the entry's `leaf_index` value).
+- `leaf_index` is the entry's zero-based array position in `entries[]`. It is
+  implicit and is not stored in either the catalogue header or the 72-byte
+  entry record; assign it while parsing the array.
 - `proof_depth` is the catalog's `proof_depth` value (same for every
   leaf).
 - `proof` is the entry's proof, extracted from
@@ -265,16 +321,16 @@ Trailer size bounds:
 - Total bundle ≤ 4096 + 10 + 32 × 32 = 5130 (firmware
   `ERC7730_MAX_TRAILER_LEN`)
 
-If your assembled trailer is longer than 5130 B, you've packed the
+If your assembled bundle is longer than 5130 B, you've packed the
 wrong thing — re-check `ir_len` against the catalog entry.
 
 TypeScript reference (≈ 30 lines):
 
 ```typescript
-function assembleTrailer(blob: Uint8Array, entry: CatalogEntry): Uint8Array {
+function assembleErc7730Bundle(blob: Uint8Array, entry: CatalogEntry): Uint8Array {
   const proofDepth = readU32LE(blob, 24);
   const proofsOff  = readU32LE(blob, 28);
-  const irPoolOff  = readU32LE(blob, 9);
+  const irPoolOff  = readU32LE(blob, 16);
 
   const ir = blob.subarray(irPoolOff + entry.irOff, irPoolOff + entry.irOff + entry.irLen);
   const proofBase = proofsOff + entry.leafIndex * proofDepth * 32;
@@ -289,10 +345,7 @@ function assembleTrailer(blob: Uint8Array, entry: CatalogEntry): Uint8Array {
   writeU32BE(bundle, p, proofDepth); p += 4;
   bundle.set(proof, p);
 
-  const trailer = new Uint8Array(2 + bundle.length);
-  writeU16BE(trailer, 0, bundle.length);
-  trailer.set(bundle, 2);
-  return trailer;
+  return bundle;
 }
 ```
 
@@ -300,8 +353,9 @@ function assembleTrailer(blob: Uint8Array, entry: CatalogEntry): Uint8Array {
 
 This is the part most companions get wrong on the first try, because
 each of the three sign commands has a different trailer position. The
-wire layout is positional — trailers are NOT keyed by tag; their
-presence and order is fixed by the firmware parser.
+single and off-chain layouts use fixed positional slots. Batch is the explicit
+exception: it carries a counted TLV list keyed by `(tx_idx, kind)`. Never apply
+the single-command positional parser to the batch tail.
 
 ### 6.1 CMD_SIGN_USEROP (0x30)
 
@@ -318,12 +372,12 @@ sign_userop_payload =
     base_header[330]
  || data[data_len]                                       // inner calldata
  || u16_be(erc20_bundle_len)         || erc20_bundle     // optional
- || u16_be(zk_v1_bundle_len)         || zk_v1_bundle     // optional
- || u16_be(zk_v3_bundle_len)         || zk_v3_bundle     // optional
+ || u16_be(zk_v1_reserved_len)                            // RETIRED; MUST be 0
+ || u16_be(cow_order_bundle_len)         || cow_order_bundle     // optional
  || u16_be(safe_v1_bundle_len)       || safe_v1_bundle   // optional
  || u16_be(selector_bundle_len)      || selector_bundle  // optional
  || u16_be(self_attest_bundle_len)   || self_attest      // optional
- || **u16_be(erc7730_bundle_len)     || erc7730_bundle** // wire-optional; mandatory for a known call
+ || **u16_be(erc7730_bundle_len)     || erc7730_bundle** // wire-optional; mandatory for direct/non-exempt known calls
  || names_section                                        // 1-B count + bundles
 ```
 
@@ -331,23 +385,31 @@ If the companion sends nothing for slot N but a non-empty slot N+1,
 slot N MUST still be `[u16 BE 0]`. There is no "skip" — the parser
 walks the chain sequentially.
 
-If the companion has no trailers at all, the chain collapses to:
+If the companion has no `u16` trailers and no names to attach, the chain
+collapses to end-of-payload immediately after calldata:
 
 ```
-sign_userop_payload = base_header[330] || data[data_len] || names_section
+sign_userop_payload = base_header[330] || data[data_len]
 ```
 
-(every `u16_be(...)` slot becomes `[0x00, 0x00]`)
+All seven `u16_be(...)` slots and the names count are omitted in this
+shorthand. The parser defines `cursor == total_len` as an empty names set; an
+explicit trailing `0x00` is rejected as trailing data because the zero-count
+path does not consume a byte. A non-empty names section MUST NOT use the
+shorthand: emit all seven preceding trailer slots explicitly as `[u16 BE 0]`,
+then the non-zero names count and its bundles. Otherwise the first names bytes
+are consumed as an earlier positional trailer.
 
 That zero-trailer form is signable only for tuples absent from the
 firmware-paired known-call filter. It is not a way to opt out of clear-signing
 for a compiled descriptor.
 
-**Important:** the firmware also expects a `names_section` after the
-last trailer. It's `[u8 count][bundle_0 ... bundle_{count-1}]`,
-`count ≤ 4`, each bundle `[u16 BE len][payload]`. If you don't have
-any names to attach, send `[0x00]`. Never omit the count byte — the
-parser reads it unconditionally.
+**Important:** a non-empty `names_section` after the last trailer is
+`[u8 count][bundle_0 ... bundle_{count-1}]`, `1 ≤ count ≤ 4`, each bundle
+`[u16 BE len][payload]`. If there are no names, end the payload after the last
+present trailer; do not append a zero count byte. When `count > 0`, the seven
+earlier `u16` slots must all be present (zero-length where unused) before the
+names count.
 
 ### 6.2 CMD_SIGN_USEROP_BATCH (0x32)
 
@@ -355,8 +417,9 @@ The atomic multi-UserOp sign command uses the wire-v2 TLV trailer list described
 in [`companion-batch-sign-integration.md`](companion-batch-sign-integration.md).
 Attach one kind-7 `TRAILER_KIND_ERC7730` record per matching member, with that
 member's `tx_idx`. Every firmware-known member needs its own verified proof;
-omitting any one aborts the whole atomic batch. When no member has a descriptor,
-emit a zero `trailer_count` byte.
+omitting any one aborts the whole atomic batch. Emit a zero `trailer_count` byte
+only when the batch has no trailer of any kind; ERC-20, CoW, Safe, selector, or
+name records still count even when no member has an ERC-7730 descriptor.
 
 Wire tail (the full batch header and record layout is in the linked guide):
 
@@ -381,17 +444,17 @@ EIP-712 typed signs have their OWN dedicated payload shape — the
 trailer is the LAST element, not interleaved with anything:
 
 ```
-header = u8(account) | u8_be(chain) | u32_be(slot) | u8(kind=2) | u16_be(payload_len) | u8(flags)
-                                                                                       ^ bit 0 = account_deployed
+header[17] = u8(account) | u64_be(chain_id) | u32_be(slot) | u8(kind=2) | u16_be(payload_len) | u8(flags)
+                                                                                             ^ bit 0 = account_deployed
 
 payload =
     u16_be(1)                          // domain_sep_present (must be 1)
  || u8[32] domain_separator             // EIP-712 EIP712Domain hash
- || u8[32] primary_type_hash            // keccak256(typeString)
+ || u8[32] primary_type_hash            // keccak256(encodeType(primaryType, types))
  || u16_be(encoded_data_len)            // ≤ 512 (MAX_OFFCHAIN_EIP712_ENCODED_DATA_LEN)
- || u8[encoded_data_len] encoded_data   // viem::encodeAbiParameters(types, message)
+ || u8[encoded_data_len] encoded_data   // canonical EIP-712 encodeData body, without typeHash
  || u16_be(trailer_len)                 // ≤ 5130 (ERC7730_MAX_TRAILER_LEN)
- || u8[trailer_len] trailer             // ERC-7730 bundle (§5)
+ || u8[trailer_len] erc7730_bundle      // inner bundle (§5)
 ```
 
 Constraints the firmware enforces:
@@ -400,28 +463,46 @@ Constraints the firmware enforces:
   the bare 32-byte `primaryType` hash without a domain) is rejected.
 - `encoded_data` is the **struct body only**. Do NOT prepend
   `primary_type_hash` — the firmware concatenates it internally.
-  This is what `viem.encodeAbiParameters(types, message)` produces;
-  ethers users want `AbiCoder.defaultAbiCoder().encode(types,
-  values)`.
+  Construct canonical EIP-712 `encodeData(primaryType, message, types)` and
+  remove its leading type hash, or ABI-encode already-transformed member words.
+  Plain `encodeAbiParameters(types, message)` is equivalent only for a flat
+  struct of static scalar members. Dynamic `bytes`/`string`, structs, and
+  arrays occupy their EIP-712 hash words, not ordinary ABI dynamic tails.
 - `trailer_len > 0`. Sending kind=2 without a trailer fails with
-  `"7730 bundle fail"`. The kind=2 codepath has no blind-sign fallback
+  `"empty trailer"`. The kind=2 codepath has no blind-sign fallback
   inside the firmware — it expects clear-sign info or it bails.
 
-If you can't find a descriptor for an EIP-712 sign, **route the user
-through `kind=0` (raw32) or `kind=1` (personal_sign) instead** by
-pre-hashing on the companion side. The firmware will show the
-fingerprint page and require button confirm; the dapp gets an
-EIP-1271 sig back the same way.
+If a dapp requested EIP-712 typed signing and no compatible descriptor exists,
+return an unsupported/catalogue error. **Do not silently translate it to
+`kind=0` (raw32) or `kind=1` (personal_sign)**: those are distinct user-visible
+signature semantics and are not a fallback around a typed-data refusal. Use
+kind 0/1 only when that is the operation the dapp actually requested and the
+companion preserves the corresponding firmware-side replay-safe nesting.
+
+This is currently a **companion policy, not a firmware-enforced equivalence
+check**. The firmware cannot infer whether a 32-byte `RAW32` payload was
+originally the final hash of a supported typed-data request. A hostile
+companion can therefore suppress semantic pages by relabelling such a hash as
+RAW32; the device warns `! BLIND RAW32` and shows the complete hash. Production
+should disable RAW32 unless compatibility explicitly accepts that residual.
 
 ### 6.4 CMD_SIGN_OFFCHAIN — kind=0 / kind=1 fingerprint pages
 
 For `kind=0` (raw32) and `kind=1` (personal_sign), no ERC-7730
-trailer slot exists in the payload — the firmware just renders the
-fixed banner pages plus the ERC-8213 fingerprint of the hash being
-signed. No companion-side action needed for clear-sign; do attach a
-names section if you want the wallet name resolved.
+trailer slot exists in the payload. The firmware renders fixed banner pages plus
+a user-cross-check fingerprint: raw `H` for RAW32, or
+`calldata_digest(message)` for PERSONAL_SIGN. These are deliberately not the
+firmware-internal replay-safe nested digest that the C10 signature covers. No
+companion-side clear-sign or names-bundle section exists for these kinds.
+Appending bytes either makes RAW32 invalid or changes the PERSONAL_SIGN message.
 
 ### 6.5 CMD_SIGN_OFFCHAIN — kind=3 EIP-712 typed with NESTED structs (Permit2 / UniswapX)
+
+Kind 3 is a wire capability, not proof that a named protocol is currently in
+the compiled catalogue. The checked-in `secure/data/erc7730.review.txt` is
+authoritative. At this snapshot the UniswapX order descriptors are rejected by
+the strict all-signed-operands-visible policy, so companions must refuse them;
+the framing below is retained for future safely-curated descriptors and tests.
 
 Some EIP-712 messages have a **nested-struct member** — a struct (or an
 array-of-struct) inside the signed struct. On-chain EIP-712 encodes each such
@@ -442,18 +523,18 @@ The payload is kind=2's, with a `nested_blob` section inserted **between**
 `encoded_data` and the trailer:
 
 ```
-header = u8(account) | u8_be(chain) | u32_be(slot) | u8(kind=3) | u16_be(payload_len) | u8(flags)
+header[17] = u8(account) | u64_be(chain_id) | u32_be(slot) | u8(kind=3) | u16_be(payload_len) | u8(flags)
 
 payload =
     u16_be(1)                          // domain_sep_present (must be 1)
  || u8[32] domain_separator
- || u8[32] primary_type_hash            // keccak256(full typeString)
+ || u8[32] primary_type_hash            // keccak256(encodeType(primaryType, types))
  || u16_be(encoded_data_len)            // ≤ 512
- || u8[encoded_data_len] encoded_data   // viem::encodeAbiParameters — the SIGNED top struct body
+ || u8[encoded_data_len] encoded_data   // canonical EIP-712 encodeData body, without typeHash
  || u16_be(nested_blob_len)             // ≤ 2048 (MAX_OFFCHAIN_EIP712_NESTED_LEN); 0 if no nested member
  || u8[nested_blob_len] nested_blob     // DFS records, see below — DISPLAY-ONLY, not signed
  || u16_be(trailer_len)                 // ERC-7730 bundle (§5)
- || u8[trailer_len] trailer
+ || u8[trailer_len] erc7730_bundle
 ```
 
 The **signed digest is UNCHANGED** — the firmware still signs
@@ -487,8 +568,8 @@ array-of-struct       (a T[] member):
 
 - `nested_ed` (and each `elem_i_ed`) is the **EIP-712 `encodeData` of that nested
   struct** — exactly `member_count × 32` bytes, where `member_count` is the nested
-  struct's OWN member count (from its EIP-712 type). It is `viem::encodeAbiParameters`
-  of the nested struct's members: `address`/`uintN`/`bytesN`/`bool` in their natural
+  struct's OWN member count (from its EIP-712 type). It is the canonical EIP-712
+  member-word encoding: `address`/`uintN`/`bytesN`/`bool` in their natural
   ABI word; a **dynamic** `bytes`/`string` member as its `keccak256(value)` word; a
   **nested struct** member as its `hashStruct` word; a **T[]** member as its
   `keccak(∥ hashStruct)` word. (Same rules as the on-chain `encodeData` — the device
@@ -540,30 +621,36 @@ Companion-side flow:
    find e where e.context_kind == 1 && e.chain_id == 1
               && e.contract == 0xdAC17F958D2ee523a2206206994597C13D831ec7
    ```
-   Found: `tether-usdt.json` mainnet entry.
+   Found: `registry/tether/calldata-usdt.json` mainnet entry.
 
-2. **Assemble trailer** per §5.
+2. **Assemble the inner bundle** per §5.
 
 3. **Build the SIGN_USEROP payload:**
    ```
    header (330 B)
    data (68 B = 4-byte selector + 32-byte to + 32-byte amount)
    u16_be(0)         // erc20 (absent)
-   u16_be(0)         // zk_v1 (absent)
-   u16_be(0)         // zk_v3 (absent)
+   u16_be(0)         // reserved compatibility slot (MUST be zero)
+   u16_be(0)         // cow_order (absent)
    u16_be(0)         // safe_v1 (absent)
    u16_be(0)         // selector (absent)
    u16_be(0)         // self_attest (absent)
-   u16_be(len) || trailer   // ERC-7730 trailer ⟵
-   u8(0)             // names_section count = 0
+   u16_be(len) || erc7730_bundle   // exactly one frame; end payload here (no names)
    ```
 
-4. **Send.** The firmware will show:
+4. **Send.** Because this worked example deliberately sends no ERC-20 metadata
+   proof in the first trailer slot, the descriptor authenticates the intent and
+   operands but does not authenticate USDT's decimals or ticker. The current
+   `dev-unattested` firmware will show:
    ```
-   Page 0: "Sign: Send" / "Tether Limited" / "Tether USD" / "> next"
-   Page 1: "Amount" / "100" / "USDT" / "> next"
-   Page 2: "To" / "0x333333…" / "..." / "> next"
-   Page 3+: network; exact max-fee/tip/maximum-total; call,
+   Page 0: "** DEV BUILD **" / "Unattested" / "descriptor" / "> next"
+   Page 1: "Signer acct #0" + the full mnemonic-derived wallet address
+   Page 2: "Target contract:" + the full USDT contract address
+   Page 3: "Send" / "Tether Limited" / "Tether USD" / "> next"
+   Page 4: "Amount" / "100000000" / "" / "! raw, dec=?"
+   Page 5: "Token (UNVERIFIED)" + the exact USDT contract address
+   Page 6: "To" / "0x333333…" / "..." / "> next"
+   Then: network; exact max-fee/tip/maximum-total; call,
             verification, and pre-verification gas separately; full
             256-bit UserOp nonce (hex)...
    Page N: "8213 Fingerprint" / "CalldataDigest" / "> verify off-dev"
@@ -577,10 +664,15 @@ Companion-side flow:
    refuse. The three EntryPoint v0.6 gas words and all 32 nonce bytes remain
    independently visible, so equal sums or equal low 64 bits cannot alias.
 
-5. **Receive** the response, ABI-encode the type2 wrapper, wrap into
-   a v0.6 `PackedUserOperation` with `callData =
-   executeWithOffchainCount(1, new_offchain_count, USDT, 0, data)`,
-   ship to the bundler.
+   To obtain a scaled `100 USDT` page instead, supply the exact matching
+   Merkle-verified ERC-20 metadata bundle in the first trailer slot. This guide
+   does not embed or invent those proof bytes.
+
+5. **Receive** the response and place the already ABI-encoded
+   `type2_wrapper` directly into an EntryPoint v0.6 `UserOperation`
+   (`UserOperation06`) with
+   `callData = executeWithOffchainCount(1, new_offchain_count, USDT, 0, data)`,
+   then ship it to the bundler.
 
 ### 7.2 USDT approve unlimited
 
@@ -595,20 +687,23 @@ eth_sendTransaction({
 })
 ```
 
-Lookup hits the same `tether-usdt.json` entry. The descriptor sets a
-`threshold` parameter on the amount field; the renderer compares the
-value to that threshold and writes `"unlimited <ticker>"` on row 1
-instead of running the digit formatter — the `!AMOUNT OVERFLOW`
-banner that pre-fix builds emitted for `uint256.MAX` is short-
-circuited.
+Lookup hits the same `registry/tether/calldata-usdt.json` entry. The descriptor
+sets a `threshold` parameter on the amount field; the renderer compares the
+value to that threshold before running the digit formatter, so the
+`!AMOUNT OVERFLOW` banner that pre-fix builds emitted for `uint256.MAX`
+is short-circuited. Because this example still supplies no ERC-20 metadata
+bundle, the token cannot be authenticated and no ticker is claimed.
 
 Expected display:
 
 ```
-Page 0: "Sign: Approve" / "Tether Limited" / "Tether USD" / "> next"
-Page 1: "Spender" / "0x444444…" / "..." / "> next"
-Page 2: "Amount" / "unlimited USDT" / "" / "> next"
-Page 3+: envelope + fingerprint + confirm
+Page 0: "** DEV BUILD **" / "Unattested" / "descriptor" / "> next"
+Page 1: "Signer acct #0" + the full mnemonic-derived wallet address
+Page 2: "Target contract:" + the full USDT contract address
+Page 3: "Approve" / "Tether Limited" / "Tether USD" / "> next"
+Page 4: "Spender" / "0x444444…" / "..." / "> next"
+Page 5: "Amount" / "unlimited" / "(unverified)" / "> next"
+Page 6+: exact "Token (UNVERIFIED)" identity, envelope, fingerprint, confirm
 ```
 
 ### 7.3 WETH deposit (zero-arg, value from envelope)
@@ -623,7 +718,7 @@ eth_sendTransaction({
 })
 ```
 
-Lookup: `weth.json` mainnet entry.
+Lookup: `registry/weth/calldata-weth.json` mainnet entry.
 
 This is the **`@.value` container path** case. The descriptor's
 single "Amount" field has `"path": "@.value"`, which the firmware
@@ -633,189 +728,68 @@ resolves to the UserOp envelope's `value` field — NOT the calldata
 Expected display:
 
 ```
-Page 0: "Sign: Wrap" / "WETH" / "WETH" / "> next"
-Page 1: "Amount" / "0.5 ETH" / "" / "> next"
-Page 2+: envelope + fingerprint + confirm
+Page 0: "** DEV BUILD **" / "Unattested" / "descriptor" / "> next"
+Page 1: "Signer acct #0" + the full mnemonic-derived wallet address
+Page 2: "Target contract:" + the full WETH contract address
+Page 3: "! NATIVE ETH" + the exact 0.5 ETH outer value
+Page 4: "Wrap" / "WETH" / "WETH" / "> next"
+Page 5: "Amount" / "0.5 ETH" / "" / "> next"
+Page 6+: envelope + fingerprint + confirm
 ```
 
-### 7.4 USDC TransferWithAuthorization (EIP-712 typed)
+### 7.4 USDC TransferWithAuthorization (currently refused)
 
-Dapp request:
+The upstream Circle `TransferWithAuthorization` descriptors are present in the
+vendored security corpus but are not compiled into trusted-display leaves at
+this snapshot. Their hidden nonce/replay operands violate the strict rule that
+every signed non-address operand must be surfaced. A companion must treat the
+catalogue miss as unsupported and return an error; it must not relabel the
+request as raw32/personal-sign or claim the clear-sign pages shown in older
+drafts. Re-enable this example only after the descriptor compiles, the root is
+reviewedly rotated, and the generated review receipt lists the exact leaf.
 
-```javascript
-eth_signTypedData_v4({
-  domain: {
-    name:    "USD Coin",
-    version: "2",
-    chainId: 1,
-    verifyingContract: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
-  },
-  types: {
-    EIP712Domain: [...],
-    TransferWithAuthorization: [
-      { name: "from",         type: "address" },
-      { name: "to",           type: "address" },
-      { name: "value",        type: "uint256" },
-      { name: "validAfter",   type: "uint256" },
-      { name: "validBefore",  type: "uint256" },
-      { name: "nonce",        type: "bytes32" },
-    ],
-  },
-  primaryType: "TransferWithAuthorization",
-  message: { from, to, value, validAfter, validBefore, nonce },
-})
-```
+### 7.5 Batch signing and the current slot-rotation blocker
 
-Companion-side:
+`CMD_SIGN_USEROP_BATCH` supports per-transaction kind-7 ERC-7730 TLVs and can
+clear-sign an ordinary batch on an already-registered slot. Attach each bundle
+to its `tx_idx` in the TLV list described in §6.2.
 
-1. **Compute `domain_separator`** via `keccak256(EIP712Domain_typehash
-   || encode(domain))`. For viem: `getDomainSeparator(domain)`.
-2. **Compute `primary_type_hash`** via
-   `keccak256("TransferWithAuthorization(address from,...)")`. For
-   viem: `getTypesHash(types, "TransferWithAuthorization")`.
-3. **Encode the struct body**: `viem.encodeAbiParameters(typesArr,
-   valuesArr)` where `typesArr` is the field-type list and
-   `valuesArr` is the message values in declaration order.
-4. **Look up** the descriptor:
-   ```
-   find e where e.context_kind == 2 && e.chain_id == 1
-              && e.contract == 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48
-              && e.primary_type_hash[..4] == computed_primary_type_hash[..4]
-   ```
-5. **Assemble the kind=2 payload** per §6.3.
-6. **Send** as `CMD_SIGN_OFFCHAIN` with `kind=2`.
+Do **not** describe first deployment as Type 1 registration. First deployment
+uses `FLAG_INCLUDE_INIT_CODE`, `slot_index = 0`, and
+`FLAG_REGISTER_SLOT = 0`; the factory installs slot 0 atomically and the device
+emits only the slot-0 Type 2 signature.
 
-Expected display:
+Rotation to slot N≥1 is currently blocked for seedless companions. Firmware
+can emit a Type 1 signature over `addOwnerBytes(newSlotPk)`, but wire v2 does
+not return the 64-byte `newSlotPk = pkSeed || pkRoot` needed to reconstruct that
+exact signed calldata. A no-op `execute(sender,0,"")` is invalid and hashes to
+a different UserOp. Until a reviewed wire bump exposes the public key (or the
+complete Type-1 calldata), production companions MUST keep
+`FLAG_REGISTER_SLOT` clear, treat any nonzero `type1_len` as unsupported, and
+must not retry the request: every retry releases another fresh bootstrap C10
+signature without a successful on-chain counter increment.
 
-```
-Page 0: "Sign: Authorize" / "Circle" / "USD Coin" / "> next"
-Page 1: "From" / <from addr> / "" / "> next"
-Page 2: "To" / <to addr> / "" / "> next"
-Page 3: "Amount" / <value> "USDC" / "" / "> next"
-Page 4: "Valid after" / <date UTC> / "" / "> next"
-Page 5: "Valid before" / <date UTC> / "" / "> next"
-Page 6: "Nonce" / <hex> / "" / "> next"
-Page 7+: fingerprint + confirm
-```
+### 7.6 UniswapX orders (currently refused)
 
-The output is byte-identical to a `kind=0` raw32 sign of the EIP-712
-final hash — the companion can wrap as `abi.encode(uint256
-ownerIndex, bytes c10Sig)` and pass to
-`wallet.isValidSignature(rawHash, wrappedSig)`. Off-chain
-verification works through any EIP-1271-aware verifier.
+The vendored UniswapX `DutchOrder`, `ExclusiveDutchOrder`, and `LimitOrder`
+descriptors are not compiled into the current trusted catalogue. They hide
+signed nonce/replay or other effect-bearing operands, so the strict compiler
+records a visible skip and the typed request must be refused. Kind 3 nested
+framing support does not override that policy. Do not construct the historical
+nested blob described in older drafts unless a future reviewed descriptor is
+present in the exact firmware catalogue and its generated receipt confirms all
+signed operands are rendered.
 
-### 7.5 Atomic batch (Type 1 + Type 2 in one user confirm)
+### 7.7 1inch aggregation calls (currently refused)
 
-When the wallet's slot 0 is not yet registered on a new chain, a
-fresh registration UserOp must be bundled before the user's call.
-The batch sign command does this atomically (one user confirm for
-both UserOps).
-
-If the user-call is an ERC-7730-described action (e.g. their first
-USDT transfer on Optimism after deriving the slot), attach the
-trailer **at the very end of the batch payload** (§6.2). The
-firmware will render:
-
-```
-Page 0: "Batch sign" / "2 UserOps" / "" / "> next"
-[Type 1 wrapper pages]
-[Type 2 user-tx pages, rendered with clear-sign]
-[Batch summary: combined fingerprint hash]
-Page N: "Cancel / Confirm"
-```
-
-Attaching the trailer only changes the Type 2 rendering; the Type 1
-slot-registration UserOp is always rendered as `"Register slot N
-(once-only)"` boilerplate regardless.
-
-### 7.6 UniswapX ExclusiveDutchOrder (kind=3, depth-2 nested)
-
-The user signs a Permit2 `PermitWitnessTransferFrom` whose `witness` is an
-`ExclusiveDutchOrder`. This exercises the full nested machinery: a depth-1 nested
-struct (`witness`) that itself contains a depth-2 nested struct (`witness.info`,
-`OrderInfo`) AND a depth-2 nested array-of-struct (`witness.outputs`,
-`DutchOutput[]`). Its pinned format declares `nested_descent_count = 4`
-(`permitted` + `witness` + `info` + `outputs`), so you MUST use kind=3.
-
-`encoded_data` is the SIGNED top struct body — 5 words for
-`PermitWitnessTransferFrom(TokenPermissions permitted, address spender, uint256
-nonce, uint256 deadline, ExclusiveDutchOrder witness)`:
-
-```
-encoded_data (160 B) = hashStruct(permitted) | spender | nonce | deadline | hashStruct(witness)
-```
-
-`nested_blob` mirrors the device's depth-first descent. The descent order is
-`permitted` (top anchor), then `witness` (top anchor) → into `witness`: `info`
-(nested struct) then `outputs` (nested array). So the records are:
-
-```
-nested_blob =
-    u16_be(64)  || permitted_ed        // TokenPermissions: token | amount           (2 words)
- || u16_be(288) || witness_ed          // ExclusiveDutchOrder encodeData              (9 words):
-                                        //   hashStruct(info) | decayStartTime | decayEndTime |
-                                        //   exclusiveFiller | exclusivityOverrideBps | inputToken |
-                                        //   inputStartAmount | inputEndAmount | keccak(∥ hashStruct(outputs))
- || u16_be(192) || info_ed             // OrderInfo: reactor | swapper | nonce | deadline |
-                                        //   additionalValidationContract | keccak(additionalValidationData)  (6 words)
- || u16_be(2)                          // outputs elem_count = 2
- || u16_be(128) || out0_ed             // DutchOutput: token | startAmount | endAmount | recipient  (4 words)
- || u16_be(128) || out1_ed             // DutchOutput #2
-```
-
-Key points a companion gets wrong:
-- `witness_ed[0]` (the `info` word) must equal `keccak(typeHash(OrderInfo) ∥ info_ed)`,
-  and `witness_ed[8]` (the `outputs` word) must equal `keccak(hashStruct(out0) ∥
-  hashStruct(out1))` — i.e. the nested records and their parent's committed words must
-  be mutually consistent, exactly as on-chain. If you build `witness_ed` from a real
-  order these already hold; if you hand-craft them, they must chain.
-- `additionalValidationData` is a `bytes` member → its word is `keccak256(the bytes)`,
-  NOT the bytes; include that one word (it is hidden on-screen but the hash covers it).
-- Records for `info` come BEFORE `outputs` because the curated descriptor lists the
-  `witness.info` field group before the `witness.outputs.[]` group. Match the descriptor's
-  field order.
-
-The device renders: the approve amount, `spender`, the OrderInfo `reactor`/`swapper`/
-`validationContract` (curated shown), the `exclusiveFiller`, the input "Spend max"
-amount, each output's min-receive amount + recipient (`Item i of N`), and the deadline —
-all cryptographically bound to the signed digest. `DutchOrder` (no exclusiveFiller),
-`LimitOrder` (`OutputToken`, 3-member element), and `V2DutchOrder` (adds `cosigner`,
-`baseInput*`/`baseOutputs`) follow the identical record pattern with their own member layouts.
-
-### 7.7 1inch aggregation `swap` — what "Minimum receive" means (partial-fill caveat)
-
-1inch AggregationRouter V3/V4/V5 `swap` clear-signs (it's a normal `CMD_SIGN_USEROP`
-calldata sign, §6.1 — the descriptor is `1inch/calldata-AggregationRouterV5.json`
-et al.). The device shows three fields and hides two by a **reviewed** policy
-exemption (`secure/data/erc7730/policy.toml`, `hidden_address_allow`):
-
-| shown | hidden (allowlisted / non-address) |
-|---|---|
-| **Send** — `desc.amount` of `desc.srcToken` | `caller`/`executor`, `desc.srcReceiver` (execution intermediaries) |
-| **Minimum receive** — `desc.minReturnAmount` of `desc.dstToken` | `desc.flags`, `permit`, `data` |
-| **Beneficiary** — `desc.dstReceiver` | |
-
-Why hiding `executor`/`srcReceiver` is safe: the router's ONLY debit from the signer
-is exactly the shown `desc.amount` of `desc.srcToken` (it does not relay the signer's
-approvals to the executor), and it reverts unless at least `desc.minReturnAmount` of
-`desc.dstToken` reaches `desc.dstReceiver` — all shown. A malicious executor/srcReceiver
-can only make the swap **revert**, never redirect funds or spend beyond the shown amount.
-
-**Caveat companions MUST convey to users — read "Send" as a MAX and "Minimum receive"
-as the FULL-fill floor.** When `desc.flags & _PARTIAL_FILL` (bit 0) is set (the device
-does not display flags), 1inch may fill the swap PARTIALLY: it spends *up to* `desc.amount`,
-delivers *at least the shown rate* (`minReturnAmount / amount`) on the spent portion, and
-REFUNDS the unspent `srcToken`. So a partial fill receives proportionally less than the
-shown "Minimum receive" — but at ≥ the signed rate, with the remainder returned. This is
-**user-favourable** (the signer is never forced to over-spend or accept a worse rate), so
-the device does not scare-flag it; but a companion UI should present a `_PARTIAL_FILL`
-swap as "swap **up to** {amount} {srcToken} for **at least** {minReturn} {dstToken} (at
-this rate; may fill partially and refund the rest)". The same principle applies to any
-partial-fillable swap: the on-device "minimum receive" is the maximum-fill floor.
-
-The pools-slice `swap` variants (`unoswap`, `uniswapV3Swap`, …) are NOT clear-signable —
-they carry a rendered-value array slice (`pools.[-1]`) that would hide the rest of the
-array, so the device correctly declines them (loud blind-sign).
+All current 1inch AggregationRouter descriptors are retained in the security
+corpus but emit no trusted render leaf. The compiler rejects hidden executor /
+routing addresses, flags and other signed operands, multi-dynamic framing, and
+packed pool encodings. Consequently these firmware-known tuples hard-refuse;
+they do not show the former three-field "Send / Minimum receive / Beneficiary"
+screen and do not fall through to loud blind signing. A companion must surface
+an unsupported-catalogue error until a future descriptor safely renders every
+effect-bearing operand and the firmware root is reviewedly rotated.
 
 ## 8. Firmware response handling
 
@@ -829,27 +803,40 @@ whether a trailer was attached:
 [type2_len u32 BE]     [type2_wrapper]  // always 4128 B
 ```
 
+Both signature wrappers are already `abi.encode(uint256 ownerIndex, bytes
+c10Sig)`. Use `type2_wrapper` directly as `UserOperation.signature`; do not
+ABI-encode it a second time.
+
+Wire v2 does not return the new slot public key needed to reconstruct a
+rotation Type-1 `addOwnerBytes(bytes)` call. A production companion must
+therefore request first deployment with `FLAG_INCLUDE_INIT_CODE` on slot 0 and
+no Type 1, and must reject a nonzero `type1_len` until the rotation wire is
+reviewedly extended (see §7.5).
+
 The `new_offchain_count` is what `executeWithOffchainCount(...)` will
 write to `offchainSigCount[i]` on-chain — bake it into the Type 2
 callData.
 
-The `CMD_SIGN_OFFCHAIN` response (any kind):
+The `CMD_SIGN_OFFCHAIN` response depends on the input header's
+`OFFCHAIN_FLAG_ACCOUNT_DEPLOYED` bit:
 
 ```
 [new_local_offchain_count u64 BE]
-[c10_sig u8; 4008]                       // total 4016 B for deployed
-                                         // or 8616 B for counterfactual
-                                         // (ERC-6492 blob)
+[c10_sig u8; 4008]                       // deployed: total 4016 B
+// OR
+[erc6492_blob u8; 8608]                  // counterfactual: total 8616 B
 ```
 
-For ERC-1271 verification on-chain, wrap as:
+For a deployed wallet, wrap only the raw C10 signature as:
 
 ```
 abi.encode(uint256 ownerIndex, bytes c10Sig)
 ```
 
 where `ownerIndex = slot + 1` (slot 0 = ownerIndex 1, since
-ownerIndex 0 is reserved for the bootstrap key).
+ownerIndex 0 is reserved for the bootstrap key). For a counterfactual wallet,
+the 8608-byte payload is already the complete ERC-6492 blob; pass it through
+unchanged to an ERC-6492-aware verifier. Do not ABI-wrap it again.
 
 ## 9. Failure modes and how to test them
 
@@ -866,17 +853,18 @@ companion-side.
 | Firmware-known call, wrong chain_id in trailer    | Status: `"7730 binding fail"`, then hard refusal.                                                                                                               |
 | Firmware-known call, wrong contract in trailer    | Status: `"7730 binding fail"`, then hard refusal.                                                                                                               |
 | EIP-712 sign with mismatched domain_separator     | Status: `"7730 binding fail"`. NO blind-sign fallback for kind=2 — error returned to dapp.                                                                      |
-| No trailer for firmware-known contract call       | Hard refusal: `"7730 proof needed"`.                                                                                                                           |
+| No descriptor for firmware-known contract call    | Hard refusal: `"7730 proof needed"`, unless this is the explicitly supported Safe native ERC-20 path with exact chain/contract-bound Merkle metadata and strict ABI decode. Direct known calls require the descriptor. |
 | No trailer for genuinely unknown contract call    | Generic value/ERC-20/typed/blind ladder remains available (Bloom false positives may conservatively refuse).                                                    |
-| Bundle > 5130 bytes                               | Firmware rejects the entire sign with `"erc7730 too big"`. Fix the companion's lookup.                                                                          |
+| Bundle > 5130 bytes                               | No generic `"erc7730 too big"` status exists. Single-UserOp positional framing reports `"bad erc7730"`; batch reports `"trailer len>cap"`; off-chain typed framing may report a framing or bundle-verification failure. Treat every path as a hard companion error. |
 | Verified descriptor lacks the calldata selector   | `RenderErr::NoFormat` → hard refusal. This is a companion/catalog mismatch, never downgrade permission.                                                         |
-| Root in `*_db.bin` ≠ firmware's pinned root       | EVERY trailer fails `"7730 bundle fail"`. Companion-side root parity check at startup catches this.                                                             |
+| Blob/expected-root pairing differs from firmware's pinned root | EVERY trailer fails `"7730 bundle fail"`. The blob contains no root; release metadata or independent recomputation must establish the expected pairing. |
 | EIP-712 (kind=2) trailer sent for a **contract-context** descriptor | The descriptor cannot render that typed message and the sign refuses. Use kind=2 ONLY for a matching `eip712` descriptor/deployment.                              |
-| Off-chain header `flags` byte set wrong            | `flags = 1` = `OFFCHAIN_FLAG_ACCOUNT_DEPLOYED`; `flags = 0` = counterfactual ERC-6492. Bit 0 wrong returns either `"6492 needs slot 0"` (slot ≠ 0 + counterfactual) or a wrong output-buffer size. |
+| Off-chain header `flags` byte set wrong            | `flags = 1` = deployed output; `flags = 0` = counterfactual ERC-6492 output. Firmware cannot query chain deployment state: the bit selects semantics and response length. Counterfactual slot ≠ 0 deterministically returns `"6492 needs slot 0"`; other lies can return a semantically unusable signature rather than a dedicated error. Derive the bit from `eth_getCode` and surface the device's pre-deploy warning. |
 
 Test the failure modes too. A companion must surface a clear catalogue/proof
 error and stop retrying; silently resubmitting without the trailer is
-intentionally ineffective for firmware-known calls.
+intentionally ineffective for firmware-known calls except for the documented,
+independently authenticated Safe native ERC-20 capability.
 
 ## 10. Versioning and root rotation
 
@@ -884,26 +872,30 @@ The `ERC7730_DESCRIPTORS_ROOT` is a firmware-build constant. Every
 firmware update can change it — when descriptors are added, removed,
 or modified, the root changes deterministically.
 
-**Current pinned roots** (as of master tip after the path_off=0 fix
-in PR #2):
+**Current development roots** (this integration snapshot; production
+provenance remains blocked):
 
 | Variant | Root                                                                 | Catalog blob bytes |
 |---------|----------------------------------------------------------------------|-------------------:|
-| prod    | `0x650d46a2445e1a5490822a84b6e97d267eefe8d2b4ba7517e83e45289395dc19` |             10 939 |
-| e2e     | `0xcef0ce215baf061a08be24aba9764160eec8c44672ead549535d89a7e4a39934` |              1 448 |
+| development (non-e2e) | `0x048fd2f1ff61942027ffa248f7d26fdbe9d8e2f02e9ad6478ad6714cb96ab142` |            334 827 |
+| e2e     | `0x2c4f31595aa61014a4bc1e347a19893e167aa940ab50771bd826ffe35e3d9575` |              2 000 |
 
 Source of truth: `secure/src/db_roots.rs` (regenerated by
 `cargo run -p dbgen`).
 
 **Companion update flow** when the firmware rolls a new root:
 
-1. New firmware ships with new `ERC7730_DESCRIPTORS_ROOT`.
+1. After the firmware-release quarantine closes, a reviewed firmware release
+   ships with a new `ERC7730_DESCRIPTORS_ROOT`.
 2. Companion release pipeline regenerates `erc7730_db.bin` via
-   `cargo run -p dbgen` against the same seed corpus + policy.
-3. Companion package ships with the new blob.
-4. On startup, companion reads the firmware's `GET_DEVICE_INFO`
-   (or a future dedicated `GET_ERC7730_ROOT` endpoint), compares to
-   the blob's root, and:
+   `cargo run -p dbgen` from the same vendored registry baseline, reviewed
+   curation set, and policy as the firmware build.
+3. Companion package ships with the new blob plus the expected root in signed
+   release metadata (or enough authenticated material to recompute it).
+4. No current gateway command reports the root. Until a reviewed
+   `GET_ERC7730_ROOT`-style endpoint exists, bind the companion catalogue to an
+   exact firmware release/version. Once such an endpoint exists, compare the
+   reported root to the separately expected/recomputed root and:
    - **Match:** use clear-sign normally.
    - **Mismatch:** block affected signing and require a compatible companion /
      catalogue update. Do not disable trailers and retry: tuples in the
@@ -916,53 +908,66 @@ sees as noise.
 For development against bring-up firmware built with
 `erc7730-dev-unattested`: the descriptor on every render adds a
 `** DEV BUILD ** Unattested` page so the user can't miss the
-relaxed gate. The Cargo feature is `compile_error!`-fenced against
-`mode-production`, so a shipping firmware will never carry it.
+absence of verified provenance. There is no relaxed verifier: no ERC-8176
+verifier exists yet, and production rejects the dev root. The generated
+provenance fences also reject a future verified root if the warning remains;
+that root rotation must remove the temporary debug/mock/e2e feature coupling
+in `secure/Cargo.toml` in the same reviewed change.
 
 ## 11. Pre-flight checklist before shipping
 
 Companion-side pre-release:
 
-- [ ] Catalog blob matches the firmware's pinned root (sanity-check
-      first 32 B at startup).
+- [ ] Catalogue expected/recomputed root is bound to the exact firmware
+      release. Bytes 0..31 of the blob are the header, not a root.
 - [ ] Every entry in the catalog is reachable via the lookup
       function — round-trip every leaf through assemble-and-verify
       against the bundle parser at companion-side test time. Mirror
       the firmware's `dbgen/tests/erc7730_roundtrip.rs` flow on the
       companion language.
-- [ ] Wire ordering matches §6 for all three commands (test against
-      QEMU firmware: `make e2e` Scenarios 5m/5n/5p exercise this).
+- [ ] Wire ordering matches §6 for all three commands. QEMU covers single
+      UserOp (5m/5n), batch kind-7 routing and misbinding
+      (5e-7730/5e-7730-mismatch), and off-chain typed data (5p). These tests
+      call the NSC API directly; separately test USB/APDU framing and the
+      production-language catalogue helper.
 - [ ] Trailer assembly produces ≤ 5130 B for every catalog entry.
 - [ ] Treat `"7730 bundle fail"`, `"7730 binding fail"`, or
       `"7730 proof needed"` as a hard catalogue/proof error; never retry a
-      firmware-known call without the trailer.
-- [ ] Omit the trailer on lookup miss only after root parity establishes that
-      the tuple is genuinely absent from the firmware-paired catalogue (don't
-      ship a "default" trailer — that triggers binding failure).
-- [ ] Names section count byte present even when empty (`0x00`).
-- [ ] EIP-712 kind=2 path passes `encoded_data` as struct body
-      ONLY (no type-hash prefix) — viem
-      `encodeAbiParameters(types, message)` is correct; ethers
-      `_TypedDataEncoder.hashStruct()` is **NOT** (that prepends the
-      type hash and computes the hash, which is the wrong shape).
+      direct/non-exempt firmware-known call without the trailer. The only
+      exception is the explicitly supported Safe native-ERC20 route with
+      exact chain/contract-bound Merkle metadata and strict ABI decoding.
+- [ ] A compiled-catalogue miss is not proof of absence from the firmware
+      known-call Bloom filter. Use a version-paired filter/manifest or accept a
+      fail-closed refusal; don't retry without a trailer as a downgrade.
+- [ ] Empty names are represented by end-of-payload (no `0x00` byte). If the
+      names section is non-empty, all seven preceding `u16` trailer slots are
+      explicit, with a zero length for every unused slot.
+- [ ] EIP-712 kind=2 passes canonical `encodeData` struct-body words only
+      (no leading type hash). Plain `encodeAbiParameters(types, message)` is
+      valid only for flat static members; dynamic/composite members must first
+      be transformed to EIP-712 hash words. A final `hashStruct()` digest is
+      not the required body.
 
 Firmware-side smoke (run on QEMU before each release):
 
-- [ ] `make e2e` — Scenarios 5m + 5n + 5p all green.
+- [ ] `make e2e` — Scenarios 5m + 5n + 5e-7730 +
+      5e-7730-mismatch + 5p all green.
 - [ ] `cargo test -p sphincs-tz-secure --tests --no-default-features
-      --features mock-se,debug-log,ui-semihosting
-      erc7730_render` — 9 render tests + 1 diagnostic (ignored).
-- [ ] `cargo test -p dbgen --test erc7730_roundtrip` — 9 round-trip
-      tests.
-- [ ] `xtask gen-erc7730-descriptors --check` — catalog parity
+      --features mock-se,debug-log,ui-semihosting,erc7730-dev-unattested`
+      — run the full secure host suite; use filters only for iteration.
+- [ ] `cargo test --locked -p dbgen --tests` — policy/includes, compiler, and
+      round-trip suites.
+- [ ] `cargo run --locked -p pqsigner-xtask --
+      gen-erc7730-descriptors --check` — catalog parity
       against checked-in artifacts.
 
 ## 12. Known bugs / blockers
 
-These are issues we know about on `clear-sign-rebased`. They do NOT
-need companion-side workarounds (the firmware will degrade
-gracefully) but a companion shipping today should expect users to
-report them.
+These are historical and current issues tracked on the `master` integration
+line. Renderer limitations normally decline or hard-refuse, but the current
+catalogue/provenance and slot-rotation blockers require the explicit
+companion-side fail-closed behavior described above. Read each item's status;
+do not assume graceful fallback or retry is safe.
 
 ### 12.1 `path_off == 0` collision — FIXED (root rotation required)
 
@@ -979,7 +984,7 @@ What changed:
   `param_off == 0` "default params" sentinel are unchanged — the host
   pipeline now respects them instead of stepping on them. The catalog
   IR pool grows by 1 byte per descriptor.
-- `ERC7730_DESCRIPTORS_ROOT` rotated:
+- In that historical PR snapshot, `ERC7730_DESCRIPTORS_ROOT` rotated:
   - prod:
     `0x4b8adbb75193a7fd5fe15581cb17f5d016015a89e6ff8d2f52f58f493a7e8ff3`
     →
@@ -988,13 +993,14 @@ What changed:
     `0x43243e272cc023c3fd5f83b837ac6fb5cbabb1e984d12eb1127ef725991bc15f`
     →
     `0xcef0ce215baf061a08be24aba9764160eec8c44672ead549535d89a7e4a39934`
-- Catalog blob size: prod `tools/companion-stub/erc7730_db.bin`
+- Historical catalog blob size: development `tools/companion-stub/erc7730_db.bin`
   10919 → 10939 B, e2e `erc7730_db_e2e.bin` 1444 → 1448 B.
 
 **Companion checklist** (post-fix):
 
-1. Copy the new `tools/companion-stub/erc7730_db.bin` (or rebuild
-   from the same seed corpus + policy via `cargo run -p dbgen`).
+1. Copy the new `tools/companion-stub/erc7730_db.bin` (or rebuild from the same
+   vendored registry baseline + reviewed curations + policy via
+   `cargo run -p dbgen`).
 2. Update the build-time root constant pinned next to the blob.
 3. Re-run companion integration tests against firmware built from
    master.
@@ -1002,29 +1008,35 @@ What changed:
 Previously-affected descriptors now render full clear-sign pages instead of
 refusing at the verified-descriptor render gate:
 
-- `weth.json` / `deposit()` — Amount field renders.
-- `tether-usdt.json` / `transfer` and `approve` — To / Spender +
+- `registry/weth/calldata-weth.json` / `deposit()` — Amount field renders.
+- `registry/tether/calldata-usdt.json` / `transfer` and `approve` — To / Spender +
   Amount fields render.
-- `aave-v3-pool.json` / `supply` etc. — all fields render.
-- `circle-usdc-twa.json` / `circle-usdc-rwa.json` — From + To +
-  Amount fields render.
+- `registry/aave/calldata-lpv3.json` — currently accepted `withdraw`/`repay`
+  formats render; incomplete formats such as `supply`/`borrow` are known-call
+  refusals until every signed operand is visible.
+- Fixture-only `circle-usdc-twa.json` / `circle-usdc-rwa.json` render tests —
+  From + To + Amount fields exercise the renderer mechanics. This is not a
+  production-catalogue claim: the current vendored Circle
+  `TransferWithAuthorization` descriptor is refused for its hidden nonce, as
+  described in §7.4.
 
 Bonus UX from the same commit: `render_token_amount` now honors
-`params.threshold`. ERC-20 `approve(uint256.MAX)` against USDT
-displays `"unlimited USDT"` on the Amount page instead of the
-previous `"!AMOUNT OVERFLOW"` fallback. **No wire format change** —
-the descriptor's existing `threshold` TLV (tag `0x32`) drives this;
-companions don't need to change anything.
+`params.threshold`. ERC-20 `approve(uint256.MAX)` against USDT displays
+`"unlimited USDT"` only when an exact Merkle-verified USDT metadata bundle
+supplies the ticker. Without that metadata it displays `"unlimited"` plus
+`"(unverified)"` and the exact token identity instead of the previous
+`"!AMOUNT OVERFLOW"` fallback. The descriptor's existing `threshold` TLV (tag
+`0x32`) needs no new wire field; authenticated ticker/decimals still require the
+existing ERC-20 trailer.
 
-### 12.2 `interpolatedIntent` is unimplemented
+### 12.2 `interpolatedIntent` is ignored
 
-Descriptors that use `interpolatedIntent` (e.g. `"intent": "Send
-{amount} {token}"`) render literally as `Send {amount} {token}` on
-the device, braces and all. The seed corpus avoids this; the first
-registry descriptor that uses it will look broken. Phase 5+ wires
-the path-lookup-and-format substitution; until then, avoid
-`interpolatedIntent` descriptors in the catalog or accept the ugly
-rendering.
+The current host compiler models `interpolatedIntent` so it does not trip the
+unknown-key gate, but it does not substitute or emit that field into the IR.
+The device renders the descriptor's separate static `intent` string, or
+`"Sign"` when static `intent` is absent. It therefore does **not** display an
+`interpolatedIntent` template literally with braces. Treat interpolation as an
+unsupported UX feature; do not claim that its dynamic values are shown.
 
 ### 12.3 Nested calldata stubs out
 
@@ -1070,7 +1082,9 @@ decoder.
 - `docs/companion/companion-batch-sign-integration.md` — batch sign per-tx
   record format.
 - `tools/companion-stub/erc7730_trailer.py` — Python reference
-  implementation of §4–§5.
+  implementation of §4–§5; pass `--context contract`, or
+  `--context eip712 --domain-separator 0x<64 hex>` and
+  `--primary-type-hash 0x<64 hex>` for typed data.
 - `dbgen/tests/erc7730_roundtrip.rs` — host-side round-trip test
   showing the catalog → trailer → on-device verifier flow
   byte-for-byte.

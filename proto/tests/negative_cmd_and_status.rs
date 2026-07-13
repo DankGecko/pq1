@@ -14,7 +14,7 @@
 //!    silently round-trip — they must fall through to InternalError so
 //!    a misconfigured firmware doesn't replay a stale status code with
 //!    a recycled meaning.
-//! 4. CMD IDs 4 and 6 are reserved (legacy CMD_SIGN, CMD_CLEAR_SIGN_MSG).
+//! 4. CMD IDs 4, 5, and 6 are reserved legacy wire values.
 //!    No live CMD constant may reuse them.
 
 use pqsigner_proto::*;
@@ -66,7 +66,7 @@ fn negative_no_two_cmds_share_the_same_u32() {
 }
 
 // ───────────────────────────────────────────────────────────────────────
-// Reserved CMD IDs — 4 (legacy CMD_SIGN) and 6 (legacy CMD_CLEAR_SIGN_MSG)
+// Reserved CMD IDs — 4, 5, and 6 (retired legacy gateway operations)
 //
 // These must NOT be reused by any currently-defined CMD. Reuse would
 // have a deployed companion app silently dispatch into the wrong
@@ -75,7 +75,7 @@ fn negative_no_two_cmds_share_the_same_u32() {
 
 #[test]
 fn negative_reserved_cmd_ids_are_not_reused() {
-    for &reserved in &[4_u32, 6] {
+    for &reserved in &[4_u32, 5, 6] {
         for &(cmd, name) in ALL_CMDS {
             assert_ne!(
                 cmd, reserved,

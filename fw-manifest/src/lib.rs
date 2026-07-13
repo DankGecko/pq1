@@ -97,6 +97,15 @@ pub use sphincs_c10::params::{SIGNATURE_LEN, VERIFYING_KEY_LEN};
 /// Total manifest size in bytes — one STM32U585 flash page.
 pub const MANIFEST_SIZE: usize = 8192;
 
+/// Secure A/B image capacity: 58 STM32U585 flash pages.
+///
+/// This is shared by the device admission checks and host release tooling so
+/// a signer cannot authorize an image the FSBL or updater must reject.
+pub const SLOT_SECURE_CAPACITY: u32 = 58 * 8 * 1024;
+
+/// Non-secure A/B image capacity: 64 STM32U585 flash pages.
+pub const SLOT_NS_CAPACITY: u32 = 64 * 8 * 1024;
+
 /// Magic bytes at the start of every manifest.
 pub const MAGIC: [u8; 4] = *b"PQSF";
 

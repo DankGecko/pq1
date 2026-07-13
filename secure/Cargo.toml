@@ -175,8 +175,15 @@ accel-saes-dhuk        = ["saes-dhuk"]
 # implementation.  NEVER ship.
 legacy-fw-rollback-unsafe = []
 
-debug-log = ["legacy-fw-rollback-unsafe"]
-mock-se = ["legacy-fw-rollback-unsafe"]
+# Current development images independently acknowledge both quarantined
+# subsystems: the legacy rollback backend and the dev-unattested ERC-7730
+# catalogue. Neither acknowledgement feature implies the other; these
+# never-ship development modes deliberately select both. This coupling is
+# temporary: the first reviewed `erc8176-verified` root rotation MUST remove
+# `erc7730-dev-unattested` from these aliases in the same change, because the
+# generated verified-root fence intentionally rejects a stale warning feature.
+debug-log = ["legacy-fw-rollback-unsafe", "erc7730-dev-unattested"]
+mock-se = ["legacy-fw-rollback-unsafe", "erc7730-dev-unattested"]
 tropic01-se = ["dep:tropic01", "dep:x25519-dalek", "dep:embedded-hal"]
 ui-semihosting = []
 ui-noop = []  # Silent no-op UI for standalone USB operation (no debugger)
@@ -194,7 +201,11 @@ hw-sha256 = ["sphincs-c10/hw-sha256"]
 # every confirm() / enter_pin() dialog so no stdin input is needed.
 # Logs the chosen TxKind variant on every cmd_sign for assertions.
 # NEVER ship in production: it disables every meaningful trust gate.
-e2e-test = ["legacy-fw-rollback-unsafe"]
+# E2E images use the generated dev fixture catalogue. Pull in the matching
+# trusted-display provenance warning centrally so every E2E target satisfies
+# the generated root fence; `mode-production` remains mutually exclusive with
+# both `e2e-test` and `erc7730-dev-unattested`.
+e2e-test = ["legacy-fw-rollback-unsafe", "erc7730-dev-unattested"]
 # Reversible firmware anti-rollback test: drives the real fw_update::
 # verify_manifest chain with dev-key-signed v1/v2/v3 manifests against
 # literal test floors (no OTP burn, no flash, no reboot). Runs early in
@@ -423,7 +434,7 @@ mlkem-inner-wrap = []
 # captures [UI-FP] fingerprints, then halts — no C10 keygen/sign (which makes
 # the e2e-based `ui-golden` too slow on QEMU software SHA-256). Implies
 # `ui-capture` (the fingerprint emitter). Dev-only.
-ui-golden-render = ["ui-capture"]
+ui-golden-render = ["ui-capture", "erc7730-dev-unattested"]
 
 # Masked-SHA-256 overhead bench (work-todo §18 SHAKE-vs-SHA2 #2
 # measurement). Runs once at boot, DWT-times the masked gates +
@@ -571,7 +582,7 @@ optiga-lock-operational = []  # Production: bump LcsO to Operational on BOTH E14
 # shares its pairing secret with every other device built with this feature,
 # which would let a logic-analyzer snoop decrypt the Shielded Connection
 # across every unit.
-otp-hardcoded-master-key = ["legacy-fw-rollback-unsafe"]
+otp-hardcoded-master-key = ["legacy-fw-rollback-unsafe", "erc7730-dev-unattested"]
 # Tier-2 phase 2A dev fallback: replace the silicon BHK with a compile-
 # time fixed 32-byte ASCII test constant ("PQSIGNER-TEST-BHK-DHUK-WRAP-
 # v1!!"). Lets us exercise the `secret_keys::derive_into_bhk` path +
@@ -754,11 +765,14 @@ button-test = ["stm32u585", "mock-se", "gpio-buttons"]  # Flash + run GPIO butto
 # generated compile fences require this feature for a dev-unattested root and
 # forbid that root under `mode-production`. When enabled, the trusted display
 # adds the "DEV: unattested descriptor" warning page. Canonical Make-driven dev
-# builds derive the feature from `secure/data/erc7730.review.txt`; direct Cargo
-# builds must select it explicitly when the generated root requires it.
+# builds derive the feature from `secure/data/erc7730.review.txt`; the canonical
+# never-ship dev modes above also select it. Other direct Cargo builds must
+# select it explicitly when the generated root requires it.
 #
 # NEVER ship — the dedicated `mode-production` fence in `nsc/mod.rs`, the
-# generated root-provenance fence, and `make prod-check` all reject it. Unlike
+# generated root-provenance fence, and `make prod-erc7730-provenance-check`
+# all reject it. The rollback quarantine remains independently visible through
+# `make prod-check-ship`. Unlike
 # secret-leaking debug features, it remains valid on explicitly dev/bring-up
 # hardware because that is where the warning is required.
 erc7730-dev-unattested = ["pqsigner-erc7730/erc7730-dev-unattested"]

@@ -32,7 +32,11 @@ repointed to `docs/archive/…` at move time.
 | `ai-research-briefing.md` | States the **wrong signing primitive** (SLH-DSA 17 KB + ML-DSA bootstrap) — a paste hazard. | `CLAUDE.md` (current architecture); its §5 corrected-facts table is historical. |
 | `pq-aa-wallet-design.md` | Original two-tier design (ML-DSA-44 / XMSS / dual verifier) superseded by all-C10. | `CLAUDE.md` §Recovery, `contracts/smart-wallet/`. |
 | `sphincs-c7-firmware-integration.md` | Self-bannered OBSOLETE; describes the deleted C7 (keccak256, 3704-B) signer. | `CLAUDE.md` invariant #5 (all-C10). |
-| `m4-cowswap-eip712.md` | Self-bannered historical handoff; signs with SLH-DSA and describes a design that was explicitly *not built*. | `docs/companion/m4-cowswap-eip712-impl.md` (the as-built zk_v3 trailer). |
+| `m4-cowswap-eip712.md` | Self-bannered historical handoff; signs with SLH-DSA and describes a design that was explicitly *not built*. | `docs/companion/companion-safe-cowswap-presign.md` plus `docs/archive/zk-clear-sign-retirement.md`. |
+| `m4-cowswap-eip712-impl.md` | Snapshot of the retired Groth16/VK/readable-string implementation. | `docs/companion/companion-safe-cowswap-presign.md` (native canonical GPv2Order decode). |
+| `cowswap-zk-poc/` | Reproduction material for vulnerabilities in the retired Groth16 circuit path. | Historical evidence only; current CoW clear-signing is the native pipeline documented in `docs/companion/companion-safe-cowswap-presign.md`. |
+| `architecture-zk-clear-signing-retired.md` | Full design record for the removed proof/VK clear-signing path. | `CLAUDE.md` and `docs/architecture/architecture.md` (current index). |
+| `groth16-fault-sweep-2026-05.md` | Fault-analysis notes for the removed Groth16 verifier. | Native decoder/FI residuals in `docs/work-todo.md` and `docs/security/HARDENING.md`. |
 
 ## Completed point-in-time handoffs (work shipped; residuals tracked elsewhere)
 

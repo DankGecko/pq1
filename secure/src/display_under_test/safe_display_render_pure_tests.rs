@@ -125,12 +125,16 @@ fn build_raw_trailer(
 }
 
 fn build_trailer(recipient: [u8; 20], amount: u64) -> (Vec<u8>, [u8; APPROVE_HASH_CALLDATA_LEN]) {
-    // Inner calldata: ERC-20 transfer(recipient, amount) = selector ‖ arg1 ‖ arg2.
+    build_raw_trailer(TOKEN, 0, &erc20_transfer(recipient, amount))
+}
+
+fn erc20_transfer(recipient: [u8; 20], amount: u64) -> [u8; 68] {
+    // ERC-20 transfer(recipient, amount) = selector ‖ arg1 ‖ arg2.
     let mut raw = [0u8; 68];
     raw[0..4].copy_from_slice(&[0xa9, 0x05, 0x9c, 0xbb]); // transfer(address,uint256)
     raw[16..36].copy_from_slice(&recipient); // 20-byte recipient, right-aligned
     raw[60..68].copy_from_slice(&amount.to_be_bytes()); // amount in the low 8 bytes
-    build_raw_trailer(TOKEN, 0, &raw)
+    raw
 }
 
 fn render_raw(to: [u8; 20], operation: u8, raw: &[u8]) -> Result<Pages, ()> {
@@ -371,6 +375,51 @@ fn supported_cow_multisend_keeps_exact_erc20_native_record_live() {
     let text = all_text(&pages);
     assert!(text.contains("wstETH"));
     assert!(text.contains("CowSwap order"));
+}
+
+#[test]
+fn multisend_metadata_is_scoped_to_its_exact_record_contract() {
+    // The one metadata bundle may describe record A only. Record B must not
+    // borrow A's symbol/decimals merely because both records decode as the
+    // same standard ERC-20 ABI shape.
+    const SECOND_TOKEN: [u8; 20] = [0x71; 20];
+    let first = erc20_transfer([0x21; 20], 1_500_000);
+    let second = erc20_transfer([0x22; 20], 7_000_000);
+    let mut packed = pack_record(0, &TOKEN, &ZERO_VALUE, &first);
+    packed.extend_from_slice(&pack_record(0, &SECOND_TOKEN, &ZERO_VALUE, &second));
+    let raw = encode_multisend(&packed);
+
+    let meta = usdc_meta();
+    let pages = render_raw_with_context(
+        MULTISEND_CALL_ONLY_ADDRESSES[0],
+        1,
+        &raw,
+        None,
+        Some(&meta),
+    )
+    .expect("two strict synthetic ERC-20 records should render");
+    let text = all_text(&pages);
+    assert!(text.contains("USDC"), "record A must use its verified metadata");
+
+    let (_, second_section) = text
+        .split_once("MSend rec 2/2")
+        .expect("second record divider must be present");
+    assert!(second_section.contains("ERC-20 call"));
+    assert!(second_section.contains("(unverified)"));
+    assert!(second_section.contains("Raw amount:"));
+    assert!(!second_section.contains("USDC"));
+    assert!(!second_section.contains("USD Coin"));
+
+    let rendered_hex: String = second_section
+        .chars()
+        .filter(char::is_ascii_hexdigit)
+        .collect::<String>()
+        .to_lowercase();
+    let second_hex: String = SECOND_TOKEN.iter().map(|b| format!("{b:02x}")).collect();
+    assert!(
+        rendered_hex.contains(&second_hex),
+        "record B must display its full token contract {second_hex}"
+    );
 }
 
 #[test]

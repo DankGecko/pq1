@@ -22,7 +22,7 @@
 //! [`super::batch_trailers`]). Every clear-signing kind the single-tx
 //! handler accepts is also accepted here, routed per inner-tx:
 //!
-//!   * Kinds 1..=7 (ERC-20, ZK v1, ZK v3, Safe v1, selector curated,
+//!   * Kinds 1..=7 (ERC-20, reserved kind 2, native CoW order, Safe v1, selector curated,
 //!     selector self-attest, ERC-7730) bind via `tx_idx` to a specific
 //!     inner-tx and feed `pick_sign_pages` for that tx.
 //!   * Kind 8 (address-name bundles) is batch-wide (`tx_idx == 0xff`),
@@ -30,7 +30,7 @@
 //!
 //! The same per-tx **downgrade-mitigation gates** as single-tx fire
 //! before `pick_sign_pages` for each inner-tx: if an inner calldata
-//! claims `setPreSignature` on GPv2 settlement, the matching ZK v3
+//! claims `setPreSignature` on GPv2 settlement, the matching native CoW order
 //! trailer is mandatory; if it claims `approveHash(bytes32)`, the
 //! matching Safe v1 trailer is mandatory. Refusal aborts the whole
 //! batch with `InvalidPointer`.
@@ -52,7 +52,7 @@ use sphincs_tz_shared::{
     SIGN_USEROP_BATCH_MAX_PAYLOAD_LEN, SIGN_USEROP_BATCH_TX_PREFIX_LEN,
     SIGN_USEROP_BATCH_WIRE_VERSION, SIG_WRAPPER_LEN, SLOT_INDEX_MASK, TRAILER_KIND_ERC20,
     TRAILER_KIND_ERC7730, TRAILER_KIND_NAME, TRAILER_KIND_SAFE_V1, TRAILER_KIND_SEL_CURATED,
-    TRAILER_KIND_SEL_SELFATTEST, TRAILER_KIND_ZK_V1, TRAILER_KIND_ZK_V3,
+    TRAILER_KIND_RESERVED_V1, TRAILER_KIND_SEL_SELFATTEST, TRAILER_KIND_COW_ORDER,
 };
 use subtle::ConstantTimeEq;
 use zeroize::{Zeroize, Zeroizing};
@@ -104,11 +104,11 @@ struct ParsedTx {
 /// Lifetime `'a` ties to the secure-side TOCTOU snapshot — every
 /// borrowed verifier output (ERC-20 metadata, Safe canonical, ERC-7730
 /// IR, selector text-sig) lives inside `snap[..]` for the whole
-/// `pick_sign_pages` call window. ZK v1 / v3 verifiers return owned
-/// fixed-size buffers, hence no `'a` on those variants.
+/// `pick_sign_pages` call window. The native CoW verifier returns an owned
+/// fixed-size buffer, hence no `'a` on that variant.
 struct RoutedTrailers<'a> {
     erc20: Option<Erc20Metadata<'a>>,
-    zk_v3: Option<VerifiedCowswapV3>,
+    cow_order: Option<VerifiedCowswapV3>,
     safe_v1: Option<VerifiedSafeV1<'a>>,
     erc7730: Option<VerifiedDescriptor<'a>>,
     selector: Option<SelectorMeta<'a>>,
@@ -120,7 +120,7 @@ impl<'a> RoutedTrailers<'a> {
     fn empty() -> Self {
         Self {
             erc20: None,
-            zk_v3: None,
+            cow_order: None,
             safe_v1: None,
             erc7730: None,
             selector: None,
@@ -441,64 +441,20 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                     continue;
                 }
                 let meta = meta_opt.unwrap();
-                let ptx = parsed[rec.tx_idx as usize].as_ref().unwrap();
-                let inner_data: &[u8] = &snap[ptx.data_off..ptx.data_off + ptx.data_len];
-                // Cross-check (chain_id, contract) against the routed
-                // tx. The contract may also sit one level deeper —
-                // inside a Safe flow's multiSend record (e.g.
-                // `[approve(USDC), setPreSignature]` batched through
-                // MultiSendCallOnly): accept when an exec calldata's
-                // multiSend `data` carries a matching record. The
-                // renderer re-matches per record before applying, so
-                // this is routing, not the trust gate. (The approveHash
-                // flavour's multiSend lives in the safe_v1 trailer; the
-                // single-tx handler peeks it, here the records walk the
-                // exec calldata only — safe_v1 batch members keep the
-                // direct match.)
-                let exec_record_match = inner_data.len() >= 4
-                    && inner_data[..4] == sphincs_tz_shared::EXEC_TRANSACTION_SELECTOR
-                    && crate::tx::eip712::safe::exec_decode::decode_exec_transaction(inner_data)
-                        .map(|d| {
-                            crate::tx::eip712::safe::multi_send::any_record_to_matches(
-                                d.data,
-                                &meta.contract,
-                            )
-                        })
-                        .unwrap_or(false);
-                let safe_v1_record_match = parsed_trailers.records
-                    [..parsed_trailers.count]
-                    .iter()
-                    .flatten()
-                    .any(|r| {
-                        r.kind == TRAILER_KIND_SAFE_V1
-                            && r.tx_idx == rec.tx_idx
-                            && r.len >= sphincs_tz_shared::SAFE_V1_CANONICAL_LEN + 2
-                            && {
-                                let b = &snap[r.start..r.start + r.len];
-                                let raw_len = u16::from_be_bytes([
-                                    b[sphincs_tz_shared::SAFE_V1_CANONICAL_LEN],
-                                    b[sphincs_tz_shared::SAFE_V1_CANONICAL_LEN + 1],
-                                ])
-                                    as usize;
-                                let start = sphincs_tz_shared::SAFE_V1_CANONICAL_LEN + 2;
-                                start
-                                    .checked_add(raw_len)
-                                    .is_some_and(|end| end <= b.len())
-                                    && crate::tx::eip712::safe::multi_send::any_record_to_matches(
-                                        &b[start..start + raw_len],
-                                        &meta.contract,
-                                    )
-                            }
-                    });
-                if meta.chain_id == chain_id
-                    && (meta.contract == ptx.to || exec_record_match || safe_v1_record_match)
-                {
+                // Store only the Merkle- and chain-verified metadata here.
+                // Target attribution is deliberately deferred until render
+                // time, after every Safe trailer for this member has either
+                // produced a verified context or failed closed. Scanning raw
+                // SAFE_V1 bytes here used to let an invalid companion trailer
+                // grant metadata authority to an unrelated direct ERC-7730
+                // call (RT-ERC20-01).
+                if meta.chain_id == chain_id {
                     routed[rec.tx_idx as usize]
                         .get_or_insert_with(RoutedTrailers::empty)
                         .erc20 = Some(meta);
                 }
             }
-            TRAILER_KIND_ZK_V1 => {
+            TRAILER_KIND_RESERVED_V1 => {
                 // Retired: the Groth16 ZK clear-sign path was removed
                 // (Aave clear-signing moved to the native ERC-7730
                 // verifier). A record carrying this legacy kind is
@@ -508,12 +464,12 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                 // through without its own kind-7 proof).
                 continue;
             }
-            TRAILER_KIND_ZK_V3 => {
+            TRAILER_KIND_COW_ORDER => {
                 // Deferred to pass 2 (§5d below). The CoW binding
                 // target depends on the Safe context for the same
                 // tx_idx — and the matching `safe_v1` record may sit
                 // LATER in the companion-supplied record order — so
-                // ZK_V3 verification runs only after every other kind
+                // COW_ORDER verification runs only after every other kind
                 // has routed. Parse-time validation (kind / tx_idx /
                 // length caps / dedup) already happened in
                 // `parse_batch_trailers`, so skipping here is safe.
@@ -680,7 +636,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         }
     }
 
-    // ── 5d. Pass 2: verify the deferred ZK_V3 (CoW v3) records ──────
+    // ── 5d. Pass 2: verify the deferred COW_ORDER (CoW v3) records ──────
     //
     // Runs after every other kind so the Safe context for the same
     // tx_idx — wherever it sat in the companion's record order — is
@@ -695,7 +651,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             Some(r) => r,
             None => continue,
         };
-        if rec.kind != TRAILER_KIND_ZK_V3 {
+        if rec.kind != TRAILER_KIND_COW_ORDER {
             continue;
         }
         let bytes: &[u8] = &snap[rec.start..rec.start + rec.len];
@@ -734,7 +690,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         }
         routed[idx]
             .get_or_insert_with(RoutedTrailers::empty)
-            .zk_v3 = v_opt;
+            .cow_order = v_opt;
     }
 
     // ── 6. Per-tx clear-signing confirm ─────────────────────────────
@@ -850,7 +806,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         //
         // Mirroring single-tx `cmd_sign_userop.rs:789-806`. If an inner
         // calldata claims `setPreSignature` on the GPv2 settlement
-        // contract, the matching ZK v3 trailer is mandatory — without
+        // contract, the matching native CoW order trailer is mandatory — without
         // it the user would otherwise confirm the weaker static "Pre-
         // sign CowSwap order" string and end up signing an orderUid
         // they never saw the contents of. Same logic for Safe
@@ -862,7 +818,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         let cow_target = ptx.to == GPV2_SETTLEMENT_ADDRESS;
         if cow_selector
             && cow_target
-            && routed[i].as_ref().and_then(|r| r.zk_v3.as_ref()).is_none()
+            && routed[i].as_ref().and_then(|r| r.cow_order.as_ref()).is_none()
         {
             ui::show_status("CoW sign", "v3 required (batch)");
             return NscStatus::InvalidPointer as u32;
@@ -903,6 +859,14 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         } else {
             None
         };
+
+        // `r.erc20` is Merkle- and chain-verified. The display dispatcher
+        // grants it only against signed facts of the selected surface:
+        // outer target, verified descriptor tokenPath, or verified Safe
+        // direct/pinned-MultiSend target. Invalid raw Safe trailers never
+        // participate, while legitimate direct ERC-7730 protocol calls keep
+        // their friendly metadata.
+        let chain_verified_erc20 = r.and_then(|r| r.erc20.as_ref());
         let safe_exec_selector = inner_data.len() >= 4
             && inner_data[..4] == sphincs_tz_shared::EXEC_TRANSACTION_SELECTOR;
         let safe_exec_enough_len =
@@ -931,7 +895,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             match crate::tx::display::multisend_sign_gate(
                 routed[i].as_ref().and_then(|r| r.safe_v1.as_ref()),
                 safe_exec_verified.as_ref(),
-                routed[i].as_ref().and_then(|r| r.zk_v3.as_ref()),
+                routed[i].as_ref().and_then(|r| r.cow_order.as_ref()),
                 reserved,
             ) {
                 crate::tx::display::MultisendGate::Reject(reason) => {
@@ -958,7 +922,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         )
         .via_safe;
         if safe_wrapped_cow
-            && routed[i].as_ref().and_then(|r| r.zk_v3.as_ref()).is_none()
+            && routed[i].as_ref().and_then(|r| r.cow_order.as_ref()).is_none()
         {
             ui::show_status("CoW sign", "v3 required (batch)");
             return NscStatus::InvalidPointer as u32;
@@ -973,7 +937,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         // sign a member whose attacker-chosen destination the CoW screen
         // never showed.
         if !crate::tx::eip712::safe::direct_cow_target_ok(
-            routed[i].as_ref().and_then(|r| r.zk_v3.as_ref()).is_some(),
+            routed[i].as_ref().and_then(|r| r.cow_order.as_ref()).is_some(),
             safe_wrapped_cow,
             &ptx.to,
         ) {
@@ -983,11 +947,11 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         let inner_pages = match pick_sign_pages(
             &tx_for_display,
             inner_data,
-            r.and_then(|r| r.zk_v3.as_ref()),
+            r.and_then(|r| r.cow_order.as_ref()),
             r.and_then(|r| r.safe_v1.as_ref()),
             safe_exec_verified.as_ref(),
             r.and_then(|r| r.erc7730.as_ref()),
-            r.and_then(|r| r.erc20.as_ref()),
+            chain_verified_erc20,
             r.and_then(|r| r.selector.as_ref()),
             &resolver,
         ) {

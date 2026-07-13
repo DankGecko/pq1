@@ -867,10 +867,8 @@ pub const SLOT_B_SECURE_ADDR: u32 = 0x0C08_2000;
 pub const SLOT_B_SECURE_FIRST_PAGE: u32 = 65;
 pub const SLOT_B_SECURE_LAST_PAGE: u32 = 122;
 
-/// Secure-slot usable byte capacity (bytes writable into one slot).
-/// 58 pages × 8 KB = 464 KB. Firmware images larger than this are
-/// rejected at `CMD_FW_BEGIN`.
-pub const SLOT_SECURE_CAPACITY: u32 = 58 * 8 * 1024;
+/// Slot capacities are a shared host/device release-policy constant.
+pub use fw_manifest::{SLOT_NS_CAPACITY, SLOT_SECURE_CAPACITY};
 
 pub const SLOT_A_NS_ADDR: u32 = 0x0810_0000;
 pub const SLOT_A_NS_FIRST_PAGE: u32 = 0;
@@ -879,9 +877,6 @@ pub const SLOT_A_NS_LAST_PAGE: u32 = 63;
 pub const SLOT_B_NS_ADDR: u32 = 0x0818_0000;
 pub const SLOT_B_NS_FIRST_PAGE: u32 = 64;
 pub const SLOT_B_NS_LAST_PAGE: u32 = 127;
-
-/// NS-slot usable byte capacity. 64 pages × 8 KB = 512 KB.
-pub const SLOT_NS_CAPACITY: u32 = 64 * 8 * 1024;
 
 pub fn slot_secure_addr(slot: Slot) -> u32 {
     match slot {

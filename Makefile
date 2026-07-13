@@ -98,9 +98,14 @@ FEATURES ?= mock-se,debug-log,ui-semihosting
 # root/fences in secure/src/db_roots.rs. When the selected root is explicitly
 # dev-unattested, canonical Make-driven dev builds automatically enable the
 # matching trusted-display warning. A production feature set never gets that
-# feature: prod-check and the generated Rust fence reject the root instead.
-ERC7730_REVIEW := secure/data/erc7730.review.txt
-ERC7730_CATALOGUE_PROVENANCE := $(strip $(shell awk '/^\# Provenance: / { print $$3; exit }' $(ERC7730_REVIEW) 2>/dev/null))
+# feature: `prod-erc7730-provenance-check` and the generated Rust fence reject
+# the root instead. The rollback quarantine remains an independent ship gate.
+# These values are security policy inputs, not caller configuration.  GNU
+# make command-line assignments normally override ordinary makefile values;
+# use `override` so an invocation cannot make this process gate false-green
+# while the generated Rust fence still embeds the dev catalogue.
+override ERC7730_REVIEW := secure/data/erc7730.review.txt
+override ERC7730_CATALOGUE_PROVENANCE := $(strip $(shell awk '/^\# Provenance: / { print $$3; exit }' $(ERC7730_REVIEW) 2>/dev/null))
 ifeq ($(ERC7730_CATALOGUE_PROVENANCE),dev-unattested)
 ifeq (,$(findstring mode-production,$(FEATURES)))
 ifeq (,$(findstring erc7730-dev-unattested,$(FEATURES)))
@@ -330,10 +335,12 @@ flash-hw: build-hw ## Flash + run on real STM32U585 (probe-rs/OpenOCD)
 # Builds both worlds with the `e2e-test` cargo feature, runs them in QEMU
 # with stdin closed (no semihosting input needed), captures stdout, and
 # asserts that the secure-world dispatcher routed each scenario to the
-# right TxKind variant + that every scenario returned NscStatus::Ok.
+# right TxKind variant + that every scenario returned its expected status
+# (positive cases `Ok`; negative binding/framing cases the pinned refusal).
 #
 # The authoritative scenario list is the `for line in ...` assertion
-# block below (Scenarios 1–6, including the 5a–5u sub-scenarios). It
+# block below (Scenarios 0a–6, including every emitted Scenario 5
+# sub-scenario currently present in the firmware test driver). It
 # covers value transfers, known/unknown ERC-20, blind-sign, slot
 # rotation, Safe approveHash / exec clear-sign, selector + self-attest
 # + ERC-7730 typed render, atomic batch sign, and Safe-wrapped CoW
@@ -381,9 +388,14 @@ e2e: ## Automated unified-sign E2E (QEMU)
 		"\\[NS\\]\\[e2e\\] Scenario 4: register slot 1 on chain B" \
 		"\\[NS\\]\\[e2e\\] Scenario 5: Safe approveHash clear-sign" \
 		"\\[NS\\]\\[e2e\\] Scenario 5b: verified function-selector bundle" \
+		"\\[NS\\]\\[e2e\\] Scenario 5v: companion-supplied ERC-20 metadata trailer" \
+		"\\[NS\\]\\[e2e\\] Scenario 5w: companion-supplied address-name trailer" \
 		"\\[NS\\]\\[e2e\\] Scenario 5c: cross-check rejects mismatched selector" \
 		"\\[NS\\]\\[e2e\\] Scenario 5d: typed walker declines, blind-sign fallback" \
 		"\\[NS\\]\\[e2e\\] Scenario 5e: atomic batch sign" \
+		"\\[NS\\]\\[e2e\\] Scenario 5e-7730: batch ERC-7730 trailer matches + signs" \
+		"\\[NS\\]\\[e2e\\] Scenario 5e-rt-erc20: invalid Safe cannot gate ERC-7730 token metadata" \
+		"\\[NS\\]\\[e2e\\] Scenario 5e-7730-mismatch: batch mis-bound descriptor is refused" \
 		"\\[NS\\]\\[e2e\\] Scenario 5f: degenerate 1-tx batch" \
 		"\\[NS\\]\\[e2e\\] Scenario 5g: max-size batch" \
 		"\\[NS\\]\\[e2e\\] Scenario 5h: empty batch is refused" \
@@ -391,12 +403,14 @@ e2e: ## Automated unified-sign E2E (QEMU)
 		"\\[NS\\]\\[e2e\\] Scenario 5j: self-attest typed render" \
 		"\\[NS\\]\\[e2e\\] Scenario 5k: self-attest keccak mismatch dropped" \
 		"\\[NS\\]\\[e2e\\] Scenario 5l: both selector trailers refused" \
-		"\\[NS\\]\\[e2e\\] Scenario 5p: EIP-712 typed sign (kind=2) wire format" \
+		"\\[NS\\]\\[e2e\\] Scenario 5m: ERC-7730 trailer matches + signs" \
+		"\\[NS\\]\\[e2e\\] Scenario 5p: EIP-712 typed sign + binding differential" \
+		"\\[NS\\]\\[e2e\\] Scenario 5n: known-call mis-bound descriptor is refused" \
 		"\\[NS\\]\\[e2e\\] Scenario 5q: Safe-wrapped CoW presign clear-sign" \
-		"\\[NS\\]\\[e2e\\] Scenario 5r: safe-wrapped presign without zk_v3 is refused" \
+		"\\[NS\\]\\[e2e\\] Scenario 5r: safe-wrapped presign without cow_order is refused" \
 		"\\[NS\\]\\[e2e\\] Scenario 5s: multiSend (approve+presign) safe-wrapped CoW clear-sign" \
 		"\\[NS\\]\\[e2e\\] Scenario 5t: multiSend with a delegatecall record is refused" \
-		"\\[NS\\]\\[e2e\\] Scenario 5u: multiSend presign without zk_v3 is refused" \
+		"\\[NS\\]\\[e2e\\] Scenario 5u: multiSend presign without cow_order is refused" \
 		"\\[NS\\]\\[e2e\\] Scenario 6: brute-force protection" \
 		"\\[NS\\]\\[e2e\\] === All scenarios passed! ==="; do \
 		if grep -q "$$line" $$log; then \
@@ -406,6 +420,30 @@ e2e: ## Automated unified-sign E2E (QEMU)
 			fail=1; \
 		fi; \
 	done; \
+	rt_region=$$(mktemp); \
+	awk '/Scenario 5e-rt-erc20:/{capture=1} capture{print} /RT-ERC20 trusted pages complete/{exit}' $$log > $$rt_region; \
+	for text in \
+		"0x1CDD2EaB611126" \
+		"97626F7b4bB0e23D" \
+		"a4FeBF7B7C" \
+		"0xdAC17F958D2ee5" \
+		"23a2206206994597" \
+		"C13D831ec7"; do \
+		if ! grep -Fq "$$text" $$rt_region; then \
+			echo "  MISS  RT-ERC20 trusted row: $$text"; \
+			fail=1; \
+		fi; \
+	done; \
+	if [ $$(grep -Fc "Token contract" $$rt_region) -lt 2 ]; then \
+		echo "  MISS  RT-ERC20 two exact token-identity pages"; fail=1; \
+	fi; \
+	if [ $$(grep -Fc "Amount" $$rt_region) -lt 2 ] || [ $$(grep -Fc "USDT" $$rt_region) -lt 2 ]; then \
+		echo "  MISS  RT-ERC20 two decoded amount+ticker displays"; fail=1; \
+	fi; \
+	if grep -Fq "Token (UNVERI" $$rt_region || grep -Fq "Approve Safe TX" $$rt_region; then \
+		echo "  FAIL  RT-ERC20 regressed to unverified or Safe-attributed display"; fail=1; \
+	fi; \
+	rm -f $$rt_region; \
 	rm -f $$log; \
 	if [ $$fail -eq 0 ]; then \
 		echo "==> e2e: ALL ASSERTIONS PASSED"; \
@@ -1271,7 +1309,7 @@ build-hw-se050-oled:
 build-hw-se050-oled-standalone:
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 	cargo build --locked --release --target $(TARGET) --target-dir target/secure \
-		-p sphincs-tz-secure --no-default-features --features se050,gpio-buttons,ui-lcd,stm32u585,usb,legacy-fw-rollback-unsafe
+		-p sphincs-tz-secure --no-default-features --features se050,gpio-buttons,ui-lcd,stm32u585,usb,legacy-fw-rollback-unsafe,erc7730-dev-unattested
 	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
 	cargo build --locked --release --target $(TARGET) --target-dir target/nonsecure \
@@ -1472,7 +1510,7 @@ flash-hw-dual-se-oled-standalone-debug: build-hw-dual-se-oled-standalone-debug
 build-hw-optiga-oled-standalone:
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 	cargo build --locked --release --target $(TARGET) --target-dir target/secure \
-		-p sphincs-tz-secure --no-default-features --features optiga-trust-m,gpio-buttons,ui-lcd,stm32u585,usb,legacy-fw-rollback-unsafe
+		-p sphincs-tz-secure --no-default-features --features optiga-trust-m,gpio-buttons,ui-lcd,stm32u585,usb,legacy-fw-rollback-unsafe,erc7730-dev-unattested
 	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
 	cargo build --locked --release --target $(TARGET) --target-dir target/nonsecure \
@@ -1732,7 +1770,7 @@ test-unit: ## Rust workspace unit tests (host)
 # Run manually:
 #   make check-codegen
 #
-# Or as part of `make prod-check` (Phase 2 onwards).
+# Or as part of `make prod-erc7730-provenance-check` (Phase 2 onwards).
 .PHONY: check-codegen check-erc7730-descriptors check-solidity-constants erc8176-coverage
 check-codegen: check-erc7730-descriptors check-solidity-constants
 	@echo "==> codegen artifacts in sync"
@@ -2171,19 +2209,16 @@ PROD_SHIP_FEATURES = stm32u585,se050,optiga-trust-m,dual-se,ui-lcd,usb,iwdg,saes
 
 # Exact machine-readable provenance string emitted by dbgen only after a real
 # ERC-8176 EAS verification implementation has authenticated every leaf.
-PROD_ERC7730_PROVENANCE = erc8176-verified
+override PROD_ERC7730_PROVENANCE := erc8176-verified
 
 .PHONY: prod-erc7730-provenance-check
+ifeq ($(ERC7730_CATALOGUE_PROVENANCE),$(PROD_ERC7730_PROVENANCE))
 prod-erc7730-provenance-check: check-erc7730-descriptors ## Validate production ERC-7730 catalogue provenance
-	@if [ "$(ERC7730_CATALOGUE_PROVENANCE)" != "$(PROD_ERC7730_PROVENANCE)" ]; then \
-		echo "==> prod-erc7730-provenance-check: FAIL — ERC-7730 catalogue provenance is '$(ERC7730_CATALOGUE_PROVENANCE)'"; \
-		echo "    required: $(PROD_ERC7730_PROVENANCE)"; \
-		echo "    Current dbgen has no production ERC-8176 verifier; an obsolete embedded"; \
-		echo "    attestations array is not accepted. Keep ERC-7730 dev-only until real EAS"; \
-		echo "    records are signature/identity-verified and the catalogue is regenerated."; \
-		exit 1; \
-	fi
 	@echo "==> prod-erc7730-provenance-check: PASS — production catalogue provenance verified"
+else
+prod-erc7730-provenance-check: check-erc7730-descriptors ## Validate production ERC-7730 catalogue provenance
+	@$(error prod-erc7730-provenance-check: FAIL — ERC-7730 catalogue provenance is '$(ERC7730_CATALOGUE_PROVENANCE)'; required '$(PROD_ERC7730_PROVENANCE)'; Draft catalogue has no production authority)
+endif
 
 .PHONY: prod-feature-check prod-check
 prod-feature-check: ## Resolve and validate the production hardening feature set
@@ -2197,7 +2232,7 @@ prod-feature-check: ## Resolve and validate the production hardening feature set
 		echo "$$feats" | grep -qx "$$f" && bad="$$bad $$f"; \
 	done; \
 	if [ -n "$$bad" ]; then \
-		echo "==> prod-check: FAIL — shipping build enables never-ship feature(s):$$bad"; \
+		echo "==> prod-feature-check: FAIL — shipping feature set enables never-ship feature(s):$$bad"; \
 		echo "    forbidden set: $(PROD_FORBIDDEN)"; \
 		exit 1; \
 	fi; \
@@ -2206,12 +2241,12 @@ prod-feature-check: ## Resolve and validate the production hardening feature set
 		echo "$$feats" | grep -qx "$$f" || missing="$$missing $$f"; \
 	done; \
 	if [ -n "$$missing" ]; then \
-		echo "==> prod-check: FAIL — shipping build is MISSING required hardening feature(s):$$missing"; \
+		echo "==> prod-feature-check: FAIL — shipping feature set is MISSING required hardening feature(s):$$missing"; \
 		echo "    required set : $(PROD_REQUIRED)"; \
 		echo "    (S-1/S-2 OPTIGA lockdown, hw PIN counter, SCA mask, tamper-wipe, Tier-1 SE keys)"; \
-		echo "    Build the real shipping image with:"; \
-		echo "      make release RELEASE_FEATURES=\"$(PROD_SHIP_FEATURES)\""; \
-		echo "    or run the shipping gate directly: make prod-check-ship"; \
+		echo "    Validate the canonical feature set with:"; \
+		echo "      make prod-feature-check RELEASE_FEATURES=\"$(PROD_SHIP_FEATURES)\""; \
+		echo "    prod-check-ship remains expected to stop at the rollback quarantine."; \
 		exit 1; \
 	fi; \
 	echo "==> prod-feature-check: PASS — required/forbidden feature policy is intact"
@@ -2221,35 +2256,59 @@ prod-feature-check: ## Resolve and validate the production hardening feature set
 prod-check: prod-feature-check ## Production-readiness gate (blocked after feature validation)
 	@$(error prod-check: FAIL — reviewed production rollback backend is not implemented; Draft 0.9 grants no ship authority)
 
-# Shipping-config gate: validate the canonical PROD_SHIP_FEATURES. This is what
-# CI runs (so the gate exercises the REAL hardened image, not the dev default).
+# Shipping-config gate: resolve and validate the canonical PROD_SHIP_FEATURES.
+# No production image is built while the rollback backend remains quarantined.
 .PHONY: prod-check-ship
 prod-check-ship: RELEASE_FEATURES := $(PROD_SHIP_FEATURES)
 prod-check-ship: prod-feature-check ## Strict ship gate — feature-check, then rollback refusal
 	@$(error prod-check-ship: FAIL — reviewed production rollback backend is not implemented; Draft 0.9 grants no ship authority)
 
-# Image size / budget report. The secure image must fit its 464 KB A/B slot
-# (SLOT_SECURE_CAPACITY = 58*8*1024, secure/src/hw/flash.rs) — enforced only
-# on-device at update time + in the FSBL boot check, NEVER at build time (the
-# secure linker script allows 984K, so the linker can't catch a slot overflow).
+# Image size / budget report. The secure image must fit its 464 KB A/B slot.
+# The non-overrideable capacity lives in fw-manifest and is enforced by
+# fwmeasure, fwsign, the updater, and FSBL. This Make target is a diagnostic
+# receipt, not release authority; fwsign enforces the bound before signing.
 # The NS world runs on the stack left over after .bss/.data in its 64 KB SRAM2
 # (nonsecure/memory-stm32u585.x), which is already tight. This target surfaces
-# both before a flash. Wired into `release`; run standalone after any firmware
-# build too. (2026-07-02: nothing printed image size before this.)
-SECURE_SLOT_CAP := 475136
+# both before a flash. Run it standalone against a prepared artifact directory;
+# the quarantined `release` target intentionally publishes nothing. Any future
+# reviewed release pipeline must invoke the signer-side capacity gate as part
+# of its atomic package operation. (2026-07-02: nothing printed image size.)
 NS_SRAM_CAP := 65536
 NS_STACK_WARN := 12288
 NS_STACK_MIN := 2048
 .PHONY: size-report
 size-report: ## Report secure/NS/FSBL image sizes against their flash/SRAM budgets
+	$(if $(findstring i,$(filter-out --%,$(firstword $(MAKEFLAGS)) $(firstword $(MFLAGS)))),$(error size-report refuses make --ignore-errors; a capacity failure must propagate))
+	$(if $(wildcard $(RELEASE_ARTIFACT_DIR)/secure.elf),,$(error size-report: missing required $(RELEASE_ARTIFACT_DIR)/secure.elf))
 	@echo "==> Image size report"
-	@if [ -f $(RELEASE_ARTIFACT_DIR)/secure.elf ]; then \
-	  arm-none-eabi-size -B $(RELEASE_ARTIFACT_DIR)/secure.elf | awk -v cap=$(SECURE_SLOT_CAP) 'NR==2 { \
-	    used=$$1+$$2; pct=used*100.0/cap; \
-	    printf "    secure : %d B of %d B slot (%.1f%%), %d B free\n", used, cap, pct, cap-used; \
-	    if (used>cap) { print "    secure : FAIL — image exceeds the 464 KB A/B slot"; exit 1 } \
-	    if (pct>=85) { printf "    secure : WARN — over 85%% of the slot\n" } }'; \
-	else echo "    secure : (no $(RELEASE_ARTIFACT_DIR)/secure.elf — run make release)"; fi
+	@report=$$(cargo run --locked --quiet -p fwmeasure -- \
+	  "$(RELEASE_ARTIFACT_DIR)/secure.elf" --require-secure-slot \
+	  2>&1 >/dev/null) || { \
+	    echo "    secure : FAIL — strict fwmeasure/capacity check rejected the ELF"; \
+	    printf '%s\n' "$$report" >&2; \
+	    exit 1; \
+	  }; \
+	used=$$(printf '%s\n' "$$report" | \
+	  sed -n 's/^Flash end:.*(\([0-9][0-9]*\) bytes)$$/\1/p'); \
+	cap=$$(printf '%s\n' "$$report" | \
+	  sed -n 's/^Flash limit: \([0-9][0-9]*\) bytes (secure slot)$$/\1/p'); \
+	case "$$used" in \
+	  ''|*[!0-9]*) \
+	    echo "    secure : FAIL — could not parse strict fwmeasure receipt"; \
+	    printf '%s\n' "$$report" >&2; \
+	    exit 1 ;; \
+	esac; \
+	case "$$cap" in \
+	  ''|*[!0-9]*) \
+	    echo "    secure : FAIL — could not parse strict fwmeasure receipt"; \
+	    printf '%s\n' "$$report" >&2; \
+	    exit 1 ;; \
+	esac; \
+	awk -v used="$$used" -v cap="$$cap" 'BEGIN { \
+	  pct=used*100.0/cap; \
+	  printf "    secure : %d B physical span of %d B slot (%.1f%%), %d B free\n", used, cap, pct, cap-used; \
+	  if (used>cap) { print "    secure : FAIL — image exceeds the 464 KB A/B slot"; exit 1 } \
+	  if (pct>=85) { printf "    secure : WARN — over 85%% of the slot\n" } }'
 	@if [ -f $(RELEASE_ARTIFACT_DIR)/nonsecure.elf ]; then \
 	  arm-none-eabi-size -B $(RELEASE_ARTIFACT_DIR)/nonsecure.elf | awk -v cap=$(NS_SRAM_CAP) -v warn=$(NS_STACK_WARN) -v min=$(NS_STACK_MIN) 'NR==2 { \
 	    stat=$$2+$$3; free=cap-stat; \
@@ -3176,7 +3235,12 @@ FUZZ_LIBFUZZER_ARGS = $(if $(FUZZ_TIME),-- -max_total_time=$(FUZZ_TIME),)
 # Auto-prepend the nix gcc-lib dir if present; empty on a standard glibc env
 # (where the binaries link the system libstdc++ and just run).
 FUZZ_LD := $(shell ls -d /nix/store/*gcc-1[45]*-lib/lib 2>/dev/null | head -1)
-FUZZ_ENV := $(if $(FUZZ_LD),LD_LIBRARY_PATH=$(FUZZ_LD),)
+# Prefer a versioned symbolizer whose matching libLLVM is installed.  Some
+# hosts expose `/usr/bin/llvm-symbolizer` from LLVM 18 even though its shared
+# library is absent; libFuzzer then exits during its first NEW_FUNC report.
+# Keep this overrideable for Nix/CI images with a different known-good binary.
+FUZZ_SYMBOLIZER ?= $(shell command -v llvm-symbolizer-17 2>/dev/null || command -v llvm-symbolizer 2>/dev/null || true)
+FUZZ_ENV := $(if $(FUZZ_LD),LD_LIBRARY_PATH=$(FUZZ_LD),) $(if $(FUZZ_SYMBOLIZER),ASAN_SYMBOLIZER_PATH=$(FUZZ_SYMBOLIZER),)
 
 # Net-isolation (SOTA 2026-06 §7 egress discipline): the fuzzer RUN phase has no
 # business reaching the network, so wrap it in tools/sca/run-isolated.sh
@@ -3193,18 +3257,37 @@ FUZZ_ISOLATE ?= $(CURDIR)/tools/sca/run-isolated.sh
 # crash drops an artifact under fuzz/artifacts/<target>/ to triage (these parsers
 # are Kani-proven panic-free on bounded input, so a crash = a real unbounded-path
 # bug OR a harness artifact — decide which before "fixing"). Last full run
-# (2026-06-17): all 11 targets non-vacuous (cov 23-133), 0 crashes.
+# (2026-07-13): all 12 targets non-vacuous, 0 artifact files of any kind.
+fuzz-all: SHELL := /usr/bin/env bash
 fuzz-all: ## Run every cargo-fuzz target for FUZZ_TIME
 	@cd fuzz && cargo +nightly fuzz build
-	@cd fuzz && for t in $$(cargo +nightly fuzz list); do \
+	@set -o pipefail; cd fuzz && \
+	if ! targets=$$(cargo +nightly fuzz list); then \
+	  echo "FAIL: cargo-fuzz could not enumerate targets"; \
+	  exit 1; \
+	fi; \
+	if [ -z "$$(printf '%s' "$$targets" | tr -d '[:space:]')" ]; then \
+	  echo "FAIL: cargo-fuzz enumerated zero targets"; \
+	  exit 1; \
+	fi; \
+	run_count=0; \
+	for t in $$targets; do \
+	  run_count=$$((run_count + 1)); \
 	  echo "==> fuzz $$t ($(or $(FUZZ_TIME),30)s)"; \
 	  mkdir -p corpus/$$t artifacts/$$t; \
-	  $(FUZZ_ISOLATE) env $(FUZZ_ENV) target/x86_64-unknown-linux-gnu/release/$$t corpus/$$t \
+	  if ! $(FUZZ_ISOLATE) env $(FUZZ_ENV) target/x86_64-unknown-linux-gnu/release/$$t corpus/$$t \
 	    -max_total_time=$(or $(FUZZ_TIME),30) -rss_limit_mb=2048 -artifact_prefix=artifacts/$$t/ \
-	    2>&1 | grep -E "DONE|cov: [0-9]+ ft:|crash|deadly signal|SUMMARY" | tail -2; \
+	    2>&1 | grep -E "DONE|cov: [0-9]+ ft:|crash|deadly signal|SUMMARY" | tail -2; then \
+	    echo "FAIL: fuzz target $$t exited non-zero or never reached a reportable verdict"; \
+	    exit 1; \
+	  fi; \
 	done; \
-	c=$$(find artifacts -type f \( -name 'crash-*' -o -name 'oom-*' \) 2>/dev/null | wc -l); \
-	echo "==> fuzz-all done; crash artifacts: $$c (triage any under fuzz/artifacts/)"
+	c=$$(find artifacts -type f 2>/dev/null | wc -l); \
+	if [ "$$c" -ne 0 ]; then \
+	  echo "FAIL: fuzz-all produced $$c artifact(s) under fuzz/artifacts/"; \
+	  exit 1; \
+	fi; \
+	echo "==> fuzz-all done; $$run_count target(s); artifacts: 0"
 
 fuzz-list: ## List the cargo-fuzz targets
 	@echo "Available fuzz targets (see fuzz/README.md):"
@@ -3244,10 +3327,10 @@ fuzz-erc7730-ir-parse:
 fuzz-erc7730-render-dispatch:
 	cd fuzz && cargo +nightly fuzz run erc7730_render_dispatch $(FUZZ_LIBFUZZER_ARGS)
 
-# Populate the render-dispatch corpus from the real ERC-7730 registry (897 IR
-# leaves) so the fuzzer starts from valid descriptors — without this the field
-# formatters are ~unreachable (cov 130 empty vs 1877 seeded). Run once before
-# `make fuzz-erc7730-render-dispatch`.
+# Populate the render-dispatch corpus from the current pinned ERC-7730 catalogue
+# (420 IR leaves) so the fuzzer starts from valid descriptors. Coverage numbers
+# are root/source-tree specific; regenerate and rerun after every root rotation
+# before reporting them. See docs/erc7730-renderer-fuzzability.md.
 fuzz-seed-erc7730-render:
 	cd fuzz && cargo test --test gen_render_seeds -- --ignored --nocapture
 

@@ -34,8 +34,9 @@ The report is self-describing (frontmatter + per-finding status), so `grep -rl '
 | `open` | one or more findings are still `🔲 OPEN` |
 | `in-review` | all findings triaged (`🔬`/beyond), some not yet closed |
 | `resolved` | **every** finding is `✅ FIXED` / `☑️ ACCEPTED` / `🚫 INVALID` / `⏸ DEFERRED` (with a tracking link) |
+| `fixes-landed-production-blocked` | every code finding is handled, but a named deferred ship blocker still forbids production authority |
 
-**When you work through a report:** for each finding you handle, change its `Status:` line, append a one-line **Resolution** (what you did / a commit SHA + date, or why accepted/invalid), and — when nothing is left `🔲 OPEN` / `🔬 REVIEWED` — flip the report frontmatter `status:` to `resolved`. Cross-link the real work to `docs/work-todo.md` (which stays the master task list); this folder is the *review record*, work-todo is the *action list*.
+**When you work through a report:** for each finding you handle, change its `Status:` line, append a one-line **Resolution** (what you did / a commit SHA + date, or why accepted/invalid), and — when nothing is left `🔲 OPEN` / `🔬 REVIEWED` — flip the report frontmatter `status:` to `resolved` (or `fixes-landed-production-blocked` when a named deferred finding still forbids shipping). Cross-link the real work to `docs/work-todo.md` (which stays the master task list); this folder is the *review record*, work-todo is the *action list*.
 
 ## Catalogue
 
@@ -43,6 +44,6 @@ Newest first. Add a row when you file a report; update the Status/Findings cells
 
 | Report | Surface | Date | Report status | Findings (open / handled) |
 |---|---|---|---|---|
-| [clear-signing-2026-07-10](./clear-signing-2026-07-10.md) | clear-signing (ERC-7730 compiler, renderer, dispatch + FI) | 2026-07-10 | `resolved` | 0 open / 12 handled (10 fixed, 1 accepted, 1 deferred) |
+| [clear-signing-2026-07-10](./clear-signing-2026-07-10.md) | clear-signing (ERC-7730 compiler, renderer, dispatch + FI; validation continued 2026-07-12) | 2026-07-10 | `fixes-landed-production-blocked` | 0 open / 30 handled (28 fixed, 1 accepted, 1 deferred) |
 | [2026-07-adversarial-review-engagement](./2026-07-adversarial-review-engagement.md) | multi (playbook family build-out) | 2026-07-02..04 | `resolved` | 0 open / 11 handled (7 fixed, 1 accepted, 3 deferred) |
 | [clear-signing-2026-07-02](./clear-signing-2026-07-02.md) | clear-signing (ERC-7730 + render ladder) | 2026-07-02 | `resolved` | historical pass — live bugs fixed, tracked in the clear-signing playbook + work-todo |

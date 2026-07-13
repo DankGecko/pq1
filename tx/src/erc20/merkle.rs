@@ -1,5 +1,4 @@
-//! Merkle proof verifier shared between the ERC-20 metadata DB and the
-//! ZK clear-signing VK DB.
+//! Merkle proof verifier shared by the authenticated metadata catalogues.
 //!
 //! Both DBs use the same scheme:
 //!

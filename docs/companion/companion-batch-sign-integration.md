@@ -1,9 +1,12 @@
 # PQSigner Multi-Tx Batch Sign — Companion Integration
 
-This doc is a delta against [`companion-app-integration.md`](companion-app-integration.md).
+This doc is a delta against the normative
+[`usb-protocol-v2.md`](usb-protocol-v2.md) and
+[`companion-erc7730-implementation-guide.md`](companion-erc7730-implementation-guide.md).
 It assumes you already have a working companion that drives single-tx
 `SIGN_USEROP` (INS `0x30`) end-to-end, and only describes what's new for
-the atomic multi-call **batch sign** flow.
+the atomic multi-call **batch sign** flow. Do not use the legacy broad
+`companion-app-integration.md` recipes as wire authority.
 
 ## TL;DR
 
@@ -19,10 +22,12 @@ the atomic multi-call **batch sign** flow.
   gate that repeats that signer identity.
 * Hard caps: `MAX_BATCH_TXS = 4` inner calls per UserOp, each call's
   `data` ≤ `MAX_TX_LEN = 4096` bytes.
-* Same flag layout as single-tx — `FLAG_INCLUDE_INIT_CODE`,
-  `FLAG_REGISTER_SLOT`, `account_index`, `slot_index` all behave
-  identically. Type 1 (addOwner / factorySig) UserOps remain
-  single-call by construction; only the user-tx Type 2 is batched.
+* Same flag layout as single-tx. First deployment uses
+  `FLAG_INCLUDE_INIT_CODE` with slot 0; `FLAG_REGISTER_SLOT` must remain clear.
+  Wire v2 cannot complete a seedless slot rotation because the response omits
+  the exact 64-byte new slot public key. Production companions must therefore
+  refuse Type 1 output until the reviewed protocol bump tracked in
+  `docs/work-todo.md` lands. Only the user-tx Type 2 is batched.
 
 ## When to use it
 
@@ -94,21 +99,24 @@ count-prefixed list of TLV records:
 Each per-tx kind binds via `tx_idx` to one inner transaction. The
 firmware verifies the bundle, FI-cross-checks the binding, and feeds the result
 into `pick_sign_pages` for that tx. A failed ERC-7730 proof leaves its slot
-empty, but the firmware-pinned known-call filter then hard-refuses any registry-declared
-`(chain, target, selector)` instead of downgrading it. CoW and Safe also have
+empty, but the firmware-pinned known-call filter then hard-refuses any tuple
+present in that filter instead of downgrading it. The generator intends to
+cover every parsable registry declaration, but Bloom membership is not itself a
+proof of selector-parser completeness; independent grammar tests and the exact
+tuple-set receipt cover that boundary. CoW and Safe also have
 the explicit downgrade gates below. Kind 8 trailers accumulate batch-wide into
 one `NameResolver` shared across renders.
 
 | `kind` | symbol | max bytes | verifier | applies to |
 |-------:|--------|----------:|----------|------------|
 | 1 | `TRAILER_KIND_ERC20`         | 1120 | `erc20::bundle::verify_erc20_bundle` (`ERC20_DB_ROOT`) | inner tx at `tx_idx` |
-| 2 | `TRAILER_KIND_ZK_V1`         | 2660 | `zk::verify_and_bind_trailer_v1` (`VK_DB_ROOT`)        | inner tx at `tx_idx` |
-| 3 | `TRAILER_KIND_ZK_V3`         | 2764 | `tx::eip712::cowswap::verify_and_bind_trailer`         | inner tx at `tx_idx` |
+| 2 | `TRAILER_KIND_RESERVED_V1`   |    0 | reserved compatibility kind; do not emit a record       | inner tx at `tx_idx` |
+| 3 | `TRAILER_KIND_COW_ORDER`         | 2448 | `tx::eip712::cowswap::verify_and_bind_trailer`         | inner tx at `tx_idx` |
 | 4 | `TRAILER_KIND_SAFE_V1`       | 4379 | `tx::eip712::safe::verify_and_bind_trailer`            | inner tx at `tx_idx` |
-| 5 | `TRAILER_KIND_SEL_CURATED`   | 1156 | `selectors::verify_selector_bundle` (`SELECTOR_DB_ROOT`) | inner tx at `tx_idx` |
+| 5 | `TRAILER_KIND_SEL_CURATED`   | 1100 | `selectors::verify_selector_bundle` (`SELECTOR_DB_ROOT`) | inner tx at `tx_idx` |
 | 6 | `TRAILER_KIND_SEL_SELFATTEST`|   68 | `selectors::parse_self_attest_bundle` (keccak self-check) | inner tx at `tx_idx` |
 | 7 | `TRAILER_KIND_ERC7730`       | 5130 | `tx::erc7730::verify_erc7730_bundle` (`ERC7730_DESCRIPTORS_ROOT`) | inner tx at `tx_idx` |
-| 8 | `TRAILER_KIND_NAME`          | 1156 | `names::verify_name_bundle` (`NAMES_DB_ROOT`)          | batch-wide (`tx_idx == 0xff`) |
+| 8 | `TRAILER_KIND_NAME`          | 1093 | `names::verify_name_bundle` (`NAMES_DB_ROOT`)          | batch-wide (`tx_idx == 0xff`) |
 
 The firmware refuses at parse time:
 
@@ -133,9 +141,10 @@ routed trailer.
 * **CoW v3**: if `inner.data[0..4] == 0xec6cb13f` (setPreSignature) AND
   `inner.to == GPV2_SETTLEMENT (0x9008…ab41)`, a kind 3 trailer with
   `tx_idx = i` is mandatory.
-* **Safe v1**: if `inner.data[0..4] == 0xd4d9bdcd` (approveHash) AND
-  `inner.data.length == 36`, a kind 4 trailer with `tx_idx = i` is
-  mandatory.
+* **Safe v1**: if `inner.data[0..4] == 0xd4d9bdcd` (`approveHash`), a
+  kind 4 trailer with `tx_idx = i` is mandatory regardless of trailing
+  calldata length. Safe ignores trailing calldata on-chain, so an exact-length
+  predicate would permit a one-byte padding bypass into blind signing.
 * **ERC-7730 known call**: if the firmware-pinned membership filter contains
   `(chain_id, inner.to, inner.data[0..4])`, a verified kind 7 trailer routed to
   `tx_idx = i` is mandatory. Omission, malformed proof, binding failure, or
@@ -161,8 +170,10 @@ refuse to send v2 payloads to firmware that doesn't advertise v2 support.
 [type2_len(4 BE)]     [type2_wrapper...(4128 bytes)]
 ```
 
-Each `wrapper` is `abi.encode(uint256 ownerIndex, bytes c10Sig)` — drop
-it straight into the EntryPoint v0.6 `UserOperation.signature`.
+Each `wrapper` is `abi.encode(uint256 ownerIndex, bytes c10Sig)`. The Type 2
+wrapper goes directly into `UserOperation.signature`. Although Type 1 uses the
+same wrapper encoding, a wire-v2 companion must reject that response because
+the corresponding exact calldata cannot yet be reconstructed.
 
 `new_offchain_count` is the firmware's per-slot `local_offchain_count`
 as committed to the just-signed batch UserOp. The companion uses this
@@ -186,7 +197,8 @@ Once you have the device-emitted `(type1_wrapper?, type2_wrapper)`:
    `newOffchainCount` is the leading `u64` from the response.
 2. Wrap into a `UserOperation06`:
    * `sender` = the wallet proxy address (same one you sent in).
-   * `nonce` = `base_nonce` (or `base_nonce + 1` if Type 1 was emitted).
+   * `nonce` = `base_nonce`. A current wire-v2 companion must reject Type 1
+     output rather than constructing a second UserOp.
    * `initCode` = the device-emitted `init_code` bytes (only on first
      deploy, when you set `FLAG_INCLUDE_INIT_CODE`).
    * `callData` = the bytes from step 1.
@@ -194,13 +206,14 @@ Once you have the device-emitted `(type1_wrapper?, type2_wrapper)`:
    * Gas + paymaster fields = the values you sent to the device.
 3. Submit to the EntryPoint v0.6 bundler RPC like any other UserOp.
 
-If `type1_wrapper` is also present (because you set `FLAG_REGISTER_SLOT`),
-submit it as a **separate UserOp at `nonce = base_nonce`** with
-`callData = abi.encodeCall(wallet.addOwnerBytes, (slotN_owner_bytes))`
-and `signature = type1_wrapper`. The batch UserOp follows it at
-`nonce = base_nonce + 1`. This is identical to the single-tx rotation
-flow — the firmware just signs the rotation Type 1 and the batch Type 2
-in one device round-trip.
+If `type1_wrapper` is present, reject the response and do **not** retry it.
+Firmware signed `addOwnerBytes(slotN_owner_bytes)`, but wire v2 does not return
+the exact `slotN_owner_bytes = pkSeed || pkRoot` needed to reconstruct that
+signed calldata. Substituting a no-op or guessed public key hashes a different
+UserOp and cannot validate. Retrying only releases another fresh bootstrap C10
+signature without a successful on-chain counter increment. A future reviewed
+wire-version bump must return the exact public key or complete Type-1 calldata
+and bind it byte-for-byte before this workflow may be enabled.
 
 ## On-chain ABI
 
@@ -231,13 +244,14 @@ it carried.
 
 * CLA = `APDU_CLA_V2 = 0xF0` (same as INS `0x30`).
 * The payload typically exceeds the 253-byte APDU MTU (header alone is
-  277 bytes), so the request **must** be sent via standard ISO 7816-4
+  278 bytes), so the request **must** be sent via standard ISO 7816-4
   command chaining — same chunker your single-tx sign already uses.
   Use `P1 = P1_V2_MORE = 0x80` on every chunk except the last, and
   `P1 = P1_V2_LAST = 0x00` on the final.
 * Response is also chunked via `GET_RESPONSE` chaining once the device
-  has the bundle ready (typical response is ~4136 bytes Type 2 only,
-  or ~8268 bytes when Type 1 + Type 2 are both emitted).
+  has the bundle ready (4148 bytes for Type 2 only, or 8276 bytes if the
+  currently-unsupported Type 1 output is also emitted). The conservative
+  protocol maximum, including initCode, is 12,556 bytes.
 * Status word mapping is unchanged — `SW_OK (0x9000)` on success,
   `SW_INTERNAL_ERROR (0x6F00)` for `CryptoError` / `InvalidPointer`,
   `SW_SECURITY_NOT_SATISFIED` for `UserRejected` (cancel anywhere in
@@ -274,7 +288,7 @@ constants header (preferred):
 |---|---|---|
 | `INS_V2_SIGN_USEROP_BATCH` | `0x32` | `shared::INS_V2_SIGN_USEROP_BATCH` |
 | `MAX_BATCH_TXS` | `4` | `shared::MAX_BATCH_TXS` |
-| `SIGN_USEROP_BATCH_HEADER_LEN` | `277` | `shared::SIGN_USEROP_BATCH_HEADER_LEN` |
+| `SIGN_USEROP_BATCH_HEADER_LEN` | `278` | `shared::SIGN_USEROP_BATCH_HEADER_LEN` |
 | `SIGN_USEROP_BATCH_TX_PREFIX_LEN` | `54` | `shared::SIGN_USEROP_BATCH_TX_PREFIX_LEN` |
 | `EXECUTE_BATCH_SELECTOR` | `0x7a389933` | `shared::EXECUTE_BATCH_SELECTOR` |
 | `MAX_TX_LEN` (per-tx data cap) | `4096` | `shared::MAX_TX_LEN` |
@@ -303,10 +317,10 @@ constants header (preferred):
 If your companion already speaks INS `0x30`:
 
 - [ ] Add `INS_V2_SIGN_USEROP_BATCH = 0x32` to your APDU constants.
-- [ ] Mirror the wire layout above in your payload builder. The first
-      277 bytes (everything up to and including `batch_count`) are
-      identical to the SIGN_USEROP header except `to/value/data_len/data`
-      are replaced by `batch_count + N inner-tx blocks`.
+- [ ] Mirror the wire layout above in your payload builder. The first 276 bytes
+      (through `paymaster_and_data_hash`) match SIGN_USEROP. Append
+      `wire_version` and `batch_count` to reach the 278-byte batch header, then
+      append N inner-tx blocks instead of single-tx `to/value/data_len/data`.
 - [ ] Reuse your single-tx APDU chaining; only the INS byte and the
       payload shape change.
 - [ ] Reuse your single-tx response parser — bundle layout is unchanged.

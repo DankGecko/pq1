@@ -19,9 +19,9 @@
 //!  > verify off-dev             <16 hex of bytes [24..32]>
 //! ```
 //!
-//! Page-budget impact: 2 pages out of the 22-page max. The longest
-//! existing renderer (typed-call selector) is 14 pages — 6 pages of
-//! headroom remain after the fingerprint, well within the budget.
+//! Page-budget impact: every signing path reserves these two pages before
+//! rendering. If the complete trusted display would exceed `MAX_PAGES`, the
+//! request is refused; pages are never truncated to make the fingerprint fit.
 //!
 //! ## Kinds
 //!

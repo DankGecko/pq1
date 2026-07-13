@@ -1,5 +1,12 @@
 # VULN — CowSwap ZK clear-signing: byte-pack commitment is not byte-binding (proof forgery)
 
+> **HISTORICAL — RETIRED SUBSYSTEM.** The Groth16/BLS12-381 verifier,
+> circuits, VK database, proof payloads, and commands discussed below were
+> removed on 2026-06-30. Paths and commands in this record may no longer exist
+> and MUST NOT be executed or treated as current remediation guidance. Current
+> CoW and Aave semantics are decoded natively on-device; see
+> `docs/archive/zk-clear-sign-retirement.md`.
+
 **Severity:** Critical (full WYSIWYS break — sign a different order than displayed)
 **Component:** `circuits/lib/poseidon_bytes.circom :: PackBytes31 / PoseidonBytes`
 (consumed by `circuits/cowswap/eip712_order/circuit.circom`, and identically by
@@ -14,7 +21,7 @@ overwritten freely. Empirically verified: an out-of-range witness byte
 a legitimate v3 order proof + the aave supply proof both still verify through the
 firmware's own Groth16 verifier.
 
-## Resolution (2026-06-12)
+## Historical resolution before retirement (2026-06-12)
 
 1. **Root cause (in-circuit).** `Num2Bits(8)` is now applied to every input byte
    of the three byte-commitment packers BEFORE the base-256 fold, forcing the
@@ -200,7 +207,7 @@ bytes, so no other check trips.)
   the analogous attack there. Aave's calldata likewise has packed-only argument
   words.
 
-## Fix
+## Historical fix (superseded by subsystem removal)
 
 Range-check every byte to `[0,256)` **before** packing — one line per byte at the
 single shared chokepoint:
@@ -230,11 +237,9 @@ trusting the proof to bind the headline and re-derive it on-device — for the
 fields the firmware already parses. That doesn't cover receiver/fee/validTo/
 appData, which is why the circuit fix is the real remedy.
 
-## Verification status
+## Historical verification status
 
-Analysis + construction only; no PoC witness generated yet. Next step to make it
-empirical: build the v3 zkey, hand `snarkjs`/`rapidsnark` a witness with
-out-of-range receiver/fee/appData signals solving the 7 block equations for a
-chosen malicious/benign pair, and confirm `groth16_verify_3pub` accepts it on a
-QEMU build. Mirrors the layout of `docs/security/cowswap-zk-poc/` from the amount-overflow
-finding.
+At that historical checkpoint the analysis/construction did not yet include a
+PoC witness. The then-proposed zkey/snarkjs/QEMU steps are intentionally not
+carried forward: the verifier and its inputs were removed. The preserved PoC
+layout lives under `docs/archive/cowswap-zk-poc/` for audit history only.

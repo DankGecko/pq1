@@ -88,9 +88,9 @@ companion fed the firmware.
   8213 fingerprint with the legacy single-page
   `write_calldata_hash_rows` which truncates to 14 hex chars (kept
   for non-8213 paths like blind-sign + selectors).
-- Page budget: 2 pages × 22 page cap = ~6 pages of headroom after the
-  longest existing renderer. No risk of bumping page count past
-  `MAX_PAGES = 22`.
+- Page budget: the two fingerprint pages are explicitly reserved within
+  `MAX_PAGES = 30`. If the complete trusted display does not fit, firmware
+  refuses the request; it never truncates pages to force a fit.
 - Test vectors: every helper in `pqsigner-tx-core::erc8213` has
   pinned test vectors in `pqsigner-tx-core/src/erc8213.rs` —
   these run in the host test suite (`cargo test -p pqsigner-tx-core`).

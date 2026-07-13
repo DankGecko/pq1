@@ -11,8 +11,7 @@
 MEMORY
 {
     /* Secure flash: SSRAM-0 S alias, first ~2MB (MPC blocks 0-63 = secure).
-     * Increased from 256K to 512K to accommodate ZK clear signing constants
-     * (Poseidon round constants + BLS12-381 verification key). */
+     * The 512K envelope is retained pending a separate measured layout review. */
     FLASH : ORIGIN = 0x10000000, LENGTH = 512K
 
     /* NSC region: SSRAM-0 S alias at offset 0x3FF000 (near end of 4MB).

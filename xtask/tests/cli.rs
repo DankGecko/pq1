@@ -46,6 +46,20 @@ fn positive_help_alias_prints_subcommand_list_and_exits_success() {
             stdout.contains("pqsigner-xtask"),
             "help alias `{arg}` must self-identify, got: {stdout}",
         );
+        assert!(
+            stdout.contains("secure/data/erc7730-registry/registry")
+                && stdout.contains("secure/data/erc7730-e2e")
+                && stdout.contains("erc7730-known-calls.bloom")
+                && stdout.contains("erc7730-known-calls-e2e.bloom"),
+            "help alias `{arg}` must describe the actual catalogue inputs and outputs, got: {stdout}",
+        );
+        assert!(
+            stdout.contains("validation-only")
+                && stdout.contains("cargo run -p dbgen")
+                && !stdout.contains("--out-root")
+                && !stdout.contains("secure/data/erc7730/*.json"),
+            "help alias `{arg}` must not advertise retired flags or ownership, got: {stdout}",
+        );
     }
 }
 
@@ -193,5 +207,201 @@ fn negative_check_mode_produces_no_stderr_diagnostics() {
     assert!(
         stderr.is_empty(),
         "--check must produce no stderr on the happy path, got: {stderr:?}",
+    );
+}
+
+#[test]
+fn vendor_registry_preserves_dead_only_known_calls_not_just_merkle_leaves() {
+    use dbgen::erc7730::build_db_tolerant;
+
+    let workspace = workspace_root();
+    let temp = tempfile::tempdir().expect("create vendor test directory");
+    let test_root = temp.path();
+    let upstream = test_root.join("upstream");
+    let output = test_root.join("vendored");
+    let registry = upstream.join("registry");
+    let live_dir = registry.join("live");
+    let dead_dir = registry.join("dead-only");
+    let tests_dir = registry.join("tests");
+    std::fs::create_dir_all(&live_dir).expect("create live fixture dir");
+    std::fs::create_dir_all(&dead_dir).expect("create dead fixture dir");
+    std::fs::create_dir_all(&tests_dir).expect("create excluded tests dir");
+    std::fs::create_dir_all(upstream.join("ercs")).expect("create ercs dir");
+
+    std::fs::copy(
+        workspace.join("secure/data/erc7730-e2e/weth.json"),
+        live_dir.join("calldata-live.json"),
+    )
+    .expect("copy accepted control descriptor");
+
+    // These descriptors are syntactically resolvable but intentionally
+    // unrenderable: effectful ABI parameters have no visible fields, so the
+    // completeness gate drops the format while the known-call preflight must
+    // retain its tuple. A broken include is no longer a valid tolerance
+    // witness because include-resolution failure correctly aborts the entire
+    // catalogue before compilation.
+    let dead_descriptor = |address: &str, signature: &str| {
+        format!(
+            r#"{{
+  "context": {{ "contract": {{ "deployments": [
+    {{ "chainId": 1, "address": "{address}" }}
+  ] }} }},
+  "metadata": {{ "owner": "Refused", "contractName": "Refused" }},
+  "display": {{ "formats": {{
+    "{signature}": {{ "intent": "Refused", "fields": [] }}
+  }} }}
+}}"#
+        )
+    };
+    std::fs::write(
+        dead_dir.join("calldata-dead-only.json"),
+        dead_descriptor(
+            "0x00000000000000000000000000000000000000d1",
+            "deadOnly(address target,uint256 amount)",
+        ),
+    )
+    .expect("write dead-only descriptor");
+    std::fs::write(
+        live_dir.join("calldata-dead-sibling.json"),
+        dead_descriptor(
+            "0x00000000000000000000000000000000000000d2",
+            "deadSibling(bytes32 value)",
+        ),
+    )
+    .expect("write dead sibling descriptor");
+    std::fs::write(
+        registry.join("renamed-descriptor.json"),
+        r#"{
+  "context": { "contract": { "deployments": [
+    { "chainId": 1, "address": "0x00000000000000000000000000000000000000d3" }
+  ] } },
+  "metadata": { "owner": "Renamed", "contractName": "Renamed" },
+  "display": { "formats": {
+    "renamed(uint256 value)": { "intent": "Renamed", "fields": [] }
+  } }
+}"#,
+    )
+    .expect("write nonstandard-name descriptor");
+    std::fs::write(upstream.join("ercs/common.json"), "{}\n").expect("write template");
+    std::fs::write(tests_dir.join("ignored.json"), "{}\n").expect("write test fixture");
+    std::fs::write(registry.join("ignored.tests.json"), "{}\n")
+        .expect("write suffix-excluded fixture");
+
+    let policy = workspace.join("secure/data/erc7730/policy.toml");
+    let command = Command::new(bin())
+        .args(["vendor-registry", "--registry-root"])
+        .arg(&upstream)
+        .arg("--out")
+        .arg(&output)
+        .arg("--policy")
+        .arg(&policy)
+        .output()
+        .expect("run vendor-registry");
+    assert!(
+        command.status.success(),
+        "vendor-registry failed:\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&command.stdout),
+        String::from_utf8_lossy(&command.stderr),
+    );
+
+    for relative in [
+        "registry/live/calldata-live.json",
+        "registry/dead-only/calldata-dead-only.json",
+        "registry/live/calldata-dead-sibling.json",
+        "registry/renamed-descriptor.json",
+        "ercs/common.json",
+    ] {
+        assert!(
+            output.join(relative).is_file(),
+            "security-relevant source was not vendored: {relative}"
+        );
+    }
+    assert!(!output.join("registry/tests/ignored.json").exists());
+    assert!(!output.join("registry/ignored.tests.json").exists());
+    let stdout = String::from_utf8_lossy(&command.stdout);
+    assert!(
+        stdout.contains("excluded fixture JSON: 2 files"),
+        "excluded fixture inventory was not receipted: {stdout}"
+    );
+
+    // The marker is an exact machine-owned sentinel, not a hand-maintained
+    // provenance receipt. Stale content must stop a future replacement before
+    // either managed directory moves.
+    let marker = output.join(".pqsigner-erc7730-vendor");
+    std::fs::write(&marker, b"stale hand-maintained receipt\n").unwrap();
+    let stale_marker = Command::new(bin())
+        .args(["vendor-registry", "--registry-root"])
+        .arg(&upstream)
+        .arg("--out")
+        .arg(&output)
+        .arg("--policy")
+        .arg(&policy)
+        .output()
+        .expect("rerun vendor-registry with stale marker");
+    assert!(!stale_marker.status.success());
+    assert!(
+        String::from_utf8_lossy(&stale_marker.stderr).contains("vendor marker content mismatch"),
+        "unexpected stale-marker diagnostic: {}",
+        String::from_utf8_lossy(&stale_marker.stderr)
+    );
+    std::fs::write(
+        &marker,
+        b"PQSigner ERC-7730 tool-managed registry/ and ercs/ directories.\n",
+    )
+    .unwrap();
+
+    let (source, _) = build_db_tolerant(&registry, &policy, Some(&upstream)).expect("source build");
+    let (vendored, _) = build_db_tolerant(&output.join("registry"), &policy, Some(&output))
+        .expect("vendored build");
+    assert_eq!(source.root, vendored.root);
+    assert_eq!(source.blob, vendored.blob);
+    assert_eq!(source.known_call_count, vendored.known_call_count);
+    assert_eq!(source.known_call_set_hash, vendored.known_call_set_hash);
+    assert_eq!(source.known_calls_bloom, vendored.known_calls_bloom);
+    assert_eq!(source.review_text, vendored.review_text);
+
+    // Non-vacuity: removing the dead-only project leaves every accepted leaf
+    // and therefore the Merkle root unchanged, but MUST change the exact
+    // known-call receipt. This is the hole a root-only vendoring check missed.
+    std::fs::remove_file(output.join("registry/dead-only/calldata-dead-only.json"))
+        .expect("remove dead-only fixture from disposable vendored tree");
+    let (pruned, _) =
+        build_db_tolerant(&output.join("registry"), &policy, Some(&output)).expect("pruned build");
+    assert_eq!(source.root, pruned.root, "dead-only source emitted no leaf");
+    assert!(pruned.known_call_count < source.known_call_count);
+    assert_ne!(source.known_call_set_hash, pruned.known_call_set_hash);
+    assert_ne!(source.known_calls_bloom, pruned.known_calls_bloom);
+}
+
+#[cfg(unix)]
+#[test]
+fn vendor_registry_rejects_symlinked_security_corpus_roots_before_build() {
+    use std::os::unix::fs::symlink;
+
+    let workspace = workspace_root();
+    let temp = tempfile::tempdir().expect("create symlink test directory");
+    let test_root = temp.path();
+    let upstream = test_root.join("upstream");
+    let outside = test_root.join("outside");
+    std::fs::create_dir_all(&upstream).unwrap();
+    std::fs::create_dir_all(outside.join("registry")).unwrap();
+    std::fs::create_dir_all(outside.join("ercs")).unwrap();
+    symlink(outside.join("registry"), upstream.join("registry")).unwrap();
+    symlink(outside.join("ercs"), upstream.join("ercs")).unwrap();
+
+    let output = Command::new(bin())
+        .args(["vendor-registry", "--registry-root"])
+        .arg(&upstream)
+        .arg("--out")
+        .arg(test_root.join("vendored"))
+        .arg("--policy")
+        .arg(workspace.join("secure/data/erc7730/policy.toml"))
+        .output()
+        .expect("run vendor-registry");
+    assert!(!output.status.success(), "symlinked source roots must fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("source directory may not be a symlink"),
+        "unexpected diagnostic: {stderr}"
     );
 }

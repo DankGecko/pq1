@@ -57,7 +57,8 @@ Each item below is implemented today (QEMU and/or real STM32U585), partial, or p
 - **Dual secure elements (split entropy)** — BIP-39 entropy is XOR-split: `half_O` on OPTIGA, `half_E` on SE050. Either chip alone reveals zero bits. `E = HKDF(half_O ⊕ half_E)` happens only in S-SRAM during unlock, then zeroized. *(Validated on silicon; both on I2C1 at 0x30 / 0x48.)*
 - **Three-way PIN counter sync** — silicon-monotonic counters on MCU page 124 (FI-hardened pre-commit), OPTIGA E120 LUC bound to F1D0 Execute (immune to PBS extraction), and SE050 silicon UserID. `MAX_ATTEMPTS = 10` on any one dispatches `factory_reset_admin` + page-124 erase; `CMD_GET_REMAINING` returns the min. *(Validated: `make pin-gate-hw-counter-e2e`, `make pin-gate-wipe-e2e`.)*
 - **Three-tier DHUK + BHK + OTP key hierarchy** — Tier 1 (DHUK, `SAES-CMAC(DHUK, label‖counter)`) is **landed** behind `saes-dhuk`. At RDP0 the DHUK is an ST-substituted constant shared across boards (per-die uniqueness only at RDP ≥ 1). Tier 2 (BHK) and the OTP-salt repurpose are planned.
-- **Trusted-display clear-signing** — every signable artifact is decoded and rendered in S-world before confirm, all by **native on-device decoders** (no ZK proof). **Safe** EIP-712 `SafeTx` and **CoW Swap** EIP-712 `GPv2Order` are verified in-world (`secure/src/tx/eip712/{safe,cowswap}/`) and decoded locally. **ERC-20** transfers and CoW order legs render symbol/decimals from a Merkle-verified metadata bundle; **ERC-7730** descriptors (incl. Aave v3) render field-level pages. Unknown shapes (incl. Safe `multiSend` batches) fall, loudly, to blind-sign. *(An earlier Groth16/BLS12-381 ZK clear-sign verifier was retired 2026-06-30 — see `docs/archive/zk-clear-sign-retirement.md`.)*
+- **Trusted-display clear-signing** — every signable artifact is decoded and rendered in S-world before confirm, all by **native on-device decoders** (no ZK proof). **Safe** EIP-712 `SafeTx` and **CoW Swap** EIP-712 `GPv2Order` are verified in-world (`secure/src/tx/eip712/{safe,cowswap}/`) and decoded locally. **ERC-20** transfers and CoW order legs render symbol/decimals from a Merkle-verified metadata bundle; accepted **ERC-7730** descriptors, including supported Aave v3 operations, render field-level pages. Allowlisted `MultiSendCallOnly` DELEGATECALL batches are strictly decoded record-by-record. Only genuinely absent opaque calls/records may reach loud blind pages; registry-known/Bloom-positive calls without valid bound semantics, incomplete Aave descriptors, malformed or prohibited batches, other delegatecalls, and page-budget overflow refuse. *(An earlier Groth16/BLS12-381 ZK clear-sign verifier was retired 2026-06-30 — see `docs/archive/zk-clear-sign-retirement.md`.)*
+  The clear-signing guarantee covers structured on-chain and typed-data dispatch. Explicit EIP-1271 `RAW32` remains a separate `! BLIND RAW32` off-chain tier and must never be used by a companion to downgrade a typed-data request.
 - **Boot-time self-test & measurement** — `hw::hash::init_clock()` runs a `SHA-256("abc")` KAT (halt on mismatch); `make saes-self-test-hw` runs the SAES round-trip + 8-byte DHUK fingerprint. The secure-world image hash is rendered as 8 BIP-39 words on the NV3007 LCD for trustless comparison against `fwmeasure`.
 - **Hardening hooks** — STM32U585 TAMP (Trezor-port; log-only on this branch, production flips to `trigger_lockout_wipe()`), TIM2 CH1 PWM consumption mask (PA5), UI-capture screenshot-hash harness. All feature-gated; CI keeps them out of production.
 - **No heap** — `#![no_std]`, stack-only, no `Vec`/`Box`/`String`. `zeroize` on every secret; `subtle` for constant-time compares; `// SAFETY:` on every `unsafe`.
@@ -120,17 +121,28 @@ sphincs_rust/
 
 See `CLAUDE.md` for the full per-file map and the non-negotiable invariants.
 
-## On-device databases (ERC-20 / names / ERC-7730)
+## Authenticated companion databases
 
-Three embedded read-only DBs ship in **non-secure rodata**, all Merkle-anchored to 32-byte roots pinned in secure flash (`secure/src/db_roots.rs`):
+The full catalogue blobs stay on the host/companion. Secure firmware pins only
+their 32-byte Merkle roots (`secure/src/db_roots.rs`) and verifies every
+companion-supplied lookup bundle before its metadata can reach the display.
 
 | DB | Source | NS artifact | Secure anchor |
 |---|---|---|---|
-| ERC20 metadata | `secure/data/erc20.json` | `nonsecure/src/erc20_db.bin` | `ERC20_DB_ROOT` |
-| Address names | `secure/data/names.json` | `nonsecure/src/names_db.bin` | `NAMES_DB_ROOT` |
-| ERC-7730 descriptors | `secure/data/erc7730/*.json` | `tools/companion-stub/erc7730_db.bin` | `ERC7730_DESCRIPTORS_ROOT` |
+| ERC20 metadata | `secure/data/erc20.json` | `tools/companion-stub/erc20_db.bin` | `ERC20_DB_ROOT` |
+| Address names | `secure/data/names.json` | `tools/companion-stub/names_db.bin` | `NAMES_DB_ROOT` |
+| Function selectors | `secure/data/selectors.json` | `tools/companion-stub/selectors_db.bin` | `SELECTOR_DB_ROOT` |
+| ERC-7730 descriptors | `secure/data/erc7730-registry/{registry,ercs}/**/*.json` + `secure/data/erc7730/policy.toml` | `tools/companion-stub/erc7730_db.bin` | `ERC7730_DESCRIPTORS_ROOT` |
 
-`cargo run -p dbgen` reads the JSON, builds a SHA-256 Merkle tree, appends per-entry proofs, and writes the `.bin` files plus `db_roots.rs`. All generated files are committed so downstream builds don't need the Rust host toolchain. `nonsecure/build.rs` sniffs the magic bytes (`ERC2` / `NAMS`) and fails the build with a "run `cargo run -p dbgen`" message if the JSON drifted from the `.bin`. The trust chain is fully offline: firmware-signing key → root in secure flash → Merkle proof walk → verification. Adding a token or a contract descriptor: edit the JSON, rerun `dbgen`, commit the regenerated files. *(A ZK-VK DB lived here for the Groth16 clear-sign path; it was removed when that path was retired — see `docs/archive/zk-clear-sign-retirement.md`.)*
+`cargo run -p dbgen` reads the pinned inputs, builds the SHA-256 Merkle trees,
+appends per-entry proofs, and writes the `.bin` files plus `db_roots.rs`. All
+generated files are committed. `nonsecure/build.rs` checks the small E2E blobs
+used by the QEMU companion stub; production firmware embeds no catalogue blob.
+The trust chain is fully offline: firmware-signing key → root in secure flash →
+Merkle proof walk → verification. Catalogue changes must go through the pinned
+vendor/install workflow, regenerate with `dbgen`, and pass `make check-codegen`.
+*(A ZK-VK DB lived here for the retired Groth16 path; it no longer exists — see
+`docs/archive/zk-clear-sign-retirement.md`.)*
 
 ## Cryptographic Primitives
 
@@ -483,7 +495,7 @@ separately authorizes named sacrificial hardware.
 
 Start with this README → `docs/STATUS.md` (the security/verification frontier — what is done, what is open, and why, with an evidence pointer per row) → `CLAUDE.md` (invariants, file map, conventions) → `docs/work-todo.md` (backlog) → the subsystem doc for your task.
 
-- **Architecture / hardening:** `docs/architecture/architecture.md`, `docs/security/HARDENING.md`, `docs/security/threat-model.md`, `docs/security/production-security.md`, `docs/security/brownout-hardening.md`
+- **Architecture / hardening:** `CLAUDE.md`, `docs/security/HARDENING.md`, `docs/security/threat-model.md`, `docs/security/production-security.md`, `docs/security/brownout-hardening.md`. `docs/architecture/architecture.md` is a current index; the retired ZK architecture lives only under `docs/archive/`.
 - **Secure elements:** `docs/secure-elements/se050-userid-pin-auth.md`, `docs/secure-elements/se050-factory-reset.md`, `docs/secure-elements/optiga-bringup-status.md`, `docs/secure-elements/OPTIGATRUSTM/*.md`
 - **Firmware / builds:** `docs/firmware/firmware-update.md`, `docs/firmware/reproducible-builds.md`
 - **Wallet / clear-signing:** `CLAUDE.md` (§Wire formats + §Recovery / Key derivation — the authoritative wallet design), `contracts/smart-wallet/` (the ERC-4337 v0.6 account + Yul C10 verifier), `docs/companion/companion-app-integration.md`, `docs/companion/erc7730-integration.md`, `docs/companion/erc8213-fingerprints.md`. *(Historical design notes: `docs/archive/pq-aa-wallet-design.md`, `docs/archive/m4-cowswap-eip712.md`.)*

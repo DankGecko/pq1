@@ -8,6 +8,7 @@
   {"chain_id": 1, "address": "0x111111111117dC0aa78b770fA6A738034120C302", "name": "1INCH Token", "symbol": "1INCH", "decimals": 18},
   {"chain_id": 1, "address": "0x18084fbA666a33d37592fA2633fD49a74DD93a88", "name": "tBTC v2", "symbol": "tBTC", "decimals": 18},
   {"chain_id": 1, "address": "0x1aBaEA1f7C830bD89Acc67eC4af516284b1bC33c", "name": "Euro Coin", "symbol": "EURC", "decimals": 6},
+  {"chain_id": 1, "address": "0x1CDD2EaB61112697626F7b4bB0e23Da4FeBF7B7C", "name": "USDT", "symbol": "USDT", "decimals": 6},
   {"chain_id": 1, "address": "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984", "name": "Uniswap", "symbol": "UNI", "decimals": 18},
   {"chain_id": 1, "address": "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599", "name": "Wrapped BTC", "symbol": "WBTC", "decimals": 8},
   {"chain_id": 1, "address": "0x226bb599a12C826476e3A771454697EA52E9E220", "name": "Propy", "symbol": "PRO", "decimals": 8},

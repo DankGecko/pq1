@@ -1,0 +1,45 @@
+{
+  "$schema": "../../specs/erc7730-v2.schema.json",
+  "context": {
+    "eip712": {
+      "deployments": [
+        {
+          "chainId": 11155111,
+          "address": "0x0000000000000000000000000000000000007730"
+        }
+      ],
+      "domain": {
+        "name": "PQSigner E2E",
+        "version": "1"
+      }
+    }
+  },
+  "metadata": {
+    "owner": "PQSigner",
+    "contractName": "E2E Delegate"
+  },
+  "display": {
+    "formats": {
+      "Delegation(address delegatee,uint256 nonce,uint256 expiry)": {
+        "intent": "Delegate",
+        "fields": [
+          {
+            "path": "delegatee",
+            "label": "Delegatee",
+            "format": "addressName"
+          },
+          {
+            "path": "nonce",
+            "label": "Nonce",
+            "format": "raw"
+          },
+          {
+            "path": "expiry",
+            "label": "Expiry",
+            "format": "raw"
+          }
+        ]
+      }
+    }
+  }
+}

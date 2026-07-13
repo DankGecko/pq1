@@ -16,7 +16,7 @@ Every build picks at most one option from each axis (except *Accelerators*, whic
 | **Secure element** | `secure-element-mock` · `-optiga` · `-se050` · `-tropic01` · `-dual` (`= ["dual-se"]` ⇒ OPTIGA + SE050) | Pick one at the top level. `dual` is what ships. |
 | **UI** | `ui-mode-semihosting` · `-oled` · `-noop` · `-mirror` · `-capture` | Mutually exclusive backends. `-mirror`/`-capture` compose on top of `-oled`/`-noop`. |
 | **Mode** | `mode-production` · `-bringup` (=`debug-log`) · `-e2e` (=`debug-log,e2e-test`) · `-bench` | Development profile. |
-| **Accelerators** | `accel-pka` · `-tamp` · `-consumption-mask` · `-saes-dhuk` | Compose freely. |
+| **Hardening / accelerators** | `tamp` · `consumption-mask` · `saes-dhuk` | Compose freely. |
 
 ---
 
@@ -102,7 +102,7 @@ Live source: `secure/Cargo.toml` (each feature has an inline `#`-comment). The h
 - **Backend mutex (pick one at the top level):** `mock-se` · `optiga-trust-m` · `se050` · `tropic01-se` · `dual-se` (= `optiga-trust-m + se050`).
 - **Platform:** `stm32u585` (real HW, implies `hw-sha256`) vs. nothing (QEMU `mps2-an505`).
 - **UI:** `ui-semihosting` · `ui-oled` · `ui-noop` (silent for headless USB) · `ui-mirror` (RTT framebuffer stream) · `ui-capture` (per-frame SHA-256).
-- **Hardening / accelerators (compose):** `saes-dhuk` (Tier-1 DHUK-SAES KDF) · `saes-self-test` · `tamp` (currently log-only) · `consumption-mask` (TIM2 PWM PA5) · `pka-accel` · `bhk` (Tier-2 BHK lifecycle on flash page 126).
+- **Hardening / accelerators (compose):** `saes-dhuk` (Tier-1 DHUK-SAES KDF) · `saes-self-test` · `tamp` (currently log-only) · `consumption-mask` (TIM2 PWM PA5) · `bhk` (Tier-2 BHK lifecycle on flash page 126).
 - **OPTIGA-specific:** `optiga-hw-counter` (E120 LUC bound to F1D0) · `optiga-lock-operational` (irreversible LcsO bump — production only) · `optiga-no-shield` (dev only).
 - **SE050-specific:** `se050-derived-scp03` (Stage A of #20 — derived SCP03 keys with probe-on-boot fallback) · `se050-rotate-scp03` (Stage B — the irreversible PUT KEY ceremony build, fenced) · `se050-factory-reset` · `se050-reset-e2e` · `se050-admin-wipe-e2e` · `se050-admin-extract-attempt-e2e` · `se050-crash-safety-e2e`.
 - **TROPIC01-specific:** `tropic01-se`.

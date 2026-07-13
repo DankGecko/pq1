@@ -333,7 +333,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // ── 5. Parse optional trailers ─────────────────────────────────
     //
     // Three independently-optional length-prefixed trailers (ERC-20
-    // bundle, v1 ZK clear-sign, v3 CoW EIP-712), followed by the
+    // bundle, reserved compatibility slot, native CoW EIP-712), followed by the
     // address-name bundles section. Each uses the same
     // `[u16 BE len][payload]` framing, delegated to the `trailer`
     // helper so bounds-checking and error-label routing stay
@@ -352,23 +352,21 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     };
     cursor = erc20.next_cursor;
 
-    // Retired ZK (Groth16) clear-sign slot. The Groth16 verifier was
-    // removed (Aave clear-signing moved to the native ERC-7730 path);
-    // the 2-byte length field is kept reserved for wire-offset stability
-    // of the trailers that follow. `max_len = 0` makes the read
-    // fail-closed: a non-zero declared length is rejected, and no proof
-    // bytes are ever parsed.
-    let zk_reserved = match super::trailer::read_optional_u16_prefixed(
+    // Reserved compatibility slot. The 2-byte length field is kept for
+    // wire-offset stability of the trailers that follow. `max_len = 0`
+    // makes the read fail-closed: a non-zero declared length is rejected,
+    // and no payload bytes are ever parsed.
+    let reserved_v1 = match super::trailer::read_optional_u16_prefixed(
         snap,
         cursor,
         total_len,
         0,
-        "zk slot retired (must be 0)",
+        "reserved slot must be 0",
     ) {
         Ok(t) => t,
         Err(s) => return s,
     };
-    cursor = zk_reserved.next_cursor;
+    cursor = reserved_v1.next_cursor;
 
     // CoW order trailer: canonical(204) [|| sell_len(2) || sell_bundle
     // || buy_len(2) || buy_bundle]. Companion sends the whole trailer;
@@ -381,7 +379,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // OLED distinguishes the two failure modes (oversized declared
     // length vs. declared length overflowing the payload) — makes
     // companion-vs-NS-router layout disagreements trivial to triage.
-    let zk_v3 = if cursor + 2 > total_len {
+    let cow_order = if cursor + 2 > total_len {
         super::trailer::Trailer {
             start: cursor,
             len: 0,
@@ -394,14 +392,14 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             // Dump four values across the 4-line OLED:
             //   line 1: "Sign v3 len>cap"
             //   line 2: "d=XXXX (data_len)"
-            //   line 3: "e=XXXX z=XXXX   "   (erc20 + v1 zk declared len)
+            //   line 3: "e=XXXX r=XXXX   "   (erc20 + reserved declared len)
             //   line 4: "v3=XXXX        "
             // Expected happy values for a CoW swap on Base:
-            //   d=00a4 (164), e=0000, z=0000, v3=0790 (or 02cc bare).
+            //   d=00a4 (164), e=0000, r=0000, v3=0790 (or 02cc bare).
             const HEX: &[u8] = b"0123456789abcdef";
             let d = data_len as u16;
             let e = erc20.len as u16;
-            let z = zk_reserved.len as u16;
+            let r = reserved_v1.len as u16;
             let v = declared as u16;
 
             let mut line2 = [b' '; 16];
@@ -419,12 +417,12 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             line3[3] = HEX[((e >> 8) & 0xF) as usize];
             line3[4] = HEX[((e >> 4) & 0xF) as usize];
             line3[5] = HEX[(e & 0xF) as usize];
-            line3[7] = b'z';
+            line3[7] = b'r';
             line3[8] = b'=';
-            line3[9] = HEX[((z >> 12) & 0xF) as usize];
-            line3[10] = HEX[((z >> 8) & 0xF) as usize];
-            line3[11] = HEX[((z >> 4) & 0xF) as usize];
-            line3[12] = HEX[(z & 0xF) as usize];
+            line3[9] = HEX[((r >> 12) & 0xF) as usize];
+            line3[10] = HEX[((r >> 8) & 0xF) as usize];
+            line3[11] = HEX[((r >> 4) & 0xF) as usize];
+            line3[12] = HEX[(r & 0xF) as usize];
 
             let mut line4 = [b' '; 16];
             line4[0] = b'v';
@@ -454,7 +452,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             next_cursor: payload_start + declared,
         }
     };
-    cursor = zk_v3.next_cursor;
+    cursor = cow_order.next_cursor;
 
     // 5a-bis. Optional Safe-multisig `approveHash` clear-sign trailer
     // (`safe_v1`). Layout: canonical(281) || u16 raw_data_len ||
@@ -823,10 +821,10 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // Computing it here would force the disjuncts to run before the Safe
     // verdicts exist.
 
-    // 7b. (retired) v1 ZK clear-sign. The Groth16 path was removed —
+    // 7b. Reserved compatibility slot. The former verifier was removed —
     // Aave clear-signing now flows through the native ERC-7730 verifier
     // (§7c-quinquies / `erc7730_verified`). The wire slot is parsed as a
-    // reserved zero-length field above (`zk_reserved`).
+    // reserved zero-length field above (`reserved_v1`).
 
     // 7c. `safe_v1` Safe-multisig `approveHash` cross-check —
     // 8-step all-native pipeline (length → selector → calldata len →
@@ -838,7 +836,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // Runs BEFORE the v3 CoW verify (7c-ter): a Safe-wrapped CoW
     // presign anchors the v3 binding to the SafeTx's inner raw_data and
     // to the Safe's address, so the CoW verify needs the verified Safe
-    // context first. Nothing in between reads `zk_v3_verified`.
+    // context first. Nothing in between reads `cow_order_verified`.
     let safe_v1_verified = if safe_v1.len > 0 {
         let v = crate::tx::eip712::safe::verify_and_bind_trailer(
             &snap[safe_v1.start..safe_v1.start + safe_v1.len],
@@ -890,101 +888,29 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         None
     };
 
-    // 7c-bis-erc20. ERC-20 bundle → display metadata (deferred from §7a).
+    // 7c-bis-erc20. ERC-20 bundle → authenticated display metadata
+    // (deferred from §7a).
     //
-    // Merkle-verified token metadata, cross-checked against the tx's
-    // chain_id + the address it is meant to label. Accepted attributions:
-    //   (a) the outer tx `to_address` — a DIRECT ERC-20 call: the wallet
-    //       is `msg.sender` and `tx.to` IS the token contract;
-    //   (b) the inner SafeTx target decoded from a *verified*
-    //       `execTransaction` (Safe-wrapped ERC-20 — outer `to_address`
-    //       is the Safe, the bundle labels the token the Safe will call);
-    //   (c) a multiSend RECORD inside a *verified* Safe context targets
-    //       the token (the Safe-UI batches e.g. `[approve(USDC),
-    //       setPreSignature]` through MultiSendCallOnly).
-    //
-    // Defence in depth (audit 2026-06-28 — `v1_ms` mis-attribution): the
-    // Safe-flow disjuncts (b)/(c) are gated on the corresponding Safe
-    // context having ACTUALLY VERIFIED (`safe_exec_verified` /
-    // `safe_v1_verified` is `Some`), not on raw companion trailer bytes.
-    // Previously `v1_ms` matched a token referenced by an *unverified*
-    // `safe_v1` trailer, which — on the direct render path — let a
-    // transfer to token Y be labelled with token T's name/symbol/decimals.
-    // The renderer ALSO re-checks `meta.contract == tx.to` on the direct
-    // branch (`display::pick_sign_pages_inner`); both layers must be
-    // defeated for a single fault to mis-attribute.
-    let verified_meta: Option<Erc20Metadata<'_>> = if erc20.len > 0 {
+    // This layer proves only the Merkle leaf and chain. Surface-specific
+    // attribution happens after dispatch against signed facts: outer target
+    // for a direct ERC-20 call, descriptor-resolved tokenPath for ERC-7730,
+    // or a verified Safe direct/MultiSend target. Keeping that decision out of
+    // raw trailer routing both closes RT-ERC20-01 and preserves legitimate
+    // metadata for direct protocol calls such as `deposit(asset, amount)`.
+    let chain_verified_meta: Option<Erc20Metadata<'_>> = if erc20.len > 0 {
         let bundle_slice = &snap[erc20.start..erc20.start + erc20.len];
         match verify_erc20_bundle(bundle_slice) {
-            Some(meta) => {
-                let outer_to_match = match tx_for_display.to {
-                    Some(addr) => addr == meta.contract,
-                    None => false,
-                };
-                // (b) inner SafeTx target — only when the exec context
-                //     verified (else the decoded `inner_to` is unauthent-
-                //     icated companion bytes).
-                let safe_exec_inner_match = safe_exec_verified.is_some()
-                    && inner_data.len() >= EXEC_TRANSACTION_MIN_CALLDATA_LEN
-                    && inner_data[..4] == EXEC_TRANSACTION_SELECTOR
-                    && inner_data[4..16].iter().all(|&b| b == 0)
-                    && {
-                        let mut inner_to = [0u8; 20];
-                        inner_to.copy_from_slice(&inner_data[16..36]);
-                        inner_to == meta.contract
-                    };
-                // (c) a multiSend RECORD targets the token — only inside a
-                //     VERIFIED Safe context. `any_record_to_matches`
-                //     returns false for anything that isn't a well-formed
-                //     multiSend; the renderer re-matches per record before
-                //     applying the label.
-                let msend_record_match = {
-                    let exec_ms = safe_exec_verified.is_some()
-                        && inner_data.len() >= 4
-                        && inner_data[..4] == EXEC_TRANSACTION_SELECTOR
-                        && crate::tx::eip712::safe::exec_decode::decode_exec_transaction(
-                            inner_data,
-                        )
-                        .map(|d| {
-                            crate::tx::eip712::safe::multi_send::any_record_to_matches(
-                                d.data,
-                                &meta.contract,
-                            )
-                        })
-                        .unwrap_or(false);
-                    let v1_ms = safe_v1_verified.is_some()
-                        && safe_v1.len >= sphincs_tz_shared::SAFE_V1_CANONICAL_LEN + 2
-                        && {
-                            let b = &snap[safe_v1.start..safe_v1.start + safe_v1.len];
-                            let raw_len = u16::from_be_bytes([
-                                b[sphincs_tz_shared::SAFE_V1_CANONICAL_LEN],
-                                b[sphincs_tz_shared::SAFE_V1_CANONICAL_LEN + 1],
-                            ]) as usize;
-                            let start = sphincs_tz_shared::SAFE_V1_CANONICAL_LEN + 2;
-                            start.checked_add(raw_len).is_some_and(|end| end <= b.len())
-                                && crate::tx::eip712::safe::multi_send::any_record_to_matches(
-                                    &b[start..start + raw_len],
-                                    &meta.contract,
-                                )
-                        };
-                    exec_ms || v1_ms
-                };
-                if meta.chain_id == chain_id
-                    && (outer_to_match || safe_exec_inner_match || msend_record_match)
-                {
-                    Some(meta)
-                } else {
-                    None
-                }
-            }
+            Some(meta) if meta.chain_id == chain_id => Some(meta),
             None => None,
+            Some(_) => None,
         }
     } else {
         None
     };
 
-    // 7c-ter. v3 CoW EIP-712 — 5-step pipeline (Groth16 + H_root pin →
-    // sentinel + chain → length → shape → cross-check). Returns
+    // 7c-ter. Native CoW EIP-712 pipeline: canonical decode, chain/shape
+    // checks, orderUid cross-check, and optional Merkle-verified token
+    // metadata for each leg. Returns
     // `None` on any failure; no partial-success fallback. See
     // `tx::eip712::cowswap::verify_and_bind_trailer` for specifics.
     //
@@ -1001,15 +927,15 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         safe_v1_verified.as_ref(),
         safe_exec_verified.as_ref(),
     );
-    let zk_v3_verified = if zk_v3.len > 0 {
+    let cow_order_verified = if cow_order.len > 0 {
         let v = crate::tx::eip712::cowswap::verify_and_bind_trailer(
-            &snap[zk_v3.start..zk_v3.start + zk_v3.len],
+            &snap[cow_order.start..cow_order.start + cow_order.len],
             cow_bind.calldata,
             chain_id,
             &cow_bind.owner,
         );
         // FI-hardened verdict: same sentinel double-eval as the safe_v1
-        // bind above and the batch dispatcher's ZK_V3 arm (this call
+        // bind above and the batch dispatcher's COW_ORDER arm (this call
         // site historically lacked the envelope — closed for parity).
         // Fail closed to `None`.
         let ok = v.is_some();
@@ -1095,7 +1021,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // require v3 verification. No fallback.
     let cow_selector = inner_data.len() >= 4 && &inner_data[..4] == SET_PRE_SIGNATURE_SELECTOR;
     let cow_target = to_address == GPV2_SETTLEMENT_ADDRESS;
-    if cow_selector && cow_target && zk_v3_verified.is_none() {
+    if cow_selector && cow_target && cow_order_verified.is_none() {
         ui::show_status("CoW sign", "v3 required");
         return NscStatus::InvalidPointer as u32;
     }
@@ -1109,7 +1035,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // display might confirm it anyway. Same failure mode covers
     // malformed presign calldata and `signed == false` (revocation is
     // unsupported, exactly like the direct path).
-    if cow_bind.via_safe && zk_v3_verified.is_none() {
+    if cow_bind.via_safe && cow_order_verified.is_none() {
         ui::show_status("CoW sign", "v3 required");
         return NscStatus::InvalidPointer as u32;
     }
@@ -1126,7 +1052,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // A legitimate direct presign always targets GPv2, so this never refuses
     // a well-formed CoW UserOp.
     if !crate::tx::eip712::safe::direct_cow_target_ok(
-        zk_v3_verified.is_some(),
+        cow_order_verified.is_some(),
         cow_bind.via_safe,
         &to_address,
     ) {
@@ -1193,7 +1119,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         match crate::tx::display::multisend_sign_gate(
             safe_v1_verified.as_ref(),
             safe_exec_verified.as_ref(),
-            zk_v3_verified.as_ref(),
+            cow_order_verified.as_ref(),
             reserved,
         ) {
             crate::tx::display::MultisendGate::Reject(reason) => {
@@ -1230,11 +1156,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
 
     // ── 8. Render + confirm ────────────────────────────────────────
     //
-    // The priority ladder (v3 → v1 → value/ERC-20/blind-sign) lives in
-    // `display::pick_sign_pages`. Ordering is load-bearing: v3 beats
-    // v1 so a CoW setPreSig that satisfied both circuits renders the
-    // 8-page order, not the weaker string. The gate above made this
-    // the only legal outcome for CoW setPreSig already.
+    // The priority ladder (CoW → Safe → ERC-7730 → known-call refusal →
+    // value/ERC-20/typed/blind) lives in `display::pick_sign_pages`.
     //
     // Slot rotation is its own affirmative-consent step: when
     // `FLAG_REGISTER_SLOT` is set the firmware also emits a Type 1
@@ -1292,11 +1215,11 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     let mut pages = match pick_sign_pages(
         &tx_for_display,
         inner_data,
-        zk_v3_verified.as_ref(),
+        cow_order_verified.as_ref(),
         safe_v1_verified.as_ref(),
         safe_exec_verified.as_ref(),
         erc7730_verified.as_ref(),
-        verified_meta.as_ref(),
+        chain_verified_meta.as_ref(),
         selector_verified.as_ref(),
         &resolver,
     ) {

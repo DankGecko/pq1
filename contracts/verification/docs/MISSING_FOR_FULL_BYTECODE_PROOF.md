@@ -7,7 +7,7 @@ mathematically proven to the deployed bytecode." It is the master
 checklist; the per-topic detail lives in
 [`THE_CLAIM.md`](THE_CLAIM.md), [`A3_1_VERIFIER_GAP.md`](A3_1_VERIFIER_GAP.md),
 [`TRUST_ASSUMPTIONS.md`](TRUST_ASSUMPTIONS.md), and
-[`PATH_TO_VERIFIED_BYTECODE.md`](PATH_TO_VERIFIED_BYTECODE.md).
+[`A3_1_CLOSURE_PATH.md`](A3_1_CLOSURE_PATH.md).
 
 Each gap has: **what** is unproven, **why** it is open, **what closes it**,
 and a rough **cost/dependency**. Gaps are ordered by how badly they block the
@@ -76,7 +76,7 @@ was repaired 2026-06-12.) The gaps below enumerate the delta.
   KEVM, which can reason about concrete SHA-256 along reachable paths) **or**
   **verified compilation** (Verity — write the verifier in the Lean EDSL and
   carry a machine-checked Lean→Yul lowering proof; see
-  `PATH_TO_VERIFIED_BYTECODE.md`).
+  `A3_1_CLOSURE_PATH.md`).
 - **Cost/dependency:** large, separate engagement; depends on GAP-1 for the
   faithful spec to compare against. Even Verity stops at Yul (leaves GAP-5).
 

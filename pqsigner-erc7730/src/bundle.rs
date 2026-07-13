@@ -74,6 +74,10 @@ pub enum BundleError {
     DepthCap,
     /// `ir_len` exceeds `MAX_IR_LEN`.
     IrLenCap,
+    /// `leaf_index` is outside the firmware-pinned real catalogue length.
+    /// This rejects duplicate-tail padding positions that authenticate the
+    /// same final leaf but are not canonical descriptor indices.
+    LeafIndexCap,
 }
 
 impl From<IrError> for BundleError {
@@ -97,6 +101,30 @@ pub fn verify_erc7730_bundle<'a>(
     bundle: &'a [u8],
     root: &[u8; 32],
 ) -> Result<VerifiedDescriptor<'a>, BundleError> {
+    verify_erc7730_bundle_inner(bundle, root, None)
+}
+
+/// Verify a bundle and require `leaf_index < leaf_count`.
+///
+/// Merkle trees duplicate their final leaf to reach a power-of-two width. A
+/// root alone therefore cannot distinguish the real final index from padded
+/// positions carrying byte-identical IR. Firmware uses this entry point with
+/// the count generated alongside the root and co-signed in the firmware image,
+/// so proofs have one canonical index without changing the wire format or
+/// Merkle root.
+pub fn verify_erc7730_bundle_with_leaf_count<'a>(
+    bundle: &'a [u8],
+    root: &[u8; 32],
+    leaf_count: usize,
+) -> Result<VerifiedDescriptor<'a>, BundleError> {
+    verify_erc7730_bundle_inner(bundle, root, Some(leaf_count))
+}
+
+fn verify_erc7730_bundle_inner<'a>(
+    bundle: &'a [u8],
+    root: &[u8; 32],
+    leaf_count: Option<usize>,
+) -> Result<VerifiedDescriptor<'a>, BundleError> {
     if bundle.len() < 2 {
         return Err(BundleError::Truncated);
     }
@@ -118,6 +146,9 @@ pub fn verify_erc7730_bundle<'a>(
             .map_err(|_| BundleError::Truncated)?,
     ) as usize;
     off += 4;
+    if leaf_count.is_some_and(|count| leaf_index >= count) {
+        return Err(BundleError::LeafIndexCap);
+    }
 
     let proof_depth = u32::from_be_bytes(
         bundle[off..off + 4]
@@ -298,5 +329,50 @@ mod tests {
 
         let v1 = verify_erc7730_bundle(&bundle1, &root).unwrap();
         assert_eq!(v1.ir.contract, [0x20; 20]);
+    }
+
+    #[test]
+    fn pinned_leaf_count_rejects_duplicate_tail_padding_index() {
+        fn node_hash(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
+            let mut hasher = Sha256::new();
+            hasher.update([0x01u8]);
+            hasher.update(left);
+            hasher.update(right);
+            hasher.finalize().into()
+        }
+
+        // Three real leaves pad to [L0, L1, L2, L2]. Indices 2 and 3 can
+        // therefore authenticate the same L2 bytes against the same root.
+        let ir0 = minimal_ir(1, [0x10; 20]);
+        let ir1 = minimal_ir(1, [0x20; 20]);
+        let ir2 = minimal_ir(1, [0x30; 20]);
+        let l0 = leaf_hash(&ir0);
+        let l1 = leaf_hash(&ir1);
+        let l2 = leaf_hash(&ir2);
+        let left_parent = node_hash(&l0, &l1);
+        let right_parent = node_hash(&l2, &l2);
+        let root = node_hash(&left_parent, &right_parent);
+
+        let bundle_for = |index: u32| {
+            let mut bundle = std::vec::Vec::new();
+            bundle.extend_from_slice(&(ir2.len() as u16).to_be_bytes());
+            bundle.extend_from_slice(&ir2);
+            bundle.extend_from_slice(&index.to_be_bytes());
+            bundle.extend_from_slice(&2u32.to_be_bytes());
+            bundle.extend_from_slice(&l2);
+            bundle.extend_from_slice(&left_parent);
+            bundle
+        };
+
+        let canonical = bundle_for(2);
+        let padded_alias = bundle_for(3);
+        assert!(verify_erc7730_bundle_with_leaf_count(&canonical, &root, 3).is_ok());
+        assert_eq!(
+            verify_erc7730_bundle_with_leaf_count(&padded_alias, &root, 3),
+            Err(BundleError::LeafIndexCap)
+        );
+        // The root-only host API intentionally remains compatible and shows
+        // why firmware must supply the generated catalogue count.
+        assert!(verify_erc7730_bundle(&padded_alias, &root).is_ok());
     }
 }

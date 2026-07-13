@@ -254,7 +254,7 @@ fn negative_sig_wrapper_two_calls_produce_identical_output() {
 // 3. Positive: `read_optional_u16_prefixed` (trailer.rs)
 //
 // Optional `[u16 BE len][payload]` parser shared by every trailer site
-// in `cmd_sign_userop.rs` (ERC-20 / ZK v1 / Safe / selector / self-
+// in `cmd_sign_userop.rs` (ERC-20 / reserved slot / Safe / selector / self-
 // attest). Absence is legal at end-of-buffer.
 // ─────────────────────────────────────────────────────────────────────
 
@@ -1034,7 +1034,7 @@ fn negative_slice_binds_sender_before_confirm_sign_or_counter_write() {
         .find("super::cmd_get_wallet_address::bind_userop_sender(")
         .expect("single-sign sender binding must remain present");
     let trusted_shadow = CMD_SIGN_USEROP_SRC[gate..]
-        .find("let sender = unsafe {")
+        .find("let sender =")
         .map(|p| gate + p)
         .expect("single-sign path must replace the companion sender");
 
@@ -1114,7 +1114,7 @@ fn negative_slice_binds_sender_before_confirm_sign_or_counter_write() {
     assert!(before_call.contains("SenderBinding::fail_closed()"));
     assert!(before_call.contains("core::ptr::write_volatile("));
     assert!(CMD_SIGN_USEROP_SRC[gate..].contains("SENDER_BIND_CFI_EXPECTED"));
-    assert!(CMD_SIGN_USEROP_SRC[gate..].contains("let sender_check = unsafe"));
+    assert!(CMD_SIGN_USEROP_SRC[gate..].contains("let sender_check ="));
     assert!(CMD_SIGN_USEROP_SRC[gate..].contains("sender_reads_agree"));
 }
 
@@ -1125,9 +1125,11 @@ fn negative_slice_every_userop_confirm_gets_bound_from_page() {
         2,
         "slot-rotation and transaction confirms must each show source identity"
     );
-    assert!(CMD_SIGN_USEROP_SRC.contains(
-        "enforce_from_page(\n            &mut rotate_pages,\n            account_index,\n            &sender,"
-    ));
+    let compact = CMD_SIGN_USEROP_SRC
+        .split_whitespace()
+        .collect::<String>()
+        .replace(",)", ")");
+    assert!(compact.contains("enforce_from_page(&mutrotate_pages,account_index,&sender)"));
     assert!(CMD_SIGN_USEROP_SRC.contains(
         "enforce_from_page(&mut pages, account_index, &sender)"
     ));
@@ -1226,7 +1228,7 @@ fn negative_slice_pins_cow_downgrade_mitigation_gate() {
     // orderUid they never saw the contents of.
     assert!(CMD_SIGN_USEROP_SRC.contains("SET_PRE_SIGNATURE_SELECTOR"));
     assert!(CMD_SIGN_USEROP_SRC.contains("GPV2_SETTLEMENT_ADDRESS"));
-    assert!(CMD_SIGN_USEROP_SRC.contains("zk_v3_verified.is_none()"));
+    assert!(CMD_SIGN_USEROP_SRC.contains("cow_order_verified.is_none()"));
 }
 
 #[test]

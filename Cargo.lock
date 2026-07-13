@@ -699,6 +699,7 @@ dependencies = [
 name = "fwmeasure"
 version = "0.1.0"
 dependencies = [
+ "fw-manifest",
  "object",
  "sha2",
  "sphincs-tz-bip39",
@@ -713,6 +714,7 @@ dependencies = [
  "chacha20poly1305",
  "clap",
  "fw-manifest",
+ "fwmeasure",
  "hex",
  "object",
  "rand_core 0.6.4",
@@ -1226,6 +1228,9 @@ dependencies = [
 [[package]]
 name = "pqsigner-fsbl-tests"
 version = "0.1.0"
+dependencies = [
+ "tempfile",
+]
 
 [[package]]
 name = "pqsigner-hal"
@@ -1281,6 +1286,9 @@ dependencies = [
  "dbgen",
  "hex",
  "pqsigner-proto",
+ "serde_json",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]

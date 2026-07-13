@@ -17,45 +17,25 @@
 //!
 //! The firmware-update subsystem places each A/B slot at a different
 //! base address. When measuring a release artifact destined for a
-//! specific slot, pass `--flash-base=<hex>` to override the computed
-//! base (the default uses the lowest `p_paddr` of the ELF's LOAD
-//! segments, which is correct for the whole-firmware measurement but
-//! not for per-slot measurement). Optional `--flash-end=<hex>`
-//! overrides the measurement end — useful when the ELF was linked
-//! at a different base than it will ultimately land.
+//! specific slot, pass `--flash-base=<hex>` / `--flash-end=<hex>` to
+//! override the enclosing measurement window. Overrides are strict:
+//! every non-empty `PT_LOAD` must still fit wholly inside that window.
 
-use object::elf::PT_LOAD;
-use object::read::elf::{ElfFile32, ProgramHeader};
-use object::{LittleEndian, Object, ObjectSymbol};
-use sha2::{Digest, Sha256};
+#[cfg(test)]
+use fwmeasure::MAX_FLASH_SIZE;
+use fwmeasure::{flatten_elf_with_overrides, LayoutOverrides};
 use sphincs_tz_bip39::{hash_to_word_indices, WORDLIST};
 use std::fmt::Display;
-use std::{env, fs, process};
+use std::{env, process};
 
-/// Maximum plausible flash region (2 MB). Used to sanity-check
-/// `__veneer_limit` — if it's beyond this offset from flash base,
-/// it's in a different memory region (e.g. QEMU NSC at 0x103FF000).
-const MAX_FLASH_SIZE: u64 = 2 * 1024 * 1024;
-
-const USAGE: &str = "Usage: fwmeasure <firmware.elf> [--flash-base=0xHEX] [--flash-end=0xHEX]";
+const USAGE: &str = "Usage: fwmeasure <firmware.elf> [--flash-base=0xHEX] [--flash-end=0xHEX] [--require-secure-slot]";
 
 /// Parsed command-line arguments.
 struct Args {
     elf_path: String,
     flash_base_override: Option<u64>,
     flash_end_override: Option<u64>,
-}
-
-/// Resolved flash region for this measurement.
-struct FlashLayout {
-    base: u64,
-    end: u64,
-}
-
-impl FlashLayout {
-    fn size(&self) -> usize {
-        (self.end - self.base) as usize
-    }
+    require_secure_slot: bool,
 }
 
 fn die(msg: impl Display) -> ! {
@@ -67,12 +47,15 @@ fn parse_args() -> Args {
     let mut elf_path: Option<String> = None;
     let mut flash_base_override: Option<u64> = None;
     let mut flash_end_override: Option<u64> = None;
+    let mut require_secure_slot = false;
 
     for arg in env::args().skip(1) {
         if let Some(rest) = arg.strip_prefix("--flash-base=") {
             flash_base_override = Some(parse_hex(rest));
         } else if let Some(rest) = arg.strip_prefix("--flash-end=") {
             flash_end_override = Some(parse_hex(rest));
+        } else if arg == "--require-secure-slot" {
+            require_secure_slot = true;
         } else if let Some(prev) = elf_path.as_deref() {
             die(format_args!("Multiple ELF paths: {prev:?} and {arg:?}"));
         } else {
@@ -84,6 +67,7 @@ fn parse_args() -> Args {
         elf_path: elf_path.unwrap_or_else(|| die(USAGE)),
         flash_base_override,
         flash_end_override,
+        require_secure_slot,
     }
 }
 
@@ -91,83 +75,6 @@ fn parse_hex(s: &str) -> u64 {
     let cleaned = s.trim_start_matches("0x").replace('_', "");
     u64::from_str_radix(&cleaned, 16)
         .unwrap_or_else(|e| die(format_args!("Cannot parse hex address {s:?}: {e}")))
-}
-
-fn require_symbol(elf: &ElfFile32<LittleEndian>, name: &str) -> u64 {
-    find_symbol(elf, name).unwrap_or_else(|| die(format_args!("ELF missing {name} symbol")))
-}
-
-fn find_symbol(elf: &ElfFile32<LittleEndian>, name: &str) -> Option<u64> {
-    elf.symbols()
-        .find(|s| s.name() == Ok(name))
-        .map(|s| s.address())
-}
-
-/// Resolve the flash region to measure.
-///
-/// Base defaults to the lowest `p_paddr` of any non-empty LOAD
-/// segment (this is where probe-rs writes during download). End
-/// defaults to `__veneer_limit` when it lies inside the plausible
-/// flash window, else falls back to `__sidata + (__edata - __sdata)`
-/// — needed on QEMU where `build.rs` redirects `.gnu.sgstubs` to a
-/// separate NSC region above the flash.
-fn compute_layout(elf: &ElfFile32<LittleEndian>, args: &Args) -> FlashLayout {
-    let le = LittleEndian;
-    let computed_base = elf
-        .elf_program_headers()
-        .iter()
-        .filter(|ph| ph.p_type(le) == PT_LOAD && ph.p_filesz(le) > 0)
-        .map(|ph| u64::from(ph.p_paddr(le)))
-        .min()
-        .unwrap_or_else(|| die("No LOAD segments found in ELF"));
-    let base = args.flash_base_override.unwrap_or(computed_base);
-
-    let end = args.flash_end_override.unwrap_or_else(|| {
-        let veneer_limit = find_symbol(elf, "__veneer_limit");
-        match veneer_limit {
-            Some(vl) if (base..base + MAX_FLASH_SIZE).contains(&vl) => vl,
-            _ => {
-                let sidata = require_symbol(elf, "__sidata");
-                let sdata = require_symbol(elf, "__sdata");
-                let edata = require_symbol(elf, "__edata");
-                sidata + (edata - sdata)
-            }
-        }
-    });
-
-    FlashLayout { base, end }
-}
-
-/// Reconstruct the on-flash image: erased flash (`0xFF`) overlaid
-/// with each LOAD segment at its physical address.
-fn build_flash_image(
-    elf: &ElfFile32<LittleEndian>,
-    elf_data: &[u8],
-    layout: &FlashLayout,
-) -> Vec<u8> {
-    let le = LittleEndian;
-    let size = layout.size();
-    let mut flash = vec![0xFFu8; size];
-
-    for ph in elf.elf_program_headers() {
-        if ph.p_type(le) != PT_LOAD {
-            continue;
-        }
-        let paddr = u64::from(ph.p_paddr(le));
-        let filesz = ph.p_filesz(le) as usize;
-        if filesz == 0 || paddr < layout.base || paddr >= layout.end {
-            continue;
-        }
-
-        let offset = (paddr - layout.base) as usize;
-        let data = ph
-            .data(le, elf_data)
-            .unwrap_or_else(|_| die(format_args!("Cannot read segment data at p_paddr {paddr:#010X}")));
-        let copy_len = data.len().min(size - offset);
-        flash[offset..offset + copy_len].copy_from_slice(&data[..copy_len]);
-    }
-
-    flash
 }
 
 fn format_hex(bytes: &[u8]) -> String {
@@ -189,22 +96,39 @@ fn print_words(hash: &[u8; 32]) {
 
 fn main() {
     let args = parse_args();
+    let image = flatten_elf_with_overrides(
+        std::path::Path::new(&args.elf_path),
+        LayoutOverrides {
+            flash_base: args.flash_base_override,
+            flash_end: args.flash_end_override,
+        },
+    )
+    .unwrap_or_else(|error| die(error));
 
-    let elf_data = fs::read(&args.elf_path)
-        .unwrap_or_else(|e| die(format_args!("Cannot read {}: {e}", args.elf_path)));
-    let elf = ElfFile32::<LittleEndian>::parse(&*elf_data)
-        .unwrap_or_else(|e| die(format_args!("Cannot parse ELF: {e}")));
+    if args.require_secure_slot && image.bytes.len() > fw_manifest::SLOT_SECURE_CAPACITY as usize {
+        die(format_args!(
+            "secure image is {} bytes, above the fixed {}-byte slot capacity",
+            image.bytes.len(),
+            fw_manifest::SLOT_SECURE_CAPACITY
+        ));
+    }
 
-    let layout = compute_layout(&elf, &args);
-    let flash = build_flash_image(&elf, &elf_data, &layout);
-    let hash: [u8; 32] = Sha256::digest(&flash).into();
-
-    eprintln!("Flash base:  0x{:08X}", layout.base);
-    eprintln!("Flash end:   0x{:08X} ({} bytes)", layout.end, layout.size());
-    eprintln!("SHA-256:     {}", format_hex(&hash));
+    eprintln!("Flash base:  0x{:08X}", image.base);
+    eprintln!(
+        "Flash end:   0x{:08X} ({} bytes)",
+        image.end(),
+        image.bytes.len()
+    );
+    if args.require_secure_slot {
+        eprintln!(
+            "Flash limit: {} bytes (secure slot)",
+            fw_manifest::SLOT_SECURE_CAPACITY
+        );
+    }
+    eprintln!("SHA-256:     {}", format_hex(&image.hash));
     eprintln!();
 
-    print_words(&hash);
+    print_words(&image.hash);
 }
 
 #[cfg(test)]
@@ -268,33 +192,10 @@ mod tests {
         }
     }
 
-    // ---------------- positive: FlashLayout ----------------
-
-    #[test]
-    fn positive_flash_layout_size_difference() {
-        let l = FlashLayout {
-            base: 0x0800_0000,
-            end: 0x0800_1000,
-        };
-        assert_eq!(l.size(), 0x1000);
-    }
-
-    #[test]
-    fn positive_flash_layout_size_zero_when_base_equals_end() {
-        let l = FlashLayout {
-            base: 0x1234,
-            end: 0x1234,
-        };
-        assert_eq!(l.size(), 0);
-    }
-
     // ---------------- positive: invariants ----------------
 
     #[test]
     fn positive_max_flash_size_is_two_mib() {
-        // Cross-checks the constant against `fwsign::elf::MAX_FLASH_SIZE`.
-        // A change here without the sibling tool change would let the
-        // host hash a window the device wouldn't.
         assert_eq!(MAX_FLASH_SIZE, 2 * 1024 * 1024);
     }
 
@@ -304,6 +205,7 @@ mod tests {
         // either flag will be caught (companion docs reference both).
         assert!(USAGE.contains("--flash-base="));
         assert!(USAGE.contains("--flash-end="));
+        assert!(USAGE.contains("--require-secure-slot"));
         assert!(USAGE.contains("<firmware.elf>"));
     }
 
@@ -344,23 +246,5 @@ mod tests {
                 "byte 0x{b:02x} produced uppercase {s:?}"
             );
         }
-    }
-
-    // ---------------- negative: FlashLayout::size on degenerate input ----------------
-
-    #[test]
-    #[should_panic]
-    fn negative_flash_layout_size_panics_when_end_before_base() {
-        // Documents the precondition: callers must never construct a
-        // layout with `end < base`. The (`end - base`) subtraction
-        // overflows. `compute_layout` enforces this via the
-        // veneer-window check + sidata fallback; if a future caller
-        // bypasses `compute_layout`, this test ensures the panic is
-        // not silenced by accident (no checked_sub fallback to 0).
-        let l = FlashLayout {
-            base: 0x100,
-            end: 0x080, // end < base
-        };
-        let _ = l.size();
     }
 }

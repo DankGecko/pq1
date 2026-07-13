@@ -2,9 +2,12 @@
 //!
 //! This decodes only the three classic ERC20 surface methods. Anything
 //! else (including non-standard "ERC20-like" tokens with extra
-//! arguments, or any contract method that happens to share a selector
-//! prefix) returns `None` and the secure world falls back to BLIND
-//! SIGNING display.
+//! arguments, or a call with the wrong selector or ABI shape) returns
+//! `None` and the secure world falls back to BLIND SIGNING display. As with
+//! every four-byte EVM selector, an exact selector collision with the same
+//! canonical ABI shape is indistinguishable; trusted token metadata therefore
+//! also pins the exact chain and contract before native ERC-20 semantics are
+//! accepted.
 //!
 //! ## Selectors (first 4 bytes of the calldata)
 //!

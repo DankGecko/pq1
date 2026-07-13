@@ -52,7 +52,7 @@ Already landed in this branch:
 export const SIGN_USEROP_BATCH_WIRE_VERSION = 2
 
 export const TRAILER_KIND_ERC20         = 1
-export const TRAILER_KIND_ZK_V1         = 2
+export const TRAILER_KIND_RESERVED_V1   = 2
 export const TRAILER_KIND_ZK_V3         = 3
 export const TRAILER_KIND_SAFE_V1       = 4
 export const TRAILER_KIND_SEL_CURATED   = 5

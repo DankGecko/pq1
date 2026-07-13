@@ -47,7 +47,7 @@ use sphincs_tz_shared::{
     NscStatus, MAX_BATCH_TXS, MAX_TRAILERS_PER_BATCH, SAFE_V1_PAYLOAD_MAX,
     SIGN_USEROP_BATCH_TRAILER_HEADER_LEN, TRAILERS_TOTAL_MAX_LEN, TRAILER_KIND_ERC20,
     TRAILER_KIND_ERC7730, TRAILER_KIND_NAME, TRAILER_KIND_SAFE_V1, TRAILER_KIND_SEL_CURATED,
-    TRAILER_KIND_SEL_SELFATTEST, TRAILER_KIND_ZK_V1, TRAILER_KIND_ZK_V3,
+    TRAILER_KIND_RESERVED_V1, TRAILER_KIND_SEL_SELFATTEST, TRAILER_KIND_COW_ORDER,
     TRAILER_TX_IDX_BATCH_WIDE, COW_ORDER_BUNDLE_MAX, COW_ORDER_TRAILER_MAX_LEN,
     ERC7730_MAX_TRAILER_LEN,
 };
@@ -67,7 +67,7 @@ use crate::ui;
 pub const MAX_LEN_PER_KIND: [usize; 9] = [
     0,                                              // 0 — unused
     MAX_ERC20_BUNDLE_LEN,                           // 1 — ERC-20 metadata
-    0,                                              // 2 — ZK v1 (retired; must be empty)
+    0,                                              // 2 — reserved; must be empty
     COW_ORDER_TRAILER_MAX_LEN,                      // 3 — CoW order (on-device decode)
     SAFE_V1_PAYLOAD_MAX,                            // 4 — Safe v1
     MAX_SELECTOR_BUNDLE_LEN,                        // 5 — selector curated
@@ -289,8 +289,8 @@ pub fn parse_all(
         // case before recording.
         match kind {
             TRAILER_KIND_ERC20
-            | TRAILER_KIND_ZK_V1
-            | TRAILER_KIND_ZK_V3
+            | TRAILER_KIND_RESERVED_V1
+            | TRAILER_KIND_COW_ORDER
             | TRAILER_KIND_SAFE_V1
             | TRAILER_KIND_SEL_CURATED
             | TRAILER_KIND_SEL_SELFATTEST
@@ -569,11 +569,11 @@ mod tests {
         // Drift guard: bump kind caps in the table whenever the
         // verifier-side const bumps.
         assert_eq!(MAX_LEN_PER_KIND[TRAILER_KIND_ERC20 as usize], MAX_ERC20_BUNDLE_LEN);
-        // ZK v1 is retired — its cap is 0 so any non-empty record of
+        // Kind 2 is reserved — its cap is 0 so any non-empty record of
         // that legacy kind is rejected at parse time.
-        assert_eq!(MAX_LEN_PER_KIND[TRAILER_KIND_ZK_V1 as usize], 0);
+        assert_eq!(MAX_LEN_PER_KIND[TRAILER_KIND_RESERVED_V1 as usize], 0);
         assert_eq!(
-            MAX_LEN_PER_KIND[TRAILER_KIND_ZK_V3 as usize],
+            MAX_LEN_PER_KIND[TRAILER_KIND_COW_ORDER as usize],
             COW_ORDER_TRAILER_MAX_LEN
         );
         // Drift guard: proto's COW_ORDER_BUNDLE_MAX literal must track

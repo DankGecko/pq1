@@ -1,7 +1,7 @@
-//! Companion-stub round-trip for the now-host-side ERC-20 / names / VK
-//! DBs.
+//! Companion-stub round-trip for the host-side ERC-20 and address-name
+//! databases.
 //!
-//! These three DBs no longer ship in the firmware image — they live
+//! These databases do not ship in the firmware image — they live
 //! under `tools/companion-stub/` and the companion app builds the
 //! per-tx `(entry, merkle_proof, leaf_index)` bundle. The device holds
 //! only the 32-byte Merkle root and verifies the bundle in S-world.

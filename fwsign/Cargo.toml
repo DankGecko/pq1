@@ -13,6 +13,7 @@ path = "src/main.rs"
 # Crypto + manifest
 sphincs-c10       = { workspace = true }
 fw-manifest       = { workspace = true, features = ["std"] }
+fwmeasure         = { path = "../fwmeasure" }
 sphincs-tz-bip39  = { workspace = true, features = ["full-wordlist"] }
 sha2              = { version = "0.10", default-features = false }
 # fwsign is std, so use the full zeroize feature set (alloc enables
@@ -30,7 +31,7 @@ hex          = { workspace = true }
 anyhow       = "1"
 rpassword    = "7.5"
 
-# ELF → flat image (reuses same logic as fwmeasure)
+# ELF trust-root extraction (flattening itself is shared via fwmeasure).
 object       = { version = "0.36", features = ["read_core", "elf", "std"] }
 
 # .pqfw bundle packing

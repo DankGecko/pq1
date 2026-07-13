@@ -11,9 +11,10 @@
 //!
 //! JSON parsing on a 1 MiB Cortex-M33 with no heap is impractical. The
 //! host compiler in `dbgen` walks each descriptor JSON, validates it
-//! against the v2 schema (and, separately, against the ERC-8176
-//! attestation policy in `secure/data/erc7730/policy.toml`), and emits
-//! a compact binary IR. The IR is what the device walks at sign time.
+//! against the supported schema and the selected provenance policy, and emits
+//! a compact binary IR. The current full catalogue is explicitly
+//! `dev-unattested`; production generation fails closed until real ERC-8176
+//! verification exists. The IR is what the device walks at sign time.
 //!
 //! ## Trust model
 //!
@@ -42,10 +43,10 @@
 //!   secp256k1 (EIP-191) or ERC-1271 contract sigs. Adding a classical
 //!   verifier to the firmware would break the PQSigner invariant "no
 //!   classical signer anywhere — firmware, contract, FW-update path."
-//!   8176 enforcement happens in the host build pipeline: only
-//!   descriptors meeting `min_attesters` / `trusted_attesters` policy
-//!   in `secure/data/erc7730/policy.toml` enter the Merkle tree. The
-//!   firmware pins the *root* of that filtered tree.
+//!   The host pipeline records `dev-unattested` provenance today and refuses a
+//!   production-policy build. Once real ERC-8176 record and identity
+//!   verification lands, only descriptors meeting that policy may enter a
+//!   shipping Merkle tree. The firmware pins the resulting *root*.
 //! - **Live registry resolution.** All shipped descriptors are pinned
 //!   at firmware build time. Updates rotate via signed FW updates
 //!   (already SPHINCS+C10, `PQFW_V1`).

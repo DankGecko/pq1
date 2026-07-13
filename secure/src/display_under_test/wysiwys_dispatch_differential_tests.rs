@@ -757,6 +757,38 @@ fn wysiwys_erc20_metadata_contract_mismatch_downgrades_to_unknown() {
 }
 
 #[test]
+fn wysiwys_erc20_metadata_chain_mismatch_downgrades_to_unknown() {
+    let token = [0xAA; 20];
+    let mut req = WireSignRequest::base();
+    req.to = token;
+    let mut data = vec![0u8; 4 + 64];
+    data[..4].copy_from_slice(&selector_of("transfer(address,uint256)"));
+    data[4 + 12..4 + 32].copy_from_slice(&[0xB7; 20]);
+    data[4 + 32 + 24..4 + 64].copy_from_slice(&500_000u64.to_be_bytes());
+    req.data = data;
+    let p = mirror_parse(&req.encode());
+    let ctx = Contexts {
+        erc20: Some(Erc20Metadata {
+            chain_id: 1, // Signed request is Base (8453).
+            contract: token,
+            decimals: 6,
+            name: b"USD Coin",
+            symbol: b"USDC",
+        }),
+        ..Default::default()
+    };
+    let out = drive_glue(&p, &ctx);
+    assert_core_bindings(&p, &out);
+
+    let rows = all_rows(&out.pages);
+    assert!(rows_contain(&rows, "! Unknown token"));
+    assert!(
+        !rows_contain(&rows, "USDC"),
+        "metadata authenticated for a different chain must not label the signed call"
+    );
+}
+
+#[test]
 fn wysiwys_blind_sign_shows_signed_selector_and_fingerprint() {
     let mut req = WireSignRequest::base();
     req.value = be_u256_from_u64(250_000_000_000_000_000); // 0.25 ETH rides along
@@ -995,7 +1027,9 @@ fn divergence_probe_account_flip_moves_mandatory_from_page() {
 const HANDLER_SRC: &str = include_str!("../nsc/cmd_sign_userop.rs");
 
 fn squash_ws(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ")
+    s.split_whitespace()
+        .collect::<String>()
+        .replace(",)", ")")
 }
 
 #[test]
@@ -1022,8 +1056,8 @@ fn pin_handler_render_and_digest_glue_matches_replication() {
     for (frag, why) in [
         (
             "let mut pages = match pick_sign_pages( &tx_for_display, inner_data,
-             zk_v3_verified.as_ref(), safe_v1_verified.as_ref(), safe_exec_verified.as_ref(),
-             erc7730_verified.as_ref(), verified_meta.as_ref(), selector_verified.as_ref(),
+             cow_order_verified.as_ref(), safe_v1_verified.as_ref(), safe_exec_verified.as_ref(),
+             erc7730_verified.as_ref(), chain_verified_meta.as_ref(), selector_verified.as_ref(),
              &resolver, )",
             "handler §8 render dispatch drifted",
         ),
@@ -1036,8 +1070,8 @@ fn pin_handler_render_and_digest_glue_matches_replication() {
             "handler §8 mandatory signer-page splice drifted",
         ),
         (
-            "if crate::tx::display::from_page_proof( &pages, signer_pages_before,
-             account_index, &sender, ) != crate::fi::OK_SENTINEL",
+            "if crate::tx::display::from_page_proof(&pages, signer_pages_before,
+             account_index, &sender) != crate::fi::OK_SENTINEL",
             "handler §8 signer-page FI proof drifted",
         ),
         (

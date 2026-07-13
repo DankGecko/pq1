@@ -21,25 +21,25 @@
 /// orchestrator and the "which display wins when multiple trailers
 /// verify" decision lives in one place:
 ///
-///   1. v3 CoW EIP-712 (full 8-page GPv2Order breakdown from the
-///      circuit-bound canonical + readable).
-///   2. v1 ZK clear-sign (circuit-attested readable string + EIP-1559
-///      summary pages).
-///   3. Safe v1 inner-tx render (verified canonical SafeTx).
-///   4. ERC-7730 descriptor (verified against the firmware-pinned
+///   1. Native CoW EIP-712 (full GPv2Order breakdown from the
+///      secure-world-decoded canonical order).
+///   2. Safe v1 inner-tx render (verified canonical SafeTx).
+///   3. ERC-7730 descriptor (verified against the firmware-pinned
 ///      `ERC7730_DESCRIPTORS_ROOT`; binding cross-checked against
 ///      `(chain_id, to)`).
+///   4. Known-call omission filter: a registry-known/Bloom-positive tuple
+///      without a successfully bound descriptor hard-refuses.
 ///   5. Plain value transfer (empty inner calldata).
 ///   6. ERC-20 with verified metadata (token name/symbol/decimals).
 ///   7. ERC-20 shape-only (unverified token — bare hex decode).
 ///   8. Typed-call selector + verified ABI walk.
-///   9. Blind-sign (calldata that doesn't decode as ERC-20 / typed).
+///   9. Blind-sign, only after known-call non-membership succeeds.
 ///
-/// Ordering is load-bearing. In particular (1) beats (2) so a CoW
-/// setPreSignature UserOp that also happens to satisfy the v1 circuit
-/// renders the 8-page order, not the weaker "Pre-sign CowSwap order"
-/// string. The handler's downgrade-mitigation gate enforces this
-/// separately at refuse-to-sign level. (3) is above (4) so a Safe
+/// Ordering is load-bearing. In particular, the native CoW route must
+/// retain priority over generic typed-call/descriptor rendering so a
+/// setPreSignature UserOp renders the complete order intent. The handler's
+/// downgrade-mitigation gate enforces this separately at refuse-to-sign
+/// level. (2) is above (3) so a Safe
 /// `execTransaction` carrying an ERC-7730 descriptor for an inner
 /// call still renders the outer Safe banner first — the descriptor
 /// would be for the inner call, which the Safe renderer dispatches
@@ -139,6 +139,12 @@ fn pick_sign_pages_inner(
     selector: Option<&crate::selectors::SelectorMeta<'_>>,
     resolver: &crate::names::NameResolver<'_>,
 ) -> Result<super::Pages, ()> {
+    // Handler verification already enforces this before dispatch. Repeat the
+    // public-envelope bind locally so future or host-only call sites cannot
+    // lend metadata from another chain to any renderer. Surface-specific
+    // contract/tokenPath checks below remain mandatory as a separate axis.
+    let erc20 = erc20.filter(|meta| meta.chain_id == tx.chain_id);
+
     if let Some(v3) = v3 {
         // Safe-wrapped CoW presign: when the v3 order was verified
         // against a Safe flow's inner calldata (the handler bound uid
@@ -152,11 +158,21 @@ fn pick_sign_pages_inner(
         // the presign), so the address-matched bundle is threaded
         // through; the single-call presign arm ignores it.
         if let Some(safe) = safe_v1 {
-            let inner_meta = safe_inner_meta(erc20, &safe_v1_inner_to(safe), safe.raw_data);
+            let inner_meta = safe_inner_meta(
+                erc20,
+                safe.canonical[sphincs_tz_shared::SAFE_OFF_OPERATION],
+                &safe_v1_inner_to(safe),
+                safe.raw_data,
+            );
             return super::safe_display::render_safe_v1_pages(safe, Some(v3), inner_meta, resolver);
         }
         if let Some(exec) = safe_exec {
-            let inner_meta = safe_inner_meta(erc20, &exec.decoded.to, exec.decoded.data);
+            let inner_meta = safe_inner_meta(
+                erc20,
+                exec.decoded.operation,
+                &exec.decoded.to,
+                exec.decoded.data,
+            );
             return super::safe_display::render_safe_exec_pages(exec, Some(v3), inner_meta, resolver);
         }
         return Ok(crate::tx::eip712::cowswap_display::render_cowswap_pages(
@@ -172,14 +188,24 @@ fn pick_sign_pages_inner(
         // useful only if the inner `to` is in fact USDC — or, for a
         // multiSend batch, when one of the packed records targets the
         // token (the renderer re-matches per record before applying).
-        let inner_meta = safe_inner_meta(erc20, &safe_v1_inner_to(safe), safe.raw_data);
+        let inner_meta = safe_inner_meta(
+            erc20,
+            safe.canonical[sphincs_tz_shared::SAFE_OFF_OPERATION],
+            &safe_v1_inner_to(safe),
+            safe.raw_data,
+        );
         return super::safe_display::render_safe_v1_pages(safe, None, inner_meta, resolver);
     }
     if let Some(exec) = safe_exec {
         // Same address-match rule for the exec path, multiSend records
         // included. This pairs with the approveHash branch above so
         // both Safe surfaces handle ERC-20 attribution consistently.
-        let inner_meta = safe_inner_meta(erc20, &exec.decoded.to, exec.decoded.data);
+        let inner_meta = safe_inner_meta(
+            erc20,
+            exec.decoded.operation,
+            &exec.decoded.to,
+            exec.decoded.data,
+        );
         return super::safe_display::render_safe_exec_pages(exec, None, inner_meta, resolver);
     }
     if let Some(d) = erc7730 {
@@ -368,17 +394,12 @@ fn pick_sign_pages_inner(
             // and `tx.to` IS the token contract, so the ONLY legitimate
             // attribution is `meta.contract == tx.to`.
             //
-            // The handler-side acceptance gate (`verified_meta`) also
-            // admits a bundle whose contract sits inside a Safe-flow
-            // multiSend record (`exec_ms` / `v1_ms` / `safe_exec_inner_*`).
-            // Those disjuncts are evaluated from companion trailer bytes
-            // and are NOT valid on the direct path — a transfer to token Y
-            // must never render with token T's name/symbol/decimals just
-            // because an (unrelated, possibly non-verifying) Safe trailer
-            // referenced T. Re-check the address here and fall back to the
-            // raw `erc20_unknown` render on any mismatch. This is the
-            // per-flow gate the handler comments rely on; previously it
-            // existed only for the Safe surfaces.
+            // `erc20` has only Merkle+chain authority here. Safe branches
+            // returned above after matching verified Safe execution facts;
+            // direct ERC-7730 returned after matching its signed tokenPath.
+            // Neither grants authority to this direct ERC-20 branch. Re-check
+            // the outer contract and fall back to the raw unknown-token view
+            // on mismatch.
             let matched = erc20
                 .filter(|meta| super::value_page::direct_erc20_meta_matches(&meta.contract, tx.to.as_ref()));
             Ok(match matched {
@@ -415,23 +436,22 @@ fn safe_v1_inner_to(safe: &crate::tx::eip712::safe::VerifiedSafeV1<'_>) -> [u8; 
     t
 }
 
-/// Address-match filter for ERC-20 metadata on the Safe surfaces: the
-/// bundle applies when its contract is the inner `to`, or — for a
-/// multiSend batch — when one of the packed records targets it.
-/// (`any_record_to_matches` returns false for anything that is not a
-/// well-formed multiSend.) The renderer still re-matches per record
-/// before applying the metadata, so this is routing, not the trust
-/// gate.
+/// Address-match filter for ERC-20 metadata on the Safe surfaces: the bundle
+/// applies when its contract is the verified inner `to`, or when one of the
+/// records in a verified pinned `MultiSendCallOnly` delegatecall targets it.
+/// The renderer still re-matches per record before applying the metadata.
 fn safe_inner_meta<'m>(
     erc20: Option<&'m crate::erc20::bundle::Erc20Metadata<'m>>,
+    operation: u8,
     inner_to: &[u8; 20],
     raw_data: &[u8],
 ) -> Option<&'m crate::erc20::bundle::Erc20Metadata<'m>> {
     erc20.filter(|m| {
-        m.contract == *inner_to
-            || crate::tx::eip712::safe::multi_send::any_record_to_matches(
-                raw_data,
-                &m.contract,
-            )
+        crate::tx::eip712::safe::erc20_metadata_matches_verified_safe_call(
+            operation,
+            inner_to,
+            raw_data,
+            &m.contract,
+        )
     })
 }

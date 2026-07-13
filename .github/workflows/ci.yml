@@ -80,7 +80,7 @@ jobs:
       # equality + statement-kind histogram. Pure Python, no Lean toolchain needed —
       # this is the ONE A3.1 residual the kernel proof `execC10Asm_eq` cannot see (it
       # relates c10Program<->spec, never c10Program<->.sol). See
-      # contracts/verification/docs/A3_1_ADVERSARIAL_REVIEW_2026-06-18.md.
+      # contracts/verification/docs/findings/A3_1_ADVERSARIAL_REVIEW_2026-06-18.md.
       - name: A3.1 c10Program <-> SPHINCsC10Asm.sol transcription lint
         run: make -C contracts/verification verify-transcription
 
@@ -103,7 +103,7 @@ jobs:
         run: cargo vet --locked
 
   prod-config-gate:
-    name: Production quarantine gate (rollback backend OPEN)
+    name: Production quarantine gates (rollback + ERC-7730 provenance OPEN)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -130,6 +130,24 @@ jobs:
           grep -Fq "reviewed production rollback backend is not implemented" <<<"$output"
       - name: execute rollback quarantine negative tests
         run: cargo test --locked -p pqsigner-fsbl-tests --test rollback_ship_fences
+      - name: execute ERC-7730 provenance quarantine negative tests
+        run: cargo test --locked -p pqsigner-fsbl-tests --test erc7730_provenance_fences
+      # Keep catalogue provenance separately observable from the rollback
+      # refusal above. CI accepts only the exact dev-unattested failure; a
+      # surprise PASS or unrelated descriptor-generation failure is RED.
+      - name: prove ERC-7730 production provenance is quarantined
+        shell: bash
+        run: |
+          set -euo pipefail
+          if output="$(make prod-erc7730-provenance-check 2>&1)"; then
+            printf '%s\n' "$output"
+            echo "ERROR: ERC-7730 production provenance unexpectedly passed"
+            exit 1
+          fi
+          printf '%s\n' "$output"
+          grep -Fq "prod-erc7730-provenance-check: FAIL" <<<"$output"
+          grep -Fq "catalogue provenance is 'dev-unattested'" <<<"$output"
+          grep -Fq "required 'erc8176-verified'" <<<"$output"
 
   host-tests:
     name: Host unit tests (pure-logic crates)
@@ -174,8 +192,8 @@ jobs:
       # until 2026-07-02.
       - name: proto -> Solidity constants in-sync (PqsignerProto.sol drift)
         run: make check-solidity-constants
-      - name: ERC-7730 dbgen round-trip (IR re-parse + proof re-verify)
-        run: cargo test --locked -p dbgen --test erc7730_roundtrip
+      - name: ERC-7730 dbgen tests (policy/includes + round-trip)
+        run: cargo test --locked -p dbgen --tests
       # A3.1 independent-source KAT leg (work-todo #7): the EXISTING Rust verifier
       # must accept FRESH output from the clean-room Python C10 signer
       # (contracts/verification/scripts/independent_c10_signer.py) — implementation
@@ -200,6 +218,26 @@ jobs:
           cargo test --locked -p sphincs-tz-secure \
             --no-default-features \
             --features mock-se,debug-log,ui-semihosting
+
+  qemu-e2e:
+    name: QEMU unified-sign E2E
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: stable
+          targets: thumbv8m.main-none-eabi
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: Install ARM linker and QEMU
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends gcc-arm-none-eabi qemu-system-arm
+      # Executes the complete secure+nonsecure image under mps2-an505 and
+      # requires every unified-sign assertion, including ERC-7730 cases
+      # 5p/5n, to reach the explicit ALL ASSERTIONS PASSED sentinel.
+      - name: make e2e
+        run: make e2e
 
   miri:
     name: Miri (UB in host-reachable unsafe)

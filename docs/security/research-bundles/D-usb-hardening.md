@@ -31,7 +31,7 @@ checklist, architectural recommendation on co-processor USB.
 
 ---
 
-## Project context (condensed — full version in `docs/archive/ai-research-briefing.md`)
+## Project context (condensed; current sources are linked in each bundle)
 
 **What this is.** PQSigner OS: a post-quantum ERC-4337 smart-wallet
 firmware for STM32U585 (Cortex-M33 + ARM TrustZone) on the
@@ -48,19 +48,19 @@ planned).
 Both chips are mandatory. Neither alone reveals any bit of the seed —
 only `half_O XOR half_E = entropy`.
 
-**Why signing must run on the Cortex-M33, not the SE.** Transaction
-signatures are **post-quantum SLH-DSA (SPHINCS+ SHA2-128f, migrating
-to 192f)**. No commercial secure element currently computes SLH-DSA.
-Bootstrap signatures are **ML-DSA-44** (also PQ, also not SE-capable).
-The SEs are gated storage, not signing accelerators. The seed
+**Why signing must run on the Cortex-M33, not the SE.** Bootstrap and
+slot signatures both use the project's **SPHINCS+C10** hash-based
+post-quantum scheme; there is no classical or ML-DSA signer. No
+commercial secure element currently computes it. The SEs are gated
+storage, not signing accelerators. The seed
 therefore transits STM32 secure-world SRAM during the active signing
 window (~120 s idle timeout, then zeroize). TrustZone SAU+GTZC isolates
 this from the non-secure world.
 
 **TrustZone partition.** Secure world (flash bank 1, SRAM1) owns all
-crypto, PIN, persistent secrets. Non-secure world (flash bank 2,
-SRAM2) owns UI, USB, tx parsing. Crossings go through 6 NSC gateway
-commands with pointer validation and TOCTOU-safe copy-in.
+crypto, PIN, persistent secrets, transaction decoding, and the trusted
+NV3007 LCD UI. Non-secure world owns USB transport. Crossings go through
+the fixed NSC gateway with pointer validation and TOCTOU-safe copy-in.
 
 **Power supervision state.** BOR, PVD, ECC (except SRAM1 which is
 always-on), IWDG all at factory defaults. Stage 1 of a 5-stage brownout
@@ -126,23 +126,19 @@ keys + HUK-SAES wrapping is a production-readiness item (work-todo #7).
 //! USB stack starts.  The USB OTG peripheral itself is marked non-secure
 //! by GTZC TZSC (see sau.rs).
 
-use core::ptr::{read_volatile, write_volatile};
+use crate::hw::mmio::Reg32;
 
 // ---------------------------------------------------------------------------
 // RCC registers — SECURE alias required for TZEN=1 (GPIO clock enables
 // are secure-only; writes via NS alias 0x4602_xxxx are silently ignored).
 // ---------------------------------------------------------------------------
 const RCC_S: u32 = 0x5602_0C00;
-const RCC_AHB2ENR1: *mut u32 = (RCC_S + 0x8C) as *mut u32;
-const RCC_APB1ENR2: *mut u32 = (RCC_S + 0xA0) as *mut u32;
-const RCC_AHB2RSTR1: *mut u32 = (RCC_S + 0x64) as *mut u32;
 // Note: USB OTG FS uses ICLK (shared with RNG), already set to HSI48 in rcc.rs.
 
 // ---------------------------------------------------------------------------
 // PWR registers (secure alias — NS writes are silently ignored)
 // ---------------------------------------------------------------------------
 const PWR: u32 = 0x5602_0800;
-const PWR_SVMCR: *mut u32 = (PWR + 0x10) as *mut u32;
 
 // PWR_SVMCR bits (from stm32u585xx.h: PWR_SVMCR_USV_Pos = 28)
 const USV: u32 = 1 << 28; // VDDUSB supply valid (removes electrical isolation)
@@ -151,28 +147,59 @@ const USV: u32 = 1 << 28; // VDDUSB supply valid (removes electrical isolation)
 // GPIOA registers (secure alias — GPIOA is secure by default with TZEN=1)
 // ---------------------------------------------------------------------------
 const GPIOA_S: u32 = 0x5202_0000;
-const GPIOA_MODER: *mut u32 = (GPIOA_S + 0x00) as *mut u32;
-const GPIOA_OSPEEDR: *mut u32 = (GPIOA_S + 0x08) as *mut u32;
-const GPIOA_AFRH: *mut u32 = (GPIOA_S + 0x24) as *mut u32;
 
 // GPIOB registers (secure alias)
 const GPIOB_S: u32 = 0x5202_0400;
-const GPIOB_MODER: *mut u32 = (GPIOB_S + 0x00) as *mut u32;
-const GPIOB_OSPEEDR: *mut u32 = (GPIOB_S + 0x08) as *mut u32;
-const GPIOB_AFRH: *mut u32 = (GPIOB_S + 0x24) as *mut u32;
-const GPIOB_BSRR: *mut u32 = (GPIOB_S + 0x18) as *mut u32;
-
-// GPIOA additional registers
-const GPIOA_AFRL: *mut u32 = (GPIOA_S + 0x20) as *mut u32;
 
 // ---------------------------------------------------------------------------
 // UCPD1 registers — secure alias (APB1 peripherals are secure with TZEN=1;
 // writes via NS alias 0x4000_xxxx are silently ignored).
 // ---------------------------------------------------------------------------
 const UCPD1: u32 = 0x5000_DC00;
-const UCPD1_CFG1: *mut u32 = (UCPD1 + 0x00) as *mut u32;
-const UCPD1_CFG2: *mut u32 = (UCPD1 + 0x04) as *mut u32;
-const UCPD1_CR: *mut u32 = (UCPD1 + 0x0C) as *mut u32;
+
+struct UsbHwRegs {
+    rcc_ahb2enr1: Reg32,
+    rcc_apb1enr2: Reg32,
+    rcc_ahb2rstr1: Reg32,
+    pwr_svmcr: Reg32,
+    pwr_ucpdr: Reg32,
+    gpioa_moder: Reg32,
+    gpioa_ospeedr: Reg32,
+    gpioa_afrh: Reg32,
+    gpioa_seccfgr: Reg32,
+    gpiob_moder: Reg32,
+    gpiob_ospeedr: Reg32,
+    gpiob_bsrr: Reg32,
+    gpiob_seccfgr: Reg32,
+    ucpd1_cfg1: Reg32,
+    ucpd1_cr: Reg32,
+}
+
+// SAFETY: each address is a real, 4-byte-aligned MMIO register touched
+// once during boot by this driver, in the single-threaded secure world.
+// Shared RCC and GPIO registers are accessed via disjoint-bit RMW so
+// concurrent (sequential, non-overlapping) edits from other drivers are
+// safe. USB endpoint RAM / FIFOs are deliberately NOT wrapped here —
+// they require richer types than `Reg32` (see hw::mmio module docs).
+const REG: UsbHwRegs = unsafe {
+    UsbHwRegs {
+        rcc_ahb2enr1: Reg32::new(RCC_S + 0x8C),
+        rcc_apb1enr2: Reg32::new(RCC_S + 0xA0),
+        rcc_ahb2rstr1: Reg32::new(RCC_S + 0x64),
+        pwr_svmcr: Reg32::new(PWR + 0x10),
+        pwr_ucpdr: Reg32::new(PWR + 0x2C),
+        gpioa_moder: Reg32::new(GPIOA_S + 0x00),
+        gpioa_ospeedr: Reg32::new(GPIOA_S + 0x08),
+        gpioa_afrh: Reg32::new(GPIOA_S + 0x24),
+        gpioa_seccfgr: Reg32::new(GPIOA_S + 0x30),
+        gpiob_moder: Reg32::new(GPIOB_S + 0x00),
+        gpiob_ospeedr: Reg32::new(GPIOB_S + 0x08),
+        gpiob_bsrr: Reg32::new(GPIOB_S + 0x18),
+        gpiob_seccfgr: Reg32::new(GPIOB_S + 0x30),
+        ucpd1_cfg1: Reg32::new(UCPD1 + 0x00),
+        ucpd1_cr: Reg32::new(UCPD1 + 0x0C),
+    }
+};
 
 /// Initialize USB OTG FS hardware from the secure world.
 ///
@@ -194,27 +221,23 @@ const UCPD1_CR: *mut u32 = (UCPD1 + 0x0C) as *mut u32;
 /// Direct register access.  Must be called exactly once during boot.
 pub unsafe fn init() {
     // ---- 1. Enable GPIO clocks: GPIOA, GPIOB, GPIOE (AHB2ENR1 bits 0,1,4) ----
-    let ahb2 = read_volatile(RCC_AHB2ENR1);
-    write_volatile(RCC_AHB2ENR1, ahb2 | (1 << 0) | (1 << 1) | (1 << 4));
+    REG.rcc_ahb2enr1.set_bits((1 << 0) | (1 << 1) | (1 << 4));
     cortex_m::asm::dsb();
 
     // ---- 2. Enable VDDUSB supply monitoring (PWR_SVMCR.USV) ----
-    let svmcr = read_volatile(PWR_SVMCR);
-    write_volatile(PWR_SVMCR, svmcr | USV);
+    REG.pwr_svmcr.set_bits(USV);
     cortex_m::asm::dsb();
 
     // ---- 3. Enable USB OTG FS clock (AHB2ENR1 bit 14) ----
-    let ahb2 = read_volatile(RCC_AHB2ENR1);
-    write_volatile(RCC_AHB2ENR1, ahb2 | (1 << 14));
+    REG.rcc_ahb2enr1.set_bits(1 << 14);
     cortex_m::asm::dsb();
 
     // USB 48 MHz clock: uses ICLK (shared with RNG), already set to HSI48 by rcc::init().
 
     // ---- 4. Reset USB OTG FS peripheral (AHB2RSTR1 bit 14) ----
-    let rstr = read_volatile(RCC_AHB2RSTR1);
-    write_volatile(RCC_AHB2RSTR1, rstr | (1 << 14));
+    REG.rcc_ahb2rstr1.set_bits(1 << 14);
     cortex_m::asm::dsb();
-    write_volatile(RCC_AHB2RSTR1, rstr & !(1 << 14));
+    REG.rcc_ahb2rstr1.clear_bits(1 << 14);
     cortex_m::asm::dsb();
 
     // ---- 6. Mark USB pins as non-secure (per-pin GPIO security) ----
@@ -222,32 +245,29 @@ pub unsafe fn init() {
     // The USB OTG FS peripheral runs in NS domain, so it can only drive
     // pins that are marked as non-secure. Clear the security bits for
     // PA11 (D-), PA12 (D+) and PB5 (TCPP03 EN), PB6 (CC1), PB7 (CC2).
-    const GPIOA_SECCFGR: *mut u32 = (GPIOA_S + 0x30) as *mut u32;
-    const GPIOB_SECCFGR: *mut u32 = (GPIOB_S + 0x30) as *mut u32;
-    let a_sec = read_volatile(GPIOA_SECCFGR);
-    write_volatile(GPIOA_SECCFGR, a_sec & !(1 << 11) & !(1 << 12) & !(1 << 15)); // PA11,12,15 = NS
-    let b_sec = read_volatile(GPIOB_SECCFGR);
-    write_volatile(GPIOB_SECCFGR, b_sec & !(1 << 5) & !(1 << 15)); // PB5,15 = NS
+    REG.gpioa_seccfgr.clear_bits((1 << 11) | (1 << 12) | (1 << 15)); // PA11,12,15 = NS
+    REG.gpiob_seccfgr.clear_bits((1 << 5) | (1 << 15)); // PB5,15 = NS
 
     #[cfg(feature = "debug-log")]
     {
         // Comprehensive register dump for USB bring-up debugging
         secure_log!(
             "[S][USB] RCC_AHB2ENR1=0x{:08x}",
-            read_volatile(RCC_AHB2ENR1)
+            REG.rcc_ahb2enr1.read()
         );
         secure_log!(
             "[S][USB] GPIOA_MODER=0x{:08x} (expect PA11/12=AF=0b10)",
-            read_volatile(GPIOA_MODER)
+            REG.gpioa_moder.read()
         );
         secure_log!(
             "[S][USB] GPIOA_AFRH =0x{:08x} (expect PA11/12=AF10=0xA)",
-            read_volatile(GPIOA_AFRH)
+            REG.gpioa_afrh.read()
         );
         // Read several offsets around 0x30 to find SECCFGR
         for off in [0x28u32, 0x2C, 0x30, 0x34] {
             let addr = GPIOA_S + off;
-            let val = read_volatile(addr as *const u32);
+            // SAFETY: GPIOA register bank, 4-byte-aligned read for debug log.
+            let val = unsafe { core::ptr::read_volatile(addr as *const u32) };
             secure_log!(
                 "[S][USB] GPIOA+0x{:02x}=0x{:08x}", off, val
             );
@@ -255,23 +275,22 @@ pub unsafe fn init() {
     }
 
     // ---- 7. Configure PA11 (D-) and PA12 (D+) as AF10 (USB), very-high speed ----
-    let moder = read_volatile(GPIOA_MODER);
-    let moder = (moder & !(0b11 << 22) & !(0b11 << 24)) | (0b10 << 22) | (0b10 << 24);
-    write_volatile(GPIOA_MODER, moder);
+    REG.gpioa_moder.modify(|v| {
+        (v & !(0b11 << 22) & !(0b11 << 24)) | (0b10 << 22) | (0b10 << 24)
+    });
 
-    let ospeedr = read_volatile(GPIOA_OSPEEDR);
-    write_volatile(GPIOA_OSPEEDR, ospeedr | (0b11 << 22) | (0b11 << 24));
+    REG.gpioa_ospeedr.set_bits((0b11 << 22) | (0b11 << 24));
 
     // AFRH: PA11 = AF10, PA12 = AF10
-    let afrh = read_volatile(GPIOA_AFRH);
-    let afrh = (afrh & !(0xF << 12) & !(0xF << 16)) | (10 << 12) | (10 << 16);
-    write_volatile(GPIOA_AFRH, afrh);
+    REG.gpioa_afrh.modify(|v| {
+        (v & !(0xF << 12) & !(0xF << 16)) | (10 << 12) | (10 << 16)
+    });
 
     #[cfg(feature = "debug-log")]
     {
         secure_log!(
             "[S][USB] After GPIO config: MODER=0x{:08x} AFRH=0x{:08x}",
-            read_volatile(GPIOA_MODER), read_volatile(GPIOA_AFRH)
+            REG.gpioa_moder.read(), REG.gpioa_afrh.read()
         );
     }
 
@@ -285,23 +304,185 @@ pub unsafe fn init() {
 }
 
 /// Drive PB5 HIGH to enable the TCPP03-M20 port protection chip.
-unsafe fn enable_tcpp03() {
+fn enable_tcpp03() {
     // PB5: output, push-pull, very-high speed, no pull
     // MODER bits [11:10] = 01 (output)
-    let moder = read_volatile(GPIOB_MODER);
-    write_volatile(GPIOB_MODER, (moder & !(0b11 << 10)) | (0b01 << 10));
+    REG.gpiob_moder.modify(|v| (v & !(0b11 << 10)) | (0b01 << 10));
 
     // OSPEEDR bits [11:10] = 11 (very high speed)
-    let ospeedr = read_volatile(GPIOB_OSPEEDR);
-    write_volatile(GPIOB_OSPEEDR, ospeedr | (0b11 << 10));
+    REG.gpiob_ospeedr.set_bits(0b11 << 10);
 
-    // BSRR: set PB5 HIGH
-    write_volatile(GPIOB_BSRR, 1 << 5);
+    // BSRR: set PB5 HIGH. BSRR is atomic-set (write-1-to-set, no read needed).
+    REG.gpiob_bsrr.write(1 << 5);
 
     // Small delay for TCPP03 to initialize
     for _ in 0..100_000 {
         cortex_m::asm::nop();
     }
+}
+
+/// Soft-disconnect the device from USB, then `SCB::sys_reset`. Does
+/// not return.
+///
+/// **What it does (and what it doesn't).** Setting `OTG_DCTL.SDIS=1`
+/// drops the D+ pull-up so the host's USB 2.0 layer observes a clean
+/// `USB disconnect` event in `dmesg` (TDDIS ≥ 2.5 µs per USB 2.0
+/// §7.1.7.3). On B-U585I-IOT02A powered through the USB-C cable, this
+/// is **not sufficient by itself** to make the host *re-attach* the
+/// device on the post-reset boot — VBUS stays continuously asserted
+/// (the host is supplying it), so Linux's typec subsystem treats the
+/// brief D+/CC transitions as transient noise rather than a real
+/// unplug, and the port stays bound to the pre-reset device session.
+/// `lsusb` therefore still requires a physical cable replug to refresh
+/// after a firmware-initiated reset; see
+/// `reference_usb_c_warm_reset_edge` for the full topology analysis.
+///
+/// **Why we still do this.** Two real benefits:
+///   1. Companion / host apps that watch for `USB disconnect` see a
+///      clean event instead of a transport-level error mid-transaction.
+///   2. On topologies where VBUS *does* drop across the reset (USB-A
+///      host, USB-C-via-a-hub-with-PD-cycle, dev boards powered from
+///      ST-LINK with USB-C dongle data-only), the host re-enumerates
+///      automatically without a replug.
+///
+/// **Path classification.** USB OTG FS is GTZC-marked NS — the
+/// canonical access path from secure code is the NS alias
+/// `0x4204_0000` (same pattern as the FLASH-NSCR-via-NS-alias finding
+/// in `reference_stm32u5_nscr_ns_alias`).
+///
+/// # Safety
+/// Caller is committed to resetting the chip. Mutates the NS-mapped
+/// USB OTG controller via a volatile RMW on `OTG_DCTL`. If OTG isn't
+/// powered (boot-time pre-NS-init), the write hits a register block
+/// whose default has SDIS=1 anyway — no-op, no observable host detach,
+/// but still safe.
+#[inline(never)]
+pub unsafe fn soft_disconnect_then_reset() -> ! {
+    // USB OTG FS NS alias (matches `nonsecure/src/usb/mod.rs:USB_OTG_BASE`).
+    const OTG_NS: u32 = 0x4204_0000;
+    // OTG_DCTL @ +0x804 (STM32U5 RM §72 / RM0456). Bit 1 = SDIS.
+    const OTG_DCTL: u32 = OTG_NS + 0x804;
+    const SDIS: u32 = 1 << 1;
+
+    // SAFETY: NS-mapped peripheral, single-threaded secure-world
+    // caller on an about-to-reset path. RMW preserves the rest of
+    // DCTL (none of which matters past the imminent reset).
+    // RMW via the typed MMIO handle (hw::mmio) — no raw volatile (unsafe
+    // taxonomy). Preserves the rest of DCTL (none of which matters past
+    // the imminent reset).
+    Reg32::new(OTG_DCTL).modify(|v| v | SDIS);
+
+    // ~20 ms hold so the host's USB 2.0 layer registers the detach.
+    // Empirically tested on B-U585I-IOT02A + Linux: this is enough
+    // for `dmesg` to log a clean `USB disconnect` event. It is NOT
+    // enough on its own to convince Linux's typec subsystem to drop
+    // the port and re-enumerate when VBUS stays asserted by the host
+    // — that's a USB-C topology constraint UM2839 documents no
+    // jumper to break (no SB isolates VBUS at CN1). Tried-and-failed
+    // mitigations (don't re-add without re-testing): SDIS +
+    // `OTG_GCCFG.PWRDWN=0`, SDIS + UCPD `CCENABLE=0`, SDIS + PA12-as-
+    // GPIO-LOW, SDIS + PA12-LOW + PB5-LOW (TCPP03 disable), various
+    // 10 ms → 500 ms holds. None re-attach without a physical replug
+    // while VBUS stays continuously asserted. See memory
+    // `reference_usb_c_warm_reset_edge` for the full topology trace.
+    // ~3.2 M `nop`s at 160 MHz.
+    for _ in 0..3_200_000 {
+        cortex_m::asm::nop();
+    }
+
+    cortex_m::peripheral::SCB::sys_reset();
+}
+
+/// Hold the USB-C CC lines fully OPEN long enough that the host's
+/// Type-C port controller registers a real detach (past tCCDebounce
+/// ≈ 100–200 ms), then `sys_reset`. On the post-reset boot the
+/// dead-battery Rd re-engages (hardware default), which the host sees
+/// as a fresh attach → re-enumeration WITHOUT a physical replug.
+///
+/// This is the task-#26 fix for the USB-C warm-reset edge. A bare
+/// `sys_reset` leaves the host port stuck (VBUS stays asserted, so the
+/// typec layer keeps the port bound and never re-probes). HW-validated
+/// on B-U585I-IOT02A via the `fwup-transport-hw-iwdg` wipe-trigger:
+/// the kernel logs a clean detach + `new full-speed USB device`
+/// (1209:7051) re-attach with no physical replug, and the device is
+/// stable afterward. End-to-end latency ≈ 20–25 s (dominated by device
+/// boot; the host typec/VBUS cycle adds a few seconds).
+///
+/// Earlier failed attempts held CC open only ~200 ms (under
+/// tCCDebounce margin) and/or drove the TCPP03 EN (PB5) low — which
+/// puts the TCPP03 into *dead-battery mode* and PRESENTS Rd, the exact
+/// opposite of opening CC. The working recipe leaves EN high
+/// (passthrough) and removes BOTH device-side Rd sources below.
+///
+/// To open CC we must remove BOTH Rd sources the device can present:
+///   * UCPD's own Rd — clear `UCPD1_CR.CCENABLE` (bits 11:10) +
+///     `ANAMODE` (bit 9).
+///   * The STM32 dead-battery Rd — set `PWR_UCPDR.UCPD_DBDIS` (bit 0).
+/// We deliberately do NOT touch the TCPP03 EN (PB5): driving it low
+/// puts the TCPP03 into *dead-battery mode*, which PRESENTS Rd — the
+/// opposite of what we want. Leaving EN high passes the (now-open)
+/// UCPD CC state straight through to the connector.
+///
+/// Does not return.
+///
+/// # Safety
+/// Secure-alias UCPD1 + PWR registers (same as `init_ucpd`), single-
+/// threaded about-to-reset path.
+#[inline(never)]
+pub unsafe fn cc_open_then_reset() -> ! {
+    // UCPD1 CR (secure alias, matches `init_ucpd`).
+    const UCPD1_CR: u32 = 0x5000_DC00 + 0x0C;
+    const CC_ENABLE_MASK: u32 = 0b11 << 10; // CCENABLE[1:0]
+    const ANAMODE: u32 = 1 << 9; // sink Rd
+    // PWR_UCPDR (secure alias). UCPD_DBDIS = bit 0.
+    const PWR_UCPDR: u32 = 0x5602_0800 + 0x2C;
+    const UCPD_DBDIS: u32 = 1 << 0;
+    // OTG_DCTL.SDIS — also drop the D+ pull-up (USB-2 layer detach)
+    // alongside the CC open.
+    const OTG_DCTL: u32 = 0x4204_0000 + 0x804;
+    const SDIS: u32 = 1 << 1;
+
+    // Typed MMIO (hw::mmio) RMW — no raw volatile.
+    // 1. Drop the USB-2 D+ pull-up.
+    Reg32::new(OTG_DCTL).modify(|v| v | SDIS);
+    // 2. Drop UCPD's Rd (clear CCENABLE + ANAMODE).
+    Reg32::new(UCPD1_CR).modify(|v| v & !CC_ENABLE_MASK & !ANAMODE);
+    // 3. Disable the STM32 dead-battery Rd (idempotent — init set
+    //    this too, but a defensive re-assert in case anything reset
+    //    it). With UCPD Rd gone AND dead-battery disabled AND
+    //    TCPP03 still enabled (passthrough), CC reads open.
+    Reg32::new(PWR_UCPDR).modify(|v| v | UCPD_DBDIS);
+
+    // Hold CC open ~1.5 s — comfortably past the host's tCCDebounce
+    // (100–200 ms) + any port-controller settle, so the typec layer
+    // tears the port down to "unattached". ~240 M nops at 160 MHz.
+    for _ in 0..240_000_000 {
+        cortex_m::asm::nop();
+    }
+
+    cortex_m::peripheral::SCB::sys_reset();
+}
+
+/// Drop the USB 2.0 D+ pull-up via `OTG_DCTL.SDIS=1`. Used at the top
+/// of the "halt + wait for user to replug" paths in
+/// `cmd_fw_commit::run` and `cmd_fw_begin::arm_wipe_and_reset` so
+/// companion / host apps see a clean `USB disconnect` event in dmesg
+/// before the OLED-displayed "Replug USB" prompt becomes the
+/// human-facing signal.
+///
+/// Does NOT `sys_reset` (use [`soft_disconnect_then_reset`] for that).
+/// Does NOT wait — caller is responsible for any settle delay.
+///
+/// # Safety
+/// Mutates the NS-mapped USB OTG controller via a volatile RMW on
+/// `OTG_DCTL`. If OTG isn't powered the write is a no-op on reset-
+/// state `SDIS=1`.
+#[inline(never)]
+pub unsafe fn soft_disconnect() {
+    const OTG_DCTL: u32 = 0x4204_0000 + 0x804;
+    const SDIS: u32 = 1 << 1;
+    // Typed MMIO (hw::mmio) RMW — no raw volatile.
+    Reg32::new(OTG_DCTL).modify(|v| v | SDIS);
 }
 
 /// Initialize UCPD1 for USB Type-C CC detection (sink/device mode).
@@ -311,21 +492,18 @@ unsafe fn enable_tcpp03() {
 ///   PB15 = UCPD1_CC2 (analog)
 ///
 /// We configure UCPD1 as a sink so the host detects Rd on CC and provides VBUS.
-unsafe fn init_ucpd() {
+fn init_ucpd() {
     // Enable UCPD1 clock (APB1ENR2 bit 23)
-    let apb1enr2 = read_volatile(RCC_APB1ENR2);
-    write_volatile(RCC_APB1ENR2, apb1enr2 | (1 << 23));
+    REG.rcc_apb1enr2.set_bits(1 << 23);
     cortex_m::asm::dsb();
 
     // Configure PA15 as analog (UCPD CC1)
     // MODER bits [31:30] for PA15 = 11 (analog)
-    let moder_a = read_volatile(GPIOA_MODER);
-    write_volatile(GPIOA_MODER, moder_a | (0b11 << 30));
+    REG.gpioa_moder.set_bits(0b11 << 30);
 
     // Configure PB15 as analog (UCPD CC2)
     // MODER bits [31:30] for PB15 = 11 (analog)
-    let moder_b = read_volatile(GPIOB_MODER);
-    write_volatile(GPIOB_MODER, moder_b | (0b11 << 30));
+    REG.gpiob_moder.set_bits(0b11 << 30);
 
     // UCPD1 CFG1: prescaler and timing for CC detection.
     // Values follow ST's reference configuration for HSI16.
@@ -334,26 +512,34 @@ unsafe fn init_ucpd() {
         | (7 << 11)              // TRANSWIN
         | (0b01 << 17)           // PSC_USBPDCLK = /2 (HSI16/2 = 8 MHz)
         | (1 << 31);             // UCPDEN (enable UCPD)
-    write_volatile(UCPD1_CFG1, cfg1);
+    REG.ucpd1_cfg1.write(cfg1);
     cortex_m::asm::dsb();
 
     // UCPD1 CR: enable CC PHYs and connect Rd pull-downs (sink mode).
-    // Bit 9:     ANAMODE = 1 (sink → connects 5.1kΩ Rd on CC lines)
+    // Bit 9:     ANAMODE  = 1  (sink → connects 5.1kΩ Rd on CC lines)
     // Bits 11:10 CCENABLE = 11 (both CC1 and CC2 PHYs enabled)
-    // Bits 21:20 CC2TCDIS:CC1TCDIS = 11 (disable dead-battery pull-downs)
     //
-    // Dead-battery Rd pull-downs are active by default after reset so that
-    // a USB-C host can detect the sink even before firmware runs.  Once we
-    // configure the UCPD controller with its own Rd (ANAMODE=1) we must
-    // disable the dead-battery resistors — they add a parallel path that
-    // shifts the CC voltage and can cause mis-detection with USB-C to USB-C
-    // cables (where the host Rp is driven by a UCPD controller, not a
-    // fixed 56 kΩ pull-up in the cable plug as with USB-A to USB-C).
+    // IMPORTANT: bits 20/21 are **CC1TCDIS / CC2TCDIS = the Type-C voltage
+    // *detector* disables**, NOT a dead-battery control (verified against
+    // ST's LL driver: `LL_UCPD_TypeCDetectionCC1Disable() = SET_BIT(
+    // CC1TCDIS)`). A prior version set them to 1 — which BLINDED the CC
+    // voltage detectors (UCPD_SR.TYPEC_VSTATE stuck at 0, no attach ever
+    // detected). We leave them CLEAR so the detectors run.
     let cr: u32 = (0b11 << 10)  // CCENABLE: both CC lines enabled
-        | (1 << 9)               // ANAMODE: sink (Rd pull-down)
-        | (1 << 20)              // CC1TCDIS: disable CC1 dead-battery
-        | (1 << 21);             // CC2TCDIS: disable CC2 dead-battery
-    write_volatile(UCPD1_CR, cr);
+        | (1 << 9);              // ANAMODE: sink (Rd pull-down)
+    REG.ucpd1_cr.write(cr);
+    cortex_m::asm::dsb();
+
+    // Disable the DEAD-BATTERY pull-downs the CORRECT way: PWR_UCPDR.
+    // UCPD_DBDIS (bit 0). Mirrors `LL_PWR_DisableUCPDDeadBattery()` =
+    // `SET_BIT(PWR->UCPDR, PWR_UCPDR_UCPD_DBDIS)` (PWR @ 0x5602_0800,
+    // UCPDR @ +0x2C). After reset the dead-battery Rd is engaged (so an
+    // unpowered/just-booted sink presents Rd); now that UCPD presents its
+    // own Rd (ANAMODE=1) we release the dead-battery so it doesn't sit in
+    // PARALLEL with the UCPD Rd and shift the CC voltage the host reads
+    // (which is what broke USB-C-to-USB-C detection). Done AFTER the CR
+    // config so there is no window with no Rd presented.
+    REG.pwr_ucpdr.set_bits(1 << 0); // UCPD_DBDIS
     cortex_m::asm::dsb();
 
     // Settling delay for CC pull-downs
@@ -385,10 +571,9 @@ use usb_device::prelude::*;
 // ---------------------------------------------------------------------------
 
 /// USB OTG FS peripheral on STM32U585 (DWC2 IP, Full-Speed).
+///
+/// Zero-sized unit struct — `Send + Sync` are auto-derived.
 pub struct Stm32U5UsbOtgFs;
-
-unsafe impl Sync for Stm32U5UsbOtgFs {}
-unsafe impl Send for Stm32U5UsbOtgFs {}
 
 /// USB OTG FS register base (NS alias).
 const USB_OTG_BASE: u32 = 0x4204_0000;
@@ -463,16 +648,102 @@ pub unsafe fn configure_vbus_u5() {
     cortex_m::asm::dsb();
 }
 
+/// §19 P1 production hardening — explicitly force OTG_FS into pure
+/// device mode and mask the Start-of-Frame interrupt.
+///
+/// **Why FDMOD = 1.** The synopsys-usb-otg crate runs in device mode
+/// by default but the DWC2 core retains the OTG role-switching state
+/// machine. Forcing `OTG_GUSBCFG.FDMOD = 1` removes any attacker-
+/// triggered role-switch path — the controller stays as a peripheral
+/// until power-cycle.
+///
+/// **Why mask SOF.** The Start-of-Frame interrupt fires once per
+/// 1 ms USB frame. If enabled, it preempts secure-world / NS work
+/// on a host-controlled cadence, creating a timing side-channel an
+/// attacker can use to gate / correlate other measurements (Colin
+/// O'Flynn et al, "Power-Analysis Attacks on USB Controllers"). We
+/// don't need SOF events for HID transport — synopsys-usb-otg
+/// derives frame timing from URB completions. Mask
+/// `OTG_GINTMSK.SOFM = 0` (default after reset, but assert
+/// explicitly so a future crate-version change that flips it on
+/// can't introduce the side-channel silently).
+///
+/// Both registers are NS-mapped — same alias as configure_vbus_u5.
+///
+/// # Safety
+/// Volatile RMW on NS-mapped USB OTG registers. Must be called
+/// AFTER the synopsys-usb-otg core soft-reset (i.e. after
+/// `configure_vbus_u5`).
+pub unsafe fn harden_otg() {
+    // GUSBCFG @ +0x00C, FDMOD @ bit 30.
+    const GUSBCFG: *mut u32 = (USB_OTG_BASE + 0x00C) as *mut u32;
+    // GINTMSK @ +0x018, SOFM @ bit 3.
+    const GINTMSK: *mut u32 = (USB_OTG_BASE + 0x018) as *mut u32;
+    const FDMOD: u32 = 1 << 30;
+    const SOFM: u32 = 1 << 3;
+
+    let cfg = core::ptr::read_volatile(GUSBCFG);
+    core::ptr::write_volatile(GUSBCFG, cfg | FDMOD);
+
+    let msk = core::ptr::read_volatile(GINTMSK);
+    core::ptr::write_volatile(GINTMSK, msk & !SOFM);
+
+    cortex_m::asm::dsb();
+
+    // FDMOD takes effect after 25 ms (per STM32U5 RM §72.16.2
+    // GUSBCFG.FDMOD field description). The synopsys-usb-otg crate
+    // doesn't poll for this — its own init asserted FHMOD/FDMOD
+    // before the soft-reset and then proceeded. Our late assertion
+    // here is a belt-and-braces lock-in; the crate is already
+    // running in device mode so the 25 ms is a no-op wait. ~4 M
+    // `nop`s at 160 MHz.
+    for _ in 0..4_000_000 {
+        cortex_m::asm::nop();
+    }
+}
+
+/// Read the USB frame number (`OTG_DSTS.FNSOF`) as a coarse 1 ms-tick
+/// monotonic clock for USB-transaction timeouts.
+///
+/// The host issues a Start-of-Frame token every 1 ms; the DWC2 core
+/// latches the frame number into `OTG_DSTS.FNSOF` (bits 21:8, 14-bit,
+/// wraps every 16.384 s) — we can read it without enabling the SOF
+/// interrupt (which we deliberately mask in `harden_otg` to avoid the
+/// timing side-channel). The counter advances ONLY while the host is
+/// actively sending SOFs (enumerated + not suspended), which is
+/// exactly the window where a reassembly / response timeout is
+/// meaningful: a host that stops talking naturally freezes the clock,
+/// so we never time out a legitimately-idle session.
+///
+/// 14-bit range bounds any single timeout to < 16.384 s; the 5 s
+/// reassembly timeout (`RX_REASSEMBLY_TIMEOUT_FRAMES`) fits with
+/// wrap-aware subtraction at the call site.
+#[must_use]
+pub fn usb_frame_number() -> u16 {
+    // OTG_DSTS @ device-base (0x800) + 0x08 = OTG_FS base + 0x808.
+    const OTG_DSTS: *const u32 = (USB_OTG_BASE + 0x808) as *const u32;
+    // SAFETY: read-only access to an NS-mapped USB OTG register; no
+    // side effects, races, or aliasing concerns for a volatile load.
+    let dsts = unsafe { core::ptr::read_volatile(OTG_DSTS) };
+    ((dsts >> 8) & 0x3FFF) as u16
+}
+
 /// Initialize the USB stack.  Returns a fully-configured `UsbStack` ready
 /// to be polled in the main loop.
 ///
 /// # Safety
 /// Must be called exactly once.  Uses static mut for EP memory and bus allocator.
 pub unsafe fn init() -> UsbStack {
-    // Create the bus allocator (must live in a static)
-    let alloc = UsbBus::new(Stm32U5UsbOtgFs, &mut EP_MEMORY);
-    USB_BUS_ALLOC = Some(alloc);
-    let bus_ref = USB_BUS_ALLOC.as_ref().unwrap();
+    // SAFETY: `init` is called exactly once before the USB main loop
+    // starts polling, and the NS world is single-threaded with no
+    // interrupt handlers touching EP_MEMORY / USB_BUS_ALLOC. Both `&mut`
+    // / `&` references are released before any second call could
+    // reasonably exist.
+    let alloc = UsbBus::new(Stm32U5UsbOtgFs, &mut *core::ptr::addr_of_mut!(EP_MEMORY));
+    *core::ptr::addr_of_mut!(USB_BUS_ALLOC) = Some(alloc);
+    let bus_ref = (*core::ptr::addr_of!(USB_BUS_ALLOC))
+        .as_ref()
+        .expect("USB_BUS_ALLOC was just set");
 
     // Create the HID class (allocates endpoints from the bus)
     let hid_class = hid::PqSignerHid::new(bus_ref);
@@ -494,6 +765,10 @@ pub unsafe fn init() -> UsbStack {
     // does not recognise the STM32U5 and VBUS sensing silently fails,
     // preventing enumeration on USB-C to USB-C connections.
     configure_vbus_u5();
+
+    // §19 P1: force FDMOD=1 + mask SOF interrupt. See `harden_otg`
+    // docstring + memory `production-security.md` §2.4.
+    harden_otg();
 
     UsbStack {
         device: usb_dev,
@@ -520,31 +795,39 @@ pub unsafe fn init() -> UsbStack {
 //! 3. Each response APDU is individually HID-framed (fragmented into
 //!    64-byte HID reports).
 
-use sphincs_tz_shared::{HID_REPORT_SIZE, HID_TAG_APDU, HID_TAG_PING};
+use sphincs_tz_shared::{HID_REPORT_SIZE, HID_TAG_APDU};
+use sphincs_tz_shared::apdu_framing::{
+    FrameOutcome, HidFrameAssembler, HID_CONT_DATA, HID_FIRST_DATA, MAX_APDU_RX,
+};
 use super::hid::PqSignerHid;
 use super::UsbBusType;
 
-/// Maximum single APDU size we can reassemble from HID frames.
-const MAX_APDU_RX: usize = 4096;
-
-/// Data bytes in the first HID fragment (64 - 7 header bytes).
-const FIRST_DATA: usize = HID_REPORT_SIZE - 7;
-
-/// Data bytes in continuation fragments (64 - 5 header bytes).
-const CONT_DATA: usize = HID_REPORT_SIZE - 5;
-
 /// APDU-over-HID transport state machine.
+///
+/// RX framing logic — `HidFrameAssembler` — lives in the `shared` crate
+/// so the production path here and the proptest harness in
+/// `shared/src/apdu_framing.rs::fuzz_props` exercise byte-identical
+/// state-machine code. Adding a new edge case there immediately covers
+/// this transport too.
 pub struct Transport {
     pub hid: PqSignerHid<'static, UsbBusType>,
 
-    // RX state: reassemble one APDU from multiple HID frames
-    channel_id: u16,
+    // RX state: bookkeeping (channel/seq/expected) lives in the
+    // assembler; the actual reassembly buffer is owned here.
+    rx: HidFrameAssembler,
     rx_buf: [u8; MAX_APDU_RX],
-    rx_expected: usize,
-    rx_pos: usize,
-    rx_seq: u16,
 
-    // TX state: fragment one response APDU into multiple HID frames
+    // USB frame number (OTG_DSTS.FNSOF) captured when a multi-frame
+    // reassembly began, or `None` when idle. Drives the 5 s reassembly
+    // timeout in `check_rx_timeout`. `Some` precisely while the
+    // assembler is mid-APDU (between a seq=0 NeedMore and the matching
+    // ApduComplete/Dropped).
+    rx_start_frame: Option<u16>,
+
+    // TX state: fragment one response APDU into multiple HID frames.
+    // `channel_id` is captured from the most recent successfully
+    // reassembled RX so outgoing frames carry the matching id.
+    channel_id: u16,
     tx_buf: [u8; 256],   // response APDU (max 255 bytes, fits any single APDU)
     tx_len: usize,
     tx_pos: usize,
@@ -552,15 +835,19 @@ pub struct Transport {
     tx_active: bool,
 }
 
+/// 5 s reassembly timeout in USB frames (1 frame = 1 ms SOF). Below
+/// the 14-bit `OTG_DSTS.FNSOF` wrap (16.384 s) so wrap-aware
+/// subtraction stays unambiguous. §19 P0 "Bounded APDU reassembly".
+pub const RX_REASSEMBLY_TIMEOUT_FRAMES: u16 = 5000;
+
 impl Transport {
     pub fn new(hid: PqSignerHid<'static, UsbBusType>) -> Self {
         Self {
             hid,
-            channel_id: 0,
+            rx: HidFrameAssembler::new(),
             rx_buf: [0u8; MAX_APDU_RX],
-            rx_expected: 0,
-            rx_pos: 0,
-            rx_seq: 0,
+            rx_start_frame: None,
+            channel_id: 0,
             tx_buf: [0u8; 256],
             tx_len: 0,
             tx_pos: 0,
@@ -572,69 +859,65 @@ impl Transport {
     /// Try to receive a complete APDU from the host.
     /// Returns `Some(slice)` when a full APDU has been reassembled
     /// from one or more HID frames.
-    pub fn try_receive(&mut self) -> Option<&[u8]> {
+    ///
+    /// `now_frame` is the current `OTG_DSTS.FNSOF` (see
+    /// `usb::usb_frame_number`); it stamps the reassembly start so
+    /// `check_rx_timeout` can bound how long a partial APDU may sit
+    /// half-assembled.
+    pub fn try_receive(&mut self, now_frame: u16) -> Option<&[u8]> {
         let mut report = [0u8; HID_REPORT_SIZE];
         let n = self.hid.read_report(&mut report)?;
-        if n < 3 {
-            return None;
-        }
 
-        let channel = u16::from_be_bytes([report[0], report[1]]);
-        let tag = report[2];
-
-        // PING echo
-        if tag == HID_TAG_PING {
-            self.hid.write_report(&report);
-            return None;
-        }
-
-        if tag != HID_TAG_APDU {
-            return None;
-        }
-
-        let seq = u16::from_be_bytes([report[3], report[4]]);
-
-        if seq == 0 {
-            // First HID frame — start new APDU
-            if n < 7 {
-                return None;
+        match self.rx.process_frame(&report, n, &mut self.rx_buf) {
+            FrameOutcome::ApduComplete(len) => {
+                self.channel_id = self.rx.channel_id();
+                self.rx_start_frame = None;
+                Some(&self.rx_buf[..len])
             }
-            self.channel_id = channel;
-            self.rx_expected = u16::from_be_bytes([report[5], report[6]]) as usize;
-            if self.rx_expected > MAX_APDU_RX || self.rx_expected == 0 {
-                self.reset_rx();
-                return None;
+            FrameOutcome::PingEcho => {
+                self.hid.write_report(&report);
+                None
             }
-            self.rx_pos = 0;
-            self.rx_seq = 1;
-
-            let avail = core::cmp::min(FIRST_DATA, self.rx_expected);
-            self.rx_buf[..avail].copy_from_slice(&report[7..7 + avail]);
-            self.rx_pos = avail;
-        } else {
-            // Continuation HID frame
-            if channel != self.channel_id || seq != self.rx_seq {
-                self.reset_rx();
-                return None;
+            FrameOutcome::NeedMore => {
+                // Reassembly in progress — stamp the start frame on the
+                // transition from idle so the total-reassembly clock
+                // runs from the first chunk, not the latest.
+                if self.rx_start_frame.is_none() {
+                    self.rx_start_frame = Some(now_frame);
+                }
+                None
             }
-            self.rx_seq += 1;
-
-            let remaining = self.rx_expected - self.rx_pos;
-            let avail = core::cmp::min(CONT_DATA, remaining);
-            self.rx_buf[self.rx_pos..self.rx_pos + avail]
-                .copy_from_slice(&report[5..5 + avail]);
-            self.rx_pos += avail;
+            FrameOutcome::Dropped => {
+                self.rx_start_frame = None;
+                None
+            }
         }
+    }
 
-        if self.rx_pos >= self.rx_expected {
-            let len = self.rx_expected;
-            self.rx_expected = 0;
-            self.rx_pos = 0;
-            self.rx_seq = 0;
-            Some(&self.rx_buf[..len])
-        } else {
-            None
+    /// Enforce the reassembly timeout. Call once per main-loop
+    /// iteration with the current `OTG_DSTS.FNSOF`. If a partial APDU
+    /// has been sitting half-assembled longer than
+    /// `RX_REASSEMBLY_TIMEOUT_FRAMES`, scrub the reassembly buffer +
+    /// reset the assembler and return `true`.
+    ///
+    /// Why: a host that sends a seq=0 (declaring a large APDU) and
+    /// then stalls would otherwise pin a partial secret-bearing buffer
+    /// indefinitely. The frame clock only advances while the host is
+    /// sending SOFs, so a genuinely-idle (suspended/unplugged) link
+    /// won't false-trip this.
+    pub fn check_rx_timeout(&mut self, now_frame: u16) -> bool {
+        let Some(start) = self.rx_start_frame else {
+            return false;
+        };
+        // Wrap-aware elapsed over the 14-bit frame counter.
+        let elapsed = now_frame.wrapping_sub(start) & 0x3FFF;
+        if elapsed >= RX_REASSEMBLY_TIMEOUT_FRAMES {
+            self.rx_buf.fill(0);
+            self.rx.reset();
+            self.rx_start_frame = None;
+            return true;
         }
+        false
     }
 
     /// Queue a response APDU for HID-framed transmission.
@@ -646,7 +929,12 @@ impl Transport {
     /// # Safety
     /// `ptr` must be valid for `len` bytes.
     pub unsafe fn queue_response(&mut self, ptr: *const u8, len: usize) {
-        let copy_len = core::cmp::min(len, self.tx_buf.len());
+        // FI-hardened length clamp — the secure-side `len` flows
+        // directly into a `copy_nonoverlapping`, so an EMFI-glitch on
+        // the `min` here would let a stale-or-faulted `len` punch past
+        // `tx_buf` end. `pqsigner_fi::fi_min` recomputes via the
+        // opposite branch if the result fails the post-condition.
+        let copy_len = pqsigner_fi::fi_min(len, self.tx_buf.len());
         core::ptr::copy_nonoverlapping(ptr, self.tx_buf.as_mut_ptr(), copy_len);
         self.tx_len = copy_len;
         self.tx_pos = 0;
@@ -670,7 +958,7 @@ impl Transport {
             // First HID frame: includes data length
             frame[5..7].copy_from_slice(&(self.tx_len as u16).to_be_bytes());
             let remaining = self.tx_len - self.tx_pos;
-            let chunk = core::cmp::min(FIRST_DATA, remaining);
+            let chunk = core::cmp::min(HID_FIRST_DATA, remaining);
             frame[7..7 + chunk].copy_from_slice(&self.tx_buf[self.tx_pos..self.tx_pos + chunk]);
             if !self.hid.write_report(&frame) {
                 return false;
@@ -680,7 +968,7 @@ impl Transport {
         } else {
             // Continuation HID frame
             let remaining = self.tx_len - self.tx_pos;
-            let chunk = core::cmp::min(CONT_DATA, remaining);
+            let chunk = core::cmp::min(HID_CONT_DATA, remaining);
             frame[5..5 + chunk].copy_from_slice(&self.tx_buf[self.tx_pos..self.tx_pos + chunk]);
             if !self.hid.write_report(&frame) {
                 return false;
@@ -697,12 +985,6 @@ impl Transport {
 
     pub fn is_tx_active(&self) -> bool {
         self.tx_active
-    }
-
-    fn reset_rx(&mut self) {
-        self.rx_expected = 0;
-        self.rx_pos = 0;
-        self.rx_seq = 0;
     }
 }
 
@@ -779,21 +1061,14 @@ impl<'a, B: UsbBus> PqSignerHid<'a, B> {
     /// Try to read a 64-byte HID report from the OUT endpoint.
     /// Returns the number of bytes read, or None if no data available.
     pub fn read_report(&mut self, buf: &mut [u8; REPORT_SIZE]) -> Option<usize> {
-        match self.ep_out.read(buf) {
-            Ok(n) => Some(n),
-            Err(UsbError::WouldBlock) => None,
-            Err(_) => None,
-        }
+        self.ep_out.read(buf).ok()
     }
 
     /// Write a 64-byte HID report to the IN endpoint.
-    /// Returns true if the write succeeded, false if the endpoint is busy.
+    /// Returns true if the write succeeded, false if the endpoint is busy
+    /// or the bus is otherwise unable to accept the report right now.
     pub fn write_report(&mut self, data: &[u8; REPORT_SIZE]) -> bool {
-        match self.ep_in.write(data) {
-            Ok(_) => true,
-            Err(UsbError::WouldBlock) => false,
-            Err(_) => false,
-        }
+        self.ep_in.write(data).is_ok()
     }
 }
 
@@ -866,44 +1141,124 @@ impl<B: UsbBus> UsbClass<B> for PqSignerHid<'_, B> {
 ### `nonsecure/src/usb/commands.rs`
 
 ```rust
-//! APDU command router — dual protocol support.
+// The router holds its response buffers as module-level `static mut`
+// because they outlive any single dispatch call (e.g. the GET_RESPONSE
+// chunker pages out of SIG_BUF across multiple HID polls). Every access
+// runs inside an `unsafe fn` on the single-threaded NS main loop with
+// no interrupts re-entering this module, so the rust-2024
+// `static_mut_refs` lint is suppressed per the same pattern as
+// `e2e_test.rs` / `bench_key_speed.rs` / `fwup_hw_test.rs`.
+#![allow(static_mut_refs)]
+
+//! APDU command router — PQSigner v2 native protocol only (post-cutover).
 //!
-//! CLA 0xE0 → v1 (Keycard Shell compatible, legacy)
-//! CLA 0xF0 → v2 (PQSigner native protocol)
+//! One class byte: `APDU_CLA_V2 = 0xF0`. One signing command. Every
+//! legacy shim (v1 Keycard Shell, bootstrap/main signing, ZK clear-
+//! signing, EIP-191, EIP-712) is gone — the single sign-userop Type 1 /
+//! Type 2 state machine in the secure world absorbs the lot.
 //!
-//! The v2 protocol drops Keycard Shell compatibility in favor of
-//! PQSigner-native commands that expose every device capability:
-//! per-chain key derivation, bootstrap signing, ZK clear-signing,
-//! EIP-191 message signing, CREATE2 address verification, and
-//! structured PQSignatureWrapper responses.
+//! Supported v2 instructions:
+//!
+//! | INS  | Name                     |
+//! |------|--------------------------|
+//! | 0x01 | GET_DEVICE_INFO          |
+//! | 0x02 | GET_STATUS               |
+//! | 0x10 | UNLOCK                   |
+//! | 0x11 | LOCK                     |
+//! | 0x30 | SIGN_USEROP (unified)    |
+//! | 0x60 | GET_WALLET_ADDRESS       |
+//! | 0x61 | GET_INIT_CODE            |
+//! | 0xC0 | GET_RESPONSE             |
 
 use sphincs_tz_shared::*;
+use sphincs_tz_shared::apdu_framing::{
+    parse_apdu_header, route_v2, ChainState, ChainStepOutcome,
+};
+
 use crate::nsc_api;
 
 // ---------------------------------------------------------------------------
 // Static buffers
 // ---------------------------------------------------------------------------
 
-/// Maximum accumulated command data (across chained APDUs).
-const CHAIN_BUF_LEN: usize = 8192;
+/// Maximum accumulated command data across chained APDUs. Size reflects
+/// the worst-case unified sign payload: `SIGN_USEROP_HEADER_LEN`-byte
+/// header + max inner-tx calldata (`MAX_TX_LEN`) + optional 2-byte prefix
+/// + max ERC-20 bundle + the 2-byte reserved compatibility slot.
+///
+/// Also accommodates `INS_V2_FW_BEGIN`'s 8 KB manifest — the max
+/// function below resolves to whichever of the two use cases is
+/// larger. `const fn max` isn't available in no_std stable, so we
+/// hand-expand via a pair of `const` branches and compile-asserts.
+const CHAIN_BUF_LEN_SIGN: usize = SIGN_USEROP_HEADER_LEN
+    + MAX_TX_LEN
+    + 2
+    + 1120
+    + 2 // reserved compatibility slot (length field only, must be 0)
+    // CoW order trailer: 2-byte length + canonical + two ERC-20 bundles.
+    + 2
+    + COW_ORDER_TRAILER_MAX_LEN
+    // ERC-7730 clear-signing descriptor trailer (Phase 3): 2-byte
+    // length + bundle (up to ERC7730_MAX_TRAILER_LEN = 5130 B). Sits
+    // between self-attest and names per the wire-format ordering in
+    // `docs/archive/handoff-erc7730-phase3.md` §"Canonical wire formats".
+    + 2
+    + sphincs_tz_shared::ERC7730_MAX_TRAILER_LEN
+    // Names trailer: 1-byte count + up to 4 × (2-byte length + bundle).
+    // The 1200-byte-per-bundle figure is the MAX_NAME_BUNDLE_LEN upper
+    // bound plus the 2-byte length prefix, rounded to the 32-bit
+    // proof-depth cap.
+    + 1
+    + 4 * (2 + 1200)
+    + 64;
+const CHAIN_BUF_LEN_FW: usize = fw_manifest::MANIFEST_SIZE + 64;
+/// Worst-case batch sign payload: header + N × (per-tx prefix +
+/// MAX_TX_LEN data). Defined in the shared crate as
+/// [`sphincs_tz_shared::SIGN_USEROP_BATCH_MAX_PAYLOAD_LEN`].
+const CHAIN_BUF_LEN_BATCH: usize = SIGN_USEROP_BATCH_MAX_PAYLOAD_LEN;
+const CHAIN_BUF_LEN_SIGN_OR_BATCH: usize = if CHAIN_BUF_LEN_SIGN > CHAIN_BUF_LEN_BATCH {
+    CHAIN_BUF_LEN_SIGN
+} else {
+    CHAIN_BUF_LEN_BATCH
+};
+const CHAIN_BUF_LEN: usize = if CHAIN_BUF_LEN_SIGN_OR_BATCH > CHAIN_BUF_LEN_FW {
+    CHAIN_BUF_LEN_SIGN_OR_BATCH
+} else {
+    CHAIN_BUF_LEN_FW
+};
 
-/// Signature / UserOp response buffer — sized for the full structured
-/// UserOp response (initCode + callData + wrapper) + SW bytes.
-static mut SIG_BUF: [u8; MAX_USEROP_RESPONSE_LEN + 2] = [0u8; MAX_USEROP_RESPONSE_LEN + 2];
+/// Per-CMD upper bound on accumulated chain payload. The global
+/// `CHAIN_BUF_LEN` is the max of all chained CMDs; passing it to
+/// `ChainState::step` would let a hostile host accumulate up to that
+/// global max for any one CMD before the per-CMD execute-time length
+/// check rejected it (e.g. fill ~8 KB for FW_BEGIN even though the
+/// real bound is `MANIFEST_SIZE = 8192`). Tighten per-CMD here so the
+/// step layer itself rejects oversized accumulations as soon as `lc`
+/// pushes past the *real* limit for that CMD. See finding #4 in
+/// `docs/security/usb-fw-update-hardening.md`.
+///
+/// Unknown CMDs fall back to the global max — execute_chain returns
+/// `INS_NOT_SUPPORTED` at the next layer, no behaviour change.
+const fn per_cmd_chain_bound(ins: u8) -> usize {
+    match ins {
+        INS_V2_SIGN_USEROP => CHAIN_BUF_LEN_SIGN,
+        INS_V2_SIGN_USEROP_BATCH => CHAIN_BUF_LEN_BATCH,
+        INS_V2_SIGN_OFFCHAIN => SIGN_OFFCHAIN_INPUT_MAX_LEN,
+        // `INS_V2_FW_BEGIN`'s handler is `#[cfg(feature = "stm32u585")]`-
+        // gated; the wire constant exists unconditionally, so we match it
+        // here without a cfg so this stays a `const fn`. On a non-
+        // stm32u585 build, `execute_chain` returns `INS_NOT_SUPPORTED` —
+        // tightening the bound costs nothing.
+        INS_V2_FW_BEGIN => CHAIN_BUF_LEN_FW,
+        _ => CHAIN_BUF_LEN,
+    }
+}
 
-/// Sign payload assembly buffer (must fit full UserOp wire format).
-const SIGN_PAYLOAD_BUF_LEN: usize = USEROP_PREFIX_LEN + 4096 + 4 + 1120 + 64;
-static mut SIGN_PAYLOAD_BUF: [u8; SIGN_PAYLOAD_BUF_LEN] = [0u8; SIGN_PAYLOAD_BUF_LEN];
+/// Response buffer — sized for the maximum unified output plus
+/// the 2-byte SW.
+static mut SIG_BUF: [u8; MAX_SIGN_RESPONSE_LEN + 2] = [0u8; MAX_SIGN_RESPONSE_LEN + 2];
 
-/// Clear-sign payload buffer.
-const CLEAR_SIGN_BUF_LEN: usize = ZK_HEADER_LEN + 4096 + 4 + 2048;
-static mut CLEAR_SIGN_BUF: [u8; CLEAR_SIGN_BUF_LEN] = [0u8; CLEAR_SIGN_BUF_LEN];
-
-/// EIP-712 clear-sign payload buffer.
-const EIP712_BUF_LEN: usize = EIP712_HEADER_LEN + 4 + 2048;
-static mut EIP712_BUF: [u8; EIP712_BUF_LEN] = [0u8; EIP712_BUF_LEN];
-
-/// Short response buffer (for non-signature responses).
+/// Short response buffer (non-signature responses).
 static mut RESP_BUF: [u8; 256] = [0u8; 256];
 
 /// Command chaining accumulation buffer.
@@ -914,11 +1269,38 @@ static mut PENDING_PTR: *const u8 = core::ptr::null();
 static mut PENDING_LEN: usize = 0;
 static mut PENDING_POS: usize = 0;
 
+/// 30-second inter-chunk timeout for an in-progress GET_RESPONSE drain
+/// (§19 P1 "Response-buffer locking … 30 s timeout"). If the host
+/// declares a chunked SLH-DSA-signature response (SW=0x61xx) and then
+/// stops issuing GET_RESPONSE entirely — no command at all, so the
+/// `dispatch` scrub-on-interleave never fires — the pending buffer
+/// would otherwise sit referenced indefinitely. `check_response_timeout`
+/// (driven from the NS poll loop by the `OTG_DSTS.FNSOF` frame clock)
+/// accumulates elapsed frames between checks and scrubs the pending
+/// cursor once `PENDING_TIMEOUT_FRAMES` pass without a GET_RESPONSE.
+///
+/// Accumulating per-iteration deltas (rather than a single start→now
+/// delta) sidesteps the 14-bit FNSOF wrap at 16.384 s: the NS loop
+/// polls at kHz, so each `(now - last) & 0x3FFF` delta is tiny and
+/// always wrap-correct, and 30 s > one wrap is handled by summation.
+static mut PENDING_LAST_FRAME: u16 = 0;
+static mut PENDING_ELAPSED_FRAMES: u32 = 0;
+/// 30 s at the nominal 1 ms USB SOF cadence.
+const PENDING_TIMEOUT_FRAMES: u32 = 30_000;
+
 // ---------------------------------------------------------------------------
 // Firmware version
 // ---------------------------------------------------------------------------
 
-const FW_VERSION: [u8; 3] = [0x02, 0x00, 0x00];
+const FW_VERSION: [u8; 3] = [0x03, 0x00, 0x00];
+
+// ---------------------------------------------------------------------------
+// Capability bits (reported by GET_DEVICE_INFO).
+// ---------------------------------------------------------------------------
+
+const CAP_SIGN_USEROP: u32 = 1 << 0; // the one sign command
+// Bit 1 (CAP_FLASH_NEXT_Q) is retired — post-C10-cutover the firmware
+// is stateless for slot selection; the companion drives rotation.
 
 // ---------------------------------------------------------------------------
 // Response wrapper
@@ -934,843 +1316,941 @@ pub struct Response {
 // ---------------------------------------------------------------------------
 
 pub struct CommandRouter {
-    chain_ins: u8,
-    chain_pos: usize,
-    /// CLA of current chaining session (0xE0 or 0xF0).
-    chain_cla: u8,
-    /// P2 byte from the first chaining block (v2 only). Carries
-    /// per-command flags like the deployed/not-deployed mode for
-    /// SIGN_USEROP.
-    chain_p2: u8,
+    /// Chained-APDU state. The ISO 7816-4 framing — INS-mid-chain
+    /// detection, monotonic write cursor, overflow-safe length checks
+    /// — lives in `sphincs_tz_shared::apdu_framing` so the production
+    /// path here and the proptest harness in
+    /// `shared/src/apdu_framing.rs` exercise byte-identical logic.
+    chain: ChainState,
 }
 
 impl CommandRouter {
     pub fn new() -> Self {
         Self {
-            chain_ins: 0,
-            chain_pos: 0,
-            chain_cla: 0,
-            chain_p2: 0,
+            chain: ChainState::new(),
         }
     }
 
     pub unsafe fn dispatch(&mut self, apdu: &[u8]) -> Response {
-        if apdu.len() < 4 {
-            return self.sw_response(SW_WRONG_LENGTH);
-        }
+        // Pure header parser — host-fuzzed in
+        // `sphincs_tz_shared::apdu_framing::fuzz_props`.
+        let header = match parse_apdu_header(apdu) {
+            Ok(h) => h,
+            Err(e) => return self.sw_response(e.to_sw()),
+        };
 
-        let cla = apdu[0];
-        let ins = apdu[1];
-        let p1 = apdu[2];
-        let p2 = apdu[3];
-
-        // GET_RESPONSE is CLA-agnostic (shared between v1 and v2)
-        if ins == INS_V2_GET_RESPONSE {
+        // GET_RESPONSE is CLA-agnostic so the companion can keep using
+        // it without tracking which chain the pending bytes belong to.
+        if header.ins == INS_V2_GET_RESPONSE {
             return self.get_response();
         }
 
-        match cla {
-            APDU_CLA => self.dispatch_v1(apdu, ins, p1),
-            APDU_CLA_V2 => self.dispatch_v2(apdu, ins, p1, p2),
-            _ => self.sw_response(SW_CLA_NOT_SUPPORTED),
+        // Any command OTHER than GET_RESPONSE arriving while a chunked
+        // response is still pending means the host abandoned the drain.
+        // Reset the pending cursor so the leftover bytes can't be
+        // siphoned by a later GET_RESPONSE that belongs to a different
+        // logical exchange. §19 P1 "Response-buffer locking … scrub on
+        // anything other than GET_RESPONSE arriving". The 30 s
+        // wall-clock half of that item is still owed (NS clock
+        // plumbing); this closes the command-interleave half now.
+        if !PENDING_PTR.is_null() {
+            PENDING_PTR = core::ptr::null();
+            PENDING_LEN = 0;
+            PENDING_POS = 0;
         }
-    }
 
-    // ===================================================================
-    // v1 protocol (CLA 0xE0) — Keycard Shell compatible (legacy)
-    // ===================================================================
+        if let Err(e) = route_v2(&header) {
+            return self.sw_response(e.to_sw());
+        }
 
-    unsafe fn dispatch_v1(&mut self, apdu: &[u8], ins: u8, p1: u8) -> Response {
-        let (lc, data) = if apdu.len() > 4 {
-            let lc = apdu[4] as usize;
-            if apdu.len() < 5 + lc {
-                return self.sw_response(SW_WRONG_LENGTH);
-            }
-            (lc, &apdu[5..5 + lc])
-        } else {
-            (0, &[] as &[u8])
-        };
+        let ins = header.ins;
+        let p1 = header.p1;
+        let lc = header.lc;
+        let data = header.data;
 
-        // Non-chained v1 commands
+        // Non-chained commands (full payload fits in one APDU).
         match ins {
-            INS_GET_APP_CONF => return self.cmd_v1_get_app_conf(),
-            INS_GET_PUBLIC => return self.cmd_v1_get_public(apdu[3], data, lc),
-            INS_GET_PIN_REMAINING => return self.cmd_v1_get_pin_remaining(),
-            INS_UNLOCK => return self.cmd_v1_unlock(),
+            INS_V2_GET_DEVICE_INFO => return self.cmd_get_device_info(),
+            INS_V2_GET_STATUS => return self.cmd_get_status(),
+            INS_V2_UNLOCK => return self.cmd_unlock(),
+            INS_V2_LOCK => return self.cmd_lock(),
+            INS_V2_GET_WALLET_ADDRESS => return self.cmd_get_wallet_address(data),
+            INS_V2_GET_INIT_CODE => return self.cmd_get_init_code(data),
+            // INS_V2_SIGN_OFFCHAIN is chained — see `execute_chain`.
+            // PersonalSign payloads can run up to ~700 bytes, well past
+            // the single-APDU Lc=255 limit.
+            INS_V2_OFFCHAIN_STATUS => return self.cmd_offchain_status(data),
+            INS_V2_OFFCHAIN_SYNC => return self.cmd_offchain_sync(data),
+
+            // Firmware-update non-chained commands. CHUNK carries the
+            // 8-byte header + up to 1024 bytes of data — well under
+            // the 253-byte APDU data limit, so it's NOT chained:
+            // each CMD_FW_CHUNK is exactly one APDU. COMMIT / STATUS
+            // / ABORT have no payload.
+            #[cfg(feature = "stm32u585")]
+            INS_V2_FW_CHUNK => return self.cmd_fw_chunk(data),
+            #[cfg(feature = "stm32u585")]
+            INS_V2_FW_COMMIT => return self.cmd_fw_commit(),
+            #[cfg(feature = "stm32u585")]
+            INS_V2_FW_STATUS => return self.cmd_fw_status(),
+            #[cfg(feature = "stm32u585")]
+            INS_V2_FW_ABORT => return self.cmd_fw_abort(),
+
+            // Prodtest INSes (companion → device, prodtest builds only).
+            // No PIN gating — the prodtest firmware runs before any
+            // user state exists. Each command writes its output bytes
+            // into `RESP_BUF` followed by the 2-byte SW.
+            #[cfg(feature = "prodtest")]
+            INS_V2_PRODTEST_GET_ID => return self.cmd_prodtest_get_id(),
+            #[cfg(feature = "prodtest")]
+            INS_V2_PRODTEST_DISPLAY_PATTERN => return self.cmd_prodtest_display_pattern(data),
+            #[cfg(feature = "prodtest")]
+            INS_V2_PRODTEST_SAES_SELFTEST => return self.cmd_prodtest_saes_selftest(),
+            #[cfg(feature = "prodtest")]
+            INS_V2_PRODTEST_BHK_SELFTEST => return self.cmd_prodtest_bhk_selftest(),
+            #[cfg(feature = "prodtest")]
+            INS_V2_PRODTEST_FLASH_RW => return self.cmd_prodtest_flash_rw(data),
+            #[cfg(feature = "prodtest")]
+            INS_V2_PRODTEST_TRNG_SAMPLE => return self.cmd_prodtest_trng_sample(data),
+            #[cfg(feature = "prodtest")]
+            INS_V2_PRODTEST_OPTIGA_HANDSHAKE => return self.cmd_prodtest_optiga_handshake(),
+            #[cfg(feature = "prodtest")]
+            INS_V2_PRODTEST_SE050_HANDSHAKE => return self.cmd_prodtest_se050_handshake(),
+            #[cfg(feature = "prodtest")]
+            INS_V2_PRODTEST_USB_LOOPBACK => return self.cmd_prodtest_usb_loopback(data),
+            #[cfg(feature = "prodtest")]
+            INS_V2_PRODTEST_BUTTON_TEST => return self.cmd_prodtest_button_test(),
+
             _ => {}
         }
 
-        // Chained v1 commands
-        match p1 {
-            P1_FIRST => {
-                self.chain_ins = ins;
-                self.chain_cla = APDU_CLA;
-                self.chain_pos = 0;
-                if lc > CHAIN_BUF_LEN {
-                    self.chain_ins = 0;
-                    return self.sw_response(SW_WRONG_LENGTH);
-                }
+        // INS allowlist for the chained-command path. Reject unknown
+        // INS *before* `chain.step` accepts any payload bytes — a
+        // hostile host could otherwise burn up to `CHAIN_BUF_LEN`
+        // (~8 KB) of buffer accumulation for a bogus INS before the
+        // execute-time `_ => SW_INS_NOT_SUPPORTED` arm finally rejects
+        // it. Matches §19 "APDU CLA/INS allowlist at non-secure
+        // *before* any NSC gateway call" in `docs/security/production-security.md`.
+        // Mirrors the explicit set in `execute_chain` below.
+        let is_chained_ins = matches!(
+            ins,
+            INS_V2_SIGN_USEROP | INS_V2_SIGN_USEROP_BATCH | INS_V2_SIGN_OFFCHAIN
+        );
+        #[cfg(feature = "stm32u585")]
+        let is_chained_ins = is_chained_ins || ins == INS_V2_FW_BEGIN;
+        if !is_chained_ins {
+            return self.sw_response(SW_INS_NOT_SUPPORTED);
+        }
+
+        // Chained commands. The state machine, INS-mismatch detection,
+        // and overflow-safe length checks all live in
+        // `ChainState::step` — see `shared/src/apdu_framing.rs`. We
+        // only need to copy `lc` bytes into `CHAIN_BUF` at the cursor
+        // the helper hands us, then either ack or execute.
+        match self.chain.step(ins, p1, lc, per_cmd_chain_bound(ins)) {
+            ChainStepOutcome::Appended { write_at, lc } => {
                 if lc > 0 {
-                    CHAIN_BUF[..lc].copy_from_slice(data);
-                    self.chain_pos = lc;
-                }
-                if lc < APDU_MAX_DATA {
-                    return self.execute_chain_v1(ins);
+                    CHAIN_BUF[write_at..write_at + lc].copy_from_slice(data);
                 }
                 self.sw_response(SW_OK)
             }
-            P1_MORE => {
-                if ins != self.chain_ins || self.chain_cla != APDU_CLA {
-                    self.chain_ins = 0;
-                    self.chain_pos = 0;
-                    return self.sw_response(SW_CONDITIONS_NOT_SATISFIED);
+            ChainStepOutcome::Execute { ins, final_len, write_at, lc } => {
+                if lc > 0 {
+                    CHAIN_BUF[write_at..write_at + lc].copy_from_slice(data);
                 }
-                if self.chain_pos + lc > CHAIN_BUF_LEN {
-                    self.chain_ins = 0;
-                    self.chain_pos = 0;
-                    return self.sw_response(SW_WRONG_LENGTH);
-                }
-                CHAIN_BUF[self.chain_pos..self.chain_pos + lc].copy_from_slice(data);
-                self.chain_pos += lc;
-                if lc < APDU_MAX_DATA {
-                    return self.execute_chain_v1(ins);
-                }
-                self.sw_response(SW_OK)
+                self.execute_chain(ins, final_len)
             }
-            _ => self.sw_response(SW_WRONG_DATA),
+            ChainStepOutcome::ProtocolError => {
+                self.sw_response(ChainStepOutcome::protocol_error_sw())
+            }
+            ChainStepOutcome::WrongLength => {
+                self.sw_response(ChainStepOutcome::wrong_length_sw())
+            }
         }
     }
 
-    unsafe fn execute_chain_v1(&mut self, ins: u8) -> Response {
-        let len = self.chain_pos;
-        self.chain_ins = 0;
-        self.chain_pos = 0;
-
+    unsafe fn execute_chain(&mut self, ins: u8, len: usize) -> Response {
         match ins {
-            INS_SIGN_ETH_TX => self.cmd_v1_sign_eth_tx(&CHAIN_BUF[..len], len),
-            INS_SIGN_ETH_MSG => self.cmd_v1_sign_eth_msg(&CHAIN_BUF[..len], len),
-            INS_SIGN_EIP712 => self.cmd_v1_sign_eip712(&CHAIN_BUF[..len], len),
+            INS_V2_SIGN_USEROP => self.cmd_sign_userop(len),
+            INS_V2_SIGN_USEROP_BATCH => self.cmd_sign_userop_batch(len),
+            INS_V2_SIGN_OFFCHAIN => self.cmd_sign_offchain(len),
+            #[cfg(feature = "stm32u585")]
+            INS_V2_FW_BEGIN => self.cmd_fw_begin(len),
             _ => self.sw_response(SW_INS_NOT_SUPPORTED),
         }
     }
 
     // ===================================================================
-    // v2 protocol (CLA 0xF0) — PQSigner native
+    // Command handlers
     // ===================================================================
 
-    unsafe fn dispatch_v2(&mut self, apdu: &[u8], ins: u8, p1: u8, p2: u8) -> Response {
-        let (lc, data) = if apdu.len() > 4 {
-            let lc = apdu[4] as usize;
-            if apdu.len() < 5 + lc {
-                return self.sw_response(SW_WRONG_LENGTH);
-            }
-            (lc, &apdu[5..5 + lc])
-        } else {
-            (0, &[] as &[u8])
-        };
-
-        // Non-chained v2 commands (single APDU, no P1 chaining)
-        match ins {
-            INS_V2_GET_DEVICE_INFO => return self.cmd_v2_get_device_info(),
-            INS_V2_GET_STATUS => return self.cmd_v2_get_status(),
-            INS_V2_UNLOCK => return self.cmd_v2_unlock(),
-            INS_V2_LOCK => return self.cmd_v2_lock(),
-            INS_V2_GET_BOOTSTRAP_VK => return self.cmd_v2_get_bootstrap_vk(),
-            INS_V2_GET_MAIN_VK => return self.cmd_v2_get_main_vk(data, lc),
-            INS_V2_GET_WALLET_ADDRESS => return self.cmd_v2_get_wallet_address(data, lc),
-            _ => {}
-        }
-
-        // Chained v2 commands (P1=0x00 last/only, P1=0x80 more)
-        let is_more = (p1 & 0x80) != 0;
-        if !is_more {
-            // First or only block — capture P2 for the whole chain
-            self.chain_ins = ins;
-            self.chain_cla = APDU_CLA_V2;
-            self.chain_p2 = p2;
-            self.chain_pos = 0;
-            if lc > CHAIN_BUF_LEN {
-                self.chain_ins = 0;
-                return self.sw_response(SW_WRONG_LENGTH);
-            }
-            if lc > 0 {
-                CHAIN_BUF[..lc].copy_from_slice(data);
-                self.chain_pos = lc;
-            }
-            if lc < APDU_MAX_DATA {
-                return self.execute_chain_v2(ins);
-            }
-            self.sw_response(SW_OK)
-        } else {
-            // Continuation block
-            if ins != self.chain_ins || self.chain_cla != APDU_CLA_V2 {
-                self.chain_ins = 0;
-                self.chain_pos = 0;
-                return self.sw_response(SW_CONDITIONS_NOT_SATISFIED);
-            }
-            if self.chain_pos + lc > CHAIN_BUF_LEN {
-                self.chain_ins = 0;
-                self.chain_pos = 0;
-                return self.sw_response(SW_WRONG_LENGTH);
-            }
-            CHAIN_BUF[self.chain_pos..self.chain_pos + lc].copy_from_slice(data);
-            self.chain_pos += lc;
-            if lc < APDU_MAX_DATA {
-                return self.execute_chain_v2(ins);
-            }
-            self.sw_response(SW_OK)
-        }
-    }
-
-    unsafe fn execute_chain_v2(&mut self, ins: u8) -> Response {
-        let len = self.chain_pos;
-        self.chain_ins = 0;
-        self.chain_pos = 0;
-
-        match ins {
-            INS_V2_SIGN_USEROP => self.cmd_v2_sign_userop(&CHAIN_BUF[..len], len),
-            INS_V2_SIGN_CLEAR_USEROP => self.cmd_v2_sign_clear_userop(&CHAIN_BUF[..len], len),
-            INS_V2_SIGN_MESSAGE => self.cmd_v2_sign_message(&CHAIN_BUF[..len], len),
-            INS_V2_SIGN_EIP712 => self.cmd_v2_sign_eip712(&CHAIN_BUF[..len], len),
-            INS_V2_SIGN_BOOTSTRAP => self.cmd_v2_sign_bootstrap(&CHAIN_BUF[..len], len),
-            _ => self.sw_response(SW_INS_NOT_SUPPORTED),
-        }
-    }
-
-    // ===================================================================
-    // v2 command handlers
-    // ===================================================================
-
-    // -- 0x01 GET_DEVICE_INFO --
-
-    unsafe fn cmd_v2_get_device_info(&self) -> Response {
+    /// 0x01 GET_DEVICE_INFO.
+    unsafe fn cmd_get_device_info(&self) -> Response {
         let mut p = 0usize;
 
-        // protocol_version u16 BE
         RESP_BUF[p..p + 2].copy_from_slice(&PROTOCOL_VERSION.to_be_bytes());
         p += 2;
 
-        // fw_major, fw_minor, fw_patch
         RESP_BUF[p..p + 3].copy_from_slice(&FW_VERSION);
         p += 3;
 
-        // device_uid (16 bytes)
-        RESP_BUF[p..p + 16].fill(0);
+        RESP_BUF[p..p + 16].fill(0); // device_uid placeholder
         p += 16;
 
-        // capabilities u32 BE
-        let caps: u32 = (1 << 0)  // UserOp signing
-            | (1 << 1)            // ZK clear-sign
-            | (1 << 2)            // EIP-712
-            | (1 << 3)            // Personal message signing
-            | (1 << 4)            // Bootstrap signer
-            | (1 << 5)            // Per-chain main key derivation
-            | (1 << 7);           // Address verification
+        let caps = CAP_SIGN_USEROP;
         RESP_BUF[p..p + 4].copy_from_slice(&caps.to_be_bytes());
         p += 4;
 
-        // sig_param_set u8 (0 = SHA2-128f)
-        RESP_BUF[p] = 0;
+        RESP_BUF[p] = 2; // sig_param_set: 2 = SPHINCS+C10 (128-bit) everywhere
         p += 1;
 
-        // sig_size u16 BE
-        RESP_BUF[p..p + 2].copy_from_slice(&(SIGNATURE_LEN as u16).to_be_bytes());
+        // Type 2 sig size — now fixed at `SIG_TYPE2_LEN` bytes.
+        RESP_BUF[p..p + 2].copy_from_slice(&(SIG_TYPE2_LEN as u16).to_be_bytes());
         p += 2;
 
-        // erc20_db_version u32 BE
-        RESP_BUF[p..p + 4].copy_from_slice(&0x20260408u32.to_be_bytes());
+        // Unused legacy version fields, zeroed.
+        RESP_BUF[p..p + 4].fill(0);
+        p += 4;
+        RESP_BUF[p..p + 4].fill(0);
         p += 4;
 
-        // vk_db_version u32 BE
-        RESP_BUF[p..p + 4].copy_from_slice(&0x20260408u32.to_be_bytes());
-        p += 4;
-
-        // ep_version u16 BE (EntryPoint v0.6)
+        // ep_version: 0x0006 (EntryPoint v0.6).
         RESP_BUF[p..p + 2].copy_from_slice(&0x0006u16.to_be_bytes());
         p += 2;
 
-        // wrapper_overhead u16 BE
-        RESP_BUF[p..p + 2].copy_from_slice(&(WRAPPER_HEADER_LEN as u16).to_be_bytes());
+        // Wrapper-overhead: header bytes prepended to each signed tx.
+        RESP_BUF[p..p + 2].copy_from_slice(&(SIG_TYPE2_HEADER_LEN as u16).to_be_bytes());
         p += 2;
 
-        // SW
         RESP_BUF[p] = (SW_OK >> 8) as u8;
         RESP_BUF[p + 1] = (SW_OK & 0xFF) as u8;
         p += 2;
 
-        Response { ptr: RESP_BUF.as_ptr(), len: p }
+        Response {
+            ptr: RESP_BUF.as_ptr(),
+            len: p,
+        }
     }
 
-    // -- 0x02 GET_STATUS --
-
-    unsafe fn cmd_v2_get_status(&self) -> Response {
+    /// 0x02 GET_STATUS.
+    unsafe fn cmd_get_status(&self) -> Response {
         let remaining = nsc_api::get_remaining_attempts();
         let unlocked = nsc_api::is_unlocked();
 
         let provisioned: u8 = if remaining <= MAX_ATTEMPTS as u32 { 1 } else { 0 };
 
         RESP_BUF[0] = provisioned;
-        RESP_BUF[1] = if unlocked { 0 } else { 1 }; // locked = !unlocked
+        RESP_BUF[1] = if unlocked { 0 } else { 1 };
         RESP_BUF[2] = remaining as u8;
         RESP_BUF[3] = (SW_OK >> 8) as u8;
         RESP_BUF[4] = (SW_OK & 0xFF) as u8;
 
-        Response { ptr: RESP_BUF.as_ptr(), len: 5 }
+        Response {
+            ptr: RESP_BUF.as_ptr(),
+            len: 5,
+        }
     }
 
-    // -- 0x10 UNLOCK --
-
-    unsafe fn cmd_v2_unlock(&self) -> Response {
+    /// 0x10 UNLOCK.
+    unsafe fn cmd_unlock(&self) -> Response {
         let status = nsc_api::request_unlock();
         self.nsc_status_to_response(status)
     }
 
-    // -- 0x11 LOCK --
-
-    unsafe fn cmd_v2_lock(&self) -> Response {
+    /// 0x11 LOCK.
+    unsafe fn cmd_lock(&self) -> Response {
         nsc_api::lock();
         self.sw_response(SW_OK)
     }
 
-    // -- 0x20 GET_BOOTSTRAP_VK --
-
-    unsafe fn cmd_v2_get_bootstrap_vk(&self) -> Response {
-        let mut vk = [0u8; VERIFYING_KEY_LEN];
-        let status = nsc_api::get_bootstrap_pubkey(&mut vk);
+    /// 0x60 GET_WALLET_ADDRESS — return the 20-byte CREATE2-predicted
+    /// sender for this device's bootstrap C10 pubkey at `account_index`.
+    /// Requires unlock.
+    ///
+    /// APDU body layout: 4 bytes big-endian `account_index` (0..=255).
+    /// An empty body is accepted as `account_index == 0` so legacy
+    /// companion builds that pre-date multi-account derivation still
+    /// see their original single wallet.
+    unsafe fn cmd_get_wallet_address(&self, data: &[u8]) -> Response {
+        let account_index = match data.len() {
+            0 => 0u32,
+            4 => u32::from_be_bytes([data[0], data[1], data[2], data[3]]),
+            _ => return self.sw_response(SW_WRONG_LENGTH),
+        };
+        let mut addr = [0u8; 20];
+        let status = nsc_api::get_wallet_address(&mut addr, account_index);
         if status != NscStatus::Ok as u32 {
             return self.nsc_status_to_response(status);
         }
-
-        RESP_BUF[..VERIFYING_KEY_LEN].copy_from_slice(&vk);
-        RESP_BUF[VERIFYING_KEY_LEN] = (SW_OK >> 8) as u8;
-        RESP_BUF[VERIFYING_KEY_LEN + 1] = (SW_OK & 0xFF) as u8;
-        Response { ptr: RESP_BUF.as_ptr(), len: VERIFYING_KEY_LEN + 2 }
+        RESP_BUF[..20].copy_from_slice(&addr);
+        RESP_BUF[20..22].copy_from_slice(&SW_OK.to_be_bytes());
+        Response {
+            ptr: RESP_BUF.as_ptr(),
+            len: 22,
+        }
     }
 
-    // -- 0x21 GET_MAIN_VK --
-
-    unsafe fn cmd_v2_get_main_vk(&self, data: &[u8], lc: usize) -> Response {
-        if lc != MAIN_PUBKEY_PAYLOAD_LEN {
+    /// 0x61 GET_INIT_CODE — return the 4280-byte ERC-4337 initCode for
+    /// `(account_index, chain_id)`. Used by the companion's gas
+    /// estimator for not-yet-deployed wallets; the bytes are
+    /// byte-identical to what the deploy path of SIGN_USEROP emits
+    /// and safe to cache. Requires an unlocked device.
+    ///
+    /// APDU body: 12 bytes `[account_index u32 BE || chain_id u64 BE]`.
+    /// Response: 4280 bytes streamed via `GET_RESPONSE` chaining.
+    unsafe fn cmd_get_init_code(&self, data: &[u8]) -> Response {
+        if data.len() != 12 {
             return self.sw_response(SW_WRONG_LENGTH);
         }
-        let chain_id = u64::from_be_bytes([
-            data[0], data[1], data[2], data[3],
-            data[4], data[5], data[6], data[7],
-        ]);
-        let key_index = u32::from_be_bytes([data[8], data[9], data[10], data[11]]);
-
-        let mut vk = [0u8; VERIFYING_KEY_LEN];
-        let status = nsc_api::get_main_pubkey(chain_id, key_index, &mut vk);
+        let status = nsc_api::get_init_code(
+            data,
+            &mut SIG_BUF[..PQ_INIT_CODE_LEN],
+        );
         if status != NscStatus::Ok as u32 {
             return self.nsc_status_to_response(status);
         }
-
-        RESP_BUF[..VERIFYING_KEY_LEN].copy_from_slice(&vk);
-        RESP_BUF[VERIFYING_KEY_LEN] = (SW_OK >> 8) as u8;
-        RESP_BUF[VERIFYING_KEY_LEN + 1] = (SW_OK & 0xFF) as u8;
-        Response { ptr: RESP_BUF.as_ptr(), len: VERIFYING_KEY_LEN + 2 }
+        // PQ_INIT_CODE_LEN = 4280 > APDU_MAX_RESP (253), so this always
+        // enters the GET_RESPONSE chaining path. The chunker lives in
+        // `setup_chunked_response` and reuses the caller's existing
+        // PENDING_PTR/LEN/POS cursor.
+        self.setup_chunked_response(PQ_INIT_CODE_LEN)
     }
 
-    // -- 0x60 GET_WALLET_ADDRESS --
-
-    unsafe fn cmd_v2_get_wallet_address(&self, data: &[u8], lc: usize) -> Response {
-        if lc != 60 {
+    /// 0x30 SIGN_USEROP — unified Type 1 / Type 2 state machine.
+    ///
+    /// The payload is the `SIGN_USEROP_HEADER_LEN`-byte header plus
+    /// the inner tx calldata (see `sphincs_tz_shared::SIGN_USEROP_HEADER_LEN`
+    /// for the canonical layout). The secure world writes a bundled
+    /// response into `SIG_BUF`:
+    ///
+    /// ```text
+    ///   [new_offchain_count u64 BE]
+    ///   [init_code_len u32 BE] [init_code_bytes...]
+    ///   [type1_len     u32 BE] [type1_bytes...]
+    ///   [type2_len     u32 BE] [type2_bytes...]
+    /// ```
+    ///
+    /// `init_code_len` is non-zero only when the companion set
+    /// `FLAG_INCLUDE_INIT_CODE` on the request (fresh wallet, first deploy
+    /// on this chain). Similarly `type1_len == 0` means slot registration
+    /// was not needed and the companion should submit only Type 2.
+    unsafe fn cmd_sign_userop(&self, data_len: usize) -> Response {
+        if data_len < SIGN_USEROP_HEADER_LEN {
             return self.sw_response(SW_WRONG_LENGTH);
         }
-        let mut address = [0u8; 20];
-        let status = nsc_api::get_wallet_address(data, &mut address);
-        if status != NscStatus::Ok as u32 {
-            return self.nsc_status_to_response(status);
-        }
 
-        RESP_BUF[..20].copy_from_slice(&address);
-        RESP_BUF[20] = (SW_OK >> 8) as u8;
-        RESP_BUF[21] = (SW_OK & 0xFF) as u8;
-        Response { ptr: RESP_BUF.as_ptr(), len: 22 }
-    }
+        // All metadata trailers (ERC-20 / native CoW / names / selector /
+        // ERC-7730 / …) are built by the companion and arrive inside the
+        // request — the DBs live host-side, the device holds only the
+        // pinned Merkle roots and verifies every byte in S-world. NS no
+        // longer looks anything up. We only normalise the positional
+        // trailer skeleton so a companion that sent a short prefix (or no
+        // trailers at all) still presents a well-formed, fail-safe layout
+        // to the secure parser — missing slots degrade to "unknown token"
+        // / raw-hex / blind-sign, never a forged display.
+        let effective_len = Self::ensure_trailer_skeleton(data_len);
 
-    // -- 0x30 SIGN_USEROP --
-
-    unsafe fn cmd_v2_sign_userop(&self, data: &[u8], len: usize) -> Response {
-        // v2 wire: key_index(4) + ots_index(4) + AA header(304) + tx_len(2) + tx + bundle_len(2) + bundle
-        // We need to translate this to the v1 NSC wire format that cmd_sign_userop expects.
-        if len < USEROP_V2_HEADER_LEN + 2 {
-            return self.sw_response(SW_WRONG_DATA);
-        }
-
-        let key_index = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
-        let ots_index = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
-
-        // P2 carries the deployment flag: 0x00 = deployed, 0x01 = not deployed.
-        let needs_init_code = self.chain_p2 == P2_NOT_DEPLOYED;
-
-        let aa_start = 8; // skip key_index + ots_index
-        let tx_len_off = USEROP_V2_HEADER_LEN;
-        if tx_len_off + 2 > len {
-            return self.sw_response(SW_WRONG_DATA);
-        }
-        let tx_len = u16::from_be_bytes([data[tx_len_off], data[tx_len_off + 1]]) as usize;
-        let tx_start = tx_len_off + 2;
-        let tx_end = tx_start + tx_len;
-        if tx_end > len {
-            return self.sw_response(SW_WRONG_DATA);
-        }
-
-        // Check for optional bundle
-        let (has_bundle, bundle_len, bundle_start) = if tx_end + 2 <= len {
-            let bl = u16::from_be_bytes([data[tx_end], data[tx_end + 1]]) as usize;
-            if bl > 0 && tx_end + 2 + bl <= len {
-                (true, bl, tx_end + 2)
-            } else {
-                (false, 0, 0)
-            }
-        } else {
-            (false, 0, 0)
-        };
-
-        // Build v1 NSC payload in SIGN_PAYLOAD_BUF.
-        // Mode byte: 0=deployed, 1=deployed+bundle, 2=not-deployed, 3=not-deployed+bundle
-        let mut p = 0usize;
-        let mode: u8 = match (needs_init_code, has_bundle) {
-            (false, false) => 0,
-            (false, true) => 1,
-            (true, false) => 2,
-            (true, true) => 3,
-        };
-        SIGN_PAYLOAD_BUF[p] = mode;
-        p += 1;
-        // Copy AA fields (sender through paymaster_hash) — starts at data[8]
-        let aa_len = USEROP_V2_HEADER_LEN - 8; // 304 bytes
-        SIGN_PAYLOAD_BUF[p..p + aa_len].copy_from_slice(&data[aa_start..aa_start + aa_len]);
-        p += aa_len;
-        // tx_len as u32 LE
-        SIGN_PAYLOAD_BUF[p..p + 4].copy_from_slice(&(tx_len as u32).to_le_bytes());
-        p += 4;
-        // tx data
-        SIGN_PAYLOAD_BUF[p..p + tx_len].copy_from_slice(&data[tx_start..tx_end]);
-        p += tx_len;
-        // Optional bundle
-        if has_bundle {
-            SIGN_PAYLOAD_BUF[p..p + 4].copy_from_slice(&(bundle_len as u32).to_le_bytes());
-            p += 4;
-            SIGN_PAYLOAD_BUF[p..p + bundle_len].copy_from_slice(&data[bundle_start..bundle_start + bundle_len]);
-            p += bundle_len;
-        }
-
-        // Append key_index(4 BE) + ots_index(4 BE) as a trailer.
-        // The secure world detects these via bit 31 of the total_len arg.
-        SIGN_PAYLOAD_BUF[p..p + 4].copy_from_slice(&key_index.to_be_bytes());
-        p += 4;
-        SIGN_PAYLOAD_BUF[p..p + 4].copy_from_slice(&ots_index.to_be_bytes());
-        p += 4;
-
-        // The secure world writes the structured UserOp response into SIG_BUF.
-        // Response: init_code_len(4) + initCode(N) + call_data_len(4) + callData(M) + wrapper
-        let status = nsc_api::sign_userop_with_ots(
-            &SIGN_PAYLOAD_BUF[..p],
-            &mut SIG_BUF[..MAX_USEROP_RESPONSE_LEN],
+        let status = nsc_api::sign_userop(
+            &CHAIN_BUF[..effective_len],
+            &mut SIG_BUF[..MAX_SIGN_RESPONSE_LEN],
         );
         if status != NscStatus::Ok as u32 {
             return self.nsc_status_to_response(status);
         }
 
-        // Parse the structured response to find the total length:
-        // init_code_len(4) + initCode + call_data_len(4) + callData + WRAPPER_TOTAL_LEN
-        let ic_len = u32::from_be_bytes([SIG_BUF[0], SIG_BUF[1], SIG_BUF[2], SIG_BUF[3]]) as usize;
-        let cd_off = 4 + ic_len;
-        if cd_off + 4 > MAX_USEROP_RESPONSE_LEN {
-            return self.sw_response(SW_INTERNAL_ERROR);
+        match Self::total_sign_response_len() {
+            Some(total) => self.setup_chunked_response(total),
+            None => self.sw_response(SW_INTERNAL_ERROR),
         }
-        let cd_len = u32::from_be_bytes([
-            SIG_BUF[cd_off], SIG_BUF[cd_off + 1], SIG_BUF[cd_off + 2], SIG_BUF[cd_off + 3],
-        ]) as usize;
-        let total = cd_off + 4 + cd_len + WRAPPER_TOTAL_LEN;
-        if total > MAX_USEROP_RESPONSE_LEN {
-            return self.sw_response(SW_INTERNAL_ERROR);
-        }
-
-        self.setup_chunked_response(total)
     }
 
-    // -- 0x31 SIGN_CLEAR_USEROP --
-
-    unsafe fn cmd_v2_sign_clear_userop(&self, data: &[u8], len: usize) -> Response {
-        // v2 wire: key_index(4) + ots_index(4) + proof(384) + calldata(164) + readable(64) +
-        //          AA header(304) + tx_len(2) + tx + vk_bundle_len(2) + vk_bundle
-        let zk_header_start = 8; // after key_index + ots_index
-        let min_len = 8 + ZK_PROOF_LEN + ZK_MAX_CALLDATA + ZK_STRING_LEN + (USEROP_V2_HEADER_LEN - 8) + 2;
-        if len < min_len {
-            return self.sw_response(SW_WRONG_DATA);
+    /// 0x32 SIGN_USEROP_BATCH — atomic multi-call sign command. The
+    /// payload is the `CMD_SIGN_USEROP_BATCH` wire format
+    /// (`SIGN_USEROP_BATCH_HEADER_LEN` header + N inner-tx blocks);
+    /// the response framing is byte-identical to
+    /// [`Self::cmd_sign_userop`]'s (the only on-chain difference is
+    /// that the resulting UserOp's callData is
+    /// `executeBatchWithOffchainCount(...)` instead of the
+    /// single-call `executeWithOffchainCount(...)`).
+    ///
+    /// No NS-side trailer injection: the companion supplies the wire-v2
+    /// routed TLV list. ERC-20 metadata, native CoW (frozen wire kind 3),
+    /// Safe, selector, ERC-7730, and name trailers all have batch routes;
+    /// reserved wire kind 2 has a zero-byte cap.
+    unsafe fn cmd_sign_userop_batch(&self, data_len: usize) -> Response {
+        if data_len < SIGN_USEROP_BATCH_HEADER_LEN + SIGN_USEROP_BATCH_TX_PREFIX_LEN {
+            return self.sw_response(SW_WRONG_LENGTH);
         }
 
-        // Translate to v1 clear-sign NSC wire format:
-        // v1: proof(384) + calldata(164) + readable(64) + [has_bundle(1)][AA header][tx_len u32 LE][tx][bundle_len u32 LE][vk_bundle]
-        let mut p = 0usize;
-
-        // Copy ZK header (proof + calldata + readable)
-        let zk_len = ZK_PROOF_LEN + ZK_MAX_CALLDATA + ZK_STRING_LEN;
-        CLEAR_SIGN_BUF[p..p + zk_len].copy_from_slice(&data[zk_header_start..zk_header_start + zk_len]);
-        p += zk_len;
-
-        // AA header: has_bundle = 0 (VK bundle goes at the end in v1 format)
-        let aa_v2_start = zk_header_start + zk_len;
-        CLEAR_SIGN_BUF[p] = 0; // has_bundle
-        p += 1;
-        let aa_len = USEROP_V2_HEADER_LEN - 8;
-        CLEAR_SIGN_BUF[p..p + aa_len].copy_from_slice(&data[aa_v2_start..aa_v2_start + aa_len]);
-        p += aa_len;
-
-        // tx_len (v2: u16 BE → v1: u32 LE)
-        let tx_len_off = aa_v2_start + aa_len;
-        if tx_len_off + 2 > len {
-            return self.sw_response(SW_WRONG_DATA);
-        }
-        let tx_len = u16::from_be_bytes([data[tx_len_off], data[tx_len_off + 1]]) as usize;
-        CLEAR_SIGN_BUF[p..p + 4].copy_from_slice(&(tx_len as u32).to_le_bytes());
-        p += 4;
-
-        // tx data
-        let tx_start = tx_len_off + 2;
-        let tx_end = tx_start + tx_len;
-        if tx_end > len {
-            return self.sw_response(SW_WRONG_DATA);
-        }
-        CLEAR_SIGN_BUF[p..p + tx_len].copy_from_slice(&data[tx_start..tx_end]);
-        p += tx_len;
-
-        // VK bundle: v2 has vk_bundle_len(2) + vk_bundle; v1 has bundle_len(4) + bundle
-        if tx_end + 2 > len {
-            return self.sw_response(SW_WRONG_DATA);
-        }
-        let vk_len = u16::from_be_bytes([data[tx_end], data[tx_end + 1]]) as usize;
-        let vk_start = tx_end + 2;
-        if vk_start + vk_len > len {
-            return self.sw_response(SW_WRONG_DATA);
-        }
-        CLEAR_SIGN_BUF[p..p + 4].copy_from_slice(&(vk_len as u32).to_le_bytes());
-        p += 4;
-        CLEAR_SIGN_BUF[p..p + vk_len].copy_from_slice(&data[vk_start..vk_start + vk_len]);
-        p += vk_len;
-
-        let status = nsc_api::clear_sign(&CLEAR_SIGN_BUF[..p], &mut SIG_BUF[..SIGNATURE_LEN]);
-        self.sign_result_v1(status)
-    }
-
-    // -- 0x40 SIGN_MESSAGE --
-
-    unsafe fn cmd_v2_sign_message(&self, data: &[u8], len: usize) -> Response {
-        // v2 wire: key_index(4) + ots_index(4) + chain_id(8) + msg_len(2) + msg
-        if len < 18 {
-            return self.sw_response(SW_WRONG_DATA);
-        }
-
-        let status = nsc_api::sign_message(data, &mut SIG_BUF[..WRAPPER_TOTAL_LEN]);
-        self.sign_result_wrapped(status)
-    }
-
-    // -- 0x41 SIGN_EIP712 --
-
-    unsafe fn cmd_v2_sign_eip712(&self, data: &[u8], len: usize) -> Response {
-        // v2 wire: key_index(4) + ots_index(4) + proof(384) + canonical(204) + readable(128) +
-        //          vk_bundle_len(2) + vk_bundle
-        let min_len = 8 + EIP712_PROOF_LEN + EIP712_CANONICAL_LEN + EIP712_STRING_LEN + 2;
-        if len < min_len {
-            return self.sw_response(SW_WRONG_DATA);
-        }
-
-        // Translate to v1 NSC wire format: proof(384) + canonical(204) + readable(128) + bundle_len(4) + vk_bundle
-        // (skip key_index + ots_index which aren't in the v1 format)
-        let mut p = 0usize;
-        let zk_start = 8;
-        let zk_len = EIP712_PROOF_LEN + EIP712_CANONICAL_LEN + EIP712_STRING_LEN;
-        EIP712_BUF[p..p + zk_len].copy_from_slice(&data[zk_start..zk_start + zk_len]);
-        p += zk_len;
-
-        // VK bundle: v2 u16 BE → v1 u32 LE
-        let vk_len_off = zk_start + zk_len;
-        if vk_len_off + 2 > len {
-            return self.sw_response(SW_WRONG_DATA);
-        }
-        let vk_len = u16::from_be_bytes([data[vk_len_off], data[vk_len_off + 1]]) as usize;
-        let vk_start = vk_len_off + 2;
-        if vk_start + vk_len > len {
-            return self.sw_response(SW_WRONG_DATA);
-        }
-        EIP712_BUF[p..p + 4].copy_from_slice(&(vk_len as u32).to_le_bytes());
-        p += 4;
-        EIP712_BUF[p..p + vk_len].copy_from_slice(&data[vk_start..vk_start + vk_len]);
-        p += vk_len;
-
-        let status = nsc_api::clear_sign_msg(&EIP712_BUF[..p], &mut SIG_BUF[..SIGNATURE_LEN]);
-        self.sign_result_v1(status)
-    }
-
-    // -- 0x50 SIGN_BOOTSTRAP (DEPRECATED) --
-    // Bootstrap signing is now handled automatically by SIGN_USEROP when
-    // P2=0x01 (not-deployed). Kept for backward compatibility.
-
-    unsafe fn cmd_v2_sign_bootstrap(&self, data: &[u8], len: usize) -> Response {
-        // v2 wire: ots_index(4) + context_tag(1) + msg_hash(32) = 37 bytes
-        if len != 37 {
-            return self.sw_response(SW_WRONG_DATA);
-        }
-
-        let _ots_index = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
-        let _context_tag = data[4];
-        let mut msg_hash = [0u8; 32];
-        msg_hash.copy_from_slice(&data[5..37]);
-
-        let status = nsc_api::sign_bootstrap(&msg_hash, &mut SIG_BUF[..SIGNATURE_LEN]);
-        self.sign_result_v1(status)
-    }
-
-    // ===================================================================
-    // v1 command handlers (unchanged logic from original)
-    // ===================================================================
-
-    unsafe fn cmd_v1_get_app_conf(&self) -> Response {
-        let mut p = 0usize;
-        RESP_BUF[p..p + 3].copy_from_slice(&FW_VERSION);
-        p += 3;
-        RESP_BUF[p..p + 4].copy_from_slice(&0x20260408u32.to_be_bytes());
-        p += 4;
-        RESP_BUF[p..p + 16].fill(0);
-        p += 16;
-        let mut pubkey = [0u8; VERIFYING_KEY_LEN];
-        let status = nsc_api::get_pubkey(&mut pubkey);
-        if status == NscStatus::Ok as u32 {
-            RESP_BUF[p..p + VERIFYING_KEY_LEN].copy_from_slice(&pubkey);
-        }
-        p += VERIFYING_KEY_LEN;
-        RESP_BUF[p] = (SW_OK >> 8) as u8;
-        RESP_BUF[p + 1] = (SW_OK & 0xFF) as u8;
-        p += 2;
-        Response { ptr: RESP_BUF.as_ptr(), len: p }
-    }
-
-    unsafe fn cmd_v1_get_public(&self, p2: u8, data: &[u8], lc: usize) -> Response {
-        if lc < 1 { return self.sw_response(SW_WRONG_DATA); }
-        let mut pubkey = [0u8; VERIFYING_KEY_LEN];
-        let status = nsc_api::get_pubkey(&mut pubkey);
+        let status = nsc_api::sign_userop_batch(
+            &CHAIN_BUF[..data_len],
+            &mut SIG_BUF[..MAX_SIGN_RESPONSE_LEN],
+        );
         if status != NscStatus::Ok as u32 {
             return self.nsc_status_to_response(status);
         }
-        let mut p = 0usize;
-        RESP_BUF[p] = 4;
-        p += 1;
-        RESP_BUF[p..p + 4].copy_from_slice(&pubkey[..4]);
-        p += 4;
-        RESP_BUF[p] = VERIFYING_KEY_LEN as u8;
-        p += 1;
-        RESP_BUF[p..p + VERIFYING_KEY_LEN].copy_from_slice(&pubkey);
-        p += VERIFYING_KEY_LEN;
-        if p2 == 0x01 {
-            RESP_BUF[p] = 32;
-            p += 1;
-            RESP_BUF[p..p + 32].fill(0);
-            p += 32;
-        } else {
-            RESP_BUF[p] = 0;
-            p += 1;
+
+        match Self::total_sign_response_len() {
+            Some(total) => self.setup_chunked_response(total),
+            None => self.sw_response(SW_INTERNAL_ERROR),
         }
-        RESP_BUF[p] = (SW_OK >> 8) as u8;
-        RESP_BUF[p + 1] = (SW_OK & 0xFF) as u8;
-        p += 2;
-        Response { ptr: RESP_BUF.as_ptr(), len: p }
     }
 
-    unsafe fn cmd_v1_sign_eth_tx(&self, data: &[u8], len: usize) -> Response {
-        if len < 5 { return self.sw_response(SW_WRONG_DATA); }
-        let path_elements = data[0] as usize;
-        let path_bytes = 1 + path_elements * 4;
-        if len < path_bytes { return self.sw_response(SW_WRONG_DATA); }
-        let tx_data = &data[path_bytes..];
-        let tx_len = len - path_bytes;
-        if tx_len == 0 || tx_len > 4096 { return self.sw_response(SW_WRONG_LENGTH); }
-        let chain_id = match crate::aa::extract_chain_id(tx_data) {
-            Some(id) => id,
-            None => return self.sw_response(SW_WRONG_DATA),
+    /// Parse the bundled sign-userop response framing — same shape for
+    /// the single-call and batch sign paths — out of `SIG_BUF` and return
+    /// the total length to ship to the host, or `None` if any declared
+    /// length overflows the response buffer (which can only happen on a
+    /// firmware bug, hence the `SW_INTERNAL_ERROR` mapping at the call
+    /// site).
+    ///
+    /// Framing (after the firmware's gateway write):
+    /// ```text
+    ///   [new_offchain_count(8 BE)]
+    ///   [init_code_len(4 BE)] [init_code...]
+    ///   [type1_len(4 BE)]    [type1...]
+    ///   [type2_len(4 BE)]    [type2...]
+    /// ```
+    unsafe fn total_sign_response_len() -> Option<usize> {
+        const COUNT_LEN: usize = 8;
+
+        let ic_len_off = COUNT_LEN;
+        let ic_len = read_be_u32(&SIG_BUF, ic_len_off)? as usize;
+
+        let t1_len_off = ic_len_off + 4 + ic_len;
+        let t1_len = read_be_u32(&SIG_BUF, t1_len_off)? as usize;
+
+        let t2_len_off = t1_len_off + 4 + t1_len;
+        let t2_len = read_be_u32(&SIG_BUF, t2_len_off)? as usize;
+
+        let total = t2_len_off + 4 + t2_len;
+        if total > MAX_SIGN_RESPONSE_LEN {
+            return None;
+        }
+        Some(total)
+    }
+
+    /// 0x62 SIGN_OFFCHAIN — produce a SPHINCS+C10 sig for an EIP-1271
+    /// request. Body is variable-length (`SIGN_OFFCHAIN_HEADER_LEN +
+    /// payload_len`); the secure world parses the `kind` byte and
+    /// validates `payload_len` against the per-kind constraints. The
+    /// hard upper bound (`SIGN_OFFCHAIN_INPUT_MAX_LEN`) is enforced
+    /// here so an oversize HID body is rejected before the gateway
+    /// call. PersonalSign payloads can run up to ~700 bytes — past the
+    /// single-APDU Lc=255 limit — so the request is APDU-chained;
+    /// `execute_chain` calls us with the assembled payload pulled out
+    /// of `CHAIN_BUF`.
+    ///
+    /// Response length depends on the `OFFCHAIN_FLAG_ACCOUNT_DEPLOYED`
+    /// bit in the input flags byte:
+    ///   * set (deployed): 4016 B (8 count + 4008 C10 sig)
+    ///   * clear (counterfactual): 8616 B (8 count + 8608 ERC-6492
+    ///     wrapped sig)
+    unsafe fn cmd_sign_offchain(&self, data_len: usize) -> Response {
+        if data_len < sphincs_tz_shared::SIGN_OFFCHAIN_HEADER_LEN
+            || data_len > sphincs_tz_shared::SIGN_OFFCHAIN_INPUT_MAX_LEN
+        {
+            return self.sw_response(SW_WRONG_LENGTH);
+        }
+        let flags = CHAIN_BUF[sphincs_tz_shared::SIGN_OFFCHAIN_INPUT_FLAGS_OFF];
+        let account_deployed =
+            flags & sphincs_tz_shared::OFFCHAIN_FLAG_ACCOUNT_DEPLOYED != 0;
+        let out_len = if account_deployed {
+            sphincs_tz_shared::SIGN_OFFCHAIN_OUTPUT_LEN
+        } else {
+            sphincs_tz_shared::SIGN_OFFCHAIN_OUTPUT_LEN_6492
         };
-
-        static ENTRYPOINT_V06: [u8; 20] = [
-            0x5f, 0xf1, 0x37, 0xd4, 0xb0, 0xfd, 0xcd, 0x49, 0xdc, 0xa3,
-            0x0c, 0x7c, 0xf5, 0x7e, 0x57, 0x8a, 0x02, 0x6d, 0x27, 0x89,
-        ];
-        let zero20 = [0u8; 20];
-        let zero32 = [0u8; 32];
-        let mut nonce = [0u8; 32]; nonce[31] = 1;
-        let mut call_gas = [0u8; 32]; call_gas[29] = 0x01; call_gas[30] = 0x86; call_gas[31] = 0xa0;
-        let mut ver_gas = [0u8; 32]; ver_gas[29] = 0x03; ver_gas[30] = 0x0d; ver_gas[31] = 0x40;
-        let mut pre_gas = [0u8; 32]; pre_gas[30] = 0x52; pre_gas[31] = 0x08;
-        let mut max_fee = [0u8; 32];
-        max_fee[24..32].copy_from_slice(&50_000_000_000u64.to_be_bytes());
-        let mut max_prio = [0u8; 32];
-        max_prio[24..32].copy_from_slice(&2_000_000_000u64.to_be_bytes());
-
-        let wrap = crate::aa::UserOpWrapper {
-            sender: &zero20, entry_point: &ENTRYPOINT_V06, chain_id,
-            nonce: &nonce, call_gas_limit: &call_gas, verification_gas_limit: &ver_gas,
-            pre_verification_gas: &pre_gas, max_fee_per_gas: &max_fee,
-            max_priority_fee_per_gas: &max_prio,
-            init_code_hash: &crate::aa::KECCAK_EMPTY,
-            paymaster_and_data_hash: &crate::aa::KECCAK_EMPTY,
-        };
-        let payload_len = crate::aa::build_userop_payload(&wrap, tx_data, &mut SIGN_PAYLOAD_BUF);
-        let status = nsc_api::sign_userop(&SIGN_PAYLOAD_BUF[..payload_len], &mut SIG_BUF[..SIGNATURE_LEN]);
-        self.sign_result_v1(status)
+        let status = nsc_api::sign_offchain(&CHAIN_BUF[..data_len], &mut SIG_BUF[..out_len]);
+        if status != NscStatus::Ok as u32 {
+            return self.nsc_status_to_response(status);
+        }
+        self.setup_chunked_response(out_len)
     }
 
-    unsafe fn cmd_v1_sign_eth_msg(&self, data: &[u8], len: usize) -> Response {
-        if len < 5 { return self.sw_response(SW_WRONG_DATA); }
-        let path_elements = data[0] as usize;
-        let path_bytes = 1 + path_elements * 4;
-        if len < path_bytes + 4 { return self.sw_response(SW_WRONG_DATA); }
-        let msg_data = &data[path_bytes..];
-        let msg_len = len - path_bytes;
-        if msg_len > SIGN_PAYLOAD_BUF_LEN { return self.sw_response(SW_WRONG_LENGTH); }
-
-        let mut p = 0usize;
-        SIGN_PAYLOAD_BUF[p] = 0u8;
-        p += 1;
-        SIGN_PAYLOAD_BUF[p..p + 4].copy_from_slice(&(msg_len as u32).to_le_bytes());
-        p += 4;
-        SIGN_PAYLOAD_BUF[p..p + msg_len].copy_from_slice(msg_data);
-        p += msg_len;
-        let status = nsc_api::sign_userop(&SIGN_PAYLOAD_BUF[..p], &mut SIG_BUF[..SIGNATURE_LEN]);
-        self.sign_result_v1(status)
+    /// 0x63 OFFCHAIN_STATUS — read per-slot off-chain state. Body: 13
+    /// bytes. Response: 24 bytes (fits in a single APDU).
+    unsafe fn cmd_offchain_status(&self, data: &[u8]) -> Response {
+        if data.len() != sphincs_tz_shared::OFFCHAIN_STATUS_INPUT_LEN {
+            return self.sw_response(SW_WRONG_LENGTH);
+        }
+        let status = nsc_api::offchain_status(
+            data,
+            &mut RESP_BUF[..sphincs_tz_shared::OFFCHAIN_STATUS_OUTPUT_LEN],
+        );
+        if status != NscStatus::Ok as u32 {
+            return self.nsc_status_to_response(status);
+        }
+        let total = sphincs_tz_shared::OFFCHAIN_STATUS_OUTPUT_LEN;
+        RESP_BUF[total..total + 2].copy_from_slice(&SW_OK.to_be_bytes());
+        Response {
+            ptr: RESP_BUF.as_ptr(),
+            len: total + 2,
+        }
     }
 
-    unsafe fn cmd_v1_sign_eip712(&self, data: &[u8], len: usize) -> Response {
-        if len < 5 { return self.sw_response(SW_WRONG_DATA); }
-        let path_elements = data[0] as usize;
-        let path_bytes = 1 + path_elements * 4;
-        if len < path_bytes + 4 { return self.sw_response(SW_WRONG_DATA); }
-        let msg_data = &data[path_bytes..];
-        let msg_len = len - path_bytes;
-        if msg_len > CLEAR_SIGN_BUF_LEN { return self.sw_response(SW_WRONG_LENGTH); }
-        CLEAR_SIGN_BUF[..msg_len].copy_from_slice(msg_data);
-        let status = nsc_api::clear_sign_msg(&CLEAR_SIGN_BUF[..msg_len], &mut SIG_BUF[..SIGNATURE_LEN]);
-        self.sign_result_v1(status)
-    }
-
-    unsafe fn cmd_v1_get_pin_remaining(&self) -> Response {
-        let remaining = nsc_api::get_remaining_attempts();
-        RESP_BUF[0] = remaining as u8;
-        RESP_BUF[1] = (SW_OK >> 8) as u8;
-        RESP_BUF[2] = (SW_OK & 0xFF) as u8;
-        Response { ptr: RESP_BUF.as_ptr(), len: 3 }
-    }
-
-    unsafe fn cmd_v1_unlock(&self) -> Response {
-        let status = nsc_api::request_unlock();
+    /// 0x64 OFFCHAIN_SYNC — bump per-slot `last_userop_count` to a
+    /// companion-supplied floor. Input is the 21-byte
+    /// `OFFCHAIN_SYNC_INPUT_LEN` payload. No response body, SW only.
+    unsafe fn cmd_offchain_sync(&self, data: &[u8]) -> Response {
+        if data.len() != sphincs_tz_shared::OFFCHAIN_SYNC_INPUT_LEN {
+            return self.sw_response(SW_WRONG_LENGTH);
+        }
+        let status = nsc_api::offchain_sync(data);
         self.nsc_status_to_response(status)
     }
 
+    /// Ensure the `[erc20][reserved_v1][cow_order][safe_v1][selector][self_attest][erc7730]`
+    /// u16-prefixed trailer skeleton is fully present before `received_len`,
+    /// padding any missing prefix with `[0x00, 0x00]`.
+    ///
+    /// Background: the secure-world sign_userop parser walks trailers
+    /// positionally in that exact order and then reads the `names`
+    /// trailer at whatever cursor lands after them. If the companion
+    /// sent a payload that stops earlier in the chain (e.g. only
+    /// `erc20+reserved_v1+cow_order`, or a bare `header+data` with no trailers at
+    /// all), the secure parser would consume the `[count][bundle_len][...]`
+    /// framing of the names trailer as `safe_v1`'s u16 length and the
+    /// next pair as `selector`'s — bytes that are almost always > the
+    /// per-trailer caps and trip "bad safe bundle" or "bad selector
+    /// bundle" on the OLED. (Earlier symptom: "Sign v3 len>cap" when
+    /// only 1 prefix was padded.)
+    ///
+    /// This helper walks the trailer chain and appends empty `[0, 0]`
+    /// u16 prefixes for any section not yet encoded, returning the
+    /// updated `received_len`. For a payload that already contains a
+    /// full skeleton this is a no-op. It is the ONLY trailer
+    /// normalisation NS does now that the metadata DBs live host-side:
+    /// the companion builds every real bundle; NS just guarantees a
+    /// parseable, fail-safe skeleton so missing trailers degrade
+    /// gracefully (unknown token / raw hex / blind-sign).
+    unsafe fn ensure_trailer_skeleton(received_len: usize) -> usize {
+        if received_len < SIGN_USEROP_HEADER_LEN {
+            return received_len;
+        }
+        let data_len =
+            u16::from_be_bytes([CHAIN_BUF[328], CHAIN_BUF[329]]) as usize;
+        let after_data = SIGN_USEROP_HEADER_LEN + data_len;
+        if after_data > received_len {
+            return received_len;
+        }
+        let mut pos = after_data;
+        let mut new_len = received_len;
+        // Seven empty u16 prefixes to ensure, in secure-parser order:
+        // erc20, reserved_v1, cow_order, safe_v1, selector, self_attest, erc7730.
+        // Must match the parse sequence in
+        // `secure/src/nsc/cmd_sign_userop.rs::run` exactly — any
+        // divergence causes the names trailer to misalign with the
+        // secure parser's cursor and surfaces on the OLED as a
+        // "bad <section> bundle" / "bad names count" / etc. error.
+        //
+        // History:
+        // - Bumped from 5 → 6 when commit 33cd0ed added the self_attest
+        //   slot; without this the NS-injected names count byte got read
+        //   as the self_attest u16 length and tripped "bad self-attest"
+        //   on every ETH transfer to a named address.
+        // - Bumped from 6 → 7 when the ERC-7730 clear-signing trailer
+        //   slot landed (after self_attest, before names). Without this
+        //   bump, an NS-injected ERC-20 bundle / names section for a
+        //   companion that ships no ERC-7730 trailer caused the secure
+        //   parser to read the names `[count][bundle_len]` as the
+        //   erc7730 trailer's u16 length, skip 256–1024 bytes of names
+        //   payload, then sample a random byte from inside the names
+        //   bundle as the next names_count → "bad names count" on the
+        //   OLED. The fix simply pads a 7th `[0, 0]` u16 so the secure
+        //   parser sees an absent erc7730 slot and lands on the real
+        //   NS-written names count byte.
+        for _ in 0..7 {
+            if pos + 2 > new_len {
+                if pos + 2 > CHAIN_BUF_LEN {
+                    return new_len;
+                }
+                CHAIN_BUF[pos..pos + 2].copy_from_slice(&0u16.to_be_bytes());
+                new_len = pos + 2;
+                pos += 2;
+            } else {
+                let section_len =
+                    u16::from_be_bytes([CHAIN_BUF[pos], CHAIN_BUF[pos + 1]]) as usize;
+                pos += 2 + section_len;
+                if pos > new_len {
+                    // Declared section extends past received_len — leave
+                    // it to the secure parser to reject; don't attempt
+                    // recovery that could mask a real truncation bug.
+                    return new_len;
+                }
+            }
+        }
+        new_len
+    }
+
+
     // ===================================================================
-    // GET_RESPONSE — drain pending large response (shared v1/v2)
+    // GET_RESPONSE (CLA-agnostic)
     // ===================================================================
 
     unsafe fn get_response(&self) -> Response {
-        if PENDING_PTR.is_null() || PENDING_POS >= PENDING_LEN {
-            PENDING_PTR = core::ptr::null();
+        if PENDING_PTR.is_null() || PENDING_LEN == 0 {
             return self.sw_response(SW_CONDITIONS_NOT_SATISFIED);
         }
 
-        let remaining = PENDING_LEN - PENDING_POS;
-        let chunk = core::cmp::min(remaining, APDU_MAX_RESP);
-        let is_last = (PENDING_POS + chunk) >= PENDING_LEN;
+        // Progress — the host is actively draining, so reset the
+        // inter-chunk idle timeout accumulator.
+        PENDING_ELAPSED_FRAMES = 0;
 
-        let src = core::slice::from_raw_parts(PENDING_PTR.add(PENDING_POS), chunk);
-        RESP_BUF[..chunk].copy_from_slice(src);
+        let remaining = PENDING_LEN - PENDING_POS;
+        // FI-hardened length clamp — a glitched `chunk` value here
+        // would either overflow CHUNK_BUF (if it exceeds APDU_MAX_RESP)
+        // or read past `PENDING_PTR + PENDING_POS + remaining` (if it
+        // exceeds `remaining`), in either case leaking adjacent memory
+        // into the response. See `pqsigner_fi::fi_min` docstring.
+        let chunk = pqsigner_fi::fi_min(remaining, APDU_MAX_RESP);
+        static mut CHUNK_BUF: [u8; APDU_MAX_RESP + 2] = [0u8; APDU_MAX_RESP + 2];
+        core::ptr::copy_nonoverlapping(PENDING_PTR.add(PENDING_POS), CHUNK_BUF.as_mut_ptr(), chunk);
         PENDING_POS += chunk;
 
-        if is_last {
-            PENDING_PTR = core::ptr::null();
-            RESP_BUF[chunk] = (SW_OK >> 8) as u8;
-            RESP_BUF[chunk + 1] = (SW_OK & 0xFF) as u8;
-            Response { ptr: RESP_BUF.as_ptr(), len: chunk + 2 }
+        if PENDING_POS < PENDING_LEN {
+            let left = PENDING_LEN - PENDING_POS;
+            CHUNK_BUF[chunk] = SW_MORE_DATA;
+            CHUNK_BUF[chunk + 1] = if left > 255 { 0xFF } else { left as u8 };
         } else {
-            let still_remaining = PENDING_LEN - PENDING_POS;
-            RESP_BUF[chunk] = SW_MORE_DATA;
-            RESP_BUF[chunk + 1] = if still_remaining > 255 { 0xFF } else { still_remaining as u8 };
-            Response { ptr: RESP_BUF.as_ptr(), len: chunk + 2 }
+            CHUNK_BUF[chunk] = (SW_OK >> 8) as u8;
+            CHUNK_BUF[chunk + 1] = (SW_OK & 0xFF) as u8;
+            PENDING_PTR = core::ptr::null();
+            PENDING_LEN = 0;
+            PENDING_POS = 0;
         }
+
+        Response {
+            ptr: CHUNK_BUF.as_ptr(),
+            len: chunk + 2,
+        }
+    }
+
+    /// Enforce the 30-second GET_RESPONSE inter-chunk timeout. Call once
+    /// per NS poll-loop iteration with the current `OTG_DSTS.FNSOF`
+    /// (`usb::usb_frame_number`). If a chunked-response drain has been
+    /// idle (no GET_RESPONSE) for `PENDING_TIMEOUT_FRAMES`, scrub the
+    /// pending cursor so a stalled host can't pin the buffer. No-op when
+    /// no drain is in progress.
+    ///
+    /// # Safety
+    /// Touches the module `PENDING_*` static-mut state under the
+    /// single-threaded NS dispatcher invariant (same as `get_response`
+    /// / `dispatch`).
+    pub unsafe fn check_response_timeout(&self, now_frame: u16) {
+        if PENDING_PTR.is_null() {
+            // No drain in progress — keep the clock reference fresh so
+            // the first frame of the next drain measures a small delta.
+            PENDING_ELAPSED_FRAMES = 0;
+            PENDING_LAST_FRAME = now_frame;
+            return;
+        }
+        let delta = now_frame.wrapping_sub(PENDING_LAST_FRAME) & 0x3FFF;
+        PENDING_LAST_FRAME = now_frame;
+        PENDING_ELAPSED_FRAMES = PENDING_ELAPSED_FRAMES.saturating_add(delta as u32);
+        if PENDING_ELAPSED_FRAMES >= PENDING_TIMEOUT_FRAMES {
+            // Abandoned drain — scrub.
+            PENDING_PTR = core::ptr::null();
+            PENDING_LEN = 0;
+            PENDING_POS = 0;
+            PENDING_ELAPSED_FRAMES = 0;
+        }
+    }
+
+    // ===================================================================
+    // Firmware-update command handlers (STM32U585 only)
+    // ===================================================================
+
+    /// CMD_FW_BEGIN — the 8 KB manifest has been accumulated in
+    /// `CHAIN_BUF[..len]`. Hand the whole buffer to the secure world.
+    #[cfg(feature = "stm32u585")]
+    unsafe fn cmd_fw_begin(&self, len: usize) -> Response {
+        if len != fw_manifest::MANIFEST_SIZE {
+            return self.sw_response(SW_WRONG_LENGTH);
+        }
+        let status = nsc_api::fw_begin(&CHAIN_BUF[..len]);
+        self.sw_response(nsc_status_to_sw(status))
+    }
+
+    /// CMD_FW_CHUNK — one APDU, payload is `[header(8) | data(N)]`.
+    /// Pass straight through; the secure world does the monotonic /
+    /// bounds checks against its in-SRAM streaming state.
+    #[cfg(feature = "stm32u585")]
+    unsafe fn cmd_fw_chunk(&self, data: &[u8]) -> Response {
+        if data.len() < FW_CHUNK_HEADER_LEN
+            || data.len() > FW_CHUNK_HEADER_LEN + FW_MAX_CHUNK
+        {
+            return self.sw_response(SW_WRONG_LENGTH);
+        }
+        let status = nsc_api::fw_chunk(data);
+        self.sw_response(nsc_status_to_sw(status))
+    }
+
+    /// CMD_FW_COMMIT — may not return if the commit succeeds (the
+    /// device resets). Maps to a cancelled status word if the user
+    /// rejects the dialog.
+    #[cfg(feature = "stm32u585")]
+    unsafe fn cmd_fw_commit(&self) -> Response {
+        let status = nsc_api::fw_commit();
+        self.sw_response(nsc_status_to_sw(status))
+    }
+
+    /// CMD_FW_STATUS — returns `[state|recv_s|recv_ns|slot]` + SW.
+    #[cfg(feature = "stm32u585")]
+    unsafe fn cmd_fw_status(&self) -> Response {
+        let mut out = [0u8; FW_STATUS_RESPONSE_LEN];
+        let status = nsc_api::fw_status(&mut out);
+        if status != 0 {
+            return self.sw_response(nsc_status_to_sw(status));
+        }
+        // Copy response + SW into RESP_BUF.
+        RESP_BUF[..FW_STATUS_RESPONSE_LEN].copy_from_slice(&out);
+        RESP_BUF[FW_STATUS_RESPONSE_LEN] = (SW_OK >> 8) as u8;
+        RESP_BUF[FW_STATUS_RESPONSE_LEN + 1] = (SW_OK & 0xFF) as u8;
+        Response {
+            ptr: RESP_BUF.as_ptr(),
+            len: FW_STATUS_RESPONSE_LEN + 2,
+        }
+    }
+
+    /// CMD_FW_ABORT — discard partial update. Always returns OK; the
+    /// secure-side drop is idempotent.
+    #[cfg(feature = "stm32u585")]
+    unsafe fn cmd_fw_abort(&self) -> Response {
+        let status = nsc_api::fw_abort();
+        self.sw_response(nsc_status_to_sw(status))
+    }
+
+    // ===================================================================
+    // Prodtest command handlers (`prodtest` feature only)
+    // ===================================================================
+    //
+    // Each handler wraps a `CMD_PRODTEST_*` veneer. Response layout:
+    //   [output_bytes ... | sw_hi | sw_lo]
+    // SW is `SW_OK` on Ok, `SW_INTERNAL_ERROR` otherwise. Output bytes
+    // are appended even on failure paths so the host fixture can still
+    // log diagnostic data (e.g. the BUTTON_TEST step-status byte).
+
+    #[cfg(feature = "prodtest")]
+    unsafe fn prodtest_finalize(&self, n: usize, status: u32) -> Response {
+        let sw = if status == 0 { SW_OK } else { SW_INTERNAL_ERROR };
+        RESP_BUF[n] = (sw >> 8) as u8;
+        RESP_BUF[n + 1] = (sw & 0xFF) as u8;
+        Response {
+            ptr: RESP_BUF.as_ptr(),
+            len: n + 2,
+        }
+    }
+
+    #[cfg(feature = "prodtest")]
+    unsafe fn cmd_prodtest_get_id(&self) -> Response {
+        let mut out = [0u8; 24];
+        let status = nsc_api::prodtest_get_id(&mut out);
+        RESP_BUF[..24].copy_from_slice(&out);
+        self.prodtest_finalize(24, status)
+    }
+
+    #[cfg(feature = "prodtest")]
+    unsafe fn cmd_prodtest_display_pattern(&self, data: &[u8]) -> Response {
+        if data.len() != 4 {
+            return self.sw_response(SW_WRONG_LENGTH);
+        }
+        let pattern = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+        let status = nsc_api::prodtest_display_pattern(pattern);
+        self.prodtest_finalize(0, status)
+    }
+
+    #[cfg(feature = "prodtest")]
+    unsafe fn cmd_prodtest_saes_selftest(&self) -> Response {
+        let mut out = [0u8; 8];
+        let status = nsc_api::prodtest_saes_selftest(&mut out);
+        RESP_BUF[..8].copy_from_slice(&out);
+        self.prodtest_finalize(8, status)
+    }
+
+    #[cfg(feature = "prodtest")]
+    unsafe fn cmd_prodtest_bhk_selftest(&self) -> Response {
+        let mut out = [0u8; 8];
+        let status = nsc_api::prodtest_bhk_selftest(&mut out);
+        RESP_BUF[..8].copy_from_slice(&out);
+        self.prodtest_finalize(8, status)
+    }
+
+    #[cfg(feature = "prodtest")]
+    unsafe fn cmd_prodtest_flash_rw(&self, data: &[u8]) -> Response {
+        if data.len() != 4 {
+            return self.sw_response(SW_WRONG_LENGTH);
+        }
+        let pattern = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+        let status = nsc_api::prodtest_flash_rw(pattern);
+        self.prodtest_finalize(0, status)
+    }
+
+    #[cfg(feature = "prodtest")]
+    unsafe fn cmd_prodtest_trng_sample(&self, data: &[u8]) -> Response {
+        if data.len() != 4 {
+            return self.sw_response(SW_WRONG_LENGTH);
+        }
+        let n = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+        // Cap at 254, not 256: prodtest_finalize appends a 2-byte status word at
+        // RESP_BUF[n..n+2], so n==256 would write RESP_BUF[256..258] one past the
+        // 256-byte buffer end (an OOB panic in the factory bring-up tool). The
+        // companion samples in <=254-byte chunks.
+        if n == 0 || n > 254 {
+            return self.sw_response(SW_WRONG_LENGTH);
+        }
+        let n_usize = n as usize;
+        // Buffer carved from RESP_BUF directly to avoid a stack copy.
+        let status = nsc_api::prodtest_trng_sample(n, &mut RESP_BUF[..n_usize]);
+        self.prodtest_finalize(n_usize, status)
+    }
+
+    #[cfg(feature = "prodtest")]
+    unsafe fn cmd_prodtest_optiga_handshake(&self) -> Response {
+        let mut out = [0u8; 16];
+        let status = nsc_api::prodtest_optiga_handshake(&mut out);
+        RESP_BUF[..16].copy_from_slice(&out);
+        self.prodtest_finalize(16, status)
+    }
+
+    #[cfg(feature = "prodtest")]
+    unsafe fn cmd_prodtest_se050_handshake(&self) -> Response {
+        let mut out = [0u8; 16];
+        let status = nsc_api::prodtest_se050_handshake(&mut out);
+        RESP_BUF[..16].copy_from_slice(&out);
+        self.prodtest_finalize(16, status)
+    }
+
+    #[cfg(feature = "prodtest")]
+    unsafe fn cmd_prodtest_usb_loopback(&self, data: &[u8]) -> Response {
+        if data.is_empty() || data.len() > 256 {
+            return self.sw_response(SW_WRONG_LENGTH);
+        }
+        // RESP_BUF == 256 bytes; we need data + 2 bytes SW. Worst case
+        // 256 + 2 = 258 > 256, so cap at 254 to be safe. The Phase C
+        // cap in the firmware is 256 but the single-APDU LC max is 255
+        // before SW; staying at 254 keeps headroom for the SW suffix
+        // inside RESP_BUF without needing GET_RESPONSE chunking.
+        if data.len() > 254 {
+            return self.sw_response(SW_WRONG_LENGTH);
+        }
+        // Use a stack buffer for the input copy so the input and
+        // output don't overlap on the secure side (`crate::SE` may not
+        // tolerate aliased ptrs).
+        let mut buf = [0u8; 256];
+        buf[..data.len()].copy_from_slice(data);
+        let status = nsc_api::prodtest_usb_loopback(
+            &buf[..data.len()],
+            &mut RESP_BUF[..data.len()],
+        );
+        self.prodtest_finalize(data.len(), status)
+    }
+
+    #[cfg(feature = "prodtest")]
+    unsafe fn cmd_prodtest_button_test(&self) -> Response {
+        let mut out = [0u8; 4];
+        let status = nsc_api::prodtest_button_test(&mut out);
+        RESP_BUF[..4].copy_from_slice(&out);
+        self.prodtest_finalize(4, status)
     }
 
     // ===================================================================
     // Helpers
     // ===================================================================
 
-    /// Build chunked response for a v1 signing result (raw SIGNATURE_LEN bytes).
-    unsafe fn sign_result_v1(&self, status: u32) -> Response {
-        if status != NscStatus::Ok as u32 {
-            return self.nsc_status_to_response(status);
-        }
-        self.setup_chunked_response(SIGNATURE_LEN)
-    }
-
-    /// Build chunked response for a v2 signing result (WRAPPER_TOTAL_LEN bytes).
-    unsafe fn sign_result_wrapped(&self, status: u32) -> Response {
-        if status != NscStatus::Ok as u32 {
-            return self.nsc_status_to_response(status);
-        }
-        self.setup_chunked_response(WRAPPER_TOTAL_LEN)
-    }
-
     /// Set up chunked GET_RESPONSE state for `total_data` bytes in SIG_BUF.
     unsafe fn setup_chunked_response(&self, total_data: usize) -> Response {
-        // Append SW_OK after the data
         SIG_BUF[total_data] = (SW_OK >> 8) as u8;
         SIG_BUF[total_data + 1] = (SW_OK & 0xFF) as u8;
 
         if total_data <= APDU_MAX_RESP {
-            Response {
+            return Response {
                 ptr: SIG_BUF.as_ptr(),
                 len: total_data + 2,
-            }
-        } else {
-            let first_chunk = APDU_MAX_RESP;
-            let remaining = total_data - first_chunk;
+            };
+        }
 
-            PENDING_PTR = SIG_BUF.as_ptr().add(first_chunk);
-            PENDING_LEN = remaining;
-            PENDING_POS = 0;
+        let first_chunk = APDU_MAX_RESP;
+        let remaining = total_data - first_chunk;
 
-            static mut FIRST_RESP: [u8; APDU_MAX_RESP + 2] = [0u8; APDU_MAX_RESP + 2];
-            core::ptr::copy_nonoverlapping(
-                SIG_BUF.as_ptr(),
-                FIRST_RESP.as_mut_ptr(),
-                first_chunk,
-            );
-            FIRST_RESP[first_chunk] = SW_MORE_DATA;
-            FIRST_RESP[first_chunk + 1] = if remaining > 255 { 0xFF } else { remaining as u8 };
+        PENDING_PTR = SIG_BUF.as_ptr().add(first_chunk);
+        PENDING_LEN = remaining;
+        PENDING_POS = 0;
 
-            Response {
-                ptr: FIRST_RESP.as_ptr(),
-                len: first_chunk + 2,
-            }
+        static mut FIRST_RESP: [u8; APDU_MAX_RESP + 2] = [0u8; APDU_MAX_RESP + 2];
+        core::ptr::copy_nonoverlapping(SIG_BUF.as_ptr(), FIRST_RESP.as_mut_ptr(), first_chunk);
+        FIRST_RESP[first_chunk] = SW_MORE_DATA;
+        FIRST_RESP[first_chunk + 1] = if remaining > 255 { 0xFF } else { remaining as u8 };
+
+        Response {
+            ptr: FIRST_RESP.as_ptr(),
+            len: first_chunk + 2,
         }
     }
 
     unsafe fn sw_response(&self, sw: u16) -> Response {
         RESP_BUF[0] = (sw >> 8) as u8;
         RESP_BUF[1] = (sw & 0xFF) as u8;
-        Response { ptr: RESP_BUF.as_ptr(), len: 2 }
+        Response {
+            ptr: RESP_BUF.as_ptr(),
+            len: 2,
+        }
     }
 
     unsafe fn nsc_status_to_response(&self, status: u32) -> Response {
-        let sw = match NscStatus::from(status) {
-            NscStatus::Ok => SW_OK,
-            NscStatus::PinIncorrect => SW_SECURITY_NOT_SATISFIED,
-            NscStatus::PinLocked => SW_CONDITIONS_NOT_SATISFIED,
-            NscStatus::NotInitialized => SW_CONDITIONS_NOT_SATISFIED,
-            NscStatus::UserRejected => SW_SECURITY_NOT_SATISFIED,
-            NscStatus::InvalidPointer => SW_INTERNAL_ERROR,
-            NscStatus::CryptoError => SW_INTERNAL_ERROR,
-            NscStatus::IdleWipe => SW_REFERENCED_DATA_INVALIDATED,
-            NscStatus::InternalError => SW_INTERNAL_ERROR,
-        };
-        self.sw_response(sw)
+        self.sw_response(nsc_status_to_sw(status))
+    }
+}
+
+/// Read a big-endian u32 starting at `off` in `buf`, returning `None`
+/// if reading 4 bytes (or the implicit follow-on length field at
+/// `off + 4 + len`) would walk past the buffer end. The reads are
+/// length-only — callers are responsible for keeping the response
+/// pointer inside `SIG_BUF` once the framing has been validated.
+#[inline]
+fn read_be_u32(buf: &[u8], off: usize) -> Option<u32> {
+    let end = off.checked_add(4)?;
+    if end > buf.len() {
+        return None;
+    }
+    Some(u32::from_be_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]]))
+}
+
+/// Free function so new FW_* command handlers can reuse the mapping
+/// without going through a `&self` method. (The existing sign path
+/// keeps using `nsc_status_to_response` which wraps this.)
+fn nsc_status_to_sw(status: u32) -> u16 {
+    match NscStatus::from(status) {
+        NscStatus::Ok => SW_OK,
+        NscStatus::PinIncorrect => SW_SECURITY_NOT_SATISFIED,
+        NscStatus::PinLocked => SW_CONDITIONS_NOT_SATISFIED,
+        NscStatus::NotInitialized => SW_CONDITIONS_NOT_SATISFIED,
+        NscStatus::UserRejected => SW_SECURITY_NOT_SATISFIED,
+        NscStatus::InvalidPointer => SW_INTERNAL_ERROR,
+        NscStatus::CryptoError => SW_INTERNAL_ERROR,
+        NscStatus::IdleWipe => SW_REFERENCED_DATA_INVALIDATED,
+        // Firmware-update statuses. Map to APDU status words that
+        // distinguish "transient retriable" from "permanent — abort".
+        //
+        // BadState, BadChunk, FlashError → SW_CONDITIONS_NOT_SATISFIED
+        //   The companion can issue CMD_FW_ABORT and retry from BEGIN.
+        // BadManifest, BadVersion, BadImage → SW_WRONG_DATA
+        //   The release the companion holds is unacceptable to this
+        //   device. The companion must fetch a different release.
+        // OtpExhausted → SW_FEATURE_NOT_SUPPORTED
+        //   This device will never accept another update. Surface a
+        //   clear end-of-life message in the companion UI.
+        NscStatus::FwUpdateBadState => SW_CONDITIONS_NOT_SATISFIED,
+        NscStatus::FwUpdateBadChunk => SW_CONDITIONS_NOT_SATISFIED,
+        NscStatus::FwUpdateFlashError => SW_CONDITIONS_NOT_SATISFIED,
+        NscStatus::FwUpdateBadManifest => SW_WRONG_DATA,
+        NscStatus::FwUpdateBadVersion => SW_WRONG_DATA,
+        NscStatus::FwUpdateBadImage => SW_WRONG_DATA,
+        NscStatus::FwUpdateOtpExhausted => SW_FEATURE_NOT_SUPPORTED,
+        // Off-chain (EIP-1271) sign refusals. All recoverable on the
+        // companion side: register a slot / publish a UserOp / rotate.
+        NscStatus::OffchainSlotUnregistered => SW_CONDITIONS_NOT_SATISFIED,
+        NscStatus::OffchainGapExceeded => SW_CONDITIONS_NOT_SATISFIED,
+        NscStatus::OffchainCapExceeded => SW_CONDITIONS_NOT_SATISFIED,
+        NscStatus::InternalError => SW_INTERNAL_ERROR,
     }
 }
 
@@ -1779,7 +2259,7 @@ impl CommandRouter {
 
 ### From `docs/companion/usb-protocol-v2.md`
 
-# PQSigner USB Protocol v2
+# PQSigner USB Protocol v2 (post-all-C10 cutover)
 
 Companion app integration guide for the PQSigner post-quantum hardware wallet.
 
@@ -1792,7 +2272,7 @@ Companion app integration guide for the PQSigner post-quantum hardware wallet.
 | Report size | 64 bytes (interrupt EP1 IN/OUT) |
 | Framing | Ledger-compatible APDU-over-HID |
 | CLA byte | **0xF0** (v2 native) |
-| Max APDU reassembly | 8192 bytes |
+| Max APDU reassembly | 4096 bytes (`shared::apdu_framing::MAX_APDU_RX`) |
 
 ### HID Frame Format
 
@@ -1826,12 +2306,14 @@ multiple APDUs with the same INS:
 - **P1 = 0x00**: last or only block
 - **P1 = 0x80**: more blocks follow
 
-The device accumulates data until it receives a block with `Lc < 255`
-(the short-last-chunk sentinel), then executes the command.
+The device accumulates data while P1 bit 7 is set and executes only when it
+receives a block with **P1 = 0x00**. `Lc` does not terminate a chain: a short
+intermediate block is legal with P1=0x80, and an exact-multiple-of-255 payload
+still needs its final data block marked P1=0x00.
 
 ### Response Chaining (GET_RESPONSE)
 
-Signing responses are 17,161 bytes. The device returns the first 253
+Signing responses are up to `MAX_SIGN_RESPONSE_LEN = 12,556` bytes. The device returns the first 253
 bytes with `SW = 0x61FF` (more data). The companion drains the rest by
 repeatedly sending `INS 0xC0` (GET_RESPONSE) until `SW = 0x9000`.
 
@@ -1840,529 +2322,308 @@ Host → Device:  SIGN_USEROP (chained)
 Device → Host:  [253 bytes] SW=0x61FF
 Host → Device:  GET_RESPONSE
 Device → Host:  [253 bytes] SW=0x61FF
-... (~68 round-trips)
+...
 Host → Device:  GET_RESPONSE
 Device → Host:  [remaining bytes] SW=0x9000
 ```
 
----
+## Instruction Set
 
-## Status Words
+> **Source of truth.** Authoritative INS values live in `proto/src/lib.rs`
+> (search for `INS_V2_*`). This table is a convenience snapshot — when in
+> doubt, check the constants.
 
-| SW | Meaning |
-|------|---------|
-| 0x9000 | Success |
-| 0x61XX | More data available (call GET_RESPONSE) |
+After the all-C10 cutover, the v2 protocol exposes the following commands:
+
+| INS  | Name                   | Chained? | P1         |
+|------|------------------------|----------|------------|
+| 0x01 | GET_DEVICE_INFO        | No       | 0          |
+| 0x02 | GET_STATUS             | No       | 0          |
+| 0x10 | UNLOCK                 | No       | 0          |
+| 0x11 | LOCK                   | No       | 0          |
+| 0x30 | SIGN_USEROP (unified)  | Yes      | 0x00/0x80  |
+| 0x32 | SIGN_USEROP_BATCH      | Yes      | 0x00/0x80  |
+| 0x60 | GET_WALLET_ADDRESS     | No       | 0          |
+| 0x61 | GET_INIT_CODE          | No       | 0          |
+| 0x62 | SIGN_OFFCHAIN          | Yes      | 0x00/0x80  |
+| 0x63 | OFFCHAIN_STATUS        | No       | 0          |
+| 0x70 | FW_BEGIN               | Yes      | 0x00/0x80  |
+| 0x71 | FW_CHUNK               | Yes      | 0x00/0x80  |
+| 0x72 | FW_COMMIT              | No       | 0          |
+| 0x73 | FW_STATUS              | No       | 0          |
+| 0x74 | FW_ABORT               | No       | 0          |
+| 0xC0 | GET_RESPONSE           | No       | 0          |
+
+### 0x30 SIGN_USEROP — unified sign
+
+**This is the only single-UserOp signing command in the post-cutover wallet.**
+The companion's flags request initCode or Type 1 output; firmware does not infer
+registration state. Current production companions may request the slot-0
+factory-deploy path or Type 2 only. They must not request/submit Type 1 until
+the reviewed wire bump described below supplies its missing binding material.
+
+**Input payload (`SIGN_USEROP_HEADER_LEN = 330` bytes of header + inner
+calldata):**
+
+```
+offset  size  field
+---------------------------------------------------------
+  0     8    chain_id (u64 BE)
+  8     4    flags (u32 BE — see shared/src/lib.rs)
+ 12    20    sender (MUST equal GET_WALLET_ADDRESS(account_index); mismatch is refused)
+ 32    20    entry_point (EntryPoint v0.6 address)
+ 52    32    nonce (u256 BE, base nonce for Type 1 if needed else Type 2)
+ 84    32    call_gas_limit (u256 BE)
+116    32    verification_gas_limit (u256 BE)
+148    32    pre_verification_gas (u256 BE)
+180    32    max_fee_per_gas (u256 BE)
+212    32    max_priority_fee_per_gas (u256 BE)
+244    32    paymaster_and_data_hash (sha256, SHA256_EMPTY when empty)
+276    20    to_address (inner tx recipient)
+296    32    value (u256 BE)
+328     2    data_len (u16 BE, 0..=4096)
+330     N    data
+```
+
+Before any signature is released, every confirmation set includes a mandatory
+`Signer acct #N` page followed by the full EIP-55 address independently derived
+for `account_index` in secure world. The wire `sender` must match that address,
+but is not trusted as the source of the displayed identity. Batch signing shows
+the same identity for each member confirmation and again at the final batch
+authorization gate.
+
+**Response (post-2026-04-29 layout):**
+
+```
+[new_offchain_count   u64 BE]               (8 bytes — for Type 2 calldata)
+[init_code_len        u32 BE]
+[init_code            init_code_len bytes]  (4280 B when FLAG_INCLUDE_INIT_CODE, else 0)
+[type1_len            u32 BE]
+[type1_wrapper        type1_len bytes]      (4128 B when FLAG_REGISTER_SLOT, else 0)
+[type2_len            u32 BE]
+[type2_wrapper        type2_len bytes]      (always 4128 B)
+```
+
+- `type1_len == 0` means only that no Type 1 was requested/emitted. Except for
+  slot 0 installed atomically by the factory path, the companion must verify
+  the selected slot is already registered on-chain before requesting Type 2.
+- `type1_len == 4128` means firmware signed a rotation to slot N≥1. Wire v2
+  does not return the 64-byte new slot public key required to reconstruct the
+  signed `addOwnerBytes(bytes)` calldata. Seedless production companions MUST
+  reject this response and MUST NOT retry it until a reviewed protocol bump
+  supplies the public key or complete Type-1 calldata.
+
+**Type 1 / Type 2 wrapper (each exactly 4128 bytes):**
+
+Both are `abi.encode(uint256 ownerIndex, bytes c10Sig)` where
+`c10Sig` is a raw 4008-byte SPHINCS+C10 signature
+(`C10_SIG_LEN = 4008`, `OWNER_BYTES_LEN = 64`). The wallet contract
+ABI-decodes them as `SignatureWrapper(uint256 ownerIndex, bytes signatureData)`
+in `validateUserOp`:
+
+- `ownerIndex == 0` → Type 1 (bootstrap-key sig); installs the slot pubkey
+  at the wrapper's destination index.
+- `ownerIndex >= 1` → Type 2 (slot-key sig); executes the user's call
+  via `executeWithOffchainCount(...)` which atomically updates
+  `offchainSigCount[i]` to `new_offchain_count`.
+
+The companion wraps an available wrapper in an EntryPoint v0.6 `UserOperation`
+(`UserOperation06`) with the appropriate
+`callData`:
+
+- **Type 1 UserOp (rotation, currently companion-blocked):** the signed calldata
+  is exactly `addOwnerBytes(newSlotPk)`. A no-op `execute(sender,0,"")` has a
+  different hash and fails the contract's Type-1 selector gate. Do not submit
+  it. First deployment is not Type 1: set `FLAG_INCLUDE_INIT_CODE`, use slot 0,
+  and keep `FLAG_REGISTER_SLOT` clear; the factory installs slot 0.
+- **Type 2 UserOp**: `callData = executeWithOffchainCount(ownerIndex,
+  new_offchain_count, to, value, data)` — the wallet bumps the EIP-1271
+  off-chain counter and dispatches the user's call atomically.
+
+### 0x10 UNLOCK
+
+No arguments. The secure world takes over the trusted UI, prompts the
+user for their PIN via buttons, and (on success) unlocks both secure
+elements. The PIN never crosses the gateway.
+
+Response is a status word only (no data).
+
+### 0x02 GET_STATUS
+
+Returns:
+```
+[provisioned u8] [locked u8] [pin_remaining u8]
+```
+
+### 0x01 GET_DEVICE_INFO
+
+Returns a versioning + capability header. Reports `ep_version = 0x0006`
+(EntryPoint v0.6) and `sig_param_set = 2` (SPHINCS+C10,
+`C10_SIG_LEN = 4008`).
+
+### 0x60 GET_WALLET_ADDRESS
+
+Input: empty for legacy `account_index = 0`, or `[account_index u32 BE]` for
+accounts `0..=255`. No chain id is accepted; wallet addresses are chain-
+independent by design.
+Output: 20-byte CREATE2-predicted ERC-1967 proxy address.
+First call after unlock takes <1 s (master keygen); cached afterwards.
+
+### 0x61 GET_INIT_CODE
+
+Pre-computed 4280-byte `initCode` for `(account_index, chain_id)` so the
+companion can run gas estimation against the EntryPoint without
+round-tripping through `0x30 SIGN_USEROP`.
+
+### 0x62 SIGN_OFFCHAIN
+
+EIP-1271 signature response with two layouts selected by the input `flags`
+byte:
+
+- `OFFCHAIN_FLAG_ACCOUNT_DEPLOYED = 1`:
+  `[new_local_offchain_count u64 BE][C10 sig (4008 B)]` (4016 bytes total).
+  Wrap the raw signature as `abi.encode(uint256 ownerIndex, bytes c10Sig)` and
+  call `wallet.isValidSignature(rawHash, wrappedSig)`.
+- `OFFCHAIN_FLAG_ACCOUNT_DEPLOYED = 0`:
+  `[new_local_offchain_count u64 BE][ERC-6492 blob (8608 B)]` (8616 bytes
+  total). The payload is already the complete ERC-6492 wrapper; pass it through
+  unchanged to an ERC-6492-aware verifier and do not ABI-wrap it again. This
+  counterfactual path is restricted to slot 0.
+
+The deployed-wallet path refuses an unregistered slot. The undeployed
+counterfactual path has one narrow exception: a never-used slot 0 is
+auto-registered locally so its ERC-6492 deploy-then-verify blob can be produced.
+Both paths refuse when the gap exceeds `MAX_OFFCHAIN_GAP = 100` or the combined
+cap is exhausted. Bootstrap key (`ownerIndex == 0`) is **forbidden** for
+EIP-1271.
+
+The input header is 17 B (`account(1) | chain(8) | slot(4) | kind(1) |
+payload_len(2) | flags(1)`). The `kind` byte selects the payload
+format:
+
+| `kind`                          | Value | Payload                                                                                       |
+|---------------------------------|-------|-----------------------------------------------------------------------------------------------|
+| `OFFCHAIN_KIND_RAW32`           | 0     | 32 companion-supplied opaque bytes; firmware wraps via Solady nested EIP-712 and displays `! BLIND RAW32`. Never translate a typed-data request into this kind. |
+| `OFFCHAIN_KIND_PERSONAL_SIGN`   | 1     | UTF-8 message ≤ `MAX_OFFCHAIN_PERSONAL_SIGN_LEN`; firmware applies EIP-191 prefix + wraps.    |
+| `OFFCHAIN_KIND_EIP712_TYPED`    | 2     | EIP-712 typed-data (see below) — Phase 4 of the ERC-7730 rollout.                              |
+| `OFFCHAIN_KIND_EIP712_TYPED_V3` | 3     | EIP-712 typed-data plus nested encodeData records; see the canonical companion guide §6.5.   |
+
+`RAW32` is a deliberately loud blind-sign tier, not evidence that the device
+understands a user's intent. A hostile companion can submit the final hash of
+otherwise structured typed data through this kind and suppress its semantic
+pages. Production companions MUST NOT downgrade structured requests to
+`RAW32`; production firmware should disable the kind unless the product owner
+explicitly accepts this residual.
+
+#### `kind = OFFCHAIN_KIND_EIP712_TYPED` (2) wire format
+
+Payload layout (immediately after the 17-byte header):
+
+```
+[u16 BE = 1]                  // domain_sep_present (must be 1)
+[u8; 32] domain_separator     // EIP-712 EIP712Domain final hash
+[u8; 32] primary_type_hash    // keccak256(encodeType(primaryType, types))
+[u16 BE] encoded_data_len     // ≤ MAX_OFFCHAIN_EIP712_ENCODED_DATA_LEN
+[u8; encoded_data_len] encoded_data
+                              // canonical EIP-712 encodeData body (NOT
+                              // including the type hash). Plain ABI encoding
+                              // matches only flat static scalar members;
+                              // dynamic/composite members use hash words.
+[u16 BE] trailer_len          // ERC-7730 descriptor trailer length
+[u8; trailer_len] trailer     // ERC-7730 bundle (see docs/companion/erc7730-integration.md)
+```
+
+The minimum payload length is `2 + 32 + 32 + 2 + 2 = 70` bytes (empty
+`encoded_data` + zero-length trailer reaches the strict framing parser but is
+rejected with `empty trailer`). The maximum payload length is
+`MAX_OFFCHAIN_EIP712_TYPED_LEN`.
+
+Secure-side processing:
+
+1. Verify the trailer bundle against `ERC7730_DESCRIPTORS_ROOT`.
+2. `cross_check_eip712(descriptor.ir, chain_id, domain_separator)` — exact,
+   FI-hardened binding. The descriptor compiler forced the deployment
+   `verifyingContract` into this domain separator; firmware does not receive a
+   second independent contract argument on this path.
+3. Constant-time select the authenticated descriptor format using the complete
+   32-byte `primary_type_hash`; a four-byte prefix or catalogue hint is never
+   sufficient.
+4. Compute `struct_hash = keccak256(primary_type_hash || encoded_data)`.
+5. Compute the EIP-712 final hash:
+   `final = keccak256(0x1901 || domain_separator || struct_hash)`.
+6. Render the descriptor's matching format via
+   `display::erc7730::render_erc7730_eip712_pages`; render the
+   ERC-8213 fingerprint with the `final` hash as the displayed value.
+7. Wrap `final` through Solady's nested PersonalSign envelope (no new
+   typehash, no on-chain change).
+8. Sign with the slot key + bump the per-slot off-chain counter.
+
+Output format is selected by the same deployed/counterfactual flag as kinds 0
+and 1: 4016-byte count+C10 for deployed wallets, or 8616-byte
+count+ERC-6492 blob for counterfactual slot 0.
+
+### 0x63 OFFCHAIN_STATUS
+
+Per-slot `(local_offchain_count, last_userop_count, registered)` readback.
+
+### 0x70..0x74 FW_BEGIN/CHUNK/COMMIT/STATUS/ABORT
+
+Streaming firmware update. PIN unlock required on every call. See
+`docs/firmware/firmware-update.md`.
+
+## Reserved / unused INS values
+
+These INS values exist as constants in `proto/src/lib.rs` but are no
+longer dispatched (or are reserved for backwards-compat probing):
+
+- `0x20 GET_BOOTSTRAP_VK`, `0x21 GET_MAIN_VK` — superseded by
+  `GET_WALLET_ADDRESS` (slot keys are derived on demand and not exposed)
+- `0x31 SIGN_CLEAR_USEROP` — clear-sign is now an in-line side-effect of
+  `0x30 SIGN_USEROP` when calldata is recognised (ERC-20, Safe, CowSwap…)
+- `0x40 SIGN_MESSAGE`, `0x41 SIGN_EIP712` — EIP-191 / generic EIP-712 are
+  served via `0x62 SIGN_OFFCHAIN` (Solady-nested EIP-712 / EIP-1271)
+- `0x50 SIGN_BOOTSTRAP` — folded into `0x30 SIGN_USEROP` with
+  `FLAG_REGISTER_SLOT`
+
+## Status words
+
+| SW     | Meaning |
+|--------|---------|
+| 0x9000 | OK |
+| 0x6100..0x61FF | More data available; send GET_RESPONSE |
+| 0x6501 | Slot exhausted (rotation path failed) |
 | 0x6700 | Wrong length |
-| 0x6982 | Security not satisfied (wrong PIN, user rejected on device) |
-| 0x6984 | Idle timeout — device locked itself mid-operation |
-| 0x6985 | Conditions not satisfied (device locked, not provisioned) |
-| 0x6A80 | Wrong data (malformed payload, invalid ZK proof) |
+| 0x6982 | Security condition not satisfied (bad PIN, cancelled sign) |
+| 0x6984 | Session expired (idle wipe) |
+| 0x6985 | Device locked |
+| 0x6A80 | Wrong data |
 | 0x6D00 | INS not supported |
 | 0x6E00 | CLA not supported |
 | 0x6F00 | Internal error |
-
----
-
-## Command Reference
-
-### INS 0x01 — GET_DEVICE_INFO
-
-Capability discovery. **Always call this first.** No unlock required.
-
-**Request:** empty
-
-**Response (41 bytes):**
-
-| Offset | Size | Field | Description |
-|--------|------|-------|-------------|
-| 0 | 2 | protocol_version | u16 BE, currently `0x0200` |
-| 2 | 1 | fw_major | |
-| 3 | 1 | fw_minor | |
-| 4 | 1 | fw_patch | |
-| 5 | 16 | device_uid | STM32 UID96 (zeros on dev builds) |
-| 21 | 4 | capabilities | u32 BE bitmap (see below) |
-| 25 | 1 | sig_param_set | 0 = SHA2-128f, 1 = SHA2-192f |
-| 26 | 2 | sig_size | u16 BE, raw signature bytes (17088) |
-| 28 | 4 | erc20_db_version | u32 BE, YYYYMMDD |
-| 32 | 4 | vk_db_version | u32 BE, YYYYMMDD |
-| 36 | 2 | ep_version | u16 BE, EntryPoint version (0x0006) |
-| 38 | 2 | wrapper_overhead | u16 BE, PQSignatureWrapper header (73) |
-
-**Capability bitmap:**
-
-| Bit | Feature |
-|-----|---------|
-| 0 | UserOp signing (SIGN_USEROP) |
-| 1 | ZK clear-sign calldata (SIGN_CLEAR_USEROP) |
-| 2 | EIP-712 typed-data signing (SIGN_EIP712) |
-| 3 | Personal message signing (SIGN_MESSAGE) |
-| 4 | Bootstrap signer (SIGN_BOOTSTRAP) |
-| 5 | Per-chain main key derivation (GET_MAIN_VK) |
-| 6 | CowSwap EIP-712 v3 |
-| 7 | Address verification (GET_WALLET_ADDRESS) |
-| 8 | Device attestation (reserved) |
-| 9 | EntryPoint v0.7 (reserved) |
-
-**Companion logic:**
-```
-total_wrapper_size = wrapper_overhead + sig_size  // 73 + 17088 = 17161
-```
-
----
-
-### INS 0x02 — GET_STATUS
-
-Check device state before operations. No unlock required.
-
-**Request:** empty
-
-**Response (3 bytes):**
-
-| Offset | Field | Values |
-|--------|-------|--------|
-| 0 | provisioned | 0 = not provisioned, 1 = provisioned |
-| 1 | locked | 0 = unlocked, 1 = locked |
-| 2 | pin_remaining | 0-10 attempts remaining |
-
----
-
-### INS 0x10 — UNLOCK
-
-Trigger PIN entry on the device's trusted OLED display. The PIN never
-crosses USB — the device handles everything internally.
-
-**Request:** empty
-
-**Response:** SW only
-
-- `0x9000` — unlocked successfully
-- `0x6982` — wrong PIN entered
-- `0x6985` — permanently locked (0 attempts remaining)
-- `0x6984` — user took too long, idle timeout
-
-**Note:** This blocks until the user finishes PIN entry on the device
-(~5-30 seconds). Set your USB timeout accordingly.
-
----
-
-### INS 0x11 — LOCK
-
-Explicitly lock the device, zeroizing all cached secrets.
-
-**Request:** empty  
-**Response:** `SW 0x9000`
-
----
-
-### INS 0x20 — GET_BOOTSTRAP_VK
-
-Return the bootstrap signer's 32-byte verifying key. This key is global
-(not per-chain), set at provisioning, and never changes.
-
-**No unlock required** — the VK is public data.
-
-**Request:** empty
-
-**Response (32 bytes):**
-
-```
-[0..16)   pk_seed    16 bytes
-[16..32)  pk_root    16 bytes
-```
-
-The bootstrap VK determines the wallet's CREATE2 address on all chains.
-
----
-
-### INS 0x21 — GET_MAIN_VK
-
-Derive and return the per-chain main signer's verifying key.
-
-**Unlock required.**
-
-**Request (12 bytes):**
-
-| Offset | Size | Field |
-|--------|------|-------|
-| 0 | 8 | chain_id — u64 BE (e.g., 1 for Ethereum, 8453 for Base) |
-| 8 | 4 | key_index — u32 BE (signer epoch, usually 0) |
-
-**Response (32 bytes):**
-
-```
-[0..16)   pk_seed    16 bytes
-[16..32)  pk_root    16 bytes
-```
-
-Each `(chain_id, key_index)` pair produces a cryptographically
-independent keypair.
-
----
-
-### INS 0x30 — SIGN_USEROP
-
-Sign an EIP-1559 transaction as an ERC-4337 UserOperation. The device
-displays the inner transaction on its trusted OLED, independently
-reconstructs the `execute()` calldata, computes the `userOpHash`, and
-signs it with SLH-DSA.
-
-**Unlock required. Command chaining required.**
-
-**Request:**
-
-| Offset | Size | Field | Source |
-|--------|------|-------|--------|
-| 0 | 4 | key_index | u32 BE — from `wallet.currentKeyIndex()` |
-| 4 | 4 | ots_index | u32 BE — from `wallet.currentOTSIndex()` |
-| 8 | 20 | sender | wallet contract address |
-| 28 | 20 | entry_point | EntryPoint address |
-| 48 | 8 | chain_id | u64 BE |
-| 56 | 32 | nonce | u256 BE — from EntryPoint |
-| 88 | 32 | call_gas_limit | u256 BE — from bundler estimate |
-| 120 | 32 | verification_gas_limit | u256 BE |
-| 152 | 32 | pre_verification_gas | u256 BE |
-| 184 | 32 | max_fee_per_gas | u256 BE |
-| 216 | 32 | max_priority_fee_per_gas | u256 BE |
-| 248 | 32 | init_code_hash | keccak256(initCode), or keccak256("") |
-| 280 | 32 | paymaster_and_data_hash | keccak256(paymasterAndData), or keccak256("") |
-| 312 | 2 | tx_len | u16 BE |
-| 314 | tx_len | tx_data | unsigned EIP-1559 RLP envelope |
-| 314+tx_len | 2 | bundle_len | u16 BE (0 = no ERC20 bundle) |
-| +2 | bundle_len | bundle_data | Merkle-verified ERC20 metadata |
-
-**Response: PQSignatureWrapper (17,161 bytes via GET_RESPONSE)**
-
-See [PQSignatureWrapper](#pqsignaturewrapper-response-format) below.
-
-**Constants:**
-```
-keccak256("") = 0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470
-EntryPoint v0.6 = 0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789
-```
-
----
-
-### INS 0x31 — SIGN_CLEAR_USEROP
-
-ZK clear-signed UserOp. A Groth16 proof attests that a human-readable
-string faithfully represents the calldata. The device Merkle-verifies
-the VK, runs the Groth16 verifier, displays the readable string on the
-OLED, then signs the userOpHash.
-
-**Unlock required. Command chaining required.**
-
-**Request:**
-
-| Offset | Size | Field |
-|--------|------|-------|
-| 0 | 4 | key_index | u32 BE |
-| 4 | 4 | ots_index | u32 BE |
-| 8 | 384 | proof | Groth16 proof (pi_A \|\| pi_B \|\| pi_C) |
-| 392 | 164 | calldata | zero-padded to 164 bytes |
-| 556 | 64 | readable | null-padded to 64 bytes |
-| 620 | 20 | sender | |
-| 640 | 20 | entry_point | |
-| 660 | 8 | chain_id | u64 BE |
-| 668 | 32 | nonce | u256 BE |
-| ... | ... | *(remaining AA fields same as SIGN_USEROP)* | |
-| ... | 2 | tx_len | u16 BE |
-| ... | tx_len | tx_data | |
-| ... | 2 | vk_bundle_len | u16 BE |
-| ... | vk_bundle_len | vk_bundle | Merkle-verified VK |
-
-**Response:** PQSignatureWrapper (17,161 bytes)
-
----
-
-### INS 0x40 — SIGN_MESSAGE
-
-EIP-191 personal_sign. The device displays the message on its trusted
-OLED and signs `keccak256("\x19Ethereum Signed Message:\n" + len + msg)`.
-
-**Unlock required. Command chaining for messages > ~230 bytes.**
-
-**Request:**
-
-| Offset | Size | Field |
-|--------|------|-------|
-| 0 | 4 | key_index | u32 BE |
-| 4 | 4 | ots_index | u32 BE |
-| 8 | 8 | chain_id | u64 BE (for display) |
-| 16 | 2 | msg_len | u16 BE |
-| 18 | msg_len | message | raw bytes (max 1024) |
-
-**Response:** PQSignatureWrapper (17,161 bytes)
-
----
-
-### INS 0x41 — SIGN_EIP712
-
-EIP-712 typed data signing with ZK clear-sign verification. Used for
-CowSwap GPv2 orders and future off-chain signature protocols.
-
-**Unlock required. Command chaining required.**
-
-**Request:**
-
-| Offset | Size | Field |
-|--------|------|-------|
-| 0 | 4 | key_index | u32 BE |
-| 4 | 4 | ots_index | u32 BE |
-| 8 | 384 | proof | Groth16 proof |
-| 392 | 204 | canonical | protocol-specific packed encoding |
-| 596 | 128 | readable | null-padded to 128 bytes |
-| 724 | 2 | vk_bundle_len | u16 BE |
-| 726 | vk_bundle_len | vk_bundle | Merkle-verified VK |
-
-**Response:** PQSignatureWrapper (17,161 bytes)
-
----
-
-### INS 0x50 — SIGN_BOOTSTRAP
-
-Sign a 32-byte hash with the bootstrap key. Used for wallet deployment
-and emergency signer rotation.
-
-**Unlock required.**
-
-**Request (37 bytes):**
-
-| Offset | Size | Field |
-|--------|------|-------|
-| 0 | 4 | ots_index | u32 BE — from `wallet.bootstrapOTSIndex()` |
-| 4 | 1 | context_tag | 0x00=DEPLOY, 0x01=ROTATE, 0x02=GENERIC |
-| 5 | 32 | msg_hash | the bytes32 to sign |
-
-The context_tag controls what the device displays:
-- `0x00`: "Deploy wallet?" + hash preview
-- `0x01`: "Rotate signer?" + hash preview
-- `0x02`: "Bootstrap sign?" + hash preview (warning banner)
-
-**Response:** PQSignatureWrapper (17,161 bytes, signer_type=0x01)
-
----
-
-### INS 0x60 — GET_WALLET_ADDRESS
-
-Compute the CREATE2 wallet address from the device's stored bootstrap VK
-plus factory parameters. The device independently computes the address
-and displays it on the OLED for the user to verify visually.
-
-**No unlock required.**
-
-**Request (60 bytes):**
-
-| Offset | Size | Field |
-|--------|------|-------|
-| 0 | 8 | chain_id | u64 BE (displayed on OLED) |
-| 8 | 20 | factory_address | PQCoinbaseSmartWalletFactory |
-| 28 | 32 | init_code_hash | from `factory.initCodeHash()` |
-
-The device computes:
-```
-pk_seed_padded = bootstrap_vk[0..16] ++ zeros[16]
-pk_root_padded = bootstrap_vk[16..32] ++ zeros[16]
-salt = keccak256(pk_seed_padded ++ pk_root_padded)
-address = keccak256(0xFF ++ factory ++ salt ++ init_code_hash)[12..32]
-```
-
-**Response (20 bytes):** the Ethereum address.
-
-The user must confirm on the device before the response is sent. If the
-user cancels, SW = 0x6982.
-
----
-
-### INS 0xC0 — GET_RESPONSE
-
-Drain remaining bytes of a large response. See
-[Response Chaining](#response-chaining-get_response).
-
-**Request:** empty  
-**Response:** next chunk (up to 253 bytes) + SW
-
----
-
-## PQSignatureWrapper Response Format
-
-All signing commands return this structured response. The companion app
-ABI-encodes it for on-chain submission in the UserOp's `signature` field.
-
-```
-[0]        signer_type    u8     0x00=MAIN, 0x01=BOOTSTRAP
-[1..5)     key_index      u32 BE
-[5..9)     ots_index      u32 BE
-[9..41)    pk_seed        32 bytes (16 bytes right-padded to bytes32)
-[41..73)   pk_root        32 bytes (16 bytes right-padded to bytes32)
-[73..17161) signature     17088 bytes (SLH-DSA-SHA2-128f)
-```
-
-**Total: 17,161 bytes** (73 header + 17,088 signature)
-
-### ABI Encoding for On-Chain
-
-The on-chain `PQCoinbaseSmartWallet.validateUserOp()` expects:
-
-```solidity
-abi.encode(PQSignatureWrapper({
-    signerType:  SignerType(wrapper[0]),        // MAIN or BOOTSTRAP
-    keyIndex:    uint32(wrapper[1..5]),
-    otsIndex:    uint32(wrapper[5..9]),
-    pkSeed:      bytes32(wrapper[9..41]),       // already padded
-    pkRoot:      bytes32(wrapper[41..73]),       // already padded
-    signature:   bytes(wrapper[73..17161])
-}))
-```
-
----
-
-## Companion App Workflows
-
-### First Connection
-
-```
-GET_DEVICE_INFO                → capabilities, sig_size, versions
-GET_STATUS                     → provisioned? locked?
-if locked:
-    UNLOCK                     → user enters PIN on device
-GET_BOOTSTRAP_VK               → 32-byte VK → compute wallet addresses
-GET_MAIN_VK(chain_id, 0)       → main signer VK for this chain
-```
-
-### Sending ETH
-
-```
-1. Build unsigned EIP-1559 envelope
-2. Query bundler for gas estimates
-3. Query on-chain: wallet.currentKeyIndex(), wallet.currentOTSIndex()
-4. Query EntryPoint nonce
-
-SIGN_USEROP(key_index, ots_index, aa_header, tx)
-  → user confirms "Send X ETH to 0x..." on device
-  → GET_RESPONSE loop → 17161-byte PQSignatureWrapper
-
-5. ABI-encode wrapper → UserOp.signature
-6. Submit UserOp to bundler
-```
-
-### DeFi Interaction (ZK Clear-Signed)
-
-```
-1. Build calldata (e.g., aave.supply(USDC, 1000))
-2. Generate Groth16 proof off-device: proof binds calldata → readable
-3. Look up VK bundle from local Merkle DB
-
-SIGN_CLEAR_USEROP(key_index, ots_index, proof, calldata,
-                  "Aave V3: Supply 1000 USDC", aa_header, tx, vk_bundle)
-  → device verifies proof, shows "Aave V3: Supply 1000 USDC"
-  → PQSignatureWrapper
-
-4. Submit to bundler
-```
-
-### Deploy Wallet on New Chain
-
-```
-1. GET_BOOTSTRAP_VK → (pk_seed, pk_root)
-2. GET_MAIN_VK(chain_id, 0) → initial main signer (pk_seed, pk_root)
-3. Compute auth_msg:
-     keccak256("PQWALLET_INIT_V1" ++ mainPkSeed_padded ++ mainPkRoot_padded)
-
-4. SIGN_BOOTSTRAP(bootstrap_ots_index, 0x00, auth_msg)
-     → user confirms "Deploy wallet?"
-     → PQSignatureWrapper (bootstrap sig)
-
-5. Construct initCode:
-     factory_addr ++ abi.encodeCall(createAccount,
-       (bootstrapPkSeed_padded, bootstrapPkRoot_padded,
-        mainPkSeed_padded, mainPkRoot_padded, bootstrap_sig))
-
-6. Build deployment UserOp with initCode
-7. SIGN_USEROP(0, 0, aa_header, inner_tx)
-     → PQSignatureWrapper (main sig)
-8. Submit to bundler
-```
-
-### CowSwap EIP-712 Order
-
-```
-1. Pack GPv2Order into 204-byte canonical encoding
-2. Generate Groth16 proof: canonical → "Sell 100 USDC for >= 80 DAI"
-
-SIGN_EIP712(key_index, ots_index, proof, canonical, readable, vk_bundle)
-  → device verifies proof, shows "Sell 100 USDC for >= 80 DAI"
-  → PQSignatureWrapper
-
-3. Submit signed order to CowSwap API
-```
-
-### Receive Funds (Address Verification)
-
-```
-GET_WALLET_ADDRESS(chain_id, factory_addr, init_code_hash)
-  → device computes address, displays on OLED
-  → user verifies, presses confirm
-  → returns 20-byte address
-
-Compare with locally computed address. Protects against clipboard
-attacks and compromised companion displays.
-```
-
----
-
-## Multi-Chain Key Architecture
-
-```
-BIP-39 entropy (32 bytes, stored encrypted on dual secure elements)
-  │
-  ├─► Bootstrap signer (global, never rotates)
-  │     domain: "pqwallet-bootstrap-*"
-  │     Used for: deployment, emergency rotation
-  │     Determines wallet address on all chains (via CREATE2)
-  │
-  ├─► Main signer (chain_id=1, key_index=0)
-  │     domain: "pqwallet-main-*" + chain_id + key_index
-  │     Used for: Ethereum mainnet transactions
-  │     Rotates every ~1M signatures
-  │
-  ├─► Main signer (chain_id=8453, key_index=0)
-  │     Used for: Base transactions
-  │     Cryptographically independent from other chains
-  │
-  └─► Main signer (chain_id=42161, key_index=0)
-        Used for: Arbitrum transactions
-```
-
-Same 24-word recovery phrase produces the same keys on any PQSigner
-device running this firmware.
-
----
-
-## Constants
-
-```
-Signature size (SHA2-128f):     17,088 bytes
-Wrapper header:                 73 bytes
-Total wrapper:                  17,161 bytes
-Max message length:             1,024 bytes
-Max inner tx length:            4,096 bytes
-APDU max data per chunk:        255 bytes
-APDU max response per chunk:    253 bytes
-GET_RESPONSE round-trips:       ~68 for a full signature
-VK size (2-public-signal):      960 bytes
-VK size (3-public-signal):      1,056 bytes
-ZK proof size:                  384 bytes
-ZK calldata field:              164 bytes (zero-padded)
-ZK readable field:              64 bytes (EIP-1559) / 128 bytes (EIP-712)
-EIP-712 canonical field:        204 bytes (CowSwap GPv2Order v3)
-```
 
 
 
 ### From `docs/hardware/usb-hid-setup.md`
 
 # USB HID Setup Guide
+
+> **🟠 Pre-cutover protocol details superseded (2026-04-30 audit).**
+>
+> The hardware setup, cabling, JP4 configuration, flashing, udev rules, and
+> Chrome WebHID flow described below are still correct. The **APDU command set
+> shown in §"USB Protocol"** is from the v1 era (CLA `0xE0`, SLH-DSA 17,088-byte
+> signatures, INS 0x02/0x04/0x06/0x08/0x0C). It does **not** describe the
+> shipping protocol.
+>
+> Current protocol after the all-C10 cutover is **CLA `0xF0`** with INS
+> `0x01..0x74` (see proto/src/lib.rs `INS_V2_*`). Authoritative spec:
+>
+> - `docs/companion/usb-protocol-v2.md` — wire format, INS table, request/response layouts
+> - `docs/companion/companion-app-integration.md` — full integration walkthrough
+> - `proto/src/lib.rs` — `INS_V2_*` constants are source of truth
+>
+> The hardware-setup half of this doc (CN1/CN8/JP4/cables/udev) is preserved
+> as-is for board bring-up.
 
 USB HID transport for PQSigner on the B-U585I-IOT02A discovery board.
 
@@ -2466,41 +2727,15 @@ google-chrome tools/webhid_test.html
 
 ## USB Protocol
 
-The device speaks a Keycard Shell compatible APDU-over-HID protocol:
+The v1 APDU command set that previously lived here (CLA `0xE0`, the
+0x02..0x0C INS table, and SLH-DSA 17,088-byte chunked responses) has been
+**removed as superseded** — it does not describe the shipping firmware.
 
-- **VID/PID**: 0x1209 / 0x7051
-- **USB Class**: Custom HID (Usage Page 0xFFA0)
-- **Endpoints**: EP1 IN + EP1 OUT, 64-byte Interrupt, 1ms poll
-- **Framing**: Ledger-compatible (channel ID + sequence + fragmentation)
-- **APDU CLA**: 0xE0
+The current wire protocol is CLA `0xF0` with the `INS_V2_*` command set,
+signing with SPHINCS+C10 (4008-byte signatures). See:
 
-### Commands
-
-| INS | Name | Description |
-|-----|------|-------------|
-| 0x02 | GET_PUBLIC | Export SLH-DSA verifying key (32 bytes) |
-| 0x04 | SIGN_ETH_TX | Sign EIP-1559 transaction |
-| 0x06 | GET_APP_CONF | Firmware version + device info |
-| 0x08 | SIGN_ETH_MSG | Sign Ethereum message (personal_sign) |
-| 0x0C | SIGN_EIP712 | Sign EIP-712 typed data |
-| 0x10 | GET_PIN_REMAINING | PIN attempts remaining |
-| 0x12 | UNLOCK | PIN entry on device |
-| 0xC0 | GET_RESPONSE | Retrieve remaining response data |
-
-### Command chaining
-
-For payloads > 255 bytes, use P1-based chaining:
-- P1=0x00: First chunk
-- P1=0x01: Continuation chunks
-- Chain ends when Lc < 255 (last chunk)
-
-### Large responses (signatures)
-
-SLH-DSA signatures are 17,088 bytes. Responses > 253 bytes use
-APDU-level chunking:
-- First response: 253 bytes data + SW=0x61FF
-- Host sends GET_RESPONSE (INS 0xC0) to drain remaining data
-- Final chunk: remaining data + SW=0x9000
+- `docs/companion/usb-protocol-v2.md` — wire format, INS table, request/response layouts
+- `proto/src/lib.rs` — `APDU_CLA_V2` / `INS_V2_*` constants (source of truth)
 
 ## Architecture
 
@@ -2517,7 +2752,7 @@ Host PC (WebHID / node-hid / hidapi)
     |
 [NSC Gateway]                   ← Shared-memory mailbox
     |
-[Secure World]                  ← SLH-DSA signing, PIN, ZK verify
+[Secure World]                  ← signing, PIN, native trusted-display decode
 ```
 
 USB runs entirely in the **non-secure TrustZone world**. The secure

@@ -8,14 +8,13 @@
 //!
 //! ## interpolatedIntent
 //!
-//! Phase 4 v1 omits `{path}` substitution. The seed corpus's intent
-//! strings are all static literals ("Send", "Wrap", "Swap on Uniswap",
-//! …) so there is nothing to interpolate. When a descriptor that uses
-//! interpolatedIntent lands in the registry, Phase 5 wires the path-
-//! lookup-and-format substitution machinery; until then, the
-//! formatter dispatch loop renders interpolation tokens verbatim
-//! (e.g., "Send {amount} {token}" prints with the braces still in).
-//! That's intentionally ugly so a user-facing review notices.
+//! The host compiler currently models but ignores `interpolatedIntent`; it
+//! neither substitutes that field nor emits its template into the IR. The
+//! format header therefore contains only the descriptor's separate static
+//! `intent`, or the host-generated `"Sign"` fallback when `intent` is absent.
+//! This renderer never receives `interpolatedIntent` tokens and does not print
+//! their braces literally. Dynamic interpolation remains unsupported UX and
+//! must not be claimed as displayed content.
 
 use super::super::primitives::write_line;
 use crate::ir::{Erc7730Ir, FormatHeader};
@@ -32,14 +31,16 @@ pub const INTENT_BANNER_PAGES: usize = 2;
 #[cfg(not(feature = "erc7730-dev-unattested"))]
 pub const INTENT_BANNER_PAGES: usize = 1;
 
-/// Write the intent banner page. Always allocates exactly one page.
+/// Write the intent banner. Allocates one intent page and, in an explicitly
+/// acknowledged dev-unattested build, one preceding warning page.
 ///
 /// Under the `erc7730-dev-unattested` Cargo feature, allocates an
 /// EXTRA preceding page with a "DEV UNATTESTED" warning row so a dev
-/// confirming on a bring-up build cannot miss that the host-side
-/// attestation gate was relaxed. The feature is mutually exclusive
-/// with `mode-production` (compile_error in `nsc/mod.rs`), so a
-/// shipped build will never render this row.
+/// confirming on a bring-up build cannot mistake the current catalogue for
+/// ERC-8176-verified provenance. No ERC-8176 verifier exists yet; production
+/// rejects the dev root. The secure crate's generated provenance fences make
+/// this feature mandatory for non-test dev firmware and reject it when a
+/// future verified root is selected.
 pub(super) fn render_intent_banner(
     pages: &mut Pages,
     ir: &Erc7730Ir<'_>,

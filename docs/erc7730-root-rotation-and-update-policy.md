@@ -1,6 +1,7 @@
 # ERC-7730 descriptor-root rotation & update policy (ADR, 2026-07-02)
 
-**Status: accepted (documents current design + a roadmapped lighter channel).**
+**Status: accepted architecture, implementation blocked by firmware-release
+quarantine (documents the intended design + a roadmapped lighter channel).**
 Consolidates the root-update decision that until now lived only in archived
 handoffs (`docs/archive/handoff-erc7730-phase2.md`, phase3), surfaced by the
 2026-07 implementation review (§2.5). Not a code change.
@@ -29,11 +30,13 @@ user wants rides a full FW release.
    a companion-supplied, unpinned root — that would let the companion (the
    untrusted side) choose what "clear-signs".
 
-2. **Root updates ride the existing signed FW-update chain.** No separate,
-   lower-assurance descriptor-update path ships in v1. The FW-update preimage
-   (`"PQFW_V1" || fw_version || secure_hash || nonsecure_hash`) already covers
-   the firmware image that embeds the root, so a root change is authenticated by
-   the same release key and reproducible-build chain — no new trust surface.
+2. **Root updates will ride the reviewed signed FW-update chain after rollback
+   closure.** No separate, lower-assurance descriptor-update path ships in v1.
+   The current `PQFW_V1` signer/release backend is explicitly quarantined and
+   grants no production authority. The frozen Draft-0.9 replacement manifest
+   binds the secure image that embeds the root; only after that backend, its
+   resource gates, and its release ceremony are implemented and approved may a
+   root change inherit the firmware release key's authority.
 
 3. **Companion ↔ firmware root-compatibility policy.** The descriptor root and
    generated known-call filter form one versioned catalogue. A proof cut from a
@@ -41,9 +44,11 @@ user wants rides a full FW release.
    filter, the device then hard-refuses instead of blind-signing. Conversely, an
    older companion that omits a tuple in the newer firmware filter is refused.
    Only a tuple genuinely unknown to the installed firmware may use the generic
-   ladder. The companion must therefore compare its root to the `CMD`-reported
-   firmware root and require a compatible update on mismatch. **No version
-   negotiation; mismatch = refuse affected known calls, never mis-render.**
+   ladder. A root-reporting gateway command does not currently exist. Until one
+   is implemented and reviewed, a companion release must pin its catalogue to
+   an exact firmware release manifest/version and treat any uncertain pairing
+   as incompatible. **No version negotiation; mismatch or unknown pairing =
+   refuse affected known calls, never mis-render.**
 
 4. **Resync cadence (post-ship): batched, not per-descriptor.** Roll the
    vendored corpus + root on the normal FW-release train (see the resync
@@ -72,9 +77,11 @@ chain and stored in flash:
 
 ## Resync ceremony (the recurring operation)
 
-1. `xtask vendor-registry` — copy the compilable subset from an upstream
-   checkout into `secure/data/erc7730-registry/` (records the upstream SHA;
-   auto-stamping is review item 2.3).
+1. `xtask vendor-registry` — copy the complete security-relevant JSON corpus
+   from an upstream checkout into `secure/data/erc7730-registry/`. The tool
+   proves exact accepted-catalogue and known/refused-call coverage, but does
+   **not** stamp or authenticate the Git SHA; reviewers verify the source
+   checkout and update the README receipt explicitly.
 2. Re-apply curations (until the 2.1 overlay lands, these are in-place edits;
    the guard tests fail loud if dropped).
 3. `cargo run -p dbgen` — regenerate the blob, `db_roots.rs` root, and the
@@ -83,7 +90,14 @@ chain and stored in flash:
 4. **Review the review-file diff**: leaves gained/lost, any `degraded=` markers
    (finding 1.1), any new skips by category, any `CONFLICT` dedup error
    (finding 2.2). This is the human gate on what the device will trust.
-5. Commit; the root rides the next signed FW release.
+5. Commit; after the firmware-release quarantine closes, the root rides the
+   next reviewed and signed firmware release. Before closure this step produces
+   development artifacts only.
+6. When provenance first changes from `dev-unattested` to
+   `erc8176-verified`, remove the temporary debug/mock/e2e feature coupling to
+   `erc7730-dev-unattested` in `secure/Cargo.toml` in the same root rotation.
+   Generated fences deliberately reject a verified root that still requests
+   the dev-warning feature, so this migration cannot be deferred silently.
 
 ## Related
 

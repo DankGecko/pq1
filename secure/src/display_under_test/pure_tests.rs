@@ -745,7 +745,7 @@ fn positive_eip1271_raw32_six_pages() {
     );
     assert_eq!(pages.len, 6);
     assert_eq!(row_str(&pages.buf[0][0]), "EIP-1271 Sign?");
-    assert_eq!(row_str(&pages.buf[0][1]), "! Raw 32-byte");
+    assert_eq!(row_str(&pages.buf[0][1]), "! BLIND RAW32");
     assert_eq!(row_str(&pages.buf[3][0]), "Hash 1/2:");
     assert_eq!(row_str(&pages.buf[4][0]), "Hash 2/2:");
     // Hash 1/2 row 1: first 8 bytes hex

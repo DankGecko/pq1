@@ -96,7 +96,7 @@ if __name__ == "__main__":
     print()
 
     # ── Emit input.json files for the circuit-level negative test ──────
-    # (consumed by docs/security/cowswap-zk-poc/run_overflow_negative_test.sh against
+    # (historically consumed by docs/archive/cowswap-zk-poc/run_overflow_negative_test.sh against
     #  circuits/test/format_trimmed_overflow_test.circom)
     import json
     import os

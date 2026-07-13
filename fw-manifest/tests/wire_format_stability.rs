@@ -16,8 +16,8 @@ use fw_manifest::{
     OFF_CRC32, OFF_FW_VERSION, OFF_MAGIC, OFF_MANIFEST_DIGEST, OFF_MANIFEST_VERSION,
     OFF_NONSECURE_HASH, OFF_NONSECURE_LEN, OFF_RESERVED_1, OFF_RESERVED_2, OFF_SECURE_HASH,
     OFF_SECURE_LEN, OFF_SIGNATURE, OFF_SLOT, OFF_TRY_ONCE, OFF_VENDOR_FPR, SIGNATURE_LEN,
-    SIGNED_PREIMAGE_LEN, SLOT_A, SLOT_B, TRY_ONCE_COMMITTED, TRY_ONCE_COMMITTING, TRY_ONCE_TRIED,
-    VERIFYING_KEY_LEN,
+    SIGNED_PREIMAGE_LEN, SLOT_A, SLOT_B, SLOT_NS_CAPACITY, SLOT_SECURE_CAPACITY,
+    TRY_ONCE_COMMITTED, TRY_ONCE_COMMITTING, TRY_ONCE_TRIED, VERIFYING_KEY_LEN,
 };
 
 // ---------------------------------------------------------------------------
@@ -31,6 +31,14 @@ fn negative_manifest_size_must_be_one_stm32u585_flash_page() {
         "MANIFEST_SIZE must be one STM32U585 flash page (8 KiB) — changing this re-partitions \
          the manifest A/B layout in flash and breaks every shipped FSBL"
     );
+}
+
+#[test]
+fn positive_slot_capacities_match_frozen_flash_geometry() {
+    assert_eq!(SLOT_SECURE_CAPACITY, 58 * 8 * 1024);
+    assert_eq!(SLOT_SECURE_CAPACITY, 475_136);
+    assert_eq!(SLOT_NS_CAPACITY, 64 * 8 * 1024);
+    assert_eq!(SLOT_NS_CAPACITY, 524_288);
 }
 
 #[test]

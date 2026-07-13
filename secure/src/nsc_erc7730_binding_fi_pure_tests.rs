@@ -43,20 +43,25 @@ fn assert_dual_reject_gates(
     gate_a: &str,
     gate_b: &str,
 ) {
+    let normalized = source
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace(" .", ".");
     assert_eq!(
-        count_substr(source, volatile_read),
+        count_substr(&normalized, volatile_read),
         2,
         "permission evidence must be volatile-read independently for both gates",
     );
     assert_eq!(
-        count_substr(source, cfi_check),
+        count_substr(&normalized, cfi_check),
         2,
         "caller-owned CFI must be independently checked by both gates",
     );
-    assert_eq!(count_substr(source, gate_a), 1, "missing first reject gate");
-    assert_eq!(count_substr(source, gate_b), 1, "missing second reject gate");
+    assert_eq!(count_substr(&normalized, gate_a), 1, "missing first reject gate");
+    assert_eq!(count_substr(&normalized, gate_b), 1, "missing second reject gate");
     assert_ordered(
-        source,
+        &normalized,
         gate_a,
         "crate::fi::wait_random();",
         cfi_check,
@@ -114,7 +119,19 @@ fn proof_helpers_recompute_membership_and_binding_twice() {
         );
     }
 
-    assert_eq!(count_substr(ERC7730_GLUE, "verify_erc7730_bundle("), 4);
+    assert_eq!(
+        count_substr(ERC7730_GLUE, "verify_erc7730_bundle("),
+        4,
+        "both binding helpers must independently verify membership twice",
+    );
+    assert!(ERC7730_GLUE.contains("pub fn verify_erc7730_bundle<'a>("));
+    assert_ordered(
+        ERC7730_GLUE,
+        "pqsigner_erc7730::bundle::verify_erc7730_bundle_with_leaf_count(",
+        "bundle,",
+        "root,",
+        "crate::db_roots::ERC7730_DESCRIPTOR_COUNT",
+    );
     assert_eq!(count_substr(ERC7730_GLUE, "verified.ir == *"), 4);
     assert_eq!(count_substr(ERC7730_GLUE, "cross_check_contract("), 2);
     assert_eq!(count_substr(ERC7730_GLUE, "cross_check_eip712("), 2);

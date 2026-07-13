@@ -12,12 +12,190 @@ set -euo pipefail
 
 # Locate repo root regardless of where script is invoked
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 OUT_DIR="$SCRIPT_DIR"
 
 cd "$REPO_ROOT"
 
 # -------- shared helpers --------
+
+# Rebase repository-root Markdown destinations without modifying examples.
+# A real CommonMark parser validates each candidate replacement. Its built-in
+# fixture runs on every invocation so code/HTML examples cannot silently turn
+# into generated links.
+rebase_markdown_links() {
+  local src="$1"
+  python3 - "$src" <<'PY'
+import sys
+
+try:
+    from markdown_it import MarkdownIt
+except ImportError as error:
+    raise SystemExit(
+        "research-bundle generation requires the CommonMark parser "
+        "markdown-it-py (Debian/Ubuntu: python3-markdown-it)"
+    ) from error
+
+
+MD = MarkdownIt("commonmark")
+SOURCE_PREFIX = "docs/"
+BUNDLE_PREFIX = "../../../docs/"
+
+
+def normalized_destination(value: str):
+    if value.startswith(SOURCE_PREFIX):
+        return ("repo-doc", value[len(SOURCE_PREFIX) :])
+    if value.startswith(BUNDLE_PREFIX):
+        return ("repo-doc", value[len(BUNDLE_PREFIX) :])
+    return value
+
+
+def token_signature(token):
+    attrs = []
+    for key, value in sorted(token.attrs.items()):
+        if key in {"href", "src"}:
+            value = normalized_destination(value)
+        attrs.append((key, value))
+    children = tuple(token_signature(child) for child in (token.children or ()))
+    # Inline-token content duplicates the parsed child stream, including raw
+    # destinations. Children are authoritative. Code, HTML, and fence tokens
+    # have no children, so their content remains a byte-for-byte comparison.
+    content = "" if token.children is not None else token.content
+    return (
+        token.type,
+        token.tag,
+        token.nesting,
+        tuple(attrs),
+        content,
+        token.markup,
+        token.info,
+        token.block,
+        token.hidden,
+        children,
+    )
+
+
+def document_signature(text: str):
+    return tuple(token_signature(token) for token in MD.parse(text))
+
+
+def root_destinations(text: str):
+    found = []
+
+    def visit(token):
+        for key in ("href", "src"):
+            value = token.attrs.get(key)
+            if value is not None and value.startswith(SOURCE_PREFIX):
+                found.append(value)
+        for child in token.children or ():
+            visit(child)
+
+    for token in MD.parse(text):
+        visit(token)
+    return found
+
+
+def rebase(text: str) -> str:
+    baseline = document_signature(text)
+    rewritten = text
+    needle = "](docs/"
+    replacement = "](../../../docs/"
+    search_from = 0
+
+    # Test each literal candidate independently. Keep it only when the parsed
+    # document proves that the sole semantic change is a repository-root link
+    # or image destination. Candidates inside malformed syntax, code, nested
+    # fences, or raw HTML are preserved rather than guessed about.
+    while True:
+        position = rewritten.find(needle, search_from)
+        if position < 0:
+            break
+        trial = rewritten[:position] + replacement + rewritten[position + len(needle) :]
+        if document_signature(trial) == baseline:
+            rewritten = trial
+            search_from = position + len(replacement)
+        else:
+            search_from = position + len(needle)
+
+    remaining = root_destinations(rewritten)
+    if remaining:
+        raise ValueError(
+            "unsupported live repository-root Markdown destination(s): "
+            + ", ".join(sorted(set(remaining)))
+        )
+    if document_signature(rewritten) != baseline:
+        raise AssertionError("Markdown link rebasing changed document semantics")
+    return rewritten
+
+
+fixture = """[live](docs/a.md) and [`label`](docs/b.md#x)
+`[inline](docs/no-inline.md)` and ``[wide](docs/no-wide.md)``
+`unmatched
+
+[after unmatched](docs/after-unmatched.md)
+```md
+[fenced](docs/no-fence.md)
+```
+~~~text
+[tilde](docs/no-tilde.md)
+~~~
+> ~~~
+> [quoted fence](docs/no-quoted-fence.md)
+> ~~~
+- ~~~
+  [listed fence](docs/no-listed-fence.md)
+  ~~~
+
+outside list
+
+    [indented](docs/no-indent.md)
+<pre>
+[raw pre](docs/no-pre.md)
+</pre>
+<code>
+[raw code block](docs/no-code-block.md)
+</code>
+
+<code>[inline html](docs/inline-html.md)</code>
+[url](https://example.com/docs/x) [anchor](#docs/x) [relative](other.md)
+"""
+expected = """[live](../../../docs/a.md) and [`label`](../../../docs/b.md#x)
+`[inline](docs/no-inline.md)` and ``[wide](docs/no-wide.md)``
+`unmatched
+
+[after unmatched](../../../docs/after-unmatched.md)
+```md
+[fenced](docs/no-fence.md)
+```
+~~~text
+[tilde](docs/no-tilde.md)
+~~~
+> ~~~
+> [quoted fence](docs/no-quoted-fence.md)
+> ~~~
+- ~~~
+  [listed fence](docs/no-listed-fence.md)
+  ~~~
+
+outside list
+
+    [indented](docs/no-indent.md)
+<pre>
+[raw pre](docs/no-pre.md)
+</pre>
+<code>
+[raw code block](docs/no-code-block.md)
+</code>
+
+<code>[inline html](../../../docs/inline-html.md)</code>
+[url](https://example.com/docs/x) [anchor](#docs/x) [relative](other.md)
+"""
+assert rebase(fixture) == expected, "Markdown link-rebaser self-test failed"
+
+with open(sys.argv[1], encoding="utf-8", newline="") as handle:
+    sys.stdout.write(rebase(handle.read()))
+PY
+}
 
 # Append a code file to a bundle with a markdown heading + fenced block.
 # Args: $1=bundle_path $2=source_path $3=language (rust|md|toml|...)
@@ -44,7 +222,11 @@ append_markdown() {
   fi
   {
     printf '\n\n### From `%s`\n\n' "$src"
-    cat "$src"
+    # Root documents (notably README.md) use repository-root `docs/...`
+    # destinations. Once embedded here, those paths would resolve below
+    # docs/security/research-bundles/. Rebase only live Markdown destinations;
+    # fenced, inline, and indented code remains byte-identical.
+    rebase_markdown_links "$src"
     printf '\n'
   } >> "$bundle"
 }
@@ -57,7 +239,7 @@ write_preamble() {
 
 ---
 
-## Project context (condensed — full version in `docs/archive/ai-research-briefing.md`)
+## Project context (condensed; current sources are linked in each bundle)
 
 **What this is.** PQSigner OS: a post-quantum ERC-4337 smart-wallet
 firmware for STM32U585 (Cortex-M33 + ARM TrustZone) on the
@@ -74,19 +256,19 @@ planned).
 Both chips are mandatory. Neither alone reveals any bit of the seed —
 only `half_O XOR half_E = entropy`.
 
-**Why signing must run on the Cortex-M33, not the SE.** Transaction
-signatures are **post-quantum SLH-DSA (SPHINCS+ SHA2-128f, migrating
-to 192f)**. No commercial secure element currently computes SLH-DSA.
-Bootstrap signatures are **ML-DSA-44** (also PQ, also not SE-capable).
-The SEs are gated storage, not signing accelerators. The seed
+**Why signing must run on the Cortex-M33, not the SE.** Bootstrap and
+slot signatures both use the project's **SPHINCS+C10** hash-based
+post-quantum scheme; there is no classical or ML-DSA signer. No
+commercial secure element currently computes it. The SEs are gated
+storage, not signing accelerators. The seed
 therefore transits STM32 secure-world SRAM during the active signing
 window (~120 s idle timeout, then zeroize). TrustZone SAU+GTZC isolates
 this from the non-secure world.
 
 **TrustZone partition.** Secure world (flash bank 1, SRAM1) owns all
-crypto, PIN, persistent secrets. Non-secure world (flash bank 2,
-SRAM2) owns UI, USB, tx parsing. Crossings go through 6 NSC gateway
-commands with pointer validation and TOCTOU-safe copy-in.
+crypto, PIN, persistent secrets, transaction decoding, and the trusted
+NV3007 LCD UI. Non-secure world owns USB transport. Crossings go through
+the fixed NSC gateway with pointer validation and TOCTOU-safe copy-in.
 
 **Power supervision state.** BOR, PVD, ECC (except SRAM1 which is
 always-on), IWDG all at factory defaults. Stage 1 of a 5-stage brownout
@@ -156,9 +338,9 @@ against STM32 Cortex-M33 designs, what is the minimum set of
 1. The seed XOR-reconstruction code path in `DualSecureElement::unlock`
    (reads half_O and half_E from the two SEs, reconstructs full
    entropy, derives master_secret, caches encrypted blob).
-2. The SLH-DSA signature verify-before-release guard in
-   `sign_and_emit.rs` — currently a single compare that should be
-   double-glitch-resistant.
+2. The SPHINCS+C10 double-compute, byte-compare, and verify-before-release
+   chain in `secure/src/crypto.rs` — assess the existing CFI/sentinel
+   structure against realistic single- and multi-fault models.
 3. The PIN-lockout trigger in `cmd_request_unlock.rs` — a single-
    glitch inversion of the "remaining == 0" check currently blocks
    the factory-reset path.
@@ -179,7 +361,6 @@ EOF
     printf '\n## Relevant code\n'
   } >> "$bundle"
   append_code "$bundle" "secure/src/dual_se.rs" rust
-  append_code "$bundle" "secure/src/nsc/sign_and_emit.rs" rust
   append_code "$bundle" "secure/src/nsc/cmd_request_unlock.rs" rust
   append_code "$bundle" "secure/src/nsc/state.rs" rust
   append_code "$bundle" "secure/src/crypto.rs" rust
@@ -278,7 +459,6 @@ EOF
     printf '\n## Relevant code\n'
   } >> "$bundle"
   append_code "$bundle" "secure/src/crypto.rs" rust
-  append_code "$bundle" "secure/src/nsc/sign_and_emit.rs" rust
   append_code "$bundle" "secure/src/nsc/cmd_sign_userop.rs" rust
   append_code "$bundle" "secure/Cargo.toml" toml
   echo "  built $bundle ($(wc -c < "$bundle") bytes)"
@@ -380,9 +560,9 @@ EOF
   {
     printf '\n## Relevant design docs (code footprint small — feature not implemented)\n'
   } >> "$bundle"
-  append_markdown "$bundle" "docs/architecture/architecture.md"
-  append_markdown "$bundle" "docs/archive/pq-aa-wallet-design.md"
+  append_markdown "$bundle" "CLAUDE.md"
   append_markdown "$bundle" "docs/security/HARDENING.md"
+  append_markdown "$bundle" "docs/security/production-security.md"
   echo "  built $bundle ($(wc -c < "$bundle") bytes)"
 }
 
@@ -420,13 +600,13 @@ Compare across these dimensions, in this order:
 2. **Cryptographic algorithms (signing + key derivation)**
    - Trezor Safe 7: what curves / signature schemes does it support on-
      device? Any post-quantum scheme today, announced, or on roadmap?
-   - PQSigner: SLH-DSA-SHA2-128f (migrating 192f) transaction signer,
-     ML-DSA-44 bootstrap signer, no classical signer anywhere. ERC-4337
-     smart-account model (no EOA, keys rotate on-chain).
+   - PQSigner: SPHINCS+C10 for bootstrap and slot transactions, with no
+     classical signer anywhere. ERC-4337 smart-account model (no EOA;
+     slot keys register on-chain while the bootstrap key is immutable).
    - Evaluate the classical-vs-PQ trade-off honestly: Trezor's curve
      choices are battle-tested and ubiquitous; PQSigner's PQ choices
      are NIST-finalized but rare in production wallets and much larger
-     signatures (17-35 KB vs 64 bytes).
+     signatures (4,008 bytes vs 64 bytes).
 
 3. **Seed storage, recovery, and derivation**
    - Trezor Safe 7 seed storage location + PIN-lockout policy + Shamir
@@ -449,10 +629,10 @@ Compare across these dimensions, in this order:
 5. **Firmware update model and verifiability**
    - Trezor Safe 7 firmware update: signed by whom, with what keys,
      verified by which chip? Rollback protection?
-   - PQSigner: measured-boot + 8-BIP-39-word SHA-256 displayed on OLED,
-     user visually compares with host tool output. Planned: ML-DSA-44-
-     signed measurement hash (not binary) for reproducible-build
-     verification. Firmware flashed over ST-LINK (no USB DFU).
+   - PQSigner: immutable FSBL verifies a vendor SPHINCS+C10 firmware
+     manifest and displays an 8-BIP-39-word SHA-256 fingerprint on the
+     NV3007 LCD. The secure runtime shows the same advisory fingerprint.
+     Firmware updates use the authenticated streaming update commands.
    - Pros/cons of each model for a paranoid user.
 
 6. **Supply chain + attestation ("is my new box genuine?")**
@@ -489,16 +669,16 @@ Compare across these dimensions, in this order:
    - Trezor Safe 7's support for smart-contract wallets today (Safe,
      Argent, ERC-4337 passkey/4337 signers). Does it clear-sign any
      AA structures or just EIP-712?
-   - PQSigner: native ERC-4337 smart account with PQ-only signers, on-
-     device Groth16 ZK clear-signing for Aave v3 (+ CowSwap planned),
+   - PQSigner: native ERC-4337 smart account with PQ-only signers and
+     on-device native ERC-7730, Safe, MultiSend, and CoW decoding;
      deterministic CREATE2 address on all chains from bootstrap PK.
    - Which is the better on-ramp for the smart-wallet / AA world?
 
 10. **UX / ergonomics honestly**
-    - Signature size (PQSigner 17-35 KB per tx vs 64 bytes) — ergonomic
+    - Signature size (PQSigner 4,008 bytes per C10 signature vs 64 bytes) — ergonomic
       fallout on USB latency, mempool propagation, L2 inclusion cost.
     - User prompts per transaction, number of button presses, display
-      constraints (PQSigner: SSD1306 128x64 OLED; Trezor Safe 7: 1.54"
+     constraints (PQSigner: NV3007 LCD; Trezor Safe 7: 1.54"
       color touchscreen).
     - Recovery ceremony complexity. Backup verification flow.
 
@@ -508,7 +688,7 @@ Compare across these dimensions, in this order:
 
 12. **What PQSigner does that Trezor can't easily adopt**
     - Things structurally locked out by Trezor's architecture (dual-SE
-      retrofit, PQ-only signing, on-device AA / ZK clear-signing,
+      retrofit, PQ-only signing, on-device AA / native clear-signing,
       etc.).
 
 Deliverables:
@@ -539,12 +719,9 @@ EOF
   } >> "$bundle"
   append_markdown "$bundle" "README.md"
   append_markdown "$bundle" "CLAUDE.md"
-  append_markdown "$bundle" "docs/architecture/architecture.md"
-  append_markdown "$bundle" "docs/archive/pq-aa-wallet-design.md"
   append_markdown "$bundle" "docs/security/HARDENING.md"
   append_markdown "$bundle" "docs/security/brownout-hardening.md"
   append_markdown "$bundle" "docs/security/production-security.md"
-  append_markdown "$bundle" "docs/archive/ai-research-briefing.md"
   append_code "$bundle" "secure/src/dual_se.rs" rust
   append_code "$bundle" "secure/src/nsc/mod.rs" rust
   echo "  built $bundle ($(wc -c < "$bundle") bytes)"

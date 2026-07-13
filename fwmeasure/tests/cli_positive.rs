@@ -13,11 +13,7 @@ use std::collections::HashSet;
 use std::io::Write;
 
 fn write_tmp(name: &str, bytes: &[u8]) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "fwmeasure-tests-{}-{}",
-        std::process::id(),
-        name
-    ));
+    let dir = std::env::temp_dir().join(format!("fwmeasure-tests-{}-{}", std::process::id(), name));
     std::fs::create_dir_all(&dir).expect("mkdir tmp");
     let path = dir.join(format!("{name}.elf"));
     let mut f = std::fs::File::create(&path).expect("create tmp ELF");
@@ -51,7 +47,12 @@ fn positive_output_word_count_is_exactly_8() {
     assert!(out.status.success());
     let stdout = String::from_utf8(out.stdout).unwrap();
     let lines: Vec<&str> = stdout.lines().collect();
-    assert_eq!(lines.len(), 8, "stdout had {} lines, expected 8", lines.len());
+    assert_eq!(
+        lines.len(),
+        8,
+        "stdout had {} lines, expected 8",
+        lines.len()
+    );
     for (i, line) in lines.iter().enumerate() {
         let prefix = format!("{} ", i + 1);
         assert!(
@@ -91,9 +92,18 @@ fn positive_stderr_metadata_lines_present() {
     let out = run_fwmeasure([path.as_os_str()]);
     assert!(out.status.success());
     let stderr = String::from_utf8(out.stderr).unwrap();
-    assert!(stderr.contains("Flash base:"), "stderr missing 'Flash base:': {stderr}");
-    assert!(stderr.contains("Flash end:"), "stderr missing 'Flash end:': {stderr}");
-    assert!(stderr.contains("SHA-256:"), "stderr missing 'SHA-256:': {stderr}");
+    assert!(
+        stderr.contains("Flash base:"),
+        "stderr missing 'Flash base:': {stderr}"
+    );
+    assert!(
+        stderr.contains("Flash end:"),
+        "stderr missing 'Flash end:': {stderr}"
+    );
+    assert!(
+        stderr.contains("SHA-256:"),
+        "stderr missing 'SHA-256:': {stderr}"
+    );
 }
 
 #[test]
@@ -159,10 +169,7 @@ fn positive_hash_matches_independent_sha256_over_overlaid_image() {
     // And the 8 words must be exactly hash_to_word_indices(h) mapped
     // through WORDLIST.
     let stdout = String::from_utf8(out.stdout).unwrap();
-    let got_words: Vec<String> = parse_words(&stdout)
-        .into_iter()
-        .map(|(_, w)| w)
-        .collect();
+    let got_words: Vec<String> = parse_words(&stdout).into_iter().map(|(_, w)| w).collect();
     let expected_words: Vec<&str> = hash_to_word_indices(&h)
         .iter()
         .map(|&i| WORDLIST[i as usize])
@@ -183,7 +190,11 @@ fn positive_gaps_between_segments_filled_with_0xff() {
         .build();
     let path = write_tmp("gaps", &elf);
     let out = run_fwmeasure([path.as_os_str()]);
-    assert!(out.status.success(), "stderr={}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let mut expected = vec![0xFFu8; 0x80];
     expected[..32].fill(0x11);
@@ -199,9 +210,8 @@ fn positive_gaps_between_segments_filled_with_0xff() {
 
 #[test]
 fn positive_flash_base_override_changes_window() {
-    // Same ELF + same payload but `--flash-base=` 8 bytes higher
-    // should produce a *different* hash. Confirms the override is wired
-    // through.
+    // An explicit base may enlarge the enclosing window. It must not crop a
+    // load segment (covered by the negative suite).
     let base: u32 = 0x0800_0000;
     let elf = minimal_elf(base, &[0xCDu8; 64], base + 0x80);
     let path = write_tmp("base_override", &elf);
@@ -209,7 +219,7 @@ fn positive_flash_base_override_changes_window() {
     let a = run_fwmeasure([path.as_os_str()]);
     let b = run_fwmeasure([
         path.as_os_str(),
-        std::ffi::OsStr::new("--flash-base=0x08000008"),
+        std::ffi::OsStr::new("--flash-base=0x07FFFFF8"),
     ]);
     assert!(a.status.success() && b.status.success());
     assert_ne!(
@@ -219,23 +229,39 @@ fn positive_flash_base_override_changes_window() {
 }
 
 #[test]
-fn positive_flash_end_override_truncates_measurement() {
+fn positive_exact_secure_slot_capacity_is_accepted() {
+    let base: u32 = 0x0C00_0000;
+    let payload = vec![0x5Au8; fw_manifest::SLOT_SECURE_CAPACITY as usize];
+    let end = base + fw_manifest::SLOT_SECURE_CAPACITY;
+    let elf = minimal_elf(base, &payload, end);
+    let path = write_tmp("exact_secure_cap", &elf);
+    let out = run_fwmeasure([
+        path.as_os_str(),
+        std::ffi::OsStr::new("--require-secure-slot"),
+    ]);
+    assert!(
+        out.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stderr).contains("Flash limit: 475136 bytes"));
+}
+
+#[test]
+fn negative_flash_end_override_cannot_truncate_load() {
     let base: u32 = 0x0800_0000;
     let payload: Vec<u8> = (0..0x40u8).collect();
     let elf = minimal_elf(base, &payload, base + 0x80);
     let path = write_tmp("end_override", &elf);
 
-    // Force end to base+0x20 → hash the first 32 bytes only.
+    // Force end to base+0x20 while the load is 0x40 bytes. Strict
+    // measurement must reject rather than silently hash a prefix.
     let out = run_fwmeasure([
         path.as_os_str(),
         std::ffi::OsStr::new("--flash-end=0x08000020"),
     ]);
-    assert!(out.status.success(), "stderr={}", String::from_utf8_lossy(&out.stderr));
-
-    let h: [u8; 32] = Sha256::digest(&payload[..0x20]).into();
-    let hex: String = h.iter().map(|b| format!("{b:02x}")).collect();
-    let stderr = String::from_utf8(out.stderr).unwrap();
-    assert!(stderr.contains(&hex), "truncated-end hash mismatch:\n{stderr}");
+    assert!(!out.status.success(), "truncating override must fail");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("outside measurement envelope"));
 }
 
 #[test]
@@ -255,7 +281,11 @@ fn positive_veneer_limit_inside_window_used_as_end() {
     let elf_bytes = elf.build();
     let path = write_tmp("veneer_in", &elf_bytes);
     let out = run_fwmeasure([path.as_os_str()]);
-    assert!(out.status.success(), "stderr={}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     // Expected hash = SHA-256 over exactly `payload` (0x40 bytes).
     let h: [u8; 32] = Sha256::digest(&payload).into();
@@ -285,12 +315,19 @@ fn positive_veneer_limit_outside_window_falls_back_to_sidata() {
         .build();
     let path = write_tmp("veneer_out", &elf);
     let out = run_fwmeasure([path.as_os_str()]);
-    assert!(out.status.success(), "stderr={}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let h: [u8; 32] = Sha256::digest(&payload).into();
     let hex: String = h.iter().map(|b| format!("{b:02x}")).collect();
     let stderr = String::from_utf8(out.stderr).unwrap();
-    assert!(stderr.contains(&hex), "fallback path must hash payload only:\n{stderr}");
+    assert!(
+        stderr.contains(&hex),
+        "fallback path must hash payload only:\n{stderr}"
+    );
     assert!(
         stderr.contains("Flash end:   0x08000020"),
         "fallback end wrong:\n{stderr}"
@@ -298,9 +335,9 @@ fn positive_veneer_limit_outside_window_falls_back_to_sidata() {
 }
 
 #[test]
-fn positive_lowest_p_paddr_chosen_as_base_with_unsorted_segments() {
-    // Two LOAD segments in non-ascending p_paddr order. The lower
-    // address must become the base.
+fn positive_vector_table_chosen_as_base_with_unsorted_segments() {
+    // Two valid LOAD segments in non-ascending p_paddr order. The linked
+    // vector-table address, not program-header order, is the image base.
     let lo: u32 = 0x0800_0000;
     let hi: u32 = lo + 0x100;
     let elf = ElfBuilder::new()
@@ -315,7 +352,7 @@ fn positive_lowest_p_paddr_chosen_as_base_with_unsorted_segments() {
     let stderr = String::from_utf8(out.stderr).unwrap();
     assert!(
         stderr.contains("Flash base:  0x08000000"),
-        "base must be lowest p_paddr:\n{stderr}"
+        "base must be the vector-table address:\n{stderr}"
     );
 }
 
@@ -342,36 +379,28 @@ fn positive_pt_note_segments_ignored() {
 }
 
 #[test]
-fn positive_segment_outside_window_excluded() {
-    // A LOAD segment whose p_paddr is past flash_end must not be
-    // included. This guards the per-slot measurement use-case where
-    // `--flash-end=` deliberately drops segments living above it.
-    let base: u32 = 0x0800_0000;
+fn negative_late_nonempty_pt_load_rejected() {
+    // Regression for SR-01: a late `.gnu.sgstubs`-equivalent PT_LOAD must
+    // not disappear from the measurement/signing envelope.
+    let base: u32 = 0x0C00_0000;
+    let end: u32 = 0x0C05_2040;
     let inside = vec![0x11u8; 32];
     let outside = vec![0x22u8; 64];
     let elf = ElfBuilder::new()
-        .add_segment(Segment::load(base, inside.clone()))
-        .add_segment(Segment::load(base + 0x1000, outside)) // beyond end
-        .add_default_symbols(base, 0, 0x20) // end = base + 0x20
+        .add_segment(Segment::load(base, inside))
+        .add_segment(Segment::load(0x0C08_0000, outside))
+        .add_default_symbols(base, 0, end - base)
         .build();
     let path = write_tmp("outside", &elf);
     let out = run_fwmeasure([path.as_os_str()]);
-    assert!(out.status.success());
-
-    let h: [u8; 32] = Sha256::digest(&inside).into();
-    let hex: String = h.iter().map(|b| format!("{b:02x}")).collect();
-    let stderr = String::from_utf8(out.stderr).unwrap();
-    assert!(
-        stderr.contains(&hex),
-        "out-of-window segment must be ignored:\n{stderr}"
-    );
+    assert!(!out.status.success(), "late PT_LOAD must be rejected");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("PT_LOAD #1"));
 }
 
 #[test]
 fn positive_zero_filesz_load_segment_ignored() {
     // p_filesz == 0 LOAD segments (e.g. .bss) must not pull data nor
-    // shift the computed base. Use a high p_paddr so it would dominate
-    // the `.min()` if filesz were not filtered.
+    // affect validation of the vector-table-rooted flash envelope.
     let base: u32 = 0x0800_0000;
     let mut elf = ElfBuilder::new()
         .add_segment(Segment::load(base, vec![0x44u8; 16]))
@@ -383,7 +412,11 @@ fn positive_zero_filesz_load_segment_ignored() {
     let bytes = elf.build();
     let path = write_tmp("zero_filesz", &bytes);
     let out = run_fwmeasure([path.as_os_str()]);
-    assert!(out.status.success(), "stderr={}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stderr = String::from_utf8(out.stderr).unwrap();
     assert!(
         stderr.contains("Flash base:  0x08000000"),
@@ -392,31 +425,21 @@ fn positive_zero_filesz_load_segment_ignored() {
 }
 
 #[test]
-fn positive_partial_overlap_segment_clipped_at_window_end() {
-    // A LOAD that crosses the end boundary must be clipped, not
-    // truncated entirely. The bytes up to `flash_end` are included,
-    // the rest are dropped. Anchor the base with a small first
-    // segment so the second one is the overlapper.
-    let base: u32 = 0x0800_0000;
-    let end: u32 = base + 0x40;
+fn negative_crossing_nonempty_pt_load_rejected() {
+    // Regression for SR-01: never clip a veneer segment crossing the
+    // measurement endpoint.
+    let base: u32 = 0x0C00_0000;
+    let end: u32 = 0x0C05_2040;
     let anchor = vec![0xEEu8; 8];
-    let seg_paddr: u32 = base + 0x20;
-    let seg_data: Vec<u8> = (0..0x40u8).collect(); // 64 bytes, half outside
+    let seg_paddr: u32 = 0x0C05_2000;
+    let seg_data = vec![0xA5; 0xA0];
     let elf = ElfBuilder::new()
-        .add_segment(Segment::load(base, anchor.clone()))
-        .add_segment(Segment::load(seg_paddr, seg_data.clone()))
+        .add_segment(Segment::load(base, anchor))
+        .add_segment(Segment::load(seg_paddr, seg_data))
         .add_default_symbols(base, 0, end - base)
         .build();
     let path = write_tmp("clipped", &elf);
     let out = run_fwmeasure([path.as_os_str()]);
-    assert!(out.status.success(), "stderr={}", String::from_utf8_lossy(&out.stderr));
-
-    let mut expected = vec![0xFFu8; (end - base) as usize];
-    expected[..anchor.len()].copy_from_slice(&anchor);
-    // Only the first 0x20 bytes of seg_data fit.
-    expected[0x20..0x40].copy_from_slice(&seg_data[..0x20]);
-    let h: [u8; 32] = Sha256::digest(&expected).into();
-    let hex: String = h.iter().map(|b| format!("{b:02x}")).collect();
-    let stderr = String::from_utf8(out.stderr).unwrap();
-    assert!(stderr.contains(&hex), "expected clipped hash {hex}:\n{stderr}");
+    assert!(!out.status.success(), "crossing PT_LOAD must be rejected");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("PT_LOAD #1"));
 }

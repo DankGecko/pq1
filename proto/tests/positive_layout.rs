@@ -78,8 +78,8 @@ fn positive_batch_trailer_kind_enum_values_stable() {
     // Pinned: the wire dispatch table on the secure side matches each
     // const by value, so renumbering breaks deployed companions.
     assert_eq!(TRAILER_KIND_ERC20, 1);
-    assert_eq!(TRAILER_KIND_ZK_V1, 2);
-    assert_eq!(TRAILER_KIND_ZK_V3, 3);
+    assert_eq!(TRAILER_KIND_RESERVED_V1, 2);
+    assert_eq!(TRAILER_KIND_COW_ORDER, 3);
     assert_eq!(TRAILER_KIND_SAFE_V1, 4);
     assert_eq!(TRAILER_KIND_SEL_CURATED, 5);
     assert_eq!(TRAILER_KIND_SEL_SELFATTEST, 6);
@@ -91,7 +91,7 @@ fn positive_batch_trailer_kind_enum_values_stable() {
 #[test]
 fn positive_max_trailers_per_batch_covers_worst_case() {
     // Realistic worst case: every inner tx carries six per-tx kinds
-    // (ERC-20, ZK_V1, ZK_V3, SAFE_V1, ERC-7730, plus one of
+    // (ERC-20, RESERVED_V1, COW_ORDER, SAFE_V1, ERC-7730, plus one of
     // SEL_CURATED XOR SEL_SELFATTEST since they're mutually exclusive),
     // plus the four batch-wide name bundles.
     let worst_case = MAX_BATCH_TXS * 6 + 4 /* MAX_NAME_BUNDLES */;
@@ -358,11 +358,11 @@ fn positive_cow_v3_trailer_layout() {
     // Native EIP-712 CoW v3 trailer (post Groth16-ZK retirement, 2026-06-30):
     // the canonical packed GPv2Order followed by up to two Merkle-bundle
     // sections. There is NO proof / readable-string slot any more — the
-    // readable intent is decoded on-device. `TRAILER_KIND_ZK_V3 = 3` keeps its
+    // readable intent is decoded on-device. `TRAILER_KIND_COW_ORDER = 3` keeps its
     // legacy name for wire compatibility.
     assert_eq!(EIP712_CANONICAL_LEN, 204);
     assert_eq!(COW_ORDER_BUNDLE_MAX, 1120);
-    assert_eq!(TRAILER_KIND_ZK_V3, 3);
+    assert_eq!(TRAILER_KIND_COW_ORDER, 3);
     assert_eq!(
         COW_ORDER_TRAILER_MAX_LEN,
         EIP712_CANONICAL_LEN + 2 * (2 + COW_ORDER_BUNDLE_MAX)

@@ -1,148 +1,44 @@
-//! ELF → flat flash image conversion.
+//! Strict ELF-to-flat-image adapter shared with `fwmeasure`.
 //!
-//! Mirrors exactly what `fwmeasure` does for the boot-time measurement,
-//! so the SHA-256 this module computes matches what the device recomputes
-//! at boot (and what FSBL checks against `manifest.secure_hash`).
-//!
-//! The key invariant: the "meaningful" portion of the flash image covers
-//! `[lowest p_paddr, measurement_end)`, where `measurement_end` is
-//! `__veneer_limit` on real hardware (veneers stay in flash) and
-//! `__sidata + (__edata - __sdata)` on QEMU (veneers live in NSC). Any
-//! gaps inside this range are filled with 0xFF (erased flash). Anything
-//! beyond this range is outside what the device hashes and is not
-//! included.
+//! Release signing and user-visible measured-boot words must consume the
+//! exact same bytes.  The implementation lives in the `fwmeasure` library;
+//! this module only preserves the signer's existing interface.
 
-use anyhow::{anyhow, bail, Context, Result};
-use object::elf::PT_LOAD;
-use object::read::elf::{ElfFile32, ProgramHeader};
-use object::{LittleEndian, Object, ObjectSymbol};
-use sha2::{Digest, Sha256};
+use anyhow::{bail, Result};
+use std::path::Path;
 
-/// Maximum plausible flash region — used to sanity-check `__veneer_limit`.
-/// On any build where `__veneer_limit` is outside `[flash_base, flash_base
-/// + MAX_FLASH_SIZE)` (e.g. QEMU, where veneers are in NSC at
-/// 0x103F_F000) we fall back to the `__sidata + data_size` heuristic.
-pub const MAX_FLASH_SIZE: u64 = 2 * 1024 * 1024;
+pub use fwmeasure::FlatImage;
 
-/// Result of flattening an ELF: the meaningful bytes, the base address
-/// they're mapped at, and the SHA-256 over them.
-pub struct FlatImage {
-    pub bytes: Vec<u8>,
-    pub base: u64,
-    pub hash: [u8; 32],
+pub fn flatten_elf(path: &Path) -> Result<FlatImage> {
+    fwmeasure::flatten_elf(path).map_err(Into::into)
 }
 
-impl FlatImage {
-    /// Image byte length, narrowed to `u32` to match the manifest field
-    /// type. Caller must ensure `bytes.len() <= u32::MAX` — which holds
-    /// trivially for any plausible firmware image (<< 4 GiB).
-    #[must_use]
-    pub fn len(&self) -> u32 {
-        u32::try_from(self.bytes.len()).expect("flat image larger than 4 GiB")
-    }
+pub fn flatten_elf_bytes(path: &Path, bytes: &[u8]) -> Result<FlatImage> {
+    fwmeasure::flatten_elf_bytes(path, bytes).map_err(Into::into)
 }
 
-/// Reconstruct the measurement-region bytes and compute their SHA-256.
-/// Identical logic to `fwmeasure/src/main.rs` — any change here must be
-/// mirrored there or the host tool will disagree with on-device
-/// measurement.
-pub fn flatten_elf(elf_path: &std::path::Path) -> Result<FlatImage> {
-    let elf_data = std::fs::read(elf_path)
-        .with_context(|| format!("reading ELF {}", elf_path.display()))?;
-    flatten_elf_bytes(elf_path, &elf_data)
-}
-
-/// Byte-slice variant used by the release signer so the trust-root check and
-/// manifest image hash consume one immutable in-memory snapshot of the ELF.
-pub fn flatten_elf_bytes(elf_path: &std::path::Path, elf_data: &[u8]) -> Result<FlatImage> {
-    let elf = ElfFile32::<LittleEndian>::parse(&*elf_data)
-        .map_err(|e| anyhow!("parsing ELF {}: {e}", elf_path.display()))?;
-
-    let find_sym = |name: &str| -> Option<u64> {
-        elf.symbols()
-            .find(|s| s.name() == Ok(name))
-            .map(|s| s.address())
-    };
-
-    let veneer_limit = find_sym("__veneer_limit");
-    let sidata = find_sym("__sidata")
-        .ok_or_else(|| anyhow!("{}: missing __sidata symbol", elf_path.display()))?;
-    let sdata = find_sym("__sdata")
-        .ok_or_else(|| anyhow!("{}: missing __sdata symbol", elf_path.display()))?;
-    let edata = find_sym("__edata")
-        .ok_or_else(|| anyhow!("{}: missing __edata symbol", elf_path.display()))?;
-
-    let le = LittleEndian;
-    let phdrs = elf.elf_program_headers();
-
-    let flash_base = phdrs
-        .iter()
-        .filter(|ph| ph.p_type(le) == PT_LOAD && ph.p_filesz(le) > 0)
-        .map(|ph| u64::from(ph.p_paddr(le)))
-        .min()
-        .ok_or_else(|| anyhow!("{}: no PT_LOAD segments", elf_path.display()))?;
-
-    let measurement_end = match veneer_limit {
-        Some(vl) if vl >= flash_base && vl < flash_base + MAX_FLASH_SIZE => vl,
-        _ => sidata + (edata - sdata),
-    };
-
-    if measurement_end <= flash_base {
-        bail!(
-            "{}: measurement_end ({measurement_end:#x}) <= flash_base ({flash_base:#x})",
-            elf_path.display()
-        );
+pub fn ensure_image_capacity(label: &str, len: usize, capacity: u32) -> Result<()> {
+    if len > capacity as usize {
+        bail!("{label} image is {len} bytes, above the fixed {capacity}-byte slot capacity");
     }
-
-    let size = (measurement_end - flash_base) as usize;
-    let mut flash = vec![0xFFu8; size];
-
-    for ph in phdrs {
-        if ph.p_type(le) != PT_LOAD {
-            continue;
-        }
-        let paddr = u64::from(ph.p_paddr(le));
-        if paddr < flash_base || paddr >= measurement_end || ph.p_filesz(le) == 0 {
-            continue;
-        }
-        let offset = (paddr - flash_base) as usize;
-        let data = ph
-            .data(le, &*elf_data)
-            .map_err(|_| anyhow!("cannot read PT_LOAD data at {paddr:#x}"))?;
-        let copy_len = data.len().min(size - offset);
-        flash[offset..offset + copy_len].copy_from_slice(&data[..copy_len]);
-    }
-
-    let hash: [u8; 32] = Sha256::digest(&flash).into();
-
-    Ok(FlatImage {
-        bytes: flash,
-        base: flash_base,
-        hash,
-    })
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // Build the real secure ELF and confirm we produce the same
-    // measurement the device would. Skipped in CI if the ELF isn't
-    // already built.
     #[test]
-    fn flatten_matches_fwmeasure() {
-        let elf = std::path::PathBuf::from(
-            "../target/secure/thumbv8m.main-none-eabi/release/sphincs-tz-secure",
-        );
-        if !elf.exists() {
-            eprintln!("skipping — run `make secure` first");
-            return;
-        }
-        let img = flatten_elf(&elf).unwrap();
-        // Can only sanity-check; the real validation is that
-        // `fwmeasure` and this produce identical hashes. That's
-        // checked by the integration test in tests/.
-        assert!(!img.bytes.is_empty());
-        assert!(img.base > 0);
+    fn exact_slot_capacity_is_accepted() {
+        assert!(ensure_image_capacity("secure", 475_136, 475_136).is_ok());
+    }
+
+    #[test]
+    fn one_byte_over_slot_capacity_is_rejected() {
+        let error = ensure_image_capacity("secure", 475_137, 475_136)
+            .expect_err("capacity + 1 must fail")
+            .to_string();
+        assert!(error.contains("475137"));
+        assert!(error.contains("475136"));
     }
 }

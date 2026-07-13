@@ -195,8 +195,8 @@ pub fn resolve_cow_binding<'s>(
 /// A legitimate direct presign always targets GPv2, so this never refuses a
 /// well-formed CoW UserOp.
 #[must_use]
-pub fn direct_cow_target_ok(zk_v3_present: bool, via_safe: bool, to_address: &[u8; 20]) -> bool {
-    if zk_v3_present && !via_safe {
+pub fn direct_cow_target_ok(cow_order_present: bool, via_safe: bool, to_address: &[u8; 20]) -> bool {
+    if cow_order_present && !via_safe {
         *to_address == GPV2_SETTLEMENT_ADDRESS
     } else {
         true
