@@ -1006,67 +1006,81 @@ Custom bootloader that verifies S-world and NS-world firmware images with ML-DSA
 
 ### 14. Firmware Update / OTA
 
-**Status:** CORE LANDED (2026-04-20), hardware bring-up + trusted-UI
-confirm + A/B linker split remaining.
+**Status:** PRODUCTION-QUARANTINED (corrected 2026-07-13). The 2026-04
+implementation is a legacy bench path, not a sound A/B rollback core: it uses
+manifest v2/`PQFW_V1`, an unsigned slot, a mutable try-once byte, a runtime
+floor bump before candidate health, and an invalid per-bit interpretation of
+STM32U585 ECC-protected OTP quad-words. Build and release fences deliberately
+prevent that backend from shipping.
 
-**Design:** hash-signature model (item 15 below) realised via
-SPHINCS+C10 over a minimal 75-byte preimage
-(`"PQFW_V1" || fw_version_be || secure_hash || nonsecure_hash`). One
-`.pqfw` per release works for either A/B slot. Full architecture in
-`docs/firmware/firmware-update.md`.
+The reviewed replacement is frozen Draft 0.9 at
+`docs/security/a-b-firmware-rollback-architecture.md` (SHA-256
+`f38b9030...a947336`, tag `rollback-architecture-v0.9`). Its review receipt
+approves the software-interface freeze and open-decision work only; it does
+not approve an implementation or physical backend.
 
-**What landed:**
-- [x] Reproducible builds (`.cargo/config.toml`, `make verify-repro`)
-- [x] `fw-manifest` crate — no_std manifest parser/builder + CRC + verify chain
-- [x] `fwsign` tool — `keygen`/`pubkey`/`sign`/`verify`/`verify-release`/`extract-sig`/`inspect`
-- [x] Bank-2 (NS flash) write/erase in `secure/src/hw/flash.rs`
-- [x] OTP rollback counter in `secure/src/hw/otp.rs`
-- [x] Boot-state page in `secure/src/hw/boot_state.rs`
-- [x] `fsbl/` immutable bootloader (18 KB / 32 KB budget)
-- [x] `CMD_FW_BEGIN`/`CHUNK`/`COMMIT`/`STATUS`/`ABORT` over USB APDU v2
-- [x] PIN-unlock gate on every FW command
-- [x] `docs/firmware/firmware-update.md` + `docs/firmware/reproducible-builds.md`
+**What remains useful from the legacy bring-up:** reproducible-build tooling,
+the SPHINCS+C10 verifier, streaming update transport, inactive-slot flash
+plumbing, trusted-display confirmation substrate, A/B link/package tooling,
+and the immutable measured-boot path. None of those makes the old rollback
+state or OTP tally production-safe.
 
-**What's left:**
-- [ ] Trusted-UI confirmation dialog (stubbed — blocked on the
-      ongoing `secure/src/tx/display/` refactor; will reuse
-      `ui::confirm::confirm()` once the render helpers stabilise)
-- [ ] A/B slot linker scripts (`SLOT=A|B` variants of
-      `secure/memory-stm32u585.x` + `nonsecure/memory-stm32u585.x`)
-- [ ] `make flash-hw-production` factory sequence + WRP1A on
-      `ob-configurator`
-- [ ] Companion updater (`tools/fwupdate.py`)
-- [ ] Hardware end-to-end test (v1 → v2 install → try-once revert →
-      OTP rollback floor enforcement on a real B-U585I-IOT02A)
+**Authorized pre-silicon sequence (isolated, nonshipping):**
+
+- [x] Model the exact flag-day manifest-v4 bytes, `PQFW_V4` 80-byte signed
+      preimage, normalized CRC, page fixtures, marker codewords, and
+      `PQFW_A1` token binding without changing production parsers. Host model
+      and independent Python oracle landed in the Draft-0.9 research set.
+- [x] Model the frozen composite journal decoder and confirmed-preserving
+      two-slot selector, including the enumerated malformed and token-loss
+      logical tuples. Power cuts remain abstract until a durable physical
+      representation is selected.
+- [x] Model the typed `Steady(F)` / bound `Recovering` / `Unknown` floor and
+      durable-stage semantics, with same-epoch paths proving zero persistent
+      writes.
+- [~] Model viable antichain/replica codecs and the crash-consistent durable
+      pre-claim candidates, including QW ownership, replay, second-cut,
+      quorum, degradation, and capacity accounting. Do not select MAC versus
+      plain records before the Section-13 master-closure evidence. An abstract
+      six-QW planned-map candidate is executable, but physical stage
+      persistence/compaction and backend viability remain open.
+- [~] Produce per-candidate nonshipping combined FLASH/RAM warning builds and
+      QEMU/power-cut traces. A green warning is not final fit or production
+      authority. The host cut traces and checked resource arithmetic are done;
+      the 28,320-B legacy link and 38,860-B proxy remain non-combined/AMBER,
+      and no honest Draft-0.9 QEMU candidate exists yet. See
+      `docs/security/fw-rollback-draft09-host-model-receipt-2026-07.md`.
+- [~] Freeze the host-only candidate snapshot for two independent adversarial
+      reviews. This remains incomplete as a production-backend decision: no
+      physical durable-stage construction or OTP backend has survived the
+      still-open silicon/layout gates, so production-shared implementation
+      remains forbidden regardless of the host-model verdicts.
+
+**Hard stop:** no OTP/TAMP/option-byte/RDP mutation, no irreversible writer,
+no production-shared backend choice, and no claim that `OPEN-JRN-HW-1`,
+`OPEN-JRN-DUR-1`, `OPEN-ECC-1`, or `OPEN-OTP-1..3` is closed until the owner
+separately authorizes the named-board/QW sacrificial-silicon plan in Draft 0.9
+Section 13.
 
 ---
 
 ### 15. Hash-Signature Firmware Update Model
 
-**Status:** LANDED (2026-04-20), subsumed into item 14.
+**Status:** LEGACY FORMAT QUARANTINED; replacement interface frozen.
 
-The manufacturer's SPHINCS+C10 signature covers
-`SHA-256("PQFW_V1" || fw_version || secure_hash || nonsecure_hash)`
-— a 75-byte preimage an auditor reconstructs from source alone
-(`fwsign verify-release`). No classical crypto in the sign/verify
-path; entire chain is PQ.
+The existing `fw-manifest`/`fwsign`/FSBL path still exercises SPHINCS+C10 over
+the legacy 75-byte `PQFW_V1` preimage for nonshipping bench tests. Draft 0.9
+replaces it flag-day with schema `0x04` and the exact 80-byte
+`PQFW_V4 || physical_slot || release_version || security_epoch ||
+secure_hash || nonsecure_hash` preimage. Slot binding and the epoch split are
+authority-bearing; no production parser may translate or retry v1/v2/v3.
 
-**Shipped:**
-- [x] SPHINCS+C10 verify in FSBL (re-uses `sphincs-c10` crate, software SHA-256)
-- [x] Vendor public key embedded at FSBL build time via `FSBL_VENDOR_PUBKEY` env var
-- [x] Signature stored inside the manifest page (4008 bytes at offset 180)
-- [x] USB APDU v2 update handshake (INS 0x70..0x74)
-- [x] Boot-time image-hash re-verification in FSBL before branch
-- [x] `fwsign verify-release` for independent reproducible verification
-- [x] Version binding prevents signed-hash replay with a higher version claim
-
-**Remaining for this item specifically:**
-- [ ] Key rotation mechanism (single root today; delegation keys are future work — tracked as a separate item when product scale needs it)
-- [ ] CI/CD signing pipeline: build + `make verify-repro` + `fwsign sign` → GitHub Releases
-- [ ] Companion app: the fwsign library could be compiled to WASM for in-browser verification
-
-**Files to create:** `secure/src/update.rs` (update protocol), `secure/src/fw_verify.rs` (signature verification)
-**Files to change:** `secure/src/main.rs` (boot-time verification), `secure/src/hw/flash.rs` (signature page)
+The vendor-key primitive remains SPHINCS+C10 only. `OPEN-REL-1` must still
+select the protected append-only `(R,E)` release-set authority and atomic A/B
+ceremony, while `OPEN-C10-1` must freeze the global per-physical-vendor-key
+signature cap before provisioning or production signing. Key rotation and a
+shipping signing service remain separate reviewed work; neither is a reason
+to retain the legacy manifest contract.
 
 ---
 
