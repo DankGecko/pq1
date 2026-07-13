@@ -1,0 +1,17 @@
+# WCH CH347 USB bridge (Waveshare USB-TO-UART/I2C/SPI/JTAG) — non-root access
+# to the vendor SPI/I2C/GPIO interface for the NV3007 designer tool.
+#
+# Linux only. On macOS no rule is needed (the vendor interface is unclaimed;
+# libusb reaches it directly).
+#
+# Install:
+#   sudo cp 99-ch347.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+#   (then unplug/replug the board)
+#
+# The CDC-UART interfaces (0,1) stay bound to cdc_acm as /dev/ttyACM0 — that's
+# fine, we only claim the vendor interface (2). No unbinding required.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55db", MODE="0666", TAG+="uaccess"
+# Some units enumerate under other CH347 mode PIDs; harmless to allow them too.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55dd", MODE="0666", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55de", MODE="0666", TAG+="uaccess"
