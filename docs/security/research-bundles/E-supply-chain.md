@@ -876,7 +876,7 @@ sub-questions about timing channels:
    overflows the stack AND glitches the assert's compare instruction
    bypasses. Defence in depth: the depth cap is checked separately
    inside the walker (`pqsigner_erc7730::walker::resolve_program`),
-   and the `Pages` buffer's `MAX_PAGES = 30` bound caps the page-emit
+   and the `Pages` buffer's `MAX_PAGES = 31` bound caps the page-emit
    side independently — neither path can grow without bound even if
    the canary is defeated.
 

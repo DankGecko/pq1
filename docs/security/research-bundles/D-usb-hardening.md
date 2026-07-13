@@ -2372,7 +2372,8 @@ offset  size  field
   8     4    flags (u32 BE — see shared/src/lib.rs)
  12    20    sender (MUST equal GET_WALLET_ADDRESS(account_index); mismatch is refused)
  32    20    entry_point (EntryPoint v0.6 address)
- 52    32    nonce (u256 BE, base nonce for Type 1 if needed else Type 2)
+ 52    32    nonce (u256 BE: high 192-bit v0.6 lane key | low 64-bit sequence;
+                   base nonce for Type 1 if needed else Type 2)
  84    32    call_gas_limit (u256 BE)
 116    32    verification_gas_limit (u256 BE)
 148    32    pre_verification_gas (u256 BE)
@@ -2391,6 +2392,17 @@ for `account_index` in secure world. The wire `sender` must match that address,
 but is not trusted as the source of the displayed identity. Batch signing shows
 the same identity for each member confirmation and again at the final batch
 authorization gate.
+
+EntryPoint v0.6 parallel nonce lanes remain supported. The normal renderer's
+`Nonce:` row shows the low-64 sequence. If the high-192 lane key is non-zero,
+every applicable confirmation set additionally includes one exact
+`Nonce lane key:` page containing all 48 lowercase hexadecimal characters.
+Lane zero omits the page. The page is reconstructed from the same full nonce
+that enters the respective transaction/batch `userOpHash` and is independently
+FI-proved before confirmation. With `FLAG_REGISTER_SLOT`, the rotation signature
+uses the Type-1 base nonce and its displayed high-192 lane is shared with the
+transaction; transaction/batch confirmations show the exact Type-2 `base + 1`
+sequence. CRIT-17 rejects low-64 overflow before it can change lanes.
 
 **Response (post-2026-04-29 layout):**
 

@@ -932,6 +932,14 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         ui::show_status("Nonce seq", "overflow");
         return NscStatus::InvalidPointer as u32;
     }
+    // Derive the exact nonce of the transaction UserOp before rendering.
+    // REGISTER_SLOT emits a separate Type-1 UserOp at `nonce`; the displayed
+    // and signed Type-2 transaction is at `nonce + 1` within the same lane.
+    // The overflow gate above proves this increment cannot carry into key192.
+    let mut type2_nonce = nonce;
+    if register_slot {
+        add_one_to_be_u256(&mut type2_nonce);
+    }
 
     let inner_data: &[u8] =
         &snap[SIGN_USEROP_HEADER_LEN..SIGN_USEROP_HEADER_LEN + data_len];
@@ -1384,8 +1392,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
 
     // ── 6. Build display-time Eip1559Tx shim ───────────────────────
     let display_nonce = u64::from_be_bytes([
-        nonce[24], nonce[25], nonce[26], nonce[27],
-        nonce[28], nonce[29], nonce[30], nonce[31],
+        type2_nonce[24], type2_nonce[25], type2_nonce[26], type2_nonce[27],
+        type2_nonce[28], type2_nonce[29], type2_nonce[30], type2_nonce[31],
     ]);
     let display_max_fee = U256(max_fee_per_gas);
     let display_max_prio = U256(max_priority_fee_per_gas);
@@ -1713,13 +1721,16 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // dispatcher's native-value page when the outer UserOp carries
     // ETH, plus the two ERC-8213 fingerprint pages appended below.
     {
-        // native-value page (when outer value != 0) + mandatory full signer
-        // and target pages + 2 ERC-8213 fingerprint pages + 2 gas/fee pages
-        // (the dispatcher splices gas for Safe) + optional paymaster page.
+        // Native-value page (when outer value != 0) + mandatory full signer
+        // and target pages + worst-case non-zero nonce-lane page + 2 ERC-8213
+        // fingerprint pages + 2 gas/fee pages (the dispatcher splices the gas
+        // pages for the Safe surface — audit 2026-06-19) + the paymaster page
+        // when paymasterAndData is non-empty (audit 2026-06-27).
         let reserved = usize::from(value.iter().any(|&b| b != 0))
             + usize::from(paymaster_and_data_hash != SHA256_EMPTY)
             + crate::tx::display::SIGNER_IDENTITY_PAGES
             + crate::tx::display::TARGET_IDENTITY_PAGES
+            + crate::tx::display::NONZERO_NONCE_LANE_PAGES
             + 2
             + 2;
         match crate::tx::display::multisend_sign_gate(
@@ -1796,6 +1807,21 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         ) != crate::fi::OK_SENTINEL
         {
             ui::show_status("Sign refused", "signer unshown");
+            return NscStatus::InternalError as u32;
+        }
+        let nonce_lane_pages_before = rotate_pages.len;
+        if crate::tx::display::enforce_nonce_lane_page(&mut rotate_pages, &nonce).is_err() {
+            ui::show_status("Sign refused", "lane unshown");
+            return NscStatus::InternalError as u32;
+        }
+        crate::fi::scrub_sentinel_register();
+        if crate::tx::display::nonce_lane_page_proof(
+            &rotate_pages,
+            nonce_lane_pages_before,
+            &nonce,
+        ) != crate::fi::OK_SENTINEL
+        {
+            ui::show_status("Sign refused", "lane unshown");
             return NscStatus::InternalError as u32;
         }
         let (cr, cr_verdict) = confirm_checked(rotate_pages.as_slice());
@@ -1888,10 +1914,30 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         ui::show_status("Sign refused", "target unshown");
         return NscStatus::InternalError as u32;
     }
+    // EntryPoint v0.6's high 192 nonce bits select an independently
+    // executable lane. Lane zero stays compact; every non-zero lane is shown
+    // in full and independently FI-proved so two lane-distinct UserOps cannot
+    // hide behind the same low-64 `Nonce:` row.
+    let nonce_lane_pages_before = pages.len;
+    if crate::tx::display::enforce_nonce_lane_page(&mut pages, &type2_nonce).is_err() {
+        ui::show_status("Sign refused", "lane unshown");
+        return NscStatus::InternalError as u32;
+    }
+    crate::fi::scrub_sentinel_register();
+    if crate::tx::display::nonce_lane_page_proof(
+        &pages,
+        nonce_lane_pages_before,
+        &type2_nonce,
+    ) != crate::fi::OK_SENTINEL
+    {
+        ui::show_status("Sign refused", "lane unshown");
+        return NscStatus::InternalError as u32;
+    }
     // ERC-8213 fingerprint — show the calldata digest as the last
     // page so a user can cross-check against `cast` / `viem`. Cap is
-    // `MAX_PAGES` = 30; `multisend_sign_gate` reserves the full signer and
-    // target pages plus these two fingerprint pages. If the buffer is full we
+    // `MAX_PAGES` = 31; `multisend_sign_gate` reserves the full signer and
+    // target pages, the conditional nonce-lane page, and these two fingerprint
+    // pages. If the buffer is nonetheless full we
     // fail closed (F5): the fingerprint binds the displayed intent to the
     // signed calldata, so dropping it silently and signing anyway breaks that
     // binding.
@@ -2101,13 +2147,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     };
 
     // ── 11. Type 2 nonce ───────────────────────────────────────────
-    // When REGISTER_SLOT is set, the Type 1 UserOp consumes the supplied
-    // base nonce and Type 2 uses base+1. In the other two modes Type 2
-    // uses the supplied base directly.
-    let mut type2_nonce = nonce;
-    if register_slot {
-        add_one_to_be_u256(&mut type2_nonce);
-    }
+    // `type2_nonce` was derived before trusted-display rendering so the
+    // sequence/lane shown to the user is byte-identical to this signed nonce.
 
     // ── 12. Slot C10 keygen (cached by (account_index, chain_id, slot_index)) ──
     //
