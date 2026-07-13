@@ -24,9 +24,8 @@
 //!     builds are unaffected.
 //!
 //! `pick_sign_pages` (the dispatcher, now in `tx/display/dispatch.rs`)
-//! IS mounted here since 2026-07-06 — its historic blockers are gone
-//! (`crate::zk` was retired 2026-06-30; `cowswap_display` is test-mounted
-//! in `eip712/mod.rs`). The WYSIWYS glue harness in
+//! IS mounted here since 2026-07-06. `cowswap_display` is test-mounted in
+//! `eip712/mod.rs`. The WYSIWYS glue harness in
 //! `wysiwys_dispatch_differential_tests.rs` drives the real dispatcher
 //! body against the same request bytes the sign handler hashes.
 

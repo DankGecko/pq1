@@ -3,7 +3,7 @@
 Audit scope: firmware (`secure/`, `nonsecure/`, `proto/`, `domain/`, `aa/`,
 `tx-core/`, `tx/`, `hal/`, `shared/`, `fw-manifest/`, `fsbl/`, `bip39/`,
 `sphincs-c10/` API surface only). The on-chain Solidity verifier, the
-ZK Groth16 verifier internals, the SE050/OPTIGA driver internals, and
+SE050/OPTIGA driver internals, and
 the trusted-UI rendering pipeline are out of scope and warrant their
 own passes.
 

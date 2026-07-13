@@ -9,9 +9,7 @@ selectors and ERC-7730 DBs. The device ships only the 32-byte Merkle
 roots (`ERC20_DB_ROOT` / `NAMES_DB_ROOT` in
 `secure/src/db_roots.rs`) and Merkle-verifies every companion-supplied
 bundle against them in the secure world before any byte reaches the
-trusted UI. (A ZK-VK bundle kind existed here for the Groth16 clear-sign
-path; it was removed when that path was retired — see
-docs/archive/zk-clear-sign-retirement.md.)
+trusted UI.
 
 This module is the reference implementation a real companion app
 follows. It mirrors the firmware's `nonsecure/src/{erc20,names}_db.rs`
@@ -197,10 +195,6 @@ def build_names_bundle(blob: bytes, chain_id: int, address: bytes) -> bytes:
     out += struct.pack("<I", hdr["proof_depth"])
     out += _proof(blob, hdr, idx)
     return bytes(out)
-
-
-# (The VK bundle builder was removed with the Groth16 ZK clear-sign
-# retirement — see docs/archive/zk-clear-sign-retirement.md.)
 
 
 _KINDS = {

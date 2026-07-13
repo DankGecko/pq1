@@ -507,9 +507,9 @@ value page appears each time. **Pass:** no path hides native value.
 - **Safe-wrapped CoW pre-sign:** confirm the order binds to `orderUid.owner == the Safe` and renders
   Safe context + full order intent. `secure/src/tx/eip712/safe/cow_binding.rs`.
 
-### 7.3 CowSwap order binding — **native on-device decode (ZK path RETIRED)**
+### 7.3 CowSwap order binding — **native on-device decode**
 
-The Groth16/BLS12-381 ZK clear-sign path was **removed 2026-06-30** (`docs/archive/zk-clear-sign-retirement.md`); CoW and supported Aave operations now use fully native on-device decoders, while incomplete registry-known Aave formats refuse. There is no `secure/src/zk/`, no circuits, and no VK/`VK_DB_ROOT` on the EVT image — a red-teamer finding any of those present is itself a finding (stale build). The binding to check today is the native one: the EIP-712 `GPv2Order` is verified in S-world (`secure/src/tx/eip712/cowswap/`) and the order payload is decoded on-device, with token name/symbol/decimals from the firmware-pinned `ERC20_DB_ROOT`. **Test:** construct a settlement calldata whose decoded order ≠ the rendered intent (wrong token, amount, or receiver) and confirm `cowswap/verify.rs` rejects the mismatched canonical/readable pair; also confirm an unknown sell/buy token falls to a loud page rather than a friendly-but-wrong symbol. **Pass:** no benign-display/malicious-sign order verifies. *(The historical ZK amount-overflow / byte-pack forgeries no longer apply — that code is gone.)*
+The EIP-712 `GPv2Order` is verified in S-world (`secure/src/tx/eip712/cowswap/`) and the order payload is decoded on-device, with token name/symbol/decimals from the firmware-pinned `ERC20_DB_ROOT`. Incomplete registry-known Aave formats refuse. **Test:** construct a settlement calldata whose decoded order differs from the rendered intent (wrong token, amount, or receiver) and confirm `cowswap/verify.rs` rejects it; also confirm an unknown sell/buy token falls to a loud page rather than a friendly-but-wrong symbol. **Pass:** no benign-display/malicious-sign order verifies.
 
 ### 7.4 ERC-7730 / typed-call
 
@@ -662,9 +662,9 @@ Confirm on the actual EVT image / unit:
 - [ ] **Consumption-mask** active and unbiased; measurably raises CPA trace count.
 - [ ] **Debug** RDP-2 set; forbidden features `compile_error!`; no debug strings in the ELF.
 - [ ] **Boot** confirm monolithic-vs-A/B reality; note the human-only fingerprint comparison gap.
-- [ ] **CowSwap (native decode)** the EVT image has NO ZK verifier / circuits / `VK_DB_ROOT`
-      (retired 2026-06-30); order binding is the native `cowswap/verify.rs` canonical-vs-readable
-      cross-check against the pinned `ERC20_DB_ROOT` (§7.3).
+- [ ] **CowSwap (native decode)** order binding uses
+      `cowswap/verify.rs` to cross-check the canonical order against the
+      calldata and token metadata against the pinned `ERC20_DB_ROOT` (§7.3).
 
 ---
 

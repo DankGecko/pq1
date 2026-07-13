@@ -372,7 +372,7 @@ sign_userop_payload =
     base_header[330]
  || data[data_len]                                       // inner calldata
  || u16_be(erc20_bundle_len)         || erc20_bundle     // optional
- || u16_be(zk_v1_reserved_len)                            // RETIRED; MUST be 0
+ || u16_be(reserved_v1_len)                               // reserved; MUST be 0
  || u16_be(cow_order_bundle_len)         || cow_order_bundle     // optional
  || u16_be(safe_v1_bundle_len)       || safe_v1_bundle   // optional
  || u16_be(selector_bundle_len)      || selector_bundle  // optional

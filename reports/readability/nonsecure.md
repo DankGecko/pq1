@@ -147,7 +147,7 @@ builds warning-clean under every shipping feature combination
   state machines — the router file just appends payload bytes to a
   cursor the helper hands back.
 - The trailer-injection pipeline (`maybe_inject_erc20_bundle`,
-  `maybe_inject_vk_bundle*`, `maybe_inject_names_bundles`) is
+  `maybe_inject_names_bundles`) is
   consistently "degrade silently to the bare-payload path on any
   failure," matching the threat model where the secure world is the
   sole arbiter of trust.

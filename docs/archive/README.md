@@ -14,7 +14,6 @@ repointed to `docs/archive/…` at move time.
 
 | Archived file | Folded into | Notes |
 |---|---|---|
-| `companion-safe-cowswap-multisend.md` | `docs/companion/companion-safe-cowswap-presign.md` | Was a *delta* to presign; now the "multiSend batches" section of it (allowlist, hard rules, refusal banners, scenarios 5s/5t/5u all preserved). |
 | `companion-erc7730-integration.md` | `docs/companion/companion-erc7730-implementation-guide.md` | Earlier narrower draft. Its 2 unique pitfalls are now §9 rows of the guide; its `E73D` catalog schema was **superseded** by the guide's `P730` (§3) — do not use it. |
 | `optiga-shielded-connection.md` | `docs/secure-elements/OPTIGATRUSTM/ifx-i2c-protocol.md` §3a | The Shielded Connection IS the IFX I2C presentation layer that the protocol reference stubbed out; folded in full (handshake, TLS-PRF KDF, AES-128-CCM, pairing, session save/restore). |
 
@@ -32,11 +31,6 @@ repointed to `docs/archive/…` at move time.
 | `ai-research-briefing.md` | States the **wrong signing primitive** (SLH-DSA 17 KB + ML-DSA bootstrap) — a paste hazard. | `CLAUDE.md` (current architecture); its §5 corrected-facts table is historical. |
 | `pq-aa-wallet-design.md` | Original two-tier design (ML-DSA-44 / XMSS / dual verifier) superseded by all-C10. | `CLAUDE.md` §Recovery, `contracts/smart-wallet/`. |
 | `sphincs-c7-firmware-integration.md` | Self-bannered OBSOLETE; describes the deleted C7 (keccak256, 3704-B) signer. | `CLAUDE.md` invariant #5 (all-C10). |
-| `m4-cowswap-eip712.md` | Self-bannered historical handoff; signs with SLH-DSA and describes a design that was explicitly *not built*. | `docs/companion/companion-safe-cowswap-presign.md` plus `docs/archive/zk-clear-sign-retirement.md`. |
-| `m4-cowswap-eip712-impl.md` | Snapshot of the retired Groth16/VK/readable-string implementation. | `docs/companion/companion-safe-cowswap-presign.md` (native canonical GPv2Order decode). |
-| `cowswap-zk-poc/` | Reproduction material for vulnerabilities in the retired Groth16 circuit path. | Historical evidence only; current CoW clear-signing is the native pipeline documented in `docs/companion/companion-safe-cowswap-presign.md`. |
-| `architecture-zk-clear-signing-retired.md` | Full design record for the removed proof/VK clear-signing path. | `CLAUDE.md` and `docs/architecture/architecture.md` (current index). |
-| `groth16-fault-sweep-2026-05.md` | Fault-analysis notes for the removed Groth16 verifier. | Native decoder/FI residuals in `docs/work-todo.md` and `docs/security/HARDENING.md`. |
 
 ## Completed point-in-time handoffs (work shipped; residuals tracked elsewhere)
 
@@ -49,5 +43,4 @@ repointed to `docs/archive/…` at move time.
 | `handoff-unsafe-reduction.md` | Per-peripheral MMIO → `hw::mmio` migration. | §3 migration queue captured in `docs/work-todo.md` "Archived-handoff residuals"; CLAUDE.md unsafe taxonomy is the live reference. |
 | `handoff-verity-c10-verifier.md` | Multi-quarter plan to port the Yul verifier into the Verity Lean EDSL. | **Approach superseded** by the live Aeneas→Lean track (`docs/verification/verification-targets-2026-06.md`, `contracts/verification/`). |
 | `verity-v0.1.0-primitive-map.md` | Companion recon of Verity v0.1.0's API + gap table (Phase-0 of the above). | As above — superseded by Aeneas. |
-| `companion-batch-sign-trailer-parity.md` | Ambire-extension changelog for the batch-trailer-parity fix. | Durable wire format lives in `docs/companion/companion-batch-sign-integration.md`. Its one open task ("thread the extension caller sites") is an **Ambire-extension** change (a separate companion repo) — out of scope for this repo's work-todo, so deliberately not promoted. |
 | `calldata-decoding-handoff.md` | Phase-2 calldata typed-args decode design + a Phase-3 sketch. | Phase-2 decode shipped (`secure/src/tx/typed_call/`). Its Phase-3 "Migration to ERC-7730 per-contract attestation" sketch **became the shipped ERC-7730 descriptor system** (`secure/data/erc7730/policy.toml`, `secure/src/tx/erc7730.rs`); reachable via `docs/companion/companion-selector-decoding.md §13`. No open residual. |

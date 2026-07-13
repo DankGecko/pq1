@@ -31,18 +31,18 @@ no idea what SafeTx is being approved. That's blind signing, which is
 the exact thing this firmware is built to avoid.
 
 `safe_v1` solves this by having the companion attach an optional
-trailer to `CMD_SIGN_USEROP` that brings the *plaintext* SafeTx fields
+trailer to `CMD_SIGN_USEROP` that brings the canonical SafeTx fields
 on-device. The firmware re-derives the `safeTxHash` natively, byte-
 compares it against the calldata's `bytes32`, and only then renders a
-clear-signed view. No Groth16, no proof — the bind is just keccak.
+clear-signed view.
 
 ## Native binding in both Safe and CoW
 
 CoW `setPreSignature` carries a 56-byte opaque `orderUid`; the companion
 therefore supplies the 204-byte canonical GPv2Order. Secure world recomputes
 its EIP-712 digest and renders the fields natively. Safe likewise recomputes
-the SafeTx digest from its canonical fields. Neither path uses Groth16,
-companion-supplied readable text, or a VK database.
+the SafeTx digest from its canonical fields. Neither path trusts
+companion-supplied display text.
 
 Safe is structurally different. The on-chain `approveHash(bytes32)`
 calldata carries the EIP-712 digest itself. So:
@@ -51,7 +51,7 @@ calldata carries the EIP-712 digest itself. So:
 |---|---|---|
 | What's in calldata | 56-byte opaque `orderUid` | 32-byte `safeTxHash` |
 | Can firmware re-derive natively? | Yes; canonical GPv2Order → EIP-712 digest | Yes; canonical SafeTx → EIP-712 digest |
-| Need a proof? | No | No |
+| Native binding | EIP-712 digest + orderUid cross-check | EIP-712 digest + approveHash cross-check |
 | Trailer overhead | 204..=2448 B (canonical + optional ERC-20 bundles) | ~283 B (canonical + 2-byte raw_data length) + raw_data |
 
 So Safe gets clear-signing at a fraction of the implementation +

@@ -19,7 +19,7 @@
 //! (the EIP-712 digest) stay in `secure/src/tx/eip712/safe/mod.rs`, and
 //! the `MultiSendCallOnly` operation-gate / CoW-binding glue stays in
 //! `secure/` — none of it is pulled in here (no keccak, no `multi_send`,
-//! no `cow_binding`, no Groth16, no hardware). Dependency closure is just
+//! no `cow_binding`, no hardware). Dependency closure is just
 //! the `pqsigner-proto` layout constants.
 //!
 //! ## A. Canonical SafeTx typed-data — [`decode_canonical`]

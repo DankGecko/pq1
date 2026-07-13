@@ -33,7 +33,7 @@ Pre-production: no devices shipped, no funds on-chain. Boots on real **B-U585I-I
 
 ## 3. SLOC (in scope, full-stack)
 
-Code SLOC = non-blank, non-comment-only lines. **Rust unit tests are inline (`#[cfg(test)]`) and counted here**, and large data tables (BIP-39 wordlist and C10 KATs) inflate the figure — true production logic is materially smaller. The table below is the last pre-retirement snapshot; rerun the repository SLOC tooling before using totals contractually. Groth16/BLS12-381 rows have been removed because that implementation was retired on 2026-06-30.
+Code SLOC = non-blank, non-comment-only lines. **Rust unit tests are inline (`#[cfg(test)]`) and counted here**, and large data tables (BIP-39 wordlist and C10 KATs) inflate the figure — true production logic is materially smaller. Rerun the repository SLOC tooling before using totals contractually.
 
 ### On-device (runs on the STM32U585)
 
@@ -67,7 +67,6 @@ Code SLOC = non-blank, non-comment-only lines. **Rust unit tests are inline (`#[
 ## 4. Third-party deps / forks
 
 - **RustCrypto, vetted, relied-upon (not re-audited):** `sha2`, `sha3`, `aes`, `aes-gcm`, `cmac`, `hmac`, `subtle` (constant-time compares), `zeroize` / `zerocopy`. All `default-features = false`, `no_std`.
-- **Retired dependency note:** the former in-repo BLS12-381/Groth16 fork and host harness are not part of the current build or audit scope. Historical findings and reproduction material live only under `docs/archive/` and `docs/security/vulns/`.
 - **`tropic01`** — the **only git-pinned external dependency** (`tropicsquare/libtropic-rs`, `rev = 0cacb5e…`), feature-gated (`tropic01-se`) and **not used in the shipping dual-SE config**. A `compile_error!` fence enforces the 40-char-hex pin.
 - **Written from scratch (no upstream exists for this parameter set):** `sphincs-c10` (C10 SLH-DSA-style signer), `bip39` (`no_std` wordlist + derivation), plus the `proto / tx-core / aa / domain / tx / erc7730 / hal / fi` logic crates.
 - **Ported / derived (provenance flag):** `secure/src/hw/tamp.rs` is a **port of Trezor** `core/embed/sec/tamper/stm32u5/tamper.c` (currently log-only — see §6); other hardening patterns (brownout, FI random-delay) are Trezor-informed. Per-slot key derivation parallels the Coinbase-Smart-Wallet port shared with the contracts. **Trezor-derived code may carry copyleft implications** — flag before open-sourcing.

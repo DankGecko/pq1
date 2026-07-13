@@ -55,7 +55,7 @@ These are inherited from Phases 1 + 2 and are NOT up for debate:
 Existing sign-input trailers (in order, post Phase 3) sitting between the inner tx and the address-name bundles:
 
 ```
-erc20 → zk_v1 → zk_v3 → safe_v1 → selector → self_attest → erc7730 (NEW) → names
+erc20 → reserved_v1 → cow_order → safe_v1 → selector → self_attest → erc7730 (NEW) → names
 ```
 
 Wire framing: same `[u16 BE len][payload]` pattern as every other trailer. `len == 0` means absent. Implemented via the existing `secure/src/nsc/trailer::read_optional_u16_prefixed` helper.

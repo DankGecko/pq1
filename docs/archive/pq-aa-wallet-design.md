@@ -317,10 +317,8 @@ contract PQWallet is IPQWallet, BaseAccount {
         uint32 otsIndex,
         bytes memory sig
     ) internal view returns (bool) {
-        // XMSS or SPHINCS+ few-time verification.
-        // Likely wrapped as a ZK proof of validity to fit in validateUserOp's
-        // gas budget — raw verification is 4.4M gas (XMSS) or 11.6M gas (SPHINCS+),
-        // both over the practical bundler limit.
+        // Superseded prototype. The current wallet verifies SPHINCS+C10
+        // directly through its dedicated on-chain verifier.
     }
 
     function _verifyStatelessPQ(
@@ -509,16 +507,11 @@ For Safe transactions where the PQ wallet is a signer on a Safe:
 4. When the Safe transaction executes, Safe's `checkSignatures` sees the pre-approved hash and accepts it
 5. The PQ signature is verified only once, inside the PQ wallet's `validateUserOp` — never passed to the Safe
 
-### Direct EIP-1271 (fallback, for off-chain gasless flows)
+### Direct EIP-1271
 
-When a protocol absolutely requires `isValidSignature` to be called and there's no on-chain pre-approval path:
-
-1. The PQ wallet must be deployed on the target chain
-2. `isValidSignature` verifies a **ZK proof** of PQ signature validity, not the raw PQ signature
-    - Groth16 proof: ~128–200 bytes, cheap verification
-    - STARK proof: larger but post-quantum secure
-3. The ZK proof fits comfortably in Safe's ~64 KB practical signature limit
-4. Raw PQ signatures (7.8–50 KB) would exceed practical Safe/CowSwap signature size limits and should never be passed directly
+This archived proposal is superseded. The current EIP-1271 flow signs the
+firmware-computed replay-safe hash with SPHINCS+C10 and returns the frozen
+signature wrapper documented in `CLAUDE.md`.
 
 ---
 
@@ -587,7 +580,7 @@ On-chain verification cost is prohibitive for both (4.4M/11.6M gas). Wrap verifi
 - [ ] Companion app: CowSwap setPreSignature integration
 - [ ] Companion app: Safe signMessage integration
 - [ ] Test Flow D extensively — cross-chain first-deployment after rotation on another chain is the most subtle path
-- [ ] Security audit focused on: OTS reuse scenarios, front-running on new chains, bootstrap key exposure, ZK circuit soundness
+- [ ] Security audit focused on: OTS reuse scenarios, front-running on new chains, bootstrap key exposure
 - [ ] Consider timelock on bootstrap-authorized rotations for high-value deployments
 
 ---
@@ -595,7 +588,6 @@ On-chain verification cost is prohibitive for both (4.4M/11.6M gas). Wrap verifi
 ## Open questions to resolve before mainnet
 
 1. **Exact main signer scheme**: final parameter selection for SPHINCS+ few-time vs. XMSS. Pending completion of the C reference implementation.
-2. **ZK wrapping strategy**: Groth16 (smaller proofs, trusted setup) vs. STARK (no trusted setup, post-quantum secure, larger proofs). STARK is philosophically better aligned with a PQ wallet.
-3. **EIP-8051 timing**: if ML-DSA precompile lands before mainnet, bootstrap verification becomes nearly free and the design simplifies.
-4. **Timelock default**: should bootstrap-authorized rotations have a default timelock? What's the right duration? (Suggestion: 24h default, user-configurable, 0h for low-value wallets.)
-5. **Chain ID collisions**: the per-chain derivation path uses `chainId` — what happens if a chain forks and creates a duplicate? (Unlikely but worth specifying: the wallet commits to a specific chainId at deploy time via its state, so a fork creates two independent states naturally.)
+2. **EIP-8051 timing**: if ML-DSA precompile lands before mainnet, bootstrap verification becomes nearly free and the design simplifies.
+3. **Timelock default**: should bootstrap-authorized rotations have a default timelock? What's the right duration? (Suggestion: 24h default, user-configurable, 0h for low-value wallets.)
+4. **Chain ID collisions**: the per-chain derivation path uses `chainId` — what happens if a chain forks and creates a duplicate? (Unlikely but worth specifying: the wallet commits to a specific chainId at deploy time via its state, so a fork creates two independent states naturally.)

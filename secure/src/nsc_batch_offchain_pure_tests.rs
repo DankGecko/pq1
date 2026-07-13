@@ -1615,7 +1615,7 @@ fn negative_batch_erc20_metadata_never_scans_unverified_safe_trailers() {
     let erc20_arm = CMD_SIGN_USEROP_BATCH_SRC
         .split("TRAILER_KIND_ERC20 =>")
         .nth(1)
-        .and_then(|tail| tail.split("TRAILER_KIND_RESERVED_V1 =>").next())
+        .and_then(|tail| tail.split("TRAILER_KIND_COW_ORDER =>").next())
         .expect("ERC-20 trailer arm");
     assert!(
         !erc20_arm.contains("parsed_trailers.records"),
@@ -1624,6 +1624,29 @@ fn negative_batch_erc20_metadata_never_scans_unverified_safe_trailers() {
     assert!(erc20_arm.contains("Store only the Merkle- and chain-verified metadata"));
     assert!(CMD_SIGN_USEROP_BATCH_SRC.contains("let chain_verified_erc20"));
     assert!(CMD_SIGN_USEROP_BATCH_SRC.contains("selected surface"));
+}
+
+#[test]
+fn negative_reserved_compatibility_inputs_are_fail_closed() {
+    const BATCH_TRAILERS_SRC: &str = include_str!("nsc/batch_trailers.rs");
+
+    // The batch TLV value is frozen for wire compatibility but every record,
+    // including an empty one, is rejected before dispatch.
+    assert!(BATCH_TRAILERS_SRC.contains("if kind == TRAILER_KIND_RESERVED_V1"));
+    assert!(BATCH_TRAILERS_SRC.contains("reserved trailer"));
+    assert!(!CMD_SIGN_USEROP_BATCH_SRC.contains("TRAILER_KIND_RESERVED_V1 =>"));
+
+    // The single-sign wire uses a positional field, so its two-byte length
+    // prefix must remain. A zero cap ensures no payload can revive the retired
+    // slot or shift the following fields.
+    let reserved_parse = CMD_SIGN_USEROP_SRC
+        .split("let reserved_v1 = match")
+        .nth(1)
+        .and_then(|tail| tail.split("cursor = reserved_v1.next_cursor").next())
+        .expect("single-sign reserved compatibility parser");
+    assert!(reserved_parse.contains("read_optional_u16_prefixed"));
+    assert!(reserved_parse.contains("\n        0,"));
+    assert!(reserved_parse.contains("reserved slot must be 0"));
 }
 
 #[test]

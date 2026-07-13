@@ -12,7 +12,7 @@
 //! pipeline, the cross-check, and the full test suite keep working.
 //!
 //! Dependency closure is intentionally empty: pure byte copies and
-//! comparisons, no hashing, no `cow_binding`, no Groth16/Poseidon, no
+//! comparisons, no hashing, no `cow_binding`, no
 //! hardware. The keccak `struct_hash` / `compute_digest` and the
 //! `setPreSignature` cross-check stay in `secure/` — only the byte-layout
 //! decode lives here.

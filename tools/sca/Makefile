@@ -102,9 +102,6 @@ build-flashctr: $(FCT_ELF)
 $(FCT_ELF): $(FCT_DIR)/src/main.rs $(FCT_DIR)/memory.x $(FCT_DIR)/build.rs $(FCT_DIR)/Cargo.toml ../../pqsigner-fi/src/lib.rs ../../secure/src/hw/flash.rs
 	cargo build --release --target $(TARGET) --manifest-path $(FCT_DIR)/Cargo.toml
 
-# (The Groth16 fault-injection sweep was removed with the ZK clear-sign
-# retirement — see docs/archive/zk-clear-sign-retirement.md.)
-
 build-saes-kdf: $(SKDF_ELF)
 
 # Rebuilds when the production cmac.rs changes (it's `#[path]`-included).

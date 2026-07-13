@@ -90,11 +90,11 @@ fn positive_batch_trailer_kind_enum_values_stable() {
 
 #[test]
 fn positive_max_trailers_per_batch_covers_worst_case() {
-    // Realistic worst case: every inner tx carries six per-tx kinds
-    // (ERC-20, RESERVED_V1, COW_ORDER, SAFE_V1, ERC-7730, plus one of
+    // Realistic worst case: every inner tx carries five live per-tx kinds
+    // (ERC-20, COW_ORDER, SAFE_V1, ERC-7730, plus one of
     // SEL_CURATED XOR SEL_SELFATTEST since they're mutually exclusive),
-    // plus the four batch-wide name bundles.
-    let worst_case = MAX_BATCH_TXS * 6 + 4 /* MAX_NAME_BUNDLES */;
+    // plus the four batch-wide name bundles. RESERVED_V1 is rejected.
+    let worst_case = MAX_BATCH_TXS * 5 + 4 /* MAX_NAME_BUNDLES */;
     assert!(
         MAX_TRAILERS_PER_BATCH >= worst_case,
         "MAX_TRAILERS_PER_BATCH ({}) must bound worst case ({})",
@@ -355,11 +355,9 @@ fn positive_max_execute_calldata_covers_worst_case() {
 
 #[test]
 fn positive_cow_v3_trailer_layout() {
-    // Native EIP-712 CoW v3 trailer (post Groth16-ZK retirement, 2026-06-30):
-    // the canonical packed GPv2Order followed by up to two Merkle-bundle
-    // sections. There is NO proof / readable-string slot any more — the
-    // readable intent is decoded on-device. `TRAILER_KIND_COW_ORDER = 3` keeps its
-    // legacy name for wire compatibility.
+    // Native EIP-712 CoW v3 trailer: canonical packed GPv2Order followed by
+    // up to two Merkle-bundle sections. The readable intent is decoded
+    // on-device. Kind value 3 is frozen for wire compatibility.
     assert_eq!(EIP712_CANONICAL_LEN, 204);
     assert_eq!(COW_ORDER_BUNDLE_MAX, 1120);
     assert_eq!(TRAILER_KIND_COW_ORDER, 3);

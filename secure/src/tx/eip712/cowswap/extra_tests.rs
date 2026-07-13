@@ -221,7 +221,7 @@ fn negative_order_typehash_preimage_is_byte_stable() {
     assert_eq!(
         keccak(ORDER_TYPEHASH_PREIMAGE),
         expected_typehash,
-        "ORDER_TYPEHASH must equal 0xd5a25ba2… per docs/companion/m4-cowswap-eip712-impl.md"
+        "ORDER_TYPEHASH must equal the on-chain GPv2Order.TYPE_HASH (0xd5a25ba2…)"
     );
 }
 

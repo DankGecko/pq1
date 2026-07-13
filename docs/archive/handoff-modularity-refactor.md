@@ -654,15 +654,6 @@ gen-solidity-constants` and commit the regenerated
 is a discipline gate, not an automated one. Add it to PR review
 checklists.
 
-### 4.10 `zk-test` master had a stale path (run 1)
-
-Pre-existing on master: `zk-test/src/main.rs:16` referenced
-`../../secure/src/zk/poseidon_constants.rs` but the file is at
-`../../secure/src/zk/generated/poseidon_constants.rs`. Fixed in run
-1 as a drive-by because CI now exercises the workspace and would
-fail. **If you're rebasing this work on a newer master, check that
-this fix is still applicable.**
-
 ### 4.11 `MockSecureElement::is_provisioned()` has a too-small read buffer (run 2)
 
 `secure/src/secure_element.rs:240`-style `is_provisioned()` uses a
@@ -711,8 +702,8 @@ in Phase 11, those constants either move into `pqsigner-proto`
 because the constants are leaf-imports — no other Rust code depends
 on them inside `pqsigner-tx`'s callers.
 
-Note that `db_format` is also used by `nonsecure/`, `dbgen/`, and
-`secure/src/zk/`, so when it moves, all four import sites update.
+Note that `db_format` is also used by `nonsecure/` and `dbgen/`, so
+those import sites must update together.
 
 ### 4.16 `cfg-feature` density grew slightly across run 2 (run 2)
 

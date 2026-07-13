@@ -172,12 +172,6 @@ fn negative_gpv2_settlement_address_frozen() {
     );
 }
 
-// (Removed 2026-06-30: `negative_cowswap_sentinel_differs_from_settlement_only_in_last_byte`
-// tested `COWSWAP_EIP712_SENTINEL` — a fake-settlement-address discriminator used
-// only by the retired Poseidon/ZK DB lookup. The native EIP-712 CoW path has no
-// such sentinel; the constant was removed with the Groth16 retirement. The real
-// settlement address stays frozen by `negative_gpv2_settlement_address_frozen` above.)
-
 #[test]
 fn negative_gpv2_vault_relayer_address_frozen() {
     let expected: [u8; 20] = [

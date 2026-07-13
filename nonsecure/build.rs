@@ -22,8 +22,7 @@ fn main() {
     // the host-side copies. The classic failure mode is "edited the JSON,
     // forgot to regenerate" — catch it at build time by sniffing the
     // magic bytes. Production builds ship no blob, so there is nothing
-    // to check. (The VK blob was removed with the Groth16 ZK clear-sign
-    // retirement — see docs/archive/zk-clear-sign-retirement.md.)
+    // to check.
     if env::var_os("CARGO_FEATURE_E2E_TEST").is_some() {
         // The e2e NS stub bakes the TINY erc20 fixture blob (the full
         // production erc20_db.bin is multi-MB and would overflow NS flash).

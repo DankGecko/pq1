@@ -1153,8 +1153,7 @@ impl<B: UsbBus> UsbClass<B> for PqSignerHid<'_, B> {
 //! APDU command router — PQSigner v2 native protocol only (post-cutover).
 //!
 //! One class byte: `APDU_CLA_V2 = 0xF0`. One signing command. Every
-//! legacy shim (v1 Keycard Shell, bootstrap/main signing, ZK clear-
-//! signing, EIP-191, EIP-712) is gone — the single sign-userop Type 1 /
+//! legacy signing shim is gone — the single sign-userop Type 1 /
 //! Type 2 state machine in the secure world absorbs the lot.
 //!
 //! Supported v2 instructions:
@@ -1676,7 +1675,7 @@ impl CommandRouter {
     /// No NS-side trailer injection: the companion supplies the wire-v2
     /// routed TLV list. ERC-20 metadata, native CoW (frozen wire kind 3),
     /// Safe, selector, ERC-7730, and name trailers all have batch routes;
-    /// reserved wire kind 2 has a zero-byte cap.
+    /// reserved wire kind 2 is rejected at every payload length.
     unsafe fn cmd_sign_userop_batch(&self, data_len: usize) -> Response {
         if data_len < SIGN_USEROP_BATCH_HEADER_LEN + SIGN_USEROP_BATCH_TX_PREFIX_LEN {
             return self.sw_response(SW_WRONG_LENGTH);

@@ -2973,10 +2973,3 @@ fast enough that distributing across cores doesn't pay. A wider sweep
 (say > 500 k faults) might tip the balance — at which point FaultFinder
 (Murdock et al., ASHES'24) is the validated multicore Unicorn pattern to
 adopt instead of rolling our own.
-
-## Retired Groth16 sweep
-
-The Groth16/BLS12-381 verifier and its SCA targets were retired on
-2026-06-30. The dated fault-sweep receipt is preserved at
-`docs/archive/groth16-fault-sweep-2026-05.md`; its commands and paths do not
-apply to the current tree.

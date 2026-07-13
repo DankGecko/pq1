@@ -22,7 +22,8 @@ Source files covered:
 
 Deferred (see "Coverage gaps"):
 - `secure/src/tx/display/safe_display.rs` — has helpers (`write_short_addr`, `write_raw_uint_two_rows`, `write_safe_nonce_row`, `write_overflow_marker`) that fire `dead_code` warnings under the host scaffold and which the no-`#[allow]` rule forbids me from silencing. Covered by the firmware e2e harness's Safe path.
-- `secure/src/tx/display/mod.rs::pick_sign_pages` — depends on `crate::zk` / `crate::tx::eip712::cowswap_display`, both gated to firmware builds.
+- `secure/src/tx/display/mod.rs::pick_sign_pages` — covered by the real
+  dispatcher mount and WYSIWYS differential suite.
 
 ## Test files added / extended
 
@@ -152,7 +153,9 @@ None classified as security bugs. One minor cosmetic finding worth noting in a f
 ## Coverage gaps deliberately left
 
 - **`safe_display.rs`** — Re-mounting the file under the host scaffold surfaces four `dead_code` warnings (`write_short_addr`, `write_raw_uint_two_rows`, `write_safe_nonce_row`, `write_overflow_marker`) because the host build doesn't reach every branch of `render_safe_v1_pages`. The no-`#[allow]` rule of this pass prevents silencing them; the firmware e2e harness exercises the full Safe path. A follow-up pass that's allowed to add `#[cfg(test)] #[allow(dead_code)]` on those helpers can pull this slice into the host scaffold.
-- **`pick_sign_pages`** (the dispatcher in `tx/display/mod.rs`) — depends on `crate::zk` / `crate::tx::eip712::cowswap_display`, both of which are themselves `#[cfg(not(test))]` and require firmware-only crates. Tested by the e2e clear-sign scenarios.
+- **`pick_sign_pages`** is covered by the host-mounted real dispatcher and
+  the WYSIWYS differential suite; heavyweight device behavior remains covered
+  by the end-to-end clear-sign scenarios.
 - **Real on-target rendering** (SSD1306 framebuffer correctness, font metrics, USB HID round-trip) — out of scope for a host-side cargo-test pass; covered by `make play-hw-display` and the screenshot-capture suite under `ui-capture`.
 - **`Eip1559Tx::parse` round-trip** — would test that what the parser produces feeds correctly into the renderers. Out of slice scope; lives under `pqsigner-tx-core`.
 

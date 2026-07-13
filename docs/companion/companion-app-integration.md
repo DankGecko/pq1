@@ -1045,8 +1045,7 @@ authenticated the factory call, so the threat is purely client-side.
 
 ## 12. Current clear-sign trailers (normative redirect)
 
-The historical proof/VK recipe is retired. CoW, Aave, and ERC-7730 shapes are
-decoded natively on-device. The companion must explicitly supply current
+CoW, Aave, and ERC-7730 shapes are decoded natively on-device. The companion must explicitly supply current
 Merkle-authenticated metadata/descriptor bundles; the non-secure USB layer does
 no database or display-text injection.
 
@@ -1131,7 +1130,7 @@ issue.
    `GET_WALLET_ADDRESS`, not just in the companion UI.
 7. **Clear-sign data must match the pinned roots.** The companion supplies
    ERC-7730, ERC-20, names, Safe, and CoW bundles explicitly. A root/version
-   mismatch fails closed; there is no NS-side lookup or Groth16 fallback.
+   mismatch fails closed; there is no NS-side lookup or display-text injection.
 8. **A compiled-catalogue miss is not an unknown-call proof.** Calls present in
    the firmware-pinned known-call filter still require their verified
    descriptor and refuse if it is absent.

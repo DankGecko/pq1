@@ -28,7 +28,7 @@
 //! corresponding `make`-targets (`make e2e-hw`, `make
 //! optiga-hw-counter-e2e`, etc.) — they are not exercised by this
 //! host-side cargo-test pass and are documented in
-//! `reports/tests/secure-hw-platform.md` under "Coverage gaps".
+//! Hardware-only coverage gaps remain tracked in `docs/work-todo.md`.
 
 #[cfg(test)]
 mod pure_tests;

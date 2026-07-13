@@ -120,6 +120,3 @@ fn companion_stub_names_verifies_against_on_device() {
         "tampered names bundle must be rejected"
     );
 }
-
-// (The VK-bundle round-trip test was removed with the Groth16 ZK
-// clear-sign retirement — see docs/archive/zk-clear-sign-retirement.md.)

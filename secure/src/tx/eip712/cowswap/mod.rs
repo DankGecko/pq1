@@ -36,18 +36,14 @@
 //!   * [`verify`] — the top-level `verify_and_bind_trailer` that the
 //!     gateway handler calls. Runs the length + shape + keccak
 //!     orderDigest cross-check (the trust anchor) and decodes each swap
-//!     leg's token metadata on-device from an ERC-20 Merkle bundle. No
-//!     Groth16 / Poseidon registry — those were retired in favour of the
-//!     on-device decode (which lifts the old 256-token circuit cap).
+//!     leg's token metadata on-device from an ERC-20 Merkle bundle.
 //!   * `test_vectors` (cfg(test) only) — 1000 USDC → WETH fixture and
 //!     the 9 cross-check / shape regression tests, kept off the
 //!     production build entirely.
 
 use super::{eip712_domain_separator, final_digest, keccak, Eip712Error};
 
-// `verify` no longer depends on `crate::zk` (the CoW Groth16 path was
-// retired in favour of on-device ERC-20 bundle decode), so it now
-// compiles under host tests too — letting `test_vectors` exercise the
+// `verify` compiles under host tests, letting `test_vectors` exercise the
 // full trailer→cross-check→leg-decode pipeline, not just the primitives.
 pub mod verify;
 pub use verify::{verify_and_bind_trailer, CowLeg, VerifiedCowswapV3};

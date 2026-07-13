@@ -694,7 +694,7 @@ use crate::ui;
 const SNAP_LEN: usize = SIGN_USEROP_HEADER_LEN
     + MAX_TX_LEN
     + 2 + MAX_ERC20_BUNDLE_LEN
-    + 2 // reserved: retired ZK clear-sign slot (length field only, must be 0)
+    + 2 // reserved compatibility length field; must be 0
     + 2 + COW_ORDER_TRAILER_MAX_LEN
     + 2 + SAFE_V1_PAYLOAD_MAX
     + 2 + MAX_SELECTOR_BUNDLE_LEN
@@ -984,8 +984,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
 
     // CoW order trailer: canonical(204) [|| sell_len(2) || sell_bundle
     // || buy_len(2) || buy_bundle]. Companion sends the whole trailer;
-    // no NS-side injection (there is no VK bundle anymore — token
-    // metadata is decoded on-device from the ERC-20 bundles). Absent is
+    // no NS-side injection: token metadata is decoded on-device from the
+    // ERC-20 bundles. Absent is
     // legal for non-CoW tx — the CoW downgrade-mitigation gate below
     // enforces presence when needed.
     //
@@ -1435,16 +1435,15 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // Computing it here would force the disjuncts to run before the Safe
     // verdicts exist.
 
-    // 7b. Reserved compatibility slot. The former verifier was removed —
-    // Aave clear-signing now flows through the native ERC-7730 verifier
-    // (§7c-quinquies / `erc7730_verified`). The wire slot is parsed as a
-    // reserved zero-length field above (`reserved_v1`).
+    // 7b. Reserved compatibility slot. Aave clear-signing flows through
+    // the native ERC-7730 verifier (§7c-quinquies / `erc7730_verified`).
+    // The wire slot is parsed as a zero-length field above (`reserved_v1`).
 
     // 7c. `safe_v1` Safe-multisig `approveHash` cross-check —
-    // 8-step all-native pipeline (length → selector → calldata len →
+    // 8-step native pipeline (length → selector → calldata len →
     // chain pin → safe-address pin → operation gate → data_hash bind
-    // → safeTxHash bind). No Groth16; the approveHash digest is in the
-    // calldata itself, so the firmware natively recomputes both
+    // → safeTxHash bind). The approveHash digest is in the calldata
+    // itself, so the firmware recomputes both
     // keccak chains and byte-compares.
     //
     // Runs BEFORE the v3 CoW verify (7c-ter): a Safe-wrapped CoW

@@ -344,8 +344,7 @@ flash-hw: build-hw ## Flash + run on real STM32U585 (probe-rs/OpenOCD)
 # covers value transfers, known/unknown ERC-20, blind-sign, slot
 # rotation, Safe approveHash / exec clear-sign, selector + self-attest
 # + ERC-7730 typed render, atomic batch sign, and Safe-wrapped CoW
-# pre-sign (all on-device native decode — the Groth16 ZK clear-sign
-# path was retired, see docs/archive/zk-clear-sign-retirement.md).
+# pre-sign, all through on-device native decode.
 #
 # Pass → exits 0. Any missing assertion or non-zero status → exits 1.
 e2e: ## Automated unified-sign E2E (QEMU)

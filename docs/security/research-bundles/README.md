@@ -103,4 +103,4 @@ researched.
 
 Existing result files are historical research inputs, not current
 implementation guidance. The banner in `results/README.md` records that
-boundary, including the retirement of the former Groth16/VKDB design.
+boundary.

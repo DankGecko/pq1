@@ -175,10 +175,6 @@ if [ -d contracts/smart-wallet/lib ]; then
 fi
 ok "no lib/ directories outside foundry.lock"
 
-# (The NPM / circuits/ check was removed with the Groth16 ZK clear-sign
-# retirement — the Circom circuit sources are gone. See
-# docs/archive/zk-clear-sign-retirement.md.)
-
 echo "==> 3/4 Rust toolchain"
 
 # rust-toolchain.toml must pin a dated nightly or exact semver.

@@ -30,7 +30,7 @@ it last as the source of truth.*
 - **TrustZone partition**: secure world (flash bank 1 `0x0C000000`,
   SRAM1 `0x3000_0000`) owns all crypto, PIN verification, and
   persistent secrets. Non-secure world (flash bank 2, SRAM2) owns UI,
-  USB transport, transaction parsing, and ZK-proof verification
+  USB transport, transaction parsing, and native clear-sign verification
   scaffolding. Crossings go through 6 NSC gateway commands; pointer
   validation + TOCTOU-safe copy-to-secure-stack on every entry.
 - **Bootstrap signer (ML-DSA-44)** never rotates — it owns the wallet
@@ -116,7 +116,7 @@ not useful.
 - Shielded Connection on OPTIGA Trust M with Platform Binding Secret
   (PBS) in secure flash page 126.
 - SLH-DSA-SHA2-128f signing with verify-before-release.
-- ZK clear-signing (Groth16 + Poseidon) for Aave v3 calldata.
+- Native ERC-7730 clear-signing for supported Aave v3 calldata.
 - 6-command NSC gateway with pointer validation and TOCTOU-safe
   copy-in.
 - Firmware measurement: SHA-256 of secure-flash region → 8 BIP-39

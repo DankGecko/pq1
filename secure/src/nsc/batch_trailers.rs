@@ -9,7 +9,7 @@
 //!   [ u8 trailer_count ]            (0..=MAX_TRAILERS_PER_BATCH)
 //!   [ trailer_count × {
 //!       u8  kind                    (1..=8, see proto::TRAILER_KIND_*)
-//!       u8  tx_idx                  (0..batch_count-1 for kinds 1..=7;
+//!       u8  tx_idx                  (0..batch_count-1 for live kinds 1, 3..=7;
 //!                                    TRAILER_TX_IDX_BATCH_WIDE for kind 8)
 //!       u16 BE len                  (per-kind cap, see MAX_LEN_PER_KIND)
 //!       [len bytes]                 trailer payload
@@ -67,7 +67,7 @@ use crate::ui;
 pub const MAX_LEN_PER_KIND: [usize; 9] = [
     0,                                              // 0 — unused
     MAX_ERC20_BUNDLE_LEN,                           // 1 — ERC-20 metadata
-    0,                                              // 2 — reserved; must be empty
+    0,                                              // 2 — reserved; always rejected
     COW_ORDER_TRAILER_MAX_LEN,                      // 3 — CoW order (on-device decode)
     SAFE_V1_PAYLOAD_MAX,                            // 4 — Safe v1
     MAX_SELECTOR_BUNDLE_LEN,                        // 5 — selector curated
@@ -127,10 +127,10 @@ impl ParsedTrailers {
 }
 
 /// Compile-time sanity: the worst-case record count
-/// (`MAX_BATCH_TXS × 6 + MAX_NAME_BUNDLES`) must fit inside
-/// `MAX_TRAILERS_PER_BATCH`. Six per-tx kinds because selector-curated
-/// and selector-self-attest are mutually exclusive per tx.
-const _: () = assert!(MAX_TRAILERS_PER_BATCH >= MAX_BATCH_TXS * 6 + MAX_NAME_BUNDLES);
+/// (`MAX_BATCH_TXS × 5 + MAX_NAME_BUNDLES`) must fit inside
+/// `MAX_TRAILERS_PER_BATCH`. Kind 2 is permanently rejected, while
+/// selector-curated and selector-self-attest are mutually exclusive.
+const _: () = assert!(MAX_TRAILERS_PER_BATCH >= MAX_BATCH_TXS * 5 + MAX_NAME_BUNDLES);
 
 /// Parse the TLV-tagged trailer list starting at `cursor`.
 ///
@@ -202,6 +202,13 @@ pub fn parse_all(
         // 3b. Kind enum check.
         if kind == 0 || kind > MAX_TRAILER_KIND {
             ui::show_status("Batch sign", "bad trailer kind");
+            return Err(NscStatus::InvalidPointer as u32);
+        }
+        // Frozen compatibility value only: accepting even an empty record
+        // would leave a no-op dispatch path that a future change could
+        // accidentally reactivate. Every occurrence is invalid.
+        if kind == TRAILER_KIND_RESERVED_V1 {
+            ui::show_status("Batch sign", "reserved trailer");
             return Err(NscStatus::InvalidPointer as u32);
         }
 
@@ -289,7 +296,6 @@ pub fn parse_all(
         // case before recording.
         match kind {
             TRAILER_KIND_ERC20
-            | TRAILER_KIND_RESERVED_V1
             | TRAILER_KIND_COW_ORDER
             | TRAILER_KIND_SAFE_V1
             | TRAILER_KIND_SEL_CURATED
@@ -420,6 +426,19 @@ mod tests {
     #[test]
     fn refuses_kind_nine() {
         let snap = build(&[(9, 0, &[])]);
+        assert!(parse_all(&snap, 0, snap.len(), 1).is_err());
+    }
+
+    #[test]
+    fn refuses_reserved_kind_with_zero_length() {
+        let snap = build(&[(TRAILER_KIND_RESERVED_V1, 0, &[])]);
+        assert!(parse_all(&snap, 0, snap.len(), 1).is_err());
+    }
+
+    #[test]
+    fn refuses_reserved_kind_with_nonzero_length() {
+        let payload = [0x5au8];
+        let snap = build(&[(TRAILER_KIND_RESERVED_V1, 0, &payload)]);
         assert!(parse_all(&snap, 0, snap.len(), 1).is_err());
     }
 
@@ -569,8 +588,8 @@ mod tests {
         // Drift guard: bump kind caps in the table whenever the
         // verifier-side const bumps.
         assert_eq!(MAX_LEN_PER_KIND[TRAILER_KIND_ERC20 as usize], MAX_ERC20_BUNDLE_LEN);
-        // Kind 2 is reserved — its cap is 0 so any non-empty record of
-        // that legacy kind is rejected at parse time.
+        // Kind 2 is reserved. Its zero cap is defence in depth; the parser
+        // rejects even an empty record before consulting this table.
         assert_eq!(MAX_LEN_PER_KIND[TRAILER_KIND_RESERVED_V1 as usize], 0);
         assert_eq!(
             MAX_LEN_PER_KIND[TRAILER_KIND_COW_ORDER as usize],

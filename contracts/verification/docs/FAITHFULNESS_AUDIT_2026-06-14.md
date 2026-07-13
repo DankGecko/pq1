@@ -184,7 +184,7 @@ by Halmos (A3.2/A3.2-exec/A3.3/A3.4) + the corpus-bound A3.1.
 | #2 Hardware PIN three-way lockstep / 10-attempt brick | **NOT COVERED** (firmware/SE-only) |
 | #3 E2E SE tunnels (Shielded Connection / SCP03) | **NOT COVERED** (firmware/SE-only) |
 | #4 TrustZone secret isolation + NS-ptr TOCTOU | **NOT COVERED** (GTZC is silicon-validated, not Lean) |
-| Trusted-display clear-signing (EIP-712 SafeTx/CoW + Groth16) | **NOT COVERED** (secure-world UI/zk) |
+| Trusted-display clear-signing (native Safe/CoW/ERC-7730) | **NOT COVERED** (secure-world UI/decoders) |
 | #9 firmware half — `MAX_OFFCHAIN_GAP=100` unbacked-sig refusal, page-123 counter | **PARTIAL** (on-chain combined cap proven; firmware gap-refusal not modeled) |
 
 This is the single largest honest gap **by surface area**. The Lean proof's

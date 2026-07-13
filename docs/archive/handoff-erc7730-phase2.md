@@ -12,7 +12,7 @@ On **2026-05-12** the Ethereum Foundation, through its Trillion Dollar Security 
 - **ERC-8176** — RFC 8785 JCS-canonicalised + keccak256-of-descriptor, signed by EIP-191 (EOA) or ERC-1271 attesters
 - **ERC-8213** — short reproducible fingerprints (calldata digest, EIP-712 final hash) for cross-device verification
 
-PQSigner already does its own clear-signing (CowSwap EIP-712 v3 Groth16-attested, Safe v1, Phase-2 typed-call ABI decoder, ERC-20 / selector / name Merkle bundles). ERC-7730 lets us cover the long tail of the registry (Aave, Compound, Lido, Curve, OpenSea, EAS, Permit2, Uniswap V3, etc.) by ingesting community-curated descriptors rather than hand-writing per-protocol Rust + circuits.
+PQSigner already does its own clear-signing (native CowSwap and Safe EIP-712, Phase-2 typed-call ABI decoder, ERC-20 / selector / name Merkle bundles). ERC-7730 lets us cover the long tail of the registry (Aave, Compound, Lido, Curve, OpenSea, EAS, Permit2, Uniswap V3, etc.) by ingesting community-curated descriptors rather than hand-writing per-protocol Rust.
 
 ## Architectural choices already locked
 

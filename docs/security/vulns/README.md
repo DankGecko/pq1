@@ -27,16 +27,6 @@ diverged from — or hid behind — what was rendered.
 | [erc7730-visible-never-noparam-clearsign](./VULN-erc7730-visible-never-noparam-clearsign.md) | `visible:"never"` lets a shipping descriptor clear-sign with NO parameters shown |
 | [erc7730-walker-slot-confusion](./VULN-erc7730-walker-slot-confusion.md) | Phase-4 calldata-walker slot-confusion (renders one field, signs another) |
 
-## ZK clear-signing (retired Groth16 path)
-
-From the earlier Groth16/BLS12-381 clear-signing design (retired 2026-06-30;
-CoW/Aave now decode natively). Kept for the soundness history.
-
-| Write-up | The break |
-|----------|-----------|
-| [cowswap-zk-amount-overflow](./VULN-cowswap-zk-amount-overflow.md) | Field-overflow amount forgery — valid proof, UI shows 0.2 USDC, signs ~2.6e70 |
-| [cowswap-zk-bytepack-nonbinding](./VULN-cowswap-zk-bytepack-nonbinding.md) | Byte-pack commitment is not byte-binding → proof forgery over a different order |
-
 ## Availability / durable-brick (state machines + provisioning)
 
 Not confidentiality breaks — paths where a hostile companion or a mis-ordered

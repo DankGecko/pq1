@@ -2,9 +2,8 @@
 
 This is the live wire and binding contract for direct CoW orders, Safe
 `approveHash`, decoded Safe `execTransaction`, and allowlisted
-`MultiSendCallOnly` batches. The historical Groth16, readable-string, VK, and
-AddrOnly/proof-mode designs are retired. The numeric kind 3 and its wire position
-remain unchanged; current APIs call it the native CoW order trailer.
+`MultiSendCallOnly` batches. Numeric kind 3 and its wire position are frozen;
+current APIs call it the native CoW order trailer.
 
 ## CoW order trailer (kind 3)
 
@@ -24,8 +23,7 @@ canonical GPv2Order                      204 bytes
 - Every non-native leg displays its full 20-byte contract even when metadata is
   valid. Metadata improves readability; it never replaces token identity.
 
-There is no proof, readable string, VK bundle, sentinel lookup, or NS-injected
-display text. Firmware natively recomputes the GPv2Order EIP-712 digest and
+Firmware natively recomputes the GPv2Order EIP-712 digest and
 binds it to `orderUid`, `validTo`, the owner, the calldata shape, and
 `signed == true`.
 
@@ -95,8 +93,4 @@ mutually-exclusive records and enforces per-kind and aggregate length caps.
 - Genuinely unknown opaque call: loud generic display may be offered.
 
 The status text may still say `CoW sign / v3 required`; “v3” denotes the frozen
-wire generation, not a proof requirement.
-
-Historical material is quarantined in
-[`docs/archive/zk-clear-sign-retirement.md`](../archive/zk-clear-sign-retirement.md)
-and [`docs/archive/m4-cowswap-eip712-impl.md`](../archive/m4-cowswap-eip712-impl.md).
+wire generation.

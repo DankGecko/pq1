@@ -22,9 +22,10 @@
 //! [`super::batch_trailers`]). Every clear-signing kind the single-tx
 //! handler accepts is also accepted here, routed per inner-tx:
 //!
-//!   * Kinds 1..=7 (ERC-20, reserved kind 2, native CoW order, Safe v1, selector curated,
-//!     selector self-attest, ERC-7730) bind via `tx_idx` to a specific
+//!   * Live kinds 1 and 3..=7 (ERC-20, native CoW order, Safe v1,
+//!     selector curated, selector self-attest, ERC-7730) bind via `tx_idx` to a specific
 //!     inner-tx and feed `pick_sign_pages` for that tx.
+//!   * Frozen compatibility kind 2 is rejected for every payload length.
 //!   * Kind 8 (address-name bundles) is batch-wide (`tx_idx == 0xff`),
 //!     accumulating into a single `NameResolver` shared across renders.
 //!
@@ -52,7 +53,7 @@ use sphincs_tz_shared::{
     SIGN_USEROP_BATCH_MAX_PAYLOAD_LEN, SIGN_USEROP_BATCH_TX_PREFIX_LEN,
     SIGN_USEROP_BATCH_WIRE_VERSION, SIG_WRAPPER_LEN, SLOT_INDEX_MASK, TRAILER_KIND_ERC20,
     TRAILER_KIND_ERC7730, TRAILER_KIND_NAME, TRAILER_KIND_SAFE_V1, TRAILER_KIND_SEL_CURATED,
-    TRAILER_KIND_RESERVED_V1, TRAILER_KIND_SEL_SELFATTEST, TRAILER_KIND_COW_ORDER,
+    TRAILER_KIND_SEL_SELFATTEST, TRAILER_KIND_COW_ORDER,
 };
 use subtle::ConstantTimeEq;
 use zeroize::{Zeroize, Zeroizing};
@@ -461,16 +462,6 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                         .erc20 = Some(meta);
                 }
             }
-            TRAILER_KIND_RESERVED_V1 => {
-                // Retired: the Groth16 ZK clear-sign path was removed
-                // (Aave clear-signing moved to the native ERC-7730
-                // verifier). A record carrying this legacy kind is
-                // ignored — the retired proof is never verified. The inner tx
-                // may use native ERC-7730 or generic renderers, subject to the
-                // known-call filter (a registry-declared ERC-7730 tuple cannot fall
-                // through without its own kind-7 proof).
-                continue;
-            }
             TRAILER_KIND_COW_ORDER => {
                 // Deferred to pass 2 (§5d below). The CoW binding
                 // target depends on the Safe context for the same
@@ -665,8 +656,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         let idx = rec.tx_idx as usize;
         let ptx = parsed[idx].as_ref().unwrap();
         let inner_data: &[u8] = &snap[ptx.data_off..ptx.data_off + ptx.data_len];
-        // Exec context via a cheap pure ABI decode (no keccak, no
-        // Groth16). The render loop recomputes the same decode later;
+        // Exec context via a cheap pure ABI decode (no keccak). The render
+        // loop recomputes the same decode later;
         // doubling it for the one CoW-wrapped tx beats threading a
         // MAX_BATCH_TXS-sized context array through the handler.
         let safe_exec_ctx = if inner_data.len() >= 4

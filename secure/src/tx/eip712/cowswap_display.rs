@@ -23,9 +23,8 @@
 //!     user can still verify magnitudes without trusting the host for
 //!     decimals. 2 pages.
 //!
-//! There is no Groth16 proof and no Poseidon registry — token metadata
-//! is decoded on-device against a firmware-pinned Merkle root, lifting
-//! the old 256-token / 6-char-symbol circuit cap entirely.
+//! Token metadata is decoded on-device against a firmware-pinned Merkle
+//! root.
 
 use crate::tx::display::Pages;
 use crate::tx::eip712::cowswap::CowLeg;

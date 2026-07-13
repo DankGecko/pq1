@@ -118,7 +118,7 @@ one `NameResolver` shared across renders.
 | `kind` | symbol | max bytes | verifier | applies to |
 |-------:|--------|----------:|----------|------------|
 | 1 | `TRAILER_KIND_ERC20`         | 1120 | `erc20::bundle::verify_erc20_bundle` (`ERC20_DB_ROOT`) | inner tx at `tx_idx` |
-| 2 | `TRAILER_KIND_RESERVED_V1`   |    0 | reserved compatibility kind; do not emit a record       | inner tx at `tx_idx` |
+| 2 | `TRAILER_KIND_RESERVED_V1`   |    0 | reserved compatibility value; every record is rejected  | none; never emit |
 | 3 | `TRAILER_KIND_COW_ORDER`         | 2448 | `tx::eip712::cowswap::verify_and_bind_trailer`         | inner tx at `tx_idx` |
 | 4 | `TRAILER_KIND_SAFE_V1`       | 4379 | `tx::eip712::safe::verify_and_bind_trailer`            | inner tx at `tx_idx` |
 | 5 | `TRAILER_KIND_SEL_CURATED`   | 1100 | `selectors::verify_selector_bundle` (`SELECTOR_DB_ROOT`) | inner tx at `tx_idx` |

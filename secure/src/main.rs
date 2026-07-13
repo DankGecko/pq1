@@ -302,8 +302,8 @@ pub(crate) mod nsc_core_under_test;
 // the FI hardening / KDF tags / zeroization sites in `crypto.rs` +
 // `dual_se.rs`, alongside runtime tests for the four `db_roots`-
 // bound bundle wrappers (`erc20`, `names`, `selectors`) and the
-// `aa` re-export shim. See `reports/tests/secure-crypto-glue.md`
-// for the inventory.
+// `aa` re-export shim. The executable inventory lives in
+// `secure_crypto_glue_under_test/` beside these sources.
 #[cfg(test)]
 mod secure_crypto_glue_under_test;
 
@@ -392,9 +392,6 @@ mod se050_under_test;
 // inventory.
 #[cfg(test)]
 mod secure_se_misc_pure_tests;
-
-// (The `secure-zk` test scaffold was removed when the Groth16 ZK
-// clear-sign path was retired — see docs/archive/zk-clear-sign-retirement.md.)
 
 // ── Test-only scaffold for the `secure-ui` slice ──
 //
@@ -3680,10 +3677,6 @@ fn main() -> ! {
             }
         }
     }
-
-    // (The PKA hardware accelerator was removed with the Groth16 ZK
-    // clear-sign path — BLS12-381 was its only consumer. See
-    // docs/archive/zk-clear-sign-retirement.md.)
 
     // Initialize USB OTG FS hardware (clocks, GPIO, UCPD) when targeting
     // real hardware with USB enabled.  Must run after rcc::init() and

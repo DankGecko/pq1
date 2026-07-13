@@ -1,9 +1,7 @@
 # Firmware Security Audit — Secure-World Signing & Trusted-Display Path
 
-> **Historical snapshot.** This report describes the 2026-06-09 tree. Its
-> Groth16/BLS12-381 paths were removed on 2026-06-30; they are not current
-> implementation guidance. CoW and supported Aave operations now use native
-> on-device decoders. See `docs/archive/zk-clear-sign-retirement.md`.
+> **Historical snapshot.** This report describes the 2026-06-09 tree. Current
+> implementation guidance lives in the native Safe/CoW/ERC-7730 documents.
 
 **Date:** 2026-06-09
 **Auditor:** Claude (Fable 5), max-effort pass
@@ -13,7 +11,7 @@
 
 - **In scope:** software correctness of the firmware signing path — NS→S gateway,
   the unified sign dispatch, transaction decoding, trusted-display renderers, the
-  Safe EIP-712 verifier, the CowSwap Groth16 verifier, and the EIP-1271/offchain path.
+  native Safe and CowSwap EIP-712 verifiers, and the EIP-1271/offchain path.
 - **Trusted (out of scope):** all hardware — SE chips, TrustZone SAU/GTZC enforcement,
   SHA/keccak/PKA peripherals, fault-injection resistance of silicon. This is a
   *software-logic* review.
@@ -22,13 +20,13 @@
 - **Security property under test:** **WYSIWYS** — what the user sees rendered on the
   trusted display must be *exactly* what the SPHINCS+C10 signature commits to. A
   malicious companion must not be able to display a benign action while signing a
-  malicious one, hide a parameter, forge a proof, or bypass a decode.
+  malicious one, hide a parameter, forge metadata, or bypass a decode.
 
 ## Method
 
 The central `to/value/data → signature` binding was traced by hand
 (`cmd_sign_userop.rs` → `reconstruct_execute_calldata` → `compute_sphincs_digest_v06`),
-and four parallel adversarial deep-dives covered Safe EIP-712, CowSwap/Groth16, the
+and four parallel adversarial deep-dives covered Safe EIP-712, CowSwap, the
 NS↔S boundary, and the known-shape decoders. Every High/Critical claim below was
 re-verified against the live source, including the on-chain `PQSmartWallet.sol`
 execution semantics.
@@ -77,13 +75,9 @@ All twelve findings are fixed. Summary of the implemented remediations:
   policy.
 - **M-7** — `render_enum` / `render_nft_name` now `Reject` (fall through
   to blind-sign) instead of rendering a raw integer under a semantic label.
-- **L-9** — `groth16_verify*` reject identity A/B/C/vk_x/VK points before
-  the Miller loop; the dead `any_identity` accumulator removed from
-  `miller_loop_4` (with a comment that a blanket product mask would
-  false-*accept*, so callers must reject identity inputs explicitly).
-- **L-10** — Single-tx Safe `safe_v1`/`safe_exec` binds and the Groth16
-  accept decision are now FI-sentinel double-evaluated (`wait_random` +
-  `check_true_into_sentinel`), matching the batch dispatcher.
+- **L-10** — Single-tx Safe `safe_v1`/`safe_exec` binds are now FI-sentinel
+  double-evaluated (`wait_random` + `check_true_into_sentinel`), matching
+  the batch dispatcher.
 - **L-11** — `cross_check_eip712` dropped the tautological
   `verifying_contract` argument; the verifying contract is bound through
   the independently-checked `domain_separator`.
@@ -91,8 +85,8 @@ All twelve findings are fixed. Summary of the implemented remediations:
   decoder and falls to blind-sign.
 
 Validation: host unit tests pass (incl. the new C-1 regression and the M-5
-IR/dbgen round-trip against the real corpus); `pqsigner-erc7730`, `dbgen`,
-and `bls12_381_pka` test suites pass; the firmware compiles clean for
+IR/dbgen round-trip against the real corpus); `pqsigner-erc7730` and `dbgen`
+test suites pass; the firmware compiles clean for
 `thumbv8m.main-none-eabi`. (A pre-existing `make e2e` Scenario-2 failure on
 this branch reproduces identically on the unmodified commit — it stems from
 the stale firmware `PROXY_INIT_CODE_HASH` after an unrelated
@@ -112,8 +106,7 @@ the stale firmware `PROXY_INIT_CODE_HASH` after an unrelated
 | M-6 | 🟡 Medium | ETH amount render trims trailing zeros (visual collision) | `secure/src/tx/display/primitives.rs` | ✅ Fixed |
 | M-7 | 🟡 Medium | ERC-7730 `Enum`/`NftName` render raw int under semantic label | `secure/src/tx/display/erc7730/formatters.rs` | ✅ Fixed |
 | M-8 | 🟡 Medium | Safe paths don't show outer UserOp `value` | `secure/src/tx/display/safe_display.rs` | ✅ Fixed |
-| L-9 | 🟢 Low | `miller_loop_4` drops identity mask (false-reject only) | `bls12_381_pka/src/pairings.rs` | ✅ Fixed |
-| L-10 | 🟢 Low | Groth16 verdict / single-tx Safe verify lack FI sentinel | `secure/src/zk/groth16.rs`, `cmd_sign_userop.rs` | ✅ Fixed |
+| L-10 | 🟢 Low | Single-tx Safe verify lacks FI sentinel | `cmd_sign_userop.rs` | ✅ Fixed |
 | L-11 | 🟢 Low | `cross_check_eip712` contract arg is tautological | `secure/src/nsc/cmd_sign_offchain.rs` | ✅ Fixed |
 | L-12 | 🟢 Low | Docs claim multiSend decoding that doesn't exist | `CLAUDE.md`, `README.md` | ✅ Fixed |
 
@@ -310,32 +303,15 @@ an explicit outer-value page. The global C-1 value page also covers this.
 
 ---
 
-## L-9 🟢 LOW — `miller_loop_4` drops the identity-result mask
+## L-10 🟢 LOW — Safe verifier verdicts lack FI sentinel hardening
 
-`bls12_381_pka/src/pairings.rs:664-726`: `miller_loop_4` computes an `any_identity`
-`Choice` but never applies the `Fp12::conditional_select(.., Fp12::one(), any_identity)`
-mask that the reference `pairing()` (`:635-651`) uses. If a proof point is the identity,
-the loop computes a *wrong* product instead of the correct `e(identity,·)=1` factor.
-**Not exploitable** — this can only cause a *false reject*, never a false accept; honest
-proofs never contain identity A/B/C and VK points are pinned/non-identity.
-
-**Fix (hygiene):** apply the mask to match `pairing()` semantics, or have
-`groth16_verify*` explicitly reject identity A/B/C before the loop; remove the dead
-`any_identity` otherwise.
-
----
-
-## L-10 🟢 LOW — Verifier verdicts lack FI sentinel hardening
-
-The Groth16 accept decision is a single `result == Gt::identity()` boolean
-(`secure/src/zk/groth16.rs:117-127`), and the single-tx Safe `safe_v1`/exec binds are
-consumed as plain `Option`s (`secure/src/nsc/cmd_sign_userop.rs:735-759`) — whereas the
+The single-tx Safe `safe_v1`/exec binds are consumed as plain `Option`s
+(`secure/src/nsc/cmd_sign_userop.rs:735-759`) — whereas the
 batch path wraps them in `fi::check_true_into_sentinel(...)` with `wait_random()`
 (`cmd_sign_userop_batch.rs:415-421`). Out of *this* (software-only) threat model, but
 inconsistent with the codebase's stated FI posture.
 
-**Fix:** mirror the batch path's sentinel double-eval for the single-tx Safe binds and
-the ZK verdict.
+**Fix:** mirror the batch path's sentinel double-eval for the single-tx Safe binds.
 
 ---
 
@@ -365,14 +341,10 @@ falls (loudly, WYSIWYS-safely) to blind-sign.
 
 ## Verified sound (no break found)
 
-- **CowSwap Groth16 forgery — not possible (within threat model).** VK is firmware-pinned
-  via a SHA-256 Merkle root (`secure/src/zk/vk_bundle.rs` → `db_roots::VK_DB_ROOT`); G1/G2
-  proof + VK points are full subgroup-checked (`is_torsion_free`) on deserialization; the
-  pairing equation is the correct Groth16 check against the true `Fp12` identity; the
-  Circom circuit `===`-binds displayed `readable` to signed `canonical`; and the firmware
-  *independently* recomputes the EIP-712 order digest from `canonical` and byte-matches it
-  to the `orderUid` in the signed calldata. The CoW `setPreSignature` downgrade gate is
-  enforced in both single and batch handlers.
+- **CowSwap native binding — sound.** Firmware recomputes the EIP-712 order
+  digest from canonical GPv2Order bytes and byte-matches it to the `orderUid`
+  in signed calldata. Token metadata is Merkle-authenticated and target-bound;
+  the `setPreSignature` downgrade gate is enforced in single and batch handlers.
 - **Safe EIP-712 — core binding sound.** Rendered fields ⟸ verified `canonical` ⟸
   `inner_data` ⟸ signed UserOp; chainId + verifyingContract pinned to the UserOp;
   DELEGATECALL rejected in both `approveHash` and `execTransaction` paths; firmware decode
@@ -385,7 +357,7 @@ falls (loudly, WYSIWYS-safely) to blind-sign.
   `SLOT_CACHE` is full-`(account, chain, slot)`-tuple keyed (no wrong-key signing). The
   prior `cmd_sign_offchain` 4016/8616 FI-OOB fix is **confirmed complete** with no sibling
   regressions.
-- **Merkle trust-bundles** (ERC-20 / names / selectors / VK / ERC-7730) are
+- **Merkle trust-bundles** (ERC-20 / names / selectors / ERC-7730) are
   domain-separated (`0x00` leaf / `0x01` node — second-preimage safe), depth-bounded
   (≤32), and reject trailing bytes; every companion-supplied display string is
   ASCII-charset-gated and length-bounded (no homoglyph / control-char OLED spoof).
@@ -399,7 +371,7 @@ falls (loudly, WYSIWYS-safely) to blind-sign.
 2. **H-3** — add ERC-7730 field-completeness enforcement (or restrict `Visibility::Never`).
 3. **M-4, M-7** — make unbound/stubbed ERC-7730 formatters fail loud (raw + banner, or
    `Reject`) instead of presenting authoritative-looking values.
-4. **M-5, M-6, L-9–L-12** — defense-in-depth and hygiene; batch into a cleanup pass.
+4. **M-5, M-6, L-10–L-12** — defense-in-depth and hygiene; batch into a cleanup pass.
 
 **Bottom line:** the cryptographic and NS-boundary engineering is strong; the one
 critical, directly-exploitable break is mundane and recurring — *native `value` is

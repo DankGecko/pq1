@@ -21,16 +21,6 @@ owners:
   and [`../companion/companion-safe-cowswap-presign.md`](../companion/companion-safe-cowswap-presign.md)
   — native trusted-display clear signing.
 
-## Retired design warning
-
-The former Groth16/BLS12-381 proof verifier, VK database, proof-bearing gateway
-commands, and readable-string trust path were removed on 2026-06-30. They are
-not an optional mode or future implementation plan. Current Safe, CoW, Aave,
-ERC-7730, ERC-20, and typed-call semantics are decoded on-device.
-
-Historical material is quarantined under
-[`../archive/zk-clear-sign-retirement.md`](../archive/zk-clear-sign-retirement.md)
-and
-[`../archive/architecture-zk-clear-signing-retired.md`](../archive/architecture-zk-clear-signing-retired.md).
-Commands, payloads, paths, and remediation steps in those archives must not be
-used to implement current firmware or companion software.
+Safe, CoW, Aave, ERC-7730, ERC-20, and typed-call semantics are decoded
+on-device. This index and the linked live documents define the only supported
+clear-signing architecture.

@@ -368,7 +368,7 @@ fixed header + variable `data_len` calldata). All length prefixes are
 ```
 [fixed 330B header][data_len][data]
 [erc20_bundle_len    ][erc20_bundle    ]   ← slot 0
-[zk_v1_len           ][zk_v1_bundle    ]   ← slot 1: retired, length MUST be zero
+[reserved_v1_len     ][no payload      ]   ← slot 1: reserved, length MUST be zero
 [cow_order_len           ][cow_order_bundle    ]   ← slot 2: legacy name for native CoW v3 trailer
 [safe_v1_len         ][safe_v1_payload ]   ← slot 3
 [curated_selector_len][curated_bundle  ]   ← slot 4 (Phase 2)
@@ -404,7 +404,7 @@ Rules:
 ```
 header(330) || data_len(2) || data(N)
 || 00 00     (erc20_len            = 0)
-|| 00 00     (zk_v1_len            = 0)
+|| 00 00     (reserved_v1_len      = 0)
 || 00 00     (cow_order_len            = 0)
 || 00 00     (safe_v1_len          = 0)
 || LL LL     (curated_selector_len = curated bundle byte length)
@@ -418,7 +418,7 @@ header(330) || data_len(2) || data(N)
 ```
 header(330) || data_len(2) || data(N)
 || 00 00     (erc20_len            = 0)
-|| 00 00     (zk_v1_len            = 0)
+|| 00 00     (reserved_v1_len      = 0)
 || 00 00     (cow_order_len            = 0)
 || 00 00     (safe_v1_len          = 0)
 || 00 00     (curated_selector_len = 0)
@@ -632,7 +632,7 @@ or pre-bound at construction). Selector
    ```
    [330B header][2 = data_len = 36][36B inner_data]
    [00 00]                                  ← erc20_len   = 0
-   [00 00]                                  ← zk_v1_len   = 0
+   [00 00]                                  ← reserved_v1_len = 0
    [00 00]                                  ← cow_order_len   = 0
    [00 00]                                  ← safe_v1_len = 0
    [02 5E]                                  ← selector_len = 606 (0x025e)

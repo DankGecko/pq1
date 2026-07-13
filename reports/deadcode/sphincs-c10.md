@@ -27,7 +27,7 @@ fully superseded by the `sign_with_shuffle` form (the un-shuffled call
 sites now pass `ShuffleSeed::zero()` directly). Removing them collapses
 the public surface to a single signing entrypoint per layer and clears
 the three `rustc` warnings the crate emits on host check (two
-`dead_code` already noted in `reports/deadcode/proto.md`, plus an
+`dead_code` already noted by the earlier cross-slice pass, plus an
 unrelated `unused_mut`). Two stale doc paragraphs about `opt_rand` being
 "currently ignored" were corrected — `opt_rand` is in fact mixed into
 `fors::grind_r` (F-9 fix), so the old wording was actively misleading.
@@ -38,7 +38,7 @@ byte-equality regression passes).
 | file:lines (pre-edit) | item | bucket | rationale |
 |---|---|---|---|
 | `sphincs-c10/src/lib.rs:107-120` | `SigningKey::sign_with_progress` | 4 (vestigial) | Backwards-compatible identity-shuffle wrapper. Only callers (per repo-wide grep) were docs/markdown; runtime callers use `sign_with_shuffle` directly (e.g. `secure/src/crypto.rs:166,169`). Doc comment on `sign_with_shuffle` updated to mention the `ShuffleSeed::zero()` un-shuffled mode it used to wrap. |
-| `sphincs-c10/src/hypertree.rs:46-57` | `hypertree::sign_with_progress` | 1 (truly unused) | Internal helper that only `SigningKey::sign_with_progress` called. Flagged dead by rustc; previously noted in `reports/deadcode/proto.md` cross-slice observations. Doc on the surviving `sign_with_shuffle` folded the progress description in. |
+| `sphincs-c10/src/hypertree.rs:46-57` | `hypertree::sign_with_progress` | 1 (truly unused) | Internal helper that only `SigningKey::sign_with_progress` called. Flagged dead by rustc in the earlier cross-slice pass. Doc on the surviving `sign_with_shuffle` folded the progress description in. |
 | `sphincs-c10/src/wots.rs:98-114` | `wots::sign` | 1 (truly unused) | Backwards-compatible thin wrapper around `wots::sign_with_shuffle(.., &[0u8;32])`. The only consumer (`hypertree::sign_inner`) already calls `sign_with_shuffle` directly with a derived per-layer seed. Flagged dead by rustc. |
 | `sphincs-c10/src/hypertree.rs:75-78` | stale `sign_inner` "currently unused" comment about `opt_rand` | 5 (stale comment) | The param is `opt_rand` (not `_opt_rand`) and it *is* passed into `fors::grind_r`, where it mixes into the R-grinding hash for the F-9 fix. The block at lines 83-90 in the function body already documents the real semantics correctly. |
 | `sphincs-c10/src/lib.rs:92-101` | stale `SigningKey::sign` doc claiming `opt_rand` is "currently ignored" | 5 (stale comment) | Same as above — replaced with a one-paragraph correct description (`Some` → F-9 randomised; `None` → byte-stable deterministic). |
@@ -51,7 +51,7 @@ hw-sha256`), `cargo test --lib`, and the
 
 ## Cross-slice observations
 None new. The two `sphincs-c10` items previously listed under
-`reports/deadcode/proto.md` cross-slice observations
+the earlier cross-slice observations
 (`hypertree::sign_with_progress`, `wots::sign`) are now removed.
 
 ## Skipped

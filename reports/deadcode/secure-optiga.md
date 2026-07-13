@@ -54,9 +54,8 @@ deferred to it.
 None — the equivalence check passed first try.
 
 ## Cross-slice observations
-The same compiler runs surface a long tail of likely-dead items elsewhere
-(notably `crate::zk::vk_bundle::MAX_VK_BUNDLE_LEN`, several `poseidon_constants`
-`N_CONSTANTS` constants, and a `secure_element::MockSecureElement::macd_all_initialized`).
+The same compiler runs surface a long tail of likely-dead items elsewhere,
+including `secure_element::MockSecureElement::macd_all_initialized`.
 Not touched — out of scope for this slice.
 
 ## Skipped (recommendations not applied)

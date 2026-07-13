@@ -107,8 +107,8 @@ placeholders go in any prior trailer slot the companion doesn't use:
 ```
 sign_input = base_header ||
              [u16 = 0] ||  // erc20 trailer (absent)
-             [u16 = 0] ||  // zk_v1 trailer (absent)
-             [u16 = 0] ||  // zk_v3 trailer (absent)
+             [u16 = 0] ||  // reserved compatibility slot
+             [u16 = 0] ||  // native CoW trailer absent
              [u16 = 0] ||  // safe_v1 trailer (absent)
              [u16 = 0] ||  // selector trailer (absent)
              [u16 = 0] ||  // self_attest trailer (absent)

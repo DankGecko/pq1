@@ -918,8 +918,7 @@ const DeviceAPI = {
 // Optional trailer sections (after inner-tx calldata), in order:
 //   * `erc20Bundle`     — Merkle-verified ERC-20 metadata (token name /
 //                         symbol / decimals).
-//   * reserved slot 1   — the former proof slot was retired; it
-//                         is always written zero-length so the framing
+//   * reserved slot 1   — always written zero-length so the framing
 //                         stays positional (firmware rejects non-zero).
 //   * (cow_order + safe_v1) — written as zero-length when not provided;
 //                         present here so the framing stays positional.
@@ -1733,10 +1732,6 @@ $('testUsdcBtn').addEventListener('click', async () => {
   };
   await runSignWithParams(params, 'USDC on Base transfer');
 });
-
-// (The "Test: ZK clear-sign (Aave V3 supply)" demo was removed with the
-// Groth16 ZK clear-sign retirement — Aave now clear-signs through the
-// native ERC-7730 path. See docs/archive/zk-clear-sign-retirement.md.)
 
 // Typed-call render (transfer(uint256), self-attest path).
 //

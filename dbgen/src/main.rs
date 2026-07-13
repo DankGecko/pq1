@@ -209,9 +209,6 @@ fn main() {
         hex::encode(erc20_e2e_res.root),
     );
 
-    // (The Groth16 VK DB was removed with the ZK clear-sign retirement —
-    // see docs/archive/zk-clear-sign-retirement.md.)
-
     // ----- Names DB -----
     let names_res = names::build_db(&names_json).expect("names db build failed");
     names::round_trip_check(&names_res.blob, &names_json, &names_res.root)

@@ -90,8 +90,7 @@ pub const CMD_GET_REMAINING: u32 = 1;
 pub const CMD_REQUEST_UNLOCK: u32 = 2;
 pub const CMD_GET_PUBKEY: u32 = 3;
 // CMD 4 reserved (was CMD_SIGN in v1)
-// CMD 5 reserved (was CMD_CLEAR_SIGN — Groth16 ZK clear-sign; retired
-// 2026-06-30, see docs/archive/zk-clear-sign-retirement.md)
+// CMD 5 reserved; do not reuse this frozen protocol value.
 // CMD 6 reserved (was CMD_CLEAR_SIGN_MSG — standalone EIP-712 typed-data
 // signing; the only EIP-712 consumer is now the v3 trailer cross-check
 // inside CMD_SIGN_USEROP, so the standalone path was removed).
@@ -432,19 +431,20 @@ pub const CMD_SIGN_OFFCHAIN: u32 = 16;
 ///   [...     )  trailer_count u8 (0..=MAX_TRAILERS_PER_BATCH)
 ///   [...     )  repeat trailer_count times:
 ///                 [ 1]              kind   u8 (1..=8; see TRAILER_KIND_*)
-///                 [ 1]              tx_idx u8 (0..batch_count-1 for kinds 1..=7;
+///                 [ 1]              tx_idx u8 (0..batch_count-1 for live kinds 1, 3..=7;
 ///                                              TRAILER_TX_IDX_BATCH_WIDE (0xff) for kind 8)
 ///                 [ 2]              len    u16 BE  (bounded per-kind by the
 ///                                              secure-side dispatch table)
 ///                 [len]             trailer bytes
 /// ```
 ///
-/// Each per-tx kind (ERC-20, reserved compatibility slot, native CoW order, Safe v1, selector curated,
+/// Each live per-tx kind (ERC-20, native CoW order, Safe v1, selector curated,
 /// selector self-attest, ERC-7730) routes to the inner-tx specified by
 /// `tx_idx`; the firmware verifies, FI-cross-checks the binding, and
 /// passes the result into `pick_sign_pages` for that inner-tx. Name
 /// bundles (kind 8) are batch-wide and accumulate into a single
-/// `NameResolver`. Sum of all `len` is bounded by `TRAILERS_TOTAL_MAX_LEN`.
+/// `NameResolver`. Reserved kind 2 is rejected at every length. Sum of all
+/// `len` is bounded by `TRAILERS_TOTAL_MAX_LEN`.
 /// Curated and self-attest are mutually exclusive per `tx_idx`.
 ///
 /// Cutover from v1 (single optional ERC-7730 trailer at the tail): hard.
@@ -1338,9 +1338,7 @@ pub const SIGN_USEROP_HEADER_LEN: usize =
 /// Compile-time sanity check: header ends exactly at `data_len`.
 const _: () = assert!(SIGN_USEROP_HEADER_LEN == 330);
 
-// The former proof-bundle constants were removed with the retired verifier
-// (2026-06-30). Wire slot 1 is kept reserved (length MUST be 0); see
-// docs/archive/zk-clear-sign-retirement.md.
+// Wire slot 1 is reserved for compatibility and its length MUST remain zero.
 
 // ═══════════════════════════════════════════════════════════════════════════
 //   CoW Protocol / GPv2Settlement — EIP-712 clear-sign (on-device decode)
@@ -1348,8 +1346,8 @@ const _: () = assert!(SIGN_USEROP_HEADER_LEN == 330);
 //
 // When the companion sends a CoW UserOp whose inner calldata is
 // `setPreSignature(orderUid, true)` on GPv2Settlement, it attaches a CoW
-// order trailer (kind `TRAILER_KIND_COW_ORDER`, value 3) after the retired
-// zero-length proof slot:
+// order trailer (kind `TRAILER_KIND_COW_ORDER`, value 3) after the reserved
+// zero-length compatibility slot:
 //
 //   [cow_len u16 BE] [cow_trailer]
 //
@@ -1369,10 +1367,9 @@ const _: () = assert!(SIGN_USEROP_HEADER_LEN == 330);
 // exactly as it did before any token was in the DB. A canonical-only
 // trailer (204 B, no length-prefixed legs) renders both legs AddrOnly.
 //
-// There is NO Groth16 proof and NO Poseidon registry. The secure world
-// natively re-keccaks `canonical` → orderDigest and byte-compares it
+// The secure world natively re-keccaks `canonical` → orderDigest and byte-compares it
 // against the calldata's `[100..132)` slice (`cross_check_setpresig_-
-// calldata`); that binding — not a SNARK — is the WYSIWYS trust anchor.
+// calldata`); that binding is the WYSIWYS trust anchor.
 // Each present leg's bundle is Merkle-verified on-device against
 // `ERC20_DB_ROOT` (the same root the ERC-20 transfer path uses), and the
 // bundle's `(contract, chain_id)` is cross-checked against the canonical
@@ -1420,8 +1417,7 @@ pub const GPV2_SETTLEMENT_ADDRESS: [u8; 20] = [
 // Safe.
 //
 // The `approveHash(bytes32)` selector puts the EIP-712 digest *in the
-// calldata*, so unlike the CoW v3 path there is no Groth16 — the
-// firmware natively keccaks (raw_data → data_hash) and (canonical →
+// calldata*. The firmware natively keccaks (raw_data → data_hash) and (canonical →
 // safeTxHash), then byte-compares safeTxHash against
 // `inner_data[4..36]`.
 
@@ -1682,13 +1678,13 @@ pub const SIGN_USEROP_BATCH_TX_PREFIX_LEN: usize = 20 + 32 + 2; // 54
 
 /// ERC-20 token metadata bundle. Verifier: `erc20::bundle::verify_erc20_bundle`.
 pub const TRAILER_KIND_ERC20: u8 = 1;
-/// Reserved compatibility kind. Secure parsing gives this frozen wire value a
-/// zero-byte cap, so companions must not emit a record.
+/// Reserved compatibility kind. Secure parsing rejects this frozen wire value
+/// at every payload length; companions must never emit it.
 pub const TRAILER_KIND_RESERVED_V1: u8 = 2;
 /// Native CoW order trailer (kind value 3):
 /// canonical GPv2Order + two optional ERC-20 bundles, decoded + rendered
 /// on-device. orderDigest is keccak-cross-checked against the
-/// setPreSignature calldata; no Groth16, no Poseidon registry.
+/// setPreSignature calldata.
 pub const TRAILER_KIND_COW_ORDER: u8 = 3;
 /// Safe v1 `approveHash` clear-sign bundle (281-byte canonical SafeTx).
 pub const TRAILER_KIND_SAFE_V1: u8 = 4;
@@ -1705,9 +1701,9 @@ pub const TRAILER_KIND_NAME: u8 = 8;
 pub const TRAILER_TX_IDX_BATCH_WIDE: u8 = 0xff;
 
 /// Maximum number of trailer records the firmware accepts in one batch.
-/// Worst-case live use: `MAX_BATCH_TXS × 6` (six per-tx kinds, curated
+/// Worst-case live use: `MAX_BATCH_TXS × 5` (kind 2 is rejected; curated
 /// and self-attest are mutually exclusive) + `MAX_NAME_BUNDLES (4)` =
-/// 28. Round up to 32 for headroom + power-of-two array alignment.
+/// 24. Round up to 32 for headroom + power-of-two array alignment.
 pub const MAX_TRAILERS_PER_BATCH: usize = 32;
 
 /// Sum-of-lengths bound on the trailer payload bytes in a batch. Covers
