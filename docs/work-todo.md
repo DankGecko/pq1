@@ -1013,11 +1013,12 @@ floor bump before candidate health, and an invalid per-bit interpretation of
 STM32U585 ECC-protected OTP quad-words. Build and release fences deliberately
 prevent that backend from shipping.
 
-The reviewed replacement is frozen Draft 0.9 at
-`docs/security/a-b-firmware-rollback-architecture.md` (SHA-256
-`f38b9030...a947336`, tag `rollback-architecture-v0.9`). Its review receipt
-approves the software-interface freeze and open-decision work only; it does
-not approve an implementation or physical backend.
+Draft 0.9 remains preserved at tag `rollback-architecture-v0.9` as historical
+evidence. The current planning input is Draft 1.1 at commit
+`93da75679a06b0bd289d49bdb511a7d3cd1acac7`, SHA-256
+`743bc156417ff84b5ac201996b07c97db1e53526e2f9a2f59e44a6681ce3d7ad`.
+Draft 1.1 is a normative research candidate, not an implementation-approved
+production contract.
 
 **What remains useful from the legacy bring-up:** reproducible-build tooling,
 the SPHINCS+C10 verifier, streaming update transport, inactive-slot flash
@@ -1025,7 +1026,7 @@ plumbing, trusted-display confirmation substrate, A/B link/package tooling,
 and the immutable measured-boot path. None of those makes the old rollback
 state or OTP tally production-safe.
 
-**Authorized pre-silicon sequence (isolated, nonshipping):**
+**Historical Draft-0.9 pre-silicon sequence (isolated, nonshipping):**
 
 - [x] Model the exact flag-day manifest-v4 bytes, `PQFW_V4` 80-byte signed
       preimage, normalized CRC, page fixtures, marker codewords, and
@@ -1056,24 +1057,76 @@ state or OTP tally production-safe.
       still-open silicon/layout gates, so production-shared implementation
       remains forbidden regardless of the host-model verdicts.
 
+**Bounded Draft-1.1 deletion gate (host-only; no Draft 1.2 prose cycle):**
+
+- [~] Before any production-shared rollback implementation, run one isolated
+      fake-backend model/deletion study covering the terminal-first manifest
+      decoder, `Steady/Recovering/Aborted/Unknown`, `E > F` / `T = E - 1`,
+      at-most-once probation, confirmed-fallback preservation, same-epoch
+      zero-write behavior, and a reset after every abstract mutation. Compare
+      reachable states/transitions and conservative FLASH/static-RAM/stack
+      estimates for exactly these four hypotheses:
+
+      This is a disposable architecture experiment, not a Draft-1.1
+      conformance implementation; none of its model code may be shared with
+      FSBL or secure production paths.
+
+      1. **Byte-level freezes:** retain an exact encoding only when signed-tool
+         interoperability, an executed fault-safety property, and measured fit
+         make it load-bearing; otherwise keep it semantic/open until the
+         physical backend closes.
+      2. **`RecoverySameEpoch`:** retain it only if field recovery from
+         `Aborted` is an explicit product requirement and the model proves no
+         floor change, backend write, epoch-policy bypass, or replay; otherwise
+         use `Aborted -> service/RMA`.
+      3. **`FloorBoundAccepted`:** retain it only if continued boot after loss
+         of all terminal replicas is an explicit supported fault and exact
+         artifact binding remains uniquely safe in every cut trace; otherwise
+         require service/halt after total terminal-authority loss.
+      4. **Three durability ladders:** retain all three only if the one bounded
+         two-ladder candidate (manifest-resident one-way ATTEMPTED marker plus
+         the Route-1/OTP floor, with no TAMP arm token) violates a named
+         rollback, at-most-once, fallback, or power-cut invariant. Otherwise
+         nominate the smaller design; final selection remains blocked on a
+         separately authorized combined resource build and the existing
+         physical gates.
+
+      Record one short decision receipt. Revisit the specification once, after
+      this evidence and the separately authorized silicon evidence, and change
+      it only for a concrete unsafe trace, unimplementable requirement, or
+      measured resource failure; optional hardening remains work-todo.
+
+      Host-model receipt (2026-07-14):
+      `docs/security/fw-rollback-draft11-deletion-gate-2026-07.md`. The tested
+      manifest-only ATTEMPTED deletion candidate failed; the two availability
+      mechanisms remain product choices, and exact formats remain without a
+      verdict pending resource/backend evidence. This item stays in progress
+      until those owner and physical gates close.
+
+      This entry does not authorize production code, selection of unresolved
+      physical behavior, MMIO or real flash/TAMP/OTP writers, firmware
+      flashing, OTP programming, option-byte/RDP changes, or sacrificial-
+      silicon tests. Any such work requires separate owner authorization.
+
 **Hard stop:** no OTP/TAMP/option-byte/RDP mutation, no irreversible writer,
 no production-shared backend choice, and no claim that `OPEN-JRN-HW-1`,
 `OPEN-JRN-DUR-1`, `OPEN-ECC-1`, or `OPEN-OTP-1..3` is closed until the owner
-separately authorizes the named-board/QW sacrificial-silicon plan in Draft 0.9
+separately authorizes the named-board/QW sacrificial-silicon plan in Draft 1.1
 Section 13.
 
 ---
 
 ### 15. Hash-Signature Firmware Update Model
 
-**Status:** LEGACY FORMAT QUARANTINED; replacement interface frozen.
+**Status:** LEGACY FORMAT QUARANTINED; Draft-1.1 research candidate only.
 
 The existing `fw-manifest`/`fwsign`/FSBL path still exercises SPHINCS+C10 over
-the legacy 75-byte `PQFW_V1` preimage for nonshipping bench tests. Draft 0.9
-replaces it flag-day with schema `0x04` and the exact 80-byte
-`PQFW_V4 || physical_slot || release_version || security_epoch ||
-secure_hash || nonsecure_hash` preimage. Slot binding and the epoch split are
-authority-bearing; no production parser may translate or retry v1/v2/v3.
+the legacy 75-byte `PQFW_V1` preimage for nonshipping bench tests. Historical
+Draft 0.9 proposed manifest-v4/`PQFW_V4`; it is not the current replacement.
+Draft 1.1 `FROZEN-MAN-4` instead proposes a flag-day manifest-v6, schema
+`0x06`, `PQFW_V6`, and a 121-byte signed preimage. That exact format remains a
+research candidate without implementation approval; no production parser may
+translate or retry a legacy schema under v6.
 
 The vendor-key primitive remains SPHINCS+C10 only. `OPEN-REL-1` must still
 select the protected append-only `(R,E)` release-set authority and atomic A/B
