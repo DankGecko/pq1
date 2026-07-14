@@ -176,17 +176,18 @@ jobs:
             -p sphincs-tz-bip39 -p fw-manifest -p sphincs-tz-shared \
             -p pqsigner-hal -p pqsigner-pq-seal -p masked-sha2 -p pqsigner-xtask \
             -p fwsign
-      # Keep the host-only Draft 0.9 rollback models enrolled explicitly.
+      # Keep the host-only rollback models enrolled explicitly.
       # The whole fsbl-tests crate stays out of this job because its footprint
       # suite cross-compiles the real FSBL; these named suites have no Thumb or
       # hardware dependency and must not silently disappear from CI.
-      - name: Draft 0.9 rollback host models
+      - name: Rollback host models
         run: |
           cargo test --locked -p pqsigner-fsbl-tests \
             --lib \
             --test draft09_floor_stage_model \
             --test draft09_codec_candidates \
-            --test draft09_resource_envelope
+            --test draft09_resource_envelope \
+            --test draft11_deletion_experiments
       # ERC-7730 descriptor catalog gate: (1) the firmware-pinned
       # `ERC7730_DESCRIPTORS_ROOT` in secure/src/db_roots.rs must match a
       # fresh dbgen build — catches a forgotten `cargo run -p dbgen` after a
