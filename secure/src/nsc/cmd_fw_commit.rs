@@ -1,6 +1,6 @@
 //! CMD_FW_COMMIT — legacy V1 staged-update finalizer (bench only).
 //!
-//! **Production-blocked:** this handler predates Draft 0.9. It advances the
+//! **Production-blocked:** this handler predates Draft 1.1. It advances the
 //! rejected unary OTP floor before candidate health and therefore does not
 //! provide the promised A/B rollback contract. The source is retained for
 //! pre-production diagnosis; `stm32u585 + mode-production` and all factory
@@ -152,7 +152,7 @@ pub(super) unsafe fn run(_args: &GatewayArgs) -> u32 {
     // did NOT make the transaction brick-safe: the candidate is selected as
     // the sole floor-admissible slot before health, the legacy try-once
     // fallback is nonfunctional in that state, and an interrupted OTP QW is
-    // ambiguous/lost. Draft 0.9 replaces this sequence with
+    // ambiguous/lost. Draft 1.1 proposes replacing this sequence with
     // PENDING -> ATTEMPTED -> health -> CONFIRMED -> FSBL-owned establishment.
 
     // 1. Write the target manifest page. The try_once_flag in the

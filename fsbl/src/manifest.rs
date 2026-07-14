@@ -21,7 +21,8 @@ use crate::slot::{manifest_addr, Slot};
 /// Borrow a manifest **directly from its memory-mapped flash page** — no RAM
 /// copy. The returned [`ManifestRef`] reads its fields straight from flash.
 ///
-/// This is what keeps the FSBL inside its 16 KB RAM budget, and it is the
+/// This removes the known pair of live 8 KB stack copies; it does not prove
+/// Draft 1.1's still-open static-RAM plus worst-case-stack envelope. It is the
 /// no-copy design this module's doc-comment has always described. The prior
 /// `read()` copied each 8 KB manifest into a stack `[u8; MANIFEST_SIZE]`; with
 /// BOTH slots' buffers live simultaneously across the multi-KB-stack

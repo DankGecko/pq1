@@ -2,11 +2,11 @@
 //!
 //! **Legacy bench format; production-blocked.** This crate currently encodes
 //! manifest v0x02 / `PQFW_V1`. Its unsigned slot field and mutable try-once
-//! metadata are not the reviewed production interface. Draft 0.9 freezes a
-//! flag-day manifest v4 with an exact 80-byte, slot-bound `PQFW_V4` preimage
-//! over `(physical_slot, release_version, security_epoch, secure_hash,
-//! nonsecure_hash)`. Keep these constants for legacy tests only; do not infer
-//! production approval from their existence.
+//! metadata are not a reviewed production interface. Historical Draft 0.9
+//! modeled V4/80 bytes. Draft 1.1 now proposes a flag-day manifest v6 with an
+//! exact 121-byte, slot-bound `PQFW_V6` preimage, but remains an unapproved
+//! research candidate. Keep these constants for legacy tests only; do not
+//! infer implementation or production authority from their existence.
 //!
 //! One 8 KB flash page per manifest. The FSBL reads two copies of this
 //! structure (manifest A at `0x0C00_8000`, manifest B at `0x0C00_A000`)

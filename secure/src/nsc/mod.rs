@@ -267,8 +267,9 @@ compile_error!(
 // Firmware-rollback backend quarantine. The current hardware implementation
 // treats one ECC-protected OTP quad-word as a reusable per-bit tally, but
 // STM32U585 user OTP permits only one program operation per 128-bit QW.
-// Draft 0.9 freezes replacement interfaces while deliberately leaving the
-// physical journal/ECC/OTP backend open.
+// Draft 1.1 is the current research candidate for replacement interfaces and
+// deliberately leaves approval plus physical journal/ECC/OTP/resource gates
+// open. It is not implementation authority.
 //
 // Shipping builds are blocked unconditionally. Bench images must carry a
 // conspicuous no-behaviour-change opt-in (normally inherited from debug-log,
@@ -278,9 +279,10 @@ compile_error!(
 #[cfg(all(feature = "mode-production", feature = "stm32u585"))]
 compile_error!(
     "FW_ROLLBACK_PRODUCTION_BLOCKED: the legacy firmware rollback path \
-     reprograms ECC-protected OTP quad-words. Replace it with the reviewed \
-     Draft-0.9 backend and close OPEN-JRN-HW/DUR, OPEN-ECC, OPEN-OTP, and \
-     combined FLASH/RAM gates before removing this fence."
+     reprograms ECC-protected OTP quad-words. Approve and implement the \
+     replacement contract, then close OPEN-JRN-HW/DUR, OPEN-FLASH-HW, \
+     OPEN-ECC, OPEN-RAM, OPEN-OTP, release/factory, and silicon gates before \
+     removing this fence."
 );
 #[cfg(all(
     feature = "stm32u585",
@@ -1052,63 +1054,25 @@ pub unsafe fn gated_unlock(
     }
 }
 
-/// Boot-time PIN-counter reconciliation across the independent
-/// failed-attempts counters: MCU page-124 and the OPTIGA PIN counter
-/// (silicon E120 LUC `current` under `optiga-hw-counter` — the production
-/// config — else the F1E1 soft counter). The SE050 USERID `auth_attempts`
-/// leg is unavailable in production (see the Correction note below).
-/// (§4 dual-chip PIN-lockout-sync hardening.)
+/// Boot-time directional rollback check between MCU page 124 and the readable
+/// OPTIGA attempt counter (E120 LUC under `optiga-hw-counter`; F1E1 only in a
+/// non-production soft-counter build). Because `gated_unlock` precharges page
+/// 124 before SE verification, benign states have `mcu >= e120`: equality
+/// after both advances, or an MCU lead after a cut/transport error. Only
+/// `e120 > mcu` proves page-124 rollback and triggers the wipe.
 ///
-/// **Attack defended.** An attacker who can reset any ONE side
-/// — OPTIGA PBS reset (E140 Conf(E140) Auto on a glitched chip
-/// rewinds every PBS-protected OID including F1E1), SE050 USERID
-/// delete-and-recreate, or a TZ-bypass that erases MCU page-124 —
-/// leaves the other two counters in a different state. Boot-time
-/// disagreement is unambiguous tamper evidence; wipe immediately
-/// rather than waiting for the next unlock to expose it.
+/// This is deliberately not described as three-way boot reconciliation. The
+/// production SE050 UserID policy denies an attempt-attribute read with
+/// `SW=0x6986`, so `Se050::pin_attempt_count` returns `None`. SE050 still
+/// participates in every ordinary PIN attempt, independently enforces its
+/// max-10 lockout, and maps `AuthMethodBlocked` to the wipe path. Making its
+/// counter boot-readable requires a separately reviewed policy/backend and
+/// silicon decision; a VERIFY probe would itself consume an attempt.
 ///
-/// **Three checks, any failure = wipe.**
-///   1. MCU vs strictest-SE (the existing `pin_attempt_count()`
-///      aggregate, which returns `max(optiga, se050)` of the
-///      USED-attempts counts).
-///   2. Intra-SE divergence (`pin_attempt_counts_divergent()`):
-///      OPTIGA and SE050 agree with each other.
-///   3. Implicit: both above are `false`-by-default for backends
-///      without readable counters, so single-SE and mock paths
-///      simply skip.
-///
-/// **Limitations.**
-///   - If the attacker coordinates resets of ALL THREE counters in
-///     one campaign, all see 0 → agree → no tamper detected. The
-///     defense bound is that the attacker can reset at most TWO
-///     sides per campaign. A hardware-monotonic OPTIGA counter
-///     (work-todo #24 P1 → migrate to 0xE120) would close this gap
-///     against OPTIGA-side resets entirely.
-///   - On fresh boot with un-provisioned SE, both SE getters
-///     return `None`; reconcile accepts as "no comparison possible."
-///
-/// **What it doesn't replace.** The original §4 "cryptographic FI
-/// checksum on the bump" item is effectively closed by F-12 +
-/// F-15.r5 + F-19 (forward+reverse scan + double-read agreement +
-/// triple-read of the result). A separate paired-counter checksum
-/// would catch only the multi-fault attack where ALL of those
-/// reads return the same wrong value — out of scope for the
-/// single-fault threat model.
-///
-/// **Correction note (audit pin-unlock 20260625).** Two earlier claims in
-/// this docstring were wrong and are retracted:
-///   - SE050's `auth_attempts` was said to be peekable via
-///     `ReadObjectAttributes` without consuming an attempt. On the
-///     production `USERID_OBJ` policy the chip answers SW=0x6986 (policy
-///     denial), so `Se050::pin_attempt_count` returns `None` and the SE050
-///     leg of this reconcile is skipped. See
-///     `se050::Se050::pin_attempt_count_raw` for the silicon evidence.
-///   - The OPTIGA leg formerly read the F1E1 soft counter, which is frozen
-///     at its provisioned 0 under `optiga-hw-counter` (the production
-///     config) — a dead comparison that also false-wiped on a benign
-///     wrong-PIN-then-reboot. `OptigaTrustM::pin_attempt_count` now reads
-///     the live E120 LUC `current` instead, so the MCU↔OPTIGA cross-check
-///     is meaningful and tracks page-124 in lockstep.
+/// On an unprovisioned/backend-unavailable boot, no readable SE leg means no
+/// comparison is possible and the function logs and returns. For a future
+/// multi-SE backend where both counters are safely readable,
+/// `pin_attempt_counts_divergent` remains an additional tamper input.
 ///
 /// Called once per boot from `main.rs` after SE init but before
 /// the gateway accepts any unlock command. On tamper detection it
@@ -1123,7 +1087,7 @@ where
     let se_used = se.pin_attempt_count();
     let se_split = se.pin_attempt_counts_divergent();
 
-    // If no SE leg is readable (shield not yet up, or an unprovisioned chip
+    // If no readable SE leg exists (shield not yet up, or an unprovisioned chip
     // at first boot) there is nothing to compare. Skip — but loudly, so the
     // lost cross-check is visible rather than silently mistaken for
     // agreement on a frozen value.

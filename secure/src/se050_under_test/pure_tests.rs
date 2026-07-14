@@ -1047,8 +1047,9 @@ fn negative_blob_cached_uses_fi_bool_not_plain_bool() {
 fn negative_remaining_attempts_shared_max_attempts_const() {
     // The in-RAM `remaining` cache must initialise to
     // `sphincs_tz_shared::MAX_ATTEMPTS` — a hard-coded literal would
-    // drift away from the three-way lockstep constant the OPTIGA / SE050
-    // / MCU pages all share.
+    // drift away from the user-facing max-10 policy shared by the SE050
+    // runtime mirror and MCU page 124. OPTIGA E120 has its separate 32-use
+    // hardware limit and is not governed by this cache constant.
     assert!(MOD_SRC.contains("remaining: sphincs_tz_shared::MAX_ATTEMPTS,"));
     assert!(MOD_SRC.contains("self.remaining = sphincs_tz_shared::MAX_ATTEMPTS;"));
 }
@@ -1661,8 +1662,10 @@ fn negative_store_objects_fails_loud_on_stale_userid() {
 
 #[test]
 fn negative_sync_remaining_with_mcu_monotonic_down() {
-    // Boot-time reconcile takes the MIN across all three counters.
-    // Letting the SE050 mirror GROW from an MCU-reported value would
+    // This helper ratchets the SE050 driver's runtime mirror downward after
+    // MCU accounting. It is not a three-input boot-reconciliation receipt:
+    // the production UserID attribute read is policy-denied (0x6986).
+    // Letting the runtime mirror GROW from an MCU-reported value would
     // silently extend the lockout horizon — an attacker who burns
     // attempts via a tamper sequence shouldn't get them back at boot.
     assert!(MOD_SRC.contains("if mcu_remaining < self.remaining {"));

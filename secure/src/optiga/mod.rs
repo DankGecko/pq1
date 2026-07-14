@@ -3005,7 +3005,9 @@ impl WalletStore for OptigaTrustM {
         // reconcile compare page-124 against a CONSTANT — a dead detector
         // that also false-wiped on a benign wrong-PIN-then-reboot. Return
         // the live E120 `current` (attempts used) instead, so the MCU↔OPTIGA
-        // cross-check is meaningful and tracks page-124 in lockstep. The
+        // directional rollback check is meaningful. Page 124 is precharged,
+        // so MCU-leading states are conservatively charged and only E120
+        // leading page 124 proves rollback. The
         // read needs the shielded link, so bring it up first; if it can't be
         // established (early boot / unprovisioned chip) return None so the
         // reconcile treats the leg as "unavailable, skip" rather than
@@ -3019,9 +3021,9 @@ impl WalletStore for OptigaTrustM {
             match unsafe { self.read_hw_pin_counter() } {
                 // (curr, 0) or None ⇒ unprovisioned / read failure.
                 Some((_, 0)) | None => None,
-                // Normalise to the MAX_ATTEMPTS scale (E120 limit is 32,
-                // MCU page-124 caps at MAX_ATTEMPTS=10) so the `!=` compare
-                // against the MCU used-count is on the same axis.
+                // Saturate to the user-facing MAX_ATTEMPTS scale (E120 limit
+                // is 32, MCU page-124 caps at 10) before the directional
+                // `e120_used > mcu_used` comparison.
                 Some((curr, _limit)) => Some(curr.min(MAX_ATTEMPTS as u32) as u8),
             }
         }

@@ -155,16 +155,14 @@ pub trait WalletStore {
     /// Returns the SE-side **failed-attempts USED** count (starts at
     /// 0, bumps on each wrong PIN, reaches `MAX_ATTEMPTS` at
     /// lockout), or `None` if no SE-side counter is available.
-    /// Semantics match the MCU page-124 counter for a direct `!=`
-    /// reconcile.
+    /// Semantics match the MCU page-124 used count. Boot uses the available
+    /// value directionally (`se_used > mcu_used`), because MCU precharge may
+    /// benignly lead.
     ///
-    /// Both production backends expose this on a peek-safe path
-    /// (does NOT consume an attempt):
-    ///   - OPTIGA Trust M: raw read of F1E1 (`OID_COUNTER`).
-    ///   - SE050: `ReadObjectAttributes` on the USERID auth object —
-    ///     the attribute response carries `auth_attempts` /
-    ///     `max_attempts` as plain TLV fields. See
-    ///     `Se050::pin_attempt_count_raw` for parse + SDK reference.
+    /// The production OPTIGA backend exposes E120 on a peek-safe path. The
+    /// production SE050 UserID policy denies its attempt-attribute read with
+    /// SW=0x6986 and therefore returns `None`; probing with VERIFY would consume
+    /// an attempt.
     ///
     /// For multi-SE backends (`DualSecureElement`) the returned
     /// value is the **max** across SEs — i.e. the most-locked-out
@@ -172,13 +170,9 @@ pub trait WalletStore {
     /// missing one). Intra-SE disagreement is surfaced separately
     /// by [`Self::pin_attempt_counts_divergent`].
     ///
-    /// Used by `nsc::reconcile_pin_attempts` at boot to cross-check
-    /// the MCU page-124 counter against each SE's silicon counter. A
-    /// disagreement on any pair indicates: (a) attacker reset OPTIGA
-    /// E140/PBS (which resets PBS-protected OIDs including F1E1) or
-    /// the SE050 USERID, (b) attacker glitched the MCU page-124
-    /// counter via a TZ-bypass, or (c) a genuine flash fault. All
-    /// three are tamper signals → wipe.
+    /// Used by `nsc::reconcile_pin_attempts` at boot to detect a readable SE
+    /// count that leads the precharged MCU page-124 counter. That direction is
+    /// a rollback/tamper signal; an MCU lead is a charged cut/error state.
     ///
     /// Default: `None` (mock + tropic01 don't expose a counter).
     fn pin_attempt_count(&mut self) -> Option<u8> {
@@ -188,10 +182,9 @@ pub trait WalletStore {
     /// Returns `true` iff this backend wraps multiple SEs AND those
     /// SEs disagree on the remaining PIN-attempt count. For single-
     /// SE backends this is structurally `false`. Used by
-    /// `nsc::reconcile_pin_attempts` to fire the tamper wipe even
-    /// when MCU↔min(SE) happens to match — an attacker who resets
-    /// JUST the OPTIGA counter would otherwise still leave a
-    /// detectable OPTIGA↔SE050 split.
+    /// `nsc::reconcile_pin_attempts` as an additional input only when both
+    /// counters are genuinely readable. The current production SE050 policy
+    /// returns `None`, so the dual backend cannot make this comparison.
     fn pin_attempt_counts_divergent(&mut self) -> bool {
         false
     }

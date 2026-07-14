@@ -39,12 +39,13 @@
 //!      files' source text that the load-bearing gates remain in
 //!      place: pin-verified check, NS pointer validation, FI
 //!      double-read of the page-124 counter, FAIL-IN sentinel
-//!      encoding, three-way counter lockstep, gated_unlock pre-commit,
+//!      encoding, three-way per-attempt consumption plus the directional
+//!      page124/E120 boot check, gated_unlock pre-commit,
 //!      `c10_sign_verified*` verify-before-release, and the absence of
 //!      every forbidden code path called out in CLAUDE.md
 //!      (`rotateMasterKeys`, classical signers, EntryPoint v0.7/v0.8,
 //!      etc.).
-//!   4. **Three-way counter / lockout-wipe semantics** — pin the
+//!   4. **PIN counter / lockout-wipe semantics** — pin the
 //!      values the `cmd_test_pin_lockout` brute-force harness depends
 //!      on so a future refactor that quietly bumps `MAX_ATTEMPTS` or
 //!      changes the wrong-PIN baked into the e2e test surfaces here
@@ -1090,10 +1091,10 @@ fn negative_get_init_code_uses_c10_sign_verified_with_progress() {
 
 #[test]
 fn negative_get_remaining_uses_min_of_mcu_and_se() {
-    // CLAUDE.md docstring (cmd_get_remaining.rs:9): "Authoritative
-    // value is the MIN across all three counters." A refactor that
-    // displayed only the MCU counter (or only the SE counter) would
-    // hide a real lockout from the user.
+    // User-facing status is the conservative MIN of page-124 and the runtime
+    // secure-element mirror available to this command. It is not a boot-time
+    // three-silicon receipt: boot reconciliation is the directional page124 /
+    // OPTIGA-E120 check, and SE050 exposes no attempt-count read here.
     assert!(
         GET_REMAINING_SRC.contains(".min("),
         "cmd_get_remaining must take the MIN of MCU and SE counters"

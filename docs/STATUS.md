@@ -7,6 +7,13 @@
 > **Freshness.** §A–§D are a snapshot **reconciled against the repo on 2026-06-17** (`security-frontier-reconcile`
 > workflow). They are only trustworthy if re-reconciled — a stale STATUS is worse than none. Re-run that
 > workflow over a slice before relying on its rows, and trust the **evidence pointer, not the prose**.
+>
+> **Scoped rollback/process update (2026-07-14).** Only the §0 planning and
+> rollback owner rows, the rollback clauses under AT A GLANCE, and §A `FW-RB`
+> were reconciled against Draft 1.1 commit `93da7567`, SHA-256
+> `743bc156…3d7ad`, its bounded deletion receipt, and the planning-workflow
+> review. This does not refresh any other §A–§D row or supersede the
+> 2026-06-17 full-frontier snapshot.
 
 ## §0 — Where the truth lives (doc map)
 
@@ -28,7 +35,7 @@ in four places). The rule: **owners hold the fact; everything else links.**
 | EVT bench-attack pass/fail bars | **`docs/security/red-teaming.md`** | the on-copper test matrix |
 | Empirical on-silicon SE050 status | **`docs/secure-elements/se050-silicon-findings.md`** | |
 | Provisioning ceremony (untrusted-CM) | **`docs/provisioning/provisioning-reference.md`** | |
-| A/B rollback architecture candidate and physical/resource gates | **`docs/security/a-b-firmware-rollback-architecture.md`** | Draft 1.1 is pending exact-digest dual review + owner approval; bounded deletion receipt: `docs/security/fw-rollback-draft11-deletion-gate-2026-07.md`; Draft 0.9 receipt is historical |
+| A/B rollback architecture candidate and physical/resource gates | **`docs/security/a-b-firmware-rollback-architecture.md`** | Draft 1.1 is pending exact-digest dual review + owner approval; bounded deletion receipt: `docs/security/fw-rollback-draft11-deletion-gate-2026-07.md`. Draft 0.9 is historical at tag `rollback-architecture-v0.9`; receipts: `docs/security/a-b-firmware-rollback-review-receipt-2026-07.md` and `docs/security/fw-rollback-draft09-host-model-receipt-2026-07.md` |
 | Companion integration · clear-signing | `docs/companion/companion-app-integration.md` + the `companion-*` deltas | firmware side: `docs/companion/erc7730-integration.md` |
 | FV strategy / what full proof requires | **`docs/verification/how_to_math_proof_secureness.md`** | live proof state: `contracts/verification/` (`THE_CLAIM.md`) |
 | FV target ranking · security-tooling adoption | `docs/verification/verification-targets-2026-06.md` · `docs/verification/security-tooling-sota-2026-06.md` (= §34) | |
@@ -59,14 +66,18 @@ re-drifting.
 
 - **The real ship gate is NOT a tooling track** — it includes **firmware
   rollback Foundation A** (legacy OTP/A-B path is production-fenced; Draft 1.1
-  exact-digest approval, implementation, combined FLASH/RAM fit, and physical
+  exact-digest approval, implementation, separate physical FLASH and
+  static-RAM/worst-case-stack fit, and physical
   journal/ECC/OTP receipts remain open), **OPTIGA silicon (S-1/S-3 LcsO ratchet) + the S-2 factory
   trust-anchor cert**, the **SCP03 per-unit PUT-KEY ceremony (HIGH-1,
   code-fenced)**, and the **S-5 bus capture**.
-- **Keyboard-doable security work right now (`blocked-on: code`):** the S-3 soft-counter compile-fence, the
-  `make checkct` CI gate + SAES-CMAC driver, hevm-equiv, the independent-source KAT oracle leg, a
-  ClusterFuzzLite job, the `claude-code-security-review` Action, the prod-config CI gate (MED-2), and the ToB
-  skill-pilot tail.
+- **Keyboard-doable security work right now (`blocked-on: code`):** the S-3
+  soft-counter compile-fence, `make checkct` CI enrollment, S-4's remaining
+  documentation/code items, the optional Lean credits corollary, mutation
+  testing, and the Draft-1.1 review/model work named by `FW-RB`. The detailed
+  §B table—not this summary—is authoritative; previously listed hevm, KAT,
+  ClusterFuzzLite, security-review Action, prod-config, and most ToB-pilot work
+  are already closed or deliberately deprioritized there.
 - **The big compute item:** the full ~40h FI fault-sweep campaign (harnesses built, only smoke-run).
 - **Stale-doc flag found during reconcile:** `docs/secure-elements/se050-silicon-findings.md` still says lockout SW `0x6982`; the
   live post-revert code maps `0x6986` (`ef3d00da`). Worth a 2-minute sync.
@@ -80,7 +91,7 @@ re-drifting.
 
 | ID | Item | Status | Blocked-on | Evidence (spot-check) | What remains |
 |----|------|--------|-----------|------------------------|--------------|
-| **FW-RB** | A/B rollback + anti-rollback root | Draft 1.1 research candidate; implementation **NO-GO** | **code + bench** | Draft 1.1 commit `93da7567`, SHA `743bc156…3d7ad`; bounded host deletion receipt; exact-digest Opus/GPT reviews and owner approval remain pending; build.rs + Rust compile gates cover production secure/FSBL, factory/rehearsal, and explicit bench opt-in; `prod-check-ship` is an expected-failure CI gate | Obtain both exact Draft-1.1 architecture reviews + owner approval; implement and adversarially review the selected contract; prove combined ≤38,912-B FSBL + RAM/stack envelope; close `OPEN-JRN-HW-1`, `OPEN-JRN-DUR-1`, `OPEN-ECC-1`, `OPEN-OTP-1..3`; then obtain separately authorized Section-13 silicon receipts. Legacy 1,024-bit tally and current try-once claims are rejected. |
+| **FW-RB** | A/B rollback + anti-rollback root | Draft 1.1 research candidate; implementation **NO-GO** | **code + bench + factory** | Draft 1.1 commit `93da7567`, SHA `743bc156…3d7ad`; bounded host deletion receipt; exact-digest Opus/GPT reviews and owner approval remain pending; build.rs + Rust compile gates cover production secure/FSBL, factory/rehearsal, and explicit bench opt-in; `prod-check-ship` is an expected-failure CI gate | Obtain both exact Draft-1.1 architecture reviews + owner approval; implement and adversarially review the selected contract. The physical FSBL FLASH LOAD span must meet the candidate's proposed 38,912-B target (40,960-B hard ceiling), and separately `OPEN-RAM-1` must close the static-RAM + worst-case-stack envelope. Close `OPEN-PIN-HW-1`, `OPEN-JRN-HW-1`, `OPEN-JRN-DUR-1`, `OPEN-FLASH-HW-1`, `OPEN-ECC-1`, `OPEN-RAM-1`, `OPEN-OTP-1..3`, `OPEN-REL-1`, and `OPEN-C10-1`; then obtain separately authorized Section-13 silicon/factory receipts. Legacy 1,024-bit tally and current try-once claims are rejected. |
 | **S-1** | F1D0 `Change=ALW` → desolder PIN brute-force | partial | **bench** | the `optiga-lock-operational` fence in `nsc/mod.rs` (commit `832a369d`); the `Auto(F1D0)` AuthRef builder in `optiga/apdu.rs`; `optiga::verify_and_lock` | Irreversible **LcsO=Op ratchet** + sacrificial-part validation on fresh silicon. During the rollback quarantine, a non-production STM32 image can compile only with explicit `legacy-fw-rollback-unsafe`, while production and factory shapes are blocked; this is bench capability, not a shippable escape. |
 | **S-2** | Public Infineon **sample** trust-anchor at `0xE0E3` → SetObjectProtected bypass | partial | **factory** | sample cert `optiga/reset.rs:33-38`; reset-oids fence `nsc/mod.rs:229-243`; `lockdown_ta_pool` `optiga/mod.rs:1772` | Production **PQ1-factory-HSM** trust-anchor cert (key-custody). NOTE: repo's own correction — `0xE0E3` is a non-writable device-cert slot; `docs/provisioning/provisioning-reference.md` says only `0xE0E0` ships a sample anchor. Weakens the specific path, doesn't close S-2. |
 | **S-3** | Default build has no silicon-enforced PIN lockout | partial | **bench** + code | the `optiga-hw-counter`-required fence in `nsc/mod.rs` (grep the fence STRING, not a line); LUC `Execute=LUC(E120)` in `optiga/apdu.rs`; `make optiga-hw-counter-e2e` PASSED 2026-04-22 | ⚠ **CORRECTION:** the claimed `build_metadata_counter` production gate **does NOT exist** (grep-confirmed) — fencing the weak soft-counter path is still **code-doable** work. Plus the LcsO=Op ratchet (bench). |
@@ -90,7 +101,7 @@ re-drifting.
 | **S-7d** | Empirical UserID-lockout SW mapping | **done** (on silicon) | none | `git ef3d00da` (Runs 3-4, B-U585I); `create_session` maps `0x6986`→`AuthMethodBlocked` `apdu.rs:679-692` | ⚠ **was marked open** — actually run. `0x6982` was a reverted red herring. **`docs/secure-elements/se050-silicon-findings.md` is stale (says 0x6982) — sync it.** |
 | **S-4** | OPTIGA lower-sev cleanups (5 sub-items) | partial | bench + code | `Conf(E140)` DoS branch live `apdu.rs:907`; F1D5/F1E1 naming split `apdu.rs:161` vs `mod.rs:37` | Items 2/3/5 are doc/code-doable now; item 1 needs a design+bench tradeoff; item 4 needs the board. |
 | **HIGH-1** | SCP03 default-keyed with PUBLISHED AN12436 factory keys (dev) → bus attacker extracts `half_E` | partial (code fenced) | **factory** | prod fence `nsc/mod.rs:378-388` (forces `se050-derived-scp03`); rotation wired `main.rs:1613`; anti-factory-key guard `scp03_logic.rs:252` | ⚠ **Corrected from the audit's as-found "open back-door" — code half is CLOSED** (same fence shape as S-1/S-3: factory keys dev-only, production won't compile without derived keys). Remaining = the per-unit `se050-rotate-scp03` **PUT KEY ceremony on silicon** + validation that rotation takes. |
-| **MED-2** | `e2e-test`/`dev-testkey` escape hatches ship fixed secrets; no prod-check CI gate | OPEN | code | `docs/security/audits/tz-tamper-debug-20260611-*.md` MEDIUM-2 | A CI/prod-config gate. |
+| **MED-2** | `e2e-test`/`dev-testkey` escape hatches ship fixed secrets; no prod-check CI gate | **done 2026-06-18** | none | `mode-production` compile fences + `make prod-check`; per-push `prod-config-gate` CI job (`6309f753`) | — |
 | — | **Claim 3 (PIN gate) is PROVISIONAL** | — | bench | `docs/security/threat-model.md` Claim 3 | Re-establish via `pin-gate-hw-counter-e2e` on a ratcheted sacrificial part once S-1 closes. |
 
 ---

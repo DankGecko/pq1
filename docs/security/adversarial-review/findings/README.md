@@ -23,7 +23,7 @@ The report is self-describing (frontmatter + per-finding status), so `grep -rl '
 | `🔲 OPEN` | surfaced, not yet worked through |
 | `🔬 REVIEWED` | triaged — a disposition is set (confirmed / false-positive / already-fixed) but not yet closed out |
 | `✅ FIXED` | a fix landed — the **Resolution** line names the commit + date |
-| `☑️ ACCEPTED` | risk-accepted / by-design / deferred-by-design — the **Resolution** line says why |
+| `☑️ ACCEPTED` | explicit owner-only risk acceptance — the **Resolution** records owner, date, exact finding, target + frozen-report digests, accepted consequence, and scope; a reviewer, model, or ordinarily authorized maintainer cannot set this status |
 | `🚫 INVALID` | false positive on re-review — the **Resolution** line says why |
 | `⏸ DEFERRED` | real, but blocked (needs hardware / a design decision / another dependency) — Resolution names the blocker + the tracking item |
 
@@ -36,7 +36,14 @@ The report is self-describing (frontmatter + per-finding status), so `grep -rl '
 | `resolved` | **every** finding is `✅ FIXED` / `☑️ ACCEPTED` / `🚫 INVALID` / `⏸ DEFERRED` (with a tracking link) |
 | `fixes-landed-production-blocked` | every code finding is handled, but a named deferred ship blocker still forbids production authority |
 
-**When you work through a report:** for each finding you handle, change its `Status:` line, append a one-line **Resolution** (what you did / a commit SHA + date, or why accepted/invalid), and — when nothing is left `🔲 OPEN` / `🔬 REVIEWED` — flip the report frontmatter `status:` to `resolved` (or `fixes-landed-production-blocked` when a named deferred finding still forbids shipping). Cross-link the real work to `docs/work-todo.md` (which stays the master task list); this folder is the *review record*, work-todo is the *action list*.
+**When you work through a report:** for each finding you handle, change its `Status:` line, append a one-line **Resolution** (what you did / a commit SHA + date, or why invalid/deferred), and — when nothing is left `🔲 OPEN` / `🔬 REVIEWED` — flip the report frontmatter `status:` to `resolved` (or `fixes-landed-production-blocked` when a named deferred finding still forbids shipping). Only an explicit owner decision may set `☑️ ACCEPTED`; record the owner, date, exact finding, target and frozen-report digests, accepted consequence, and scope. Ordinary maintainer authority does not include risk acceptance. Reviewer consensus is recommendation evidence, never acceptance authority. Cross-link the real work to `docs/work-todo.md` (which stays the master task list); this folder is the *review record*, work-todo is the *action list*.
+
+For an immutable-target review, reviewers first write and digest their raw
+reports outside the target. After all first-pass and cross reports freeze, a
+coordinator may file byte-identical copies in a separate reporting commit and
+catalogue them here. The reporting commit is not the reviewed target and does
+not inherit its recommendation. Later disposition edits must preserve the raw
+report digest in the resolution record.
 
 ## Catalogue
 

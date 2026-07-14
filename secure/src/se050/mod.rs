@@ -517,13 +517,10 @@ impl Se050 {
         r
     }
 
-    /// Peek the silicon-enforced **failed-attempts USED** count on the
-    /// USERID auth object — i.e. the `auth_attempts` field — WITHOUT
-    /// burning an attempt.
-    ///
-    /// (Semantics match OPTIGA's F1E1: both return "attempts USED"
-    /// starting at 0, so the boot-time reconcile against the MCU
-    /// page-124 used-counter is a straight `!=` compare.)
+    /// Attempt a non-consuming read of the USERID object's
+    /// **failed-attempts USED** attribute. On the production policy this is
+    /// expected to return `None`: silicon rejects the attribute read with
+    /// SW=0x6986. It therefore supplies no SE050 boot-reconciliation input.
     ///
     /// Mechanism: `ReadObjectAttributes` (CLA=0x80 INS_READ
     /// P2_ATTRIBUTES) reads the object's attribute structure over the
@@ -564,15 +561,15 @@ impl Se050 {
     /// **retracted**.
     ///
     /// **Operational consequence.** On production `USERID_OBJ` (same
-    /// policy shape) this method returns `None` at boot, so the SE050
-    /// leg of the boot-time MCU↔SE050 attempt-counter reconcile is
-    /// silently skipped. The OPTIGA + MCU page-124 legs still
-    /// reconcile, which is the load-bearing pair (PIN comparison is in
+    /// policy shape) this method returns `None` at boot, so there is no SE050
+    /// boot-counter leg. The directional OPTIGA-E120/page-124 check remains
+    /// available (PIN comparison is in
     /// SE silicon, and a desolder-bench attacker who derives
     /// `se050_admin_pin()` still can't read user-gated objects per the
     /// `audit_admin_passive_read_refused` silicon claim). The skipped
     /// SE050 leg is a defense-in-depth loss, not a confidentiality
-    /// loss.
+    /// loss. Callers must log the unavailable leg rather than treating it as
+    /// agreement.
     ///
     /// **No workaround using attribute reads.** Recovering the counter
     /// without burning an attempt would require either (1) opening a

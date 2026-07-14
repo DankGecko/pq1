@@ -1,7 +1,8 @@
 //! `fwsign sign` — produce a `.pqfw` release bundle.
 //!
-//! Legacy bench command: emits manifest v0x02 / `PQFW_V1`, not Draft-0.9 V4.
-//! Production packaging is deliberately blocked at the root Makefile.
+//! Legacy bench command: emits manifest v0x02 / `PQFW_V1`, not Draft 1.1's
+//! proposed V6 format. Production packaging is deliberately blocked at the
+//! root Makefile.
 //!
 //! Flow:
 //! 1. Load + decrypt the vendor key.

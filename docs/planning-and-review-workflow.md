@@ -74,8 +74,15 @@ A non-trivial plan must make the following reviewable before implementation:
    is complete.
 2. **Baseline identity.** Record repository, branch, `HEAD`, dirty/untracked
    manifest, and any input document or artifact digest.
-3. **Sources of truth.** Link the owning requirements, threat model, interface,
-   and hardware documentation. Do not copy facts into a second owner.
+3. **Sources-of-truth preflight.** Follow `STATUS.md` owner links and record the
+   path, revision or digest, authority scope, stated status, and evidence date
+   for every requirement, task specification, surface playbook, hardware
+   source, and prior receipt used by the plan. Check those active inputs for
+   conflicting requirements, authority, gates, or evidence claims before
+   freezing the packet. Neither document class nor publication date silently
+   wins: quote any material conflict, identify the affected gate, and stop
+   until the named owner resolves it or explicitly carries it as an open
+   decision. Do not copy facts into a second owner.
 4. **Named invariants and threats.** Say which invariant each mechanism serves
    and the concrete failure if it is absent.
 5. **Scope and non-goals.** Name what may change, what is deliberately deferred,
@@ -183,9 +190,12 @@ A proposed expansion becomes a **candidate** when at least one of these applies:
 - the owner explicitly adds a product or assurance requirement.
 
 Except for an explicit owner-added requirement, a candidate expansion enters
-the accepted plan only after its trigger is reproduced and adjudicated. For
-security-sensitive work, this includes the applicable independent/cross-review
-step; a single reviewer's unverified trace or factual assertion is not enough.
+the accepted plan only after its trigger is independently substantiated at the
+applicable evidence level and adjudicated. Destructive E6/E7 evidence is never
+repeated merely to satisfy this sentence; it requires the separate authority
+in Section 11. For security-sensitive work, substantiation includes the
+applicable independent/cross-review step; a single reviewer's unverified trace
+or factual assertion is not enough.
 
 For an expansion, record:
 
@@ -226,11 +236,21 @@ Reports must name the exact level actually reached.
 
 For security-sensitive architecture and implementation, use both partners:
 
-- **Partner A:** Claude Code **Opus 4.8**, 1M context when available, at
-  **`ultracode`** effort. Use `max` only when `ultracode` is unavailable or a
-  task-specific technical reason favors `max`; record that reason before the
-  review starts.
-- **Partner B:** **GPT-5.6 SOL** at **`ultra`** effort.
+- **Partner A:** Claude Code **Opus 4.8** with 1M context. Run the
+  **`ultracode` orchestration workflow** and set reasoning effort separately to
+  **`xhigh`**. `ultracode` is an orchestration profile, not a reasoning-effort
+  value, and MUST NOT be recorded as one. Use `max` only when a task-specific
+  technical reason favors it; record that reason before review starts. `max`
+  never substitutes for the required `ultracode` orchestration.
+- **Partner B:** literal model **`gpt-5.6-sol`** with
+  **`model_reasoning_effort="ultra"`**.
+
+Before either first pass starts, freeze a reviewer-configuration receipt for
+each leg: role, literal model identifier, context window, reasoning-effort
+setting, orchestration profile if any, harness/backend and version, allowed
+fan-out or subagents, and every substitution or deviation. Each report repeats
+the actual runtime values observed; requested settings alone are not evidence
+that the required pair ran.
 
 If either exact partner is unavailable, do not silently substitute a weaker or
 different review and call the pair complete. Record the missing leg and ask the
@@ -257,12 +277,22 @@ non-destructive commands, build into external target directories, and create or
 mutate PoCs in an isolated scratch copy. They must record those actions and
 must never report scratch state as the reviewed identity.
 
+Reviewers write raw reports outside the immutable target and freeze each report
+with its own digest. After both first passes and cross-adjudications are frozen,
+a coordinator may file byte-identical copies in a separate reporting
+commit/worktree. That archival commit is not the reviewed target and MUST NOT
+be described as inheriting its recommendation. Any substantive edit to a raw
+report creates a new report digest and remains visibly distinct from the frozen
+original.
+
 Use neutral mutual disclosure without sharing conclusions:
 
-- Tell Opus: **“GPT-5.6 SOL at ultra effort is independently reviewing this
+- Tell Opus: **“GPT-5.6 SOL (`gpt-5.6-sol`,
+  `model_reasoning_effort="ultra"`) is independently reviewing this same frozen
+  packet. Do not infer its verdict or defer to it.”**
+- Tell GPT-5.6: **“Claude Code Opus 4.8 with 1M context, `ultracode`
+  orchestration, and `xhigh` reasoning effort is independently reviewing this
   same frozen packet. Do not infer its verdict or defer to it.”**
-- Tell GPT-5.6: **“Claude Code Opus 4.8 at ultracode effort is independently
-  reviewing this same frozen packet. Do not infer its verdict or defer to it.”**
 
 Do not provide either partner with the other's findings or verdict before both
 first-pass reports are frozen. The disclosure prevents a model from being
@@ -289,6 +319,20 @@ After both first-pass reports freeze:
    written plainly; an unresolved correctness contradiction cannot be accepted
    by preference.
 
+Cross-adjudication produces one durable matrix with one row for every
+first-pass finding. Each row records the stable finding ID, originating
+severity and stage impact, Partner A's disposition and evidence, Partner B's
+disposition and evidence, the resulting correction or residual, and whether an
+owner decision remains. Use only `CONFIRMED`, `REFUTED`, `NARROWED`, or
+`UNRESOLVED` as cross dispositions.
+
+A new finding discovered during cross-adjudication receives a stable `X-*` ID
+and one bounded response from the counterpart. If that response does not
+resolve it, record it as `UNRESOLVED`; do not start a recursive discussion
+loop. The matrix header binds the target identity and both first-pass and
+cross-report digests. Its footer records the final target drift check and each
+partner's revised stage-specific verdict.
+
 The partner identities provide model diversity; the reproduce/refute phase is
 what turns two opinions into adversarial evidence.
 
@@ -312,19 +356,22 @@ reproduce the claims:
 Each reviewer report must contain:
 
 1. **Identity and drift result.** Initial and final snapshot identity.
-2. **Stage-specific verdicts.** Architecture, implementation, merge, and
+2. **Reviewer-configuration receipt.** Actual model ID, context, reasoning
+   effort, orchestration profile, harness/backend version, and
+   reviewer-controlled fan-out used for the report.
+3. **Stage-specific verdicts.** Architecture, implementation, merge, and
    production shipment are stated separately; unavailable stages say so.
-3. **Findings.** Stable ID, severity, file/line, mechanism, prerequisites,
+4. **Findings.** Stable ID, severity, file/line, mechanism, prerequisites,
    consequence, whether introduced here, falsifiable evidence/PoC, and required
    correction.
-4. **Invariant and failure-path trace.** Especially power cuts, malformed
+5. **Invariant and failure-path trace.** Especially power cuts, malformed
    states, trust-boundary crossings, resource exhaustion, and downgrade/fallback
    paths applicable to the change.
-5. **Executed versus inspected evidence.** Tests not rerun are never presented
+6. **Executed versus inspected evidence.** Tests not rerun are never presented
    as fresh evidence.
-6. **KEEP / SIMPLIFY / FIX NOW / DEFER / DROP / OPEN RESEARCH.** Optional ideas
+7. **KEEP / SIMPLIFY / FIX NOW / DEFER / DROP / OPEN RESEARCH.** Optional ideas
    are classified rather than smuggled into a red-line.
-7. **Honest residual.** What resisted attack, what was not reviewed, tool or
+8. **Honest residual.** What resisted attack, what was not reviewed, tool or
    model limits, and the exact remaining gates.
 
 Every security review governed by the surface playbooks files a durable report
@@ -334,6 +381,13 @@ and its
 [`status lifecycle`](security/adversarial-review/findings/README.md).
 Formal-verification work also follows
 [`verification/fv-adversarial-review-playbook.md`](verification/fv-adversarial-review-playbook.md).
+
+A reviewer may recommend risk acceptance but may not set a finding to
+`☑️ ACCEPTED`. That status is owner-only and requires a recorded owner decision
+naming the owner, date, exact finding and target/report digests, accepted
+consequence, and scope. Ordinary implementation/merge authority delegated to a
+maintainer does not include security-risk acceptance. Model consensus is not
+acceptance authority.
 
 ## 9. Reviewer recommendation meanings
 
@@ -407,11 +461,19 @@ or production-release mutation, obtain an explicit owner instruction naming:
 
 - the exact board/part and revision or external target;
 - the cells, objects, keys, lifecycle states, or deployment affected;
+- the exact artifact, source, toolchain, ceremony/procedure, and dual-review
+  report digests being authorized;
+- the named operator, authorization window, and exact single attempt covered;
 - the pre-state capture and recovery limits;
 - the expected irreversible result and stop conditions;
 - the evidence that the non-destructive prerequisites passed.
 
-Absence of authorization is a hard stop, not an assumption to fill in.
+Absence of authorization is a hard stop, not an assumption to fill in. The
+authorization is consumed when the first irreversible command may have
+launched, including a timeout, reset, error, or partial execution. It cannot be
+replayed for a retry, replacement part, broader cell/object range, changed
+artifact, changed procedure, or later window; each requires fresh owner
+authorization.
 
 ## 12. Reusable reviewer prompt preamble
 
@@ -421,7 +483,9 @@ requirements; this generic preamble never replaces them.
 
 ```text
 You are independent adversarial review Partner <A|B> for PQSigner OS.
-Run at <Opus 4.8 ultracode, 1M context | GPT-5.6 SOL ultra>.
+Run with <Opus 4.8, 1M context, ultracode orchestration, xhigh reasoning |
+literal gpt-5.6-sol, model_reasoning_effort="ultra">.
+Record the actual runtime configuration receipt required by Sections 7 and 8.
 <Neutral counterpart-disclosure sentence from Section 7.>
 
 Keep the canonical review target immutable: do not edit its repository or
@@ -443,4 +507,5 @@ mandatory questions, open gates, and exact files follow.>
 ```
 
 After both first passes freeze, issue a separate cross-adjudication prompt with
-both complete reports and require the Section-7 reproduce/refute procedure.
+both complete reports and require the Section-7 disposition matrix, report
+digests, final drift result, and revised stage-specific verdicts.

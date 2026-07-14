@@ -118,7 +118,17 @@ MANDATORY HONEST RESIDUAL (the run is INVALID without it):
   Never imply "the rest is fine." Absence of a finding is not evidence of WYSIWYS.
 ```
 
-**Running it as a swarm.** Fan out ≥3 independent reviewers per scope and cross-vote (a finding ≥quorum reviewers raise is "confirmed"); rotate across two model backends so one model's blind spot doesn't become yours. The `contracts/verification/adversarial-review/` kit (`run_review.py`) already drives this shape backend-agnostically — add a clear-signing angle to its `protocol.json` mirroring the existing `kani-decoder-vacuity` angle, or drive `parallel()` + a `phase('CrossCheck')` from a `Workflow`.
+**Running it as a swarm.** Fan out ≥3 independent reviewers per scope and use
+quorum only to prioritize or corroborate discovery; quorum does not set a
+finding's disposition and never overrides the exact Partner-A/Partner-B
+protocol in [`../../planning-and-review-workflow.md`](../../planning-and-review-workflow.md).
+Rotate discovery across two model backends so one model's blind spot does not
+become yours. The required pair must personally reproduce/refute/narrow every
+finding and preserve disagreement—never majority-vote it away. The
+`contracts/verification/adversarial-review/` kit (`run_review.py`) already
+drives discovery backend-agnostically—add a clear-signing angle to its
+`protocol.json` mirroring `kani-decoder-vacuity`, or drive `parallel()` plus a
+`phase('CrossCheck')` from a `Workflow`.
 
 ---
 

@@ -2,9 +2,9 @@
 //!
 //! **Production quarantine:** the current subcommands emit and verify legacy
 //! manifest v0x02 / `PQFW_V1` artifacts. They remain useful for bench tests,
-//! but are not the frozen Draft-0.9 V4 interface and must not produce a
-//! shipping release. The root `make release` gate fails until V4 and the
-//! reviewed rollback backend/resource gates are implemented.
+//! but are not Draft 1.1's proposed V6 interface and must not produce a
+//! shipping release. The root `make release` gate fails until the candidate is
+//! approved and its V6/backend/resource/release gates are implemented.
 //!
 //! This is the host-side companion to the on-device FSBL. It produces
 //! signed `.pqfw` release bundles that the companion updater app streams

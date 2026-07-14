@@ -485,7 +485,11 @@ scenarios.
   ```
   Update protocol: write fully to inactive slot → verify CRC → atomic
   bit-clear flip of pointer. Torn update leaves active slot intact.
-- **Same pattern for PBS page 126.**
+- **Do not apply this pattern to an OPTIGA PBS page.** The PBS is now
+  DHUK-derived at boot and has no flash page. Bank-1 page 126 instead holds the
+  wrapped SE050 BHK when enabled; any redundancy or migration proposal for
+  that page needs a separate BHK-owner design and must not be inferred from
+  this historical slot sketch.
 - **Migration**: detect old single-slot layout at boot, relocate to
   A/B.
 

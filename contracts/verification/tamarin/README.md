@@ -1,12 +1,12 @@
-# Tamarin — three-way PIN-attempt lockstep model
+# Tamarin — idealized symmetric three-counter PIN research model
 
-Stateful symbolic proof that the three-way PIN-attempt reconcile (MCU page-124
-+ OPTIGA F1E1 + SE050 UserID) catches any single/double counter reset, so the
-per-counter "≤10 attempts" silicon cap cannot be reset-bypassed without
-resetting **all three** counters. This is the **stateful** companion to the
-ProVerif secrecy model (`../proverif/`): ProVerif proves the message-level
-secrecy/authentication, Tamarin proves the reachable-state counter property
-ProVerif (and the impl-proofs / SCA-FI sweeps) cannot.
+This model proves a property of an **idealized symmetric reconcile** over MCU
+page-124, OPTIGA E120, and an abstract SE050 counter. It is useful as a research
+contrast model: under that stronger predicate, a single/double counter reset is
+caught and only an all-three reset survives. It is not evidence for the deployed
+boot policy, which reads page-124 and E120 directionally and has no SE050
+attempt-count input. The model complements the ProVerif secrecy model
+(`../proverif/`); it does not certify deployed PIN reconciliation.
 
 ## Run
 
@@ -56,16 +56,14 @@ the model*.
 > fund-drain. Re-modeling the directional predicate (the both-SE reset then
 > surfaces as a NEW residual) is the tracked follow-up.
 
-### Maps to the threat model
+### Relationship to the threat model
 
-- This is **Claim 3** (`threat-model.md §6.2`) at the protocol level: every PIN
-  attack is online, and the three-way lockstep makes a counter rewind detectable.
-- The `full_reset_bypass` residual is exactly the documented limitation in
-  `reconcile_pin_attempts` ("the attacker can reset at most two sides per
-  campaign"). The **hardware-monotonic OPTIGA counter** (work-todo #24 /
-  ship-blocker **S-3**) closes it by making `Reset_OPT` impossible — dropping the
-  attacker to "reset 1 of 3", which `fresh_synced_means_no_reset` catches. So
-  this model also *quantifies the value of S-3*.
+- This is an idealized research hypothesis adjacent to Claim 3
+  (`threat-model.md §6.2`), not a proof of that deployed claim.
+- `full_reset_bypass` identifies the symmetric model's residual. The deployed
+  directional page124/E120 policy has a different state space and must be
+  modeled and validated separately. Hardware-monotonic E120 remains a primary
+  per-attempt control, not a theorem imported from this model.
 
 ## Out of frame (deliberate — stated, not discovered)
 

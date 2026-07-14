@@ -33,8 +33,9 @@ user wants rides a full FW release.
 2. **Root updates will ride the reviewed signed FW-update chain after rollback
    closure.** No separate, lower-assurance descriptor-update path ships in v1.
    The current `PQFW_V1` signer/release backend is explicitly quarantined and
-   grants no production authority. The frozen Draft-0.9 replacement manifest
-   binds the secure image that embeds the root; only after that backend, its
+   grants no production authority. Draft 1.1 proposes a manifest-v6 binding for
+   the secure image that embeds the root, but is not implementation-approved;
+   only after that candidate, its backend, its
    resource gates, and its release ceremony are implemented and approved may a
    root change inherit the firmware release key's authority.
 

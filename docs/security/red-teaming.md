@@ -249,7 +249,8 @@ bytes. **This directly retires S-5.**
 
 ### 5.2 OPTIGA Shielded Connection confidentiality
 
-**Property.** TLS-PRF + AES-128-CCM-8 over IFX I²C; PBS in flash page 126; application payloads
+**Property.** TLS-PRF + AES-128-CCM-8 over IFX I²C; PBS DHUK-derived at boot
+(flash page 126 is the wrapped SE050 BHK, not PBS storage); application payloads
 (half_O at F1D1, PIN-related OIDs) encrypted on I²C1. `secure/src/optiga/{shield,apdu,ifx_i2c}.rs`.
 
 **Test (LA on I²C1).** Capture `establish()` + first encrypted GetDataObject. Confirm handshake
@@ -261,32 +262,42 @@ flaky on the bench (see `docs/secure-elements/optiga-bringup-status.md`); a full
 silicon may still need to be confirmed. If the handshake doesn't complete, the LA test for §5.2
 cannot run — fix the handshake first.
 
-### 5.3 Three-way PIN-gating lockstep (Invariant #2)
+### 5.3 Three-way PIN-attempt enforcement + directional boot cross-check (Invariant #2)
 
-**Property.** PIN compared in SE silicon only (never MCU). Three counters move in lockstep:
-SE050 UserID (max 10), OPTIGA E120 LUC bound to F1D0, MCU page-124 (FI-hardened pre-commit in
-`gated_unlock`). Boot reconciles to strictest; 10 wrong on any → admin wipe + page-124 erase.
-`secure/src/nsc/mod.rs` (`gated_unlock`, `reconcile_pin_attempts`), `secure/src/hw/flash.rs`.
+**Property.** PIN comparison stays in SE silicon. `gated_unlock` precharges the
+MCU page-124 counter; an ordinary wrong PIN then exercises OPTIGA F1D0/E120
+and the SE050 UserID. Page 124 and SE050 enforce the user-facing 10-attempt
+bound; E120 is a separate 32-lifetime-attempt anti-extraction backstop. At boot
+the production firmware can read page 124 and E120 and wipes only when
+`E120_used > page124_used`; an MCU lead is the fail-closed power-cut/transport
+window. The SE050 UserID attempt attribute is policy-denied (`SW=0x6986`), so
+it is not a boot-reconciliation input. `secure/src/nsc/mod.rs`
+(`gated_unlock`, `reconcile_pin_attempts`), `secure/src/hw/flash.rs`.
 
 **Tests.**
 - **10-wrong-PIN brick (functional, on a sacrificial provisioned unit).** Drive 10 wrong PINs;
-  confirm all three counters advance together and the wallet bricks + admin-wipes both SEs.
+  confirm every attempt consumes page 124, E120, and the SE050 UserID path and
+  that SE050/page-124 exhaustion bricks + admin-wipes both SEs.
   (`make pin-gate-wipe-e2e` is the QEMU analogue; do it on silicon here.)
-- **Counter desync → tamper.** Externally reset MCU page-124 (SWD, RDP-0 unit) while the SE
-  counters are non-zero; reboot; confirm the boot reconcile detects the mismatch and wipes.
+- **Readable-counter rollback → tamper.** Externally reset MCU page 124 (SWD,
+  RDP-0 unit) while E120 is non-zero; reboot; confirm `E120_used >
+  page124_used` detects the rollback and wipes. Separately demonstrate that a
+  benign MCU lead after a cut does not false-wipe.
 - **Glitch `gated_unlock` pre-commit.** Glitch to skip the page-124 bump or flip the verdict;
   confirm the FI sentinels + double-read counter + FihBool `pin_verified` fail closed (single
   fault insufficient).
 - **No software compare.** LA confirms the PIN bytes go *to* the SE and only a verdict returns —
   the MCU never compares the PIN.
 
-**Pass.** Counters stay in lockstep; desync wipes; no single fault unlocks; PIN never compared in MCU.
+**Pass.** Every ordinary wrong attempt consumes all three paths; SE050 locks at
+10; page-124 rollback behind E120 wipes; a benign MCU lead does not; no single
+fault unlocks; PIN is never compared in MCU.
 
-**Caveat (audit MEDIUM, verify on silicon).** The boot reconcile path reads an OPTIGA counter via
-`read_counter_raw` (`secure/src/optiga/mod.rs`); the pin-unlock-lockstep audit flagged that under
-some build configs it reads the **soft** counter (F1E1), not the **hardware** E120 LUC, which would
-make the three-way reconcile a no-op and risk false-positive wipes. **Explicitly confirm on the EVT
-which counter is read with `optiga-hw-counter` on**, and that a real desync triggers the wipe.
+**Caveat.** This is not three-way boot reconciliation. The SE050 attempt count
+cannot be read under its production UserID policy without changing the policy
+or consuming an attempt. Any design that adds a readable SE050 boot leg is a
+separate architecture/policy decision requiring adversarial and silicon
+review; do not weaken UserID policy merely to make the documentation symmetric.
 
 ### 5.4 OPTIGA shipping-state lockdown — **S-1 / S-2 / S-3 ship-blockers**
 
@@ -419,9 +430,10 @@ could brick units during legitimate validation. Characterise the threshold on th
 
 > **NO-GO until separately authorized.** The legacy unary tally and idempotent
 > re-burn assumptions below are invalid for STM32U585 OTP quad-words. Production
-> is compile-blocked. Draft 0.9 freezes the replacement interface but leaves
-> the physical codec and this sacrificial-silicon section open. Nothing in this
-> document authorizes an OTP write; follow the named-board/exact-QW gate in
+> is compile-blocked. Draft 1.1 proposes replacement interfaces but remains an
+> unapproved research candidate; its physical codec and this sacrificial-
+> silicon section remain open. Nothing in this document authorizes an OTP
+> write; follow the named-board/exact-QW gate in
 > `docs/security/a-b-firmware-rollback-architecture.md` Section 13.
 
 **Target property.** The typed security-epoch floor never decreases; ordinary
@@ -435,9 +447,10 @@ complete 128-bit QWs through the approved replicated/interruption-safe codec.
   the consumed QW through fresh ECC/status evidence. Never assume an
   idempotent re-burn; a QW whose write may have launched is not retried.
 
-**Pass.** Defined only by Draft 0.9 after `OPEN-ECC`/`OPEN-OTP-1..3` close; no
-downgrade, no fallback retirement before the health contract, and no uncertain
-QW reuse.
+**Pass.** Available only after an exact rollback architecture digest is
+implementation-approved and its journal/ECC/OTP, resource, factory, and
+silicon gates close; no downgrade, no fallback retirement before the health
+contract, and no uncertain QW reuse.
 
 ### 6.5 SAES / DHUK key derivation (Tier-1 KDF)
 
@@ -579,17 +592,18 @@ the device doesn't fall into host mode or re-open the SOF side-channel.
 ### 8.3 Firmware update replay / rollback
 
 > **Software review only; no silicon authority.** The V1/75-byte path and its
-> OTP tally are legacy bench code and production-fenced. The target property is
-> Draft-0.9's slot-bound manifest-v4 plus typed marker/selector/floor state.
+> OTP tally are legacy bench code and production-fenced. Draft 1.1 proposes a
+> slot-bound manifest-v6 plus typed marker/selector/floor state, but is an
+> unapproved research candidate and grants no implementation authority.
 
-**Property under review.** A vendor-authenticated manifest-v4 tuple cannot
+**Property under review.** A vendor-authenticated candidate manifest tuple cannot
 retire the confirmed fallback before the health contract; ordinary same-epoch
 releases perform zero floor writes; PIN is required on every FW command.
 `secure/src/fw_update/`, `fw-manifest/`, `fwsign/`, `fsbl/`.
 
 **Tests.** Replay an old signed manifest; reject a retired epoch; single-fault
 glitch the verify; cut power at every PENDING/ATTEMPTED/CONFIRMED marker and
-floor-establishment transition in the frozen state machine; confirm no
+floor-establishment transition in the candidate state machine; confirm no
 pre-CONFIRMED transition retires the fallback. Corrupt staged bytes and require
 the image re-hash to reject. These are software/model tests until the later
 silicon gate is separately authorized.

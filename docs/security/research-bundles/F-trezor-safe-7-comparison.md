@@ -230,8 +230,10 @@ A **post-quantum ERC-4337 hardware wallet** (the **PQ1**) where every primitive 
 
 **Target hardware:** STM32U585 (Cortex-M33, TrustZone) + Infineon OPTIGA Trust M V3 + NXP EdgeLock SE050. No single die, no single vendor, and no future cryptographically-relevant quantum computer (CRQC) should recover the seed from harvested traffic or extracted ciphertext.
 
+**Build one yourself:** every part is off-the-shelf — [`DIY.md`](../../../DIY.md) has the ~$150 bill of materials (Mouser links included), the wiring, and the first-flash guide.
+
 > **Status — 2026-04, pre-production bring-up. All-C10 cutover complete.**
-> Every transaction is signed with **SPHINCS+C10** (W+C_F+C, `h=18, d=2, a=11, k=13, w=8, l=43, target_sum=205, sig=4008`) — hash-based, no lattice or number-theoretic assumptions, no classical fallback. The *same* primitive signs both Type 1 (bootstrap → slot registration) and Type 2 (slot → user tx); there is no FORS+C and no secp256k1/P-256/Ed25519 anywhere. The firmware boots and runs on a real **B-U585I-IOT02A** with the OPTIGA Trust M V3 Shield + NXP OM-SE050ARD on Arduino R3 headers, and on QEMU `mps2-an505`. Dual-SE XOR entropy split, three-way PIN counter sync (MCU + OPTIGA + SE050), both SE drivers, and the Tier-1 SAES-CMAC(DHUK) KDF are validated end-to-end on silicon. On-chain contracts (`PQSmartWallet` + factory + `PQMultiOwnable`) target **EntryPoint v0.6** behind cheap ERC-1967 proxies at a deterministic CREATE2 address keyed on `sha256(masterPkSeed‖masterPkRoot)`. SHA-256 throughout the PQ stack (routed to the STM32U585 HASH peripheral); Keccak-256 only for EVM-mandated hashes.
+> Every transaction is signed with **SPHINCS+C10** (W+C_F+C, `h=18, d=2, a=11, k=13, w=8, l=43, target_sum=205, sig=4008`) — hash-based, no lattice or number-theoretic assumptions, no classical fallback. The *same* primitive signs both Type 1 (bootstrap → slot registration) and Type 2 (slot → user tx); there is no FORS+C and no secp256k1/P-256/Ed25519 anywhere. The firmware boots and runs on a real **B-U585I-IOT02A** with the OPTIGA Trust M V3 Shield + NXP OM-SE050ARD on Arduino R3 headers, and on QEMU `mps2-an505`. Dual-SE XOR entropy split, three-way PIN-attempt consumption (MCU + OPTIGA + SE050), both SE drivers, and the Tier-1 SAES-CMAC(DHUK) KDF are validated end-to-end on silicon; the boot counter check is directionally MCU→OPTIGA E120 because the SE050 attempt count is not peek-readable. On-chain contracts (`PQSmartWallet` + factory + `PQMultiOwnable`) target **EntryPoint v0.6** behind cheap ERC-1967 proxies at a deterministic CREATE2 address keyed on `sha256(masterPkSeed‖masterPkRoot)`. SHA-256 throughout the PQ stack (routed to the STM32U585 HASH peripheral); Keccak-256 only for EVM-mandated hashes.
 >
 > **No devices have shipped and no on-chain wallets hold funds.** Anything described below as "frozen" or "a hard fork to change" is the shape the team intends to commit to *at launch* — domain tags, the C10 parameter set, the CREATE2 salt, and the EntryPoint version can all still be changed cleanly before first shipment. The bring-up branch carries known production-invariant regressions; see `CLAUDE.md` "Pre-Production Caveats". **Tropic01** is supported only as a *standalone* single-SE option, not in the dual-SE production path.
 
@@ -267,9 +269,10 @@ A **post-quantum ERC-4337 hardware wallet** (the **PQ1**) where every primitive 
                   │  └────────────────────────────────────────────────┘ │
                   └──────────────────────────────────────────────────┘
                                           ▲
-                                          │  FSBL (HDPL1, immutable, WRP1A-locked)
-                                          │  verifies firmware via SPHINCS+C10 + SHA-256
-                                          │  — no classical fallback — before any of your code runs
+                                          │  FSBL (current: legacy bench code;
+                                          │  target: approved + WRP-protected)
+                                          │  verifies C10+SHA-256 on bench; production
+                                          │  rollback/factory authority remains blocked
 ```
 
 ## Design Properties
@@ -277,11 +280,11 @@ A **post-quantum ERC-4337 hardware wallet** (the **PQ1**) where every primitive 
 Each item below is implemented today (QEMU and/or real STM32U585), partial, or planned. See [Implementation Status](#implementation-status) for the per-item state.
 
 - **Post-quantum signatures, one primitive everywhere** — SPHINCS+C10 for both Type 1 (bootstrap slot registration) and Type 2 (per-slot user tx). The on-chain contract has a single `c10Verifier` immutable wired to both dispatch paths. Per-chain caps `MAX_BOOTSTRAP_USES = MAX_SLOT_USES = 65,536` are immutable; combined ≈ 2³² user txns/chain before that chain is permanently frozen — well inside the C10 birthday margin. *(Implemented; `forge test` covers both paths.)*
-- **Post-quantum firmware signing (pre-production)** — the existing V1/75-byte signer and FSBL verify SPHINCS+C10 artifacts on the bench, but their rollback/try-once backend is rejected and compile-blocked from production. The reviewed Draft-0.9 target freezes slot-bound manifest v4 and its exact 80-byte `PQFW_V4` preimage over `(physical_slot, release_version, security_epoch, secure_hash, nonsecure_hash)`. Its journal/ECC/OTP backend and final FSBL resource fit remain open; this is an interface freeze, not implementation approval.
+- **Post-quantum firmware signing (pre-production)** — the existing V1/75-byte signer and FSBL verify SPHINCS+C10 artifacts on the bench, but their rollback/try-once backend is rejected and compile-blocked from production. Historical Draft 0.9/V4 is preserved as research evidence. Draft 1.1 proposes slot-bound manifest v6 and an exact 121-byte `PQFW_V6` preimage, but remains an unapproved research candidate; journal/ECC/OTP, FLASH, RAM/stack, release-policy, factory, and silicon gates remain open.
 - **Symmetric-only SE tunnels (no harvestable handshake)** — both SE channels key from pre-shared symmetric roots (OPTIGA PBS DHUK-derived, SE050 SCP03 statics rotated per-device at provisioning), so no public-key exchange ever crosses I²C and a recorded bus yields nothing Shor can open. Accepted residual: Grover key search on AES-128 session keys (~2⁶⁴ serial, NIST Category 1 — the same floor as SPHINCS+C10 itself), per recorded session, requiring a physical tap during a live unlock, twice over thanks to the XOR split. *(A ML-KEM-1024 inner wrap was prototyped and descoped 2026-07-07 — owner decision; see `docs/security/ml-kem-inner-wrap.md`.)*
 - **TrustZone isolation** — signing key, PIN state, key derivation, and crypto confined to the secure world. The NSC gateway (sign / batch-sign / off-chain sign / unlock / lock / status / wallet-address / init-code / firmware-update) is the only crossing point, with NS pointer validation and TOCTOU defense (NS buffers copied to S-stack before parse). On silicon the gateway runs through real ARMv8-M CMSE veneers (`make e2e-hw`); QEMU uses a shared-memory mailbox (workaround for a QEMU 8.2.2 MPC S-alias bug).
 - **Dual secure elements (split entropy)** — BIP-39 entropy is XOR-split: `half_O` on OPTIGA, `half_E` on SE050. Either chip alone reveals zero bits. `E = HKDF(half_O ⊕ half_E)` happens only in S-SRAM during unlock, then zeroized. *(Validated on silicon; both on I2C1 at 0x30 / 0x48.)*
-- **Three-way PIN counter sync** — silicon-monotonic counters on MCU page 124 (FI-hardened pre-commit), OPTIGA E120 LUC bound to F1D0 Execute (immune to PBS extraction), and SE050 silicon UserID. `MAX_ATTEMPTS = 10` on any one dispatches `factory_reset_admin` + page-124 erase; `CMD_GET_REMAINING` returns the min. *(Validated: `make pin-gate-hw-counter-e2e`, `make pin-gate-wipe-e2e`.)*
+- **Three-way PIN-attempt enforcement** — every ordinary wrong attempt charges FI-hardened MCU page 124, OPTIGA E120 LUC, and the SE050 silicon UserID. Page 124 and SE050 enforce the user-facing 10-attempt bound; E120 is a separate 32-lifetime-attempt anti-extraction backstop. Boot checks the readable counters directionally (`E120_used > page124_used` means rollback/tamper); the SE050 attempt attribute is policy-denied and is not a boot input. `CMD_GET_REMAINING` uses page 124 plus runtime driver mirrors, not a three-way silicon read receipt. *Silicon evidence from `make pin-gate-hw-counter-e2e` covers per-attempt consumption/desync recovery within one run, and `make pin-gate-wipe-e2e` covers lockout/wipe. A reboot-based silicon receipt for both directional boot-ordering cases remains open; those branches are not claimed as hardware-E2E-validated.*
 - **Three-tier DHUK + BHK + OTP key hierarchy** — Tier 1 (DHUK, `SAES-CMAC(DHUK, label‖counter)`) is **landed** behind `saes-dhuk`. At RDP0 the DHUK is an ST-substituted constant shared across boards (per-die uniqueness only at RDP ≥ 1). Tier 2 (BHK) and the OTP-salt repurpose are planned.
 - **Trusted-display clear-signing** — every signable artifact is decoded and rendered in S-world before confirm by **native on-device decoders**. **Safe** EIP-712 `SafeTx` and **CoW Swap** EIP-712 `GPv2Order` are verified in-world (`secure/src/tx/eip712/{safe,cowswap}/`) and decoded locally. **ERC-20** transfers and CoW order legs render symbol/decimals from a Merkle-verified metadata bundle; accepted **ERC-7730** descriptors, including supported Aave v3 operations, render field-level pages. Allowlisted `MultiSendCallOnly` DELEGATECALL batches are strictly decoded record-by-record. Only genuinely absent opaque calls/records may reach loud blind pages; registry-known/Bloom-positive calls without valid bound semantics, incomplete Aave descriptors, malformed or prohibited batches, other delegatecalls, and page-budget overflow refuse.
   The clear-signing guarantee covers structured on-chain and typed-data dispatch. Explicit EIP-1271 `RAW32` remains a separate `! BLIND RAW32` off-chain tier and must never be used by a companion to downgrade a typed-data request.
@@ -338,7 +341,7 @@ sphincs_rust/
 ├── domain/ tx-core/ aa/ tx/ hal/ pqsigner-erc7730/   pure-logic workspace crates
 ├── contracts/smart-wallet/   Foundry project — PQSmartWallet, Factory, PQMultiOwnable,
 │                             verifiers/SPHINCsC10Asm.sol (stateless Yul C10 verifier)
-├── fsbl/          immutable first-stage bootloader (PQ A/B selector, ~32 KB — near its 32 KB cap)
+├── fsbl/          first-stage bootloader (legacy bench link: 32 KiB; Draft 1.1 resources OPEN)
 ├── fwsign/ fwmeasure/ fw-manifest/   host signer/verifier, measurement tool, manifest chain
 ├── dbgen/         host ERC20/names/selectors/ERC-7730 DB + Merkle-tree builder
 ├── tools/         webhid_test.html, wallet_run_hw.py, …
@@ -375,7 +378,7 @@ Every primitive that touches a secret, with PQ status. **Classical** entries are
 | Where | Primitive | Size | PQ | Notes |
 |---|---|---|---|---|
 | **Tx signing (Type 1 + 2)** | SPHINCS+C10 (W+C_F+C, h=18 d=2 a=11 k=13 w=8 l=43 target_sum=205) | sig 4008 B, pk 32 B | ✅ | One primitive for bootstrap *and* per-slot. Verifier `SPHINCsC10Asm.sol` runs in-EVM via the SHA-256 precompile. The on-chain `SignatureWrapper(ownerIndex, sig)` is 4128 B (4008 padded to 4032 + 3×32 header) |
-| **Firmware signing** | SPHINCS+C10 (same params) | sig 4008 B | ⚠️ | Legacy V1 bench path exists; production is blocked until Draft-0.9 manifest-v4 + rollback backend/resource gates are implemented. No classical fallback |
+| **Firmware signing** | SPHINCS+C10 (same params) | sig 4008 B | ⚠️ | Legacy V1 bench path exists. Draft 1.1 proposes manifest-v6 but is not implementation-approved; production remains blocked on its journal/ECC/OTP, FLASH, RAM/stack, release-policy, factory, and silicon gates. No classical fallback |
 | **OPTIGA wire** | Shielded Connection: TLS-PRF + AES-128-CCM-8, root = PBS (DHUK-derived, per-device) | tag 8 B | ⚠️ | Symmetric-rooted (no Shor surface); KDF is HMAC-SHA-256. Residual = Grover-2⁶⁴ on a physically-tapped session (Cat-1, accepted 2026-07-07) |
 | **OPTIGA PIN gate** | AuthRef (`0xF1D0`) + E120 LUC (silicon-monotonic) | — | ✅ | Trezor-parity; immune to PBS extraction. Hardware-cleared by `Change=Auto(F1D0)` over transient auth on success |
 | **SE050 wire** | SCP03 (AES-CMAC + AES-CBC), statics rotated per-device | k 16/32 B | ⚠️ | Symmetric-rooted (no Shor surface). Session keys derive from statics + challenges (no forward secrecy) — per-device rotation (work-todo #11) is load-bearing; residual = Grover-2⁶⁴ on a tapped session (accepted 2026-07-07) |
@@ -388,7 +391,7 @@ Every primitive that touches a secret, with PQ status. **Classical** entries are
 | **Tier 3 root** | OTP-master 32-byte TRNG burn at first boot | 32 B | ✅ | Today: dev KDF fallback. Post-Tier-2: PBKDF2 salt for any MCU-side PIN-gated wrap |
 | **BIP-39 → C10 master** | PBKDF2-HMAC-SHA512 (2048) → `HMAC-SHA512("sphincs-c6-v1", seed)` (acct 0) / `…("sphincs-c6-v1-acct", seed‖acct_be4)` (accts 1..=255) | 64 B | ✅ | `"c6"` tag is historical (carried through the C10 cutover). Acct 0 reproduces the legacy derivation byte-for-byte |
 | **Slot derivation** | `slot_entropy = sha256(slot_master‖"slot_entropy"‖chain_id_be8‖slot_index_be4)`; `slot_sk_seed = sha256("slot_c10_sk_seed"‖slot_entropy)`; `slot_pk_seed = sha256("slot_c10_pk_seed"‖slot_entropy) & N_MASK` | 32 B sk, 16 B pk | ✅ | **Chain-bound** (post-Coinbase port): slot keys differ per chain. Stateless within the 2¹⁸ tree; cached in SRAM for the unlock session only |
-| **Anti-rollback floor** | Draft-0.9 typed OTP interface | — | ⚠️ | Ordinary releases within one security epoch consume no OTP; the physical codec/capacity, interruption recovery, ECC handling, and silicon evidence remain OPEN. The legacy 1,024-bit tally is invalid on STM32U585 and production-fenced |
+| **Anti-rollback floor** | Draft 1.1 research candidate | — | ⚠️ | Ordinary releases within one security epoch would consume no OTP. The candidate is not implementation-approved; the physical codec/capacity, interruption recovery, ECC handling, resource fit, and silicon evidence remain OPEN. The legacy 1,024-bit tally is invalid on STM32U585 and production-fenced |
 | **TRNG mixing** | STM32 TRNG today; planned ⊕ OPTIGA ⊕ SE050 TRNG | 32 B | ✅ | Quantum offers nothing against true randomness |
 | **Clear-sign decoders** | Native on-device decode (Safe / CoW / ERC-7730 / ERC-20 / typed-call) | — | ❌ | Display-only — gates *what is shown before signing*, never reaches the seed. |
 | **Clear-sign DB auth** | SHA-256 Merkle tree over pinned leaves; 32-byte root in secure flash | root 32 B | ✅ | Anchored to the firmware-signing key; fully offline (no on-chain governance lookups) |
@@ -423,7 +426,7 @@ A single SE is a single point of trust. The production target pairs **OPTIGA Tru
 |---|---|---|
 | Class-break on one vendor's firmware / invasive die attack | seed exposed | other half still secret — zero bits leaked |
 | Backdoored RNG in one chip | biased entropy | XOR with the other SE's TRNG + STM32 TRNG preserves uniformity |
-| Stolen powered-off device | one retry counter | **three** counters; any one hitting MAX triggers full admin-wipe of both SEs |
+| Stolen powered-off device | one retry counter | three attempt gates: page 124 + SE050 enforce 10 attempts, E120 provides a 32-lifetime-attempt backstop; exhaustion/blocked auth drives the full admin-wipe path |
 | U585 secure-SRAM compromise during active unlock | full break | full break (irreducible window — minimised by 120 s timeout + TAMP/BOR wipe ISR) |
 
 Cost: one extra I²C peripheral, ~$3 BOM, ~50 ms unlock latency.
@@ -435,15 +438,15 @@ Cost: one extra I²C peripheral, ~$3 BOM, ~50 ms unlock latency.
 | **Seed at rest (OPTIGA)** | `half_O` in object `0xF1D1`, `Read = Auto(0xF1D0) + Conf(0xE140)` — readable only after an AuthRef HMAC-SHA-256 challenge against the PIN-derived `0xF1D0` *and* through the AES-128-CCM-8 Shielded Connection |
 | **Seed at rest (SE050)** | `half_E = E ⊕ half_O` in an SE050 binary object whose read policy is bound to a UserID opened only inside SCP03. Admin PIN derived from the OTP master (crash-safe) |
 | **Seed reconstruction** | `E = HKDF(half_O ⊕ half_E)` only in S-SRAM, for microseconds, then zeroized. Mnemonic / seed / master / slot keys recomputed on demand, dropped on lock / idle / panic |
-| **Key transport** | OPTIGA Shielded Connection (TLS-PRF + AES-128-CCM-8, PBS in flash page 126) and SE050 SCP03, both with per-device keys from `hw::secret_keys` (Tier 1 SAES-CMAC(DHUK) under `saes-dhuk`, dev fallback `HKDF(OTP_master)`) |
+| **Key transport** | OPTIGA Shielded Connection (TLS-PRF + AES-128-CCM-8, PBS DHUK-derived at boot) and SE050 SCP03. Flash page 126 is reserved for the wrapped SE050 BHK when enabled; it is not PBS storage. Production keys come from `hw::secret_keys`; legacy dev fallback is quarantined. |
 | **PIN handling** | Raw PIN never leaves S-world; the trusted UI runs entirely in S-world. NS never sees a digit, cursor, or confirm decision. SE challenges derived via `hw::secret_keys` so neither chip stores the PIN |
-| **Retry counters** | Three-way lockstep (MCU page 124 + OPTIGA E120 LUC + SE050 UserID); `MAX_ATTEMPTS = 10` on any one → `factory_reset_admin` + page-124 erase |
+| **Retry counters** | Three-way per-attempt consumption (MCU page 124 + OPTIGA E120 LUC + SE050 UserID); boot cross-check is directional page124→E120, while SE050 independently enforces max-10 lockout |
 | **Boot self-tests** | `SHA-256("abc")` KAT (halt on FAIL); `make saes-self-test-hw` SAES round-trip + DHUK fingerprint. Production gates the self-test feature out |
 | **TAMP / SCA mask** | TAMP monitors backup-domain voltage, LSE, JTAG/SWD@RDP>0, crypto fault, IWDG (log-only on this branch; production flips to `trigger_lockout_wipe()`). TIM2 CH1 PWM consumption mask on PA5 |
 | **Memory isolation** | TrustZone (SAU + IDAU + MPC + GTZC); DMA into secure SRAM blocked; NS pointer validation + TOCTOU defense; no panics across NSC |
 | **Inactivity / power loss** | Secure-only TIM enforces a 120 s idle wipe; TAMP and BOR fire the same ISR; bulk cap sized so the ISR completes under brownout |
 | **Crash safety** | Panic handler zeroizes secrets and resets before halting; idempotent `wipe-for-wizard` dev recovery path |
-| **Production lockdown** | RDP Level 2 burned as the final, irreversible step; both SE auth policies frozen in the same provisioning session; WRP1A locks FSBL pages 0–3 before the RDP-2 burn |
+| **Production lockdown** | **Not authorized yet.** Draft 1.1 proposes an immutable pages-0..4 FSBL envelope, but FLASH/RAM, option-byte, factory, and silicon gates remain open. The RDP/WRP/self-provision sequence in work-todo #36 is research input, not an executable ceremony. |
 
 ### Boot → Unlock → Sign → Lock
 
@@ -472,7 +475,7 @@ Every step runs in the **secure world**; NS drives nothing more sensitive than "
                     cached secrets + stack + registers, loop-twice + verify → "Locked" screen
 ```
 
-**Invariants the dual-SE design hangs on:** (1) the trusted path is contiguous button → S-ISR → LCD → S-world (GTZC marks all of it Secure-only); (2) the PIN buffer never crosses the NSC boundary — there is no `enter_pin(bytes)` call, only `request_unlock()`; (3) activity is defined by S-world button presses, never NS pings; (4) PIN counter sync is three-way and boot reconciles to the strictest; (5) the firmware is stateless w.r.t. slot selection — no `next_q`-in-flash, no per-signature flash writes (slot keys re-derived on demand; SPHINCS+C10 is stateless within its 2¹⁸ tree).
+**Invariants the dual-SE design hangs on:** (1) the trusted path is contiguous button → S-ISR → LCD → S-world (GTZC marks all of it Secure-only); (2) the PIN buffer never crosses the NSC boundary — there is no `enter_pin(bytes)` call, only `request_unlock()`; (3) activity is defined by S-world button presses, never NS pings; (4) every ordinary PIN attempt is charged through page 124 and both SE auth paths, while boot can only perform the documented directional page124/E120 rollback check; (5) the firmware is stateless w.r.t. slot selection — no `next_q`-in-flash, no per-signature flash writes (slot keys re-derived on demand; SPHINCS+C10 is stateless within its 2¹⁸ tree).
 
 ## Formal Verification (Lean 4)
 
@@ -541,7 +544,7 @@ Any claim of "verified" in docs or marketing must carry the assumption list.
 | OPTIGA Trust M V3: IFX I2C + APDU + Shielded Connection | 🟢 HW |
 | OPTIGA E120 LUC silicon PIN counter + F1D0/E120 transient-auth reset | 🟢 HW |
 | SE050: T1oI2C + APDU + SCP03; admin-wipe e2e | 🟢 HW |
-| Dual-SE XOR entropy split; MCU page-124 FI-hardened counter; three-way PIN sync | 🟢 HW |
+| Dual-SE XOR entropy split; MCU page-124 FI-hardened counter; three-way PIN-attempt enforcement | 🟢 HW |
 | Tier 1 SAES-CMAC(DHUK) KDF + SAES driver self-test | 🟢 HW |
 | `sphincs-c10` library; HW SHA-256 routing (HASH peripheral, boot KAT) | 🟢 QEMU + HW |
 | Standalone Tropic01 path (Noise_KK1 + MACD) | 🟢 HW (not used in dual-SE) |
@@ -551,30 +554,30 @@ Any claim of "verified" in docs or marketing must carry the assumption list.
 | EIP-712 Safe + CoW Swap verifiers; ERC-7730 renderer | 🟢 QEMU |
 | Automated e2e (`make e2e` QEMU; `make e2e-hw` silicon) | 🟢 |
 | ERC-1967 proxy contracts (PQSmartWallet + Factory + PQMultiOwnable), Foundry suite | 🟢 |
-| Hash-signature firmware update (FSBL + `fwsign` + `fw-manifest` + streaming `fw_update/`) | ⚠️ legacy bench implementation; Draft-0.9 interfaces frozen; production backend blocked |
+| Hash-signature firmware update (FSBL + `fwsign` + `fw-manifest` + streaming `fw_update/`) | ⚠️ legacy bench implementation; Draft 1.1 is an unapproved research candidate; production blocked on software, resource, factory, and silicon gates |
 | Firmware measurement at boot (SHA-256 → 8 BIP-39 words) | 🟢; bit-packed shared rendering verified |
 | Firmware rollback journal + typed OTP floor | 🚫 production-blocked pending software backend, resource gates, and later owner-authorized silicon evidence |
 | TAMP driver (log-only); consumption-mask hook | 🟢 implemented |
 | Tier 2 BHK; boot-time attestation; device-identity cert | ⏳ not started |
 | ML-KEM-1024 inner wrap | 🚫 descoped 2026-07-07 (owner decision — accepted Grover-only bus residual; prototype retained feature-gated) |
 | Mixed-RNG (STM32 ⊕ OPTIGA ⊕ SE050 TRNG); PIN-entry digit scrambling | 🔵 partial / ⏳ |
-| Custom PCB; HUK-SAES at-rest wrap; production TAMP wipe; RDP-2 burn; FI/SCA lab | 🚫 blocked on HW |
+| Custom PCB; HUK-SAES at-rest wrap; production TAMP wipe; first-boot RDP-2 self-lock validation (work-todo #36); FI/SCA lab | 🚫 blocked on HW |
 
 ## Firmware Update Model
 
 A **hash-signature** model combining open-source reproducible builds with manufacturer approval — end-to-end SPHINCS+C10 + SHA-256, no classical fallback.
 
 ```
-Target:        CI hashes both images → manifest-v4 signs the exact 80-byte `PQFW_V4` preimage
-               binding physical slot + release_version + security_epoch + both image hashes.
-FSBL (boot):   verify both slots, decode typed marker/floor state, select under the frozen state
-               machine, and establish a security-epoch floor only after CONFIRMED.
-Device (run):  stream and verify a candidate, enter restricted probation, complete the reviewed
-               health protocol, then seal CONFIRMED. Runtime never writes the OTP floor.
+Candidate:     Draft 1.1 proposes manifest-v6 over an exact 121-byte `PQFW_V6` preimage
+               binding slot, versions, image lengths/hashes, and vendor-key fingerprint.
+FSBL (target): verify both slots, decode typed marker/floor state, select under the candidate
+               state machine, and establish a security-epoch floor only after CONFIRMED.
+Device (target): stream and verify a candidate, enter restricted probation, complete the
+               candidate health protocol, then seal CONFIRMED. Runtime never writes the floor.
 ```
 
 - **One PQ algorithm in the verification path** — the FSBL has one pubkey and one algorithm; a "just in case" classical fallback would defeat the PQ property, so there is none.
-- **Signing the preimage IS signing the firmware** — SHA-256 collision resistance ties the frozen 80-byte, slot-bound V4 preimage to the exact approved binaries and rollback tuple.
+- **Signing the preimage IS signing the firmware** — once approved and implemented, SHA-256 collision resistance would tie Draft 1.1's proposed 121-byte, slot-bound V6 preimage to the exact binaries, lengths, vendor key, and rollback tuple. No such implementation authority exists yet.
 - **Epoch split** — ordinary releases only advance `release_version`; OTP is consumed only when `security_epoch` revokes older vulnerable releases. The physical OTP design is still open and production-blocked.
 - **PIN unlock required on every `CMD_FW_*`** (the seed is never accessed, but this blocks silent re-flash of a stolen device). The at-rest vendor SK is Argon2id + XChaCha20-Poly1305 wrapped — only on the signing machine, never on the device.
 
@@ -603,13 +606,14 @@ Mode aliases: `mode-production` (no dev features) · `mode-bringup` (`debug-log`
 
 Each phase has a hard exit criterion before the next starts. Full backlog: `docs/work-todo.md`.
 
-- **Phase 0 — bring-up complete (today).** All-C10 firmware boots on the B-U585I-IOT02A; dual-SE split, three-way PIN sync, Tier-1 DHUK KDF, OPTIGA Shielded-Connection unlock, SE050 admin-wipe, and the FSBL firmware-update path all run end-to-end. The branch carries known production-invariant regressions (see `CLAUDE.md`).
+- **Phase 0 — bring-up complete (today).** All-C10 firmware boots on the B-U585I-IOT02A; dual-SE split, three-way PIN-attempt enforcement, Tier-1 DHUK KDF, OPTIGA Shielded-Connection unlock, SE050 admin-wipe, and the FSBL firmware-update path all run end-to-end. The directional boot cross-check and known production-invariant regressions are stated in `CLAUDE.md`.
 - **Phase 1 — close the bring-up regressions (in progress).** Restore the GTZC `TZSC_SECCFGR` allowlist (incl. GTZC2 USB-OTG); strip `debug-log`/`e2e-test`/`mock-se` from production builds + restore the `compile_error!` fences; remove dev log/register dumps; wire TAMP IRQ → `trigger_lockout_wipe()`; move BOR/inactivity to the Secure-only TIM; land Tier 2 (BHK); step a board to RDP1 and re-validate per-die DHUK uniqueness.
 - **Phase 2 — boot-time attestation (still on the devkit).** Pin a SPHINCS+C10 device-identity cert; implement mixed-RNG and PIN digit scrambling. (The ML-KEM-1024 inner wrap formerly in this phase was descoped 2026-07-07 — owner decision; bus confidentiality rests on the symmetric-rooted tunnels + per-device key rotation.) Exit: attestation verified at boot; halves cross the bus only under per-device-keyed AEAD (trace-verified).
 - **Phase 3 — custom PCB, HUK-SAES, GTZC, production peripheral set.** Design/review the PCB (U585 + both SEs + NV3007 LCD + buttons + tamper mesh + EMI can); HUK-SAES wrap the at-rest secrets; GTZC-mark every Secure-only peripheral; MPU boundaries; block DMA into S-SRAM; wire case switch / tamper mesh / temp sensor / BOR to the wipe ISR (measure bulk-cap holdup on real HW).
-- **Phase 4 — secure boot, provisioning, lockdown (blocked).** Implement and
-  approve manifest-v4, the rollback backend/resource gates, and a replacement
-  factory receipt before defining any irreversible ceremony. Sacrificial-unit
+- **Phase 4 — secure boot, provisioning, lockdown (blocked).** Approve an exact
+  successor to the Draft 1.1 research candidate, close its rollback
+  backend/resource gates, and produce a replacement factory receipt before
+  defining any irreversible ceremony. Sacrificial-unit
   and RDP2 work is explicitly outside the current software-only milestone.
 - **Phase 5 — pre-launch validation.** External audit, FI + SCA lab time on the locked PCB, public bug bounty before any sale, gradual rollout with a long observation window.
 
@@ -646,8 +650,8 @@ Nothing here is optional. Run through the entire list **per device class**, not 
 - [ ] SPHINCS+C10 test vectors pass on-target; output matches `SPHINCsC10Asm.sol` byte-for-byte; differential test vs a second HBS impl
 - [ ] BIP-39, HKDF PIN-stretch, HKDF-SHA256, SHA-512, AES-256-GCM (SAES path) test vectors pass
 - [ ] SCP03 + Shielded-Connection + attestation negative tests (replay, malformed, wrong keys/UID, timeout)
-- [ ] PIN brick test (9 wrong → brick exactly once, verified by zeroized r-mem read-back); power-loss tests at every step of every flow
-- [ ] Three-way counter-divergence test (`make pin-gate-hw-counter-e2e` is the starting point); full recovery test on a fresh device B
+- [ ] PIN brick test (nine prior wrong attempts, then the tenth wrong attempt bricks exactly once, verified by zeroized r-mem read-back); power-loss tests at every step of every flow
+- [ ] Three-way per-attempt test plus directional page124/E120 rollback cases (`make pin-gate-hw-counter-e2e` is the starting point); full recovery test on a fresh device B
 
 **E. Side-channel & fault hardening**
 - [ ] External FI lab (voltage / EM / clock glitch) against PIN entry, attestation, signing, wipe; SCA lab (SPA/DPA) with and without the EMI can + consumption mask
@@ -656,10 +660,10 @@ Nothing here is optional. Run through the entire list **per device class**, not 
 - [ ] Stack scrub + CPU register scrub + cache flush after every secret-touching routine; cold-boot mitigation (freeze-spray tested); DMA-into-S-SRAM denied by GTZC
 
 **F. STM32U585 secure boot & option bytes** *(how-to: "Locking the STM32 to your firmware only" below)*
-- [ ] Custom immutable FSBL with SPHINCS+C10 verification in HDPL1; WRP1A locks pages 0–3 before the RDP-2 burn
+- [ ] Approve an immutable SPHINCS+C10 FSBL artifact, final page geometry, both-bank protection, and factory ceremony. Draft 1.1's pages-0..4 proposal grants no burn authority (work-todo #36).
 - [ ] FSBL refuses any slot whose preimage sig doesn't verify (CI flips one bit, confirms halt); image verification before any of your code runs
 - [ ] C10 vendor sk lives only in an air-gapped HSM (Argon2id + XChaCha20-Poly1305 at-rest wrap, two-person rule, no on-disk copies)
-- [ ] `TZEN=1`; `RDP=0xCC` (Level 2) as the **final** step (verified by JTAG/SWD refusal); `nBOOT0`/`nSWBOOT0`/`nBOOT_SEL`/`nBOOT_LOCK` force internal-flash boot
+- [ ] `TZEN=1`; devices ship at **RDP-0** for pre-first-power user verification and the FSBL self-programs `RDP=0xCC` (Level 2) on the first field boot as the **final** lockdown step (work-todo #36; verified by JTAG/SWD refusal on locked units); `nBOOT0`/`nSWBOOT0`/`nBOOT_SEL`/`nBOOT_LOCK` force internal-flash boot
 - [ ] `SECBOOTADD0` + `SECWM1/2` cover all S-flash; HDPL increments hand off bootROM → S → NS; OBKEY anti-rollback advances per update
 - [ ] All debug option bytes disabled; BOOT0 tied low / removed; option-byte profile burned via the HSM-signed script (no manual clicks); independent verification on a sample of finished units
 
@@ -688,27 +692,35 @@ Nothing here is optional. Run through the entire list **per device class**, not 
 **J. The "honest caveats" page in the box**
 - [ ] Plain-language list of what the device does *not* protect against (coerced unlock, SE-die lab attack, vendor supply-chain, your own bugs); recommends a passphrase for coercion threat models and multi-sig for high value; states bug-bounty contact + firmware-signing-key fingerprint; translated per market
 
-## Locking the STM32 to your firmware only
+## Target: locking the STM32 to approved firmware only
 
-The STM32U585 boot ROM + OEMiROT enforce "this chip only runs firmware signed by *this* key". We replace ST's stock ECDSA/RSA OEMiROT with a **custom immutable FSBL that verifies a SPHINCS+C10 signature** before any of our code runs.
+This is the intended production state, not the current bench state. After the
+rollback architecture, physical geometry, both-bank protection, option-byte
+ceremony, and silicon receipts are approved, the STM32U585 boot path is meant
+to enforce “this chip only runs firmware signed by *this* key” with a custom
+WRP-protected FSBL that verifies SPHINCS+C10 before mutable firmware runs. The
+current legacy FSBL verifies C10 artifacts on the bench but is explicitly
+production-fenced and grants no irreversible burn authority.
 
 ```
 HDPL0  System Bootloader (immutable) — dispatches to the FSBL per option bytes
-HDPL1  Our FSBL (WRP1A-locked) — holds the 32-byte C10 vendor key and verifies/measures A/B slots.
-       The reviewed Draft-0.9 target uses a release-version + security-epoch tuple and a typed
-       OTP floor; the physical journal/ECC/OTP backend and final FSBL resource fit remain OPEN.
+HDPL1  Target FSBL (future approved WRP range) — holds the 32-byte C10 vendor key and verifies/measures A/B slots.
+       Draft 1.1 proposes a release-version + security-epoch tuple and typed OTP floor, but is
+       not implementation-approved; journal/ECC/OTP, FLASH, RAM/stack, and silicon gates remain OPEN.
        The legacy 1024-bit/75-byte-preimage path is production-fenced and must not ship.
 HDPL2  Secure-world firmware — configures SAU/MPC/GTZC, opens SE buses, holds the
        OPTIGA PBS + SE050 SCP03 keys (derived via hw::secret_keys)
 HDPL3  Non-secure firmware — UI shell, USB; no access to S-flash, SE buses, or any HDPL1/2 secret
 ```
 
-Each HDPL transition irrevocably hides the previous level's option bytes and OBKEYs.
+In that target state, each authorized HDPL transition irrevocably hides the
+previous level's option bytes and OBKEYs. No such statement authorizes or
+records a transition on the current bench tree.
 
 **No bring-up/burn sequence is currently authorized.** `fwsign sign` is a
 legacy bench-only command requiring an explicit unsafe acknowledgement; release,
 factory, and RDP2 targets fail non-ignorably. The future ceremony will be
-written only after the Draft-0.9 open software decisions close and the owner
+written only after an exact rollback architecture digest is implementation-approved, its open software decisions close, and the owner
 separately authorizes named sacrificial hardware.
 
 **What this gives you:** only firmware signed by the vendor C10 key runs (a SHA-256 class-break is the only way past); PQ confidentiality of stored secrets (post inner-wrap); no debug access, no bootloader fallback, no option-byte rollback, no flash patching of the FSBL; HDPL hides keys from later stages.
@@ -736,9 +748,16 @@ Copyright (c) 2026 EthereumPhone. All rights reserved.
 
 # PQSigner OS — LLM Context
 
+> **Agent process entry point:** Claude Code loads this file directly. Before
+> non-trivial work, read [`AGENTS.md`](../../../AGENTS.md), which routes current status,
+> the planning/review workflow, and applicable adversarial-review playbooks.
+> The project contract below remains authoritative for its stated scope.
+
 Post-quantum ERC-4337 hardware wallet on **STM32U585 (Cortex-M33, TrustZone) + OPTIGA Trust M V3 + SE050**. **SPHINCS+C10 only** for signing — pure PQ, no ECDSA fallback. Account-abstraction smart account on **EntryPoint v0.6** (Coinbase-Smart-Wallet-compatible) — **frozen target, no v0.7/v0.8 migration**: the v0.6 instance address + ABI are baked into `initCode`, the userOpHash preimage, and the on-chain factory; switching EntryPoint versions would change the CREATE2 init-code hash and break invariant #6 (same 24 words → same address on every chain). v0.6 stays supported by EIP-4337 bundlers indefinitely; if v0.6 is ever sunset, the response is to keep using direct EOA-bundled execution against the same wallet contract, not to redeploy. Same 24 words → same on-chain address on every chain (CREATE2 salt = `sha256(masterPkSeed‖masterPkRoot)`). SHA-256 inside the PQ stack; Keccak-256 only for EVM-mandated hashes (userOpHash, EIP-712, EIP-1559, ERC-7201, CREATE2 opcode).
 
-**Status (2026-04, pre-production bring-up).** All-C10 cutover complete: bootstrap **and** slot keys are C10 (`h=18, d=2, a=11, k=13, w=8, l=43, target_sum=205, sig=4008`). Boots on real B-U585I-IOT02A and QEMU mps2-an505. Both SE drivers + Tier-1 SAES-CMAC(DHUK) KDF working; three-way PIN sync (MCU page 124 + OPTIGA E120 LUC + SE050 silicon UserID) validated end-to-end including 10-wrong-PIN brick + admin-wipe. On-chain caps: `MAX_BOOTSTRAP_USES = MAX_SLOT_USES = 65,536` (≈ 2^32 txns/chain, well inside the C10 birthday margin). Firmware is **stateless w.r.t. slot selection** — companion supplies `(chain_id, slot_index, flags)` on every sign. Page 123 durably tracks each slot's off-chain count, reconciled UserOp count, generated UserOp-signature tally, and registration state.
+**Status (2026-04, pre-production bring-up).** All-C10 cutover complete: bootstrap **and** slot keys are C10 (`h=18, d=2, a=11, k=13, w=8, l=43, target_sum=205, sig=4008`). Boots on real B-U585I-IOT02A and QEMU mps2-an505. Both SE drivers + Tier-1 SAES-CMAC(DHUK) KDF working; three-way PIN-attempt consumption (MCU page 124 + OPTIGA E120 LUC + SE050 silicon UserID) and the 10-wrong-PIN brick/admin-wipe flow were validated end-to-end. Boot reconciliation has the narrower directional scope stated in invariant #2. On-chain caps: `MAX_BOOTSTRAP_USES = MAX_SLOT_USES = 65,536` (≈ 2^32 txns/chain, well inside the C10 birthday margin). Firmware is **stateless w.r.t. slot selection** — companion supplies `(chain_id, slot_index, flags)` on every sign. Page 123 durably tracks each slot's off-chain count, reconciled UserOp count, generated UserOp-signature tally, and registration state.
+
+**Shipping model (owner decision 2026-07-14 — work-todo #36).** The factory only flashes the firmware and provisions SE-internal state onto per-device *transport* keysets, then ships at **RDP-0** so anyone can verify flash + option bytes + OTP over SWD (connect-under-reset, **before first power**) against the reproducible build. On the **first field boot** the device self-locks to RDP-2 (only then is the per-die DHUK final) and *then* self-provisions on-device — BHK first-write + TRNG-salted SCP03/PBS pairing rotation off the transport keysets — before the seed wizard. There is **no factory/fixture RDP-2 burn** and no factory-held pairing secret. Any doc/comment that still says "factory burns RDP-2" or "rotate keys before the device leaves the facility" predates this decision; #36 is authoritative.
 
 **Trusted-display clear-signing.** Every signable artifact is decoded and rendered inside the secure world before the user presses confirm — no blind-sign path for known shapes. (1) **Safe transactions:** the EIP-712 `SafeTx` typed-data hash is verified in S-world (`secure/src/tx/eip712/safe/`) and the inner `to/value/data/operation` is decoded locally — ERC-20 transfers and Safe owner/threshold/module/guard changes render on the LCD with full parameters; the companion never gets to substitute a hash. Safe `multiSend` batches (selector `0x8d80ff0a`, the shape the Safe web UI emits for anything multi-step) clear-sign per record: `operation=1` (DELEGATECALL) is accepted ONLY against the three pinned canonical `MultiSendCallOnly` deployments, the packed records are strictly decoded (`secure/src/tx/eip712/safe/multi_send.rs` — per-record op==0, ≤6 records, exact framing) and each record routes through the same inner ladder (ERC-20 / ETH / Safe-mgmt / CoW / loud per-record blind) with divider pages; any rule violation or page-budget overflow refuses to sign — a DELEGATECALL is never blind-signed. (`operation=0` calls to a MultiSend address stay loud blind-sign — under CALL the Safe isn't msg.sender for the records.) (2) **CoW Swap orders:** the EIP-712 `GPv2Order` is verified in S-world (`secure/src/tx/eip712/cowswap/`) and the order payload is decoded **on-device** — token name/symbol/decimals come from the firmware-pinned `ERC20_DB_ROOT` (the same Merkle root the ERC-20 transfer path uses), so the user sees the exact intent (e.g. `SELL 0.2 USDC for at least 0.0004 WETH`) rather than a 32-byte digest. ERC-7730 clear-sign descriptors and the typed-call ABI parser are likewise pure on-device decoders; incomplete registry-known formats are hard refusals. (3) **Safe-wrapped CoW orders:** when a SafeTx's inner call is CowSwap `GPv2Settlement.setPreSignature(orderUid, true)` — directly, or as a record inside an allowlisted `MultiSendCallOnly` batch (the Safe UI's actual `[approve(vault relayer), setPreSignature]` shape) — the same CoW v3 pipeline verifies the order bound to the presign calldata (the *record's* bytes for multiSend) with `orderUid.owner == the Safe` (not the wallet `sender`), and the render combines Safe context (banner, address, nonce, refund pages) with the full order intent — unmistakably "a CoW order for this specific Safe". One binding resolver (`secure/src/tx/eip712/safe/cow_binding.rs`) and the shared `cowswap_display::append_order_body_pages` keep all flows code-identical; see `docs/companion/companion-safe-cowswap-presign.md` (single-call + the folded-in multiSend-batch section).
 
@@ -749,7 +768,7 @@ Post-quantum ERC-4337 hardware wallet on **STM32U585 (Cortex-M33, TrustZone) + O
 Production contract — every shipping build must respect ALL. Pre-production may temporarily violate one (note in next section).
 
 1. **Dual-chip seed split.** BIP-39 entropy is XOR-split: `half_O` on OPTIGA, `half_E` on SE050. Neither chip alone reveals any bit. Never store full entropy on one chip or transmit a half across.
-2. **Hardware PIN gating, three-way lockstep.** PIN compare in SE silicon, never in MCU. SE050 UserID (max 10), OPTIGA F1D0 AuthRef bound to E120 LUC, MCU page-124 attempt counter (FI-hardened pre-commit in `nsc::gated_unlock`). Boot reconciles to strictest; disagreement = tamper. `MAX_ATTEMPTS = 10` on any one → `factory_reset_admin` + page-124 erase.
+2. **Hardware PIN gating; three-way per-attempt consumption, directional boot cross-check.** PIN comparison stays in SE silicon. `gated_unlock` precharges MCU page 124; an ordinary wrong-PIN attempt then advances OPTIGA E120 and the SE050 UserID. Page 124 and SE050 enforce the user-facing 10-attempt bound; E120 is a separate 32-lifetime-attempt anti-extraction backstop. At boot firmware can read page 124 and E120 and wipes when `E120_used > page124_used`; an MCU lead is a conservatively charged power-cut/transport-error state. The production SE050 UserID policy denies attempt-attribute reads (`SW=0x6986`), so SE050 is not a boot-reconciliation input; `AuthMethodBlocked` still maps to `PinLocked` and the wipe path. Do not claim three-way boot reconciliation. Making that property genuinely three-way requires a separately reviewed SE050 policy/backend and silicon decision.
 3. **E2E encrypted SE tunnels.** OPTIGA Shielded Connection (TLS-PRF + AES-128-CCM-8, PBS **DHUK-derived at boot** via `hw::secret_keys::derive_into("pqsigner/optiga-pbs-v1")` — no longer flash-page-126-sealed; page 126 was freed by work-todo #24 and is exclusively the bank-1 wrapped SE050 BHK when `bhk` is enabled). SE050 SCP03 (AES-CMAC + AES-CBC). No plaintext secret on I2C. The ML-KEM-1024 inner wrap was DESCOPED 2026-07-07 (owner decision, do not re-raise — see work-todo #9): both tunnels are symmetric-rooted (no Shor material on the bus), so the accepted residual is Grover-2⁶⁴ (Cat-1) key search against physically-tapped sessions; consequence: per-device SCP03/PBS key rotation (work-todo #11 / §9.2 ceremony) is load-bearing for this acceptance.
 4. **All secrets only in TrustZone secure world.** NS never sees PIN, entropy, signing key, or derived secret. NSC gateway returns opaque non-secret data. Validate NS pointers and copy NS buffers to S-stack before parse (TOCTOU).
 5. **One signature primitive: SPHINCS+C10.** Both Type 1 (bootstrap → slot registration) and Type 2 (slot → user tx). No FORS+C, no classical signer (secp256k1, P-256, Ed25519). Wallet has a single `c10Verifier`.
@@ -762,7 +781,7 @@ Production contract — every shipping build must respect ALL. Pre-production ma
 
 No devices shipped, no funds on-chain — domain tags / parameters are still renamable pre-launch. Known acceptable regressions:
 
-- **⚠️ SHIP BLOCKERS — OPTIGA shipping-state lockdown (S-1, S-2, S-3 — all three required before any device leaves the bench).** S-1 (F1D0 `Change=ALW` → a desoldered-OPTIGA attacker brute-forces PINs), S-2 (trust anchor is Infineon's PUBLIC sample cert → `SetObjectProtected` bypasses every Change AC, **must close together with S-1**), S-3 (no silicon-enforced lockout without `optiga-hw-counter`). The **compile-time half is landed** — three `mode-production` `compile_error!` fences in `nsc/mod.rs` + the closure code (`optiga::{verify_and_lock, lockdown_ta_pool, lock_oid}` and the `apdu` metadata builders for `Auto(F1D0)` / TA-pool-neutralize / counter). Those fences PREVENT shipping unhardened but do **not** close the blockers: the **irreversible LcsO=Op ratchet + sacrificial-part validation + the PQ1-factory-HSM trust-anchor cert are bench/factory work that remains** (⚠ plus one code-doable residual: the claimed `build_metadata_counter` production gate does NOT exist yet). **Owners:** `docs/production-todo.md` "OPTIGA Trust M V3 — LcsO transitions" (the burn ceremony + exact metadata bytes) and `docs/STATUS.md` §A (live status + evidence pointer + blocked-on). The SE-side blockers **S-5/S-6/S-7 are RESOLVED 2026-05-28** (`docs/security/security-review-2026-05.md` §§C-7/C-8/C-9 = Fixed); the only open SE residual is **S-7d-silicon** (drive a throwaway UserID to lockout and capture the real `VERIFY` SW). The OPTIGA bring-up state is acceptable ONLY because nothing has shipped.
+- **⚠️ SHIP BLOCKERS — OPTIGA shipping-state lockdown (S-1, S-2, S-3 — all three required before any device leaves the bench).** S-1 (F1D0 `Change=ALW` → a desoldered-OPTIGA attacker brute-forces PINs), S-2 (trust anchor is Infineon's PUBLIC sample cert → `SetObjectProtected` bypasses every Change AC, **must close together with S-1**), S-3 (no silicon-enforced lockout without `optiga-hw-counter`). The **compile-time half is landed** — three `mode-production` `compile_error!` fences in `nsc/mod.rs` + the closure code (`optiga::{verify_and_lock, lockdown_ta_pool, lock_oid}` and the `apdu` metadata builders for `Auto(F1D0)` / TA-pool-neutralize / counter). Those fences PREVENT shipping unhardened but do **not** close the blockers: the **irreversible LcsO=Op ratchet + sacrificial-part validation + the PQ1-factory-HSM trust-anchor cert are bench/factory work that remains** (⚠ plus one code-doable residual: the claimed `build_metadata_counter` production gate does NOT exist yet). **Owners:** `docs/production-todo.md` "OPTIGA Trust M V3 — LcsO transitions" (the burn ceremony + exact metadata bytes) and `docs/STATUS.md` §A (live status + evidence pointer + blocked-on). The SE-side blockers **S-5/S-6/S-7 are RESOLVED 2026-05-28** (`docs/security/security-review-2026-05.md` §§C-7/C-8/C-9 = Fixed); S-7d's on-silicon `VERIFY` status mapping is resolved as `0x6986` and recorded in `docs/STATUS.md`. The OPTIGA bring-up state is acceptable ONLY because nothing has shipped.
 
 - **TZSC config (invariant #4):** regressed then fixed; enforcement **and** USB-coexistence **silicon-validated 2026-05-20** (`make gtzc-enforcement-hw` → 7/7 secure peripherals RAZ-fault on NS access; device still enumerates `1209:7051` over USB-C). `secure/src/sau.rs` wires `GTZC1_TZSC_SECCFGR{1,3}` (AHB2 AES/HASH/RNG/PKA/SAES + I2C1/2 SECURE; OTG stays NS). Only TAMP (in GTZC2) remains as a follow-up.
 - **Debug instrumentation may ship in this branch.** `debug-log` allowed on hardware, `secure_log!` in the wizard, NS pre-USB register dumps, DHCSR-gated semihosting prints in `hw::hash::init_clock`. CI must still gate production on `debug-log` / `e2e-test` / `mock-se` OFF.
@@ -796,7 +815,7 @@ parse {chain_id, flags{INCLUDE_INIT_CODE | REGISTER_SLOT | account_index | slot_
 
 | CMD | Name | Purpose |
 |-----|------|---------|
-| 1 | GET_REMAINING | min over MCU/OPTIGA/SE050 attempt counters |
+| 1 | GET_REMAINING | min over MCU count + runtime SE-driver remaining-attempt mirrors; not a boot-reconciliation receipt |
 | 2 | REQUEST_UNLOCK | trusted-UI PIN entry → `gated_unlock` |
 | 7 | SIGN_USEROP | unified Type 1/Type 2 sign; flags drive `INCLUDE_INIT_CODE` and `REGISTER_SLOT` |
 | 11 | IS_UNLOCKED | 1/0 |
@@ -909,7 +928,7 @@ make test-key-speed          # DWT-timed signing bench (no semihosting reads)
 make measure                 # build + print 8 BIP-39 measurement words
 make saes-self-test-hw       # SAES driver: SW + DHUK round-trip + fingerprint
 make optiga-hw-counter-e2e   # provision E120 LUC + drive PIN cycles
-make pin-gate-hw-counter-e2e # full three-way (MCU + OPTIGA + SE050) sync e2e
+make pin-gate-hw-counter-e2e # three-way attempt/lockout e2e; boot cross-check is MCU→E120 directional
 make pin-gate-wipe-e2e       # 10 wrong PINs → assert factory-reset on both SEs
 make wipe-for-wizard         # dev-only: wipe both SEs + page 124, halt; cold boot enters wizard
 cd contracts/smart-wallet && forge test -vv
@@ -1027,13 +1046,13 @@ Pure-logic primitives live in standalone workspace crates so host signers / benc
 | `secure/src/hw/saes.rs` | SAES driver (AES-256-ECB) under `KEYSEL ∈ {Software, DHUK, BHK, DHUK^BHK}`. |
 | `secure/src/hw/saes_cmac.rs` | `cmac_dhuk(msg) -> tag` thin SAES adaptor. |
 | `secure/src/hw/secret_keys.rs` | Per-purpose subkey API: `optiga_pairing_secret() -> [u8;64]`, `se050_scp03_{enc,mac}_key() -> [u8;16]`, `se050_admin_pin() -> [u8;16]`, `tropic01_pairing_key() -> [u8;32]`. Production: `SAES-CMAC(DHUK, label‖counter)`. Dev: `HKDF(OTP_master, label)`. |
-| `secure/src/hw/otp.rs` | Rejected legacy unary rollback tally (bench-only, production-fenced) + device-master/factory legacy OTP regions. Draft 0.9 freezes a replacement typed floor API; its physical codec/ECC/interruption backend remains open. |
+| `secure/src/hw/otp.rs` | Rejected legacy unary rollback tally (bench-only, production-fenced) + device-master/factory legacy OTP regions. Draft 1.1 is a research candidate for the replacement typed floor API; its implementation, physical codec, ECC, interruption, and durability gates remain open. |
 | `secure/src/hw/huk.rs` | `derive_device_key(label) = HKDF(UID‖OTP_master, label)`. |
 | `secure/src/hw/flash.rs` | Bank-2 writes, ICACHE invalidate, `pin_attempts_{read,bump,reset}` on page 124, admin-page (125) wipe-flag. |
 | `secure/src/hw/tamp.rs` | TAMP (Trezor-port). Log-only by default; under `tamp-wipe` (production) escalates to `tzic::trigger_intrusion_wipe`. |
 | `secure/src/hw/consumption_mask.rs` | TIM2 CH1 PWM on PA5, randomised duty cycle. |
 | `secure/src/hw/uart.rs` | USART1 VCP (GPIOA AF7), used by SAES RDP1 self-test + dev logging. |
-| `secure/src/hw/boot_state.rs` | Legacy try-once page (nonfunctional for the promised rollback contract and production-fenced). Draft 0.9 freezes the replacement marker/journal interface. |
+| `secure/src/hw/boot_state.rs` | Legacy try-once page (nonfunctional for the promised rollback contract and production-fenced). Draft 1.1 proposes replacement marker/journal interfaces but is not implementation-approved. |
 | `secure/src/hw/{rcc,rng,usb_hw,buttons,spi,spi_hw,i2c,i2c_hw,i2c2_probe}.rs` | Bare-metal peripheral drivers. |
 
 ### Non-secure world / host tools
@@ -1044,9 +1063,9 @@ Pure-logic primitives live in standalone workspace crates so host signers / benc
 | `nonsecure/src/usb/{commands,hid,transport}.rs` | APDU v2 router + USB HID. |
 | `nonsecure/src/e2e_test.rs` | Non-interactive end-to-end test runner. |
 | `fwmeasure/` | Host firmware measurement tool. |
-| `fw-manifest/` | Legacy v0x02/PQFW_V1 manifest + verify chain (bench only). Draft-0.9 V4 replacement not implemented. |
-| `fwsign/` | Legacy bench release-signing CLI; production packaging is quarantined pending V4/backend closure. |
-| `fsbl/` | Legacy immutable bootloader (bench build only). Draft-0.9 targets a 40-KiB envelope; final combined FLASH+RAM fit remains OPEN. |
+| `fw-manifest/` | Legacy v0x02/PQFW_V1 manifest + verify chain (bench only). Draft 1.1 proposes manifest-v6/`PQFW_V6` with a 121-byte signed preimage; it is neither implemented nor implementation-approved. |
+| `fwsign/` | Legacy bench release-signing CLI; production packaging is quarantined pending candidate approval and backend closure. |
+| `fsbl/` | Legacy immutable bootloader (bench build only). Draft 1.1 keeps a 40-KiB candidate envelope; the physical FLASH LOAD-span gate and independent RAM/worst-case-stack gate remain OPEN. |
 | `dbgen/` | Merkle-DB builder (ERC-20 / names / selectors / ERC-7730 descriptor roots). |
 | `xtask/` | Host workspace tooling — codegen, doc-checks, release packaging. |
 | `tools/webhid_test.html`, `tools/wallet_run_hw.py` | Browser companion + probe-rs arrow-key forwarder. |
@@ -1076,9 +1095,11 @@ Pure-logic primitives live in standalone workspace crates so host signers / benc
 - **No new per-signature flash state** beyond the page-123 EIP-1271 counter.
 - **NS does not control the inactivity timer** — only S-world button presses on confirm dialogs reset it.
 - **No `debug-log` / `e2e-test` / `mock-se` / `otp-hardcoded-master-key` / `ui-capture` / `legacy-fw-rollback-unsafe`** in production builds. CI must gate.
-- **Do not change the frozen Draft-0.9 FW-update bytes casually.** The target is the exact 80-byte slot-bound `PQFW_V4 || physical_slot || release_version || security_epoch || secure_hash || nonsecure_hash` preimage. Any byte change requires a new schema/domain, a re-frozen digest, and both independent reviewers. The legacy 75-byte V1 format is not authoritative.
+- **Rollback manifest work is not implementation-approved.** Draft 0.9's V4/80-byte format is a preserved historical reference. Draft 1.1 proposes the exact 121-byte `PQFW_V6 || schema || physical_slot || release_version || security_epoch || secure_image_length || nonsecure_image_length || secure_image_hash || nonsecure_image_hash || vendor_key_fingerprint` preimage, but remains a research/review candidate with open backend, resource, ECC, release-policy, and silicon gates. Do not treat either layout as current implementation authority. Adoption or any schema change requires an exact approved specification digest, the required dual review, and an owner stage decision.
 - **No "reset rollback floor" path.** OTP is one-way by design.
-- **No writes to FSBL flash pages** from runtime firmware. Pages 0–3 are WRP1A-locked; attempts silently `WRPERR`.
+- **No runtime writes to the eventual approved FSBL range.** The current
+  pages-0..3/32-KiB layout is legacy bench-only; Draft 1.1 proposes pages 0..4
+  but leaves geometry, both-bank protection, factory, and silicon gates open.
 
 ## Work tracking
 
@@ -1181,12 +1202,12 @@ On every boot, before trusting the SE050:
 
 ### 3.5 Provisioning
 
-- Rotate the SE050 factory-default SCP03 platform keys to device-unique keys **before the device leaves your facility** (GP `PUT KEY`, replacing keyset `0x0B` in place — the factory keys are *published* in AN12436, so an un-rotated channel is plaintext-equivalent to a bus sniffer with the datasheet). Root the new keys in the **BHK** (`SAES-CMAC(BHK, "se050-scp03-{enc,mac,dek}-v1")`), same axis as the SE050 admin PIN — *not* the DHUK: the SCP03 keyset is replaceable and on an RDP2 unit the BHK can never be lost, so the "lost root ⇒ unrecoverable channel" brick mode is structurally impossible and the Tier-2 isolation (a silicon-DHUK extraction does not reach `half_E`) comes free. **Ordering matters: provision the BHK and run the PUT KEY ceremony only after stepping RDP → 1** (the BHK's flash wrapping is DHUK-keyed and the DHUK changes at RDP0→RDP1) — and only on a unit committed to production, never on a dev board that still moves RDP around (the RDP1↔RDP0 dance mass-erases the BHK page → dead SE050). Brick class on commit = same as OPTIGA PBS loss. Operational detail + the exact ceremony + the factory sequence: `docs/production-todo.md` §"SE050 — SCP03 + ADMIN provisioning" and the root-choice reasoning in `docs/architecture/trezor-comparison.md §6.5`. (The OPTIGA PBS stays on the **DHUK** for the inverse reason — its E140 is bumped to `LcsO=Operational`, i.e. immutable, so it needs the maximally-stable silicon root.)
+- **UPDATE 2026-07-14 (work-todo #36):** the final rotation now runs **ON-DEVICE at first field boot, immediately after the RDP-2 self-lock** — the factory rotates the AN12436 defaults only to per-device *transport* keysets and ships at RDP-0 (so buyers can verify the flash before first power); the first-boot rotation must mix **fresh TRNG salt** (a pure deterministic derivation is recoverable via the RDP-1-roundtrip attack, see #36). The root-choice and ordering reasoning below still applies, executed by firmware instead of a fixture. Rotate the SE050 factory-default SCP03 platform keys to device-unique keys (GP `PUT KEY`, replacing keyset `0x0B` in place — the factory keys are *published* in AN12436, so an un-rotated channel is plaintext-equivalent to a bus sniffer with the datasheet). Root the new keys in the **BHK** (`SAES-CMAC(BHK, "se050-scp03-{enc,mac,dek}-v1")`), same axis as the SE050 admin PIN — *not* the DHUK: the SCP03 keyset is replaceable and on an RDP2 unit the BHK can never be lost, so the "lost root ⇒ unrecoverable channel" brick mode is structurally impossible and the Tier-2 isolation (a silicon-DHUK extraction does not reach `half_E`) comes free. **Ordering matters: provision the BHK and run the PUT KEY ceremony only after stepping RDP → 1** (the BHK's flash wrapping is DHUK-keyed and the DHUK changes at RDP0→RDP1) — and only on a unit committed to production, never on a dev board that still moves RDP around (the RDP1↔RDP0 dance mass-erases the BHK page → dead SE050). Brick class on commit = same as OPTIGA PBS loss. Operational detail + the exact ceremony + the factory sequence: `docs/production-todo.md` §"SE050 — SCP03 + ADMIN provisioning" and the root-choice reasoning in `docs/architecture/trezor-comparison.md §6.5`. (The OPTIGA PBS stays on the **DHUK** for the inverse reason — its E140 is bumped to `LcsO=Operational`, i.e. immutable, so it needs the maximally-stable silicon root.)
 - Create the PIN auth object, seed binary object, and all policies in the same authenticated provisioning session.
 - Wrap the new SCP03 keys with the U585's HUK-derived key via SAES and write the ciphertext to Secure flash in the same provisioning step.
 - Pin the SE050 unique ID to U585 Secure flash.
 - Apply SE050 transport lock if applicable to your variant.
-- Enable U585 RDP Level 2 as the final production step. **This is irreversible; do it last.**
+- U585 RDP Level 2 is the final lockdown step. **Irreversible; it happens last — and per work-todo #36 it is self-programmed by the FSBL on the first field boot, not burned at the factory: devices ship at RDP-0 so users can verify flash/option-bytes/OTP over SWD before first power.**
 - Consider NXP EdgeLock 2GO if you need to provision at volume.
 - Provisioning must run in a clean-room environment. A compromised provisioning station compromises every device that passes through it.
 
@@ -1204,7 +1225,7 @@ On every boot, before trusting the SE050:
 
 ### 4.2 Debug & Readout Protection
 
-- **RDP Level 2** in production. Final step before shipping. Irreversible.
+- **RDP Level 2** in production. Irreversible. Self-programmed by the FSBL on the first field boot — devices ship at RDP-0 for pre-first-power user verification (work-todo #36).
 - Debug ports (SWD, JTAG) disabled by RDP-2.
 - Boot from internal flash only. Disable bootloader access in option bytes.
 - Verify the RDP level in boot code; refuse to run if debug build flags are set in a production image.
@@ -2007,7 +2028,11 @@ scenarios.
   ```
   Update protocol: write fully to inactive slot → verify CRC → atomic
   bit-clear flip of pointer. Torn update leaves active slot intact.
-- **Same pattern for PBS page 126.**
+- **Do not apply this pattern to an OPTIGA PBS page.** The PBS is now
+  DHUK-derived at boot and has no flash page. Bank-1 page 126 instead holds the
+  wrapped SE050 BHK when enabled; any redundancy or migration proposal for
+  that page needs a separate BHK-owner design and must not be inferred from
+  this historical slot sketch.
 - **Migration**: detect old single-slot layout at boot, relocate to
   A/B.
 
@@ -2293,6 +2318,17 @@ protected boolean (FihInt). Acceptable for a wallet UX.
 
 **Big picture**: Trezor Safe 5 uses single-SE + binding; we extend to
 dual-SE + signed binding record + OTP anchor + monotonic counter.
+
+> **UPDATE 2026-07-14 (work-todo #36 — ship-RDP-0 decision).** Retained as
+> research input, but **stage 2 now executes ON-DEVICE at first field boot,
+> not on the factory fixture**: devices ship at RDP-0 (batch-uniform image,
+> user-verifiable over SWD via connect-under-reset before first power); the
+> FSBL self-locks to RDP-2, and only then — with the per-die DHUK final —
+> does firmware do the BHK first-write and rotate SCP03/PBS **with fresh TRNG
+> salt** off the factory-installed *transport* keysets (pure deterministic
+> DHUK derivation is forbidden — see #36's RDP-1-roundtrip attack). Step 10
+> ("Burn RDP Level 2") is no longer a fixture action, and the stage-1
+> FMK-derived SCP03 keys are demoted to transport keysets.
 
 **Factory provisioning — two-stage RDP flow**:
 
@@ -3427,22 +3463,17 @@ impl WalletStore for DualSecureElement {
     }
 
     fn pin_attempt_count(&mut self) -> Option<u8> {
-        // Both SEs expose the counter on a peek-safe path:
-        //   - OPTIGA: F1E1 counter object (`read_counter_raw`).
-        //   - SE050: `ReadObjectAttributes` on USERID_OBJ — returns
-        //     `max_attempts - auth_attempts` over the SCP03 channel
-        //     without authenticating against the UserID (no attempt
-        //     consumed). See `Se050::pin_attempt_count_raw` for the
-        //     parse + SDK reference. (This corrects an earlier work-
-        //     todo §4 claim that said SE050's counter couldn't be
-        //     peeked.)
+        // OPTIGA exposes a peek-safe counter (E120 in the production
+        // `optiga-hw-counter` configuration). The production SE050 UserID
+        // policy denies `ReadObjectAttributes` with SW=0x6986, so its leg is
+        // `None`; see `Se050::pin_attempt_count_raw`.
         //
         // Combined value: MAX of whatever's available — counters
         // are "attempts USED" (higher = closer to lockout), so the
-        // strict aggregate is `max`, not `min`. Used by reconcile to
-        // compare against MCU page-124's used-count for a `!=`
-        // tamper check. Intra-SE divergence is reported separately
-        // by `pin_attempt_counts_divergent`.
+        // strict aggregate is `max`, not `min`. Reconciliation uses the
+        // available count directionally (`se_used > mcu_used`), because the
+        // MCU is precharged and may benignly lead. Intra-SE divergence is
+        // meaningful only when both legs are actually readable.
         let o = self.optiga.pin_attempt_count();
         let s = self.se050.pin_attempt_count();
         match (o, s) {
@@ -4206,8 +4237,9 @@ compile_error!(
 // Firmware-rollback backend quarantine. The current hardware implementation
 // treats one ECC-protected OTP quad-word as a reusable per-bit tally, but
 // STM32U585 user OTP permits only one program operation per 128-bit QW.
-// Draft 0.9 freezes replacement interfaces while deliberately leaving the
-// physical journal/ECC/OTP backend open.
+// Draft 1.1 is the current research candidate for replacement interfaces and
+// deliberately leaves approval plus physical journal/ECC/OTP/resource gates
+// open. It is not implementation authority.
 //
 // Shipping builds are blocked unconditionally. Bench images must carry a
 // conspicuous no-behaviour-change opt-in (normally inherited from debug-log,
@@ -4217,9 +4249,10 @@ compile_error!(
 #[cfg(all(feature = "mode-production", feature = "stm32u585"))]
 compile_error!(
     "FW_ROLLBACK_PRODUCTION_BLOCKED: the legacy firmware rollback path \
-     reprograms ECC-protected OTP quad-words. Replace it with the reviewed \
-     Draft-0.9 backend and close OPEN-JRN-HW/DUR, OPEN-ECC, OPEN-OTP, and \
-     combined FLASH/RAM gates before removing this fence."
+     reprograms ECC-protected OTP quad-words. Approve and implement the \
+     replacement contract, then close OPEN-JRN-HW/DUR, OPEN-FLASH-HW, \
+     OPEN-ECC, OPEN-RAM, OPEN-OTP, release/factory, and silicon gates before \
+     removing this fence."
 );
 #[cfg(all(
     feature = "stm32u585",
@@ -4991,63 +5024,25 @@ pub unsafe fn gated_unlock(
     }
 }
 
-/// Boot-time PIN-counter reconciliation across the independent
-/// failed-attempts counters: MCU page-124 and the OPTIGA PIN counter
-/// (silicon E120 LUC `current` under `optiga-hw-counter` — the production
-/// config — else the F1E1 soft counter). The SE050 USERID `auth_attempts`
-/// leg is unavailable in production (see the Correction note below).
-/// (§4 dual-chip PIN-lockout-sync hardening.)
+/// Boot-time directional rollback check between MCU page 124 and the readable
+/// OPTIGA attempt counter (E120 LUC under `optiga-hw-counter`; F1E1 only in a
+/// non-production soft-counter build). Because `gated_unlock` precharges page
+/// 124 before SE verification, benign states have `mcu >= e120`: equality
+/// after both advances, or an MCU lead after a cut/transport error. Only
+/// `e120 > mcu` proves page-124 rollback and triggers the wipe.
 ///
-/// **Attack defended.** An attacker who can reset any ONE side
-/// — OPTIGA PBS reset (E140 Conf(E140) Auto on a glitched chip
-/// rewinds every PBS-protected OID including F1E1), SE050 USERID
-/// delete-and-recreate, or a TZ-bypass that erases MCU page-124 —
-/// leaves the other two counters in a different state. Boot-time
-/// disagreement is unambiguous tamper evidence; wipe immediately
-/// rather than waiting for the next unlock to expose it.
+/// This is deliberately not described as three-way boot reconciliation. The
+/// production SE050 UserID policy denies an attempt-attribute read with
+/// `SW=0x6986`, so `Se050::pin_attempt_count` returns `None`. SE050 still
+/// participates in every ordinary PIN attempt, independently enforces its
+/// max-10 lockout, and maps `AuthMethodBlocked` to the wipe path. Making its
+/// counter boot-readable requires a separately reviewed policy/backend and
+/// silicon decision; a VERIFY probe would itself consume an attempt.
 ///
-/// **Three checks, any failure = wipe.**
-///   1. MCU vs strictest-SE (the existing `pin_attempt_count()`
-///      aggregate, which returns `max(optiga, se050)` of the
-///      USED-attempts counts).
-///   2. Intra-SE divergence (`pin_attempt_counts_divergent()`):
-///      OPTIGA and SE050 agree with each other.
-///   3. Implicit: both above are `false`-by-default for backends
-///      without readable counters, so single-SE and mock paths
-///      simply skip.
-///
-/// **Limitations.**
-///   - If the attacker coordinates resets of ALL THREE counters in
-///     one campaign, all see 0 → agree → no tamper detected. The
-///     defense bound is that the attacker can reset at most TWO
-///     sides per campaign. A hardware-monotonic OPTIGA counter
-///     (work-todo #24 P1 → migrate to 0xE120) would close this gap
-///     against OPTIGA-side resets entirely.
-///   - On fresh boot with un-provisioned SE, both SE getters
-///     return `None`; reconcile accepts as "no comparison possible."
-///
-/// **What it doesn't replace.** The original §4 "cryptographic FI
-/// checksum on the bump" item is effectively closed by F-12 +
-/// F-15.r5 + F-19 (forward+reverse scan + double-read agreement +
-/// triple-read of the result). A separate paired-counter checksum
-/// would catch only the multi-fault attack where ALL of those
-/// reads return the same wrong value — out of scope for the
-/// single-fault threat model.
-///
-/// **Correction note (audit pin-unlock 20260625).** Two earlier claims in
-/// this docstring were wrong and are retracted:
-///   - SE050's `auth_attempts` was said to be peekable via
-///     `ReadObjectAttributes` without consuming an attempt. On the
-///     production `USERID_OBJ` policy the chip answers SW=0x6986 (policy
-///     denial), so `Se050::pin_attempt_count` returns `None` and the SE050
-///     leg of this reconcile is skipped. See
-///     `se050::Se050::pin_attempt_count_raw` for the silicon evidence.
-///   - The OPTIGA leg formerly read the F1E1 soft counter, which is frozen
-///     at its provisioned 0 under `optiga-hw-counter` (the production
-///     config) — a dead comparison that also false-wiped on a benign
-///     wrong-PIN-then-reboot. `OptigaTrustM::pin_attempt_count` now reads
-///     the live E120 LUC `current` instead, so the MCU↔OPTIGA cross-check
-///     is meaningful and tracks page-124 in lockstep.
+/// On an unprovisioned/backend-unavailable boot, no readable SE leg means no
+/// comparison is possible and the function logs and returns. For a future
+/// multi-SE backend where both counters are safely readable,
+/// `pin_attempt_counts_divergent` remains an additional tamper input.
 ///
 /// Called once per boot from `main.rs` after SE init but before
 /// the gateway accepts any unlock command. On tamper detection it
@@ -5062,7 +5057,7 @@ where
     let se_used = se.pin_attempt_count();
     let se_split = se.pin_attempt_counts_divergent();
 
-    // If no SE leg is readable (shield not yet up, or an unprovisioned chip
+    // If no readable SE leg exists (shield not yet up, or an unprovisioned chip
     // at first boot) there is nothing to compare. Skip — but loudly, so the
     // lost cross-check is visible rather than silently mistaken for
     // agreement on a frozen value.

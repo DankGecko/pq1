@@ -342,7 +342,10 @@ Response:
 > `Auto(LUC(0xE120))`-gated authenticate burns one LUC tick; once the LUC
 > reaches its limit, the chip refuses further AuthRef use — independent of the
 > MCU page-124 attempt counter. This is the immune-to-PBS-extraction layer of
-> the three-way PIN sync (MCU + OPTIGA E120 + SE050 UserID).
+> the three-way per-attempt gate (MCU + OPTIGA E120 + SE050 UserID). At boot,
+> deployed code can compare only page 124 with live E120 and wipes if E120 is
+> ahead; the SE050 UserID remaining-attempt attribute is not readable without
+> consuming an attempt (`0x6986`) and is not a boot-reconciliation input.
 
 ### Platform Binding Secret
 

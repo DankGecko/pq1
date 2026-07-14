@@ -2,7 +2,7 @@ theory DualSE_PinLockstep
 begin
 
 /* ===========================================================================
-   PQ-Signer — three-way PIN-attempt lockstep, stateful model (Tamarin)
+   PQ-Signer — idealized symmetric three-counter PIN research model (Tamarin)
    ===========================================================================
 
    Companion to the ProVerif secrecy model (contracts/verification/proverif/).
@@ -10,19 +10,17 @@ begin
    STATEFUL reconcile property it cannot reason about (counter resets +
    reachable-state safety).
 
-   Mechanism (threat-model.md §6.2 / secure/src/nsc/mod.rs::reconcile_pin_attempts):
-   three failed-attempt counters — MCU page-124, OPTIGA F1E1, SE050 UserID —
-   move in LOCKSTEP (every wrong PIN bumps all three). At boot, reconcile()
-   WIPES the device if the three counters DISAGREE (tamper signal). An attacker
-   can RESET one counter (OPTIGA via the S-1 glitch / SE050 delete-recreate /
-   a TZ-bypass MCU-erase) to try to win back attempts.
+   Idealized mechanism: three abstract failed-attempt counters — MCU page-124,
+   OPTIGA E120, and SE050 UserID — are compared symmetrically at boot and any
+   disagreement wipes. This is deliberately stronger than the deployed
+   directional page124/E120 boot check, which has no SE050 attempt-count input.
 
    MODEL SCOPE (2026-07-02, finding F5): this model does NOT model the wrong-PIN
    BUMP rule — it abstracts each counter to a STATUS ('fresh'/'zeroed', see below)
    and proves the RECONCILE property (a reset/desync from an assumed-synced baseline
    is caught), NOT the "every wrong PIN bumps all three" lockstep dynamics. The theory
-   name `DualSE_PinLockstep` and the README "move in lockstep" describe the DEPLOYED
-   system; the lemmas here prove reconcile-catches-desync only.
+   name `DualSE_PinLockstep` is historical; the lemmas prove only the idealized
+   symmetric reconcile-catches-desync property.
 
    !! MODEL <-> CODE FIDELITY CAVEAT (2026-07-02, finding PM-1) !!
    This model wipes on ANY disagreement (a SYMMETRIC reconcile). The DEPLOYED
@@ -46,18 +44,19 @@ begin
    counters (so the both-SE reset appears as a NEW residual) is the tracked
    follow-up (docs/work-todo.md).
 
-   PROVEN (see lemmas): a surviving boot is reachable ONLY when either NO
+   PROVEN **within this idealized model** (see lemmas): a surviving boot is
+   reachable ONLY when either NO
    counter was reset, or ALL THREE were. Equivalently, a PARTIAL reset (one or
    two of the three) can NEVER survive a boot — the un-reset counter(s) desync
    the reset one and reconcile wipes. A single-side reset (S-1 alone, SE050
-   delete alone, MCU erase alone) is always caught. The all-three reset is the
-   documented residual that the hardware-monotonic OPTIGA counter (work-todo
-   #24 / ship-blocker S-3) closes by making Reset_OPT impossible — dropping the
-   attacker from "reset 2 of 3" to "reset 1 of 3", which is caught here.
+   delete alone, MCU erase alone) is always caught by the model. The all-three
+   reset is the model's residual. None of those statements is a theorem about
+   the deployed directional reconcile.
 
    ABSTRACTIONS (stated, not discovered):
    * Each counter's value is abstracted to a STATUS: 'fresh' (in lockstep) or
-     'zeroed' (attacker-reset). This is faithful for the RECONCILE property:
+     'zeroed' (attacker-reset). This is faithful only for the idealized
+     symmetric RECONCILE property:
      lockstep counters always agree, a reset desyncs one. It deliberately drops
      the exact "<= 10" per-counter silicon cap (enforced inside each SE; out of
      this model's frame) — what is proven is that the reconcile DEFENDS that cap
@@ -122,10 +121,10 @@ lemma fresh_synced_means_no_reset:
         SyncedFresh(sid) @ b
       ==> not (Ex c #r. Reset(sid, c) @ r & r < b)"
 
-/* CORE (B): a surviving ZERO boot implies ALL THREE counters were reset before
+/* IDEALIZED CORE (B): a surviving ZERO boot implies ALL THREE counters were reset before
    it. Together with (A): a surviving boot is reachable ONLY via no-reset or
    all-three-reset, so a PARTIAL (one/two) reset can never survive — the
-   three-way reconcile catches every single-side reset. */
+   symmetric model catches every single-side reset. */
 lemma zero_synced_means_all_reset:
   all-traces
     "All sid #b.
@@ -135,9 +134,8 @@ lemma zero_synced_means_all_reset:
               & Reset(sid, 'OPT') @ ro & ro < b
               & Reset(sid, 'SE')  @ rs & rs < b )"
 
-/* RESIDUAL (documented limitation): resetting ALL THREE counters together does
-   survive a boot — reconcile cannot see an all-zero agreement. This is the gap
-   the hardware-monotonic OPTIGA counter closes (it removes Reset_OPT). */
+/* MODEL RESIDUAL: resetting ALL THREE abstract counters together survives a
+   boot because the symmetric model cannot see an all-zero agreement. */
 lemma full_reset_bypass:
   exists-trace
     "Ex sid #rm #ro #rs #b.

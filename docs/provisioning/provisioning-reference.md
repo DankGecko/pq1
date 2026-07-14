@@ -6,18 +6,19 @@
 > authority are blocked. Hardware encoding facts below do not make the ordering
 > or receipt safe. Do not run any OTP, option-byte, lifecycle, or RDP command
 > from this document until a replacement ceremony is independently approved.
+> In particular, the old `~18 KB` / pages-0..3 FSBL geometry, generic
+> "program + lock OTP" step, and flash-as-ROM equivalence wording are
+> superseded. Draft 1.1 only *proposes* pages 0..4 and a 40,960-byte hard
+> ceiling; its FLASH, RAM/stack, OTP, factory, and silicon decisions remain
+> open and grant no hardware authority.
 
-> **UPDATE 2026-07-14 — shipping model (work-todo #36).** Wherever this
-> reference says the factory/fixture burns `RDP=0xCC` (M-8 "LAST") or that
-> "SE secret injection is gated on the MCU lifecycle step" performed at the
-> line: devices now ship at **RDP-0** (batch-uniform image, user-verifiable
-> over SWD via connect-under-reset before first power) with the rest of the
-> option-byte lock set (M-1..M-7, M-9..) already in the shipped profile and
-> the SEs on per-device *transport* keysets. The FSBL self-locks to RDP-2 on
-> the first field boot (the DHUK's single transition to per-die-final), then
-> firmware does the BHK first-write and TRNG-salted SCP03/PBS rotation
-> on-device. The hardened-value table remains correct; only the *actor and
-> moment* of M-8 changed.
+> **UPDATE 2026-07-14 — selected product direction, not a ceremony.** Devices
+> are intended to ship as a batch-uniform, pre-first-power-verifiable RDP-0
+> artifact and perform any eventual lifecycle/self-provision transition on the
+> first field boot. This does **not** establish that M-1..M-7/M-9 are already a
+> safe shipped profile, authorize an RDP-2 self-lock, or validate the historical
+> key-rotation order below. Exact option bytes, failure recovery, receipts, and
+> irreversible operations remain gated by a replacement reviewed ceremony.
 
 > **Provenance & repo notes (2026-05-29).** Output of a deep-research run against
 > `docs/archive/provisioning-research-brief.md`. It is a research *synthesis*, not
@@ -44,7 +45,7 @@
 ---
 
 ## TL;DR
-- **STM32U585:** Burn `RDP=0xCC` (Level 2), `WRP1A UNLOCK=0` over the ~18 KB FSBL pages, `HDP1EN=1` + `HDP1_ACCDIS` at boot-exit, `BOOT_LOCK=1` with `SECBOOTADD0` inside the secure/WRP/HDP region, `TZEN=1`, and provisioned/finalized OEM1/OEM2 debug-authentication keys so JTAG/SWD is permanently closed in the field. WRP+RDP2+HDP+BOOT_LOCK gets a *flash* FSBL functionally ROM-equivalent against rewrite/readout; the only residual gap is a *successful* fault-injection RDP2→RDP1 downgrade (the wallet.fail/Kraken class), mitigated by the U5's glitch-aware silicon, FSBL self-checking its own option bytes every boot, and the fact that a flash read-out reveals neither the SPHINCS+ key (TrustZone SRAM only) nor the seed (XOR-split across two SEs).
+- **STM32U585:** This document records historical lockdown research, not a burn plan. The eventual ceremony must bind WRP/HDP/SECWM/BOOT_LOCK/TZEN/RDP and both-bank geometry to an approved FSBL layout and verified artifact. Draft 1.1's pages-0..4 / 40,960-byte proposal remains unapproved, and flash protection is not mask-ROM equivalence. No exact option-byte or OTP step below is executable authority.
 - **OPTIGA Trust M V3 & SE050 (dual, independently hardened to the same bar):** OPTIGA — write a chip-unique 64-byte Platform Binding Secret to `0xE140`, ratchet every used secret/anchor/counter object to `LcsO=operational (0x07)`, set AuthRef `0xF1D0` to `Change=Conf(0xE140)&&Auto(0xF1D0)`/`Read=NEV`, enable monotonic counter `0xE120`, and neutralize the `0xE0E0` Infineon sample certificate + close all empty anchor slots. SE050 — **rotate the AN12436-published default Platform SCP03 keys** (the #1 ship-blocker), negotiate **full security level `P1=0x33` (C-MAC+C-DEC+R-MAC+R-ENC)**, set per-object policies to the minimum (no ALLOW_WRITE/DELETE except one provisioning-admin object), set UserID PIN `max_attempts`, bind UserID delete to the admin AuthID only, and disable unused AppletConfig features. OPTIGA PBS is rooted on STM32 **DHUK**; SE050 SCP03 on STM32 **BHK** — so a single-vendor break or single-key extraction yields only one XOR half, never the seed.
 - **Future ceremony constraint, not an instruction:** any replacement must stage
   and verify reversible state first, then order one-way transitions last. Exact
@@ -87,7 +88,7 @@ Delivered in RDP0 with no NVM protection (UM3387 §4.1). Each row: **Setting →
 | M-10 | OEM1KEY / RDP0 regression | Absent (no path) or PQ1-secret one-way control | RDP1→0 mass-erases; close or gate; "reset in RDP0 only" | STM32U5 Sec Overview; AN4992 | Confirm state before raising RDP |
 | M-11 | BHK (→ SE050 SCP03 root) | FSBL writes BHK into TAMP backup regs once at boot; `SAES_CR.KEYSEL=010` (BHK) / `100` (DHUK^BHK); **write-once, never SW-readable** — `TAMP_SECCFGR.BHKLOCK` makes it SAES-only until reset | Tier-isolation root for half_E; cleared on tamper / RDP-regression | RM0456 §SAES; ES0499; production-security.md:479 | Verify via a SAES-CMAC(BHK) known check-value (NOT a register read-back — BHK is unreadable); confirm BHKLOCK set |
 | M-12 | DHUK (→ OPTIGA PBS root) | Per-die only after RDP0→1 (constant in Open) | Gates SE injection until DHUK is per-die | ST Community; RM0456 §SAES; Sensitive-key-protection wiki | Confirm DHUK-wrapped value changes pre/post transition |
-| M-13 | OTP (rollback ctr + secrets) | Program + set OTP lock bits | OTP unaffected by mass erase; one-way; A/B rollback + page-124 PIN counter | RM0456 §OTP; Stm32World | Read OTP + lock bits; counter init; lock set |
+| M-13 | OTP rollback backend | **OPEN — do not program or lock** | Draft 1.1 treats OTP as a candidate WORM epoch-floor backend; codec, interruption, allocation, factory, and silicon gates are unclosed | RM0456 §OTP; Draft 1.1 OPEN-OTP-1..3 | Owner-authorized sacrificial characterization only after a separately approved plan |
 | M-14 | TAMP + RNG | Internal tamper on; TRNG "config A"; tamper erases BHK | Protects BHK-wrapped SE050 transport; certified RNG | UM3387 §4.2.1; RM0456 §TAMP/RNG | Sacrificial tamper → BHK erase + reset; RNG health pass |
 | M-15 | FI software countermeasures | Redundancy / inverse-check, timing jitter, control-flow integrity around SPHINCS+ verify + option-byte self-check | Software half of closing RDP2-downgrade residual gap | UM3387 §4.2.1 | Rainbow single-fault simulation of verify/lock path |
 
@@ -107,7 +108,7 @@ Tags: RD/CHA/EXE/MUPD. Codes: `ALW=0x00`, `NEV=0xFF`, `LcsO(X)` (`E1 FC 07`="Lcs
 | O-4 | 0xE0E1/E0E2/E0E3 | Fill PQ1 anchor + ratchet, or ratchet op to make `Change=LcsO<op` unsatisfiable | Empty at creation → attacker installs own anchor, signs SetObjectProtected manifest (S-2) | V3 object dump; SRM Protected Update | `LcsO:0x07`; metadata change refused |
 | O-5 | 0xE0E8/E0E9/E0EF (type 0x11) | Fill-and-lock if used (PQ1 Protected-Update anchor) else ratchet op | Type-0x11 anchors authorize manifests; attacker anchor = worst case | V3 object dump; SRM | PQ1 anchor + `LcsO:0x07` or empty+ratcheted |
 | O-6 | 0xF1D1–F1DB, F1E0, F1E1 | Ratchet every unused slot to op | Creation-state slots are writable footholds | V3 object dump; SRM | All unused slots `LcsO:0x07` |
-| O-7 | 0xE120 counter | Init counter+threshold (8-byte ctr‖thr); link as PIN/usage limiter; ratchet op | Silicon leg of three-way lockstep; mandatory (S-3) | KBA235409; SRM; linux-optiga-trust-m | `trustm_monotonic_counter -r 0xE120`; sacrificial: reaches threshold→error |
+| O-7 | 0xE120 counter | Init counter+threshold (8-byte ctr‖thr); link as PIN/usage limiter; ratchet op | Readable silicon leg for per-attempt charging and the directional page124→E120 boot rollback check; mandatory (S-3) | KBA235409; SRM; linux-optiga-trust-m | `trustm_monotonic_counter -r 0xE120`; sacrificial: reaches threshold→error |
 | O-8 | 0xE200 AES | If used: write key, `Change=NEV`, Execute gated by `Conf(0xE140)`, ratchet op; else leave uninstantiated | Not present by default; CHA=ALW only *during* keygen, re-close after | V3 object dump; linux-optiga-trust-m note | If used: `LcsO:0x07` + shielded-gated; else absent |
 | O-9 | Shielded enforcement | All half_O objects: `Read/Execute=Conf(0xE140)` | I²C probe sees only ciphertext | SRM §Comm Protection; discussion #103 | Sacrificial: bypass shielded (`-X`) → Access Condition Not Satisfied |
 | O-10 | Protected Update policy | Restrict to PQ1 anchor; manifest `Conf(secret)&&Int(anchor)` | Without locked anchor, anyone signs a manifest (S-2 core) | SRM §Protected Update; Infineon blog | Non-PQ1 manifest → rejected |
@@ -128,7 +129,7 @@ Policies = per-object `POLICY_OBJ_ALLOW_*` bitmask; rule: deny all not needed; n
 | S-B | SCP03 level (P1) | **`P1=0x33`** (C-MAC+C-DEC+R-MAC+R-ENC) (S-5) | Anything less leaves bus data exposed one/both directions | GlobalPlatform SCP03 Table 7-3; AN12413 | Sniff I²C: cmd+rsp ciphertext+MAC; refuse downgrade |
 | S-C | half_E object | Persistent Binary File, REQUIRE_SM, bound to the UserID AuthID (no anonymous/AuthID-0 grant). **READ + DELETE are present (SM-gated) and design-mandatory** (READ = seed reconstruction `mod.rs:2478`; DELETE = admin-wipe/S-6). **WRITE is present today but droppable** — drop it at provisioning (write-once policy; work-todo) so a PIN-session can't re-seed half_E. IMPORT_EXPORT N/A to a Binary File | Verifiable denials are IMPORT_EXPORT=False, ATTESTATION=False, no AuthID-0 grant — NOT R/D (those can never be False by design) | AN12413 Table 11, §3.7.1.1 | non-admin delete → `0x6985`; attested-read (S-G) confirms I-E/ATTESTATION=False (NOT R/D=False) |
 | S-D | UserID delete policy (S-6) | Delete bound to admin SCP03 AuthID only | UserID "only be deleted and created new" → delete-recreate resets lockout | NXP Community | Non-admin delete of UserID → fail |
-| S-E | UserID max_attempts (S-7) | =10; permanent fail on exhaustion; status mapped to MCU strictest-of-three | SE050 leg of three-way lockstep; mis-mapped status = false success | AN12413; AN13483 | Sacrificial: exhaust → permanent lockout; verify status map |
+| S-E | UserID max_attempts (S-7) | =10; permanent fail on exhaustion; blocked-auth status maps to `PinLocked`/wipe | SE050 independently consumes every ordinary attempt, but its attempt attribute is policy-denied and is not a boot-reconciliation input; mis-mapped auth status = false success | AN12413; AN13483 | Sacrificial: exhaust → permanent lockout; verify status map and attribute-read denial |
 | S-F | RESERVED_ID_FACTORY_RESET | PQ1-secret or unprovisioned; never default | `DeleteAll` only in this session; default/known = wipe+reprovision/clone path | AN12543; NXP Community | DeleteAll in default/none session → fail |
 | S-G | Attestation (ECKey) | If used: `ALLOW_ATTESTATION`, **`ALLOW_SIGN=0`, `ALLOW_DECRYPT=0`**. NOT implemented in the driver today — either build it as provisioning/QA tooling or down-scope | Signed read-back proof primitive; asserts the *verifiable* denials only | AN13254 Table 1 | Attested read confirms half_E I-E/ATTESTATION=False, no AuthID-0 (lockstep with S-C — NOT R/D=False) |
 | S-H | AppletConfig (variant) | **Not field-configurable** — `SetAppletFeatures` needs the NXP-owned `RESERVED_ID_FEATURE`; the feature set is fixed by the **ordered OEF variant**. This is a PROCUREMENT lever (choose variant at order time), not a provisioning step. Per invariant #5 the SE050 crypto engine is unused anyway | AppletConfig is NXP-owned | AN12436 §4.6.3, §3.2.5.4 | `GetVersion`/OEF — confirm the variant we ORDERED (anti-substitution), not "minimized" |
@@ -142,7 +143,7 @@ Policies = per-object `POLICY_OBJ_ALLOW_*` bitmask; rule: deny all not needed; n
 
 The chips are coupled: SE roots derive from DHUK/BHK, which become per-die/final only at the MCU `RDP0→1` transition (SAES uses a *constant* for DHUK in Open). **SE secret injection is gated on the MCU lifecycle step.** All locks are one-way.
 
-**PHASE 0 — Sacrificial validation.** Run the *complete* ceremony (incl. final burns) on ≥3 sacrificial units. Confirm FSBL boots, SPHINCS+ verify passes, PIN lockstep locks at 10, seed reconstructs from both halves, JTAG dead, no object at LcsO=creation. Only then run production.
+**PHASE 0 — FUTURE OWNER-AUTHORIZED SACRIFICIAL VALIDATION.** No run is authorized by this document. After a replacement ceremony and exact irreversible ranges are approved, the owner may name sacrificial units and exact operations. Only that later plan may test final burns, FSBL boot/verify, PIN-attempt controls, seed reconstruction, debug closure, and object lifecycle state.
 
 **PHASE 1 — Stage (reversible).** 1.1 Acceptance: `DBGMCU_IDCODE` (`DEV_ID=0x482`, STM32U585 rev. U), virgin flash (0xFF), genuine OPTIGA V3 (UID + chain to "Infineon OPTIGA ECC Root CA 2"), SE050 variant via `se05x_GetInfo`. 1.2 Program FSBL + A/B firmware; stage TZEN/SECWM/HDP/WRP/BOOT_LOCK values uncommitted. 1.3 Stage OTP counter (hold lock bits), prepare OEM1/OEM2 DA keys. ⚠️ All reversible (RDP0; mass-erase recovers).
 
@@ -150,11 +151,13 @@ The chips are coupled: SE roots derive from DHUK/BHK, which become per-die/final
 
 **PHASE 3 — SE injection (gated on Phase 2; reversible until ratchet/rotate).** 3.1 OPTIGA: derive PBS from DHUK, write chip-unique 64-byte to `0xE140` (still `LcsO<op`), write half_O, init `0xE120`, prepare F1D0. 3.2 SE050: open ISD with default SCP03; *stage* new BHK-derived keys, half_E, UserID/PIN object + policies.
 
-**PHASE 4 — FULL VERIFICATION GATE (no burns; go/no-go).** 4.1 MCU: read back all set Matrix-1 rows; FSBL option-byte self-check + HDP1_ACCDIS engage. 4.2 OPTIGA: read back all Matrix-2 rows; shielded works w/ unique PBS, fails w/ default; **nothing ratcheted yet** (recoverable). 4.3 SE050: new SCP03 authenticates, defaults fail; `P1=0x33`; half_E bitmask; UserID delete admin-bound; factory-reset credential state; attested read (S-G) as proof. 4.4 Functional: XOR-reconstruct seed in TrustZone SRAM, derive SPHINCS+ key, sign+verify test vector; drive 10-attempt lockstep, confirm strictest-of-three. **Any failure → unit still recoverable; fix and re-verify; do not proceed.**
+**PHASE 4 — FULL VERIFICATION GATE (no burns; go/no-go).** 4.1 MCU: read back all set Matrix-1 rows; FSBL option-byte self-check + HDP1_ACCDIS engage. 4.2 OPTIGA: read back all Matrix-2 rows; shielded works w/ unique PBS, fails w/ default; **nothing ratcheted yet** (recoverable). 4.3 SE050: new SCP03 authenticates, defaults fail; `P1=0x33`; half_E bitmask; UserID delete admin-bound; factory-reset credential state; attested read (S-G) as proof. 4.4 Functional: XOR-reconstruct seed in TrustZone SRAM, derive SPHINCS+ key, sign+verify test vector; drive 10 wrong attempts through all three paths, confirm SE050/page-124 lockout and the directional page124/E120 boot check. **Any failure → unit still recoverable; fix and re-verify; do not proceed.**
 
-**PHASE 5 — Irreversible burns, LAST, dependency-ordered (SE-first, MCU-RDP2-last so no failure bricks).** 5.1 **🔥 IRREVERSIBLE-2 (SE050):** PUT KEY rotate SCP03 (defaults gone); finalize half_E/PIN policies. 5.2 **🔥 IRREVERSIBLE-3 (OPTIGA):** ratchet `LcsO=operational` on E140, F1D0, E120, all used/empty cert+anchor slots (E0E1/2/3, E0E8/9/EF), all spare F1Dx/F1Ex. 5.3 **🔥 IRREVERSIBLE-4 (MCU OTP):** set OTP lock bits. 5.4 **🔥 IRREVERSIBLE-5 (MCU WRP):** commit `WRP1A + WRP2A UNLOCK=0` over FSBL pages 0..3 in BOTH banks (removable only while RDP≠2 → must precede RDP2; see SWAP_BANK ship-blocker). 5.5 **🔥 IRREVERSIBLE-6 (MCU DA/OEM):** finalize OEM1/OEM2 keys + regression policy (resettable in RDP0 only). 5.6 **🔥 IRREVERSIBLE-7 (MCU RDP2 — FINAL BURN):** `RDP=0xCC`; JTAG dies, option bytes lock (EXCEPT SWAP_BANK — must be neutralized by WRP-both-banks + identical-FSBL-both-banks, see ship-blocker), WRP unremovable.
+**PHASE 5 — HISTORICAL SEQUENCE; DO NOT EXECUTE.** The dependency-ordering notes are research input only. In particular, there is no approved MCU OTP lock step, no approved WRP page range, and no approved RDP2 transition. A replacement ceremony must be generated from a reviewed artifact/layout, independently authorized, and validated on named sacrificial units before any irreversible operation.
 
-**PHASE 6 — Post-burn confirmation (every unit).** Confirm `RDP=0xCC`, JTAG dead, device boots/signs/enforces PIN, default SE050 SCP03 + default OPTIGA PBS both fail. Shippable-state attestation.
+**PHASE 6 — HISTORICAL POST-BURN CHECK; NOT EXECUTABLE.** A future approved
+ceremony must define its own per-unit attestation and failure handling. This
+line is neither a burn instruction nor a claim that a unit is shippable.
 
 ---
 
@@ -168,7 +171,7 @@ The chips are coupled: SE roots derive from DHUK/BHK, which become per-die/final
 - **MCU-5 BOOT_LOCK off / alternate boot entry** → M-3 `BOOT_LOCK=1`.
 - **MCU-6 HDP not engaged at runtime** (HDP1_ACCDIS unset) → M-6 self-test.
 - **MCU-7 Seed/keys in flash recoverable** (Kraken extracted encrypted seed from STM32 flash). → Architectural: SPHINCS+ key in TrustZone SRAM only; seed XOR-split.
-- **MCU-8 SWAP_BANK cross-bank boot redirect** (DS Table 4 note 6: SWAP_BANK stays writable at RDP2; BOOT_LOCK pins a *logical* address that SWAP_BANK remaps to the other physical bank; our bank-2 boot pages are NS-writable today). → WRP1A **and WRP2A** over FSBL pages 0..3 in **both** banks + identical FSBL staged in both banks + HDP2/SECWM2 mirror; `SWAP_BANK=0` necessary-not-sufficient. **SHIP-BLOCKER** — full treatment in production-todo.md "STM32U585 — datasheet cross-reference".
+- **MCU-8 SWAP_BANK cross-bank boot redirect** (historical analysis). Any approved design must protect the final frozen FSBL range in **both** physical banks, stage an identical approved FSBL in both, and mirror HDP/SECWM. Draft 1.1 currently proposes pages 0..4, but the range and ceremony remain unapproved. **SHIP-BLOCKER** — full treatment in production-todo.md "STM32U585 — datasheet cross-reference".
 
 **OPTIGA Trust M V3**
 - **S-1 F1D0 left un-ratcheted at `Change=LcsO<op`** — desoldered-chip attacker overwrites the AuthRef secret. → O-2 ratchet `LcsO=operational` + `Change=Conf(0xE140)&&Auto(0xF1D0)`.
@@ -180,7 +183,7 @@ The chips are coupled: SE roots derive from DHUK/BHK, which become per-die/final
 **SE050**
 - **S-5 SCP03 not at full security level** — bus data exposed. → S-B `P1=0x33`.
 - **S-6 UserID admin-delete allows delete→recreate substitution** — bypasses lockout. → S-D bind delete to admin AuthID.
-- **S-7 UserID max_attempts / status-code mishandling** — lockout not enforced or status misread as success. → S-E set =10, map to MCU strictest-of-three.
+- **S-7 UserID max_attempts / status-code mishandling** — lockout not enforced or status misread as success. → S-E set =10; map blocked auth to `PinLocked`/wipe. Do not claim SE050 attempt-count boot readback.
 - **S-8 (added) Published default Platform SCP03 keys not rotated** (AN12436; OP-TEE source) — anyone authenticates to half_E. → S-A rotate via PUT KEY.
 - **S-9 (added) Over-permissive object policy / writable-deletable secrets** — half_E rewritable/exportable. → S-C/S-I deny all but one admin object.
 - **S-10 (added) Factory-reset credential default/unset** — wipe+reprovision/clone path. → S-F PQ1-secret or unprovisioned.
@@ -192,9 +195,13 @@ The chips are coupled: SE roots derive from DHUK/BHK, which become per-die/final
 
 **Stage 1 — Before any silicon (now):** Lock the exact option-byte/OID/policy *values* into a machine-checked provisioning script keyed to UM3387 §3.2.3 (MCU), the OPTIGA SRM metadata model (OPTIGA), and AN12436/AN12413 (SE050). Build the read-back verifier (Phase 4/6) first — it is the safety net.
 
-**Stage 2 — Sacrificial validation (Phase 0):** Burn ≥3 sacrificial units fully to RDP2; confirm end-to-end (boot, sign, PIN lockstep, seed reconstruct, JTAG dead). **Benchmark that changes the plan:** if any sacrificial unit bricks or any default key/PBS still authenticates after burn, halt and fix the script before production.
+**Stage 2 — Future sacrificial validation (Phase 0):** only after the owner
+approves a replacement ceremony, names sacrificial units, and authorizes exact
+irreversible operations. This research document grants none of that authority.
 
-**Stage 3 — Production with gate (Phases 1–6):** Run stage→verify→burn-last per unit. **Threshold:** zero objects at LcsO=creation, zero default keys authenticating, RDP=0xCC, JTAG dead — all four must be true on the Phase-6 read-back or the unit is quarantined, not shipped.
+**Stage 3 — Production:** blocked. A reviewed replacement ceremony, factory
+receipt, artifact/layout freeze, and silicon evidence must define any future
+stage→verify→burn-last sequence and acceptance thresholds.
 
 **Stage 4 — Ongoing:** Track Infineon/NXP/ST security advisories; re-run the verifier if any chip's certified config assumptions change. Subscribe to BSI/PSA maintenance updates for BSI-DSZ-CC-0961 and PSA cert 0632793519409-10300.
 
@@ -218,4 +225,4 @@ The chips are coupled: SE roots derive from DHUK/BHK, which become per-die/final
 - **Exact `P1` bit value `0x33`** follows the GlobalPlatform SCP03 P1 bitmap (AUTHENTICATED+C_MAC+C_DECRYPTION+R_MAC+R_ENCRYPTION); verify your middleware encodes the full level (some stacks default to C-MAC only) and that the SE050 negotiated level matches via I²C capture.
 - **STM32U5 RDP2 immutability** is option-byte/state-machine enforced, not mask-ROM; the residual FI-downgrade risk is real but, per Ledger Donjon, no public U5 fault-injection attack exists at the time of writing, and PQ1's split-secret architecture removes the payoff. Treat any future published U5 FI attack as a trigger to re-evaluate.
 - **Counter limits:** OPTIGA monotonic counters are capped at 600,000 updates each and ~2 million total updates across all objects — size the PIN/usage thresholds accordingly so the lockstep counter cannot exhaust device endurance.
-- **Status-code mapping (S-E/S-7)** is the subtlest correctness risk: the MCU must reconcile SE050 UserID status + OPTIGA E120 + page-124 to the *strictest* and never interpret an SE error code as success; validate the full mapping table against AN12413 on sacrificial units.
+- **Status-code mapping (S-E/S-7)** is the subtlest correctness risk: the MCU must never interpret an SE error code as success. Validate `AuthMethodBlocked`→`PinLocked`/wipe and the SE050 attempt-attribute `0x6986` denial against AN12413 on sacrificial units. Boot rollback reconciliation remains the separately tested directional page124/E120 check.

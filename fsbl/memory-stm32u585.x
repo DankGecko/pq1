@@ -1,12 +1,12 @@
 /* First-stage bootloader linker script for STM32U585.
  *
- * The FSBL occupies the first 32 KB of bank 1 (pages 0–3). These
- * four pages are WRP1A-locked as the final step of factory
- * provisioning, so even a compromised runtime firmware cannot
- * overwrite the FSBL in place.
+ * Legacy bench layout: the FSBL occupies the first 32 KB of bank 1
+ * (pages 0–3). This file is not production geometry or factory authority.
+ * Draft 1.1 proposes a different envelope and keeps FLASH/RAM/factory gates
+ * open; do not derive WRP or irreversible operations from this linker script.
  *
  * Flash layout (bank 1, secure alias):
- *   0x0C00_0000  FSBL           32 KB   (this file — pages 0–3, WRP-locked)
+ *   0x0C00_0000  FSBL           32 KB   (legacy bench pages 0–3)
  *   0x0C00_8000  Manifest A      8 KB   (page 4)
  *   0x0C00_A000  Manifest B      8 KB   (page 5)
  *   0x0C00_C000  Boot state      8 KB   (page 6)

@@ -2,9 +2,10 @@
 
 > **ROLLBACK/FACTORY CORRECTION (2026-07-11).** The V1 75-byte manifest,
 > try-once selector, unary OTP tally, and legacy factory receipt are bench-only
-> and production-fenced. Draft 0.9 freezes manifest-v4 and typed journal/floor
-> software interfaces only; their backend/resource gates and all silicon work
-> remain OPEN. This intake grants no firmware-release, OTP, option-byte,
+> and production-fenced. Draft 1.1 proposes manifest-v6 and typed journal/floor
+> software interfaces only; it is not implementation-approved, and its
+> backend/resource/factory gates and all silicon work remain OPEN. This intake
+> grants no firmware-release, OTP, option-byte,
 > factory, or RDP2 authority. `make fw-rollback-hw` tests only reversible legacy
 > comparison logic and is not anti-rollback evidence.
 
@@ -18,7 +19,7 @@ Firmware for **PQ1**, a $149 post-quantum self-custody hardware wallet. Target i
 
 The one and only signature primitive is **SPHINCS+C10** (hash-based, SLH-DSA-style; `h=18, d=2, a=11, k=13, w=8, l=43, target_sum=205` → 4008-byte sig). No classical signer (secp256k1/P-256/Ed25519) exists anywhere in the firmware, FSBL, or update path. SHA-256 is the only hash inside the PQ stack; Keccak-256 appears only for EVM-mandated hashes.
 
-Runtime flow: BIP-39 entropy is **XOR-split across the two secure elements** (neither chip alone holds a seed bit); PIN is compared **in SE silicon, never in MCU code**, with a three-way lockstep counter (MCU flash page 124 + OPTIGA E120 LUC + SE050 UserID); on unlock the seed is reconstructed in TrustZone-secure SRAM only, used to derive per-`(account, chain, slot)` C10 keys, and zeroized on lock/tamper/timeout. A companion app (USB-HID) builds the UserOp and supplies non-secret routing metadata; **the device trusts the companion for nothing secret** and decodes/clear-signs every artifact on its own trusted NV3007 LCD before the user confirms.
+Runtime flow: BIP-39 entropy is **XOR-split across the two secure elements** (neither chip alone holds a seed bit); PIN is compared **in SE silicon, never in MCU code**, with three-way per-attempt consumption (MCU flash page 124 + OPTIGA E120 LUC + SE050 UserID). Boot's readable-counter rollback check is directional page124/E120 because the SE050 attempt attribute is policy-denied. On unlock the seed is reconstructed in TrustZone-secure SRAM only, used to derive per-`(account, chain, slot)` C10 keys, and zeroized on lock/tamper/timeout. A companion app (USB-HID) builds the UserOp and supplies non-secret routing metadata; **the device trusts the companion for nothing secret** and decodes/clear-signs every artifact on its own trusted NV3007 LCD before the user confirms.
 
 Pre-production: no devices shipped, no funds on-chain. Boots on real **B-U585I-IOT02A** and **QEMU mps2-an505**.
 
@@ -98,11 +99,11 @@ Ordered roughly by blast radius.
 2. **Verify-before-release / fault-injection sig grafting.** Every Type 1/2 signature is double-computed on disjoint SRAM regions, constant-time compared, then verify-after-sign'd (`crypto::c10_sign_verified*`, `secure/src/fi.rs`). RFC 9814 §5 / Genêt TCHES 2023: verify-after-sign *alone* is insufficient — a single grafted fault yields a forgeable subtree. **Audit this for symmetry across *every* gateway handler**, not just the happy path.
 3. **Deterministic-signing side-channel (OptRand).** Every signature must draw fresh TRNG randomness; OptRand = 0 enables horizontal-DPA `PRF(SK.seed)` recovery (Saarinen SLotH 2024). Confirm no signing path is deterministic; confirm OptRand sourcing is hardware-TRNG, never software PRNG.
 4. **NSC gateway boundary (NS → S).** `secure/src/nsc/` is the entire untrusted-→-secure attack surface: `NsPtr<T>` range validation, copy-NS-buffer-to-S-stack-before-parse (TOCTOU), length confusion on bounded buffers. Any path that lets the nonsecure world read S-SRAM or skip a bound = full seed exfiltration. The two sign handlers (`cmd_sign_userop.rs`, `cmd_sign_userop_batch.rs`) are the hottest.
-5. **Dual-SE XOR split + three-way PIN lockstep** (invariants #1/#2). No code path may store full entropy on one chip, transmit a half across, or compare the PIN in MCU software. The MCU/OPTIGA/SE050 counters must stay in lockstep so 10 wrong attempts deterministically wipes both SEs + page 124 — look for desync or a glitch that defeats the pre-commit (`nsc::gated_unlock`).
+5. **Dual-SE XOR split + three-way PIN-attempt enforcement** (invariants #1/#2). No code path may store full entropy on one chip, transmit a half across, or compare the PIN in MCU software. Every ordinary attempt must exercise MCU/OPTIGA/SE050; page 124 and SE050 enforce the max-10 user bound, while boot checks only the documented `E120_used > page124_used` rollback direction. Look for an omitted auth leg, status-mapping error, or a glitch that defeats the pre-commit (`nsc::gated_unlock`).
 6. **Trusted-display clear-signing integrity.** The human-readable intent shown on the NV3007 LCD and the hash actually signed must derive from the **same S-stack copy** — the companion never gets to substitute a digest. Covers the native ERC-20 / Safe `SafeTx` / CowSwap `GPv2Order` / ERC-7730 decoders. A decode-vs-sign mismatch = user confirms X, signs Y. The outer UserOp sender is hard-bound to `GET_WALLET_ADDRESS(account_index)` and only the derived address reaches verifiers/hashes. Every UserOp confirmation now renders the exact zero-based account index plus the full derived EIP-55 signer address under an FI completion/readback gate, closing cross-account source substitution behind otherwise-identical pages.
 7. **SE tunnels + factory provisioning.** No plaintext secret may touch I2C; channel keys come from a Tier-1 SAES-CMAC(DHUK) KDF (`hw/secret_keys.rs`). Note the published SE050 default SCP03 keys (§6.2) — confirm the rotation gate and that the shielded-connection/SCP03 state machines fail closed on MAC/desync.
 8. **Firmware-update / boot integrity (production-blocked).** Audit the exact
-Draft-0.9 manifest-v4/typed marker/selector/floor interfaces and the quarantine
+Draft-1.1 manifest-v6/typed marker/selector/floor research candidate and the quarantine
 that prevents legacy V1, factory, signer, or release paths from acquiring ship
 authority. The physical journal/ECC/OTP backend and final FSBL FLASH/RAM fit are
 open; no OPTIGA firmware-version counter exists. Reversible legacy comparison
@@ -126,7 +127,7 @@ make play                # interactive arrow-key UI
 make test-key-speed      # DWT-timed signing bench, prints === PASS ===
 make saes-self-test-hw   # SAES SW + DHUK round-trip
 make gtzc-enforcement-hw # NS-access RAZ-fault check (invariant #4)
-make pin-gate-hw-counter-e2e   # full three-way PIN lockstep
+make pin-gate-hw-counter-e2e   # three-way attempt consumption + directional boot check
 make pin-gate-wipe-e2e         # 10 wrong PINs → factory reset
 # make fw-rollback-hw          # legacy comparison harness; NOT rollback evidence
 

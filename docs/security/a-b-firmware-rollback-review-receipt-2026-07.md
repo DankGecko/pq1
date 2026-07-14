@@ -5,7 +5,9 @@ Scope: software-interface freeze and open-decision closure only
 
 ## Frozen artifact
 
-- Architecture: [`a-b-firmware-rollback-architecture.md`](a-b-firmware-rollback-architecture.md)
+- Architecture: historical object
+  `git show rollback-architecture-v0.9:docs/security/a-b-firmware-rollback-architecture.md`
+  (do not follow the mutable repository path, which now contains Draft 1.1)
 - SHA-256:
   `f38b90307f15b87a65e9dc9d69583a74775fe4f77385e8b3a84978c34a947336`
 - The repository copy was compared byte-for-byte with the reviewed `/tmp`
@@ -61,8 +63,9 @@ this review. Their hashes make later substitution detectable.
    7.1/7.2. A changed marker/QW/CRC layout re-freezes `FROZEN-MAN-1`.
 3. The 38,860-byte warning proxy is AMBER Draft-0.8-era research logic and
    reservations, not a Draft-0.9 combined implementation. The actual selected
-   semantics must meet the 40,960-byte hard ceiling, the reviewed 38,912-byte
-   final-core target, and `OPEN-RAM-1`.
+   semantics must meet the 40,960-byte hard ceiling, the candidate's proposed
+   38,912-byte final-core target, and the separate `OPEN-RAM-1` static-RAM and
+   worst-case-stack gate.
 4. ES0499 evidence is keyed by stable erratum titles. A production receipt
    must archive the exact official PDF, revision, SHA-256, title-to-section
    map, exact MCU revision, and applicability; moving section numbers from an
@@ -74,7 +77,8 @@ The following remain blocking and open:
 
 - `OPEN-JRN-HW-1` and `OPEN-JRN-DUR-1`;
 - `OPEN-ECC-1` and `OPEN-OTP-1..3`;
-- `OPEN-RAM-1`, final combined FLASH/RAM fit, and production key/profile link;
+- final physical FLASH LOAD-span fit, `OPEN-RAM-1` static-RAM and
+  worst-case-stack fit, and the production key/profile link;
 - `OPEN-REL-1`, `OPEN-C10-1`, health/timing parameters, and final factory
   policy;
 - all sacrificial-silicon, OTP, option-byte, TAMP/BKP, and power-cut receipts.

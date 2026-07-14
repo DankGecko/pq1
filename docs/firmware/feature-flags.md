@@ -26,7 +26,7 @@ There are three different things a SE secret can be rooted in, picked at compile
 
 | Build features | OPTIGA PBS root (`optiga_pairing_secret`) | SE050 admin PIN root (`se050_admin_pin`) | SE050 SCP03 keys (today / after #20) | Ships? |
 |---|---|---|---|---|
-| **Production:** `saes-dhuk` + `bhk` (no hardcoded keys) | silicon **DHUK** — `SAES-CMAC(DHUK, "pqsigner/optiga-pbs-v1")` | silicon **BHK** — `SAES-CMAC(BHK, "pqsigner/se050-admin-pin-v1")` | published factory keys *today*; **BHK** after `make flash-hw-se050-rotate-scp03` at provisioning | ✅ this is the shipping config |
+| **Intended production roots:** `saes-dhuk` + `bhk` (no hardcoded keys) | silicon **DHUK** — `SAES-CMAC(DHUK, "pqsigner/optiga-pbs-v1")`, with the planned first-field rotation also mixing TRNG salt | silicon **BHK** — `SAES-CMAC(BHK, "pqsigner/se050-admin-pin-v1")` | transport keys *today*; per-device keys only after the future approved first-field PUT KEY flow | 🚫 target shape only; shipping and lifecycle flow remain blocked |
 | `make dual-se-bhk-e2e` (`saes-dhuk,bhk,e2e-test`) | silicon DHUK | silicon BHK | factory (probe-derived if `se050-derived-scp03` also added) | ❌ test image (`e2e-test`) |
 | `make dual-se-admin-wipe-e2e`, `make e2e-hw` (`otp-hardcoded-master-key`, no `bhk`) | **compile-time OTP constant** (HKDF) | `derive_into_bhk` *falls through* → **compile-time OTP constant** (HKDF) | published factory keys | ❌ dev-only (fence) |
 | `bhk-hardcoded-master-key` (dev) | (per the DHUK/OTP arm) | **compile-time BHK constant** (HKDF) | published factory keys | ❌ dev-only (fence) |
@@ -46,10 +46,11 @@ Two distinct things both called "OTP":
   quad-words. The current `hw/otp.rs` 1,024-bit unary rollback tally is a
   rejected prototype. Production and factory images are blocked in both
   build scripts and Rust source; other STM32U585 bench images must carry the
-  explicit `legacy-fw-rollback-unsafe` marker. Draft 0.9
-  uses zero OTP writes for ordinary same-epoch releases and reserves complete
-  fresh QWs for rare security-epoch revocations; its physical codec remains
-  open. *Not* a bit-addressable fuse bank.
+  explicit `legacy-fw-rollback-unsafe` marker. Draft 1.1 proposes zero OTP
+  writes for ordinary same-epoch releases and complete fresh QWs for rare
+  security-epoch revocations, but is not implementation-approved; its physical
+  codec, interruption handling, resource fit, and silicon gates remain open.
+  *Not* a bit-addressable fuse bank.
 - **OTP "master key" region** (32 bytes in OTP, burned once by `hw::otp::ensure_device_master()`) — the **legacy** derivation root. On a `saes-dhuk` shipping build `ensure_device_master()` is **never called** (verified in the Phase-2C pre-flight) → this region **stays blank for the device's life**. The roots are the silicon DHUK + BHK, not an OTP-burned master. The old "burn an OTP master in production" plan is superseded.
 - **`otp-hardcoded-master-key` Cargo feature** — a *dev-only compile-time constant* standing in for that OTP master so re-flashed bench boards keep stable derivations. **Never ships** (in the `compile_error!` fence in `nsc/mod.rs`).
 

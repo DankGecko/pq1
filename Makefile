@@ -525,7 +525,7 @@ test-key-speed: ## DWT-timed signing bench on HW
 #   * Never calls CMD_FW_COMMIT → no OTP program command is launched.
 #     The legacy per-bit tally is invalid on STM32U585 ECC quad-words and is
 #     production-fenced; this test neither exercises nor consumes the still-
-#     open Draft-0.9 epoch-floor backend.
+#     open Draft-1.1 research-candidate epoch-floor backend.
 #   * Never lets CMD_FW_BEGIN reach `flash::erase_slot(inactive)`.  On
 #     the current linker layout the inactive slot's manifest page (page
 #     5 @ 0x0C00_A000) still sits inside the running secure firmware's
@@ -1276,7 +1276,7 @@ flash-hw-se050-rotate-scp03:
 # PASS = chip silicon enforced the read deny. FAIL = security regression
 # (admin extracted a user-PIN-gated secret — would mean a DHUK/BHK leak
 # could drain funds, contrary to the threat model in CLAUDE.md §"Hardware
-# PIN gating, three-way lockstep").
+# PIN gating and three-way per-attempt consumption").
 # Watch semihosting for "[E2E-EXTRACT] ADMIN-EXTRACT ATTEMPT: PASS"/"FAIL".
 # Repeatable on the same chip (step 1 cleans up prior residue).
 se050-admin-extract-attempt-e2e:
@@ -1964,10 +1964,11 @@ measure: build-hw-dual-se-oled-standalone ## Build + print the 8 BIP-39 measurem
 # is for development use only and will not accept production-signed
 # firmware, and vice versa.
 #
-# Budget: 32 KB at 0x0C00_0000 (pages 0–3 of bank 1). Current footprint
-# is ~32 KB (~99% of its 32 KB WRP1A budget) with software SHA-256.
+# Legacy bench budget: 32 KB at 0x0C00_0000 (pages 0–3 of bank 1). This target
+# is not the Draft-1.1 candidate resource gate: that candidate proposes a
+# 40,960-byte hard ceiling plus separate physical LOAD-span and RAM/stack gates.
 .PHONY: fsbl
-fsbl: ## Build the immutable first-stage bootloader (must fit 32 KB WRP1A)
+fsbl: ## Build legacy bench FSBL (32 KB regression gate; not candidate approval)
 	@echo "==> Building FSBL (FSBL_VENDOR_PUBKEY=$${FSBL_VENDOR_PUBKEY:-<dev fixture>})"
 	@# FSBL_ALLOW_DEV_KEY opts this dev target into fsbl/build.rs's committed
 	@# dev vendor key when FSBL_VENDOR_PUBKEY is unset (finding F2). A bare
@@ -1978,16 +1979,14 @@ fsbl: ## Build the immutable first-stage bootloader (must fit 32 KB WRP1A)
 		cargo build --locked --release --target $(TARGET) --target-dir target/fsbl \
 			-p pqsigner-fsbl --features legacy-fw-rollback-unsafe
 	@echo "==> FSBL built: $(FSBL_ELF)"
-	@# Headroom gate: the FSBL is physically capped at 32 KB (WRP1A-locked
-	@# pages 0-3, fsbl/memory-stm32u585.x). It is currently ~99% full — a
-	@# careless addition would silently overflow the linker region. Fail hard
-	@# on overflow, WARN past 95%. (2026-07-02: was ~18 KB when the docs were
-	@# written; the NV3007 fingerprint renderer grew it to ~32 KB.)
+	@# Legacy-linker regression gate only. It protects the current 32 KB bench
+	@# image from overflow; it does not close Draft 1.1's physical LOAD-span or
+	@# independent RAM/worst-case-stack gates.
 	@arm-none-eabi-size -B $(FSBL_ELF) | awk -v cap=32768 -v warn=95 'NR==2 { \
 	  used=$$1+$$2; pct=used*100.0/cap; \
 	  printf "==> FSBL: %d B of %d B (%.1f%% of 32 KB), %d B free\n", used, cap, pct, cap-used; \
-	  if (used>cap) { print "==> FSBL: FAIL — exceeds the 32 KB WRP1A budget"; exit 1 } \
-	  if (pct>=warn) { printf "==> FSBL: WARN — over %d%% of the frozen budget (only %d B headroom)\n", warn, cap-used } \
+	  if (used>cap) { print "==> FSBL: FAIL — exceeds the legacy 32 KB linker region"; exit 1 } \
+	  if (pct>=warn) { printf "==> FSBL: WARN — over %d%% of the legacy bench budget (only %d B headroom)\n", warn, cap-used } \
 	}'
 
 # Isolated NV3007 LCD bring-up test for the FSBL display port. Builds the FSBL
@@ -2016,7 +2015,7 @@ fsbl-lcd-test-hw:
 # Use this in the release pipeline.
 .PHONY: fsbl-release
 fsbl-release: ## Build the release FSBL (blocked until rollback backend closure)
-	@$(error fsbl-release: FAIL — production firmware rollback backend is not implemented; Draft 0.9 grants no release authority)
+	@$(error fsbl-release: FAIL — production firmware rollback backend is not implemented; Draft 1.1 is an unapproved research candidate)
 
 # One key path must feed both secure/build.rs and fsbl/build.rs.  This gate is
 # deliberately a release dependency (not just an FSBL convenience check): an
@@ -2253,14 +2252,14 @@ prod-feature-check: ## Resolve and validate the production hardening feature set
 # Keep checking feature-policy drift throughout the rollback quarantine, then
 # fail with a make-time error that `make -i` cannot ignore.
 prod-check: prod-feature-check ## Production-readiness gate (blocked after feature validation)
-	@$(error prod-check: FAIL — reviewed production rollback backend is not implemented; Draft 0.9 grants no ship authority)
+	@$(error prod-check: FAIL — reviewed production rollback backend is not implemented; Draft 1.1 remains unapproved and grants no ship authority)
 
 # Shipping-config gate: resolve and validate the canonical PROD_SHIP_FEATURES.
 # No production image is built while the rollback backend remains quarantined.
 .PHONY: prod-check-ship
 prod-check-ship: RELEASE_FEATURES := $(PROD_SHIP_FEATURES)
 prod-check-ship: prod-feature-check ## Strict ship gate — feature-check, then rollback refusal
-	@$(error prod-check-ship: FAIL — reviewed production rollback backend is not implemented; Draft 0.9 grants no ship authority)
+	@$(error prod-check-ship: FAIL — reviewed production rollback backend is not implemented; Draft 1.1 remains unapproved and grants no ship authority)
 
 # Image size / budget report. The secure image must fit its 464 KB A/B slot.
 # The non-overrideable capacity lives in fw-manifest and is enforced by
@@ -4077,14 +4076,13 @@ proverif: ## ProVerif symbolic protocol-model verification
 	@echo "==> ProVerif: firmware-update authenticity (vendor-signed manifest, domain-separated)"
 	proverif contracts/verification/proverif/fw_update_authenticity.pv
 
-# Stateful symbolic model (Tamarin) of the three-way PIN-attempt lockstep:
-# a single-counter reset is always caught by the boot reconcile (CORE), an
-# all-three reset is the documented residual. Companion to the ProVerif secrecy
-# model. See contracts/verification/tamarin/README.md.
+# Idealized symmetric three-counter Tamarin research model. It is a contrast
+# model, not a proof of the deployed directional page124/E120 boot check or of
+# an SE050 boot counter read. See contracts/verification/tamarin/README.md.
 .PHONY: tamarin
 tamarin: ## Tamarin symbolic protocol-model verification
 	@command -v tamarin-prover >/dev/null 2>&1 || { echo "ERROR: tamarin-prover not found. Install the prebuilt linux64 binary + the maude backend (both need no sudo/GHC; see contracts/verification/tamarin/README.md)"; exit 1; }
-	@echo "==> Tamarin: three-way PIN-attempt lockstep reconcile"
+	@echo "==> Tamarin: idealized symmetric three-counter PIN model"
 	tamarin-prover --prove contracts/verification/tamarin/pin_lockstep.spthy
 	@echo "==> Tamarin: SCP03 within-session no-replay (counter)"
 	tamarin-prover --prove contracts/verification/tamarin/scp03_replay.spthy

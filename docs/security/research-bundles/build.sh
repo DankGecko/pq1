@@ -40,6 +40,10 @@ except ImportError as error:
 MD = MarkdownIt("commonmark")
 SOURCE_PREFIX = "docs/"
 BUNDLE_PREFIX = "../../../docs/"
+ROOT_FILES = {
+    "AGENTS.md": "../../../AGENTS.md",
+    "DIY.md": "../../../DIY.md",
+}
 
 
 def normalized_destination(value: str):
@@ -47,6 +51,9 @@ def normalized_destination(value: str):
         return ("repo-doc", value[len(SOURCE_PREFIX) :])
     if value.startswith(BUNDLE_PREFIX):
         return ("repo-doc", value[len(BUNDLE_PREFIX) :])
+    for source, bundled in ROOT_FILES.items():
+        if value == source or value == bundled:
+            return ("repo-root-file", source)
     return value
 
 
@@ -85,7 +92,9 @@ def root_destinations(text: str):
     def visit(token):
         for key in ("href", "src"):
             value = token.attrs.get(key)
-            if value is not None and value.startswith(SOURCE_PREFIX):
+            if value is not None and (
+                value.startswith(SOURCE_PREFIX) or value in ROOT_FILES
+            ):
                 found.append(value)
         for child in token.children or ():
             visit(child)
@@ -98,24 +107,27 @@ def root_destinations(text: str):
 def rebase(text: str) -> str:
     baseline = document_signature(text)
     rewritten = text
-    needle = "](docs/"
-    replacement = "](../../../docs/"
-    search_from = 0
+    replacements = [
+        ("](docs/", "](../../../docs/"),
+        *[(f"]({source}", f"]({bundled}") for source, bundled in ROOT_FILES.items()],
+    ]
 
     # Test each literal candidate independently. Keep it only when the parsed
     # document proves that the sole semantic change is a repository-root link
     # or image destination. Candidates inside malformed syntax, code, nested
     # fences, or raw HTML are preserved rather than guessed about.
-    while True:
-        position = rewritten.find(needle, search_from)
-        if position < 0:
-            break
-        trial = rewritten[:position] + replacement + rewritten[position + len(needle) :]
-        if document_signature(trial) == baseline:
-            rewritten = trial
-            search_from = position + len(replacement)
-        else:
-            search_from = position + len(needle)
+    for needle, replacement in replacements:
+        search_from = 0
+        while True:
+            position = rewritten.find(needle, search_from)
+            if position < 0:
+                break
+            trial = rewritten[:position] + replacement + rewritten[position + len(needle) :]
+            if document_signature(trial) == baseline:
+                rewritten = trial
+                search_from = position + len(replacement)
+            else:
+                search_from = position + len(needle)
 
     remaining = root_destinations(rewritten)
     if remaining:
@@ -129,6 +141,7 @@ def rebase(text: str) -> str:
 
 
 fixture = """[live](docs/a.md) and [`label`](docs/b.md#x)
+[agents](AGENTS.md) and [diy](DIY.md)
 `[inline](docs/no-inline.md)` and ``[wide](docs/no-wide.md)``
 `unmatched
 
@@ -160,6 +173,7 @@ outside list
 [url](https://example.com/docs/x) [anchor](#docs/x) [relative](other.md)
 """
 expected = """[live](../../../docs/a.md) and [`label`](../../../docs/b.md#x)
+[agents](../../../AGENTS.md) and [diy](../../../DIY.md)
 `[inline](docs/no-inline.md)` and ``[wide](docs/no-wide.md)``
 `unmatched
 

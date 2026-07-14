@@ -38,7 +38,8 @@
 
 **Cross-linked surface (owned elsewhere).** The **firmware-update gateway**
 (`cmd_fw_{begin,chunk,commit,status,abort}`) is a TrustZone entry surface. Its
-legacy V1/OTP backend is production-fenced; review Draft 0.9 and the corrected
+legacy V1/OTP backend is production-fenced; review the unapproved Draft 1.1
+research candidate and the corrected
 [`red-teaming.md`](../red-teaming.md) §8.3 / [`threat-model.md`](../threat-model.md)
 Claim 8. Here, only confirm the veneers use the central validator and a
 `HandlerGuard`.

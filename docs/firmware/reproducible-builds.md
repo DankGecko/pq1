@@ -245,9 +245,10 @@ firmware and should be rejected).
 
 There is no active release pipeline. The historical command
 `FSBL_VENDOR_PUBKEY=… make release` now fails closed and does not remove,
-replace, or publish any artifact. Restore this section only after manifest-v4,
-the rollback backend, combined FLASH/RAM gates, and the reviewed production
-ceremony are implemented and approved.
+replace, or publish any artifact. Restore this section only after an exact
+rollback architecture digest is implementation-approved, its backend and
+separate FLASH plus RAM/stack gates close, and the production ceremony is
+reviewed and owner-authorized.
 
 ## Independent verification workflow
 

@@ -5,9 +5,9 @@ Scope: isolated pre-silicon research only; no production-backend or hardware aut
 
 ## Authority boundary
 
-The governing architecture is
-[`a-b-firmware-rollback-architecture.md`](a-b-firmware-rollback-architecture.md),
-SHA-256
+The governing architecture is the historical object
+`git show rollback-architecture-v0.9:docs/security/a-b-firmware-rollback-architecture.md`
+(not the mutable repository path, which now contains Draft 1.1), SHA-256
 `f38b90307f15b87a65e9dc9d69583a74775fe4f77385e8b3a84978c34a947336`,
 preserved by annotated tag `rollback-architecture-v0.9`.
 

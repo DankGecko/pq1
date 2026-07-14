@@ -245,11 +245,11 @@ S-1/S-6 ship-blockers describe.
 Priority (skeptic's ranking):
 1. **ProVerif** on the SE channel protocols (OPTIGA Shielded Connection, SCP03) — fastest path,
    gentle curve.
-2. **Tamarin** for the two properties no other tool covers: the **three-way PIN-lockstep counter
-   monotonicity** (needs non-monotonic mutable state — Tamarin has it) and the **XOR seed-split
-   secrecy** (needs Tamarin's XOR equational theory — it has it). Prove there is no reachable
-   state where a desolder/substitute attacker resets the counter, and that the split leaks
-   nothing if one SE is compromised.
+2. **Tamarin** for the stateful properties no other tool covers. The existing
+   three-counter PIN model is an idealized symmetric research contrast, not a
+   deployed proof; a faithful model must encode the directional page124/E120
+   boot check and the absence of an SE050 attempt-count input. Tamarin's XOR
+   equational theory also fits the XOR seed-split secrecy question.
 3. **EMVerify** as the structural template; **SAPIC+** to write each model once and target
    ProVerif+Tamarin; **CryptoVerif** (now PQ-sound) / **PQ-Squirrel** for computational
    seed-split guarantees if you want quantum-soundness, not just symbolic.

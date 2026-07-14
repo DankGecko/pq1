@@ -1303,15 +1303,12 @@ fn main() -> ! {
         (&mut *core::ptr::addr_of_mut!(SE)).load_pbs();
     }
 
-    // §4 PIN-counter reconciliation. Cross-checks the MCU page-124
-    // attempt counter against BOTH SE-side counters (OPTIGA F1E1 +
-    // SE050 USERID `auth_attempts` via ReadObjectAttributes), AND
-    // checks intra-SE divergence. Any disagreement = unambiguous
-    // tamper signal (≥1 counter was reset without the others) →
-    // wipe immediately rather than waiting for the next unlock to
-    // expose it. See `nsc::reconcile_pin_attempts` for the full
-    // design + limitation notes (incl. the correction to the earlier
-    // "SE050 can't be peeked" claim).
+    // §4 PIN-counter rollback check. Compares MCU page 124 with the readable
+    // OPTIGA E120 count and wipes only when E120 leads, because page 124 is
+    // precharged before SE verification. The SE050 UserID attribute is
+    // policy-denied (0x6986), so it is not a boot input; SE050 still consumes
+    // ordinary attempts and independently enforces max-10 lockout. See
+    // `nsc::reconcile_pin_attempts` for the exact direction and limits.
     #[cfg(all(feature = "stm32u585", any(feature = "optiga-trust-m", feature = "dual-se"), not(test)))]
     unsafe {
         nsc::reconcile_pin_attempts(&mut *core::ptr::addr_of_mut!(SE));

@@ -27,7 +27,7 @@ checkers (Kani / rainbow / forge / lake / prod-check) or read source only.
 - **PoC (falsifiable):** <the runnable artifact — a flip→decline test, a Kani counterexample, a rainbow BYPASS, a `#print axioms` diff, a merged diff that skipped a gate. No PoC ⇒ this is a "suspicion", list it under §Suspicions, not here.>
 - **Disposition:** CONFIRMED_REAL | FALSE_POSITIVE | ALREADY_FIXED | OPEN_RESEARCH
 - **Proposed fix:** <and flag if the fix would break an invariant / regress a proof / weaken a fence>
-- **Resolution:** <FILLED WHEN HANDLED — what was done + commit SHA + date, or why accepted/invalid/deferred + the tracking item (work-todo #…)>
+- **Resolution:** <FILLED WHEN HANDLED — what was done + commit SHA + date, or why invalid/deferred + the tracking item (work-todo #…). ACCEPTED additionally requires an explicit owner-only decision: owner + date + exact finding + target and frozen-report digests + accepted consequence + scope. A reviewer/model/ordinary maintainer cannot accept risk.>
 
 <!-- ### F2 — … -->
 

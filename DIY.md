@@ -131,8 +131,10 @@ you're signing. First signature ≤ 3 s; ~1.1 s warm. (To re-run the wizard on a
   SE050. Neither chip alone — desoldered, decapped, whatever — holds a single bit of it.
 - **A real trusted display.** Transactions are decoded and rendered inside the TrustZone
   secure world; the companion app never gets to substitute a hash.
-- **PIN gating in silicon, three ways.** SE050 UserID counter, OPTIGA lockout counter,
-  MCU flash counter — reconciled to the strictest on every boot.
+- **PIN gating in silicon, three ways per attempt.** An ordinary wrong attempt
+  charges the SE050 UserID, OPTIGA E120, and MCU flash counter. Boot can only
+  compare MCU page 124 with readable E120, directionally; SE050 still enforces
+  its independent max-10 lockout but its attempt attribute is not peek-readable.
 - **Verifiability.** The build is reproducible (`docs/firmware/reproducible-builds.md`,
   `make verify-repro`), and the boot fingerprint — 8 BIP-39 words on the LCD — lets you
   check the flash contents against a build you made yourself. This is the same property

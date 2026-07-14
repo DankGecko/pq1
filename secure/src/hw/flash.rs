@@ -824,7 +824,8 @@ pub unsafe fn pin_attempts_reset() -> Result<(), ()> {
 //     Slot B NS        pages  64..127  0x0818_0000  (512 KB)
 
 /// A/B slot identifier. The current V1 selector is legacy bench code; the
-/// production target is Draft 0.9's frozen typed selector interface.
+/// Draft 1.1 proposes a replacement typed selector interface, but is not
+/// implementation-approved.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Slot {
     A,

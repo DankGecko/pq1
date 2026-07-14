@@ -9,8 +9,9 @@ Primary architectural twin: **T3W1 ("Trezor Safe 7") — STM32U5A9 + Optiga Trus
 > **2026-07-11 rollback correction.** The §8.3 claim that legacy
 > `otp::bump_to` is “DONE” or stronger than Trezor is superseded. Its two
 > readbacks do not rescue an encoding that illegally reprograms one STM32U585
-> OTP QW. Draft 0.9 makes OTP only the candidate first backend; physical
-> codec/ECC/interruption/capacity and combined resource fit remain OPEN.
+> OTP QW. Draft 1.1 keeps OTP as a research-candidate first backend, but is not
+> implementation-approved; physical codec/ECC/interruption/capacity and the
+> separate FLASH plus RAM/stack gates remain OPEN.
 
 ## TL;DR
 
@@ -396,12 +397,13 @@ FLASH_OTP_BLOCK_MANUFACTURING_LOCK   = 8  // irreversible "provisioning done"
 **PQSigner legacy prototype (rejected):** the current code models a 1024-bit
 unary tally, but STM32U585 OTP is 32 one-program 128-bit ECC quad-words. It
 cannot be reprogrammed bit by bit and is now compile-blocked from production.
-Draft 0.9 keeps ordinary releases OTP-free within an epoch and leaves the
-replicated full-QW security-epoch codec open.
+Draft 1.1 proposes ordinary releases that are OTP-free within an epoch and
+leaves the replicated full-QW security-epoch codec open. It is not
+implementation authority.
 
 **Trade-off:** Trezor's approach is revocable with a flash erase of the SECRET region (not exposed to firmware) and survives power-loss mid-write because each chunk is atomic. PQSigner's OTP budget is simpler and harder to override, at the cost of a finite ceiling.
 
-**Verdict: RE-EVALUATE AFTER DRAFT-0.9 GATES.** OTP remains the preferred
+**Verdict: RE-EVALUATE AFTER DRAFT-1.1 CANDIDATE GATES.** OTP remains the preferred
 pre-PIN immutable root, but only with a hardware-valid full-QW codec and durable
 interruption protocol. Trezor's erasable SECRET-region journal remains a
 possible supporting durable-stage mechanism, not a substitute authority. Do
@@ -442,7 +444,7 @@ These Trezor findings confirm directions PQSigner has already committed to — t
 | Trezor pattern | PQSigner equivalent | Status |
 |---|---|---|
 | `secret_keys/stm32u5/secret_keys.c:41-175` domain-labelled HKDF-Expand from OTP master | `secure/src/hw/secret_keys.rs` header comment literally says "PQSigner parallel to Trezor's" | ✅ Landed |
-| `monoctr` for bootloader/firmware rollback | Draft-0.9 epoch floor over full OTP QWs; physical codec still OPEN | ⛔ legacy bit tally production-fenced |
+| `monoctr` for bootloader/firmware rollback | Draft 1.1 research-candidate epoch floor over full OTP QWs; approval and physical codec still OPEN | ⛔ legacy bit tally production-fenced |
 | Counter-gated SE auth (Optiga E120/E121/E122 LUC) | `work-todo #4 Phase 2` + `#24` to migrate Optiga counter to 0xE120 | 🟡 Tracked |
 | OTP-randomness-derived PBS (`secret_key_master_key_get` at `sec/secret_keys/stm32u5/secret_keys.c:178-195`): TRNG seed written once to OTP, then read every boot, HKDF-Expand to produce PBS | `work-todo #24` | 🟡 Tracked — adopts exact Trezor pattern |
 | MCU pre-commit PIN counter, bump-before-SE-verify, glitch-guard readback | `nsc::gated_unlock` + `hw::flash::pin_attempts_bump` | ✅ Landed (cites Trezor `storage.c:1171-1311`) |
@@ -624,7 +626,7 @@ Trezor: boardloader → bootloader → secmon → kernel → firmware. PQSigner:
 
 **Pattern 1 — register zero-out at the jump.** Trezor's `jump_to_next_stage(addr, args)` is a naked asm routine that zeroes R0-R12 + R14 and disables MSPLIM before `BX LR` to the next-stage vector table (`boardloader/main.c:365`, secmon's `jump_to_vectbl_ns` similar). PQSigner's FSBL→firmware handoff currently does not register-scrub.
 
-**Pattern 2 — monotonic counter write-then-read-verify at every handoff.** `monoctr_write(MONOCTR_BOOTLOADER_VERSION, hdr->monotonic)` is followed by a read-back; failure halts. PQSigner's legacy `bump_to` does two readbacks, but that evidence is **not transferable**: the underlying unary codec attempts forbidden second programs of STM32U585 OTP QWs. Treat the old C-4 “DONE/stronger” result as a test of legacy control flow only. The replacement typed floor and its fresh-read/ECCC/replica rules remain OPEN under Draft 0.9.
+**Pattern 2 — monotonic counter write-then-read-verify at every handoff.** `monoctr_write(MONOCTR_BOOTLOADER_VERSION, hdr->monotonic)` is followed by a read-back; failure halts. PQSigner's legacy `bump_to` does two readbacks, but that evidence is **not transferable**: the underlying unary codec attempts forbidden second programs of STM32U585 OTP QWs. Treat the old C-4 “DONE/stronger” result as a test of legacy control flow only. The replacement typed floor and its fresh-read/ECCC/replica rules remain an OPEN, unapproved Draft 1.1 proposal.
 
 **Pattern 3 — VTRUST flags in the manifest.** A 16-bit `vtrust` field in the vendor header gates provisioning mode, secret access level, vendor-screen display behavior. The bootloader enforces it BEFORE calling `secret_prepare_fw(...)`. PQSigner's FSBL doesn't have an equivalent — manifest is signed but doesn't carry runtime-policy flags.
 

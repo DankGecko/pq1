@@ -6,7 +6,7 @@
   the floor before the new slot proves health excludes the old slot and makes
   try-once rollback nonfunctional. The underlying bitwise OTP tally is also
   invalid on STM32U585 ECC quad-words. Production is compile-blocked; see the
-  reviewed Draft-0.9 replacement in
+  unapproved Draft 1.1 research candidate in
   [`../a-b-firmware-rollback-architecture.md`](../a-b-firmware-rollback-architecture.md).
 - **Component:** firmware-update commit + FSBL boot selection.
 - **Root cause:** `secure/src/nsc/cmd_fw_commit.rs` — `otp::bump_to(new_version-1)` ran *before* the new manifest/boot-state were written.
@@ -37,7 +37,7 @@ successful floor bump the old slot is ineligible before the new slot proves
 health; the legacy single-candidate selector cannot provide the advertised
 try-once fallback.
 
-**Draft-0.9 correction:** a complete repair does require coordinated FSBL,
+**Architecture correction:** a complete repair does require coordinated FSBL,
 manifest/journal, health, and floor-ownership changes. The earlier
 "No FSBL change required" conclusion applied only to the narrow power-loss
 sibling and must not be used as the A/B rollback disposition.
@@ -113,14 +113,16 @@ written and selectable:
 1. Write the new manifest (`try_once = TRIED`) + boot-state pointer first.
 2. `otp::bump_to(new_version - 1)` last (still before `sys_reset`).
 
-That change closed one sibling window but is not the complete fix. The current
-normative target is Draft 0.9's PENDING → ATTEMPTED → health → CONFIRMED flow,
-with the immutable FSBL establishing the security-epoch floor afterward. Its
-durable journal/ECC/OTP backend remains open and production-blocked.
+That change closed one sibling window but is not the complete fix. Draft 1.1
+preserves the PENDING → ATTEMPTED → health → CONFIRMED research
+candidate, with the immutable FSBL establishing the security-epoch floor
+afterward. It is not implementation-approved; its durable journal/ECC/OTP,
+resource, release-policy, factory, and silicon gates remain open and
+production-blocking.
 
 ## Replacement regression matrix
 
-Exercise every cut across the frozen PENDING → ATTEMPTED → health → CONFIRMED
+Exercise every cut across the candidate PENDING → ATTEMPTED → health → CONFIRMED
 state machine. Every pre-CONFIRMED cut must preserve and select the already
 confirmed fallback; no runtime path may establish the floor. Only a subsequent
 immutable-FSBL step may establish `security_epoch - 1` for a CONFIRMED slot.

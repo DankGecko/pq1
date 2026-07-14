@@ -146,9 +146,11 @@ ui-mode-capture     = ["ui-capture"]
 # 4. mode axis (development profile)
 mode-production = []                                    # no debug-log / no e2e-test / no mock-se
 # Opt-in: hard-refuse to run (halt) if the boot-time RDP check finds RDP != Level 2
-# under `mode-production`. OFF by default so a mode-production image can still run
-# during factory rehearsal before the irreversible RDP2 burn (default = WARN-and-
-# continue; RDP2 already disables SWD/JTAG in silicon). silicon-lockdown SL7.
+# under `mode-production`. OFF by default while the intended first-field-boot
+# self-lock ordering remains unapproved/unimplemented, so non-production
+# rehearsal can observe rather than perform an irreversible transition
+# (default = WARN-and-continue; RDP2 disables SWD/JTAG in silicon once an
+# separately authorized path sets it). silicon-lockdown SL7.
 rdp-enforce-halt = []
 mode-bringup    = ["debug-log"]                         # debug-log allowed; production-fence sub-features prohibited
 mode-e2e        = ["debug-log", "e2e-test"]             # full e2e suite including skip-* sub-flags
@@ -171,8 +173,9 @@ accel-saes-dhuk        = ["saes-dhuk"]
 # firmware.  Production and factory-provisioning builds reject it (and reject
 # the legacy backend unconditionally) in build.rs + nsc/mod.rs.
 #
-# Remove this feature when the reviewed Draft-0.9 backend replaces the legacy
-# implementation.  NEVER ship.
+# Remove this feature only when an exact-digest-approved replacement backend
+# replaces the legacy implementation. Draft 1.1 is still a research candidate.
+# NEVER ship.
 legacy-fw-rollback-unsafe = []
 
 # Current development images independently acknowledge both quarantined
@@ -362,11 +365,10 @@ duress-provision-e2e = ["duress-pin"]
 # without standing up a full dual-SE provision. main.rs short-circuits
 # into a dialog loop at boot. Pure UI; pairs with mock-se + ui-oled.
 duress-ui-test = []
-# Combined MCU page-124 + OPTIGA E120 + SE050 counter sync + desync
-# recovery e2e. Under dual-se with hw-counter, exercises the full PIN
-# lockout pipeline AND asserts all three counters stay in sync through
-# normal + desync flows. Deliberately desyncs MCU-ahead and OPTIGA-ahead
-# to verify recovery on the next correct PIN. Use
+# Combined MCU page-124 + OPTIGA E120 + SE050 per-attempt and rollback-check
+# e2e. Under dual-se with hw-counter, exercises ordinary three-way attempt
+# consumption plus MCU-ahead and OPTIGA-ahead cases under the directional
+# page124/E120 boot policy. It does not claim an SE050 boot-counter read. Use
 # `make pin-gate-hw-counter-e2e`.
 pin-gate-hw-counter-e2e = ["dual-se", "optiga-hw-counter", "e2e-test"]
 # Destructive end-to-end: burns 10 wrong PINs through gated_unlock to force
@@ -570,7 +572,7 @@ boot-pulse = ["stm32u585"]
 sca-trigger = ["stm32u585"]
 optiga-reset-oids = ["optiga-trust-m"]  # One-shot recovery: provision Trust Anchor at 0xE0E3 and send SetObjectProtected reset manifests for OIDs F1D0..F1DF. Dev-only; drop once the chip is recovered.
 optiga-no-shield = []  # Dev mode: skip Shielded Connection (PRL) entirely — no setup_pbs_no_handshake, no ensure_shield, no encrypted I2C. PIN HMAC + entropy read/write still work via plaintext APDUs. Use when E140 is unreachable (current bricked test chip). NOT production-safe. See docs/secure-elements/optiga-brick-postmortem.md §7.
-optiga-lock-operational = []  # Production: bump LcsO to Operational on BOTH E140 (PBS) AND every user OID (F1D0..F1D4 + F1E1) at end of provisioning. Irreversible per OPTIGA SRM §"Life Cycle Status" — LcsO is monotonic, no reverse path exists. Default OFF so dev chips stay at LcsO=Creation throughout all iteration (metadata still mutable, data rewriteable without AC constraints). ONLY enable when (a) STM32 OTP master is burned, (b) PBS is OTP-derived, (c) this specific chip is intended to become a production unit and you have validated the provisioning flow against sacrificial parts. See docs/production-todo.md for the full pre-ship checklist and docs/secure-elements/optiga-brick-postmortem.md §5 + §7 for the history.
+optiga-lock-operational = []  # Candidate production action: bump LcsO to Operational on BOTH E140 (PBS) AND every user OID (F1D0..F1D4 + F1E1) only through the future approved lifecycle flow. Irreversible per OPTIGA SRM §"Life Cycle Status" — LcsO is monotonic, no reverse path exists. Default OFF so dev chips stay at LcsO=Creation throughout all iteration (metadata still mutable, data rewriteable without AC constraints). The intended product direction ships transport keysets at RDP0, then on first field boot self-locks, derives/rotates the DHUK-rooted PBS plus TRNG salt, rotates SE050 SCP03, and only then ratchets lifecycle; that ordering is not implemented or authorized yet. Enable only for an exact owner-authorized sacrificial/production procedure after validation. See docs/production-todo.md and docs/secure-elements/optiga-brick-postmortem.md §5 + §7.
 # Dev/bring-up ONLY: swap the STM32U585 OTP-stored device master key for a
 # compile-time fixed 32-byte constant. Lets us exercise the whole hw/otp.rs
 # + hw/secret_keys.rs + OPTIGA pairing-secret derivation pipeline on bench

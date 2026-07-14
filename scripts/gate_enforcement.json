@@ -214,7 +214,7 @@
       ],
       "runs_in": "ci.yml",
       "enforcement": "per_pr_blocking",
-      "note": "During the Draft-0.9 quarantine, CI first resolves the canonical required/forbidden production feature set, then requires prod-check-ship to fail for the exact open rollback-backend reason and executes the secure/FSBL/factory negative-compilation/process suite. Enrolled so the meta-gate catches the quarantine step being removed or made non-blocking."
+      "note": "During the rollback quarantine, CI first resolves the canonical required/forbidden production feature set, then requires prod-check-ship to fail for the exact open rollback-backend reason and executes the secure/FSBL/factory negative-compilation/process suite. Draft 1.1 is an unapproved research candidate, not the selected backend. Enrolled so the meta-gate catches the quarantine step being removed or made non-blocking."
     },
     {
       "id": "prod-erc7730-provenance-check",

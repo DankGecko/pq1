@@ -501,22 +501,17 @@ impl WalletStore for DualSecureElement {
     }
 
     fn pin_attempt_count(&mut self) -> Option<u8> {
-        // Both SEs expose the counter on a peek-safe path:
-        //   - OPTIGA: F1E1 counter object (`read_counter_raw`).
-        //   - SE050: `ReadObjectAttributes` on USERID_OBJ — returns
-        //     `max_attempts - auth_attempts` over the SCP03 channel
-        //     without authenticating against the UserID (no attempt
-        //     consumed). See `Se050::pin_attempt_count_raw` for the
-        //     parse + SDK reference. (This corrects an earlier work-
-        //     todo §4 claim that said SE050's counter couldn't be
-        //     peeked.)
+        // OPTIGA exposes a peek-safe counter (E120 in the production
+        // `optiga-hw-counter` configuration). The production SE050 UserID
+        // policy denies `ReadObjectAttributes` with SW=0x6986, so its leg is
+        // `None`; see `Se050::pin_attempt_count_raw`.
         //
         // Combined value: MAX of whatever's available — counters
         // are "attempts USED" (higher = closer to lockout), so the
-        // strict aggregate is `max`, not `min`. Used by reconcile to
-        // compare against MCU page-124's used-count for a `!=`
-        // tamper check. Intra-SE divergence is reported separately
-        // by `pin_attempt_counts_divergent`.
+        // strict aggregate is `max`, not `min`. Reconciliation uses the
+        // available count directionally (`se_used > mcu_used`), because the
+        // MCU is precharged and may benignly lead. Intra-SE divergence is
+        // meaningful only when both legs are actually readable.
         let o = self.optiga.pin_attempt_count();
         let s = self.se050.pin_attempt_count();
         match (o, s) {

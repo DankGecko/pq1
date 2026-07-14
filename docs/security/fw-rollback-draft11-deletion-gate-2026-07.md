@@ -38,7 +38,8 @@ secure runtime.
    justified. This does not close the TAMP hardware or durability gates.
 4. **Exact byte formats: no verdict.** The model contains only a policy check
    that refuses a freeze without signed-tool interoperability, executed cut
-   properties, physical-backend closure, and combined FLASH/RAM/stack fit. It
+   properties, physical-backend closure, the physical FLASH LOAD-span gate,
+   and the separate static-RAM/worst-case-stack gate. It
    provides none of that evidence and therefore neither approves nor rejects
    Draft 1.1's proposed byte-level formats.
 

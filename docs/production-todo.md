@@ -9,19 +9,22 @@ validation flow against sacrificial parts, then on the production line.
 Compare with `docs/work-todo.md`, which is strictly the
 reversible-iteration backlog.
 
-> **UPDATE 2026-07-14 — shipping model changed (work-todo #36).** Devices ship
-> at **RDP-0** (batch-uniform image, user-verifiable over SWD via
-> connect-under-reset before first power). The **RDP-2 transition is no longer
-> a factory/fixture action**: the FSBL self-locks to RDP-2 on the first field
-> boot, and every DHUK/BHK-gated provisioning step below (BHK first-write,
-> SE050 SCP03 PUT KEY rotation, OPTIGA PBS rotation, admin UserID — everything
-> that says "after stepping RDP → 1") executes **on-device after that
-> self-lock**, mixed with fresh TRNG salt, against factory-installed
-> *transport* keysets. Factory-side scope shrinks to: flash + the shipped
-> option-byte profile (TZEN, WRP1A, SECWM/HDP, BOOT_LOCK, OEM-key
-> finalization — everything EXCEPT RDP-2) + SE-internal lockdown (LcsO
-> ratchet, S-1/S-2/S-3, transport keysets, #22 manifest). Ceremony orderings
-> below remain correct with "burn RDP2" read as "first-boot self-lock".
+> **NO AUTHORITY.** This file is a backlog of irreversible risks and candidate
+> ceremony inputs; it does not authorize any command, burn, lifecycle change,
+> key/object mutation, or production release. Follow
+> [`planning-and-review-workflow.md` §11](planning-and-review-workflow.md#11-irreversible-and-external-actions):
+> every attempt requires a fresh owner instruction naming the exact part,
+> operation/range, artifact, procedure, operator, and authorization window.
+> Authorization is consumed once an irreversible command may have launched;
+> failure does not authorize an automatic retry on this or another part.
+
+> **UPDATE 2026-07-14 — selected product direction (work-todo #36).** The
+> intended product ships a batch-uniform, pre-first-power-verifiable RDP-0
+> artifact and moves lifecycle/self-provision work to first field boot rather
+> than a fixture RDP-2 burn. Exact option bytes, transport-key state,
+> first-boot ordering, failure recovery, and receipts are not yet an approved
+> ceremony. Older orderings below are research inputs and MUST NOT be
+> mechanically reinterpreted as first-boot instructions.
 
 ## Ground rules
 
@@ -29,11 +32,10 @@ reversible-iteration backlog.
    set keeps every one-way transition behind an opt-in Cargo feature.
    If a normal `make flash-hw-*` target commits silicon, that is a
    bug — file it, fix the default.
-2. **Sacrificial parts first.** Every one-way flow below is validated
-   against a chip we have explicitly designated as "about to be
-   committed and never rolled back." If that chip fails a step, we
-   learn and retry on the next sacrificial part, never on a customer
-   device.
+2. **Sacrificial parts first, with per-attempt authority.** The owner must name
+   the exact part and operation under workflow §11. A timeout, cut, partial
+   launch, or failure consumes that authorization; retrying this part or a new
+   part requires a fresh instruction.
 3. **No feature combinations on dev machines.** The
    `optiga-lock-operational`, future `stm32-burn-device-key`, RDP=2,
    and WRP1A flows are enabled exactly once per physical part, at
@@ -407,6 +409,15 @@ blockers above stand; these refine accuracy + add residuals.
 
 ### STM32U585 — OTP + option-bytes commits
 
+> **2026-07-14 scope override — no executable ceremony.** The factory no
+> longer burns a legacy OTP master or performs an RDP0→1→2 transition. The
+> owner-selected product model ships a verifiable RDP-0 artifact and performs
+> any eventual lifecycle/self-provision transition on first field boot, but
+> its exact option bytes, ordering, receipts, rollback backend, and failure
+> recovery remain unapproved. Draft 1.1 grants no OTP/WRP/RDP authority. Treat
+> older bullets in this section as research inputs until rewritten into an
+> exact, reviewed, owner-authorized ceremony.
+
 #### Production items
 
 - [x] **Do not require the legacy STM32 OTP master-key burn for shipping.**
@@ -439,7 +450,7 @@ blockers above stand; these refine accuracy + add residuals.
       Historical test proposal (superseded for the device-master region): do
       not flash an image that calls `otp::ensure_device_master` as a shipping
       gate. The later owner-authorized rollback characterization uses named
-      sacrificial QWs and parts under Draft 0.9 Section 13; this software-only
+      sacrificial QWs and parts under Draft 1.1 Section 13; this software-only
       work stops before that authority.
       The dev-only `optiga-factory-reset-hw` /
       `optiga-preprovision-hw` /
@@ -452,10 +463,13 @@ blockers above stand; these refine accuracy + add residuals.
 - [ ] **Replace the invalid OTP rollback tally before production.** STM32U585
       user OTP is 32 one-program 128-bit ECC quad-words, not 1,024 individually
       writable bits. The current `ROLLBACK_WORDS`/`bump_to` path and cumulative
-      factory-sentinel transitions are production-fenced. Implement only the
-      reviewed Draft-0.9 typed journal/floor interface after
-      `OPEN-JRN-HW/DUR`, `OPEN-ECC`, `OPEN-OTP-1..3`, and combined FLASH/RAM
-      gates close. Ordinary releases stay within an epoch and consume zero OTP;
+      factory-sentinel transitions are production-fenced. Draft 1.1 is an
+      unapproved research candidate, not implementation authority. Implement
+      only an exact owner-approved successor after `OPEN-PIN-HW-1`,
+      `OPEN-JRN-HW-1`, `OPEN-JRN-DUR-1`, `OPEN-FLASH-HW-1`, `OPEN-ECC-1`,
+      `OPEN-RAM-1`, `OPEN-OTP-1..3`, `OPEN-REL-1`, `OPEN-C10-1`, and the
+      required review, factory, and silicon gates close. Ordinary releases
+      stay within an epoch and consume zero OTP;
       only a security-epoch revocation consumes the final codec's full-QW
       commitment budget.
 - [ ] **BHK page first-write** (work-todo #7 Tier 2 Phase 2B). 32 TRNG
@@ -510,9 +524,10 @@ blockers above stand; these refine accuracy + add residuals.
       this in the refurbishment / RMA flow. (Post-#36 the first-boot
       self-lock sequence is: verify option bytes + slots → RDP=0xCC →
       reset → BHK first-write → TRNG-salted SCP03/PBS rotation → wizard.)
-- [ ] **WRP1A on FSBL pages (0..3).** Writes to the first-stage
-      bootloader flash region are rejected post-commit. Makes the FSBL
-      immutable in the field.
+- [ ] **WRP over the final approved FSBL range in both physical banks.** The
+      current pages-0..3 linker range is legacy bench-only; Draft 1.1 proposes
+      pages 0..4 but keeps geometry, resource, option-byte, factory, and silicon
+      gates open.
 - [ ] **WRP on BHK page** (work-todo #7 Tier 2). Write-protect the BHK
       page via WRP1B or a second WRP group so no rogue firmware can
       overwrite DHUK-wrapped BHK bytes and force a pairing mismatch.
@@ -534,13 +549,10 @@ blockers above stand; these refine accuracy + add residuals.
       security auditors and RMA — the only post-lockdown access path. The default
       DA password is a hole; a default-password challenge MUST fail. (Research-
       derived; ST AN6008. Not present today.)
-- [ ] **Ordering: commit WRP1A *before* RDP2.** WRP is removable only while
-      RDP≠2 (AN5156), so the WRP1A `UNLOCK=0` burn MUST precede the RDP2 burn or
-      the FSBL never becomes immutable. Pin into the ceremony order: WRP →
-      DA-finalize → **RDP2 last of all**. (Post-#36: WRP + DA-finalize belong
-      to the shipped option-byte profile the factory sets; "RDP2 last of all"
-      is the first-boot self-lock, which verifies that profile before
-      programming 0xCC.)
+- [ ] **Freeze ordering only in the replacement ceremony.** Hardware ordering
+      constraints such as WRP-before-RDP2 remain inputs, but no factory or
+      first-boot sequence is authorized until the exact profile, artifact,
+      recovery behavior, and receipts pass the planning/review workflow.
 
 #### BHK survivability matrix (which events spare vs destroy the BHK)
 
@@ -574,7 +586,14 @@ regs / SRAM2 / caches — do NOT add a software step that erases page 126; and d
 NOT try to make the BHK survive RDP regression by OTP-storing or DHUK-deriving it
 (OTP-store burns scarce OTP; DHUK-derive collapses the Tier-2 isolation).
 
-#### Pre-commit checklist
+#### Historical pre-commit checklist — RETIRED; DO NOT EXECUTE
+
+This list records the former OTP-master/factory-lifecycle plan. It conflicts
+with the selected RDP-0/first-field-boot direction and grants no hardware or
+production-line authority. A replacement must bind the exact artifact,
+layout, option bytes, operator, receipt schema, and failure recovery; close the
+Draft 1.1/SE gates; and obtain fresh per-part owner authorization before any
+irreversible attempt.
 
 1. All firmware built with matching `SOURCE_DATE_EPOCH` and
    `--build-id=none`; `make verify-repro` green.
@@ -604,7 +623,7 @@ NOT try to make the BHK survive RDP regression by OTP-storing or DHUK-deriving i
    an RDP2→RDP0 regression (mass erase clears main flash, OTP
    persists); DHUK probe still reproduces post-regression; BHK page
    is confirmed gone post-regression (and re-provisionable).
-8. Only then: production line flips each part through OTP-burn →
+8. **Historical sequence, not authorized:** the former production line flipped each part through OTP-burn →
    DHUK-probe-record → BHK-first-write → OPTIGA-provision →
    SE050-provision → option-byte lock in sequence, with per-part
    logs recording every step's observable (fingerprints, return
@@ -635,17 +654,23 @@ pages → flip SWAP_BANK → it serves 0x0C00_0000.
 (RM0456 §7.4.1 L20405 / §7.4.2 L20746). So the NS-flip is **closed at the source by
 BOOT_LOCK** (which we set anyway). Keep BOTH layers (belt + braces):
 
+> **No burn authority from this section.** The old pages-0..3 / 32-KiB
+> geometry was a legacy research layout. The unapproved Draft 1.1 candidate
+> proposes pages 0..4 and a 40,960-byte hard ceiling, but physical LOAD-span,
+> RAM/stack, option-byte, factory, and silicon gates remain open. The exact
+> both-bank protection range must be re-frozen after those gates close.
+
 - [ ] **PRIMARY (source-level): commit `BOOT_LOCK=1` + `TZEN=1`** → SWAP_BANK can't
       be written at all (`OPTWERR`). This was missing from the earlier draft and is
       the single most important fix; set it in the lifecycle lockdown.
 
-- [ ] **WRP1A *and WRP2A*, `UNLOCK=0`, over pages 0..3 of BOTH physical banks**,
-      committed before RDP2. (Two WRP areas per bank @ 8 KB granularity — DS
-      §3.4.1; FSBL = 32 KB = one 8-KB-granular area per bank.)
-- [ ] **Stage the same known-good FSBL in both banks' pages 0..3** so a SWAP_BANK
+- [ ] **After candidate approval only:** set WRP1A *and WRP2A*, `UNLOCK=0`, over
+      the final frozen FSBL page range in both physical banks. Draft 1.1's
+      current proposal is pages 0..4; this is not yet a ceremony input.
+- [ ] **Stage the same approved FSBL in both banks' final frozen page range** so a SWAP_BANK
       flip is a harmless no-op, not a brick. (Erased+WRP-locked bank-2 boot pages
       are the weaker fallback: swap → DoS instead of RCE.)
-- [ ] **Mirror HDP2 + SECWM2** over the bank-2 boot pages (DS §3.4.2: one HDP area
+- [ ] **Mirror HDP2 + SECWM2** over that same bank-2 range (DS §3.4.2: one HDP area
       *per bank*; we only spec HDP1/SECWM1 today). The hide must cover both banks.
 - [ ] `SWAP_BANK=0` — set it; it becomes durable once BOOT_LOCK=1 locks it
       (`OPTWERR`). (Pre-BOOT_LOCK it's NS-mutable — so order BOOT_LOCK into the burn
@@ -1016,12 +1041,13 @@ cross-reference (full 56-finding set in the run output).
 ### Hardening regressions — restore before production
 
 These are pre-production regressions the bring-up branch knowingly
-ships with, flagged in `CLAUDE.md` §"Development Posture" and
-surfaced by the three-way PIN-sync validation runs (2026-04-22).
-None of them affect the PIN-sync / wipe-dispatch paths that were
-validated on silicon — the three-way lockstep, boot-time cache
-re-sync, and MCU-MAX wipe dispatch all work today. They DO affect
-the broader secure-world isolation that production will need.
+ships with, flagged in `AGENTS.md` and surfaced by PIN-path validation runs
+(2026-04-22). Ordinary attempts exercise page-124, OPTIGA E120, and SE050
+UserID; boot reconciliation is only the directional page124/E120 check, and
+SE050 exposes no attempt-count input there. MCU-MAX and blocked-auth wipe
+dispatch are separate controls. A true three-way boot receipt would require a
+new reviewed SE050 policy/backend plus silicon evidence. These regressions also
+affect the broader secure-world isolation that production will need.
 
 - [ ] **GTZC1_TZSC_SECCFGR{1,2,3} allowlist restored to invariant #4.**
       Currently `secure/src/sau.rs` clears these to 0 (everything NS)
@@ -1069,9 +1095,10 @@ the broader secure-world isolation that production will need.
       `LcsO=Creation`. The production bump to `LcsO=Operational` is
       covered by this document's OPTIGA section (and is the defining
       commit ceremony of the OPTIGA subsystem), but also needs
-      explicit cross-validation against the PIN-sync paths before
+      explicit cross-validation against the PIN-attempt paths before
       flipping: confirm that `reset_hw_pin_counter`,
-      `factory_reset`, and the three-way lockstep all still work on
+      `factory_reset`, three-way per-attempt consumption, and the directional
+      page124/E120 boot check all still work on
       an OID set with `LcsO=Op` metadata. See work-todo.md #25 Gap 5
       for the reversible dry-run on a sacrificial chip that must
       precede any production LcsO=Op flip.

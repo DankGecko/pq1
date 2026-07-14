@@ -3,12 +3,15 @@
 Date: 2026-07-11
 Scope: Draft-0.8 software-only warning work; no production or hardware authority
 
-This receipt remains the frozen provenance for the isolated warning proxy.
-Draft 0.9 does not retroactively turn it into a combined implementation build;
-the approved interface contract and exact boundary are in
+This receipt remains frozen provenance for the isolated warning proxy.
+Historical Draft 0.9 is bound to tag `rollback-architecture-v0.9` and SHA-256
+`f38b90307f15b87a65e9dc9d69583a74775fe4f77385e8b3a84978c34a947336`;
+it never turned this proxy into a combined implementation build. The live
 [`a-b-firmware-rollback-architecture.md`](a-b-firmware-rollback-architecture.md)
-at SHA-256
-`f38b90307f15b87a65e9dc9d69583a74775fe4f77385e8b3a84978c34a947336`.
+is Draft 1.1 at SHA-256
+`743bc156417ff84b5ac201996b07c97db1e53526e2f9a2f59e44a6681ce3d7ad`.
+Draft 1.1 is an unapproved research candidate and does not retroactively raise
+this receipt's authority.
 
 ## Outcome
 

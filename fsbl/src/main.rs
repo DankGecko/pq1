@@ -2,10 +2,10 @@
 //!
 //! **Production status:** this is the legacy V1 selector retained for bench
 //! diagnosis. Its unary OTP floor and single-candidate try-once behavior do
-//! not satisfy the reviewed rollback contract, so production builds fail in
-//! both `build.rs` and this crate. Draft 0.9 freezes replacement
-//! manifest-v4/typed-marker/typed-floor interfaces; it does not approve a
-//! physical backend or this selector.
+//! not satisfy the required rollback contract, so production builds fail in
+//! both `build.rs` and this crate. Draft 1.1 proposes replacement
+//! manifest-v6/typed-marker/typed-floor interfaces but does not approve an
+//! implementation, physical backend, or this selector.
 //!
 //! Runs at power-on from `0x0C00_0000`. Selects one of two A/B
 //! firmware slots based on the manifests FSBL finds at `0x0C00_8000`
@@ -40,7 +40,7 @@
 //!   total, which is an acceptable boot delay.
 //! * **LCD error screen.** On catastrophic failure FSBL halts silently.
 //! * **Reviewed probation/rollback.** The legacy `TRIED` logic is not a
-//!   production safety net. Draft 0.9 replaces it with typed
+//!   production safety net. Draft 1.1 proposes typed
 //!   PENDING/ATTEMPTED/CONFIRMED transitions and FSBL-owned floor
 //!   establishment after health finalization.
 
@@ -53,7 +53,7 @@
 // bypass from silently producing a shipping image.
 #[cfg(feature = "mode-production")]
 compile_error!(
-    "FW_ROLLBACK_FSBL_PRODUCTION_BLOCKED: the reviewed Draft-0.9 rollback backend is not implemented"
+    "FW_ROLLBACK_FSBL_PRODUCTION_BLOCKED: the Draft-1.1 rollback candidate is not implementation-approved or implemented"
 );
 #[cfg(not(any(feature = "mode-production", feature = "legacy-fw-rollback-unsafe")))]
 compile_error!(

@@ -4,8 +4,8 @@
 > code below still contains the rejected bitwise OTP tally and nonfunctional
 > try-once rollback path. STM32U585 user OTP is 512 bytes / 32 one-program
 > 128-bit ECC quad-words; it does not provide 1,024 per-bit increments.
-> `stm32u585 + mode-production` is compile-blocked. The reviewed target and
-> exact frozen interfaces are
+> `stm32u585 + mode-production` is compile-blocked. The unapproved Draft 1.1
+> research candidate and its proposed interfaces are
 > [`a-b-firmware-rollback-architecture.md`](../security/a-b-firmware-rollback-architecture.md).
 > Ordinary releases are unlimited within a security epoch; only a security-
 > epoch revocation consumes the still-open replicated OTP record codec.
@@ -43,24 +43,29 @@ vendor laptop             user laptop                 device (STM32U585)
    not-yet-revoked vendor release.
 3. **Target anti-rollback is an epoch floor rooted in STM32U585 OTP.** A
    same-epoch ordinary release performs zero OTP writes. An epoch advance uses
-   complete fresh quad-words through the reviewed typed/replicated codec. The
-   physical codec, interruption recovery, and silicon receipts remain open;
+   complete fresh quad-words through a proposed typed/replicated codec. The
+   physical codec, interruption recovery, and silicon receipts remain open and
+   no production codec has been selected;
    the legacy per-bit implementation is not valid or production-eligible.
-4. **The FSBL is immutable after provisioning.** Pages 0–3 of bank 1
-   are WRP1A-locked before RDP-2. Any FSBL bug is a device
-   replacement.
-5. **Target power-loss contract.** Draft 0.9 preserves the last confirmed
+4. **The FSBL must be immutable after provisioning.** The legacy bench layout
+   uses pages 0–3. Draft 1.1 proposes pages 0–4 with a 40,960-byte hard ceiling,
+   but the geometry, physical LOAD-span fit, RAM/stack bound, option-byte
+   ceremony, and hardware receipts remain unapproved. Any eventual immutable
+   FSBL bug is a device replacement.
+5. **Candidate power-loss contract.** Draft 1.1 proposes preserving the last confirmed
    fallback through PENDING and ATTEMPTED, seals CONFIRMED only after the
-   reviewed health/finalization flow, and lets the immutable FSBL establish
-   the epoch floor. Its durable journal/OTP construction remains open; the
-   legacy two-page commit is not power-fail-safe.
+   proposed health/finalization flow, and lets the immutable FSBL establish
+   the epoch floor. It is not implementation-approved; its durable
+   journal/OTP construction and resource, release-policy, factory, and silicon
+   gates remain open. The legacy two-page commit is not power-fail-safe.
 6. **User-consent gated.** The target flow shows the new firmware's 8
    BIP-39 measurement words on the NV3007 LCD; the user holds long-right
    to confirm. Matching the words against the vendor's published
    release is the anchor that prevents a MitM companion app from
    slipping a (vendor-signed but user-unauthorised) release in.
-7. **FSBL-rooted post-install verification.** After COMMIT writes the
-   new slot and the device reboots, the WRP1A-locked FSBL re-hashes
+7. **FSBL-rooted post-install verification.** Under the future approved
+   factory geometry, after COMMIT writes the new slot and the device reboots,
+   the WRP-protected FSBL re-hashes
    the now-active slot and renders ITS view of the 8 words on the
    NV3007 LCD before branching into the new firmware. The user MUST see
    the same 8 words FSBL shows that they confirmed at install time
@@ -69,11 +74,12 @@ vendor laptop             user laptop                 device (STM32U585)
    PIN in that state. See [`measured-boot.md`](../security/measured-boot.md) for
    the threat model and the trust chain.
 
-## Legacy storage layout (not the frozen Draft-0.9 layout)
+## Legacy storage layout (not the Draft 1.1 candidate layout)
 
 ```
 Bank 1 — secure (1 MB, SECWM1: all 128 pages secure):
-  pages 0–3       FSBL               32 KB   (WRP1A-locked)
+  pages 0–3       FSBL               32 KB   (legacy bench allocation;
+                                               not factory/WRP authority)
   page  4         Manifest A          8 KB
   page  5         Manifest B          8 KB
   page  6         Boot state          8 KB   (try-once + active slot)
@@ -130,8 +136,9 @@ Concretely, what's signed vs. unsigned:
 
 **Legacy behavior: one signature works for either slot.** The vendor emits one
 `.pqfw` per release, not two — the same signed bytes install
-identically into slot A or slot B. Draft 0.9 replaces this with slot-bound V4
-artifacts and separate A/B signatures.
+identically into slot A or slot B. Historical Draft 0.9 proposed slot-bound V4
+artifacts; Draft 1.1 instead proposes slot-bound V6 artifacts and separate A/B
+signatures. Neither research layout is current implementation authority.
 
 ## Manifest format (8 KB flash page)
 
@@ -200,7 +207,7 @@ Covered in `fsbl/src/main.rs`. Summary:
 ## Vendor release pipeline
 
 > **Currently blocked.** `make release`, `make fsbl-release`, and
-> `make prod-check-ship` intentionally fail until the reviewed rollback
+> `make prod-check-ship` intentionally fail until an approved rollback
 > backend and resource gates close. The commands below document the legacy
 > bench tooling; they are not a production release procedure.
 
@@ -385,7 +392,7 @@ Status word mapping:
 | `fwsign` deterministic sign  | ✔ verified               |
 | secure `hw::flash` bank 2    | ✔ landed                 |
 | secure `hw::otp`             | ✘ legacy unary codec; production-fenced |
-| secure `hw::boot_state`      | ✘ legacy try-once state; replacement interface frozen only |
+| secure `hw::boot_state`      | ✘ legacy try-once state; replacement interface only proposed by unapproved Draft 1.1 |
 | `fsbl/` crate                | ✔ bench build; production release blocked |
 | `shared` CMD_FW_* / INS codes | ✔ landed                |
 | secure `fw_update/` module   | ✔ landed                 |
@@ -396,7 +403,7 @@ Status word mapping:
 | Trusted-UI confirm dialog    | ⚠ stubbed (returns false; must be filled in after the ongoing `secure/src/ui/` refactor lands so it can reuse the same multi-page `confirm()` flow the sign path uses) |
 | A/B slot linker scripts      | ⚠ not reshaped (current firmware still boots at 0x0C00_0000; Phase 4 will split the secure/NS memory.x into `--slot A|B` variants) |
 | Companion updater tool       | ⚠ out of scope (see `tools/fwupdate.py` as the intended next-session artifact) |
-| Draft-0.9 backend/resource fit | ⚠ OPEN — no implementation approval |
+| Draft 1.1 approval/backend/resource fit | ⚠ OPEN — research candidate only; no implementation approval |
 | Hardware bring-up            | ⛔ intentionally stopped before sacrificial-silicon tests |
 | WRP1A in `ob-configurator`   | ⚠ out of scope — Phase 7 |
 | `make flash-hw-production`   | ⚠ out of scope — Phase 7 |

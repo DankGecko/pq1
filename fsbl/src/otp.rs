@@ -4,9 +4,10 @@
 //!
 //! This unary bit-tally is not a valid STM32U585 OTP backend: one
 //! ECC-protected 128-bit quad-word cannot be reprogrammed bit by bit. Shipping
-//! builds are compile-blocked until the reviewed Draft-0.9 typed floor/journal
-//! interface and physical codec replace this module. Do not extend this reader
-//! or treat `ROLLBACK_WORDS * 32` as physical update capacity.
+//! builds are compile-blocked. Draft 1.1 proposes a typed floor/journal
+//! interface, but is not implementation-approved and leaves the physical
+//! codec open. Do not extend this reader or treat `ROLLBACK_WORDS * 32` as
+//! physical update capacity.
 
 use core::ptr::read_volatile;
 
