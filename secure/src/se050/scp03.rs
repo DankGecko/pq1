@@ -203,6 +203,26 @@ pub unsafe fn establish(
     }
 }
 
+/// work-todo #36: establish an SCP03 session under an EXPLICIT static keyset,
+/// with NO fallback. The first-boot rotation uses this to probe the FINAL
+/// keyset (resume) and to open the TRANSPORT session before `PUT KEY` — it
+/// must NOT silently fall back to the AN12436 published keys (that would be
+/// the fail-OPEN the runtime `establish` deliberately compiles out), so this
+/// is a thin, fallback-free wrapper over `establish_with_keys`.
+///
+/// # Safety
+/// Drives the SE050 SCP03 handshake; single-threaded secure world.
+#[cfg(feature = "rdp2-self-lock")]
+pub unsafe fn establish_with(
+    session: &mut Scp03Session,
+    t1: &mut super::t1oi2c::T1State,
+    static_enc: &[u8; 16],
+    static_mac: &[u8; 16],
+) -> Result<(), Se050Error> {
+    // SAFETY: forwarded contract.
+    unsafe { establish_with_keys(session, t1, static_enc, static_mac) }
+}
+
 /// One INITIALIZE-UPDATE + EXTERNAL-AUTHENTICATE handshake using the
 /// given static `(S-ENC, S-MAC)` keys. Returns `Se050Error::Scp03` on a
 /// card-cryptogram mismatch (the "wrong keys" signal the caller uses to

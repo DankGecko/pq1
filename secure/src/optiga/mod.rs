@@ -390,7 +390,11 @@ impl OptigaTrustM {
         #[cfg(not(feature = "optiga-no-shield"))]
         {
             use zeroize::Zeroize;
-            match crate::hw::secret_keys::optiga_pairing_secret() {
+            // work-todo #36: single source of truth. `current_pbs()` returns
+            // the SALTED-final PBS once the first-boot rotation is complete
+            // (journal ALL_DONE), else the unsalted value — byte-identical to
+            // pre-#36 behaviour when the feature is off.
+            match crate::hw::secret_keys::current_pbs() {
                 Ok(mut pbs) => {
                     // Fingerprint log: first 8 bytes of the derived PBS.
                     // Stable across rebuilds iff the derivation root +
@@ -508,6 +512,60 @@ impl OptigaTrustM {
         }
     }
 
+    /// work-todo #36 first-boot: rotate the E140 Platform Binding Secret from
+    /// the factory **transport** PBS to the **salted-final** PBS, two-phase.
+    ///
+    /// Resumable: probes the FINAL PBS first (if a shield already establishes
+    /// under it, rotation completed on a prior boot → no-op). Otherwise it
+    /// establishes the shield under the TRANSPORT PBS (authorising the E140
+    /// rewrite via the `Change = LcsO<Op OR Conf(0xE140)` AC the factory
+    /// metadata keeps), writes the salted-final PBS to E140, then re-shields
+    /// under FINAL to **confirm** before returning.
+    ///
+    /// `salt` is the persisted (journal, RDP-2-hidden) 32-byte TRNG salt, so
+    /// the FINAL PBS is deterministic across resumes. Silicon-validation
+    /// deferred (see the #36 runbook): the SetData wedge (2–3 ops) timing and
+    /// the shield re-establish after the failed FINAL probe.
+    #[cfg(all(feature = "stm32u585", feature = "rdp2-self-lock"))]
+    pub fn rotate_pbs_to_salted(&mut self, salt: &[u8; 32]) -> Result<(), OptigaError> {
+        use zeroize::Zeroize;
+
+        let mut final_pbs = crate::hw::secret_keys::optiga_pairing_secret_salted(salt)
+            .map_err(|_| OptigaError::Transport)?;
+        let mut tr_pbs =
+            crate::hw::secret_keys::transport_optiga_pbs().map_err(|_| OptigaError::Transport)?;
+
+        let result = (|| {
+            // Resume / idempotence: FINAL PBS already establishes a shield?
+            self.shield.load_pbs(&final_pbs);
+            if self.hard_reset_and_reinit().is_ok() && self.ensure_shield().is_ok() {
+                return Ok(());
+            }
+
+            // Establish under TRANSPORT to authorise the E140 rewrite.
+            self.shield.load_pbs(&tr_pbs);
+            self.hard_reset_and_reinit()?;
+            self.ensure_shield()?;
+
+            // Write the salted-final PBS to E140.
+            // SAFETY: live shielded session under the current (transport) PBS;
+            // single-threaded secure world.
+            unsafe {
+                apdu::set_data_object(&mut self.ifx, &mut self.shield, apdu::OID_PBS, &final_pbs)?;
+            }
+
+            // Confirm: re-shield under FINAL. Only now is rotation "done".
+            self.shield.load_pbs(&final_pbs);
+            self.hard_reset_and_reinit()?;
+            self.ensure_shield()?;
+            Ok(())
+        })();
+
+        final_pbs.zeroize();
+        tr_pbs.zeroize();
+        result
+    }
+
     /// Derive PBS from the OTP master and load it into the shield state
     /// WITHOUT touching E140 on the chip. For bring-up test paths where
     /// E140 is already provisioned from a prior boot — we only need the
@@ -515,9 +573,10 @@ impl OptigaTrustM {
     /// under `optiga-no-shield`.
     #[cfg(feature = "stm32u585")]
     pub(crate) fn load_pbs_from_otp(&mut self) -> Result<(), OptigaError> {
-        let mut pbs = crate::hw::secret_keys::optiga_pairing_secret()
+        // work-todo #36: single source of truth (salted-final after rotation).
+        let mut pbs = crate::hw::secret_keys::current_pbs()
             .map_err(|e| {
-                secure_log!("[OPTIGA/bringup] optiga_pairing_secret FAILED: {:?}", e);
+                secure_log!("[OPTIGA/bringup] current_pbs FAILED: {:?}", e);
                 OptigaError::Transport
             })?;
         self.shield.load_pbs(&pbs);
@@ -589,10 +648,15 @@ impl OptigaTrustM {
         // `stm32u585`-gated peripherals are what deliver APDUs).
         //
         // 64-byte size per OPTIGA Trust M SRM §"Platform Binding Secret".
+        // work-todo #36: `current_pbs()` (single source of truth) so a wizard
+        // re-provision after the first-boot rotation writes the SAME salted
+        // value already at E140 — never downgrading it back to unsalted (the
+        // brick-class hazard). Byte-identical to `optiga_pairing_secret()`
+        // when `rdp2-self-lock` is off or the rotation hasn't completed.
         #[cfg(feature = "stm32u585")]
-        let mut pbs = crate::hw::secret_keys::optiga_pairing_secret()
+        let mut pbs = crate::hw::secret_keys::current_pbs()
             .map_err(|e| {
-                secure_log!("[OPTIGA/prov] optiga_pairing_secret FAILED: {:?}", e);
+                secure_log!("[OPTIGA/prov] current_pbs FAILED: {:?}", e);
                 OptigaError::Transport
             })?;
         #[cfg(not(feature = "stm32u585"))]

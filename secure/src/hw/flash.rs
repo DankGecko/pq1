@@ -420,6 +420,206 @@ pub unsafe fn write_key(key: &[u8; 32]) -> Result<(), ()> {
     Ok(())
 }
 
+// ===========================================================================
+// work-todo #36 — first-boot RDP-2 self-lock + page-127 provisioning journal.
+//
+// Compiled ONLY for the shipping self-lock feature (`rdp2-self-lock`); every
+// current dev / QEMU / bench build omits this block entirely, so their flash
+// behaviour is byte-identical to before. The one genuinely new *mutating*
+// routine is `program_rdp_level2_and_launch` — the irreversible RDP burn —
+// which is why it lives behind the same feature the `nsc/mod.rs` ship fence
+// forces on only for `mode-production`.
+//
+// Register offsets: the option-byte programming keys + OPTSTRT/OBL_LAUNCH/
+// OPTLOCK bit positions come from `tools/ob-configurator/src/main.rs` (which
+// ran the OB-commit on the bench), but the SECSR/SECCR *offsets* there are
+// swapped — this code uses the RM0456-correct `secsr=0x24 / seccr=0x2C`
+// already bound in `REG` above. WRP1AR / SECWM offsets + the OEM-lock status
+// register are BENCH-CONFIRM (RM0456) items — see the #36 deferred runbook.
+// ===========================================================================
+
+/// Option-byte key register offset (RM0456; `FLASH_S+0x10`).
+#[cfg(feature = "rdp2-self-lock")]
+const OPTKEYR_OFF: u32 = 0x10;
+/// Option-byte unlock keys (GP/RM0456; from `tools/ob-configurator`).
+#[cfg(feature = "rdp2-self-lock")]
+const OPT_KEY1: u32 = 0x0819_2A3B;
+#[cfg(feature = "rdp2-self-lock")]
+const OPT_KEY2: u32 = 0x4C5D_6E7F;
+/// `SECCR.OPTSTRT` (bit 17) — commit staged option bytes to flash.
+#[cfg(feature = "rdp2-self-lock")]
+const OPTSTRT: u32 = 1 << 17;
+/// `SECCR.OBL_LAUNCH` (bit 27) — reload option bytes (triggers a reset).
+#[cfg(feature = "rdp2-self-lock")]
+const OBL_LAUNCH: u32 = 1 << 27;
+/// `SECCR.OPTLOCK` (bit 30) — cleared by the `OPTKEYR` key sequence.
+#[cfg(feature = "rdp2-self-lock")]
+const OPTLOCK: u32 = 1 << 30;
+/// `FLASH_OPTR.RDP` byte value for Level 2 (permanent debug lockdown).
+#[cfg(feature = "rdp2-self-lock")]
+const RDP_LEVEL2: u32 = 0xCC;
+/// BENCH-CONFIRM (RM0456) register offsets for the ship-profile verifier.
+#[cfg(feature = "rdp2-self-lock")]
+const SECWM1R1_OFF: u32 = 0x50;
+#[cfg(feature = "rdp2-self-lock")]
+const WRP1AR_OFF: u32 = 0x58;
+#[cfg(feature = "rdp2-self-lock")]
+const SECWM2R1_OFF: u32 = 0x60;
+
+/// Raw `FLASH_OPTR` (TZEN / BOR_LEV / RDP fields for the ship-profile check).
+#[cfg(feature = "rdp2-self-lock")]
+#[must_use]
+pub fn optr_raw() -> u32 {
+    // SAFETY: real, 4-byte-aligned secure option register; pure read.
+    unsafe { RoReg32::new(FLASH + FLASH_OPTR_OFF) }.read()
+}
+
+/// Raw `SECWM1R1` (bank-1 secure watermark).
+#[cfg(feature = "rdp2-self-lock")]
+#[must_use]
+pub fn secwm1r1_raw() -> u32 {
+    // SAFETY: as `optr_raw`.
+    unsafe { RoReg32::new(FLASH + SECWM1R1_OFF) }.read()
+}
+
+/// Raw `SECWM2R1` (bank-2 secure watermark).
+#[cfg(feature = "rdp2-self-lock")]
+#[must_use]
+pub fn secwm2r1_raw() -> u32 {
+    // SAFETY: as `optr_raw`.
+    unsafe { RoReg32::new(FLASH + SECWM2R1_OFF) }.read()
+}
+
+/// Raw `WRP1AR` (FSBL write-protect span). BENCH-CONFIRM offset.
+#[cfg(feature = "rdp2-self-lock")]
+#[must_use]
+pub fn wrp1ar_raw() -> u32 {
+    // SAFETY: as `optr_raw`.
+    unsafe { RoReg32::new(FLASH + WRP1AR_OFF) }.read()
+}
+
+/// Raw OEM-lock status. BENCH-CONFIRM register (FLASH_NSSR vs FLASH_OPTSR) —
+/// the bit *masks* live in `sphincs_tz_shared::lockdown` (`OEM1LOCK`/`OEM2LOCK`).
+#[cfg(feature = "rdp2-self-lock")]
+#[must_use]
+pub fn oem_lock_status_raw() -> u32 {
+    // SAFETY: real, 4-byte-aligned FLASH status register; pure read.
+    unsafe { RoReg32::new(FLASH_NS + 0x20) }.read()
+}
+
+/// Is a bank-1 secure page fully erased (all `0xFF`)? Phase A blank-checks the
+/// per-device pages 123..=127 before the RDP burn: a pre-planted page-127
+/// journal salt would otherwise yield a predictable final PBS (#36 hardening).
+#[cfg(feature = "rdp2-self-lock")]
+#[must_use]
+pub fn is_secure_page_blank(page: u32) -> bool {
+    assert!(page <= 127, "bank-1 page out of range");
+    let base = FSBL_BASE_ADDR + page * 0x2000; // 8 KB pages, secure alias
+    let src = base as *const u32;
+    for i in 0..(0x2000 / 4) {
+        // SAFETY: `base..base+8KB` is a fixed in-flash page; read-only.
+        if unsafe { read_volatile(src.add(i)) } != 0xFFFF_FFFF {
+            return false;
+        }
+    }
+    true
+}
+
+/// Append one 16-byte record to the page-127 provisioning journal at
+/// `qw_index` (0..512). Read-back-verified; ICACHE is invalidated by
+/// `write_quadword_verified`.
+///
+/// # Safety
+/// Programs persistent flash in page 127 (KEY_PAGE — owned outright by the
+/// first-boot journal now that TROPIC01 is retired). Caller ensures the QW is
+/// currently erased (the codec only ever appends at the scanned `next_free`).
+#[cfg(feature = "rdp2-self-lock")]
+pub unsafe fn write_journal_qw(qw_index: usize, rec: &[u8; 16]) -> Result<(), ()> {
+    if qw_index >= 512 {
+        return Err(());
+    }
+    let addr = KEY_PAGE_ADDR + (qw_index as u32) * 16;
+    // SAFETY: `addr` is quad-word aligned and inside page 127; the caller
+    // guarantees it is currently erased (append at `next_free`).
+    unsafe { write_quadword_verified(addr, rec) }
+}
+
+/// **Irreversible.** Stage `FLASH_OPTR.RDP = 0xCC` (Level 2), commit the
+/// option bytes, and reload them (`OBL_LAUNCH` → system reset).
+///
+/// On success this **never returns** (the MCU resets). It only *returns* on a
+/// pre-launch error — as `Err(())` — so Phase A can show a numbered fault and
+/// halt UNLOCKED without having locked a bad unit. A power loss between the
+/// `OPTSTRT` commit and `OBL_LAUNCH` is safe: the option bytes are already in
+/// flash, so the next natural reset boots at RDP-2 (#36 (b) — the one
+/// unavoidable residual window; keep it short, BOR on).
+///
+/// # Safety
+/// Permanently sets RDP Level 2. Caller MUST have verified the ship option-
+/// byte profile + blank per-device pages first (Phase A) — RDP-2 is
+/// unrecoverable.
+#[cfg(feature = "rdp2-self-lock")]
+pub unsafe fn program_rdp_level2_and_launch() -> Result<(), ()> {
+    let commit = cortex_m::interrupt::free(|_| -> Result<(), ()> {
+        // SAFETY: option-byte registers in the secure FLASH block; single-
+        // threaded secure world; each `unsafe` funnels through `Reg32` once.
+        let optkeyr = unsafe { Reg32::new(FLASH + OPTKEYR_OFF) };
+        let optr = unsafe { Reg32::new(FLASH + FLASH_OPTR_OFF) };
+
+        wait_bsy();
+        clear_errors();
+        unlock();
+        if REG.seccr.read() & LOCK != 0 {
+            return Err(()); // flash controller still locked (not in secure mode?)
+        }
+
+        // Unlock the option-byte area.
+        optkeyr.write(OPT_KEY1);
+        optkeyr.write(OPT_KEY2);
+        cortex_m::asm::dsb();
+        if REG.seccr.read() & OPTLOCK != 0 {
+            return Err(()); // option bytes still locked
+        }
+
+        // Stage RDP=0xCC, preserving TZEN / BOR / WRP / SECWM / … .
+        let staged = (optr.read() & !0xFF) | RDP_LEVEL2;
+        optr.write(staged);
+
+        // Commit the staged option bytes to flash.
+        REG.seccr.write(OPTSTRT);
+        wait_bsy();
+        let sr = REG.secsr.read();
+        // NOTE (BENCH-CONFIRM): `ERR_MASK` catches the general program/erase
+        // errors; option-write errors (`OPTWERR`) live in a separate bit that
+        // is a runbook pin. A missed OPTWERR is non-fatal — the burn simply
+        // didn't take, so the next boot re-attempts idempotently.
+        if sr & ERR_MASK != 0 {
+            clear_errors();
+            return Err(());
+        }
+        Ok(())
+    });
+
+    commit?;
+
+    // Success: reload option bytes → system reset. Diverges.
+    // SAFETY: option bytes are staged + committed; OBL_LAUNCH resets the MCU.
+    unsafe { obl_launch() }
+}
+
+/// Trigger `OBL_LAUNCH` (option-byte reload → system reset). Never returns.
+#[cfg(feature = "rdp2-self-lock")]
+unsafe fn obl_launch() -> ! {
+    cortex_m::interrupt::free(|_| {
+        REG.seccr.write(OBL_LAUNCH);
+    });
+    // OBL_LAUNCH triggers a system reset; if for any reason it doesn't, park
+    // rather than continue into an inconsistent boot.
+    loop {
+        cortex_m::asm::wfe();
+    }
+}
+
 // ---------------------------------------------------------------------------
 // SE050 admin-wipe state — page 125
 // ---------------------------------------------------------------------------

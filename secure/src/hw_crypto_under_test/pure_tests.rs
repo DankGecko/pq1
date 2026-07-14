@@ -268,6 +268,91 @@ fn positive_hkdf_distinct_labels_diverge() {
     assert_ne!(a, b, "distinct domain labels must yield independent keys");
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// work-todo #36: transport keysets + salted-final PBS.
+//
+// The transport keys HKDF the REAL OTP master with `pqsigner/transport/*`
+// labels (RDP-invariant, public-by-assumption); the final OPTIGA PBS mixes
+// a persisted TRNG salt into a `-v2` label. These KATs use the same
+// reference HKDF the real derivation runs under `otp-hardcoded-master-key`.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn wt36_transport_labels_domain_separate_from_final_and_each_other() {
+    let prk = [0x33u8; 32];
+    // A transport key must be independent of its final counterpart even
+    // though they share a suffix — the "transport/" prefix separates them.
+    let mut t = [0u8; 16];
+    let mut f = [0u8; 16];
+    hkdf_expand_ref(&prk, b"pqsigner/transport/se050-scp03-enc-v1", &mut t);
+    hkdf_expand_ref(&prk, b"pqsigner/se050-scp03-enc-v1", &mut f);
+    assert_ne!(t, f, "transport SCP03-enc must differ from the final SCP03-enc");
+
+    // All five transport labels pairwise-distinct.
+    let labels: [&[u8]; 5] = [
+        b"pqsigner/transport/se050-scp03-enc-v1",
+        b"pqsigner/transport/se050-scp03-mac-v1",
+        b"pqsigner/transport/se050-scp03-dek-v1",
+        b"pqsigner/transport/se050-admin-pin-v1",
+        b"pqsigner/transport/optiga-pbs-v1",
+    ];
+    for i in 0..labels.len() {
+        for j in (i + 1)..labels.len() {
+            let mut a = [0u8; 32];
+            let mut b = [0u8; 32];
+            hkdf_expand_ref(&prk, labels[i], &mut a);
+            hkdf_expand_ref(&prk, labels[j], &mut b);
+            assert_ne!(a, b, "transport labels {i},{j} collided");
+        }
+    }
+}
+
+#[test]
+fn wt36_salted_pbs_differs_from_unsalted_and_varies_with_salt() {
+    let prk = [0x77u8; 32];
+    let mut unsalted = [0u8; 64];
+    hkdf_expand_ref(&prk, b"pqsigner/optiga-pbs-v1", &mut unsalted);
+
+    // info = "pqsigner/optiga-pbs-v2" || salt (matches optiga_pairing_secret_salted).
+    let build = |salt: &[u8; 32]| {
+        let mut info = [0u8; 22 + 32];
+        info[..22].copy_from_slice(b"pqsigner/optiga-pbs-v2");
+        info[22..].copy_from_slice(salt);
+        let mut out = [0u8; 64];
+        hkdf_expand_ref(&prk, &info, &mut out);
+        out
+    };
+    let s1 = build(&[0xAAu8; 32]);
+    let s2 = build(&[0xBBu8; 32]);
+    assert_ne!(&s1[..], &unsalted[..], "salted-final PBS must differ from the unsalted transport-era PBS");
+    assert_ne!(s1, s2, "a different salt must yield a different final PBS");
+}
+
+#[test]
+fn wt36_secret_keys_new_labels_and_fns_pinned() {
+    // Tag drift on any of these strands every field device — same rule as the
+    // existing label pins below.
+    assert!(SECRET_KEYS_SRC.contains(r#"b"pqsigner/transport/""#), "transport prefix drifted");
+    assert!(SECRET_KEYS_SRC.contains(r#"b"pqsigner/optiga-pbs-v2""#), "salted PBS label drifted");
+    for suffix in [
+        r#"b"se050-scp03-enc-v1""#,
+        r#"b"se050-scp03-mac-v1""#,
+        r#"b"se050-scp03-dek-v1""#,
+        r#"b"se050-admin-pin-v1""#,
+        r#"b"optiga-pbs-v1""#,
+    ] {
+        assert!(SECRET_KEYS_SRC.contains(suffix), "transport suffix {suffix} missing");
+    }
+    // Transport keys root in the REAL OTP master (read_device_master, no burn),
+    // NOT derive_into (which would route through the RDP-variant DHUK).
+    assert!(SECRET_KEYS_SRC.contains("otp::read_device_master()"), "transport must read OTP master");
+    assert!(SECRET_KEYS_SRC.contains("pub fn transport_optiga_pbs() -> Result<[u8; 64], OtpError>"));
+    assert!(SECRET_KEYS_SRC.contains("pub fn optiga_pairing_secret_salted(salt: &[u8; 32]) -> Result<[u8; 64], OtpError>"));
+    assert!(SECRET_KEYS_SRC.contains("pub fn current_pbs() -> Result<[u8; 64], OtpError>"));
+    // current_pbs gates the salted path on the ship feature.
+    assert!(SECRET_KEYS_SRC.contains(r#"feature = "rdp2-self-lock""#), "current_pbs must gate salted path");
+}
+
 #[test]
 fn legacy_otp_rollback_logical_bit_walk_is_lsb_first() {
     // Pins the quarantined software model only. STM32U585 OTP cannot perform

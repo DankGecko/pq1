@@ -232,6 +232,36 @@ impl Se050 {
         }
 
         unsafe {
+            // SAFETY: single-threaded secure world; the T=1 link + applet
+            // select touch only this driver's `t1` state.
+            self.link_bringup()?;
+
+            #[cfg(feature = "debug-log")]
+            secure_log!("[SE050] Init: establishing SCP03...");
+
+            scp03::establish(&mut self.scp03, &mut self.t1)?;
+
+            #[cfg(feature = "debug-log")]
+            secure_log!("[SE050] Init complete");
+        }
+
+        self.ready = true;
+        Ok(())
+    }
+
+    /// T=1 link bring-up: power-on settle → `interface_reset` (cold-boot
+    /// retry loop) → `select_applet`. Shared by `init` (which then does the
+    /// SCP03 establish under the build's preferred keys) and the work-todo #36
+    /// first-boot rotation methods (which establish under explicit
+    /// transport/final keys). Does NOT establish SCP03 or set `ready`.
+    ///
+    /// # Safety
+    /// Drives the SE050 T=1 interface; single-threaded secure world.
+    unsafe fn link_bringup(&mut self) -> Result<(), Se050Error> {
+        // SAFETY: matches the original `init` body — all T=1 / applet-select
+        // operations run in the single-threaded secure world on this driver's
+        // own `t1` state.
+        unsafe {
             // Initial power-on settle (~3 ms at 160 MHz). Covers the
             // warm-reset case (`probe-rs reset`) where the SE050 was
             // recently powered and only needs the T=1 state to clear.
@@ -303,16 +333,138 @@ impl Se050 {
             apdu::select_applet(&mut self.t1)?;
 
             #[cfg(feature = "debug-log")]
-            secure_log!("[SE050] Init: establishing SCP03...");
-
-            scp03::establish(&mut self.scp03, &mut self.t1)?;
-
-            #[cfg(feature = "debug-log")]
-            secure_log!("[SE050] Init complete");
+            secure_log!("[SE050] link bring-up complete (applet selected)");
         }
 
-        self.ready = true;
         Ok(())
+    }
+
+    /// work-todo #36 first-boot: rotate the SCP03 keyset from the factory
+    /// **transport** keys to the **final** BHK-rooted keys, two-phase.
+    ///
+    /// Resumable: probes the FINAL keyset first (if it already establishes,
+    /// the rotation completed on a prior boot and this is a no-op). Otherwise
+    /// establishes under TRANSPORT, sends GP `PUT KEY` (new final keys wrapped
+    /// under the current transport DEK), then re-establishes under FINAL to
+    /// **confirm** before returning — so a crash mid-rotation re-enters and
+    /// converges (the OLD keyset is only "dead" once NEW is proven live).
+    ///
+    /// Silicon-validation deferred (see the #36 runbook): the transport→final
+    /// PUT KEY flow + the re-establish-after-failed-auth link handling must be
+    /// proven on a sacrificial part.
+    #[cfg(feature = "rdp2-self-lock")]
+    pub fn rotate_scp03_transport_to_final(&mut self) -> Result<(), Se050Error> {
+        use crate::hw::secret_keys as sk;
+        use zeroize::Zeroize;
+
+        let map = |_| Se050Error::Scp03;
+        let mut final_enc = sk::se050_scp03_enc_key().map_err(map)?;
+        let mut final_mac = sk::se050_scp03_mac_key().map_err(map)?;
+        let mut final_dek = sk::se050_scp03_dek_key().map_err(map)?;
+        let mut tr_enc = sk::transport_se050_scp03_enc().map_err(map)?;
+        let mut tr_mac = sk::transport_se050_scp03_mac().map_err(map)?;
+        let mut tr_dek = sk::transport_se050_scp03_dek().map_err(map)?;
+
+        self.ready = false;
+        let result = (|| unsafe {
+            // Fresh link, then probe FINAL (resume / idempotence).
+            self.link_bringup()?;
+            self.scp03 = Scp03Session::new();
+            if scp03::establish_with(&mut self.scp03, &mut self.t1, &final_enc, &final_mac).is_ok() {
+                self.ready = true;
+                return Ok(());
+            }
+
+            // Not final yet: clean link, establish under TRANSPORT.
+            self.link_bringup()?;
+            self.scp03 = Scp03Session::new();
+            scp03::establish_with(&mut self.scp03, &mut self.t1, &tr_enc, &tr_mac)
+                .map_err(|_| Se050Error::Scp03)?;
+
+            // Install the FINAL keyset in place (KVN 0x0B), key blocks wrapped
+            // under the CURRENT (transport) DEK.
+            let (apdu_buf, len) =
+                scp03::build_put_key_apdu(&final_enc, &final_mac, &final_dek, &tr_dek);
+            let mut resp = [0u8; 32];
+            let n = apdu::send_apdu(&mut self.t1, &mut self.scp03, &apdu_buf[..len], &mut resp)?;
+            if n < 2 {
+                return Err(Se050Error::Scp03);
+            }
+            let sw = ((resp[n - 2] as u16) << 8) | (resp[n - 1] as u16);
+            if sw != 0x9000 {
+                return Err(Se050Error::Status(sw));
+            }
+
+            // Confirm: re-establish under FINAL. Only now is rotation "done".
+            self.link_bringup()?;
+            self.scp03 = Scp03Session::new();
+            scp03::establish_with(&mut self.scp03, &mut self.t1, &final_enc, &final_mac)
+                .map_err(|_| Se050Error::Scp03)?;
+            self.ready = true;
+            Ok(())
+        })();
+
+        final_enc.zeroize();
+        final_mac.zeroize();
+        final_dek.zeroize();
+        tr_enc.zeroize();
+        tr_mac.zeroize();
+        tr_dek.zeroize();
+        result
+    }
+
+    /// work-todo #36 first-boot: re-key the admin UserID credential
+    /// (`ADMIN_WIPE_OBJ`) from the factory **transport** admin PIN to the
+    /// **final** BHK-rooted admin PIN. Must run AFTER
+    /// `rotate_scp03_transport_to_final` (it uses the final SCP03 channel).
+    ///
+    /// Resumable: (a) admin absent → recreate with FINAL; (b) already verifies
+    /// under FINAL → done; (c) verifies under TRANSPORT → delete + recreate
+    /// with FINAL. The admin UserID is created with UNLIMITED attempts, so the
+    /// FINAL-then-TRANSPORT verify probes cannot lock it out.
+    #[cfg(feature = "rdp2-self-lock")]
+    pub fn rekey_admin_transport_to_final(&mut self) -> Result<(), Se050Error> {
+        use crate::hw::secret_keys as sk;
+        use zeroize::Zeroize;
+
+        self.init()?; // final SCP03 channel (rotation step already completed)
+
+        let map = |_| Se050Error::Scp03;
+        let mut final_pin = sk::se050_admin_pin().map_err(map)?;
+        let mut tr_pin = sk::transport_se050_admin_pin().map_err(map)?;
+
+        let result = (|| unsafe {
+            // (a) Admin object missing (crashed between delete and recreate).
+            if !apdu::check_exists(&mut self.t1, &mut self.scp03, ADMIN_WIPE_OBJ).unwrap_or(false) {
+                apdu::write_userid_unlimited(
+                    &mut self.t1, &mut self.scp03, ADMIN_WIPE_OBJ, &final_pin, None,
+                )?;
+                return Ok(());
+            }
+
+            // (b) Already re-keyed? Verify under FINAL.
+            if let Ok(sid) = apdu::create_session(&mut self.t1, &mut self.scp03, ADMIN_WIPE_OBJ) {
+                let ok = apdu::verify_session(&mut self.t1, &mut self.scp03, &sid, &final_pin).is_ok();
+                let _ = apdu::close_session(&mut self.t1, &mut self.scp03, &sid);
+                if ok {
+                    return Ok(());
+                }
+            }
+
+            // (c) Authenticate under TRANSPORT, delete, recreate with FINAL.
+            let sid = apdu::create_session(&mut self.t1, &mut self.scp03, ADMIN_WIPE_OBJ)?;
+            apdu::verify_session(&mut self.t1, &mut self.scp03, &sid, &tr_pin)?;
+            apdu::delete_object_authed(&mut self.t1, &mut self.scp03, &sid, ADMIN_WIPE_OBJ)?;
+            let _ = apdu::close_session(&mut self.t1, &mut self.scp03, &sid);
+            apdu::write_userid_unlimited(
+                &mut self.t1, &mut self.scp03, ADMIN_WIPE_OBJ, &final_pin, None,
+            )?;
+            Ok(())
+        })();
+
+        final_pin.zeroize();
+        tr_pin.zeroize();
+        result
     }
 
     /// **IRREVERSIBLE — production-provisioning only.** One-shot GP `PUT KEY`
@@ -347,7 +499,12 @@ impl Se050 {
             secure_log!("[SE050/rotate] REFUSE: derived SCP03 keys == published factory keys — root not selecting?");
             return Err(Se050Error::Scp03);
         }
-        let (apdu, len) = scp03::build_put_key_apdu(&new_enc, &new_mac, &new_dek);
+        // Factory rotation: the chip is still on the published AN12436
+        // defaults, so the current DEK that wraps the new key blocks is
+        // `PLATFORM_DEK`. (First-boot transport→final rotation passes the
+        // per-device transport DEK instead — see work-todo #36.)
+        let (apdu, len) =
+            scp03::build_put_key_apdu(&new_enc, &new_mac, &new_dek, &crate::scp03_logic::PLATFORM_DEK);
         let mut resp = [0u8; 32];
         let n = unsafe { apdu::send_apdu(&mut self.t1, &mut self.scp03, &apdu[..len], &mut resp)? };
         if n < 2 {

@@ -446,6 +446,80 @@ compile_error!(
      would brick dev chips). Do NOT broaden the trigger to match S-2/S-3."
 );
 
+// work-todo #36 ship gate: a production build MUST enable `rdp2-self-lock`,
+// the first-boot RDP-2 self-lock + on-device pairing rotation. Devices ship at
+// RDP-0 (batch-uniform, user-verifiable over SWD before first power); the first
+// field boot verifies the ship option-byte profile, self-locks RDP-2, and
+// rotates the SE pairing secrets off the factory transport keysets — before
+// the seed wizard. Without this feature a shipped unit would stay at RDP-0
+// (debug open) forever and keep the public transport keysets as its live
+// pairing secrets.
+//
+// DELIBERATELY keyed to `mode-production` ALONE — NOT the belt-and-braces
+// `all(stm32u585, not(debug_assertions))` form the S-2/S-3/tamp fences use.
+// The RDP=0xCC burn is IRREVERSIBLE, so it must fire only for an explicit
+// production-unit build, never for a dev/test RELEASE hardware build:
+// `make e2e-hw` / `play-hw-display` build `--release` (`not(debug_assertions)`)
+// WITHOUT `mode-production`, and forcing the self-lock onto them would brick
+// dev bench chips at their first boot. Same rationale + narrow trigger as the
+// S-1 `optiga-lock-operational` fence directly above.
+#[cfg(all(feature = "mode-production", not(feature = "rdp2-self-lock")))]
+compile_error!(
+    "Production builds require `rdp2-self-lock` (work-todo #36): the first field \
+     boot self-locks RDP Level 2 and rotates the SE pairing secrets off the \
+     factory transport keysets, before the seed wizard. Without it a shipped \
+     unit stays at RDP-0 (debug port open) with the public transport keysets as \
+     its live SCP03/PBS/admin secrets. This fence is `mode-production`-only BY \
+     DESIGN: the RDP burn is irreversible and must never fire on dev/test \
+     release hardware (which would brick dev chips at first boot). Do NOT \
+     broaden the trigger."
+);
+
+// work-todo #36 anti-footgun: `rdp2-self-lock` must NEVER compile into a
+// dev / QEMU / bench / test image — its first boot programs RDP=0xCC
+// (irreversible) and rotates SE keys against the factory transport state. A
+// bench board is not in that state, so a production FSBL on it would brick.
+// `tropic01-se` is included because it and the first-boot journal both claim
+// flash page 127 (KEY_PAGE); TROPIC01 is retired, so this only pins the
+// single-ownership invariant. `mock-se` / `*-hardcoded-master-key` would make
+// the "rotate off the real transport keysets" step meaningless.
+#[cfg(all(
+    feature = "rdp2-self-lock",
+    any(
+        feature = "e2e-test",
+        feature = "dev-testkey",
+        feature = "mock-se",
+        feature = "otp-hardcoded-master-key",
+        feature = "bhk-hardcoded-master-key",
+        feature = "factory-provisioning",
+        feature = "tropic01-se",
+    ),
+))]
+compile_error!(
+    "`rdp2-self-lock` (work-todo #36) is incompatible with dev/test features \
+     (e2e-test / dev-testkey / mock-se / otp-hardcoded-master-key / \
+     bhk-hardcoded-master-key / factory-provisioning / tropic01-se). Its first \
+     boot performs the IRREVERSIBLE RDP=0xCC burn and rotates SE pairing \
+     secrets against the factory transport state — a bench/QEMU/test board is \
+     not in that state and would self-brick. Build the production image without \
+     these features, or a dev image without `rdp2-self-lock`. (`tropic01-se` \
+     also collides with the page-127 provisioning journal — TROPIC01 is retired.)"
+);
+
+// work-todo #36 config guard: `rdp2-self-lock` requires `dual-se`. Phase B
+// rotates BOTH secure elements' pairing secrets (SE050 SCP03/admin + OPTIGA
+// PBS) off the factory transport keysets. Without `dual-se` the Phase-B glue
+// is compiled out while Phase A would still program RDP-2 — locking the device
+// without ever provisioning it. `dual-se` is the shipping seed-split config
+// (invariant #1) anyway, so this only rules out a broken bench combination.
+#[cfg(all(feature = "rdp2-self-lock", not(feature = "dual-se")))]
+compile_error!(
+    "`rdp2-self-lock` (work-todo #36) requires `dual-se`: first-boot Phase B \
+     rotates BOTH SEs' pairing secrets off the factory transport keysets. \
+     Without `dual-se` the rotation glue is compiled out while Phase A still \
+     locks RDP-2 — locking the device without provisioning it."
+);
+
 // SCA ship-blocker (audit secret-lifecycle 20260611, MEDIUM-3): a production
 // hardware build MUST enable the power-consumption mask (`consumption-mask`).
 // The ~7 s SPHINCS+C10 keygen/sign produces a characteristic power-draw

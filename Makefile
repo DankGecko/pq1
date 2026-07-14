@@ -2162,10 +2162,13 @@ _repro_one:
 # per-device derived keys instead of the published AN12436 factory constants.
 # Without these a default `make release` shipped non-Tier-1 roots, contrary to
 # invariant #3; the nsc/mod.rs require-fence now makes that a build error.
-# `bhk` (Tier-2 SE050 split) is deliberately NOT added — enabling it without
-# the phase-2B silicon provisioning yields zero-keyed derivations (see
-# secure/Cargo.toml); it remains a tracked follow-up.
-RELEASE_FEATURES ?= stm32u585,se050,optiga-trust-m,dual-se,ui-lcd,usb,iwdg,saes-dhuk,se050-derived-scp03,mode-production,optiga-lock-operational,optiga-hw-counter,consumption-mask,tamp,tamp-wipe,tzic-wipe
+# `rdp2-self-lock` (work-todo #36) adds the first-boot RDP-2 self-lock +
+# on-device pairing rotation, and pulls in `bhk` (Tier-2 SE050 split) — which
+# is now correct to ship because #36 Phase B IS the phase-2B BHK provisioning
+# (BHK first-write + load-lock happen on the first field boot, before the
+# wizard), so the earlier "bhk yields zero-keyed derivations without phase-2B"
+# caveat no longer applies once `rdp2-self-lock` owns that provisioning.
+RELEASE_FEATURES ?= stm32u585,se050,optiga-trust-m,dual-se,ui-lcd,usb,iwdg,saes-dhuk,se050-derived-scp03,mode-production,optiga-lock-operational,optiga-hw-counter,consumption-mask,tamp,tamp-wipe,tzic-wipe,bhk,rdp2-self-lock
 
 # MED-2 ship gate (audits/tz-tamper-debug-20260611). Resolve the ACTUAL feature
 # set cargo would compile for the shipping image and fail if any never-ship
@@ -2194,7 +2197,7 @@ PROD_FORBIDDEN = e2e-test dev-testkey mock-se debug-log otp-hardcoded-master-key
 # `make release` / `prod-check`, so it is unaffected.)
 PROD_REQUIRED = mode-production optiga-lock-operational optiga-hw-counter \
                 consumption-mask tamp tamp-wipe tzic-wipe iwdg \
-                saes-dhuk se050-derived-scp03
+                saes-dhuk se050-derived-scp03 bhk rdp2-self-lock
 
 # Canonical production shipping feature set (the full hardened image). This is
 # what a real shipping build / CI prod-gate validates. Kept on ONE line so the
@@ -2204,7 +2207,7 @@ PROD_REQUIRED = mode-production optiga-lock-operational optiga-hw-counter \
 # PROVISION time — only flash this onto a unit you intend to ship, after the
 # OTP-master burn (the `is_device_master_burned()` runtime guard refuses the
 # bump otherwise). See secure/Cargo.toml:553 + docs/production-todo.md.
-PROD_SHIP_FEATURES = stm32u585,se050,optiga-trust-m,dual-se,ui-lcd,usb,iwdg,saes-dhuk,se050-derived-scp03,mode-production,optiga-lock-operational,optiga-hw-counter,consumption-mask,tamp,tamp-wipe,tzic-wipe
+PROD_SHIP_FEATURES = stm32u585,se050,optiga-trust-m,dual-se,ui-lcd,usb,iwdg,saes-dhuk,se050-derived-scp03,mode-production,optiga-lock-operational,optiga-hw-counter,consumption-mask,tamp,tamp-wipe,tzic-wipe,bhk,rdp2-self-lock
 
 # Exact machine-readable provenance string emitted by dbgen only after a real
 # ERC-8176 EAS verification implementation has authenticated every leaf.
@@ -2261,6 +2264,23 @@ prod-check: prod-feature-check ## Production-readiness gate (blocked after featu
 prod-check-ship: RELEASE_FEATURES := $(PROD_SHIP_FEATURES)
 prod-check-ship: prod-feature-check ## Strict ship gate — feature-check, then rollback refusal
 	@$(error prod-check-ship: FAIL — reviewed production rollback backend is not implemented; Draft 0.9 grants no ship authority)
+
+# work-todo #36 CI gate: prove the `rdp2-self-lock` feature-ON code path
+# (first-boot Phase A/B glue, the RDP-2 write path, transport/salted key
+# derivation) still COMPILES for thumbv8m. It cannot use PROD_SHIP_FEATURES /
+# mode-production — those are blocked at build.rs by the rollback quarantine
+# (FW_ROLLBACK_PRODUCTION_BLOCKED) — so it compiles the same feature-ON code
+# with the dev-style opt-ins the bench targets use (legacy-fw-rollback-unsafe
+# + erc7730-dev-unattested), WITHOUT mode-production. Mirrors how the S-1
+# lockdown closure code is kept compiling. Compile-only (`cargo check`); no
+# flash, no reset, no OTP.
+.PHONY: build-rdp2-self-lock
+build-rdp2-self-lock: ## Compile-check the first-boot self-lock feature (work-todo #36)
+	@echo "==> build-rdp2-self-lock (work-todo #36): checking feature-ON compile for $(TARGET)"
+	cargo check -p sphincs-tz-secure --no-default-features \
+		--features "stm32u585,dual-se,ui-lcd,usb,saes-dhuk,se050-derived-scp03,bhk,rdp2-self-lock,iwdg,legacy-fw-rollback-unsafe,erc7730-dev-unattested" \
+		--target $(TARGET)
+	@echo "==> build-rdp2-self-lock: PASS — first-boot self-lock code compiles"
 
 # Image size / budget report. The secure image must fit its 464 KB A/B slot.
 # The non-overrideable capacity lives in fw-manifest and is enforced by

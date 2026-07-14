@@ -390,3 +390,123 @@ pub fn se050_admin_pin() -> Result<[u8; 16], OtpError> {
     derive_into_bhk(b"pqsigner/se050-admin-pin-v1", &mut out)?;
     Ok(out)
 }
+
+// ===========================================================================
+// work-todo #36 — first-boot self-provisioning key material.
+//
+// The factory (at RDP-0) provisions the SEs onto per-device **transport**
+// keysets and burns the OTP master. On the first field boot the device
+// self-locks RDP-2 and rotates those transport keysets to the FINAL secrets
+// above (SE050 → BHK axis; OPTIGA PBS → DHUK + a fresh persisted TRNG salt).
+//
+// The transport keysets MUST be reproducible at BOTH factory-time (RDP-0) and
+// post-lock (RDP-2), so they root in the **real burned OTP master** (S-world-
+// readable at every RDP level) via HKDF — NOT `derive_into` (whose `saes-dhuk`
+// arm changes value across the RDP-0 → RDP-1 transition) and NOT the BHK
+// (mass-erased on regression, not per-die at RDP-0). Transport keys are
+// public-by-assumption: at RDP-0 anyone can read the OTP master and recompute
+// them — that is the whole trustless-supply-chain premise (#36).
+// ===========================================================================
+
+/// Domain tag prefix for the transport keysets (distinct from every final
+/// label so a transport secret can never collide with a final one).
+const TRANSPORT_PREFIX: &[u8] = b"pqsigner/transport/";
+
+/// HKDF the transport keyset for `suffix` from the **real** OTP master. Uses
+/// `read_device_master` (never `ensure_` — first boot must NOT trigger a burn;
+/// the factory already burned it) so a blank master surfaces `NotBurned`
+/// rather than a half-burn attempt.
+fn transport_derive_into(suffix: &[u8], output: &mut [u8]) -> Result<(), OtpError> {
+    // Assemble the full label `pqsigner/transport/<suffix>` on the stack.
+    const MAX_LABEL: usize = 64;
+    debug_assert!(TRANSPORT_PREFIX.len() + suffix.len() <= MAX_LABEL);
+    let mut label = [0u8; MAX_LABEL];
+    let plen = TRANSPORT_PREFIX.len();
+    label[..plen].copy_from_slice(TRANSPORT_PREFIX);
+    label[plen..plen + suffix.len()].copy_from_slice(suffix);
+    let full = &label[..plen + suffix.len()];
+
+    let mut master = otp::read_device_master()?;
+    hkdf_expand(&master, full, output);
+    master.zeroize();
+    Ok(())
+}
+
+/// Transport SE050 SCP03 S-ENC (factory-installed; rotated at first boot).
+pub fn transport_se050_scp03_enc() -> Result<[u8; 16], OtpError> {
+    let mut out = [0u8; 16];
+    transport_derive_into(b"se050-scp03-enc-v1", &mut out)?;
+    Ok(out)
+}
+/// Transport SE050 SCP03 S-MAC.
+pub fn transport_se050_scp03_mac() -> Result<[u8; 16], OtpError> {
+    let mut out = [0u8; 16];
+    transport_derive_into(b"se050-scp03-mac-v1", &mut out)?;
+    Ok(out)
+}
+/// Transport SE050 SCP03 DEK (wraps the new key blocks during the first-boot
+/// `PUT KEY` transport → final rotation).
+pub fn transport_se050_scp03_dek() -> Result<[u8; 16], OtpError> {
+    let mut out = [0u8; 16];
+    transport_derive_into(b"se050-scp03-dek-v1", &mut out)?;
+    Ok(out)
+}
+/// Transport SE050 admin PIN (the admin UserID the factory installs; re-keyed
+/// to `se050_admin_pin()` at first boot).
+pub fn transport_se050_admin_pin() -> Result<[u8; 16], OtpError> {
+    let mut out = [0u8; 16];
+    transport_derive_into(b"se050-admin-pin-v1", &mut out)?;
+    Ok(out)
+}
+/// Transport OPTIGA PBS (E140; rotated to the salted-final PBS at first boot).
+pub fn transport_optiga_pbs() -> Result<[u8; 64], OtpError> {
+    let mut out = [0u8; 64];
+    transport_derive_into(b"optiga-pbs-v1", &mut out)?;
+    Ok(out)
+}
+
+/// Domain tag for the FINAL, salted OPTIGA PBS (distinct `-v2` from the
+/// unsalted `-v1`). The salt is appended as HKDF/CMAC `info`.
+const OPTIGA_PBS_V2_LABEL: &[u8] = b"pqsigner/optiga-pbs-v2";
+
+// The salted label (`OPTIGA_PBS_V2_LABEL ‖ salt`) must fit the KDF's stack
+// info buffer (`MAX_LABEL = 64` in `derive_into_saes_kdf`).
+const _: () = assert!(OPTIGA_PBS_V2_LABEL.len() + 32 <= 64, "salted PBS label overflows KDF info buffer");
+
+/// The FINAL OPTIGA PBS: `derive_into("pqsigner/optiga-pbs-v2" ‖ salt)`. The
+/// salt (32 B fresh TRNG, persisted in the RDP-2-hidden page-127 journal for
+/// device life) is mixed in as domain-separating info, so a transit attacker
+/// who learned the deterministic DHUK ladder pre-lock cannot predict it (#36
+/// forbids the bare `SAES-CMAC(DHUK, label)` ladder). Byte-for-byte
+/// deterministic across boots given the same persisted salt — the property
+/// that keeps `load_pbs` matching the value written to E140.
+pub fn optiga_pairing_secret_salted(salt: &[u8; 32]) -> Result<[u8; 64], OtpError> {
+    let mut info = [0u8; 22 + 32];
+    info[..OPTIGA_PBS_V2_LABEL.len()].copy_from_slice(OPTIGA_PBS_V2_LABEL);
+    info[OPTIGA_PBS_V2_LABEL.len()..].copy_from_slice(salt);
+    let mut out = [0u8; 64];
+    let r = derive_into(&info, &mut out);
+    info.zeroize();
+    r?;
+    Ok(out)
+}
+
+/// The PBS the OPTIGA driver should currently pair with — the SINGLE source of
+/// truth shared by `load_pbs`, `setup_pbs_no_handshake`, and
+/// `pair_for_first_boot`. After the first-boot rotation completes
+/// (journal `ALL_DONE`) it returns the SALTED-final PBS keyed on the persisted
+/// salt; otherwise (dev/legacy, or before rotation) it returns the unsalted
+/// `optiga_pairing_secret()` — byte-identical to pre-#36 behaviour.
+///
+/// This is the fix for the brick-class hazard where the seed wizard's
+/// `store_objects` would otherwise rewrite E140 back to the unsalted value
+/// after rotation, so the next boot's `load_pbs(salted)` would mismatch.
+pub fn current_pbs() -> Result<[u8; 64], OtpError> {
+    #[cfg(feature = "rdp2-self-lock")]
+    {
+        if let Some(salt) = crate::first_boot::journal_salt_if_all_done() {
+            return optiga_pairing_secret_salted(&salt);
+        }
+    }
+    optiga_pairing_secret()
+}

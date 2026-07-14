@@ -605,6 +605,17 @@ bhk-hardcoded-master-key = []
 # stable-but-zero-keyed derivations on most STM32U5 silicon (BHK
 # backup registers are zero at reset).
 bhk = ["saes-dhuk"]
+# work-todo #36: on the FIRST field boot, self-lock the MCU to RDP Level 2 and
+# rotate the SE pairing secrets off the factory-installed *transport* keysets
+# to final BHK-/salted-DHUK-rooted secrets, before the seed wizard. Devices
+# ship at RDP-0 (batch-uniform, user-verifiable over SWD before first power);
+# this feature owns the on-device half. It pulls in `bhk` (the Tier-2 axis the
+# rotation provisions) — hence `saes-dhuk` transitively. The RDP burn is
+# IRREVERSIBLE, so this must NEVER be in a dev/QEMU/bench image: the
+# `nsc/mod.rs` ship fence forces it on for `mode-production` ONLY, and
+# incompat fences keep it out of every test/dev feature. Absent from every
+# current build target; behaviour with it OFF is byte-identical to today.
+rdp2-self-lock = ["bhk"]
 # Under `e2e-test`, halt the boot flow right after `provision_from_mnemonic`
 # returns, BEFORE `SE.unlock` would trigger the OPTIGA PRL handshake + the
 # irreversible E140 LcsO=op bump. Used for the Phase-A hardware-validation

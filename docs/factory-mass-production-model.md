@@ -21,6 +21,17 @@ Decisions locked 2026-06-17:
 > step 5 (`bump-rdp2-after-factory`) and the "sentinel → RDP2" gate below are
 > superseded — the sentinel now gates *shipping*, not an RDP2 burn. The SE
 > lockdown steps (5–8) stay at the line unchanged.
+>
+> **The device-side half is now implemented** (feature `rdp2-self-lock`,
+> 2026-07-14) and the **authoritative factory ⇄ first-boot responsibility
+> split** lives in
+> [`provisioning/first-boot-provisioning.md`](provisioning/first-boot-provisioning.md#authoritative-factory--first-boot-responsibility-split)
+> — keep this model's step table in sync with it. This 10-step line ceremony
+> is the FACTORY side of that split (SE-internal structure + irreversible locks
+> on transport keysets, OTP-master burn, option-byte profile except RDP,
+> read-back QA); the RDP-2 self-lock + the transport→final pairing rotation are
+> the FIRST-BOOT side, done on the device. Amendment: the self-lock is
+> implemented in the secure app early-boot, not the FSBL (FSBL budget).
 
 ---
 

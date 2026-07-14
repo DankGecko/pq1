@@ -10,10 +10,24 @@
 >
 > **Additionally (2026-07-14, work-todo #36): the production model no longer
 > includes ANY factory RDP2 bump.** Devices ship at RDP-0 (user-verifiable
-> over SWD before first power) and the FSBL self-locks to RDP-2 on the first
+> over SWD before first power) and the device self-locks to RDP-2 on the first
 > field boot, then self-provisions pairing keys on-device. The factory scope
 > is flash + option-byte profile (everything except RDP-2) + SE-internal
 > lockdown on transport keysets.
+>
+> **The authoritative factory ⇄ first-boot responsibility split lives in
+> [`first-boot-provisioning.md`](first-boot-provisioning.md#authoritative-factory--first-boot-responsibility-split)**
+> — keep that table and this note in sync. Factory-side, in one line: flash the
+> reproducible image; set the option-byte profile (TZEN/SECWM/SECBOOTADD0/WRP1A/
+> BOR/BOOT_LOCK/OEM — **everything EXCEPT RDP**, which stays 0); burn the OTP
+> master; provision the SE-internal structure + irreversible locks
+> (LcsO=Op ratchet, S-1/S-2/S-3, admin UserID, E120 LUC, trust-anchor cert,
+> #22 manifest) onto per-device **transport** keysets (SCP03 under
+> `PLATFORM_DEK`; transport PBS at E140 kept `Conf(E140)`-rotatable); read-back
+> QA; box + ship at RDP-0. The device (not the factory) programs RDP=0xCC and
+> rotates the transport keysets to their final values on the first field boot.
+> (Amendment: the self-lock is implemented in the secure app, not the FSBL —
+> see the #36 note in `first-boot-provisioning.md`.)
 
 This document is for the **factory operator** who flashes and runs
 the factory firmware on a fresh PQSigner device. You do not need to

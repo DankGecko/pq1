@@ -187,9 +187,17 @@ pub const PUT_KEY_INS: u8 = 0xD8;
 /// Build the (un-wrapped) GP `PUT KEY` APDU that **replaces SCP03 keyset
 /// `0x0B` in place** with the three given AES-128 keys (S-ENC, S-MAC,
 /// DEK, in that order). The new key values are encrypted under the chip's
-/// *current* DEK — which, since the only time this ceremony runs is on a
-/// factory-fresh chip (`work-todo #20` Stage B: production-provisioning,
-/// once per chip), is the published factory `PLATFORM_DEK`.
+/// *current* DEK, passed as `wrap_dek`:
+/// - **Factory rotation** (AN12436 defaults → per-device *transport* keyset,
+///   `work-todo #20` Stage B): the chip's current DEK is the published
+///   `PLATFORM_DEK`.
+/// - **First-boot rotation** (transport → final, `work-todo #36`): the chip's
+///   current DEK is the per-device *transport* DEK
+///   (`secret_keys::transport_se050_scp03_dek()`), since the factory already
+///   moved the chip off the AN12436 defaults.
+///
+/// Passing the wrong `wrap_dek` produces key blocks the chip cannot decrypt,
+/// so `PUT KEY` fails closed (the ceremony never silently installs garbage).
 ///
 /// The caller MUST transmit the result inside an *established* SCP03
 /// session (`apdu::send_apdu` will C-MAC + C-DEC it) — `PUT KEY` is only
@@ -224,6 +232,7 @@ pub fn build_put_key_apdu(
     new_enc: &[u8; 16],
     new_mac: &[u8; 16],
     new_dek: &[u8; 16],
+    wrap_dek: &[u8; 16],
 ) -> ([u8; PUT_KEY_APDU_LEN], usize) {
     const DATA_LEN: usize = 1 + 3 * 22; // 67
     let mut a = [0u8; PUT_KEY_APDU_LEN];
@@ -237,7 +246,7 @@ pub fn build_put_key_apdu(
     for k in [new_enc, new_mac, new_dek] {
         a[o] = 0x88; // key type: AES
         a[o + 1] = 0x10; // encrypted key data length = 16
-        let wrapped = aes128_ecb_encrypt(&PLATFORM_DEK, k);
+        let wrapped = aes128_ecb_encrypt(wrap_dek, k);
         a[o + 2..o + 18].copy_from_slice(&wrapped);
         a[o + 18] = 0x03; // KCV length
         let kcv = scp03_kcv(k);
@@ -399,7 +408,7 @@ mod tests {
         let new_enc = [0xA0u8; 16];
         let new_mac = [0xB1u8; 16];
         let new_dek = [0xC2u8; 16];
-        let (a, n) = build_put_key_apdu(&new_enc, &new_mac, &new_dek);
+        let (a, n) = build_put_key_apdu(&new_enc, &new_mac, &new_dek, &PLATFORM_DEK);
         assert_eq!(n, PUT_KEY_APDU_LEN);
         assert_eq!(n, 72);
         // Header: CLA INS P1 P2 Lc
@@ -413,7 +422,7 @@ mod tests {
         let new_enc = [0xA0u8; 16];
         let new_mac = [0xB1u8; 16];
         let new_dek = [0xC2u8; 16];
-        let (a, _) = build_put_key_apdu(&new_enc, &new_mac, &new_dek);
+        let (a, _) = build_put_key_apdu(&new_enc, &new_mac, &new_dek, &PLATFORM_DEK);
         for (i, k) in [&new_enc, &new_mac, &new_dek].iter().enumerate() {
             let base = 6 + i * 22;
             assert_eq!(a[base], 0x88, "key #{i}: type=AES");
@@ -430,6 +439,48 @@ mod tests {
                 "key #{i}: KCV bytes",
             );
         }
+    }
+
+    /// work-todo #36: the first-boot rotation wraps the new key blocks under
+    /// the per-device *transport* DEK, not `PLATFORM_DEK`. Prove `wrap_dek`
+    /// is actually the encryption key: a different `wrap_dek` MUST produce
+    /// different wrapped bytes (and match the ECB KAT under that DEK), while
+    /// the KCV — computed over the plaintext new key — is unchanged.
+    #[test]
+    fn put_key_wrap_dek_selects_the_encryption_key() {
+        let new_enc = [0xA0u8; 16];
+        let new_mac = [0xB1u8; 16];
+        let new_dek = [0xC2u8; 16];
+        // A stand-in per-device transport DEK, distinct from PLATFORM_DEK.
+        let transport_dek = [0x5Au8; 16];
+        assert_ne!(transport_dek, PLATFORM_DEK);
+
+        let (factory, _) = build_put_key_apdu(&new_enc, &new_mac, &new_dek, &PLATFORM_DEK);
+        let (field, _) = build_put_key_apdu(&new_enc, &new_mac, &new_dek, &transport_dek);
+
+        for (i, k) in [&new_enc, &new_mac, &new_dek].iter().enumerate() {
+            let base = 6 + i * 22;
+            // Field build wraps under the transport DEK (KAT).
+            assert_eq!(
+                &field[base + 2..base + 18],
+                &aes128_ecb_encrypt(&transport_dek, k)[..],
+                "block #{i}: field build must wrap under the transport DEK",
+            );
+            // ...and differs from the factory (PLATFORM_DEK) wrap.
+            assert_ne!(
+                &field[base + 2..base + 18],
+                &factory[base + 2..base + 18],
+                "block #{i}: transport-DEK wrap must differ from PLATFORM_DEK wrap",
+            );
+            // KCV is over the plaintext key, so it is identical for both.
+            assert_eq!(
+                &field[base + 19..base + 22],
+                &factory[base + 19..base + 22],
+                "block #{i}: KCV is over plaintext → unchanged by wrap_dek",
+            );
+        }
+        // Everything outside the wrapped-key bytes is identical.
+        assert_eq!(&factory[..6], &field[..6], "header unchanged by wrap_dek");
     }
 
     // ----- DD constants pin -----
@@ -797,7 +848,7 @@ mod tests {
     /// silent rotation failure during production-provisioning.
     #[test]
     fn negative_put_key_apdu_header_bytes_are_frozen() {
-        let (a, _) = build_put_key_apdu(&[0u8; 16], &[0u8; 16], &[0u8; 16]);
+        let (a, _) = build_put_key_apdu(&[0u8; 16], &[0u8; 16], &[0u8; 16], &PLATFORM_DEK);
         assert_eq!(a[0], 0x80, "CLA must be 0x80 — wrap_apdu later ORs in 0x04");
         assert_eq!(a[1], 0xD8, "INS must be PUT KEY (0xD8)");
         assert_eq!(a[2], 0x0B, "P1 must be KVN 0x0B (the slot to replace)");
@@ -814,7 +865,7 @@ mod tests {
     /// the KCV.
     #[test]
     fn negative_put_key_enc_data_len_byte_is_0x10_per_block() {
-        let (a, _) = build_put_key_apdu(&[0u8; 16], &[0u8; 16], &[0u8; 16]);
+        let (a, _) = build_put_key_apdu(&[0u8; 16], &[0u8; 16], &[0u8; 16], &PLATFORM_DEK);
         for i in 0..3 {
             let base = 6 + i * 22;
             assert_eq!(a[base], 0x88, "key #{i} type byte must be 0x88 (AES)");
@@ -834,7 +885,7 @@ mod tests {
         let new_enc = [0xA0u8; 16];
         let new_mac = [0xB1u8; 16];
         let new_dek = [0xC2u8; 16];
-        let (a, _) = build_put_key_apdu(&new_enc, &new_mac, &new_dek);
+        let (a, _) = build_put_key_apdu(&new_enc, &new_mac, &new_dek, &PLATFORM_DEK);
         for (i, k) in [&new_enc, &new_mac, &new_dek].iter().enumerate() {
             let base = 6 + i * 22;
             let expected_wrap = aes128_ecb_encrypt(&PLATFORM_DEK, k);
@@ -857,7 +908,7 @@ mod tests {
         let enc = [0xE0u8; 16];
         let mac = [0xC1u8; 16];
         let dek = [0xD2u8; 16];
-        let (a, _) = build_put_key_apdu(&enc, &mac, &dek);
+        let (a, _) = build_put_key_apdu(&enc, &mac, &dek, &PLATFORM_DEK);
         assert_eq!(
             &a[6 + 0 * 22 + 2..6 + 0 * 22 + 18],
             &aes128_ecb_encrypt(&PLATFORM_DEK, &enc)[..],

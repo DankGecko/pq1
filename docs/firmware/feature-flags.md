@@ -36,6 +36,21 @@ There are three different things a SE secret can be rooted in, picked at compile
 
 **Provisioning-order constraint (production):** because the BHK is stored DHUK-ECB-wrapped on flash page 126, and the DHUK changes at `RDP0 → RDP1` (ST-substituted constant → real per-die), the BHK first-write — and anything derived from it, including the admin UserID and the SCP03 PUT KEY ceremony — must happen *at RDP ≥ 1*. **Post-#36 (2026-07-14) this runs ON-DEVICE, not at the factory:** devices ship at RDP-0 (user-verifiable) with the SEs on transport keysets; the first field boot self-locks `RDP → 2` (the DHUK's single transition, straight to per-die-final), then does the BHK first-write → OPTIGA PBS rotation → SE050 SCP03 PUT KEY rotation, mixed with fresh TRNG salt. The constraint is unchanged — only the actor and moment moved (see work-todo #36).
 
+**Feature `rdp2-self-lock` (work-todo #36, landed 2026-07-14).** Owns the
+device-side first-boot flow above: Phase A (verify ship option bytes + blank
+per-device pages → program RDP=0xCC → reset) and Phase B (journaled, resumable
+BHK first-write + transport→final rotation of SE050 SCP03/admin + OPTIGA PBS),
+in `secure/src/first_boot/`. `rdp2-self-lock = ["bhk"]` (so it pulls `bhk` →
+`saes-dhuk` → `stm32u585`). It is **forced ON for `mode-production` only** (the
+RDP burn is irreversible — the `nsc/mod.rs` fence uses the narrow S-1-style
+trigger, not the belt-and-braces one) and is **incompatible** with every
+dev/test feature (`e2e-test`, `dev-testkey`, `mock-se`,
+`otp-hardcoded-master-key`, `bhk-hardcoded-master-key`, `factory-provisioning`,
+`tropic01-se`) and **requires `dual-se`**. Absent from every current bench/
+QEMU build; behaviour with it OFF is byte-identical to before. Compile-check
+the feature-ON path with `make build-rdp2-self-lock`. Operator/field reference:
+`docs/provisioning/first-boot-provisioning.md`.
+
 ---
 
 ## 3. What "OTP" means in this codebase

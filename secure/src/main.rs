@@ -71,6 +71,13 @@ mod scp03_logic;
 // harness can hammer them on host. The hardware-gated `se050::apdu`
 // and `optiga::apdu` modules import these for the production path.
 mod iso7816;
+// First-boot self-provisioning (work-todo #36). The `journal` + `state`
+// children are pure logic (page-127 codec + resumable state machine) and are
+// always compiled so `cargo test -p sphincs-tz-secure` exercises them; the
+// hardware glue inside `first_boot::mod` is `stm32u585` + `rdp2-self-lock`
+// gated. Absent from every current dev/QEMU/bench build's behaviour (the
+// entry points are only *called* from `main` under the feature).
+mod first_boot;
 
 // Hardware-dependent modules: gated out in test builds so `cargo test`
 // compiles only the pure logic on x86_64.
@@ -909,6 +916,22 @@ fn main() -> ! {
         {
             let rdp = hw::flash::rdp_level();
             if rdp != hw::flash::RdpLevel::L2 {
+                // work-todo #36: once first-boot provisioning has completed
+                // (journal ALL_DONE) the device MUST be at RDP-2 — RDP below L2
+                // then is an RDP regression / tamper, so HARD-HALT rather than
+                // warn. Before completion (ship RDP-0 / mid-ceremony) RDP < L2
+                // is legitimate and Phase A owns the lock, so keep the
+                // warn-and-continue below.
+                #[cfg(feature = "rdp2-self-lock")]
+                if first_boot::journal_all_done() {
+                    secure_log!(
+                        "[S][lockdown] RDP regressed below L2 after first-boot \
+                         ALL_DONE — tamper signal, HALT"
+                    );
+                    loop {
+                        cortex_m::asm::wfe();
+                    }
+                }
                 secure_log!(
                     "[S][lockdown] WARNING: RDP != Level 2 (got {:?}) — a shipping \
                      image must run only on an RDP2-locked device; SWD/JTAG is open \
@@ -1126,23 +1149,42 @@ fn main() -> ! {
     // on the software fallback and this is skipped.
     #[cfg(all(feature = "bhk", not(feature = "otp-hardcoded-master-key"), not(feature = "bhk-hardcoded-master-key"), not(feature = "saes-self-test")))]
     unsafe {
-        if !hw::bhk::is_provisioned() {
-            match hw::bhk::provision() {
+        // work-todo #36: under `rdp2-self-lock` the BHK provision+load is owned
+        // by first-boot Phase B (journal-gated, anti-pre-plant erase-and-
+        // reprovision, per-die DHUK only AFTER the RDP-2 lock). So this
+        // every-boot block stands down until the ceremony is ALL_DONE:
+        //  - boot #1 (RDP-0, journal blank): skip — never wrap the BHK under
+        //    the shared RDP-0 constant DHUK (it would mismatch post-lock);
+        //  - Phase-B boot: skip — Phase B provisions + load_and_locks EXACTLY
+        //    once (its resume-load covers a crash past the BHK step), so this
+        //    block must not also load_and_lock (BHKLOCK is write-once/boot);
+        //  - normal boot after ALL_DONE: run as before.
+        #[cfg(feature = "rdp2-self-lock")]
+        let run_bhk_block = first_boot::journal_all_done();
+        #[cfg(not(feature = "rdp2-self-lock"))]
+        let run_bhk_block = true;
+
+        if run_bhk_block {
+            if !hw::bhk::is_provisioned() {
+                match hw::bhk::provision() {
+                    Ok(()) => {
+                        secure_log!("[S] BHK provisioned (first boot)");
+                    }
+                    Err(e) => {
+                        secure_log!("[S] BHK provision FAIL: {:?}", e);
+                    }
+                }
+            }
+            match hw::bhk::load_and_lock() {
                 Ok(()) => {
-                    secure_log!("[S] BHK provisioned (first boot)");
+                    secure_log!("[S] BHK loaded + BHKLOCK set");
                 }
                 Err(e) => {
-                    secure_log!("[S] BHK provision FAIL: {:?}", e);
+                    secure_log!("[S] BHK load FAIL: {:?} — BHK derivations will error", e);
                 }
             }
-        }
-        match hw::bhk::load_and_lock() {
-            Ok(()) => {
-                secure_log!("[S] BHK loaded + BHKLOCK set");
-            }
-            Err(e) => {
-                secure_log!("[S] BHK load FAIL: {:?} — BHK derivations will error", e);
-            }
+        } else {
+            secure_log!("[S] BHK block deferred to first-boot Phase B (rdp2-self-lock)");
         }
     }
 
@@ -1168,6 +1210,17 @@ fn main() -> ! {
 
     ui::init();
     secure_log!("[S] UI initialized");
+
+    // work-todo #36 — Phase A (pre-lock). On the FIRST field boot (RDP != L2)
+    // this verifies the ship option-byte profile + blank per-device pages,
+    // shows "DO NOT POWER OFF", programs RDP=0xCC, and resets — it never
+    // returns on that boot. On every later boot RDP is already L2 and it
+    // returns immediately. Placed right after `ui::init()` (panel is up) and
+    // before ANY SE/USB traffic, so the pre-lock window stays tiny. Absent
+    // from every non-`rdp2-self-lock` build.
+    #[cfg(feature = "rdp2-self-lock")]
+    first_boot::run_pre_lock_and_maybe_lock();
+
     ui::splash();
 
     // Start SysTick early on real hardware so measured_boot can use
@@ -1282,6 +1335,19 @@ fn main() -> ! {
     // Skipped in automated e2e tests which need non-interactive boot.
     #[cfg(not(feature = "e2e-test"))]
     measured_boot::run();
+
+    // work-todo #36 — Phase B (post-lock provisioning). After the RDP-2
+    // self-lock (the per-die DHUK is now final), resume the journaled first-
+    // boot ceremony: BHK first-write + SE050 SCP03/admin rotation + OPTIGA PBS
+    // rotation OFF the factory transport keysets, all before first PIN entry /
+    // the seed wizard. A completed ceremony (journal ALL_DONE) returns at
+    // once. This is the FIRST SE traffic — everything above (measured_boot)
+    // only hashes flash. Absent from every non-`rdp2-self-lock` build.
+    #[cfg(all(feature = "rdp2-self-lock", feature = "dual-se"))]
+    unsafe {
+        let se = &mut *core::ptr::addr_of_mut!(SE);
+        first_boot::run_post_lock_provisioning(se);
+    }
 
     // Try to load a previously saved per-device pairing key for the
     // Tropic01. If found, sessions use pairing slot 1 (per-device)
