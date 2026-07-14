@@ -4,6 +4,8 @@ A **post-quantum ERC-4337 hardware wallet** (the **PQ1**) where every primitive 
 
 **Target hardware:** STM32U585 (Cortex-M33, TrustZone) + Infineon OPTIGA Trust M V3 + NXP EdgeLock SE050. No single die, no single vendor, and no future cryptographically-relevant quantum computer (CRQC) should recover the seed from harvested traffic or extracted ciphertext.
 
+**Build one yourself:** every part is off-the-shelf — [`DIY.md`](DIY.md) has the ~$150 bill of materials (Mouser links included), the wiring, and the first-flash guide.
+
 > **Status — 2026-04, pre-production bring-up. All-C10 cutover complete.**
 > Every transaction is signed with **SPHINCS+C10** (W+C_F+C, `h=18, d=2, a=11, k=13, w=8, l=43, target_sum=205, sig=4008`) — hash-based, no lattice or number-theoretic assumptions, no classical fallback. The *same* primitive signs both Type 1 (bootstrap → slot registration) and Type 2 (slot → user tx); there is no FORS+C and no secp256k1/P-256/Ed25519 anywhere. The firmware boots and runs on a real **B-U585I-IOT02A** with the OPTIGA Trust M V3 Shield + NXP OM-SE050ARD on Arduino R3 headers, and on QEMU `mps2-an505`. Dual-SE XOR entropy split, three-way PIN counter sync (MCU + OPTIGA + SE050), both SE drivers, and the Tier-1 SAES-CMAC(DHUK) KDF are validated end-to-end on silicon. On-chain contracts (`PQSmartWallet` + factory + `PQMultiOwnable`) target **EntryPoint v0.6** behind cheap ERC-1967 proxies at a deterministic CREATE2 address keyed on `sha256(masterPkSeed‖masterPkRoot)`. SHA-256 throughout the PQ stack (routed to the STM32U585 HASH peripheral); Keccak-256 only for EVM-mandated hashes.
 >
