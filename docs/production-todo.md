@@ -9,6 +9,20 @@ validation flow against sacrificial parts, then on the production line.
 Compare with `docs/work-todo.md`, which is strictly the
 reversible-iteration backlog.
 
+> **UPDATE 2026-07-14 — shipping model changed (work-todo #36).** Devices ship
+> at **RDP-0** (batch-uniform image, user-verifiable over SWD via
+> connect-under-reset before first power). The **RDP-2 transition is no longer
+> a factory/fixture action**: the FSBL self-locks to RDP-2 on the first field
+> boot, and every DHUK/BHK-gated provisioning step below (BHK first-write,
+> SE050 SCP03 PUT KEY rotation, OPTIGA PBS rotation, admin UserID — everything
+> that says "after stepping RDP → 1") executes **on-device after that
+> self-lock**, mixed with fresh TRNG salt, against factory-installed
+> *transport* keysets. Factory-side scope shrinks to: flash + the shipped
+> option-byte profile (TZEN, WRP1A, SECWM/HDP, BOOT_LOCK, OEM-key
+> finalization — everything EXCEPT RDP-2) + SE-internal lockdown (LcsO
+> ratchet, S-1/S-2/S-3, transport keysets, #22 manifest). Ceremony orderings
+> below remain correct with "burn RDP2" read as "first-boot self-lock".
+
 ## Ground rules
 
 1. **Dev builds never flip any of these gates.** The default feature
@@ -478,9 +492,11 @@ blockers above stand; these refine accuracy + add residuals.
       refuses to unlock. Probe output is non-secret (only proves DHUK
       is reachable, same as a UID read), safe to store in the binding
       manifest from #22.
-- [ ] **RDP = Level 2.** Once the factory burns RDP=2, debug access is
+- [ ] **RDP = Level 2.** Self-programmed by the FSBL on the first field boot
+      (work-todo #36 — devices ship at RDP-0 for user verification; there is
+      no fixture burn). Once RDP=2 is set, debug access is
       permanently disabled. No JTAG, no SWD, no read-out of flash.
-      Required before shipping to prevent flash extraction. Note:
+      Required before any user secret exists, to prevent flash extraction. Note:
       RDP2 → RDP0 regression on STM32U5 does a mass erase but survives
       for OTP (confirmed behaviour; OTP is the anchor of trust). Also
       confirmed: **DHUK survives RDP2→RDP0 regression** — it is derived
@@ -491,7 +507,9 @@ blockers above stand; these refine accuracy + add residuals.
       device generates a fresh BHK → Tier 2 pairings re-key, which means
       SE050 + TROPIC01 (if on BHK per the work-todo #7 split) must be
       re-paired via the normal first-boot provisioning path. Document
-      this in the refurbishment / RMA flow.
+      this in the refurbishment / RMA flow. (Post-#36 the first-boot
+      self-lock sequence is: verify option bytes + slots → RDP=0xCC →
+      reset → BHK first-write → TRNG-salted SCP03/PBS rotation → wizard.)
 - [ ] **WRP1A on FSBL pages (0..3).** Writes to the first-stage
       bootloader flash region are rejected post-commit. Makes the FSBL
       immutable in the field.
@@ -519,7 +537,10 @@ blockers above stand; these refine accuracy + add residuals.
 - [ ] **Ordering: commit WRP1A *before* RDP2.** WRP is removable only while
       RDP≠2 (AN5156), so the WRP1A `UNLOCK=0` burn MUST precede the RDP2 burn or
       the FSBL never becomes immutable. Pin into the ceremony order: WRP →
-      DA-finalize → **RDP2 last of all**.
+      DA-finalize → **RDP2 last of all**. (Post-#36: WRP + DA-finalize belong
+      to the shipped option-byte profile the factory sets; "RDP2 last of all"
+      is the first-boot self-lock, which verifies that profile before
+      programming 0xCC.)
 
 #### BHK survivability matrix (which events spare vs destroy the BHK)
 
@@ -822,6 +843,11 @@ The SE050 half of the dual-SE also has irreversible steps (per
       OPTIGA provision → SE050 provision → SCP03 PUT KEY → … → burn
       RDP2.** (This ordering constraint already applies to the
       Phase-2C admin PIN; the SCP03 rotation just inherits it.)
+      **Post-#36 the same constraint is satisfied on-device instead:
+      first field boot self-locks RDP → 2 (the DHUK's one and only
+      transition, straight to its final per-die value) → BHK
+      first-write → PUT KEY rotation off the factory transport keyset,
+      mixed with fresh TRNG salt. The fixture never steps RDP at all.**
 
       **Failure modes after commit:**
       - Lose the BHK → cannot re-establish SCP03 → hard brick, same
@@ -866,6 +892,9 @@ The SE050 half of the dual-SE also has irreversible steps (per
         wrong admin PIN. Same constraint the SCP03 rotation inherits
         (see the SCP03 item above): step RDP→1 → provision BHK →
         provision SE050 (admin UserID here) → … → burn RDP2.
+        (Post-#36: satisfied by running this on-device after the
+        first-boot RDP-2 self-lock — the factory-created admin UserID
+        uses the transport credential and is re-keyed then.)
       Wipe flow validated via `make dual-se-admin-wipe-e2e` (full
       8-step roundtrip) + `make dual-se-multi-unlock-e2e` (15 unlocks
       across 3 cold reboots), and — with the BHK-rooted admin PIN —

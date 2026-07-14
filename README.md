@@ -217,7 +217,7 @@ Cost: one extra I²C peripheral, ~$3 BOM, ~50 ms unlock latency.
 | **Memory isolation** | TrustZone (SAU + IDAU + MPC + GTZC); DMA into secure SRAM blocked; NS pointer validation + TOCTOU defense; no panics across NSC |
 | **Inactivity / power loss** | Secure-only TIM enforces a 120 s idle wipe; TAMP and BOR fire the same ISR; bulk cap sized so the ISR completes under brownout |
 | **Crash safety** | Panic handler zeroizes secrets and resets before halting; idempotent `wipe-for-wizard` dev recovery path |
-| **Production lockdown** | RDP Level 2 burned as the final, irreversible step; both SE auth policies frozen in the same provisioning session; WRP1A locks FSBL pages 0–3 before the RDP-2 burn |
+| **Production lockdown** | Devices ship at RDP-0 (anyone can SWD-verify flash/option-bytes/OTP before first power); the FSBL self-locks to RDP Level 2 on the first field boot, then firmware self-provisions (TRNG-salted SCP03/PBS pairing rotation off factory transport keysets) — work-todo #36. SE-internal auth policies are frozen at the factory; WRP1A locks FSBL pages 0–3 in the shipped option-byte profile, i.e. before the RDP-2 self-lock |
 
 ### Boot → Unlock → Sign → Lock
 
@@ -332,7 +332,7 @@ Any claim of "verified" in docs or marketing must carry the assumption list.
 | Tier 2 BHK; boot-time attestation; device-identity cert | ⏳ not started |
 | ML-KEM-1024 inner wrap | 🚫 descoped 2026-07-07 (owner decision — accepted Grover-only bus residual; prototype retained feature-gated) |
 | Mixed-RNG (STM32 ⊕ OPTIGA ⊕ SE050 TRNG); PIN-entry digit scrambling | 🔵 partial / ⏳ |
-| Custom PCB; HUK-SAES at-rest wrap; production TAMP wipe; RDP-2 burn; FI/SCA lab | 🚫 blocked on HW |
+| Custom PCB; HUK-SAES at-rest wrap; production TAMP wipe; first-boot RDP-2 self-lock validation (work-todo #36); FI/SCA lab | 🚫 blocked on HW |
 
 ## Firmware Update Model
 
@@ -430,10 +430,10 @@ Nothing here is optional. Run through the entire list **per device class**, not 
 - [ ] Stack scrub + CPU register scrub + cache flush after every secret-touching routine; cold-boot mitigation (freeze-spray tested); DMA-into-S-SRAM denied by GTZC
 
 **F. STM32U585 secure boot & option bytes** *(how-to: "Locking the STM32 to your firmware only" below)*
-- [ ] Custom immutable FSBL with SPHINCS+C10 verification in HDPL1; WRP1A locks pages 0–3 before the RDP-2 burn
+- [ ] Custom immutable FSBL with SPHINCS+C10 verification in HDPL1; WRP1A locks pages 0–3 in the shipped (RDP-0) option-byte profile, before the first-boot RDP-2 self-lock (work-todo #36)
 - [ ] FSBL refuses any slot whose preimage sig doesn't verify (CI flips one bit, confirms halt); image verification before any of your code runs
 - [ ] C10 vendor sk lives only in an air-gapped HSM (Argon2id + XChaCha20-Poly1305 at-rest wrap, two-person rule, no on-disk copies)
-- [ ] `TZEN=1`; `RDP=0xCC` (Level 2) as the **final** step (verified by JTAG/SWD refusal); `nBOOT0`/`nSWBOOT0`/`nBOOT_SEL`/`nBOOT_LOCK` force internal-flash boot
+- [ ] `TZEN=1`; devices ship at **RDP-0** for pre-first-power user verification and the FSBL self-programs `RDP=0xCC` (Level 2) on the first field boot as the **final** lockdown step (work-todo #36; verified by JTAG/SWD refusal on locked units); `nBOOT0`/`nSWBOOT0`/`nBOOT_SEL`/`nBOOT_LOCK` force internal-flash boot
 - [ ] `SECBOOTADD0` + `SECWM1/2` cover all S-flash; HDPL increments hand off bootROM → S → NS; OBKEY anti-rollback advances per update
 - [ ] All debug option bytes disabled; BOOT0 tied low / removed; option-byte profile burned via the HSM-signed script (no manual clicks); independent verification on a sample of finished units
 

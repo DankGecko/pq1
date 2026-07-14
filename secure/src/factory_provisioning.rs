@@ -133,7 +133,9 @@ pub enum FactoryStep {
     PostWipeValidation = 6,
     /// Legacy receipt write. The design is quarantined because entry and
     /// completion reprogram the same one-write QW; no resulting value grants
-    /// RDP2 authority. Production/factory builds are blocked.
+    /// RDP2 authority. Production/factory builds are blocked. (Per work-todo
+    /// #36 no factory RDP2 bump exists at all anymore: devices ship at RDP-0
+    /// and the FSBL self-locks to RDP-2 on the first field boot.)
     WriteOtpSentinel = 7,
 }
 
@@ -447,7 +449,9 @@ pub fn run_and_halt(se: &mut dyn WalletStore) -> ! {
     }
 
     // Step 7: write the OTP sentinel for the host-side factory
-    // fixture to read before bumping RDP2.
+    // fixture to read before boxing the unit (per work-todo #36 there
+    // is no fixture RDP2 bump; the device self-locks at first field
+    // boot).
     show_step_running(FactoryStep::WriteOtpSentinel);
     if let Err(code) = step_write_otp_sentinel() {
         halt_with_failure(FactoryStep::WriteOtpSentinel, code);

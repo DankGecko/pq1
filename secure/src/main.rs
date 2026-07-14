@@ -895,13 +895,16 @@ fn main() -> ! {
         hw::boot_pulse::pulse(3);
 
         // Silicon-lockdown belt-and-braces (HARDENING §4.2 / silicon-lockdown
-        // SL7): a shipping image must run only on an RDP Level 2 device, where
-        // SWD/JTAG is disabled in silicon. This check is REDUNDANT with that
-        // silicon debug lockdown, so it WARN-and-continues by default — a hard
-        // halt would brick a device during factory rehearsal, where a
-        // `mode-production` image may legitimately run before the irreversible
-        // RDP2 burn (RDP2 is the LAST ceremony step, see docs/production-todo.md).
-        // The opt-in `rdp-enforce-halt` feature hard-refuses instead.
+        // SL7): a locked production device runs at RDP Level 2, where SWD/JTAG
+        // is disabled in silicon. This check is REDUNDANT with that silicon
+        // debug lockdown, so it WARN-and-continues by default — a hard halt
+        // would brick the boots where RDP != L2 is LEGITIMATE: per the
+        // ship-RDP-0 model (work-todo #36) devices ship at RDP-0 so users can
+        // verify the flash before first power, and the FSBL self-locks to
+        // RDP-2 on the first field boot — so a `mode-production` image
+        // necessarily runs below RDP2 until that self-lock commits (and during
+        // factory rehearsal). The opt-in `rdp-enforce-halt` feature
+        // hard-refuses instead.
         #[cfg(feature = "mode-production")]
         {
             let rdp = hw::flash::rdp_level();

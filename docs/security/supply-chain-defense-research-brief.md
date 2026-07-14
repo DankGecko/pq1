@@ -3,6 +3,17 @@
 Paste-ready brief for a Claude deep-research run. Scoped to PQ1's actual model and
 the gaps the 2026-05-29 supply-chain survey established.
 
+> **UPDATE 2026-07-14 (work-todo #36).** The lockdown model changed after this
+> brief was written: devices now ship at **RDP-0** (anyone can SWD-verify
+> flash/option-bytes/OTP before first power via connect-under-reset) and
+> self-lock to RDP-2 on the first field boot, followed by an on-device
+> TRNG-salted pairing rotation off factory transport keysets. Read the
+> baseline lines "host fixture bumps RDP2" and "a malicious station can flash
+> backdoored firmware and self-lock" against that: the station no longer
+> locks anything, and every shipped unit is pre-first-power auditable — the
+> malicious-station residual becomes detectable by receiving audits and any
+> end user with a probe.
+
 ```
 DEEP RESEARCH BRIEF — State-of-the-art supply-chain-attack defense for a crypto
 hardware wallet whose devices are provisioned by an UNTRUSTED contract manufacturer.

@@ -34,7 +34,7 @@ There are three different things a SE secret can be rooted in, picked at compile
 
 **The thing that's easy to get wrong:** `secret_keys::derive_into_bhk` is the *call site* for SE050 secrets (the Phase-2C call-site flip, `aa23f05`), but whether it actually uses the silicon BHK depends on the `bhk` feature. With `bhk` off it falls through to `derive_into` → DHUK / OTP-const / OTP-master per the table. The "BHK axis" describes the code path; the root is build-dependent.
 
-**Provisioning-order constraint (production):** because the BHK is stored DHUK-ECB-wrapped on flash page 126, and the DHUK changes at `RDP0 → RDP1` (ST-substituted constant → real per-die), the BHK first-write — and anything derived from it, including the admin UserID and the SCP03 PUT KEY ceremony — must happen *at RDP ≥ 1*. Factory sequence: `step RDP → 1` → provision (BHK first-write) → OPTIGA provision → SE050 provision → SCP03 PUT KEY → … → `burn RDP=2`.
+**Provisioning-order constraint (production):** because the BHK is stored DHUK-ECB-wrapped on flash page 126, and the DHUK changes at `RDP0 → RDP1` (ST-substituted constant → real per-die), the BHK first-write — and anything derived from it, including the admin UserID and the SCP03 PUT KEY ceremony — must happen *at RDP ≥ 1*. **Post-#36 (2026-07-14) this runs ON-DEVICE, not at the factory:** devices ship at RDP-0 (user-verifiable) with the SEs on transport keysets; the first field boot self-locks `RDP → 2` (the DHUK's single transition, straight to per-die-final), then does the BHK first-write → OPTIGA PBS rotation → SE050 SCP03 PUT KEY rotation, mixed with fresh TRNG salt. The constraint is unchanged — only the actor and moment moved (see work-todo #36).
 
 ---
 

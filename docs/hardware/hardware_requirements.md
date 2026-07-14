@@ -154,9 +154,14 @@ From `README.md` §A and `docs/security/brownout-hardening.md`.
 - **No test pads, debug headers, or probe points** exposing either SE bus, the
   display bus, the button GPIOs, or *any* S-world peripheral (`README.md` §A,
   `docs/security/HARDENING.md`)
-- **No exposed SWD/JTAG pads after assembly** — cut traces or fill vias. (The
-  firmware burns RDP-2, but the board must not leave the pads physically
-  reachable.)
+- **SWD + NRST pads MUST stay accessible after assembly** — REVERSED 2026-07-14
+  by the ship-RDP-0 decision (work-todo #36): devices ship at RDP-0 so buyers
+  can verify flash/option-bytes/OTP over SWD (connect-under-reset, which needs
+  NRST reachable too) before first power; the first field boot self-locks to
+  RDP-2, which disables the debug port in silicon, and ITAMP6 fires on
+  post-lock probe attempts. The pads are the verification feature, not a
+  liability. (This reverses the earlier "cut traces or fill vias" rule, which
+  assumed a factory RDP-2 burn.)
 - **LSE 32.768 kHz crystal** — optional / "nice to have" for accurate RTC and
   IWDG timekeeping; the TAMP driver runs LSI-only and works without it
 - **No second debug / test connector of any kind**
@@ -210,7 +215,7 @@ Legend: ✅ done / works · 🟡 partial (firmware present, board step pending o
 | PCB feature | Required by | Enforced / implemented in | Status |
 |---|---|---|---|
 | STM32U585 (M33+TZ, AES/SHA/PKA/SAES/TRNG) | this doc, README §A | whole secure world; `secure/src/hw/*` | ✅ runs on dev board |
-| RDP-2 / TZEN, JTAG disabled, no SWD pads | README §A, `docs/security/HARDENING.md` | option-byte burn (README "Locking the STM32"); board layout | ⏳ board not started; RDP-2 burn is a sacrificial-unit step |
+| RDP-2 / TZEN; SWD + NRST pads accessible (ship RDP-0, first-boot self-lock — work-todo #36) | README §A, `docs/security/HARDENING.md` | shipped option-byte profile + FSBL first-boot RDP-2 self-lock; board layout | ⏳ board not started; self-lock ceremony validation is a sacrificial-unit step |
 | OPTIGA Trust M V3 @ I2C 0x30 + Shielded Conn | this doc | `secure/src/optiga/*` | ✅ validated on shield |
 | SE050 @ I2C 0x48 + SCP03 + UserID PIN | this doc | `secure/src/se050/*` | ✅ validated on ARD board |
 | SE050 on a separate I²C peripheral | README §A | — (layout decision) | ⏳ open layout review item |

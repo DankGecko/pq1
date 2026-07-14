@@ -1313,6 +1313,8 @@ Dev-research from Prompt D identified the USB path as our **largest remote attac
 
 **Status:** NOT STARTED (research complete — see `docs/security/production-security.md`)
 
+> **UPDATE 2026-07-14 (owner decision — see #36).** Devices ship at **RDP-0** for user self-verification and self-lock to RDP-2 on first field boot. The two-stage flow below survives in shape, but **stage 2 moves on-device** (fixture never burns RDP-2, never sees per-die DHUK material), and the stage-1 FMK-derived SCP03 keys are demoted to *transport* keysets that the device rotates with fresh TRNG salt post-lock. Details, power-loss matrix, and threat rationale in #36.
+
 Prompt B surfaced a concrete production-provisioning protocol. Supersedes the brief HUK-SAES note in item #7.
 
 **What's needed — P0:**
@@ -1389,7 +1391,7 @@ Bundle E extends item #20 with a **triple-UID cryptographically-signed manifest*
 - [ ] **OPTIGA attestation at boot**: `optiga_crypt_ecdsa_sign` with key `0xE0F0`, cert from OID `0xE0E0`, UID from `0xE0C2`. Chain signature to pinned Infineon OPTIGA ECC Root CA 2.
 - [ ] **Boot-time ceremony** (runs in secure world before entropy reconstruction): read STM32 UID → load manifest → verify SLH-DSA signature → compare all 3 UIDs to manifest + against each SE's own attested response → compare SHA3-256(firmware) against manifest.firmware_hash → check anti-rollback counter → ATTESTATION_PASSED. Any mismatch → permanent lockdown (no entropy release).
 - [ ] **Transparency log**: append-only public record of every `device_serial` + manifest hash emitted at the factory. Merkle-anchored (scheme TBD — see research prompt). Enables detection of rogue production runs even under HSM compromise.
-- [ ] **RDP Level 2** burned at end of provisioning (also in #20 — coordinate).
+- [ ] ~~**RDP Level 2** burned at end of provisioning (also in #20 — coordinate)~~ → **SUPERSEDED 2026-07-14 by #36**: devices ship RDP-0 (user-verifiable) and self-lock to RDP-2 on first field boot. Note #36 consequence for the anti-counterfeit list above: the factory can never record a per-die DHUK fingerprint (it never runs at RDP ≥ 1) — binding leans on the 3 UIDs + SE attestation instead.
 
 **Reference point**: Trezor Safe 7 (verified real, announced Oct 21 2025, shipping late 2025 / early 2026) is the closest existing production-wallet architecture. Uses TROPIC01 as transparent SE + EAL6+ second SE for dual attestation. PQSigner adds the triple-UID SLH-DSA manifest on top. Worth studying Trezor's public documentation on Safe 7's attestation protocol before we finalise our own — we may learn from their transparent-SE approach, and we should be explicit where our design intentionally diverges.
 - [ ] Study Trezor Safe 7 attestation protocol (public docs + any security evaluations) and document how our triple-UID SLH-DSA design differs. May surface improvements or shared patterns.
@@ -1774,6 +1776,8 @@ Goal: a single-purpose firmware the factory operator flashes BEFORE `factory_pro
 
 **Status:** Phase A (scaffold) landed 2026-05-19 in commit (this commit). Phase A is a buildable factory image the user can ship to the factory; subsequent phases are deferred to before real production runs. NOT YET silicon-validated by intent — Phase A is the "send to factory for trial flash + iterate on error reports" milestone.
 
+> **UPDATE 2026-07-14 (see #36).** Scope split: this ceremony keeps SE-internal provisioning (SCP03 *transport* keysets, PBS, F1Dx metadata, LcsO locks, #22 manifest) + read-back QA, but does **NOT** burn RDP-2 — devices ship RDP-0 and self-lock + rotate pairing keys on first field boot. The error-screen/numbered-code pattern here is the model for #36's first-boot failure UX.
+
 Goal: a single firmware build the factory operator flashes to a fresh device, runs once, and either ships ("FACTORY OK") or sets aside and reports a numbered code ("FACTORY FAIL @ STEP X/6 EXXXX"). Operator does not need to be a developer; they read the OLED, photograph the failure code, send the photo back. Vendor (us) maintains an error-code → diagnosis table in `docs/provisioning/factory-provisioning.md`.
 
 **Phase A — scaffold (DONE)**: new `factory-provisioning` Cargo feature, `secure/src/factory_provisioning.rs` state machine with 6 steps (HW selftest → OTP master → pre-populated-state check → dual-SE provision → wipe dummy user state → post-wipe validation) + 12 distinct error codes covering the failure surface, OLED display helpers, `make build-hw-factory-provisioning` target, full operator manual `docs/provisioning/factory-provisioning.md`. 5 host pin-tests inside the module (step count vs enum, format-string layout, hex codes all in [0-9A-F], hint length fits OLED row, step labels fit OLED row, codes are pairwise distinct). Implementation pattern: provision-with-deterministic-zero + immediate `factory_reset_admin` to wipe the dummy user state, leaving SE infrastructure (SCP03, admin UserID, PBS, F1Dx metadata) in place. The zero user state never leaves the secure world.
@@ -1791,6 +1795,38 @@ Goal: a single firmware build the factory operator flashes to a fresh device, ru
 - [ ] **`flash-hw-factory-provisioning` Makefile target.** Currently the build target exists; the corresponding flash+run target is a TODO referenced in the build target's epilogue. Mirror the `flash-hw-dual-se-oled-standalone` pattern (probe-rs download + STM32_Programmer_CLI option-byte config + probe-rs run for the post-flash semihosting). Phase B will need this anyway.
 
 - [ ] **Validation cycle: `wipe-for-wizard` + factory rerun.** Confirm that after a wipe (`make wipe-for-wizard`), the factory firmware can re-run successfully on the same device. Today's pre-populated-state check (step 3) rejects any chip with user state; a wiped chip should pass through cleanly. Bench-validate this loop before the factory operator starts seeing intermittent reruns.
+
+---
+
+### 36. On-device first-boot provisioning + RDP-0 verifiable shipping (trustless supply chain)
+
+**Status:** DECISION RECORDED 2026-07-14 (owner) — NOT STARTED. Supersedes the *factory-side* RDP-2 burn in #20 stage 2 and the "#22 RDP Level 2 burned at end of provisioning" bullet; reshapes the #29 ceremony scope (SE-internal provisioning stays factory-side, device-facing provisioning moves on-device).
+
+**Decision.** Devices ship at **RDP-0** with a batch-uniform image so anyone can verify flash + option bytes + OTP with an ST-LINK **before first power** (connect-under-reset — attaching a probe normally powers the board, which boots and self-locks; the published procedure must say this loudly). First field boot self-locks to RDP-2 and completes provisioning on-device. Rationale (trust-us vs trustless): we hand-flash at the factory, but the point is that nobody has to believe that — reproducible build + published expected option bytes/OTP + open-source verifier tool make the whole fleet falsifiable, including against our own compromised bench or coercion. **One uniform SKU, no "verifiable SKU" split** — a SKU split leaks who audits, letting a compromised factory ship clean units to verifiers only; herd honesty requires the factory cannot predict which unit gets checked. Factory read-back QA (connect-under-reset compare on every unit before boxing) is encouraged but deliberately not load-bearing.
+
+**Why provisioning must move on-device (structural, not preference):** at RDP-0 the MCU can hold no secret — flash/OTP/debug are open and the DHUK is the ST constant (per-die only at RDP ≥ 1; no RDP level offers per-die DHUK *and* readable flash, and any regression mass-erases). So the factory provisions the SEs onto per-device **transport** keysets (treated as public), and the real pairing secrets can only come into existence after the first-boot lock.
+
+**Ship state:** RDP-0, TZEN=1, WRP1A on FSBL pages, per-device flash pages 123–126 erased; published: reproducible image, expected option bytes **including OEM1/OEM2 key lock bits**, OTP map. If the #22 binding record lands in MCU flash, the verifier validates that region against the signed manifest instead of byte-compare (image no longer fully uniform — document the mask). **Board consequence:** SWD + NRST pads MUST stay accessible after assembly (verification needs connect-under-reset) — this REVERSED the old "cut traces or fill vias" rule in `docs/hardware/hardware_requirements.md` (updated 2026-07-14).
+
+**First-boot sequence** (FSBL, gated by a new `rdp2-self-lock` feature forced on by the `nsc/mod.rs` ship fences and **absent from every bench build** — a production FSBL on a bench board self-bricks):
+1. If RDP == 0xCC → normal boot (idempotence: the check runs every boot).
+2. Verify slot signatures first (existing measured boot); invalid → **halt WITHOUT locking** (unit stays returnable/reflashable — never turn a bad flash into an RDP-2 brick).
+3. Verify option bytes match the published ship profile, incl. OEM key lock state (a transit attacker must not be able to pre-plant an OEM2 regression password). Reuse/extend the tz-1/sh-1 `fsbl/src/optbytes.rs` read-only verifier; mismatch → halt unlocked + fault screen.
+4. Trusted-UI warning **before any irreversible step**: "FIRST BOOT — DO NOT DISCONNECT POWER" + progress indication; confirm stable power (BOR configured, VBUS present).
+5. Program RDP=0xCC → OBL_LAUNCH (reset). Keep the pre-lock window tiny (before USB/SE traffic).
+6. Post-lock (per-die DHUK now live): **TRNG-salted pairing rotation** — generate fresh keys, rotate SE050 SCP03 via PUT KEY + OPTIGA PBS via shielded update from the transport keysets, store DHUK-wrapped in now-unreadable flash; then the seed wizard. ⚠ MUST NOT be the bare deterministic `SAES-CMAC(DHUK, label)` ladder: a transit attacker can flash own code at RDP-0, step to RDP-1, exfiltrate every deterministic per-die derivation, mass-erase-regress to RDP-0 and restore the genuine image — invisible to verification. The fresh salt (in RDP-2-hidden flash) is what makes transit-learned material worthless. Small `hw::secret_keys` change for the pairing labels.
+
+**Self-healing / anti-brick (owner requirement — the ceremony must survive power loss at any point):**
+- Every step idempotent + resumable; journaled progress marker written commit-LAST per step (mirror the `fw_update` staging pattern and the provision-half-write-rollback lesson).
+- Power-loss matrix to bench-validate with induced cuts at every step boundary: (a) before the RDP burn → next boot redoes checks + burn; (b) during OPTSTRT itself → the one unavoidable residual window; keep it short, BOR on, document; (c) after burn, before rotation → next boot sees RDP-2 + transport keys still active → resume rotation; (d) mid-rotation → per-SE two-phase: authenticate under NEW keyset to confirm it took before considering the old one dead; on failure retry under old (SCP03 PUT KEY is atomic per keyset; PBS update shielded under current PBS); (e) after rotation, before wizard → normal "provisioned, no seed" boot.
+- Resume UX: a "recovering — do not disconnect" screen, not an error screen. Unrecoverable states (e.g. transit attacker pre-rotated the SE transport keys) → fail-closed numbered error per the #29 pattern = RMA; never silent partial provisioning, never a lock on a unit that can't finish.
+- Sacrificial-unit validation of the full ceremony incl. the power-cut matrix before any production run (same culture as the S-1/S-2/S-3 burn ceremony — RDP-2 mistakes are unrecoverable).
+
+**What stays factory-side:** SE-internal irreversible state (LcsO=Op ratchet, S-1/S-2/S-3 metadata locks, UserID/LUC objects, attestation objects, #22 manifest burn) + hand-flash + read-back QA. Threat note for the honest docs: a transit attacker at RDP-0 can reflash + self-lock; non-verifying users rely on tamper-evident fulfillment + the #22 genuine-check, and the FSBL fingerprint words do NOT defend a pre-lock reflash (post-lock integrity anchor only). This residual is the price of falsifiability; state it plainly ("verify before first power, or you're trusting the mail").
+
+**RM0456 items to pin before code:** direct RDP 0→2 transition semantics with TZEN=1; OEM key lock/status bits (`FLASH_NSSR`); DHUK constant at RDP-0 vs 0.5 (already a #20 verification item).
+
+**Cross-refs:** #20 (stage-2 moves on-device; FMK-derived SCP03 → transport-keys role), #22 (attestation unchanged; its RDP-2 bullet moves here; per-die DHUK factory fingerprint probe becomes impossible — binding leans on UIDs + SE attestation), #29 (ceremony scope), #11 (SCP03 rotation primitive is the building block), tz-1/sh-1 (optbytes verifier). On implementation start: dated UPDATE notes in `docs/security/production-security.md` §2.2, `docs/security/threat-model.md` §7.11, README shipping checklist ("RDP=0xCC as the final step" → first-boot self-lock).
 
 ---
 

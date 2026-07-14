@@ -3497,7 +3497,7 @@ flash-hw-factory-provisioning-rehearsal:
 # legacy receipt grants no eligibility, and make-time `$(error ...)` prevents
 # this target from running even under `make -i`.
 bump-rdp2-after-factory:
-	@$(error REFUSED — factory OTP receipt is quarantined; RDP2 authority is disabled; no irreversible command was run)
+	@$(error REFUSED — factory OTP receipt is quarantined; RDP2 authority is disabled — and per work-todo #36 devices ship at RDP-0 and self-lock to RDP-2 on first field boot, so no fixture RDP2 bump exists; no irreversible command was run)
 
 # Read-only inspection target: report the legacy OTP factory sentinel without
 # flashing. Every decoded state is explicitly non-authoritative and exits

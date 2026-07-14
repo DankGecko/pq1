@@ -7,6 +7,13 @@
 > closed. The procedure below is retained as historical design input only;
 > it is not an operator instruction until a replacement receipt codec and the
 > full production ceremony are independently reviewed.
+>
+> **Additionally (2026-07-14, work-todo #36): the production model no longer
+> includes ANY factory RDP2 bump.** Devices ship at RDP-0 (user-verifiable
+> over SWD before first power) and the FSBL self-locks to RDP-2 on the first
+> field boot, then self-provisions pairing keys on-device. The factory scope
+> is flash + option-byte profile (everything except RDP-2) + SE-internal
+> lockdown on transport keysets.
 
 This document is for the **factory operator** who flashes and runs
 the factory firmware on a fresh PQSigner device. You do not need to

@@ -655,8 +655,11 @@ pub unsafe fn ensure_device_master() -> Result<[u8; MASTER_KEY_SIZE], OtpError> 
 // ---------------------------------------------------------------------------
 // Factory ceremony sentinel — used by the production factory firmware
 // to record one-way "ceremony ran" state for the host-side fixture to
-// read before bumping RDP2. See `secure/src/factory_provisioning.rs`
-// for the state machine that writes this.
+// read before boxing a unit. (Historically this gated a fixture-side
+// RDP2 bump; per work-todo #36 devices ship at RDP-0 and the FSBL
+// self-locks to RDP-2 on the first field boot — no host RDP2
+// authority exists.) See `secure/src/factory_provisioning.rs` for the
+// state machine that writes this.
 // ---------------------------------------------------------------------------
 
 /// Read the factory sentinel's 32-bit value. `0xFFFFFFFF` on a fresh
@@ -751,7 +754,8 @@ mod tests {
     #[test]
     fn factory_sentinel_bit_layout() {
         // Encoding contract — silent drift in these constants would
-        // make field reports (and the host fixture's RDP2-gate)
+        // make field reports (and the host fixture's ship-gate; no
+        // fixture RDP2 bump exists per work-todo #36)
         // misinterpret the OTP state.
         assert_eq!(FACTORY_SENTINEL_BIT_RAN, 0x01);
         assert_eq!(FACTORY_SENTINEL_BIT_REHEARSAL, 0x02);

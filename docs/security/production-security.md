@@ -113,6 +113,17 @@ protected boolean (FihInt). Acceptable for a wallet UX.
 **Big picture**: Trezor Safe 5 uses single-SE + binding; we extend to
 dual-SE + signed binding record + OTP anchor + monotonic counter.
 
+> **UPDATE 2026-07-14 (work-todo #36 — ship-RDP-0 decision).** Retained as
+> research input, but **stage 2 now executes ON-DEVICE at first field boot,
+> not on the factory fixture**: devices ship at RDP-0 (batch-uniform image,
+> user-verifiable over SWD via connect-under-reset before first power); the
+> FSBL self-locks to RDP-2, and only then — with the per-die DHUK final —
+> does firmware do the BHK first-write and rotate SCP03/PBS **with fresh TRNG
+> salt** off the factory-installed *transport* keysets (pure deterministic
+> DHUK derivation is forbidden — see #36's RDP-1-roundtrip attack). Step 10
+> ("Burn RDP Level 2") is no longer a fixture action, and the stage-1
+> FMK-derived SCP03 keys are demoted to transport keysets.
+
 **Factory provisioning — two-stage RDP flow**:
 
 Stage 1 at RDP0 (debug attached):

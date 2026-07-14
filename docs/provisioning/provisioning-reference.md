@@ -7,6 +7,18 @@
 > or receipt safe. Do not run any OTP, option-byte, lifecycle, or RDP command
 > from this document until a replacement ceremony is independently approved.
 
+> **UPDATE 2026-07-14 — shipping model (work-todo #36).** Wherever this
+> reference says the factory/fixture burns `RDP=0xCC` (M-8 "LAST") or that
+> "SE secret injection is gated on the MCU lifecycle step" performed at the
+> line: devices now ship at **RDP-0** (batch-uniform image, user-verifiable
+> over SWD via connect-under-reset before first power) with the rest of the
+> option-byte lock set (M-1..M-7, M-9..) already in the shipped profile and
+> the SEs on per-device *transport* keysets. The FSBL self-locks to RDP-2 on
+> the first field boot (the DHUK's single transition to per-die-final), then
+> firmware does the BHK first-write and TRNG-salted SCP03/PBS rotation
+> on-device. The hardened-value table remains correct; only the *actor and
+> moment* of M-8 changed.
+
 > **Provenance & repo notes (2026-05-29).** Output of a deep-research run against
 > `docs/archive/provisioning-research-brief.md`. It is a research *synthesis*, not
 > vendor-authoritative: treat specific constants (OPTIGA TLV codes, the "~600k
