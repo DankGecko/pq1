@@ -207,7 +207,7 @@ const BHK_TEST_CONSTANT: [u8; 32] = *b"PQSIGNER-TEST-BHK-DHUK-WRAP-v1!!";
 
 /// Tier-2 BHK derivation entry point. Same shape as `derive_into` but
 /// resolves through the BHK SAES KEYSEL instead of DHUK, providing
-/// independent key material for the SE050/TROPIC01 split (see
+/// independent key material for the SE050 axis (see
 /// `docs/work-todo.md` §"Tier 2 — BHK").
 ///
 /// Three cfg branches mirror `derive_into`:

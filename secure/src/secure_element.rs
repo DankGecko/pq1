@@ -1,10 +1,10 @@
 //! Secure Element abstraction — low-level trait + high-level [`WalletStore`].
 //!
 //! [`SecureElement`] is the low-level r-mem / MAC-and-Destroy abstraction
-//! implemented by backends with MACD slot storage (Mock, Tropic01).
+//! implemented by backends with MACD slot storage (Mock).
 //!
 //! [`WalletStore`] is the high-level wallet-operations trait implemented
-//! by every backend (Mock, SE050, Tropic01, dual). Call sites depend on
+//! by every backend (Mock, SE050, dual). Call sites depend on
 //! [`WalletStore`] only, so no `#[cfg]` feature gates leak out.
 
 #[derive(Debug)]
@@ -25,7 +25,7 @@ pub enum UnlockError {
 
 /// Low-level secure element operations: r-mem slots and MAC-and-Destroy.
 ///
-/// Implemented by backends with MACD-capable storage (Mock, Tropic01).
+/// Implemented by backends with MACD-capable storage (Mock).
 /// SE050 does NOT implement this — it uses hardware UserID PIN gating.
 pub trait SecureElement {
     fn r_mem_write(&mut self, slot: u16, data: &[u8]) -> Result<(), SeError>;
@@ -47,7 +47,7 @@ pub trait WalletStore {
     /// The caller handles key derivation (the "recovery contract") via
     /// [`crypto::provision_from_mnemonic`] and passes pre-derived data here.
     /// Each backend stores it according to its own security model:
-    /// - Mock/Tropic01: encrypts entropy, sets up MACD PIN chain
+    /// - Mock: encrypts entropy, sets up MACD PIN chain
     /// - SE050: stores raw entropy behind hardware UserID PIN gate
     fn provision(
         &mut self,
@@ -70,7 +70,7 @@ pub trait WalletStore {
     /// Always-provision is load-bearing for deniability: the wizard
     /// provisions a decoy with a RANDOM PIN even when the user declines,
     /// so "duress configured vs not" is indistinguishable. Default no-op
-    /// for backends without a duress path (Mock, Tropic01).
+    /// for backends without a duress path (Mock).
     fn provision_duress(
         &mut self,
         _entropy: &[u8; 32],
@@ -131,8 +131,7 @@ pub trait WalletStore {
     /// so this is safe to call even when the cache is already
     /// authoritative (fresh provision, mid-session state).
     ///
-    /// Default no-op: correct for Mock (reads r-mem directly) and
-    /// Tropic01 (queries the chip on every `remaining_attempts`).
+    /// Default no-op: correct for Mock (reads r-mem directly).
     fn sync_remaining_with_mcu(&mut self, _mcu_used: u8) {}
 
     /// Draw `buf.len()` bytes from the active SE backend's TRNG(s).
@@ -180,7 +179,7 @@ pub trait WalletStore {
     /// counter via a TZ-bypass, or (c) a genuine flash fault. All
     /// three are tamper signals → wipe.
     ///
-    /// Default: `None` (mock + tropic01 don't expose a counter).
+    /// Default: `None` (mock doesn't expose a counter).
     fn pin_attempt_count(&mut self) -> Option<u8> {
         None
     }
@@ -344,8 +343,8 @@ impl SecureElement for MockSecureElement {
             return Err(SeError::InternalError);
         }
         // Simplified mock: HMAC(data_in, slot_state_or_zeros).
-        // Each call replaces slot_state with data_in (like TROPIC01's
-        // "overwrite slot with input" behavior for re-init).
+        // Each call replaces slot_state with data_in ("overwrite slot
+        // with input" re-init behavior).
         // Output = HMAC(data_in, previous_state) — deterministic per (input, state) pair.
         let output = if self.macd_initialized[s] {
             hmac_sha256(data_in, &self.macd_state[s])
@@ -354,8 +353,7 @@ impl SecureElement for MockSecureElement {
             hmac_sha256(data_in, data_in)
         };
         // Store data_in as new state (not output) — this ensures that
-        // calling with the same init_in restores the slot to a known state,
-        // matching TROPIC01's re-initialization behavior.
+        // calling with the same init_in restores the slot to a known state.
         self.macd_state[s] = *data_in;
         Ok(output)
     }

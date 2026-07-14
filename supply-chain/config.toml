@@ -16,9 +16,6 @@ url = "https://raw.githubusercontent.com/google/rust-crate-audits/main/audits.to
 [imports.mozilla]
 url = "https://raw.githubusercontent.com/mozilla/supply-chain/main/audits.toml"
 
-[policy.tropic01]
-audit-as-crates-io = true
-
 [[exemptions.aead]]
 version = "0.5.2"
 criteria = "safe-to-deploy"
@@ -233,14 +230,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.ctutils]]
 version = "0.4.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.curve25519-dalek]]
-version = "4.1.3"
-criteria = "safe-to-deploy"
-
-[[exemptions.curve25519-dalek-derive]]
-version = "0.1.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.dbl]]
@@ -739,10 +728,6 @@ criteria = "safe-to-deploy"
 version = "0.22.27"
 criteria = "safe-to-deploy"
 
-[[exemptions.tropic01]]
-version = "0.1.0@git:0cacb5ed94e5df491bfbb39e8702cc47598f7d63"
-criteria = "safe-to-deploy"
-
 [[exemptions.twox-hash]]
 version = "1.6.3"
 criteria = "safe-to-deploy"
@@ -869,10 +854,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.wyz]]
 version = "0.5.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.x25519-dalek]]
-version = "2.0.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.zerocopy]]

@@ -4,7 +4,7 @@
 //! pairing secrets off the factory transport keysets. That ceremony must
 //! survive power loss at any point, so each step's completion is recorded
 //! **commit-LAST** in a durable log on flash page 127 (KEY_PAGE — owned
-//! outright by this journal now that the TROPIC01 backend is retired).
+//! outright by this journal).
 //!
 //! The codec is log-structured and append-only, mirroring the page-123
 //! off-chain-counter idiom (`hw::flash` / `offchain_state`): 16-byte

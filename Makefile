@@ -123,7 +123,7 @@ empty :=
 space := $(empty) $(empty)
 NS_FEATURES_ARG = $(if $(NS_FEATURES_LIST),--features $(subst $(space),$(comma),$(NS_FEATURES_LIST)),)
 
-.PHONY: all clean secure nonsecure run play play-hw-display run-tropic01 run-hw setup-serial e2e e2e-hw e2e-erc7730-hw e2e-hw-display e2e-hw-dual-se build-hw flash-hw test test-unit test-solidity test-formal-verification verify-theft-free test-key-speed test-update-hw measure factory-reset optiga-reset-oids flash-hw-optiga-reset verify-pins
+.PHONY: all clean secure nonsecure run play play-hw-display run-hw e2e e2e-hw e2e-erc7730-hw e2e-hw-display e2e-hw-dual-se build-hw flash-hw test test-unit test-solidity test-formal-verification verify-theft-free test-key-speed test-update-hw measure factory-reset optiga-reset-oids flash-hw-optiga-reset verify-pins
 
 # Supply-chain audit. Hard-fails if any dependency is not cryptographically
 # pinned (Cargo.lock checksums, git rev= pins, foundry.lock matching
@@ -146,7 +146,7 @@ nonsecure: secure
 	cargo build --locked --release --target $(TARGET) --target-dir target/nonsecure -p sphincs-tz-nonsecure $(NS_FEATURES_ARG)
 	@echo "==> Non-secure world built."
 
-# Run with mock SE (no real TROPIC01 chip needed).
+# Run with mock SE (no real secure element needed).
 # We attach semihosting to a dedicated stdio chardev so SYS_READC can read
 # from the host terminal — this is what the secure UI mock uses to receive
 # "button" input ('l'/'h' = short, 'L'/'H' = long).
@@ -277,31 +277,10 @@ stm32-harden-opts:
 		--optionbytes BOR_LEV=3 SRAM2_RST=0
 	@echo "==> Option bytes written. Reset triggered. Chip state: hardened."
 
-# Configure /dev/ttyACM0 for TROPIC01 communication
-setup-serial:
-	@echo "Configuring /dev/ttyACM0 for TROPIC01..."
-	stty -F /dev/ttyACM0 115200 raw -echo cs8 -cstopb -parenb
-	@echo "Serial port ready."
-
-# Build + run with real TROPIC01 chip via semihosting SPI bridge.
-# UI is still mocked over semihosting (the OLED + buttons live on real HW).
-# Requires: TROPIC01 TS1302 devkit connected at /dev/ttyACM0
-run-tropic01: setup-serial
-	$(MAKE) FEATURES=tropic01-se,debug-log,ui-semihosting all
-	qemu-system-arm \
-		-M mps2-an505 \
-		-monitor null \
-		-serial null \
-		-chardev stdio,id=hostio \
-		-semihosting-config enable=on,target=native,chardev=hostio \
-		-kernel $(SECURE_ELF) \
-		-device loader,file=$(NONSECURE_ELF)
-
-# Real STM32U585 hardware build (full): real chip + real OLED + real buttons.
+# Real STM32U585 hardware build (full): real chips + real LCD + real buttons.
 # This target only BUILDS — flashing is done with probe-rs / openocd / etc.
-# It will not link until the ui-lcd backend is fully wired up.
 run-hw: ## Run on real hardware via probe-rs
-	$(MAKE) FEATURES=tropic01-se,ui-lcd,consumption-mask,stm32u585,legacy-fw-rollback-unsafe all
+	$(MAKE) FEATURES=dual-se,ui-lcd,consumption-mask,stm32u585,legacy-fw-rollback-unsafe all
 
 # Real STM32U585 hardware build (semihosting): mock SE + semihosting UI.
 # Uses probe-rs semihosting for I/O — same interactive model as QEMU
@@ -1012,7 +991,7 @@ se050-reset:
 #                    attempt; capacity 32, lockout at 10)
 #       - page 125 — SE050 admin PIN + crash-safety wipe flag
 #       - page 126 — OPTIGA Trust M Platform Binding Secret
-#       - page 127 — Tropic01 pairing key slot
+#       - page 127 — first-boot provisioning journal (KEY_PAGE)
 #     plus all firmware code — so you WILL need to re-flash afterwards.
 #
 # What does NOT get wiped:

@@ -27,11 +27,8 @@ pub mod usb_hw;
 #[cfg(all(feature = "stm32u585", any(feature = "se050", feature = "optiga-trust-m")))]
 pub mod i2c_hw;
 
-#[cfg(all(feature = "stm32u585", any(feature = "tropic01-se", feature = "ui-lcd")))]
+#[cfg(all(feature = "stm32u585", feature = "ui-lcd"))]
 pub mod spi_hw;
-
-#[cfg(all(feature = "stm32u585", feature = "tropic01-se"))]
-pub mod spi;
 
 #[cfg(feature = "stm32u585")]
 pub mod flash;
@@ -115,7 +112,7 @@ pub mod uart;
 pub mod bhk;
 
 /// Domain-separated per-purpose subkeys derived from the OTP master
-/// (OPTIGA PBS, SE050 SCP03, TROPIC01 pairing, ...). Only compiled on
+/// (OPTIGA PBS, SE050 SCP03, ...). Only compiled on
 /// real hardware — the underlying OTP master key lives in STM32U585-
 /// specific flash OTP.
 #[cfg(feature = "stm32u585")]

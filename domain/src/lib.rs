@@ -788,9 +788,8 @@ pub fn derive_c10_slot_keypair_with_progress(
 // `deserialize_pin_state`) stores the master secret encrypted once per allowed
 // attempt, so only the correct PIN decrypts a slot and a wrong-PIN cycle
 // destroys one. This is the *software* PIN-gating pipeline for the mock SE
-// (dev/QEMU), a backend that lacks a silicon PIN counter. (The dead, unwired
-// Tropic01 driver `secure/src/tropic01_se.rs` also references these helpers,
-// but Tropic01 is not a shipping backend — production is OPTIGA + SE050 only.)
+// (dev/QEMU), a backend that lacks a silicon PIN counter — production is
+// OPTIGA + SE050 only.
 // AUTHORITATIVE: `secure/src/pin.rs` — "SE050 / OPTIGA backends do the PIN
 // compare inside the chip instead of through this MACD pipeline."
 //
@@ -874,8 +873,7 @@ mod kani_harnesses {
     ///
     /// Scope: host-reachable pure-logic recovery parser (no_std) for the
     /// software MACD PIN-state blob — the NON-PRODUCTION path used only by the
-    /// mock-SE (dev/QEMU) backend (see the section header above; the dead
-    /// Tropic01 driver also references it but is not a shipping backend).
+    /// mock-SE (dev/QEMU) backend (see the section header above).
     /// It is NOT the shipping dual-SE auth gate (OPTIGA/SE050 PIN-compare in
     /// silicon, invariant #2), so this proves panic-freedom of a non-production
     /// recovery parser — not coverage of a production PIN gate.

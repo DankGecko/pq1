@@ -321,7 +321,7 @@ fn positive_sca_trigger_pin_pd2() {
 #[test]
 fn positive_boot_pulse_pin_pe13() {
     // PE13 = Arduino D13 on B-U585I-IOT02A — free in builds without
-    // spi1-arduino / tropic01-se.
+    // spi1-arduino.
     assert!(BOOT_PULSE_SRC.contains("const TARGET_PIN: u32 = 13;"));
     assert!(BOOT_PULSE_SRC.contains("const GPIOE_BASE: u32 = 0x5202_1000;"));
 }

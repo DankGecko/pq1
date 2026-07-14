@@ -2,8 +2,6 @@
 //!
 //! Used by:
 //! * BIP-39 mnemonic generation in `crypto::provision_with_mnemonic`
-//! * The ephemeral X25519 keypair for each TROPIC01 e2e session
-//!   (`tropic01_se::generate_ephemeral`)
 //! * Spot-check word index selection in the seed-phrase wizard
 //!
 //! On real STM32U585 hardware this module will be replaced by an embassy

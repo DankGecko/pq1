@@ -479,7 +479,7 @@ blockers above stand; these refine accuracy + add residuals.
       Phase 2A landed the cryptographic primitive (`cmac_bhk` +
       `derive_into_bhk` + `bhk-hardcoded-master-key` dev fallback) with
       no chip writes; Phase 2B (this checkbox) lands the silicon path;
-      Phase 2C migrates SE050 SCP03 + admin PIN + TROPIC01 pairing
+      Phase 2C migrates SE050 SCP03 + admin PIN
       callers from DHUK to BHK with a coordinated re-pair step.
 - [ ] **DHUK availability probe** (work-todo #7 Tier 1). Before any
       DHUK-based derivation, verify SAES returns stable output for a
@@ -505,7 +505,7 @@ blockers above stand; these refine accuracy + add residuals.
       — so Tier 1 derivations still reproduce after a mass erase. **BHK does NOT survive** — its DHUK-wrapped bytes
       live in flash, which is mass-erased. A regressed + re-provisioned
       device generates a fresh BHK → Tier 2 pairings re-key, which means
-      SE050 + TROPIC01 (if on BHK per the work-todo #7 split) must be
+      the SE050 must be
       re-paired via the normal first-boot provisioning path. Document
       this in the refurbishment / RMA flow. (Post-#36 the first-boot
       self-lock sequence is: verify option bytes + slots → RDP=0xCC →

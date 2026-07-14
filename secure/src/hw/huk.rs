@@ -29,7 +29,7 @@
 //! ## Relationship to `hw::secret_keys`
 //!
 //! `hw::secret_keys` provides the canonical per-purpose subkey API
-//! (OPTIGA PBS, SE050 SCP03, TROPIC01 pairing). That layer is what
+//! (OPTIGA PBS, SE050 SCP03). That layer is what
 //! the SE drivers actually call. `huk::derive_device_key` is the
 //! lower-level helper for the hypothetical case where we need to
 //! seal arbitrary MCU-side flash data bound to the device — for

@@ -25,8 +25,8 @@ use crate::fih::FihBool;
 pub(super) struct SecureState {
     /// How many PIN attempts the current lockout window still permits.
     /// Mirrors the secure element's monotonic PIN counter for the mock
-    /// backend; for the real TROPIC01 backend the value is refreshed
-    /// from the chip on every `cmd_get_remaining`.
+    /// backend; real SE backends refresh it from the chip on every
+    /// `cmd_get_remaining`.
     pub(super) remaining_attempts: u8,
     /// Whether the current session has passed PIN verification. Reset
     /// by [`zeroize_sensitive`] on cancel / idle wipe / panic.
@@ -43,7 +43,7 @@ pub(super) struct SecureState {
     /// skip together.
     pub(super) pin_verified: FihBool,
     /// The 32-byte master secret unwrapped by
-    /// `crate::pin::verify_pin` (or the TROPIC01 MAC-and-Destroy flow).
+    /// `crate::pin::verify_pin`.
     /// Used both as the AES-GCM key for the encrypted-entropy blob and
     /// as the hedge input for SLH-DSA signing randomizers.
     pub(super) master_secret: [u8; 32],

@@ -67,16 +67,6 @@ zeroize = { workspace = true }
 # (default-features = false).
 micromath = { version = "2.1", default-features = false, optional = true }
 
-# TROPIC01 secure element (for real chip mode).
-#
-# SECURITY: `rev =` is the ONLY supply-chain pin here — there is no
-# checksum for git deps in Cargo.lock. Never relax this to `branch =`
-# or `tag =`, both of which are mutable upstream. `make verify-pins`
-# hard-fails if this line has no 40-char hex `rev =`.
-tropic01 = { git = "https://github.com/tropicsquare/libtropic-rs", rev = "0cacb5ed94e5df491bfbb39e8702cc47598f7d63", features = ["keys"], optional = true }
-x25519-dalek = { version = "2.0.1", default-features = false, features = ["static_secrets"], optional = true }
-embedded-hal = { version = "1", optional = true }
-
 # Graphics primitives used by the NV3007 LCD font/glyph path.
 embedded-graphics = { version = "0.8", default-features = false, optional = true }
 
@@ -134,7 +124,6 @@ platform-stm32u585 = ["stm32u585"]
 secure-element-mock     = ["mock-se"]
 secure-element-optiga   = ["optiga-trust-m"]
 secure-element-se050    = ["se050"]
-secure-element-tropic01 = ["tropic01-se"]
 secure-element-dual     = ["dual-se"]
 
 # 3. ui-mode axis (mutually exclusive — enforced by build.rs today,
@@ -184,7 +173,6 @@ legacy-fw-rollback-unsafe = []
 # generated verified-root fence intentionally rejects a stale warning feature.
 debug-log = ["legacy-fw-rollback-unsafe", "erc7730-dev-unattested"]
 mock-se = ["legacy-fw-rollback-unsafe", "erc7730-dev-unattested"]
-tropic01-se = ["dep:tropic01", "dep:x25519-dalek", "dep:embedded-hal"]
 ui-semihosting = []
 ui-noop = []  # Silent no-op UI for standalone USB operation (no debugger)
 # Real STM32U585 hardware target (vs QEMU mps2-an505). Pulls in `hw-sha256`
@@ -765,7 +753,7 @@ se050-crash-safety-e2e = ["se050"]  # 2-phase test: partial wipe + reset + resum
 # tests) / `make se050-stress-only-<name>` (single test) / `make
 # se050-stress-list` (host-side catalog).
 se050-stress = ["se050"]
-spi1-arduino = []  # Use SPI1/PE12-PE15 (Arduino R3 headers) instead of SPI2/PB12-PB15 for TROPIC01
+spi1-arduino = []  # Use SPI1/PE12-PE15 (Arduino R3 headers) instead of SPI2/PB12-PB15 (NV3007 LCD wiring)
 stsafe-probe = ["stm32u585", "mock-se"]  # I2C2 bus scan to detect on-board STSAFE-A110
 gpio-buttons = ["stm32u585"]  # GPIO button driver: PI2 (LEFT) + PA15 (RIGHT) on CN14
 button-test = ["stm32u585", "mock-se", "gpio-buttons"]  # Flash + run GPIO button test

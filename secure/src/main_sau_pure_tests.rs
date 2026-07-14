@@ -1168,8 +1168,8 @@ fn negative_se_static_mut_is_unique_per_backend() {
     // meaning entropy half-O or half-E might never be persisted.
     let count = MAIN_SRC.matches("static mut SE:").count();
     assert_eq!(
-        count, 5,
-        "exactly five backend-cfg'd `static mut SE:` definitions expected (mock, tropic01, se050, optiga, dual)"
+        count, 4,
+        "exactly four backend-cfg'd `static mut SE:` definitions expected (mock, se050, optiga, dual)"
     );
 }
 

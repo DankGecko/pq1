@@ -166,7 +166,7 @@ The secure-flash bank-1 page map is nearly full of persistent data:
 
 | page | addr | use |
 |---|---|---|
-| 127 | `0x0C0F_E000` | key storage / Tropic01 pairing (8 KB) |
+| 127 | `0x0C0F_E000` | first-boot provisioning journal (KEY_PAGE, 8 KB) |
 | 126 | `0x0C0F_C000` | FW-update fail counter (was OPTIGA PBS) |
 | 125 | `0x0C0F_A000` | SE050 admin-wipe state |
 | 124 | — | PIN-attempt counter |

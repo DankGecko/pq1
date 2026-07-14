@@ -479,10 +479,8 @@ compile_error!(
 // dev / QEMU / bench / test image — its first boot programs RDP=0xCC
 // (irreversible) and rotates SE keys against the factory transport state. A
 // bench board is not in that state, so a production FSBL on it would brick.
-// `tropic01-se` is included because it and the first-boot journal both claim
-// flash page 127 (KEY_PAGE); TROPIC01 is retired, so this only pins the
-// single-ownership invariant. `mock-se` / `*-hardcoded-master-key` would make
-// the "rotate off the real transport keysets" step meaningless.
+// `mock-se` / `*-hardcoded-master-key` would make the "rotate off the real
+// transport keysets" step meaningless.
 #[cfg(all(
     feature = "rdp2-self-lock",
     any(
@@ -492,18 +490,16 @@ compile_error!(
         feature = "otp-hardcoded-master-key",
         feature = "bhk-hardcoded-master-key",
         feature = "factory-provisioning",
-        feature = "tropic01-se",
     ),
 ))]
 compile_error!(
     "`rdp2-self-lock` (work-todo #36) is incompatible with dev/test features \
      (e2e-test / dev-testkey / mock-se / otp-hardcoded-master-key / \
-     bhk-hardcoded-master-key / factory-provisioning / tropic01-se). Its first \
+     bhk-hardcoded-master-key / factory-provisioning). Its first \
      boot performs the IRREVERSIBLE RDP=0xCC burn and rotates SE pairing \
      secrets against the factory transport state — a bench/QEMU/test board is \
      not in that state and would self-brick. Build the production image without \
-     these features, or a dev image without `rdp2-self-lock`. (`tropic01-se` \
-     also collides with the page-127 provisioning journal — TROPIC01 is retired.)"
+     these features, or a dev image without `rdp2-self-lock`."
 );
 
 // work-todo #36 config guard: `rdp2-self-lock` requires `dual-se`. Phase B
@@ -561,7 +557,7 @@ compile_error!(
 // campaign against the SAES/PKA/TRNG gets unbounded attempts with no penalty.
 // Keyed on `dual-se` (the production seed-split SE config, invariant #1) so
 // the fence targets shipping images only and never forces a brick-on-tamper
-// response onto mock / tropic01 / single-SE bench builds — mirrors how the
+// response onto mock / single-SE bench builds — mirrors how the
 // `optiga-hw-counter` / `se050-derived-scp03` fences key on their backend.
 // These features are not auto-composed, so the fence forces a shipping build
 // to opt in. Hardware TEST images may opt out via `e2e-test` / `dev-testkey`
@@ -712,7 +708,7 @@ compile_error!(
 //
 // `dual-se` is the explicit "both production SEs simultaneously" build,
 // implemented as `dual-se = ["optiga-trust-m", "se050"]`. Outside of
-// `dual-se`, exactly one of {mock-se, tropic01-se, se050, optiga-trust-m}
+// `dual-se`, exactly one of {mock-se, se050, optiga-trust-m}
 // must be selected.
 //
 // The selection is done in `secure/src/main.rs` today by a chain of
@@ -720,12 +716,6 @@ compile_error!(
 // (negative-condition voting) — i.e., simultaneous selection compiles
 // silently with a "first match wins" semantics. Make it loud here.
 // ---------------------------------------------------------------------------
-
-#[cfg(all(feature = "mock-se", feature = "tropic01-se"))]
-compile_error!(
-    "Secure-element backends `mock-se` and `tropic01-se` are mutually \
-     exclusive. Pick exactly one."
-);
 
 #[cfg(all(feature = "mock-se", feature = "se050"))]
 compile_error!(
@@ -740,26 +730,12 @@ compile_error!(
      and `se050`, so combining `mock-se` with `dual-se` is also forbidden.)"
 );
 
-#[cfg(all(feature = "tropic01-se", feature = "se050"))]
-compile_error!(
-    "Secure-element backends `tropic01-se` and `se050` are mutually exclusive. \
-     `tropic01-se` is a standalone-only backend; for two-SE builds use `dual-se`."
-);
-
-#[cfg(all(feature = "tropic01-se", feature = "optiga-trust-m"))]
-compile_error!(
-    "Secure-element backends `tropic01-se` and `optiga-trust-m` are mutually \
-     exclusive. `tropic01-se` is a standalone-only backend; for two-SE builds \
-     use `dual-se`."
-);
-
 // At least one SE backend must be selected when targeting hardware or QEMU.
 #[cfg(all(
     not(test),
     target_arch = "arm",
     not(any(
         feature = "mock-se",
-        feature = "tropic01-se",
         feature = "se050",
         feature = "optiga-trust-m",
         feature = "dual-se",
@@ -767,7 +743,7 @@ compile_error!(
 ))]
 compile_error!(
     "Exactly one secure-element backend must be selected: `mock-se`, \
-     `tropic01-se`, `se050`, `optiga-trust-m`, or `dual-se`."
+     `se050`, `optiga-trust-m`, or `dual-se`."
 );
 
 #[cfg(not(feature = "stm32u585"))]

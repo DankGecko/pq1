@@ -19,7 +19,7 @@
 //! (flash dump of the wrapped bytes + offline DHUK-ECB crack) does not
 //! unlock DHUK-keyed derivations. See `docs/work-todo.md` §"Tier 2 —
 //! BHK" for the SE-to-axis split (DHUK → OPTIGA PBS; BHK → SE050 SCP03 +
-//! admin PIN, TROPIC01 pairing).
+//! admin PIN).
 //!
 //! ## Reversibility
 //!

@@ -1,7 +1,7 @@
 //! Early-boot GPIO bisection diagnostic on PE13 (Arduino D13 on the
 //! B-U585I-IOT02A — verified via `secure/src/hw/spi_hw.rs`'s SPI1
 //! arduino-pinout block; PE13 is the standard SPI1_SCK pin and is
-//! free in builds without `spi1-arduino` / `tropic01-se`).
+//! free in builds without `spi1-arduino`).
 //!
 //! Used when stepping to RDP ≥ 1 where neither SWD halt nor USART
 //! output works as a diagnostic — wire an LA1010 channel to D5 + GND,
@@ -51,7 +51,7 @@ const GPIOD_BASE: u32 = 0x5202_0C00;
 const GPIOE_BASE: u32 = 0x5202_1000;
 
 // PE13 = Arduino D13 on this board (SPI1_SCK in our spi_hw.rs).
-// Free in builds without `spi1-arduino` / `tropic01-se`. PE4 (= D5)
+// Free in builds without `spi1-arduino`. PE4 (= D5)
 // is unusable as a probe target because the OM-SE050ARD shield
 // routes it to SE050 ENA, masking GPIO drives.
 const TARGET_PIN: u32 = 13;

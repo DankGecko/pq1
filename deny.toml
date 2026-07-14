@@ -43,7 +43,7 @@ targets = [
 # be toggled off if true, if you want to conditionally enable `--all-features` it
 # is recommended to pass `--all-features` on the cmd line instead
 # Collect the dep graph with --all-features so the `sources`/`advisories` gates
-# actually SEE optional deps (e.g. the `tropic01` git dep). With this false the
+# actually SEE optional deps. With this false the
 # [sources] check was a no-op — it pruned the optional git source it was meant
 # to police (2026-06-18 ToB supply-chain audit). Cannot be toggled off at the
 # cmd line once true, which is what we want for a hard gate.
@@ -264,11 +264,11 @@ allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = []
 
 [sources.allow-org]
-# github.com organizations to allow git sources for. `tropicsquare` = the
-# libtropic-rs (tropic01) optional SE driver dep — the ONLY allowed git org;
-# any other git source now fails the gate. `make verify-pins` separately
-# hard-fails any git dep lacking a 40-char hex `rev =` pin (belt-and-braces).
-github = ["tropicsquare"]
+# github.com organizations to allow git sources for. Empty since the TROPIC01
+# backend (libtropic-rs git dep) was removed 2026-07-14 — any git source now
+# fails the gate. `make verify-pins` separately hard-fails any git dep lacking
+# a 40-char hex `rev =` pin (belt-and-braces).
+github = []
 # gitlab.com organizations to allow git sources for
 gitlab = []
 # bitbucket.org organizations to allow git sources for

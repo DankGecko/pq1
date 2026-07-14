@@ -1,7 +1,7 @@
 //! Minimal secure flash driver for STM32U585.
 //!
 //! Provides read/write/erase for the last two pages of bank 1:
-//! - Page 127 (0x0C0F_E000): Tropic01 pairing key / persistent secure data
+//! - Page 127 (0x0C0F_E000): first-boot provisioning journal (KEY_PAGE)
 //! - Page 126 (0x0C0F_C000): OPTIGA Trust M Platform Binding Secret (PBS)
 //!
 //! The linker script (`memory-stm32u585.x`) must shrink FLASH LENGTH
@@ -531,7 +531,7 @@ pub fn is_secure_page_blank(page: u32) -> bool {
 ///
 /// # Safety
 /// Programs persistent flash in page 127 (KEY_PAGE — owned outright by the
-/// first-boot journal now that TROPIC01 is retired). Caller ensures the QW is
+/// first-boot journal). Caller ensures the QW is
 /// currently erased (the codec only ever appends at the scanned `next_free`).
 #[cfg(feature = "rdp2-self-lock")]
 pub unsafe fn write_journal_qw(qw_index: usize, rec: &[u8; 16]) -> Result<(), ()> {

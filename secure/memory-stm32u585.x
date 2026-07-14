@@ -18,8 +18,8 @@ MEMORY
     /* Secure flash: bank 1 via S alias.
      * Last 40 KB (pages 123-127, 0x0C0F6000-0x0C0FFFFF) reserved for
      * persistent secure data:
-     *   page 127 (0x0C0FE000) = reserved (legacy Tropic01 pairing key;
-     *                            free for reuse after full Tropic01 removal)
+     *   page 127 (0x0C0FE000) = first-boot provisioning journal
+     *                            (KEY_PAGE, `rdp2-self-lock`; otherwise reserved)
      *   page 126 (0x0C0FC000) = wrapped SE050 BHK (`bhk` only; otherwise reserved)
      *   page 125 (0x0C0FA000) = SE050 admin-wipe state (PIN at QW0, flag at QW1)
      *   page 124 (0x0C0F8000) = MCU PIN-attempt counter

@@ -37,7 +37,7 @@ pub mod state;
 #[must_use]
 pub fn journal_salt_if_all_done() -> Option<[u8; 32]> {
     // SAFETY: page 127 (KEY_PAGE) is a fixed 8 KB in-flash region, owned
-    // outright by this journal (TROPIC01 retired); this is a read-only view.
+    // outright by this journal; this is a read-only view.
     let page = unsafe {
         core::slice::from_raw_parts(
             crate::hw::flash::KEY_PAGE_ADDR as *const u8,

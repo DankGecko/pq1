@@ -61,7 +61,7 @@ use zeroize::Zeroize;
 ///
 /// Under `feature = "mock-se"` the SE call is allowed to fail (the
 /// mock backend has no TRNG); under any production backend
-/// (`optiga-trust-m`, `se050`, `dual-se`, `tropic01-se`) a missing SE
+/// (`optiga-trust-m`, `se050`, `dual-se`) a missing SE
 /// contribution is fatal.
 pub fn fill(buf: &mut [u8]) -> Result<(), ()> {
     if buf.is_empty() {

@@ -65,8 +65,9 @@ This means:
   releases must honour this (`rustup` does it automatically when the
   file is present).
 - **Locked dependencies**: `Cargo.lock` is committed; all crates-io
-  dependencies are pinned to exact versions. Any git dependency is
-  pinned by commit hash (see `secure/Cargo.toml`'s `tropic01` entry).
+  dependencies are pinned to exact versions. Any git dependency must be
+  pinned by commit hash (`make verify-pins`; none remain since the
+  TROPIC01 backend was removed 2026-07-14).
 - **Single-codegen-unit release profile**: `[profile.release]
   codegen-units = 1, lto = true` in the workspace `Cargo.toml` (already
   present before this work).
@@ -294,8 +295,8 @@ tree the vendor claims it does. Do **not** load such a bundle on a device.
 ## Known non-goals
 
 - **Vendored dependencies** (offline / air-gap builds): `Cargo.lock`
-  pins every crates.io dep by SHA-256 and the one git dep (`tropic01`)
-  by 40-char rev, so the build is bit-reproducible given `crates.io`
+  pins every crates.io dep by SHA-256 (no git deps remain), so the
+  build is bit-reproducible given `crates.io`
   reachability. For true air-gap audit support, `cargo vendor` (or
   crane-driven Nix vendoring) committed to the repo is the follow-up.
 - **Native Windows builds**: use WSL2. `measure.bat` at the repo root

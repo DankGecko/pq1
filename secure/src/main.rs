@@ -148,12 +148,8 @@ mod se050_stress;
 compile_error!(
     "`se050-stress` requires real SE050 silicon — drop `mock-se` from the feature set"
 );
-#[cfg(all(feature = "tropic01-se", not(feature = "stm32u585"), not(test)))]
-mod semihosting_spi;
 #[cfg(not(test))]
 mod timeout;
-#[cfg(all(feature = "tropic01-se", not(test)))]
-mod tropic01_se;
 #[cfg(all(feature = "optiga-trust-m", not(test)))]
 mod optiga;
 #[cfg(all(feature = "dual-se", not(test)))]
@@ -340,7 +336,7 @@ mod hw_platform_under_test;
 // Same shape as `hw_crypto_under_test` / `hw_platform_under_test`:
 // hosts the host-runnable source-text + reference-encoding pinning
 // suite for the bus / I/O peripheral layer (I2C1 OLED + SE050,
-// I2C2 STSAFE probe, SPI TROPIC01, USB OTG FS, USART1 RDP1 diag,
+// I2C2 STSAFE probe, USB OTG FS, USART1 RDP1 diag,
 // GPIO buttons). See the module's docstring + the pure_tests.rs
 // header for what is and isn't covered.
 #[cfg(test)]
@@ -386,19 +382,6 @@ mod optiga_under_test;
 // `scp03_logic` / `iso7816` modules. See `reports/tests/secure-se050.md`.
 #[cfg(test)]
 mod se050_under_test;
-
-// ── Host-side test suite for the `secure-se-misc` slice ──
-//
-// Covers `secure/src/scp03_logic.rs`, `secure/src/cmac.rs`,
-// `secure/src/secure_element.rs` (each via inline `#[cfg(test)] mod
-// tests` blocks), and the firmware-only `secure/src/tropic01_se.rs` +
-// `secure/src/semihosting_spi.rs` (via `include_str!` source-text
-// invariant pins in this module, because both files depend on
-// `cortex_m_semihosting` / `tropic01` / `x25519-dalek` and cannot
-// link on host). See `reports/tests/secure-se-misc.md` for the
-// inventory.
-#[cfg(test)]
-mod secure_se_misc_pure_tests;
 
 // ── Test-only scaffold for the `secure-ui` slice ──
 //
@@ -462,12 +445,8 @@ const ARCH: ArchRegs = unsafe {
 };
 
 // Global mock SE (used when mock-se feature is active, no real SE)
-#[cfg(all(feature = "mock-se", not(feature = "se050"), not(feature = "tropic01-se"), not(feature = "optiga-trust-m"), not(test)))]
+#[cfg(all(feature = "mock-se", not(feature = "se050"), not(feature = "optiga-trust-m"), not(test)))]
 static mut SE: MockSecureElement = MockSecureElement::new();
-
-// Global TROPIC01 SE (standalone, without dual-se)
-#[cfg(all(feature = "tropic01-se", not(feature = "dual-se"), not(test)))]
-static mut SE: tropic01_se::Tropic01SecureElement = tropic01_se::Tropic01SecureElement::new();
 
 // Global SE050 SE (standalone, without dual-se)
 #[cfg(all(feature = "se050", not(feature = "dual-se"), not(test)))]
@@ -732,7 +711,7 @@ fn setup_systick() {
 }
 
 /// Returns true if the SE backend has been provisioned.
-/// Each backend (Mock, SE050, Tropic01) checks via its WalletStore impl.
+/// Each backend (Mock, SE050, OPTIGA, dual) checks via its WalletStore impl.
 #[cfg(not(test))]
 fn is_provisioned(se: &mut impl WalletStore) -> bool {
     se.is_provisioned()
@@ -1197,17 +1176,6 @@ fn main() -> ! {
         secure_log!("[S] I2C1 initialized (PB8/PB9, 400 kHz)");
     }
 
-    // Initialize SPI2 for TROPIC01 secure element.
-    // Must come after rcc::init() (clocks) and sau::init() (peripherals).
-    #[cfg(all(feature = "stm32u585", feature = "tropic01-se"))]
-    unsafe {
-        hw::spi_hw::init();
-        #[cfg(feature = "spi1-arduino")]
-        secure_log!("[S] SPI1 initialized for TROPIC01 (PE12-15 Arduino, 5 MHz)");
-        #[cfg(not(feature = "spi1-arduino"))]
-        secure_log!("[S] SPI2 initialized for TROPIC01 (PB12-15, 5 MHz)");
-    }
-
     ui::init();
     secure_log!("[S] UI initialized");
 
@@ -1347,15 +1315,6 @@ fn main() -> ! {
     unsafe {
         let se = &mut *core::ptr::addr_of_mut!(SE);
         first_boot::run_post_lock_provisioning(se);
-    }
-
-    // Try to load a previously saved per-device pairing key for the
-    // Tropic01. If found, sessions use pairing slot 1 (per-device)
-    // instead of slot 0 (shared devkit keys).
-    //
-    #[cfg(all(feature = "tropic01-se", not(feature = "dual-se"), not(test)))]
-    unsafe {
-        (&mut *core::ptr::addr_of_mut!(SE)).load_pairing_key();
     }
 
     // Load the Platform Binding Secret for OPTIGA Trust M from secure flash.

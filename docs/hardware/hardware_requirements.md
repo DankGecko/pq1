@@ -56,10 +56,9 @@ Entropy of the seed phrase is split across two independent secure elements to el
 
 > **TROPIC01 note.** Earlier design iterations evaluated TROPIC01 as a
 > secondary SE in a dual-SE split. That path was retired in favour of the
-> OPTIGA + SE050 pairing above. TROPIC01 support remains in the codebase as a
-> standalone-SE option (Cargo feature `tropic01-se`, driver at
-> `secure/src/tropic01_se.rs`) for development and alternative-SE testing,
-> but it is not part of the primary product hardware.
+> OPTIGA + SE050 pairing above, and the remaining standalone-SE driver and
+> `tropic01-se` Cargo feature were removed from the codebase on 2026-07-14
+> (owner decision — dual-SE only).
 
 ### I²C bus
 

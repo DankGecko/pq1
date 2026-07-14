@@ -12,7 +12,7 @@
 //!   hardening primitives are keyed off the secure-world TRNG.
 //! * [`provision_from_mnemonic`] / [`store_macd_encrypted`] — the
 //!   `WalletStore` + `SecureElement` provisioning entry points used by
-//!   the wizard and by the mock/Tropic01 backends. These touch the
+//!   the wizard and by the mock backend. These touch the
 //!   secure-side `crate::secure_element::*` traits with r-mem
 //!   semantics, so they cannot live in the pure-logic crate.
 //!
@@ -425,7 +425,7 @@ fn provision_duress_wallet(
 
 /// Store pre-derived entropy, VK, and PIN state via the MACD chain on an
 /// r-mem-capable secure element. Used by backends that support the
-/// `SecureElement` trait (Mock, Tropic01 on the generic path).
+/// `SecureElement` trait (Mock on the generic path).
 ///
 /// The mnemonic-to-entropy derivation is NOT done here — the caller must
 /// pass pre-derived `(entropy, master_secret, vk, bootstrap_vk)`.

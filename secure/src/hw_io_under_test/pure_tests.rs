@@ -4,15 +4,14 @@
 //! Slice files in scope:
 //!   - `secure/src/hw/i2c_hw.rs`     (I2C1 SE050 init — hw only, no API)
 //!   - `secure/src/hw/i2c2_probe.rs` (I2C2 bus-scan — `stsafe-probe` dev)
-//!   - `secure/src/hw/spi.rs`        (SPI master, `embedded_hal::SpiDevice`)
-//!   - `secure/src/hw/spi_hw.rs`     (SPI2/SPI1 init — TROPIC01 bus)
+//!   - `secure/src/hw/spi_hw.rs`     (SPI2/SPI1 init — NV3007 LCD bus)
 //!   - `secure/src/hw/usb_hw.rs`     (USB OTG FS init — flips NS pins)
 //!   - `secure/src/hw/uart.rs`       (USART1 dev-only diag VCP, `uart-console`)
 //!   - `secure/src/hw/buttons.rs`    (PA8 / PC1 GPIO trusted-UI buttons)
 //!   - `secure/src/hw/mod.rs`        (feature gates for every IO module)
 //!
 //! These files all sit behind `feature = "stm32u585"` (or
-//! `tropic01-se` / `usb` / `gpio-buttons` / `uart-console` /
+//! `usb` / `gpio-buttons` / `uart-console` /
 //! `stsafe-probe`) and pull in `cortex_m` MMIO machinery that does not
 //! link on host. We therefore pin the slice through `include_str!`
 //! source-text invariants — every constant whose silent regression
@@ -31,7 +30,6 @@
 
 const I2C_HW_SRC: &str = include_str!("../hw/i2c_hw.rs");
 const I2C2_PROBE_SRC: &str = include_str!("../hw/i2c2_probe.rs");
-const SPI_SRC: &str = include_str!("../hw/spi.rs");
 const SPI_HW_SRC: &str = include_str!("../hw/spi_hw.rs");
 const USB_HW_SRC: &str = include_str!("../hw/usb_hw.rs");
 const UART_SRC: &str = include_str!("../hw/uart.rs");
@@ -147,70 +145,7 @@ fn positive_i2c2_probe_halts_after_scan() {
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// 4. POSITIVE — SPI driver (spi.rs)
-// ═════════════════════════════════════════════════════════════════════
-
-#[test]
-fn positive_spi_sr_bit_positions() {
-    assert!(SPI_SRC.contains("const SR_TXP: u32 = 1 << 1;"));
-    assert!(SPI_SRC.contains("const SR_RXP: u32 = 1 << 0;"));
-    assert!(SPI_SRC.contains("const SR_EOT: u32 = 1 << 3;"));
-    assert!(SPI_SRC.contains("const SR_OVR: u32 = 1 << 6;"));
-}
-
-#[test]
-fn positive_spi_cr1_spe_and_cstart_bits() {
-    assert!(SPI_SRC.contains("const CR1_SPE: u32 = 1 << 0;"));
-    assert!(SPI_SRC.contains("const CR1_CSTART: u32 = 1 << 9;"));
-}
-
-#[test]
-fn positive_spi_ifcr_clear_bits() {
-    assert!(SPI_SRC.contains("const IFCR_EOTC: u32 = 1 << 3;"));
-    assert!(SPI_SRC.contains("const IFCR_TXTFC: u32 = 1 << 4;"));
-    assert!(SPI_SRC.contains("const IFCR_OVRC: u32 = 1 << 6;"));
-}
-
-#[test]
-fn positive_spi_register_offsets_match_stm32u5_layout() {
-    // STM32U5 SPI v2: CR1=+0x00, CR2=+0x04, SR=+0x14, IFCR=+0x18,
-    // TXDR=+0x20, RXDR=+0x30. The driver computes addresses relative
-    // to SPI_BASE — pin them so a future "consolidate the offsets"
-    // refactor cannot silently shift them.
-    assert!(SPI_SRC.contains("Reg32::new(SPI_BASE + 0x00)"));
-    assert!(SPI_SRC.contains("Reg32::new(SPI_BASE + 0x04)"));
-    assert!(SPI_SRC.contains("RoReg32::new(SPI_BASE + 0x14)"));
-    assert!(SPI_SRC.contains("Reg32::new(SPI_BASE + 0x18)"));
-    assert!(SPI_SRC.contains("txdr_addr: SPI_BASE + 0x20"));
-    assert!(SPI_SRC.contains("rxdr_addr: SPI_BASE + 0x30"));
-}
-
-#[test]
-fn positive_spi_empty_transfer_is_ok() {
-    assert!(SPI_SRC.contains("if data.is_empty() {\n            return Ok(());\n        }"));
-}
-
-#[test]
-fn positive_spi_overrun_returns_err_overrun() {
-    assert!(SPI_SRC.contains("ErrorKind::Overrun"));
-    assert!(SPI_SRC.contains("Err(SpiError::Overrun)"));
-}
-
-#[test]
-fn positive_spi_disables_pe_on_timeout() {
-    // wait_eot_and_disable: timeout path force-disables SPE.
-    assert!(SPI_SRC.contains("// Timeout — force disable\n        REG.cr1.clear_bits(CR1_SPE);"));
-}
-
-#[test]
-fn positive_spi_cs_always_deasserted_at_end_of_transaction() {
-    // Even on error, CS must be released so the bus isn't held.
-    assert!(SPI_SRC.contains("// Deassert CS at the end of the transaction (always, even on error)."));
-    assert!(SPI_SRC.contains("cs_deassert();\n\n        result"));
-}
-
-// ═════════════════════════════════════════════════════════════════════
-// 5. POSITIVE — SPI hardware init (spi_hw.rs, TROPIC01)
+// 5. POSITIVE — SPI hardware init (spi_hw.rs, NV3007 LCD)
 // ═════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -253,7 +188,7 @@ fn positive_spi_hw_cfg1_baud_gated_dsize_8bit() {
     // SPI1 baud is gated on `ui-lcd` (2026-06-09): ÷8 (20 MHz) for the NV3007
     // LCD (dropped from ÷4/40 MHz — the dev board's blue LED on PE13=SCK loads
     // the line and corrupts 40 MHz edges), ÷32 (5 MHz) conservative for non-LCD
-    // / shared-TROPIC01 builds. DSIZE = 7 (8-bit); only MBR nibble [30:28] moves.
+    // builds. DSIZE = 7 (8-bit); only MBR nibble [30:28] moves.
     assert!(SPI_HW_SRC.contains("const MBR: u32 = 0b010;")); // ÷8 → 20 MHz (ui-lcd)
     assert!(SPI_HW_SRC.contains("const MBR: u32 = 0b100;")); // ÷32 → 5 MHz (default)
     assert!(SPI_HW_SRC.contains("REG.spi_cfg1.write((MBR << 28) | 7);"));
@@ -537,17 +472,11 @@ fn positive_mod_i2c_hw_se_gate() {
 }
 
 #[test]
-fn positive_mod_spi_tropic01_gate() {
-    // `spi_hw` is shared between the Tropic01 SE driver and the
-    // NV3007 LCD driver (Phase A landed 2026-05-19). The `spi`
-    // embedded-hal SpiDevice impl above it stays tropic01-specific
-    // because the LCD uses direct TXDR access (`hw::lcd_nv3007`),
-    // not the SpiDevice abstraction.
+fn positive_mod_spi_hw_lcd_gate() {
+    // `spi_hw` serves the NV3007 LCD driver (`hw::lcd_nv3007`, direct
+    // TXDR access — no SpiDevice abstraction).
     assert!(HW_MOD_SRC.contains(
-        "#[cfg(all(feature = \"stm32u585\", any(feature = \"tropic01-se\", feature = \"ui-lcd\")))]\npub mod spi_hw;"
-    ));
-    assert!(HW_MOD_SRC.contains(
-        "#[cfg(all(feature = \"stm32u585\", feature = \"tropic01-se\"))]\npub mod spi;"
+        "#[cfg(all(feature = \"stm32u585\", feature = \"ui-lcd\"))]\npub mod spi_hw;"
     ));
 }
 
@@ -603,11 +532,11 @@ fn negative_i2c2_probe_does_not_use_ns_alias() {
 fn negative_spi_hw_does_not_use_ns_alias_for_spi2_or_spi1() {
     assert!(
         !contains_in_code(SPI_HW_SRC, "0x4000_3800"),
-        "SPI2 NS alias forbidden in code — TROPIC01 bus must stay in Secure world (invariant #3)",
+        "SPI2 NS alias forbidden in code — trusted-display bus must stay in Secure world (invariant #4)",
     );
     assert!(
         !contains_in_code(SPI_HW_SRC, "0x4001_3000"),
-        "SPI1 NS alias forbidden in code — TROPIC01 bus must stay in Secure world (invariant #3)",
+        "SPI1 NS alias forbidden in code — trusted-display bus must stay in Secure world (invariant #4)",
     );
 }
 
@@ -649,7 +578,7 @@ fn negative_buttons_does_not_use_ns_aliases() {
 // `usb_hw::init` is the ONLY file in this slice that flips GPIO pins
 // from Secure → Non-Secure via SECCFGR. The exact set of pins is
 // load-bearing: any extra `clear_bits` would silently expose the
-// SE050 I2C1 bus (PB8/PB9), the TROPIC01 SPI2 bus (PB12/13/14), or
+// SE050 I2C1 bus (PB8/PB9), the secure SPI2 bus (PB12/13/14), or
 // other secure GPIO to the non-secure world.
 // ═════════════════════════════════════════════════════════════════════
 
@@ -675,7 +604,7 @@ fn negative_usb_must_not_mark_i2c1_pins_pb8_pb9_ns() {
         let pattern = format!("seccfgr.clear_bits({needle})");
         assert!(
             !USB_HW_SRC.contains(&pattern),
-            "usb_hw must NOT mark PB{pin} as NS — it would expose an SE bus (PB8/9 = SE050 I2C1, PB12-14 = TROPIC01 SPI2)",
+            "usb_hw must NOT mark PB{pin} as NS — it would expose a secure bus (PB8/9 = SE050 I2C1, PB12-14 = SPI2)",
         );
     }
 }
@@ -753,7 +682,7 @@ fn negative_no_classical_signer_referenced_in_hw_io() {
         "FORS+C",
     ];
     for src in [
-        I2C_HW_SRC, I2C2_PROBE_SRC, SPI_SRC, SPI_HW_SRC, USB_HW_SRC, UART_SRC,
+        I2C_HW_SRC, I2C2_PROBE_SRC, SPI_HW_SRC, USB_HW_SRC, UART_SRC,
         BUTTONS_SRC, HW_MOD_SRC,
     ] {
         for needle in banned {
@@ -790,7 +719,7 @@ fn negative_no_software_pin_compare_in_hw_io() {
         "MAX_ATTEMPTS",
     ];
     for src in [
-        I2C_HW_SRC, I2C2_PROBE_SRC, SPI_SRC, SPI_HW_SRC, USB_HW_SRC, UART_SRC,
+        I2C_HW_SRC, I2C2_PROBE_SRC, SPI_HW_SRC, USB_HW_SRC, UART_SRC,
         BUTTONS_SRC,
     ] {
         for needle in banned_substrings {
@@ -813,7 +742,7 @@ fn negative_no_software_pin_compare_in_hw_io() {
 fn negative_no_heap_types_in_hw_io_sources() {
     let banned: &[&str] = &["String::new", "Vec::new", "Box::new", "vec![", "alloc::"];
     for src in [
-        I2C_HW_SRC, I2C2_PROBE_SRC, SPI_SRC, SPI_HW_SRC, USB_HW_SRC, UART_SRC,
+        I2C_HW_SRC, I2C2_PROBE_SRC, SPI_HW_SRC, USB_HW_SRC, UART_SRC,
         BUTTONS_SRC,
     ] {
         for needle in banned {
@@ -905,16 +834,16 @@ fn negative_i2c_hw_does_not_reclassify_se_bus_to_ns() {
 }
 
 #[test]
-fn negative_spi_hw_does_not_reclassify_tropic01_bus_to_ns() {
+fn negative_spi_hw_does_not_reclassify_lcd_bus_to_ns() {
     // spi_hw.rs must not touch any SECCFGR register in code — the
-    // TROPIC01 SPI bus must stay fully secure.
+    // trusted-display SPI bus must stay fully secure.
     assert!(
         !contains_in_code(SPI_HW_SRC, "seccfgr"),
-        "spi_hw must not access SECCFGR in code — TROPIC01 bus stays Secure (invariant #3)",
+        "spi_hw must not access SECCFGR in code — trusted-display bus stays Secure (invariant #4)",
     );
     assert!(
         !contains_in_code(SPI_HW_SRC, "SECCFGR"),
-        "spi_hw must not access SECCFGR in code — TROPIC01 bus stays Secure",
+        "spi_hw must not access SECCFGR in code — trusted-display bus stays Secure",
     );
     assert!(
         SPI_HW_SRC.contains("(no GTZC/SECCFGR changes)"),
@@ -925,12 +854,6 @@ fn negative_spi_hw_does_not_reclassify_tropic01_bus_to_ns() {
 // ═════════════════════════════════════════════════════════════════════
 // 19. NEGATIVE — Bounded loops everywhere (no unbounded busy-wait)
 // ═════════════════════════════════════════════════════════════════════
-
-#[test]
-fn negative_spi_busy_wait_is_bounded() {
-    assert!(SPI_SRC.contains("const TIMEOUT_LOOPS: u32 = 1_000_000;"));
-    assert!(SPI_SRC.contains("for _ in 0..TIMEOUT_LOOPS"));
-}
 
 #[test]
 fn negative_i2c2_probe_busy_wait_is_bounded() {
@@ -996,27 +919,6 @@ fn negative_usb_hw_raw_volatile_only_under_debug_log_diagnostic() {
         USB_HW_SRC.contains("#[cfg(feature = \"debug-log\")]"),
         "usb_hw.rs must keep any raw read_volatile gated behind #[cfg(feature = \"debug-log\")]",
     );
-}
-
-// ═════════════════════════════════════════════════════════════════════
-// 21. NEGATIVE — SPI driver leaks no transient buffers beyond MAX_FRAME
-//
-// `SpiDevice::transaction(Operation::Write)` uses a 300-byte stack
-// scratch buffer (matches semihosting_spi MAX_FRAME). Larger writes
-// must be silently truncated — a regression that drops the `.min(...)`
-// would either stack-overflow or send incomplete frames.
-// ═════════════════════════════════════════════════════════════════════
-
-#[test]
-fn negative_spi_write_op_clamps_to_300_byte_scratch() {
-    assert!(SPI_SRC.contains("let mut tmp = [0u8; 300];"));
-    assert!(SPI_SRC.contains("let len = data.len().min(tmp.len());"));
-}
-
-#[test]
-fn negative_spi_transfer_op_uses_min_of_read_write_lens() {
-    // `Transfer(read, write)` must shrink to min(read.len(), write.len()).
-    assert!(SPI_SRC.contains("let len = read.len().min(write.len());"));
 }
 
 // ═════════════════════════════════════════════════════════════════════

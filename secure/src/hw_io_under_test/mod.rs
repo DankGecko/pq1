@@ -2,7 +2,7 @@
 //!
 //! The production `hw` module is `#[cfg(not(test))]` because the bus /
 //! I/O drivers in this slice all sit behind `feature = "stm32u585"`
-//! (or `tropic01-se` / `usb` / `gpio-buttons` / ...) and pull in
+//! (or `usb` / `gpio-buttons` / ...) and pull in
 //! `cortex_m` MMIO machinery that does not link on host. This scaffold
 //! hosts the cross-file pure-logic + source-text invariant suite that
 //! pins the bus / I/O peripheral layer:
@@ -20,7 +20,7 @@
 //!     ONLY hw-IO module that flips GPIO pins from Secure → Non-Secure,
 //!     and it must flip exactly the USB-OTG and TCPP03 pins (PA11 /
 //!     PA12 / PA15 / PB5 / PB15) and nothing else. Touching PB8 / PB9
-//!     (I2C1 SE bus) or PB12-15 (SPI2 TROPIC01 bus) would expose an SE
+//!     (I2C1 SE bus) or PB12-15 (secure SPI2 bus) would expose a secure
 //!     bus to the NS world.
 //!   * SWD-pin protection — `buttons::init` configures PA8 input but
 //!     must NOT touch PA13 (SWDIO) or PA14 (SWCLK); a stray RMW on
@@ -31,7 +31,7 @@
 //!     features.
 //!
 //! On-target tests (real OLED ACK, real SE050 SCP03 handshake, real
-//! TROPIC01 SPI frame, real USB enumeration, real button press)
+//! USB enumeration, real button press)
 //! happen under the corresponding `make` targets and are NOT exercised
 //! here. The host-side suite below catches regressions that would
 //! either prevent the on-target tests from booting at all or silently

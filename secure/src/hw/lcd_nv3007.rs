@@ -165,9 +165,8 @@ struct LcdRegs {
 // secure-world driver (verified via grep — they appear only in pin_diag's
 // candidate sweep). The single-threaded secure world doesn't
 // race on these; RMW on disjoint bits is fine. The SPI peripheral is
-// shared with `hw::spi` (used by Tropic01) — but Tropic01 isn't shipped
-// (`project_tropic01_excluded`) and the `ui-lcd` feature is mutually
-// exclusive with `tropic01-se` at the Cargo level.
+// exclusively the LCD's (the TROPIC01 backend that once shared it was
+// removed 2026-07-14).
 const REG: LcdRegs = unsafe {
     LcdRegs {
         gpioe_moder: Reg32::new(GPIOE_S + 0x00),
@@ -712,8 +711,8 @@ pub fn fill_rect(x0: u16, y0: u16, w: u16, h: u16, color: u16) {
 pub fn init() {
     // RES is tied to 3V3 on this board (PD15/PE14 both proved un-drivable),
     // so use a software SWRESET instead of hard_reset()'s pin pulse, and init
-    // SPI ourselves — main.rs only inits SPI1 on the tropic01-se path, not for
-    // ui-lcd. Mirrors the validated lcd_test_loop bring-up sequence.
+    // SPI ourselves — main.rs does not init SPI1 for ui-lcd. Mirrors the
+    // validated lcd_test_loop bring-up sequence.
     crate::hw::spi_hw::init();
     init_dc_res_gpios();
     write_cmd(0x01); // SWRESET

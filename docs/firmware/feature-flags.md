@@ -13,7 +13,7 @@ Every build picks at most one option from each axis (except *Accelerators*, whic
 | Axis | Options | Notes |
 |---|---|---|
 | **Platform** | `platform-qemu` · `platform-stm32u585` (`= ["stm32u585"]`) | Pick one. `stm32u585` is real hardware; `platform-qemu` is `mps2-an505`. |
-| **Secure element** | `secure-element-mock` · `-optiga` · `-se050` · `-tropic01` · `-dual` (`= ["dual-se"]` ⇒ OPTIGA + SE050) | Pick one at the top level. `dual` is what ships. |
+| **Secure element** | `secure-element-mock` · `-optiga` · `-se050` · `-dual` (`= ["dual-se"]` ⇒ OPTIGA + SE050) | Pick one at the top level. `dual` is what ships. |
 | **UI** | `ui-mode-semihosting` · `-oled` · `-noop` · `-mirror` · `-capture` | Mutually exclusive backends. `-mirror`/`-capture` compose on top of `-oled`/`-noop`. |
 | **Mode** | `mode-production` · `-bringup` (=`debug-log`) · `-e2e` (=`debug-log,e2e-test`) · `-bench` | Development profile. |
 | **Hardening / accelerators** | `tamp` · `consumption-mask` · `saes-dhuk` | Compose freely. |
@@ -45,8 +45,8 @@ in `secure/src/first_boot/`. `rdp2-self-lock = ["bhk"]` (so it pulls `bhk` →
 RDP burn is irreversible — the `nsc/mod.rs` fence uses the narrow S-1-style
 trigger, not the belt-and-braces one) and is **incompatible** with every
 dev/test feature (`e2e-test`, `dev-testkey`, `mock-se`,
-`otp-hardcoded-master-key`, `bhk-hardcoded-master-key`, `factory-provisioning`,
-`tropic01-se`) and **requires `dual-se`**. Absent from every current bench/
+`otp-hardcoded-master-key`, `bhk-hardcoded-master-key`, `factory-provisioning`)
+and **requires `dual-se`**. Absent from every current bench/
 QEMU build; behaviour with it OFF is byte-identical to before. Compile-check
 the feature-ON path with `make build-rdp2-self-lock`. Operator/field reference:
 `docs/provisioning/first-boot-provisioning.md`.
@@ -114,13 +114,12 @@ There's also a dedicated dual-feature `compile_error!` for `otp-hardcoded-master
 
 Live source: `secure/Cargo.toml` (each feature has an inline `#`-comment). The high-level groupings:
 
-- **Backend mutex (pick one at the top level):** `mock-se` · `optiga-trust-m` · `se050` · `tropic01-se` · `dual-se` (= `optiga-trust-m + se050`).
+- **Backend mutex (pick one at the top level):** `mock-se` · `optiga-trust-m` · `se050` · `dual-se` (= `optiga-trust-m + se050`).
 - **Platform:** `stm32u585` (real HW, implies `hw-sha256`) vs. nothing (QEMU `mps2-an505`).
 - **UI:** `ui-semihosting` · `ui-oled` · `ui-noop` (silent for headless USB) · `ui-mirror` (RTT framebuffer stream) · `ui-capture` (per-frame SHA-256).
 - **Hardening / accelerators (compose):** `saes-dhuk` (Tier-1 DHUK-SAES KDF) · `saes-self-test` · `tamp` (currently log-only) · `consumption-mask` (TIM2 PWM PA5) · `bhk` (Tier-2 BHK lifecycle on flash page 126).
 - **OPTIGA-specific:** `optiga-hw-counter` (E120 LUC bound to F1D0) · `optiga-lock-operational` (irreversible LcsO bump — production only) · `optiga-no-shield` (dev only).
 - **SE050-specific:** `se050-derived-scp03` (Stage A of #20 — derived SCP03 keys with probe-on-boot fallback) · `se050-rotate-scp03` (Stage B — the irreversible PUT KEY ceremony build, fenced) · `se050-factory-reset` · `se050-reset-e2e` · `se050-admin-wipe-e2e` · `se050-admin-extract-attempt-e2e` · `se050-crash-safety-e2e`.
-- **TROPIC01-specific:** `tropic01-se`.
 - **Test scaffolding:** `e2e-test` (fixed mnemonic + PIN, short-circuits `confirm()`/`enter_pin()`) · `e2e-skip-*` (sub-tests skipped under e2e) · `dev-testkey` (interactive UI, OTP substituted) · various `*-e2e` one-shot dispatchers.
 - **Dev-only (NEVER ship):** `debug-log` · `ui-semihosting` · `ui-mirror` · `ui-capture` · `mock-se` · `otp-hardcoded-master-key` · `bhk-hardcoded-master-key` · `saes-self-test` · `uart-console` · `boot-pulse` · `se050-rotate-scp03` (irreversible ceremony build).
 

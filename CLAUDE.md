@@ -196,7 +196,7 @@ cargo test -p sphincs-tz-secure --tests --release
 
 `secure/Cargo.toml` has ~50 flags. Active vocabulary:
 
-- **Backend (mutually exclusive at top level):** `mock-se` · `optiga-trust-m` · `se050` · `tropic01-se` · `dual-se` (implies optiga + se050).
+- **Backend (mutually exclusive at top level):** `mock-se` · `optiga-trust-m` · `se050` · `dual-se` (implies optiga + se050). (The standalone TROPIC01 backend was removed 2026-07-14 — owner decision; dual-SE only.)
 - **Platform / UI:** `stm32u585` (real hardware, implies `hw-sha256`) vs QEMU default. UI: `ui-semihosting` · `ui-lcd` (NV3007 SPI LCD — the only shipping display; the SSD1306 `ui-oled` backend was removed 2026-06-30) · `ui-noop` (silent for headless USB).
 - **Mode profiles** (axis aliases): `mode-production` (no debug-log/e2e-test/mock-se) · `mode-bringup` (`debug-log`) · `mode-e2e` (`debug-log`+`e2e-test`+skip flags) · `mode-bench`.
 - **Hardening / accelerators (compose):** `saes-dhuk` (Tier-1 KDF) · `saes-self-test` · `tamp` (Trezor-port; log-only by itself) · `tamp-wipe` (production escalation — fires `tzic::trigger_intrusion_wipe` on a confirmed tamper; default-off for bench safety, **forced ON for shipping dual-SE images** by the `nsc/mod.rs` ship-blocker fence alongside `tzic-wipe`) · `consumption-mask` (TIM2 CH1 PWM on PA5; caller must call `randomize()` periodically) · `usb`.
@@ -283,7 +283,6 @@ Pure-logic primitives live in standalone workspace crates so host signers / benc
 |------|---------|
 | `secure/src/optiga/{mod,ifx_i2c,apdu,shield,i2c}.rs` | OPTIGA Trust M driver (4-layer IFX I2C + Shielded Connection). OIDs: `0xE140` PBS, `0xE120` LUC, `0xF1D0` AuthRef, `0xF1D1` half_O, `0xF1D2` master, `0xF1D3` VK, `0xF1D4` bootstrap VK. E120 binding under `optiga-hw-counter`. |
 | `secure/src/se050/{mod,scp03,apdu,t1oi2c,i2c}.rs` | SE050 driver (T=1' + SCP03 + UserID PIN). Admin UserID `max_attempts=0`; current OID range `0x7B0C_*`. |
-| `secure/src/tropic01_se.rs` | Tropic01 standalone SE (not used in dual-se). |
 
 ### UI / hardware drivers
 | Path | Purpose |
@@ -293,7 +292,7 @@ Pure-logic primitives live in standalone workspace crates so host signers / benc
 | `secure/src/hw/hash.rs` | STM32U585 HASH peripheral; `pqsigner_sha256_*` extern fns consumed by `sphincs-c10` under `hw-sha256`. Uses `mmio` for register access. |
 | `secure/src/hw/saes.rs` | SAES driver (AES-256-ECB) under `KEYSEL ∈ {Software, DHUK, BHK, DHUK^BHK}`. |
 | `secure/src/hw/saes_cmac.rs` | `cmac_dhuk(msg) -> tag` thin SAES adaptor. |
-| `secure/src/hw/secret_keys.rs` | Per-purpose subkey API: `optiga_pairing_secret() -> [u8;64]`, `se050_scp03_{enc,mac}_key() -> [u8;16]`, `se050_admin_pin() -> [u8;16]`, `tropic01_pairing_key() -> [u8;32]`. Production: `SAES-CMAC(DHUK, label‖counter)`. Dev: `HKDF(OTP_master, label)`. |
+| `secure/src/hw/secret_keys.rs` | Per-purpose subkey API: `optiga_pairing_secret() -> [u8;64]`, `se050_scp03_{enc,mac}_key() -> [u8;16]`, `se050_admin_pin() -> [u8;16]`. Production: `SAES-CMAC(DHUK, label‖counter)`. Dev: `HKDF(OTP_master, label)`. |
 | `secure/src/hw/otp.rs` | Rejected legacy unary rollback tally (bench-only, production-fenced) + device-master/factory legacy OTP regions. Draft 0.9 freezes a replacement typed floor API; its physical codec/ECC/interruption backend remains open. |
 | `secure/src/hw/huk.rs` | `derive_device_key(label) = HKDF(UID‖OTP_master, label)`. |
 | `secure/src/hw/flash.rs` | Bank-2 writes, ICACHE invalidate, `pin_attempts_{read,bump,reset}` on page 124, admin-page (125) wipe-flag. |

@@ -1,4 +1,4 @@
-//! SPI hardware initialization for TROPIC01 on STM32U585.
+//! SPI hardware initialization for the NV3007 LCD on STM32U585.
 //!
 //! Two pin configurations are supported, selected by the `spi1-arduino`
 //! cargo feature:
@@ -6,20 +6,20 @@
 //! ## Default: SPI2 on PB12–PB15 (direct wiring)
 //!   PB12 = CS   (GPIO output, active-low)
 //!   PB13 = SCK  (SPI2_SCK, AF5)
-//!   PB14 = MISO (SPI2_MISO, AF5) — TROPIC01 SPI_SDO
-//!   PB15 = MOSI (SPI2_MOSI, AF5) — TROPIC01 SPI_SDI
+//!   PB14 = MISO (SPI2_MISO, AF5)
+//!   PB15 = MOSI (SPI2_MOSI, AF5)
 //!
 //! ## `spi1-arduino`: SPI1 on PE12–PE15 (Arduino R3 headers)
-//! Used when the TROPIC01 MikroE Clicker is connected via an Arduino
-//! shield (e.g. stacked on top of the OM-SE050ARD).
+//! Used for the NV3007 LCD wired to the Arduino headers (e.g. stacked
+//! on top of the OM-SE050ARD). `ui-lcd` implies this feature.
 //!   PE12 = CS   (GPIO output, active-low)
 //!   PE13 = SCK  (SPI1_SCK, AF5)
-//!   PE14 = MISO (SPI1_MISO, AF5) — TROPIC01 SPI_SDO
-//!   PE15 = MOSI (SPI1_MOSI, AF5) — TROPIC01 SPI_SDI
+//!   PE14 = MISO (SPI1_MISO, AF5)
+//!   PE15 = MOSI (SPI1_MOSI, AF5)
 //!
 //! All configuration runs in the secure world.  The SPI peripheral stays
 //! secure (no GTZC/SECCFGR changes) — the non-secure world never touches
-//! the TROPIC01 directly.
+//! the trusted display's bus.
 
 use crate::hw::mmio::Reg32;
 
@@ -201,8 +201,8 @@ pub fn init() {
     // NV3007 10 ns data setup/hold spec (Table 8-3-2; SCK half-period 25 ns) and
     // matches what real NV3007 drivers run (ESPHome 20 MHz, LVGL 40 MHz).
     //
-    // Gated on `ui-lcd` so a non-LCD build (e.g. the excluded `tropic01-se`,
-    // which shares SPI1) keeps the conservative ÷32 — the bump is bus-wide, so
+    // Gated on `ui-lcd` so a non-LCD build keeps the conservative ÷32 — the
+    // bump is bus-wide, so
     // only raise it where a fast display actually needs it. If striping ever
     // reappears at 20 MHz it means the jumper wiring can't sustain the edges:
     // back off to ÷16 (`0b011`, 10 MHz). DSIZE stays 7; only MBR[30:28] changes.

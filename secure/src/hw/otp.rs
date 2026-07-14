@@ -45,7 +45,7 @@
 //! per-device master secret, filled with STM32 TRNG output on first
 //! secure-world boot and never modified again. See `hw/secret_keys.rs`
 //! for the HKDF wrappers that derive per-purpose subkeys from it
-//! (OPTIGA PBS, SE050 SCP03, TROPIC01 pairing). The master key is
+//! (OPTIGA PBS, SE050 SCP03). The master key is
 //! the root of trust for every on-device SE pairing; because it lives
 //! in OTP it survives firmware updates, which is what keeps the
 //! OPTIGA Shielded Connection alive through a reflash — see
@@ -462,7 +462,7 @@ unsafe fn program_otp_qw(addr: u32, data: &[u8; 16]) -> Result<(), OtpError> {
 // ---------------------------------------------------------------------------
 //
 // The master key is the root input for every SE pairing secret this device
-// uses — OPTIGA PBS, SE050 SCP03 ENC/MAC, TROPIC01 pairing. It is generated
+// uses — OPTIGA PBS, SE050 SCP03 ENC/MAC. It is generated
 // once from the STM32 TRNG on the first secure-world boot of a blank MCU
 // and lives in OTP bytes 128..160 from that moment on. Callers in
 // `hw/secret_keys.rs` run HKDF-style derivations over it with distinct
