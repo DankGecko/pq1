@@ -1,6 +1,18 @@
 # Threat → claim map (the G3 coverage-completeness artifact)
 
-**Snapshot date: 2026-07-02.** This is the *bottom-up, threat-indexed dual* of [`ASSURANCE_CASE.md`](ASSURANCE_CASE.md)'s top-down claim tree. The assurance case starts from what is **proven** and decomposes it; this map starts from what could **go wrong** (every threat / invariant-violation / adversarial-review attack-class) and asks *does any claim cover it?* — so an **unclaimed threat becomes a visible red row instead of a silent absence** (the G3 gap the FV adversarial-review playbook names, `docs/verification/fv-adversarial-review-playbook.md` line ~189).
+**Snapshot date: 2026-07-02; status overrides reviewed 2026-07-15.** This is the *bottom-up, threat-indexed dual* of [`ASSURANCE_CASE.md`](ASSURANCE_CASE.md)'s top-down claim tree. The assurance case starts from what is **proven** and decomposes it; this map starts from what could **go wrong** (every threat / invariant-violation / adversarial-review attack-class) and asks *does any claim cover it?* — so an **unclaimed threat becomes a visible red row instead of a silent absence** (the G3 gap the FV adversarial-review playbook names, `docs/verification/fv-adversarial-review-playbook.md` line ~189).
+
+> **Controlling 2026-07-15 overrides pending a generated table refresh:**
+> `S-FW-PREIMAGE-EXPAND` is **PARTIAL—legacy V1 only**, not current coverage;
+> G10 contributes no current rollback/unsigned-image state theorem. EasyCrypt
+> contributes partial research evidence to `S-SPHINCS-BREAK` but leaves A5
+> cited-TCB. Current extraction proves committed generated artifacts, not
+> current-Rust freshness. Current Kani census is 148 harnesses/25 files; 140
+> harnesses/19 files lie in mutation-enrolled files, leaving eight/six outside,
+> and three of 31 mutation groups are full-only. See the
+> [coordinator report](../../../docs/security/adversarial-review/findings/fv-full-stack-2026-07-15-coordinator.md)
+> and current [`FV_SURFACE_MAP.md`](FV_SURFACE_MAP.md). Until the table is
+> regenerated, these overrides take precedence over conflicting rows/counts.
 
 It closes the coverage-completeness blind spot: per-theorem gates can only tell you a claim is *hollow*; they cannot tell you a threat has **no claim at all**, because there is no theorem to turn red. This map is that missing view.
 

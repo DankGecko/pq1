@@ -6,6 +6,14 @@ A **post-quantum ERC-4337 hardware wallet** (the **PQ1**) where every primitive 
 
 **Build one yourself:** every part is off-the-shelf — [`DIY.md`](DIY.md) has the ~$150 bill of materials (Mouser links included), the wiring, and the first-flash guide.
 
+> **Firmware-format authority correction — 2026-07-15.** The existing
+> `PQFW_V1`/75-byte proof and implementation are legacy bench evidence only.
+> Historical V4/80-byte text remains in some owner documents, while the
+> more-specific Draft 1.1 describes V6/121 bytes as a research candidate with
+> no implementation authority. No replacement schema is currently selected.
+> Reconcile those owners before implementation or formalization; later V4
+> passages in this README are historical candidate text, not current approval.
+
 > **Status — 2026-04, pre-production bring-up. All-C10 cutover complete.**
 > Every transaction is signed with **SPHINCS+C10** (W+C_F+C, `h=18, d=2, a=11, k=13, w=8, l=43, target_sum=205, sig=4008`) — hash-based, no lattice or number-theoretic assumptions, no classical fallback. The *same* primitive signs both Type 1 (bootstrap → slot registration) and Type 2 (slot → user tx); there is no FORS+C and no secp256k1/P-256/Ed25519 anywhere. The firmware boots and runs on a real **B-U585I-IOT02A** with the OPTIGA Trust M V3 Shield + NXP OM-SE050ARD on Arduino R3 headers, and on QEMU `mps2-an505`. Dual-SE XOR entropy split, three-way PIN-attempt consumption (MCU + OPTIGA + SE050), both SE drivers, and the Tier-1 SAES-CMAC(DHUK) KDF are validated end-to-end on silicon; the boot counter check is directionally MCU→OPTIGA E120 because the SE050 attempt count is not peek-readable. On-chain contracts (`PQSmartWallet` + factory + `PQMultiOwnable`) target **EntryPoint v0.6** behind cheap ERC-1967 proxies at a deterministic CREATE2 address keyed on `sha256(masterPkSeed‖masterPkRoot)`. SHA-256 throughout the PQ stack (routed to the STM32U585 HASH peripheral); Keccak-256 only for EVM-mandated hashes.
 >
@@ -285,9 +293,13 @@ Every step runs in the **secure world**; NS drives nothing more sensitive than "
 
 ## Formal Verification (Lean 4)
 
-Two machine-checked proof tracks, one shared specification. Neither gates
-shipping — the C10 parameters and wire formats are frozen, so proofs that land
-after a release still apply to shipped firmware.
+Two machine-checked proof tracks, one shared specification. A proof applies to
+a shipped release only when an identity-bound receipt connects that exact
+release artifact to its source, configuration, generated models, toolchain,
+assumption closure, and proof result. Frozen parameters or wire formats alone
+do not establish that correspondence. A release may be separately authorized
+without FV, but it must not be described retrospectively as verified without
+that binding.
 
 **On-chain track (established).** `contracts/verification/` holds a Lean 4
 specification of SPHINCS+C10 verification (`SphincsCVerify/Spec/` — WOTS, FORS,
@@ -314,11 +326,13 @@ Research and tool selection: [docs/verification/lean-verification-research-2026-
 
 What this unlocks, in value order:
 
-1. **Firmware↔chain binding.** The headline goal theorem: *the bytes the
-   firmware signs over a parsed sign-request are exactly the `userOpHash` the
-   proven wallet model verifies* — closing, mathematically, the gap between
-   what the device signs and what the chain checks. No test suite can cover
-   that gap exhaustively; a theorem covers every input at once.
+1. **Firmware↔chain binding.** The headline goal theorem must show that the
+   bytes the firmware signs over a parsed sign-request are exactly the custom
+   SHA-256 `PQSmartWallet.sphincsDigest(userOp)` the wallet recomputes—not the
+   EntryPoint canonical keccak `userOpHash`, which this wallet ignores. The
+   existing extracted `compute_user_op_hash` theorem is tooling-only; the
+   production `compute_sphincs_digest_v06` bridge remains open. No finite test
+   suite can close that gap exhaustively; a current-source theorem can.
 2. **Signer/verifier correspondence.** The firmware's C10 signer and the
    on-chain verifier proven against one spec, ending any possibility of
    silent algorithmic drift between the two implementations.

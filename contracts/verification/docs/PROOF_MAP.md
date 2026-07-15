@@ -1,5 +1,14 @@
 # Proof Map — PQSmartWallet Theft-Freedom
 
+> **Current-status correction — 2026-07-15.** The reference signer,
+> `findCount_post`, component roundtrips, and `honest_consistent` are closed in
+> the Lean model. The open boundary is production firmware signer/serialization
+> → that model; KATs are not a kernel refinement theorem. Clean compilation
+> establishes type/kernel acceptance of the committed artifact, not extraction
+> freshness or deployed identity. Exact closure claims must resolve through the
+> machine-readable closure entries, not the shorthand “A1–A5.” See the
+> [coordinator report](../../../docs/security/adversarial-review/findings/fv-full-stack-2026-07-15-coordinator.md).
+
 Theorem index for the SphincsCVerify project. Every entry is either
 closed, axiomatic, or a `sorry` blocking the headline `theft_free`.
 
@@ -33,15 +42,15 @@ For the trust assumptions A1–A6 and the work plan, see
 | `th` / `thPair` / `hMsg` size lemmas | `th_size`, `thPair_size`, `hMsg_size` | `Spec/Hash.lean` | ✅ Closed |
 | Kernel-computable SHA-256 | `sha256` (def) | `Spec/Hash.lean` | ✅ Closed — FIPS 180-4 port from Trail of Bits scroll-fv, sealed `@[irreducible]` so axiom set unchanged; NIST CAVS vectors verified. |
 | Tweakable-hash unfolds to SHA-256 | `sha256_eq_impl` | `Spec/Hash.lean` | ✅ Closed via `rfl` (since `sha256 := sha256_impl` under the irreducible seal, with `sha256_eq_impl` as the unfolding bridge). |
-| Reference signer complete | `Signer.sign` (def) | `Spec/Signer.lean` | ⏳ Placeholder; real signer is future Group V work. Not load-bearing for `theft_free`. |
-| `findCount` correctness | `findCount_correct` | `Spec/Signer.lean` | ⏳ Not stated; not load-bearing. |
+| Reference signer complete | `Signer.sign` (def) | `Spec/Signer.lean` | ✅ Closed in the Lean model; production implementation bridge remains open. Not load-bearing for `theft_free`. |
+| `findCount` correctness | `findCount_post` | `Spec/SignerPost.lean` | ✅ Closed in the Lean model; not load-bearing for `theft_free`. |
 | Real `deserialise` | `Signature.deserialise` (def) | `Spec/Signature.lean` | ✅ Concretised — byte-level decoder mirroring Yul's `calldataload(add(sigBase, …))` arithmetic. |
 | `serialise/deserialise` round-trip | `serialise_deserialise_roundtrip` | `Spec/Signature.lean` | ⏳ Not stated; not load-bearing. |
-| Merkle round-trip | `merkle_roundtrip` | (deferred) | ⏳ Folded into `consistent sk`; future Group V work. |
-| WOTS+C chain round-trip | `wots_chain_roundtrip` | (deferred) | ⏳ Folded into `consistent sk`. |
-| FORS+C round-trip | `fors_roundtrip` | (deferred) | ⏳ Folded into `consistent sk`. |
-| Chain-hash composition | `chainHash_compose` | (deferred) | ⏳ Folded into `consistent sk`. |
-| Sign/verify round-trip | `verify_signs` | `Spec/Theorems.lean` | ✅ Closed by direct appeal to the strengthened `consistent` predicate. The four sub-lemmas above become the obligations to discharge `consistent sk` for any honestly-keygen'd `sk` — future Group V work, not in `theft_free`'s dep closure. |
+| Merkle round-trip | `merkle_roundtrip` | `Verifier/MerkleRoundtrip.lean` | ✅ Closed in the Lean model. |
+| WOTS+C chain round-trip | `wots_chain_roundtrip` | `Verifier/WotsRoundtrip.lean` | ✅ Closed in the Lean model. |
+| FORS+C round-trip | `fors_roundtrip` | `Verifier/ForsRoundtrip.lean` | ✅ Closed in the Lean model. |
+| Chain-hash composition | `chainHash_compose` | `Verifier/WotsRoundtrip.lean` | ✅ Closed in the Lean model. |
+| Sign/verify round-trip | `verify_signs`, `honest_consistent` | `Spec/Theorems.lean`, `Verifier/HonestConsistent.lean` | ✅ Closed for `WellFormed` Lean-model keys. Production firmware signer/serialization→model refinement remains open and is not in `theft_free`'s dependency closure. |
 
 ## Verifier refinement (Lean spec ↔ Yul shape)
 

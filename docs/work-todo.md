@@ -2,9 +2,75 @@
 
 Tracks what remains to go from "working dual-SE demo" to "end-to-end hardware wallet on STM32U585 + OPTIGA Trust M + SE050, PIN-gated, doing real transactions."
 
-Last audited: 2026-04-13
+Last audited: 2026-07-15
 
 ---
+
+## 🧾 Formal-verification full-stack review 2026-07-15 — open follow-ups
+
+Owner report:
+[`fv-full-stack-2026-07-15-coordinator.md`](security/adversarial-review/findings/fv-full-stack-2026-07-15-coordinator.md).
+This was research/documentation only; none of the implementation acceptance
+tests below has been completed. The report owns mechanisms, severities,
+deduplication, and falsifiable acceptance criteria.
+
+- [ ] **FV15-F1 — reopen extraction freshness (prior extracted F1/F3).** Require
+  pinned clean regeneration from every mirrored current Rust source, a total
+  source→generated→theorem registry and receipt, and Rust-only semantic
+  mutations that make CI red. First concrete closures: current Tx-Merkle
+  regeneration/edge vectors and the FW manifest literal-tag mutation.
+- [ ] **FV15-F2 — prove the digest actually signed.** Relabel the existing
+  `compute_user_op_hash` extraction tooling-only; extract and prove
+  `compute_sphincs_digest_v06` plus parsed-handler→signing-argument flow against
+  `PQSmartWallet.sphincsDigest`, with per-field and freshness negatives.
+- [ ] **FV15-F3 — make extracted closure policy fail closed.** Apply exact
+  per-headline axiom identities/cardinalities and declaration inventory to
+  extracted/decimal/audit theorems; a consumed kernel-valid `axiom Evil : False`
+  must fail. Keep lean4checker labelled kernel replay, not authorization.
+- [ ] **FV15-F4 — make firmware proof currency truthful.** Mark all `PQFW_V1`
+  results LEGACY/NONSHIPPING. Reconcile the V4/80-byte owner text with Draft
+  1.1's V6/121-byte research candidate before selecting or formalizing a current
+  schema; do not resolve that owner conflict implicitly.
+- [ ] **FV15-F5 — repair EasyCrypt build/provenance truth.** Split partial/full;
+  full means 21/21, zero skips, pinned source-built/causally attested
+  dependencies and tools, exact axiom/admit names+types, stale-cache/skip/false-
+  axiom negatives, and explicit gate-enforcement enrollment.
+- [ ] **FV15-F6 — EasyCrypt C10 representability stop/go (research-only).**
+  Before adaptive/capstone work, determine whether a concrete checksum-free
+  WOTS theory can cover `w=8`, `log_w=3`, `l=43`, target sum 205 and whether the
+  conditioned fresh-`R` bounded grinder refines production. Preserve and stop
+  if either requires a foundational rewrite that retires no named assumption;
+  otherwise proceed milestone-by-milestone through concrete WOTS, FORS, trees,
+  and one common-adversary scheme theorem. No release credit meanwhile.
+- [ ] **FV15-F7 — repair protocol-model driver semantics (reopens PM-2).** Fail
+  on nonzero prover status before parsing, pin normalized query/lemma identities
+  and exact results, reject missing/duplicate output, and support the documented
+  CryptoVerif library layouts. Exit 42 and `Install⇒Install` substitutions must
+  fail.
+- [ ] **FV15-F8 — create one required assurance registry.** Generate counts,
+  nine-surface map and narrative views from immutable required IDs and semantic
+  fields; deletion of a whole collection/mandatory ID must fail. Refresh the
+  58-module checker count and LeanLoop configuration/KAT truth.
+- [ ] **FV15-F9 — correct claim and release precision.** Scope Kontrol
+  property-by-property; use an explicit cross-hash game; distinguish ideal from
+  conditioned share distributions; finish stale model-signer/digest docs; and
+  require exact artifact/source/config/tool/generated-model/closure/receipt
+  binding before any retrospective “verified release” label.
+- [ ] **FV15-F10 — fix and independently validate LeanLoop `vet`.** RED requires
+  zero Lean exit plus named declaration kernel acceptance; unsolved goals,
+  syntax/type errors, timeouts and missing diagnostics must be ERROR/UNRESOLVED.
+  Add end-to-end negative regressions before citing `vet` as assurance.
+- [ ] **FV15-F11 — reconcile Kani inventory and mutation strength.** Generate
+  the 148-harness/25-file census from source; give every security-bearing
+  harness a load-bearing mutation or reviewed waiver; identify the eight
+  harnesses/six files currently outside mutation-enrolled files and the three
+  full-only groups. Broad reruns follow the higher-priority gate-integrity work.
+- [ ] **FV15-ROADMAP — decide the expanded verification program.** Use
+  [`formal-verification-assurance-expansion-2026-07-15.md`](verification/formal-verification-assurance-expansion-2026-07-15.md):
+  assurance fidelity first, then actual signed-intent/digest correspondence,
+  release-artifact linkage, composable durable/lifecycle state, owner-selected
+  firmware update, and narrow tool pilots. Do not start a framework migration or
+  monolithic lifecycle theorem without a separate owner decision and plan.
 
 ## ⚠️ SHIP BLOCKERS — must be resolved before any unit leaves the bench
 

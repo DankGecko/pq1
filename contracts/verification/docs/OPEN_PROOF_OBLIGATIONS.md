@@ -1,6 +1,17 @@
 # Open Proof Obligations — Proving Assets Cannot Be Stolen from `PQSmartWallet`
 
-This document is the **complete remaining work** to take the SphincsCVerify
+> **Historical-plan notice — 2026-07-15.** This is the May closeout plan, not
+> the authoritative current obligation inventory. The Lean reference signer is
+> now implemented in the model (`Signer.sign`, `findCount_post`, component
+> roundtrips, and `honest_consistent`); the open obligation is production
+> Rust/firmware signer and serialization→model refinement. The authorization
+> digest is `PQSmartWallet.sphincsDigest(userOp)`, not EntryPoint's canonical
+> keccak `userOpHash`; the deployed wallet ignores the supplied canonical hash.
+> Current status is routed through [`FV_SURFACE_MAP.md`](FV_SURFACE_MAP.md),
+> [`FV_VALUE_AND_GAPS.md`](FV_VALUE_AND_GAPS.md), and the
+> [2026-07-15 findings](../../../docs/security/adversarial-review/findings/fv-full-stack-2026-07-15-coordinator.md).
+
+This document records the **historical remaining work** proposed to take the SphincsCVerify
 project from its current state to a kernel-checked formal-verification result
 for the single goal:
 
@@ -53,40 +64,27 @@ different files are independent and can be parallelised. There is no internal
 ordering: any work-item that doesn't reference a `sorry` from another can be
 attacked first. Total: **~6–9 person-months** for one engineer.
 
-### Group V — Verifier (functional correctness of `SPHINCsC10Asm`)
+### Group V — Verifier and signer correspondence (current correction)
 
-The verifier must accept honestly-signed signatures and reject malformed
-ones. Without this, `validateUserOp` cannot be reasoned about as a
-signature check.
+The committed Lean model now contains the reference signer, `findCount_post`,
+component roundtrip lemmas, `honest_consistent`, a concrete deserialiser, the
+kernel-computable SHA-256 model, and the model-side verifier refinement. Those
+historical subgoals are closed in the model.
 
-* `Spec/Hash.lean` — replace `opaque sha256` with a kernel-computable
-  FIPS 180-4 SHA-256. Add the tweakable-hash unfolding lemmas
-  (`th_unfolds_to_sha256`, `thPair_unfolds_to_sha256`, `hMsg_unfolds_to_sha256`).
-* `Spec/Signer.lean` — complete the reference signer (FORS Merkle root +
-  auth path; WOTS+ chains; WOTS+C `findCount` + R-grinding; D=2 hypertree
-  assembly).
-* `Spec/Signature.lean` — replace the placeholder `deserialise` with the
-  real byte-level deserialiser; prove the `serialise/deserialise`
-  round-trip.
-* `Spec/Theorems.lean::verify_signs` — close the round-trip theorem. Needs
-  the four sub-lemmas: `merkle_roundtrip`, `wots_chain_roundtrip`,
-  `fors_roundtrip`, `chainHash_compose`.
-* `Spec/Theorems.lean::verify_rejects_bad_digit_sum` — strengthen the
-  current structural form by chaining `pkFromSig_returns_none_of_bad_digit_sum`
-  through the D=2 hypertree loop.
-* `Verifier/Equivalence.lean` — close `load_R_consistent`,
-  `fors_section_consistent`, `ht_layer0_consistent`, `ht_layer1_consistent`,
-  and the composite `verifyRefined_eq_spec`.
+The remaining load-bearing work is different:
 
-Output (target): `verify_signs` *discharged* (not merely compiling under
-an assumed `consistent sk`) and `verifyRefined_eq_spec` closed; the
-verifier proven functionally correct against a kernel-computable SHA-256
-model. Current state: `verifyRefined_eq_spec` and the kernel-computable
-SHA-256 model are done; `verify_signs` compiles but its `consistent sk`
-hypothesis is **still undischarged** (and is provably false for the
-present placeholder `Spec.Signer.sign` stub — see the status-snapshot
-caveat), so the round-trip leg is open Group V work.
+* prove current production Rust/firmware signing and serialization refines the
+  Lean signer/model rather than relying only on KAT/corpus agreement;
+* prove the parsed handler path passes exactly
+  `compute_sphincs_digest_v06` to signing and connect it to the contract's
+  `sphincsDigest`;
+* make all mirrored-source extraction freshness fail closed; and
+* retain deployed source/bytecode→committed Lean execution-model identity as a
+  separate, explicit boundary.
 
+Output (target): current-source, exact-artifact correspondence for the signer,
+serialization, signed digest, and verifier layers. Do not reopen the completed
+model signer or describe it as a stub.
 ### Group W — Wallet invariants
 
 The wallet logic must route every successful UserOp through the verifier

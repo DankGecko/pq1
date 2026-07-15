@@ -13,6 +13,16 @@ Assurance-2.0 eliminative argumentation: *every residual is a tracked node, not 
 silence.* It does not restate the per-axiom detail — it routes you to the doc
 that owns it.
 
+> **2026-07-15 status correction.** G2's committed Lean execution-model→spec
+> refinement is universally kernel-closed; deployed source/bytecode→that model
+> remains the correspondence boundary. G3/EasyCrypt is partial research and
+> does not instantiate shipped C10 WOTS or a concrete top-level scheme theorem.
+> G10 applies only to the frozen legacy `PQFW_V1` 75-byte model and grants no
+> authority to V4 or the V6 research candidate. D1 and D5 are therefore open at
+> the deployed-model and current-Rust-extraction boundaries, respectively. The
+> exact evidence and acceptance tests are in the
+> [2026-07-15 coordinator report](../../../docs/security/adversarial-review/findings/fv-full-stack-2026-07-15-coordinator.md).
+
 > **One-sentence honest summary.** The on-chain authorization logic of the wallet
 > is proven to the Lean kernel and discharged on the deployed bytecode by two
 > independent symbolic engines; the cryptographic unforgeability and the

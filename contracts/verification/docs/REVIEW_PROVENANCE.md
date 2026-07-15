@@ -14,7 +14,30 @@ Pairs with [`THREAT_CLAIM_MAP.md`](THREAT_CLAIM_MAP.md) (the `Last review` colum
 | `mutation-verified` | an anti-vacuity mutation was shown to flip the verdict (proof is non-hollow) | strongest software tier — the gate is proven load-bearing |
 | `silicon-E2E` | validated on real STM32U585 / SE hardware | strongest for hardware-bound properties |
 
-**27 rounds on record.**
+The historical ledger below is retained verbatim. The current full-stack round
+is recorded separately because it has two mutually withheld first passes, two
+symmetric cross reports, and one coordinator synthesis rather than a single
+swarm row.
+
+### FV-FULL-STACK-2026-07-15
+
+| Artifact | Reviewer / depth | Frozen identity and result | Immutable report |
+|---|---|---|---|
+| Partner A first pass | Claude Code Opus 4.8, `max`; source-read plus classified immutable execution receipts | PQ HEAD `ddc7cefc…`, tracked diff `6d9a66…`; 7 findings; architecture/evidence approve-with-red-lines before cross | [`partner-a-first-pass`](../../../docs/security/adversarial-review/findings/fv-full-stack-2026-07-15-partner-a-first-pass.md), SHA-256 `5afe1f48de1847281bdbb3e10e5ce2f9e18e4faff95c34599a1c755be19722f8` |
+| Partner B first pass | GPT-5.6 SOL, `ultra`; source-read plus independently executed/cross-checked frozen evidence | same packet; 14 findings; no-go for current assurance promotion | [`partner-b-first-pass`](../../../docs/security/adversarial-review/findings/fv-full-stack-2026-07-15-partner-b-first-pass.md), SHA-256 `9b8a4264ee8430075466ab43e60904496408df67e0563d16a48906b2eb8e9cef` |
+| Partner A symmetric cross | Opus 4.8, `max`; source-grounded cross-adjudication | every A-F1..F7 and B-F1..F14 mapped; implementation-evidence no-go, kernel architecture approve-with-red-lines | [`partner-a-cross`](../../../docs/security/adversarial-review/findings/fv-full-stack-2026-07-15-partner-a-cross.md), SHA-256 `339c2d98bad1b5198e7fcdeef42961c94b23f4fb1024868571fcdfeb472a89e1` |
+| Partner B symmetric cross | GPT-5.6 SOL, `ultra`; source + receipt reproduction | every A/B finding mapped; current/end-to-end assurance promotion no-go; no deployed defect inferred | [`partner-b-cross`](../../../docs/security/adversarial-review/findings/fv-full-stack-2026-07-15-partner-b-cross.md), SHA-256 `ac2ed51b2c386f80237819e8ebed2d83b615b5ef289b21d4a35c21e45763fb27` |
+| Coordinator synthesis | executing, mutation-verified where recorded; nine-surface review | 11 deduplicated findings; 58/58 external kernel replay; EasyCrypt 10/21+11 skips; no full Kani/Halmos/Kontrol/silicon/release run | [`coordinator`](../../../docs/security/adversarial-review/findings/fv-full-stack-2026-07-15-coordinator.md), SHA-256 `7d88a0372c4739442af4222d8b64da6705f6fa0d520a9eca7afc73b41449f1d7` |
+
+Neutral packet SHA-256:
+`74f9716f744dbab0d376096a05fc75db28e008d389ff2ddb749df8e1c54ead82`.
+Cross packet SHA-256:
+`cf2bdc6c1e911019155c007f9a34c8f275fc109f4c7ea7a31aa20cbbfef49972`.
+The [cataloguing receipt](../../../docs/security/adversarial-review/findings/fv-full-stack-2026-07-15-cataloguing-receipt.md)
+records prompt/envelope hashes, the one invalid transport attempt, corrected
+EasyCrypt/MM45 provenance, and post-freeze documentation mutation.
+
+### Historical rounds (27 rows at the prior snapshot)
 
 | Round | Date | Surface reviewed | Depth | Findings | Verdict | Doc / commit |
 |---|---|---|---|---|---|---|

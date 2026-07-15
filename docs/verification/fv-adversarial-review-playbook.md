@@ -4,6 +4,33 @@
 
 > **The thesis, stated once.** A `lake`-green tree, a clean `#print axioms`, and a confident self-assessment are *consistency* signals, not *soundness* signals. Every gate the project runs is **green precisely on the vacuous, tautological, and undischarged-but-advertised proofs** — because those proofs *do* compile and *do* have the expected axiom set; they just don't constrain anything. The EF swarm found 31 such gaps that our green CI could not see. You cannot catch your own vacuity with a gate you designed, because the gate encodes the assumptions you didn't think to question. So the goal is **never "be sure."** It is: automate the mechanical vacuity classes into per-commit gates, run an adversarial pass on a cadence for the semantic classes no gate can catch, keep occasional genuine externality, and report confidence as *eliminative* (every doubt is a tracked defeater, discharged or accepted — never indefeasible).
 
+## Current full-stack routing (2026-07-15)
+
+This playbook covers **nine assurance/verification surfaces**, not only the Lean
+tree: Lean on-chain/model proofs; Solidity/Yul/model/bytecode correspondence;
+Aeneas-extracted Rust; Kani; Miri/unsafe; ProVerif/Tamarin/CryptoVerif; CT/SCA/FI;
+differential/fuzz; and EasyCrypt C10 research. The current inventory and review
+depth live in
+[`FV_SURFACE_MAP.md`](../../contracts/verification/docs/FV_SURFACE_MAP.md).
+Findings go only to the global
+[`docs/security/adversarial-review/findings/`](../security/adversarial-review/findings/README.md)
+catalogue.
+
+Security-sensitive FV review follows
+[`planning-and-review-workflow.md`](../planning-and-review-workflow.md): exact
+mutually withheld Opus 4.8 and GPT-5.6 SOL first passes at the prescribed
+effort, then symmetric cross-adjudication. Extra swarms are supplemental and
+cannot replace that pair or vote away a blocker.
+
+The [2026-07-15 full-stack review](../security/adversarial-review/findings/fv-full-stack-2026-07-15-coordinator.md)
+reproduced classes this older narrative described as globally gated. Mechanical
+closure is strong for selected Lean headlines, but **not globally complete**:
+current-source extraction, arbitrary project axioms on extracted theorems,
+protocol query identity/exit status, EasyCrypt skips/axiom identity, Kani
+mutation enrollment, and custom checker validation each need their own negative
+controls. Any conflicting historical count or “never reviewed” statement below
+is a dated record, not current status.
+
 ---
 
 ## Part A — The "green ≠ sound" failure catalog
@@ -17,14 +44,21 @@ These are the ways a Lean theorem can be `lake`-green yet say nothing (or less t
 | V3 | **Trivial conclusion** | `Q = True` / always-holds — theorem says nothing | pre-2026 `: True` placeholders | `lint_axioms` (no `True`-typed axiom) + `lint_placeholders.py` (no `True := trivial`) + a **refutation test** (`∃ inputs, ¬Q` constructible) | ✅ exists + ⚠ refutation gap |
 | V4 | **Dead conjunct / unused premise** | `A ∧ B` where deleting `B` (or an axiom) breaks nothing downstream | P9 (EUF-CMA conjunct detached from the safety conjunct) | **Proof-mutation**: delete each axiom/conjunct, re-`lake build`, **expect failure**. Still green ⇒ dead. | ✅ `make verify-proof-mutation` |
 | V5 | **Undischarged-but-advertised hypothesis** | Theorem conditional on a free hypothesis the ledger calls "proven/closed" | P1 (`hInv` "kernel-proven" — was a free hyp) | **Ledger-consistency**: diff each theorem's *actual* closure + headline statement-shape (signature pin) against what `AXIOM_STATUS` *advertises*. | ✅ `make verify-ledger-consistency` |
-| V6 | **Stub / placeholder definition** | `def f := <all-zero/arbitrary>` makes a round-trip predicate unsatisfiable or trivially-true | P9 (`Spec.Signer.sign` all-zero stub) | The def must (a) round-trip with a **real witness** and (b) be cross-checked against an **independent oracle** (KAT), not be self-derived. | ⚠ partial (`honest_consistent` did it; not enforced) |
+| V6 | **Stub / self-derived definition** | `def f := <all-zero/arbitrary>` makes a round-trip predicate unsatisfiable or trivially true | historical P9 (`Spec.Signer.sign` was a stub; the model signer and `honest_consistent` are now closed) | Require a real witness and independent oracle; the current adversarial target is production signer/serialization→model correspondence. | ⚠ model closed; implementation bridge open |
 | V7 | **Over-strong / latent-false axiom** | An axiom that, if false, makes everything provable (`… → False`) | pre-2026-06-14 EUF-CMA `→ False` | **BreaksHash firewall** (`lint_fv (b)`: no `¬ BreaksHash` / `→ False` on a proof path) | ✅ `lint_fv (b)` |
 | V8 | **Wrong-shape quantifier** | `∃` witness where the claim needs `∀` (binds one case, not all) | P6 (TxFlow existential vs all-calldata) | Read the statement adversarially: does the quantifier match the *threat*? **No gate** — needs the swarm. | ❌ adversary |
 | V9 | **Model ≠ deployed artifact** | Theorem about a Lean model that doesn't faithfully mirror the bytecode/firmware/transcription | the LeanModel.sol ↔ Lean TCB; Charon-LLBC | **Differential KAT** (same vectors through model + artifact) + codegen the bridge + an **independent engine** (Kontrol vs Halmos). Not a pure-Lean check. | ⚠ partial (Aeneas diff-gate, Kontrol) |
 | V10 | **`#print axioms` bypass** | `native_decide`/`decide +native`/`ofReduceBool`/`@[csimp]`/`@[extern]` smuggle an axiom invisibly (lean4 #7463) | (latent) | **banned-tactic grep**, comment-stripped | ✅ `lint_fv (a)` |
 | V11 | **Right spec? captures the real threat?** | The theorem is sound and non-vacuous but proves the *wrong property* | (the deepest class) | Adversary + externality + the assurance-case decomposition. **No tool catches "you modeled the wrong thing."** | ❌ adversary + external |
 
-**Read this catalog as the answer to "how do we not get fooled by green":** V1–V3, V7, V10 were *covered* already; **V4 and V5 — the EF findings (P9-dead-conjunct, P1-undischarged-advertised) that recurred — are now closed by two BUILT gates** (`make verify-proof-mutation` + `make verify-ledger-consistency`, 2026-06-29; see Part B). V1/V6 are now enforced too (`verify-ledger-consistency` C9 witness-coverage, 2026-06-29) — so **every mechanical vacuity class V1–V7, V10 is gated**. **V8/V9/V11 are irreducibly the adversary's job** — no gate ever catches them; that is Part B / the portable kit, not a CI check. Do not let "we have mutation + ledger gates now" become the next version of "we thought we were in a good place": the gates stop you *re-discovering* the same vacuity; they do not make you *sure*.
+**Read this catalog as the answer to "how do we not get fooled by green":** the
+Lean headline gates cover many mechanical instances, but no V-class is globally
+closed merely because one framework has a gate. Apply the class separately to
+every surface and property. The 2026-07-15 arbitrary-axiom, protocol-query,
+extraction-freshness, and EasyCrypt mutations are concrete counterexamples to a
+stack-wide “all mechanical classes are gated” claim. **V8/V9/V11 remain
+irreducibly adversarial**, while the mechanical classes still require
+surface-specific enrollment and negative controls.
 
 ---
 
@@ -62,12 +96,39 @@ Already in place: `lint_fv` (a-escape-hatch / b-BreaksHash-firewall / c-exact-cl
 
 The mechanical anti-vacuity layer for the *theorem-level* classes (V1–V7, V10) is complete; the 2026-07-01 round surfaced one new *system-level* mechanical class (G1) not yet mechanized (item 4 above). What no gate closes is below.
 
+### EasyCrypt profile — required attacks
+
+Treat EasyCrypt as surface 9 even while it is research-only. A pass must:
+
+1. distinguish a named partial build from full verification and require every
+   expected `.ec` target in full mode;
+2. fail on a skip, absent source dependency, stale/prebuilt-only `.eco`, admit,
+   or unpinned tool/solver/dependency revision;
+3. pin each axiom/admit by normalized name, full type, source file, and intended
+   consumer—never by aggregate count alone;
+4. mutate an assumption to an equal-count false type and require failure;
+5. prove every `nth witness`, range, ordering, pool-size, and nondegeneracy
+   premise before treating an abstract scheme as concrete;
+6. instantiate shipped C10 parameters and serialization exactly, including
+   `w=8`, `log_w=3`, 43 checksum-free target-sum chains and bounded fresh-`R`
+   grinding;
+7. distinguish batch from adaptive games and a conditional arithmetic capstone
+   from one common-adversary concrete scheme theorem; and
+8. record the EasyCrypt tree, MM45 dependency trees, toolchain, command, inputs,
+   outputs, skips, admits, and final drift in the review receipt.
+
+The first stop/go question is representability: if the imported WOTS theory
+cannot express C10 without a foundational rewrite, preserve the research and do
+not continue the abstract capstone as though it retired A5.
+
 ### Layer 2 — the adversarial swarm (for V8/V9/V11 no gate can catch)
 
 The mechanical gates make the *vacuity* class non-recurring. They do **nothing** for "wrong quantifier," "model ≠ artifact," or "wrong spec." Those need an adversary. The recipe (validated: the 62-agent verify+adversarial pass this engagement ran *converged* with an independent 11-agent sweep):
 
 - **Adversarial framing** — agents tasked to **refute** ("find where the proof says less than the marketing; where the gate is green but the claim is hollow"); default-to-guilty.
-- **Model diversity** — ≥3 independent models; convergence is signal, divergence surfaces a blind spot one model shares with you.
+- **Required partner diversity** — use the exact Opus 4.8 and GPT-5.6 SOL pair,
+  mutually withheld first, then symmetric cross-adjudication, as owned by the
+  planning workflow. Additional independent models are supplemental signal.
 - **PoC-required** — every finding carries a *runnable* artifact: a Lean snippet proving a hypothesis unsatisfiable, a "delete this conjunct and the theorem still holds," a `#print axioms` showing an advertised premise absent, a Rust test showing a fail-open. **No PoC ⇒ filtered.**
 - **Adversarial discovery corroboration** — additional agents independently try
   to reproduce or falsify each candidate (this is what caught the two dangerous
@@ -108,17 +169,17 @@ TARGET (read first, in this order):
 SCOPE THIS RUN: {{e.g. "the EUF-CMA / signer claims" | "the bytecode bridge axioms"
   | "the whole theft_free closure" | "the firmware fail-open paths"}}.
 
-SURFACE NOTE (2026-07-01): the TARGET above is the **Lean on-chain surface ONLY** — that
-is 2 of the 8 FV surfaces (see contracts/verification/docs/FV_SURFACE_MAP.md; a second round
-has since covered the firmware Kani surface too — ADVERSARIAL_REVIEW_KANI_2026-07-01.md — so
-the map now reads ~3 of 8 reviewed). The
-firmware Kani, Miri, the protocol models (ProVerif/Tamarin/CryptoVerif), CT/SCA (checkct),
-the Aeneas §33 extraction, and the differential/fuzz corpus have NEVER been adversarially
-reviewed. To review one, set SCOPE to it AND swap the claims inventory: the Kani harnesses
+SURFACE NOTE (current): the TARGET above is the **Lean on-chain profile**, not
+the whole nine-surface stack in `FV_SURFACE_MAP.md`. To review another surface,
+set SCOPE to it AND swap the claims inventory: the Kani harnesses
 + scripts/kani_mutations.json (V1/V3/V8 — a harness that asserts nothing / is bounded
 trivially / samples where ∀ is needed); the protocol .pv/.spthy + their expected verdicts
-(V2 tautological query); the checkct/.t.sol drivers; the extracted/ §33 ranks. The V1–V11
-catalog transfers unchanged — only the artifacts change. The FIRST such profile is BUILT: the `kani-decoder-vacuity` angle in `contracts/verification/adversarial-review/protocol.json` (run `python3 run_review.py --angle kani-decoder-vacuity`) — its `instructions` field is the per-surface V-mode manifestation (V1 empty-assume · V3 no-assert · V6 self-oracle · V8 bounded-N-as-∀ · V11 gate≠renderer · G3 uncovered decoders). Model each new surface angle on it; the persona (`PROMPT.md`) is shared.
+(V2 tautological query); the checkct/.t.sol drivers; the extracted/ §33 ranks;
+or the EasyCrypt dependency/game/axiom closure. The V1–V11 catalog transfers,
+but every profile also needs source freshness, subprocess/skip truth, semantic
+identity pins, and a surface-specific negative. The `kani-decoder-vacuity`
+angle in `contracts/verification/adversarial-review/protocol.json` is one
+profile, not evidence that the other eight are covered.
 
 ATTACK PROTOCOL — walk EVERY V1–V11 mode against each claim in scope:
   V1 vacuous antecedent · V2 tautological axiom/hyp · V3 trivial conclusion ·
@@ -219,10 +280,27 @@ rate-limit-gentle batching ≤2 concurrent avoids the throttle.)
 
 Completeness is not a state this playbook can reach — claiming it would be the exact overconfidence Parts A/A2 catalog. So this section names the boundary, because an *unstated* boundary is itself a G3 (a gap with no red row).
 
-1. **Surface scope — the review reaches ~3 of 8 FV surfaces.** The master-prompt TARGET is the Lean on-chain tree (2 surfaces); a second round has since covered the firmware Kani surface ([`ADVERSARIAL_REVIEW_KANI_2026-07-01.md`](../../contracts/verification/docs/findings/ADVERSARIAL_REVIEW_KANI_2026-07-01.md)). [`FV_SURFACE_MAP.md`](../../contracts/verification/docs/FV_SURFACE_MAP.md) enumerates the whole surface; Miri / protocol models / CT-SCA / Aeneas §33 / differential-fuzz still have **never had a first adversarial pass**. Every "no hole found" is scoped to what was targeted — never the whole stack. Extending the TARGET (the surface note in Part C) is the standing next-round work. **Beyond the FV surface entirely, the sibling adversarial-review playbooks in [`docs/security/adversarial-review/`](../security/adversarial-review/README.md) cover the firmware/hardware/on-chain attack surfaces (clear-signing decoders, TrustZone gateway, SE drivers, SCA/FI, firmware-update + secure-boot, USB + compromised-companion, off-chain signing, on-chain Solidity, trusted-UI, silicon-lockdown hardening-depth) — same discipline, tailored per-surface catalogs.**
+1. **Surface scope.** The 2026-07-15 pass reviewed all nine rows at differing
+   depths; the current depth and residual for each live only in
+   [`FV_SURFACE_MAP.md`](../../contracts/verification/docs/FV_SURFACE_MAP.md)
+   and [`REVIEW_PROVENANCE.md`](../../contracts/verification/docs/REVIEW_PROVENANCE.md).
+   “Full-stack” does not mean every expensive engine, binary, or hardware leg
+   was rerun. Every no-finding statement remains scoped to its recorded source,
+   host, model, target, or receipt evidence. Apply every intersecting sibling
+   playbook indexed in
+   [`docs/security/adversarial-review/`](../security/adversarial-review/README.md).
 
-2. **What is now mechanized vs still the adversary's.** The theorem-level vacuity classes V1–V7/V10 are gated; the *system-level* **G1 (gate-enforcement) is now gated too** (`make verify-gate-enforcement`, 2026-07-01). What no gate closes, and never will: **V8/V9/V11** (wrong quantifier / model ≠ artifact / wrong spec) and **G2/G3/G5** (cited-TCB reality drift / coverage-completeness / qualitative↔quantitative gap). Those are irreducibly the adversary + the *external* red-team (Layer 3). The in-house layers make an external pass find *less*, never *nothing*.
+2. **What is mechanized vs still the adversary's.** Selected Lean headlines
+   have strong V1–V7/V10 and G1 controls; that is not a global statement about
+   extracted, protocol, Kani, EasyCrypt, or custom-checker surfaces. What no
+   mechanical gate closes on its own: **V8/V9/V11** (wrong quantifier / model ≠
+   artifact / wrong spec) and **G2/G3/G5** (reality drift / coverage completeness
+   / qualitative↔quantitative gap). Those remain the adversary's and the
+   external reviewer's job.
 
-3. **Two artifacts the catalog still only names.** G3's threat-model → claim *map* does not yet exist (so "is this threat unclaimed?" is answerable only by hand), and there is no *review-provenance ledger* (which claim was reviewed, at what depth — source-read vs executing — when), so a stale source-only "no finding" can masquerade as durable assurance. Building these is the honest continuation of this playbook.
+3. **The map and provenance ledger exist but are not self-authenticating.** The
+   current attack is deletion, stale counts, wrong tier, and wrong artifact—not
+   absence. Required IDs, semantic fields, digests, and deletion negatives must
+   make a missing or stale row turn red.
 
 **The one-sentence boundary.** *This playbook can tell you that no covered claim on the Lean surface is hollow or unenforced as of the last executing pass — it cannot tell you the uncovered surfaces are sound, the cited facts are current, the threat model is complete, or that a non-executing pass proved anything.* That sentence — not a green tree — is what to hand an auditor.

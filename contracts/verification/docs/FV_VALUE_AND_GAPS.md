@@ -20,6 +20,15 @@ assertion about what is proven. Where the two could drift, defer to
 
 ## TL;DR
 
+> **2026-07-15 update.** This review still found no new deployed-product defect
+> inside the FV-covered scope, but it did reproduce assurance-system defects in
+> current-source extraction, exact-property correspondence, arbitrary-axiom
+> rejection, protocol exit/query semantics, EasyCrypt completeness/assumption
+> pins, mutation enrollment, and checker validation. A green result therefore
+> has only the strength of its named artifact and gate. The current gaps and
+> expansion order are owned by [`FV_SURFACE_MAP.md`](FV_SURFACE_MAP.md) and the
+> [sourced roadmap](../../../docs/verification/formal-verification-assurance-expansion-2026-07-15.md).
+
 The FV stack's demonstrated payoff to date is **soundness self-policing** and
 **spec-transcription regression-fencing**, *not* discovery of exploitable
 on-chain/firmware bugs. That is not a weakness — it is what these tools are *for*
@@ -149,7 +158,17 @@ the coverage gap, not a clean bill of health.
 
 ---
 
-## The two genuinely-uncaptured gaps (status)
+## Current open assurance gaps (status)
+
+The historical two-gap discussion below is retained as a dated value record,
+but it is no longer a complete inventory. Current gaps include deployed
+bytecode/source→Lean model identity; current Rust→extracted Lean freshness; an
+owner-selected firmware schema; production signer/serialization and actual
+digest correspondence; semantic protocol-query integrity; fail-closed concrete
+C10 EasyCrypt work; durable lifecycle/recovery/display-policy refinement;
+target-only unsafe/concurrency/resource behavior; selected production
+binary/TrustZone correspondence; and independent validation of custom proof
+tools. Track status in the surface map and actions in `docs/work-todo.md`.
 
 Everything else FV-related is tracked in `docs/work-todo.md` §33/§34 with
 what/why/closes-it/cost discipline (the Kani/Miri/cargo-checkct/cargo-fuzz/

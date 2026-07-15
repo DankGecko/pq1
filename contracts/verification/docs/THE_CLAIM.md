@@ -5,6 +5,19 @@ about the PQSmartWallet formal-verification stack. It is deliberately
 conservative. If a marketing line is not derivable from the "✅ Claimable"
 section below, do not ship it.
 
+> **Controlling correction — 2026-07-15 full-stack adversarial review.** The
+> scoped Lean theorem tree still kernel-checks; an independent replay accepted
+> **58/58 modules**. That replay is kernel/environment validation, not an exact
+> project-axiom authorization policy. Current assurance must also retain these
+> boundaries: (1) the extracted `compute_user_op_hash` theorem is tooling-only;
+> it is not a production bridge for the actually signed
+> `compute_sphincs_digest_v06`; (2) Kontrol removes transcription only for the
+> property and concrete wrapper recorded in `KONTROL_SCOPING.md`, not uniformly
+> for every bridge; (3) V1 firmware-preimage results are legacy/nonshipping;
+> and (4) EasyCrypt is partial research evidence whose imported WOTS theorem
+> cannot currently instantiate C10 parameters. See the
+> [2026-07-15 coordinator report](../../../docs/security/adversarial-review/findings/fv-full-stack-2026-07-15-coordinator.md).
+
 > ## ✅ EUF-CMA inconsistency RESOLVED for `theft_free` (2026-06-14)
 >
 > The `EUF_CMA_SPHINCSplusC` inconsistency (a kernel-checked `False` from a
@@ -57,7 +70,7 @@ Specifically and defensibly:
    is reported by `#print axioms`, which is known to **under-report** in the
    pinned Lean v4.22.0; the completeness backstop is `make verify-lean4checker`
    (external-kernel re-check) — run to completion 2026-07-02: **kernel re-check
-   ACCEPTED every declaration across all 55 modules**, so the closure is not a
+   ACCEPTED every declaration across all 58 modules**, so the closure is not a
    `#print`-only artifact (previously this backstop was manual-only and unrun —
    the caveat now carries its discharge). What `theft_free`
    actually says: it is a **conjunction** — conjunct 1 (the safety guarantee:

@@ -1,51 +1,57 @@
-# FV surface map — what the formal-verification stack covers, and what the adversarial review actually reaches
+# FV assurance/verification surface map
 
-**Snapshot: 2026-07-01.** This doc answers one question the per-theorem ledgers cannot:
-**is the adversarial review (`docs/verification/fv-adversarial-review-playbook.md`)
-run across the *entire* FV surface, or only certain subsystems?** It is the concrete
-artifact for catalog class **G3 (coverage-completeness)** — the class no per-theorem
-gate can see, because a subsystem with *no* review has no red row to notice.
+**Snapshot: 2026-07-15.** This map owns the current inventory of proof and
+proof-adjacent assurance surfaces. It deliberately includes non-formal evidence
+such as Miri, fuzzing, differential tests, and physical/tool receipts, but labels
+their evidence tier instead of calling every row formal verification. A green
+row proves only the property, artifact, and configuration named in that row.
 
-**The honest headline: two 2026-07-01 adversarial rounds covered ~3 of the 8 FV
-surfaces below — the Lean on-chain tree (round 1) and the firmware Kani surface
-(round 2, source-read; `findings/ADVERSARIAL_REVIEW_KANI_2026-07-01.md`, verdict: 13 low + 7 info,
-0 medium+, no hollow load-bearing proof, no live vuln).** The rest of the stack (Miri, the protocol
-models, CT/SCA, the Aeneas §33 extraction, the differential/fuzz corpus) has **never been
-adversarially reviewed.** Each is *gated* (green when run), but "green" is not
-"adversarially attacked for vacuity" — the V1–V11 catalog was never pointed at it.
-So each "no headline soundness hole" verdict is scoped to the surface it ran on, not
-the whole thing.
+## Current surface
 
-## The surface
+| # | Surface | Strongest honest evidence | Enforcement at this snapshot | Main residual / current review result |
+|---|---|---|---|---|
+| 1 | Lean on-chain safety and SPHINCS+C verifier specification | Kernel-built theorem tree; exact advertised closures for selected headlines; proof mutations; independent `lean4checker` replay of 58 modules | Lean build/audit/lints per FV workflows; mutations partly nightly/local | No new kernel inconsistency found. Theorem intent and exact-closure policy remain distinct: independent kernel replay accepts kernel-valid project axioms unless a separate allowlist rejects them. |
+| 2 | Solidity/Yul/model/deployed-bytecode correspondence (A3.1/A3.x) | Kernel model→spec interpreter refinement; structural source→AST parse; KAT/mutant differential; Halmos/Kontrol sessions and pinned codehashes | Mixed per-PR and local/manual; consult gate manifest and receipts | Model→spec is universally proved. Exact deployed-bytecode/source/session correspondence and property-specific Kontrol scope remain the boundary; public “transcription-free” wording is broader than the validate-wrapper evidence. |
+| 3 | Aeneas-extracted Rust | Kernel theorems over committed generated Lean; selected Rust/extracted differentials | Default extracted build in CI; regeneration targets are not comprehensively triggered | **False-green freshness reproduced.** Current Tx-Merkle Rust differs semantically from committed extraction; regeneration fails. A Rust domain-tag mutation passes both extraction gates. The default closure check also accepts an arbitrary new project axiom. |
+| 4 | Firmware Kani bounded proofs | 148 `#[kani::proof]` harnesses in 25 files | Nightly/default tiers plus a curated mutation manifest | 140 harnesses in 19 files reside in mutation-enrolled files; eight harnesses in six files do not. Default/nightly runs 28/31 mutation groups; three are full-only. No full Kani campaign was rerun here. Bounded harnesses are not architecture-wide proofs. |
+| 5 | Firmware Miri and unsafe-code assurance | Host-reachable Miri checks plus source-level unsafe controls | Per configured host workflows | Host reachability excludes target-only CMSE/MMIO/interrupt/concurrency behavior. Treat as dynamic UB evidence, not formal verification or a whole-target guarantee. |
+| 6 | ProVerif, Tamarin, and CryptoVerif protocol models | Symbolic/computational model results plus selected reachability witnesses | Mixed nightly/local | The driver ignores subprocess return codes and pins result counts rather than query semantics; a tautological query and synthetic exit 42 both pass. CryptoVerif’s canonical launcher uses the wrong library path. Deployed directionality, conditioned distributions, lifecycle, and code refinement remain explicit interfaces. |
+| 7 | Constant-time, side-channel, and fault assurance | Selected source/object binary analyses, fault sweeps, and separate physical plans/receipts | Mostly local/manual; configuration-specific | Bind every result to exact symbols/bytes/profile and analyzer semantics. Selected binary CT is not physical leakage resistance; bounded instruction faults are not voltage/clock/EM/laser evidence. |
+| 8 | Differential and fuzz assurance | Cross-implementation corpora and continuous fuzzing over selected parsers/render paths | Mixed continuous/local | Valuable regression evidence, not a universal proof. Record corpus provenance/coverage and unsupported paths; regenerate from current source where freshness is claimed. |
+| 9 | EasyCrypt C10 cryptographic reductions | Partial WOTS+C/FORS+C games, combinatorial lemmas, and arithmetic guardrails | Local wrapper only; absent from the 21-entry gate-enforcement manifest | Full wrapper compiles 10/21 and skips 11 MM45-dependent files while exiting 0; pins count axioms rather than identities/types. Imported WOTS parameters exclude C10 (`w=8`, `log2_w=3`, `l=43`, no checksum). Adaptive WOTS, concrete FORS/tree/scheme, bounded grinding, and common-adversary composition remain open research. |
 
-| # | FV surface | What it proves | Gate(s) | CI enforcement | Adversarially reviewed? |
-|---|---|---|---|---|---|
-| 1 | **Lean on-chain — `theft_free`** | no unauthorized fund movement given a correct signed digest (the headline theorem + safety closure) | `verify-{build,fv-lints,audit,ledger-consistency,proof-mutation,storage-mutators}`; `verify-lean4checker` (local backstop) | per-PR (`lean-fv.yml`) + nightly (`proof-mutation`) | ✅ **2026-07-01 (source-read-only)** — the playbook's *only* target |
-| 2 | **Lean on-chain — bytecode bridge / A3.1** | deployed `SPHINCsC10Asm.verify = execC10Asm` (∀ carried by KAT + executable differential + ~250-mutant screen; symbolic ∀ in progress) | `verify-{bytecode,transcription,interp,bulk,cavp}`; `kontrol`/`halmos` | per-PR: `transcription` in `a31-transcription.yml`. **`bytecode`/`interp`/`bulk`/`cavp`/`kontrol`/`halmos` are LOCAL/manual** (corrected 2026-07-02: an earlier row claimed per-PR `bytecode` in `ci.yml` — false; ci.yml *paths-ignores* `contracts/verification/**`, and `verify-bytecode` is `local_documented` in `gate_enforcement.json`. Per-PR bytecode-drift protection = the codehash-freeze test in the `contracts` job) | ◑ partial (a31 angle, 2026-07-01 + 2026-07-02) — **user's active front** |
-| 3 | **Aeneas §33 extracted** | firmware pure-logic (KDF byte-layout / invariant #5·#8 functional) = the Rust, ∀ | `verify-{extracted,extract-differential,spec-vendored-fidelity}` | `lean-extracted.yml` (nightly) | ❌ **never** |
-| 4 | **Firmware Kani** (93 harnesses / 17 files) | decoder/gate DECISIONS panic/OOB-free + canonical-acceptance (multiSend / CoW / typed-call / SafeTx / ERC-7730 / Safe-mgmt / NS-ptr / fw-manifest / AA-calldata) | `make kani` + `verify-kani-mutation` (**curated: 6 mutations / 4 files — the other 57 harnesses have no vacuity screen**) | nightly (`nightly.yml`) | ✅ **2026-07-01 (source-read)** — `kani-decoder-vacuity` angle, 13 low + 7 info, 0 medium+; `findings/ADVERSARIAL_REVIEW_KANI_2026-07-01.md` |
-| 5 | **Firmware Miri** | 0-UB on the host-reachable `unsafe` (FI volatile helpers, NS-ptr deref, tree-borrows) | `make miri` | per-PR (`ci.yml`) | ❌ **never** |
-| 6 | **Protocol models** (5 ProVerif + 3 Tamarin + 1 CryptoVerif) | dual-SE seed-split secrecy · 3-way PIN-lockstep reconcile · SCP03 + OPTIGA-shield tunnels · FW-update authenticity (symbolic + computational) | `proverif`/`tamarin`/`cryptoverif` + `verify-protocol-models` | nightly (`nightly.yml`: `proverif` + `verify-protocol-models`); `tamarin`/`cryptoverif` **local** | ❌ **never** |
-| 7 | **CT / SCA** | 5 crypto drivers (kdf/fors/th/saes/**ct_eq**) constant-time on `thumbv8m` (binsec relational; ct_eq guards the `subtle` compares — added 2026-07-02) | `make checkct` | **local only** — the `checkct` job is `workflow_dispatch`-only + `continue-on-error` (WIP; a G1) | ❌ **never** |
-| 8 | **Differential / fuzz** | decoder ↔ deployed-`MultiSendCallOnly` bytecode agreement (revm) · panic-freedom over unbounded input (12 libFuzzer targets) | `fuzz-all` + the revm differential (dev-only) | ClusterFuzzLite (`cflite-*`); `fuzz-all` **local** | ❌ **never** |
+`verify-gate-enforcement` checks entries already declared in
+`scripts/gate_enforcement.json`; it is not a reverse-discovery proof that every
+proof target, model, script, or surface is enrolled. At this snapshot EasyCrypt
+is not enrolled.
 
-*(Enforcement per row is asserted mechanically by `make verify-gate-enforcement` — the G1 lint — against `scripts/gate_enforcement.json`.)*
+## Review provenance
 
-## What this means for the review
+The 2026-07-15 review is the first current nine-surface full-stack pass using the
+mandated mutually withheld Opus 4.8 and GPT-5.6 SOL first passes followed by
+symmetric cross-adjudication. The immutable reports and digests live in the
+global adversarial-review findings catalogue; `REVIEW_PROVENANCE.md` records
+execution depth. Older source-read or executing passes remain historical
+evidence for their exact snapshots and must not be promoted to current coverage
+without a new identity-bound receipt.
 
-- **The V1–V11 catalog transfers to every surface, but was only *run* on #1–#2.** A Kani
-  harness can be vacuous (asserts nothing / bounded so tightly it's trivial — V1/V3); a
-  protocol query can be a tautology over its own model (V2); a differential can *sample*
-  where it needs `∀` (V8); a fuzz target can have zero coverage (V1). None of these were
-  attacked this round. The `verify-kani-mutation` / `verify-protocol-models` gates catch
-  the *re-discovery* of a known vacuity per surface, but no adversary has done the *first*
-  pass on #3–#8.
-- **Next rounds must extend the master-prompt `TARGET` + add per-surface angles** (Kani /
-  Miri / protocol / CT / Aeneas / differential), each with its own claims inventory. Until
-  then, the honest scope of any "no hole found" is: **the Lean on-chain tree only.**
-- **G3 is the un-mechanizable residual** — a threat with no covering *claim* (not just no
-  review) still has no red row. That needs a threat-model → claim map + the periodic
-  external red-team (playbook Layer 3), not a gate.
+## Expansion order
 
-See `findings/ADVERSARIAL_REVIEW_2026-07-01.md` (the run this scopes) and
-`../../docs/verification/fv-adversarial-review-playbook.md` (the method + the G1–G5 catalog).
+1. Repair current-source freshness, semantic query/axiom pins, subprocess
+   failure propagation, skip behavior, enrollment completeness, and receipts.
+2. Prove the production `compute_sphincs_digest_v06` ↔ Solidity
+   `sphincsDigest` bridge and the signed-intent/display policy projection.
+3. Model durable generated/charged/released query accounting and crash-consistent
+   page state; then compose firmware rollback and lifecycle models through
+   explicit stable interfaces.
+4. Formalize an owner-approved current firmware schema only after the V4/V6
+   owner-document conflict is resolved.
+5. Strengthen exact release-artifact, EntryPoint, selected TrustZone/linker, and
+   selected shipping-profile binary correspondence.
+
+The dated
+[`formal-verification-assurance-expansion-2026-07-15.md`](../../../docs/verification/formal-verification-assurance-expansion-2026-07-15.md)
+gives costs, tool pilots, limits, and EasyCrypt stop/go criteria; the
+[`coordinator report`](../../../docs/security/adversarial-review/findings/fv-full-stack-2026-07-15-coordinator.md)
+owns findings and acceptance tests. This map owns inventory; it does not
+duplicate that roadmap or the action list in `docs/work-todo.md`.

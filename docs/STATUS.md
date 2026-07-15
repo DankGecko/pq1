@@ -17,6 +17,22 @@
 > §A–§D row was refreshed, and this does not supersede the 2026-06-17 full-
 > frontier snapshot.
 
+> **FV correction — 2026-07-15.** The current full-stack adversarial review is
+> [`fv-full-stack-2026-07-15-coordinator.md`](security/adversarial-review/findings/fv-full-stack-2026-07-15-coordinator.md),
+> with the nine-surface inventory in
+> [`FV_SURFACE_MAP.md`](../contracts/verification/docs/FV_SURFACE_MAP.md) and the
+> sourced expansion roadmap in
+> [`formal-verification-assurance-expansion-2026-07-15.md`](verification/formal-verification-assurance-expansion-2026-07-15.md).
+> Individual Lean results remain scoped and kernel-valid, but current
+> end-to-end assurance promotion is blocked by extraction freshness, the actual
+> signed-digest bridge, extracted closure policy, protocol-driver semantics,
+> and EasyCrypt gate/parameter correspondence. EasyCrypt reproduced 10/21
+> compiled with 11 skips and success; its imported WOTS theorem excludes C10's
+> `log2_w=3`. The source census is 148 Kani harnesses/25 files; mutation-enrolled
+> files contain 140/19, with eight/six outside and three of 31 groups full-only.
+> No fresh full Kani campaign was run. V1 is legacy evidence; V4 versus V6
+> remains an owner conflict, not a selected implementation target.
+
 ## §0 — Where the truth lives (doc map)
 
 One concern → one **owner** doc. If a fact lives in two docs it *will* drift (it did: S-1/S-2/S-3 status was

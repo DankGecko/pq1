@@ -1,5 +1,16 @@
 # Mechanizing C10 EUF-CMA in EasyCrypt — a sourced feasibility verdict (2026-07)
 
+> **Controlling correction — 2026-07-15.** The historical progress log below
+> remains useful, but its optimistic “concrete C10” and near-capstone language
+> is superseded. The full wrapper currently exits successfully after compiling
+> 10/21 files and skipping 11 MM45-dependent files; axiom pins are count-only.
+> More fundamentally, imported MM45 WOTS fixes `log2_w∈{2,4,8}` and standard
+> checksum WOTS, while shipped C10 uses `log2_w=3`, 43 checksum-free target-sum
+> chains. Continue only as staged research after a fail-closed build and a C10
+> representability stop/go gate; do not resume the abstract capstone first.
+> See the [full review](../security/adversarial-review/findings/fv-full-stack-2026-07-15-coordinator.md)
+> and [research roadmap](formal-verification-assurance-expansion-2026-07-15.md).
+
 **Bottom line:** turning the cited `Crypto.EUF_CMA_SPHINCSplusC` axiom
 (`contracts/verification/lean/SphincsCVerify/Crypto/EUFCMA.lean`) into a
 machine-checked theorem is **NOT a multi-person-year effort**. The expensive
