@@ -197,11 +197,18 @@ impl FirstBootHw for FirstBootHwImpl<'_> {
 
     fn commit_salt(&mut self, salt: &[u8; 32]) -> Result<(), FirstBootError> {
         let recs = journal::encode_salt(salt);
-        let mut idx = self.journal().next_free;
+        let st = self.journal();
+        // Reserve the complete three-QW salt record plus the two step markers
+        // that must follow it. Refuse before the first program command rather
+        // than persist a salt that can never reach ALL_DONE.
+        if !st.can_append(journal::SALT_COMPLETION_RESERVE_QWS) {
+            return Err(FirstBootError::OptigaSaltPersistFailed);
+        }
+        let mut idx = st.next_free;
         for r in &recs {
             // SAFETY: consecutive erased QWs from `next_free` (data, data, hdr).
             unsafe { crate::hw::flash::write_journal_qw(idx, r) }
-                .map_err(|_| FirstBootError::JournalWriteFailed)?;
+                .map_err(|_| FirstBootError::OptigaSaltPersistFailed)?;
             idx += 1;
         }
         Ok(())

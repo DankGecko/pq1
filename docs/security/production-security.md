@@ -39,8 +39,9 @@ items are marked in place; current authority lives in `docs/STATUS.md` and
 3. **NXP SE050 SCP03 keys must not remain the published factory
    defaults.** The factory installs only per-device transport keysets and
    ships at RDP0. After owner verification, the first-field ceremony
-   self-locks RDP2, performs the BHK first write, and rotates to the final
-   fresh-TRNG-salted keyset before the seed wizard. The exact E140
+   self-locks RDP2 and performs the BHK first write. The implemented candidate
+   then rotates SE050 to unsalted BHK-rooted final SCP03/admin credentials and
+   OPTIGA to a DHUK + page-127-TRNG-salt final PBS before the seed wizard. The exact E140
    ratchet-versus-final-rotation ordering remains OPEN and owner/silicon
    gated. *Source: bundle B and work-todo #36.*
 
@@ -61,11 +62,12 @@ items are marked in place; current authority lives in `docs/STATUS.md` and
    `measured_boot::firmware_hash()` and bricked pairing after an update.**
    The bench failure remains valid historical evidence (§1 of
    `docs/secure-elements/optiga-brick-postmortem.md`), but the intermediate
-   OTP-master proposal is not current production architecture. Current code
-   derives bring-up PBS deterministically from DHUK with no flash copy; page
-   126 belongs only to the wrapped BHK. The production-final fresh-salted
-   rotation protocol and its durable public state remain OPEN under work-todo
-   #36. See the current-state override in §2.6. *Source: bench failure,
+   proposal to use the OTP master as the final PBS root is not current
+   production architecture. The factory-burned OTP master is transport-only;
+   the candidate final PBS derives from DHUK plus a page-127-persisted TRNG
+   salt, with no secret PBS flash copy. Page 126 belongs only to the wrapped
+   BHK. Handoff, recovery, ordering, silicon evidence, and production approval
+   remain OPEN under work-todo #36. See the current-state override in §2.6. *Source: bench failure,
    2026-04-17; later lifecycle corrections.*
 
 ## 2. Per-topic summary
@@ -122,12 +124,14 @@ authority.
 > research input, but **stage 2 now executes ON-DEVICE at first field boot,
 > not on the factory fixture**: devices ship at RDP-0 (batch-uniform image,
 > user-verifiable over SWD via connect-under-reset before first power); the
-> FSBL self-locks to RDP-2, and only then — with the per-die DHUK final —
-> does firmware do the BHK first-write and rotate SCP03/PBS **with fresh TRNG
-> salt** off the factory-installed *transport* keysets (pure deterministic
-> DHUK derivation is forbidden — see #36's RDP-1-roundtrip attack). Step 10
-> ("Burn RDP Level 2") is no longer a fixture action, and the stage-1
-> FMK-derived SCP03 keys are demoted to transport keysets.
+> secure-app early boot self-locks to RDP-2, and only then — with the per-die
+> DHUK final — does firmware do the BHK first-write, rotate SE050 SCP03/admin
+> to unsalted BHK-rooted final credentials, and rotate OPTIGA PBS to DHUK plus
+> a page-127-persisted fresh TRNG salt off the factory-installed
+> OTP-master-derived *transport* credentials. Step 10
+> ("Burn RDP Level 2") is no longer a fixture action. The historical stage-1
+> FMK proposal is superseded; the candidate factory transport credentials all
+> derive from the factory-burned per-device OTP master.
 
 **Historical factory provisioning proposal — superseded by the current
 transport-to-first-field lifecycle above:**
@@ -472,11 +476,13 @@ change to work-todo #20 scope.
 
 > **Current-state override (2026-07-14).** This section preserves the
 > historical failure analysis and staged proposal; it is not the current page
-> map or an implementation plan. OPTIGA PBS is now DHUK-derived at boot and has
-> no flash copy. Bank-1 page 126 is exclusively the DHUK-wrapped SE050 BHK when
-> `bhk` is enabled, and no persistent firmware-update failure counter remains.
-> The OTP-master route below is legacy/rejected for production. Current
-> lifecycle and rollback authority stays with `docs/production-todo.md`,
+> map or an implementation plan. The factory-burned OTP master derives only
+> transport credentials. The candidate final OPTIGA PBS derives from DHUK plus
+> the page-127-persisted TRNG salt and has no secret flash copy. Bank-1 page 126
+> is exclusively the DHUK-wrapped SE050 BHK when `bhk` is enabled, and no
+> persistent firmware-update failure counter remains. The historical route
+> below that reused the OTP master as a final root is rejected for production.
+> Current lifecycle and rollback authority stays with `docs/production-todo.md`,
 > `docs/STATUS.md`, and the production-fenced rollback architecture record.
 
 **Threat context.** The OPTIGA Trust M pairing-secret flow that landed

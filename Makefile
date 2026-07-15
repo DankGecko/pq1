@@ -1758,13 +1758,17 @@ test-unit: ## Rust workspace unit tests (host)
 #   make check-codegen
 #
 # Or as part of `make prod-erc7730-provenance-check` (Phase 2 onwards).
-.PHONY: check-codegen check-erc7730-descriptors check-solidity-constants erc8176-coverage
-check-codegen: check-erc7730-descriptors check-solidity-constants
+.PHONY: check-codegen check-erc7730-descriptors check-solidity-constants check-research-bundles erc8176-coverage
+check-codegen: check-erc7730-descriptors check-solidity-constants check-research-bundles
 	@echo "==> codegen artifacts in sync"
 
 check-erc7730-descriptors:
 	@echo "==> Checking ERC-7730 descriptor catalog (xtask --check)"
 	@cargo run --locked -q -p pqsigner-xtask -- gen-erc7730-descriptors --check
+
+check-research-bundles:
+	@echo "==> Checking generated security research bundles"
+	@bash docs/security/research-bundles/build.sh --check
 
 # proto -> Solidity freshness gate: the generated PqsignerProto.sol must be a
 # byte-for-byte render of the current pqsigner-proto constants. `--check` prints
@@ -2268,22 +2272,24 @@ prod-check-ship: override RELEASE_FEATURES := $(PROD_SHIP_FEATURES)
 prod-check-ship: prod-feature-check ## Strict ship gate — feature-check, then rollback refusal
 	@$(error prod-check-ship: FAIL — reviewed production rollback backend is not implemented; Draft 1.1 remains unapproved and grants no ship authority)
 
-# work-todo #36 CI gate: prove the `rdp2-self-lock` feature-ON code path
-# (first-boot Phase A/B glue, the RDP-2 write path, transport/salted key
-# derivation) still COMPILES for thumbv8m. It cannot use PROD_SHIP_FEATURES /
-# mode-production — those are blocked at build.rs by the rollback quarantine
-# (FW_ROLLBACK_PRODUCTION_BLOCKED) — so it compiles the same feature-ON code
-# with the dev-style opt-ins the bench targets use (legacy-fw-rollback-unsafe
-# + erc7730-dev-unattested), WITHOUT mode-production. Mirrors how the S-1
-# lockdown closure code is kept compiling. Compile-only (`cargo check`); no
-# flash, no reset, no OTP.
+# work-todo #36 anti-footgun gate: prove a non-production configuration cannot
+# compile the irreversible `rdp2-self-lock` path. Positive hardware-path
+# compilation remains behind `mode-production`, which is independently blocked
+# until the rollback architecture is approved. Pure first-boot logic remains
+# host-tested without producing a flashable self-lock image.
 .PHONY: build-rdp2-self-lock
-build-rdp2-self-lock: ## Compile-check the first-boot self-lock feature (work-todo #36)
-	@echo "==> build-rdp2-self-lock (work-todo #36): checking feature-ON compile for $(TARGET)"
-	cargo check -p sphincs-tz-secure --no-default-features \
-		--features "stm32u585,dual-se,ui-lcd,usb,saes-dhuk,se050-derived-scp03,bhk,rdp2-self-lock,iwdg,legacy-fw-rollback-unsafe,erc7730-dev-unattested" \
-		--target $(TARGET)
-	@echo "==> build-rdp2-self-lock: PASS — first-boot self-lock code compiles"
+build-rdp2-self-lock: ## Prove self-lock is rejected outside mode-production (work-todo #36)
+	@echo "==> build-rdp2-self-lock: checking non-production anti-footgun"
+	@set -eu; out="$$(mktemp)"; trap 'rm -f "$$out"' EXIT; \
+		if cargo check -p sphincs-tz-secure --no-default-features \
+			--features "stm32u585,dual-se,ui-lcd,usb,saes-dhuk,se050-derived-scp03,bhk,rdp2-self-lock,iwdg,legacy-fw-rollback-unsafe,erc7730-dev-unattested" \
+			--target $(TARGET) >"$$out" 2>&1; then \
+			cat "$$out"; \
+			echo "build-rdp2-self-lock: FAIL — unsafe non-production self-lock build succeeded" >&2; \
+			exit 1; \
+		fi; \
+		grep -Fq "RDP2_SELF_LOCK_REQUIRES_MODE_PRODUCTION" "$$out" || { cat "$$out"; exit 1; }; \
+		echo "==> build-rdp2-self-lock: PASS — non-production self-lock build rejected"
 
 # Image size / budget report. The secure image must fit its 464 KB A/B slot.
 # The non-overrideable capacity lives in fw-manifest and is enforced by

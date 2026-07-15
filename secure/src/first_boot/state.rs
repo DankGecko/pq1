@@ -2,9 +2,9 @@
 //!
 //! Work-todo #36 Phase B: after the RDP-2 self-lock, rotate the SE pairing
 //! secrets off the factory transport keysets to final BHK-/salted-DHUK-rooted
-//! secrets. The ceremony must survive power loss at any point, so every step
-//! is idempotent + resumable and its completion is recorded **commit-LAST**
-//! in the page-127 journal ([`super::journal`]).
+//! secrets. Completed quad-word programs are recorded **commit-LAST** so an
+//! ordinary power loss can resume. The append-only page has finite capacity;
+//! exhaustion or silicon-level partial-program ambiguity fails closed to RMA.
 //!
 //! This module is the pure control flow only: it drives the hardware through
 //! the [`FirstBootHw`] seam and never touches flash / the SEs / the display
@@ -170,7 +170,7 @@ pub fn run(hw: &mut dyn FirstBootHw) -> Result<(), FirstBootFault> {
     let js = hw.journal();
     let resuming = !js.is_blank();
     let mut done = js.done;
-    let mut salt = js.salt;
+    let salt = js.salt;
 
     // Step 2 — BHK first-write (anti-pre-plant erase-and-reprovision).
     if done & DONE_BHK == 0 {
@@ -215,7 +215,6 @@ pub fn run(hw: &mut dyn FirstBootHw) -> Result<(), FirstBootFault> {
                     .map_err(|e| FirstBootFault::new(FirstBootStep::OptigaPbs, e))?;
                 hw.commit_salt(&s)
                     .map_err(|e| FirstBootFault::new(FirstBootStep::OptigaPbs, e))?;
-                salt = Some(s);
                 s
             }
         };
@@ -270,6 +269,7 @@ mod tests {
         scp03_calls: usize,
         admin_calls: usize,
         optiga_calls: usize,
+        optiga_salt_used: Option<[u8; 32]>,
     }
 
     impl FakeHw {
@@ -291,6 +291,7 @@ mod tests {
                 scp03_calls: 0,
                 admin_calls: 0,
                 optiga_calls: 0,
+                optiga_salt_used: None,
             }
         }
 
@@ -328,10 +329,17 @@ mod tests {
         }
         fn commit_salt(&mut self, salt: &[u8; 32]) -> Result<(), FirstBootError> {
             let recs = journal::encode_salt(salt);
-            for r in &recs {
-                self.append(r)?;
+            if !self
+                .journal()
+                .can_append(journal::SALT_COMPLETION_RESERVE_QWS)
+            {
+                return Err(FirstBootError::OptigaSaltPersistFailed);
             }
-            self.tick();
+            for r in &recs {
+                self.append(r)
+                    .map_err(|_| FirstBootError::OptigaSaltPersistFailed)?;
+                self.tick();
+            }
             Ok(())
         }
         fn otp_master_burned(&self) -> bool {
@@ -383,9 +391,10 @@ mod tests {
         }
         fn optiga_rotate_pbs(&mut self, salt: &[u8; 32]) -> Result<(), FirstBootError> {
             assert_eq!(self.journal_done() & DONE_OPTIGA_PBS, 0, "PBS re-run after commit");
-            // The salt handed to us MUST be the persisted one (deterministic
-            // final PBS across resumes).
-            assert_eq!(salt, &self.salt_source, "rotation used a non-persisted salt");
+            // The salt handed to us MUST be the currently committed journal
+            // value, including after a torn earlier attempt regenerated it.
+            assert_eq!(Some(*salt), self.journal().salt, "rotation used a non-persisted salt");
+            self.optiga_salt_used = Some(*salt);
             self.optiga_calls += 1;
             self.tick();
             if self.fail_on_step == Some(5) {
@@ -404,6 +413,26 @@ mod tests {
             && hw.se050_admin_final
             && hw.optiga_pbs_final
             && hw.journal().all_done()
+    }
+
+    fn prime_pre_salt(hw: &mut FakeHw, next_free: usize) {
+        assert!(next_free >= 3 && next_free <= PAGE_QWS);
+        for step in [STEP_BHK, STEP_SE050_KEYS, STEP_SE050_ADMIN] {
+            hw.append(&journal::encode_step(step)).unwrap();
+        }
+        let junk = [0xA5u8; QW];
+        while hw.journal().next_free < next_free {
+            hw.append(&junk).unwrap();
+        }
+        assert_eq!(hw.journal().next_free, next_free);
+    }
+
+    fn run_expect_powercut(hw: &mut FakeHw) {
+        let prev = panic::take_hook();
+        panic::set_hook(std::boxed::Box::new(|_| {}));
+        let res = panic::catch_unwind(AssertUnwindSafe(|| run(hw)));
+        panic::set_hook(prev);
+        assert!(res.is_err(), "configured power cut did not fire");
     }
 
     #[test]
@@ -540,5 +569,86 @@ mod tests {
                 assert_eq!(s, [0x9Cu8; 32], "cut@{cut}: salt changed across resume");
             }
         }
+    }
+
+    #[test]
+    fn torn_salt_data_is_orphaned_and_regenerated_before_use() {
+        for cut_after_qw in 1..=2 {
+            let mut hw = FakeHw::new();
+            prime_pre_salt(&mut hw, 3);
+            hw.salt_source = [0x11u8; 32];
+            // TRNG is tick 1; each completed salt QW is one further boundary.
+            hw.cut_at = Some(1 + cut_after_qw);
+            run_expect_powercut(&mut hw);
+            assert_eq!(hw.journal().salt, None);
+
+            hw.cut_at = None;
+            hw.salt_source = [0x22u8; 32];
+            assert_eq!(run(&mut hw), Ok(()));
+            assert_eq!(hw.journal().salt, Some([0x22u8; 32]));
+            assert_eq!(hw.optiga_salt_used, Some([0x22u8; 32]));
+        }
+    }
+
+    #[test]
+    fn committed_salt_header_is_reused_after_cut() {
+        let mut hw = FakeHw::new();
+        prime_pre_salt(&mut hw, 3);
+        hw.salt_source = [0x31u8; 32];
+        hw.cut_at = Some(4); // TRNG + QW1 + QW2 + committed header.
+        run_expect_powercut(&mut hw);
+        assert_eq!(hw.journal().salt, Some([0x31u8; 32]));
+
+        hw.cut_at = None;
+        hw.salt_source = [0x42u8; 32];
+        assert_eq!(run(&mut hw), Ok(()));
+        assert_eq!(hw.optiga_salt_used, Some([0x31u8; 32]));
+    }
+
+    #[test]
+    fn near_full_journal_refuses_salt_without_writing() {
+        let mut hw = FakeHw::new();
+        prime_pre_salt(&mut hw, PAGE_QWS - 2);
+        let before = hw.page.clone();
+
+        assert_eq!(
+            run(&mut hw),
+            Err(FirstBootFault::new(
+                FirstBootStep::OptigaPbs,
+                FirstBootError::OptigaSaltPersistFailed,
+            ))
+        );
+        assert_eq!(hw.page, before);
+        assert_eq!(hw.journal().salt, None);
+        assert_eq!(hw.optiga_calls, 0);
+    }
+
+    #[test]
+    fn repeated_torn_salt_attempts_exhaust_capacity_fail_closed() {
+        let mut hw = FakeHw::new();
+        prime_pre_salt(&mut hw, PAGE_QWS - 8);
+
+        // Four resets immediately after QW1 consume four orphan QWs. The
+        // five-QW completion reserve then refuses another attempt.
+        for attempt in 0..4u8 {
+            hw.salt_source = [0x50 + attempt; 32];
+            hw.cut_at = Some(hw.ops + 2); // TRNG, then salt QW1.
+            run_expect_powercut(&mut hw);
+            assert_eq!(hw.journal().salt, None);
+        }
+        assert_eq!(hw.journal().next_free, PAGE_QWS - 4);
+
+        hw.cut_at = None;
+        let before = hw.page.clone();
+        assert_eq!(
+            run(&mut hw),
+            Err(FirstBootFault::new(
+                FirstBootStep::OptigaPbs,
+                FirstBootError::OptigaSaltPersistFailed,
+            ))
+        );
+        assert_eq!(hw.page, before, "capacity refusal must not consume another QW");
+        assert_eq!(hw.optiga_calls, 0);
+        assert!(!hw.journal().all_done());
     }
 }

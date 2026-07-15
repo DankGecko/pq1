@@ -665,6 +665,16 @@ fn positive_legacy_otp_rollback_backend_blocks_production() {
 }
 
 #[test]
+fn positive_rdp2_self_lock_requires_explicit_production_mode() {
+    assert!(
+        NSC_MOD_SRC.contains(
+            "#[cfg(all(feature = \"rdp2-self-lock\", not(feature = \"mode-production\")))]"
+        ) && NSC_MOD_SRC.contains("RDP2_SELF_LOCK_REQUIRES_MODE_PRODUCTION"),
+        "the irreversible self-lock feature must fail compilation outside mode-production"
+    );
+}
+
+#[test]
 fn positive_ui_backend_mutually_exclusive_fences_present() {
     // Three pairwise compile_error! fences (semihosting × oled,
     // semihosting × noop, oled × noop). Count them.

@@ -14,6 +14,20 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 OUT_DIR="$SCRIPT_DIR"
+CHECK_ONLY=0
+
+case "${1:-}" in
+  "") ;;
+  --check)
+    CHECK_ONLY=1
+    OUT_DIR="$(mktemp -d)"
+    trap 'rm -rf "$OUT_DIR"' EXIT
+    ;;
+  *)
+    echo "usage: $0 [--check]" >&2
+    exit 2
+    ;;
+esac
 
 cd "$REPO_ROOT"
 
@@ -807,6 +821,30 @@ make_bundle_c
 make_bundle_d
 make_bundle_e
 make_bundle_f
+
+if (( CHECK_ONLY )); then
+  drift=0
+  for name in \
+    A-fault-injection.md \
+    B-key-management.md \
+    C-slhdsa-side-channel.md \
+    D-usb-hardening.md \
+    E-supply-chain.md \
+    F-trezor-safe-7-comparison.md
+  do
+    if ! cmp -s "$OUT_DIR/$name" "$SCRIPT_DIR/$name"; then
+      echo "research-bundle drift: $name" >&2
+      drift=1
+    fi
+  done
+  if (( drift )); then
+    echo "research bundles are stale; run $0" >&2
+    exit 1
+  fi
+  echo
+  echo "research bundles: in sync"
+  exit 0
+fi
 
 echo
 echo "Done. Upload any single bundle file to Claude web and paste nothing"

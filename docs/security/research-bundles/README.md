@@ -55,6 +55,12 @@ bash docs/security/research-bundles/build.sh
 
 This regenerates all six from the current tree.
 
+To verify the checked-in bundles without modifying them:
+
+```
+bash docs/security/research-bundles/build.sh --check
+```
+
 The builder requires Python 3 and `markdown-it-py` (Debian/Ubuntu package
 `python3-markdown-it`). The CommonMark parser is a fail-closed generation
 dependency: it proves that rebasing repository-root links does not alter code,

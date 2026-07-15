@@ -91,16 +91,23 @@ whole option-byte profile except RDP. First boot only self-locks RDP-2 and
 
 ---
 
-## Self-healing / power-loss
+## Bounded power-loss recovery
 
-The ceremony survives power loss at any point except the single unavoidable
-window during the RDP `OPTSTRT` flash commit (#36 (b) — keep it short, BOR on).
-Each step is idempotent and resumable; completion is recorded **commit-LAST**
-in the page-127 journal (log-structured, torn-write-safe, mirroring the
-page-123 idiom). On a resume boot the flow re-scans the journal, skips every
-completed step, and continues at the first incomplete one. Per-SE rotation is
-**two-phase**: the new keyset is confirmed live before the old one is
-considered dead (resume probes the FINAL keyset first, falls back to TRANSPORT).
+The candidate resumes ordinary resets between completed flash quad-word
+programs. Each step is idempotent; completion is recorded **commit-LAST** in
+the append-only page-127 journal. A reset after one or two complete salt-data
+QWs leaves them orphaned and the next attempt appends a new three-QW salt
+record. Before starting that record, firmware reserves room for it plus the
+two completion markers and otherwise fails closed without another write.
+
+This is a finite recovery budget, not an unlimited guarantee. Repeatedly timed
+interruptions or a flash defect can exhaust the 512-QW page and require RMA.
+The host matrix models cuts between completed QW programs; partial-program,
+retention, and the RDP `OPTSTRT` window remain silicon-validation gates. On a
+resume boot the flow re-scans the journal, skips every completed step, and
+continues at the first incomplete one. Per-SE rotation is **two-phase**: the
+new keyset is confirmed live before the old one is considered dead (resume
+probes the FINAL keyset first, then the TRANSPORT keyset).
 
 The user must know: **do not disconnect power during first-boot setup.** The
 screen says so. A resume shows "RECOVERING / DO NOT POWER OFF", not an error.
@@ -155,7 +162,7 @@ space `0x08xx–0x0Fxx` is disjoint from the factory ceremony's
 | OPTIGA PBS rotation | `secure/src/optiga/mod.rs` |
 | Boot wiring (Phase A/B, BHK gate, SL7) | `secure/src/main.rs` |
 | Feature + ship fences | `secure/Cargo.toml`, `secure/src/nsc/mod.rs` |
-| Compile-check CI target | `make build-rdp2-self-lock` |
+| Non-production anti-footgun check | `make build-rdp2-self-lock` (must reject the feature outside `mode-production`) |
 
 ## Silicon-validation runbook (MUST complete before any production run)
 

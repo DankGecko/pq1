@@ -1,19 +1,22 @@
 //! First-boot provisioning journal — pure page-127 codec (host-testable).
 //!
 //! Work-todo #36: the first field boot self-locks RDP-2 and rotates the SE
-//! pairing secrets off the factory transport keysets. That ceremony must
-//! survive power loss at any point, so each step's completion is recorded
-//! **commit-LAST** in a durable log on flash page 127 (KEY_PAGE — owned
-//! outright by this journal).
+//! pairing secrets off the factory transport keysets. The ceremony records
+//! each completed step so ordinary power loss between completed quad-word
+//! programs can resume safely. Recovery is bounded by the finite page: repeated
+//! interruptions or a flash fault can exhaust it and force fail-closed RMA.
+//! Completion is recorded **commit-LAST** in a durable log on flash page 127
+//! (KEY_PAGE — owned outright by this journal).
 //!
 //! The codec is log-structured and append-only, mirroring the page-123
 //! off-chain-counter idiom (`hw::flash` / `offchain_state`): 16-byte
 //! quad-word records, the log ends at the first all-`0xFF` QW, and any QW
 //! that doesn't parse as a framed record is **skipped, not treated as the
 //! end** (a torn write leaves a non-blank-but-invalid QW mid-log). Because
-//! we only ever *append* (never rewrite a QW in place), a crash mid-write
-//! simply orphans a QW or two and the next boot re-appends — the same
-//! self-healing property `cmd_fw_commit` relies on.
+//! we only ever *append* (never rewrite a QW in place), complete QWs preceding
+//! a reset are orphaned and the next boot re-appends. Host tests model reset
+//! boundaries between completed QW programs; silicon partial-program behavior
+//! remains a production validation gate.
 //!
 //! Everything here is pure arithmetic over `&[u8]` + a `write_qw` closure,
 //! with no hardware dependency, so it is unit-tested on the host. The
@@ -31,6 +34,10 @@ use fw_manifest::crc32_ieee;
 pub const QW: usize = 16;
 /// Quad-words in the 8 KB page 127.
 pub const PAGE_QWS: usize = 512;
+/// Quad-words in one salt record: two data words followed by its commit header.
+pub const SALT_RECORD_QWS: usize = 3;
+/// Salt plus the OPTIGA-complete and whole-ceremony-complete step markers.
+pub const SALT_COMPLETION_RESERVE_QWS: usize = SALT_RECORD_QWS + 2;
 
 /// Record magic — "PF" (Pqsigner First-boot). Distinguishes a framed
 /// journal record from raw salt bytes / erased flash.
@@ -101,6 +108,14 @@ impl JournalState {
     pub fn is_blank(&self) -> bool {
         self.next_free == 0 && self.done == 0 && self.salt.is_none()
     }
+
+    /// Does the append frontier have room for `qws` complete records?
+    #[must_use]
+    pub fn can_append(&self, qws: usize) -> bool {
+        self.next_free
+            .checked_add(qws)
+            .is_some_and(|end| end <= PAGE_QWS)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -126,7 +141,7 @@ pub fn encode_step(step_id: u8) -> [u8; QW] {
 /// commit point — it carries `crc32(salt)` so a crash before the header
 /// leaves the two data QWs orphaned and the salt is regenerated next boot.
 #[must_use]
-pub fn encode_salt(salt: &[u8; 32]) -> [[u8; QW]; 3] {
+pub fn encode_salt(salt: &[u8; 32]) -> [[u8; QW]; SALT_RECORD_QWS] {
     let mut lo = [0u8; QW];
     let mut hi = [0u8; QW];
     lo.copy_from_slice(&salt[0..16]);
@@ -246,6 +261,19 @@ mod tests {
         assert_eq!(st.next_free, 0);
         assert_eq!(st.done, 0);
         assert_eq!(st.salt, None);
+    }
+
+    #[test]
+    fn append_capacity_is_checked_and_overflow_safe() {
+        let at = |next_free| JournalState {
+            done: 0,
+            salt: None,
+            next_free,
+        };
+        assert!(at(PAGE_QWS - SALT_RECORD_QWS).can_append(SALT_RECORD_QWS));
+        assert!(!at(PAGE_QWS - SALT_RECORD_QWS + 1).can_append(SALT_RECORD_QWS));
+        assert!(!at(PAGE_QWS).can_append(1));
+        assert!(!at(PAGE_QWS).can_append(usize::MAX));
     }
 
     #[test]

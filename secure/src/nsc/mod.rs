@@ -543,24 +543,30 @@ compile_error!(
 // (debug open) forever and keep the public transport keysets as its live
 // pairing secrets.
 //
-// DELIBERATELY keyed to `mode-production` ALONE — NOT the belt-and-braces
-// `all(stm32u585, not(debug_assertions))` form the S-2/S-3/tamp fences use.
-// The RDP=0xCC burn is IRREVERSIBLE, so it must fire only for an explicit
-// production-unit build, never for a dev/test RELEASE hardware build:
-// `make e2e-hw` / `play-hw-display` build `--release` (`not(debug_assertions)`)
-// WITHOUT `mode-production`, and forcing the self-lock onto them would brick
-// dev bench chips at their first boot. Same rationale + narrow trigger as the
-// S-1 `optiga-lock-operational` fence directly above.
+// Keyed to `mode-production` rather than `not(debug_assertions)`: release-mode
+// bench builds are not shipping images. The converse guard immediately below
+// also rejects `rdp2-self-lock` without `mode-production`, so the two features
+// are coupled and no bench/dev build can carry the irreversible path.
 #[cfg(all(feature = "mode-production", not(feature = "rdp2-self-lock")))]
 compile_error!(
     "Production builds require `rdp2-self-lock` (work-todo #36): the first field \
      boot self-locks RDP Level 2 and rotates the SE pairing secrets off the \
      factory transport keysets, before the seed wizard. Without it a shipped \
      unit stays at RDP-0 (debug port open) with the public transport keysets as \
-     its live SCP03/PBS/admin secrets. This fence is `mode-production`-only BY \
-     DESIGN: the RDP burn is irreversible and must never fire on dev/test \
-     release hardware (which would brick dev chips at first boot). Do NOT \
-     broaden the trigger."
+     its live SCP03/PBS/admin secrets. Release-mode bench builds remain outside \
+     `mode-production` and therefore cannot carry the self-lock feature."
+);
+
+// The converse is equally important: never produce a flashable image carrying
+// the irreversible self-lock path unless it is the explicit production
+// configuration. Compile-only coverage lives in the pure host model while the
+// production build remains quarantined by the independent rollback gate.
+#[cfg(all(feature = "rdp2-self-lock", not(feature = "mode-production")))]
+compile_error!(
+    "RDP2_SELF_LOCK_REQUIRES_MODE_PRODUCTION: `rdp2-self-lock` contains the \
+     irreversible RDP=0xCC and secure-element rotation path and must not compile \
+     into a bench/dev image. Use the pure first_boot host tests until the \
+     production rollback quarantine is closed."
 );
 
 // work-todo #36 anti-footgun: `rdp2-self-lock` must NEVER compile into a

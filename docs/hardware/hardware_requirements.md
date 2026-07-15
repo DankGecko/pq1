@@ -16,8 +16,8 @@
   - ARM Cortex-M33 with TrustZone (CMSE)
   - Hardware AES, SHA-256, PKA, SAES (with DHUK), TRNG accelerators
   - Secure boot target via TZEN and RDP level 2. Devices ship at RDP-0 for
-    owner verification; the still-unimplemented, owner-gated first-field
-    ceremony must self-lock RDP-2 before secrets are finalized.
+    owner verification; an implemented but unapproved secure-app early-boot
+    candidate self-locks RDP-2 before final credentials are established.
   - **SWD + NRST remain physically accessible after assembly** for that
     pre-first-power verification. RDP-2 disables debug in silicon after the
     reviewed self-lock; do not cut or hide the pads (see §Connectors & debug).
@@ -38,11 +38,11 @@ Entropy of the seed phrase is split across two independent secure elements to el
 - Shielded Connection (TLS-PRF + AES-128-CCM-8) for encrypted I2C
 - Authorization reference PIN protection (hardware-enforced access conditions),
   with the E120 LUC bound to F1D0 under `optiga-hw-counter`
-- Current bring-up/transport Platform Binding Secret — derived from the Tier-1
-  SAES-DHUK root via `hw::secret_keys::optiga_pairing_secret()`, **not** stored
-  in flash (post work-todo #24). It is not the production-final credential.
-  Fresh-TRNG rotation, durable public salt/state, cut recovery, and E140
-  actor/order remain OPEN production blockers (work-todo #36).
+- Candidate transport Platform Binding Secret — derived from the
+  factory-burned per-device OTP master. The candidate final PBS derives from
+  Tier-1 SAES-DHUK plus a non-secret fresh TRNG salt persisted in the page-127
+  journal; no PBS is stored in page 126. Handoff/recovery, E140 actor/order,
+  silicon evidence, and production approval remain OPEN (work-todo #36).
 - **Independent reset line** (see §Power, brownout & reset)
 
 ### NXP SE050
@@ -51,11 +51,11 @@ Entropy of the seed phrase is split across two independent secure elements to el
 - Common Criteria EAL6+ certified
 - T=1' over I2C at address 0x48; SCP03 secure channel (AES-CMAC + AES-CBC)
 - UserID PIN authentication; admin UserID (`max_attempts=0`) for crash-safe
-  factory reset. The current transport helper
-  `hw::secret_keys::se050_admin_pin()` uses the BHK axis; DHUK is a fallback
-  and OTP-shaped roots are explicit dev/legacy configurations. This does not
-  settle the production-final fresh-TRNG credential rotation or its durable
-  state and power-cut recovery, which remain OPEN under work-todo #36.
+  factory reset. Factory transport SCP03/admin credentials derive from the
+  per-device OTP master. The candidate final credentials derive from the
+  unsalted BHK through `hw::secret_keys`; direct DHUK/BHK helpers remain bench
+  configurations. Handoff/recovery, silicon evidence, and production approval
+  remain OPEN under work-todo #36.
 - **Independent reset line** so a fault on the SE050 cannot wedge the OPTIGA
   (and vice-versa) — see §Power, brownout & reset
 - **Production layout review item:** the two SEs share I2C1 today; evaluate
@@ -184,12 +184,12 @@ hand-off):
   — especially OPTIGA Trust M V3 and SE050. A stockout that forces a vendor
   swap would break pinned attestation / the baked-in CC certs and the
   per-device pairing model
-- Current per-device transport secrets (SE050 SCP03 helpers, OPTIGA PBS, UID
-  PIN helpers) are derived on-device via `hw::secret_keys`; they are **not**
-  programmed at the PCB fab. The production-final credentials require the
-  still-OPEN fresh-TRNG rotation, durable public state, cut recovery, and
-  coordinated E140/SE050 order in the owner-gated first-field ceremony
-  (`README.md` §B, work-todo #36).
+- The factory burns one per-device OTP master and provisions transport
+  SCP03/admin/PBS credentials derived from it; these are not final device
+  credentials. Secure-app early boot derives final SE050 credentials from the
+  post-lock BHK and final OPTIGA PBS from DHUK plus the page-127 salt. The
+  authenticated handoff, cut recovery, E140/SE050 order, silicon evidence, and
+  production approval remain OPEN (`README.md` §B, work-todo #36).
 
 ## Explicitly *not* on the board
 
@@ -215,10 +215,10 @@ hardware features above actually do something:
   on the bring-up branch (probe-rs glitches false-trigger ITAMP9); production
   must escalate. See `docs/production-todo.md` "TAMP escalation" and
   `README.md` Phase-3 step 6.
-- **BHK first write/load** belongs only inside the future reviewed,
-  owner-gated first-field RDP2 self-lock ceremony. Do not run it from a generic
-  boot or factory flow. The exact fresh-TRNG final credential derivation,
-  durable state, cut recovery, and E140/SE050 ordering must be frozen first.
+- **BHK first write/load** exists only inside the `rdp2-self-lock` candidate,
+  which is valid only with `mode-production`; do not run it from a generic,
+  bench, or factory flow. The authenticated handoff, cut recovery,
+  E140/SE050 ordering, silicon evidence, and production approval remain open.
   See `docs/work-todo.md §7/#36` and `secure/src/hw/bhk.rs`.
 
 ## Cross-reference: feature → requirement → enforced/implemented → status
@@ -228,7 +228,7 @@ Legend: ✅ done / works · 🟡 partial (firmware present, board step pending o
 | PCB feature | Required by | Enforced / implemented in | Status |
 |---|---|---|---|
 | STM32U585 (M33+TZ, AES/SHA/PKA/SAES/TRNG) | this doc, README §A | whole secure world; `secure/src/hw/*` | ✅ runs on dev board |
-| RDP-2 / TZEN; SWD + NRST pads accessible (ship RDP-0, first-boot self-lock — work-todo #36) | README §A, `docs/security/HARDENING.md` | shipped option-byte profile + FSBL first-boot RDP-2 self-lock; board layout | ⏳ board not started; self-lock ceremony validation is a sacrificial-unit step |
+| RDP-2 / TZEN; SWD + NRST pads accessible (ship RDP-0, first-boot self-lock — work-todo #36) | README §A, `docs/security/HARDENING.md` | shipped option-byte profile + secure-app early-boot `rdp2-self-lock` candidate; board layout | ⏳ board not started; candidate is production-only and unapproved; self-lock ceremony validation is a sacrificial-unit step |
 | OPTIGA Trust M V3 @ I2C 0x30 + Shielded Conn | this doc | `secure/src/optiga/*` | ✅ validated on shield |
 | SE050 @ I2C 0x48 + SCP03 + UserID PIN | this doc | `secure/src/se050/*` | ✅ validated on ARD board |
 | SE050 on a separate I²C peripheral | README §A | — (layout decision) | ⏳ open layout review item |

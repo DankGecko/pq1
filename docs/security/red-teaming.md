@@ -253,8 +253,10 @@ bytes. **This directly retires S-5.**
 
 ### 5.2 OPTIGA Shielded Connection confidentiality
 
-**Property.** TLS-PRF + AES-128-CCM-8 over IFX I²C; PBS DHUK-derived at boot
-(flash page 126 is the wrapped SE050 BHK, not PBS storage); application payloads
+**Property.** TLS-PRF + AES-128-CCM-8 over IFX I²C. The factory transport PBS
+derives from the per-device OTP master; the candidate final PBS derives from
+DHUK plus a non-secret TRNG salt persisted in the page-127 journal. Flash page
+126 is the wrapped SE050 BHK, not PBS storage; application payloads
 (half_O at F1D1, PIN-related OIDs) encrypted on I²C1. `secure/src/optiga/{shield,apdu,ifx_i2c}.rs`.
 
 **Test (LA on I²C1).** Capture `establish()` + first encrypted GetDataObject. Confirm handshake
@@ -357,24 +359,27 @@ keep the admin-delete (DoS-wipe) path. `secure/src/se050/mod.rs`, `docs/secure-e
 ### 5.6 Factory SCP03 / pairing secrets are device-unique
 
 **Property.** The published NXP AN12436 / Infineon sample keys must never be a
-production credential. The current `se050-derived-scp03` and DHUK/BHK helpers
-close that fallback only for bring-up transport. Production additionally
-requires the still-open fresh-TRNG final per-device OPTIGA/SE050 rotation,
-crash-safe durable public salt/state, recovery after every cut point, and a
-reviewed E140 ordering; deterministic device uniqueness alone is not a pass.
+production credential. The implemented first-field candidate uses
+OTP-master-derived factory transport credentials, then rotates SE050 to
+unsalted BHK-rooted final SCP03/admin credentials and OPTIGA to a DHUK +
+persisted-TRNG-salt final PBS. Production additionally requires authenticated
+handoff, recovery after every cut point, a reviewed E140 ordering, silicon
+evidence, and explicit approval; deterministic device uniqueness alone is not
+a pass.
 
 **Test.** First confirm `se050-scp03-allow-factory-fallback` is fenced out and
 that neither tunnel accepts published/sample credentials. After the final
-protocol is implemented, cut power at every durable-state and chip-update
+candidate is authorized for silicon validation, cut power at every durable-state and chip-update
 boundary, prove recovery never re-enables transport keys, and confirm two units
-receive distinct fresh-random final credentials while retaining only the
-public recovery state needed to reconstruct them. Exercise the reviewed E140
+receive distinct final credentials while retaining only the non-secret
+recovery state needed to reconstruct them. Exercise the reviewed E140
 order on sacrificial silicon.
 
-**Pass.** Fresh-random final credentials are per-device and non-public; every
-power cut recovers or fails closed without restoring transport credentials;
-both tunnels reconnect after a clean ceremony; the reviewed lifecycle order
-holds on silicon. Until then HIGH-1 remains open.
+**Pass.** Final credentials are per-device and non-public: SE050 is rooted in
+the post-lock BHK, while OPTIGA is rooted in per-die DHUK plus the persisted
+fresh salt. Every power cut recovers or fails closed without restoring
+transport credentials; both tunnels reconnect after a clean ceremony; the
+reviewed lifecycle order holds on silicon. Until then HIGH-1 remains open.
 
 ---
 

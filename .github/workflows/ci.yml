@@ -27,22 +27,10 @@ name: CI
 on:
   push:
     branches: [master]
-    # Skip CI when a push touches ONLY docs / proofs / formal-models — none of
-    # these feed any CI job (the verify-bytecode + kontrol gates are local-only,
-    # and contracts/verification/** is never compiled by the `contracts` job,
-    # which builds contracts/smart-wallet). A push that ALSO changes any other
-    # file still runs the full suite. Conserves private-repo Actions minutes.
-    paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
-      - '**/*.lean'
-      - 'contracts/verification/**'
-  pull_request:
-    paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
-      - '**/*.lean'
-      - 'contracts/verification/**'
+  # Documentation is executable review input: research bundles are generated
+  # from Markdown and are drift-checked by `check-codegen`. Do not add a
+  # docs-only path exclusion without a separate always-on bundle-drift job.
+  pull_request: {}
 
 permissions:
   contents: read
@@ -204,6 +192,10 @@ jobs:
       # until 2026-07-02.
       - name: proto -> Solidity constants in-sync (PqsignerProto.sol drift)
         run: make check-solidity-constants
+      - name: security research bundles in-sync (drift gate)
+        run: |
+          python3 -m pip install --quiet markdown-it-py==3.0.0
+          make check-research-bundles
       - name: ERC-7730 dbgen tests (policy/includes + round-trip)
         run: cargo test --locked -p dbgen --tests
       # A3.1 independent-source KAT leg (work-todo #7): the EXISTING Rust verifier

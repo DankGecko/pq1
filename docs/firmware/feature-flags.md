@@ -41,8 +41,9 @@ first-write — and anything derived from it, including the final admin UserID
 and SCP03 PUT KEY ceremony — must happen *at RDP ≥ 1*. Under work-todo #36, the
 factory retains SE-internal irreversible provisioning and lockdown on transport
 keysets, including OPTIGA S-1/S-2/S-3 and lifecycle ratchets. First field boot
-is limited to `RDP → 2`, the BHK first-write, TRNG-salted OPTIGA PBS and SE050
-SCP03 rotation, then the seed wizard. The authenticated per-unit handoff must
+is limited to `RDP → 2`, the BHK first-write, unsalted BHK-rooted SE050
+SCP03/admin rotation, DHUK + page-127-TRNG-salt OPTIGA PBS rotation, then the
+seed wizard. The authenticated per-unit handoff must
 prove the transport credentials work **before** any rotation; resume must
 distinguish old/new credentials and KVN before committing completion. Those
 contracts, the exact E140 lifecycle-versus-field-rotation ordering, and silicon
@@ -54,14 +55,17 @@ device-side first-boot flow above: Phase A (verify ship option bytes + blank
 per-device pages → program RDP=0xCC → reset) and Phase B (journaled, resumable
 BHK first-write + transport→final rotation of SE050 SCP03/admin + OPTIGA PBS),
 in `secure/src/first_boot/`. `rdp2-self-lock = ["bhk"]` (so it pulls `bhk` →
-`saes-dhuk` → `stm32u585`). It is **forced ON for `mode-production` only** (the
-RDP burn is irreversible — the `nsc/mod.rs` fence uses the narrow S-1-style
-trigger, not the belt-and-braces one) and is **incompatible** with every
+`saes-dhuk` → `stm32u585`). The fence is **bidirectional**: `mode-production`
+requires `rdp2-self-lock`, and `rdp2-self-lock` is rejected unless
+`mode-production` is also enabled. This prevents any bench/bring-up image from
+arming the irreversible RDP burn. It is also **incompatible** with every
 dev/test feature (`e2e-test`, `dev-testkey`, `mock-se`,
 `otp-hardcoded-master-key`, `bhk-hardcoded-master-key`, `factory-provisioning`)
-and **requires `dual-se`**. Absent from every current bench/
-QEMU build; behaviour with it OFF is byte-identical to before. Compile-check
-the feature-ON path with `make build-rdp2-self-lock`. Operator/field reference:
+and **requires `dual-se`**. Absent from every current bench/QEMU build;
+behaviour with it OFF is byte-identical to before. `make build-rdp2-self-lock`
+is a negative anti-footgun check: it deliberately tries a non-production
+feature-ON build and must observe `RDP2_SELF_LOCK_REQUIRES_MODE_PRODUCTION`.
+It does not compile a runnable self-lock image. Operator/field reference:
 `docs/provisioning/first-boot-provisioning.md`.
 
 ---
@@ -121,8 +125,8 @@ There's also a dedicated dual-feature `compile_error!` for `otp-hardcoded-master
 |---|---|---|
 | `make e2e-hw` | `e2e-test,stm32u585,otp-hardcoded-master-key,dual-se,…` | The full unified-sign e2e on real silicon. **Brick-proof** (all-constants config). Default for routine dev. |
 | `make dual-se-admin-wipe-e2e` | `dual-se-admin-wipe-e2e,stm32u585,ui-oled,debug-log,e2e-test,otp-hardcoded-master-key` | Admin-wipe roundtrip with the OTP-const root. **Brick-proof.** Self-heals the OPTIGA back to OTP-const PBS. |
-| `make dual-se-bhk-e2e` | `dual-se-admin-wipe-e2e,stm32u585,ui-oled,debug-log,e2e-test,saes-dhuk,bhk` | Current candidate transport-shape validation — admin PIN on silicon BHK + OPTIGA PBS on silicon DHUK. It does not exercise the still-open fresh-TRNG final rotation. Provisions+wipes in one boot, so no persistent brick — but **don't run on a board you're about to RDP-regress** if you've left a BHK-derived provisioning persistent. |
-| `make flash-hw-se050-rotate-scp03` | `se050-rotate-scp03,bhk,stm32u585,ui-oled,debug-log,e2e-test` | **IRREVERSIBLE.** One-shot deterministic GP PUT KEY evidence path, replacing SCP03 keyset 0x0B in place. Sacrificial bench/factory validation only; it is not the still-open fresh-TRNG production-final rotation and must not be used on a unit intended to ship. |
+| `make dual-se-bhk-e2e` | `dual-se-admin-wipe-e2e,stm32u585,ui-oled,debug-log,e2e-test,saes-dhuk,bhk` | Direct-root helper validation — admin PIN on silicon BHK + OPTIGA PBS on silicon DHUK. It does **not** exercise the journaled candidate's factory OTP transport credentials, page-127 salt, or transport→final recovery. Provisions+wipes in one boot, so no persistent brick — but **don't run on a board you're about to RDP-regress** if you've left a BHK-derived provisioning persistent. |
+| `make flash-hw-se050-rotate-scp03` | `se050-rotate-scp03,bhk,stm32u585,ui-oled,debug-log,e2e-test` | **IRREVERSIBLE.** One-shot deterministic GP PUT KEY evidence path, replacing SCP03 keyset 0x0B in place. Sacrificial bench validation only; it is not the journaled first-boot migration candidate and must not be used on a unit intended to ship. |
 | `make saes-self-test-hw[-rdp1]` | `saes-self-test,debug-log,ui-noop,e2e-test,mock-se[,uart-console]` | DHUK fingerprint check. **Brick-proof** (`mock-se` — no real SE I/O). Used for the per-die DHUK experiments. |
 | `make test-key-speed` | (bench profile) | DWT-timed signing bench, no semihosting reads → works on real silicon without the probe-rs `SYS_READC` hang (CLAUDE.md HW gotcha). |
 

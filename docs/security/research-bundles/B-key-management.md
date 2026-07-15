@@ -2082,7 +2082,9 @@ mod bank1_programming {
 /// unable to overwrite the persisted final-PBS salt.
 ///
 /// # Safety
-/// Same contract as [`write_quadword`]. Page 127 is never a valid target.
+/// The destination must be erased. The address is validated here as an
+/// aligned quad-word wholly inside bank-1 pages 0..=126; page 127 is never a
+/// valid target.
 pub unsafe fn write_quadword_verified(addr: u32, data: &[u8; 16]) -> Result<(), ()> {
     let addr = GenericSecureQwAddr::new(addr).ok_or(())?;
     // SAFETY: the validated capability excludes page 127, misalignment,
@@ -2198,7 +2200,7 @@ pub fn is_secure_page_blank(page: u32) -> bool {
 
 /// Append one 16-byte record to the page-127 provisioning journal at
 /// `qw_index` (0..512). Read-back-verified; ICACHE is invalidated by
-/// `write_quadword_verified`.
+/// the same raw bank-1 writer used by `write_quadword_verified`.
 ///
 /// # Safety
 /// Programs persistent flash in page 127 (KEY_PAGE — owned outright by the

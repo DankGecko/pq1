@@ -424,7 +424,7 @@ Pure-logic primitives live in standalone workspace crates so host signers / benc
 | `secure/src/hw/hash.rs` | STM32U585 HASH peripheral; `pqsigner_sha256_*` extern fns consumed by `sphincs-c10` under `hw-sha256`. Uses `mmio` for register access. |
 | `secure/src/hw/saes.rs` | SAES driver (AES-256-ECB) under `KEYSEL ∈ {Software, DHUK, BHK, DHUK^BHK}`. |
 | `secure/src/hw/saes_cmac.rs` | `cmac_dhuk(msg) -> tag` thin SAES adaptor. |
-| `secure/src/hw/secret_keys.rs` | Current per-purpose key API. OPTIGA uses the DHUK-rooted transport/final PBS paths (the first-boot final PBS also binds the persisted TRNG salt); SE050 final SCP03/admin credentials use the BHK path, with separate factory-transport credentials for the resumable first-boot rotation. Explicit dev/legacy configurations use hardcoded/OTP-master-shaped HKDF fallbacks. The first-boot implementation remains production-quarantined pending its named silicon and ordering gates. |
+| `secure/src/hw/secret_keys.rs` | Current per-purpose key API. Factory transport SCP03/admin/PBS credentials derive from the factory-burned per-device OTP master. The candidate final OPTIGA PBS derives from DHUK plus the persisted TRNG salt; final SE050 SCP03/admin credentials derive from BHK. Explicit dev/legacy configurations use hardcoded or deterministic fallback roots. The first-boot implementation remains production-quarantined pending its named handoff, recovery, silicon, and ordering gates. |
 | `secure/src/hw/otp.rs` | Rejected legacy unary rollback tally (bench-only, production-fenced) + device-master/factory legacy OTP regions. Draft 1.1 is a research candidate for the replacement typed floor API; its implementation, physical codec, ECC, interruption, and durability gates remain open. |
 | `secure/src/hw/huk.rs` | `derive_device_key(label) = HKDF(UID‖OTP_master, label)`. |
 | `secure/src/hw/flash.rs` | Bank-2 writes, ICACHE invalidate, `pin_attempts_{read,bump,reset}` on page 124, admin-page (125) wipe-flag. |
@@ -529,7 +529,7 @@ Document your trust boundaries, your list of secrets, and where each secret is a
 |---|---|---|
 | BIP-39 entropy / seed | SE050 at rest; U585 Secure SRAM briefly during signing | U585 flash, NS world, logs, debug output |
 | SPHINCS+ `SK.seed`, `SK.prf`, `PK.seed` | U585 Secure SRAM briefly during signing | Anywhere persistent on U585, NS world |
-| SCP03 static keys | Current bring-up transport keys are derived on demand from the BHK (DHUK fallback; OTP only in dev/legacy builds). The fresh-TRNG production-final rotation remains OPEN | Flash as a standalone key blob, NS world, logs, debug output |
+| SCP03 static keys | Factory transport keys derive from the factory-burned per-device OTP master. The candidate first-field flow replaces them with final keys derived from the BHK (no TRNG salt); production approval and recovery evidence remain OPEN | Flash as a standalone key blob, NS world, logs, debug output |
 | PIN (raw) | U585 Secure SRAM for microseconds during stretching | Anywhere else, ever |
 | Stretched PIN (AESKey credential) | U585 Secure SRAM for one SCP03 handshake | Persistent storage, NS world |
 | SE050 attestation root cert | U585 Secure flash (hardcoded in image) | N/A (public) |
@@ -581,14 +581,14 @@ On every boot, before trusting the SE050:
 
 ### 3.5 Provisioning
 
-- **Current lifecycle split (work-todo #36):** the factory installs and locks only per-device SE transport/attestation state, then ships at RDP-0 so the owner can verify flash and option bytes before first power. It does not install the final pairing secret, perform the BHK first write, create the wallet seed, or set RDP-2.
-- On first field boot, after pre-power verification, the FSBL self-locks RDP-2, performs the BHK first write, and then must run a final pairing rotation with fresh TRNG input before the seed wizard. A purely deterministic final rotation is forbidden because it is recoverable through an RDP round trip.
-- Current code only supplies deterministic DHUK-derived OPTIGA PBS and BHK-derived SE050 credentials. The durable non-secret salt/state owner, cut recovery, exact derivation, and E140 ratchet-versus-final-PBS ordering remain OPEN, owner-gated, and silicon-gated. This document does not select that construction or authorize an irreversible action; follow `docs/production-todo.md` and work-todo #36.
-- The current storage boundary is: deterministic OPTIGA PBS has no flash copy; flash page 126 holds only the wrapped BHK; SE050 SCP03/admin material is on the BHK axis. The final protocol must preserve the no-plaintext-secret boundary without inventing an HUK-wrapped SCP03/PBS blob, but may require reviewed durable public salt/state elsewhere.
+- **Current lifecycle split (work-todo #36):** the factory burns the per-device OTP master and uses it to install the device's transport SCP03/admin/PBS credentials plus the required SE structure, policy, and attestation state. It then ships at RDP-0 so the owner can verify flash and option bytes before first power. It does not install the final pairing credentials, perform the BHK first write, create the wallet seed, or set RDP-2.
+- On first field boot, after pre-power verification, the **secure app early-boot** candidate self-locks RDP-2 and performs the BHK first write. It then replaces SE050 transport credentials with unsalted BHK-derived final SCP03/admin credentials and replaces the OPTIGA transport PBS with a final value derived from the per-die DHUK plus a fresh TRNG salt persisted in the page-127 journal, before the seed wizard. The FSBL only authenticates and hands off the selected slot.
+- That candidate is implemented behind `rdp2-self-lock`, but the authenticated handoff, authenticate-before-rotate rule, old/new/KVN recovery proof, exact E140 ordering, silicon receipts, and production approval remain OPEN. This document does not authorize an irreversible action; follow `docs/production-todo.md` and work-todo #36.
+- The storage boundary is: flash page 126 holds only the DHUK-wrapped BHK; page 127 owns the first-boot journal and non-secret OPTIGA salt; final SE050 SCP03/admin material derives from the BHK and has no standalone flash key blob.
 - Create the PIN-auth and seed objects only during the reviewed first-field ceremony after the final secure-channel rotation.
 - Pin the SE050 unique ID to U585 Secure flash.
 - Apply SE050 transport lock if applicable to your variant.
-- U585 RDP Level 2 is the final MCU option-byte lockdown step before the final pairing rotation and seed wizard. **Irreversible; per work-todo #36 it is self-programmed by the FSBL on first field boot, not burned at the factory: devices ship at RDP-0 so users can verify flash, option bytes, and OTP over SWD before first power.**
+- U585 RDP Level 2 is the final MCU option-byte lockdown step before the final pairing rotation and seed wizard. **Irreversible; per work-todo #36 the candidate programs it from secure-app early boot on first field boot, not at the factory: devices ship at RDP-0 so users can verify flash, option bytes, and OTP over SWD before first power.**
 - Consider NXP EdgeLock 2GO if you need to provision at volume.
 - Provisioning must run in a clean-room environment. A compromised provisioning station compromises every device that passes through it.
 
@@ -606,17 +606,17 @@ On every boot, before trusting the SE050:
 
 ### 4.2 Debug & Readout Protection
 
-- **RDP Level 2** in production. Irreversible. Self-programmed by the FSBL on the first field boot — devices ship at RDP-0 for pre-first-power user verification (work-todo #36).
+- **RDP Level 2** in production. Irreversible. The current candidate self-programs it from secure-app early boot on first field boot — devices ship at RDP-0 for pre-first-power user verification (work-todo #36).
 - Debug ports (SWD, JTAG) disabled by RDP-2.
 - Boot from internal flash only. Disable bootloader access in option bytes.
 - Verify the RDP level in boot code; refuse to run if debug build flags are set in a production image.
 
 ### 4.3 At-Rest Key Protection
 
-- Current bring-up OPTIGA PBS is deterministically derived from the STM32U585 DHUK at boot and is never stored in flash; this is not yet the production-final salted protocol.
-- Flash page 126 stores only the BHK wrapped under the per-die DHUK; final SE050 SCP03/admin material derives on the BHK axis.
+- The candidate's factory transport PBS derives from the factory-burned per-device OTP master; its final OPTIGA PBS derives from the per-die DHUK plus the non-secret TRNG salt persisted in page 127. Legacy bench builds may still use deterministic DHUK or development roots.
+- Flash page 126 stores only the BHK wrapped under the per-die DHUK; final SE050 SCP03/admin material derives from that BHK without the OPTIGA salt.
 - A flash dump transplanted to another U585 must be useless.
-- The final derivation, durable public salt/state, first-field recovery, and E140 ordering remain OPEN until the owner-approved silicon and lifecycle gates close.
+- The candidate derivations are implemented, but first-field handoff/recovery, E140 ordering, silicon evidence, and production approval remain OPEN.
 
 ### 4.4 Hardware Peripherals to Use
 
@@ -963,8 +963,9 @@ items are marked in place; current authority lives in `docs/STATUS.md` and
 3. **NXP SE050 SCP03 keys must not remain the published factory
    defaults.** The factory installs only per-device transport keysets and
    ships at RDP0. After owner verification, the first-field ceremony
-   self-locks RDP2, performs the BHK first write, and rotates to the final
-   fresh-TRNG-salted keyset before the seed wizard. The exact E140
+   self-locks RDP2 and performs the BHK first write. The implemented candidate
+   then rotates SE050 to unsalted BHK-rooted final SCP03/admin credentials and
+   OPTIGA to a DHUK + page-127-TRNG-salt final PBS before the seed wizard. The exact E140
    ratchet-versus-final-rotation ordering remains OPEN and owner/silicon
    gated. *Source: bundle B and work-todo #36.*
 
@@ -985,11 +986,12 @@ items are marked in place; current authority lives in `docs/STATUS.md` and
    `measured_boot::firmware_hash()` and bricked pairing after an update.**
    The bench failure remains valid historical evidence (§1 of
    `docs/secure-elements/optiga-brick-postmortem.md`), but the intermediate
-   OTP-master proposal is not current production architecture. Current code
-   derives bring-up PBS deterministically from DHUK with no flash copy; page
-   126 belongs only to the wrapped BHK. The production-final fresh-salted
-   rotation protocol and its durable public state remain OPEN under work-todo
-   #36. See the current-state override in §2.6. *Source: bench failure,
+   proposal to use the OTP master as the final PBS root is not current
+   production architecture. The factory-burned OTP master is transport-only;
+   the candidate final PBS derives from DHUK plus a page-127-persisted TRNG
+   salt, with no secret PBS flash copy. Page 126 belongs only to the wrapped
+   BHK. Handoff, recovery, ordering, silicon evidence, and production approval
+   remain OPEN under work-todo #36. See the current-state override in §2.6. *Source: bench failure,
    2026-04-17; later lifecycle corrections.*
 
 ## 2. Per-topic summary
@@ -1046,12 +1048,14 @@ authority.
 > research input, but **stage 2 now executes ON-DEVICE at first field boot,
 > not on the factory fixture**: devices ship at RDP-0 (batch-uniform image,
 > user-verifiable over SWD via connect-under-reset before first power); the
-> FSBL self-locks to RDP-2, and only then — with the per-die DHUK final —
-> does firmware do the BHK first-write and rotate SCP03/PBS **with fresh TRNG
-> salt** off the factory-installed *transport* keysets (pure deterministic
-> DHUK derivation is forbidden — see #36's RDP-1-roundtrip attack). Step 10
-> ("Burn RDP Level 2") is no longer a fixture action, and the stage-1
-> FMK-derived SCP03 keys are demoted to transport keysets.
+> secure-app early boot self-locks to RDP-2, and only then — with the per-die
+> DHUK final — does firmware do the BHK first-write, rotate SE050 SCP03/admin
+> to unsalted BHK-rooted final credentials, and rotate OPTIGA PBS to DHUK plus
+> a page-127-persisted fresh TRNG salt off the factory-installed
+> OTP-master-derived *transport* credentials. Step 10
+> ("Burn RDP Level 2") is no longer a fixture action. The historical stage-1
+> FMK proposal is superseded; the candidate factory transport credentials all
+> derive from the factory-burned per-device OTP master.
 
 **Historical factory provisioning proposal — superseded by the current
 transport-to-first-field lifecycle above:**
@@ -1396,11 +1400,13 @@ change to work-todo #20 scope.
 
 > **Current-state override (2026-07-14).** This section preserves the
 > historical failure analysis and staged proposal; it is not the current page
-> map or an implementation plan. OPTIGA PBS is now DHUK-derived at boot and has
-> no flash copy. Bank-1 page 126 is exclusively the DHUK-wrapped SE050 BHK when
-> `bhk` is enabled, and no persistent firmware-update failure counter remains.
-> The OTP-master route below is legacy/rejected for production. Current
-> lifecycle and rollback authority stays with `docs/production-todo.md`,
+> map or an implementation plan. The factory-burned OTP master derives only
+> transport credentials. The candidate final OPTIGA PBS derives from DHUK plus
+> the page-127-persisted TRNG salt and has no secret flash copy. Bank-1 page 126
+> is exclusively the DHUK-wrapped SE050 BHK when `bhk` is enabled, and no
+> persistent firmware-update failure counter remains. The historical route
+> below that reused the OTP master as a final root is rejected for production.
+> Current lifecycle and rollback authority stays with `docs/production-todo.md`,
 > `docs/STATUS.md`, and the production-fenced rollback architecture record.
 
 **Threat context.** The OPTIGA Trust M pairing-secret flow that landed

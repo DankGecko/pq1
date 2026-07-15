@@ -406,9 +406,12 @@ blockers above stand; these refine accuracy + add residuals.
 
 ### STM32U585 — OTP + option-bytes commits
 
-> **2026-07-14 scope override — no executable ceremony.** The factory no
-> longer burns a legacy OTP master or performs an RDP0→1→2 transition. The
-> owner-selected product model ships a verifiable RDP-0 artifact. First field
+> **2026-07-15 scope override — no executable ceremony.** The factory does
+> not assign the old OTP master region to rollback, but the current candidate
+> does require the factory to burn one per-device OTP master solely for
+> temporary transport-credential derivation. The factory does not perform an
+> RDP0→1→2 transition; the owner-selected product model ships a verifiable
+> RDP-0 artifact. First field
 > boot reserves only the MCU RDP-2 self-lock, BHK first-write, BHK-rooted SE050
 > rotation, and persisted-TRNG-salted OPTIGA PBS rotation; OPTIGA S-1/S-2/S-3 lockdown and lifecycle responsibility
 > remain factory-side. The exact E140 ratchet-versus-field-rotation sequence is
@@ -419,17 +422,17 @@ blockers above stand; these refine accuracy + add residuals.
 
 #### Production items
 
-- [x] **Do not assign the legacy OTP master to the anti-rollback floor.**
-      The current first-boot candidate uses the existing per-device OTP master
-      only for factory transport-key derivation, while final OPTIGA PBS binds
-      fresh TRNG and SE050 final credentials use the BHK. This does not close
-      the still-open factory handoff/recovery/E140/silicon gates. The legacy
-      32-byte region at
-      `0x0BFA_0080..0x0BFA_00A0` on first secure-world boot of a blank
-      MCU is a dev/legacy fallback and should remain blank unless a separately
-      reviewed future consumer assigns it. `otp-hardcoded-master-key` remains
-      never-ship. The text below records historical bring-up evidence; it is
-      not a production burn ceremony.
+- [x] **Keep the transport OTP master separate from anti-rollback.**
+      The current first-boot candidate requires the factory to burn the
+      per-device OTP master and derives all temporary factory transport
+      SCP03/admin/PBS credentials from it. First field boot rejects a blank
+      master and never burns it. The value is neither the rollback floor nor a
+      final pairing root: final OPTIGA PBS uses DHUK + page-127-persisted TRNG
+      salt, and final SE050 credentials use the unsalted BHK. The exact OTP
+      allocation/burn receipt and factory authorization remain unapproved,
+      alongside the handoff/recovery/E140/silicon gates.
+      `otp-hardcoded-master-key` remains never-ship. The text below records
+      historical bring-up evidence; it is not a production burn ceremony.
 
       **Historical bring-up receipt (not a current shipping step).** Not every STM32U585 with clean
       option bytes accepts user-OTP writes. On one B-U585I-IOT02A
@@ -525,7 +528,8 @@ blockers above stand; these refine accuracy + add residuals.
       re-paired via the normal first-boot provisioning path. Document
       this in the refurbishment / RMA flow. (Post-#36 the first-boot
       self-lock sequence is: verify option bytes + slots → RDP=0xCC →
-      reset → BHK first-write → TRNG-salted SCP03/PBS rotation → wizard.)
+      reset → BHK first-write → unsalted BHK-rooted SE050 rotation +
+      DHUK/page-127-salted OPTIGA PBS rotation → wizard.)
 - [ ] **WRP over the final approved FSBL range in both physical banks.** The
       current pages-0..3 linker range is legacy bench-only; Draft 1.1 proposes
       pages 0..4 but keeps geometry, resource, option-byte, factory, and silicon
@@ -887,8 +891,9 @@ The SE050 half of the dual-SE also has irreversible steps (per
       **Post-#36 the same constraint is satisfied on-device instead:
       first field boot self-locks RDP → 2 (the DHUK's one and only
       transition, straight to its final per-die value) → BHK
-      first-write → PUT KEY rotation off the factory transport keyset,
-      mixed with fresh TRNG salt. The fixture never steps RDP at all.**
+      first-write → unsalted BHK-rooted PUT KEY rotation off the factory
+      transport keyset. The separate OPTIGA final PBS uses DHUK plus the
+      page-127-persisted fresh TRNG salt. The fixture never steps RDP at all.**
 
       **Failure modes after commit:**
       - Lose the BHK → cannot re-establish SCP03 → hard brick, same

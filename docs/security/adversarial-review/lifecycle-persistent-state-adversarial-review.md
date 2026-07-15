@@ -9,12 +9,17 @@ OPTIGA and SE050 objects, not merely whether each local driver works.
 
 > **Current state (2026-07-14).** The adopted design ships at RDP0 so a user can
 > inspect the device, then self-locks to RDP2 on first field boot before the
-> BHK first-write and TRNG-salted OPTIGA/SE050 key rotation. That flow is
+> BHK first-write. Factory transport SCP03/admin/PBS credentials derive from
+> the factory-burned per-device OTP master. The candidate then rotates SE050
+> to unsalted BHK-rooted final credentials and OPTIGA to a DHUK + page-127-
+> persisted-TRNG-salt final PBS. That flow is
 > tracked by `docs/work-todo.md` item 36 and has an **implemented candidate
 > behind `rdp2-self-lock`, but is not production-approved or authorized for
 > execution**. Authenticated per-unit handoff must prove transport credentials
 > before rotation, and resume must distinguish old/new credentials and KVN.
-> A review may compile it and run host-only simulations;
+> The feature is valid only with `mode-production`; the dedicated Make target
+> is a negative anti-footgun check, not a runnable self-lock build. A review
+> may run host-only simulations of the pure state machine;
 > this playbook does not authorize option-byte burns, key rotation, destructive
 > wipe, or RMA access.
 

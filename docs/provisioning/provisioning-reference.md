@@ -17,8 +17,10 @@
 > artifact after factory-side SE-internal provisioning and lockdown on
 > transport keysets, including S-1/S-2/S-3 metadata/object preparation,
 > UserID/LUC, attestation objects, and the eventual OPTIGA lifecycle ratchets.
-> First field boot is limited to the MCU RDP-2 self-lock, BHK first-write,
-> TRNG-salted SCP03/PBS rotation, and seed wizard. The exact E140 lifecycle
+> The factory also burns the per-device OTP master and derives every transport
+> credential from it. First field boot is limited to the MCU RDP-2 self-lock,
+> BHK first-write, unsalted BHK-rooted SE050 rotation, DHUK + persisted-TRNG-
+> salt OPTIGA PBS rotation, and seed wizard. The exact E140 lifecycle
 > timing relative to field rotation remains OPEN and silicon-gated. This does
 > **not** establish that M-1..M-7/M-9 are a safe shipped profile, authorize an
 > RDP-2 self-lock, or validate the historical key-rotation order below. Exact
@@ -61,13 +63,14 @@ self-protection constraints, sources, and caveats.
 - **OPTIGA Trust M V3 & SE050 (dual, independently hardened to the same bar):**
   factory-side work must close the S-1/S-2/S-3 metadata, trust-anchor, counter,
   policy, and unused-feature surfaces, while SE050 uses full SCP03 security
-  level `P1=0x33`. Current bring-up transport material is DHUK-derived for the
-  OPTIGA PBS and BHK-derived for SE050; it is **not** the production-final
-  credential protocol. Owner decision #36 requires a fresh-TRNG final
-  per-device rotation after first-field RDP2 self-lock. Its exact derivation,
-  durable public state, cut recovery, KVN/update shape, coordinated chip order,
-  and E140 timing remain OPEN and production-blocking. No exact ratchet or PUT
-  KEY ordering in this research document is executable authority.
+  level `P1=0x33`. The candidate factory transport credentials all derive from
+  the factory-burned per-device OTP master. After first-field RDP2 self-lock,
+  the implemented candidate rotates SE050 SCP03/admin to unsalted BHK-rooted
+  final values and OPTIGA PBS to DHUK + persisted-page-127-TRNG-salt final
+  material. Authenticated handoff, cut recovery, KVN/update shape, coordinated
+  chip order, E140 timing, silicon evidence, and production approval remain
+  OPEN. No exact ratchet or PUT KEY ordering in this research document is
+  executable authority.
 - **Future ceremony constraint, not an instruction:** any replacement must stage
   and verify reversible state first, then order one-way transitions last. Exact
   steps, receipt semantics, and authorization remain OPEN; this research does
@@ -116,10 +119,10 @@ Delivered in RDP0 with no NVM protection (UM3387 §4.1). Each row: **Setting →
 | M-8 | RDP | `0xCC` (Level 2) | Kills JTAG/SWD, RAM/bootloader boot, locks option bytes **EXCEPT SWAP_BANK** (DS Table 4 note 6 — see SWAP_BANK ship-blocker in production-todo), no mass-erase-open; keeps WRP un-removable | UM3387 §4.2; RM0456 §3.10; DS Table 4 | **LAST** verification; sacrificial: JTAG dead + FSBL boots |
 | M-9 | OEM2 DA key (OBKeys) | Provision secret; no default; prefer no field regression | RDP2+OEM2 disables debug; default password = hole | AN6008; STM32U5 Sec Overview | DA challenge with default password → rejected |
 | M-10 | OEM1KEY / RDP0 regression | Absent (no path) or PQ1-secret one-way control | RDP1→0 mass-erases; close or gate; "reset in RDP0 only" | STM32U5 Sec Overview; AN4992 | Confirm state before raising RDP |
-| M-11 | BHK (current SE050 transport-helper root; final credential derivation OPEN) | Candidate boot path writes BHK into TAMP backup regs once at boot; `SAES_CR.KEYSEL=010` (BHK) / `100` (DHUK^BHK); **write-once, never SW-readable** — `TAMP_SECCFGR.BHKLOCK` makes it SAES-only until reset | Tier-isolation input for half_E; cleared on tamper / RDP-regression; not by itself production-final pairing closure | RM0456 §SAES; ES0499; production-security.md:479 | Verify via a SAES-CMAC(BHK) known check-value (NOT a register read-back — BHK is unreadable); confirm BHKLOCK set; separately close final-rotation state/recovery |
-| M-12 | DHUK (current OPTIGA transport-PBS helper root; final credential derivation OPEN) | Constant in Open; per-die closed-state behavior requires an approved lifecycle transition. The historical `RDP0→1` experiment is not the ceremony | Current hardware-root input; does not select the fresh-TRNG final construction | ST Community; RM0456 §SAES; Sensitive-key-protection wiki | On an authorized sacrificial part, confirm the DHUK-wrapped value changes across the selected transition; separately close final-rotation state/recovery |
+| M-11 | BHK (candidate final SE050 SCP03/admin root) | Candidate first-field path writes the TRNG-generated BHK into TAMP backup regs after the RDP2 transition; `SAES_CR.KEYSEL=010` (BHK) / `100` (DHUK^BHK); **write-once, never SW-readable** — `TAMP_SECCFGR.BHKLOCK` makes it SAES-only until reset | Unsalted final tier-isolation input for half_E; cleared on tamper / RDP-regression; transport credentials instead derive from the factory OTP master | RM0456 §SAES; ES0499; production-security.md:479 | Verify via a SAES-CMAC(BHK) known check-value (NOT a register read-back — BHK is unreadable); confirm BHKLOCK set; separately close final-rotation state/recovery |
+| M-12 | DHUK (candidate final OPTIGA-PBS root) | Constant in Open; per-die closed-state behavior requires an approved lifecycle transition. The final PBS additionally binds a non-secret TRNG salt persisted in the page-127 journal; the historical `RDP0→1` experiment is not the ceremony | Hardware-root input for the final OPTIGA PBS; factory transport PBS instead derives from the OTP master | ST Community; RM0456 §SAES; Sensitive-key-protection wiki | On an authorized sacrificial part, confirm the DHUK-wrapped value changes across the selected transition; separately close final-rotation state/recovery |
 | M-13 | OTP rollback backend | **OPEN — do not program or lock** | Draft 1.1 treats OTP as a candidate WORM epoch-floor backend; codec, interruption, allocation, factory, and silicon gates are unclosed | RM0456 §OTP; Draft 1.1 OPEN-OTP-1..3 | Owner-authorized sacrificial characterization only after a separately approved plan |
-| M-14 | TAMP + RNG | Internal tamper on; TRNG "config A"; tamper erases BHK | Protects BHK-wrapped SE050 transport; certified RNG | UM3387 §4.2.1; RM0456 §TAMP/RNG | Sacrificial tamper → BHK erase + reset; RNG health pass |
+| M-14 | TAMP + RNG | Internal tamper on; TRNG "config A"; tamper erases BHK | Protects the BHK-rooted final SE050 credentials; certified RNG | UM3387 §4.2.1; RM0456 §TAMP/RNG | Sacrificial tamper → BHK erase + reset; RNG health pass |
 | M-15 | FI software countermeasures | Redundancy / inverse-check, timing jitter, control-flow integrity around SPHINCS+ verify + the future complete option-byte self-check | Software half of closing RDP2-downgrade residual gap; not implemented as a complete FSBL verifier | UM3387 §4.2.1 | After implementation, Rainbow single-fault simulation of verify/lock path |
 
 **Residual-gap statement:** M-1…M-15 are a target hardening profile, not a
@@ -133,13 +136,13 @@ bench FSBL immutable.
 
 ---
 
-## Matrix 2 — Infineon OPTIGA Trust M V3 (half_O; current transport helper uses STM32 DHUK, final credential protocol OPEN)
+## Matrix 2 — Infineon OPTIGA Trust M V3 (half_O; OTP-master transport PBS, candidate salted-DHUK final PBS)
 
 Tags: RD/CHA/EXE/MUPD. Codes: `ALW=0x00`, `NEV=0xFF`, `LcsO(X)` (`E1 FC 07`="LcsO<operational"), `Conf(X)` (shielded), `Auto(X)` (auth-ref). LcsO ratchet TLV = `C0 01 07` (framed `20 03 C0 01 07`).
 
 | # | OID | Hardened value | Rationale | Source | Verify before LcsO burn |
 |---|---|---|---|---|---|
-| O-1 | 0xE140 PBS | Final 64-byte per-device PBS construction and ratchet order **OPEN**. The deterministic DHUK helper and any TRNG transport spike are sacrificial/bring-up mechanisms, not production-final credentials; the eventual object still requires `Read=NEV`, a reviewed `Change` policy, and an approved lifecycle ratchet | Roots shielded conn (AES-128-CCM8) protecting half_O; default PBS non-unique | SRM Shielded Conn §; Shielded-Connection-101 wiki; KBA235350 | Under the future approved protocol: verify metadata/lifecycle, unique-channel success, default-PBS failure, and crash recovery |
+| O-1 | 0xE140 PBS | The factory transport PBS derives from the per-device OTP master. The implemented candidate final PBS derives from per-die DHUK plus a non-secret TRNG salt persisted in page 127. Exact ratchet order, handoff/recovery, and production approval remain **OPEN**; the object still requires `Read=NEV`, a reviewed `Change` policy, and an approved lifecycle ratchet | Roots shielded conn (AES-128-CCM8) protecting half_O; default PBS non-unique | SRM Shielded Conn §; Shielded-Connection-101 wiki; KBA235350 | Under the future approved protocol: verify metadata/lifecycle, unique-channel success, transport-PBS rejection after completion, and crash recovery |
 | O-2 | 0xF1D0 AuthRef | Chip-unique; `Change=Conf(0xE140)&&Auto(0xF1D0)`, `Read=NEV`, AUTOREF; ratchet op | Default `Change=LcsO<op`,`Read=ALW`,untyped → creation-state rewritable (S-1) | V3 object dump; OPTIGA Config Guide | `trustm_metadata -r 0xF1D0`: `LcsO:0x07,R:NEV,C:Conf&&Auto`; unauthorized change → `0x8007` |
 | O-3 | 0xE0E0/0xE0F0 | On PRODUCTION parts `0xE0E0` is a **chip-unique Infineon device cert** (`Change=NEV`, leaf key sealed at `0xE0F0 Read=NEV`) — do NOT neutralize; it's an anti-counterfeit primitive. Just don't anchor *wallet* trust on it (wrong type: device-identity 0x12, not TA) | NOT "a public sample anyone can reproduce" — that's the engineering-sample *Test* cert; our eval shield (TRUSTMV3SHIELDTOBO1) may carry the test cert | Keys&Certificates v3.10; SRM Table 68 | Confirm whether our part carries the production chip-unique cert vs the eval test cert; never anchor wallet trust on E0E0 |
 | O-4 | 0xE0E1/E0E2/E0E3 device-cert surfaces | Preserve/verify `DataType=0x12`; ratchet op so `Change=LcsO<op` becomes unsatisfiable; never retype these slots as anchors | An unratcheted device-cert surface may be retyped on a variant that leaves it mutable; our observed E0E3 is already full and rejected the old sample-anchor write | Device dump; SRM Table 68; SKU/revision receipt still required | Read back type/lifecycle for each slot; post-ratchet metadata change refused |
@@ -154,7 +157,7 @@ Tags: RD/CHA/EXE/MUPD. Codes: `ALW=0x00`, `NEV=0xFF`, `LcsO(X)` (`E1 FC 07`="Lcs
 
 ---
 
-## Matrix 3 — NXP SE050 (half_E; current transport helper uses STM32 BHK, final credential protocol OPEN)
+## Matrix 3 — NXP SE050 (half_E; OTP-master transport credentials, candidate BHK-rooted finals)
 
 **Dev-board variant: EdgeLock SE050E2, OEF ID `0xA921`** (the OM-SE050ARD-E carries SE050E; NXP docs map SE050E2 → OEF 0xA921). Implications baked into the rows below: **CC EAL6+ to OS level (yes), FIPS 140-2 (NO — that's SE050F only), platform SCP03 forced by default (NO — SE050E defaults `SCP_NOT_REQUIRED`; we rely on per-object `REQUIRE_SM`).** ⚠️ **The PRODUCTION part is not yet selected** — the custom board is in early ID (2026-05); working assumption is the same SE050E2/`0xA921` as the dev board. The `GetVersion`/OEF boot assertion (work-todo) ENFORCES this (fail-closed on mismatch). **The one variant that would move this matrix is SE050F** (would add FIPS + force SCP03); any other SE050E-class OEF only changes the expected OEF value, not the security properties. Pin the variant requirement into the hardware spec during ID so it's locked, not discovered at bring-up.
 
@@ -162,7 +165,7 @@ Policies = per-object `POLICY_OBJ_ALLOW_*` bitmask; rule: deny all not needed; n
 
 | # | Setting | Hardened value | Rationale | Source | Verify before SCP03-rotation burn |
 |---|---|---|---|---|---|
-| S-A | Platform SCP03 keys | Factory defaults must be replaced. The current BHK-derived PUT KEY path is sacrificial transport evidence only; final fresh-TRNG derivation, KVN/update shape, actor handoff, ordering, and cut recovery are **OPEN** | Defaults published (AN12436 Table 6 + OP-TEE source); #1 ship-blocker | AN12436; foundries.io/u-boot | Under the future approved protocol: defaults fail, final keys succeed, interrupted rotation recovers or fails closed, and receipts bind the resulting state |
+| S-A | Platform SCP03 keys | Factory defaults must be replaced with OTP-master-derived transport keys. The implemented candidate rotates them to final unsalted BHK-derived keys; KVN/update shape, actor handoff, authenticate-before-rotate, ordering, cut recovery, silicon evidence, and production approval are **OPEN** | Defaults published (AN12436 Table 6 + OP-TEE source); #1 ship-blocker | AN12436; foundries.io/u-boot | Under the future approved protocol: defaults and transport keys fail after completion, final keys succeed, interrupted rotation recovers or fails closed, and receipts bind the resulting state |
 | S-B | SCP03 level (P1) | **`P1=0x33`** (C-MAC+C-DEC+R-MAC+R-ENC) (S-5) | Anything less leaves bus data exposed one/both directions | GlobalPlatform SCP03 Table 7-3; AN12413 | Sniff I²C: cmd+rsp ciphertext+MAC; refuse downgrade |
 | S-C | half_E object | Persistent Binary File, REQUIRE_SM, bound to the UserID AuthID (no anonymous/AuthID-0 grant). **READ + DELETE are present (SM-gated) and design-mandatory** (READ = seed reconstruction `mod.rs:2478`; DELETE = admin-wipe/S-6). **WRITE is present today but droppable** — drop it at provisioning (write-once policy; work-todo) so a PIN-session can't re-seed half_E. IMPORT_EXPORT N/A to a Binary File | Verifiable denials are IMPORT_EXPORT=False, ATTESTATION=False, no AuthID-0 grant — NOT R/D (those can never be False by design) | AN12413 Table 11, §3.7.1.1 | non-admin delete → `0x6985`; attested-read (S-G) confirms I-E/ATTESTATION=False (NOT R/D=False) |
 | S-D | UserID delete policy (S-6) | Delete bound to admin SCP03 AuthID only | UserID "only be deleted and created new" → delete-recreate resets lockout | NXP Community | Non-admin delete of UserID → fail |
@@ -181,8 +184,9 @@ Policies = per-object `POLICY_OBJ_ALLOW_*` bitmask; rule: deny all not needed; n
 The phase sequence below is a historical dependency hypothesis, not the
 selected ceremony. It coupled deterministic DHUK/BHK helpers and SE injection
 to an `RDP0→1` transition. Owner decision #36 instead targets a batch-uniform
-RDP-0 transport artifact, factory-side SE preparation on transport keysets,
-and a first-field RDP-2/BHK/fresh-TRNG final rotation. The actor handoff,
+RDP-0 transport artifact, a factory-burned OTP master and factory-side SE
+preparation on credentials derived from it, and a first-field RDP-2/BHK final
+SE050 rotation plus salted-DHUK OPTIGA rotation. The actor handoff,
 durable public state, cut recovery, KVN/update shape, chip order, and E140
 timing remain OPEN. No phase below authorizes an irreversible action or a
 production credential.
@@ -201,11 +205,11 @@ is not the current product direction and has no burn authority. The approved
 replacement must specify the first-field RDP-2/BHK transition, verification,
 failure state, and recovery boundary explicitly.
 
-**PHASE 3 — HISTORICAL DETERMINISTIC-TRANSPORT SPIKE.** The DHUK-derived PBS
+**PHASE 3 — HISTORICAL DETERMINISTIC-ROOT SPIKES.** Direct DHUK-derived PBS
 and BHK-derived SCP03 helpers are retained as sacrificial/bring-up evidence.
-They do not define final credentials. Factory transport preparation and the
-first-field fresh-TRNG final rotation require a separately frozen protocol and
-crash-consistent handoff.
+The current candidate instead uses the OTP master for factory transport,
+unsalted BHK for final SE050 credentials, and DHUK + page-127 salt for the
+final OPTIGA PBS. Crash-consistent handoff and production approval remain open.
 
 **PHASE 4 — REQUIREMENTS FOR A REPLACEMENT, NOT A RUNNABLE GATE.** A future
 approved plan must verify the complete MCU option-byte policy, OPTIGA metadata
@@ -271,9 +275,10 @@ stage→verify→burn-last sequence and acceptance thresholds.
 **Stage 4 — Ongoing:** Track Infineon/NXP/ST security advisories; re-run the verifier if any chip's certified config assumptions change. Subscribe to BSI/PSA maintenance updates for BSI-DSZ-CC-0961 and PSA cert 0632793519409-10300.
 
 **Secondary — candidate constraints for a later ceremony, not current claims:**
-(1) the factory must never learn final device credentials; current DHUK/BHK
-helpers are transport/sacrificial mechanisms only, while the fresh-TRNG final
-construction and durable public state remain OPEN; (2) any provisioning-admin
+(1) the factory must never learn final device credentials; it installs only
+OTP-master-derived transport credentials. The candidate final SE050 root is
+the post-lock BHK and the final OPTIGA root is DHUK plus page-127 salt, while
+handoff/recovery and production approval remain OPEN; (2) any provisioning-admin
 AuthID and Protected-Update anchor must stay under PQ1 custody rather than on a
 partner tool; (3) self-enforcement may be claimed only after RDP2, lifecycle,
 final rotation, recovery, and receipt gates all close; and (4) a future
