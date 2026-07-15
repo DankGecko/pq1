@@ -1,13 +1,10 @@
-//! Boot-state reader for the FSBL.
+//! Legacy bench boot-state reader for the FSBL.
 //!
 //! Mirrors the layout in `secure/src/hw/boot_state.rs`. FSBL reads
-//! only — it does not write the boot-state page. The secure firmware
-//! updates the page on successful commits and on first-post-update
-//! confirmations; FSBL's own tracking of "which slot was last tried"
-//! is also stored here, but **written by the secure firmware during
-//! commit**, not by FSBL itself. This keeps FSBL's flash-write path
-//! out of the way of the runtime's own flash hardening — FSBL stays
-//! as close to read-only as possible.
+//! only — it does not write the boot-state page. The legacy secure firmware's
+//! `CMD_FW_COMMIT` path is the only writer; no first-post-update confirmation
+//! writer exists. Consequently this module does not implement try-once
+//! production recovery and is production-fenced pending the replacement.
 
 use core::ptr::read_volatile;
 

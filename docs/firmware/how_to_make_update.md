@@ -2,11 +2,12 @@
 
 > **Do not use this legacy v0x02 procedure for production.** It documents the
 > current bring-up tooling, including an invalid bitwise OTP-capacity model.
-> Production is compile-blocked. The reviewed target is Draft 0.9 in
+> Production is compile-blocked. Draft 1.1 in
 > [`a-b-firmware-rollback-architecture.md`](../security/a-b-firmware-rollback-architecture.md):
-> ordinary releases are free within a security epoch, while only a security-
-> epoch revocation consumes complete fresh OTP quad-words through a codec that
-> remains hardware-gated and unimplemented.
+> is an unapproved research candidate, not an implementation target. It
+> proposes ordinary releases that are free within a security epoch, while only
+> a security-epoch revocation consumes complete fresh OTP quad-words through a
+> codec that remains software-, resource-, factory-, and silicon-gated.
 
 A practical recipe for the firmware maintainer. For the *why* + threat
 model see `docs/firmware/firmware-update.md`; this doc is the
@@ -14,7 +15,8 @@ copy-paste-and-go checklist.
 
 There is currently **no production copy-paste procedure**. `make release`,
 `make fsbl-release`, factory provisioning/rehearsal, and RDP2 authority fail
-closed until the reviewed backend and resource gates close. Commands retained
+closed until an exact architecture digest is approved and its backend and
+resource gates close. Commands retained
 below are useful only for inspecting the legacy bench format.
 
 ---
@@ -100,7 +102,7 @@ fw_version: u32, monotonic, strictly greater than the previously
 ```
 
 A device ships at version `1`, so the first legacy-format update would use a
-higher release version. In the reviewed design, skipping release versions does
+higher release version. In the Draft 1.1 candidate, skipping release versions does
 not itself consume multiple OTP records: `release_version` selects the newest
 artifact, while a separate monotonic `security_epoch` advances only when older
 signed releases must be revoked. Final epoch capacity depends on the still-open
@@ -143,8 +145,10 @@ cargo run --release -p fwsign -- sign \
 You'll be prompted for the vendor passphrase. The output is a single
 `release-v2.pqfw` file (~1.1 MB) containing the manifest + both image
 halves + metadata. **Legacy only:** one `.pqfw` installs into either slot
-because V1 does not sign the slot. Frozen manifest v4 binds `physical_slot`,
-so the production tool will emit separately signed A/B artifacts.
+because V1 does not sign the slot. The historical Draft-0.9 V4 model bound
+`physical_slot`; the unapproved Draft 1.1 candidate proposes V6 and separately
+signed A/B artifacts. No production manifest format or emitting tool is
+authorized yet.
 
 `--slot` stamps the unsigned `slot` metadata byte for traceability;
 it has no cryptographic effect. Pick A by convention.
@@ -182,7 +186,7 @@ looks like.
 6. User compares against your published words, long-presses right to
    confirm.
 7. Target design writes PENDING and resets; immutable FSBL arms ATTEMPTED.
-8. Restricted probation completes the reviewed health flow and physical
+8. Restricted probation completes the proposed health flow and physical
    finalization before CONFIRMED; a later FSBL boot establishes `E - 1`.
 
 This flow is not implemented yet. The legacy runtime-floor/try-once path does
@@ -257,7 +261,7 @@ make verify-repro RELEASE_FEATURES=...
   production release policy is still OPEN-REL-1. Do not rely on the legacy
   unary OTP floor: it is invalid on STM32U585 and compile-blocked. The target
   signer must enforce monotonic `release_version` plus security-relevant epoch
-  bumps against the reviewed release ledger.
+  bumps against the still-open release-ledger authority (`OPEN-REL-1`).
 - **Different build host → different ELFs.** Reproducibility depends
   on the pinned toolchain + the `--remap-path-prefix` flags. If
   you're signing from a laptop that isn't on `nightly-2026-04-06`,

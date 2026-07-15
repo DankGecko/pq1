@@ -20,7 +20,7 @@ fn main() {
     // programs of one ECC-protected OTP quad-word, which STM32U585 forbids.
     if is_thumbv && stm32u585 && mode_production {
         panic!(
-            "FW_ROLLBACK_PRODUCTION_BLOCKED: the reviewed Draft-0.9 rollback backend is not implemented"
+            "FW_ROLLBACK_PRODUCTION_BLOCKED: the Draft-1.1 rollback candidate is not implementation-approved or implemented"
         );
     }
     if is_thumbv && stm32u585 && factory_provisioning {
@@ -35,7 +35,7 @@ fn main() {
     }
     if is_thumbv && stm32u585 && legacy_rollback_unsafe {
         println!(
-            "cargo:warning=LEGACY ROLLBACK BACKEND — NONSHIPPING secure firmware; Draft 0.9 interfaces are not implemented"
+            "cargo:warning=LEGACY ROLLBACK BACKEND — NONSHIPPING secure firmware; Draft 1.1 is an unapproved research candidate"
         );
     }
 

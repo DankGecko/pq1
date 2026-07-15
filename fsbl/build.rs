@@ -36,7 +36,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=FSBL_ALLOW_DEV_KEY");
     if mode_production {
         panic!(
-            "FW_ROLLBACK_FSBL_PRODUCTION_BLOCKED: the reviewed Draft-0.9 rollback backend is not implemented"
+            "FW_ROLLBACK_FSBL_PRODUCTION_BLOCKED: the Draft-1.1 rollback candidate is not implementation-approved or implemented"
         );
     }
     if !legacy_rollback_unsafe {
@@ -45,7 +45,7 @@ fn main() {
         );
     }
     println!(
-        "cargo:warning=LEGACY ROLLBACK BACKEND — NONSHIPPING FSBL; Draft 0.9 interfaces are not implemented"
+        "cargo:warning=LEGACY ROLLBACK BACKEND — NONSHIPPING FSBL; Draft 1.1 is an unapproved research candidate"
     );
     if mode_production && lcd_test {
         panic!("FSBL `mode-production` and bench-only `lcd-test` are mutually exclusive");

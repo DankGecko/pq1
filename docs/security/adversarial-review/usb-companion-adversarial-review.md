@@ -36,7 +36,7 @@ This is the anchor: every remote attack a malicious companion / web-extension ca
 | **Request a signature forgery / off-chain drain** | firmware — never the companion — does the `replaySafeHash` nesting; per-slot counter/gap/combined-cap; bootstrap key forbidden off-chain | [off-chain signing](./offchain-signing-adversarial-review.md) — OC1–OC9 |
 | **Pick a wrong slot/chain to force key reuse** | **the slot key is *derived* from `(master_entropy, chain_id, slot_index)`** — a lie derives a *different* key, not a reuse; the sig validates only for that (chain, slot) and on-chain `validateUserOp` binds it. The FI risk (a glitch flipping `REGISTER_SLOT`) is swept by `fault_sweep_dispatch.py` | derivation-binding (`cmd_sign_userop.rs`) + [sca-fi](./sca-fi-adversarial-review.md) |
 | **Substitute a hash the user didn't see** | the device never accepts a companion-supplied hash for known shapes; it re-derives the EIP-712/1271 final hash on-device | [clear-signing](./clear-signing-adversarial-review.md) + [off-chain](./offchain-signing-adversarial-review.md) |
-| **Spam wrong PINs** | three-way MCU+OPTIGA+SE050 lockstep counter, silicon compare | [secure-element](./secure-element-adversarial-review.md) — SE3/SE4 |
+| **Spam wrong PINs** | three-way per-attempt consumption; directional MCU-page124/OPTIGA-E120 boot check; independent SE050 lockout | [secure-element](./secure-element-adversarial-review.md) — SE3/SE4 |
 | **Suppress / spoof a confirm** | confirm is driven by the S-world trusted display + physical buttons (secure-owned GPIO); NS/companion has **no code path** to it | [trusted-UI](./trusted-ui-adversarial-review.md) — UI4/UI6 |
 | **Web-extension origin-confusion** | the device is **origin-blind** (no origin field on the wire) — defense is entirely on-device clear-sign + confirm; the browser's per-origin grant is a host-side control the device does not rely on | (posture — this playbook) |
 | **DoS the transport** | timeouts + IWDG + NS-is-untrusted (a crash exposes no secret) | UC1/UC4/UC5 (this playbook) |
@@ -98,19 +98,16 @@ RULES:
     defense.
   - The device is origin-blind — "the extension can be malicious" is the assumed model, not a
     finding; the finding is a missing on-device defense.
-  - For each finding: UC-mode or map-entry, file:line, PoC, disposition, severity (DoS vs
-    gateway-crossing vs wrong-sig), proposed fix.
+  - For each candidate: UC-mode or map-entry, file:line, PoC, provisional
+    severity (DoS vs gateway-crossing vs wrong-sig), stable candidate ID, and
+    proposed fix. Do not assign a finding disposition.
 
-OUTPUT — file findings so they can be catalogued + worked through (see
-docs/security/adversarial-review/findings/README.md):
-  Write a dated report to docs/security/adversarial-review/findings/<surface>-<YYYY-MM-DD>.md
-  from findings/TEMPLATE.md — everything below (findings + the honest residual) goes IN it.
-  Report frontmatter `status: open`; EACH finding gets its own `Status:` line (start 🔲 OPEN)
-  + a falsifiable PoC. Add one row to the Catalogue table in findings/README.md. As findings
-  are worked through, whoever handles each flips its `Status:` (✅ FIXED / ☑️ ACCEPTED /
-  🚫 INVALID / ⏸ DEFERRED) + a Resolution (commit+date or why), and sets the report
-  `status: resolved` once none remain OPEN. work-todo.md stays the action list; findings/ is
-  the review record — cross-link them.
+OUTPUT — return an external candidate packet to the coordinator. Do not modify
+the repository, write a canonical findings report, or update catalogue/status
+fields. Include every candidate and the honest residual. The coordinator freezes
+the raw packet and gives the complete union to the exact Partner-A/Partner-B
+pair; only their symmetric cross-adjudication may assign dispositions. An
+authorized maintainer records the adjudicated result afterward.
 
 MANDATORY HONEST RESIDUAL (the run is INVALID without it):
   1. "What I tried to break and COULDN'T" — per transport stage + per map entry.
@@ -120,7 +117,14 @@ MANDATORY HONEST RESIDUAL (the run is INVALID without it):
   Never imply "the rest is fine."
 ```
 
-**Running it as a swarm.** ≥3 reviewers per scope, cross-vote, two model backends. The map (§A2) is best split one-entry-per-reviewer so each independently verifies the linked defense exists.
+**Running it as a swarm.** Use ≥3 independent discovery reviewers per scope
+across two model backends. Quorum only corroborates/prioritizes discovery; it
+does not set a disposition, and sub-quorum variants remain in the packet. Give
+every candidate and origin variant to the exact Partner-A/Partner-B pair in
+[`../../planning-and-review-workflow.md`](../../planning-and-review-workflow.md);
+only their symmetric cross-adjudication may disposition it, with disagreement
+preserved. The map (§A2) is best split one-entry-per-reviewer so each
+independently verifies the linked defense exists.
 
 ---
 

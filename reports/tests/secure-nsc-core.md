@@ -184,10 +184,13 @@ Total: **77 new host tests** (46 positive, 31 negative, 1 of which is
   pointer. Their per-CMD dispatch behaviour is the union of the
   per-`cmd_*` tests, so the dispatcher is effectively exercised by the
   other slice suites.
-- **`reconcile_pin_attempts` three-way reconciliation** — depends on
-  three SE drivers + flash + UI. The semantics are covered by `make
-  pin-gate-hw-counter-e2e` on hardware; no host mock can replicate the
-  silicon-counter behaviour we want to reconcile against.
+- **`reconcile_pin_attempts` boot reconciliation** — depends on SE drivers,
+  flash, UI, and a true reset boundary. `make pin-gate-hw-counter-e2e`
+  covers per-attempt consumption plus an in-run driver-cache reset and
+  `sync_remaining_with_mcu`; it does not reset the MCU or execute the
+  boot-only reconciliation path. The directional cold-reboot receipt
+  (E120-leading fail-closed and page-124-leading conservative retention)
+  remains OPEN.
 - **`set_e2e_unlocked` test helper** — only built under `e2e-test`;
   the `e2e` feature flag is not currently enabled in `cargo test -p
   sphincs-tz-secure`. Its behaviour is the same as `unlock_with_master`
@@ -207,8 +210,8 @@ Total: **77 new host tests** (46 positive, 31 negative, 1 of which is
 - `cargo test -p sphincs-tz-secure` — PASS (532 passed; 1 ignored;
   0 failed; was 455 before this pass — 77 new tests).
 - (firmware) on-target tests deferred: yes — CMSE veneer behaviour,
-  `gated_unlock` flash pre-commit, `reconcile_pin_attempts` three-way
-  reconciliation, and `tt_range_is_ns` SAU round-trip require the
-  `stm32u585` flash + SAU + CMSE features. Covered on real silicon by
-  `make pin-gate-e2e`, `make pin-gate-wipe-e2e`,
-  `make pin-gate-hw-counter-e2e`, `make gtzc-enforcement-hw`.
+  `gated_unlock` flash pre-commit, true cold-boot
+  `reconcile_pin_attempts`, and `tt_range_is_ns` SAU round-trip require
+  the `stm32u585` flash + SAU + CMSE features. Existing hardware targets
+  cover PIN attempts, wipe, in-run cache re-sync, and GTZC enforcement;
+  they do not close the directional cold-reboot reconciliation receipt.

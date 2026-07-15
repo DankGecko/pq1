@@ -1,29 +1,31 @@
-# Research Prompt B — Production Key Management (SCP03 + PBS + HUK-SAES)
+# Research Prompt B — Transport-to-First-Field SCP03/PBS Lifecycle
 
 ## Research question
 
-Design a production provisioning + runtime key-management protocol:
+Design and attack a production provisioning + first-field lifecycle:
 
-1. Rotate SE050 SCP03 static ENC/MAC keys from NXP defaults to per-
-   device-unique at chip personalization. Store the new keys on the
-   STM32 side HUK-SAES-wrapped (never in plaintext flash).
-2. Wrap the OPTIGA Platform Binding Secret the same way.
-3. Handle PQSigner firmware upgrade: if a newer firmware includes a
-   different HUK-SAES domain tag, how does it recover existing users'
-   keys without requiring chip reset?
-4. Establish verifiable per-device attestation binding physical
-   SE050 + OPTIGA UIDs to the STM32 chip-unique-ID, so that swap
-   attacks (move SE from a victim device to attacker's device) fail
-   at boot.
+1. The factory installs and locks only per-device SE transport and
+   attestation state, then ships at RDP0 so the owner can verify the MCU
+   before first power. It does not install the final pairing secret, perform
+   the BHK first write, create the wallet seed, or set RDP2.
+2. On first field boot, the FSBL self-locks RDP2 and performs the BHK first
+   write. The production-final pairing rotation must include fresh TRNG input
+   before the seed wizard; current code does not implement that protocol.
+3. Current bring-up OPTIGA PBS is deterministic DHUK-derived and has no flash
+   copy; page 126 stores only the DHUK-wrapped BHK. Design the final derivation,
+   durable non-secret salt/state owner, and power-cut recovery without
+   inventing an HUK-wrapped SCP03/PBS secret blob.
+4. Establish verifiable per-device attestation binding the physical SE050
+   and OPTIGA UIDs to the STM32 UID so swap attacks fail at boot.
 
-Constraints: key rotation happens at one-time factory provisioning (no
-field rekey). Out-of-band transport via a secure provisioner machine
-is acceptable. Bricked-HUK recovery is NOT required — the wallet can
-be considered dead, user restores from 24-word backup.
+Constraints: the exact final derivation and E140 ratchet-versus-final-PBS-
+rotation ordering are OPEN, owner-gated, and silicon-gated. Do not select them
+on paper and do not infer authority for an irreversible ceremony from this
+research prompt.
 
-Deliverables: protocol diagram + flash-layout sketch + the minimum
-STM32U585 SAES API usage pattern. Reference implementations from
-other hardware wallets are useful.
+Deliverables: protocol/state diagram, durable-state sketch, power-cut matrix,
+and the minimum STM32U585 SAES API usage pattern. Clearly separate measured
+facts, current code, proposed ceremony steps, and still-open silicon gates.
 
 
 ---
@@ -86,9 +88,13 @@ security anchor.
 **Dark Skippy and similar nonce-exfil attacks do NOT apply.** Hash-
 based SLH-DSA has no nonce. Don't chase this.
 
-**Current SCP03 state.** The SE050 SCP03 channel is active (every TX
-has CLA=0x84). Using NXP default static keys; rotation to per-device
-keys + HUK-SAES wrapping is a production-readiness item (work-todo #7).
+**Current SCP03 lifecycle.** The SE050 SCP03 channel is active (every TX
+has CLA=0x84). Factory defaults are not an acceptable production state:
+the factory installs per-device transport keysets, while the final
+fresh-TRNG-salted BHK-axis rotation belongs to the owner-approved first-field
+ceremony after RDP2 self-lock and BHK first write. OPTIGA PBS is DHUK-derived
+at boot and is never stored in flash; page 126 holds only the wrapped BHK.
+The exact E140 ratchet-versus-final-rotation order remains OPEN.
 
 ---
 
@@ -316,6 +322,26 @@ pub unsafe fn establish(
             Err(e)
         }
     }
+}
+
+/// work-todo #36: establish an SCP03 session under an EXPLICIT static keyset,
+/// with NO fallback. The first-boot rotation uses this to probe the FINAL
+/// keyset (resume) and to open the TRANSPORT session before `PUT KEY` — it
+/// must NOT silently fall back to the AN12436 published keys (that would be
+/// the fail-OPEN the runtime `establish` deliberately compiles out), so this
+/// is a thin, fallback-free wrapper over `establish_with_keys`.
+///
+/// # Safety
+/// Drives the SE050 SCP03 handshake; single-threaded secure world.
+#[cfg(feature = "rdp2-self-lock")]
+pub unsafe fn establish_with(
+    session: &mut Scp03Session,
+    t1: &mut super::t1oi2c::T1State,
+    static_enc: &[u8; 16],
+    static_mac: &[u8; 16],
+) -> Result<(), Se050Error> {
+    // SAFETY: forwarded contract.
+    unsafe { establish_with_keys(session, t1, static_enc, static_mac) }
 }
 
 /// One INITIALIZE-UPDATE + EXTERNAL-AUTHENTICATE handshake using the
@@ -950,8 +976,11 @@ pub struct ShieldedConnection {
     pub active: bool,
     /// Platform Binding Secret. 64 bytes per OPTIGA Trust M SRM §
     /// "Platform Binding Secret" ("It shall be 64 bytes …") — derived
-    /// on demand from the OTP master via `hw::secret_keys::optiga_
-    /// pairing_secret`.
+    /// on demand from the configured device root via
+    /// `hw::secret_keys::optiga_pairing_secret` (DHUK in the current
+    /// bring-up transport path; OTP only in explicit dev/legacy builds).
+    /// This buffer does not implement the still-open fresh-TRNG
+    /// production-final pairing protocol.
     pbs: [u8; 64],
     /// Whether PBS has been loaded.
     pub pbs_loaded: bool,
@@ -1699,8 +1728,12 @@ fn set_counter(a: &mut [u8; AES_BLOCK], counter: u64) {
 //! Minimal secure flash driver for STM32U585.
 //!
 //! Provides read/write/erase for the last two pages of bank 1:
-//! - Page 127 (0x0C0F_E000): Tropic01 pairing key / persistent secure data
-//! - Page 126 (0x0C0F_C000): OPTIGA Trust M Platform Binding Secret (PBS)
+//! - Page 127 (0x0C0F_E000): first-boot provisioning journal (KEY_PAGE)
+//! - Page 126 (0x0C0F_C000): DHUK-wrapped SE050 BHK when `bhk` is enabled
+//!
+//! OPTIGA PBS bytes are derived rather than stored verbatim, but the
+//! `rdp2-self-lock` final PBS depends on the persisted salt in page 127.
+//! Firmware-update verification has no persistent failure counter.
 //!
 //! The linker script (`memory-stm32u585.x`) must shrink FLASH LENGTH
 //! by 16 KB to prevent firmware code from being placed in these pages.
@@ -1747,7 +1780,11 @@ const FLASH_OPTR_OFF: u32 = 0x40;
 #[allow(dead_code)]
 const FLASH_SECBOOTADD0R_OFF: u32 = 0x4C;
 
-/// STM32U585 FSBL base (secure bank-1 page 0) — the shipping secure-boot entry.
+/// STM32U585 legacy bench FSBL base (secure bank-1 page 0).
+///
+/// The target shipping design keeps this entry, but production extent/WRP and
+/// option-byte authority remain open until their reviewed ceremony and silicon
+/// receipts close.
 #[allow(dead_code)]
 pub const FSBL_BASE_ADDR: u32 = 0x0C00_0000;
 
@@ -1897,9 +1934,9 @@ const KEY_PAGE_NUM: u32 = 127;
 
 // NOTE: flash page 126 (the former OPTIGA PBS seal page at
 // 0x0C0F_C000) was freed by work-todo #24 — the Platform Binding
-// Secret is now re-derived from the OTP master on every boot via
-// `hw::secret_keys::optiga_pairing_secret`. It is exclusively owned by
-// the wrapped SE050 BHK store when the `bhk` feature is enabled. Firmware
+// Secret is now resolved via `hw::secret_keys::current_pbs`; after first-boot
+// completion that derivation also depends on the salt in page 127. Page 126
+// is exclusively owned by the wrapped SE050 BHK store when `bhk` is enabled. Firmware
 // update verification intentionally has no persistent failure counter:
 // malformed companion input must never erase, reset, or write wallet state.
 
@@ -2118,6 +2155,206 @@ pub unsafe fn write_key(key: &[u8; 32]) -> Result<(), ()> {
     Ok(())
 }
 
+// ===========================================================================
+// work-todo #36 — first-boot RDP-2 self-lock + page-127 provisioning journal.
+//
+// Compiled ONLY for the shipping self-lock feature (`rdp2-self-lock`); every
+// current dev / QEMU / bench build omits this block entirely, so their flash
+// behaviour is byte-identical to before. The one genuinely new *mutating*
+// routine is `program_rdp_level2_and_launch` — the irreversible RDP burn —
+// which is why it lives behind the same feature the `nsc/mod.rs` ship fence
+// forces on only for `mode-production`.
+//
+// Register offsets: the option-byte programming keys + OPTSTRT/OBL_LAUNCH/
+// OPTLOCK bit positions come from `tools/ob-configurator/src/main.rs` (which
+// ran the OB-commit on the bench), but the SECSR/SECCR *offsets* there are
+// swapped — this code uses the RM0456-correct `secsr=0x24 / seccr=0x2C`
+// already bound in `REG` above. WRP1AR / SECWM offsets + the OEM-lock status
+// register are BENCH-CONFIRM (RM0456) items — see the #36 deferred runbook.
+// ===========================================================================
+
+/// Option-byte key register offset (RM0456; `FLASH_S+0x10`).
+#[cfg(feature = "rdp2-self-lock")]
+const OPTKEYR_OFF: u32 = 0x10;
+/// Option-byte unlock keys (GP/RM0456; from `tools/ob-configurator`).
+#[cfg(feature = "rdp2-self-lock")]
+const OPT_KEY1: u32 = 0x0819_2A3B;
+#[cfg(feature = "rdp2-self-lock")]
+const OPT_KEY2: u32 = 0x4C5D_6E7F;
+/// `SECCR.OPTSTRT` (bit 17) — commit staged option bytes to flash.
+#[cfg(feature = "rdp2-self-lock")]
+const OPTSTRT: u32 = 1 << 17;
+/// `SECCR.OBL_LAUNCH` (bit 27) — reload option bytes (triggers a reset).
+#[cfg(feature = "rdp2-self-lock")]
+const OBL_LAUNCH: u32 = 1 << 27;
+/// `SECCR.OPTLOCK` (bit 30) — cleared by the `OPTKEYR` key sequence.
+#[cfg(feature = "rdp2-self-lock")]
+const OPTLOCK: u32 = 1 << 30;
+/// `FLASH_OPTR.RDP` byte value for Level 2 (permanent debug lockdown).
+#[cfg(feature = "rdp2-self-lock")]
+const RDP_LEVEL2: u32 = 0xCC;
+/// BENCH-CONFIRM (RM0456) register offsets for the ship-profile verifier.
+#[cfg(feature = "rdp2-self-lock")]
+const SECWM1R1_OFF: u32 = 0x50;
+#[cfg(feature = "rdp2-self-lock")]
+const WRP1AR_OFF: u32 = 0x58;
+#[cfg(feature = "rdp2-self-lock")]
+const SECWM2R1_OFF: u32 = 0x60;
+
+/// Raw `FLASH_OPTR` (TZEN / BOR_LEV / RDP fields for the ship-profile check).
+#[cfg(feature = "rdp2-self-lock")]
+#[must_use]
+pub fn optr_raw() -> u32 {
+    // SAFETY: real, 4-byte-aligned secure option register; pure read.
+    unsafe { RoReg32::new(FLASH + FLASH_OPTR_OFF) }.read()
+}
+
+/// Raw `SECWM1R1` (bank-1 secure watermark).
+#[cfg(feature = "rdp2-self-lock")]
+#[must_use]
+pub fn secwm1r1_raw() -> u32 {
+    // SAFETY: as `optr_raw`.
+    unsafe { RoReg32::new(FLASH + SECWM1R1_OFF) }.read()
+}
+
+/// Raw `SECWM2R1` (bank-2 secure watermark).
+#[cfg(feature = "rdp2-self-lock")]
+#[must_use]
+pub fn secwm2r1_raw() -> u32 {
+    // SAFETY: as `optr_raw`.
+    unsafe { RoReg32::new(FLASH + SECWM2R1_OFF) }.read()
+}
+
+/// Raw `WRP1AR` (FSBL write-protect span). BENCH-CONFIRM offset.
+#[cfg(feature = "rdp2-self-lock")]
+#[must_use]
+pub fn wrp1ar_raw() -> u32 {
+    // SAFETY: as `optr_raw`.
+    unsafe { RoReg32::new(FLASH + WRP1AR_OFF) }.read()
+}
+
+/// Raw OEM-lock status. BENCH-CONFIRM register (FLASH_NSSR vs FLASH_OPTSR) —
+/// the bit *masks* live in `sphincs_tz_shared::lockdown` (`OEM1LOCK`/`OEM2LOCK`).
+#[cfg(feature = "rdp2-self-lock")]
+#[must_use]
+pub fn oem_lock_status_raw() -> u32 {
+    // SAFETY: real, 4-byte-aligned FLASH status register; pure read.
+    unsafe { RoReg32::new(FLASH_NS + 0x20) }.read()
+}
+
+/// Is a bank-1 secure page fully erased (all `0xFF`)? Phase A blank-checks the
+/// per-device pages 123..=127 before the RDP burn: a pre-planted page-127
+/// journal salt would otherwise yield a predictable final PBS (#36 hardening).
+#[cfg(feature = "rdp2-self-lock")]
+#[must_use]
+pub fn is_secure_page_blank(page: u32) -> bool {
+    assert!(page <= 127, "bank-1 page out of range");
+    let base = FSBL_BASE_ADDR + page * 0x2000; // 8 KB pages, secure alias
+    let src = base as *const u32;
+    for i in 0..(0x2000 / 4) {
+        // SAFETY: `base..base+8KB` is a fixed in-flash page; read-only.
+        if unsafe { read_volatile(src.add(i)) } != 0xFFFF_FFFF {
+            return false;
+        }
+    }
+    true
+}
+
+/// Append one 16-byte record to the page-127 provisioning journal at
+/// `qw_index` (0..512). Read-back-verified; ICACHE is invalidated by
+/// `write_quadword_verified`.
+///
+/// # Safety
+/// Programs persistent flash in page 127 (KEY_PAGE — owned outright by the
+/// first-boot journal). Caller ensures the QW is
+/// currently erased (the codec only ever appends at the scanned `next_free`).
+#[cfg(feature = "rdp2-self-lock")]
+pub unsafe fn write_journal_qw(qw_index: usize, rec: &[u8; 16]) -> Result<(), ()> {
+    if qw_index >= 512 {
+        return Err(());
+    }
+    let addr = KEY_PAGE_ADDR + (qw_index as u32) * 16;
+    // SAFETY: `addr` is quad-word aligned and inside page 127; the caller
+    // guarantees it is currently erased (append at `next_free`).
+    unsafe { write_quadword_verified(addr, rec) }
+}
+
+/// **Irreversible.** Stage `FLASH_OPTR.RDP = 0xCC` (Level 2), commit the
+/// option bytes, and reload them (`OBL_LAUNCH` → system reset).
+///
+/// On success this **never returns** (the MCU resets). It only *returns* on a
+/// pre-launch error — as `Err(())` — so Phase A can show a numbered fault and
+/// halt UNLOCKED without having locked a bad unit. A power loss between the
+/// `OPTSTRT` commit and `OBL_LAUNCH` is safe: the option bytes are already in
+/// flash, so the next natural reset boots at RDP-2 (#36 (b) — the one
+/// unavoidable residual window; keep it short, BOR on).
+///
+/// # Safety
+/// Permanently sets RDP Level 2. Caller MUST have verified the ship option-
+/// byte profile + blank per-device pages first (Phase A) — RDP-2 is
+/// unrecoverable.
+#[cfg(feature = "rdp2-self-lock")]
+pub unsafe fn program_rdp_level2_and_launch() -> Result<(), ()> {
+    let commit = cortex_m::interrupt::free(|_| -> Result<(), ()> {
+        // SAFETY: option-byte registers in the secure FLASH block; single-
+        // threaded secure world; each `unsafe` funnels through `Reg32` once.
+        let optkeyr = unsafe { Reg32::new(FLASH + OPTKEYR_OFF) };
+        let optr = unsafe { Reg32::new(FLASH + FLASH_OPTR_OFF) };
+
+        wait_bsy();
+        clear_errors();
+        unlock();
+        if REG.seccr.read() & LOCK != 0 {
+            return Err(()); // flash controller still locked (not in secure mode?)
+        }
+
+        // Unlock the option-byte area.
+        optkeyr.write(OPT_KEY1);
+        optkeyr.write(OPT_KEY2);
+        cortex_m::asm::dsb();
+        if REG.seccr.read() & OPTLOCK != 0 {
+            return Err(()); // option bytes still locked
+        }
+
+        // Stage RDP=0xCC, preserving TZEN / BOR / WRP / SECWM / … .
+        let staged = (optr.read() & !0xFF) | RDP_LEVEL2;
+        optr.write(staged);
+
+        // Commit the staged option bytes to flash.
+        REG.seccr.write(OPTSTRT);
+        wait_bsy();
+        let sr = REG.secsr.read();
+        // NOTE (BENCH-CONFIRM): `ERR_MASK` catches the general program/erase
+        // errors; option-write errors (`OPTWERR`) live in a separate bit that
+        // is a runbook pin. A missed OPTWERR is non-fatal — the burn simply
+        // didn't take, so the next boot re-attempts idempotently.
+        if sr & ERR_MASK != 0 {
+            clear_errors();
+            return Err(());
+        }
+        Ok(())
+    });
+
+    commit?;
+
+    // Success: reload option bytes → system reset. Diverges.
+    // SAFETY: option bytes are staged + committed; OBL_LAUNCH resets the MCU.
+    unsafe { obl_launch() }
+}
+
+/// Trigger `OBL_LAUNCH` (option-byte reload → system reset). Never returns.
+#[cfg(feature = "rdp2-self-lock")]
+unsafe fn obl_launch() -> ! {
+    cortex_m::interrupt::free(|_| {
+        REG.seccr.write(OBL_LAUNCH);
+    });
+    // OBL_LAUNCH triggers a system reset; if for any reason it doesn't, park
+    // rather than continue into an inconsistent boot.
+    loop {
+        cortex_m::asm::wfe();
+    }
+}
+
 // ---------------------------------------------------------------------------
 // SE050 admin-wipe state — page 125
 // ---------------------------------------------------------------------------
@@ -2189,8 +2426,9 @@ pub unsafe fn erase_admin_page() -> Result<(), ()> {
 // NOTE: `write_admin_pin` / `read_admin_pin` / `is_admin_pin_blank`
 // and `ADMIN_PIN_OFFSET` were all removed (2026-05-11). The SE050
 // admin PIN is never persisted to flash — it's re-derived on demand
-// from the OTP master via `hw::secret_keys::se050_admin_pin()` (the
-// v6 OTP-derived admin scheme; see `Se050::store_objects` /
+// via `hw::secret_keys::se050_admin_pin()` (BHK in the production
+// target, DHUK fallback, OTP only in explicit dev/legacy builds; see
+// `Se050::store_objects` /
 // `Se050::factory_reset_admin`). The e2e pre-clean cascades that used
 // to read a pre-v6 flash PIN now call `Se050::factory_reset_admin()`
 // (the v6 path) directly. Page 125 still holds the wipe-in-progress
@@ -2260,19 +2498,20 @@ pub fn is_duress_wipe_mode() -> bool {
 // MCU-side PIN attempt counter — page 124
 // ---------------------------------------------------------------------------
 //
-// Authoritative PIN-attempt counter. Trezor-parity design (see
-// `storage/storage.c:1171-1311` in trezor-firmware): the MCU-side
-// counter is the source of truth, incremented BEFORE every SE verify
-// (pre-commit), reset only after a successful PIN match. SE-side
-// counters (OPTIGA F1E1, SE050 silicon retry on UserID) are
-// secondary redundant defenses — if they disagree with the MCU
-// counter at boot, the MCU counter wins.
+// Persistent user-facing PIN-attempt counter. Trezor-parity design (see
+// `storage/storage.c:1171-1311` in trezor-firmware): page 124 is precharged
+// BEFORE every SE verify and reset only after a successful PIN match. It is
+// therefore the firmware gate for the ten-attempt policy.
 //
-// Why MCU-authoritative: OPTIGA's F1E1 counter is soft (writable via
-// `Conf(E140)`), so an attacker with PBS extraction can reset it.
-// Without an MCU counter, that collapses to "SE050 is the only real
-// lockout," burning only SE050's silicon budget. With MCU counter,
-// OPTIGA reset attacks cost nothing — the gate is still MCU flash.
+// Under `optiga-hw-counter`, OPTIGA E120 is a separate silicon-enforced LUC
+// and the directional boot rollback witness. A benign cut can leave page 124
+// one attempt ahead, so reconciliation accepts `mcu >= e120`; only
+// `e120 > mcu` proves page-124 rollback. F1E1 is frozen as the
+// provisioning/reset sentinel in this profile and is not an attempt counter.
+// SE050 UserID independently enforces its max-ten retry policy, but its attempt
+// attribute is not boot-readable under the production policy. Do not describe
+// reconciliation as "the MCU counter always wins" or as a symmetric
+// three-counter readback.
 //
 // Layout of page 124 (0x0C0F_8000, 8 KB):
 //   QW 0..(MAX_ATTEMPTS-1): one programmed QW per attempt (any non-
@@ -2298,7 +2537,7 @@ pub fn is_duress_wipe_mode() -> bool {
 //     wipes SEs + erases page 124 via `pin_attempts_reset()`.
 //
 // Page choice: 124 over 126. Page 126 (the former OPTIGA PBS seal
-// page, freed by work-todo #24) turned out to be in a "freed-but-
+// page, now owned by the wrapped BHK store) turned out to be in a "freed-but-
 // write-hostile" state on the current bench chip — erase returns
 // OK (no SR error) but subsequent programs of QW0 fail with
 // PROGERR|PGSERR. Page 124 is truly never-touched and accepts
@@ -2509,20 +2748,21 @@ pub unsafe fn pin_attempts_reset() -> Result<(), ()> {
 // Slot layout (see docs/firmware/firmware-update.md for the full picture):
 //
 //   Bank 1 (secure):
-//     FSBL             pages   0..3    0x0C00_0000  (32 KB, WRP-locked)
+//     FSBL             pages   0..3    0x0C00_0000  (legacy 32 KB bench layout)
 //     Manifest A       page    4       0x0C00_8000  (8 KB)
 //     Manifest B       page    5       0x0C00_A000  (8 KB)
 //     Boot state       page    6       0x0C00_C000  (8 KB, redundant)
 //     Slot A secure    pages   7..64   0x0C00_E000  (464 KB)
 //     Slot B secure    pages  65..122  0x0C08_2000  (464 KB)
-//     (reserved)       pages 123..127  legacy + PBS + SE050 admin
+//     (reserved)       pages 123..127  legacy state + admin/wipe + wrapped BHK
 //
 //   Bank 2 (non-secure):
 //     Slot A NS        pages   0..63   0x0810_0000  (512 KB)
 //     Slot B NS        pages  64..127  0x0818_0000  (512 KB)
 
 /// A/B slot identifier. The current V1 selector is legacy bench code; the
-/// production target is Draft 0.9's frozen typed selector interface.
+/// Draft 1.1 proposes a replacement typed selector interface, but is not
+/// implementation-approved.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Slot {
     A,
@@ -3824,10 +4064,10 @@ pub unsafe fn userop_sigs_bump(slot_key: &[u8; 8], new_count: u64) -> Result<(),
 > history (v1 → v2 → v3 `0x7B06_xxxx` → v4 `0x7B0C_xxxx` → v5 → v6) is
 > documented at `secure/src/se050/mod.rs:23-30`.
 >
-> **Admin PIN derivation has also evolved.** §2 below describes a TRNG-generated
-> admin PIN persisted to flash page 125. Since commit `1bfb572` (2026-04-27),
-> the admin PIN is **OTP-derived** via `secure/src/hw/secret_keys.rs::se050_admin_pin()`
-> (production: `SAES-CMAC(DHUK, label‖counter)`; dev: `HKDF(OTP_master, label)`).
+> **Admin PIN derivation has also evolved.** Historical §2 text described a
+> TRNG-generated admin PIN persisted to flash page 125. The current PIN is
+> root-derived via `secure/src/hw/secret_keys.rs::se050_admin_pin()` on the
+> BHK axis (DHUK fallback when `bhk` is disabled).
 > Page 125 still hosts the wipe flag, but the admin PIN no longer needs flash
 > persistence — it's deterministic per device and re-derives on every boot.
 > §2a's "future optimisation — HUK-SAES derivation" has effectively landed.
@@ -3951,8 +4191,8 @@ SE050 admin session:
   ↓
 best-effort unauthenticated sweep (iterative_delete_all) for legacy stragglers
   ↓
-erase_admin_page()  ← clears admin PIN + wipe flag atomically
-(dual-SE only) erase_pbs_page()  ← orphans OPTIGA from STM32
+erase_admin_page()  ← clears the wipe marker / legacy admin area
+(dual-SE orchestrator also wipes OPTIGA user objects; page 126 is untouched)
   ↓
 zeroize all SRAM state
   ↓
@@ -3988,54 +4228,33 @@ re-introducing the unwipeable-orphan problem.
 
 ### 1. PlatformSCP03 keys
 
-Dev chips use NXP default SCP03 keys (`0x40 0x41 0x42 … 0x4F` — encoded
-in our `se050/scp03.rs`). Production chips must have these rotated to
-per-batch or per-device keys delivered by NXP's secure provisioning
-service. The wipe path depends on SCP03 channel being establishable, so
-the rotated keys must also be stored in TrustZone secure flash and
-loaded before any SE050 operation.
-
-**Action:** add a key-storage slot in secure flash (alongside PBS /
-pairing key) and a boot-time load step before `scp03::establish()`.
-Today the driver hard-codes the NXP defaults; that's fine for dev, not
-for production.
+Published NXP keys and the current deterministic helper output are
+transport/bring-up credentials only. The existing
+`hw::secret_keys::se050_scp03_{enc,mac,dek}_key()` plus
+`se050-rotate-scp03` path is a sacrificial validation mechanism, not the
+production target: it derives deterministically from the BHK axis (DHUK
+fallback when `bhk` is off) and does not implement the owner-required fresh
+TRNG final rotation. Production remains blocked on an authenticated migration
+from the per-device transport credential, durable old/new state and recovery,
+and reviewed KVN/atomicity and OPTIGA/E140 ordering. This document does not
+select that protocol or authorize PUT KEY on a real unit.
 
 ### 2. Lifecycle of ADMIN_WIPE_OBJ PIN
 
-Admin PIN is generated once at first-boot provisioning via STM32 TRNG
-(`rng::fill()`) and persisted to secure flash page 125 QW 0. It is
-read back from flash on every boot that needs it (factory reset, boot-time
-wipe resume). Because it lives in TrustZone secure flash it is never
-exposed to non-secure world, USB, or any external interface.
+The admin PIN is reproducibly derived by
+`hw::secret_keys::se050_admin_pin()` on the BHK axis and has no flash
+representation. Page 125 carries the non-secret wipe marker/legacy hygiene
+area; `erase_admin_page()` clears that marker but does not rotate the derived
+credential. Re-pairing requires the reviewed BHK/root lifecycle, not a flash
+PIN rewrite.
 
-The PIN is erased atomically with the wipe flag when
-`erase_admin_page()` runs at the end of a factory reset. After that
-erase, any subsequent boot sees `is_admin_pin_blank() == true` and
-treats the chip as unprovisioned (runs first-boot wizard, generates a
-fresh admin PIN).
+### 2a. Deterministic transport credential — implemented
 
-If you ever re-provision the firmware without wiping first (e.g. a
-dev-mode reflash while keeping the existing SE050 contents), the
-already-persisted admin PIN continues to work because it's read from
-flash, not regenerated. Only `erase_admin_page()` rotates the PIN.
-
-### 2a. Future optimisation — HUK-SAES derivation
-
-Storing the admin PIN in flash is functional but dependent on flash
-integrity. An attacker who can read page 125 off a powered-off chip
-(invasive attack) learns the admin PIN and can wipe the device.
-A stronger design derives the admin PIN at boot from the STM32U585
-Hardware Unique Key via the SAES peripheral — the HUK never leaves the
-silicon and is unique per chip. The admin PIN then has no on-flash
-representation at all.
-
-This is flagged as a future improvement because HUK-SAES wrapping is
-not yet wired up for other secrets either (e.g. SCP03 platform keys —
-see docs/work-todo.md item #7). When that infrastructure lands, fold
-admin-PIN derivation into the same code path with domain tag
-`"pqwallet-se050-admin-pin-huk-v1"` (new tag, not v1 — the v1 tag stays
-frozen so already-provisioned flash-persisted devices keep working
-during the migration).
+The current bring-up design derives the credential through the BHK/DHUK SAES
+KDF with domain tag `"pqsigner/se050-admin-pin-v1"`. The root never leaves
+silicon; only the derived credential is presented inside the secure channel.
+That property is useful transport evidence but is not production-final: the
+first-field handoff and fresh-TRNG rotation blockers above remain open.
 
 ### 3. Attestation-based device pairing (not yet implemented)
 
@@ -4074,10 +4293,9 @@ itself does not depend on the OID range.
   firmware creates on SE050 must have two TAG_POLICY entries. Objects
   without entry 2 cannot be recovered from PIN lockout and are
   orphans-by-design.
-- **Do NOT regenerate the admin PIN without erasing page 125 first.**
-  The PIN is TRNG-generated and persisted; overwriting only the PIN
-  slot would leave the old wipe flag (if armed) in a stale state. Use
-  `erase_admin_page()` to rotate.
+- **Do NOT change the admin-PIN domain/root without a coordinated SE050
+  reprovisioning ceremony.** Page 125 does not carry the PIN; erasing it only
+  clears wipe/legacy state and cannot rotate the root-derived credential.
 - **Do NOT skip the round-trip selftest.** It's the cheap insurance
   against re-introducing garbled-policy orphans on future builds.
 - **Do NOT reuse the ADMIN_WIPE_OBJ PIN for user-facing operations.**
@@ -4103,9 +4321,9 @@ itself does not depend on the OID range.
 | Admin credential provisioning | `secure/src/se050/mod.rs` (`provision_admin`, `store_objects`) — runs automatically inside `WalletStore::provision` on stm32u585 |
 | Admin-delete wipe             | `secure/src/se050/mod.rs` (`admin_factory_reset`)          |
 | Round-trip selftest           | `secure/src/se050/mod.rs` (`policy_roundtrip_selftest`)    |
-| Admin PIN + wipe-flag storage | `secure/src/hw/flash.rs` page 125 (`read_admin_pin`, `write_admin_pin`, `erase_admin_page`, `arm_wipe_flag`, `is_wipe_armed`) |
+| Admin credential + wipe flag  | `secure/src/hw/secret_keys.rs` (`se050_admin_pin`); page 125 retains only wipe-marker/legacy hygiene state (`erase_admin_page`, `arm_wipe_flag`, `is_wipe_armed`) |
 | SE050 wipe entry point        | `secure/src/se050/mod.rs` `WalletStore::factory_reset_admin` |
-| Dual-SE wipe orchestration    | `secure/src/dual_se.rs` `WalletStore::factory_reset_admin` (delegates to SE050, then erases PBS) |
+| Dual-SE wipe orchestration    | `secure/src/dual_se.rs` `WalletStore::factory_reset_admin` (best-effort wipes OPTIGA + SE050; never erases page 126) |
 | PIN-lockout trigger           | `secure/src/nsc/cmd_request_unlock.rs` (`trigger_lockout_wipe`) |
 | Boot-time resume              | `secure/src/main.rs` (block after `load_pbs`)              |
 | Flash layout (linker)         | `secure/memory-stm32u585.x` (`FLASH LENGTH = 1000K`, reserves pages 125-127) |

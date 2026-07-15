@@ -9,9 +9,10 @@
 > **Superseded rollback conclusion (2026-07-11).** The reversible
 > `fw-rollback-hw` test exercised comparison logic; it did not validate OTP
 > programming physics, interrupted writes, or A/B availability. The legacy
-> unary floor is production-fenced. Draft 0.9 freezes replacement software
-> interfaces, while the physical journal/ECC/OTP backend and silicon evidence
-> remain OPEN. Transport/parser findings below retain their narrow value.
+> unary floor is production-fenced. Draft 1.1 proposes replacement software
+> interfaces but is not implementation-approved; the physical
+> journal/ECC/OTP, resource, factory, and silicon gates remain OPEN.
+> Transport/parser findings below retain their narrow value.
 
 ## 0 — What this document is (and isn't)
 
@@ -143,9 +144,10 @@ though the signature needs ~2. Closed across both verify paths:
 **Superseded conclusion — `try_once_flag`.** The earlier claim that this
 unsigned V1 byte was a bounded-safe residual is false: the old COMMIT/floor
 ordering made A/B rollback nonfunctional. It is not accepted for production.
-Draft 0.9 replaces this surface with a slot-bound manifest-v4 tuple and frozen
-typed marker/selector interfaces; their storage backend and power-loss
-semantics remain OPEN and ship-blocking.
+Historical Draft 0.9 proposed a slot-bound manifest-v4 tuple. Draft 1.1 instead
+proposes manifest-v6 and revised typed marker/selector interfaces, but is not
+implementation-approved; its storage backend, power-loss semantics, resource,
+release-policy, factory, and silicon gates remain OPEN and ship-blocking.
 
 ---
 
@@ -192,9 +194,9 @@ contrasts and shared patterns:
 | Host-declared length bound | `FirmwareErase.length` is **bounded against `FIRMWARE_MAXSIZE`** (1664 KB per model) | `expected_secure_len` / `expected_nonsecure_len` from the manifest are **not bounded against slot capacity** — only against themselves at CHUNK time | **Adopt.** See finding #1. |
 | Per-chunk size | `IMAGE_CHUNK_SIZE = 128 KB` (Trezor) | `FW_MAX_CHUNK` (smaller; HID-friendly) | Both bound per-chunk; our smaller size means more APDUs, but USB HID throughput is the bottleneck either way. |
 | Signature scheme | Ed25519 (multi-sig vendor in some models) | SPHINCS+C10 (PQ) | Different threat model; our PQ choice is invariant #5. |
-| Anti-rollback | `FIRMWARE_MONOTONIC_VERSION` — bootloader rejects below current | Draft-0.9 security-epoch floor interface; physical backend OPEN | No production comparison claim yet. |
+| Anti-rollback | `FIRMWARE_MONOTONIC_VERSION` — bootloader rejects below current | Draft 1.1 security-epoch floor research candidate; physical backend OPEN | No implementation approval or production comparison claim yet. |
 | User confirm before destructive op | User enters bootloader = consent; firmware erase proceeds | Legacy confirm is after staging erase/writes and before activation; target health finalization is frozen separately | Different boundaries; no “stricter” claim. |
-| A/B slot recovery after bad update | Bricks until reflash on most models (single-slot) | Legacy recovery is nonfunctional; Draft-0.9 state machine is interface-frozen but unimplemented | Production-blocked pending backend/tests. |
+| A/B slot recovery after bad update | Bricks until reflash on most models (single-slot) | Legacy recovery is nonfunctional; Draft 1.1 proposes an unimplemented state machine without granting implementation authority | Production-blocked pending approval, backend, resource, factory, and silicon gates. |
 | Fuzzing | Has a `tests/` directory with mostly happy-path unit tests; no formal fuzz harness in the public tree | Adding one now (this session). | |
 
 **Trezor's `FirmwareErase.length` bound is the cleanest pattern to copy.**

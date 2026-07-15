@@ -654,7 +654,7 @@ fn positive_legacy_otp_rollback_backend_blocks_production() {
             && NSC_MOD_SRC.contains("OPEN-JRN-HW/DUR")
             && NSC_MOD_SRC.contains("OPEN-ECC")
             && NSC_MOD_SRC.contains("OPEN-OTP"),
-        "mode-production must stay blocked until the reviewed rollback backend replaces the invalid bitwise OTP tally"
+        "mode-production must stay blocked until an approved rollback backend replaces the invalid bitwise OTP tally"
     );
     assert!(
         NSC_MOD_SRC.contains(

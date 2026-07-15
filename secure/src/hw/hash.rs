@@ -189,7 +189,7 @@ fn debug_log_safe(f: impl FnOnce()) {
 /// continuation, and parking with `wfe` (as the boot KAT does, where no
 /// secret exists yet) would strand `master_secret` + the cached slot key
 /// live in SRAM through the idle window — exactly the exposure rr-1
-/// closes. A reset re-zeroes `.bss` and the WRP1A-locked FSBL re-verifies
+/// closes. A reset re-zeroes `.bss` and the legacy bench FSBL re-verifies
 /// the active slot before any secret is reconstructed from the PIN.
 ///
 /// (If the engine is wedged at *boot* — inside the self-test's `init` →

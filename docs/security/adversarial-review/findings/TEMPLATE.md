@@ -1,43 +1,67 @@
 ---
-surface: <clear-signing | trustzone-gateway | secure-element | sca-fi | firmware-update-secure-boot | usb-companion | offchain-signing | onchain-contracts | trusted-ui | silicon-lockdown | fv>
+report_kind: canonical-post-cross-adjudication
+surface: <clear-signing | trustzone-gateway | secure-element | sca-fi | firmware-update-secure-boot | usb-companion | offchain-signing | onchain-contracts | trusted-ui | silicon-lockdown | lifecycle-persistent-state | entropy-key-lifecycle | secure-runtime-resource | production-configuration-prodtest | build-release-provenance | fv | multi>
 run_date: YYYY-MM-DD
-reviewer: <model / agent + backend, e.g. "opus-4.8 via run_review.py --backend claude">
-scope: <the specific claims / files / SL-modes reviewed this pass>
-status: open   # open → in-review → resolved  (see findings/README.md lifecycle)
+target_identity: <commit/tree/spec digest and hardware identity, as applicable>
+cross_adjudication_sha256: <SHA-256 of the completed CROSS_ADJUDICATION_TEMPLATE report>
+scope: <the specific claims / files / modes reviewed>
+status: in-review   # post-cross items start REVIEWED; see findings/README.md
 ---
 
-# Adversarial-review findings — <surface> — YYYY-MM-DD
+# Canonical adversarial-review findings — <surface> — YYYY-MM-DD
+
+> This is the post-cross-adjudication repository record. Do not use it as a
+> raw first-pass report or as the cross-adjudication worksheet. Those artifacts
+> freeze outside the reviewed target first; cite their exact digests below.
+
+## Evidence inputs
+
+- Partner A first pass: `<path/receipt>` — SHA-256 `<digest>`
+- Partner B first pass: `<path/receipt>` — SHA-256 `<digest>`
+- Partner A cross pass: `<path/receipt>` — SHA-256 `<digest>`
+- Partner B cross pass: `<path/receipt>` — SHA-256 `<digest>`
+- Cross-adjudication matrix: `<path/receipt>` — SHA-256 `<digest>`
+- Execution and identity receipts: `<exact commands/logs/digests>`
 
 ## Summary
 
-<n findings: A confirmed-real, B false-positive, C accepted/by-design.> One-line verdict
-(e.g. "no headline hole; one MED hardening gap"). Note whether this pass EXECUTED the
-checkers (Kani / rainbow / forge / lake / prod-check) or read source only.
+<One-line stage recommendation and count by CONFIRMED / REFUTED / NARROWED /
+UNRESOLVED. Preserve separate Partner-A and Partner-B recommendations when they
+differ. State whether checks executed or the pass was source-only.>
 
 ## Findings
 
-<!-- One block per finding. `Fn` id is stable; update Status + Resolution as it is worked
-     through. Delete this comment and the example below when filling a real report. -->
+<!-- One block per canonical item. Stable IDs and raw origin IDs must trace back
+     to the cross-adjudication matrix. Delete this comment/example when filing. -->
 
 ### F1 — <short title>
-- **Status:** 🔲 OPEN   <!-- 🔲 OPEN · 🔬 REVIEWED · ✅ FIXED · ☑️ ACCEPTED · 🚫 INVALID · ⏸ DEFERRED -->
-- **Mode / severity:** <catalog id e.g. CS3 / TZ4 / SL2> · <LOW | MED | HIGH>
-- **Location:** `path/to/file.rs:line`
-- **What:** one-sentence statement of the defect / gap.
-- **PoC (falsifiable):** <the runnable artifact — a flip→decline test, a Kani counterexample, a rainbow BYPASS, a `#print axioms` diff, a merged diff that skipped a gate. No PoC ⇒ this is a "suspicion", list it under §Suspicions, not here.>
-- **Disposition:** CONFIRMED_REAL | FALSE_POSITIVE | ALREADY_FIXED | OPEN_RESEARCH
-- **Proposed fix:** <and flag if the fix would break an invariant / regress a proof / weaken a fence>
-- **Resolution:** <FILLED WHEN HANDLED — what was done + commit SHA + date, or why accepted/invalid/deferred + the tracking item (work-todo #…)>
+- **Origin IDs:** `<raw namespace/origin IDs from both first passes>`
+- **Status:** 🔬 REVIEWED   <!-- post-cross default; then ✅ FIXED · ☑️ ACCEPTED · 🚫 INVALID · ⏸ DEFERRED -->
+- **Cross disposition:** CONFIRMED | REFUTED | NARROWED | UNRESOLVED
+- **Cross evidence:** `<matrix row + both cross-report digests; no majority vote>`
+- **Mode / severity / stage impact:** <catalog id> · <INFO | LOW | MED | HIGH | CRITICAL> · <impact>
+- **Location / stable anchor:** `path/to/file.rs:line` + <unique symbol/string/policy>
+- **Claim and mechanism:** <what was claimed, the violated invariant, and the concrete defect/gap>
+- **Prerequisites:** <attacker capability, lifecycle/configuration/state, and required prior failures>
+- **Consequence:** <confidentiality/integrity/availability/claim impact and affected asset>
+- **Introduced here?:** <YES / NO / UNKNOWN — evidence and first known snapshot>
+- **Failure-path trace:** <input/authority crossing through states, branches, writes, reset/resource/fallback edges to the bad outcome>
+- **PoC / refutation:** <falsifiable artifact and result; preserve contradictory evidence>
+- **Evidence provenance:** <what actually ran vs what was inspected; exact cfg/artifact/log digest>
+- **Classification:** KEEP | SIMPLIFY | FIX NOW | DEFER | DROP | OPEN RESEARCH
+- **Required correction or residual:** <minimal falsifiable correction, or the exact residual if narrowed/unresolved>
+- **Resolution:** <FILLED WHEN HANDLED — action + commit/date, or invalid/deferred tracking. ACCEPTED additionally requires an owner-only record naming owner, date, exact finding, target and report digests, accepted consequence, and scope. Reviewer agreement is not risk acceptance.>
 
 <!-- ### F2 — … -->
 
-## Suspicions (unverified — no PoC)
+## Explicit disagreements and unresolved defeaters
 
-<Things that smelled wrong but you could not produce a falsifiable PoC for. Not findings;
-next round's leads.>
+<List every surviving disagreement, unexecuted modality, and evidence gap. Do
+not collapse disagreement into a consensus severity or silently omit it.>
 
-## Honest residual (the run is INVALID without this)
+## Honest residual
 
-1. **What I tried to break and COULDN'T** — the claims that survived + the strongest single failed PoC-attempt per claim.
-2. **What I did NOT look at** — modes/files/surfaces not walked; the next round's target list.
-3. **Provenance** — did this pass EXECUTE the checkers, or read source + the ledger only? A source-only pass is weaker; say so plainly.
+1. **What both reviewers tried to break and could not** — strongest failed PoC per claim.
+2. **What neither reviewer established** — unreviewed modes/files/hardware and assumptions.
+3. **Provenance** — exactly what executed, what was source-only, and where evidence lives.
+4. **Authority boundary** — recommendations are not merge/ship/risk-acceptance authority.

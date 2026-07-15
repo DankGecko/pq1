@@ -24,8 +24,10 @@ Specifically:
 4. Our design rotates the main signer every ~2^20 signatures. Is
    that already beyond the SCA trace-count threshold for practical
    recovery, or do we need tighter rotation?
-5. Does migration from SHA2-128f to SHA2-192f meaningfully improve
-   the SCA posture, or is it orthogonal?
+5. With the all-C10 parameter choice fixed, which implementation-level
+   countermeasures materially improve the SCA posture? Do not reopen a
+   SHA2-128f/192f migration or imply that changing parameters alone closes
+   leakage.
 
 Deliverables: catalogued threat list with severity + mitigation per
 item, plus specific recommendations on per-signer rotation cadence
@@ -92,9 +94,13 @@ security anchor.
 **Dark Skippy and similar nonce-exfil attacks do NOT apply.** Hash-
 based SLH-DSA has no nonce. Don't chase this.
 
-**Current SCP03 state.** The SE050 SCP03 channel is active (every TX
-has CLA=0x84). Using NXP default static keys; rotation to per-device
-keys + HUK-SAES wrapping is a production-readiness item (work-todo #7).
+**Current SCP03 lifecycle.** The SE050 SCP03 channel is active (every TX
+has CLA=0x84). Factory defaults are not an acceptable production state:
+the factory installs per-device transport keysets, while the final
+fresh-TRNG-salted BHK-axis rotation belongs to the owner-approved first-field
+ceremony after RDP2 self-lock and BHK first write. OPTIGA PBS is DHUK-derived
+at boot and is never stored in flash; page 126 holds only the wrapped BHK.
+The exact E140 ratchet-versus-final-rotation order remains OPEN.
 
 ---
 
@@ -133,7 +139,7 @@ keys + HUK-SAES wrapping is a production-readiness item (work-todo #7).
 //!   hardening primitives are keyed off the secure-world TRNG.
 //! * [`provision_from_mnemonic`] / [`store_macd_encrypted`] — the
 //!   `WalletStore` + `SecureElement` provisioning entry points used by
-//!   the wizard and by the mock/Tropic01 backends. These touch the
+//!   the wizard and by the mock backend. These touch the
 //!   secure-side `crate::secure_element::*` traits with r-mem
 //!   semantics, so they cannot live in the pure-logic crate.
 //!
@@ -546,7 +552,7 @@ fn provision_duress_wallet(
 
 /// Store pre-derived entropy, VK, and PIN state via the MACD chain on an
 /// r-mem-capable secure element. Used by backends that support the
-/// `SecureElement` trait (Mock, Tropic01 on the generic path).
+/// `SecureElement` trait (Mock on the generic path).
 ///
 /// The mnemonic-to-entropy derivation is NOT done here — the caller must
 /// pass pre-derived `(entropy, master_secret, vk, bootstrap_vk)`.
@@ -2790,16 +2796,6 @@ zeroize = { workspace = true }
 # (default-features = false).
 micromath = { version = "2.1", default-features = false, optional = true }
 
-# TROPIC01 secure element (for real chip mode).
-#
-# SECURITY: `rev =` is the ONLY supply-chain pin here — there is no
-# checksum for git deps in Cargo.lock. Never relax this to `branch =`
-# or `tag =`, both of which are mutable upstream. `make verify-pins`
-# hard-fails if this line has no 40-char hex `rev =`.
-tropic01 = { git = "https://github.com/tropicsquare/libtropic-rs", rev = "0cacb5ed94e5df491bfbb39e8702cc47598f7d63", features = ["keys"], optional = true }
-x25519-dalek = { version = "2.0.1", default-features = false, features = ["static_secrets"], optional = true }
-embedded-hal = { version = "1", optional = true }
-
 # Graphics primitives used by the NV3007 LCD font/glyph path.
 embedded-graphics = { version = "0.8", default-features = false, optional = true }
 
@@ -2857,7 +2853,6 @@ platform-stm32u585 = ["stm32u585"]
 secure-element-mock     = ["mock-se"]
 secure-element-optiga   = ["optiga-trust-m"]
 secure-element-se050    = ["se050"]
-secure-element-tropic01 = ["tropic01-se"]
 secure-element-dual     = ["dual-se"]
 
 # 3. ui-mode axis (mutually exclusive — enforced by build.rs today,
@@ -2869,9 +2864,11 @@ ui-mode-capture     = ["ui-capture"]
 # 4. mode axis (development profile)
 mode-production = []                                    # no debug-log / no e2e-test / no mock-se
 # Opt-in: hard-refuse to run (halt) if the boot-time RDP check finds RDP != Level 2
-# under `mode-production`. OFF by default so a mode-production image can still run
-# during factory rehearsal before the irreversible RDP2 burn (default = WARN-and-
-# continue; RDP2 already disables SWD/JTAG in silicon). silicon-lockdown SL7.
+# under `mode-production`. OFF by default while the intended first-field-boot
+# self-lock ordering remains unapproved/unimplemented, so non-production
+# rehearsal can observe rather than perform an irreversible transition
+# (default = WARN-and-continue; RDP2 disables SWD/JTAG in silicon once an
+# separately authorized path sets it). silicon-lockdown SL7.
 rdp-enforce-halt = []
 mode-bringup    = ["debug-log"]                         # debug-log allowed; production-fence sub-features prohibited
 mode-e2e        = ["debug-log", "e2e-test"]             # full e2e suite including skip-* sub-flags
@@ -2894,8 +2891,9 @@ accel-saes-dhuk        = ["saes-dhuk"]
 # firmware.  Production and factory-provisioning builds reject it (and reject
 # the legacy backend unconditionally) in build.rs + nsc/mod.rs.
 #
-# Remove this feature when the reviewed Draft-0.9 backend replaces the legacy
-# implementation.  NEVER ship.
+# Remove this feature only when an exact-digest-approved replacement backend
+# replaces the legacy implementation. Draft 1.1 is still a research candidate.
+# NEVER ship.
 legacy-fw-rollback-unsafe = []
 
 # Current development images independently acknowledge both quarantined
@@ -2907,7 +2905,6 @@ legacy-fw-rollback-unsafe = []
 # generated verified-root fence intentionally rejects a stale warning feature.
 debug-log = ["legacy-fw-rollback-unsafe", "erc7730-dev-unattested"]
 mock-se = ["legacy-fw-rollback-unsafe", "erc7730-dev-unattested"]
-tropic01-se = ["dep:tropic01", "dep:x25519-dalek", "dep:embedded-hal"]
 ui-semihosting = []
 ui-noop = []  # Silent no-op UI for standalone USB operation (no debugger)
 # Real STM32U585 hardware target (vs QEMU mps2-an505). Pulls in `hw-sha256`
@@ -3035,9 +3032,10 @@ optiga-trust-m = []  # Infineon OPTIGA Trust M V3 via I2C1 (TRUSTMV3SHIELDTOBO1 
 # DESTRUCTIVE on first provisioning: rewrites F1D0 metadata with
 # Execute=LUC(E120). If F1D0 is already at LcsO=Operational with the
 # non-LUC metadata installed, the ratchet blocks the rewrite — the chip
-# would need a SetObjectProtected recovery pass (same mechanism as
-# `optiga-reset-oids`) before this feature can be enabled. See
-# `docs/secure-elements/optiga-brick-postmortem.md` for the recovery story.
+# cannot be repaired by the retired, mis-targeted `optiga-reset-oids`
+# experiment. Stop, preserve the part as evidence, and use only a separately
+# specified and reviewed replacement ceremony; none exists today. See
+# `docs/secure-elements/optiga-brick-postmortem.md` for the incident record.
 #
 # Feature is pure-additive against non-`optiga-hw-counter` builds: all
 # new code is cfg-gated, no behavioural change without it.
@@ -3085,11 +3083,11 @@ duress-provision-e2e = ["duress-pin"]
 # without standing up a full dual-SE provision. main.rs short-circuits
 # into a dialog loop at boot. Pure UI; pairs with mock-se + ui-oled.
 duress-ui-test = []
-# Combined MCU page-124 + OPTIGA E120 + SE050 counter sync + desync
-# recovery e2e. Under dual-se with hw-counter, exercises the full PIN
-# lockout pipeline AND asserts all three counters stay in sync through
-# normal + desync flows. Deliberately desyncs MCU-ahead and OPTIGA-ahead
-# to verify recovery on the next correct PIN. Use
+# Combined MCU page-124 + OPTIGA E120 + SE050 per-attempt and in-run
+# desynchronization/recovery E2E. It exercises ordinary three-way attempt
+# consumption plus MCU-, OPTIGA-, and SE050-ahead recovery and simulated
+# cache resynchronization. It does not reboot, call `reconcile_pin_attempts`,
+# or supply evidence for either directional boot branch. Use
 # `make pin-gate-hw-counter-e2e`.
 pin-gate-hw-counter-e2e = ["dual-se", "optiga-hw-counter", "e2e-test"]
 # Destructive end-to-end: burns 10 wrong PINs through gated_unlock to force
@@ -3291,9 +3289,9 @@ boot-pulse = ["stm32u585"]
 # `hw::sca_trigger`; rises high on entry to a guarded primitive and falls
 # low on exit. Implies `stm32u585` because the trigger pin is a real GPIO.
 sca-trigger = ["stm32u585"]
-optiga-reset-oids = ["optiga-trust-m"]  # One-shot recovery: provision Trust Anchor at 0xE0E3 and send SetObjectProtected reset manifests for OIDs F1D0..F1DF. Dev-only; drop once the chip is recovered.
+optiga-reset-oids = ["optiga-trust-m"]  # RETIRED evidence-only feature. Unconditionally compile-fenced: it mis-targets the observed type-0x12 E0E3 device-certificate object as a type-0x11 anchor. No runnable profile may enable it.
 optiga-no-shield = []  # Dev mode: skip Shielded Connection (PRL) entirely — no setup_pbs_no_handshake, no ensure_shield, no encrypted I2C. PIN HMAC + entropy read/write still work via plaintext APDUs. Use when E140 is unreachable (current bricked test chip). NOT production-safe. See docs/secure-elements/optiga-brick-postmortem.md §7.
-optiga-lock-operational = []  # Production: bump LcsO to Operational on BOTH E140 (PBS) AND every user OID (F1D0..F1D4 + F1E1) at end of provisioning. Irreversible per OPTIGA SRM §"Life Cycle Status" — LcsO is monotonic, no reverse path exists. Default OFF so dev chips stay at LcsO=Creation throughout all iteration (metadata still mutable, data rewriteable without AC constraints). ONLY enable when (a) STM32 OTP master is burned, (b) PBS is OTP-derived, (c) this specific chip is intended to become a production unit and you have validated the provisioning flow against sacrificial parts. See docs/production-todo.md for the full pre-ship checklist and docs/secure-elements/optiga-brick-postmortem.md §5 + §7 for the history.
+optiga-lock-operational = []  # Controlled irreversible-validation primitive for non-E140 OPTIGA object locks (F1D0..F1D4 + F1E1) and separately gated S-2 experiments. Irreversible per OPTIGA SRM §"Life Cycle Status" — LcsO is monotonic, no reverse path exists. Ordinary `pair_for_first_boot` / `setup_pbs_no_handshake` NEVER ratchets E140, even when this feature is present. Work-todo #36 fixes the E140 actor as factory-side but leaves exact timing/order relative to the first-field final PBS rotation OPEN; the E140 ratchet primitive remains intentionally unwired. This feature grants no production authority and is unconditionally incompatible with prodtest. Enable only under an exact owner-authorized sacrificial plan until a reviewed lifecycle flow exists. See docs/production-todo.md and docs/secure-elements/optiga-brick-postmortem.md §5 + §7.
 # Dev/bring-up ONLY: swap the STM32U585 OTP-stored device master key for a
 # compile-time fixed 32-byte constant. Lets us exercise the whole hw/otp.rs
 # + hw/secret_keys.rs + OPTIGA pairing-secret derivation pipeline on bench
@@ -3318,26 +3316,40 @@ otp-hardcoded-master-key = ["legacy-fw-rollback-unsafe", "erc7730-dev-unattested
 # in the production-build `compile_error!` fence. Pure-additive (no
 # silicon side effects).
 bhk-hardcoded-master-key = []
-# Tier-2 phase 2B production gate: switch `secret_keys::derive_into_bhk`
+# Tier-2 phase 2B candidate-hardware gate: switch `secret_keys::derive_into_bhk`
 # from the dev hardcoded fallback (HKDF over a compile-time constant)
 # to the real silicon path — `kdf_cmac_counter_generic` driven by
 # `KeySel::Bhk`. Requires `saes-dhuk` (Tier 1) AND the silicon-side
 # BHK provisioning + boot-load + TAMP-lock infrastructure that phase
-# 2B will land. OFF until that infrastructure exists; turning it on
+# 2B will land. This deterministic root helper is not the still-open
+# fresh-TRNG production-final credential protocol. OFF until that
+# infrastructure exists; turning it on
 # in a build that hasn't run phase-2B provisioning would produce
 # stable-but-zero-keyed derivations on most STM32U5 silicon (BHK
 # backup registers are zero at reset).
 bhk = ["saes-dhuk"]
+# work-todo #36: on the FIRST field boot, self-lock the MCU to RDP Level 2 and
+# rotate the SE pairing secrets off the factory-installed *transport* keysets
+# to final BHK-/salted-DHUK-rooted secrets, before the seed wizard. Devices
+# ship at RDP-0 (batch-uniform, user-verifiable over SWD before first power);
+# this feature owns the on-device half. It pulls in `bhk` (the Tier-2 axis the
+# rotation provisions) — hence `saes-dhuk` transitively. The RDP burn is
+# IRREVERSIBLE, so this must NEVER be in a dev/QEMU/bench image: the
+# `nsc/mod.rs` ship fence forces it on for `mode-production` ONLY, and
+# incompat fences keep it out of every test/dev feature. Absent from every
+# current build target; behaviour with it OFF is byte-identical to today.
+rdp2-self-lock = ["bhk"]
 # Under `e2e-test`, halt the boot flow right after `provision_from_mnemonic`
-# returns, BEFORE `SE.unlock` would trigger the OPTIGA PRL handshake + the
-# irreversible E140 LcsO=op bump. Used for the Phase-A hardware-validation
-# target (`flash-hw-optiga-bringup-write-only`): we want to prove the PBS
-# was written to the chip without committing the chip to that PBS.
+# returns, before the ordinary unlock/PRL handshake. Used for the Phase-A
+# hardware-validation target (`flash-hw-optiga-bringup-write-only`) to prove
+# the PBS write without proceeding into the rest of the session. Ordinary
+# unlock does not ratchet E140; that irreversible factory-side step remains
+# unwired and OPEN.
 # Only meaningful in combination with `e2e-test`.
 e2e-skip-unlock = []
 # Under `e2e-test`, skip the `crypto::provision_from_mnemonic` call. Used when
-# the OPTIGA chip is already provisioned from a prior run and its user-OID
-# metadata has been locked at LcsO=op — re-running `store_objects` would fail
+# the OPTIGA chip is already provisioned from a prior run and its protected
+# user-OID metadata has been locked at LcsO=op — re-running `store_objects` would fail
 # on the first `set_metadata` APDU because the target OID is already frozen.
 # With this feature set, we jump straight to `SE.unlock(pin)` which triggers
 # the PRL handshake against the existing PBS + PIN secret on the chip. Only
@@ -3361,23 +3373,31 @@ dual-se = ["optiga-trust-m", "se050"]  # Both SEs active: XOR-split entropy acro
 # `establish()` probes the derived set first; if that fails the card-cryptogram check it
 # can fall back to the published factory keys — but ONLY when `se050-scp03-allow-factory-
 # fallback` is ALSO set (see below). Reversible: just code + this flag, no chip writes.
-# Production-safe on its own (it's the chosen direction); the irreversible rotation is
-# `se050-rotate-scp03`. See work-todo #20 Stage A.
+# Necessary for the current deterministic transport-key path, but not
+# production-final or sufficient for shipment. The selected shipping model
+# requires a fresh-TRNG per-device final rotation plus crash-safe durable public
+# state and recovery; that protocol is still OPEN. The existing irreversible
+# deterministic PUT KEY mechanism is `se050-rotate-scp03` and is bench/factory
+# evidence only. See work-todo #20 and docs/production-todo.md.
 se050-derived-scp03 = ["se050"]
 # Permit `establish()` to fall back to the PUBLISHED AN12436 factory SCP03 keys when the
 # derived-key handshake fails. This is needed ONLY by the provisioning/rotation tool
 # firmware (§29) — it must open a factory-key session to send GP PUT KEY against a chip
 # that still holds NXP defaults. The runtime-signing SHIP build talks exclusively to an
-# already-rotated chip, so it MUST omit this flag and FAIL CLOSED instead of silently
-# downgrading to attacker-known factory keys (a fail-OPEN). ENFORCED at compile time:
+# already-rotated deterministic-transport chip, so it MUST omit this flag and
+# FAIL CLOSED instead of silently downgrading to attacker-known factory keys (a
+# fail-OPEN). This is a necessary current guard, not production-final pairing
+# closure. ENFORCED at compile time:
 # this flag is in the hardware-release `compile_error!` fence in nsc/mod.rs (alongside
 # debug-log / se050-rotate-scp03), so a `stm32u585 + !debug_assertions` image that is not
 # an explicit `e2e-test` / `dev-testkey` test build cannot enable it. Nonsensical without
 # `se050-derived-scp03` → second compile_error in scp03.rs.
 se050-scp03-allow-factory-fallback = ["se050-derived-scp03"]
-# IRREVERSIBLE per chip — one-shot GP PUT KEY ceremony that replaces SCP03 keyset 0x0B
-# in place with the device's derived keys, then halts. NEVER ship; production-provisioning
-# only; never flash to a board that still moves RDP around (the RDP1↔RDP0 dance mass-erases
+# IRREVERSIBLE per chip — existing one-shot GP PUT KEY evidence path that
+# replaces SCP03 keyset 0x0B in place with deterministic derived transport
+# keys, then halts. This is not the required fresh-TRNG production-final
+# rotation. NEVER ship; sacrificial bench/factory validation only; never flash
+# to a board that still moves RDP around (the RDP1↔RDP0 dance mass-erases
 # the BHK page → dead SE050). The PUT KEY APDU framing is best-effort from GP 2.3 / AN12436
 # and MUST be validated on sacrificial parts before any real provisioning run. Listed in the
 # `compile_error!` fence in nsc/mod.rs. See work-todo #20 Stage B + docs/production-todo.md.
@@ -3458,12 +3478,13 @@ dual-se-admin-wipe-e2e = ["dual-se"]
 # — the exact scenario where the old PE4→ENA cross-coupling corrupted
 # ENTROPY_OBJ. Use `make dual-se-multi-unlock-e2e`.
 dual-se-multi-unlock-e2e = ["dual-se"]
-# Direct test of the MCU-side PIN attempt counter (page 126) + the
+# Direct test of the MCU-side PIN attempt counter (page 124) + the
 # `nsc::gated_unlock` pre-commit pattern. Hardcoded right/wrong PINs
 # + semihosting PASS/FAIL output; no buttons or PIN UI needed.
 # Exercises what the interactive unlock path would — counter
 # bump on wrong PIN, counter reset on correct PIN, return-code
-# correctness. Use `make pin-gate-e2e`.
+# correctness. It does not enable the OPTIGA E120 hardware counter and does
+# not exercise boot reconciliation. Use `make pin-gate-e2e`.
 pin-gate-e2e = ["dual-se"]
 se050-crash-safety-e2e = ["se050"]  # 2-phase test: partial wipe + reset + resume. Use `make se050-crash-safety-e2e`.
 # On-silicon SE050 stress-test harness. Catalog-driven runner that boots
@@ -3477,7 +3498,7 @@ se050-crash-safety-e2e = ["se050"]  # 2-phase test: partial wipe + reset + resum
 # tests) / `make se050-stress-only-<name>` (single test) / `make
 # se050-stress-list` (host-side catalog).
 se050-stress = ["se050"]
-spi1-arduino = []  # Use SPI1/PE12-PE15 (Arduino R3 headers) instead of SPI2/PB12-PB15 for TROPIC01
+spi1-arduino = []  # Use SPI1/PE12-PE15 (Arduino R3 headers) instead of SPI2/PB12-PB15 (NV3007 LCD wiring)
 stsafe-probe = ["stm32u585", "mock-se"]  # I2C2 bus scan to detect on-board STSAFE-A110
 gpio-buttons = ["stm32u585"]  # GPIO button driver: PI2 (LEFT) + PA15 (RIGHT) on CN14
 button-test = ["stm32u585", "mock-se", "gpio-buttons"]  # Flash + run GPIO button test

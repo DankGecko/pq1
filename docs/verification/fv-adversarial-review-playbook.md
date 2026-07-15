@@ -69,7 +69,13 @@ The mechanical gates make the *vacuity* class non-recurring. They do **nothing**
 - **Adversarial framing** — agents tasked to **refute** ("find where the proof says less than the marketing; where the gate is green but the claim is hollow"); default-to-guilty.
 - **Model diversity** — ≥3 independent models; convergence is signal, divergence surfaces a blind spot one model shares with you.
 - **PoC-required** — every finding carries a *runnable* artifact: a Lean snippet proving a hypothesis unsatisfiable, a "delete this conjunct and the theorem still holds," a `#print axioms` showing an advertised premise absent, a Rust test showing a fail-open. **No PoC ⇒ filtered.**
-- **Adversarial cross-vote** — a *second* agent tries to refute each finding (this is what caught the two dangerous "fixes" — the F8 plaintext-downgrade and the P1 prove-a-false-statement traps).
+- **Adversarial discovery corroboration** — additional agents independently try
+  to reproduce or falsify each candidate (this is what caught the two dangerous
+  "fixes" — the F8 plaintext-downgrade and the P1 prove-a-false-statement
+  traps). Swarm quorum only prioritizes discovery; it never assigns a finding
+  disposition. The exact dual-review pair in
+  [`../planning-and-review-workflow.md`](../planning-and-review-workflow.md)
+  must receive every candidate/variant and personally cross-adjudicate it.
 - **Claims-inventory anchor** — attack the *specific* claims in `ASSURANCE_CASE.md` / `AXIOM_STATUS.json` / `THE_CLAIM.md`, walking the V1–V11 catalog against each.
 - **Honest residual output** — the run MUST end with *"what we could not break"* AND *"what we did NOT look at"* (modalities not run, claims unverified, artifacts unread). The latter becomes the next round's targets. A pass that only reports findings and implies "the rest is fine" is itself overconfidence.
 
@@ -81,7 +87,7 @@ An in-house swarm reads our docs and inherits our framing, so it shares *some* b
 
 ## Part C — THE MASTER PROMPT (copy-paste / workflow brief)
 
-> **Now packaged as a runnable, framework-agnostic kit:** `contracts/verification/adversarial-review/`. The prompt below is mirrored (self-contained, with the V1–V11 catalog + a strict JSON findings schema) in `adversarial-review/PROMPT.md`; the angles/targets/cross-vote live in `protocol.json`; and `run_review.py` drives it through **any** backend — `--backend claude`, `--backend codex`, or `--backend generic --cmd '…'` for a raw model or a future system. So you are not locked to Claude Code: `python3 run_review.py --backend codex --reviewers 3 --quorum 2`. Self-test with no LLM: `--backend generic --cmd 'cat tests/canned_findings.json' --self-test-ok`. See `adversarial-review/README.md`. The copy-paste form below remains for a quick one-off paste into any chat.
+> **Now packaged as a runnable, framework-agnostic kit:** `contracts/verification/adversarial-review/`. The prompt below is mirrored (self-contained, with the V1–V11 catalog + a strict JSON findings schema) in `adversarial-review/PROMPT.md`; the angles/targets/discovery-corroboration threshold live in `protocol.json`; and `run_review.py` drives it through **any** backend — `--backend claude`, `--backend codex`, or `--backend generic --cmd '…'` for a raw model or a future system. So you are not locked to Claude Code: `python3 run_review.py --backend codex --reviewers 3 --quorum 2 --run-id <stable-id> --out <external-dir>`. Self-test with no LLM: `--backend generic --cmd 'cat tests/canned_findings.json' --self-test-ok --run-id self-test --out <external-dir>`. The kit retains every raw variant with a deterministic origin ID; quorum only separates corroborated from sub-quorum discovery candidates and never supplies a review disposition. See `adversarial-review/README.md`. The copy-paste form below remains for a quick one-off paste into any chat.
 
 Paste this to a fresh agent (or use it as the per-agent brief in an N-way swarm workflow; rotate models). Fill the `{{…}}` slots.
 
@@ -139,22 +145,19 @@ RULES:
   - Verify against the CURRENT tree, not docs alone; re-read the cited Lean — do not
     trust quotes. Check git log for recent changes.
   - Distinguish "ships-broken" from "pre-production caveat behind a fence" (CLAUDE.md).
-  - For each finding give: which V-mode, the exact file:line, the PoC, the
-    disposition (CONFIRMED_REAL / FALSE_POSITIVE / ALREADY_FIXED / OPEN_RESEARCH),
-    severity, and a proposed fix — flagging if the fix would break an invariant,
+  - For each candidate give: which V-mode, the exact file:line, the PoC,
+    provisional severity, a stable candidate ID, and a proposed fix — flagging
+    if the fix would break an invariant,
     regress a green proof, introduce a sorry/axiom, or "fix" correct code.
+    Do not assign a finding disposition.
 
-OUTPUT — file findings so they can be catalogued + worked through (see
-contracts/verification/docs/findings/README.md — the FV catalogue is REVIEW_PROVENANCE.md):
-  Write a dated report to contracts/verification/docs/findings/<surface>-<YYYY-MM-DD>.md
-  from docs/security/adversarial-review/findings/TEMPLATE.md, AND add a row to
-  contracts/verification/docs/REVIEW_PROVENANCE.md — everything below (findings + the honest residual) goes IN it.
-  Report frontmatter `status: open`; EACH finding gets its own `Status:` line (start 🔲 OPEN)
-  + a falsifiable PoC. Add one row to the Catalogue table in findings/README.md. As findings
-  are worked through, whoever handles each flips its `Status:` (✅ FIXED / ☑️ ACCEPTED /
-  🚫 INVALID / ⏸ DEFERRED) + a Resolution (commit+date or why), and sets the report
-  `status: resolved` once none remain OPEN. work-todo.md stays the action list; findings/ is
-  the review record — cross-link them.
+OUTPUT — return an external candidate packet to the coordinator. Do not modify
+the repository, write a canonical findings report, or update
+`REVIEW_PROVENANCE.md`/status fields. Include every candidate and the honest
+residual. The coordinator freezes the raw packet and gives the complete union
+to the exact Partner-A/Partner-B pair; only their symmetric cross-adjudication
+may assign dispositions. An authorized maintainer records the adjudicated
+result afterward.
 
 MANDATORY HONEST RESIDUAL (the run is INVALID without it):
   1. "What I tried to break and COULDN'T" — the claims that survived, and the
@@ -171,7 +174,29 @@ MANDATORY HONEST RESIDUAL (the run is INVALID without it):
   Never imply "the rest is fine." Absence of a finding is not evidence of soundness.
 ```
 
-**Running it as a swarm** (replicates the EF pass): the portable kit does the fan-out for you — `run_review.py --reviewers 3 --quorum 2` runs N independent passes per angle and cross-votes (a finding ≥quorum reviewers raise is "confirmed"; the rest are sub-quorum triage). For model diversity, run it twice across **two** backends (`--backend claude` then `--backend codex`) so a single model's blind spot doesn't become yours, and union the `out/report.md` honest-residual blocks into the next round's targets. (If you prefer to drive it from inside Claude Code instead of the CLI, the `Workflow` tool's `parallel()` + a `phase('CrossCheck')` is the equivalent mechanical shape; rate-limit-gentle batching ≤2 concurrent avoids the throttle.)
+**Running it as a swarm** (replicates the EF discovery pass): the portable kit
+does the fan-out for you — `run_review.py --reviewers 3 --quorum 2 --run-id
+<stable-id> --out <external-dir>` runs N independent passes per angle. `--out`
+is mandatory for executing runs, must resolve outside the repository, and
+creates a backend/run-ID namespaced directory that refuses overwrite. A
+candidate raised by at least quorum distinct
+passes is **corroborated discovery**; every other candidate remains
+**sub-quorum discovery**. Neither classification sets a disposition, and the
+kit retains all variants and deterministic origin IDs. For model diversity,
+run it twice across **two** backends (`--backend claude` then `--backend codex`)
+so a single model's blind spot does not become yours, union every candidate and
+honest residual, and submit that complete union to the exact Partner-A/Partner-B
+pair required by
+[`../planning-and-review-workflow.md`](../planning-and-review-workflow.md).
+Create that envelope with `run_review.py --union-raw <claude-raw.json>
+<codex-raw.json> --out <external-dir>`: it preserves both complete raw receipts
+and their hashes deterministically, rejects duplicate namespaces and clobbering,
+and deliberately performs no cross-run grouping or voting.
+Only their symmetric cross-adjudication may assign
+`CONFIRMED`/`REFUTED`/`NARROWED`/`UNRESOLVED`; disagreement is preserved, never
+majority-voted away. (If you prefer to drive discovery from inside Claude Code
+instead of the CLI, the `Workflow` tool's `parallel()` shape is equivalent;
+rate-limit-gentle batching ≤2 concurrent avoids the throttle.)
 
 ---
 

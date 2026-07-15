@@ -42,10 +42,11 @@ TRUST_ANCHOR_OID = 0xE0E3
 # after provisioning its LcsO is Operational and Change becomes Conf(E140),
 # making normal rewrites impossible once the host-side PBS is lost. The
 # custom metadata restores it to Creation with data_type=PBS so
-# `setup_pbs_no_handshake` can re-run end-to-end on the next boot. Post
-# work-todo #24 the PBS is re-derived from the OTP master on every boot,
-# so this reset path is only useful for chips that were paired under the
-# pre-#24 driver and whose MCU-side PBS copy was subsequently lost.
+# `setup_pbs_no_handshake` can re-run end-to-end on the next boot. Shipping-
+# profile PBS derives from the STM32 DHUK on every boot and has no flash copy;
+# explicit legacy/dev profiles may still use the OTP-master-shaped fallback.
+# This reset helper is bench recovery for a chip paired under a different or
+# subsequently unavailable development root, not a production lifecycle step.
 TARGET_OIDS: list[tuple[int, Path]] = [
     (oid, META_FILE_DEFAULT) for oid in range(0xF1D0, 0xF1E0)
 ] + [

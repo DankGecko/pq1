@@ -13,8 +13,9 @@ publish = false
 #
 # Tests here shell out to `cargo build -p pqsigner-fsbl` as a subprocess,
 # parse `arm-none-eabi-size`, and assert flash-footprint / source-text
-# invariants. They run on every `cargo test --workspace` and gate the
-# WRP1A-locked 32 KB FSBL flash region against silent growth.
+# invariants. They run on every `cargo test --workspace` and protect the
+# current legacy 32 KB bench linker region against silent growth. They do not
+# close Draft 1.1's FLASH or RAM/stack gates.
 
 [dependencies]
 

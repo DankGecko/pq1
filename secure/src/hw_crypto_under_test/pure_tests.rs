@@ -502,7 +502,8 @@ fn negative_legacy_otp_layout_shape_does_not_drift_silently() {
     assert!(OTP_SRC.contains("pub const MAX_FW_VERSION: u32 = ROLLBACK_WORDS * 32;"));
     // This pins the legacy layout so bench fixtures do not drift while the
     // path is quarantined. It makes no lifetime/capacity claim: each physical
-    // OTP QW is one-program-only and Draft 0.9's replacement codec is OPEN.
+    // OTP QW is one-program-only. Draft 1.1's replacement codec is an
+    // unapproved research candidate and remains OPEN.
     assert!(OTP_SRC.contains("pub const ROLLBACK_WORDS: u32 = 32;"));
 }
 

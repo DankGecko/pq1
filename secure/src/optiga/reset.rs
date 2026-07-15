@@ -1,6 +1,13 @@
-//! One-shot OID recovery via SetObjectProtected (CMD 0x83).
+//! Retired OID-recovery experiment via SetObjectProtected (CMD 0x83).
 //!
-//! Gated behind the `optiga-reset-oids` feature. During the bring-up pass
+//! **Evidence only; never executable.** `secure/src/nsc/mod.rs` unconditionally
+//! rejects the `optiga-reset-oids` feature with
+//! `OPTIGA_RESET_OIDS_RETIRED`. The experiment assumed E0E3 could become a
+//! type-0x11 Trust Anchor, but the observed SKU/revision has a full type-0x12
+//! device certificate there. Keep these bytes only to explain the failed
+//! incident path; do not copy them into a replacement ceremony.
+//!
+//! The historical intent was: during the bring-up pass
 //! that has left the `0xF1D0..0xF1DF` AUTHREF OID range locked (the chip
 //! rejects SetDataObject after two successful writes per session, across
 //! power cycles, for reasons outside this driver's control), we recover by
@@ -13,16 +20,19 @@
 //! `tools/optiga_reset/gen_reset_manifests.py` (which drives the Infineon
 //! `protected_update_data_set` tool) and compiled into the firmware as
 //! `include_bytes!`. The signing key lives next to the tool; it is the
-//! sample EC P-256 key from Infineon's example set. This is a dev-only
-//! recovery path — once the OIDs are unburned and the real wallet
-//! provisioning succeeds, builds drop the `optiga-reset-oids` feature.
+//! sample EC P-256 key from Infineon's example set. This was proposed as a
+//! dev-only recovery path, but it was retired after the target OID proved
+//! misidentified. All builds now reject the `optiga-reset-oids` feature.
 
 use super::apdu::{self, OptigaError};
 use super::ifx_i2c::IfxState;
 use super::shield::ShieldedConnection;
 
-/// OID to store the Trust Anchor cert. `0xE0E3..0xE0E8` are reserved for
-/// Trust Anchors; `0xE0E3` is the default in Infineon's tool.
+/// Historical, mis-targeted OID from the Infineon example tool.
+///
+/// On the observed part E0E3 is a full type-0x12 device-certificate object,
+/// not an available type-0x11 Trust Anchor. The real candidate pool is tracked
+/// separately as E0E8/E0E9/E0EF and has no executable ceremony.
 pub const TRUST_ANCHOR_OID: u16 = 0xE0E3;
 
 /// Metadata for a Trust Anchor OID, verbatim from

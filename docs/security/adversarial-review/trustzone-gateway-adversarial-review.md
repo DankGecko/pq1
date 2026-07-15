@@ -38,7 +38,8 @@
 
 **Cross-linked surface (owned elsewhere).** The **firmware-update gateway**
 (`cmd_fw_{begin,chunk,commit,status,abort}`) is a TrustZone entry surface. Its
-legacy V1/OTP backend is production-fenced; review Draft 0.9 and the corrected
+legacy V1/OTP backend is production-fenced; review the unapproved Draft 1.1
+research candidate and the corrected
 [`red-teaming.md`](../red-teaming.md) §8.3 / [`threat-model.md`](../threat-model.md)
 Claim 8. Here, only confirm the veneers use the central validator and a
 `HandlerGuard`.
@@ -88,19 +89,17 @@ RULES:
     passing host test as evidence the hardware reclassification holds (that is silicon).
   - The Kani window/decode_flags/validate_data_len proofs cover the CORE; their scope
     notes EXCLUDE fixed-offset inlined reads — that exclusion is your hunting ground.
-  - For each finding: TZ-mode, file:line, PoC, disposition, severity, proposed fix
+  - For each candidate: TZ-mode, file:line, PoC, provisional severity, stable
+    candidate ID, and proposed fix
     (flag if it would regress a Kani proof, break the typestate, or weaken a sentinel).
+    Do not assign a finding disposition.
 
-OUTPUT — file findings so they can be catalogued + worked through (see
-docs/security/adversarial-review/findings/README.md):
-  Write a dated report to docs/security/adversarial-review/findings/<surface>-<YYYY-MM-DD>.md
-  from findings/TEMPLATE.md — everything below (findings + the honest residual) goes IN it.
-  Report frontmatter `status: open`; EACH finding gets its own `Status:` line (start 🔲 OPEN)
-  + a falsifiable PoC. Add one row to the Catalogue table in findings/README.md. As findings
-  are worked through, whoever handles each flips its `Status:` (✅ FIXED / ☑️ ACCEPTED /
-  🚫 INVALID / ⏸ DEFERRED) + a Resolution (commit+date or why), and sets the report
-  `status: resolved` once none remain OPEN. work-todo.md stays the action list; findings/ is
-  the review record — cross-link them.
+OUTPUT — return an external candidate packet to the coordinator. Do not modify
+the repository, write a canonical findings report, or update catalogue/status
+fields. Include every candidate and the honest residual. The coordinator freezes
+the raw packet and gives the complete union to the exact Partner-A/Partner-B
+pair; only their symmetric cross-adjudication may assign dispositions. An
+authorized maintainer records the adjudicated result afterward.
 
 MANDATORY HONEST RESIDUAL (the run is INVALID without it):
   1. "What I tried to break and COULDN'T" — per entry point.
@@ -110,7 +109,14 @@ MANDATORY HONEST RESIDUAL (the run is INVALID without it):
   Never imply "the rest is fine."
 ```
 
-**Running it as a swarm.** ≥3 reviewers per scope, cross-vote, two model backends; the `contracts/verification/adversarial-review/` kit drives the fan-out.
+**Running it as a swarm.** Use ≥3 independent discovery reviewers per scope
+across two model backends. Quorum only corroborates/prioritizes discovery; it
+does not set a disposition, and sub-quorum variants remain in the packet. Give
+every candidate and origin variant to the exact Partner-A/Partner-B pair in
+[`../../planning-and-review-workflow.md`](../../planning-and-review-workflow.md);
+only their symmetric cross-adjudication may disposition it, with disagreement
+preserved. The `contracts/verification/adversarial-review/` kit drives the
+fan-out.
 
 ---
 

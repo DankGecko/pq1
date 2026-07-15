@@ -81,23 +81,25 @@ pub const DURESS_BOOTSTRAP_VK_OBJ: u32 = 0x7B10_0013;
 /// Admin wipe UserID. Second auth object, created at provisioning
 /// with a hardware-root-derived PIN (`hw::secret_keys::se050_admin_pin()`
 /// → `derive_into_bhk("pqsigner/se050-admin-pin-v1")`): in a `bhk`
-/// build (the shipping target since the Phase-2C call-site flip,
-/// `aa23f05`) that's `SAES-CMAC(silicon-BHK, …)`; with `saes-dhuk`
+/// build (the current candidate hardware shape since the Phase-2C call-site
+/// flip, `aa23f05`) that's `SAES-CMAC(silicon-BHK, …)`; with `saes-dhuk`
 /// alone it falls through to `SAES-CMAC(DHUK, …)`; on the legacy /
 /// `otp-hardcoded-master-key` path it's `HKDF(OTP-master/const, …)`.
 /// Every variant is deterministic per device and stable across power
 /// cycles, reflashes, and a flash mass-erase (the only exception: the
 /// BHK lives in flash page 126, so an RDP regression loses it → the
 /// SE050 needs re-pairing afterward — but losing the *admin* PIN that
-/// way is non-fatal, you don't need it during recovery, and an RDP2
-/// production unit can't be regressed). Used by the PIN-lockout
+/// way is non-fatal, you don't need it during recovery, and an RDP2-locked
+/// unit can't be regressed). Used by the PIN-lockout
 /// factory-reset path: after 10 failed user PIN attempts, firmware
 /// authenticates against this object and deletes every user object
 /// (which all carry an admin-delete policy entry pointing here).
 ///
-/// **Invariant (post-v6)**: the admin PIN is reproducible from a
-/// silicon hardware root, never persisted, so there is no flash-side
-/// pairing to drift out of sync with the on-chip UserID. Previous
+/// **Current-helper invariant (post-v6)**: the admin PIN is reproducible from
+/// a silicon hardware root, never persisted, so there is no flash-side
+/// pairing to drift out of sync with the on-chip UserID. The #36 candidate
+/// rekeys the factory transport UserID to this BHK-rooted final helper; its
+/// handoff/recovery contract and silicon authority remain open. Previous
 /// ranges (v3–v5) paired admin with a flash page-125 PIN slot and
 /// retired whenever the two desynchronised; v6 removes the coupling
 /// entirely (`hw::flash::write_admin_pin`/`read_admin_pin` deleted).
@@ -467,15 +469,17 @@ impl Se050 {
         result
     }
 
-    /// **IRREVERSIBLE — production-provisioning only.** One-shot GP `PUT KEY`
-    /// ceremony: replace the SE050's SCP03 platform keyset `0x0B` in place
-    /// with this device's derived keys (`secret_keys::se050_scp03_*_key()`,
-    /// BHK-rooted in a `bhk` build). After this, the published factory
+    /// **IRREVERSIBLE — sacrificial evidence only.** One-shot GP `PUT KEY`
+    /// path: replace the SE050's SCP03 platform keyset `0x0B` in place with
+    /// this device's deterministic derived keys
+    /// (`secret_keys::se050_scp03_*_key()`, BHK-rooted in a `bhk` build).
+    /// This bypasses the journaled `rdp2-self-lock` transport→final path and
+    /// must not be used on a unit intended to ship. After this, the published factory
     /// keys are gone and the chip only opens with firmware that re-derives
     /// the matching keys (`establish()`'s probe-on-boot handles that).
     ///
-    /// Pre-conditions the caller MUST have satisfied (see `work-todo #20`
-    /// Stage B + `docs/production-todo.md`): the unit is at its final
+    /// Pre-conditions the sacrificial evidence caller MUST have satisfied
+    /// (see `work-todo #20` Stage B + `docs/production-todo.md`): the unit is at its final
     /// per-die-DHUK RDP level (RDP ≥ 1) so the BHK is stable; the BHK has
     /// been provisioned; this is a factory-fresh chip still holding the
     /// `PLATFORM_*` keys (we `init()` here, which establishes SCP03 —
@@ -674,13 +678,10 @@ impl Se050 {
         r
     }
 
-    /// Peek the silicon-enforced **failed-attempts USED** count on the
-    /// USERID auth object — i.e. the `auth_attempts` field — WITHOUT
-    /// burning an attempt.
-    ///
-    /// (Semantics match OPTIGA's F1E1: both return "attempts USED"
-    /// starting at 0, so the boot-time reconcile against the MCU
-    /// page-124 used-counter is a straight `!=` compare.)
+    /// Attempt a non-consuming read of the USERID object's
+    /// **failed-attempts USED** attribute. On the production policy this is
+    /// expected to return `None`: silicon rejects the attribute read with
+    /// SW=0x6986. It therefore supplies no SE050 boot-reconciliation input.
     ///
     /// Mechanism: `ReadObjectAttributes` (CLA=0x80 INS_READ
     /// P2_ATTRIBUTES) reads the object's attribute structure over the
@@ -721,15 +722,15 @@ impl Se050 {
     /// **retracted**.
     ///
     /// **Operational consequence.** On production `USERID_OBJ` (same
-    /// policy shape) this method returns `None` at boot, so the SE050
-    /// leg of the boot-time MCU↔SE050 attempt-counter reconcile is
-    /// silently skipped. The OPTIGA + MCU page-124 legs still
-    /// reconcile, which is the load-bearing pair (PIN comparison is in
+    /// policy shape) this method returns `None` at boot, so there is no SE050
+    /// boot-counter leg. The directional OPTIGA-E120/page-124 check remains
+    /// available (PIN comparison is in
     /// SE silicon, and a desolder-bench attacker who derives
     /// `se050_admin_pin()` still can't read user-gated objects per the
     /// `audit_admin_passive_read_refused` silicon claim). The skipped
     /// SE050 leg is a defense-in-depth loss, not a confidentiality
-    /// loss.
+    /// loss. Callers must log the unavailable leg rather than treating it as
+    /// agreement.
     ///
     /// **No workaround using attribute reads.** Recovering the counter
     /// without burning an attempt would require either (1) opening a
@@ -1389,10 +1390,9 @@ impl Se050 {
     ///   b. Provision admin UserID at `0x7B0A_00A0`, user UserID at
     ///      `0x7B0A_0000`, data object at `0x7B0A_0001`. All with the
     ///      real two-entry TAG_POLICY template.
-    ///   c. Persist the test admin PIN to flash page 125 QW0 so the
-    ///      resume phase can read it back (same mechanism the real
-    ///      wipe path uses).
-    ///   d. Arm the wipe flag at page 125 QW1.
+    ///   c. Erase page 125's legacy area and arm its wipe flag. The test
+    ///      admin PIN is a compile-time test literal; production re-derives
+    ///      its admin PIN from the BHK/DHUK root and never stores it here.
     ///   e. Partial wipe: open admin session, delete ONLY the data
     ///      object, leaving user + admin UserIDs intact. This models
     ///      power being cut halfway through the wipe sequence.
@@ -1401,17 +1401,16 @@ impl Se050 {
     /// PHASE 2 (flag armed on boot):
     ///   a. Verify pre-resume state: data gone, user present, admin
     ///      present, flag armed. Any deviation = FAIL.
-    ///   b. Read test admin PIN from flash page 125 QW0 (same read
-    ///      path the real `factory_reset_admin` uses).
+    ///   b. Reuse the compile-time test PIN (production would re-derive
+    ///      `secret_keys::se050_admin_pin()`).
     ///   c. Open admin session, delete remaining user + admin UserIDs.
     ///   d. Verify all three test objects are gone.
-    ///   e. Erase flash page 125 — clears admin PIN and flag atomically,
+    ///   e. Erase flash page 125 — clears the flag and legacy area,
     ///      proving the normal wipe-completion path works.
     ///   f. Reports "PHASE 2 — CRASH-SAFETY RESUME: PASS".
     ///
-    /// Returns a status tag the caller can print. Destructive to any
-    /// real admin PIN on page 125 — only run on a chip that hasn't yet
-    /// been through first-boot wizard with production firmware.
+    /// Returns a status tag the caller can print. Destructive to page 125's
+    /// wipe/legacy state — use only on an authorized throwaway test device.
     #[cfg(feature = "se050-crash-safety-e2e")]
     pub fn run_crash_safety_roundtrip(&mut self) -> Result<&'static str, Se050Error> {
         self.init()?;
@@ -2737,11 +2736,13 @@ impl WalletStore for Se050 {
         // Admin-wipe flow (STM32 target only — QEMU has no flash):
         //   1. Derive the per-device admin PIN via
         //      `secret_keys::se050_admin_pin()` → `derive_into_bhk(...)`:
-        //      `SAES-CMAC(BHK, ...)` in a `bhk` build (the shipping
-        //      target), `SAES-CMAC(DHUK, ...)` with `saes-dhuk` alone,
+        //      `SAES-CMAC(BHK, ...)` in a `bhk` build (the current candidate
+        //      hardware shape), `SAES-CMAC(DHUK, ...)` with `saes-dhuk` alone,
         //      `HKDF(OTP-master/const, ...)` on the legacy / dev path.
-        //      Nothing is persisted to flash; the PIN is re-derivable
-        //      on every boot from silicon HUK state.
+        //      Nothing is persisted to flash; the PIN is re-derivable on every
+        //      boot from silicon HUK state. The #36 candidate uses this as the
+        //      final BHK-rooted credential, but that candidate is not
+        //      production-approved until handoff/recovery/silicon closure.
         //   2. Provision ADMIN_WIPE_OBJ UserID with that PIN.
         //   3. Run a canary round-trip selftest proving the admin-delete
         //      policy actually works (guardrail against TLV byte-order
@@ -3015,16 +3016,19 @@ impl WalletStore for Se050 {
         // Re-derive the admin PIN via `secret_keys::se050_admin_pin()`
         // → `derive_into_bhk("pqsigner/se050-admin-pin-v1")` — the same
         // derivation `store_objects` uses to write the admin UserID. In a
-        // `bhk` build (the shipping target) that's `SAES-CMAC(BHK, ...)`;
+        // `bhk` build (the current candidate hardware shape) that's
+        // `SAES-CMAC(BHK, ...)`;
         // with `saes-dhuk` alone it falls through to `SAES-CMAC(DHUK, ...)`;
         // the legacy / `otp-hardcoded-master-key` path is `HKDF(OTP-master/
-        // const, ...)`. Every variant is deterministic per device and
-        // survives reflashes + a flash mass-erase (the BHK is the one bit
-        // in flash — page 126 — but a lost admin PIN isn't fatal, you don't
-        // need it during recovery). The former page-125 PIN slot is gone
-        // entirely (no `write_admin_pin` / `read_admin_pin` anymore) — a v6
-        // chip never persists the admin PIN to flash; deriving it on demand
-        // is what closes the "lose the flash, lose the pairing" brick class.
+        // const, ...)`. Every variant is deterministic per device across
+        // ordinary reflashes. The BHK-rooted variant depends on the wrapped
+        // BHK in page 126: a flash mass erase destroys that root, so a newly
+        // generated BHK cannot authenticate the existing SE050 admin object
+        // without an authorized re-pair/reprovision ceremony. The former
+        // page-125 PIN slot is gone entirely (no `write_admin_pin` /
+        // `read_admin_pin` anymore); deriving on demand removes page-125 PIN
+        // desynchronization, but it does not make BHK loss recoverable or by
+        // itself approve the journaled first-boot credential protocol.
         //
         // Page 125 still holds the wipe-in-progress flag (for crash-safe
         // resume) at `WIPE_FLAG_OFFSET`, which we arm below — a separate

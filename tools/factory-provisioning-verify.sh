@@ -86,7 +86,7 @@ decode_sentinel() {
 
 if [[ "${1:-}" == "--bump-rdp2" ]]; then
     echo "REFUSED: --bump-rdp2 is disabled while the factory OTP receipt is quarantined." >&2
-    echo "Draft 0.9 freezes rollback software interfaces only; it grants no irreversible authority." >&2
+    echo "Draft 1.1 is an unapproved rollback research candidate; it grants no irreversible authority." >&2
     exit 4
 fi
 

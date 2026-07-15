@@ -60,9 +60,10 @@ impl DualSecureElement {
         self.optiga.load_pbs();
     }
 
-    /// First-boot OPTIGA E140 pairing, run BEFORE the seed wizard draws
-    /// entropy — see `OptigaTrustM::pair_for_first_boot` for why
-    /// (mandatory `ensure_shield` in `random()` needs a paired chip).
+    /// Bring-up transport OPTIGA E140 pairing, run before the legacy seed
+    /// wizard draws entropy — see `OptigaTrustM::pair_for_first_boot` for why
+    /// (mandatory `ensure_shield` in `random()` needs a paired chip). This is
+    /// not the production-final fresh-TRNG rotation or E140 lock ceremony.
     /// The OPTIGA-level error detail is logged by the inner driver;
     /// callers only branch on success.
     pub fn pair_optiga_for_first_boot(&mut self) -> Result<(), SeError> {
@@ -501,22 +502,17 @@ impl WalletStore for DualSecureElement {
     }
 
     fn pin_attempt_count(&mut self) -> Option<u8> {
-        // Both SEs expose the counter on a peek-safe path:
-        //   - OPTIGA: F1E1 counter object (`read_counter_raw`).
-        //   - SE050: `ReadObjectAttributes` on USERID_OBJ — returns
-        //     `max_attempts - auth_attempts` over the SCP03 channel
-        //     without authenticating against the UserID (no attempt
-        //     consumed). See `Se050::pin_attempt_count_raw` for the
-        //     parse + SDK reference. (This corrects an earlier work-
-        //     todo §4 claim that said SE050's counter couldn't be
-        //     peeked.)
+        // OPTIGA exposes a peek-safe counter (E120 in the production
+        // `optiga-hw-counter` configuration). The production SE050 UserID
+        // policy denies `ReadObjectAttributes` with SW=0x6986, so its leg is
+        // `None`; see `Se050::pin_attempt_count_raw`.
         //
         // Combined value: MAX of whatever's available — counters
         // are "attempts USED" (higher = closer to lockout), so the
-        // strict aggregate is `max`, not `min`. Used by reconcile to
-        // compare against MCU page-124's used-count for a `!=`
-        // tamper check. Intra-SE divergence is reported separately
-        // by `pin_attempt_counts_divergent`.
+        // strict aggregate is `max`, not `min`. Reconciliation uses the
+        // available count directionally (`se_used > mcu_used`), because the
+        // MCU is precharged and may benignly lead. Intra-SE divergence is
+        // meaningful only when both legs are actually readable.
         let o = self.optiga.pin_attempt_count();
         let s = self.se050.pin_attempt_count();
         match (o, s) {
@@ -588,9 +584,9 @@ impl WalletStore for DualSecureElement {
     ///
     /// OPTIGA: `optiga.factory_reset()` overwrites every user OID through
     /// the shielded-connection path (`Change = Auto(F1D0) OR Conf(0xE140)`).
-    /// Works even if the user PIN is forgotten. The PBS in flash is
-    /// preserved so the chip remains usable for re-provisioning; the user
-    /// OIDs are now blank.
+    /// Works even if the user PIN is forgotten. The DHUK-derived PBS remains
+    /// reproducible and the shield stays available for re-provisioning; the
+    /// user OIDs are now blank. No PBS is stored on flash page 126.
     ///
     /// SE050: delegates to its own `factory_reset_admin` which uses the
     /// admin UserID at 0x7B10_00A0 to delete user objects.

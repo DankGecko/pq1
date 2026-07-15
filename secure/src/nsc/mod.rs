@@ -237,21 +237,115 @@ compile_error!(
 );
 
 // Dedicated guard: `otp-hardcoded-master-key` + `optiga-lock-operational` is
-// a specifically catastrophic combination. The lock-operational feature
-// commits the E140 LcsO=Operational bump, which is hardware-irreversible;
-// the hardcoded-master-key feature makes the PBS derivation a compile-time
-// constant shared by every device built with the feature. Combining them
-// would lock a chip to a PBS that is identical across every dev board —
-// effectively publishing the Shielded Connection key. Refuse to build.
+// a specifically catastrophic combination. The lock feature irreversibly
+// ratchets protected user-object metadata while the hardcoded-master-key
+// feature makes the PBS a compile-time constant shared by every such device.
+// Anyone knowing that constant can satisfy Conf(E140), so the supposedly
+// locked object policy would be rooted in a published credential. Ordinary
+// pairing no longer ratchets E140 itself, but this combination remains unsafe.
 #[cfg(all(
     feature = "otp-hardcoded-master-key",
     feature = "optiga-lock-operational",
 ))]
 compile_error!(
     "otp-hardcoded-master-key and optiga-lock-operational are mutually \
-     exclusive. Enabling both would bump E140 LcsO=Operational (irreversible) \
-     against a PBS derived from a shared compile-time constant, effectively \
-     publishing the Shielded Connection pairing secret."
+     exclusive. Enabling both would irreversibly lock protected objects while \
+     their Conf(E140) authority is rooted in a shared compile-time PBS, \
+     effectively publishing the Shielded Connection credential."
+);
+
+// The retained S-2 helper previously targeted the wrong OIDs and treated an
+// omitted DataType tag as if it removed an existing TrustAnchor type. OPTIGA
+// metadata updates are not yet proven to provide that replacement semantics,
+// so compiling the would-be ceremony is unsafe. Keep the exact candidate
+// inventory in the fail-closed helper for future silicon work, but do not emit
+// a runnable irreversible image until type transition, data readback,
+// lifecycle, and AC verification are all specified and validated.
+#[cfg(all(feature = "mode-production", feature = "optiga-trust-m"))]
+compile_error!(
+    "OPTIGA_S2_PRODUCTION_BLOCKED: the real type-0x11 trust-anchor pool \
+     E0E8/E0E9/E0EF and the device-certificate retype boundary remain OPEN. \
+     No production OPTIGA image may compile until the exact closure ceremony \
+     is implemented, reviewed, and silicon-validated. Enabling an \
+     irreversible acknowledgement or `optiga-lock-operational` does not \
+     satisfy this gate."
+);
+
+#[cfg(all(
+    feature = "optiga-lock-operational",
+    feature = "factory-production-irreversible-im-sure"
+))]
+compile_error!(
+    "OPTIGA_TA_POOL_LOCKDOWN_BLOCKED: the S-2 trust-anchor neutralization \
+     helper is not executable authority. The candidate pool is exactly \
+     E0E8/E0E9/E0EF, but safe DataType replacement plus data/AC/lifecycle \
+     readback has not been specified or silicon-validated. Do not build an \
+     irreversible image until that ceremony is separately reviewed."
+);
+
+// Prodtest is a reversible acceptance-test image.  It must never share a
+// build with a persistent-root, option-byte/shipping, SE-rotation, lifecycle,
+// or factory ceremony path.  In particular, an acknowledgement feature is
+// not authority to consume the BHK first write (which runs before prodtest's
+// main-loop short-circuit) or mutate either secure element.  The safe prodtest
+// profile uses `dev-testkey`; an unqualified prodtest build would use the real
+// OTP-master path and is rejected here as well.
+#[cfg(all(
+    feature = "prodtest",
+    any(
+        feature = "bhk",
+        feature = "se050-rotate-scp03",
+        feature = "optiga-lock-operational",
+        feature = "factory-provisioning",
+        feature = "factory-provisioning-rehearsal",
+        feature = "factory-production-irreversible-im-sure",
+        feature = "mode-production",
+        feature = "rdp-enforce-halt",
+        feature = "tamp-wipe",
+        feature = "tzic-wipe",
+        not(any(feature = "dev-testkey", feature = "otp-hardcoded-master-key")),
+    )
+))]
+compile_error!(
+    "PRODTEST_PERSISTENT_ACTION_FORBIDDEN: `prodtest` is a reversible \
+     acceptance-test profile and is unconditionally incompatible with real \
+     BHK/OTP roots, option-byte or shipping profiles, SE key rotation, OPTIGA \
+     lifecycle ratchets, persistent tamper-wipe handlers, and factory \
+     ceremony features. An irreversible \
+     acknowledgement does not relax this fence. Use the non-persistent \
+     `prodtest,dev-testkey` profile; run any destructive experiment only in a \
+     separately reviewed, owner-authorized sacrificial harness."
+);
+
+// Direct-Cargo defence for single-purpose reset/wipe/provision/stress images.
+// These features replace normal boot with code that mutates persistent MCU or
+// secure-element state. They are useful only as named bench harnesses and can
+// never be composed with a production image, even if some other quarantine
+// would also reject today's build.
+#[cfg(all(
+    feature = "mode-production",
+    any(
+        feature = "se050-factory-reset",
+        feature = "se050-reset-e2e",
+        feature = "se050-admin-wipe-e2e",
+        feature = "se050-crash-safety-e2e",
+        feature = "se050-admin-extract-attempt-e2e",
+        feature = "se050-stress",
+        feature = "optiga-admin-wipe-e2e",
+        feature = "optiga-nuclear-reset",
+        feature = "dual-se-admin-wipe-e2e",
+        feature = "optiga-hw-counter-e2e",
+        feature = "duress-probe-e2e",
+        feature = "duress-provision-e2e",
+        feature = "pin-gate-e2e",
+        feature = "dual-se-multi-unlock-e2e",
+    )
+))]
+compile_error!(
+    "PRODUCTION_DESTRUCTIVE_HARNESS_FORBIDDEN: mode-production cannot include \
+     any reset, wipe, persistent provisioning, stress, counter-mutation, or \
+     stateful E2E harness. Use each feature only through its named bench target \
+     and never on a unit intended to ship."
 );
 
 // Dedicated guard: `fw-rollback-e2e` is a dev/test image that embeds the dev
@@ -267,8 +361,9 @@ compile_error!(
 // Firmware-rollback backend quarantine. The current hardware implementation
 // treats one ECC-protected OTP quad-word as a reusable per-bit tally, but
 // STM32U585 user OTP permits only one program operation per 128-bit QW.
-// Draft 0.9 freezes replacement interfaces while deliberately leaving the
-// physical journal/ECC/OTP backend open.
+// Draft 1.1 is the current research candidate for replacement interfaces and
+// deliberately leaves approval plus physical journal/ECC/OTP/resource gates
+// open. It is not implementation authority.
 //
 // Shipping builds are blocked unconditionally. Bench images must carry a
 // conspicuous no-behaviour-change opt-in (normally inherited from debug-log,
@@ -278,9 +373,10 @@ compile_error!(
 #[cfg(all(feature = "mode-production", feature = "stm32u585"))]
 compile_error!(
     "FW_ROLLBACK_PRODUCTION_BLOCKED: the legacy firmware rollback path \
-     reprograms ECC-protected OTP quad-words. Replace it with the reviewed \
-     Draft-0.9 backend and close OPEN-JRN-HW/DUR, OPEN-ECC, OPEN-OTP, and \
-     combined FLASH/RAM gates before removing this fence."
+     reprograms ECC-protected OTP quad-words. Approve and implement the \
+     replacement contract, then close OPEN-JRN-HW/DUR, OPEN-FLASH-HW, \
+     OPEN-ECC, OPEN-RAM, OPEN-OTP, release/factory, and silicon gates before \
+     removing this fence."
 );
 #[cfg(all(
     feature = "stm32u585",
@@ -338,7 +434,8 @@ compile_error!(
 // play-hw-display` can drive the tests), so nothing else catches them in a
 // shipping image. `mode-production` is the explicit "this is a shipping
 // build" declaration; it must reject both. We key on `mode-production` ALONE
-// (not the stm32u585+release condition the S-2/S-3 fences use) because
+// (not the broader `stm32u585 + !debug_assertions` hardware-release condition
+// used by the denylist above and one arm of the S-3 fence) because
 // stm32u585+release+e2e-test IS the legitimate `make e2e-hw` hardware-test
 // image. The belt-and-braces companion is `make prod-check`, which resolves
 // the actual shipping feature set (catching a release built WITHOUT
@@ -386,64 +483,55 @@ compile_error!(
      `e2e-test` / `dev-testkey`."
 );
 
-// S-2 ship-blocker: `optiga-reset-oids` compiles in the SetObjectProtected
-// manifest senders AND (via `optiga::reset`) provisions Infineon's PUBLIC
-// sample trust-anchor cert at 0xE0E3. Either is a protected-update bypass of
-// every OID's Change AC on a shipped chip (defeats even the S-1 F1D0 fix). It
-// is a dev-only recovery feature and must never reach a production image.
-#[cfg(all(
-    any(
-        feature = "mode-production",
-        all(feature = "stm32u585", not(debug_assertions)),
-    ),
-    not(feature = "e2e-test"),
-    not(feature = "dev-testkey"),
-    feature = "optiga-reset-oids",
-))]
+// S-2 quarantine: the retired recovery feature writes sample-certificate
+// material and type-0x11 metadata to E0E3, but the observed object is a full
+// type-0x12 device certificate.  The operation is therefore mis-targeted and
+// destructive even in a dev build.  Keep the source only as incident evidence;
+// no Cargo profile may compile it into a runnable image until a replacement is
+// separately specified, reviewed, and authorized for named sacrificial parts.
+#[cfg(feature = "optiga-reset-oids")]
 compile_error!(
-    "`optiga-reset-oids` must not ship (ship-blocker S-2): it compiles the \
-     SetObjectProtected manifest senders and provisions the PUBLIC Infineon \
-     sample trust-anchor cert — a protected-update bypass of every OID's \
-     Change AC. Drop `optiga-reset-oids` from production builds."
+    "OPTIGA_RESET_OIDS_RETIRED: `optiga-reset-oids` is a mis-targeted E0E3 \
+     recovery experiment and is unconditionally quarantined. The observed \
+     E0E3 is a full type-0x12 device certificate, not the type-0x11 anchor \
+     assumed by this path. No dev, test, factory, or production build may \
+     execute it."
 );
 
-// S-1 ship-blocker: a production OPTIGA unit MUST ratchet F1D0 to
-// `Change = Auto(F1D0)` + LcsO=Operational via `optiga-lock-operational` (the
-// `Auto(F1D0)` metadata itself is already wired at `optiga/apdu.rs:1080` under
-// this feature). Without it F1D0 stays `Change = ALW`: a desoldered-OPTIGA bench
+// S-1 candidate-profile diagnostic: the currently modeled hardened metadata
+// uses `Change = Auto(F1D0)` + LcsO=Operational under
+// `optiga-lock-operational` (the `Auto(F1D0)` bytes are wired at
+// `optiga/apdu.rs:1080`). Without that class of closure F1D0 can remain
+// rewritable: a desoldered-OPTIGA bench
 // attacker overwrites the AuthRef HMAC key with a chosen one, self-authenticates,
 // resets the E120 LUC counter, and brute-forces the PIN without bound — and
 // because the PIN is shared with the SE050, that defeats the whole wallet.
 //
-// DELIBERATELY keyed to `mode-production` ALONE — NOT the
+// This diagnostic is DELIBERATELY keyed to `mode-production` ALONE — NOT the
 // `all(stm32u585, not(debug_assertions))` belt-and-braces the S-2/S-3 fences
-// use. `optiga-lock-operational` performs the IRREVERSIBLE LcsO ratchet (OPTIGA
-// SRM: LcsO is monotonic, no reverse path), so it must fire only for an explicit
-// production-unit build, never for a dev/test RELEASE hardware build:
+// use. `optiga-lock-operational` performs an IRREVERSIBLE LcsO ratchet (OPTIGA
+// SRM: LcsO is monotonic, no reverse path), so it must never be added merely to
+// clear this diagnostic or to a dev/test RELEASE hardware build:
 // `make e2e-hw` / `play-hw-display` build `--release` (so `not(debug_assertions)`)
 // WITHOUT `mode-production`, and forcing the ratchet on them would brick dev
-// bench chips. The release-hardware-without-`mode-production` gap (a shipping
-// image that forgets the profile) is therefore NOT closed here — it cannot be,
-// without a fence that would break those dev hardware targets; shipping ==
-// `mode-production` stays a documented convention (see docs/work-todo.md S-1).
+// bench chips. The final E140 actor/order, credential rotation, recovery, and
+// complete metadata ceremony remain OPEN. This fence models a candidate
+// baseline; it grants no hardware, factory, or shipment authority.
 //
-// NOTE: this fence does not *fix* S-1 — it makes a production build that omits
-// the metadata hardening fail to compile. Actually closing S-1 is the
-// (irreversible, bench-only) LcsO ratchet + sacrificial-part validation.
+// NOTE: this fence does not *fix* S-1. Closing S-1 requires a reviewed final
+// lifecycle plus owner-authorized sacrificial validation. The unconditional
+// rollback quarantine separately keeps current production images unavailable.
 #[cfg(all(
     feature = "mode-production",
     feature = "optiga-trust-m",
     not(feature = "optiga-lock-operational"),
 ))]
 compile_error!(
-    "Production OPTIGA builds require `optiga-lock-operational` (ship-blocker \
-     S-1): it ratchets F1D0 to `Change = Auto(F1D0)` + LcsO=Operational so the \
-     PIN-gating AuthRef HMAC key can no longer be overwritten on a desoldered \
-     chip. Without it F1D0 stays `Change = ALW` and a bench attacker resets the \
-     E120 attempt counter and brute-forces the PIN. This fence is \
-     `mode-production`-only BY DESIGN: the lock-operational ratchet is \
-     irreversible, so it must never fire for dev/test hardware builds (which \
-     would brick dev chips). Do NOT broaden the trigger to match S-2/S-3."
+    "Candidate OPTIGA profile is incomplete without a reviewed S-1 metadata \
+     closure. `optiga-lock-operational` is an irreversible sacrificial-test \
+     candidate, NOT a production fix or instruction: do not enable it merely \
+     to clear this diagnostic. The final E140/credential ordering and recovery \
+     ceremony remain OPEN, and current production remains quarantined."
 );
 
 // work-todo #36 ship gate: a production build MUST enable `rdp2-self-lock`,
@@ -585,8 +673,9 @@ compile_error!(
      `e2e-test` / `dev-testkey`."
 );
 
-// HIGH-1 ship-blocker (audit se-tunnels 20260611): a production SE050 build MUST
-// root its SCP03 channel in per-device derived keys (`se050-derived-scp03`), not
+// HIGH-1 ship-blocker (audit se-tunnels 20260611): a candidate production
+// configuration MUST at minimum root its current transport SCP03 channel in
+// per-device derived transport keys (`se050-derived-scp03`), not
 // the published AN12436 factory keyset. Without the feature,
 // `scp03::load_platform_keys` returns `PLATFORM_{ENC,MAC,DEK}` — the public
 // SE050E OEF-0xA921 constants — and `establish()` derives the session keys from
@@ -595,10 +684,13 @@ compile_error!(
 // out of every unlock. `scp03_logic.rs` says it outright: such a channel is
 // "plaintext-equivalent to a bus sniffer with the datasheet". Invariant #3 break;
 // weakens #1. Mirrors the S-3 `optiga-hw-counter` pattern — the feature is not
-// auto-composed, so the fence forces a shipping build to opt in (and to run the
-// per-unit `se050-rotate-scp03` PUT KEY ceremony so the chip holds the matching
-// derived keys). `dual-se` implies `se050`, so this also covers the production
-// dual-chip build. NOTE: fencing out the *fallback* fail-OPEN
+// auto-composed, so this fence records a candidate-profile prerequisite. It
+// does not authorize the sacrificial `se050-rotate-scp03` PUT KEY path or any
+// write to a real unit. This fence is necessary but not sufficient:
+// it does not implement the still-open fresh-TRNG production-final rotation,
+// durable public state, cut recovery, or coordinated E140 ordering. `dual-se`
+// implies `se050`, so this also covers the candidate dual-chip build. NOTE:
+// fencing out the *fallback* fail-OPEN
 // (`se050-scp03-allow-factory-fallback`, above) shut the back door; this shuts
 // the front door — shipping with the feature simply OFF. Hardware TEST images
 // may opt out via `e2e-test` / `dev-testkey`.
@@ -613,16 +705,17 @@ compile_error!(
     not(feature = "se050-derived-scp03"),
 ))]
 compile_error!(
-    "Production SE050 builds require `se050-derived-scp03` (ship-blocker; audit \
-     se-tunnels 20260611 HIGH-1). Without it the SCP03 static keys are the \
+    "Candidate SE050 profile is incomplete without non-public SCP03 transport \
+     keys (ship-blocker; audit se-tunnels 20260611 HIGH-1). Without \
+     `se050-derived-scp03` the static keys are the \
      PUBLISHED AN12436 factory constants (`PLATFORM_{ENC,MAC,DEK}`), so the SE050 \
      secure channel is plaintext-equivalent to a bus sniffer holding the \
      datasheet: a logic analyzer on I2C1 reconstructs the session keys from the \
      on-wire SCP03 handshake challenges and decrypts `half_E` out of every unlock \
-     (invariant #3 break, weakens #1). Enable `se050-derived-scp03` (and run the \
-     per-unit `se050-rotate-scp03` PUT KEY ceremony so the chip holds the matching \
-     derived keys), or build a non-shipping test image with `e2e-test` / \
-     `dev-testkey`."
+     (invariant #3 break, weakens #1). The existing derived-key/PUT-KEY path is \
+     sacrificial evidence only; do not run it or enable features merely to clear \
+     this diagnostic. The fresh-TRNG final rotation, durable state, cut recovery, \
+     and coordinated E140 ordering remain OPEN; current production is quarantined."
 );
 
 // MEDIUM-1 ship-blocker (audit se-tunnels 20260611): `optiga-no-shield` turns
@@ -895,7 +988,7 @@ pub fn unlock_with_master(master: [u8; 32]) {
 /// Gated unlock — every PIN verify MUST go through this.
 ///
 /// Wraps the raw `WalletStore::unlock` with the MCU-side attempt
-/// counter at secure-flash page 126:
+/// counter at secure-flash page 124:
 ///
 ///   1. Check the counter. If ≥ MAX_ATTEMPTS, refuse — return
 ///      `PinLocked`. Caller is responsible for running
@@ -1102,63 +1195,25 @@ pub unsafe fn gated_unlock(
     }
 }
 
-/// Boot-time PIN-counter reconciliation across the independent
-/// failed-attempts counters: MCU page-124 and the OPTIGA PIN counter
-/// (silicon E120 LUC `current` under `optiga-hw-counter` — the production
-/// config — else the F1E1 soft counter). The SE050 USERID `auth_attempts`
-/// leg is unavailable in production (see the Correction note below).
-/// (§4 dual-chip PIN-lockout-sync hardening.)
+/// Boot-time directional rollback check between MCU page 124 and the readable
+/// OPTIGA attempt counter (E120 LUC under `optiga-hw-counter`; F1E1 only in a
+/// non-production soft-counter build). Because `gated_unlock` precharges page
+/// 124 before SE verification, benign states have `mcu >= e120`: equality
+/// after both advances, or an MCU lead after a cut/transport error. Only
+/// `e120 > mcu` proves page-124 rollback and triggers the wipe.
 ///
-/// **Attack defended.** An attacker who can reset any ONE side
-/// — OPTIGA PBS reset (E140 Conf(E140) Auto on a glitched chip
-/// rewinds every PBS-protected OID including F1E1), SE050 USERID
-/// delete-and-recreate, or a TZ-bypass that erases MCU page-124 —
-/// leaves the other two counters in a different state. Boot-time
-/// disagreement is unambiguous tamper evidence; wipe immediately
-/// rather than waiting for the next unlock to expose it.
+/// This is deliberately not described as three-way boot reconciliation. The
+/// production SE050 UserID policy denies an attempt-attribute read with
+/// `SW=0x6986`, so `Se050::pin_attempt_count` returns `None`. SE050 still
+/// participates in every ordinary PIN attempt, independently enforces its
+/// max-10 lockout, and maps `AuthMethodBlocked` to the wipe path. Making its
+/// counter boot-readable requires a separately reviewed policy/backend and
+/// silicon decision; a VERIFY probe would itself consume an attempt.
 ///
-/// **Three checks, any failure = wipe.**
-///   1. MCU vs strictest-SE (the existing `pin_attempt_count()`
-///      aggregate, which returns `max(optiga, se050)` of the
-///      USED-attempts counts).
-///   2. Intra-SE divergence (`pin_attempt_counts_divergent()`):
-///      OPTIGA and SE050 agree with each other.
-///   3. Implicit: both above are `false`-by-default for backends
-///      without readable counters, so single-SE and mock paths
-///      simply skip.
-///
-/// **Limitations.**
-///   - If the attacker coordinates resets of ALL THREE counters in
-///     one campaign, all see 0 → agree → no tamper detected. The
-///     defense bound is that the attacker can reset at most TWO
-///     sides per campaign. A hardware-monotonic OPTIGA counter
-///     (work-todo #24 P1 → migrate to 0xE120) would close this gap
-///     against OPTIGA-side resets entirely.
-///   - On fresh boot with un-provisioned SE, both SE getters
-///     return `None`; reconcile accepts as "no comparison possible."
-///
-/// **What it doesn't replace.** The original §4 "cryptographic FI
-/// checksum on the bump" item is effectively closed by F-12 +
-/// F-15.r5 + F-19 (forward+reverse scan + double-read agreement +
-/// triple-read of the result). A separate paired-counter checksum
-/// would catch only the multi-fault attack where ALL of those
-/// reads return the same wrong value — out of scope for the
-/// single-fault threat model.
-///
-/// **Correction note (audit pin-unlock 20260625).** Two earlier claims in
-/// this docstring were wrong and are retracted:
-///   - SE050's `auth_attempts` was said to be peekable via
-///     `ReadObjectAttributes` without consuming an attempt. On the
-///     production `USERID_OBJ` policy the chip answers SW=0x6986 (policy
-///     denial), so `Se050::pin_attempt_count` returns `None` and the SE050
-///     leg of this reconcile is skipped. See
-///     `se050::Se050::pin_attempt_count_raw` for the silicon evidence.
-///   - The OPTIGA leg formerly read the F1E1 soft counter, which is frozen
-///     at its provisioned 0 under `optiga-hw-counter` (the production
-///     config) — a dead comparison that also false-wiped on a benign
-///     wrong-PIN-then-reboot. `OptigaTrustM::pin_attempt_count` now reads
-///     the live E120 LUC `current` instead, so the MCU↔OPTIGA cross-check
-///     is meaningful and tracks page-124 in lockstep.
+/// On an unprovisioned/backend-unavailable boot, no readable SE leg means no
+/// comparison is possible and the function logs and returns. For a future
+/// multi-SE backend where both counters are safely readable,
+/// `pin_attempt_counts_divergent` remains an additional tamper input.
 ///
 /// Called once per boot from `main.rs` after SE init but before
 /// the gateway accepts any unlock command. On tamper detection it
@@ -1173,7 +1228,7 @@ where
     let se_used = se.pin_attempt_count();
     let se_split = se.pin_attempt_counts_divergent();
 
-    // If no SE leg is readable (shield not yet up, or an unprovisioned chip
+    // If no readable SE leg exists (shield not yet up, or an unprovisioned chip
     // at first boot) there is nothing to compare. Skip — but loudly, so the
     // lost cross-check is visible rather than silently mistaken for
     // agreement on a frozen value.
@@ -1556,7 +1611,7 @@ pub extern "cmse-nonsecure-entry" fn nsc_prodtest_get_id(out_ptr: u32) -> u32 {
     r
 }
 
-/// CMD_PRODTEST_DISPLAY_PATTERN (101) — render OLED test pattern.
+/// CMD_PRODTEST_DISPLAY_PATTERN (101) — render NV3007 LCD test pattern.
 #[cfg(feature = "prodtest")]
 #[no_mangle]
 pub extern "cmse-nonsecure-entry" fn nsc_prodtest_display_pattern(in_ptr: u32) -> u32 {

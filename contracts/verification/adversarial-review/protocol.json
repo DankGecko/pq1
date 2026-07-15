@@ -1,13 +1,13 @@
 {
   "name": "pqsigner-fv-adversarial-review",
-  "version": 1,
-  "doc": "Machine-readable protocol for the PQSigner FV adversarial review. Framework-AGNOSTIC: run_review.py drives ANY backend (Claude Code, Codex, a raw LLM, a future agent) that can read a prompt and emit JSON. The reviewer persona + the green-but-hollow catalog live in PROMPT.md; this file defines WHAT to review (angles + targets), HOW MANY independent passes (reviewers) and the agreement rule (quorum), and the STRICT output schema every backend must satisfy. See docs/verification/fv-adversarial-review-playbook.md for the full method and README.md to run it.",
+  "version": 3,
+  "doc": "Machine-readable protocol for the PQSigner FV adversarial-review discovery swarm. Framework-AGNOSTIC: run_review.py drives ANY backend (Claude Code, Codex, a raw LLM, a future agent) that can read a prompt and emit JSON. The reviewer persona + the green-but-hollow catalog live in PROMPT.md; this file defines WHAT to review (angles + targets), HOW MANY independent discovery passes (reviewers), the corroboration threshold (quorum), and the STRICT output schema every backend must satisfy. Quorum only prioritizes/corroborates discovery; it never assigns a finding disposition. The exact Partner-A/Partner-B pair and symmetric cross-adjudication in docs/planning-and-review-workflow.md exclusively own CONFIRMED/REFUTED/NARROWED/UNRESOLVED dispositions. See docs/verification/fv-adversarial-review-playbook.md for the full method and README.md to run it.",
 
   "defaults": {
     "reviewers": 2,
     "quorum": 2,
     "jobs": 1,
-    "comment": "reviewers = independent passes per angle (cross-vote); quorum = passes that must agree for a finding to be 'confirmed'. Defaults are rate-limit-gentle (2 passes, serial). For a stronger adversarial pass use reviewers=3 quorum=2 (majority). jobs>1 parallelises but can trip provider rate limits."
+    "comment": "reviewers = independent discovery passes per angle; quorum = distinct passes needed to classify a candidate as corroborated rather than sub_quorum. Both classes remain undispositioned and every raw variant/origin ID is retained for the exact dual-review partners. Defaults are rate-limit-gentle (2 passes, serial). For broader discovery use reviewers=3 quorum=2. jobs>1 parallelises but can trip provider rate limits."
   },
 
   "root": "../../..",
@@ -98,33 +98,36 @@
     "codex": "codex exec --skip-git-repo-check --sandbox read-only - < {prompt_file}",
     "generic": "{cmd}"
   },
-  "backends_doc": "A backend is any shell command that reads the assembled prompt (the {prompt_file} placeholder is replaced with a temp file path) and writes the model's JSON answer to stdout. claude/codex are AGENTS with file-read tools, so the prompt lists target paths and they read them — the templates MUST grant read access or the agent denies/hangs in non-interactive mode: `claude -p` needs `--allowedTools Read Grep Glob`; `codex exec` needs `--sandbox read-only` (lets the model read files, blocks writes). These templates match backends/claude.sh + backends/codex.sh exactly (keep them in sync). For a tool-less backend (raw API), pass --inline-files so file contents are embedded in the prompt. The 'generic' backend takes --cmd verbatim (use it for self-test: --backend generic --cmd 'cat tests/canned_findings.json'). The model's JSON answer may be surrounded by reasoning/tool logs on stdout; run_review.py brace-scans for the last balanced {findings:...} object.",
+  "backends_doc": "A normal backend is any shell command that receives the assembled prompt through the mandatory {prompt_file} placeholder (shell-safely replaced with a temp file path) and writes the model's strict UTF-8 JSON answer to stdout. The runner can prove prompt delivery, not that an arbitrary operator-supplied generic command used the prompt; backend-command provenance remains a coordinator trust boundary. Runtime logs belong on stderr: stdout may contain only whitespace around exactly one unwrapped top-level findings object with no unknown fields. claude/codex are AGENTS with file-read tools, so the prompt lists target paths and they read them — the templates MUST grant read access or the agent denies/hangs in non-interactive mode: `claude -p` needs `--allowedTools Read Grep Glob`; `codex exec` needs `--sandbox read-only` (lets the model read files, blocks writes). These templates match backends/claude.sh + backends/codex.sh exactly (keep them in sync). For a tool-less backend (raw API), pass --inline-files so file contents are embedded in the prompt. The 'generic' backend takes --cmd verbatim. Only --self-test-ok may use the canned no-prompt command; the built-in fixture is reserved and rejected from normal discovery, its raw receipt is self_test_only, and it cannot enter a discovery union. A union accepts only the current explicit non-self-test raw format with a sibling terminal completion.json that binds the raw artifact. run_review.py rejects wrappers, fences, preambles, trailers, multiple/truncated/scalar/authority-bearing answers; preserves stdout/stderr byte-for-byte as base64/hash/length receipts; terminates the backend process group on timeout; binds the target, prompts, selectors, settings, and terminal outcome; rejects any unknown requested angle; writes completion.json last; and fails without publishing success-shaped artifacts on invalid output or target drift.",
 
   "output_schema": {
     "type": "object",
+    "additionalProperties": false,
     "required": ["findings", "honest_residual"],
     "properties": {
       "findings": {
         "type": "array",
         "items": {
           "type": "object",
+          "additionalProperties": false,
           "required": ["id", "v_class", "severity", "target", "title", "claim", "defect", "poc", "confidence"],
           "properties": {
-            "id": {"type": "string", "doc": "short kebab slug, unique within this answer"},
-            "v_class": {"type": "string", "doc": "V1..V11 (see PROMPT.md), or 'FW' for a firmware bypass, or 'NA'"},
+            "id": {"type": "string", "minLength": 1, "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "doc": "short kebab slug, unique within this answer; run_review.py enforces cross-item uniqueness"},
+            "v_class": {"enum": ["V1", "V2", "V3", "V4", "V5", "V6", "V7", "V8", "V9", "V10", "V11", "G1", "G2", "G3", "G4", "G5", "FW", "NA"], "doc": "V1..V11 and G1..G5 are defined in PROMPT.md; FW is a firmware bypass; NA is none of those classes"},
             "severity": {"enum": ["critical", "high", "medium", "low", "info"]},
-            "target": {"type": "string", "doc": "file:Lnn or fully-qualified symbol"},
-            "title": {"type": "string"},
-            "claim": {"type": "string", "doc": "what the artifact ASSERTS / advertises"},
-            "defect": {"type": "string", "doc": "why the guarantee is hollow/false/weaker than the claim"},
-            "poc": {"type": "string", "doc": "MANDATORY: the concrete reproduction (mutation that should break it but does not; input the predicate should reject but accepts; the falsifying witness; the bypass ordering). If you could NOT produce one, write 'NONE' and set severity to low/info."},
-            "confidence": {"type": "number", "doc": "0.0-1.0 self-assessed"},
+            "target": {"type": "string", "minLength": 1, "doc": "file:Lnn or fully-qualified symbol"},
+            "title": {"type": "string", "minLength": 1},
+            "claim": {"type": "string", "minLength": 1, "doc": "what the artifact ASSERTS / advertises"},
+            "defect": {"type": "string", "minLength": 1, "doc": "why the guarantee is hollow/false/weaker than the claim"},
+            "poc": {"type": "string", "minLength": 1, "doc": "MANDATORY: the concrete reproduction (mutation that should break it but does not; input the predicate should reject but accepts; the falsifying witness; the bypass ordering). If you could NOT produce one, write 'NONE' and set severity to low/info; run_review.py rejects NONE at medium/greater."},
+            "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0, "doc": "0.0-1.0 self-assessed"},
             "suggested_fix": {"type": "string"}
           }
         }
       },
       "honest_residual": {
         "type": "string",
+        "minLength": 1,
         "doc": "MANDATORY eliminative-argumentation field: what you could NOT verify, what you assumed true, which targets you did not fully read, and where your own findings might be wrong. A review that claims to have found everything is itself a V-class failure."
       }
     }

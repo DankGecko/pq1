@@ -1,6 +1,15 @@
 # First-boot self-provisioning (on-device) — work-todo #36
 
-Status: **implemented (feature `rdp2-self-lock`), silicon-validation pending** (2026-07-14).
+Status: **candidate implemented (`rdp2-self-lock`); not production-approved;
+silicon and protocol-closure gates pending** (2026-07-15).
+
+> **CANDIDATE RUNBOOK, NOT AN IRREVERSIBLE CEREMONY.** This document describes
+> the current code and its intended factory/device boundary. It does not
+> authorize RDP, OTP, SE-key, or OPTIGA lifecycle changes. The authenticated
+> per-unit transport handoff/receipt, authenticate-before-rotate rule,
+> old/new/KVN recovery proof, exact E140 order, and silicon receipts remain
+> OPEN. Follow `docs/planning-and-review-workflow.md` §11 for any future
+> owner-authorized hardware attempt.
 
 Devices ship at **RDP-0** with a batch-uniform image (user-verifiable over SWD
 before first power). The **first field boot** verifies the ship state,
@@ -20,9 +29,10 @@ reshuffle happens anyway.
 
 ---
 
-## Authoritative factory ⇄ first-boot responsibility split
+<a id="authoritative-factory--first-boot-responsibility-split"></a>
+## Candidate factory ⇄ first-boot responsibility split
 
-This exact boundary is the concrete realization of the #36 split. It is
+This boundary is the current candidate realization of the #36 split. It is
 mirrored verbatim in `docs/provisioning/factory-provisioning.md` and
 `docs/factory-mass-production-model.md`; if you change one, change all three.
 

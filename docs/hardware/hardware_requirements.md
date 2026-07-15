@@ -15,9 +15,12 @@
 - **STM32U5** series (e.g. STM32U585)
   - ARM Cortex-M33 with TrustZone (CMSE)
   - Hardware AES, SHA-256, PKA, SAES (with DHUK), TRNG accelerators
-  - Secure boot via TZEN and RDP level 2
-  - JTAG/SWD permanently disabled in production — **and no SWD/JTAG pads
-    reachable after assembly** (cut traces or fill vias; see §Connectors & debug)
+  - Secure boot target via TZEN and RDP level 2. Devices ship at RDP-0 for
+    owner verification; the still-unimplemented, owner-gated first-field
+    ceremony must self-lock RDP-2 before secrets are finalized.
+  - **SWD + NRST remain physically accessible after assembly** for that
+    pre-first-power verification. RDP-2 disables debug in silicon after the
+    reviewed self-lock; do not cut or hide the pads (see §Connectors & debug).
   - Internal temperature sensor available to firmware (cold-boot defence —
     `docs/security/HARDENING.md`: refuse operation below the rated low temperature)
   - Verify the die revision before relying on Stop-2 / backup-domain behaviour
@@ -35,9 +38,11 @@ Entropy of the seed phrase is split across two independent secure elements to el
 - Shielded Connection (TLS-PRF + AES-128-CCM-8) for encrypted I2C
 - Authorization reference PIN protection (hardware-enforced access conditions),
   with the E120 LUC bound to F1D0 under `optiga-hw-counter`
-- Platform Binding Secret for per-device pairing — derived from the Tier-1
+- Current bring-up/transport Platform Binding Secret — derived from the Tier-1
   SAES-DHUK root via `hw::secret_keys::optiga_pairing_secret()`, **not** stored
-  in flash (post work-todo #24; see `docs/secure-elements/optiga-brick-postmortem.md`)
+  in flash (post work-todo #24). It is not the production-final credential.
+  Fresh-TRNG rotation, durable public salt/state, cut recovery, and E140
+  actor/order remain OPEN production blockers (work-todo #36).
 - **Independent reset line** (see §Power, brownout & reset)
 
 ### NXP SE050
@@ -46,8 +51,11 @@ Entropy of the seed phrase is split across two independent secure elements to el
 - Common Criteria EAL6+ certified
 - T=1' over I2C at address 0x48; SCP03 secure channel (AES-CMAC + AES-CBC)
 - UserID PIN authentication; admin UserID (`max_attempts=0`) for crash-safe
-  factory reset, admin PIN derived from the OTP/DHUK root via
-  `hw::secret_keys::se050_admin_pin()`
+  factory reset. The current transport helper
+  `hw::secret_keys::se050_admin_pin()` uses the BHK axis; DHUK is a fallback
+  and OTP-shaped roots are explicit dev/legacy configurations. This does not
+  settle the production-final fresh-TRNG credential rotation or its durable
+  state and power-cut recovery, which remain OPEN under work-todo #36.
 - **Independent reset line** so a fault on the SE050 cannot wedge the OPTIGA
   (and vice-versa) — see §Power, brownout & reset
 - **Production layout review item:** the two SEs share I2C1 today; evaluate
@@ -143,7 +151,9 @@ From `README.md` §A and `docs/security/brownout-hardening.md`.
     monitoring (`MONEN=1`) — ES0499 §2.2.7/§2.2.8 spurious-tamper workaround
 - **Independent reset line for each SE** so a fault on one cannot wedge the
   other
-- **NRST** routed but with **no exposed pad** post-assembly
+- **NRST** routed to an accessible verification pad alongside SWD so the owner
+  can use connect-under-reset before first power; after the reviewed RDP2
+  self-lock, silicon debug closure—not physical concealment—is the boundary
 
 ## Connectors & debug
 
@@ -174,10 +184,12 @@ hand-off):
   — especially OPTIGA Trust M V3 and SE050. A stockout that forces a vendor
   swap would break pinned attestation / the baked-in CC certs and the
   per-device pairing model
-- Per-device unique secrets (SE050 SCP03 keys, OPTIGA PBS, both UID PINs) are
-  *derived* on first boot from the SAES-DHUK Tier-1 root via
-  `hw::secret_keys` — they are **not** programmed at the PCB fab; that's a
-  provisioning-facility concern (`README.md` §B), not a board feature
+- Current per-device transport secrets (SE050 SCP03 helpers, OPTIGA PBS, UID
+  PIN helpers) are derived on-device via `hw::secret_keys`; they are **not**
+  programmed at the PCB fab. The production-final credentials require the
+  still-OPEN fresh-TRNG rotation, durable public state, cut recovery, and
+  coordinated E140/SE050 order in the owner-gated first-field ceremony
+  (`README.md` §B, work-todo #36).
 
 ## Explicitly *not* on the board
 
@@ -203,9 +215,11 @@ hardware features above actually do something:
   on the bring-up branch (probe-rs glitches false-trigger ITAMP9); production
   must escalate. See `docs/production-todo.md` "TAMP escalation" and
   `README.md` Phase-3 step 6.
-- **Turn on the `bhk` feature** and run `provision()` + `load_and_lock()` once
-  per device (after the first SAES-DHUK derivation) — Tier-2 of the
-  DHUK/BHK/OTP hierarchy. See `docs/work-todo.md §7` and `secure/src/hw/bhk.rs`.
+- **BHK first write/load** belongs only inside the future reviewed,
+  owner-gated first-field RDP2 self-lock ceremony. Do not run it from a generic
+  boot or factory flow. The exact fresh-TRNG final credential derivation,
+  durable state, cut recovery, and E140/SE050 ordering must be frozen first.
+  See `docs/work-todo.md §7/#36` and `secure/src/hw/bhk.rs`.
 
 ## Cross-reference: feature → requirement → enforced/implemented → status
 

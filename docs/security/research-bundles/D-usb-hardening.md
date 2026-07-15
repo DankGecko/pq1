@@ -89,9 +89,13 @@ security anchor.
 **Dark Skippy and similar nonce-exfil attacks do NOT apply.** Hash-
 based SLH-DSA has no nonce. Don't chase this.
 
-**Current SCP03 state.** The SE050 SCP03 channel is active (every TX
-has CLA=0x84). Using NXP default static keys; rotation to per-device
-keys + HUK-SAES wrapping is a production-readiness item (work-todo #7).
+**Current SCP03 lifecycle.** The SE050 SCP03 channel is active (every TX
+has CLA=0x84). Factory defaults are not an acceptable production state:
+the factory installs per-device transport keysets, while the final
+fresh-TRNG-salted BHK-axis rotation belongs to the owner-approved first-field
+ceremony after RDP2 self-lock and BHK first write. OPTIGA PBS is DHUK-derived
+at boot and is never stored in flash; page 126 holds only the wrapped BHK.
+The exact E140 ratchet-versus-final-rotation order remains OPEN.
 
 ---
 
@@ -2089,11 +2093,8 @@ impl CommandRouter {
             return self.sw_response(SW_WRONG_LENGTH);
         }
         let n = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
-        // Cap at 254, not 256: prodtest_finalize appends a 2-byte status word at
-        // RESP_BUF[n..n+2], so n==256 would write RESP_BUF[256..258] one past the
-        // 256-byte buffer end (an OOB panic in the factory bring-up tool). The
-        // companion samples in <=254-byte chunks.
-        if n == 0 || n > 254 {
+        // Reserve the shared two-byte status-word suffix in RESP_BUF.
+        if n == 0 || n as usize > PRODTEST_MAX_RESPONSE_DATA_LEN {
             return self.sw_response(SW_WRONG_LENGTH);
         }
         let n_usize = n as usize;
@@ -2120,21 +2121,13 @@ impl CommandRouter {
 
     #[cfg(feature = "prodtest")]
     unsafe fn cmd_prodtest_usb_loopback(&self, data: &[u8]) -> Response {
-        if data.is_empty() || data.len() > 256 {
-            return self.sw_response(SW_WRONG_LENGTH);
-        }
-        // RESP_BUF == 256 bytes; we need data + 2 bytes SW. Worst case
-        // 256 + 2 = 258 > 256, so cap at 254 to be safe. The Phase C
-        // cap in the firmware is 256 but the single-APDU LC max is 255
-        // before SW; staying at 254 keeps headroom for the SW suffix
-        // inside RESP_BUF without needing GET_RESPONSE chunking.
-        if data.len() > 254 {
+        if data.is_empty() || data.len() > PRODTEST_MAX_RESPONSE_DATA_LEN {
             return self.sw_response(SW_WRONG_LENGTH);
         }
         // Use a stack buffer for the input copy so the input and
         // output don't overlap on the secure side (`crate::SE` may not
         // tolerate aliased ptrs).
-        let mut buf = [0u8; 256];
+        let mut buf = [0u8; PRODTEST_MAX_RESPONSE_DATA_LEN];
         buf[..data.len()].copy_from_slice(data);
         let status = nsc_api::prodtest_usb_loopback(
             &buf[..data.len()],

@@ -15,7 +15,8 @@
 //! script and `nsc/mod.rs` reject every production/factory image; other
 //! STM32U585 bench images require the explicit
 //! `legacy-fw-rollback-unsafe` marker until this module is replaced by the
-//! reviewed Draft-0.9 typed journal/ECC/OTP backend.
+//! Draft-1.1 typed journal/ECC/OTP research candidate after exact-digest
+//! approval and physical-gate closure.
 //!
 //! This warning does not approve the remaining one-shot secret provisioning
 //! paths. Their exact factory map, interruption handling, and final protection
@@ -66,7 +67,7 @@
 //! - **Brown-out during OTP write**: contents are not guaranteed and the
 //!   quad-word is lost; it must not be retried or interpreted as a bit count.
 //!   Exact-looking/ECC-corrected outcomes and cross-power-loss intent remain
-//!   explicit open gates in the Draft-0.9 architecture.
+//!   explicit open gates in the Draft-1.1 research candidate.
 //! - **PROGERR on write** (WRPERR, PROGERR, SIZERR, etc.): Reported
 //!   to the caller. No production path may infer that the target is reusable.
 

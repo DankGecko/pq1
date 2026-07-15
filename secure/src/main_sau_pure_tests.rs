@@ -1029,7 +1029,7 @@ fn negative_default_handler_logs_unexpected_irqs_instead_of_silent_drop() {
 fn negative_pendsv_uses_gated_unlock_not_raw_unlock() {
     // PendSV re-unlock fires after an idle wipe. If it called
     // `SE.unlock` directly instead of `nsc::gated_unlock`, the MCU
-    // page-126 attempt counter would be bypassed and an attacker
+    // page-124 attempt counter would be bypassed and an attacker
     // who can keep the device idle long enough could brute-force
     // the PIN past MAX_ATTEMPTS. The CLAUDE.md "What NOT to do"
     // entry on PIN compares + invariant #2 hangs on this.

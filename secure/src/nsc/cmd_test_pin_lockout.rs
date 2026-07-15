@@ -5,11 +5,11 @@
 //! the SE050 user UserID's silicon retry budget intact (so the test is
 //! repeatable without chip replacement):
 //!
-//!   Pass A — real wrong-PIN lockstep (non-destructive)
+//!   Pass A — real three-way per-attempt consumption (non-destructive)
 //!     Runs `MAX_ATTEMPTS - 1` wrong-PIN `gated_unlock` calls. Each one
 //!     actually drives both chips: OPTIGA's auth-ref rejects, SE050's
 //!     silicon decrements, MCU page-124 is bumped by the gate. Thanks to
-//!     the three-way lockstep fix (commit 7574218) the SE050 silicon
+//!     the coordinated per-attempt fix (commit 7574218) the SE050 silicon
 //!     counter advances on wrong PINs now — proves wrong PINs really do
 //!     burn retry budget. One follow-up correct-PIN call resets all
 //!     three counters (MCU erased, SE050 silicon retries back to max),

@@ -29,7 +29,7 @@ use crate::ui::{ascii_str, display, input, show_status};
 //
 // We derive the measurement base from this symbol rather than a hardcoded
 // constant so `firmware_hash()` always measures the bytes the image
-// ACTUALLY runs from — which is precisely the range the WRP1A-rooted FSBL
+// ACTUALLY runs from — which is precisely the range the legacy bench FSBL
 // hashes for its trusted-display fingerprint (`fsbl/src/verify.rs` hashes
 // `[slot_secure_addr, slot_secure_addr + secure_len)` = `[ORIGIN(FLASH),
 // __veneer_limit)`). A hardcoded `0x0C00_0000` would silently measure the
@@ -96,7 +96,7 @@ fn flash_end() -> usize {
 /// Covers `[image_base(), flash_end())` — the vector table, .text,
 /// .rodata, .data init values, and (on STM32U585) the CMSE veneers — i.e.
 /// the exact bytes the running image occupies in flash. This is the same
-/// range the WRP1A-rooted FSBL hashes for its trusted-display fingerprint,
+/// range the legacy bench FSBL hashes for its measured-display fingerprint,
 /// so an honest slot yields identical words on both rows regardless of
 /// which slot the firmware runs from (see docs/security/measured-boot.md).
 pub fn firmware_hash() -> [u8; 32] {
@@ -154,7 +154,7 @@ fn render_all_words(hash: &[u8; 32]) {
     let d = display();
     d.clear();
 
-    // Consume the exact same pure 4x16 byte grid as the immutable FSBL.
+    // Consume the exact same pure 4x16 byte grid as the legacy bench FSBL.
     // Keeping layout and prefix truncation in one shared helper makes an
     // honest FSBL/secure-world mismatch a meaningful tamper signal instead
     // of a renderer-width artifact.

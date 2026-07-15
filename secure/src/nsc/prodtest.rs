@@ -21,40 +21,18 @@
 //!   either chip metadata (UID, fingerprint) or test artifacts. No
 //!   user secrets leave the chip via these commands.
 //!
-//! - **Phase A vs Phase B**: Phase A is GET_ID + DISPLAY_PATTERN
-//!   (validates the architecture). Phase B adds the four compute-
-//!   only commands (SAES + BHK selftest, FLASH_RW, TRNG_SAMPLE).
-//!   Phase C-G (communication tests, host fixture runner) are
-//!   tracked in work-todo §30.
+//! - **Supported profile**: GET_ID, DISPLAY_PATTERN, SAES, TRNG, the
+//!   two SE handshakes, USB loopback, and buttons are required. BHK
+//!   and FLASH_RW remain explicit unsupported-capability probes; they
+//!   return `InternalError` and never mutate persistent state.
 
 #![cfg(feature = "prodtest")]
 
-// ---------------------------------------------------------------------------
-// Compile-time fence — same opt-in pattern as factory_provisioning.
-// Prodtest doesn't normally burn irreversible state (no OTP writes,
-// no LcsO=Op bumps), but a build that ALSO enables those features
-// (e.g., someone configures `prodtest,bhk` with the production BHK
-// burn path) should refuse unless the user opts in explicitly.
-// ---------------------------------------------------------------------------
+// The unconditional cross-feature fence lives in `nsc/mod.rs` so it is
+// visible beside the other production/irreversible composition guards.
+// `factory-production-irreversible-im-sure` deliberately cannot relax it.
 
-#[cfg(all(
-    not(feature = "factory-production-irreversible-im-sure"),
-    any(
-        feature = "optiga-lock-operational",
-        feature = "bhk",
-        not(any(feature = "dev-testkey", feature = "otp-hardcoded-master-key")),
-    )
-))]
-compile_error!(
-    "prodtest would burn IRREVERSIBLE chip state without an explicit \
-     `factory-production-irreversible-im-sure` opt-in. One or more of: \
-     `optiga-lock-operational`, `bhk`, or a production OTP-master path \
-     is enabled. Add `factory-production-irreversible-im-sure` to \
-     acknowledge the chip-state changes are permanent, OR add \
-     `dev-testkey` to the build for dev iteration."
-);
-
-use sphincs_tz_shared::NscStatus;
+use sphincs_tz_shared::{NscStatus, PRODTEST_MAX_RESPONSE_DATA_LEN};
 
 use super::ptr_validate::{validate_ns_read_ptr, validate_ns_write_ptr};
 use super::GatewayArgs;
@@ -62,7 +40,7 @@ use super::GatewayArgs;
 /// Prodtest firmware version. Bumped on every prodtest behavioral
 /// change so the factory's traceability DB can correlate per-unit
 /// diagnostic data with the firmware version that produced it.
-const PRODTEST_FW_VERSION: u32 = 1;
+const PRODTEST_FW_VERSION: u32 = 3;
 
 /// STM32U585 chip UID, 96 bits at `0x0BFA_0700` per RM0456 §28.10.
 const STM32_UID_ADDR: u32 = 0x0BFA_0700;
@@ -147,11 +125,11 @@ pub(super) unsafe fn cmd_display_pattern_run(args: &GatewayArgs) -> u32 {
         return NscStatus::InvalidPointer as u32;
     }
 
-    render_oled_pattern(pattern);
+    render_lcd_pattern(pattern);
     NscStatus::Ok as u32
 }
 
-/// Render a known full-screen test pattern to the SSD1306 OLED.
+/// Render a known full-screen test pattern to the NV3007 LCD.
 ///
 /// `pattern` is one of:
 ///   0 = all white (every pixel ON)
@@ -159,7 +137,7 @@ pub(super) unsafe fn cmd_display_pattern_run(args: &GatewayArgs) -> u32 {
 ///   2 = horizontal stripes (every other row)
 ///   3 = vertical stripes (every other column)
 ///   4 = 8×8 checker
-fn render_oled_pattern(pattern: u32) {
+fn render_lcd_pattern(pattern: u32) {
     use crate::ui::display;
 
     let d = display();
@@ -167,12 +145,12 @@ fn render_oled_pattern(pattern: u32) {
     // Build a 4-row × 16-col ASCII representation. The CT blit path
     // (`flush_with_secret_rows`) takes byte-rows directly, so we just
     // pick the right per-byte fill: 0xFF = solid ON, 0x00 = solid OFF.
-    // For striped / checker patterns the SSD1306 framebuffer would
-    // need raw pixel access — for Phase A we approximate via the
+    // For striped / checker patterns the NV3007 framebuffer would
+    // need raw pixel access — for this profile we approximate via the
     // text grid which is what's already in the framebuffer pipeline.
     //
-    // Note: this is a TEXT-LAYER approximation. A future Phase C
-    // pass should reach into the OLED framebuffer directly and draw
+    // Note: this is a TEXT-LAYER approximation. A future display-specific
+    // harness can reach into the LCD framebuffer directly and draw
     // per-pixel patterns. For now the operator + fixture verify the
     // expected text-grid pattern is visible:
     //   pattern 0 ("white"): 16 solid blocks per row × 4 rows
@@ -229,35 +207,31 @@ pub(super) unsafe fn cmd_saes_selftest_run(args: &GatewayArgs) -> u32 {
         return NscStatus::InvalidPointer as u32;
     }
 
-    // Compute the DHUK fingerprint: SAES-ECB(DHUK, [0u8; 16])
-    // truncated to 8 bytes. Same shape as the existing
-    // `hw::saes::self_test` fingerprint path (which compiles under
-    // `saes-self-test` + `saes-dhuk`).
-    //
-    // Phase B implementation note: we currently can't call into
-    // `hw::saes::*` directly without the `saes-dhuk` feature.
-    // Under the `prodtest` feature ALONE (no `saes-dhuk`), we
-    // return a stub all-zero fingerprint + InternalError so the
-    // host fixture sees the test as "compiled out" rather than
-    // "passed silently". The proper prodtest build profile pairs
-    // `prodtest,saes-dhuk` so this path actually runs.
+    // The canonical prodtest profile includes `saes-dhuk`. Main deliberately
+    // skips its ordinary DHUK init under `dev-testkey`, so this command must
+    // initialize the peripheral itself before exercising both the software
+    // and DHUK self-test paths. `init()` is idempotent and register-only.
     #[cfg(feature = "saes-dhuk")]
     {
-        let mut block = [0u8; 16];
-        if crate::hw::saes::encrypt_ecb_block(
-            crate::hw::saes::KeySel::Dhuk,
-            &mut block,
-        )
-        .is_err()
-        {
+        if crate::hw::saes::init().is_err() || crate::hw::saes::self_test().is_err() {
             return NscStatus::InternalError as u32;
         }
+
+        let block: [u8; 16] = *b"PQSIGNER-SAES-v1";
+        let fingerprint_block = match crate::hw::saes::encrypt_ecb_block(
+            crate::hw::saes::KeySel::Dhuk,
+            None,
+            &block,
+        ) {
+            Ok(ciphertext) => ciphertext,
+            Err(_) => return NscStatus::InternalError as u32,
+        };
         let out = args.arg1 as *mut u8;
         for i in 0..SAES_FINGERPRINT_LEN {
             // SAFETY: validate_ns_write_ptr above checked
             // SAES_FINGERPRINT_LEN bytes writable at args.arg1.
             unsafe {
-                core::ptr::write_volatile(out.add(i), block[i]);
+                core::ptr::write_volatile(out.add(i), fingerprint_block[i]);
             }
         }
         return NscStatus::Ok as u32;
@@ -277,47 +251,23 @@ pub(super) unsafe fn cmd_saes_selftest_run(args: &GatewayArgs) -> u32 {
 const BHK_FINGERPRINT_LEN: usize = 8;
 
 /// # Safety
-/// CMSE non-secure-entry handler — writes 8 bytes to NS after
-/// `validate_ns_write_ptr`. Drives the SAES peripheral with the BHK
-/// key selector.
+/// CMSE non-secure-entry handler — writes an eight-byte zero diagnostic after
+/// `validate_ns_write_ptr`, then returns the profile's required unsupported
+/// status. It never drives BHK or persistent state.
 pub(super) unsafe fn cmd_bhk_selftest_run(args: &GatewayArgs) -> u32 {
     if !validate_ns_write_ptr(args.arg1, BHK_FINGERPRINT_LEN) {
         return NscStatus::InvalidPointer as u32;
     }
 
-    // Same shape as `hw::bhk::self_test` — requires both `bhk` and
-    // `saes-dhuk` features to be present. If either is off the test
-    // returns InternalError so the fixture knows it can't sign off
-    // on Tier-2 silicon root validation for this build.
-    #[cfg(all(feature = "bhk", feature = "saes-dhuk"))]
-    {
-        let mut block = [0u8; 16];
-        // BHK must be loaded into TAMP backup registers + locked
-        // before SAES can use it. The boot path normally does this
-        // under `bhk` feature; we trust the boot init here.
-        if crate::hw::saes::encrypt_ecb_block(
-            crate::hw::saes::KeySel::Bhk,
-            &mut block,
-        )
-        .is_err()
-        {
-            return NscStatus::InternalError as u32;
+    let out = args.arg1 as *mut u8;
+    for i in 0..BHK_FINGERPRINT_LEN {
+        // SAFETY: validate_ns_write_ptr above checked the full diagnostic.
+        unsafe {
+            core::ptr::write_volatile(out.add(i), 0);
         }
-        let out = args.arg1 as *mut u8;
-        for i in 0..BHK_FINGERPRINT_LEN {
-            // SAFETY: validate_ns_write_ptr above.
-            unsafe {
-                core::ptr::write_volatile(out.add(i), block[i]);
-            }
-        }
-        return NscStatus::Ok as u32;
     }
-    #[cfg(not(all(feature = "bhk", feature = "saes-dhuk")))]
-    {
-        let _ = args;
-        secure_log!("[PRODTEST] bhk_selftest skipped — bhk + saes-dhuk features required");
-        NscStatus::InternalError as u32
-    }
+    secure_log!("[PRODTEST] bhk_selftest unsupported in reversible profile");
+    NscStatus::InternalError as u32
 }
 
 // ---------------------------------------------------------------------------
@@ -325,9 +275,9 @@ pub(super) unsafe fn cmd_bhk_selftest_run(args: &GatewayArgs) -> u32 {
 // ---------------------------------------------------------------------------
 
 /// # Safety
-/// CMSE non-secure-entry handler — reads 4 bytes from NS, drives the
-/// flash controller. Writes to a designated test page only; the
-/// `flash::test_page_*` helpers refuse any non-test-page address.
+/// CMSE non-secure-entry handler — reads the stable four-byte request shape
+/// from NS, but deliberately performs no flash-controller operation or other
+/// persistent write in the reversible profile.
 pub(super) unsafe fn cmd_flash_rw_run(args: &GatewayArgs) -> u32 {
     if !validate_ns_read_ptr(args.arg0, 4) {
         return NscStatus::InvalidPointer as u32;
@@ -341,13 +291,11 @@ pub(super) unsafe fn cmd_flash_rw_run(args: &GatewayArgs) -> u32 {
     }
     let pattern = u32::from_le_bytes(buf);
 
-    // Phase B stub: the flash R/W test page + helpers aren't carved
-    // out yet. Designated test page would be page 122 (the last
-    // SLOT_B_SECURE page — unused on prodtest builds that don't run
-    // firmware update). Returning InternalError until the helpers
-    // land. Tracked in work-todo §30 as Phase B finalisation.
+    // Deliberately unsupported: reversible acceptance has no designated
+    // writable page and must not infer flash-write authority from this wire
+    // command. A separately reviewed destructive harness would be required.
     let _ = pattern;
-    secure_log!("[PRODTEST] flash_rw_test — test-page helpers not yet wired (work-todo §30)");
+    secure_log!("[PRODTEST] flash_rw_test unsupported in reversible profile");
     NscStatus::InternalError as u32
 }
 
@@ -355,11 +303,11 @@ pub(super) unsafe fn cmd_flash_rw_run(args: &GatewayArgs) -> u32 {
 // CMD_PRODTEST_TRNG_SAMPLE (105) — Phase B
 // ---------------------------------------------------------------------------
 
-const TRNG_SAMPLE_MAX: usize = 256;
+const TRNG_SAMPLE_MAX: usize = PRODTEST_MAX_RESPONSE_DATA_LEN;
 
 /// # Safety
 /// CMSE non-secure-entry handler — reads 4 bytes from NS, draws from
-/// the STM32 TRNG, writes 1..=256 bytes to NS after
+/// the STM32 TRNG, writes 1..=254 bytes to NS after
 /// `validate_ns_write_ptr`.
 pub(super) unsafe fn cmd_trng_sample_run(args: &GatewayArgs) -> u32 {
     if !validate_ns_read_ptr(args.arg0, 4) {
@@ -406,11 +354,10 @@ pub(super) unsafe fn cmd_trng_sample_run(args: &GatewayArgs) -> u32 {
 // ---------------------------------------------------------------------------
 //
 // Drives the OPTIGA Trust M's IFX I²C → APDU stack end-to-end without
-// touching any persistent chip state. `OptigaTrustM::random()` lazily
-// runs `init()` (RST pulse + OpenApplication) then sends a `GetRandom`
-// APDU. On a fresh chip there's no PBS yet, so the call goes through
-// the plain APDU path (shield.active == false; see
-// `secure/src/optiga/apdu.rs::send_command`). Catches:
+// touching any persistent chip state. The prodtest-only probe lazily runs
+// `init()` (RST pulse + OpenApplication) then sends a plaintext `GetRandom`
+// APDU. This is intentionally separate from production `random()`, which
+// always requires a loaded PBS and Shielded Connection. Catches:
 //   - missing chip / broken solder / I²C bus wedged
 //   - RST line wrong / floating (init's pin_diag::run pulse fails)
 //   - power-rail / clock issues (OpenApplication times out)
@@ -436,8 +383,8 @@ pub(super) unsafe fn cmd_optiga_handshake_run(args: &GatewayArgs) -> u32 {
         // `static mut crate::SE` access. We touch only `optiga`.
         let se = unsafe { &mut *core::ptr::addr_of_mut!(crate::SE) };
         let mut rng_buf = [0u8; OPTIGA_HANDSHAKE_RNG_LEN];
-        if se.optiga.random(&mut rng_buf).is_err() {
-            secure_log!("[PRODTEST] optiga_handshake: random() failed");
+        if se.optiga.prodtest_plain_random(&mut rng_buf).is_err() {
+            secure_log!("[PRODTEST] optiga_handshake: plain probe failed");
             return NscStatus::InternalError as u32;
         }
         let out = args.arg1 as *mut u8;
@@ -516,18 +463,18 @@ pub(super) unsafe fn cmd_se050_handshake_run(args: &GatewayArgs) -> u32 {
 // Echo N bytes back to the host. The fact the firmware RECEIVED the
 // command already proves USB RX framing works; this command proves
 // TX + full round-trip byte integrity for non-trivial payloads up to
-// the 256 B per-call cap (chosen to match TRNG_SAMPLE's bound).
+// the shared 254-byte response-data cap.
 // Catches:
 //   - USB OTG FS TX path corruption
 //   - HID report fragmentation bugs in the NS-side stack
 //   - buffer-overflow / off-by-one in the USB transport layer
 //   - VCC instability under sustained USB TX
 
-const USB_LOOPBACK_MAX: usize = 256;
+const USB_LOOPBACK_MAX: usize = PRODTEST_MAX_RESPONSE_DATA_LEN;
 
 /// # Safety
 /// CMSE non-secure-entry handler — reads N bytes from NS, writes N
-/// bytes to NS. Both pointers validated; N must be 1..=256.
+/// bytes to NS. Both pointers validated; N must be 1..=254.
 pub(super) unsafe fn cmd_usb_loopback_run(args: &GatewayArgs) -> u32 {
     let n = args.arg2 as usize;
     if n == 0 || n > USB_LOOPBACK_MAX {
@@ -691,7 +638,7 @@ fn run_both_button_step() -> u8 {
 
 /// # Safety
 /// CMSE non-secure-entry handler — writes 4 bytes to NS after
-/// `validate_ns_write_ptr`. Drives the OLED + button GPIOs.
+/// `validate_ns_write_ptr`. Drives the NV3007 LCD + button GPIOs.
 pub(super) unsafe fn cmd_button_test_run(args: &GatewayArgs) -> u32 {
     if !validate_ns_write_ptr(args.arg1, BUTTON_TEST_OUT_LEN) {
         return NscStatus::InvalidPointer as u32;
@@ -724,7 +671,7 @@ pub(super) unsafe fn cmd_button_test_run(args: &GatewayArgs) -> u32 {
         }
     };
 
-    // If gpio-buttons or ui-oled is somehow off (shouldn't be — the
+    // If gpio-buttons or ui-lcd is somehow off (shouldn't be — the
     // prodtest feature pulls both in), report a generic timeout so the
     // fixture sees the build profile is wrong.
     #[cfg(not(all(feature = "gpio-buttons", feature = "ui-lcd")))]
@@ -770,13 +717,13 @@ mod tests {
         // The factory's traceability DB correlates this with
         // per-unit diagnostic data. Drop a row in the operator
         // manual every time this bumps.
-        assert_eq!(PRODTEST_FW_VERSION, 1);
+        assert_eq!(PRODTEST_FW_VERSION, 3);
     }
 
     #[test]
     fn positive_trng_sample_cap_matches_proto_doc() {
-        // Cap stays at 256 to keep the USB HID buffer bounded.
-        assert_eq!(TRNG_SAMPLE_MAX, 256);
+        assert_eq!(TRNG_SAMPLE_MAX, PRODTEST_MAX_RESPONSE_DATA_LEN);
+        assert_eq!(TRNG_SAMPLE_MAX, 254);
     }
 
     #[test]
@@ -802,7 +749,7 @@ mod tests {
     fn positive_usb_loopback_cap_matches_proto_doc() {
         // Cap matches TRNG_SAMPLE_MAX so the same caller-side buffer
         // can be reused for both commands.
-        assert_eq!(USB_LOOPBACK_MAX, 256);
+        assert_eq!(USB_LOOPBACK_MAX, PRODTEST_MAX_RESPONSE_DATA_LEN);
     }
 
     #[test]

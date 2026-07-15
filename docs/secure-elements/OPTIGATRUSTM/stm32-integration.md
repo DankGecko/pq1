@@ -174,9 +174,16 @@ For the PQSigner OS architecture:
   - Configure GTZC to restrict I2C1 peripheral to secure world
   - Same pattern as SE050 I2C and Tropic01 SPI
 
-- **Platform Binding Secret storage**
-  - Store in secure flash, SAES-wrapped (same pattern as Tropic01 pairing key)
-  - Reserve a flash page for OPTIGA Trust M PBS
+- **Current bring-up Platform Binding Secret root**
+  - Derive the PBS at boot with
+    `hw::secret_keys::derive_into("pqsigner/optiga-pbs-v1")`; it has no flash
+    representation.
+  - Do not reserve page 126 for PBS. Page 126 belongs exclusively to the
+    DHUK-wrapped SE050 BHK when `bhk` is enabled.
+  - Do not treat this deterministic helper as the production-final protocol.
+    The required fresh-TRNG final per-device rotation, durable public
+    salt/state, cut recovery, and exact E140 ordering remain OPEN and
+    production-blocking.
 
 - **RST GPIO must be secure-world-only**
   - Prevent non-secure world from resetting the chip

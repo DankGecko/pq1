@@ -9,15 +9,16 @@ Primary architectural twin: **T3W1 ("Trezor Safe 7") — STM32U5A9 + Optiga Trus
 > **2026-07-11 rollback correction.** The §8.3 claim that legacy
 > `otp::bump_to` is “DONE” or stronger than Trezor is superseded. Its two
 > readbacks do not rescue an encoding that illegally reprograms one STM32U585
-> OTP QW. Draft 0.9 makes OTP only the candidate first backend; physical
-> codec/ECC/interruption/capacity and combined resource fit remain OPEN.
+> OTP QW. Draft 1.1 keeps OTP as a research-candidate first backend, but is not
+> implementation-approved; physical codec/ECC/interruption/capacity and the
+> separate FLASH plus RAM/stack gates remain OPEN.
 
 ## TL;DR
 
 Trezor has shipped three hardware generations on ARMv8-M + Optiga Trust M. Their firmware carries ~7 years of post-mortem scar tissue that PQSigner can inherit without paying the same tuition. The highest-signal findings are:
 
 1. **PQSigner's current GTZC1_TZSC=0 "everything NS" regression has a direct, verified Trezor fix** — adopt their per-peripheral S-allowlist.
-2. **Counter-gated SE authorization**, **OTP-derived PBS**, **MCU pre-commit PIN counter**, and **domain-separated secret_keys via HKDF-Expand** are all Trezor patterns PQSigner already tracks or has landed. These findings validate existing `work-todo.md` items #4/#24 and `hw/secret_keys.rs`.
+2. **Counter-gated SE authorization**, **MCU pre-commit PIN counters**, and **domain-separated hardware-root KDFs** are Trezor patterns PQSigner adopted. The older OTP-derived-PBS proposal documented here was an intermediate design: current bring-up PBS is DHUK-derived, while the production-final fresh-salted rotation remains OPEN under work-todo #36.
 3. **Genuine gaps not yet tracked:** prodtest factory firmware, screenshot-hash UI regression, ~~libFuzzer corpus for APDU+NSC~~ (APDU side landed 2026-05-13 in `fuzz/` — 5 cargo-fuzz targets over the workspace pure-logic parsers; NSC ptr-validate side now **closed-via-Kani 2026-06-30** — see §2.4 / C-3), vendor-header-hash OTP lock, multi-source TAMP enable list, glitch-sentinel `wait_random`, richer OTP layout (batch/SN/vendor-lock/manufacturing-lock).
 4. **Morale/validation:** `MODEL_BOARDLOADER_PQ_KEYS` at `core/embed/models/T3W1/model_T3W1.h:48-51` shows Trezor is wiring PQ signature verification into their boardloader — PQSigner's PQ-only stance is not niche.
 
@@ -292,7 +293,13 @@ for (int i = 0; i < 512; i++) NVIC_SetTargetState(i);  // all IRQs NS by default
 
 **Trezor (`core/embed/models/T3W1/otp_layout.h:6` + `sec/image/image.c`):** `FLASH_OTP_BLOCK_VENDOR_HEADER_LOCK` holds a 32-byte hash pin. The bootloader refuses firmware whose vendor header hash diverges. Because OTP is one-way, this is durable across RDP regression and board-level reflash attacks.
 
-**Action:** Add a `FLASH_OTP_BLOCK_VENDOR_PK_HASH` block. FSBL computes `SHA-256(vendor_pubkey_bytes)`, compares against the OTP block on every boot; reject on mismatch; refuse to boot. On factory line, `fwsign` seals the OTP block irrevocably before `RDP-2`. This closes the "substitute vendor key + reflash FSBL" path.
+**Historical candidate, not current authority:** an earlier proposal added a
+`FLASH_OTP_BLOCK_VENDOR_PK_HASH` block and sealed it during a factory-side
+RDP-2 ceremony. The 2026-07-14 lifecycle decision supersedes that ordering:
+devices ship at RDP-0 and any eventual vendor-key OTP binding plus first-field
+RDP-2 self-lock must be specified together by the approved rollback/factory
+architecture. Draft 1.1 leaves the physical OTP codec, factory receipt, and
+silicon gates open. Do not implement or burn this older proposal directly.
 
 ---
 
@@ -313,7 +320,7 @@ Trezor's prodtest is a separate, signed, UART-CRC-framed command shell with ~300
 
 **Finding:** Trezor's prodtest pairs Optiga via `prodtest_optiga_pair()` (`core/embed/projects/prodtest/cmd/prodtest_optiga.c:107-158`) and only *after a successful handshake* calls `prodtest_optiga_lock()` (line 169-246) to set LcsO=Operational on E140. If the handshake fails, lock is never executed and the chip stays provisionable.
 
-**Relevance:** PQSigner's bench-chip brick (`project_optiga_brick.md`) is the exact scenario Trezor prevents by construction. The fix tracked in work-todo #24 (Trezor-style OTP-derived PBS) is correct — add the **"verify Shielded Connection round-trip succeeds before E140 lock"** gate as an explicit prodtest step.
+**Relevance:** PQSigner's bench-chip brick (`project_optiga_brick.md`) is the exact scenario Trezor prevents by construction. The historical OTP-derived-PBS fix was superseded by the current DHUK bring-up path and the still-open final salted lifecycle. The surviving requirement is to **verify a Shielded Connection round trip before any E140 lock**; its placement belongs to the reviewed E140/rotation ceremony, not this dated comparison.
 
 ### 2.3 Screenshot-hash UI regression tests
 
@@ -396,12 +403,13 @@ FLASH_OTP_BLOCK_MANUFACTURING_LOCK   = 8  // irreversible "provisioning done"
 **PQSigner legacy prototype (rejected):** the current code models a 1024-bit
 unary tally, but STM32U585 OTP is 32 one-program 128-bit ECC quad-words. It
 cannot be reprogrammed bit by bit and is now compile-blocked from production.
-Draft 0.9 keeps ordinary releases OTP-free within an epoch and leaves the
-replicated full-QW security-epoch codec open.
+Draft 1.1 proposes ordinary releases that are OTP-free within an epoch and
+leaves the replicated full-QW security-epoch codec open. It is not
+implementation authority.
 
 **Trade-off:** Trezor's approach is revocable with a flash erase of the SECRET region (not exposed to firmware) and survives power-loss mid-write because each chunk is atomic. PQSigner's OTP budget is simpler and harder to override, at the cost of a finite ceiling.
 
-**Verdict: RE-EVALUATE AFTER DRAFT-0.9 GATES.** OTP remains the preferred
+**Verdict: RE-EVALUATE AFTER DRAFT-1.1 CANDIDATE GATES.** OTP remains the preferred
 pre-PIN immutable root, but only with a hardware-valid full-QW codec and durable
 interruption protocol. Trezor's erasable SECRET-region journal remains a
 possible supporting durable-stage mechanism, not a substitute authority. Do
@@ -441,10 +449,10 @@ These Trezor findings confirm directions PQSigner has already committed to — t
 
 | Trezor pattern | PQSigner equivalent | Status |
 |---|---|---|
-| `secret_keys/stm32u5/secret_keys.c:41-175` domain-labelled HKDF-Expand from OTP master | `secure/src/hw/secret_keys.rs` header comment literally says "PQSigner parallel to Trezor's" | ✅ Landed |
-| `monoctr` for bootloader/firmware rollback | Draft-0.9 epoch floor over full OTP QWs; physical codec still OPEN | ⛔ legacy bit tally production-fenced |
+| `secret_keys/stm32u5/secret_keys.c:41-175` domain-labelled expansion from a hardware root | `secure/src/hw/secret_keys.rs` applies the pattern with current DHUK/BHK paths; explicit OTP-shaped fallbacks are dev/legacy | ✅ pattern landed; final salted lifecycle OPEN |
+| `monoctr` for bootloader/firmware rollback | Draft 1.1 research-candidate epoch floor over full OTP QWs; approval and physical codec still OPEN | ⛔ legacy bit tally production-fenced |
 | Counter-gated SE auth (Optiga E120/E121/E122 LUC) | `work-todo #4 Phase 2` + `#24` to migrate Optiga counter to 0xE120 | 🟡 Tracked |
-| OTP-randomness-derived PBS (`secret_key_master_key_get` at `sec/secret_keys/stm32u5/secret_keys.c:178-195`): TRNG seed written once to OTP, then read every boot, HKDF-Expand to produce PBS | `work-todo #24` | 🟡 Tracked — adopts exact Trezor pattern |
+| OTP-randomness-derived PBS (`secret_key_master_key_get` at `sec/secret_keys/stm32u5/secret_keys.c:178-195`) | Historical work-todo #24 candidate; current bring-up is DHUK-derived and the production-final fresh-salted protocol is still open | ⏸ superseded as direct implementation recipe |
 | MCU pre-commit PIN counter, bump-before-SE-verify, glitch-guard readback | `nsc::gated_unlock` + `hw::flash::pin_attempts_bump` | ✅ Landed (cites Trezor `storage.c:1171-1311`) |
 | BIP-39 → PBKDF2-HMAC-SHA512 → seed | `secure/src/crypto.rs` | ✅ Same primitive |
 | SHA-256 hardware peripheral for hot inner loop | `secure/src/hw/hash.rs` + KAT-on-boot ("abc" known-answer test, halt on fail) | ✅ Landed; Trezor has no equivalent self-test on `sec/hash_processor/` — **PQSigner's KAT is actually better** |
@@ -527,7 +535,7 @@ Per `CLAUDE.md` Development Posture: PQSigner is pre-production bring-up. Items 
 10. On-device i18n (only if product-market-fit demands non-English).
 
 **Keep current plan:**
-11. OTP-derived PBS (`work-todo #24`) — matches Trezor exactly.
+11. Hardware-root/domain-separation pattern — retained; the direct OTP-derived-PBS recipe is superseded by the current DHUK bring-up path and open final salted lifecycle.
 12. Optiga 0xE120 counter migration (`work-todo #4 Phase 2`) — matches Trezor E120/E121/E122 pattern.
 13. XOR dual-SE split — stronger than Trezor's attestation-only dual-SE for seed-recovery threat model.
 14. SPHINCS+C10-only signing — Trezor is moving toward PQ; PQSigner's head-start is a moat, not a risk.
@@ -624,13 +632,13 @@ Trezor: boardloader → bootloader → secmon → kernel → firmware. PQSigner:
 
 **Pattern 1 — register zero-out at the jump.** Trezor's `jump_to_next_stage(addr, args)` is a naked asm routine that zeroes R0-R12 + R14 and disables MSPLIM before `BX LR` to the next-stage vector table (`boardloader/main.c:365`, secmon's `jump_to_vectbl_ns` similar). PQSigner's FSBL→firmware handoff currently does not register-scrub.
 
-**Pattern 2 — monotonic counter write-then-read-verify at every handoff.** `monoctr_write(MONOCTR_BOOTLOADER_VERSION, hdr->monotonic)` is followed by a read-back; failure halts. PQSigner's legacy `bump_to` does two readbacks, but that evidence is **not transferable**: the underlying unary codec attempts forbidden second programs of STM32U585 OTP QWs. Treat the old C-4 “DONE/stronger” result as a test of legacy control flow only. The replacement typed floor and its fresh-read/ECCC/replica rules remain OPEN under Draft 0.9.
+**Pattern 2 — monotonic counter write-then-read-verify at every handoff.** `monoctr_write(MONOCTR_BOOTLOADER_VERSION, hdr->monotonic)` is followed by a read-back; failure halts. PQSigner's legacy `bump_to` does two readbacks, but that evidence is **not transferable**: the underlying unary codec attempts forbidden second programs of STM32U585 OTP QWs. Treat the old C-4 “DONE/stronger” result as a test of legacy control flow only. The replacement typed floor and its fresh-read/ECCC/replica rules remain an OPEN, unapproved Draft 1.1 proposal.
 
 **Pattern 3 — VTRUST flags in the manifest.** A 16-bit `vtrust` field in the vendor header gates provisioning mode, secret access level, vendor-screen display behavior. The bootloader enforces it BEFORE calling `secret_prepare_fw(...)`. PQSigner's FSBL doesn't have an equivalent — manifest is signed but doesn't carry runtime-policy flags.
 
 **Pattern 4 — `startup_args` versioned container for state passing.** `STARTUP_ARGS_TYPE_*` enum (`startup_args.h`) lets the bootloader pass typed payloads (MCU device cert today; presumably more later) to firmware without ABI breaks. PQSigner FSBL→firmware passes no structured state currently.
 
-**Pattern 5 (Trezor-specific) — secmon as TrustZone enforcer.** Secmon initializes secure peripherals + sets up NVIC/MPU for the non-secure kernel, then jumps to kernel in NS mode. PQSigner's SAU/GTZC setup happens inline in the secure entry point at `secure/src/main.rs`; we don't need a separate secmon layer because the FSBL is already trusted (it's WRP1A-locked) and the secure-world entry IS the equivalent.
+**Pattern 5 (Trezor-specific) — secmon as TrustZone enforcer.** Secmon initializes secure peripherals + sets up NVIC/MPU for the non-secure kernel, then jumps to kernel in NS mode. PQSigner's SAU/GTZC setup happens inline in the secure entry point at `secure/src/main.rs`; the intended design does not need a separate secmon layer because the secure-world entry is the equivalent. The legacy bench FSBL is not yet a production trust root: its geometry, WRP/factory, build/resource, and silicon gates remain open.
 
 **Adoption candidates.**
 - [P2, ~half day] Register zero-out + MSPLIM disable at the FSBL→firmware handoff. `secure/src/main.rs`'s reset_handler runs before any FSBL-state could leak, but the FSBL itself doesn't scrub. Worth porting the asm pattern verbatim to `fsbl/src/jump.rs` (or wherever the jump-to-firmware happens).

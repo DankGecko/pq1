@@ -167,7 +167,7 @@ The secure-flash bank-1 page map is nearly full of persistent data:
 | page | addr | use |
 |---|---|---|
 | 127 | `0x0C0F_E000` | first-boot provisioning journal (KEY_PAGE, 8 KB) |
-| 126 | `0x0C0F_C000` | FW-update fail counter (was OPTIGA PBS) |
+| 126 | `0x0C0F_C000` | wrapped SE050 BHK when `bhk` is enabled; no PBS or persistent fw-fail counter |
 | 125 | `0x0C0F_A000` | SE050 admin-wipe state |
 | 124 | — | PIN-attempt counter |
 | 123 | — | off-chain sig counter (log-structured) |

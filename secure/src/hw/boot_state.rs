@@ -1,11 +1,12 @@
-//! Boot-state page (flash page 6, 0x0C00_C000).
+//! Legacy bench boot-state page (flash page 6, 0x0C00_C000).
 //!
-//! Holds the try-once / committed markers that FSBL reads at power-on
-//! to decide whether the last-tried slot is safe to boot again.
+//! This implementation does not satisfy the production rollback architecture:
+//! `CMD_FW_COMMIT` is its only writer, there is no first-successful-unlock
+//! confirmation write, and the production path is compile-fenced. It remains
+//! solely for bench compatibility while the approved replacement is designed.
 //!
 //! Unlike the manifest, this page is written by the runtime firmware
-//! (from the secure-world `CMD_FW_COMMIT` handler and by the slot
-//! itself on first-successful-unlock), *not* signed. It's integrity-
+//! (from the secure-world `CMD_FW_COMMIT` handler), *not* signed. It's integrity-
 //! protected by a CRC-32 + redundant copies so a torn write doesn't
 //! confuse FSBL, but tampering with it only changes which slot FSBL
 //! picks — every candidate slot still goes through full manifest
@@ -54,8 +55,8 @@ pub struct BootState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BootStateError {
-    /// Both copies are unparseable (blank or bad CRC). FSBL should
-    /// fall back to the default "Slot A, floor 0" state in that case.
+    /// Both copies are unparseable (blank or bad CRC). The legacy bench FSBL
+    /// falls back to Slot A/floor 0; that fallback is not production policy.
     Unavailable,
     /// A flash program/erase sequence failed.
     FlashError,
@@ -124,7 +125,7 @@ fn encode(state: &BootState) -> [u8; BSTATE_SIZE] {
 }
 
 /// Erase the boot-state page and write the new state to both copies.
-/// Used at commit-time and at first-successful-unlock after boot.
+/// Used only by the legacy `CMD_FW_COMMIT` path.
 pub unsafe fn write(state: &BootState) -> Result<(), BootStateError> {
     unsafe { flash::erase_secure_page(BOOT_STATE_PAGE) }.map_err(|_| BootStateError::FlashError)?;
     let buf = encode(state);

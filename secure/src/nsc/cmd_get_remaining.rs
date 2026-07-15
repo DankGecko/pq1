@@ -1,18 +1,15 @@
 //! `CMD_GET_REMAINING` — return how many PIN attempts are still
 //! available in the current lockout window.
 //!
-//! Authoritative value is the MIN across all three counters:
-//!   - MCU page-124 (tightest gate in production, fires first at
-//!     `MAX_ATTEMPTS = 10`)
-//!   - OPTIGA E120 LUC (hardware-enforced, lives in silicon)
-//!   - SE050 UserID remaining (reported via `WalletStore`; for the
-//!     Dual backend this is already `min(optiga, se050)`).
+//! User-facing value is the MIN of MCU page-124 and the runtime SE-driver
+//! `remaining_attempts()` mirror. For the dual backend that mirror reflects
+//! the active unlock paths and is synchronized conservatively from page 124;
+//! it is not a fresh, authoritative read of all three silicon counters.
 //!
-//! Why MIN: in healthy lockstep, the MCU count dominates and MIN is
-//! redundant. The value of MIN is in failure modes — e.g., flash
-//! corruption that resets page-124 while silicon counters retain their
-//! real state — when the displayed remaining must track the *lowest*
-//! real count or the user gets a surprise lockout.
+//! Why MIN: never display more attempts than either locally enforced view.
+//! Boot rollback detection is separate and directionally compares page 124
+//! with readable OPTIGA E120; the production SE050 attempt attribute cannot be
+//! peeked without weakening policy or consuming an attempt.
 
 use super::state;
 

@@ -15,9 +15,10 @@
 //!
 //! Renders the SAME `DISPLAY_COLS=16 × DISPLAY_ROWS=4` char grid as the
 //! secure-world `ui-lcd` backend (`secure/src/ui/lcd.rs`), so the FSBL
-//! trust-root row and `measured_boot::run`'s advisory row show the same 8
-//! words for the same digest (visual parity is part of the trust story —
-//! any divergence is a tamper signal).
+//! legacy bench-FSBL row and `measured_boot::run`'s advisory row show the same
+//! 8 words for the same digest. The eventual trust-root claim additionally
+//! requires the approved geometry, WRP/RDP ceremony, resource gates, and
+//! silicon evidence; this display parity alone does not establish it.
 //!
 //! ## Pin mapping (B-U585I-IOT02A, Arduino R3 headers + `spi1-arduino`)
 //!
@@ -290,7 +291,7 @@ fn spi_begin(tsize: u16) {
 /// within microseconds, so the cap (~10M iterations ≈ a few seconds at the
 /// 16 MHz FSBL clock) never trips in normal operation — it exists only so a
 /// STALLED SPI/LCD (dead panel, cracked ribbon, cold-solder joint) cannot hang
-/// the immutable, WRP1A-locked bootloader forever: the FSBL arms no watchdog,
+/// the legacy bench bootloader forever: the FSBL arms no watchdog,
 /// so an unbounded `while` here would be an unrecoverable boot hang. On timeout
 /// we give up on this transfer and let boot proceed — a broken display renders
 /// nothing either way, so booting (device still usable over USB) beats hanging.
@@ -359,7 +360,7 @@ fn write_cmd(cmd: u8) {
 // Encoded as a FLAT `cmd, nparams, params...` byte stream rather than a
 // `&[(u8, &[u8])]` table: the tuple form costs ~12 B/entry (the fat slice
 // pointer) + a separate rodata array per param list (~1.5 KB total), which
-// overflows the WRP1A-locked FSBL FLASH region. The flat stream is one ~355 B
+// overflows the legacy 32-KiB bench FSBL FLASH region. The flat stream is one ~355 B
 // rodata blob — still byte-diffable against the source, just denser.
 //
 // **Do not alter values without re-validating on the ZT165M017AT panel** —

@@ -922,12 +922,12 @@ fn main() -> ! {
                     cortex_m::asm::wfe();
                 }
             }
-            // Secure boot must enter the immutable WRP1A-locked FSBL (silicon-
-            // lockdown SL2/SL3): a redirected SECBOOTADD0 = a boot bypass. This
-            // checks the boot ADDRESS only (not the BOOT_LOCK bit — its position
-            // is doc-ambiguous; tracked as a bench-confirmation follow-up), and
-            // WARN-and-continues (a mis-provisioned address is a factory error,
-            // not something a shipped device can fix at boot).
+            // The target shipping design must enter the approved, WRP-protected
+            // FSBL (silicon-lockdown SL2/SL3): a redirected SECBOOTADD0 is a boot
+            // bypass. This checks the boot ADDRESS only; it does not prove the
+            // FSBL extent or WRP mapping, whose production geometry/factory and
+            // silicon receipts remain open. It also does not check BOOT_LOCK
+            // (position still tracked as a bench-confirmation follow-up).
             let secboot = hw::flash::secboot_add0_reg();
             if !sphincs_tz_shared::lockdown::secboot_selects(
                 secboot,
@@ -1117,8 +1117,8 @@ fn main() -> ! {
         }
     }
 
-    // Tier-2 BHK boot-time load + lock. Only when the `bhk` production
-    // feature is on (and the dev/self-test shortcuts are off). First
+    // Tier-2 BHK boot-time load + lock. Only when the `bhk` candidate
+    // hardware feature is on (and the dev/self-test shortcuts are off). First
     // boot of an unprovisioned device generates + wraps + stores the
     // BHK; every subsequent boot unwraps it into the TAMP backup
     // registers and sets `BHKLOCK` so only SAES can read it. Must run
@@ -1319,25 +1319,38 @@ fn main() -> ! {
 
     // Load the Platform Binding Secret for OPTIGA Trust M from secure flash.
     // If blank (first boot), PBS will be provisioned during the seed wizard.
-    #[cfg(all(feature = "optiga-trust-m", not(feature = "dual-se"), not(test)))]
+    // Prodtest bypasses this wallet-state preflight: reversible acceptance
+    // must not load or reconcile persistent wallet credentials before its
+    // short-circuit.
+    #[cfg(all(
+        feature = "optiga-trust-m",
+        not(feature = "dual-se"),
+        not(feature = "prodtest"),
+        not(test)
+    ))]
     unsafe {
         (&mut *core::ptr::addr_of_mut!(SE)).load_pbs();
     }
-    #[cfg(all(feature = "dual-se", not(test)))]
+    #[cfg(all(feature = "dual-se", not(feature = "prodtest"), not(test)))]
     unsafe {
         (&mut *core::ptr::addr_of_mut!(SE)).load_pbs();
     }
 
-    // §4 PIN-counter reconciliation. Cross-checks the MCU page-124
-    // attempt counter against BOTH SE-side counters (OPTIGA F1E1 +
-    // SE050 USERID `auth_attempts` via ReadObjectAttributes), AND
-    // checks intra-SE divergence. Any disagreement = unambiguous
-    // tamper signal (≥1 counter was reset without the others) →
-    // wipe immediately rather than waiting for the next unlock to
-    // expose it. See `nsc::reconcile_pin_attempts` for the full
-    // design + limitation notes (incl. the correction to the earlier
-    // "SE050 can't be peeked" claim).
-    #[cfg(all(feature = "stm32u585", any(feature = "optiga-trust-m", feature = "dual-se"), not(test)))]
+    // §4 PIN-counter rollback check. Compares MCU page 124 with the readable
+    // OPTIGA E120 count and wipes only when E120 leads, because page 124 is
+    // precharged before SE verification. The SE050 UserID attribute is
+    // policy-denied (0x6986), so it is not a boot input; SE050 still consumes
+    // ordinary attempts and independently enforces max-10 lockout. See
+    // `nsc::reconcile_pin_attempts` for the exact direction and limits.
+    // `reconcile_pin_attempts` can deliberately wipe wallet state when the SE
+    // counter leads the MCU counter. It is therefore outside the reversible
+    // prodtest profile and must never run before the prodtest short-circuit.
+    #[cfg(all(
+        feature = "stm32u585",
+        any(feature = "optiga-trust-m", feature = "dual-se"),
+        not(feature = "prodtest"),
+        not(test)
+    ))]
     unsafe {
         nsc::reconcile_pin_attempts(&mut *core::ptr::addr_of_mut!(SE));
     }
@@ -1409,12 +1422,12 @@ fn main() -> ! {
         boot_ns::boot(NS_FLASH_BASE);
     }
 
-    // ---- One-shot OPTIGA OID recovery (optiga-reset-oids) ----
-    // Runs before any wallet provisioning. Provisions a Trust Anchor cert
-    // at 0xE0E3 and sends SetObjectProtected reset manifests to the burned
-    // AUTHREF OID range so subsequent SetDataObject writes succeed again.
-    // Dev-only — disabled by `make prod-check`. Drop the feature once the
-    // chip is back to a writable state.
+    // ---- Retired OPTIGA OID-recovery incident path ----
+    // These branches preserve the failed E0E3 experiment for source-level
+    // provenance only. `nsc/mod.rs` unconditionally rejects the feature with
+    // OPTIGA_RESET_OIDS_RETIRED, so no executable image can reach them. Do not
+    // re-enable this path: the observed E0E3 is a full type-0x12 device cert,
+    // not the type-0x11 anchor the experiment assumed.
     #[cfg(all(feature = "optiga-reset-oids", feature = "dual-se", not(test)))]
     unsafe {
         secure_log!("[S] optiga-reset-oids: running one-shot OID recovery");
@@ -1467,7 +1480,7 @@ fn main() -> ! {
         // Two triggers for boot-time wipe:
         //   (a) page-125 wipe-in-progress flag is armed — a prior
         //       `factory_reset_admin` was interrupted mid-flight.
-        //   (b) page-126 MCU attempt counter is at MAX_ATTEMPTS — a
+        //   (b) page-124 MCU attempt counter is at MAX_ATTEMPTS — a
         //       prior session burned the last attempt but crashed
         //       before `trigger_lockout_wipe` could complete. Without
         //       this check, the device would boot and let the user
@@ -1486,7 +1499,7 @@ fn main() -> ! {
             ui::show_status("WIPING", "resuming from interrupt");
             let _ = (&mut *core::ptr::addr_of_mut!(SE)).factory_reset_admin();
             // factory_reset_admin ends with erase_admin_page() which clears
-            // both the page-125 PIN and the wipe flag. Also reset page 126
+            // both the page-125 PIN and the wipe flag. Also reset page 124
             // (MCU attempt counter) so next boot sees unprovisioned state +
             // blank counter → first-boot wizard, not another lockout loop.
             let _ = hw::flash::pin_attempts_reset();
@@ -1676,17 +1689,17 @@ fn main() -> ! {
         loop { cortex_m::asm::wfi(); }
     }
 
-    // ---- SE050 SCP03 key-rotation ceremony (IRREVERSIBLE — production only) ----
+    // ---- SE050 deterministic-transport rotation experiment (IRREVERSIBLE) ----
     // One-shot GP PUT KEY: replace SCP03 keyset 0x0B in place with this
-    // device's derived keys (secret_keys::se050_scp03_*_key, BHK-rooted in
-    // a `bhk` build), then halt. The published factory keys are gone after
-    // this — the chip only opens with firmware that re-derives the matching
-    // keys (establish() probes derived-first, falls back to factory).
-    // PRE-CONDITIONS (see work-todo #20 Stage B + docs/production-todo.md):
-    // RDP already stepped to ≥1 (so the BHK is its final per-die-DHUK value),
-    // BHK provisioned, chip is factory-fresh. NEVER run on a board that still
-    // moves RDP around. The PUT KEY framing is best-effort from GP 2.3 /
-    // AN12436 — validate on sacrificial parts before any real provisioning run.
+    // device's deterministic derived transport keys
+    // (secret_keys::se050_scp03_*_key, BHK-rooted in a `bhk` build), then halt.
+    // This is sacrificial evidence only, not the owner-required fresh-TRNG
+    // production-final rotation and not a factory/field ceremony. It does not
+    // solve the per-device transport-key handoff, authenticated migration,
+    // durable old/new recovery, KVN/atomicity, or coordinated E140 ordering.
+    // The PUT KEY framing is best-effort from GP 2.3 / AN12436 and may run only
+    // under an exact owner-authorized sacrificial plan. Prodtest is
+    // unconditionally incompatible with this feature.
     // Triggered by: make flash-hw-se050-rotate-scp03
     #[cfg(feature = "se050-rotate-scp03")]
     unsafe {
@@ -1694,7 +1707,7 @@ fn main() -> ! {
         let se = &mut *core::ptr::addr_of_mut!(SE);
         match se.rotate_scp03_keys() {
             Ok(()) => {
-                secure_log!("[S] [SCP03-ROTATE] PUT KEY OK — keyset 0x0B replaced with derived keys");
+                secure_log!("[S] [SCP03-ROTATE] PUT KEY OK — sacrificial deterministic transport-key experiment only");
                 ui::show_status("SCP03 rotate", "PASS");
             }
             Err(_e) => {
@@ -1797,7 +1810,7 @@ fn main() -> ! {
     // Direct validation of the work-todo #4 Phase 1 dual-SE PIN lockout
     // sync fix. No buttons or USB UI required — hardcoded right/wrong
     // PINs drive `nsc::gated_unlock` through its happy and sad paths
-    // while reading page 126 directly to verify the counter state.
+    // while reading page 124 directly to verify the counter state.
     //
     // Flow:
     //   0. factory_reset_admin + pin_attempts_reset → known blank state.
@@ -1829,7 +1842,7 @@ fn main() -> ! {
         // ── Step 0: known blank state ─────────────────────────────
         // Deliberately NO `factory_reset_admin` here — the production
         // wrapper erases page 125 as part of cleanup, and calling it
-        // followed by `pin_attempts_reset` (page 126) triggered a flash-
+        // followed by `pin_attempts_reset` (page 124) triggered a flash-
         // timing window on this bench chip where a subsequent program
         // to page 125 QW0 returned PROGERR silently. The test just needs
         // the MCU counter cleared; SE cleanup is the provision path's job.
@@ -1986,7 +1999,7 @@ fn main() -> ! {
 
         // ── Step 1: provision ────────────────────────────────────
         if let Err(_e) = se.provision(&test_entropy, &test_master, &test_vk, &test_bvk, &correct_pin) {
-            fail!("provision returned error (chip likely at LcsO=Op with non-LUC F1D0 — run optiga-reset-oids first)");
+            fail!("provision returned error (chip state may be incompatible; optiga-reset-oids is retired — stop and preserve the part)");
         }
         secure_log!("[S] [E2E-OPTIGA-HW-CTR] step 1: provision OK");
 
@@ -2113,7 +2126,7 @@ fn main() -> ! {
             .provision(&test_entropy, &test_master, &test_vk, &test_bvk, &real_pin)
             .is_err()
         {
-            fail!("real provision failed (chip may be LcsO=Op — run optiga-reset-oids)");
+            fail!("real provision failed (chip state may be incompatible; optiga-reset-oids is retired — stop and preserve the part)");
         }
         secure_log!("[S] [DURESS-PROBE] step 1: real provision OK");
 
@@ -2878,15 +2891,13 @@ fn main() -> ! {
         }
         secure_log!("[S] [E2E-SYNC] phase-4: SE050-ahead desync recovered OK");
 
-        // ── Phase 5: boot-time SE050 cache re-sync across simulated reboot ──
-        // Proves that `sync_remaining_with_mcu` correctly ratchets the
-        // SE050 (and OPTIGA) software mirror down to match the MCU
-        // page-124 counter after a power cycle, so a post-lockout-window
-        // reboot doesn't over-report remaining attempts. Real reboot is
-        // simulated by manually writing `MAX_ATTEMPTS` back into the
-        // drivers' cache fields after 3 failed unlocks — the same
-        // stale-high state a genuine boot would produce via
-        // `const fn new()` initialisation.
+        // ── Phase 5: in-run driver-cache reset + re-sync ──
+        // This phase proves only that `sync_remaining_with_mcu` ratchets
+        // the SE050 and OPTIGA software mirrors down to the durable MCU
+        // page-124 count after their cache fields are reset in the same
+        // firmware run. It does not reset the MCU and does not call the
+        // boot-only `reconcile_pin_attempts`; it is not a cold-reboot
+        // reconciliation receipt.
         for _ in 0..3 {
             match nsc::gated_unlock(se, &wrong_pin) {
                 Err(UnlockError::PinIncorrect) => {}
@@ -2896,20 +2907,19 @@ fn main() -> ! {
                 }
             }
         }
-        if !check_sync!("phase-5 pre-reboot-sim", 3u8, 3u32, max_rem - 3) {
-            fail!("phase-5 pre-reboot-sim: counters not at (3,3,7)");
+        if !check_sync!("phase-5 pre-cache-reset-sim", 3u8, 3u32, max_rem - 3) {
+            fail!("phase-5 pre-cache-reset-sim: counters not at (3,3,7)");
         }
 
-        // Simulate reboot: force both SE driver caches back to MAX,
-        // which is exactly what `const fn new()` yields on power-on.
-        // MCU page-124 counter (durable) still reads 3.
+        // Force both SE driver caches back to MAX without resetting the
+        // MCU. The durable page-124 counter still reads 3.
         se.optiga._e2e_force_remaining_to_max();
         se.se050._e2e_force_remaining_to_max();
         {
             use crate::secure_element::WalletStore;
             let rem_before_sync = se.remaining_attempts();
             secure_log!(
-                "[SYNC] phase-5 post-reboot-sim (caches stale): SE-pair min={} (expected {})",
+                "[SYNC] phase-5 post-cache-reset-sim (caches stale): SE-pair min={} (expected {})",
                 rem_before_sync, max_rem
             );
             if rem_before_sync != max_rem {
@@ -2940,7 +2950,7 @@ fn main() -> ! {
         if !check_sync!("phase-5 after recovery", 0u8, 0u32, max_rem) {
             fail!("phase-5: counters not synced after recovery");
         }
-        secure_log!("[S] [E2E-SYNC] phase-5: post-reboot cache re-sync OK");
+        secure_log!("[S] [E2E-SYNC] phase-5: in-run cache re-sync OK");
 
         secure_log!("[S] [E2E-SYNC] SYNC+DESYNC ROUNDTRIP: PASS");
         ui::show_status("SYNC", "PASS");
@@ -3185,8 +3195,11 @@ fn main() -> ! {
     //   - SRAM secret caches via `nsc::zeroize_sensitive_state()`.
     //
     // What this deliberately preserves (required for re-provisioning):
-    //   - STM32 OTP master (one-way by nature, survives any wipe).
-    //   - OPTIGA E140 PBS — derived from OTP master, re-established by
+    //   - The configured current-helper root (DHUK in the bring-up transport
+    //     path; legacy OTP in explicit dev builds), which survives this
+    //     wallet-state wipe. This is not the still-open fresh-TRNG
+    //     production-final pairing protocol.
+    //   - The current OPTIGA E140 transport PBS — derived from that root, re-established by
     //     the shielded-connection handshake on the next boot. Stays
     //     at LcsO=Creation.
     //   - Every OPTIGA OID's metadata (Change / Read / Execute ACs).
@@ -3448,7 +3461,8 @@ fn main() -> ! {
             let _ = &pin;
             secure_log!("[S][e2e] e2e-skip-provision active: skipping provision_from_mnemonic (chip assumed already provisioned)");
 
-            // Bring-up path: load PBS host-side from OTP and run the PRL
+            // Bring-up path: load PBS host-side from the configured device
+            // root and run the PRL
             // handshake against the already-provisioned E140 so we can
             // validate `shield::establish` in isolation, without touching
             // any F1Dx metadata.
@@ -3457,8 +3471,8 @@ fn main() -> ! {
                 let se = &mut *core::ptr::addr_of_mut!(SE);
                 if let Err(e) = se.init() {
                     secure_log!("[S][e2e] OPTIGA init FAILED: {:?}", e);
-                } else if let Err(e) = se.load_pbs_from_otp() {
-                    secure_log!("[S][e2e] load_pbs_from_otp FAILED: {:?}", e);
+                } else if let Err(e) = se.load_pbs_from_device_root() {
+                    secure_log!("[S][e2e] load_pbs_from_device_root FAILED: {:?}", e);
                 } else if let Err(e) = se.ensure_shield() {
                     secure_log!("[S][e2e] ensure_shield FAILED: {:?}", e);
                 } else {
@@ -3467,12 +3481,11 @@ fn main() -> ! {
             }
         }
 
-        // `e2e-skip-unlock` halts the boot flow right after provisioning so
-        // that `ensure_shield` never runs — which keeps the OPTIGA chip at
-        // LcsO=Creation on E140 and rewriteable. Used for the Phase-A
-        // hardware-validation target (`flash-hw-optiga-bringup-write-only`)
-        // where we want to prove the PBS was written to the chip without
-        // committing the irreversible LcsO=Operational bump.
+        // `e2e-skip-unlock` halts the boot flow right after provisioning,
+        // before the PRL handshake. Ordinary pairing never invokes the
+        // separately retained E140 lifecycle primitive, so this Phase-A path
+        // proves only that the PBS was written while E140 remains at Creation;
+        // it grants no lifecycle authority.
         #[cfg(feature = "e2e-skip-unlock")]
         {
             secure_log!("[S][e2e] e2e-skip-unlock active: halting after provisioning");
@@ -3512,7 +3525,8 @@ fn main() -> ! {
         if !is_provisioned(&mut *core::ptr::addr_of_mut!(SE)) {
             secure_log!("[S] Unprovisioned — running first-boot wizard");
 
-            // Pair the OPTIGA's E140 PBS BEFORE the wizard: the wizard's
+            // Bring-up transport pairing of the deterministic OPTIGA E140 PBS
+            // BEFORE the legacy wizard: the wizard's
             // very first screens draw `rng_strong` (PIN-pad start digit,
             // seed entropy), whose OPTIGA leg mandates the Shielded
             // Connection (CRIT-8) — and the PRL handshake needs E140
@@ -3520,7 +3534,9 @@ fn main() -> ! {
             // step 1 rewrites the same bytes again later). Failure is
             // logged loudly but non-fatal: `Optiga::random`'s self-heal
             // retry gives each draw another chance, and the wizard's
-            // RNG-failure loop remains the fallback UX.
+            // RNG-failure loop remains the fallback UX. This path is not the
+            // production-final fresh-TRNG rotation and grants no E140 lock or
+            // shipping authority; final state/recovery/order remains OPEN.
             #[cfg(all(feature = "dual-se", feature = "stm32u585"))]
             {
                 let se = &mut *core::ptr::addr_of_mut!(SE);
@@ -3921,7 +3937,7 @@ fn PendSV() {
             // Route through the MCU-counter-gated unlock so re-unlock
             // after idle wipe respects the same lockout budget as a
             // fresh CMD_REQUEST_UNLOCK. Without this, a PendSV-reached
-            // re-unlock could brute-force the PIN bypassing page 126.
+            // re-unlock could brute-force the PIN bypassing page 124.
             let se = &mut *core::ptr::addr_of_mut!(SE);
             let result = nsc::gated_unlock(se, &pin);
 
@@ -3971,7 +3987,7 @@ fn PendSV() {
 /// injection glitch (the same class of attack the FI-hardened signing path
 /// defends against), so it must not leave secrets recoverable in the idle
 /// window. We wipe the SRAM secret caches, then `sys_reset()`: startup
-/// re-zeroes `.bss` and the WRP1A-locked FSBL re-verifies the active slot
+/// re-zeroes `.bss` and the legacy bench FSBL re-verifies the active slot
 /// before any secret is reconstructed from the PIN, closing the window.
 ///
 /// We deliberately do **NOT** arm `hw::tzic::trigger_intrusion_wipe` here:

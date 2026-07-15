@@ -10,23 +10,29 @@ The fixture's outer script wraps this with:
   - Per-unit serial number / position tracking
   - Database write of the test results
   - Operator UI (pass/fail beacon, retest prompts, etc.)
-  - On pass: flash factory_provisioning firmware + run ceremony
+  - On pass: record acceptance and set the unit aside; DO NOT chain an
+    irreversible provisioning or lifecycle ceremony
   - On fail: set device aside, log the offending CMD_PRODTEST_* code
 
-This runner script is Phase A — it sends CMD_PRODTEST_GET_ID and
-CMD_PRODTEST_DISPLAY_PATTERN (Phase A commands) plus the four
-compute-only commands (Phase B). Phase C+ communication tests
-(OPTIGA / SE050 handshake) and the button test land in subsequent
-phases per work-todo §30.
+Exit zero is a reversible acceptance-test result only. It grants no authority
+to program OTP, rotate SE credentials, lock E140, or change option bytes.
+
+The supported profile executes all ten stable commands. Eight are required
+acceptance checks. BHK_SELFTEST and FLASH_RW are explicit unsupported-
+capability probes: their expected failure is recorded as non-passing
+``SKIP_UNSUPPORTED``, while an unexpected success fails the profile.
 
 Usage:
     tools/factory-prodtest-runner.py [--device /dev/hidrawN]
                                      [--report report.json]
                                      [--verbose]
 
-The script EXITS 0 on all tests passing, non-zero on any failure.
-Non-zero exit means: set this chip aside, do not flash the factory
-provisioning firmware on it.
+The script exits 0 only when the reversible profile is accepted: every
+required check passed and both unsupported probes returned their exact
+non-authority result. This does not mean every command passed and grants no
+follow-on provisioning authority. Exit 1 is a test/profile failure; exit 2 is
+a runner or transport failure. When ``--report`` is supplied, failures still
+produce an atomic JSON receipt whenever the destination is writable.
 
 Environment variables:
     PQ_USB_VID — USB vendor ID (default 0x2c97, Ledger-compatible)
@@ -46,9 +52,10 @@ import json
 import os
 import struct
 import sys
+import tempfile
 import time
 from dataclasses import dataclass, field, asdict
-from typing import Optional
+from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Command IDs — mirror `proto/src/lib.rs::CMD_PRODTEST_*`. Keep STABLE
@@ -65,6 +72,66 @@ CMD_PRODTEST_OPTIGA_HANDSHAKE = 106
 CMD_PRODTEST_SE050_HANDSHAKE = 107
 CMD_PRODTEST_USB_LOOPBACK = 108
 CMD_PRODTEST_BUTTON_TEST = 109
+
+# Shared wire contract. Mirrors
+# `proto/src/lib.rs::PRODTEST_MAX_RESPONSE_DATA_LEN`.
+PRODTEST_MAX_RESPONSE_DATA_LEN = 254
+EXPECTED_PRODTEST_FW_VERSION = 3
+
+PROFILE_ID = "pqsigner-prodtest-reversible-v1"
+PROFILE_REQUIRED = "required"
+PROFILE_OPTIONAL = "optional"
+PROFILE_UNSUPPORTED = "unsupported"
+OUTCOME_PASS = "PASS"
+OUTCOME_FAIL = "FAIL"
+OUTCOME_SKIP_UNSUPPORTED = "SKIP_UNSUPPORTED"
+
+# This matrix is emitted verbatim in every JSON receipt. The feature lists are
+# the host's required build policy, not a device-attested feature manifest;
+# firmware behavior is separately bound by EXPECTED_PRODTEST_FW_VERSION.
+# Keep the lists synchronized with Makefile's PRODTEST_*_FEATURES variables.
+COMMAND_POLICIES = {
+    CMD_PRODTEST_GET_ID: ("GET_ID", PROFILE_REQUIRED),
+    CMD_PRODTEST_DISPLAY_PATTERN: ("DISPLAY_PATTERN", PROFILE_REQUIRED),
+    CMD_PRODTEST_SAES_SELFTEST: ("SAES_SELFTEST", PROFILE_REQUIRED),
+    CMD_PRODTEST_BHK_SELFTEST: ("BHK_SELFTEST", PROFILE_UNSUPPORTED),
+    CMD_PRODTEST_FLASH_RW: ("FLASH_RW", PROFILE_UNSUPPORTED),
+    CMD_PRODTEST_TRNG_SAMPLE: ("TRNG_SAMPLE", PROFILE_REQUIRED),
+    CMD_PRODTEST_OPTIGA_HANDSHAKE: ("OPTIGA_HANDSHAKE", PROFILE_REQUIRED),
+    CMD_PRODTEST_SE050_HANDSHAKE: ("SE050_HANDSHAKE", PROFILE_REQUIRED),
+    CMD_PRODTEST_USB_LOOPBACK: ("USB_LOOPBACK", PROFILE_REQUIRED),
+    CMD_PRODTEST_BUTTON_TEST: ("BUTTON_TEST", PROFILE_REQUIRED),
+}
+
+
+def profile_receipt() -> dict:
+    """Return a new, JSON-safe copy of the acceptance-profile contract."""
+    policy_classes = {
+        PROFILE_REQUIRED: [
+            cmd
+            for cmd, (_, policy) in COMMAND_POLICIES.items()
+            if policy == PROFILE_REQUIRED
+        ],
+        PROFILE_OPTIONAL: [],
+        PROFILE_UNSUPPORTED: [
+            cmd
+            for cmd, (_, policy) in COMMAND_POLICIES.items()
+            if policy == PROFILE_UNSUPPORTED
+        ],
+    }
+    return {
+        "id": PROFILE_ID,
+        "feature_list_authority": "host_expected_not_device_attested",
+        "secure_features": ["prodtest", "dev-testkey", "saes-dhuk"],
+        "nonsecure_features": ["stm32u585", "usb", "prodtest"],
+        "max_response_data_len": PRODTEST_MAX_RESPONSE_DATA_LEN,
+        "expected_firmware_version": EXPECTED_PRODTEST_FW_VERSION,
+        "policy_classes": policy_classes,
+        "commands": [
+            {"cmd": cmd, "name": name, "policy": policy}
+            for cmd, (name, policy) in COMMAND_POLICIES.items()
+        ],
+    }
 
 # Per-CMD INS codes for the v2 APDU dispatcher. Mirrors
 # `proto/src/lib.rs::INS_V2_PRODTEST_*`.
@@ -135,6 +202,24 @@ class TestResult:
     status_code: int
     detail: str = ""
     raw_response: bytes = field(default=b"", repr=False)
+    policy: str = ""
+    outcome: str = ""
+
+    def __post_init__(self) -> None:
+        declared = COMMAND_POLICIES.get(self.cmd)
+        if declared is None:
+            raise ValueError(f"unknown prodtest command in result: {self.cmd}")
+        if not self.policy:
+            self.policy = declared[1]
+        if self.policy != declared[1]:
+            raise ValueError(
+                f"policy mismatch for command {self.cmd}: "
+                f"{self.policy!r} != {declared[1]!r}"
+            )
+        if not self.outcome:
+            self.outcome = OUTCOME_PASS if self.passed else OUTCOME_FAIL
+        if self.outcome == OUTCOME_SKIP_UNSUPPORTED and self.passed:
+            raise ValueError("SKIP_UNSUPPORTED must remain visibly non-passing")
 
 
 @dataclass
@@ -142,15 +227,51 @@ class UnitReport:
     stm32_uid_hex: str = ""
     prodtest_fw_version: int = 0
     results: list[TestResult] = field(default_factory=list)
+    fatal_error: str = ""
 
     @property
     def all_passed(self) -> bool:
-        return all(r.passed for r in self.results)
+        """Legacy literal result: false when approved unsupported probes skip."""
+        return bool(self.results) and all(r.passed for r in self.results)
+
+    @property
+    def required_checks_passed(self) -> bool:
+        for cmd, (_, policy) in COMMAND_POLICIES.items():
+            if policy != PROFILE_REQUIRED:
+                continue
+            matches = [r for r in self.results if r.cmd == cmd]
+            if not matches or any(
+                not r.passed or r.outcome != OUTCOME_PASS for r in matches
+            ):
+                return False
+        return True
+
+    @property
+    def profile_accepted(self) -> bool:
+        if self.fatal_error:
+            return False
+        if any(r.cmd not in COMMAND_POLICIES for r in self.results):
+            return False
+        if not self.required_checks_passed:
+            return False
+        for cmd, (_, policy) in COMMAND_POLICIES.items():
+            if policy != PROFILE_UNSUPPORTED:
+                continue
+            matches = [r for r in self.results if r.cmd == cmd]
+            if len(matches) != 1 or matches[0].passed:
+                return False
+            if matches[0].outcome != OUTCOME_SKIP_UNSUPPORTED:
+                return False
+        return True
 
     def to_dict(self) -> dict:
         d = asdict(self)
         for r in d["results"]:
             r["raw_response"] = r["raw_response"].hex() if r["raw_response"] else ""
+        d["profile"] = profile_receipt()
+        d["required_checks_passed"] = self.required_checks_passed
+        d["all_results_passed"] = self.all_passed
+        d["profile_accepted"] = self.profile_accepted
         return d
 
 
@@ -363,6 +484,18 @@ def test_get_id(tx: ProdtestTransport, report: UnitReport) -> TestResult:
             detail=f"UID looks bogus: {uid.hex()}",
             raw_response=resp,
         )
+    if fw_version != EXPECTED_PRODTEST_FW_VERSION:
+        return TestResult(
+            name="GET_ID",
+            cmd=CMD_PRODTEST_GET_ID,
+            passed=False,
+            status_code=status,
+            detail=(
+                f"firmware/profile mismatch: got v{fw_version}, "
+                f"expected v{EXPECTED_PRODTEST_FW_VERSION}"
+            ),
+            raw_response=resp,
+        )
     return TestResult(
         name="GET_ID",
         cmd=CMD_PRODTEST_GET_ID,
@@ -388,15 +521,16 @@ def test_display_pattern(tx: ProdtestTransport, pattern: int) -> TestResult:
 
 def test_saes_selftest(tx: ProdtestTransport) -> TestResult:
     status, resp = tx.send_cmd(CMD_PRODTEST_SAES_SELFTEST, b"", out_size=8)
-    if status != STATUS_OK:
+    if status != STATUS_OK or len(resp) != 8:
         return TestResult(
             name="SAES_SELFTEST",
             cmd=CMD_PRODTEST_SAES_SELFTEST,
             passed=False,
             status_code=status,
-            detail=f"non-OK status (likely saes-dhuk feature off)",
+            detail=f"status=0x{status:08x} got {len(resp)} bytes (expected 8)",
+            raw_response=resp,
         )
-    fingerprint = resp[:8].hex() if len(resp) >= 8 else ""
+    fingerprint = resp.hex()
     # All-zero fingerprint = SAES not actually running. Pass requires
     # at least one nonzero bit.
     nonzero = any(b != 0 for b in resp[:8])
@@ -412,37 +546,53 @@ def test_saes_selftest(tx: ProdtestTransport) -> TestResult:
 
 def test_bhk_selftest(tx: ProdtestTransport) -> TestResult:
     status, resp = tx.send_cmd(CMD_PRODTEST_BHK_SELFTEST, b"", out_size=8)
-    if status != STATUS_OK:
+    if status == SW_INTERNAL_ERROR_WIRE and resp == b"\x00" * 8:
         return TestResult(
             name="BHK_SELFTEST",
             cmd=CMD_PRODTEST_BHK_SELFTEST,
             passed=False,
             status_code=status,
-            detail="non-OK status (likely bhk / saes-dhuk feature off)",
+            detail="unsupported by reversible profile (expected non-authority result)",
+            raw_response=resp,
+            outcome=OUTCOME_SKIP_UNSUPPORTED,
         )
-    fingerprint = resp[:8].hex() if len(resp) >= 8 else ""
-    nonzero = any(b != 0 for b in resp[:8])
     return TestResult(
         name="BHK_SELFTEST",
         cmd=CMD_PRODTEST_BHK_SELFTEST,
-        passed=nonzero,
+        passed=False,
         status_code=status,
-        detail=f"fingerprint={fingerprint}",
+        detail=(
+            "profile drift: expected SW_INTERNAL_ERROR and eight zero "
+            f"diagnostic bytes, got status=0x{status:08x} len={len(resp)}"
+        ),
         raw_response=resp,
     )
 
 
 def test_flash_rw(tx: ProdtestTransport) -> TestResult:
-    # Pattern 0xDEADBEEF is the canonical factory test value.
+    # The stable request shape is exercised as a negative-capability check.
+    # The reversible profile must not grant a writable test page.
     in_data = struct.pack("<I", 0xDEADBEEF)
-    status, _ = tx.send_cmd(CMD_PRODTEST_FLASH_RW, in_data, out_size=0)
-    passed = status == STATUS_OK
+    status, resp = tx.send_cmd(CMD_PRODTEST_FLASH_RW, in_data, out_size=0)
+    if status == SW_INTERNAL_ERROR_WIRE and not resp:
+        return TestResult(
+            name="FLASH_RW",
+            cmd=CMD_PRODTEST_FLASH_RW,
+            passed=False,
+            status_code=status,
+            detail="unsupported by reversible profile (no flash-write authority)",
+            outcome=OUTCOME_SKIP_UNSUPPORTED,
+        )
     return TestResult(
         name="FLASH_RW",
         cmd=CMD_PRODTEST_FLASH_RW,
-        passed=passed,
+        passed=False,
         status_code=status,
-        detail="(stub — flash test page helpers not yet wired)",
+        detail=(
+            "profile drift: expected SW_INTERNAL_ERROR with no response data, "
+            f"got status=0x{status:08x} len={len(resp)}"
+        ),
+        raw_response=resp,
     )
 
 
@@ -507,7 +657,9 @@ def test_se050_handshake(tx: ProdtestTransport) -> TestResult:
     )
 
 
-def test_usb_loopback(tx: ProdtestTransport, n: int = 256) -> TestResult:
+def test_usb_loopback(
+    tx: ProdtestTransport, n: int = PRODTEST_MAX_RESPONSE_DATA_LEN
+) -> TestResult:
     # Pseudo-random but reproducible test pattern: incrementing
     # bytes XOR'd with the position-rotated key 0xA5. Catches off-by-
     # one + bit-flip + byte-substitution bugs.
@@ -565,14 +717,16 @@ def test_button_test(tx: ProdtestTransport) -> TestResult:
     return TestResult(
         name="BUTTON_TEST",
         cmd=CMD_PRODTEST_BUTTON_TEST,
-        passed=(step_status == 0x00),
+        passed=(status == STATUS_OK and step_status == 0x00),
         status_code=status,
         detail=f"{label}: {hint}",
         raw_response=resp,
     )
 
 
-def test_trng_sample(tx: ProdtestTransport, n: int = 256) -> TestResult:
+def test_trng_sample(
+    tx: ProdtestTransport, n: int = PRODTEST_MAX_RESPONSE_DATA_LEN
+) -> TestResult:
     in_data = struct.pack("<I", n)
     status, resp = tx.send_cmd(CMD_PRODTEST_TRNG_SAMPLE, in_data, out_size=n)
     if status != STATUS_OK or len(resp) != n:
@@ -587,7 +741,7 @@ def test_trng_sample(tx: ProdtestTransport, n: int = 256) -> TestResult:
     # should have ~n/256 of any specific byte value). All-zero or
     # constant-value output fails.
     distinct = len(set(resp))
-    passed = distinct >= 32  # at least 32 distinct byte values in 256 bytes
+    passed = distinct >= 32  # at least 32 distinct byte values in 254 bytes
     return TestResult(
         name=f"TRNG_SAMPLE({n})",
         cmd=CMD_PRODTEST_TRNG_SAMPLE,
@@ -605,8 +759,13 @@ def test_trng_sample(tx: ProdtestTransport, n: int = 256) -> TestResult:
 
 def run_all_tests(tx: ProdtestTransport, report: UnitReport) -> None:
     # Order matters: GET_ID first so the report has the UID for
-    # traceability even if subsequent tests fail.
-    report.results.append(test_get_id(tx, report))
+    # traceability. Never send another command if the identity/version contract
+    # is not exact: later INS values must not be interpreted under an unknown
+    # firmware protocol.
+    identity = test_get_id(tx, report)
+    report.results.append(identity)
+    if not identity.passed:
+        return
 
     # Display test: run all 5 patterns, each held for 1 second so
     # the fixture's camera can frame each.
@@ -623,16 +782,74 @@ def run_all_tests(tx: ProdtestTransport, report: UnitReport) -> None:
     report.results.append(test_saes_selftest(tx))
     report.results.append(test_bhk_selftest(tx))
     report.results.append(test_flash_rw(tx))
-    report.results.append(test_trng_sample(tx, 256))
+    report.results.append(test_trng_sample(tx, PRODTEST_MAX_RESPONSE_DATA_LEN))
     # Phase C: communication tests.
     report.results.append(test_optiga_handshake(tx))
     report.results.append(test_se050_handshake(tx))
-    report.results.append(test_usb_loopback(tx, 256))
+    report.results.append(test_usb_loopback(tx, PRODTEST_MAX_RESPONSE_DATA_LEN))
     # Phase D: operator-interactive button test (last because the
     # operator must be present and pressing buttons; failures from
     # the prior automated tests are easier to recover from without
     # involving a human).
     report.results.append(test_button_test(tx))
+
+
+def write_report_atomic(path: str, report: UnitReport) -> None:
+    """Durably replace a report without exposing a partial JSON document."""
+    target = Path(path)
+    parent = target.parent if str(target.parent) else Path(".")
+    fd, temporary = tempfile.mkstemp(
+        prefix=f".{target.name}.", suffix=".tmp", dir=str(parent)
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as output:
+            json.dump(report.to_dict(), output, indent=2)
+            output.write("\n")
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, target)
+        directory_fd = os.open(parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def print_summary(report: UnitReport) -> None:
+    print()
+    print("=" * 60)
+    print(f"Profile:    {PROFILE_ID}")
+    print(f"UID:        {report.stm32_uid_hex}")
+    print(f"FW version: {report.prodtest_fw_version}")
+    print("=" * 60)
+    for result in report.results:
+        marker = {
+            OUTCOME_PASS: "✓",
+            OUTCOME_FAIL: "✗",
+            OUTCOME_SKIP_UNSUPPORTED: "-",
+        }.get(result.outcome, "?")
+        print(
+            f"  {marker} {result.name:<24}  {result.outcome:<16} "
+            f"status=0x{result.status_code:08x}  {result.detail}"
+        )
+    print("=" * 60)
+    if report.fatal_error:
+        print(f"RESULT: RUNNER ERROR — {report.fatal_error}")
+    elif report.profile_accepted:
+        print(
+            "RESULT: REVERSIBLE PROFILE ACCEPTED — required checks passed; "
+            "unsupported probes remained non-authoritative"
+        )
+    else:
+        failures = sum(1 for r in report.results if r.outcome == OUTCOME_FAIL)
+        print(f"RESULT: PROFILE REJECTED — {failures} executed check(s) failed")
+    print()
 
 
 def main() -> int:
@@ -660,34 +877,29 @@ def main() -> int:
         tx.connect()
         run_all_tests(tx, report)
     except Exception as e:
-        print(f"FATAL: {e}", file=sys.stderr)
-        return 2
+        report.fatal_error = f"{type(e).__name__}: {e}"
+        print(f"FATAL: {report.fatal_error}", file=sys.stderr)
     finally:
-        tx.close()
+        try:
+            tx.close()
+        except Exception as e:
+            if not report.fatal_error:
+                report.fatal_error = f"close {type(e).__name__}: {e}"
+                print(f"FATAL: {report.fatal_error}", file=sys.stderr)
 
-    # Print per-test summary
-    print()
-    print("=" * 60)
-    print(f"UID:        {report.stm32_uid_hex}")
-    print(f"FW version: {report.prodtest_fw_version}")
-    print("=" * 60)
-    for r in report.results:
-        marker = "✓" if r.passed else "✗"
-        print(f"  {marker} {r.name:<24}  status=0x{r.status_code:08x}  {r.detail}")
-    print("=" * 60)
-    if report.all_passed:
-        print("RESULT: ALL TESTS PASSED — chip is prodtest-clean")
-    else:
-        fails = sum(1 for r in report.results if not r.passed)
-        print(f"RESULT: {fails} FAIL(S) — set this chip aside, do not flash factory_provisioning")
-    print()
+    print_summary(report)
 
     if args.report:
-        with open(args.report, "w") as f:
-            json.dump(report.to_dict(), f, indent=2, default=str)
-        print(f"Wrote JSON report to {args.report}")
+        try:
+            write_report_atomic(args.report, report)
+            print(f"Wrote atomic JSON report to {args.report}")
+        except Exception as e:
+            print(f"FATAL: could not write report atomically: {e}", file=sys.stderr)
+            return 2
 
-    return 0 if report.all_passed else 1
+    if report.fatal_error:
+        return 2
+    return 0 if report.profile_accepted else 1
 
 
 if __name__ == "__main__":

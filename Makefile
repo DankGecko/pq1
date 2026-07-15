@@ -504,7 +504,7 @@ test-key-speed: ## DWT-timed signing bench on HW
 #   * Never calls CMD_FW_COMMIT → no OTP program command is launched.
 #     The legacy per-bit tally is invalid on STM32U585 ECC quad-words and is
 #     production-fenced; this test neither exercises nor consumes the still-
-#     open Draft-0.9 epoch-floor backend.
+#     open Draft-1.1 research-candidate epoch-floor backend.
 #   * Never lets CMD_FW_BEGIN reach `flash::erase_slot(inactive)`.  On
 #     the current linker layout the inactive slot's manifest page (page
 #     5 @ 0x0C00_A000) still sits inside the running secure firmware's
@@ -990,16 +990,17 @@ se050-reset:
 #       - page 124 — MCU PIN-attempt counter (one programmed QW per
 #                    attempt; capacity 32, lockout at 10)
 #       - page 125 — SE050 admin PIN + crash-safety wipe flag
-#       - page 126 — OPTIGA Trust M Platform Binding Secret
+#       - page 126 — DHUK-wrapped SE050 BHK when `bhk` is enabled
 #       - page 127 — first-boot provisioning journal (KEY_PAGE)
 #     plus all firmware code — so you WILL need to re-flash afterwards.
 #
 # What does NOT get wiped:
 #   * OPTIGA Trust M internal objects (half_O, auth refs). The firmware
-#     currently has no OPTIGA reset path. Losing the PBS on STM32 page
-#     126 means the MCU can no longer open a Shielded Connection against
-#     those objects, so in practice the OPTIGA side is inert after this
-#     target runs, but its silicon still holds the entropy half.
+#     currently has no OPTIGA reset path. The PBS bytes are not stored verbatim,
+#     but the `rdp2-self-lock` final PBS depends on the salt in page 127; erasing
+#     it makes that OPTIGA pairing unrecoverable. Erasing page 126 likewise
+#     loses the wrapped SE050 BHK and its final pairing. Both chips still retain
+#     their internal objects until an authenticated reset reaches them.
 #   * Option bytes (TZEN / SECWM / SECBOOTADD0). Those survive mass
 #     erase and the normal flash-hw-* targets re-assert them anyway.
 #
@@ -1213,8 +1214,9 @@ se050-stress-list:
 # halts. The published AN12436 factory keys are GONE after this — the chip
 # only opens with firmware that re-derives the matching keys, so:
 #  - on a board that ever gets RDP-regressed, the BHK is mass-erased => dead
-#    SE050 => half_E unrecoverable. PRODUCTION-PROVISIONING ONLY (RDP2 has no
-#    regression path); never flash this to a board you still RDP-bounce.
+#    SE050 => half_E unrecoverable. SACRIFICIAL BENCH/FACTORY EVIDENCE ONLY;
+#    this deterministic path is not the production-final fresh-TRNG rotation.
+#    Never flash it to a board you still RDP-bounce or intend to ship.
 #  - the PUT KEY APDU framing in scp03::build_put_key_apdu is best-effort
 #    from GP 2.3 / AN12436 -- VALIDATE ON SACRIFICIAL PARTS before any real
 #    provisioning run (the chip recomputes the KCV/fields and rejects on
@@ -1255,7 +1257,7 @@ flash-hw-se050-rotate-scp03:
 # PASS = chip silicon enforced the read deny. FAIL = security regression
 # (admin extracted a user-PIN-gated secret — would mean a DHUK/BHK leak
 # could drain funds, contrary to the threat model in CLAUDE.md §"Hardware
-# PIN gating, three-way lockstep").
+# PIN gating and three-way per-attempt consumption").
 # Watch semihosting for "[E2E-EXTRACT] ADMIN-EXTRACT ATTEMPT: PASS"/"FAIL".
 # Repeatable on the same chip (step 1 cleans up prior residue).
 se050-admin-extract-attempt-e2e:
@@ -1328,8 +1330,11 @@ flash-hw-se050-oled-standalone: build-hw-se050-oled-standalone
 #      constant and `se050-derived-scp03` is OFF, so the SE050 SCP03 channel runs
 #      on the PUBLISHED AN12436 factory keys. Both are bus-sniffable here — fine
 #      for bench (dev-testkey is a non-shipping marker), NOT confidential. A
-#      SHIPPING build must add `se050-derived-scp03` (+ saes-dhuk/bhk PBS) and a
-#      rotated chip; the `nsc/mod.rs` HIGH-1 fence enforces the build side.
+#      candidate quarantine build must add `se050-derived-scp03`
+#      (+ saes-dhuk/bhk PBS) and a rotated chip; the `nsc/mod.rs` HIGH-1 fence
+#      enforces only that deterministic baseline. The separate journaled
+#      `rdp2-self-lock` path and its remaining production gates are not
+#      exercised by this bench target.
 #   #4/#5/#6/#7/#8 — all in force; this is just a feature-set wrapper.
 #
 # Intended workflow for bench iteration:
@@ -1475,12 +1480,16 @@ flash-hw-dual-se-oled-standalone-debug: build-hw-dual-se-oled-standalone-debug
 # OPTIGA Trust M + OLED standalone — single-SE variant of the SE050
 # standalone target above. Uses Infineon OPTIGA Trust M V3 on I2C1
 # (TRUSTMV3SHIELDTOBO1 on Arduino R3 headers). No semihosting, USB-C
-# only. Deliberately does NOT include `optiga-lock-operational`, so
-# every user OID (E140, F1D0..F1D4, F1E1) stays at LcsO=Creation
-# throughout provisioning — metadata remains mutable, data rewriteable,
-# no irreversible LcsO=Operational bump. This build is intended for
-# bench/dev use; see docs/secure-elements/optiga-brick-postmortem.md §5 + §7 before
-# adding `optiga-lock-operational` for a real production unit.
+# only. Deliberately does NOT include `optiga-lock-operational`, so the
+# protected user OIDs F1D0..F1D4 and F1E1 stay at LcsO=Creation throughout
+# provisioning — metadata remains mutable, data rewriteable, and no
+# irreversible protected-object LcsO bump occurs. E140 is unchanged by both
+# this target and ordinary pairing; its factory actor/order remains OPEN.
+# This build is intended for
+# bench/dev use; see docs/secure-elements/optiga-brick-postmortem.md §5 + §7.
+# Do not add `optiga-lock-operational` to a unit intended to ship merely to
+# ratchet protected objects: the full S-1/S-2 ceremony and E140's actor/order
+# relative to the final rotation remain OPEN.
 #
 # NOTE: this target violates invariant #1 (dual-chip seed split) — the
 # full entropy lives on OPTIGA alone. It is the single-SE OPTIGA twin of
@@ -1943,10 +1952,11 @@ measure: build-hw-dual-se-oled-standalone ## Build + print the 8 BIP-39 measurem
 # is for development use only and will not accept production-signed
 # firmware, and vice versa.
 #
-# Budget: 32 KB at 0x0C00_0000 (pages 0–3 of bank 1). Current footprint
-# is ~32 KB (~99% of its 32 KB WRP1A budget) with software SHA-256.
+# Legacy bench budget: 32 KB at 0x0C00_0000 (pages 0–3 of bank 1). This target
+# is not the Draft-1.1 candidate resource gate: that candidate proposes a
+# 40,960-byte hard ceiling plus separate physical LOAD-span and RAM/stack gates.
 .PHONY: fsbl
-fsbl: ## Build the immutable first-stage bootloader (must fit 32 KB WRP1A)
+fsbl: ## Build legacy bench FSBL (32 KB regression gate; not candidate approval)
 	@echo "==> Building FSBL (FSBL_VENDOR_PUBKEY=$${FSBL_VENDOR_PUBKEY:-<dev fixture>})"
 	@# FSBL_ALLOW_DEV_KEY opts this dev target into fsbl/build.rs's committed
 	@# dev vendor key when FSBL_VENDOR_PUBKEY is unset (finding F2). A bare
@@ -1957,16 +1967,14 @@ fsbl: ## Build the immutable first-stage bootloader (must fit 32 KB WRP1A)
 		cargo build --locked --release --target $(TARGET) --target-dir target/fsbl \
 			-p pqsigner-fsbl --features legacy-fw-rollback-unsafe
 	@echo "==> FSBL built: $(FSBL_ELF)"
-	@# Headroom gate: the FSBL is physically capped at 32 KB (WRP1A-locked
-	@# pages 0-3, fsbl/memory-stm32u585.x). It is currently ~99% full — a
-	@# careless addition would silently overflow the linker region. Fail hard
-	@# on overflow, WARN past 95%. (2026-07-02: was ~18 KB when the docs were
-	@# written; the NV3007 fingerprint renderer grew it to ~32 KB.)
+	@# Legacy-linker regression gate only. It protects the current 32 KB bench
+	@# image from overflow; it does not close Draft 1.1's physical LOAD-span or
+	@# independent RAM/worst-case-stack gates.
 	@arm-none-eabi-size -B $(FSBL_ELF) | awk -v cap=32768 -v warn=95 'NR==2 { \
 	  used=$$1+$$2; pct=used*100.0/cap; \
 	  printf "==> FSBL: %d B of %d B (%.1f%% of 32 KB), %d B free\n", used, cap, pct, cap-used; \
-	  if (used>cap) { print "==> FSBL: FAIL — exceeds the 32 KB WRP1A budget"; exit 1 } \
-	  if (pct>=warn) { printf "==> FSBL: WARN — over %d%% of the frozen budget (only %d B headroom)\n", warn, cap-used } \
+	  if (used>cap) { print "==> FSBL: FAIL — exceeds the legacy 32 KB linker region"; exit 1 } \
+	  if (pct>=warn) { printf "==> FSBL: WARN — over %d%% of the legacy bench budget (only %d B headroom)\n", warn, cap-used } \
 	}'
 
 # Isolated NV3007 LCD bring-up test for the FSBL display port. Builds the FSBL
@@ -1995,7 +2003,7 @@ fsbl-lcd-test-hw:
 # Use this in the release pipeline.
 .PHONY: fsbl-release
 fsbl-release: ## Build the release FSBL (blocked until rollback backend closure)
-	@$(error fsbl-release: FAIL — production firmware rollback backend is not implemented; Draft 0.9 grants no release authority)
+	@$(error fsbl-release: FAIL — production firmware rollback backend is not implemented; Draft 1.1 is an unapproved research candidate)
 
 # One key path must feed both secure/build.rs and fsbl/build.rs.  This gate is
 # deliberately a release dependency (not just an FSBL convenience check): an
@@ -2142,11 +2150,12 @@ _repro_one:
 # Without these a default `make release` shipped non-Tier-1 roots, contrary to
 # invariant #3; the nsc/mod.rs require-fence now makes that a build error.
 # `rdp2-self-lock` (work-todo #36) adds the first-boot RDP-2 self-lock +
-# on-device pairing rotation, and pulls in `bhk` (Tier-2 SE050 split) — which
-# is now correct to ship because #36 Phase B IS the phase-2B BHK provisioning
+# on-device pairing rotation, and pulls in `bhk` (Tier-2 SE050 split). This is
+# the candidate envelope because #36 Phase B owns phase-2B BHK provisioning
 # (BHK first-write + load-lock happen on the first field boot, before the
 # wizard), so the earlier "bhk yields zero-keyed derivations without phase-2B"
-# caveat no longer applies once `rdp2-self-lock` owns that provisioning.
+# caveat no longer applies. It is not correct-to-ship evidence: handoff,
+# recovery/KVN, E140 ordering, and silicon gates remain open.
 RELEASE_FEATURES ?= stm32u585,se050,optiga-trust-m,dual-se,ui-lcd,usb,iwdg,saes-dhuk,se050-derived-scp03,mode-production,optiga-lock-operational,optiga-hw-counter,consumption-mask,tamp,tamp-wipe,tzic-wipe,bhk,rdp2-self-lock
 
 # MED-2 ship gate (audits/tz-tamper-debug-20260611). Resolve the ACTUAL feature
@@ -2157,36 +2166,51 @@ RELEASE_FEATURES ?= stm32u585,se050,optiga-trust-m,dual-se,ui-lcd,usb,iwdg,saes-
 # forbidden set. Independent of the `mode-production` compile fences in
 # nsc/mod.rs: this also catches a release built as `stm32u585,…` WITHOUT
 # mode-production. `make release` depends on it; CI runs it as a fast gate.
-PROD_FORBIDDEN = e2e-test dev-testkey mock-se debug-log otp-hardcoded-master-key \
+override PROD_FORBIDDEN := e2e-test dev-testkey mock-se debug-log otp-hardcoded-master-key \
                  ui-capture bhk-hardcoded-master-key uart-console \
                  boot-pulse sca-trigger erc7730-dev-unattested optiga-reset-oids \
                  fw-rollback-e2e fwup-transport-e2e se050-scp03-allow-factory-fallback \
-                 legacy-fw-rollback-unsafe
+                 legacy-fw-rollback-unsafe prodtest factory-provisioning \
+                 factory-provisioning-rehearsal factory-production-irreversible-im-sure \
+                 se050-factory-reset se050-reset-e2e se050-admin-wipe-e2e \
+                 se050-crash-safety-e2e se050-admin-extract-attempt-e2e se050-stress \
+                 optiga-admin-wipe-e2e optiga-nuclear-reset dual-se-admin-wipe-e2e \
+                 optiga-hw-counter-e2e duress-probe-e2e duress-provision-e2e \
+                 pin-gate-e2e dual-se-multi-unlock-e2e
 
-# HIGH-1 ship gate (audit pin-unlock 20260625): the denylist above stops
-# never-ship features, but a denylist CANNOT express "a required hardening
-# feature is MISSING". The S-1 OPTIGA-lockdown fence (nsc/mod.rs) is keyed on
-# `mode-production` ALONE (it performs the IRREVERSIBLE LcsO ratchet, so it must
-# never auto-fire on dev/test RELEASE hardware), so a release built WITHOUT
+# HIGH-1 compile-time baseline (audit pin-unlock 20260625): the denylist above
+# stops never-ship features, but a denylist CANNOT express "a required
+# hardening feature is MISSING". This allowlist proves only that the current
+# deterministic transport helpers are selected; it does NOT close or implement
+# the production-final fresh-TRNG per-device rotation, durable public state,
+# cut recovery, or E140 ordering. Those remain production blockers. The S-1
+# OPTIGA-lockdown fence (nsc/mod.rs) is keyed on
+# `mode-production` ALONE (the current candidate envelope includes the
+# IRREVERSIBLE LcsO ratchet feature, whose final actor/order is still OPEN, so
+# it must never auto-fire on dev/test RELEASE hardware), so a release built WITHOUT
 # `mode-production` previously slipped through every gate while shipping F1D0
 # `Change=ALW` + mutable metadata — a desolder-bench seed-extraction path
 # (shared-PIN cascade across both SEs). This allowlist makes that omission a
-# LOUD build failure: a shipping image MUST carry the full production hardening
-# set. (Dev/bench hardware uses the `flash-hw-*` / `*-e2e` targets, NOT
+# LOUD build failure for the current quarantined candidate envelope. It does
+# not establish the final shipping feature set or authorize the ratchet.
+# (Dev/bench hardware uses the `flash-hw-*` / `*-e2e` targets, NOT
 # `make release` / `prod-check`, so it is unaffected.)
-PROD_REQUIRED = mode-production optiga-lock-operational optiga-hw-counter \
+override PROD_REQUIRED := mode-production optiga-lock-operational optiga-hw-counter \
                 consumption-mask tamp tamp-wipe tzic-wipe iwdg \
                 saes-dhuk se050-derived-scp03 bhk rdp2-self-lock
 
-# Canonical production shipping feature set (the full hardened image). This is
-# what a real shipping build / CI prod-gate validates. Kept on ONE line so the
+# Candidate production feature envelope used by the negative ship-quarantine
+# gates. It is necessary but explicitly not sufficient for a real shipping
+# image: HIGH-1's candidate implementation still lacks approved handoff,
+# recovery/KVN, E140-order, and silicon closure; other named ship blockers also
+# remain open. Kept on ONE line so the
 # comma list survives `make` variable expansion (a backslash-newline would
 # inject a stray space into the feature string). NOTE: enabling
-# `optiga-lock-operational` performs the irreversible OPTIGA LcsO ratchet at
-# PROVISION time — only flash this onto a unit you intend to ship, after the
-# OTP-master burn (the `is_device_master_burned()` runtime guard refuses the
-# bump otherwise). See secure/Cargo.toml:553 + docs/production-todo.md.
-PROD_SHIP_FEATURES = stm32u585,se050,optiga-trust-m,dual-se,ui-lcd,usb,iwdg,saes-dhuk,se050-derived-scp03,mode-production,optiga-lock-operational,optiga-hw-counter,consumption-mask,tamp,tamp-wipe,tzic-wipe,bhk,rdp2-self-lock
+# `optiga-lock-operational` exposes the irreversible OPTIGA LcsO ratchet; the
+# exact actor/order relative to the final pairing rotation is OPEN, so this
+# feature list grants no authority to flash or ratchet hardware. See
+# secure/Cargo.toml and docs/production-todo.md.
+override PROD_SHIP_FEATURES := stm32u585,se050,optiga-trust-m,dual-se,ui-lcd,usb,iwdg,saes-dhuk,se050-derived-scp03,mode-production,optiga-lock-operational,optiga-hw-counter,consumption-mask,tamp,tamp-wipe,tzic-wipe,bhk,rdp2-self-lock
 
 # Exact machine-readable provenance string emitted by dbgen only after a real
 # ERC-8176 EAS verification implementation has authenticated every leaf.
@@ -2235,14 +2259,14 @@ prod-feature-check: ## Resolve and validate the production hardening feature set
 # Keep checking feature-policy drift throughout the rollback quarantine, then
 # fail with a make-time error that `make -i` cannot ignore.
 prod-check: prod-feature-check ## Production-readiness gate (blocked after feature validation)
-	@$(error prod-check: FAIL — reviewed production rollback backend is not implemented; Draft 0.9 grants no ship authority)
+	@$(error prod-check: FAIL — reviewed production rollback backend is not implemented; Draft 1.1 remains unapproved and grants no ship authority)
 
 # Shipping-config gate: resolve and validate the canonical PROD_SHIP_FEATURES.
 # No production image is built while the rollback backend remains quarantined.
 .PHONY: prod-check-ship
-prod-check-ship: RELEASE_FEATURES := $(PROD_SHIP_FEATURES)
+prod-check-ship: override RELEASE_FEATURES := $(PROD_SHIP_FEATURES)
 prod-check-ship: prod-feature-check ## Strict ship gate — feature-check, then rollback refusal
-	@$(error prod-check-ship: FAIL — reviewed production rollback backend is not implemented; Draft 0.9 grants no ship authority)
+	@$(error prod-check-ship: FAIL — reviewed production rollback backend is not implemented; Draft 1.1 remains unapproved and grants no ship authority)
 
 # work-todo #36 CI gate: prove the `rdp2-self-lock` feature-ON code path
 # (first-boot Phase A/B glue, the RDP-2 write path, transport/salted key
@@ -2315,9 +2339,9 @@ size-report: ## Report secure/NS/FSBL image sizes against their flash/SRAM budge
 	    if (free<warn) { printf "    ns     : WARN — under %d B stack headroom (NS SRAM2 is tight)\n", warn } }'; \
 	else echo "    ns     : (no $(RELEASE_ARTIFACT_DIR)/nonsecure.elf — run make release)"; fi
 	@if [ -f $(RELEASE_ARTIFACT_DIR)/fsbl.elf ]; then \
-	  arm-none-eabi-size -B $(RELEASE_ARTIFACT_DIR)/fsbl.elf | awk 'NR==2 { u=$$1+$$2; printf "    fsbl   : %d B of 32768 B (%.1f%%), %d B free\n", u, u*100.0/32768, 32768-u }'; \
+	  arm-none-eabi-size -B $(RELEASE_ARTIFACT_DIR)/fsbl.elf | awk 'NR==2 { u=$$1+$$2; printf "    fsbl   : %d B of 32768 B legacy bench region (%.1f%%), %d B free\n", u, u*100.0/32768, 32768-u }'; \
 	elif [ -f $(FSBL_ELF) ]; then \
-	  arm-none-eabi-size -B $(FSBL_ELF) | awk 'NR==2 { u=$$1+$$2; printf "    fsbl   : %d B of 32768 B (%.1f%%), %d B free\n", u, u*100.0/32768, 32768-u }'; \
+	  arm-none-eabi-size -B $(FSBL_ELF) | awk 'NR==2 { u=$$1+$$2; printf "    fsbl   : %d B of 32768 B legacy bench region (%.1f%%), %d B free\n", u, u*100.0/32768, 32768-u }'; \
 	fi
 
 .PHONY: release _release
@@ -2351,9 +2375,9 @@ _release:
 #                                    iterating.
 #
 # What to watch for on the probe-rs semihosting stream:
-#   [OPTIGA] PBS derived from OTP master and loaded
+#   [OPTIGA] PBS derived from hardware root and loaded
 #   [OPTIGA/prov] step 1: setup_pbs_no_handshake
-#   [OPTIGA/prov] E140 LcsO bump SKIPPED (optiga-lock-operational OFF; ...)
+#   [OPTIGA/prov] E140 lifecycle unchanged; factory-side ratchet is a separate OPEN ceremony
 #   [OPTIGA/shield] establish: start
 #   [OPTIGA/shield] sending MasterHello
 #   [OPTIGA/shield] MasterHello response n=38
@@ -2401,14 +2425,15 @@ flash-hw-optiga-bringup:
 #     plaintext APDU. The chip records it at LcsO=Creation (rewriteable).
 #   - Each user OID (F1D0..F1E1) is provisioned plaintext, LcsO=Creation.
 #   - `authenticate_and_read` / `ensure_shield` / `shield.establish` are
-#     NEVER called, so `ensure_pbs_lcso_operational` cannot bump E140 to
-#     LcsO=Operational. The chip remains fully recoverable.
+#     NEVER called. Ordinary pairing no longer invokes the separately retained,
+#     unwired E140 lifecycle primitive in any case. The chip remains fully
+#     recoverable.
 #
 # If the write succeeds, we see `[OPTIGA] PBS provisioned (handshake
 # deferred)` followed by `[S][e2e] e2e-skip-unlock active: halting after
 # provisioning`. At that point the chip holds our PBS but is still rewrite-
-# able via plaintext I2C (LcsO<op), so Phase B's PRL test can commit it
-# properly, or a re-run with a different PBS can overwrite it.
+# able via plaintext I2C (LcsO<op), so Phase B can test PRL without a lifecycle
+# change, or a re-run with a different PBS can overwrite it.
 #
 # If the write FAILS (e.g., the chip refuses the 64-byte size, or some
 # APDU-level error), we see a `set_data_object FAILED` line and Phase B
@@ -2503,7 +2528,7 @@ optiga-hw-counter-e2e: ## Provision E120 LUC + drive PIN cycles (HW)
 	@echo "    Creation on every touched OID (optiga-lock-operational OFF)."
 	@echo "    If F1D0 is somehow already at LcsO=Operational with legacy"
 	@echo "    non-LUC metadata the firmware aborts loudly (Status 0xE0) —"
-	@echo "    run optiga-reset-oids first in that case."
+	@echo "    stop and preserve the part; optiga-reset-oids is retired."
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 	cargo build --release --target $(TARGET) --target-dir target/secure \
 		-p sphincs-tz-secure --no-default-features \
@@ -2693,7 +2718,7 @@ dual-se-bhk-e2e:
 	@probe-rs run --chip STM32U585AIIx $(SECURE_ELF)
 
 # PIN-gate roundtrip e2e. Direct non-interactive test of the MCU-side
-# PIN attempt counter at flash page 126 + the `nsc::gated_unlock`
+# PIN attempt counter at flash page 124 + the `nsc::gated_unlock`
 # pre-commit pattern. No buttons, no USB — hardcoded right/wrong PINs
 # + semihosting PASS/FAIL.
 #
@@ -3114,7 +3139,7 @@ saes-self-test-hw-rdp0-regress:
 		SECWM2_PSTRT=0x7F SECWM2_PEND=0x0 SECBOOTADD0=0x180000
 	@echo "==> Regression complete — board is back at RDP0."
 
-pin-gate-e2e: ## PIN-gate three-way sync E2E (QEMU)
+pin-gate-e2e: ## MCU PIN pre-commit/reset E2E (HW; no E120 counter or reboot reconcile)
 	@echo "==> Building PIN-gate roundtrip e2e firmware..."
 	@echo "    WARNING: this build will WIPE wallet state on BOTH chips."
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
@@ -3136,12 +3161,15 @@ pin-gate-e2e: ## PIN-gate three-way sync E2E (QEMU)
 	@probe-rs run --chip STM32U585AIIx $(SECURE_ELF)
 
 # Shield-handshake-only test. Skips `provision_from_mnemonic` entirely
-# and runs `init` → `load_pbs_from_otp` → `ensure_shield` against an
+# and runs `init` → `load_pbs_from_device_root` → `ensure_shield` against an
 # already-provisioned chip. Use this to validate the Shielded Connection
 # handshake in isolation without re-writing any F1Dx state. The chip's
-# E140 must already have the OTP-derived PBS from a prior run of
+# E140 must already have the matching device-root-derived PBS from a prior run of
 # `flash-hw-optiga-bringup-write-only`; the PBS itself is reproduced
-# deterministically from the STM32U585's OTP master on every boot.
+# deterministically from the configured device root on every boot (DHUK in the
+# current bring-up/candidate transport path; OTP only in explicit dev/legacy
+# builds). This target does not exercise or approve the journaled
+# `rdp2-self-lock` final-rotation candidate.
 flash-hw-optiga-shield-handshake-only:
 	@echo "==> Building OPTIGA shield-handshake-only test"
 	@echo "    (e2e-skip-provision: reuses existing E140 PBS, tests PRL only)"
@@ -3163,50 +3191,21 @@ flash-hw-optiga-shield-handshake-only:
 	@echo "==> Resetting and attaching — expect '[S][e2e] SHIELD UP — PRL handshake succeeded'."
 	@probe-rs run --chip STM32U585AIIx $(SECURE_ELF)
 
-# One-shot OPTIGA Trust M OID recovery. Regenerates reset manifests from
-# the Infineon protected_update_data_set tool, builds firmware with the
-# optiga-reset-oids feature, flashes the STM32U585, and attaches probe-rs
-# so the reset log is visible. Drop the feature from the regular flash
-# targets after the chip reports all OIDs reset OK.
+# Retired OPTIGA SetObjectProtected experiment: regenerate the historical
+# manifest bytes for incident/evidence reproducibility only. This target does
+# not build firmware, flash a board, change option bytes, or grant recovery
+# authority. The paired flash target below refuses unconditionally.
 optiga-reset-oids:
 	@echo "==> Regenerating reset manifests (requires built tool)"
 	@test -x /home/nicola/repos/optiga-trust-m/examples/tools/protected_update_data_set/bin/protected_update_data_set \
 		|| (echo "Build the tool first: make -C /home/nicola/repos/optiga-trust-m/examples/tools/protected_update_data_set" && exit 1)
 	@python3 tools/optiga_reset/gen_reset_manifests.py
 
-flash-hw-optiga-reset: optiga-reset-oids
-	@echo "==> Building firmware with optiga-reset-oids"
-	@echo ""
-	@echo "    ### DOES NOT WORK ON TRUSTMV3SHIELDTOBO1 ###"
-	@echo "    Verified 2026-04-22: all 17 target OIDs return Status(0xFF)"
-	@echo "    because E0E3 on this shield is Infineon's device cert slot"
-	@echo "    (DataType 0x12), not a mutable Trust Anchor slot (0x11)."
-	@echo "    SetDataObject accepts our TA cert bytes but the chip does"
-	@echo "    not promote the slot to act as a TA, so every subsequent"
-	@echo "    SetObjectProtected manifest fails signature verification."
-	@echo "    See memory/project_optiga_reset_oids.md for full trace."
-	@echo ""
-	@echo "    Continue only if you have a DIFFERENT OPTIGA chip where"
-	@echo "    E0E3 is known-blank (fresh engineering samples). Ctrl-C"
-	@echo "    now to abort."
-	@echo ""
-	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW) -C debug-assertions=on" \
-	cargo build --locked --release --target $(TARGET) --target-dir target/secure \
-		-p sphincs-tz-secure --no-default-features \
-		--features dual-se,optiga-reset-oids,stm32u585,ui-lcd,debug-log,usb
-	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
-	cargo build --locked --release --target $(TARGET) --target-dir target/nonsecure \
-		-p sphincs-tz-nonsecure --features stm32u585,usb
-	@echo "==> Flashing..."
-	@probe-rs download --chip STM32U585AIIx $(NONSECURE_ELF)
-	@probe-rs download --chip STM32U585AIIx $(SECURE_ELF)
-	@echo "==> Configuring TrustZone option bytes..."
-	@STM32_Programmer_CLI --connect port=SWD \
-		--optionbytes TZEN=1 SECWM1_PSTRT=0x0 SECWM1_PEND=0x7F \
-		SECWM2_PSTRT=0x7F SECWM2_PEND=0x0 SECBOOTADD0=0x180000
-	@echo "==> Attaching probe-rs so the reset log is visible (Ctrl-C to quit)..."
-	@probe-rs reset --chip STM32U585AIIx
-	@probe-rs attach --chip STM32U585AIIx $(SECURE_ELF)
+flash-hw-optiga-reset:
+	@echo "REFUSED: the retired E0E3 sample-anchor recovery path is mis-targeted"
+	@echo "for the observed OPTIGA SKU/revision and has no reviewed replacement."
+	@echo "It must not build, flash, or touch option bytes. See docs/production-todo.md S-2."
+	@false
 
 # Coverage-guided libFuzzer harnesses (`fuzz/`, kept as a standalone
 # workspace since cargo-fuzz needs nightly + libFuzzer + sanitizers).
@@ -3399,21 +3398,22 @@ decoy-flicker-lcd-hw:
 	@echo "==> Flashed. Run + watch the LCD (log prints the active DECOY_HOLD):"
 	@echo "    probe-rs run --chip STM32U585AIIx $(SECURE_ELF)"
 
-# Factory production-line test (prodtest) firmware. Single-purpose
-# build that the factory operator flashes BEFORE the
-# factory_provisioning ceremony. Sits in WFI after boot, waiting for
-# the factory fixture to drive each component test via USB. See
+# Factory production-line test (prodtest) firmware. Single-purpose,
+# reversible acceptance-test candidate; a pass does NOT authorize or chain the
+# quarantined factory_provisioning ceremony. Sits in WFI after boot, waiting
+# for the factory fixture to drive each component test via USB. See
 # `docs/provisioning/factory-prodtest.md` for the command reference + fixture
 # integration guide.
 #
 # Phase A (landed 2026-05-19): CMD_PRODTEST_GET_ID +
 #                              CMD_PRODTEST_DISPLAY_PATTERN
-# Phase B (landed 2026-05-19): CMD_PRODTEST_{SAES,BHK}_SELFTEST,
-#                              CMD_PRODTEST_FLASH_RW (stub),
-#                              CMD_PRODTEST_TRNG_SAMPLE
-# Phase C-G (deferred to work-todo §30): communication tests
-#                              (OPTIGA/SE050 handshakes), button
-#                              test, host-side fixture runner.
+# The supported profile requires SAES/DHUK, but deliberately keeps BHK and
+# FLASH_RW unsupported: their wire commands are negative capability checks,
+# not passing component tests. Communication and button tests are required.
+# Keep these feature lists exact and synchronized with the machine-readable
+# receipt emitted by tools/factory-prodtest-runner.py.
+override PRODTEST_SECURE_FEATURES := prodtest,dev-testkey,saes-dhuk
+override PRODTEST_NONSECURE_FEATURES := stm32u585,usb,prodtest
 #
 # Use this target to validate the prodtest build compiles cleanly;
 # silicon validation is Phase B work in work-todo §30.
@@ -3421,18 +3421,19 @@ build-hw-prodtest:
 	@echo "==> Building prodtest firmware..."
 	@echo "    Boot sequence:"
 	@echo "      1. Normal STM32 + SE + button + USB init"
-	@echo "      2. Display 'PRODTEST READY' on OLED"
+	@echo "      2. Display 'PRODTEST READY' on NV3007 LCD"
 	@echo "      3. Launch NS world (USB stack)"
 	@echo "      4. Wait for USB INSes (INS_V2_PRODTEST_* 0x80-0x89)"
 	@echo "    Factory fixture drives the test sequence via USB HID."
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 	cargo build --locked --release --target $(TARGET) --target-dir target/secure \
 		-p sphincs-tz-secure --no-default-features \
-		--features prodtest,dev-testkey
+		--features $(PRODTEST_SECURE_FEATURES)
 	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
 	cargo build --locked --release --target $(TARGET) --target-dir target/nonsecure \
-		-p sphincs-tz-nonsecure --features stm32u585,usb,prodtest
+		-p sphincs-tz-nonsecure --no-default-features \
+		--features $(PRODTEST_NONSECURE_FEATURES)
 	@echo "==> Prodtest build ready."
 	@echo "    Host fixture runner at tools/factory-prodtest-runner.py"
 
@@ -4076,14 +4077,13 @@ proverif: ## ProVerif symbolic protocol-model verification
 	@echo "==> ProVerif: firmware-update authenticity (vendor-signed manifest, domain-separated)"
 	proverif contracts/verification/proverif/fw_update_authenticity.pv
 
-# Stateful symbolic model (Tamarin) of the three-way PIN-attempt lockstep:
-# a single-counter reset is always caught by the boot reconcile (CORE), an
-# all-three reset is the documented residual. Companion to the ProVerif secrecy
-# model. See contracts/verification/tamarin/README.md.
+# Idealized symmetric three-counter Tamarin research model. It is a contrast
+# model, not a proof of the deployed directional page124/E120 boot check or of
+# an SE050 boot counter read. See contracts/verification/tamarin/README.md.
 .PHONY: tamarin
 tamarin: ## Tamarin symbolic protocol-model verification
 	@command -v tamarin-prover >/dev/null 2>&1 || { echo "ERROR: tamarin-prover not found. Install the prebuilt linux64 binary + the maude backend (both need no sudo/GHC; see contracts/verification/tamarin/README.md)"; exit 1; }
-	@echo "==> Tamarin: three-way PIN-attempt lockstep reconcile"
+	@echo "==> Tamarin: idealized symmetric three-counter PIN model"
 	tamarin-prover --prove contracts/verification/tamarin/pin_lockstep.spthy
 	@echo "==> Tamarin: SCP03 within-session no-replay (counter)"
 	tamarin-prover --prove contracts/verification/tamarin/scp03_replay.spthy

@@ -1,21 +1,19 @@
 //! FSBL footprint CI gate.
 //!
 //! Builds `pqsigner-fsbl --release --target thumbv8m.main-none-eabi`
-//! with the production link flags, runs `arm-none-eabi-size` on the
-//! resulting ELF, and asserts the on-flash sections stay under the
-//! WRP1A-locked FSBL flash region (32 KB at `0x0C00_0000`, per
-//! `fsbl/memory-stm32u585.x: FLASH 32K`).
+//! with the current legacy bench link flags, runs `arm-none-eabi-size` on the
+//! resulting ELF, and asserts the sections stay under that linker's 32 KB
+//! region at `0x0C00_0000` (`fsbl/memory-stm32u585.x: FLASH 32K`).
 //!
-//! Why this lives at the CI layer: the WRP1A region is irreversibly
-//! locked at factory provisioning. A future PR that pushes FSBL over
-//! 32 KB silently breaks production builds — better to fail
-//! `cargo test` than to discover it at provisioning time.
+//! This is a legacy regression check, not production geometry or resource
+//! approval. Draft 1.1 proposes a 40,960-byte hard ceiling and separately
+//! requires physical LOAD-span and static-RAM/worst-case-stack gates.
 
 use std::path::PathBuf;
 use std::process::Command;
 
-/// Hard ceiling for the FSBL: 32 KB across pages 0–3 of bank 1.
-/// Matches `fsbl/memory-stm32u585.x: FLASH 32K`.
+/// Legacy bench linker ceiling. This is not the Draft-1.1 candidate ceiling.
+/// Matches the current `fsbl/memory-stm32u585.x: FLASH 32K`.
 const FSBL_FLASH_CEILING: u64 = 32 * 1024;
 
 /// Returns true if `arm-none-eabi-size` is on PATH.
@@ -131,10 +129,9 @@ fn fsbl_release_flash_sections_fit_in_32kb() {
 
     assert!(
         total <= FSBL_FLASH_CEILING,
-        "FSBL footprint {} exceeds WRP1A-locked 32 KB ceiling ({} bytes over). \
-         Drop to WORDLIST_PREFIX4 (saves ~2 KB), shave non-essential FSBL \
-         code, or — last resort — bump the FSBL allocation by one page \
-         (changes the flash map; touches WRP1A config).",
+        "FSBL footprint {} exceeds the legacy 32 KB linker region ({} bytes over). \
+         Shrink the legacy bench image; any layout/WRP change belongs to the \
+         separately approved candidate resource and factory gates.",
         total,
         total - FSBL_FLASH_CEILING,
     );

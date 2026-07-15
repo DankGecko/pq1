@@ -2,7 +2,7 @@
 //! just the source-built firmware.
 //!
 //! This verifies the legacy v0x02 / `PQFW_V1` format only. It does not prove
-//! Draft-0.9 V4 compatibility or production rollback eligibility.
+//! Draft-1.1 V6 compatibility or production rollback eligibility.
 //!
 //! This is the subcommand an auditor uses after rebuilding the
 //! firmware from source:

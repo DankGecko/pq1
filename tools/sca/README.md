@@ -430,9 +430,10 @@ attempt uncharged → a "free guess". **But that "free guess" only affects the M
 *redundant* counter, not the authoritative one**: `gated_unlock` does the page-124
 bump *before* `se.unlock(pin)`, so even when the bump is glitched/skipped,
 `se.unlock(pin)` still runs and the SE counts the wrong PIN **in silicon**
-(invariant #2 — SE050 UserID `max_attempts`, OPTIGA F1D0/E120 LUC). Boot reconciles
-to the *strictest* of {MCU page-124, OPTIGA E120 LUC, SE050 UserID}, so if the
-MCU's lags, the SE's becomes the gate → 10 attempts → wipe. So the MCU-side
+(invariant #2 — SE050 UserID `max_attempts`, OPTIGA F1D0/E120 LUC). The
+production boot check cannot read the SE050 attempt count, but it does detect
+this direction directly: after the skipped MCU bump, `E120_used > page124_used`
+and reboot wipes. Without reboot, SE050 still independently locks at 10. So the MCU-side
 redundancy degrades to no-redundancy under a precise repeated glitch, but the
 **primary (SE-silicon) rate-limit holds** — it's a robustness/redundancy gap, not
 an unlimited-guesses hole. A "fix" would be drastic (treat a `pin_attempts_bump`

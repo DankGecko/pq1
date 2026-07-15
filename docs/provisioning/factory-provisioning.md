@@ -15,9 +15,10 @@
 > is flash + option-byte profile (everything except RDP-2) + SE-internal
 > lockdown on transport keysets.
 >
-> **The authoritative factory ⇄ first-boot responsibility split lives in
+> **The current candidate factory ⇄ first-boot responsibility split lives in
 > [`first-boot-provisioning.md`](first-boot-provisioning.md#authoritative-factory--first-boot-responsibility-split)**
-> — keep that table and this note in sync. Factory-side, in one line: flash the
+> — keep that table and this note in sync. It describes the candidate code and
+> is not an approved irreversible ceremony. Factory-side, in one line: flash the
 > reproducible image; set the option-byte profile (TZEN/SECWM/SECBOOTADD0/WRP1A/
 > BOR/BOOT_LOCK/OEM — **everything EXCEPT RDP**, which stays 0); burn the OTP
 > master; provision the SE-internal structure + irreversible locks
@@ -27,7 +28,8 @@
 > QA; box + ship at RDP-0. The device (not the factory) programs RDP=0xCC and
 > rotates the transport keysets to their final values on the first field boot.
 > (Amendment: the self-lock is implemented in the secure app, not the FSBL —
-> see the #36 note in `first-boot-provisioning.md`.)
+> see the #36 note in `first-boot-provisioning.md`.) The handoff/receipt,
+> recovery/KVN, E140-order, and silicon gates named there remain OPEN.
 
 This document is for the **factory operator** who flashes and runs
 the factory firmware on a fresh PQSigner device. You do not need to

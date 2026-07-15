@@ -1,24 +1,30 @@
 # FSBL-rooted firmware fingerprint
 
+> **Geometry/resource scope.** This document explains the measured-display
+> property of the current legacy bench FSBL. Its pages-0..3 / 32-KiB layout is
+> not production authority. Draft 1.1 is an unapproved research candidate that
+> proposes pages 0..4 and a 40,960-byte hard ceiling, with physical LOAD-span
+> and RAM/worst-case-stack gates still open.
+
 ## What this defends against
 
 A firmware update — even one signed with the legitimate vendor key, or
 one shipped by a compromised CI pipeline — must not be able to **forge
-what the user sees on the OLED at boot**. The 8 BIP-39 measurement
+what the user sees on the NV3007 LCD at boot**. The 8 BIP-39 measurement
 words ("OS Fingerprint") are the user's only out-of-band channel for
 deciding whether the firmware running on the device matches the
 reproducible-build artifact `./measure.sh` produces from the public
 source tree. If those words could be faked, the entire reproducible-
 build story collapses.
 
-The defended property:
+The target defended property (after the production FSBL/WRP gates close):
 
 > The user trusts only the *initial provisioning*. Any subsequent
-> firmware update is unable to forge the 8 words shown on the OLED.
+> firmware update is unable to forge the 8 words shown on the NV3007 LCD.
 
 The user writes down the 8 words at first boot (or compares them to
 the value `./measure.sh` produces for the released commit). On every
-subsequent boot they glance at the OLED. If the words match the
+subsequent boot they glance at the LCD. If the words match the
 recorded baseline, the firmware is byte-identical to what they trust.
 If the words differ, an update happened — legitimate or not — and the
 user re-verifies the new words against the published
@@ -41,7 +47,7 @@ user re-verifies the new words against the published
   glitch attack remains a residual risk handled at the
   silicon-hardening layer (RDP-2, TAMP, consumption mask).
 - **Denial of service.** A malicious slot can crash the device before
-  the user finishes reading the FSBL row, then loop. The OLED would
+  the user finishes reading the FSBL row, then loop. The LCD would
   flicker honest words but never settle. This is detectable as a
   visible UX regression and is not forgery — the displayed bytes are
   always correct when displayed at all.
@@ -50,14 +56,14 @@ user re-verifies the new words against the published
 
 ```text
                 ┌──────────────────────────────────────────┐
-WRP1A-locked    │ FSBL (pages 0..3 of bank 1, 32 KB total) │
+legacy bench    │ FSBL (pages 0..3 of bank 1, 32 KB total) │
 flash region    │   1. Read manifest A, manifest B         │
                 │   2. verify_signature(both)              │
                 │   3. verify_images(both) → digest        │
                 │   4. pick_slot()        → (slot, digest) │
                 │   5. ┌───────────────────────────────┐   │
                 │      │ render::render_fingerprint    │   │
-                │      │   * I2C1 + SSD1306 init       │   │
+                │      │   * SPI + NV3007 init         │   │
                 │      │   * firmware_fingerprint_lines│   │
                 │      │   * draw + flush + hold ~3 s  │   │
                 │      └───────────────────────────────┘   │
@@ -66,7 +72,7 @@ flash region    │   1. Read manifest A, manifest B         │
                                   │
                                   ▼  (control passes to slot;
                                        FSBL flash stays read-only,
-                                       FSBL row stays on the OLED)
+                                       FSBL row stays on the LCD)
                 ┌──────────────────────────────────────────┐
 mutable slot    │ secure.elf — verified, but slot code     │
 (updatable)     │ can lie about its own hash               │
@@ -80,7 +86,7 @@ mutable slot    │ secure.elf — verified, but slot code     │
                 └──────────────────────────────────────────┘
 ```
 
-The OLED words FSBL renders are derived from the SAME bytes
+The LCD words FSBL renders are derived from the SAME bytes
 `verify_images` just SHA-256'd to check against the signed manifest
 hash. Surfaced via `verify_images` returning `Option<[u8; 32]>` (the
 digest on success) instead of `bool`. The pure layout function is
@@ -91,9 +97,9 @@ identical bytes for any honest slot.
 ### Why 5-char prefix
 
 The full BIP-39 wordlist (`WORDLIST_FLAT: [[u8; 8]; 2048]`) plus its
-length table costs ~18 KB of rodata. The FSBL's flash ceiling is 32 KB
-and the rest of the bootloader uses ~18 KB by itself — the full
-wordlist would not fit. The FSBL therefore ships a
+length table costs ~18 KB of rodata. It did not fit the legacy 32-KiB
+bench linker region alongside the rest of the bootloader. The FSBL therefore
+ships a
 `WORDLIST_PREFIX5_PACKED: [[u8; 3]; 2048]` base-27 table (~6 KB), generated
 at build time from the same canonical `bip39/src/wordlist.rs` source the
 secure world uses. `word_prefix_at` decodes the selected entry back to the
@@ -104,7 +110,7 @@ This is safe because:
 * BIP-39's English wordlist guarantees the first **4 chars** are unique
   per word, so a 5-char prefix unambiguously identifies any wordlist
   entry. The 5th byte serves as a visual sanity buffer for the user.
-* Both the immutable FSBL and advisory secure-world screen draw the exact
+* Both the legacy FSBL and advisory secure-world screen draw the exact
   4×16 byte grid returned by `firmware_fingerprint_lines`. They therefore
   use the same five-character truncation, spacing, and short-word padding;
   any honest-image display divergence is a real defect or tamper signal.
@@ -117,14 +123,14 @@ The `bip39/tests/prefix5_roundtrip.rs` test pins these invariants
 ### First boot (initial provisioning)
 
 1. Power up the device for the first time.
-2. Observe the 8 words on the OLED (~3 s, then the boot continues).
+2. Observe the 8 words on the NV3007 LCD (~3 s, then the boot continues).
 3. Independently rebuild the release commit (`./measure.sh` or
    `nix run .#measure`) on a separate trusted machine.
 4. Confirm the 8 words match. Record them on paper as the baseline.
 
 ### Every subsequent boot
 
-1. Power up. Glance at the OLED.
+1. Power up. Glance at the NV3007 LCD.
 2. **If the words match the baseline:** the firmware is unchanged.
 3. **If the words differ:** a firmware update happened. Re-verify
    the new words against the published `measurement.txt` for that
@@ -163,12 +169,13 @@ this cross-check mis-fire on honest firmware (the "divergence ⇒ tamper"
 signal would then be permanently tripped and ignored). See
 `docs/security/audits/boot-fsbl-20260611-141459.md` (MEDIUM-1).
 
-> **Status of the cross-check.** Today's shipping build is **monolithic**
-> (no FSBL flashed), so only the self-attested secure-world row exists; the
-> FSBL trust root is not yet deployed. The base-tracking fix above is what
-> makes the two rows agree *once FSBL + A/B ship*. There is still **no
+> **Status of the cross-check.** No shipping build exists. The default
+> monolithic bring-up profile has only the self-attested secure-world row;
+> separate legacy bench FSBL/A/B exercises do not establish a production
+> trust root. The base-tracking fix above is what makes the two rows agree in
+> a future approved slot-relocated build. There is still **no
 > automated comparator** — divergence detection is a human glance at the
-> OLED against the recorded baseline. Wiring an on-device comparator (FSBL
+> LCD against the recorded baseline. Wiring an on-device comparator (FSBL
 > leaving its verdict in a known SRAM/RTC-backup slot for the slot to echo)
 > remains future work and is tracked as the open half of MEDIUM-1.
 
@@ -196,7 +203,8 @@ signal would then be permanently tripped and ignored). See
 
 - `bip39/tests/prefix5_roundtrip.rs` — prefix table integrity, layout
   pinning, fingerprint_lines correctness for known digests.
-- `fsbl-tests/tests/footprint.rs` — CI gate, FSBL release ≤ 32 KB.
+- `fsbl-tests/tests/footprint.rs` — legacy 32-KiB bench-link regression; it is
+  not Draft 1.1 FLASH/RAM approval.
 - `fsbl-tests/tests/source_invariants.rs` — `verify_images` returns
   digest, FSBL renders before branch, NV3007 hardware-validated constants,
   `measured_boot` survives.

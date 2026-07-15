@@ -92,7 +92,7 @@ mirror plus source-text invariant pins.
 | `negative_panic_handler_is_test_excluded` | `#[panic_handler]` global; would conflict with std's handler in host tests | Pin `#[cfg(not(test))]\n#[panic_handler]` | Gate present |
 | `negative_default_handler_dispatches_tzic_to_on_violation` | GTZC IRQ 8 must route to `on_violation` so violations are counted | Pin the `8 => unsafe { hw::tzic::on_violation() }` arm | Arm present |
 | `negative_default_handler_logs_unexpected_irqs_instead_of_silent_drop` | Catch-all `_ =>` arm is required; missing means UB on unmasked IRQs | Pin `_ => {` and `cortex_m::asm::wfe();` | Both present |
-| `negative_pendsv_uses_gated_unlock_not_raw_unlock` | PendSV re-unlock must respect MCU page-126 counter (CLAUDE.md inv #2) | Pin `nsc::gated_unlock(se, &pin)` | Used; raw `SE.unlock` would be a brute-force bypass |
+| `negative_pendsv_uses_gated_unlock_not_raw_unlock` | PendSV re-unlock must respect the MCU page-124 attempt counter (CLAUDE.md inv #2) | Pin `nsc::gated_unlock(se, &pin)` | Used; raw `SE.unlock` would be a brute-force bypass |
 | `negative_pendsv_has_reentry_guard` | SysTick can re-pend PendSV; re-entry is UB on M33 | Pin `static mut PENDSV_IN_FLIGHT` + the `read_volatile != 0` check | Guard present |
 | `negative_pendsv_zeroizes_pin_after_use` | Local PIN buffer leaks into stack if not zeroized | Pin `pin.zeroize();` + `crate::fi::zeroize_barrier();` | Both present |
 | `negative_systick_idle_wipe_skips_when_handler_is_busy` | HIGH-7 fix: wiping while a sign handler holds stack-local secrets lets it sign for a now-locked session | Pin the `!nsc::handler_is_busy()` guard in the idle-wipe `if` | Guard present |

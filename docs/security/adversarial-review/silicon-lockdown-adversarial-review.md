@@ -39,7 +39,7 @@ Each row asks a **distinct question**. SL1/SL2/SL3 can all fire on the same exam
 | SL4 | **Fence escape hatch (fence keyed too narrowly)** | can a *legitimate, shippable* build config bypass a lockdown fence? | No STM32U585 build is silently shippable: production/factory are rejected, and every bench build requires `legacy-fw-rollback-unsafe`, which production policy forbids. | Negative compilation across secure + FSBL feature shapes | ✅ quarantine |
 | SL5 | **Wrong ordering (irreversible-before-validation, or wrong sequence → silent-wrong-key/brick)** | is every irreversible step ordered *after* its validation and *after* its dependencies? | **OPEN.** The old sentinel was not an ordering guard because entry and completion attempted to program the same QW. | Replacement receipt and ceremony must be spec-reviewed before any burn; checklist alone is not authority | 🚫 blocked |
 | SL6 | **Regression / DECONFIGURE un-lock** | can a path *undo* a lockdown, and does a foot-gun guard get mistaken for a security gate? | **(a/c).** RDP2→RDP0 regression mass-erases main flash + wipes BHK/backup-regs, but **DHUK and OTP survive** (`production-todo.md:485-487`, `otp.rs:388` "no recovery, not even RDP regression"); BHK-rooted SCP03 breaks post-regression (Phase-2C gate). The irreversible-burn foot-gun guards (`factory_provisioning.rs:88`, `prodtest.rs:48`, requiring `factory-production-irreversible-im-sure`) are a **foot-gun guard, NOT a security gate** — "anyone who can add it can remove it" (`:70-72`) | Confirm no *runtime* path lowers a lockdown; the OTP one-way property is the backstop; the foot-gun guards prevent accidents, not attackers | ✅ OTP one-way / ⚠ guards |
-| SL7 | **Claimed-but-missing enforcement (claim-vs-code)** | does a doc/claim assert a gate that does not exist? | **(c) — two, both low, both tracked.** (i) The **S-3** `build_metadata_counter()` production gate **does not exist**: `apdu.rs:971` is un-gated and installs the *weak* F1D5 soft-counter; only `optiga-hw-counter` *presence* is fenced, not the soft-path *absence* (`STATUS.md:80,98` — code-doable residual). (ii) **RDP-verify-in-boot** (`HARDENING.md §4.2`) — **IMPLEMENTED 2026-07-02** (`hw::flash::rdp_level` + a `mode-production` boot check in `main.rs`): WARN-and-continue if RDP != Level 2 (hard-refuse behind the opt-in `rdp-enforce-halt` feature; a hard halt would brick a device during factory rehearsal). LOW/belt-and-braces (RDP2 disables SWD in silicon), so warn-not-halt is correct | Grep for the claimed gate; both are already in STATUS/HARDENING — cite, don't re-file | ❌ adversary (grep, tracked) |
+| SL7 | **Claimed-but-missing enforcement (claim-vs-code)** | does a doc/claim assert a gate that does not exist? | **Current authority is explicit.** (i) Production requires `optiga-hw-counter`; E120 is lockout authority. F1E1 is only a provisioning/reset sentinel, so deleting `build_metadata_counter()` without replacing its consumers would be incorrect; its final lifecycle remains factory/silicon-gated in `docs/production-todo.md`. (ii) **RDP-verify-in-boot** (`HARDENING.md §4.2`) — **IMPLEMENTED 2026-07-02** (`hw::flash::rdp_level` + a `mode-production` boot check in `main.rs`): WARN-and-continue if RDP != Level 2 (hard-refuse behind the opt-in `rdp-enforce-halt` feature; a hard halt would brick a device during factory rehearsal). LOW/belt-and-braces (RDP2 disables SWD in silicon), so warn-not-halt is correct | Grep for the production E120 requirement, F1E1 sentinel wording, and RDP check | ✅ fence / ⚠ factory lifecycle |
 
 **Current answer:** the intended depth is not yet a shipping property. The
 software quarantine prevents accidental claims while the replacement rollback
@@ -49,7 +49,7 @@ and factory authority remain open.
 
 ## Part B — The enforcement backbone (what already forces the lockdown)
 
-1. **The `compile_error!` fence wall** (`secure/src/nsc/mod.rs`, ~20 fences). The feature-flag half of every lockdown: the dev-feature denylist (`:114`), the Tier-1 SE-key REQUIRE (`:190`), S-3 `optiga-hw-counter` (`:331`), S-2 `optiga-reset-oids`-forbidden (`:354`), S-1 `optiga-lock-operational` (`:389`), consumption-mask (`:419`), tamp/tamp-wipe/tzic-wipe (`:457`), HIGH-1 `se050-derived-scp03` (`:496`), `optiga-no-shield`-forbidden (`:526`), the mode-production ⊥ {e2e-test, dev-testkey, ui-noop, mlkem, erc7730-dev-unattested, fw-rollback-e2e, fwup-transport-e2e} guards, and the UI/SE backend exactly-one checks.
+1. **The `compile_error!` fence wall** (`secure/src/nsc/mod.rs`, ~20 fences). The feature-flag half of every lockdown: the dev-feature denylist, the Tier-1 SE-key requirement, S-3 `optiga-hw-counter`, the unconditional retired `optiga-reset-oids` fence, the independent `OPTIGA_S2_PRODUCTION_BLOCKED` gate for every production OPTIGA image, the S-1 `optiga-lock-operational` candidate requirement, consumption-mask, tamp/tamp-wipe/tzic-wipe, HIGH-1 `se050-derived-scp03`, `optiga-no-shield`-forbidden, the mode-production ⊥ {e2e-test, dev-testkey, ui-noop, mlkem, erc7730-dev-unattested, fw-rollback-e2e, fwup-transport-e2e} guards, and the UI/SE backend exactly-one checks. Line numbers are deliberately omitted because this wall changes frequently; grep the dedicated diagnostic strings and execute the negative compilation tests.
 2. **`make prod-check-ship` (blocking CI)** — the production-quarantine job
    first resolves and validates `PROD_SHIP_FEATURES`, then requires the exact
    non-ignorable rollback refusal. CI also executes the negative build matrix.
@@ -59,7 +59,7 @@ and factory authority remain open.
 4. **The irreversible-burn foot-gun guards** (`factory_provisioning.rs:88`, `prodtest.rs:48`, requiring `factory-production-irreversible-im-sure`) — prevent *accidental* burns; explicitly not a security gate (SL6).
 5. **The bench/factory ceremony (the `(b)` owner)** — [`production-todo.md`](../../production-todo.md): register-exact TLV bytes (`:119-131`), the WRP-before-RDP2 ordering (`:518-521`), the sacrificial-part rehearsal checklist (`:555-588`), the RM0456 register map (`:639-658`). Silicon evidence: `make optiga-hw-counter-e2e` (PASSED 2026-04-22), `saes-self-test-hw-rdp1` (per-die DHUK), the SE050 stress verifiers.
 
-**The one new (low) item — CLOSED 2026-07-02:** the fence wall + `prod-check-ship` were not registered in `scripts/gate_enforcement.json`, so the `verify-gate-enforcement` meta-gate did not police them. A `prod-check-ship` entry is now enrolled (`per_pr_blocking`, `polices_paths` = `nsc/mod.rs` + `Cargo.toml` + `Makefile`); the checker validates it (18/18 green, self-test passes). The S-3 soft-counter fence turned out NOT to be a quick fence (F1E1 is deeply integrated — read at 5+ sites, written by `factory_reset_body`, LcsO-ratcheted) → refined + deferred to a hardware-validated pass (work-todo #12e).
+**The one new (low) item — CLOSED 2026-07-02:** the fence wall + `prod-check-ship` were not registered in `scripts/gate_enforcement.json`, so the `verify-gate-enforcement` meta-gate did not police them. A `prod-check-ship` entry is now enrolled (`per_pr_blocking`, `polices_paths` = `nsc/mod.rs` + `Cargo.toml` + `Makefile`); the checker validates it. The S-3 review was refined: production already requires E120 lockout, while F1E1 is the provisioning/reset sentinel. Its final lifecycle or replacement is deferred to the hardware-validated owner path (work-todo #12e), not a partial one-line fence.
 
 ---
 
@@ -110,20 +110,17 @@ RULES:
     report every false closure/authority statement and new code/CI bypass.
   - Defer per-subsystem runtime specifics to the sibling playbooks (secure-element SE8,
     fw-update FW7, sca-fi DHUK/BHK) — cross-link, don't re-explain.
-  - For each finding: SL-mode, (a)/(b)/(c) class, file:line or doc:line, PoC, disposition,
-    severity, proposed fix — flagging if a "fix" would make an irreversible burn fire in a
+  - For each candidate: SL-mode, (a)/(b)/(c) class, file:line or doc:line,
+    PoC, provisional severity, stable candidate ID, and proposed fix — flagging if a "fix" would make an irreversible burn fire in a
     dev/test build (a brick risk).
+    Do not assign a finding disposition.
 
-OUTPUT — file findings so they can be catalogued + worked through (see
-docs/security/adversarial-review/findings/README.md):
-  Write a dated report to docs/security/adversarial-review/findings/<surface>-<YYYY-MM-DD>.md
-  from findings/TEMPLATE.md — everything below (findings + the honest residual) goes IN it.
-  Report frontmatter `status: open`; EACH finding gets its own `Status:` line (start 🔲 OPEN)
-  + a falsifiable PoC. Add one row to the Catalogue table in findings/README.md. As findings
-  are worked through, whoever handles each flips its `Status:` (✅ FIXED / ☑️ ACCEPTED /
-  🚫 INVALID / ⏸ DEFERRED) + a Resolution (commit+date or why), and sets the report
-  `status: resolved` once none remain OPEN. work-todo.md stays the action list; findings/ is
-  the review record — cross-link them.
+OUTPUT — return an external candidate packet to the coordinator. Do not modify
+the repository, write a canonical findings report, or update catalogue/status
+fields. Include every candidate and the honest residual. The coordinator freezes
+the raw packet and gives the complete union to the exact Partner-A/Partner-B
+pair; only their symmetric cross-adjudication may assign dispositions. An
+authorized maintainer records the adjudicated result afterward.
 
 MANDATORY HONEST RESIDUAL (the run is INVALID without it):
   1. "What I tried to break and COULDN'T" — the layers whose enforcement/ordering held.
@@ -135,7 +132,14 @@ MANDATORY HONEST RESIDUAL (the run is INVALID without it):
   burned on silicon — that is the factory ceremony's job.
 ```
 
-**Running it as a swarm.** ≥3 reviewers per scope, cross-vote, two model backends. Split SL2's coverage map one-layer-per-reviewer (each owns "if RDP2/RDP1/WRP1A/LcsO/BOOT_LOCK is absent, what's exposed?").
+**Running it as a swarm.** Use ≥3 independent discovery reviewers per scope
+across two model backends. Quorum only corroborates/prioritizes discovery; it
+does not set a disposition, and sub-quorum variants remain in the packet. Give
+every candidate and origin variant to the exact Partner-A/Partner-B pair in
+[`../../planning-and-review-workflow.md`](../../planning-and-review-workflow.md);
+only their symmetric cross-adjudication may disposition it, with disagreement
+preserved. Split SL2's coverage map one-layer-per-reviewer (each owns "if
+RDP2/RDP1/WRP1A/LcsO/BOOT_LOCK is absent, what's exposed?").
 
 ---
 

@@ -1174,7 +1174,7 @@ fn positive_measurement_base_derives_from_image_link_symbol() {
     // the address the image is actually linked + loaded at), so it tracks
     // the active layout — `0x0C00_0000` monolithic, `0x1000_0000` QEMU,
     // and the slot base once the A/B slot-relocated build ships. This is
-    // the SAME range the WRP1A-rooted FSBL hashes for its trusted-display
+    // the SAME range the legacy bench FSBL hashes for its measured-display
     // fingerprint, so an honest slot yields identical words on both rows.
     // A regression to a hardcoded base would silently measure the FSBL +
     // manifest region instead of the running slot in the A/B layout.

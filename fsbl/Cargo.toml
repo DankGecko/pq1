@@ -2,7 +2,7 @@
 name = "pqsigner-fsbl"
 version = "0.1.0"
 edition.workspace = true
-description = "PQSigner first-stage bootloader — immutable, vendor-C10-verified A/B slot selector for the firmware-update subsystem."
+description = "PQSigner legacy bench first-stage bootloader — production-fenced vendor-C10 A/B slot selector."
 
 [[bin]]
 name = "pqsigner-fsbl"
@@ -16,7 +16,7 @@ mode-production = []
 # Bench-only acknowledgement that this FSBL still reads the rejected unary
 # OTP rollback encoding.  It changes no runtime behaviour.  All production
 # builds reject the legacy backend; `make fsbl` and the isolated footprint
-# test opt in explicitly until the Draft-0.9 backend is implemented.
+# test opt in explicitly until an approved replacement backend is implemented.
 legacy-fw-rollback-unsafe = []
 # Bench-only: short-circuit FSBL boot into the NV3007 LCD self-test
 # (`nv3007::lcd_test_loop`) so the display port can be validated on real

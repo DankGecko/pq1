@@ -40,6 +40,28 @@ except ImportError as error:
 MD = MarkdownIt("commonmark")
 SOURCE_PREFIX = "docs/"
 BUNDLE_PREFIX = "../../../docs/"
+ROOT_FILES = {
+    "AGENTS.md": "../../../AGENTS.md",
+    "DIY.md": "../../../DIY.md",
+}
+
+
+def destination_suffix(value: str, base: str):
+    """Return a destination's query/fragment suffix, or None if unrelated."""
+    if value == base:
+        return ""
+    if value.startswith(base) and value[len(base) : len(base) + 1] in {"?", "#"}:
+        return value[len(base) :]
+    return None
+
+
+def normalized_root_file_destination(value: str):
+    for source, bundled in ROOT_FILES.items():
+        for base in (source, bundled):
+            suffix = destination_suffix(value, base)
+            if suffix is not None:
+                return ("repo-root-file", source, suffix)
+    return None
 
 
 def normalized_destination(value: str):
@@ -47,6 +69,9 @@ def normalized_destination(value: str):
         return ("repo-doc", value[len(SOURCE_PREFIX) :])
     if value.startswith(BUNDLE_PREFIX):
         return ("repo-doc", value[len(BUNDLE_PREFIX) :])
+    root_file = normalized_root_file_destination(value)
+    if root_file is not None:
+        return root_file
     return value
 
 
@@ -85,7 +110,13 @@ def root_destinations(text: str):
     def visit(token):
         for key in ("href", "src"):
             value = token.attrs.get(key)
-            if value is not None and value.startswith(SOURCE_PREFIX):
+            if value is not None and (
+                value.startswith(SOURCE_PREFIX)
+                or any(
+                    destination_suffix(value, source) is not None
+                    for source in ROOT_FILES
+                )
+            ):
                 found.append(value)
         for child in token.children or ():
             visit(child)
@@ -98,24 +129,27 @@ def root_destinations(text: str):
 def rebase(text: str) -> str:
     baseline = document_signature(text)
     rewritten = text
-    needle = "](docs/"
-    replacement = "](../../../docs/"
-    search_from = 0
+    replacements = [
+        ("](docs/", "](../../../docs/"),
+        *[(f"]({source}", f"]({bundled}") for source, bundled in ROOT_FILES.items()],
+    ]
 
     # Test each literal candidate independently. Keep it only when the parsed
     # document proves that the sole semantic change is a repository-root link
     # or image destination. Candidates inside malformed syntax, code, nested
     # fences, or raw HTML are preserved rather than guessed about.
-    while True:
-        position = rewritten.find(needle, search_from)
-        if position < 0:
-            break
-        trial = rewritten[:position] + replacement + rewritten[position + len(needle) :]
-        if document_signature(trial) == baseline:
-            rewritten = trial
-            search_from = position + len(replacement)
-        else:
-            search_from = position + len(needle)
+    for needle, replacement in replacements:
+        search_from = 0
+        while True:
+            position = rewritten.find(needle, search_from)
+            if position < 0:
+                break
+            trial = rewritten[:position] + replacement + rewritten[position + len(needle) :]
+            if document_signature(trial) == baseline:
+                rewritten = trial
+                search_from = position + len(replacement)
+            else:
+                search_from = position + len(needle)
 
     remaining = root_destinations(rewritten)
     if remaining:
@@ -129,15 +163,21 @@ def rebase(text: str) -> str:
 
 
 fixture = """[live](docs/a.md) and [`label`](docs/b.md#x)
+[agents](AGENTS.md) and [diy](DIY.md)
+[agents fragment](AGENTS.md#entry) [agents query](AGENTS.md?raw=1)
+[agents both](AGENTS.md?raw=1#entry) [diy fragment](DIY.md#build)
 `[inline](docs/no-inline.md)` and ``[wide](docs/no-wide.md)``
+`[root inline](AGENTS.md#no-inline)` and ``[root wide](DIY.md?raw=1#no-wide)``
 `unmatched
 
 [after unmatched](docs/after-unmatched.md)
 ```md
 [fenced](docs/no-fence.md)
+[root fenced](AGENTS.md#no-fence)
 ```
 ~~~text
 [tilde](docs/no-tilde.md)
+[root tilde](DIY.md?raw=1#no-tilde)
 ~~~
 > ~~~
 > [quoted fence](docs/no-quoted-fence.md)
@@ -160,15 +200,21 @@ outside list
 [url](https://example.com/docs/x) [anchor](#docs/x) [relative](other.md)
 """
 expected = """[live](../../../docs/a.md) and [`label`](../../../docs/b.md#x)
+[agents](../../../AGENTS.md) and [diy](../../../DIY.md)
+[agents fragment](../../../AGENTS.md#entry) [agents query](../../../AGENTS.md?raw=1)
+[agents both](../../../AGENTS.md?raw=1#entry) [diy fragment](../../../DIY.md#build)
 `[inline](docs/no-inline.md)` and ``[wide](docs/no-wide.md)``
+`[root inline](AGENTS.md#no-inline)` and ``[root wide](DIY.md?raw=1#no-wide)``
 `unmatched
 
 [after unmatched](../../../docs/after-unmatched.md)
 ```md
 [fenced](docs/no-fence.md)
+[root fenced](AGENTS.md#no-fence)
 ```
 ~~~text
 [tilde](docs/no-tilde.md)
+[root tilde](DIY.md?raw=1#no-tilde)
 ~~~
 > ~~~
 > [quoted fence](docs/no-quoted-fence.md)
@@ -297,9 +343,13 @@ security anchor.
 **Dark Skippy and similar nonce-exfil attacks do NOT apply.** Hash-
 based SLH-DSA has no nonce. Don't chase this.
 
-**Current SCP03 state.** The SE050 SCP03 channel is active (every TX
-has CLA=0x84). Using NXP default static keys; rotation to per-device
-keys + HUK-SAES wrapping is a production-readiness item (work-todo #7).
+**Current SCP03 lifecycle.** The SE050 SCP03 channel is active (every TX
+has CLA=0x84). Factory defaults are not an acceptable production state:
+the factory installs per-device transport keysets, while the final
+fresh-TRNG-salted BHK-axis rotation belongs to the owner-approved first-field
+ceremony after RDP2 self-lock and BHK first write. OPTIGA PBS is DHUK-derived
+at boot and is never stored in flash; page 126 holds only the wrapped BHK.
+The exact E140 ratchet-versus-final-rotation order remains OPEN.
 
 ---
 
@@ -374,32 +424,34 @@ EOF
 make_bundle_b() {
   local bundle="$OUT_DIR/B-key-management.md"
   cat > "$bundle" <<'EOF'
-# Research Prompt B — Production Key Management (SCP03 + PBS + HUK-SAES)
+# Research Prompt B — Transport-to-First-Field SCP03/PBS Lifecycle
 
 ## Research question
 
-Design a production provisioning + runtime key-management protocol:
+Design and attack a production provisioning + first-field lifecycle:
 
-1. Rotate SE050 SCP03 static ENC/MAC keys from NXP defaults to per-
-   device-unique at chip personalization. Store the new keys on the
-   STM32 side HUK-SAES-wrapped (never in plaintext flash).
-2. Wrap the OPTIGA Platform Binding Secret the same way.
-3. Handle PQSigner firmware upgrade: if a newer firmware includes a
-   different HUK-SAES domain tag, how does it recover existing users'
-   keys without requiring chip reset?
-4. Establish verifiable per-device attestation binding physical
-   SE050 + OPTIGA UIDs to the STM32 chip-unique-ID, so that swap
-   attacks (move SE from a victim device to attacker's device) fail
-   at boot.
+1. The factory installs and locks only per-device SE transport and
+   attestation state, then ships at RDP0 so the owner can verify the MCU
+   before first power. It does not install the final pairing secret, perform
+   the BHK first write, create the wallet seed, or set RDP2.
+2. On first field boot, the FSBL self-locks RDP2 and performs the BHK first
+   write. The production-final pairing rotation must include fresh TRNG input
+   before the seed wizard; current code does not implement that protocol.
+3. Current bring-up OPTIGA PBS is deterministic DHUK-derived and has no flash
+   copy; page 126 stores only the DHUK-wrapped BHK. Design the final derivation,
+   durable non-secret salt/state owner, and power-cut recovery without
+   inventing an HUK-wrapped SCP03/PBS secret blob.
+4. Establish verifiable per-device attestation binding the physical SE050
+   and OPTIGA UIDs to the STM32 UID so swap attacks fail at boot.
 
-Constraints: key rotation happens at one-time factory provisioning (no
-field rekey). Out-of-band transport via a secure provisioner machine
-is acceptable. Bricked-HUK recovery is NOT required — the wallet can
-be considered dead, user restores from 24-word backup.
+Constraints: the exact final derivation and E140 ratchet-versus-final-PBS-
+rotation ordering are OPEN, owner-gated, and silicon-gated. Do not select them
+on paper and do not infer authority for an irreversible ceremony from this
+research prompt.
 
-Deliverables: protocol diagram + flash-layout sketch + the minimum
-STM32U585 SAES API usage pattern. Reference implementations from
-other hardware wallets are useful.
+Deliverables: protocol/state diagram, durable-state sketch, power-cut matrix,
+and the minimum STM32U585 SAES API usage pattern. Clearly separate measured
+facts, current code, proposed ceremony steps, and still-open silicon gates.
 
 EOF
   write_preamble "$bundle"
@@ -446,8 +498,10 @@ Specifically:
 4. Our design rotates the main signer every ~2^20 signatures. Is
    that already beyond the SCA trace-count threshold for practical
    recovery, or do we need tighter rotation?
-5. Does migration from SHA2-128f to SHA2-192f meaningfully improve
-   the SCA posture, or is it orthogonal?
+5. With the all-C10 parameter choice fixed, which implementation-level
+   countermeasures materially improve the SCA posture? Do not reopen a
+   SHA2-128f/192f migration or imply that changing parameters alone closes
+   leakage.
 
 Deliverables: catalogued threat list with severity + mitigation per
 item, plus specific recommendations on per-signer rotation cadence
@@ -621,18 +675,23 @@ Compare across these dimensions, in this order:
 4. **PIN security and lockout**
    - Trezor Safe 7 PIN gate: software counter, SE counter, or MCU-
      enforced? Max-attempts behaviour?
-   - PQSigner: hardware-enforced counters on both SEs (SE050 UserID
-     max 10; OPTIGA Trust M auth reference + firmware-managed decr-
-     before-auth counter at OID 0xF1D5). Admin-wipe secondary UserID
-     for post-lockout recovery.
+   - PQSigner: every attempted PIN is pre-committed to MCU flash page 124,
+     OPTIGA E120 is a silicon-monotonic lifetime counter, and SE050 UserID
+     independently enforces max 10. Boot reconciliation is directional:
+     E120 ahead of page 124 fails closed; a page-124 lead is retained rather
+     than rolled back. The true cold-reboot receipt for both directions is
+     still OPEN and must not be inferred from an in-run cache-reset harness.
 
 5. **Firmware update model and verifiability**
    - Trezor Safe 7 firmware update: signed by whom, with what keys,
      verified by which chip? Rollback protection?
-   - PQSigner: immutable FSBL verifies a vendor SPHINCS+C10 firmware
-     manifest and displays an 8-BIP-39-word SHA-256 fingerprint on the
-     NV3007 LCD. The secure runtime shows the same advisory fingerprint.
-     Firmware updates use the authenticated streaming update commands.
+   - PQSigner target: a production-gated immutable FSBL verifies a vendor
+     SPHINCS+C10 firmware manifest and displays an 8-BIP-39-word SHA-256
+     fingerprint on the NV3007 LCD. The current legacy bench FSBL exercises
+     the display path but is not an immutable production trust root; geometry,
+     WRP/factory, resource, rollback-backend, and silicon gates remain open.
+     The secure runtime shows the same advisory fingerprint. Firmware updates
+     use the authenticated streaming update commands.
    - Pros/cons of each model for a paranoid user.
 
 6. **Supply chain + attestation ("is my new box genuine?")**
@@ -661,7 +720,8 @@ Compare across these dimensions, in this order:
      record — cite actual audit reports.
    - PQSigner: fully open-source (no NDA components in the firmware
      code path), BUT depends on closed-source SE firmware on SE050 +
-     OPTIGA Trust M. Reproducible builds planned not shipped.
+     OPTIGA Trust M. Reproducible-build mechanics and CI gates exist; the
+     production packaging/signing ceremony and shipment remain quarantined.
    - What does "verifiable hardware wallet" actually mean in each
      case?
 

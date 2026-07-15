@@ -25,10 +25,11 @@ claim.
 1. **An independently-derivable baseline** — `./measure.sh` words for
    the published release commit. This is what reproducible builds
    provide; everything below in this document is about getting it.
-2. **An on-device ground truth the running firmware can't forge** —
-   the WRP1A-locked FSBL renders the measurement words on the NV3007 LCD
-   *before* branching into the slot, so any firmware update (even
-   vendor-signed) cannot lie about what bytes ended up on the device.
+2. **An on-device ground truth the running firmware can't forge** — the target
+   design has an approved, WRP-protected FSBL render the measurement words on
+   the NV3007 LCD *before* branching into the slot. The legacy bench FSBL
+   implements the measurement/display behavior, but production immutability
+   still awaits the geometry, WRP/factory, build/resource, and silicon gates.
    See [`measured-boot.md`](../security/measured-boot.md) for the threat model
    and the trust chain.
 
@@ -246,9 +247,10 @@ firmware and should be rejected).
 
 There is no active release pipeline. The historical command
 `FSBL_VENDOR_PUBKEY=… make release` now fails closed and does not remove,
-replace, or publish any artifact. Restore this section only after manifest-v4,
-the rollback backend, combined FLASH/RAM gates, and the reviewed production
-ceremony are implemented and approved.
+replace, or publish any artifact. Restore this section only after an exact
+rollback architecture digest is implementation-approved, its backend and
+separate FLASH plus RAM/stack gates close, and the production ceremony is
+reviewed and owner-authorized.
 
 ## Independent verification workflow
 

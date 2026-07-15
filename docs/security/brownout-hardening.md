@@ -27,10 +27,10 @@ least catastrophic:
 | **B. Partial page erase** | 8 KB page erase aborted mid-sweep. Cells partially erased. | Undetected. Next read returns unpredictable mix. |
 | **C. Multi-QW write window** | Between QW0 and QW1 of a 32-byte write, Vcc dies. Half-good, half-blank on reboot. | Undetected. No CRC, no length, no magic — readers trust raw bytes. |
 | **D. SE050 mid-APDU** | I2C dies during an SCP03 command. SE050 NVM is APDU-atomic but we don't verify post-hoc. | Silent state drift: firmware thinks delete succeeded, object still on chip. |
-| **E. Dual-SE ordering** | STM32 wipes SE050 OK, then Vcc dies before `erase_pbs_page` runs. Half-wiped state survives. | Partially covered by the wipe-in-progress flag, but the flag doesn't distinguish "pre-SE050-wipe" from "post-SE050-wipe-pre-OPTIGA-erase". |
+| **E. Dual-SE ordering** | STM32 wipes one secure element, then Vcc dies before the other secure-element wipe completes. | Partially covered by the wipe-in-progress flag, but the flag does not encode which SE operations completed. There is no PBS flash page to erase. |
 | **F. SRAM residue** | Abnormal reset before panic handler runs. Secrets linger in SRAM1 retention until next power-on. | `panic_handler` zeroizes, but any reset path that skips it leaves SRAM intact. No boot-time sanitization. |
 | **G. Half-flashed firmware** | OTA / DFU interrupted by brownout. Firmware partially programmed. | Out of scope for this doc — addressed by the separate measured-boot + signed-update work (work-todo.md items 14-16). |
-| **H. Option-byte write** | Bricks the chip. | We never write option bytes at runtime. Fine. |
+| **H. Option-byte write** | Can brick the chip if interrupted or mis-sequenced. | Current runtime performs none. The only planned exception is the still-unimplemented, owner-gated first-field RDP2 self-lock; it needs its own cut-safe ceremony and sacrificial evidence. |
 
 Current design addresses **E partially** (wipe flag) and **F partially**
 (panic handler zeroize). Everything else is unmitigated.
@@ -342,8 +342,8 @@ Smallest usable chunk that moves the needle.
   flags, exposes result to `main`. Log each boot's cause.
 - **1b. Verified flash writes.** New `write_quadword_verified` in
   `hw/flash.rs` reads back after every write and compares. New error
-  variant `VerifyMismatch`. Existing multi-QW writers (`write_key`,
-  `write_pbs`, `write_admin_pin`, `arm_wipe_flag`) switch to verified
+  variant `VerifyMismatch`. Active multi-QW writers (`write_key`, BHK
+  provisioning, and persistent marker/state writers) switch to verified
   form. Torn-write detection: class **A** and class **C** failures now
   observable.
 - **1c. Option-byte setup target.** `make stm32-harden-opts` runs
@@ -438,7 +438,8 @@ uncorrectable ECC (prevent silent corruption).
       payload: [u8; N],
   }
   ```
-  Every persistent structure (admin PIN, PBS, future items) goes
+  Every persistent structure that still exists (the wrapped BHK and future
+  records; not the root-derived admin PIN or PBS) goes
   through this wrapper. On read: check magic + CRC; mismatch → treat as
   blank + trigger recovery.
 - **Migration path** for already-provisioned devices: version 0 =
@@ -485,7 +486,11 @@ scenarios.
   ```
   Update protocol: write fully to inactive slot → verify CRC → atomic
   bit-clear flip of pointer. Torn update leaves active slot intact.
-- **Same pattern for PBS page 126.**
+- **Do not apply this pattern to an OPTIGA PBS page.** The PBS is now
+  DHUK-derived at boot and has no flash page. Bank-1 page 126 instead holds the
+  wrapped SE050 BHK when enabled; any redundancy or migration proposal for
+  that page needs a separate BHK-owner design and must not be inferred from
+  this historical slot sketch.
 - **Migration**: detect old single-slot layout at boot, relocate to
   A/B.
 
@@ -538,11 +543,13 @@ Validated at each stage; the test matrix grows monotonically.
 
 ## What NOT to do
 
-- **Do not write option bytes from runtime firmware.** Option-byte
-  writes require `OBL_LAUNCH` which resets the chip. Doing it at an
-  unexpected time could brick the wallet. Runtime code only *reads*
-  option bytes; all writes go through `STM32_Programmer_CLI` during
-  provisioning.
+- **Do not add general runtime option-byte writes.** Option-byte writes require
+  `OBL_LAUNCH`, which resets the chip, and an unexpected write can brick the
+  wallet. The sole planned runtime exception is the still-unimplemented,
+  owner-gated first-field RDP2 self-lock after user verification. Its exact
+  cut-safe sequence must be separately reviewed and validated on named
+  sacrificial units. All other option-byte writes require an independently
+  authorized external provisioning plan; this document grants none.
 - **Do not move the existing wipe-in-progress flag location in Stage 1
   or 2.** Stage 4 will replace it wholesale. Changing its format twice
   risks migration bugs.

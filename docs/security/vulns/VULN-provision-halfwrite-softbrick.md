@@ -47,6 +47,6 @@ Regression test: `secure/src/secure_element.rs::failed_provision_rolls_back_befo
 The rollback fixes the *observable* soft-brick for the common case (user re-enters the same PIN on the wizard re-run). Two SE050-ordering hazards remain, both silicon-dependent and out of scope for a blind code change:
 
 1. `check_provisioned` keys on the **first**-written object (`USERID_OBJ`) rather than the last, so `is_provisioned()` can transiently read true mid-write. Consider keying it on the last-written object — but note the write-once + fail-loud-if-exists (0x6986) re-provision semantics and the S-6 non-admin-deletable USERID interact here.
-2. If the user picks a **different** PIN on the wizard re-run, the surviving (admin-undeletable) `USERID_OBJ` keeps the old PIN while OPTIGA F1D0 gets the new one → three-way lockstep mismatch. Same limitation the existing decoy rollback has.
+2. If the user picks a **different** PIN on the wizard re-run, the surviving (admin-undeletable) `USERID_OBJ` keeps the old PIN while OPTIGA F1D0 gets the new one → cross-SE credential mismatch. Same limitation the existing decoy rollback has.
 
 Recommended bench check: drive a fault between the USERID write and the entropy write and confirm the rollback + re-provision path recovers on real silicon (does `factory_reset_admin` reliably flip `is_provisioned()` false, and does re-provision with a fresh PIN reconcile).

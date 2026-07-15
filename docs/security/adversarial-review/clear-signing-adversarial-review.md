@@ -6,7 +6,7 @@
 
 **How this differs from the bench red-team.** [`docs/security/red-teaming.md`](../red-teaming.md) enumerates *silicon / bench pass-fail bars* (Claim 9 trusted-UI, §9). **This playbook is the code-review counterpart**: it walks the *source* of each decoder against its asserted WYSIWYS property, hunting claim-vs-code drift and fail-open/vacuity — the same job the [FV adversarial-review playbook](../../verification/fv-adversarial-review-playbook.md) does for the Lean tree, transposed onto the render path. The FV playbook's vacuity catalog has a direct analog here: a render-faithfulness test that passes but is *not bound to the canonical signed bytes* is exactly a vacuous proof. Use the two documents together; do not re-run red-teaming.md's bench checks here.
 
-> **Honesty note (this catalog's own discipline).** The `Status` column distinguishes **defended-by-construction** (with the evidence) from **relies-on-build-time-gate** from **reasoned-latent**. As of the 2026-07 survey this surface is *largely closed* — most rows below are "defended, here is the test that proves it." Do **not** manufacture findings to fill the catalog; a row that says "closed, evidence X" is the honest and valuable output. CS10's lower-trust self-attested label remains an explicit accepted residual.
+> **Honesty note (this catalog's own discipline).** The `Status` column distinguishes **defended-by-construction** (with the evidence) from **relies-on-build-time-gate** from **reasoned-latent**. As of the 2026-07 survey this surface is *largely closed* — most rows below are "defended, here is the test that proves it." Do **not** manufacture findings to fill the catalog; a row that says "closed, evidence X" is the honest and valuable output. CS10's lower-trust self-attested label remains an explicit reviewed residual; no owner risk-acceptance receipt is recorded.
 
 ---
 
@@ -93,20 +93,17 @@ RULES:
     it, or any second decoder that can reach confirmation, is a CS9 finding.
   - Distinguish an on-device belt from a build-time dbgen gate (CS5): a property enforced
     only at build time is a different assurance than one enforced on-device.
-  - For each finding give: CS-mode, exact file:line, the PoC, disposition (CONFIRMED_REAL
-    / FALSE_POSITIVE / ALREADY_FIXED / OPEN_RESEARCH), severity, proposed fix — flagging
+  - For each candidate give: CS-mode, exact file:line, the PoC, provisional
+    severity, proposed fix, and a stable candidate ID — flagging
     if the fix would weaken a binding, regress a render test, or "fix" correct code.
+    Do not assign a finding disposition.
 
-OUTPUT — file findings so they can be catalogued + worked through (see
-docs/security/adversarial-review/findings/README.md):
-  Write a dated report to docs/security/adversarial-review/findings/<surface>-<YYYY-MM-DD>.md
-  from findings/TEMPLATE.md — everything below (findings + the honest residual) goes IN it.
-  Report frontmatter `status: open`; EACH finding gets its own `Status:` line (start 🔲 OPEN)
-  + a falsifiable PoC. Add one row to the Catalogue table in findings/README.md. As findings
-  are worked through, whoever handles each flips its `Status:` (✅ FIXED / ☑️ ACCEPTED /
-  🚫 INVALID / ⏸ DEFERRED) + a Resolution (commit+date or why), and sets the report
-  `status: resolved` once none remain OPEN. work-todo.md stays the action list; findings/ is
-  the review record — cross-link them.
+OUTPUT — return an external candidate packet to the coordinator. Do not modify
+the repository, write a canonical findings report, or update catalogue/status
+fields. Include every candidate and the honest residual. The coordinator freezes
+the raw packet and gives the complete union to the exact Partner-A/Partner-B
+pair; only their symmetric cross-adjudication may assign dispositions. An
+authorized maintainer records the adjudicated result afterward.
 
 MANDATORY HONEST RESIDUAL (the run is INVALID without it):
   1. "What I tried to break and COULDN'T" — the bindings that survived, and the strongest
@@ -118,7 +115,17 @@ MANDATORY HONEST RESIDUAL (the run is INVALID without it):
   Never imply "the rest is fine." Absence of a finding is not evidence of WYSIWYS.
 ```
 
-**Running it as a swarm.** Fan out ≥3 independent reviewers per scope and cross-vote (a finding ≥quorum reviewers raise is "confirmed"); rotate across two model backends so one model's blind spot doesn't become yours. The `contracts/verification/adversarial-review/` kit (`run_review.py`) already drives this shape backend-agnostically — add a clear-signing angle to its `protocol.json` mirroring the existing `kani-decoder-vacuity` angle, or drive `parallel()` + a `phase('CrossCheck')` from a `Workflow`.
+**Running it as a swarm.** Fan out ≥3 independent reviewers per scope and use
+quorum only to prioritize or corroborate discovery; quorum does not set a
+finding's disposition and never overrides the exact Partner-A/Partner-B
+protocol in [`../../planning-and-review-workflow.md`](../../planning-and-review-workflow.md).
+Rotate discovery across two model backends so one model's blind spot does not
+become yours. The required pair must personally reproduce/refute/narrow every
+finding and preserve disagreement—never majority-vote it away. The
+`contracts/verification/adversarial-review/` kit (`run_review.py`) already
+drives discovery backend-agnostically—add a clear-signing angle to its
+`protocol.json` mirroring `kani-decoder-vacuity`, or drive `parallel()` plus a
+`phase('CrossCheck')` from a `Workflow`.
 
 ---
 

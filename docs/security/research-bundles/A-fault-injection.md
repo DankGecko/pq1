@@ -87,9 +87,13 @@ security anchor.
 **Dark Skippy and similar nonce-exfil attacks do NOT apply.** Hash-
 based SLH-DSA has no nonce. Don't chase this.
 
-**Current SCP03 state.** The SE050 SCP03 channel is active (every TX
-has CLA=0x84). Using NXP default static keys; rotation to per-device
-keys + HUK-SAES wrapping is a production-readiness item (work-todo #7).
+**Current SCP03 lifecycle.** The SE050 SCP03 channel is active (every TX
+has CLA=0x84). Factory defaults are not an acceptable production state:
+the factory installs per-device transport keysets, while the final
+fresh-TRNG-salted BHK-axis rotation belongs to the owner-approved first-field
+ceremony after RDP2 self-lock and BHK first write. OPTIGA PBS is DHUK-derived
+at boot and is never stored in flash; page 126 holds only the wrapped BHK.
+The exact E140 ratchet-versus-final-rotation order remains OPEN.
 
 ---
 
@@ -176,9 +180,10 @@ impl DualSecureElement {
         self.optiga.load_pbs();
     }
 
-    /// First-boot OPTIGA E140 pairing, run BEFORE the seed wizard draws
-    /// entropy — see `OptigaTrustM::pair_for_first_boot` for why
-    /// (mandatory `ensure_shield` in `random()` needs a paired chip).
+    /// Bring-up transport OPTIGA E140 pairing, run before the legacy seed
+    /// wizard draws entropy — see `OptigaTrustM::pair_for_first_boot` for why
+    /// (mandatory `ensure_shield` in `random()` needs a paired chip). This is
+    /// not the production-final fresh-TRNG rotation or E140 lock ceremony.
     /// The OPTIGA-level error detail is logged by the inner driver;
     /// callers only branch on success.
     pub fn pair_optiga_for_first_boot(&mut self) -> Result<(), SeError> {
@@ -617,22 +622,17 @@ impl WalletStore for DualSecureElement {
     }
 
     fn pin_attempt_count(&mut self) -> Option<u8> {
-        // Both SEs expose the counter on a peek-safe path:
-        //   - OPTIGA: F1E1 counter object (`read_counter_raw`).
-        //   - SE050: `ReadObjectAttributes` on USERID_OBJ — returns
-        //     `max_attempts - auth_attempts` over the SCP03 channel
-        //     without authenticating against the UserID (no attempt
-        //     consumed). See `Se050::pin_attempt_count_raw` for the
-        //     parse + SDK reference. (This corrects an earlier work-
-        //     todo §4 claim that said SE050's counter couldn't be
-        //     peeked.)
+        // OPTIGA exposes a peek-safe counter (E120 in the production
+        // `optiga-hw-counter` configuration). The production SE050 UserID
+        // policy denies `ReadObjectAttributes` with SW=0x6986, so its leg is
+        // `None`; see `Se050::pin_attempt_count_raw`.
         //
         // Combined value: MAX of whatever's available — counters
         // are "attempts USED" (higher = closer to lockout), so the
-        // strict aggregate is `max`, not `min`. Used by reconcile to
-        // compare against MCU page-124's used-count for a `!=`
-        // tamper check. Intra-SE divergence is reported separately
-        // by `pin_attempt_counts_divergent`.
+        // strict aggregate is `max`, not `min`. Reconciliation uses the
+        // available count directionally (`se_used > mcu_used`), because the
+        // MCU is precharged and may benignly lead. Intra-SE divergence is
+        // meaningful only when both legs are actually readable.
         let o = self.optiga.pin_attempt_count();
         let s = self.se050.pin_attempt_count();
         match (o, s) {
@@ -704,9 +704,9 @@ impl WalletStore for DualSecureElement {
     ///
     /// OPTIGA: `optiga.factory_reset()` overwrites every user OID through
     /// the shielded-connection path (`Change = Auto(F1D0) OR Conf(0xE140)`).
-    /// Works even if the user PIN is forgotten. The PBS in flash is
-    /// preserved so the chip remains usable for re-provisioning; the user
-    /// OIDs are now blank.
+    /// Works even if the user PIN is forgotten. The DHUK-derived PBS remains
+    /// reproducible and the shield stays available for re-provisioning; the
+    /// user OIDs are now blank. No PBS is stored on flash page 126.
     ///
     /// SE050: delegates to its own `factory_reset_admin` which uses the
     /// admin UserID at 0x7B10_00A0 to delete user objects.
@@ -1192,7 +1192,7 @@ unsafe fn verify_pin_with_chip(pin: &[u8; 8]) -> u32 {
 
     let se = &mut *core::ptr::addr_of_mut!(crate::SE);
 
-    // `super::gated_unlock` handles the MCU-side counter (page 126):
+    // `super::gated_unlock` handles the MCU-side counter (page 124):
     // pre-commit bump before SE verify, reset on success, refuse
     // on flash fault. See its docstring for the full Trezor-style
     // gating rationale.
@@ -1337,8 +1337,8 @@ use crate::fih::FihBool;
 pub(super) struct SecureState {
     /// How many PIN attempts the current lockout window still permits.
     /// Mirrors the secure element's monotonic PIN counter for the mock
-    /// backend; for the real TROPIC01 backend the value is refreshed
-    /// from the chip on every `cmd_get_remaining`.
+    /// backend; real SE backends refresh it from the chip on every
+    /// `cmd_get_remaining`.
     pub(super) remaining_attempts: u8,
     /// Whether the current session has passed PIN verification. Reset
     /// by [`zeroize_sensitive`] on cancel / idle wipe / panic.
@@ -1355,7 +1355,7 @@ pub(super) struct SecureState {
     /// skip together.
     pub(super) pin_verified: FihBool,
     /// The 32-byte master secret unwrapped by
-    /// `crate::pin::verify_pin` (or the TROPIC01 MAC-and-Destroy flow).
+    /// `crate::pin::verify_pin`.
     /// Used both as the AES-GCM key for the encrypted-entropy blob and
     /// as the hedge input for SLH-DSA signing randomizers.
     pub(super) master_secret: [u8; 32],
@@ -2040,7 +2040,7 @@ pub(super) mod tests {
 //!   hardening primitives are keyed off the secure-world TRNG.
 //! * [`provision_from_mnemonic`] / [`store_macd_encrypted`] — the
 //!   `WalletStore` + `SecureElement` provisioning entry points used by
-//!   the wizard and by the mock/Tropic01 backends. These touch the
+//!   the wizard and by the mock backend. These touch the
 //!   secure-side `crate::secure_element::*` traits with r-mem
 //!   semantics, so they cannot live in the pure-logic crate.
 //!
@@ -2453,7 +2453,7 @@ fn provision_duress_wallet(
 
 /// Store pre-derived entropy, VK, and PIN state via the MACD chain on an
 /// r-mem-capable secure element. Used by backends that support the
-/// `SecureElement` trait (Mock, Tropic01 on the generic path).
+/// `SecureElement` trait (Mock on the generic path).
 ///
 /// The mnemonic-to-entropy derivation is NOT done here — the caller must
 /// pass pre-derived `(entropy, master_secret, vk, bootstrap_vk)`.

@@ -3,7 +3,10 @@
 - **Severity:** HIGH / CRITICAL (permanent brick), **latent** — dormant while `bhk` is off; detonates the moment `bhk` is enabled.
 - **Class:** availability / brick, on the once-a-year firmware-update path.
 - **Found:** 2026-07-02 reliability hunt (multi-agent workflow; the finder rated it HIGH, the first-pass verifier REFUTED it on "`bhk` is off by default." That refutation is true-today but dismisses a loaded gun — see below).
-- **Status:** compile-time guard landed (`secure/src/hw/bhk.rs`); structural relocation still owed (owner decision).
+- **Status:** **RESOLVED in current code.** The persistent firmware-update
+  verify-failure counter was removed; page 126 now has one owner, the wrapped
+  SE050 BHK. The mechanism below is the historical as-found state and must not
+  be read as a current page map.
 
 ## Mechanism
 
@@ -24,18 +27,26 @@ Under `bhk`, that erase wipes the wrapped BHK. The SE050 SCP03 session keys **an
 
 Both are false in each other's presence. The FW-fail counter **is** the FW-update path writing/erasing bank-1 page 126, so the BHK's "bank-2-only" safety assumption does not hold. `bhk.rs:40` even states the contract — *"firmware-update path MUST NOT touch page 126"* — which the FW-fail counter silently violated when it was added.
 
-## Reachability / why it's dormant today
+## Reachability in the as-found tree
 
-`bhk` is **not** in the production `RELEASE_FEATURES` (Makefile:2017). It is deliberately excluded — but for an **unrelated** reason (Makefile:2014-2016: "enabling it without the phase-2B silicon provisioning yields zero-keyed derivations"), **not** because of this collision. So:
+`bhk` was **not** in the production `RELEASE_FEATURES`. It was deliberately
+excluded for an unrelated provisioning reason, not because of this collision.
+At discovery time:
 
-- **Today (bhk off):** page 126 is owned solely by the FW-fail counter; erasing it at COMMIT is correct and harmless. No brick.
-- **When phase-2B lands** and someone adds `bhk` to `RELEASE_FEATURES` (it is on the roadmap; `se050/mod.rs` calls a `bhk` build "the shipping target"): the first annual FW-update erases the BHK → brick. Nothing but a stale comment (`bhk.rs:40`) stood between the roadmap and a fleet-wide brick.
+- **Then-current default (`bhk` off):** page 126 was owned solely by the
+  FW-fail counter; erasing it at COMMIT was harmless in that build.
+- **If phase-2B had landed without a fix:** adding `bhk` to
+  `RELEASE_FEATURES` would have made the first firmware-update COMMIT erase the
+  BHK and brick the device.
 
-The only builds that enable `bhk` today are two dev/e2e bench targets (`Makefile:1190`, `dual-se-bhk-e2e` at `Makefile:2453`), both with `debug-log,e2e-test`. Neither exercises "provision a BHK **then** run a FW-COMMIT on the same device," which is why the collision has never manifested on the bench.
+The only builds that enabled `bhk` in that snapshot were dev/e2e bench
+targets. Neither exercised "provision a BHK **then** run a FW-COMMIT on the
+same device," which is why the collision had not manifested on the bench.
 
-## Fix applied
+## Initial containment (historical)
 
-Compile-time collision guard in `secure/src/hw/bhk.rs` (only compiled when `bhk` is on, so a no-op for today's production + host test suite):
+The first containment added this compile-time collision guard in
+`secure/src/hw/bhk.rs`:
 
 ```rust
 const _: () = assert!(
@@ -47,9 +58,13 @@ const _: () = assert!(
 );
 ```
 
-Verified: `cargo check … --features …,saes-dhuk,bhk` now fails with
+At that stage, `cargo check … --features …,saes-dhuk,bhk` failed with
 `error[E0080]: evaluation panicked: page-126 collision …`. Non-`bhk` builds and the host test suite are unaffected (2065/0). This matches the codebase's existing `compile_error!` ship-blocker-fence pattern (`nsc/mod.rs`), and it **auto-clears** once the pages are separated.
 
-## Remaining work (owner decision — NOT done here)
+## Final resolution (current)
 
-Relocate one owner to a free flash page so `bhk` is shippable. Bank-1 secure pages 123–127 are all claimed (123 offchain, 124 pin-attempts, 125 admin, 126 collision, 127 reserved key storage), so a genuinely-free page must be chosen from the full linker/WRP/FSBL map — hence deferred to the owner. The FW-fail counter is the simpler mover (an 8 KB tally page); BHK's whole lifecycle is documented around page 126. After relocation, the guard above passes automatically.
+The persistent firmware-update verify-failure counter was removed rather than
+relocated. Page 126 has one current owner: the DHUK-wrapped SE050 BHK when the
+`bhk` feature is enabled. Firmware-update code does not write or erase that
+page. The collision guard and prose above describe the historical containment,
+not a current build failure or an open relocation task.

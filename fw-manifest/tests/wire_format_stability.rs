@@ -6,10 +6,10 @@
 //! invalidates every already-signed release bundle and every FSBL that
 //! ships hard-coded vendor pubkeys.
 //!
-//! CLAUDE.md guidance: "Do not expand the signed FW-update preimage. It
-//! is intentionally 75 B `'PQFW_V1' || fw_version_be || secure_hash ||
-//! nonsecure_hash` so any auditor can reconstruct from `(version,
-//! secure.elf, nonsecure.elf)` alone."
+//! This pins the legacy manifest-v0x02 compatibility contract owned by
+//! `fw-manifest/src/lib.rs`: the 75-byte `PQFW_V1 || fw_version_be ||
+//! secure_hash || nonsecure_hash` preimage. It is bench compatibility
+//! evidence, not production rollback authority.
 
 use fw_manifest::{
     DOMAIN_TAG, MAGIC, MANIFEST_SIZE, MANIFEST_VERSION, OFF_BOOT_CTR_SNAP, OFF_BUILD_ID,
@@ -62,9 +62,8 @@ fn negative_manifest_version_is_pinned_to_0x02() {
 
 #[test]
 fn negative_domain_tag_is_exactly_pqfw_v1() {
-    // CLAUDE.md: "Do not expand the signed FW-update preimage." The
-    // domain tag's bytes are part of every release signature; renaming
-    // it invalidates every previously-signed release bundle.
+    // The legacy crate contract owns these bytes; renaming them invalidates
+    // every previously-signed v0x02 bench bundle.
     assert_eq!(
         DOMAIN_TAG,
         b"PQFW_V1",
