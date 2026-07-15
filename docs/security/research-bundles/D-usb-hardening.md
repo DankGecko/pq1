@@ -91,11 +91,15 @@ based SLH-DSA has no nonce. Don't chase this.
 
 **Current SCP03 lifecycle.** The SE050 SCP03 channel is active (every TX
 has CLA=0x84). Factory defaults are not an acceptable production state:
-the factory installs per-device transport keysets, while the final
-fresh-TRNG-salted BHK-axis rotation belongs to the owner-approved first-field
-ceremony after RDP2 self-lock and BHK first write. OPTIGA PBS is DHUK-derived
-at boot and is never stored in flash; page 126 holds only the wrapped BHK.
-The exact E140 ratchet-versus-final-rotation order remains OPEN.
+the factory transport credentials are derived from the per-device OTP master
+burned for that handoff. After RDP2 self-lock and the BHK first write, the
+implemented first-field candidate rotates SE050 SCP03/admin credentials to
+the final BHK axis and rotates the OPTIGA E140 PBS to the final DHUK derivation
+bound to a fresh TRNG salt persisted in the page-127 journal. Page 126 holds
+only the DHUK-wrapped BHK. This candidate is not a production-approved
+ceremony: authenticated per-unit handoff and authenticate-before-rotate,
+durable old/new/KVN recovery, the exact E140 lifecycle-versus-final-rotation
+order, and silicon receipts remain OPEN.
 
 ---
 

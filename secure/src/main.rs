@@ -78,6 +78,10 @@ mod iso7816;
 // gated. Absent from every current dev/QEMU/bench build's behaviour (the
 // entry points are only *called* from `main` under the feature).
 mod first_boot;
+// Pure, host-tested ownership policy for generic secure-bank flash writes and
+// erases. The STM32 driver consumes its validated address/page capabilities;
+// page 127 remains exclusively owned by the first-boot journal.
+mod flash_policy;
 
 // Hardware-dependent modules: gated out in test builds so `cargo test`
 // compiles only the pure logic on x86_64.

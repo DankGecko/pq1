@@ -18,14 +18,15 @@
 //! The remaining `unsafe fn` markers sit on the public flash-*mutating*
 //! APIs (erase / program / bump) for commit-visibility — callers must
 //! reason about *which* flash bytes they are about to change. Read-only
-//! helpers (`read_key`, `pin_attempts_read`, `offchain_count_read`,
+//! helpers (`pin_attempts_read`, `offchain_count_read`,
 //! `last_userop_count_read`, `offchain_count_is_registered`,
-//! `is_key_blank`, `is_wipe_armed`) are safe `fn` because they cannot
+//! `is_wipe_armed`) are safe `fn` because they cannot
 //! commit anything; raw pointer derefs of flash memory inside them stay
 //! in tight `unsafe { ... }` blocks with `// SAFETY:` comments.
 
 use core::ptr::{read_volatile, write_volatile};
 
+use crate::flash_policy::{self, GenericSecurePage, GenericSecureQwAddr};
 use crate::hw::mmio::{Reg32, RoReg32};
 
 // ---------------------------------------------------------------------------
@@ -59,7 +60,7 @@ const FLASH_SECBOOTADD0R_OFF: u32 = 0x4C;
 /// option-byte authority remain open until their reviewed ceremony and silicon
 /// receipts close.
 #[allow(dead_code)]
-pub const FSBL_BASE_ADDR: u32 = 0x0C00_0000;
+pub const FSBL_BASE_ADDR: u32 = flash_policy::BANK1_BASE;
 
 // The pure RDP/SECBOOTADD0 decode + its host unit tests live in the
 // host-compiled `sphincs_tz_shared::lockdown` (this whole `hw` module is
@@ -202,17 +203,7 @@ fn icache_invalidate() {
 // ---------------------------------------------------------------------------
 
 /// Base address of the reserved first-boot journal page (page 127).
-pub const KEY_PAGE_ADDR: u32 = 0x0C0F_E000;
-const FIRST_BOOT_JOURNAL_PAGE_NUM: u32 = 127;
-const FLASH_PAGE_BYTES: u32 = 0x2000;
-const FIRST_BOOT_JOURNAL_PAGE_END: u32 = KEY_PAGE_ADDR + FLASH_PAGE_BYTES;
-
-fn overlaps_first_boot_journal(addr: u32) -> bool {
-    let Some(end) = addr.checked_add(16) else {
-        return true;
-    };
-    addr < FIRST_BOOT_JOURNAL_PAGE_END && end > KEY_PAGE_ADDR
-}
+pub const KEY_PAGE_ADDR: u32 = flash_policy::FIRST_BOOT_JOURNAL_ADDR;
 
 // NOTE: flash page 126 (the former OPTIGA PBS seal page at
 // 0x0C0F_C000) was freed by work-todo #24 — the Platform Binding
@@ -257,87 +248,95 @@ fn lock() {
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Program one quad-word (16 bytes / 128 bits) at the given flash address.
-///
-/// The address must be quad-word aligned (16-byte boundary) and must
-/// point within the key storage page. The destination must be erased
-/// (all 0xFF) before writing.
-///
-/// Returns `Err(())` only if the flash controller set one of the error
-/// flags (PROGERR / WRPERR / PGAERR / SIZERR / PGSERR). **Does not
-/// verify that the bytes actually landed correctly** — a torn write
-/// under brown-out can produce a half-programmed quad-word with no
-/// error flag set. For persistent data, use `write_quadword_verified`.
-///
-/// HIGH-12 fix: the whole unlock → program → lock sequence runs
-/// inside `cortex_m::interrupt::free` so an IRQ (especially SysTick
-/// or the OLED I2C callback) landing mid-sequence can't leave SECCR
-/// in an inconsistent state. On STM32U5 an interrupted program
-/// sequence can latch PGSERR; the `free` block keeps the sequence
-/// atomic.
-///
-/// # Safety
-/// Commits bytes to flash. Caller must guarantee `addr` is quad-word
-/// aligned, inside a writable secure-bank page, and currently erased.
-unsafe fn write_quadword(addr: u32, data: &[u8; 16]) -> Result<(), ()> {
-    cortex_m::interrupt::free(|_| {
-        wait_bsy();
-        clear_errors();
-        unlock();
+// The raw bank-1 program primitive is private to this child module.  Its only
+// outward capabilities are (a) a generic writer that requires the pure
+// policy's validated, journal-disjoint address type and (b) an index-bounded
+// journal writer.  A same-file helper cannot alias the raw primitive because
+// Rust privacy prevents the parent module from naming child-private items.
+mod bank1_programming {
+    use super::{
+        clear_errors, icache_invalidate, lock, read_volatile, unlock, wait_bsy, write_volatile,
+        GenericSecureQwAddr, ERR_MASK, PG, REG,
+    };
 
-        // Set PG bit
-        REG.seccr.write(PG);
-
-        // Write 4 × 32-bit words to the target address.
-        let dst = addr as *mut u32;
-        for i in 0..4 {
-            let word = u32::from_le_bytes([
-                data[i * 4],
-                data[i * 4 + 1],
-                data[i * 4 + 2],
-                data[i * 4 + 3],
-            ]);
-            // SAFETY: caller asserts `addr..addr+16` is a valid, erased,
-            // quad-word-aligned flash region. Volatile prevents the
-            // compiler from reordering or coalescing the four word writes
-            // that the flash controller expects in sequence.
-            unsafe { write_volatile(dst.add(i), word) };
-        }
-
-        wait_bsy();
-
-        // Clear PG
-        REG.seccr.write(0);
-        let sr = REG.secsr.read();
-        lock();
-        cortex_m::asm::dsb();
-        cortex_m::asm::isb();
-        icache_invalidate();
-
-        if sr & ERR_MASK != 0 {
+    /// Program one raw bank-1 quad-word. The destination contract is supplied
+    /// exclusively by one of the two capability-bearing wrappers below.
+    unsafe fn write_raw(addr: u32, data: &[u8; 16]) -> Result<(), ()> {
+        cortex_m::interrupt::free(|_| {
+            wait_bsy();
             clear_errors();
-            Err(())
-        } else {
-            Ok(())
+            unlock();
+
+            REG.seccr.write(PG);
+            let dst = addr as *mut u32;
+            for i in 0..4 {
+                let word = u32::from_le_bytes([
+                    data[i * 4],
+                    data[i * 4 + 1],
+                    data[i * 4 + 2],
+                    data[i * 4 + 3],
+                ]);
+                // SAFETY: the caller supplied either a validated generic
+                // address or an index-bounded journal address. Volatile writes
+                // preserve the controller's required four-word sequence.
+                unsafe { write_volatile(dst.add(i), word) };
+            }
+
+            wait_bsy();
+            REG.seccr.write(0);
+            let sr = REG.secsr.read();
+            lock();
+            cortex_m::asm::dsb();
+            cortex_m::asm::isb();
+            icache_invalidate();
+
+            if sr & ERR_MASK != 0 {
+                clear_errors();
+                Err(())
+            } else {
+                Ok(())
+            }
+        })
+    }
+
+    /// Program and read back a raw address already authorized by this module.
+    unsafe fn write_verified_raw(addr: u32, data: &[u8; 16]) -> Result<(), ()> {
+        // SAFETY: forwarded contract from the capability-bearing caller.
+        unsafe { write_raw(addr, data)? };
+
+        let src = addr as *const u8;
+        for (i, expected) in data.iter().enumerate() {
+            // SAFETY: the capability proves `addr..addr+16` is a valid flash
+            // quad-word. This is a read-only verification pass.
+            if unsafe { read_volatile(src.add(i)) } != *expected {
+                return Err(());
+            }
         }
-    })
-}
+        Ok(())
+    }
 
-/// Private raw verified writer. Page-127 journal code uses this capability;
-/// every generic/cross-module caller goes through the guarded public wrapper.
-unsafe fn write_quadword_verified_raw(addr: u32, data: &[u8; 16]) -> Result<(), ()> {
-    // SAFETY: forwarded contract from caller.
-    unsafe { write_quadword(addr, data)? };
+    pub(super) unsafe fn write_generic_verified(
+        addr: GenericSecureQwAddr,
+        data: &[u8; 16],
+    ) -> Result<(), ()> {
+        // SAFETY: `GenericSecureQwAddr` proves the full raw-writer contract
+        // except erased state, which remains the caller's responsibility.
+        unsafe { write_verified_raw(addr.get(), data) }
+    }
 
-    let src = addr as *const u8;
-    for i in 0..16 {
-        // SAFETY: caller's contract guarantees `addr..addr+16` is a
-        // valid 16-byte flash region; we only read.
-        if unsafe { read_volatile(src.add(i)) } != data[i] {
+    #[cfg(feature = "rdp2-self-lock")]
+    pub(super) unsafe fn write_journal_verified(
+        qw_index: usize,
+        data: &[u8; 16],
+    ) -> Result<(), ()> {
+        if qw_index >= 512 {
             return Err(());
         }
+        let addr = super::KEY_PAGE_ADDR + (qw_index as u32) * 16;
+        // SAFETY: the checked index confines the address to page 127 and the
+        // caller guarantees append-at-erased-frontier semantics.
+        unsafe { write_verified_raw(addr, data) }
     }
-    Ok(())
 }
 
 /// Program one quad-word **and read it back to confirm the bytes landed**.
@@ -349,13 +348,15 @@ unsafe fn write_quadword_verified_raw(addr: u32, data: &[u8; 16]) -> Result<(), 
 /// unable to overwrite the persisted final-PBS salt.
 ///
 /// # Safety
-/// Same contract as [`write_quadword`]. Page 127 is never a valid target.
+/// The destination must be erased. The address is validated here as an
+/// aligned quad-word wholly inside bank-1 pages 0..=126; page 127 is never a
+/// valid target.
 pub unsafe fn write_quadword_verified(addr: u32, data: &[u8; 16]) -> Result<(), ()> {
-    if overlaps_first_boot_journal(addr) {
-        return Err(());
-    }
-    // SAFETY: forwarded contract; page-127 overlap was rejected above.
-    unsafe { write_quadword_verified_raw(addr, data) }
+    let addr = GenericSecureQwAddr::new(addr).ok_or(())?;
+    // SAFETY: the validated capability excludes page 127, misalignment,
+    // out-of-bank ranges, and checked-add overflow. The caller still owns the
+    // erased-destination precondition.
+    unsafe { bank1_programming::write_generic_verified(addr, data) }
 }
 
 // ===========================================================================
@@ -465,7 +466,7 @@ pub fn is_secure_page_blank(page: u32) -> bool {
 
 /// Append one 16-byte record to the page-127 provisioning journal at
 /// `qw_index` (0..512). Read-back-verified; ICACHE is invalidated by
-/// `write_quadword_verified`.
+/// the same raw bank-1 writer used by `write_quadword_verified`.
 ///
 /// # Safety
 /// Programs persistent flash in page 127 (KEY_PAGE — owned outright by the
@@ -473,13 +474,9 @@ pub fn is_secure_page_blank(page: u32) -> bool {
 /// currently erased (the codec only ever appends at the scanned `next_free`).
 #[cfg(feature = "rdp2-self-lock")]
 pub unsafe fn write_journal_qw(qw_index: usize, rec: &[u8; 16]) -> Result<(), ()> {
-    if qw_index >= 512 {
-        return Err(());
-    }
-    let addr = KEY_PAGE_ADDR + (qw_index as u32) * 16;
-    // SAFETY: `addr` is quad-word aligned and inside page 127; the caller
-    // guarantees it is currently erased (append at `next_free`).
-    unsafe { write_quadword_verified_raw(addr, rec) }
+    // SAFETY: the child-module capability checks the index and confines the
+    // write to page 127; the caller guarantees append-at-erased-frontier.
+    unsafe { bank1_programming::write_journal_verified(qw_index, rec) }
 }
 
 /// **Irreversible.** Stage `FLASH_OPTR.RDP = 0xCC` (Level 2), commit the
@@ -1226,10 +1223,9 @@ pub unsafe fn write_ns_quadword_verified(addr: u32, data: &[u8; 16]) -> Result<(
 /// Erases a secure-bank page. Caller must ensure the page is part of
 /// the inactive A/B slot or is otherwise safe to clear.
 pub unsafe fn erase_secure_page(page: u32) -> Result<(), ()> {
-    assert!(page <= 127, "bank-1 page out of range");
-    if page == FIRST_BOOT_JOURNAL_PAGE_NUM {
-        return Err(());
-    }
+    // The proof constructor fails closed for page 127 and every out-of-range
+    // value before the flash controller is unlocked or any MMIO write occurs.
+    let page = GenericSecurePage::new(page).ok_or(())?.get();
     cortex_m::interrupt::free(|_| {
         wait_bsy();
         clear_errors();

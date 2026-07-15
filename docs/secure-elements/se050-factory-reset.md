@@ -26,7 +26,18 @@
 > §2a's "future optimisation — HUK-SAES derivation" has effectively landed.
 >
 > The two-entry TAG_POLICY design, the wipe flow, and the round-trip selftest
-> are still the shipping mechanism.
+> remain in the current implementation. The old page-125 PIN storage described
+> in the historical section below is retired.
+>
+> **Current first-field credential axes (2026-07-15).** Factory transport
+> credentials are derived from the factory-burned per-device OTP master via
+> the `transport_*` helpers. The implemented `rdp2-self-lock` candidate rotates
+> SE050 SCP03 and admin credentials to final BHK-axis derivations, and rotates
+> the OPTIGA E140 PBS to a final DHUK derivation bound to a fresh TRNG salt
+> persisted in the page-127 journal. It is implementation evidence, not a
+> production-approved ceremony. Authenticated per-unit handoff and
+> authenticate-before-rotate, durable old/new/KVN recovery, the exact E140
+> lifecycle-versus-final-rotation order, and silicon receipts remain gates.
 
 ## Why this document exists
 
@@ -74,7 +85,13 @@ user PIN gets locked out, the UserID can no longer authenticate anyone,
 so `delete_object_authed` can't run either. Every UserID-gated object
 becomes unreachable.
 
-## The design we shipped
+## Historical v3 flash-PIN design (retired)
+
+The following section preserves the original rationale for the two-entry
+policy and crash-resumable wipe. Its TRNG-generated page-125 admin-PIN storage
+is historical and must not be read as the current credential lifecycle; the
+current axes and first-field candidate are summarized above and in the
+production checklist.
 
 Every gated user object carries a **two-entry TAG_POLICY**:
 
@@ -181,16 +198,20 @@ re-introducing the unwipeable-orphan problem.
 
 ### 1. PlatformSCP03 keys
 
-Published NXP keys and the current deterministic helper output are
-transport/bring-up credentials only. The existing
-`hw::secret_keys::se050_scp03_{enc,mac,dek}_key()` plus
-`se050-rotate-scp03` path is a sacrificial validation mechanism, not the
-production target: it derives deterministically from the BHK axis (DHUK
-fallback when `bhk` is off) and does not implement the owner-required fresh
-TRNG final rotation. Production remains blocked on an authenticated migration
-from the per-device transport credential, durable old/new state and recovery,
-and reviewed KVN/atomicity and OPTIGA/E140 ordering. This document does not
-select that protocol or authorize PUT KEY on a real unit.
+Published NXP keys are historical bring-up credentials, not the candidate
+factory handoff. The candidate factory transport keyset comes from the
+factory-burned per-device OTP master through
+`transport_se050_scp03_{enc,mac,dek}()`; those labels are disjoint from every
+final credential label. The final `se050_scp03_{enc,mac,dek}_key()` helpers
+derive on the BHK axis (DHUK fallback only in builds without `bhk`).
+
+The journaled `rdp2-self-lock` candidate implements the transport-to-final
+rotation, but does not approve it for production. The separate
+`se050-rotate-scp03` halt path remains sacrificial validation evidence, not the
+field protocol. Production remains blocked on authenticated per-unit handoff
+and authenticate-before-rotate, durable old/new/KVN recovery and atomicity,
+the exact OPTIGA E140 lifecycle-versus-final-rotation order, and silicon
+receipts. This document does not authorize `PUT KEY` on a real unit.
 
 ### 2. Lifecycle of ADMIN_WIPE_OBJ PIN
 
@@ -201,13 +222,23 @@ area; `erase_admin_page()` clears that marker but does not rotate the derived
 credential. Re-pairing requires the reviewed BHK/root lifecycle, not a flash
 PIN rewrite.
 
-### 2a. Deterministic transport credential — implemented
+The factory transport admin PIN is a distinct OTP-master-derived credential
+from `transport_se050_admin_pin()`. The production contract requires the
+transport state to authenticate before it can be replaced with the final
+BHK-axis admin PIN; that authenticate-before-rotate evidence and the
+old/new/KVN recovery contract remain production gates.
 
-The current bring-up design derives the credential through the BHK/DHUK SAES
-KDF with domain tag `"pqsigner/se050-admin-pin-v1"`. The root never leaves
-silicon; only the derived credential is presented inside the secure channel.
-That property is useful transport evidence but is not production-final: the
-first-field handoff and fresh-TRNG rotation blockers above remain open.
+### 2a. Transport-to-final admin rotation — implemented candidate
+
+The final admin credential uses the BHK/DHUK SAES KDF with domain tag
+`"pqsigner/se050-admin-pin-v1"`; in the intended `bhk` build this is the BHK
+axis. The final root never leaves silicon, and only the derived credential is
+presented inside the secure channel. The factory transport credential instead
+uses the per-device OTP master and the disjoint
+`"pqsigner/transport/se050-admin-pin-v1"` label. The candidate code performs
+that replacement, but production approval still depends on the handoff,
+authenticate-before-rotate, durable recovery, ordering, and silicon gates
+listed above.
 
 ### 3. Attestation-based device pairing (not yet implemented)
 

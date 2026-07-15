@@ -93,11 +93,15 @@ based SLH-DSA has no nonce. Don't chase this.
 
 **Current SCP03 lifecycle.** The SE050 SCP03 channel is active (every TX
 has CLA=0x84). Factory defaults are not an acceptable production state:
-the factory installs per-device transport keysets, while the final
-fresh-TRNG-salted BHK-axis rotation belongs to the owner-approved first-field
-ceremony after RDP2 self-lock and BHK first write. OPTIGA PBS is DHUK-derived
-at boot and is never stored in flash; page 126 holds only the wrapped BHK.
-The exact E140 ratchet-versus-final-rotation order remains OPEN.
+the factory transport credentials are derived from the per-device OTP master
+burned for that handoff. After RDP2 self-lock and the BHK first write, the
+implemented first-field candidate rotates SE050 SCP03/admin credentials to
+the final BHK axis and rotates the OPTIGA E140 PBS to the final DHUK derivation
+bound to a fresh TRNG salt persisted in the page-127 journal. Page 126 holds
+only the DHUK-wrapped BHK. This candidate is not a production-approved
+ceremony: authenticated per-unit handoff and authenticate-before-rotate,
+durable old/new/KVN recovery, the exact E140 lifecycle-versus-final-rotation
+order, and silicon receipts remain OPEN.
 
 ---
 
@@ -1748,14 +1752,15 @@ fn set_counter(a: &mut [u8; AES_BLOCK], counter: u64) {
 //! The remaining `unsafe fn` markers sit on the public flash-*mutating*
 //! APIs (erase / program / bump) for commit-visibility — callers must
 //! reason about *which* flash bytes they are about to change. Read-only
-//! helpers (`read_key`, `pin_attempts_read`, `offchain_count_read`,
+//! helpers (`pin_attempts_read`, `offchain_count_read`,
 //! `last_userop_count_read`, `offchain_count_is_registered`,
-//! `is_key_blank`, `is_wipe_armed`) are safe `fn` because they cannot
+//! `is_wipe_armed`) are safe `fn` because they cannot
 //! commit anything; raw pointer derefs of flash memory inside them stay
 //! in tight `unsafe { ... }` blocks with `// SAFETY:` comments.
 
 use core::ptr::{read_volatile, write_volatile};
 
+use crate::flash_policy::{self, GenericSecurePage, GenericSecureQwAddr};
 use crate::hw::mmio::{Reg32, RoReg32};
 
 // ---------------------------------------------------------------------------
@@ -1789,7 +1794,7 @@ const FLASH_SECBOOTADD0R_OFF: u32 = 0x4C;
 /// option-byte authority remain open until their reviewed ceremony and silicon
 /// receipts close.
 #[allow(dead_code)]
-pub const FSBL_BASE_ADDR: u32 = 0x0C00_0000;
+pub const FSBL_BASE_ADDR: u32 = flash_policy::BANK1_BASE;
 
 // The pure RDP/SECBOOTADD0 decode + its host unit tests live in the
 // host-compiled `sphincs_tz_shared::lockdown` (this whole `hw` module is
@@ -1932,17 +1937,7 @@ fn icache_invalidate() {
 // ---------------------------------------------------------------------------
 
 /// Base address of the reserved first-boot journal page (page 127).
-pub const KEY_PAGE_ADDR: u32 = 0x0C0F_E000;
-const FIRST_BOOT_JOURNAL_PAGE_NUM: u32 = 127;
-const FLASH_PAGE_BYTES: u32 = 0x2000;
-const FIRST_BOOT_JOURNAL_PAGE_END: u32 = KEY_PAGE_ADDR + FLASH_PAGE_BYTES;
-
-fn overlaps_first_boot_journal(addr: u32) -> bool {
-    let Some(end) = addr.checked_add(16) else {
-        return true;
-    };
-    addr < FIRST_BOOT_JOURNAL_PAGE_END && end > KEY_PAGE_ADDR
-}
+pub const KEY_PAGE_ADDR: u32 = flash_policy::FIRST_BOOT_JOURNAL_ADDR;
 
 // NOTE: flash page 126 (the former OPTIGA PBS seal page at
 // 0x0C0F_C000) was freed by work-todo #24 — the Platform Binding
@@ -1987,87 +1982,95 @@ fn lock() {
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Program one quad-word (16 bytes / 128 bits) at the given flash address.
-///
-/// The address must be quad-word aligned (16-byte boundary) and must
-/// point within the key storage page. The destination must be erased
-/// (all 0xFF) before writing.
-///
-/// Returns `Err(())` only if the flash controller set one of the error
-/// flags (PROGERR / WRPERR / PGAERR / SIZERR / PGSERR). **Does not
-/// verify that the bytes actually landed correctly** — a torn write
-/// under brown-out can produce a half-programmed quad-word with no
-/// error flag set. For persistent data, use `write_quadword_verified`.
-///
-/// HIGH-12 fix: the whole unlock → program → lock sequence runs
-/// inside `cortex_m::interrupt::free` so an IRQ (especially SysTick
-/// or the OLED I2C callback) landing mid-sequence can't leave SECCR
-/// in an inconsistent state. On STM32U5 an interrupted program
-/// sequence can latch PGSERR; the `free` block keeps the sequence
-/// atomic.
-///
-/// # Safety
-/// Commits bytes to flash. Caller must guarantee `addr` is quad-word
-/// aligned, inside a writable secure-bank page, and currently erased.
-unsafe fn write_quadword(addr: u32, data: &[u8; 16]) -> Result<(), ()> {
-    cortex_m::interrupt::free(|_| {
-        wait_bsy();
-        clear_errors();
-        unlock();
+// The raw bank-1 program primitive is private to this child module.  Its only
+// outward capabilities are (a) a generic writer that requires the pure
+// policy's validated, journal-disjoint address type and (b) an index-bounded
+// journal writer.  A same-file helper cannot alias the raw primitive because
+// Rust privacy prevents the parent module from naming child-private items.
+mod bank1_programming {
+    use super::{
+        clear_errors, icache_invalidate, lock, read_volatile, unlock, wait_bsy, write_volatile,
+        GenericSecureQwAddr, ERR_MASK, PG, REG,
+    };
 
-        // Set PG bit
-        REG.seccr.write(PG);
-
-        // Write 4 × 32-bit words to the target address.
-        let dst = addr as *mut u32;
-        for i in 0..4 {
-            let word = u32::from_le_bytes([
-                data[i * 4],
-                data[i * 4 + 1],
-                data[i * 4 + 2],
-                data[i * 4 + 3],
-            ]);
-            // SAFETY: caller asserts `addr..addr+16` is a valid, erased,
-            // quad-word-aligned flash region. Volatile prevents the
-            // compiler from reordering or coalescing the four word writes
-            // that the flash controller expects in sequence.
-            unsafe { write_volatile(dst.add(i), word) };
-        }
-
-        wait_bsy();
-
-        // Clear PG
-        REG.seccr.write(0);
-        let sr = REG.secsr.read();
-        lock();
-        cortex_m::asm::dsb();
-        cortex_m::asm::isb();
-        icache_invalidate();
-
-        if sr & ERR_MASK != 0 {
+    /// Program one raw bank-1 quad-word. The destination contract is supplied
+    /// exclusively by one of the two capability-bearing wrappers below.
+    unsafe fn write_raw(addr: u32, data: &[u8; 16]) -> Result<(), ()> {
+        cortex_m::interrupt::free(|_| {
+            wait_bsy();
             clear_errors();
-            Err(())
-        } else {
-            Ok(())
+            unlock();
+
+            REG.seccr.write(PG);
+            let dst = addr as *mut u32;
+            for i in 0..4 {
+                let word = u32::from_le_bytes([
+                    data[i * 4],
+                    data[i * 4 + 1],
+                    data[i * 4 + 2],
+                    data[i * 4 + 3],
+                ]);
+                // SAFETY: the caller supplied either a validated generic
+                // address or an index-bounded journal address. Volatile writes
+                // preserve the controller's required four-word sequence.
+                unsafe { write_volatile(dst.add(i), word) };
+            }
+
+            wait_bsy();
+            REG.seccr.write(0);
+            let sr = REG.secsr.read();
+            lock();
+            cortex_m::asm::dsb();
+            cortex_m::asm::isb();
+            icache_invalidate();
+
+            if sr & ERR_MASK != 0 {
+                clear_errors();
+                Err(())
+            } else {
+                Ok(())
+            }
+        })
+    }
+
+    /// Program and read back a raw address already authorized by this module.
+    unsafe fn write_verified_raw(addr: u32, data: &[u8; 16]) -> Result<(), ()> {
+        // SAFETY: forwarded contract from the capability-bearing caller.
+        unsafe { write_raw(addr, data)? };
+
+        let src = addr as *const u8;
+        for (i, expected) in data.iter().enumerate() {
+            // SAFETY: the capability proves `addr..addr+16` is a valid flash
+            // quad-word. This is a read-only verification pass.
+            if unsafe { read_volatile(src.add(i)) } != *expected {
+                return Err(());
+            }
         }
-    })
-}
+        Ok(())
+    }
 
-/// Private raw verified writer. Page-127 journal code uses this capability;
-/// every generic/cross-module caller goes through the guarded public wrapper.
-unsafe fn write_quadword_verified_raw(addr: u32, data: &[u8; 16]) -> Result<(), ()> {
-    // SAFETY: forwarded contract from caller.
-    unsafe { write_quadword(addr, data)? };
+    pub(super) unsafe fn write_generic_verified(
+        addr: GenericSecureQwAddr,
+        data: &[u8; 16],
+    ) -> Result<(), ()> {
+        // SAFETY: `GenericSecureQwAddr` proves the full raw-writer contract
+        // except erased state, which remains the caller's responsibility.
+        unsafe { write_verified_raw(addr.get(), data) }
+    }
 
-    let src = addr as *const u8;
-    for i in 0..16 {
-        // SAFETY: caller's contract guarantees `addr..addr+16` is a
-        // valid 16-byte flash region; we only read.
-        if unsafe { read_volatile(src.add(i)) } != data[i] {
+    #[cfg(feature = "rdp2-self-lock")]
+    pub(super) unsafe fn write_journal_verified(
+        qw_index: usize,
+        data: &[u8; 16],
+    ) -> Result<(), ()> {
+        if qw_index >= 512 {
             return Err(());
         }
+        let addr = super::KEY_PAGE_ADDR + (qw_index as u32) * 16;
+        // SAFETY: the checked index confines the address to page 127 and the
+        // caller guarantees append-at-erased-frontier semantics.
+        unsafe { write_verified_raw(addr, data) }
     }
-    Ok(())
 }
 
 /// Program one quad-word **and read it back to confirm the bytes landed**.
@@ -2081,11 +2084,11 @@ unsafe fn write_quadword_verified_raw(addr: u32, data: &[u8; 16]) -> Result<(), 
 /// # Safety
 /// Same contract as [`write_quadword`]. Page 127 is never a valid target.
 pub unsafe fn write_quadword_verified(addr: u32, data: &[u8; 16]) -> Result<(), ()> {
-    if overlaps_first_boot_journal(addr) {
-        return Err(());
-    }
-    // SAFETY: forwarded contract; page-127 overlap was rejected above.
-    unsafe { write_quadword_verified_raw(addr, data) }
+    let addr = GenericSecureQwAddr::new(addr).ok_or(())?;
+    // SAFETY: the validated capability excludes page 127, misalignment,
+    // out-of-bank ranges, and checked-add overflow. The caller still owns the
+    // erased-destination precondition.
+    unsafe { bank1_programming::write_generic_verified(addr, data) }
 }
 
 // ===========================================================================
@@ -2203,13 +2206,9 @@ pub fn is_secure_page_blank(page: u32) -> bool {
 /// currently erased (the codec only ever appends at the scanned `next_free`).
 #[cfg(feature = "rdp2-self-lock")]
 pub unsafe fn write_journal_qw(qw_index: usize, rec: &[u8; 16]) -> Result<(), ()> {
-    if qw_index >= 512 {
-        return Err(());
-    }
-    let addr = KEY_PAGE_ADDR + (qw_index as u32) * 16;
-    // SAFETY: `addr` is quad-word aligned and inside page 127; the caller
-    // guarantees it is currently erased (append at `next_free`).
-    unsafe { write_quadword_verified_raw(addr, rec) }
+    // SAFETY: the child-module capability checks the index and confines the
+    // write to page 127; the caller guarantees append-at-erased-frontier.
+    unsafe { bank1_programming::write_journal_verified(qw_index, rec) }
 }
 
 /// **Irreversible.** Stage `FLASH_OPTR.RDP = 0xCC` (Level 2), commit the
@@ -2956,10 +2955,9 @@ pub unsafe fn write_ns_quadword_verified(addr: u32, data: &[u8; 16]) -> Result<(
 /// Erases a secure-bank page. Caller must ensure the page is part of
 /// the inactive A/B slot or is otherwise safe to clear.
 pub unsafe fn erase_secure_page(page: u32) -> Result<(), ()> {
-    assert!(page <= 127, "bank-1 page out of range");
-    if page == FIRST_BOOT_JOURNAL_PAGE_NUM {
-        return Err(());
-    }
+    // The proof constructor fails closed for page 127 and every out-of-range
+    // value before the flash controller is unlocked or any MMIO write occurs.
+    let page = GenericSecurePage::new(page).ok_or(())?.get();
     cortex_m::interrupt::free(|_| {
         wait_bsy();
         clear_errors();
@@ -4009,7 +4007,18 @@ pub unsafe fn userop_sigs_bump(slot_key: &[u8; 8], new_count: u64) -> Result<(),
 > §2a's "future optimisation — HUK-SAES derivation" has effectively landed.
 >
 > The two-entry TAG_POLICY design, the wipe flow, and the round-trip selftest
-> are still the shipping mechanism.
+> remain in the current implementation. The old page-125 PIN storage described
+> in the historical section below is retired.
+>
+> **Current first-field credential axes (2026-07-15).** Factory transport
+> credentials are derived from the factory-burned per-device OTP master via
+> the `transport_*` helpers. The implemented `rdp2-self-lock` candidate rotates
+> SE050 SCP03 and admin credentials to final BHK-axis derivations, and rotates
+> the OPTIGA E140 PBS to a final DHUK derivation bound to a fresh TRNG salt
+> persisted in the page-127 journal. It is implementation evidence, not a
+> production-approved ceremony. Authenticated per-unit handoff and
+> authenticate-before-rotate, durable old/new/KVN recovery, the exact E140
+> lifecycle-versus-final-rotation order, and silicon receipts remain gates.
 
 ## Why this document exists
 
@@ -4057,7 +4066,13 @@ user PIN gets locked out, the UserID can no longer authenticate anyone,
 so `delete_object_authed` can't run either. Every UserID-gated object
 becomes unreachable.
 
-## The design we shipped
+## Historical v3 flash-PIN design (retired)
+
+The following section preserves the original rationale for the two-entry
+policy and crash-resumable wipe. Its TRNG-generated page-125 admin-PIN storage
+is historical and must not be read as the current credential lifecycle; the
+current axes and first-field candidate are summarized above and in the
+production checklist.
 
 Every gated user object carries a **two-entry TAG_POLICY**:
 
@@ -4164,16 +4179,20 @@ re-introducing the unwipeable-orphan problem.
 
 ### 1. PlatformSCP03 keys
 
-Published NXP keys and the current deterministic helper output are
-transport/bring-up credentials only. The existing
-`hw::secret_keys::se050_scp03_{enc,mac,dek}_key()` plus
-`se050-rotate-scp03` path is a sacrificial validation mechanism, not the
-production target: it derives deterministically from the BHK axis (DHUK
-fallback when `bhk` is off) and does not implement the owner-required fresh
-TRNG final rotation. Production remains blocked on an authenticated migration
-from the per-device transport credential, durable old/new state and recovery,
-and reviewed KVN/atomicity and OPTIGA/E140 ordering. This document does not
-select that protocol or authorize PUT KEY on a real unit.
+Published NXP keys are historical bring-up credentials, not the candidate
+factory handoff. The candidate factory transport keyset comes from the
+factory-burned per-device OTP master through
+`transport_se050_scp03_{enc,mac,dek}()`; those labels are disjoint from every
+final credential label. The final `se050_scp03_{enc,mac,dek}_key()` helpers
+derive on the BHK axis (DHUK fallback only in builds without `bhk`).
+
+The journaled `rdp2-self-lock` candidate implements the transport-to-final
+rotation, but does not approve it for production. The separate
+`se050-rotate-scp03` halt path remains sacrificial validation evidence, not the
+field protocol. Production remains blocked on authenticated per-unit handoff
+and authenticate-before-rotate, durable old/new/KVN recovery and atomicity,
+the exact OPTIGA E140 lifecycle-versus-final-rotation order, and silicon
+receipts. This document does not authorize `PUT KEY` on a real unit.
 
 ### 2. Lifecycle of ADMIN_WIPE_OBJ PIN
 
@@ -4184,13 +4203,23 @@ area; `erase_admin_page()` clears that marker but does not rotate the derived
 credential. Re-pairing requires the reviewed BHK/root lifecycle, not a flash
 PIN rewrite.
 
-### 2a. Deterministic transport credential — implemented
+The factory transport admin PIN is a distinct OTP-master-derived credential
+from `transport_se050_admin_pin()`. The production contract requires the
+transport state to authenticate before it can be replaced with the final
+BHK-axis admin PIN; that authenticate-before-rotate evidence and the
+old/new/KVN recovery contract remain production gates.
 
-The current bring-up design derives the credential through the BHK/DHUK SAES
-KDF with domain tag `"pqsigner/se050-admin-pin-v1"`. The root never leaves
-silicon; only the derived credential is presented inside the secure channel.
-That property is useful transport evidence but is not production-final: the
-first-field handoff and fresh-TRNG rotation blockers above remain open.
+### 2a. Transport-to-final admin rotation — implemented candidate
+
+The final admin credential uses the BHK/DHUK SAES KDF with domain tag
+`"pqsigner/se050-admin-pin-v1"`; in the intended `bhk` build this is the BHK
+axis. The final root never leaves silicon, and only the derived credential is
+presented inside the secure channel. The factory transport credential instead
+uses the per-device OTP master and the disjoint
+`"pqsigner/transport/se050-admin-pin-v1"` label. The candidate code performs
+that replacement, but production approval still depends on the handoff,
+authenticate-before-rotate, durable recovery, ordering, and silicon gates
+listed above.
 
 ### 3. Attestation-based device pairing (not yet implemented)
 

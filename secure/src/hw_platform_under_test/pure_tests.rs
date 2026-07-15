@@ -58,7 +58,13 @@ const HW_MOD_SRC: &str = include_str!("../hw/mod.rs");
 
 #[test]
 fn positive_flash_key_page_127() {
-    assert!(FLASH_SRC.contains("pub const KEY_PAGE_ADDR: u32 = 0x0C0F_E000;"));
+    assert_eq!(
+        crate::flash_policy::FIRST_BOOT_JOURNAL_ADDR,
+        0x0C0F_E000
+    );
+    assert!(FLASH_SRC.contains(
+        "pub const KEY_PAGE_ADDR: u32 = flash_policy::FIRST_BOOT_JOURNAL_ADDR;"
+    ));
 }
 
 #[test]
@@ -961,10 +967,10 @@ fn negative_flash_unlock_keys_are_st_canonical_not_swapped() {
 
 #[test]
 fn negative_flash_write_quadword_inside_interrupt_free() {
-    let body = extract_body(FLASH_SRC, "unsafe fn write_quadword(addr: u32, data: &[u8; 16]) -> Result<(), ()> {");
+    let body = extract_body(FLASH_SRC, "unsafe fn write_raw(addr: u32, data: &[u8; 16]) -> Result<(), ()> {");
     assert!(
         body.contains("cortex_m::interrupt::free"),
-        "write_quadword MUST run inside cortex_m::interrupt::free (HIGH-12 fix)"
+        "raw bank-1 writer MUST run inside cortex_m::interrupt::free (HIGH-12 fix)"
     );
 }
 
@@ -1062,10 +1068,10 @@ fn negative_flash_write_quadword_verified_compares_every_byte() {
     // `for i in 0..8`) would only catch the first half.
     let body = extract_body(
         FLASH_SRC,
-        "unsafe fn write_quadword_verified_raw(addr: u32, data: &[u8; 16]) -> Result<(), ()> {",
+        "unsafe fn write_verified_raw(addr: u32, data: &[u8; 16]) -> Result<(), ()> {",
     );
-    assert!(body.contains("for i in 0..16 {"));
-    assert!(body.contains("!= data[i]"));
+    assert!(body.contains("for (i, expected) in data.iter().enumerate() {"));
+    assert!(body.contains("!= *expected"));
     assert!(body.contains("return Err(());"));
 }
 
@@ -1452,26 +1458,39 @@ fn negative_page_127_has_no_generic_erase_or_key_storage_owner() {
         FLASH_SRC,
         "pub unsafe fn write_quadword_verified(addr: u32, data: &[u8; 16]) -> Result<(), ()> {",
     );
-    assert!(generic_write.contains("if overlaps_first_boot_journal(addr)"));
+    assert!(generic_write.contains("GenericSecureQwAddr::new(addr).ok_or(())?"));
+    assert!(generic_write.contains("bank1_programming::write_generic_verified(addr, data)"));
 
     let generic_erase = extract_body(
         FLASH_SRC,
         "pub unsafe fn erase_secure_page(page: u32) -> Result<(), ()> {",
     );
-    assert!(generic_erase.contains("if page == FIRST_BOOT_JOURNAL_PAGE_NUM"));
+    assert!(generic_erase.contains("GenericSecurePage::new(page).ok_or(())?.get()"));
 
     let journal_write = extract_body(
         FLASH_SRC,
         "pub unsafe fn write_journal_qw(qw_index: usize, rec: &[u8; 16]) -> Result<(), ()> {",
     );
-    assert!(journal_write.contains("write_quadword_verified_raw(addr, rec)"));
+    assert!(journal_write.contains("bank1_programming::write_journal_verified(qw_index, rec)"));
 
-    // Definition + guarded wrapper + journal writer are the only raw verified
-    // capability references. Likewise, only the raw verified writer may call
-    // the unverified primitive. These cardinalities catch renamed same-file
-    // bypasses; the runtime guards catch renamed cross-file callers.
-    assert_eq!(FLASH_SRC.matches("write_quadword_verified_raw(").count(), 3);
-    assert_eq!(FLASH_SRC.matches("write_quadword(").count(), 2);
+    // Raw programming lives in a private child module and neither raw helper
+    // is exported. Rust privacy, rather than an identifier-occurrence count,
+    // prevents the parent or another module from aliasing the raw capability.
+    let programming = extract_body(FLASH_SRC, "mod bank1_programming {");
+    let raw_decl = programming
+        .lines()
+        .find(|line| line.contains("unsafe fn write_raw("))
+        .expect("raw writer declaration");
+    let verified_decl = programming
+        .lines()
+        .find(|line| line.contains("unsafe fn write_verified_raw("))
+        .expect("raw verified-writer declaration");
+    assert!(raw_decl.trim_start().starts_with("unsafe fn write_raw("));
+    assert!(
+        verified_decl
+            .trim_start()
+            .starts_with("unsafe fn write_verified_raw(")
+    );
 }
 
 #[test]
