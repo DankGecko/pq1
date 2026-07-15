@@ -8,19 +8,22 @@ Design and attack a production provisioning + first-field lifecycle:
    attestation state, then ships at RDP0 so the owner can verify the MCU
    before first power. It does not install the final pairing secret, perform
    the BHK first write, create the wallet seed, or set RDP2.
-2. On first field boot, the FSBL self-locks RDP2 and performs the BHK first
-   write. The production-final pairing rotation must include fresh TRNG input
-   before the seed wizard; current code does not implement that protocol.
-3. Current bring-up OPTIGA PBS is deterministic DHUK-derived and has no flash
-   copy; page 126 stores only the DHUK-wrapped BHK. Design the final derivation,
-   durable non-secret salt/state owner, and power-cut recovery without
-   inventing an HUK-wrapped SCP03/PBS secret blob.
+2. On first field boot, the secure-application `rdp2-self-lock` candidate
+   self-locks RDP2, performs the BHK first write, and journal-rotates the
+   transport credentials to BHK-rooted SE050 keys and a fresh-TRNG-salted
+   DHUK OPTIGA PBS before the seed wizard. The code exists but is not an
+   approved production ceremony.
+3. Page 126 stores only the DHUK-wrapped BHK; page 127 owns the append-only
+   first-boot journal and persisted salt. Require authenticated per-device
+   handoff and authenticate-before-rotate, then prove old/new/KVN recovery,
+   power-cut safety, and the exact E140 lifecycle ordering without inventing
+   an HUK-wrapped SCP03/PBS secret blob.
 4. Establish verifiable per-device attestation binding the physical SE050
    and OPTIGA UIDs to the STM32 UID so swap attacks fail at boot.
 
-Constraints: the exact final derivation and E140 ratchet-versus-final-PBS-
-rotation ordering are OPEN, owner-gated, and silicon-gated. Do not select them
-on paper and do not infer authority for an irreversible ceremony from this
+Constraints: authenticate-before-rotate, old/new/KVN recovery, the exact E140
+ratchet-versus-final-PBS ordering, and silicon receipts are OPEN and
+owner-gated. Do not infer authority for an irreversible ceremony from this
 research prompt.
 
 Deliverables: protocol/state diagram, durable-state sketch, power-cut matrix,
@@ -1930,6 +1933,16 @@ fn icache_invalidate() {
 
 /// Base address of the reserved first-boot journal page (page 127).
 pub const KEY_PAGE_ADDR: u32 = 0x0C0F_E000;
+const FIRST_BOOT_JOURNAL_PAGE_NUM: u32 = 127;
+const FLASH_PAGE_BYTES: u32 = 0x2000;
+const FIRST_BOOT_JOURNAL_PAGE_END: u32 = KEY_PAGE_ADDR + FLASH_PAGE_BYTES;
+
+fn overlaps_first_boot_journal(addr: u32) -> bool {
+    let Some(end) = addr.checked_add(16) else {
+        return true;
+    };
+    addr < FIRST_BOOT_JOURNAL_PAGE_END && end > KEY_PAGE_ADDR
+}
 
 // NOTE: flash page 126 (the former OPTIGA PBS seal page at
 // 0x0C0F_C000) was freed by work-todo #24 — the Platform Binding
@@ -2040,21 +2053,9 @@ unsafe fn write_quadword(addr: u32, data: &[u8; 16]) -> Result<(), ()> {
     })
 }
 
-/// Program one quad-word **and read it back to confirm the bytes landed**.
-///
-/// Detects class-A torn writes (brown-out mid-program leaving some bits
-/// committed and others not): NOR flash can leave such a QW readable
-/// without flagging PROGERR, so a pure `write_quadword` returns `Ok`
-/// while the actual memory differs from `data`. The read-back compare
-/// here catches that deterministically.
-///
-/// Use this for anything that matters (admin PIN, PBS, pairing key,
-/// wipe flag). Internal helpers that don't care about durability can
-/// keep using `write_quadword`.
-///
-/// # Safety
-/// Same contract as [`write_quadword`].
-pub unsafe fn write_quadword_verified(addr: u32, data: &[u8; 16]) -> Result<(), ()> {
+/// Private raw verified writer. Page-127 journal code uses this capability;
+/// every generic/cross-module caller goes through the guarded public wrapper.
+unsafe fn write_quadword_verified_raw(addr: u32, data: &[u8; 16]) -> Result<(), ()> {
     // SAFETY: forwarded contract from caller.
     unsafe { write_quadword(addr, data)? };
 
@@ -2067,6 +2068,24 @@ pub unsafe fn write_quadword_verified(addr: u32, data: &[u8; 16]) -> Result<(), 
         }
     }
     Ok(())
+}
+
+/// Program one quad-word **and read it back to confirm the bytes landed**.
+///
+/// Detects class-A torn writes (brown-out mid-program leaving some bits
+/// committed and others not). The first-boot journal page is deliberately
+/// rejected: its only writer is [`write_journal_qw`], which holds the private
+/// raw capability above. This makes a renamed or cross-module generic caller
+/// unable to overwrite the persisted final-PBS salt.
+///
+/// # Safety
+/// Same contract as [`write_quadword`]. Page 127 is never a valid target.
+pub unsafe fn write_quadword_verified(addr: u32, data: &[u8; 16]) -> Result<(), ()> {
+    if overlaps_first_boot_journal(addr) {
+        return Err(());
+    }
+    // SAFETY: forwarded contract; page-127 overlap was rejected above.
+    unsafe { write_quadword_verified_raw(addr, data) }
 }
 
 // ===========================================================================
@@ -2190,7 +2209,7 @@ pub unsafe fn write_journal_qw(qw_index: usize, rec: &[u8; 16]) -> Result<(), ()
     let addr = KEY_PAGE_ADDR + (qw_index as u32) * 16;
     // SAFETY: `addr` is quad-word aligned and inside page 127; the caller
     // guarantees it is currently erased (append at `next_free`).
-    unsafe { write_quadword_verified(addr, rec) }
+    unsafe { write_quadword_verified_raw(addr, rec) }
 }
 
 /// **Irreversible.** Stage `FLASH_OPTR.RDP = 0xCC` (Level 2), commit the
@@ -2938,6 +2957,9 @@ pub unsafe fn write_ns_quadword_verified(addr: u32, data: &[u8; 16]) -> Result<(
 /// the inactive A/B slot or is otherwise safe to clear.
 pub unsafe fn erase_secure_page(page: u32) -> Result<(), ()> {
     assert!(page <= 127, "bank-1 page out of range");
+    if page == FIRST_BOOT_JOURNAL_PAGE_NUM {
+        return Err(());
+    }
     cortex_m::interrupt::free(|_| {
         wait_bsy();
         clear_errors();

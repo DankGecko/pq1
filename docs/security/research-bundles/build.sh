@@ -434,19 +434,22 @@ Design and attack a production provisioning + first-field lifecycle:
    attestation state, then ships at RDP0 so the owner can verify the MCU
    before first power. It does not install the final pairing secret, perform
    the BHK first write, create the wallet seed, or set RDP2.
-2. On first field boot, the FSBL self-locks RDP2 and performs the BHK first
-   write. The production-final pairing rotation must include fresh TRNG input
-   before the seed wizard; current code does not implement that protocol.
-3. Current bring-up OPTIGA PBS is deterministic DHUK-derived and has no flash
-   copy; page 126 stores only the DHUK-wrapped BHK. Design the final derivation,
-   durable non-secret salt/state owner, and power-cut recovery without
-   inventing an HUK-wrapped SCP03/PBS secret blob.
+2. On first field boot, the secure-application `rdp2-self-lock` candidate
+   self-locks RDP2, performs the BHK first write, and journal-rotates the
+   transport credentials to BHK-rooted SE050 keys and a fresh-TRNG-salted
+   DHUK OPTIGA PBS before the seed wizard. The code exists but is not an
+   approved production ceremony.
+3. Page 126 stores only the DHUK-wrapped BHK; page 127 owns the append-only
+   first-boot journal and persisted salt. Require authenticated per-device
+   handoff and authenticate-before-rotate, then prove old/new/KVN recovery,
+   power-cut safety, and the exact E140 lifecycle ordering without inventing
+   an HUK-wrapped SCP03/PBS secret blob.
 4. Establish verifiable per-device attestation binding the physical SE050
    and OPTIGA UIDs to the STM32 UID so swap attacks fail at boot.
 
-Constraints: the exact final derivation and E140 ratchet-versus-final-PBS-
-rotation ordering are OPEN, owner-gated, and silicon-gated. Do not select them
-on paper and do not infer authority for an irreversible ceremony from this
+Constraints: authenticate-before-rotate, old/new/KVN recovery, the exact E140
+ratchet-versus-final-PBS ordering, and silicon receipts are OPEN and
+owner-gated. Do not infer authority for an irreversible ceremony from this
 research prompt.
 
 Deliverables: protocol/state diagram, durable-state sketch, power-cut matrix,

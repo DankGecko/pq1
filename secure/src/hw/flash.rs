@@ -203,6 +203,16 @@ fn icache_invalidate() {
 
 /// Base address of the reserved first-boot journal page (page 127).
 pub const KEY_PAGE_ADDR: u32 = 0x0C0F_E000;
+const FIRST_BOOT_JOURNAL_PAGE_NUM: u32 = 127;
+const FLASH_PAGE_BYTES: u32 = 0x2000;
+const FIRST_BOOT_JOURNAL_PAGE_END: u32 = KEY_PAGE_ADDR + FLASH_PAGE_BYTES;
+
+fn overlaps_first_boot_journal(addr: u32) -> bool {
+    let Some(end) = addr.checked_add(16) else {
+        return true;
+    };
+    addr < FIRST_BOOT_JOURNAL_PAGE_END && end > KEY_PAGE_ADDR
+}
 
 // NOTE: flash page 126 (the former OPTIGA PBS seal page at
 // 0x0C0F_C000) was freed by work-todo #24 — the Platform Binding
@@ -313,21 +323,9 @@ unsafe fn write_quadword(addr: u32, data: &[u8; 16]) -> Result<(), ()> {
     })
 }
 
-/// Program one quad-word **and read it back to confirm the bytes landed**.
-///
-/// Detects class-A torn writes (brown-out mid-program leaving some bits
-/// committed and others not): NOR flash can leave such a QW readable
-/// without flagging PROGERR, so a pure `write_quadword` returns `Ok`
-/// while the actual memory differs from `data`. The read-back compare
-/// here catches that deterministically.
-///
-/// Use this for anything that matters (admin PIN, PBS, pairing key,
-/// wipe flag). Internal helpers that don't care about durability can
-/// keep using `write_quadword`.
-///
-/// # Safety
-/// Same contract as [`write_quadword`].
-pub unsafe fn write_quadword_verified(addr: u32, data: &[u8; 16]) -> Result<(), ()> {
+/// Private raw verified writer. Page-127 journal code uses this capability;
+/// every generic/cross-module caller goes through the guarded public wrapper.
+unsafe fn write_quadword_verified_raw(addr: u32, data: &[u8; 16]) -> Result<(), ()> {
     // SAFETY: forwarded contract from caller.
     unsafe { write_quadword(addr, data)? };
 
@@ -340,6 +338,24 @@ pub unsafe fn write_quadword_verified(addr: u32, data: &[u8; 16]) -> Result<(), 
         }
     }
     Ok(())
+}
+
+/// Program one quad-word **and read it back to confirm the bytes landed**.
+///
+/// Detects class-A torn writes (brown-out mid-program leaving some bits
+/// committed and others not). The first-boot journal page is deliberately
+/// rejected: its only writer is [`write_journal_qw`], which holds the private
+/// raw capability above. This makes a renamed or cross-module generic caller
+/// unable to overwrite the persisted final-PBS salt.
+///
+/// # Safety
+/// Same contract as [`write_quadword`]. Page 127 is never a valid target.
+pub unsafe fn write_quadword_verified(addr: u32, data: &[u8; 16]) -> Result<(), ()> {
+    if overlaps_first_boot_journal(addr) {
+        return Err(());
+    }
+    // SAFETY: forwarded contract; page-127 overlap was rejected above.
+    unsafe { write_quadword_verified_raw(addr, data) }
 }
 
 // ===========================================================================
@@ -463,7 +479,7 @@ pub unsafe fn write_journal_qw(qw_index: usize, rec: &[u8; 16]) -> Result<(), ()
     let addr = KEY_PAGE_ADDR + (qw_index as u32) * 16;
     // SAFETY: `addr` is quad-word aligned and inside page 127; the caller
     // guarantees it is currently erased (append at `next_free`).
-    unsafe { write_quadword_verified(addr, rec) }
+    unsafe { write_quadword_verified_raw(addr, rec) }
 }
 
 /// **Irreversible.** Stage `FLASH_OPTR.RDP = 0xCC` (Level 2), commit the
@@ -1211,6 +1227,9 @@ pub unsafe fn write_ns_quadword_verified(addr: u32, data: &[u8; 16]) -> Result<(
 /// the inactive A/B slot or is otherwise safe to clear.
 pub unsafe fn erase_secure_page(page: u32) -> Result<(), ()> {
     assert!(page <= 127, "bank-1 page out of range");
+    if page == FIRST_BOOT_JOURNAL_PAGE_NUM {
+        return Err(());
+    }
     cortex_m::interrupt::free(|_| {
         wait_bsy();
         clear_errors();

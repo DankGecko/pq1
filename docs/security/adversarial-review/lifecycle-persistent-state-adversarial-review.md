@@ -12,7 +12,9 @@ OPTIGA and SE050 objects, not merely whether each local driver works.
 > BHK first-write and TRNG-salted OPTIGA/SE050 key rotation. That flow is
 > tracked by `docs/work-todo.md` item 36 and has an **implemented candidate
 > behind `rdp2-self-lock`, but is not production-approved or authorized for
-> execution**. A review may compile it and run host-only simulations;
+> execution**. Authenticated per-unit handoff must prove transport credentials
+> before rotation, and resume must distinguish old/new credentials and KVN.
+> A review may compile it and run host-only simulations;
 > this playbook does not authorize option-byte burns, key rotation, destructive
 > wipe, or RMA access.
 
@@ -84,9 +86,9 @@ recovery costs or destroys.
 4. **Adopted first-boot requirements.** `docs/work-todo.md` item 36 and
    `docs/firmware/feature-flags.md` define the RDP0 shipment and post-lock key
    rotation ordering. An executing candidate now exists behind
-   `rdp2-self-lock`; treat it as unapproved until authenticated handoff,
-   recovery/KVN semantics, E140 ordering, cut-point tests, and authorized
-   silicon receipts close.
+   `rdp2-self-lock`; treat it as unapproved until authenticated handoff and
+   authenticate-before-rotate, old/new/KVN recovery semantics, E140 ordering,
+   cut-point tests, and authorized silicon receipts close.
 5. **Sibling evidence.** Image/rollback checks, SE policy tests, option-byte
    receipts, USB authorization, and off-chain counter models remain owned by
    their respective playbooks. Import their results into the lifecycle model;

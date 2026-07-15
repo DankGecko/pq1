@@ -26,7 +26,7 @@ There are three different things a SE secret can be rooted in, picked at compile
 
 | Build features | OPTIGA PBS root (`optiga_pairing_secret`) | SE050 admin PIN root (`se050_admin_pin`) | SE050 SCP03 keys (today / after #20) | Ships? |
 |---|---|---|---|---|
-| **Current candidate hardware roots:** `saes-dhuk` + `bhk` + `rdp2-self-lock` (no hardcoded keys) | transport PBS = silicon **DHUK** via `SAES-CMAC(DHUK, "pqsigner/optiga-pbs-v1")`; after journaled `ALL_DONE`, `current_pbs()` selects the TRNG-salted v2 derivation | transport/admin axis and the final candidate derivations use silicon **BHK** through domain-separated helpers | the journaled transport→final rotation candidate is implemented; authenticated handoff, recovery/KVN semantics, E140 ordering, and silicon evidence remain OPEN | 🚫 implemented candidate only; not production-approved |
+| **Current candidate hardware roots:** `saes-dhuk` + `bhk` + `rdp2-self-lock` (no hardcoded keys) | factory transport PBS = factory-burned **OTP master**; after journaled `ALL_DONE`, final PBS = silicon **DHUK** + persisted TRNG salt | factory transport admin = **OTP master**; final admin = silicon **BHK** | factory transport SCP03 = **OTP master**; the candidate rotates to BHK-rooted final keys | 🚫 implemented candidate only; authenticate-before-rotate, old/new/KVN recovery, E140 ordering, silicon evidence, and production approval remain OPEN |
 | `make dual-se-bhk-e2e` (`saes-dhuk,bhk,e2e-test`) | silicon DHUK | silicon BHK | factory (probe-derived if `se050-derived-scp03` also added) | ❌ test image (`e2e-test`) |
 | `make dual-se-admin-wipe-e2e`, `make e2e-hw` (`otp-hardcoded-master-key`, no `bhk`) | **compile-time OTP constant** (HKDF) | `derive_into_bhk` *falls through* → **compile-time OTP constant** (HKDF) | published factory keys | ❌ dev-only (fence) |
 | `bhk-hardcoded-master-key` (dev) | (per the DHUK/OTP arm) | **compile-time BHK constant** (HKDF) | published factory keys | ❌ dev-only (fence) |
@@ -37,14 +37,17 @@ There are three different things a SE secret can be rooted in, picked at compile
 **Provisioning-order constraint (production target, not an approved ceremony):**
 because the BHK is stored DHUK-ECB-wrapped on flash page 126, and the DHUK
 changes at `RDP0 → RDP1` (ST-substituted constant → real per-die), the BHK
-first-write — and anything derived from it, including the admin UserID and the
-SCP03 PUT KEY ceremony — must happen *at RDP ≥ 1*. Under work-todo #36, the
+first-write — and anything derived from it, including the final admin UserID
+and SCP03 PUT KEY ceremony — must happen *at RDP ≥ 1*. Under work-todo #36, the
 factory retains SE-internal irreversible provisioning and lockdown on transport
 keysets, including OPTIGA S-1/S-2/S-3 and lifecycle ratchets. First field boot
 is limited to `RDP → 2`, the BHK first-write, TRNG-salted OPTIGA PBS and SE050
-SCP03 rotation, then the seed wizard. The exact E140 lifecycle-versus-field-
-rotation ordering is still OPEN and silicon-gated; none of this paragraph is an
-executable or owner-authorized ceremony.
+SCP03 rotation, then the seed wizard. The authenticated per-unit handoff must
+prove the transport credentials work **before** any rotation; resume must
+distinguish old/new credentials and KVN before committing completion. Those
+contracts, the exact E140 lifecycle-versus-field-rotation ordering, and silicon
+evidence remain OPEN; none of this paragraph is an executable or
+owner-authorized ceremony.
 
 **Feature `rdp2-self-lock` (work-todo #36, landed 2026-07-14).** Owns the
 device-side first-boot flow above: Phase A (verify ship option bytes + blank
@@ -76,7 +79,13 @@ Two distinct things both called "OTP":
   security-epoch revocations, but is not implementation-approved; its physical
   codec, interruption handling, resource fit, and silicon gates remain open.
   *Not* a bit-addressable fuse bank.
-- **OTP "master key" region** (32 bytes in OTP, burned once by `hw::otp::ensure_device_master()`) — the **legacy** derivation root. In the current `saes-dhuk` candidate hardware shape `ensure_device_master()` is **never called** (verified in the Phase-2C pre-flight), so this region stays blank. The current helper roots are silicon DHUK + BHK, not an OTP-burned master; the production-final credential protocol is separately OPEN. The old "burn an OTP master in production" plan is superseded.
+- **OTP "master key" region** (32 bytes in OTP) — the item-36 factory burns
+  this per-device value before handoff so both factory and post-lock firmware
+  can reproduce the temporary transport credentials. Phase B rejects a blank
+  region and never burns it itself. The OTP master is **not** the final pairing
+  root: after the candidate completes, OPTIGA uses DHUK + persisted salt and
+  SE050 uses BHK-rooted final credentials. Factory burn authorization and
+  evidence remain part of the unapproved ceremony.
 - **`otp-hardcoded-master-key` Cargo feature** — a *dev-only compile-time constant* standing in for that OTP master so re-flashed bench boards keep stable derivations. **Never ships** (in the `compile_error!` fence in `nsc/mod.rs`).
 
 ---

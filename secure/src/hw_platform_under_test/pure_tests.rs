@@ -1062,7 +1062,7 @@ fn negative_flash_write_quadword_verified_compares_every_byte() {
     // `for i in 0..8`) would only catch the first half.
     let body = extract_body(
         FLASH_SRC,
-        "pub unsafe fn write_quadword_verified(addr: u32, data: &[u8; 16]) -> Result<(), ()> {",
+        "unsafe fn write_quadword_verified_raw(addr: u32, data: &[u8; 16]) -> Result<(), ()> {",
     );
     assert!(body.contains("for i in 0..16 {"));
     assert!(body.contains("!= data[i]"));
@@ -1448,7 +1448,30 @@ fn negative_page_127_has_no_generic_erase_or_key_storage_owner() {
             "page 127 gained a retired second-owner API: {forbidden}"
         );
     }
-    assert!(FLASH_SRC.contains("pub unsafe fn write_journal_qw"));
+    let generic_write = extract_body(
+        FLASH_SRC,
+        "pub unsafe fn write_quadword_verified(addr: u32, data: &[u8; 16]) -> Result<(), ()> {",
+    );
+    assert!(generic_write.contains("if overlaps_first_boot_journal(addr)"));
+
+    let generic_erase = extract_body(
+        FLASH_SRC,
+        "pub unsafe fn erase_secure_page(page: u32) -> Result<(), ()> {",
+    );
+    assert!(generic_erase.contains("if page == FIRST_BOOT_JOURNAL_PAGE_NUM"));
+
+    let journal_write = extract_body(
+        FLASH_SRC,
+        "pub unsafe fn write_journal_qw(qw_index: usize, rec: &[u8; 16]) -> Result<(), ()> {",
+    );
+    assert!(journal_write.contains("write_quadword_verified_raw(addr, rec)"));
+
+    // Definition + guarded wrapper + journal writer are the only raw verified
+    // capability references. Likewise, only the raw verified writer may call
+    // the unverified primitive. These cardinalities catch renamed same-file
+    // bypasses; the runtime guards catch renamed cross-file callers.
+    assert_eq!(FLASH_SRC.matches("write_quadword_verified_raw(").count(), 3);
+    assert_eq!(FLASH_SRC.matches("write_quadword(").count(), 2);
 }
 
 #[test]

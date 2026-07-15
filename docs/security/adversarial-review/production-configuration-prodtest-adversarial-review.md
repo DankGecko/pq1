@@ -24,8 +24,9 @@ program is the program the project believes it is testing.
 > evidence. `bhk` and `rdp2-self-lock` are now present in
 > `PROD_SHIP_FEATURES`, and the device-side first-boot candidate is implemented,
 > but this grants no execution or shipment authority: authenticated per-unit
-> handoff, recovery/KVN semantics, E140 ordering, and silicon evidence remain
-> open. Do not exercise the irreversible path on unprepared hardware.
+> handoff/authenticate-before-rotate, old/new/KVN recovery semantics, E140
+> ordering, and silicon evidence remain open. Do not exercise the irreversible
+> path on unprepared hardware.
 
 **Sibling boundaries.** The [build/release playbook](./build-release-provenance-adversarial-review.md)
 owns source-to-artifact provenance, signing custody, and publication; the
