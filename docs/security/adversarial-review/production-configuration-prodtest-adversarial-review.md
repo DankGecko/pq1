@@ -21,11 +21,11 @@ program is the program the project believes it is testing.
 > architecture and by the `prod-erc7730-provenance-check` refusal for the
 > current `dev-unattested` catalogue. The
 > current canonical feature list is therefore a policy target, not shipping
-> evidence. In particular, `bhk` is deliberately absent from
-> `PROD_SHIP_FEATURES` while first-boot BHK activation remains open, even though
-> `docs/firmware/feature-flags.md` describes BHK as the eventual shipping root.
-> Resolve that distinction before release; do not “fix” it by enabling BHK on
-> unprepared hardware.
+> evidence. `bhk` and `rdp2-self-lock` are now present in
+> `PROD_SHIP_FEATURES`, and the device-side first-boot candidate is implemented,
+> but this grants no execution or shipment authority: authenticated per-unit
+> handoff, recovery/KVN semantics, E140 ordering, and silicon evidence remain
+> open. Do not exercise the irreversible path on unprepared hardware.
 
 **Sibling boundaries.** The [build/release playbook](./build-release-provenance-adversarial-review.md)
 owns source-to-artifact provenance, signing custody, and publication; the

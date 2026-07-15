@@ -59,7 +59,6 @@ const HW_MOD_SRC: &str = include_str!("../hw/mod.rs");
 #[test]
 fn positive_flash_key_page_127() {
     assert!(FLASH_SRC.contains("pub const KEY_PAGE_ADDR: u32 = 0x0C0F_E000;"));
-    assert!(FLASH_SRC.contains("const KEY_PAGE_NUM: u32 = 127;"));
 }
 
 #[test]
@@ -961,15 +960,6 @@ fn negative_flash_unlock_keys_are_st_canonical_not_swapped() {
 // reliability regression that surfaces only under load.
 
 #[test]
-fn negative_flash_erase_key_page_inside_interrupt_free() {
-    let body = extract_body(FLASH_SRC, "pub unsafe fn erase_key_page() -> Result<(), ()> {");
-    assert!(
-        body.contains("cortex_m::interrupt::free"),
-        "erase_key_page MUST run inside cortex_m::interrupt::free (HIGH-12 fix)"
-    );
-}
-
-#[test]
 fn negative_flash_write_quadword_inside_interrupt_free() {
     let body = extract_body(FLASH_SRC, "unsafe fn write_quadword(addr: u32, data: &[u8; 16]) -> Result<(), ()> {");
     assert!(
@@ -1415,9 +1405,7 @@ fn negative_flash_mutating_apis_stay_unsafe() {
     // a refactor accidentally call `pin_attempts_reset` from a
     // non-PIN-verified context — silently bypassing the lockout.
     for needle in [
-        "pub unsafe fn erase_key_page",
         "pub unsafe fn write_quadword_verified",
-        "pub unsafe fn write_key",
         "pub unsafe fn erase_admin_page",
         "pub unsafe fn arm_wipe_flag",
         "pub unsafe fn pin_attempts_read",
@@ -1441,6 +1429,26 @@ fn negative_flash_mutating_apis_stay_unsafe() {
             "{needle} must keep `unsafe` marker — see flash.rs file-level docstring"
         );
     }
+}
+
+#[test]
+fn negative_page_127_has_no_generic_erase_or_key_storage_owner() {
+    // Page 127 is exclusively the append-only first-boot journal. A generic
+    // key-store API can erase the committed salt and make `current_pbs()`
+    // select transport credentials while OPTIGA E140 retains the final PBS.
+    for forbidden in [
+        "pub unsafe fn erase_key_page",
+        "pub fn read_key",
+        "pub fn is_key_blank",
+        "pub unsafe fn write_key",
+        "const KEY_PAGE_NUM",
+    ] {
+        assert!(
+            !FLASH_SRC.contains(forbidden),
+            "page 127 gained a retired second-owner API: {forbidden}"
+        );
+    }
+    assert!(FLASH_SRC.contains("pub unsafe fn write_journal_qw"));
 }
 
 #[test]

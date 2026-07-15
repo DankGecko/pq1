@@ -10,8 +10,9 @@ OPTIGA and SE050 objects, not merely whether each local driver works.
 > **Current state (2026-07-14).** The adopted design ships at RDP0 so a user can
 > inspect the device, then self-locks to RDP2 on first field boot before the
 > BHK first-write and TRNG-salted OPTIGA/SE050 key rotation. That flow is
-> tracked by `docs/work-todo.md` item 36 and is **not implemented or authorized
-> for execution yet**. A review may model it and run host-only simulations;
+> tracked by `docs/work-todo.md` item 36 and has an **implemented candidate
+> behind `rdp2-self-lock`, but is not production-approved or authorized for
+> execution**. A review may compile it and run host-only simulations;
 > this playbook does not authorize option-byte burns, key rotation, destructive
 > wipe, or RMA access.
 
@@ -39,8 +40,8 @@ and require an explicitly designated sacrificial device.
 
 | # | Failure mode | What to try to prove | Status / anchor in this tree | Detection | Auto? |
 |---|---|---|---|---|---|
-| LC1 | **Ambiguous lifecycle authority** | Device/fixture/user components infer different states (blank, factory, transit-verifiable, first-boot-in-progress, provisioned, recovery, RMA), so a privileged step runs from the wrong state | **OPEN for item 36.** The target first-boot state machine and receipt are not implemented. Existing `is_provisioned()` checks are local observations, not a cross-device lifecycle authority. Include connect-under-reset ship-state verification and the deliberate residual for a user who powers a transit-reflashed unit before verifying it. | Enumerate state predicates and produce two actors/stores whose classifications disagree | ❌ adversary/model |
-| LC2 | **Irreversible step before complete preflight** | RDP/LcsO/key rotation/counter advance happens before image, power, UID, option-byte, storage, and downstream-key checks succeed | **SHIP-BLOCKING DESIGN RISK.** Item 36 requires preflight before RDP2 and commit-last journaling after rotation. A BHK/pairing root created while RDP0 still supplies the shared DHUK may become unusable or retain the wrong security identity after the final transition. The legacy firmware-update floor ordering is a concrete warning (`VULN-fwcommit-otp-before-commit-brick.md`). | Dependency DAG + fail-before/fail-after injection at every irreversible edge | ⚠ model; silicon later |
+| LC1 | **Ambiguous lifecycle authority** | Device/fixture/user components infer different states (blank, factory, transit-verifiable, first-boot-in-progress, provisioned, recovery, RMA), so a privileged step runs from the wrong state | **OPEN for item 36.** The device-side candidate state machine and journal are implemented, but the authenticated per-unit factory handoff/receipt and production lifecycle authority are not closed. Existing `is_provisioned()` checks remain local observations rather than a cross-device lifecycle authority. Include connect-under-reset ship-state verification and the deliberate residual for a user who powers a transit-reflashed unit before verifying it. | Enumerate state predicates and produce two actors/stores whose classifications disagree | ❌ adversary/model |
+| LC2 | **Irreversible step before complete preflight** | RDP/LcsO/key rotation/counter advance happens before image, power, UID, option-byte, storage, and downstream-key checks succeed | **SHIP-BLOCKING IMPLEMENTATION/VALIDATION RISK.** The item-36 candidate performs preflight before RDP2 and uses commit-last journaling after rotation, but E140 lifecycle ordering and silicon cut-point evidence remain open. A BHK/pairing root created while RDP0 still supplies the shared DHUK may become unusable or retain the wrong security identity after the final transition. The legacy firmware-update floor ordering is a concrete warning (`VULN-fwcommit-otp-before-commit-brick.md`). | Dependency DAG + fail-before/fail-after injection at every irreversible edge | ⚠ model; silicon later |
 | LC3 | **Cross-store partial commit / half-provision** | STM32, OPTIGA, and SE050 disagree after reset; retry selects the wrong credentials or cannot erase the first write | **KNOWN CLASS, WITH A CURRENT LOCAL INSTANCE.** `VULN-provision-halfwrite-softbrick.md` records one rollback fix and a remaining silicon/credential residual. Separately, `secure/src/hw/bhk.rs::provision` writes two ciphertext quadwords without a commit marker while `is_provisioned()` accepts any non-`0xFF` byte. A cut after QW0 makes a torn BHK authoritative and prevents retry (`docs/work-todo.md` `sh-3`). The new first-boot rotation also re-opens the cross-store composition question. | Host fault injection around every durable write; require commit-last records; power-cut matrix on an authorized sacrificial device | ✅ host / ⚠ HW |
 | LC4 | **Non-idempotent resume or false completion receipt** | A torn journal, stale marker, discarded backend error, or duplicate command skips/repeats work or declares READY/WIPED early | **OPEN item-36 requirement plus a SOURCE-CONFIRMED REVIEW TARGET.** The boot block containing `"Wipe-in-progress flag set"` in `secure/src/main.rs` and `secure/src/nsc/cmd_request_unlock.rs::trigger_lockout_wipe` discard `factory_reset_admin()` errors, reset the MCU attempt counter, and display `WALLET WIPED`; a failed SE wipe can therefore be presented as success. Pairing-key rotation must also authenticate under the new keyset before commit—marker write alone is not proof. | Cut-point model + force every backend failure; success UI/receipt only after all postconditions | ✅ host/model + ⚠ HW |
 | LC5 | **Persistent-address / ownership collision** | Two features erase or reinterpret the same page, object, OID, OTP word, or backup register | **HISTORICAL INSTANCE STRUCTURALLY FIXED; CLASS REMAINS LIVE.** The persistent firmware-failure counter and its page-126 collision were removed; `secure/src/hw/flash.rs` and `secure/src/hw/bhk.rs` now assign page 126 only to BHK. Reconcile the now-stale `VULN-page126-bhk-fwfail-collision-brick.md` separately. Pages 123–127 and all SE objects still need one generated global ownership ledger. | Generate an ownership map from linker/config/constants; reject overlaps and unversioned aliases | ✅ structural |
@@ -82,8 +83,10 @@ recovery costs or destroys.
    and OPTIGA OID; comments alone are not a collision fence.
 4. **Adopted first-boot requirements.** `docs/work-todo.md` item 36 and
    `docs/firmware/feature-flags.md` define the RDP0 shipment and post-lock key
-   rotation ordering. Treat those as target requirements until executing code,
-   cut-point tests, and authorized silicon receipts exist.
+   rotation ordering. An executing candidate now exists behind
+   `rdp2-self-lock`; treat it as unapproved until authenticated handoff,
+   recovery/KVN semantics, E140 ordering, cut-point tests, and authorized
+   silicon receipts close.
 5. **Sibling evidence.** Image/rollback checks, SE policy tests, option-byte
    receipts, USB authorization, and off-chain counter models remain owned by
    their respective playbooks. Import their results into the lifecycle model;

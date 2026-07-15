@@ -1925,12 +1925,11 @@ fn icache_invalidate() {
 }
 
 // ---------------------------------------------------------------------------
-// Key storage page — last 8 KB of secure flash bank 1 (page 127)
+// First-boot provisioning journal — last 8 KB of secure flash bank 1 (page 127)
 // ---------------------------------------------------------------------------
 
-/// Base address of the reserved key storage page (page 127).
+/// Base address of the reserved first-boot journal page (page 127).
 pub const KEY_PAGE_ADDR: u32 = 0x0C0F_E000;
-const KEY_PAGE_NUM: u32 = 127;
 
 // NOTE: flash page 126 (the former OPTIGA PBS seal page at
 // 0x0C0F_C000) was freed by work-todo #24 — the Platform Binding
@@ -1974,42 +1973,6 @@ fn lock() {
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
-
-/// Erase the key storage page (page 127, 8 KB).
-///
-/// After erase, all bytes in the page read as 0xFF.
-///
-/// # Safety
-/// Erases persistent flash. Caller must ensure no other code is relying
-/// on the current contents of page 127.
-pub unsafe fn erase_key_page() -> Result<(), ()> {
-    // HIGH-12 fix: interrupt-free around the erase sequence.
-    cortex_m::interrupt::free(|_| {
-        wait_bsy();
-        clear_errors();
-        unlock();
-
-        let cr = PER | (KEY_PAGE_NUM << PNB_SHIFT);
-        REG.seccr.write(cr);
-        REG.seccr.write(cr | STRT);
-
-        wait_bsy();
-
-        REG.seccr.write(0);
-        let sr = REG.secsr.read();
-        lock();
-        cortex_m::asm::dsb();
-        cortex_m::asm::isb();
-        icache_invalidate();
-
-        if sr & ERR_MASK != 0 {
-            clear_errors();
-            Err(())
-        } else {
-            Ok(())
-        }
-    })
-}
 
 /// Program one quad-word (16 bytes / 128 bits) at the given flash address.
 ///
@@ -2103,55 +2066,6 @@ pub unsafe fn write_quadword_verified(addr: u32, data: &[u8; 16]) -> Result<(), 
             return Err(());
         }
     }
-    Ok(())
-}
-
-/// Read 32 bytes from the start of the key storage page.
-pub fn read_key(buf: &mut [u8; 32]) {
-    let src = KEY_PAGE_ADDR as *const u8;
-    for i in 0..32 {
-        // SAFETY: `KEY_PAGE_ADDR` is a fixed in-flash region of at least
-        // 8 KB; `src.add(0..32)` stays inside that page. Reads from
-        // memory-mapped flash are side-effect-free.
-        buf[i] = unsafe { read_volatile(src.add(i)) };
-    }
-}
-
-/// Check whether the key storage page is blank (first 32 bytes = 0xFF).
-pub fn is_key_blank() -> bool {
-    let src = KEY_PAGE_ADDR as *const u8;
-    for i in 0..32 {
-        // SAFETY: same as `read_key`.
-        if unsafe { read_volatile(src.add(i)) } != 0xFF {
-            return false;
-        }
-    }
-    true
-}
-
-/// Write a 32-byte key to the key storage page.
-///
-/// Erases the page first, then programs two quad-words (2 × 16 bytes).
-///
-/// # Safety
-/// Overwrites persistent flash at `KEY_PAGE_ADDR`. Caller is responsible
-/// for any prior contents.
-pub unsafe fn write_key(key: &[u8; 32]) -> Result<(), ()> {
-    // SAFETY: caller's contract.
-    unsafe { erase_key_page()? };
-
-    // First quad-word: bytes 0-15
-    let mut qw0 = [0u8; 16];
-    qw0.copy_from_slice(&key[..16]);
-    // SAFETY: page was just erased to 0xFF; address is aligned and in-page.
-    unsafe { write_quadword_verified(KEY_PAGE_ADDR, &qw0)? };
-
-    // Second quad-word: bytes 16-31
-    let mut qw1 = [0u8; 16];
-    qw1.copy_from_slice(&key[16..]);
-    // SAFETY: see above.
-    unsafe { write_quadword_verified(KEY_PAGE_ADDR + 16, &qw1)? };
-
     Ok(())
 }
 
