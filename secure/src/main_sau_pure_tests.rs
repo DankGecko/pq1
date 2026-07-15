@@ -729,19 +729,29 @@ fn negative_stm32_tzsc_base_is_5003_2400_not_5003_2800() {
 
 #[test]
 fn negative_stm32_gtzc_postwrite_self_check_is_present() {
-    // The post-write readback catches base-addr typos and clock-not-
-    // enabled glitches. Dropping it would let a botched GTZC config
-    // boot silently into "TZSC writes go to /dev/null and every
-    // peripheral is NS" — i.e., a stealthy regression of CLAUDE.md
-    // invariant #4.
+    // The post-write readback catches base-addr typos, clock-not-enabled
+    // glitches, and skipped/faulted config writes. It MUST survive the shipping
+    // `--release` profile: the old `debug_assert_eq!` compiled to nothing there
+    // (debug-assertions off), so a botched GTZC config could boot silently into
+    // "TZSC writes go to /dev/null and every peripheral is NS" — a stealthy
+    // CLAUDE.md invariant #4 regression. F6 promoted it to the unconditional,
+    // fail-closed `verify_or_halt`.
     assert!(SAU_SRC.contains("let r1 = GTZC.tzsc_seccfgr1.read();"));
     assert!(SAU_SRC.contains("let r2 = GTZC.tzsc_seccfgr2.read();"));
     assert!(SAU_SRC.contains("let r3 = GTZC.tzsc_seccfgr3.read();"));
     assert!(
-        SAU_SRC.contains("debug_assert_eq!(r1, seccfgr1,"),
-        "SECCFGR1 must self-check via debug_assert_eq! after the write"
+        SAU_SRC.contains("verify_or_halt(r1, seccfgr1);"),
+        "SECCFGR1 must self-check via the unconditional verify_or_halt (F6)"
     );
-    assert!(SAU_SRC.contains("debug_assert_eq!(r3, seccfgr3,"));
+    assert!(SAU_SRC.contains("verify_or_halt(r3, seccfgr3);"));
+    assert!(
+        !SAU_SRC.contains("debug_assert_eq!(r1, seccfgr1,"),
+        "the post-write self-check must not regress to debug_assert_eq! (a no-op in release)"
+    );
+    assert!(
+        SAU_SRC.contains("fn verify_or_halt(actual: u32, expected: u32)"),
+        "the fail-closed readback helper must exist (F6)"
+    );
 }
 
 #[test]

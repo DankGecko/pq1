@@ -1526,36 +1526,64 @@ fn negative_status_response_layout_uses_proto_offset_constants() {
 // ─────────────────────────────────────────────────────────────────────
 // 20. Negative: shape pins — file size & shape sanity
 //
-// ABORT is intentionally tiny (a PIN gate, then `FW_UPDATE = None` —
-// no NS deref, no flash, no HandlerGuard). A regression that grew the
-// file past a small bound is a smell worth surfacing.
+// ABORT is small (a PIN gate, the busy guard, then `FW_UPDATE = None`).
+// LCR-F2: ABORT now holds `HandlerGuard::enter()` before touching
+// `FW_UPDATE` — `= None` runs the `ZeroizeOnDrop` `FwUpdateCtx`
+// destructor, which the SysTick idle-wipe can otherwise race on the
+// CMSE path. A regression that grew the file well past that is a smell.
 // ─────────────────────────────────────────────────────────────────────
 
 #[test]
-fn negative_abort_handler_is_intentionally_tiny() {
-    // The file is ~40 lines including the doc comment. Anything
-    // significantly larger has snuck in extra work — review.
+fn negative_abort_handler_is_small_and_guards_fw_update() {
+    // Still small — anything much larger has snuck in extra work.
     let lines = ABORT_SRC.lines().count();
     assert!(
-        lines < 50,
-        "cmd_fw_abort is intentionally tiny ({lines} lines); growth is a smell"
+        lines < 70,
+        "cmd_fw_abort is intentionally small ({lines} lines); large growth is a smell"
     );
-    // The PIN gate reads only the SecureState sentinel via `peek_state`
-    // (not `FW_UPDATE`), and the FW_UPDATE write stays a single
-    // statement — no mutable borrow is held across any operation that
-    // SysTick's idle-wipe could race, so HandlerGuard::enter() is not
-    // needed. (The doc-comment references HandlerGuard to explain why
-    // the single-statement write is safe; the assertion below pins
-    // the absence of an *active* enter() call.)
+    // LCR-F2: ABORT touches `FW_UPDATE` (a `ZeroizeOnDrop` context), so it MUST
+    // hold the busy guard before the deref — just like BEGIN/CHUNK/COMMIT — or
+    // the SysTick idle-wipe can race the destructor.
+    let body = ABORT_SRC
+        .find("pub(super) unsafe fn run")
+        .expect("ABORT handler must have a run fn");
+    let body = &ABORT_SRC[body..];
+    let guard_pos = body
+        .find("HandlerGuard::enter()")
+        .expect("ABORT must call HandlerGuard::enter() before touching FW_UPDATE (LCR-F2)");
+    let deref_pos = body
+        .find("addr_of_mut!(FW_UPDATE)")
+        .expect("ABORT must touch FW_UPDATE");
     assert!(
-        !ABORT_SRC.contains("HandlerGuard::enter()"),
-        "ABORT holds no mutable FW_UPDATE borrow — no HandlerGuard::enter() needed"
+        guard_pos < deref_pos,
+        "HandlerGuard::enter() must be acquired BEFORE the static-mut FW_UPDATE deref"
     );
     assert!(!ABORT_SRC.contains("validate_ns_"));
     // It IS pin-gated (LOW-1 fix), but performs no NS pointer work.
     assert!(
         ABORT_SRC.contains("pin_verified.check_sentinel()"),
         "ABORT is pin-gated; the gate reads SecureState, not FW_UPDATE"
+    );
+}
+
+#[test]
+fn negative_status_holds_handler_guard_before_fw_update_read() {
+    // LCR-F2: STATUS holds a `&FwUpdateCtx` reference across several field reads;
+    // it MUST hold the busy guard before that read, or the SysTick idle-wipe can
+    // zero the context out from under the reference mid-read.
+    let body = STATUS_SRC
+        .find("pub(super) unsafe fn run")
+        .expect("STATUS handler must have a run fn");
+    let body = &STATUS_SRC[body..];
+    let guard_pos = body
+        .find("HandlerGuard::enter()")
+        .expect("STATUS must call HandlerGuard::enter() before reading FW_UPDATE (LCR-F2)");
+    let deref_pos = body
+        .find("addr_of!(FW_UPDATE)")
+        .expect("STATUS must read FW_UPDATE");
+    assert!(
+        guard_pos < deref_pos,
+        "HandlerGuard::enter() must be acquired BEFORE the static-mut FW_UPDATE read"
     );
 }
 

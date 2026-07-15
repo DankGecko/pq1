@@ -79,15 +79,22 @@ impl Transport {
     /// `usb::usb_frame_number`); it stamps the reassembly start so
     /// `check_rx_timeout` can bound how long a partial APDU may sit
     /// half-assembled.
-    pub fn try_receive(&mut self, now_frame: u16) -> Option<&[u8]> {
+    ///
+    /// On `ApduComplete` returns `(channel_id, apdu_bytes)` — the HID channel
+    /// the completed APDU arrived on is threaded through to `dispatch` for the
+    /// single-session router lease (finding F11). It is returned in the tuple
+    /// rather than read via a separate accessor because the returned slice
+    /// borrows `self`, so a second `&self` access here would not borrow-check.
+    pub fn try_receive(&mut self, now_frame: u16) -> Option<(u16, &[u8])> {
         let mut report = [0u8; HID_REPORT_SIZE];
         let n = self.hid.read_report(&mut report)?;
 
         match self.rx.process_frame(&report, n, &mut self.rx_buf) {
             FrameOutcome::ApduComplete(len) => {
-                self.channel_id = self.rx.channel_id();
+                let channel = self.rx.channel_id();
+                self.channel_id = channel;
                 self.rx_start_frame = None;
-                Some(&self.rx_buf[..len])
+                Some((channel, &self.rx_buf[..len]))
             }
             FrameOutcome::PingEcho => {
                 self.hid.write_report(&report);

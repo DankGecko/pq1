@@ -134,8 +134,15 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // stuck-at on a plain reject branch falls through into the handler body
     // with an unvalidated pointer — NS then picks an `out_ptr` into secure
     // SRAM and the response write below becomes an OOB write across the
-    // S/NS boundary. Comparing a sentinel value (not a bool) fails closed.
-    // Same idiom as the §14 6492 re-validation in cmd_sign_offchain.rs.
+    // S/NS boundary. The sentinel comparison closes the value / stuck-at-
+    // register class (a random faulted value is not `OK_SENTINEL`), but NOT the
+    // one-skip-of-the-reject-branch residual on its own (finding F5): a precise
+    // skip of the `if != OK_SENTINEL` branch still falls through. That residual
+    // is closed by RE-VALIDATING the write extent immediately before the output
+    // write (§15 below), so a single glitch must skip two spatially-distant
+    // reject branches. Same idiom as the §14 6492 re-validation in
+    // cmd_sign_offchain.rs. (The FI-bypass count itself is validated by the
+    // deferred rainbow instruction-skip sweep on the real ELF, not in-repo.)
     let read_ptr_ok = crate::fi::check_true_into_sentinel(|| {
         validate_ns_read_ptr(args.arg0, total_len)
     });
@@ -1115,15 +1122,17 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // ETH, plus the two ERC-8213 fingerprint pages appended below.
     {
         // Native-value page (when outer value != 0) + mandatory full signer
-        // and target pages + worst-case non-zero nonce-lane page + 2 ERC-8213
-        // fingerprint pages + 2 gas/fee pages (the dispatcher splices the gas
-        // pages for the Safe surface — audit 2026-06-19) + the paymaster page
-        // when paymasterAndData is non-empty (audit 2026-06-27).
+        // and target pages + worst-case non-zero nonce-lane page + the
+        // mandatory UserOp gas-triple page (F10) + 2 ERC-8213 fingerprint pages
+        // + 2 gas/fee pages (the dispatcher splices the gas pages for the Safe
+        // surface — audit 2026-06-19) + the paymaster page when paymasterAndData
+        // is non-empty (audit 2026-06-27).
         let reserved = usize::from(value.iter().any(|&b| b != 0))
             + usize::from(paymaster_and_data_hash != SHA256_EMPTY)
             + crate::tx::display::SIGNER_IDENTITY_PAGES
             + crate::tx::display::TARGET_IDENTITY_PAGES
             + crate::tx::display::NONZERO_NONCE_LANE_PAGES
+            + crate::tx::display::USEROP_GAS_PAGES
             + 2
             + 2;
         match crate::tx::display::multisend_sign_gate(
@@ -1324,6 +1333,37 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     ) != crate::fi::OK_SENTINEL
     {
         ui::show_status("Sign refused", "lane unshown");
+        return NscStatus::InternalError as u32;
+    }
+    // EntryPoint v0.6 commits callGasLimit, verificationGasLimit, and
+    // preVerificationGas as three independent, ordered 256-bit words. The
+    // generic Safe/CoW envelope only showed their saturated u64 aggregate, so a
+    // gas-split permutation with the same sum rendered identically (F10). Bind
+    // all three exact values on their own page, independently FI-proved, so no
+    // permutation can hide behind the aggregate. On the ERC-7730 path this
+    // double-shows (redundant, fail-safe — the nonce-lane precedent).
+    let gas_lane_pages_before = pages.len;
+    if crate::tx::display::enforce_userop_gas_page(
+        &mut pages,
+        &call_gas_limit,
+        &verification_gas_limit,
+        &pre_verification_gas,
+    )
+    .is_err()
+    {
+        ui::show_status("Sign refused", "gas unshown");
+        return NscStatus::InternalError as u32;
+    }
+    crate::fi::scrub_sentinel_register();
+    if crate::tx::display::userop_gas_page_proof(
+        &pages,
+        gas_lane_pages_before,
+        &call_gas_limit,
+        &verification_gas_limit,
+        &pre_verification_gas,
+    ) != crate::fi::OK_SENTINEL
+    {
+        ui::show_status("Sign refused", "gas unshown");
         return NscStatus::InternalError as u32;
     }
     // ERC-8213 fingerprint — show the calldata digest as the last
@@ -1985,6 +2025,22 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     //   [init_code_len(4 BE)][init_code(0 or 4280)]
     //   [type1_len(4 BE)][type1_wrapper(0 or 4128)]
     //   [type2_len(4 BE)][type2_wrapper(4128)]
+    //
+    // FI deref-site re-validation (finding F5). The top-of-handler write gate
+    // (§2) and these volatile writes are spatially distant, so a single skip of
+    // that gate's reject branch would admit an `out_ptr` into secure SRAM
+    // straight to the writes below. Re-validate the FULL MAX_SIGN_RESPONSE_LEN
+    // write extent now, double-evaluated through the Hamming-distant sentinel,
+    // so reaching the write REQUIRES a second passing validation in this branch
+    // — two coordinated faults instead of one. A legit sign already passed the
+    // identical §2 check, so this never false-rejects.
+    let out_extent_ok = crate::fi::check_true_into_sentinel(|| {
+        validate_ns_write_ptr(args.arg1, MAX_SIGN_RESPONSE_LEN)
+    });
+    if out_extent_ok != crate::fi::OK_SENTINEL {
+        ui::show_status("Sign", "bad out");
+        return NscStatus::InvalidPointer as u32;
+    }
     let mut write_pos: usize = 0;
     write_be_u64(out_ptr, &mut write_pos, new_offchain_count);
     let init_code_len = if emit_init_code { PQ_INIT_CODE_LEN } else { 0 };

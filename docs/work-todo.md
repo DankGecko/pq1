@@ -6,6 +6,121 @@ Last audited: 2026-07-15
 
 ---
 
+## 🔝 NEXT HARDWARE SESSION — top priority (owner, 2026-07-14)
+
+**Do Phase-2B BHK provisioning FIRST when the dev board is next connected.**
+Owner decision 2026-07-14: keep the Tier-2 BHK split (SE050 SCP03 on BHK, OPTIGA
+PBS on DHUK) rather than collapsing SE050 onto DHUK. Until the ship image can be
+built with `bhk` on, the ceremony (BHK) and ship (DHUK) SCP03 axes diverge — the
+new `make se050-scp03-axis-parity` gate (finding **F7**) is RED by design and
+`half_E` would be unrecoverable if a chip were rotated then run under the ship
+image. Sequence for the next bench session:
+
+1. **Phase-2B silicon validation** (details at "Phase 2B — silicon-side BHK on
+   real hardware" below): enable `bhk`, run on a bench board with the
+   BOOT0+TAMP+`-tzenreg` recovery ready, confirm per-die BHK uniqueness at RDP1.
+2. **Resolve the Phase-2C SHIP-GATE** (the "resolve SE050 re-pair-after-BHK-loss
+   BEFORE enabling `bhk` in production" item below) — pick and validate one of
+   the three recovery options on a sacrificial board.
+3. Flip `PROD_SHIP_FEATURES` to include `bhk`; `make se050-scp03-axis-parity`
+   then goes green, closing F7.
+
+## 🔎 Adversarial sweep 2026-07-14 — deferred residuals
+
+From `docs/security/adversarial-review/findings/full-project-sweep-2026-07-14.md`
+(10 fixed, 4 deferred-with-diff, 4 deferred release blockers). Fixes landed on
+branch `fix/sweep-2026-07-14-findings`. Deferred, needs bench silicon:
+
+- [ ] **F2 — IWDG secure (silicon).** Mark IWDG SECURE (`SECCFGR1` bit 7) AND
+  switch `hw/iwdg.rs` from NS alias `0x4000_3000` to secure alias `0x5000_3000`
+  **atomically** (else the secured TZSC blocks every kick → ~2 s reset-loop
+  brick). Add an IWDG probe to `make gtzc-enforcement-hw` (8th target).
+- [ ] **F3 — RCC/PWR clock security (silicon).** Write `RCC_SECCFGR` mask
+  `0xCE9` via the SECURE alias `0x5602_0C10` after clock config, before the SAU
+  lock; confirm the RM0456 SYSCLKSEC↔PWR-VOS coupling; verify NS clock re-config
+  is WI on-silicon and USB still enumerates.
+- [ ] **F4 — TAMP TAMPSEC + DBP hygiene (silicon).** Set `TAMP_SECCFGR.TAMPSEC`
+  (bit 31) via read-modify-OR preserving BHKLOCK; clear `PWR_DBPR.DBP` only
+  AFTER the BHK BKP writes; optional GTZC2/TZIC2 detection. Bench-validate BHK
+  still provisions (a mis-ordered DBP clear zeroes it).
+- [ ] **F9 — SRAM_RST=0 option byte (sacrificial board).** Add `SRAM_RST=0` to
+  `stm32-harden-opts` so silicon erases SRAM1/3/4 (the secret stack) every reset
+  (current provisioning only sets `SRAM2_RST=0` — the wrong bank). Confirm the
+  CLI token lands; residue-test with a canary + reset.
+- [ ] **F1 residuals — trusted-display GPIO/clock.** SPI1 peripheral is now
+  secure, but the panel GPIOE pins (PE7/12/13/14/15) stay NS and the SPI1 RCC
+  clock-enable is RCC-governed (F3). Close both for full "NS cannot touch the
+  trusted display", then re-run the 2026-05-20 USB/LCD coexistence receipts.
+- [ ] **F5 — full NsPtr adoption + rainbow FI sweep.** The bounded deref-site
+  re-validation landed; the structural fix (adopt the `NsPtr` typestate across
+  all ~10 handlers, remove its `#![allow(dead_code)]`) and the rainbow
+  instruction-skip bypass sweep on the real compiled ELF are still owed.
+- [ ] **F6 — MPCBB config lock + halt-doesn't-false-trip receipt.** Set/verify
+  MPCBB1/2 `CFGLOCKR`/`CR.GLOCK` before NS boot; confirm the new fail-closed
+  `verify_or_halt` does not false-trip a correct config on a bench boot.
+- [ ] **F8 — OPTIGA S-2 burn (sacrificial silicon, deferred-by-design).** The
+  destructive pool is fixed on master by the concurrent first-boot work
+  (`lockdown_ta_pool` is a fail-closed placeholder that refuses until the
+  E0E8/E0E9/E0EF type/data/AC/lifecycle readback contract is silicon-reviewed;
+  the correct `{E0E8,E0E9,E0EF}` anchors are documented). The irreversible LcsO
+  ratchet + the sacrificial-part validation matrix (`docs/production-todo.md`
+  S-2) remain the factory-ceremony step — S-2 stays a production blocker.
+- [ ] **F10 — multiSend page-budget `make e2e` check.** Confirm no legitimate
+  page-heavy Safe multiSend overflows `MAX_PAGES=31` now that the UserOp
+  gas-triple page is mandatory (fail-closed refuse if it does).
+- [ ] **F12 — (optional, owner) OPTIGA PBS just-before-handshake.** Reverses the
+  accepted MEDIUM-1 retained-PBS residual; availability risk (OPTIGA-unreachable
+  if handshake-time re-derivation ever fails). Owner call — left as-is.
+
+## 🔎 Local closure review 2026-07-14/15 (LCR) — dispositions
+
+From `docs/security/adversarial-review/findings/multi-2026-07-14-local-closure-review.md`
+(a local, self-rated **E0 source-only** pass — the GPT-5.6 and Opus legs were
+interrupted and *discarded* per the doc, so these are leads, weighed on
+independently-confirmed code; the 2026-07-15 "deterministic second round" doc
+added **0** findings). Fixes on branch `fix/sweep-2026-07-14-findings`:
+
+- [x] **LCR-F4 — SCP03 keyed/plaintext intermediates lack zeroize-on-drop (MED).
+  FIXED** (completes the sweep's F12). `ApduBuf` now zeroizes its buffer on drop
+  (holds plaintext PIN/provisioned bytes during construction); `wrap_apdu`'s
+  `enc_buf` + `unwrap_response`'s `plain` decrypted-body buffers are `Zeroizing`;
+  the `aes`/`cmac` crate `zeroize` features are enabled so cipher key schedules
+  wipe on drop. Compile-validated on dual-se. *Residual (DiD):* the transient
+  `GenericArray` block/prev locals inside `scp03_logic` cbc/cmac loops are not
+  individually wiped — the primary secrets (session keys, plaintext buffers,
+  ApduBuf, cipher schedules) are covered.
+- [x] **LCR-F2 — FW STATUS/ABORT touch `FW_UPDATE` without `HandlerGuard` (MED).
+  FIXED.** Confirmed a REAL race on the CMSE path: `FwUpdateCtx` is
+  `#[derive(ZeroizeOnDrop)]`, so `*FW_UPDATE = None` runs a non-atomic
+  destructor, and the SysTick idle-wipe (`main.rs:3783`) does the same whenever
+  `!handler_is_busy()`. Both veneers now hold `HandlerGuard::enter()` before
+  touching `FW_UPDATE` (like BEGIN/CHUNK/COMMIT); source-invariant pure-tests
+  added for both. Not secret disclosure — update-state corruption / torn read.
+- [ ] **LCR-F1 — OPTIGA provisioning/lockdown accepts an already-`Operational`
+  object without proving full policy/identity (HIGH). DEFERRED (brick-risky,
+  silicon-only).** `verify_and_lock` already verifies-before-lock; the finding
+  targets the idempotent already-Operational **skip**, which returns `Ok`
+  without re-checking `metadata_matches_expected`. Turning the skip into
+  verify-and-fail-closed is a security-vs-brick tradeoff on the OPTIGA path (a
+  benign expected-vs-frozen metadata delta on a *frozen, unfixable* object would
+  fail closed → brick a legitimately-provisioned device) and is silicon-only-
+  validatable — same principle as the sweep's F2/F3/F4/F9. **Diff:** on the
+  already-Operational skip in `verify_and_lock` (+ the `provision_*`/`lockdown`
+  callers), verify `metadata_matches_expected` (and, for anchors/certs, object
+  identity) before accepting; fail closed on mismatch. **Safe code-now slice
+  (not yet done):** add host predicates that detect incomplete/permissive final
+  metadata for each object class. Owner tradeoff — pick up with the F8/S-2
+  sacrificial-silicon work.
+- [ ] **LCR-F3 — FW COMMIT reaches reset without complete sensitive-state
+  cleanup (LOW now / MED latent). DEFERRED (behind the quarantined update
+  backend).** `cmd_fw_commit` clears only update context before a delayed/direct
+  SW reset while boot cleanup assumes SW-reset callers already wiped. Only
+  reachable when the replacement (Draft-0.9) update backend is enabled, which is
+  production-fenced. **Diff:** apply full `zeroize_sensitive_state()` + barrier
+  before both reset arms and before any pre-reset delay; replace the global
+  "SW-reset callers already cleaned" assumption with an enforced cleanup
+  contract; bind the replacement backend to it. Track with the rollback program.
+
 ## 🧾 Formal-verification full-stack review 2026-07-15 — open follow-ups
 
 Owner report:
@@ -722,6 +837,26 @@ Quoted from Trezor `secret.c:593-595`:
 - BHK → SE050 SCP03 enc+mac, SE050 admin PIN
 
 That way a compromise of one selector exposes at most one SE's channel. The Tier-2-A fallback (`derive_into_bhk` with neither `bhk` nor `bhk-hardcoded-master-key` → route through `derive_into` (DHUK)) keeps pre-2B builds running; production builds enable `bhk` to flip to the real BHK selector.
+
+- [ ] **Architecture exploration — determine whether BHK is an independent
+  failure boundary or only DHUK-backed compartmentalization.** The BHK has
+  independent TRNG entropy, but its persistent page-126 representation is
+  wrapped solely by DHUK. An attacker with both a DHUK break/oracle and the
+  page-126 ciphertext can therefore recover or use the BHK; do not describe
+  the current construction as two independent secret roots until this is
+  resolved. Compare two bounded options: **(a)** narrow the claim to the
+  protections actually provided (flash-only confidentiality, anti-transplant,
+  post-load `BHKLOCK`, and domain separation), leaving the dual-SE XOR seed
+  split as the real two-failure boundary; **(b)** add an independently protected
+  SE contribution to BHK reconstruction/wrapping, such as a PIN/AC-gated
+  OPTIGA-held share or key-operation, without making the BHK, Shielded
+  Connection, SCP03, PIN, admin-wipe, or recovery flows circular. The decision
+  packet must include an explicit attacker-capability matrix (flash read,
+  DHUK oracle/extraction, secure-world compromise, either SE compromise, and
+  combinations), boot/unlock dependency graph, power-cut and lockout behavior,
+  recovery/RMA consequences, FLASH/RAM/stack cost, and deletion criteria. No
+  production claim, backend change, or silicon mutation follows from this item;
+  any selected design requires the normal dual adversarial review first.
 
 **What's needed — P0 (requires Tier 1 landed first):**
 
@@ -3185,6 +3320,8 @@ When a task above is completed, update it here with the date and a one-line summ
 | --- | --- | --- |
 | 2026-07-15 | #36 correction after integration review | The 2026-07-14 row is retained as an as-found receipt, but its authority and two evidence claims are superseded: `rdp2-self-lock` is bidirectionally coupled to `mode-production`; `make build-rdp2-self-lock` now proves the unsafe non-production combination is rejected rather than compiling a runnable image. Host cuts cover boundaries between completed QW programs and recovery is capacity-bounded, not “power loss at any point.” The candidate is not production-approved; handoff/receipt, authenticate-before-rotate, old/new/KVN recovery, E140 ordering, silicon receipts, and later Opus re-review remain OPEN. `docs/provisioning/first-boot-provisioning.md` grants no irreversible authority. |
 | 2026-07-14 | #36 first-boot self-provisioning — DEVICE-SIDE IMPLEMENTED (feature `rdp2-self-lock`, silicon-validation pending) | On the first field boot the secure app verifies the ship option-byte profile + blank per-device pages 123–127, self-locks RDP-2 (Phase A, right after `ui::init()`), then resumes a journaled state machine that provisions the BHK (anti-pre-plant erase-and-reprovision) and rotates the SE050 SCP03 keyset + admin credential and the OPTIGA E140 PBS off the factory **transport** keysets to their final BHK-/salted-DHUK-rooted values (Phase B, right after `measured_boot::run()`), all before the seed wizard. Owner amendment: the lock lives in the **secure app early-boot, not the FSBL** (FSBL is ~99 % of its 32 KB budget; FSBL still gates slot-signature verification before entry). Landed: feature + `mode-production`-only ship require-fence + incompat/`dual-se` fences (`nsc/mod.rs`); pure page-127 journal codec + resumable state machine, **host-tested incl. a power-cut-at-every-boundary convergence matrix** (`secure/src/first_boot/{journal,state}.rs`); ship OB profile + verifier (`shared/src/lockdown.rs`); RDP-2 write path + OB readers + journal I/O (`hw/flash.rs`); transport keysets + salted-`v2` PBS + the `current_pbs()` single-source-of-truth resolver that fixes the wizard-rewrites-E140-to-unsalted **brick class** (`hw/secret_keys.rs`); two-phase SE rotation methods (`se050/mod.rs`, `scp03.rs`, `optiga/mod.rs`); parameterized `build_put_key_apdu(wrap_dek)`; boot wiring (Phase A/B, BHK-block journal gate so the BHK is never wrapped under the RDP-0 constant DHUK, SL7 journal-aware hard-halt on RDP regression). Authoritative factory⇄first-boot split written into `docs/provisioning/first-boot-provisioning.md` (new) + `factory-provisioning.md` + `factory-mass-production-model.md`. Verified: 2163 secure + 36 shared host tests green, `make build-rdp2-self-lock` compiles the feature-ON path for thumbv8m, dev/QEMU builds byte-identical (feature off). NOT done = the silicon-validation runbook (RDP 0→2 with TZEN=1, page-126 program-hostility, SE rotation APDU flows, OEM/BOR/WRP register pins, power-cut matrix on sacrificial parts) — nothing has shipped. |
+| 2026-07-15 | Local closure review (LCR) 2026-07-14/15 — 2 fixed / 2 deferred | Worked the 4 leads in `multi-2026-07-14-local-closure-review.md` (a local E0 source-only pass — its GPT-5.6/Opus legs were discarded per the doc; the 2026-07-15 second round added 0 findings). Weighed each on independently-confirmed code. **✅ FIXED:** LCR-F4 (completes the sweep's F12 — `ApduBuf` zeroize-on-drop, `wrap_apdu`/`unwrap_response` plaintext buffers → `Zeroizing`, enabled the `aes`/`cmac` crate `zeroize` features so cipher schedules wipe; dual-se compile); LCR-F2 (confirmed a REAL race on the CMSE path — `FwUpdateCtx` is `ZeroizeOnDrop`, so `*FW_UPDATE = None` is a non-atomic destructor the preemptive SysTick idle-wipe can hit; FW STATUS + ABORT now hold `HandlerGuard::enter()` before touching `FW_UPDATE` like BEGIN/CHUNK/COMMIT; the old test that pinned abort as guard-free was rewritten to assert the guard + a new STATUS guard test). Secure host 2150/0. **⏸ DEFERRED (diffs in the LCR dispositions section):** LCR-F1 (OPTIGA verify-final-state-before-accept-skip — brick-risky, silicon-only, same principle as the sweep's F2/F3/F4/F9), LCR-F3 (FW-COMMIT cleanup-before-reset — behind the quarantined update backend). |
+| 2026-07-14 | Adversarial full-project sweep 2026-07-14 — fix pass (10 fixed / 4 deferred-w/-diff / 4 deferred release blockers) | Worked through all 14 open findings of `docs/security/adversarial-review/findings/full-project-sweep-2026-07-14.md` on branch `fix/sweep-2026-07-14-findings`. **✅ FIXED (validated in-repo):** F13 (reconciled the stale `no-unsafe-in-pure-logic-crates` semgrep rule — narrow documented excludes for the 2 host-relocated structurally-required-unsafe files + a `make invariant-gates` allowlist guard + CLAUDE.md taxonomy; 17→0, negative control still fires); F14 (`make build-hw` → adds `e2e-test` escape, exits 0, stays non-shippable); F10 (FI-proven UserOp gas-triple display lane `userop_gas_lane.rs` wired at the single handler + all 3 batch sites + both multiSend budgets; 6 host tests incl. the `permuted_gas_triple_yields_distinct_pages` WYSIWYS-injectivity property); F11 (USB single-session router owner-lease + pure host-tested `router_lease_allows`); F12-core (SE050 SCP03 keys + PUT KEY APDU → `Zeroizing`, derived in place); F8 (OPTIGA destructive `E0E3..E0E8` pool — **CONVERGED at merge** with the concurrent first-boot work: origin's fail-closed `lockdown_ta_pool` placeholder superseded my ceremony implementation; both document the correct `{E0E8,E0E9,E0EF}` anchors and defer the irreversible burn — S-2 stays a production blocker); F7-code (`se050-scp03-axis-parity` gate — red by design, keep-BHK); F1 (SPI1→SECCFGR2-bit1 secure, partial); F6 (`debug_assert_eq!` readbacks → unconditional fail-closed `verify_or_halt`); F5 (deref-site write re-validation + corrected over-claiming comment). Secure host tests 2143/0 + 6 gas-lane + 3 lease; all firmware compiles on `thumbv8m.main-none-eabi` (dual-se ship + ceremony builds). **⏸ DEFERRED with exact register diffs → work-todo "Adversarial sweep 2026-07-14 — deferred residuals" (owner decision "land soft two"):** F2 (IWDG secure+alias), F3 (`RCC_SECCFGR`), F4 (`TAMP_SECCFGR`+DBP), F9 (`SRAM_RST=0`) — brick-risky, silicon-validation-only. Phase-2B BHK provisioning bumped to a top-of-file NEXT-HARDWARE-SESSION callout (gates F7). F15–F18 remain deferred release blockers. |
 | 2026-07-06 | format_decimal M6b+M7+M8 — the END-TO-END WYSIWYS theorem lands; the track is COMPLETE | The full pipeline value→digits→round→trim→emit is now ONE kernel theorem: `FormatDecimalSpec.u256_format_decimal_spec` — for EVERY 2^256 value × decimals × frac_digits × trim × output buffer, `U256::format_decimal` either returns None with the buffer untouched (exact width accounting) or emits a well-formed decimal string whose parsed value is EXACTLY round-half-up(value/10^decimals) at the emitted fraction count, trim proven value-preserving. All four phase specs composed with every intermediate hypothesis discharged; closures exactly `[propext, Classical.choice, Quot.sound]` (no hash axiom, no bv_decide). Supporting: `EmitSpec.emit_spec` (954 lines — byte-exact `emitBytes` render, literal `(none, out)` overflow path) and `FormatDecimalDiffVectors` (55 vectors GENERATED BY THE SHIPPED RUST — round-half-up boundaries incl. 77-digit carry ripple, decimals=100>78-digit max, exact-fit/one-short/zero buffers — replayed through the EXECUTABLE extracted Lean with 3 deliberately-wrong negative controls that must flag; in `verify-extract-differential`). The M-6 digit-aliasing and F14#3 nonzero-collapse HIGH classes are theorems now. Ops note: the authoring workflow was interrupted by a host OOM freeze (two concurrent ~31GB Lean elaborations); recovered from the journal + object store — one omega mis-atomization fixed (explicit Nat.le_trans), everything re-gated serially. This retires the LAST multi-week item of the 2026-07-02 FV frontier plan. |
 | 2026-07-06 | ETHFALCON-port R1 — per-primitive component KAT (Rust↔Python↔Yul) landed | From the 2026-07-06 ETHFALCON-repo port assessment (`docs/verification/external-kat-provenance-and-ethfalcon-port-2026-07.md`): ETHFALCON KATs its sub-primitives with intermediate values off- AND on-chain; we KAT'd only whole 4008-B signatures. Added committed golden `contracts/smart-wallet/test/c10_primitive_kat_vectors.json` (26 vectors across all 8 C10 tweakable-hash primitives — th/th_pair/th_multi/h_msg/chain_hash/wots_digest + the wots_secret/fors_secret PRFs) cross-checked THREE independent ways: **Rust** `sphincs-c10/tests/primitive_kat.rs` (recompute regression pin; widened `sim_internals` to re-export chain_hash/wots_digest/wots_secret; `C10_KAT_REGEN=1` regen, assert-skips-during-regen to avoid the read/write race), **clean-room Python** `independent_c10_signer.py --check-primitives` (independence guard), and the **Yul verifier's on-chain SHA-256 layout** `contracts/smart-wallet/test/C10PrimitiveKat.t.sol` (the 6 verify-side primitives reconstructed via precompile 0x02; the 2 PRFs are Rust↔Python only since the verifier never sees sk_seed). `make -C contracts/verification verify-primitive-kat` runs all three (+ `.PHONY`). **Mutation-verified non-vacuity:** a single corrupted golden byte fails all three legs with the exact label. HONEST SCOPE = localization/auditor-ergonomics (pins WHICH primitive/offset diverged, the A3.1 `chain_hash` `chain_index`-vs-`chain_pos` bug class), NOT new coverage over the whole-sig differential; self-generated + N-way cross-checked, NOT externally conformant (C10 shares only raw SHA-256 with any standard — anchored to NIST CAVP). No regression: default build + full sim-internals suite green (primitive_kat 2, fors_position_binding 5, signing_suite 42, …). R2 (portable .rsp artifact) still queued. |
 | 2026-07-06 | format_decimal M5 round_carry_spec + M6 trim_frac_spec (Track 1) | Two more phases of the end-to-end WYSIWYS spec kernel-proven over the committed extraction. **M5 `RoundCarrySpec.round_carry_spec`**: in the rounding case (frac < decimals ∧ dropped digit ≥ 5) the carry loop is VALUE-EXACT — `decValue ds' = decValue digits + 10^round_idx` — with the dropped-digit prefix untouched, all digits ≤ 9 preserved, count growth exactly `n ≤ n' ≤ n+1` + zero tail + no-leading-zero disjunct; in the no-round case the array and count are IDENTITY. The in-code overflow-safety comment ("the carry stays in bounds") is now a theorem: the two-phase loop invariant (live-carry value ledger `decValue ds + 10^i = decValue d0 + 10^round_idx` ∧ i ≤ n) makes the i = 80 exit unreachable. **M6 `TrimFracSpec.trim_frac_spec`**: the returned emit-count is the largest fractional position ≤ frac whose DISPLAYED (guarded-read) digit is nonzero, and every trimmed position displays a structural zero — the trim can only strip true zeros, never a significant digit. + `usize_saturating_sub` step lemma (Aeneas ships none). Closures exactly `[propext, Classical.choice, Quot.sound]`; `verify-extracted` green (1765 jobs). Remaining: fmt_emit spec → M7 composition → M8 differential vectors. (Track-1 agent authored both; landed by the coordinating session.) |

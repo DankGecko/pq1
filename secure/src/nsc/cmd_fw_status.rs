@@ -18,6 +18,15 @@ use super::GatewayArgs;
 /// pointer before deref and reads the `static mut FW_UPDATE` snapshot
 /// under the single-threaded dispatcher invariant.
 pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
+    // Hold the busy guard for the whole handler (finding LCR-F2). This handler
+    // holds a `&FwUpdateCtx` reference (`ctx_ref` below) across several field
+    // reads; the SysTick idle-wipe (`main.rs`) does `*FW_UPDATE = None` — running
+    // the `ZeroizeOnDrop` destructor — whenever `!handler_is_busy()`. Without
+    // this guard idle-wipe can preempt the handler on the CMSE path and zero the
+    // context out from under `ctx_ref` mid-read (torn/garbage status). Every
+    // sibling FW handler already holds it.
+    let _busy = super::HandlerGuard::enter();
+
     // PIN gate — like BEGIN/CHUNK/COMMIT and per CLAUDE.md ("PIN unlock
     // required on every call" for CMDs 20–24). Pre-unlock the session
     // context is already `None` (BEGIN requires PIN; lock/idle-wipe drops
@@ -38,9 +47,10 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     }
 
     let mut buf = [0u8; FW_STATUS_RESPONSE_LEN];
-    // SAFETY: category 5 — read-only borrow of `static mut FW_UPDATE`.
-    // The non-reentrant gateway dispatcher means no other handler is
-    // concurrently mutating this slot.
+    // SAFETY: category 5 — read-only borrow of `static mut FW_UPDATE`. The
+    // non-reentrant gateway dispatcher means no other *handler* mutates this
+    // slot, and the `HandlerGuard` above blocks the SysTick idle-wipe from
+    // zeroizing the context while `ctx_ref` is live (LCR-F2).
     let ctx_ref = unsafe { (*core::ptr::addr_of!(FW_UPDATE)).as_ref() };
     let (state, recv_s, recv_ns, slot) = match ctx_ref {
         None => (FW_STATE_IDLE, 0, 0, 0),

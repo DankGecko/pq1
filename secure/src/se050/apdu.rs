@@ -148,6 +148,19 @@ struct ApduBuf {
     cursor: usize,
 }
 
+impl Drop for ApduBuf {
+    /// LCR-F4: an APDU under construction can hold plaintext PIN,
+    /// provisioned-object, or key material before it is SCP03-wrapped and
+    /// sent. Wipe the whole buffer on EVERY scope exit (success or error) so
+    /// those bytes don't outlive the operation on the secure stack. `ApduBuf`
+    /// is only ever a local (created → `.tlv()` → `.finish()` borrow), so the
+    /// drop always runs at the constructing function's scope end.
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.buf.zeroize();
+    }
+}
+
 impl ApduBuf {
     /// Start a new APDU with the given header bytes.
     fn new(cla: u8, ins: u8, p1: u8, p2: u8) -> Self {

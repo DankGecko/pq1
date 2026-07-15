@@ -67,7 +67,7 @@
 
 use hmac::Mac;
 use sha2::Sha256;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::hw::otp::{self, OtpError};
 
@@ -335,17 +335,22 @@ pub fn mlkem_wrap_secret() -> Result<[u8; 32], OtpError> {
 /// `derive_into_bhk` falls through to `derive_into` (DHUK) — same
 /// bytes as before Phase 2C; the split only takes effect once `bhk`
 /// is enabled and the BHK lifecycle (`hw::bhk`) has provisioned.
-pub fn se050_scp03_enc_key() -> Result<[u8; 16], OtpError> {
-    let mut out = [0u8; 16];
-    derive_into_bhk(b"pqsigner/se050-scp03-enc-v1", &mut out)?;
+///
+/// Returns [`Zeroizing`] so the per-device static key auto-wipes on every
+/// return path in the caller (finding F12); the buffer is derived in place, so
+/// no un-wiped `[u8; 16]` (`Copy`) stack temp is left behind.
+pub fn se050_scp03_enc_key() -> Result<Zeroizing<[u8; 16]>, OtpError> {
+    let mut out = Zeroizing::new([0u8; 16]);
+    derive_into_bhk(b"pqsigner/se050-scp03-enc-v1", &mut out[..])?;
     Ok(out)
 }
 
 /// 16-byte SE050 SCP03 MAC key. Paired with `se050_scp03_enc_key`.
 /// Same BHK-axis derivation (Tier-2 split — see `se050_scp03_enc_key`).
-pub fn se050_scp03_mac_key() -> Result<[u8; 16], OtpError> {
-    let mut out = [0u8; 16];
-    derive_into_bhk(b"pqsigner/se050-scp03-mac-v1", &mut out)?;
+/// [`Zeroizing`] for the same reason (finding F12).
+pub fn se050_scp03_mac_key() -> Result<Zeroizing<[u8; 16]>, OtpError> {
+    let mut out = Zeroizing::new([0u8; 16]);
+    derive_into_bhk(b"pqsigner/se050-scp03-mac-v1", &mut out[..])?;
     Ok(out)
 }
 
@@ -360,9 +365,12 @@ pub fn se050_scp03_mac_key() -> Result<[u8; 16], OtpError> {
 /// `se050_scp03_enc_key` and `docs/work-todo.md` #20 for why the SCP03
 /// keys are on the BHK axis (recoverable keyset + RDP2-stable BHK ⇒ no
 /// brick mode) while the OPTIGA PBS stays on DHUK (immutable E140).
-pub fn se050_scp03_dek_key() -> Result<[u8; 16], OtpError> {
-    let mut out = [0u8; 16];
-    derive_into_bhk(b"pqsigner/se050-scp03-dek-v1", &mut out)?;
+/// [`Zeroizing`] so the DEK auto-wipes on every caller return path (finding
+/// F12) — it carries the same secret weight as ENC/MAC even though `establish`
+/// never uses it.
+pub fn se050_scp03_dek_key() -> Result<Zeroizing<[u8; 16]>, OtpError> {
+    let mut out = Zeroizing::new([0u8; 16]);
+    derive_into_bhk(b"pqsigner/se050-scp03-dek-v1", &mut out[..])?;
     Ok(out)
 }
 

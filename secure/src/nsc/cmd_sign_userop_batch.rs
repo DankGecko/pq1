@@ -738,6 +738,31 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             ui::show_status("Batch sign", "lane unshown");
             return NscStatus::InternalError as u32;
         }
+        // Bind the three signed gas limits (F10) — mirrors cmd_sign_userop.rs.
+        let gas_lane_pages_before = rotate_pages.len;
+        if crate::tx::display::enforce_userop_gas_page(
+            &mut rotate_pages,
+            &call_gas_limit,
+            &verification_gas_limit,
+            &pre_verification_gas,
+        )
+        .is_err()
+        {
+            ui::show_status("Batch sign", "gas unshown");
+            return NscStatus::InternalError as u32;
+        }
+        crate::fi::scrub_sentinel_register();
+        if crate::tx::display::userop_gas_page_proof(
+            &rotate_pages,
+            gas_lane_pages_before,
+            &call_gas_limit,
+            &verification_gas_limit,
+            &pre_verification_gas,
+        ) != crate::fi::OK_SENTINEL
+        {
+            ui::show_status("Batch sign", "gas unshown");
+            return NscStatus::InternalError as u32;
+        }
         let (cr, cr_verdict) = confirm_checked(rotate_pages.as_slice());
         match cr {
             ConfirmResult::Confirmed => {}
@@ -898,8 +923,9 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         // pages here: the dispatcher's native-value page when this
         // member carries ETH, the two ERC-8213 fingerprint pages, the batch
         // banner page, mandatory full signer + target pages, worst-case
-        // non-zero nonce-lane page, and the two gas/fee pages the dispatcher
-        // splices for the Safe surface (audit 2026-06-19).
+        // non-zero nonce-lane page, the mandatory UserOp gas-triple page (F10),
+        // and the two gas/fee pages the dispatcher splices for the Safe surface
+        // (audit 2026-06-19).
         {
             let reserved = usize::from(ptx.value.iter().any(|&b| b != 0))
                 + 2
@@ -907,6 +933,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                 + crate::tx::display::SIGNER_IDENTITY_PAGES
                 + crate::tx::display::TARGET_IDENTITY_PAGES
                 + crate::tx::display::NONZERO_NONCE_LANE_PAGES
+                + crate::tx::display::USEROP_GAS_PAGES
                 + 2;
             match crate::tx::display::multisend_sign_gate(
                 routed[i].as_ref().and_then(|r| r.safe_v1.as_ref()),
@@ -1041,6 +1068,31 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             ui::show_status("Batch sign", "lane unshown");
             return NscStatus::InternalError as u32;
         }
+        // Bind the three signed gas limits (F10) — mirrors cmd_sign_userop.rs.
+        let gas_lane_pages_before = pages.len;
+        if crate::tx::display::enforce_userop_gas_page(
+            &mut pages,
+            &call_gas_limit,
+            &verification_gas_limit,
+            &pre_verification_gas,
+        )
+        .is_err()
+        {
+            ui::show_status("Batch sign", "gas unshown");
+            return NscStatus::InternalError as u32;
+        }
+        crate::fi::scrub_sentinel_register();
+        if crate::tx::display::userop_gas_page_proof(
+            &pages,
+            gas_lane_pages_before,
+            &call_gas_limit,
+            &verification_gas_limit,
+            &pre_verification_gas,
+        ) != crate::fi::OK_SENTINEL
+        {
+            ui::show_status("Batch sign", "gas unshown");
+            return NscStatus::InternalError as u32;
+        }
 
         // Per-tx ERC-8213 fingerprint. The user sees one fingerprint
         // per inner call; a separate batch-final fingerprint binds
@@ -1149,6 +1201,31 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         ) != crate::fi::OK_SENTINEL
         {
             ui::show_status("Batch sign", "lane unshown");
+            return NscStatus::InternalError as u32;
+        }
+        // Bind the three signed gas limits (F10) — mirrors cmd_sign_userop.rs.
+        let gas_lane_pages_before = final_pages.len;
+        if crate::tx::display::enforce_userop_gas_page(
+            &mut final_pages,
+            &call_gas_limit,
+            &verification_gas_limit,
+            &pre_verification_gas,
+        )
+        .is_err()
+        {
+            ui::show_status("Batch sign", "gas unshown");
+            return NscStatus::InternalError as u32;
+        }
+        crate::fi::scrub_sentinel_register();
+        if crate::tx::display::userop_gas_page_proof(
+            &final_pages,
+            gas_lane_pages_before,
+            &call_gas_limit,
+            &verification_gas_limit,
+            &pre_verification_gas,
+        ) != crate::fi::OK_SENTINEL
+        {
+            ui::show_status("Batch sign", "gas unshown");
             return NscStatus::InternalError as u32;
         }
         // Fail closed if the batch-final fingerprint can't be appended (F5):

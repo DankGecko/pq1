@@ -105,6 +105,10 @@ pub mod value_page;
 #[path = "../tx/display/nonce_lane.rs"]
 pub mod nonce_lane;
 
+// Unconditional exact display of the three signed UserOp gas limits (F10).
+#[path = "../tx/display/userop_gas_lane.rs"]
+pub mod userop_gas_lane;
+
 #[path = "../tx/display/slot_rotation.rs"]
 pub mod slot_rotation;
 

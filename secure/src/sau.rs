@@ -263,6 +263,24 @@ mod stm32 {
     const SECCFGR1_I2C1_BIT: u32 = 1 << 13;
     const SECCFGR1_I2C2_BIT: u32 = 1 << 14;
 
+    // ---- SECCFGR2 (APB2) — SPI1 (trusted display) SECURE (finding F1) ----
+    // Bit position per `GTZC_CFGR2_SPI1_Pos` in CMSIS `stm32u585xx.h` (= 1).
+    //
+    // SPI1 (bit 1): the NV3007 LCD bus under `ui-lcd` (→ `spi1-arduino`) — the
+    // trusted-confirmation display, the clear-signing trust root. It is driven
+    // EXCLUSIVELY from the secure world (`hw::spi_hw`, `hw::lcd_nv3007`); NS
+    // never touches it. Leaving it NS lets a hostile NS image reconfigure,
+    // disable, or drive the display used to confirm what is signed — a direct
+    // invariant #4 break. Marked only when the SPI1 LCD backend is compiled in.
+    //
+    // NOTE (F1 is PARTIAL — silicon-validation + two residuals still owed, see
+    // the finding): this closes the SPI1 *peripheral* attribution, but the panel
+    // GPIOE pins (PE7/12/13/14/15) stay NS (NS could drive the lines directly
+    // via GPIOE, bypassing SPI1) and the SPI1 clock-enable is RCC-governed (F3),
+    // so full "NS cannot touch the trusted display" needs those closed too.
+    #[cfg(feature = "spi1-arduino")]
+    const SECCFGR2_SPI1_BIT: u32 = 1 << 1;
+
     // ---- SECCFGR3 (AHB2) — crypto block SECURE, OTG NS ----
     // Bit positions per `GTZC_CFGR3_*_Pos` in CMSIS `stm32u585xx.h`.
     //
@@ -289,6 +307,28 @@ mod stm32 {
     const SECCFGR3_RNG_BIT:  u32 = 1 << 13;
     const SECCFGR3_PKA_BIT:  u32 = 1 << 14;
     const SECCFGR3_SAES_BIT: u32 = 1 << 15;
+
+    /// Unconditional post-write readback verifier (finding F6).
+    ///
+    /// Unlike `debug_assert_eq!` — which compiles to nothing under the shipping
+    /// `--release` profile (Cargo.toml sets `overflow-checks` but NOT
+    /// `debug-assertions`) — this runs in EVERY build, so a skipped or
+    /// single-fault-faulted security-config / lock write is caught before NS
+    /// boot rather than reaching it undetected. On mismatch it parks the CPU
+    /// (fail closed, matching the `hw::hash::init_clock` boot-KAT idiom); this
+    /// executes pre-NS-boot, so a halt exposes no secret and is re-flashable
+    /// (not a permanent brick). `#[inline(never)]` keeps it a distinct call
+    /// site. NOTE: the fail-closed HALT path has not itself been silicon-
+    /// exercised — a bench boot (`make play-hw-display` / `make e2e-hw`) must
+    /// confirm a correct config does NOT false-trip it before shipping.
+    #[inline(never)]
+    fn verify_or_halt(actual: u32, expected: u32) {
+        if actual != expected {
+            loop {
+                cortex_m::asm::wfe();
+            }
+        }
+    }
 
     pub fn configure_gtzc() {
         // Enable GTZC1 clock
@@ -325,12 +365,14 @@ mod stm32 {
         // Locked-down peripherals (NS reads/writes will trip the GTZC
         // illegal-access IRQ once the post-write check below validates):
         //   - SECCFGR1: I2C1, I2C2 (SE driver buses; STSAFE probe)
+        //   - SECCFGR2: SPI1 (the trusted-display LCD bus, under ui-lcd — F1)
         //   - SECCFGR3: AES, HASH, RNG, PKA, SAES (the crypto block)
         //
         // Intentionally LEFT NS (the NS world legitimately needs them):
         //   - OTG (SECCFGR3 bit 10): USB HID transport to companion
         //   - GPIO banks: governed per-pin by GPIOx_SECCFGR, not TZSC
-        //   - TIM / SPI / USART / etc.: NS-side UI + debug logging
+        //   - TIM / USART / etc.: NS-side UI + debug logging (SPI1 is now
+        //     secured above; SPI2 stays NS on the non-LCD Tropic bench build)
         //
         // Other peripherals (SDMMC, OCTOSPI, FDCAN, etc.) keep their
         // NS reset default; we don't currently use them from the
@@ -340,7 +382,12 @@ mod stm32 {
         // setup is owed in a follow-up (the `tamp` feature flag is
         // log-only-on-this-branch per CLAUDE.md anyway).
         let seccfgr1 = SECCFGR1_I2C1_BIT | SECCFGR1_I2C2_BIT;
-        let seccfgr2: u32 = 0; // nothing security-critical in APB2 today
+        // SPI1 (trusted-display bus) is the only APB2 peripheral we secure
+        // (F1), and only in the `spi1-arduino` LCD build.
+        #[cfg(feature = "spi1-arduino")]
+        let seccfgr2: u32 = SECCFGR2_SPI1_BIT;
+        #[cfg(not(feature = "spi1-arduino"))]
+        let seccfgr2: u32 = 0; // no APB2 peripheral secured on non-LCD builds
         let seccfgr3 = SECCFGR3_AES_BIT
             | SECCFGR3_HASH_BIT
             | SECCFGR3_RNG_BIT
@@ -351,19 +398,18 @@ mod stm32 {
         GTZC.tzsc_seccfgr3.write(seccfgr3);
         cortex_m::asm::dsb();
 
-        // Post-write self-check: read back and assert. SECCFGR bits
-        // are R/W from the secure world, so a write-read round-trip
-        // is the right shape (no separate "is this bit even
-        // configurable" question — every documented bit in CFGR3
-        // for U585 corresponds to an attached peripheral). A
-        // mismatch here is diagnostic of a wrong base addr or a
-        // clock-not-enabled glitch.
+        // Post-write self-check: read back and verify UNCONDITIONALLY (F6).
+        // SECCFGR bits are R/W from the secure world, so a write-read round-trip
+        // is the right shape (every documented bit corresponds to an attached
+        // peripheral). This MUST run in release too — the previous
+        // `debug_assert_eq!` vanished under `--release`, so a skipped/faulted
+        // config write reached NS boot undetected. `verify_or_halt` fails closed.
         let r1 = GTZC.tzsc_seccfgr1.read();
         let r2 = GTZC.tzsc_seccfgr2.read();
         let r3 = GTZC.tzsc_seccfgr3.read();
-        debug_assert_eq!(r1, seccfgr1, "TZSC_SECCFGR1 write-readback mismatch");
-        debug_assert_eq!(r2, seccfgr2, "TZSC_SECCFGR2 write-readback mismatch");
-        debug_assert_eq!(r3, seccfgr3, "TZSC_SECCFGR3 write-readback mismatch");
+        verify_or_halt(r1, seccfgr1); // TZSC_SECCFGR1
+        verify_or_halt(r2, seccfgr2); // TZSC_SECCFGR2
+        verify_or_halt(r3, seccfgr3); // TZSC_SECCFGR3
 
         // Test-only: enable AES/PKA/SAES clocks so the gtzc-test
         // validation driver can prove GTZC enforcement applies to
@@ -463,19 +509,14 @@ mod stm32 {
         cortex_m::asm::dsb();
         cortex_m::asm::isb();
 
-        // Write-readback self-check (the lock bits read back set; AIRCR is
-        // NOT checked here — a read returns VECTKEYSTAT, not VECTKEY).
+        // Write-readback self-check, UNCONDITIONAL + fail-closed (F6): the lock
+        // bits must read back set before NS boots, in release too (the previous
+        // `debug_assert_eq!` was a no-op under `--release`, so a faulted lock
+        // write left SAU/TZSC re-writable with nobody noticing). AIRCR is NOT
+        // checked here — a read returns VECTKEYSTAT, not VECTKEY.
         let want = CSLCKR_LOCKSAU | CSLCKR_LOCKSVTAIRCR;
-        debug_assert_eq!(
-            syscfg_cslckr.read() & want,
-            want,
-            "SYSCFG_CSLCKR SAU/AIRCR lock bits not set"
-        );
-        debug_assert_eq!(
-            tzsc_cr.read() & TZSC_CR_LCK,
-            TZSC_CR_LCK,
-            "GTZC1 TZSC CR.LCK not set"
-        );
+        verify_or_halt(syscfg_cslckr.read() & want, want); // SAU/AIRCR lock bits
+        verify_or_halt(tzsc_cr.read() & TZSC_CR_LCK, TZSC_CR_LCK); // TZSC CR.LCK
     }
 }
 

@@ -43,6 +43,7 @@ mod safe_display;
 mod safe_mgmt;
 mod slot_rotation;
 mod typed_call;
+mod userop_gas_lane;
 mod value_page;
 // `pub(crate)` so the render-only golden harness (`ui::golden`) can drive the
 // renderer directly; private otherwise.
@@ -55,6 +56,9 @@ pub(crate) use value_page::{
 };
 pub(crate) use nonce_lane::{
     enforce_nonce_lane_page, nonce_lane_page_proof, NONZERO_NONCE_LANE_PAGES,
+};
+pub(crate) use userop_gas_lane::{
+    enforce_userop_gas_page, userop_gas_page_proof, USEROP_GAS_PAGES,
 };
 pub use blind_sign::render_blind_sign_pages;
 pub use eip1271::{render_eip1271_personal_sign_pages, render_eip1271_raw32_pages};

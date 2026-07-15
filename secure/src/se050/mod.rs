@@ -507,8 +507,13 @@ impl Se050 {
         // defaults, so the current DEK that wraps the new key blocks is
         // `PLATFORM_DEK`. (First-boot transport→final rotation passes the
         // per-device transport DEK instead — see work-todo #36.)
+        //
+        // The PUT KEY APDU carries the new static keys under DEK encryption;
+        // wrap it so the buffer auto-wipes on every return path (finding
+        // F12/LCR-F4). `new_enc/new_mac/new_dek` are already `Zeroizing`.
         let (apdu, len) =
             scp03::build_put_key_apdu(&new_enc, &new_mac, &new_dek, &crate::scp03_logic::PLATFORM_DEK);
+        let apdu = zeroize::Zeroizing::new(apdu);
         let mut resp = [0u8; 32];
         let n = unsafe { apdu::send_apdu(&mut self.t1, &mut self.scp03, &apdu[..len], &mut resp)? };
         if n < 2 {

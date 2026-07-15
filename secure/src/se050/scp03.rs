@@ -30,6 +30,7 @@ use crate::scp03_logic::{
 };
 
 use super::apdu::Se050Error;
+use zeroize::Zeroizing;
 
 // The factory-key fallback only makes sense when the build *prefers*
 // derived keys (otherwise the preferred set already IS the factory keys
@@ -70,10 +71,21 @@ compile_error!(
 /// Lives here (not in `scp03_logic`) because the derived-key path imports
 /// `hw::secret_keys`, and the `hw` module is `not(test)`-gated — keeping
 /// this stub in the gated `se050` module keeps `scp03_logic` host-clean.
-pub fn load_platform_keys() -> Result<([u8; 16], [u8; 16], [u8; 16]), Se050Error> {
+///
+/// Returns each key wrapped in [`Zeroizing`] (finding F12) so the per-device
+/// static keys — and the DEK that `establish` binds but never uses — auto-wipe
+/// on every caller return path. The derived-key path derives in place (no
+/// un-wiped `Copy` temp); the factory-constant path wraps the public AN12436
+/// constants (harmless, and keeps a single return type across both cfgs).
+pub fn load_platform_keys(
+) -> Result<(Zeroizing<[u8; 16]>, Zeroizing<[u8; 16]>, Zeroizing<[u8; 16]>), Se050Error> {
     #[cfg(not(feature = "se050-derived-scp03"))]
     {
-        Ok((PLATFORM_ENC, PLATFORM_MAC, PLATFORM_DEK))
+        Ok((
+            Zeroizing::new(PLATFORM_ENC),
+            Zeroizing::new(PLATFORM_MAC),
+            Zeroizing::new(PLATFORM_DEK),
+        ))
     }
     #[cfg(feature = "se050-derived-scp03")]
     {
@@ -409,7 +421,9 @@ pub fn wrap_apdu(
 
     // --- C-DEC: encrypt command data ---
     let enc_len = if has_data {
-        let mut enc_buf = [0u8; 1024];
+        // LCR-F4: holds plaintext command data (PIN / provisioned-object bytes)
+        // before + after in-place encryption — wipe on scope exit.
+        let mut enc_buf = Zeroizing::new([0u8; 1024]);
         enc_buf[..data_len].copy_from_slice(&apdu[hdr_len..hdr_len + data_len]);
         // ISO 7816-4 padding: 0x80 then zeros to next 16-byte boundary
         let mut padded_len = data_len;
@@ -679,7 +693,9 @@ pub fn unwrap_response(
         return Err(UnwrapError::BadCiphertextLen);
     }
 
-    let mut plain = [0u8; 1024];
+    // LCR-F4: holds the DECRYPTED SE050 response body (provisioned-object reads,
+    // PIN-gated data) — wipe on scope exit, success or error.
+    let mut plain = Zeroizing::new([0u8; 1024]);
     if body_end > plain.len() {
         return Err(UnwrapError::Overflow);
     }

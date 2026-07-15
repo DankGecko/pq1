@@ -57,13 +57,34 @@ rules:
   # ── Unsafe taxonomy: pure-logic crates are 100% safe Rust ──────────────────
   # Operationalises CLAUDE.md's unsafe taxonomy boundary. The five structurally
   # required `unsafe` categories (CMSE veneers, NS-ptr deref, SHA-256 hooks, FI
-  # volatile helpers, static-mut driver state) ALL live in secure/ — the
-  # host-runnable pure-logic crates carry none. Verified 0 findings 2026-06-18.
-  # (We deliberately do NOT add a raw-MMIO `*_volatile` rule here: ~50 legit
-  # sites in secure/ — the documented hw::mmio migration queue + the irreducible
-  # fi/nsc/hash categories — would make it pure noise. SAFETY-comment coverage
-  # is better enforced by clippy::undocumented_unsafe_blocks than by a generic-
-  # mode regex, and "no new flash state" is not expressible as a sound pattern.)
+  # volatile helpers, static-mut driver state) live in secure/ — with TWO
+  # deliberately host-placed exceptions that are `exclude:`d below. These are NOT
+  # a regression: they are the SAME structurally-required categories, relocated
+  # into a host-runnable crate PRECISELY so they can be formally verified there,
+  # and each carries a `// SAFETY:` block (2026-07-14 reconciliation — F13 of the
+  # full-project sweep):
+  #   * shared/src/ns_ptr_validate.rs — category (2) NS-pointer deref, extracted
+  #     verbatim from secure/src/nsc (commit c2cc92c8) so the window check is
+  #     Kani-proven (`cargo kani -p sphincs-tz-shared`, the `#[cfg(kani)] mod
+  #     verification` block) and the raw `read_volatile`/`write_volatile`/
+  #     `from_raw_parts` copy primitives are Miri-tree-borrows-checked
+  #     (`cargo +nightly miri test -p sphincs-tz-shared`). Re-exported by
+  #     secure/src/nsc/{ns_ptr,ptr_validate}.rs — genuinely shared, not stray.
+  #   * pqsigner-erc7730/src/display/render/mod.rs — category (4) FI stack-canary
+  #     volatiles (`write_volatile`/`read_volatile` on STACK_CANARY), which rode
+  #     into the host crate with the render dispatch (commit 695c1e8b, 2026-07-04)
+  #     so it is host-fuzzable / Kani-linkable. They MUST stay volatile — a
+  #     `core::hint::black_box` swap gives no stack-materialisation/reload
+  #     guarantee, so the overrun check could compile to a no-op (silent FI
+  #     weakening), and it contradicts taxonomy category (4) ("must be
+  #     read_volatile/write_volatile to defeat compiler folding").
+  # The `exclude:` list must stay EXACTLY these two files; `make invariant-gates`
+  # asserts that so a future over-broad exclude cannot silently silence a real
+  # unsafe. (We deliberately do NOT add a raw-MMIO `*_volatile` rule here: ~50
+  # legit sites in secure/ — the documented hw::mmio migration queue + the
+  # irreducible fi/nsc/hash categories — would make it pure noise. SAFETY-comment
+  # coverage is better enforced by clippy::undocumented_unsafe_blocks than by a
+  # generic-mode regex, and "no new flash state" is not expressible soundly.)
   - id: no-unsafe-in-pure-logic-crates
     languages: [generic]
     severity: ERROR
@@ -71,9 +92,11 @@ rules:
       Unsafe taxonomy (CLAUDE.md): the pure-logic workspace crates (proto, bip39,
       tx-core, aa, domain, tx, pqsigner-erc7730, hal, shared) are host-runnable,
       no_std, stack-only, and MUST stay 100% safe Rust — every structurally
-      required `unsafe` lives in the secure HAL / NSC veneers / FI helpers, never
-      in a pure-logic crate. If a parser/derivation seems to need `unsafe`, that
-      is a design smell — find the safe formulation.
+      required `unsafe` lives in the secure HAL / NSC veneers / FI helpers, or in
+      the two documented host-verified exceptions excluded by this rule
+      (shared/src/ns_ptr_validate.rs, pqsigner-erc7730/src/display/render/mod.rs).
+      If a parser/derivation seems to need NEW `unsafe`, that is a design smell —
+      find the safe formulation.
     paths:
       include:
         - 'proto/src/'
@@ -85,6 +108,12 @@ rules:
         - 'pqsigner-erc7730/src/'
         - 'hal/src/'
         - 'shared/src/'
+      # Host-relocated structurally-required unsafe — see the header comment
+      # above for the Kani/Miri proof pointers. KEEP EXACTLY THESE TWO ENTRIES
+      # (asserted by `make invariant-gates`).
+      exclude:
+        - 'shared/src/ns_ptr_validate.rs'
+        - 'pqsigner-erc7730/src/display/render/mod.rs'
     patterns:
       - pattern-regex: '\bunsafe\s*(\{|fn\b|impl\b|trait\b|extern\b)'
 

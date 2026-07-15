@@ -21,20 +21,28 @@ use super::state::{peek_state, FW_UPDATE};
 /// CMSE veneer. Dispatcher invariants apply: single-threaded,
 /// non-reentrant, NS arguments have already been snapshotted.
 pub(super) unsafe fn run() -> u32 {
-    // PIN gate — matches BEGIN/CHUNK/COMMIT. `peek_state` reads only the
-    // SecureState sentinel (not `FW_UPDATE`), so the single-statement
-    // `FW_UPDATE` write below still needs no `HandlerGuard`.
+    // Hold the busy guard for the whole handler (finding LCR-F2). The
+    // `*FW_UPDATE = None` write below is NOT the atomic "single-statement write"
+    // the previous comment claimed: `FwUpdateCtx` is `#[derive(ZeroizeOnDrop)]`,
+    // so `= None` runs a non-atomic multi-field destructor. The SysTick idle-wipe
+    // (`main.rs`) also does `*FW_UPDATE = None` whenever `!handler_is_busy()`, so
+    // without this guard idle-wipe can preempt the handler on the CMSE path and
+    // race the destructor (update-state corruption / read-during-drop). Every
+    // sibling FW handler (BEGIN/CHUNK/COMMIT) already holds it; STATUS/ABORT were
+    // the two that didn't. The guard drops at function exit (after the write).
+    let _busy = super::HandlerGuard::enter();
+
+    // PIN gate — matches BEGIN/CHUNK/COMMIT.
     if peek_state(|s| s.pin_verified.check_sentinel()) != crate::fi::OK_SENTINEL {
         return NscStatus::NotInitialized as u32;
     }
 
-    // SAFETY: `FW_UPDATE` is the secure-world `static mut` that holds
-    // the in-flight firmware-update context (category 5: single-
-    // threaded driver bookkeeping). Access is serialised by the non-
-    // reentrant gateway — no other handler can be running concurrently
-    // and SysTick's idle-wipe respects `HandlerGuard`. `addr_of_mut!`
-    // is used (rather than `&mut`) to avoid materialising a reference
-    // we don't need; the write replaces the slot wholesale.
+    // SAFETY: `FW_UPDATE` is the secure-world `static mut` that holds the
+    // in-flight firmware-update context (category 5). Access is serialised by
+    // the non-reentrant gateway, and the `HandlerGuard` above blocks the SysTick
+    // idle-wipe from racing the drop. `addr_of_mut!` is used (rather than `&mut`)
+    // to avoid materialising a reference we don't need; the write replaces the
+    // slot wholesale.
     unsafe {
         *core::ptr::addr_of_mut!(FW_UPDATE) = None;
     }

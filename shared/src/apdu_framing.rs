@@ -434,9 +434,59 @@ pub enum FrameOutcome {
     Dropped,
 }
 
+/// Router single-session lease decision (finding F11).
+///
+/// The device is single-session — one unlock, one signing window — so at most
+/// one HID channel may hold a live multi-APDU exchange (a chained command in
+/// progress, or a pending chunked `GET_RESPONSE` drain) at any moment. The
+/// non-secure router records the owning channel while an exchange is live and
+/// consults this predicate on every incoming APDU:
+///
+/// * `owner == None` — no exchange in progress, so any channel may start one.
+/// * `owner == Some(o)` — `o` holds the lease; only `o` may continue or drain
+///   it. A foreign channel is rejected *without* touching the owner's state, so
+///   it can neither siphon the owner's queued response (the chunked-signature
+///   bytes) nor DoS the owner by scrubbing its pending cursor / chain buffer.
+///
+/// The `channel_id` this operates on is the 2-byte field already present in
+/// every HID frame; F11 only adds enforcement, no new wire bytes.
+#[must_use]
+pub fn router_lease_allows(owner: Option<u16>, caller: u16) -> bool {
+    match owner {
+        None => true,
+        Some(o) => o == caller,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Property tests
 // ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod router_lease_tests {
+    use super::router_lease_allows;
+
+    #[test]
+    fn unleased_router_admits_any_channel() {
+        assert!(router_lease_allows(None, 0));
+        assert!(router_lease_allows(None, 0xABCD));
+    }
+
+    #[test]
+    fn leased_router_admits_only_the_owner() {
+        assert!(router_lease_allows(Some(0x1111), 0x1111));
+        // A different channel is refused while the owner holds the lease.
+        assert!(!router_lease_allows(Some(0x1111), 0x2222));
+        assert!(!router_lease_allows(Some(0x0000), 0x0001));
+    }
+
+    #[test]
+    fn channel_zero_owner_is_still_enforced() {
+        // 0x0000 is a valid channel id; a Some(0) lease must still exclude others.
+        assert!(router_lease_allows(Some(0), 0));
+        assert!(!router_lease_allows(Some(0), 1));
+    }
+}
 
 #[cfg(test)]
 mod fuzz_props {

@@ -28,7 +28,7 @@
 
 use sphincs_tz_shared::*;
 use sphincs_tz_shared::apdu_framing::{
-    parse_apdu_header, route_v2, ChainState, ChainStepOutcome,
+    parse_apdu_header, route_v2, router_lease_allows, ChainState, ChainStepOutcome,
 };
 
 use crate::nsc_api;
@@ -125,6 +125,15 @@ static mut PENDING_PTR: *const u8 = core::ptr::null();
 static mut PENDING_LEN: usize = 0;
 static mut PENDING_POS: usize = 0;
 
+/// Single-session router lease owner (finding F11). `Some(channel_id)` while an
+/// exchange (a live chained command OR a pending chunked `GET_RESPONSE` drain)
+/// is in progress, recording which HID channel started it; `None` when the
+/// router is idle. `dispatch` refuses any APDU from a different channel while
+/// the lease is held, so a second client on the same physical device can
+/// neither drain another channel's queued response nor scrub its chain/pending
+/// state. Owned by the single-threaded NS dispatcher, same as `PENDING_*`.
+static mut ROUTER_OWNER: Option<u16> = None;
+
 /// 30-second inter-chunk timeout for an in-progress GET_RESPONSE drain
 /// (§19 P1 "Response-buffer locking … 30 s timeout"). If the host
 /// declares a chunked SLH-DSA-signature response (SW=0x61xx) and then
@@ -187,7 +196,29 @@ impl CommandRouter {
         }
     }
 
-    pub unsafe fn dispatch(&mut self, apdu: &[u8]) -> Response {
+    /// Router entry point. Enforces the single-session lease (F11) around the
+    /// real dispatch: a foreign channel is refused while another channel owns a
+    /// live exchange, and the lease is re-derived from the resulting state so it
+    /// releases the instant no chain and no pending drain remain.
+    pub unsafe fn dispatch(&mut self, channel: u16, apdu: &[u8]) -> Response {
+        if !router_lease_allows(ROUTER_OWNER, channel) {
+            // A different channel acted while the owner holds the lease. Reject
+            // WITHOUT disturbing the owner's chain/pending state, so a foreign
+            // channel can neither siphon its response nor DoS it by scrubbing.
+            return self.sw_response(SW_CONDITIONS_NOT_SATISFIED);
+        }
+        let resp = self.dispatch_inner(apdu);
+        // Re-derive the lease: a chain still in progress or a pending chunked
+        // drain keeps the lease with `channel`; otherwise it is released.
+        ROUTER_OWNER = if PENDING_PTR.is_null() && self.chain.active_ins() == 0 {
+            None
+        } else {
+            Some(channel)
+        };
+        resp
+    }
+
+    unsafe fn dispatch_inner(&mut self, apdu: &[u8]) -> Response {
         // Pure header parser — host-fuzzed in
         // `sphincs_tz_shared::apdu_framing::fuzz_props`.
         let header = match parse_apdu_header(apdu) {
@@ -803,11 +834,14 @@ impl CommandRouter {
         PENDING_LAST_FRAME = now_frame;
         PENDING_ELAPSED_FRAMES = PENDING_ELAPSED_FRAMES.saturating_add(delta as u32);
         if PENDING_ELAPSED_FRAMES >= PENDING_TIMEOUT_FRAMES {
-            // Abandoned drain — scrub.
+            // Abandoned drain — scrub, and release the router lease (F11) so a
+            // new channel can start a fresh exchange. A pending drain and a live
+            // chain are mutually exclusive, so clearing the owner here is safe.
             PENDING_PTR = core::ptr::null();
             PENDING_LEN = 0;
             PENDING_POS = 0;
             PENDING_ELAPSED_FRAMES = 0;
+            ROUTER_OWNER = None;
         }
     }
 

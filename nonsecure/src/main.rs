@@ -213,8 +213,8 @@ fn main() -> ! {
             }
             poll_counter = poll_counter.saturating_add(1);
             if !stack.transport.is_tx_active() {
-                if let Some(apdu) = stack.transport.try_receive(now_frame) {
-                    let resp = unsafe { stack.commands.dispatch(apdu) };
+                if let Some((channel, apdu)) = stack.transport.try_receive(now_frame) {
+                    let resp = unsafe { stack.commands.dispatch(channel, apdu) };
                     unsafe { stack.transport.queue_response(resp.ptr, resp.len) };
                 }
             }

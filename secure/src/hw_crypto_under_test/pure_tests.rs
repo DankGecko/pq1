@@ -155,11 +155,13 @@ fn positive_huk_domain_tag_present() {
 
 #[test]
 fn positive_secret_keys_output_sizes() {
-    // OPTIGA PBS: 64 bytes per SRM; SCP03 + admin: 16 bytes per spec.
+    // OPTIGA PBS: 64 bytes per SRM; SCP03 + admin: 16 bytes per spec. The SCP03
+    // static keys now return `Zeroizing<[u8; 16]>` (finding F12 — auto-wipe on
+    // every caller return path); the inner `[u8; 16]` still pins the size.
     assert!(SECRET_KEYS_SRC.contains("pub fn optiga_pairing_secret() -> Result<[u8; 64], OtpError>"));
-    assert!(SECRET_KEYS_SRC.contains("pub fn se050_scp03_enc_key() -> Result<[u8; 16], OtpError>"));
-    assert!(SECRET_KEYS_SRC.contains("pub fn se050_scp03_mac_key() -> Result<[u8; 16], OtpError>"));
-    assert!(SECRET_KEYS_SRC.contains("pub fn se050_scp03_dek_key() -> Result<[u8; 16], OtpError>"));
+    assert!(SECRET_KEYS_SRC.contains("pub fn se050_scp03_enc_key() -> Result<Zeroizing<[u8; 16]>, OtpError>"));
+    assert!(SECRET_KEYS_SRC.contains("pub fn se050_scp03_mac_key() -> Result<Zeroizing<[u8; 16]>, OtpError>"));
+    assert!(SECRET_KEYS_SRC.contains("pub fn se050_scp03_dek_key() -> Result<Zeroizing<[u8; 16]>, OtpError>"));
     assert!(SECRET_KEYS_SRC.contains("pub fn se050_admin_pin() -> Result<[u8; 16], OtpError>"));
 }
 

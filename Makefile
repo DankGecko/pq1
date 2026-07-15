@@ -282,11 +282,17 @@ stm32-harden-opts:
 run-hw: ## Run on real hardware via probe-rs
 	$(MAKE) FEATURES=dual-se,ui-lcd,consumption-mask,stm32u585,legacy-fw-rollback-unsafe all
 
-# Real STM32U585 hardware build (semihosting): mock SE + semihosting UI.
-# Uses probe-rs semihosting for I/O — same interactive model as QEMU
-# but running on the real Cortex-M33.
-build-hw: ## Build the real-hardware STM32U585 image
-	$(MAKE) FEATURES=mock-se,debug-log,ui-semihosting,stm32u585 all
+# Real STM32U585 hardware build (semihosting smoke): mock SE + semihosting UI.
+# The `e2e-test` escape is REQUIRED, not optional: this is a RELEASE (debug_assertions
+# OFF) stm32u585 build carrying dev-only features (mock-se/debug-log/ui-semihosting),
+# which the nsc/mod.rs ship-blocker fences correctly reject without a non-shippable
+# marker; `e2e-test` defuses both fences AND short-circuits enter_pin() so the image
+# doesn't hang on probe-rs's missing SYS_READC (the CLAUDE.md HW gotcha) — mirrors the
+# known-good `test-key-speed` target. Both `e2e-test` and `dev-testkey` are on the CI
+# production-OFF denylist, so the image stays un-shippable by construction. For an
+# INTERACTIVE hardware session, use `play-hw-lcd` (real LCD + arrow-key buttons).
+build-hw: ## Build the real-hardware STM32U585 smoke image (non-shippable)
+	$(MAKE) FEATURES=mock-se,debug-log,ui-semihosting,e2e-test,stm32u585 all
 
 # Flash and run on real STM32U585 via probe-rs + OpenOCD.
 # Requires: ST-LINK connected, openocd installed.
@@ -1225,13 +1231,24 @@ se050-stress-list:
 # value), BHK provisioned, chip factory-fresh. See docs/production-todo.md
 # §"SE050 - SCP03 + ADMIN provisioning" + docs/work-todo.md #20.
 # Watch the OLED / semihosting for "[SCP03-ROTATE] PUT KEY OK" / "FAIL".
+# SE050 SCP03-rotation ceremony feature set (single source of truth — consumed
+# by the flash target below AND the `se050-scp03-axis-parity` gate, finding F7,
+# so the two can never drift). `bhk` keeps the Tier-2 split (owner decision
+# 2026-07-14: SE050 on BHK, OPTIGA PBS on DHUK).
+SE050_ROTATE_FEATURES := se050-rotate-scp03,bhk,stm32u585,ui-lcd,debug-log,e2e-test
+
+.PHONY: se050-scp03-axis-parity
+se050-scp03-axis-parity: ## F7: SE050 SCP03 ceremony-vs-ship key-derivation axis parity gate
+	@echo "==> [F7] SE050 SCP03 key-derivation axis parity (ceremony vs ship):"
+	@python3 tools/check_se050_scp03_axis_parity.py "$(SE050_ROTATE_FEATURES)" "$(PROD_SHIP_FEATURES)"
+
 flash-hw-se050-rotate-scp03:
 	@echo "==> *** IRREVERSIBLE SCP03 KEY ROTATION -- Ctrl-C now if this is your working bench SE050 ***"
 	@echo "==> Building SE050 SCP03-rotation ceremony firmware..."
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_SECURE_HW)" \
 	cargo build --release --target $(TARGET) --target-dir target/secure \
 		-p sphincs-tz-secure --no-default-features \
-		--features se050-rotate-scp03,bhk,stm32u585,ui-lcd,debug-log,e2e-test
+		--features $(SE050_ROTATE_FEATURES)
 	@rm -f $(NONSECURE_ELF) target/nonsecure/$(TARGET)/release/deps/sphincs_tz_nonsecure-*
 	$(RUSTFLAGS_VAR)="$(RUSTFLAGS_NONSECURE_HW)" \
 	cargo build --release --target $(TARGET) --target-dir target/nonsecure \
@@ -3858,6 +3875,8 @@ invariant-gates: ## Local invariant gates (cargo-deny + semgrep + transcription)
 	@command -v "$(SEMGREP)" >/dev/null 2>&1 || { echo "ERROR: semgrep not found ($(SEMGREP)). Install: python3 -m venv ~/.venvs/semgrep && ~/.venvs/semgrep/bin/pip install semgrep"; exit 1; }
 	@echo "==> [2/3] invariants #5/#6/#7 (source, ERROR-level fails the build):"
 	"$(SEMGREP)" --config .semgrep/pqsigner-invariants.yml --severity ERROR --error --metrics off --quiet
+	@echo "    guard: unsafe-ban exclude allowlist is exactly the 2 documented files:"
+	@python3 .semgrep/check_unsafe_exclude_allowlist.py
 	@echo "==> [3/3] advisory warnings (non-blocking):"
 	-@"$(SEMGREP)" --config .semgrep/pqsigner-invariants.yml --severity WARNING --metrics off --quiet
 	@echo "==> invariant-gates: PASS"
